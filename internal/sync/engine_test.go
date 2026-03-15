@@ -2610,11 +2610,27 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// runFullReconciliation tests (Item 6)
+// runFullReconciliationAsync tests (Item 6 + Phase 10)
 // ---------------------------------------------------------------------------
 
+// waitForReconcileDone polls until reconcileRunning becomes false.
+// Fails the test if it doesn't complete within 10 seconds.
+func waitForReconcileDone(t *testing.T, ws *watchState) {
+	t.Helper()
+
+	deadline := time.After(10 * time.Second)
+	for ws.reconcileRunning.Load() {
+		select {
+		case <-deadline:
+			require.Fail(t, "reconcileRunning did not become false within 10s")
+		default:
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+}
+
 // Validates: R-2.1.6
-func TestRunFullReconciliation_NoChanges(t *testing.T) {
+func TestRunFullReconciliationAsync_NoChanges(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(testDriveID)
@@ -2656,16 +2672,17 @@ func TestRunFullReconciliation_NoChanges(t *testing.T) {
 
 	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: ItemTypeFile})
 
-	safety := DefaultSafetyConfig()
 	setupWatchEngine(t, e)
+	e.watch.buf = NewBuffer(e.logger)
 
 	// Should complete without panic; events exist but planner produces no
 	// actions because nothing is different from baseline.
-	e.runFullReconciliation(ctx, bl, SyncDownloadOnly, safety)
+	e.runFullReconciliationAsync(ctx, bl)
+	waitForReconcileDone(t, e.watch)
 }
 
 // Validates: R-2.1.6
-func TestRunFullReconciliation_DeltaError(t *testing.T) {
+func TestRunFullReconciliationAsync_DeltaError(t *testing.T) {
 	t.Parallel()
 
 	mock := &engineMockClient{
@@ -2680,11 +2697,135 @@ func TestRunFullReconciliation_DeltaError(t *testing.T) {
 	bl, err := e.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	safety := DefaultSafetyConfig()
 	setupWatchEngine(t, e)
+	e.watch.buf = NewBuffer(e.logger)
 
 	// Should not panic — error is logged and function returns.
-	e.runFullReconciliation(ctx, bl, SyncDownloadOnly, safety)
+	e.runFullReconciliationAsync(ctx, bl)
+	waitForReconcileDone(t, e.watch)
+
+	// Buffer should be empty — no events were produced.
+	batch := e.watch.buf.FlushImmediate()
+	assert.Empty(t, batch)
+}
+
+func TestRunFullReconciliationAsync_NonBlocking(t *testing.T) {
+	t.Parallel()
+
+	// deltaFn blocks on a channel — lets us verify the call returns
+	// before delta completes.
+	unblock := make(chan struct{})
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			<-unblock
+			return &graph.DeltaPage{DeltaLink: "tok"}, nil
+		},
+	}
+
+	e, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	bl, err := e.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	setupWatchEngine(t, e)
+	e.watch.buf = NewBuffer(e.logger)
+
+	// Call should return immediately — goroutine is blocked in deltaFn.
+	e.runFullReconciliationAsync(ctx, bl)
+
+	// reconcileRunning should be true while delta is blocked.
+	assert.True(t, e.watch.reconcileRunning.Load(), "reconcileRunning should be true while goroutine runs")
+
+	// Unblock delta and wait for completion.
+	close(unblock)
+	waitForReconcileDone(t, e.watch)
+}
+
+func TestRunFullReconciliationAsync_SkipsIfRunning(t *testing.T) {
+	t.Parallel()
+
+	deltaCalled := false
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			deltaCalled = true
+			require.Fail(t, "deltaFn should not be called when reconciliation is already running")
+			return nil, nil
+		},
+	}
+
+	e, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	bl, err := e.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	setupWatchEngine(t, e)
+	e.watch.buf = NewBuffer(e.logger)
+
+	// Pre-set reconcileRunning — simulates a reconciliation already in progress.
+	e.watch.reconcileRunning.Store(true)
+
+	e.runFullReconciliationAsync(ctx, bl)
+
+	// deltaFn should not have been invoked.
+	assert.False(t, deltaCalled, "deltaFn should not be called when reconciliation is already running")
+
+	// Clean up: reset so waitForReconcileDone doesn't hang.
+	e.watch.reconcileRunning.Store(false)
+}
+
+func TestRunFullReconciliationAsync_FeedsBuffer(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{ID: "f1", Name: "newfile.txt", ParentID: "root", DriveID: driveID, Size: 42, QuickXorHash: "qxh"},
+				},
+				DeltaLink: "tok",
+			}, nil
+		},
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	syncDir := t.TempDir()
+	logger := testLogger(t)
+
+	e, err := NewEngine(&EngineConfig{
+		DBPath:    dbPath,
+		SyncRoot:  syncDir,
+		DriveID:   driveID,
+		Fetcher:   mock,
+		Items:     mock,
+		Downloads: mock,
+		Uploads:   mock,
+		Logger:    logger,
+	})
+	require.NoError(t, err)
+	defer e.Close()
+
+	ctx := t.Context()
+
+	bl, err := e.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	setupWatchEngine(t, e)
+	e.watch.buf = NewBuffer(e.logger)
+
+	// Baseline is empty — delta returns a new file → orphan detection
+	// produces a download event that gets fed into the buffer.
+	e.runFullReconciliationAsync(ctx, bl)
+	waitForReconcileDone(t, e.watch)
+
+	batch := e.watch.buf.FlushImmediate()
+	assert.NotEmpty(t, batch, "buffer should contain events from reconciliation")
 }
 
 // ---------------------------------------------------------------------------
