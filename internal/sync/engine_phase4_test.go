@@ -1005,9 +1005,10 @@ func TestReobserve_Remote_200(t *testing.T) {
 		Direction: strDownload,
 	}
 
-	ev := eng.reobserve(ctx, row)
+	ev, retryAfter := eng.reobserve(ctx, row)
 
 	require.NotNil(t, ev)
+	assert.Equal(t, time.Duration(0), retryAfter, "200 should have zero RetryAfter")
 	assert.Equal(t, SourceRemote, ev.Source)
 	assert.Equal(t, ChangeModify, ev.Type)
 	assert.Equal(t, "live-item", ev.ItemID)
@@ -1043,9 +1044,10 @@ func TestReobserve_Remote_404(t *testing.T) {
 		Direction: strDownload,
 	}
 
-	ev := eng.reobserve(ctx, row)
+	ev, retryAfter := eng.reobserve(ctx, row)
 
 	require.NotNil(t, ev)
+	assert.Equal(t, time.Duration(0), retryAfter, "404 should have zero RetryAfter")
 	assert.Equal(t, ChangeDelete, ev.Type)
 	assert.True(t, ev.IsDeleted)
 	assert.Equal(t, "deleted-item", ev.ItemID)
@@ -1077,9 +1079,74 @@ func TestReobserve_Remote_429(t *testing.T) {
 		Direction: strDownload,
 	}
 
-	ev := eng.reobserve(ctx, row)
+	ev, retryAfter := eng.reobserve(ctx, row)
 
 	assert.Nil(t, ev, "should return nil when scope condition persists (429)")
+	assert.Equal(t, time.Duration(0), retryAfter, "429 without Retry-After header should return 0")
+}
+
+func TestReobserve_Remote_429_WithRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{
+		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+			return nil, &graph.GraphError{
+				StatusCode: 429,
+				Err:        graph.ErrThrottled,
+				Message:    "too many requests",
+				RetryAfter: 90 * time.Second,
+			}
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	eng.depGraph = NewDepGraph(eng.logger)
+	ctx := context.Background()
+
+	row := &SyncFailureRow{
+		Path:      "throttled-retry.txt",
+		DriveID:   driveid.New("drive1"),
+		ItemID:    "throttled-retry-item",
+		Direction: strDownload,
+	}
+
+	ev, retryAfter := eng.reobserve(ctx, row)
+
+	assert.Nil(t, ev, "should return nil when scope condition persists (429)")
+	assert.Equal(t, 90*time.Second, retryAfter,
+		"should forward RetryAfter from GraphError")
+}
+
+func TestReobserve_Remote_507_WithRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{
+		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+			return nil, &graph.GraphError{
+				StatusCode: 507,
+				Err:        graph.ErrServerError,
+				Message:    "insufficient storage",
+				RetryAfter: 120 * time.Second,
+			}
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	eng.depGraph = NewDepGraph(eng.logger)
+	ctx := context.Background()
+
+	row := &SyncFailureRow{
+		Path:      "storage-full.txt",
+		DriveID:   driveid.New("drive1"),
+		ItemID:    "storage-full-item",
+		Direction: strDownload,
+	}
+
+	ev, retryAfter := eng.reobserve(ctx, row)
+
+	assert.Nil(t, ev, "should return nil when scope condition persists (507)")
+	assert.Equal(t, 120*time.Second, retryAfter,
+		"should forward RetryAfter from 507 GraphError")
 }
 
 func TestReobserve_Local_Exists(t *testing.T) {
@@ -1105,9 +1172,10 @@ func TestReobserve_Local_Exists(t *testing.T) {
 		Direction: strUpload,
 	}
 
-	ev := eng.reobserve(ctx, row)
+	ev, retryAfter := eng.reobserve(ctx, row)
 
 	require.NotNil(t, ev)
+	assert.Equal(t, time.Duration(0), retryAfter, "local reobserve should have zero RetryAfter")
 	assert.Equal(t, SourceLocal, ev.Source)
 	assert.Equal(t, ChangeModify, ev.Type)
 	assert.NotEmpty(t, ev.Hash)
@@ -1130,9 +1198,10 @@ func TestReobserve_Local_Gone(t *testing.T) {
 		Direction: strUpload,
 	}
 
-	ev := eng.reobserve(ctx, row)
+	ev, retryAfter := eng.reobserve(ctx, row)
 
 	require.NotNil(t, ev)
+	assert.Equal(t, time.Duration(0), retryAfter, "local gone should have zero RetryAfter")
 	assert.Equal(t, ChangeDelete, ev.Type)
 	assert.True(t, ev.IsDeleted)
 }
@@ -1323,6 +1392,11 @@ func TestTrialDispatch_UsesReobserve(t *testing.T) {
 		ItemID:    "trial-item",
 	}, nil))
 
+	// Capture the scope block's TrialInterval before dispatch.
+	blockBefore, ok := eng.scopeGate.GetScopeBlock(sk)
+	require.True(t, ok)
+	intervalBefore := blockBefore.TrialInterval
+
 	eng.runTrialDispatch(ctx)
 
 	// The buffer should have a full-fidelity event from reobserve (not synthesized).
@@ -1341,6 +1415,78 @@ func TestTrialDispatch_UsesReobserve(t *testing.T) {
 	eng.trialMu.Unlock()
 
 	assert.True(t, hasTrial, "trial should be registered in trialPending")
+
+	// After successful dispatch, the scope block's TrialInterval should NOT
+	// be extended — interval stays unmutated until the worker result arrives.
+	blockAfter, ok := eng.scopeGate.GetScopeBlock(sk)
+	require.True(t, ok)
+	assert.Equal(t, intervalBefore, blockAfter.TrialInterval,
+		"trial interval should NOT be extended after successful dispatch")
+}
+
+// TestTrialDispatch_ForwardsRetryAfter verifies that when reobserve returns
+// a RetryAfter duration from a 429 response, runTrialDispatch forwards it
+// to extendTrialInterval, which uses the server value instead of doubling.
+func TestTrialDispatch_ForwardsRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{
+		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+			return nil, &graph.GraphError{
+				StatusCode: 429,
+				Err:        graph.ErrThrottled,
+				Message:    "too many requests",
+				RetryAfter: 90 * time.Second,
+			}
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	eng.depGraph = NewDepGraph(eng.logger)
+	eng.scopeGate = NewScopeGate(eng.baseline, eng.logger)
+	eng.readyCh = make(chan *TrackedAction, 1024)
+	eng.trialPending = make(map[string]trialEntry)
+	eng.retryTimerCh = make(chan struct{}, 1)
+	eng.nowFn = func() time.Time { return time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC) }
+	eng.buf = NewBuffer(eng.logger)
+
+	ctx := context.Background()
+	driveID := driveid.New("drive1")
+	now := eng.nowFn()
+
+	sk := SKQuotaOwn
+
+	// Set up a scope block with a small TrialInterval and NextTrialAt in the past.
+	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, sk, &ScopeBlock{
+		Key:           sk,
+		IssueType:     IssueQuotaExceeded,
+		BlockedAt:     now.Add(-time.Minute),
+		NextTrialAt:   now.Add(-time.Second),
+		TrialInterval: 10 * time.Second,
+	}))
+
+	// Seed a scope-blocked failure.
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path:      "throttled.txt",
+		DriveID:   driveID,
+		Direction: strDownload,
+		Category:  strTransient,
+		ScopeKey:  sk,
+		ItemID:    "throttled-item",
+	}, nil))
+
+	eng.runTrialDispatch(ctx)
+
+	// Buffer should be empty — reobserve returned nil (scope persists).
+	result := eng.buf.FlushImmediate()
+	assert.Empty(t, result, "no event should be dispatched when scope condition persists")
+
+	// The scope block's TrialInterval should now be 90s (from server's
+	// Retry-After), not 20s (doubled from 10s).
+	blockAfter, ok := eng.scopeGate.GetScopeBlock(sk)
+	require.True(t, ok)
+	assert.Equal(t, 90*time.Second, blockAfter.TrialInterval,
+		"trial interval should use server's Retry-After (90s), not exponential backoff (20s)")
 }
 
 func TestTrialDispatch_CleansStaleTrialPending(t *testing.T) {
