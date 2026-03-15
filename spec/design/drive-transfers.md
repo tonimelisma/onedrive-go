@@ -2,7 +2,7 @@
 
 GOVERNS: internal/driveops/cleanup.go, internal/driveops/disk_unix.go, internal/driveops/doc.go, internal/driveops/errors.go, internal/driveops/hash.go, internal/driveops/interfaces.go, internal/driveops/session.go, internal/driveops/session_store.go, internal/driveops/stale_partials.go, internal/driveops/transfer_manager.go, pkg/quickxorhash/quickxorhash.go, get.go, put.go
 
-Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [implemented], R-5.5 [verified], R-1.2 [verified], R-1.3 [verified], R-5.6 [implemented], R-5.7 [verified], R-5.8 [planned], R-6.8.3 [verified], R-6.2.6 [verified], R-6.4.7 [verified]
+Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [implemented], R-5.5 [verified], R-1.2 [verified], R-1.3 [verified], R-5.6 [implemented], R-5.7 [verified], R-5.8 [planned], R-6.8.3 [verified], R-6.2.6 [verified], R-6.4.7 [verified], R-6.2.10 [implemented]
 
 ## TransferManager
 
@@ -60,7 +60,7 @@ Design properties:
 
 - `Upload()` accepts `io.ReaderAt` (not `io.Reader`): enables retry-safe uploads without re-opening the file. `io.NewSectionReader` creates independent readers for each chunk.
 - Guard `.partial` file cleanup with `ctx.Err() == nil`: a 3.9 GB partial of a 4 GB download should survive Ctrl-C for resume. Only intentional deletions (hash mismatch) should remove partials.
-- Per-transfer timeout or connection-level deadline for `transferHTTPClient()`: `Timeout: 0` relies on context; a stalled connection without context cancellation hangs indefinitely. [planned]
+- **Connection-level deadlines** (`transferTransport()`): `transferHTTPClient()` and `syncTransferHTTPClient()` use a shared `transferTransport()` with `ResponseHeaderTimeout: 2m` (detects servers that accept but never respond) and TCP keepalives (30s idle, 10s interval, 3 probes — detects dead connections within ~60s). No `http.Client.Timeout` — transfer duration varies with file size and bandwidth. [implemented]
 - Transfer manager resume edge case tests: corrupt partial file, changed remote content, oversized partial. [planned]
 
 ### Rationale: Per-Side Hashes
