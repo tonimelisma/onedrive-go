@@ -148,6 +148,12 @@ type watchState struct {
 	// CompareAndSwap(false, true) at start, Store(false) in defer.
 	// Zero value (false) is the correct initial state.
 	reconcileRunning atomic.Bool
+
+	// afterReconcileCommit is a test-only hook called after CommitObservation
+	// succeeds in runFullReconciliationAsync. Nil in production. Allows tests
+	// to inject actions (e.g. context cancellation) at an otherwise unreachable
+	// point between commit and buffer feeding.
+	afterReconcileCommit func()
 }
 
 // Engine orchestrates a complete sync pass: observe → plan → execute → commit.
@@ -3544,13 +3550,14 @@ func (e *Engine) initReconcileTicker(opts WatchOpts) (<-chan time.Time, func()) 
 //   - DepGraph.HasInFlight + CancelByPath prevent duplicate dispatch
 func (e *Engine) runFullReconciliationAsync(ctx context.Context, bl *Baseline) {
 	if !e.watch.reconcileRunning.CompareAndSwap(false, true) {
-		e.logger.Debug("full reconciliation skipped — previous still running")
+		e.logger.Info("full reconciliation skipped — previous still running")
 		return
 	}
 
 	go func() {
 		defer e.watch.reconcileRunning.Store(false)
 
+		start := time.Now()
 		e.logger.Info("periodic full reconciliation starting")
 
 		events, deltaToken, err := e.observeRemoteFull(ctx, bl)
@@ -3578,6 +3585,18 @@ func (e *Engine) runFullReconciliationAsync(ctx context.Context, bl *Baseline) {
 			return
 		}
 
+		if e.watch.afterReconcileCommit != nil {
+			e.watch.afterReconcileCommit()
+		}
+
+		// Observations are durably committed. If we're shutting down, skip
+		// feeding events to the buffer — the watch loop is also stopping and
+		// won't process them. Next startup will re-observe idempotently.
+		if ctx.Err() != nil {
+			e.logger.Info("full reconciliation: observations committed, stopping for shutdown")
+			return
+		}
+
 		// Filter out shortcut events and process shortcut scopes.
 		events = filterOutShortcuts(events)
 
@@ -3591,7 +3610,9 @@ func (e *Engine) runFullReconciliationAsync(ctx context.Context, bl *Baseline) {
 		events = append(events, shortcutEvents...)
 
 		if len(events) == 0 {
-			e.logger.Info("periodic full reconciliation complete: no changes")
+			e.logger.Info("periodic full reconciliation complete: no changes",
+				slog.Duration("duration", time.Since(start)),
+			)
 			return
 		}
 
@@ -3611,6 +3632,7 @@ func (e *Engine) runFullReconciliationAsync(ctx context.Context, bl *Baseline) {
 
 		e.logger.Info("periodic full reconciliation complete",
 			slog.Int("events", len(events)),
+			slog.Duration("duration", time.Since(start)),
 		)
 	}()
 }

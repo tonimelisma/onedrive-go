@@ -1,10 +1,12 @@
 package sync
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -156,6 +158,38 @@ func newTestEngine(t *testing.T, mock *engineMockClient) (*Engine, string) {
 	require.NoError(t, os.MkdirAll(syncRoot, 0o755), "creating sync root")
 
 	logger := testLogger(t)
+	driveID := driveid.New(engineTestDriveID)
+
+	eng, err := NewEngine(&EngineConfig{
+		DBPath:    dbPath,
+		SyncRoot:  syncRoot,
+		DriveID:   driveID,
+		Fetcher:   mock,
+		Items:     mock,
+		Downloads: mock,
+		Uploads:   mock,
+		Logger:    logger,
+	})
+	require.NoError(t, err, "NewEngine")
+
+	t.Cleanup(func() {
+		assert.NoError(t, eng.Close(), "Engine.Close")
+	})
+
+	return eng, syncRoot
+}
+
+// newTestEngineWithLogger is like newTestEngine but accepts a custom logger
+// for tests that need to capture or filter log output.
+func newTestEngineWithLogger(t *testing.T, mock *engineMockClient, logger *slog.Logger) (*Engine, string) {
+	t.Helper()
+
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	syncRoot := filepath.Join(tmpDir, "sync")
+
+	require.NoError(t, os.MkdirAll(syncRoot, 0o755), "creating sync root")
+
 	driveID := driveid.New(engineTestDriveID)
 
 	eng, err := NewEngine(&EngineConfig{
@@ -2826,6 +2860,231 @@ func TestRunFullReconciliationAsync_FeedsBuffer(t *testing.T) {
 
 	batch := e.watch.buf.FlushImmediate()
 	assert.NotEmpty(t, batch, "buffer should contain events from reconciliation")
+}
+
+func TestRunFullReconciliationAsync_ShutdownAfterCommit(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{ID: "f1", Name: "newfile.txt", ParentID: "root", DriveID: driveID, Size: 42, QuickXorHash: "qxh"},
+				},
+				DeltaLink: "shutdown-tok",
+			}, nil
+		},
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	syncDir := t.TempDir()
+	logger := testLogger(t)
+
+	e, err := NewEngine(&EngineConfig{
+		DBPath:    dbPath,
+		SyncRoot:  syncDir,
+		DriveID:   driveID,
+		Fetcher:   mock,
+		Items:     mock,
+		Downloads: mock,
+		Uploads:   mock,
+		Logger:    logger,
+	})
+	require.NoError(t, err)
+	defer e.Close()
+
+	// Context with manual cancel — cancel is triggered by the
+	// afterReconcileCommit hook at the exact point between
+	// CommitObservation succeeding and the ctx.Err() check.
+	ctx, cancel := context.WithCancel(t.Context())
+
+	bl, err := e.baseline.Load(t.Context())
+	require.NoError(t, err)
+
+	setupWatchEngine(t, e)
+	e.watch.buf = NewBuffer(e.logger)
+
+	// Hook: cancel context immediately after CommitObservation succeeds.
+	// This guarantees we test the exact shutdown-after-commit code path,
+	// not the commit-failed path or the normal completion path.
+	e.watch.afterReconcileCommit = func() {
+		cancel()
+	}
+
+	e.runFullReconciliationAsync(ctx, bl)
+	waitForReconcileDone(t, e.watch)
+
+	// Verify observations WERE committed to SQLite — proving we took
+	// the post-commit shutdown path, not the commit-failed path.
+	// CommitObservation saves delta token with scopeID="" (primary drive scope).
+	savedToken, tokenErr := e.baseline.GetDeltaToken(t.Context(), driveID.String(), "")
+	require.NoError(t, tokenErr)
+	assert.Equal(t, "shutdown-tok", savedToken,
+		"delta token should be saved — CommitObservation must have succeeded")
+
+	// Buffer should be empty — events were committed to SQLite but
+	// not fed to the buffer because shutdown was detected after commit.
+	batch := e.watch.buf.FlushImmediate()
+	assert.Empty(t, batch, "buffer should be empty after shutdown-aware early exit")
+}
+
+func TestRunFullReconciliationAsync_SkipLogPromotedToInfo(t *testing.T) {
+	t.Parallel()
+
+	// Capture logs at Info level — if the skip message were still Debug,
+	// it would NOT appear in the output.
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			require.Fail(t, "deltaFn should not be called when reconciliation is already running")
+			return nil, nil
+		},
+	}
+
+	e, _ := newTestEngineWithLogger(t, mock, logger)
+	ctx := t.Context()
+
+	bl, err := e.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	setupWatchEngine(t, e)
+	e.watch.buf = NewBuffer(e.logger)
+
+	// Pre-set reconcileRunning — simulates a reconciliation already in progress.
+	e.watch.reconcileRunning.Store(true)
+
+	e.runFullReconciliationAsync(ctx, bl)
+
+	// The skip message should appear in the Info-level log buffer.
+	// If it were still at Debug level, the Info-level handler would exclude it.
+	logOutput := logBuf.String()
+	assert.Contains(t, logOutput, "full reconciliation skipped",
+		"skip message should be logged at Info level (not Debug)")
+
+	// Clean up.
+	e.watch.reconcileRunning.Store(false)
+}
+
+func TestRunFullReconciliationAsync_DurationInCompletionLog(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{ID: "f1", Name: "newfile.txt", ParentID: "root", DriveID: driveID, Size: 42, QuickXorHash: "qxh"},
+				},
+				DeltaLink: "dur-tok",
+			}, nil
+		},
+	}
+
+	// Capture logs to verify duration field in completion message.
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	syncDir := t.TempDir()
+
+	e, err := NewEngine(&EngineConfig{
+		DBPath:    dbPath,
+		SyncRoot:  syncDir,
+		DriveID:   driveID,
+		Fetcher:   mock,
+		Items:     mock,
+		Downloads: mock,
+		Uploads:   mock,
+		Logger:    logger,
+	})
+	require.NoError(t, err)
+	defer e.Close()
+
+	ctx := t.Context()
+
+	bl, err := e.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	setupWatchEngine(t, e)
+	e.watch.buf = NewBuffer(e.logger)
+
+	e.runFullReconciliationAsync(ctx, bl)
+	waitForReconcileDone(t, e.watch)
+
+	logOutput := logBuf.String()
+	assert.Contains(t, logOutput, "periodic full reconciliation complete",
+		"should have completion message")
+	assert.Contains(t, logOutput, "duration=",
+		"completion log must include duration field")
+}
+
+func TestRunFullReconciliationAsync_DurationInNoChangesLog(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+
+	// Return only root item — FullDelta produces 0 events (root is skipped),
+	// so the function takes the "no changes" path.
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+				},
+				DeltaLink: "no-change-tok",
+			}, nil
+		},
+	}
+
+	// Capture logs to verify duration in the "no changes" completion path.
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	syncDir := t.TempDir()
+
+	e, err := NewEngine(&EngineConfig{
+		DBPath:    dbPath,
+		SyncRoot:  syncDir,
+		DriveID:   driveID,
+		Fetcher:   mock,
+		Items:     mock,
+		Downloads: mock,
+		Uploads:   mock,
+		Logger:    logger,
+	})
+	require.NoError(t, err)
+	defer e.Close()
+
+	ctx := t.Context()
+
+	bl, err := e.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	setupWatchEngine(t, e)
+	e.watch.buf = NewBuffer(e.logger)
+
+	e.runFullReconciliationAsync(ctx, bl)
+	waitForReconcileDone(t, e.watch)
+
+	logOutput := logBuf.String()
+	assert.Contains(t, logOutput, "no changes",
+		"should have no-changes completion message")
+	assert.Contains(t, logOutput, "duration=",
+		"no-changes completion log must also include duration field")
 }
 
 // ---------------------------------------------------------------------------
