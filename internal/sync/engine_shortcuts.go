@@ -325,8 +325,8 @@ func (e *Engine) handleRemovedShortcuts(ctx context.Context, deletedItemIDs map[
 		scKey := sc.RemoteDrive + ":" + sc.RemoteItem
 		scopeKey := SKQuotaShortcut(scKey)
 
-		if e.scopeGate != nil {
-			if err := e.scopeGate.ClearScopeBlock(ctx, scopeKey); err != nil {
+		if e.watch != nil {
+			if err := e.watch.scopeGate.ClearScopeBlock(ctx, scopeKey); err != nil {
 				e.logger.Debug("handleRemovedShortcuts: failed to clear scope block",
 					slog.String("scope_key", scopeKey.String()),
 					slog.String("error", err.Error()),

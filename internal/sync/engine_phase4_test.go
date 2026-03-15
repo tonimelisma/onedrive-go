@@ -25,11 +25,9 @@ func newPhase4Engine(t *testing.T) *Engine {
 
 	// Initialize Phase 4 fields.
 	eng.depGraph = NewDepGraph(eng.logger)
-	eng.scopeGate = NewScopeGate(eng.baseline, eng.logger)
 	eng.readyCh = make(chan *TrackedAction, 1024)
-	eng.trialPending = make(map[string]trialEntry)
-	eng.retryTimerCh = make(chan struct{}, 1)
 	eng.nowFn = func() time.Time { return time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC) }
+	newTestWatchState(t, eng)
 
 	return eng
 }
@@ -117,7 +115,7 @@ func TestEngine_OnScopeClear(t *testing.T) {
 	sk := SKQuotaOwn
 
 	// Create a scope block.
-	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, sk, &ScopeBlock{
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, sk, &ScopeBlock{
 		Key:       sk,
 		IssueType: IssueQuotaExceeded,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
@@ -137,7 +135,7 @@ func TestEngine_OnScopeClear(t *testing.T) {
 	eng.onScopeClear(ctx, sk)
 
 	// Scope block should be gone.
-	assert.False(t, eng.scopeGate.IsScopeBlocked(sk))
+	assert.False(t, eng.watch.scopeGate.IsScopeBlocked(sk))
 
 	// Failures should now be retryable.
 	now := eng.nowFn()
@@ -155,8 +153,8 @@ func TestEngine_AdmitReady_NoScopeGate(t *testing.T) {
 	eng := newPhase4Engine(t)
 	ctx := context.Background()
 
-	// nil scope gate → all actions pass through.
-	eng.scopeGate = nil
+	// nil watch → one-shot mode, all actions pass through.
+	eng.watch = nil
 
 	action := Action{
 		Type:    ActionUpload,
@@ -175,7 +173,7 @@ func TestEngine_AdmitReady_ScopeBlocked(t *testing.T) {
 	ctx := context.Background()
 
 	// Set up a scope block.
-	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, SKQuotaOwn, &ScopeBlock{
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, SKQuotaOwn, &ScopeBlock{
 		Key:       SKQuotaOwn,
 		IssueType: IssueQuotaExceeded,
 		BlockedAt: eng.nowFn(),
@@ -377,17 +375,17 @@ func TestRetrierSweep_BatchLimit(t *testing.T) {
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(rows), total)
 
-	eng.buf = NewBuffer(eng.logger)
+	eng.watch.buf = NewBuffer(eng.logger)
 
 	eng.runRetrierSweep(ctx)
 
 	// Should dispatch exactly retryBatchSize items.
-	assert.Equal(t, retryBatchSize, eng.buf.Len(),
+	assert.Equal(t, retryBatchSize, eng.watch.buf.Len(),
 		"sweep should be batch-limited to retryBatchSize")
 
 	// retryTimerCh should have a signal for remaining items.
 	select {
-	case <-eng.retryTimerCh:
+	case <-eng.watch.retryTimerCh:
 		// Good — re-arm signal sent.
 	default:
 		t.Fatal("retryTimerCh should have a signal for remaining batch items")
@@ -442,12 +440,12 @@ func TestRetrierSweep_SkipsInFlight(t *testing.T) {
 		ItemID:  "in-flight-item",
 	}, 1, nil)
 
-	eng.buf = NewBuffer(eng.logger)
+	eng.watch.buf = NewBuffer(eng.logger)
 
 	eng.runRetrierSweep(ctx)
 
 	// Should dispatch 2 items (a.txt and c.txt), skipping b.txt.
-	assert.Equal(t, 2, eng.buf.Len(),
+	assert.Equal(t, 2, eng.watch.buf.Len(),
 		"sweep should skip in-flight items")
 }
 
@@ -464,7 +462,7 @@ func TestTrialDispatch_NoCandidates_ClearsScope(t *testing.T) {
 
 	// Set a scope block with NextTrialAt in the past.
 	sk := SKQuotaOwn
-	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, sk, &ScopeBlock{
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, sk, &ScopeBlock{
 		Key:           sk,
 		IssueType:     IssueQuotaExceeded,
 		BlockedAt:     now.Add(-time.Minute),
@@ -473,12 +471,12 @@ func TestTrialDispatch_NoCandidates_ClearsScope(t *testing.T) {
 	}))
 
 	// Do NOT seed any sync_failures for this scope — no candidates.
-	eng.buf = NewBuffer(eng.logger)
+	eng.watch.buf = NewBuffer(eng.logger)
 
 	eng.runTrialDispatch(ctx)
 
 	// Scope should be cleared because there are no candidates.
-	assert.False(t, eng.scopeGate.IsScopeBlocked(sk),
+	assert.False(t, eng.watch.scopeGate.IsScopeBlocked(sk),
 		"scope should be cleared when no trial candidates exist")
 }
 
@@ -1245,11 +1243,11 @@ func TestRetrierSweep_FullFidelityEvents_D9(t *testing.T) {
 		return -time.Minute
 	}))
 
-	eng.buf = NewBuffer(eng.logger)
+	eng.watch.buf = NewBuffer(eng.logger)
 	eng.runRetrierSweep(ctx)
 
 	// Verify the buffer contains a full-fidelity event.
-	result := eng.buf.FlushImmediate()
+	result := eng.watch.buf.FlushImmediate()
 	require.Len(t, result, 1)
 	require.Len(t, result[0].RemoteEvents, 1)
 
@@ -1319,11 +1317,11 @@ func TestRetrierSweep_SkipsResolvedFailures_D11(t *testing.T) {
 		}))
 	}
 
-	eng.buf = NewBuffer(eng.logger)
+	eng.watch.buf = NewBuffer(eng.logger)
 	eng.runRetrierSweep(ctx)
 
 	// Only d11-pending should be dispatched (d11-synced is resolved).
-	result := eng.buf.FlushImmediate()
+	result := eng.watch.buf.FlushImmediate()
 	require.Len(t, result, 1, "D-11: resolved failure should be skipped")
 	assert.Equal(t, "d11-pending.txt", result[0].Path)
 
@@ -1360,12 +1358,10 @@ func TestTrialDispatch_UsesReobserve(t *testing.T) {
 
 	eng, _ := newTestEngine(t, mock)
 	eng.depGraph = NewDepGraph(eng.logger)
-	eng.scopeGate = NewScopeGate(eng.baseline, eng.logger)
 	eng.readyCh = make(chan *TrackedAction, 1024)
-	eng.trialPending = make(map[string]trialEntry)
-	eng.retryTimerCh = make(chan struct{}, 1)
 	eng.nowFn = func() time.Time { return time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC) }
-	eng.buf = NewBuffer(eng.logger)
+	newTestWatchState(t, eng)
+	eng.watch.buf = NewBuffer(eng.logger)
 
 	ctx := context.Background()
 	driveID := driveid.New("drive1")
@@ -1374,7 +1370,7 @@ func TestTrialDispatch_UsesReobserve(t *testing.T) {
 	sk := SKQuotaOwn
 
 	// Set up a scope block with NextTrialAt in the past.
-	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, sk, &ScopeBlock{
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, sk, &ScopeBlock{
 		Key:           sk,
 		IssueType:     IssueQuotaExceeded,
 		BlockedAt:     now.Add(-time.Minute),
@@ -1393,14 +1389,14 @@ func TestTrialDispatch_UsesReobserve(t *testing.T) {
 	}, nil))
 
 	// Capture the scope block's TrialInterval before dispatch.
-	blockBefore, ok := eng.scopeGate.GetScopeBlock(sk)
+	blockBefore, ok := eng.watch.scopeGate.GetScopeBlock(sk)
 	require.True(t, ok)
 	intervalBefore := blockBefore.TrialInterval
 
 	eng.runTrialDispatch(ctx)
 
 	// The buffer should have a full-fidelity event from reobserve (not synthesized).
-	result := eng.buf.FlushImmediate()
+	result := eng.watch.buf.FlushImmediate()
 	require.Len(t, result, 1)
 	require.Len(t, result[0].RemoteEvents, 1)
 
@@ -1410,15 +1406,15 @@ func TestTrialDispatch_UsesReobserve(t *testing.T) {
 	assert.Equal(t, "trial-etag", ev.ETag, "D-9: reobserve should populate etag")
 
 	// trialPending should have an entry.
-	eng.trialMu.Lock()
-	_, hasTrial := eng.trialPending["trial.txt"]
-	eng.trialMu.Unlock()
+	eng.watch.trialMu.Lock()
+	_, hasTrial := eng.watch.trialPending["trial.txt"]
+	eng.watch.trialMu.Unlock()
 
 	assert.True(t, hasTrial, "trial should be registered in trialPending")
 
 	// After successful dispatch, the scope block's TrialInterval should NOT
 	// be extended — interval stays unmutated until the worker result arrives.
-	blockAfter, ok := eng.scopeGate.GetScopeBlock(sk)
+	blockAfter, ok := eng.watch.scopeGate.GetScopeBlock(sk)
 	require.True(t, ok)
 	assert.Equal(t, intervalBefore, blockAfter.TrialInterval,
 		"trial interval should NOT be extended after successful dispatch")
@@ -1443,12 +1439,10 @@ func TestTrialDispatch_ForwardsRetryAfter(t *testing.T) {
 
 	eng, _ := newTestEngine(t, mock)
 	eng.depGraph = NewDepGraph(eng.logger)
-	eng.scopeGate = NewScopeGate(eng.baseline, eng.logger)
 	eng.readyCh = make(chan *TrackedAction, 1024)
-	eng.trialPending = make(map[string]trialEntry)
-	eng.retryTimerCh = make(chan struct{}, 1)
 	eng.nowFn = func() time.Time { return time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC) }
-	eng.buf = NewBuffer(eng.logger)
+	newTestWatchState(t, eng)
+	eng.watch.buf = NewBuffer(eng.logger)
 
 	ctx := context.Background()
 	driveID := driveid.New("drive1")
@@ -1457,7 +1451,7 @@ func TestTrialDispatch_ForwardsRetryAfter(t *testing.T) {
 	sk := SKQuotaOwn
 
 	// Set up a scope block with a small TrialInterval and NextTrialAt in the past.
-	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, sk, &ScopeBlock{
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, sk, &ScopeBlock{
 		Key:           sk,
 		IssueType:     IssueQuotaExceeded,
 		BlockedAt:     now.Add(-time.Minute),
@@ -1478,12 +1472,12 @@ func TestTrialDispatch_ForwardsRetryAfter(t *testing.T) {
 	eng.runTrialDispatch(ctx)
 
 	// Buffer should be empty — reobserve returned nil (scope persists).
-	result := eng.buf.FlushImmediate()
+	result := eng.watch.buf.FlushImmediate()
 	assert.Empty(t, result, "no event should be dispatched when scope condition persists")
 
 	// The scope block's TrialInterval should now be 90s (from server's
 	// Retry-After), not 20s (doubled from 10s).
-	blockAfter, ok := eng.scopeGate.GetScopeBlock(sk)
+	blockAfter, ok := eng.watch.scopeGate.GetScopeBlock(sk)
 	require.True(t, ok)
 	assert.Equal(t, 90*time.Second, blockAfter.TrialInterval,
 		"trial interval should use server's Retry-After (90s), not exponential backoff (20s)")
@@ -1497,21 +1491,21 @@ func TestTrialDispatch_CleansStaleTrialPending(t *testing.T) {
 	now := eng.nowFn()
 
 	// Insert a stale trial entry (older than trialPendingTTL).
-	eng.trialMu.Lock()
-	eng.trialPending["stale.txt"] = trialEntry{
+	eng.watch.trialMu.Lock()
+	eng.watch.trialPending["stale.txt"] = trialEntry{
 		scopeKey: SKQuotaOwn,
 		created:  now.Add(-2 * trialPendingTTL),
 	}
-	eng.trialMu.Unlock()
+	eng.watch.trialMu.Unlock()
 
-	eng.buf = NewBuffer(eng.logger)
+	eng.watch.buf = NewBuffer(eng.logger)
 
 	// No due scopes needed — stale cleanup runs first in runTrialDispatch.
 	eng.runTrialDispatch(ctx)
 
-	eng.trialMu.Lock()
-	remaining := len(eng.trialPending)
-	eng.trialMu.Unlock()
+	eng.watch.trialMu.Lock()
+	remaining := len(eng.watch.trialPending)
+	eng.watch.trialMu.Unlock()
 
 	assert.Equal(t, 0, remaining,
 		"stale trial entries should be cleaned up")

@@ -489,7 +489,7 @@ func (e *Engine) recheckLocalPermissions(ctx context.Context) {
 			continue
 		}
 
-		if e.scopeGate != nil {
+		if e.watch != nil {
 			e.onScopeClear(ctx, issue.ScopeKey)
 		}
 
@@ -547,7 +547,7 @@ func (e *Engine) clearScannerResolvedPermissions(ctx context.Context, observedPa
 			continue
 		}
 
-		if !issue.ScopeKey.IsZero() && e.scopeGate != nil {
+		if !issue.ScopeKey.IsZero() && e.watch != nil {
 			e.onScopeClear(ctx, issue.ScopeKey)
 		}
 

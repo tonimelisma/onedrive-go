@@ -188,6 +188,20 @@ func setupWatchEngine(t *testing.T, eng *Engine) <-chan *TrackedAction {
 	return eng.readyCh
 }
 
+// newTestWatchState initializes watch state on an engine for testing.
+// Creates scopeGate, trialPending, and retryTimerCh — the minimum set
+// needed for watch-mode tests.
+func newTestWatchState(t *testing.T, eng *Engine) {
+	t.Helper()
+
+	eng.watch = &watchState{
+		scopeGate:    NewScopeGate(eng.baseline, eng.logger),
+		scopeState:   NewScopeState(eng.nowFunc, eng.logger),
+		trialPending: make(map[string]trialEntry),
+		retryTimerCh: make(chan struct{}, 1),
+	}
+}
+
 // deltaPageWithItems returns a DeltaPage with the given items and a delta link.
 func deltaPageWithItems(items []graph.Item, deltaLink string) *graph.DeltaPage {
 	return &graph.DeltaPage{
@@ -877,11 +891,11 @@ func TestResolveSafetyConfig_UsesConfiguredThreshold(t *testing.T) {
 func TestResolveSafetyConfig_WatchMode_DisablesThreshold(t *testing.T) {
 	t.Parallel()
 
-	// When deleteCounter is non-nil (watch mode), the planner-level
+	// When watch is non-nil (watch mode), the planner-level
 	// big-delete threshold is disabled regardless of force flag.
 	eng := &Engine{
 		bigDeleteThreshold: 500,
-		deleteCounter:      newDeleteCounter(500, 5*time.Minute, time.Now),
+		watch:              &watchState{},
 	}
 	cfg := eng.resolveSafetyConfig(false)
 
@@ -1207,7 +1221,7 @@ func TestRunWatch_UploadOnly_SkipsRemoteObserver(t *testing.T) {
 	assert.Equal(t, 0, deltaCalledAfterInit, "delta should not be called after init in upload-only mode")
 
 	// remoteObs should not be set in upload-only mode.
-	assert.Nil(t, eng.remoteObs, "remoteObs should be nil in upload-only mode")
+	assert.Nil(t, eng.watch.remoteObs, "remoteObs should be nil in upload-only mode")
 }
 
 // TestRunWatch_ProcessBatch_BigDelete verifies that the rolling delete
@@ -1265,11 +1279,12 @@ func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
 	}
 
 	ready := setupWatchEngine(t, eng)
+	newTestWatchState(t, eng)
 
 	// Install a rolling delete counter with threshold=10 on the engine.
 	// The planner-level check is disabled (forceSafetyMax) — the counter
 	// handles protection in watch mode.
-	eng.deleteCounter = newDeleteCounter(10, 5*time.Minute, time.Now)
+	eng.watch.deleteCounter = newDeleteCounter(10, 5*time.Minute, time.Now)
 	safety := &SafetyConfig{BigDeleteThreshold: forceSafetyMax}
 
 	eng.processBatch(ctx, batch, bl, SyncBidirectional, safety)
@@ -1283,7 +1298,7 @@ func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
 	}
 
 	// Verify counter is now held.
-	assert.True(t, eng.deleteCounter.IsHeld(), "counter should be held")
+	assert.True(t, eng.watch.deleteCounter.IsHeld(), "counter should be held")
 
 	// Verify held deletes were recorded as actionable issues.
 	rows, listErr := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueBigDeleteHeld)
@@ -1361,15 +1376,16 @@ func TestRunWatch_ProcessBatch_BigDelete_NonDeletesFlow(t *testing.T) {
 	})
 
 	ready := setupWatchEngine(t, eng)
+	newTestWatchState(t, eng)
 
 	// Install counter with threshold=10. 15 deletes > 10 → trips.
-	eng.deleteCounter = newDeleteCounter(10, 5*time.Minute, time.Now)
+	eng.watch.deleteCounter = newDeleteCounter(10, 5*time.Minute, time.Now)
 	safety := &SafetyConfig{BigDeleteThreshold: forceSafetyMax}
 
 	eng.processBatch(ctx, batch, bl, SyncBidirectional, safety)
 
 	// Counter should be held.
-	assert.True(t, eng.deleteCounter.IsHeld(), "counter should be held")
+	assert.True(t, eng.watch.deleteCounter.IsHeld(), "counter should be held")
 
 	// One download action should have been dispatched.
 	dispatched := 0
@@ -1443,14 +1459,15 @@ func TestRunWatch_ProcessBatch_BigDelete_BelowThreshold(t *testing.T) {
 	}
 
 	ready := setupWatchEngine(t, eng)
+	newTestWatchState(t, eng)
 
-	eng.deleteCounter = newDeleteCounter(10, 5*time.Minute, time.Now)
+	eng.watch.deleteCounter = newDeleteCounter(10, 5*time.Minute, time.Now)
 	safety := &SafetyConfig{BigDeleteThreshold: forceSafetyMax}
 
 	eng.processBatch(ctx, batch, bl, SyncBidirectional, safety)
 
 	// Counter should NOT be held.
-	assert.False(t, eng.deleteCounter.IsHeld(), "counter should not trip at 5 < 10")
+	assert.False(t, eng.watch.deleteCounter.IsHeld(), "counter should not trip at 5 < 10")
 
 	// All 5 deletes should have been dispatched.
 	dispatched := 0
@@ -1481,11 +1498,12 @@ func TestEngine_ExternalDBChanged(t *testing.T) {
 
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
+	newTestWatchState(t, eng)
 
 	// Seed the initial data_version.
 	dv, err := eng.baseline.DataVersion(ctx)
 	require.NoError(t, err)
-	eng.lastDataVersion = dv
+	eng.watch.lastDataVersion = dv
 
 	// No external changes yet — should return false.
 	assert.False(t, eng.externalDBChanged(ctx), "no external changes")
@@ -1513,11 +1531,12 @@ func TestEngine_HandleExternalChanges_BigDeleteClearance(t *testing.T) {
 
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
+	newTestWatchState(t, eng)
 
 	// Install a held delete counter.
-	eng.deleteCounter = newDeleteCounter(10, 5*time.Minute, time.Now)
-	eng.deleteCounter.Add(15) // trips the counter
-	require.True(t, eng.deleteCounter.IsHeld())
+	eng.watch.deleteCounter = newDeleteCounter(10, 5*time.Minute, time.Now)
+	eng.watch.deleteCounter.Add(15) // trips the counter
+	require.True(t, eng.watch.deleteCounter.IsHeld())
 
 	// Record some big_delete_held issues.
 	failures := []ActionableFailure{
@@ -1528,14 +1547,14 @@ func TestEngine_HandleExternalChanges_BigDeleteClearance(t *testing.T) {
 
 	// handleExternalChanges should NOT release — rows still present.
 	eng.handleExternalChanges(ctx)
-	assert.True(t, eng.deleteCounter.IsHeld(), "should still be held with entries present")
+	assert.True(t, eng.watch.deleteCounter.IsHeld(), "should still be held with entries present")
 
 	// Clear all big_delete_held entries (simulates `issues clear --all`).
 	require.NoError(t, eng.baseline.ClearResolvedActionableFailures(ctx, IssueBigDeleteHeld, nil))
 
 	// Now handleExternalChanges should release.
 	eng.handleExternalChanges(ctx)
-	assert.False(t, eng.deleteCounter.IsHeld(), "should be released after entries cleared")
+	assert.False(t, eng.watch.deleteCounter.IsHeld(), "should be released after entries cleared")
 }
 
 // TestEngine_HandleExternalChanges_PartialClear verifies that the counter
@@ -1555,10 +1574,11 @@ func TestEngine_HandleExternalChanges_PartialClear(t *testing.T) {
 
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
+	newTestWatchState(t, eng)
 
-	eng.deleteCounter = newDeleteCounter(10, 5*time.Minute, time.Now)
-	eng.deleteCounter.Add(15)
-	require.True(t, eng.deleteCounter.IsHeld())
+	eng.watch.deleteCounter = newDeleteCounter(10, 5*time.Minute, time.Now)
+	eng.watch.deleteCounter.Add(15)
+	require.True(t, eng.watch.deleteCounter.IsHeld())
 
 	// Record two big_delete_held entries.
 	failures := []ActionableFailure{
@@ -1571,7 +1591,7 @@ func TestEngine_HandleExternalChanges_PartialClear(t *testing.T) {
 	require.NoError(t, eng.baseline.ClearResolvedActionableFailures(ctx, IssueBigDeleteHeld, []string{"file2.txt"}))
 
 	eng.handleExternalChanges(ctx)
-	assert.True(t, eng.deleteCounter.IsHeld(), "should remain held with one entry still present")
+	assert.True(t, eng.watch.deleteCounter.IsHeld(), "should remain held with one entry still present")
 }
 
 // TestRunWatch_ProcessBatch_EmptyPlan verifies that an empty plan (all
@@ -1624,6 +1644,7 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 	}}
 
 	setupWatchEngine(t, eng)
+	newTestWatchState(t, eng)
 	safety := DefaultSafetyConfig()
 
 	// Should return without error or dispatching actions.
@@ -1653,6 +1674,7 @@ func TestRunWatch_Deduplication(t *testing.T) {
 	require.NoError(t, err, "Load")
 
 	setupWatchEngine(t, eng)
+	newTestWatchState(t, eng)
 	safety := DefaultSafetyConfig()
 
 	// First batch: download a file.
@@ -1745,7 +1767,7 @@ func TestRunWatch_DownloadOnly_SkipsLocalObserver(t *testing.T) {
 	}
 
 	// In download-only mode, the remote observer should be set.
-	assert.NotNil(t, eng.remoteObs, "remoteObs should be set in download-only mode")
+	assert.NotNil(t, eng.watch.remoteObs, "remoteObs should be set in download-only mode")
 }
 
 // TestRunWatch_AllObserversDead_ReturnsError verifies that RunWatch returns an
@@ -2078,13 +2100,14 @@ func TestEngine_Close_NilsObserversAndCleansStale(t *testing.T) {
 	require.NoError(t, err)
 
 	// Simulate observers being set (as RunWatch does).
-	eng.remoteObs = &RemoteObserver{}
-	eng.localObs = &LocalObserver{}
+	eng.watch = &watchState{}
+	eng.watch.remoteObs = &RemoteObserver{}
+	eng.watch.localObs = &LocalObserver{}
 
 	// First Close should succeed and nil out references.
 	require.NoError(t, eng.Close())
-	assert.Nil(t, eng.remoteObs, "remoteObs should be nil after Close")
-	assert.Nil(t, eng.localObs, "localObs should be nil after Close")
+	assert.Nil(t, eng.watch.remoteObs, "remoteObs should be nil after Close")
+	assert.Nil(t, eng.watch.localObs, "localObs should be nil after Close")
 
 	// Second Close must not panic (idempotency). The baseline DB is already
 	// closed so the second call returns an error, which is acceptable.
@@ -2633,6 +2656,7 @@ func TestRunFullReconciliation_NoChanges(t *testing.T) {
 
 	safety := DefaultSafetyConfig()
 	setupWatchEngine(t, e)
+	newTestWatchState(t, e)
 
 	// Should complete without panic; events exist but planner produces no
 	// actions because nothing is different from baseline.
@@ -2657,6 +2681,7 @@ func TestRunFullReconciliation_DeltaError(t *testing.T) {
 
 	safety := DefaultSafetyConfig()
 	setupWatchEngine(t, e)
+	newTestWatchState(t, e)
 
 	// Should not panic — error is logged and function returns.
 	e.runFullReconciliation(ctx, bl, SyncDownloadOnly, safety)
@@ -3070,7 +3095,7 @@ func TestProcessTrialResultV2_Success_ClearsScope(t *testing.T) {
 
 	// Set up a scope block in the ScopeGate.
 	now := eng.nowFunc()
-	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, SKThrottleAccount, &ScopeBlock{
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, SKThrottleAccount, &ScopeBlock{
 		Key:           SKThrottleAccount,
 		IssueType:     IssueRateLimited,
 		BlockedAt:     now,
@@ -3096,7 +3121,7 @@ func TestProcessTrialResultV2_Success_ClearsScope(t *testing.T) {
 	})
 
 	// Scope block should be cleared.
-	assert.False(t, eng.scopeGate.IsScopeBlocked(SKThrottleAccount),
+	assert.False(t, eng.watch.scopeGate.IsScopeBlocked(SKThrottleAccount),
 		"scope block should be removed after successful trial")
 
 	// Scope-blocked failures should now be retryable (next_retry_at set to ~now).
@@ -3113,7 +3138,7 @@ func TestProcessTrialResultV2_Failure_DoublesInterval(t *testing.T) {
 	ctx := t.Context()
 
 	now := eng.nowFunc()
-	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, SKService, &ScopeBlock{
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, SKService, &ScopeBlock{
 		Key:           SKService,
 		IssueType:     IssueServiceOutage,
 		BlockedAt:     now,
@@ -3134,7 +3159,7 @@ func TestProcessTrialResultV2_Failure_DoublesInterval(t *testing.T) {
 	})
 
 	// Verify block's TrialInterval was doubled.
-	got, ok := eng.scopeGate.GetScopeBlock(SKService)
+	got, ok := eng.watch.scopeGate.GetScopeBlock(SKService)
 	require.True(t, ok)
 	assert.Equal(t, 60*time.Second, got.TrialInterval, "interval should be doubled")
 }
@@ -3165,7 +3190,7 @@ func TestProcessTrialResultV2_Failure_CapsAt5m(t *testing.T) {
 			now := eng.nowFunc()
 
 			// Start with an interval that would exceed 5m when doubled.
-			require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, tt.scopeKey, &ScopeBlock{
+			require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, tt.scopeKey, &ScopeBlock{
 				Key:           tt.scopeKey,
 				IssueType:     tt.issueType,
 				BlockedAt:     now,
@@ -3184,7 +3209,7 @@ func TestProcessTrialResultV2_Failure_CapsAt5m(t *testing.T) {
 				ErrMsg:        "test failure",
 			})
 
-			got, ok := eng.scopeGate.GetScopeBlock(tt.scopeKey)
+			got, ok := eng.watch.scopeGate.GetScopeBlock(tt.scopeKey)
 			require.True(t, ok)
 			assert.Equal(t, defaultMaxTrialInterval, got.TrialInterval,
 				"%s interval should cap at %v", tt.name, defaultMaxTrialInterval)
@@ -3200,10 +3225,10 @@ func TestProcessTrialResultV2_Failure_NoScopeDetection(t *testing.T) {
 	ctx := t.Context()
 
 	ss := NewScopeState(eng.nowFn, eng.logger)
-	eng.scopeState = ss
+	eng.watch.scopeState = ss
 
 	now := eng.nowFunc()
-	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, SKService, &ScopeBlock{
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, SKService, &ScopeBlock{
 		Key:           SKService,
 		IssueType:     IssueServiceOutage,
 		BlockedAt:     now,
@@ -3222,7 +3247,7 @@ func TestProcessTrialResultV2_Failure_NoScopeDetection(t *testing.T) {
 		ErrMsg:        "internal server error",
 	})
 
-	got, ok := eng.scopeGate.GetScopeBlock(SKService)
+	got, ok := eng.watch.scopeGate.GetScopeBlock(SKService)
 	require.True(t, ok, "scope block should still exist")
 	assert.Equal(t, 60*time.Second, got.TrialInterval, "interval should be doubled, not reset")
 }
@@ -3268,7 +3293,7 @@ func TestExtendTrialInterval_WithRetryAfter(t *testing.T) {
 	ctx := t.Context()
 
 	now := eng.nowFunc()
-	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, SKThrottleAccount, &ScopeBlock{
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, SKThrottleAccount, &ScopeBlock{
 		Key:           SKThrottleAccount,
 		IssueType:     IssueRateLimited,
 		BlockedAt:     now,
@@ -3290,7 +3315,7 @@ func TestExtendTrialInterval_WithRetryAfter(t *testing.T) {
 		ErrMsg:        "too many requests",
 	})
 
-	got, ok := eng.scopeGate.GetScopeBlock(SKThrottleAccount)
+	got, ok := eng.watch.scopeGate.GetScopeBlock(SKThrottleAccount)
 	require.True(t, ok)
 	assert.Equal(t, 30*time.Minute, got.TrialInterval,
 		"Retry-After must be used directly with no cap — server is ground truth")
@@ -3313,7 +3338,7 @@ func TestDiskLocalScopeBlock_FullCycle(t *testing.T) {
 	require.Equal(t, SKDiskLocal, scope)
 
 	// 2. Establish the scope block via ScopeGate.
-	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, SKDiskLocal, &ScopeBlock{
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, SKDiskLocal, &ScopeBlock{
 		Key:           SKDiskLocal,
 		IssueType:     IssueDiskFull,
 		BlockedAt:     now,
@@ -3325,14 +3350,14 @@ func TestDiskLocalScopeBlock_FullCycle(t *testing.T) {
 	dlAction := &TrackedAction{ID: 1, Action: Action{Type: ActionDownload, Path: "big.zip", DriveID: driveid.New("d"), ItemID: "dl1"}}
 	ulAction := &TrackedAction{ID: 2, Action: Action{Type: ActionUpload, Path: "small.txt", DriveID: driveid.New("d"), ItemID: "ul1"}}
 
-	assert.False(t, eng.scopeGate.Admit(dlAction).IsZero(), "download should be blocked by disk:local scope")
-	assert.True(t, eng.scopeGate.Admit(ulAction).IsZero(), "upload should NOT be blocked by disk:local scope")
+	assert.False(t, eng.watch.scopeGate.Admit(dlAction).IsZero(), "download should be blocked by disk:local scope")
+	assert.True(t, eng.watch.scopeGate.Admit(ulAction).IsZero(), "upload should NOT be blocked by disk:local scope")
 
 	// 4. Clear scope block (simulating trial success / disk space freed).
 	eng.onScopeClear(ctx, SKDiskLocal)
 
 	// 5. Download should now be admitted.
-	assert.True(t, eng.scopeGate.Admit(dlAction).IsZero(), "download should be admitted after scope clear")
+	assert.True(t, eng.watch.scopeGate.Admit(dlAction).IsZero(), "download should be admitted after scope clear")
 }
 
 // ---------------------------------------------------------------------------
@@ -3388,14 +3413,14 @@ func TestApplyScopeBlock_ArmsTrialTimer(t *testing.T) {
 	})
 
 	// Verify the block has the correct NextTrialAt from the injectable clock.
-	earliest, ok := eng.scopeGate.EarliestTrialAt()
+	earliest, ok := eng.watch.scopeGate.EarliestTrialAt()
 	require.True(t, ok, "EarliestTrialAt should find the scope block")
 	assert.Equal(t, now.Add(30*time.Second), earliest, "NextTrialAt should be now + trial interval")
 
 	// Trial timer should be armed.
-	eng.trialMu.Lock()
-	timerSet := eng.trialTimer != nil
-	eng.trialMu.Unlock()
+	eng.watch.trialMu.Lock()
+	timerSet := eng.watch.trialTimer != nil
+	eng.watch.trialMu.Unlock()
 	assert.True(t, timerSet, "trial timer should be armed after applyScopeBlock")
 }
 
@@ -3492,10 +3517,10 @@ func startDrainLoop(t *testing.T) (chan WorkerResult, <-chan *TrackedAction, con
 	t.Helper()
 
 	eng := newPhase4Engine(t)
-	eng.scopeState = NewScopeState(eng.nowFunc, eng.logger)
+	eng.watch.scopeState = NewScopeState(eng.nowFunc, eng.logger)
 
 	buf := NewBuffer(eng.logger)
-	eng.buf = buf
+	eng.watch.buf = buf
 
 	results := make(chan WorkerResult, 16)
 	ready := eng.readyCh
@@ -3547,7 +3572,7 @@ func TestE2E_DrainLoop_ProcessesAndRoutes(t *testing.T) {
 
 	// Verify scope block created and failure recorded.
 	require.Eventually(t, func() bool {
-		return eng.scopeGate.IsScopeBlocked(SKThrottleAccount)
+		return eng.watch.scopeGate.IsScopeBlocked(SKThrottleAccount)
 	}, time.Second, time.Millisecond, "scope block should be created")
 
 	issues, err := eng.baseline.ListSyncFailures(ctx)
@@ -3566,7 +3591,7 @@ func TestE2E_DrainLoop_TrialResultSuccess(t *testing.T) {
 	ctx := t.Context()
 
 	// Set up scope block and a scope-blocked failure.
-	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, SKThrottleAccount, &ScopeBlock{
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, SKThrottleAccount, &ScopeBlock{
 		Key:           SKThrottleAccount,
 		IssueType:     IssueRateLimited,
 		BlockedAt:     eng.nowFunc(),
@@ -3595,7 +3620,7 @@ func TestE2E_DrainLoop_TrialResultSuccess(t *testing.T) {
 
 	// Scope block should be cleared.
 	require.Eventually(t, func() bool {
-		return !eng.scopeGate.IsScopeBlocked(SKThrottleAccount)
+		return !eng.watch.scopeGate.IsScopeBlocked(SKThrottleAccount)
 	}, time.Second, time.Millisecond, "scope block should be cleared after trial success")
 }
 
@@ -3608,7 +3633,7 @@ func TestE2E_DrainLoop_TrialResultFailure(t *testing.T) {
 
 	ctx := t.Context()
 
-	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, SKService, &ScopeBlock{
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, SKService, &ScopeBlock{
 		Key:           SKService,
 		IssueType:     IssueServiceOutage,
 		BlockedAt:     eng.nowFunc(),
@@ -3634,7 +3659,7 @@ func TestE2E_DrainLoop_TrialResultFailure(t *testing.T) {
 
 	// Interval should be doubled from 10ms to 20ms.
 	require.Eventually(t, func() bool {
-		block, ok := eng.scopeGate.GetScopeBlock(SKService)
+		block, ok := eng.watch.scopeGate.GetScopeBlock(SKService)
 		return ok && block.TrialInterval == 20*time.Millisecond
 	}, time.Second, time.Millisecond, "trial failure should double interval")
 }
@@ -3655,9 +3680,9 @@ func TestE2E_DrainExit_StopsTimer(t *testing.T) {
 
 	// Verify timer is armed.
 	require.Eventually(t, func() bool {
-		eng.trialMu.Lock()
-		defer eng.trialMu.Unlock()
-		return eng.trialTimer != nil
+		eng.watch.trialMu.Lock()
+		defer eng.watch.trialMu.Unlock()
+		return eng.watch.trialTimer != nil
 	}, time.Second, time.Millisecond)
 
 	// Close results channel → drainWorkerResults returns → defer stopTrialTimer.
@@ -3665,9 +3690,9 @@ func TestE2E_DrainExit_StopsTimer(t *testing.T) {
 
 	// Timer should be cleared.
 	require.Eventually(t, func() bool {
-		eng.trialMu.Lock()
-		defer eng.trialMu.Unlock()
-		return eng.trialTimer == nil
+		eng.watch.trialMu.Lock()
+		defer eng.watch.trialMu.Unlock()
+		return eng.watch.trialTimer == nil
 	}, time.Second, time.Millisecond)
 }
 
@@ -3937,7 +3962,7 @@ func TestFeedScopeDetection_LocalErrorIgnored(t *testing.T) {
 	t.Parallel()
 
 	eng := newPhase4Engine(t)
-	eng.scopeState = NewScopeState(time.Now, eng.logger)
+	eng.watch.scopeState = NewScopeState(time.Now, eng.logger)
 
 	// Feed several local errors (HTTPStatus=0) — should not trigger a scope block.
 	for i := range 10 {
@@ -3951,9 +3976,9 @@ func TestFeedScopeDetection_LocalErrorIgnored(t *testing.T) {
 	}
 
 	// No scope block should have been created.
-	assert.False(t, eng.scopeGate.IsScopeBlocked(SKService),
+	assert.False(t, eng.watch.scopeGate.IsScopeBlocked(SKService),
 		"local errors with HTTPStatus=0 must not trigger service scope")
-	assert.False(t, eng.scopeGate.IsScopeBlocked(SKThrottleAccount),
+	assert.False(t, eng.watch.scopeGate.IsScopeBlocked(SKThrottleAccount),
 		"local errors with HTTPStatus=0 must not trigger throttle scope")
 }
 
@@ -3968,7 +3993,7 @@ func TestIsObservationSuppressed_Throttled(t *testing.T) {
 	assert.False(t, eng.isObservationSuppressed())
 
 	// After throttle block, should be suppressed.
-	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, SKThrottleAccount, &ScopeBlock{
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, SKThrottleAccount, &ScopeBlock{
 		Key:           SKThrottleAccount,
 		IssueType:     IssueRateLimited,
 		TrialInterval: 30 * time.Second,
@@ -3984,7 +4009,7 @@ func TestIsObservationSuppressed_ServiceOutage(t *testing.T) {
 	ctx := t.Context()
 
 	// Service outage should also suppress.
-	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, SKService, &ScopeBlock{
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, SKService, &ScopeBlock{
 		Key:           SKService,
 		IssueType:     IssueServiceOutage,
 		TrialInterval: 60 * time.Second,
@@ -3997,9 +4022,9 @@ func TestIsObservationSuppressed_NilScopeGate(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
-	eng.scopeGate = nil
 
-	// With nil scopeGate, should not panic and should return false.
+	// With nil watch (one-shot mode), should not panic and should return false.
+	assert.Nil(t, eng.watch, "watch state should be nil after NewEngine")
 	assert.False(t, eng.isObservationSuppressed())
 }
 
@@ -4011,12 +4036,42 @@ func TestIsObservationSuppressed_QuotaDoesNotSuppress(t *testing.T) {
 	ctx := t.Context()
 
 	// Quota scope block should NOT suppress observation (R-2.10.31).
-	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, SKQuotaOwn, &ScopeBlock{
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, SKQuotaOwn, &ScopeBlock{
 		Key:           SKQuotaOwn,
 		IssueType:     IssueQuotaExceeded,
 		TrialInterval: 5 * time.Minute,
 	}))
 	assert.False(t, eng.isObservationSuppressed())
+}
+
+// ---------------------------------------------------------------------------
+// watchState nil invariant (Phase 8)
+// ---------------------------------------------------------------------------
+
+func TestWatchState_NilInOneShotMode(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	// After construction, watch state must be nil.
+	assert.Nil(t, eng.watch, "watch state should be nil after NewEngine")
+
+	// After RunOnce, watch state must still be nil.
+	report, err := eng.RunOnce(ctx, SyncDownloadOnly, RunOpts{})
+	require.NoError(t, err)
+	assert.NotNil(t, report)
+	assert.Nil(t, eng.watch, "watch state should be nil after RunOnce")
 }
 
 // ---------------------------------------------------------------------------

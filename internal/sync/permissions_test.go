@@ -1042,7 +1042,7 @@ func TestHandleLocalPermission_DirectoryLevel(t *testing.T) {
 	})
 
 	// Set up scope gate (needed for setScopeBlock).
-	eng.scopeGate = NewScopeGate(eng.baseline, eng.logger)
+	newTestWatchState(t, eng)
 
 	// Simulate a worker result with os.ErrPermission.
 	r := &WorkerResult{
@@ -1062,7 +1062,7 @@ func TestHandleLocalPermission_DirectoryLevel(t *testing.T) {
 	assert.Equal(t, SKPermDir("Private"), issues[0].ScopeKey)
 
 	// Should have created a scope block.
-	assert.True(t, eng.scopeGate.IsScopeBlocked(SKPermDir("Private")), "should create a scope block for the denied directory")
+	assert.True(t, eng.watch.scopeGate.IsScopeBlocked(SKPermDir("Private")), "should create a scope block for the denied directory")
 }
 
 // Validates: R-2.10.12
@@ -1111,7 +1111,7 @@ func TestRecheckLocalPermissions_Restored(t *testing.T) {
 	require.NoError(t, os.MkdirAll(deniedDir, 0o755))
 
 	// Set up scope gate.
-	eng.scopeGate = NewScopeGate(eng.baseline, eng.logger)
+	newTestWatchState(t, eng)
 
 	scopeKey := SKPermDir("Private")
 
@@ -1126,7 +1126,7 @@ func TestRecheckLocalPermissions_Restored(t *testing.T) {
 		ScopeKey:  scopeKey,
 	}, nil))
 
-	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, scopeKey, &ScopeBlock{
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, scopeKey, &ScopeBlock{
 		Key: scopeKey, IssueType: IssueLocalPermissionDenied,
 	}))
 
@@ -1139,7 +1139,7 @@ func TestRecheckLocalPermissions_Restored(t *testing.T) {
 	assert.Empty(t, issues, "failure should be cleared when directory is accessible")
 
 	// Scope block should be released.
-	assert.False(t, eng.scopeGate.IsScopeBlocked(scopeKey), "scope block should be released when directory is accessible")
+	assert.False(t, eng.watch.scopeGate.IsScopeBlocked(scopeKey), "scope block should be released when directory is accessible")
 }
 
 // Validates: R-2.10.13
@@ -1162,7 +1162,7 @@ func TestRecheckLocalPermissions_StillDenied(t *testing.T) {
 		_ = os.Chmod(deniedDir, 0o755)
 	})
 
-	eng.scopeGate = NewScopeGate(eng.baseline, eng.logger)
+	newTestWatchState(t, eng)
 
 	scopeKey := SKPermDir("Private")
 
@@ -1176,7 +1176,7 @@ func TestRecheckLocalPermissions_StillDenied(t *testing.T) {
 		ScopeKey:  scopeKey,
 	}, nil))
 
-	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, scopeKey, &ScopeBlock{
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, scopeKey, &ScopeBlock{
 		Key: scopeKey, IssueType: IssueLocalPermissionDenied,
 	}))
 
@@ -1188,7 +1188,7 @@ func TestRecheckLocalPermissions_StillDenied(t *testing.T) {
 	assert.Len(t, issues, 1, "failure should remain when directory is still inaccessible")
 
 	// Scope block should still be active.
-	assert.True(t, eng.scopeGate.IsScopeBlocked(scopeKey), "scope block should remain when directory is still inaccessible")
+	assert.True(t, eng.watch.scopeGate.IsScopeBlocked(scopeKey), "scope block should remain when directory is still inaccessible")
 }
 
 // ---------------------------------------------------------------------------
@@ -1230,7 +1230,7 @@ func TestClearScannerResolvedPermissions_DirLevel(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	eng.scopeGate = NewScopeGate(eng.baseline, eng.logger)
+	newTestWatchState(t, eng)
 
 	scopeKey := SKPermDir("Private")
 
@@ -1245,7 +1245,7 @@ func TestClearScannerResolvedPermissions_DirLevel(t *testing.T) {
 		ScopeKey:  scopeKey,
 	}, nil))
 
-	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, scopeKey, &ScopeBlock{
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, scopeKey, &ScopeBlock{
 		Key: scopeKey, IssueType: IssueLocalPermissionDenied,
 	}))
 
@@ -1258,7 +1258,7 @@ func TestClearScannerResolvedPermissions_DirLevel(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, issues, "dir-level failure should be cleared when scanner observes a child path")
 
-	assert.False(t, eng.scopeGate.IsScopeBlocked(scopeKey), "scope block should be released when scanner proves directory is accessible")
+	assert.False(t, eng.watch.scopeGate.IsScopeBlocked(scopeKey), "scope block should be released when scanner proves directory is accessible")
 }
 
 // Validates: R-2.10.10
@@ -1269,7 +1269,7 @@ func TestClearScannerResolvedPermissions_NoFalsePositives(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	eng.scopeGate = NewScopeGate(eng.baseline, eng.logger)
+	newTestWatchState(t, eng)
 
 	scopeKey := SKPermDir("Private")
 
@@ -1283,7 +1283,7 @@ func TestClearScannerResolvedPermissions_NoFalsePositives(t *testing.T) {
 		ScopeKey:  scopeKey,
 	}, nil))
 
-	require.NoError(t, eng.scopeGate.SetScopeBlock(ctx, scopeKey, &ScopeBlock{
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, scopeKey, &ScopeBlock{
 		Key: scopeKey, IssueType: IssueLocalPermissionDenied,
 	}))
 
@@ -1295,7 +1295,7 @@ func TestClearScannerResolvedPermissions_NoFalsePositives(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, issues, 1, "failure should remain when scanner didn't observe the blocked path")
 
-	assert.True(t, eng.scopeGate.IsScopeBlocked(scopeKey), "scope block should remain when scanner didn't observe the blocked path")
+	assert.True(t, eng.watch.scopeGate.IsScopeBlocked(scopeKey), "scope block should remain when scanner didn't observe the blocked path")
 }
 
 func TestPathSetFromEvents(t *testing.T) {

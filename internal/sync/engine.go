@@ -101,6 +101,50 @@ type SyncReport struct {
 	Errors    []error
 }
 
+// watchState bundles all watch-mode-only state. Nil in one-shot mode.
+// A single e.watch != nil check replaces scattered nil guards for
+// scopeGate, scopeState, buf, deleteCounter, etc.
+type watchState struct {
+	// Scope gate — watch-mode only (§2.3: scope blocking is watch-mode only;
+	// one-shot never creates scope blocks).
+	scopeGate *ScopeGate
+
+	// Scope detection — sliding window failure tracking.
+	scopeState *ScopeState
+
+	// Event buffer — drain-loop retrier injects events via e.watch.buf.Add().
+	buf *Buffer
+
+	// Big-delete protection: rolling counter + external change detection.
+	// deleteCounter is nil even in watch mode when force=true.
+	deleteCounter   *deleteCounter
+	lastDataVersion int64
+
+	// Trial management (drain-goroutine-only state per tracker-redesign.md §3.9).
+	trialPending map[string]trialEntry
+	trialTimer   *time.Timer
+	trialMu      stdsync.Mutex
+
+	// Retry timer (replaces FailureRetrier per tracker-redesign.md §3.8).
+	retryTimer   *time.Timer
+	retryTimerCh chan struct{} // persistent, buffered(1)
+
+	// Observer references — set in startObservers, nil'd on Close.
+	remoteObs *RemoteObserver
+	localObs  *LocalObserver
+
+	// Monotonic action ID counter. Zeroed at watch start. Each action gets
+	// a unique ID via e.watch.nextActionID.Add(1) — prevents ID collisions
+	// across batches.
+	nextActionID atomic.Int64
+
+	// Throttling: tracks last recheckPermissions call time (R-2.10.9).
+	lastPermRecheck time.Time
+
+	// Deduplication: caches last actionable issue count for watch summaries.
+	lastSummaryTotal int
+}
+
 // Engine orchestrates a complete sync pass: observe → plan → execute → commit.
 // Single-drive only; multi-drive orchestration is handled by the Orchestrator.
 type Engine struct {
@@ -116,75 +160,36 @@ type Engine struct {
 	syncRoot           string
 	driveID            driveid.ID
 	logger             *slog.Logger
-	remoteObs          *RemoteObserver        // stored during RunWatch for delta token reads
-	localObs           *LocalObserver         // stored during RunWatch for drop counter reads
 	sessionStore       *driveops.SessionStore // for CleanStale() housekeeping
 	transferWorkers    int                    // goroutine count for the worker pool
 	checkWorkers       int                    // goroutine limit for parallel file hashing
 	bigDeleteThreshold int                    // from config; 0 means use default
 
-	// Watch-mode big-delete protection: rolling counter + external change detection.
-	deleteCounter   *deleteCounter // nil outside RunWatch
-	lastDataVersion int64          // tracks PRAGMA data_version for CLI→daemon notification
-
 	// watchShortcuts holds the latest shortcuts for use by the drain
 	// goroutine in watch mode. Updated by the watch goroutine after
-	// observation; read by drainWorkerResults for 403 handling.
+	// observation; read by drainWorkerResults for 403 handling. Stays on
+	// Engine because setWatchShortcuts is called from RunOnce (one-shot)
+	// where watch is nil.
 	watchShortcuts   []Shortcut
 	watchShortcutsMu stdsync.RWMutex
-
-	// scopeState tracks scope-level failure detection (sliding windows)
-	// and informs scope block decisions. Created per sync pass.
-	scopeState *ScopeState
 
 	// depGraph is the pure dependency graph. Tracks action dependencies and
 	// readiness. Set during executePlan (one-shot) or initWatchPipeline
 	// (watch mode).
 	depGraph *DepGraph
 
-	// nextActionID is the monotonic counter for DepGraph action IDs. Each
-	// action gets a unique ID via e.nextActionID.Add(1). Critical in watch
-	// mode where processBatch is called repeatedly — using loop indices
-	// would cause ID collisions across batches.
-	nextActionID atomic.Int64
-
-	// scopeGate is scope-based admission control with persistent blocks.
-	// Only initialized in watch mode — one-shot mode has no scope blocking.
-	scopeGate *ScopeGate
-
 	// readyCh feeds admitted actions to the worker pool. The engine sends
 	// actions that pass the scope gate (or bypass it in one-shot mode).
 	// Workers read from this channel via the WorkerPool.
 	readyCh chan *TrackedAction
 
-	// buf is the event buffer for watch mode. Promoted from local variable
-	// in initWatchPipeline so the drain-loop retrier can inject events via
-	// e.buf.Add(). Nil in one-shot mode.
-	buf *Buffer
+	// trialCh is the persistent, buffered(1) channel for trial timer signals.
+	// Created in NewEngine. In one-shot mode, no writer → harmlessly blocks
+	// in select.
+	trialCh chan struct{}
 
-	// trialTimer fires when the next scope trial is due (R-2.10.5).
-	// Protected by trialMu. Nil when no trials are pending.
-	trialTimer *time.Timer
-	trialMu    stdsync.Mutex
-	trialCh    chan struct{} // persistent, buffered(1); trial timer signals here
-
-	// trialPending tracks paths with pending trial actions. Used by
-	// admitAndDispatch (main goroutine) and admitReady (drain goroutine)
-	// to intercept trial actions. Protected by trialMu.
-	trialPending map[string]trialEntry
-
-	// retryTimer fires when the next retrier sweep is due (integrated into
-	// the drain loop).
-	retryTimer   *time.Timer
-	retryTimerCh chan struct{} // persistent, buffered(1); retry timer signals here
-
-	// lastPermRecheck tracks the last time recheckPermissions was called
-	// in watch mode, to throttle API calls to at most once per 60 seconds (R-2.10.9).
-	lastPermRecheck time.Time
-
-	// lastSummaryTotal caches the last actionable issue count to avoid
-	// logging duplicate watch mode summaries on every recheck tick.
-	lastSummaryTotal int
+	// watch bundles all watch-mode-only state. Nil in one-shot mode.
+	watch *watchState
 
 	// Engine-owned result counters. Workers are pure executors — the engine
 	// classifies results and owns all final disposition counts (R-6.8.9).
@@ -268,8 +273,10 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 // closes the database connection last. Safe to call more than once.
 func (e *Engine) Close() error {
 	// Nil out observer references to prevent dangling reads after Close.
-	e.remoteObs = nil
-	e.localObs = nil
+	if e.watch != nil {
+		e.watch.remoteObs = nil
+		e.watch.localObs = nil
+	}
 
 	// Clean stale upload session files (best-effort).
 	if e.sessionStore != nil {
@@ -482,13 +489,12 @@ func (e *Engine) executePlan(
 	// Reset engine counters for this pass.
 	e.resetResultStats()
 
-	// One-shot mode: DepGraph + readyCh, no scope gate. Actions that pass
-	// dependency resolution go straight to workers. Scope blocking is
-	// watch-mode only (§2.3).
+	// One-shot mode: DepGraph + readyCh, no scope gate (e.watch == nil).
+	// Actions that pass dependency resolution go straight to workers.
+	// Scope blocking is watch-mode only (§2.3).
 	depGraph := NewDepGraph(e.logger)
 	e.depGraph = depGraph
 	e.readyCh = make(chan *TrackedAction, len(plan.Actions))
-	e.scopeGate = nil // explicit: one-shot has no scope gate
 
 	// Add all actions to the graph. Immediately-ready actions (no deps)
 	// are sent to readyCh before workers start — workers begin consuming
@@ -802,7 +808,7 @@ func changeEventsToObservedItems(events []ChangeEvent) []ObservedItem {
 // the engine has a deleteCounter (watch mode — the rolling counter handles
 // big-delete protection instead).
 func (e *Engine) resolveSafetyConfig(force bool) *SafetyConfig {
-	if force || e.deleteCounter != nil {
+	if force || e.watch != nil {
 		return &SafetyConfig{
 			BigDeleteThreshold: forceSafetyMax,
 		}
@@ -966,7 +972,7 @@ func (e *Engine) getWatchShortcuts() []Shortcut {
 // the first recheck tick doesn't fire spuriously.
 func (e *Engine) initDeleteProtection(ctx context.Context, force bool) {
 	if !force {
-		e.deleteCounter = newDeleteCounter(e.bigDeleteThreshold, deleteCounterWindow, time.Now)
+		e.watch.deleteCounter = newDeleteCounter(e.bigDeleteThreshold, deleteCounterWindow, time.Now)
 	}
 
 	if err := e.baseline.ClearResolvedActionableFailures(ctx, IssueBigDeleteHeld, nil); err != nil {
@@ -976,7 +982,7 @@ func (e *Engine) initDeleteProtection(ctx context.Context, force bool) {
 	}
 
 	if dv, dvErr := e.baseline.DataVersion(ctx); dvErr == nil {
-		e.lastDataVersion = dv
+		e.watch.lastDataVersion = dv
 	}
 }
 
@@ -1053,7 +1059,7 @@ type watchPipeline struct {
 //     which would prematurely close between batches. Workers exit only via ctx.Done().
 //   - Retrier logic is integrated into the drain loop (retryTimerCh case) to
 //     eliminate coordination problems (D-11).
-//   - Buffer is promoted to e.buf so the drain-loop retrier can inject events.
+//   - Buffer is promoted to e.watch.buf so the drain-loop retrier can inject events.
 func (e *Engine) initWatchPipeline(
 	ctx context.Context, mode SyncMode, opts WatchOpts,
 ) (*watchPipeline, error) {
@@ -1063,6 +1069,12 @@ func (e *Engine) initWatchPipeline(
 		return nil, err
 	}
 
+	// Create watchState — all watch-mode-only fields live here.
+	e.watch = &watchState{
+		trialPending: make(map[string]trialEntry),
+		retryTimerCh: make(chan struct{}, 1),
+	}
+
 	e.initDeleteProtection(ctx, opts.Force)
 
 	// DepGraph tracks action dependencies; ScopeGate handles scope-based
@@ -1070,16 +1082,14 @@ func (e *Engine) initWatchPipeline(
 	// survive crash/restart (D-8).
 	depGraph := NewDepGraph(e.logger)
 	e.depGraph = depGraph
-	e.scopeGate = NewScopeGate(e.baseline, e.logger)
+	e.watch.scopeGate = NewScopeGate(e.baseline, e.logger)
 
-	if loadErr := e.scopeGate.LoadFromStore(ctx); loadErr != nil {
+	if loadErr := e.watch.scopeGate.LoadFromStore(ctx); loadErr != nil {
 		return nil, fmt.Errorf("sync: loading scope blocks: %w", loadErr)
 	}
 
-	e.scopeState = NewScopeState(e.nowFunc, e.logger)
-	e.trialPending = make(map[string]trialEntry)
-	e.retryTimerCh = make(chan struct{}, 1)
-	e.nextActionID.Store(0)
+	e.watch.scopeState = NewScopeState(e.nowFunc, e.logger)
+	e.watch.nextActionID.Store(0)
 
 	// readyCh feeds admitted actions to workers. Buffer is generous to avoid
 	// backpressure when a batch produces many immediately-ready actions.
@@ -1094,11 +1104,11 @@ func (e *Engine) initWatchPipeline(
 
 	go e.drainWorkerResults(ctx, pool.Results(), bl)
 
-	// Buffer promoted to engine field — drain-loop retrier injects events
-	// via e.buf.Add(). Retrier logic runs inside the drain loop's
+	// Buffer promoted to watchState — drain-loop retrier injects events
+	// via e.watch.buf.Add(). Retrier logic runs inside the drain loop's
 	// retryTimerCh case.
 	buf := NewBuffer(e.logger)
-	e.buf = buf
+	e.watch.buf = buf
 	ready := buf.FlushDebounced(ctx, e.resolveDebounce(opts))
 
 	// Observers.
@@ -1279,11 +1289,11 @@ func isOutagePattern(err error) bool {
 // function used by applyScopeBlock for initial intervals, ensuring a single
 // code path for the Retry-After-vs-backoff policy.
 func (e *Engine) extendTrialInterval(scopeKey ScopeKey, retryAfter time.Duration) {
-	if e.scopeGate == nil {
+	if e.watch == nil {
 		return
 	}
 
-	block, ok := e.scopeGate.GetScopeBlock(scopeKey)
+	block, ok := e.watch.scopeGate.GetScopeBlock(scopeKey)
 	if !ok {
 		return // scope was released between dispatch and result
 	}
@@ -1296,7 +1306,7 @@ func (e *Engine) extendTrialInterval(scopeKey ScopeKey, retryAfter time.Duration
 		slog.Duration("retry_after", retryAfter),
 	)
 
-	if err := e.scopeGate.ExtendTrialInterval(context.Background(), scopeKey, e.nowFunc().Add(newInterval), newInterval); err != nil {
+	if err := e.watch.scopeGate.ExtendTrialInterval(context.Background(), scopeKey, e.nowFunc().Add(newInterval), newInterval); err != nil {
 		e.logger.Warn("extendTrialInterval: failed to persist interval extension",
 			slog.String("scope_key", scopeKey.String()),
 			slog.String("error", err.Error()),
@@ -1331,11 +1341,11 @@ func computeTrialInterval(retryAfter, currentInterval time.Duration) time.Durati
 // (throttle:account or service) is active, meaning shortcut observation
 // polling should be skipped to avoid wasting API calls (R-2.10.30).
 func (e *Engine) isObservationSuppressed() bool {
-	if e.scopeGate == nil {
+	if e.watch == nil {
 		return false
 	}
 
-	return e.scopeGate.IsScopeBlocked(SKThrottleAccount) || e.scopeGate.IsScopeBlocked(SKService)
+	return e.watch.scopeGate.IsScopeBlocked(SKThrottleAccount) || e.watch.scopeGate.IsScopeBlocked(SKService)
 }
 
 // feedScopeDetection feeds a worker result into scope detection sliding
@@ -1344,7 +1354,7 @@ func (e *Engine) isObservationSuppressed() bool {
 // processWorkerResult switch — never called for trial results (the scope is
 // already blocked, and re-detecting would overwrite the doubled interval).
 func (e *Engine) feedScopeDetection(r *WorkerResult) {
-	if e.scopeState == nil {
+	if e.watch == nil {
 		return
 	}
 
@@ -1354,13 +1364,13 @@ func (e *Engine) feedScopeDetection(r *WorkerResult) {
 		return
 	}
 
-	sr := e.scopeState.UpdateScope(r)
+	sr := e.watch.scopeState.UpdateScope(r)
 	if sr.Block {
 		e.applyScopeBlock(sr)
 	}
 	// Also check outage pattern for 400s.
 	if r.HTTPStatus == http.StatusBadRequest && isOutagePattern(r.Err) {
-		osr := e.scopeState.UpdateScopeOutagePattern(r.Path)
+		osr := e.watch.scopeState.UpdateScopeOutagePattern(r.Path)
 		if osr.Block {
 			e.applyScopeBlock(osr)
 		}
@@ -1369,11 +1379,11 @@ func (e *Engine) feedScopeDetection(r *WorkerResult) {
 
 // setScopeBlock writes a scope block to the ScopeGate.
 func (e *Engine) setScopeBlock(key ScopeKey, block *ScopeBlock) {
-	if e.scopeGate == nil {
+	if e.watch == nil {
 		return
 	}
 
-	if err := e.scopeGate.SetScopeBlock(context.Background(), key, block); err != nil {
+	if err := e.watch.scopeGate.SetScopeBlock(context.Background(), key, block); err != nil {
 		e.logger.Warn("setScopeBlock: failed to persist scope block",
 			slog.String("scope_key", key.String()),
 			slog.String("error", err.Error()),
@@ -1419,22 +1429,24 @@ func (e *Engine) applyScopeBlock(sr ScopeUpdateResult) {
 // In one-shot mode, scope gate is not initialized — all actions pass through.
 func (e *Engine) admitAndDispatch(ctx context.Context, ready []*TrackedAction) {
 	for _, ta := range ready {
-		// Trial interception — mutex-protected, safe from any goroutine.
-		e.trialMu.Lock()
-		entry, isTrial := e.trialPending[ta.Action.Path]
-		if isTrial {
-			delete(e.trialPending, ta.Action.Path)
-		}
-		e.trialMu.Unlock()
+		// Trial interception — watch mode only (one-shot has no trials).
+		if e.watch != nil {
+			e.watch.trialMu.Lock()
+			entry, isTrial := e.watch.trialPending[ta.Action.Path]
+			if isTrial {
+				delete(e.watch.trialPending, ta.Action.Path)
+			}
+			e.watch.trialMu.Unlock()
 
-		if isTrial {
-			e.handleTrialInterception(ctx, ta, entry)
-			continue
+			if isTrial {
+				e.handleTrialInterception(ctx, ta, entry)
+				continue
+			}
 		}
 
-		// Normal scope admission (watch mode only — scopeGate is nil in one-shot).
-		if e.scopeGate != nil {
-			if key := e.scopeGate.Admit(ta); !key.IsZero() {
+		// Normal scope admission (watch mode only — e.watch is nil in one-shot).
+		if e.watch != nil {
+			if key := e.watch.scopeGate.Admit(ta); !key.IsZero() {
 				e.cascadeRecordAndComplete(ctx, ta, key)
 				e.armTrialTimer()
 				continue
@@ -1459,14 +1471,17 @@ func (e *Engine) admitReady(ctx context.Context, ready []*TrackedAction) []*Trac
 	var dispatch []*TrackedAction
 
 	for _, ta := range ready {
-		// Trial interception — mutex-protected (trialPending accessed from
-		// both main goroutine via admitAndDispatch and drain goroutine here).
-		e.trialMu.Lock()
-		entry, isTrial := e.trialPending[ta.Action.Path]
-		if isTrial {
-			delete(e.trialPending, ta.Action.Path)
+		// Trial interception — watch mode only (one-shot has no trials).
+		var isTrial bool
+		var entry trialEntry
+		if e.watch != nil {
+			e.watch.trialMu.Lock()
+			entry, isTrial = e.watch.trialPending[ta.Action.Path]
+			if isTrial {
+				delete(e.watch.trialPending, ta.Action.Path)
+			}
+			e.watch.trialMu.Unlock()
 		}
-		e.trialMu.Unlock()
 
 		if isTrial {
 			if entry.scopeKey.BlocksAction(ta.Action.Path,
@@ -1484,10 +1499,10 @@ func (e *Engine) admitReady(ctx context.Context, ready []*TrackedAction) []*Trac
 						slog.String("error", err.Error()),
 					)
 				}
-				if e.scopeGate == nil {
+				if e.watch == nil {
 					e.setDispatch(ctx, &ta.Action)
 					dispatch = append(dispatch, ta)
-				} else if key := e.scopeGate.Admit(ta); key.IsZero() {
+				} else if key := e.watch.scopeGate.Admit(ta); key.IsZero() {
 					e.setDispatch(ctx, &ta.Action)
 					dispatch = append(dispatch, ta)
 				}
@@ -1498,8 +1513,8 @@ func (e *Engine) admitReady(ctx context.Context, ready []*TrackedAction) []*Trac
 		}
 
 		// Normal scope admission.
-		if e.scopeGate != nil {
-			if key := e.scopeGate.Admit(ta); !key.IsZero() {
+		if e.watch != nil {
+			if key := e.watch.scopeGate.Admit(ta); !key.IsZero() {
 				e.cascadeRecordAndComplete(ctx, ta, key)
 				continue
 			}
@@ -1538,14 +1553,14 @@ func (e *Engine) handleTrialInterception(ctx context.Context, ta *TrackedAction,
 			slog.String("error", err.Error()),
 		)
 	}
-	if e.scopeGate == nil {
+	if e.watch == nil {
 		e.setDispatch(ctx, &ta.Action)
 
 		select {
 		case e.readyCh <- ta:
 		case <-ctx.Done():
 		}
-	} else if key := e.scopeGate.Admit(ta); key.IsZero() {
+	} else if key := e.watch.scopeGate.Admit(ta); key.IsZero() {
 		e.setDispatch(ctx, &ta.Action)
 
 		select {
@@ -1662,8 +1677,8 @@ func (e *Engine) onScopeClear(ctx context.Context, key ScopeKey) {
 
 	// Update in-memory cache. ClearScopeBlock tries to delete from DB again
 	// (harmless — row already gone). We call it for the in-memory map update.
-	if e.scopeGate != nil {
-		if err := e.scopeGate.ClearScopeBlock(ctx, key); err != nil {
+	if e.watch != nil {
+		if err := e.watch.scopeGate.ClearScopeBlock(ctx, key); err != nil {
 			e.logger.Debug("onScopeClear: in-memory cache update failed (non-fatal)",
 				slog.String("scope_key", key.String()),
 				slog.String("error", err.Error()),
@@ -1733,8 +1748,8 @@ func (e *Engine) applyResultSideEffects(ctx context.Context, class resultClass, 
 	case resultSuccess:
 		e.succeeded.Add(1)
 		e.clearFailureOnSuccess(ctx, r)
-		if e.scopeState != nil {
-			e.scopeState.RecordSuccess(r)
+		if e.watch != nil {
+			e.watch.scopeState.RecordSuccess(r)
 		}
 
 	case resultRequeue:
@@ -1786,8 +1801,8 @@ func (e *Engine) processTrialResult(ctx context.Context, r *WorkerResult) []*Tra
 	if class == resultSuccess {
 		e.onScopeClear(ctx, r.TrialScopeKey)
 		e.succeeded.Add(1)
-		if e.scopeState != nil {
-			e.scopeState.RecordSuccess(r)
+		if e.watch != nil {
+			e.watch.scopeState.RecordSuccess(r)
 		}
 		// Dispatch any dependents that were waiting on the trial.
 		return e.admitReady(ctx, ready)
@@ -1829,7 +1844,7 @@ func (e *Engine) processTrialResult(ctx context.Context, r *WorkerResult) []*Tra
 // retry timer channel is already signaled (non-blocking send to buffered(1)
 // channel), the next drain loop select iteration processes it.
 func (e *Engine) armRetryTimer() {
-	if e.retryTimerCh == nil {
+	if e.watch == nil {
 		return
 	}
 
@@ -1842,21 +1857,21 @@ func (e *Engine) armRetryTimer() {
 	if delay <= 0 {
 		// Items already due — signal immediately.
 		select {
-		case e.retryTimerCh <- struct{}{}:
+		case e.watch.retryTimerCh <- struct{}{}:
 		default:
 		}
 		return
 	}
 
-	e.trialMu.Lock()
-	defer e.trialMu.Unlock()
+	e.watch.trialMu.Lock()
+	defer e.watch.trialMu.Unlock()
 
-	if e.retryTimer != nil {
-		e.retryTimer.Stop()
+	if e.watch.retryTimer != nil {
+		e.watch.retryTimer.Stop()
 	}
-	e.retryTimer = time.AfterFunc(delay, func() {
+	e.watch.retryTimer = time.AfterFunc(delay, func() {
 		select {
-		case e.retryTimerCh <- struct{}{}:
+		case e.watch.retryTimerCh <- struct{}{}:
 		default:
 		}
 	})
@@ -1866,7 +1881,11 @@ func (e *Engine) armRetryTimer() {
 // channel when retryTimerCh is not initialized (one-shot mode), which blocks
 // forever in a select — effectively disabling the case.
 func (e *Engine) retryTimerChan() <-chan struct{} {
-	return e.retryTimerCh
+	if e.watch == nil {
+		return nil // nil channel blocks in select — disables retry case
+	}
+
+	return e.watch.retryTimerCh
 }
 
 // runTrialDispatch handles due scope trials. For each due scope, picks the
@@ -1887,7 +1906,7 @@ func (e *Engine) runTrialDispatch(ctx context.Context) {
 	e.cleanStaleTrialPending(now)
 
 	// Snapshot all due scopes — each visited exactly once.
-	for _, key := range e.scopeGate.AllDueTrials(now) {
+	for _, key := range e.watch.scopeGate.AllDueTrials(now) {
 		// Pick oldest scope-blocked failure for this scope.
 		row, err := e.baseline.PickTrialCandidate(ctx, key)
 		if err != nil {
@@ -1908,12 +1927,12 @@ func (e *Engine) runTrialDispatch(ctx context.Context) {
 
 		// Register the trial in trialPending so admitAndDispatch/admitReady
 		// can intercept the resulting action from the planner.
-		e.trialMu.Lock()
-		e.trialPending[row.Path] = trialEntry{
+		e.watch.trialMu.Lock()
+		e.watch.trialPending[row.Path] = trialEntry{
 			scopeKey: key,
 			created:  now,
 		}
-		e.trialMu.Unlock()
+		e.watch.trialMu.Unlock()
 
 		// Re-observe the item with a real API call / FS access to confirm
 		// whether the scope condition has cleared. Unlike the retrier (which
@@ -1928,8 +1947,8 @@ func (e *Engine) runTrialDispatch(ctx context.Context) {
 			continue
 		}
 
-		if e.buf != nil {
-			e.buf.Add(ev)
+		if e.watch != nil {
+			e.watch.buf.Add(ev)
 		}
 
 		e.logger.Debug("trial dispatched",
@@ -1971,7 +1990,7 @@ func (e *Engine) runRetrierSweep(ctx context.Context) {
 			// More items remain — re-arm immediately so the drain loop
 			// picks up the next batch on the next iteration.
 			select {
-			case e.retryTimerCh <- struct{}{}:
+			case e.watch.retryTimerCh <- struct{}{}:
 			default:
 			}
 
@@ -1999,8 +2018,8 @@ func (e *Engine) runRetrierSweep(ctx context.Context) {
 			continue
 		}
 
-		if e.buf != nil {
-			e.buf.Add(ev)
+		if e.watch != nil {
+			e.watch.buf.Add(ev)
 		}
 
 		dispatched++
@@ -2315,12 +2334,12 @@ func (e *Engine) reobserve(ctx context.Context, row *SyncFailureRow) (*ChangeEve
 // under trialMu. Entries older than trialPendingTTL are cleared and the
 // corresponding sync_failure is deleted (item is stale).
 func (e *Engine) cleanStaleTrialPending(now time.Time) {
-	e.trialMu.Lock()
-	defer e.trialMu.Unlock()
+	e.watch.trialMu.Lock()
+	defer e.watch.trialMu.Unlock()
 
-	for path, entry := range e.trialPending {
+	for path, entry := range e.watch.trialPending {
 		if now.Sub(entry.created) > trialPendingTTL {
-			delete(e.trialPending, path)
+			delete(e.watch.trialPending, path)
 			// Clear the stale sync_failure — this trial candidate was never
 			// intercepted by the planner (item may have been deleted). Best-effort.
 			if err := e.baseline.ClearSyncFailureByPath(context.Background(), path); err != nil {
@@ -2556,19 +2575,19 @@ func directionFromAction(at ActionType) string {
 // watches the old timer's channel after replacement. Called after scope blocks
 // are created, trials dispatched, or trial results processed (R-2.10.5).
 func (e *Engine) armTrialTimer() {
-	e.trialMu.Lock()
-	defer e.trialMu.Unlock()
-
-	if e.trialTimer != nil {
-		e.trialTimer.Stop()
-		e.trialTimer = nil
-	}
-
-	if e.scopeGate == nil {
+	if e.watch == nil {
 		return
 	}
 
-	earliest, ok := e.scopeGate.EarliestTrialAt()
+	e.watch.trialMu.Lock()
+	defer e.watch.trialMu.Unlock()
+
+	if e.watch.trialTimer != nil {
+		e.watch.trialTimer.Stop()
+		e.watch.trialTimer = nil
+	}
+
+	earliest, ok := e.watch.scopeGate.EarliestTrialAt()
 	if !ok {
 		return
 	}
@@ -2583,7 +2602,7 @@ func (e *Engine) armTrialTimer() {
 	// drainWorkerResults calls AllDueTrials, so even if a second AfterFunc
 	// fires while a signal is pending, all due scopes are still processed
 	// on the next drain iteration.
-	e.trialTimer = time.AfterFunc(delay, func() {
+	e.watch.trialTimer = time.AfterFunc(delay, func() {
 		select {
 		case e.trialCh <- struct{}{}:
 		default:
@@ -2600,12 +2619,16 @@ func (e *Engine) trialTimerChan() <-chan struct{} {
 
 // stopTrialTimer stops and clears the trial timer. Called on shutdown.
 func (e *Engine) stopTrialTimer() {
-	e.trialMu.Lock()
-	defer e.trialMu.Unlock()
+	if e.watch == nil {
+		return
+	}
 
-	if e.trialTimer != nil {
-		e.trialTimer.Stop()
-		e.trialTimer = nil
+	e.watch.trialMu.Lock()
+	defer e.watch.trialMu.Unlock()
+
+	if e.watch.trialTimer != nil {
+		e.watch.trialTimer.Stop()
+		e.watch.trialTimer = nil
 	}
 }
 
@@ -2662,7 +2685,7 @@ func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan WorkerRe
 // handleTrialTimer dispatches due scope trials via ScopeGate.
 // In one-shot mode (scopeGate == nil), this is a no-op.
 func (e *Engine) handleTrialTimer(ctx context.Context) {
-	if e.scopeGate != nil {
+	if e.watch != nil {
 		e.runTrialDispatch(ctx)
 	}
 }
@@ -2710,7 +2733,7 @@ func (e *Engine) startObservers(
 	if mode != SyncUploadOnly {
 		remoteObs := NewRemoteObserver(e.fetcher, bl, e.driveID, e.logger)
 		remoteObs.obsWriter = e.baseline
-		e.remoteObs = remoteObs
+		e.watch.remoteObs = remoteObs
 
 		savedToken, tokenErr := e.baseline.GetDeltaToken(ctx, e.driveID.String(), "")
 		if tokenErr != nil {
@@ -2742,7 +2765,7 @@ func (e *Engine) startObservers(
 			localObs.watcherFactory = e.localWatcherFactory
 		}
 
-		e.localObs = localObs
+		e.watch.localObs = localObs
 
 		obsWg.Add(1)
 		count++
@@ -2873,7 +2896,7 @@ func (e *Engine) processBatch(
 	// filter them out if the counter trips. Non-delete actions continue
 	// flowing. The planner-level check is disabled in watch mode
 	// (threshold=MaxInt32) — this counter replaces it.
-	if e.deleteCounter != nil {
+	if e.watch != nil && e.watch.deleteCounter != nil {
 		plan = e.applyDeleteCounter(ctx, plan)
 		if len(plan.Actions) == 0 {
 			return
@@ -2890,11 +2913,11 @@ func (e *Engine) periodicPermRecheck(ctx context.Context, bl *Baseline) {
 	const permRecheckInterval = 60 * time.Second
 
 	now := time.Now()
-	if now.Sub(e.lastPermRecheck) < permRecheckInterval {
+	if now.Sub(e.watch.lastPermRecheck) < permRecheckInterval {
 		return
 	}
 
-	e.lastPermRecheck = now
+	e.watch.lastPermRecheck = now
 
 	// recheckPermissions calls the Graph API — skip during outage or
 	// throttle to avoid wasting API calls (R-2.10.30). Local permission
@@ -2939,7 +2962,7 @@ func (e *Engine) dispatchBatchActions(ctx context.Context, plan *ActionPlan) {
 	// Allocate monotonic action IDs for this batch. Using a global atomic
 	// counter prevents ID collisions across batches — loop indices (int64(i))
 	// would collide when multiple batches are processed.
-	batchBaseID := e.nextActionID.Add(int64(len(plan.Actions))) - int64(len(plan.Actions))
+	batchBaseID := e.watch.nextActionID.Add(int64(len(plan.Actions))) - int64(len(plan.Actions))
 
 	// Map from plan index → action ID for dependency resolution.
 	actionIDs := make([]int64, len(plan.Actions))
@@ -3033,15 +3056,15 @@ func (e *Engine) applyDeleteCounter(ctx context.Context, plan *ActionPlan) *Acti
 
 	// Feed to the rolling counter. tripped=true means this call caused
 	// the first transition from not-held → held.
-	tripped := e.deleteCounter.Add(deleteCount)
+	tripped := e.watch.deleteCounter.Add(deleteCount)
 	if tripped {
 		e.logger.Warn("big-delete protection triggered in watch mode",
-			slog.Int("delete_count", e.deleteCounter.Count()),
-			slog.Int("threshold", e.deleteCounter.Threshold()),
+			slog.Int("delete_count", e.watch.deleteCounter.Count()),
+			slog.Int("threshold", e.watch.deleteCounter.Threshold()),
 		)
 	}
 
-	if !e.deleteCounter.IsHeld() {
+	if !e.watch.deleteCounter.IsHeld() {
 		return plan
 	}
 
@@ -3138,11 +3161,11 @@ func (e *Engine) externalDBChanged(ctx context.Context) bool {
 		return false
 	}
 
-	if dv == e.lastDataVersion {
+	if dv == e.watch.lastDataVersion {
 		return false
 	}
 
-	e.lastDataVersion = dv
+	e.watch.lastDataVersion = dv
 
 	return true
 }
@@ -3164,7 +3187,7 @@ func (e *Engine) handleRecheckTick(ctx context.Context) {
 
 func (e *Engine) handleExternalChanges(ctx context.Context) {
 	// Big-delete clearance: check if user approved held deletes.
-	if e.deleteCounter != nil && e.deleteCounter.IsHeld() {
+	if e.watch != nil && e.watch.deleteCounter != nil && e.watch.deleteCounter.IsHeld() {
 		rows, err := e.baseline.ListSyncFailuresByIssueType(ctx, IssueBigDeleteHeld)
 		if err != nil {
 			e.logger.Warn("failed to check big-delete-held entries",
@@ -3175,7 +3198,7 @@ func (e *Engine) handleExternalChanges(ctx context.Context) {
 		}
 
 		if len(rows) == 0 {
-			e.deleteCounter.Release()
+			e.watch.deleteCounter.Release()
 			e.logger.Info("big-delete protection cleared by user")
 		}
 	}
@@ -3189,11 +3212,11 @@ func (e *Engine) handleExternalChanges(ctx context.Context) {
 // had their sync_failures cleared (by user action via CLI), and releases
 // the corresponding scope blocks.
 func (e *Engine) clearResolvedPermissionScopes(ctx context.Context) {
-	if e.scopeGate == nil {
+	if e.watch == nil {
 		return
 	}
 
-	scopeKeys := e.scopeGate.ScopeBlockKeys()
+	scopeKeys := e.watch.scopeGate.ScopeBlockKeys()
 	if len(scopeKeys) == 0 {
 		return
 	}
@@ -3233,19 +3256,19 @@ func (e *Engine) clearResolvedPermissionScopes(ctx context.Context) {
 func (e *Engine) logWatchSummary(ctx context.Context) {
 	issues, err := e.baseline.ListActionableFailures(ctx)
 	if err != nil || len(issues) == 0 {
-		if e.lastSummaryTotal != 0 {
-			e.lastSummaryTotal = 0
+		if e.watch.lastSummaryTotal != 0 {
+			e.watch.lastSummaryTotal = 0
 		}
 
 		return
 	}
 
 	// Only log if count changed since last summary.
-	if len(issues) == e.lastSummaryTotal {
+	if len(issues) == e.watch.lastSummaryTotal {
 		return
 	}
 
-	e.lastSummaryTotal = len(issues)
+	e.watch.lastSummaryTotal = len(issues)
 
 	// Group by issue_type, emit one-liner.
 	counts := make(map[string]int)
