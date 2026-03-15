@@ -275,35 +275,35 @@ func TestNewRootCmd_DriveSubcommandsSkipConfig(t *testing.T) {
 
 // --- annotation-based skip config (tree-walking) ---
 
-// dataCommands lists leaf commands that require Phase 2 config loading (no
-// skipConfigAnnotation). This set is small and stable — adding a new data
-// command requires updating this list, which triggers a test failure as a
-// reminder to classify the new command.
-var dataCommands = map[string]bool{
-	"onedrive-go ls":                  true,
-	"onedrive-go get":                 true,
-	"onedrive-go put":                 true,
-	"onedrive-go rm":                  true,
-	"onedrive-go mkdir":               true,
-	"onedrive-go stat":                true,
-	"onedrive-go mv":                  true,
-	"onedrive-go cp":                  true,
-	"onedrive-go issues":              true,
-	"onedrive-go issues resolve":      true,
-	"onedrive-go issues clear":        true,
-	"onedrive-go issues retry":        true,
-	"onedrive-go verify":              true,
-	"onedrive-go recycle-bin list":    true,
-	"onedrive-go recycle-bin restore": true,
-	"onedrive-go recycle-bin empty":   true,
-}
-
 // TestAnnotationTreeWalk walks the entire command tree and verifies that every
 // leaf command with RunE is correctly classified: data commands must NOT have
 // skipConfigAnnotation, and all other commands must HAVE it. Any unclassified
 // command fails the test, forcing authors to explicitly decide when adding
 // new commands.
 func TestAnnotationTreeWalk(t *testing.T) {
+	// dataCommands lists leaf commands that require Phase 2 config loading
+	// (no skipConfigAnnotation). This set is small and stable — adding a new
+	// data command requires updating this list, which triggers a test failure
+	// as a reminder to classify the new command.
+	dataCommands := map[string]bool{
+		"onedrive-go ls":                  true,
+		"onedrive-go get":                 true,
+		"onedrive-go put":                 true,
+		"onedrive-go rm":                  true,
+		"onedrive-go mkdir":               true,
+		"onedrive-go stat":                true,
+		"onedrive-go mv":                  true,
+		"onedrive-go cp":                  true,
+		"onedrive-go issues":              true,
+		"onedrive-go issues resolve":      true,
+		"onedrive-go issues clear":        true,
+		"onedrive-go issues retry":        true,
+		"onedrive-go verify":              true,
+		"onedrive-go recycle-bin list":    true,
+		"onedrive-go recycle-bin restore": true,
+		"onedrive-go recycle-bin empty":   true,
+	}
+
 	cmd := newRootCmd()
 
 	var walk func(c *cobra.Command)
