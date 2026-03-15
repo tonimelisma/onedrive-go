@@ -599,3 +599,187 @@ func TestDepGraph_D10_CompletedDepSatisfiedForNewAction(t *testing.T) {
 		"D-10: new action depending on completed ID must be immediately ready")
 	assert.Equal(t, int64(2), ta.ID)
 }
+
+// ---------------------------------------------------------------------------
+// WaitForEmpty
+// ---------------------------------------------------------------------------
+
+func TestDepGraph_WaitForEmpty_AlreadyEmpty(t *testing.T) {
+	t.Parallel()
+
+	dg := NewDepGraph(testLogger(t))
+
+	// Empty graph — WaitForEmpty should return a pre-closed channel.
+	ch := dg.WaitForEmpty()
+	select {
+	case <-ch:
+		// Good — channel was already closed.
+	default:
+		require.Fail(t, "WaitForEmpty on empty graph should return a pre-closed channel")
+	}
+}
+
+func TestDepGraph_WaitForEmpty_FiresAfterAllComplete(t *testing.T) {
+	t.Parallel()
+
+	dg := NewDepGraph(testLogger(t))
+
+	// Add 3 independent actions.
+	for i := int64(1); i <= 3; i++ {
+		dg.Add(&Action{
+			Type: ActionDownload, Path: fmt.Sprintf("file-%d", i),
+			DriveID: driveid.New("d"), ItemID: fmt.Sprintf("i%d", i),
+		}, i, nil)
+	}
+
+	ch := dg.WaitForEmpty()
+
+	// Channel should not fire yet.
+	select {
+	case <-ch:
+		require.Fail(t, "WaitForEmpty should not fire with 3 in-flight actions")
+	default:
+	}
+
+	// Complete 2 of 3 — still not empty.
+	dg.Complete(1)
+	dg.Complete(2)
+	select {
+	case <-ch:
+		require.Fail(t, "WaitForEmpty should not fire with 1 in-flight action")
+	default:
+	}
+
+	// Complete the last — now empty.
+	dg.Complete(3)
+	select {
+	case <-ch:
+		// Good.
+	default:
+		require.Fail(t, "WaitForEmpty should fire after all actions completed")
+	}
+}
+
+func TestDepGraph_WaitForEmpty_WithDependencies(t *testing.T) {
+	t.Parallel()
+
+	dg := NewDepGraph(testLogger(t))
+
+	// Parent action (no deps).
+	dg.Add(&Action{
+		Type: ActionFolderCreate, Path: "parent",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil)
+
+	// Child depends on parent.
+	dg.Add(&Action{
+		Type: ActionDownload, Path: "parent/child.txt",
+		DriveID: driveid.New("d"), ItemID: "i2",
+	}, 2, []int64{1})
+
+	ch := dg.WaitForEmpty()
+
+	// Complete parent — child becomes ready but graph isn't empty.
+	ready, ok := dg.Complete(1)
+	require.True(t, ok)
+	require.Len(t, ready, 1)
+
+	select {
+	case <-ch:
+		require.Fail(t, "WaitForEmpty should not fire with child still in-flight")
+	default:
+	}
+
+	// Complete child — now empty.
+	dg.Complete(2)
+	select {
+	case <-ch:
+		// Good.
+	default:
+		require.Fail(t, "WaitForEmpty should fire after parent+child completed")
+	}
+}
+
+func TestDepGraph_WaitForEmpty_Concurrent(t *testing.T) {
+	t.Parallel()
+
+	dg := NewDepGraph(testLogger(t))
+
+	// Add 50 independent actions.
+	for i := int64(1); i <= 50; i++ {
+		dg.Add(&Action{
+			Type: ActionDownload, Path: fmt.Sprintf("file-%d", i),
+			DriveID: driveid.New("d"), ItemID: fmt.Sprintf("i%d", i),
+		}, i, nil)
+	}
+
+	ch := dg.WaitForEmpty()
+
+	// Complete all concurrently.
+	var wg stdsync.WaitGroup
+	for i := int64(1); i <= 50; i++ {
+		wg.Add(1)
+		go func(id int64) {
+			defer wg.Done()
+			dg.Complete(id)
+		}(i)
+	}
+	wg.Wait()
+
+	// Channel should be closed exactly once, no panic.
+	select {
+	case <-ch:
+		// Good.
+	default:
+		require.Fail(t, "WaitForEmpty should fire after all 50 concurrent completions")
+	}
+}
+
+func TestDepGraph_WaitForEmpty_Reusable(t *testing.T) {
+	t.Parallel()
+
+	dg := NewDepGraph(testLogger(t))
+
+	// Batch 1: add and complete 2 actions.
+	dg.Add(&Action{
+		Type: ActionDownload, Path: "a.txt",
+		DriveID: driveid.New("d"), ItemID: "i1",
+	}, 1, nil)
+	dg.Add(&Action{
+		Type: ActionDownload, Path: "b.txt",
+		DriveID: driveid.New("d"), ItemID: "i2",
+	}, 2, nil)
+
+	ch1 := dg.WaitForEmpty()
+	dg.Complete(1)
+	dg.Complete(2)
+
+	select {
+	case <-ch1:
+		// Good — batch 1 emptied.
+	default:
+		require.Fail(t, "first WaitForEmpty should fire after batch 1 emptied")
+	}
+
+	// Batch 2: add more actions — new WaitForEmpty should work.
+	dg.Add(&Action{
+		Type: ActionUpload, Path: "c.txt",
+		DriveID: driveid.New("d"), ItemID: "i3",
+	}, 3, nil)
+
+	ch2 := dg.WaitForEmpty()
+
+	select {
+	case <-ch2:
+		require.Fail(t, "second WaitForEmpty should not fire while batch 2 is in-flight")
+	default:
+	}
+
+	dg.Complete(3)
+	select {
+	case <-ch2:
+		// Good — batch 2 emptied.
+	default:
+		require.Fail(t, "second WaitForEmpty should fire after batch 2 emptied")
+	}
+}
