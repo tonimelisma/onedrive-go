@@ -1,0 +1,386 @@
+// observer_local.go — LocalObserver struct definition and watch coordination.
+//
+// Contents:
+//   - LocalObserver struct + NewLocalObserver constructor
+//   - FsWatcher interface + fsnotifyWrapper adapter
+//   - Watch() entry point + AddWatchesRecursive
+//   - Event channel management (TrySend, DroppedEvents, LastActivity)
+//
+// Related files:
+//   - observer_local_handlers.go:  watch event loop + fsnotify event handlers
+//   - observer_local_collisions.go: case collision detection helpers (cache, peers)
+//   - scanner.go:                   FullScan, walk/hash/filter logic
+package syncobserve
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"sync/atomic"
+	"time"
+
+	"github.com/fsnotify/fsnotify"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+)
+
+// Constants for the local observer (watch mode).
+const (
+	safetyScanInterval = 5 * time.Minute
+
+	// defaultWriteCoalesceCooldown is the per-path quiescence window for
+	// write coalescing (B-107). Multiple Write events within this window are
+	// coalesced into a single hash + emit.
+	defaultWriteCoalesceCooldown = 500 * time.Millisecond
+
+	// HashRequestBufSize is the buffer for the timer → watchLoop channel.
+	// Timer callbacks must not block; 256 handles bursts like `git checkout`.
+	HashRequestBufSize = 256
+)
+
+// MaxCoalesceRetries caps the number of re-schedule attempts in hashAndEmit
+// when errFileChangedDuringHash is returned. Prevents infinite retry if a file
+// is being written to continuously.
+const MaxCoalesceRetries = 3
+
+// HashRequest is sent from timer callbacks to the watchLoop goroutine when a
+// write coalesce timer fires and the file should be hashed (B-107).
+type HashRequest struct {
+	FsPath    string
+	DbRelPath string
+	Name      string
+	Retries   int // number of re-schedules already attempted
+}
+
+// FsWatcher abstracts filesystem event monitoring. Satisfied by
+// *fsnotify.Watcher; tests inject a mock implementation.
+type FsWatcher interface {
+	Add(name string) error
+	Remove(name string) error
+	Close() error
+	Events() <-chan fsnotify.Event
+	Errors() <-chan error
+}
+
+// fsnotifyWrapper adapts *fsnotify.Watcher to the FsWatcher interface.
+// fsnotify exposes Events and Errors as public fields, not methods.
+type fsnotifyWrapper struct {
+	w *fsnotify.Watcher
+}
+
+func (fw *fsnotifyWrapper) Add(name string) error         { return fw.w.Add(name) }
+func (fw *fsnotifyWrapper) Remove(name string) error      { return fw.w.Remove(name) }
+func (fw *fsnotifyWrapper) Close() error                  { return fw.w.Close() }
+func (fw *fsnotifyWrapper) Events() <-chan fsnotify.Event { return fw.w.Events }
+func (fw *fsnotifyWrapper) Errors() <-chan error          { return fw.w.Errors }
+
+// LocalObserver walks the local filesystem and produces []synctypes.ChangeEvent by
+// comparing each entry against the in-memory baseline. Stateless — syncRoot
+// is a parameter of FullScan, allowing reuse across passes.
+type LocalObserver struct {
+	Baseline           *synctypes.Baseline
+	Logger             *slog.Logger
+	checkWorkers       int // parallel hash goroutine limit for FullScan (0 → defaultCheckWorkers)
+	WatcherFactory     func() (FsWatcher, error)
+	droppedEvents      atomic.Int64                                     // events dropped by TrySend due to full channel
+	droppedRetries     atomic.Int64                                     // hash requests dropped due to full channel
+	lastActivityNano   atomic.Int64                                     // liveness: updated on each event emit (B-125)
+	SleepFunc          func(ctx context.Context, d time.Duration) error // injectable for testing
+	SafetyTickFunc     func(d time.Duration) (<-chan time.Time, func()) // injectable for testing; returns tick channel + stop func
+	safetyScanInterval time.Duration                                    // 0 → default (5 minutes); configurable (B-099)
+
+	// hashFunc computes the QuickXorHash of a file. Injectable for testing
+	// (e.g., to simulate panics in the hash phase).
+	HashFunc func(path string) (string, error)
+
+	// Write coalescing fields (B-107). Maps initialized in constructor;
+	// channel initialized in constructor so methods are safe before Watch().
+	WriteCoalesceCooldown time.Duration          // 0 → defaultWriteCoalesceCooldown; injectable for tests
+	PendingTimers         map[string]*time.Timer // per-path timers; watchLoop-only (no mutex needed)
+	HashRequests          chan HashRequest       // timer callback → watchLoop
+
+	// skippedCh forwards SkippedItems from safety scans to the engine for
+	// recording in sync_failures. Nil disables forwarding (pre-existing behavior).
+	// Set via SetSkippedChannel before Watch.
+	skippedCh chan<- []synctypes.SkippedItem
+
+	// dirNameCache caches lowercase→original name mappings per directory for
+	// O(1) case collision lookups. Built lazily on first check; invalidated
+	// by Create/Delete events. Single-goroutine access (watchLoop) — no mutex.
+	DirNameCache map[string]map[string][]string // dirPath → lowName → []originalNames
+
+	// recentLocalDeletes tracks dbRelPaths of files deleted locally in the
+	// current watch session. Used to suppress false-positive baseline
+	// collisions during case-only renames: the Delete event removes the
+	// old name but baseline isn't updated until the action executes (async).
+	// Cleared on safety scan. Single-goroutine access (watchLoop).
+	RecentLocalDeletes map[string]struct{}
+
+	// collisionPeers tracks N-way collision relationships detected in watch
+	// mode. When a collider is deleted, all surviving peers are re-emitted
+	// via handleCreate (which re-checks and re-records any remaining collisions).
+	// Cleared on safety scan (authoritative DetectCaseCollisions replaces this).
+	// Single-goroutine access (watchLoop) — no mutex.
+	CollisionPeers map[string]map[string]struct{} // dbRelPath → set of peer dbRelPaths
+}
+
+// NewLocalObserver creates a LocalObserver. checkWorkers controls the number
+// of parallel goroutines used for file hashing during FullScan (0 → default 4).
+// The baseline must be loaded (from SyncStore.Load); it is read-only
+// during observation.
+func NewLocalObserver(baseline *synctypes.Baseline, logger *slog.Logger, checkWorkers int) *LocalObserver {
+	return &LocalObserver{
+		Baseline:           baseline,
+		Logger:             logger,
+		checkWorkers:       checkWorkers,
+		HashFunc:           driveops.ComputeQuickXorHash,
+		SleepFunc:          TimeSleep,
+		PendingTimers:      make(map[string]*time.Timer),
+		HashRequests:       make(chan HashRequest, HashRequestBufSize),
+		DirNameCache:       make(map[string]map[string][]string),
+		RecentLocalDeletes: make(map[string]struct{}),
+		CollisionPeers:     make(map[string]map[string]struct{}),
+		SafetyTickFunc: func(d time.Duration) (<-chan time.Time, func()) {
+			t := time.NewTicker(d)
+			return t.C, t.Stop
+		},
+		WatcherFactory: func() (FsWatcher, error) {
+			w, err := fsnotify.NewWatcher()
+			if err != nil {
+				return nil, err
+			}
+			return &fsnotifyWrapper{w: w}, nil
+		},
+	}
+}
+
+// SetSkippedChannel sets the channel for forwarding SkippedItems from safety
+// scans to the engine. Must be called before Watch. Nil disables forwarding.
+func (o *LocalObserver) SetSkippedChannel(ch chan<- []synctypes.SkippedItem) {
+	o.skippedCh = ch
+}
+
+// SetSafetyScanInterval overrides the default 5-minute safety scan interval.
+// Zero means use the default. Called by the engine when WatchOpts specifies
+// a custom interval (e.g., for faster tests).
+func (o *LocalObserver) SetSafetyScanInterval(d time.Duration) {
+	o.safetyScanInterval = d
+}
+
+// SetWatcherFactory overrides the default fsnotify watcher factory. Used by
+// tests to inject a mock factory that simulates inotify watch limit exhaustion
+// (ENOSPC) or other platform-specific failure modes.
+func (o *LocalObserver) SetWatcherFactory(fn func() (FsWatcher, error)) {
+	o.WatcherFactory = fn
+}
+
+// TrySend sends a ChangeEvent to the events channel without blocking. If the
+// channel is full, the event is dropped and logged at Warn. The safety scan
+// (every 5 minutes) catches any dropped events, providing eventual consistency.
+func (o *LocalObserver) TrySend(ctx context.Context, events chan<- synctypes.ChangeEvent, ev *synctypes.ChangeEvent) {
+	select {
+	case events <- *ev:
+		o.recordActivity()
+	case <-ctx.Done():
+	default:
+		o.droppedEvents.Add(1)
+		o.Logger.Warn("event channel full, dropping event (safety scan will catch up)",
+			slog.String("path", ev.Path),
+			slog.String("type", ev.Type.String()),
+		)
+	}
+}
+
+// DroppedEvents returns the cumulative number of events dropped by TrySend
+// due to a full channel. Production code uses ResetDroppedEvents for per-pass
+// reporting; this accessor is retained for tests and diagnostics.
+func (o *LocalObserver) DroppedEvents() int64 {
+	return o.droppedEvents.Load()
+}
+
+// ResetDroppedEvents atomically reads and resets the drop counter to zero.
+// Returns the number of events dropped since the last reset. Used by the
+// engine to log per-pass drops without double-counting across passes.
+func (o *LocalObserver) ResetDroppedEvents() int64 {
+	return o.droppedEvents.Swap(0)
+}
+
+// DroppedRetries returns the cumulative number of hash requests dropped
+// because the HashRequests channel was full. Safety scans catch these.
+func (o *LocalObserver) DroppedRetries() int64 {
+	return o.droppedRetries.Load()
+}
+
+// LastActivity returns the time of the most recent event emission.
+// Returns zero time if no events have been emitted. Thread-safe (B-125).
+func (o *LocalObserver) LastActivity() time.Time {
+	nano := o.lastActivityNano.Load()
+	if nano == 0 {
+		return time.Time{}
+	}
+
+	return time.Unix(0, nano)
+}
+
+// recordActivity updates the liveness timestamp to now.
+func (o *LocalObserver) recordActivity() {
+	o.lastActivityNano.Store(time.Now().UnixNano())
+}
+
+// EstimateDirCount returns the estimated number of directories that will need
+// inotify watches. Counts ItemTypeFolder entries in baseline plus one for the
+// sync root itself.
+func (o *LocalObserver) EstimateDirCount() int {
+	count := 1 // sync root always needs a watch
+
+	o.Baseline.ForEachPath(func(_ string, entry *synctypes.BaselineEntry) {
+		if entry.ItemType == synctypes.ItemTypeFolder {
+			count++
+		}
+	})
+
+	return count
+}
+
+// Watch monitors the local filesystem for changes using fsnotify and sends
+// events to the provided channel. It blocks until the context is canceled,
+// returning nil. A periodic safety scan (every 5 minutes) catches any events
+// that fsnotify may miss (e.g., during brief watcher gaps or platform edge
+// cases). Returns ErrNosyncGuard if the .nosync guard file is present.
+//
+// Channel sizing (B-114): The events channel should be buffered (recommended
+// size: 256). An unbuffered channel blocks on every event. If the channel is
+// full, TrySend drops the event and increments the drop counter — the safety
+// scan provides eventual consistency for any dropped events.
+func (o *LocalObserver) Watch(ctx context.Context, syncRoot string, events chan<- synctypes.ChangeEvent) error {
+	o.Logger.Info("local observer starting watch",
+		slog.String("sync_root", syncRoot),
+	)
+
+	// Guard: abort if .nosync file is present.
+	if _, err := os.Stat(filepath.Join(syncRoot, nosyncFileName)); err == nil {
+		o.Logger.Warn("nosync guard file detected, aborting watch",
+			slog.String("sync_root", syncRoot))
+
+		return synctypes.ErrNosyncGuard
+	}
+
+	watcher, err := o.WatcherFactory()
+	if err != nil {
+		return fmt.Errorf("sync: creating filesystem watcher: %w", err)
+	}
+	defer watcher.Close()
+
+	defer o.cancelPendingTimers()
+
+	// Pre-flight capacity check (Linux only; no-op on other platforms).
+	CheckInotifyCapacity(o.EstimateDirCount(), o.Logger)
+
+	// Walk the sync root to add watches on all existing directories.
+	if walkErr := o.AddWatchesRecursive(watcher, syncRoot); walkErr != nil {
+		if errors.Is(walkErr, synctypes.ErrWatchLimitExhausted) {
+			return synctypes.ErrWatchLimitExhausted
+		}
+
+		return fmt.Errorf("sync: adding initial watches: %w", walkErr)
+	}
+
+	return o.watchLoop(ctx, watcher, syncRoot, events)
+}
+
+// cancelPendingTimers stops and clears all pending write coalesce timers.
+// Called on watchLoop exit to prevent timer callbacks sending to a closed channel.
+//
+// Deleting map entries during range iteration is safe in Go — the spec
+// guarantees that entries added during iteration may or may not be visited,
+// and deletion of unvisited entries is well-defined. See go.dev/ref/spec#For_range.
+func (o *LocalObserver) cancelPendingTimers() {
+	for path, timer := range o.PendingTimers {
+		timer.Stop()
+		delete(o.PendingTimers, path)
+	}
+}
+
+// AddWatchesRecursive walks the sync root and adds a watch on every directory.
+func (o *LocalObserver) AddWatchesRecursive(watcher FsWatcher, syncRoot string) error {
+	var watched, failed int
+
+	err := filepath.WalkDir(syncRoot, func(fsPath string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			o.Logger.Warn("walk error during watch setup",
+				slog.String("path", fsPath), slog.String("error", walkErr.Error()))
+
+			return SkipEntry(d)
+		}
+
+		if !d.IsDir() {
+			return nil
+		}
+
+		// Symlinked directories cannot be reliably watched (the watcher
+		// follows the real path, not the symlink) and are excluded from
+		// sync. Log a warning so the user knows why the directory is
+		// skipped (B-120).
+		if d.Type()&fs.ModeSymlink != 0 {
+			o.Logger.Warn("skipping symlinked directory in watch setup",
+				slog.String("path", fsPath))
+
+			return filepath.SkipDir
+		}
+
+		// Unified observation filter for directory names. NFC-normalize to match
+		// the convention used by scanner and watch handlers.
+		name := nfcNormalize(d.Name())
+		if fsPath != syncRoot {
+			relPath, relErr := filepath.Rel(syncRoot, fsPath)
+			if relErr != nil {
+				o.Logger.Warn("failed to compute relative path during watch setup",
+					slog.String("path", fsPath), slog.String("error", relErr.Error()))
+				return filepath.SkipDir
+			}
+
+			dbRelPath := nfcNormalize(filepath.ToSlash(relPath))
+
+			if ShouldObserve(name, dbRelPath) != nil {
+				return filepath.SkipDir
+			}
+		}
+
+		if addErr := watcher.Add(fsPath); addErr != nil {
+			if IsWatchLimitError(addErr) {
+				o.Logger.Error("inotify watch limit exhausted",
+					slog.String("path", fsPath),
+					slog.Int("watches_added", watched),
+				)
+
+				return synctypes.ErrWatchLimitExhausted
+			}
+
+			failed++
+			o.Logger.Warn("failed to add watch",
+				slog.String("path", fsPath), slog.String("error", addErr.Error()))
+		} else {
+			watched++
+		}
+
+		return nil
+	})
+
+	// Use Info when failures occurred (operator needs to know), Debug otherwise.
+	logLevel := slog.LevelDebug
+	if failed > 0 {
+		logLevel = slog.LevelInfo
+	}
+
+	o.Logger.Log(context.Background(), logLevel, "watch setup complete",
+		slog.Int("watches_added", watched),
+		slog.Int("watches_failed", failed),
+	)
+
+	return err
+}

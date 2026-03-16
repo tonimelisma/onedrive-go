@@ -68,7 +68,7 @@ func TestIsDisposable(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// deleteLocalFolder with disposable files tests
+// DeleteLocalFolder with disposable files tests
 // ---------------------------------------------------------------------------
 
 func newDeleteTestExecutor(t *testing.T) (*Executor, string) {
@@ -83,8 +83,8 @@ func newDeleteTestExecutor(t *testing.T) (*Executor, string) {
 	ul := &executorMockUploader{}
 
 	cfg := NewExecutorConfig(items, dl, ul, syncRoot, driveID, logger)
-	cfg.transferMgr = driveops.NewTransferManager(dl, ul, nil, logger)
-	cfg.nowFunc = func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) }
+	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
+	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) })
 	e := NewExecution(cfg, emptyBaseline())
 
 	return e, syncRoot
@@ -102,7 +102,7 @@ func TestDeleteLocalFolder_DSStoreOnly_Succeeds(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".DS_Store"), []byte{0}, 0o644))
 
 	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
-	outcome := e.deleteLocalFolder(action, dir)
+	outcome := e.DeleteLocalFolder(action, dir)
 
 	requireOutcomeSuccess(t, outcome)
 
@@ -122,7 +122,7 @@ func TestDeleteLocalFolder_TmpFilesOnly_Succeeds(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "edit.swp"), []byte("swp"), 0o644))
 
 	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
-	outcome := e.deleteLocalFolder(action, dir)
+	outcome := e.DeleteLocalFolder(action, dir)
 
 	requireOutcomeSuccess(t, outcome)
 
@@ -141,7 +141,7 @@ func TestDeleteLocalFolder_UnknownFile_Fails(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "important.txt"), []byte("data"), 0o644))
 
 	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
-	outcome := e.deleteLocalFolder(action, dir)
+	outcome := e.DeleteLocalFolder(action, dir)
 
 	requireOutcomeFailure(t, outcome)
 	assert.Contains(t, outcome.Error.Error(), "important.txt")
@@ -158,7 +158,7 @@ func TestDeleteLocalFolder_MixedDisposableAndUnknown_Fails(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "realfile.doc"), []byte("content"), 0o644))
 
 	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
-	outcome := e.deleteLocalFolder(action, dir)
+	outcome := e.DeleteLocalFolder(action, dir)
 
 	requireOutcomeFailure(t, outcome)
 	assert.Contains(t, outcome.Error.Error(), "realfile.doc")
@@ -179,7 +179,7 @@ func TestDeleteLocalFolder_AppleDoubleFiles_Succeeds(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".DS_Store"), []byte{0}, 0o644))
 
 	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
-	outcome := e.deleteLocalFolder(action, dir)
+	outcome := e.DeleteLocalFolder(action, dir)
 
 	requireOutcomeSuccess(t, outcome)
 
@@ -198,7 +198,7 @@ func TestDeleteLocalFolder_DisposableDirWithNonDisposableChild_Fails(t *testing.
 	require.NoError(t, os.WriteFile(filepath.Join(macDir, "important.txt"), []byte("data"), 0o644))
 
 	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
-	outcome := e.deleteLocalFolder(action, dir)
+	outcome := e.DeleteLocalFolder(action, dir)
 
 	requireOutcomeFailure(t, outcome)
 	assert.Contains(t, outcome.Error.Error(), "__MACOSX/important.txt")
@@ -216,7 +216,7 @@ func TestDeleteLocalFolder_DisposableDirAllDisposableChildren_Succeeds(t *testin
 	require.NoError(t, os.WriteFile(filepath.Join(macDir, ".DS_Store"), []byte{0}, 0o644))
 
 	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
-	outcome := e.deleteLocalFolder(action, dir)
+	outcome := e.DeleteLocalFolder(action, dir)
 
 	requireOutcomeSuccess(t, outcome)
 
@@ -248,7 +248,7 @@ func TestDeleteLocalFolder_EmptyDir_Succeeds(t *testing.T) {
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 
 	action := &Action{Type: ActionLocalDelete, Path: "empty", ItemID: "id1"}
-	outcome := e.deleteLocalFolder(action, dir)
+	outcome := e.DeleteLocalFolder(action, dir)
 
 	requireOutcomeSuccess(t, outcome)
 

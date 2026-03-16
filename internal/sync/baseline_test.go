@@ -114,7 +114,7 @@ func TestNewSyncStore_WALMode(t *testing.T) {
 	var journalMode string
 
 	ctx := t.Context()
-	err := mgr.db.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode)
+	err := mgr.DB().QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode)
 	require.NoError(t, err)
 	assert.Equal(t, "wal", journalMode)
 }
@@ -131,7 +131,7 @@ func TestSyncStore_Close_CheckpointsWAL(t *testing.T) {
 
 	// Write some data to ensure WAL has content.
 	ctx := t.Context()
-	_, err = mgr.db.ExecContext(ctx,
+	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO baseline (path, drive_id, item_id, parent_id, item_type,
 		 local_hash, remote_hash, size, mtime, synced_at, etag)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -162,7 +162,7 @@ func TestNewSyncStore_RunsMigrations(t *testing.T) {
 
 	var count int
 
-	err := mgr.db.QueryRowContext(ctx,
+	err := mgr.DB().QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM goose_db_version WHERE version_id > 0",
 	).Scan(&count)
 	require.NoError(t, err)
@@ -181,21 +181,21 @@ func TestCheckpoint_PrunesDeletedRemoteState(t *testing.T) {
 	retention := 24 * time.Hour                    // 1 day retention
 
 	// Insert a deleted row older than retention (should be pruned).
-	_, err := mgr.db.ExecContext(ctx,
+	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"drv1", "old-item", "/old.txt", "file", "deleted", oldTime)
 	require.NoError(t, err)
 
 	// Insert a deleted row newer than retention (should survive).
-	_, err = mgr.db.ExecContext(ctx,
+	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"drv1", "new-item", "/new.txt", "file", "deleted", newTime)
 	require.NoError(t, err)
 
 	// Insert a synced row (should never be pruned regardless of age).
-	_, err = mgr.db.ExecContext(ctx,
+	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"drv1", "synced-item", "/synced.txt", "file", "synced", oldTime)
@@ -205,7 +205,7 @@ func TestCheckpoint_PrunesDeletedRemoteState(t *testing.T) {
 
 	// Verify: old deleted row pruned, new deleted and synced rows survive.
 	var count int
-	err = mgr.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM remote_state`).Scan(&count)
+	err = mgr.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM remote_state`).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 2, count, "old deleted should be pruned, new deleted + synced should remain")
 }
@@ -222,21 +222,21 @@ func TestCheckpoint_PrunesActionableSyncFailures(t *testing.T) {
 	retention := 24 * time.Hour
 
 	// Insert an actionable failure older than retention (should be pruned).
-	_, err := mgr.db.ExecContext(ctx,
+	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO sync_failures (path, drive_id, direction, category, first_seen_at, last_seen_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"/old-issue.txt", "", "upload", "actionable", oldTime, oldTime)
 	require.NoError(t, err)
 
 	// Insert an actionable failure newer than retention (should survive).
-	_, err = mgr.db.ExecContext(ctx,
+	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO sync_failures (path, drive_id, direction, category, first_seen_at, last_seen_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"/new-issue.txt", "", "upload", "actionable", newTime, newTime)
 	require.NoError(t, err)
 
 	// Insert a transient failure (should never be pruned regardless of age).
-	_, err = mgr.db.ExecContext(ctx,
+	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO sync_failures (path, drive_id, direction, category, first_seen_at, last_seen_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"/pending-issue.txt", "", "upload", "transient", oldTime, oldTime)
@@ -245,7 +245,7 @@ func TestCheckpoint_PrunesActionableSyncFailures(t *testing.T) {
 	require.NoError(t, mgr.Checkpoint(ctx, retention))
 
 	var count int
-	err = mgr.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sync_failures`).Scan(&count)
+	err = mgr.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sync_failures`).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 2, count, "old actionable should be pruned, new actionable + transient should remain")
 }
@@ -259,7 +259,7 @@ func TestCheckpoint_ZeroRetentionSkipsPruning(t *testing.T) {
 	oldTime := time.Now().Add(-48 * time.Hour).UnixNano()
 
 	// Insert old deleted row.
-	_, err := mgr.db.ExecContext(ctx,
+	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"drv1", "item1", "/old.txt", "file", "deleted", oldTime)
@@ -269,7 +269,7 @@ func TestCheckpoint_ZeroRetentionSkipsPruning(t *testing.T) {
 	require.NoError(t, mgr.Checkpoint(ctx, 0))
 
 	var count int
-	err = mgr.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM remote_state`).Scan(&count)
+	err = mgr.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM remote_state`).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count, "zero retention should not prune anything")
 }
@@ -295,7 +295,7 @@ func TestCommit_Download(t *testing.T) {
 	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
-	mgr.nowFunc = func() time.Time { return fixedTime }
+	mgr.SetNowFunc(func() time.Time { return fixedTime })
 
 	outcomes := []Outcome{{
 		Action:     ActionDownload,
@@ -314,7 +314,7 @@ func TestCommit_Download(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes)
 
-	entry, ok := mgr.baseline.GetByPath("docs/readme.md")
+	entry, ok := mgr.Baseline().GetByPath("docs/readme.md")
 	require.True(t, ok, "baseline entry not found for docs/readme.md")
 	assert.True(t, entry.DriveID.Equal(driveid.New("drive1")), "DriveID mismatch")
 	assert.Equal(t, "item1", entry.ItemID)
@@ -330,7 +330,7 @@ func TestCommit_Upload(t *testing.T) {
 	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 2, 1, 10, 0, 0, 0, time.UTC)
-	mgr.nowFunc = func() time.Time { return fixedTime }
+	mgr.SetNowFunc(func() time.Time { return fixedTime })
 
 	outcomes := []Outcome{{
 		Action:     ActionUpload,
@@ -349,7 +349,7 @@ func TestCommit_Upload(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes)
 
-	entry, ok := mgr.baseline.GetByPath("photos/cat.jpg")
+	entry, ok := mgr.Baseline().GetByPath("photos/cat.jpg")
 	require.True(t, ok, "baseline entry not found")
 	assert.Equal(t, "hash-local", entry.LocalHash)
 	assert.Equal(t, "hash-remote", entry.RemoteHash)
@@ -361,9 +361,9 @@ func TestCommit_FolderCreate(t *testing.T) {
 	mgr := newTestManager(t)
 	ctx := t.Context()
 
-	mgr.nowFunc = func() time.Time {
+	mgr.SetNowFunc(func() time.Time {
 		return time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
-	}
+	})
 
 	outcomes := []Outcome{{
 		Action:   ActionFolderCreate,
@@ -377,7 +377,7 @@ func TestCommit_FolderCreate(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes)
 
-	entry, ok := mgr.baseline.GetByPath("Documents/Reports")
+	entry, ok := mgr.Baseline().GetByPath("Documents/Reports")
 	require.True(t, ok, "folder entry not found")
 	assert.Equal(t, ItemTypeFolder, entry.ItemType)
 	// Folders have no hash or size.
@@ -393,7 +393,7 @@ func TestCommit_UpdateSynced(t *testing.T) {
 
 	// First commit: create baseline entry.
 	t1 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	mgr.nowFunc = func() time.Time { return t1 }
+	mgr.SetNowFunc(func() time.Time { return t1 })
 
 	outcomes := []Outcome{{
 		Action:     ActionDownload,
@@ -412,7 +412,7 @@ func TestCommit_UpdateSynced(t *testing.T) {
 
 	// Second commit: convergent edit updates synced_at.
 	t2 := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
-	mgr.nowFunc = func() time.Time { return t2 }
+	mgr.SetNowFunc(func() time.Time { return t2 })
 
 	outcomes[0].Action = ActionUpdateSynced
 	outcomes[0].LocalHash = "h2"
@@ -420,7 +420,7 @@ func TestCommit_UpdateSynced(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes)
 
-	entry, ok := mgr.baseline.GetByPath("file.txt")
+	entry, ok := mgr.Baseline().GetByPath("file.txt")
 	require.True(t, ok)
 	assert.Equal(t, t2.UnixNano(), entry.SyncedAt)
 	assert.Equal(t, "h2", entry.LocalHash)
@@ -433,9 +433,9 @@ func TestCommit_LocalDelete(t *testing.T) {
 	mgr := newTestManager(t)
 	ctx := t.Context()
 
-	mgr.nowFunc = func() time.Time {
+	mgr.SetNowFunc(func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	}
+	})
 
 	// Create, then delete.
 	create := []Outcome{{
@@ -453,7 +453,7 @@ func TestCommit_LocalDelete(t *testing.T) {
 
 	commitAll(t, mgr, ctx, del)
 
-	_, ok := mgr.baseline.GetByPath("delete-me.txt")
+	_, ok := mgr.Baseline().GetByPath("delete-me.txt")
 	assert.False(t, ok, "entry still exists after local delete")
 }
 
@@ -464,9 +464,9 @@ func TestCommit_RemoteDelete(t *testing.T) {
 	mgr := newTestManager(t)
 	ctx := t.Context()
 
-	mgr.nowFunc = func() time.Time {
+	mgr.SetNowFunc(func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	}
+	})
 
 	create := []Outcome{{
 		Action: ActionDownload, Success: true,
@@ -483,7 +483,7 @@ func TestCommit_RemoteDelete(t *testing.T) {
 
 	commitAll(t, mgr, ctx, del)
 
-	_, ok := mgr.baseline.GetByPath("remote-del.txt")
+	_, ok := mgr.Baseline().GetByPath("remote-del.txt")
 	assert.False(t, ok, "entry still exists after remote delete")
 }
 
@@ -493,9 +493,9 @@ func TestCommit_Cleanup(t *testing.T) {
 	mgr := newTestManager(t)
 	ctx := t.Context()
 
-	mgr.nowFunc = func() time.Time {
+	mgr.SetNowFunc(func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	}
+	})
 
 	create := []Outcome{{
 		Action: ActionDownload, Success: true,
@@ -512,7 +512,7 @@ func TestCommit_Cleanup(t *testing.T) {
 
 	commitAll(t, mgr, ctx, cleanup)
 
-	_, ok := mgr.baseline.GetByPath("cleanup.txt")
+	_, ok := mgr.Baseline().GetByPath("cleanup.txt")
 	assert.False(t, ok, "entry still exists after cleanup")
 }
 
@@ -523,7 +523,7 @@ func TestCommit_Move(t *testing.T) {
 	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	mgr.nowFunc = func() time.Time { return fixedTime }
+	mgr.SetNowFunc(func() time.Time { return fixedTime })
 
 	// Create original entry.
 	create := []Outcome{{
@@ -546,10 +546,10 @@ func TestCommit_Move(t *testing.T) {
 
 	commitAll(t, mgr, ctx, move)
 
-	_, ok := mgr.baseline.GetByPath("old/path.txt")
+	_, ok := mgr.Baseline().GetByPath("old/path.txt")
 	assert.False(t, ok, "old path still exists after move")
 
-	entry, ok := mgr.baseline.GetByPath("new/path.txt")
+	entry, ok := mgr.Baseline().GetByPath("new/path.txt")
 	require.True(t, ok, "new path not found after move")
 	assert.Equal(t, "i", entry.ItemID)
 }
@@ -561,7 +561,7 @@ func TestCommit_Conflict(t *testing.T) {
 	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	mgr.nowFunc = func() time.Time { return fixedTime }
+	mgr.SetNowFunc(func() time.Time { return fixedTime })
 
 	outcomes := []Outcome{{
 		Action:       ActionConflict,
@@ -580,7 +580,7 @@ func TestCommit_Conflict(t *testing.T) {
 	// Verify conflict row was inserted with a valid UUID.
 	var id, conflictPath, conflictType, resolution string
 
-	err := mgr.db.QueryRowContext(ctx,
+	err := mgr.DB().QueryRowContext(ctx,
 		"SELECT id, path, conflict_type, resolution FROM conflicts LIMIT 1",
 	).Scan(&id, &conflictPath, &conflictType, &resolution)
 	require.NoError(t, err)
@@ -599,7 +599,7 @@ func TestCommit_Conflict_StoresRemoteMtime(t *testing.T) {
 	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	mgr.nowFunc = func() time.Time { return fixedTime }
+	mgr.SetNowFunc(func() time.Time { return fixedTime })
 
 	remoteMtime := int64(1700000000000000000) // non-zero nanosecond timestamp
 	outcomes := []Outcome{{
@@ -621,7 +621,7 @@ func TestCommit_Conflict_StoresRemoteMtime(t *testing.T) {
 	// Verify remote_mtime is stored as non-zero.
 	var storedRemoteMtime sql.NullInt64
 
-	err := mgr.db.QueryRowContext(ctx,
+	err := mgr.DB().QueryRowContext(ctx,
 		"SELECT remote_mtime FROM conflicts WHERE path = ?", "mtime-test.txt",
 	).Scan(&storedRemoteMtime)
 	require.NoError(t, err)
@@ -636,9 +636,9 @@ func TestCommit_SkipsFailedOutcomes(t *testing.T) {
 	mgr := newTestManager(t)
 	ctx := t.Context()
 
-	mgr.nowFunc = func() time.Time {
+	mgr.SetNowFunc(func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	}
+	})
 
 	outcomes := []Outcome{{
 		Action:  ActionDownload,
@@ -661,9 +661,9 @@ func TestCommit_DeltaToken(t *testing.T) {
 	mgr := newTestManager(t)
 	ctx := t.Context()
 
-	mgr.nowFunc = func() time.Time {
+	mgr.SetNowFunc(func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	}
+	})
 
 	// Commit with a delta token.
 	outcomes := []Outcome{{
@@ -687,9 +687,9 @@ func TestCommit_DeltaTokenUpdate(t *testing.T) {
 	mgr := newTestManager(t)
 	ctx := t.Context()
 
-	mgr.nowFunc = func() time.Time {
+	mgr.SetNowFunc(func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	}
+	})
 
 	outcomes := []Outcome{{
 		Action: ActionDownload, Success: true,
@@ -721,7 +721,7 @@ func TestCommit_SyncedAtFromNowFunc(t *testing.T) {
 
 	// Use a distinctive fixed time to verify nowFunc is used.
 	fixedTime := time.Date(2025, 6, 15, 12, 30, 0, 0, time.UTC)
-	mgr.nowFunc = func() time.Time { return fixedTime }
+	mgr.SetNowFunc(func() time.Time { return fixedTime })
 
 	outcomes := []Outcome{{
 		Action: ActionDownload, Success: true,
@@ -731,7 +731,7 @@ func TestCommit_SyncedAtFromNowFunc(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes)
 
-	entry, ok := mgr.baseline.GetByPath("f.txt")
+	entry, ok := mgr.Baseline().GetByPath("f.txt")
 	require.True(t, ok)
 	assert.Equal(t, fixedTime.UnixNano(), entry.SyncedAt)
 }
@@ -742,12 +742,12 @@ func TestCommit_RefreshesCache(t *testing.T) {
 	mgr := newTestManager(t)
 	ctx := t.Context()
 
-	mgr.nowFunc = func() time.Time {
+	mgr.SetNowFunc(func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	}
+	})
 
 	// Verify baseline is nil before first commit.
-	assert.Nil(t, mgr.baseline, "baseline should be nil before first Load/Commit")
+	assert.Nil(t, mgr.Baseline(), "baseline should be nil before first Load/Commit")
 
 	outcomes := []Outcome{{
 		Action: ActionDownload, Success: true,
@@ -757,8 +757,8 @@ func TestCommit_RefreshesCache(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes)
 
-	require.NotNil(t, mgr.baseline, "baseline should be populated after Commit")
-	assert.Equal(t, 1, mgr.baseline.Len())
+	require.NotNil(t, mgr.Baseline(), "baseline should be populated after Commit")
+	assert.Equal(t, 1, mgr.Baseline().Len())
 }
 
 func TestGetDeltaToken_Empty(t *testing.T) {
@@ -778,9 +778,9 @@ func TestGetDeltaToken_AfterCommit(t *testing.T) {
 	mgr := newTestManager(t)
 	ctx := t.Context()
 
-	mgr.nowFunc = func() time.Time {
+	mgr.SetNowFunc(func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	}
+	})
 
 	outcomes := []Outcome{{
 		Action: ActionDownload, Success: true,
@@ -803,7 +803,7 @@ func TestLoad_NullableFields(t *testing.T) {
 	ctx := t.Context()
 
 	// Insert a row with NULL parent_id, hashes, size, mtime, etag directly.
-	_, err := mgr.db.ExecContext(ctx,
+	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO baseline (path, drive_id, item_id, parent_id, item_type,
 		 local_hash, remote_hash, size, mtime, synced_at, etag)
 		 VALUES (?, ?, ?, NULL, ?, NULL, NULL, NULL, NULL, ?, NULL)`,
@@ -851,7 +851,7 @@ func seedConflict(t *testing.T, mgr *SyncStore, path, conflictType string) strin
 	// Retrieve the UUID.
 	var id string
 
-	err := mgr.db.QueryRowContext(ctx,
+	err := mgr.DB().QueryRowContext(ctx,
 		"SELECT id FROM conflicts WHERE path = ? ORDER BY detected_at DESC LIMIT 1", path,
 	).Scan(&id)
 	require.NoError(t, err, "retrieving conflict ID for %s", path)
@@ -876,7 +876,7 @@ func TestListConflicts_WithConflicts(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 
 	seedConflict(t, mgr, "a.txt", "edit_edit")
 	seedConflict(t, mgr, "b.txt", "edit_delete")
@@ -895,7 +895,7 @@ func TestListConflicts_OnlyUnresolved(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 
 	id := seedConflict(t, mgr, "resolved.txt", "edit_edit")
 	seedConflict(t, mgr, "pending.txt", "edit_edit")
@@ -916,7 +916,7 @@ func TestGetConflict_ByID(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 
 	id := seedConflict(t, mgr, "lookup.txt", "create_create")
 	ctx := t.Context()
@@ -933,7 +933,7 @@ func TestGetConflict_ByPath(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 
 	seedConflict(t, mgr, "bypath.txt", "edit_edit")
 	ctx := t.Context()
@@ -958,7 +958,7 @@ func TestResolveConflict(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 
 	id := seedConflict(t, mgr, "resolve-me.txt", "edit_edit")
 	ctx := t.Context()
@@ -969,7 +969,7 @@ func TestResolveConflict(t *testing.T) {
 	var resolution, resolvedBy string
 	var resolvedAt int64
 
-	err := mgr.db.QueryRowContext(ctx,
+	err := mgr.DB().QueryRowContext(ctx,
 		"SELECT resolution, resolved_at, resolved_by FROM conflicts WHERE id = ?", id,
 	).Scan(&resolution, &resolvedAt, &resolvedBy)
 	require.NoError(t, err)
@@ -982,7 +982,7 @@ func TestResolveConflict_AlreadyResolved(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 
 	id := seedConflict(t, mgr, "double-resolve.txt", "edit_edit")
 	ctx := t.Context()
@@ -1000,7 +1000,7 @@ func TestLoad_ReturnsCachedBaseline(t *testing.T) {
 
 	mgr := newTestManager(t)
 	ctx := t.Context()
-	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 
 	// Seed a baseline entry.
 	outcomes := []Outcome{{
@@ -1027,7 +1027,7 @@ func TestLoad_CacheInvalidatedByCommit(t *testing.T) {
 
 	mgr := newTestManager(t)
 	ctx := t.Context()
-	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 
 	// Seed one entry.
 	outcomes := []Outcome{{
@@ -1088,7 +1088,7 @@ func TestCommitConflict_AutoResolved(t *testing.T) {
 	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC)
-	mgr.nowFunc = func() time.Time { return fixedTime }
+	mgr.SetNowFunc(func() time.Time { return fixedTime })
 
 	outcomes := []Outcome{{
 		Action:       ActionConflict,
@@ -1112,7 +1112,7 @@ func TestCommitConflict_AutoResolved(t *testing.T) {
 	var resolution, resolvedBy string
 	var resolvedAt int64
 
-	err := mgr.db.QueryRowContext(ctx,
+	err := mgr.DB().QueryRowContext(ctx,
 		"SELECT resolution, resolved_at, resolved_by FROM conflicts WHERE path = ?",
 		"auto-resolved.txt",
 	).Scan(&resolution, &resolvedAt, &resolvedBy)
@@ -1122,7 +1122,7 @@ func TestCommitConflict_AutoResolved(t *testing.T) {
 	assert.NotZero(t, resolvedAt)
 
 	// Verify baseline was also updated (auto-resolve upserts baseline).
-	entry, ok := mgr.baseline.GetByPath("auto-resolved.txt")
+	entry, ok := mgr.Baseline().GetByPath("auto-resolved.txt")
 	require.True(t, ok, "baseline entry not found for auto-resolved conflict")
 	assert.Equal(t, "new-item", entry.ItemID)
 	assert.Equal(t, "local-h", entry.LocalHash)
@@ -1133,7 +1133,7 @@ func TestListAllConflicts(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 
 	// Seed an unresolved conflict.
 	seedConflict(t, mgr, "unresolved.txt", "edit_edit")
@@ -1181,7 +1181,7 @@ func TestCommitOutcome_Download(t *testing.T) {
 	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC)
-	mgr.nowFunc = func() time.Time { return fixedTime }
+	mgr.SetNowFunc(func() time.Time { return fixedTime })
 
 	outcome := Outcome{
 		Action:     ActionDownload,
@@ -1200,7 +1200,7 @@ func TestCommitOutcome_Download(t *testing.T) {
 
 	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
 
-	entry, ok := mgr.baseline.GetByPath("co-download.txt")
+	entry, ok := mgr.Baseline().GetByPath("co-download.txt")
 	require.True(t, ok, "baseline entry not found")
 	assert.Equal(t, "i1", entry.ItemID)
 	assert.Equal(t, "lh", entry.LocalHash)
@@ -1213,7 +1213,7 @@ func TestCommitOutcome_Upload(t *testing.T) {
 	mgr := newTestManager(t)
 	ctx := t.Context()
 
-	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
 	outcome := Outcome{
 		Action:     ActionUpload,
@@ -1229,7 +1229,7 @@ func TestCommitOutcome_Upload(t *testing.T) {
 
 	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
 
-	entry, ok := mgr.baseline.GetByPath("co-upload.txt")
+	entry, ok := mgr.Baseline().GetByPath("co-upload.txt")
 	require.True(t, ok, "baseline entry not found")
 	assert.Equal(t, "i2", entry.ItemID)
 }
@@ -1240,7 +1240,7 @@ func TestCommitOutcome_Delete(t *testing.T) {
 	mgr := newTestManager(t)
 	ctx := t.Context()
 
-	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
 	// Seed an entry first.
 	seed := Outcome{
@@ -1254,7 +1254,7 @@ func TestCommitOutcome_Delete(t *testing.T) {
 	del := Outcome{Action: ActionLocalDelete, Success: true, Path: "co-delete.txt"}
 	require.NoError(t, mgr.CommitOutcome(ctx, &del))
 
-	_, ok := mgr.baseline.GetByPath("co-delete.txt")
+	_, ok := mgr.Baseline().GetByPath("co-delete.txt")
 	assert.False(t, ok, "entry still exists after delete")
 }
 
@@ -1264,7 +1264,7 @@ func TestCommitOutcome_Move(t *testing.T) {
 	mgr := newTestManager(t)
 	ctx := t.Context()
 
-	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
 	// Seed original entry.
 	seed := Outcome{
@@ -1283,10 +1283,10 @@ func TestCommitOutcome_Move(t *testing.T) {
 	}
 	require.NoError(t, mgr.CommitOutcome(ctx, &move))
 
-	_, ok := mgr.baseline.GetByPath("old/move.txt")
+	_, ok := mgr.Baseline().GetByPath("old/move.txt")
 	assert.False(t, ok, "old path still exists after move")
 
-	entry, ok := mgr.baseline.GetByPath("new/move.txt")
+	entry, ok := mgr.Baseline().GetByPath("new/move.txt")
 	require.True(t, ok, "new path not found after move")
 	assert.Equal(t, "p2", entry.ParentID)
 }
@@ -1298,7 +1298,7 @@ func TestCommitOutcome_Conflict_AutoResolved(t *testing.T) {
 	mgr := newTestManager(t)
 	ctx := t.Context()
 
-	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
 	outcome := Outcome{
 		Action:       ActionConflict,
@@ -1316,14 +1316,14 @@ func TestCommitOutcome_Conflict_AutoResolved(t *testing.T) {
 	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
 
 	// Auto-resolved conflict should update baseline.
-	entry, ok := mgr.baseline.GetByPath("co-conflict.txt")
+	entry, ok := mgr.Baseline().GetByPath("co-conflict.txt")
 	require.True(t, ok, "baseline entry not found for auto-resolved conflict")
 	assert.Equal(t, "new-item", entry.ItemID)
 
 	// Conflict row should exist.
 	var resolution string
 
-	err := mgr.db.QueryRowContext(ctx,
+	err := mgr.DB().QueryRowContext(ctx,
 		"SELECT resolution FROM conflicts WHERE path = ?", "co-conflict.txt",
 	).Scan(&resolution)
 	require.NoError(t, err)
@@ -1337,7 +1337,7 @@ func TestCommitOutcome_Conflict_Unresolved(t *testing.T) {
 	mgr := newTestManager(t)
 	ctx := t.Context()
 
-	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
 	outcome := Outcome{
 		Action:       ActionConflict,
@@ -1352,7 +1352,7 @@ func TestCommitOutcome_Conflict_Unresolved(t *testing.T) {
 	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
 
 	// Unresolved conflict should NOT update baseline.
-	_, ok := mgr.baseline.GetByPath("co-unresolved.txt")
+	_, ok := mgr.Baseline().GetByPath("co-unresolved.txt")
 	assert.False(t, ok, "baseline entry should not exist for unresolved conflict")
 }
 
@@ -1363,7 +1363,7 @@ func TestCommitOutcome_EditDeleteConflict_DeletesBaseline(t *testing.T) {
 	mgr := newTestManager(t)
 	ctx := t.Context()
 
-	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
 	// First, create a baseline entry for the file.
 	setupOutcome := Outcome{
@@ -1377,7 +1377,7 @@ func TestCommitOutcome_EditDeleteConflict_DeletesBaseline(t *testing.T) {
 	require.NoError(t, mgr.CommitOutcome(ctx, &setupOutcome))
 
 	// Verify baseline entry exists.
-	_, ok := mgr.baseline.GetByPath("edit-delete-target.txt")
+	_, ok := mgr.Baseline().GetByPath("edit-delete-target.txt")
 	require.True(t, ok, "baseline entry should exist after download")
 
 	// Now commit an unresolved edit-delete conflict (B-133).
@@ -1395,13 +1395,13 @@ func TestCommitOutcome_EditDeleteConflict_DeletesBaseline(t *testing.T) {
 	require.NoError(t, mgr.CommitOutcome(ctx, &conflictOutcome))
 
 	// Baseline entry should be deleted — the original file was renamed to conflict copy.
-	_, ok = mgr.baseline.GetByPath("edit-delete-target.txt")
+	_, ok = mgr.Baseline().GetByPath("edit-delete-target.txt")
 	assert.False(t, ok, "baseline entry should be deleted for unresolved edit-delete conflict")
 
 	// Conflict record should exist.
 	var conflictType, resolution string
 
-	err := mgr.db.QueryRowContext(ctx,
+	err := mgr.DB().QueryRowContext(ctx,
 		"SELECT conflict_type, resolution FROM conflicts WHERE path = ?", "edit-delete-target.txt",
 	).Scan(&conflictType, &resolution)
 	require.NoError(t, err)
@@ -1423,8 +1423,8 @@ func TestCommitOutcome_SkipsFailedOutcome(t *testing.T) {
 
 	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
 
-	if mgr.baseline != nil {
-		_, ok := mgr.baseline.GetByPath("should-not-exist.txt")
+	if mgr.Baseline() != nil {
+		_, ok := mgr.Baseline().GetByPath("should-not-exist.txt")
 		assert.False(t, ok, "failed outcome should not create baseline entry")
 	}
 }
@@ -1435,7 +1435,7 @@ func TestCommitOutcome_FolderCreate(t *testing.T) {
 	mgr := newTestManager(t)
 	ctx := t.Context()
 
-	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
 	outcome := Outcome{
 		Action:   ActionFolderCreate,
@@ -1449,7 +1449,7 @@ func TestCommitOutcome_FolderCreate(t *testing.T) {
 
 	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
 
-	entry, ok := mgr.baseline.GetByPath("Documents/Reports")
+	entry, ok := mgr.Baseline().GetByPath("Documents/Reports")
 	require.True(t, ok, "folder entry not found")
 	assert.Equal(t, ItemTypeFolder, entry.ItemType)
 	assert.Equal(t, "folder-id", entry.ItemID)
@@ -1496,17 +1496,17 @@ func TestCommitOutcome_Upload_NewItemID_SamePath(t *testing.T) {
 	require.NoError(t, mgr.CommitOutcome(ctx, &uploadOutcome))
 
 	// Verify the entry now has the new item_id.
-	entry, ok := mgr.baseline.GetByPath("file.txt")
+	entry, ok := mgr.Baseline().GetByPath("file.txt")
 	require.True(t, ok, "entry should exist")
 	assert.Equal(t, "new-id", entry.ItemID)
 	assert.Equal(t, "hash2", entry.RemoteHash)
 
 	// Old ID should no longer exist in ByID.
-	_, ok = mgr.baseline.GetByID(driveid.NewItemKey(driveID, "old-id"))
+	_, ok = mgr.Baseline().GetByID(driveid.NewItemKey(driveID, "old-id"))
 	assert.False(t, ok, "old ID should be removed from ByID")
 
 	// New ID should exist in ByID.
-	_, ok = mgr.baseline.GetByID(driveid.NewItemKey(driveID, "new-id"))
+	_, ok = mgr.Baseline().GetByID(driveid.NewItemKey(driveID, "new-id"))
 	assert.True(t, ok, "new ID should exist in ByID")
 }
 
@@ -1521,7 +1521,7 @@ func TestCommitDeltaToken(t *testing.T) {
 	mgr := newTestManager(t)
 	ctx := t.Context()
 
-	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
 	require.NoError(t, mgr.CommitDeltaToken(ctx, "token-abc", "d", "", "d"))
 
@@ -1536,7 +1536,7 @@ func TestCommitDeltaToken_Update(t *testing.T) {
 	mgr := newTestManager(t)
 	ctx := t.Context()
 
-	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
 	require.NoError(t, mgr.CommitDeltaToken(ctx, "token-1", "d", "", "d"))
 	require.NoError(t, mgr.CommitDeltaToken(ctx, "token-2", "d", "", "d"))
@@ -1614,11 +1614,11 @@ func TestBaseline_GetByPath(t *testing.T) {
 	t.Parallel()
 
 	b := &Baseline{
-		byPath: map[string]*BaselineEntry{
+		ByPath: map[string]*BaselineEntry{
 			"docs/readme.md": {Path: "docs/readme.md", ItemID: "item1", DriveID: driveid.New("d1")},
 		},
-		byID:       make(map[driveid.ItemKey]*BaselineEntry),
-		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
+		ByID:       make(map[driveid.ItemKey]*BaselineEntry),
+		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
 	entry, ok := b.GetByPath("docs/readme.md")
@@ -1637,9 +1637,9 @@ func TestBaseline_GetByID(t *testing.T) {
 	entry := &BaselineEntry{Path: "test.txt", ItemID: "item1", DriveID: driveID}
 
 	b := &Baseline{
-		byPath:     make(map[string]*BaselineEntry),
-		byID:       map[driveid.ItemKey]*BaselineEntry{key: entry},
-		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
+		ByPath:     make(map[string]*BaselineEntry),
+		ByID:       map[driveid.ItemKey]*BaselineEntry{key: entry},
+		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
 	got, ok := b.GetByID(key)
@@ -1655,9 +1655,9 @@ func TestBaseline_Put(t *testing.T) {
 	t.Parallel()
 
 	b := &Baseline{
-		byPath:     make(map[string]*BaselineEntry),
-		byID:       make(map[driveid.ItemKey]*BaselineEntry),
-		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
+		ByPath:     make(map[string]*BaselineEntry),
+		ByID:       make(map[driveid.ItemKey]*BaselineEntry),
+		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
 	entry := &BaselineEntry{
@@ -1688,9 +1688,9 @@ func TestBaseline_Put_ReplacesStaleID(t *testing.T) {
 	oldKey := driveid.NewItemKey(driveID, "old-id")
 
 	b := &Baseline{
-		byPath:     map[string]*BaselineEntry{"file.txt": oldEntry},
-		byID:       map[driveid.ItemKey]*BaselineEntry{oldKey: oldEntry},
-		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
+		ByPath:     map[string]*BaselineEntry{"file.txt": oldEntry},
+		ByID:       map[driveid.ItemKey]*BaselineEntry{oldKey: oldEntry},
+		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
 	// Put a new entry at the same path but different item_id.
@@ -1722,9 +1722,9 @@ func TestBaseline_Delete(t *testing.T) {
 	key := driveid.NewItemKey(driveID, "item-del")
 
 	b := &Baseline{
-		byPath:     map[string]*BaselineEntry{"delete-me.txt": entry},
-		byID:       map[driveid.ItemKey]*BaselineEntry{key: entry},
-		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
+		ByPath:     map[string]*BaselineEntry{"delete-me.txt": entry},
+		ByID:       map[driveid.ItemKey]*BaselineEntry{key: entry},
+		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
 	b.Delete("delete-me.txt")
@@ -1743,12 +1743,12 @@ func TestBaseline_Len(t *testing.T) {
 	t.Parallel()
 
 	b := &Baseline{
-		byPath: map[string]*BaselineEntry{
+		ByPath: map[string]*BaselineEntry{
 			"a.txt": {Path: "a.txt"},
 			"b.txt": {Path: "b.txt"},
 		},
-		byID:       make(map[driveid.ItemKey]*BaselineEntry),
-		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
+		ByID:       make(map[driveid.ItemKey]*BaselineEntry),
+		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
 	assert.Equal(t, 2, b.Len())
@@ -1758,12 +1758,12 @@ func TestBaseline_ForEachPath(t *testing.T) {
 	t.Parallel()
 
 	b := &Baseline{
-		byPath: map[string]*BaselineEntry{
+		ByPath: map[string]*BaselineEntry{
 			"a.txt": {Path: "a.txt", ItemID: "i1"},
 			"b.txt": {Path: "b.txt", ItemID: "i2"},
 		},
-		byID:       make(map[driveid.ItemKey]*BaselineEntry),
-		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
+		ByID:       make(map[driveid.ItemKey]*BaselineEntry),
+		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
 	paths := make(map[string]bool)
@@ -1780,9 +1780,9 @@ func TestBaseline_ConcurrentAccess(t *testing.T) {
 	t.Parallel()
 
 	b := &Baseline{
-		byPath:     make(map[string]*BaselineEntry),
-		byID:       make(map[driveid.ItemKey]*BaselineEntry),
-		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
+		ByPath:     make(map[string]*BaselineEntry),
+		ByID:       make(map[driveid.ItemKey]*BaselineEntry),
+		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
 	// Seed some entries.
@@ -1887,7 +1887,7 @@ func TestConflictRecord_NameField(t *testing.T) {
 func setupPruneTestConflicts(t *testing.T, mgr *SyncStore, ctx context.Context, now time.Time) (oldID, newID string) {
 	t.Helper()
 
-	mgr.nowFunc = func() time.Time { return now.AddDate(0, 0, -120) }
+	mgr.SetNowFunc(func() time.Time { return now.AddDate(0, 0, -120) })
 
 	require.NoError(t, mgr.CommitOutcome(ctx, &Outcome{
 		Action: ActionConflict, Success: true,
@@ -1896,7 +1896,7 @@ func setupPruneTestConflicts(t *testing.T, mgr *SyncStore, ctx context.Context, 
 		LocalHash: "lh1", RemoteHash: "rh1", Mtime: 100, RemoteMtime: 200,
 	}))
 
-	mgr.nowFunc = func() time.Time { return now.AddDate(0, 0, -100) }
+	mgr.SetNowFunc(func() time.Time { return now.AddDate(0, 0, -100) })
 
 	conflicts, err := mgr.ListConflicts(ctx)
 	require.NoError(t, err)
@@ -1904,7 +1904,7 @@ func setupPruneTestConflicts(t *testing.T, mgr *SyncStore, ctx context.Context, 
 	oldID = conflicts[0].ID
 	require.NoError(t, mgr.ResolveConflict(ctx, oldID, "keep_local"))
 
-	mgr.nowFunc = func() time.Time { return now.AddDate(0, 0, -10) }
+	mgr.SetNowFunc(func() time.Time { return now.AddDate(0, 0, -10) })
 
 	require.NoError(t, mgr.CommitOutcome(ctx, &Outcome{
 		Action: ActionConflict, Success: true,
@@ -1913,7 +1913,7 @@ func setupPruneTestConflicts(t *testing.T, mgr *SyncStore, ctx context.Context, 
 		LocalHash: "lh2", RemoteHash: "rh2", Mtime: 300, RemoteMtime: 400,
 	}))
 
-	mgr.nowFunc = func() time.Time { return now.AddDate(0, 0, -5) }
+	mgr.SetNowFunc(func() time.Time { return now.AddDate(0, 0, -5) })
 
 	conflicts, err = mgr.ListConflicts(ctx)
 	require.NoError(t, err)
@@ -1926,7 +1926,7 @@ func setupPruneTestConflicts(t *testing.T, mgr *SyncStore, ctx context.Context, 
 
 	require.NoError(t, mgr.ResolveConflict(ctx, newID, "keep_remote"))
 
-	mgr.nowFunc = func() time.Time { return now.AddDate(0, 0, -120) }
+	mgr.SetNowFunc(func() time.Time { return now.AddDate(0, 0, -120) })
 
 	require.NoError(t, mgr.CommitOutcome(ctx, &Outcome{
 		Action: ActionConflict, Success: true,
@@ -1947,14 +1947,14 @@ func TestPruneResolvedConflicts(t *testing.T) {
 	ctx := t.Context()
 	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
 
-	mgr.nowFunc = func() time.Time { return now }
+	mgr.SetNowFunc(func() time.Time { return now })
 
 	_, err := mgr.Load(ctx)
 	require.NoError(t, err)
 
 	oldID, newID := setupPruneTestConflicts(t, mgr, ctx, now)
 
-	mgr.nowFunc = func() time.Time { return now }
+	mgr.SetNowFunc(func() time.Time { return now })
 
 	pruned, err := mgr.PruneResolvedConflicts(ctx, 90*24*time.Hour)
 	require.NoError(t, err)
@@ -2000,7 +2000,7 @@ func TestCheckCacheConsistency(t *testing.T) {
 	assert.Equal(t, 0, mismatches)
 
 	// Manually corrupt the DB row behind the cache's back.
-	_, err = mgr.rawDB().ExecContext(ctx,
+	_, err = mgr.DB().ExecContext(ctx,
 		`UPDATE baseline SET local_hash = 'tampered' WHERE path = 'consistency-check.txt'`)
 	require.NoError(t, err)
 
@@ -2028,7 +2028,7 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 
 	for _, table := range expectedTables {
 		var name string
-		err := mgr.db.QueryRowContext(ctx,
+		err := mgr.DB().QueryRowContext(ctx,
 			`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table,
 		).Scan(&name)
 		require.NoError(t, err, "table %q should exist", table)
@@ -2037,41 +2037,41 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 
 	// Verify delta_tokens composite key: two tokens for same drive_id,
 	// different scope_id should coexist.
-	_, err := mgr.db.ExecContext(ctx,
+	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO delta_tokens (drive_id, scope_id, scope_drive, token, updated_at)
 		 VALUES (?, ?, ?, ?, ?)`,
 		"d!abc123", "", "d!abc123", "primary-token", 1700000000)
 	require.NoError(t, err)
 
-	_, err = mgr.db.ExecContext(ctx,
+	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO delta_tokens (drive_id, scope_id, scope_drive, token, updated_at)
 		 VALUES (?, ?, ?, ?, ?)`,
 		"d!abc123", "shared-folder-id", "d!other456", "scoped-token", 1700000001)
 	require.NoError(t, err)
 
 	var count int
-	err = mgr.db.QueryRowContext(ctx,
+	err = mgr.DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM delta_tokens WHERE drive_id = ?`, "d!abc123",
 	).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 2, count)
 
 	// Verify remote_state table structure: insert + query.
-	_, err = mgr.db.ExecContext(ctx,
+	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"d!abc123", "item1", "/test.txt", "file", "pending_download", 1700000000)
 	require.NoError(t, err)
 
 	// Verify sync_failures table structure: insert + query.
-	_, err = mgr.db.ExecContext(ctx,
+	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO sync_failures (path, drive_id, direction, category, issue_type, first_seen_at, last_seen_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		"/bad-file.txt", "d!abc123", "upload", "transient", "invalid_filename", 1700000000, 1700000000)
 	require.NoError(t, err)
 
 	// Verify remote_state CHECK constraint rejects invalid status.
-	_, err = mgr.db.ExecContext(ctx,
+	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"d!abc123", "item2", "/bad.txt", "file", "invalid_status", 1700000000)
@@ -2085,21 +2085,21 @@ func TestConsolidatedSchema_RemoteStateActivePathUnique(t *testing.T) {
 	ctx := t.Context()
 
 	// Insert an active item at a path.
-	_, err := mgr.db.ExecContext(ctx,
+	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"d!abc123", "item1", "/test.txt", "file", "synced", 1700000000)
 	require.NoError(t, err)
 
 	// Another active item at the same path should be rejected by the partial unique index.
-	_, err = mgr.db.ExecContext(ctx,
+	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"d!abc123", "item2", "/test.txt", "file", "pending_download", 1700000000)
 	require.Error(t, err, "duplicate active path should be rejected")
 
 	// A deleted item at the same path should be allowed.
-	_, err = mgr.db.ExecContext(ctx,
+	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"d!abc123", "item3", "/test.txt", "file", "deleted", 1700000000)
@@ -2232,7 +2232,7 @@ func TestSetDispatchStatus_Download(t *testing.T) {
 	ctx := t.Context()
 
 	// Insert a pending_download row.
-	_, err := mgr.db.ExecContext(ctx,
+	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"d!abc", "item1", "/test.txt", "file", "pending_download", 1700000000)
@@ -2241,7 +2241,7 @@ func TestSetDispatchStatus_Download(t *testing.T) {
 	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", ActionDownload))
 
 	var status string
-	err = mgr.db.QueryRowContext(ctx,
+	err = mgr.DB().QueryRowContext(ctx,
 		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
 		"d!abc", "item1").Scan(&status)
 	require.NoError(t, err)
@@ -2255,7 +2255,7 @@ func TestSetDispatchStatus_DownloadFromFailed(t *testing.T) {
 	ctx := t.Context()
 
 	// Insert a download_failed row.
-	_, err := mgr.db.ExecContext(ctx,
+	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"d!abc", "item1", "/test.txt", "file", "download_failed", 1700000000)
@@ -2264,7 +2264,7 @@ func TestSetDispatchStatus_DownloadFromFailed(t *testing.T) {
 	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", ActionDownload))
 
 	var status string
-	err = mgr.db.QueryRowContext(ctx,
+	err = mgr.DB().QueryRowContext(ctx,
 		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
 		"d!abc", "item1").Scan(&status)
 	require.NoError(t, err)
@@ -2278,7 +2278,7 @@ func TestSetDispatchStatus_LocalDelete(t *testing.T) {
 	ctx := t.Context()
 
 	// Insert a pending_delete row.
-	_, err := mgr.db.ExecContext(ctx,
+	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"d!abc", "item1", "/test.txt", "file", "pending_delete", 1700000000)
@@ -2287,7 +2287,7 @@ func TestSetDispatchStatus_LocalDelete(t *testing.T) {
 	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", ActionLocalDelete))
 
 	var status string
-	err = mgr.db.QueryRowContext(ctx,
+	err = mgr.DB().QueryRowContext(ctx,
 		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
 		"d!abc", "item1").Scan(&status)
 	require.NoError(t, err)
@@ -2301,7 +2301,7 @@ func TestSetDispatchStatus_DeleteFromFailed(t *testing.T) {
 	ctx := t.Context()
 
 	// Insert a delete_failed row.
-	_, err := mgr.db.ExecContext(ctx,
+	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"d!abc", "item1", "/test.txt", "file", "delete_failed", 1700000000)
@@ -2310,7 +2310,7 @@ func TestSetDispatchStatus_DeleteFromFailed(t *testing.T) {
 	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", ActionLocalDelete))
 
 	var status string
-	err = mgr.db.QueryRowContext(ctx,
+	err = mgr.DB().QueryRowContext(ctx,
 		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
 		"d!abc", "item1").Scan(&status)
 	require.NoError(t, err)
@@ -2324,7 +2324,7 @@ func TestSetDispatchStatus_NoMatchingRow(t *testing.T) {
 	ctx := t.Context()
 
 	// Insert a synced row (wrong status for dispatch).
-	_, err := mgr.db.ExecContext(ctx,
+	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"d!abc", "item1", "/test.txt", "file", "synced", 1700000000)
@@ -2334,7 +2334,7 @@ func TestSetDispatchStatus_NoMatchingRow(t *testing.T) {
 	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", ActionDownload))
 
 	var status string
-	err = mgr.db.QueryRowContext(ctx,
+	err = mgr.DB().QueryRowContext(ctx,
 		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
 		"d!abc", "item1").Scan(&status)
 	require.NoError(t, err)
@@ -2373,7 +2373,7 @@ func TestResetInProgressStates_DeleteFileAbsent(t *testing.T) {
 	syncRoot := t.TempDir()
 
 	// Insert a deleting row whose file does NOT exist on disk.
-	_, err := mgr.db.ExecContext(ctx,
+	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"d!abc", "item1", "gone.txt", "file", "deleting", 1700000000)
@@ -2383,7 +2383,7 @@ func TestResetInProgressStates_DeleteFileAbsent(t *testing.T) {
 	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot, testDelay))
 
 	var status string
-	err = mgr.db.QueryRowContext(ctx,
+	err = mgr.DB().QueryRowContext(ctx,
 		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
 		"d!abc", "item1").Scan(&status)
 	require.NoError(t, err)
@@ -2403,7 +2403,7 @@ func TestResetInProgressStates_DeleteFileExists(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "exists.txt"), []byte("data"), 0o600))
 
 	// Insert a deleting row whose file DOES exist.
-	_, err := mgr.db.ExecContext(ctx,
+	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"d!abc", "item1", "exists.txt", "file", "deleting", 1700000000)
@@ -2413,7 +2413,7 @@ func TestResetInProgressStates_DeleteFileExists(t *testing.T) {
 	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot, testDelay))
 
 	var status string
-	err = mgr.db.QueryRowContext(ctx,
+	err = mgr.DB().QueryRowContext(ctx,
 		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
 		"d!abc", "item1").Scan(&status)
 	require.NoError(t, err)
@@ -2430,7 +2430,7 @@ func TestResetInProgressStates_DownloadStillResetsToPending(t *testing.T) {
 	syncRoot := t.TempDir()
 
 	// Insert a downloading row.
-	_, err := mgr.db.ExecContext(ctx,
+	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"d!abc", "item1", "dl.txt", "file", "downloading", 1700000000)
@@ -2440,7 +2440,7 @@ func TestResetInProgressStates_DownloadStillResetsToPending(t *testing.T) {
 	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot, testDelay))
 
 	var status string
-	err = mgr.db.QueryRowContext(ctx,
+	err = mgr.DB().QueryRowContext(ctx,
 		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
 		"d!abc", "item1").Scan(&status)
 	require.NoError(t, err)
@@ -2468,7 +2468,7 @@ func TestResetInProgressStates_MixedStates(t *testing.T) {
 		{"i3", "has-file.txt", "deleting"},
 		{"i4", "synced.txt", "synced"},
 	} {
-		_, err := mgr.db.ExecContext(ctx,
+		_, err := mgr.DB().ExecContext(ctx,
 			`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 			 VALUES (?, ?, ?, ?, ?, ?)`,
 			"d!abc", row.id, row.path, "file", row.status, 1700000000)
@@ -2487,7 +2487,7 @@ func TestResetInProgressStates_MixedStates(t *testing.T) {
 	}
 	for id, want := range expected {
 		var got string
-		err := mgr.db.QueryRowContext(ctx,
+		err := mgr.DB().QueryRowContext(ctx,
 			`SELECT sync_status FROM remote_state WHERE item_id = ?`, id).Scan(&got)
 		require.NoError(t, err)
 		assert.Equal(t, want, got, "item %s", id)
@@ -2505,7 +2505,7 @@ func TestResetInProgressStates_CreatesSyncFailures_Download(t *testing.T) {
 	syncRoot := t.TempDir()
 
 	// Insert a downloading row.
-	_, err := mgr.db.ExecContext(ctx,
+	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"d!abc", "item1", "dl.txt", "file", "downloading", 1700000000)
@@ -2516,7 +2516,7 @@ func TestResetInProgressStates_CreatesSyncFailures_Download(t *testing.T) {
 
 	// Verify remote_state was reset.
 	var status string
-	err = mgr.db.QueryRowContext(ctx,
+	err = mgr.DB().QueryRowContext(ctx,
 		`SELECT sync_status FROM remote_state WHERE item_id = ?`, "item1").Scan(&status)
 	require.NoError(t, err)
 	assert.Equal(t, "pending_download", status)
@@ -2543,7 +2543,7 @@ func TestResetInProgressStates_CreatesSyncFailures_Delete(t *testing.T) {
 	// Create the file so it transitions to pending_delete (not deleted).
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "del.txt"), []byte("data"), 0o600))
 
-	_, err := mgr.db.ExecContext(ctx,
+	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"d!abc", "item1", "del.txt", "file", "deleting", 1700000000)
@@ -2570,7 +2570,7 @@ func TestResetInProgressStates_NoSyncFailure_DeleteComplete(t *testing.T) {
 	syncRoot := t.TempDir()
 
 	// File absent → delete completed before crash → no sync_failures entry.
-	_, err := mgr.db.ExecContext(ctx,
+	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"d!abc", "item1", "gone.txt", "file", "deleting", 1700000000)
@@ -2581,7 +2581,7 @@ func TestResetInProgressStates_NoSyncFailure_DeleteComplete(t *testing.T) {
 
 	// Remote_state should be "deleted".
 	var status string
-	err = mgr.db.QueryRowContext(ctx,
+	err = mgr.DB().QueryRowContext(ctx,
 		`SELECT sync_status FROM remote_state WHERE item_id = ?`, "item1").Scan(&status)
 	require.NoError(t, err)
 	assert.Equal(t, "deleted", status)
@@ -2634,7 +2634,7 @@ func TestResetInProgressStates_PreservesExistingBackoff(t *testing.T) {
 	assert.Equal(t, 3, preFailures[0].FailureCount)
 
 	// Insert a downloading row and reset.
-	_, err = mgr.db.ExecContext(ctx,
+	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		driveID.String(), "item1", "dl.txt", "file", "downloading", 1700000000)
@@ -2659,7 +2659,7 @@ func TestResetInProgressStates_NoPendingItems_NoSyncFailures(t *testing.T) {
 	syncRoot := t.TempDir()
 
 	// Only synced items — no in-progress states.
-	_, err := mgr.db.ExecContext(ctx,
+	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"d!abc", "item1", "synced.txt", "file", "synced", 1700000000)
@@ -2684,7 +2684,7 @@ func TestUpdateRemoteStateOnOutcome_Move(t *testing.T) {
 	driveID := driveid.New("d!abc")
 
 	// Insert a synced remote_state row using the normalized drive ID.
-	_, err := mgr.db.ExecContext(ctx,
+	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		driveID.String(), "item1", "/old/path.txt", "file", "synced", 1700000000)
@@ -2707,7 +2707,7 @@ func TestUpdateRemoteStateOnOutcome_Move(t *testing.T) {
 	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
 
 	var rsPath, status string
-	err = mgr.db.QueryRowContext(ctx,
+	err = mgr.DB().QueryRowContext(ctx,
 		`SELECT path, sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
 		driveID.String(), "item1").Scan(&rsPath, &status)
 	require.NoError(t, err)
@@ -2739,7 +2739,7 @@ func TestEarliestSyncFailureRetryAt_FutureRetry(t *testing.T) {
 	future := now.Add(5 * time.Minute)
 
 	// Insert a transient sync_failures row with next_retry_at in the future.
-	_, err := mgr.db.ExecContext(ctx,
+	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO sync_failures (path, drive_id, direction, category, failure_count, next_retry_at, last_error, http_status, first_seen_at, last_seen_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"/future.txt", "d!abc", "download", "transient", 1, future.UnixNano(), "timeout", 0, now.UnixNano(), now.UnixNano())
@@ -2761,7 +2761,7 @@ func TestEarliestSyncFailureRetryAt_PastRetry(t *testing.T) {
 	past := now.Add(-5 * time.Minute)
 
 	// Insert a transient sync_failures row with next_retry_at in the past (already due).
-	_, err := mgr.db.ExecContext(ctx,
+	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO sync_failures (path, drive_id, direction, category, failure_count, next_retry_at, last_error, http_status, first_seen_at, last_seen_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"/past.txt", "d!abc", "download", "transient", 3, past.UnixNano(), "timeout", 0, now.UnixNano(), now.UnixNano())

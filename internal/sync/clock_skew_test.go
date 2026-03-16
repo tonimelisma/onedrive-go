@@ -25,7 +25,7 @@ func TestClockSkew_BackwardJump_BaselineSyncedAt(t *testing.T) {
 	driveID := driveid.New(engineTestDriveID)
 
 	// Commit at t=2000.
-	mgr.nowFunc = func() time.Time { return time.Unix(2000, 0) }
+	mgr.SetNowFunc(func() time.Time { return time.Unix(2000, 0) })
 
 	require.NoError(t, mgr.CommitOutcome(ctx, &Outcome{
 		Action: ActionDownload, Success: true, Path: "file.txt",
@@ -41,7 +41,7 @@ func TestClockSkew_BackwardJump_BaselineSyncedAt(t *testing.T) {
 	firstSyncedAt := entry.SyncedAt
 
 	// Jump backward to t=1000 and update.
-	mgr.nowFunc = func() time.Time { return time.Unix(1000, 0) }
+	mgr.SetNowFunc(func() time.Time { return time.Unix(1000, 0) })
 
 	require.NoError(t, mgr.CommitOutcome(ctx, &Outcome{
 		Action: ActionDownload, Success: true, Path: "file.txt",
@@ -69,7 +69,7 @@ func TestClockSkew_BackwardJump_SyncFailureTimestamp(t *testing.T) {
 	ctx := t.Context()
 
 	// Record at t=5000.
-	mgr.nowFunc = func() time.Time { return time.Unix(5000, 0) }
+	mgr.SetNowFunc(func() time.Time { return time.Unix(5000, 0) })
 
 	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "file1.txt",
@@ -80,7 +80,7 @@ func TestClockSkew_BackwardJump_SyncFailureTimestamp(t *testing.T) {
 	}, nil))
 
 	// Jump backward to t=1000.
-	mgr.nowFunc = func() time.Time { return time.Unix(1000, 0) }
+	mgr.SetNowFunc(func() time.Time { return time.Unix(1000, 0) })
 
 	// Should still succeed.
 	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
@@ -107,7 +107,7 @@ func TestClockSkew_BackwardJump_ConflictDetectedAt(t *testing.T) {
 	driveID := driveid.New(engineTestDriveID)
 
 	// Record conflict at t=1000 via CommitOutcome with a conflict action.
-	mgr.nowFunc = func() time.Time { return time.Unix(1000, 0) }
+	mgr.SetNowFunc(func() time.Time { return time.Unix(1000, 0) })
 
 	require.NoError(t, mgr.CommitOutcome(ctx, &Outcome{
 		Path:         "file.txt",
@@ -119,7 +119,7 @@ func TestClockSkew_BackwardJump_ConflictDetectedAt(t *testing.T) {
 	}))
 
 	// Jump clock backward to t=500.
-	mgr.nowFunc = func() time.Time { return time.Unix(500, 0) }
+	mgr.SetNowFunc(func() time.Time { return time.Unix(500, 0) })
 
 	// Record another conflict.
 	require.NoError(t, mgr.CommitOutcome(ctx, &Outcome{
