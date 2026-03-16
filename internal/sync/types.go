@@ -122,26 +122,15 @@ const (
 	CreateRemote = synctypes.CreateRemote
 )
 
-// String constant aliases — used internally by store and observer code.
+// String constant aliases — only those still used by engine code.
 const (
-	strRemote       = synctypes.StrRemote
-	strLocal        = synctypes.StrLocal
-	strFile         = synctypes.StrFile
-	strFolder       = synctypes.StrFolder
-	strRoot         = synctypes.StrRoot
-	strDownload     = synctypes.StrDownload
-	strUpload       = synctypes.StrUpload
-	strDelete       = synctypes.StrDelete
-	strActionable   = synctypes.StrActionable
-	strTransient    = synctypes.StrTransient
-	strLocalDelete  = synctypes.StrLocalDelete
-	strRemoteDelete = synctypes.StrRemoteDelete
-	strLocalMove    = synctypes.StrLocalMove
-	strRemoteMove   = synctypes.StrRemoteMove
-	strFolderCreate = synctypes.StrFolderCreate
-	strConflict     = synctypes.StrConflict
-	strUpdateSynced = synctypes.StrUpdateSynced
-	strCleanup      = synctypes.StrCleanup
+	strFile       = synctypes.StrFile
+	strFolder     = synctypes.StrFolder
+	strDownload   = synctypes.StrDownload
+	strUpload     = synctypes.StrUpload
+	strDelete     = synctypes.StrDelete
+	strActionable = synctypes.StrActionable
+	strTransient  = synctypes.StrTransient
 )
 
 // Resolution/conflict/resolvedBy constant aliases.
@@ -328,112 +317,32 @@ const (
 )
 
 // ---------------------------------------------------------------------------
-// Verify constant aliases — for verify_test.go which uses the unqualified names.
-// ---------------------------------------------------------------------------
-
-const (
-	VerifyMissing      = syncstore.VerifyMissing
-	VerifyHashMismatch = syncstore.VerifyHashMismatch
-	VerifySizeMismatch = syncstore.VerifySizeMismatch
-)
-
-// ---------------------------------------------------------------------------
-// Observer type aliases — for test files that reference these types directly.
+// Observer type aliases — used by engine production code and remaining tests.
 // ---------------------------------------------------------------------------
 
 type (
 	LocalObserver  = syncobserve.LocalObserver
 	RemoteObserver = syncobserve.RemoteObserver
 	FsWatcher      = syncobserve.FsWatcher
-
-	// Internal types exposed for tests (were in the sync package before split).
-	inflightParent   = syncobserve.InflightParent
-	itemConverter    = syncobserve.ItemConverter
-	observerCounters = syncobserve.ObserverCounters
-	hashRequest      = syncobserve.HashRequest
 )
 
 // Observer constructor aliases.
 var (
 	NewLocalObserver  = syncobserve.NewLocalObserver
 	NewRemoteObserver = syncobserve.NewRemoteObserver
+)
 
-	// Unexported aliases used by tests.
-	newPrimaryConverter  = syncobserve.NewPrimaryConverter
-	newShortcutConverter = syncobserve.NewShortcutConverter
-
-	// Shortcut item conversion (tests use old unexported names).
+// Observer function aliases — used by remaining engine shortcut tests.
+var (
 	convertShortcutItems  = syncobserve.ConvertShortcutItems
 	detectShortcutOrphans = syncobserve.DetectShortcutOrphans
 )
 
-// Observer constants (unexported aliases for test access).
-const (
-	hashRequestBufSize    = syncobserve.HashRequestBufSize
-	maxCoalesceRetries    = syncobserve.MaxCoalesceRetries
-	maxOneDriveFileSize   = syncobserve.MaxOneDriveFileSize
-	maxOneDrivePathLength = syncobserve.MaxOneDrivePathLength
-	minPollInterval       = syncobserve.MinPollInterval
-)
+// Planner aliases — used by remaining engine tests.
+var ActionsOfType = syncplan.ActionsOfType
 
-// Observer function aliases (unexported, for tests).
-var (
-	classifyItemType     = syncobserve.ClassifyItemType
-	toUnixNano           = syncobserve.ToUnixNano
-	timeSleep            = syncobserve.TimeSleep
-	skipEntry            = syncobserve.SkipEntry
-	syncRootExists       = syncobserve.SyncRootExists
-	validateOneDriveName = syncobserve.ValidateOneDriveName
-	shouldObserve        = syncobserve.ShouldObserve
-	isAlwaysExcluded     = syncobserve.IsAlwaysExcluded
-	detectCaseCollisions = syncobserve.DetectCaseCollisions
-	asciiLower           = syncobserve.AsciiLower
-	readInotifyLimit     = syncobserve.ReadInotifyLimit
-	checkInotifyCapacity = syncobserve.CheckInotifyCapacity
-	isWatchLimitError    = syncobserve.IsWatchLimitError
-)
-
-// ---------------------------------------------------------------------------
-// Planner function aliases — for test files that reference internal functions.
-// ---------------------------------------------------------------------------
-
-var (
-	ActionsOfType          = syncplan.ActionsOfType
-	makeAction             = syncplan.MakeAction
-	buildDependencies      = syncplan.BuildDependencies
-	detectLocalChange      = syncplan.DetectLocalChange
-	detectRemoteChange     = syncplan.DetectRemoteChange
-	isCrossDriveLocalMove  = syncplan.IsCrossDriveLocalMove
-	isCrossDriveRemoteMove = syncplan.IsCrossDriveRemoteMove
-	exceedsDeleteThreshold = syncplan.ExceedsDeleteThreshold
-	resolvePathDriveID     = syncplan.ResolvePathDriveID
-	isActionableIssue      = syncstore.IsActionableIssue
-	detectDependencyCycle  = syncplan.DetectDependencyCycle
-	isWriteDenied          = syncplan.IsWriteDenied
-)
-
-// Planner constants (unexported aliases for test access).
+// Scope timing constants — used by remaining engine tests.
 const (
 	defaultInitialTrialInterval = syncdispatch.DefaultInitialTrialInterval
 	defaultMaxTrialInterval     = syncdispatch.DefaultMaxTrialInterval
 )
-
-// ---------------------------------------------------------------------------
-// Executor function aliases — for test files that reference internal functions.
-// ---------------------------------------------------------------------------
-
-var (
-	findNonDisposable = syncexec.FindNonDisposable
-	isDisposable      = syncexec.IsDisposable
-	conflictCopyPath  = syncexec.ConflictCopyPath
-	conflictStemExt   = syncexec.ConflictStemExt
-	containedPath     = syncexec.ContainedPath
-	extractHTTPStatus = syncexec.ExtractHTTPStatus
-	extractRetryAfter = syncexec.ExtractRetryAfter
-)
-
-// ---------------------------------------------------------------------------
-// Syncstore function aliases — for test files that reference internal functions.
-// ---------------------------------------------------------------------------
-
-var computeNewStatus = syncstore.ComputeNewStatus
