@@ -22,7 +22,7 @@ func TestEstimateDirCount_Empty(t *testing.T) {
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	// +1 for root even with empty baseline.
-	assert.Equal(t, 1, obs.estimateDirCount())
+	assert.Equal(t, 1, obs.EstimateDirCount())
 }
 
 func TestEstimateDirCount_WithFolders(t *testing.T) {
@@ -36,7 +36,7 @@ func TestEstimateDirCount_WithFolders(t *testing.T) {
 
 	obs := NewLocalObserver(bl, testLogger(t), 0)
 	// 2 folders + 1 for root = 3.
-	assert.Equal(t, 3, obs.estimateDirCount())
+	assert.Equal(t, 3, obs.EstimateDirCount())
 }
 
 // ---------------------------------------------------------------------------
@@ -94,7 +94,7 @@ func TestAddWatchesRecursive_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 	watcher := newEnospcWatcher(1) // fail after first successful Add (root)
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
-	err := obs.addWatchesRecursive(watcher, root)
+	err := obs.AddWatchesRecursive(watcher, root)
 
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrWatchLimitExhausted),
@@ -115,7 +115,7 @@ func TestAddWatchesRecursive_NonENOSPC_ContinuesNormally(t *testing.T) {
 	}
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
-	err := obs.addWatchesRecursive(watcher, root)
+	err := obs.AddWatchesRecursive(watcher, root)
 
 	// Non-ENOSPC errors should NOT return ErrWatchLimitExhausted.
 	assert.NoError(t, err) // walks continue, failures are just logged
@@ -162,7 +162,7 @@ func TestWatch_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 	watcher := newEnospcWatcher(1)
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
-	obs.watcherFactory = func() (FsWatcher, error) { return watcher, nil }
+	obs.WatcherFactory = func() (FsWatcher, error) { return watcher, nil }
 
 	events := make(chan ChangeEvent, 256)
 	ctx := t.Context()

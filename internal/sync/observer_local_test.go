@@ -1274,7 +1274,7 @@ func TestHashPhase_PanicRecovery(t *testing.T) {
 
 			obs := NewLocalObserver(emptyBaseline(), testLogger(t), 1)
 			// Inject a hash function that panics for the target path.
-			obs.hashFunc = func(path string) (string, error) {
+			obs.HashFunc = func(path string) (string, error) {
 				if filepath.Base(path) == tt.panicPath {
 					panic("simulated hash panic for " + tt.panicPath)
 				}
@@ -1317,7 +1317,7 @@ func TestFullScan_HashPanicDoesNotAbort(t *testing.T) {
 	writeTestFile(t, dir, "bad.txt", "bad content")
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
-	obs.hashFunc = func(path string) (string, error) {
+	obs.HashFunc = func(path string) (string, error) {
 		if filepath.Base(path) == "bad.txt" {
 			panic("corrupted file")
 		}
@@ -1358,6 +1358,6 @@ func TestNewLocalObserver_MapsInitialized(t *testing.T) {
 	t.Parallel()
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
-	assert.NotNil(t, obs.pendingTimers, "pendingTimers should be initialized in constructor")
-	assert.NotNil(t, obs.hashRequests, "hashRequests should be initialized in constructor")
+	assert.NotNil(t, obs.PendingTimers, "pendingTimers should be initialized in constructor")
+	assert.NotNil(t, obs.HashRequests, "hashRequests should be initialized in constructor")
 }

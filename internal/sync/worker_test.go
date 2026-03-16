@@ -130,8 +130,8 @@ func newWorkerTestSetup(t *testing.T) (
 	ul := &workerMockUploader{}
 
 	cfg := NewExecutorConfig(items, dl, ul, syncRoot, driveID, logger)
-	cfg.transferMgr = driveops.NewTransferManager(dl, ul, nil, logger)
-	cfg.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
+	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
+	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 	return cfg, mgr, syncRoot
 }
 
@@ -410,12 +410,12 @@ func TestWorkerPool_FailedOutcome(t *testing.T) {
 	ctx := t.Context()
 
 	// Configure a download mock that always fails.
-	cfg.downloads = &workerMockDownloader{
+	cfg.SetDownloads(&workerMockDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
 			return 0, fmt.Errorf("simulated download failure")
 		},
-	}
-	cfg.transferMgr = driveops.NewTransferManager(cfg.downloads, cfg.uploads, nil, testLogger(t))
+	})
+	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, testLogger(t)))
 
 	actions := []Action{
 		{
@@ -472,14 +472,14 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 	var capturedParentID string
 
 	// Override uploader to capture the parentID used.
-	cfg.uploads = &workerMockUploader{
+	cfg.SetUploads(&workerMockUploader{
 		uploadFn: func(_ context.Context, _ driveid.ID, parentID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			capturedParentID = parentID
 
 			return &graph.Item{ID: "uploaded-into-folder", ETag: "e1"}, nil
 		},
-	}
-	cfg.transferMgr = driveops.NewTransferManager(cfg.downloads, cfg.uploads, nil, testLogger(t))
+	})
+	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, testLogger(t)))
 
 	// Action 0: create folder "Uploads".
 	// Action 1: upload file "Uploads/doc.txt" into that folder.
@@ -539,12 +539,12 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 	ctx := t.Context()
 
 	// Configure a download mock that panics.
-	cfg.downloads = &workerMockDownloader{
+	cfg.SetDownloads(&workerMockDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
 			panic("intentional panic for testing")
 		},
-	}
-	cfg.transferMgr = driveops.NewTransferManager(cfg.downloads, cfg.uploads, nil, testLogger(t))
+	})
+	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, testLogger(t)))
 
 	actions := []Action{
 		{
@@ -664,8 +664,8 @@ func TestWorkerResult_PopulatesFromAction(t *testing.T) {
 			DriveID:           driveid.New("0000000000000001"),
 			ItemID:            "del-id",
 			View:              &PathView{},
-			targetShortcutKey: "remoteDrive:remoteItem",
-			targetDriveID:     driveid.New("0000000000000002"),
+			TargetShortcutKey: "remoteDrive:remoteItem",
+			TargetDriveID:     driveid.New("0000000000000002"),
 		},
 	}
 
@@ -706,7 +706,7 @@ func TestWorkerResult_HTTPStatusAndRetryAfter(t *testing.T) {
 	ctx := t.Context()
 
 	// Configure a download mock that returns a 429 with Retry-After.
-	cfg.downloads = &workerMockDownloader{
+	cfg.SetDownloads(&workerMockDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
 			return 0, &graph.GraphError{
 				StatusCode: 429,
@@ -714,8 +714,8 @@ func TestWorkerResult_HTTPStatusAndRetryAfter(t *testing.T) {
 				RetryAfter: 30 * time.Second,
 			}
 		},
-	}
-	cfg.transferMgr = driveops.NewTransferManager(cfg.downloads, cfg.uploads, nil, testLogger(t))
+	})
+	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, testLogger(t)))
 
 	actions := []Action{
 		{
@@ -826,7 +826,7 @@ func TestAction_TargetsOwnDrive(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			a := Action{targetShortcutKey: tt.targetShortcutKey}
+			a := Action{TargetShortcutKey: tt.targetShortcutKey}
 			assert.Equal(t, tt.wantOwnDrive, a.TargetsOwnDrive())
 			assert.Equal(t, tt.wantShortcutKey, a.ShortcutKey())
 		})
@@ -844,7 +844,7 @@ func TestEngineOwnsCounters(t *testing.T) {
 	ctx := t.Context()
 
 	// 2 actions: one succeeds, one fails.
-	cfg.downloads = &workerMockDownloader{
+	cfg.SetDownloads(&workerMockDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, itemID string, w io.Writer) (int64, error) {
 			if itemID == "fail-id" {
 				return 0, fmt.Errorf("simulated failure")
@@ -852,8 +852,8 @@ func TestEngineOwnsCounters(t *testing.T) {
 			n, err := w.Write([]byte("ok"))
 			return int64(n), err
 		},
-	}
-	cfg.transferMgr = driveops.NewTransferManager(cfg.downloads, cfg.uploads, nil, testLogger(t))
+	})
+	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, testLogger(t)))
 
 	actions := []Action{
 		{

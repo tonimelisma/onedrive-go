@@ -25,7 +25,7 @@ func TestSyncStore_PickTrialCandidate_ReturnsOldestScopeBlockedFailure(t *testin
 	sk := SKQuotaOwn
 
 	// Insert two scope-blocked failures (next_retry_at = NULL, scope_key matches).
-	mgr.nowFunc = func() time.Time { return time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC) }
+	mgr.SetNowFunc(func() time.Time { return time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC) })
 	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:      "b.txt",
 		DriveID:   driveID,
@@ -35,7 +35,7 @@ func TestSyncStore_PickTrialCandidate_ReturnsOldestScopeBlockedFailure(t *testin
 		ScopeKey:  sk,
 	}, nil)) // nil delayFn → next_retry_at = NULL
 
-	mgr.nowFunc = func() time.Time { return time.Date(2025, 1, 1, 9, 0, 0, 0, time.UTC) }
+	mgr.SetNowFunc(func() time.Time { return time.Date(2025, 1, 1, 9, 0, 0, 0, time.UTC) })
 	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:      "a.txt",
 		DriveID:   driveID,

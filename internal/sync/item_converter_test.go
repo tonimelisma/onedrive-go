@@ -25,11 +25,11 @@ func TestNewPrimaryConverter_EnablesVaultAndShortcutDetect(t *testing.T) {
 
 	c := newPrimaryConverter(bl, driveID, testLogger(t), stats)
 
-	assert.True(t, c.enableVaultFilter, "primary converter should enable vault filter")
-	assert.True(t, c.enableShortcutDetect, "primary converter should enable shortcut detect")
-	assert.Empty(t, c.pathPrefix, "primary converter should have no path prefix")
-	assert.Empty(t, c.scopeRootID, "primary converter should have no scope root")
-	assert.False(t, c.skipNestedShortcuts, "primary converter should not skip nested shortcuts")
+	assert.True(t, c.EnableVaultFilter, "primary converter should enable vault filter")
+	assert.True(t, c.EnableShortcutDetect, "primary converter should enable shortcut detect")
+	assert.Empty(t, c.PathPrefix, "primary converter should have no path prefix")
+	assert.Empty(t, c.ScopeRootID, "primary converter should have no scope root")
+	assert.False(t, c.SkipNestedShortcuts, "primary converter should not skip nested shortcuts")
 }
 
 func TestNewShortcutConverter_EnablesShortcutBehavior(t *testing.T) {
@@ -46,13 +46,13 @@ func TestNewShortcutConverter_EnablesShortcutBehavior(t *testing.T) {
 
 	c := newShortcutConverter(bl, remoteDriveID, testLogger(t), sc)
 
-	assert.False(t, c.enableVaultFilter, "shortcut converter should not enable vault filter")
-	assert.False(t, c.enableShortcutDetect, "shortcut converter should not enable shortcut detect")
-	assert.Equal(t, "Shared/TeamDocs", c.pathPrefix, "shortcut converter should set path prefix")
-	assert.Equal(t, "source-folder-1", c.scopeRootID, "shortcut converter should set scope root")
-	assert.True(t, c.skipNestedShortcuts, "shortcut converter should skip nested shortcuts")
-	assert.Equal(t, "0000000000000099", c.shortcutDriveID, "shortcut converter should set shortcutDriveID")
-	assert.Equal(t, "source-folder-1", c.shortcutItemID, "shortcut converter should set shortcutItemID")
+	assert.False(t, c.EnableVaultFilter, "shortcut converter should not enable vault filter")
+	assert.False(t, c.EnableShortcutDetect, "shortcut converter should not enable shortcut detect")
+	assert.Equal(t, "Shared/TeamDocs", c.PathPrefix, "shortcut converter should set path prefix")
+	assert.Equal(t, "source-folder-1", c.ScopeRootID, "shortcut converter should set scope root")
+	assert.True(t, c.SkipNestedShortcuts, "shortcut converter should skip nested shortcuts")
+	assert.Equal(t, "0000000000000099", c.ShortcutDriveID, "shortcut converter should set shortcutDriveID")
+	assert.Equal(t, "source-folder-1", c.ShortcutItemID, "shortcut converter should set shortcutItemID")
 }
 
 // ---------------------------------------------------------------------------
@@ -339,8 +339,8 @@ func TestPrimaryConverter_VaultExclusion(t *testing.T) {
 	c := newPrimaryConverter(bl, driveID, testLogger(t), &observerCounters{})
 
 	inflight := map[driveid.ItemKey]inflightParent{
-		driveid.NewItemKey(driveID, "root"):         {name: "", isRoot: true},
-		driveid.NewItemKey(driveID, "vault-folder"): {name: "Personal Vault", parentID: "root", isVault: true},
+		driveid.NewItemKey(driveID, "root"):         {Name: "", IsRoot: true},
+		driveid.NewItemKey(driveID, "vault-folder"): {Name: "Personal Vault", ParentID: "root", IsVault: true},
 	}
 
 	// Vault folder itself.
@@ -348,21 +348,21 @@ func TestPrimaryConverter_VaultExclusion(t *testing.T) {
 		ID: "vault-folder", Name: "Personal Vault", ParentID: "root",
 		DriveID: driveID, IsFolder: true, SpecialFolderName: "vault",
 	}
-	assert.Nil(t, c.classifyItem(vaultItem, inflight), "vault folder should be skipped")
+	assert.Nil(t, c.ClassifyItem(vaultItem, inflight), "vault folder should be skipped")
 
 	// Child of vault.
 	vaultChild := &graph.Item{
 		ID: "vault-child", Name: "secret.pdf", ParentID: "vault-folder",
 		DriveID: driveID, Size: 1024,
 	}
-	assert.Nil(t, c.classifyItem(vaultChild, inflight), "vault child should be skipped")
+	assert.Nil(t, c.ClassifyItem(vaultChild, inflight), "vault child should be skipped")
 
 	// Normal file outside vault.
 	normalFile := &graph.Item{
 		ID: "normal-file", Name: "readme.txt", ParentID: "root",
 		DriveID: driveID, Size: 256,
 	}
-	ev := c.classifyItem(normalFile, inflight)
+	ev := c.ClassifyItem(normalFile, inflight)
 	assert.NotNil(t, ev, "normal file should produce an event")
 	assert.Equal(t, "readme.txt", ev.Path)
 }
@@ -377,7 +377,7 @@ func TestPrimaryConverter_ShortcutDetection(t *testing.T) {
 	c := newPrimaryConverter(bl, driveID, testLogger(t), &observerCounters{})
 
 	inflight := map[driveid.ItemKey]inflightParent{
-		driveid.NewItemKey(driveID, "root"): {name: "", isRoot: true},
+		driveid.NewItemKey(driveID, "root"): {Name: "", IsRoot: true},
 	}
 
 	item := &graph.Item{
@@ -385,7 +385,7 @@ func TestPrimaryConverter_ShortcutDetection(t *testing.T) {
 		IsFolder: true, RemoteDriveID: "remote-drive", RemoteItemID: "remote-item",
 	}
 
-	ev := c.classifyItem(item, inflight)
+	ev := c.ClassifyItem(item, inflight)
 	require.NotNil(t, ev)
 	assert.Equal(t, ChangeShortcut, ev.Type)
 	assert.Equal(t, "TeamDocs", ev.Path)
@@ -402,14 +402,14 @@ func TestPrimaryConverter_NilStatsIsSafe(t *testing.T) {
 
 	// Create converter with nil stats (like shortcut converter).
 	c := &itemConverter{
-		baseline: bl,
-		driveID:  driveID,
-		logger:   testLogger(t),
-		stats:    nil,
+		Baseline: bl,
+		DriveID:  driveID,
+		Logger:   testLogger(t),
+		Stats:    nil,
 	}
 
 	inflight := map[driveid.ItemKey]inflightParent{
-		driveid.NewItemKey(driveID, "root"): {name: "", isRoot: true},
+		driveid.NewItemKey(driveID, "root"): {Name: "", IsRoot: true},
 	}
 
 	item := &graph.Item{
@@ -418,7 +418,7 @@ func TestPrimaryConverter_NilStatsIsSafe(t *testing.T) {
 	}
 
 	// Should not panic with nil stats.
-	ev := c.classifyItem(item, inflight)
+	ev := c.ClassifyItem(item, inflight)
 	require.NotNil(t, ev)
 	assert.Equal(t, "hash123", ev.Hash)
 }
@@ -709,7 +709,7 @@ func TestPrimaryConverter_ContentEventsHaveEmptyShortcutIdentity(t *testing.T) {
 	c := newPrimaryConverter(bl, driveID, testLogger(t), &observerCounters{})
 
 	inflight := map[driveid.ItemKey]inflightParent{
-		driveid.NewItemKey(driveID, "root"): {name: "", isRoot: true},
+		driveid.NewItemKey(driveID, "root"): {Name: "", IsRoot: true},
 	}
 
 	item := &graph.Item{
@@ -717,7 +717,7 @@ func TestPrimaryConverter_ContentEventsHaveEmptyShortcutIdentity(t *testing.T) {
 		DriveID: driveID, Size: 256,
 	}
 
-	ev := c.classifyItem(item, inflight)
+	ev := c.ClassifyItem(item, inflight)
 	require.NotNil(t, ev)
 	assert.Empty(t, ev.RemoteDriveID, "primary drive events should have empty RemoteDriveID")
 	assert.Empty(t, ev.RemoteItemID, "primary drive events should have empty RemoteItemID")

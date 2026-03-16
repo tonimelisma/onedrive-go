@@ -7,15 +7,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// DriveReport summarizes the result of a single drive's sync run.
-// Err and Report are mutually exclusive: when Err is set, Report is nil.
-type DriveReport struct {
-	CanonicalID driveid.CanonicalID
-	DisplayName string
-	Report      *SyncReport // nil when Err is set
-	Err         error
-}
-
 // DriveRunner manages a single drive's sync lifecycle with panic recovery
 // and error isolation. Each DriveRunner runs independently — a panic or
 // error in one drive does not affect others.

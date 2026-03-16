@@ -105,7 +105,7 @@ func makeShortcutTrackedAction(actionType ActionType, path, shortcutKey string) 
 			Path:              path,
 			DriveID:           driveid.New("d"),
 			ItemID:            "item1",
-			targetShortcutKey: shortcutKey,
+			TargetShortcutKey: shortcutKey,
 		},
 		ID: 1,
 	}

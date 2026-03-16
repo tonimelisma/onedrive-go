@@ -18,7 +18,7 @@ func newTestSyncStoreForFailures(t *testing.T) (*SyncStore, time.Time) {
 
 	fixedTime := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
 	mgr := newTestManager(t)
-	mgr.nowFunc = func() time.Time { return fixedTime }
+	mgr.SetNowFunc(func() time.Time { return fixedTime })
 
 	return mgr, fixedTime
 }
@@ -38,7 +38,7 @@ func TestRecordFailure_RepeatFailure(t *testing.T) {
 
 	// Advance time and record again.
 	laterTime := fixedTime.Add(5 * time.Minute)
-	mgr.nowFunc = func() time.Time { return laterTime }
+	mgr.SetNowFunc(func() time.Time { return laterTime })
 
 	err = mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "file.txt",
@@ -117,7 +117,7 @@ func TestListLocalIssues_Multiple(t *testing.T) {
 
 	// Insert 3 issues with different last_seen_at times.
 	for i, p := range []string{"a.txt", "b.txt", "c.txt"} {
-		mgr.nowFunc = func() time.Time { return fixedTime.Add(time.Duration(i) * time.Minute) }
+		mgr.SetNowFunc(func() time.Time { return fixedTime.Add(time.Duration(i) * time.Minute) })
 		err := mgr.RecordFailure(ctx, &SyncFailureParams{
 			Path:      p,
 			DriveID:   driveid.ID{},
@@ -175,7 +175,7 @@ func TestClearResolvedLocalIssues(t *testing.T) {
 	}
 
 	// Manually set one to actionable (ClearActionableSyncFailures removes actionable rows).
-	_, err := mgr.db.ExecContext(ctx,
+	_, err := mgr.DB().ExecContext(ctx,
 		`UPDATE sync_failures SET category = 'actionable' WHERE path = 'b.txt'`)
 	require.NoError(t, err)
 
@@ -263,7 +263,7 @@ func TestCommitOutcome_DownloadSuccess_DoesNotClearSyncFailures(t *testing.T) {
 	require.NoError(t, err)
 
 	// Insert a remote_state row so the download outcome has something to update.
-	_, err = mgr.db.ExecContext(ctx,
+	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state
 			(drive_id, item_id, path, parent_id, item_type, sync_status, observed_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -306,7 +306,7 @@ func TestCommitOutcome_DeleteSuccess_DoesNotClearSyncFailures(t *testing.T) {
 	require.NoError(t, err)
 
 	// Insert a remote_state row in deleting status.
-	_, err = mgr.db.ExecContext(ctx,
+	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state
 			(drive_id, item_id, path, parent_id, item_type, sync_status, observed_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -346,7 +346,7 @@ func TestCommitOutcome_MoveSuccess_DoesNotClearSyncFailures(t *testing.T) {
 	require.NoError(t, err)
 
 	// Insert a remote_state row for the item.
-	_, err = mgr.db.ExecContext(ctx,
+	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state
 			(drive_id, item_id, path, parent_id, item_type, sync_status, observed_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -462,7 +462,7 @@ func TestRecordFailure_RepeatIncrementsCount(t *testing.T) {
 
 	// Advance time and record second failure.
 	laterTime := fixedTime.Add(5 * time.Minute)
-	mgr.nowFunc = func() time.Time { return laterTime }
+	mgr.SetNowFunc(func() time.Time { return laterTime })
 
 	err = mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:      "file.txt",
@@ -896,11 +896,11 @@ func TestRecordFailure_DownloadStateTransition(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	mgr.nowFunc = func() time.Time { return time.Unix(1000, 0) }
+	mgr.SetNowFunc(func() time.Time { return time.Unix(1000, 0) })
 	ctx := context.Background()
 
 	// Insert a downloading item.
-	_, err := mgr.rawDB().ExecContext(ctx,
+	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		VALUES (?, ?, ?, 'file', 'downloading', ?)`,
 		testDriveID, "item1", "hello.txt", 999,
@@ -917,7 +917,7 @@ func TestRecordFailure_DownloadStateTransition(t *testing.T) {
 	require.NoError(t, err)
 
 	// remote_state should be transitioned to download_failed.
-	row := readRemoteStateRow(t, mgr.rawDB(), "item1")
+	row := readRemoteStateRow(t, mgr.DB(), "item1")
 	require.NotNil(t, row)
 	assert.Equal(t, statusDownloadFailed, row.SyncStatus)
 
@@ -932,11 +932,11 @@ func TestRecordFailure_UploadNoStateTransition(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
-	mgr.nowFunc = func() time.Time { return time.Unix(1000, 0) }
+	mgr.SetNowFunc(func() time.Time { return time.Unix(1000, 0) })
 	ctx := context.Background()
 
 	// Insert a synced item — uploads should not affect remote_state.
-	_, err := mgr.rawDB().ExecContext(ctx,
+	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		VALUES (?, ?, ?, 'file', 'synced', ?)`,
 		testDriveID, "item1", "hello.txt", 999,
@@ -952,7 +952,7 @@ func TestRecordFailure_UploadNoStateTransition(t *testing.T) {
 	require.NoError(t, err)
 
 	// Status should remain synced — uploads don't transition remote_state.
-	row := readRemoteStateRow(t, mgr.rawDB(), "item1")
+	row := readRemoteStateRow(t, mgr.DB(), "item1")
 	require.NotNil(t, row)
 	assert.Equal(t, statusSynced, row.SyncStatus)
 }
@@ -977,7 +977,7 @@ func TestRecordFailure_PreservesExistingValuesOnConflict(t *testing.T) {
 
 	// Second record without file_size and local_hash — should preserve originals.
 	laterTime := fixedTime.Add(5 * time.Minute)
-	mgr.nowFunc = func() time.Time { return laterTime }
+	mgr.SetNowFunc(func() time.Time { return laterTime })
 
 	err = mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:      "file.txt",

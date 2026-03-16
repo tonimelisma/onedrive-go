@@ -14,6 +14,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 )
 
 // maxShortcutConcurrency limits how many shortcut scopes are observed in parallel.
@@ -512,7 +513,7 @@ func (e *Engine) observeShortcutDelta(
 		}
 	}
 
-	events := convertShortcutItems(items, sc, remoteDriveID, bl, e.logger)
+	events := syncobserve.ConvertShortcutItems(items, sc, remoteDriveID, bl, e.logger)
 
 	return scopeResult{
 		events:     events,
@@ -534,10 +535,10 @@ func (e *Engine) observeShortcutEnumerate(
 		return scopeResult{}, fmt.Errorf("sync: shortcut enumerate: %w", err)
 	}
 
-	events := convertShortcutItems(items, sc, remoteDriveID, bl, e.logger)
+	events := syncobserve.ConvertShortcutItems(items, sc, remoteDriveID, bl, e.logger)
 
 	// Detect deletions: items in baseline under this scope but not in enumeration.
-	orphans := detectShortcutOrphans(sc, remoteDriveID, items, bl)
+	orphans := syncobserve.DetectShortcutOrphans(sc, remoteDriveID, items, bl)
 	events = append(events, orphans...)
 
 	return scopeResult{
@@ -596,8 +597,8 @@ func (e *Engine) reconcileShortcutDelta(
 		return scopeResult{}, fmt.Errorf("sync: shortcut full reconciliation delta: %w", err)
 	}
 
-	events := convertShortcutItems(items, sc, remoteDriveID, bl, e.logger)
-	orphans := detectShortcutOrphans(sc, remoteDriveID, items, bl)
+	events := syncobserve.ConvertShortcutItems(items, sc, remoteDriveID, bl, e.logger)
+	orphans := syncobserve.DetectShortcutOrphans(sc, remoteDriveID, items, bl)
 	events = append(events, orphans...)
 
 	return scopeResult{

@@ -24,7 +24,7 @@ func TestTrySend_ChannelAvailable_SendsEvent(t *testing.T) {
 		ItemType: ItemTypeFile,
 	}
 
-	obs.trySend(ctx, events, &ev)
+	obs.TrySend(ctx, events, &ev)
 
 	select {
 	case got := <-events:
@@ -56,7 +56,7 @@ func TestTrySend_ChannelFull_DropsEvent(t *testing.T) {
 		ItemType: ItemTypeFile,
 	}
 
-	obs.trySend(ctx, events, &second)
+	obs.TrySend(ctx, events, &second)
 
 	assert.Equal(t, int64(1), obs.DroppedEvents())
 
@@ -86,7 +86,7 @@ func TestTrySend_ContextCanceled_NoDrop(t *testing.T) {
 		ItemType: ItemTypeFile,
 	}
 
-	obs.trySend(ctx, events, &ev)
+	obs.TrySend(ctx, events, &ev)
 
 	// Context cancel takes priority over default branch in select, but
 	// Go's select is non-deterministic. The drop counter may or may not

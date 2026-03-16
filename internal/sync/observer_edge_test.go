@@ -284,14 +284,14 @@ func TestIsOversizedFile(t *testing.T) {
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 
 	// Exactly at the limit — should NOT be oversized.
-	assert.False(t, obs.isOversizedFile(maxOneDriveFileSize, "exactly-250gb.bin"),
+	assert.False(t, obs.IsOversizedFile(maxOneDriveFileSize, "exactly-250gb.bin"),
 		"file exactly at maxOneDriveFileSize should not be oversized")
 
 	// One byte over the limit — should be oversized.
-	assert.True(t, obs.isOversizedFile(maxOneDriveFileSize+1, "over-250gb.bin"),
+	assert.True(t, obs.IsOversizedFile(maxOneDriveFileSize+1, "over-250gb.bin"),
 		"file one byte over maxOneDriveFileSize should be oversized")
 
 	// Zero-length file — should NOT be oversized.
-	assert.False(t, obs.isOversizedFile(0, "empty.txt"),
+	assert.False(t, obs.IsOversizedFile(0, "empty.txt"),
 		"zero-length file should not be oversized")
 }

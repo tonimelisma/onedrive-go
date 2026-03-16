@@ -470,7 +470,7 @@ func TestRetrierSweep_BatchLimit(t *testing.T) {
 
 	// Align store clock with engine clock so next_retry_at is computed
 	// relative to the same fixed time.
-	eng.baseline.nowFunc = eng.nowFn
+	eng.baseline.SetNowFunc(eng.nowFn)
 
 	total := retryBatchSize + 5
 
@@ -534,7 +534,7 @@ func TestRetrierSweep_SkipsInFlight(t *testing.T) {
 	driveID := driveid.New("drive1")
 
 	// Align store clock with engine clock.
-	eng.baseline.nowFunc = eng.nowFn
+	eng.baseline.SetNowFunc(eng.nowFn)
 
 	names := []string{"a.txt", "b.txt", "c.txt"}
 
@@ -922,7 +922,7 @@ func TestIsFailureResolved_Download_Synced(t *testing.T) {
 		},
 	}, "", driveID))
 
-	_, err := eng.baseline.db.ExecContext(ctx,
+	_, err := eng.baseline.DB().ExecContext(ctx,
 		`UPDATE remote_state SET sync_status = ? WHERE item_id = ?`,
 		statusSynced, "resolved-item",
 	)
@@ -1349,7 +1349,7 @@ func TestRetrierSweep_FullFidelityEvents_D9(t *testing.T) {
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
-	eng.baseline.nowFunc = eng.nowFn
+	eng.baseline.SetNowFunc(eng.nowFn)
 
 	// Seed remote_state with full metadata.
 	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{
@@ -1406,7 +1406,7 @@ func TestRetrierSweep_SkipsResolvedFailures_D11(t *testing.T) {
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
-	eng.baseline.nowFunc = eng.nowFn
+	eng.baseline.SetNowFunc(eng.nowFn)
 
 	// Seed remote_state: d11-synced will be set to statusSynced (resolved),
 	// d11-pending stays at statusPendingDownload (not resolved).
@@ -1432,7 +1432,7 @@ func TestRetrierSweep_SkipsResolvedFailures_D11(t *testing.T) {
 	// Directly set d11-synced to synced status (simulates a completed download
 	// through the normal pipeline). The full download lifecycle
 	// (pending_download → downloading → synced) isn't needed for this test.
-	_, err := eng.baseline.db.ExecContext(ctx,
+	_, err := eng.baseline.DB().ExecContext(ctx,
 		`UPDATE remote_state SET sync_status = ? WHERE item_id = ?`,
 		statusSynced, "synced-item",
 	)

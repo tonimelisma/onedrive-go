@@ -1913,7 +1913,7 @@ func TestMakeAction_ShortcutEnrichment(t *testing.T) {
 
 			assert.Equal(t, tt.wantOwnDrive, action.TargetsOwnDrive(), "TargetsOwnDrive()")
 			assert.Equal(t, tt.wantShortcutKey, action.ShortcutKey(), "ShortcutKey()")
-			assert.Equal(t, tt.wantTargetDrive, action.TargetDriveID(), "TargetDriveID()")
+			assert.Equal(t, tt.wantTargetDrive, action.TargetDriveID, "TargetDriveID")
 		})
 	}
 }
@@ -2419,7 +2419,7 @@ func TestPlan_ShortcutAction_HasTargetShortcutKey(t *testing.T) {
 	assert.False(t, action.TargetsOwnDrive(), "shortcut action should NOT target own drive")
 	assert.Equal(t, remoteDriveID+":"+remoteItemID, action.ShortcutKey(),
 		"ShortcutKey should be remoteDrive:remoteItem")
-	assert.Equal(t, driveid.New(remoteDriveID), action.TargetDriveID(),
+	assert.Equal(t, driveid.New(remoteDriveID), action.TargetDriveID,
 		"TargetDriveID should be the sharer's drive")
 }
 

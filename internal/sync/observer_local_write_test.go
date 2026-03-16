@@ -95,18 +95,18 @@ func TestHandleWrite_CoalescesRapidWrites(t *testing.T) {
 
 	mockWatcher := newMockFsWatcher()
 	obs := &LocalObserver{
-		baseline:              baseline,
-		logger:                testLogger(t),
-		writeCoalesceCooldown: 100 * time.Millisecond,
-		sleepFunc:             func(_ context.Context, _ time.Duration) error { return nil },
-		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+		Baseline:              baseline,
+		Logger:                testLogger(t),
+		WriteCoalesceCooldown: 100 * time.Millisecond,
+		SleepFunc:             func(_ context.Context, _ time.Duration) error { return nil },
+		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return make(chan time.Time), func() {}
 		},
-		watcherFactory: func() (FsWatcher, error) {
+		WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
-		pendingTimers: make(map[string]*time.Timer),
-		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+		PendingTimers: make(map[string]*time.Timer),
+		HashRequests:  make(chan hashRequest, hashRequestBufSize),
 	}
 
 	events := make(chan ChangeEvent, 10)
@@ -170,18 +170,18 @@ func TestHandleWrite_EmitsAfterCooldownExpires(t *testing.T) {
 
 	mockWatcher := newMockFsWatcher()
 	obs := &LocalObserver{
-		baseline:              baseline,
-		logger:                testLogger(t),
-		writeCoalesceCooldown: 50 * time.Millisecond,
-		sleepFunc:             func(_ context.Context, _ time.Duration) error { return nil },
-		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+		Baseline:              baseline,
+		Logger:                testLogger(t),
+		WriteCoalesceCooldown: 50 * time.Millisecond,
+		SleepFunc:             func(_ context.Context, _ time.Duration) error { return nil },
+		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return make(chan time.Time), func() {}
 		},
-		watcherFactory: func() (FsWatcher, error) {
+		WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
-		pendingTimers: make(map[string]*time.Timer),
-		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+		PendingTimers: make(map[string]*time.Timer),
+		HashRequests:  make(chan hashRequest, hashRequestBufSize),
 	}
 
 	events := make(chan ChangeEvent, 10)
@@ -236,18 +236,18 @@ func TestHandleWrite_DifferentPathsNotCoalesced(t *testing.T) {
 
 	mockWatcher := newMockFsWatcher()
 	obs := &LocalObserver{
-		baseline:              baseline,
-		logger:                testLogger(t),
-		writeCoalesceCooldown: 50 * time.Millisecond,
-		sleepFunc:             func(_ context.Context, _ time.Duration) error { return nil },
-		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+		Baseline:              baseline,
+		Logger:                testLogger(t),
+		WriteCoalesceCooldown: 50 * time.Millisecond,
+		SleepFunc:             func(_ context.Context, _ time.Duration) error { return nil },
+		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return make(chan time.Time), func() {}
 		},
-		watcherFactory: func() (FsWatcher, error) {
+		WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
-		pendingTimers: make(map[string]*time.Timer),
-		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+		PendingTimers: make(map[string]*time.Timer),
+		HashRequests:  make(chan hashRequest, hashRequestBufSize),
 	}
 
 	events := make(chan ChangeEvent, 10)
@@ -311,18 +311,18 @@ func TestHandleWrite_DeleteClearsTimer(t *testing.T) {
 
 	mockWatcher := newMockFsWatcher()
 	obs := &LocalObserver{
-		baseline:              baseline,
-		logger:                testLogger(t),
-		writeCoalesceCooldown: 200 * time.Millisecond,
-		sleepFunc:             func(_ context.Context, _ time.Duration) error { return nil },
-		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+		Baseline:              baseline,
+		Logger:                testLogger(t),
+		WriteCoalesceCooldown: 200 * time.Millisecond,
+		SleepFunc:             func(_ context.Context, _ time.Duration) error { return nil },
+		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return make(chan time.Time), func() {}
 		},
-		watcherFactory: func() (FsWatcher, error) {
+		WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
-		pendingTimers: make(map[string]*time.Timer),
-		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+		PendingTimers: make(map[string]*time.Timer),
+		HashRequests:  make(chan hashRequest, hashRequestBufSize),
 	}
 
 	events := make(chan ChangeEvent, 10)
@@ -394,18 +394,18 @@ func TestCancelPendingTimers(t *testing.T) {
 
 	mockWatcher := newMockFsWatcher()
 	obs := &LocalObserver{
-		baseline:              baseline,
-		logger:                testLogger(t),
-		writeCoalesceCooldown: 5 * time.Second, // very long — timers should NOT fire
-		sleepFunc:             func(_ context.Context, _ time.Duration) error { return nil },
-		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+		Baseline:              baseline,
+		Logger:                testLogger(t),
+		WriteCoalesceCooldown: 5 * time.Second, // very long — timers should NOT fire
+		SleepFunc:             func(_ context.Context, _ time.Duration) error { return nil },
+		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return make(chan time.Time), func() {}
 		},
-		watcherFactory: func() (FsWatcher, error) {
+		WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
-		pendingTimers: make(map[string]*time.Timer),
-		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+		PendingTimers: make(map[string]*time.Timer),
+		HashRequests:  make(chan hashRequest, hashRequestBufSize),
 	}
 
 	events := make(chan ChangeEvent, 10)
@@ -467,11 +467,11 @@ func TestHashAndEmit_RetriesExhausted_EmitsEvent(t *testing.T) {
 	})
 
 	obs := &LocalObserver{
-		baseline:              baseline,
-		logger:                testLogger(t),
-		writeCoalesceCooldown: 100 * time.Millisecond,
-		pendingTimers:         make(map[string]*time.Timer),
-		hashRequests:          make(chan hashRequest, 10),
+		Baseline:              baseline,
+		Logger:                testLogger(t),
+		WriteCoalesceCooldown: 100 * time.Millisecond,
+		PendingTimers:         make(map[string]*time.Timer),
+		HashRequests:          make(chan hashRequest, 10),
 	}
 
 	events := make(chan ChangeEvent, 5)
@@ -480,11 +480,11 @@ func TestHashAndEmit_RetriesExhausted_EmitsEvent(t *testing.T) {
 	// Call hashAndEmit with retries at the cap. Even though the file is
 	// stable (no errFileChangedDuringHash), this verifies the code path
 	// works correctly at the retry boundary.
-	obs.hashAndEmit(ctx, hashRequest{
-		fsPath:    filePath,
-		dbRelPath: "exhausted.txt",
-		name:      "exhausted.txt",
-		retries:   maxCoalesceRetries,
+	obs.HashAndEmit(ctx, hashRequest{
+		FsPath:    filePath,
+		DbRelPath: "exhausted.txt",
+		Name:      "exhausted.txt",
+		Retries:   maxCoalesceRetries,
 	}, events)
 
 	select {
@@ -497,7 +497,7 @@ func TestHashAndEmit_RetriesExhausted_EmitsEvent(t *testing.T) {
 	}
 
 	// No timer should be pending — the request should not be re-scheduled.
-	require.Empty(t, obs.pendingTimers, "no timer should be pending after exhausted retries")
+	require.Empty(t, obs.PendingTimers, "no timer should be pending after exhausted retries")
 }
 
 // TestHashAndEmit_BaselineMatch_NoEvent verifies that hashAndEmit does NOT emit
@@ -515,20 +515,20 @@ func TestHashAndEmit_BaselineMatch_NoEvent(t *testing.T) {
 	})
 
 	obs := &LocalObserver{
-		baseline:              baseline,
-		logger:                testLogger(t),
-		writeCoalesceCooldown: 100 * time.Millisecond,
-		pendingTimers:         make(map[string]*time.Timer),
-		hashRequests:          make(chan hashRequest, 10),
+		Baseline:              baseline,
+		Logger:                testLogger(t),
+		WriteCoalesceCooldown: 100 * time.Millisecond,
+		PendingTimers:         make(map[string]*time.Timer),
+		HashRequests:          make(chan hashRequest, 10),
 	}
 
 	events := make(chan ChangeEvent, 5)
 	ctx := t.Context()
 
-	obs.hashAndEmit(ctx, hashRequest{
-		fsPath:    filePath,
-		dbRelPath: "noop.txt",
-		name:      "noop.txt",
+	obs.HashAndEmit(ctx, hashRequest{
+		FsPath:    filePath,
+		DbRelPath: "noop.txt",
+		Name:      "noop.txt",
 	}, events)
 
 	// No event should be emitted since hash matches baseline.
@@ -567,18 +567,18 @@ func TestHashAndEmit_CaseCollision_Suppressed(t *testing.T) {
 
 	mockWatcher := newMockFsWatcher()
 	obs := &LocalObserver{
-		baseline:              baseline,
-		logger:                testLogger(t),
-		writeCoalesceCooldown: 50 * time.Millisecond,
-		sleepFunc:             func(_ context.Context, _ time.Duration) error { return nil },
-		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+		Baseline:              baseline,
+		Logger:                testLogger(t),
+		WriteCoalesceCooldown: 50 * time.Millisecond,
+		SleepFunc:             func(_ context.Context, _ time.Duration) error { return nil },
+		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return make(chan time.Time), func() {}
 		},
-		watcherFactory: func() (FsWatcher, error) {
+		WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
-		pendingTimers: make(map[string]*time.Timer),
-		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+		PendingTimers: make(map[string]*time.Timer),
+		HashRequests:  make(chan hashRequest, hashRequestBufSize),
 	}
 
 	events := make(chan ChangeEvent, 10)
@@ -621,28 +621,28 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 
 	mockWatcher := newMockFsWatcher()
 	obs := &LocalObserver{
-		baseline:       emptyBaseline(),
-		logger:         testLogger(t),
-		collisionPeers: make(map[string]map[string]struct{}),
+		Baseline:       emptyBaseline(),
+		Logger:         testLogger(t),
+		CollisionPeers: make(map[string]map[string]struct{}),
 		// Pre-populate dirNameCache with a different-cased entry.
 		// This simulates a collision without requiring a case-sensitive FS.
-		dirNameCache: map[string]map[string][]string{
+		DirNameCache: map[string]map[string][]string{
 			dir: {
 				"existing.txt": {"existing.txt", "Existing.txt"},
 			},
 		},
-		writeCoalesceCooldown: 50 * time.Millisecond,
-		sleepFunc: func(_ context.Context, _ time.Duration) error {
+		WriteCoalesceCooldown: 50 * time.Millisecond,
+		SleepFunc: func(_ context.Context, _ time.Duration) error {
 			return nil
 		},
-		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return make(chan time.Time), func() {}
 		},
-		watcherFactory: func() (FsWatcher, error) {
+		WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
-		pendingTimers: make(map[string]*time.Timer),
-		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+		PendingTimers: make(map[string]*time.Timer),
+		HashRequests:  make(chan hashRequest, hashRequestBufSize),
 	}
 
 	events := make(chan ChangeEvent, 10)

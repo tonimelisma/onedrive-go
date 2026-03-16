@@ -29,12 +29,6 @@ func resolveRemoteItemID(bl *Baseline, localPath string, driveID driveid.ID) str
 	return entry.ItemID
 }
 
-// PermissionChecker provides permission queries on drive items.
-// Satisfied by *graph.Client.
-type PermissionChecker interface {
-	ListItemPermissions(ctx context.Context, driveID driveid.ID, itemID string) ([]graph.Permission, error)
-}
-
 // permissionCache is a thread-safe in-memory cache of folder path → canWrite.
 // Built from sync_failures + API queries each pass. Not persisted.
 // Accessed concurrently by the main sync goroutine (recheckPermissions,

@@ -874,7 +874,7 @@ func TestRunOnce_CrashRecovery_ResetsInProgressStates(t *testing.T) {
 
 	// Simulate a crash by inserting rows with in-progress states directly.
 	now := time.Now().Unix()
-	_, err := eng.baseline.rawDB().ExecContext(ctx, `
+	_, err := eng.baseline.DB().ExecContext(ctx, `
 		INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		VALUES (?, 'item-dl', '/downloading.txt', 'file', 'downloading', ?),
 		       (?, 'item-del', '/deleting.txt', 'file', 'deleting', ?)`,
@@ -887,14 +887,14 @@ func TestRunOnce_CrashRecovery_ResetsInProgressStates(t *testing.T) {
 
 	// Verify the states were reset.
 	var dlStatus, delStatus string
-	err = eng.baseline.rawDB().QueryRowContext(ctx,
+	err = eng.baseline.DB().QueryRowContext(ctx,
 		`SELECT sync_status FROM remote_state WHERE item_id = 'item-dl'`).Scan(&dlStatus)
 	require.NoError(t, err)
 	assert.Equal(t, "pending_download", dlStatus, "downloading should be reset")
 
 	// deleting → deleted because the file doesn't exist on disk (crash
 	// recovery checks filesystem to determine target state).
-	err = eng.baseline.rawDB().QueryRowContext(ctx,
+	err = eng.baseline.DB().QueryRowContext(ctx,
 		`SELECT sync_status FROM remote_state WHERE item_id = 'item-del'`).Scan(&delStatus)
 	require.NoError(t, err)
 	assert.Equal(t, "deleted", delStatus, "deleting with no local file should be marked deleted")

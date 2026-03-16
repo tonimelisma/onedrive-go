@@ -54,7 +54,7 @@ func TestIsCrossDriveLocalMove_SameDrive(t *testing.T) {
 		{Path: "docs", DriveID: driveA, ItemID: "folder1", ItemType: ItemTypeFolder},
 	})
 	views := map[string]*PathView{
-		"old.txt":          {Path: "old.txt", Baseline: bl.byPath["old.txt"]},
+		"old.txt":          {Path: "old.txt", Baseline: bl.ByPath["old.txt"]},
 		"docs/renamed.txt": {Path: "docs/renamed.txt", Local: &LocalState{Hash: "hash1"}},
 	}
 
@@ -70,7 +70,7 @@ func TestIsCrossDriveLocalMove_DifferentDrive(t *testing.T) {
 		{Path: "shared", DriveID: driveB, ItemID: "folder1", ItemType: ItemTypeFolder},
 	})
 	views := map[string]*PathView{
-		"own/file.txt":    {Path: "own/file.txt", Baseline: bl.byPath["own/file.txt"]},
+		"own/file.txt":    {Path: "own/file.txt", Baseline: bl.ByPath["own/file.txt"]},
 		"shared/file.txt": {Path: "shared/file.txt", Local: &LocalState{Hash: "hash1"}},
 	}
 
@@ -84,7 +84,7 @@ func TestIsCrossDriveLocalMove_ZeroDrive(t *testing.T) {
 		{Path: "old.txt", DriveID: driveA, ItemID: "item1", ItemType: ItemTypeFile, LocalHash: "hash1"},
 	})
 	views := map[string]*PathView{
-		"old.txt":         {Path: "old.txt", Baseline: bl.byPath["old.txt"]},
+		"old.txt":         {Path: "old.txt", Baseline: bl.ByPath["old.txt"]},
 		"unknown/new.txt": {Path: "unknown/new.txt", Local: &LocalState{Hash: "hash1"}},
 	}
 

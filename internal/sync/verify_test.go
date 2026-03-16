@@ -21,7 +21,7 @@ func TestVerifyBaseline_AllMatch(t *testing.T) {
 
 	hash := hashContent(t, content)
 	bl := &Baseline{
-		byPath: map[string]*BaselineEntry{
+		ByPath: map[string]*BaselineEntry{
 			"docs/readme.md": {
 				Path: "docs/readme.md", DriveID: driveid.New("d"), ItemID: "i1",
 				ItemType: ItemTypeFile, LocalHash: hash, Size: int64(len(content)),
@@ -31,7 +31,7 @@ func TestVerifyBaseline_AllMatch(t *testing.T) {
 				ItemType: ItemTypeFile, LocalHash: hash, Size: int64(len(content)),
 			},
 		},
-		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
+		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
 	ctx := t.Context()
@@ -51,13 +51,13 @@ func TestVerifyBaseline_MissingFile(t *testing.T) {
 
 	// Baseline references a file that doesn't exist on disk.
 	bl := &Baseline{
-		byPath: map[string]*BaselineEntry{
+		ByPath: map[string]*BaselineEntry{
 			"ghost.txt": {
 				Path: "ghost.txt", DriveID: driveid.New("d"), ItemID: "i1",
 				ItemType: ItemTypeFile, LocalHash: "somehash", Size: 100,
 			},
 		},
-		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
+		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
 	ctx := t.Context()
@@ -81,13 +81,13 @@ func TestVerifyBaseline_HashMismatch(t *testing.T) {
 
 	// Baseline has a different hash than what's on disk.
 	bl := &Baseline{
-		byPath: map[string]*BaselineEntry{
+		ByPath: map[string]*BaselineEntry{
 			"changed.txt": {
 				Path: "changed.txt", DriveID: driveid.New("d"), ItemID: "i1",
 				ItemType: ItemTypeFile, LocalHash: "wrong-hash", Size: int64(len(content)),
 			},
 		},
-		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
+		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
 	ctx := t.Context()
@@ -109,8 +109,8 @@ func TestVerifyBaseline_EmptyBaseline(t *testing.T) {
 
 	dir := t.TempDir()
 	bl := &Baseline{
-		byPath:     make(map[string]*BaselineEntry),
-		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
+		ByPath:     make(map[string]*BaselineEntry),
+		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
 	ctx := t.Context()
@@ -132,7 +132,7 @@ func TestVerifyBaseline_SkipsFolders(t *testing.T) {
 
 	hash := hashContent(t, content)
 	bl := &Baseline{
-		byPath: map[string]*BaselineEntry{
+		ByPath: map[string]*BaselineEntry{
 			"docs": {
 				Path: "docs", DriveID: driveid.New("d"), ItemID: "folder1",
 				ItemType: ItemTypeFolder,
@@ -142,7 +142,7 @@ func TestVerifyBaseline_SkipsFolders(t *testing.T) {
 				ItemType: ItemTypeFile, LocalHash: hash, Size: int64(len(content)),
 			},
 		},
-		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
+		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
 	ctx := t.Context()
@@ -164,13 +164,13 @@ func TestVerifyBaseline_SizeMismatch(t *testing.T) {
 	writeTestFile(t, dir, "size.txt", content)
 
 	bl := &Baseline{
-		byPath: map[string]*BaselineEntry{
+		ByPath: map[string]*BaselineEntry{
 			"size.txt": {
 				Path: "size.txt", DriveID: driveid.New("d"), ItemID: "i1",
 				ItemType: ItemTypeFile, LocalHash: "somehash", Size: 99999,
 			},
 		},
-		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
+		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
 	ctx := t.Context()
