@@ -13,11 +13,11 @@ Fast, safe OneDrive CLI and sync client in Go. Unix-style file ops (`ls`, `get`,
 | `internal/driveops/`, `get.go`, `put.go` | `spec/design/drive-transfers.md` | |
 | `pkg/quickxorhash/` | `spec/design/drive-transfers.md` | |
 | `internal/retry/` | `spec/design/retry.md` | |
-| `internal/sync/observer_*.go`, `item_converter.go`, `scanner.go`, `buffer.go` | `spec/design/sync-observation.md` | `spec/reference/onedrive-sync-behavior.md` |
-| `internal/sync/planner.go`, `types.go` | `spec/design/sync-planning.md` | `spec/reference/onedrive-sync-behavior.md` |
-| `internal/sync/executor*.go`, `worker.go`, `dep_graph.go`, `scope_gate.go` | `spec/design/sync-execution.md` | |
-| `internal/sync/engine*.go`, `orchestrator.go`, `drive_runner.go`, `sync.go` | `spec/design/sync-engine.md` | |
-| `internal/sync/store*.go`, `migrations.go` | `spec/design/sync-store.md` | `spec/design/data-model.md` |
+| `internal/syncobserve/` | `spec/design/sync-observation.md` | `spec/reference/onedrive-sync-behavior.md` |
+| `internal/syncplan/`, `internal/synctypes/` | `spec/design/sync-planning.md` | `spec/reference/onedrive-sync-behavior.md` |
+| `internal/syncexec/`, `internal/syncdispatch/` | `spec/design/sync-execution.md` | |
+| `internal/sync/engine*.go`, `orchestrator.go`, `drive_runner.go`, `permissions.go`, `sync.go` | `spec/design/sync-engine.md` | |
+| `internal/syncstore/` | `spec/design/sync-store.md` | `spec/design/data-model.md` |
 | Root package CLI files | `spec/design/cli.md` | |
 
 | Working on capability... | Requirements | Design docs |

@@ -1,8 +1,10 @@
 # Sync Package Modularization
 
-**Status**: Planned
+**Status**: Complete
 **Depends on**: Tracker & engine pipeline redesign (complete)
-**Scope**: All files currently in `internal/sync/` — 41 production files, 15,495 lines
+**Scope**: All files previously in `internal/sync/` — split into 7 focused packages
+
+GOVERNS: internal/synctypes/*.go
 **Related design docs**: `sync-observation.md`, `sync-planning.md`, `sync-execution.md`, `sync-engine.md`, `sync-store.md`, `data-model.md`
 
 ---

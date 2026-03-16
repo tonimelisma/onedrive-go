@@ -1,6 +1,6 @@
 # Sync Planning
 
-GOVERNS: internal/sync/planner.go, internal/sync/types.go
+GOVERNS: internal/syncplan/planner.go, internal/synctypes/*.go, internal/sync/types.go
 
 Implements: R-2.2 [verified], R-2.3.1 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.7.7 [verified], R-2.14.2 [verified]
 
