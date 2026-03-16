@@ -110,8 +110,8 @@ func newTestExecutorConfig(t *testing.T, items *executorMockItemClient, dl *exec
 	logger := testLogger(t)
 
 	cfg := NewExecutorConfig(items, dl, ul, syncRoot, driveID, logger)
-	cfg.transferMgr = driveops.NewTransferManager(dl, ul, nil, logger)
-	cfg.nowFunc = func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) }
+	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
+	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) })
 
 	return cfg, syncRoot
 }
@@ -161,7 +161,7 @@ func TestExecutor_CreateLocalFolder(t *testing.T) {
 		},
 	}
 
-	o := e.executeFolderCreate(t.Context(), action)
+	o := e.ExecuteFolderCreate(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	info, err := os.Stat(filepath.Join(syncRoot, "docs/notes"))
@@ -191,7 +191,7 @@ func TestExecutor_CreateRemoteFolder(t *testing.T) {
 		View:       &PathView{Path: "photos"},
 	}
 
-	o := e.executeFolderCreate(t.Context(), action)
+	o := e.ExecuteFolderCreate(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	assert.Equal(t, "new-folder-id", o.ItemID)
@@ -216,7 +216,7 @@ func TestExecutor_CreateRemoteFolder_Error(t *testing.T) {
 		View:       &PathView{Path: "restricted"},
 	}
 
-	o := e.executeFolderCreate(t.Context(), action)
+	o := e.ExecuteFolderCreate(t.Context(), action)
 	requireOutcomeFailure(t, o)
 }
 
@@ -239,7 +239,7 @@ func TestExecutor_LocalMove(t *testing.T) {
 		View:    &PathView{Path: "new-name.txt"},
 	}
 
-	o := e.executeMove(t.Context(), action)
+	o := e.ExecuteMove(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	assert.NoFileExists(t, filepath.Join(syncRoot, "old-name.txt"), "old path still exists")
@@ -259,7 +259,7 @@ func TestExecutor_LocalMove_SourceMissing(t *testing.T) {
 		View:    &PathView{Path: "target.txt"},
 	}
 
-	o := e.executeMove(t.Context(), action)
+	o := e.ExecuteMove(t.Context(), action)
 	requireOutcomeFailure(t, o)
 }
 
@@ -288,7 +288,7 @@ func TestExecutor_RemoteMove(t *testing.T) {
 		View:    &PathView{Path: "renamed.txt"},
 	}
 
-	o := e.executeMove(t.Context(), action)
+	o := e.ExecuteMove(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	assert.Equal(t, "renamed.txt", o.Path)
@@ -330,7 +330,7 @@ func TestExecutor_Download_Success(t *testing.T) {
 		},
 	}
 
-	o := e.executeDownload(t.Context(), action)
+	o := e.ExecuteDownload(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	data, err := os.ReadFile(filepath.Join(syncRoot, "greetings.txt"))
@@ -362,7 +362,7 @@ func TestExecutor_Download_APIError(t *testing.T) {
 		View:    &PathView{Remote: &RemoteState{}},
 	}
 
-	o := e.executeDownload(t.Context(), action)
+	o := e.ExecuteDownload(t.Context(), action)
 	requireOutcomeFailure(t, o)
 }
 
@@ -387,7 +387,7 @@ func TestExecutor_Download_ParentDirCreated(t *testing.T) {
 		View:    &PathView{Remote: &RemoteState{Mtime: 1}},
 	}
 
-	o := e.executeDownload(t.Context(), action)
+	o := e.ExecuteDownload(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	assert.FileExists(t, filepath.Join(syncRoot, "deep/nested/dir/exec-dl.txt"), "file not created in nested dir")
@@ -413,7 +413,7 @@ func TestExecutor_Download_ZeroByte(t *testing.T) {
 		View:    &PathView{Remote: &RemoteState{}},
 	}
 
-	o := e.executeDownload(t.Context(), action)
+	o := e.ExecuteDownload(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	info, err := os.Stat(filepath.Join(syncRoot, "exec-empty.txt"))
@@ -457,7 +457,7 @@ func TestExecutor_Download_HashMismatch_Retries(t *testing.T) {
 		View:    &PathView{Remote: &RemoteState{Hash: correctHash, Mtime: 1}},
 	}
 
-	o := e.executeDownload(t.Context(), action)
+	o := e.ExecuteDownload(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	assert.Equal(t, 3, callCount, "expected 3 download calls")
@@ -495,7 +495,7 @@ func TestExecutor_Download_HashMismatch_Accepted(t *testing.T) {
 		View:    &PathView{Remote: &RemoteState{Hash: "stale-remote-hash", Mtime: 1}},
 	}
 
-	o := e.executeDownload(t.Context(), action)
+	o := e.ExecuteDownload(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	// All retries exhausted: 1 initial + 2 retries = 3.
@@ -531,7 +531,7 @@ func TestExecutor_Download_HashMatch_NoRetry(t *testing.T) {
 		View:    &PathView{Remote: &RemoteState{Hash: correctHash, Mtime: 1}},
 	}
 
-	o := e.executeDownload(t.Context(), action)
+	o := e.ExecuteDownload(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	assert.Equal(t, 1, callCount, "expected 1 download call")
@@ -567,7 +567,7 @@ func TestExecutor_Upload_SimpleSuccess(t *testing.T) {
 		View:    &PathView{Path: "exec-small.txt"},
 	}
 
-	o := e.executeUpload(t.Context(), action)
+	o := e.ExecuteUpload(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	assert.Equal(t, "uploaded1", o.ItemID)
@@ -602,7 +602,7 @@ func TestExecutor_Upload_ParentFromBaseline(t *testing.T) {
 		View: &PathView{Path: "exec-existing-dir/exec-doc.txt"},
 	}
 
-	o := e.executeUpload(t.Context(), action)
+	o := e.ExecuteUpload(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	assert.Equal(t, "baseline-folder-id", capturedParentID)
@@ -632,7 +632,7 @@ func TestExecutor_Upload_B068_ZeroDriveIDFilled(t *testing.T) {
 		View: &PathView{Path: "exec-new-file.txt"},
 	}
 
-	o := e.executeUpload(t.Context(), action)
+	o := e.ExecuteUpload(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	// Executor should have filled driveID from its own context.
@@ -662,7 +662,7 @@ func TestExecutor_Upload_LargeFileSuccess(t *testing.T) {
 		View: &PathView{Path: "exec-big-file.bin"},
 	}
 
-	o := e.executeUpload(t.Context(), action)
+	o := e.ExecuteUpload(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	assert.Equal(t, "chunked1", o.ItemID)
@@ -693,7 +693,7 @@ func TestExecutor_LocalDelete_HashMatch(t *testing.T) {
 		},
 	}
 
-	o := e.executeLocalDelete(t.Context(), action)
+	o := e.ExecuteLocalDelete(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	_, statErr := os.Stat(absPath)
@@ -721,7 +721,7 @@ func TestExecutor_LocalDelete_HashMismatch_ConflictCopy(t *testing.T) {
 		},
 	}
 
-	o := e.executeLocalDelete(t.Context(), action)
+	o := e.ExecuteLocalDelete(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	// B-133: outcome should be ActionConflict (not ActionLocalDelete) so it's tracked.
@@ -759,7 +759,7 @@ func TestExecutor_LocalDelete_AlreadyGone(t *testing.T) {
 		View:   &PathView{},
 	}
 
-	o := e.executeLocalDelete(t.Context(), action)
+	o := e.ExecuteLocalDelete(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 }
 
@@ -778,7 +778,7 @@ func TestExecutor_LocalDelete_FolderEmpty(t *testing.T) {
 		View:   &PathView{},
 	}
 
-	o := e.executeLocalDelete(t.Context(), action)
+	o := e.ExecuteLocalDelete(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	_, statErr := os.Stat(filepath.Join(syncRoot, "exec-empty-dir"))
@@ -800,7 +800,7 @@ func TestExecutor_LocalDelete_FolderNotEmpty(t *testing.T) {
 		View:   &PathView{},
 	}
 
-	o := e.executeLocalDelete(t.Context(), action)
+	o := e.ExecuteLocalDelete(t.Context(), action)
 	requireOutcomeFailure(t, o)
 }
 
@@ -830,7 +830,7 @@ func TestExecutor_RemoteDelete_Success(t *testing.T) {
 		View:    &PathView{},
 	}
 
-	o := e.executeRemoteDelete(t.Context(), action)
+	o := e.ExecuteRemoteDelete(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 }
 
@@ -854,7 +854,7 @@ func TestExecutor_RemoteDelete_404IsSuccess(t *testing.T) {
 		View:    &PathView{},
 	}
 
-	o := e.executeRemoteDelete(t.Context(), action)
+	o := e.ExecuteRemoteDelete(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 }
 
@@ -878,7 +878,7 @@ func TestExecutor_RemoteDelete_403Skip(t *testing.T) {
 		View:    &PathView{},
 	}
 
-	o := e.executeRemoteDelete(t.Context(), action)
+	o := e.ExecuteRemoteDelete(t.Context(), action)
 	requireOutcomeFailure(t, o)
 }
 
@@ -917,7 +917,7 @@ func TestExecutor_Conflict_EditEdit_KeepBoth(t *testing.T) {
 		ConflictInfo: &ConflictRecord{ConflictType: "edit_edit"},
 	}
 
-	o := e.executeConflict(t.Context(), action)
+	o := e.ExecuteConflict(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	assert.Equal(t, "edit_edit", o.ConflictType)
@@ -978,7 +978,7 @@ func TestExecutor_Conflict_EditDelete_AutoResolve(t *testing.T) {
 		},
 	}
 
-	o := e.executeConflict(t.Context(), action)
+	o := e.ExecuteConflict(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	assert.True(t, uploadCalled, "expected upload to be called for edit-delete auto-resolve")
@@ -1058,7 +1058,7 @@ func TestExecutor_SyncedUpdate(t *testing.T) {
 		},
 	}
 
-	o := e.executeSyncedUpdate(action)
+	o := e.ExecuteSyncedUpdate(action)
 	requireOutcomeSuccess(t, o)
 
 	assert.Equal(t, "hash1", o.RemoteHash)
@@ -1084,7 +1084,7 @@ func TestExecutor_Cleanup(t *testing.T) {
 		DriveID: driveid.New(testDriveID),
 	}
 
-	o := e.executeCleanup(action)
+	o := e.ExecuteCleanup(action)
 	requireOutcomeSuccess(t, o)
 
 	assert.Equal(t, ActionCleanup, o.Action)
@@ -1121,7 +1121,7 @@ func TestExecutor_ResolveParentID_Baseline(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			id, err := e.resolveParentID(tt.relPath)
+			id, err := e.ResolveParentID(tt.relPath)
 			if tt.expectErr {
 				require.Error(t, err)
 
@@ -1192,7 +1192,7 @@ func TestExecutor_Conflict_DownloadFails_RestoresLocal(t *testing.T) {
 		ConflictInfo: &ConflictRecord{ConflictType: "edit_edit"},
 	}
 
-	o := e.executeConflict(t.Context(), action)
+	o := e.ExecuteConflict(t.Context(), action)
 	requireOutcomeFailure(t, o)
 
 	// Original file should be restored after download failure.
@@ -1223,7 +1223,7 @@ func TestExecutor_RemoteMove_Error(t *testing.T) {
 		View:    &PathView{Path: "renamed.txt"},
 	}
 
-	o := e.executeMove(t.Context(), action)
+	o := e.ExecuteMove(t.Context(), action)
 	requireOutcomeFailure(t, o)
 
 	assert.ErrorIs(t, o.Error, graph.ErrForbidden)
@@ -1259,7 +1259,7 @@ func TestExecutor_LocalMove_ViewFields(t *testing.T) {
 		},
 	}
 
-	o := e.executeMove(t.Context(), action)
+	o := e.ExecuteMove(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	assert.Equal(t, "remotehash", o.RemoteHash)
@@ -1297,7 +1297,7 @@ func TestExecutor_Upload_LargeFileSizePassedToUploader(t *testing.T) {
 		View: &PathView{Path: "exec-multi-chunk.bin"},
 	}
 
-	o := e.executeUpload(t.Context(), action)
+	o := e.ExecuteUpload(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	assert.Equal(t, expectedSize, capturedSize)
@@ -1344,7 +1344,7 @@ func TestExecutor_DeleteOutcome_FolderType(t *testing.T) {
 		},
 	}
 
-	o := e.executeRemoteDelete(t.Context(), action)
+	o := e.ExecuteRemoteDelete(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	assert.Equal(t, ItemTypeFolder, o.ItemType)
@@ -1366,7 +1366,7 @@ func TestExecutor_Cleanup_FolderType(t *testing.T) {
 		},
 	}
 
-	o := e.executeCleanup(action)
+	o := e.ExecuteCleanup(action)
 	requireOutcomeSuccess(t, o)
 
 	assert.Equal(t, ItemTypeFolder, o.ItemType)
@@ -1390,7 +1390,7 @@ func TestExecutor_SyncedUpdate_BaselineFallback(t *testing.T) {
 		},
 	}
 
-	o := e.executeSyncedUpdate(action)
+	o := e.ExecuteSyncedUpdate(action)
 	requireOutcomeSuccess(t, o)
 
 	assert.Equal(t, ItemTypeFolder, o.ItemType)
@@ -1407,11 +1407,11 @@ func TestExecutor_LocalDelete_TrashSuccess(t *testing.T) {
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 
 	trashCalled := false
-	cfg.trashFunc = func(absPath string) error {
+	cfg.SetTrashFunc(func(absPath string) error {
 		trashCalled = true
 		// Simulate successful trash by removing the file.
 		return os.Remove(absPath)
-	}
+	})
 
 	e := NewExecution(cfg, emptyBaseline())
 
@@ -1424,7 +1424,7 @@ func TestExecutor_LocalDelete_TrashSuccess(t *testing.T) {
 		View:   &PathView{Baseline: &BaselineEntry{}},
 	}
 
-	o := e.executeLocalDelete(t.Context(), action)
+	o := e.ExecuteLocalDelete(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	assert.True(t, trashCalled, "trashFunc should have been called")
@@ -1436,9 +1436,9 @@ func TestExecutor_LocalDelete_TrashFailure_FallsBackToRemove(t *testing.T) {
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 
-	cfg.trashFunc = func(_ string) error {
+	cfg.SetTrashFunc(func(_ string) error {
 		return fmt.Errorf("trash unavailable")
-	}
+	})
 
 	e := NewExecution(cfg, emptyBaseline())
 
@@ -1451,7 +1451,7 @@ func TestExecutor_LocalDelete_TrashFailure_FallsBackToRemove(t *testing.T) {
 		View:   &PathView{Baseline: &BaselineEntry{}},
 	}
 
-	o := e.executeLocalDelete(t.Context(), action)
+	o := e.ExecuteLocalDelete(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	// File should still be deleted (via os.Remove fallback).
@@ -1476,7 +1476,7 @@ func TestExecutor_LocalDelete_NoTrashFunc_DirectRemove(t *testing.T) {
 		View:   &PathView{Baseline: &BaselineEntry{}},
 	}
 
-	o := e.executeLocalDelete(t.Context(), action)
+	o := e.ExecuteLocalDelete(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	_, statErr := os.Stat(absPath)
@@ -1490,11 +1490,11 @@ func TestExecutor_LocalDeleteFolder_TrashSuccess(t *testing.T) {
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 
 	trashCalled := false
-	cfg.trashFunc = func(absPath string) error {
+	cfg.SetTrashFunc(func(absPath string) error {
 		trashCalled = true
 
 		return os.Remove(absPath)
-	}
+	})
 
 	e := NewExecution(cfg, emptyBaseline())
 
@@ -1507,7 +1507,7 @@ func TestExecutor_LocalDeleteFolder_TrashSuccess(t *testing.T) {
 		View:   &PathView{},
 	}
 
-	o := e.executeLocalDelete(t.Context(), action)
+	o := e.ExecuteLocalDelete(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	assert.True(t, trashCalled, "trashFunc should have been called for folder")
@@ -1548,7 +1548,7 @@ func TestExecutor_Download_PartialFileCleanedOnMidStreamError(t *testing.T) {
 		View:    &PathView{Remote: &RemoteState{}},
 	}
 
-	o := e.executeDownload(t.Context(), action)
+	o := e.ExecuteDownload(t.Context(), action)
 	requireOutcomeFailure(t, o)
 
 	// The .partial file must not remain on disk after the error.
@@ -1565,7 +1565,7 @@ func TestExecutor_Download_PartialFileCleanedOnMidStreamError(t *testing.T) {
 // Regression: B-081 — executor propagates file mtime to Uploader
 // ---------------------------------------------------------------------------
 
-// TestExecutor_Upload_MtimePassedToUploader verifies that executeUpload reads
+// TestExecutor_Upload_MtimePassedToUploader verifies that ExecuteUpload reads
 // the local file's modification time and passes it to the Uploader.Upload call.
 func TestExecutor_Upload_MtimePassedToUploader(t *testing.T) {
 	t.Parallel()
@@ -1597,7 +1597,7 @@ func TestExecutor_Upload_MtimePassedToUploader(t *testing.T) {
 		View: &PathView{Path: "mtime-test.txt"},
 	}
 
-	o := e.executeUpload(t.Context(), action)
+	o := e.ExecuteUpload(t.Context(), action)
 	requireOutcomeSuccess(t, o)
 
 	// Verify the uploader received the file's mtime.
@@ -1676,7 +1676,7 @@ func TestCreateLocalFolder_TraversalBlocked(t *testing.T) {
 		CreateSide: CreateLocal,
 	}
 
-	o := e.executeFolderCreate(t.Context(), action)
+	o := e.ExecuteFolderCreate(t.Context(), action)
 	requireOutcomeFailure(t, o)
 	assert.ErrorIs(t, o.Error, ErrPathEscapesSyncRoot)
 }

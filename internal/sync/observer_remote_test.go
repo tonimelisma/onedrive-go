@@ -51,9 +51,9 @@ func (m *mockDeltaFetcher) Delta(_ context.Context, driveID driveid.ID, _ string
 // emptyBaseline returns a Baseline with initialized but empty maps.
 func emptyBaseline() *Baseline {
 	return &Baseline{
-		byPath:     make(map[string]*BaselineEntry),
-		byID:       make(map[driveid.ItemKey]*BaselineEntry),
-		byDirLower: make(map[dirLowerKey][]*BaselineEntry),
+		ByPath:     make(map[string]*BaselineEntry),
+		ByID:       make(map[driveid.ItemKey]*BaselineEntry),
+		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 }
 
@@ -62,11 +62,11 @@ func emptyBaseline() *Baseline {
 func baselineWith(entries ...*BaselineEntry) *Baseline {
 	b := emptyBaseline()
 	for _, e := range entries {
-		b.byPath[e.Path] = e
-		b.byID[driveid.NewItemKey(e.DriveID, e.ItemID)] = e
+		b.ByPath[e.Path] = e
+		b.ByID[driveid.NewItemKey(e.DriveID, e.ItemID)] = e
 
-		dlk := dirLowerKeyFromPath(e.Path)
-		b.byDirLower[dlk] = append(b.byDirLower[dlk], e)
+		dlk := DirLowerKeyFromPath(e.Path)
+		b.ByDirLower[dlk] = append(b.ByDirLower[dlk], e)
 	}
 
 	return b
@@ -853,7 +853,7 @@ func TestWatch_PollsAtInterval(t *testing.T) {
 	}
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
-	obs.sleepFunc = noopSleep
+	obs.SleepFunc = noopSleep
 
 	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -897,7 +897,7 @@ func TestWatch_BackoffOnError(t *testing.T) {
 	var sleepDurations []time.Duration
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
-	obs.sleepFunc = func(_ context.Context, d time.Duration) error {
+	obs.SleepFunc = func(_ context.Context, d time.Duration) error {
 		sleepDurations = append(sleepDurations, d)
 		return nil
 	}
@@ -938,7 +938,7 @@ func TestWatch_DeltaExpiredResets(t *testing.T) {
 	}
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
-	obs.sleepFunc = noopSleep
+	obs.SleepFunc = noopSleep
 
 	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -967,7 +967,7 @@ func TestWatch_ContextCancellation(t *testing.T) {
 	}
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
-	obs.sleepFunc = func(ctx context.Context, _ time.Duration) error {
+	obs.SleepFunc = func(ctx context.Context, _ time.Duration) error {
 		// Block until canceled.
 		<-ctx.Done()
 		return ctx.Err()
@@ -1020,7 +1020,7 @@ func TestWatch_CurrentDeltaToken(t *testing.T) {
 	}
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(testDriveID), testLogger(t))
-	obs.sleepFunc = noopSleep
+	obs.SleepFunc = noopSleep
 
 	// Before Watch starts, token is empty.
 	assert.Empty(t, obs.CurrentDeltaToken(), "initial token")
@@ -1029,8 +1029,8 @@ func TestWatch_CurrentDeltaToken(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 
 	pollCount := 0
-	origSleep := obs.sleepFunc
-	obs.sleepFunc = func(ctx context.Context, d time.Duration) error {
+	origSleep := obs.SleepFunc
+	obs.SleepFunc = func(ctx context.Context, d time.Duration) error {
 		pollCount++
 		if pollCount >= 2 {
 			cancel()
@@ -1063,7 +1063,7 @@ func TestWatch_IntervalClamping(t *testing.T) {
 
 	// Track what interval the sleep function actually receives.
 	var actualSleepDuration time.Duration
-	obs.sleepFunc = func(_ context.Context, d time.Duration) error {
+	obs.SleepFunc = func(_ context.Context, d time.Duration) error {
 		actualSleepDuration = d
 		return errors.New("stop after first sleep")
 	}
@@ -1439,7 +1439,7 @@ func TestClassifyItem_RemoteTrustsServer(t *testing.T) {
 	obs := NewRemoteObserver(nil, bl, driveID, testLogger(t))
 
 	inflight := map[driveid.ItemKey]inflightParent{
-		driveid.NewItemKey(driveID, "root"): {name: "", isRoot: true},
+		driveid.NewItemKey(driveID, "root"): {Name: "", IsRoot: true},
 	}
 
 	tests := []struct {
@@ -1483,7 +1483,7 @@ func TestClassifyItem_RemoteTrustsServer(t *testing.T) {
 				IsDeleted: tt.isDeleted,
 			}
 
-			ev := obs.converter.classifyItem(item, inflight)
+			ev := obs.Converter.ClassifyItem(item, inflight)
 			assert.NotNil(t, ev, "remote observer must produce event for %q (server data is authoritative)", tt.itemName)
 		})
 	}
@@ -1527,8 +1527,8 @@ func TestWatch_CommitsObservations(t *testing.T) {
 
 	writer := &mockObservationWriter{}
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, testLogger(t))
-	obs.obsWriter = writer
-	obs.sleepFunc = noopSleep
+	obs.ObsWriter = writer
+	obs.SleepFunc = noopSleep
 
 	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -1585,8 +1585,8 @@ func TestWatch_ObsWriterError_ContinuesRetry(t *testing.T) {
 
 	writer := &mockObservationWriter{err: fmt.Errorf("simulated commit error")}
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, testLogger(t))
-	obs.obsWriter = writer
-	obs.sleepFunc = func(_ context.Context, _ time.Duration) error {
+	obs.ObsWriter = writer
+	obs.SleepFunc = func(_ context.Context, _ time.Duration) error {
 		pollCount++
 		if pollCount >= 3 {
 			return fmt.Errorf("stop")
@@ -1621,8 +1621,8 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 
 	writer := &mockObservationWriter{}
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, testLogger(t))
-	obs.obsWriter = writer
-	obs.sleepFunc = func(_ context.Context, _ time.Duration) error {
+	obs.ObsWriter = writer
+	obs.SleepFunc = func(_ context.Context, _ time.Duration) error {
 		pollCount++
 		if pollCount >= 1 {
 			return fmt.Errorf("stop")
@@ -1658,7 +1658,7 @@ func TestClassifyItem_ShortcutDetection(t *testing.T) {
 	obs := NewRemoteObserver(nil, bl, driveID, testLogger(t))
 
 	inflight := map[driveid.ItemKey]inflightParent{
-		driveid.NewItemKey(driveID, "root"): {name: "", isRoot: true},
+		driveid.NewItemKey(driveID, "root"): {Name: "", IsRoot: true},
 	}
 
 	// A shortcut folder: IsFolder=true with RemoteDriveID pointing to another drive.
@@ -1672,7 +1672,7 @@ func TestClassifyItem_ShortcutDetection(t *testing.T) {
 		RemoteItemID:  "source-item-123",
 	}
 
-	ev := obs.converter.classifyItem(item, inflight)
+	ev := obs.Converter.ClassifyItem(item, inflight)
 	require.NotNil(t, ev, "shortcut should produce an event")
 
 	assert.Equal(t, ChangeShortcut, ev.Type, "shortcut should be classified as ChangeShortcut")
@@ -1694,7 +1694,7 @@ func TestClassifyItem_ShortcutDetection_NotFolder(t *testing.T) {
 	obs := NewRemoteObserver(nil, bl, driveID, testLogger(t))
 
 	inflight := map[driveid.ItemKey]inflightParent{
-		driveid.NewItemKey(driveID, "root"): {name: "", isRoot: true},
+		driveid.NewItemKey(driveID, "root"): {Name: "", IsRoot: true},
 	}
 
 	// A shared file (not a folder) — should be treated as a normal file create.
@@ -1709,7 +1709,7 @@ func TestClassifyItem_ShortcutDetection_NotFolder(t *testing.T) {
 		QuickXorHash:  "hash123",
 	}
 
-	ev := obs.converter.classifyItem(item, inflight)
+	ev := obs.Converter.ClassifyItem(item, inflight)
 	require.NotNil(t, ev, "shared file should produce an event")
 
 	assert.Equal(t, ChangeCreate, ev.Type, "shared file should be ChangeCreate, not ChangeShortcut")
@@ -1729,7 +1729,7 @@ func TestClassifyItem_ShortcutDeleted(t *testing.T) {
 	obs := NewRemoteObserver(nil, bl, driveID, testLogger(t))
 
 	inflight := map[driveid.ItemKey]inflightParent{
-		driveid.NewItemKey(driveID, "root"): {name: "", isRoot: true},
+		driveid.NewItemKey(driveID, "root"): {Name: "", IsRoot: true},
 	}
 
 	item := &graph.Item{
@@ -1743,7 +1743,7 @@ func TestClassifyItem_ShortcutDeleted(t *testing.T) {
 		RemoteItemID:  "source-item-123",
 	}
 
-	ev := obs.converter.classifyItem(item, inflight)
+	ev := obs.Converter.ClassifyItem(item, inflight)
 	require.NotNil(t, ev, "deleted shortcut should produce an event")
 
 	assert.Equal(t, ChangeDelete, ev.Type, "deleted shortcut should be ChangeDelete")

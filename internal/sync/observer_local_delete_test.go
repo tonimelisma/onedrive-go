@@ -127,7 +127,7 @@ func TestAddWatchesRecursive_SkipsSymlinks(t *testing.T) {
 
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 
-	err := obs.addWatchesRecursive(tracker, root)
+	err := obs.AddWatchesRecursive(tracker, root)
 	require.NoError(t, err)
 
 	// The root and realdir should be watched, but NOT the symlink.
@@ -254,13 +254,13 @@ func TestHandleDelete_UsesOriginalFsPath(t *testing.T) {
 			})
 
 			obs := NewLocalObserver(baseline, testLogger(t), 0)
-			obs.pendingTimers = make(map[string]*time.Timer)
-			obs.hashRequests = make(chan hashRequest, hashRequestBufSize)
+			obs.PendingTimers = make(map[string]*time.Timer)
+			obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
 
 			events := make(chan ChangeEvent, 10)
 			name := filepath.Base(tt.dbRelPath)
 
-			obs.handleDelete(t.Context(), watcher, tt.fsPath, tt.dbRelPath, name, events)
+			obs.HandleDelete(t.Context(), watcher, tt.fsPath, tt.dbRelPath, name, events)
 
 			removed := watcher.getRemovedPaths()
 			if tt.wantRemove {
@@ -299,11 +299,11 @@ func TestHandleDelete_EmitsDeleteEvent(t *testing.T) {
 			})
 
 			obs := NewLocalObserver(baseline, testLogger(t), 0)
-			obs.pendingTimers = make(map[string]*time.Timer)
-			obs.hashRequests = make(chan hashRequest, hashRequestBufSize)
+			obs.PendingTimers = make(map[string]*time.Timer)
+			obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
 
 			events := make(chan ChangeEvent, 10)
-			obs.handleDelete(t.Context(), watcher, "/sync/target", "target", "target", events)
+			obs.HandleDelete(t.Context(), watcher, "/sync/target", "target", "target", events)
 
 			select {
 			case ev := <-events:
@@ -327,16 +327,16 @@ func TestHandleDelete_CancelsCoalesceTimer(t *testing.T) {
 
 	watcher := newRecordingFsWatcher()
 	obs := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
-	obs.pendingTimers = make(map[string]*time.Timer)
-	obs.hashRequests = make(chan hashRequest, hashRequestBufSize)
+	obs.PendingTimers = make(map[string]*time.Timer)
+	obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
 
 	// Set up a pending timer for "file.txt".
-	obs.pendingTimers["file.txt"] = time.AfterFunc(time.Hour, func() {})
+	obs.PendingTimers["file.txt"] = time.AfterFunc(time.Hour, func() {})
 
 	events := make(chan ChangeEvent, 10)
-	obs.handleDelete(t.Context(), watcher, "/sync/file.txt", "file.txt", "file.txt", events)
+	obs.HandleDelete(t.Context(), watcher, "/sync/file.txt", "file.txt", "file.txt", events)
 
-	assert.Empty(t, obs.pendingTimers, "handleDelete should cancel pending timer")
+	assert.Empty(t, obs.PendingTimers, "handleDelete should cancel pending timer")
 }
 
 // Validates: R-6.7.20
@@ -359,8 +359,8 @@ func TestHandleFsEvent_DeletePassesFsPath(t *testing.T) {
 	})
 
 	obs := NewLocalObserver(baseline, testLogger(t), 0)
-	obs.pendingTimers = make(map[string]*time.Timer)
-	obs.hashRequests = make(chan hashRequest, hashRequestBufSize)
+	obs.PendingTimers = make(map[string]*time.Timer)
+	obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
 
 	events := make(chan ChangeEvent, 10)
 
@@ -369,7 +369,7 @@ func TestHandleFsEvent_DeletePassesFsPath(t *testing.T) {
 		Op:   fsnotify.Remove,
 	}
 
-	obs.handleFsEvent(t.Context(), fsEvent, watcher, syncRoot, events)
+	obs.HandleFsEvent(t.Context(), fsEvent, watcher, syncRoot, events)
 
 	removed := watcher.getRemovedPaths()
 	require.Len(t, removed, 1, "expected Remove call for folder delete")

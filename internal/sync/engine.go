@@ -20,6 +20,11 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
+	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
+	"github.com/tonimelisma/onedrive-go/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/syncplan"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 )
 
 // forceSafetyMax is the maximum threshold used when --force is set,
@@ -48,76 +53,23 @@ type trialEntry struct {
 	created  time.Time
 }
 
-// EngineConfig holds the options for NewEngine. Uses a struct because
-// seven fields is too many for positional parameters.
-type EngineConfig struct {
-	DBPath             string              // path to the SQLite state database
-	SyncRoot           string              // absolute path to the local sync directory
-	DataDir            string              // application data directory for session files (optional)
-	DriveID            driveid.ID          // normalized drive identifier
-	Fetcher            DeltaFetcher        // satisfied by *graph.Client
-	Items              ItemClient          // satisfied by *graph.Client
-	Downloads          driveops.Downloader // satisfied by *graph.Client
-	Uploads            driveops.Uploader   // satisfied by *graph.Client
-	DriveVerifier      DriveVerifier       // optional: verified at startup (B-074); nil skips check
-	FolderDelta        FolderDeltaFetcher  // optional: folder-scoped delta for shortcut observation (6.4b)
-	RecursiveLister    RecursiveLister     // optional: recursive listing for shortcut observation (6.4b)
-	PermChecker        PermissionChecker   // optional: permission checking for shared folders (6.4c)
-	Logger             *slog.Logger
-	UseLocalTrash      bool  // move deleted local files to OS trash instead of permanent delete
-	TransferWorkers    int   // goroutine count for the worker pool (0 → minWorkers)
-	CheckWorkers       int   // goroutine limit for parallel file hashing (0 → 4)
-	BigDeleteThreshold int   // max delete actions before big-delete protection triggers (0 → defaultBigDeleteThreshold)
-	MinFreeSpace       int64 // minimum free disk space (bytes) before downloads; 0 disables (R-6.4.7)
-}
-
-// RunOpts holds per-pass options for RunOnce.
-type RunOpts struct {
-	DryRun        bool
-	Force         bool
-	FullReconcile bool // when true, runs a full delta enumeration + orphan detection
-}
-
-// SyncReport summarizes the result of a single sync pass.
-type SyncReport struct {
-	Mode     SyncMode
-	DryRun   bool
-	Duration time.Duration
-
-	// Plan counts (always populated, even for dry-run).
-	FolderCreates int
-	Moves         int
-	Downloads     int
-	Uploads       int
-	LocalDeletes  int
-	RemoteDeletes int
-	Conflicts     int
-	SyncedUpdates int
-	Cleanups      int
-
-	// Execution results (zero for dry-run).
-	Succeeded int
-	Failed    int
-	Errors    []error
-}
-
 // watchState bundles all watch-mode-only state. Nil in one-shot mode.
 // A single e.watch != nil check replaces scattered nil guards for
 // scopeGate, scopeState, buf, deleteCounter, etc.
 type watchState struct {
 	// Scope gate — watch-mode only (§2.3: scope blocking is watch-mode only;
 	// one-shot never creates scope blocks).
-	scopeGate *ScopeGate
+	scopeGate *syncdispatch.ScopeGate
 
 	// Scope detection — sliding window failure tracking.
-	scopeState *ScopeState
+	scopeState *syncdispatch.ScopeState
 
 	// Event buffer — drain-loop retrier injects events via e.watch.buf.Add().
-	buf *Buffer
+	buf *syncobserve.Buffer
 
 	// Big-delete protection: rolling counter + external change detection.
 	// deleteCounter is nil even in watch mode when force=true.
-	deleteCounter   *deleteCounter
+	deleteCounter   *syncdispatch.DeleteCounter
 	lastDataVersion int64
 
 	// Trial management (drain-goroutine-only state).
@@ -130,8 +82,8 @@ type watchState struct {
 	retryTimerCh chan struct{} // persistent, buffered(1)
 
 	// Observer references — set in startObservers, nil'd on Close.
-	remoteObs *RemoteObserver
-	localObs  *LocalObserver
+	remoteObs *syncobserve.RemoteObserver
+	localObs  *syncobserve.LocalObserver
 
 	// Monotonic action ID counter. Zeroed at watch start. Each action gets
 	// a unique ID via e.watch.nextActionID.Add(1) — prevents ID collisions
@@ -159,9 +111,9 @@ type watchState struct {
 // Engine orchestrates a complete sync pass: observe → plan → execute → commit.
 // Single-drive only; multi-drive orchestration is handled by the Orchestrator.
 type Engine struct {
-	baseline           *SyncStore
-	planner            *Planner
-	execCfg            *ExecutorConfig
+	baseline           *syncstore.SyncStore
+	planner            *syncplan.Planner
+	execCfg            *syncexec.ExecutorConfig
 	fetcher            DeltaFetcher
 	driveVerifier      DriveVerifier      // optional (B-074)
 	folderDelta        FolderDeltaFetcher // optional: for shortcut observation (6.4b)
@@ -187,7 +139,7 @@ type Engine struct {
 	// depGraph is the pure dependency graph. Tracks action dependencies and
 	// readiness. Set during executePlan (one-shot) or initWatchPipeline
 	// (watch mode).
-	depGraph *DepGraph
+	depGraph *syncdispatch.DepGraph
 
 	// readyCh feeds admitted actions to the worker pool. The engine sends
 	// actions that pass the scope gate (or bypass it in one-shot mode).
@@ -216,7 +168,7 @@ type Engine struct {
 	// localWatcherFactory overrides the default fsnotify watcher factory
 	// for the local observer. Tests inject a mock factory to simulate
 	// inotify watch limit exhaustion (ENOSPC).
-	localWatcherFactory func() (FsWatcher, error)
+	localWatcherFactory func() (syncobserve.FsWatcher, error)
 }
 
 // NewEngine creates an Engine, initializing the SyncStore (which opens
@@ -227,15 +179,15 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 		return nil, fmt.Errorf("sync: engine requires non-zero drive ID")
 	}
 
-	bm, err := NewSyncStore(cfg.DBPath, cfg.Logger)
+	bm, err := syncstore.NewSyncStore(cfg.DBPath, cfg.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("sync: creating engine: %w", err)
 	}
 
-	execCfg := NewExecutorConfig(cfg.Items, cfg.Downloads, cfg.Uploads, cfg.SyncRoot, cfg.DriveID, cfg.Logger)
+	execCfg := syncexec.NewExecutorConfig(cfg.Items, cfg.Downloads, cfg.Uploads, cfg.SyncRoot, cfg.DriveID, cfg.Logger)
 
 	if cfg.UseLocalTrash {
-		execCfg.trashFunc = defaultTrashFunc
+		execCfg.SetTrashFunc(syncstore.DefaultTrashFunc)
 	}
 
 	// Construct sessionStore and TransferManager together so the TM is
@@ -247,9 +199,9 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 		sessionStore = driveops.NewSessionStore(cfg.DataDir, cfg.Logger)
 	}
 
-	execCfg.transferMgr = driveops.NewTransferManager(cfg.Downloads, cfg.Uploads, sessionStore, cfg.Logger,
+	execCfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads, cfg.Uploads, sessionStore, cfg.Logger,
 		driveops.WithDiskCheck(cfg.MinFreeSpace, driveops.DiskAvailable),
-	)
+	))
 
 	// Default threshold if not set by config.
 	bdThreshold := cfg.BigDeleteThreshold
@@ -259,7 +211,7 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 
 	return &Engine{
 		baseline:           bm,
-		planner:            NewPlanner(cfg.Logger),
+		planner:            syncplan.NewPlanner(cfg.Logger),
 		execCfg:            execCfg,
 		fetcher:            cfg.Fetcher,
 		driveVerifier:      cfg.DriveVerifier,
@@ -423,7 +375,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 	}
 
 	// Step 7: Build report from plan counts.
-	counts := countByType(plan.Actions)
+	counts := syncplan.CountByType(plan.Actions)
 	report := buildReportFromCounts(counts, mode, opts)
 
 	if opts.DryRun {
@@ -503,7 +455,7 @@ func (e *Engine) executePlan(
 	// One-shot mode: DepGraph + readyCh, no scope gate (e.watch == nil).
 	// Actions that pass dependency resolution go straight to workers.
 	// Scope blocking is watch-mode only (§2.3).
-	depGraph := NewDepGraph(e.logger)
+	depGraph := syncdispatch.NewDepGraph(e.logger)
 	e.depGraph = depGraph
 	e.readyCh = make(chan *TrackedAction, len(plan.Actions))
 
@@ -526,7 +478,7 @@ func (e *Engine) executePlan(
 		}
 	}
 
-	pool := NewWorkerPool(e.execCfg, e.readyCh, depGraph.Done(), e.baseline, e.logger, len(plan.Actions))
+	pool := syncexec.NewWorkerPool(e.execCfg, e.readyCh, depGraph.Done(), e.baseline, e.logger, len(plan.Actions))
 	pool.Start(ctx, e.transferWorkers)
 
 	// Process results concurrently — engine classifies and calls Complete.
@@ -576,7 +528,7 @@ func (e *Engine) observeRemote(ctx context.Context, bl *Baseline) ([]ChangeEvent
 		return nil, "", fmt.Errorf("sync: getting delta token: %w", err)
 	}
 
-	obs := NewRemoteObserver(e.fetcher, bl, e.driveID, e.logger)
+	obs := syncobserve.NewRemoteObserver(e.fetcher, bl, e.driveID, e.logger)
 
 	events, token, err := obs.FullDelta(ctx, savedToken)
 	if err != nil {
@@ -599,7 +551,7 @@ func (e *Engine) observeRemote(ctx context.Context, bl *Baseline) ([]ChangeEvent
 // observeLocal scans the local filesystem for changes and collects skipped
 // items (invalid names, path too long, file too large) for failure recording.
 func (e *Engine) observeLocal(ctx context.Context, bl *Baseline) (ScanResult, error) {
-	obs := NewLocalObserver(bl, e.logger, e.checkWorkers)
+	obs := syncobserve.NewLocalObserver(bl, e.logger, e.checkWorkers)
 
 	result, err := obs.FullScan(ctx, e.syncRoot)
 	if err != nil {
@@ -679,7 +631,7 @@ func (e *Engine) observeChanges(
 		e.clearScannerResolvedPermissions(ctx, pathSetFromEvents(localResult.Events))
 	}
 
-	buf := NewBuffer(e.logger)
+	buf := syncobserve.NewBuffer(e.logger)
 	buf.AddAll(remoteEvents)
 	buf.AddAll(shortcutEvents)
 	buf.AddAll(localResult.Events)
@@ -724,7 +676,7 @@ func (e *Engine) observeAndCommitRemote(ctx context.Context, bl *Baseline) ([]Ch
 // delta. Returns all events (creates/modifies from the full enumeration +
 // synthesized deletes for orphans) and the new delta token.
 func (e *Engine) observeRemoteFull(ctx context.Context, bl *Baseline) ([]ChangeEvent, string, error) {
-	obs := NewRemoteObserver(e.fetcher, bl, e.driveID, e.logger)
+	obs := syncobserve.NewRemoteObserver(e.fetcher, bl, e.driveID, e.logger)
 
 	// Full enumeration: empty token returns ALL items as create/modify events.
 	events, token, err := obs.FullDelta(ctx, "")
@@ -898,7 +850,7 @@ func (e *Engine) resolveTransfer(ctx context.Context, c *ConflictRecord, actionT
 		return fmt.Errorf("sync: loading baseline for resolve: %w", err)
 	}
 
-	exec := NewExecution(e.execCfg, bl)
+	exec := syncexec.NewExecution(e.execCfg, bl)
 
 	action := &Action{
 		Type:    actionType,
@@ -910,9 +862,9 @@ func (e *Engine) resolveTransfer(ctx context.Context, c *ConflictRecord, actionT
 
 	var outcome Outcome
 	if actionType == ActionUpload {
-		outcome = exec.executeUpload(ctx, action)
+		outcome = exec.ExecuteUpload(ctx, action)
 	} else {
-		outcome = exec.executeDownload(ctx, action)
+		outcome = exec.ExecuteDownload(ctx, action)
 	}
 
 	if !outcome.Success {
@@ -952,15 +904,6 @@ const (
 // ~500 API calls (~17% of a single 5-minute rate window), so 24h is safe.
 const defaultReconcileInterval = 24 * time.Hour
 
-// WatchOpts holds per-session options for RunWatch.
-type WatchOpts struct {
-	Force              bool
-	PollInterval       time.Duration // remote delta polling interval (0 → 5m)
-	Debounce           time.Duration // buffer debounce window (0 → 2s)
-	SafetyScanInterval time.Duration // local safety scan interval (0 → 5m) (B-099)
-	ReconcileInterval  time.Duration // periodic full reconciliation (0 → 24h, negative = disabled)
-}
-
 // setShortcuts updates the shortcuts used by the drain goroutine.
 // Called by the watch goroutine after observation when shortcuts may have changed.
 func (e *Engine) setShortcuts(shortcuts []Shortcut) {
@@ -983,7 +926,7 @@ func (e *Engine) getShortcuts() []Shortcut {
 // the first recheck tick doesn't fire spuriously.
 func (e *Engine) initDeleteProtection(ctx context.Context, force bool) {
 	if !force {
-		e.watch.deleteCounter = newDeleteCounter(e.bigDeleteThreshold, deleteCounterWindow, time.Now)
+		e.watch.deleteCounter = syncdispatch.NewDeleteCounter(e.bigDeleteThreshold, deleteCounterWindow, time.Now)
 	}
 
 	if err := e.baseline.ClearResolvedActionableFailures(ctx, IssueBigDeleteHeld, nil); err != nil {
@@ -1068,8 +1011,8 @@ type watchPipeline struct {
 	recheckC   <-chan time.Time
 	activeObs  int
 	mode       SyncMode
-	pool       *WorkerPool     // for bootstrapSync to access Results()
-	drainDone  <-chan struct{} // closed when drain goroutine exits
+	pool       *syncexec.WorkerPool // for bootstrapSync to access Results()
+	drainDone  <-chan struct{}      // closed when drain goroutine exits
 	cleanup    func()
 }
 
@@ -1099,15 +1042,15 @@ func (e *Engine) initWatchInfra(
 	// DepGraph tracks action dependencies; ScopeGate handles scope-based
 	// admission control. ScopeGate loads persisted blocks from DB — blocks
 	// survive crash/restart (D-8).
-	depGraph := NewDepGraph(e.logger)
+	depGraph := syncdispatch.NewDepGraph(e.logger)
 	e.depGraph = depGraph
-	e.watch.scopeGate = NewScopeGate(e.baseline, e.logger)
+	e.watch.scopeGate = syncdispatch.NewScopeGate(e.baseline, e.logger)
 
 	if loadErr := e.watch.scopeGate.LoadFromStore(ctx); loadErr != nil {
 		return nil, fmt.Errorf("sync: loading scope blocks: %w", loadErr)
 	}
 
-	e.watch.scopeState = NewScopeState(e.nowFunc, e.logger)
+	e.watch.scopeState = syncdispatch.NewScopeState(e.nowFunc, e.logger)
 	e.watch.nextActionID.Store(0)
 
 	// readyCh feeds admitted actions to workers. Buffer is generous to avoid
@@ -1118,13 +1061,13 @@ func (e *Engine) initWatchInfra(
 	// between batches when completed == total. Workers exit only via ctx.Done().
 	neverDone := make(chan struct{})
 
-	pool := NewWorkerPool(e.execCfg, e.readyCh, neverDone, e.baseline, e.logger, watchResultBuf)
+	pool := syncexec.NewWorkerPool(e.execCfg, e.readyCh, neverDone, e.baseline, e.logger, watchResultBuf)
 	pool.Start(ctx, e.transferWorkers)
 
 	// Buffer promoted to watchState — drain-loop retrier injects events
 	// via e.watch.buf.Add(). Retrier logic runs inside the drain loop's
 	// retryTimerCh case.
-	buf := NewBuffer(e.logger)
+	buf := syncobserve.NewBuffer(e.logger)
 	e.watch.buf = buf
 	ready := buf.FlushDebounced(ctx, e.resolveDebounce(opts))
 
@@ -1449,12 +1392,12 @@ func computeTrialInterval(retryAfter, currentInterval time.Duration) time.Durati
 	}
 	if currentInterval > 0 {
 		doubled := currentInterval * 2
-		if doubled > defaultMaxTrialInterval {
-			return defaultMaxTrialInterval
+		if doubled > syncdispatch.DefaultMaxTrialInterval {
+			return syncdispatch.DefaultMaxTrialInterval
 		}
 		return doubled
 	}
-	return defaultInitialTrialInterval
+	return syncdispatch.DefaultInitialTrialInterval
 }
 
 // isObservationSuppressed returns true if a global scope block
@@ -2198,7 +2141,7 @@ func remoteStateToChangeEvent(rs *RemoteStateRow, path string) *ChangeEvent {
 	isDeleted := false
 
 	switch rs.SyncStatus {
-	case statusDeleted, statusDeleting, statusDeleteFailed, statusPendingDelete:
+	case syncstore.StatusDeleted, syncstore.StatusDeleting, syncstore.StatusDeleteFailed, syncstore.StatusPendingDelete:
 		ct = ChangeDelete
 		isDeleted = true
 	}
@@ -2261,7 +2204,7 @@ func (e *Engine) observeLocalFile(path, caller string) *ChangeEvent {
 
 	var hash string
 	if it == ItemTypeFile {
-		hash, err = computeStableHash(absPath)
+		hash, err = syncobserve.ComputeStableHash(absPath)
 		if err != nil {
 			e.logger.Debug(caller+": hash failed",
 				slog.String("path", path),
@@ -2344,7 +2287,7 @@ func (e *Engine) isFailureResolved(ctx context.Context, row *SyncFailureRow) boo
 			resolved = true
 		} else {
 			switch rs.SyncStatus {
-			case statusSynced, statusDeleted, statusFiltered:
+			case syncstore.StatusSynced, syncstore.StatusDeleted, syncstore.StatusFiltered:
 				resolved = true
 			}
 		}
@@ -2403,7 +2346,7 @@ func (e *Engine) reobserve(ctx context.Context, row *SyncFailureRow) (*ChangeEve
 		return e.observeLocalFile(row.Path, "reobserve"), 0
 
 	default: // "download" or "delete"
-		item, err := e.execCfg.items.GetItem(ctx, row.DriveID, row.ItemID)
+		item, err := e.execCfg.Items().GetItem(ctx, row.DriveID, row.ItemID)
 		if err != nil {
 			// Classify the error to determine whether the scope is still blocked
 			// or the item is truly gone.
@@ -2711,7 +2654,7 @@ func (e *Engine) resetResultStats() {
 
 // directionFromAction maps an ActionType to a sync_failures direction string.
 func directionFromAction(at ActionType) string {
-	switch at { //nolint:exhaustive // only failure-producing actions need mapping
+	switch at {
 	case ActionUpload:
 		return strUpload
 	case ActionLocalDelete, ActionRemoteDelete:
@@ -2855,7 +2798,7 @@ func (e *Engine) handleRetryTimer(ctx context.Context) {
 // the number of observers started. The events channel is closed automatically
 // when all observers exit, allowing the bridge goroutine to drain cleanly.
 func (e *Engine) startObservers(
-	ctx context.Context, bl *Baseline, mode SyncMode, buf *Buffer, opts WatchOpts,
+	ctx context.Context, bl *Baseline, mode SyncMode, buf *syncobserve.Buffer, opts WatchOpts,
 ) (<-chan error, int, <-chan []SkippedItem) {
 	events := make(chan ChangeEvent, watchEventBuf)
 	errs := make(chan error, 2)
@@ -2883,8 +2826,8 @@ func (e *Engine) startObservers(
 
 	// Remote observer (skip for upload-only mode).
 	if mode != SyncUploadOnly {
-		remoteObs := NewRemoteObserver(e.fetcher, bl, e.driveID, e.logger)
-		remoteObs.obsWriter = e.baseline
+		remoteObs := syncobserve.NewRemoteObserver(e.fetcher, bl, e.driveID, e.logger)
+		remoteObs.SetObsWriter(e.baseline)
 		e.watch.remoteObs = remoteObs
 
 		savedToken, tokenErr := e.baseline.GetDeltaToken(ctx, e.driveID.String(), "")
@@ -2909,12 +2852,12 @@ func (e *Engine) startObservers(
 
 	// Local observer (skip for download-only mode).
 	if mode != SyncDownloadOnly {
-		localObs := NewLocalObserver(bl, e.logger, e.checkWorkers)
-		localObs.safetyScanInterval = opts.SafetyScanInterval
+		localObs := syncobserve.NewLocalObserver(bl, e.logger, e.checkWorkers)
+		localObs.SetSafetyScanInterval(opts.SafetyScanInterval)
 		localObs.SetSkippedChannel(skippedCh)
 
 		if e.localWatcherFactory != nil {
-			localObs.watcherFactory = e.localWatcherFactory
+			localObs.SetWatcherFactory(e.localWatcherFactory)
 		}
 
 		e.watch.localObs = localObs
@@ -2955,7 +2898,7 @@ func (e *Engine) startObservers(
 // inotify watch limits are exhausted. Blocks until the context is canceled.
 // Each scan's events are forwarded to the events channel via trySend.
 func (e *Engine) runPeriodicFullScan(
-	ctx context.Context, obs *LocalObserver, syncRoot string,
+	ctx context.Context, obs *syncobserve.LocalObserver, syncRoot string,
 	events chan<- ChangeEvent, interval time.Duration,
 ) {
 	ticker := time.NewTicker(interval)
@@ -2990,7 +2933,7 @@ func (e *Engine) runPeriodicFullScan(
 			// Forward events only — skipped items are logged at DEBUG.
 			// The primary scan and safety scan handle recording to sync_failures.
 			for i := range result.Events {
-				obs.trySend(ctx, events, &result.Events[i])
+				obs.TrySend(ctx, events, &result.Events[i])
 			}
 
 			if len(result.Skipped) > 0 {

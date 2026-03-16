@@ -248,17 +248,17 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 	tickCh := make(chan time.Time, 1)
 
 	obs := &LocalObserver{
-		baseline:  emptyBaseline(),
-		logger:    testLogger(t),
-		sleepFunc: recorder.sleep,
-		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+		Baseline:  emptyBaseline(),
+		Logger:    testLogger(t),
+		SleepFunc: recorder.sleep,
+		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return tickCh, func() {}
 		},
-		watcherFactory: func() (FsWatcher, error) {
+		WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
-		pendingTimers: make(map[string]*time.Timer),
-		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+		PendingTimers: make(map[string]*time.Timer),
+		HashRequests:  make(chan hashRequest, hashRequestBufSize),
 	}
 
 	events := make(chan ChangeEvent, 50)
@@ -312,18 +312,18 @@ func TestWatchLoop_BackoffEscalatesWithoutReset(t *testing.T) {
 	mockWatcher := newMockFsWatcher()
 
 	obs := &LocalObserver{
-		baseline:  emptyBaseline(),
-		logger:    testLogger(t),
-		sleepFunc: recorder.sleep,
-		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+		Baseline:  emptyBaseline(),
+		Logger:    testLogger(t),
+		SleepFunc: recorder.sleep,
+		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			// Never-firing ticker: no safety scan means backoff keeps escalating.
 			return make(chan time.Time), func() {}
 		},
-		watcherFactory: func() (FsWatcher, error) {
+		WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
-		pendingTimers: make(map[string]*time.Timer),
-		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+		PendingTimers: make(map[string]*time.Timer),
+		HashRequests:  make(chan hashRequest, hashRequestBufSize),
 	}
 
 	events := make(chan ChangeEvent, 50)
@@ -367,17 +367,17 @@ func TestWatchLoop_ChmodCreateCombinedEvent(t *testing.T) {
 
 	mockWatcher := newMockFsWatcher()
 	obs := &LocalObserver{
-		baseline:  emptyBaseline(),
-		logger:    testLogger(t),
-		sleepFunc: func(_ context.Context, _ time.Duration) error { return nil },
-		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+		Baseline:  emptyBaseline(),
+		Logger:    testLogger(t),
+		SleepFunc: func(_ context.Context, _ time.Duration) error { return nil },
+		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return make(chan time.Time), func() {}
 		},
-		watcherFactory: func() (FsWatcher, error) {
+		WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
-		pendingTimers: make(map[string]*time.Timer),
-		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+		PendingTimers: make(map[string]*time.Timer),
+		HashRequests:  make(chan hashRequest, hashRequestBufSize),
 	}
 
 	events := make(chan ChangeEvent, 10)
@@ -421,17 +421,17 @@ func TestWatchLoop_TransientFileCreateDelete(t *testing.T) {
 
 	mockWatcher := newMockFsWatcher()
 	obs := &LocalObserver{
-		baseline:  emptyBaseline(),
-		logger:    testLogger(t),
-		sleepFunc: func(_ context.Context, _ time.Duration) error { return nil },
-		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+		Baseline:  emptyBaseline(),
+		Logger:    testLogger(t),
+		SleepFunc: func(_ context.Context, _ time.Duration) error { return nil },
+		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return make(chan time.Time), func() {}
 		},
-		watcherFactory: func() (FsWatcher, error) {
+		WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
-		pendingTimers: make(map[string]*time.Timer),
-		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+		PendingTimers: make(map[string]*time.Timer),
+		HashRequests:  make(chan hashRequest, hashRequestBufSize),
 	}
 
 	events := make(chan ChangeEvent, 10)
@@ -490,17 +490,17 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 
 	mockWatcher := newMockFsWatcher()
 	obs := &LocalObserver{
-		baseline:  baseline,
-		logger:    testLogger(t),
-		sleepFunc: func(_ context.Context, _ time.Duration) error { return nil },
-		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+		Baseline:  baseline,
+		Logger:    testLogger(t),
+		SleepFunc: func(_ context.Context, _ time.Duration) error { return nil },
+		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return make(chan time.Time), func() {}
 		},
-		watcherFactory: func() (FsWatcher, error) {
+		WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
-		pendingTimers: make(map[string]*time.Timer),
-		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+		PendingTimers: make(map[string]*time.Timer),
+		HashRequests:  make(chan hashRequest, hashRequestBufSize),
 	}
 
 	events := make(chan ChangeEvent, 10)

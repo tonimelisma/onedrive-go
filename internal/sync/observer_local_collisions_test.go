@@ -62,14 +62,14 @@ func TestHasCaseCollisionCached_Detected(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "File.txt"), []byte("a"), 0o644))
 
 	obs := &LocalObserver{
-		baseline: emptyBaseline(),
+		Baseline: emptyBaseline(),
 	}
 
 	// On case-sensitive FS, "file.txt" differs from "File.txt" → collision.
 	// On case-insensitive FS (macOS), creating "File.txt" means "file.txt"
 	// refers to the same inode, so os.ReadDir returns "File.txt" and the
 	// exact-match check fails → no collision detected. Correct on both.
-	collidingName, found := obs.hasCaseCollisionCached(dir, "file.txt", ".")
+	collidingName, found := obs.HasCaseCollisionCached(dir, "file.txt", ".")
 	if found {
 		assert.Equal(t, "File.txt", collidingName,
 			"should return the name of the existing colliding file")
@@ -84,10 +84,10 @@ func TestHasCaseCollisionCached_NoCollision(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "other.txt"), []byte("a"), 0o644))
 
 	obs := &LocalObserver{
-		baseline: emptyBaseline(),
+		Baseline: emptyBaseline(),
 	}
 
-	_, found := obs.hasCaseCollisionCached(dir, "newfile.txt", ".")
+	_, found := obs.HasCaseCollisionCached(dir, "newfile.txt", ".")
 	assert.False(t, found, "unrelated files should not trigger collision")
 }
 
@@ -99,10 +99,10 @@ func TestHasCaseCollisionCached_ExactMatch_NotCollision(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "same.txt"), []byte("a"), 0o644))
 
 	obs := &LocalObserver{
-		baseline: emptyBaseline(),
+		Baseline: emptyBaseline(),
 	}
 
-	_, found := obs.hasCaseCollisionCached(dir, "same.txt", ".")
+	_, found := obs.HasCaseCollisionCached(dir, "same.txt", ".")
 	assert.False(t, found, "exact name match should not be a collision")
 }
 
@@ -111,11 +111,11 @@ func TestHasCaseCollisionCached_UnreadableDir_FailOpen(t *testing.T) {
 	t.Parallel()
 
 	obs := &LocalObserver{
-		baseline: emptyBaseline(),
+		Baseline: emptyBaseline(),
 	}
 
 	// Non-existent directory → ReadDir fails → returns false (fail-open).
-	_, found := obs.hasCaseCollisionCached("/nonexistent/path", "anything.txt", ".")
+	_, found := obs.HasCaseCollisionCached("/nonexistent/path", "anything.txt", ".")
 	assert.False(t, found, "unreadable directory should fail open")
 }
 
@@ -126,10 +126,10 @@ func TestHasCaseCollisionCached_EmptyDir(t *testing.T) {
 	dir := t.TempDir()
 
 	obs := &LocalObserver{
-		baseline: emptyBaseline(),
+		Baseline: emptyBaseline(),
 	}
 
-	_, found := obs.hasCaseCollisionCached(dir, "anything.txt", ".")
+	_, found := obs.HasCaseCollisionCached(dir, "anything.txt", ".")
 	assert.False(t, found, "empty directory should have no collisions")
 }
 
@@ -146,10 +146,10 @@ func TestHasCaseCollisionCached_BaselineCollision(t *testing.T) {
 	// Baseline has "File.txt" — no file on disk.
 	bl := baselineWith(&BaselineEntry{Path: "File.txt"})
 	obs := &LocalObserver{
-		baseline: bl,
+		Baseline: bl,
 	}
 
-	collidingName, found := obs.hasCaseCollisionCached(dir, "file.txt", ".")
+	collidingName, found := obs.HasCaseCollisionCached(dir, "file.txt", ".")
 	assert.True(t, found, "should detect baseline collision")
 	assert.Equal(t, "File.txt", collidingName)
 }
@@ -162,10 +162,10 @@ func TestHasCaseCollisionCached_BaselineExactMatch(t *testing.T) {
 
 	bl := baselineWith(&BaselineEntry{Path: "File.txt"})
 	obs := &LocalObserver{
-		baseline: bl,
+		Baseline: bl,
 	}
 
-	_, found := obs.hasCaseCollisionCached(dir, "File.txt", ".")
+	_, found := obs.HasCaseCollisionCached(dir, "File.txt", ".")
 	assert.False(t, found, "same casing in baseline should not be a collision")
 }
 
@@ -177,11 +177,11 @@ func TestHasCaseCollisionCached_BaselineSkipsRecentDelete(t *testing.T) {
 
 	bl := baselineWith(&BaselineEntry{Path: "File.txt"})
 	obs := &LocalObserver{
-		baseline:           bl,
-		recentLocalDeletes: map[string]struct{}{"File.txt": {}},
+		Baseline:           bl,
+		RecentLocalDeletes: map[string]struct{}{"File.txt": {}},
 	}
 
-	_, found := obs.hasCaseCollisionCached(dir, "file.txt", ".")
+	_, found := obs.HasCaseCollisionCached(dir, "file.txt", ".")
 	assert.False(t, found, "recently deleted baseline entry should not trigger collision")
 }
 
@@ -201,19 +201,19 @@ func TestWatch_CaseCollision_EventSuppressed(t *testing.T) {
 
 	mockWatcher := newMockFsWatcher()
 	obs := &LocalObserver{
-		baseline: emptyBaseline(),
-		logger:   testLogger(t),
-		sleepFunc: func(_ context.Context, _ time.Duration) error {
+		Baseline: emptyBaseline(),
+		Logger:   testLogger(t),
+		SleepFunc: func(_ context.Context, _ time.Duration) error {
 			return nil
 		},
-		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return make(chan time.Time), func() {}
 		},
-		watcherFactory: func() (FsWatcher, error) {
+		WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
-		pendingTimers: make(map[string]*time.Timer),
-		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+		PendingTimers: make(map[string]*time.Timer),
+		HashRequests:  make(chan hashRequest, hashRequestBufSize),
 	}
 
 	events := make(chan ChangeEvent, 10)
@@ -261,19 +261,19 @@ func TestScanNewDirectory_CaseCollision_Skipped(t *testing.T) {
 
 	mockWatcher := newMockFsWatcher()
 	obs := &LocalObserver{
-		baseline: emptyBaseline(),
-		logger:   testLogger(t),
-		sleepFunc: func(_ context.Context, _ time.Duration) error {
+		Baseline: emptyBaseline(),
+		Logger:   testLogger(t),
+		SleepFunc: func(_ context.Context, _ time.Duration) error {
 			return nil
 		},
-		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return make(chan time.Time), func() {}
 		},
-		watcherFactory: func() (FsWatcher, error) {
+		WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
-		pendingTimers: make(map[string]*time.Timer),
-		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+		PendingTimers: make(map[string]*time.Timer),
+		HashRequests:  make(chan hashRequest, hashRequestBufSize),
 	}
 
 	events := make(chan ChangeEvent, 10)
@@ -348,20 +348,20 @@ func TestWatch_DirectoryCollision_Suppressed(t *testing.T) {
 
 	mockWatcher := newMockFsWatcher()
 	obs := &LocalObserver{
-		baseline:       emptyBaseline(),
-		logger:         testLogger(t),
-		collisionPeers: make(map[string]map[string]struct{}),
-		sleepFunc: func(_ context.Context, _ time.Duration) error {
+		Baseline:       emptyBaseline(),
+		Logger:         testLogger(t),
+		CollisionPeers: make(map[string]map[string]struct{}),
+		SleepFunc: func(_ context.Context, _ time.Duration) error {
 			return nil
 		},
-		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return make(chan time.Time), func() {}
 		},
-		watcherFactory: func() (FsWatcher, error) {
+		WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
-		pendingTimers: make(map[string]*time.Timer),
-		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+		PendingTimers: make(map[string]*time.Timer),
+		HashRequests:  make(chan hashRequest, hashRequestBufSize),
 	}
 
 	events := make(chan ChangeEvent, 10)
@@ -411,20 +411,20 @@ func TestWatch_TwoDirectoryCollision_Suppressed(t *testing.T) {
 
 	mockWatcher := newMockFsWatcher()
 	obs := &LocalObserver{
-		baseline:       emptyBaseline(),
-		logger:         testLogger(t),
-		collisionPeers: make(map[string]map[string]struct{}),
-		sleepFunc: func(_ context.Context, _ time.Duration) error {
+		Baseline:       emptyBaseline(),
+		Logger:         testLogger(t),
+		CollisionPeers: make(map[string]map[string]struct{}),
+		SleepFunc: func(_ context.Context, _ time.Duration) error {
 			return nil
 		},
-		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return make(chan time.Time), func() {}
 		},
-		watcherFactory: func() (FsWatcher, error) {
+		WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
-		pendingTimers: make(map[string]*time.Timer),
-		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+		PendingTimers: make(map[string]*time.Timer),
+		HashRequests:  make(chan hashRequest, hashRequestBufSize),
 	}
 
 	events := make(chan ChangeEvent, 10)
@@ -477,20 +477,20 @@ func TestScanNewDirectory_SubdirCollision_Suppressed(t *testing.T) {
 
 	mockWatcher := newMockFsWatcher()
 	obs := &LocalObserver{
-		baseline:       emptyBaseline(),
-		logger:         testLogger(t),
-		collisionPeers: make(map[string]map[string]struct{}),
-		sleepFunc: func(_ context.Context, _ time.Duration) error {
+		Baseline:       emptyBaseline(),
+		Logger:         testLogger(t),
+		CollisionPeers: make(map[string]map[string]struct{}),
+		SleepFunc: func(_ context.Context, _ time.Duration) error {
 			return nil
 		},
-		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return make(chan time.Time), func() {}
 		},
-		watcherFactory: func() (FsWatcher, error) {
+		WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
-		pendingTimers: make(map[string]*time.Timer),
-		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+		PendingTimers: make(map[string]*time.Timer),
+		HashRequests:  make(chan hashRequest, hashRequestBufSize),
 	}
 
 	events := make(chan ChangeEvent, 10)
@@ -560,20 +560,20 @@ func TestWatch_DeleteCollider_ReEmitsSurvivor(t *testing.T) {
 
 	mockWatcher := newMockFsWatcher()
 	obs := &LocalObserver{
-		baseline:       emptyBaseline(),
-		logger:         testLogger(t),
-		collisionPeers: make(map[string]map[string]struct{}),
-		sleepFunc: func(_ context.Context, _ time.Duration) error {
+		Baseline:       emptyBaseline(),
+		Logger:         testLogger(t),
+		CollisionPeers: make(map[string]map[string]struct{}),
+		SleepFunc: func(_ context.Context, _ time.Duration) error {
 			return nil
 		},
-		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return make(chan time.Time), func() {}
 		},
-		watcherFactory: func() (FsWatcher, error) {
+		WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
-		pendingTimers: make(map[string]*time.Timer),
-		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+		PendingTimers: make(map[string]*time.Timer),
+		HashRequests:  make(chan hashRequest, hashRequestBufSize),
 	}
 
 	events := make(chan ChangeEvent, 10)
@@ -660,20 +660,20 @@ func TestWatch_DeleteCollider_ThreeWay_StillBlocked(t *testing.T) {
 
 	mockWatcher := newMockFsWatcher()
 	obs := &LocalObserver{
-		baseline:       emptyBaseline(),
-		logger:         testLogger(t),
-		collisionPeers: make(map[string]map[string]struct{}),
-		sleepFunc: func(_ context.Context, _ time.Duration) error {
+		Baseline:       emptyBaseline(),
+		Logger:         testLogger(t),
+		CollisionPeers: make(map[string]map[string]struct{}),
+		SleepFunc: func(_ context.Context, _ time.Duration) error {
 			return nil
 		},
-		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return make(chan time.Time), func() {}
 		},
-		watcherFactory: func() (FsWatcher, error) {
+		WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
-		pendingTimers: make(map[string]*time.Timer),
-		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+		PendingTimers: make(map[string]*time.Timer),
+		HashRequests:  make(chan hashRequest, hashRequestBufSize),
 	}
 
 	events := make(chan ChangeEvent, 10)
@@ -758,26 +758,26 @@ func TestWatch_SafetyScan_ClearsPeers(t *testing.T) {
 	safetyTickCh := make(chan time.Time, 1)
 	mockWatcher := newMockFsWatcher()
 	obs := &LocalObserver{
-		baseline:       emptyBaseline(),
-		logger:         testLogger(t),
-		collisionPeers: make(map[string]map[string]struct{}),
-		dirNameCache:   make(map[string]map[string][]string),
-		sleepFunc: func(_ context.Context, _ time.Duration) error {
+		Baseline:       emptyBaseline(),
+		Logger:         testLogger(t),
+		CollisionPeers: make(map[string]map[string]struct{}),
+		DirNameCache:   make(map[string]map[string][]string),
+		SleepFunc: func(_ context.Context, _ time.Duration) error {
 			return nil
 		},
-		safetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
+		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return safetyTickCh, func() {}
 		},
-		watcherFactory: func() (FsWatcher, error) {
+		WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
-		pendingTimers: make(map[string]*time.Timer),
-		hashRequests:  make(chan hashRequest, hashRequestBufSize),
+		PendingTimers: make(map[string]*time.Timer),
+		HashRequests:  make(chan hashRequest, hashRequestBufSize),
 	}
 
 	// Pre-populate collision peers and dir name cache.
-	obs.addCollisionPeer("a.txt", "A.txt")
-	obs.dirNameCache[dir] = map[string][]string{
+	obs.AddCollisionPeer("a.txt", "A.txt")
+	obs.DirNameCache[dir] = map[string][]string{
 		"a.txt": {"a.txt", "A.txt"},
 	}
 
@@ -802,6 +802,6 @@ func TestWatch_SafetyScan_ClearsPeers(t *testing.T) {
 
 	// Both maps should have been cleared by the safety scan.
 	// Safe to read after watchLoop exits (single-goroutine fields).
-	assert.Empty(t, obs.collisionPeers, "collisionPeers should be cleared after safety scan")
-	assert.Empty(t, obs.dirNameCache, "dirNameCache should be cleared after safety scan")
+	assert.Empty(t, obs.CollisionPeers, "collisionPeers should be cleared after safety scan")
+	assert.Empty(t, obs.DirNameCache, "dirNameCache should be cleared after safety scan")
 }
