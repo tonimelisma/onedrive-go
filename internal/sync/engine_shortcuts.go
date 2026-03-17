@@ -15,18 +15,19 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // maxShortcutConcurrency limits how many shortcut scopes are observed in parallel.
 const maxShortcutConcurrency = 4
 
-// filterOutShortcuts removes ChangeShortcut events from a slice — they are
+// filterOutShortcuts removes synctypes.ChangeShortcut events from a slice — they are
 // consumed by processShortcuts and should not enter the planner as regular events.
-func filterOutShortcuts(events []ChangeEvent) []ChangeEvent {
+func filterOutShortcuts(events []synctypes.ChangeEvent) []synctypes.ChangeEvent {
 	n := 0
 
 	for i := range events {
-		if events[i].Type != ChangeShortcut {
+		if events[i].Type != synctypes.ChangeShortcut {
 			events[n] = events[i]
 			n++
 		}
@@ -40,22 +41,22 @@ func filterOutShortcuts(events []ChangeEvent) []ChangeEvent {
 // Returns additional ChangeEvents for shortcut content that should be fed
 // into the planner alongside primary drive events.
 func (e *Engine) processShortcuts(
-	ctx context.Context, remoteEvents []ChangeEvent, bl *Baseline, dryRun bool,
-) ([]ChangeEvent, error) {
+	ctx context.Context, remoteEvents []synctypes.ChangeEvent, bl *synctypes.Baseline, dryRun bool,
+) ([]synctypes.ChangeEvent, error) {
 	if e.folderDelta == nil && e.recursiveLister == nil {
 		return nil, nil
 	}
 
 	// Step 1: Extract shortcut events and detect removed shortcuts.
-	var shortcutEvents []ChangeEvent
+	var shortcutEvents []synctypes.ChangeEvent
 
 	removedShortcutIDs := make(map[string]bool)
 
 	for i := range remoteEvents {
-		switch remoteEvents[i].Type { //nolint:exhaustive // only ChangeShortcut and ChangeDelete are relevant here
-		case ChangeShortcut:
+		switch remoteEvents[i].Type { //nolint:exhaustive // only synctypes.ChangeShortcut and synctypes.ChangeDelete are relevant here
+		case synctypes.ChangeShortcut:
 			shortcutEvents = append(shortcutEvents, remoteEvents[i])
-		case ChangeDelete:
+		case synctypes.ChangeDelete:
 			removedShortcutIDs[remoteEvents[i].ItemID] = true
 		}
 	}
@@ -106,10 +107,10 @@ func (e *Engine) processShortcuts(
 	return e.observeShortcutContentFromList(ctx, shortcuts, bl, collisions)
 }
 
-// registerShortcuts upserts shortcuts from ChangeShortcut events.
+// registerShortcuts upserts shortcuts from synctypes.ChangeShortcut events.
 // For new shortcuts, detects the source drive type to determine the
 // observation strategy (delta vs enumerate).
-func (e *Engine) registerShortcuts(ctx context.Context, events []ChangeEvent) error {
+func (e *Engine) registerShortcuts(ctx context.Context, events []synctypes.ChangeEvent) error {
 	for i := range events {
 		ev := &events[i]
 
@@ -118,12 +119,12 @@ func (e *Engine) registerShortcuts(ctx context.Context, events []ChangeEvent) er
 			return fmt.Errorf("sync: checking shortcut %s: %w", ev.ItemID, err)
 		}
 
-		sc := Shortcut{
+		sc := synctypes.Shortcut{
 			ItemID:       ev.ItemID,
 			RemoteDrive:  ev.RemoteDriveID,
 			RemoteItem:   ev.RemoteItemID,
 			LocalPath:    ev.Path,
-			Observation:  ObservationUnknown,
+			Observation:  synctypes.ObservationUnknown,
 			DiscoveredAt: time.Now().Unix(),
 		}
 
@@ -161,7 +162,7 @@ func (e *Engine) registerShortcuts(ctx context.Context, events []ChangeEvent) er
 // and returns the set of item IDs that should be skipped during observation.
 // Detects: exact duplicates, prefix nesting (Shared vs Shared/Sub), and
 // conflicts with primary drive baseline entries.
-func detectShortcutCollisionsFromList(shortcuts []Shortcut, bl *Baseline, logger *slog.Logger) map[string]bool {
+func detectShortcutCollisionsFromList(shortcuts []synctypes.Shortcut, bl *synctypes.Baseline, logger *slog.Logger) map[string]bool {
 	collisions := make(map[string]bool)
 
 	// Check shortcut-vs-shortcut: exact duplicates and prefix nesting.
@@ -213,7 +214,7 @@ func detectShortcutCollisionsFromList(shortcuts []Shortcut, bl *Baseline, logger
 
 	// Check shortcut-vs-shortcut: duplicate source folder.
 	// Sort by ItemID for deterministic winner selection (lowest ID wins).
-	sorted := make([]Shortcut, len(shortcuts))
+	sorted := make([]synctypes.Shortcut, len(shortcuts))
 	copy(sorted, shortcuts)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ItemID < sorted[j].ItemID })
 
@@ -275,22 +276,22 @@ func (e *Engine) detectDriveType(ctx context.Context, remoteDriveID string) (str
 			slog.String("error", err.Error()),
 		)
 
-		return "", ObservationEnumerate
+		return "", synctypes.ObservationEnumerate
 	}
 
 	driveType := drive.DriveType
-	obs := ObservationEnumerate
+	obs := synctypes.ObservationEnumerate
 
 	if driveType == "personal" {
-		obs = ObservationDelta
+		obs = synctypes.ObservationDelta
 	}
 
 	return driveType, obs
 }
 
-// handleRemovedShortcuts processes ChangeDelete events for known shortcuts.
+// handleRemovedShortcuts processes synctypes.ChangeDelete events for known shortcuts.
 // Takes pre-loaded shortcuts to avoid a redundant DB query.
-func (e *Engine) handleRemovedShortcuts(ctx context.Context, deletedItemIDs map[string]bool, shortcuts []Shortcut) error {
+func (e *Engine) handleRemovedShortcuts(ctx context.Context, deletedItemIDs map[string]bool, shortcuts []synctypes.Shortcut) error {
 	if len(deletedItemIDs) == 0 {
 		return nil
 	}
@@ -324,7 +325,7 @@ func (e *Engine) handleRemovedShortcuts(ctx context.Context, deletedItemIDs map[
 		// When a shortcut is removed while a scope block exists, held
 		// actions are no longer valid — discard instead of dispatch (R-2.10.38).
 		scKey := sc.RemoteDrive + ":" + sc.RemoteItem
-		scopeKey := SKQuotaShortcut(scKey)
+		scopeKey := synctypes.SKQuotaShortcut(scKey)
 
 		if e.watch != nil {
 			if err := e.watch.scopeGate.ClearScopeBlock(ctx, scopeKey); err != nil {
@@ -351,15 +352,15 @@ func (e *Engine) handleRemovedShortcuts(ctx context.Context, deletedItemIDs map[
 // Delta tokens are collected and committed only after all scopes succeed,
 // preventing partial token advancement on crash.
 type scopeResult struct {
-	events     []ChangeEvent
+	events     []synctypes.ChangeEvent
 	deltaToken string // non-empty for delta-observed scopes
-	shortcut   *Shortcut
+	shortcut   *synctypes.Shortcut
 }
 
 // shortcutDispatchFunc is the per-scope callback used by
 // observeShortcutsConcurrently. Each caller supplies a closure that performs
 // the actual observation (delta, enumerate, or reconciliation).
-type shortcutDispatchFunc func(ctx context.Context, sc *Shortcut) (scopeResult, error)
+type shortcutDispatchFunc func(ctx context.Context, sc *synctypes.Shortcut) (scopeResult, error)
 
 // observeShortcutsConcurrently fans out shortcut observation across up to
 // maxShortcutConcurrency goroutines. It handles errgroup setup, collision
@@ -367,9 +368,9 @@ type shortcutDispatchFunc func(ctx context.Context, sc *Shortcut) (scopeResult, 
 // completion logging. The dispatch func contains the per-scope observation
 // strategy — callers only need to supply a closure and a log label.
 func (e *Engine) observeShortcutsConcurrently(
-	ctx context.Context, shortcuts []Shortcut, collisions map[string]bool,
+	ctx context.Context, shortcuts []synctypes.Shortcut, collisions map[string]bool,
 	dispatch shortcutDispatchFunc, logContext string,
-) ([]ChangeEvent, error) {
+) ([]synctypes.ChangeEvent, error) {
 	if len(shortcuts) == 0 {
 		return nil, nil
 	}
@@ -422,7 +423,7 @@ func (e *Engine) observeShortcutsConcurrently(
 	}
 
 	// Commit all delta tokens after all scopes are done.
-	var allEvents []ChangeEvent
+	var allEvents []synctypes.ChangeEvent
 
 	for i := range results {
 		allEvents = append(allEvents, results[i].events...)
@@ -453,10 +454,10 @@ func (e *Engine) observeShortcutsConcurrently(
 // (B-333). Delta tokens are deferred until all scopes complete, ensuring
 // atomicity.
 func (e *Engine) observeShortcutContentFromList(
-	ctx context.Context, shortcuts []Shortcut, bl *Baseline, collisions map[string]bool,
-) ([]ChangeEvent, error) {
+	ctx context.Context, shortcuts []synctypes.Shortcut, bl *synctypes.Baseline, collisions map[string]bool,
+) ([]synctypes.ChangeEvent, error) {
 	return e.observeShortcutsConcurrently(ctx, shortcuts, collisions,
-		func(gCtx context.Context, sc *Shortcut) (scopeResult, error) {
+		func(gCtx context.Context, sc *synctypes.Shortcut) (scopeResult, error) {
 			return e.observeSingleShortcut(gCtx, sc, bl)
 		},
 		"observation",
@@ -465,14 +466,14 @@ func (e *Engine) observeShortcutContentFromList(
 
 // observeSingleShortcut observes content for one shortcut scope.
 // Returns a scopeResult with events and an optional delta token to commit.
-func (e *Engine) observeSingleShortcut(ctx context.Context, sc *Shortcut, bl *Baseline) (scopeResult, error) {
+func (e *Engine) observeSingleShortcut(ctx context.Context, sc *synctypes.Shortcut, bl *synctypes.Baseline) (scopeResult, error) {
 	remoteDriveID := driveid.New(sc.RemoteDrive)
 
 	switch sc.Observation {
-	case ObservationDelta:
+	case synctypes.ObservationDelta:
 		return e.observeShortcutDelta(ctx, sc, remoteDriveID, bl)
 	default:
-		// B-335: ObservationEnumerate and ObservationUnknown both use enumerate.
+		// B-335: synctypes.ObservationEnumerate and synctypes.ObservationUnknown both use enumerate.
 		return e.observeShortcutEnumerate(ctx, sc, remoteDriveID, bl)
 	}
 }
@@ -486,7 +487,7 @@ func (e *Engine) observeSingleShortcut(ctx context.Context, sc *Shortcut, bl *Ba
 // deleted. Orphan detection for delta-observed shortcuts is handled by
 // reconcileShortcutDelta, which uses an empty token to enumerate all items.
 func (e *Engine) observeShortcutDelta(
-	ctx context.Context, sc *Shortcut, remoteDriveID driveid.ID, bl *Baseline,
+	ctx context.Context, sc *synctypes.Shortcut, remoteDriveID driveid.ID, bl *synctypes.Baseline,
 ) (scopeResult, error) {
 	if e.folderDelta == nil {
 		return scopeResult{}, fmt.Errorf("sync: folder delta not available for shortcut %s", sc.ItemID)
@@ -524,7 +525,7 @@ func (e *Engine) observeShortcutDelta(
 
 // observeShortcutEnumerate uses recursive listing to observe shortcut content.
 func (e *Engine) observeShortcutEnumerate(
-	ctx context.Context, sc *Shortcut, remoteDriveID driveid.ID, bl *Baseline,
+	ctx context.Context, sc *synctypes.Shortcut, remoteDriveID driveid.ID, bl *synctypes.Baseline,
 ) (scopeResult, error) {
 	if e.recursiveLister == nil {
 		return scopeResult{}, fmt.Errorf("sync: recursive lister not available for shortcut %s", sc.ItemID)
@@ -551,7 +552,7 @@ func (e *Engine) observeShortcutEnumerate(
 // scopes. For delta-capable shortcuts, runs a fresh delta with empty token.
 // For enumerate-capable shortcuts, runs ListChildrenRecursive. Both detect
 // orphans against the baseline.
-func (e *Engine) reconcileShortcutScopes(ctx context.Context, bl *Baseline) ([]ChangeEvent, error) {
+func (e *Engine) reconcileShortcutScopes(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, error) {
 	if e.folderDelta == nil && e.recursiveLister == nil {
 		return nil, nil
 	}
@@ -568,11 +569,11 @@ func (e *Engine) reconcileShortcutScopes(ctx context.Context, bl *Baseline) ([]C
 	collisions := detectShortcutCollisionsFromList(shortcuts, bl, e.logger)
 
 	return e.observeShortcutsConcurrently(ctx, shortcuts, collisions,
-		func(gCtx context.Context, sc *Shortcut) (scopeResult, error) {
+		func(gCtx context.Context, sc *synctypes.Shortcut) (scopeResult, error) {
 			remoteDriveID := driveid.New(sc.RemoteDrive)
 
 			switch sc.Observation {
-			case ObservationDelta:
+			case synctypes.ObservationDelta:
 				return e.reconcileShortcutDelta(gCtx, sc, remoteDriveID, bl)
 			default:
 				return e.observeShortcutEnumerate(gCtx, sc, remoteDriveID, bl)
@@ -586,7 +587,7 @@ func (e *Engine) reconcileShortcutScopes(ctx context.Context, bl *Baseline) ([]C
 // by using an empty token. This enumerates all items via delta and detects
 // orphans that may have been missed by incremental delta.
 func (e *Engine) reconcileShortcutDelta(
-	ctx context.Context, sc *Shortcut, remoteDriveID driveid.ID, bl *Baseline,
+	ctx context.Context, sc *synctypes.Shortcut, remoteDriveID driveid.ID, bl *synctypes.Baseline,
 ) (scopeResult, error) {
 	if e.folderDelta == nil {
 		return scopeResult{}, fmt.Errorf("sync: folder delta not available for shortcut %s", sc.ItemID)

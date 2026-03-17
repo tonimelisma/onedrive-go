@@ -136,6 +136,7 @@ func TestScopeGate_Admit_Blocked(t *testing.T) {
 	assert.Equal(t, synctypes.SKThrottleAccount, key, "action matching blocked scope should return the scope key")
 }
 
+// Validates: R-2.10
 func TestScopeGate_Admit_NotBlocked(t *testing.T) {
 	t.Parallel()
 
@@ -301,6 +302,7 @@ func TestScopeGate_Admit_QuotaShortcut(t *testing.T) {
 // SetScopeBlock / ClearScopeBlock lifecycle tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10
 func TestScopeGate_SetScopeBlock_Persists(t *testing.T) {
 	t.Parallel()
 
@@ -329,6 +331,7 @@ func TestScopeGate_SetScopeBlock_Persists(t *testing.T) {
 	require.Contains(t, store.blocks, synctypes.SKThrottleAccount.String())
 }
 
+// Validates: R-2.10
 func TestScopeGate_SetScopeBlock_StoreError(t *testing.T) {
 	t.Parallel()
 
@@ -351,6 +354,7 @@ func TestScopeGate_SetScopeBlock_StoreError(t *testing.T) {
 	assert.False(t, ok, "memory should not be updated on store error")
 }
 
+// Validates: R-2.10
 func TestScopeGate_ClearScopeBlock(t *testing.T) {
 	t.Parallel()
 
@@ -375,6 +379,7 @@ func TestScopeGate_ClearScopeBlock(t *testing.T) {
 	assert.Equal(t, 1, store.deleteCalls)
 }
 
+// Validates: R-2.10
 func TestScopeGate_ClearScopeBlock_NotFound(t *testing.T) {
 	t.Parallel()
 
@@ -416,6 +421,7 @@ func TestScopeGate_ClearScopeBlock_StoreError(t *testing.T) {
 // IsScopeBlocked
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10
 func TestScopeGate_IsScopeBlocked(t *testing.T) {
 	t.Parallel()
 
@@ -437,6 +443,7 @@ func TestScopeGate_IsScopeBlocked(t *testing.T) {
 // GetScopeBlock
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10
 func TestScopeGate_GetScopeBlock_ReturnsCopy(t *testing.T) {
 	t.Parallel()
 
@@ -501,6 +508,7 @@ func TestScopeGate_ExtendTrialInterval(t *testing.T) {
 	assert.Equal(t, 1, store.upsertCalls, "store should be called for persistence")
 }
 
+// Validates: R-2.10.5
 func TestScopeGate_ExtendTrialInterval_UnknownScope(t *testing.T) {
 	t.Parallel()
 
@@ -550,6 +558,7 @@ func TestScopeGate_AllDueTrials_ReturnsDueScopes(t *testing.T) {
 	assert.Contains(t, due, synctypes.SKService)
 }
 
+// Validates: R-2.10.5
 func TestScopeGate_AllDueTrials_SkipsZeroNextTrialAt(t *testing.T) {
 	t.Parallel()
 
@@ -566,6 +575,7 @@ func TestScopeGate_AllDueTrials_SkipsZeroNextTrialAt(t *testing.T) {
 	assert.Empty(t, due, "zero NextTrialAt should be excluded")
 }
 
+// Validates: R-2.10.5
 func TestScopeGate_AllDueTrials_NoneReturnsEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -613,6 +623,7 @@ func TestScopeGate_EarliestTrialAt_ReturnsEarliest(t *testing.T) {
 		"should return the earlier of the two")
 }
 
+// Validates: R-2.10.5
 func TestScopeGate_EarliestTrialAt_NoBlocks(t *testing.T) {
 	t.Parallel()
 
@@ -643,6 +654,7 @@ func TestScopeGate_EarliestTrialAt_NoHeldQueueCheck(t *testing.T) {
 	assert.Equal(t, now.Add(time.Minute), earliest)
 }
 
+// Validates: R-2.10.5
 func TestScopeGate_EarliestTrialAt_SkipsZeroNextTrialAt(t *testing.T) {
 	t.Parallel()
 
@@ -663,6 +675,7 @@ func TestScopeGate_EarliestTrialAt_SkipsZeroNextTrialAt(t *testing.T) {
 // ScopeBlockKeys
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10
 func TestScopeGate_ScopeBlockKeys(t *testing.T) {
 	t.Parallel()
 
@@ -697,6 +710,7 @@ func TestScopeGate_ScopeBlockKeys(t *testing.T) {
 // LoadFromStore
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10
 func TestScopeGate_LoadFromStore(t *testing.T) {
 	t.Parallel()
 
@@ -738,6 +752,7 @@ func TestScopeGate_LoadFromStore(t *testing.T) {
 	assert.Equal(t, 1, store.listCalls, "store.ListScopeBlocks should be called once")
 }
 
+// Validates: R-2.10
 func TestScopeGate_LoadFromStore_Error(t *testing.T) {
 	t.Parallel()
 
@@ -750,6 +765,7 @@ func TestScopeGate_LoadFromStore_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "database locked")
 }
 
+// Validates: R-2.10
 func TestScopeGate_LoadFromStore_ReplacesExisting(t *testing.T) {
 	t.Parallel()
 
@@ -781,6 +797,7 @@ func TestScopeGate_LoadFromStore_ReplacesExisting(t *testing.T) {
 // Concurrency / race detector tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10, R-6.4
 func TestScopeGate_ConcurrentAdmitDuringSetBlock(t *testing.T) {
 	t.Parallel()
 
@@ -822,6 +839,7 @@ func TestScopeGate_ConcurrentAdmitDuringSetBlock(t *testing.T) {
 	wg.Wait()
 }
 
+// Validates: R-2.10.5, R-6.4
 func TestScopeGate_ConcurrentExtendAndAllDueTrials(t *testing.T) {
 	t.Parallel()
 
@@ -863,6 +881,7 @@ func TestScopeGate_ConcurrentExtendAndAllDueTrials(t *testing.T) {
 	wg.Wait()
 }
 
+// Validates: R-2.10, R-6.4
 func TestScopeGate_ConcurrentLoadFromStore(t *testing.T) {
 	t.Parallel()
 

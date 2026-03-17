@@ -3,7 +3,7 @@ package sync
 // This file provides executor mock types and test helper functions for
 // fault_injection_test.go. The helpers were previously defined in
 // executor_test.go but that file was migrated to internal/syncexec.
-// Since fault_injection_test.go tests the sync package's WorkerPool
+// Since fault_injection_test.go tests the sync package's syncexec.WorkerPool
 // integration (using the type aliases in types.go), these helpers must
 // live in the same test package.
 
@@ -21,6 +21,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/syncexec"
 )
 
 // executorMockItemClient is a test double for synctypes.ItemClient.
@@ -102,16 +103,16 @@ func (m *executorMockUploader) Upload(ctx context.Context, driveID driveid.ID, p
 	return nil, fmt.Errorf("Upload not mocked")
 }
 
-// newTestExecutorConfig creates a test ExecutorConfig with a temp sync root,
+// newTestExecutorConfig creates a test syncexec.ExecutorConfig with a temp sync root,
 // injecting the provided mock item client, downloader, and uploader.
-func newTestExecutorConfig(t *testing.T, items *executorMockItemClient, dl *executorMockDownloader, ul *executorMockUploader) (*ExecutorConfig, string) {
+func newTestExecutorConfig(t *testing.T, items *executorMockItemClient, dl *executorMockDownloader, ul *executorMockUploader) (*syncexec.ExecutorConfig, string) {
 	t.Helper()
 
 	syncRoot := t.TempDir()
 	driveID := driveid.New(testDriveID)
 	logger := testLogger(t)
 
-	cfg := NewExecutorConfig(items, dl, ul, syncRoot, driveID, logger)
+	cfg := syncexec.NewExecutorConfig(items, dl, ul, syncRoot, driveID, logger)
 	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
 	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) })
 

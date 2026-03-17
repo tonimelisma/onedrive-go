@@ -13,7 +13,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // defaultVisiblePaths is the maximum number of paths shown per group
@@ -24,7 +24,7 @@ const defaultVisiblePaths = 5
 type failureGroup struct {
 	IssueType string
 	ScopeKey  string // humanized (e.g. "Team Docs" instead of internal drive ID)
-	Message   sync.IssueMessage
+	Message   synctypes.IssueMessage
 	Paths     []string
 	Count     int
 }
@@ -32,7 +32,9 @@ type failureGroup struct {
 // groupFailures groups failures by (issue_type, scope_key), humanizing scope
 // keys using the provided shortcut list. big_delete_held entries are separated
 // into a distinct slice.
-func groupFailures(failures []sync.SyncFailureRow, shortcuts []sync.Shortcut) (groups []failureGroup, heldDeletes []sync.SyncFailureRow) {
+func groupFailures(
+	failures []synctypes.SyncFailureRow, shortcuts []synctypes.Shortcut,
+) (groups []failureGroup, heldDeletes []synctypes.SyncFailureRow) {
 	type groupKey struct {
 		issueType string
 		scopeKey  string
@@ -43,7 +45,7 @@ func groupFailures(failures []sync.SyncFailureRow, shortcuts []sync.Shortcut) (g
 	for i := range failures {
 		f := &failures[i]
 
-		if f.IssueType == sync.IssueBigDeleteHeld {
+		if f.IssueType == synctypes.IssueBigDeleteHeld {
 			heldDeletes = append(heldDeletes, *f)
 			continue
 		}
@@ -59,7 +61,7 @@ func groupFailures(failures []sync.SyncFailureRow, shortcuts []sync.Shortcut) (g
 			groups = append(groups, failureGroup{
 				IssueType: f.IssueType,
 				ScopeKey:  humanScope,
-				Message:   sync.MessageForIssueType(f.IssueType),
+				Message:   synctypes.MessageForIssueType(f.IssueType),
 				Paths:     []string{f.Path},
 				Count:     1,
 			})
@@ -126,7 +128,7 @@ func printGroupedFailures(w io.Writer, groups []failureGroup, verbose bool) {
 const heldDeleteDirGroupThreshold = 20
 
 // printPendingRetries renders a summary of pending retries grouped by scope.
-func printPendingRetries(w io.Writer, groups []sync.PendingRetryGroup, shortcuts []sync.Shortcut) {
+func printPendingRetries(w io.Writer, groups []synctypes.PendingRetryGroup, shortcuts []synctypes.Shortcut) {
 	total := 0
 	for _, g := range groups {
 		total += g.Count
@@ -152,7 +154,7 @@ func printPendingRetries(w io.Writer, groups []sync.PendingRetryGroup, shortcuts
 
 // printHeldDeletesGrouped renders held deletes grouped by parent directory
 // when the count exceeds the threshold, or individually when small.
-func printHeldDeletesGrouped(w io.Writer, heldDeletes []sync.SyncFailureRow, verbose bool) {
+func printHeldDeletesGrouped(w io.Writer, heldDeletes []synctypes.SyncFailureRow, verbose bool) {
 	fmt.Fprintf(w, "HELD DELETES (%d files — big-delete protection triggered, run `issues clear` to approve)\n",
 		len(heldDeletes))
 
@@ -263,7 +265,10 @@ type heldDeleteJSON struct {
 }
 
 // printGroupedIssuesJSON writes the structured JSON output for issues.
-func printGroupedIssuesJSON(w io.Writer, conflicts []sync.ConflictRecord, groups []failureGroup, heldDeletes []sync.SyncFailureRow) error {
+func printGroupedIssuesJSON(
+	w io.Writer, conflicts []synctypes.ConflictRecord,
+	groups []failureGroup, heldDeletes []synctypes.SyncFailureRow,
+) error {
 	out := issuesOutputJSON{
 		Conflicts:     make([]conflictJSON, len(conflicts)),
 		FailureGroups: make([]failureGroupJSON, len(groups)),
@@ -306,9 +311,9 @@ func printGroupedIssuesJSON(w io.Writer, conflicts []sync.ConflictRecord, groups
 // command using grouped failure display. When verbose is true, all paths are
 // shown; otherwise only the first defaultVisiblePaths per group are shown.
 func printGroupedIssuesText(
-	w io.Writer, conflicts []sync.ConflictRecord,
-	groups []failureGroup, heldDeletes []sync.SyncFailureRow,
-	pendingRetries []sync.PendingRetryGroup, shortcuts []sync.Shortcut,
+	w io.Writer, conflicts []synctypes.ConflictRecord,
+	groups []failureGroup, heldDeletes []synctypes.SyncFailureRow,
+	pendingRetries []synctypes.PendingRetryGroup, shortcuts []synctypes.Shortcut,
 	history, verbose bool,
 ) {
 	sections := 0

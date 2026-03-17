@@ -25,6 +25,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/syncplan"
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // forceSafetyMax is the maximum threshold used when --force is set,
@@ -49,7 +50,7 @@ const trialPendingTTL = 30 * time.Second
 // the trial timer fires and reobserve succeeds, consumed when the planner's
 // fresh action arrives at admitAndDispatch or admitReady.
 type trialEntry struct {
-	scopeKey ScopeKey
+	scopeKey synctypes.ScopeKey
 	created  time.Time
 }
 
@@ -114,12 +115,11 @@ type Engine struct {
 	baseline           *syncstore.SyncStore
 	planner            *syncplan.Planner
 	execCfg            *syncexec.ExecutorConfig
-	fetcher            DeltaFetcher
-	driveVerifier      DriveVerifier      // optional (B-074)
-	folderDelta        FolderDeltaFetcher // optional: for shortcut observation (6.4b)
-	recursiveLister    RecursiveLister    // optional: for shortcut observation (6.4b)
-	permChecker        PermissionChecker  // optional: for shared folder permission checks (6.4c)
-	permCache          *permissionCache   // per-pass in-memory cache of folder→canWrite
+	fetcher            synctypes.DeltaFetcher
+	driveVerifier      synctypes.DriveVerifier      // optional (B-074)
+	folderDelta        synctypes.FolderDeltaFetcher // optional: for shortcut observation (6.4b)
+	recursiveLister    synctypes.RecursiveLister    // optional: for shortcut observation (6.4b)
+	permHandler        *PermissionHandler           // encapsulates all permission logic (6.4c)
 	syncRoot           string
 	driveID            driveid.ID
 	logger             *slog.Logger
@@ -133,7 +133,7 @@ type Engine struct {
 	// observation; read by drainWorkerResults for 403 handling. Stays on
 	// Engine because setShortcuts is called from RunOnce (one-shot)
 	// where watch is nil.
-	watchShortcuts   []Shortcut
+	watchShortcuts   []synctypes.Shortcut
 	watchShortcutsMu stdsync.RWMutex
 
 	// depGraph is the pure dependency graph. Tracks action dependencies and
@@ -144,7 +144,7 @@ type Engine struct {
 	// readyCh feeds admitted actions to the worker pool. The engine sends
 	// actions that pass the scope gate (or bypass it in one-shot mode).
 	// Workers read from this channel via the WorkerPool.
-	readyCh chan *TrackedAction
+	readyCh chan *synctypes.TrackedAction
 
 	// trialCh is the persistent, buffered(1) channel for trial timer signals.
 	// Created in NewEngine. In one-shot mode, no writer → harmlessly blocks
@@ -174,7 +174,7 @@ type Engine struct {
 // NewEngine creates an Engine, initializing the SyncStore (which opens
 // the SQLite database and runs migrations). Returns an error if DB init fails
 // or if DriveID is zero (indicates a config/login issue).
-func NewEngine(cfg *EngineConfig) (*Engine, error) {
+func NewEngine(cfg *synctypes.EngineConfig) (*Engine, error) {
 	if cfg.DriveID.IsZero() {
 		return nil, fmt.Errorf("sync: engine requires non-zero drive ID")
 	}
@@ -206,10 +206,10 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 	// Default threshold if not set by config.
 	bdThreshold := cfg.BigDeleteThreshold
 	if bdThreshold == 0 {
-		bdThreshold = defaultBigDeleteThreshold
+		bdThreshold = synctypes.DefaultBigDeleteThreshold
 	}
 
-	return &Engine{
+	e := &Engine{
 		baseline:           bm,
 		planner:            syncplan.NewPlanner(cfg.Logger),
 		execCfg:            execCfg,
@@ -217,8 +217,6 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 		driveVerifier:      cfg.DriveVerifier,
 		folderDelta:        cfg.FolderDelta,
 		recursiveLister:    cfg.RecursiveLister,
-		permChecker:        cfg.PermChecker,
-		permCache:          newPermissionCache(),
 		sessionStore:       sessionStore,
 		syncRoot:           cfg.SyncRoot,
 		driveID:            cfg.DriveID,
@@ -228,7 +226,22 @@ func NewEngine(cfg *EngineConfig) (*Engine, error) {
 		bigDeleteThreshold: bdThreshold,
 		nowFn:              time.Now,
 		trialCh:            make(chan struct{}, 1),
-	}, nil
+	}
+
+	e.permHandler = &PermissionHandler{
+		baseline:        e.baseline,
+		permChecker:     cfg.PermChecker,
+		permCache:       newPermissionCache(),
+		syncRoot:        cfg.SyncRoot,
+		driveID:         cfg.DriveID,
+		logger:          cfg.Logger,
+		nowFn:           e.nowFunc,
+		setScopeBlockFn: e.setScopeBlock,
+		onScopeClearFn:  e.onScopeClear,
+		isWatchModeFn:   func() bool { return e.watch != nil },
+	}
+
+	return e, nil
 }
 
 // Close releases resources held by the engine. Nil-safe for observer
@@ -262,7 +275,7 @@ func (e *Engine) Close() error {
 }
 
 // verifyDriveIdentity checks that the configured drive ID matches the remote
-// API (B-074). Returns nil if no DriveVerifier is configured (optional check).
+// API (B-074). Returns nil if no synctypes.DriveVerifier is configured (optional check).
 func (e *Engine) verifyDriveIdentity(ctx context.Context) error {
 	if e.driveVerifier == nil {
 		return nil
@@ -295,7 +308,7 @@ func (e *Engine) verifyDriveIdentity(ctx context.Context) error {
 //  7. Return early if dry-run
 //  8. Build DepGraph, start worker pool
 //  9. Wait for completion, commit delta token
-func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*SyncReport, error) {
+func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts synctypes.RunOpts) (*synctypes.SyncReport, error) {
 	start := time.Now()
 
 	e.logger.Info("sync pass starting",
@@ -332,13 +345,13 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 
 	// Recheck permissions — clear any permission_denied issues
 	// for folders that have become writable since the last pass.
-	if e.permChecker != nil && scErr == nil {
-		e.recheckPermissions(ctx, bl, shortcuts)
+	if e.permHandler.HasPermChecker() && scErr == nil {
+		e.permHandler.recheckPermissions(ctx, bl, shortcuts)
 	}
 
 	// Recheck local permission denials — clear scope blocks for
 	// directories that have become accessible since the last pass (R-2.10.13).
-	e.recheckLocalPermissions(ctx)
+	e.permHandler.recheckLocalPermissions(ctx)
 
 	// Steps 2-4: Observe remote + local, buffer, and flush.
 	changes, err := e.observeChanges(ctx, bl, mode, opts.DryRun, opts.FullReconcile)
@@ -352,7 +365,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 			slog.Duration("duration", time.Since(start)),
 		)
 
-		report := &SyncReport{
+		report := &synctypes.SyncReport{
 			Mode:     mode,
 			DryRun:   opts.DryRun,
 			Duration: time.Since(start),
@@ -367,7 +380,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOpts) (*Syn
 
 	// Step 6: Plan actions.
 	safety := e.resolveSafetyConfig(opts.Force)
-	denied := e.permCache.deniedPrefixes()
+	denied := e.permHandler.DeniedPrefixes()
 
 	plan, err := e.planner.Plan(changes, bl, mode, safety, denied)
 	if err != nil {
@@ -427,8 +440,8 @@ func (e *Engine) postSyncHousekeeping() {
 // directly to readyCh. Scope detection (ScopeState) is nil in one-shot;
 // feedScopeDetection is nil-guarded → no-op.
 func (e *Engine) executePlan(
-	ctx context.Context, plan *ActionPlan, report *SyncReport,
-	bl *Baseline,
+	ctx context.Context, plan *synctypes.ActionPlan, report *synctypes.SyncReport,
+	bl *synctypes.Baseline,
 ) {
 	if len(plan.Actions) == 0 {
 		return
@@ -457,7 +470,7 @@ func (e *Engine) executePlan(
 	// Scope blocking is watch-mode only (§2.3).
 	depGraph := syncdispatch.NewDepGraph(e.logger)
 	e.depGraph = depGraph
-	e.readyCh = make(chan *TrackedAction, len(plan.Actions))
+	e.readyCh = make(chan *synctypes.TrackedAction, len(plan.Actions))
 
 	// Add all actions to the graph. Immediately-ready actions (no deps)
 	// are sent to readyCh before workers start — workers begin consuming
@@ -503,26 +516,26 @@ func (e *Engine) executePlan(
 	report.Succeeded, report.Failed, report.Errors = e.resultStats()
 }
 
-// buildReportFromCounts populates a SyncReport with plan counts.
-func buildReportFromCounts(counts map[ActionType]int, mode SyncMode, opts RunOpts) *SyncReport {
-	return &SyncReport{
+// buildReportFromCounts populates a synctypes.SyncReport with plan counts.
+func buildReportFromCounts(counts map[synctypes.ActionType]int, mode synctypes.SyncMode, opts synctypes.RunOpts) *synctypes.SyncReport {
+	return &synctypes.SyncReport{
 		Mode:          mode,
 		DryRun:        opts.DryRun,
-		FolderCreates: counts[ActionFolderCreate],
-		Moves:         counts[ActionLocalMove] + counts[ActionRemoteMove],
-		Downloads:     counts[ActionDownload],
-		Uploads:       counts[ActionUpload],
-		LocalDeletes:  counts[ActionLocalDelete],
-		RemoteDeletes: counts[ActionRemoteDelete],
-		Conflicts:     counts[ActionConflict],
-		SyncedUpdates: counts[ActionUpdateSynced],
-		Cleanups:      counts[ActionCleanup],
+		FolderCreates: counts[synctypes.ActionFolderCreate],
+		Moves:         counts[synctypes.ActionLocalMove] + counts[synctypes.ActionRemoteMove],
+		Downloads:     counts[synctypes.ActionDownload],
+		Uploads:       counts[synctypes.ActionUpload],
+		LocalDeletes:  counts[synctypes.ActionLocalDelete],
+		RemoteDeletes: counts[synctypes.ActionRemoteDelete],
+		Conflicts:     counts[synctypes.ActionConflict],
+		SyncedUpdates: counts[synctypes.ActionUpdateSynced],
+		Cleanups:      counts[synctypes.ActionCleanup],
 	}
 }
 
 // observeRemote fetches delta changes from the Graph API. Automatically
-// retries with an empty token if ErrDeltaExpired is returned (full resync).
-func (e *Engine) observeRemote(ctx context.Context, bl *Baseline) ([]ChangeEvent, string, error) {
+// retries with an empty token if synctypes.ErrDeltaExpired is returned (full resync).
+func (e *Engine) observeRemote(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, string, error) {
 	savedToken, err := e.baseline.GetDeltaToken(ctx, e.driveID.String(), "")
 	if err != nil {
 		return nil, "", fmt.Errorf("sync: getting delta token: %w", err)
@@ -532,7 +545,7 @@ func (e *Engine) observeRemote(ctx context.Context, bl *Baseline) ([]ChangeEvent
 
 	events, token, err := obs.FullDelta(ctx, savedToken)
 	if err != nil {
-		if !errors.Is(err, ErrDeltaExpired) {
+		if !errors.Is(err, synctypes.ErrDeltaExpired) {
 			return nil, "", err
 		}
 
@@ -550,12 +563,12 @@ func (e *Engine) observeRemote(ctx context.Context, bl *Baseline) ([]ChangeEvent
 
 // observeLocal scans the local filesystem for changes and collects skipped
 // items (invalid names, path too long, file too large) for failure recording.
-func (e *Engine) observeLocal(ctx context.Context, bl *Baseline) (ScanResult, error) {
+func (e *Engine) observeLocal(ctx context.Context, bl *synctypes.Baseline) (synctypes.ScanResult, error) {
 	obs := syncobserve.NewLocalObserver(bl, e.logger, e.checkWorkers)
 
 	result, err := obs.FullScan(ctx, e.syncRoot)
 	if err != nil {
-		return ScanResult{}, fmt.Errorf("sync: local scan: %w", err)
+		return synctypes.ScanResult{}, fmt.Errorf("sync: local scan: %w", err)
 	}
 
 	return result, nil
@@ -570,13 +583,13 @@ func (e *Engine) observeLocal(ctx context.Context, bl *Baseline) (ScanResult, er
 // ALL remote items) and detects orphans — baseline entries not in the full
 // enumeration, representing missed delta deletions.
 func (e *Engine) observeChanges(
-	ctx context.Context, bl *Baseline, mode SyncMode, dryRun, fullReconcile bool,
-) ([]PathChanges, error) {
-	var remoteEvents []ChangeEvent
+	ctx context.Context, bl *synctypes.Baseline, mode synctypes.SyncMode, dryRun, fullReconcile bool,
+) ([]synctypes.PathChanges, error) {
+	var remoteEvents []synctypes.ChangeEvent
 
 	var err error
 
-	if mode != SyncUploadOnly {
+	if mode != synctypes.SyncUploadOnly {
 		if fullReconcile {
 			e.logger.Info("full reconciliation: enumerating all remote items")
 			remoteEvents, err = e.observeAndCommitRemoteFull(ctx, bl)
@@ -596,7 +609,7 @@ func (e *Engine) observeChanges(
 	// Process shortcuts: register new ones, remove deleted ones, observe content.
 	// During throttle:account or service scope blocks, suppress shortcut
 	// observation to avoid wasting API calls (R-2.10.30).
-	var shortcutEvents []ChangeEvent
+	var shortcutEvents []synctypes.ChangeEvent
 
 	if e.isObservationSuppressed() {
 		e.logger.Debug("suppressing shortcut observation — global scope block active")
@@ -609,13 +622,13 @@ func (e *Engine) observeChanges(
 		}
 	}
 
-	// Filter out ChangeShortcut events from primary events — they were consumed
+	// Filter out synctypes.ChangeShortcut events from primary events — they were consumed
 	// by processShortcuts and should not enter the planner as regular events.
 	remoteEvents = filterOutShortcuts(remoteEvents)
 
-	var localResult ScanResult
+	var localResult synctypes.ScanResult
 
-	if mode != SyncDownloadOnly {
+	if mode != synctypes.SyncDownloadOnly {
 		localResult, err = e.observeLocal(ctx, bl)
 		if err != nil {
 			return nil, err
@@ -628,7 +641,7 @@ func (e *Engine) observeChanges(
 		// R-2.10.10: If the scanner observed paths that were previously blocked
 		// by local permission denials, clear the failures (scanner success = proof
 		// of accessibility).
-		e.clearScannerResolvedPermissions(ctx, pathSetFromEvents(localResult.Events))
+		e.permHandler.clearScannerResolvedPermissions(ctx, pathSetFromEvents(localResult.Events))
 	}
 
 	buf := syncobserve.NewBuffer(e.logger)
@@ -648,7 +661,7 @@ func (e *Engine) observeChanges(
 // permanently skip it. Deletions are delivered exactly once in a narrow
 // window (ci_issues.md §20). This narrows but does not close the miss
 // window — events can also be excluded from non-empty batches.
-func (e *Engine) observeAndCommitRemote(ctx context.Context, bl *Baseline) ([]ChangeEvent, error) {
+func (e *Engine) observeAndCommitRemote(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, error) {
 	events, deltaToken, err := e.observeRemote(ctx, bl)
 	if err != nil {
 		return nil, err
@@ -675,7 +688,7 @@ func (e *Engine) observeAndCommitRemote(ctx context.Context, bl *Baseline) ([]Ch
 // but not in the full enumeration = deleted remotely but missed by incremental
 // delta. Returns all events (creates/modifies from the full enumeration +
 // synthesized deletes for orphans) and the new delta token.
-func (e *Engine) observeRemoteFull(ctx context.Context, bl *Baseline) ([]ChangeEvent, string, error) {
+func (e *Engine) observeRemoteFull(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, string, error) {
 	obs := syncobserve.NewRemoteObserver(e.fetcher, bl, e.driveID, e.logger)
 
 	// Full enumeration: empty token returns ALL items as create/modify events.
@@ -716,7 +729,7 @@ func (e *Engine) observeRemoteFull(ctx context.Context, bl *Baseline) ([]ChangeE
 
 // observeAndCommitRemoteFull wraps observeRemoteFull to persist observations
 // and delta token atomically via CommitObservation.
-func (e *Engine) observeAndCommitRemoteFull(ctx context.Context, bl *Baseline) ([]ChangeEvent, error) {
+func (e *Engine) observeAndCommitRemoteFull(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, error) {
 	events, deltaToken, err := e.observeRemoteFull(ctx, bl)
 	if err != nil {
 		return nil, err
@@ -733,11 +746,11 @@ func (e *Engine) observeAndCommitRemoteFull(ctx context.Context, bl *Baseline) (
 // changeEventsToObservedItems converts remote ChangeEvents into ObservedItems
 // for CommitObservation. Filters out local-source events and events with
 // empty ItemIDs (defensive guard against malformed API responses).
-func changeEventsToObservedItems(logger *slog.Logger, events []ChangeEvent) []ObservedItem {
-	var items []ObservedItem
+func changeEventsToObservedItems(logger *slog.Logger, events []synctypes.ChangeEvent) []synctypes.ObservedItem {
+	var items []synctypes.ObservedItem
 
 	for i := range events {
-		if events[i].Source != SourceRemote {
+		if events[i].Source != synctypes.SourceRemote {
 			continue
 		}
 
@@ -749,7 +762,7 @@ func changeEventsToObservedItems(logger *slog.Logger, events []ChangeEvent) []Ob
 			continue
 		}
 
-		items = append(items, ObservedItem{
+		items = append(items, synctypes.ObservedItem{
 			DriveID:   events[i].DriveID,
 			ItemID:    events[i].ItemID,
 			ParentID:  events[i].ParentID,
@@ -766,30 +779,30 @@ func changeEventsToObservedItems(logger *slog.Logger, events []ChangeEvent) []Ob
 	return items
 }
 
-// resolveSafetyConfig returns the appropriate SafetyConfig. The planner-level
+// resolveSafetyConfig returns the appropriate synctypes.SafetyConfig. The planner-level
 // big-delete check is disabled (threshold=MaxInt32) when force is set or when
 // the engine has a deleteCounter (watch mode — the rolling counter handles
 // big-delete protection instead).
-func (e *Engine) resolveSafetyConfig(force bool) *SafetyConfig {
+func (e *Engine) resolveSafetyConfig(force bool) *synctypes.SafetyConfig {
 	if force || e.watch != nil {
-		return &SafetyConfig{
+		return &synctypes.SafetyConfig{
 			BigDeleteThreshold: forceSafetyMax,
 		}
 	}
 
-	return &SafetyConfig{
+	return &synctypes.SafetyConfig{
 		BigDeleteThreshold: e.bigDeleteThreshold,
 	}
 }
 
 // ListConflicts returns all unresolved conflicts from the database.
-func (e *Engine) ListConflicts(ctx context.Context) ([]ConflictRecord, error) {
+func (e *Engine) ListConflicts(ctx context.Context) ([]synctypes.ConflictRecord, error) {
 	return e.baseline.ListConflicts(ctx)
 }
 
 // ListAllConflicts returns all conflicts (resolved and unresolved) from the
 // database. Used by 'conflicts --history'.
-func (e *Engine) ListAllConflicts(ctx context.Context) ([]ConflictRecord, error) {
+func (e *Engine) ListAllConflicts(ctx context.Context) ([]synctypes.ConflictRecord, error) {
 	return e.baseline.ListAllConflicts(ctx)
 }
 
@@ -804,20 +817,20 @@ func (e *Engine) ResolveConflict(ctx context.Context, conflictID, resolution str
 	}
 
 	switch resolution {
-	case ResolutionKeepBoth:
+	case synctypes.ResolutionKeepBoth:
 		// DB-only — executor already saved both copies during sync.
 		return e.baseline.ResolveConflict(ctx, c.ID, resolution)
 
-	case ResolutionKeepLocal:
+	case synctypes.ResolutionKeepLocal:
 		if err := e.resolveKeepLocal(ctx, c); err != nil {
-			return fmt.Errorf("sync: resolving conflict %s (%s): %w", c.ID, ResolutionKeepLocal, err)
+			return fmt.Errorf("sync: resolving conflict %s (%s): %w", c.ID, synctypes.ResolutionKeepLocal, err)
 		}
 
 		return e.baseline.ResolveConflict(ctx, c.ID, resolution)
 
-	case ResolutionKeepRemote:
+	case synctypes.ResolutionKeepRemote:
 		if err := e.resolveKeepRemote(ctx, c); err != nil {
-			return fmt.Errorf("sync: resolving conflict %s (%s): %w", c.ID, ResolutionKeepRemote, err)
+			return fmt.Errorf("sync: resolving conflict %s (%s): %w", c.ID, synctypes.ResolutionKeepRemote, err)
 		}
 
 		return e.baseline.ResolveConflict(ctx, c.ID, resolution)
@@ -828,13 +841,13 @@ func (e *Engine) ResolveConflict(ctx context.Context, conflictID, resolution str
 }
 
 // resolveKeepLocal uploads the local file to overwrite the remote version.
-func (e *Engine) resolveKeepLocal(ctx context.Context, c *ConflictRecord) error {
-	return e.resolveTransfer(ctx, c, ActionUpload)
+func (e *Engine) resolveKeepLocal(ctx context.Context, c *synctypes.ConflictRecord) error {
+	return e.resolveTransfer(ctx, c, synctypes.ActionUpload)
 }
 
 // resolveKeepRemote downloads the remote file to overwrite the local version.
-func (e *Engine) resolveKeepRemote(ctx context.Context, c *ConflictRecord) error {
-	return e.resolveTransfer(ctx, c, ActionDownload)
+func (e *Engine) resolveKeepRemote(ctx context.Context, c *synctypes.ConflictRecord) error {
+	return e.resolveTransfer(ctx, c, synctypes.ActionDownload)
 }
 
 // resolveTransfer executes a single transfer (upload or download) for conflict
@@ -844,7 +857,7 @@ func (e *Engine) resolveKeepRemote(ctx context.Context, c *ConflictRecord) error
 // is a user-initiated override ("keep mine" / "keep theirs") where the intent
 // is to force one side to match the other, not to verify content integrity.
 // The executor's per-action functions already verify hashes for normal syncs.
-func (e *Engine) resolveTransfer(ctx context.Context, c *ConflictRecord, actionType ActionType) error {
+func (e *Engine) resolveTransfer(ctx context.Context, c *synctypes.ConflictRecord, actionType synctypes.ActionType) error {
 	bl, err := e.baseline.Load(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: loading baseline for resolve: %w", err)
@@ -852,16 +865,16 @@ func (e *Engine) resolveTransfer(ctx context.Context, c *ConflictRecord, actionT
 
 	exec := syncexec.NewExecution(e.execCfg, bl)
 
-	action := &Action{
+	action := &synctypes.Action{
 		Type:    actionType,
 		DriveID: c.DriveID,
 		ItemID:  c.ItemID,
 		Path:    c.Path,
-		View:    &PathView{Path: c.Path},
+		View:    &synctypes.PathView{Path: c.Path},
 	}
 
-	var outcome Outcome
-	if actionType == ActionUpload {
+	var outcome synctypes.Outcome
+	if actionType == synctypes.ActionUpload {
 		outcome = exec.ExecuteUpload(ctx, action)
 	} else {
 		outcome = exec.ExecuteDownload(ctx, action)
@@ -906,14 +919,14 @@ const defaultReconcileInterval = 24 * time.Hour
 
 // setShortcuts updates the shortcuts used by the drain goroutine.
 // Called by the watch goroutine after observation when shortcuts may have changed.
-func (e *Engine) setShortcuts(shortcuts []Shortcut) {
+func (e *Engine) setShortcuts(shortcuts []synctypes.Shortcut) {
 	e.watchShortcutsMu.Lock()
 	e.watchShortcuts = shortcuts
 	e.watchShortcutsMu.Unlock()
 }
 
 // getShortcuts returns the latest shortcuts for drain goroutine use.
-func (e *Engine) getShortcuts() []Shortcut {
+func (e *Engine) getShortcuts() []synctypes.Shortcut {
 	e.watchShortcutsMu.RLock()
 	defer e.watchShortcutsMu.RUnlock()
 
@@ -929,7 +942,7 @@ func (e *Engine) initDeleteProtection(ctx context.Context, force bool) {
 		e.watch.deleteCounter = syncdispatch.NewDeleteCounter(e.bigDeleteThreshold, deleteCounterWindow, time.Now)
 	}
 
-	if err := e.baseline.ClearResolvedActionableFailures(ctx, IssueBigDeleteHeld, nil); err != nil {
+	if err := e.baseline.ClearResolvedActionableFailures(ctx, synctypes.IssueBigDeleteHeld, nil); err != nil {
 		e.logger.Warn("failed to clear stale big-delete-held entries",
 			slog.String("error", err.Error()),
 		)
@@ -941,9 +954,9 @@ func (e *Engine) initDeleteProtection(ctx context.Context, force bool) {
 }
 
 // loadWatchState loads the baseline and shortcuts for the watch session.
-// Both are loaded once after the initial sync. Baseline is live-mutated
+// Both are loaded once after the initial sync. synctypes.Baseline is live-mutated
 // under RWMutex; shortcuts are updated via setShortcuts when they change.
-func (e *Engine) loadWatchState(ctx context.Context) (*Baseline, error) {
+func (e *Engine) loadWatchState(ctx context.Context) (*synctypes.Baseline, error) {
 	bl, err := e.baseline.Load(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("sync: loading baseline for watch: %w", err)
@@ -969,7 +982,7 @@ func (e *Engine) loadWatchState(ctx context.Context) (*Baseline, error) {
 // Unlike the old approach (calling RunOnce with throwaway infrastructure),
 // bootstrapSync dispatches through the same DepGraph, ScopeGate, and
 // WorkerPool that the watch loop uses.
-func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) error {
+func (e *Engine) RunWatch(ctx context.Context, mode synctypes.SyncMode, opts synctypes.WatchOpts) error {
 	e.logger.Info("watch mode starting",
 		slog.String("mode", mode.String()),
 		slog.Bool("force", opts.Force),
@@ -1002,15 +1015,15 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOpts) er
 // watchPipeline holds all handles needed by the watch select loop.
 // Created by initWatchInfra; cleaned up by its cleanup method.
 type watchPipeline struct {
-	bl         *Baseline
-	safety     *SafetyConfig
-	ready      <-chan []PathChanges
+	bl         *synctypes.Baseline
+	safety     *synctypes.SafetyConfig
+	ready      <-chan []synctypes.PathChanges
 	errs       <-chan error
-	skippedCh  <-chan []SkippedItem
+	skippedCh  <-chan []synctypes.SkippedItem
 	reconcileC <-chan time.Time
 	recheckC   <-chan time.Time
 	activeObs  int
-	mode       SyncMode
+	mode       synctypes.SyncMode
 	pool       *syncexec.WorkerPool // for bootstrapSync to access Results()
 	drainDone  <-chan struct{}      // closed when drain goroutine exits
 	cleanup    func()
@@ -1029,7 +1042,7 @@ type watchPipeline struct {
 //     eliminate coordination problems (D-11).
 //   - Buffer is promoted to e.watch.buf so the drain-loop retrier can inject events.
 func (e *Engine) initWatchInfra(
-	ctx context.Context, mode SyncMode, opts WatchOpts,
+	ctx context.Context, mode synctypes.SyncMode, opts synctypes.WatchOpts,
 ) (*watchPipeline, error) {
 	// Create watchState — all watch-mode-only fields live here.
 	e.watch = &watchState{
@@ -1055,7 +1068,7 @@ func (e *Engine) initWatchInfra(
 
 	// readyCh feeds admitted actions to workers. Buffer is generous to avoid
 	// backpressure when a batch produces many immediately-ready actions.
-	e.readyCh = make(chan *TrackedAction, watchResultBuf)
+	e.readyCh = make(chan *synctypes.TrackedAction, watchResultBuf)
 
 	// Never-closing done channel — DepGraph.Done() would fire prematurely
 	// between batches when completed == total. Workers exit only via ctx.Done().
@@ -1124,7 +1137,7 @@ const quiescenceLogInterval = 30 * time.Second
 // the watch loop uses. Blocks until all bootstrap actions complete.
 //
 // Must be called after initWatchInfra and before startObservers.
-func (e *Engine) bootstrapSync(ctx context.Context, mode SyncMode, pipe *watchPipeline) error {
+func (e *Engine) bootstrapSync(ctx context.Context, mode synctypes.SyncMode, pipe *watchPipeline) error {
 	e.logger.Info("bootstrap sync starting", slog.String("mode", mode.String()))
 
 	// Drive identity check (B-074).
@@ -1154,11 +1167,11 @@ func (e *Engine) bootstrapSync(ctx context.Context, mode SyncMode, pipe *watchPi
 	pipe.drainDone = drainDone
 
 	// Permission rechecks.
-	if e.permChecker != nil {
+	if e.permHandler.HasPermChecker() {
 		shortcuts := e.getShortcuts()
-		e.recheckPermissions(ctx, bl, shortcuts)
+		e.permHandler.recheckPermissions(ctx, bl, shortcuts)
 	}
-	e.recheckLocalPermissions(ctx)
+	e.permHandler.recheckLocalPermissions(ctx)
 
 	// Observe changes.
 	changes, err := e.observeChanges(ctx, bl, mode, false, false)
@@ -1189,7 +1202,7 @@ func (e *Engine) bootstrapSync(ctx context.Context, mode SyncMode, pipe *watchPi
 // before starting observers. Returns when the graph empties or the
 // context is canceled (SIGTERM/SIGINT).
 //
-// No timeout: every dispatched action produces exactly one WorkerResult
+// No timeout: every dispatched action produces exactly one synctypes.WorkerResult
 // (worker.go guarantees this), drainWorkerResults reads every result,
 // and processWorkerResult calls depGraph.Complete for every result.
 // There is no code path where an action enters the DepGraph without
@@ -1259,7 +1272,7 @@ func (e *Engine) runWatchLoop(ctx context.Context, p *watchPipeline) error {
 // Result classification (R-6.8.15)
 // ---------------------------------------------------------------------------
 
-// resultClass categorizes a WorkerResult for routing by processWorkerResult.
+// resultClass categorizes a synctypes.WorkerResult for routing by processWorkerResult.
 type resultClass int
 
 const (
@@ -1271,63 +1284,63 @@ const (
 	resultFatal                         // abort sync pass (401 unrecoverable auth)
 )
 
-// classifyResult is a pure function that maps a WorkerResult to a result
+// classifyResult is a pure function that maps a synctypes.WorkerResult to a result
 // class and optional scope key. No side effects — classification is
 // separate from routing ("functions do one thing").
 //
 //nolint:gocyclo // classification table — each HTTP status code is a distinct case
-func classifyResult(r *WorkerResult) (resultClass, ScopeKey) {
+func classifyResult(r *synctypes.WorkerResult) (resultClass, synctypes.ScopeKey) {
 	if r.Success {
-		return resultSuccess, ScopeKey{}
+		return resultSuccess, synctypes.ScopeKey{}
 	}
 
 	// Shutdown: context canceled or deadline exceeded — graceful drain.
 	// NOT a failure — just a canceled operation. Don't record in sync_failures.
 	if errors.Is(r.Err, context.Canceled) || errors.Is(r.Err, context.DeadlineExceeded) {
-		return resultShutdown, ScopeKey{}
+		return resultShutdown, synctypes.ScopeKey{}
 	}
 
 	switch {
 	case r.HTTPStatus == http.StatusUnauthorized:
-		return resultFatal, ScopeKey{}
+		return resultFatal, synctypes.ScopeKey{}
 
 	case r.HTTPStatus == http.StatusForbidden:
-		return resultSkip, ScopeKey{}
+		return resultSkip, synctypes.ScopeKey{}
 
 	case r.HTTPStatus == http.StatusTooManyRequests:
-		return resultScopeBlock, SKThrottleAccount
+		return resultScopeBlock, synctypes.SKThrottleAccount
 
 	case r.HTTPStatus == http.StatusInsufficientStorage:
-		return resultScopeBlock, ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
+		return resultScopeBlock, synctypes.ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
 
 	case r.HTTPStatus == http.StatusBadRequest && isOutagePattern(r.Err):
 		// Known outage pattern (e.g., "ObjectHandle is Invalid") — transient,
 		// feeds scope detection. Distinguished from phantom drive 400s
 		// (R-6.7.11) which are handled by drive filtering.
-		return resultRequeue, ScopeKey{}
+		return resultRequeue, synctypes.ScopeKey{}
 
 	case r.HTTPStatus >= 500:
-		return resultRequeue, ScopeKey{}
+		return resultRequeue, synctypes.ScopeKey{}
 
 	case r.HTTPStatus == http.StatusRequestTimeout ||
 		r.HTTPStatus == http.StatusPreconditionFailed ||
 		r.HTTPStatus == http.StatusNotFound ||
 		r.HTTPStatus == http.StatusLocked:
-		return resultRequeue, ScopeKey{}
+		return resultRequeue, synctypes.ScopeKey{}
 
 	case errors.Is(r.Err, driveops.ErrDiskFull):
 		// Deterministic signal — immediate scope block, no sliding window (R-2.10.43).
-		return resultScopeBlock, SKDiskLocal
+		return resultScopeBlock, synctypes.SKDiskLocal
 
 	case errors.Is(r.Err, driveops.ErrFileTooLargeForSpace):
 		// Per-file failure, no scope escalation — smaller files may fit (R-2.10.44).
-		return resultSkip, ScopeKey{}
+		return resultSkip, synctypes.ScopeKey{}
 
 	case errors.Is(r.Err, os.ErrPermission):
-		return resultSkip, ScopeKey{}
+		return resultSkip, synctypes.ScopeKey{}
 
 	default:
-		return resultSkip, ScopeKey{}
+		return resultSkip, synctypes.ScopeKey{}
 	}
 }
 
@@ -1351,7 +1364,7 @@ func isOutagePattern(err error) bool {
 // Delegates to computeTrialInterval for the actual computation — the same
 // function used by applyScopeBlock for initial intervals, ensuring a single
 // code path for the Retry-After-vs-backoff policy.
-func (e *Engine) extendTrialInterval(scopeKey ScopeKey, retryAfter time.Duration) {
+func (e *Engine) extendTrialInterval(scopeKey synctypes.ScopeKey, retryAfter time.Duration) {
 	if e.watch == nil {
 		return
 	}
@@ -1408,7 +1421,7 @@ func (e *Engine) isObservationSuppressed() bool {
 		return false
 	}
 
-	return e.watch.scopeGate.IsScopeBlocked(SKThrottleAccount) || e.watch.scopeGate.IsScopeBlocked(SKService)
+	return e.watch.scopeGate.IsScopeBlocked(synctypes.SKThrottleAccount) || e.watch.scopeGate.IsScopeBlocked(synctypes.SKService)
 }
 
 // feedScopeDetection feeds a worker result into scope detection sliding
@@ -1416,7 +1429,7 @@ func (e *Engine) isObservationSuppressed() bool {
 // regular failures and 400 outage patterns. Called directly from the normal
 // processWorkerResult switch — never called for trial results (the scope is
 // already blocked, and re-detecting would overwrite the doubled interval).
-func (e *Engine) feedScopeDetection(r *WorkerResult) {
+func (e *Engine) feedScopeDetection(r *synctypes.WorkerResult) {
 	if e.watch == nil {
 		return
 	}
@@ -1441,7 +1454,7 @@ func (e *Engine) feedScopeDetection(r *WorkerResult) {
 }
 
 // setScopeBlock writes a scope block to the ScopeGate.
-func (e *Engine) setScopeBlock(key ScopeKey, block *ScopeBlock) {
+func (e *Engine) setScopeBlock(key synctypes.ScopeKey, block *synctypes.ScopeBlock) {
 	if e.watch == nil {
 		return
 	}
@@ -1454,16 +1467,16 @@ func (e *Engine) setScopeBlock(key ScopeKey, block *ScopeBlock) {
 	}
 }
 
-// applyScopeBlock creates a ScopeBlock and tells the ScopeGate to block
+// applyScopeBlock creates a synctypes.ScopeBlock and tells the ScopeGate to block
 // affected actions. Uses computeTrialInterval for the initial interval,
 // ensuring the same Retry-After-vs-backoff policy as extendTrialInterval.
 // Logs a WARN because a scope block is a degraded-but-recoverable state
 // (R-6.6.10).
-func (e *Engine) applyScopeBlock(sr ScopeUpdateResult) {
+func (e *Engine) applyScopeBlock(sr synctypes.ScopeUpdateResult) {
 	now := e.nowFunc()
 	interval := computeTrialInterval(sr.RetryAfter, 0)
 
-	e.setScopeBlock(sr.ScopeKey, &ScopeBlock{
+	e.setScopeBlock(sr.ScopeKey, &synctypes.ScopeBlock{
 		Key:           sr.ScopeKey,
 		IssueType:     sr.IssueType,
 		BlockedAt:     now,
@@ -1490,7 +1503,7 @@ func (e *Engine) applyScopeBlock(sr ScopeUpdateResult) {
 // (processBatch, executePlan for watch mode).
 //
 // In one-shot mode, scope gate is not initialized — all actions pass through.
-func (e *Engine) admitAndDispatch(ctx context.Context, ready []*TrackedAction) {
+func (e *Engine) admitAndDispatch(ctx context.Context, ready []*synctypes.TrackedAction) {
 	for _, ta := range ready {
 		// Trial interception — watch mode only (one-shot has no trials).
 		if e.watch != nil {
@@ -1530,8 +1543,8 @@ func (e *Engine) admitAndDispatch(ctx context.Context, ready []*TrackedAction) {
 // actions for the outbox instead of sending to readyCh (actor-with-outbox
 // pattern, section 3.5). This prevents deadlock when Complete returns many
 // dependents.
-func (e *Engine) admitReady(ctx context.Context, ready []*TrackedAction) []*TrackedAction {
-	var dispatch []*TrackedAction
+func (e *Engine) admitReady(ctx context.Context, ready []*synctypes.TrackedAction) []*synctypes.TrackedAction {
+	var dispatch []*synctypes.TrackedAction
 
 	for _, ta := range ready {
 		// Trial interception — watch mode only (one-shot has no trials).
@@ -1593,7 +1606,7 @@ func (e *Engine) admitReady(ctx context.Context, ready []*TrackedAction) []*Trac
 // handleTrialInterception handles a trial-intercepted action in
 // admitAndDispatch (main goroutine path). Called by admitAndDispatch when
 // the action's path matches a trialPending entry.
-func (e *Engine) handleTrialInterception(ctx context.Context, ta *TrackedAction, entry trialEntry) {
+func (e *Engine) handleTrialInterception(ctx context.Context, ta *synctypes.TrackedAction, entry trialEntry) {
 	if entry.scopeKey.BlocksAction(ta.Action.Path,
 		ta.Action.ShortcutKey(), ta.Action.Type,
 		ta.Action.TargetsOwnDrive()) {
@@ -1639,9 +1652,9 @@ func (e *Engine) handleTrialInterception(ctx context.Context, ta *TrackedAction,
 // Safe for concurrent use — depGraph.Complete uses a mutex. Two cascades
 // from different goroutines cannot return the same dependent (depsLeft is
 // atomic — the last parent to complete returns the dependent).
-func (e *Engine) cascadeRecordAndComplete(ctx context.Context, ta *TrackedAction, scopeKey ScopeKey) {
+func (e *Engine) cascadeRecordAndComplete(ctx context.Context, ta *synctypes.TrackedAction, scopeKey synctypes.ScopeKey) {
 	seen := make(map[int64]bool)
-	queue := []*TrackedAction{ta}
+	queue := []*synctypes.TrackedAction{ta}
 
 	for len(queue) > 0 {
 		current := queue[0]
@@ -1663,7 +1676,7 @@ func (e *Engine) cascadeRecordAndComplete(ctx context.Context, ta *TrackedAction
 // cascadeFailAndComplete records each transitive dependent as a cascade
 // failure and completes it in the DepGraph. BFS ensures grandchildren are
 // not stranded. Used for worker failures (non-scope-related).
-func (e *Engine) cascadeFailAndComplete(ctx context.Context, ready []*TrackedAction, r *WorkerResult) {
+func (e *Engine) cascadeFailAndComplete(ctx context.Context, ready []*synctypes.TrackedAction, r *synctypes.WorkerResult) {
 	seen := make(map[int64]bool)
 	queue := ready
 
@@ -1684,7 +1697,7 @@ func (e *Engine) cascadeFailAndComplete(ctx context.Context, ready []*TrackedAct
 
 // completeSubtree silently completes all transitive dependents without
 // recording failures. Used for shutdown (context canceled — not a failure).
-func (e *Engine) completeSubtree(ready []*TrackedAction) {
+func (e *Engine) completeSubtree(ready []*synctypes.TrackedAction) {
 	seen := make(map[int64]bool)
 	queue := ready
 
@@ -1705,7 +1718,7 @@ func (e *Engine) completeSubtree(ready []*TrackedAction) {
 // recordScopeBlockedFailure records a sync_failure for an action that was
 // blocked by a scope gate. Uses next_retry_at = NULL (nil delayFn) so the
 // retrier ignores it until onScopeClear sets next_retry_at.
-func (e *Engine) recordScopeBlockedFailure(ctx context.Context, action *Action, scopeKey ScopeKey) {
+func (e *Engine) recordScopeBlockedFailure(ctx context.Context, action *synctypes.Action, scopeKey synctypes.ScopeKey) {
 	direction := directionFromAction(action.Type)
 
 	driveID := action.DriveID
@@ -1713,11 +1726,11 @@ func (e *Engine) recordScopeBlockedFailure(ctx context.Context, action *Action, 
 		driveID = e.driveID
 	}
 
-	if err := e.baseline.RecordFailure(ctx, &SyncFailureParams{
+	if err := e.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      action.Path,
 		DriveID:   driveID,
 		Direction: direction,
-		Category:  strTransient,
+		Category:  synctypes.CategoryTransient,
 		ScopeKey:  scopeKey,
 		ErrMsg:    "scope blocked: " + scopeKey.String(),
 	}, nil); err != nil { // nil delayFn → next_retry_at = NULL
@@ -1733,7 +1746,7 @@ func (e *Engine) recordScopeBlockedFailure(ctx context.Context, action *Action, 
 // failed. The dependent inherits the parent's error context but gets its
 // own direction and a fresh failure_count. Uses retry.Reconcile.Delay for
 // exponential backoff — the dependent retries independently.
-func (e *Engine) recordCascadeFailure(ctx context.Context, action *Action, parentResult *WorkerResult) {
+func (e *Engine) recordCascadeFailure(ctx context.Context, action *synctypes.Action, parentResult *synctypes.WorkerResult) {
 	direction := directionFromAction(action.Type)
 
 	driveID := action.DriveID
@@ -1743,11 +1756,11 @@ func (e *Engine) recordCascadeFailure(ctx context.Context, action *Action, paren
 
 	issueType := issueTypeForHTTPStatus(parentResult.HTTPStatus, parentResult.Err)
 
-	if err := e.baseline.RecordFailure(ctx, &SyncFailureParams{
+	if err := e.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      action.Path,
 		DriveID:   driveID,
 		Direction: direction,
-		Category:  strTransient,
+		Category:  synctypes.CategoryTransient,
 		IssueType: issueType,
 		ErrMsg:    "parent action failed: " + parentResult.ErrMsg,
 	}, retry.Reconcile.Delay); err != nil {
@@ -1765,7 +1778,7 @@ func (e *Engine) recordCascadeFailure(ctx context.Context, action *Action, paren
 // Does NOT re-observe items inline — would block the drain loop. Instead,
 // makes sync_failures retryable and lets the retrier handle re-processing
 // at its own pace (section 3.7).
-func (e *Engine) onScopeClear(ctx context.Context, key ScopeKey) {
+func (e *Engine) onScopeClear(ctx context.Context, key synctypes.ScopeKey) {
 	now := e.nowFunc()
 
 	// Atomic: delete scope_blocks row + set next_retry_at = NOW in one tx.
@@ -1802,7 +1815,7 @@ func (e *Engine) onScopeClear(ctx context.Context, key ScopeKey) {
 //   - Parent success → children admitted via admitReady (scope gate check)
 //   - Parent failure → children cascade-recorded as sync_failures
 //   - Parent shutdown → children silently completed (no dispatch, no failure)
-func (e *Engine) processWorkerResult(ctx context.Context, r *WorkerResult, bl *Baseline) []*TrackedAction {
+func (e *Engine) processWorkerResult(ctx context.Context, r *synctypes.WorkerResult, bl *synctypes.Baseline) []*synctypes.TrackedAction {
 	// Trial results handled separately (early return).
 	if r.IsTrial && !r.TrialScopeKey.IsZero() {
 		return e.processTrialResult(ctx, r)
@@ -1814,7 +1827,7 @@ func (e *Engine) processWorkerResult(ctx context.Context, r *WorkerResult, bl *B
 	ready, _ := e.depGraph.Complete(r.ActionID)
 
 	// Dependent routing — based on result class.
-	var dispatched []*TrackedAction
+	var dispatched []*synctypes.TrackedAction
 
 	switch class {
 	case resultSuccess:
@@ -1841,7 +1854,7 @@ func (e *Engine) processWorkerResult(ctx context.Context, r *WorkerResult, bl *B
 // applyResultSideEffects handles per-class side effects: counter updates,
 // failure recording, scope detection, and retrier kicks. Called after
 // dependent routing is complete.
-func (e *Engine) applyResultSideEffects(ctx context.Context, class resultClass, r *WorkerResult, bl *Baseline) {
+func (e *Engine) applyResultSideEffects(ctx context.Context, class resultClass, r *synctypes.WorkerResult, bl *synctypes.Baseline) {
 	switch class {
 	case resultSuccess:
 		e.succeeded.Add(1)
@@ -1867,13 +1880,13 @@ func (e *Engine) applyResultSideEffects(ctx context.Context, class resultClass, 
 		// Local permission errors get special handling — walk up to find the
 		// denied directory and create a scope block (R-2.10.12).
 		if errors.Is(r.Err, os.ErrPermission) {
-			e.handleLocalPermission(ctx, r)
+			e.permHandler.handleLocalPermission(ctx, r)
 			e.recordError(r)
 
 			return
 		}
-		if r.HTTPStatus == http.StatusForbidden && e.permChecker != nil {
-			e.handle403(ctx, bl, r.Path, e.getShortcuts())
+		if r.HTTPStatus == http.StatusForbidden && e.permHandler.HasPermChecker() {
+			e.permHandler.handle403(ctx, bl, r.Path, e.getShortcuts())
 		}
 		// Non-retryable: record with nil delayFn (no next_retry_at).
 		e.recordFailure(ctx, r, nil)
@@ -1890,7 +1903,7 @@ func (e *Engine) applyResultSideEffects(ctx context.Context, class resultClass, 
 
 // processTrialResult handles trial results using the new architecture.
 // Returns actions for the outbox. Called from the drain goroutine.
-func (e *Engine) processTrialResult(ctx context.Context, r *WorkerResult) []*TrackedAction {
+func (e *Engine) processTrialResult(ctx context.Context, r *synctypes.WorkerResult) []*synctypes.TrackedAction {
 	class, _ := classifyResult(r)
 
 	// Complete the trial action in the graph.
@@ -2130,31 +2143,31 @@ func (e *Engine) runRetrierSweep(ctx context.Context) {
 	e.armRetryTimer()
 }
 
-// remoteStateToChangeEvent converts a RemoteStateRow into a full-fidelity
-// ChangeEvent. Pure function — no I/O. Used by createEventFromDB for
+// remoteStateToChangeEvent converts a synctypes.RemoteStateRow into a full-fidelity
+// synctypes.ChangeEvent. Pure function — no I/O. Used by createEventFromDB for
 // download/delete failures where the DB-cached remote_state provides all
 // fields the planner needs (D-9 fix).
-func remoteStateToChangeEvent(rs *RemoteStateRow, path string) *ChangeEvent {
+func remoteStateToChangeEvent(rs *synctypes.RemoteStateRow, path string) *synctypes.ChangeEvent {
 	// Determine change type from sync_status: delete-family statuses
-	// become ChangeDelete, everything else becomes ChangeModify.
-	ct := ChangeModify
+	// become synctypes.ChangeDelete, everything else becomes synctypes.ChangeModify.
+	ct := synctypes.ChangeModify
 	isDeleted := false
 
 	switch rs.SyncStatus {
 	case syncstore.StatusDeleted, syncstore.StatusDeleting, syncstore.StatusDeleteFailed, syncstore.StatusPendingDelete:
-		ct = ChangeDelete
+		ct = synctypes.ChangeDelete
 		isDeleted = true
 	}
 
 	// Parse item type from the database string; default to file on error
 	// (defensive — the DB value should always be valid).
-	it, err := ParseItemType(rs.ItemType)
+	it, err := synctypes.ParseItemType(rs.ItemType)
 	if err != nil {
-		it = ItemTypeFile
+		it = synctypes.ItemTypeFile
 	}
 
-	return &ChangeEvent{
-		Source:    SourceRemote,
+	return &synctypes.ChangeEvent{
+		Source:    synctypes.SourceRemote,
 		Type:      ct,
 		Path:      path,
 		ItemID:    rs.ItemID,
@@ -2170,21 +2183,21 @@ func remoteStateToChangeEvent(rs *RemoteStateRow, path string) *ChangeEvent {
 	}
 }
 
-// observeLocalFile stats and hashes a local file, returning a ChangeEvent.
-// File gone → ChangeDelete. Transient FS error → nil. Used by both
+// observeLocalFile stats and hashes a local file, returning a synctypes.ChangeEvent.
+// File gone → synctypes.ChangeDelete. Transient FS error → nil. Used by both
 // createEventFromDB and reobserve to avoid duplicating the upload path.
-func (e *Engine) observeLocalFile(path, caller string) *ChangeEvent {
+func (e *Engine) observeLocalFile(path, caller string) *synctypes.ChangeEvent {
 	absPath := filepath.Join(e.syncRoot, path)
 
 	info, err := os.Stat(absPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return &ChangeEvent{
-				Source:    SourceLocal,
-				Type:      ChangeDelete,
+			return &synctypes.ChangeEvent{
+				Source:    synctypes.SourceLocal,
+				Type:      synctypes.ChangeDelete,
 				Path:      path,
 				Name:      filepath.Base(path),
-				ItemType:  ItemTypeFile,
+				ItemType:  synctypes.ItemTypeFile,
 				IsDeleted: true,
 			}
 		}
@@ -2197,13 +2210,13 @@ func (e *Engine) observeLocalFile(path, caller string) *ChangeEvent {
 		return nil
 	}
 
-	it := ItemTypeFile
+	it := synctypes.ItemTypeFile
 	if info.IsDir() {
-		it = ItemTypeFolder
+		it = synctypes.ItemTypeFolder
 	}
 
 	var hash string
-	if it == ItemTypeFile {
+	if it == synctypes.ItemTypeFile {
 		hash, err = syncobserve.ComputeStableHash(absPath)
 		if err != nil {
 			e.logger.Debug(caller+": hash failed",
@@ -2215,9 +2228,9 @@ func (e *Engine) observeLocalFile(path, caller string) *ChangeEvent {
 		}
 	}
 
-	return &ChangeEvent{
-		Source:   SourceLocal,
-		Type:     ChangeModify,
+	return &synctypes.ChangeEvent{
+		Source:   synctypes.SourceLocal,
+		Type:     synctypes.ChangeModify,
 		Path:     path,
 		Name:     filepath.Base(path),
 		ItemType: it,
@@ -2227,21 +2240,21 @@ func (e *Engine) observeLocalFile(path, caller string) *ChangeEvent {
 	}
 }
 
-// createEventFromDB builds a full-fidelity ChangeEvent from database state
+// createEventFromDB builds a full-fidelity synctypes.ChangeEvent from database state
 // and the local filesystem. Direction-based dispatch:
-//   - Upload: stat + hash the local file. File gone → ChangeDelete. Error → nil.
+//   - Upload: stat + hash the local file. File gone → synctypes.ChangeDelete. Error → nil.
 //   - Download/Delete: query remote_state from DB. Nil → nil (resolved).
 //     Otherwise remoteStateToChangeEvent.
 //
 // No API calls — uploads use the local FS; downloads use DB-cached
 // remote_state (kept fresh by delta polls). Fixes D-9: the planner receives
 // complete PathViews with hash, size, mtime, etag, and name.
-func (e *Engine) createEventFromDB(ctx context.Context, row *SyncFailureRow) *ChangeEvent {
-	switch row.Direction {
-	case strUpload:
+func (e *Engine) createEventFromDB(ctx context.Context, row *synctypes.SyncFailureRow) *synctypes.ChangeEvent {
+	switch row.Direction { //nolint:exhaustive // download and delete share the same path
+	case synctypes.DirectionUpload:
 		return e.observeLocalFile(row.Path, "createEventFromDB")
 
-	default: // "download" or "delete"
+	default: // download or delete
 		rs, err := e.baseline.GetRemoteStateByPath(ctx, row.Path, row.DriveID)
 		if err != nil {
 			e.logger.Debug("createEventFromDB: remote state lookup failed",
@@ -2271,11 +2284,11 @@ func (e *Engine) createEventFromDB(ctx context.Context, row *SyncFailureRow) *Ch
 //   - Download: remote_state is nil (deleted) OR sync_status is synced/deleted/filtered.
 //   - Upload: local file no longer exists (os.ErrNotExist).
 //   - Delete: no baseline entry exists for the path (already cleaned up).
-func (e *Engine) isFailureResolved(ctx context.Context, row *SyncFailureRow) bool {
+func (e *Engine) isFailureResolved(ctx context.Context, row *synctypes.SyncFailureRow) bool {
 	var resolved bool
 
 	switch row.Direction {
-	case strDownload:
+	case synctypes.DirectionDownload:
 		rs, err := e.baseline.GetRemoteStateByPath(ctx, row.Path, row.DriveID)
 		if err != nil {
 			// DB error — can't determine resolution, treat as unresolved.
@@ -2292,7 +2305,7 @@ func (e *Engine) isFailureResolved(ctx context.Context, row *SyncFailureRow) boo
 			}
 		}
 
-	case strUpload:
+	case synctypes.DirectionUpload:
 		absPath := filepath.Join(e.syncRoot, row.Path)
 
 		_, err := os.Stat(absPath)
@@ -2300,7 +2313,7 @@ func (e *Engine) isFailureResolved(ctx context.Context, row *SyncFailureRow) boo
 			resolved = true
 		}
 
-	case strDelete:
+	case synctypes.DirectionDelete:
 		// Load baseline to check if the entry still exists.
 		bl, err := e.baseline.Load(ctx)
 		if err != nil {
@@ -2331,21 +2344,21 @@ func (e *Engine) isFailureResolved(ctx context.Context, row *SyncFailureRow) boo
 // has actually cleared.
 //
 // Direction-based dispatch:
-//   - Download/Delete: GetItem API call. 200 → full ChangeEvent. 404 → ChangeDelete.
+//   - Download/Delete: GetItem API call. 200 → full synctypes.ChangeEvent. 404 → synctypes.ChangeDelete.
 //     429/507/5xx → nil (scope still blocked).
-//   - Upload: stat + hash local file. Exists → full ChangeEvent. Gone → ChangeDelete.
+//   - Upload: stat + hash local file. Exists → full synctypes.ChangeEvent. Gone → synctypes.ChangeDelete.
 //     Error → nil.
 //
 // Returns (nil, retryAfter) when the scope condition persists — caller
 // forwards retryAfter to extendTrialInterval for server-driven backoff.
 // Returns (event, 0) on success or when the item is gone.
-func (e *Engine) reobserve(ctx context.Context, row *SyncFailureRow) (*ChangeEvent, time.Duration) {
-	switch row.Direction {
-	case strUpload:
+func (e *Engine) reobserve(ctx context.Context, row *synctypes.SyncFailureRow) (*synctypes.ChangeEvent, time.Duration) {
+	switch row.Direction { //nolint:exhaustive // download and delete share the same path
+	case synctypes.DirectionUpload:
 		// Local FS — no RetryAfter concept.
 		return e.observeLocalFile(row.Path, "reobserve"), 0
 
-	default: // "download" or "delete"
+	default: // download or delete
 		item, err := e.execCfg.Items().GetItem(ctx, row.DriveID, row.ItemID)
 		if err != nil {
 			// Classify the error to determine whether the scope is still blocked
@@ -2354,13 +2367,13 @@ func (e *Engine) reobserve(ctx context.Context, row *SyncFailureRow) (*ChangeEve
 			if errors.As(err, &ge) {
 				if errors.Is(ge.Err, graph.ErrNotFound) {
 					// Item was deleted remotely — return a delete event.
-					return &ChangeEvent{
-						Source:    SourceRemote,
-						Type:      ChangeDelete,
+					return &synctypes.ChangeEvent{
+						Source:    synctypes.SourceRemote,
+						Type:      synctypes.ChangeDelete,
 						Path:      row.Path,
 						ItemID:    row.ItemID,
 						DriveID:   row.DriveID,
-						ItemType:  ItemTypeFile,
+						ItemType:  synctypes.ItemTypeFile,
 						Name:      filepath.Base(row.Path),
 						IsDeleted: true,
 					}, 0
@@ -2391,24 +2404,24 @@ func (e *Engine) reobserve(ctx context.Context, row *SyncFailureRow) (*ChangeEve
 			return nil, 0
 		}
 
-		// 200 — build a full ChangeEvent from the live API response.
-		it := ItemTypeFile
+		// 200 — build a full synctypes.ChangeEvent from the live API response.
+		it := synctypes.ItemTypeFile
 		if item.IsFolder {
-			it = ItemTypeFolder
+			it = synctypes.ItemTypeFolder
 		} else if item.IsRoot {
-			it = ItemTypeRoot
+			it = synctypes.ItemTypeRoot
 		}
 
-		ct := ChangeModify
+		ct := synctypes.ChangeModify
 		isDeleted := false
 
 		if item.IsDeleted {
-			ct = ChangeDelete
+			ct = synctypes.ChangeDelete
 			isDeleted = true
 		}
 
-		return &ChangeEvent{
-			Source:    SourceRemote,
+		return &synctypes.ChangeEvent{
+			Source:    synctypes.SourceRemote,
 			Type:      ct,
 			Path:      row.Path,
 			ItemID:    item.ID,
@@ -2449,7 +2462,7 @@ func (e *Engine) cleanStaleTrialPending(now time.Time) {
 
 // recordError increments the failed counter and appends the error to the
 // diagnostic error list.
-func (e *Engine) recordError(r *WorkerResult) {
+func (e *Engine) recordError(r *synctypes.WorkerResult) {
 	e.failed.Add(1)
 	if r.Err != nil {
 		e.syncErrorsMu.Lock()
@@ -2522,7 +2535,7 @@ func (e *Engine) logFailureSummary() {
 // clearFailureOnSuccess removes the sync_failures row for a successfully
 // completed action. The engine owns failure lifecycle — store_baseline's
 // CommitOutcome handles only baseline/remote_state updates (D-6).
-func (e *Engine) clearFailureOnSuccess(ctx context.Context, r *WorkerResult) {
+func (e *Engine) clearFailureOnSuccess(ctx context.Context, r *synctypes.WorkerResult) {
 	driveID := r.DriveID
 	if driveID.String() == "" {
 		driveID = e.driveID
@@ -2539,7 +2552,7 @@ func (e *Engine) clearFailureOnSuccess(ctx context.Context, r *WorkerResult) {
 // recordFailure writes a failure to sync_failures with the given delay
 // function for computing next_retry_at. For transient failures, pass
 // retry.Reconcile.Delay; for actionable/fatal, pass nil (no retry).
-func (e *Engine) recordFailure(ctx context.Context, r *WorkerResult, delayFn func(int) time.Duration) {
+func (e *Engine) recordFailure(ctx context.Context, r *synctypes.WorkerResult, delayFn func(int) time.Duration) {
 	direction := directionFromAction(r.ActionType)
 
 	driveID := r.DriveID
@@ -2549,15 +2562,15 @@ func (e *Engine) recordFailure(ctx context.Context, r *WorkerResult, delayFn fun
 
 	// The engine's routing already classifies each result — delayFn is non-nil
 	// for transient failures (retryable) and nil for actionable/fatal ones.
-	category := strTransient
+	category := synctypes.CategoryTransient
 	if delayFn == nil {
-		category = strActionable
+		category = synctypes.CategoryActionable
 	}
 
 	issueType := issueTypeForHTTPStatus(r.HTTPStatus, r.Err)
 	scopeKey := deriveScopeKey(r)
 
-	if recErr := e.baseline.RecordFailure(ctx, &SyncFailureParams{
+	if recErr := e.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       r.Path,
 		DriveID:    driveID,
 		Direction:  direction,
@@ -2588,10 +2601,10 @@ func (e *Engine) recordFailure(ctx context.Context, r *WorkerResult, delayFn fun
 
 // deriveScopeKey returns the scope key for a failed worker result.
 // deriveScopeKey maps a worker result to its typed scope key. Delegates to
-// ScopeKeyForStatus — single source of truth for HTTP status → scope key
-// mapping. Returns the zero-value ScopeKey for non-scope statuses.
-func deriveScopeKey(r *WorkerResult) ScopeKey {
-	return ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
+// synctypes.ScopeKeyForStatus — single source of truth for HTTP status → scope key
+// mapping. Returns the zero-value synctypes.ScopeKey for non-scope statuses.
+func deriveScopeKey(r *synctypes.WorkerResult) synctypes.ScopeKey {
+	return synctypes.ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
 }
 
 // issueTypeForHTTPStatus maps an HTTP status code and error to a sync
@@ -2600,15 +2613,15 @@ func deriveScopeKey(r *WorkerResult) ScopeKey {
 func issueTypeForHTTPStatus(httpStatus int, err error) string {
 	switch {
 	case httpStatus == http.StatusTooManyRequests:
-		return IssueRateLimited
+		return synctypes.IssueRateLimited
 	case httpStatus == http.StatusInsufficientStorage:
-		return IssueQuotaExceeded
+		return synctypes.IssueQuotaExceeded
 	case httpStatus == http.StatusForbidden:
-		return IssuePermissionDenied
+		return synctypes.IssuePermissionDenied
 	case httpStatus == http.StatusBadRequest && isOutagePattern(err):
-		return IssueServiceOutage
+		return synctypes.IssueServiceOutage
 	case httpStatus >= http.StatusInternalServerError:
-		return IssueServiceOutage
+		return synctypes.IssueServiceOutage
 	case httpStatus == http.StatusRequestTimeout:
 		return "request_timeout"
 	case httpStatus == http.StatusPreconditionFailed:
@@ -2618,11 +2631,11 @@ func issueTypeForHTTPStatus(httpStatus int, err error) string {
 	case httpStatus == http.StatusLocked:
 		return "resource_locked"
 	case errors.Is(err, driveops.ErrDiskFull):
-		return IssueDiskFull
+		return synctypes.IssueDiskFull
 	case errors.Is(err, driveops.ErrFileTooLargeForSpace):
-		return IssueFileTooLargeForSpace
+		return synctypes.IssueFileTooLargeForSpace
 	case errors.Is(err, os.ErrPermission):
-		return IssueLocalPermissionDenied
+		return synctypes.IssueLocalPermissionDenied
 	default:
 		return ""
 	}
@@ -2652,15 +2665,15 @@ func (e *Engine) resetResultStats() {
 	e.syncErrorsMu.Unlock()
 }
 
-// directionFromAction maps an ActionType to a sync_failures direction string.
-func directionFromAction(at ActionType) string {
-	switch at {
-	case ActionUpload:
-		return strUpload
-	case ActionLocalDelete, ActionRemoteDelete:
-		return strDelete
+// directionFromAction maps a synctypes.ActionType to a typed Direction enum.
+func directionFromAction(at synctypes.ActionType) synctypes.Direction {
+	switch at { //nolint:exhaustive // most action types map to download
+	case synctypes.ActionUpload:
+		return synctypes.DirectionUpload
+	case synctypes.ActionLocalDelete, synctypes.ActionRemoteDelete:
+		return synctypes.DirectionDelete
 	default:
-		return strDownload
+		return synctypes.DirectionDownload
 	}
 }
 
@@ -2735,18 +2748,18 @@ func (e *Engine) stopTrialTimer() {
 //
 // The trial timer fires scope trial dispatch when trials become due (R-2.10.5).
 // In one-shot mode (scopeGate == nil), trial dispatch is a no-op.
-func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan WorkerResult, bl *Baseline) {
+func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan synctypes.WorkerResult, bl *synctypes.Baseline) {
 	defer e.stopTrialTimer()
 
-	var outbox []*TrackedAction
+	var outbox []*synctypes.TrackedAction
 
 	for {
 		// Actor-with-outbox: if outbox has items, include a send case for
 		// readyCh. The nil channel pattern disables the case when outbox is
 		// empty — Go's select on a nil channel blocks, effectively removing
 		// it from the select.
-		var outCh chan<- *TrackedAction
-		var outVal *TrackedAction
+		var outCh chan<- *synctypes.TrackedAction
+		var outVal *synctypes.TrackedAction
 		if len(outbox) > 0 {
 			outCh = e.readyCh
 			outVal = outbox[0]
@@ -2798,9 +2811,9 @@ func (e *Engine) handleRetryTimer(ctx context.Context) {
 // the number of observers started. The events channel is closed automatically
 // when all observers exit, allowing the bridge goroutine to drain cleanly.
 func (e *Engine) startObservers(
-	ctx context.Context, bl *Baseline, mode SyncMode, buf *syncobserve.Buffer, opts WatchOpts,
-) (<-chan error, int, <-chan []SkippedItem) {
-	events := make(chan ChangeEvent, watchEventBuf)
+	ctx context.Context, bl *synctypes.Baseline, mode synctypes.SyncMode, buf *syncobserve.Buffer, opts synctypes.WatchOpts,
+) (<-chan error, int, <-chan []synctypes.SkippedItem) {
+	events := make(chan synctypes.ChangeEvent, watchEventBuf)
 	errs := make(chan error, 2)
 
 	var obsWg stdsync.WaitGroup
@@ -2825,7 +2838,7 @@ func (e *Engine) startObservers(
 	count := 0
 
 	// Remote observer (skip for upload-only mode).
-	if mode != SyncUploadOnly {
+	if mode != synctypes.SyncUploadOnly {
 		remoteObs := syncobserve.NewRemoteObserver(e.fetcher, bl, e.driveID, e.logger)
 		remoteObs.SetObsWriter(e.baseline)
 		e.watch.remoteObs = remoteObs
@@ -2848,10 +2861,10 @@ func (e *Engine) startObservers(
 
 	// Channel for forwarding SkippedItems from safety scans to the engine.
 	// Buffered(2) — at most 2 safety scans could overlap before draining.
-	skippedCh := make(chan []SkippedItem, 2)
+	skippedCh := make(chan []synctypes.SkippedItem, 2)
 
 	// Local observer (skip for download-only mode).
-	if mode != SyncDownloadOnly {
+	if mode != synctypes.SyncDownloadOnly {
 		localObs := syncobserve.NewLocalObserver(bl, e.logger, e.checkWorkers)
 		localObs.SetSafetyScanInterval(opts.SafetyScanInterval)
 		localObs.SetSkippedChannel(skippedCh)
@@ -2869,7 +2882,7 @@ func (e *Engine) startObservers(
 			defer obsWg.Done()
 
 			watchErr := localObs.Watch(ctx, e.syncRoot, events)
-			if errors.Is(watchErr, ErrWatchLimitExhausted) {
+			if errors.Is(watchErr, synctypes.ErrWatchLimitExhausted) {
 				e.logger.Warn("inotify watch limit exhausted, falling back to periodic full scan",
 					slog.Duration("poll_interval", e.resolvePollInterval(opts)),
 				)
@@ -2899,7 +2912,7 @@ func (e *Engine) startObservers(
 // Each scan's events are forwarded to the events channel via trySend.
 func (e *Engine) runPeriodicFullScan(
 	ctx context.Context, obs *syncobserve.LocalObserver, syncRoot string,
-	events chan<- ChangeEvent, interval time.Duration,
+	events chan<- synctypes.ChangeEvent, interval time.Duration,
 ) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -2951,8 +2964,8 @@ func (e *Engine) runPeriodicFullScan(
 // continues. In-flight actions for overlapping paths are canceled and
 // replaced (B-122 deduplication).
 func (e *Engine) processBatch(
-	ctx context.Context, batch []PathChanges, bl *Baseline,
-	mode SyncMode, safety *SafetyConfig,
+	ctx context.Context, batch []synctypes.PathChanges, bl *synctypes.Baseline,
+	mode synctypes.SyncMode, safety *synctypes.SafetyConfig,
 ) {
 	e.logger.Info("processing watch batch",
 		slog.Int("paths", len(batch)),
@@ -2962,12 +2975,12 @@ func (e *Engine) processBatch(
 
 	// R-2.10.10: use scanner output as proof-of-accessibility to clear
 	// permission denials for paths observed in this batch.
-	e.clearScannerResolvedPermissions(ctx, pathSetFromBatch(batch))
+	e.permHandler.clearScannerResolvedPermissions(ctx, pathSetFromBatch(batch))
 
-	denied := e.permCache.deniedPrefixes()
+	denied := e.permHandler.DeniedPrefixes()
 	plan, err := e.planner.Plan(batch, bl, mode, safety, denied)
 	if err != nil {
-		if errors.Is(err, ErrBigDeleteTriggered) {
+		if errors.Is(err, synctypes.ErrBigDeleteTriggered) {
 			e.logger.Warn("big-delete protection triggered, skipping batch",
 				slog.Int("paths", len(batch)),
 			)
@@ -3004,7 +3017,7 @@ func (e *Engine) processBatch(
 
 // periodicPermRecheck runs permission rechecks at most once per 60 seconds.
 // Throttled to avoid API hammering (R-2.10.9).
-func (e *Engine) periodicPermRecheck(ctx context.Context, bl *Baseline) {
+func (e *Engine) periodicPermRecheck(ctx context.Context, bl *synctypes.Baseline) {
 	const permRecheckInterval = 60 * time.Second
 
 	now := time.Now()
@@ -3017,19 +3030,19 @@ func (e *Engine) periodicPermRecheck(ctx context.Context, bl *Baseline) {
 	// recheckPermissions calls the Graph API — skip during outage or
 	// throttle to avoid wasting API calls (R-2.10.30). Local permission
 	// rechecks (filesystem-only) proceed regardless.
-	if e.permChecker != nil && !e.isObservationSuppressed() {
+	if e.permHandler.HasPermChecker() && !e.isObservationSuppressed() {
 		shortcuts, err := e.baseline.ListShortcuts(ctx)
 		if err == nil {
-			e.recheckPermissions(ctx, bl, shortcuts)
+			e.permHandler.recheckPermissions(ctx, bl, shortcuts)
 		}
 	}
 
-	e.recheckLocalPermissions(ctx)
+	e.permHandler.recheckLocalPermissions(ctx)
 }
 
 // deduplicateInFlight cancels in-flight actions for paths that appear in the
 // plan. B-122: newer observation supersedes in-progress action.
-func (e *Engine) deduplicateInFlight(plan *ActionPlan) {
+func (e *Engine) deduplicateInFlight(plan *synctypes.ActionPlan) {
 	for i := range plan.Actions {
 		if e.depGraph.HasInFlight(plan.Actions[i].Path) {
 			e.logger.Info("canceling in-flight action for updated path",
@@ -3043,7 +3056,7 @@ func (e *Engine) deduplicateInFlight(plan *ActionPlan) {
 
 // dispatchBatchActions adds plan actions to the DepGraph with monotonic IDs,
 // then admits ready actions through the scope gate.
-func (e *Engine) dispatchBatchActions(ctx context.Context, plan *ActionPlan) {
+func (e *Engine) dispatchBatchActions(ctx context.Context, plan *synctypes.ActionPlan) {
 	// Invariant: Planner always builds Deps with len(Actions).
 	if len(plan.Actions) != len(plan.Deps) {
 		e.logger.Error("plan invariant violation: Actions/Deps length mismatch",
@@ -3069,7 +3082,7 @@ func (e *Engine) dispatchBatchActions(ctx context.Context, plan *ActionPlan) {
 	// transitions (setDispatch) are deferred to admitAndDispatch, which runs
 	// AFTER scope gate checks — setDispatch on a scope-blocked action would
 	// be incorrect (section 2.2: no dispatch before admission).
-	var ready []*TrackedAction
+	var ready []*synctypes.TrackedAction
 
 	for i := range plan.Actions {
 		id := actionIDs[i]
@@ -3099,7 +3112,7 @@ func (e *Engine) dispatchBatchActions(ctx context.Context, plan *ActionPlan) {
 // setDispatch writes the dispatch state transition for an action before it
 // enters the tracker. Only applies to downloads and local deletes (the action
 // types that have remote_state lifecycle).
-func (e *Engine) setDispatch(ctx context.Context, action *Action) {
+func (e *Engine) setDispatch(ctx context.Context, action *synctypes.Action) {
 	if err := e.baseline.SetDispatchStatus(ctx, action.DriveID.String(), action.ItemID, action.Type); err != nil {
 		e.logger.Warn("failed to set dispatch status",
 			slog.String("path", action.Path),
@@ -3109,7 +3122,7 @@ func (e *Engine) setDispatch(ctx context.Context, action *Action) {
 }
 
 // resolvePollInterval returns the configured poll interval or the default.
-func (e *Engine) resolvePollInterval(opts WatchOpts) time.Duration {
+func (e *Engine) resolvePollInterval(opts synctypes.WatchOpts) time.Duration {
 	if opts.PollInterval > 0 {
 		return opts.PollInterval
 	}
@@ -3118,7 +3131,7 @@ func (e *Engine) resolvePollInterval(opts WatchOpts) time.Duration {
 }
 
 // resolveDebounce returns the configured debounce or the default.
-func (e *Engine) resolveDebounce(opts WatchOpts) time.Duration {
+func (e *Engine) resolveDebounce(opts synctypes.WatchOpts) time.Duration {
 	if opts.Debounce > 0 {
 		return opts.Debounce
 	}
@@ -3127,8 +3140,8 @@ func (e *Engine) resolveDebounce(opts WatchOpts) time.Duration {
 }
 
 // isDeleteAction returns true if the action type is a local or remote delete.
-func isDeleteAction(t ActionType) bool {
-	return t == ActionLocalDelete || t == ActionRemoteDelete
+func isDeleteAction(t synctypes.ActionType) bool {
+	return t == synctypes.ActionLocalDelete || t == synctypes.ActionRemoteDelete
 }
 
 // applyDeleteCounter counts planned deletes in the plan, feeds them to the
@@ -3136,7 +3149,7 @@ func isDeleteAction(t ActionType) bool {
 // of the plan and records them as actionable issues. Returns the (possibly
 // filtered) plan. When all actions are filtered, returns a plan with empty
 // Actions/Deps.
-func (e *Engine) applyDeleteCounter(ctx context.Context, plan *ActionPlan) *ActionPlan {
+func (e *Engine) applyDeleteCounter(ctx context.Context, plan *synctypes.ActionPlan) *synctypes.ActionPlan {
 	// Count planned deletes.
 	deleteCount := 0
 	for i := range plan.Actions {
@@ -3165,11 +3178,11 @@ func (e *Engine) applyDeleteCounter(ctx context.Context, plan *ActionPlan) *Acti
 
 	// Filter: separate deletes from non-deletes and rebuild the plan.
 	// Dependency indices must be remapped to the new action positions.
-	kept := make([]Action, 0, len(plan.Actions))
+	kept := make([]synctypes.Action, 0, len(plan.Actions))
 	keptDeps := make([][]int, 0, len(plan.Deps))
 	oldToNew := make(map[int]int, len(plan.Actions))
 
-	var heldDeletes []Action
+	var heldDeletes []synctypes.Action
 
 	for i := range plan.Actions {
 		if isDeleteAction(plan.Actions[i].Type) {
@@ -3214,18 +3227,18 @@ func (e *Engine) applyDeleteCounter(ctx context.Context, plan *ActionPlan) *Acti
 // recordHeldDeletes writes held delete actions to sync_failures as actionable
 // issues with type big_delete_held. Uses UpsertActionableFailures for batch
 // upsert — idempotent when the same deletes are re-observed.
-func (e *Engine) recordHeldDeletes(ctx context.Context, actions []Action) {
+func (e *Engine) recordHeldDeletes(ctx context.Context, actions []synctypes.Action) {
 	if len(actions) == 0 {
 		return
 	}
 
-	failures := make([]ActionableFailure, len(actions))
+	failures := make([]synctypes.ActionableFailure, len(actions))
 	for i := range actions {
-		failures[i] = ActionableFailure{
+		failures[i] = synctypes.ActionableFailure{
 			Path:      actions[i].Path,
 			DriveID:   actions[i].DriveID,
-			Direction: strDelete,
-			IssueType: IssueBigDeleteHeld,
+			Direction: synctypes.DirectionDelete,
+			IssueType: synctypes.IssueBigDeleteHeld,
 			Error:     fmt.Sprintf("held by big-delete protection (threshold: %d)", e.bigDeleteThreshold),
 		}
 	}
@@ -3283,7 +3296,7 @@ func (e *Engine) handleRecheckTick(ctx context.Context) {
 func (e *Engine) handleExternalChanges(ctx context.Context) {
 	// Big-delete clearance: check if user approved held deletes.
 	if e.watch != nil && e.watch.deleteCounter != nil && e.watch.deleteCounter.IsHeld() {
-		rows, err := e.baseline.ListSyncFailuresByIssueType(ctx, IssueBigDeleteHeld)
+		rows, err := e.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueBigDeleteHeld)
 		if err != nil {
 			e.logger.Warn("failed to check big-delete-held entries",
 				slog.String("error", err.Error()),
@@ -3316,7 +3329,7 @@ func (e *Engine) clearResolvedPermissionScopes(ctx context.Context) {
 		return
 	}
 
-	issues, err := e.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	issues, err := e.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueLocalPermissionDenied)
 	if err != nil {
 		e.logger.Warn("failed to check permission failures",
 			slog.String("error", err.Error()),
@@ -3326,7 +3339,7 @@ func (e *Engine) clearResolvedPermissionScopes(ctx context.Context) {
 	}
 
 	// Build set of still-active scope keys from DB.
-	activeScopes := make(map[ScopeKey]bool, len(issues))
+	activeScopes := make(map[synctypes.ScopeKey]bool, len(issues))
 	for i := range issues {
 		if issues[i].ScopeKey.IsPermDir() {
 			activeScopes[issues[i].ScopeKey] = true
@@ -3389,13 +3402,13 @@ func (e *Engine) logWatchSummary(ctx context.Context) {
 // Groups items by issue type and uses UpsertActionableFailures for efficient
 // batch upserts. Aggregated logging: >10 same-type items → 1 WARN with
 // count + sample paths; ≤10 → per-file WARN.
-func (e *Engine) recordSkippedItems(ctx context.Context, skipped []SkippedItem) {
+func (e *Engine) recordSkippedItems(ctx context.Context, skipped []synctypes.SkippedItem) {
 	if len(skipped) == 0 {
 		return
 	}
 
 	// Group by issue type for batch upsert and aggregated logging.
-	byReason := make(map[string][]SkippedItem)
+	byReason := make(map[string][]synctypes.SkippedItem)
 	for i := range skipped {
 		byReason[skipped[i].Reason] = append(byReason[skipped[i].Reason], skipped[i])
 	}
@@ -3429,13 +3442,13 @@ func (e *Engine) recordSkippedItems(ctx context.Context, skipped []SkippedItem) 
 			}
 		}
 
-		// Build ActionableFailure slice for batch upsert.
-		failures := make([]ActionableFailure, len(items))
+		// Build synctypes.ActionableFailure slice for batch upsert.
+		failures := make([]synctypes.ActionableFailure, len(items))
 		for i := range items {
-			failures[i] = ActionableFailure{
+			failures[i] = synctypes.ActionableFailure{
 				Path:      items[i].Path,
 				DriveID:   e.driveID,
-				Direction: "upload",
+				Direction: synctypes.DirectionUpload,
 				IssueType: reason,
 				Error:     items[i].Detail,
 				FileSize:  items[i].FileSize,
@@ -3455,7 +3468,7 @@ func (e *Engine) recordSkippedItems(ctx context.Context, skipped []SkippedItem) 
 // clearResolvedSkippedItems removes sync_failures entries for scanner-detectable
 // issue types that are no longer present in the current scan. For example, if a
 // user renames an invalid file to a valid name, the old failure is auto-cleared.
-func (e *Engine) clearResolvedSkippedItems(ctx context.Context, skipped []SkippedItem) {
+func (e *Engine) clearResolvedSkippedItems(ctx context.Context, skipped []synctypes.SkippedItem) {
 	// Collect current paths per scanner-detectable issue type.
 	currentByType := make(map[string][]string)
 	for i := range skipped {
@@ -3464,7 +3477,11 @@ func (e *Engine) clearResolvedSkippedItems(ctx context.Context, skipped []Skippe
 
 	// For each scanner-detectable issue type, clear entries not in the current scan.
 	// If no items of that type were found, pass empty slice (clears all of that type).
-	for _, issueType := range []string{IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge, IssueCaseCollision} {
+	scannerIssueTypes := []string{
+		synctypes.IssueInvalidFilename, synctypes.IssuePathTooLong,
+		synctypes.IssueFileTooLarge, synctypes.IssueCaseCollision,
+	}
+	for _, issueType := range scannerIssueTypes {
 		paths := currentByType[issueType] // nil if no items — that's fine (clears all)
 		if err := e.baseline.ClearResolvedActionableFailures(ctx, issueType, paths); err != nil {
 			e.logger.Error("failed to clear resolved failures",
@@ -3483,7 +3500,7 @@ const minReconcileInterval = 15 * time.Minute
 // resolveReconcileInterval returns the configured reconcile interval or the
 // default. Negative values disable periodic reconciliation. Values below
 // minReconcileInterval are clamped up.
-func (e *Engine) resolveReconcileInterval(opts WatchOpts) time.Duration {
+func (e *Engine) resolveReconcileInterval(opts synctypes.WatchOpts) time.Duration {
 	if opts.ReconcileInterval < 0 {
 		return 0 // disabled
 	}
@@ -3517,7 +3534,7 @@ func (e *Engine) newReconcileTicker(interval time.Duration) *time.Ticker {
 // initReconcileTicker creates the periodic full-reconciliation timer and
 // returns its channel plus a stop function. If reconciliation is disabled,
 // both the channel and stop function are nil.
-func (e *Engine) initReconcileTicker(opts WatchOpts) (<-chan time.Time, func()) {
+func (e *Engine) initReconcileTicker(opts synctypes.WatchOpts) (<-chan time.Time, func()) {
 	interval := e.resolveReconcileInterval(opts)
 	ticker := e.newReconcileTicker(interval)
 
@@ -3543,7 +3560,7 @@ func (e *Engine) initReconcileTicker(opts WatchOpts) (<-chan time.Time, func()) 
 //   - Buffer.Add is mutex-protected (buffer.go:41)
 //   - Planner is idempotent on duplicate events
 //   - DepGraph.HasInFlight + CancelByPath prevent duplicate dispatch
-func (e *Engine) runFullReconciliationAsync(ctx context.Context, bl *Baseline) {
+func (e *Engine) runFullReconciliationAsync(ctx context.Context, bl *synctypes.Baseline) {
 	if !e.watch.reconcileRunning.CompareAndSwap(false, true) {
 		e.logger.Info("full reconciliation skipped — previous still running")
 		return

@@ -75,7 +75,7 @@ func TestClockSkew_BackwardJump_SyncFailureTimestamp(t *testing.T) {
 
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "file1.txt",
-		Direction:  "upload",
+		Direction:  synctypes.DirectionUpload,
 		IssueType:  "upload_failed",
 		ErrMsg:     "err",
 		HTTPStatus: 500,
@@ -87,7 +87,7 @@ func TestClockSkew_BackwardJump_SyncFailureTimestamp(t *testing.T) {
 	// Should still succeed.
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "file2.txt",
-		Direction:  "upload",
+		Direction:  synctypes.DirectionUpload,
 		IssueType:  "upload_failed",
 		ErrMsg:     "err",
 		HTTPStatus: 500,

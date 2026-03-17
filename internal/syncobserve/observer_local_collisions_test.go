@@ -24,13 +24,12 @@ func isCaseSensitiveFS(t *testing.T, dir string) bool {
 	upper := filepath.Join(dir, "CasE_ChEcK")
 	lower := filepath.Join(dir, "case_check")
 
-	if err := os.WriteFile(upper, []byte("x"), 0o644); err != nil {
-		t.Fatalf("isCaseSensitiveFS: create upper: %v", err)
-	}
+	err := os.WriteFile(upper, []byte("x"), 0o644)
+	require.NoError(t, err, "isCaseSensitiveFS: create upper")
 	defer os.Remove(upper)
 
 	// If creating the lowercase variant fails, FS is case-insensitive.
-	if err := os.WriteFile(lower, []byte("y"), 0o644); err != nil {
+	if writeErr := os.WriteFile(lower, []byte("y"), 0o644); writeErr != nil {
 		return false
 	}
 	defer os.Remove(lower)
@@ -239,7 +238,7 @@ func TestWatch_CaseCollision_EventSuppressed(t *testing.T) {
 	// No event should be emitted — the case collision suppresses it.
 	select {
 	case ev := <-events:
-		t.Fatalf("expected no event, got %+v", ev)
+		require.FailNow(t, "expected no event", "got %+v", ev)
 	case <-time.After(500 * time.Millisecond):
 		// Good — no event emitted.
 	}
@@ -388,7 +387,7 @@ func TestWatch_DirectoryCollision_Suppressed(t *testing.T) {
 	select {
 	case ev := <-events:
 		if ev.ItemType == synctypes.ItemTypeFolder && ev.Name == "Xyz" {
-			t.Fatalf("directory event should be suppressed due to case collision, got %+v", ev)
+			require.FailNow(t, "directory event should be suppressed due to case collision", "got %+v", ev)
 		}
 	case <-time.After(500 * time.Millisecond):
 		// Good — no directory event emitted.
@@ -451,7 +450,7 @@ func TestWatch_TwoDirectoryCollision_Suppressed(t *testing.T) {
 	select {
 	case ev := <-events:
 		if ev.ItemType == synctypes.ItemTypeFolder && ev.Name == "docs" {
-			t.Fatalf("directory event should be suppressed due to case collision, got %+v", ev)
+			require.FailNow(t, "directory event should be suppressed due to case collision", "got %+v", ev)
 		}
 	case <-time.After(500 * time.Millisecond):
 		// Good — no directory event emitted.
@@ -599,7 +598,7 @@ func TestWatch_DeleteCollider_ReEmitsSurvivor(t *testing.T) {
 	// Verify suppressed — no event within timeout.
 	select {
 	case ev := <-events:
-		t.Fatalf("expected create to be suppressed, got %+v", ev)
+		require.FailNow(t, "expected create to be suppressed", "got %+v", ev)
 	case <-time.After(300 * time.Millisecond):
 	}
 
@@ -623,7 +622,7 @@ func TestWatch_DeleteCollider_ReEmitsSurvivor(t *testing.T) {
 		case ev := <-events:
 			received = append(received, ev)
 		case <-timeout:
-			t.Fatalf("expected 2 events, got %d: %+v", len(received), received)
+			require.Len(t, received, 2)
 		}
 	}
 
@@ -737,7 +736,7 @@ func TestWatch_DeleteCollider_ThreeWay_StillBlocked(t *testing.T) {
 	// Only the delete should come through; re-emitted creates are suppressed.
 	for _, ev := range received {
 		if ev.Type == synctypes.ChangeCreate {
-			t.Errorf("expected no create events (survivors still collide), got %+v", ev)
+			assert.FailNow(t, "expected no create events (survivors still collide)", "got %+v", ev)
 		}
 	}
 
