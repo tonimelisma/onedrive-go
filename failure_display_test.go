@@ -11,20 +11,20 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // Validates: R-2.3.7
 func TestGroupFailures_MoreThanTen(t *testing.T) {
 	t.Parallel()
 
-	var failures []sync.SyncFailureRow
+	var failures []synctypes.SyncFailureRow
 	for i := range 15 {
-		failures = append(failures, sync.SyncFailureRow{
+		failures = append(failures, synctypes.SyncFailureRow{
 			Path:      fmt.Sprintf("/docs/file%02d.docx", i),
-			IssueType: sync.IssueQuotaExceeded,
-			ScopeKey:  sync.SKQuotaOwn,
-			Category:  "actionable",
+			IssueType: synctypes.IssueQuotaExceeded,
+			ScopeKey:  synctypes.SKQuotaOwn,
+			Category:  synctypes.CategoryActionable,
 		})
 	}
 
@@ -32,7 +32,7 @@ func TestGroupFailures_MoreThanTen(t *testing.T) {
 	require.Len(t, groups, 1)
 	assert.Empty(t, heldDeletes)
 	assert.Equal(t, 15, groups[0].Count)
-	assert.Equal(t, sync.IssueQuotaExceeded, groups[0].IssueType)
+	assert.Equal(t, synctypes.IssueQuotaExceeded, groups[0].IssueType)
 	assert.Len(t, groups[0].Paths, 15)
 }
 
@@ -40,9 +40,9 @@ func TestGroupFailures_MoreThanTen(t *testing.T) {
 func TestGroupFailures_HumanReadableMessages(t *testing.T) {
 	t.Parallel()
 
-	failures := []sync.SyncFailureRow{
-		{Path: "/a.txt", IssueType: sync.IssueQuotaExceeded, ScopeKey: sync.SKQuotaOwn, Category: "actionable"},
-		{Path: "/b.txt", IssueType: sync.IssuePermissionDenied, Category: "actionable"},
+	failures := []synctypes.SyncFailureRow{
+		{Path: "/a.txt", IssueType: synctypes.IssueQuotaExceeded, ScopeKey: synctypes.SKQuotaOwn, Category: synctypes.CategoryActionable},
+		{Path: "/b.txt", IssueType: synctypes.IssuePermissionDenied, Category: synctypes.CategoryActionable},
 	}
 
 	groups, _ := groupFailures(failures, nil)
@@ -60,10 +60,10 @@ func TestGroupFailures_HumanReadableMessages(t *testing.T) {
 func TestGroupFailures_SeparatesHeldDeletes(t *testing.T) {
 	t.Parallel()
 
-	failures := []sync.SyncFailureRow{
-		{Path: "/a.txt", IssueType: sync.IssueQuotaExceeded, Category: "actionable"},
-		{Path: "/b.txt", IssueType: sync.IssueBigDeleteHeld, Category: "actionable"},
-		{Path: "/c.txt", IssueType: sync.IssueBigDeleteHeld, Category: "actionable"},
+	failures := []synctypes.SyncFailureRow{
+		{Path: "/a.txt", IssueType: synctypes.IssueQuotaExceeded, Category: synctypes.CategoryActionable},
+		{Path: "/b.txt", IssueType: synctypes.IssueBigDeleteHeld, Category: synctypes.CategoryActionable},
+		{Path: "/c.txt", IssueType: synctypes.IssueBigDeleteHeld, Category: synctypes.CategoryActionable},
 	}
 
 	groups, heldDeletes := groupFailures(failures, nil)
@@ -75,21 +75,21 @@ func TestGroupFailures_SeparatesHeldDeletes(t *testing.T) {
 func TestGroupFailures_ShortcutScopeKeyHumanized(t *testing.T) {
 	t.Parallel()
 
-	shortcuts := []sync.Shortcut{
+	shortcuts := []synctypes.Shortcut{
 		{
 			RemoteDrive: "driveAAA",
 			RemoteItem:  "itemBBB",
 			LocalPath:   "Team Docs",
-			Observation: sync.ObservationDelta,
+			Observation: synctypes.ObservationDelta,
 		},
 	}
 
-	failures := []sync.SyncFailureRow{
+	failures := []synctypes.SyncFailureRow{
 		{
 			Path:      "/Team Docs/report.docx",
-			IssueType: sync.IssueQuotaExceeded,
-			ScopeKey:  sync.SKQuotaShortcut("driveAAA:itemBBB"),
-			Category:  "actionable",
+			IssueType: synctypes.IssueQuotaExceeded,
+			ScopeKey:  synctypes.SKQuotaShortcut("driveAAA:itemBBB"),
+			Category:  synctypes.CategoryActionable,
 		},
 	}
 
@@ -102,9 +102,9 @@ func TestGroupFailures_ShortcutScopeKeyHumanized(t *testing.T) {
 func TestGroupFailures_GroupsByScopeKey(t *testing.T) {
 	t.Parallel()
 
-	failures := []sync.SyncFailureRow{
-		{Path: "/a.txt", IssueType: sync.IssueQuotaExceeded, ScopeKey: sync.SKQuotaOwn, Category: "actionable"},
-		{Path: "/b.txt", IssueType: sync.IssueQuotaExceeded, ScopeKey: sync.SKQuotaShortcut("drive1:item1"), Category: "actionable"},
+	failures := []synctypes.SyncFailureRow{
+		{Path: "/a.txt", IssueType: synctypes.IssueQuotaExceeded, ScopeKey: synctypes.SKQuotaOwn, Category: synctypes.CategoryActionable},
+		{Path: "/b.txt", IssueType: synctypes.IssueQuotaExceeded, ScopeKey: synctypes.SKQuotaShortcut("drive1:item1"), Category: synctypes.CategoryActionable},
 	}
 
 	groups, _ := groupFailures(failures, nil)
@@ -116,11 +116,11 @@ func TestGroupFailures_GroupsByScopeKey(t *testing.T) {
 func TestGroupFailures_SortedLargestFirst(t *testing.T) {
 	t.Parallel()
 
-	failures := []sync.SyncFailureRow{
-		{Path: "/a.txt", IssueType: sync.IssuePermissionDenied, Category: "actionable"},
-		{Path: "/b.txt", IssueType: sync.IssueQuotaExceeded, ScopeKey: sync.SKQuotaOwn, Category: "actionable"},
-		{Path: "/c.txt", IssueType: sync.IssueQuotaExceeded, ScopeKey: sync.SKQuotaOwn, Category: "actionable"},
-		{Path: "/d.txt", IssueType: sync.IssueQuotaExceeded, ScopeKey: sync.SKQuotaOwn, Category: "actionable"},
+	failures := []synctypes.SyncFailureRow{
+		{Path: "/a.txt", IssueType: synctypes.IssuePermissionDenied, Category: synctypes.CategoryActionable},
+		{Path: "/b.txt", IssueType: synctypes.IssueQuotaExceeded, ScopeKey: synctypes.SKQuotaOwn, Category: synctypes.CategoryActionable},
+		{Path: "/c.txt", IssueType: synctypes.IssueQuotaExceeded, ScopeKey: synctypes.SKQuotaOwn, Category: synctypes.CategoryActionable},
+		{Path: "/d.txt", IssueType: synctypes.IssueQuotaExceeded, ScopeKey: synctypes.SKQuotaOwn, Category: synctypes.CategoryActionable},
 	}
 
 	groups, _ := groupFailures(failures, nil)
@@ -148,8 +148,8 @@ func TestPrintGroupedFailures_VerboseShowsAll(t *testing.T) {
 
 	groups := []failureGroup{
 		{
-			IssueType: sync.IssueQuotaExceeded,
-			Message:   sync.MessageForIssueType(sync.IssueQuotaExceeded),
+			IssueType: synctypes.IssueQuotaExceeded,
+			Message:   synctypes.MessageForIssueType(synctypes.IssueQuotaExceeded),
 			Paths:     paths,
 			Count:     12,
 		},
@@ -178,8 +178,8 @@ func TestPrintGroupedFailures_NonVerboseTruncates(t *testing.T) {
 
 	groups := []failureGroup{
 		{
-			IssueType: sync.IssueQuotaExceeded,
-			Message:   sync.MessageForIssueType(sync.IssueQuotaExceeded),
+			IssueType: synctypes.IssueQuotaExceeded,
+			Message:   synctypes.MessageForIssueType(synctypes.IssueQuotaExceeded),
 			Paths:     paths,
 			Count:     12,
 		},
@@ -201,9 +201,9 @@ func TestPrintGroupedFailures_ShowsScopeKey(t *testing.T) {
 
 	groups := []failureGroup{
 		{
-			IssueType: sync.IssueQuotaExceeded,
+			IssueType: synctypes.IssueQuotaExceeded,
 			ScopeKey:  "Team Docs",
-			Message:   sync.MessageForIssueType(sync.IssueQuotaExceeded),
+			Message:   synctypes.MessageForIssueType(synctypes.IssueQuotaExceeded),
 			Paths:     []string{"/Team Docs/a.txt"},
 			Count:     1,
 		},
@@ -219,9 +219,9 @@ func TestPrintGroupedFailures_NoScopeLineWhenEmpty(t *testing.T) {
 
 	groups := []failureGroup{
 		{
-			IssueType: sync.IssueInvalidFilename,
+			IssueType: synctypes.IssueInvalidFilename,
 			ScopeKey:  "",
-			Message:   sync.MessageForIssueType(sync.IssueInvalidFilename),
+			Message:   synctypes.MessageForIssueType(synctypes.IssueInvalidFilename),
 			Paths:     []string{"/bad:file.txt"},
 			Count:     1,
 		},
@@ -236,7 +236,7 @@ func TestPrintGroupedFailures_NoScopeLineWhenEmpty(t *testing.T) {
 func TestPrintGroupedIssuesJSON_StructuredOutput(t *testing.T) {
 	t.Parallel()
 
-	conflicts := []sync.ConflictRecord{
+	conflicts := []synctypes.ConflictRecord{
 		{
 			ID:           "abc123",
 			Path:         "/conflict.txt",
@@ -247,15 +247,15 @@ func TestPrintGroupedIssuesJSON_StructuredOutput(t *testing.T) {
 
 	groups := []failureGroup{
 		{
-			IssueType: sync.IssueQuotaExceeded,
+			IssueType: synctypes.IssueQuotaExceeded,
 			ScopeKey:  "your OneDrive storage",
-			Message:   sync.MessageForIssueType(sync.IssueQuotaExceeded),
+			Message:   synctypes.MessageForIssueType(synctypes.IssueQuotaExceeded),
 			Paths:     []string{"/a.txt", "/b.txt"},
 			Count:     2,
 		},
 	}
 
-	heldDeletes := []sync.SyncFailureRow{
+	heldDeletes := []synctypes.SyncFailureRow{
 		{Path: "/deleted.txt", LastSeenAt: 2000000000},
 	}
 
@@ -283,20 +283,20 @@ func TestPrintGroupedIssuesJSON_StructuredOutput(t *testing.T) {
 func TestPrintGroupedIssuesText_AllSections(t *testing.T) {
 	t.Parallel()
 
-	conflicts := []sync.ConflictRecord{
+	conflicts := []synctypes.ConflictRecord{
 		{ID: "abc123", Path: "/conflict.txt", ConflictType: "content", DetectedAt: 1000000000},
 	}
 
 	groups := []failureGroup{
 		{
-			IssueType: sync.IssueQuotaExceeded,
-			Message:   sync.MessageForIssueType(sync.IssueQuotaExceeded),
+			IssueType: synctypes.IssueQuotaExceeded,
+			Message:   synctypes.MessageForIssueType(synctypes.IssueQuotaExceeded),
 			Paths:     []string{"/a.txt"},
 			Count:     1,
 		},
 	}
 
-	heldDeletes := []sync.SyncFailureRow{
+	heldDeletes := []synctypes.SyncFailureRow{
 		{Path: "/deleted.txt", LastSeenAt: 2000000000},
 	}
 
@@ -312,9 +312,9 @@ func TestPrintGroupedIssuesText_AllSections(t *testing.T) {
 func TestPrintPendingRetries(t *testing.T) {
 	t.Parallel()
 
-	groups := []sync.PendingRetryGroup{
-		{ScopeKey: sync.SKThrottleAccount, Count: 8, EarliestNext: time.Now().Add(2*time.Minute + 30*time.Second)},
-		{ScopeKey: sync.SKQuotaOwn, Count: 4, EarliestNext: time.Now().Add(4*time.Minute + 15*time.Second)},
+	groups := []synctypes.PendingRetryGroup{
+		{ScopeKey: synctypes.SKThrottleAccount, Count: 8, EarliestNext: time.Now().Add(2*time.Minute + 30*time.Second)},
+		{ScopeKey: synctypes.SKQuotaOwn, Count: 4, EarliestNext: time.Now().Add(4*time.Minute + 15*time.Second)},
 	}
 
 	var buf bytes.Buffer
@@ -330,9 +330,9 @@ func TestPrintHeldDeletesGrouped_SmallCount(t *testing.T) {
 	t.Parallel()
 
 	// Under threshold: should show individual paths.
-	var heldDeletes []sync.SyncFailureRow
+	var heldDeletes []synctypes.SyncFailureRow
 	for i := range 5 {
-		heldDeletes = append(heldDeletes, sync.SyncFailureRow{
+		heldDeletes = append(heldDeletes, synctypes.SyncFailureRow{
 			Path:       fmt.Sprintf("dir/file%d.txt", i),
 			LastSeenAt: 1700000000000000000,
 		})
@@ -350,14 +350,14 @@ func TestPrintHeldDeletesGrouped_LargeCount(t *testing.T) {
 	t.Parallel()
 
 	// Over threshold: should group by directory.
-	var heldDeletes []sync.SyncFailureRow
+	var heldDeletes []synctypes.SyncFailureRow
 	for i := range 30 {
 		dir := "Documents/Archive"
 		if i >= 20 {
 			dir = "Photos/2024"
 		}
 
-		heldDeletes = append(heldDeletes, sync.SyncFailureRow{
+		heldDeletes = append(heldDeletes, synctypes.SyncFailureRow{
 			Path:       fmt.Sprintf("%s/file%d.txt", dir, i),
 			LastSeenAt: 1700000000000000000,
 		})
@@ -379,9 +379,9 @@ func TestPrintHeldDeletesGrouped_LargeCountVerbose(t *testing.T) {
 	t.Parallel()
 
 	// Over threshold but verbose: should show individual paths.
-	var heldDeletes []sync.SyncFailureRow
+	var heldDeletes []synctypes.SyncFailureRow
 	for i := range 25 {
-		heldDeletes = append(heldDeletes, sync.SyncFailureRow{
+		heldDeletes = append(heldDeletes, synctypes.SyncFailureRow{
 			Path:       fmt.Sprintf("dir/file%d.txt", i),
 			LastSeenAt: 1700000000000000000,
 		})

@@ -320,6 +320,7 @@ func TestScope_SuccessResetsShortcutWindow(t *testing.T) {
 	assert.Equal(t, synctypes.SKQuotaShortcut(shortcutKey), result.ScopeKey)
 }
 
+// Validates: R-2.10.3
 // TestScope_SameFileDoesNotEscalate verifies that repeated failures from
 // the same file path do not trigger a scope block, since the sliding window
 // counts unique paths.
@@ -330,7 +331,7 @@ func TestScope_SameFileDoesNotEscalate(t *testing.T) {
 	ss := NewScopeState(clock, discardLogger())
 
 	// Feed 10 failures on the same path — should never trigger.
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		r := synctypes.WorkerResult{
 			Path:       "/same-file.txt",
 			HTTPStatus: 507,
@@ -341,6 +342,7 @@ func TestScope_SameFileDoesNotEscalate(t *testing.T) {
 	}
 }
 
+// Validates: R-2.10.3, R-2.10.28
 // TestScope_UpdateScopeOutagePattern verifies that 400 outage patterns
 // feed the service sliding window and can trigger a service block.
 func TestScope_UpdateScopeOutagePattern(t *testing.T) {
@@ -365,6 +367,7 @@ func TestScope_UpdateScopeOutagePattern(t *testing.T) {
 	}
 }
 
+// Validates: R-2.10.3, R-2.10.28
 // TestScope_OutagePatternSharesWindowWith5xx verifies that 400 outage
 // patterns and 5xx errors feed the same service sliding window.
 func TestScope_OutagePatternSharesWindowWith5xx(t *testing.T) {
@@ -393,6 +396,7 @@ func TestScope_OutagePatternSharesWindowWith5xx(t *testing.T) {
 	assert.Equal(t, synctypes.SKService, result.ScopeKey)
 }
 
+// Validates: R-2.10.3
 // TestScope_NonScopeStatusReturnsEmpty verifies that non-scope HTTP
 // statuses (e.g. 404, 409) produce a zero-value ScopeUpdateResult.
 func TestScope_NonScopeStatusReturnsEmpty(t *testing.T) {
@@ -424,6 +428,7 @@ func TestScope_NonScopeStatusReturnsEmpty(t *testing.T) {
 	}
 }
 
+// Validates: R-2.10.42
 // TestScope_SuccessResetsServiceWindow verifies that a success resets the
 // service sliding window in addition to quota windows.
 func TestScope_SuccessResetsServiceWindow(t *testing.T) {
@@ -454,6 +459,7 @@ func TestScope_SuccessResetsServiceWindow(t *testing.T) {
 // synctypes.ScopeKey type system tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10
 func TestScopeKey_StringRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -480,6 +486,7 @@ func TestScopeKey_StringRoundTrip(t *testing.T) {
 	}
 }
 
+// Validates: R-2.10
 func TestParseScopeKey_Unknown(t *testing.T) {
 	t.Parallel()
 
@@ -491,6 +498,7 @@ func TestParseScopeKey_Unknown(t *testing.T) {
 	assert.True(t, sk.IsZero(), "empty string should produce zero synctypes.ScopeKey")
 }
 
+// Validates: R-2.10
 func TestScopeKey_IsZero(t *testing.T) {
 	t.Parallel()
 
@@ -499,6 +507,7 @@ func TestScopeKey_IsZero(t *testing.T) {
 	assert.False(t, synctypes.SKPermDir("x").IsZero())
 }
 
+// Validates: R-2.10
 func TestScopeKey_IsGlobal(t *testing.T) {
 	t.Parallel()
 
@@ -510,6 +519,7 @@ func TestScopeKey_IsGlobal(t *testing.T) {
 	assert.False(t, synctypes.SKDiskLocal.IsGlobal())
 }
 
+// Validates: R-2.10
 func TestScopeKey_IsPermDir(t *testing.T) {
 	t.Parallel()
 
@@ -518,6 +528,7 @@ func TestScopeKey_IsPermDir(t *testing.T) {
 	assert.False(t, synctypes.SKQuotaOwn.IsPermDir())
 }
 
+// Validates: R-2.10
 func TestScopeKey_DirPath(t *testing.T) {
 	t.Parallel()
 
@@ -527,6 +538,7 @@ func TestScopeKey_DirPath(t *testing.T) {
 	assert.Panics(t, func() { synctypes.SKThrottleAccount.DirPath() })
 }
 
+// Validates: R-2.10
 func TestScopeKey_IssueType(t *testing.T) {
 	t.Parallel()
 
@@ -548,6 +560,7 @@ func TestScopeKey_IssueType(t *testing.T) {
 	}
 }
 
+// Validates: R-2.10
 func TestScopeKey_Humanize(t *testing.T) {
 	t.Parallel()
 
@@ -568,6 +581,7 @@ func TestScopeKey_Humanize(t *testing.T) {
 	assert.Equal(t, "driveX:itemY", synctypes.SKQuotaShortcut("driveX:itemY").Humanize(nil))
 }
 
+// Validates: R-2.10
 func TestScopeKey_BlocksAction(t *testing.T) {
 	t.Parallel()
 

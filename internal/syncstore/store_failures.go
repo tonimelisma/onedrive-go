@@ -79,7 +79,7 @@ func IsActionableIssue(issueType string) bool {
 // When ItemID is not provided and direction is download/delete, it is
 // auto-resolved from remote_state within the same transaction.
 //
-// The engine sets p.Category ("transient" or "actionable") and provides
+// The engine sets p.Category (CategoryTransient or CategoryActionable) and provides
 // delayFn for computing next_retry_at from the current failure count.
 // Passing delayFn=nil means no retry scheduling (actionable failures).
 //
@@ -95,7 +95,7 @@ func (m *SyncStore) RecordFailure(ctx context.Context, p *synctypes.SyncFailureP
 	defer func() { _ = tx.Rollback() }()
 
 	// Step 1: Transition remote_state status for download/delete failures.
-	if p.Direction == synctypes.StrDownload || p.Direction == synctypes.StrDelete {
+	if p.Direction == synctypes.DirectionDownload || p.Direction == synctypes.DirectionDelete {
 		if transErr := m.transitionRemoteStateOnFailure(ctx, tx, p.Path); transErr != nil {
 			return transErr
 		}
@@ -104,7 +104,7 @@ func (m *SyncStore) RecordFailure(ctx context.Context, p *synctypes.SyncFailureP
 	// Step 2: Read current failure count and compute backoff.
 	category := p.Category
 	if category == "" {
-		category = synctypes.StrTransient
+		category = synctypes.CategoryTransient
 	}
 
 	currentFailures := m.readFailureCount(ctx, tx, p)
@@ -196,7 +196,7 @@ func (m *SyncStore) resolveItemID(ctx context.Context, tx *sql.Tx, p *synctypes.
 		return p.ItemID, nil
 	}
 
-	if p.Direction != synctypes.StrDownload && p.Direction != synctypes.StrDelete {
+	if p.Direction != synctypes.DirectionDownload && p.Direction != synctypes.DirectionDelete {
 		return "", nil
 	}
 

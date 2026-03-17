@@ -231,7 +231,7 @@ func TestComputeNewStatus(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			gotStatus, gotChanged := ComputeNewStatus(tt.currentStatus, tt.currentHash, tt.observedHash, tt.isDeleted)
+			gotStatus, gotChanged := computeNewStatus(tt.currentStatus, tt.currentHash, tt.observedHash, tt.isDeleted)
 			assert.Equal(t, tt.wantStatus, gotStatus, "status")
 			assert.Equal(t, tt.wantChanged, gotChanged, "changed")
 		})

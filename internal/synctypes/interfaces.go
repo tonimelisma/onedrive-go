@@ -84,11 +84,11 @@ type ScopeBlockStore interface {
 // Only Path, DriveID, Direction, and ErrMsg are always required. Other fields
 // are optional — zero values are preserved via COALESCE on conflict.
 type SyncFailureParams struct {
-	Path       string     // required
-	DriveID    driveid.ID // required
-	Direction  string     // "upload", "download", "delete"
-	IssueType  string     // e.g. IssueQuotaExceeded; empty = generic transient
-	Category   string     // "transient" or "actionable" — set by the engine, never by the store
+	Path       string          // required
+	DriveID    driveid.ID      // required
+	Direction  Direction       // DirectionUpload, DirectionDownload, DirectionDelete
+	IssueType  string          // e.g. IssueQuotaExceeded; empty = generic transient
+	Category   FailureCategory // CategoryTransient or CategoryActionable — set by the engine, never by the store
 	ErrMsg     string
 	HTTPStatus int
 	FileSize   int64    // optional, for upload validation context
@@ -101,8 +101,8 @@ type SyncFailureParams struct {
 type SyncFailureRow struct {
 	Path         string
 	DriveID      driveid.ID
-	Direction    string // "download", "upload", "delete"
-	Category     string // "transient", "actionable"
+	Direction    Direction       // DirectionDownload, DirectionUpload, DirectionDelete
+	Category     FailureCategory // CategoryTransient, CategoryActionable
 	IssueType    string
 	ItemID       string
 	FailureCount int
@@ -121,7 +121,7 @@ type SyncFailureRow struct {
 type ActionableFailure struct {
 	Path      string
 	DriveID   driveid.ID
-	Direction string
+	Direction Direction
 	IssueType string
 	Error     string
 	ScopeKey  ScopeKey // typed scope key; zero value = unscoped

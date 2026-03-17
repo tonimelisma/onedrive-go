@@ -68,8 +68,8 @@ func TestPerSideHash_PreventsReUploadLoop(t *testing.T) {
 	require.NoError(t, err)
 
 	// No upload, no download — both sides match their respective baselines.
-	uploads := syncplan.ActionsOfType(plan.Actions, synctypes.ActionUpload)
-	downloads := syncplan.ActionsOfType(plan.Actions, synctypes.ActionDownload)
+	uploads := synctest.ActionsOfType(plan.Actions, synctypes.ActionUpload)
+	downloads := synctest.ActionsOfType(plan.Actions, synctypes.ActionDownload)
 	assert.Empty(t, uploads, "no re-upload when local hash matches baseline")
 	assert.Empty(t, downloads, "no re-download when remote hash matches baseline")
 }
@@ -118,8 +118,8 @@ func TestPerSideHash_PreventsReDownloadLoop(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
-	downloads := syncplan.ActionsOfType(plan.Actions, synctypes.ActionDownload)
-	uploads := syncplan.ActionsOfType(plan.Actions, synctypes.ActionUpload)
+	downloads := synctest.ActionsOfType(plan.Actions, synctypes.ActionDownload)
+	uploads := synctest.ActionsOfType(plan.Actions, synctypes.ActionUpload)
 	assert.Empty(t, downloads, "no re-download when remote hash matches baseline")
 	assert.Empty(t, uploads, "no re-upload when local hash matches baseline")
 }
@@ -213,84 +213,7 @@ func TestPerSideHash_NormalDriveUnaffected(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should produce a download because remote hash changed.
-	downloads := syncplan.ActionsOfType(plan.Actions, synctypes.ActionDownload)
+	downloads := synctest.ActionsOfType(plan.Actions, synctypes.ActionDownload)
 	assert.Len(t, downloads, 1,
 		"normal drive: remote hash change should produce download")
-}
-
-// TestDetectLocalChange_UsesLocalHash validates that DetectLocalChange
-// compares against baseline.LocalHash (not RemoteHash), which is critical
-// for the per-side hash scheme.
-func TestDetectLocalChange_UsesLocalHash(t *testing.T) {
-	t.Run("local_matches_local_hash", func(t *testing.T) {
-		view := &synctypes.PathView{
-			Path: "test.txt",
-			Local: &synctypes.LocalState{
-				Hash: "localHash",
-			},
-			Baseline: &synctypes.BaselineEntry{
-				ItemType:   synctypes.ItemTypeFile,
-				LocalHash:  "localHash",
-				RemoteHash: "differentRemoteHash",
-			},
-		}
-
-		assert.False(t, syncplan.DetectLocalChange(view),
-			"local hash matching LocalHash should NOT be a change")
-	})
-
-	t.Run("local_differs_from_local_hash", func(t *testing.T) {
-		view := &synctypes.PathView{
-			Path: "test.txt",
-			Local: &synctypes.LocalState{
-				Hash: "newLocalHash",
-			},
-			Baseline: &synctypes.BaselineEntry{
-				ItemType:   synctypes.ItemTypeFile,
-				LocalHash:  "oldLocalHash",
-				RemoteHash: "oldLocalHash",
-			},
-		}
-
-		assert.True(t, syncplan.DetectLocalChange(view),
-			"local hash differing from LocalHash should be a change")
-	})
-}
-
-// TestDetectRemoteChange_UsesRemoteHash validates that DetectRemoteChange
-// compares against baseline.RemoteHash (not LocalHash).
-func TestDetectRemoteChange_UsesRemoteHash(t *testing.T) {
-	t.Run("remote_matches_remote_hash", func(t *testing.T) {
-		view := &synctypes.PathView{
-			Path: "test.txt",
-			Remote: &synctypes.RemoteState{
-				Hash: "remoteHash",
-			},
-			Baseline: &synctypes.BaselineEntry{
-				ItemType:   synctypes.ItemTypeFile,
-				LocalHash:  "differentLocalHash",
-				RemoteHash: "remoteHash",
-			},
-		}
-
-		assert.False(t, syncplan.DetectRemoteChange(view),
-			"remote hash matching RemoteHash should NOT be a change")
-	})
-
-	t.Run("remote_differs_from_remote_hash", func(t *testing.T) {
-		view := &synctypes.PathView{
-			Path: "test.txt",
-			Remote: &synctypes.RemoteState{
-				Hash: "newRemoteHash",
-			},
-			Baseline: &synctypes.BaselineEntry{
-				ItemType:   synctypes.ItemTypeFile,
-				LocalHash:  "someHash",
-				RemoteHash: "oldRemoteHash",
-			},
-		}
-
-		assert.True(t, syncplan.DetectRemoteChange(view),
-			"remote hash differing from RemoteHash should be a change")
-	})
 }

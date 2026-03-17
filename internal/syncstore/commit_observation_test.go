@@ -379,7 +379,7 @@ func TestRecordFailure_TransitionsDownloading(t *testing.T) {
 	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "hello.txt",
 		DriveID:    driveid.New(testDriveID),
-		Direction:  "download",
+		Direction:  synctypes.DirectionDownload,
 		ErrMsg:     "connection reset",
 		HTTPStatus: 500,
 	}, nil)
@@ -426,7 +426,7 @@ func TestRecordFailure_OptimisticConcurrency_NoMatch(t *testing.T) {
 	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "hello.txt",
 		DriveID:    driveid.New(testDriveID),
-		Direction:  "download",
+		Direction:  synctypes.DirectionDownload,
 		ErrMsg:     "some error",
 		HTTPStatus: 500,
 	}, nil)
@@ -461,7 +461,7 @@ func TestRecordFailure_IncreasesFailureCount(t *testing.T) {
 	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "hello.txt",
 		DriveID:    driveid.New(testDriveID),
-		Direction:  "download",
+		Direction:  synctypes.DirectionDownload,
 		ErrMsg:     "err1",
 		HTTPStatus: 500,
 	}, nil)
@@ -484,7 +484,7 @@ func TestRecordFailure_IncreasesFailureCount(t *testing.T) {
 	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "hello.txt",
 		DriveID:    driveid.New(testDriveID),
-		Direction:  "download",
+		Direction:  synctypes.DirectionDownload,
 		ErrMsg:     "err2",
 		HTTPStatus: 503,
 	}, nil)
@@ -515,7 +515,7 @@ func TestRecordFailure_DeleteTransitionsDeleting(t *testing.T) {
 	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "hello.txt",
 		DriveID:    driveid.New(testDriveID),
-		Direction:  "download",
+		Direction:  synctypes.DirectionDownload,
 		ErrMsg:     "permission denied",
 		HTTPStatus: 403,
 	}, nil)
@@ -558,7 +558,7 @@ func TestRecordFailure_Download(t *testing.T) {
 	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "hello.txt",
 		DriveID:    driveid.New(testDriveID),
-		Direction:  "download",
+		Direction:  synctypes.DirectionDownload,
 		ErrMsg:     "connection reset",
 		HTTPStatus: 500,
 	}, nil)
@@ -601,7 +601,7 @@ func TestRecordFailure_Delete(t *testing.T) {
 	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "hello.txt",
 		DriveID:    driveid.New(testDriveID),
-		Direction:  "delete",
+		Direction:  synctypes.DirectionDelete,
 		ErrMsg:     "permission denied",
 		HTTPStatus: 403,
 	}, nil)
@@ -630,9 +630,9 @@ func TestRecordFailure_SetsIssueTypeAndScopeKey(t *testing.T) {
 	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "hello.txt",
 		DriveID:    driveid.New(testDriveID),
-		Direction:  "download",
+		Direction:  synctypes.DirectionDownload,
 		IssueType:  synctypes.IssueQuotaExceeded,
-		Category:   "actionable",
+		Category:   synctypes.CategoryActionable,
 		ErrMsg:     "quota full",
 		HTTPStatus: 507,
 		ScopeKey:   synctypes.SKQuotaOwn,

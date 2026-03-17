@@ -602,7 +602,7 @@ func TestHashAndEmit_CaseCollision_Suppressed(t *testing.T) {
 	// No event should be emitted — the case collision suppresses it.
 	select {
 	case ev := <-events:
-		t.Fatalf("expected no event due to case collision, got %+v", ev)
+		require.FailNow(t, "expected no event due to case collision", "got %+v", ev)
 	case <-time.After(500 * time.Millisecond):
 		// Good — no event emitted.
 	}
@@ -669,7 +669,7 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 	// Wait for write coalesce cooldown + processing.
 	select {
 	case ev := <-events:
-		t.Fatalf("expected no event (collision via cached lookup), got %+v", ev)
+		require.FailNow(t, "expected no event (collision via cached lookup)", "got %+v", ev)
 	case <-time.After(500 * time.Millisecond):
 		// Good — no event emitted.
 	}

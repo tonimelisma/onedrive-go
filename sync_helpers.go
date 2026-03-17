@@ -7,6 +7,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // newSyncEngine creates a sync.Engine from a driveops.Session and resolved config.
@@ -29,7 +30,7 @@ func newSyncEngine(session *driveops.Session, resolved *config.ResolvedDrive, ve
 		return nil, fmt.Errorf("invalid min_free_space %q: %w", resolved.MinFreeSpace, err)
 	}
 
-	ecfg := &sync.EngineConfig{
+	ecfg := &synctypes.EngineConfig{
 		DBPath:             dbPath,
 		SyncRoot:           syncDir,
 		DataDir:            config.DefaultDataDir(),

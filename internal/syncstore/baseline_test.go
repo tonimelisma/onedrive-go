@@ -26,6 +26,7 @@ func commitAll(t *testing.T, mgr *SyncStore, ctx context.Context, outcomes []syn
 	}
 }
 
+// Validates: R-2.2
 func TestNewSyncStore_CreatesDB(t *testing.T) {
 	t.Parallel()
 
@@ -91,6 +92,7 @@ func TestSyncStore_Close_CheckpointsWAL(t *testing.T) {
 	// If WAL file doesn't exist at all, that's also fine.
 }
 
+// Validates: R-2.2
 func TestNewSyncStore_RunsMigrations(t *testing.T) {
 	t.Parallel()
 
@@ -108,6 +110,7 @@ func TestNewSyncStore_RunsMigrations(t *testing.T) {
 	assert.NotZero(t, count, "no migrations applied (goose_db_version has no entries)")
 }
 
+// Validates: R-2.2
 func TestCheckpoint_PrunesDeletedRemoteState(t *testing.T) {
 	t.Parallel()
 
@@ -149,6 +152,7 @@ func TestCheckpoint_PrunesDeletedRemoteState(t *testing.T) {
 	assert.Equal(t, 2, count, "old deleted should be pruned, new deleted + synced should remain")
 }
 
+// Validates: R-2.2
 func TestCheckpoint_PrunesActionableSyncFailures(t *testing.T) {
 	t.Parallel()
 
@@ -189,6 +193,7 @@ func TestCheckpoint_PrunesActionableSyncFailures(t *testing.T) {
 	assert.Equal(t, 2, count, "old actionable should be pruned, new actionable + transient should remain")
 }
 
+// Validates: R-2.2
 func TestCheckpoint_ZeroRetentionSkipsPruning(t *testing.T) {
 	t.Parallel()
 
@@ -213,6 +218,7 @@ func TestCheckpoint_ZeroRetentionSkipsPruning(t *testing.T) {
 	assert.Equal(t, 1, count, "zero retention should not prune anything")
 }
 
+// Validates: R-2.2
 func TestLoad_EmptyBaseline(t *testing.T) {
 	t.Parallel()
 
@@ -294,6 +300,7 @@ func TestCommit_Upload(t *testing.T) {
 	assert.Equal(t, "hash-remote", entry.RemoteHash)
 }
 
+// Validates: R-2.2
 func TestCommit_FolderCreate(t *testing.T) {
 	t.Parallel()
 
@@ -324,6 +331,7 @@ func TestCommit_FolderCreate(t *testing.T) {
 	assert.Zero(t, entry.Size)
 }
 
+// Validates: R-2.2
 func TestCommit_UpdateSynced(t *testing.T) {
 	t.Parallel()
 
@@ -426,6 +434,7 @@ func TestCommit_RemoteDelete(t *testing.T) {
 	assert.False(t, ok, "entry still exists after remote delete")
 }
 
+// Validates: R-2.2
 func TestCommit_Cleanup(t *testing.T) {
 	t.Parallel()
 
@@ -455,6 +464,7 @@ func TestCommit_Cleanup(t *testing.T) {
 	assert.False(t, ok, "entry still exists after cleanup")
 }
 
+// Validates: R-2.2
 func TestCommit_Move(t *testing.T) {
 	t.Parallel()
 
@@ -493,6 +503,7 @@ func TestCommit_Move(t *testing.T) {
 	assert.Equal(t, "i", entry.ItemID)
 }
 
+// Validates: R-2.2, R-2.3.2
 func TestCommit_Conflict(t *testing.T) {
 	t.Parallel()
 
@@ -531,6 +542,7 @@ func TestCommit_Conflict(t *testing.T) {
 	assert.Equal(t, "unresolved", resolution)
 }
 
+// Validates: R-2.2, R-2.3.2
 func TestCommit_Conflict_StoresRemoteMtime(t *testing.T) {
 	t.Parallel()
 
@@ -594,6 +606,7 @@ func TestCommit_SkipsFailedOutcomes(t *testing.T) {
 	assert.Equal(t, 0, b.Len())
 }
 
+// Validates: R-2.2
 func TestCommit_DeltaToken(t *testing.T) {
 	t.Parallel()
 
@@ -620,6 +633,7 @@ func TestCommit_DeltaToken(t *testing.T) {
 	assert.Equal(t, "token-abc", token)
 }
 
+// Validates: R-2.2
 func TestCommit_DeltaTokenUpdate(t *testing.T) {
 	t.Parallel()
 
@@ -652,6 +666,7 @@ func TestCommit_DeltaTokenUpdate(t *testing.T) {
 	assert.Equal(t, "token-2", token)
 }
 
+// Validates: R-2.2
 func TestCommit_SyncedAtFromNowFunc(t *testing.T) {
 	t.Parallel()
 
@@ -675,6 +690,7 @@ func TestCommit_SyncedAtFromNowFunc(t *testing.T) {
 	assert.Equal(t, fixedTime.UnixNano(), entry.SyncedAt)
 }
 
+// Validates: R-2.2
 func TestCommit_RefreshesCache(t *testing.T) {
 	t.Parallel()
 
@@ -700,6 +716,7 @@ func TestCommit_RefreshesCache(t *testing.T) {
 	assert.Equal(t, 1, mgr.Baseline().Len())
 }
 
+// Validates: R-2.2
 func TestGetDeltaToken_Empty(t *testing.T) {
 	t.Parallel()
 
@@ -711,6 +728,7 @@ func TestGetDeltaToken_Empty(t *testing.T) {
 	assert.Empty(t, token)
 }
 
+// Validates: R-2.2
 func TestGetDeltaToken_AfterCommit(t *testing.T) {
 	t.Parallel()
 
@@ -735,6 +753,7 @@ func TestGetDeltaToken_AfterCommit(t *testing.T) {
 	assert.Equal(t, "saved-token", token)
 }
 
+// Validates: R-2.2
 func TestLoad_NullableFields(t *testing.T) {
 	t.Parallel()
 
@@ -934,6 +953,7 @@ func TestResolveConflict_AlreadyResolved(t *testing.T) {
 	require.Error(t, err)
 }
 
+// Validates: R-2.2
 func TestLoad_ReturnsCachedBaseline(t *testing.T) {
 	t.Parallel()
 
@@ -961,6 +981,7 @@ func TestLoad_ReturnsCachedBaseline(t *testing.T) {
 	assert.Equal(t, 1, b2.Len())
 }
 
+// Validates: R-2.2
 func TestLoad_CacheInvalidatedByCommit(t *testing.T) {
 	t.Parallel()
 
@@ -995,6 +1016,7 @@ func TestLoad_CacheInvalidatedByCommit(t *testing.T) {
 	assert.Equal(t, 2, b2.Len(), "cache should reflect both commits")
 }
 
+// Validates: R-2.2
 func TestMigrations_Idempotent(t *testing.T) {
 	t.Parallel()
 
@@ -1113,6 +1135,7 @@ func TestListAllConflicts(t *testing.T) {
 // CommitOutcome tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.2
 func TestCommitOutcome_Download(t *testing.T) {
 	t.Parallel()
 
@@ -1146,6 +1169,7 @@ func TestCommitOutcome_Download(t *testing.T) {
 	assert.Equal(t, fixedTime.UnixNano(), entry.SyncedAt)
 }
 
+// Validates: R-2.2
 func TestCommitOutcome_Upload(t *testing.T) {
 	t.Parallel()
 
@@ -1173,6 +1197,7 @@ func TestCommitOutcome_Upload(t *testing.T) {
 	assert.Equal(t, "i2", entry.ItemID)
 }
 
+// Validates: R-2.2
 func TestCommitOutcome_Delete(t *testing.T) {
 	t.Parallel()
 
@@ -1197,6 +1222,7 @@ func TestCommitOutcome_Delete(t *testing.T) {
 	assert.False(t, ok, "entry still exists after delete")
 }
 
+// Validates: R-2.2
 func TestCommitOutcome_Move(t *testing.T) {
 	t.Parallel()
 
@@ -1348,6 +1374,7 @@ func TestCommitOutcome_EditDeleteConflict_DeletesBaseline(t *testing.T) {
 	assert.Equal(t, synctypes.ResolutionUnresolved, resolution)
 }
 
+// Validates: R-2.2
 func TestCommitOutcome_SkipsFailedOutcome(t *testing.T) {
 	t.Parallel()
 
@@ -1368,6 +1395,7 @@ func TestCommitOutcome_SkipsFailedOutcome(t *testing.T) {
 	}
 }
 
+// Validates: R-2.2
 func TestCommitOutcome_FolderCreate(t *testing.T) {
 	t.Parallel()
 
@@ -1394,6 +1422,7 @@ func TestCommitOutcome_FolderCreate(t *testing.T) {
 	assert.Equal(t, "folder-id", entry.ItemID)
 }
 
+// Validates: R-2.2
 // TestCommitOutcome_Upload_NewItemID_SamePath verifies that when an upload
 // outcome has a different item_id than the existing baseline entry at the same
 // path (e.g., server-side delete+recreate assigns new ID), the stale row is
@@ -1469,6 +1498,7 @@ func TestCommitDeltaToken(t *testing.T) {
 	assert.Equal(t, "token-abc", token)
 }
 
+// Validates: R-2.15.1
 func TestCommitDeltaToken_Update(t *testing.T) {
 	t.Parallel()
 
@@ -1485,6 +1515,7 @@ func TestCommitDeltaToken_Update(t *testing.T) {
 	assert.Equal(t, "token-2", token)
 }
 
+// Validates: R-2.15.1
 func TestCommitDeltaToken_EmptyIsNoop(t *testing.T) {
 	t.Parallel()
 
@@ -1499,6 +1530,7 @@ func TestCommitDeltaToken_EmptyIsNoop(t *testing.T) {
 	assert.Empty(t, token)
 }
 
+// Validates: R-2.15.1
 func TestCommitDeltaToken_CompositeKey_DifferentScopes(t *testing.T) {
 	t.Parallel()
 
@@ -1521,6 +1553,7 @@ func TestCommitDeltaToken_CompositeKey_DifferentScopes(t *testing.T) {
 	assert.Equal(t, "shortcut-token", shortcut)
 }
 
+// Validates: R-2.15.1
 func TestCommitDeltaToken_CompositeKey_UpdatePreservesOtherScopes(t *testing.T) {
 	t.Parallel()
 
@@ -1549,6 +1582,7 @@ func TestCommitDeltaToken_CompositeKey_UpdatePreservesOtherScopes(t *testing.T) 
 // Locked accessor tests (Baseline.GetByPath, GetByID, Put, Delete, Len, ForEachPath)
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.2
 func TestBaseline_GetByPath(t *testing.T) {
 	t.Parallel()
 
@@ -1568,6 +1602,7 @@ func TestBaseline_GetByPath(t *testing.T) {
 	assert.False(t, ok)
 }
 
+// Validates: R-2.2
 func TestBaseline_GetByID(t *testing.T) {
 	t.Parallel()
 
@@ -1590,6 +1625,7 @@ func TestBaseline_GetByID(t *testing.T) {
 	assert.False(t, ok)
 }
 
+// Validates: R-2.2
 func TestBaseline_Put(t *testing.T) {
 	t.Parallel()
 
@@ -1619,6 +1655,7 @@ func TestBaseline_Put(t *testing.T) {
 
 // TestBaseline_Put_ReplacesStaleID verifies that Put at an existing path with
 // a different (driveID, itemID) removes the stale ByID entry.
+// Validates: R-2.2
 func TestBaseline_Put_ReplacesStaleID(t *testing.T) {
 	t.Parallel()
 
@@ -1653,6 +1690,7 @@ func TestBaseline_Put_ReplacesStaleID(t *testing.T) {
 	assert.Equal(t, 1, b.Len())
 }
 
+// Validates: R-2.2
 func TestBaseline_Delete(t *testing.T) {
 	t.Parallel()
 
@@ -1678,6 +1716,7 @@ func TestBaseline_Delete(t *testing.T) {
 	b.Delete("nonexistent")
 }
 
+// Validates: R-2.2
 func TestBaseline_Len(t *testing.T) {
 	t.Parallel()
 
@@ -1693,6 +1732,7 @@ func TestBaseline_Len(t *testing.T) {
 	assert.Equal(t, 2, b.Len())
 }
 
+// Validates: R-2.2
 func TestBaseline_ForEachPath(t *testing.T) {
 	t.Parallel()
 
@@ -1715,6 +1755,7 @@ func TestBaseline_ForEachPath(t *testing.T) {
 	assert.True(t, paths["b.txt"], "ForEachPath did not visit b.txt")
 }
 
+// Validates: R-2.2, R-6.4
 func TestBaseline_ConcurrentAccess(t *testing.T) {
 	t.Parallel()
 
@@ -1915,6 +1956,7 @@ func TestPruneResolvedConflicts(t *testing.T) {
 	assert.Equal(t, "unresolved.txt", unresolved[0].Path)
 }
 
+// Validates: R-2.2
 // TestCheckCacheConsistency verifies that CheckCacheConsistency detects
 // mismatches between the in-memory baseline cache and the database (B-198).
 func TestCheckCacheConsistency(t *testing.T) {
@@ -1953,6 +1995,7 @@ func TestCheckCacheConsistency(t *testing.T) {
 // Migration tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.2
 func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 	t.Parallel()
 
@@ -2017,6 +2060,7 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 	require.Error(t, err, "invalid sync_status should be rejected by CHECK constraint")
 }
 
+// Validates: R-2.2
 func TestConsolidatedSchema_RemoteStateActivePathUnique(t *testing.T) {
 	t.Parallel()
 
@@ -2047,6 +2091,7 @@ func TestConsolidatedSchema_RemoteStateActivePathUnique(t *testing.T) {
 
 // --- Sync metadata tests (6.2b) ---
 
+// Validates: R-2.2
 func TestWriteSyncMetadata_RoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -2071,6 +2116,7 @@ func TestWriteSyncMetadata_RoundTrip(t *testing.T) {
 	assert.NotEmpty(t, meta["last_sync_time"])
 }
 
+// Validates: R-2.2
 func TestWriteSyncMetadata_Upsert(t *testing.T) {
 	t.Parallel()
 
@@ -2089,6 +2135,7 @@ func TestWriteSyncMetadata_Upsert(t *testing.T) {
 	assert.Equal(t, "2000", meta["last_sync_duration_ms"])
 }
 
+// Validates: R-2.2
 func TestWriteSyncMetadata_NoErrors(t *testing.T) {
 	t.Parallel()
 
@@ -2103,6 +2150,7 @@ func TestWriteSyncMetadata_NoErrors(t *testing.T) {
 	assert.Empty(t, meta["last_sync_error"])
 }
 
+// Validates: R-2.2
 func TestReadSyncMetadata_EmptyDB(t *testing.T) {
 	t.Parallel()
 
@@ -2114,6 +2162,7 @@ func TestReadSyncMetadata_EmptyDB(t *testing.T) {
 	assert.Empty(t, meta)
 }
 
+// Validates: R-2.2
 func TestBaselineEntryCount_Empty(t *testing.T) {
 	t.Parallel()
 
@@ -2125,6 +2174,7 @@ func TestBaselineEntryCount_Empty(t *testing.T) {
 	assert.Equal(t, 0, count)
 }
 
+// Validates: R-2.2
 func TestBaselineEntryCount_WithEntries(t *testing.T) {
 	t.Parallel()
 
@@ -2151,6 +2201,7 @@ func TestBaselineEntryCount_WithEntries(t *testing.T) {
 	assert.Equal(t, 1, count)
 }
 
+// Validates: R-2.3.2
 func TestUnresolvedConflictCount_Empty(t *testing.T) {
 	t.Parallel()
 
@@ -2164,6 +2215,7 @@ func TestUnresolvedConflictCount_Empty(t *testing.T) {
 
 // --- SetDispatchStatus tests (5.7.2) ---
 
+// Validates: R-2.5
 func TestSetDispatchStatus_Download(t *testing.T) {
 	t.Parallel()
 
@@ -2187,6 +2239,7 @@ func TestSetDispatchStatus_Download(t *testing.T) {
 	assert.Equal(t, "downloading", status)
 }
 
+// Validates: R-2.5
 func TestSetDispatchStatus_DownloadFromFailed(t *testing.T) {
 	t.Parallel()
 
@@ -2210,6 +2263,7 @@ func TestSetDispatchStatus_DownloadFromFailed(t *testing.T) {
 	assert.Equal(t, "downloading", status)
 }
 
+// Validates: R-2.5
 func TestSetDispatchStatus_LocalDelete(t *testing.T) {
 	t.Parallel()
 
@@ -2233,6 +2287,7 @@ func TestSetDispatchStatus_LocalDelete(t *testing.T) {
 	assert.Equal(t, "deleting", status)
 }
 
+// Validates: R-2.5
 func TestSetDispatchStatus_DeleteFromFailed(t *testing.T) {
 	t.Parallel()
 
@@ -2256,6 +2311,7 @@ func TestSetDispatchStatus_DeleteFromFailed(t *testing.T) {
 	assert.Equal(t, "deleting", status)
 }
 
+// Validates: R-2.5
 func TestSetDispatchStatus_NoMatchingRow(t *testing.T) {
 	t.Parallel()
 
@@ -2280,6 +2336,7 @@ func TestSetDispatchStatus_NoMatchingRow(t *testing.T) {
 	assert.Equal(t, "synced", status, "synced row should not be affected")
 }
 
+// Validates: R-2.5
 func TestSetDispatchStatus_UnsupportedAction(t *testing.T) {
 	t.Parallel()
 
@@ -2290,6 +2347,7 @@ func TestSetDispatchStatus_UnsupportedAction(t *testing.T) {
 	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", synctypes.ActionUpload))
 }
 
+// Validates: R-2.5
 func TestSetDispatchStatus_NonExistentRow(t *testing.T) {
 	t.Parallel()
 
@@ -2465,8 +2523,8 @@ func TestResetInProgressStates_CreatesSyncFailures_Download(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, failures, 1)
 	assert.Equal(t, "dl.txt", failures[0].Path)
-	assert.Equal(t, "download", failures[0].Direction)
-	assert.Equal(t, "transient", failures[0].Category)
+	assert.Equal(t, synctypes.DirectionDownload, failures[0].Direction)
+	assert.Equal(t, synctypes.CategoryTransient, failures[0].Category)
 	assert.Equal(t, 1, failures[0].FailureCount)
 	assert.Contains(t, failures[0].LastError, "crash recovery")
 }
@@ -2496,8 +2554,8 @@ func TestResetInProgressStates_CreatesSyncFailures_Delete(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, failures, 1)
 	assert.Equal(t, "del.txt", failures[0].Path)
-	assert.Equal(t, "delete", failures[0].Direction)
-	assert.Equal(t, "transient", failures[0].Category)
+	assert.Equal(t, synctypes.DirectionDelete, failures[0].Direction)
+	assert.Equal(t, synctypes.CategoryTransient, failures[0].Category)
 }
 
 // Validates: R-2.5.4

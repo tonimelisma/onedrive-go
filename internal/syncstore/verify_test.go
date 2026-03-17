@@ -136,6 +136,7 @@ func TestVerifyBaseline_HashMismatch(t *testing.T) {
 	assert.Equal(t, actualHash, report.Mismatches[0].Actual)
 }
 
+// Validates: R-2.7
 func TestVerifyBaseline_EmptyBaseline(t *testing.T) {
 	t.Parallel()
 
@@ -154,6 +155,7 @@ func TestVerifyBaseline_EmptyBaseline(t *testing.T) {
 	assert.Empty(t, report.Mismatches)
 }
 
+// Validates: R-2.7
 func TestVerifyBaseline_SkipsFolders(t *testing.T) {
 	t.Parallel()
 
@@ -187,6 +189,7 @@ func TestVerifyBaseline_SkipsFolders(t *testing.T) {
 	assert.Empty(t, report.Mismatches)
 }
 
+// Validates: R-2.7
 func TestVerifyBaseline_SizeMismatch(t *testing.T) {
 	t.Parallel()
 

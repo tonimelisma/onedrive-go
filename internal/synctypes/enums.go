@@ -27,6 +27,26 @@ const (
 	StrCleanup      = "cleanup"
 )
 
+// Direction represents the direction of a sync action (upload, download, delete).
+// Stored as TEXT in SQLite — type Direction string serializes identically to
+// raw strings, so no migration is needed.
+type Direction string
+
+const (
+	DirectionDownload Direction = StrDownload
+	DirectionUpload   Direction = StrUpload
+	DirectionDelete   Direction = StrDelete
+)
+
+// FailureCategory classifies sync failures as transient (retryable) or
+// actionable (requires user intervention).
+type FailureCategory string
+
+const (
+	CategoryTransient  FailureCategory = StrTransient
+	CategoryActionable FailureCategory = StrActionable
+)
+
 // Resolution strategy constants for conflict resolution.
 const (
 	ResolutionKeepLocal  = "keep_local"

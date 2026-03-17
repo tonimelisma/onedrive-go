@@ -115,7 +115,7 @@ func TestClassifyFile_EF2_RemoteModified(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	downloads := ActionsOfType(plan.Actions, synctypes.ActionDownload)
+	downloads := synctest.ActionsOfType(plan.Actions, synctypes.ActionDownload)
 	require.Len(t, downloads, 1, "EF2")
 	assert.Equal(t, "planner-test.txt", downloads[0].Path, "EF2")
 }
@@ -151,7 +151,7 @@ func TestClassifyFile_EF3_LocalModified(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	uploads := ActionsOfType(plan.Actions, synctypes.ActionUpload)
+	uploads := synctest.ActionsOfType(plan.Actions, synctypes.ActionUpload)
 	require.Len(t, uploads, 1, "EF3")
 	assert.Equal(t, "planner-test.txt", uploads[0].Path, "EF3")
 }
@@ -198,7 +198,7 @@ func TestClassifyFile_EF4_ConvergentEdit(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	syncedUpdates := ActionsOfType(plan.Actions, synctypes.ActionUpdateSynced)
+	syncedUpdates := synctest.ActionsOfType(plan.Actions, synctypes.ActionUpdateSynced)
 	require.Len(t, syncedUpdates, 1, "EF4")
 }
 
@@ -245,7 +245,7 @@ func TestClassifyFile_EF5_EditEditConflict(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	conflicts := ActionsOfType(plan.Actions, synctypes.ActionConflict)
+	conflicts := synctest.ActionsOfType(plan.Actions, synctypes.ActionConflict)
 	require.Len(t, conflicts, 1, "EF5")
 	assert.Equal(t, "edit_edit", conflicts[0].ConflictInfo.ConflictType, "EF5")
 }
@@ -280,7 +280,7 @@ func TestClassifyFile_EF6_LocalDeleteRemoteUnchanged(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	remoteDeletes := ActionsOfType(plan.Actions, synctypes.ActionRemoteDelete)
+	remoteDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionRemoteDelete)
 	require.Len(t, remoteDeletes, 1, "EF6")
 }
 
@@ -325,7 +325,7 @@ func TestClassifyFile_EF7_LocalDeleteRemoteModified(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	downloads := ActionsOfType(plan.Actions, synctypes.ActionDownload)
+	downloads := synctest.ActionsOfType(plan.Actions, synctypes.ActionDownload)
 	require.Len(t, downloads, 1, "EF7")
 }
 
@@ -364,7 +364,7 @@ func TestClassifyFile_EF8_RemoteDeleted(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	localDeletes := ActionsOfType(plan.Actions, synctypes.ActionLocalDelete)
+	localDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionLocalDelete)
 	require.Len(t, localDeletes, 1, "EF8")
 }
 
@@ -411,7 +411,7 @@ func TestClassifyFile_EF9_EditDeleteConflict(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	conflicts := ActionsOfType(plan.Actions, synctypes.ActionConflict)
+	conflicts := synctest.ActionsOfType(plan.Actions, synctypes.ActionConflict)
 	require.Len(t, conflicts, 1, "EF9")
 	assert.Equal(t, "edit_delete", conflicts[0].ConflictInfo.ConflictType, "EF9")
 }
@@ -457,7 +457,7 @@ func TestClassifyFile_EF10_BothDeleted(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	cleanups := ActionsOfType(plan.Actions, synctypes.ActionCleanup)
+	cleanups := synctest.ActionsOfType(plan.Actions, synctypes.ActionCleanup)
 	require.Len(t, cleanups, 1, "EF10")
 }
 
@@ -494,7 +494,7 @@ func TestClassifyFile_EF11_ConvergentCreate(t *testing.T) {
 	plan, err := planner.Plan(changes, synctest.EmptyBaseline(), synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	syncedUpdates := ActionsOfType(plan.Actions, synctypes.ActionUpdateSynced)
+	syncedUpdates := synctest.ActionsOfType(plan.Actions, synctypes.ActionUpdateSynced)
 	require.Len(t, syncedUpdates, 1, "EF11")
 }
 
@@ -532,7 +532,7 @@ func TestClassifyFile_EF12_CreateCreateConflict(t *testing.T) {
 	plan, err := planner.Plan(changes, synctest.EmptyBaseline(), synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	conflicts := ActionsOfType(plan.Actions, synctypes.ActionConflict)
+	conflicts := synctest.ActionsOfType(plan.Actions, synctypes.ActionConflict)
 	require.Len(t, conflicts, 1, "EF12")
 	assert.Equal(t, "create_create", conflicts[0].ConflictInfo.ConflictType, "EF12")
 }
@@ -559,7 +559,7 @@ func TestClassifyFile_EF13_NewLocal(t *testing.T) {
 	plan, err := planner.Plan(changes, synctest.EmptyBaseline(), synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	uploads := ActionsOfType(plan.Actions, synctypes.ActionUpload)
+	uploads := synctest.ActionsOfType(plan.Actions, synctypes.ActionUpload)
 	require.Len(t, uploads, 1, "EF13")
 }
 
@@ -587,7 +587,7 @@ func TestClassifyFile_EF14_NewRemote(t *testing.T) {
 	plan, err := planner.Plan(changes, synctest.EmptyBaseline(), synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	downloads := ActionsOfType(plan.Actions, synctypes.ActionDownload)
+	downloads := synctest.ActionsOfType(plan.Actions, synctypes.ActionDownload)
 	require.Len(t, downloads, 1, "EF14")
 }
 
@@ -665,7 +665,7 @@ func TestClassifyFolder_ED2_Adopt(t *testing.T) {
 	plan, err := planner.Plan(changes, synctest.EmptyBaseline(), synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	syncedUpdates := ActionsOfType(plan.Actions, synctypes.ActionUpdateSynced)
+	syncedUpdates := synctest.ActionsOfType(plan.Actions, synctypes.ActionUpdateSynced)
 	require.Len(t, syncedUpdates, 1, "ED2")
 }
 
@@ -691,7 +691,7 @@ func TestClassifyFolder_ED3_NewRemoteFolder(t *testing.T) {
 	plan, err := planner.Plan(changes, synctest.EmptyBaseline(), synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	folderCreates := ActionsOfType(plan.Actions, synctypes.ActionFolderCreate)
+	folderCreates := synctest.ActionsOfType(plan.Actions, synctypes.ActionFolderCreate)
 	require.Len(t, folderCreates, 1, "ED3")
 	assert.Equal(t, synctypes.CreateLocal, folderCreates[0].CreateSide, "ED3")
 }
@@ -733,7 +733,7 @@ func TestClassifyFolder_ED4_RecreateLocal(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	folderCreates := ActionsOfType(plan.Actions, synctypes.ActionFolderCreate)
+	folderCreates := synctest.ActionsOfType(plan.Actions, synctypes.ActionFolderCreate)
 	require.Len(t, folderCreates, 1, "ED4")
 	assert.Equal(t, synctypes.CreateLocal, folderCreates[0].CreateSide, "ED4")
 }
@@ -759,7 +759,7 @@ func TestClassifyFolder_ED5_NewLocalFolder(t *testing.T) {
 	plan, err := planner.Plan(changes, synctest.EmptyBaseline(), synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	folderCreates := ActionsOfType(plan.Actions, synctypes.ActionFolderCreate)
+	folderCreates := synctest.ActionsOfType(plan.Actions, synctypes.ActionFolderCreate)
 	require.Len(t, folderCreates, 1, "ED5")
 	assert.Equal(t, synctypes.CreateRemote, folderCreates[0].CreateSide, "ED5")
 }
@@ -802,7 +802,7 @@ func TestClassifyFolder_ED6_RemoteDeletedFolder(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	localDeletes := ActionsOfType(plan.Actions, synctypes.ActionLocalDelete)
+	localDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionLocalDelete)
 	require.Len(t, localDeletes, 1, "ED6")
 }
 
@@ -844,7 +844,7 @@ func TestClassifyFolder_ED7_BothGone(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	cleanups := ActionsOfType(plan.Actions, synctypes.ActionCleanup)
+	cleanups := synctest.ActionsOfType(plan.Actions, synctypes.ActionCleanup)
 	require.Len(t, cleanups, 1, "ED7")
 }
 
@@ -877,7 +877,7 @@ func TestClassifyFolder_ED8_PropagateRemoteDelete(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	remoteDeletes := ActionsOfType(plan.Actions, synctypes.ActionRemoteDelete)
+	remoteDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionRemoteDelete)
 	require.Len(t, remoteDeletes, 1, "ED8")
 	assert.Equal(t, "docs/planner-dir", remoteDeletes[0].Path, "ED8")
 	assert.Equal(t, "folder1", remoteDeletes[0].ItemID, "ED8")
@@ -957,11 +957,11 @@ func TestClassifyFolder_ED4_UploadOnly(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncUploadOnly, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	folderCreates := ActionsOfType(plan.Actions, synctypes.ActionFolderCreate)
+	folderCreates := synctest.ActionsOfType(plan.Actions, synctypes.ActionFolderCreate)
 	assert.Empty(t, folderCreates, "ED4 upload-only")
 
 	// Upload-only: local deletion should still propagate remotely (ED8 path).
-	remoteDeletes := ActionsOfType(plan.Actions, synctypes.ActionRemoteDelete)
+	remoteDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionRemoteDelete)
 	assert.Len(t, remoteDeletes, 1, "ED4 upload-only: local deletion propagates")
 }
 
@@ -1006,7 +1006,7 @@ func TestClassifyFolder_ED6_UploadOnly(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncUploadOnly, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	localDeletes := ActionsOfType(plan.Actions, synctypes.ActionLocalDelete)
+	localDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionLocalDelete)
 	assert.Empty(t, localDeletes, "ED6 upload-only")
 	assert.Equal(t, 0, countActions(plan), "ED6 upload-only: expected 0 total actions")
 }
@@ -1458,7 +1458,7 @@ func TestPlan_DownloadOnly_SuppressesUploads(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncDownloadOnly, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	uploads := ActionsOfType(plan.Actions, synctypes.ActionUpload)
+	uploads := synctest.ActionsOfType(plan.Actions, synctypes.ActionUpload)
 	assert.Empty(t, uploads, "download-only: expected 0 uploads")
 }
 
@@ -1494,7 +1494,7 @@ func TestPlan_UploadOnly_SuppressesDownloads(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncUploadOnly, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	downloads := ActionsOfType(plan.Actions, synctypes.ActionDownload)
+	downloads := synctest.ActionsOfType(plan.Actions, synctypes.ActionDownload)
 	assert.Empty(t, downloads, "upload-only: expected 0 downloads")
 }
 
@@ -1519,7 +1519,7 @@ func TestPlan_DownloadOnly_SuppressesFolderCreateRemote(t *testing.T) {
 	plan, err := planner.Plan(changes, synctest.EmptyBaseline(), synctypes.SyncDownloadOnly, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	folderCreates := ActionsOfType(plan.Actions, synctypes.ActionFolderCreate)
+	folderCreates := synctest.ActionsOfType(plan.Actions, synctypes.ActionFolderCreate)
 	assert.Empty(t, folderCreates, "download-only: expected 0 folder creates")
 }
 
@@ -1545,7 +1545,7 @@ func TestPlan_UploadOnly_SuppressesFolderCreateLocal(t *testing.T) {
 	plan, err := planner.Plan(changes, synctest.EmptyBaseline(), synctypes.SyncUploadOnly, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	folderCreates := ActionsOfType(plan.Actions, synctypes.ActionFolderCreate)
+	folderCreates := synctest.ActionsOfType(plan.Actions, synctypes.ActionFolderCreate)
 	assert.Empty(t, folderCreates, "upload-only: expected 0 folder creates")
 }
 
@@ -1581,7 +1581,7 @@ func TestOrderPlan_FolderCreatesTopDown(t *testing.T) {
 	plan, err := planner.Plan(changes, synctest.EmptyBaseline(), synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	folderCreates := ActionsOfType(plan.Actions, synctypes.ActionFolderCreate)
+	folderCreates := synctest.ActionsOfType(plan.Actions, synctypes.ActionFolderCreate)
 	require.Len(t, folderCreates, 3)
 
 	// Build a path→index map for the full action list so we can check deps.
@@ -1651,7 +1651,7 @@ func TestOrderPlan_DeletesBottomUp(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	localDeletes := ActionsOfType(plan.Actions, synctypes.ActionLocalDelete)
+	localDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionLocalDelete)
 	require.Len(t, localDeletes, 3)
 
 	// Verify all 3 delete paths are present (order is non-deterministic in the
@@ -1709,10 +1709,10 @@ func TestPlan_MixedFileAndFolder(t *testing.T) {
 	plan, err := planner.Plan(changes, synctest.EmptyBaseline(), synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	folderCreates := ActionsOfType(plan.Actions, synctypes.ActionFolderCreate)
+	folderCreates := synctest.ActionsOfType(plan.Actions, synctypes.ActionFolderCreate)
 	assert.Len(t, folderCreates, 1)
 
-	downloads := ActionsOfType(plan.Actions, synctypes.ActionDownload)
+	downloads := synctest.ActionsOfType(plan.Actions, synctypes.ActionDownload)
 	assert.Len(t, downloads, 1)
 }
 
@@ -1778,15 +1778,15 @@ func TestPlan_FullScenario(t *testing.T) {
 	require.NoError(t, err, "Plan()")
 
 	// EF2 + EF14 = 2 downloads.
-	downloads := ActionsOfType(plan.Actions, synctypes.ActionDownload)
+	downloads := synctest.ActionsOfType(plan.Actions, synctypes.ActionDownload)
 	assert.Len(t, downloads, 2)
 
 	// EF3 = 1 upload.
-	uploads := ActionsOfType(plan.Actions, synctypes.ActionUpload)
+	uploads := synctest.ActionsOfType(plan.Actions, synctypes.ActionUpload)
 	assert.Len(t, uploads, 1)
 
 	// ED3 = 1 folder create.
-	folderCreates := ActionsOfType(plan.Actions, synctypes.ActionFolderCreate)
+	folderCreates := synctest.ActionsOfType(plan.Actions, synctypes.ActionFolderCreate)
 	assert.Len(t, folderCreates, 1)
 }
 
@@ -1928,24 +1928,24 @@ func TestDetectLocalChange(t *testing.T) {
 	view := &synctypes.PathView{
 		Local: &synctypes.LocalState{Hash: "h1"},
 	}
-	assert.True(t, DetectLocalChange(view), "expected local change with no baseline and local present")
+	assert.True(t, detectLocalChange(view), "expected local change with no baseline and local present")
 
 	// No baseline, no local → not changed.
 	view = &synctypes.PathView{}
-	assert.False(t, DetectLocalChange(view), "expected no local change with no baseline and no local")
+	assert.False(t, detectLocalChange(view), "expected no local change with no baseline and no local")
 
 	// Baseline exists, local nil → changed (deleted).
 	view = &synctypes.PathView{
 		Baseline: &synctypes.BaselineEntry{ItemType: synctypes.ItemTypeFile, LocalHash: "h1"},
 	}
-	assert.True(t, DetectLocalChange(view), "expected local change when local is nil (deleted)")
+	assert.True(t, detectLocalChange(view), "expected local change when local is nil (deleted)")
 
 	// Baseline folder → not changed (folders have no hash).
 	view = &synctypes.PathView{
 		Baseline: &synctypes.BaselineEntry{ItemType: synctypes.ItemTypeFolder},
 		Local:    &synctypes.LocalState{ItemType: synctypes.ItemTypeFolder},
 	}
-	assert.False(t, DetectLocalChange(view), "expected no change for folder")
+	assert.False(t, detectLocalChange(view), "expected no change for folder")
 }
 
 // Validates: R-6.7.7
@@ -1954,26 +1954,103 @@ func TestDetectRemoteChange(t *testing.T) {
 	view := &synctypes.PathView{
 		Remote: &synctypes.RemoteState{Hash: "h1"},
 	}
-	assert.True(t, DetectRemoteChange(view), "expected remote change with no baseline and remote present")
+	assert.True(t, detectRemoteChange(view), "expected remote change with no baseline and remote present")
 
 	// No baseline, remote is deleted → not changed (never synced, delete is a no-op).
 	view = &synctypes.PathView{
 		Remote: &synctypes.RemoteState{IsDeleted: true},
 	}
-	assert.False(t, DetectRemoteChange(view), "expected no remote change for deleted item with no baseline")
+	assert.False(t, detectRemoteChange(view), "expected no remote change for deleted item with no baseline")
 
 	// Baseline exists, remote nil → no change (no observation).
 	view = &synctypes.PathView{
 		Baseline: &synctypes.BaselineEntry{ItemType: synctypes.ItemTypeFile, RemoteHash: "h1"},
 	}
-	assert.False(t, DetectRemoteChange(view), "expected no remote change when remote is nil")
+	assert.False(t, detectRemoteChange(view), "expected no remote change when remote is nil")
 
 	// Baseline exists, remote deleted → changed.
 	view = &synctypes.PathView{
 		Baseline: &synctypes.BaselineEntry{ItemType: synctypes.ItemTypeFile, RemoteHash: "h1"},
 		Remote:   &synctypes.RemoteState{IsDeleted: true},
 	}
-	assert.True(t, DetectRemoteChange(view), "expected remote change when remote is deleted")
+	assert.True(t, detectRemoteChange(view), "expected remote change when remote is deleted")
+}
+
+// TestDetectLocalChange_UsesLocalHash validates that detectLocalChange
+// compares against baseline.LocalHash (not RemoteHash), which is critical
+// for the per-side hash scheme.
+func TestDetectLocalChange_UsesLocalHash(t *testing.T) {
+	t.Run("local_matches_local_hash", func(t *testing.T) {
+		view := &synctypes.PathView{
+			Path: "test.txt",
+			Local: &synctypes.LocalState{
+				Hash: "localHash",
+			},
+			Baseline: &synctypes.BaselineEntry{
+				ItemType:   synctypes.ItemTypeFile,
+				LocalHash:  "localHash",
+				RemoteHash: "differentRemoteHash",
+			},
+		}
+
+		assert.False(t, detectLocalChange(view),
+			"local hash matching LocalHash should NOT be a change")
+	})
+
+	t.Run("local_differs_from_local_hash", func(t *testing.T) {
+		view := &synctypes.PathView{
+			Path: "test.txt",
+			Local: &synctypes.LocalState{
+				Hash: "newLocalHash",
+			},
+			Baseline: &synctypes.BaselineEntry{
+				ItemType:   synctypes.ItemTypeFile,
+				LocalHash:  "oldLocalHash",
+				RemoteHash: "oldLocalHash",
+			},
+		}
+
+		assert.True(t, detectLocalChange(view),
+			"local hash differing from LocalHash should be a change")
+	})
+}
+
+// TestDetectRemoteChange_UsesRemoteHash validates that detectRemoteChange
+// compares against baseline.RemoteHash (not LocalHash).
+func TestDetectRemoteChange_UsesRemoteHash(t *testing.T) {
+	t.Run("remote_matches_remote_hash", func(t *testing.T) {
+		view := &synctypes.PathView{
+			Path: "test.txt",
+			Remote: &synctypes.RemoteState{
+				Hash: "remoteHash",
+			},
+			Baseline: &synctypes.BaselineEntry{
+				ItemType:   synctypes.ItemTypeFile,
+				LocalHash:  "differentLocalHash",
+				RemoteHash: "remoteHash",
+			},
+		}
+
+		assert.False(t, detectRemoteChange(view),
+			"remote hash matching RemoteHash should NOT be a change")
+	})
+
+	t.Run("remote_differs_from_remote_hash", func(t *testing.T) {
+		view := &synctypes.PathView{
+			Path: "test.txt",
+			Remote: &synctypes.RemoteState{
+				Hash: "newRemoteHash",
+			},
+			Baseline: &synctypes.BaselineEntry{
+				ItemType:   synctypes.ItemTypeFile,
+				LocalHash:  "someHash",
+				RemoteHash: "oldRemoteHash",
+			},
+		}
+
+		assert.True(t, detectRemoteChange(view),
+			"remote hash differing from RemoteHash should be a change")
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -2051,7 +2128,7 @@ func TestDetectMoves_RemoteMoveOldPathReused(t *testing.T) {
 	assert.Equal(t, "planner-reused-path.txt", move.OldPath, "move source")
 
 	// The new file at the old path should produce a download (EF14).
-	downloads := ActionsOfType(plan.Actions, synctypes.ActionDownload)
+	downloads := synctest.ActionsOfType(plan.Actions, synctypes.ActionDownload)
 	require.Len(t, downloads, 1, "expected 1 download for new file at reused path")
 	assert.Equal(t, "planner-reused-path.txt", downloads[0].Path)
 }
@@ -2113,7 +2190,7 @@ func TestDetectMoves_RemoteMoveOldPathReusedFolder(t *testing.T) {
 	require.Len(t, allMoves, 1)
 
 	// The new folder at the old path should produce a folder create (ED3).
-	folderCreates := ActionsOfType(plan.Actions, synctypes.ActionFolderCreate)
+	folderCreates := synctest.ActionsOfType(plan.Actions, synctypes.ActionFolderCreate)
 	require.Len(t, folderCreates, 1, "expected 1 folder create for new folder at reused path")
 	assert.Equal(t, "planner-reused-folder", folderCreates[0].Path)
 	assert.Equal(t, synctypes.CreateLocal, folderCreates[0].CreateSide)
@@ -2164,7 +2241,7 @@ func TestOrderPlan_DeletesFilesBeforeFoldersAtSameDepth(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 
-	localDeletes := ActionsOfType(plan.Actions, synctypes.ActionLocalDelete)
+	localDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionLocalDelete)
 	require.Len(t, localDeletes, 2)
 
 	// Verify both paths are present (order is non-deterministic in the flat
@@ -2232,7 +2309,7 @@ func TestPlan_DeniedPrefix_SuppressesUploads(t *testing.T) {
 	require.NoError(t, err)
 
 	// Upload suppressed under denied prefix.
-	uploads := ActionsOfType(plan.Actions, synctypes.ActionUpload)
+	uploads := synctest.ActionsOfType(plan.Actions, synctypes.ActionUpload)
 	assert.Empty(t, uploads, "uploads should be suppressed under denied prefix")
 }
 
@@ -2260,7 +2337,7 @@ func TestPlan_DeniedPrefix_AllowsDownloads(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), denied)
 	require.NoError(t, err)
 
-	downloads := ActionsOfType(plan.Actions, synctypes.ActionDownload)
+	downloads := synctest.ActionsOfType(plan.Actions, synctypes.ActionDownload)
 	assert.Len(t, downloads, 1, "downloads should proceed under denied prefix")
 }
 
@@ -2285,7 +2362,7 @@ func TestPlan_DeniedPrefix_OutsideDenied_Normal(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), denied)
 	require.NoError(t, err)
 
-	uploads := ActionsOfType(plan.Actions, synctypes.ActionUpload)
+	uploads := synctest.ActionsOfType(plan.Actions, synctypes.ActionUpload)
 	assert.Len(t, uploads, 1, "uploads outside denied prefix should proceed normally")
 }
 
@@ -2313,11 +2390,11 @@ func TestPlan_DeniedPrefix_RemoteDelete_LocalDelete(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), denied)
 	require.NoError(t, err)
 
-	localDeletes := ActionsOfType(plan.Actions, synctypes.ActionLocalDelete)
+	localDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionLocalDelete)
 	assert.Len(t, localDeletes, 1, "remote delete under denied prefix → local delete")
 
 	// Should NOT produce remote delete (we can't write to remote).
-	remoteDeletes := ActionsOfType(plan.Actions, synctypes.ActionRemoteDelete)
+	remoteDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionRemoteDelete)
 	assert.Empty(t, remoteDeletes, "should not produce remote deletes under denied prefix")
 }
 
@@ -2355,7 +2432,7 @@ func TestPlan_DeniedPrefix_LocalMove_Suppressed(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should NOT produce a remote move — can't write to remote under denied prefix.
-	remoteMoves := ActionsOfType(plan.Actions, synctypes.ActionRemoteMove)
+	remoteMoves := synctest.ActionsOfType(plan.Actions, synctypes.ActionRemoteMove)
 	assert.Empty(t, remoteMoves, "local move under denied prefix should not produce remote move")
 }
 
