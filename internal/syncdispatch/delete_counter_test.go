@@ -11,6 +11,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
+// Validates: R-2.3.5
 func TestDeleteCounter_BelowThreshold(t *testing.T) {
 	t.Parallel()
 
@@ -23,6 +24,7 @@ func TestDeleteCounter_BelowThreshold(t *testing.T) {
 	assert.Equal(t, 5, c.Count())
 }
 
+// Validates: R-2.3.5
 func TestDeleteCounter_CrossingThreshold(t *testing.T) {
 	t.Parallel()
 
@@ -38,6 +40,7 @@ func TestDeleteCounter_CrossingThreshold(t *testing.T) {
 	assert.True(t, c.IsHeld())
 }
 
+// Validates: R-2.3.5
 func TestDeleteCounter_AtThreshold_NoTrip(t *testing.T) {
 	t.Parallel()
 
@@ -50,6 +53,7 @@ func TestDeleteCounter_AtThreshold_NoTrip(t *testing.T) {
 	assert.False(t, c.IsHeld())
 }
 
+// Validates: R-2.3.5
 func TestDeleteCounter_ExpiredEntries(t *testing.T) {
 	t.Parallel()
 
@@ -70,6 +74,7 @@ func TestDeleteCounter_ExpiredEntries(t *testing.T) {
 	assert.False(t, c.IsHeld())
 }
 
+// Validates: R-2.3.5
 func TestDeleteCounter_Release(t *testing.T) {
 	t.Parallel()
 
@@ -86,6 +91,7 @@ func TestDeleteCounter_Release(t *testing.T) {
 	assert.Equal(t, 0, c.Count())
 }
 
+// Validates: R-2.3.5
 func TestDeleteCounter_ReTrip(t *testing.T) {
 	t.Parallel()
 
@@ -104,6 +110,7 @@ func TestDeleteCounter_ReTrip(t *testing.T) {
 	assert.True(t, c.IsHeld())
 }
 
+// Validates: R-2.3.5
 func TestDeleteCounter_AccumulateAcrossAdds(t *testing.T) {
 	t.Parallel()
 
@@ -121,6 +128,7 @@ func TestDeleteCounter_AccumulateAcrossAdds(t *testing.T) {
 	assert.True(t, c.IsHeld())
 }
 
+// Validates: R-2.3.5
 func TestDeleteCounter_ThresholdZero_Disabled(t *testing.T) {
 	t.Parallel()
 
@@ -132,6 +140,7 @@ func TestDeleteCounter_ThresholdZero_Disabled(t *testing.T) {
 	assert.False(t, c.IsHeld())
 }
 
+// Validates: R-2.3.5
 func TestDeleteCounter_AlreadyHeld_NoReTrip(t *testing.T) {
 	t.Parallel()
 
@@ -148,6 +157,7 @@ func TestDeleteCounter_AlreadyHeld_NoReTrip(t *testing.T) {
 	assert.True(t, c.IsHeld(), "should still be held")
 }
 
+// Validates: R-2.3.5
 func TestDeleteCounter_WindowExpiry_NoTrip(t *testing.T) {
 	t.Parallel()
 

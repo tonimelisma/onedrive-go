@@ -9,6 +9,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
+// Validates: R-2.10.16
 func TestUpsertShortcut_Insert(t *testing.T) {
 	t.Parallel()
 
@@ -41,6 +42,7 @@ func TestUpsertShortcut_Insert(t *testing.T) {
 	assert.Equal(t, int64(1000), got.DiscoveredAt)
 }
 
+// Validates: R-2.10.16
 func TestUpsertShortcut_Update(t *testing.T) {
 	t.Parallel()
 
@@ -69,6 +71,7 @@ func TestUpsertShortcut_Update(t *testing.T) {
 	assert.Equal(t, synctypes.ObservationDelta, got.Observation)
 }
 
+// Validates: R-2.10.16
 func TestUpsertShortcut_PreservesDiscoveredAt(t *testing.T) {
 	t.Parallel()
 
@@ -92,6 +95,7 @@ func TestUpsertShortcut_PreservesDiscoveredAt(t *testing.T) {
 	assert.Equal(t, int64(1000), got.DiscoveredAt, "discovered_at should be preserved across upserts")
 }
 
+// Validates: R-2.10.16
 func TestGetShortcut_NotFound(t *testing.T) {
 	t.Parallel()
 
@@ -103,6 +107,7 @@ func TestGetShortcut_NotFound(t *testing.T) {
 	assert.Nil(t, got)
 }
 
+// Validates: R-2.10.16
 func TestListShortcuts_Empty(t *testing.T) {
 	t.Parallel()
 
@@ -114,6 +119,7 @@ func TestListShortcuts_Empty(t *testing.T) {
 	assert.Empty(t, shortcuts)
 }
 
+// Validates: R-2.10.16
 func TestListShortcuts_Multiple(t *testing.T) {
 	t.Parallel()
 
@@ -132,6 +138,7 @@ func TestListShortcuts_Multiple(t *testing.T) {
 	assert.Len(t, shortcuts, 2)
 }
 
+// Validates: R-2.10.16
 func TestDeleteShortcut(t *testing.T) {
 	t.Parallel()
 
@@ -152,6 +159,7 @@ func TestDeleteShortcut(t *testing.T) {
 	assert.Nil(t, got)
 }
 
+// Validates: R-2.10.16
 func TestDeleteShortcut_NotFound(t *testing.T) {
 	t.Parallel()
 

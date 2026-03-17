@@ -11,6 +11,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	isync "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 func newSyncCmd() *cobra.Command {
@@ -86,7 +87,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 
 	if watch {
 		holder := config.NewHolder(rawCfg, cc.CfgPath)
-		return runSyncDaemon(ctx, holder, selectors, mode, isync.WatchOpts{
+		return runSyncDaemon(ctx, holder, selectors, mode, synctypes.WatchOpts{
 			Force: force,
 		}, logger)
 	}
@@ -135,7 +136,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 		Logger:   logger,
 	})
 
-	reports := orch.RunOnce(ctx, mode, isync.RunOpts{
+	reports := orch.RunOnce(ctx, mode, synctypes.RunOpts{
 		DryRun:        dryRun,
 		Force:         force,
 		FullReconcile: fullReconcile,
@@ -151,7 +152,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 // drives without restart).
 func runSyncDaemon(
 	ctx context.Context, holder *config.Holder, selectors []string,
-	mode isync.SyncMode, opts isync.WatchOpts, logger *slog.Logger,
+	mode synctypes.SyncMode, opts synctypes.WatchOpts, logger *slog.Logger,
 ) error {
 	// Include paused drives — Orchestrator handles pause/resume internally.
 	drives, err := config.ResolveDrives(holder.Config(), selectors, true, logger)
@@ -198,22 +199,22 @@ func runSyncDaemon(
 // false, so GetBool() would work identically. Changed() is preferred because
 // it directly expresses intent: "did the user explicitly set this flag?" This
 // is the standard Cobra pattern for flags where presence equals activation.
-func syncModeFromFlags(cmd *cobra.Command) isync.SyncMode {
+func syncModeFromFlags(cmd *cobra.Command) synctypes.SyncMode {
 	if cmd.Flags().Changed("download-only") {
-		return isync.SyncDownloadOnly
+		return synctypes.SyncDownloadOnly
 	}
 
 	if cmd.Flags().Changed("upload-only") {
-		return isync.SyncUploadOnly
+		return synctypes.SyncUploadOnly
 	}
 
-	return isync.SyncBidirectional
+	return synctypes.SyncBidirectional
 }
 
 // printDriveReports prints sync reports for all drives. When there's only
 // one drive, the output is identical to the pre-Orchestrator format. For
 // multiple drives, each drive's output is prefixed with a header.
-func printDriveReports(reports []*isync.DriveReport, cc *CLIContext) {
+func printDriveReports(reports []*synctypes.DriveReport, cc *CLIContext) {
 	multiDrive := len(reports) > 1
 
 	for _, dr := range reports {
@@ -235,7 +236,7 @@ func printDriveReports(reports []*isync.DriveReport, cc *CLIContext) {
 
 // driveReportsError returns an error if any drive report has an error.
 // Returns nil when all drives succeeded.
-func driveReportsError(reports []*isync.DriveReport) error {
+func driveReportsError(reports []*synctypes.DriveReport) error {
 	var firstErr error
 
 	failCount := 0
@@ -269,7 +270,7 @@ func printNonZero(cc *CLIContext, label string, n int) {
 }
 
 // printSyncReport formats and prints the sync report to stderr.
-func printSyncReport(r *isync.SyncReport, cc *CLIContext) {
+func printSyncReport(r *synctypes.SyncReport, cc *CLIContext) {
 	if r.DryRun {
 		cc.Statusf("Dry run — no changes applied\n")
 	}

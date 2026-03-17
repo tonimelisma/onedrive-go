@@ -249,11 +249,11 @@ func (m *SyncStore) ResetInProgressStates(ctx context.Context, syncRoot string, 
 	// if a sync_failures entry already exists (from a prior failure before
 	// the crash), the existing failure_count is preserved and incremented,
 	// so backoff continues from where it left off.
-	if err := m.createCrashRecoveryFailures(ctx, downloadingRows, synctypes.StrDownload, delayFn); err != nil {
+	if err := m.createCrashRecoveryFailures(ctx, downloadingRows, synctypes.DirectionDownload, delayFn); err != nil {
 		return err
 	}
 
-	if err := m.createCrashRecoveryFailures(ctx, pendingDeleteRows, synctypes.StrDelete, delayFn); err != nil {
+	if err := m.createCrashRecoveryFailures(ctx, pendingDeleteRows, synctypes.DirectionDelete, delayFn); err != nil {
 		return err
 	}
 
@@ -296,14 +296,14 @@ func (m *SyncStore) queryResetCandidates(ctx context.Context, status string) ([]
 // were reset during crash recovery. This ensures the retrier can rediscover
 // them on the next bootstrap sweep.
 func (m *SyncStore) createCrashRecoveryFailures(
-	ctx context.Context, candidates []resetCandidate, direction string, delayFn func(int) time.Duration,
+	ctx context.Context, candidates []resetCandidate, direction synctypes.Direction, delayFn func(int) time.Duration,
 ) error {
 	for _, r := range candidates {
 		if err := m.RecordFailure(ctx, &synctypes.SyncFailureParams{
 			Path:      r.path,
 			DriveID:   driveid.New(r.driveID),
 			Direction: direction,
-			Category:  synctypes.StrTransient,
+			Category:  synctypes.CategoryTransient,
 			ItemID:    r.itemID,
 			ErrMsg:    "crash recovery: reset from in-progress state",
 		}, delayFn); err != nil {

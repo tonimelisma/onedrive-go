@@ -13,10 +13,14 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
+	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
-// newPhase4Engine creates a minimal engine with DepGraph + ScopeGate for
-// testing Phase 4 methods. Uses a real SyncStore (in-memory SQLite).
+// newPhase4Engine creates a minimal engine with syncdispatch.DepGraph + syncdispatch.ScopeGate for
+// testing Phase 4 methods. Uses a real syncstore.SyncStore (in-memory SQLite).
 func newPhase4Engine(t *testing.T) *Engine {
 	t.Helper()
 
@@ -38,8 +42,8 @@ func TestEngine_CascadeRecordAndComplete_SingleAction(t *testing.T) {
 	ctx := context.Background()
 
 	// Add a single action to the graph.
-	action := Action{
-		Type:    ActionUpload,
+	action := synctypes.Action{
+		Type:    synctypes.ActionUpload,
 		Path:    "test.txt",
 		DriveID: driveid.New("drive1"),
 	}
@@ -47,7 +51,7 @@ func TestEngine_CascadeRecordAndComplete_SingleAction(t *testing.T) {
 	require.NotNil(t, ta, "action should be immediately ready")
 
 	// Cascade-record it as scope-blocked.
-	eng.cascadeRecordAndComplete(ctx, ta, SKQuotaOwn)
+	eng.cascadeRecordAndComplete(ctx, ta, synctypes.SKQuotaOwn)
 
 	// Verify it was completed in the graph.
 	assert.Equal(t, 0, eng.depGraph.InFlightCount())
@@ -57,7 +61,7 @@ func TestEngine_CascadeRecordAndComplete_SingleAction(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, failures, 1)
 	assert.Equal(t, "test.txt", failures[0].Path)
-	assert.Equal(t, SKQuotaOwn, failures[0].ScopeKey)
+	assert.Equal(t, synctypes.SKQuotaOwn, failures[0].ScopeKey)
 	assert.Equal(t, int64(0), failures[0].NextRetryAt, "scope-blocked failure should have next_retry_at = 0 (NULL)")
 }
 
@@ -69,8 +73,8 @@ func TestEngine_CascadeRecordAndComplete_WithDependents(t *testing.T) {
 	driveID := driveid.New("drive1")
 
 	// Add parent action.
-	parent := Action{
-		Type:    ActionFolderCreate,
+	parent := synctypes.Action{
+		Type:    synctypes.ActionFolderCreate,
 		Path:    "dir",
 		DriveID: driveID,
 	}
@@ -78,8 +82,8 @@ func TestEngine_CascadeRecordAndComplete_WithDependents(t *testing.T) {
 	require.NotNil(t, parentTA)
 
 	// Add child that depends on parent.
-	child := Action{
-		Type:    ActionUpload,
+	child := synctypes.Action{
+		Type:    synctypes.ActionUpload,
 		Path:    "dir/file.txt",
 		DriveID: driveID,
 	}
@@ -87,7 +91,7 @@ func TestEngine_CascadeRecordAndComplete_WithDependents(t *testing.T) {
 	assert.Nil(t, childTA, "child should wait on parent")
 
 	// Cascade-record parent → child should also be recorded.
-	eng.cascadeRecordAndComplete(ctx, parentTA, SKQuotaOwn)
+	eng.cascadeRecordAndComplete(ctx, parentTA, synctypes.SKQuotaOwn)
 
 	// Both should be completed.
 	assert.Equal(t, 0, eng.depGraph.InFlightCount())
@@ -108,23 +112,23 @@ func TestEngine_OnScopeClear(t *testing.T) {
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
-	sk := SKQuotaOwn
+	sk := synctypes.SKQuotaOwn
 
 	// Create a scope block.
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, sk, &ScopeBlock{
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, sk, &synctypes.ScopeBlock{
 		Key:       sk,
-		IssueType: IssueQuotaExceeded,
+		IssueType: synctypes.IssueQuotaExceeded,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
 	}))
 
 	// Create scope-blocked failures.
-	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
-		Path: "a.txt", DriveID: driveID, Direction: strUpload,
-		Category: strTransient, ScopeKey: sk,
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path: "a.txt", DriveID: driveID, Direction: synctypes.DirectionUpload,
+		Category: synctypes.CategoryTransient, ScopeKey: sk,
 	}, nil))
-	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
-		Path: "b.txt", DriveID: driveID, Direction: strUpload,
-		Category: strTransient, ScopeKey: sk,
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path: "b.txt", DriveID: driveID, Direction: synctypes.DirectionUpload,
+		Category: synctypes.CategoryTransient, ScopeKey: sk,
 	}, nil))
 
 	// Clear the scope.
@@ -152,14 +156,14 @@ func TestEngine_AdmitReady_NoScopeGate(t *testing.T) {
 	// nil watch → one-shot mode, all actions pass through.
 	eng.watch = nil
 
-	action := Action{
-		Type:    ActionUpload,
+	action := synctypes.Action{
+		Type:    synctypes.ActionUpload,
 		Path:    "test.txt",
 		DriveID: driveid.New("drive1"),
 	}
 	ta := eng.depGraph.Add(&action, 1, nil)
 
-	dispatched := eng.admitReady(ctx, []*TrackedAction{ta})
+	dispatched := eng.admitReady(ctx, []*synctypes.TrackedAction{ta})
 	assert.Len(t, dispatched, 1, "without scope gate, action should pass through")
 }
 
@@ -169,20 +173,20 @@ func TestEngine_AdmitReady_ScopeBlocked(t *testing.T) {
 	ctx := context.Background()
 
 	// Set up a scope block.
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, SKQuotaOwn, &ScopeBlock{
-		Key:       SKQuotaOwn,
-		IssueType: IssueQuotaExceeded,
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, synctypes.SKQuotaOwn, &synctypes.ScopeBlock{
+		Key:       synctypes.SKQuotaOwn,
+		IssueType: synctypes.IssueQuotaExceeded,
 		BlockedAt: eng.nowFn(),
 	}))
 
-	action := Action{
-		Type:    ActionUpload,
+	action := synctypes.Action{
+		Type:    synctypes.ActionUpload,
 		Path:    "test.txt",
 		DriveID: eng.driveID, // own drive
 	}
 	ta := eng.depGraph.Add(&action, 1, nil)
 
-	dispatched := eng.admitReady(ctx, []*TrackedAction{ta})
+	dispatched := eng.admitReady(ctx, []*synctypes.TrackedAction{ta})
 	assert.Empty(t, dispatched, "scope-blocked action should not be dispatched")
 
 	// Action should be completed in graph (cascade).
@@ -205,21 +209,21 @@ func TestEngine_ProcessAndRoute_Success(t *testing.T) {
 
 	driveID := driveid.New("drive1")
 
-	// Add parent + child to DepGraph.
-	parent := Action{Type: ActionUpload, Path: "parent.txt", DriveID: driveID}
+	// Add parent + child to syncdispatch.DepGraph.
+	parent := synctypes.Action{Type: synctypes.ActionUpload, Path: "parent.txt", DriveID: driveID}
 	eng.depGraph.Add(&parent, 1, nil)
 
-	child := Action{Type: ActionUpload, Path: "child.txt", DriveID: driveID}
+	child := synctypes.Action{Type: synctypes.ActionUpload, Path: "child.txt", DriveID: driveID}
 	eng.depGraph.Add(&child, 2, []int64{1})
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
 	// Simulate successful result for parent.
-	r := &WorkerResult{
+	r := &synctypes.WorkerResult{
 		Path:       "parent.txt",
 		DriveID:    driveID,
-		ActionType: ActionUpload,
+		ActionType: synctypes.ActionUpload,
 		Success:    true,
 		ActionID:   1,
 	}
@@ -242,20 +246,20 @@ func TestEngine_ProcessAndRoute_FailureCascadesChildren(t *testing.T) {
 	driveID := driveid.New("drive1")
 
 	// Add parent + child.
-	parent := Action{Type: ActionFolderCreate, Path: "dir", DriveID: driveID}
+	parent := synctypes.Action{Type: synctypes.ActionFolderCreate, Path: "dir", DriveID: driveID}
 	eng.depGraph.Add(&parent, 1, nil)
 
-	child := Action{Type: ActionUpload, Path: "dir/file.txt", DriveID: driveID}
+	child := synctypes.Action{Type: synctypes.ActionUpload, Path: "dir/file.txt", DriveID: driveID}
 	eng.depGraph.Add(&child, 2, []int64{1})
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
 	// Simulate failed result for parent.
-	r := &WorkerResult{
+	r := &synctypes.WorkerResult{
 		Path:       "dir",
 		DriveID:    driveID,
-		ActionType: ActionFolderCreate,
+		ActionType: synctypes.ActionFolderCreate,
 		Success:    false,
 		ErrMsg:     "network error",
 		HTTPStatus: 500,
@@ -290,23 +294,23 @@ func TestCascadeFailAndComplete_Grandchildren(t *testing.T) {
 	driveID := driveid.New("drive1")
 
 	// 3-level chain: A → B → C
-	a := Action{Type: ActionFolderCreate, Path: "a", DriveID: driveID}
+	a := synctypes.Action{Type: synctypes.ActionFolderCreate, Path: "a", DriveID: driveID}
 	eng.depGraph.Add(&a, 1, nil)
 
-	b := Action{Type: ActionFolderCreate, Path: "a/b", DriveID: driveID}
+	b := synctypes.Action{Type: synctypes.ActionFolderCreate, Path: "a/b", DriveID: driveID}
 	eng.depGraph.Add(&b, 2, []int64{1})
 
-	c := Action{Type: ActionDownload, Path: "a/b/c.txt", DriveID: driveID, ItemID: "ic"}
+	c := synctypes.Action{Type: synctypes.ActionDownload, Path: "a/b/c.txt", DriveID: driveID, ItemID: "ic"}
 	eng.depGraph.Add(&c, 3, []int64{2})
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
 	// Fail parent A — B and C should both be cascade-failed and completed.
-	r := &WorkerResult{
+	r := &synctypes.WorkerResult{
 		Path:       "a",
 		DriveID:    driveID,
-		ActionType: ActionFolderCreate,
+		ActionType: synctypes.ActionFolderCreate,
 		Success:    false,
 		ErrMsg:     "server error",
 		HTTPStatus: 500,
@@ -336,23 +340,23 @@ func TestCompleteSubtree_Grandchildren(t *testing.T) {
 	driveID := driveid.New("drive1")
 
 	// 3-level chain: A → B → C
-	a := Action{Type: ActionFolderCreate, Path: "a", DriveID: driveID}
+	a := synctypes.Action{Type: synctypes.ActionFolderCreate, Path: "a", DriveID: driveID}
 	eng.depGraph.Add(&a, 1, nil)
 
-	b := Action{Type: ActionFolderCreate, Path: "a/b", DriveID: driveID}
+	b := synctypes.Action{Type: synctypes.ActionFolderCreate, Path: "a/b", DriveID: driveID}
 	eng.depGraph.Add(&b, 2, []int64{1})
 
-	c := Action{Type: ActionDownload, Path: "a/b/c.txt", DriveID: driveID, ItemID: "ic"}
+	c := synctypes.Action{Type: synctypes.ActionDownload, Path: "a/b/c.txt", DriveID: driveID, ItemID: "ic"}
 	eng.depGraph.Add(&c, 3, []int64{2})
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
 	// Shutdown parent A — B and C should be silently completed.
-	r := &WorkerResult{
+	r := &synctypes.WorkerResult{
 		Path:       "a",
 		DriveID:    driveID,
-		ActionType: ActionFolderCreate,
+		ActionType: synctypes.ActionFolderCreate,
 		Success:    false,
 		Err:        context.Canceled,
 		ActionID:   1,
@@ -380,26 +384,26 @@ func TestCascadeFailAndComplete_Diamond(t *testing.T) {
 	driveID := driveid.New("drive1")
 
 	// Diamond: A → B, A → C, B → D, C → D
-	a := Action{Type: ActionFolderCreate, Path: "a", DriveID: driveID}
+	a := synctypes.Action{Type: synctypes.ActionFolderCreate, Path: "a", DriveID: driveID}
 	eng.depGraph.Add(&a, 1, nil)
 
-	b := Action{Type: ActionFolderCreate, Path: "a/b", DriveID: driveID}
+	b := synctypes.Action{Type: synctypes.ActionFolderCreate, Path: "a/b", DriveID: driveID}
 	eng.depGraph.Add(&b, 2, []int64{1})
 
-	c := Action{Type: ActionFolderCreate, Path: "a/c", DriveID: driveID}
+	c := synctypes.Action{Type: synctypes.ActionFolderCreate, Path: "a/c", DriveID: driveID}
 	eng.depGraph.Add(&c, 3, []int64{1})
 
-	d := Action{Type: ActionDownload, Path: "a/d.txt", DriveID: driveID, ItemID: "id"}
+	d := synctypes.Action{Type: synctypes.ActionDownload, Path: "a/d.txt", DriveID: driveID, ItemID: "id"}
 	eng.depGraph.Add(&d, 4, []int64{2, 3})
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
 	// Fail parent A — B, C, and D should all be cascade-failed.
-	r := &WorkerResult{
+	r := &synctypes.WorkerResult{
 		Path:       "a",
 		DriveID:    driveID,
-		ActionType: ActionFolderCreate,
+		ActionType: synctypes.ActionFolderCreate,
 		Success:    false,
 		ErrMsg:     "server error",
 		HTTPStatus: 500,
@@ -415,15 +419,15 @@ func TestCascadeFailAndComplete_Diamond(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// DepGraph.Done
+// syncdispatch.DepGraph.Done
 // ---------------------------------------------------------------------------
 
 func TestDepGraph_DoneClosesWhenAllComplete(t *testing.T) {
 	t.Parallel()
-	dg := NewDepGraph(testLogger(t))
+	dg := syncdispatch.NewDepGraph(testLogger(t))
 
-	action1 := Action{Type: ActionUpload, Path: "a.txt"}
-	action2 := Action{Type: ActionUpload, Path: "b.txt"}
+	action1 := synctypes.Action{Type: synctypes.ActionUpload, Path: "a.txt"}
+	action2 := synctypes.Action{Type: synctypes.ActionUpload, Path: "b.txt"}
 
 	dg.Add(&action1, 1, nil)
 	dg.Add(&action2, 2, nil)
@@ -476,13 +480,13 @@ func TestRetrierSweep_BatchLimit(t *testing.T) {
 
 	// Seed remote_state rows so createEventFromDB can build full events.
 	// Each download failure needs a corresponding remote_state row.
-	obs := make([]ObservedItem, total)
+	obs := make([]synctypes.ObservedItem, total)
 	for i := range total {
-		obs[i] = ObservedItem{
+		obs[i] = synctypes.ObservedItem{
 			DriveID:  driveID,
 			ItemID:   fmt.Sprintf("item-%d", i),
 			Path:     fmt.Sprintf("file-%d.txt", i),
-			ItemType: strFile,
+			ItemType: synctypes.StrFile,
 			Hash:     fmt.Sprintf("hash-%d", i),
 			Size:     int64(i * 100),
 		}
@@ -493,11 +497,11 @@ func TestRetrierSweep_BatchLimit(t *testing.T) {
 	// Seed retryBatchSize + 5 sync_failures with past next_retry_at.
 	// delayFn returns -1 minute so next_retry_at = now - 1m (in the past).
 	for i := range total {
-		require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 			Path:      fmt.Sprintf("file-%d.txt", i),
 			DriveID:   driveID,
-			Direction: strDownload,
-			Category:  strTransient,
+			Direction: synctypes.DirectionDownload,
+			Category:  synctypes.CategoryTransient,
 		}, func(_ int) time.Duration {
 			return -time.Minute
 		}))
@@ -508,7 +512,7 @@ func TestRetrierSweep_BatchLimit(t *testing.T) {
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(rows), total)
 
-	eng.watch.buf = NewBuffer(eng.logger)
+	eng.watch.buf = syncobserve.NewBuffer(eng.logger)
 
 	eng.runRetrierSweep(ctx)
 
@@ -539,13 +543,13 @@ func TestRetrierSweep_SkipsInFlight(t *testing.T) {
 	names := []string{"a.txt", "b.txt", "c.txt"}
 
 	// Seed remote_state rows so createEventFromDB can build full events.
-	obs := make([]ObservedItem, len(names))
+	obs := make([]synctypes.ObservedItem, len(names))
 	for i, name := range names {
-		obs[i] = ObservedItem{
+		obs[i] = synctypes.ObservedItem{
 			DriveID:  driveID,
 			ItemID:   fmt.Sprintf("item-%s", name),
 			Path:     name,
-			ItemType: strFile,
+			ItemType: synctypes.StrFile,
 			Hash:     fmt.Sprintf("hash-%s", name),
 			Size:     int64(100 * (i + 1)),
 		}
@@ -555,25 +559,25 @@ func TestRetrierSweep_SkipsInFlight(t *testing.T) {
 
 	// Seed 3 sync_failures.
 	for _, name := range names {
-		require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 			Path:      name,
 			DriveID:   driveID,
-			Direction: strDownload,
-			Category:  strTransient,
+			Direction: synctypes.DirectionDownload,
+			Category:  synctypes.CategoryTransient,
 		}, func(_ int) time.Duration {
 			return -time.Minute
 		}))
 	}
 
-	// Add "b.txt" to the DepGraph so it's in-flight.
-	eng.depGraph.Add(&Action{
-		Type:    ActionDownload,
+	// Add "b.txt" to the syncdispatch.DepGraph so it's in-flight.
+	eng.depGraph.Add(&synctypes.Action{
+		Type:    synctypes.ActionDownload,
 		Path:    "b.txt",
 		DriveID: driveID,
 		ItemID:  "in-flight-item",
 	}, 1, nil)
 
-	eng.watch.buf = NewBuffer(eng.logger)
+	eng.watch.buf = syncobserve.NewBuffer(eng.logger)
 
 	eng.runRetrierSweep(ctx)
 
@@ -594,17 +598,17 @@ func TestTrialDispatch_NoCandidates_ClearsScope(t *testing.T) {
 	now := eng.nowFn()
 
 	// Set a scope block with NextTrialAt in the past.
-	sk := SKQuotaOwn
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, sk, &ScopeBlock{
+	sk := synctypes.SKQuotaOwn
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, sk, &synctypes.ScopeBlock{
 		Key:           sk,
-		IssueType:     IssueQuotaExceeded,
+		IssueType:     synctypes.IssueQuotaExceeded,
 		BlockedAt:     now.Add(-time.Minute),
 		NextTrialAt:   now.Add(-time.Second),
 		TrialInterval: 10 * time.Second,
 	}))
 
 	// Do NOT seed any sync_failures for this scope — no candidates.
-	eng.watch.buf = NewBuffer(eng.logger)
+	eng.watch.buf = syncobserve.NewBuffer(eng.logger)
 
 	eng.runTrialDispatch(ctx)
 
@@ -626,13 +630,13 @@ func TestGetRemoteStateByPath_Found(t *testing.T) {
 	driveID := driveid.New("drive1")
 
 	// Insert a remote_state row via CommitObservation.
-	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{
+	require.NoError(t, eng.baseline.CommitObservation(ctx, []synctypes.ObservedItem{
 		{
 			DriveID:  driveID,
 			ItemID:   "item-abc",
 			Path:     "docs/report.pdf",
 			ParentID: "parent-1",
-			ItemType: strFile,
+			ItemType: synctypes.StrFile,
 			Hash:     "xorhash-abc",
 			Size:     4096,
 			Mtime:    1000000000,
@@ -651,7 +655,7 @@ func TestGetRemoteStateByPath_Found(t *testing.T) {
 	assert.Equal(t, int64(4096), row.Size)
 	assert.Equal(t, int64(1000000000), row.Mtime)
 	assert.Equal(t, "etag-1", row.ETag)
-	assert.Equal(t, statusPendingDownload, row.SyncStatus)
+	assert.Equal(t, syncstore.StatusPendingDownload, row.SyncStatus)
 }
 
 func TestGetRemoteStateByPath_NotFound(t *testing.T) {
@@ -676,12 +680,12 @@ func TestGetRemoteStateByPath_NullableFields(t *testing.T) {
 	driveID := driveid.New("drive1")
 
 	// Insert with minimal fields (no hash, no size, no mtime).
-	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{
+	require.NoError(t, eng.baseline.CommitObservation(ctx, []synctypes.ObservedItem{
 		{
 			DriveID:  driveID,
 			ItemID:   "item-sparse",
 			Path:     "folder/",
-			ItemType: strFolder,
+			ItemType: synctypes.StrFolder,
 		},
 	}, "", driveID))
 
@@ -701,28 +705,28 @@ func TestGetRemoteStateByPath_NullableFields(t *testing.T) {
 func TestRemoteStateToChangeEvent_Download(t *testing.T) {
 	t.Parallel()
 
-	rs := &RemoteStateRow{
+	rs := &synctypes.RemoteStateRow{
 		DriveID:    driveid.New("drive1"),
 		ItemID:     "item-42",
 		Path:       "docs/file.txt",
 		ParentID:   "parent-7",
-		ItemType:   strFile,
+		ItemType:   synctypes.StrFile,
 		Hash:       "xorhash-42",
 		Size:       8192,
 		Mtime:      2000000000,
 		ETag:       "etag-42",
-		SyncStatus: statusPendingDownload,
+		SyncStatus: syncstore.StatusPendingDownload,
 	}
 
 	ev := remoteStateToChangeEvent(rs, "docs/file.txt")
 
-	assert.Equal(t, SourceRemote, ev.Source)
-	assert.Equal(t, ChangeModify, ev.Type)
+	assert.Equal(t, synctypes.SourceRemote, ev.Source)
+	assert.Equal(t, synctypes.ChangeModify, ev.Type)
 	assert.Equal(t, "docs/file.txt", ev.Path)
 	assert.Equal(t, "item-42", ev.ItemID)
 	assert.Equal(t, "parent-7", ev.ParentID)
 	assert.Equal(t, driveid.New("drive1"), ev.DriveID)
-	assert.Equal(t, ItemTypeFile, ev.ItemType)
+	assert.Equal(t, synctypes.ItemTypeFile, ev.ItemType)
 	assert.Equal(t, "file.txt", ev.Name)
 	assert.Equal(t, int64(8192), ev.Size)
 	assert.Equal(t, "xorhash-42", ev.Hash)
@@ -735,21 +739,21 @@ func TestRemoteStateToChangeEvent_Delete(t *testing.T) {
 	t.Parallel()
 
 	// Test all delete-family statuses.
-	for _, status := range []string{statusDeleted, statusDeleting, statusDeleteFailed, statusPendingDelete} {
+	for _, status := range []string{syncstore.StatusDeleted, syncstore.StatusDeleting, syncstore.StatusDeleteFailed, syncstore.StatusPendingDelete} {
 		t.Run(status, func(t *testing.T) {
 			t.Parallel()
 
-			rs := &RemoteStateRow{
+			rs := &synctypes.RemoteStateRow{
 				DriveID:    driveid.New("drive1"),
 				ItemID:     "item-del",
 				Path:       "trash/old.txt",
 				SyncStatus: status,
-				ItemType:   strFile,
+				ItemType:   synctypes.StrFile,
 			}
 
 			ev := remoteStateToChangeEvent(rs, "trash/old.txt")
 
-			assert.Equal(t, ChangeDelete, ev.Type)
+			assert.Equal(t, synctypes.ChangeDelete, ev.Type)
 			assert.True(t, ev.IsDeleted)
 			assert.Equal(t, "old.txt", ev.Name)
 		})
@@ -759,17 +763,17 @@ func TestRemoteStateToChangeEvent_Delete(t *testing.T) {
 func TestRemoteStateToChangeEvent_Folder(t *testing.T) {
 	t.Parallel()
 
-	rs := &RemoteStateRow{
+	rs := &synctypes.RemoteStateRow{
 		DriveID:    driveid.New("drive1"),
 		ItemID:     "item-folder",
 		Path:       "photos/vacation",
-		SyncStatus: statusPendingDownload,
-		ItemType:   strFolder,
+		SyncStatus: syncstore.StatusPendingDownload,
+		ItemType:   synctypes.StrFolder,
 	}
 
 	ev := remoteStateToChangeEvent(rs, "photos/vacation")
 
-	assert.Equal(t, ItemTypeFolder, ev.ItemType)
+	assert.Equal(t, synctypes.ItemTypeFolder, ev.ItemType)
 	assert.Equal(t, "vacation", ev.Name)
 }
 
@@ -794,20 +798,20 @@ func TestCreateEventFromDB_Upload_FileExists(t *testing.T) {
 		0o644,
 	))
 
-	row := &SyncFailureRow{
+	row := &synctypes.SyncFailureRow{
 		Path:      testFile,
 		DriveID:   driveID,
-		Direction: strUpload,
+		Direction: synctypes.DirectionUpload,
 	}
 
 	ev := eng.createEventFromDB(ctx, row)
 
 	require.NotNil(t, ev, "should create event for existing file")
-	assert.Equal(t, SourceLocal, ev.Source)
-	assert.Equal(t, ChangeModify, ev.Type)
+	assert.Equal(t, synctypes.SourceLocal, ev.Source)
+	assert.Equal(t, synctypes.ChangeModify, ev.Type)
 	assert.Equal(t, testFile, ev.Path)
 	assert.Equal(t, "upload-test.txt", ev.Name)
-	assert.Equal(t, ItemTypeFile, ev.ItemType)
+	assert.Equal(t, synctypes.ItemTypeFile, ev.ItemType)
 	assert.Greater(t, ev.Size, int64(0), "size should be populated")
 	assert.NotEmpty(t, ev.Hash, "hash should be computed")
 	assert.Greater(t, ev.Mtime, int64(0), "mtime should be populated")
@@ -821,17 +825,17 @@ func TestCreateEventFromDB_Upload_FileGone(t *testing.T) {
 
 	driveID := driveid.New("drive1")
 
-	row := &SyncFailureRow{
+	row := &synctypes.SyncFailureRow{
 		Path:      "nonexistent-upload.txt",
 		DriveID:   driveID,
-		Direction: strUpload,
+		Direction: synctypes.DirectionUpload,
 	}
 
 	ev := eng.createEventFromDB(ctx, row)
 
 	require.NotNil(t, ev, "should create delete event for missing file")
-	assert.Equal(t, SourceLocal, ev.Source)
-	assert.Equal(t, ChangeDelete, ev.Type)
+	assert.Equal(t, synctypes.SourceLocal, ev.Source)
+	assert.Equal(t, synctypes.ChangeDelete, ev.Type)
 	assert.True(t, ev.IsDeleted)
 }
 
@@ -844,12 +848,12 @@ func TestCreateEventFromDB_Download_RemoteStateExists(t *testing.T) {
 	driveID := driveid.New("drive1")
 
 	// Seed remote_state.
-	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{
+	require.NoError(t, eng.baseline.CommitObservation(ctx, []synctypes.ObservedItem{
 		{
 			DriveID:  driveID,
 			ItemID:   "dl-item",
 			Path:     "download-test.txt",
-			ItemType: strFile,
+			ItemType: synctypes.StrFile,
 			Hash:     "dl-hash",
 			Size:     1024,
 			Mtime:    5000000000,
@@ -857,17 +861,17 @@ func TestCreateEventFromDB_Download_RemoteStateExists(t *testing.T) {
 		},
 	}, "", driveID))
 
-	row := &SyncFailureRow{
+	row := &synctypes.SyncFailureRow{
 		Path:      "download-test.txt",
 		DriveID:   driveID,
-		Direction: strDownload,
+		Direction: synctypes.DirectionDownload,
 	}
 
 	ev := eng.createEventFromDB(ctx, row)
 
 	require.NotNil(t, ev, "should create event from remote_state")
-	assert.Equal(t, SourceRemote, ev.Source)
-	assert.Equal(t, ChangeModify, ev.Type)
+	assert.Equal(t, synctypes.SourceRemote, ev.Source)
+	assert.Equal(t, synctypes.ChangeModify, ev.Type)
 	assert.Equal(t, "download-test.txt", ev.Path)
 	assert.Equal(t, "dl-item", ev.ItemID)
 	assert.Equal(t, "dl-hash", ev.Hash)
@@ -886,10 +890,10 @@ func TestCreateEventFromDB_Download_RemoteStateGone(t *testing.T) {
 	driveID := driveid.New("drive1")
 
 	// No remote_state seeded.
-	row := &SyncFailureRow{
+	row := &synctypes.SyncFailureRow{
 		Path:      "no-remote.txt",
 		DriveID:   driveID,
-		Direction: strDownload,
+		Direction: synctypes.DirectionDownload,
 	}
 
 	ev := eng.createEventFromDB(ctx, row)
@@ -911,12 +915,12 @@ func TestIsFailureResolved_Download_Synced(t *testing.T) {
 
 	// Seed remote_state and set it to synced (simulates a download that
 	// completed through the normal pipeline).
-	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{
+	require.NoError(t, eng.baseline.CommitObservation(ctx, []synctypes.ObservedItem{
 		{
 			DriveID:  driveID,
 			ItemID:   "resolved-item",
 			Path:     "resolved.txt",
-			ItemType: strFile,
+			ItemType: synctypes.StrFile,
 			Hash:     "resolved-hash",
 			Size:     512,
 		},
@@ -924,22 +928,22 @@ func TestIsFailureResolved_Download_Synced(t *testing.T) {
 
 	_, err := eng.baseline.DB().ExecContext(ctx,
 		`UPDATE remote_state SET sync_status = ? WHERE item_id = ?`,
-		statusSynced, "resolved-item",
+		syncstore.StatusSynced, "resolved-item",
 	)
 	require.NoError(t, err)
 
 	// Seed a sync_failure for this path.
-	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "resolved.txt",
 		DriveID:   driveID,
-		Direction: strDownload,
-		Category:  strTransient,
+		Direction: synctypes.DirectionDownload,
+		Category:  synctypes.CategoryTransient,
 	}, nil))
 
-	row := &SyncFailureRow{
+	row := &synctypes.SyncFailureRow{
 		Path:      "resolved.txt",
 		DriveID:   driveID,
-		Direction: strDownload,
+		Direction: synctypes.DirectionDownload,
 	}
 
 	assert.True(t, eng.isFailureResolved(ctx, row),
@@ -959,10 +963,10 @@ func TestIsFailureResolved_Download_NoRemoteState(t *testing.T) {
 
 	driveID := driveid.New("drive1")
 
-	row := &SyncFailureRow{
+	row := &synctypes.SyncFailureRow{
 		Path:      "deleted-remotely.txt",
 		DriveID:   driveID,
-		Direction: strDownload,
+		Direction: synctypes.DirectionDownload,
 	}
 
 	assert.True(t, eng.isFailureResolved(ctx, row),
@@ -978,20 +982,20 @@ func TestIsFailureResolved_Download_StillPending(t *testing.T) {
 	driveID := driveid.New("drive1")
 
 	// Seed remote_state with pending_download.
-	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{
+	require.NoError(t, eng.baseline.CommitObservation(ctx, []synctypes.ObservedItem{
 		{
 			DriveID:  driveID,
 			ItemID:   "pending-item",
 			Path:     "still-pending.txt",
-			ItemType: strFile,
+			ItemType: synctypes.StrFile,
 			Hash:     "pending-hash",
 		},
 	}, "", driveID))
 
-	row := &SyncFailureRow{
+	row := &synctypes.SyncFailureRow{
 		Path:      "still-pending.txt",
 		DriveID:   driveID,
-		Direction: strDownload,
+		Direction: synctypes.DirectionDownload,
 	}
 
 	assert.False(t, eng.isFailureResolved(ctx, row),
@@ -1006,10 +1010,10 @@ func TestIsFailureResolved_Upload_FileGone(t *testing.T) {
 
 	driveID := driveid.New("drive1")
 
-	row := &SyncFailureRow{
+	row := &synctypes.SyncFailureRow{
 		Path:      "gone-upload.txt",
 		DriveID:   driveID,
-		Direction: strUpload,
+		Direction: synctypes.DirectionUpload,
 	}
 
 	assert.True(t, eng.isFailureResolved(ctx, row),
@@ -1031,10 +1035,10 @@ func TestIsFailureResolved_Upload_FileExists(t *testing.T) {
 		0o644,
 	))
 
-	row := &SyncFailureRow{
+	row := &synctypes.SyncFailureRow{
 		Path:      "still-here.txt",
 		DriveID:   driveID,
-		Direction: strUpload,
+		Direction: synctypes.DirectionUpload,
 	}
 
 	assert.False(t, eng.isFailureResolved(ctx, row),
@@ -1049,10 +1053,10 @@ func TestIsFailureResolved_Delete_NoBaseline(t *testing.T) {
 
 	driveID := driveid.New("drive1")
 
-	row := &SyncFailureRow{
+	row := &synctypes.SyncFailureRow{
 		Path:      "already-deleted.txt",
 		DriveID:   driveID,
-		Direction: strDelete,
+		Direction: synctypes.DirectionDelete,
 	}
 
 	assert.True(t, eng.isFailureResolved(ctx, row),
@@ -1068,33 +1072,33 @@ func TestIsFailureResolved_Delete_BaselineExists(t *testing.T) {
 	driveID := driveid.New("drive1")
 
 	// Create a baseline entry via a successful download outcome.
-	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{
+	require.NoError(t, eng.baseline.CommitObservation(ctx, []synctypes.ObservedItem{
 		{
 			DriveID:  driveID,
 			ItemID:   "baseline-item",
 			Path:     "still-in-baseline.txt",
-			ItemType: strFile,
+			ItemType: synctypes.StrFile,
 			Hash:     "bl-hash",
 			Size:     100,
 		},
 	}, "", driveID))
 
-	require.NoError(t, eng.baseline.CommitOutcome(ctx, &Outcome{
-		Action:     ActionDownload,
+	require.NoError(t, eng.baseline.CommitOutcome(ctx, &synctypes.Outcome{
+		Action:     synctypes.ActionDownload,
 		Success:    true,
 		Path:       "still-in-baseline.txt",
 		DriveID:    driveID,
 		ItemID:     "baseline-item",
-		ItemType:   ItemTypeFile,
+		ItemType:   synctypes.ItemTypeFile,
 		LocalHash:  "bl-hash",
 		RemoteHash: "bl-hash",
 		Size:       100,
 	}))
 
-	row := &SyncFailureRow{
+	row := &synctypes.SyncFailureRow{
 		Path:      "still-in-baseline.txt",
 		DriveID:   driveID,
-		Direction: strDelete,
+		Direction: synctypes.DirectionDelete,
 	}
 
 	assert.False(t, eng.isFailureResolved(ctx, row),
@@ -1124,24 +1128,24 @@ func TestReobserve_Remote_200(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	eng.depGraph = NewDepGraph(eng.logger)
+	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
 
-	row := &SyncFailureRow{
+	row := &synctypes.SyncFailureRow{
 		Path:      "live-file.txt",
 		DriveID:   driveID,
 		ItemID:    "live-item",
-		Direction: strDownload,
+		Direction: synctypes.DirectionDownload,
 	}
 
 	ev, retryAfter := eng.reobserve(ctx, row)
 
 	require.NotNil(t, ev)
 	assert.Equal(t, time.Duration(0), retryAfter, "200 should have zero RetryAfter")
-	assert.Equal(t, SourceRemote, ev.Source)
-	assert.Equal(t, ChangeModify, ev.Type)
+	assert.Equal(t, synctypes.SourceRemote, ev.Source)
+	assert.Equal(t, synctypes.ChangeModify, ev.Type)
 	assert.Equal(t, "live-item", ev.ItemID)
 	assert.Equal(t, "live-hash", ev.Hash)
 	assert.Equal(t, int64(2048), ev.Size)
@@ -1163,23 +1167,23 @@ func TestReobserve_Remote_404(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	eng.depGraph = NewDepGraph(eng.logger)
+	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
 
-	row := &SyncFailureRow{
+	row := &synctypes.SyncFailureRow{
 		Path:      "deleted-remotely.txt",
 		DriveID:   driveID,
 		ItemID:    "deleted-item",
-		Direction: strDownload,
+		Direction: synctypes.DirectionDownload,
 	}
 
 	ev, retryAfter := eng.reobserve(ctx, row)
 
 	require.NotNil(t, ev)
 	assert.Equal(t, time.Duration(0), retryAfter, "404 should have zero RetryAfter")
-	assert.Equal(t, ChangeDelete, ev.Type)
+	assert.Equal(t, synctypes.ChangeDelete, ev.Type)
 	assert.True(t, ev.IsDeleted)
 	assert.Equal(t, "deleted-item", ev.ItemID)
 }
@@ -1198,16 +1202,16 @@ func TestReobserve_Remote_429(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	eng.depGraph = NewDepGraph(eng.logger)
+	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
 
-	row := &SyncFailureRow{
+	row := &synctypes.SyncFailureRow{
 		Path:      "throttled.txt",
 		DriveID:   driveID,
 		ItemID:    "throttled-item",
-		Direction: strDownload,
+		Direction: synctypes.DirectionDownload,
 	}
 
 	ev, retryAfter := eng.reobserve(ctx, row)
@@ -1231,14 +1235,14 @@ func TestReobserve_Remote_429_WithRetryAfter(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	eng.depGraph = NewDepGraph(eng.logger)
+	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
 	ctx := context.Background()
 
-	row := &SyncFailureRow{
+	row := &synctypes.SyncFailureRow{
 		Path:      "throttled-retry.txt",
 		DriveID:   driveid.New("drive1"),
 		ItemID:    "throttled-retry-item",
-		Direction: strDownload,
+		Direction: synctypes.DirectionDownload,
 	}
 
 	ev, retryAfter := eng.reobserve(ctx, row)
@@ -1263,14 +1267,14 @@ func TestReobserve_Remote_507_WithRetryAfter(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	eng.depGraph = NewDepGraph(eng.logger)
+	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
 	ctx := context.Background()
 
-	row := &SyncFailureRow{
+	row := &synctypes.SyncFailureRow{
 		Path:      "storage-full.txt",
 		DriveID:   driveid.New("drive1"),
 		ItemID:    "storage-full-item",
-		Direction: strDownload,
+		Direction: synctypes.DirectionDownload,
 	}
 
 	ev, retryAfter := eng.reobserve(ctx, row)
@@ -1285,7 +1289,7 @@ func TestReobserve_Local_Exists(t *testing.T) {
 
 	mock := &engineMockClient{}
 	eng, syncRoot := newTestEngine(t, mock)
-	eng.depGraph = NewDepGraph(eng.logger)
+	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -1297,18 +1301,18 @@ func TestReobserve_Local_Exists(t *testing.T) {
 		0o644,
 	))
 
-	row := &SyncFailureRow{
+	row := &synctypes.SyncFailureRow{
 		Path:      "local-exists.txt",
 		DriveID:   driveID,
-		Direction: strUpload,
+		Direction: synctypes.DirectionUpload,
 	}
 
 	ev, retryAfter := eng.reobserve(ctx, row)
 
 	require.NotNil(t, ev)
 	assert.Equal(t, time.Duration(0), retryAfter, "local reobserve should have zero RetryAfter")
-	assert.Equal(t, SourceLocal, ev.Source)
-	assert.Equal(t, ChangeModify, ev.Type)
+	assert.Equal(t, synctypes.SourceLocal, ev.Source)
+	assert.Equal(t, synctypes.ChangeModify, ev.Type)
 	assert.NotEmpty(t, ev.Hash)
 	assert.Greater(t, ev.Size, int64(0))
 }
@@ -1318,22 +1322,22 @@ func TestReobserve_Local_Gone(t *testing.T) {
 
 	mock := &engineMockClient{}
 	eng, _ := newTestEngine(t, mock)
-	eng.depGraph = NewDepGraph(eng.logger)
+	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
 
-	row := &SyncFailureRow{
+	row := &synctypes.SyncFailureRow{
 		Path:      "gone-local.txt",
 		DriveID:   driveID,
-		Direction: strUpload,
+		Direction: synctypes.DirectionUpload,
 	}
 
 	ev, retryAfter := eng.reobserve(ctx, row)
 
 	require.NotNil(t, ev)
 	assert.Equal(t, time.Duration(0), retryAfter, "local gone should have zero RetryAfter")
-	assert.Equal(t, ChangeDelete, ev.Type)
+	assert.Equal(t, synctypes.ChangeDelete, ev.Type)
 	assert.True(t, ev.IsDeleted)
 }
 
@@ -1352,13 +1356,13 @@ func TestRetrierSweep_FullFidelityEvents_D9(t *testing.T) {
 	eng.baseline.SetNowFunc(eng.nowFn)
 
 	// Seed remote_state with full metadata.
-	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{
+	require.NoError(t, eng.baseline.CommitObservation(ctx, []synctypes.ObservedItem{
 		{
 			DriveID:  driveID,
 			ItemID:   "d9-item",
 			Path:     "d9-test.txt",
 			ParentID: "d9-parent",
-			ItemType: strFile,
+			ItemType: synctypes.StrFile,
 			Hash:     "d9-hash",
 			Size:     9999,
 			Mtime:    7777777777,
@@ -1367,16 +1371,16 @@ func TestRetrierSweep_FullFidelityEvents_D9(t *testing.T) {
 	}, "", driveID))
 
 	// Seed a sync_failure.
-	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "d9-test.txt",
 		DriveID:   driveID,
-		Direction: strDownload,
-		Category:  strTransient,
+		Direction: synctypes.DirectionDownload,
+		Category:  synctypes.CategoryTransient,
 	}, func(_ int) time.Duration {
 		return -time.Minute
 	}))
 
-	eng.watch.buf = NewBuffer(eng.logger)
+	eng.watch.buf = syncobserve.NewBuffer(eng.logger)
 	eng.runRetrierSweep(ctx)
 
 	// Verify the buffer contains a full-fidelity event.
@@ -1408,14 +1412,14 @@ func TestRetrierSweep_SkipsResolvedFailures_D11(t *testing.T) {
 	driveID := driveid.New("drive1")
 	eng.baseline.SetNowFunc(eng.nowFn)
 
-	// Seed remote_state: d11-synced will be set to statusSynced (resolved),
-	// d11-pending stays at statusPendingDownload (not resolved).
-	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{
+	// Seed remote_state: d11-synced will be set to syncstore.StatusSynced (resolved),
+	// d11-pending stays at syncstore.StatusPendingDownload (not resolved).
+	require.NoError(t, eng.baseline.CommitObservation(ctx, []synctypes.ObservedItem{
 		{
 			DriveID:  driveID,
 			ItemID:   "synced-item",
 			Path:     "d11-synced.txt",
-			ItemType: strFile,
+			ItemType: synctypes.StrFile,
 			Hash:     "synced-hash",
 			Size:     100,
 		},
@@ -1423,7 +1427,7 @@ func TestRetrierSweep_SkipsResolvedFailures_D11(t *testing.T) {
 			DriveID:  driveID,
 			ItemID:   "pending-item",
 			Path:     "d11-pending.txt",
-			ItemType: strFile,
+			ItemType: synctypes.StrFile,
 			Hash:     "pending-hash",
 			Size:     200,
 		},
@@ -1434,23 +1438,23 @@ func TestRetrierSweep_SkipsResolvedFailures_D11(t *testing.T) {
 	// (pending_download → downloading → synced) isn't needed for this test.
 	_, err := eng.baseline.DB().ExecContext(ctx,
 		`UPDATE remote_state SET sync_status = ? WHERE item_id = ?`,
-		statusSynced, "synced-item",
+		syncstore.StatusSynced, "synced-item",
 	)
 	require.NoError(t, err)
 
 	// Seed sync_failures for both.
 	for _, path := range []string{"d11-synced.txt", "d11-pending.txt"} {
-		require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 			Path:      path,
 			DriveID:   driveID,
-			Direction: strDownload,
-			Category:  strTransient,
+			Direction: synctypes.DirectionDownload,
+			Category:  synctypes.CategoryTransient,
 		}, func(_ int) time.Duration {
 			return -time.Minute
 		}))
 	}
 
-	eng.watch.buf = NewBuffer(eng.logger)
+	eng.watch.buf = syncobserve.NewBuffer(eng.logger)
 	eng.runRetrierSweep(ctx)
 
 	// Only d11-pending should be dispatched (d11-synced is resolved).
@@ -1492,29 +1496,29 @@ func TestTrialDispatch_UsesReobserve(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	eng.nowFn = func() time.Time { return time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC) }
 	setupWatchEngine(t, eng)
-	eng.watch.buf = NewBuffer(eng.logger)
+	eng.watch.buf = syncobserve.NewBuffer(eng.logger)
 
 	ctx := context.Background()
 	driveID := driveid.New("drive1")
 	now := eng.nowFn()
 
-	sk := SKQuotaOwn
+	sk := synctypes.SKQuotaOwn
 
 	// Set up a scope block with NextTrialAt in the past.
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, sk, &ScopeBlock{
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, sk, &synctypes.ScopeBlock{
 		Key:           sk,
-		IssueType:     IssueQuotaExceeded,
+		IssueType:     synctypes.IssueQuotaExceeded,
 		BlockedAt:     now.Add(-time.Minute),
 		NextTrialAt:   now.Add(-time.Second),
 		TrialInterval: 10 * time.Second,
 	}))
 
 	// Seed a scope-blocked failure.
-	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "trial.txt",
 		DriveID:   driveID,
-		Direction: strDownload,
-		Category:  strTransient,
+		Direction: synctypes.DirectionDownload,
+		Category:  synctypes.CategoryTransient,
 		ScopeKey:  sk,
 		ItemID:    "trial-item",
 	}, nil))
@@ -1571,36 +1575,36 @@ func TestTrialDispatch_ForwardsRetryAfter(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	eng.nowFn = func() time.Time { return time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC) }
 	setupWatchEngine(t, eng)
-	eng.watch.buf = NewBuffer(eng.logger)
+	eng.watch.buf = syncobserve.NewBuffer(eng.logger)
 
 	ctx := context.Background()
 	driveID := driveid.New("drive1")
 	now := eng.nowFn()
 
-	sk := SKQuotaOwn
+	sk := synctypes.SKQuotaOwn
 
 	// Set up a scope block with a small TrialInterval and NextTrialAt in the past.
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, sk, &ScopeBlock{
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, sk, &synctypes.ScopeBlock{
 		Key:           sk,
-		IssueType:     IssueQuotaExceeded,
+		IssueType:     synctypes.IssueQuotaExceeded,
 		BlockedAt:     now.Add(-time.Minute),
 		NextTrialAt:   now.Add(-time.Second),
 		TrialInterval: 10 * time.Second,
 	}))
 
 	// Seed a scope-blocked failure.
-	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "throttled.txt",
 		DriveID:   driveID,
-		Direction: strDownload,
-		Category:  strTransient,
+		Direction: synctypes.DirectionDownload,
+		Category:  synctypes.CategoryTransient,
 		ScopeKey:  sk,
 		ItemID:    "throttled-item",
 	}, nil))
 
 	eng.runTrialDispatch(ctx)
 
-	// Buffer should be empty — reobserve returned nil (scope persists).
+	// syncobserve.Buffer should be empty — reobserve returned nil (scope persists).
 	result := eng.watch.buf.FlushImmediate()
 	assert.Empty(t, result, "no event should be dispatched when scope condition persists")
 
@@ -1622,12 +1626,12 @@ func TestTrialDispatch_CleansStaleTrialPending(t *testing.T) {
 	// Insert a stale trial entry (older than trialPendingTTL).
 	eng.watch.trialMu.Lock()
 	eng.watch.trialPending["stale.txt"] = trialEntry{
-		scopeKey: SKQuotaOwn,
+		scopeKey: synctypes.SKQuotaOwn,
 		created:  now.Add(-2 * trialPendingTTL),
 	}
 	eng.watch.trialMu.Unlock()
 
-	eng.watch.buf = NewBuffer(eng.logger)
+	eng.watch.buf = syncobserve.NewBuffer(eng.logger)
 
 	// No due scopes needed — stale cleanup runs first in runTrialDispatch.
 	eng.runTrialDispatch(ctx)

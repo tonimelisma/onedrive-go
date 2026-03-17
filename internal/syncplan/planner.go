@@ -58,9 +58,9 @@ func (p *Planner) Plan(
 	}
 
 	// Step 3: build dependency edges and verify acyclicity.
-	deps := BuildDependencies(allActions)
+	deps := buildDependencies(allActions)
 
-	if err := DetectDependencyCycle(deps); err != nil {
+	if err := detectDependencyCycle(deps); err != nil {
 		return nil, err
 	}
 
@@ -73,7 +73,7 @@ func (p *Planner) Plan(
 	counts := CountByType(plan.Actions)
 	deleteCount := counts[synctypes.ActionLocalDelete] + counts[synctypes.ActionRemoteDelete]
 
-	if ExceedsDeleteThreshold(deleteCount, config.BigDeleteThreshold) {
+	if exceedsDeleteThreshold(deleteCount, config.BigDeleteThreshold) {
 		p.logger.Warn("big-delete protection triggered",
 			slog.Int("delete_count", deleteCount),
 			slog.Int("threshold", config.BigDeleteThreshold),
@@ -139,11 +139,11 @@ func buildPathViews(changes []synctypes.PathChanges, baseline *synctypes.Baselin
 // Cross-drive move guard
 // ---------------------------------------------------------------------------
 
-// ResolvePathDriveID determines which drive owns a path by checking the
+// resolvePathDriveID determines which drive owns a path by checking the
 // baseline. If the path itself has no baseline entry, walks up parent
 // directories until an ancestor with a baseline entry is found. Returns
 // zero ID if no ancestry has a baseline entry.
-func ResolvePathDriveID(p string, bl *synctypes.Baseline) driveid.ID {
+func resolvePathDriveID(p string, bl *synctypes.Baseline) driveid.ID {
 	// Check the path itself first.
 	if entry, ok := bl.GetByPath(p); ok {
 		return entry.DriveID
@@ -159,11 +159,11 @@ func ResolvePathDriveID(p string, bl *synctypes.Baseline) driveid.ID {
 	return driveid.ID{}
 }
 
-// IsCrossDriveLocalMove returns true when a hash-correlated delete+create
+// isCrossDriveLocalMove returns true when a hash-correlated delete+create
 // pair spans different drives (e.g., own drive → shortcut folder). The
 // Graph API MoveItem is a single-drive operation, so cross-drive moves
 // must be decomposed into a delete + upload.
-func IsCrossDriveLocalMove(deletePath, createPath string, views map[string]*synctypes.PathView, bl *synctypes.Baseline) bool {
+func isCrossDriveLocalMove(deletePath, createPath string, views map[string]*synctypes.PathView, bl *synctypes.Baseline) bool {
 	// Source drive comes from the deleted item's baseline.
 	deleteView := views[deletePath]
 	if deleteView == nil || deleteView.Baseline == nil {
@@ -171,7 +171,7 @@ func IsCrossDriveLocalMove(deletePath, createPath string, views map[string]*sync
 	}
 
 	sourceDrive := deleteView.Baseline.DriveID
-	destDrive := ResolvePathDriveID(createPath, bl)
+	destDrive := resolvePathDriveID(createPath, bl)
 
 	// Conservative: if either drive is unknown, don't decompose — let the
 	// normal move path handle it (it'll fail and get retried as separate ops).
@@ -182,11 +182,11 @@ func IsCrossDriveLocalMove(deletePath, createPath string, views map[string]*sync
 	return !sourceDrive.Equal(destDrive)
 }
 
-// IsCrossDriveRemoteMove returns true when a remote ChangeMove event
+// isCrossDriveRemoteMove returns true when a remote ChangeMove event
 // has different drive IDs in the baseline (source) and remote (destination).
 // Cross-drive remote moves from the API shouldn't happen in practice, but
 // guard defensively.
-func IsCrossDriveRemoteMove(view *synctypes.PathView) bool {
+func isCrossDriveRemoteMove(view *synctypes.PathView) bool {
 	if view.Baseline == nil || view.Remote == nil {
 		return false
 	}
@@ -241,7 +241,7 @@ func detectRemoteMoves(views map[string]*synctypes.PathView, changes []synctypes
 			// skip the move action and let the paths classify as separate
 			// delete + download. This shouldn't happen in practice but
 			// guards defensively.
-			if IsCrossDriveRemoteMove(view) {
+			if isCrossDriveRemoteMove(view) {
 				continue
 			}
 
@@ -353,7 +353,7 @@ func shouldSkipLocalMove(
 	// and destination are on different drives, skip the move match — the
 	// paths fall through to normal per-path classification which will
 	// produce a delete + upload instead.
-	return IsCrossDriveLocalMove(deletePath, createPath, views, bl)
+	return isCrossDriveLocalMove(deletePath, createPath, views, bl)
 }
 
 // classifyPathView determines actions for a single path view based on
@@ -399,8 +399,8 @@ func classifyFile(view *synctypes.PathView, mode synctypes.SyncMode) []synctypes
 // classifyFileWithBaseline handles EF1-EF10: files that have a baseline
 // entry (previously synced).
 func classifyFileWithBaseline(view *synctypes.PathView, mode synctypes.SyncMode) []synctypes.Action {
-	localChanged := DetectLocalChange(view)
-	remoteChanged := DetectRemoteChange(view)
+	localChanged := detectLocalChange(view)
+	remoteChanged := detectRemoteChange(view)
 
 	// Mode filtering: suppress the side we are not syncing.
 	if mode == synctypes.SyncDownloadOnly {
@@ -648,9 +648,9 @@ func localStateFromBaseline(entry *synctypes.BaselineEntry) *synctypes.LocalStat
 	}
 }
 
-// DetectLocalChange returns true if the local state differs from the
+// detectLocalChange returns true if the local state differs from the
 // baseline. A missing local state (deleted file) counts as changed.
-func DetectLocalChange(view *synctypes.PathView) bool {
+func detectLocalChange(view *synctypes.PathView) bool {
 	if view.Baseline == nil {
 		return view.Local != nil
 	}
@@ -668,9 +668,9 @@ func DetectLocalChange(view *synctypes.PathView) bool {
 	return view.Local.Hash != view.Baseline.LocalHash
 }
 
-// DetectRemoteChange returns true if the remote state differs from the
+// detectRemoteChange returns true if the remote state differs from the
 // baseline. A nil Remote means no observation (not "unchanged").
-func DetectRemoteChange(view *synctypes.PathView) bool {
+func detectRemoteChange(view *synctypes.PathView) bool {
 	if view.Baseline == nil {
 		return view.Remote != nil && !view.Remote.IsDeleted
 	}
@@ -796,12 +796,12 @@ func makeFolderCreate(view *synctypes.PathView, side synctypes.FolderCreateSide)
 	return a
 }
 
-// BuildDependencies computes dependency edges for a flat action list.
+// buildDependencies computes dependency edges for a flat action list.
 // Returns deps where deps[i] contains the indices that action i depends on.
 // Rules: (1) folder create before any action in that subtree,
 // (2) child delete/cleanup before parent folder delete,
 // (3) move target parent must exist first.
-func BuildDependencies(actions []synctypes.Action) [][]int {
+func buildDependencies(actions []synctypes.Action) [][]int {
 	deps := make([][]int, len(actions))
 
 	// Index folder creates by path for quick lookup.
@@ -880,23 +880,10 @@ func CountByType(actions []synctypes.Action) map[synctypes.ActionType]int {
 	return counts
 }
 
-// ActionsOfType filters a flat action list to a single type.
-func ActionsOfType(actions []synctypes.Action, t synctypes.ActionType) []synctypes.Action {
-	var result []synctypes.Action
-
-	for i := range actions {
-		if actions[i].Type == t {
-			result = append(result, actions[i])
-		}
-	}
-
-	return result
-}
-
-// DetectDependencyCycle performs a DFS to check for cycles in the dependency
+// detectDependencyCycle performs a DFS to check for cycles in the dependency
 // graph. Returns ErrDependencyCycle if any cycle is found. Uses standard
 // white/gray/black three-color marking (B-313).
-func DetectDependencyCycle(deps [][]int) error {
+func detectDependencyCycle(deps [][]int) error {
 	const (
 		white = 0 // unvisited
 		gray  = 1 // in current DFS path
@@ -936,8 +923,8 @@ func DetectDependencyCycle(deps [][]int) error {
 	return nil
 }
 
-// ExceedsDeleteThreshold returns true if the planned delete count exceeds
+// exceedsDeleteThreshold returns true if the planned delete count exceeds
 // the configured threshold. A threshold of 0 disables the check.
-func ExceedsDeleteThreshold(deleteCount, threshold int) bool {
+func exceedsDeleteThreshold(deleteCount, threshold int) bool {
 	return threshold > 0 && deleteCount > threshold
 }

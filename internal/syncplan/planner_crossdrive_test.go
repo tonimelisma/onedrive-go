@@ -15,16 +15,18 @@ import (
 // resolvePathDriveID tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10.16
 func TestResolvePathDriveID_DirectMatch(t *testing.T) {
 	driveA := driveid.New("driveA")
 	bl := synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{
 		{Path: "docs/file.txt", DriveID: driveA, ItemID: "item1", ItemType: synctypes.ItemTypeFile},
 	})
 
-	got := ResolvePathDriveID("docs/file.txt", bl)
+	got := resolvePathDriveID("docs/file.txt", bl)
 	assert.Equal(t, driveA, got)
 }
 
+// Validates: R-2.10.16
 func TestResolvePathDriveID_ParentMatch(t *testing.T) {
 	driveA := driveid.New("driveA")
 	bl := synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{
@@ -32,16 +34,17 @@ func TestResolvePathDriveID_ParentMatch(t *testing.T) {
 	})
 
 	// The file itself has no baseline, but its parent folder does.
-	got := ResolvePathDriveID("shared/new-file.txt", bl)
+	got := resolvePathDriveID("shared/new-file.txt", bl)
 	assert.Equal(t, driveA, got)
 }
 
+// Validates: R-2.10.16
 func TestResolvePathDriveID_NoMatch(t *testing.T) {
 	bl := synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{
 		{Path: "other/file.txt", DriveID: driveid.New("driveX"), ItemID: "x", ItemType: synctypes.ItemTypeFile},
 	})
 
-	got := ResolvePathDriveID("completely/different/path.txt", bl)
+	got := resolvePathDriveID("completely/different/path.txt", bl)
 	assert.True(t, got.IsZero(), "no ancestry match should return zero ID")
 }
 
@@ -49,6 +52,7 @@ func TestResolvePathDriveID_NoMatch(t *testing.T) {
 // isCrossDriveLocalMove tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10.16
 func TestIsCrossDriveLocalMove_SameDrive(t *testing.T) {
 	driveA := driveid.New("driveA")
 	bl := synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{
@@ -60,10 +64,11 @@ func TestIsCrossDriveLocalMove_SameDrive(t *testing.T) {
 		"docs/renamed.txt": {Path: "docs/renamed.txt", Local: &synctypes.LocalState{Hash: "hash1"}},
 	}
 
-	got := IsCrossDriveLocalMove("old.txt", "docs/renamed.txt", views, bl)
+	got := isCrossDriveLocalMove("old.txt", "docs/renamed.txt", views, bl)
 	assert.False(t, got, "same drive should not be detected as cross-drive")
 }
 
+// Validates: R-2.10.16
 func TestIsCrossDriveLocalMove_DifferentDrive(t *testing.T) {
 	driveA := driveid.New("driveA")
 	driveB := driveid.New("driveB")
@@ -76,10 +81,11 @@ func TestIsCrossDriveLocalMove_DifferentDrive(t *testing.T) {
 		"shared/file.txt": {Path: "shared/file.txt", Local: &synctypes.LocalState{Hash: "hash1"}},
 	}
 
-	got := IsCrossDriveLocalMove("own/file.txt", "shared/file.txt", views, bl)
+	got := isCrossDriveLocalMove("own/file.txt", "shared/file.txt", views, bl)
 	assert.True(t, got, "different drives should be detected as cross-drive")
 }
 
+// Validates: R-2.10.16
 func TestIsCrossDriveLocalMove_ZeroDrive(t *testing.T) {
 	driveA := driveid.New("driveA")
 	bl := synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{
@@ -91,7 +97,7 @@ func TestIsCrossDriveLocalMove_ZeroDrive(t *testing.T) {
 	}
 
 	// Destination has no baseline ancestry → zero drive → conservative false.
-	got := IsCrossDriveLocalMove("old.txt", "unknown/new.txt", views, bl)
+	got := isCrossDriveLocalMove("old.txt", "unknown/new.txt", views, bl)
 	assert.False(t, got, "unknown destination drive should return false (conservative)")
 }
 
@@ -99,6 +105,7 @@ func TestIsCrossDriveLocalMove_ZeroDrive(t *testing.T) {
 // isCrossDriveRemoteMove tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10.16
 func TestIsCrossDriveRemoteMove_SameDrive(t *testing.T) {
 	driveA := driveid.New("driveA")
 	view := &synctypes.PathView{
@@ -106,24 +113,26 @@ func TestIsCrossDriveRemoteMove_SameDrive(t *testing.T) {
 		Remote:   &synctypes.RemoteState{DriveID: driveA},
 	}
 
-	assert.False(t, IsCrossDriveRemoteMove(view))
+	assert.False(t, isCrossDriveRemoteMove(view))
 }
 
+// Validates: R-2.10.16
 func TestIsCrossDriveRemoteMove_DifferentDrive(t *testing.T) {
 	view := &synctypes.PathView{
 		Baseline: &synctypes.BaselineEntry{DriveID: driveid.New("driveA")},
 		Remote:   &synctypes.RemoteState{DriveID: driveid.New("driveB")},
 	}
 
-	assert.True(t, IsCrossDriveRemoteMove(view))
+	assert.True(t, isCrossDriveRemoteMove(view))
 }
 
+// Validates: R-2.10.16
 func TestIsCrossDriveRemoteMove_NoBaseline(t *testing.T) {
 	view := &synctypes.PathView{
 		Remote: &synctypes.RemoteState{DriveID: driveid.New("driveA")},
 	}
 
-	assert.False(t, IsCrossDriveRemoteMove(view), "no baseline → false")
+	assert.False(t, isCrossDriveRemoteMove(view), "no baseline → false")
 }
 
 // ---------------------------------------------------------------------------
@@ -257,6 +266,7 @@ func TestPlan_CrossDriveLocalMove_ShortcutToOwnDrive(t *testing.T) {
 	assert.True(t, hasUpload, "should have ActionUpload for own/doc.txt")
 }
 
+// Validates: R-2.10.16
 func TestPlan_SameDriveMove_StillWorks(t *testing.T) {
 	// Regression: same-drive moves should still be detected and produce
 	// ActionRemoteMove actions.

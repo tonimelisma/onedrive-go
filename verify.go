@@ -11,7 +11,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // errVerifyMismatch is returned when verify finds hash/size mismatches.
@@ -65,8 +66,8 @@ func runVerify(cmd *cobra.Command, _ []string) error {
 
 // loadAndVerify opens the baseline, loads it, and runs verification.
 // Separated so the defer Close() runs before the caller returns.
-func loadAndVerify(ctx context.Context, dbPath, syncDir string, logger *slog.Logger) (*sync.VerifyReport, error) {
-	mgr, err := sync.NewSyncStore(dbPath, logger)
+func loadAndVerify(ctx context.Context, dbPath, syncDir string, logger *slog.Logger) (*synctypes.VerifyReport, error) {
+	mgr, err := syncstore.NewSyncStore(dbPath, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -77,10 +78,10 @@ func loadAndVerify(ctx context.Context, dbPath, syncDir string, logger *slog.Log
 		return nil, err
 	}
 
-	return sync.VerifyBaseline(ctx, bl, syncDir, logger)
+	return syncstore.VerifyBaseline(ctx, bl, syncDir, logger)
 }
 
-func printVerifyJSON(w io.Writer, report *sync.VerifyReport) error {
+func printVerifyJSON(w io.Writer, report *synctypes.VerifyReport) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 
@@ -91,7 +92,7 @@ func printVerifyJSON(w io.Writer, report *sync.VerifyReport) error {
 	return nil
 }
 
-func printVerifyTable(w io.Writer, report *sync.VerifyReport) {
+func printVerifyTable(w io.Writer, report *synctypes.VerifyReport) {
 	fmt.Fprintf(w, "Verified: %d files\n", report.Verified)
 
 	if len(report.Mismatches) == 0 {

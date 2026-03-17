@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // --- driveReportsError ---
@@ -20,7 +20,7 @@ func TestDriveReportsError(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		reports []*sync.DriveReport
+		reports []*synctypes.DriveReport
 		wantNil bool
 		wantMsg string // substring, only checked when wantNil is false
 	}{
@@ -31,29 +31,29 @@ func TestDriveReportsError(t *testing.T) {
 		},
 		{
 			name: "one success",
-			reports: []*sync.DriveReport{
-				{Report: &sync.SyncReport{Mode: sync.SyncBidirectional}},
+			reports: []*synctypes.DriveReport{
+				{Report: &synctypes.SyncReport{Mode: synctypes.SyncBidirectional}},
 			},
 			wantNil: true,
 		},
 		{
 			name: "one failure",
-			reports: []*sync.DriveReport{
+			reports: []*synctypes.DriveReport{
 				{Err: errDelta},
 			},
 			wantMsg: "delta expired",
 		},
 		{
 			name: "multi-drive mixed",
-			reports: []*sync.DriveReport{
-				{Report: &sync.SyncReport{}},
+			reports: []*synctypes.DriveReport{
+				{Report: &synctypes.SyncReport{}},
 				{Err: errDelta},
 			},
 			wantMsg: "1 of 2 drives failed",
 		},
 		{
 			name: "all failures",
-			reports: []*sync.DriveReport{
+			reports: []*synctypes.DriveReport{
 				{Err: errDelta},
 				{Err: errAuth},
 			},
@@ -87,10 +87,10 @@ func quietCC() *CLIContext {
 func TestPrintDriveReports_SingleDrive_NoHeader(t *testing.T) {
 	t.Parallel()
 
-	reports := []*sync.DriveReport{
+	reports := []*synctypes.DriveReport{
 		{
 			DisplayName: "Personal",
-			Report:      &sync.SyncReport{Mode: sync.SyncBidirectional},
+			Report:      &synctypes.SyncReport{Mode: synctypes.SyncBidirectional},
 		},
 	}
 
@@ -101,10 +101,10 @@ func TestPrintDriveReports_SingleDrive_NoHeader(t *testing.T) {
 func TestPrintDriveReports_MultiDrive_WithError(t *testing.T) {
 	t.Parallel()
 
-	reports := []*sync.DriveReport{
+	reports := []*synctypes.DriveReport{
 		{
 			DisplayName: "Personal",
-			Report:      &sync.SyncReport{Mode: sync.SyncBidirectional},
+			Report:      &synctypes.SyncReport{Mode: synctypes.SyncBidirectional},
 		},
 		{
 			DisplayName: "Business",
@@ -125,11 +125,11 @@ func TestSyncModeFromFlags(t *testing.T) {
 	tests := []struct {
 		name string
 		flag string
-		want sync.SyncMode
+		want synctypes.SyncMode
 	}{
-		{"default bidirectional", "", sync.SyncBidirectional},
-		{"download-only", "download-only", sync.SyncDownloadOnly},
-		{"upload-only", "upload-only", sync.SyncUploadOnly},
+		{"default bidirectional", "", synctypes.SyncBidirectional},
+		{"download-only", "download-only", synctypes.SyncDownloadOnly},
+		{"upload-only", "upload-only", synctypes.SyncUploadOnly},
 	}
 
 	for _, tt := range tests {
@@ -165,17 +165,17 @@ func TestPrintSyncReport(t *testing.T) {
 	cc := quietCC()
 
 	// Dry-run report.
-	printSyncReport(&sync.SyncReport{DryRun: true, Mode: sync.SyncBidirectional}, cc)
+	printSyncReport(&synctypes.SyncReport{DryRun: true, Mode: synctypes.SyncBidirectional}, cc)
 
 	// No-changes report.
-	printSyncReport(&sync.SyncReport{Mode: sync.SyncUploadOnly}, cc)
+	printSyncReport(&synctypes.SyncReport{Mode: synctypes.SyncUploadOnly}, cc)
 
 	// Full report with results.
-	printSyncReport(&sync.SyncReport{
+	printSyncReport(&synctypes.SyncReport{
 		Downloads: 3,
 		Uploads:   2,
 		Succeeded: 5,
-		Mode:      sync.SyncDownloadOnly,
+		Mode:      synctypes.SyncDownloadOnly,
 	}, cc)
 }
 

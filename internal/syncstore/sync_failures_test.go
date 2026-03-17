@@ -31,7 +31,7 @@ func TestRecordFailure_RepeatFailure(t *testing.T) {
 	err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "file.txt",
 		DriveID:   driveid.ID{},
-		Direction: "upload",
+		Direction: synctypes.DirectionUpload,
 		IssueType: "upload_failed",
 		ErrMsg:    "timeout",
 	}, nil)
@@ -44,7 +44,7 @@ func TestRecordFailure_RepeatFailure(t *testing.T) {
 	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "file.txt",
 		DriveID:    driveid.ID{},
-		Direction:  "upload",
+		Direction:  synctypes.DirectionUpload,
 		IssueType:  "upload_failed",
 		ErrMsg:     "connection reset",
 		HTTPStatus: 503,
@@ -70,9 +70,9 @@ func TestRecordFailure_PermanentStatus(t *testing.T) {
 	err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "CON.txt",
 		DriveID:   driveid.ID{},
-		Direction: "upload",
+		Direction: synctypes.DirectionUpload,
 		IssueType: "invalid_filename",
-		Category:  "actionable",
+		Category:  synctypes.CategoryActionable,
 		ErrMsg:    "reserved name",
 	}, nil)
 	require.NoError(t, err)
@@ -80,7 +80,7 @@ func TestRecordFailure_PermanentStatus(t *testing.T) {
 	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
-	assert.Equal(t, "actionable", issues[0].Category)
+	assert.Equal(t, synctypes.CategoryActionable, issues[0].Category)
 }
 
 func TestRecordFailure_TransientStatus(t *testing.T) {
@@ -90,7 +90,7 @@ func TestRecordFailure_TransientStatus(t *testing.T) {
 	err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "big.zip",
 		DriveID:    driveid.ID{},
-		Direction:  "upload",
+		Direction:  synctypes.DirectionUpload,
 		IssueType:  "upload_failed",
 		ErrMsg:     "server error",
 		HTTPStatus: 500,
@@ -100,7 +100,7 @@ func TestRecordFailure_TransientStatus(t *testing.T) {
 	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
-	assert.Equal(t, "transient", issues[0].Category)
+	assert.Equal(t, synctypes.CategoryTransient, issues[0].Category)
 }
 
 func TestListLocalIssues_Empty(t *testing.T) {
@@ -122,7 +122,7 @@ func TestListLocalIssues_Multiple(t *testing.T) {
 		err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 			Path:      p,
 			DriveID:   driveid.ID{},
-			Direction: "upload",
+			Direction: synctypes.DirectionUpload,
 			IssueType: "upload_failed",
 			ErrMsg:    "err",
 		}, nil)
@@ -145,7 +145,7 @@ func TestClearLocalIssue(t *testing.T) {
 	err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "file.txt",
 		DriveID:   driveid.ID{},
-		Direction: "upload",
+		Direction: synctypes.DirectionUpload,
 		IssueType: "upload_failed",
 		ErrMsg:    "err",
 	}, nil)
@@ -168,7 +168,7 @@ func TestClearResolvedLocalIssues(t *testing.T) {
 		err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 			Path:      p,
 			DriveID:   driveid.ID{},
-			Direction: "upload",
+			Direction: synctypes.DirectionUpload,
 			IssueType: "upload_failed",
 			ErrMsg:    "err",
 		}, nil)
@@ -202,7 +202,7 @@ func TestCommitOutcome_UploadSuccess_DoesNotClearSyncFailures(t *testing.T) {
 	err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "docs/file.txt",
 		DriveID:   driveid.ID{},
-		Direction: "upload",
+		Direction: synctypes.DirectionUpload,
 		IssueType: "upload_failed",
 		ErrMsg:    "timeout",
 	}, nil)
@@ -257,7 +257,7 @@ func TestCommitOutcome_DownloadSuccess_DoesNotClearSyncFailures(t *testing.T) {
 	err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "docs/file.txt",
 		DriveID:   driveid.ID{},
-		Direction: "download",
+		Direction: synctypes.DirectionDownload,
 		IssueType: "download_failed",
 		ErrMsg:    "timeout",
 	}, nil)
@@ -300,7 +300,7 @@ func TestCommitOutcome_DeleteSuccess_DoesNotClearSyncFailures(t *testing.T) {
 	err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "docs/old.txt",
 		DriveID:   driveid.ID{},
-		Direction: "delete",
+		Direction: synctypes.DirectionDelete,
 		IssueType: "delete_failed",
 		ErrMsg:    "timeout",
 	}, nil)
@@ -340,7 +340,7 @@ func TestCommitOutcome_MoveSuccess_DoesNotClearSyncFailures(t *testing.T) {
 	err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "docs/moved.txt",
 		DriveID:   driveid.ID{},
-		Direction: "upload",
+		Direction: synctypes.DirectionUpload,
 		IssueType: "upload_failed",
 		ErrMsg:    "timeout",
 	}, nil)
@@ -405,7 +405,7 @@ func TestRecordFailure_TransientHasNextRetryAt(t *testing.T) {
 	err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "file.txt",
 		DriveID:   driveid.ID{},
-		Direction: "upload",
+		Direction: synctypes.DirectionUpload,
 		IssueType: "upload_failed",
 		ErrMsg:    "timeout",
 	}, retry.Reconcile.Delay)
@@ -427,9 +427,9 @@ func TestRecordFailure_PermanentNoRetryAt(t *testing.T) {
 	err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "CON",
 		DriveID:   driveid.ID{},
-		Direction: "upload",
+		Direction: synctypes.DirectionUpload,
 		IssueType: "invalid_filename",
-		Category:  "actionable",
+		Category:  synctypes.CategoryActionable,
 		ErrMsg:    "reserved name",
 	}, nil)
 	require.NoError(t, err)
@@ -450,7 +450,7 @@ func TestRecordFailure_RepeatIncrementsCount(t *testing.T) {
 	err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "file.txt",
 		DriveID:   driveid.ID{},
-		Direction: "upload",
+		Direction: synctypes.DirectionUpload,
 		IssueType: "upload_failed",
 		ErrMsg:    "timeout",
 	}, retry.Reconcile.Delay)
@@ -468,7 +468,7 @@ func TestRecordFailure_RepeatIncrementsCount(t *testing.T) {
 	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "file.txt",
 		DriveID:   driveid.ID{},
-		Direction: "upload",
+		Direction: synctypes.DirectionUpload,
 		IssueType: "upload_failed",
 		ErrMsg:    "timeout again",
 	}, retry.Reconcile.Delay)
@@ -493,7 +493,7 @@ func TestListLocalIssuesForRetry_ReturnsResults(t *testing.T) {
 	err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "retry.txt",
 		DriveID:   driveid.ID{},
-		Direction: "upload",
+		Direction: synctypes.DirectionUpload,
 		IssueType: "upload_failed",
 		ErrMsg:    "timeout",
 	}, retry.Reconcile.Delay)
@@ -521,7 +521,7 @@ func TestEarliestLocalIssueRetryAt_ReturnsFutureTime(t *testing.T) {
 	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "file.txt",
 		DriveID:   driveid.ID{},
-		Direction: "upload",
+		Direction: synctypes.DirectionUpload,
 		IssueType: "upload_failed",
 		ErrMsg:    "timeout",
 	}, retry.Reconcile.Delay)
@@ -542,7 +542,7 @@ func TestMarkLocalIssuePermanent(t *testing.T) {
 	err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "file.txt",
 		DriveID:   driveid.ID{},
-		Direction: "upload",
+		Direction: synctypes.DirectionUpload,
 		IssueType: "upload_failed",
 		ErrMsg:    "timeout",
 	}, nil)
@@ -552,7 +552,7 @@ func TestMarkLocalIssuePermanent(t *testing.T) {
 	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
-	assert.Equal(t, "transient", issues[0].Category)
+	assert.Equal(t, synctypes.CategoryTransient, issues[0].Category)
 
 	// Mark as permanent.
 	err = mgr.MarkSyncFailureActionable(ctx, "file.txt", driveid.ID{})
@@ -562,7 +562,7 @@ func TestMarkLocalIssuePermanent(t *testing.T) {
 	issues, err = mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
-	assert.Equal(t, "actionable", issues[0].Category)
+	assert.Equal(t, synctypes.CategoryActionable, issues[0].Category)
 	assert.Equal(t, int64(0), issues[0].NextRetryAt, "permanent issues should have no retry time")
 
 	// Should not appear in retry list.
@@ -577,16 +577,16 @@ func TestListLocalIssuesByType(t *testing.T) {
 
 	// Record issues of different types.
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path: "a.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: "upload_failed", ErrMsg: "err",
+		Path: "a.txt", DriveID: driveid.ID{}, Direction: synctypes.DirectionUpload, IssueType: "upload_failed", ErrMsg: "err",
 	}, nil))
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path: "b.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: synctypes.IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: 403,
+		Path: "b.txt", DriveID: driveid.ID{}, Direction: synctypes.DirectionUpload, IssueType: synctypes.IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: 403,
 	}, nil))
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path: "c.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: synctypes.IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: 403,
+		Path: "c.txt", DriveID: driveid.ID{}, Direction: synctypes.DirectionUpload, IssueType: synctypes.IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: 403,
 	}, nil))
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path: "d.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: "upload_failed", ErrMsg: "err",
+		Path: "d.txt", DriveID: driveid.ID{}, Direction: synctypes.DirectionUpload, IssueType: "upload_failed", ErrMsg: "err",
 	}, nil))
 
 	// Query by permission_denied type.
@@ -613,16 +613,16 @@ func TestClearLocalIssuesByPrefix(t *testing.T) {
 
 	// Record issues at various paths.
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path: "shared", DriveID: driveid.ID{}, Direction: "upload", IssueType: synctypes.IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: 403,
+		Path: "shared", DriveID: driveid.ID{}, Direction: synctypes.DirectionUpload, IssueType: synctypes.IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: 403,
 	}, nil))
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path: "shared/file.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: synctypes.IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: 403,
+		Path: "shared/file.txt", DriveID: driveid.ID{}, Direction: synctypes.DirectionUpload, IssueType: synctypes.IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: 403,
 	}, nil))
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path: "shared/sub/file.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: synctypes.IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: 403,
+		Path: "shared/sub/file.txt", DriveID: driveid.ID{}, Direction: synctypes.DirectionUpload, IssueType: synctypes.IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: 403,
 	}, nil))
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path: "other/file.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: synctypes.IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: 403,
+		Path: "other/file.txt", DriveID: driveid.ID{}, Direction: synctypes.DirectionUpload, IssueType: synctypes.IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: 403,
 	}, nil))
 
 	// Clear by prefix "shared".
@@ -642,10 +642,10 @@ func TestClearLocalIssuesByPrefix_TypeFiltering(t *testing.T) {
 
 	// Record a permission_denied and an upload_failed at the same prefix.
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path: "shared/a.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: synctypes.IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: 403,
+		Path: "shared/a.txt", DriveID: driveid.ID{}, Direction: synctypes.DirectionUpload, IssueType: synctypes.IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: 403,
 	}, nil))
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path: "shared/b.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: "upload_failed", ErrMsg: "err", HTTPStatus: 500,
+		Path: "shared/b.txt", DriveID: driveid.ID{}, Direction: synctypes.DirectionUpload, IssueType: "upload_failed", ErrMsg: "err", HTTPStatus: 500,
 	}, nil))
 
 	// Clear permission_denied only.
@@ -666,7 +666,7 @@ func TestRecordFailure_ScopeKeyStored(t *testing.T) {
 	err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "big.zip",
 		DriveID:   driveid.ID{},
-		Direction: "upload",
+		Direction: synctypes.DirectionUpload,
 		IssueType: synctypes.IssueQuotaExceeded,
 		ErrMsg:    "quota exceeded",
 		FileSize:  5000,
@@ -687,7 +687,7 @@ func TestRecordFailure_ScopeKeyDefaultEmpty(t *testing.T) {
 	err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "file.txt",
 		DriveID:   driveid.ID{},
-		Direction: "upload",
+		Direction: synctypes.DirectionUpload,
 		IssueType: "upload_failed",
 		ErrMsg:    "timeout",
 	}, nil)
@@ -704,8 +704,8 @@ func TestUpsertActionableFailures(t *testing.T) {
 	ctx := context.Background()
 
 	failures := []synctypes.ActionableFailure{
-		{Path: "CON.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: synctypes.IssueInvalidFilename, Error: "reserved name"},
-		{Path: "long/path.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: synctypes.IssuePathTooLong, Error: "too long"},
+		{Path: "CON.txt", DriveID: driveid.ID{}, Direction: synctypes.DirectionUpload, IssueType: synctypes.IssueInvalidFilename, Error: "reserved name"},
+		{Path: "long/path.txt", DriveID: driveid.ID{}, Direction: synctypes.DirectionUpload, IssueType: synctypes.IssuePathTooLong, Error: "too long"},
 	}
 
 	err := mgr.UpsertActionableFailures(ctx, failures)
@@ -717,7 +717,7 @@ func TestUpsertActionableFailures(t *testing.T) {
 
 	// Both should be actionable.
 	for _, row := range issues {
-		assert.Equal(t, "actionable", row.Category)
+		assert.Equal(t, synctypes.CategoryActionable, row.Category)
 	}
 }
 
@@ -727,7 +727,7 @@ func TestUpsertActionableFailures_UpdateExisting(t *testing.T) {
 
 	// Insert initial failure.
 	failures := []synctypes.ActionableFailure{
-		{Path: "CON.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: synctypes.IssueInvalidFilename, Error: "reserved name v1"},
+		{Path: "CON.txt", DriveID: driveid.ID{}, Direction: synctypes.DirectionUpload, IssueType: synctypes.IssueInvalidFilename, Error: "reserved name v1"},
 	}
 	err := mgr.UpsertActionableFailures(ctx, failures)
 	require.NoError(t, err)
@@ -759,9 +759,9 @@ func TestClearResolvedActionableFailures(t *testing.T) {
 
 	// Upsert 3 actionable failures of the same type.
 	failures := []synctypes.ActionableFailure{
-		{Path: "CON.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: synctypes.IssueInvalidFilename, Error: "reserved"},
-		{Path: "NUL.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: synctypes.IssueInvalidFilename, Error: "reserved"},
-		{Path: "PRN.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: synctypes.IssueInvalidFilename, Error: "reserved"},
+		{Path: "CON.txt", DriveID: driveid.ID{}, Direction: synctypes.DirectionUpload, IssueType: synctypes.IssueInvalidFilename, Error: "reserved"},
+		{Path: "NUL.txt", DriveID: driveid.ID{}, Direction: synctypes.DirectionUpload, IssueType: synctypes.IssueInvalidFilename, Error: "reserved"},
+		{Path: "PRN.txt", DriveID: driveid.ID{}, Direction: synctypes.DirectionUpload, IssueType: synctypes.IssueInvalidFilename, Error: "reserved"},
 	}
 	err := mgr.UpsertActionableFailures(ctx, failures)
 	require.NoError(t, err)
@@ -787,8 +787,8 @@ func TestClearResolvedActionableFailures_DifferentTypeNotCleared(t *testing.T) {
 
 	// Upsert failures of two different types.
 	failures := []synctypes.ActionableFailure{
-		{Path: "CON.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: synctypes.IssueInvalidFilename, Error: "reserved"},
-		{Path: "long/path.txt", DriveID: driveid.ID{}, Direction: "upload", IssueType: synctypes.IssuePathTooLong, Error: "too long"},
+		{Path: "CON.txt", DriveID: driveid.ID{}, Direction: synctypes.DirectionUpload, IssueType: synctypes.IssueInvalidFilename, Error: "reserved"},
+		{Path: "long/path.txt", DriveID: driveid.ID{}, Direction: synctypes.DirectionUpload, IssueType: synctypes.IssuePathTooLong, Error: "too long"},
 	}
 	err := mgr.UpsertActionableFailures(ctx, failures)
 	require.NoError(t, err)
@@ -817,7 +817,7 @@ func TestRecordFailure_NewEntry(t *testing.T) {
 	err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "docs/report.xlsx",
 		DriveID:    driveid.ID{},
-		Direction:  "upload",
+		Direction:  synctypes.DirectionUpload,
 		IssueType:  "upload_failed",
 		ErrMsg:     "connection reset",
 		HTTPStatus: 500,
@@ -833,7 +833,7 @@ func TestRecordFailure_NewEntry(t *testing.T) {
 	row := issues[0]
 	assert.Equal(t, "docs/report.xlsx", row.Path)
 	assert.Equal(t, "upload_failed", row.IssueType)
-	assert.Equal(t, "transient", row.Category)
+	assert.Equal(t, synctypes.CategoryTransient, row.Category)
 	assert.Equal(t, 1, row.FailureCount)
 	assert.Equal(t, "connection reset", row.LastError)
 	assert.Equal(t, 500, row.HTTPStatus)
@@ -853,9 +853,9 @@ func TestRecordFailure_ActionableClassification(t *testing.T) {
 	err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "CON.txt",
 		DriveID:   driveid.ID{},
-		Direction: "upload",
+		Direction: synctypes.DirectionUpload,
 		IssueType: synctypes.IssueInvalidFilename,
-		Category:  "actionable",
+		Category:  synctypes.CategoryActionable,
 		ErrMsg:    "reserved name",
 	}, nil)
 	require.NoError(t, err)
@@ -864,7 +864,7 @@ func TestRecordFailure_ActionableClassification(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 
-	assert.Equal(t, "actionable", issues[0].Category)
+	assert.Equal(t, synctypes.CategoryActionable, issues[0].Category)
 	assert.Equal(t, int64(0), issues[0].NextRetryAt, "actionable issues should not have next_retry_at")
 }
 
@@ -877,7 +877,7 @@ func TestRecordFailure_TransientHasDatabaseBackoff(t *testing.T) {
 	err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "file.txt",
 		DriveID:    driveid.ID{},
-		Direction:  "upload",
+		Direction:  synctypes.DirectionUpload,
 		ErrMsg:     "timeout",
 		HTTPStatus: 503,
 	}, retry.Reconcile.Delay)
@@ -887,7 +887,7 @@ func TestRecordFailure_TransientHasDatabaseBackoff(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 
-	assert.Equal(t, "transient", issues[0].Category)
+	assert.Equal(t, synctypes.CategoryTransient, issues[0].Category)
 	// next_retry_at should be set by the delay function.
 	assert.Greater(t, issues[0].NextRetryAt, int64(0),
 		"transient issues should have next_retry_at set by delay function")
@@ -911,7 +911,7 @@ func TestRecordFailure_DownloadStateTransition(t *testing.T) {
 	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "hello.txt",
 		DriveID:    driveid.New(testDriveID),
-		Direction:  "download",
+		Direction:  synctypes.DirectionDownload,
 		ErrMsg:     "connection reset",
 		HTTPStatus: 500,
 	}, nil)
@@ -947,7 +947,7 @@ func TestRecordFailure_UploadNoStateTransition(t *testing.T) {
 	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "hello.txt",
 		DriveID:   driveid.New(testDriveID),
-		Direction: "upload",
+		Direction: synctypes.DirectionUpload,
 		ErrMsg:    "upload error",
 	}, nil)
 	require.NoError(t, err)
@@ -968,7 +968,7 @@ func TestRecordFailure_PreservesExistingValuesOnConflict(t *testing.T) {
 	err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "file.txt",
 		DriveID:   driveid.ID{},
-		Direction: "upload",
+		Direction: synctypes.DirectionUpload,
 		IssueType: "upload_failed",
 		ErrMsg:    "timeout",
 		FileSize:  2048,
@@ -983,7 +983,7 @@ func TestRecordFailure_PreservesExistingValuesOnConflict(t *testing.T) {
 	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "file.txt",
 		DriveID:   driveid.ID{},
-		Direction: "upload",
+		Direction: synctypes.DirectionUpload,
 		ErrMsg:    "new error",
 	}, nil)
 	require.NoError(t, err)
@@ -1015,7 +1015,7 @@ func TestDeleteSyncFailuresByScope(t *testing.T) {
 		err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 			Path:      p.path,
 			DriveID:   driveid.ID{},
-			Direction: "upload",
+			Direction: synctypes.DirectionUpload,
 			IssueType: "upload_failed",
 			ErrMsg:    "timeout",
 			ScopeKey:  p.scopeKey,
@@ -1069,7 +1069,7 @@ func TestPendingRetrySummary(t *testing.T) {
 		recErr := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 			Path:      p.path,
 			DriveID:   driveid.ID{},
-			Direction: "upload",
+			Direction: synctypes.DirectionUpload,
 			IssueType: "upload_failed",
 			ErrMsg:    "timeout",
 			ScopeKey:  p.scopeKey,
@@ -1081,9 +1081,9 @@ func TestPendingRetrySummary(t *testing.T) {
 	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "actionable.txt",
 		DriveID:   driveid.ID{},
-		Direction: "upload",
+		Direction: synctypes.DirectionUpload,
 		IssueType: "invalid_filename",
-		Category:  "actionable",
+		Category:  synctypes.CategoryActionable,
 		ErrMsg:    "bad name",
 	}, nil)
 	require.NoError(t, err)

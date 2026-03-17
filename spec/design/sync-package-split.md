@@ -1,6 +1,6 @@
 # Sync Package Modularization
 
-**Status**: Complete
+**Status**: Complete — review findings resolved
 **Depends on**: Tracker & engine pipeline redesign (complete)
 **Scope**: All files previously in `internal/sync/` — split into 7 focused packages
 
@@ -275,7 +275,7 @@ The glue. Creates all subsystems, wires them together, owns the drain loop, clas
 Rules:
 1. `synctypes` is a leaf — imports only `internal/driveid` and stdlib
 2. Every other package imports `synctypes` and external dependencies
-3. No package imports a sibling (except `sync` which imports all)
+3. No package imports a sibling (except `sync` which imports all). Note: syncexec no longer imports syncstore — it uses `synctypes.OutcomeWriter` interface instead (fixed in review).
 4. `sync` is the root — nothing imports it except the CLI layer
 
 ### 3.3 Interface Boundaries
@@ -296,27 +296,11 @@ Each non-engine package exposes its functionality through concrete types that im
 
 Three preparatory refactorings must happen as part of the split. Each is mechanical — no behavior changes.
 
-### 4.1 Extract PermissionHandler from Engine
+### 4.1 Extract PermissionHandler from Engine — COMPLETE
 
-**Current state:** `permissions.go` contains 8 methods on `*Engine` that handle 403 responses, local permission denials, and per-pass permission rechecks.
+**Status:** Completed in review fix Step 5.
 
-**Target state:** A `PermissionHandler` struct with explicit dependencies:
-
-```go
-type PermissionHandler struct {
-    store       synctypes.SyncFailureRecorder
-    permChecker synctypes.PermissionChecker
-    permCache   *permissionCache
-    scopeGate   *syncdispatch.ScopeGate
-    logger      *slog.Logger
-    syncRoot    string
-    driveID     driveid.ID
-    nowFunc     func() time.Time
-    onScopeClear func(ctx context.Context, key synctypes.ScopeKey)
-}
-```
-
-Engine creates one PermissionHandler and delegates. The 8 methods become methods on PermissionHandler. All Engine field accesses become explicit struct field accesses on PermissionHandler.
+`PermissionHandler` struct extracted to `internal/sync/permission_handler.go` with explicit dependencies (baseline, permChecker, permCache, logger, syncRoot, driveID, nowFn) plus callbacks for scope management (setScopeBlockFn, onScopeClearFn, isWatchModeFn). Engine creates one in `NewEngine` and delegates via `e.permHandler`. All 7 permission methods are now methods on `*PermissionHandler` instead of `*Engine`.
 
 ### 4.2 Promote Cross-Cutting Types to synctypes
 
@@ -331,9 +315,11 @@ Move from their current locations to `synctypes`:
 - `PermissionChecker` interface (from `permissions.go`)
 - Consumer interfaces: DeltaFetcher, ItemClient, etc. (from `types.go`)
 
-### 4.3 Absorb compute_status.go into store_observation.go
+### 4.3 Absorb compute_status.go into store_observation.go — COMPLETE
 
-`computeNewStatus()` is a pure function implementing the `remote_state` state machine. It's called exclusively by `processObservedItem()` in `store_observation.go`. Move the function into that file. No interface change — it's unexported.
+**Status:** Completed in review fix Step 3.
+
+`computeNewStatus()` and its helper functions (`computeDeleted`, `computeSameHash`, `computeDifferentHash`) plus status constants absorbed into `store_observation.go`. Functions unexported as specified. Both `compute_status.go` and `compute_status_test.go` deleted; tests moved to `store_observation_test.go`.
 
 ---
 

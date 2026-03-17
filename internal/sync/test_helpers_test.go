@@ -17,18 +17,19 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // testDriveID is the canonical drive ID used by engine tests.
 const testDriveID = synctest.TestDriveID
 
-// emptyBaseline returns a Baseline with initialized but empty maps.
-func emptyBaseline() *Baseline {
+// emptyBaseline returns a synctypes.Baseline with initialized but empty maps.
+func emptyBaseline() *synctypes.Baseline {
 	return synctest.EmptyBaseline()
 }
 
-// baselineWith creates a Baseline pre-populated with the given entries.
-func baselineWith(entries ...*BaselineEntry) *Baseline {
+// baselineWith creates a synctypes.Baseline pre-populated with the given entries.
+func baselineWith(entries ...*synctypes.BaselineEntry) *synctypes.Baseline {
 	return synctest.BaselineWith(entries...)
 }
 
@@ -38,7 +39,7 @@ func testLogger(t *testing.T) *slog.Logger {
 	return synctest.TestLogger(t)
 }
 
-// newTestManager creates a SyncStore backed by a temp directory for use in
+// newTestManager creates a syncstore.SyncStore backed by a temp directory for use in
 // engine tests that need database access (shortcut storage, etc.).
 func newTestManager(t *testing.T) *syncstore.SyncStore {
 	t.Helper()

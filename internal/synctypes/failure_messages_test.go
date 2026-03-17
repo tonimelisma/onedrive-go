@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// Validates: R-2.3.7
 func TestMessageForIssueType_AllKnownTypes(t *testing.T) {
 	t.Parallel()
 
@@ -32,6 +33,7 @@ func TestMessageForIssueType_AllKnownTypes(t *testing.T) {
 	}
 }
 
+// Validates: R-2.3.7
 func TestMessageForIssueType_UnknownType(t *testing.T) {
 	t.Parallel()
 

@@ -10,6 +10,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // conflictIDPrefixLen is the number of characters to show for the conflict ID
@@ -17,11 +19,11 @@ import (
 // sufficient for uniqueness in any realistic conflict set.
 const conflictIDPrefixLen = 8
 
-// Resolution strategy aliases (re-export from sync package for CLI use).
+// Resolution strategy aliases (re-export from synctypes package for CLI use).
 const (
-	resolutionKeepLocal  = sync.ResolutionKeepLocal
-	resolutionKeepRemote = sync.ResolutionKeepRemote
-	resolutionKeepBoth   = sync.ResolutionKeepBoth
+	resolutionKeepLocal  = synctypes.ResolutionKeepLocal
+	resolutionKeepRemote = synctypes.ResolutionKeepRemote
+	resolutionKeepBoth   = synctypes.ResolutionKeepBoth
 )
 
 func newIssuesCmd() *cobra.Command {
@@ -55,7 +57,7 @@ func runIssuesList(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("cannot determine state DB path for drive %q", cc.Cfg.CanonicalID)
 	}
 
-	mgr, err := sync.NewSyncStore(dbPath, cc.Logger)
+	mgr, err := syncstore.NewSyncStore(dbPath, cc.Logger)
 	if err != nil {
 		return err
 	}
@@ -68,7 +70,7 @@ func runIssuesList(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	var conflicts []sync.ConflictRecord
+	var conflicts []synctypes.ConflictRecord
 	if history {
 		conflicts, err = mgr.ListAllConflicts(ctx)
 	} else {
@@ -206,7 +208,7 @@ func resolveKeepBothOnly(ctx context.Context, cc *CLIContext, args []string, all
 		return fmt.Errorf("cannot determine state DB path for drive %q", cc.Cfg.CanonicalID)
 	}
 
-	mgr, err := sync.NewSyncStore(dbPath, cc.Logger)
+	mgr, err := syncstore.NewSyncStore(dbPath, cc.Logger)
 	if err != nil {
 		return err
 	}
@@ -220,7 +222,7 @@ func resolveKeepBothOnly(ctx context.Context, cc *CLIContext, args []string, all
 }
 
 func resolveEachConflict(
-	cc *CLIContext, conflicts []sync.ConflictRecord, resolution string, dryRun bool,
+	cc *CLIContext, conflicts []synctypes.ConflictRecord, resolution string, dryRun bool,
 	resolveFn func(id, resolution string) error,
 ) error {
 	if len(conflicts) == 0 {
@@ -245,7 +247,7 @@ func resolveEachConflict(
 	return nil
 }
 
-func resolveAllKeepBoth(ctx context.Context, cc *CLIContext, mgr *sync.SyncStore, dryRun bool) error {
+func resolveAllKeepBoth(ctx context.Context, cc *CLIContext, mgr *syncstore.SyncStore, dryRun bool) error {
 	conflicts, err := mgr.ListConflicts(ctx)
 	if err != nil {
 		return err
@@ -256,9 +258,9 @@ func resolveAllKeepBoth(ctx context.Context, cc *CLIContext, mgr *sync.SyncStore
 	})
 }
 
-func resolveSingleKeepBoth(ctx context.Context, cc *CLIContext, mgr *sync.SyncStore, idOrPath string, dryRun bool) error {
+func resolveSingleKeepBoth(ctx context.Context, cc *CLIContext, mgr *syncstore.SyncStore, idOrPath string, dryRun bool) error {
 	return resolveSingleConflict(cc, idOrPath, resolutionKeepBoth, dryRun,
-		func() ([]sync.ConflictRecord, error) { return mgr.ListConflicts(ctx) },
+		func() ([]synctypes.ConflictRecord, error) { return mgr.ListConflicts(ctx) },
 		func(id, resolution string) error { return mgr.ResolveConflict(ctx, id, resolution) },
 	)
 }
@@ -297,14 +299,14 @@ func resolveAllWithEngine(ctx context.Context, cc *CLIContext, engine *sync.Engi
 
 func resolveSingleWithEngine(ctx context.Context, cc *CLIContext, engine *sync.Engine, idOrPath, resolution string, dryRun bool) error {
 	return resolveSingleConflict(cc, idOrPath, resolution, dryRun,
-		func() ([]sync.ConflictRecord, error) { return engine.ListConflicts(ctx) },
+		func() ([]synctypes.ConflictRecord, error) { return engine.ListConflicts(ctx) },
 		func(id, res string) error { return engine.ResolveConflict(ctx, id, res) },
 	)
 }
 
 func resolveSingleConflict(
 	cc *CLIContext, idOrPath, resolution string, dryRun bool,
-	listFn func() ([]sync.ConflictRecord, error),
+	listFn func() ([]synctypes.ConflictRecord, error),
 	resolveFn func(id, resolution string) error,
 ) error {
 	conflicts, err := listFn()
@@ -339,7 +341,7 @@ func errAmbiguousPrefix(prefix string) error {
 	return fmt.Errorf("ambiguous conflict ID prefix %q — provide more characters", prefix)
 }
 
-func findConflict(conflicts []sync.ConflictRecord, idOrPath string) (*sync.ConflictRecord, error) {
+func findConflict(conflicts []synctypes.ConflictRecord, idOrPath string) (*synctypes.ConflictRecord, error) {
 	if idOrPath == "" {
 		return nil, nil
 	}
@@ -353,7 +355,7 @@ func findConflict(conflicts []sync.ConflictRecord, idOrPath string) (*sync.Confl
 	}
 
 	// Second pass: prefix match with ambiguity detection.
-	var match *sync.ConflictRecord
+	var match *synctypes.ConflictRecord
 
 	for i := range conflicts {
 		c := &conflicts[i]
@@ -389,8 +391,8 @@ actionable failures.`,
 
 func runIssuesClear(cmd *cobra.Command, args []string) error {
 	return runFailureAction(cmd, args, failureAction{
-		allFn: func(ctx context.Context, mgr *sync.SyncStore) error { return mgr.ClearActionableSyncFailures(ctx) },
-		singleFn: func(ctx context.Context, mgr *sync.SyncStore, p string) error {
+		allFn: func(ctx context.Context, mgr *syncstore.SyncStore) error { return mgr.ClearActionableSyncFailures(ctx) },
+		singleFn: func(ctx context.Context, mgr *syncstore.SyncStore, p string) error {
 			return mgr.ClearSyncFailureByPath(ctx, p)
 		},
 		noArgMsg:  "provide a path to clear, or use --all to clear all actionable failures",
@@ -419,8 +421,8 @@ failed items.`,
 
 func runIssuesRetry(cmd *cobra.Command, args []string) error {
 	return runFailureAction(cmd, args, failureAction{
-		allFn:     func(ctx context.Context, mgr *sync.SyncStore) error { return mgr.ResetAllFailures(ctx) },
-		singleFn:  func(ctx context.Context, mgr *sync.SyncStore, p string) error { return mgr.ResetFailure(ctx, p) },
+		allFn:     func(ctx context.Context, mgr *syncstore.SyncStore) error { return mgr.ResetAllFailures(ctx) },
+		singleFn:  func(ctx context.Context, mgr *syncstore.SyncStore, p string) error { return mgr.ResetFailure(ctx, p) },
 		noArgMsg:  "provide a path to retry, or use --all to retry all failures",
 		allMsg:    "Reset all failures for retry.",
 		singleFmt: "Reset failure for %s — will retry on next sync.",
@@ -429,8 +431,8 @@ func runIssuesRetry(cmd *cobra.Command, args []string) error {
 
 // failureAction defines the all/single operations for a failures subcommand.
 type failureAction struct {
-	allFn     func(ctx context.Context, mgr *sync.SyncStore) error
-	singleFn  func(ctx context.Context, mgr *sync.SyncStore, path string) error
+	allFn     func(ctx context.Context, mgr *syncstore.SyncStore) error
+	singleFn  func(ctx context.Context, mgr *syncstore.SyncStore, path string) error
 	noArgMsg  string
 	allMsg    string
 	singleFmt string // format string with %s for path
@@ -444,7 +446,7 @@ func runFailureAction(cmd *cobra.Command, args []string, action failureAction) e
 		return fmt.Errorf("cannot determine state DB path for drive %q", cc.Cfg.CanonicalID)
 	}
 
-	mgr, err := sync.NewSyncStore(dbPath, cc.Logger)
+	mgr, err := syncstore.NewSyncStore(dbPath, cc.Logger)
 	if err != nil {
 		return err
 	}
@@ -512,7 +514,7 @@ type conflictJSON struct {
 	ResolvedBy   string `json:"resolved_by,omitempty"`
 }
 
-func toConflictJSON(c *sync.ConflictRecord) conflictJSON {
+func toConflictJSON(c *synctypes.ConflictRecord) conflictJSON {
 	return conflictJSON{
 		ID:           c.ID,
 		Path:         c.Path,
@@ -526,7 +528,7 @@ func toConflictJSON(c *sync.ConflictRecord) conflictJSON {
 	}
 }
 
-func printConflictsTable(w io.Writer, conflicts []sync.ConflictRecord, history bool) {
+func printConflictsTable(w io.Writer, conflicts []synctypes.ConflictRecord, history bool) {
 	var headers []string
 	if history {
 		headers = []string{"ID", "PATH", "TYPE", "RESOLUTION", "RESOLVED BY", "DETECTED"}
@@ -552,7 +554,7 @@ func printConflictsTable(w io.Writer, conflicts []sync.ConflictRecord, history b
 
 // printHeldDeletesTable renders held-delete entries with a simplified table
 // (path only — direction is always "delete" and error is always the same).
-func printHeldDeletesTable(w io.Writer, failures []sync.SyncFailureRow) {
+func printHeldDeletesTable(w io.Writer, failures []synctypes.SyncFailureRow) {
 	headers := []string{"PATH", "LAST SEEN"}
 
 	rows := make([][]string, len(failures))

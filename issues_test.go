@@ -17,7 +17,8 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // --- truncateID ---
@@ -77,7 +78,7 @@ func TestFormatNanoTimestamp(t *testing.T) {
 func TestToConflictJSON(t *testing.T) {
 	t.Parallel()
 
-	c := &sync.ConflictRecord{
+	c := &synctypes.ConflictRecord{
 		ID:           "abc123",
 		Path:         "/foo.txt",
 		ConflictType: "edit_edit",
@@ -144,7 +145,7 @@ func TestIssuesResolveCmd_Structure(t *testing.T) {
 func TestPrintConflictsTable(t *testing.T) {
 	t.Parallel()
 
-	conflicts := []sync.ConflictRecord{
+	conflicts := []synctypes.ConflictRecord{
 		{
 			ID:           "abcdefghijklmnop",
 			Path:         "/test.txt",
@@ -165,7 +166,7 @@ func TestPrintConflictsTable(t *testing.T) {
 func TestPrintConflictsTable_WithHistory(t *testing.T) {
 	t.Parallel()
 
-	conflicts := []sync.ConflictRecord{
+	conflicts := []synctypes.ConflictRecord{
 		{
 			ID:           "abcdefghijklmnop",
 			Path:         "/resolved.txt",
@@ -192,7 +193,7 @@ func TestPrintConflictsTable_WithHistory(t *testing.T) {
 func TestFindConflict(t *testing.T) {
 	t.Parallel()
 
-	conflicts := []sync.ConflictRecord{
+	conflicts := []synctypes.ConflictRecord{
 		{ID: "aabb1122-dead-beef-cafe-000000000001", Path: "/foo/bar.txt"},
 		{ID: "aabb1122-dead-beef-cafe-000000000002", Path: "/baz/qux.txt"},
 		{ID: "ccdd3344-dead-beef-cafe-000000000003", Path: "/other/file.txt"},
@@ -256,7 +257,7 @@ func newTestCLIContext(w io.Writer) *CLIContext {
 func TestResolveEachConflict_ResolvesAll(t *testing.T) {
 	t.Parallel()
 
-	conflicts := []sync.ConflictRecord{
+	conflicts := []synctypes.ConflictRecord{
 		{ID: "id-1", Path: "/foo.txt"},
 		{ID: "id-2", Path: "/bar.txt"},
 	}
@@ -281,7 +282,7 @@ func TestResolveEachConflict_ResolvesAll(t *testing.T) {
 func TestResolveEachConflict_DryRun(t *testing.T) {
 	t.Parallel()
 
-	conflicts := []sync.ConflictRecord{
+	conflicts := []synctypes.ConflictRecord{
 		{ID: "id-1", Path: "/foo.txt"},
 	}
 
@@ -319,7 +320,7 @@ func TestResolveEachConflict_EmptyConflicts(t *testing.T) {
 func TestResolveEachConflict_ErrorPropagation(t *testing.T) {
 	t.Parallel()
 
-	conflicts := []sync.ConflictRecord{
+	conflicts := []synctypes.ConflictRecord{
 		{ID: "id-1", Path: "/foo.txt"},
 	}
 
@@ -339,7 +340,7 @@ func TestResolveEachConflict_ErrorPropagation(t *testing.T) {
 func TestResolveSingleConflict_ExactMatch(t *testing.T) {
 	t.Parallel()
 
-	conflicts := []sync.ConflictRecord{
+	conflicts := []synctypes.ConflictRecord{
 		{ID: "id-1", Path: "/foo.txt"},
 		{ID: "id-2", Path: "/bar.txt"},
 	}
@@ -354,7 +355,7 @@ func TestResolveSingleConflict_ExactMatch(t *testing.T) {
 	cc := newTestCLIContext(&buf)
 
 	err := resolveSingleConflict(cc, "/bar.txt", "keep_local", false,
-		func() ([]sync.ConflictRecord, error) { return conflicts, nil },
+		func() ([]synctypes.ConflictRecord, error) { return conflicts, nil },
 		resolveFn,
 	)
 	require.NoError(t, err)
@@ -368,7 +369,7 @@ func TestResolveSingleConflict_NotFound(t *testing.T) {
 	cc := newTestCLIContext(&buf)
 
 	err := resolveSingleConflict(cc, "nonexistent", "keep_both", false,
-		func() ([]sync.ConflictRecord, error) { return nil, nil },
+		func() ([]synctypes.ConflictRecord, error) { return nil, nil },
 		func(_, _ string) error { return nil },
 	)
 	require.Error(t, err)
@@ -420,7 +421,7 @@ func TestResolveStrategy_NoFlag(t *testing.T) {
 func TestPrintGroupedIssuesJSON_MixedOutput(t *testing.T) {
 	t.Parallel()
 
-	conflicts := []sync.ConflictRecord{
+	conflicts := []synctypes.ConflictRecord{
 		{
 			ID:           "conflict-001",
 			Path:         "/docs/readme.txt",
@@ -431,8 +432,8 @@ func TestPrintGroupedIssuesJSON_MixedOutput(t *testing.T) {
 
 	groups := []failureGroup{
 		{
-			IssueType: sync.IssueInvalidFilename,
-			Message:   sync.MessageForIssueType(sync.IssueInvalidFilename),
+			IssueType: synctypes.IssueInvalidFilename,
+			Message:   synctypes.MessageForIssueType(synctypes.IssueInvalidFilename),
 			Paths:     []string{"docs/CON"},
 			Count:     1,
 		},
@@ -457,14 +458,14 @@ func TestPrintGroupedIssuesJSON_MixedOutput(t *testing.T) {
 func TestPrintGroupedIssuesText_BothSections(t *testing.T) {
 	t.Parallel()
 
-	conflicts := []sync.ConflictRecord{
+	conflicts := []synctypes.ConflictRecord{
 		{ID: "abcdefghijklmnop", Path: "/test.txt", ConflictType: "edit_edit", DetectedAt: 1700000000000000000},
 	}
 
 	groups := []failureGroup{
 		{
-			IssueType: sync.IssueInvalidFilename,
-			Message:   sync.MessageForIssueType(sync.IssueInvalidFilename),
+			IssueType: synctypes.IssueInvalidFilename,
+			Message:   synctypes.MessageForIssueType(synctypes.IssueInvalidFilename),
 			Paths:     []string{"docs/CON"},
 			Count:     1,
 		},
@@ -483,7 +484,7 @@ func TestPrintGroupedIssuesText_BothSections(t *testing.T) {
 func TestPrintGroupedIssuesText_OnlyConflicts(t *testing.T) {
 	t.Parallel()
 
-	conflicts := []sync.ConflictRecord{
+	conflicts := []synctypes.ConflictRecord{
 		{ID: "abcdefghijklmnop", Path: "/test.txt", ConflictType: "edit_edit", DetectedAt: 1700000000000000000},
 	}
 
@@ -499,8 +500,8 @@ func TestPrintGroupedIssuesText_OnlyFailures(t *testing.T) {
 
 	groups := []failureGroup{
 		{
-			IssueType: sync.IssueInvalidFilename,
-			Message:   sync.MessageForIssueType(sync.IssueInvalidFilename),
+			IssueType: synctypes.IssueInvalidFilename,
+			Message:   synctypes.MessageForIssueType(synctypes.IssueInvalidFilename),
 			Paths:     []string{"docs/CON"},
 			Count:     1,
 		},
@@ -517,9 +518,9 @@ func TestPrintGroupedIssuesText_OnlyFailures(t *testing.T) {
 func TestPrintGroupedIssuesText_HeldDeletes(t *testing.T) {
 	t.Parallel()
 
-	heldDeletes := []sync.SyncFailureRow{
-		{Path: "file1.txt", Direction: "delete", IssueType: sync.IssueBigDeleteHeld, LastSeenAt: 1700000000000000000},
-		{Path: "file2.txt", Direction: "delete", IssueType: sync.IssueBigDeleteHeld, LastSeenAt: 1700000000000000000},
+	heldDeletes := []synctypes.SyncFailureRow{
+		{Path: "file1.txt", Direction: synctypes.DirectionDelete, IssueType: synctypes.IssueBigDeleteHeld, LastSeenAt: 1700000000000000000},
+		{Path: "file2.txt", Direction: synctypes.DirectionDelete, IssueType: synctypes.IssueBigDeleteHeld, LastSeenAt: 1700000000000000000},
 	}
 
 	var buf bytes.Buffer
@@ -537,15 +538,15 @@ func TestPrintGroupedIssuesText_MixedHeldAndOther(t *testing.T) {
 
 	groups := []failureGroup{
 		{
-			IssueType: sync.IssueInvalidFilename,
-			Message:   sync.MessageForIssueType(sync.IssueInvalidFilename),
+			IssueType: synctypes.IssueInvalidFilename,
+			Message:   synctypes.MessageForIssueType(synctypes.IssueInvalidFilename),
 			Paths:     []string{"docs/CON"},
 			Count:     1,
 		},
 	}
 
-	heldDeletes := []sync.SyncFailureRow{
-		{Path: "file1.txt", Direction: "delete", IssueType: sync.IssueBigDeleteHeld, LastSeenAt: 1700000000000000000},
+	heldDeletes := []synctypes.SyncFailureRow{
+		{Path: "file1.txt", Direction: synctypes.DirectionDelete, IssueType: synctypes.IssueBigDeleteHeld, LastSeenAt: 1700000000000000000},
 	}
 
 	var buf bytes.Buffer
@@ -573,25 +574,25 @@ func newSeededIssuesCmd(t *testing.T) (*cobra.Command, string) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	// Create and seed the DB.
-	mgr, err := sync.NewSyncStore(dbPath, logger)
+	mgr, err := syncstore.NewSyncStore(dbPath, logger)
 	require.NoError(t, err)
 
 	ctx := context.Background()
 
 	// Actionable failure (invalid filename — will be targeted by "clear").
-	err = mgr.RecordFailure(ctx, &sync.SyncFailureParams{
+	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "docs/CON",
-		Direction: "upload",
+		Direction: synctypes.DirectionUpload,
 		IssueType: "invalid_filename",
-		Category:  "actionable",
+		Category:  synctypes.CategoryActionable,
 		ErrMsg:    "reserved name",
 	}, nil)
 	require.NoError(t, err)
 
 	// Transient failure (upload_failed — will be targeted by "retry").
-	err = mgr.RecordFailure(ctx, &sync.SyncFailureParams{
+	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "data/report.xlsx",
-		Direction:  "upload",
+		Direction:  synctypes.DirectionUpload,
 		IssueType:  "upload_failed",
 		ErrMsg:     "connection reset",
 		HTTPStatus: 500,
@@ -600,11 +601,11 @@ func newSeededIssuesCmd(t *testing.T) (*cobra.Command, string) {
 	require.NoError(t, err)
 
 	// Second actionable failure for testing --all.
-	err = mgr.RecordFailure(ctx, &sync.SyncFailureParams{
+	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "docs/NUL.txt",
-		Direction: "upload",
+		Direction: synctypes.DirectionUpload,
 		IssueType: "invalid_filename",
-		Category:  "actionable",
+		Category:  synctypes.CategoryActionable,
 		ErrMsg:    "reserved name",
 	}, nil)
 	require.NoError(t, err)
@@ -657,7 +658,7 @@ func TestIssuesClear_SinglePath(t *testing.T) {
 
 	// Verify: "docs/CON" is gone, other failures remain.
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mgr, err := sync.NewSyncStore(dbPath, logger)
+	mgr, err := syncstore.NewSyncStore(dbPath, logger)
 	require.NoError(t, err)
 	defer mgr.Close()
 
@@ -679,7 +680,7 @@ func TestIssuesClear_All(t *testing.T) {
 
 	// Verify: all actionable failures gone, transient remains.
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mgr, err := sync.NewSyncStore(dbPath, logger)
+	mgr, err := syncstore.NewSyncStore(dbPath, logger)
 	require.NoError(t, err)
 	defer mgr.Close()
 
@@ -704,7 +705,7 @@ func TestIssuesRetry_SinglePath(t *testing.T) {
 
 	// Verify: the transient failure for "data/report.xlsx" is cleared.
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mgr, err := sync.NewSyncStore(dbPath, logger)
+	mgr, err := syncstore.NewSyncStore(dbPath, logger)
 	require.NoError(t, err)
 	defer mgr.Close()
 
@@ -728,7 +729,7 @@ func TestIssuesRetry_All(t *testing.T) {
 
 	// Verify: transient failures are cleared; actionable remain.
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mgr, err := sync.NewSyncStore(dbPath, logger)
+	mgr, err := syncstore.NewSyncStore(dbPath, logger)
 	require.NoError(t, err)
 	defer mgr.Close()
 
@@ -738,7 +739,7 @@ func TestIssuesRetry_All(t *testing.T) {
 
 	// Only actionable failures should remain.
 	for _, f := range all {
-		assert.Equal(t, "actionable", f.Category,
+		assert.Equal(t, synctypes.CategoryActionable, f.Category,
 			"only actionable failures should remain after retry --all")
 	}
 }

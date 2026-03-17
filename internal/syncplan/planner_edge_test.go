@@ -51,7 +51,7 @@ func TestS1_NoRemoteDeleteWithoutBaseline(t *testing.T) {
 	}
 
 	// Should produce a download instead.
-	downloads := ActionsOfType(plan.Actions, synctypes.ActionDownload)
+	downloads := synctest.ActionsOfType(plan.Actions, synctypes.ActionDownload)
 	assert.Len(t, downloads, 1)
 }
 
@@ -61,25 +61,26 @@ func TestS1_NoRemoteDeleteWithoutBaseline(t *testing.T) {
 func TestS5_BigDeleteThresholdBoundary(t *testing.T) {
 	t.Run("above_threshold_blocked", func(t *testing.T) {
 		// 11 deletes > threshold of 10 → triggered.
-		assert.True(t, ExceedsDeleteThreshold(11, 10))
+		assert.True(t, exceedsDeleteThreshold(11, 10))
 	})
 
 	t.Run("below_threshold_allowed", func(t *testing.T) {
 		// 9 deletes < threshold of 10 → allowed.
-		assert.False(t, ExceedsDeleteThreshold(9, 10))
+		assert.False(t, exceedsDeleteThreshold(9, 10))
 	})
 
 	t.Run("exactly_at_threshold_allowed", func(t *testing.T) {
 		// 10 deletes = threshold of 10 → NOT greater than, so allowed.
-		assert.False(t, ExceedsDeleteThreshold(10, 10))
+		assert.False(t, exceedsDeleteThreshold(10, 10))
 	})
 
 	t.Run("threshold_zero_disables", func(t *testing.T) {
 		// Threshold of 0 disables protection entirely.
-		assert.False(t, ExceedsDeleteThreshold(99999, 0))
+		assert.False(t, exceedsDeleteThreshold(99999, 0))
 	})
 }
 
+// Validates: R-2.3
 // TestS7_PartialFilesNeverUploaded validates Safety Invariant S7:
 // .partial files are excluded by the local observer and should never
 // appear in planner output. This test validates the exclusion function.
@@ -99,6 +100,7 @@ func TestS7_PartialFilesNeverUploaded(t *testing.T) {
 	}
 }
 
+// Validates: R-2.3
 // TestS7_TempFilesFilteredSymmetrically validates that temp file exclusion
 // applies to both potential upload and download paths.
 func TestS7_TempFilesFilteredSymmetrically(t *testing.T) {
@@ -121,6 +123,7 @@ func TestS7_TempFilesFilteredSymmetrically(t *testing.T) {
 // §4: Decision Matrix Edge Cases
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.3
 // TestEF6_LocalDeletedImpliesLocalChanged validates that a locally deleted
 // file (baseline exists, local absent) is correctly classified as EF6
 // (remote delete propagation), not stolen by EF3 (local changed).
@@ -155,10 +158,11 @@ func TestEF6_LocalDeletedImpliesLocalChanged(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
-	remoteDeletes := ActionsOfType(plan.Actions, synctypes.ActionRemoteDelete)
+	remoteDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionRemoteDelete)
 	assert.Len(t, remoteDeletes, 1, "EF6: local delete should propagate as remote delete")
 }
 
+// Validates: R-2.3
 // TestEF4_ConvergentEdit_NoTransfer validates that when both sides
 // independently edit to the same hash, the result is ActionUpdateSynced
 // with no data transfer.
@@ -203,15 +207,16 @@ func TestEF4_ConvergentEdit_NoTransfer(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
-	synced := ActionsOfType(plan.Actions, synctypes.ActionUpdateSynced)
+	synced := synctest.ActionsOfType(plan.Actions, synctypes.ActionUpdateSynced)
 	assert.Len(t, synced, 1, "EF4: convergent edit should produce update_synced")
 
-	downloads := ActionsOfType(plan.Actions, synctypes.ActionDownload)
-	uploads := ActionsOfType(plan.Actions, synctypes.ActionUpload)
+	downloads := synctest.ActionsOfType(plan.Actions, synctypes.ActionDownload)
+	uploads := synctest.ActionsOfType(plan.Actions, synctypes.ActionUpload)
 	assert.Empty(t, downloads, "EF4: no download needed for convergent edit")
 	assert.Empty(t, uploads, "EF4: no upload needed for convergent edit")
 }
 
+// Validates: R-2.3
 // TestEF11_ConvergentCreate validates that files appearing on both sides
 // with the same hash are adopted (ActionUpdateSynced) without transfer.
 func TestEF11_ConvergentCreate(t *testing.T) {
@@ -246,7 +251,7 @@ func TestEF11_ConvergentCreate(t *testing.T) {
 	plan, err := planner.Plan(changes, synctest.EmptyBaseline(), synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
-	synced := ActionsOfType(plan.Actions, synctypes.ActionUpdateSynced)
+	synced := synctest.ActionsOfType(plan.Actions, synctypes.ActionUpdateSynced)
 	assert.Len(t, synced, 1, "EF11: convergent create should adopt")
 }
 
@@ -285,7 +290,7 @@ func TestEF12_DivergentCreate(t *testing.T) {
 	plan, err := planner.Plan(changes, synctest.EmptyBaseline(), synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
-	conflicts := ActionsOfType(plan.Actions, synctypes.ActionConflict)
+	conflicts := synctest.ActionsOfType(plan.Actions, synctypes.ActionConflict)
 	assert.Len(t, conflicts, 1, "EF12: divergent create should conflict")
 	assert.Equal(t, synctypes.ConflictCreateCreate, conflicts[0].ConflictInfo.ConflictType)
 }
@@ -334,11 +339,12 @@ func TestEF9_EditDeleteAutoResolve(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
-	conflicts := ActionsOfType(plan.Actions, synctypes.ActionConflict)
+	conflicts := synctest.ActionsOfType(plan.Actions, synctypes.ActionConflict)
 	assert.Len(t, conflicts, 1, "EF9: local edit + remote delete = conflict")
 	assert.Equal(t, synctypes.ConflictEditDelete, conflicts[0].ConflictInfo.ConflictType)
 }
 
+// Validates: R-2.3
 // TestUploadOnlyMode_ProducesRemoteDeletes validates that upload-only mode
 // with locally deleted files produces ActionRemoteDelete (EF6), not
 // EF10 cleanup.
@@ -372,11 +378,12 @@ func TestUploadOnlyMode_ProducesRemoteDeletes(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncUploadOnly, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
-	remoteDeletes := ActionsOfType(plan.Actions, synctypes.ActionRemoteDelete)
+	remoteDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionRemoteDelete)
 	assert.Len(t, remoteDeletes, 1,
 		"upload-only: local delete should produce remote delete")
 }
 
+// Validates: R-2.3
 // TestDownloadOnlyMode_SkipsLocalCorruption validates that download-only
 // mode with a corrupted local file but unchanged remote produces no action.
 func TestDownloadOnlyMode_SkipsLocalCorruption(t *testing.T) {
@@ -417,6 +424,7 @@ func TestDownloadOnlyMode_SkipsLocalCorruption(t *testing.T) {
 		"download-only: corrupted local with unchanged remote = no action")
 }
 
+// Validates: R-2.3
 // TestED8_FolderModeFilteringRegression validates that folder classifiers
 // use upfront mode filtering. ED8 (locally deleted folder, no remote observation,
 // no remote deletion) should produce ActionRemoteDelete in bidirectional mode.
@@ -448,7 +456,7 @@ func TestED8_FolderModeFilteringRegression(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
-	remoteDeletes := ActionsOfType(plan.Actions, synctypes.ActionRemoteDelete)
+	remoteDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionRemoteDelete)
 	assert.Len(t, remoteDeletes, 1,
 		"ED8: locally deleted folder should produce remote delete")
 }
@@ -457,6 +465,7 @@ func TestED8_FolderModeFilteringRegression(t *testing.T) {
 // §5: Move Detection Edge Cases
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.3
 // TestMoveDetection_AmbiguousSameHashMultipleDeletes validates that when
 // two deleted files share the same hash, no move is detected (ambiguous).
 func TestMoveDetection_AmbiguousSameHashMultipleDeletes(t *testing.T) {
@@ -503,6 +512,7 @@ func TestMoveDetection_AmbiguousSameHashMultipleDeletes(t *testing.T) {
 	assert.Empty(t, mvs, "ambiguous move: multiple deletes should prevent move detection")
 }
 
+// Validates: R-2.3
 // TestMoveDetection_AmbiguousSameHashMultipleCreates validates that when
 // two created files share the same hash as one deleted file, no move is detected.
 func TestMoveDetection_AmbiguousSameHashMultipleCreates(t *testing.T) {
@@ -544,7 +554,8 @@ func TestMoveDetection_AmbiguousSameHashMultipleCreates(t *testing.T) {
 	assert.Empty(t, mvs, "ambiguous move: multiple creates should prevent move detection")
 }
 
-// TestRemoteMove_WithRecreationAtSource validates that a remote move A→B
+// Validates: R-2.3
+// TestRemoteMove_WithRecreationAtSource validates that a remote move A->B
 // combined with a new item at path A is handled correctly: B gets the
 // move action, and A is classified as a new item.
 func TestRemoteMove_WithRecreationAtSource(t *testing.T) {
@@ -593,7 +604,7 @@ func TestRemoteMove_WithRecreationAtSource(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should have a local move for the renamed item.
-	localMoves := ActionsOfType(plan.Actions, synctypes.ActionLocalMove)
+	localMoves := synctest.ActionsOfType(plan.Actions, synctypes.ActionLocalMove)
 	assert.Len(t, localMoves, 1, "should have a local move action")
 
 	if len(localMoves) > 0 {
@@ -602,7 +613,7 @@ func TestRemoteMove_WithRecreationAtSource(t *testing.T) {
 	}
 
 	// The new item at source.txt should be classified as a download (EF14).
-	downloads := ActionsOfType(plan.Actions, synctypes.ActionDownload)
+	downloads := synctest.ActionsOfType(plan.Actions, synctypes.ActionDownload)
 	assert.Len(t, downloads, 1, "new item at old path should be downloaded")
 }
 
@@ -610,6 +621,7 @@ func TestRemoteMove_WithRecreationAtSource(t *testing.T) {
 // §4: Dependency graph tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-5.1
 // TestBuildDependencies_FolderCreateBeforeChild validates that a child
 // download depends on its parent folder create.
 func TestBuildDependencies_FolderCreateBeforeChild(t *testing.T) {
@@ -618,7 +630,7 @@ func TestBuildDependencies_FolderCreateBeforeChild(t *testing.T) {
 		{Type: synctypes.ActionDownload, Path: "newdir/file.txt"},
 	}
 
-	deps := BuildDependencies(actions)
+	deps := buildDependencies(actions)
 
 	// Action 1 (download) should depend on action 0 (folder create).
 	require.Len(t, deps, 2)
@@ -626,6 +638,7 @@ func TestBuildDependencies_FolderCreateBeforeChild(t *testing.T) {
 	assert.Empty(t, deps[0], "folder create should have no dependencies")
 }
 
+// Validates: R-5.1
 // TestBuildDependencies_ChildDeleteBeforeParent validates that a parent
 // folder delete depends on child deletes completing first.
 func TestBuildDependencies_ChildDeleteBeforeParent(t *testing.T) {
@@ -644,7 +657,7 @@ func TestBuildDependencies_ChildDeleteBeforeParent(t *testing.T) {
 		},
 	}
 
-	deps := BuildDependencies(actions)
+	deps := buildDependencies(actions)
 
 	// Action 0 (parent delete) should depend on action 1 (child delete).
 	require.Len(t, deps, 2)
@@ -700,6 +713,7 @@ func TestPlan_BigDeleteBlocked(t *testing.T) {
 // §6: DAG Cycle Detection
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.3
 func TestDetectCycle_NoCycle(t *testing.T) {
 	t.Parallel()
 
@@ -710,10 +724,11 @@ func TestDetectCycle_NoCycle(t *testing.T) {
 		{1}, // 2 depends on 1
 	}
 
-	err := DetectDependencyCycle(deps)
+	err := detectDependencyCycle(deps)
 	assert.NoError(t, err)
 }
 
+// Validates: R-2.3
 func TestDetectCycle_SelfLoop(t *testing.T) {
 	t.Parallel()
 
@@ -724,11 +739,12 @@ func TestDetectCycle_SelfLoop(t *testing.T) {
 		{},  // 2
 	}
 
-	err := DetectDependencyCycle(deps)
+	err := detectDependencyCycle(deps)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, synctypes.ErrDependencyCycle)
 }
 
+// Validates: R-2.3
 func TestDetectCycle_MutualDependency(t *testing.T) {
 	t.Parallel()
 
@@ -738,11 +754,12 @@ func TestDetectCycle_MutualDependency(t *testing.T) {
 		{0}, // 1 depends on 0
 	}
 
-	err := DetectDependencyCycle(deps)
+	err := detectDependencyCycle(deps)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, synctypes.ErrDependencyCycle)
 }
 
+// Validates: R-2.3
 func TestDetectCycle_IndirectCycle(t *testing.T) {
 	t.Parallel()
 
@@ -753,11 +770,12 @@ func TestDetectCycle_IndirectCycle(t *testing.T) {
 		{1}, // 2 depends on 1
 	}
 
-	err := DetectDependencyCycle(deps)
+	err := detectDependencyCycle(deps)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, synctypes.ErrDependencyCycle)
 }
 
+// Validates: R-2.3
 func TestDetectCycle_DiamondNoCycle(t *testing.T) {
 	t.Parallel()
 
@@ -769,6 +787,6 @@ func TestDetectCycle_DiamondNoCycle(t *testing.T) {
 		{},     // 3 depends on nothing
 	}
 
-	err := DetectDependencyCycle(deps)
+	err := detectDependencyCycle(deps)
 	assert.NoError(t, err)
 }

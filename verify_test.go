@@ -8,12 +8,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 func TestPrintVerifyTable_NoMismatches(t *testing.T) {
 	var buf bytes.Buffer
-	printVerifyTable(&buf, &sync.VerifyReport{Verified: 10})
+	printVerifyTable(&buf, &synctypes.VerifyReport{Verified: 10})
 	out := buf.String()
 
 	assert.Contains(t, out, "Verified: 10")
@@ -22,9 +22,9 @@ func TestPrintVerifyTable_NoMismatches(t *testing.T) {
 
 func TestPrintVerifyTable_WithMismatches(t *testing.T) {
 	var buf bytes.Buffer
-	printVerifyTable(&buf, &sync.VerifyReport{
+	printVerifyTable(&buf, &synctypes.VerifyReport{
 		Verified: 8,
-		Mismatches: []sync.VerifyResult{
+		Mismatches: []synctypes.VerifyResult{
 			{Path: "/foo.txt", Status: "hash_mismatch", Expected: "aaa", Actual: "bbb"},
 		},
 	})
@@ -36,12 +36,12 @@ func TestPrintVerifyTable_WithMismatches(t *testing.T) {
 
 func TestPrintVerifyJSON(t *testing.T) {
 	var buf bytes.Buffer
-	require.NoError(t, printVerifyJSON(&buf, &sync.VerifyReport{Verified: 5}))
+	require.NoError(t, printVerifyJSON(&buf, &synctypes.VerifyReport{Verified: 5}))
 	out := buf.String()
 
 	assert.Contains(t, out, `"verified"`)
 
-	var parsed sync.VerifyReport
+	var parsed synctypes.VerifyReport
 	require.NoError(t, json.Unmarshal([]byte(out), &parsed))
 	assert.Equal(t, 5, parsed.Verified)
 }

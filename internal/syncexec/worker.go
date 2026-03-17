@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -29,7 +28,7 @@ type WorkerPool struct {
 	cfg      *ExecutorConfig
 	readyCh  <-chan *synctypes.TrackedAction
 	doneCh   <-chan struct{}
-	baseline *syncstore.SyncStore
+	baseline synctypes.OutcomeWriter
 	logger   *slog.Logger
 
 	// results reports per-action outcomes back to the engine. The engine
@@ -51,7 +50,7 @@ func NewWorkerPool(
 	cfg *ExecutorConfig,
 	readyCh <-chan *synctypes.TrackedAction,
 	doneCh <-chan struct{},
-	baseline *syncstore.SyncStore,
+	baseline synctypes.OutcomeWriter,
 	logger *slog.Logger,
 	planSize int,
 ) *WorkerPool {
