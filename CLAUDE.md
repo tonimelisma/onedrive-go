@@ -49,13 +49,90 @@ Planned work: search `spec/` for `[planned]`. Reference docs: `spec/reference/`.
 
 ## Coding Conventions
 
+### General
+
 - Write lots of comments explaining **why**, not **what**
 - Functions do one thing
 - Accept interfaces / return structs
-- Sentinel errors with `%w` wrapping
 - No package-level mutable state
+- No magic numbers — use named constants near their usage
+- Always use named fields in struct literals — positional initialization breaks silently when fields are added
+- Unexported by default. Export only what other packages need. The exported API is a contract.
 
-**Logging** (`log/slog` with structured fields):
+### Naming
+
+- **Names carry the semantics the type can't.** `count int` is useless. `pendingUploadCount int` is self-documenting. A name should let you understand usage without reading the definition.
+- **Boolean names state the true condition.** `isReady`, `hasConflict`, `canRetry` — never negated names like `notDone` (double negatives in `if !notDone` are unreadable).
+- **Package names are single lowercase words.** No underscores, no `util`, no `common`, no `helpers`. If you can't name the package, the abstraction is wrong.
+
+### Error Handling
+
+- **Wrap with `fmt.Errorf("verb noun: %w", err)`** — the message reads as a chain: `"sync file: upload chunk: HTTP POST: connection refused"`. Verb-noun, not "failed to" or "error while".
+- **Errors cross exactly one boundary before being wrapped.** Don't double-wrap: if `graph.Client` wraps the HTTP error, `driveops` adds its own context but doesn't re-wrap the inner error. Each layer adds *its* perspective: what it was trying to do.
+- **Sentinel errors are for callers that branch on them.** If no caller checks `errors.Is(err, ErrFoo)`, it doesn't need to be a sentinel — a formatted string is fine.
+- **Never swallow errors.** If you handle an error (retry, fallback, skip), log it. If you can't handle it, return it. The only silent discard allowed is when the doc comment on the function explicitly says so and why.
+- **Panics are bugs, not flow control.** Panic only for programmer errors (invariant violations, impossible states). Never panic on external input — network responses, file system results, user config. Recover only at goroutine boundaries to prevent crashes, and log the panic as Error.
+- **Partial failure is a first-class concept.** Operations that process multiple items return both results and errors. Never stop-on-first-error for bulk operations — collect, report, continue.
+
+### Concurrency
+
+- **Goroutine ownership:** Every goroutine must have a clear owner responsible for its lifecycle. The owner must ensure the goroutine terminates. No fire-and-forget goroutines — ever.
+- **Context is the cancellation backbone.** Every function that does I/O or could block takes `context.Context` as its first parameter. Respect cancellation: check `ctx.Err()` before expensive operations, and select on `ctx.Done()` in loops.
+- **Channel direction:** Always declare channel direction in function signatures (`chan<-`, `<-chan`). The sender closes, never the receiver.
+- **Mutex scope:** A mutex protects data, not code. Comment what fields it guards. Keep critical sections small — no I/O under a lock, no channel operations under a lock. Prefer `sync.Mutex` over `sync.RWMutex` unless profiling shows read contention.
+- **No goroutine in `init()` or package-level scope.** Goroutines start from explicit method calls, never implicitly.
+- **Worker pools have bounded concurrency.** Use semaphores (`chan struct{}`) or `errgroup.SetLimit()`. Never let fan-out scale with input size.
+
+### Resource Lifecycle
+
+- **`defer` for cleanup, but verify the close.** `defer f.Close()` silently drops the error. For writes: check the error from `Close()` — it flushes buffers. Pattern: `defer func() { closeErr := f.Close(); if err == nil { err = closeErr } }()`.
+- **Streams over buffers.** Never read an entire file or HTTP body into memory unless the size is bounded and small (< 1 MB). Use `io.Reader`/`io.Writer` pipelines. For large files, chunk.
+- **HTTP response bodies are always closed.** Every `http.Response` gets `defer resp.Body.Close()` immediately, even on error status codes. Failing to do so leaks connections.
+- **Temporary files use the target directory.** `os.CreateTemp(targetDir, pattern)` — so the subsequent `os.Rename` is atomic (same filesystem). Never create temps in `/tmp` and rename across mount points.
+
+### File System Safety
+
+- **Atomic writes only.** Never write directly to the target path. Write to a temp file in the same directory, `fsync`, then `os.Rename`. This is non-negotiable for any file that matters.
+- **Paths use `filepath.Join`, never `+` concatenation.** No exceptions.
+- **Validate all paths from external sources.** API responses can contain `..`, absolute paths, or names with special characters. Sanitize before any filesystem operation. Reject path traversal.
+- **File comparison is content-based, not timestamp-based.** Timestamps lie (timezone bugs, FAT32 precision, NTP skew). Use checksums as the source of truth; timestamps as a fast-path hint only.
+- **Preserve what you don't understand.** If the remote has metadata you don't model, don't destroy it by round-tripping through your structs. Only write back fields you explicitly manage.
+
+### API Interaction Discipline
+
+- **Timeout budgets propagate inward.** A sync pass has a deadline. Subdivide it across phases. Don't let one stuck request consume the entire budget. Use `context.WithTimeout` at each layer.
+- **Treat every API response as untrusted input.** Nil-check nested fields. Validate enums against known values. Don't trust `Content-Length`. Don't assume array order.
+- **Pagination is mandatory, not optional.** If an API can return `@odata.nextLink`, code must follow it. Never assume a single page is the full result. Test with collections larger than one page.
+- **Idempotency awareness.** Know which operations are idempotent (GET, PUT, DELETE by ID) and which aren't (POST to create). Only retry idempotent operations automatically. For non-idempotent operations, implement idempotency keys or check-before-act.
+
+### State Machine Discipline
+
+- **State transitions are explicit, enumerated, and validated.** If an item can be `clean → modified → uploading → clean`, enforce the valid transitions. Reject illegal transitions loudly (log + error, not silent ignore).
+- **State persists atomically.** Never write half a state update. Use transactions or write-replace for the state store. A crash between two writes must not leave inconsistent state.
+- **State is recoverable from truth.** If local state is lost or corrupt, the system must be able to rebuild from the remote (or local FS + remote) without user intervention. Design state as a cache of decisions, not the source of truth.
+
+### Defensive Coding
+
+- **Validate at system boundaries, trust internally.** Validate: CLI args, config files, API responses, file system reads. Don't validate: function-to-function calls within a package (that's what types are for).
+- **Make illegal states unrepresentable.** Use types to prevent misuse. A `DriveID` type prevents passing a random string where a drive ID is expected. Enums over raw strings. Required fields are struct members, optional fields use pointer-or-option patterns.
+- **Timeouts on everything external.** Every HTTP call, every file operation that could hang (NFS, FUSE), every channel send that could block. No operation waits forever.
+- **Bound all collections from external input.** If the API returns items, cap how many you process per batch. If a directory has 500k files, don't load them all into a slice. Stream or paginate.
+- **Invariant assertions in debug/test.** For critical invariants (e.g., "every item has a parent"), add assertions that panic in test builds. Use build tags or a flag to enable them.
+
+### Shutdown and Lifecycle
+
+- **Graceful shutdown has a deadline.** On SIGINT/SIGTERM: stop accepting new work, drain in-flight operations (with a timeout), flush state, exit. Second signal = immediate exit.
+- **In-flight operations are interruptible.** Every long operation checks context cancellation. An upload that ignores cancellation holds the process hostage.
+- **Cleanup runs even on error paths.** Temp files, partial uploads, lock files — all cleaned up on any exit path. `defer` is the mechanism; never rely on "we'll clean up next run."
+
+### Dependencies
+
+- Evaluate every new dependency for maintenance health, transitive deps, and whether the functionality justifies the coupling. Fewer deps = smaller attack surface.
+- Prefer stdlib over third-party when the stdlib solution is reasonable. Don't add a library for something `net/http` or `os` already does.
+
+### Logging
+
+`log/slog` with structured fields:
 - **Debug**: HTTP request/response, token acquisition, file read/write
 - **Info**: Lifecycle events — login/logout, sync start/complete, config load
 - **Warn**: Degraded but recoverable — retries, expired tokens, fallbacks.
@@ -64,13 +141,24 @@ Planned work: search `spec/` for `[planned]`. Reference docs: `spec/reference/`.
 - **Error**: Terminal failures — request failed after all retries, unrecoverable auth
 - Minimum per code path: function entry with key params, state transitions, error paths, external calls. Never log secrets.
 
-**Test style**:
+### Test Style
+
 - **All assertions use testify** (`github.com/stretchr/testify/assert` and `require`). Never use stdlib `t.Fatal`, `t.Fatalf`, `t.Error`, `t.Errorf` for assertions. Use `require` when the test cannot continue without the assertion passing (nil checks, error checks before using result). Use `assert` for non-fatal value comparisons.
 - **Requirement traceability**: Every test that validates a spec requirement MUST have a `// Validates: R-X.Y.Z` comment on the line immediately before the `func Test...` declaration. Multiple requirements use comma separation: `// Validates: R-1.1, R-1.2`. For table-driven subtests, place the comment on the subtest case struct. This enables `grep -r "Validates:"` to produce a full traceability matrix.
 - Never pass nil context — runtime panics not caught by compiler
 - Table-driven tests where appropriate, with specific assertions (check values, not just "no error")
 
-**E2E & integration tests** run against live OneDrive accounts. Test account names are never committed — use `.env` (gitignored) or environment variables. Both suites require `ONEDRIVE_ALLOWED_TEST_ACCOUNTS` and `ONEDRIVE_TEST_DRIVE` to be set (crashes without them). Copy `.env.example` to `.env` and fill in your test accounts. E2E tests are tiered: `e2e` tag (fast, every CI push) vs `e2e_full` tag (slow, nightly/manual, 30-min timeout).
+### Test Strategy
+
+- **Test the contract, not the implementation.** Tests should break when behavior changes, not when you refactor internals. Test through exported APIs. Only test unexported functions when the logic is complex and the exported surface doesn't exercise it.
+- **Failure injection is mandatory for I/O paths.** Use interfaces to inject: network failures, partial reads, slow responses, disk-full errors. Every I/O path must have at least one failure test.
+- **Test concurrent code with the race detector and stress.** `-race` is in the DoD checklist, but also: write tests that exercise concurrent paths with `sync.WaitGroup` barriers. Use `-count=100` on flaky-candidate tests.
+- **Golden files for complex output.** Sync plans, conflict reports, any structured output — compare against checked-in golden files, not inline string assertions. Update with `-update` flag.
+- **Mocks implement the full interface contract.** A mock that returns `nil, nil` is a lie. Mocks should simulate realistic behavior: latency, partial results, error conditions. Use `testify/mock` with explicit expectations.
+
+### E2E & Integration Tests
+
+Run against live OneDrive accounts. Test account names are never committed — use `.env` (gitignored) or environment variables. Both suites require `ONEDRIVE_ALLOWED_TEST_ACCOUNTS` and `ONEDRIVE_TEST_DRIVE` to be set (crashes without them). Copy `.env.example` to `.env` and fill in your test accounts. E2E tests are tiered: `e2e` tag (fast, every CI push) vs `e2e_full` tag (slow, nightly/manual, 30-min timeout).
 
 **Test credential pipeline** (one-time setup, then CI is self-sustaining):
 
