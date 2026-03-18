@@ -2266,9 +2266,10 @@ func TestObserveAndCommitRemote_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	require.NoError(t, err)
 
 	// observeAndCommitRemote with 0 events (only root, which is skipped).
-	events, err := e.observeAndCommitRemote(ctx, bl)
+	events, pendingToken, err := e.observeAndCommitRemote(ctx, bl)
 	require.NoError(t, err)
 	assert.Empty(t, events, "should return 0 events (root is skipped)")
+	assert.Empty(t, pendingToken, "no pending token when 0 events")
 
 	// Token should NOT have been advanced.
 	savedToken, err := e.baseline.GetDeltaToken(ctx, driveID.String(), "")
@@ -2277,7 +2278,7 @@ func TestObserveAndCommitRemote_ZeroEvents_NoTokenAdvance(t *testing.T) {
 }
 
 // Validates: R-2.15.1
-func TestObserveAndCommitRemote_WithEvents_TokenAdvances(t *testing.T) {
+func TestObserveAndCommitRemote_WithEvents_TokenDeferred(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(testDriveID)
@@ -2319,14 +2320,17 @@ func TestObserveAndCommitRemote_WithEvents_TokenAdvances(t *testing.T) {
 	require.NoError(t, err)
 
 	// observeAndCommitRemote with actual events.
-	events, err := e.observeAndCommitRemote(ctx, bl)
+	events, pendingToken, err := e.observeAndCommitRemote(ctx, bl)
 	require.NoError(t, err)
 	assert.Len(t, events, 1, "should return 1 event (root is skipped)")
 
-	// Token SHOULD have been advanced.
+	// Token should be returned as pending — NOT yet committed to DB.
+	assert.Equal(t, "new-token", pendingToken, "pending token should be returned")
+
 	savedToken, err := e.baseline.GetDeltaToken(ctx, driveID.String(), "")
 	require.NoError(t, err)
-	assert.Equal(t, "new-token", savedToken, "token should advance when events > 0")
+	assert.Equal(t, "old-token", savedToken,
+		"token should NOT be committed to DB by observeAndCommitRemote — it is deferred")
 }
 
 // ---------------------------------------------------------------------------
@@ -2621,7 +2625,7 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 	bl.Put(&synctypes.BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: synctypes.ItemTypeFile})
 	bl.Put(&synctypes.BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: synctypes.ItemTypeFile})
 
-	events, err := e.observeAndCommitRemoteFull(ctx, bl)
+	events, pendingToken, err := e.observeAndCommitRemoteFull(ctx, bl)
 	require.NoError(t, err)
 
 	// Should have modify (file1) + orphan delete (file2).
@@ -2642,10 +2646,12 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 	assert.Equal(t, 1, modifies)
 	assert.Equal(t, 1, deletes)
 
-	// Delta token should have been saved.
+	// Token should be returned as pending — NOT committed to DB.
+	assert.Equal(t, "full-token", pendingToken, "pending token should be returned")
+
 	savedToken, err := e.baseline.GetDeltaToken(ctx, driveID.String(), "")
 	require.NoError(t, err)
-	assert.Equal(t, "full-token", savedToken)
+	assert.Empty(t, savedToken, "token should NOT be committed to DB by observeAndCommitRemoteFull — it is deferred")
 }
 
 // ---------------------------------------------------------------------------

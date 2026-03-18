@@ -1656,8 +1656,9 @@ func TestClassifyItem_ShortcutDetection(t *testing.T) {
 }
 
 // TestClassifyItem_ShortcutDetection_NotFolder verifies that items with
-// RemoteDriveID but NOT IsFolder are not treated as shortcuts (e.g.,
-// shared files appear with remoteItem but are regular files).
+// RemoteDriveID but NOT IsFolder are still classified as shortcuts. The Graph
+// API delta endpoint may return shared folder shortcuts without the folder
+// facet (IsFolder=false). RemoteDriveID alone is sufficient.
 func TestClassifyItem_ShortcutDetection_NotFolder(t *testing.T) {
 	t.Parallel()
 
@@ -1669,22 +1670,52 @@ func TestClassifyItem_ShortcutDetection_NotFolder(t *testing.T) {
 		driveid.NewItemKey(driveID, "root"): {Name: "", IsRoot: true},
 	}
 
-	// A shared file (not a folder) — should be treated as a normal file create.
+	// A shared folder shortcut without the folder facet — should still be
+	// classified as a shortcut because RemoteDriveID is set.
 	item := &graph.Item{
 		ID:            "shared-file-1",
-		Name:          "shared-doc.docx",
+		Name:          "Shared Folder",
 		ParentID:      "root",
 		DriveID:       driveID,
 		IsFolder:      false,
 		RemoteDriveID: "source-drive-abc",
 		RemoteItemID:  "source-item-456",
-		QuickXorHash:  "hash123",
 	}
 
 	ev := obs.Converter.ClassifyItem(item, inflight)
-	require.NotNil(t, ev, "shared file should produce an event")
+	require.NotNil(t, ev, "shortcut without folder facet should produce an event")
 
-	assert.Equal(t, synctypes.ChangeCreate, ev.Type, "shared file should be ChangeCreate, not ChangeShortcut")
+	assert.Equal(t, synctypes.ChangeShortcut, ev.Type, "item with RemoteDriveID should be ChangeShortcut regardless of IsFolder")
+	assert.Equal(t, "source-drive-abc", ev.RemoteDriveID)
+	assert.Equal(t, "source-item-456", ev.RemoteItemID)
+}
+
+// TestClassifyItem_RegularFileNoRemoteDriveID verifies that a regular file
+// without RemoteDriveID is classified normally (not as a shortcut).
+func TestClassifyItem_RegularFileNoRemoteDriveID(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	bl := synctest.EmptyBaseline()
+	obs := NewRemoteObserver(nil, bl, driveID, synctest.TestLogger(t))
+
+	inflight := map[driveid.ItemKey]InflightParent{
+		driveid.NewItemKey(driveID, "root"): {Name: "", IsRoot: true},
+	}
+
+	item := &graph.Item{
+		ID:           "regular-file-1",
+		Name:         "document.docx",
+		ParentID:     "root",
+		DriveID:      driveID,
+		IsFolder:     false,
+		QuickXorHash: "hash123",
+	}
+
+	ev := obs.Converter.ClassifyItem(item, inflight)
+	require.NotNil(t, ev, "regular file should produce an event")
+
+	assert.Equal(t, synctypes.ChangeCreate, ev.Type, "regular file without RemoteDriveID should be ChangeCreate")
 }
 
 // TestClassifyItem_ShortcutDeleted verifies that a deleted shortcut produces

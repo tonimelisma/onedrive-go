@@ -693,13 +693,13 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 }
 
 // TestE2E_Sync_BigDeleteProtection exercises S5 big-delete protection and
-// the --force override. Creates 12 files (above MinItems=10 threshold),
-// deletes all remotely (100% > 50% MaxPercent), verifies protection triggers.
+// the --force override. Creates 12 files, configures a low threshold (10)
+// so that 12 deletions exceed it, and verifies protection triggers.
 func TestE2E_Sync_BigDeleteProtection(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "big_delete_threshold = 10\n")
 	opsCfgPath := writeMinimalConfig(t)
 	testFolder := fmt.Sprintf("e2e-sync-bigdel-%d", time.Now().UnixNano())
 
@@ -719,16 +719,35 @@ func TestE2E_Sync_BigDeleteProtection(t *testing.T) {
 	// Step 2: Upload baseline.
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
+	// Advance delta token past the upload. Upload-only mode skips remote
+	// observation, so no delta token is saved. Download-only avoids
+	// big-delete triggering from parallel test cleanup deletions.
+	runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
+
+	// Poll for eventual consistency — verify all 12 files exist remotely
+	// before proceeding to delete them.
+	pollCLIWithConfigContains(t, opsCfgPath, nil, "file-12.txt", pollTimeout, "ls", "/"+testFolder)
+
 	// Step 3: Delete all 12 files remotely.
 	for i := 1; i <= fileCount; i++ {
 		name := fmt.Sprintf("file-%02d.txt", i)
 		runCLIWithConfig(t, opsCfgPath, nil, "rm", "/"+testFolder+"/"+name)
 	}
 
+	// Wait for remote deletes to propagate via REST before sync sees them via delta.
+	pollCLIWithConfigNotContains(t, opsCfgPath, nil, "file-01.txt", pollTimeout, "ls", "/"+testFolder)
+
 	// Step 4: Sync without --force — big-delete protection should trigger.
-	_, stderr, syncErr := runCLIWithConfigAllowError(t, cfgPath, env, "sync")
-	require.Error(t, syncErr, "sync should fail due to big-delete protection")
-	assert.Contains(t, stderr, "big-delete")
+	// Retry until delta catches up with all remote deletions (OneDrive
+	// eventual consistency — delta may lag behind REST).
+	var lastStderr string
+	var lastErr error
+
+	require.Eventually(t, func() bool {
+		_, lastStderr, lastErr = runCLIWithConfigAllowError(t, cfgPath, env, "sync")
+		return lastErr != nil && strings.Contains(lastStderr, "big-delete")
+	}, 120*time.Second, 5*time.Second,
+		"big-delete protection should trigger: lastErr=%v lastStderr=%s", lastErr, lastStderr)
 
 	// Step 5: Local files should still exist (no changes applied).
 	for i := 1; i <= fileCount; i++ {
@@ -737,7 +756,7 @@ func TestE2E_Sync_BigDeleteProtection(t *testing.T) {
 		assert.NoError(t, err, "local file %s should still exist after big-delete protection", name)
 	}
 
-	// Step 6: Sync with --force — should succeed.
+	// Step 6: Sync with --force — should succeed and apply the deletes.
 	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 
 	// Step 7: All local files should be deleted.
@@ -748,7 +767,7 @@ func TestE2E_Sync_BigDeleteProtection(t *testing.T) {
 	}
 
 	// Step 8: Re-sync is idempotent.
-	_, stderr = runCLIWithConfig(t, cfgPath, env, "sync")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 	assert.Contains(t, stderr, "No changes detected")
 }
 
