@@ -126,21 +126,21 @@ func TestCheckpoint_PrunesDeletedRemoteState(t *testing.T) {
 	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"drv1", "old-item", "/old.txt", "file", "deleted", oldTime)
+		"drv1", "old-item", "/old.txt", "file", synctypes.SyncStatusDeleted, oldTime)
 	require.NoError(t, err)
 
 	// Insert a deleted row newer than retention (should survive).
 	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"drv1", "new-item", "/new.txt", "file", "deleted", newTime)
+		"drv1", "new-item", "/new.txt", "file", synctypes.SyncStatusDeleted, newTime)
 	require.NoError(t, err)
 
 	// Insert a synced row (should never be pruned regardless of age).
 	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"drv1", "synced-item", "/synced.txt", "file", "synced", oldTime)
+		"drv1", "synced-item", "/synced.txt", "file", synctypes.SyncStatusSynced, oldTime)
 	require.NoError(t, err)
 
 	require.NoError(t, mgr.Checkpoint(ctx, retention))
@@ -206,7 +206,7 @@ func TestCheckpoint_ZeroRetentionSkipsPruning(t *testing.T) {
 	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"drv1", "item1", "/old.txt", "file", "deleted", oldTime)
+		"drv1", "item1", "/old.txt", "file", synctypes.SyncStatusDeleted, oldTime)
 	require.NoError(t, err)
 
 	// Zero retention = WAL checkpoint only, no pruning.
@@ -2042,7 +2042,7 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"d!abc123", "item1", "/test.txt", "file", "pending_download", 1700000000)
+		"d!abc123", "item1", "/test.txt", "file", synctypes.SyncStatusPendingDownload, 1700000000)
 	require.NoError(t, err)
 
 	// Verify sync_failures table structure: insert + query.
@@ -2071,21 +2071,21 @@ func TestConsolidatedSchema_RemoteStateActivePathUnique(t *testing.T) {
 	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"d!abc123", "item1", "/test.txt", "file", "synced", 1700000000)
+		"d!abc123", "item1", "/test.txt", "file", synctypes.SyncStatusSynced, 1700000000)
 	require.NoError(t, err)
 
 	// Another active item at the same path should be rejected by the partial unique index.
 	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"d!abc123", "item2", "/test.txt", "file", "pending_download", 1700000000)
+		"d!abc123", "item2", "/test.txt", "file", synctypes.SyncStatusPendingDownload, 1700000000)
 	require.Error(t, err, "duplicate active path should be rejected")
 
 	// A deleted item at the same path should be allowed.
 	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"d!abc123", "item3", "/test.txt", "file", "deleted", 1700000000)
+		"d!abc123", "item3", "/test.txt", "file", synctypes.SyncStatusDeleted, 1700000000)
 	require.NoError(t, err, "deleted item at same path should be allowed")
 }
 
@@ -2226,7 +2226,7 @@ func TestSetDispatchStatus_Download(t *testing.T) {
 	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"d!abc", "item1", "/test.txt", "file", "pending_download", 1700000000)
+		"d!abc", "item1", "/test.txt", "file", synctypes.SyncStatusPendingDownload, 1700000000)
 	require.NoError(t, err)
 
 	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", synctypes.ActionDownload))
@@ -2250,7 +2250,7 @@ func TestSetDispatchStatus_DownloadFromFailed(t *testing.T) {
 	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"d!abc", "item1", "/test.txt", "file", "download_failed", 1700000000)
+		"d!abc", "item1", "/test.txt", "file", synctypes.SyncStatusDownloadFailed, 1700000000)
 	require.NoError(t, err)
 
 	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", synctypes.ActionDownload))
@@ -2274,7 +2274,7 @@ func TestSetDispatchStatus_LocalDelete(t *testing.T) {
 	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"d!abc", "item1", "/test.txt", "file", "pending_delete", 1700000000)
+		"d!abc", "item1", "/test.txt", "file", synctypes.SyncStatusPendingDelete, 1700000000)
 	require.NoError(t, err)
 
 	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", synctypes.ActionLocalDelete))
@@ -2298,7 +2298,7 @@ func TestSetDispatchStatus_DeleteFromFailed(t *testing.T) {
 	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"d!abc", "item1", "/test.txt", "file", "delete_failed", 1700000000)
+		"d!abc", "item1", "/test.txt", "file", synctypes.SyncStatusDeleteFailed, 1700000000)
 	require.NoError(t, err)
 
 	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", synctypes.ActionLocalDelete))
@@ -2322,7 +2322,7 @@ func TestSetDispatchStatus_NoMatchingRow(t *testing.T) {
 	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"d!abc", "item1", "/test.txt", "file", "synced", 1700000000)
+		"d!abc", "item1", "/test.txt", "file", synctypes.SyncStatusSynced, 1700000000)
 	require.NoError(t, err)
 
 	// Should be a no-op (no error, no change).
@@ -2373,7 +2373,7 @@ func TestResetInProgressStates_DeleteFileAbsent(t *testing.T) {
 	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"d!abc", "item1", "gone.txt", "file", "deleting", 1700000000)
+		"d!abc", "item1", "gone.txt", "file", synctypes.SyncStatusDeleting, 1700000000)
 	require.NoError(t, err)
 
 	testDelay := func(_ int) time.Duration { return time.Second }
@@ -2403,7 +2403,7 @@ func TestResetInProgressStates_DeleteFileExists(t *testing.T) {
 	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"d!abc", "item1", "exists.txt", "file", "deleting", 1700000000)
+		"d!abc", "item1", "exists.txt", "file", synctypes.SyncStatusDeleting, 1700000000)
 	require.NoError(t, err)
 
 	testDelay := func(_ int) time.Duration { return time.Second }
@@ -2430,7 +2430,7 @@ func TestResetInProgressStates_DownloadStillResetsToPending(t *testing.T) {
 	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"d!abc", "item1", "dl.txt", "file", "downloading", 1700000000)
+		"d!abc", "item1", "dl.txt", "file", synctypes.SyncStatusDownloading, 1700000000)
 	require.NoError(t, err)
 
 	testDelay := func(_ int) time.Duration { return time.Second }
@@ -2458,12 +2458,14 @@ func TestResetInProgressStates_MixedStates(t *testing.T) {
 
 	// Insert: downloading, deleting (file absent), deleting (file exists), synced.
 	for _, row := range []struct {
-		id, path, status string
+		id     string
+		path   string
+		status synctypes.SyncStatus
 	}{
-		{"i1", "downloading.txt", "downloading"},
-		{"i2", "no-file.txt", "deleting"},
-		{"i3", "has-file.txt", "deleting"},
-		{"i4", "synced.txt", "synced"},
+		{"i1", "downloading.txt", synctypes.SyncStatusDownloading},
+		{"i2", "no-file.txt", synctypes.SyncStatusDeleting},
+		{"i3", "has-file.txt", synctypes.SyncStatusDeleting},
+		{"i4", "synced.txt", synctypes.SyncStatusSynced},
 	} {
 		_, err := mgr.DB().ExecContext(ctx,
 			`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
@@ -2505,7 +2507,7 @@ func TestResetInProgressStates_CreatesSyncFailures_Download(t *testing.T) {
 	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"d!abc", "item1", "dl.txt", "file", "downloading", 1700000000)
+		"d!abc", "item1", "dl.txt", "file", synctypes.SyncStatusDownloading, 1700000000)
 	require.NoError(t, err)
 
 	testDelay := func(_ int) time.Duration { return time.Second }
@@ -2543,7 +2545,7 @@ func TestResetInProgressStates_CreatesSyncFailures_Delete(t *testing.T) {
 	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"d!abc", "item1", "del.txt", "file", "deleting", 1700000000)
+		"d!abc", "item1", "del.txt", "file", synctypes.SyncStatusDeleting, 1700000000)
 	require.NoError(t, err)
 
 	testDelay := func(_ int) time.Duration { return time.Second }
@@ -2570,7 +2572,7 @@ func TestResetInProgressStates_NoSyncFailure_DeleteComplete(t *testing.T) {
 	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"d!abc", "item1", "gone.txt", "file", "deleting", 1700000000)
+		"d!abc", "item1", "gone.txt", "file", synctypes.SyncStatusDeleting, 1700000000)
 	require.NoError(t, err)
 
 	testDelay := func(_ int) time.Duration { return time.Second }
