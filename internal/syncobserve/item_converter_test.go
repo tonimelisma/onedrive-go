@@ -394,6 +394,60 @@ func TestPrimaryConverter_ShortcutDetection(t *testing.T) {
 	assert.Equal(t, "remote-drive", ev.RemoteDriveID)
 }
 
+// TestPrimaryConverter_ShortcutDetection_NoFolderFacet verifies that shared
+// folder shortcuts are classified as ChangeShortcut even when the Graph API
+// delta endpoint omits the folder facet (IsFolder=false). The presence of
+// RemoteDriveID is sufficient.
+func TestPrimaryConverter_ShortcutDetection_NoFolderFacet(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	bl := synctest.EmptyBaseline()
+	c := NewPrimaryConverter(bl, driveID, synctest.TestLogger(t), &ObserverCounters{})
+
+	inflight := map[driveid.ItemKey]InflightParent{
+		driveid.NewItemKey(driveID, "root"): {Name: "", IsRoot: true},
+	}
+
+	// Shared folder shortcut WITHOUT folder facet — this is what the delta
+	// endpoint returns for items under "My Shared Folders".
+	item := &graph.Item{
+		ID: "sc-2", Name: "Testi Shared Folder", ParentID: "root", DriveID: driveID,
+		IsFolder: false, RemoteDriveID: "remote-drive-2", RemoteItemID: "remote-item-2",
+	}
+
+	ev := c.ClassifyItem(item, inflight)
+	require.NotNil(t, ev, "shortcut without folder facet should produce an event")
+	assert.Equal(t, synctypes.ChangeShortcut, ev.Type, "RemoteDriveID alone should trigger shortcut classification")
+	assert.Equal(t, "Testi Shared Folder", ev.Path)
+	assert.Equal(t, "remote-drive-2", ev.RemoteDriveID)
+	assert.Equal(t, "remote-item-2", ev.RemoteItemID)
+}
+
+// TestPrimaryConverter_RegularFileNotShortcut verifies that a regular file
+// without RemoteDriveID is classified as a normal create, not a shortcut.
+func TestPrimaryConverter_RegularFileNotShortcut(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	bl := synctest.EmptyBaseline()
+	c := NewPrimaryConverter(bl, driveID, synctest.TestLogger(t), &ObserverCounters{})
+
+	inflight := map[driveid.ItemKey]InflightParent{
+		driveid.NewItemKey(driveID, "root"): {Name: "", IsRoot: true},
+	}
+
+	item := &graph.Item{
+		ID: "f1", Name: "document.txt", ParentID: "root", DriveID: driveID,
+		Size: 256,
+	}
+
+	ev := c.ClassifyItem(item, inflight)
+	require.NotNil(t, ev)
+	assert.Equal(t, synctypes.ChangeCreate, ev.Type, "regular file should be ChangeCreate")
+	assert.Empty(t, ev.RemoteDriveID, "regular file should have empty RemoteDriveID")
+}
+
 // TestPrimaryConverter_NilStatsIsSafe verifies that a nil stats pointer
 // doesn't panic (shortcut converter has nil stats).
 func TestPrimaryConverter_NilStatsIsSafe(t *testing.T) {

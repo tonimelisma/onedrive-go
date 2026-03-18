@@ -89,11 +89,12 @@ func TestE2E_SharedFolder_OwnerUpload_RecipientDownload(t *testing.T) {
 
 	// Run download-only sync. The shared folder's shortcut should be detected
 	// and content observed.
-	stdout, _ := runCLIWithConfigForDrive(t, recipientCfg, recipientEnv, drive2,
+	_, stderr := runCLIWithConfigForDrive(t, recipientCfg, recipientEnv, drive2,
 		"sync", "--force", "--download-only")
 
-	// Verify the sync completed.
-	assert.Contains(t, stdout, "Sync complete",
+	// Verify the sync completed. Status output (Mode, Duration, Plan, Results)
+	// goes to stderr via CLIContext.Statusf.
+	assert.Contains(t, stderr, "Mode: download-only",
 		"sync should complete successfully for recipient")
 }
 
@@ -136,10 +137,10 @@ func TestE2E_SharedFolder_RecipientSyncTwice_Idempotent(t *testing.T) {
 	runCLIWithConfigForDrive(t, recipientCfg, recipientEnv, drive2,
 		"sync", "--force", "--download-only")
 
-	// Second sync — should report no changes.
-	stdout, _ := runCLIWithConfigForDrive(t, recipientCfg, recipientEnv, drive2,
+	// Second sync — should report no changes. Status output goes to stderr.
+	_, stderr := runCLIWithConfigForDrive(t, recipientCfg, recipientEnv, drive2,
 		"sync", "--force", "--download-only")
 
-	assert.Contains(t, stdout, "No changes detected",
+	assert.Contains(t, stderr, "No changes detected",
 		"second sync should report no changes")
 }
