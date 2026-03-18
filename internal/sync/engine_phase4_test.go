@@ -15,7 +15,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
 	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -655,7 +654,7 @@ func TestGetRemoteStateByPath_Found(t *testing.T) {
 	assert.Equal(t, int64(4096), row.Size)
 	assert.Equal(t, int64(1000000000), row.Mtime)
 	assert.Equal(t, "etag-1", row.ETag)
-	assert.Equal(t, syncstore.StatusPendingDownload, row.SyncStatus)
+	assert.Equal(t, synctypes.SyncStatusPendingDownload, row.SyncStatus)
 }
 
 func TestGetRemoteStateByPath_NotFound(t *testing.T) {
@@ -715,7 +714,7 @@ func TestRemoteStateToChangeEvent_Download(t *testing.T) {
 		Size:       8192,
 		Mtime:      2000000000,
 		ETag:       "etag-42",
-		SyncStatus: syncstore.StatusPendingDownload,
+		SyncStatus: synctypes.SyncStatusPendingDownload,
 	}
 
 	ev := remoteStateToChangeEvent(rs, "docs/file.txt")
@@ -739,8 +738,8 @@ func TestRemoteStateToChangeEvent_Delete(t *testing.T) {
 	t.Parallel()
 
 	// Test all delete-family statuses.
-	for _, status := range []string{syncstore.StatusDeleted, syncstore.StatusDeleting, syncstore.StatusDeleteFailed, syncstore.StatusPendingDelete} {
-		t.Run(status, func(t *testing.T) {
+	for _, status := range []synctypes.SyncStatus{synctypes.SyncStatusDeleted, synctypes.SyncStatusDeleting, synctypes.SyncStatusDeleteFailed, synctypes.SyncStatusPendingDelete} {
+		t.Run(string(status), func(t *testing.T) {
 			t.Parallel()
 
 			rs := &synctypes.RemoteStateRow{
@@ -767,7 +766,7 @@ func TestRemoteStateToChangeEvent_Folder(t *testing.T) {
 		DriveID:    driveid.New("drive1"),
 		ItemID:     "item-folder",
 		Path:       "photos/vacation",
-		SyncStatus: syncstore.StatusPendingDownload,
+		SyncStatus: synctypes.SyncStatusPendingDownload,
 		ItemType:   synctypes.StrFolder,
 	}
 
@@ -928,7 +927,7 @@ func TestIsFailureResolved_Download_Synced(t *testing.T) {
 
 	_, err := eng.baseline.DB().ExecContext(ctx,
 		`UPDATE remote_state SET sync_status = ? WHERE item_id = ?`,
-		syncstore.StatusSynced, "resolved-item",
+		synctypes.SyncStatusSynced, "resolved-item",
 	)
 	require.NoError(t, err)
 
@@ -1412,8 +1411,8 @@ func TestRetrierSweep_SkipsResolvedFailures_D11(t *testing.T) {
 	driveID := driveid.New("drive1")
 	eng.baseline.SetNowFunc(eng.nowFn)
 
-	// Seed remote_state: d11-synced will be set to syncstore.StatusSynced (resolved),
-	// d11-pending stays at syncstore.StatusPendingDownload (not resolved).
+	// Seed remote_state: d11-synced will be set to synctypes.SyncStatusSynced (resolved),
+	// d11-pending stays at synctypes.SyncStatusPendingDownload (not resolved).
 	require.NoError(t, eng.baseline.CommitObservation(ctx, []synctypes.ObservedItem{
 		{
 			DriveID:  driveID,
@@ -1438,7 +1437,7 @@ func TestRetrierSweep_SkipsResolvedFailures_D11(t *testing.T) {
 	// (pending_download → downloading → synced) isn't needed for this test.
 	_, err := eng.baseline.DB().ExecContext(ctx,
 		`UPDATE remote_state SET sync_status = ? WHERE item_id = ?`,
-		syncstore.StatusSynced, "synced-item",
+		synctypes.SyncStatusSynced, "synced-item",
 	)
 	require.NoError(t, err)
 

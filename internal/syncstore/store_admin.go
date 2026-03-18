@@ -41,7 +41,7 @@ func (m *SyncStore) ListUnreconciled(ctx context.Context) ([]synctypes.RemoteSta
 		`SELECT drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
 			previous_path, sync_status, observed_at
 		FROM remote_state WHERE sync_status NOT IN (?, ?, ?)`,
-		statusSynced, statusFiltered, statusDeleted,
+		synctypes.SyncStatusSynced, synctypes.SyncStatusFiltered, synctypes.SyncStatusDeleted,
 	)
 }
 
@@ -53,7 +53,8 @@ func (m *SyncStore) ListActionableRemoteState(ctx context.Context) ([]synctypes.
 			previous_path, sync_status, observed_at
 		FROM remote_state
 		WHERE sync_status IN (?, ?, ?, ?)`,
-		statusPendingDownload, statusDownloadFailed, statusPendingDelete, statusDeleteFailed,
+		synctypes.SyncStatusPendingDownload, synctypes.SyncStatusDownloadFailed,
+		synctypes.SyncStatusPendingDelete, synctypes.SyncStatusDeleteFailed,
 	)
 }
 
@@ -126,7 +127,7 @@ func (m *SyncStore) ResetFailure(ctx context.Context, path string) error {
 	// download_failed → pending_download
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE remote_state SET sync_status = ? WHERE path = ? AND sync_status = ?`,
-		statusPendingDownload, path, statusDownloadFailed,
+		synctypes.SyncStatusPendingDownload, path, synctypes.SyncStatusDownloadFailed,
 	); err != nil {
 		return fmt.Errorf("sync: resetting download failure for %s: %w", path, err)
 	}
@@ -135,7 +136,7 @@ func (m *SyncStore) ResetFailure(ctx context.Context, path string) error {
 	// should be re-attempted as a delete, not a download).
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE remote_state SET sync_status = ? WHERE path = ? AND sync_status = ?`,
-		statusPendingDelete, path, statusDeleteFailed,
+		synctypes.SyncStatusPendingDelete, path, synctypes.SyncStatusDeleteFailed,
 	); err != nil {
 		return fmt.Errorf("sync: resetting delete failure for %s: %w", path, err)
 	}
@@ -159,7 +160,7 @@ func (m *SyncStore) ResetFailure(ctx context.Context, path string) error {
 func (m *SyncStore) ResetAllFailures(ctx context.Context) error {
 	_, err := m.db.ExecContext(ctx,
 		`UPDATE remote_state SET sync_status = ? WHERE sync_status = ?`,
-		statusPendingDownload, statusDownloadFailed,
+		synctypes.SyncStatusPendingDownload, synctypes.SyncStatusDownloadFailed,
 	)
 	if err != nil {
 		return fmt.Errorf("sync: resetting download failures: %w", err)
@@ -167,7 +168,7 @@ func (m *SyncStore) ResetAllFailures(ctx context.Context) error {
 
 	_, err = m.db.ExecContext(ctx,
 		`UPDATE remote_state SET sync_status = ? WHERE sync_status = ?`,
-		statusPendingDelete, statusDeleteFailed,
+		synctypes.SyncStatusPendingDelete, synctypes.SyncStatusDeleteFailed,
 	)
 	if err != nil {
 		return fmt.Errorf("sync: resetting delete failures: %w", err)
@@ -200,7 +201,7 @@ func (m *SyncStore) ResetInProgressStates(ctx context.Context, syncRoot string, 
 	// Phase 1: Collect items that were downloading before reset.
 	// We need to query BEFORE the status update to identify which items
 	// were actually in-progress (not already pending_download).
-	downloadingRows, err := m.queryResetCandidates(ctx, statusDownloading)
+	downloadingRows, err := m.queryResetCandidates(ctx, synctypes.SyncStatusDownloading)
 	if err != nil {
 		return fmt.Errorf("sync: querying downloading candidates: %w", err)
 	}
@@ -208,14 +209,14 @@ func (m *SyncStore) ResetInProgressStates(ctx context.Context, syncRoot string, 
 	// downloading → pending_download (unconditional).
 	_, err = m.db.ExecContext(ctx,
 		`UPDATE remote_state SET sync_status = ? WHERE sync_status = ?`,
-		statusPendingDownload, statusDownloading,
+		synctypes.SyncStatusPendingDownload, synctypes.SyncStatusDownloading,
 	)
 	if err != nil {
 		return fmt.Errorf("sync: resetting downloading states: %w", err)
 	}
 
 	// deleting → check filesystem to determine correct target state.
-	deletingRows, err := m.queryResetCandidates(ctx, statusDeleting)
+	deletingRows, err := m.queryResetCandidates(ctx, synctypes.SyncStatusDeleting)
 	if err != nil {
 		return fmt.Errorf("sync: querying deleting candidates: %w", err)
 	}
@@ -226,13 +227,13 @@ func (m *SyncStore) ResetInProgressStates(ctx context.Context, syncRoot string, 
 	for _, r := range deletingRows {
 		fullPath := filepath.Join(syncRoot, r.path)
 
-		var newStatus string
+		var newStatus synctypes.SyncStatus
 		if _, statErr := os.Stat(fullPath); statErr != nil {
 			// File absent (deleted successfully before crash).
-			newStatus = statusDeleted
+			newStatus = synctypes.SyncStatusDeleted
 		} else {
 			// File still exists (delete didn't complete).
-			newStatus = statusPendingDelete
+			newStatus = synctypes.SyncStatusPendingDelete
 			pendingDeleteRows = append(pendingDeleteRows, r)
 		}
 
@@ -268,7 +269,7 @@ type resetCandidate struct {
 
 // queryResetCandidates returns identity info for remote_state rows matching
 // a given status. Used to capture row data before the bulk status update.
-func (m *SyncStore) queryResetCandidates(ctx context.Context, status string) ([]resetCandidate, error) {
+func (m *SyncStore) queryResetCandidates(ctx context.Context, status synctypes.SyncStatus) ([]resetCandidate, error) {
 	rows, err := m.db.QueryContext(ctx,
 		`SELECT drive_id, item_id, path FROM remote_state WHERE sync_status = ?`,
 		status,
@@ -324,8 +325,8 @@ func (m *SyncStore) SetDispatchStatus(ctx context.Context, driveID, itemID strin
 		_, err := m.db.ExecContext(ctx,
 			`UPDATE remote_state SET sync_status = ?
 			WHERE drive_id = ? AND item_id = ? AND sync_status IN (?, ?)`,
-			statusDownloading,
-			driveID, itemID, statusPendingDownload, statusDownloadFailed,
+			synctypes.SyncStatusDownloading,
+			driveID, itemID, synctypes.SyncStatusPendingDownload, synctypes.SyncStatusDownloadFailed,
 		)
 		if err != nil {
 			return fmt.Errorf("sync: setting dispatch status downloading for %s: %w", itemID, err)
@@ -335,8 +336,8 @@ func (m *SyncStore) SetDispatchStatus(ctx context.Context, driveID, itemID strin
 		_, err := m.db.ExecContext(ctx,
 			`UPDATE remote_state SET sync_status = ?
 			WHERE drive_id = ? AND item_id = ? AND sync_status IN (?, ?)`,
-			statusDeleting,
-			driveID, itemID, statusPendingDelete, statusDeleteFailed,
+			synctypes.SyncStatusDeleting,
+			driveID, itemID, synctypes.SyncStatusPendingDelete, synctypes.SyncStatusDeleteFailed,
 		)
 		if err != nil {
 			return fmt.Errorf("sync: setting dispatch status deleting for %s: %w", itemID, err)
