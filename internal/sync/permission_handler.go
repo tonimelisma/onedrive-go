@@ -26,12 +26,9 @@ type PermissionHandler struct {
 	logger      *slog.Logger
 	nowFn       func() time.Time
 
-	// Function callbacks that delegate to Engine methods. These break
-	// the circular dependency: PermissionHandler needs scope management
-	// (which lives on Engine/watchState) without importing Engine itself.
-	setScopeBlockFn func(key synctypes.ScopeKey, block *synctypes.ScopeBlock)
-	onScopeClearFn  func(ctx context.Context, key synctypes.ScopeKey)
-	isWatchModeFn   func() bool
+	// scopeMgr abstracts Engine's scope lifecycle operations. Replaces
+	// individual function callbacks with a single narrow interface.
+	scopeMgr scopeManager
 }
 
 // HasPermChecker reports whether a remote permission checker is configured.
@@ -363,7 +360,7 @@ func (ph *PermissionHandler) handleLocalPermission(ctx context.Context, r *synct
 
 	// Create a scope block — no trials for permission blocks (rechecked per-pass
 	// by recheckLocalPermissions instead).
-	ph.setScopeBlockFn(scopeKey, &synctypes.ScopeBlock{
+	ph.scopeMgr.setScopeBlock(scopeKey, &synctypes.ScopeBlock{
 		Key:       scopeKey,
 		IssueType: synctypes.IssueLocalPermissionDenied,
 		BlockedAt: ph.nowFn(),
@@ -410,8 +407,8 @@ func (ph *PermissionHandler) recheckLocalPermissions(ctx context.Context) {
 			continue
 		}
 
-		if ph.isWatchModeFn() {
-			ph.onScopeClearFn(ctx, issue.ScopeKey)
+		if ph.scopeMgr.isWatchMode() {
+			ph.scopeMgr.onScopeClear(ctx, issue.ScopeKey)
 		}
 
 		ph.logger.Info("local permission restored, clearing denial",
@@ -468,8 +465,8 @@ func (ph *PermissionHandler) clearScannerResolvedPermissions(ctx context.Context
 			continue
 		}
 
-		if !issue.ScopeKey.IsZero() && ph.isWatchModeFn() {
-			ph.onScopeClearFn(ctx, issue.ScopeKey)
+		if !issue.ScopeKey.IsZero() && ph.scopeMgr.isWatchMode() {
+			ph.scopeMgr.onScopeClear(ctx, issue.ScopeKey)
 		}
 
 		ph.logger.Info("scanner resolved permission denial",

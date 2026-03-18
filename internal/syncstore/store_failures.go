@@ -222,9 +222,9 @@ func (m *SyncStore) transitionRemoteStateOnFailure(ctx context.Context, tx *sql.
 				WHEN ? THEN ?
 			END
 		WHERE path = ? AND sync_status IN (?, ?)`,
-		statusDownloading, statusDownloadFailed,
-		statusDeleting, statusDeleteFailed,
-		path, statusDownloading, statusDeleting,
+		synctypes.SyncStatusDownloading, synctypes.SyncStatusDownloadFailed,
+		synctypes.SyncStatusDeleting, synctypes.SyncStatusDeleteFailed,
+		path, synctypes.SyncStatusDownloading, synctypes.SyncStatusDeleting,
 	)
 	if execErr != nil {
 		return fmt.Errorf("sync: transitioning remote_state for %s: %w", path, execErr)

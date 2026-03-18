@@ -25,6 +25,17 @@ const (
 	StrConflict     = "conflict"
 	StrUpdateSynced = "update_synced"
 	StrCleanup      = "cleanup"
+
+	// SyncStatus string constants — remote_state sync_status column values.
+	StrPendingDownload = "pending_download"
+	StrDownloading     = "downloading"
+	StrDownloadFailed  = "download_failed"
+	StrSynced          = "synced"
+	StrPendingDelete   = "pending_delete"
+	StrDeleting        = "deleting"
+	StrDeleteFailed    = "delete_failed"
+	StrDeleted         = "deleted"
+	StrFiltered        = "filtered"
 )
 
 // Direction represents the direction of a sync action (upload, download, delete).
@@ -45,6 +56,24 @@ type FailureCategory string
 const (
 	CategoryTransient  FailureCategory = StrTransient
 	CategoryActionable FailureCategory = StrActionable
+)
+
+// SyncStatus represents the sync_status of a remote_state row. Stored as TEXT
+// in SQLite — type SyncStatus string serializes identically to raw strings,
+// so no migration is needed. Matches the CHECK constraint in the remote_state
+// table (migrations/00001_consolidated_schema.sql).
+type SyncStatus string
+
+const (
+	SyncStatusPendingDownload SyncStatus = StrPendingDownload
+	SyncStatusDownloading     SyncStatus = StrDownloading
+	SyncStatusDownloadFailed  SyncStatus = StrDownloadFailed
+	SyncStatusSynced          SyncStatus = StrSynced
+	SyncStatusPendingDelete   SyncStatus = StrPendingDelete
+	SyncStatusDeleting        SyncStatus = StrDeleting
+	SyncStatusDeleteFailed    SyncStatus = StrDeleteFailed
+	SyncStatusDeleted         SyncStatus = StrDeleted
+	SyncStatusFiltered        SyncStatus = StrFiltered
 )
 
 // Resolution strategy constants for conflict resolution.

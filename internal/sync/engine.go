@@ -229,16 +229,14 @@ func NewEngine(cfg *synctypes.EngineConfig) (*Engine, error) {
 	}
 
 	e.permHandler = &PermissionHandler{
-		baseline:        e.baseline,
-		permChecker:     cfg.PermChecker,
-		permCache:       newPermissionCache(),
-		syncRoot:        cfg.SyncRoot,
-		driveID:         cfg.DriveID,
-		logger:          cfg.Logger,
-		nowFn:           e.nowFunc,
-		setScopeBlockFn: e.setScopeBlock,
-		onScopeClearFn:  e.onScopeClear,
-		isWatchModeFn:   func() bool { return e.watch != nil },
+		baseline:    e.baseline,
+		permChecker: cfg.PermChecker,
+		permCache:   newPermissionCache(),
+		syncRoot:    cfg.SyncRoot,
+		driveID:     cfg.DriveID,
+		logger:      cfg.Logger,
+		nowFn:       e.nowFunc,
+		scopeMgr:    e,
 	}
 
 	return e, nil
@@ -1453,6 +1451,10 @@ func (e *Engine) feedScopeDetection(r *synctypes.WorkerResult) {
 	}
 }
 
+// isWatchMode reports whether the engine is running in watch mode.
+// Part of the scopeManager interface.
+func (e *Engine) isWatchMode() bool { return e.watch != nil }
+
 // setScopeBlock writes a scope block to the ScopeGate.
 func (e *Engine) setScopeBlock(key synctypes.ScopeKey, block *synctypes.ScopeBlock) {
 	if e.watch == nil {
@@ -2153,8 +2155,8 @@ func remoteStateToChangeEvent(rs *synctypes.RemoteStateRow, path string) *syncty
 	ct := synctypes.ChangeModify
 	isDeleted := false
 
-	switch rs.SyncStatus {
-	case syncstore.StatusDeleted, syncstore.StatusDeleting, syncstore.StatusDeleteFailed, syncstore.StatusPendingDelete:
+	switch rs.SyncStatus { //nolint:exhaustive // non-delete statuses all map to ChangeModify
+	case synctypes.SyncStatusDeleted, synctypes.SyncStatusDeleting, synctypes.SyncStatusDeleteFailed, synctypes.SyncStatusPendingDelete:
 		ct = synctypes.ChangeDelete
 		isDeleted = true
 	}
@@ -2299,8 +2301,8 @@ func (e *Engine) isFailureResolved(ctx context.Context, row *synctypes.SyncFailu
 		if rs == nil {
 			resolved = true
 		} else {
-			switch rs.SyncStatus {
-			case syncstore.StatusSynced, syncstore.StatusDeleted, syncstore.StatusFiltered:
+			switch rs.SyncStatus { //nolint:exhaustive // only terminal statuses mean resolved
+			case synctypes.SyncStatusSynced, synctypes.SyncStatusDeleted, synctypes.SyncStatusFiltered:
 				resolved = true
 			}
 		}
@@ -2666,15 +2668,23 @@ func (e *Engine) resetResultStats() {
 }
 
 // directionFromAction maps a synctypes.ActionType to a typed Direction enum.
+// All ActionType values are explicitly covered — no default case, so the
+// exhaustive linter catches any new ActionType values added in the future.
 func directionFromAction(at synctypes.ActionType) synctypes.Direction {
-	switch at { //nolint:exhaustive // most action types map to download
+	switch at {
 	case synctypes.ActionUpload:
 		return synctypes.DirectionUpload
+	case synctypes.ActionDownload, synctypes.ActionFolderCreate, synctypes.ActionConflict:
+		return synctypes.DirectionDownload
 	case synctypes.ActionLocalDelete, synctypes.ActionRemoteDelete:
 		return synctypes.DirectionDelete
-	default:
+	case synctypes.ActionLocalMove, synctypes.ActionRemoteMove,
+		synctypes.ActionUpdateSynced, synctypes.ActionCleanup:
+		// Metadata ops default to download direction for failure recording.
 		return synctypes.DirectionDownload
 	}
+	// Unreachable — all ActionType values are covered above.
+	return synctypes.DirectionDownload
 }
 
 // armTrialTimer sets (or resets) the trial timer to fire at the earliest

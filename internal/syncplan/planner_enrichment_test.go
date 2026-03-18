@@ -1,4 +1,4 @@
-package syncobserve
+package syncplan
 
 import (
 	"testing"
@@ -7,7 +7,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/syncplan"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -25,7 +24,7 @@ import (
 // (LocalHash=AAA), if the server modifies it (RemoteHash=BBB), the next sync
 // run does NOT produce an upload action because LocalHash still matches.
 func TestPerSideHash_PreventsReUploadLoop(t *testing.T) {
-	planner := syncplan.NewPlanner(synctest.TestLogger(t))
+	planner := NewPlanner(synctest.TestLogger(t))
 
 	// Baseline: local and remote hashes diverge (SharePoint enrichment).
 	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
@@ -78,7 +77,7 @@ func TestPerSideHash_PreventsReUploadLoop(t *testing.T) {
 // download, if the local file's hash differs from remote (because server
 // enriched it), the next run does NOT produce a download action.
 func TestPerSideHash_PreventsReDownloadLoop(t *testing.T) {
-	planner := syncplan.NewPlanner(synctest.TestLogger(t))
+	planner := NewPlanner(synctest.TestLogger(t))
 
 	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
 		Path:       "enriched.pptx",
@@ -139,7 +138,7 @@ func TestPerSideHash_5RunStabilityProof(t *testing.T) {
 	})
 
 	for run := range 5 {
-		planner := syncplan.NewPlanner(synctest.TestLogger(t))
+		planner := NewPlanner(synctest.TestLogger(t))
 
 		changes := []synctypes.PathChanges{
 			{
@@ -179,7 +178,7 @@ func TestPerSideHash_5RunStabilityProof(t *testing.T) {
 // files where LocalHash == RemoteHash, the per-side hash scheme does not
 // interfere with normal change detection.
 func TestPerSideHash_NormalDriveUnaffected(t *testing.T) {
-	planner := syncplan.NewPlanner(synctest.TestLogger(t))
+	planner := NewPlanner(synctest.TestLogger(t))
 
 	// Normal case: both hashes are the same.
 	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{

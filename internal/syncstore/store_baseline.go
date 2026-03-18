@@ -466,8 +466,8 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *synctypes.Ou
 		_, err := tx.ExecContext(ctx,
 			`UPDATE remote_state SET sync_status = ?
 			WHERE drive_id = ? AND item_id = ? AND sync_status = ? AND hash IS ?`,
-			statusSynced,
-			o.DriveID.String(), o.ItemID, statusDownloading, nullString(o.RemoteHash),
+			synctypes.SyncStatusSynced,
+			o.DriveID.String(), o.ItemID, synctypes.SyncStatusDownloading, nullString(o.RemoteHash),
 		)
 		if err != nil {
 			return fmt.Errorf("sync: updating remote_state for download %s: %w", o.Path, err)
@@ -477,8 +477,8 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *synctypes.Ou
 		_, err := tx.ExecContext(ctx,
 			`UPDATE remote_state SET sync_status = ?
 			WHERE drive_id = ? AND item_id = ? AND sync_status = ?`,
-			statusDeleted,
-			o.DriveID.String(), o.ItemID, statusDeleting,
+			synctypes.SyncStatusDeleted,
+			o.DriveID.String(), o.ItemID, synctypes.SyncStatusDeleting,
 		)
 		if err != nil {
 			return fmt.Errorf("sync: updating remote_state for local delete %s: %w", o.Path, err)
@@ -489,7 +489,7 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *synctypes.Ou
 		_, err := tx.ExecContext(ctx,
 			`UPDATE remote_state SET sync_status = ?, hash = ?, size = ?, mtime = ?
 			WHERE drive_id = ? AND item_id = ?`,
-			statusSynced, nullString(o.RemoteHash), nullInt64(o.Size), nullInt64(o.Mtime),
+			synctypes.SyncStatusSynced, nullString(o.RemoteHash), nullInt64(o.Size), nullInt64(o.Mtime),
 			o.DriveID.String(), o.ItemID,
 		)
 		if err != nil {
@@ -501,7 +501,7 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *synctypes.Ou
 		_, err := tx.ExecContext(ctx,
 			`UPDATE remote_state SET path = ?, sync_status = ?
 			WHERE drive_id = ? AND item_id = ?`,
-			o.Path, statusSynced,
+			o.Path, synctypes.SyncStatusSynced,
 			o.DriveID.String(), o.ItemID,
 		)
 		if err != nil {
