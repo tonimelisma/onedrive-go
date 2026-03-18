@@ -188,8 +188,10 @@ func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[driveid.Item
 	}
 
 	// Shortcut detection (6.4a.2): items with a remoteItem facet pointing to
-	// another drive AND IsFolder are shortcuts.
-	if c.EnableShortcutDetect && item.IsFolder && item.RemoteDriveID != "" && !item.IsDeleted {
+	// another drive are shortcuts. The folder facet may be absent on shared
+	// folder shortcuts returned by the delta endpoint — RemoteDriveID alone
+	// is sufficient to identify a shortcut.
+	if c.EnableShortcutDetect && item.RemoteDriveID != "" && !item.IsDeleted {
 		return c.classifyShortcut(item, inflight, itemDriveID)
 	}
 

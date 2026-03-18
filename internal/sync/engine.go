@@ -352,7 +352,9 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 	e.permHandler.recheckLocalPermissions(ctx)
 
 	// Steps 2-4: Observe remote + local, buffer, and flush.
-	changes, err := e.observeChanges(ctx, bl, mode, opts.DryRun, opts.FullReconcile)
+	// The pending delta token is returned but NOT committed yet — it is
+	// deferred until after the planner approves the changes (step 6).
+	changes, pendingDeltaToken, err := e.observeChanges(ctx, bl, mode, opts.DryRun, opts.FullReconcile)
 	if err != nil {
 		return nil, err
 	}
@@ -382,6 +384,13 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 
 	plan, err := e.planner.Plan(changes, bl, mode, safety, denied)
 	if err != nil {
+		// Big-delete protection (or other planner errors) — the delta token
+		// is NOT committed, so the next sync replays the same events.
+		return nil, err
+	}
+
+	// Planner approved — commit the deferred delta token now.
+	if err := e.commitDeferredDeltaToken(ctx, pendingDeltaToken); err != nil {
 		return nil, err
 	}
 
@@ -573,34 +582,38 @@ func (e *Engine) observeLocal(ctx context.Context, bl *synctypes.Baseline) (sync
 }
 
 // observeChanges runs remote and local observers based on mode, buffers their
-// events, and returns the flushed change set. Delta token is committed
-// atomically with observations in observeAndCommitRemote (skipped for dry-run
-// so that a subsequent real sync sees the same delta changes).
+// events, and returns the flushed change set plus a pending delta token.
+//
+// Observations (remote_state rows) are committed immediately. The delta token
+// is returned but NOT committed — the caller must commit it only after the
+// planner approves the changes (prevents big-delete protection from
+// permanently consuming deletion events). Skipped entirely for dry-run.
 //
 // When fullReconcile is true, runs a fresh delta with empty token (enumerates
 // ALL remote items) and detects orphans — baseline entries not in the full
 // enumeration, representing missed delta deletions.
 func (e *Engine) observeChanges(
 	ctx context.Context, bl *synctypes.Baseline, mode synctypes.SyncMode, dryRun, fullReconcile bool,
-) ([]synctypes.PathChanges, error) {
+) ([]synctypes.PathChanges, string, error) {
 	var remoteEvents []synctypes.ChangeEvent
+	var pendingDeltaToken string
 
 	var err error
 
 	if mode != synctypes.SyncUploadOnly {
 		if fullReconcile {
 			e.logger.Info("full reconciliation: enumerating all remote items")
-			remoteEvents, err = e.observeAndCommitRemoteFull(ctx, bl)
+			remoteEvents, pendingDeltaToken, err = e.observeAndCommitRemoteFull(ctx, bl)
 		} else if dryRun {
 			// Dry-run: observe without committing delta token or observations.
 			// A subsequent real sync must see the same remote changes.
 			remoteEvents, _, err = e.observeRemote(ctx, bl)
 		} else {
-			remoteEvents, err = e.observeAndCommitRemote(ctx, bl)
+			remoteEvents, pendingDeltaToken, err = e.observeAndCommitRemote(ctx, bl)
 		}
 
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 	}
 
@@ -629,7 +642,7 @@ func (e *Engine) observeChanges(
 	if mode != synctypes.SyncDownloadOnly {
 		localResult, err = e.observeLocal(ctx, bl)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 
 		// Record observation-time issues (invalid names, path too long, file too large).
@@ -647,22 +660,28 @@ func (e *Engine) observeChanges(
 	buf.AddAll(shortcutEvents)
 	buf.AddAll(localResult.Events)
 
-	return buf.FlushImmediate(), nil
+	return buf.FlushImmediate(), pendingDeltaToken, nil
 }
 
 // observeAndCommitRemote wraps observeRemote to persist observations
-// and delta token atomically via CommitObservation.
+// and return the pending delta token for deferred commitment.
+//
+// Observations (remote_state rows) are committed immediately so the baseline
+// reflects the current remote state. The delta token is NOT committed here —
+// it is returned to the caller, who must commit it only after the planner
+// approves the changes. This prevents big-delete protection from permanently
+// consuming deletion events: if the planner rejects the plan, the token stays
+// at its old position and the next sync replays the same delta window.
 //
 // When delta returns 0 events, the token is NOT advanced. The old token
 // still covers the same window — replaying it costs nothing (O(1)). But if
 // a deletion was still propagating to the Graph change log, advancing would
 // permanently skip it. Deletions are delivered exactly once in a narrow
-// window (ci_issues.md §20). This narrows but does not close the miss
-// window — events can also be excluded from non-empty batches.
-func (e *Engine) observeAndCommitRemote(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, error) {
+// window (ci_issues.md §20).
+func (e *Engine) observeAndCommitRemote(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, string, error) {
 	events, deltaToken, err := e.observeRemote(ctx, bl)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	// Skip token advancement when no events were returned. The old token
@@ -670,15 +689,36 @@ func (e *Engine) observeAndCommitRemote(ctx context.Context, bl *synctypes.Basel
 	// past deletions still propagating through the Graph change log.
 	if len(events) == 0 {
 		e.logger.Debug("delta returned 0 events, skipping token advancement")
-		return events, nil
+		return events, "", nil
 	}
 
+	// Commit observations WITHOUT the delta token. The token is deferred
+	// until after the planner approves the changes.
 	observed := changeEventsToObservedItems(e.logger, events)
-	if commitErr := e.baseline.CommitObservation(ctx, observed, deltaToken, e.driveID); commitErr != nil {
-		return nil, fmt.Errorf("sync: committing observations: %w", commitErr)
+	if commitErr := e.baseline.CommitObservation(ctx, observed, "", e.driveID); commitErr != nil {
+		return nil, "", fmt.Errorf("sync: committing observations: %w", commitErr)
 	}
 
-	return events, nil
+	return events, deltaToken, nil
+}
+
+// commitDeferredDeltaToken advances the delta token after the planner approves
+// the changes. No-op when token is empty (upload-only mode, 0-event delta).
+// If the process crashes between this call and execution, the next sync
+// replays the same delta window — the state machine handles re-observation
+// idempotently (same hash → no-op, same delete → no-op).
+func (e *Engine) commitDeferredDeltaToken(ctx context.Context, token string) error {
+	if token == "" {
+		return nil
+	}
+
+	if err := e.baseline.CommitDeltaToken(
+		ctx, token, e.driveID.String(), "", e.driveID.String(),
+	); err != nil {
+		return fmt.Errorf("sync: committing deferred delta token: %w", err)
+	}
+
+	return nil
 }
 
 // observeRemoteFull runs a fresh delta with empty token (enumerates ALL remote
@@ -726,19 +766,21 @@ func (e *Engine) observeRemoteFull(ctx context.Context, bl *synctypes.Baseline) 
 }
 
 // observeAndCommitRemoteFull wraps observeRemoteFull to persist observations
-// and delta token atomically via CommitObservation.
-func (e *Engine) observeAndCommitRemoteFull(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, error) {
+// and return the pending delta token for deferred commitment (same deferral
+// pattern as observeAndCommitRemote — see its doc comment for rationale).
+func (e *Engine) observeAndCommitRemoteFull(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, string, error) {
 	events, deltaToken, err := e.observeRemoteFull(ctx, bl)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
+	// Commit observations without the delta token — token deferred to caller.
 	observed := changeEventsToObservedItems(e.logger, events)
-	if commitErr := e.baseline.CommitObservation(ctx, observed, deltaToken, e.driveID); commitErr != nil {
-		return nil, fmt.Errorf("sync: committing full reconciliation: %w", commitErr)
+	if commitErr := e.baseline.CommitObservation(ctx, observed, "", e.driveID); commitErr != nil {
+		return nil, "", fmt.Errorf("sync: committing full reconciliation: %w", commitErr)
 	}
 
-	return events, nil
+	return events, deltaToken, nil
 }
 
 // changeEventsToObservedItems converts remote ChangeEvents into ObservedItems
@@ -1172,7 +1214,7 @@ func (e *Engine) bootstrapSync(ctx context.Context, mode synctypes.SyncMode, pip
 	e.permHandler.recheckLocalPermissions(ctx)
 
 	// Observe changes.
-	changes, err := e.observeChanges(ctx, bl, mode, false, false)
+	changes, pendingToken, err := e.observeChanges(ctx, bl, mode, false, false)
 	if err != nil {
 		return fmt.Errorf("sync: bootstrap observation failed: %w", err)
 	}
@@ -1180,6 +1222,13 @@ func (e *Engine) bootstrapSync(ctx context.Context, mode synctypes.SyncMode, pip
 	if len(changes) == 0 {
 		e.logger.Info("bootstrap sync complete: no changes detected")
 		return nil
+	}
+
+	// Commit the deferred delta token before dispatching bootstrap actions.
+	// Bootstrap uses watch-mode big-delete (rolling counter), not planner-level
+	// threshold, so the token is always safe to commit here.
+	if err := e.commitDeferredDeltaToken(ctx, pendingToken); err != nil {
+		return err
 	}
 
 	// Dispatch through watch pipeline (same path as steady-state batches).

@@ -295,7 +295,7 @@ func TestE2E_Sync_TransferWorkersConfig(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "transfer_workers = 2\n")
+	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "transfer_workers = 4\n")
 	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-sync-workers-%d", time.Now().UnixNano())
