@@ -765,7 +765,7 @@ func changeEventsToObservedItems(logger *slog.Logger, events []synctypes.ChangeE
 			ItemID:    events[i].ItemID,
 			ParentID:  events[i].ParentID,
 			Path:      events[i].Path,
-			ItemType:  events[i].ItemType.String(),
+			ItemType:  events[i].ItemType,
 			Hash:      events[i].Hash,
 			Size:      events[i].Size,
 			Mtime:     events[i].Mtime,
@@ -2161,13 +2161,6 @@ func remoteStateToChangeEvent(rs *synctypes.RemoteStateRow, path string) *syncty
 		isDeleted = true
 	}
 
-	// Parse item type from the database string; default to file on error
-	// (defensive — the DB value should always be valid).
-	it, err := synctypes.ParseItemType(rs.ItemType)
-	if err != nil {
-		it = synctypes.ItemTypeFile
-	}
-
 	return &synctypes.ChangeEvent{
 		Source:    synctypes.SourceRemote,
 		Type:      ct,
@@ -2175,7 +2168,7 @@ func remoteStateToChangeEvent(rs *synctypes.RemoteStateRow, path string) *syncty
 		ItemID:    rs.ItemID,
 		ParentID:  rs.ParentID,
 		DriveID:   rs.DriveID,
-		ItemType:  it,
+		ItemType:  rs.ItemType,
 		Name:      filepath.Base(path),
 		Size:      rs.Size,
 		Hash:      rs.Hash,

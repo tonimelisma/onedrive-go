@@ -130,7 +130,6 @@ func (m *SyncStore) Load(ctx context.Context) (*synctypes.Baseline, error) {
 func scanBaselineRow(rows *sql.Rows) (*synctypes.BaselineEntry, error) {
 	var (
 		e          synctypes.BaselineEntry
-		itemType   string
 		parentID   sql.NullString
 		localHash  sql.NullString
 		remoteHash sql.NullString
@@ -140,19 +139,13 @@ func scanBaselineRow(rows *sql.Rows) (*synctypes.BaselineEntry, error) {
 	)
 
 	err := rows.Scan(
-		&e.DriveID, &e.ItemID, &e.Path, &parentID, &itemType,
+		&e.DriveID, &e.ItemID, &e.Path, &parentID, &e.ItemType,
 		&localHash, &remoteHash, &size, &mtime, &e.SyncedAt, &etag,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("sync: scanning baseline row: %w", err)
 	}
 
-	parsed, err := synctypes.ParseItemType(itemType)
-	if err != nil {
-		return nil, err
-	}
-
-	e.ItemType = parsed
 	e.ParentID = parentID.String
 	e.LocalHash = localHash.String
 	e.RemoteHash = remoteHash.String

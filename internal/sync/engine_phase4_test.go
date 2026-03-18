@@ -485,7 +485,7 @@ func TestRetrierSweep_BatchLimit(t *testing.T) {
 			DriveID:  driveID,
 			ItemID:   fmt.Sprintf("item-%d", i),
 			Path:     fmt.Sprintf("file-%d.txt", i),
-			ItemType: synctypes.StrFile,
+			ItemType: synctypes.ItemTypeFile,
 			Hash:     fmt.Sprintf("hash-%d", i),
 			Size:     int64(i * 100),
 		}
@@ -548,7 +548,7 @@ func TestRetrierSweep_SkipsInFlight(t *testing.T) {
 			DriveID:  driveID,
 			ItemID:   fmt.Sprintf("item-%s", name),
 			Path:     name,
-			ItemType: synctypes.StrFile,
+			ItemType: synctypes.ItemTypeFile,
 			Hash:     fmt.Sprintf("hash-%s", name),
 			Size:     int64(100 * (i + 1)),
 		}
@@ -635,7 +635,7 @@ func TestGetRemoteStateByPath_Found(t *testing.T) {
 			ItemID:   "item-abc",
 			Path:     "docs/report.pdf",
 			ParentID: "parent-1",
-			ItemType: synctypes.StrFile,
+			ItemType: synctypes.ItemTypeFile,
 			Hash:     "xorhash-abc",
 			Size:     4096,
 			Mtime:    1000000000,
@@ -684,7 +684,7 @@ func TestGetRemoteStateByPath_NullableFields(t *testing.T) {
 			DriveID:  driveID,
 			ItemID:   "item-sparse",
 			Path:     "folder/",
-			ItemType: synctypes.StrFolder,
+			ItemType: synctypes.ItemTypeFolder,
 		},
 	}, "", driveID))
 
@@ -709,7 +709,7 @@ func TestRemoteStateToChangeEvent_Download(t *testing.T) {
 		ItemID:     "item-42",
 		Path:       "docs/file.txt",
 		ParentID:   "parent-7",
-		ItemType:   synctypes.StrFile,
+		ItemType:   synctypes.ItemTypeFile,
 		Hash:       "xorhash-42",
 		Size:       8192,
 		Mtime:      2000000000,
@@ -747,7 +747,7 @@ func TestRemoteStateToChangeEvent_Delete(t *testing.T) {
 				ItemID:     "item-del",
 				Path:       "trash/old.txt",
 				SyncStatus: status,
-				ItemType:   synctypes.StrFile,
+				ItemType:   synctypes.ItemTypeFile,
 			}
 
 			ev := remoteStateToChangeEvent(rs, "trash/old.txt")
@@ -767,7 +767,7 @@ func TestRemoteStateToChangeEvent_Folder(t *testing.T) {
 		ItemID:     "item-folder",
 		Path:       "photos/vacation",
 		SyncStatus: synctypes.SyncStatusPendingDownload,
-		ItemType:   synctypes.StrFolder,
+		ItemType:   synctypes.ItemTypeFolder,
 	}
 
 	ev := remoteStateToChangeEvent(rs, "photos/vacation")
@@ -852,7 +852,7 @@ func TestCreateEventFromDB_Download_RemoteStateExists(t *testing.T) {
 			DriveID:  driveID,
 			ItemID:   "dl-item",
 			Path:     "download-test.txt",
-			ItemType: synctypes.StrFile,
+			ItemType: synctypes.ItemTypeFile,
 			Hash:     "dl-hash",
 			Size:     1024,
 			Mtime:    5000000000,
@@ -919,7 +919,7 @@ func TestIsFailureResolved_Download_Synced(t *testing.T) {
 			DriveID:  driveID,
 			ItemID:   "resolved-item",
 			Path:     "resolved.txt",
-			ItemType: synctypes.StrFile,
+			ItemType: synctypes.ItemTypeFile,
 			Hash:     "resolved-hash",
 			Size:     512,
 		},
@@ -986,7 +986,7 @@ func TestIsFailureResolved_Download_StillPending(t *testing.T) {
 			DriveID:  driveID,
 			ItemID:   "pending-item",
 			Path:     "still-pending.txt",
-			ItemType: synctypes.StrFile,
+			ItemType: synctypes.ItemTypeFile,
 			Hash:     "pending-hash",
 		},
 	}, "", driveID))
@@ -1076,7 +1076,7 @@ func TestIsFailureResolved_Delete_BaselineExists(t *testing.T) {
 			DriveID:  driveID,
 			ItemID:   "baseline-item",
 			Path:     "still-in-baseline.txt",
-			ItemType: synctypes.StrFile,
+			ItemType: synctypes.ItemTypeFile,
 			Hash:     "bl-hash",
 			Size:     100,
 		},
@@ -1361,7 +1361,7 @@ func TestRetrierSweep_FullFidelityEvents_D9(t *testing.T) {
 			ItemID:   "d9-item",
 			Path:     "d9-test.txt",
 			ParentID: "d9-parent",
-			ItemType: synctypes.StrFile,
+			ItemType: synctypes.ItemTypeFile,
 			Hash:     "d9-hash",
 			Size:     9999,
 			Mtime:    7777777777,
@@ -1418,7 +1418,7 @@ func TestRetrierSweep_SkipsResolvedFailures_D11(t *testing.T) {
 			DriveID:  driveID,
 			ItemID:   "synced-item",
 			Path:     "d11-synced.txt",
-			ItemType: synctypes.StrFile,
+			ItemType: synctypes.ItemTypeFile,
 			Hash:     "synced-hash",
 			Size:     100,
 		},
@@ -1426,7 +1426,7 @@ func TestRetrierSweep_SkipsResolvedFailures_D11(t *testing.T) {
 			DriveID:  driveID,
 			ItemID:   "pending-item",
 			Path:     "d11-pending.txt",
-			ItemType: synctypes.StrFile,
+			ItemType: synctypes.ItemTypeFile,
 			Hash:     "pending-hash",
 			Size:     200,
 		},

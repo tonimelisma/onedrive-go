@@ -3,7 +3,10 @@
 // beyond standard library and driveid.
 package synctypes
 
-import "fmt"
+import (
+	"database/sql/driver"
+	"fmt"
+)
 
 // String constants for enum serialization (shared by String() and Parse*).
 const (
@@ -167,6 +170,31 @@ func (t ItemType) String() string {
 	default:
 		return fmt.Sprintf("ItemType(%d)", int(t))
 	}
+}
+
+// Scan implements sql.Scanner so database/sql can scan a TEXT column
+// directly into an ItemType field. This eliminates manual ParseItemType
+// calls at every consumption point.
+func (t *ItemType) Scan(src any) error {
+	s, ok := src.(string)
+	if !ok {
+		return fmt.Errorf("synctypes: ItemType.Scan: expected string, got %T", src)
+	}
+
+	parsed, err := ParseItemType(s)
+	if err != nil {
+		return err
+	}
+
+	*t = parsed
+
+	return nil
+}
+
+// Value implements driver.Valuer so database/sql can bind an ItemType
+// field as a TEXT parameter in SQL statements.
+func (t ItemType) Value() (driver.Value, error) {
+	return t.String(), nil
 }
 
 // ParseItemType converts a database TEXT value to ItemType.
