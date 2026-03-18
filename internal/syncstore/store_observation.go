@@ -105,7 +105,7 @@ func (m *SyncStore) processObservedItem(ctx context.Context, tx *sql.Tx, item *s
 		return m.insertRemoteState(ctx, tx, item, now)
 	}
 
-	// Existing row — compute new status.
+	// Existing row — compute new status via the state machine.
 	newStatus, changed := computeNewStatus(existing.SyncStatus, existing.Hash, item.Hash, item.IsDeleted)
 
 	// Track path changes for move detection.
@@ -222,7 +222,7 @@ func (m *SyncStore) insertRemoteState(ctx context.Context, tx *sql.Tx, item *syn
 		nullString(item.ParentID), item.ItemType,
 		nullString(item.Hash), nullInt64(item.Size), nullInt64(item.Mtime),
 		nullString(item.ETag),
-		statusPendingDownload, now,
+		synctypes.SyncStatusPendingDownload, now,
 	)
 	if err != nil {
 		return fmt.Errorf("sync: inserting remote_state for %s: %w", item.Path, err)
@@ -234,7 +234,7 @@ func (m *SyncStore) insertRemoteState(ctx context.Context, tx *sql.Tx, item *syn
 // updateRemoteStateFromObs updates an existing remote_state row with observation data.
 func (m *SyncStore) updateRemoteStateFromObs(
 	ctx context.Context, tx *sql.Tx, item *synctypes.ObservedItem,
-	newStatus, previousPath string, now int64,
+	newStatus synctypes.SyncStatus, previousPath string, now int64,
 ) error {
 	_, err := tx.ExecContext(ctx, sqlUpdateRemoteState,
 		item.Path, nullString(item.ParentID), item.ItemType,
@@ -255,36 +255,6 @@ func (m *SyncStore) updateRemoteStateFromObs(
 // rows when delta observations arrive.
 // ---------------------------------------------------------------------------
 
-// Remote state sync_status values. These match the CHECK constraint in
-// the remote_state table (migrations/00001_consolidated_schema.sql).
-//
-// The exported constants (StatusSynced, StatusDeleted, StatusFiltered,
-// StatusPendingDelete, StatusDeleting, StatusDeleteFailed) are used by the
-// sync engine to interpret RemoteStateRow.SyncStatus values without importing
-// string literals directly.
-const (
-	statusPendingDownload = "pending_download"
-	statusDownloading     = "downloading"
-	statusDownloadFailed  = "download_failed"
-	statusSynced          = "synced"
-	statusPendingDelete   = "pending_delete"
-	statusDeleting        = "deleting"
-	statusDeleteFailed    = "delete_failed"
-	statusDeleted         = "deleted"
-	statusFiltered        = "filtered"
-
-	// Exported variants — for use by the sync engine (internal/sync) and its tests.
-	StatusSynced          = statusSynced
-	StatusDeleted         = statusDeleted
-	StatusFiltered        = statusFiltered
-	StatusPendingDownload = statusPendingDownload
-	StatusDownloading     = statusDownloading
-	StatusDownloadFailed  = statusDownloadFailed
-	StatusPendingDelete   = statusPendingDelete
-	StatusDeleting        = statusDeleting
-	StatusDeleteFailed    = statusDeleteFailed
-)
-
 // computeNewStatus determines the new sync_status for a remote_state row
 // when a delta observation arrives. Pure function — no I/O, no side effects.
 //
@@ -293,7 +263,7 @@ const (
 //
 // Implements the 30-cell decision matrix from
 // spec/design/data-model.md (remote_state sync_status state machine).
-func computeNewStatus(currentStatus, currentHash, observedHash string, isDeleted bool) (string, bool) {
+func computeNewStatus(currentStatus synctypes.SyncStatus, currentHash, observedHash string, isDeleted bool) (synctypes.SyncStatus, bool) {
 	sameHash := currentHash == observedHash
 
 	if isDeleted {
@@ -308,59 +278,59 @@ func computeNewStatus(currentStatus, currentHash, observedHash string, isDeleted
 }
 
 // computeDeleted handles the "deleted" column of the decision matrix.
-func computeDeleted(currentStatus string) (string, bool) {
+func computeDeleted(currentStatus synctypes.SyncStatus) (synctypes.SyncStatus, bool) {
 	switch currentStatus {
-	case statusPendingDownload, statusDownloading, statusDownloadFailed, statusSynced:
-		return statusPendingDelete, true
-	case statusPendingDelete:
-		return statusPendingDelete, false // already pending delete
-	case statusDeleting:
-		return statusDeleting, false // let worker finish
-	case statusDeleteFailed:
-		return statusPendingDelete, true // retry
-	case statusDeleted:
-		return statusDeleted, false // already deleted
-	case statusFiltered:
-		return statusDeleted, true
+	case synctypes.SyncStatusPendingDownload, synctypes.SyncStatusDownloading, synctypes.SyncStatusDownloadFailed, synctypes.SyncStatusSynced:
+		return synctypes.SyncStatusPendingDelete, true
+	case synctypes.SyncStatusPendingDelete:
+		return synctypes.SyncStatusPendingDelete, false // already pending delete
+	case synctypes.SyncStatusDeleting:
+		return synctypes.SyncStatusDeleting, false // let worker finish
+	case synctypes.SyncStatusDeleteFailed:
+		return synctypes.SyncStatusPendingDelete, true // retry
+	case synctypes.SyncStatusDeleted:
+		return synctypes.SyncStatusDeleted, false // already deleted
+	case synctypes.SyncStatusFiltered:
+		return synctypes.SyncStatusDeleted, true
 	default:
 		return currentStatus, false
 	}
 }
 
 // computeSameHash handles the "same hash, not deleted" column.
-func computeSameHash(currentStatus string) (string, bool) {
+func computeSameHash(currentStatus synctypes.SyncStatus) (synctypes.SyncStatus, bool) {
 	switch currentStatus {
-	case statusPendingDownload, statusDownloading:
+	case synctypes.SyncStatusPendingDownload, synctypes.SyncStatusDownloading:
 		return currentStatus, false // no change / let worker finish
-	case statusDownloadFailed:
-		return statusPendingDownload, true // retry
-	case statusSynced:
+	case synctypes.SyncStatusDownloadFailed:
+		return synctypes.SyncStatusPendingDownload, true // retry
+	case synctypes.SyncStatusSynced:
 		// Critical: prevents re-download on delta redelivery.
-		return statusSynced, false
-	case statusPendingDelete, statusDeleting, statusDeleteFailed, statusDeleted:
-		return statusPendingDownload, true // restored/recreated
-	case statusFiltered:
-		return statusFiltered, false
+		return synctypes.SyncStatusSynced, false
+	case synctypes.SyncStatusPendingDelete, synctypes.SyncStatusDeleting, synctypes.SyncStatusDeleteFailed, synctypes.SyncStatusDeleted:
+		return synctypes.SyncStatusPendingDownload, true // restored/recreated
+	case synctypes.SyncStatusFiltered:
+		return synctypes.SyncStatusFiltered, false
 	default:
 		return currentStatus, false
 	}
 }
 
 // computeDifferentHash handles the "different hash, not deleted" column.
-func computeDifferentHash(currentStatus string) (string, bool) {
+func computeDifferentHash(currentStatus synctypes.SyncStatus) (synctypes.SyncStatus, bool) {
 	switch currentStatus {
-	case statusPendingDownload:
-		return statusPendingDownload, true // update hash (still pending)
-	case statusDownloading:
-		return statusPendingDownload, true // cancel + re-queue
-	case statusDownloadFailed:
-		return statusPendingDownload, true // new version
-	case statusSynced:
-		return statusPendingDownload, true
-	case statusPendingDelete, statusDeleting, statusDeleteFailed, statusDeleted:
-		return statusPendingDownload, true // restored+changed / recreated
-	case statusFiltered:
-		return statusFiltered, true // update hash, stay filtered
+	case synctypes.SyncStatusPendingDownload:
+		return synctypes.SyncStatusPendingDownload, true // update hash (still pending)
+	case synctypes.SyncStatusDownloading:
+		return synctypes.SyncStatusPendingDownload, true // cancel + re-queue
+	case synctypes.SyncStatusDownloadFailed:
+		return synctypes.SyncStatusPendingDownload, true // new version
+	case synctypes.SyncStatusSynced:
+		return synctypes.SyncStatusPendingDownload, true
+	case synctypes.SyncStatusPendingDelete, synctypes.SyncStatusDeleting, synctypes.SyncStatusDeleteFailed, synctypes.SyncStatusDeleted:
+		return synctypes.SyncStatusPendingDownload, true // restored+changed / recreated
+	case synctypes.SyncStatusFiltered:
+		return synctypes.SyncStatusFiltered, true // update hash, stay filtered
 	default:
 		return currentStatus, false
 	}

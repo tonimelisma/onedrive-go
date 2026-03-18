@@ -107,7 +107,7 @@ func TestCommitObservation_NewItem(t *testing.T) {
 	row := readRemoteStateRow(t, mgr.DB(), "item1")
 	require.NotNil(t, row, "row should exist")
 	assert.Equal(t, "hello.txt", row.Path)
-	assert.Equal(t, statusPendingDownload, row.SyncStatus)
+	assert.Equal(t, synctypes.SyncStatusPendingDownload, row.SyncStatus)
 	assert.Equal(t, "hash1", row.Hash)
 	assert.Equal(t, int64(100), row.Size)
 	assert.Equal(t, "etag1", row.ETag)
@@ -180,7 +180,7 @@ func TestCommitObservation_SyncedSameHash_NoChange(t *testing.T) {
 	// Status should remain synced (no re-download on delta redelivery).
 	row := readRemoteStateRow(t, mgr.DB(), "item1")
 	require.NotNil(t, row)
-	assert.Equal(t, statusSynced, row.SyncStatus, "should remain synced")
+	assert.Equal(t, synctypes.SyncStatusSynced, row.SyncStatus, "should remain synced")
 }
 
 func TestCommitObservation_HashChange_ResetsFailureCount(t *testing.T) {
@@ -216,7 +216,7 @@ func TestCommitObservation_HashChange_ResetsFailureCount(t *testing.T) {
 
 	row := readRemoteStateRow(t, mgr.DB(), "item1")
 	require.NotNil(t, row)
-	assert.Equal(t, statusPendingDownload, row.SyncStatus)
+	assert.Equal(t, synctypes.SyncStatusPendingDownload, row.SyncStatus)
 	assert.Equal(t, "new-hash", row.Hash)
 	// Failure state is tracked in sync_failures table, not remote_state.
 }
@@ -293,29 +293,29 @@ func TestCommitObservation_AllMatrixCells(t *testing.T) {
 	// Table-driven through key cells of the 30-cell matrix.
 	tests := []struct {
 		name           string
-		existingStatus string
+		existingStatus synctypes.SyncStatus
 		existingHash   string
 		observedHash   string
 		isDeleted      bool
-		wantStatus     string
+		wantStatus     synctypes.SyncStatus
 		wantChanged    bool
 	}{
 		// Same hash, not deleted.
-		{"synced+same→noop", statusSynced, "h1", "h1", false, statusSynced, false},
-		{"pending_download+same→noop", statusPendingDownload, "h1", "h1", false, statusPendingDownload, false},
-		{"download_failed+same→retry", statusDownloadFailed, "h1", "h1", false, statusPendingDownload, true},
-		{"deleted+same→restore", statusDeleted, "h1", "h1", false, statusPendingDownload, true},
+		{"synced+same→noop", synctypes.SyncStatusSynced, "h1", "h1", false, synctypes.SyncStatusSynced, false},
+		{"pending_download+same→noop", synctypes.SyncStatusPendingDownload, "h1", "h1", false, synctypes.SyncStatusPendingDownload, false},
+		{"download_failed+same→retry", synctypes.SyncStatusDownloadFailed, "h1", "h1", false, synctypes.SyncStatusPendingDownload, true},
+		{"deleted+same→restore", synctypes.SyncStatusDeleted, "h1", "h1", false, synctypes.SyncStatusPendingDownload, true},
 
 		// Different hash, not deleted.
-		{"synced+diff→pending", statusSynced, "h1", "h2", false, statusPendingDownload, true},
-		{"downloading+diff→pending", statusDownloading, "h1", "h2", false, statusPendingDownload, true},
-		{"download_failed+diff→pending", statusDownloadFailed, "h1", "h2", false, statusPendingDownload, true},
+		{"synced+diff→pending", synctypes.SyncStatusSynced, "h1", "h2", false, synctypes.SyncStatusPendingDownload, true},
+		{"downloading+diff→pending", synctypes.SyncStatusDownloading, "h1", "h2", false, synctypes.SyncStatusPendingDownload, true},
+		{"download_failed+diff→pending", synctypes.SyncStatusDownloadFailed, "h1", "h2", false, synctypes.SyncStatusPendingDownload, true},
 
 		// Deleted.
-		{"synced+deleted→pending_delete", statusSynced, "h1", "", true, statusPendingDelete, true},
-		{"pending_download+deleted→pending_delete", statusPendingDownload, "h1", "", true, statusPendingDelete, true},
-		{"pending_delete+deleted→noop", statusPendingDelete, "h1", "", true, statusPendingDelete, false},
-		{"deleted+deleted→noop", statusDeleted, "h1", "", true, statusDeleted, false},
+		{"synced+deleted→pending_delete", synctypes.SyncStatusSynced, "h1", "", true, synctypes.SyncStatusPendingDelete, true},
+		{"pending_download+deleted→pending_delete", synctypes.SyncStatusPendingDownload, "h1", "", true, synctypes.SyncStatusPendingDelete, true},
+		{"pending_delete+deleted→noop", synctypes.SyncStatusPendingDelete, "h1", "", true, synctypes.SyncStatusPendingDelete, false},
+		{"deleted+deleted→noop", synctypes.SyncStatusDeleted, "h1", "", true, synctypes.SyncStatusDeleted, false},
 	}
 
 	for _, tt := range tests {
@@ -387,7 +387,7 @@ func TestRecordFailure_TransitionsDownloading(t *testing.T) {
 
 	row := readRemoteStateRow(t, mgr.DB(), "item1")
 	require.NotNil(t, row)
-	assert.Equal(t, statusDownloadFailed, row.SyncStatus)
+	assert.Equal(t, synctypes.SyncStatusDownloadFailed, row.SyncStatus)
 
 	// Failure metadata is now in sync_failures, not remote_state.
 	var sfCount int
@@ -435,7 +435,7 @@ func TestRecordFailure_OptimisticConcurrency_NoMatch(t *testing.T) {
 	// Status should remain synced.
 	row := readRemoteStateRow(t, mgr.DB(), "item1")
 	require.NotNil(t, row)
-	assert.Equal(t, statusSynced, row.SyncStatus)
+	assert.Equal(t, synctypes.SyncStatusSynced, row.SyncStatus)
 }
 
 func TestRecordFailure_IncreasesFailureCount(t *testing.T) {
@@ -523,7 +523,7 @@ func TestRecordFailure_DeleteTransitionsDeleting(t *testing.T) {
 
 	row := readRemoteStateRow(t, mgr.DB(), "item1")
 	require.NotNil(t, row)
-	assert.Equal(t, statusDeleteFailed, row.SyncStatus)
+	assert.Equal(t, synctypes.SyncStatusDeleteFailed, row.SyncStatus)
 
 	// Failure metadata is now in sync_failures.
 	var sfCount int
@@ -567,7 +567,7 @@ func TestRecordFailure_Download(t *testing.T) {
 	// remote_state should transition to download_failed.
 	row := readRemoteStateRow(t, mgr.DB(), "item1")
 	require.NotNil(t, row)
-	assert.Equal(t, statusDownloadFailed, row.SyncStatus)
+	assert.Equal(t, synctypes.SyncStatusDownloadFailed, row.SyncStatus)
 
 	// sync_failures should have the failure recorded.
 	var sfCount int
@@ -609,7 +609,7 @@ func TestRecordFailure_Delete(t *testing.T) {
 
 	row := readRemoteStateRow(t, mgr.DB(), "item1")
 	require.NotNil(t, row)
-	assert.Equal(t, statusDeleteFailed, row.SyncStatus)
+	assert.Equal(t, synctypes.SyncStatusDeleteFailed, row.SyncStatus)
 }
 
 func TestRecordFailure_SetsIssueTypeAndScopeKey(t *testing.T) {
@@ -768,7 +768,7 @@ func TestCommitOutcome_UpdatesRemoteState_Download(t *testing.T) {
 
 	row := readRemoteStateRow(t, mgr.DB(), "item1")
 	require.NotNil(t, row)
-	assert.Equal(t, statusSynced, row.SyncStatus)
+	assert.Equal(t, synctypes.SyncStatusSynced, row.SyncStatus)
 }
 
 func TestCommitOutcome_HashGuard_PreventsStaleOverwrite(t *testing.T) {
@@ -807,7 +807,7 @@ func TestCommitOutcome_HashGuard_PreventsStaleOverwrite(t *testing.T) {
 	// Should NOT transition to synced (hash mismatch guard).
 	row := readRemoteStateRow(t, mgr.DB(), "item1")
 	require.NotNil(t, row)
-	assert.Equal(t, statusDownloading, row.SyncStatus, "hash guard should prevent stale overwrite")
+	assert.Equal(t, synctypes.SyncStatusDownloading, row.SyncStatus, "hash guard should prevent stale overwrite")
 }
 
 func TestCommitOutcome_Upload_UnconditionalUpdate(t *testing.T) {
@@ -846,7 +846,7 @@ func TestCommitOutcome_Upload_UnconditionalUpdate(t *testing.T) {
 
 	row := readRemoteStateRow(t, mgr.DB(), "item1")
 	require.NotNil(t, row)
-	assert.Equal(t, statusSynced, row.SyncStatus)
+	assert.Equal(t, synctypes.SyncStatusSynced, row.SyncStatus)
 	assert.Equal(t, "upload-hash", row.Hash)
 	assert.Equal(t, int64(500), row.Size)
 }
@@ -864,14 +864,14 @@ func TestListUnreconciled(t *testing.T) {
 	// Insert rows in various states.
 	for _, s := range []struct {
 		id     string
-		status string
+		status synctypes.SyncStatus
 	}{
-		{"a", statusPendingDownload},
-		{"b", statusSynced},
-		{"c", statusDownloadFailed},
-		{"d", statusDeleted},
-		{"e", statusPendingDelete},
-		{"f", statusFiltered},
+		{"a", synctypes.SyncStatusPendingDownload},
+		{"b", synctypes.SyncStatusSynced},
+		{"c", synctypes.SyncStatusDownloadFailed},
+		{"d", synctypes.SyncStatusDeleted},
+		{"e", synctypes.SyncStatusPendingDelete},
+		{"f", synctypes.SyncStatusFiltered},
 	} {
 		_, err := mgr.DB().ExecContext(ctx,
 			`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
@@ -908,28 +908,28 @@ func TestListFailedForRetry(t *testing.T) {
 	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		VALUES (?, ?, ?, 'file', ?, ?)`,
-		testDriveID, "pending", "pending.txt", statusPendingDownload, 999,
+		testDriveID, "pending", "pending.txt", synctypes.SyncStatusPendingDownload, 999,
 	)
 	require.NoError(t, err)
 
 	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		VALUES (?, ?, ?, 'file', ?, ?)`,
-		testDriveID, "failed", "failed.txt", statusDownloadFailed, 999,
+		testDriveID, "failed", "failed.txt", synctypes.SyncStatusDownloadFailed, 999,
 	)
 	require.NoError(t, err)
 
 	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		VALUES (?, ?, ?, 'file', ?, ?)`,
-		testDriveID, "synced", "synced.txt", statusSynced, 999,
+		testDriveID, "synced", "synced.txt", synctypes.SyncStatusSynced, 999,
 	)
 	require.NoError(t, err)
 
 	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		VALUES (?, ?, ?, 'file', ?, ?)`,
-		testDriveID, "del-failed", "del-failed.txt", statusDeleteFailed, 999,
+		testDriveID, "del-failed", "del-failed.txt", synctypes.SyncStatusDeleteFailed, 999,
 	)
 	require.NoError(t, err)
 
@@ -988,7 +988,7 @@ func TestResetFailure(t *testing.T) {
 	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		VALUES (?, ?, ?, 'file', ?, ?)`,
-		testDriveID, "item1", "hello.txt", statusDownloadFailed, 999,
+		testDriveID, "item1", "hello.txt", synctypes.SyncStatusDownloadFailed, 999,
 	)
 	require.NoError(t, err)
 
@@ -1007,7 +1007,7 @@ func TestResetFailure(t *testing.T) {
 	// remote_state should be transitioned to pending_download.
 	row := readRemoteStateRow(t, mgr.DB(), "item1")
 	require.NotNil(t, row)
-	assert.Equal(t, statusPendingDownload, row.SyncStatus)
+	assert.Equal(t, synctypes.SyncStatusPendingDownload, row.SyncStatus)
 
 	// sync_failures row should be deleted.
 	var sfCount int
@@ -1030,7 +1030,7 @@ func TestResetFailure_DeleteFailedTransitionsToPendingDelete(t *testing.T) {
 	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
 		VALUES (?, ?, ?, 'file', ?, ?)`,
-		testDriveID, "del-item", "deleted.txt", statusDeleteFailed, 999,
+		testDriveID, "del-item", "deleted.txt", synctypes.SyncStatusDeleteFailed, 999,
 	)
 	require.NoError(t, err)
 
@@ -1049,7 +1049,7 @@ func TestResetFailure_DeleteFailedTransitionsToPendingDelete(t *testing.T) {
 	// delete_failed should transition to pending_delete (NOT pending_download).
 	row := readRemoteStateRow(t, mgr.DB(), "del-item")
 	require.NotNil(t, row)
-	assert.Equal(t, statusPendingDelete, row.SyncStatus,
+	assert.Equal(t, synctypes.SyncStatusPendingDelete, row.SyncStatus,
 		"delete_failed must transition to pending_delete, not pending_download")
 
 	// sync_failures row should be deleted.
@@ -1069,11 +1069,11 @@ func TestResetAllFailures(t *testing.T) {
 
 	for _, s := range []struct {
 		id     string
-		status string
+		status synctypes.SyncStatus
 	}{
-		{"a", statusDownloadFailed},
-		{"b", statusDeleteFailed},
-		{"c", statusSynced},
+		{"a", synctypes.SyncStatusDownloadFailed},
+		{"b", synctypes.SyncStatusDeleteFailed},
+		{"c", synctypes.SyncStatusSynced},
 	} {
 		_, err := mgr.DB().ExecContext(ctx,
 			`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
@@ -1088,15 +1088,15 @@ func TestResetAllFailures(t *testing.T) {
 
 	// download_failed should become pending_download.
 	rowA := readRemoteStateRow(t, mgr.DB(), "a")
-	assert.Equal(t, statusPendingDownload, rowA.SyncStatus)
+	assert.Equal(t, synctypes.SyncStatusPendingDownload, rowA.SyncStatus)
 
 	// delete_failed should become pending_delete.
 	rowB := readRemoteStateRow(t, mgr.DB(), "b")
-	assert.Equal(t, statusPendingDelete, rowB.SyncStatus)
+	assert.Equal(t, synctypes.SyncStatusPendingDelete, rowB.SyncStatus)
 
 	// synced should not change.
 	rowC := readRemoteStateRow(t, mgr.DB(), "c")
-	assert.Equal(t, statusSynced, rowC.SyncStatus)
+	assert.Equal(t, synctypes.SyncStatusSynced, rowC.SyncStatus)
 }
 
 func TestResetInProgressStates(t *testing.T) {
@@ -1111,12 +1111,12 @@ func TestResetInProgressStates(t *testing.T) {
 
 	for _, s := range []struct {
 		id     string
-		status string
+		status synctypes.SyncStatus
 	}{
-		{"a", statusDownloading},
-		{"b", statusDeleting}, // file exists → pending_delete
-		{"c", statusSynced},
-		{"d", statusPendingDownload},
+		{"a", synctypes.SyncStatusDownloading},
+		{"b", synctypes.SyncStatusDeleting}, // file exists → pending_delete
+		{"c", synctypes.SyncStatusSynced},
+		{"d", synctypes.SyncStatusPendingDownload},
 	} {
 		_, err := mgr.DB().ExecContext(ctx,
 			`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
@@ -1131,16 +1131,16 @@ func TestResetInProgressStates(t *testing.T) {
 	require.NoError(t, err)
 
 	rowA := readRemoteStateRow(t, mgr.DB(), "a")
-	assert.Equal(t, statusPendingDownload, rowA.SyncStatus, "downloading→pending_download")
+	assert.Equal(t, synctypes.SyncStatusPendingDownload, rowA.SyncStatus, "downloading→pending_download")
 
 	rowB := readRemoteStateRow(t, mgr.DB(), "b")
-	assert.Equal(t, statusPendingDelete, rowB.SyncStatus, "deleting+file exists→pending_delete")
+	assert.Equal(t, synctypes.SyncStatusPendingDelete, rowB.SyncStatus, "deleting+file exists→pending_delete")
 
 	rowC := readRemoteStateRow(t, mgr.DB(), "c")
-	assert.Equal(t, statusSynced, rowC.SyncStatus, "synced unchanged")
+	assert.Equal(t, synctypes.SyncStatusSynced, rowC.SyncStatus, "synced unchanged")
 
 	rowD := readRemoteStateRow(t, mgr.DB(), "d")
-	assert.Equal(t, statusPendingDownload, rowD.SyncStatus, "pending_download unchanged")
+	assert.Equal(t, synctypes.SyncStatusPendingDownload, rowD.SyncStatus, "pending_download unchanged")
 }
 
 func TestCommitOutcome_LocalDelete_MarksDeleted(t *testing.T) {
@@ -1174,5 +1174,5 @@ func TestCommitOutcome_LocalDelete_MarksDeleted(t *testing.T) {
 
 	row := readRemoteStateRow(t, mgr.DB(), "item1")
 	require.NotNil(t, row)
-	assert.Equal(t, statusDeleted, row.SyncStatus)
+	assert.Equal(t, synctypes.SyncStatusDeleted, row.SyncStatus)
 }

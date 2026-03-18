@@ -268,7 +268,7 @@ func TestCommitOutcome_DownloadSuccess_DoesNotClearSyncFailures(t *testing.T) {
 		`INSERT INTO remote_state
 			(drive_id, item_id, path, parent_id, item_type, sync_status, observed_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		driveid.New(testDriveID).String(), "item-1", "docs/file.txt", "file", "file", statusDownloading, 1)
+		driveid.New(testDriveID).String(), "item-1", "docs/file.txt", "file", "file", synctypes.SyncStatusDownloading, 1)
 	require.NoError(t, err)
 
 	// Commit a successful download outcome.
@@ -311,7 +311,7 @@ func TestCommitOutcome_DeleteSuccess_DoesNotClearSyncFailures(t *testing.T) {
 		`INSERT INTO remote_state
 			(drive_id, item_id, path, parent_id, item_type, sync_status, observed_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		driveid.New(testDriveID).String(), "item-1", "docs/old.txt", "root", "file", statusDeleting, 1)
+		driveid.New(testDriveID).String(), "item-1", "docs/old.txt", "root", "file", synctypes.SyncStatusDeleting, 1)
 	require.NoError(t, err)
 
 	// Commit a successful local delete outcome.
@@ -351,7 +351,7 @@ func TestCommitOutcome_MoveSuccess_DoesNotClearSyncFailures(t *testing.T) {
 		`INSERT INTO remote_state
 			(drive_id, item_id, path, parent_id, item_type, sync_status, observed_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		driveid.New(testDriveID).String(), "item-1", "docs/moved.txt", "root", "file", statusSynced, 1)
+		driveid.New(testDriveID).String(), "item-1", "docs/moved.txt", "root", "file", synctypes.SyncStatusSynced, 1)
 	require.NoError(t, err)
 
 	// Commit a successful move outcome (path stays the same in outcome).
@@ -920,7 +920,7 @@ func TestRecordFailure_DownloadStateTransition(t *testing.T) {
 	// remote_state should be transitioned to download_failed.
 	row := readRemoteStateRow(t, mgr.DB(), "item1")
 	require.NotNil(t, row)
-	assert.Equal(t, statusDownloadFailed, row.SyncStatus)
+	assert.Equal(t, synctypes.SyncStatusDownloadFailed, row.SyncStatus)
 
 	// sync_failures row should exist with item_id auto-resolved.
 	issues, err := mgr.ListSyncFailures(ctx)
@@ -955,7 +955,7 @@ func TestRecordFailure_UploadNoStateTransition(t *testing.T) {
 	// Status should remain synced — uploads don't transition remote_state.
 	row := readRemoteStateRow(t, mgr.DB(), "item1")
 	require.NotNil(t, row)
-	assert.Equal(t, statusSynced, row.SyncStatus)
+	assert.Equal(t, synctypes.SyncStatusSynced, row.SyncStatus)
 }
 
 func TestRecordFailure_PreservesExistingValuesOnConflict(t *testing.T) {

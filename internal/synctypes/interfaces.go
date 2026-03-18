@@ -156,7 +156,7 @@ type RemoteStateRow struct {
 	Mtime        int64
 	ETag         string
 	PreviousPath string
-	SyncStatus   string
+	SyncStatus   SyncStatus
 	ObservedAt   int64
 }
 
