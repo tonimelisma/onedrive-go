@@ -414,7 +414,7 @@ func changeEventsToObservedItems(logger *slog.Logger, events []synctypes.ChangeE
 			ItemID:    events[i].ItemID,
 			ParentID:  events[i].ParentID,
 			Path:      events[i].Path,
-			ItemType:  events[i].ItemType.String(),
+			ItemType:  events[i].ItemType,
 			Hash:      events[i].Hash,
 			Size:      events[i].Size,
 			Mtime:     events[i].Mtime,

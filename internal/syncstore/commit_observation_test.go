@@ -93,7 +93,7 @@ func TestCommitObservation_NewItem(t *testing.T) {
 			ItemID:   "item1",
 			ParentID: "root",
 			Path:     "hello.txt",
-			ItemType: "file",
+			ItemType: synctypes.ItemTypeFile,
 			Hash:     "hash1",
 			Size:     100,
 			Mtime:    1000000,
@@ -129,7 +129,7 @@ func TestCommitObservation_DeletedUnknownItem_Noop(t *testing.T) {
 			DriveID:   driveID,
 			ItemID:    "unknown",
 			Path:      "gone.txt",
-			ItemType:  "file",
+			ItemType:  synctypes.ItemTypeFile,
 			IsDeleted: true,
 		},
 	}
@@ -169,7 +169,7 @@ func TestCommitObservation_SyncedSameHash_NoChange(t *testing.T) {
 			DriveID:  driveID,
 			ItemID:   "item1",
 			Path:     "hello.txt",
-			ItemType: "file",
+			ItemType: synctypes.ItemTypeFile,
 			Hash:     "hash1",
 		},
 	}
@@ -206,7 +206,7 @@ func TestCommitObservation_HashChange_ResetsFailureCount(t *testing.T) {
 			DriveID:  driveID,
 			ItemID:   "item1",
 			Path:     "hello.txt",
-			ItemType: "file",
+			ItemType: synctypes.ItemTypeFile,
 			Hash:     "new-hash",
 		},
 	}
@@ -244,7 +244,7 @@ func TestCommitObservation_MoveTracking_SetsPreviousPath(t *testing.T) {
 			DriveID:  driveID,
 			ItemID:   "item1",
 			Path:     "new/hello.txt",
-			ItemType: "file",
+			ItemType: synctypes.ItemTypeFile,
 			Hash:     "hash1",
 		},
 	}
@@ -270,11 +270,11 @@ func TestCommitObservation_AtomicWithDeltaToken(t *testing.T) {
 	events := []synctypes.ObservedItem{
 		{
 			DriveID: driveID, ItemID: "a", Path: "a.txt",
-			ItemType: "file", Hash: "h1",
+			ItemType: synctypes.ItemTypeFile, Hash: "h1",
 		},
 		{
 			DriveID: driveID, ItemID: "b", Path: "b.txt",
-			ItemType: "file", Hash: "h2",
+			ItemType: synctypes.ItemTypeFile, Hash: "h2",
 		},
 	}
 
@@ -341,7 +341,7 @@ func TestCommitObservation_AllMatrixCells(t *testing.T) {
 					DriveID:   driveID,
 					ItemID:    "item1",
 					Path:      "file.txt",
-					ItemType:  "file",
+					ItemType:  synctypes.ItemTypeFile,
 					Hash:      tt.observedHash,
 					IsDeleted: tt.isDeleted,
 				},

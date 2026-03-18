@@ -891,18 +891,18 @@ func TestRunOnce_CrashRecovery_ResetsInProgressStates(t *testing.T) {
 	require.NoError(t, runErr, "RunOnce")
 
 	// Verify the states were reset.
-	var dlStatus, delStatus string
+	var dlStatus, delStatus synctypes.SyncStatus
 	err = eng.baseline.DB().QueryRowContext(ctx,
 		`SELECT sync_status FROM remote_state WHERE item_id = 'item-dl'`).Scan(&dlStatus)
 	require.NoError(t, err)
-	assert.Equal(t, "pending_download", dlStatus, "downloading should be reset")
+	assert.Equal(t, synctypes.SyncStatusPendingDownload, dlStatus, "downloading should be reset")
 
 	// deleting → deleted because the file doesn't exist on disk (crash
 	// recovery checks filesystem to determine target state).
 	err = eng.baseline.DB().QueryRowContext(ctx,
 		`SELECT sync_status FROM remote_state WHERE item_id = 'item-del'`).Scan(&delStatus)
 	require.NoError(t, err)
-	assert.Equal(t, "deleted", delStatus, "deleting with no local file should be marked deleted")
+	assert.Equal(t, synctypes.SyncStatusDeleted, delStatus, "deleting with no local file should be marked deleted")
 }
 
 func TestResolveSafetyConfig_Default(t *testing.T) {
@@ -2211,14 +2211,14 @@ func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
 	assert.Equal(t, "item1", items[0].ItemID)
 	assert.Equal(t, "parent1", items[0].ParentID)
 	assert.Equal(t, "docs/file.txt", items[0].Path)
-	assert.Equal(t, "file", items[0].ItemType)
+	assert.Equal(t, synctypes.ItemTypeFile, items[0].ItemType)
 	assert.Equal(t, "qxh1", items[0].Hash)
 	assert.Equal(t, int64(1024), items[0].Size)
 	assert.Equal(t, int64(123456789), items[0].Mtime)
 	assert.Equal(t, "etag1", items[0].ETag)
 	assert.False(t, items[0].IsDeleted)
 
-	assert.Equal(t, "folder", items[1].ItemType)
+	assert.Equal(t, synctypes.ItemTypeFolder, items[1].ItemType)
 	assert.True(t, items[1].IsDeleted)
 }
 
@@ -4593,7 +4593,7 @@ func TestRetryPipeline_TransientFailure_DrainLoopRetrier(t *testing.T) {
 			DriveID:  driveID,
 			ItemID:   "item-abc",
 			Path:     testPath,
-			ItemType: synctypes.StrFile,
+			ItemType: synctypes.ItemTypeFile,
 			Hash:     "report-hash",
 			Size:     4096,
 		},

@@ -135,7 +135,7 @@ type ObservedItem struct {
 	ItemID    string
 	ParentID  string
 	Path      string
-	ItemType  string // "file", "folder", "root"
+	ItemType  ItemType
 	Hash      string
 	Size      int64
 	Mtime     int64
@@ -150,7 +150,7 @@ type RemoteStateRow struct {
 	ItemID       string
 	Path         string
 	ParentID     string
-	ItemType     string
+	ItemType     ItemType
 	Hash         string
 	Size         int64
 	Mtime        int64

@@ -2231,12 +2231,12 @@ func TestSetDispatchStatus_Download(t *testing.T) {
 
 	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", synctypes.ActionDownload))
 
-	var status string
+	var status synctypes.SyncStatus
 	err = mgr.DB().QueryRowContext(ctx,
 		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
 		"d!abc", "item1").Scan(&status)
 	require.NoError(t, err)
-	assert.Equal(t, "downloading", status)
+	assert.Equal(t, synctypes.SyncStatusDownloading, status)
 }
 
 // Validates: R-2.5
@@ -2255,12 +2255,12 @@ func TestSetDispatchStatus_DownloadFromFailed(t *testing.T) {
 
 	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", synctypes.ActionDownload))
 
-	var status string
+	var status synctypes.SyncStatus
 	err = mgr.DB().QueryRowContext(ctx,
 		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
 		"d!abc", "item1").Scan(&status)
 	require.NoError(t, err)
-	assert.Equal(t, "downloading", status)
+	assert.Equal(t, synctypes.SyncStatusDownloading, status)
 }
 
 // Validates: R-2.5
@@ -2279,12 +2279,12 @@ func TestSetDispatchStatus_LocalDelete(t *testing.T) {
 
 	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", synctypes.ActionLocalDelete))
 
-	var status string
+	var status synctypes.SyncStatus
 	err = mgr.DB().QueryRowContext(ctx,
 		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
 		"d!abc", "item1").Scan(&status)
 	require.NoError(t, err)
-	assert.Equal(t, "deleting", status)
+	assert.Equal(t, synctypes.SyncStatusDeleting, status)
 }
 
 // Validates: R-2.5
@@ -2303,12 +2303,12 @@ func TestSetDispatchStatus_DeleteFromFailed(t *testing.T) {
 
 	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", synctypes.ActionLocalDelete))
 
-	var status string
+	var status synctypes.SyncStatus
 	err = mgr.DB().QueryRowContext(ctx,
 		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
 		"d!abc", "item1").Scan(&status)
 	require.NoError(t, err)
-	assert.Equal(t, "deleting", status)
+	assert.Equal(t, synctypes.SyncStatusDeleting, status)
 }
 
 // Validates: R-2.5
@@ -2328,12 +2328,12 @@ func TestSetDispatchStatus_NoMatchingRow(t *testing.T) {
 	// Should be a no-op (no error, no change).
 	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", synctypes.ActionDownload))
 
-	var status string
+	var status synctypes.SyncStatus
 	err = mgr.DB().QueryRowContext(ctx,
 		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
 		"d!abc", "item1").Scan(&status)
 	require.NoError(t, err)
-	assert.Equal(t, "synced", status, "synced row should not be affected")
+	assert.Equal(t, synctypes.SyncStatusSynced, status, "synced row should not be affected")
 }
 
 // Validates: R-2.5
@@ -2379,12 +2379,12 @@ func TestResetInProgressStates_DeleteFileAbsent(t *testing.T) {
 	testDelay := func(_ int) time.Duration { return time.Second }
 	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot, testDelay))
 
-	var status string
+	var status synctypes.SyncStatus
 	err = mgr.DB().QueryRowContext(ctx,
 		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
 		"d!abc", "item1").Scan(&status)
 	require.NoError(t, err)
-	assert.Equal(t, "deleted", status, "file absent → deleted")
+	assert.Equal(t, synctypes.SyncStatusDeleted, status, "file absent → deleted")
 }
 
 // Validates: R-2.5.1, R-6.5.2
@@ -2409,12 +2409,12 @@ func TestResetInProgressStates_DeleteFileExists(t *testing.T) {
 	testDelay := func(_ int) time.Duration { return time.Second }
 	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot, testDelay))
 
-	var status string
+	var status synctypes.SyncStatus
 	err = mgr.DB().QueryRowContext(ctx,
 		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
 		"d!abc", "item1").Scan(&status)
 	require.NoError(t, err)
-	assert.Equal(t, "pending_delete", status, "file exists → pending_delete")
+	assert.Equal(t, synctypes.SyncStatusPendingDelete, status, "file exists → pending_delete")
 }
 
 // Validates: R-2.5.1, R-6.5.2
@@ -2436,12 +2436,12 @@ func TestResetInProgressStates_DownloadStillResetsToPending(t *testing.T) {
 	testDelay := func(_ int) time.Duration { return time.Second }
 	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot, testDelay))
 
-	var status string
+	var status synctypes.SyncStatus
 	err = mgr.DB().QueryRowContext(ctx,
 		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
 		"d!abc", "item1").Scan(&status)
 	require.NoError(t, err)
-	assert.Equal(t, "pending_download", status)
+	assert.Equal(t, synctypes.SyncStatusPendingDownload, status)
 }
 
 // Validates: R-2.5.1, R-6.5.2
@@ -2476,14 +2476,14 @@ func TestResetInProgressStates_MixedStates(t *testing.T) {
 	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot, testDelay))
 
 	// Verify each row.
-	expected := map[string]string{
-		"i1": "pending_download", // downloading → pending_download
-		"i2": "deleted",          // deleting + file absent → deleted
-		"i3": "pending_delete",   // deleting + file exists → pending_delete
-		"i4": "synced",           // untouched
+	expected := map[string]synctypes.SyncStatus{
+		"i1": synctypes.SyncStatusPendingDownload, // downloading → pending_download
+		"i2": synctypes.SyncStatusDeleted,         // deleting + file absent → deleted
+		"i3": synctypes.SyncStatusPendingDelete,   // deleting + file exists → pending_delete
+		"i4": synctypes.SyncStatusSynced,          // untouched
 	}
 	for id, want := range expected {
-		var got string
+		var got synctypes.SyncStatus
 		err := mgr.DB().QueryRowContext(ctx,
 			`SELECT sync_status FROM remote_state WHERE item_id = ?`, id).Scan(&got)
 		require.NoError(t, err)
@@ -2512,11 +2512,11 @@ func TestResetInProgressStates_CreatesSyncFailures_Download(t *testing.T) {
 	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot, testDelay))
 
 	// Verify remote_state was reset.
-	var status string
+	var status synctypes.SyncStatus
 	err = mgr.DB().QueryRowContext(ctx,
 		`SELECT sync_status FROM remote_state WHERE item_id = ?`, "item1").Scan(&status)
 	require.NoError(t, err)
-	assert.Equal(t, "pending_download", status)
+	assert.Equal(t, synctypes.SyncStatusPendingDownload, status)
 
 	// Verify sync_failures entry was created.
 	failures, err := mgr.ListSyncFailures(ctx)
@@ -2577,11 +2577,11 @@ func TestResetInProgressStates_NoSyncFailure_DeleteComplete(t *testing.T) {
 	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot, testDelay))
 
 	// Remote_state should be "deleted".
-	var status string
+	var status synctypes.SyncStatus
 	err = mgr.DB().QueryRowContext(ctx,
 		`SELECT sync_status FROM remote_state WHERE item_id = ?`, "item1").Scan(&status)
 	require.NoError(t, err)
-	assert.Equal(t, "deleted", status)
+	assert.Equal(t, synctypes.SyncStatusDeleted, status)
 
 	// No sync_failures should exist.
 	failures, err := mgr.ListSyncFailures(ctx)
