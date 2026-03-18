@@ -8,37 +8,39 @@ import (
 	"fmt"
 )
 
-// String constants for enum serialization (shared by String() and Parse*).
+// string constants for enum serialization (shared by String() and Parse*).
+// Unexported: only used within this file for typed constant definitions
+// and String()/Parse* methods.
 const (
-	StrRemote       = "remote"
-	StrLocal        = "local"
-	StrFile         = "file"
-	StrFolder       = "folder"
-	StrRoot         = "root"
-	StrDownload     = "download"
-	StrUpload       = "upload"
-	StrDelete       = "delete"
-	StrActionable   = "actionable"
-	StrTransient    = "transient"
-	StrLocalDelete  = "local_delete"
-	StrRemoteDelete = "remote_delete"
-	StrLocalMove    = "local_move"
-	StrRemoteMove   = "remote_move"
-	StrFolderCreate = "folder_create"
-	StrConflict     = "conflict"
-	StrUpdateSynced = "update_synced"
-	StrCleanup      = "cleanup"
+	strRemote       = "remote"
+	strLocal        = "local"
+	strFile         = "file"
+	strFolder       = "folder"
+	strRoot         = "root"
+	strDownload     = "download"
+	strUpload       = "upload"
+	strDelete       = "delete"
+	strActionable   = "actionable"
+	strTransient    = "transient"
+	strLocalDelete  = "local_delete"
+	strRemoteDelete = "remote_delete"
+	strLocalMove    = "local_move"
+	strRemoteMove   = "remote_move"
+	strFolderCreate = "folder_create"
+	strConflict     = "conflict"
+	strUpdateSynced = "update_synced"
+	strCleanup      = "cleanup"
 
 	// SyncStatus string constants — remote_state sync_status column values.
-	StrPendingDownload = "pending_download"
-	StrDownloading     = "downloading"
-	StrDownloadFailed  = "download_failed"
-	StrSynced          = "synced"
-	StrPendingDelete   = "pending_delete"
-	StrDeleting        = "deleting"
-	StrDeleteFailed    = "delete_failed"
-	StrDeleted         = "deleted"
-	StrFiltered        = "filtered"
+	strPendingDownload = "pending_download"
+	strDownloading     = "downloading"
+	strDownloadFailed  = "download_failed"
+	strSynced          = "synced"
+	strPendingDelete   = "pending_delete"
+	strDeleting        = "deleting"
+	strDeleteFailed    = "delete_failed"
+	strDeleted         = "deleted"
+	strFiltered        = "filtered"
 )
 
 // Direction represents the direction of a sync action (upload, download, delete).
@@ -47,9 +49,9 @@ const (
 type Direction string
 
 const (
-	DirectionDownload Direction = StrDownload
-	DirectionUpload   Direction = StrUpload
-	DirectionDelete   Direction = StrDelete
+	DirectionDownload Direction = strDownload
+	DirectionUpload   Direction = strUpload
+	DirectionDelete   Direction = strDelete
 )
 
 // FailureCategory classifies sync failures as transient (retryable) or
@@ -57,8 +59,8 @@ const (
 type FailureCategory string
 
 const (
-	CategoryTransient  FailureCategory = StrTransient
-	CategoryActionable FailureCategory = StrActionable
+	CategoryTransient  FailureCategory = strTransient
+	CategoryActionable FailureCategory = strActionable
 )
 
 // SyncStatus represents the sync_status of a remote_state row. Stored as TEXT
@@ -68,15 +70,15 @@ const (
 type SyncStatus string
 
 const (
-	SyncStatusPendingDownload SyncStatus = StrPendingDownload
-	SyncStatusDownloading     SyncStatus = StrDownloading
-	SyncStatusDownloadFailed  SyncStatus = StrDownloadFailed
-	SyncStatusSynced          SyncStatus = StrSynced
-	SyncStatusPendingDelete   SyncStatus = StrPendingDelete
-	SyncStatusDeleting        SyncStatus = StrDeleting
-	SyncStatusDeleteFailed    SyncStatus = StrDeleteFailed
-	SyncStatusDeleted         SyncStatus = StrDeleted
-	SyncStatusFiltered        SyncStatus = StrFiltered
+	SyncStatusPendingDownload SyncStatus = strPendingDownload
+	SyncStatusDownloading     SyncStatus = strDownloading
+	SyncStatusDownloadFailed  SyncStatus = strDownloadFailed
+	SyncStatusSynced          SyncStatus = strSynced
+	SyncStatusPendingDelete   SyncStatus = strPendingDelete
+	SyncStatusDeleting        SyncStatus = strDeleting
+	SyncStatusDeleteFailed    SyncStatus = strDeleteFailed
+	SyncStatusDeleted         SyncStatus = strDeleted
+	SyncStatusFiltered        SyncStatus = strFiltered
 )
 
 // Resolution strategy constants for conflict resolution.
@@ -113,9 +115,9 @@ const (
 func (s ChangeSource) String() string {
 	switch s {
 	case SourceRemote:
-		return StrRemote
+		return strRemote
 	case SourceLocal:
-		return StrLocal
+		return strLocal
 	default:
 		return fmt.Sprintf("ChangeSource(%d)", int(s))
 	}
@@ -162,11 +164,11 @@ const (
 func (t ItemType) String() string {
 	switch t {
 	case ItemTypeFile:
-		return StrFile
+		return strFile
 	case ItemTypeFolder:
-		return StrFolder
+		return strFolder
 	case ItemTypeRoot:
-		return StrRoot
+		return strRoot
 	default:
 		return fmt.Sprintf("ItemType(%d)", int(t))
 	}
@@ -200,11 +202,11 @@ func (t ItemType) Value() (driver.Value, error) {
 // ParseItemType converts a database TEXT value to ItemType.
 func ParseItemType(s string) (ItemType, error) {
 	switch s {
-	case StrFile:
+	case strFile:
 		return ItemTypeFile, nil
-	case StrFolder:
+	case strFolder:
 		return ItemTypeFolder, nil
-	case StrRoot:
+	case strRoot:
 		return ItemTypeRoot, nil
 	default:
 		return ItemTypeFile, fmt.Errorf("synctypes: unknown item type %q", s)
@@ -252,25 +254,25 @@ const (
 func (a ActionType) String() string {
 	switch a {
 	case ActionDownload:
-		return StrDownload
+		return strDownload
 	case ActionUpload:
-		return StrUpload
+		return strUpload
 	case ActionLocalDelete:
-		return StrLocalDelete
+		return strLocalDelete
 	case ActionRemoteDelete:
-		return StrRemoteDelete
+		return strRemoteDelete
 	case ActionLocalMove:
-		return StrLocalMove
+		return strLocalMove
 	case ActionRemoteMove:
-		return StrRemoteMove
+		return strRemoteMove
 	case ActionFolderCreate:
-		return StrFolderCreate
+		return strFolderCreate
 	case ActionConflict:
-		return StrConflict
+		return strConflict
 	case ActionUpdateSynced:
-		return StrUpdateSynced
+		return strUpdateSynced
 	case ActionCleanup:
-		return StrCleanup
+		return strCleanup
 	default:
 		return fmt.Sprintf("ActionType(%d)", int(a))
 	}
@@ -287,9 +289,9 @@ const (
 func (s FolderCreateSide) String() string {
 	switch s {
 	case CreateLocal:
-		return StrLocal
+		return strLocal
 	case CreateRemote:
-		return StrRemote
+		return strRemote
 	default:
 		return fmt.Sprintf("FolderCreateSide(%d)", int(s))
 	}
