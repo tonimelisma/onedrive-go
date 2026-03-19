@@ -858,7 +858,14 @@ func (e *Engine) ResolveConflict(ctx context.Context, conflictID, resolution str
 
 	switch resolution {
 	case synctypes.ResolutionKeepBoth:
-		// DB-only — executor already saved both copies during sync.
+		// Update baseline entries for both the original file and the conflict
+		// copy so the next sync sees them as unchanged. Without this, the
+		// scanner would flag the original (stale hash) and the conflict copy
+		// (no baseline entry) as needing action.
+		if err := e.resolveKeepBoth(ctx, c); err != nil {
+			return fmt.Errorf("sync: resolving conflict %s (%s): %w", c.ID, synctypes.ResolutionKeepBoth, err)
+		}
+
 		return e.baseline.ResolveConflict(ctx, c.ID, resolution)
 
 	case synctypes.ResolutionKeepLocal:
@@ -880,8 +887,34 @@ func (e *Engine) ResolveConflict(ctx context.Context, conflictID, resolution str
 	}
 }
 
-// resolveKeepLocal uploads the local file to overwrite the remote version.
+// resolveKeepLocal restores the conflict copy (which holds the user's local
+// version) to the original path and uploads it. During conflict detection,
+// ExecuteConflict renamed the local file to a conflict copy and downloaded
+// the remote content to the original path. "Keep local" means the user wants
+// their pre-conflict local content — which lives in the conflict copy.
 func (e *Engine) resolveKeepLocal(ctx context.Context, c *synctypes.ConflictRecord) error {
+	absPath := filepath.Join(e.syncRoot, c.Path)
+	pattern := syncexec.ConflictCopyGlob(absPath)
+
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return fmt.Errorf("glob conflict copies for keep-local: %w", err)
+	}
+
+	// Restore the first conflict copy to the original path. If multiple
+	// conflict copies exist (shouldn't normally happen), the first one is
+	// the user's local version.
+	if len(matches) > 0 {
+		if renameErr := os.Rename(matches[0], absPath); renameErr != nil {
+			return fmt.Errorf("restoring conflict copy to %s: %w", c.Path, renameErr)
+		}
+
+		e.logger.Debug("restored conflict copy for keep-local",
+			slog.String("from", filepath.Base(matches[0])),
+			slog.String("to", c.Path),
+		)
+	}
+
 	return e.resolveTransfer(ctx, c, synctypes.ActionUpload)
 }
 
@@ -924,7 +957,115 @@ func (e *Engine) resolveTransfer(ctx context.Context, c *synctypes.ConflictRecor
 		return fmt.Errorf("transfer failed: %w", outcome.Error)
 	}
 
-	return e.baseline.CommitOutcome(ctx, &outcome)
+	if err := e.baseline.CommitOutcome(ctx, &outcome); err != nil {
+		return err
+	}
+
+	// Clean up conflict copies — the user has chosen one side, so the
+	// conflict copy (holding the other side's content) serves no purpose.
+	e.cleanupConflictCopies(c.Path)
+
+	return nil
+}
+
+// resolveKeepBoth updates baseline entries for both the original file and its
+// conflict copies so that the next sync treats them as unchanged. The original
+// file's baseline was not updated during conflict detection (unresolved
+// conflicts intentionally skip baseline upsert), so it still has a stale hash.
+// Conflict copies have no baseline entry at all.
+func (e *Engine) resolveKeepBoth(ctx context.Context, c *synctypes.ConflictRecord) error {
+	absPath := filepath.Join(e.syncRoot, c.Path)
+
+	// Update baseline for the original file with its current on-disk hash.
+	if err := e.upsertBaselineFromDisk(ctx, c.DriveID, c.ItemID, c.Path, absPath); err != nil {
+		return fmt.Errorf("updating baseline for original: %w", err)
+	}
+
+	// Find conflict copies and create baseline entries for each. A synthetic
+	// item ID is used because the conflict copy has no remote counterpart yet.
+	// The next upload-capable sync or full reconciliation will upload the file
+	// and replace this entry with a real item ID.
+	pattern := syncexec.ConflictCopyGlob(absPath)
+
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return fmt.Errorf("glob conflict copies: %w", err)
+	}
+
+	for _, m := range matches {
+		relPath, relErr := filepath.Rel(e.syncRoot, m)
+		if relErr != nil {
+			return fmt.Errorf("computing relative path for conflict copy: %w", relErr)
+		}
+
+		syntheticID := "conflict-copy-placeholder"
+		if upsertErr := e.upsertBaselineFromDisk(ctx, c.DriveID, syntheticID, relPath, m); upsertErr != nil {
+			return fmt.Errorf("updating baseline for conflict copy %s: %w", filepath.Base(m), upsertErr)
+		}
+	}
+
+	return nil
+}
+
+// upsertBaselineFromDisk computes the QuickXorHash of a file on disk and
+// commits a synthetic UpdateSynced outcome to the baseline. Used during
+// conflict resolution to bring baseline entries up to date without a real
+// transfer.
+func (e *Engine) upsertBaselineFromDisk(ctx context.Context, driveID driveid.ID, itemID, relPath, absPath string) error {
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", relPath, err)
+	}
+
+	hash, err := driveops.ComputeQuickXorHash(absPath)
+	if err != nil {
+		return fmt.Errorf("hashing %s: %w", relPath, err)
+	}
+
+	outcome := &synctypes.Outcome{
+		Action:    synctypes.ActionUpdateSynced,
+		Success:   true,
+		Path:      relPath,
+		DriveID:   driveID,
+		ItemID:    itemID,
+		ItemType:  synctypes.ItemTypeFile,
+		LocalHash: hash,
+		Size:      info.Size(),
+		Mtime:     info.ModTime().UnixNano(),
+	}
+
+	return e.baseline.CommitOutcome(ctx, outcome)
+}
+
+// cleanupConflictCopies deletes all conflict copy files for the given
+// relative path. Called after keep-local or keep-remote resolution — the
+// user has chosen one side, so the other side's content is no longer needed.
+func (e *Engine) cleanupConflictCopies(relPath string) {
+	absPath := filepath.Join(e.syncRoot, relPath)
+	pattern := syncexec.ConflictCopyGlob(absPath)
+
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		e.logger.Warn("glob for conflict copies",
+			slog.String("path", relPath),
+			slog.String("error", err.Error()),
+		)
+
+		return
+	}
+
+	for _, m := range matches {
+		if removeErr := os.Remove(m); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			e.logger.Warn("removing conflict copy",
+				slog.String("file", filepath.Base(m)),
+				slog.String("error", removeErr.Error()),
+			)
+		} else {
+			e.logger.Debug("removed conflict copy",
+				slog.String("file", filepath.Base(m)),
+			)
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------

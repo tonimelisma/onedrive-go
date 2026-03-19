@@ -170,6 +170,17 @@ func writeMinimalConfig(t *testing.T) string {
 	return cfgPath
 }
 
+// skipIfPersonalDrive skips the test if the primary test drive is a Personal
+// OneDrive account. Some Graph API endpoints (e.g., /special/recyclebin) are
+// only available on Business/SharePoint drives.
+func skipIfPersonalDrive(t *testing.T) {
+	t.Helper()
+
+	if strings.HasPrefix(drive, "personal:") {
+		t.Skip("skipping: test requires Business/SharePoint drive (personal drive does not support this API)")
+	}
+}
+
 // --- CLI execution helpers ---
 
 // makeCmd creates an exec.Cmd for the CLI binary with explicit environment.

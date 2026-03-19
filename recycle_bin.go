@@ -70,6 +70,13 @@ func runRecycleBinList(cmd *cobra.Command, _ []string) error {
 
 	items, err := session.ListRecycleBinItems(ctx)
 	if err != nil {
+		// Personal OneDrive accounts don't support the /special/recyclebin
+		// endpoint — the Graph API returns HTTP 400. Provide a clear message
+		// instead of a raw API error (graph-api-quirks.md §Recycle Bin).
+		if errors.Is(err, graph.ErrBadRequest) {
+			return fmt.Errorf("recycle bin listing is not available on Personal OneDrive accounts")
+		}
+
 		return fmt.Errorf("listing recycle bin: %w", err)
 	}
 
@@ -136,6 +143,10 @@ func runRecycleBinEmpty(cmd *cobra.Command, _ []string) error {
 
 	items, err := session.ListRecycleBinItems(ctx)
 	if err != nil {
+		if errors.Is(err, graph.ErrBadRequest) {
+			return fmt.Errorf("recycle bin listing is not available on Personal OneDrive accounts")
+		}
+
 		return fmt.Errorf("listing recycle bin: %w", err)
 	}
 
