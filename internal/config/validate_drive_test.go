@@ -48,7 +48,7 @@ func TestValidateDrives_InvalidPollInterval(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{
 		SyncDir:      "~/OneDrive",
-		PollInterval: "1m", // too short (min 5m)
+		PollInterval: "10s", // too short (min 30s)
 	}
 
 	err := Validate(cfg)

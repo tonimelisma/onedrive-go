@@ -72,7 +72,8 @@ func TestE2E_Sync_IncrementalDeltaToken(t *testing.T) {
 // (remote deletes + local creates) and a sync, an immediate re-sync detects
 // no changes — proving crash recovery is idempotent.
 func TestE2E_Sync_CrashRecoveryIdempotent(t *testing.T) {
-	t.Parallel()
+	// No t.Parallel() — bidirectional sync sees drive-level delta feed,
+	// so parallel tests inject cross-test events causing spurious failures.
 	registerLogDump(t)
 
 	syncDir := t.TempDir()

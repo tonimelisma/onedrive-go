@@ -180,7 +180,7 @@ func TestValidate_Permissions_Valid(t *testing.T) {
 
 func TestValidate_PollInterval_TooShort(t *testing.T) {
 	cfg := validConfig()
-	cfg.PollInterval = "1m"
+	cfg.PollInterval = "10s"
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "poll_interval")

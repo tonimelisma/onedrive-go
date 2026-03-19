@@ -56,6 +56,7 @@ func TestE2E_Sync_EmptyDirectory(t *testing.T) {
 	// required. Big-delete protection won't trigger (< 10 baseline items).
 	// Use runCLIWithConfigAllowError inside Eventually to prevent panic
 	// when the test times out (require.Eventually runs in a goroutine).
+	// Delta endpoint may lag 60-120s behind REST; use 180s to avoid flakes.
 	require.Eventually(t, func() bool {
 		_, _, syncErr := runCLIWithConfigAllowError(t, cfgPath, env, "sync", "--download-only")
 		if syncErr != nil {
@@ -63,7 +64,7 @@ func TestE2E_Sync_EmptyDirectory(t *testing.T) {
 		}
 		_, statErr := os.Stat(localDir)
 		return os.IsNotExist(statErr)
-	}, 120*time.Second, 5*time.Second, "empty folder should be deleted locally after remote delete")
+	}, 180*time.Second, 5*time.Second, "empty folder should be deleted locally after remote delete")
 }
 
 // TestE2E_Sync_NestedDeletion validates that deleting a deeply nested remote
@@ -104,6 +105,7 @@ func TestE2E_Sync_NestedDeletion(t *testing.T) {
 	// delta catches up and the tree deletion propagates locally.
 	// Use runCLIWithConfigAllowError inside Eventually to prevent panic
 	// when the test times out (require.Eventually runs in a goroutine).
+	// Delta endpoint may lag 60-120s behind REST; use 180s to avoid flakes.
 	require.Eventually(t, func() bool {
 		_, _, syncErr := runCLIWithConfigAllowError(t, cfgPath, env, "sync", "--download-only")
 		if syncErr != nil {
@@ -111,7 +113,7 @@ func TestE2E_Sync_NestedDeletion(t *testing.T) {
 		}
 		_, statErr := os.Stat(filepath.Join(localDir, "a"))
 		return os.IsNotExist(statErr)
-	}, 120*time.Second, 5*time.Second, "a/ directory should be deleted locally after remote delete")
+	}, 180*time.Second, 5*time.Second, "a/ directory should be deleted locally after remote delete")
 
 	// Verify entire local tree is gone.
 	_, err := os.Stat(filepath.Join(localDir, "a", "b", "c", "deep.txt"))
@@ -127,7 +129,8 @@ func TestE2E_Sync_NestedDeletion(t *testing.T) {
 // TestE2E_Sync_ResolveKeepLocalThenSync resolves an edit-edit conflict with
 // --keep-local, then syncs to verify the remote gets the local content.
 func TestE2E_Sync_ResolveKeepLocalThenSync(t *testing.T) {
-	t.Parallel()
+	// No t.Parallel() — bidirectional sync sees drive-level delta feed,
+	// so parallel tests inject cross-test events causing spurious failures.
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
@@ -167,7 +170,8 @@ func TestE2E_Sync_ResolveKeepLocalThenSync(t *testing.T) {
 // --keep-remote, syncs, and verifies local has remote content with conflict
 // copy cleaned up.
 func TestE2E_Sync_ResolveKeepRemoteThenSync(t *testing.T) {
-	t.Parallel()
+	// No t.Parallel() — bidirectional sync sees drive-level delta feed,
+	// so parallel tests inject cross-test events causing spurious failures.
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
@@ -261,7 +265,8 @@ func TestE2E_Sync_MtimeOnlyChange(t *testing.T) {
 // TestE2E_Sync_IdempotentReSync validates that re-syncing immediately after
 // a successful sync reports no changes.
 func TestE2E_Sync_IdempotentReSync(t *testing.T) {
-	t.Parallel()
+	// No t.Parallel() — bidirectional sync sees drive-level delta feed,
+	// so parallel tests inject cross-test events causing spurious failures.
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
