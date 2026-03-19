@@ -105,8 +105,9 @@ func TestE2E_Sync_NestedDeletion(t *testing.T) {
 	// delta catches up and the tree deletion propagates locally.
 	// Use runCLIWithConfigAllowError inside Eventually to prevent panic
 	// when the test times out (require.Eventually runs in a goroutine).
-	// Delta endpoint may lag 60-180s+ behind REST for nested tree deletions
-	// (ci_issues.md §17); use 300s to give ~2x headroom.
+	// With cascade expansion (sync-planning.md §Folder Delete Cascade),
+	// once delta reports the parent folder deletion, all children are
+	// deleted in a single pass — no need for multiple delta cycles.
 	require.Eventually(t, func() bool {
 		_, _, syncErr := runCLIWithConfigAllowError(t, cfgPath, env, "sync", "--download-only")
 		if syncErr != nil {
@@ -114,7 +115,7 @@ func TestE2E_Sync_NestedDeletion(t *testing.T) {
 		}
 		_, statErr := os.Stat(filepath.Join(localDir, "a"))
 		return os.IsNotExist(statErr)
-	}, 300*time.Second, 5*time.Second, "a/ directory should be deleted locally after remote delete")
+	}, 120*time.Second, 5*time.Second, "a/ directory should be deleted locally after remote delete")
 
 	// Verify entire local tree is gone.
 	_, err := os.Stat(filepath.Join(localDir, "a", "b", "c", "deep.txt"))

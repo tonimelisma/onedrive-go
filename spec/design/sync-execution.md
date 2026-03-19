@@ -111,6 +111,8 @@ Flat pool of `transfer_workers` goroutines. Decoupled from dispatch infrastructu
 ### Uploads (`executor_transfer.go`)
 Simple PUT (≤4 MiB) or resumable session (>4 MiB). Post-upload validation detects SharePoint enrichment.
 
+**Watch-Mode Upload Freshness Check**: In watch mode, `ExecuteUpload` performs a pre-flight eTag comparison before uploading. The debounce-based event batching can split simultaneous local+remote changes across passes: a local fsnotify event may trigger an upload before the remote observer has polled the collaborator's edit. The freshness check fetches the item's current remote eTag via `GetItem` and compares it against the baseline eTag. If they differ, the upload is aborted with a descriptive error (recorded in `sync_failures`). On the next pass, the remote observer will have polled, the planner will see both changes, and a proper conflict will be detected. Cost: one additional `GetItem` API call per upload in watch mode only — controlled by `ExecutorConfig.watchMode` (set by `initWatchInfra`).
+
 ### Deletes (`executor_delete.go`)
 Implements: R-6.2.4 [verified]
 

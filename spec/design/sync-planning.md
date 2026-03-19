@@ -76,6 +76,20 @@ In watch mode, the planner-level check is disabled (`threshold=MaxInt32`) — th
 - The planner detects action dependency cycles using DFS with white/gray/black node coloring after `buildDependencies()`. Cycle detection prevents deadlock in the DepGraph.
 - Property-based tests for planner with random inputs — verify DAG invariant holds under all generated scenarios. [planned]
 
+## Folder Delete Cascade Expansion
+
+When the Graph API delta endpoint reports a parent folder as deleted, it does NOT report individual child item deletions. Without intervention, the planner generates a single `ActionLocalDelete` for the parent, and the executor's `DeleteLocalFolder` refuses to remove a non-empty directory.
+
+**Solution**: Step 2.5 in `Plan()` — `expandFolderDeleteCascades()` runs after per-path classification but before dependency building. For each folder `ActionLocalDelete` or `ActionCleanup`, it walks `baseline.DescendantsOf(path)` to find all baseline entries under the folder and synthesizes additional delete/cleanup actions.
+
+**Deduplication**: Maintains an `existingPaths` set to prevent double-generation when delta reports both parent and child.
+
+**Safety preservation**:
+- Hash-before-delete (S4): cascaded file deletes go through `DeleteLocalFile` which verifies hash against baseline before deletion — if locally modified, creates conflict copy.
+- Big-delete protection: cascaded actions increase the delete count → threshold check at Step 4 happens after cascade → triggers correctly.
+- Non-disposable check: `DeleteLocalFolder` remains as defense-in-depth.
+- Upload-only mode: cascade is skipped entirely (no local deletions in upload-only).
+
 ## Cross-Drive Move Guard
 
 Implements: R-6.7.21 [verified]

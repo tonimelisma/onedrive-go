@@ -1231,6 +1231,11 @@ func (e *Engine) initWatchInfra(
 		retryTimerCh: make(chan struct{}, 1),
 	}
 
+	// Enable watch-mode-specific executor behavior (pre-upload eTag
+	// freshness checks to prevent silently overwriting concurrent remote
+	// changes — see executor_transfer.go).
+	e.execCfg.SetWatchMode(true)
+
 	e.initDeleteProtection(ctx, opts.Force)
 
 	// DepGraph tracks action dependencies; ScopeGate handles scope-based

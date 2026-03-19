@@ -2,6 +2,7 @@ package syncexec
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -76,8 +77,32 @@ func (e *Executor) downloadOutcome(
 
 // ExecuteUpload uploads a local file to OneDrive via TransferManager. Exported
 // for use by the engine's conflict resolution path.
+//
+// In watch mode, a pre-upload eTag freshness check prevents silently
+// overwriting concurrent remote changes. When the remote eTag differs from
+// the baseline, the upload is aborted with a descriptive error. The engine
+// records this as a sync_failure; on the next pass the remote observer will
+// have polled, and the planner will see both changes and detect a conflict.
 func (e *Executor) ExecuteUpload(ctx context.Context, action *synctypes.Action) synctypes.Outcome {
 	driveID := e.resolveDriveID(action)
+
+	// Watch-mode freshness check: verify the remote hasn't changed since
+	// our last observation. This catches the race where a local change
+	// triggers an upload before the remote observer has polled the
+	// collaborator's edit.
+	if e.watchMode && action.ItemID != "" &&
+		action.View != nil && action.View.Baseline != nil &&
+		action.View.Baseline.ETag != "" {
+		currentItem, fetchErr := e.items.GetItem(ctx, driveID, action.ItemID)
+		if fetchErr == nil && currentItem.ETag != action.View.Baseline.ETag {
+			return e.failedOutcome(action, synctypes.ActionUpload,
+				fmt.Errorf("remote eTag changed since last sync (baseline=%s current=%s): potential conflict",
+					action.View.Baseline.ETag, currentItem.ETag))
+		}
+		// If GetItem fails (transient error, item deleted), proceed with
+		// the upload — the server-side conflict resolution (or a 404) will
+		// handle it.
+	}
 
 	parentID, err := e.ResolveParentID(action.Path)
 	if err != nil {
