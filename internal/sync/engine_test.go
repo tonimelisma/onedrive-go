@@ -965,8 +965,11 @@ func TestResolveConflict_KeepBoth(t *testing.T) {
 		},
 	}
 
-	eng, _ := newTestEngine(t, mock)
+	eng, syncRoot := newTestEngine(t, mock)
 	ctx := t.Context()
+
+	// Create the file on disk — resolveKeepBoth hashes it to update baseline.
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "conflict-file.txt"), []byte("local content"), 0o644))
 
 	// Seed a conflict.
 	outcomes := []synctypes.Outcome{{
@@ -995,6 +998,13 @@ func TestResolveConflict_KeepBoth(t *testing.T) {
 	remaining, err := eng.ListConflicts(ctx)
 	require.NoError(t, err, "ListConflicts after resolve")
 	assert.Empty(t, remaining, "expected 0 unresolved conflicts")
+
+	// Verify baseline was updated for the original file.
+	bl, loadErr := eng.baseline.Load(ctx)
+	require.NoError(t, loadErr)
+	entry, found := bl.GetByPath("conflict-file.txt")
+	require.True(t, found, "original file should have baseline entry after keep_both")
+	assert.NotEqual(t, "local-h", entry.LocalHash, "baseline hash should be updated to current disk content")
 }
 
 func TestResolveConflict_NotFound(t *testing.T) {

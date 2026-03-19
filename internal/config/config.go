@@ -92,6 +92,7 @@ type SyncConfig struct {
 	DryRun                   bool   `toml:"dry_run"`
 	VerifyInterval           string `toml:"verify_interval"`
 	ShutdownTimeout          string `toml:"shutdown_timeout"`
+	SafetyScanInterval       string `toml:"safety_scan_interval"`
 }
 
 // LoggingConfig controls log output behavior: level, format, and rotation.
