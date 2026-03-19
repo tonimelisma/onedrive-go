@@ -658,6 +658,7 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 	// Use runCLIWithConfigAllowError inside Eventually — require.Eventually
 	// runs the function in a goroutine, and runCLIWithConfig's require.NoErrorf
 	// would panic if the test has already timed out.
+	// Delta endpoint may lag 60-120s behind REST; use 180s to avoid flakes.
 	require.Eventually(t, func() bool {
 		_, _, syncErr := runCLIWithConfigAllowError(t, cfgPath, env, "sync", "--force")
 		if syncErr != nil {
@@ -666,7 +667,7 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 		_, errRemote := os.Stat(filepath.Join(localDir, "del-remote.txt"))
 		_, errSub := os.Stat(filepath.Join(localDir, "sub"))
 		return os.IsNotExist(errRemote) && os.IsNotExist(errSub)
-	}, 120*time.Second, 5*time.Second,
+	}, 180*time.Second, 5*time.Second,
 		"remote-only deletions should propagate locally after sync")
 
 	// Step 5: Assert remaining results.

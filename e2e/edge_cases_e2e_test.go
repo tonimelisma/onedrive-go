@@ -110,9 +110,9 @@ func TestE2E_InvalidFilenameRejection(t *testing.T) {
 	// Upload.
 	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
-	// The debug stderr should mention skipping the invalid name.
-	assert.Contains(t, stderr, "skipping invalid OneDrive name",
-		"should log warning about invalid filename")
+	// The debug stderr should mention skipping the invalid entry.
+	assert.Contains(t, stderr, "skipping invalid entry",
+		"should log debug message about invalid filename")
 
 	// Verify only valid.txt appeared remotely (poll for eventual consistency).
 	stdout, _ := pollCLIWithConfigContains(t, opsCfgPath, nil, "valid.txt", pollTimeout, "ls", "/"+testFolder)
