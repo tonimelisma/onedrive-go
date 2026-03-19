@@ -158,19 +158,27 @@ func TestE2E_SyncWatch_Bidirectional(t *testing.T) {
 
 // TestE2E_SyncWatch_ConflictDuringWatch starts a bidirectional daemon, creates
 // a file, waits for it to sync, then modifies both sides to create a conflict.
+// The remote is modified FIRST and confirmed via stat, then the local is
+// modified. This ensures the remote change is in the delta feed when the
+// local fsnotify event triggers a sync pass, so the planner sees both changes
+// and produces a conflict.
 func TestE2E_SyncWatch_ConflictDuringWatch(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
+	cfgPath, env := writeSyncConfigWithOptions(t, syncDir,
+		"poll_interval = \"30s\"\nsafety_scan_interval = \"30s\"\n")
 	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-watch-conf-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
-	// Start bidirectional daemon.
-	cmd := startDaemon(t, cfgPath, env,
+	// Start bidirectional daemon with stderr access to wait for watch setup.
+	h := startDaemonWithStderr(t, cfgPath, env,
 		"--drive", drive, "sync", "--watch", "--force")
+
+	// Wait for fsnotify watches to be established before creating files.
+	waitForStderrContains(t, h.Stderr, "local observer starting watch", 30*time.Second)
 
 	// Create file and wait for it to sync.
 	localDir := filepath.Join(syncDir, testFolder)
@@ -182,9 +190,17 @@ func TestE2E_SyncWatch_ConflictDuringWatch(t *testing.T) {
 	remotePath := "/" + testFolder + "/conflict-watch.txt"
 	pollCLIWithConfigContains(t, opsCfgPath, nil, "conflict-watch.txt", daemonPollTimeout, "stat", remotePath)
 
-	// Modify both sides simultaneously to create conflict.
-	require.NoError(t, os.WriteFile(filePath, []byte("local conflict version"), 0o644))
+	// Modify remote FIRST: put a new version and confirm it propagated via
+	// stat. This ensures the delta feed has the remote change before we
+	// trigger local fsnotify.
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/conflict-watch.txt", "remote conflict version")
+
+	// Give delta time to pick up the remote change before triggering local.
+	time.Sleep(5 * time.Second)
+
+	// Now modify local — fsnotify fires, daemon runs a sync pass that sees
+	// both the local change and the remote change from the delta feed.
+	require.NoError(t, os.WriteFile(filePath, []byte("local conflict version"), 0o644))
 
 	// Wait for the daemon to detect the conflict. Poll conflicts command.
 	deadline := time.Now().Add(daemonPollTimeout)
@@ -203,26 +219,34 @@ func TestE2E_SyncWatch_ConflictDuringWatch(t *testing.T) {
 	}
 
 	// Graceful shutdown.
-	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
-	_ = cmd.Wait()
+	require.NoError(t, h.Cmd.Process.Signal(syscall.SIGTERM))
+	_ = h.Cmd.Wait()
 }
 
 // TestE2E_SyncWatch_FileModification starts an upload-only daemon, creates
 // a file, waits for upload, then modifies it and verifies the remote gets
 // the new content.
+//
+// Uses safety_scan_interval=30s as a fallback for missed fsnotify events,
+// and waits for "local observer starting watch" before creating files to
+// eliminate the watch setup race.
 func TestE2E_SyncWatch_FileModification(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
+	cfgPath, env := writeSyncConfigWithOptions(t, syncDir,
+		"poll_interval = \"30s\"\nsafety_scan_interval = \"30s\"\n")
 	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-watch-mod-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
-	// Start upload-only daemon.
-	cmd := startDaemon(t, cfgPath, env,
+	// Start upload-only daemon with stderr access to wait for watch setup.
+	h := startDaemonWithStderr(t, cfgPath, env,
 		"--drive", drive, "sync", "--upload-only", "--watch", "--force")
+
+	// Wait for fsnotify watches to be established before creating files.
+	waitForStderrContains(t, h.Stderr, "local observer starting watch", 30*time.Second)
 
 	// Create file.
 	localDir := filepath.Join(syncDir, testFolder)
@@ -254,8 +278,8 @@ func TestE2E_SyncWatch_FileModification(t *testing.T) {
 	}
 
 	// Graceful shutdown.
-	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
-	_ = cmd.Wait()
+	require.NoError(t, h.Cmd.Process.Signal(syscall.SIGTERM))
+	_ = h.Cmd.Wait()
 }
 
 // TestE2E_SyncWatch_FileDeletion starts an upload-only daemon, creates a file,

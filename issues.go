@@ -173,12 +173,10 @@ func runResolve(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	cc := mustCLIContext(ctx)
 
-	// keep_both doesn't need graph client — just DB update.
-	if resolution == resolutionKeepBoth {
-		return resolveKeepBothOnly(ctx, cc, args, resolveAll, dryRun)
-	}
-
-	// keep_local and keep_remote need graph client for transfers.
+	// All resolution strategies go through the engine: keep_local and
+	// keep_remote need the graph client for transfers, and keep_both needs
+	// the sync root to update baseline entries for the original file and
+	// its conflict copies.
 	return resolveWithTransfers(ctx, cc, args, resolution, resolveAll, dryRun)
 }
 
@@ -200,25 +198,6 @@ func resolveStrategy(cmd *cobra.Command) (string, error) {
 	default:
 		return resolutionKeepBoth, nil
 	}
-}
-
-func resolveKeepBothOnly(ctx context.Context, cc *CLIContext, args []string, all, dryRun bool) error {
-	dbPath := cc.Cfg.StatePath()
-	if dbPath == "" {
-		return fmt.Errorf("cannot determine state DB path for drive %q", cc.Cfg.CanonicalID)
-	}
-
-	mgr, err := syncstore.NewSyncStore(dbPath, cc.Logger)
-	if err != nil {
-		return err
-	}
-	defer mgr.Close()
-
-	if all {
-		return resolveAllKeepBoth(ctx, cc, mgr, dryRun)
-	}
-
-	return resolveSingleKeepBoth(ctx, cc, mgr, args[0], dryRun)
 }
 
 func resolveEachConflict(
@@ -245,24 +224,6 @@ func resolveEachConflict(
 	}
 
 	return nil
-}
-
-func resolveAllKeepBoth(ctx context.Context, cc *CLIContext, mgr *syncstore.SyncStore, dryRun bool) error {
-	conflicts, err := mgr.ListConflicts(ctx)
-	if err != nil {
-		return err
-	}
-
-	return resolveEachConflict(cc, conflicts, resolutionKeepBoth, dryRun, func(id, resolution string) error {
-		return mgr.ResolveConflict(ctx, id, resolution)
-	})
-}
-
-func resolveSingleKeepBoth(ctx context.Context, cc *CLIContext, mgr *syncstore.SyncStore, idOrPath string, dryRun bool) error {
-	return resolveSingleConflict(cc, idOrPath, resolutionKeepBoth, dryRun,
-		func() ([]synctypes.ConflictRecord, error) { return mgr.ListConflicts(ctx) },
-		func(id, resolution string) error { return mgr.ResolveConflict(ctx, id, resolution) },
-	)
 }
 
 func resolveWithTransfers(

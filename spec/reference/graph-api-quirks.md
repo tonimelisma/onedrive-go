@@ -177,3 +177,11 @@ All delta responses pass through a 5-stage normalization pipeline (`internal/gra
 3. Clear deleted item hashes
 4. Deduplicate (keep last occurrence per item ID)
 5. Reorder deletions before creations (within each parent)
+
+## Recycle Bin API — Personal vs Business
+
+The `/drives/{id}/special/recyclebin/children` endpoint only works on Business/SharePoint drives. Personal OneDrive accounts return **HTTP 400** (`"The special folder identifier isn't valid"`) because the `special` folder collection does not include `recyclebin` on Personal accounts.
+
+Similarly, `permanentDelete` (used by `recycle-bin empty`) returns **HTTP 405** on Personal accounts — the code already handles this by falling back to regular `DELETE` (`recycle_bin.go`).
+
+**Impact**: `recycle-bin list` and `recycle-bin restore` are Business-only. E2E tests skip on Personal accounts.

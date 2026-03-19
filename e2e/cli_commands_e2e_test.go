@@ -416,6 +416,7 @@ func TestE2E_Verify_AfterSync(t *testing.T) {
 // put → rm → recycle-bin list → recycle-bin restore → verify restored.
 func TestE2E_RecycleBinRoundtrip(t *testing.T) {
 	t.Parallel()
+	skipIfPersonalDrive(t)
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
@@ -477,6 +478,7 @@ func TestE2E_RecycleBinRoundtrip(t *testing.T) {
 // permanently removes items from the recycle bin.
 func TestE2E_RecycleBinEmpty(t *testing.T) {
 	t.Parallel()
+	skipIfPersonalDrive(t)
 	registerLogDump(t)
 
 	syncDir := t.TempDir()

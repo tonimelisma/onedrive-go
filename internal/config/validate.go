@@ -13,27 +13,28 @@ import (
 
 // Validation range constants.
 const (
-	minTransferWorkers = 4
-	maxTransferWorkers = 64
-	minCheckWorkers    = 1
-	maxCheckWorkers    = 16
-	minBigDelete       = 1
-	minLogRetention    = 1
-	minFullscanNonZero = 2
-	chunkAlignBytes    = 327680     // 320 KiB alignment for upload chunks
-	minChunkBytes      = 10_485_760 // 10 MiB
-	maxChunkBytes      = 62_914_560 // 60 MiB
-	minPollInterval    = 30 * time.Second
-	minShutdownTimeout = 5 * time.Second
-	minConnectTimeout  = 1 * time.Second
-	minDataTimeout     = 5 * time.Second
-	octalBase          = 8
-	minOctalDigits     = 3
-	maxOctalDigits     = 4
-	maxOctalValue      = 0o777
-	schedulePartCount  = 2
-	maxScheduleHour    = 23
-	maxScheduleMinute  = 59
+	minTransferWorkers    = 4
+	maxTransferWorkers    = 64
+	minCheckWorkers       = 1
+	maxCheckWorkers       = 16
+	minBigDelete          = 1
+	minLogRetention       = 1
+	minFullscanNonZero    = 2
+	chunkAlignBytes       = 327680     // 320 KiB alignment for upload chunks
+	minChunkBytes         = 10_485_760 // 10 MiB
+	maxChunkBytes         = 62_914_560 // 60 MiB
+	minPollInterval       = 30 * time.Second
+	minShutdownTimeout    = 5 * time.Second
+	minSafetyScanInterval = 10 * time.Second
+	minConnectTimeout     = 1 * time.Second
+	minDataTimeout        = 5 * time.Second
+	octalBase             = 8
+	minOctalDigits        = 3
+	maxOctalDigits        = 4
+	maxOctalValue         = 0o777
+	schedulePartCount     = 2
+	maxScheduleHour       = 23
+	maxScheduleMinute     = 59
 )
 
 // collectValidationErrors accumulates all config validation errors into a
@@ -283,6 +284,7 @@ func validateSync(s *SyncConfig) []error {
 	errs = append(errs, validateDurationNonNeg("conflict_reminder_interval", s.ConflictReminderInterval)...)
 	errs = append(errs, validateDurationNonNeg("verify_interval", s.VerifyInterval)...)
 	errs = append(errs, validateDurationMin("shutdown_timeout", s.ShutdownTimeout, minShutdownTimeout)...)
+	errs = append(errs, validateDurationMin("safety_scan_interval", s.SafetyScanInterval, minSafetyScanInterval)...)
 
 	return errs
 }

@@ -26,6 +26,7 @@ const (
 	defaultConflictReminder    = "1h"
 	defaultVerifyInterval      = "0"
 	defaultShutdownTimeout     = "30s"
+	defaultSafetyScanInterval  = "5m"
 	defaultLogLevel            = "info"
 	defaultLogFormat           = "auto"
 	defaultLogRetentionDays    = 30
@@ -92,6 +93,7 @@ func defaultSyncConfig() SyncConfig {
 		ConflictReminderInterval: defaultConflictReminder,
 		VerifyInterval:           defaultVerifyInterval,
 		ShutdownTimeout:          defaultShutdownTimeout,
+		SafetyScanInterval:       defaultSafetyScanInterval,
 	}
 }
 

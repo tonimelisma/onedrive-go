@@ -90,8 +90,9 @@ func runSync(cmd *cobra.Command, _ []string) error {
 		holder := config.NewHolder(rawCfg, cc.CfgPath)
 
 		return runSyncDaemon(ctx, holder, selectors, mode, synctypes.WatchOpts{
-			Force:        force,
-			PollInterval: parsePollInterval(rawCfg.PollInterval),
+			Force:              force,
+			PollInterval:       parsePollInterval(rawCfg.PollInterval),
+			SafetyScanInterval: parseDurationOrZero(rawCfg.SafetyScanInterval),
 		}, logger)
 	}
 
@@ -317,6 +318,13 @@ func printSyncReport(r *synctypes.SyncReport, cc *CLIContext) {
 // The value has already been validated by config loading, so parse failure
 // is not expected in practice.
 func parsePollInterval(s string) time.Duration {
+	return parseDurationOrZero(s)
+}
+
+// parseDurationOrZero converts a duration string to time.Duration, returning
+// 0 (use default) if the string is empty or invalid. Config values have
+// already been validated by config loading.
+func parseDurationOrZero(s string) time.Duration {
 	if s == "" {
 		return 0
 	}
