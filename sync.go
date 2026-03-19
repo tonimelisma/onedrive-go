@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/signal"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -87,8 +88,10 @@ func runSync(cmd *cobra.Command, _ []string) error {
 
 	if watch {
 		holder := config.NewHolder(rawCfg, cc.CfgPath)
+
 		return runSyncDaemon(ctx, holder, selectors, mode, synctypes.WatchOpts{
-			Force: force,
+			Force:        force,
+			PollInterval: parsePollInterval(rawCfg.PollInterval),
 		}, logger)
 	}
 
@@ -307,4 +310,21 @@ func printSyncReport(r *synctypes.SyncReport, cc *CLIContext) {
 			cc.Statusf("  Error:     %v\n", e)
 		}
 	}
+}
+
+// parsePollInterval converts the config poll_interval string to a
+// time.Duration. Returns 0 (use default) if the string is empty or invalid.
+// The value has already been validated by config loading, so parse failure
+// is not expected in practice.
+func parsePollInterval(s string) time.Duration {
+	if s == "" {
+		return 0
+	}
+
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0
+	}
+
+	return d
 }

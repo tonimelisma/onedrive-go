@@ -23,7 +23,7 @@ const (
 	chunkAlignBytes    = 327680     // 320 KiB alignment for upload chunks
 	minChunkBytes      = 10_485_760 // 10 MiB
 	maxChunkBytes      = 62_914_560 // 60 MiB
-	minPollInterval    = 5 * time.Minute
+	minPollInterval    = 30 * time.Second
 	minShutdownTimeout = 5 * time.Second
 	minConnectTimeout  = 1 * time.Second
 	minDataTimeout     = 5 * time.Second

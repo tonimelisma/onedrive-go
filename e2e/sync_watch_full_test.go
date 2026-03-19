@@ -88,7 +88,7 @@ func TestE2E_SyncWatch_RemoteToLocal(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
 	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-watch-r2l-%d", time.Now().UnixNano())
@@ -122,7 +122,7 @@ func TestE2E_SyncWatch_Bidirectional(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
 	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-watch-bidi-%d", time.Now().UnixNano())
@@ -162,7 +162,7 @@ func TestE2E_SyncWatch_ConflictDuringWatch(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
 	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-watch-conf-%d", time.Now().UnixNano())
@@ -214,7 +214,7 @@ func TestE2E_SyncWatch_FileModification(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
 	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-watch-mod-%d", time.Now().UnixNano())
@@ -264,7 +264,7 @@ func TestE2E_SyncWatch_FileDeletion(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
 	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-watch-del-%d", time.Now().UnixNano())
@@ -301,7 +301,7 @@ func TestE2E_SyncWatch_FolderCreation(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
 	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-watch-dir-%d", time.Now().UnixNano())
@@ -334,7 +334,7 @@ func TestE2E_SyncWatch_MultipleFiles(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
 	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-watch-multi-%d", time.Now().UnixNano())
@@ -374,7 +374,7 @@ func TestE2E_SyncWatch_LargeFile(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
 	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-watch-large-%d", time.Now().UnixNano())
@@ -420,7 +420,7 @@ func TestE2E_SyncWatch_RapidChurn(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
 	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-watch-churn-%d", time.Now().UnixNano())
@@ -471,7 +471,7 @@ func TestE2E_SyncWatch_GracefulShutdown(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
 	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-watch-shut-%d", time.Now().UnixNano())
@@ -525,7 +525,7 @@ func TestE2E_SyncWatch_TimedPauseExpiry(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
 	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-watch-expire-%d", time.Now().UnixNano())

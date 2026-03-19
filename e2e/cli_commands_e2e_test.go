@@ -232,14 +232,17 @@ func TestE2E_Conflicts_JSON(t *testing.T) {
 	// Check conflicts --json.
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues", "--json")
 
-	var conflicts []map[string]interface{}
-	require.NoError(t, json.Unmarshal([]byte(stdout), &conflicts),
-		"conflicts --json should produce valid JSON array, got: %s", stdout)
+	var issuesJSON map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &issuesJSON),
+		"issues --json should produce valid JSON object, got: %s", stdout)
 
-	require.NotEmpty(t, conflicts, "should have at least one conflict")
+	conflictsRaw, ok := issuesJSON["conflicts"].([]interface{})
+	require.True(t, ok, "JSON should have conflicts array")
+	require.NotEmpty(t, conflictsRaw, "should have at least one conflict")
 
 	// Verify expected fields.
-	conflict := conflicts[0]
+	conflict, ok := conflictsRaw[0].(map[string]interface{})
+	require.True(t, ok, "conflict entry should be an object")
 	assert.Contains(t, conflict, "id", "conflict should have id field")
 	assert.Contains(t, conflict, "path", "conflict should have path field")
 	assert.Contains(t, conflict, "conflict_type", "conflict should have conflict_type field")
@@ -252,7 +255,8 @@ func TestE2E_Conflicts_JSON(t *testing.T) {
 // TestE2E_Resolve_KeepBoth validates that resolve --keep-both marks the
 // conflict as resolved while preserving both the original and conflict copy.
 func TestE2E_Resolve_KeepBoth(t *testing.T) {
-	t.Parallel()
+	// No t.Parallel() — bidirectional sync sees drive-level delta feed,
+	// so parallel tests inject cross-test events causing spurious failures.
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
@@ -420,13 +424,14 @@ func TestE2E_RecycleBinRoundtrip(t *testing.T) {
 	testFolder := fmt.Sprintf("e2e-recycle-bin-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
-	// Upload a file.
+	// Create remote folder and upload a file.
 	localFile := filepath.Join(syncDir, "recycle-test.txt")
 	require.NoError(t, os.WriteFile(localFile, []byte("recycle bin test content"), 0o644))
-	runCLIWithConfig(t, cfgPath, env, "put", localFile, testFolder+"/recycle-test.txt")
+	runCLIWithConfig(t, cfgPath, env, "mkdir", "/"+testFolder)
+	runCLIWithConfig(t, cfgPath, env, "put", localFile, "/"+testFolder+"/recycle-test.txt")
 
 	// Get the item ID via ls --json.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "ls", testFolder, "--json")
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "ls", "/"+testFolder, "--json")
 	var lsItems []map[string]interface{}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &lsItems),
 		"ls --json should produce valid JSON, got: %s", stdout)
@@ -435,7 +440,7 @@ func TestE2E_RecycleBinRoundtrip(t *testing.T) {
 	require.True(t, ok, "item should have an id field")
 
 	// Delete the file (moves to recycle bin).
-	runCLIWithConfig(t, cfgPath, env, "rm", testFolder+"/recycle-test.txt")
+	runCLIWithConfig(t, cfgPath, env, "rm", "/"+testFolder+"/recycle-test.txt")
 
 	// List recycle bin — should contain our file.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "recycle-bin", "list")
@@ -461,7 +466,7 @@ func TestE2E_RecycleBinRoundtrip(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "recycle-bin", "restore", itemID)
 
 	// Verify the file is back.
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "ls", testFolder, "--json")
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "ls", "/"+testFolder, "--json")
 	require.NoError(t, json.Unmarshal([]byte(stdout), &lsItems),
 		"ls --json after restore should produce valid JSON, got: %s", stdout)
 	require.Len(t, lsItems, 1)
@@ -480,11 +485,12 @@ func TestE2E_RecycleBinEmpty(t *testing.T) {
 	testFolder := fmt.Sprintf("e2e-recycle-empty-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
-	// Upload and delete a file to put it in the recycle bin.
+	// Create remote folder, upload, and delete a file to put it in the recycle bin.
 	localFile := filepath.Join(syncDir, "empty-test.txt")
 	require.NoError(t, os.WriteFile(localFile, []byte("will be permanently deleted"), 0o644))
-	runCLIWithConfig(t, cfgPath, env, "put", localFile, testFolder+"/empty-test.txt")
-	runCLIWithConfig(t, cfgPath, env, "rm", testFolder+"/empty-test.txt")
+	runCLIWithConfig(t, cfgPath, env, "mkdir", "/"+testFolder)
+	runCLIWithConfig(t, cfgPath, env, "put", localFile, "/"+testFolder+"/empty-test.txt")
+	runCLIWithConfig(t, cfgPath, env, "rm", "/"+testFolder+"/empty-test.txt")
 
 	// Verify the item is in the recycle bin.
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "recycle-bin", "list")
@@ -953,7 +959,7 @@ func TestE2E_IssuesClear_WithFailure(t *testing.T) {
 
 	// Verify the failure was recorded.
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues")
-	assert.Contains(t, stdout, "FILE ISSUES", "issues should show file issues section")
+	assert.Contains(t, stdout, "PATH TOO LONG", "issues should show path_too_long section")
 	assert.Contains(t, stdout, "path exceeds", "issues should describe the path_too_long error")
 
 	// Clear the specific failure by path.
@@ -986,7 +992,7 @@ func TestE2E_IssuesRetry_WithFailure(t *testing.T) {
 
 	// Verify the failure was recorded.
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues")
-	assert.Contains(t, stdout, "FILE ISSUES", "issues should show the failure")
+	assert.Contains(t, stdout, "PATH TOO LONG", "issues should show path_too_long section")
 
 	// Fix the problem: remove the deeply nested directory tree.
 	longDirName := strings.Repeat("d", 200)
