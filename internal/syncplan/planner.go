@@ -57,6 +57,13 @@ func (p *Planner) Plan(
 		allActions = append(allActions, classifyPathView(views[p], mode, deniedPrefixes)...)
 	}
 
+	// Step 2.5: Cascade folder deletions to baseline descendants. When the
+	// delta API reports a parent folder as deleted, it does NOT report
+	// individual child item deletions. This step synthesizes delete/cleanup
+	// actions for all baseline descendants of deleted folders, ensuring the
+	// executor can remove children before the parent directory.
+	allActions = expandFolderDeleteCascades(allActions, baseline, views, mode, p.logger)
+
 	// Step 3: build dependency edges and verify acyclicity.
 	deps := buildDependencies(allActions)
 
@@ -794,6 +801,115 @@ func makeFolderCreate(view *synctypes.PathView, side synctypes.FolderCreateSide)
 	a.CreateSide = side
 
 	return a
+}
+
+// expandFolderDeleteCascades synthesizes delete/cleanup actions for baseline
+// descendants of deleted folders. The Graph API delta endpoint only reports
+// the parent folder deletion — children are silently dropped. Without this
+// expansion, the executor's DeleteLocalFolder sees a non-empty directory and
+// refuses to remove it ("blocked by non-disposable files").
+//
+// Logic:
+//  1. Build existingPaths set from current actions (prevents duplicates when
+//     delta reports both parent and child).
+//  2. For each folder delete/cleanup action, walk baseline.DescendantsOf.
+//  3. For each descendant not already in existingPaths, synthesize:
+//     - ActionLocalDelete if the item exists locally (preserves hash-before-delete S4)
+//     - ActionCleanup if already gone locally
+//  4. Return append(actions, cascaded...)
+func expandFolderDeleteCascades(
+	actions []synctypes.Action,
+	baseline *synctypes.Baseline,
+	views map[string]*synctypes.PathView,
+	mode synctypes.SyncMode,
+	logger *slog.Logger,
+) []synctypes.Action {
+	// Upload-only mode never deletes locally — skip cascade entirely.
+	if mode == synctypes.SyncUploadOnly {
+		return actions
+	}
+
+	// Collect paths that already have actions to avoid duplicates.
+	existingPaths := make(map[string]struct{}, len(actions))
+	for i := range actions {
+		existingPaths[actions[i].Path] = struct{}{}
+	}
+
+	var cascaded []synctypes.Action
+
+	for i := range actions {
+		a := &actions[i]
+
+		// Only cascade for folder delete/cleanup actions.
+		isDelete := a.Type == synctypes.ActionLocalDelete || a.Type == synctypes.ActionCleanup
+		if !isDelete {
+			continue
+		}
+
+		// Verify this is a folder action.
+		if resolveItemType(a.View) != synctypes.ItemTypeFolder {
+			continue
+		}
+
+		descendants := baseline.DescendantsOf(a.Path)
+		if len(descendants) == 0 {
+			continue
+		}
+
+		logger.Debug("cascading folder delete to descendants",
+			slog.String("folder", a.Path),
+			slog.Int("descendant_count", len(descendants)),
+		)
+
+		for _, desc := range descendants {
+			if _, exists := existingPaths[desc.Path]; exists {
+				continue
+			}
+
+			// Build a synthetic PathView for the descendant. The remote
+			// side is deleted (inherited from parent), and the local side
+			// is derived from baseline (item may or may not still exist
+			// on disk — the executor's hash-before-delete check handles
+			// the case where it was locally modified).
+			descView := &synctypes.PathView{
+				Path:     desc.Path,
+				Baseline: desc,
+				Remote: &synctypes.RemoteState{
+					ItemID:    desc.ItemID,
+					DriveID:   desc.DriveID,
+					ItemType:  desc.ItemType,
+					IsDeleted: true,
+				},
+			}
+
+			// Derive local state from baseline — item is assumed unchanged
+			// locally (the planner had no local events for it).
+			if existingView, ok := views[desc.Path]; ok && existingView.Local != nil {
+				descView.Local = existingView.Local
+			} else {
+				descView.Local = localStateFromBaseline(desc)
+			}
+
+			// Choose action type: if the item exists locally (Local != nil),
+			// use ActionLocalDelete (executor verifies hash before deleting).
+			// If already absent locally, use ActionCleanup (baseline removal only).
+			actionType := synctypes.ActionLocalDelete
+			if descView.Local == nil {
+				actionType = synctypes.ActionCleanup
+			}
+
+			cascaded = append(cascaded, MakeAction(actionType, descView))
+			existingPaths[desc.Path] = struct{}{}
+		}
+	}
+
+	if len(cascaded) > 0 {
+		logger.Info("folder delete cascade expanded",
+			slog.Int("cascaded_actions", len(cascaded)),
+		)
+	}
+
+	return append(actions, cascaded...)
 }
 
 // buildDependencies computes dependency edges for a flat action list.

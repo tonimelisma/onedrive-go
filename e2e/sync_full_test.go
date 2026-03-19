@@ -658,8 +658,9 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 	// Use runCLIWithConfigAllowError inside Eventually — require.Eventually
 	// runs the function in a goroutine, and runCLIWithConfig's require.NoErrorf
 	// would panic if the test has already timed out.
-	// Delta endpoint may lag 60-180s+ behind REST for concurrent deletions
-	// (ci_issues.md §17); use 300s to give ~2x headroom.
+	// With cascade expansion (sync-planning.md §Folder Delete Cascade),
+	// once delta reports the folder deletion, all children are deleted in
+	// a single pass.
 	require.Eventually(t, func() bool {
 		_, _, syncErr := runCLIWithConfigAllowError(t, cfgPath, env, "sync", "--force")
 		if syncErr != nil {
@@ -668,7 +669,7 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 		_, errRemote := os.Stat(filepath.Join(localDir, "del-remote.txt"))
 		_, errSub := os.Stat(filepath.Join(localDir, "sub"))
 		return os.IsNotExist(errRemote) && os.IsNotExist(errSub)
-	}, 300*time.Second, 5*time.Second,
+	}, 120*time.Second, 5*time.Second,
 		"remote-only deletions should propagate locally after sync")
 
 	// Step 5: Assert remaining results.
@@ -1015,6 +1016,10 @@ func TestE2E_Sync_ConvergentEdit(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "converge-edit.txt"), []byte("original"), 0o644))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+
+	// Advance delta token past the upload so the subsequent bidirectional
+	// sync uses incremental delta, not full enumeration (ci_issues.md §17).
+	runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
 
 	// Step 2: Modify both sides to the SAME content (EF4).
 	newContent := "convergent new content"

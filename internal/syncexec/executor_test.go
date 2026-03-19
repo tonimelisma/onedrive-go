@@ -1728,3 +1728,126 @@ func TestContainedPath_NonexistentPath_StillAllowed(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(root, "does/not/exist.txt"), got)
 }
+
+// ---------------------------------------------------------------------------
+// Watch-mode upload freshness check tests
+// ---------------------------------------------------------------------------
+
+func TestExecutor_Upload_WatchMode_ETagMismatch(t *testing.T) {
+	t.Parallel()
+
+	items := &executorMockItemClient{
+		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+			// Remote has a different eTag — someone else edited the file.
+			return &graph.Item{ID: "item1", ETag: "etag-remote-changed"}, nil
+		},
+	}
+
+	ul := &executorMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			t.Fatal("upload should not be called when eTag mismatches")
+			return nil, nil
+		},
+	}
+
+	cfg, syncRoot := newTestExecutorConfig(t, items, &executorMockDownloader{}, ul)
+	cfg.SetWatchMode(true)
+
+	e := NewExecution(cfg, synctest.EmptyBaseline())
+	writeExecTestFile(t, syncRoot, "conflict.txt", "local content")
+
+	action := &synctypes.Action{
+		Type:    synctypes.ActionUpload,
+		Path:    "conflict.txt",
+		ItemID:  "item1",
+		DriveID: driveid.New(synctest.TestDriveID),
+		View: &synctypes.PathView{
+			Path: "conflict.txt",
+			Baseline: &synctypes.BaselineEntry{
+				ETag: "etag-baseline",
+			},
+		},
+	}
+
+	o := e.ExecuteUpload(t.Context(), action)
+	requireOutcomeFailure(t, o)
+	assert.Contains(t, o.Error.Error(), "remote eTag changed since last sync")
+}
+
+func TestExecutor_Upload_WatchMode_ETagMatch(t *testing.T) {
+	t.Parallel()
+
+	items := &executorMockItemClient{
+		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+			// Remote eTag matches baseline — safe to upload.
+			return &graph.Item{ID: "item1", ETag: "etag-same"}, nil
+		},
+	}
+
+	ul := &executorMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			return &graph.Item{ID: "item1", ETag: "etag-new", QuickXorHash: "qxh"}, nil
+		},
+	}
+
+	cfg, syncRoot := newTestExecutorConfig(t, items, &executorMockDownloader{}, ul)
+	cfg.SetWatchMode(true)
+
+	e := NewExecution(cfg, synctest.EmptyBaseline())
+	writeExecTestFile(t, syncRoot, "safe.txt", "content")
+
+	action := &synctypes.Action{
+		Type:    synctypes.ActionUpload,
+		Path:    "safe.txt",
+		ItemID:  "item1",
+		DriveID: driveid.New(synctest.TestDriveID),
+		View: &synctypes.PathView{
+			Path: "safe.txt",
+			Baseline: &synctypes.BaselineEntry{
+				ETag: "etag-same",
+			},
+		},
+	}
+
+	o := e.ExecuteUpload(t.Context(), action)
+	requireOutcomeSuccess(t, o)
+}
+
+func TestExecutor_Upload_NonWatchMode_NoFreshnessCheck(t *testing.T) {
+	t.Parallel()
+
+	items := &executorMockItemClient{
+		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+			t.Fatal("GetItem should not be called in non-watch mode")
+			return nil, nil
+		},
+	}
+
+	ul := &executorMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			return &graph.Item{ID: "item1", ETag: "etag1", QuickXorHash: "qxh"}, nil
+		},
+	}
+
+	cfg, syncRoot := newTestExecutorConfig(t, items, &executorMockDownloader{}, ul)
+	// cfg.watchMode is false by default — no freshness check.
+
+	e := NewExecution(cfg, synctest.EmptyBaseline())
+	writeExecTestFile(t, syncRoot, "normal.txt", "content")
+
+	action := &synctypes.Action{
+		Type:    synctypes.ActionUpload,
+		Path:    "normal.txt",
+		ItemID:  "item1",
+		DriveID: driveid.New(synctest.TestDriveID),
+		View: &synctypes.PathView{
+			Path: "normal.txt",
+			Baseline: &synctypes.BaselineEntry{
+				ETag: "etag-baseline",
+			},
+		},
+	}
+
+	o := e.ExecuteUpload(t.Context(), action)
+	requireOutcomeSuccess(t, o)
+}
