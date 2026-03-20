@@ -700,12 +700,30 @@ func detectRemoteChange(view *synctypes.PathView) bool {
 
 // resolveItemType determines the item type by checking Remote, Local,
 // then Baseline. Defaults to ItemTypeFile if none provide a type.
+//
+// Special case: when the delta API reports a deleted item, it may strip
+// the folder facet — making item.IsFolder=false even for folders. When
+// Remote is deleted and its ItemType is the default (ItemTypeFile), we
+// fall through to Baseline which has the correct type from when the item
+// was alive. This ensures folder deletes are correctly identified for
+// dependency ordering in buildDependencies/addChildDeleteDeps.
 func resolveItemType(view *synctypes.PathView) synctypes.ItemType {
 	if view == nil {
 		return synctypes.ItemTypeFile
 	}
 
 	if view.Remote != nil {
+		// When the remote item is deleted, the delta API may omit the folder
+		// facet, causing ItemType to default to ItemTypeFile. If a baseline
+		// exists with a non-file type, prefer it — the baseline recorded the
+		// correct type when the item was still alive.
+		if view.Remote.IsDeleted &&
+			view.Remote.ItemType == synctypes.ItemTypeFile &&
+			view.Baseline != nil &&
+			view.Baseline.ItemType != synctypes.ItemTypeFile {
+			return view.Baseline.ItemType
+		}
+
 		return view.Remote.ItemType
 	}
 
