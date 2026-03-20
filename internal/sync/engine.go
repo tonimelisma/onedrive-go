@@ -479,21 +479,22 @@ func (e *Engine) executePlan(
 	e.depGraph = depGraph
 	e.readyCh = make(chan *synctypes.TrackedAction, len(plan.Actions))
 
-	// Add all actions to the graph. Immediately-ready actions (no deps)
-	// are sent to readyCh before workers start — workers begin consuming
-	// the moment they launch.
+	// Two-phase graph population: Register all actions first, then wire
+	// dependencies. This avoids forward-reference issues where a parent
+	// folder delete at index 0 depends on a child file delete at index 5 —
+	// single-pass Add would silently drop the unregistered depID.
 	for i := range plan.Actions {
-		id := int64(i)
+		e.setDispatch(ctx, &plan.Actions[i])
+		depGraph.Register(&plan.Actions[i], int64(i))
+	}
 
+	for i := range plan.Actions {
 		var depIDs []int64
 		for _, depIdx := range plan.Deps[i] {
 			depIDs = append(depIDs, int64(depIdx))
 		}
 
-		// Dispatch state transition: pending/failed → in-progress.
-		e.setDispatch(ctx, &plan.Actions[i])
-
-		if ta := depGraph.Add(&plan.Actions[i], id, depIDs); ta != nil {
+		if ta := depGraph.WireDeps(int64(i), depIDs); ta != nil {
 			e.readyCh <- ta
 		}
 	}
