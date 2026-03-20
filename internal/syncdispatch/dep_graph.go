@@ -82,6 +82,11 @@ func (g *DepGraph) WaitForEmpty() <-chan struct{} {
 // satisfied (depIDs is empty or all deps already completed/unknown), the
 // TrackedAction is returned as immediately ready. Otherwise nil is returned
 // and the action waits until Complete() decrements its depsLeft to zero.
+// Add registers an action and wires up dependencies in a single call.
+// WARNING: depIDs must reference actions that have ALREADY been added —
+// forward references (depID not yet in the graph) are silently dropped.
+// For one-shot mode with arbitrary dependency ordering, use the two-phase
+// Register + WireDeps approach instead.
 func (g *DepGraph) Add(action *synctypes.Action, id int64, depIDs []int64) *synctypes.TrackedAction {
 	// Wrap the public TrackedAction in an internal trackedNode that carries
 	// the dependency-tracking fields (depsLeft, dependents).
@@ -106,6 +111,77 @@ func (g *DepGraph) Add(action *synctypes.Action, id int64, depIDs []int64) *sync
 		dep, ok := g.actions[depID]
 		if !ok {
 			// Dependency not tracked (already completed or unknown) — skip.
+			continue
+		}
+
+		dep.dependents = append(dep.dependents, node)
+		depsRemaining++
+	}
+
+	node.depsLeft.Store(depsRemaining)
+
+	if depsRemaining == 0 {
+		return node.TrackedAction
+	}
+
+	return nil
+}
+
+// Register adds an action to the graph without wiring any dependencies.
+// The action is NOT immediately ready — call WireDeps to resolve
+// dependencies and determine readiness. Used in the two-phase pattern
+// (Register all, then WireDeps all) to avoid forward-reference issues
+// where parent actions depend on children that haven't been added yet.
+func (g *DepGraph) Register(action *synctypes.Action, id int64) {
+	node := &trackedNode{
+		TrackedAction: &synctypes.TrackedAction{
+			Action: *action,
+			ID:     id,
+		},
+	}
+
+	g.total.Add(1)
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	g.actions[id] = node
+	g.byPath[action.Path] = node
+
+	// Set depsLeft to 1 to prevent premature readiness. WireDeps will
+	// set the correct value. This sentinel ensures that if WireDeps is
+	// never called, the action stays blocked rather than executing.
+	node.depsLeft.Store(1)
+}
+
+// WireDeps resolves dependency edges for a previously-registered action.
+// All depIDs must reference already-registered actions (guaranteed by
+// the Register-all-first pattern). Returns the TrackedAction if the
+// action is immediately ready (no unresolved deps), nil otherwise.
+func (g *DepGraph) WireDeps(id int64, depIDs []int64) *synctypes.TrackedAction {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	node, ok := g.actions[id]
+	if !ok {
+		g.logger.Warn("dep_graph: WireDeps called with unknown ID",
+			slog.Int64("id", id),
+		)
+
+		return nil
+	}
+
+	var depsRemaining int32
+
+	for _, depID := range depIDs {
+		dep, ok := g.actions[depID]
+		if !ok {
+			// Should not happen with Register-all-first pattern.
+			g.logger.Warn("dep_graph: WireDeps references unregistered action",
+				slog.Int64("id", id),
+				slog.Int64("dep_id", depID),
+			)
+
 			continue
 		}
 
