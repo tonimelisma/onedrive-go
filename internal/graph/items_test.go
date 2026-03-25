@@ -1409,7 +1409,7 @@ func TestListChildrenRecursive_NestedFolders(t *testing.T) {
 				]
 			}`)
 		} else {
-			t.Errorf("unexpected request path: %s", r.URL.Path)
+			assert.Failf(t, "unexpected request path", "path=%s", r.URL.Path)
 		}
 	}))
 	defer srv.Close()
@@ -1458,7 +1458,7 @@ func TestListChildrenRecursive_DeeplyNested(t *testing.T) {
 				]
 			}`)
 		default:
-			t.Errorf("unexpected request path: %s", r.URL.Path)
+			assert.Failf(t, "unexpected request path", "path=%s", r.URL.Path)
 		}
 	}))
 	defer srv.Close()
