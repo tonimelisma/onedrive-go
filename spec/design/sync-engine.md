@@ -28,6 +28,54 @@ Watch mode uses a unified tick loop: filesystem events are debounced by the chan
 
 `RunOnce` remains unchanged as a standalone one-shot entry point.
 
+### Event-Loop Refactor Safety Invariants (Phase 0)
+
+Phase 0 adds characterization coverage only. It does not change production
+control flow, goroutine topology, or retry semantics. Any future event-loop
+refactor must preserve the following behavior observed in the current code:
+
+1. **Bootstrap ordering**: `RunWatch` must finish bootstrap dispatch and
+   `waitForQuiescence` before `startObservers` creates either observer.
+   Bootstrap actions run through the live watch-mode `DepGraph`, worker pool,
+   drain loop, and scope gate; observer startup is intentionally delayed until
+   that graph reaches zero in-flight actions.
+2. **One-shot drain barrier**: `executePlan` must not return its report until
+   the worker pool has stopped, the results channel has been closed, and the
+   drain goroutine has finished all side effects. The correctness boundary is
+   `pool.Wait() -> pool.Stop() -> <-drainDone`, not merely "all workers
+   finished executing syscalls."
+3. **Trial failure isolation**: trial results are handled only by
+   `processTrialResult`. Trial failures extend the active trial interval and
+   record the failed attempt, but they must not re-enter normal scope
+   detection, overwrite the blocked scope with a fresh interval, or clear the
+   scope through the standard result path.
+4. **Trial success release**: a successful trial must clear the persistent
+   scope block and make held transient failures retryable immediately via
+   `onScopeClear`. Re-entry happens through the normal retrier/buffer/planner
+   path, not by inline re-observation inside `processTrialResult`. Phase 0
+   characterizes immediate retryability plus retrier-driven re-injection
+   without any new external observation. A separate timing gap remains: rows
+   made due "now" are not independently signaled by `armRetryTimer`, which
+   only schedules future retries.
+5. **Permission recheck release**: local permission recovery paths
+   (`recheckLocalPermissions` and `clearScannerResolvedPermissions`) clear the
+   active scope and release held transient failures through `onScopeClear`.
+   Remote `recheckPermissions` is weaker than the requirements text implies:
+   it clears `permission_denied` issue rows and refreshes the cache, but it
+   does not currently participate in scope-block release or held-work
+   dispatch. The event-loop refactor must not assume remote permission
+   recovery already shares the same release semantics as local permission
+   recovery.
+6. **Scope-block ordering**: when a worker result creates or reinforces a
+   scope block, the engine must record the failing action, cascade-record
+   blocked dependents, and apply the block before any dependent action is
+   re-admitted. The refactor target is single-owner state, but this ordering
+   constraint is already required by the current behavior.
+7. **Reconciliation handoff**: `runFullReconciliationAsync` may observe and
+   commit from its own goroutine, but it must hand work back through the
+   engine-owned watch buffer. It must never dispatch directly to `readyCh`
+   from the reconciliation goroutine.
+
 ### watchState (Engine Pipeline Redesign Phase 8)
 
 `watchState` bundles all watch-mode-only Engine fields. `e.watch` is nil in
