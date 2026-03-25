@@ -2727,13 +2727,24 @@ func TestRunFullReconciliationAsync_NoChanges(t *testing.T) {
 
 	bl.Put(&synctypes.BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: synctypes.ItemTypeFile})
 
-	setupWatchEngine(t, e)
+	ready := setupWatchEngine(t, e)
 	e.watch.buf = syncobserve.NewBuffer(e.logger)
 
-	// Should complete without panic; events exist but planner produces no
-	// actions because nothing is different from baseline.
+	// Full reconciliation always hands observed changes back through the watch
+	// buffer, even when the later planner pass reduces them to a no-op. The
+	// important boundary here is "no direct dispatch from the goroutine."
 	e.runFullReconciliationAsync(ctx, bl)
 	waitForReconcileDone(t, e.watch)
+
+	select {
+	case ta := <-ready:
+		require.Failf(t, "no-change reconciliation dispatched work", "unexpected path %s", ta.Action.Path)
+	default:
+	}
+
+	batch := e.watch.buf.FlushImmediate()
+	require.Len(t, batch, 1, "reconciliation should hand observed state back through the watch buffer")
+	assert.Equal(t, "file1.txt", batch[0].Path)
 }
 
 // Validates: R-2.1.6
@@ -4001,8 +4012,9 @@ func TestE2E_DrainLoop_ProcessesAndRoutes(t *testing.T) {
 	assert.NotEmpty(t, issues, "failure should be recorded")
 }
 
+// Validates: R-2.10.5, R-2.10.11
 // TestE2E_DrainLoop_TrialResultSuccess verifies that trial success clears the
-// scope block and unblocks failures via processTrialResult in the drain loop.
+// scope block and makes held failures retryable via processTrialResult in the drain loop.
 func TestE2E_DrainLoop_TrialResultSuccess(t *testing.T) {
 	t.Parallel()
 
@@ -4043,6 +4055,11 @@ func TestE2E_DrainLoop_TrialResultSuccess(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return !eng.watch.scopeGate.IsScopeBlocked(synctypes.SKThrottleAccount)
 	}, time.Second, time.Millisecond, "scope block should be cleared after trial success")
+
+	rows, err := eng.baseline.ListSyncFailuresForRetry(ctx, eng.nowFunc())
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "trial success should make the held failure retryable")
+	assert.Equal(t, "blocked.txt", rows[0].Path)
 }
 
 // TestE2E_DrainLoop_TrialResultFailure verifies trial failure doubles the interval.

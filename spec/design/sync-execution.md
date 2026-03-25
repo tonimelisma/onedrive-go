@@ -103,6 +103,58 @@ Flat pool of `transfer_workers` goroutines. Decoupled from dispatch infrastructu
 
 `WorkerResult` carries target drive identity (`TargetDriveID`, `ShortcutKey`) from the action, `RetryAfter` from `GraphError`, the full `error` for classification, `ActionID` for DepGraph routing, `IsTrial` and `TrialScopeKey ScopeKey` for scope trial routing. The engine classifies and routes each result.
 
+### Channel And Timer Ownership
+
+The execution path relies on a small set of long-lived channels with strict
+ownership rules. The refactor target is a single watch-mode state owner, but
+that refactor must preserve the current create/write/read/close boundaries:
+
+- **`readyCh`**: owned by the engine. Created by `executePlan` in one-shot
+  mode and by `initWatchInfra` in watch mode. Written by engine admission
+  paths (`executePlan`, `admitAndDispatch`, and the drain loop outbox). Read
+  by worker goroutines only. It is intentionally not closed; workers exit via
+  `doneCh`/context cancellation instead of ranging on channel close.
+- **Worker `results` channel**: owned by `WorkerPool`. Created in
+  `NewWorkerPool`, written only by workers through `sendResult`, read only by
+  the engine's `drainWorkerResults` goroutine. Closed exactly once by
+  `WorkerPool.Stop()` after all worker goroutines exit. Engine shutdown waits
+  on `drainDone` after that close so all result side effects complete before
+  reporting completion.
+- **Trial timer delivery (`trialCh`)**: owned by the engine and created once
+  in `NewEngine`. Written only by `time.AfterFunc` callbacks scheduled by
+  `armTrialTimer`. Read only by `drainWorkerResults` through
+  `trialTimerChan()`. The channel is never closed; shutdown stops the current
+  timer via `stopTrialTimer()`.
+- **Retry timer delivery (`retryTimerCh`)**: owned by watch-mode engine state
+  and created in `initWatchInfra`. Written by `armRetryTimer`'s
+  `time.AfterFunc` callback and by inline engine wakeups that need an
+  immediate retrier pass (for example, due items or batch spillover).
+  Read only by `drainWorkerResults` through `retryTimerChan()`. Like
+  `trialCh`, it is persistent and never closed; the timer object is replaced
+  or stopped as needed.
+- **Bootstrap completion barrier**: there is no separate "bootstrap finished"
+  signal channel between bootstrap and observer startup. The barrier is
+  `depGraph.WaitForEmpty()` inside `waitForQuiescence`, which closes when the
+  in-flight action map reaches zero. Separately, `drainDone` is a
+  goroutine-lifecycle channel owned by the engine: created by `executePlan`
+  or `bootstrapSync`, closed by the drain goroutine, and awaited by the owner
+  before returning or cleaning up.
+- **Observer error signaling (`errs`)**: owned by `startObservers`. Created by
+  the engine, written once per observer goroutine on exit, read only by the
+  watch loop. It is not explicitly closed because the watch loop tracks
+  observer lifetimes by counting terminal sends rather than ranging until
+  close.
+- **Observer event bridge (`events`)**: owned by `startObservers`. Local and
+  remote observers write `ChangeEvent` values into it; a dedicated bridge
+  goroutine reads from it and adds them to the watch buffer. The engine closes
+  `events` only after all observer goroutines finish, ensuring the bridge can
+  drain remaining events cleanly.
+- **Skipped-item forwarding (`skippedCh`)**: owned by `startObservers`.
+  Created by the engine, written by the local observer's safety scan path, and
+  read by the watch loop for issue recording and resolution cleanup. It is not
+  closed; shutdown relies on context cancellation and watch-loop exit rather
+  than channel completion.
+
 ## Action Execution
 
 ### Downloads (`executor_transfer.go`)
@@ -167,7 +219,6 @@ Scope block classification remains in the sync engine: `classifyResult` maps `dr
 - Sub-second uniqueness in `conflictCopyPath`: second-precision timestamps mean two conflicts in the same second collide. [planned]
 - Explicit error for unknown `ActionType` in `applySingleOutcome`: default case currently returns nil, silently dropping outcomes. [planned]
 - Graceful shutdown test under active worker pool: verify SIGTERM during active transfers drains correctly. [planned]
-- Channel lifecycle document: every channel — who creates, closes, reads, writes. [planned]
 
 ## CLI Status (`status.go`)
 
