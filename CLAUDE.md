@@ -13,6 +13,7 @@ Fast, safe OneDrive CLI and sync client in Go. Unix-style file ops (`ls`, `get`,
 | `internal/driveops/`, `get.go`, `put.go` | `spec/design/drive-transfers.md` | |
 | `pkg/quickxorhash/` | `spec/design/drive-transfers.md` | |
 | `internal/retry/` | `spec/design/retry.md` | |
+| `internal/logfile/` | `spec/design/cli.md` | `spec/requirements/configuration.md` |
 | `internal/syncobserve/` | `spec/design/sync-observation.md` | `spec/reference/onedrive-sync-behavior.md` |
 | `internal/syncplan/`, `internal/synctypes/` | `spec/design/sync-planning.md` | `spec/reference/onedrive-sync-behavior.md` |
 | `internal/syncexec/`, `internal/syncdispatch/` | `spec/design/sync-execution.md` | |
@@ -38,7 +39,7 @@ Planned work: search `spec/` for `[planned]`. Reference docs: `spec/reference/`.
 - Never treat current implementation as a reason to avoid change.
 - The architecture should be extremely robust and full of defensive coding practices.
 - Modules and packages can be rethought at a whim if a better design appears. No code is sacred.
-- App hasn't been launched yet. No backwards compatibility. Ensure after refactoring the code doesn't show any signs of the old architecture.
+- App has zero users and hasn't launched yet. There is zero backwards-compatibility requirement anywhere: config format, token/cache files, state DB/schema, CLI flags, command output, and internal APIs can all change. Prefer the best design now and remove compatibility shims rather than carrying old architecture forward.
 
 ### Ownership - you own this repo
 
@@ -46,6 +47,7 @@ Planned work: search `spec/` for `[planned]`. Reference docs: `spec/reference/`.
 - Never call issues "pre-existing" - you find it, you fix it
 - If you touch a file, leave it better than you found it
 - If something is broken, fix it — don't work around it
+- If you intentionally deviate from a rule, document the exception, why it was necessary, and any follow-up in the increment report
 
 ## Coding Conventions
 

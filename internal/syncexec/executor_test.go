@@ -1745,7 +1745,7 @@ func TestExecutor_Upload_WatchMode_ETagMismatch(t *testing.T) {
 
 	ul := &executorMockUploader{
 		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			t.Fatal("upload should not be called when eTag mismatches")
+			require.FailNow(t, "upload should not be called when eTag mismatches")
 			return nil, nil
 		},
 	}
@@ -1818,7 +1818,7 @@ func TestExecutor_Upload_NonWatchMode_NoFreshnessCheck(t *testing.T) {
 
 	items := &executorMockItemClient{
 		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
-			t.Fatal("GetItem should not be called in non-watch mode")
+			require.FailNow(t, "GetItem should not be called in non-watch mode")
 			return nil, nil
 		},
 	}
