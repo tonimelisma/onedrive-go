@@ -94,7 +94,12 @@ func TestFindShortcutForPath(t *testing.T) {
 
 // newTestEngineWithPerms creates an engine with a mock permission checker
 // and seeds baseline entries for the given paths.
-func newTestEngineWithPerms(t *testing.T, checker synctypes.PermissionChecker, shortcuts []synctypes.Shortcut, baselineEntries []synctypes.Outcome) (*Engine, *synctypes.Baseline, string) { //nolint:unparam // syncRoot useful for callers
+func newTestEngineWithPerms(
+	t *testing.T,
+	checker synctypes.PermissionChecker,
+	shortcuts []synctypes.Shortcut,
+	baselineEntries []synctypes.Outcome,
+) (*Engine, *synctypes.Baseline, string) {
 	t.Helper()
 
 	tmpDir := t.TempDir()
