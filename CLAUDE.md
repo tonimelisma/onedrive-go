@@ -42,6 +42,22 @@ Planned work: search `spec/` for `[planned]`. Reference docs: `spec/reference/`.
 - Modules and packages can be rethought at a whim if a better design appears. No code is sacred.
 - App has zero users and hasn't launched yet. There is zero backwards-compatibility requirement anywhere: config format, token/cache files, state DB/schema, CLI flags, command output, and internal APIs can all change. Prefer the best design now and remove compatibility shims rather than carrying old architecture forward.
 
+### Performance and Simplicity
+
+These rules are the project-specific version of Pike/Hoare/KISS/Brooks. The short version: do not speculate, do not get clever early, and do not add coordination state without proof.
+
+- **Measure before optimizing.** Do not add caches, batching, special-case fast paths, or algorithmic complexity because they seem faster. In this codebase, bottlenecks are often Graph latency, filesystem I/O, or transactional boundaries — not the place intuition points first.
+- **Optimization needs evidence.** Performance work starts with profiles, benchmarks, or traces that show one part of the system dominating the rest. If the cost is not measured, it is not a justified optimization target.
+- **Prefer simple algorithms while `n` is small.** Most sync decisions are per-path, per-folder, per-scope, or per-batch, and those sets are usually small. A direct linear scan over a small set is often the right choice until measured data proves otherwise.
+- **Prefer simple data structures over clever machinery.** Fancy algorithms and layered caches bring invalidation bugs, ownership confusion, and duplicate state. If a simpler structure is fast enough, it is the better design.
+- **Data model first, algorithm second.** Get the ownership boundaries, persisted state, and in-memory projections right first. When the data structures are correct, the right algorithm is usually obvious. If an optimization requires a second source of truth, it is probably the wrong optimization.
+
+Project-specific consequences:
+
+- **One source of truth beats duplicated state.** Durable state belongs in the authoritative store. In-memory state is allowed for ephemeral working sets or derived indexes, but it must be rebuildable and must never become a competing authority.
+- **Hot-path complexity must earn its keep.** Watch-mode admission, planner checks, and retry scheduling should stay simple unless profiling shows a real bottleneck under realistic load.
+- **Use brute force when it keeps the design honest.** A straightforward scan, recomputation, or rebuild is often preferable to a fragile cache with subtle invalidation rules.
+
 ### Ownership - you own this repo
 
 - Never leave the repo in a broken state (build fails, tests fail, lint errors)
