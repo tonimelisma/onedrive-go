@@ -15,12 +15,14 @@ const (
 	ScopeQuotaOwn                                // no Param
 	ScopeQuotaShortcut                           // Param = "remoteDrive:remoteItem"
 	ScopePermDir                                 // Param = relative directory path
+	ScopePermRemote                              // Param = local boundary path
 	ScopeDiskLocal                               // no Param
 )
 
 // ScopeKey identifies a scope block. The Kind discriminator determines the
 // semantics; Param carries per-instance data for parameterized scopes
-// (ScopeQuotaShortcut, ScopePermDir). Comparable, so usable as a map key.
+// (ScopeQuotaShortcut, ScopePermDir, ScopePermRemote). Comparable, so usable
+// as a map key.
 type ScopeKey struct {
 	Kind  ScopeKeyKind
 	Param string
@@ -45,6 +47,11 @@ func SKPermDir(dirPath string) ScopeKey {
 	return ScopeKey{Kind: ScopePermDir, Param: dirPath}
 }
 
+// SKPermRemote returns the scope key for a remote read-only boundary.
+func SKPermRemote(boundaryPath string) ScopeKey {
+	return ScopeKey{Kind: ScopePermRemote, Param: boundaryPath}
+}
+
 // IsZero returns true for the zero-value ScopeKey (Kind == 0).
 func (sk ScopeKey) IsZero() bool {
 	return sk.Kind == 0
@@ -58,6 +65,7 @@ const (
 	WireQuotaOwn        = "quota:own"
 	WireQuotaShortcut   = "quota:shortcut:" // prefix for parameterized key
 	WirePermDir         = "perm:dir:"       // prefix for parameterized key
+	WirePermRemote      = "perm:remote:"    // prefix for parameterized key
 	WireDiskLocal       = "disk:local"
 )
 
@@ -75,6 +83,8 @@ func (sk ScopeKey) String() string {
 		return WireQuotaShortcut + sk.Param
 	case ScopePermDir:
 		return WirePermDir + sk.Param
+	case ScopePermRemote:
+		return WirePermRemote + sk.Param
 	case ScopeDiskLocal:
 		return WireDiskLocal
 	default:
@@ -98,6 +108,8 @@ func ParseScopeKey(s string) ScopeKey {
 		return SKQuotaShortcut(s[len(WireQuotaShortcut):])
 	case len(s) > len(WirePermDir) && s[:len(WirePermDir)] == WirePermDir:
 		return SKPermDir(s[len(WirePermDir):])
+	case len(s) > len(WirePermRemote) && s[:len(WirePermRemote)] == WirePermRemote:
+		return SKPermRemote(s[len(WirePermRemote):])
 	default:
 		return ScopeKey{}
 	}
@@ -114,11 +126,25 @@ func (sk ScopeKey) IsPermDir() bool {
 	return sk.Kind == ScopePermDir
 }
 
+// IsPermRemote returns true for remote read-only subtree scopes.
+func (sk ScopeKey) IsPermRemote() bool {
+	return sk.Kind == ScopePermRemote
+}
+
 // DirPath returns the directory path for a ScopePermDir key.
 // Panics if called on a non-PermDir key (defensive — caller bug).
 func (sk ScopeKey) DirPath() string {
 	if sk.Kind != ScopePermDir {
 		panic("ScopeKey.DirPath() called on non-PermDir key")
+	}
+	return sk.Param
+}
+
+// RemotePath returns the local boundary path for a ScopePermRemote key.
+// Panics if called on a non-PermRemote key (defensive — caller bug).
+func (sk ScopeKey) RemotePath() string {
+	if sk.Kind != ScopePermRemote {
+		panic("ScopeKey.RemotePath() called on non-PermRemote key")
 	}
 	return sk.Param
 }
@@ -135,6 +161,8 @@ func (sk ScopeKey) IssueType() string {
 		return IssueQuotaExceeded
 	case ScopePermDir:
 		return IssueLocalPermissionDenied
+	case ScopePermRemote:
+		return IssuePermissionDenied
 	case ScopeDiskLocal:
 		return IssueDiskFull
 	default:
@@ -161,7 +189,7 @@ func (sk ScopeKey) Humanize(shortcuts []Shortcut) string {
 			}
 		}
 		return sk.Param // fallback to composite key
-	case ScopePermDir:
+	case ScopePermDir, ScopePermRemote:
 		return sk.Param
 	case ScopeDiskLocal:
 		return "local disk"
@@ -184,6 +212,18 @@ func (sk ScopeKey) BlocksAction(path, shortcutKey string, actionType ActionType,
 		return shortcutKey == sk.Param && actionType == ActionUpload
 	case ScopePermDir:
 		return path == sk.Param || strings.HasPrefix(path, sk.Param+"/")
+	case ScopePermRemote:
+		if path != sk.Param && !strings.HasPrefix(path, sk.Param+"/") {
+			return false
+		}
+		switch actionType {
+		case ActionUpload, ActionRemoteDelete, ActionRemoteMove, ActionFolderCreate:
+			return true
+		case ActionDownload, ActionLocalDelete, ActionLocalMove, ActionConflict, ActionUpdateSynced, ActionCleanup:
+			return false
+		default:
+			return false
+		}
 	default:
 		return false
 	}

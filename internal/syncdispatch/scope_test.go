@@ -474,6 +474,7 @@ func TestScopeKey_StringRoundTrip(t *testing.T) {
 		{"disk:local", synctypes.SKDiskLocal, "disk:local"},
 		{"quota:shortcut", synctypes.SKQuotaShortcut("driveA:itemB"), "quota:shortcut:driveA:itemB"},
 		{"perm:dir", synctypes.SKPermDir("Documents/Private"), "perm:dir:Documents/Private"},
+		{"perm:remote", synctypes.SKPermRemote("Shared/TeamDocs"), "perm:remote:Shared/TeamDocs"},
 	}
 
 	for _, tt := range tests {
@@ -516,6 +517,7 @@ func TestScopeKey_IsGlobal(t *testing.T) {
 	assert.False(t, synctypes.SKQuotaOwn.IsGlobal())
 	assert.False(t, synctypes.SKQuotaShortcut("a:b").IsGlobal())
 	assert.False(t, synctypes.SKPermDir("x").IsGlobal())
+	assert.False(t, synctypes.SKPermRemote("x").IsGlobal())
 	assert.False(t, synctypes.SKDiskLocal.IsGlobal())
 }
 
@@ -528,6 +530,15 @@ func TestScopeKey_IsPermDir(t *testing.T) {
 	assert.False(t, synctypes.SKQuotaOwn.IsPermDir())
 }
 
+// Validates: R-2.10.34
+func TestScopeKey_IsPermRemote(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, synctypes.SKPermRemote("Shared/TeamDocs").IsPermRemote())
+	assert.False(t, synctypes.SKPermDir("Documents").IsPermRemote())
+	assert.False(t, synctypes.SKThrottleAccount.IsPermRemote())
+}
+
 // Validates: R-2.10
 func TestScopeKey_DirPath(t *testing.T) {
 	t.Parallel()
@@ -536,6 +547,14 @@ func TestScopeKey_DirPath(t *testing.T) {
 
 	// DirPath on non-PermDir should panic.
 	assert.Panics(t, func() { synctypes.SKThrottleAccount.DirPath() })
+}
+
+// Validates: R-2.10.34
+func TestScopeKey_RemotePath(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "Shared/TeamDocs", synctypes.SKPermRemote("Shared/TeamDocs").RemotePath())
+	assert.Panics(t, func() { synctypes.SKThrottleAccount.RemotePath() })
 }
 
 // Validates: R-2.10
@@ -551,6 +570,7 @@ func TestScopeKey_IssueType(t *testing.T) {
 		{synctypes.SKQuotaOwn, synctypes.IssueQuotaExceeded},
 		{synctypes.SKQuotaShortcut("a:b"), synctypes.IssueQuotaExceeded},
 		{synctypes.SKPermDir("x"), synctypes.IssueLocalPermissionDenied},
+		{synctypes.SKPermRemote("Shared/TeamDocs"), synctypes.IssuePermissionDenied},
 		{synctypes.SKDiskLocal, synctypes.IssueDiskFull},
 		{synctypes.ScopeKey{}, ""}, // zero value
 	}
@@ -573,6 +593,7 @@ func TestScopeKey_Humanize(t *testing.T) {
 	assert.Equal(t, "your OneDrive storage", synctypes.SKQuotaOwn.Humanize(nil))
 	assert.Equal(t, "local disk", synctypes.SKDiskLocal.Humanize(nil))
 	assert.Equal(t, "Documents/Private", synctypes.SKPermDir("Documents/Private").Humanize(nil))
+	assert.Equal(t, "Shared/TeamDocs", synctypes.SKPermRemote("Shared/TeamDocs").Humanize(nil))
 
 	// synctypes.Shortcut found by local path.
 	assert.Equal(t, "/mnt/shared/TeamDocs", synctypes.SKQuotaShortcut("driveA:itemB").Humanize(shortcuts))
@@ -617,6 +638,14 @@ func TestScopeKey_BlocksAction(t *testing.T) {
 		{"perm blocks exact dir", synctypes.SKPermDir("Private"), "Private", "", synctypes.ActionUpload, true, true},
 		{"perm blocks subpath", synctypes.SKPermDir("Private"), "Private/secret.txt", "", synctypes.ActionUpload, true, true},
 		{"perm passes outside", synctypes.SKPermDir("Private"), "Public/readme.txt", "", synctypes.ActionUpload, true, false},
+
+		// Perm:remote blocks remote mutations recursively, but still allows downloads/local-only work.
+		{"perm remote blocks upload", synctypes.SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", synctypes.ActionUpload, false, true},
+		{"perm remote blocks nested remote delete", synctypes.SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/nested/file.txt", "", synctypes.ActionRemoteDelete, false, true},
+		{"perm remote blocks folder create", synctypes.SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/newdir", "", synctypes.ActionFolderCreate, false, true},
+		{"perm remote passes download", synctypes.SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", synctypes.ActionDownload, false, false},
+		{"perm remote passes local delete", synctypes.SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", synctypes.ActionLocalDelete, false, false},
+		{"perm remote passes outside", synctypes.SKPermRemote("Shared/TeamDocs"), "Shared/Other/file.txt", "", synctypes.ActionUpload, false, false},
 	}
 
 	for _, tt := range tests {

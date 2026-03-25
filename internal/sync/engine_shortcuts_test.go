@@ -440,6 +440,93 @@ func TestHandleRemovedShortcuts_IgnoresNonShortcutDeletes(t *testing.T) {
 	assert.NotNil(t, sc, "shortcut should still exist")
 }
 
+// Validates: R-2.10.17, R-2.10.38
+func TestHandleRemovedShortcuts_ClearsRemotePermissionScopesUnderRemovedShortcut(t *testing.T) {
+	t.Parallel()
+
+	eng := newPhase4Engine(t)
+	ctx := t.Context()
+
+	require.NoError(t, eng.baseline.UpsertShortcut(ctx, &synctypes.Shortcut{
+		ItemID:       "sc-1",
+		RemoteDrive:  "remote-drive-1",
+		RemoteItem:   "remote-item-1",
+		LocalPath:    "SharedFolder",
+		Observation:  synctypes.ObservationUnknown,
+		DiscoveredAt: 1000,
+	}))
+	require.NoError(t, eng.baseline.UpsertShortcut(ctx, &synctypes.Shortcut{
+		ItemID:       "sc-2",
+		RemoteDrive:  "remote-drive-2",
+		RemoteItem:   "remote-item-2",
+		LocalPath:    "OtherFolder",
+		Observation:  synctypes.ObservationUnknown,
+		DiscoveredAt: 1000,
+	}))
+
+	removedScope := synctypes.SKPermRemote("SharedFolder/locked")
+	otherScope := synctypes.SKPermRemote("OtherFolder/locked")
+
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:      "SharedFolder/locked",
+		DriveID:   eng.driveID,
+		Direction: synctypes.DirectionUpload,
+		Category:  synctypes.CategoryActionable,
+		IssueType: synctypes.IssuePermissionDenied,
+		ErrMsg:    "read-only boundary",
+		ScopeKey:  removedScope,
+	}, nil))
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:      "SharedFolder/locked/file.txt",
+		DriveID:   eng.driveID,
+		Direction: synctypes.DirectionUpload,
+		Category:  synctypes.CategoryTransient,
+		ErrMsg:    "blocked by remote permission scope",
+		ScopeKey:  removedScope,
+	}, nil))
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:      "OtherFolder/locked",
+		DriveID:   eng.driveID,
+		Direction: synctypes.DirectionUpload,
+		Category:  synctypes.CategoryActionable,
+		IssueType: synctypes.IssuePermissionDenied,
+		ErrMsg:    "read-only boundary",
+		ScopeKey:  otherScope,
+	}, nil))
+
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, removedScope, &synctypes.ScopeBlock{
+		Key:       removedScope,
+		IssueType: synctypes.IssuePermissionDenied,
+		BlockedAt: eng.nowFn(),
+	}))
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, otherScope, &synctypes.ScopeBlock{
+		Key:       otherScope,
+		IssueType: synctypes.IssuePermissionDenied,
+		BlockedAt: eng.nowFn(),
+	}))
+
+	shortcuts, err := eng.baseline.ListShortcuts(ctx)
+	require.NoError(t, err)
+
+	err = eng.handleRemovedShortcuts(ctx, map[string]bool{"sc-1": true}, shortcuts)
+	require.NoError(t, err)
+
+	sc, err := eng.baseline.GetShortcut(ctx, "sc-1")
+	require.NoError(t, err)
+	assert.Nil(t, sc, "removed shortcut should be deleted")
+
+	assert.False(t, eng.watch.scopeGate.IsScopeBlocked(removedScope),
+		"remote permission scope under the removed shortcut should be cleared")
+	assert.True(t, eng.watch.scopeGate.IsScopeBlocked(otherScope),
+		"remote permission scopes under other shortcuts must remain intact")
+
+	failures, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, failures, 1, "removed shortcut should discard its remote permission failures recursively")
+	assert.Equal(t, "OtherFolder/locked", failures[0].Path)
+	assert.Equal(t, otherScope, failures[0].ScopeKey)
+}
+
 // ---------------------------------------------------------------------------
 // detectShortcutCollisions
 // ---------------------------------------------------------------------------

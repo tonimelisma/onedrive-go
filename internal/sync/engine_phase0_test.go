@@ -265,7 +265,9 @@ func TestPhase0_ExecutePlan_WaitsForDrainSideEffects(t *testing.T) {
 
 	permIssues, err := eng.baseline.ListSyncFailuresByIssueType(t.Context(), synctypes.IssuePermissionDenied)
 	require.NoError(t, err)
-	assert.Len(t, permIssues, 2, "executePlan should wait for 403 side effects before returning")
+	require.Len(t, permIssues, 1, "executePlan should wait for the boundary permission issue to be recorded before returning")
+	assert.Equal(t, "Shared/TeamDocs", permIssues[0].Path)
+	assert.Equal(t, synctypes.SKPermRemote("Shared/TeamDocs"), permIssues[0].ScopeKey)
 	assert.GreaterOrEqual(t, report.Failed, 1)
 }
 
@@ -373,16 +375,15 @@ func TestPhase0_DrainLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWitho
 		return !eng.watch.scopeGate.IsScopeBlocked(synctypes.SKThrottleAccount)
 	}, time.Second, 10*time.Millisecond, "trial success should clear the scope block")
 
-	rows, err := eng.baseline.ListSyncFailuresForRetry(ctx, eng.nowFunc())
-	require.NoError(t, err)
-	require.Len(t, rows, 1, "trial success should make held failures retryable immediately")
-	assert.Equal(t, "blocked.txt", rows[0].Path)
+	var batch []synctypes.PathChanges
+	require.Eventually(t, func() bool {
+		batch = buf.FlushImmediate()
+		if len(batch) == 0 {
+			return false
+		}
 
-	eng.runRetrierSweep(ctx)
-
-	batch := buf.FlushImmediate()
-	require.NotEmpty(t, batch)
-	assert.Equal(t, "blocked.txt", batch[0].Path)
+		return batch[0].Path == "blocked.txt"
+	}, time.Second, 10*time.Millisecond, "trial success should re-inject the held failure without external observation")
 }
 
 // Validates: R-2.10.13, R-2.10.11

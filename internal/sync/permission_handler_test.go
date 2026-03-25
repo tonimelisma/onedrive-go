@@ -121,7 +121,6 @@ func newTestPermHandler(t *testing.T, recorder *mockFailureRecorder, checker syn
 	return &PermissionHandler{
 		baseline:    recorder,
 		permChecker: checker,
-		permCache:   newPermissionCache(),
 		syncRoot:    syncRoot,
 		driveID:     driveid.New("test-drive"),
 		logger:      slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),

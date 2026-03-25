@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/engine.go, internal/sync/engine_shortcuts.go, internal/sync/orchestrator.go, internal/sync/drive_runner.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/scope_manager.go, sync.go, sync_helpers.go
 
-Implements: R-2.1 [verified], R-2.6 [verified], R-2.8 [verified], R-3.4.2 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.35 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [planned], R-6.6.10 [verified], R-6.6.12 [verified], R-6.7.27 [verified], R-6.8.15 [verified]
+Implements: R-2.1 [verified], R-2.6 [verified], R-2.8 [verified], R-3.4.2 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.35 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [planned], R-6.6.10 [verified], R-6.6.12 [verified], R-6.7.27 [verified], R-6.8.15 [verified]
 
 ## Engine (`engine.go`)
 
@@ -51,21 +51,16 @@ refactor must preserve the following behavior observed in the current code:
    scope through the standard result path.
 4. **Trial success release**: a successful trial must clear the persistent
    scope block and make held transient failures retryable immediately via
-   `onScopeClear`. Re-entry happens through the normal retrier/buffer/planner
-   path, not by inline re-observation inside `processTrialResult`. Phase 0
-   characterizes immediate retryability plus retrier-driven re-injection
-   without any new external observation. A separate timing gap remains: rows
-   made due "now" are not independently signaled by `armRetryTimer`, which
-   only schedules future retries.
-5. **Permission recheck release**: local permission recovery paths
-   (`recheckLocalPermissions` and `clearScannerResolvedPermissions`) clear the
-   active scope and release held transient failures through `onScopeClear`.
-   Remote `recheckPermissions` is weaker than the requirements text implies:
-   it clears `permission_denied` issue rows and refreshes the cache, but it
-   does not currently participate in scope-block release or held-work
-   dispatch. The event-loop refactor must not assume remote permission
-   recovery already shares the same release semantics as local permission
-   recovery.
+   `onScopeClear`. `onScopeClear` also triggers an immediate retrier wakeup,
+   so re-entry happens through the normal retrier/buffer/planner path without
+   any new external observation.
+5. **Permission recheck release**: both local permission recovery paths
+   (`recheckLocalPermissions` and `clearScannerResolvedPermissions`) and the
+   remote Graph-backed `recheckPermissions` path clear the active scope and
+   release held transient failures through `onScopeClear`. Remote permission
+   rechecks fail open: inconclusive API results or stale shortcut boundaries
+   clear the stored denial instead of continuing to suppress writes on stale
+   evidence.
 6. **Scope-block ordering**: when a worker result creates or reinforces a
    scope block, the engine must record the failing action, cascade-record
    blocked dependents, and apply the block before any dependent action is
@@ -124,17 +119,20 @@ Implements: R-2.10.3 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2
 - **success** → `Complete` + `RecordSuccess` (scope window reset) + counter + `clearFailureOnSuccess` (engine owns failure lifecycle exclusively — D-6)
 - **requeue** (transient) → `recordFailure` with `retry.Reconcile.Delay` + `Complete` + `feedScopeDetection` + arm retry timer
 - **scopeBlock** (429, 507) → `recordFailure` with `retry.Reconcile.Delay` + `feedScopeDetection` + `Complete` + `armTrialTimer()` (belt-and-suspenders)
-- **skip** (non-retryable) → handle403 side effect + `recordFailure` with nil delayFn (no `next_retry_at`) + `Complete`
+- **skip** (non-retryable) → `handle403` side effect. Confirmed remote read-only
+  403s record one actionable boundary failure (`perm:remote:{localPath}`) and
+  skip duplicate file-level failure recording; other skips use `recordFailure`
+  with nil delayFn (no `next_retry_at`) + `Complete`
 - **shutdown** → `Complete` (no failure recorded)
 - **fatal** (401) → `recordFailure` with nil delayFn + `Complete`
 
 Scope-blocked actions are not held in memory. Instead, `processWorkerResult` records the failure in `sync_failures` and calls `depGraph.Complete()`. When the scope clears, `onScopeClear` resets `next_retry_at` for matching `sync_failures` rows, and the drain-loop retrier re-injects them via buffer, planner, and DepGraph.
 
-Trial result routing: `processTrialResult()` handles all trial outcomes with an early return — trial results never enter the normal `processWorkerResult()` switch. The `TrialScopeKey ScopeKey` from `WorkerResult` identifies the scope. Trial success → `onScopeClear(scopeKey)` (`ClearScopeBlock` + `SetScopeRetryAtNow` + arm retry timer) + `armTrialTimer()`. Trial failure → `extendTrialInterval(scopeKey)` reads block's current `TrialInterval` via `scopeGate.GetScopeBlock(scopeKey)` (value copy), doubles it, caps per scope type via `computeTrialInterval()`, calls `scopeGate.ExtendTrialInterval(scopeKey, nextAt, newInterval)`. Scope detection is intentionally NOT called for trial failures — the scope is already blocked, and re-detecting would overwrite the doubled interval. Per-scope caps: quota 1h, rate_limited 10m, service 10m (R-2.10.6/R-2.10.8/R-2.10.14).
+Trial result routing: `processTrialResult()` handles all trial outcomes with an early return — trial results never enter the normal `processWorkerResult()` switch. The `TrialScopeKey ScopeKey` from `WorkerResult` identifies the scope. Trial success → `onScopeClear(scopeKey)` (`ClearScopeBlock` + `SetScopeRetryAtNow` + immediate retry wakeup) + `armTrialTimer()`. Trial failure → `extendTrialInterval(scopeKey)` reads block's current `TrialInterval` via `scopeGate.GetScopeBlock(scopeKey)` (value copy), doubles it, caps per scope type via `computeTrialInterval()`, calls `scopeGate.ExtendTrialInterval(scopeKey, nextAt, newInterval)`. Scope detection is intentionally NOT called for trial failures — the scope is already blocked, and re-detecting would overwrite the doubled interval. Per-scope caps: quota 1h, rate_limited 10m, service 10m (R-2.10.6/R-2.10.8/R-2.10.14).
 
 **Trial dispatch**: `runTrialDispatch()` is called from the drain loop's select when the trial timer fires. Uses `scopeGate.AllDueTrials(now)` to snapshot all due scope blocks at once, then iterates each exactly once — structurally incapable of infinite iteration. For each scope, uses `PickTrialCandidate` from `sync_failures` to find an actual item for re-observation and dispatch. `reobserve` returns `(*ChangeEvent, time.Duration)` — the `RetryAfter` duration is forwarded to `extendTrialInterval` when the scope condition persists (R-2.10.7). On successful dispatch, the trial interval is NOT extended (awaits worker result). Trial actions are marked `IsTrial=true` with `TrialScopeKey` set. `armTrialTimer()` uses `time.AfterFunc` to send to a persistent `trialCh` channel when the earliest `NextTrialAt` across all scope blocks is reached (via `scopeGate.EarliestTrialAt()`). Called after `applyScopeBlock()`, `processTrialResult()`, and trial dispatch.
 
-**Drain-loop retrier**: Retry is integrated directly into the drain loop via `runRetrierSweep()` — no separate goroutine. The drain loop's select includes a retry timer that triggers sweeps of `sync_failures` for items whose `next_retry_at` has expired. Each sweep is batch-limited with zero-delay re-arm when the batch is full. Items are checked via `isFailureResolved()` before re-injection (D-11 fix: prevents re-dispatching items whose underlying condition has resolved). Re-injection uses `createEventFromDB` (full `remote_state` for downloads, `observeLocal` for uploads) to feed items through the normal buffer, planner, and DepGraph pipeline.
+**Drain-loop retrier**: Retry is integrated directly into the drain loop via `runRetrierSweep()` — no separate goroutine. The drain loop's select includes a retry timer that triggers sweeps of `sync_failures` for items whose `next_retry_at` has expired. Each sweep is batch-limited with zero-delay re-arm when the batch is full. Items are checked via `isFailureResolved()` before re-injection (D-11 fix: prevents re-dispatching items whose underlying condition has resolved). Re-injection uses `createEventFromDB` (full `remote_state` for downloads, `observeLocalFile` for uploads) to feed items through the normal buffer, planner, and DepGraph pipeline. Upload re-observation now shares the scanner's safe mtime+size fast path via `syncobserve.CanReuseBaselineHash`, so retry/reobserve behavior matches full scans instead of always re-hashing.
 
 `feedScopeDetection()` feeds results into `ScopeState.UpdateScope()`. When a threshold is crossed, creates a scope block via `applyScopeBlock()` which calls `scopeGate.SetScopeBlock()` + `armTrialTimer()`.
 
@@ -177,6 +175,30 @@ Implements: R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.10 [verified]
 
 **Scanner-driven auto-clear** (R-2.10.10): `clearScannerResolvedPermissions()` checks whether the scanner observed paths that were previously blocked by `local_permission_denied` failures. If the scanner successfully accessed a path (it appeared in events), the permission issue is resolved — clear the failure and release any scope block. File-level: cleared if the path itself was observed. Directory-level (`ScopePermDir` scope): cleared if any observed path falls under the directory prefix (checked via `ScopeKey.IsPermDir()` and `ScopeKey.DirPath()`). Called after `clearResolvedSkippedItems()` in one-shot mode, and after `recheckLocalPermissions()` in watch mode. Complements `recheckLocalPermissions()` — both may clear the same failure (idempotent).
 
+### Remote Shared Permission Handling
+
+Implements: R-2.10.9 [verified], R-2.10.17 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.38 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified]
+
+`handle403()` is the single remote-permission entry point for write failures on shared content:
+
+- First it checks whether the failing path is already under an active persisted `perm:remote:{localPath}` boundary. If so, it short-circuits without another Graph permission walk.
+- Otherwise it resolves the relevant shortcut, calls `ListItemPermissions` on the target folder, and confirms whether the 403 is a real write denial or a transient/inconclusive failure.
+- On confirmed denial it walks upward, still using `ListItemPermissions`, to find the highest denied ancestor but never above the shortcut root.
+- It records one actionable `permission_denied` failure at that boundary with scope key `perm:remote:{localPath}` and, in watch mode, installs the same scope in `ScopeGate`.
+
+`perm:remote` is recursive and download-only:
+
+- uploads, folder creates, remote moves, and remote deletes are blocked for the boundary path and every descendant
+- downloads continue so the subtree remains readable and delta/reconciliation can keep it current
+
+`recheckPermissions()` revisits persisted `perm:remote` boundaries at the start of each sync pass:
+
+- writable again → clear the boundary failure and call `onScopeClear`
+- Graph/API failure or stale shortcut boundary → fail open by clearing the stored denial and calling `onScopeClear`
+- still denied → keep the boundary and refresh the in-memory scope if watch mode is active
+
+Shortcut removal also clears any `perm:remote` scope rooted under the removed shortcut and deletes all held failures for that scope. Removed shortcuts discard blocked work instead of releasing it back into dispatch.
+
 ### Planned: Observation Suppression
 
 Implements: R-2.10.30 [verified], R-2.10.31 [verified]
@@ -208,7 +230,7 @@ Sync failure logging follows a tiered approach matching CLAUDE.md policy — ind
 
 ### Shortcut Integration (`engine_shortcuts.go`)
 
-Detects shortcuts to shared folders in the delta stream. Creates additional delta scopes for shared folder observation. Handles shortcut removal (cleanup local copies).
+Detects shortcuts to shared folders in the delta stream. Creates additional delta scopes for shared folder observation. Shortcut removal also clears any persisted `perm:remote` scope under the removed shortcut and discards its held failures, preventing stale recursive write suppression after the share disappears.
 
 ## Orchestrator (`orchestrator.go`)
 
