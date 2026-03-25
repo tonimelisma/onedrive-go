@@ -343,9 +343,66 @@ func (e *Engine) handleRemovedShortcuts(ctx context.Context, deletedItemIDs map[
 				slog.String("error", err.Error()),
 			)
 		}
+
+		e.clearRemovedShortcutRemotePermissionScopes(ctx, sc.LocalPath)
 	}
 
 	return nil
+}
+
+// clearRemovedShortcutRemotePermissionScopes removes all remote permission
+// boundaries rooted under a shortcut that has disappeared. Those held actions
+// are no longer valid once the shortcut is gone, so they must be discarded,
+// not released back into dispatch.
+func (e *Engine) clearRemovedShortcutRemotePermissionScopes(ctx context.Context, localPath string) {
+	issues, err := e.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
+	if err != nil {
+		e.logger.Warn("failed to list remote permission scopes for removed shortcut",
+			slog.String("shortcut_path", localPath),
+			slog.String("error", err.Error()),
+		)
+
+		return
+	}
+
+	clearedScopes := make(map[synctypes.ScopeKey]bool)
+
+	for i := range issues {
+		issue := &issues[i]
+		if !issue.ScopeKey.IsPermRemote() {
+			continue
+		}
+
+		boundary := issue.ScopeKey.RemotePath()
+		if boundary != localPath && !strings.HasPrefix(boundary, localPath+"/") {
+			continue
+		}
+
+		if e.watch != nil && !clearedScopes[issue.ScopeKey] {
+			if clearErr := e.watch.scopeGate.ClearScopeBlock(ctx, issue.ScopeKey); clearErr != nil {
+				e.logger.Debug("failed to clear remote permission scope for removed shortcut",
+					slog.String("scope_key", issue.ScopeKey.String()),
+					slog.String("error", clearErr.Error()),
+				)
+			}
+		}
+
+		if clearErr := e.baseline.DeleteSyncFailuresByScope(ctx, issue.ScopeKey); clearErr != nil {
+			e.logger.Warn("failed to delete remote permission failures for removed shortcut",
+				slog.String("scope_key", issue.ScopeKey.String()),
+				slog.String("error", clearErr.Error()),
+			)
+		}
+
+		clearedScopes[issue.ScopeKey] = true
+	}
+
+	if err := e.baseline.ClearSyncFailuresByPrefix(ctx, localPath, synctypes.IssuePermissionDenied); err != nil {
+		e.logger.Warn("failed to clear legacy remote permission failures for removed shortcut",
+			slog.String("shortcut_path", localPath),
+			slog.String("error", err.Error()),
+		)
+	}
 }
 
 // scopeResult holds the observation output for a single shortcut scope.

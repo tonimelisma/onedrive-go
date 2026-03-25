@@ -105,6 +105,7 @@ func TestEngine_CascadeRecordAndComplete_WithDependents(t *testing.T) {
 // onScopeClear
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10.11
 func TestEngine_OnScopeClear(t *testing.T) {
 	t.Parallel()
 	eng := newPhase4Engine(t)
@@ -141,6 +142,38 @@ func TestEngine_OnScopeClear(t *testing.T) {
 	rows, err := eng.baseline.ListSyncFailuresForRetry(ctx, now)
 	require.NoError(t, err)
 	assert.Len(t, rows, 2, "scope-blocked failures should now be retryable")
+}
+
+// Validates: R-2.10.11
+func TestEngine_OnScopeClear_SignalsImmediateRetrySweep(t *testing.T) {
+	t.Parallel()
+
+	eng := newPhase4Engine(t)
+	ctx := context.Background()
+	scopeKey := synctypes.SKQuotaOwn
+
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, scopeKey, &synctypes.ScopeBlock{
+		Key:       scopeKey,
+		IssueType: synctypes.IssueQuotaExceeded,
+		BlockedAt: eng.nowFn().Add(-time.Minute),
+	}))
+
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:      "blocked.txt",
+		DriveID:   driveid.New("drive1"),
+		Direction: synctypes.DirectionUpload,
+		Category:  synctypes.CategoryTransient,
+		ScopeKey:  scopeKey,
+		ErrMsg:    "scope blocked",
+	}, nil))
+
+	eng.onScopeClear(ctx, scopeKey)
+
+	select {
+	case <-eng.watch.retryTimerCh:
+	case <-time.After(time.Second):
+		require.Fail(t, "onScopeClear should signal retryTimerCh for due-now failures")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -816,6 +849,52 @@ func TestCreateEventFromDB_Upload_FileExists(t *testing.T) {
 	assert.Greater(t, ev.Mtime, int64(0), "mtime should be populated")
 }
 
+// Validates: R-2.10.7
+func TestCreateEventFromDB_Upload_ReusesBaselineHashWhenMetadataMatches(t *testing.T) {
+	t.Parallel()
+
+	eng := newPhase4Engine(t)
+	ctx := context.Background()
+
+	driveID := driveid.New("drive1")
+	testFile := "upload-fast-path.txt"
+	actualContent := []byte("actual data")
+	cachedHash := "cached-local-hash"
+	oldTime := eng.nowFn().Add(-2 * time.Second)
+
+	require.NoError(t, os.WriteFile(filepath.Join(eng.syncRoot, testFile), actualContent, 0o644))
+	require.NoError(t, os.Chtimes(filepath.Join(eng.syncRoot, testFile), oldTime, oldTime))
+
+	info, err := os.Stat(filepath.Join(eng.syncRoot, testFile))
+	require.NoError(t, err)
+
+	actualHash, err := syncobserve.ComputeStableHash(filepath.Join(eng.syncRoot, testFile))
+	require.NoError(t, err)
+	require.NotEqual(t, actualHash, cachedHash, "test needs a distinct cached hash to prove reuse")
+
+	require.NoError(t, eng.baseline.CommitOutcome(ctx, &synctypes.Outcome{
+		Action:     synctypes.ActionUpload,
+		Success:    true,
+		Path:       testFile,
+		DriveID:    driveID,
+		ItemID:     "upload-fast-path-item",
+		ItemType:   synctypes.ItemTypeFile,
+		LocalHash:  cachedHash,
+		RemoteHash: cachedHash,
+		Size:       info.Size(),
+		Mtime:      info.ModTime().UnixNano(),
+	}))
+
+	ev := eng.createEventFromDB(ctx, &synctypes.SyncFailureRow{
+		Path:      testFile,
+		DriveID:   driveID,
+		Direction: synctypes.DirectionUpload,
+	})
+
+	require.NotNil(t, ev)
+	assert.Equal(t, cachedHash, ev.Hash, "matching metadata outside the racily-clean window should reuse the baseline hash")
+}
+
 func TestCreateEventFromDB_Upload_FileGone(t *testing.T) {
 	t.Parallel()
 
@@ -1314,6 +1393,55 @@ func TestReobserve_Local_Exists(t *testing.T) {
 	assert.Equal(t, synctypes.ChangeModify, ev.Type)
 	assert.NotEmpty(t, ev.Hash)
 	assert.Greater(t, ev.Size, int64(0))
+}
+
+// Validates: R-2.10.7
+func TestReobserve_Local_ReusesBaselineHashWhenMetadataMatches(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
+	ctx := context.Background()
+
+	driveID := driveid.New("drive1")
+	testFile := "local-fast-path.txt"
+	actualContent := []byte("actual data")
+	cachedHash := "cached-local-hash"
+	oldTime := eng.nowFn().Add(-2 * time.Second)
+
+	require.NoError(t, os.WriteFile(filepath.Join(eng.syncRoot, testFile), actualContent, 0o644))
+	require.NoError(t, os.Chtimes(filepath.Join(eng.syncRoot, testFile), oldTime, oldTime))
+
+	info, err := os.Stat(filepath.Join(eng.syncRoot, testFile))
+	require.NoError(t, err)
+
+	actualHash, err := syncobserve.ComputeStableHash(filepath.Join(eng.syncRoot, testFile))
+	require.NoError(t, err)
+	require.NotEqual(t, actualHash, cachedHash, "test needs a distinct cached hash to prove reuse")
+
+	require.NoError(t, eng.baseline.CommitOutcome(ctx, &synctypes.Outcome{
+		Action:     synctypes.ActionUpload,
+		Success:    true,
+		Path:       testFile,
+		DriveID:    driveID,
+		ItemID:     "local-fast-path-item",
+		ItemType:   synctypes.ItemTypeFile,
+		LocalHash:  cachedHash,
+		RemoteHash: cachedHash,
+		Size:       info.Size(),
+		Mtime:      info.ModTime().UnixNano(),
+	}))
+
+	ev, retryAfter := eng.reobserve(ctx, &synctypes.SyncFailureRow{
+		Path:      testFile,
+		DriveID:   driveID,
+		Direction: synctypes.DirectionUpload,
+	})
+
+	require.NotNil(t, ev)
+	assert.Zero(t, retryAfter)
+	assert.Equal(t, cachedHash, ev.Hash, "local reobserve should share the same safe metadata fast path as the scanner")
 }
 
 func TestReobserve_Local_Gone(t *testing.T) {

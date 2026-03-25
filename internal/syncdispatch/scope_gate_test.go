@@ -209,6 +209,60 @@ func TestScopeGate_Admit_PermDir_PathPrefix(t *testing.T) {
 	}
 }
 
+// Validates: R-2.10.9, R-2.10.11, R-2.14.2
+func TestScopeGate_Admit_PermRemote_RecursiveRemoteMutationsOnly(t *testing.T) {
+	t.Parallel()
+
+	gate, _ := newTestScopeGate(t)
+	ctx := context.Background()
+	scopeKey := synctypes.SKPermRemote("Shared/TeamDocs")
+
+	require.NoError(t, gate.SetScopeBlock(ctx, scopeKey, &synctypes.ScopeBlock{
+		Key:       scopeKey,
+		IssueType: synctypes.IssuePermissionDenied,
+		BlockedAt: time.Now(),
+	}))
+
+	tests := []struct {
+		name string
+		ta   *synctypes.TrackedAction
+		want synctypes.ScopeKey
+	}{
+		{
+			name: "nested upload blocked",
+			ta:   makeTrackedAction(synctypes.ActionUpload, "Shared/TeamDocs/nested/file.txt"),
+			want: scopeKey,
+		},
+		{
+			name: "nested remote delete blocked",
+			ta:   makeTrackedAction(synctypes.ActionRemoteDelete, "Shared/TeamDocs/nested/file.txt"),
+			want: scopeKey,
+		},
+		{
+			name: "folder create blocked",
+			ta:   makeTrackedAction(synctypes.ActionFolderCreate, "Shared/TeamDocs/newdir"),
+			want: scopeKey,
+		},
+		{
+			name: "download allowed",
+			ta:   makeTrackedAction(synctypes.ActionDownload, "Shared/TeamDocs/nested/file.txt"),
+			want: synctypes.ScopeKey{},
+		},
+		{
+			name: "outside subtree allowed",
+			ta:   makeTrackedAction(synctypes.ActionUpload, "Shared/Other/file.txt"),
+			want: synctypes.ScopeKey{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := gate.Admit(tt.ta)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 // Validates: R-2.10.43
 func TestScopeGate_Admit_DiskLocal_DownloadsOnly(t *testing.T) {
 	t.Parallel()

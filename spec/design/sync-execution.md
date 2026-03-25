@@ -2,7 +2,7 @@
 
 GOVERNS: internal/syncexec/executor.go, internal/syncexec/executor_conflict.go, internal/syncexec/executor_delete.go, internal/syncexec/executor_transfer.go, internal/syncexec/worker.go, internal/syncdispatch/dep_graph.go, internal/syncdispatch/scope_gate.go, internal/syncdispatch/scope.go, internal/syncdispatch/delete_counter.go, status.go
 
-Implements: R-2.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.5.3 [verified], R-6.7.25 [planned], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.16 [verified], R-2.10.41 [verified], R-2.10.42 [verified], R-2.10.43 [verified], R-2.10.44 [verified]
+Implements: R-2.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.5.3 [verified], R-6.7.25 [planned], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.16 [verified], R-2.10.41 [verified], R-2.10.42 [verified], R-2.10.43 [verified], R-2.10.44 [verified], R-2.14.2 [verified]
 
 ## Executor (`executor.go`)
 
@@ -30,7 +30,7 @@ The D-10 fix ensures completed actions are removed from the `actions` map. Witho
 
 Scope-based admission control with persistent scope blocks. No held queue, no dependency awareness, no channels. Paired with `DepGraph` to form the dispatch architecture: DepGraph resolves dependencies and returns ready actions, ScopeGate gates admission based on active scope blocks.
 
-- **`Admit(ta) ScopeKey`**: Check if an action matches any active scope block. Returns blocking key or zero. Priority-ordered: global scopes (throttle, service) first, then narrow scopes (disk, quota), then dynamic-key scopes (shortcut quota, perm:dir). Blocking logic lives on `ScopeKey.BlocksAction()`.
+- **`Admit(ta) ScopeKey`**: Check if an action matches any active scope block. Returns blocking key or zero. Priority-ordered: global scopes (throttle, service) first, then narrow scopes (disk, quota), then dynamic-key scopes (shortcut quota, `perm:dir`, `perm:remote`). Blocking logic lives on `ScopeKey.BlocksAction()`.
 - **`SetScopeBlock(ctx, key, block) error`**: Write-through: persist to `scope_blocks` table first, then update in-memory map. On store error, memory unchanged.
 - **`ClearScopeBlock(ctx, key) error`**: Delete from store first, then memory.
 - **`IsScopeBlocked(key) bool`**: Simple map lookup.
@@ -73,7 +73,7 @@ Implements: R-2.10.3 [verified], R-2.10.26 [verified], R-2.10.42 [verified]
 
 ### ScopeKey Type System
 
-All scope keys are typed `ScopeKey{Kind ScopeKeyKind, Param string}` — a comparable value type usable as map key. Six kinds: `ScopeThrottleAccount`, `ScopeService`, `ScopeQuotaOwn`, `ScopeQuotaShortcut` (Param = "remoteDrive:remoteItem"), `ScopePermDir` (Param = relative dir path), `ScopeDiskLocal`. Pre-built singletons for non-parameterized scopes (`SKThrottleAccount`, `SKService`, `SKQuotaOwn`, `SKDiskLocal`); constructor functions for parameterized scopes (`SKQuotaShortcut(key)`, `SKPermDir(path)`).
+All scope keys are typed `ScopeKey{Kind ScopeKeyKind, Param string}` — a comparable value type usable as map key. Seven kinds: `ScopeThrottleAccount`, `ScopeService`, `ScopeQuotaOwn`, `ScopeQuotaShortcut` (Param = "remoteDrive:remoteItem"), `ScopePermDir` (Param = relative dir path), `ScopePermRemote` (Param = relative boundary path), `ScopeDiskLocal`. Pre-built singletons for non-parameterized scopes (`SKThrottleAccount`, `SKService`, `SKQuotaOwn`, `SKDiskLocal`); constructor functions for parameterized scopes (`SKQuotaShortcut(key)`, `SKPermDir(path)`, `SKPermRemote(path)`).
 
 Methods on `ScopeKey` centralize logic that was previously scattered across 9+ files:
 - **`BlocksAction(path, shortcutKey, actionType, targetsOwnDrive)`** — scope-specific action blocking (used by `blockedScope()`)
@@ -81,10 +81,13 @@ Methods on `ScopeKey` centralize logic that was previously scattered across 9+ f
 - **`Humanize(shortcuts)`** — user-friendly description for display
 - **`IssueType()`** — maps scope kind to `sync_failures.issue_type` constant
 - **`IsGlobal()`** — true for scopes that block ALL actions (throttle, service)
-- **`IsPermDir()` / `DirPath()`** — type-safe access for permission scopes
+- **`IsPermDir()` / `DirPath()`** — type-safe access for local directory permission scopes
+- **`IsPermRemote()` / `RemotePath()`** — type-safe access for remote shared-folder permission scopes
 - **`IsZero()`** — detects the zero-value (invalid) key
-- **`String()` / `ParseScopeKey(s)`** — wire format serialization for SQLite `scope_key` columns. The wire format is unchanged (`"throttle:account"`, `"service"`, `"quota:own"`, `"quota:shortcut:X"`, `"perm:dir:X"`, `"disk:local"`), preserving compatibility at the SQLite boundary.
+- **`String()` / `ParseScopeKey(s)`** — wire format serialization for SQLite `scope_key` columns. The wire format is `"throttle:account"`, `"service"`, `"quota:own"`, `"quota:shortcut:X"`, `"perm:dir:X"`, `"perm:remote:X"`, `"disk:local"`.
 - **`ScopeKeyForStatus(httpStatus, shortcutKey)`** — single source of truth for HTTP status → scope key classification, replacing scattered switch/if chains in `classifyResult` and `deriveScopeKey`.
+
+`ScopePermRemote` is the recursive download-only shared-folder scope. `BlocksAction` returns true for uploads, folder creates, remote moves, and remote deletes at the boundary path and every descendant, while allowing downloads to continue.
 
 ### Scope Escalation
 

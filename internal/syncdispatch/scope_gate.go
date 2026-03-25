@@ -86,10 +86,11 @@ func (g *ScopeGate) Admit(ta *synctypes.TrackedAction) synctypes.ScopeKey {
 		}
 	}
 
-	// Dynamic-key scopes: shortcut quota and perm:dir depend on action context.
+	// Dynamic-key scopes: shortcut quota and permission boundaries depend on
+	// action context.
 	for sk := range g.blocks {
 		switch sk.Kind { //nolint:exhaustive // only parameterized scopes need per-action checking
-		case synctypes.ScopeQuotaShortcut, synctypes.ScopePermDir:
+		case synctypes.ScopeQuotaShortcut, synctypes.ScopePermDir, synctypes.ScopePermRemote:
 			if sk.BlocksAction(ta.Action.Path, scKey, ta.Action.Type, targetsOwn) {
 				return sk
 			}

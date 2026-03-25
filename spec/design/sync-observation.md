@@ -2,7 +2,7 @@
 
 GOVERNS: internal/syncobserve/observer_local.go, internal/syncobserve/observer_local_handlers.go, internal/syncobserve/observer_local_collisions.go, internal/syncobserve/observer_remote.go, internal/syncobserve/item_converter.go, internal/syncobserve/scanner.go, internal/syncobserve/buffer.go, internal/syncobserve/inotify_linux.go, internal/syncobserve/inotify_other.go
 
-Implements: R-2.1.2 [verified], R-2.4 [implemented], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.15 [planned], R-6.7.16 [planned], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [planned], R-6.7.24 [verified], R-2.11 [implemented], R-2.11.5 [implemented], R-2.12 [verified], R-2.13.1 [verified], R-2.14.1 [verified], R-2.14.3 [verified], R-2.14.4 [verified]
+Implements: R-2.1.2 [verified], R-2.4 [implemented], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.15 [planned], R-6.7.16 [planned], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [planned], R-6.7.24 [verified], R-2.11 [implemented], R-2.11.5 [implemented], R-2.12 [verified], R-2.13.1 [verified]
 
 ## Remote Observer (`observer_remote.go`)
 
@@ -70,6 +70,8 @@ Extracted filesystem walker for full-scan mode. Produces change events by walkin
 
 **`SkippedItem`** — Defined in `types.go`: `{Path string, Reason string, Detail string, FileSize int64}`. Represents a file that was observed but excluded from the event stream due to validation failure. `FileSize` is populated for `IssueFileTooLarge` (after stat). Collected during full scan and returned in `ScanResult.Skipped`. The engine processes these via `recordSkippedItems()` and `clearResolvedSkippedItems()`.
 
+**Shared local metadata fast path** — `CanReuseBaselineHash(info, base, observeStartNano)` centralizes the scanner's mtime+size fast path plus the 1-second racily-clean guard. The scanner uses it during full scans, and the sync engine reuses the same helper for upload retry/reobserve paths. This keeps "unchanged local file" detection consistent across full scans, retrier sweeps, and trial re-observation.
+
 **Case Collision Detection** (`detectCaseCollisions`) — Post-walk pure function that detects local files whose names differ only in case. OneDrive uses a case-insensitive namespace — uploading both would cause one to silently overwrite the other. Implements: R-2.12 [verified]
 
 - Runs as Phase 2.5 in `FullScan`, between hash completion and deletion detection. Groups event indices by `(directory, lowercase name)`. Keys with more than one entry are collisions — all colliders become `SkippedItem{Reason: IssueCaseCollision}` with `Detail` naming the other collider(s). O(n) time, O(n) memory.
@@ -88,9 +90,16 @@ Collects events from both observers, deduplicates, debounces (default 2 seconds)
 
 `FlushImmediate` for one-shot mode (no debounce wait).
 
-## Permissions (`permissions.go`)
+## Permission Interaction
 
-Read-only detection for shared content. When a write attempt returns 403, the path prefix is recorded and subsequent writes to that prefix are suppressed (download-only for that subtree).
+Remote shared-folder permission handling lives in the sync engine (`permission_handler.go`; see [sync-engine.md](sync-engine.md)), not in `syncobserve`.
+
+The observation layer only intersects with permission handling in two places:
+
+- the local scanner can prove a previously inaccessible local path is accessible again, which lets the engine auto-clear `perm:dir` failures
+- the shared `CanReuseBaselineHash` helper keeps upload retry/reobserve logic consistent with normal local observation
+
+Remote 403 detection itself is engine-owned: the engine confirms denials with `ListItemPermissions`, records one persisted `perm:remote:{localPath}` boundary, and switches that subtree to download-only mode through the planner and scope gate. There is no separate in-memory permission cache in the observation layer.
 
 ## Design Constraints
 
