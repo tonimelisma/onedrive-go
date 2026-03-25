@@ -1647,6 +1647,91 @@ func TestEngine_HandleExternalChanges_PartialClear(t *testing.T) {
 	assert.True(t, eng.watch.deleteCounter.IsHeld(), "should remain held with one entry still present")
 }
 
+// Validates: R-2.10.9, R-2.14.3
+func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+	newTestWatchState(t, eng)
+
+	clearedScope := synctypes.SKPermRemote("Shared/TeamDocs")
+	retainedScope := synctypes.SKPermRemote("Shared/Other")
+
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, clearedScope, &synctypes.ScopeBlock{
+		Key:       clearedScope,
+		IssueType: synctypes.IssuePermissionDenied,
+		BlockedAt: eng.nowFunc(),
+	}))
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, retainedScope, &synctypes.ScopeBlock{
+		Key:       retainedScope,
+		IssueType: synctypes.IssuePermissionDenied,
+		BlockedAt: eng.nowFunc(),
+	}))
+
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:      "Shared/TeamDocs",
+		DriveID:   driveID,
+		Direction: synctypes.DirectionUpload,
+		Category:  synctypes.CategoryActionable,
+		IssueType: synctypes.IssuePermissionDenied,
+		ErrMsg:    "read-only boundary",
+		ScopeKey:  clearedScope,
+	}, nil))
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:      "Shared/TeamDocs/file.txt",
+		DriveID:   driveID,
+		Direction: synctypes.DirectionUpload,
+		Category:  synctypes.CategoryTransient,
+		ErrMsg:    "blocked by remote permission scope",
+		ScopeKey:  clearedScope,
+	}, nil))
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:      "Shared/Other",
+		DriveID:   driveID,
+		Direction: synctypes.DirectionUpload,
+		Category:  synctypes.CategoryActionable,
+		IssueType: synctypes.IssuePermissionDenied,
+		ErrMsg:    "read-only boundary",
+		ScopeKey:  retainedScope,
+	}, nil))
+
+	require.NoError(t, eng.baseline.ClearSyncFailure(ctx, "Shared/TeamDocs", driveID))
+
+	eng.handleExternalChanges(ctx)
+
+	assert.False(t, eng.watch.scopeGate.IsScopeBlocked(clearedScope),
+		"clearing a remote permission issue externally should release that scope")
+	assert.True(t, eng.watch.scopeGate.IsScopeBlocked(retainedScope),
+		"unrelated remote permission scopes must remain blocked")
+
+	retryable, err := eng.baseline.ListSyncFailuresForRetry(ctx, eng.nowFunc())
+	require.NoError(t, err)
+	require.Len(t, retryable, 1, "held descendants under the cleared scope should become retryable immediately")
+	assert.Equal(t, "Shared/TeamDocs/file.txt", retryable[0].Path)
+
+	remainingIssues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
+	require.NoError(t, err)
+	require.Len(t, remainingIssues, 1, "only the uncleared boundary issue should remain")
+	assert.Equal(t, "Shared/Other", remainingIssues[0].Path)
+
+	select {
+	case <-eng.watch.retryTimerCh:
+	default:
+		require.Fail(t, "expected immediate retry wakeup after remote permission clearance")
+	}
+}
+
 // TestRunWatch_ProcessBatch_EmptyPlan verifies that an empty plan (all
 // changes classify to no-op) is handled gracefully.
 func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
