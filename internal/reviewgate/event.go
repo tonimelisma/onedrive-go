@@ -12,9 +12,10 @@ type githubEventPayload struct {
 		FullName string `json:"full_name"`
 	} `json:"repository"`
 	PullRequest struct {
-		Number int  `json:"number"`
-		Draft  bool `json:"draft"`
-		Head   struct {
+		Number       int  `json:"number"`
+		Draft        bool `json:"draft"`
+		ChangedFiles int  `json:"changed_files"`
+		Head         struct {
 			SHA string `json:"sha"`
 		} `json:"head"`
 		Base struct {
@@ -59,9 +60,10 @@ func LoadPullRequest(eventPath string, fallbackRepository string) (PullRequest, 
 	}
 
 	return PullRequest{
-		Repository: repository,
-		Number:     payload.PullRequest.Number,
-		Draft:      payload.PullRequest.Draft,
-		HeadSHA:    headSHA,
+		Repository:       repository,
+		Number:           payload.PullRequest.Number,
+		Draft:            payload.PullRequest.Draft,
+		HeadSHA:          headSHA,
+		ChangedFileCount: payload.PullRequest.ChangedFiles,
 	}, nil
 }

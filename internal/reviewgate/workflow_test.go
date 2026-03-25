@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Validates: R-6.3.5
 func TestReviewGateWorkflowDefinition(t *testing.T) {
 	workflowFile, err := os.ReadFile("../../.github/workflows/review-gate.yml")
 	require.NoError(t, err)

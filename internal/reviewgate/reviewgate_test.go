@@ -11,13 +11,18 @@ import (
 )
 
 type fakePullRequestReader struct {
-	changedFiles []string
+	changedFiles ChangedFiles
 	filesErr     error
 	reviews      []Review
 	reviewsErr   error
 }
 
-func (f fakePullRequestReader) ListChangedFiles(ctx context.Context, repository string, pullNumber int) ([]string, error) {
+func (f fakePullRequestReader) ListChangedFiles(
+	ctx context.Context,
+	repository string,
+	pullNumber int,
+	expectedFileCount int,
+) (ChangedFiles, error) {
 	return f.changedFiles, f.filesErr
 }
 
@@ -25,6 +30,7 @@ func (f fakePullRequestReader) ListReviews(ctx context.Context, repository strin
 	return f.reviews, f.reviewsErr
 }
 
+// Validates: R-6.3.5, R-6.3.6
 func TestGateEvaluate(t *testing.T) {
 	timestamp := time.Date(2026, time.March, 25, 9, 0, 0, 0, time.UTC)
 
@@ -44,7 +50,6 @@ func TestGateEvaluate(t *testing.T) {
 				Draft:      true,
 				HeadSHA:    "head-sha",
 			},
-			reader:          fakePullRequestReader{},
 			expectedStatus:  DecisionSkip,
 			expectedMessage: draftPRMessage,
 		},
@@ -56,11 +61,11 @@ func TestGateEvaluate(t *testing.T) {
 				HeadSHA:    "head-sha",
 			},
 			reader: fakePullRequestReader{
-				changedFiles: []string{
-					"README.md",
-					"spec/design/ci-review-gate.md",
-					"TODO.md",
-				},
+				changedFiles: completeChangedFiles(
+					changedDocFile("README.md"),
+					changedDocFile("spec/design/ci-review-gate.md"),
+					changedDocFile("TODO.md"),
+				),
 			},
 			expectedStatus:  DecisionSkip,
 			expectedMessage: docsOnlyMessage,
@@ -73,7 +78,40 @@ func TestGateEvaluate(t *testing.T) {
 				HeadSHA:    "head-sha",
 			},
 			reader: fakePullRequestReader{
-				changedFiles: []string{"CLAUDE.md"},
+				changedFiles: completeChangedFiles(changedCodeFile("CLAUDE.md")),
+			},
+			expectedStatus:  DecisionFail,
+			expectedMessage: "missing Codex review on current head SHA",
+		},
+		{
+			name: "renamed non doc file into spec still requires review",
+			pullRequest: PullRequest{
+				Repository: "tonimelisma/onedrive-go",
+				Number:     4,
+				HeadSHA:    "head-sha",
+			},
+			reader: fakePullRequestReader{
+				changedFiles: completeChangedFiles(ChangedFile{
+					Path:         "spec/reference/moved.md",
+					PreviousPath: "internal/reviewgate/gate.go",
+					Status:       ChangedFileStatusRenamed,
+				}),
+			},
+			expectedStatus:  DecisionFail,
+			expectedMessage: "missing Codex review on current head SHA",
+		},
+		{
+			name: "incomplete docs listing requires review",
+			pullRequest: PullRequest{
+				Repository: "tonimelisma/onedrive-go",
+				Number:     5,
+				HeadSHA:    "head-sha",
+			},
+			reader: fakePullRequestReader{
+				changedFiles: ChangedFiles{
+					Entries:  []ChangedFile{changedDocFile("spec/design/ci-review-gate.md")},
+					Complete: false,
+				},
 			},
 			expectedStatus:  DecisionFail,
 			expectedMessage: "missing Codex review on current head SHA",
@@ -82,11 +120,11 @@ func TestGateEvaluate(t *testing.T) {
 			name: "missing codex review on head fails",
 			pullRequest: PullRequest{
 				Repository: "tonimelisma/onedrive-go",
-				Number:     4,
+				Number:     6,
 				HeadSHA:    "head-sha",
 			},
 			reader: fakePullRequestReader{
-				changedFiles: []string{"internal/reviewgate/gate.go"},
+				changedFiles: completeChangedFiles(changedCodeFile("internal/reviewgate/gate.go")),
 				reviews: []Review{
 					{
 						ID:            1,
@@ -104,11 +142,11 @@ func TestGateEvaluate(t *testing.T) {
 			name: "older sha codex review fails",
 			pullRequest: PullRequest{
 				Repository: "tonimelisma/onedrive-go",
-				Number:     5,
+				Number:     7,
 				HeadSHA:    "new-sha",
 			},
 			reader: fakePullRequestReader{
-				changedFiles: []string{"internal/reviewgate/gate.go"},
+				changedFiles: completeChangedFiles(changedCodeFile("internal/reviewgate/gate.go")),
 				reviews: []Review{
 					{
 						ID:            2,
@@ -126,11 +164,11 @@ func TestGateEvaluate(t *testing.T) {
 			name: "non codex review on head fails",
 			pullRequest: PullRequest{
 				Repository: "tonimelisma/onedrive-go",
-				Number:     6,
+				Number:     8,
 				HeadSHA:    "head-sha",
 			},
 			reader: fakePullRequestReader{
-				changedFiles: []string{"internal/reviewgate/gate.go"},
+				changedFiles: completeChangedFiles(changedCodeFile("internal/reviewgate/gate.go")),
 				reviews: []Review{
 					{
 						ID:            3,
@@ -148,11 +186,11 @@ func TestGateEvaluate(t *testing.T) {
 			name: "commented review on head passes",
 			pullRequest: PullRequest{
 				Repository: "tonimelisma/onedrive-go",
-				Number:     7,
+				Number:     9,
 				HeadSHA:    "head-sha",
 			},
 			reader: fakePullRequestReader{
-				changedFiles: []string{"internal/reviewgate/gate.go"},
+				changedFiles: completeChangedFiles(changedCodeFile("internal/reviewgate/gate.go")),
 				reviews: []Review{
 					{
 						ID:            4,
@@ -170,11 +208,11 @@ func TestGateEvaluate(t *testing.T) {
 			name: "approved review on head passes",
 			pullRequest: PullRequest{
 				Repository: "tonimelisma/onedrive-go",
-				Number:     8,
+				Number:     10,
 				HeadSHA:    "head-sha",
 			},
 			reader: fakePullRequestReader{
-				changedFiles: []string{"internal/reviewgate/gate.go"},
+				changedFiles: completeChangedFiles(changedCodeFile("internal/reviewgate/gate.go")),
 				reviews: []Review{
 					{
 						ID:            5,
@@ -192,11 +230,11 @@ func TestGateEvaluate(t *testing.T) {
 			name: "changes requested on head fails",
 			pullRequest: PullRequest{
 				Repository: "tonimelisma/onedrive-go",
-				Number:     9,
+				Number:     11,
 				HeadSHA:    "head-sha",
 			},
 			reader: fakePullRequestReader{
-				changedFiles: []string{"internal/reviewgate/gate.go"},
+				changedFiles: completeChangedFiles(changedCodeFile("internal/reviewgate/gate.go")),
 				reviews: []Review{
 					{
 						ID:            6,
@@ -214,11 +252,11 @@ func TestGateEvaluate(t *testing.T) {
 			name: "older changes requested superseded by newer head review passes",
 			pullRequest: PullRequest{
 				Repository: "tonimelisma/onedrive-go",
-				Number:     10,
+				Number:     12,
 				HeadSHA:    "new-sha",
 			},
 			reader: fakePullRequestReader{
-				changedFiles: []string{"internal/reviewgate/gate.go"},
+				changedFiles: completeChangedFiles(changedCodeFile("internal/reviewgate/gate.go")),
 				reviews: []Review{
 					{
 						ID:            7,
@@ -243,11 +281,11 @@ func TestGateEvaluate(t *testing.T) {
 			name: "custom reviewer login is honored",
 			pullRequest: PullRequest{
 				Repository: "tonimelisma/onedrive-go",
-				Number:     11,
+				Number:     13,
 				HeadSHA:    "head-sha",
 			},
 			reader: fakePullRequestReader{
-				changedFiles: []string{"internal/reviewgate/gate.go"},
+				changedFiles: completeChangedFiles(changedCodeFile("internal/reviewgate/gate.go")),
 				reviews: []Review{
 					{
 						ID:            9,
@@ -276,6 +314,27 @@ func TestGateEvaluate(t *testing.T) {
 			assert.Equal(t, testCase.expectedStatus, decision.Status)
 			assert.Equal(t, testCase.expectedMessage, decision.Message)
 		})
+	}
+}
+
+func completeChangedFiles(entries ...ChangedFile) ChangedFiles {
+	return ChangedFiles{
+		Entries:  entries,
+		Complete: true,
+	}
+}
+
+func changedDocFile(path string) ChangedFile {
+	return ChangedFile{
+		Path:   path,
+		Status: ChangedFileStatusModified,
+	}
+}
+
+func changedCodeFile(path string) ChangedFile {
+	return ChangedFile{
+		Path:   path,
+		Status: ChangedFileStatusModified,
 	}
 }
 
@@ -314,7 +373,7 @@ func TestGateEvaluateErrors(t *testing.T) {
 				HeadSHA:    "head-sha",
 			},
 			reader: fakePullRequestReader{
-				changedFiles: []string{"internal/reviewgate/gate.go"},
+				changedFiles: completeChangedFiles(changedCodeFile("internal/reviewgate/gate.go")),
 				reviewsErr:   fmt.Errorf("boom"),
 			},
 			expectedErrMsg: "review gate: list reviews: boom",

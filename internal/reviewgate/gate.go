@@ -40,7 +40,12 @@ func (g Gate) Evaluate(ctx context.Context, pullRequest PullRequest) (Decision, 
 		}, nil
 	}
 
-	changedFiles, err := g.reader.ListChangedFiles(ctx, pullRequest.Repository, pullRequest.Number)
+	changedFiles, err := g.reader.ListChangedFiles(
+		ctx,
+		pullRequest.Repository,
+		pullRequest.Number,
+		pullRequest.ChangedFileCount,
+	)
 	if err != nil {
 		return Decision{}, fmt.Errorf("review gate: list changed files: %w", err)
 	}
@@ -67,18 +72,99 @@ func (c Config) codexReviewLogin() string {
 	return login
 }
 
-func isDocsOnlyChangeSet(changedFiles []string) bool {
-	if len(changedFiles) == 0 {
+func isDocsOnlyChangeSet(changedFiles ChangedFiles) bool {
+	if !changedFiles.Complete {
+		return false
+	}
+	if len(changedFiles.Entries) == 0 {
 		return true
 	}
 
-	for _, filename := range changedFiles {
-		if !isDocsOnlyPath(filename) {
+	for _, changedFile := range changedFiles.Entries {
+		if !isDocsOnlyChangedFile(changedFile) {
 			return false
 		}
 	}
 
 	return true
+}
+
+func isDocsOnlyChangedFile(changedFile ChangedFile) bool {
+	status := normalizeChangedFileStatus(changedFile.Status)
+	if !isSupportedChangedFileStatus(status) {
+		return false
+	}
+
+	effectivePaths, ok := changedFilePathsForDocsOnlyCheck(changedFile, status)
+	if !ok {
+		return false
+	}
+
+	for _, filePath := range effectivePaths {
+		if !isDocsOnlyPath(filePath) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func normalizeChangedFileStatus(status ChangedFileStatus) ChangedFileStatus {
+	return ChangedFileStatus(strings.ToLower(strings.TrimSpace(string(status))))
+}
+
+func isSupportedChangedFileStatus(status ChangedFileStatus) bool {
+	switch status {
+	case
+		ChangedFileStatusAdded,
+		ChangedFileStatusCopied,
+		ChangedFileStatusChanged,
+		ChangedFileStatusModified,
+		ChangedFileStatusRemoved,
+		ChangedFileStatusRenamed,
+		ChangedFileStatusUnchanged:
+		return true
+	default:
+		return false
+	}
+}
+
+func changedFilePathsForDocsOnlyCheck(
+	changedFile ChangedFile,
+	status ChangedFileStatus,
+) ([]string, bool) {
+	currentPath := strings.TrimSpace(changedFile.Path)
+	if currentPath == "" {
+		return nil, false
+	}
+
+	paths := []string{currentPath}
+	previousPath := strings.TrimSpace(changedFile.PreviousPath)
+	if previousPath != "" {
+		paths = append(paths, previousPath)
+	}
+
+	if requiresPreviousPath(status) && previousPath == "" {
+		return nil, false
+	}
+
+	return paths, true
+}
+
+func requiresPreviousPath(status ChangedFileStatus) bool {
+	switch status {
+	case ChangedFileStatusCopied, ChangedFileStatusRenamed:
+		return true
+	case
+		ChangedFileStatusAdded,
+		ChangedFileStatusChanged,
+		ChangedFileStatusModified,
+		ChangedFileStatusRemoved,
+		ChangedFileStatusUnchanged:
+		return false
+	default:
+		return false
+	}
 }
 
 func isDocsOnlyPath(filename string) bool {

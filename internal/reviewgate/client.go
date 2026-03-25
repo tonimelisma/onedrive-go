@@ -17,9 +17,16 @@ const githubPageSize = 100
 
 const maxErrorBodyBytes = 4096
 
+const githubFilesAPICap = 3000
+
 // PullRequestReader provides the remote data needed by the gate.
 type PullRequestReader interface {
-	ListChangedFiles(ctx context.Context, repository string, pullNumber int) ([]string, error)
+	ListChangedFiles(
+		ctx context.Context,
+		repository string,
+		pullNumber int,
+		expectedFileCount int,
+	) (ChangedFiles, error)
 	ListReviews(ctx context.Context, repository string, pullNumber int) ([]Review, error)
 }
 
@@ -50,7 +57,9 @@ func NewClient(httpClient HTTPClient, baseURL string, token string) *Client {
 }
 
 type githubChangedFile struct {
-	Filename string `json:"filename"`
+	Filename         string `json:"filename"`
+	PreviousFilename string `json:"previous_filename"`
+	Status           string `json:"status"`
 }
 
 type githubReview struct {
@@ -63,24 +72,35 @@ type githubReview struct {
 	} `json:"user"`
 }
 
-func (c *Client) ListChangedFiles(ctx context.Context, repository string, pullNumber int) ([]string, error) {
-	var changedFiles []string
+func (c *Client) ListChangedFiles(
+	ctx context.Context,
+	repository string,
+	pullNumber int,
+	expectedFileCount int,
+) (ChangedFiles, error) {
+	var changedFiles ChangedFiles
+	var retrievedFileCount int
 
 	for pageNumber := 1; ; pageNumber++ {
 		var pageFiles []githubChangedFile
 		if err := c.getPage(ctx, repository, pullNumber, "files", pageNumber, &pageFiles); err != nil {
-			return nil, fmt.Errorf("list changed files: %w", err)
+			return ChangedFiles{}, fmt.Errorf("list changed files: %w", err)
 		}
 
 		for _, file := range pageFiles {
-			filename := strings.TrimSpace(file.Filename)
-			if filename == "" {
-				continue
-			}
-			changedFiles = append(changedFiles, filename)
+			changedFiles.Entries = append(changedFiles.Entries, normalizeChangedFile(file))
+		}
+		retrievedFileCount += len(pageFiles)
+
+		// GitHub caps this endpoint at 3000 files. Once we hit the cap, the gate
+		// must fail closed and require review instead of guessing docs-only status.
+		if retrievedFileCount >= githubFilesAPICap && len(pageFiles) == githubPageSize {
+			changedFiles.Complete = false
+			return changedFiles, nil
 		}
 
 		if len(pageFiles) < githubPageSize {
+			changedFiles.Complete = changedFilesAreComplete(retrievedFileCount, expectedFileCount)
 			return changedFiles, nil
 		}
 	}
@@ -122,6 +142,22 @@ func normalizeReview(rawReview githubReview) (Review, error) {
 		State:         ReviewState(strings.ToUpper(strings.TrimSpace(rawReview.State))),
 		SubmittedAt:   submittedAt,
 	}, nil
+}
+
+func normalizeChangedFile(rawFile githubChangedFile) ChangedFile {
+	return ChangedFile{
+		Path:         strings.TrimSpace(rawFile.Filename),
+		PreviousPath: strings.TrimSpace(rawFile.PreviousFilename),
+		Status:       ChangedFileStatus(strings.ToLower(strings.TrimSpace(rawFile.Status))),
+	}
+}
+
+func changedFilesAreComplete(retrievedFileCount int, expectedFileCount int) bool {
+	if expectedFileCount <= 0 {
+		return true
+	}
+
+	return retrievedFileCount == expectedFileCount
 }
 
 func (c *Client) getPage(
