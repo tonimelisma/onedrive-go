@@ -3,7 +3,6 @@ package sync
 import (
 	"os"
 	"strings"
-	stdsync "sync"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
@@ -22,72 +21,6 @@ func resolveRemoteItemID(bl *synctypes.Baseline, localPath string, driveID drive
 	}
 
 	return entry.ItemID
-}
-
-// permissionCache is a thread-safe in-memory cache of folder path → canWrite.
-// Built from sync_failures + API queries each pass. Not persisted.
-// Accessed concurrently by the main sync goroutine (recheckPermissions,
-// deniedPrefixes) and the drain goroutine (handle403 → set).
-type permissionCache struct {
-	mu    stdsync.RWMutex
-	cache map[string]bool
-}
-
-func newPermissionCache() *permissionCache {
-	return &permissionCache{cache: make(map[string]bool)}
-}
-
-// reset clears all cached entries. Called at the start of each sync pass
-// to prevent stale entries from persisting when permissions change.
-func (pc *permissionCache) reset() {
-	if pc == nil {
-		return
-	}
-
-	pc.mu.Lock()
-	pc.cache = make(map[string]bool)
-	pc.mu.Unlock()
-}
-
-func (pc *permissionCache) get(folderPath string) (canWrite bool, ok bool) {
-	if pc == nil {
-		return false, false
-	}
-
-	pc.mu.RLock()
-	canWrite, ok = pc.cache[folderPath]
-	pc.mu.RUnlock()
-
-	return canWrite, ok
-}
-
-func (pc *permissionCache) set(folderPath string, canWrite bool) {
-	if pc == nil {
-		return
-	}
-
-	pc.mu.Lock()
-	pc.cache[folderPath] = canWrite
-	pc.mu.Unlock()
-}
-
-// deniedPrefixes returns all folder paths cached as read-only (canWrite == false).
-func (pc *permissionCache) deniedPrefixes() []string {
-	if pc == nil {
-		return nil
-	}
-
-	pc.mu.RLock()
-	defer pc.mu.RUnlock()
-
-	var prefixes []string
-	for path, canWrite := range pc.cache {
-		if !canWrite {
-			prefixes = append(prefixes, path)
-		}
-	}
-
-	return prefixes
 }
 
 // findShortcutForPath returns the first shortcut whose LocalPath is a prefix

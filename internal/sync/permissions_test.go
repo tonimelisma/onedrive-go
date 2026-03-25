@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -181,6 +182,7 @@ func TestHandle403_ReadOnlyFolder_RecordsIssueAtBoundary(t *testing.T) {
 
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
+	newTestWatchState(t, eng)
 
 	result := eng.permHandler.handle403(ctx, bl, "Shared/TeamDocs/sub/file.txt", shortcuts)
 	assert.True(t, result, "handle403 should return true for read-only folder")
@@ -190,11 +192,56 @@ func TestHandle403_ReadOnlyFolder_RecordsIssueAtBoundary(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, "Shared/TeamDocs/sub", issues[0].Path)
+	scopeKey := synctypes.SKPermRemote("Shared/TeamDocs/sub")
+	assert.Equal(t, scopeKey, issues[0].ScopeKey, "boundary issue should be scoped to the recursive remote permission boundary")
+	assert.True(t, eng.watch.scopeGate.IsScopeBlocked(scopeKey), "watch mode should create a recursive remote permission scope")
 
-	// Should have populated the cache.
-	canWrite, ok := eng.permHandler.permCache.get("Shared/TeamDocs/sub")
-	assert.True(t, ok, "cache should contain boundary path")
-	assert.False(t, canWrite, "boundary should be cached as read-only")
+	block, ok := eng.watch.scopeGate.GetScopeBlock(scopeKey)
+	require.True(t, ok, "remote permission scope should be queryable from scope gate")
+	assert.Equal(t, synctypes.IssuePermissionDenied, block.IssueType)
+	assert.True(t, block.NextTrialAt.IsZero(), "remote permission scopes should rely on recheckPermissions, not trial dispatch")
+
+	nestedUpload := &synctypes.TrackedAction{
+		ID: 1,
+		Action: synctypes.Action{
+			Type:    synctypes.ActionUpload,
+			Path:    "Shared/TeamDocs/sub/nested/file.txt",
+			DriveID: driveid.New(remoteDriveID),
+			ItemID:  "nested-upload",
+		},
+	}
+	nestedDelete := &synctypes.TrackedAction{
+		ID: 2,
+		Action: synctypes.Action{
+			Type:    synctypes.ActionRemoteDelete,
+			Path:    "Shared/TeamDocs/sub/nested/file.txt",
+			DriveID: driveid.New(remoteDriveID),
+			ItemID:  "nested-delete",
+		},
+	}
+	nestedDownload := &synctypes.TrackedAction{
+		ID: 3,
+		Action: synctypes.Action{
+			Type:    synctypes.ActionDownload,
+			Path:    "Shared/TeamDocs/sub/nested/file.txt",
+			DriveID: driveid.New(remoteDriveID),
+			ItemID:  "nested-download",
+		},
+	}
+	siblingUpload := &synctypes.TrackedAction{
+		ID: 4,
+		Action: synctypes.Action{
+			Type:    synctypes.ActionUpload,
+			Path:    "Shared/TeamDocs/other/file.txt",
+			DriveID: driveid.New(remoteDriveID),
+			ItemID:  "sibling-upload",
+		},
+	}
+
+	assert.Equal(t, scopeKey, eng.watch.scopeGate.Admit(nestedUpload), "all uploads under the denied boundary should be blocked recursively")
+	assert.Equal(t, scopeKey, eng.watch.scopeGate.Admit(nestedDelete), "all remote deletes under the denied boundary should be blocked recursively")
+	assert.True(t, eng.watch.scopeGate.Admit(nestedDownload).IsZero(), "downloads must remain allowed in download-only mode")
+	assert.True(t, eng.watch.scopeGate.Admit(siblingUpload).IsZero(), "siblings outside the denied boundary must remain admissible")
 }
 
 // Validates: R-2.14.1
@@ -365,6 +412,8 @@ func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
+	newTestWatchState(t, eng)
+	scopeKey := synctypes.SKPermRemote("Shared/TeamDocs/sub")
 
 	// Pre-record a permission_denied issue.
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
@@ -373,6 +422,20 @@ func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 		IssueType:  synctypes.IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
 		HTTPStatus: http.StatusForbidden,
+		ScopeKey:   scopeKey,
+	}, nil))
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, scopeKey, &synctypes.ScopeBlock{
+		Key:       scopeKey,
+		IssueType: synctypes.IssuePermissionDenied,
+		BlockedAt: eng.nowFn().Add(-time.Minute),
+	}))
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:      "Shared/TeamDocs/sub/file.txt",
+		DriveID:   eng.driveID,
+		Direction: synctypes.DirectionUpload,
+		Category:  synctypes.CategoryTransient,
+		ScopeKey:  scopeKey,
+		ErrMsg:    "scope blocked: " + scopeKey.String(),
 	}, nil))
 
 	// Verify issue exists.
@@ -386,6 +449,137 @@ func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 	after, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
 	require.NoError(t, err)
 	assert.Empty(t, after)
+	assert.False(t, eng.watch.scopeGate.IsScopeBlocked(scopeKey), "grant detection should release the recursive remote scope immediately")
+
+	retryable, err := eng.baseline.ListSyncFailuresForRetry(ctx, eng.nowFn())
+	require.NoError(t, err)
+	require.Len(t, retryable, 1)
+	assert.Equal(t, "Shared/TeamDocs/sub/file.txt", retryable[0].Path, "held child work should become retryable immediately when permissions return")
+
+	select {
+	case <-eng.watch.retryTimerCh:
+	case <-time.After(time.Second):
+		require.Fail(t, "recheckPermissions should signal retryTimerCh when a remote scope clears")
+	}
+
+	admitted := eng.watch.scopeGate.Admit(&synctypes.TrackedAction{
+		ID: 10,
+		Action: synctypes.Action{
+			Type:    synctypes.ActionUpload,
+			Path:    "Shared/TeamDocs/sub/file.txt",
+			DriveID: driveid.New(remoteDriveID),
+			ItemID:  "folder-id",
+		},
+	})
+	assert.True(t, admitted.IsZero(), "child uploads should be admissible immediately after permission restoration")
+}
+
+// Validates: R-2.10.24, R-2.14.1
+func TestHandle403_ExistingRemoteScope_AvoidsAPICall(t *testing.T) {
+	t.Parallel()
+
+	remoteDriveID := "remote-drive-1"
+	checker := &mockPermChecker{
+		perms: map[string][]graph.Permission{
+			driveid.New(remoteDriveID).String() + ":parent-folder-id": {{ID: "p1", Roles: []string{"read"}}},
+			driveid.New(remoteDriveID).String() + ":root-id":          {{ID: "p2", Roles: []string{"write"}}},
+		},
+	}
+
+	shortcuts := []synctypes.Shortcut{{
+		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
+		LocalPath: "Shared/TeamDocs", Observation: synctypes.ObservationDelta, DiscoveredAt: 1000,
+	}}
+
+	baselineEntries := []synctypes.Outcome{
+		{
+			Action: synctypes.ActionDownload, Success: true, Path: "Shared/TeamDocs",
+			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: synctypes.ItemTypeFolder,
+		},
+		{
+			Action: synctypes.ActionDownload, Success: true, Path: "Shared/TeamDocs/sub",
+			DriveID: driveid.New(remoteDriveID), ItemID: "parent-folder-id", ParentID: "root-id", ItemType: synctypes.ItemTypeFolder,
+		},
+	}
+
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	ctx := t.Context()
+	newTestWatchState(t, eng)
+
+	first := eng.permHandler.handle403(ctx, bl, "Shared/TeamDocs/sub/file-a.txt", shortcuts)
+	require.True(t, first)
+	callCount := len(checker.calls)
+	require.NotZero(t, callCount, "initial 403 should consult Graph permissions")
+
+	second := eng.permHandler.handle403(ctx, bl, "Shared/TeamDocs/sub/deeper/file-b.txt", shortcuts)
+	require.True(t, second)
+	assert.Len(t, checker.calls, callCount, "known denied boundary should short-circuit further permission API calls")
+
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	assert.Equal(t, synctypes.SKPermRemote("Shared/TeamDocs/sub"), issues[0].ScopeKey)
+}
+
+// Validates: R-2.10.9, R-2.10.11, R-2.14.4
+func TestRecheckPermissions_APIFailure_FailsOpenAndReleasesScope(t *testing.T) {
+	t.Parallel()
+
+	remoteDriveID := "remote-drive-1"
+	checker := &mockPermChecker{
+		err: fmt.Errorf("graph unavailable"),
+	}
+
+	shortcuts := []synctypes.Shortcut{{
+		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
+		LocalPath: "Shared/TeamDocs", Observation: synctypes.ObservationDelta, DiscoveredAt: 1000,
+	}}
+
+	baselineEntries := []synctypes.Outcome{
+		{
+			Action: synctypes.ActionDownload, Success: true, Path: "Shared/TeamDocs/sub",
+			DriveID: driveid.New(remoteDriveID), ItemID: "folder-id", ParentID: "root-id", ItemType: synctypes.ItemTypeFolder,
+		},
+	}
+
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	ctx := t.Context()
+	newTestWatchState(t, eng)
+	scopeKey := synctypes.SKPermRemote("Shared/TeamDocs/sub")
+
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:       "Shared/TeamDocs/sub",
+		Direction:  synctypes.DirectionUpload,
+		IssueType:  synctypes.IssuePermissionDenied,
+		ErrMsg:     "folder is read-only",
+		HTTPStatus: http.StatusForbidden,
+		ScopeKey:   scopeKey,
+	}, nil))
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, scopeKey, &synctypes.ScopeBlock{
+		Key:       scopeKey,
+		IssueType: synctypes.IssuePermissionDenied,
+		BlockedAt: eng.nowFn().Add(-time.Minute),
+	}))
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:      "Shared/TeamDocs/sub/file.txt",
+		DriveID:   eng.driveID,
+		Direction: synctypes.DirectionUpload,
+		Category:  synctypes.CategoryTransient,
+		ScopeKey:  scopeKey,
+		ErrMsg:    "scope blocked: " + scopeKey.String(),
+	}, nil))
+
+	eng.permHandler.recheckPermissions(ctx, bl, shortcuts)
+
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
+	require.NoError(t, err)
+	assert.Empty(t, issues, "inconclusive recheck must fail open rather than keep suppressing writes")
+	assert.False(t, eng.watch.scopeGate.IsScopeBlocked(scopeKey), "fail-open recheck should release the remote scope")
+
+	retryable, err := eng.baseline.ListSyncFailuresForRetry(ctx, eng.nowFn())
+	require.NoError(t, err)
+	require.Len(t, retryable, 1)
+	assert.Equal(t, "Shared/TeamDocs/sub/file.txt", retryable[0].Path)
 }
 
 func TestRecheckPermissions_StillDenied_NoChange(t *testing.T) {
@@ -414,6 +608,8 @@ func TestRecheckPermissions_StillDenied_NoChange(t *testing.T) {
 
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
+	scopeKey := synctypes.SKPermRemote("Shared/TeamDocs/sub")
+	newTestWatchState(t, eng)
 
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "Shared/TeamDocs/sub",
@@ -421,6 +617,7 @@ func TestRecheckPermissions_StillDenied_NoChange(t *testing.T) {
 		IssueType:  synctypes.IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
 		HTTPStatus: http.StatusForbidden,
+		ScopeKey:   scopeKey,
 	}, nil))
 
 	eng.permHandler.recheckPermissions(ctx, bl, shortcuts)
@@ -429,6 +626,8 @@ func TestRecheckPermissions_StillDenied_NoChange(t *testing.T) {
 	after, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
 	require.NoError(t, err)
 	assert.Len(t, after, 1)
+	assert.Equal(t, []string{"Shared/TeamDocs/sub"}, eng.permHandler.DeniedPrefixes(ctx))
+	assert.True(t, eng.watch.scopeGate.IsScopeBlocked(scopeKey), "still-denied remote boundary should remain blocked after recheck")
 }
 
 func TestRecheckPermissions_NoIssues_NoAPICalls(t *testing.T) {
@@ -445,10 +644,11 @@ func TestRecheckPermissions_NoIssues_NoAPICalls(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Fix #7: recheckPermissions caches unresolvable issues as denied.
+// Recheck fail-open and denied-prefix contract tests
 // ---------------------------------------------------------------------------
 
-func TestRecheckPermissions_UnresolvableIssues_CachedAsDenied(t *testing.T) {
+// Validates: R-2.14.4
+func TestRecheckPermissions_UnresolvableIssues_FailOpenClearsStaleBoundaries(t *testing.T) {
 	t.Parallel()
 
 	checker := &mockPermChecker{}
@@ -464,6 +664,7 @@ func TestRecheckPermissions_UnresolvableIssues_CachedAsDenied(t *testing.T) {
 		IssueType:  synctypes.IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
 		HTTPStatus: http.StatusForbidden,
+		ScopeKey:   synctypes.SKPermRemote("Shared/NoShortcut/sub"),
 	}, nil))
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "Shared/Other/locked",
@@ -471,31 +672,21 @@ func TestRecheckPermissions_UnresolvableIssues_CachedAsDenied(t *testing.T) {
 		IssueType:  synctypes.IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
 		HTTPStatus: http.StatusForbidden,
+		ScopeKey:   synctypes.SKPermRemote("Shared/Other/locked"),
 	}, nil))
 
 	// Recheck with no shortcuts — both issues have sc == nil.
 	eng.permHandler.recheckPermissions(ctx, bl, nil)
 
-	// Both should be cached as denied (canWrite == false).
-	canWrite, ok := eng.permHandler.permCache.get("Shared/NoShortcut/sub")
-	assert.True(t, ok, "unresolvable issue should be cached")
-	assert.False(t, canWrite, "unresolvable issue should be cached as denied")
-
-	canWrite, ok = eng.permHandler.permCache.get("Shared/Other/locked")
-	assert.True(t, ok, "unresolvable issue should be cached")
-	assert.False(t, canWrite, "unresolvable issue should be cached as denied")
-
-	// No API calls — can't resolve without shortcuts.
+	remaining, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
+	require.NoError(t, err)
+	assert.Empty(t, remaining, "stale remote permission boundaries should be cleared when no shortcut can resolve them")
 	assert.Empty(t, checker.calls, "should not call API when no shortcut matches")
-
-	// deniedPrefixes should return both.
-	prefixes := eng.permHandler.permCache.deniedPrefixes()
-	assert.Len(t, prefixes, 2)
-	assert.Contains(t, prefixes, "Shared/NoShortcut/sub")
-	assert.Contains(t, prefixes, "Shared/Other/locked")
+	assert.Empty(t, eng.permHandler.DeniedPrefixes(ctx), "cleared stale boundaries must not continue suppressing planning")
 }
 
-func TestRecheckPermissions_UnresolvedItemID_CachedAsDenied(t *testing.T) {
+// Validates: R-2.14.4
+func TestRecheckPermissions_UnresolvedItemID_FailOpenClearsStaleBoundary(t *testing.T) {
 	t.Parallel()
 
 	remoteDriveID := "remote-drive-1"
@@ -518,127 +709,50 @@ func TestRecheckPermissions_UnresolvedItemID_CachedAsDenied(t *testing.T) {
 		IssueType:  synctypes.IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
 		HTTPStatus: http.StatusForbidden,
+		ScopeKey:   synctypes.SKPermRemote("Shared/TeamDocs/missing"),
 	}, nil))
 
 	eng.permHandler.recheckPermissions(ctx, bl, shortcuts)
 
-	// Should be cached as denied even though item ID can't be resolved.
-	canWrite, ok := eng.permHandler.permCache.get("Shared/TeamDocs/missing")
-	assert.True(t, ok, "unresolved item ID should be cached")
-	assert.False(t, canWrite, "unresolved item ID should be cached as denied")
-
-	// No API calls — can't query without item ID.
+	remaining, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
+	require.NoError(t, err)
+	assert.Empty(t, remaining, "unresolvable remote boundaries should not stay suppressed on stale evidence")
 	assert.Empty(t, checker.calls)
+	assert.Empty(t, eng.permHandler.DeniedPrefixes(ctx))
 }
 
-// ---------------------------------------------------------------------------
-// permissionCache tests
-// ---------------------------------------------------------------------------
-
-func TestPermissionCache(t *testing.T) {
+// Validates: R-2.14.2
+func TestDeniedPrefixes_RemoteScopesOnly(t *testing.T) {
 	t.Parallel()
 
-	pc := newPermissionCache()
+	checker := &mockPermChecker{}
+	eng, _, _ := newTestEngineWithPerms(t, checker, nil, nil)
+	ctx := t.Context()
 
-	// Miss.
-	_, ok := pc.get("folder")
-	assert.False(t, ok)
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:       "Shared/TeamDocs",
+		Direction:  synctypes.DirectionUpload,
+		IssueType:  synctypes.IssuePermissionDenied,
+		ErrMsg:     "read-only",
+		HTTPStatus: http.StatusForbidden,
+		ScopeKey:   synctypes.SKPermRemote("Shared/TeamDocs"),
+	}, nil))
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:       "file.txt",
+		Direction:  synctypes.DirectionUpload,
+		IssueType:  synctypes.IssuePermissionDenied,
+		ErrMsg:     "single-file 403",
+		HTTPStatus: http.StatusForbidden,
+	}, nil))
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:      "Private",
+		Direction: synctypes.DirectionUpload,
+		IssueType: synctypes.IssueLocalPermissionDenied,
+		ErrMsg:    "local permission denied",
+		ScopeKey:  synctypes.SKPermDir("Private"),
+	}, nil))
 
-	// Set and hit.
-	pc.set("folder", true)
-
-	canWrite, ok := pc.get("folder")
-	assert.True(t, ok)
-	assert.True(t, canWrite)
-
-	// Set read-only.
-	pc.set("other", false)
-
-	canWrite, ok = pc.get("other")
-	assert.True(t, ok)
-	assert.False(t, canWrite)
-}
-
-func TestPermissionCache_Reset(t *testing.T) {
-	t.Parallel()
-
-	pc := newPermissionCache()
-
-	pc.set("folder", true)
-	pc.set("other", false)
-
-	pc.reset()
-
-	_, ok := pc.get("folder")
-	assert.False(t, ok, "entries should be cleared after reset")
-
-	_, ok = pc.get("other")
-	assert.False(t, ok, "entries should be cleared after reset")
-}
-
-func TestPermissionCache_DeniedPrefixes(t *testing.T) {
-	t.Parallel()
-
-	pc := newPermissionCache()
-
-	pc.set("Shared/ReadOnly", false)
-	pc.set("Shared/Writable", true)
-	pc.set("Shared/Other", false)
-
-	prefixes := pc.deniedPrefixes()
-	assert.Len(t, prefixes, 2)
-	assert.Contains(t, prefixes, "Shared/ReadOnly")
-	assert.Contains(t, prefixes, "Shared/Other")
-}
-
-func TestPermissionCache_NilSafe(t *testing.T) {
-	t.Parallel()
-
-	var pc *permissionCache
-
-	// None of these should panic.
-	pc.reset()
-	pc.set("folder", true)
-
-	_, ok := pc.get("folder")
-	assert.False(t, ok)
-
-	assert.Nil(t, pc.deniedPrefixes())
-}
-
-func TestPermissionCache_ConcurrentAccess(t *testing.T) {
-	t.Parallel()
-
-	pc := newPermissionCache()
-
-	// Hammer the cache from multiple goroutines to verify thread safety.
-	// The race detector will catch unprotected map access.
-	done := make(chan struct{})
-	for i := range 10 {
-		go func(id int) {
-			defer func() { done <- struct{}{} }()
-			path := fmt.Sprintf("folder/%d", id)
-
-			for range 100 {
-				pc.set(path, id%2 == 0)
-				pc.get(path)
-				pc.deniedPrefixes()
-			}
-		}(i)
-	}
-
-	// One goroutine doing resets.
-	go func() {
-		defer func() { done <- struct{}{} }()
-
-		for range 50 {
-			pc.reset()
-		}
-	}()
-
-	for range 11 {
-		<-done
-	}
+	assert.Equal(t, []string{"Shared/TeamDocs"}, eng.permHandler.DeniedPrefixes(ctx))
 }
 
 // ---------------------------------------------------------------------------
@@ -727,10 +841,11 @@ func TestHandle403_UnresolvedParent_FallsBackToRoot(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// recheckPermissions populates cache
+// recheckPermissions preserves active denied boundaries
 // ---------------------------------------------------------------------------
 
-func TestRecheckPermissions_PopulatesCache(t *testing.T) {
+// Validates: R-2.10.25
+func TestRecheckPermissions_StillDenied_KeepsDeniedPrefix(t *testing.T) {
 	t.Parallel()
 
 	remoteDriveID := "remote-drive-1"
@@ -756,6 +871,8 @@ func TestRecheckPermissions_PopulatesCache(t *testing.T) {
 
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
+	newTestWatchState(t, eng)
+	scopeKey := synctypes.SKPermRemote("Shared/TeamDocs/sub")
 
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "Shared/TeamDocs/sub",
@@ -763,14 +880,17 @@ func TestRecheckPermissions_PopulatesCache(t *testing.T) {
 		IssueType:  synctypes.IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
 		HTTPStatus: http.StatusForbidden,
+		ScopeKey:   scopeKey,
 	}, nil))
 
 	eng.permHandler.recheckPermissions(ctx, bl, shortcuts)
 
-	// Cache should have been populated.
-	canWrite, ok := eng.permHandler.permCache.get("Shared/TeamDocs/sub")
-	assert.True(t, ok, "cache should contain the checked path")
-	assert.False(t, canWrite, "should be cached as read-only")
+	remaining, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
+	require.NoError(t, err)
+	require.Len(t, remaining, 1)
+	assert.Equal(t, scopeKey, remaining[0].ScopeKey)
+	assert.Equal(t, []string{"Shared/TeamDocs/sub"}, eng.permHandler.DeniedPrefixes(ctx))
+	assert.True(t, eng.watch.scopeGate.IsScopeBlocked(scopeKey), "watch-mode recheck should keep the recursive remote scope active while still denied")
 }
 
 // ---------------------------------------------------------------------------
@@ -823,53 +943,6 @@ func TestHandle403_ShortcutUsesRemoteDrive(t *testing.T) {
 
 	// Verify at least one API call was made.
 	assert.NotEmpty(t, checker.calls, "should have made at least one API call")
-}
-
-// ---------------------------------------------------------------------------
-// R-2.10.24: permissionCache checked before API call
-// ---------------------------------------------------------------------------
-
-// Validates: R-2.10.24
-func TestPermissionCache_HitAvoidAPICall(t *testing.T) {
-	t.Parallel()
-
-	pc := newPermissionCache()
-
-	// Set a cache entry.
-	pc.set("Shared/Folder", false)
-
-	// Cache hit returns value without needing API.
-	canWrite, ok := pc.get("Shared/Folder")
-	assert.True(t, ok, "cache should hit")
-	assert.False(t, canWrite)
-
-	// Cache miss.
-	_, ok = pc.get("Shared/Other")
-	assert.False(t, ok, "cache should miss for unknown path")
-}
-
-// Validates: R-2.10.24
-func TestPermissionCache_MapsWritableAndDenied(t *testing.T) {
-	t.Parallel()
-
-	pc := newPermissionCache()
-
-	// Cache both writable and denied folders.
-	pc.set("Shared/Writable", true)
-	pc.set("Shared/Denied", false)
-
-	canWrite, ok := pc.get("Shared/Writable")
-	assert.True(t, ok)
-	assert.True(t, canWrite, "writable folder should be cached as writable")
-
-	canWrite, ok = pc.get("Shared/Denied")
-	assert.True(t, ok)
-	assert.False(t, canWrite, "denied folder should be cached as denied")
-
-	// deniedPrefixes should only include denied entries.
-	prefixes := pc.deniedPrefixes()
-	assert.Contains(t, prefixes, "Shared/Denied")
-	assert.NotContains(t, prefixes, "Shared/Writable")
 }
 
 // ---------------------------------------------------------------------------
@@ -935,7 +1008,7 @@ func TestWalkPermissionBoundary_StopsAtShortcutRoot(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// R-2.10.25: recheckPermissions re-queries and clears/updates cache
+// R-2.10.25: recheckPermissions re-queries and clears/releases boundaries
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.10.25
@@ -971,16 +1044,29 @@ func TestRecheckPermissions_MultipleIssues_PartialResolution(t *testing.T) {
 
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
+	scopeA := synctypes.SKPermRemote("Shared/TeamDocs/folderA")
+	scopeB := synctypes.SKPermRemote("Shared/TeamDocs/folderB")
+	newTestWatchState(t, eng)
 
 	// Record two permission_denied issues.
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "Shared/TeamDocs/folderA", Direction: synctypes.DirectionUpload,
-		IssueType: synctypes.IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: http.StatusForbidden,
+		IssueType: synctypes.IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: http.StatusForbidden, ScopeKey: scopeA,
 	}, nil))
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "Shared/TeamDocs/folderB", Direction: synctypes.DirectionUpload,
-		IssueType: synctypes.IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: http.StatusForbidden,
+		IssueType: synctypes.IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: http.StatusForbidden, ScopeKey: scopeB,
 	}, nil))
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, scopeA, &synctypes.ScopeBlock{
+		Key:       scopeA,
+		IssueType: synctypes.IssuePermissionDenied,
+		BlockedAt: eng.nowFn().Add(-time.Minute),
+	}))
+	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, scopeB, &synctypes.ScopeBlock{
+		Key:       scopeB,
+		IssueType: synctypes.IssuePermissionDenied,
+		BlockedAt: eng.nowFn().Add(-time.Minute),
+	}))
 
 	eng.permHandler.recheckPermissions(ctx, bl, shortcuts)
 
@@ -990,35 +1076,9 @@ func TestRecheckPermissions_MultipleIssues_PartialResolution(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, remaining, 1)
 	assert.Equal(t, "Shared/TeamDocs/folderB", remaining[0].Path)
-
-	// Cache should reflect both states.
-	canWrite, ok := eng.permHandler.permCache.get("Shared/TeamDocs/folderA")
-	assert.True(t, ok)
-	assert.True(t, canWrite, "folderA should be cached as writable after recheck")
-
-	canWrite, ok = eng.permHandler.permCache.get("Shared/TeamDocs/folderB")
-	assert.True(t, ok)
-	assert.False(t, canWrite, "folderB should remain cached as denied")
-}
-
-// Validates: R-2.10.25
-func TestRecheckPermissions_ResetsCache(t *testing.T) {
-	t.Parallel()
-
-	checker := &mockPermChecker{}
-
-	eng, bl, _ := newTestEngineWithPerms(t, checker, nil, nil)
-	ctx := t.Context()
-
-	// Pre-populate cache with stale entries.
-	eng.permHandler.permCache.set("Shared/Stale", false)
-
-	// recheckPermissions should reset the cache at the start.
-	eng.permHandler.recheckPermissions(ctx, bl, nil)
-
-	// Stale entry should be gone.
-	_, ok := eng.permHandler.permCache.get("Shared/Stale")
-	assert.False(t, ok, "stale cache entries should be cleared at pass start")
+	assert.Equal(t, []string{"Shared/TeamDocs/folderB"}, eng.permHandler.DeniedPrefixes(ctx))
+	assert.False(t, eng.watch.scopeGate.IsScopeBlocked(scopeA), "resolved boundary should be released")
+	assert.True(t, eng.watch.scopeGate.IsScopeBlocked(scopeB), "still-denied boundary should remain blocked")
 }
 
 // ---------------------------------------------------------------------------

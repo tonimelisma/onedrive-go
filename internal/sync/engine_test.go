@@ -3289,17 +3289,22 @@ func TestProcessWorkerResult_403ReadOnly_SkipsRemoteState(t *testing.T) {
 		HTTPStatus: 403,
 	}, bl)
 
-	// Permission-denied should be recorded in sync_failures: one for the
-	// file itself (from recordFailure) and one for the boundary directory
-	// (from handle403). Both carry issue_type "permission_denied".
+	// Confirmed remote read-only should collapse to one actionable boundary
+	// issue instead of leaving both a file-level failure and a boundary row.
 	permIssues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
 	require.NoError(t, err)
-	assert.Len(t, permIssues, 2, "should record permission_denied for file + boundary directory")
+	require.Len(t, permIssues, 1, "confirmed remote denial should record one boundary issue")
+	assert.Equal(t, "Shared/TeamDocs", permIssues[0].Path)
+	assert.Equal(t, synctypes.SKPermRemote("Shared/TeamDocs"), permIssues[0].ScopeKey)
 
 	// remote_state should be empty.
 	failed, err := eng.baseline.ListActionableRemoteState(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, failed, "confirmed read-only 403 should not be in remote_state")
+
+	allFailures, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Len(t, allFailures, 1, "confirmed remote denial should not leave a duplicate file-level failure behind")
 }
 
 func TestProcessWorkerResult_Success_NoRecords(t *testing.T) {
@@ -4014,11 +4019,11 @@ func TestE2E_DrainLoop_ProcessesAndRoutes(t *testing.T) {
 
 // Validates: R-2.10.5, R-2.10.11
 // TestE2E_DrainLoop_TrialResultSuccess verifies that trial success clears the
-// scope block and makes held failures retryable via processTrialResult in the drain loop.
+// scope block and re-injects held failures without waiting for a new external observation.
 func TestE2E_DrainLoop_TrialResultSuccess(t *testing.T) {
 	t.Parallel()
 
-	results, _, cancel, eng, _ := startDrainLoop(t)
+	results, _, cancel, eng, buf := startDrainLoop(t)
 	defer cancel()
 
 	ctx := t.Context()
@@ -4031,6 +4036,7 @@ func TestE2E_DrainLoop_TrialResultSuccess(t *testing.T) {
 		TrialInterval: 10 * time.Millisecond,
 		NextTrialAt:   eng.nowFunc().Add(10 * time.Millisecond),
 	}))
+	require.NoError(t, os.WriteFile(filepath.Join(eng.syncRoot, "blocked.txt"), []byte("blocked payload"), 0o644))
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "blocked.txt", DriveID: driveid.New(engineTestDriveID), Direction: synctypes.DirectionUpload,
 		Category: synctypes.CategoryTransient, ErrMsg: "rate limited", ScopeKey: synctypes.SKThrottleAccount,
@@ -4056,10 +4062,15 @@ func TestE2E_DrainLoop_TrialResultSuccess(t *testing.T) {
 		return !eng.watch.scopeGate.IsScopeBlocked(synctypes.SKThrottleAccount)
 	}, time.Second, time.Millisecond, "scope block should be cleared after trial success")
 
-	rows, err := eng.baseline.ListSyncFailuresForRetry(ctx, eng.nowFunc())
-	require.NoError(t, err)
-	require.Len(t, rows, 1, "trial success should make the held failure retryable")
-	assert.Equal(t, "blocked.txt", rows[0].Path)
+	var released []synctypes.PathChanges
+	require.Eventually(t, func() bool {
+		released = buf.FlushImmediate()
+		if len(released) == 0 {
+			return false
+		}
+
+		return released[0].Path == "blocked.txt"
+	}, time.Second, 10*time.Millisecond, "trial success should re-inject the held failure without external observation")
 }
 
 // TestE2E_DrainLoop_TrialResultFailure verifies trial failure doubles the interval.

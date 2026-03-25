@@ -420,18 +420,14 @@ func (o *LocalObserver) classifyFileChange(
 	currentMtime := info.ModTime().UnixNano()
 	currentSize := info.Size()
 
-	// Fast path: skip hashing when size and mtime both match the baseline.
+	if CanReuseBaselineHash(info, base, scanStartNano) {
+		o.Logger.Debug("fast path: mtime+size match, skipping hash",
+			slog.String("path", dbRelPath))
+
+		return nil
+	}
+
 	if currentSize == base.Size && currentMtime == base.Mtime {
-		// Racily-clean guard: if the file's mtime is within 1 second of
-		// scan start, the file may have been modified in the same clock
-		// tick as the last sync. Force a hash check to be safe.
-		if scanStartNano-currentMtime >= nanosPerSecond {
-			o.Logger.Debug("fast path: mtime+size match, skipping hash",
-				slog.String("path", dbRelPath))
-
-			return nil
-		}
-
 		o.Logger.Debug("racily clean file, forcing hash check",
 			slog.String("path", dbRelPath))
 	}

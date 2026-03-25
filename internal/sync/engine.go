@@ -231,7 +231,6 @@ func NewEngine(cfg *synctypes.EngineConfig) (*Engine, error) {
 	e.permHandler = &PermissionHandler{
 		baseline:    e.baseline,
 		permChecker: cfg.PermChecker,
-		permCache:   newPermissionCache(),
 		syncRoot:    cfg.SyncRoot,
 		driveID:     cfg.DriveID,
 		logger:      cfg.Logger,
@@ -380,7 +379,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 
 	// Step 6: Plan actions.
 	safety := e.resolveSafetyConfig(opts.Force)
-	denied := e.permHandler.DeniedPrefixes()
+	denied := e.permHandler.DeniedPrefixes(ctx)
 
 	plan, err := e.planner.Plan(changes, bl, mode, safety, denied)
 	if err != nil {
@@ -1276,7 +1275,7 @@ func (e *Engine) initWatchInfra(
 	recheckTicker := time.NewTicker(recheckInterval)
 
 	// Arm retrier timer from DB — picks up items from prior crash or prior pass.
-	e.armRetryTimer()
+	e.kickRetrySweepNow()
 	e.armTrialTimer()
 
 	pipe := &watchPipeline{
@@ -1998,7 +1997,7 @@ func (e *Engine) onScopeClear(ctx context.Context, key synctypes.ScopeKey) {
 		}
 	}
 
-	e.armRetryTimer()
+	e.kickRetrySweepNow()
 
 	e.logger.Info("scope block cleared — failures unblocked",
 		slog.String("scope_key", key.String()),
@@ -2084,7 +2083,11 @@ func (e *Engine) applyResultSideEffects(ctx context.Context, class resultClass, 
 			return
 		}
 		if r.HTTPStatus == http.StatusForbidden && e.permHandler.HasPermChecker() {
-			e.permHandler.handle403(ctx, bl, r.Path, e.getShortcuts())
+			if e.permHandler.handle403(ctx, bl, r.Path, e.getShortcuts()) {
+				e.recordError(r)
+
+				return
+			}
 		}
 		// Non-retryable: record with nil delayFn (no next_retry_at).
 		e.recordFailure(ctx, r, nil)
@@ -2161,11 +2164,7 @@ func (e *Engine) armRetryTimer() {
 
 	delay := time.Until(earliest)
 	if delay <= 0 {
-		// Items already due — signal immediately.
-		select {
-		case e.watch.retryTimerCh <- struct{}{}:
-		default:
-		}
+		e.kickRetrySweepNow()
 		return
 	}
 
@@ -2176,11 +2175,22 @@ func (e *Engine) armRetryTimer() {
 		e.watch.retryTimer.Stop()
 	}
 	e.watch.retryTimer = time.AfterFunc(delay, func() {
-		select {
-		case e.watch.retryTimerCh <- struct{}{}:
-		default:
-		}
+		e.kickRetrySweepNow()
 	})
+}
+
+// kickRetrySweepNow is the single immediate wakeup path for the watch-mode
+// retrier. Centralizing the non-blocking send keeps retry timer ownership
+// explicit and avoids scattering direct channel writes across the engine.
+func (e *Engine) kickRetrySweepNow() {
+	if e.watch == nil {
+		return
+	}
+
+	select {
+	case e.watch.retryTimerCh <- struct{}{}:
+	default:
+	}
 }
 
 // retryTimerChan returns the retry timer notification channel. Returns a nil
@@ -2295,10 +2305,7 @@ func (e *Engine) runRetrierSweep(ctx context.Context) {
 		if dispatched >= retryBatchSize {
 			// More items remain — re-arm immediately so the drain loop
 			// picks up the next batch on the next iteration.
-			select {
-			case e.watch.retryTimerCh <- struct{}{}:
-			default:
-			}
+			e.kickRetrySweepNow()
 
 			break
 		}
@@ -2377,7 +2384,30 @@ func remoteStateToChangeEvent(rs *synctypes.RemoteStateRow, path string) *syncty
 // observeLocalFile stats and hashes a local file, returning a synctypes.ChangeEvent.
 // File gone → synctypes.ChangeDelete. Transient FS error → nil. Used by both
 // createEventFromDB and reobserve to avoid duplicating the upload path.
-func (e *Engine) observeLocalFile(path, caller string) *synctypes.ChangeEvent {
+func (e *Engine) baselineEntryForPath(ctx context.Context, path string, driveID driveid.ID) *synctypes.BaselineEntry {
+	bl := e.baseline.Baseline()
+	if bl == nil {
+		var err error
+		bl, err = e.baseline.Load(ctx)
+		if err != nil {
+			e.logger.Debug("baselineEntryForPath: failed to load baseline",
+				slog.String("path", path),
+				slog.String("error", err.Error()),
+			)
+
+			return nil
+		}
+	}
+
+	entry, ok := bl.GetByPath(path)
+	if !ok || entry.DriveID != driveID {
+		return nil
+	}
+
+	return entry
+}
+
+func (e *Engine) observeLocalFile(path, caller string, base *synctypes.BaselineEntry) *synctypes.ChangeEvent {
 	absPath := filepath.Join(e.syncRoot, path)
 
 	info, err := os.Stat(absPath)
@@ -2408,14 +2438,18 @@ func (e *Engine) observeLocalFile(path, caller string) *synctypes.ChangeEvent {
 
 	var hash string
 	if it == synctypes.ItemTypeFile {
-		hash, err = syncobserve.ComputeStableHash(absPath)
-		if err != nil {
-			e.logger.Debug(caller+": hash failed",
-				slog.String("path", path),
-				slog.String("error", err.Error()),
-			)
+		if syncobserve.CanReuseBaselineHash(info, base, e.nowFunc().UnixNano()) {
+			hash = base.LocalHash
+		} else {
+			hash, err = syncobserve.ComputeStableHash(absPath)
+			if err != nil {
+				e.logger.Debug(caller+": hash failed",
+					slog.String("path", path),
+					slog.String("error", err.Error()),
+				)
 
-			return nil
+				return nil
+			}
 		}
 	}
 
@@ -2443,7 +2477,11 @@ func (e *Engine) observeLocalFile(path, caller string) *synctypes.ChangeEvent {
 func (e *Engine) createEventFromDB(ctx context.Context, row *synctypes.SyncFailureRow) *synctypes.ChangeEvent {
 	switch row.Direction { //nolint:exhaustive // download and delete share the same path
 	case synctypes.DirectionUpload:
-		return e.observeLocalFile(row.Path, "createEventFromDB")
+		return e.observeLocalFile(
+			row.Path,
+			"createEventFromDB",
+			e.baselineEntryForPath(ctx, row.Path, row.DriveID),
+		)
 
 	default: // download or delete
 		rs, err := e.baseline.GetRemoteStateByPath(ctx, row.Path, row.DriveID)
@@ -2547,7 +2585,11 @@ func (e *Engine) reobserve(ctx context.Context, row *synctypes.SyncFailureRow) (
 	switch row.Direction { //nolint:exhaustive // download and delete share the same path
 	case synctypes.DirectionUpload:
 		// Local FS — no RetryAfter concept.
-		return e.observeLocalFile(row.Path, "reobserve"), 0
+		return e.observeLocalFile(
+			row.Path,
+			"reobserve",
+			e.baselineEntryForPath(ctx, row.Path, row.DriveID),
+		), 0
 
 	default: // download or delete
 		item, err := e.execCfg.Items().GetItem(ctx, row.DriveID, row.ItemID)
@@ -3176,7 +3218,7 @@ func (e *Engine) processBatch(
 	// permission denials for paths observed in this batch.
 	e.permHandler.clearScannerResolvedPermissions(ctx, pathSetFromBatch(batch))
 
-	denied := e.permHandler.DeniedPrefixes()
+	denied := e.permHandler.DeniedPrefixes(ctx)
 	plan, err := e.planner.Plan(batch, bl, mode, safety, denied)
 	if err != nil {
 		if errors.Is(err, synctypes.ErrBigDeleteTriggered) {
@@ -3510,14 +3552,14 @@ func (e *Engine) handleExternalChanges(ctx context.Context) {
 		}
 	}
 
-	// Permission clearance: if user cleared perm:dir failures via CLI,
+	// Permission clearance: if user cleared permission boundary failures via CLI,
 	// release the corresponding in-memory scope blocks.
 	e.clearResolvedPermissionScopes(ctx)
 }
 
-// clearResolvedPermissionScopes checks if any perm:dir scope blocks have
-// had their sync_failures cleared (by user action via CLI), and releases
-// the corresponding scope blocks.
+// clearResolvedPermissionScopes checks if any permission scope blocks have had
+// their sync_failures cleared (by user action via CLI), and releases the
+// corresponding scope blocks.
 func (e *Engine) clearResolvedPermissionScopes(ctx context.Context) {
 	if e.watch == nil {
 		return
@@ -3528,9 +3570,18 @@ func (e *Engine) clearResolvedPermissionScopes(ctx context.Context) {
 		return
 	}
 
-	issues, err := e.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueLocalPermissionDenied)
+	localIssues, err := e.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueLocalPermissionDenied)
 	if err != nil {
-		e.logger.Warn("failed to check permission failures",
+		e.logger.Warn("failed to check local permission failures",
+			slog.String("error", err.Error()),
+		)
+
+		return
+	}
+
+	remoteIssues, err := e.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
+	if err != nil {
+		e.logger.Warn("failed to check remote permission failures",
 			slog.String("error", err.Error()),
 		)
 
@@ -3538,16 +3589,21 @@ func (e *Engine) clearResolvedPermissionScopes(ctx context.Context) {
 	}
 
 	// Build set of still-active scope keys from DB.
-	activeScopes := make(map[synctypes.ScopeKey]bool, len(issues))
-	for i := range issues {
-		if issues[i].ScopeKey.IsPermDir() {
-			activeScopes[issues[i].ScopeKey] = true
+	activeScopes := make(map[synctypes.ScopeKey]bool, len(localIssues)+len(remoteIssues))
+	for i := range localIssues {
+		if localIssues[i].ScopeKey.IsPermDir() {
+			activeScopes[localIssues[i].ScopeKey] = true
+		}
+	}
+	for i := range remoteIssues {
+		if remoteIssues[i].ScopeKey.IsPermRemote() {
+			activeScopes[remoteIssues[i].ScopeKey] = true
 		}
 	}
 
 	// Release any scope blocks whose failures were cleared.
 	for _, key := range scopeKeys {
-		if key.IsPermDir() && !activeScopes[key] {
+		if (key.IsPermDir() || key.IsPermRemote()) && !activeScopes[key] {
 			e.onScopeClear(ctx, key)
 
 			e.logger.Info("permission scope block cleared by user",
