@@ -25,13 +25,25 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.base.sha }}
 
+      - name: Detect bootstrap base branch
+        id: bootstrap
+        run: |
+          if [ ! -d cmd/review-gate ]; then
+            echo "should_skip=true" >>"$GITHUB_OUTPUT"
+            echo "Bootstrap PR: base branch does not contain review-gate yet; skipping."
+            exit 0
+          fi
+
+          echo "should_skip=false" >>"$GITHUB_OUTPUT"
+
       - uses: actions/setup-go@v5
+        if: steps.bootstrap.outputs.should_skip != 'true'
         with:
           go-version-file: go.mod
 
       - name: Run review gate
+        if: steps.bootstrap.outputs.should_skip != 'true'
         env:
           CODEX_REVIEW_LOGIN: ${{ vars.CODEX_REVIEW_LOGIN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: go run ./cmd/review-gate
-

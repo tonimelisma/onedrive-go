@@ -62,4 +62,4 @@ Decision rules:
 
 The PR template records the governing docs read, test and docs updates, the final self-review, the latest head SHA, and the disposition of every Codex finding.
 
-Bootstrap note: the first PR that introduces this gate cannot itself be protected by `review-gate`, because `pull_request_target` only trusts workflows already present on the base branch. That bootstrap PR must still receive a Codex review and pass the existing CI checks before merge. Once it lands on `main`, branch protection can add `review-gate` as a required status check.
+Bootstrap note: the first PR that introduces this gate cannot itself be protected by `review-gate`, because `pull_request_target` only trusts workflows already present on the base branch. The workflow therefore checks out the protected base commit and, if that base commit does not yet contain `cmd/review-gate`, exits successfully with a bootstrap-skip message instead of trying to execute PR-head code. That bootstrap PR must still receive a Codex review and pass the existing CI checks before merge. Once it lands on `main`, branch protection can add `review-gate` as a required status check.

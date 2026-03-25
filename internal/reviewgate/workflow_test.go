@@ -23,6 +23,8 @@ func TestReviewGateWorkflowDefinition(t *testing.T) {
 	assert.Contains(t, workflowYAML, "submitted")
 	assert.Contains(t, workflowYAML, "dismissed")
 	assert.Contains(t, workflowYAML, "ref: ${{ github.event.pull_request.base.sha }}")
+	assert.Contains(t, workflowYAML, "Bootstrap PR: base branch does not contain review-gate yet; skipping.")
+	assert.Contains(t, workflowYAML, "steps.bootstrap.outputs.should_skip != 'true'")
 	assert.Contains(t, workflowYAML, "go run ./cmd/review-gate")
 	assert.Contains(t, workflowYAML, "jobs:\n  review-gate:")
 	assert.NotContains(t, workflowYAML, "\n    paths:")
