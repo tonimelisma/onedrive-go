@@ -200,9 +200,10 @@ Work is done in increments. Do not ask permission, do not skip any step.
 
 ### Step 2: Set up worktree
 
-1. Create a worktree using tool
-2. Create a branch with the naming convention: `<type>/<task-name>` (e.g., `feat/cli-auth`). Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`.
-3. All changes go through PRs
+1. `git fetch origin` before creating the worktree so new work starts from the current `origin/main`, not a stale local `main`
+2. Create the worktree from `origin/main` using tool
+3. Create a branch with the naming convention: `<type>/<task-name>` (e.g., `feat/cli-auth`). Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`.
+4. All changes go through PRs
 
 `.worktreeinclude` lists files to copy into new worktrees. Entries prefixed with `@` are symlinked instead of copied
 
@@ -228,7 +229,7 @@ Self-review every change against coding standards proceeding to the Definition o
 
 ### Step 7: Definition of Done
 
-After each increment, run through this entire checklist. If something fails, fix and re-run from the top. **When complete, present this checklist to the human with pass/fail status for each item.**
+After each increment, run through this entire checklist. If something fails, fix and re-run from the top. If you rebase, resolve conflicts, or otherwise rewrite branch history, re-run the checklist from item 1 on the rebased branch before creating the PR. **When complete, present this checklist to the human with pass/fail status for each item.**
 
 1. [ ] **Format**: `gofumpt -w . && goimports -local github.com/tonimelisma/onedrive-go -w .`
 2. [ ] **Lint**: `golangci-lint run`
@@ -237,8 +238,9 @@ After each increment, run through this entire checklist. If something fails, fix
 5. [ ] **Coverage**: `go tool cover -func=/tmp/cover.out | grep total`
 6. [ ] **Fast E2E**: `go test -tags=e2e -race -v -parallel 5 -timeout=10m ./e2e/...`
 7. [ ] **Docs updated**: CLAUDE.md, spec/design/, spec/requirements/ as needed
-8. [ ] **Push and CI green**: Push branch, open PR with `gh pr create`, then enable auto-merge with `gh pr merge --auto --squash --delete-branch`. Branch protection requires CI to pass before merge. Monitor with `gh pr checks <pr_number> --watch`
-9. [ ] **Cleanup**: Clean `git status`. From the root repo (not worktree), remove the current worktree after merge. Then force-delete the local branch with `git branch -D` (squash merges create a new commit on main, so Git cannot detect the branch as merged — `git branch -d` will wrongly warn "not fully merged"). Prune stale remote-tracking branches and pull main forward:
+8. [ ] **Rebase onto latest main**: Immediately before any `gh pr create`, run `git fetch origin` and `git rebase origin/main` in the worktree branch, then verify with `git merge-base --is-ancestor origin/main HEAD`. Never create a PR from a stale merge base. If that verification fails, do not open the PR. If the rebase changes the branch or you resolve conflicts, restart this checklist at item 1 and only continue once the rebased branch is green.
+9. [ ] **Push and CI green**: After item 8 passes, push branch, using `git push --force-with-lease` if the rebase rewrote history, open PR with `gh pr create`, then enable auto-merge with `gh pr merge --auto --squash --delete-branch`. Branch protection requires CI to pass before merge. Monitor with `gh pr checks <pr_number> --watch`
+10. [ ] **Cleanup**: Clean `git status`. From the root repo (not worktree), remove the current worktree after merge. Then force-delete the local branch with `git branch -D` (squash merges create a new commit on main, so Git cannot detect the branch as merged — `git branch -d` will wrongly warn "not fully merged"). Prune stale remote-tracking branches and pull main forward:
     cd /Users/tonimelisma/Development/onedrive-go
     rm -f <worktree-path>/.testdata   # remove stale symlink before worktree removal
     git worktree remove <worktree-path>
@@ -247,7 +249,7 @@ After each increment, run through this entire checklist. If something fails, fix
     git checkout main && git pull --ff-only origin main
     echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r && echo "=== Stashes ===" && git stash list && echo "=== Worktrees ===" && git worktree list && echo "=== Open PRs ===" && gh pr list --state open && echo "=== Status ===" && git status
     **NEVER delete other worktrees or branches — even if they appear stale.** Instead, report all other worktrees and branches to the human, including their last commit date. Let the human decide what to clean up
-10. [ ] **Increment report**: Present to the human:
+11. [ ] **Increment report**: Present to the human:
     - **What you changed**: What files did you change, why and how
     - **Plan deviations**: For every deviation from the approved plan — what changed, why it changed, what was done instead, and whether the new approach is the long-term solution or a temporary measure that needs follow-up
     - **Top-up recommendations**: Any remaining codebase improvements you'd make. Don't be coy. Engineering effort is free, and this is mission-critical software. Ensure even small issues are brought up, and don't be coy to suggest more ambitious refactoring.
