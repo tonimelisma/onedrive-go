@@ -66,6 +66,23 @@ func TestClientListChangedFiles(t *testing.T) {
 		assert.Len(t, changedFiles.Entries, 1)
 	})
 
+	t.Run("unknown expected count fails closed", func(t *testing.T) {
+		client := NewClient(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return jsonResponse(t, []map[string]string{
+				{
+					"filename": "spec/design/ci-review-gate.md",
+					"status":   "modified",
+				},
+			}), nil
+		}), "https://api.github.com", "token")
+
+		changedFiles, err := client.ListChangedFiles(context.Background(), "tonimelisma/onedrive-go", 326, 0)
+
+		require.NoError(t, err)
+		assert.False(t, changedFiles.Complete)
+		assert.Len(t, changedFiles.Entries, 1)
+	})
+
 	t.Run("api cap fails closed", func(t *testing.T) {
 		client := NewClient(roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			page := req.URL.Query().Get("page")
@@ -100,7 +117,7 @@ func hundredChangedFiles(prefix string) []map[string]string {
 	files := make([]map[string]string, 0, githubPageSize)
 	for index := 0; index < githubPageSize; index++ {
 		files = append(files, map[string]string{
-			"filename": prefix + "file.md",
+			"filename": prefix + string(rune('a'+(index%26))) + "-file.md",
 			"status":   "modified",
 		})
 	}

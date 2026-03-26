@@ -44,7 +44,7 @@ Docs-only classification is an inverted whitelist:
 - rename or copy changes are docs-only only when both the source path and destination path are docs-only
 - incomplete or uncertain file listings are never docs-only; the gate must fail closed and require review
 
-GitHub's "List pull request files" endpoint is capped at 3000 files. If the gate reaches that cap, or if the fetched file count does not match the pull request's `changed_files` count from the event payload, docs-only classification becomes uncertain and the gate must require Codex review.
+GitHub's "List pull request files" endpoint is capped at 3000 files. If the gate reaches that cap, if the event payload does not provide a trustworthy `changed_files` count, or if the fetched file count does not match that expected count, docs-only classification becomes uncertain and the gate must require Codex review.
 
 A review counts only when all of the following are true:
 

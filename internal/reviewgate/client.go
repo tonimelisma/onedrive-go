@@ -154,7 +154,7 @@ func normalizeChangedFile(rawFile githubChangedFile) ChangedFile {
 
 func changedFilesAreComplete(retrievedFileCount int, expectedFileCount int) bool {
 	if expectedFileCount <= 0 {
-		return true
+		return false
 	}
 
 	return retrievedFileCount == expectedFileCount
