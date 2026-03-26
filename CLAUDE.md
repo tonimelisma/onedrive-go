@@ -19,7 +19,6 @@ Fast, safe OneDrive CLI and sync client in Go. Unix-style file ops (`ls`, `get`,
 | `internal/syncexec/`, `internal/syncdispatch/` | `spec/design/sync-execution.md` | |
 | `internal/sync/engine*.go`, `orchestrator.go`, `drive_runner.go`, `permissions.go`, `sync.go` | `spec/design/sync-engine.md` | |
 | `internal/syncstore/` | `spec/design/sync-store.md` | `spec/design/data-model.md` |
-| `internal/reviewgate/`, `cmd/review-gate/`, `.github/workflows/review-gate.yml`, `.github/pull_request_template.md` | `spec/design/ci-review-gate.md` | |
 | Root package CLI files | `spec/design/cli.md` | |
 
 | Working on capability... | Requirements | Design docs |
@@ -189,23 +188,6 @@ Run against live OneDrive accounts. Test account names are never committed — u
    az login                                   # if not already logged in
    ./scripts/migrate-test-data-to-ci.sh       # uploads tokens + config to Key Vault
 
-## Review guidelines
-
-Codex PR reviews for this repository MUST be strict. Treat the repository instructions above as mandatory requirements, not suggestions. The job of review is to stop regressions, architecture drift, and process non-compliance before merge. Optimize for catching defects, not for reducing comment count.
-
-- **Instruction precedence**: The closest `AGENTS.md` applies additively. Package-local `AGENTS.md` files may tighten review expectations for their subtree, but they never relax root rules.
-- **Severity policy**: Every violation listed in this section is at least P1. Do not downgrade because the diff is small, the branch is temporary, the repo has no users, a follow-up is planned, or the author probably intended to fix it later. If the risk is plausibly present in the diff, raise it.
-- **Finding policy**: Emit one finding per distinct defect. Cite the exact file and line. Name the violated rule, explain the concrete failure mode, and state the minimum correction needed. If evidence is incomplete, state the uncertainty but still raise the finding.
-- **Spec and design compliance is mandatory**: Use the Routing Table and the governing requirement/design docs above. If a PR changes behavior, invariants, persistence, sync semantics, retry behavior, CLI behavior, Graph interaction, or state transitions without updating the governing design doc and the relevant requirements status, raise a P1.
-- **Test compliance is mandatory**: If production code changes without tests that cover the changed behavior, raise a P1. For bug fixes, a regression test is mandatory. For I/O paths, failure-injection coverage is mandatory. For concurrent code, tests must exercise cancellation, ownership, and race-sensitive behavior. If a test validates a requirement but the `// Validates:` traceability comment is missing or incorrect, raise a P1.
-- **Concurrency and lifecycle violations are P1**: Raise a P1 for missing `context.Context` on I/O or blocking code, ignored cancellation, goroutines without a clear owner, unbounded fan-out, channel misuse, I/O or channel operations under a mutex, leaked goroutines, leaked HTTP response bodies, leaked file descriptors, or cleanup that can fail silently.
-- **File, state, and crash-safety violations are P1**: Raise a P1 for non-atomic writes to important files or state, temp files created outside the target directory when atomic rename matters, unchecked `Close()` on writers, path traversal risk, partial state updates that can leave the store inconsistent after crash, or designs that cannot recover state from source-of-truth data.
-- **API-discipline violations are P1**: Raise a P1 for missing timeouts on external calls, failure to paginate when pagination is possible, retrying non-idempotent operations without protection, trusting remote input without validation, or assuming response structure, ordering, or `Content-Length` without checks.
-- **Sync-engine invariant violations are P1**: Raise a P1 for illegal or implicit state transitions, loss of recoverability, missing conflict tracking, missing big-delete safety, missing delta-token safety, or any behavior that can silently drop or overwrite local or remote changes.
-- **Core coding-rule violations are P1 when correctness is at risk**: Raise a P1 for swallowed errors, panic on external input, package-level mutable state, positional struct literals, silent partial-failure handling, or correctness-sensitive magic numbers without named constants.
-- **Process violations are P1**: Raise a P1 if the PR weakens or bypasses the documented dev process, omits mandatory docs updates, omits required verification, replaces required work with TODO or follow-up text, or moves a required merge gate out of the normal PR path.
-- **Do not suppress findings because the PR also contains mitigations elsewhere**: Review the final diff as merged. If a risky area changed and the PR does not prove safety with code, tests, and docs, raise the finding.
-
 ## Dev Process
 
 Work is done in increments. Do not ask permission, do not skip any step.
@@ -242,7 +224,7 @@ Re-read the governing design doc. Produce a compliance report listing each spec 
 
 ### Step 6: Code review checklist
 
-Perform a final self-review against the exact merged diff that will be pushed. Repeat that self-review after every PR update that changes the diff, then proceed to the Definition of Done.
+Self-review every change against coding standards proceeding to the Definition of Done.
 
 ### Step 7: Definition of Done
 
@@ -255,7 +237,7 @@ After each increment, run through this entire checklist. If something fails, fix
 5. [ ] **Coverage**: `go tool cover -func=/tmp/cover.out | grep total`
 6. [ ] **Fast E2E**: `go test -tags=e2e -race -v -parallel 5 -timeout=10m ./e2e/...`
 7. [ ] **Docs updated**: CLAUDE.md, spec/design/, spec/requirements/ as needed
-8. [ ] **PR review gates green**: Push branch, open PR with `gh pr create`. Confirm Codex automatic review ran on the current head SHA; if it did not, comment `@codex review`. After every commit pushed after a Codex review, request another `@codex review` so the latest head SHA is reviewed. Do not enable auto-merge until the latest head SHA has a Codex review, every Codex finding is fixed or rebutted in-thread with a specific code/spec citation showing the finding is incorrect, and CI is green. Monitor with `gh pr checks <pr_number> --watch`, then enable auto-merge with `gh pr merge --auto --squash --delete-branch`. Branch protection requires CI to pass before merge.
+8. [ ] **Push and CI green**: Push branch, open PR with `gh pr create`, then enable auto-merge with `gh pr merge --auto --squash --delete-branch`. Branch protection requires CI to pass before merge. Monitor with `gh pr checks <pr_number> --watch`
 9. [ ] **Cleanup**: Clean `git status`. From the root repo (not worktree), remove the current worktree after merge. Then force-delete the local branch with `git branch -D` (squash merges create a new commit on main, so Git cannot detect the branch as merged — `git branch -d` will wrongly warn "not fully merged"). Prune stale remote-tracking branches and pull main forward:
     cd /Users/tonimelisma/Development/onedrive-go
     rm -f <worktree-path>/.testdata   # remove stale symlink before worktree removal
