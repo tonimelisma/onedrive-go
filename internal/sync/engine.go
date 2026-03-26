@@ -37,9 +37,9 @@ const forceSafetyMax = math.MaxInt32
 // prevent thundering-herd I/O spikes in multi-drive mode.
 const periodicScanJitterDivisor = 10
 
-// retryBatchSize limits how many sync_failures are processed per retrier
-// sweep in the drain loop. Prevents drain loop stalls when thousands of
-// items become retryable at once (e.g., after a scope clear).
+// retryBatchSize limits how many sync_failures are processed per retry sweep.
+// Prevents the watch loop from stalling when thousands of items become
+// retryable at once (e.g., after a scope clear).
 const retryBatchSize = 1024
 
 // trialPendingTTL is the maximum time a trial entry lingers in trialPending
@@ -55,17 +55,18 @@ type trialEntry struct {
 }
 
 // watchState bundles all watch-mode-only state. Nil in one-shot mode.
-// A single e.watch != nil check replaces scattered nil guards for
-// scopeGate, scopeState, buf, deleteCounter, etc.
+// Active scope runtime state lives here as a plain engine-owned slice; the
+// database remains the durable record for restart/recovery.
 type watchState struct {
-	// Scope gate — watch-mode only (§2.3: scope blocking is watch-mode only;
-	// one-shot never creates scope blocks).
-	scopeGate *syncdispatch.ScopeGate
+	// Active scope blocks owned by the watch control flow. The slice is tiny
+	// (usually 0-5 entries), so linear scans keep the logic simple and avoid a
+	// second mirrored subsystem.
+	activeScopes []synctypes.ScopeBlock
 
 	// Scope detection — sliding window failure tracking.
 	scopeState *syncdispatch.ScopeState
 
-	// Event buffer — drain-loop retrier injects events via e.watch.buf.Add().
+	// Event buffer — watch-loop retry/trial work injects events via buf.Add().
 	buf *syncobserve.Buffer
 
 	// Big-delete protection: rolling counter + external change detection.
@@ -73,12 +74,11 @@ type watchState struct {
 	deleteCounter   *syncdispatch.DeleteCounter
 	lastDataVersion int64
 
-	// Trial management (drain-goroutine-only state).
+	// Trial management (watch-loop-owned state).
 	trialPending map[string]trialEntry
 	trialTimer   *time.Timer
-	trialMu      stdsync.Mutex
 
-	// Retry timer — drain-loop retrier sweeps sync_failures on each tick.
+	// Retry timer — watch loop retrier sweeps sync_failures on each tick.
 	retryTimer   *time.Timer
 	retryTimerCh chan struct{} // persistent, buffered(1)
 
@@ -86,10 +86,9 @@ type watchState struct {
 	remoteObs *syncobserve.RemoteObserver
 	localObs  *syncobserve.LocalObserver
 
-	// Monotonic action ID counter. Zeroed at watch start. Each action gets
-	// a unique ID via e.watch.nextActionID.Add(1) — prevents ID collisions
-	// across batches.
-	nextActionID atomic.Int64
+	// Monotonic action ID counter owned by the watch control flow. Prevents
+	// ID collisions across batches without introducing cross-goroutine sync.
+	nextActionID int64
 
 	// Throttling: tracks last recheckPermissions call time (R-2.10.9).
 	lastPermRecheck time.Time
@@ -128,11 +127,10 @@ type Engine struct {
 	checkWorkers       int                    // goroutine limit for parallel file hashing
 	bigDeleteThreshold int                    // from config; 0 means use default
 
-	// watchShortcuts holds the latest shortcuts for use by the drain
-	// goroutine in watch mode. Updated by the watch goroutine after
-	// observation; read by drainWorkerResults for 403 handling. Stays on
-	// Engine because setShortcuts is called from RunOnce (one-shot)
-	// where watch is nil.
+	// watchShortcuts holds the latest shortcuts for permission and shortcut
+	// handling. Stays on Engine because both one-shot result draining and the
+	// watch loop need access, while setShortcuts is also called from RunOnce
+	// where e.watch is nil.
 	watchShortcuts   []synctypes.Shortcut
 	watchShortcutsMu stdsync.RWMutex
 
@@ -141,9 +139,9 @@ type Engine struct {
 	// (watch mode).
 	depGraph *syncdispatch.DepGraph
 
-	// readyCh feeds admitted actions to the worker pool. The engine sends
-	// actions that pass the scope gate (or bypass it in one-shot mode).
-	// Workers read from this channel via the WorkerPool.
+	// readyCh feeds admitted actions to the worker pool. In watch mode actions
+	// pass through active-scope admission first; one-shot mode bypasses that
+	// runtime check. Workers read from this channel via the WorkerPool.
 	readyCh chan *synctypes.TrackedAction
 
 	// trialCh is the persistent, buffered(1) channel for trial timer signals.
@@ -407,7 +405,8 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 		return report, nil
 	}
 
-	// Store shortcuts so the drain goroutine can access them via getShortcuts.
+	// Store shortcuts so result handling and permission rechecks can access
+	// them during plan execution.
 	e.setShortcuts(shortcuts)
 
 	// Execute plan: run workers, drain results (failures, 403s, upload issues).
@@ -442,9 +441,9 @@ func (e *Engine) postSyncHousekeeping() {
 // The engine processes results concurrently while workers run, classifying
 // each result and calling depGraph.Complete (R-6.8.9).
 //
-// One-shot mode has NO scope gate — all actions with satisfied deps go
-// directly to readyCh. Scope detection (ScopeState) is nil in one-shot;
-// feedScopeDetection is nil-guarded → no-op.
+// One-shot mode has NO watch-mode active-scope admission loop — all actions
+// with satisfied deps go directly to readyCh. Scope detection (ScopeState) is
+// nil in one-shot; feedScopeDetection is nil-guarded → no-op.
 func (e *Engine) executePlan(
 	ctx context.Context, plan *synctypes.ActionPlan, report *synctypes.SyncReport,
 	bl *synctypes.Baseline,
@@ -471,9 +470,9 @@ func (e *Engine) executePlan(
 	// Reset engine counters for this pass.
 	e.resetResultStats()
 
-	// One-shot mode: DepGraph + readyCh, no scope gate (e.watch == nil).
-	// Actions that pass dependency resolution go straight to workers.
-	// Scope blocking is watch-mode only (§2.3).
+	// One-shot mode: DepGraph + readyCh, no watch-mode active-scope admission
+	// loop (e.watch == nil). Actions that pass dependency resolution go
+	// straight to workers. Scope blocking is watch-mode only (§2.3).
 	depGraph := syncdispatch.NewDepGraph(e.logger)
 	e.depGraph = depGraph
 	e.readyCh = make(chan *synctypes.TrackedAction, len(plan.Actions))
@@ -513,7 +512,7 @@ func (e *Engine) executePlan(
 	}()
 
 	pool.Wait() // blocks until depGraph.Done() (all actions at terminal state)
-	pool.Stop() // cancels workers, closes results → drain goroutine exits
+	pool.Stop() // cancels workers and closes results once workers exit
 	<-drainDone // wait for drain goroutine to finish all side effects
 
 	// End-of-pass failure summary — aggregates failures by issue type so
@@ -1098,7 +1097,8 @@ const (
 // ~500 API calls (~17% of a single 5-minute rate window), so 24h is safe.
 const defaultReconcileInterval = 24 * time.Hour
 
-// setShortcuts updates the shortcuts used by the drain goroutine.
+// setShortcuts updates the shortcuts used by result processing and permission
+// handling.
 // Called by the watch goroutine after observation when shortcuts may have changed.
 func (e *Engine) setShortcuts(shortcuts []synctypes.Shortcut) {
 	e.watchShortcutsMu.Lock()
@@ -1106,7 +1106,8 @@ func (e *Engine) setShortcuts(shortcuts []synctypes.Shortcut) {
 	e.watchShortcutsMu.Unlock()
 }
 
-// getShortcuts returns the latest shortcuts for drain goroutine use.
+// getShortcuts returns the latest shortcuts for result processing and
+// permission handling.
 func (e *Engine) getShortcuts() []synctypes.Shortcut {
 	e.watchShortcutsMu.RLock()
 	defer e.watchShortcutsMu.RUnlock()
@@ -1161,8 +1162,8 @@ func (e *Engine) loadWatchState(ctx context.Context) (*synctypes.Baseline, error
 //
 // Flow: initWatchInfra → bootstrapSync → startObservers → runWatchLoop.
 // Unlike the old approach (calling RunOnce with throwaway infrastructure),
-// bootstrapSync dispatches through the same DepGraph, ScopeGate, and
-// WorkerPool that the watch loop uses.
+// bootstrapSync dispatches through the same DepGraph, active scope working
+// set, and WorkerPool that the steady-state watch loop uses.
 func (e *Engine) RunWatch(ctx context.Context, mode synctypes.SyncMode, opts synctypes.WatchOpts) error {
 	e.logger.Info("watch mode starting",
 		slog.String("mode", mode.String()),
@@ -1199,6 +1200,7 @@ type watchPipeline struct {
 	bl         *synctypes.Baseline
 	safety     *synctypes.SafetyConfig
 	ready      <-chan []synctypes.PathChanges
+	results    <-chan synctypes.WorkerResult
 	errs       <-chan error
 	skippedCh  <-chan []synctypes.SkippedItem
 	reconcileC <-chan time.Time
@@ -1206,22 +1208,20 @@ type watchPipeline struct {
 	activeObs  int
 	mode       synctypes.SyncMode
 	pool       *syncexec.WorkerPool // for bootstrapSync to access Results()
-	drainDone  <-chan struct{}      // closed when drain goroutine exits
 	cleanup    func()
 }
 
 // initWatchInfra sets up watch-mode infrastructure: watchState, DepGraph,
-// ScopeGate, worker pool, buffer, and tickers. Does NOT load baseline,
-// start observers, or launch the drain goroutine — those happen in
-// bootstrapSync and RunWatch.
+// worker pool, buffer, persisted scope state, and tickers. Does NOT load
+// baseline or start observers — those happen in bootstrapSync and RunWatch.
 //
 // Key differences from one-shot mode (executePlan):
-//   - ScopeGate is initialized and loaded from DB (scope blocks survive restart)
+//   - Active scopes are loaded from DB into engine-owned runtime state
 //   - Done channel is never-closing — DepGraph.Done() fires when completed >= total,
 //     which would prematurely close between batches. Workers exit only via ctx.Done().
-//   - Retrier logic is integrated into the drain loop (retryTimerCh case) to
-//     eliminate coordination problems (D-11).
-//   - Buffer is promoted to e.watch.buf so the drain-loop retrier can inject events.
+//   - Retrier and trials are handled by the watch control flow itself
+//   - Buffer is promoted to e.watch.buf so retrier/trial work can re-enter
+//     via buffer → planner → tracker.
 func (e *Engine) initWatchInfra(
 	ctx context.Context, mode synctypes.SyncMode, opts synctypes.WatchOpts,
 ) (*watchPipeline, error) {
@@ -1238,19 +1238,23 @@ func (e *Engine) initWatchInfra(
 
 	e.initDeleteProtection(ctx, opts.Force)
 
-	// DepGraph tracks action dependencies; ScopeGate handles scope-based
-	// admission control. ScopeGate loads persisted blocks from DB — blocks
-	// survive crash/restart (D-8).
+	// Repair stale permission-scope rows before loading runtime scope state.
+	// Older code paths could clear the boundary failure without deleting the
+	// persisted scope row; watch startup must not trust those rows blindly.
+	if err := e.repairOrphanedPermissionScopes(ctx); err != nil {
+		return nil, fmt.Errorf("sync: repairing permission scopes: %w", err)
+	}
+
+	// DepGraph tracks action dependencies. Active scope state is loaded from
+	// the persisted scope_blocks table into watch-owned runtime state.
 	depGraph := syncdispatch.NewDepGraph(e.logger)
 	e.depGraph = depGraph
-	e.watch.scopeGate = syncdispatch.NewScopeGate(e.baseline, e.logger)
-
-	if loadErr := e.watch.scopeGate.LoadFromStore(ctx); loadErr != nil {
-		return nil, fmt.Errorf("sync: loading scope blocks: %w", loadErr)
+	if err := e.loadActiveScopes(ctx); err != nil {
+		return nil, fmt.Errorf("sync: loading active scopes: %w", err)
 	}
 
 	e.watch.scopeState = syncdispatch.NewScopeState(e.nowFunc, e.logger)
-	e.watch.nextActionID.Store(0)
+	e.watch.nextActionID = 0
 
 	// readyCh feeds admitted actions to workers. Buffer is generous to avoid
 	// backpressure when a batch produces many immediately-ready actions.
@@ -1263,9 +1267,8 @@ func (e *Engine) initWatchInfra(
 	pool := syncexec.NewWorkerPool(e.execCfg, e.readyCh, neverDone, e.baseline, e.logger, watchResultBuf)
 	pool.Start(ctx, e.transferWorkers)
 
-	// Buffer promoted to watchState — drain-loop retrier injects events
-	// via e.watch.buf.Add(). Retrier logic runs inside the drain loop's
-	// retryTimerCh case.
+	// Buffer promoted to watchState so retry/trial work can re-enter via
+	// e.watch.buf.Add() and follow the normal planner/admission path.
 	buf := syncobserve.NewBuffer(e.logger)
 	e.watch.buf = buf
 	ready := buf.FlushDebounced(ctx, e.resolveDebounce(opts))
@@ -1281,6 +1284,7 @@ func (e *Engine) initWatchInfra(
 	pipe := &watchPipeline{
 		safety:     e.resolveSafetyConfig(opts.Force),
 		ready:      ready,
+		results:    pool.Results(),
 		reconcileC: reconcileC,
 		recheckC:   recheckTicker.C,
 		mode:       mode,
@@ -1300,13 +1304,9 @@ func (e *Engine) initWatchInfra(
 			)
 		}
 
-		pool.Stop() // closes results channel → drain goroutine exits
-		// Wait for drain goroutine to finish all side effects (same
-		// pattern as one-shot mode). drainDone is set by bootstrapSync
-		// before the watch loop starts.
-		if pipe.drainDone != nil {
-			<-pipe.drainDone
-		}
+		e.stopRetryTimer()
+		e.stopTrialTimer()
+		pool.Stop() // closes results channel after workers exit
 		e.logger.Info("watch mode stopped")
 	}
 
@@ -1319,7 +1319,7 @@ const quiescenceLogInterval = 30 * time.Second
 
 // bootstrapSync performs the initial sync using the watch pipeline. Unlike
 // the old approach (calling RunOnce with throwaway infrastructure), this
-// dispatches through the same DepGraph, ScopeGate, and WorkerPool that
+// dispatches through the same DepGraph, active scope working set, and WorkerPool that
 // the watch loop uses. Blocks until all bootstrap actions complete.
 //
 // Must be called after initWatchInfra and before startObservers.
@@ -1342,15 +1342,6 @@ func (e *Engine) bootstrapSync(ctx context.Context, mode synctypes.SyncMode, pip
 		return err
 	}
 	pipe.bl = bl
-
-	// Start drain goroutine — needs bl for processWorkerResult.
-	// Join via pipe.drainDone in cleanup to ensure all side effects complete.
-	drainDone := make(chan struct{})
-	go func() {
-		defer close(drainDone)
-		e.drainWorkerResults(ctx, pipe.pool.Results(), bl)
-	}()
-	pipe.drainDone = drainDone
 
 	// Permission rechecks.
 	if e.permHandler.HasPermChecker() {
@@ -1378,10 +1369,10 @@ func (e *Engine) bootstrapSync(ctx context.Context, mode synctypes.SyncMode, pip
 	}
 
 	// Dispatch through watch pipeline (same path as steady-state batches).
-	e.processBatch(ctx, changes, bl, mode, pipe.safety)
+	initialOutbox := e.processBatch(ctx, changes, bl, mode, pipe.safety)
 
 	// Wait for all bootstrap actions to complete.
-	if err := e.waitForQuiescence(ctx); err != nil {
+	if err := e.runWatchUntilQuiescent(ctx, pipe, initialOutbox); err != nil {
 		return fmt.Errorf("sync: bootstrap quiescence failed: %w", err)
 	}
 
@@ -1390,24 +1381,44 @@ func (e *Engine) bootstrapSync(ctx context.Context, mode synctypes.SyncMode, pip
 	return nil
 }
 
-// waitForQuiescence blocks until all in-flight actions in the DepGraph
-// complete. Used by bootstrapSync to ensure the initial sync finishes
-// before starting observers. Returns when the graph empties or the
-// context is canceled (SIGTERM/SIGINT).
-//
-// No timeout: every dispatched action produces exactly one synctypes.WorkerResult
-// (worker.go guarantees this), drainWorkerResults reads every result,
-// and processWorkerResult calls depGraph.Complete for every result.
-// There is no code path where an action enters the DepGraph without
-// being completed. Context cancellation handles daemon shutdown.
-func (e *Engine) waitForQuiescence(ctx context.Context) error {
+// runWatchUntilQuiescent drives the watch control flow until the dependency
+// graph empties. Used by bootstrapSync so the initial sync executes through
+// the same single-owner result/admission loop as steady-state watch mode.
+func (e *Engine) runWatchUntilQuiescent(
+	ctx context.Context,
+	p *watchPipeline,
+	initialOutbox []*synctypes.TrackedAction,
+) error {
 	emptyCh := e.depGraph.WaitForEmpty()
-
 	ticker := time.NewTicker(quiescenceLogInterval)
 	defer ticker.Stop()
+	outbox := append([]*synctypes.TrackedAction(nil), initialOutbox...)
 
 	for {
+		var outCh chan<- *synctypes.TrackedAction
+		var outVal *synctypes.TrackedAction
+		if len(outbox) > 0 {
+			outCh = e.readyCh
+			outVal = outbox[0]
+		}
+
 		select {
+		case outCh <- outVal:
+			outbox = outbox[1:]
+		case batch, ok := <-p.ready:
+			if !ok {
+				return nil
+			}
+			outbox = append(outbox, e.processBatch(ctx, batch, p.bl, p.mode, p.safety)...)
+		case r, ok := <-p.results:
+			if !ok {
+				return fmt.Errorf("sync: worker results closed during bootstrap")
+			}
+			outbox = append(outbox, e.processWorkerResult(ctx, &r, p.bl)...)
+		case <-e.trialTimerChan():
+			e.handleTrialTimer(ctx)
+		case <-e.retryTimerChan():
+			e.handleRetryTimer(ctx)
 		case <-emptyCh:
 			return nil
 		case <-ticker.C:
@@ -1420,45 +1431,138 @@ func (e *Engine) waitForQuiescence(ctx context.Context) error {
 	}
 }
 
-// runWatchLoop runs the main watch-mode select loop. Blocks until context
-// is canceled or all observers exit.
+// waitForQuiescence is the compatibility wrapper for callers and tests that
+// only need to wait for the dependency graph to drain, without a full watch
+// pipeline. It reuses the same single-owner quiescence loop used by bootstrap.
+func (e *Engine) waitForQuiescence(ctx context.Context) error {
+	return e.runWatchUntilQuiescent(ctx, &watchPipeline{}, nil)
+}
+
+// runWatchLoop runs the steady-state watch-mode select loop. The same goroutine
+// owns batch intake, result processing, retry/trial timers, and worker outbox
+// draining.
 func (e *Engine) runWatchLoop(ctx context.Context, p *watchPipeline) error {
+	var outbox []*synctypes.TrackedAction
+
 	for {
-		select {
-		case batch, ok := <-p.ready:
-			if !ok {
-				return nil
-			}
+		var (
+			done bool
+			err  error
+		)
 
-			e.processBatch(ctx, batch, p.bl, p.mode, p.safety)
-
-		case skipped := <-p.skippedCh:
-			e.recordSkippedItems(ctx, skipped)
-			e.clearResolvedSkippedItems(ctx, skipped)
-
-		case <-p.recheckC:
-			e.handleRecheckTick(ctx)
-
-		case <-p.reconcileC:
-			e.runFullReconciliationAsync(ctx, p.bl)
-
-		case obsErr := <-p.errs:
-			if obsErr != nil {
-				e.logger.Warn("observer error",
-					slog.String("error", obsErr.Error()),
-				)
-			}
-
-			p.activeObs--
-			if p.activeObs == 0 {
-				e.logger.Error("all observers have exited, stopping watch mode")
-				return fmt.Errorf("sync: all observers exited")
-			}
-
-		case <-ctx.Done():
+		if len(outbox) == 0 {
+			outbox, done, err = e.runWatchLoopIdle(ctx, p)
+		} else {
+			outbox, done, err = e.runWatchLoopWithOutbox(ctx, p, outbox)
+		}
+		if err != nil {
+			return err
+		}
+		if done {
 			return nil
 		}
 	}
+}
+
+func (e *Engine) runWatchLoopIdle(
+	ctx context.Context,
+	p *watchPipeline,
+) ([]*synctypes.TrackedAction, bool, error) {
+	select {
+	case batch, ok := <-p.ready:
+		if !ok {
+			return nil, true, nil
+		}
+		return e.processBatch(ctx, batch, p.bl, p.mode, p.safety), false, nil
+	case r, ok := <-p.results:
+		if !ok {
+			if ctx.Err() != nil {
+				return nil, true, nil
+			}
+			return nil, false, fmt.Errorf("sync: worker results channel closed unexpectedly")
+		}
+		return e.processWorkerResult(ctx, &r, p.bl), false, nil
+	case skipped := <-p.skippedCh:
+		e.recordSkippedItems(ctx, skipped)
+		e.clearResolvedSkippedItems(ctx, skipped)
+		return nil, false, nil
+	case <-p.recheckC:
+		e.handleRecheckTick(ctx)
+		return nil, false, nil
+	case <-p.reconcileC:
+		e.runFullReconciliationAsync(ctx, p.bl)
+		return nil, false, nil
+	case obsErr := <-p.errs:
+		return nil, false, e.handleObserverExit(p, obsErr)
+	case <-e.trialTimerChan():
+		e.handleTrialTimer(ctx)
+		return nil, false, nil
+	case <-e.retryTimerChan():
+		e.handleRetryTimer(ctx)
+		return nil, false, nil
+	case <-ctx.Done():
+		return nil, true, nil
+	}
+}
+
+func (e *Engine) runWatchLoopWithOutbox(
+	ctx context.Context,
+	p *watchPipeline,
+	outbox []*synctypes.TrackedAction,
+) ([]*synctypes.TrackedAction, bool, error) {
+	select {
+	case e.readyCh <- outbox[0]:
+		return outbox[1:], false, nil
+	case batch, ok := <-p.ready:
+		if !ok {
+			return outbox, true, nil
+		}
+		return append(outbox, e.processBatch(ctx, batch, p.bl, p.mode, p.safety)...), false, nil
+	case r, ok := <-p.results:
+		if !ok {
+			if ctx.Err() != nil {
+				return outbox, true, nil
+			}
+			return outbox, false, fmt.Errorf("sync: worker results channel closed unexpectedly")
+		}
+		return append(outbox, e.processWorkerResult(ctx, &r, p.bl)...), false, nil
+	case skipped := <-p.skippedCh:
+		e.recordSkippedItems(ctx, skipped)
+		e.clearResolvedSkippedItems(ctx, skipped)
+		return outbox, false, nil
+	case <-p.recheckC:
+		e.handleRecheckTick(ctx)
+		return outbox, false, nil
+	case <-p.reconcileC:
+		e.runFullReconciliationAsync(ctx, p.bl)
+		return outbox, false, nil
+	case obsErr := <-p.errs:
+		return outbox, false, e.handleObserverExit(p, obsErr)
+	case <-e.trialTimerChan():
+		e.handleTrialTimer(ctx)
+		return outbox, false, nil
+	case <-e.retryTimerChan():
+		e.handleRetryTimer(ctx)
+		return outbox, false, nil
+	case <-ctx.Done():
+		return outbox, true, nil
+	}
+}
+
+func (e *Engine) handleObserverExit(p *watchPipeline, obsErr error) error {
+	if obsErr != nil {
+		e.logger.Warn("observer error",
+			slog.String("error", obsErr.Error()),
+		)
+	}
+
+	p.activeObs--
+	if p.activeObs > 0 {
+		return nil
+	}
+
+	e.logger.Error("all observers have exited, stopping watch mode")
+	return fmt.Errorf("sync: all observers exited")
 }
 
 // ---------------------------------------------------------------------------
@@ -1553,21 +1657,149 @@ func isOutagePattern(err error) bool {
 	return strings.Contains(ge.Message, "ObjectHandle is Invalid")
 }
 
-// extendTrialInterval extends the trial interval for the given scope key.
-// Delegates to computeTrialInterval for the actual computation — the same
-// function used by applyScopeBlock for initial intervals, ensuring a single
-// code path for the Retry-After-vs-backoff policy.
-func (e *Engine) extendTrialInterval(scopeKey synctypes.ScopeKey, retryAfter time.Duration) {
+// loadActiveScopes refreshes watch runtime scope state from the persisted
+// scope_blocks table. The store remains the restart/recovery record; watch
+// mode keeps only the current working set in memory.
+func (e *Engine) loadActiveScopes(ctx context.Context) error {
+	if e.watch == nil {
+		return nil
+	}
+
+	blocks, err := e.baseline.ListScopeBlocks(ctx)
+	if err != nil {
+		return err
+	}
+
+	e.watch.activeScopes = e.watch.activeScopes[:0]
+	for i := range blocks {
+		e.watch.activeScopes = append(e.watch.activeScopes, *blocks[i])
+	}
+
+	return nil
+}
+
+// repairOrphanedPermissionScopes self-heals stale persisted permission scopes
+// whose actionable boundary rows are already gone. Old cleanup paths could
+// clear one durable representation without clearing the other; startup must
+// repair that mismatch before normal admission begins.
+func (e *Engine) repairOrphanedPermissionScopes(ctx context.Context) error {
+	blocks, err := e.baseline.ListScopeBlocks(ctx)
+	if err != nil {
+		return fmt.Errorf("sync: listing scope blocks: %w", err)
+	}
+	if len(blocks) == 0 {
+		return nil
+	}
+
+	localIssues, err := e.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueLocalPermissionDenied)
+	if err != nil {
+		return fmt.Errorf("sync: listing local permission failures: %w", err)
+	}
+	remoteIssues, err := e.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
+	if err != nil {
+		return fmt.Errorf("sync: listing remote permission failures: %w", err)
+	}
+
+	active := activePermissionScopes(localIssues, remoteIssues)
+
+	for i := range blocks {
+		key := blocks[i].Key
+		if !isPermissionScopeKey(key) {
+			continue
+		}
+		if active[key] {
+			continue
+		}
+		if err := e.baseline.ReleaseScope(ctx, key, e.nowFunc()); err != nil {
+			return fmt.Errorf("sync: releasing orphaned permission scope %s: %w", key.String(), err)
+		}
+	}
+
+	return nil
+}
+
+func activePermissionScopes(
+	localIssues []synctypes.SyncFailureRow,
+	remoteIssues []synctypes.SyncFailureRow,
+) map[synctypes.ScopeKey]bool {
+	active := make(map[synctypes.ScopeKey]bool, len(localIssues)+len(remoteIssues))
+	appendActionablePermissionScopes(active, localIssues, synctypes.ScopeKey.IsPermDir)
+	appendActionablePermissionScopes(active, remoteIssues, synctypes.ScopeKey.IsPermRemote)
+	return active
+}
+
+func appendActionablePermissionScopes(
+	active map[synctypes.ScopeKey]bool,
+	issues []synctypes.SyncFailureRow,
+	match func(synctypes.ScopeKey) bool,
+) {
+	for i := range issues {
+		if issues[i].Category != synctypes.CategoryActionable {
+			continue
+		}
+		if !match(issues[i].ScopeKey) {
+			continue
+		}
+		active[issues[i].ScopeKey] = true
+	}
+}
+
+func isPermissionScopeKey(key synctypes.ScopeKey) bool {
+	return key.IsPermDir() || key.IsPermRemote()
+}
+
+func (e *Engine) getScopeBlock(key synctypes.ScopeKey) (synctypes.ScopeBlock, bool) {
+	if e.watch == nil {
+		return synctypes.ScopeBlock{}, false
+	}
+	return syncdispatch.LookupScope(e.watch.activeScopes, key)
+}
+
+func (e *Engine) isScopeBlocked(key synctypes.ScopeKey) bool {
+	if e.watch == nil {
+		return false
+	}
+	return syncdispatch.HasScope(e.watch.activeScopes, key)
+}
+
+func (e *Engine) activeBlockingScope(ta *synctypes.TrackedAction) synctypes.ScopeKey {
+	if e.watch == nil {
+		return synctypes.ScopeKey{}
+	}
+	return syncdispatch.FindBlockingScope(e.watch.activeScopes, ta)
+}
+
+func (e *Engine) scopeBlockKeys() []synctypes.ScopeKey {
+	if e.watch == nil {
+		return nil
+	}
+	return syncdispatch.ScopeKeys(e.watch.activeScopes)
+}
+
+func (e *Engine) activateScope(ctx context.Context, block synctypes.ScopeBlock) error {
+	if err := e.baseline.UpsertScopeBlock(ctx, &block); err != nil {
+		return err
+	}
+
+	if e.watch != nil {
+		e.watch.activeScopes = syncdispatch.UpsertScope(e.watch.activeScopes, block)
+	}
+
+	return nil
+}
+
+func (e *Engine) extendScopeTrial(ctx context.Context, scopeKey synctypes.ScopeKey, retryAfter time.Duration) {
 	if e.watch == nil {
 		return
 	}
 
-	block, ok := e.watch.scopeGate.GetScopeBlock(scopeKey)
+	block, ok := e.getScopeBlock(scopeKey)
 	if !ok {
-		return // scope was released between dispatch and result
+		return
 	}
 
 	newInterval := computeTrialInterval(retryAfter, block.TrialInterval)
+	nextAt := e.nowFunc().Add(newInterval)
 
 	e.logger.Debug("extending trial interval",
 		slog.String("scope_key", scopeKey.String()),
@@ -1575,11 +1807,15 @@ func (e *Engine) extendTrialInterval(scopeKey synctypes.ScopeKey, retryAfter tim
 		slog.Duration("retry_after", retryAfter),
 	)
 
-	if err := e.watch.scopeGate.ExtendTrialInterval(context.Background(), scopeKey, e.nowFunc().Add(newInterval), newInterval); err != nil {
-		e.logger.Warn("extendTrialInterval: failed to persist interval extension",
+	block.NextTrialAt = nextAt
+	block.TrialInterval = newInterval
+	block.TrialCount++
+	if err := e.activateScope(ctx, block); err != nil {
+		e.logger.Warn("extendScopeTrial: failed to persist interval extension",
 			slog.String("scope_key", scopeKey.String()),
 			slog.String("error", err.Error()),
 		)
+		return
 	}
 
 	e.armTrialTimer()
@@ -1610,11 +1846,7 @@ func computeTrialInterval(retryAfter, currentInterval time.Duration) time.Durati
 // (throttle:account or service) is active, meaning shortcut observation
 // polling should be skipped to avoid wasting API calls (R-2.10.30).
 func (e *Engine) isObservationSuppressed() bool {
-	if e.watch == nil {
-		return false
-	}
-
-	return e.watch.scopeGate.IsScopeBlocked(synctypes.SKThrottleAccount) || e.watch.scopeGate.IsScopeBlocked(synctypes.SKService)
+	return e.isScopeBlocked(synctypes.SKThrottleAccount) || e.isScopeBlocked(synctypes.SKService)
 }
 
 // feedScopeDetection feeds a worker result into scope detection sliding
@@ -1622,7 +1854,7 @@ func (e *Engine) isObservationSuppressed() bool {
 // regular failures and 400 outage patterns. Called directly from the normal
 // processWorkerResult switch — never called for trial results (the scope is
 // already blocked, and re-detecting would overwrite the doubled interval).
-func (e *Engine) feedScopeDetection(r *synctypes.WorkerResult) {
+func (e *Engine) feedScopeDetection(ctx context.Context, r *synctypes.WorkerResult) {
 	if e.watch == nil {
 		return
 	}
@@ -1635,51 +1867,37 @@ func (e *Engine) feedScopeDetection(r *synctypes.WorkerResult) {
 
 	sr := e.watch.scopeState.UpdateScope(r)
 	if sr.Block {
-		e.applyScopeBlock(sr)
+		e.applyScopeBlock(ctx, sr)
 	}
 	// Also check outage pattern for 400s.
 	if r.HTTPStatus == http.StatusBadRequest && isOutagePattern(r.Err) {
 		osr := e.watch.scopeState.UpdateScopeOutagePattern(r.Path)
 		if osr.Block {
-			e.applyScopeBlock(osr)
+			e.applyScopeBlock(ctx, osr)
 		}
 	}
 }
 
-// isWatchMode reports whether the engine is running in watch mode.
-// Part of the scopeManager interface.
-func (e *Engine) isWatchMode() bool { return e.watch != nil }
-
-// setScopeBlock writes a scope block to the ScopeGate.
-func (e *Engine) setScopeBlock(key synctypes.ScopeKey, block *synctypes.ScopeBlock) {
-	if e.watch == nil {
-		return
-	}
-
-	if err := e.watch.scopeGate.SetScopeBlock(context.Background(), key, block); err != nil {
-		e.logger.Warn("setScopeBlock: failed to persist scope block",
-			slog.String("scope_key", key.String()),
-			slog.String("error", err.Error()),
-		)
-	}
-}
-
-// applyScopeBlock creates a synctypes.ScopeBlock and tells the ScopeGate to block
-// affected actions. Uses computeTrialInterval for the initial interval,
-// ensuring the same Retry-After-vs-backoff policy as extendTrialInterval.
-// Logs a WARN because a scope block is a degraded-but-recoverable state
-// (R-6.6.10).
-func (e *Engine) applyScopeBlock(sr synctypes.ScopeUpdateResult) {
+// applyScopeBlock persists and activates a new scope block. Uses
+// computeTrialInterval for the initial interval, ensuring the same
+// Retry-After-vs-backoff policy as extendScopeTrial.
+func (e *Engine) applyScopeBlock(ctx context.Context, sr synctypes.ScopeUpdateResult) {
 	now := e.nowFunc()
 	interval := computeTrialInterval(sr.RetryAfter, 0)
 
-	e.setScopeBlock(sr.ScopeKey, &synctypes.ScopeBlock{
+	if err := e.activateScope(ctx, synctypes.ScopeBlock{
 		Key:           sr.ScopeKey,
 		IssueType:     sr.IssueType,
 		BlockedAt:     now,
 		TrialInterval: interval,
 		NextTrialAt:   now.Add(interval),
-	})
+	}); err != nil {
+		e.logger.Warn("applyScopeBlock: failed to persist scope block",
+			slog.String("scope_key", sr.ScopeKey.String()),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
 
 	e.logger.Warn("scope block active — actions held",
 		slog.String("scope_key", sr.ScopeKey.String()),
@@ -1690,56 +1908,49 @@ func (e *Engine) applyScopeBlock(sr synctypes.ScopeUpdateResult) {
 	e.armTrialTimer() // arm so the first trial fires at NextTrialAt (R-2.10.5)
 }
 
-// ---------------------------------------------------------------------------
-// Phase 4: New engine methods for DepGraph + ScopeGate architecture
-// ---------------------------------------------------------------------------
-
-// admitAndDispatch checks scope admission for ready actions and sends
-// admitted ones to readyCh. Scope-blocked actions are cascade-recorded as
-// sync_failures and completed in the graph. Called from the MAIN goroutine
-// (processBatch, executePlan for watch mode).
-//
-// In one-shot mode, scope gate is not initialized — all actions pass through.
-func (e *Engine) admitAndDispatch(ctx context.Context, ready []*synctypes.TrackedAction) {
-	for _, ta := range ready {
-		// Trial interception — watch mode only (one-shot has no trials).
-		if e.watch != nil {
-			e.watch.trialMu.Lock()
-			entry, isTrial := e.watch.trialPending[ta.Action.Path]
-			if isTrial {
-				delete(e.watch.trialPending, ta.Action.Path)
-			}
-			e.watch.trialMu.Unlock()
-
-			if isTrial {
-				e.handleTrialInterception(ctx, ta, entry)
-				continue
-			}
-		}
-
-		// Normal scope admission (watch mode only — e.watch is nil in one-shot).
-		if e.watch != nil {
-			if key := e.watch.scopeGate.Admit(ta); !key.IsZero() {
-				e.cascadeRecordAndComplete(ctx, ta, key)
-				e.armTrialTimer()
-				continue
-			}
-		}
-
-		e.setDispatch(ctx, &ta.Action)
-
-		select {
-		case e.readyCh <- ta:
-		case <-ctx.Done():
-			return
-		}
+// releaseScope atomically removes the scope block, deletes any actionable
+// boundary row for the scope, and makes held descendants retryable now.
+func (e *Engine) releaseScope(ctx context.Context, key synctypes.ScopeKey) error {
+	if err := e.baseline.ReleaseScope(ctx, key, e.nowFunc()); err != nil {
+		return err
 	}
+
+	if e.watch != nil {
+		e.watch.activeScopes = syncdispatch.RemoveScope(e.watch.activeScopes, key)
+		e.kickRetrySweepNow()
+		e.armTrialTimer()
+	}
+
+	e.logger.Info("scope block cleared — failures unblocked",
+		slog.String("scope_key", key.String()),
+	)
+
+	return nil
 }
 
-// admitReady is the drain-goroutine variant of admitAndDispatch. Returns
-// actions for the outbox instead of sending to readyCh (actor-with-outbox
-// pattern, section 3.5). This prevents deadlock when Complete returns many
-// dependents.
+// discardScope atomically removes the scope block and deletes all failure rows
+// tied to it. Used when the blocked subtree itself disappears.
+func (e *Engine) discardScope(ctx context.Context, key synctypes.ScopeKey) error {
+	if err := e.baseline.DiscardScope(ctx, key); err != nil {
+		return err
+	}
+
+	if e.watch != nil {
+		e.watch.activeScopes = syncdispatch.RemoveScope(e.watch.activeScopes, key)
+		e.armTrialTimer()
+	}
+
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4: New engine methods for DepGraph + single-owner scope architecture
+// ---------------------------------------------------------------------------
+
+// admitReady applies watch-mode trial interception and scope admission to a
+// ready action set, returning the actions that should enter the watch loop's
+// outbox. It is the single admission path used by both newly-planned actions
+// and newly-ready dependents from result processing.
 func (e *Engine) admitReady(ctx context.Context, ready []*synctypes.TrackedAction) []*synctypes.TrackedAction {
 	var dispatch []*synctypes.TrackedAction
 
@@ -1748,12 +1959,10 @@ func (e *Engine) admitReady(ctx context.Context, ready []*synctypes.TrackedActio
 		var isTrial bool
 		var entry trialEntry
 		if e.watch != nil {
-			e.watch.trialMu.Lock()
 			entry, isTrial = e.watch.trialPending[ta.Action.Path]
 			if isTrial {
 				delete(e.watch.trialPending, ta.Action.Path)
 			}
-			e.watch.trialMu.Unlock()
 		}
 
 		if isTrial {
@@ -1775,7 +1984,7 @@ func (e *Engine) admitReady(ctx context.Context, ready []*synctypes.TrackedActio
 
 				// e.watch is guaranteed non-nil — admitReady is only
 				// called from processBatch (watch-mode only).
-				if key := e.watch.scopeGate.Admit(ta); key.IsZero() {
+				if key := e.activeBlockingScope(ta); key.IsZero() {
 					e.setDispatch(ctx, &ta.Action)
 					dispatch = append(dispatch, ta)
 				}
@@ -1787,7 +1996,7 @@ func (e *Engine) admitReady(ctx context.Context, ready []*synctypes.TrackedActio
 
 		// Normal scope admission.
 		if e.watch != nil {
-			if key := e.watch.scopeGate.Admit(ta); !key.IsZero() {
+			if key := e.activeBlockingScope(ta); !key.IsZero() {
 				e.cascadeRecordAndComplete(ctx, ta, key)
 				continue
 			}
@@ -1798,47 +2007,6 @@ func (e *Engine) admitReady(ctx context.Context, ready []*synctypes.TrackedActio
 	}
 
 	return dispatch
-}
-
-// handleTrialInterception handles a trial-intercepted action in
-// admitAndDispatch (main goroutine path). Called by admitAndDispatch when
-// the action's path matches a trialPending entry.
-func (e *Engine) handleTrialInterception(ctx context.Context, ta *synctypes.TrackedAction, entry trialEntry) {
-	if entry.scopeKey.BlocksAction(ta.Action.Path,
-		ta.Action.ShortcutKey(), ta.Action.Type,
-		ta.Action.TargetsOwnDrive()) {
-		ta.IsTrial = true
-		ta.TrialScopeKey = entry.scopeKey
-
-		select {
-		case e.readyCh <- ta: // bypass scope gate
-		case <-ctx.Done():
-		}
-
-		return
-	}
-
-	// Trial candidate no longer matches scope — clear stale failure,
-	// run normal admission. Best-effort: log on error, don't abort.
-	if err := e.baseline.ClearSyncFailure(ctx, ta.Action.Path, ta.Action.DriveID); err != nil {
-		e.logger.Debug("handleTrialInterception: failed to clear stale trial failure",
-			slog.String("path", ta.Action.Path),
-			slog.String("error", err.Error()),
-		)
-	}
-
-	// e.watch is guaranteed non-nil — handleTrialInterception is only called
-	// from admitAndDispatch, which runs inside processBatch (watch-mode only).
-	if key := e.watch.scopeGate.Admit(ta); key.IsZero() {
-		e.setDispatch(ctx, &ta.Action)
-
-		select {
-		case e.readyCh <- ta:
-		case <-ctx.Done():
-		}
-	}
-
-	e.armTrialTimer()
 }
 
 // cascadeRecordAndComplete records a scope-blocked action and all its
@@ -1864,7 +2032,7 @@ func (e *Engine) cascadeRecordAndComplete(ctx context.Context, ta *synctypes.Tra
 
 		e.recordScopeBlockedFailure(ctx, &current.Action, scopeKey)
 		// No resetDispatchStatus — setDispatch was never called for blocked
-		// actions (scope gate is checked BEFORE setDispatch, per section 2.2).
+		// actions (active-scope admission runs BEFORE setDispatch, per section 2.2).
 		ready, _ := e.depGraph.Complete(current.ID)
 		queue = append(queue, ready...)
 	}
@@ -1913,7 +2081,7 @@ func (e *Engine) completeSubtree(ready []*synctypes.TrackedAction) {
 }
 
 // recordScopeBlockedFailure records a sync_failure for an action that was
-// blocked by a scope gate. Uses next_retry_at = NULL (nil delayFn) so the
+// blocked by an active scope. Uses next_retry_at = NULL (nil delayFn) so the
 // retrier ignores it until onScopeClear sets next_retry_at.
 func (e *Engine) recordScopeBlockedFailure(ctx context.Context, action *synctypes.Action, scopeKey synctypes.ScopeKey) {
 	direction := directionFromAction(action.Type)
@@ -1968,48 +2136,24 @@ func (e *Engine) recordCascadeFailure(ctx context.Context, action *synctypes.Act
 	}
 }
 
-// onScopeClear atomically clears a scope block and makes all scope-blocked
-// failures retryable. Called when a trial succeeds or an external condition
-// resolves (permission grant, quota freed, etc.).
-//
-// Does NOT re-observe items inline — would block the drain loop. Instead,
-// makes sync_failures retryable and lets the retrier handle re-processing
-// at its own pace (section 3.7).
+// onScopeClear is retained as a narrow compatibility wrapper for older tests
+// and call sites while the engine migrates to the explicit releaseScope
+// terminology.
 func (e *Engine) onScopeClear(ctx context.Context, key synctypes.ScopeKey) {
-	now := e.nowFunc()
-
-	// Atomic: delete scope_blocks row + set next_retry_at = NOW in one tx.
-	if err := e.baseline.ClearScopeAndUnblockFailures(ctx, key, now); err != nil {
-		e.logger.Warn("failed to clear scope and unblock failures",
+	if err := e.releaseScope(ctx, key); err != nil {
+		e.logger.Warn("failed to release scope",
 			slog.String("scope_key", key.String()),
 			slog.String("error", err.Error()),
 		)
 	}
-
-	// Update in-memory cache. ClearScopeBlock tries to delete from DB again
-	// (harmless — row already gone). We call it for the in-memory map update.
-	if e.watch != nil {
-		if err := e.watch.scopeGate.ClearScopeBlock(ctx, key); err != nil {
-			e.logger.Debug("onScopeClear: in-memory cache update failed (non-fatal)",
-				slog.String("scope_key", key.String()),
-				slog.String("error", err.Error()),
-			)
-		}
-	}
-
-	e.kickRetrySweepNow()
-
-	e.logger.Info("scope block cleared — failures unblocked",
-		slog.String("scope_key", key.String()),
-	)
 }
 
 // processWorkerResult replaces processWorkerResult + routeReadyActions with
-// failure-aware dependent dispatch. Returns actions for the outbox (drain
-// goroutine) instead of sending to readyCh. Called from the drain goroutine.
+// failure-aware dependent dispatch. Returns actions for the outbox owned by
+// the calling control flow instead of sending to readyCh directly.
 //
 // Dependent routing is structured at the Complete level:
-//   - Parent success → children admitted via admitReady (scope gate check)
+//   - Parent success → children admitted via admitReady (active-scope check)
 //   - Parent failure → children cascade-recorded as sync_failures
 //   - Parent shutdown → children silently completed (no dispatch, no failure)
 func (e *Engine) processWorkerResult(ctx context.Context, r *synctypes.WorkerResult, bl *synctypes.Baseline) []*synctypes.TrackedAction {
@@ -2063,13 +2207,13 @@ func (e *Engine) applyResultSideEffects(ctx context.Context, class resultClass, 
 	case resultRequeue:
 		e.recordFailure(ctx, r, retry.Reconcile.Delay)
 		e.recordError(r)
-		e.feedScopeDetection(r)
+		e.feedScopeDetection(ctx, r)
 		e.armRetryTimer()
 
 	case resultScopeBlock:
 		e.recordFailure(ctx, r, retry.Reconcile.Delay)
 		e.recordError(r)
-		e.feedScopeDetection(r)
+		e.feedScopeDetection(ctx, r)
 		e.armTrialTimer()
 		e.armRetryTimer()
 
@@ -2103,7 +2247,7 @@ func (e *Engine) applyResultSideEffects(ctx context.Context, class resultClass, 
 }
 
 // processTrialResult handles trial results using the new architecture.
-// Returns actions for the outbox. Called from the drain goroutine.
+// Returns actions for the caller-owned outbox.
 func (e *Engine) processTrialResult(ctx context.Context, r *synctypes.WorkerResult) []*synctypes.TrackedAction {
 	class, _ := classifyResult(r)
 
@@ -2111,7 +2255,12 @@ func (e *Engine) processTrialResult(ctx context.Context, r *synctypes.WorkerResu
 	ready, _ := e.depGraph.Complete(r.ActionID)
 
 	if class == resultSuccess {
-		e.onScopeClear(ctx, r.TrialScopeKey)
+		if err := e.releaseScope(ctx, r.TrialScopeKey); err != nil {
+			e.logger.Warn("processTrialResult: failed to release scope",
+				slog.String("scope_key", r.TrialScopeKey.String()),
+				slog.String("error", err.Error()),
+			)
+		}
 		e.succeeded.Add(1)
 		if e.watch != nil {
 			e.watch.scopeState.RecordSuccess(r)
@@ -2129,7 +2278,7 @@ func (e *Engine) processTrialResult(ctx context.Context, r *synctypes.WorkerResu
 	// Trial failure: extend interval. Scope detection is NOT called — the
 	// scope is already blocked, and re-detecting would overwrite the doubled
 	// interval with a fresh initial interval (A2 bug prevention).
-	e.extendTrialInterval(r.TrialScopeKey, r.RetryAfter)
+	e.extendScopeTrial(ctx, r.TrialScopeKey, r.RetryAfter)
 
 	var delayFn func(int) time.Duration
 	if class == resultRequeue || class == resultScopeBlock {
@@ -2151,7 +2300,7 @@ func (e *Engine) processTrialResult(ctx context.Context, r *synctypes.WorkerResu
 // armRetryTimer arms the retry timer for the next retrier sweep. Queries
 // the earliest next_retry_at from sync_failures and sets the timer. If the
 // retry timer channel is already signaled (non-blocking send to buffered(1)
-// channel), the next drain loop select iteration processes it.
+// channel), the next owning loop iteration processes it.
 func (e *Engine) armRetryTimer() {
 	if e.watch == nil {
 		return
@@ -2168,15 +2317,23 @@ func (e *Engine) armRetryTimer() {
 		return
 	}
 
-	e.watch.trialMu.Lock()
-	defer e.watch.trialMu.Unlock()
-
 	if e.watch.retryTimer != nil {
 		e.watch.retryTimer.Stop()
 	}
 	e.watch.retryTimer = time.AfterFunc(delay, func() {
 		e.kickRetrySweepNow()
 	})
+}
+
+func (e *Engine) stopRetryTimer() {
+	if e.watch == nil {
+		return
+	}
+
+	if e.watch.retryTimer != nil {
+		e.watch.retryTimer.Stop()
+		e.watch.retryTimer = nil
+	}
 }
 
 // kickRetrySweepNow is the single immediate wakeup path for the watch-mode
@@ -2209,12 +2366,10 @@ func (e *Engine) retryTimerChan() <-chan struct{} {
 // re-observation event into the buffer. If no candidates exist for a scope,
 // the scope is cleared (no items left to trial — condition resolved).
 //
-// Uses AllDueTrials to snapshot all due scopes at once, then iterates each
+// Uses DueTrials to snapshot all due scopes at once, then iterates each
 // exactly once. This is structurally incapable of infinite iteration —
 // unlike the old NextDueTrial-in-a-loop approach which required state
 // mutation (extendTrialInterval) as iteration control.
-//
-// Called from the drain loop when the trial timer fires.
 func (e *Engine) runTrialDispatch(ctx context.Context) {
 	now := e.nowFunc()
 
@@ -2222,7 +2377,7 @@ func (e *Engine) runTrialDispatch(ctx context.Context) {
 	e.cleanStaleTrialPending(now)
 
 	// Snapshot all due scopes — each visited exactly once.
-	for _, key := range e.watch.scopeGate.AllDueTrials(now) {
+	for _, key := range syncdispatch.DueTrials(e.watch.activeScopes, now) {
 		// Pick oldest scope-blocked failure for this scope.
 		row, err := e.baseline.PickTrialCandidate(ctx, key)
 		if err != nil {
@@ -2236,19 +2391,22 @@ func (e *Engine) runTrialDispatch(ctx context.Context) {
 
 		if row == nil {
 			// No candidates — scope condition resolved externally.
-			e.onScopeClear(ctx, key)
+			if err := e.releaseScope(ctx, key); err != nil {
+				e.logger.Warn("runTrialDispatch: failed to release empty scope",
+					slog.String("scope_key", key.String()),
+					slog.String("error", err.Error()),
+				)
+			}
 
 			continue
 		}
 
 		// Register the trial in trialPending so admitAndDispatch/admitReady
 		// can intercept the resulting action from the planner.
-		e.watch.trialMu.Lock()
 		e.watch.trialPending[row.Path] = trialEntry{
 			scopeKey: key,
 			created:  now,
 		}
-		e.watch.trialMu.Unlock()
 
 		// Re-observe the item with a real API call / FS access to confirm
 		// whether the scope condition has cleared. Unlike the retrier (which
@@ -2258,7 +2416,7 @@ func (e *Engine) runTrialDispatch(ctx context.Context) {
 			// Scope condition persists — extend the trial interval using
 			// the server's Retry-After if provided (R-2.10.7), otherwise
 			// exponential backoff.
-			e.extendTrialInterval(key, retryAfter)
+			e.extendScopeTrial(ctx, key, retryAfter)
 
 			continue
 		}
@@ -2277,11 +2435,10 @@ func (e *Engine) runTrialDispatch(ctx context.Context) {
 }
 
 // runRetrierSweep processes a batch of due sync_failures, re-injecting them
-// into the pipeline via the buffer. Runs inline in the drain loop for
-// direct depGraph.HasInFlight
-// access without coordination problems (D-11).
+// into the pipeline via the buffer. Runs inline in the owning control flow
+// for direct depGraph.HasInFlight access without coordination problems (D-11).
 //
-// Batch-limited to retryBatchSize to prevent drain loop stalls when many
+// Batch-limited to retryBatchSize to prevent the owning loop from stalling when many
 // items become retryable at once (e.g., after a scope clear).
 func (e *Engine) runRetrierSweep(ctx context.Context) {
 	now := e.nowFunc()
@@ -2303,8 +2460,8 @@ func (e *Engine) runRetrierSweep(ctx context.Context) {
 
 	for i := range rows {
 		if dispatched >= retryBatchSize {
-			// More items remain — re-arm immediately so the drain loop
-			// picks up the next batch on the next iteration.
+			// More items remain — re-arm immediately so the owning loop picks up
+			// the next batch on the next iteration.
 			e.kickRetrySweepNow()
 
 			break
@@ -2671,13 +2828,10 @@ func (e *Engine) reobserve(ctx context.Context, row *synctypes.SyncFailureRow) (
 	}
 }
 
-// cleanStaleTrialPending removes stale entries from trialPending. Called
-// under trialMu. Entries older than trialPendingTTL are cleared and the
-// corresponding sync_failure is deleted (item is stale).
+// cleanStaleTrialPending removes stale entries from trialPending. Entries
+// older than trialPendingTTL are cleared and the corresponding sync_failure
+// is deleted (item is stale).
 func (e *Engine) cleanStaleTrialPending(now time.Time) {
-	e.watch.trialMu.Lock()
-	defer e.watch.trialMu.Unlock()
-
 	for path, entry := range e.watch.trialPending {
 		if now.Sub(entry.created) > trialPendingTTL {
 			delete(e.watch.trialPending, path)
@@ -2920,7 +3074,7 @@ func directionFromAction(at synctypes.ActionType) synctypes.Direction {
 
 // armTrialTimer sets (or resets) the trial timer to fire at the earliest
 // NextTrialAt across all scope blocks. Uses time.AfterFunc to send to the
-// persistent trialCh channel, avoiding a race where the drain loop's select
+// persistent trialCh channel, avoiding a race where the watch loop's select
 // watches the old timer's channel after replacement. Called after scope blocks
 // are created, trials dispatched, or trial results processed (R-2.10.5).
 func (e *Engine) armTrialTimer() {
@@ -2928,15 +3082,12 @@ func (e *Engine) armTrialTimer() {
 		return
 	}
 
-	e.watch.trialMu.Lock()
-	defer e.watch.trialMu.Unlock()
-
 	if e.watch.trialTimer != nil {
 		e.watch.trialTimer.Stop()
 		e.watch.trialTimer = nil
 	}
 
-	earliest, ok := e.watch.scopeGate.EarliestTrialAt()
+	earliest, ok := syncdispatch.EarliestTrialAt(e.watch.activeScopes)
 	if !ok {
 		return
 	}
@@ -2948,9 +3099,9 @@ func (e *Engine) armTrialTimer() {
 
 	// Non-blocking send to the buffered(1) channel. If a signal is already
 	// pending, the new one is coalesced (dropped). This is self-healing:
-	// drainWorkerResults calls AllDueTrials, so even if a second AfterFunc
+	// the watch loop calls DueTrials, so even if a second AfterFunc
 	// fires while a signal is pending, all due scopes are still processed
-	// on the next drain iteration.
+	// on the next loop iteration.
 	e.watch.trialTimer = time.AfterFunc(delay, func() {
 		select {
 		case e.trialCh <- struct{}{}:
@@ -2972,9 +3123,6 @@ func (e *Engine) stopTrialTimer() {
 		return
 	}
 
-	e.watch.trialMu.Lock()
-	defer e.watch.trialMu.Unlock()
-
 	if e.watch.trialTimer != nil {
 		e.watch.trialTimer.Stop()
 		e.watch.trialTimer = nil
@@ -2988,7 +3136,7 @@ func (e *Engine) stopTrialTimer() {
 // when Complete returns many dependents and readyCh is full.
 //
 // The trial timer fires scope trial dispatch when trials become due (R-2.10.5).
-// In one-shot mode (scopeGate == nil), trial dispatch is a no-op.
+// In one-shot mode (watch state is nil), trial dispatch is a no-op.
 func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan synctypes.WorkerResult, bl *synctypes.Baseline) {
 	defer e.stopTrialTimer()
 
@@ -3031,8 +3179,8 @@ func (e *Engine) drainWorkerResults(ctx context.Context, results <-chan synctype
 	}
 }
 
-// handleTrialTimer dispatches due scope trials via ScopeGate.
-// In one-shot mode (scopeGate == nil), this is a no-op.
+// handleTrialTimer dispatches due scope trials via the active-scope working
+// set. In one-shot mode this is a no-op.
 func (e *Engine) handleTrialTimer(ctx context.Context) {
 	if e.watch != nil {
 		e.runTrialDispatch(ctx)
@@ -3207,7 +3355,7 @@ func (e *Engine) runPeriodicFullScan(
 func (e *Engine) processBatch(
 	ctx context.Context, batch []synctypes.PathChanges, bl *synctypes.Baseline,
 	mode synctypes.SyncMode, safety *synctypes.SafetyConfig,
-) {
+) []*synctypes.TrackedAction {
 	e.logger.Info("processing watch batch",
 		slog.Int("paths", len(batch)),
 	)
@@ -3226,19 +3374,19 @@ func (e *Engine) processBatch(
 				slog.Int("paths", len(batch)),
 			)
 
-			return
+			return nil
 		}
 
 		e.logger.Error("planner error, skipping batch",
 			slog.String("error", err.Error()),
 		)
 
-		return
+		return nil
 	}
 
 	if len(plan.Actions) == 0 {
 		e.logger.Debug("empty plan for batch, nothing to do")
-		return
+		return nil
 	}
 
 	// Rolling-window big-delete protection: count planned deletes and
@@ -3248,12 +3396,12 @@ func (e *Engine) processBatch(
 	if e.watch != nil && e.watch.deleteCounter != nil {
 		plan = e.applyDeleteCounter(ctx, plan)
 		if len(plan.Actions) == 0 {
-			return
+			return nil
 		}
 	}
 
 	e.deduplicateInFlight(plan)
-	e.dispatchBatchActions(ctx, plan)
+	return e.dispatchBatchActions(ctx, plan)
 }
 
 // periodicPermRecheck runs permission rechecks at most once per 60 seconds.
@@ -3296,8 +3444,8 @@ func (e *Engine) deduplicateInFlight(plan *synctypes.ActionPlan) {
 }
 
 // dispatchBatchActions adds plan actions to the DepGraph with monotonic IDs,
-// then admits ready actions through the scope gate.
-func (e *Engine) dispatchBatchActions(ctx context.Context, plan *synctypes.ActionPlan) {
+// then admits ready actions through active-scope checks.
+func (e *Engine) dispatchBatchActions(ctx context.Context, plan *synctypes.ActionPlan) []*synctypes.TrackedAction {
 	// Invariant: Planner always builds Deps with len(Actions).
 	if len(plan.Actions) != len(plan.Deps) {
 		e.logger.Error("plan invariant violation: Actions/Deps length mismatch",
@@ -3305,13 +3453,14 @@ func (e *Engine) dispatchBatchActions(ctx context.Context, plan *synctypes.Actio
 			slog.Int("deps", len(plan.Deps)),
 		)
 
-		return
+		return nil
 	}
 
 	// Allocate monotonic action IDs for this batch. Using a global atomic
 	// counter prevents ID collisions across batches — loop indices (int64(i))
 	// would collide when multiple batches are processed.
-	batchBaseID := e.watch.nextActionID.Add(int64(len(plan.Actions))) - int64(len(plan.Actions))
+	batchBaseID := e.watch.nextActionID
+	e.watch.nextActionID += int64(len(plan.Actions))
 
 	// Map from plan index → action ID for dependency resolution.
 	actionIDs := make([]int64, len(plan.Actions))
@@ -3320,9 +3469,9 @@ func (e *Engine) dispatchBatchActions(ctx context.Context, plan *synctypes.Actio
 	}
 
 	// Add actions to DepGraph and collect immediately-ready ones. Dispatch
-	// transitions (setDispatch) are deferred to admitAndDispatch, which runs
-	// AFTER scope gate checks — setDispatch on a scope-blocked action would
-	// be incorrect (section 2.2: no dispatch before admission).
+	// transitions (setDispatch) are deferred to admission, which runs AFTER
+	// active-scope checks — setDispatch on a blocked action would be incorrect
+	// (section 2.2: no dispatch before admission).
 	var ready []*synctypes.TrackedAction
 
 	for i := range plan.Actions {
@@ -3338,16 +3487,17 @@ func (e *Engine) dispatchBatchActions(ctx context.Context, plan *synctypes.Actio
 		}
 	}
 
-	// Admit ready actions through the scope gate and send to workers.
-	// admitAndDispatch handles trial interception, scope blocking, and
-	// setDispatch for admitted actions.
+	// Admit ready actions through the active-scope working set. The watch loop
+	// owns actual sends to readyCh via its outbox.
 	if len(ready) > 0 {
-		e.admitAndDispatch(ctx, ready)
+		ready = e.admitReady(ctx, ready)
 	}
 
 	e.logger.Info("watch batch dispatched",
 		slog.Int("actions", len(plan.Actions)),
 	)
+
+	return ready
 }
 
 // setDispatch writes the dispatch state transition for an action before it
@@ -3565,7 +3715,7 @@ func (e *Engine) clearResolvedPermissionScopes(ctx context.Context) {
 		return
 	}
 
-	scopeKeys := e.watch.scopeGate.ScopeBlockKeys()
+	scopeKeys := e.scopeBlockKeys()
 	if len(scopeKeys) == 0 {
 		return
 	}
@@ -3604,7 +3754,13 @@ func (e *Engine) clearResolvedPermissionScopes(ctx context.Context) {
 	// Release any scope blocks whose failures were cleared.
 	for _, key := range scopeKeys {
 		if (key.IsPermDir() || key.IsPermRemote()) && !activeScopes[key] {
-			e.onScopeClear(ctx, key)
+			if err := e.releaseScope(ctx, key); err != nil {
+				e.logger.Warn("failed to release externally-cleared permission scope",
+					slog.String("scope", key.String()),
+					slog.String("error", err.Error()),
+				)
+				continue
+			}
 
 			e.logger.Info("permission scope block cleared by user",
 				slog.String("scope", key.String()),

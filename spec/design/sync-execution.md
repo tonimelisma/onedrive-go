@@ -8,7 +8,10 @@ Implements: R-2.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.5.3 [ve
 
 Implements: R-6.8.9 [verified]
 
-Thin action dispatcher. Takes an `ActionPlan` and dispatches actions to workers via `DepGraph` + `ScopeGate`. Actions dispatched based on dependency satisfaction, not fixed phase ordering. Workers produce individual `Outcome` values committed per-action by the SyncStore.
+Thin action dispatcher. Takes an `ActionPlan` and dispatches actions to workers
+via `DepGraph` plus the engine's active-scope admission logic. Actions are
+dispatched based on dependency satisfaction, not fixed phase ordering. Workers
+produce individual `Outcome` values committed per-action by the SyncStore.
 
 Action methods call the graph client directly and return `Outcome` — no retry loop, no error classification, no sleep. The following were removed as part of the retry-to-transport refactoring: `withRetry()`, `classifyError()`, `classifyStatusCode()`, `calcExecBackoff()`, `errClass` type + constants, `sleepFunc` field. Hash mismatch retry (`downloadWithHashRetry`) is unchanged — it's a data integrity mechanism orthogonal to the retry redesign.
 
@@ -26,24 +29,37 @@ The D-10 fix ensures completed actions are removed from the `actions` map. Witho
 
 `TrackedAction` struct is defined here: pairs an `Action` with an ID, cancel function, trial metadata (`IsTrial`, `TrialScopeKey`), and dependency tracking (`depsLeft`, `dependents`).
 
-## ScopeGate (`scope_gate.go`)
+## Active Scope Helpers (`scope_gate.go`)
 
-Scope-based admission control with persistent scope blocks. No held queue, no dependency awareness, no channels. Paired with `DepGraph` to form the dispatch architecture: DepGraph resolves dependencies and returns ready actions, ScopeGate gates admission based on active scope blocks.
+`scope_gate.go` no longer owns a runtime subsystem. It provides pure helper
+functions over an engine-owned `[]ScopeBlock` working set. There is no mutex,
+no write-through cache, and no persistence layer in `syncdispatch`.
 
-- **`Admit(ta) ScopeKey`**: Check if an action matches any active scope block. Returns blocking key or zero. Priority-ordered: global scopes (throttle, service) first, then narrow scopes (disk, quota), then dynamic-key scopes (shortcut quota, `perm:dir`, `perm:remote`). Blocking logic lives on `ScopeKey.BlocksAction()`.
-- **`SetScopeBlock(ctx, key, block) error`**: Write-through: persist to `scope_blocks` table first, then update in-memory map. On store error, memory unchanged.
-- **`ClearScopeBlock(ctx, key) error`**: Delete from store first, then memory.
-- **`IsScopeBlocked(key) bool`**: Simple map lookup.
-- **`GetScopeBlock(key) (ScopeBlock, bool)`**: Returns a value copy (not pointer) to prevent unsynchronized mutation.
-- **`ExtendTrialInterval(ctx, key, nextAt, interval) error`**: Update + persist. Increments `TrialCount`.
-- **`AllDueTrials(now) []ScopeKey`**: Returns a snapshot of all scope keys whose trial is due (`now >= NextTrialAt`). **No held-queue check** — any block with non-zero `NextTrialAt` is eligible. The engine uses `PickTrialCandidate` from `sync_failures` to find actual items. Snapshot pattern prevents infinite iteration.
-- **`EarliestTrialAt() (time.Time, bool)`**: Earliest `NextTrialAt` across all blocks. **No held-queue check**.
-- **`ScopeBlockKeys() []ScopeKey`**: All active scope block keys.
-- **`LoadFromStore(ctx) error`**: Startup: load all `scope_blocks` rows into memory. Replaces existing state.
+- **`FindBlockingScope(blocks, ta) ScopeKey`**: Check whether an action matches
+  any active scope block. Returns the blocking key or zero. Priority-ordered:
+  global scopes (throttle, service) first, then narrow scopes (disk, quota),
+  then dynamic-key scopes (`quota:shortcut`, `perm:dir`, `perm:remote`).
+- **`UpsertScope(blocks, block) []ScopeBlock`**: Return a copy with the scope
+  inserted or replaced by key.
+- **`RemoveScope(blocks, key) []ScopeBlock`**: Return a copy with the scope
+  removed.
+- **`LookupScope(blocks, key) (ScopeBlock, bool)`**: Return a value copy of the
+  active block.
+- **`ExtendScopeTrial(blocks, key, nextAt, interval)`**: Return a copy with the
+  scope's trial metadata updated and `TrialCount` incremented.
+- **`DueTrials(now)` / `EarliestTrialAt()` / `ScopeKeys()`**: Pure helpers for
+  watch-loop timer scheduling and scope iteration.
+
+The watch loop owns runtime scope state. `scope_blocks` remains the persisted
+restart/recovery record; store transactions update it, then the watch loop
+updates its own in-memory working set.
 
 ### Persisted Scope Blocks (`scope_blocks` table)
 
-Scope blocks survive crashes. The `scope_blocks` table is the source of truth; the in-memory map is a write-through cache. Typically 0-5 rows.
+Scope blocks survive crashes. The `scope_blocks` table is the persisted
+restart/recovery record. In watch mode the engine loads those rows into its own
+single-owner runtime working set; there is no separate write-through cache
+subsystem. Typically 0-5 rows.
 
 ```sql
 CREATE TABLE scope_blocks (
@@ -56,16 +72,20 @@ CREATE TABLE scope_blocks (
 );
 ```
 
-No FK between `scope_blocks` and `sync_failures` — intentional. `sync_failures` rows must survive `scope_blocks` deletion (`onScopeClear` queries them AFTER deleting the scope block).
+No FK between `scope_blocks` and `sync_failures` — intentional. Scope release
+and discard are transactional lifecycle operations in the store layer, not
+schema-level cascades.
 
 ### ScopeBlockStore Interface
 
-`ScopeBlockStore` is the persistence interface consumed by `ScopeGate`. Implemented by `SyncStore` in `store_scope_blocks.go`:
+`ScopeBlockStore` is the persistence interface for scope-block rows.
+Implemented by `SyncStore` in `store_scope_blocks.go`:
 - `UpsertScopeBlock(ctx, block) error` — INSERT OR REPLACE
 - `DeleteScopeBlock(ctx, key) error` — DELETE WHERE
 - `ListScopeBlocks(ctx) ([]*ScopeBlock, error)` — SELECT all rows
 
-Fixes D-2 (no `onHeld` callback, no cross-lock paths), D-8 (scope blocks persisted, survive crash).
+Fixes D-2 (no `onHeld` callback, no cross-lock paths), D-8 (scope blocks
+persisted, survive crash).
 
 ## Scope Detection (`scope.go`)
 
@@ -91,7 +111,9 @@ Methods on `ScopeKey` centralize logic that was previously scattered across 9+ f
 
 ### Scope Escalation
 
-`ScopeState` maintains sliding windows for scope escalation detection and records successes that reset windows. Thread-safety is provided by the engine's single-goroutine drain loop. Windows are keyed by `ScopeKey` (not string).
+`ScopeState` maintains sliding windows for scope escalation detection and
+records successes that reset windows. In watch mode it is owned by the
+single-owner watch loop. Windows are keyed by `ScopeKey` (not string).
 
 - **Immediate blocks** (server signals): 429 → `SKThrottleAccount` (single response triggers). 503 with Retry-After → `SKService` (single response triggers).
 - **Sliding window detection**: 507 → 3 unique paths in 10s → `SKQuotaOwn` or `SKQuotaShortcut(key)`. 5xx → 5 unique paths in 30s → `SKService`.
@@ -109,39 +131,33 @@ Flat pool of `transfer_workers` goroutines. Decoupled from dispatch infrastructu
 ### Channel And Timer Ownership
 
 The execution path relies on a small set of long-lived channels with strict
-ownership rules. The refactor target is a single watch-mode state owner, but
-that refactor must preserve the current create/write/read/close boundaries:
+ownership rules:
 
 - **`readyCh`**: owned by the engine. Created by `executePlan` in one-shot
-  mode and by `initWatchInfra` in watch mode. Written by engine admission
-  paths (`executePlan`, `admitAndDispatch`, and the drain loop outbox). Read
-  by worker goroutines only. It is intentionally not closed; workers exit via
-  `doneCh`/context cancellation instead of ranging on channel close.
+  mode and by `initWatchInfra` in watch mode. Written by one-shot admission
+  code or by the single watch loop's outbox flush. Read by worker goroutines
+  only. It is intentionally not closed; workers exit via `doneCh`/context
+  cancellation instead of ranging on channel close.
 - **Worker `results` channel**: owned by `WorkerPool`. Created in
-  `NewWorkerPool`, written only by workers through `sendResult`, read only by
-  the engine's `drainWorkerResults` goroutine. Closed exactly once by
-  `WorkerPool.Stop()` after all worker goroutines exit. Engine shutdown waits
-  on `drainDone` after that close so all result side effects complete before
-  reporting completion.
+  `NewWorkerPool`, written only by workers through `sendResult`, read by
+  `drainWorkerResults` in one-shot mode and by the watch loop in watch mode.
+  Closed exactly once by `WorkerPool.Stop()` after all worker goroutines exit.
 - **Trial timer delivery (`trialCh`)**: owned by the engine and created once
   in `NewEngine`. Written only by `time.AfterFunc` callbacks scheduled by
-  `armTrialTimer`. Read only by `drainWorkerResults` through
-  `trialTimerChan()`. The channel is never closed; shutdown stops the current
-  timer via `stopTrialTimer()`.
+  `armTrialTimer`. Read by the watch loop in watch mode. The channel is never
+  closed; shutdown stops the current timer via `stopTrialTimer()`.
 - **Retry timer delivery (`retryTimerCh`)**: owned by watch-mode engine state
   and created in `initWatchInfra`. Written by `armRetryTimer`'s
   `time.AfterFunc` callback and by inline engine wakeups that need an
-  immediate retrier pass (for example, due items or batch spillover).
-  Read only by `drainWorkerResults` through `retryTimerChan()`. Like
-  `trialCh`, it is persistent and never closed; the timer object is replaced
-  or stopped as needed.
+  immediate retrier pass (for example, due items or batch spillover). Read
+  only by the watch loop. Like `trialCh`, it is persistent and never closed;
+  the timer object is replaced or stopped as needed.
 - **Bootstrap completion barrier**: there is no separate "bootstrap finished"
-  signal channel between bootstrap and observer startup. The barrier is
-  `depGraph.WaitForEmpty()` inside `waitForQuiescence`, which closes when the
-  in-flight action map reaches zero. Separately, `drainDone` is a
-  goroutine-lifecycle channel owned by the engine: created by `executePlan`
-  or `bootstrapSync`, closed by the drain goroutine, and awaited by the owner
-  before returning or cleaning up.
+  signal channel between bootstrap and observer startup. The barrier is the
+  bootstrap event loop itself: `bootstrapSync` keeps consuming ready batches,
+  worker results, retry ticks, and trial ticks until the graph is empty and no
+  bootstrap work remains. One-shot mode still uses a `drainDone` goroutine
+  barrier inside `executePlan`.
 - **Observer error signaling (`errs`)**: owned by `startObservers`. Created by
   the engine, written once per observer goroutine on exit, read only by the
   watch loop. It is not explicitly closed because the watch loop tracks
@@ -190,9 +206,27 @@ Implements: R-2.10.41 [verified]
 
 Implements: R-2.5.4 [verified]
 
-After resetting `remote_state`, `ResetInProgressStates` also creates corresponding `sync_failures` entries (category=`transient`, direction matching the action, `next_retry_at` computed via `delayFn`) for each item that transitioned to a pending state. This bridges `remote_state` to the drain-loop retrier (`sync_failures`). Without this bridge, items that crashed mid-execution would become zombies: the delta token was already advanced (no new events), and the retrier only queries `sync_failures`. `RecordFailure` uses UPSERT — if a `sync_failures` entry already exists from a prior failure before the crash, the existing `failure_count` is preserved and incremented, so backoff continues from where it left off.
+After resetting `remote_state`, `ResetInProgressStates` also creates
+corresponding `sync_failures` entries (category=`transient`, direction matching
+the action, `next_retry_at` computed via `delayFn`) for each item that
+transitioned to a pending state. This bridges `remote_state` to the retry queue
+(`sync_failures`). Without this bridge, items that crashed mid-execution would
+become zombies: the delta token was already advanced (no new events), and the
+retry sweep only queries `sync_failures`. `RecordFailure` uses UPSERT — if a
+`sync_failures` entry already exists from a prior failure before the crash, the
+existing `failure_count` is preserved and incremented, so backoff continues
+from where it left off.
 
-The drain-loop retrier is the sole retry mechanism for sync actions. Integrated directly into the engine's drain loop (no separate goroutine), it uses `runRetrierSweep()` to periodically sweep `sync_failures` for items whose `next_retry_at` has expired and re-injects them into the pipeline via buffer → planner → DepGraph. The engine calls `DepGraph.Complete` on every worker result and records failures in `sync_failures` with exponential backoff via `retry.Reconcile.Delay`. `CommitOutcome` success cleanup clears `sync_failures` for all action types (upload, download, delete, move). `runTrialDispatch()` handles scope trial candidate selection via `PickTrialCandidate` and re-observation.
+The retry sweep is the sole retry mechanism for sync actions. In watch mode it
+is integrated directly into the single-owner watch loop; in one-shot mode there
+is no long-lived retry loop. `runRetrierSweep()` periodically sweeps
+`sync_failures` for items whose `next_retry_at` has expired and re-injects them
+into the pipeline via buffer → planner → DepGraph. The engine calls
+`DepGraph.Complete` on every worker result and records failures in
+`sync_failures` with exponential backoff via `retry.Reconcile.Delay`.
+`CommitOutcome` success cleanup clears `sync_failures` for all action types
+(upload, download, delete, move). `runTrialDispatch()` handles scope trial
+candidate selection via `PickTrialCandidate` and re-observation.
 
 ## Status Computation (`compute_status.go`)
 
@@ -218,7 +252,7 @@ Scope block classification remains in the sync engine: `classifyResult` maps `dr
 - Two concurrency knobs: `transfer_workers` (default 8, range 4-64) for file operations, `check_workers` (default 4, range 1-16) for QuickXorHash computation.
 - All executor write operations use `containedPath()` with `filepath.IsLocal()` to confine local filesystem writes to the sync root directory. This is defense-in-depth against path reconstruction bugs, not input validation (the OneDrive API is the source of truth, not an attacker). Symlink escape is prevented by resolving symlinks on the parent directory via `filepath.EvalSymlinks`.
 - Concurrent folder creates via Graph API `$batch` for sibling folders at same depth. Diminishing returns after first sync. [planned]
-- Targeted `-race` stress tests for DepGraph, ScopeGate, Buffer, WorkerPool. [planned]
+- Targeted `-race` stress tests for DepGraph, active-scope admission helpers, Buffer, WorkerPool. [planned]
 - Sub-second uniqueness in `conflictCopyPath`: second-precision timestamps mean two conflicts in the same second collide. [planned]
 - Explicit error for unknown `ActionType` in `applySingleOutcome`: default case currently returns nil, silently dropping outcomes. [planned]
 - Graceful shutdown test under active worker pool: verify SIGTERM during active transfers drains correctly. [planned]

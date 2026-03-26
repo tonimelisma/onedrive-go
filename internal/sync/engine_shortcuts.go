@@ -321,24 +321,13 @@ func (e *Engine) handleRemovedShortcuts(ctx context.Context, deletedItemIDs map[
 			return fmt.Errorf("sync: deleting shortcut %s: %w", sc.ItemID, err)
 		}
 
-		// Clear scope block + sync_failures for this shortcut's quota scope.
-		// When a shortcut is removed while a scope block exists, held
-		// actions are no longer valid — discard instead of dispatch (R-2.10.38).
+		// When a shortcut disappears, quota-scoped held work is no longer
+		// meaningful. Discard the scope and every failure tied to it instead of
+		// releasing the subtree back into dispatch.
 		scKey := sc.RemoteDrive + ":" + sc.RemoteItem
 		scopeKey := synctypes.SKQuotaShortcut(scKey)
-
-		if e.watch != nil {
-			if err := e.watch.scopeGate.ClearScopeBlock(ctx, scopeKey); err != nil {
-				e.logger.Debug("handleRemovedShortcuts: failed to clear scope block",
-					slog.String("scope_key", scopeKey.String()),
-					slog.String("error", err.Error()),
-				)
-			}
-		}
-
-		// Clear orphaned sync_failures for the removed shortcut's scope.
-		if err := e.baseline.DeleteSyncFailuresByScope(ctx, scopeKey); err != nil {
-			e.logger.Warn("failed to clear sync_failures for removed shortcut",
+		if err := e.discardScope(ctx, scopeKey); err != nil {
+			e.logger.Warn("failed to discard removed shortcut scope",
 				slog.String("scope_key", scopeKey.String()),
 				slog.String("error", err.Error()),
 			)
@@ -378,19 +367,14 @@ func (e *Engine) clearRemovedShortcutRemotePermissionScopes(ctx context.Context,
 			continue
 		}
 
-		if e.watch != nil && !clearedScopes[issue.ScopeKey] {
-			if clearErr := e.watch.scopeGate.ClearScopeBlock(ctx, issue.ScopeKey); clearErr != nil {
-				e.logger.Debug("failed to clear remote permission scope for removed shortcut",
-					slog.String("scope_key", issue.ScopeKey.String()),
-					slog.String("error", clearErr.Error()),
-				)
-			}
+		if clearedScopes[issue.ScopeKey] {
+			continue
 		}
 
-		if clearErr := e.baseline.DeleteSyncFailuresByScope(ctx, issue.ScopeKey); clearErr != nil {
-			e.logger.Warn("failed to delete remote permission failures for removed shortcut",
+		if err := e.discardScope(ctx, issue.ScopeKey); err != nil {
+			e.logger.Warn("failed to discard remote permission scope for removed shortcut",
 				slog.String("scope_key", issue.ScopeKey.String()),
-				slog.String("error", clearErr.Error()),
+				slog.String("error", err.Error()),
 			)
 		}
 
