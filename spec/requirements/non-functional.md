@@ -31,9 +31,6 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.3.1: Only one sync process per configuration shall run at a time. [verified]
 - R-6.3.2: Status and query commands shall be concurrent-reader safe while sync is running. [verified]
 - R-6.3.3: The system shall enforce single-instance via PID file with advisory lock. [verified]
-- R-6.3.4: Repository changes shall merge only through pull requests protected by required status checks and required conversation resolution. On the protected main branch, force pushes and alternate merge methods that bypass the defined PR path shall be disabled. [verified]
-- R-6.3.5: Non-draft, non-doc-only pull requests shall require a Codex review attached to the current PR head SHA before merge. Only submitted reviews by the configured Codex reviewer count, and only the latest qualifying review on the current head SHA controls the gate result. [verified]
-- R-6.3.6: Docs-only review skips shall fail closed. Only `README.md`, `TODO.md`, `LICENSE`, and `spec/**` qualify; control-plane files never qualify; rename or copy changes require both source and destination paths to be docs-only; and incomplete pull-file listings shall require review instead of skipping. [verified]
 
 ## R-6.4 Safety [implemented]
 
