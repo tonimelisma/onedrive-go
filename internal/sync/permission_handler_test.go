@@ -24,30 +24,37 @@ import (
 type mockScopeManager struct {
 	scopeBlocks     map[synctypes.ScopeKey]*synctypes.ScopeBlock
 	scopeClears     []synctypes.ScopeKey
-	watchMode       bool
+	scopeDiscards   []synctypes.ScopeKey
 	setScopeCount   int
 	clearScopeCount int
+	discardCount    int
 }
 
-func newMockScopeManager(watchMode bool) *mockScopeManager {
+func newMockScopeManager(_ bool) *mockScopeManager {
 	return &mockScopeManager{
 		scopeBlocks: make(map[synctypes.ScopeKey]*synctypes.ScopeBlock),
-		watchMode:   watchMode,
 	}
 }
 
-func (m *mockScopeManager) setScopeBlock(key synctypes.ScopeKey, block *synctypes.ScopeBlock) {
-	m.scopeBlocks[key] = block
+func (m *mockScopeManager) activateScope(_ context.Context, block synctypes.ScopeBlock) error {
+	copy := block
+	m.scopeBlocks[block.Key] = &copy
 	m.setScopeCount++
+	return nil
 }
 
-func (m *mockScopeManager) onScopeClear(_ context.Context, key synctypes.ScopeKey) {
+func (m *mockScopeManager) releaseScope(_ context.Context, key synctypes.ScopeKey) error {
 	m.scopeClears = append(m.scopeClears, key)
 	m.clearScopeCount++
+	delete(m.scopeBlocks, key)
+	return nil
 }
 
-func (m *mockScopeManager) isWatchMode() bool {
-	return m.watchMode
+func (m *mockScopeManager) discardScope(_ context.Context, key synctypes.ScopeKey) error {
+	m.scopeDiscards = append(m.scopeDiscards, key)
+	m.discardCount++
+	delete(m.scopeBlocks, key)
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -266,7 +273,7 @@ func TestPermHandler_RecheckLocalPermissions_Restored(t *testing.T) {
 	t.Parallel()
 
 	recorder := newMockFailureRecorder()
-	sm := newMockScopeManager(true) // watch mode
+	sm := newMockScopeManager(true)
 	ph, syncRoot := newTestPermHandler(t, recorder, nil, sm)
 
 	// Create the directory (accessible).
@@ -284,9 +291,9 @@ func TestPermHandler_RecheckLocalPermissions_Restored(t *testing.T) {
 
 	ph.recheckLocalPermissions(t.Context())
 
-	// Should clear the failure and invoke onScopeClear.
-	require.Len(t, recorder.clearPaths, 1)
-	assert.Equal(t, "restored", recorder.clearPaths[0])
+	// Scoped restoration should request a scope release rather than a
+	// file-by-file clear.
+	assert.Empty(t, recorder.clearPaths)
 	require.Len(t, sm.scopeClears, 1)
 	assert.Equal(t, scopeKey, sm.scopeClears[0])
 }
@@ -344,7 +351,7 @@ func TestPermHandler_ClearScannerResolved_DirLevel(t *testing.T) {
 	t.Parallel()
 
 	recorder := newMockFailureRecorder()
-	sm := newMockScopeManager(true) // watch mode for onScopeClear
+	sm := newMockScopeManager(true)
 	ph, _ := newTestPermHandler(t, recorder, nil, sm)
 
 	scopeKey := synctypes.SKPermDir("blocked")
@@ -360,13 +367,12 @@ func TestPermHandler_ClearScannerResolved_DirLevel(t *testing.T) {
 	observed := map[string]bool{"blocked/child.txt": true}
 	ph.clearScannerResolvedPermissions(t.Context(), observed)
 
-	require.Len(t, recorder.clearPaths, 1)
-	assert.Equal(t, "blocked", recorder.clearPaths[0])
+	assert.Empty(t, recorder.clearPaths)
 	require.Len(t, sm.scopeClears, 1)
 	assert.Equal(t, scopeKey, sm.scopeClears[0])
 }
 
-func TestPermHandler_ClearScannerResolved_NotWatchMode(t *testing.T) {
+func TestPermHandler_ClearScannerResolved_ReleasesScopedIssueInOneShotMode(t *testing.T) {
 	t.Parallel()
 
 	recorder := newMockFailureRecorder()
@@ -385,7 +391,7 @@ func TestPermHandler_ClearScannerResolved_NotWatchMode(t *testing.T) {
 	observed := map[string]bool{"blocked/child.txt": true}
 	ph.clearScannerResolvedPermissions(t.Context(), observed)
 
-	// Failure cleared, but no onScopeClear call (not watch mode).
-	require.Len(t, recorder.clearPaths, 1)
-	assert.Empty(t, sm.scopeClears, "onScopeClear not called in non-watch mode")
+	assert.Empty(t, recorder.clearPaths)
+	require.Len(t, sm.scopeClears, 1)
+	assert.Equal(t, scopeKey, sm.scopeClears[0], "scoped permission recovery should release the scope in one-shot mode too")
 }

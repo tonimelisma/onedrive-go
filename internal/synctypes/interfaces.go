@@ -67,9 +67,9 @@ type StateAdmin interface {
 	ResetInProgressStates(ctx context.Context, syncRoot string, delayFn func(int) time.Duration) error
 }
 
-// ScopeBlockStore persists scope blocks to durable storage. ScopeGate uses
-// this interface for write-through caching — memory is the hot path, DB is
-// the source of truth for crash recovery.
+// ScopeBlockStore persists scope blocks to durable storage. The engine loads
+// these rows into its watch-mode working state at startup and mutates the
+// database transactionally as scopes activate, release, or discard.
 type ScopeBlockStore interface {
 	UpsertScopeBlock(ctx context.Context, block *ScopeBlock) error
 	DeleteScopeBlock(ctx context.Context, key ScopeKey) error

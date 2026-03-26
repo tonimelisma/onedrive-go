@@ -146,11 +146,11 @@ func TestSyncStore_SetScopeRetryAtNow_NoMatches(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ClearScopeAndUnblockFailures
+// ReleaseScope / DiscardScope
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.10.11
-func TestSyncStore_ClearScopeAndUnblockFailures(t *testing.T) {
+func TestSyncStore_ReleaseScope(t *testing.T) {
 	t.Parallel()
 	mgr := newTestStore(t)
 	ctx := context.Background()
@@ -166,7 +166,12 @@ func TestSyncStore_ClearScopeAndUnblockFailures(t *testing.T) {
 		BlockedAt: now.Add(-time.Minute),
 	}))
 
-	// Create scope-blocked failures.
+	// Create the actionable boundary row plus held descendants.
+	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path: "quota-boundary", DriveID: driveID, Direction: synctypes.DirectionUpload,
+		Category: synctypes.CategoryActionable, IssueType: synctypes.IssueQuotaExceeded, ScopeKey: sk,
+	}, nil))
+
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "x.txt", DriveID: driveID, Direction: synctypes.DirectionUpload,
 		Category: synctypes.CategoryTransient, ScopeKey: sk,
@@ -177,8 +182,7 @@ func TestSyncStore_ClearScopeAndUnblockFailures(t *testing.T) {
 		Category: synctypes.CategoryTransient, ScopeKey: sk,
 	}, nil))
 
-	// Clear scope and unblock failures atomically.
-	err := mgr.ClearScopeAndUnblockFailures(ctx, sk, now)
+	err := mgr.ReleaseScope(ctx, sk, now)
 	require.NoError(t, err)
 
 	// Verify scope block is gone.
@@ -190,10 +194,14 @@ func TestSyncStore_ClearScopeAndUnblockFailures(t *testing.T) {
 	rows, err := mgr.ListSyncFailuresForRetry(ctx, now)
 	require.NoError(t, err)
 	assert.Len(t, rows, 2, "scope-blocked failures should now be retryable")
+
+	allRows, err := mgr.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Len(t, allRows, 2, "release should remove the actionable boundary row")
 }
 
 // Validates: R-2.10.11
-func TestSyncStore_ClearScopeAndUnblockFailures_NoScopeBlock(t *testing.T) {
+func TestSyncStore_ReleaseScope_NoScopeBlock(t *testing.T) {
 	t.Parallel()
 	mgr := newTestStore(t)
 	ctx := context.Background()
@@ -201,6 +209,43 @@ func TestSyncStore_ClearScopeAndUnblockFailures_NoScopeBlock(t *testing.T) {
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
 	// Should not error even if scope block doesn't exist.
-	err := mgr.ClearScopeAndUnblockFailures(ctx, synctypes.SKService, now)
+	err := mgr.ReleaseScope(ctx, synctypes.SKService, now)
 	require.NoError(t, err)
+}
+
+// Validates: R-2.10.38
+func TestSyncStore_DiscardScope(t *testing.T) {
+	t.Parallel()
+	mgr := newTestStore(t)
+	ctx := context.Background()
+
+	driveID := driveid.New("drive1")
+	scopeKey := synctypes.SKPermRemote("Shared/Docs")
+	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	require.NoError(t, mgr.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
+		Key:       scopeKey,
+		IssueType: synctypes.IssuePermissionDenied,
+		BlockedAt: now.Add(-time.Minute),
+	}))
+
+	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path: "Shared/Docs", DriveID: driveID, Direction: synctypes.DirectionUpload,
+		Category: synctypes.CategoryActionable, IssueType: synctypes.IssuePermissionDenied, ScopeKey: scopeKey,
+	}, nil))
+	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path: "Shared/Docs/a.txt", DriveID: driveID, Direction: synctypes.DirectionUpload,
+		Category: synctypes.CategoryTransient, ScopeKey: scopeKey,
+	}, nil))
+
+	err := mgr.DiscardScope(ctx, scopeKey)
+	require.NoError(t, err)
+
+	blocks, err := mgr.ListScopeBlocks(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, blocks, "discard should delete the persisted scope row")
+
+	rows, err := mgr.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, rows, "discard should delete all scoped failures")
 }

@@ -225,7 +225,6 @@ func setupWatchEngine(t *testing.T, eng *Engine) <-chan *synctypes.TrackedAction
 	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
 	eng.readyCh = make(chan *synctypes.TrackedAction, 1024)
 	eng.watch = &watchState{
-		scopeGate:    syncdispatch.NewScopeGate(eng.baseline, eng.logger),
 		scopeState:   syncdispatch.NewScopeState(eng.nowFunc, eng.logger),
 		trialPending: make(map[string]trialEntry),
 		retryTimerCh: make(chan struct{}, 1),
@@ -235,17 +234,47 @@ func setupWatchEngine(t *testing.T, eng *Engine) <-chan *synctypes.TrackedAction
 }
 
 // newTestWatchState initializes watch state on an engine for testing.
-// Creates scopeGate, trialPending, and retryTimerCh — the minimum set
-// needed for watch-mode tests.
+// Creates trialPending, retryTimerCh, and scope detection state — the minimum
+// set needed for watch-mode tests.
 func newTestWatchState(t *testing.T, eng *Engine) {
 	t.Helper()
 
 	eng.watch = &watchState{
-		scopeGate:    syncdispatch.NewScopeGate(eng.baseline, eng.logger),
 		scopeState:   syncdispatch.NewScopeState(eng.nowFunc, eng.logger),
 		trialPending: make(map[string]trialEntry),
 		retryTimerCh: make(chan struct{}, 1),
 	}
+}
+
+func setTestScopeBlock(t *testing.T, eng *Engine, block synctypes.ScopeBlock) {
+	t.Helper()
+	require.NoError(t, eng.activateScope(context.Background(), block))
+}
+
+func isTestScopeBlocked(eng *Engine, key synctypes.ScopeKey) bool {
+	blocks, err := eng.baseline.ListScopeBlocks(context.Background())
+	if err != nil {
+		panic(fmt.Sprintf("ListScopeBlocks: %v", err))
+	}
+	for i := range blocks {
+		if blocks[i].Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+func getTestScopeBlock(eng *Engine, key synctypes.ScopeKey) (synctypes.ScopeBlock, bool) {
+	blocks, err := eng.baseline.ListScopeBlocks(context.Background())
+	if err != nil {
+		panic(fmt.Sprintf("ListScopeBlocks: %v", err))
+	}
+	for i := range blocks {
+		if blocks[i].Key == key {
+			return *blocks[i], true
+		}
+	}
+	return synctypes.ScopeBlock{}, false
 }
 
 // deltaPageWithItems returns a DeltaPage with the given items and a delta link.
@@ -1334,7 +1363,7 @@ func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
 		})
 	}
 
-	ready := setupWatchEngine(t, eng)
+	setupWatchEngine(t, eng)
 
 	// Install a rolling delete counter with threshold=10 on the engine.
 	// The planner-level check is disabled (forceSafetyMax) — the counter
@@ -1342,15 +1371,11 @@ func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
 	eng.watch.deleteCounter = syncdispatch.NewDeleteCounter(10, 5*time.Minute, time.Now)
 	safety := &synctypes.SafetyConfig{BigDeleteThreshold: forceSafetyMax}
 
-	eng.processBatch(ctx, batch, bl, synctypes.SyncBidirectional, safety)
+	outbox := eng.processBatch(ctx, batch, bl, synctypes.SyncBidirectional, safety)
 
-	// Verify no actions were dispatched (all 20 are deletes and counter tripped).
-	select {
-	case ta := <-ready:
-		assert.Fail(t, "unexpected action dispatched", "path: %s", ta.Action.Path)
-	default:
-		// Good — no actions.
-	}
+	// Verify no actions were admitted into the watch loop outbox (all 20 are
+	// deletes and the rolling counter held them as issues).
+	assert.Empty(t, outbox)
 
 	// Verify counter is now held.
 	assert.True(t, eng.watch.deleteCounter.IsHeld(), "counter should be held")
@@ -1430,28 +1455,20 @@ func TestRunWatch_ProcessBatch_BigDelete_NonDeletesFlow(t *testing.T) {
 		}},
 	})
 
-	ready := setupWatchEngine(t, eng)
+	setupWatchEngine(t, eng)
 
 	// Install counter with threshold=10. 15 deletes > 10 → trips.
 	eng.watch.deleteCounter = syncdispatch.NewDeleteCounter(10, 5*time.Minute, time.Now)
 	safety := &synctypes.SafetyConfig{BigDeleteThreshold: forceSafetyMax}
 
-	eng.processBatch(ctx, batch, bl, synctypes.SyncBidirectional, safety)
+	outbox := eng.processBatch(ctx, batch, bl, synctypes.SyncBidirectional, safety)
 
 	// Counter should be held.
 	assert.True(t, eng.watch.deleteCounter.IsHeld(), "counter should be held")
 
-	// One download action should have been dispatched.
-	dispatched := 0
-	for range 5 {
-		select {
-		case <-ready:
-			dispatched++
-		default:
-		}
-	}
-
-	assert.Equal(t, 1, dispatched, "one non-delete action should be dispatched")
+	require.Len(t, outbox, 1, "one non-delete action should be admitted into the watch loop outbox")
+	assert.Equal(t, synctypes.ActionDownload, outbox[0].Action.Type)
+	assert.Equal(t, "newfile.txt", outbox[0].Action.Path)
 
 	// 15 held delete entries should exist.
 	rows, listErr := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueBigDeleteHeld)
@@ -1512,27 +1529,20 @@ func TestRunWatch_ProcessBatch_BigDelete_BelowThreshold(t *testing.T) {
 		})
 	}
 
-	ready := setupWatchEngine(t, eng)
+	setupWatchEngine(t, eng)
 
 	eng.watch.deleteCounter = syncdispatch.NewDeleteCounter(10, 5*time.Minute, time.Now)
 	safety := &synctypes.SafetyConfig{BigDeleteThreshold: forceSafetyMax}
 
-	eng.processBatch(ctx, batch, bl, synctypes.SyncBidirectional, safety)
+	outbox := eng.processBatch(ctx, batch, bl, synctypes.SyncBidirectional, safety)
 
 	// Counter should NOT be held.
 	assert.False(t, eng.watch.deleteCounter.IsHeld(), "counter should not trip at 5 < 10")
 
-	// All 5 deletes should have been dispatched.
-	dispatched := 0
-	for range 10 {
-		select {
-		case <-ready:
-			dispatched++
-		default:
-		}
+	require.Len(t, outbox, 5, "all 5 delete actions should be admitted into the watch loop outbox")
+	for i := range outbox {
+		assert.Equal(t, synctypes.ActionLocalDelete, outbox[i].Action.Type)
 	}
-
-	assert.Equal(t, 5, dispatched, "all 5 delete actions should be dispatched")
 }
 
 // TestEngine_ExternalDBChanged verifies the PRAGMA data_version detection.
@@ -1668,16 +1678,16 @@ func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 	clearedScope := synctypes.SKPermRemote("Shared/TeamDocs")
 	retainedScope := synctypes.SKPermRemote("Shared/Other")
 
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, clearedScope, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:       clearedScope,
 		IssueType: synctypes.IssuePermissionDenied,
 		BlockedAt: eng.nowFunc(),
-	}))
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, retainedScope, &synctypes.ScopeBlock{
+	})
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:       retainedScope,
 		IssueType: synctypes.IssuePermissionDenied,
 		BlockedAt: eng.nowFunc(),
-	}))
+	})
 
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "Shared/TeamDocs",
@@ -1710,9 +1720,9 @@ func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 
 	eng.handleExternalChanges(ctx)
 
-	assert.False(t, eng.watch.scopeGate.IsScopeBlocked(clearedScope),
+	assert.False(t, isTestScopeBlocked(eng, clearedScope),
 		"clearing a remote permission issue externally should release that scope")
-	assert.True(t, eng.watch.scopeGate.IsScopeBlocked(retainedScope),
+	assert.True(t, isTestScopeBlocked(eng, retainedScope),
 		"unrelated remote permission scopes must remain blocked")
 
 	retryable, err := eng.baseline.ListSyncFailuresForRetry(ctx, eng.nowFunc())
@@ -3615,15 +3625,15 @@ func TestProcessTrialResultV2_Success_ClearsScope(t *testing.T) {
 	eng := newPhase4Engine(t)
 	ctx := t.Context()
 
-	// Set up a scope block in the syncdispatch.ScopeGate.
+	// Set up an active persisted scope block.
 	now := eng.nowFunc()
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, synctypes.SKThrottleAccount, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:           synctypes.SKThrottleAccount,
 		IssueType:     synctypes.IssueRateLimited,
 		BlockedAt:     now,
 		TrialInterval: 10 * time.Second,
 		NextTrialAt:   now.Add(10 * time.Second),
-	}))
+	})
 
 	// Add scope-blocked failures to the DB (these would be unblocked on success).
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
@@ -3643,7 +3653,7 @@ func TestProcessTrialResultV2_Success_ClearsScope(t *testing.T) {
 	})
 
 	// Scope block should be cleared.
-	assert.False(t, eng.watch.scopeGate.IsScopeBlocked(synctypes.SKThrottleAccount),
+	assert.False(t, isTestScopeBlocked(eng, synctypes.SKThrottleAccount),
 		"scope block should be removed after successful trial")
 
 	// Scope-blocked failures should now be retryable (next_retry_at set to ~now).
@@ -3660,13 +3670,13 @@ func TestProcessTrialResultV2_Failure_DoublesInterval(t *testing.T) {
 	ctx := t.Context()
 
 	now := eng.nowFunc()
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, synctypes.SKService, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:           synctypes.SKService,
 		IssueType:     synctypes.IssueServiceOutage,
 		BlockedAt:     now,
 		TrialInterval: 30 * time.Second,
 		NextTrialAt:   now.Add(30 * time.Second),
-	}))
+	})
 
 	// Add the trial action to the syncdispatch.DepGraph.
 	eng.depGraph.Add(&synctypes.Action{Type: synctypes.ActionDownload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 99, nil)
@@ -3681,7 +3691,7 @@ func TestProcessTrialResultV2_Failure_DoublesInterval(t *testing.T) {
 	})
 
 	// Verify block's TrialInterval was doubled.
-	got, ok := eng.watch.scopeGate.GetScopeBlock(synctypes.SKService)
+	got, ok := getTestScopeBlock(eng, synctypes.SKService)
 	require.True(t, ok)
 	assert.Equal(t, 60*time.Second, got.TrialInterval, "interval should be doubled")
 }
@@ -3712,13 +3722,13 @@ func TestProcessTrialResultV2_Failure_CapsAt5m(t *testing.T) {
 			now := eng.nowFunc()
 
 			// Start with an interval that would exceed 5m when doubled.
-			require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, tt.scopeKey, &synctypes.ScopeBlock{
+			setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 				Key:           tt.scopeKey,
 				IssueType:     tt.issueType,
 				BlockedAt:     now,
 				TrialInterval: 4 * time.Minute,
 				NextTrialAt:   now.Add(4 * time.Minute),
-			}))
+			})
 
 			eng.depGraph.Add(&synctypes.Action{Type: tt.actionType, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 99, nil)
 
@@ -3731,7 +3741,7 @@ func TestProcessTrialResultV2_Failure_CapsAt5m(t *testing.T) {
 				ErrMsg:        "test failure",
 			})
 
-			got, ok := eng.watch.scopeGate.GetScopeBlock(tt.scopeKey)
+			got, ok := getTestScopeBlock(eng, tt.scopeKey)
 			require.True(t, ok)
 			assert.Equal(t, syncdispatch.DefaultMaxTrialInterval, got.TrialInterval,
 				"%s interval should cap at %v", tt.name, syncdispatch.DefaultMaxTrialInterval)
@@ -3750,13 +3760,13 @@ func TestProcessTrialResultV2_Failure_NoScopeDetection(t *testing.T) {
 	eng.watch.scopeState = ss
 
 	now := eng.nowFunc()
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, synctypes.SKService, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:           synctypes.SKService,
 		IssueType:     synctypes.IssueServiceOutage,
 		BlockedAt:     now,
 		TrialInterval: 30 * time.Second,
 		NextTrialAt:   now.Add(30 * time.Second),
-	}))
+	})
 
 	eng.depGraph.Add(&synctypes.Action{Type: synctypes.ActionDownload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 99, nil)
 
@@ -3769,7 +3779,7 @@ func TestProcessTrialResultV2_Failure_NoScopeDetection(t *testing.T) {
 		ErrMsg:        "internal server error",
 	})
 
-	got, ok := eng.watch.scopeGate.GetScopeBlock(synctypes.SKService)
+	got, ok := getTestScopeBlock(eng, synctypes.SKService)
 	require.True(t, ok, "scope block should still exist")
 	assert.Equal(t, 60*time.Second, got.TrialInterval, "interval should be doubled, not reset")
 }
@@ -3815,13 +3825,13 @@ func TestExtendTrialInterval_WithRetryAfter(t *testing.T) {
 	ctx := t.Context()
 
 	now := eng.nowFunc()
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, synctypes.SKThrottleAccount, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:           synctypes.SKThrottleAccount,
 		IssueType:     synctypes.IssueRateLimited,
 		BlockedAt:     now,
 		TrialInterval: 30 * time.Second,
 		NextTrialAt:   now.Add(30 * time.Second),
-	}))
+	})
 
 	eng.depGraph.Add(&synctypes.Action{Type: synctypes.ActionUpload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 99, nil)
 
@@ -3837,14 +3847,14 @@ func TestExtendTrialInterval_WithRetryAfter(t *testing.T) {
 		ErrMsg:        "too many requests",
 	})
 
-	got, ok := eng.watch.scopeGate.GetScopeBlock(synctypes.SKThrottleAccount)
+	got, ok := getTestScopeBlock(eng, synctypes.SKThrottleAccount)
 	require.True(t, ok)
 	assert.Equal(t, 30*time.Minute, got.TrialInterval,
 		"Retry-After must be used directly with no cap — server is ground truth")
 }
 
 // Validates: R-2.10.43 — full disk:local scope-block lifecycle:
-// ErrDiskFull → classifyResult → syncdispatch.ScopeGate blocks downloads → trial → release.
+// ErrDiskFull → classifyResult → active scope blocks downloads → trial → release.
 func TestDiskLocalScopeBlock_FullCycle(t *testing.T) {
 	t.Parallel()
 
@@ -3859,27 +3869,27 @@ func TestDiskLocalScopeBlock_FullCycle(t *testing.T) {
 	require.Equal(t, resultScopeBlock, class)
 	require.Equal(t, synctypes.SKDiskLocal, scope)
 
-	// 2. Establish the scope block via syncdispatch.ScopeGate.
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, synctypes.SKDiskLocal, &synctypes.ScopeBlock{
+	// 2. Establish the active scope block.
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:           synctypes.SKDiskLocal,
 		IssueType:     synctypes.IssueDiskFull,
 		BlockedAt:     now,
 		TrialInterval: 10 * time.Second,
 		NextTrialAt:   now.Add(10 * time.Second),
-	}))
+	})
 
-	// 3. syncdispatch.ScopeGate.Admit blocks downloads under disk:local, allows uploads.
+	// 3. Active-scope admission blocks downloads under disk:local, allows uploads.
 	dlAction := &synctypes.TrackedAction{ID: 1, Action: synctypes.Action{Type: synctypes.ActionDownload, Path: "big.zip", DriveID: driveid.New("d"), ItemID: "dl1"}}
 	ulAction := &synctypes.TrackedAction{ID: 2, Action: synctypes.Action{Type: synctypes.ActionUpload, Path: "small.txt", DriveID: driveid.New("d"), ItemID: "ul1"}}
 
-	assert.False(t, eng.watch.scopeGate.Admit(dlAction).IsZero(), "download should be blocked by disk:local scope")
-	assert.True(t, eng.watch.scopeGate.Admit(ulAction).IsZero(), "upload should NOT be blocked by disk:local scope")
+	assert.False(t, eng.activeBlockingScope(dlAction).IsZero(), "download should be blocked by disk:local scope")
+	assert.True(t, eng.activeBlockingScope(ulAction).IsZero(), "upload should NOT be blocked by disk:local scope")
 
 	// 4. Clear scope block (simulating trial success / disk space freed).
 	eng.onScopeClear(ctx, synctypes.SKDiskLocal)
 
 	// 5. Download should now be admitted.
-	assert.True(t, eng.watch.scopeGate.Admit(dlAction).IsZero(), "download should be admitted after scope clear")
+	assert.True(t, eng.activeBlockingScope(dlAction).IsZero(), "download should be admitted after scope clear")
 }
 
 // ---------------------------------------------------------------------------
@@ -3924,10 +3934,11 @@ func TestApplyScopeBlock_ArmsTrialTimer(t *testing.T) {
 	t.Parallel()
 
 	eng := newPhase4Engine(t)
+	ctx := t.Context()
 	now := eng.nowFunc()
 
-	// applyScopeBlock sets the scope block via syncdispatch.ScopeGate and arms the trial timer.
-	eng.applyScopeBlock(synctypes.ScopeUpdateResult{
+	// applyScopeBlock persists the scope and arms the trial timer.
+	eng.applyScopeBlock(ctx, synctypes.ScopeUpdateResult{
 		Block:      true,
 		ScopeKey:   synctypes.SKThrottleAccount,
 		IssueType:  synctypes.IssueRateLimited,
@@ -3935,14 +3946,12 @@ func TestApplyScopeBlock_ArmsTrialTimer(t *testing.T) {
 	})
 
 	// Verify the block has the correct NextTrialAt from the injectable clock.
-	earliest, ok := eng.watch.scopeGate.EarliestTrialAt()
+	earliest, ok := syncdispatch.EarliestTrialAt(eng.watch.activeScopes)
 	require.True(t, ok, "EarliestTrialAt should find the scope block")
 	assert.Equal(t, now.Add(30*time.Second), earliest, "NextTrialAt should be now + trial interval")
 
 	// Trial timer should be armed.
-	eng.watch.trialMu.Lock()
 	timerSet := eng.watch.trialTimer != nil
-	eng.watch.trialMu.Unlock()
 	assert.True(t, timerSet, "trial timer should be armed after applyScopeBlock")
 }
 
@@ -4024,18 +4033,19 @@ func TestRecordFailure_PopulatesScopeKey_507Shortcut(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Drain loop integration tests (Phase 4 architecture: syncdispatch.DepGraph + syncdispatch.ScopeGate)
+// Drain loop integration tests (Phase 4 architecture: DepGraph + active scopes)
 // ---------------------------------------------------------------------------
 
-// startDrainLoop creates a real engine with syncdispatch.DepGraph, syncdispatch.ScopeGate, readyCh,
-// scopeState, buf, and retryTimerCh — the full Phase 4 pipeline — and starts
-// drainWorkerResults. Returns:
+// startDrainLoop creates a real engine with DepGraph, watch-mode scope state,
+// readyCh, buf, and retryTimerCh — the full one-shot drain pipeline used by
+// the characterization tests — and starts drainWorkerResults. Returns:
 //   - results chan: test sends WorkerResults here (simulating workers)
 //   - ready chan: test reads dispatched actions from readyCh
+//   - done chan: closes when drainWorkerResults exits
 //   - cancel func: stops the drain goroutine
 //   - eng: the engine (for state inspection)
 //   - buf: the syncobserve.Buffer (for verifying retrier re-injection)
-func startDrainLoop(t *testing.T) (chan synctypes.WorkerResult, <-chan *synctypes.TrackedAction, context.CancelFunc, *Engine, *syncobserve.Buffer) {
+func startDrainLoop(t *testing.T) (chan synctypes.WorkerResult, <-chan *synctypes.TrackedAction, <-chan struct{}, context.CancelFunc, *Engine, *syncobserve.Buffer) {
 	t.Helper()
 
 	eng := newPhase4Engine(t)
@@ -4048,9 +4058,13 @@ func startDrainLoop(t *testing.T) (chan synctypes.WorkerResult, <-chan *synctype
 	ready := eng.readyCh
 
 	ctx, cancel := context.WithCancel(t.Context())
-	go eng.drainWorkerResults(ctx, results, nil)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		eng.drainWorkerResults(ctx, results, nil)
+	}()
 
-	return results, ready, cancel, eng, buf
+	return results, ready, done, cancel, eng, buf
 }
 
 // readReady reads one synctypes.TrackedAction from the ready channel with a 1s timeout.
@@ -4068,7 +4082,7 @@ func readReady(t *testing.T, ready <-chan *synctypes.TrackedAction) {
 func TestE2E_DrainLoop_ProcessesAndRoutes(t *testing.T) {
 	t.Parallel()
 
-	results, ready, cancel, eng, _ := startDrainLoop(t)
+	results, ready, _, cancel, eng, _ := startDrainLoop(t)
 	defer cancel()
 
 	ctx := t.Context()
@@ -4094,7 +4108,7 @@ func TestE2E_DrainLoop_ProcessesAndRoutes(t *testing.T) {
 
 	// Verify scope block created and failure recorded.
 	require.Eventually(t, func() bool {
-		return eng.watch.scopeGate.IsScopeBlocked(synctypes.SKThrottleAccount)
+		return isTestScopeBlocked(eng, synctypes.SKThrottleAccount)
 	}, time.Second, time.Millisecond, "scope block should be created")
 
 	issues, err := eng.baseline.ListSyncFailures(ctx)
@@ -4108,19 +4122,21 @@ func TestE2E_DrainLoop_ProcessesAndRoutes(t *testing.T) {
 func TestE2E_DrainLoop_TrialResultSuccess(t *testing.T) {
 	t.Parallel()
 
-	results, _, cancel, eng, buf := startDrainLoop(t)
+	results, ready, done, cancel, eng, buf := startDrainLoop(t)
 	defer cancel()
+	_ = ready
+	_ = done
 
 	ctx := t.Context()
 
 	// Set up scope block and a scope-blocked failure.
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, synctypes.SKThrottleAccount, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:           synctypes.SKThrottleAccount,
 		IssueType:     synctypes.IssueRateLimited,
 		BlockedAt:     eng.nowFunc(),
 		TrialInterval: 10 * time.Millisecond,
 		NextTrialAt:   eng.nowFunc().Add(10 * time.Millisecond),
-	}))
+	})
 	require.NoError(t, os.WriteFile(filepath.Join(eng.syncRoot, "blocked.txt"), []byte("blocked payload"), 0o644))
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "blocked.txt", DriveID: driveid.New(engineTestDriveID), Direction: synctypes.DirectionUpload,
@@ -4144,7 +4160,7 @@ func TestE2E_DrainLoop_TrialResultSuccess(t *testing.T) {
 
 	// Scope block should be cleared.
 	require.Eventually(t, func() bool {
-		return !eng.watch.scopeGate.IsScopeBlocked(synctypes.SKThrottleAccount)
+		return !isTestScopeBlocked(eng, synctypes.SKThrottleAccount)
 	}, time.Second, time.Millisecond, "scope block should be cleared after trial success")
 
 	var released []synctypes.PathChanges
@@ -4162,18 +4178,19 @@ func TestE2E_DrainLoop_TrialResultSuccess(t *testing.T) {
 func TestE2E_DrainLoop_TrialResultFailure(t *testing.T) {
 	t.Parallel()
 
-	results, _, cancel, eng, _ := startDrainLoop(t)
+	results, ready, done, cancel, eng, buf := startDrainLoop(t)
 	defer cancel()
+	_ = ready
+	_ = done
+	_ = buf
 
-	ctx := t.Context()
-
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, synctypes.SKService, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:           synctypes.SKService,
 		IssueType:     synctypes.IssueServiceOutage,
 		BlockedAt:     eng.nowFunc(),
 		TrialInterval: 10 * time.Millisecond,
 		NextTrialAt:   eng.nowFunc().Add(10 * time.Millisecond),
-	}))
+	})
 
 	ta := eng.depGraph.Add(&synctypes.Action{Type: synctypes.ActionDownload, Path: "trial.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 99, nil)
 	require.NotNil(t, ta)
@@ -4193,7 +4210,7 @@ func TestE2E_DrainLoop_TrialResultFailure(t *testing.T) {
 
 	// Interval should be doubled from 10ms to 20ms.
 	require.Eventually(t, func() bool {
-		block, ok := eng.watch.scopeGate.GetScopeBlock(synctypes.SKService)
+		block, ok := getTestScopeBlock(eng, synctypes.SKService)
 		return ok && block.TrialInterval == 20*time.Millisecond
 	}, time.Second, time.Millisecond, "trial failure should double interval")
 }
@@ -4201,11 +4218,14 @@ func TestE2E_DrainLoop_TrialResultFailure(t *testing.T) {
 func TestE2E_DrainExit_StopsTimer(t *testing.T) {
 	t.Parallel()
 
-	results, _, cancel, eng, _ := startDrainLoop(t)
+	results, ready, done, cancel, eng, buf := startDrainLoop(t)
 	defer cancel()
+	_ = ready
+	_ = buf
+	ctx := t.Context()
 
 	// Create scope block → arms trial timer.
-	eng.applyScopeBlock(synctypes.ScopeUpdateResult{
+	eng.applyScopeBlock(ctx, synctypes.ScopeUpdateResult{
 		Block:      true,
 		ScopeKey:   synctypes.SKService,
 		IssueType:  synctypes.IssueServiceOutage,
@@ -4214,20 +4234,18 @@ func TestE2E_DrainExit_StopsTimer(t *testing.T) {
 
 	// Verify timer is armed.
 	require.Eventually(t, func() bool {
-		eng.watch.trialMu.Lock()
-		defer eng.watch.trialMu.Unlock()
 		return eng.watch.trialTimer != nil
 	}, time.Second, time.Millisecond)
 
 	// Close results channel → drainWorkerResults returns → defer stopTrialTimer.
 	close(results)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.Fail(t, "drain loop did not exit after results channel close")
+	}
 
-	// Timer should be cleared.
-	require.Eventually(t, func() bool {
-		eng.watch.trialMu.Lock()
-		defer eng.watch.trialMu.Unlock()
-		return eng.watch.trialTimer == nil
-	}, time.Second, time.Millisecond)
+	assert.Nil(t, eng.watch.trialTimer, "drain exit should stop and clear the trial timer")
 }
 
 // ---------------------------------------------------------------------------
@@ -4261,7 +4279,7 @@ func TestTrialTimer_QuotaStartsAt5s(t *testing.T) {
 }
 
 // TestTrialTimer_BackoffCapsAt5m is covered by
-// TestProcessTrialResultV2_Failure_CapsAt5m which uses syncdispatch.ScopeGate.
+// TestProcessTrialResultV2_Failure_CapsAt5m which uses active persisted scopes.
 // Removed: old test used held-queue mechanism.
 
 // Validates: R-2.10.7
@@ -4286,7 +4304,7 @@ func TestTrialTimer_RateLimited_StartsAtRetryAfter(t *testing.T) {
 }
 
 // TestTrialTimer_RateLimited_BlocksAllActionTypes is covered by
-// TestScopeGate_Admit_Blocked and related tests in scope_gate_test.go.
+// scope_gate_test.go covers the pure active-scope helper functions directly.
 // Removed: old test used held-queue mechanism.
 
 // Validates: R-2.10.8
@@ -4500,7 +4518,7 @@ func TestFeedScopeDetection_LocalErrorIgnored(t *testing.T) {
 
 	// Feed several local errors (HTTPStatus=0) — should not trigger a scope block.
 	for i := range 10 {
-		eng.feedScopeDetection(&synctypes.WorkerResult{
+		eng.feedScopeDetection(t.Context(), &synctypes.WorkerResult{
 			Path:       fmt.Sprintf("file-%d.txt", i),
 			ActionType: synctypes.ActionDownload,
 			HTTPStatus: 0, // local error — no HTTP status
@@ -4510,9 +4528,9 @@ func TestFeedScopeDetection_LocalErrorIgnored(t *testing.T) {
 	}
 
 	// No scope block should have been created.
-	assert.False(t, eng.watch.scopeGate.IsScopeBlocked(synctypes.SKService),
+	assert.False(t, isTestScopeBlocked(eng, synctypes.SKService),
 		"local errors with HTTPStatus=0 must not trigger service scope")
-	assert.False(t, eng.watch.scopeGate.IsScopeBlocked(synctypes.SKThrottleAccount),
+	assert.False(t, isTestScopeBlocked(eng, synctypes.SKThrottleAccount),
 		"local errors with HTTPStatus=0 must not trigger throttle scope")
 }
 
@@ -4521,17 +4539,16 @@ func TestIsObservationSuppressed_Throttled(t *testing.T) {
 	t.Parallel()
 
 	eng := newPhase4Engine(t)
-	ctx := t.Context()
 
 	// Initially not suppressed.
 	assert.False(t, eng.isObservationSuppressed())
 
 	// After throttle block, should be suppressed.
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, synctypes.SKThrottleAccount, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:           synctypes.SKThrottleAccount,
 		IssueType:     synctypes.IssueRateLimited,
 		TrialInterval: 30 * time.Second,
-	}))
+	})
 	assert.True(t, eng.isObservationSuppressed())
 }
 
@@ -4540,19 +4557,18 @@ func TestIsObservationSuppressed_ServiceOutage(t *testing.T) {
 	t.Parallel()
 
 	eng := newPhase4Engine(t)
-	ctx := t.Context()
 
 	// Service outage should also suppress.
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, synctypes.SKService, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:           synctypes.SKService,
 		IssueType:     synctypes.IssueServiceOutage,
 		TrialInterval: 60 * time.Second,
-	}))
+	})
 	assert.True(t, eng.isObservationSuppressed())
 }
 
 // Validates: R-2.10.30
-func TestIsObservationSuppressed_NilScopeGate(t *testing.T) {
+func TestIsObservationSuppressed_OneShotMode_NoWatchState(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
@@ -4567,14 +4583,13 @@ func TestIsObservationSuppressed_QuotaDoesNotSuppress(t *testing.T) {
 	t.Parallel()
 
 	eng := newPhase4Engine(t)
-	ctx := t.Context()
 
 	// Quota scope block should NOT suppress observation (R-2.10.31).
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, synctypes.SKQuotaOwn, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:           synctypes.SKQuotaOwn,
 		IssueType:     synctypes.IssueQuotaExceeded,
 		TrialInterval: 5 * time.Minute,
-	}))
+	})
 	assert.False(t, eng.isObservationSuppressed())
 }
 
@@ -4708,8 +4723,10 @@ func TestLogFailureSummary_NoErrors(t *testing.T) {
 func TestRetryPipeline_TransientFailure_DrainLoopRetrier(t *testing.T) {
 	t.Parallel()
 
-	results, _, cancel, eng, buf := startDrainLoop(t)
+	results, ready, done, cancel, eng, buf := startDrainLoop(t)
 	defer cancel()
+	_ = ready
+	_ = done
 
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
@@ -4773,8 +4790,11 @@ func TestRetryPipeline_TransientFailure_DrainLoopRetrier(t *testing.T) {
 func TestDrainLoop_Success_ClearsSyncFailure(t *testing.T) {
 	t.Parallel()
 
-	results, _, cancel, eng, _ := startDrainLoop(t)
+	results, ready, done, cancel, eng, buf := startDrainLoop(t)
 	defer cancel()
+	_ = ready
+	_ = done
+	_ = buf
 
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
@@ -4956,7 +4976,6 @@ func TestBootstrapSync_NoChanges(t *testing.T) {
 	}
 	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
 	eng.readyCh = make(chan *synctypes.TrackedAction, 1024)
-	eng.watch.scopeGate = syncdispatch.NewScopeGate(eng.baseline, eng.logger)
 	eng.watch.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
 
 	neverDone := make(chan struct{})
@@ -4965,9 +4984,10 @@ func TestBootstrapSync_NoChanges(t *testing.T) {
 	defer pool.Stop()
 
 	pipe := &watchPipeline{
-		safety: synctypes.DefaultSafetyConfig(),
-		pool:   pool,
-		mode:   synctypes.SyncBidirectional,
+		safety:  synctypes.DefaultSafetyConfig(),
+		pool:    pool,
+		results: pool.Results(),
+		mode:    synctypes.SyncBidirectional,
 	}
 
 	// No changes expected — bootstrapSync should return nil.
@@ -5006,7 +5026,6 @@ func TestBootstrapSync_WithChanges(t *testing.T) {
 	}
 	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
 	eng.readyCh = make(chan *synctypes.TrackedAction, 1024)
-	eng.watch.scopeGate = syncdispatch.NewScopeGate(eng.baseline, eng.logger)
 	eng.watch.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
 
 	neverDone := make(chan struct{})
@@ -5015,9 +5034,10 @@ func TestBootstrapSync_WithChanges(t *testing.T) {
 	defer pool.Stop()
 
 	pipe := &watchPipeline{
-		safety: synctypes.DefaultSafetyConfig(),
-		pool:   pool,
-		mode:   synctypes.SyncDownloadOnly,
+		safety:  synctypes.DefaultSafetyConfig(),
+		pool:    pool,
+		results: pool.Results(),
+		mode:    synctypes.SyncDownloadOnly,
 	}
 
 	err := eng.bootstrapSync(ctx, synctypes.SyncDownloadOnly, pipe)

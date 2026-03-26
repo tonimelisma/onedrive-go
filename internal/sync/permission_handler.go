@@ -199,14 +199,17 @@ func (ph *PermissionHandler) recordRemotePermissionBoundary(
 		return false
 	}
 
-	if ph.scopeMgr.isWatchMode() {
-		// Remote permission recovery is recheck-driven, not trial-driven, so
-		// the block has zero NextTrialAt and only acts as recursive admission control.
-		ph.scopeMgr.setScopeBlock(scopeKey, &synctypes.ScopeBlock{
-			Key:       scopeKey,
-			IssueType: synctypes.IssuePermissionDenied,
-			BlockedAt: ph.nowFn(),
-		})
+	// Remote permission recovery is recheck-driven, not trial-driven, so the
+	// block has zero NextTrialAt and only acts as recursive admission control.
+	if err := ph.scopeMgr.activateScope(ctx, synctypes.ScopeBlock{
+		Key:       scopeKey,
+		IssueType: synctypes.IssuePermissionDenied,
+		BlockedAt: ph.nowFn(),
+	}); err != nil {
+		ph.logger.Warn("handle403: failed to activate remote permission scope",
+			slog.String("scope_key", scopeKey.String()),
+			slog.String("error", err.Error()),
+		)
 	}
 
 	ph.logger.Info("handle403: read-only remote boundary detected, writes suppressed recursively",
@@ -298,12 +301,15 @@ func (ph *PermissionHandler) recheckPermissions(ctx context.Context, bl *synctyp
 			continue
 		}
 
-		if ph.scopeMgr.isWatchMode() {
-			ph.scopeMgr.setScopeBlock(issue.ScopeKey, &synctypes.ScopeBlock{
-				Key:       issue.ScopeKey,
-				IssueType: synctypes.IssuePermissionDenied,
-				BlockedAt: ph.nowFn(),
-			})
+		if err := ph.scopeMgr.activateScope(ctx, synctypes.ScopeBlock{
+			Key:       issue.ScopeKey,
+			IssueType: synctypes.IssuePermissionDenied,
+			BlockedAt: ph.nowFn(),
+		}); err != nil {
+			ph.logger.Warn("recheckPermissions: failed to refresh remote permission scope",
+				slog.String("scope_key", issue.ScopeKey.String()),
+				slog.String("error", err.Error()),
+			)
 		}
 	}
 }
@@ -313,17 +319,22 @@ func (ph *PermissionHandler) releaseRemotePermissionBoundary(
 	issue *synctypes.SyncFailureRow,
 	reason string,
 ) {
-	if clearErr := ph.baseline.ClearSyncFailure(ctx, issue.Path, issue.DriveID); clearErr != nil {
-		ph.logger.Warn("recheckPermissions: failed to clear failure",
-			slog.String("path", issue.Path),
-			slog.String("error", clearErr.Error()),
+	if issue.ScopeKey.IsZero() {
+		if clearErr := ph.baseline.ClearSyncFailure(ctx, issue.Path, issue.DriveID); clearErr != nil {
+			ph.logger.Warn("recheckPermissions: failed to clear failure",
+				slog.String("path", issue.Path),
+				slog.String("error", clearErr.Error()),
+			)
+
+			return
+		}
+	} else if err := ph.scopeMgr.releaseScope(ctx, issue.ScopeKey); err != nil {
+		ph.logger.Warn("recheckPermissions: failed to release scope",
+			slog.String("scope_key", issue.ScopeKey.String()),
+			slog.String("error", err.Error()),
 		)
 
 		return
-	}
-
-	if ph.scopeMgr.isWatchMode() {
-		ph.scopeMgr.onScopeClear(ctx, issue.ScopeKey)
 	}
 
 	ph.logger.Info(reason,
@@ -440,11 +451,16 @@ func (ph *PermissionHandler) handleLocalPermission(ctx context.Context, r *synct
 
 	// Create a scope block — no trials for permission blocks (rechecked per-pass
 	// by recheckLocalPermissions instead).
-	ph.scopeMgr.setScopeBlock(scopeKey, &synctypes.ScopeBlock{
+	if err := ph.scopeMgr.activateScope(ctx, synctypes.ScopeBlock{
 		Key:       scopeKey,
 		IssueType: synctypes.IssueLocalPermissionDenied,
 		BlockedAt: ph.nowFn(),
-	})
+	}); err != nil {
+		ph.logger.Warn("handleLocalPermission: failed to activate directory scope",
+			slog.String("scope_key", scopeKey.String()),
+			slog.String("error", err.Error()),
+		)
+	}
 
 	ph.logger.Info("local permission denied: directory blocked",
 		slog.String("boundary", relBoundary),
@@ -477,18 +493,13 @@ func (ph *PermissionHandler) recheckLocalPermissions(ctx context.Context) {
 			continue
 		}
 
-		// Directory is accessible again — clear the failure and release the scope.
-		if clearErr := ph.baseline.ClearSyncFailure(ctx, issue.Path, issue.DriveID); clearErr != nil {
-			ph.logger.Warn("recheckLocalPermissions: failed to clear failure",
-				slog.String("path", issue.Path),
-				slog.String("error", clearErr.Error()),
+		if err := ph.scopeMgr.releaseScope(ctx, issue.ScopeKey); err != nil {
+			ph.logger.Warn("recheckLocalPermissions: failed to release scope",
+				slog.String("scope_key", issue.ScopeKey.String()),
+				slog.String("error", err.Error()),
 			)
 
 			continue
-		}
-
-		if ph.scopeMgr.isWatchMode() {
-			ph.scopeMgr.onScopeClear(ctx, issue.ScopeKey)
 		}
 
 		ph.logger.Info("local permission restored, clearing denial",
@@ -536,17 +547,22 @@ func (ph *PermissionHandler) clearScannerResolvedPermissions(ctx context.Context
 			continue
 		}
 
-		if clearErr := ph.baseline.ClearSyncFailure(ctx, issue.Path, issue.DriveID); clearErr != nil {
-			ph.logger.Warn("clearScannerResolvedPermissions: failed to clear failure",
-				slog.String("path", issue.Path),
-				slog.String("error", clearErr.Error()),
+		if issue.ScopeKey.IsZero() {
+			if clearErr := ph.baseline.ClearSyncFailure(ctx, issue.Path, issue.DriveID); clearErr != nil {
+				ph.logger.Warn("clearScannerResolvedPermissions: failed to clear failure",
+					slog.String("path", issue.Path),
+					slog.String("error", clearErr.Error()),
+				)
+
+				continue
+			}
+		} else if err := ph.scopeMgr.releaseScope(ctx, issue.ScopeKey); err != nil {
+			ph.logger.Warn("clearScannerResolvedPermissions: failed to release scope",
+				slog.String("scope_key", issue.ScopeKey.String()),
+				slog.String("error", err.Error()),
 			)
 
 			continue
-		}
-
-		if !issue.ScopeKey.IsZero() && ph.scopeMgr.isWatchMode() {
-			ph.scopeMgr.onScopeClear(ctx, issue.ScopeKey)
 		}
 
 		ph.logger.Info("scanner resolved permission denial",
