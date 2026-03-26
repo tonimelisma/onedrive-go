@@ -1,0 +1,49 @@
+name: review-gate
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+concurrency:
+  group: review-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  review-gate:
+    name: review-gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Detect bootstrap base branch
+        id: bootstrap
+        run: |
+          if [ ! -d cmd/review-gate ]; then
+            echo "should_skip=true" >>"$GITHUB_OUTPUT"
+            echo "Bootstrap PR: base branch does not contain review-gate yet; skipping."
+            exit 0
+          fi
+
+          echo "should_skip=false" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/setup-go@v5
+        if: steps.bootstrap.outputs.should_skip != 'true'
+        with:
+          go-version-file: go.mod
+
+      - name: Run review gate
+        if: steps.bootstrap.outputs.should_skip != 'true'
+        env:
+          CODEX_REVIEW_LOGIN: ${{ vars.CODEX_REVIEW_LOGIN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: go run ./cmd/review-gate
