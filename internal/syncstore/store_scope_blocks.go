@@ -1,14 +1,14 @@
 // store_scope_blocks.go — Persistence for scope blocks (scope_blocks table).
 //
-// ScopeGate uses ScopeBlockStore for write-through caching: the in-memory
-// map is the hot path for reads (Admit), while all mutations persist to
-// SQLite synchronously. On startup, LoadFromStore reads all rows into memory.
+// The engine persists active scope rows here for restart/recovery. Watch mode
+// loads them into its single-owner runtime working set at startup; there is no
+// separate write-through cache subsystem in syncdispatch.
 //
 // The scope_blocks table is tiny (typically 0-5 rows). No batch optimization
 // needed — single-row operations are sufficient.
 //
 // Related files:
-//   - scope_gate.go:    ScopeGate type, ScopeBlock struct, ScopeBlockStore interface
+//   - scope_gate.go:    stateless active-scope helper functions
 //   - scope.go:         ScopeKey, ParseScopeKey, ScopeKey.String()
 //   - migrations/:      00003_scope_blocks.sql creates the table
 package syncstore
@@ -26,6 +26,11 @@ import (
 // both insert and update. All fields are serialized: ScopeKey.String() for
 // the key, UnixNano for timestamps, nanoseconds for Duration.
 func (m *SyncStore) UpsertScopeBlock(ctx context.Context, block *synctypes.ScopeBlock) error {
+	nextTrialAtNano := int64(0)
+	if !block.NextTrialAt.IsZero() {
+		nextTrialAtNano = block.NextTrialAt.UnixNano()
+	}
+
 	_, err := m.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO scope_blocks
 			(scope_key, issue_type, blocked_at, trial_interval, next_trial_at, trial_count)
@@ -34,7 +39,7 @@ func (m *SyncStore) UpsertScopeBlock(ctx context.Context, block *synctypes.Scope
 		block.IssueType,
 		block.BlockedAt.UnixNano(),
 		int64(block.TrialInterval),
-		block.NextTrialAt.UnixNano(),
+		nextTrialAtNano,
 		block.TrialCount,
 	)
 	if err != nil {
@@ -58,9 +63,9 @@ func (m *SyncStore) DeleteScopeBlock(ctx context.Context, key synctypes.ScopeKey
 	return nil
 }
 
-// ListScopeBlocks returns all persisted scope blocks. Used by ScopeGate at
-// startup to populate the in-memory cache. Returns an empty slice (not nil)
-// if no rows exist.
+// ListScopeBlocks returns all persisted scope blocks. Used at startup to
+// populate the engine-owned active scope working set. Returns an empty slice
+// (not nil) if no rows exist.
 func (m *SyncStore) ListScopeBlocks(ctx context.Context) ([]*synctypes.ScopeBlock, error) {
 	rows, err := m.db.QueryContext(ctx,
 		`SELECT scope_key, issue_type, blocked_at, trial_interval, next_trial_at, trial_count
@@ -89,12 +94,17 @@ func (m *SyncStore) ListScopeBlocks(ctx context.Context) ([]*synctypes.ScopeBloc
 			return nil, fmt.Errorf("sync: scanning scope block row: %w", scanErr)
 		}
 
+		nextTrialAt := time.Time{}
+		if nextTrialNano != 0 {
+			nextTrialAt = time.Unix(0, nextTrialNano).UTC()
+		}
+
 		block := &synctypes.ScopeBlock{
 			Key:           synctypes.ParseScopeKey(wireKey),
 			IssueType:     issueType,
 			BlockedAt:     time.Unix(0, blockedAtNano).UTC(),
 			TrialInterval: time.Duration(intervalNano),
-			NextTrialAt:   time.Unix(0, nextTrialNano).UTC(),
+			NextTrialAt:   nextTrialAt,
 			TrialCount:    trialCount,
 		}
 		result = append(result, block)

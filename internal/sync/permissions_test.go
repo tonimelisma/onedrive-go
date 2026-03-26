@@ -194,10 +194,10 @@ func TestHandle403_ReadOnlyFolder_RecordsIssueAtBoundary(t *testing.T) {
 	assert.Equal(t, "Shared/TeamDocs/sub", issues[0].Path)
 	scopeKey := synctypes.SKPermRemote("Shared/TeamDocs/sub")
 	assert.Equal(t, scopeKey, issues[0].ScopeKey, "boundary issue should be scoped to the recursive remote permission boundary")
-	assert.True(t, eng.watch.scopeGate.IsScopeBlocked(scopeKey), "watch mode should create a recursive remote permission scope")
+	assert.True(t, isTestScopeBlocked(eng, scopeKey), "watch mode should create a recursive remote permission scope")
 
-	block, ok := eng.watch.scopeGate.GetScopeBlock(scopeKey)
-	require.True(t, ok, "remote permission scope should be queryable from scope gate")
+	block, ok := getTestScopeBlock(eng, scopeKey)
+	require.True(t, ok, "remote permission scope should be queryable from the active-scope working set")
 	assert.Equal(t, synctypes.IssuePermissionDenied, block.IssueType)
 	assert.True(t, block.NextTrialAt.IsZero(), "remote permission scopes should rely on recheckPermissions, not trial dispatch")
 
@@ -238,10 +238,10 @@ func TestHandle403_ReadOnlyFolder_RecordsIssueAtBoundary(t *testing.T) {
 		},
 	}
 
-	assert.Equal(t, scopeKey, eng.watch.scopeGate.Admit(nestedUpload), "all uploads under the denied boundary should be blocked recursively")
-	assert.Equal(t, scopeKey, eng.watch.scopeGate.Admit(nestedDelete), "all remote deletes under the denied boundary should be blocked recursively")
-	assert.True(t, eng.watch.scopeGate.Admit(nestedDownload).IsZero(), "downloads must remain allowed in download-only mode")
-	assert.True(t, eng.watch.scopeGate.Admit(siblingUpload).IsZero(), "siblings outside the denied boundary must remain admissible")
+	assert.Equal(t, scopeKey, eng.activeBlockingScope(nestedUpload), "all uploads under the denied boundary should be blocked recursively")
+	assert.Equal(t, scopeKey, eng.activeBlockingScope(nestedDelete), "all remote deletes under the denied boundary should be blocked recursively")
+	assert.True(t, eng.activeBlockingScope(nestedDownload).IsZero(), "downloads must remain allowed in download-only mode")
+	assert.True(t, eng.activeBlockingScope(siblingUpload).IsZero(), "siblings outside the denied boundary must remain admissible")
 }
 
 // Validates: R-2.14.1
@@ -419,16 +419,17 @@ func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "Shared/TeamDocs/sub",
 		Direction:  synctypes.DirectionUpload,
+		Category:   synctypes.CategoryActionable,
 		IssueType:  synctypes.IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
 		HTTPStatus: http.StatusForbidden,
 		ScopeKey:   scopeKey,
 	}, nil))
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, scopeKey, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:       scopeKey,
 		IssueType: synctypes.IssuePermissionDenied,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
-	}))
+	})
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "Shared/TeamDocs/sub/file.txt",
 		DriveID:   eng.driveID,
@@ -449,7 +450,7 @@ func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 	after, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
 	require.NoError(t, err)
 	assert.Empty(t, after)
-	assert.False(t, eng.watch.scopeGate.IsScopeBlocked(scopeKey), "grant detection should release the recursive remote scope immediately")
+	assert.False(t, isTestScopeBlocked(eng, scopeKey), "grant detection should release the recursive remote scope immediately")
 
 	retryable, err := eng.baseline.ListSyncFailuresForRetry(ctx, eng.nowFn())
 	require.NoError(t, err)
@@ -462,7 +463,7 @@ func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 		require.Fail(t, "recheckPermissions should signal retryTimerCh when a remote scope clears")
 	}
 
-	admitted := eng.watch.scopeGate.Admit(&synctypes.TrackedAction{
+	admitted := eng.activeBlockingScope(&synctypes.TrackedAction{
 		ID: 10,
 		Action: synctypes.Action{
 			Type:    synctypes.ActionUpload,
@@ -550,16 +551,17 @@ func TestRecheckPermissions_APIFailure_FailsOpenAndReleasesScope(t *testing.T) {
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "Shared/TeamDocs/sub",
 		Direction:  synctypes.DirectionUpload,
+		Category:   synctypes.CategoryActionable,
 		IssueType:  synctypes.IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
 		HTTPStatus: http.StatusForbidden,
 		ScopeKey:   scopeKey,
 	}, nil))
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, scopeKey, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:       scopeKey,
 		IssueType: synctypes.IssuePermissionDenied,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
-	}))
+	})
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "Shared/TeamDocs/sub/file.txt",
 		DriveID:   eng.driveID,
@@ -574,7 +576,7 @@ func TestRecheckPermissions_APIFailure_FailsOpenAndReleasesScope(t *testing.T) {
 	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
 	require.NoError(t, err)
 	assert.Empty(t, issues, "inconclusive recheck must fail open rather than keep suppressing writes")
-	assert.False(t, eng.watch.scopeGate.IsScopeBlocked(scopeKey), "fail-open recheck should release the remote scope")
+	assert.False(t, isTestScopeBlocked(eng, scopeKey), "fail-open recheck should release the remote scope")
 
 	retryable, err := eng.baseline.ListSyncFailuresForRetry(ctx, eng.nowFn())
 	require.NoError(t, err)
@@ -614,6 +616,7 @@ func TestRecheckPermissions_StillDenied_NoChange(t *testing.T) {
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "Shared/TeamDocs/sub",
 		Direction:  synctypes.DirectionUpload,
+		Category:   synctypes.CategoryActionable,
 		IssueType:  synctypes.IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
 		HTTPStatus: http.StatusForbidden,
@@ -627,7 +630,7 @@ func TestRecheckPermissions_StillDenied_NoChange(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, after, 1)
 	assert.Equal(t, []string{"Shared/TeamDocs/sub"}, eng.permHandler.DeniedPrefixes(ctx))
-	assert.True(t, eng.watch.scopeGate.IsScopeBlocked(scopeKey), "still-denied remote boundary should remain blocked after recheck")
+	assert.True(t, isTestScopeBlocked(eng, scopeKey), "still-denied remote boundary should remain blocked after recheck")
 }
 
 func TestRecheckPermissions_NoIssues_NoAPICalls(t *testing.T) {
@@ -661,6 +664,7 @@ func TestRecheckPermissions_UnresolvableIssues_FailOpenClearsStaleBoundaries(t *
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "Shared/NoShortcut/sub",
 		Direction:  synctypes.DirectionUpload,
+		Category:   synctypes.CategoryActionable,
 		IssueType:  synctypes.IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
 		HTTPStatus: http.StatusForbidden,
@@ -669,6 +673,7 @@ func TestRecheckPermissions_UnresolvableIssues_FailOpenClearsStaleBoundaries(t *
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "Shared/Other/locked",
 		Direction:  synctypes.DirectionUpload,
+		Category:   synctypes.CategoryActionable,
 		IssueType:  synctypes.IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
 		HTTPStatus: http.StatusForbidden,
@@ -706,6 +711,7 @@ func TestRecheckPermissions_UnresolvedItemID_FailOpenClearsStaleBoundary(t *test
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "Shared/TeamDocs/missing",
 		Direction:  synctypes.DirectionUpload,
+		Category:   synctypes.CategoryActionable,
 		IssueType:  synctypes.IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
 		HTTPStatus: http.StatusForbidden,
@@ -732,6 +738,7 @@ func TestDeniedPrefixes_RemoteScopesOnly(t *testing.T) {
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "Shared/TeamDocs",
 		Direction:  synctypes.DirectionUpload,
+		Category:   synctypes.CategoryActionable,
 		IssueType:  synctypes.IssuePermissionDenied,
 		ErrMsg:     "read-only",
 		HTTPStatus: http.StatusForbidden,
@@ -740,6 +747,7 @@ func TestDeniedPrefixes_RemoteScopesOnly(t *testing.T) {
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "file.txt",
 		Direction:  synctypes.DirectionUpload,
+		Category:   synctypes.CategoryActionable,
 		IssueType:  synctypes.IssuePermissionDenied,
 		ErrMsg:     "single-file 403",
 		HTTPStatus: http.StatusForbidden,
@@ -877,6 +885,7 @@ func TestRecheckPermissions_StillDenied_KeepsDeniedPrefix(t *testing.T) {
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "Shared/TeamDocs/sub",
 		Direction:  synctypes.DirectionUpload,
+		Category:   synctypes.CategoryActionable,
 		IssueType:  synctypes.IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
 		HTTPStatus: http.StatusForbidden,
@@ -890,7 +899,7 @@ func TestRecheckPermissions_StillDenied_KeepsDeniedPrefix(t *testing.T) {
 	require.Len(t, remaining, 1)
 	assert.Equal(t, scopeKey, remaining[0].ScopeKey)
 	assert.Equal(t, []string{"Shared/TeamDocs/sub"}, eng.permHandler.DeniedPrefixes(ctx))
-	assert.True(t, eng.watch.scopeGate.IsScopeBlocked(scopeKey), "watch-mode recheck should keep the recursive remote scope active while still denied")
+	assert.True(t, isTestScopeBlocked(eng, scopeKey), "watch-mode recheck should keep the recursive remote scope active while still denied")
 }
 
 // ---------------------------------------------------------------------------
@@ -1051,22 +1060,24 @@ func TestRecheckPermissions_MultipleIssues_PartialResolution(t *testing.T) {
 	// Record two permission_denied issues.
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "Shared/TeamDocs/folderA", Direction: synctypes.DirectionUpload,
+		Category:  synctypes.CategoryActionable,
 		IssueType: synctypes.IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: http.StatusForbidden, ScopeKey: scopeA,
 	}, nil))
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "Shared/TeamDocs/folderB", Direction: synctypes.DirectionUpload,
+		Category:  synctypes.CategoryActionable,
 		IssueType: synctypes.IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: http.StatusForbidden, ScopeKey: scopeB,
 	}, nil))
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, scopeA, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:       scopeA,
 		IssueType: synctypes.IssuePermissionDenied,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
-	}))
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, scopeB, &synctypes.ScopeBlock{
+	})
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:       scopeB,
 		IssueType: synctypes.IssuePermissionDenied,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
-	}))
+	})
 
 	eng.permHandler.recheckPermissions(ctx, bl, shortcuts)
 
@@ -1077,8 +1088,8 @@ func TestRecheckPermissions_MultipleIssues_PartialResolution(t *testing.T) {
 	require.Len(t, remaining, 1)
 	assert.Equal(t, "Shared/TeamDocs/folderB", remaining[0].Path)
 	assert.Equal(t, []string{"Shared/TeamDocs/folderB"}, eng.permHandler.DeniedPrefixes(ctx))
-	assert.False(t, eng.watch.scopeGate.IsScopeBlocked(scopeA), "resolved boundary should be released")
-	assert.True(t, eng.watch.scopeGate.IsScopeBlocked(scopeB), "still-denied boundary should remain blocked")
+	assert.False(t, isTestScopeBlocked(eng, scopeA), "resolved boundary should be released")
+	assert.True(t, isTestScopeBlocked(eng, scopeB), "still-denied boundary should remain blocked")
 }
 
 // ---------------------------------------------------------------------------
@@ -1107,7 +1118,7 @@ func TestHandleLocalPermission_DirectoryLevel(t *testing.T) {
 		_ = os.Chmod(deniedDir, 0o755)
 	})
 
-	// Set up scope gate (needed for setScopeBlock).
+	// Set up watch state so the test can install an active scope block.
 	newTestWatchState(t, eng)
 
 	// Simulate a worker result with os.ErrPermission.
@@ -1128,7 +1139,7 @@ func TestHandleLocalPermission_DirectoryLevel(t *testing.T) {
 	assert.Equal(t, synctypes.SKPermDir("Private"), issues[0].ScopeKey)
 
 	// Should have created a scope block.
-	assert.True(t, eng.watch.scopeGate.IsScopeBlocked(synctypes.SKPermDir("Private")), "should create a scope block for the denied directory")
+	assert.True(t, isTestScopeBlocked(eng, synctypes.SKPermDir("Private")), "should create a scope block for the denied directory")
 }
 
 // Validates: R-2.10.12
@@ -1176,7 +1187,7 @@ func TestRecheckLocalPermissions_Restored(t *testing.T) {
 	deniedDir := filepath.Join(syncRoot, "Private")
 	require.NoError(t, os.MkdirAll(deniedDir, 0o755))
 
-	// Set up scope gate.
+	// Set up watch state so the test can install an active scope block.
 	newTestWatchState(t, eng)
 
 	scopeKey := synctypes.SKPermDir("Private")
@@ -1192,9 +1203,9 @@ func TestRecheckLocalPermissions_Restored(t *testing.T) {
 		ScopeKey:  scopeKey,
 	}, nil))
 
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, scopeKey, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key: scopeKey, IssueType: synctypes.IssueLocalPermissionDenied,
-	}))
+	})
 
 	// Directory is now accessible (we didn't chmod 000 it).
 	eng.permHandler.recheckLocalPermissions(ctx)
@@ -1205,7 +1216,7 @@ func TestRecheckLocalPermissions_Restored(t *testing.T) {
 	assert.Empty(t, issues, "failure should be cleared when directory is accessible")
 
 	// Scope block should be released.
-	assert.False(t, eng.watch.scopeGate.IsScopeBlocked(scopeKey), "scope block should be released when directory is accessible")
+	assert.False(t, isTestScopeBlocked(eng, scopeKey), "scope block should be released when directory is accessible")
 }
 
 // Validates: R-2.10.13
@@ -1242,9 +1253,9 @@ func TestRecheckLocalPermissions_StillDenied(t *testing.T) {
 		ScopeKey:  scopeKey,
 	}, nil))
 
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, scopeKey, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key: scopeKey, IssueType: synctypes.IssueLocalPermissionDenied,
-	}))
+	})
 
 	eng.permHandler.recheckLocalPermissions(ctx)
 
@@ -1254,7 +1265,7 @@ func TestRecheckLocalPermissions_StillDenied(t *testing.T) {
 	assert.Len(t, issues, 1, "failure should remain when directory is still inaccessible")
 
 	// Scope block should still be active.
-	assert.True(t, eng.watch.scopeGate.IsScopeBlocked(scopeKey), "scope block should remain when directory is still inaccessible")
+	assert.True(t, isTestScopeBlocked(eng, scopeKey), "scope block should remain when directory is still inaccessible")
 }
 
 // ---------------------------------------------------------------------------
@@ -1311,9 +1322,9 @@ func TestClearScannerResolvedPermissions_DirLevel(t *testing.T) {
 		ScopeKey:  scopeKey,
 	}, nil))
 
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, scopeKey, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key: scopeKey, IssueType: synctypes.IssueLocalPermissionDenied,
-	}))
+	})
 
 	// Scanner observes a file under the blocked directory — proof that the
 	// directory is now traversable.
@@ -1324,7 +1335,7 @@ func TestClearScannerResolvedPermissions_DirLevel(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, issues, "dir-level failure should be cleared when scanner observes a child path")
 
-	assert.False(t, eng.watch.scopeGate.IsScopeBlocked(scopeKey), "scope block should be released when scanner proves directory is accessible")
+	assert.False(t, isTestScopeBlocked(eng, scopeKey), "scope block should be released when scanner proves directory is accessible")
 }
 
 // Validates: R-2.10.10
@@ -1349,9 +1360,9 @@ func TestClearScannerResolvedPermissions_NoFalsePositives(t *testing.T) {
 		ScopeKey:  scopeKey,
 	}, nil))
 
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, scopeKey, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key: scopeKey, IssueType: synctypes.IssueLocalPermissionDenied,
-	}))
+	})
 
 	// Scanner observes an unrelated path — should NOT clear the permission failure.
 	observed := map[string]bool{"Public/readme.txt": true}
@@ -1361,7 +1372,7 @@ func TestClearScannerResolvedPermissions_NoFalsePositives(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, issues, 1, "failure should remain when scanner didn't observe the blocked path")
 
-	assert.True(t, eng.watch.scopeGate.IsScopeBlocked(scopeKey), "scope block should remain when scanner didn't observe the blocked path")
+	assert.True(t, isTestScopeBlocked(eng, scopeKey), "scope block should remain when scanner didn't observe the blocked path")
 }
 
 func TestPathSetFromEvents(t *testing.T) {

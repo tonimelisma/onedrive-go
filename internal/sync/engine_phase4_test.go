@@ -18,8 +18,9 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
-// newPhase4Engine creates a minimal engine with syncdispatch.DepGraph + syncdispatch.ScopeGate for
-// testing Phase 4 methods. Uses a real syncstore.SyncStore (in-memory SQLite).
+// newPhase4Engine creates a minimal engine with syncdispatch.DepGraph plus the
+// watch-mode active-scope working set for testing Phase 4 methods. Uses a real
+// syncstore.SyncStore (in-memory SQLite).
 func newPhase4Engine(t *testing.T) *Engine {
 	t.Helper()
 
@@ -115,11 +116,11 @@ func TestEngine_OnScopeClear(t *testing.T) {
 	sk := synctypes.SKQuotaOwn
 
 	// Create a scope block.
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, sk, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:       sk,
 		IssueType: synctypes.IssueQuotaExceeded,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
-	}))
+	})
 
 	// Create scope-blocked failures.
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
@@ -135,7 +136,7 @@ func TestEngine_OnScopeClear(t *testing.T) {
 	eng.onScopeClear(ctx, sk)
 
 	// Scope block should be gone.
-	assert.False(t, eng.watch.scopeGate.IsScopeBlocked(sk))
+	assert.False(t, isTestScopeBlocked(eng, sk))
 
 	// Failures should now be retryable.
 	now := eng.nowFn()
@@ -152,11 +153,11 @@ func TestEngine_OnScopeClear_SignalsImmediateRetrySweep(t *testing.T) {
 	ctx := context.Background()
 	scopeKey := synctypes.SKQuotaOwn
 
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, scopeKey, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:       scopeKey,
 		IssueType: synctypes.IssueQuotaExceeded,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
-	}))
+	})
 
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "blocked.txt",
@@ -177,10 +178,10 @@ func TestEngine_OnScopeClear_SignalsImmediateRetrySweep(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// admitReady — scope gate checks
+// admitReady — active-scope admission checks
 // ---------------------------------------------------------------------------
 
-func TestEngine_AdmitReady_NoScopeGate(t *testing.T) {
+func TestEngine_AdmitReady_OneShotMode_NoActiveScopes(t *testing.T) {
 	t.Parallel()
 	eng := newPhase4Engine(t)
 	ctx := context.Background()
@@ -196,7 +197,7 @@ func TestEngine_AdmitReady_NoScopeGate(t *testing.T) {
 	ta := eng.depGraph.Add(&action, 1, nil)
 
 	dispatched := eng.admitReady(ctx, []*synctypes.TrackedAction{ta})
-	assert.Len(t, dispatched, 1, "without scope gate, action should pass through")
+	assert.Len(t, dispatched, 1, "without watch-mode active scopes, action should pass through")
 }
 
 func TestEngine_AdmitReady_ScopeBlocked(t *testing.T) {
@@ -205,11 +206,11 @@ func TestEngine_AdmitReady_ScopeBlocked(t *testing.T) {
 	ctx := context.Background()
 
 	// Set up a scope block.
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, synctypes.SKQuotaOwn, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:       synctypes.SKQuotaOwn,
 		IssueType: synctypes.IssueQuotaExceeded,
 		BlockedAt: eng.nowFn(),
-	}))
+	})
 
 	action := synctypes.Action{
 		Type:    synctypes.ActionUpload,
@@ -631,13 +632,13 @@ func TestTrialDispatch_NoCandidates_ClearsScope(t *testing.T) {
 
 	// Set a scope block with NextTrialAt in the past.
 	sk := synctypes.SKQuotaOwn
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, sk, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:           sk,
 		IssueType:     synctypes.IssueQuotaExceeded,
 		BlockedAt:     now.Add(-time.Minute),
 		NextTrialAt:   now.Add(-time.Second),
 		TrialInterval: 10 * time.Second,
-	}))
+	})
 
 	// Do NOT seed any sync_failures for this scope — no candidates.
 	eng.watch.buf = syncobserve.NewBuffer(eng.logger)
@@ -645,7 +646,7 @@ func TestTrialDispatch_NoCandidates_ClearsScope(t *testing.T) {
 	eng.runTrialDispatch(ctx)
 
 	// Scope should be cleared because there are no candidates.
-	assert.False(t, eng.watch.scopeGate.IsScopeBlocked(sk),
+	assert.False(t, isTestScopeBlocked(eng, sk),
 		"scope should be cleared when no trial candidates exist")
 }
 
@@ -1632,13 +1633,13 @@ func TestTrialDispatch_UsesReobserve(t *testing.T) {
 	sk := synctypes.SKQuotaOwn
 
 	// Set up a scope block with NextTrialAt in the past.
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, sk, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:           sk,
 		IssueType:     synctypes.IssueQuotaExceeded,
 		BlockedAt:     now.Add(-time.Minute),
 		NextTrialAt:   now.Add(-time.Second),
 		TrialInterval: 10 * time.Second,
-	}))
+	})
 
 	// Seed a scope-blocked failure.
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
@@ -1651,7 +1652,7 @@ func TestTrialDispatch_UsesReobserve(t *testing.T) {
 	}, nil))
 
 	// Capture the scope block's TrialInterval before dispatch.
-	blockBefore, ok := eng.watch.scopeGate.GetScopeBlock(sk)
+	blockBefore, ok := getTestScopeBlock(eng, sk)
 	require.True(t, ok)
 	intervalBefore := blockBefore.TrialInterval
 
@@ -1668,15 +1669,13 @@ func TestTrialDispatch_UsesReobserve(t *testing.T) {
 	assert.Equal(t, "trial-etag", ev.ETag, "D-9: reobserve should populate etag")
 
 	// trialPending should have an entry.
-	eng.watch.trialMu.Lock()
 	_, hasTrial := eng.watch.trialPending["trial.txt"]
-	eng.watch.trialMu.Unlock()
 
 	assert.True(t, hasTrial, "trial should be registered in trialPending")
 
 	// After successful dispatch, the scope block's TrialInterval should NOT
 	// be extended — interval stays unmutated until the worker result arrives.
-	blockAfter, ok := eng.watch.scopeGate.GetScopeBlock(sk)
+	blockAfter, ok := getTestScopeBlock(eng, sk)
 	require.True(t, ok)
 	assert.Equal(t, intervalBefore, blockAfter.TrialInterval,
 		"trial interval should NOT be extended after successful dispatch")
@@ -1711,13 +1710,13 @@ func TestTrialDispatch_ForwardsRetryAfter(t *testing.T) {
 	sk := synctypes.SKQuotaOwn
 
 	// Set up a scope block with a small TrialInterval and NextTrialAt in the past.
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, sk, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:           sk,
 		IssueType:     synctypes.IssueQuotaExceeded,
 		BlockedAt:     now.Add(-time.Minute),
 		NextTrialAt:   now.Add(-time.Second),
 		TrialInterval: 10 * time.Second,
-	}))
+	})
 
 	// Seed a scope-blocked failure.
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
@@ -1737,7 +1736,7 @@ func TestTrialDispatch_ForwardsRetryAfter(t *testing.T) {
 
 	// The scope block's TrialInterval should now be 90s (from server's
 	// Retry-After), not 20s (doubled from 10s).
-	blockAfter, ok := eng.watch.scopeGate.GetScopeBlock(sk)
+	blockAfter, ok := getTestScopeBlock(eng, sk)
 	require.True(t, ok)
 	assert.Equal(t, 90*time.Second, blockAfter.TrialInterval,
 		"trial interval should use server's Retry-After (90s), not exponential backoff (20s)")
@@ -1751,21 +1750,17 @@ func TestTrialDispatch_CleansStaleTrialPending(t *testing.T) {
 	now := eng.nowFn()
 
 	// Insert a stale trial entry (older than trialPendingTTL).
-	eng.watch.trialMu.Lock()
 	eng.watch.trialPending["stale.txt"] = trialEntry{
 		scopeKey: synctypes.SKQuotaOwn,
 		created:  now.Add(-2 * trialPendingTTL),
 	}
-	eng.watch.trialMu.Unlock()
 
 	eng.watch.buf = syncobserve.NewBuffer(eng.logger)
 
 	// No due scopes needed — stale cleanup runs first in runTrialDispatch.
 	eng.runTrialDispatch(ctx)
 
-	eng.watch.trialMu.Lock()
 	remaining := len(eng.watch.trialPending)
-	eng.watch.trialMu.Unlock()
 
 	assert.Equal(t, 0, remaining,
 		"stale trial entries should be cleaned up")

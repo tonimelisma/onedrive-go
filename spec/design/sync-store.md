@@ -12,7 +12,8 @@ Key operations:
 - `CommitObservation()`: atomically writes `remote_state` rows + advances delta token in a single transaction
 - `CommitOutcome()`: updates baseline + `remote_state` status per action
 - `RecordFailure(ctx, SyncFailureParams, delayFn func(int) time.Duration)`: unified failure recording — always transactional, handles all failure types. For download/delete: atomically transitions `remote_state` and records `sync_failures`. The `delayFn` parameter computes `next_retry_at` from failure count: non-nil → transient (computes delay for retry scheduling), nil → actionable (no `next_retry_at`, no retry). The store does not classify failures or import the retry package — category is set by the engine caller. UPSERT with COALESCE preserves existing `file_size`, `local_hash`, `item_id` on conflict. Auto-resolves `item_id` from `remote_state` for download/delete when not provided
-- `ResetRetryTimesForScope(ctx, scopeKey, now time.Time)`: thundering herd mechanism — sets `next_retry_at` to the provided `now` for all transient `sync_failures` matching `scopeKey` whose `next_retry_at` is in the future. The `now` parameter is caller-injected rather than using `time.Now()` internally, enabling deterministic testing. Called by the engine when a scope trial succeeds, making all backoff-delayed failures immediately retriable (R-2.10.11, R-2.10.15)
+- `ReleaseScope(ctx, scopeKey, now time.Time)`: single transaction for "the scope condition resolved". Deletes the persisted `scope_blocks` row, deletes boundary issue rows for the scope, and marks held transient descendants retryable immediately.
+- `DiscardScope(ctx, scopeKey)`: single transaction for "the blocked subtree/work is gone". Deletes the persisted `scope_blocks` row and all `sync_failures` rows for the scope.
 
 All write methods use optimistic concurrency (WHERE clauses preventing stale updates). Concurrency safety from SQLite WAL mode with 5-second busy timeout. Implements: R-6.3.2 [verified]
 
@@ -67,6 +68,8 @@ Implements: R-2.10.1 [planned], R-2.10.2 [planned], R-2.10.33 [implemented], R-2
 
 **Store method changes**:
 - `RecordFailure(ctx, SyncFailureParams, delayFn func(int) time.Duration)`: unified method replacing both `RecordSyncFailure` (11-param, non-transactional) and `RecordFailureWithStateTransition` (8-param, transactional). Always transactional, handles state transitions for download/delete as a safe no-op for uploads. `SyncFailureParams` struct bundles all inputs with named fields. The `delayFn` parameter decouples the store from the retry package — the engine passes `retry.Reconcile.Delay` for transient failures and nil for actionable/fatal. The store reads existing `failure_count`, increments it, and calls `delayFn(count)` to compute `next_retry_at`. `sync_failures` serves as the active retry queue: rows with non-null `next_retry_at` are swept by the `FailureRetrier`.
+- `ReleaseScope(ctx, scopeKey, now)`: transactional scope release — delete `scope_blocks`, delete boundary issue rows, set held descendants `next_retry_at = now`.
+- `DiscardScope(ctx, scopeKey)`: transactional scope discard — delete `scope_blocks` and all `sync_failures` rows for that scope.
 - `UpsertActionableFailures([]ActionableFailure)`: batch upsert for scanner-detected naming/collision issues.
 - `ClearResolvedActionableFailures(issueType, currentPaths)`: compare current skipped paths against recorded `sync_failures`; delete entries for paths no longer in the skipped set. Uses `strings.Repeat` for SQL placeholder construction.
 - `CommitOutcome`: success cleanup for download/delete/move clears `sync_failures` entries.

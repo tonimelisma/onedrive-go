@@ -207,3 +207,27 @@ func TestSyncStore_ScopeBlock_Roundtrip(t *testing.T) {
 	assert.Equal(t, original.NextTrialAt, got[0].NextTrialAt, "next_trial_at should round-trip with nanosecond precision")
 	assert.Equal(t, original.TrialCount, got[0].TrialCount, "trial_count should round-trip")
 }
+
+// Validates: R-2.10.8
+func TestSyncStore_ScopeBlock_Roundtrip_ZeroNextTrialAt(t *testing.T) {
+	t.Parallel()
+	mgr := newTestStore(t)
+	ctx := context.Background()
+
+	original := &synctypes.ScopeBlock{
+		Key:           synctypes.SKPermRemote("Shared/TeamDocs"),
+		IssueType:     synctypes.IssuePermissionDenied,
+		BlockedAt:     time.Date(2025, 3, 14, 9, 26, 53, 123456789, time.UTC),
+		TrialInterval: 0,
+		NextTrialAt:   time.Time{},
+		TrialCount:    0,
+	}
+
+	require.NoError(t, mgr.UpsertScopeBlock(ctx, original))
+
+	got, err := mgr.ListScopeBlocks(ctx)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.True(t, got[0].NextTrialAt.IsZero(), "zero trial timestamps must round-trip as a true zero time")
+	assert.Equal(t, original.TrialInterval, got[0].TrialInterval)
+}

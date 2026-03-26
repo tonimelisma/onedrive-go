@@ -11,20 +11,25 @@ Wires the sync pipeline: observers → buffer → planner → executor → SyncS
 - `RunOnce()`: one-shot sync. Observes all changes, plans, executes, returns `SyncReport`.
 - `RunWatch()`: continuous sync. Flow: `initWatchInfra → bootstrapSync → startObservers → runWatchLoop`.
 
-Watch mode uses a unified tick loop: filesystem events are debounced by the change buffer, remote changes are polled at `poll_interval` (default 5 minutes). Periodic full reconciliation runs every 24 hours to detect missed delta deletions.
+Watch mode uses a single owner for runtime control state: the watch loop owns
+active scopes, result processing, retry timing, trial timing, and dependent
+admission. Filesystem events are debounced by the change buffer, remote changes
+are polled at `poll_interval` (default 5 minutes), and periodic full
+reconciliation runs every 24 hours to detect missed delta deletions.
 
 ### Unified Bootstrap (Engine Pipeline Redesign Phase 9)
 
 `RunWatch` no longer calls `RunOnce` for its initial sync. Instead:
 
-1. **`initWatchInfra`** creates watchState, DepGraph, ScopeGate, WorkerPool, Buffer, and tickers — but does NOT load baseline, start observers, or launch the drain goroutine.
-2. **`bootstrapSync`** loads baseline, starts the drain goroutine, observes changes, and dispatches them through the same DepGraph/ScopeGate/WorkerPool that the watch loop uses. Blocks until all bootstrap actions complete via `waitForQuiescence`.
+1. **`initWatchInfra`** creates watchState, DepGraph, WorkerPool, Buffer, and tickers, repairs orphaned persisted permission scopes, and loads persisted `scope_blocks` into watch-owned runtime state — but does NOT load baseline or start observers.
+2. **`bootstrapSync`** loads baseline, observes initial changes, and dispatches them through the same single-owner watch loop machinery that steady-state mode uses. It runs until the graph is empty and no more bootstrap work is pending.
 3. **`startObservers`** launches remote and local observers AFTER bootstrap — they see the post-bootstrap baseline.
 4. **`runWatchLoop`** runs the steady-state select loop.
 
-**`waitForQuiescence`** blocks until `DepGraph.WaitForEmpty()` fires, with periodic progress logging (30s interval). No timeout — every dispatched action produces exactly one `WorkerResult`, so the DepGraph always drains. Context cancellation (SIGTERM/SIGINT) handles shutdown. `WaitForEmpty` is a one-shot channel: closed when `len(actions) == 0` after `Complete()` deletes an entry.
-
-**Why not RunOnce?** The old approach created throwaway infrastructure (DepGraph, workers, readyCh) in `RunOnce`, then `initWatchPipeline` created a completely new set. Unified bootstrap creates infrastructure once and reuses it for both the initial sync and steady-state.
+**Why not RunOnce?** The old approach created throwaway infrastructure for the
+initial sync, then created a second watch pipeline. Unified bootstrap creates
+the watch pipeline once and reuses it for both the initial sync and steady
+state.
 
 `RunOnce` remains unchanged as a standalone one-shot entry point.
 
@@ -37,8 +42,8 @@ refactor must preserve the following behavior observed in the current code:
 1. **Bootstrap ordering**: `RunWatch` must finish bootstrap dispatch and
    `waitForQuiescence` before `startObservers` creates either observer.
    Bootstrap actions run through the live watch-mode `DepGraph`, worker pool,
-   drain loop, and scope gate; observer startup is intentionally delayed until
-   that graph reaches zero in-flight actions.
+   and single-owner watch loop; observer startup is intentionally delayed
+   until that graph reaches zero in-flight actions.
 2. **One-shot drain barrier**: `executePlan` must not return its report until
    the worker pool has stopped, the results channel has been closed, and the
    drain goroutine has finished all side effects. The correctness boundary is
@@ -50,17 +55,17 @@ refactor must preserve the following behavior observed in the current code:
    detection, overwrite the blocked scope with a fresh interval, or clear the
    scope through the standard result path.
 4. **Trial success release**: a successful trial must clear the persistent
-   scope block and make held transient failures retryable immediately via
-   `onScopeClear`. `onScopeClear` also triggers an immediate retrier wakeup,
+   scope block and make held transient failures retryable immediately via the
+   scope-release path. Scope release also triggers an immediate retrier wakeup,
    so re-entry happens through the normal retrier/buffer/planner path without
    any new external observation.
 5. **Permission recheck release**: both local permission recovery paths
    (`recheckLocalPermissions` and `clearScannerResolvedPermissions`) and the
    remote Graph-backed `recheckPermissions` path clear the active scope and
-   release held transient failures through `onScopeClear`. Remote permission
-   rechecks fail open: inconclusive API results or stale shortcut boundaries
-   clear the stored denial instead of continuing to suppress writes on stale
-   evidence.
+   release held transient failures through the same scope-release operation.
+   Remote permission rechecks fail open: inconclusive API results or stale
+   shortcut boundaries clear the stored denial instead of continuing to
+   suppress writes on stale evidence.
 6. **Scope-block ordering**: when a worker result creates or reinforces a
    scope block, the engine must record the failing action, cascade-record
    blocked dependents, and apply the block before any dependent action is
@@ -77,10 +82,10 @@ refactor must preserve the following behavior observed in the current code:
 one-shot mode (`RunOnce`), non-nil in watch mode (`RunWatch`). Methods use
 `e.watch != nil` as a single guard replacing individual field nil-checks.
 
-Fields on watchState: scopeGate, scopeState, buf, deleteCounter,
-lastDataVersion, trialPending, trialTimer, trialMu, retryTimer,
-retryTimerCh, remoteObs, localObs, nextActionID, lastPermRecheck,
-lastSummaryTotal.
+Fields on watchState: activeScopes, scopeState, buf, deleteCounter,
+lastDataVersion, trialPending, trialTimer, retryTimer, retryTimerCh,
+remoteObs, localObs, nextActionID, lastPermRecheck, lastSummaryTotal,
+reconcileRunning.
 
 Fields remaining on Engine (used in both modes): depGraph, readyCh,
 trialCh, watchShortcuts, watchShortcutsMu. `watchShortcuts` stays on Engine
@@ -126,17 +131,55 @@ Implements: R-2.10.3 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2
 - **shutdown** → `Complete` (no failure recorded)
 - **fatal** (401) → `recordFailure` with nil delayFn + `Complete`
 
-Scope-blocked actions are not held in memory. Instead, `processWorkerResult` records the failure in `sync_failures` and calls `depGraph.Complete()`. When the scope clears, `onScopeClear` resets `next_retry_at` for matching `sync_failures` rows, and the drain-loop retrier re-injects them via buffer, planner, and DepGraph.
+Scope-blocked actions are not held in memory. Instead, `processWorkerResult`
+records the failure in `sync_failures` and calls `depGraph.Complete()`. When
+the scope clears, `releaseScope` deletes the persisted scope row, deletes the
+boundary issue row, marks held descendants retryable immediately, and kicks the
+retry sweep so they re-enter via buffer → planner → DepGraph.
 
-Trial result routing: `processTrialResult()` handles all trial outcomes with an early return — trial results never enter the normal `processWorkerResult()` switch. The `TrialScopeKey ScopeKey` from `WorkerResult` identifies the scope. Trial success → `onScopeClear(scopeKey)` (`ClearScopeBlock` + `SetScopeRetryAtNow` + immediate retry wakeup) + `armTrialTimer()`. Trial failure → `extendTrialInterval(scopeKey)` reads block's current `TrialInterval` via `scopeGate.GetScopeBlock(scopeKey)` (value copy), doubles it, caps per scope type via `computeTrialInterval()`, calls `scopeGate.ExtendTrialInterval(scopeKey, nextAt, newInterval)`. Scope detection is intentionally NOT called for trial failures — the scope is already blocked, and re-detecting would overwrite the doubled interval. Per-scope caps: quota 1h, rate_limited 10m, service 10m (R-2.10.6/R-2.10.8/R-2.10.14).
+Trial result routing: `processTrialResult()` handles all trial outcomes with an
+early return — trial results never enter the normal `processWorkerResult()`
+switch. The `TrialScopeKey ScopeKey` from `WorkerResult` identifies the scope.
+Trial success calls `releaseScope(scopeKey)` and re-arms trial timing for any
+remaining scopes. Trial failure calls `extendScopeTrial(scopeKey, nextAt,
+newInterval)`, updating both persisted `scope_blocks` and the watch loop's
+`activeScopes` working set. Scope detection is intentionally NOT called for
+trial failures — the scope is already blocked, and re-detecting would
+overwrite the doubled interval. Per-scope caps: quota 1h, rate_limited 10m,
+service 10m (R-2.10.6/R-2.10.8/R-2.10.14).
 
-**Trial dispatch**: `runTrialDispatch()` is called from the drain loop's select when the trial timer fires. Uses `scopeGate.AllDueTrials(now)` to snapshot all due scope blocks at once, then iterates each exactly once — structurally incapable of infinite iteration. For each scope, uses `PickTrialCandidate` from `sync_failures` to find an actual item for re-observation and dispatch. `reobserve` returns `(*ChangeEvent, time.Duration)` — the `RetryAfter` duration is forwarded to `extendTrialInterval` when the scope condition persists (R-2.10.7). On successful dispatch, the trial interval is NOT extended (awaits worker result). Trial actions are marked `IsTrial=true` with `TrialScopeKey` set. `armTrialTimer()` uses `time.AfterFunc` to send to a persistent `trialCh` channel when the earliest `NextTrialAt` across all scope blocks is reached (via `scopeGate.EarliestTrialAt()`). Called after `applyScopeBlock()`, `processTrialResult()`, and trial dispatch.
+**Trial dispatch**: `runTrialDispatch()` is called from the watch loop when the
+trial timer fires. It snapshots due scope keys from the watch-owned
+`activeScopes` slice, then iterates each exactly once. For each scope it uses
+`PickTrialCandidate` from `sync_failures` to find an actual blocked item for
+re-observation and dispatch. `reobserve` returns `(*ChangeEvent, time.Duration)`
+— the `RetryAfter` duration is forwarded to `extendScopeTrial` when the scope
+condition persists (R-2.10.7). On successful dispatch, the trial interval is
+NOT extended until the worker result arrives. Trial actions are marked
+`IsTrial=true` with `TrialScopeKey` set.
 
-**Drain-loop retrier**: Retry is integrated directly into the drain loop via `runRetrierSweep()` — no separate goroutine. The drain loop's select includes a retry timer that triggers sweeps of `sync_failures` for items whose `next_retry_at` has expired. Each sweep is batch-limited with zero-delay re-arm when the batch is full. Items are checked via `isFailureResolved()` before re-injection (D-11 fix: prevents re-dispatching items whose underlying condition has resolved). Re-injection uses `createEventFromDB` (full `remote_state` for downloads, `observeLocalFile` for uploads) to feed items through the normal buffer, planner, and DepGraph pipeline. Upload re-observation now shares the scanner's safe mtime+size fast path via `syncobserve.CanReuseBaselineHash`, so retry/reobserve behavior matches full scans instead of always re-hashing.
+**Retry sweep**: Retry is integrated directly into the watch loop via
+`runRetrierSweep()` — no separate goroutine. The watch loop's select includes
+a retry timer that triggers sweeps of `sync_failures` for items whose
+`next_retry_at` has expired. Each sweep is batch-limited with zero-delay re-arm
+when the batch is full. Items are checked via `isFailureResolved()` before
+re-injection (D-11 fix: prevents re-dispatching items whose underlying
+condition has resolved). Re-injection uses `createEventFromDB` (full
+`remote_state` for downloads, `observeLocalFile` for uploads) to feed items
+through the normal buffer, planner, and DepGraph pipeline.
 
-`feedScopeDetection()` feeds results into `ScopeState.UpdateScope()`. When a threshold is crossed, creates a scope block via `applyScopeBlock()` which calls `scopeGate.SetScopeBlock()` + `armTrialTimer()`.
+`feedScopeDetection()` feeds results into `ScopeState.UpdateScope()`. When a
+threshold is crossed, it creates or refreshes a persisted scope block via
+`activateScope()` and then re-arms trial timing.
 
-The engine owns all completion decisions — workers are pure executors. The drain loop uses an actor-with-outbox pattern: results are processed single-threaded within the drain goroutine, and ready actions are collected into an outbox slice before being sent to the `readyCh` channel. This prevents deadlock that would occur if the drain loop tried to send to a full `readyCh` while workers tried to send to a full `resultCh`. Engine-owned counters (`succeeded`, `failed` atomics) track progress. `drainWorkerResults()` processes results for both one-shot and watch modes.
+The engine owns all completion decisions — workers are pure executors. In
+watch mode the single watch loop uses an actor-with-outbox pattern: results,
+buffer flushes, trial ticks, retry ticks, and dependent admission are processed
+single-threaded within one select loop, and ready actions are collected into an
+outbox slice before being sent to `readyCh`. This prevents deadlock that would
+occur if result handling tried to synchronously send to a full `readyCh` while
+workers tried to synchronously send to a full results channel. One-shot mode
+still uses `drainWorkerResults()` because it has no long-lived watch loop.
 
 `recordFailure()` sets category based on `delayFn`: non-nil → `"transient"`, nil → `"actionable"`. Populates `scope_key` via `ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)` — returns a typed `ScopeKey`, serialized to wire format via `String()` for SQLite storage. Delegates to `SyncStore.RecordFailure()` which computes `next_retry_at` via the `delayFn`. The drain-loop retrier sweeps `sync_failures` for due items and re-injects them via buffer → planner → DepGraph.
 
@@ -144,13 +187,27 @@ The engine owns all completion decisions — workers are pure executors. The dra
 
 Implements: R-2.10.35 [verified], R-2.10.36 [verified], R-2.10.37 [verified]
 
-In-memory data structure in `scope.go`: sliding windows (`ScopeKey` → `slidingWindow`) for scope escalation detection. All keys are typed `ScopeKey` structs (see sync-execution.md § ScopeKey Type System). Engine-internal — no cross-engine coordination (each engine discovers independently). Scope blocks are managed by `ScopeGate` with write-through persistence to the `scope_blocks` table.
+In-memory data structure in `scope.go`: sliding windows (`ScopeKey` →
+`slidingWindow`) for scope escalation detection. All keys are typed `ScopeKey`
+structs (see sync-execution.md § ScopeKey Type System). Engine-internal — no
+cross-engine coordination (each engine discovers independently). Active scope
+runtime state is owned by the watch loop, while persisted scope blocks live in
+the `scope_blocks` table for restart/recovery.
 
 ### `disk:local` Scope Block
 
 Implements: R-2.10.43 [verified]
 
-Scope key `SKDiskLocal` is created by `classifyResult()` when a download fails with `ErrDiskFull` (deterministic signal — immediate, no sliding window). Unlike `SKThrottleAccount` and `SKService` which block ALL actions (via `ScopeKey.IsGlobal()`), `SKDiskLocal` blocks downloads only — `ScopeKey.BlocksAction()` returns true only for `ActionDownload`. Uploads, deletes, and moves continue because they either free space or don't consume it. In `ScopeGate.Admit()`, `SKDiskLocal` is checked in priority order between `SKService` and `SKQuotaOwn`. Trial timing uses unified parameters: 5-second initial interval, 2× backoff, 5-minute max cap (computed by `computeTrialInterval()` in engine.go).
+Scope key `SKDiskLocal` is created by `classifyResult()` when a download fails
+with `ErrDiskFull` (deterministic signal — immediate, no sliding window).
+Unlike `SKThrottleAccount` and `SKService` which block ALL actions (via
+`ScopeKey.IsGlobal()`), `SKDiskLocal` blocks downloads only —
+`ScopeKey.BlocksAction()` returns true only for `ActionDownload`. Uploads,
+deletes, and moves continue because they either free space or don't consume it.
+Admission priority still places `SKDiskLocal` between `SKService` and
+`SKQuotaOwn`. Trial timing uses unified parameters: 5-second initial interval,
+2× backoff, 5-minute max cap (computed by `computeTrialInterval()` in
+engine.go).
 
 ### Scanner ScanResult Contract
 
@@ -184,7 +241,7 @@ Implements: R-2.10.9 [verified], R-2.10.17 [verified], R-2.10.23 [verified], R-2
 - First it checks whether the failing path is already under an active persisted `perm:remote:{localPath}` boundary. If so, it short-circuits without another Graph permission walk.
 - Otherwise it resolves the relevant shortcut, calls `ListItemPermissions` on the target folder, and confirms whether the 403 is a real write denial or a transient/inconclusive failure.
 - On confirmed denial it walks upward, still using `ListItemPermissions`, to find the highest denied ancestor but never above the shortcut root.
-- It records one actionable `permission_denied` failure at that boundary with scope key `perm:remote:{localPath}` and, in watch mode, installs the same scope in `ScopeGate`.
+- It records one actionable `permission_denied` failure at that boundary with scope key `perm:remote:{localPath}` and persists the same scope in `scope_blocks`.
 
 `perm:remote` is recursive and download-only:
 
@@ -193,9 +250,9 @@ Implements: R-2.10.9 [verified], R-2.10.17 [verified], R-2.10.23 [verified], R-2
 
 `recheckPermissions()` revisits persisted `perm:remote` boundaries at the start of each sync pass:
 
-- writable again → clear the boundary failure and call `onScopeClear`
-- Graph/API failure or stale shortcut boundary → fail open by clearing the stored denial and calling `onScopeClear`
-- still denied → keep the boundary and refresh the in-memory scope if watch mode is active
+- writable again → `releaseScope`
+- Graph/API failure or stale shortcut boundary → fail open via `releaseScope`
+- still denied → keep the boundary active and refresh its persisted/runtime state
 
 Shortcut removal also clears any `perm:remote` scope rooted under the removed shortcut and deletes all held failures for that scope. Removed shortcuts discard blocked work instead of releasing it back into dispatch.
 
@@ -211,7 +268,10 @@ Observation suppression (`isObservationSuppressed()`) suppresses the entire `pro
 
 **Trial path separation**: `processWorkerResult()` checks `IsTrial` and returns early via `processTrialResult()` — trial results never enter the normal switch. This eliminates the prior fragile pattern where trial failures fell through into the normal result switch and required `maybeFeedScopeDetection` guards. `processTrialResult()` handles all trial outcomes self-contained: success releases the scope, failure extends the interval via `extendTrialInterval()`, and scope detection is never called (the scope is already blocked).
 
-**External perm:dir clearance**: `handleExternalChanges()` checks whether `local_permission_denied` failures were cleared via CLI (`issues clear`). Iterates `scopeGate.ScopeBlockKeys()`, filters via `ScopeKey.IsPermDir()`, and releases cleared blocks via `onScopeClear()`.
+**External perm:dir clearance**: `handleExternalChanges()` checks whether
+`local_permission_denied` failures were cleared via CLI (`issues clear`).
+Iterates the watch loop's `activeScopes`, filters via `ScopeKey.IsPermDir()`,
+and releases cleared blocks via `releaseScope()`.
 
 **Watch mode summary**: `logWatchSummary()` logs a periodic one-liner at the recheck interval (10s) showing actionable issue counts by type. Only logs when the count changes to avoid noisy output.
 

@@ -99,7 +99,11 @@ The observation layer only intersects with permission handling in two places:
 - the local scanner can prove a previously inaccessible local path is accessible again, which lets the engine auto-clear `perm:dir` failures
 - the shared `CanReuseBaselineHash` helper keeps upload retry/reobserve logic consistent with normal local observation
 
-Remote 403 detection itself is engine-owned: the engine confirms denials with `ListItemPermissions`, records one persisted `perm:remote:{localPath}` boundary, and switches that subtree to download-only mode through the planner and scope gate. There is no separate in-memory permission cache in the observation layer.
+Remote 403 detection itself is engine-owned: the engine confirms denials with
+`ListItemPermissions`, records one persisted `perm:remote:{localPath}`
+boundary, and switches that subtree to download-only mode through the planner
+and the watch loop's active-scope working set. There is no separate in-memory
+permission cache in the observation layer.
 
 ## Design Constraints
 

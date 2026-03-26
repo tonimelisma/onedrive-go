@@ -10,7 +10,8 @@
 //   - SetDispatchStatus:         transition pending→in-progress before dispatch
 //   - WriteSyncMetadata:         persist sync report after RunOnce
 //   - ReadSyncMetadata:          retrieve all sync metadata key-value pairs
-//   - ClearScopeAndUnblockFailures: atomic scope clear + failure unblock
+//   - ReleaseScope:               atomic scope release + failure unblock
+//   - DiscardScope:               atomic scope discard + failure delete
 //   - BaselineEntryCount:        count of entries in baseline table
 //
 // Related files:
@@ -411,45 +412,86 @@ func (m *SyncStore) ReadSyncMetadata(ctx context.Context) (map[string]string, er
 	return result, rows.Err()
 }
 
-// ClearScopeAndUnblockFailures atomically clears a scope block and makes all
-// scope-blocked failures for that scope retryable. This is the single method
-// the engine calls when a scope trial succeeds or when a scope condition
-// resolves externally (permission grant, quota freed, etc.).
+// ReleaseScope atomically applies the semantic "this scope condition has
+// resolved; blocked work may run again" transition.
 //
-// In a single transaction:
-//  1. DELETE FROM scope_blocks WHERE scope_key = ?
-//  2. UPDATE sync_failures SET next_retry_at = now WHERE scope_key = ? AND next_retry_at IS NULL
+// In one transaction it:
+//   - deletes the persisted scope_blocks row
+//   - deletes boundary issue rows for the scope
+//   - marks held transient descendants retryable immediately
 //
-// This ensures no window where failures are unblocked but the scope block
-// is still present (or vice versa).
-func (m *SyncStore) ClearScopeAndUnblockFailures(ctx context.Context, scopeKey synctypes.ScopeKey, now time.Time) error {
+// The actionable boundary row and the scope block are one semantic unit.
+// Releasing them together prevents the split-brain state where one survives
+// after the other has already been cleared.
+func (m *SyncStore) ReleaseScope(ctx context.Context, scopeKey synctypes.ScopeKey, now time.Time) error {
 	wire := scopeKey.String()
 	nowNano := now.UnixNano()
 
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("sync: begin clear-scope tx for %s: %w", wire, err)
+		return fmt.Errorf("sync: begin release-scope tx for %s: %w", wire, err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Step 1: Delete the scope block.
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM scope_blocks WHERE scope_key = ?`, wire,
 	); err != nil {
 		return fmt.Errorf("sync: deleting scope block %s: %w", wire, err)
 	}
 
-	// Step 2: Make scope-blocked failures retryable.
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE sync_failures SET next_retry_at = ?
-		WHERE scope_key = ? AND next_retry_at IS NULL AND category = 'transient'`,
-		nowNano, wire,
+		`DELETE FROM sync_failures
+		WHERE scope_key = ? AND issue_type IS NOT NULL`,
+		wire,
+	); err != nil {
+		return fmt.Errorf("sync: deleting scope issue rows %s: %w", wire, err)
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE sync_failures
+		SET next_retry_at = ?
+		WHERE scope_key = ? AND next_retry_at IS NULL AND category = ?`,
+		nowNano, wire, synctypes.CategoryTransient,
 	); err != nil {
 		return fmt.Errorf("sync: unblocking failures for scope %s: %w", wire, err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing clear-scope for %s: %w", wire, err)
+		return fmt.Errorf("sync: committing release-scope for %s: %w", wire, err)
+	}
+
+	return nil
+}
+
+// DiscardScope atomically applies the semantic "this scope and the work under
+// it are no longer valid" transition.
+//
+// This is used when the blocked subtree itself disappears, for example when a
+// shortcut is removed. Discarding differs from release: held descendants are
+// deleted instead of made retryable.
+func (m *SyncStore) DiscardScope(ctx context.Context, scopeKey synctypes.ScopeKey) error {
+	wire := scopeKey.String()
+
+	tx, err := m.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sync: begin discard-scope tx for %s: %w", wire, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM scope_blocks WHERE scope_key = ?`, wire,
+	); err != nil {
+		return fmt.Errorf("sync: deleting scope block %s: %w", wire, err)
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM sync_failures WHERE scope_key = ?`, wire,
+	); err != nil {
+		return fmt.Errorf("sync: deleting scoped failures %s: %w", wire, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sync: committing discard-scope for %s: %w", wire, err)
 	}
 
 	return nil

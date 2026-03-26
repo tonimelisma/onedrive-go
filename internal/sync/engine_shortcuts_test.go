@@ -494,16 +494,16 @@ func TestHandleRemovedShortcuts_ClearsRemotePermissionScopesUnderRemovedShortcut
 		ScopeKey:  otherScope,
 	}, nil))
 
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, removedScope, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:       removedScope,
 		IssueType: synctypes.IssuePermissionDenied,
 		BlockedAt: eng.nowFn(),
-	}))
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, otherScope, &synctypes.ScopeBlock{
+	})
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:       otherScope,
 		IssueType: synctypes.IssuePermissionDenied,
 		BlockedAt: eng.nowFn(),
-	}))
+	})
 
 	shortcuts, err := eng.baseline.ListShortcuts(ctx)
 	require.NoError(t, err)
@@ -515,9 +515,9 @@ func TestHandleRemovedShortcuts_ClearsRemotePermissionScopesUnderRemovedShortcut
 	require.NoError(t, err)
 	assert.Nil(t, sc, "removed shortcut should be deleted")
 
-	assert.False(t, eng.watch.scopeGate.IsScopeBlocked(removedScope),
+	assert.False(t, isTestScopeBlocked(eng, removedScope),
 		"remote permission scope under the removed shortcut should be cleared")
-	assert.True(t, eng.watch.scopeGate.IsScopeBlocked(otherScope),
+	assert.True(t, isTestScopeBlocked(eng, otherScope),
 		"remote permission scopes under other shortcuts must remain intact")
 
 	failures, err := eng.baseline.ListSyncFailures(ctx)

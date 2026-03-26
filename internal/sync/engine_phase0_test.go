@@ -275,17 +275,19 @@ func TestPhase0_ExecutePlan_WaitsForDrainSideEffects(t *testing.T) {
 func TestPhase0_DrainLoop_TrialFailureKeepsBlockedScopeIsolated(t *testing.T) {
 	t.Parallel()
 
-	results, _, cancel, eng, _ := startDrainLoop(t)
+	results, ready, done, cancel, eng, buf := startDrainLoop(t)
 	defer cancel()
+	_ = ready
+	_ = done
+	_ = buf
 
-	ctx := t.Context()
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, synctypes.SKService, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:           synctypes.SKService,
 		IssueType:     synctypes.IssueServiceOutage,
 		BlockedAt:     eng.nowFunc(),
 		TrialInterval: 30 * time.Millisecond,
 		NextTrialAt:   eng.nowFunc().Add(30 * time.Millisecond),
-	}))
+	})
 
 	ta := eng.depGraph.Add(&synctypes.Action{
 		Type:    synctypes.ActionDownload,
@@ -309,11 +311,11 @@ func TestPhase0_DrainLoop_TrialFailureKeepsBlockedScopeIsolated(t *testing.T) {
 	}
 
 	require.Eventually(t, func() bool {
-		block, ok := eng.watch.scopeGate.GetScopeBlock(synctypes.SKService)
+		block, ok := getTestScopeBlock(eng, synctypes.SKService)
 		return ok && block.TrialInterval == 60*time.Millisecond
 	}, time.Second, 10*time.Millisecond, "trial failure should only extend the active scope interval")
 
-	assert.True(t, eng.watch.scopeGate.IsScopeBlocked(synctypes.SKService),
+	assert.True(t, isTestScopeBlocked(eng, synctypes.SKService),
 		"trial failure must not clear the blocked scope via the normal result path")
 }
 
@@ -321,8 +323,10 @@ func TestPhase0_DrainLoop_TrialFailureKeepsBlockedScopeIsolated(t *testing.T) {
 func TestPhase0_DrainLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation(t *testing.T) {
 	t.Parallel()
 
-	results, _, cancel, eng, buf := startDrainLoop(t)
+	results, ready, done, cancel, eng, buf := startDrainLoop(t)
 	defer cancel()
+	_ = ready
+	_ = done
 
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
@@ -336,13 +340,13 @@ func TestPhase0_DrainLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWitho
 		Size:     42,
 	}}, "", driveID))
 
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, synctypes.SKThrottleAccount, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:           synctypes.SKThrottleAccount,
 		IssueType:     synctypes.IssueRateLimited,
 		BlockedAt:     eng.nowFunc(),
 		TrialInterval: 10 * time.Millisecond,
 		NextTrialAt:   eng.nowFunc().Add(10 * time.Millisecond),
-	}))
+	})
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "blocked.txt",
 		DriveID:   driveID,
@@ -372,7 +376,7 @@ func TestPhase0_DrainLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWitho
 	}
 
 	require.Eventually(t, func() bool {
-		return !eng.watch.scopeGate.IsScopeBlocked(synctypes.SKThrottleAccount)
+		return !isTestScopeBlocked(eng, synctypes.SKThrottleAccount)
 	}, time.Second, 10*time.Millisecond, "trial success should clear the scope block")
 
 	var batch []synctypes.PathChanges
@@ -427,15 +431,15 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 		ScopeKey:  scopeKey,
 		ItemID:    "private-item",
 	}, nil))
-	require.NoError(t, eng.watch.scopeGate.SetScopeBlock(ctx, scopeKey, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:       scopeKey,
 		IssueType: synctypes.IssueLocalPermissionDenied,
 		BlockedAt: eng.nowFunc(),
-	}))
+	})
 
 	eng.permHandler.recheckLocalPermissions(ctx)
 
-	assert.False(t, eng.watch.scopeGate.IsScopeBlocked(scopeKey),
+	assert.False(t, isTestScopeBlocked(eng, scopeKey),
 		"local permission recheck should clear the active scope block")
 
 	rows, err := eng.baseline.ListSyncFailuresForRetry(ctx, eng.nowFunc())
@@ -453,7 +457,7 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 func TestPhase0_ScopeBlockFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	t.Parallel()
 
-	results, ready, cancel, eng, _ := startDrainLoop(t)
+	results, ready, _, cancel, eng, _ := startDrainLoop(t)
 	defer cancel()
 
 	ctx := t.Context()
@@ -497,7 +501,7 @@ func TestPhase0_ScopeBlockFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	}
 
 	require.Eventually(t, func() bool {
-		return eng.watch.scopeGate.IsScopeBlocked(synctypes.SKThrottleAccount)
+		return isTestScopeBlocked(eng, synctypes.SKThrottleAccount)
 	}, time.Second, 10*time.Millisecond, "scope block should be activated from the worker result")
 
 	failures, err := eng.baseline.ListSyncFailures(ctx)
