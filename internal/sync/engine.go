@@ -1444,8 +1444,6 @@ const (
 // classifyResult is a pure function that maps a synctypes.WorkerResult to a result
 // class and optional scope key. No side effects — classification is
 // separate from routing ("functions do one thing").
-//
-//nolint:gocyclo // classification table — each HTTP status code is a distinct case
 func classifyResult(r *synctypes.WorkerResult) (resultClass, synctypes.ScopeKey) {
 	if r.Success {
 		return resultSuccess, synctypes.ScopeKey{}
@@ -1457,48 +1455,67 @@ func classifyResult(r *synctypes.WorkerResult) (resultClass, synctypes.ScopeKey)
 		return resultShutdown, synctypes.ScopeKey{}
 	}
 
+	if class, key, handled := classifyHTTPResult(r); handled {
+		return class, key
+	}
+
+	return classifyLocalResult(r)
+}
+
+func classifyHTTPResult(r *synctypes.WorkerResult) (resultClass, synctypes.ScopeKey, bool) {
 	switch {
+	case r.HTTPStatus == 0:
+		return resultSkip, synctypes.ScopeKey{}, false
 	case r.HTTPStatus == http.StatusUnauthorized:
-		return resultFatal, synctypes.ScopeKey{}
-
+		return resultFatal, synctypes.ScopeKey{}, true
 	case r.HTTPStatus == http.StatusForbidden:
-		return resultSkip, synctypes.ScopeKey{}
-
+		return resultSkip, synctypes.ScopeKey{}, true
 	case r.HTTPStatus == http.StatusTooManyRequests:
-		return resultScopeBlock, synctypes.SKThrottleAccount()
-
+		return resultScopeBlock, synctypes.SKThrottleAccount(), true
 	case r.HTTPStatus == http.StatusInsufficientStorage:
-		return resultScopeBlock, synctypes.ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
-
+		return resultScopeBlock, synctypes.ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey), true
 	case r.HTTPStatus == http.StatusBadRequest && isOutagePattern(r.Err):
-		// Known outage pattern (e.g., "ObjectHandle is Invalid") — transient,
-		// feeds scope detection. Distinguished from phantom drive 400s
-		// (R-6.7.11) which are handled by drive filtering.
-		return resultRequeue, synctypes.ScopeKey{}
+		return resultRequeue, synctypes.ScopeKey{}, true
+	case r.HTTPStatus >= http.StatusInternalServerError:
+		return resultRequeue, synctypes.ScopeKey{}, true
+	case isRetryableHTTPStatus(r.HTTPStatus):
+		return resultRequeue, synctypes.ScopeKey{}, true
+	default:
+		return resultSkip, synctypes.ScopeKey{}, true
+	}
+}
 
-	case r.HTTPStatus >= 500:
-		return resultRequeue, synctypes.ScopeKey{}
+func isRetryableHTTPStatus(status int) bool {
+	return status == http.StatusRequestTimeout ||
+		status == http.StatusPreconditionFailed ||
+		status == http.StatusNotFound ||
+		status == http.StatusLocked
+}
 
-	case r.HTTPStatus == http.StatusRequestTimeout ||
-		r.HTTPStatus == http.StatusPreconditionFailed ||
-		r.HTTPStatus == http.StatusNotFound ||
-		r.HTTPStatus == http.StatusLocked:
-		return resultRequeue, synctypes.ScopeKey{}
-
+func classifyLocalResult(r *synctypes.WorkerResult) (resultClass, synctypes.ScopeKey) {
+	switch {
 	case errors.Is(r.Err, driveops.ErrDiskFull):
-		// Deterministic signal — immediate scope block, no sliding window (R-2.10.43).
 		return resultScopeBlock, synctypes.SKDiskLocal()
-
 	case errors.Is(r.Err, driveops.ErrFileTooLargeForSpace):
-		// Per-file failure, no scope escalation — smaller files may fit (R-2.10.44).
 		return resultSkip, synctypes.ScopeKey{}
-
 	case errors.Is(r.Err, os.ErrPermission):
 		return resultSkip, synctypes.ScopeKey{}
-
 	default:
 		return resultSkip, synctypes.ScopeKey{}
 	}
+}
+
+func isDeleteLikeSyncStatus(status synctypes.SyncStatus) bool {
+	return status == synctypes.SyncStatusDeleted ||
+		status == synctypes.SyncStatusDeleting ||
+		status == synctypes.SyncStatusDeleteFailed ||
+		status == synctypes.SyncStatusPendingDelete
+}
+
+func isResolvedRemoteSyncStatus(status synctypes.SyncStatus) bool {
+	return status == synctypes.SyncStatusSynced ||
+		status == synctypes.SyncStatusDeleted ||
+		status == synctypes.SyncStatusFiltered
 }
 
 // isOutagePattern returns true if the error matches known transient 400
@@ -2373,8 +2390,7 @@ func remoteStateToChangeEvent(rs *synctypes.RemoteStateRow, path string) *syncty
 	ct := synctypes.ChangeModify
 	isDeleted := false
 
-	switch rs.SyncStatus { //nolint:exhaustive // non-delete statuses all map to ChangeModify
-	case synctypes.SyncStatusDeleted, synctypes.SyncStatusDeleting, synctypes.SyncStatusDeleteFailed, synctypes.SyncStatusPendingDelete:
+	if isDeleteLikeSyncStatus(rs.SyncStatus) {
 		ct = synctypes.ChangeDelete
 		isDeleted = true
 	}
@@ -2490,33 +2506,31 @@ func (e *Engine) observeLocalFile(path, caller string, base *synctypes.BaselineE
 // remote_state (kept fresh by delta polls). Fixes D-9: the planner receives
 // complete PathViews with hash, size, mtime, etag, and name.
 func (e *Engine) createEventFromDB(ctx context.Context, row *synctypes.SyncFailureRow) *synctypes.ChangeEvent {
-	switch row.Direction { //nolint:exhaustive // download and delete share the same path
-	case synctypes.DirectionUpload:
+	if row.Direction == synctypes.DirectionUpload {
 		return e.observeLocalFile(
 			row.Path,
 			"createEventFromDB",
 			e.baselineEntryForPath(ctx, row.Path, row.DriveID),
 		)
-
-	default: // download or delete
-		rs, found, err := e.baseline.GetRemoteStateByPath(ctx, row.Path, row.DriveID)
-		if err != nil {
-			e.logger.Debug("createEventFromDB: remote state lookup failed",
-				slog.String("path", row.Path),
-				slog.String("error", err.Error()),
-			)
-
-			return nil
-		}
-
-		if !found {
-			// No active remote_state → item was resolved through the normal
-			// pipeline (delta poll downloaded it, or it was deleted remotely).
-			return nil
-		}
-
-		return remoteStateToChangeEvent(rs, row.Path)
 	}
+
+	rs, found, err := e.baseline.GetRemoteStateByPath(ctx, row.Path, row.DriveID)
+	if err != nil {
+		e.logger.Debug("createEventFromDB: remote state lookup failed",
+			slog.String("path", row.Path),
+			slog.String("error", err.Error()),
+		)
+
+		return nil
+	}
+
+	if !found {
+		// No active remote_state → item was resolved through the normal
+		// pipeline (delta poll downloaded it, or it was deleted remotely).
+		return nil
+	}
+
+	return remoteStateToChangeEvent(rs, row.Path)
 }
 
 // isFailureResolved checks whether a sync_failure's underlying condition has
@@ -2542,11 +2556,8 @@ func (e *Engine) isFailureResolved(ctx context.Context, row *synctypes.SyncFailu
 		// No active row means the item was deleted or never existed.
 		if !found {
 			resolved = true
-		} else {
-			switch rs.SyncStatus { //nolint:exhaustive // only terminal statuses mean resolved
-			case synctypes.SyncStatusSynced, synctypes.SyncStatusDeleted, synctypes.SyncStatusFiltered:
-				resolved = true
-			}
+		} else if isResolvedRemoteSyncStatus(rs.SyncStatus) {
+			resolved = true
 		}
 
 	case synctypes.DirectionUpload:
@@ -2597,93 +2608,91 @@ func (e *Engine) isFailureResolved(ctx context.Context, row *synctypes.SyncFailu
 // forwards retryAfter to extendTrialInterval for server-driven backoff.
 // Returns (event, 0) on success or when the item is gone.
 func (e *Engine) reobserve(ctx context.Context, row *synctypes.SyncFailureRow) (*synctypes.ChangeEvent, time.Duration) {
-	switch row.Direction { //nolint:exhaustive // download and delete share the same path
-	case synctypes.DirectionUpload:
+	if row.Direction == synctypes.DirectionUpload {
 		// Local FS — no RetryAfter concept.
 		return e.observeLocalFile(
 			row.Path,
 			"reobserve",
 			e.baselineEntryForPath(ctx, row.Path, row.DriveID),
 		), 0
+	}
 
-	default: // download or delete
-		item, err := e.execCfg.Items().GetItem(ctx, row.DriveID, row.ItemID)
-		if err != nil {
-			// Classify the error to determine whether the scope is still blocked
-			// or the item is truly gone.
-			var ge *graph.GraphError
-			if errors.As(err, &ge) {
-				if errors.Is(ge.Err, graph.ErrNotFound) {
-					// Item was deleted remotely — return a delete event.
-					return &synctypes.ChangeEvent{
-						Source:    synctypes.SourceRemote,
-						Type:      synctypes.ChangeDelete,
-						Path:      row.Path,
-						ItemID:    row.ItemID,
-						DriveID:   row.DriveID,
-						ItemType:  synctypes.ItemTypeFile,
-						Name:      filepath.Base(row.Path),
-						IsDeleted: true,
-					}, 0
-				}
-
-				// 429, 507, 5xx — scope condition persists; return nil so the
-				// caller extends the trial interval. Forward RetryAfter from
-				// the server response (R-2.10.7) so the caller uses the
-				// server-mandated wait instead of exponential backoff.
-				if errors.Is(ge.Err, graph.ErrThrottled) || errors.Is(ge.Err, graph.ErrServerError) ||
-					ge.StatusCode == http.StatusInsufficientStorage {
-					e.logger.Debug("reobserve: scope condition persists",
-						slog.String("path", row.Path),
-						slog.Int("status", ge.StatusCode),
-						slog.Duration("retry_after", ge.RetryAfter),
-					)
-
-					return nil, ge.RetryAfter
-				}
+	item, err := e.execCfg.Items().GetItem(ctx, row.DriveID, row.ItemID)
+	if err != nil {
+		// Classify the error to determine whether the scope is still blocked
+		// or the item is truly gone.
+		var ge *graph.GraphError
+		if errors.As(err, &ge) {
+			if errors.Is(ge.Err, graph.ErrNotFound) {
+				// Item was deleted remotely — return a delete event.
+				return &synctypes.ChangeEvent{
+					Source:    synctypes.SourceRemote,
+					Type:      synctypes.ChangeDelete,
+					Path:      row.Path,
+					ItemID:    row.ItemID,
+					DriveID:   row.DriveID,
+					ItemType:  synctypes.ItemTypeFile,
+					Name:      filepath.Base(row.Path),
+					IsDeleted: true,
+				}, 0
 			}
 
-			// Unexpected error — log and return nil (skip this trial).
-			e.logger.Debug("reobserve: GetItem failed",
-				slog.String("path", row.Path),
-				slog.String("error", err.Error()),
-			)
+			// 429, 507, 5xx — scope condition persists; return nil so the
+			// caller extends the trial interval. Forward RetryAfter from
+			// the server response (R-2.10.7) so the caller uses the
+			// server-mandated wait instead of exponential backoff.
+			if errors.Is(ge.Err, graph.ErrThrottled) || errors.Is(ge.Err, graph.ErrServerError) ||
+				ge.StatusCode == http.StatusInsufficientStorage {
+				e.logger.Debug("reobserve: scope condition persists",
+					slog.String("path", row.Path),
+					slog.Int("status", ge.StatusCode),
+					slog.Duration("retry_after", ge.RetryAfter),
+				)
 
-			return nil, 0
+				return nil, ge.RetryAfter
+			}
 		}
 
-		// 200 — build a full synctypes.ChangeEvent from the live API response.
-		it := synctypes.ItemTypeFile
-		if item.IsFolder {
-			it = synctypes.ItemTypeFolder
-		} else if item.IsRoot {
-			it = synctypes.ItemTypeRoot
-		}
+		// Unexpected error — log and return nil (skip this trial).
+		e.logger.Debug("reobserve: GetItem failed",
+			slog.String("path", row.Path),
+			slog.String("error", err.Error()),
+		)
 
-		ct := synctypes.ChangeModify
-		isDeleted := false
-
-		if item.IsDeleted {
-			ct = synctypes.ChangeDelete
-			isDeleted = true
-		}
-
-		return &synctypes.ChangeEvent{
-			Source:    synctypes.SourceRemote,
-			Type:      ct,
-			Path:      row.Path,
-			ItemID:    item.ID,
-			ParentID:  item.ParentID,
-			DriveID:   item.DriveID,
-			ItemType:  it,
-			Name:      item.Name,
-			Size:      item.Size,
-			Hash:      item.QuickXorHash,
-			Mtime:     item.ModifiedAt.UnixNano(),
-			ETag:      item.ETag,
-			IsDeleted: isDeleted,
-		}, 0
+		return nil, 0
 	}
+
+	// 200 — build a full synctypes.ChangeEvent from the live API response.
+	it := synctypes.ItemTypeFile
+	if item.IsFolder {
+		it = synctypes.ItemTypeFolder
+	} else if item.IsRoot {
+		it = synctypes.ItemTypeRoot
+	}
+
+	ct := synctypes.ChangeModify
+	isDeleted := false
+
+	if item.IsDeleted {
+		ct = synctypes.ChangeDelete
+		isDeleted = true
+	}
+
+	return &synctypes.ChangeEvent{
+		Source:    synctypes.SourceRemote,
+		Type:      ct,
+		Path:      row.Path,
+		ItemID:    item.ID,
+		ParentID:  item.ParentID,
+		DriveID:   item.DriveID,
+		ItemType:  it,
+		Name:      item.Name,
+		Size:      item.Size,
+		Hash:      item.QuickXorHash,
+		Mtime:     item.ModifiedAt.UnixNano(),
+		ETag:      item.ETag,
+		IsDeleted: isDeleted,
+	}, 0
 }
 
 // cleanStaleTrialPending removes stale entries from trialPending. Entries

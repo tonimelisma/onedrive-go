@@ -10,13 +10,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 // LoadDotEnv reads KEY=VALUE pairs from a .env file at the given path.
 // Missing file is not an error (CI sets env vars directly).
 // Existing env vars take precedence over .env values.
 func LoadDotEnv(envPath string) {
-	f, err := os.Open(envPath) //nolint:gosec // Test harness chooses the .env path relative to the workspace/module root.
+	f, err := trustedpath.Open(envPath)
 	if err != nil {
 		return
 	}
@@ -170,7 +172,7 @@ func CopyMetadataFiles(srcDir, dstDir string) {
 // CopyFile copies a file from src to dst with the given permissions.
 // Crashes on failure because tests cannot proceed without the file.
 func CopyFile(src, dst string, perm os.FileMode) {
-	data, err := os.ReadFile(src) //nolint:gosec // Copy source is the test-credential fixture selected by the harness.
+	data, err := trustedpath.ReadFile(src)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FATAL: cannot read %s: %v\n", src, err)
 		fmt.Fprintln(os.Stderr, "Run scripts/bootstrap-test-credentials.sh to create test credentials.")

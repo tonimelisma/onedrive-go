@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 const testSessionDriveID = "drive-1"
@@ -196,7 +198,7 @@ func TestSessionStore_SaveWritesV2JSON(t *testing.T) {
 
 	// Read raw JSON to verify key names.
 	fpath := store.filePath(driveID, localPath)
-	data, err := os.ReadFile(fpath) //nolint:gosec // Test session file lives under t.TempDir and is controlled by the test.
+	data, err := trustedpath.ReadFile(fpath)
 	require.NoError(t, err)
 
 	raw := string(data)

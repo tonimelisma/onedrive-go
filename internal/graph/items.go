@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // listChildrenPageSize is the $top value for ListChildren requests.
@@ -462,9 +463,35 @@ func (c *Client) listChildrenRecursiveDepth(ctx context.Context, driveID driveid
 // listChildrenPage fetches a single page of children and returns the items
 // and the next page path (empty if no more pages).
 func (c *Client) listChildrenPage(ctx context.Context, path string, page int) ([]Item, string, error) {
-	resp, err := c.Do(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, "", err
+	retryRootChildren := isTransientRootChildrenPath(path)
+	policy := retry.DriveDiscoveryPolicy()
+
+	var resp *http.Response
+	for attempt := range policy.MaxAttempts {
+		var err error
+
+		resp, err = c.Do(ctx, http.MethodGet, path, nil)
+		if err == nil {
+			break
+		}
+
+		graphErr, retryable := isTransientRootChildrenError(path, err)
+		if !retryRootChildren || !retryable || attempt >= policy.MaxAttempts-1 {
+			return nil, "", err
+		}
+
+		backoff := policy.Delay(attempt)
+		c.logger.Warn("retrying root children after transient 404",
+			slog.Int("attempt", attempt+1),
+			slog.Int("max_attempts", policy.MaxAttempts),
+			slog.Int("page", page),
+			slog.Duration("backoff", backoff),
+			slog.String("request_id", graphErr.RequestID),
+		)
+
+		if sleepErr := retry.TimeSleep(ctx, backoff); sleepErr != nil {
+			return nil, "", fmt.Errorf("graph: root children retry canceled: %w", sleepErr)
+		}
 	}
 	defer resp.Body.Close()
 
@@ -494,6 +521,23 @@ func (c *Client) listChildrenPage(ctx context.Context, path string, page int) ([
 	}
 
 	return items, nextPath, nil
+}
+
+func isTransientRootChildrenPath(path string) bool {
+	return strings.Contains(path, "/items/root/children")
+}
+
+func isTransientRootChildrenError(path string, err error) (*GraphError, bool) {
+	if !isTransientRootChildrenPath(path) || !errors.Is(err, ErrNotFound) {
+		return nil, false
+	}
+
+	var graphErr *GraphError
+	if !errors.As(err, &graphErr) || graphErr.StatusCode != http.StatusNotFound {
+		return nil, false
+	}
+
+	return graphErr, true
 }
 
 // stripBaseURL removes the client's base URL prefix from a full URL,

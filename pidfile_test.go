@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 // Validates: R-6.3.1
@@ -25,7 +27,7 @@ func TestWritePIDFile_CreatesFileWithCurrentPID(t *testing.T) {
 
 	defer cleanup()
 
-	data, err := os.ReadFile(path) //nolint:gosec // Test PID file path is created in t.TempDir and controlled by the test.
+	data, err := trustedpath.ReadFile(path)
 	require.NoError(t, err)
 
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))

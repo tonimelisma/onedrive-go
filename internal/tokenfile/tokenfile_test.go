@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/oauth2"
+
+	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 func testToken() *oauth2.Token {
@@ -177,7 +179,7 @@ func TestSave_NoMetaInOutput(t *testing.T) {
 
 	require.NoError(t, Save(path, testToken()))
 
-	data, err := os.ReadFile(path) //nolint:gosec // Test token path is created in t.TempDir and controlled by the test.
+	data, err := trustedpath.ReadFile(path)
 	require.NoError(t, err)
 
 	// Verify no "meta" key in the output JSON.

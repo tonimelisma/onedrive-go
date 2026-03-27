@@ -13,6 +13,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
 
@@ -295,8 +296,7 @@ func (tm *TransferManager) downloadToPartial(
 ) (string, int64, error) {
 	// Attempt resume: open existing .partial, then stat the handle.
 	if rd, ok := tm.downloads.(RangeDownloader); ok {
-		// Partial path is derived from the managed local sync target.
-		f, openErr := os.OpenFile(partialPath, os.O_APPEND|os.O_WRONLY, downloadTempFilePerms) //nolint:gosec // Managed sync path.
+		f, openErr := trustedpath.OpenFile(partialPath, os.O_APPEND|os.O_WRONLY, downloadTempFilePerms)
 		if openErr == nil {
 			info, statErr := f.Stat()
 			if statErr != nil || info.Size() == 0 {
@@ -333,8 +333,7 @@ func (tm *TransferManager) removePartialIfNotCanceled(ctx context.Context, path 
 func (tm *TransferManager) freshDownload(
 	ctx context.Context, driveID driveid.ID, itemID, partialPath string,
 ) (string, int64, error) {
-	// Partial path is derived from the managed local sync target.
-	f, err := os.OpenFile(partialPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, downloadTempFilePerms) //nolint:gosec // Managed sync path.
+	f, err := trustedpath.OpenFile(partialPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, downloadTempFilePerms)
 	if err != nil {
 		return "", 0, fmt.Errorf("creating partial file %s: %w", partialPath, err)
 	}
@@ -469,8 +468,7 @@ func (tm *TransferManager) UploadFile(
 		mtime = info.ModTime()
 	}
 
-	// Upload path is the caller-selected local source file.
-	f, err := os.Open(localPath) //nolint:gosec // Caller-selected source path.
+	f, err := trustedpath.Open(localPath)
 	if err != nil {
 		return nil, fmt.Errorf("opening %s for upload: %w", localPath, err)
 	}

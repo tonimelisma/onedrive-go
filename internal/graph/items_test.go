@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // Validates: R-1.6
@@ -366,6 +367,61 @@ func TestListChildren_InvalidNextLink(t *testing.T) {
 	_, err := client.ListChildren(t.Context(), driveid.New("d"), "p")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not match base URL")
+}
+
+func TestListChildren_RootTransient404Retry(t *testing.T) {
+	var attempts int
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		assert.Contains(t, r.URL.Path, "/drives/000000000000000d/items/root/children")
+
+		w.Header().Set("Content-Type", "application/json")
+		if attempts == 1 {
+			w.Header().Set("request-id", "req-root-404")
+			w.WriteHeader(http.StatusNotFound)
+			writeTestResponse(t, w, `{"error":{"code":"itemNotFound","message":"transient root miss"}}`)
+
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		writeTestResponse(t, w, `{
+			"value": [
+				{"id":"a","name":"file-a.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root","driveId":"d"},"file":{"mimeType":"text/plain"}}
+			]
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	items, err := client.ListChildren(t.Context(), driveid.New("d"), "root")
+	require.NoError(t, err)
+
+	require.Len(t, items, 1)
+	assert.Equal(t, "file-a.txt", items[0].Name)
+	assert.Equal(t, 2, attempts)
+}
+
+func TestListChildren_RootTransient404RetryExhausted(t *testing.T) {
+	var attempts int
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		assert.Contains(t, r.URL.Path, "/drives/000000000000000d/items/root/children")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("request-id", "req-root-404")
+		w.WriteHeader(http.StatusNotFound)
+		writeTestResponse(t, w, `{"error":{"code":"itemNotFound","message":"transient root miss"}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.ListChildren(t.Context(), driveid.New("d"), "root")
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrNotFound)
+	assert.Equal(t, retry.DriveDiscoveryPolicy().MaxAttempts, attempts)
 }
 
 // --- CreateFolder tests ---
