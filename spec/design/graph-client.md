@@ -2,7 +2,7 @@
 
 GOVERNS: internal/graph/auth.go, internal/graph/client.go, internal/graph/delta.go, internal/graph/download.go, internal/graph/drives.go, internal/graph/errors.go, internal/graph/items.go, internal/graph/normalize.go, internal/graph/types.go, internal/graph/upload.go, internal/tokenfile/tokenfile.go
 
-Implements: R-3.1 [verified], R-6.7 [implemented], R-6.8 [verified], R-1.1 [verified], R-1.4 [verified], R-1.5 [verified], R-1.6 [verified], R-1.7 [verified], R-1.8 [verified], R-6.7.4 [verified], R-6.7.8 [verified], R-6.7.9 [verified], R-6.7.10 [verified], R-6.7.11 [planned], R-6.7.12 [verified], R-6.7.13 [verified], R-6.7.14 [verified], R-6.7.17 [implemented], R-6.7.18 [planned], R-6.7.22 [planned], R-6.7.23 [planned], R-6.8.4 [planned], R-6.8.6 [implemented], R-6.8.8 [implemented], R-6.8.14 [implemented]
+Implements: R-3.1 [verified], R-6.7 [implemented], R-6.8 [verified], R-1.1 [verified], R-1.4 [verified], R-1.5 [verified], R-1.6 [verified], R-1.7 [verified], R-1.8 [verified], R-6.7.4 [verified], R-6.7.8 [verified], R-6.7.9 [verified], R-6.7.10 [verified], R-6.7.11 [planned], R-6.7.12 [verified], R-6.7.13 [verified], R-6.7.14 [verified], R-6.7.17 [implemented], R-6.7.18 [planned], R-6.7.22 [planned], R-6.7.23 [planned], R-6.8.4 [planned], R-6.8.6 [verified], R-6.8.8 [verified], R-6.8.14 [verified]
 
 ## Overview
 
@@ -27,7 +27,8 @@ All API quirks handled at the graph boundary — downstream code never sees them
 - Missing field recovery (name, size for deleted items)
 - Timestamp validation
 - `parentReference.path` is never returned in delta — items tracked by ID
-- Root-child transient 404 retry on `GET /drives/{driveID}/items/root/children`
+- Exact transient 403 retry on `GET /me/drives` when the Graph code chain contains `accessDenied`
+- Exact transient 404 retry on `GET /drives/{driveID}/items/root/children` when the Graph code chain contains `itemNotFound`
 
 ## Delta Queries (`delta.go`)
 
@@ -37,7 +38,8 @@ The client owns its safety guards and Graph-specific request metadata:
 
 - `maxDeltaPages`: upper bound for full delta enumeration
 - `maxRecursionDepth`: upper bound for recursive child listing
-- `driveDiscoveryRetries`: transient 403 retry budget for `/me/drives`
+- `driveDiscoveryPolicy`: transient 403 retry policy for `/me/drives`
+- `rootChildrenPolicy`: transient 404 retry policy for `root/children`
 - `deltaPreferHeader`: prebuilt alias-ID delta header
 
 These are instance fields on `graph.Client`, not package globals. Tests in package `graph` override them per client instance instead of mutating shared process state.
@@ -55,6 +57,8 @@ GetItem, ListChildren, CreateFolder, MoveItem, CopyItem, DeleteItem. All operati
 
 Sentinel errors: `ErrGone` (410), `ErrNotFound` (404), `ErrThrottled` (429), `ErrConflict` (409). Error response bodies are read with a 64 KiB cap (`io.LimitReader`) to prevent unbounded memory allocation from malformed responses. HTTP 423 (Locked) from SharePoint co-authoring is classified as skip, not retryable — locks persist for hours; watch mode retries on the next safety scan.
 
+`GraphError` preserves Graph's structured error metadata: `Code`, `InnerCodes`, capped `RawBody`, and helper methods `MostSpecificCode()` / `HasCode()`. Quirk retries and sync outage classification key on the code chain first and only fall back to message text when the body cannot be parsed.
+
 **RetryAfter Header** — `RetryAfter time.Duration` field on `GraphError`. Parsed from `Retry-After` header for 429 and 503 responses. Implements: R-6.8.6 [implemented]
 
 ## Transport-Layer Retry
@@ -65,7 +69,7 @@ Generic retry has been extracted from the graph client into `retry.RetryTranspor
 
 `NewClient` accepts an `*http.Client` — the caller decides whether that client's transport includes retry. CLI callers wrap with `RetryTransport`. Sync callers pass a raw client.
 
-Pre-authenticated requests (upload chunks, downloads) go through `httpClient.Do()` directly. The `doPreAuth` helper sets `req.GetBody` using the `makeReq` factory so `RetryTransport` can rewind request bodies between attempts (e.g., `io.SectionReader` for upload chunks).
+Pre-authenticated requests (upload chunks, downloads) go through `httpClient.Do()` directly. The `doPreAuth` helper sets `req.GetBody` using the `makeReq` factory so `RetryTransport` can rewind request bodies between attempts (e.g., `io.SectionReader` for upload chunks). It also attaches a request-scoped redacted log target such as `preauth:upload chunk`, so transport retry logs never emit the pre-authenticated URL itself.
 
 ## 401 Token Refresh
 
@@ -88,9 +92,9 @@ Transparent token refresh on 401 inside `doOnce()`, independent of retry transpo
 - `dispatchRequest` is the sole raw `http.Client.Do` boundary. Graph base URLs and pre-auth URLs are validated before a request reaches that call; the remaining inline `gosec` suppression there is intentional because the linter cannot prove the validation flow.
 - Per-tenant rate limit coordination: multiple drives under the same tenant share Graph API rate limits. A shared rate limiter per-tenant prevents aggregate throttling. [planned]
 - Upload and async-copy pre-auth URL validation: verify HTTPS scheme and Microsoft domain on upload session and copy monitor URLs before use. [verified]
-- Audit all `slog.*` calls for potential secret leakage (tokens, pre-auth URLs). [planned]
+- Audit all `slog.*` calls for potential secret leakage (tokens, pre-auth URLs). [verified]
 - Audit all error message strings for embedded secrets — `GraphError.Message` includes API error body. [planned]
-- Test that captures log output and verifies no tokens or pre-auth URLs appear. [planned]
+- Test that captures log output and verifies no tokens or pre-auth URLs appear. [verified]
 - Evaluate unexporting `graph.Client.Do`/`DoWithHeaders` if unused outside the package. [planned]
 - Monitor `search(q='*')` reliability on business accounts for shared item discovery. [planned]
 - `PermanentDeleteItem` 405→`DeleteItem` fallback for Personal accounts is a workaround. Remove when MS adds Personal support.

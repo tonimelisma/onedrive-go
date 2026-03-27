@@ -18,6 +18,7 @@ Immutable configuration for exponential backoff with jitter. Fields: `MaxAttempt
 |--------|----------|-------------|---------|-----|
 | `TransportPolicy()` | HTTP retry via `RetryTransport` for CLI callers | 5 | 1s | 60s |
 | `DriveDiscoveryPolicy()` | Drive enumeration retry | 3 | 1s | 60s |
+| `RootChildrenPolicy()` | Exact `root/children` quirk retry | 3 | 250ms | 1s |
 | `WatchLocalPolicy()` | Local observer error recovery | 0 (infinite) | 1s | 30s |
 | `ReconcilePolicy()` | Single retry curve for all sync failures (`sync_failures` + engine retry sweep) | 0 (infinite) | 1s | 1h |
 | `WatchRemotePolicy()` | Remote observer error recovery | 0 (infinite) | 5s | 5m |
@@ -48,8 +49,9 @@ Features:
 - Account-wide 429 throttle coordination: when any request gets 429, all subsequent requests through the same transport wait until the deadline passes
 - Seekable body rewinding between attempts (via `req.GetBody` or `io.Seeker` fallback)
 - `X-Retry-Count` header annotation on retried requests
+- Request-scoped log target override via `WithLogTarget(ctx, target)` so callers can replace sensitive URLs with redacted descriptors
 - Retryable status codes: 408, 429, 500, 502, 503, 504, 509
-- ERROR log on retry exhaustion: when all attempts are spent (network error or retryable HTTP status), logs "request failed after all retries" at ERROR with method, URL, attempt count, and error/status. Implements: R-6.6.8 [verified]
+- Retry-attempt logs are DEBUG-only. When all attempts are spent (network error or retryable HTTP status), the transport logs a single WARN with method, redacted log target, attempt count, and final error/status. Implements: R-6.6.8 [verified]
 
 Thread-safe. All mutable state (throttle deadline) is mutex-protected.
 

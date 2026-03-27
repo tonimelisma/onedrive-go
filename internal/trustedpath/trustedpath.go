@@ -16,6 +16,9 @@ func split(path string) (string, string, error) {
 	if path == "" {
 		return "", "", fmt.Errorf("path is empty")
 	}
+	if path != string(filepath.Separator) && os.IsPathSeparator(path[len(path)-1]) {
+		return "", "", fmt.Errorf("path %q does not name a file", path)
+	}
 
 	dir := filepath.Dir(path)
 	leaf := filepath.Base(path)

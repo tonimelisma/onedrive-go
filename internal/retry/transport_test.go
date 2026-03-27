@@ -634,10 +634,10 @@ func TestRetryTransport_StripeRetryCount(t *testing.T) {
 }
 
 // Validates: R-6.6.8
-func TestRetryTransport_NetworkError_ExhaustionLogsError(t *testing.T) {
+func TestRetryTransport_NetworkError_ExhaustionLogsWarn(t *testing.T) {
 	t.Parallel()
 
-	// Use a log handler that captures log records to verify the ERROR log.
+	// Use a log handler that captures log records to verify the WARN log.
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
 
@@ -665,11 +665,11 @@ func TestRetryTransport_NetworkError_ExhaustionLogsError(t *testing.T) {
 	assert.Equal(t, int32(4), attempts.Load())
 
 	assert.Contains(t, logBuf.String(), retryExhaustedLogMessage)
-	assert.Contains(t, logBuf.String(), `"level":"ERROR"`)
+	assert.Contains(t, logBuf.String(), `"level":"WARN"`)
 }
 
 // Validates: R-6.6.8
-func TestRetryTransport_HTTPError_ExhaustionLogsError(t *testing.T) {
+func TestRetryTransport_HTTPError_ExhaustionLogsWarn(t *testing.T) {
 	t.Parallel()
 
 	var logBuf bytes.Buffer
@@ -702,5 +702,79 @@ func TestRetryTransport_HTTPError_ExhaustionLogsError(t *testing.T) {
 	assert.Equal(t, int32(4), attempts.Load())
 
 	assert.Contains(t, logBuf.String(), retryExhaustedLogMessage)
-	assert.Contains(t, logBuf.String(), `"level":"ERROR"`)
+	assert.Contains(t, logBuf.String(), `"level":"WARN"`)
+}
+
+// Validates: R-6.6.8
+func TestRetryTransport_AttemptsLogAtDebug(t *testing.T) {
+	t.Parallel()
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	var attempts atomic.Int32
+	inner := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		n := attempts.Add(1)
+		if n == 1 {
+			return nil, assert.AnError
+		}
+
+		return makeResponse(http.StatusOK, nil), nil
+	})
+
+	rt := &retry.RetryTransport{
+		Inner:  inner,
+		Policy: testPolicy(),
+		Logger: logger,
+		Sleep:  noopSleep,
+	}
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://example.com", http.NoBody)
+	require.NoError(t, err)
+
+	resp, err := rt.RoundTrip(req)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+
+	assert.Contains(t, logBuf.String(), `"level":"DEBUG"`)
+	assert.NotContains(t, logBuf.String(), `"level":"WARN"`)
+}
+
+// Validates: R-6.6.8
+func TestRetryTransport_UsesRedactedLogTargetFromContext(t *testing.T) {
+	t.Parallel()
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	opaqueSessionURL := "https://uploads.contoso.sharepoint.com/session/opaque-upload-id"
+	var attempts atomic.Int32
+	inner := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		n := attempts.Add(1)
+		if n == 1 {
+			return nil, assert.AnError
+		}
+
+		return makeResponse(http.StatusOK, nil), nil
+	})
+
+	rt := &retry.RetryTransport{
+		Inner:  inner,
+		Policy: testPolicy(),
+		Logger: logger,
+		Sleep:  noopSleep,
+	}
+
+	ctx := retry.WithLogTarget(t.Context(), "preauth:upload chunk")
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, opaqueSessionURL, http.NoBody)
+	require.NoError(t, err)
+
+	resp, err := rt.RoundTrip(req)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+
+	assert.Equal(t, int32(2), attempts.Load())
+	assert.NotContains(t, logBuf.String(), opaqueSessionURL)
+	assert.Contains(t, logBuf.String(), "preauth:upload chunk")
+	assert.NotContains(t, logBuf.String(), `"url":"`+opaqueSessionURL+`"`)
 }

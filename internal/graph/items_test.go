@@ -403,6 +403,7 @@ func TestListChildren_RootTransient404Retry(t *testing.T) {
 	assert.Equal(t, 2, attempts)
 }
 
+// Validates: R-6.7.12
 func TestListChildren_RootTransient404RetryExhausted(t *testing.T) {
 	var attempts int
 
@@ -421,7 +422,69 @@ func TestListChildren_RootTransient404RetryExhausted(t *testing.T) {
 	_, err := client.ListChildren(t.Context(), driveid.New("d"), "root")
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrNotFound)
-	assert.Equal(t, retry.DriveDiscoveryPolicy().MaxAttempts, attempts)
+	assert.Equal(t, retry.RootChildrenPolicy().MaxAttempts, attempts)
+}
+
+// Validates: R-6.7.12
+func TestListChildren_NonRetryable404sDoNotRetry(t *testing.T) {
+	tests := []struct {
+		name        string
+		itemID      string
+		pathFrag    string
+		requestID   string
+		body        string
+		description string
+	}{
+		{
+			name:        "root without itemNotFound code",
+			itemID:      "root",
+			pathFrag:    "/drives/000000000000000d/items/root/children",
+			requestID:   "req-root-404",
+			body:        `{"error":{"code":"nameAlreadyExists","message":"not found"}}`,
+			description: "404 without itemNotFound code must not retry",
+		},
+		{
+			name:        "non-root path",
+			itemID:      "parent",
+			pathFrag:    "/drives/000000000000000d/items/parent/children",
+			requestID:   "req-404",
+			body:        `{"error":{"code":"itemNotFound","message":"transient root miss"}}`,
+			description: "non-root children listings must not retry on 404",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var attempts int
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				attempts++
+				assert.Contains(t, r.URL.Path, tt.pathFrag)
+
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("request-id", tt.requestID)
+				w.WriteHeader(http.StatusNotFound)
+				writeTestResponse(t, w, tt.body)
+			}))
+			defer srv.Close()
+
+			client := newTestClient(t, srv.URL)
+			_, err := client.ListChildren(t.Context(), driveid.New("d"), tt.itemID)
+			require.Error(t, err)
+			require.ErrorIs(t, err, ErrNotFound)
+			assert.Equal(t, 1, attempts, tt.description)
+		})
+	}
+}
+
+func TestIsExactRootChildrenCollectionPath(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, isExactRootChildrenCollectionPath("/drives/abc/items/root/children"))
+	assert.True(t, isExactRootChildrenCollectionPath("/drives/abc/items/root/children?$top=200"))
+	assert.True(t, isExactRootChildrenCollectionPath("/drives/abc/items/root/children?$skiptoken=opaque"))
+	assert.False(t, isExactRootChildrenCollectionPath("/drives/abc/items/root:/folder:/children"))
+	assert.False(t, isExactRootChildrenCollectionPath("/drives/abc/items/parent/children"))
+	assert.False(t, isExactRootChildrenCollectionPath("/me/drive/root/children"))
 }
 
 // --- CreateFolder tests ---

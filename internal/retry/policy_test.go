@@ -98,10 +98,18 @@ func TestNamedPolicies_MatchOriginal(t *testing.T) {
 	assert.InDelta(t, 2.0, transport.Multiplier, 0.0)
 	assert.InDelta(t, 0.25, transport.Jitter, 0.0)
 
-	// DriveDiscovery: graph/drives.go — driveDiscoveryRetries=3
+	// DriveDiscovery: graph/drives.go — transient /me/drives retry budget.
 	driveDiscovery := DriveDiscoveryPolicy()
 	assert.Equal(t, 3, driveDiscovery.MaxAttempts)
 	assert.Equal(t, 1*time.Second, driveDiscovery.Base)
+
+	// RootChildren: graph/items.go — exact root/children transient 404 retry budget.
+	rootChildren := RootChildrenPolicy()
+	assert.Equal(t, 3, rootChildren.MaxAttempts)
+	assert.Equal(t, 250*time.Millisecond, rootChildren.Base)
+	assert.Equal(t, 1*time.Second, rootChildren.Max)
+	assert.InDelta(t, 2.0, rootChildren.Multiplier, 0.0)
+	assert.InDelta(t, 0.0, rootChildren.Jitter, 0.0)
 
 	// WatchLocal: observer_local.go — watchErrInitBackoff=1s, watchErrMaxBackoff=30s, watchErrBackoffMult=2
 	watchLocal := WatchLocalPolicy()

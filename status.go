@@ -292,7 +292,8 @@ func readAccountMeta(account string, driveIDs []driveid.CanonicalID, logger *slo
 		tokenID = findTokenFallback(account, logger)
 	}
 
-	return config.ResolveAccountNames(tokenID, logger)
+	orgName, displayName = config.ResolveAccountNames(tokenID, logger)
+	return displayName, orgName
 }
 
 // checkTokenState determines whether a valid token exists for the given account.

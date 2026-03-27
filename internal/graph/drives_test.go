@@ -579,22 +579,49 @@ func TestDrives_Permanent403_ExhaustsRetries(t *testing.T) {
 	assert.Equal(t, 3, attempts, "should have exhausted all 3 attempts")
 }
 
-func TestDrives_NonForbidden_NoRetry(t *testing.T) {
-	// Non-403 errors (e.g. 401) should not be retried.
-	var attempts int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		attempts++
-		w.Header().Set("request-id", "req-401")
-		w.WriteHeader(http.StatusUnauthorized)
-		writeTestResponse(t, w, `{"error":{"code":"InvalidAuthenticationToken"}}`)
-	}))
-	defer srv.Close()
+// Validates: R-6.7.13
+func TestDrives_NonRetryableErrorsDoNotRetry(t *testing.T) {
+	tests := []struct {
+		name      string
+		status    int
+		requestID string
+		body      string
+		wantErr   error
+	}{
+		{
+			name:      "non forbidden",
+			status:    http.StatusUnauthorized,
+			requestID: "req-401",
+			body:      `{"error":{"code":"InvalidAuthenticationToken"}}`,
+			wantErr:   ErrUnauthorized,
+		},
+		{
+			name:      "forbidden without accessDenied code",
+			status:    http.StatusForbidden,
+			requestID: "req-403",
+			body:      `{"error":{"code":"notAllowed","message":"Forbidden"}}`,
+			wantErr:   ErrForbidden,
+		},
+	}
 
-	client := newTestClient(t, srv.URL)
-	_, err := client.Drives(t.Context())
-	require.Error(t, err)
-	require.ErrorIs(t, err, ErrUnauthorized)
-	assert.Equal(t, 1, attempts, "non-403 errors should not be retried")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var attempts int
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				attempts++
+				w.Header().Set("request-id", tt.requestID)
+				w.WriteHeader(tt.status)
+				writeTestResponse(t, w, tt.body)
+			}))
+			defer srv.Close()
+
+			client := newTestClient(t, srv.URL)
+			_, err := client.Drives(t.Context())
+			require.Error(t, err)
+			require.ErrorIs(t, err, tt.wantErr)
+			assert.Equal(t, 1, attempts, "non-matching errors must not retry")
+		})
+	}
 }
 
 func TestToDrive_OwnerEmail(t *testing.T) {

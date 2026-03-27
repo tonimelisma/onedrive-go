@@ -42,7 +42,7 @@ func TestSetTempFilePermissions(t *testing.T) {
 
 	require.NoError(t, setTempFilePermissions(file))
 
-	info, err := os.Stat(file.Name())
+	info, err := file.Stat()
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(FilePerms), info.Mode().Perm())
 }
@@ -56,7 +56,7 @@ func TestWriteTempFileData(t *testing.T) {
 	require.NoError(t, writeTempFileData(file, []byte("token-data")))
 	require.NoError(t, file.Close())
 
-	data, err := os.ReadFile(file.Name())
+	data, err := trustedpath.ReadFile(file.Name())
 	require.NoError(t, err)
 	assert.Equal(t, []byte("token-data"), data)
 

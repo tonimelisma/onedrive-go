@@ -3523,12 +3523,28 @@ func TestClassifyResult_RemoteRetriesAndSkips(t *testing.T) {
 
 	outageErr := &graph.GraphError{
 		StatusCode: http.StatusBadRequest,
+		Code:       "badRequest",
+		InnerCodes: []string{"invalidRequest"},
 		Message:    "ObjectHandle is Invalid for operation",
 		Err:        graph.ErrBadRequest,
 	}
 	normalBadRequestErr := &graph.GraphError{
 		StatusCode: http.StatusBadRequest,
+		Code:       "badRequest",
+		InnerCodes: []string{"somethingElse"},
 		Message:    "invalid payload",
+		Err:        graph.ErrBadRequest,
+	}
+	wrongCodeOutageErr := &graph.GraphError{
+		StatusCode: http.StatusBadRequest,
+		Code:       "badRequest",
+		InnerCodes: []string{"nameAlreadyExists"},
+		Message:    "ObjectHandle is Invalid for operation",
+		Err:        graph.ErrBadRequest,
+	}
+	legacyOutageErr := &graph.GraphError{
+		StatusCode: http.StatusBadRequest,
+		Message:    "ObjectHandle is Invalid for operation",
 		Err:        graph.ErrBadRequest,
 	}
 
@@ -3539,6 +3555,8 @@ func TestClassifyResult_RemoteRetriesAndSkips(t *testing.T) {
 		{name: "423_locked", result: synctypes.WorkerResult{HTTPStatus: http.StatusLocked, Err: graph.ErrLocked}, wantClass: resultRequeue},
 		{name: "429_too_many_requests", result: synctypes.WorkerResult{HTTPStatus: http.StatusTooManyRequests, Err: graph.ErrThrottled}, wantClass: resultScopeBlock, wantScope: synctypes.SKThrottleAccount()},
 		{name: "400_outage_pattern", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: outageErr}, wantClass: resultRequeue},
+		{name: "400_outage_pattern_legacy_body_only", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: legacyOutageErr}, wantClass: resultRequeue},
+		{name: "400_outage_message_wrong_code", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: wrongCodeOutageErr}, wantClass: resultSkip},
 		{name: "400_normal", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: normalBadRequestErr}, wantClass: resultSkip},
 		{name: "500_internal_server_error", result: synctypes.WorkerResult{HTTPStatus: http.StatusInternalServerError, Err: graph.ErrServerError}, wantClass: resultRequeue},
 		{name: "502_bad_gateway", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadGateway, Err: graph.ErrServerError}, wantClass: resultRequeue},
@@ -4706,6 +4724,8 @@ func TestIssueTypeForHTTPStatus(t *testing.T) {
 
 	outageErr := &graph.GraphError{
 		StatusCode: http.StatusBadRequest,
+		Code:       "badRequest",
+		InnerCodes: []string{"invalidRequest"},
 		Message:    "ObjectHandle is Invalid for operation",
 		Err:        graph.ErrBadRequest,
 	}

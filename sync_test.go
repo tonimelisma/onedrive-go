@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -204,4 +205,19 @@ func TestNewSyncCmd_FullWatchMutualExclusivity(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "full")
 	assert.Contains(t, err.Error(), "watch")
+}
+
+func TestParseDurationOrZero(t *testing.T) {
+	t.Parallel()
+
+	assert.Zero(t, parseDurationOrZero(""))
+	assert.Zero(t, parseDurationOrZero("not-a-duration"))
+	assert.Equal(t, 5*time.Minute, parseDurationOrZero("5m"))
+}
+
+func TestParsePollInterval(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, 30*time.Second, parsePollInterval("30s"))
+	assert.Zero(t, parsePollInterval("bogus"))
 }

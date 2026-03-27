@@ -6,15 +6,19 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/oauth2"
 	_ "modernc.org/sqlite"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
 // mockNameReader returns fixed display name and org name for testing.
@@ -263,6 +267,78 @@ func TestBuildStatusAccountsWith_SharePointGrouping(t *testing.T) {
 	assert.Equal(t, "business", acct.DriveType) // business preferred over sharepoint
 	assert.Equal(t, "Contoso", acct.OrgName)
 	assert.Len(t, acct.Drives, 3)
+}
+
+func TestReadAccountMeta_UsesProfileFieldOrder(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	cid := driveid.MustCanonicalID("personal:alice@example.com")
+	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
+		DisplayName:    "Alice",
+		OrgName:        "Contoso",
+		UserID:         "u1",
+		PrimaryDriveID: "d1",
+	}))
+
+	displayName, orgName := readAccountMeta("alice@example.com", []driveid.CanonicalID{cid}, slog.New(slog.DiscardHandler))
+	assert.Equal(t, "Alice", displayName)
+	assert.Equal(t, "Contoso", orgName)
+}
+
+func TestReadAccountMeta_FallsBackToTokenProbe(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	cid := driveid.MustCanonicalID("personal:alice@example.com")
+	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
+		DisplayName:    "Alice",
+		OrgName:        "Contoso",
+		UserID:         "u1",
+		PrimaryDriveID: "d1",
+	}))
+
+	tokenPath := config.DriveTokenPath(cid)
+	require.NoError(t, os.MkdirAll(filepath.Dir(tokenPath), 0o700))
+	require.NoError(t, os.WriteFile(tokenPath, []byte("{}"), 0o600))
+
+	displayName, orgName := readAccountMeta("alice@example.com", nil, slog.New(slog.DiscardHandler))
+	assert.Equal(t, "Alice", displayName)
+	assert.Equal(t, "Contoso", orgName)
+}
+
+func TestCheckTokenState_MissingTokenUsesFallback(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	state := checkTokenState(t.Context(), "missing@example.com", nil, slog.New(slog.DiscardHandler))
+	assert.Equal(t, tokenStateMissing, state)
+}
+
+func TestCheckTokenState_ValidToken(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	cid := driveid.MustCanonicalID("personal:alice@example.com")
+	tokenPath := config.DriveTokenPath(cid)
+	require.NoError(t, os.MkdirAll(filepath.Dir(tokenPath), 0o700))
+	require.NoError(t, tokenfile.Save(tokenPath, &oauth2.Token{
+		AccessToken:  "access",
+		RefreshToken: "refresh",
+		TokenType:    "Bearer",
+		Expiry:       time.Now().Add(time.Hour),
+	}))
+
+	state := checkTokenState(t.Context(), "alice@example.com", []driveid.CanonicalID{cid}, slog.New(slog.DiscardHandler))
+	assert.Equal(t, tokenStateValid, state)
+}
+
+func TestCheckTokenState_InvalidTokenFileReturnsExpired(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	cid := driveid.MustCanonicalID("personal:alice@example.com")
+	tokenPath := config.DriveTokenPath(cid)
+	require.NoError(t, os.MkdirAll(filepath.Dir(tokenPath), 0o700))
+	require.NoError(t, os.WriteFile(tokenPath, []byte("{invalid-json"), 0o600))
+
+	state := checkTokenState(t.Context(), "alice@example.com", []driveid.CanonicalID{cid}, slog.New(slog.DiscardHandler))
+	assert.Equal(t, tokenStateExpired, state)
 }
 
 func TestBuildStatusAccountsWith_DisplayNameFromConfig(t *testing.T) {

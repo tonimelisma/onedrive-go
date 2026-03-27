@@ -3,9 +3,11 @@
 package graph
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -31,7 +33,10 @@ var (
 type GraphError struct {
 	StatusCode int
 	RequestID  string
+	Code       string
+	InnerCodes []string
 	Message    string
+	RawBody    string
 	Err        error // sentinel, for errors.Is()
 	// RetryAfter is the server-mandated wait duration from the Retry-After
 	// header on 429/503 responses. Zero when absent or unparseable. The engine
@@ -49,6 +54,89 @@ func (e *GraphError) Error() string {
 
 func (e *GraphError) Unwrap() error {
 	return e.Err
+}
+
+func (e *GraphError) MostSpecificCode() string {
+	for i := len(e.InnerCodes) - 1; i >= 0; i-- {
+		if e.InnerCodes[i] != "" {
+			return e.InnerCodes[i]
+		}
+	}
+
+	return e.Code
+}
+
+func (e *GraphError) HasCode(code string) bool {
+	if strings.EqualFold(e.Code, code) {
+		return true
+	}
+
+	for i := range e.InnerCodes {
+		if strings.EqualFold(e.InnerCodes[i], code) {
+			return true
+		}
+	}
+
+	return false
+}
+
+type graphErrorEnvelope struct {
+	Error graphErrorNode `json:"error"`
+}
+
+type graphErrorNode struct {
+	Code            string          `json:"code"`
+	Message         string          `json:"message"`
+	InnerError      json.RawMessage `json:"innerError"`
+	InnerErrorLower json.RawMessage `json:"innererror"`
+}
+
+func parseGraphErrorBody(body []byte) (code, message string, innerCodes []string) {
+	var envelope graphErrorEnvelope
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return "", "", nil
+	}
+
+	code = envelope.Error.Code
+	message = envelope.Error.Message
+	innerCodes = parseInnerErrorCodes(firstNonEmptyRawMessage(
+		envelope.Error.InnerError,
+		envelope.Error.InnerErrorLower,
+	))
+
+	if code == "" && message == "" && len(innerCodes) == 0 {
+		return "", "", nil
+	}
+
+	return code, message, innerCodes
+}
+
+func parseInnerErrorCodes(raw json.RawMessage) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+
+	var node graphErrorNode
+	if err := json.Unmarshal(raw, &node); err != nil {
+		return nil
+	}
+
+	var codes []string
+	if node.Code != "" {
+		codes = append(codes, node.Code)
+	}
+
+	return append(codes, parseInnerErrorCodes(firstNonEmptyRawMessage(node.InnerError, node.InnerErrorLower))...)
+}
+
+func firstNonEmptyRawMessage(values ...json.RawMessage) json.RawMessage {
+	for i := range values {
+		if len(values[i]) > 0 {
+			return values[i]
+		}
+	}
+
+	return nil
 }
 
 // classifyStatus maps an HTTP status code to a sentinel error.

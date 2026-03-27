@@ -42,23 +42,25 @@ type TokenSource interface {
 
 // Client is a pure HTTP client for the Microsoft Graph API. It handles request
 // construction, authentication (including 401 token refresh), and error
-// classification. Retry logic lives in retry.RetryTransport, configured on the
-// http.Client's Transport — the graph Client itself never retries or sleeps.
-// This separation keeps the client stateless and makes the retry decision a
-// caller concern (CLI: RetryTransport, sync: raw transport, single attempt,
-// engine records failure for the engine retry sweep).
+// classification. Generic retry logic lives in retry.RetryTransport, while the
+// client itself keeps only narrow Graph-quirk retries for documented
+// misreported errors. This separation keeps generic resilience in the transport
+// layer and preserves caller control (CLI: RetryTransport, sync: raw
+// transport, single attempt, engine records failure for the engine retry
+// sweep).
 type Client struct {
-	baseURL               string
-	httpClient            *http.Client
-	token                 TokenSource
-	logger                *slog.Logger
-	userAgent             string
-	deltaPreferHeader     http.Header
-	maxDeltaPages         int
-	maxRecursionDepth     int
-	driveDiscoveryRetries int
-	uploadURLValidator    func(*url.URL) error
-	copyMonitorValidator  func(*url.URL) error
+	baseURL              string
+	httpClient           *http.Client
+	token                TokenSource
+	logger               *slog.Logger
+	userAgent            string
+	deltaPreferHeader    http.Header
+	maxDeltaPages        int
+	maxRecursionDepth    int
+	driveDiscoveryPolicy retry.Policy
+	rootChildrenPolicy   retry.Policy
+	uploadURLValidator   func(*url.URL) error
+	copyMonitorValidator func(*url.URL) error
 }
 
 // NewClient creates a Graph API client.
@@ -91,17 +93,18 @@ func NewClient(
 	}
 
 	return &Client{
-		baseURL:               baseURL,
-		httpClient:            httpClient,
-		token:                 token,
-		logger:                logger,
-		userAgent:             userAgent,
-		deltaPreferHeader:     newDeltaPreferHeader(),
-		maxDeltaPages:         defaultMaxDeltaPages,
-		maxRecursionDepth:     defaultMaxRecursionDepth,
-		driveDiscoveryRetries: retry.DriveDiscoveryPolicy().MaxAttempts,
-		uploadURLValidator:    validateUploadURL,
-		copyMonitorValidator:  validateCopyMonitorURL,
+		baseURL:              baseURL,
+		httpClient:           httpClient,
+		token:                token,
+		logger:               logger,
+		userAgent:            userAgent,
+		deltaPreferHeader:    newDeltaPreferHeader(),
+		maxDeltaPages:        defaultMaxDeltaPages,
+		maxRecursionDepth:    defaultMaxRecursionDepth,
+		driveDiscoveryPolicy: retry.DriveDiscoveryPolicy(),
+		rootChildrenPolicy:   retry.RootChildrenPolicy(),
+		uploadURLValidator:   validateUploadURL,
+		copyMonitorValidator: validateCopyMonitorURL,
 	}
 }
 
@@ -312,14 +315,7 @@ func (c *Client) buildError(method, path string, resp *http.Response) *GraphErro
 
 	reqID := resp.Header.Get("request-id")
 	retryAfter := parseRetryAfter(resp)
-
-	graphErr := &GraphError{
-		StatusCode: resp.StatusCode,
-		RequestID:  reqID,
-		Message:    string(errBody),
-		Err:        classifyStatus(resp.StatusCode),
-		RetryAfter: retryAfter,
-	}
+	graphErr := buildGraphError(resp.StatusCode, reqID, retryAfter, errBody)
 
 	// Log at DEBUG — the HTTP layer lacks context to judge severity.
 	// Callers decide: e.g. DELETE 404 is success, GET 404 is an error.
@@ -361,6 +357,8 @@ func (c *Client) doPreAuth(
 		}
 	}
 
+	req = retry.WithRequestLogTarget(req, "preauth:"+desc)
+
 	resp, err := c.dispatchRequest(req)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -396,13 +394,7 @@ func (c *Client) doPreAuth(
 		slog.String("request_id", reqID),
 	)
 
-	return nil, &GraphError{
-		StatusCode: resp.StatusCode,
-		RequestID:  reqID,
-		Message:    string(errBody),
-		Err:        classifyStatus(resp.StatusCode),
-		RetryAfter: retryAfter,
-	}
+	return nil, buildGraphError(resp.StatusCode, reqID, retryAfter, errBody)
 }
 
 func (c *Client) dispatchRequest(req *http.Request) (*http.Response, error) {
@@ -480,4 +472,23 @@ func rewindBody(body io.Reader) error {
 	}
 
 	return nil
+}
+
+func buildGraphError(statusCode int, requestID string, retryAfter time.Duration, rawBody []byte) *GraphError {
+	raw := string(rawBody)
+	code, message, innerCodes := parseGraphErrorBody(rawBody)
+	if message == "" {
+		message = raw
+	}
+
+	return &GraphError{
+		StatusCode: statusCode,
+		RequestID:  requestID,
+		Code:       code,
+		InnerCodes: innerCodes,
+		Message:    message,
+		RawBody:    raw,
+		Err:        classifyStatus(statusCode),
+		RetryAfter: retryAfter,
+	}
 }

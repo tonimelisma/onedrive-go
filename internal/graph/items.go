@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // listChildrenPageSize is the $top value for ListChildren requests.
@@ -463,81 +462,65 @@ func (c *Client) listChildrenRecursiveDepth(ctx context.Context, driveID driveid
 // listChildrenPage fetches a single page of children and returns the items
 // and the next page path (empty if no more pages).
 func (c *Client) listChildrenPage(ctx context.Context, path string, page int) ([]Item, string, error) {
-	retryRootChildren := isTransientRootChildrenPath(path)
-	policy := retry.DriveDiscoveryPolicy()
+	type childrenPage struct {
+		items    []Item
+		nextPath string
+	}
 
-	var resp *http.Response
-	for attempt := range policy.MaxAttempts {
-		var err error
+	op := func() (childrenPage, error) {
+		resp, err := c.Do(ctx, http.MethodGet, path, nil)
+		if err != nil {
+			return childrenPage{}, err
+		}
+		defer resp.Body.Close()
 
-		resp, err = c.Do(ctx, http.MethodGet, path, nil)
-		if err == nil {
-			break
+		var lcr listChildrenResponse
+		if decErr := json.NewDecoder(resp.Body).Decode(&lcr); decErr != nil {
+			return childrenPage{}, fmt.Errorf("graph: decoding children response: %w", decErr)
 		}
 
-		graphErr, retryable := isTransientRootChildrenError(path, err)
-		if !retryRootChildren || !retryable || attempt >= policy.MaxAttempts-1 {
+		items := make([]Item, 0, len(lcr.Value))
+		for i := range lcr.Value {
+			items = append(items, lcr.Value[i].toItem(c.logger))
+		}
+
+		c.logger.Debug("fetched children page",
+			slog.Int("page", page),
+			slog.Int("count", len(items)),
+		)
+
+		var nextPath string
+		if lcr.NextLink != "" {
+			var stripErr error
+
+			nextPath, stripErr = c.stripBaseURL(lcr.NextLink)
+			if stripErr != nil {
+				return childrenPage{}, stripErr
+			}
+		}
+
+		return childrenPage{items: items, nextPath: nextPath}, nil
+	}
+
+	if !isExactRootChildrenCollectionPath(path) {
+		result, err := op()
+		if err != nil {
 			return nil, "", err
 		}
 
-		backoff := policy.Delay(attempt)
-		c.logger.Warn("retrying root children after transient 404",
-			slog.Int("attempt", attempt+1),
-			slog.Int("max_attempts", policy.MaxAttempts),
-			slog.Int("page", page),
-			slog.Duration("backoff", backoff),
-			slog.String("request_id", graphErr.RequestID),
-		)
-
-		if sleepErr := retry.TimeSleep(ctx, backoff); sleepErr != nil {
-			return nil, "", fmt.Errorf("graph: root children retry canceled: %w", sleepErr)
-		}
-	}
-	defer resp.Body.Close()
-
-	var lcr listChildrenResponse
-	if err := json.NewDecoder(resp.Body).Decode(&lcr); err != nil {
-		return nil, "", fmt.Errorf("graph: decoding children response: %w", err)
+		return result.items, result.nextPath, nil
 	}
 
-	items := make([]Item, 0, len(lcr.Value))
-	for i := range lcr.Value {
-		items = append(items, lcr.Value[i].toItem(c.logger))
+	result, err := doQuirkRetry(ctx, c, quirkRetrySpec{
+		name:   "root-children-transient-404",
+		policy: c.rootChildrenPolicy,
+		match:  isTransientRootChildrenError,
+	}, op)
+	if err != nil {
+		return nil, "", err
 	}
 
-	c.logger.Debug("fetched children page",
-		slog.Int("page", page),
-		slog.Int("count", len(items)),
-	)
-
-	var nextPath string
-	if lcr.NextLink != "" {
-		var stripErr error
-
-		nextPath, stripErr = c.stripBaseURL(lcr.NextLink)
-		if stripErr != nil {
-			return nil, "", stripErr
-		}
-	}
-
-	return items, nextPath, nil
-}
-
-func isTransientRootChildrenPath(path string) bool {
-	return strings.Contains(path, "/items/root/children")
-}
-
-func isTransientRootChildrenError(path string, err error) (*GraphError, bool) {
-	if !isTransientRootChildrenPath(path) || !errors.Is(err, ErrNotFound) {
-		return nil, false
-	}
-
-	var graphErr *GraphError
-	if !errors.As(err, &graphErr) || graphErr.StatusCode != http.StatusNotFound {
-		return nil, false
-	}
-
-	return graphErr, true
+	return result.items, result.nextPath, nil
 }
 
 // stripBaseURL removes the client's base URL prefix from a full URL,

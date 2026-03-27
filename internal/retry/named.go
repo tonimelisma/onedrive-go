@@ -7,11 +7,14 @@ import "time"
 const (
 	transportAttempts      = 5
 	driveDiscoveryAttempts = 3
+	rootChildrenAttempts   = 3
 	infiniteAttempts       = 0
 	standardMultiplier     = 2.0
 	standardJitter         = 0.25
 	noJitter               = 0.0
 	defaultBaseDelay       = 1 * time.Second
+	rootChildrenBaseDelay  = 250 * time.Millisecond
+	rootChildrenMaxDelay   = 1 * time.Second
 	transportMaxDelay      = 60 * time.Second
 	watchLocalMaxDelay     = 30 * time.Second
 	watchRemoteBaseDelay   = 5 * time.Second
@@ -39,6 +42,20 @@ func DriveDiscoveryPolicy() Policy {
 		Max:         transportMaxDelay,
 		Multiplier:  standardMultiplier,
 		Jitter:      standardJitter,
+	}
+}
+
+// RootChildrenPolicy is the quick-retry policy for the documented transient
+// 404 misfire on GET /drives/{id}/items/root/children. It is intentionally
+// shorter than drive discovery because root listing is a hot path for both CLI
+// commands and sync observation.
+func RootChildrenPolicy() Policy {
+	return Policy{
+		MaxAttempts: rootChildrenAttempts,
+		Base:        rootChildrenBaseDelay,
+		Max:         rootChildrenMaxDelay,
+		Multiplier:  standardMultiplier,
+		Jitter:      noJitter,
 	}
 }
 

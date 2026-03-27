@@ -84,11 +84,11 @@ Every Personal account has 2-3 hidden system drives (face crops, albums) created
 
 ### Transient 404 on Valid Resources
 
-`GET /drives/{driveID}/items/root/children` returns HTTP 404 ("itemNotFound") on drives that have existed for months. The token is valid, the drive ID is correct, and subsequent requests succeed. Caused by cross-datacenter lookup timeouts on the load balancer. This is a server-side failure misreported as a client error. Frequency: ~1% of requests.
+`GET /drives/{driveID}/items/root/children` returns HTTP 404 with Graph code `itemNotFound` on drives that have existed for months. The token is valid, the drive ID is correct, and subsequent requests succeed. Caused by cross-datacenter lookup timeouts on the load balancer. This is a server-side failure misreported as a client error. Frequency: ~1% of requests.
 
 ### Transient 403 on `/me/drives` (Token Propagation)
 
-After token refresh, `/me/drives` returns HTTP 403 ("accessDenied") while `/me` (user profile) succeeds with the same token. Caused by eventual consistency in Microsoft's token propagation infrastructure. The `/me` endpoint receives token updates before `/me/drives`.
+After token refresh, `/me/drives` returns HTTP 403 with Graph code `accessDenied` while `/me` (user profile) succeeds with the same token. Caused by eventual consistency in Microsoft's token propagation infrastructure. The `/me` endpoint receives token updates before `/me/drives`.
 
 ### HTTP 308 Without Location Header
 
@@ -96,7 +96,7 @@ Webhook subscription renewal (PATCH to `/v1.0/subscriptions/{id}`) returns HTTP 
 
 ### HTTP 400 "ObjectHandle is Invalid" (Outage Pattern)
 
-Multi-hour Microsoft-side backend failures return HTTP 400 `invalidRequest` / `"ObjectHandle is Invalid"` on every Graph API call. Not endpoint-specific — affects all operations. Non-retryable (400 is a client error code). The only resolution is to wait for Microsoft to fix it. Observed: one 3.5-hour incident.
+Multi-hour Microsoft-side backend failures return HTTP 400 with a Graph code chain containing `invalidRequest` plus message text such as `"ObjectHandle is Invalid"` on every Graph API call. Not endpoint-specific — affects all operations. Non-retryable (400 is a client error code). The only resolution is to wait for Microsoft to fix it. Observed: one 3.5-hour incident.
 
 ### HTTP 507 Wraps ErrServerError
 
