@@ -17,6 +17,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 func TestUniqueAccounts(t *testing.T) {
@@ -311,7 +312,7 @@ func TestOpenBrowser_StartsValidatedCommand(t *testing.T) {
 	require.NoError(t, openBrowser(t.Context(), authURL))
 
 	require.Eventually(t, func() bool {
-		data, readErr := os.ReadFile(outputPath) //nolint:gosec // Test output path is created in t.TempDir and controlled by the test.
+		data, readErr := trustedpath.ReadFile(outputPath)
 		return readErr == nil && string(data) == authURL
 	}, 5*time.Second, 25*time.Millisecond)
 }

@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/oauth2"
+
+	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 func TestMarshalTokenFile(t *testing.T) {
@@ -127,7 +129,7 @@ func TestRenameTempFile(t *testing.T) {
 
 	require.NoError(t, renameTempFile(src, dst))
 
-	data, err := os.ReadFile(dst) //nolint:gosec // Test destination is created in t.TempDir and controlled by the test.
+	data, err := trustedpath.ReadFile(dst)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("token"), data)
 

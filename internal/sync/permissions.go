@@ -1,11 +1,11 @@
 package sync
 
 import (
-	"os"
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 // resolveRemoteItemID looks up the remote item ID for a local path from the
@@ -40,7 +40,7 @@ func findShortcutForPath(shortcuts []synctypes.Shortcut, filePath string) *synct
 // os.Stat is insufficient — it succeeds on chmod 000 dirs because stat()
 // only requires execute on the parent. os.Open tests actual read access.
 func isDirAccessible(dir string) bool {
-	f, err := os.Open(dir) //nolint:gosec // Accessibility probe operates on the caller-selected local sync directory.
+	f, err := trustedpath.Open(dir)
 	if err != nil {
 		return false
 	}

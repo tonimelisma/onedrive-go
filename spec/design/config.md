@@ -18,6 +18,8 @@ Only two environment variables: `ONEDRIVE_GO_CONFIG` (config path override) and 
 
 Platform-specific paths following XDG (Linux) and Application Support (macOS) conventions. Config and data may share the same directory on macOS.
 
+Managed config/account/drive-metadata reads use root-based trusted-path opens once the CLI/config layer has selected the file path. This keeps the path trust boundary explicit without broad `gosec` carve-outs.
+
 ## Config File Manipulation
 
 The config file is read with a TOML parser (`BurntSushi/toml`) but written with line-based text edits (`toml_lines.go`). This preserves all comments — both the initial defaults template and user additions. No TOML round-trip serialization.

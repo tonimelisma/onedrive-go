@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 // File permission constants.
@@ -29,9 +31,7 @@ func Open(path string, retentionDays int) (*os.File, error) {
 		cleanOld(dir, retentionDays)
 	}
 
-	// The path is the CLI-selected log destination after config/flag resolution;
-	// logfile owns the append/open mechanics, not user-input validation.
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, filePerm) //nolint:gosec // CLI/config path boundary.
+	file, err := trustedpath.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, filePerm)
 	if err != nil {
 		return nil, fmt.Errorf("open log file: %w", err)
 	}

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 // DriveMetadata holds cached API data for a specific drive. Persisted as a
@@ -51,7 +52,7 @@ func LookupDriveMetadata(cid driveid.CanonicalID) (*DriveMetadata, bool, error) 
 		return nil, false, nil
 	}
 
-	data, err := os.ReadFile(path) //nolint:gosec // Drive metadata path is derived from a canonical drive ID under the managed data directory.
+	data, err := trustedpath.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, false, nil
 	}

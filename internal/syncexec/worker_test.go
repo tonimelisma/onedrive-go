@@ -20,6 +20,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 // ---------------------------------------------------------------------------
@@ -270,7 +271,7 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 	assert.Equal(t, 2, succeeded)
 
 	// Verify file was downloaded.
-	content, readErr := os.ReadFile(filepath.Join(syncRoot, "NewDir", "file.txt")) //nolint:gosec // Test output file lives under the temp sync root created by the test.
+	content, readErr := trustedpath.ReadFile(filepath.Join(syncRoot, "NewDir", "file.txt"))
 	require.NoError(t, readErr, "read file")
 	assert.Equal(t, "file-content", string(content))
 }

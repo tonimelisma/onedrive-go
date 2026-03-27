@@ -13,6 +13,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 // isCaseSensitiveFS returns true if the filesystem at dir distinguishes
@@ -35,7 +36,7 @@ func isCaseSensitiveFS(t *testing.T, dir string) bool {
 	defer os.Remove(lower)
 
 	// Both files created — check they're distinct by reading the upper file.
-	data, err := os.ReadFile(upper) //nolint:gosec // Test collision path lives under t.TempDir and is controlled by the test.
+	data, err := trustedpath.ReadFile(upper)
 	if err != nil {
 		return false
 	}

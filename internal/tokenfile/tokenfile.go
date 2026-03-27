@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 
 	"golang.org/x/oauth2"
+
+	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 // ErrNotFound is returned by Load when the token file does not exist.
@@ -36,7 +38,7 @@ type File struct {
 // Old bare oauth2.Token files (without the "token" wrapper) will fail with
 // "missing token field" — re-login is required.
 func Load(path string) (*oauth2.Token, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // Token path comes from config-managed drive identity resolution.
+	data, err := trustedpath.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, ErrNotFound
 	}

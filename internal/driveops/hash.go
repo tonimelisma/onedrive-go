@@ -4,9 +4,9 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
 
@@ -36,7 +36,7 @@ func SelectHash(item *graph.Item) string {
 // ComputeQuickXorHash computes the QuickXorHash of a file and returns the
 // base64-encoded digest. Uses streaming I/O (constant memory).
 func ComputeQuickXorHash(fsPath string) (string, error) {
-	f, err := os.Open(fsPath) //nolint:gosec // Hashing operates on the caller-selected local filesystem path.
+	f, err := trustedpath.Open(fsPath)
 	if err != nil {
 		return "", fmt.Errorf("opening %s for hashing: %w", fsPath, err)
 	}

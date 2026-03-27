@@ -20,6 +20,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
+	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 // testTokenJSON is the canonical token response for tests.
@@ -608,7 +609,7 @@ func TestSaveToken_JSONFormat(t *testing.T) {
 
 	require.NoError(t, tokenfile.Save(path, tok))
 
-	data, err := os.ReadFile(path) //nolint:gosec // Test token path is created in t.TempDir and controlled by the test.
+	data, err := trustedpath.ReadFile(path)
 	require.NoError(t, err)
 
 	// Verify it's valid JSON with the new wrapper format.

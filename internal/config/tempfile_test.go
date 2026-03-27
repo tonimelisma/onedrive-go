@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 func TestRemoveTempPath(t *testing.T) {
@@ -73,7 +75,7 @@ func TestRenameTrustedTempPath(t *testing.T) {
 
 	require.NoError(t, renameTrustedTempPath(src, dst, "config file"))
 
-	data, err := os.ReadFile(dst) //nolint:gosec // Test destination is created in t.TempDir and controlled by the test.
+	data, err := trustedpath.ReadFile(dst)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("cfg"), data)
 

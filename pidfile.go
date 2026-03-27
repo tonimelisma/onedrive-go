@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 // pidFilePermissions matches the standard config file permissions (owner rw, group/other r).
@@ -29,8 +31,7 @@ func writePIDFile(path string) (cleanup func(), err error) {
 		return nil, fmt.Errorf("creating PID file directory: %w", mkdirErr)
 	}
 
-	// PID file path is derived from the managed data directory.
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, pidFilePermissions) //nolint:gosec // Managed data-dir path.
+	f, err := trustedpath.OpenFile(path, os.O_CREATE|os.O_RDWR, pidFilePermissions)
 	if err != nil {
 		return nil, fmt.Errorf("opening PID file: %w", err)
 	}
@@ -87,8 +88,7 @@ func writePIDFile(path string) (cleanup func(), err error) {
 // readPIDFile reads the PID from the given file path. Returns 0 and an error
 // if the file does not exist or contains invalid content.
 func readPIDFile(path string) (int, error) {
-	// PID file path is derived from the managed data directory.
-	data, err := os.ReadFile(path) //nolint:gosec // Managed data-dir path.
+	data, err := trustedpath.ReadFile(path)
 	if err != nil {
 		return 0, fmt.Errorf("reading PID file: %w", err)
 	}

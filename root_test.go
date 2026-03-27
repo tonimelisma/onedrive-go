@@ -18,6 +18,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
+	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 // --- buildLogger tests ---
@@ -975,7 +976,7 @@ func TestBuildLoggerDual_WithLogFile(t *testing.T) {
 	logger.Info("test log message", slog.String("key", "value"))
 	require.NoError(t, closer.Close())
 
-	data, err := os.ReadFile(logPath) //nolint:gosec // Test log path is created in t.TempDir and controlled by the test.
+	data, err := trustedpath.ReadFile(logPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "test log message")
 	assert.Contains(t, string(data), "key")
@@ -1000,7 +1001,7 @@ func TestBuildLoggerDual_FileGetsJSON(t *testing.T) {
 	logger.Info("json check")
 	require.NoError(t, closer.Close())
 
-	data, err := os.ReadFile(logPath) //nolint:gosec // Test log path is created in t.TempDir and controlled by the test.
+	data, err := trustedpath.ReadFile(logPath)
 	require.NoError(t, err)
 
 	// File output should be JSON.
@@ -1029,7 +1030,7 @@ func TestBuildLoggerDual_IndependentLevels(t *testing.T) {
 	logger.Debug("debug for file only")
 	require.NoError(t, closer.Close())
 
-	data, err := os.ReadFile(logPath) //nolint:gosec // Test log path is created in t.TempDir and controlled by the test.
+	data, err := trustedpath.ReadFile(logPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "debug for file only",
 		"file handler should receive debug messages regardless of CLI flags")

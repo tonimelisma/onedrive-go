@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 func TestApplyDotEnv(t *testing.T) {
@@ -109,7 +111,7 @@ func TestCopyFile(t *testing.T) {
 
 	CopyFile(src, dst, 0o600)
 
-	data, err := os.ReadFile(dst) //nolint:gosec // Test destination is created in t.TempDir and controlled by the test.
+	data, err := trustedpath.ReadFile(dst)
 	require.NoError(t, err)
 	assert.Equal(t, "payload", string(data))
 
@@ -128,11 +130,11 @@ func TestCopyMetadataFiles(t *testing.T) {
 
 	CopyMetadataFiles(srcDir, dstDir)
 
-	accountData, err := os.ReadFile(filepath.Join(dstDir, "account_a.json")) //nolint:gosec // Test destination lives under t.TempDir.
+	accountData, err := trustedpath.ReadFile(filepath.Join(dstDir, "account_a.json"))
 	require.NoError(t, err)
 	assert.Equal(t, "account", string(accountData))
 
-	driveData, err := os.ReadFile(filepath.Join(dstDir, "drive_b.json")) //nolint:gosec // Test destination lives under t.TempDir.
+	driveData, err := trustedpath.ReadFile(filepath.Join(dstDir, "drive_b.json"))
 	require.NoError(t, err)
 	assert.Equal(t, "drive", string(driveData))
 

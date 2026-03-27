@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 // configFilePermissions is the standard permission mode for config files.
@@ -70,7 +71,7 @@ func AppendDriveSection(path string, canonicalID driveid.CanonicalID, syncDir st
 		"sync_dir", syncDir,
 	)
 
-	data, err := os.ReadFile(path) //nolint:gosec // Config path is selected at the CLI/config boundary before mutation.
+	data, err := trustedpath.ReadFile(path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("reading config file: %w", err)
@@ -139,7 +140,7 @@ func SetDriveKey(path string, canonicalID driveid.CanonicalID, key, value string
 		"value", value,
 	)
 
-	data, err := os.ReadFile(path) //nolint:gosec // Config path is selected at the CLI/config boundary before mutation.
+	data, err := trustedpath.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("reading config file: %w", err)
 	}
@@ -176,7 +177,7 @@ func DeleteDriveKey(path string, canonicalID driveid.CanonicalID, key string) er
 		"key", key,
 	)
 
-	data, err := os.ReadFile(path) //nolint:gosec // Config path is selected at the CLI/config boundary before mutation.
+	data, err := trustedpath.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("reading config file: %w", err)
 	}
@@ -207,7 +208,7 @@ func DeleteDriveSection(path string, canonicalID driveid.CanonicalID) error {
 		"canonical_id", canonicalID.String(),
 	)
 
-	data, err := os.ReadFile(path) //nolint:gosec // Config path is selected at the CLI/config boundary before mutation.
+	data, err := trustedpath.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("reading config file: %w", err)
 	}

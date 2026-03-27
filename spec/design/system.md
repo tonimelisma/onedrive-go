@@ -85,8 +85,9 @@ Static verification is a first-class architectural constraint, not a best-effort
 
 - `golangci-lint` runs with `default: none`; every enabled linter is an explicit policy choice.
 - `nolintlint` requires both a specific linter name and a short justification. Unused exclusions are surfaced with `linters.exclusions.warn-unused`.
-- Inline suppressions are reserved for the small documented exception set where the code is correct and the linter cannot express that shape cleanly.
+- Inline suppressions are reserved for the small documented exception set where the code is correct and the linter cannot express that shape cleanly: interface-mandated receiver shapes, validated subprocess/request dispatch that the linter cannot follow across helper boundaries, non-cryptographic jitter, `driver.Valuer` SQL `NULL` semantics, fixed placeholder SQL, and intentional test fixtures/mocks.
 - `scripts/verify.sh` is the single repo-owned verification entry point: lint, `go build ./...`, `go test -race -coverprofile`, coverage gate, then fast E2E when credentials are present.
+- Managed-path file reads and opens use root-based trusted-path helpers instead of broad path-taint exclusions.
 
 ## Planned Improvements
 
