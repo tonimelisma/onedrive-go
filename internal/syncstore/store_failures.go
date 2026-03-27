@@ -1,8 +1,9 @@
-// store_failures.go — Sync failure recording and queries for SyncStore.
+// Package syncstore persists sync baseline, observation, conflict, failure, and scope state.
 //
 // sync_failures is the active retry queue. Transient failures get next_retry_at
-// computed by a caller-provided delayFn (retry.Reconcile.Delay). The engine's
-// retry sweep re-injects due items via buffer → planner → executor (R-6.8.10).
+// computed by a caller-provided delayFn (typically retry.ReconcilePolicy().Delay).
+// The engine failure retrier re-injects due items via buffer → planner →
+// executor (R-6.8.10).
 //
 // Contents:
 //   - IsActionableIssue:                classify issue types requiring user action
@@ -371,7 +372,11 @@ func (m *SyncStore) UpsertActionableFailures(ctx context.Context, failures []syn
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit actionable failure upsert: %w", err)
+	}
+
+	return nil
 }
 
 // ClearResolvedActionableFailures removes actionable sync_failures entries of
@@ -579,11 +584,14 @@ func (m *SyncStore) ClearSyncFailuresByPrefix(ctx context.Context, pathPrefix, i
 // PickTrialCandidate returns the oldest scope-blocked failure for the given
 // scope key — i.e., a row with matching scope_key and NULL next_retry_at
 // (scope-blocked failures have no retry scheduling; they wait for the scope
-// to clear). Returns (nil, nil) if no candidates exist.
+// to clear).
 //
 // The engine uses this to find a real action to execute as a trial probe
 // when a scope block's trial timer fires.
-func (m *SyncStore) PickTrialCandidate(ctx context.Context, scopeKey synctypes.ScopeKey) (*synctypes.SyncFailureRow, error) {
+func (m *SyncStore) PickTrialCandidate(
+	ctx context.Context,
+	scopeKey synctypes.ScopeKey,
+) (*synctypes.SyncFailureRow, bool, error) {
 	wire := scopeKey.String()
 
 	row := m.db.QueryRowContext(ctx,
@@ -608,15 +616,15 @@ func (m *SyncStore) PickTrialCandidate(ctx context.Context, scopeKey synctypes.S
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, nil
+			return nil, false, nil
 		}
 
-		return nil, fmt.Errorf("sync: picking trial candidate for scope %s: %w", wire, err)
+		return nil, false, fmt.Errorf("sync: picking trial candidate for scope %s: %w", wire, err)
 	}
 
 	r.ScopeKey = synctypes.ParseScopeKey(wireScopeKey)
 
-	return &r, nil
+	return &r, true, nil
 }
 
 // SetScopeRetryAtNow sets next_retry_at to the given time for all transient

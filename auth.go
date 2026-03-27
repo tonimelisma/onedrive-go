@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +30,14 @@ const pendingTokenFile = ".token-pending.json"
 
 // tokenDirPerms is the permission mode for token directories (owner only).
 const tokenDirPerms = 0o700
+
+// graphDriveTypeDocumentLibrary is the Graph API drive type for SharePoint libraries.
+const graphDriveTypeDocumentLibrary = "documentLibrary"
+
+const (
+	httpScheme  = "http"
+	httpsScheme = "https"
+)
 
 func newLoginCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -121,21 +131,95 @@ func pendingTokenPath() string {
 // openBrowser attempts to open a URL in the user's default browser.
 // Uses "open" on macOS and "xdg-open" on Linux. Returns an error if the
 // browser command fails or the platform is unsupported.
-func openBrowser(rawURL string) error {
-	ctx := context.Background()
-
-	var cmd *exec.Cmd
-
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.CommandContext(ctx, "open", rawURL)
-	case "linux":
-		cmd = exec.CommandContext(ctx, "xdg-open", rawURL)
-	default:
-		return fmt.Errorf("unsupported platform %s: open the URL manually", runtime.GOOS)
+func openBrowser(ctx context.Context, rawURL string) error {
+	validatedURL, err := validateBrowserAuthURL(rawURL)
+	if err != nil {
+		return err
 	}
 
-	return cmd.Start()
+	command, err := browserOpenCommand(runtime.GOOS)
+	if err != nil {
+		return err
+	}
+
+	// Command name is selected from a fixed allowlist and the URL has already
+	// been validated against the Microsoft auth hosts.
+	cmd := exec.CommandContext(ctx, command, validatedURL) //nolint:gosec // Fixed browser command with validated auth URL.
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start browser command: %w", err)
+	}
+
+	return nil
+}
+
+func browserOpenCommand(goos string) (string, error) {
+	switch goos {
+	case "darwin":
+		return "open", nil
+	case "linux":
+		return "xdg-open", nil
+	default:
+		return "", fmt.Errorf("unsupported platform %s: open the URL manually", goos)
+	}
+}
+
+func validateBrowserAuthURL(raw string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("parsing browser auth URL: %w", err)
+	}
+
+	if parsed.User != nil {
+		return "", fmt.Errorf("browser auth URL must not contain userinfo")
+	}
+
+	host := strings.ToLower(parsed.Hostname())
+	if host == "" {
+		return "", fmt.Errorf("browser auth URL host is empty")
+	}
+
+	if isLoopbackBrowserHost(host) {
+		if parsed.Scheme != httpScheme && parsed.Scheme != httpsScheme {
+			return "", fmt.Errorf("browser auth URL loopback host must use http or https")
+		}
+
+		return parsed.String(), nil
+	}
+
+	if parsed.Scheme != httpsScheme {
+		return "", fmt.Errorf("browser auth URL must use https")
+	}
+
+	if !browserHostAllowed(host) {
+		return "", fmt.Errorf("browser auth URL host %q is not allowed", host)
+	}
+
+	return parsed.String(), nil
+}
+
+func browserHostAllowed(host string) bool {
+	for _, allowedHost := range []string{
+		"login.microsoftonline.com",
+		"login.microsoftonline.us",
+		"login.partner.microsoftonline.cn",
+		"login.live.com",
+	} {
+		if host == allowedHost || strings.HasSuffix(host, "."+allowedHost) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isLoopbackBrowserHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // runLogin implements the discovery-based login flow per accounts.md section 9:
@@ -170,15 +254,19 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 
 	if err != nil {
 		// Clean up the pending token on auth failure.
-		os.Remove(tempPath)
+		if cleanupErr := removePathIfExists(tempPath); cleanupErr != nil {
+			logger.Warn("failed to remove pending token after login failure", "path", tempPath, "error", cleanupErr)
+		}
 
-		return err
+		return fmt.Errorf("authenticate account: %w", err)
 	}
 
 	// Step 2-4: Discover account details from the Graph API.
 	canonicalID, user, orgName, primaryDriveID, err := discoverAccount(ctx, ts, logger)
 	if err != nil {
-		os.Remove(tempPath)
+		if cleanupErr := removePathIfExists(tempPath); cleanupErr != nil {
+			logger.Warn("failed to remove pending token after discovery failure", "path", tempPath, "error", cleanupErr)
+		}
 
 		return fmt.Errorf("discovering account: %w", err)
 	}
@@ -186,7 +274,9 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	// Step 5: Move token from temp path to its canonical location.
 	finalTokenPath := config.DriveTokenPath(canonicalID)
 	if finalTokenPath == "" {
-		os.Remove(tempPath)
+		if cleanupErr := removePathIfExists(tempPath); cleanupErr != nil {
+			logger.Warn("failed to remove pending token after path resolution failure", "path", tempPath, "error", cleanupErr)
+		}
 
 		return fmt.Errorf("cannot determine token path for drive %q", canonicalID.String())
 	}
@@ -232,9 +322,7 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	printLoginSuccess(os.Stdout, canonicalID.DriveType(), email, orgName, canonicalID.String(), syncDir)
-
-	return nil
+	return printLoginSuccess(os.Stdout, canonicalID.DriveType(), email, orgName, canonicalID.String(), syncDir)
 }
 
 // discoverAccount calls /me, /me/drive, and /me/organization to build the
@@ -269,7 +357,7 @@ func discoverAccount(
 	// Warn on unknown drive types — don't block login, but flag it for debugging.
 	// Known types: "personal", "business", "documentLibrary" (SharePoint).
 	switch driveType {
-	case "personal", "business", "documentLibrary": //nolint:goconst // case labels are self-documenting
+	case driveid.DriveTypePersonal, driveid.DriveTypeBusiness, graphDriveTypeDocumentLibrary:
 		// expected
 	default:
 		logger.Warn("unknown drive type from Graph API, proceeding anyway",
@@ -305,15 +393,21 @@ func discoverAccount(
 func moveToken(src, dst string) error {
 	dir := filepath.Dir(dst)
 	if err := os.MkdirAll(dir, tokenDirPerms); err != nil {
-		os.Remove(src)
+		baseErr := fmt.Errorf("creating token directory: %w", err)
+		if cleanupErr := removePathIfExists(src); cleanupErr != nil {
+			return errors.Join(baseErr, cleanupErr)
+		}
 
-		return fmt.Errorf("creating token directory: %w", err)
+		return baseErr
 	}
 
 	if err := os.Rename(src, dst); err != nil {
-		os.Remove(src)
+		baseErr := fmt.Errorf("moving token to final path: %w", err)
+		if cleanupErr := removePathIfExists(src); cleanupErr != nil {
+			return errors.Join(baseErr, cleanupErr)
+		}
 
-		return fmt.Errorf("moving token to final path: %w", err)
+		return baseErr
 	}
 
 	return nil
@@ -321,25 +415,40 @@ func moveToken(src, dst string) error {
 
 // printLoginSuccess prints the user-facing login output. Format differs
 // for personal vs. business accounts per accounts.md section 9.
-func printLoginSuccess(w io.Writer, driveType, email, orgName, canonicalID, syncDir string) {
+func printLoginSuccess(w io.Writer, driveType, email, orgName, canonicalID, syncDir string) error {
 	switch driveType {
 	case "personal":
-		fmt.Fprintf(w, "Signed in as %s (personal account).\n", email)
-		fmt.Fprintf(w, "Drive added: %s -> %s\n", canonicalID, syncDir)
+		if err := writef(w, "Signed in as %s (personal account).\n", email); err != nil {
+			return err
+		}
+
+		return writef(w, "Drive added: %s -> %s\n", canonicalID, syncDir)
 	case "business":
 		orgLabel := orgName
 		if orgLabel == "" {
 			orgLabel = "business account"
 		}
 
-		fmt.Fprintf(w, "Signed in as %s (%s).\n", email, orgLabel)
-		fmt.Fprintf(w, "Drive added: %s -> %s\n", canonicalID, syncDir)
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "You also have access to SharePoint libraries.")
-		fmt.Fprintln(w, "Run 'onedrive-go drive search <term>' to find and add them.")
+		if err := writef(w, "Signed in as %s (%s).\n", email, orgLabel); err != nil {
+			return err
+		}
+		if err := writef(w, "Drive added: %s -> %s\n", canonicalID, syncDir); err != nil {
+			return err
+		}
+		if err := writeln(w); err != nil {
+			return err
+		}
+		if err := writeln(w, "You also have access to SharePoint libraries."); err != nil {
+			return err
+		}
+
+		return writeln(w, "Run 'onedrive-go drive search <term>' to find and add them.")
 	default:
-		fmt.Fprintf(w, "Signed in as %s.\n", email)
-		fmt.Fprintf(w, "Drive added: %s -> %s\n", canonicalID, syncDir)
+		if err := writef(w, "Signed in as %s.\n", email); err != nil {
+			return err
+		}
+
+		return writef(w, "Drive added: %s -> %s\n", canonicalID, syncDir)
 	}
 }
 
@@ -489,7 +598,7 @@ func executeLogout(cfg *config.Config, cfgPath, account string, purge bool, logg
 	// (returns nil), so this works even after a prior logout.
 	if tokenPath != "" {
 		if err := graph.Logout(tokenPath, logger); err != nil {
-			return err
+			return fmt.Errorf("remove token file: %w", err)
 		}
 
 		fmt.Printf("Token removed for %s.\n", account)
@@ -500,7 +609,9 @@ func executeLogout(cfg *config.Config, cfgPath, account string, purge bool, logg
 		fmt.Printf("Token already removed for %s.\n", account)
 	}
 
-	printAffectedDrives(os.Stdout, cfg, affected)
+	if err := printAffectedDrives(os.Stdout, cfg, affected); err != nil {
+		return err
+	}
 
 	if purge {
 		if err := purgeAccountDrives(cfgPath, affected, logger); err != nil {
@@ -615,17 +726,23 @@ func canonicalIDForToken(account string, driveIDs []driveid.CanonicalID) driveid
 }
 
 // printAffectedDrives lists drives that can no longer sync after logout.
-func printAffectedDrives(w io.Writer, cfg *config.Config, affected []driveid.CanonicalID) {
+func printAffectedDrives(w io.Writer, cfg *config.Config, affected []driveid.CanonicalID) error {
 	if len(affected) == 0 {
-		return
+		return nil
 	}
 
-	fmt.Fprintln(w, "Affected drives (can no longer sync):")
+	if err := writeln(w, "Affected drives (can no longer sync):"); err != nil {
+		return err
+	}
 
 	for _, id := range affected {
 		syncDir := cfg.Drives[id].SyncDir
-		fmt.Fprintf(w, "  %s (%s)\n", id.String(), syncDir)
+		if err := writef(w, "  %s (%s)\n", id.String(), syncDir); err != nil {
+			return err
+		}
 	}
+
+	return nil
 }
 
 // purgeSingleDrive removes the state database, drive metadata, account profile,
@@ -741,7 +858,7 @@ func runWhoami(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Try the authenticated path: match drive → fetch from Graph API.
-	user, drives, authenticatedEmail, authErr := fetchAuthenticatedAccount(
+	user, drives, authenticatedEmail, hasAuthenticatedAccount, authErr := fetchAuthenticatedAccount(
 		ctx, cfg, driveSelector, logger,
 	)
 	if authErr != nil {
@@ -752,7 +869,7 @@ func runWhoami(cmd *cobra.Command, _ []string) error {
 	loggedOut := findLoggedOutAccounts(cfg, authenticatedEmail, logger)
 
 	// If no authenticated account and no logged-out accounts, give a helpful error.
-	if user == nil && len(loggedOut) == 0 {
+	if !hasAuthenticatedAccount && len(loggedOut) == 0 {
 		return fmt.Errorf("not logged in — run 'onedrive-go login' first")
 	}
 
@@ -760,26 +877,24 @@ func runWhoami(cmd *cobra.Command, _ []string) error {
 		return printWhoamiJSON(os.Stdout, user, drives, loggedOut)
 	}
 
-	printWhoamiText(os.Stdout, user, drives, loggedOut)
-
-	return nil
+	return printWhoamiText(os.Stdout, user, drives, loggedOut)
 }
 
 // fetchAuthenticatedAccount attempts to resolve a drive from config, load its
-// token, and fetch user/drive info from the Graph API. Returns (nil, nil, "", nil)
-// when no authenticated account is found (e.g. all logged out). Returns a
-// non-nil error only for hard failures (API errors after successful auth).
+// token, and fetch user/drive info from the Graph API. Returns found=false
+// when no authenticated account is available. Returns a non-nil error only
+// for hard failures after a token is located.
 func fetchAuthenticatedAccount(
 	ctx context.Context, cfg *config.Config, driveSelector string, logger *slog.Logger,
-) (*graph.User, []graph.Drive, string, error) {
-	cid, _, matchErr := config.MatchDrive(cfg, driveSelector, logger)
-	if matchErr != nil {
-		return nil, nil, "", nil
+) (*graph.User, []graph.Drive, string, bool, error) {
+	cid, found := matchAuthenticatedDrive(cfg, driveSelector, logger)
+	if !found {
+		return nil, nil, "", false, nil
 	}
 
 	tokenPath := config.DriveTokenPath(cid)
 	if tokenPath == "" {
-		return nil, nil, "", nil
+		return nil, nil, "", false, nil
 	}
 
 	logger.Debug("whoami", "drive", cid.String(), "token_path", tokenPath)
@@ -787,25 +902,43 @@ func fetchAuthenticatedAccount(
 	ts, tsErr := graph.TokenSourceFromPath(ctx, tokenPath, logger)
 	if tsErr != nil {
 		if errors.Is(tsErr, graph.ErrNotLoggedIn) {
-			return nil, nil, "", nil
+			return nil, nil, "", false, nil
 		}
 
-		return nil, nil, "", tsErr
+		return nil, nil, "", false, fmt.Errorf("load token source: %w", tsErr)
 	}
 
 	client := newGraphClient(ts, logger)
 
 	user, err := client.Me(ctx)
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("fetching user profile: %w", err)
+		return nil, nil, "", false, fmt.Errorf("fetching user profile: %w", err)
 	}
 
 	drives, err := client.Drives(ctx)
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("listing drives: %w", err)
+		return nil, nil, "", false, fmt.Errorf("listing drives: %w", err)
 	}
 
-	return user, drives, user.Email, nil
+	return user, drives, user.Email, true, nil
+}
+
+func matchAuthenticatedDrive(
+	cfg *config.Config,
+	driveSelector string,
+	logger *slog.Logger,
+) (driveid.CanonicalID, bool) {
+	cid, _, matchErr := config.MatchDrive(cfg, driveSelector, logger)
+	if matchErr != nil {
+		logger.Debug("whoami: skipping authenticated account lookup",
+			slog.String("selector", driveSelector),
+			slog.String("reason", matchErr.Error()),
+		)
+
+		return driveid.CanonicalID{}, false
+	}
+
+	return cid, true
 }
 
 // findLoggedOutAccounts discovers account profiles on disk that lack a token
@@ -846,14 +979,14 @@ func findLoggedOutAccounts(cfg *config.Config, authenticatedEmail string, logger
 		}
 
 		// Load profile for display name.
-		profile, profileErr := config.LoadAccountProfile(profileCID)
+		profile, found, profileErr := config.LookupAccountProfile(profileCID)
 		if profileErr != nil {
 			logger.Debug("could not load account profile for logged-out display",
 				"canonical_id", profileCID.String(), "error", profileErr)
 		}
 
 		var displayName string
-		if profile != nil {
+		if found {
 			displayName = profile.DisplayName
 		}
 
@@ -905,30 +1038,42 @@ func printWhoamiJSON(w io.Writer, user *graph.User, drives []graph.Drive, logged
 	return nil
 }
 
-func printWhoamiText(w io.Writer, user *graph.User, drives []graph.Drive, loggedOut []loggedOutAccount) {
+func printWhoamiText(w io.Writer, user *graph.User, drives []graph.Drive, loggedOut []loggedOutAccount) error {
 	if user != nil {
-		fmt.Fprintf(w, "User:  %s (%s)\n", user.DisplayName, user.Email)
-		fmt.Fprintf(w, "ID:    %s\n", user.ID)
+		if err := writef(w, "User:  %s (%s)\n", user.DisplayName, user.Email); err != nil {
+			return err
+		}
+		if err := writef(w, "ID:    %s\n", user.ID); err != nil {
+			return err
+		}
 
 		for i := range drives {
-			fmt.Fprintf(w, "\nDrive: %s (%s)\n", drives[i].Name, drives[i].DriveType)
-			fmt.Fprintf(w, "  ID:    %s\n", drives[i].ID)
-			fmt.Fprintf(w, "  Quota: %s / %s\n", formatSize(drives[i].QuotaUsed), formatSize(drives[i].QuotaTotal))
+			if err := writef(w, "\nDrive: %s (%s)\n", drives[i].Name, drives[i].DriveType); err != nil {
+				return err
+			}
+			if err := writef(w, "  ID:    %s\n", drives[i].ID); err != nil {
+				return err
+			}
+			if err := writef(w, "  Quota: %s / %s\n", formatSize(drives[i].QuotaUsed), formatSize(drives[i].QuotaTotal)); err != nil {
+				return err
+			}
 		}
 	}
 
-	printLoggedOutAccountsText(w, loggedOut)
+	return printLoggedOutAccountsText(w, loggedOut)
 }
 
 // printLoggedOutAccountsText prints the logged-out accounts section in
 // human-readable text format. Shows each account's email, display name,
 // and how many state DBs remain.
-func printLoggedOutAccountsText(w io.Writer, loggedOut []loggedOutAccount) {
+func printLoggedOutAccountsText(w io.Writer, loggedOut []loggedOutAccount) error {
 	if len(loggedOut) == 0 {
-		return
+		return nil
 	}
 
-	fmt.Fprintln(w, "\nLogged out accounts:")
+	if err := writeln(w, "\nLogged out accounts:"); err != nil {
+		return err
+	}
 
 	for _, acct := range loggedOut {
 		nameLabel := acct.Email
@@ -943,8 +1088,10 @@ func printLoggedOutAccountsText(w io.Writer, loggedOut []loggedOutAccount) {
 			dbLabel = fmt.Sprintf("%d state databases", acct.StateDBs)
 		}
 
-		fmt.Fprintf(w, "  %s — %s, %s\n", nameLabel, acct.DriveType, dbLabel)
+		if err := writef(w, "  %s — %s, %s\n", nameLabel, acct.DriveType, dbLabel); err != nil {
+			return err
+		}
 	}
 
-	fmt.Fprintln(w, "  Run 'onedrive-go logout --purge' to remove remaining data.")
+	return writeln(w, "  Run 'onedrive-go logout --purge' to remove remaining data.")
 }

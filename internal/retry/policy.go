@@ -2,6 +2,7 @@ package retry
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"math/rand/v2"
 	"time"
@@ -55,7 +56,7 @@ func TimeSleep(ctx context.Context, d time.Duration) error {
 
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return fmt.Errorf("sleep context: %w", ctx.Err())
 	case <-timer.C:
 		return nil
 	}

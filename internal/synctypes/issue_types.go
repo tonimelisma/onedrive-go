@@ -1,4 +1,4 @@
-// issue_types.go — Cross-cutting issue type constants.
+// Package synctypes defines shared sync types, issue classes, and data contracts.
 //
 // These constants are used by the scanner (observation-time filtering),
 // the engine (failure recording), the baseline (failure queries), and

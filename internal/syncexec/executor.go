@@ -2,7 +2,9 @@ package syncexec
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -17,6 +19,10 @@ import (
 // graphRootID is the Graph API parent reference for top-level items.
 // Distinct from strRoot in types.go which serializes the ItemTypeRoot enum.
 const graphRootID = "root"
+
+// localDirPerms are the standard permissions for directories we create inside
+// the sync root. Group/world execute keeps traversal semantics for normal dirs.
+const localDirPerms = 0o755
 
 // ExecutorConfig holds the immutable configuration for creating per-call
 // Executor instances. Separated from mutable state to prevent temporal
@@ -162,7 +168,7 @@ func (e *Executor) createLocalFolder(action *synctypes.Action) synctypes.Outcome
 		return e.failedOutcome(action, synctypes.ActionFolderCreate, err)
 	}
 
-	if err := os.MkdirAll(absPath, 0o755); err != nil { //nolint:mnd // standard dir perms
+	if err := os.MkdirAll(absPath, localDirPerms); err != nil {
 		return e.failedOutcome(action, synctypes.ActionFolderCreate, fmt.Errorf("creating local folder %s: %w", action.Path, err))
 	}
 
@@ -236,7 +242,7 @@ func (e *Executor) ExecuteLocalMove(action *synctypes.Action) synctypes.Outcome 
 	}
 
 	// Ensure parent directory exists.
-	if err := os.MkdirAll(filepath.Dir(newAbs), 0o755); err != nil { //nolint:mnd // standard dir perms
+	if err := os.MkdirAll(filepath.Dir(newAbs), localDirPerms); err != nil {
 		return e.failedOutcome(action, synctypes.ActionLocalMove, fmt.Errorf("creating parent for move target %s: %w", action.Path, err))
 	}
 
@@ -345,13 +351,16 @@ func ContainedPath(syncRoot, relPath string) (string, error) {
 	// symlink-based attacks to work.
 	parentDir := filepath.Dir(absPath)
 
-	resolvedParent, err := filepath.EvalSymlinks(parentDir)
-	if err != nil {
-		return absPath, nil
-	}
-
 	resolvedRoot, err := filepath.EvalSymlinks(syncRoot)
 	if err != nil {
+		return "", fmt.Errorf("evaluating sync root symlinks: %w", err)
+	}
+
+	resolvedParent, parentKnown, err := resolveParentForContainment(parentDir)
+	if err != nil {
+		return "", err
+	}
+	if !parentKnown {
 		return absPath, nil
 	}
 
@@ -362,6 +371,19 @@ func ContainedPath(syncRoot, relPath string) (string, error) {
 	}
 
 	return absPath, nil
+}
+
+func resolveParentForContainment(parentDir string) (string, bool, error) {
+	resolvedParent, err := filepath.EvalSymlinks(parentDir)
+	if err == nil {
+		return resolvedParent, true, nil
+	}
+
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", false, nil
+	}
+
+	return "", false, fmt.Errorf("evaluating parent directory symlinks: %w", err)
 }
 
 // resolveActionItemType extracts ItemType from the action's View, skipping

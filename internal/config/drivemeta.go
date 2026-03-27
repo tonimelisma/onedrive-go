@@ -43,35 +43,35 @@ func DriveMetadataPath(cid driveid.CanonicalID) string {
 	return filepath.Join(dataDir, "drive_"+sanitized+".json")
 }
 
-// LoadDriveMetadata reads a drive's cached metadata. Returns (nil, nil) if
-// the file does not exist.
-func LoadDriveMetadata(cid driveid.CanonicalID) (*DriveMetadata, error) {
+// LookupDriveMetadata reads a drive's cached metadata. The returned found flag
+// is false when the metadata file is not applicable or missing.
+func LookupDriveMetadata(cid driveid.CanonicalID) (*DriveMetadata, bool, error) {
 	path := DriveMetadataPath(cid)
 	if path == "" {
-		return nil, nil //nolint:nilnil // sentinel for "not applicable"
+		return nil, false, nil
 	}
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // Drive metadata path is derived from a canonical drive ID under the managed data directory.
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil //nolint:nilnil // sentinel for "not found"
+		return nil, false, nil
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("reading drive metadata: %w", err)
+		return nil, false, fmt.Errorf("reading drive metadata: %w", err)
 	}
 
 	var meta DriveMetadata
 	if err := json.Unmarshal(data, &meta); err != nil {
-		return nil, fmt.Errorf("decoding drive metadata: %w", err)
+		return nil, false, fmt.Errorf("decoding drive metadata: %w", err)
 	}
 
-	return &meta, nil
+	return &meta, true, nil
 }
 
 // SaveDriveMetadata writes a drive's cached metadata. Creates parent
 // directories as needed. Atomic write (temp + rename).
 // Idempotent: overwrites existing metadata.
-func SaveDriveMetadata(cid driveid.CanonicalID, meta *DriveMetadata) error {
+func SaveDriveMetadata(cid driveid.CanonicalID, meta *DriveMetadata) (err error) {
 	path := DriveMetadataPath(cid)
 	if path == "" {
 		return fmt.Errorf("cannot determine drive metadata path for %s", cid)
@@ -98,32 +98,28 @@ func SaveDriveMetadata(cid driveid.CanonicalID, meta *DriveMetadata) error {
 	succeeded := false
 	defer func() {
 		if !succeeded {
-			os.Remove(tmpPath)
+			err = removeTempPath(tmpPath, "drive metadata temp file", err)
 		}
 	}()
 
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-
-		return fmt.Errorf("writing drive metadata: %w", err)
+	if _, writeErr := tmp.Write(data); writeErr != nil {
+		return closeTempFile(tmp, "drive metadata temp file", fmt.Errorf("writing drive metadata: %w", writeErr))
 	}
 
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-
-		return fmt.Errorf("syncing drive metadata: %w", err)
+	if syncErr := tmp.Sync(); syncErr != nil {
+		return closeTempFile(tmp, "drive metadata temp file", fmt.Errorf("syncing drive metadata: %w", syncErr))
 	}
 
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("closing drive metadata: %w", err)
 	}
 
-	if err := os.Chmod(tmpPath, configFilePermissions); err != nil {
-		return fmt.Errorf("setting drive metadata permissions: %w", err)
+	if err := chmodTrustedTempPath(tmpPath, configFilePermissions, "drive metadata"); err != nil {
+		return err
 	}
 
-	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("renaming drive metadata: %w", err)
+	if err := renameTrustedTempPath(tmpPath, path, "drive metadata"); err != nil {
+		return err
 	}
 
 	succeeded = true

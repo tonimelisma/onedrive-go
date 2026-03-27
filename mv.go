@@ -125,7 +125,11 @@ func printMvJSON(w io.Writer, out mvJSONOutput) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 
-	return enc.Encode(out)
+	if err := enc.Encode(out); err != nil {
+		return fmt.Errorf("encode move output: %w", err)
+	}
+
+	return nil
 }
 
 func runMv(cmd *cobra.Command, args []string, force bool) error {

@@ -6,6 +6,7 @@ package testutil
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,13 +16,26 @@ import (
 // Missing file is not an error (CI sets env vars directly).
 // Existing env vars take precedence over .env values.
 func LoadDotEnv(envPath string) {
-	f, err := os.Open(envPath)
+	f, err := os.Open(envPath) //nolint:gosec // Test harness chooses the .env path relative to the workspace/module root.
 	if err != nil {
 		return
 	}
-	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
+	if err := applyDotEnv(f); err != nil {
+		if closeErr := f.Close(); closeErr != nil {
+			fatalTestEnv()
+		}
+
+		fatalTestEnv()
+	}
+
+	if err := f.Close(); err != nil {
+		fatalTestEnv()
+	}
+}
+
+func applyDotEnv(r io.Reader) error {
+	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -39,9 +53,25 @@ func LoadDotEnv(envPath string) {
 
 		// Env vars take precedence over .env file.
 		if os.Getenv(key) == "" {
-			os.Setenv(key, value)
+			if setErr := os.Setenv(key, value); setErr != nil {
+				return fmt.Errorf("setting environment from .env")
+			}
 		}
 	}
+
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("reading .env file")
+	}
+
+	return nil
+}
+
+func fatalTestEnv() {
+	if _, err := os.Stderr.WriteString("FATAL: test environment setup failed\n"); err != nil {
+		os.Exit(1)
+	}
+
+	os.Exit(1)
 }
 
 // ValidateAllowlist crashes the process if ONEDRIVE_ALLOWED_TEST_ACCOUNTS
@@ -140,7 +170,7 @@ func CopyMetadataFiles(srcDir, dstDir string) {
 // CopyFile copies a file from src to dst with the given permissions.
 // Crashes on failure because tests cannot proceed without the file.
 func CopyFile(src, dst string, perm os.FileMode) {
-	data, err := os.ReadFile(src)
+	data, err := os.ReadFile(src) //nolint:gosec // Copy source is the test-credential fixture selected by the harness.
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FATAL: cannot read %s: %v\n", src, err)
 		fmt.Fprintln(os.Stderr, "Run scripts/bootstrap-test-credentials.sh to create test credentials.")

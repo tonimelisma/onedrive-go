@@ -40,12 +40,14 @@ func findShortcutForPath(shortcuts []synctypes.Shortcut, filePath string) *synct
 // os.Stat is insufficient — it succeeds on chmod 000 dirs because stat()
 // only requires execute on the parent. os.Open tests actual read access.
 func isDirAccessible(dir string) bool {
-	f, err := os.Open(dir)
+	f, err := os.Open(dir) //nolint:gosec // Accessibility probe operates on the caller-selected local sync directory.
 	if err != nil {
 		return false
 	}
 
-	f.Close()
+	if closeErr := f.Close(); closeErr != nil {
+		return false
+	}
 
 	return true
 }

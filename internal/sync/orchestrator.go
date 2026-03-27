@@ -19,12 +19,12 @@ import (
 type engineRunner interface {
 	RunOnce(ctx context.Context, mode synctypes.SyncMode, opts synctypes.RunOpts) (*synctypes.SyncReport, error)
 	RunWatch(ctx context.Context, mode synctypes.SyncMode, opts synctypes.WatchOpts) error
-	Close() error
+	Close(ctx context.Context) error
 }
 
 // engineFactoryFunc creates an engineRunner from an synctypes.EngineConfig.
 // The real implementation calls NewEngine; tests inject mocks.
-type engineFactoryFunc func(cfg *synctypes.EngineConfig) (engineRunner, error)
+type engineFactoryFunc func(ctx context.Context, cfg *synctypes.EngineConfig) (engineRunner, error)
 
 // OrchestratorConfig holds the inputs for creating an Orchestrator.
 // The CLI layer populates this from resolved config and HTTP clients.
@@ -52,8 +52,8 @@ type Orchestrator struct {
 func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 	return &Orchestrator{
 		cfg: cfg,
-		engineFactory: func(ecfg *synctypes.EngineConfig) (engineRunner, error) {
-			return NewEngine(ecfg)
+		engineFactory: func(ctx context.Context, ecfg *synctypes.EngineConfig) (engineRunner, error) {
+			return NewEngine(ctx, ecfg)
 		},
 		logger: cfg.Logger,
 	}
@@ -125,7 +125,7 @@ func (o *Orchestrator) prepareDriveWork(ctx context.Context, mode synctypes.Sync
 			continue
 		}
 
-		w := o.buildEngineWork(rd, session, mode, opts)
+		w := o.buildEngineWork(ctx, rd, session, mode, opts)
 		work = append(work, w)
 	}
 
@@ -135,7 +135,7 @@ func (o *Orchestrator) prepareDriveWork(ctx context.Context, mode synctypes.Sync
 // buildEngineWork creates a driveWork item for a successfully-resolved drive.
 // If engine creation fails, the error is captured and reported at run time.
 func (o *Orchestrator) buildEngineWork(
-	rd *config.ResolvedDrive, session *driveops.Session, mode synctypes.SyncMode, opts synctypes.RunOpts,
+	ctx context.Context, rd *config.ResolvedDrive, session *driveops.Session, mode synctypes.SyncMode, opts synctypes.RunOpts,
 ) driveWork {
 	minFree, parseErr := config.ParseSize(rd.MinFreeSpace)
 	if parseErr != nil {
@@ -149,7 +149,7 @@ func (o *Orchestrator) buildEngineWork(
 		}
 	}
 
-	engine, engineErr := o.engineFactory(&synctypes.EngineConfig{
+	engine, engineErr := o.engineFactory(ctx, &synctypes.EngineConfig{
 		DBPath:             rd.StatePath(),
 		SyncRoot:           rd.SyncDir,
 		DataDir:            config.DefaultDataDir(),
@@ -181,7 +181,7 @@ func (o *Orchestrator) buildEngineWork(
 		runner: &DriveRunner{canonID: rd.CanonicalID, displayName: rd.DisplayName},
 		fn: func(c context.Context) (*synctypes.SyncReport, error) {
 			defer func() {
-				if closeErr := engine.Close(); closeErr != nil {
+				if closeErr := engine.Close(c); closeErr != nil {
 					o.logger.Warn("engine close error",
 						slog.String("drive", rd.CanonicalID.String()),
 						slog.String("error", closeErr.Error()))
@@ -252,7 +252,7 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode synctypes.SyncMode, op
 			wr.cancel()
 			<-wr.done
 
-			if closeErr := wr.engine.Close(); closeErr != nil {
+			if closeErr := wr.engine.Close(ctx); closeErr != nil {
 				o.logger.Warn("engine close error on shutdown",
 					slog.String("drive", cid.String()),
 					slog.String("error", closeErr.Error()),
@@ -296,7 +296,7 @@ func (o *Orchestrator) startWatchRunner(
 		return nil, fmt.Errorf("invalid min_free_space %q for %s: %w", rd.MinFreeSpace, rd.CanonicalID, parseErr)
 	}
 
-	engine, engineErr := o.engineFactory(&synctypes.EngineConfig{
+	engine, engineErr := o.engineFactory(ctx, &synctypes.EngineConfig{
 		DBPath:             rd.StatePath(),
 		SyncRoot:           rd.SyncDir,
 		DataDir:            config.DefaultDataDir(),
@@ -400,7 +400,7 @@ func (o *Orchestrator) reload(
 		wr.cancel()
 		<-wr.done
 
-		if closeErr := wr.engine.Close(); closeErr != nil {
+		if closeErr := wr.engine.Close(ctx); closeErr != nil {
 			o.logger.Warn("engine close error during reload",
 				slog.String("drive", cid.String()),
 				slog.String("error", closeErr.Error()),

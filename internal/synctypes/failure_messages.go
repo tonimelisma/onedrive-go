@@ -1,4 +1,4 @@
-// failure_messages.go — Human-readable failure messages for the issues display.
+// Package synctypes defines shared sync types, issue classes, and data contracts.
 //
 // Each issue type maps to a title, reason, and suggested action. This is the
 // single source of truth for all user-facing failure text (R-2.3.8).

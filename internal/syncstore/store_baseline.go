@@ -1,4 +1,4 @@
-// store_baseline.go — Baseline CRUD, delta tokens, and outcome commits for SyncStore.
+// Package syncstore persists sync baseline, observation, conflict, failure, and scope state.
 //
 // Contents:
 //   - Load:                    read baseline table into memory
@@ -41,8 +41,7 @@ const (
 		local_hash, remote_hash, size, mtime, synced_at, etag
 		FROM baseline`
 
-	//nolint:gosec // G101: "token" is a delta cursor, not credentials.
-	sqlGetDeltaToken = `SELECT token FROM delta_tokens WHERE drive_id = ? AND scope_id = ?`
+	sqlGetDeltaCursor = `SELECT cursor FROM delta_tokens WHERE drive_id = ? AND scope_id = ?`
 
 	sqlUpsertBaseline = `INSERT INTO baseline
 		(drive_id, item_id, path, parent_id, item_type, local_hash, remote_hash,
@@ -67,11 +66,11 @@ const (
 		 resolution, resolved_at, resolved_by)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
-	sqlUpsertDeltaToken = `INSERT INTO delta_tokens (drive_id, scope_id, scope_drive, token, updated_at)
+	sqlUpsertDeltaCursor = `INSERT INTO delta_tokens (drive_id, scope_id, scope_drive, cursor, updated_at)
 		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(drive_id, scope_id) DO UPDATE SET
 		 scope_drive = excluded.scope_drive,
-		 token = excluded.token,
+		 cursor = excluded.cursor,
 		 updated_at = excluded.updated_at`
 )
 
@@ -168,7 +167,7 @@ func scanBaselineRow(rows *sql.Rows) (*synctypes.BaselineEntry, error) {
 func (m *SyncStore) GetDeltaToken(ctx context.Context, driveID, scopeID string) (string, error) {
 	var token string
 
-	err := m.db.QueryRowContext(ctx, sqlGetDeltaToken, driveID, scopeID).Scan(&token)
+	err := m.db.QueryRowContext(ctx, sqlGetDeltaCursor, driveID, scopeID).Scan(&token)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
@@ -329,7 +328,7 @@ func (m *SyncStore) DeleteDeltaToken(ctx context.Context, driveID, scopeID strin
 func (m *SyncStore) saveDeltaToken(
 	ctx context.Context, tx *sql.Tx, driveID, scopeID, scopeDrive, token string, updatedAt int64,
 ) error {
-	_, err := tx.ExecContext(ctx, sqlUpsertDeltaToken, driveID, scopeID, scopeDrive, token, updatedAt)
+	_, err := tx.ExecContext(ctx, sqlUpsertDeltaCursor, driveID, scopeID, scopeDrive, token, updatedAt)
 	if err != nil {
 		return fmt.Errorf("sync: saving delta token for drive %s scope %q: %w", driveID, scopeID, err)
 	}
@@ -451,8 +450,7 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *synctypes.Ou
 	// Note: sync_failures cleanup is handled exclusively by the engine's
 	// clearFailureOnSuccess method (D-6). The store owns only baseline and
 	// remote_state commits.
-	switch o.Action { //nolint:exhaustive // only action types that touch remote_state
-	case synctypes.ActionDownload:
+	if o.Action == synctypes.ActionDownload {
 		// Hash guard: only transition if the remote_state hash matches the
 		// downloaded hash. Prevents stale overwrite when a new observation
 		// arrived while the download was in progress.
@@ -465,8 +463,10 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *synctypes.Ou
 		if err != nil {
 			return fmt.Errorf("sync: updating remote_state for download %s: %w", o.Path, err)
 		}
+		return nil
+	}
 
-	case synctypes.ActionLocalDelete:
+	if o.Action == synctypes.ActionLocalDelete {
 		_, err := tx.ExecContext(ctx,
 			`UPDATE remote_state SET sync_status = ?
 			WHERE drive_id = ? AND item_id = ? AND sync_status = ?`,
@@ -476,8 +476,10 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *synctypes.Ou
 		if err != nil {
 			return fmt.Errorf("sync: updating remote_state for local delete %s: %w", o.Path, err)
 		}
+		return nil
+	}
 
-	case synctypes.ActionUpload, synctypes.ActionFolderCreate:
+	if o.Action == synctypes.ActionUpload || o.Action == synctypes.ActionFolderCreate {
 		// Unconditional: upload resolves any state.
 		_, err := tx.ExecContext(ctx,
 			`UPDATE remote_state SET sync_status = ?, hash = ?, size = ?, mtime = ?
@@ -488,8 +490,10 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *synctypes.Ou
 		if err != nil {
 			return fmt.Errorf("sync: updating remote_state for upload %s: %w", o.Path, err)
 		}
+		return nil
+	}
 
-	case synctypes.ActionLocalMove, synctypes.ActionRemoteMove:
+	if o.Action == synctypes.ActionLocalMove || o.Action == synctypes.ActionRemoteMove {
 		// Move success: update path and mark synced.
 		_, err := tx.ExecContext(ctx,
 			`UPDATE remote_state SET path = ?, sync_status = ?
@@ -500,6 +504,7 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *synctypes.Ou
 		if err != nil {
 			return fmt.Errorf("sync: updating remote_state for move %s: %w", o.Path, err)
 		}
+		return nil
 	}
 
 	return nil

@@ -1,4 +1,4 @@
-// scope.go — Scope-level failure detection for the sync engine.
+// Package syncdispatch manages execution-time scope admission and delete safety.
 //
 // ScopeState maintains sliding windows for scope escalation. The engine
 // calls UpdateScope after each worker result; when a threshold is crossed,
@@ -82,7 +82,7 @@ func (ss *ScopeState) UpdateScope(r *synctypes.WorkerResult) synctypes.ScopeUpda
 		// Immediate block — server signal, single response triggers (R-2.10.26).
 		return synctypes.ScopeUpdateResult{
 			Block:      true,
-			ScopeKey:   synctypes.SKThrottleAccount,
+			ScopeKey:   synctypes.SKThrottleAccount(),
 			IssueType:  synctypes.IssueRateLimited,
 			RetryAfter: r.RetryAfter,
 		}
@@ -91,7 +91,7 @@ func (ss *ScopeState) UpdateScope(r *synctypes.WorkerResult) synctypes.ScopeUpda
 		// Immediate block — 503 with Retry-After is a server signal (R-2.10.3).
 		return synctypes.ScopeUpdateResult{
 			Block:      true,
-			ScopeKey:   synctypes.SKService,
+			ScopeKey:   synctypes.SKService(),
 			IssueType:  synctypes.IssueServiceOutage,
 			RetryAfter: r.RetryAfter,
 		}
@@ -118,7 +118,7 @@ func (ss *ScopeState) UpdateScope(r *synctypes.WorkerResult) synctypes.ScopeUpda
 // outage patterns are classified as resultRequeue (not resultScopeBlock)
 // by classifyResult but still need to feed scope detection.
 func (ss *ScopeState) UpdateScopeOutagePattern(path string) synctypes.ScopeUpdateResult {
-	return ss.checkWindow(synctypes.SKService, path, serviceWindowThreshold, serviceWindowDuration, synctypes.IssueServiceOutage)
+	return ss.checkWindow(synctypes.SKService(), path, serviceWindowThreshold, serviceWindowDuration, synctypes.IssueServiceOutage)
 }
 
 // RecordSuccess resets the sliding window for scopes relevant to the
@@ -129,10 +129,10 @@ func (ss *ScopeState) RecordSuccess(r *synctypes.WorkerResult) {
 	if r.ShortcutKey != "" {
 		delete(ss.windows, synctypes.SKQuotaShortcut(r.ShortcutKey))
 	} else {
-		delete(ss.windows, synctypes.SKQuotaOwn)
+		delete(ss.windows, synctypes.SKQuotaOwn())
 	}
 	// Also reset service window — a successful request proves the service is up.
-	delete(ss.windows, synctypes.SKService)
+	delete(ss.windows, synctypes.SKService())
 }
 
 // checkWindow adds a failure to the named sliding window and returns a

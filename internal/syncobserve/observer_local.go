@@ -1,4 +1,4 @@
-// observer_local.go — LocalObserver struct definition and watch coordination.
+// Package syncobserve watches and scans the local filesystem for sync changes.
 //
 // Contents:
 //   - LocalObserver struct + NewLocalObserver constructor
@@ -73,9 +73,30 @@ type fsnotifyWrapper struct {
 	w *fsnotify.Watcher
 }
 
-func (fw *fsnotifyWrapper) Add(name string) error         { return fw.w.Add(name) }
-func (fw *fsnotifyWrapper) Remove(name string) error      { return fw.w.Remove(name) }
-func (fw *fsnotifyWrapper) Close() error                  { return fw.w.Close() }
+func (fw *fsnotifyWrapper) Add(name string) error {
+	if err := fw.w.Add(name); err != nil {
+		return fmt.Errorf("add watch %q: %w", name, err)
+	}
+
+	return nil
+}
+
+func (fw *fsnotifyWrapper) Remove(name string) error {
+	if err := fw.w.Remove(name); err != nil {
+		return fmt.Errorf("remove watch %q: %w", name, err)
+	}
+
+	return nil
+}
+
+func (fw *fsnotifyWrapper) Close() error {
+	if err := fw.w.Close(); err != nil {
+		return fmt.Errorf("close watcher: %w", err)
+	}
+
+	return nil
+}
+
 func (fw *fsnotifyWrapper) Events() <-chan fsnotify.Event { return fw.w.Events }
 func (fw *fsnotifyWrapper) Errors() <-chan error          { return fw.w.Errors }
 
@@ -152,7 +173,7 @@ func NewLocalObserver(baseline *synctypes.Baseline, logger *slog.Logger, checkWo
 		WatcherFactory: func() (FsWatcher, error) {
 			w, err := fsnotify.NewWatcher()
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("create fsnotify watcher: %w", err)
 			}
 			return &fsnotifyWrapper{w: w}, nil
 		},
@@ -282,7 +303,7 @@ func (o *LocalObserver) Watch(ctx context.Context, syncRoot string, events chan<
 	CheckInotifyCapacity(o.EstimateDirCount(), o.Logger)
 
 	// Walk the sync root to add watches on all existing directories.
-	if walkErr := o.AddWatchesRecursive(watcher, syncRoot); walkErr != nil {
+	if walkErr := o.AddWatchesRecursive(ctx, watcher, syncRoot); walkErr != nil {
 		if errors.Is(walkErr, synctypes.ErrWatchLimitExhausted) {
 			return synctypes.ErrWatchLimitExhausted
 		}
@@ -307,10 +328,14 @@ func (o *LocalObserver) cancelPendingTimers() {
 }
 
 // AddWatchesRecursive walks the sync root and adds a watch on every directory.
-func (o *LocalObserver) AddWatchesRecursive(watcher FsWatcher, syncRoot string) error {
+func (o *LocalObserver) AddWatchesRecursive(ctx context.Context, watcher FsWatcher, syncRoot string) error {
 	var watched, failed int
 
 	err := filepath.WalkDir(syncRoot, func(fsPath string, d fs.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("watch setup context: %w", err)
+		}
+
 		if walkErr != nil {
 			o.Logger.Warn("walk error during watch setup",
 				slog.String("path", fsPath), slog.String("error", walkErr.Error()))
@@ -377,10 +402,14 @@ func (o *LocalObserver) AddWatchesRecursive(watcher FsWatcher, syncRoot string) 
 		logLevel = slog.LevelInfo
 	}
 
-	o.Logger.Log(context.Background(), logLevel, "watch setup complete",
+	o.Logger.Log(ctx, logLevel, "watch setup complete",
 		slog.Int("watches_added", watched),
 		slog.Int("watches_failed", failed),
 	)
 
-	return err
+	if err != nil {
+		return fmt.Errorf("walk watch setup: %w", err)
+	}
+
+	return nil
 }

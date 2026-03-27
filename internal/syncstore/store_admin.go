@@ -1,4 +1,4 @@
-// store_admin.go — State reader and admin operations for SyncStore.
+// Package syncstore persists sync baseline, observation, conflict, failure, and scope state.
 //
 // Contents:
 //   - ListUnreconciled:          remote_state rows needing action
@@ -197,7 +197,7 @@ func (m *SyncStore) ResetAllFailures(ctx context.Context) error {
 // zombies — the delta token was already advanced, so no new events arrive,
 // and the retrier only queries sync_failures.
 //
-// delayFn computes backoff from failure count (engine passes retry.Reconcile.Delay).
+// delayFn computes backoff from failure count (engine passes retry.ReconcilePolicy().Delay).
 func (m *SyncStore) ResetInProgressStates(ctx context.Context, syncRoot string, delayFn func(int) time.Duration) error {
 	// Phase 1: Collect items that were downloading before reset.
 	// We need to query BEFORE the status update to identify which items
@@ -276,7 +276,7 @@ func (m *SyncStore) queryResetCandidates(ctx context.Context, status synctypes.S
 		status,
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query reset candidates: %w", err)
 	}
 	defer rows.Close()
 
@@ -285,13 +285,17 @@ func (m *SyncStore) queryResetCandidates(ctx context.Context, status synctypes.S
 	for rows.Next() {
 		var r resetCandidate
 		if scanErr := rows.Scan(&r.driveID, &r.itemID, &r.path); scanErr != nil {
-			return nil, scanErr
+			return nil, fmt.Errorf("scan reset candidate: %w", scanErr)
 		}
 
 		result = append(result, r)
 	}
 
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate reset candidates: %w", err)
+	}
+
+	return result, nil
 }
 
 // createCrashRecoveryFailures creates sync_failures entries for items that
@@ -321,28 +325,19 @@ func (m *SyncStore) createCrashRecoveryFailures(
 // optimistic concurrency: only updates if the current status is valid for
 // the given action type.
 func (m *SyncStore) SetDispatchStatus(ctx context.Context, driveID, itemID string, actionType synctypes.ActionType) error {
-	switch actionType { //nolint:exhaustive // only download and delete dispatches touch remote_state
-	case synctypes.ActionDownload:
-		_, err := m.db.ExecContext(ctx,
-			`UPDATE remote_state SET sync_status = ?
-			WHERE drive_id = ? AND item_id = ? AND sync_status IN (?, ?)`,
-			synctypes.SyncStatusDownloading,
-			driveID, itemID, synctypes.SyncStatusPendingDownload, synctypes.SyncStatusDownloadFailed,
-		)
-		if err != nil {
-			return fmt.Errorf("sync: setting dispatch status downloading for %s: %w", itemID, err)
-		}
+	nextStatus, validStatuses, label, ok := dispatchStatusTransition(actionType)
+	if !ok {
+		return nil
+	}
 
-	case synctypes.ActionLocalDelete:
-		_, err := m.db.ExecContext(ctx,
-			`UPDATE remote_state SET sync_status = ?
-			WHERE drive_id = ? AND item_id = ? AND sync_status IN (?, ?)`,
-			synctypes.SyncStatusDeleting,
-			driveID, itemID, synctypes.SyncStatusPendingDelete, synctypes.SyncStatusDeleteFailed,
-		)
-		if err != nil {
-			return fmt.Errorf("sync: setting dispatch status deleting for %s: %w", itemID, err)
-		}
+	_, err := m.db.ExecContext(ctx,
+		`UPDATE remote_state SET sync_status = ?
+		WHERE drive_id = ? AND item_id = ? AND sync_status IN (?, ?)`,
+		nextStatus,
+		driveID, itemID, validStatuses[0], validStatuses[1],
+	)
+	if err != nil {
+		return fmt.Errorf("sync: setting dispatch status %s for %s: %w", label, itemID, err)
 	}
 
 	return nil
@@ -385,7 +380,11 @@ func (m *SyncStore) WriteSyncMetadata(ctx context.Context, report *synctypes.Syn
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit sync metadata reset: %w", err)
+	}
+
+	return nil
 }
 
 // ReadSyncMetadata retrieves all sync metadata key-value pairs.
@@ -395,8 +394,16 @@ func (m *SyncStore) ReadSyncMetadata(ctx context.Context) (map[string]string, er
 
 	rows, err := m.db.QueryContext(ctx, `SELECT key, value FROM sync_metadata`)
 	if err != nil {
-		// Table might not exist in pre-migration DBs — return empty map.
-		return result, nil //nolint:nilerr // graceful fallback for old DBs
+		exists, existsErr := m.syncMetadataTableExists(ctx)
+		if existsErr != nil {
+			return nil, existsErr
+		}
+
+		if !exists {
+			return result, nil
+		}
+
+		return nil, fmt.Errorf("sync metadata query: %w", err)
 	}
 	defer rows.Close()
 
@@ -409,7 +416,41 @@ func (m *SyncStore) ReadSyncMetadata(ctx context.Context) (map[string]string, er
 		result[k] = v
 	}
 
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate sync metadata rows: %w", err)
+	}
+
+	return result, nil
+}
+
+func dispatchStatusTransition(actionType synctypes.ActionType) (synctypes.SyncStatus, [2]synctypes.SyncStatus, string, bool) {
+	if actionType == synctypes.ActionDownload {
+		return synctypes.SyncStatusDownloading,
+			[2]synctypes.SyncStatus{synctypes.SyncStatusPendingDownload, synctypes.SyncStatusDownloadFailed},
+			"downloading",
+			true
+	}
+
+	if actionType == synctypes.ActionLocalDelete {
+		return synctypes.SyncStatusDeleting,
+			[2]synctypes.SyncStatus{synctypes.SyncStatusPendingDelete, synctypes.SyncStatusDeleteFailed},
+			"deleting",
+			true
+	}
+
+	return "", [2]synctypes.SyncStatus{}, "", false
+}
+
+func (m *SyncStore) syncMetadataTableExists(ctx context.Context) (bool, error) {
+	row := m.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='sync_metadata')`)
+
+	var exists int
+	if err := row.Scan(&exists); err != nil {
+		return false, fmt.Errorf("sync metadata schema check: %w", err)
+	}
+
+	return exists == 1, nil
 }
 
 // ReleaseScope atomically applies the semantic "this scope condition has

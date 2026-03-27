@@ -1435,7 +1435,7 @@ func classifyResult(r *synctypes.WorkerResult) (resultClass, synctypes.ScopeKey)
 		return resultSkip, synctypes.ScopeKey{}
 
 	case r.HTTPStatus == http.StatusTooManyRequests:
-		return resultScopeBlock, synctypes.SKThrottleAccount
+		return resultScopeBlock, synctypes.SKThrottleAccount()
 
 	case r.HTTPStatus == http.StatusInsufficientStorage:
 		return resultScopeBlock, synctypes.ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
@@ -1457,7 +1457,7 @@ func classifyResult(r *synctypes.WorkerResult) (resultClass, synctypes.ScopeKey)
 
 	case errors.Is(r.Err, driveops.ErrDiskFull):
 		// Deterministic signal — immediate scope block, no sliding window (R-2.10.43).
-		return resultScopeBlock, synctypes.SKDiskLocal
+		return resultScopeBlock, synctypes.SKDiskLocal()
 
 	case errors.Is(r.Err, driveops.ErrFileTooLargeForSpace):
 		// Per-file failure, no scope escalation — smaller files may fit (R-2.10.44).
@@ -1680,7 +1680,7 @@ func computeTrialInterval(retryAfter, currentInterval time.Duration) time.Durati
 // (throttle:account or service) is active, meaning shortcut observation
 // polling should be skipped to avoid wasting API calls (R-2.10.30).
 func (e *Engine) isObservationSuppressed() bool {
-	return e.isScopeBlocked(synctypes.SKThrottleAccount) || e.isScopeBlocked(synctypes.SKService)
+	return e.isScopeBlocked(synctypes.SKThrottleAccount()) || e.isScopeBlocked(synctypes.SKService())
 }
 
 // feedScopeDetection feeds a worker result into scope detection sliding
@@ -2036,14 +2036,14 @@ func (e *Engine) applyResultSideEffects(ctx context.Context, class resultClass, 
 		e.recordFailure(ctx, r, retry.Reconcile.Delay)
 		e.recordError(r)
 		e.feedScopeDetection(ctx, r)
-		e.armRetryTimer()
+		e.armRetryTimer(ctx)
 
 	case resultScopeBlock:
 		e.recordFailure(ctx, r, retry.Reconcile.Delay)
 		e.recordError(r)
 		e.feedScopeDetection(ctx, r)
 		e.armTrialTimer()
-		e.armRetryTimer()
+		e.armRetryTimer(ctx)
 
 	case resultSkip:
 		// Local permission errors get special handling — walk up to find the
@@ -2120,7 +2120,7 @@ func (e *Engine) processTrialResult(ctx context.Context, r *synctypes.WorkerResu
 	// BFS via cascadeFailAndComplete prevents grandchild stranding.
 	e.cascadeFailAndComplete(ctx, ready, r)
 
-	e.armRetryTimer()
+	e.armRetryTimer(ctx)
 
 	return nil
 }
@@ -2129,12 +2129,12 @@ func (e *Engine) processTrialResult(ctx context.Context, r *synctypes.WorkerResu
 // the earliest next_retry_at from sync_failures and sets the timer. If the
 // retry timer channel is already signaled (non-blocking send to buffered(1)
 // channel), the next owning loop iteration processes it.
-func (e *Engine) armRetryTimer() {
+func (e *Engine) armRetryTimer(ctx context.Context) {
 	if e.watch == nil {
 		return
 	}
 
-	earliest, err := e.baseline.EarliestSyncFailureRetryAt(context.Background(), e.nowFunc())
+	earliest, err := e.baseline.EarliestSyncFailureRetryAt(ctx, e.nowFunc())
 	if err != nil || earliest.IsZero() {
 		return
 	}
@@ -2330,7 +2330,7 @@ func (e *Engine) runRetrierSweep(ctx context.Context) {
 	}
 
 	// Re-arm for the next due item.
-	e.armRetryTimer()
+	e.armRetryTimer(ctx)
 }
 
 // remoteStateToChangeEvent converts a synctypes.RemoteStateRow into a full-fidelity
@@ -2469,7 +2469,7 @@ func (e *Engine) createEventFromDB(ctx context.Context, row *synctypes.SyncFailu
 		)
 
 	default: // download or delete
-		rs, err := e.baseline.GetRemoteStateByPath(ctx, row.Path, row.DriveID)
+		rs, found, err := e.baseline.GetRemoteStateByPath(ctx, row.Path, row.DriveID)
 		if err != nil {
 			e.logger.Debug("createEventFromDB: remote state lookup failed",
 				slog.String("path", row.Path),
@@ -2479,7 +2479,7 @@ func (e *Engine) createEventFromDB(ctx context.Context, row *synctypes.SyncFailu
 			return nil
 		}
 
-		if rs == nil {
+		if !found {
 			// No active remote_state → item was resolved through the normal
 			// pipeline (delta poll downloaded it, or it was deleted remotely).
 			return nil
@@ -2503,14 +2503,14 @@ func (e *Engine) isFailureResolved(ctx context.Context, row *synctypes.SyncFailu
 
 	switch row.Direction {
 	case synctypes.DirectionDownload:
-		rs, err := e.baseline.GetRemoteStateByPath(ctx, row.Path, row.DriveID)
+		rs, found, err := e.baseline.GetRemoteStateByPath(ctx, row.Path, row.DriveID)
 		if err != nil {
 			// DB error — can't determine resolution, treat as unresolved.
 			return false
 		}
 
 		// No active row means the item was deleted or never existed.
-		if rs == nil {
+		if !found {
 			resolved = true
 		} else {
 			switch rs.SyncStatus { //nolint:exhaustive // only terminal statuses mean resolved

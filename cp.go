@@ -127,7 +127,11 @@ func printCpJSON(w io.Writer, out cpJSONOutput) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 
-	return enc.Encode(out)
+	if err := enc.Encode(out); err != nil {
+		return fmt.Errorf("encode copy output: %w", err)
+	}
+
+	return nil
 }
 
 // awaitCopy polls the monitor URL until the copy completes, fails, or times out.
@@ -152,7 +156,7 @@ func awaitCopy(ctx context.Context, cc *CLIContext, meta *graph.Client, monitorU
 
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return "", fmt.Errorf("await copy: %w", ctx.Err())
 		case <-time.After(copyPollInterval):
 		}
 	}

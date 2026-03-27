@@ -1,4 +1,4 @@
-// observer_local_collisions.go — case collision detection helpers for watch mode.
+// Package syncobserve watches and scans the local filesystem for sync changes.
 //
 // Contents:
 //   - HasCaseCollisionCached: cached per-directory collision check

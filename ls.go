@@ -46,9 +46,7 @@ func runLs(cmd *cobra.Command, args []string) error {
 		return printItemsJSON(os.Stdout, items)
 	}
 
-	printItemsTable(os.Stdout, items)
-
-	return nil
+	return printItemsTable(os.Stdout, items)
 }
 
 // lsJSONItem is the JSON output schema for a single item in ls output.
@@ -75,10 +73,14 @@ func printItemsJSON(w io.Writer, items []graph.Item) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 
-	return enc.Encode(out)
+	if err := enc.Encode(out); err != nil {
+		return fmt.Errorf("encode ls output: %w", err)
+	}
+
+	return nil
 }
 
-func printItemsTable(w io.Writer, items []graph.Item) {
+func printItemsTable(w io.Writer, items []graph.Item) error {
 	// Sort: folders first, then alphabetical.
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].IsFolder != items[j].IsFolder {
@@ -100,5 +102,5 @@ func printItemsTable(w io.Writer, items []graph.Item) {
 		rows = append(rows, []string{name, formatSize(items[i].Size), formatTime(items[i].ModifiedAt)})
 	}
 
-	printTable(w, headers, rows)
+	return printTable(w, headers, rows)
 }

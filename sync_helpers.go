@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
@@ -14,7 +15,13 @@ import (
 // Validates syncDir and statePath, then builds the EngineConfig. Pass
 // verifyDrive=true to enable drive-level hash verification (sync uses this;
 // resolve does not need it since resolve only touches the conflict DB).
-func newSyncEngine(session *driveops.Session, resolved *config.ResolvedDrive, verifyDrive bool, logger *slog.Logger) (*sync.Engine, error) {
+func newSyncEngine(
+	ctx context.Context,
+	session *driveops.Session,
+	resolved *config.ResolvedDrive,
+	verifyDrive bool,
+	logger *slog.Logger,
+) (*sync.Engine, error) {
 	syncDir := resolved.SyncDir
 	if syncDir == "" {
 		return nil, fmt.Errorf("sync_dir not configured — set it in the config file or add a drive with 'onedrive-go drive add'")
@@ -51,5 +58,10 @@ func newSyncEngine(session *driveops.Session, resolved *config.ResolvedDrive, ve
 		ecfg.DriveVerifier = session.Meta
 	}
 
-	return sync.NewEngine(ecfg)
+	engine, err := sync.NewEngine(ctx, ecfg)
+	if err != nil {
+		return nil, fmt.Errorf("create sync engine: %w", err)
+	}
+
+	return engine, nil
 }
