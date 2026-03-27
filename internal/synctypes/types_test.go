@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
@@ -151,6 +152,63 @@ func TestBaseline_DescendantsOf_EmptyResults(t *testing.T) {
 
 	descendants := bl.DescendantsOf("lonely-folder")
 	assert.Empty(t, descendants)
+}
+
+func TestBaseline_PutGetByIDDeleteAndLen(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New("drive1")
+	original := &BaselineEntry{
+		Path:     "docs/readme.txt",
+		DriveID:  driveID,
+		ItemID:   "item-1",
+		ItemType: ItemTypeFile,
+	}
+
+	bl := NewBaselineForTest(nil)
+	bl.Put(original)
+
+	assert.Equal(t, 1, bl.Len())
+
+	gotByPath, ok := bl.GetByPath(original.Path)
+	require.True(t, ok)
+	assert.Equal(t, original, gotByPath)
+
+	gotByID, ok := bl.GetByID(driveid.NewItemKey(driveID, original.ItemID))
+	require.True(t, ok)
+	assert.Equal(t, original, gotByID)
+
+	replacement := &BaselineEntry{
+		Path:     original.Path,
+		DriveID:  driveID,
+		ItemID:   "item-2",
+		ItemType: ItemTypeFile,
+	}
+	bl.Put(replacement)
+
+	_, ok = bl.GetByID(driveid.NewItemKey(driveID, original.ItemID))
+	assert.False(t, ok, "stale item ID should be removed when a path is reassigned")
+
+	gotByID, ok = bl.GetByID(driveid.NewItemKey(driveID, replacement.ItemID))
+	require.True(t, ok)
+	assert.Equal(t, replacement, gotByID)
+
+	var seenPaths []string
+	bl.ForEachPath(func(path string, _ *BaselineEntry) {
+		seenPaths = append(seenPaths, path)
+	})
+	assert.Equal(t, []string{replacement.Path}, seenPaths)
+
+	bl.Delete(replacement.Path)
+	assert.Equal(t, 0, bl.Len())
+
+	_, ok = bl.GetByPath(replacement.Path)
+	assert.False(t, ok)
+
+	_, ok = bl.GetByID(driveid.NewItemKey(driveID, replacement.ItemID))
+	assert.False(t, ok)
+
+	assert.Empty(t, bl.GetCaseVariants("docs", "readme.txt"))
 }
 
 // Interface satisfaction checks — compile-time verification that

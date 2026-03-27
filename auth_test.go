@@ -7,7 +7,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -203,9 +205,28 @@ func TestValidateBrowserAuthURL(t *testing.T) {
 			rawURL: "http://127.0.0.1:8080/callback",
 		},
 		{
+			name:   "localhost https allowed",
+			rawURL: "https://localhost:8443/callback",
+		},
+		{
 			name:    "rejects insecure remote host",
 			rawURL:  "http://login.microsoftonline.com/common/oauth2/v2.0/authorize",
 			wantErr: "must use https",
+		},
+		{
+			name:    "rejects userinfo",
+			rawURL:  "https://user@login.microsoftonline.com/common/oauth2/v2.0/authorize",
+			wantErr: "must not contain userinfo",
+		},
+		{
+			name:    "rejects empty host",
+			rawURL:  "https:///callback",
+			wantErr: "host is empty",
+		},
+		{
+			name:    "rejects loopback with non-http scheme",
+			rawURL:  "ftp://127.0.0.1:8080/callback",
+			wantErr: "loopback host must use http or https",
 		},
 		{
 			name:    "rejects untrusted host",
@@ -230,6 +251,26 @@ func TestValidateBrowserAuthURL(t *testing.T) {
 	}
 }
 
+func TestPendingTokenPath(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	assert.Equal(t, filepath.Join(config.DefaultDataDir(), pendingTokenFile), pendingTokenPath())
+}
+
+func TestBrowserHostAllowed(t *testing.T) {
+	assert.True(t, browserHostAllowed("login.microsoftonline.com"))
+	assert.True(t, browserHostAllowed("tenant.login.microsoftonline.com"))
+	assert.True(t, browserHostAllowed("tenant.login.live.com"))
+	assert.False(t, browserHostAllowed("example.com"))
+}
+
+func TestIsLoopbackBrowserHost(t *testing.T) {
+	assert.True(t, isLoopbackBrowserHost("localhost"))
+	assert.True(t, isLoopbackBrowserHost("127.0.0.1"))
+	assert.True(t, isLoopbackBrowserHost("::1"))
+	assert.False(t, isLoopbackBrowserHost("192.168.1.10"))
+}
+
 func TestBrowserOpenCommand(t *testing.T) {
 	command, err := browserOpenCommand("darwin")
 	require.NoError(t, err)
@@ -247,6 +288,45 @@ func TestOpenBrowser_RejectsUntrustedURL(t *testing.T) {
 	err := openBrowser(context.Background(), "https://evil.example.com/callback")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "is not allowed")
+}
+
+func TestOpenBrowser_StartsValidatedCommand(t *testing.T) {
+	command, err := browserOpenCommand(runtime.GOOS)
+	if err != nil {
+		t.Skipf("unsupported platform for browser launch test: %v", err)
+	}
+
+	const executablePerms = 0o755
+	const authURL = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=test"
+
+	tempDir := t.TempDir()
+	outputPath := filepath.Join(tempDir, "browser-url.txt")
+	scriptPath := filepath.Join(tempDir, command)
+	script := "#!/bin/sh\nprintf '%s' \"$1\" > \"$CODEX_BROWSER_OUT\"\n"
+	require.NoError(t, os.WriteFile(scriptPath, []byte(script), executablePerms))
+
+	t.Setenv("PATH", tempDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CODEX_BROWSER_OUT", outputPath)
+
+	require.NoError(t, openBrowser(t.Context(), authURL))
+
+	require.Eventually(t, func() bool {
+		data, readErr := os.ReadFile(outputPath) //nolint:gosec // Test output path is created in t.TempDir and controlled by the test.
+		return readErr == nil && string(data) == authURL
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestOpenBrowser_CommandStartFailure(t *testing.T) {
+	_, err := browserOpenCommand(runtime.GOOS)
+	if err != nil {
+		t.Skipf("unsupported platform for browser launch test: %v", err)
+	}
+
+	t.Setenv("PATH", t.TempDir())
+
+	err = openBrowser(t.Context(), "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=test")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "start browser command")
 }
 
 // Validates: R-3.1.4

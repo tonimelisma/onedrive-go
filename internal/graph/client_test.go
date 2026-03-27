@@ -160,6 +160,76 @@ func TestDo_Success(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
+func assertValidatedPreAuthURL(
+	t *testing.T,
+	name string,
+	validate func(*Client, string) (string, error),
+	setValidator func(*Client, func(*url.URL) error),
+	allowedURL string,
+	rejectedURL string,
+	errorPrefix string,
+) {
+	t.Helper()
+
+	client := &Client{}
+
+	validated, err := validate(client, allowedURL)
+	require.NoError(t, err)
+	assert.Equal(t, allowedURL, validated)
+
+	_, err = validate(client, rejectedURL)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), errorPrefix)
+
+	custom := &Client{}
+	setValidator(custom, func(parsed *url.URL) error {
+		require.NotNil(t, parsed)
+		assert.Equal(t, "example.com", parsed.Hostname())
+
+		return nil
+	})
+
+	validated, err = validate(custom, rejectedURL)
+	require.NoError(t, err, name)
+	assert.Equal(t, rejectedURL, validated)
+}
+
+func TestValidatedUploadURL(t *testing.T) {
+	t.Parallel()
+
+	assertValidatedPreAuthURL(
+		t,
+		"upload",
+		func(client *Client, raw string) (string, error) {
+			return client.validatedUploadURL(UploadURL(raw))
+		},
+		func(client *Client, validator func(*url.URL) error) {
+			client.uploadURLValidator = validator
+		},
+		"https://contoso.sharepoint.com/upload",
+		"https://example.com/upload",
+		"validating upload URL",
+	)
+}
+
+func TestValidatedCopyMonitorURL(t *testing.T) {
+	t.Parallel()
+
+	assertValidatedPreAuthURL(
+		t,
+		"copy-monitor",
+		func(client *Client, raw string) (string, error) {
+			return client.validatedCopyMonitorURL(raw)
+		},
+		func(client *Client, validator func(*url.URL) error) {
+			client.copyMonitorValidator = validator
+		},
+		"https://graph.microsoft.com/v1.0/operations/copy",
+		"https://example.com/v1.0/operations/copy",
+		"validating copy monitor URL",
+	)
+}
+
 func TestDo_ErrorClassification(t *testing.T) {
 	tests := []struct {
 		name     string

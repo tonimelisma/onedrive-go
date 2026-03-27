@@ -50,11 +50,27 @@ func TestScopeKey_IsPermDirAndDirPath(t *testing.T) {
 	assert.Equal(t, "/docs", key.DirPath())
 }
 
+func TestScopeKey_IsPermRemoteAndRemotePath(t *testing.T) {
+	t.Parallel()
+
+	key := SKPermRemote("/readonly")
+	assert.True(t, key.IsPermRemote())
+	assert.Equal(t, "/readonly", key.RemotePath())
+}
+
 func TestScopeKey_DirPathPanicsForNonPermDir(t *testing.T) {
 	t.Parallel()
 
 	require.Panics(t, func() {
 		_ = SKQuotaOwn().DirPath()
+	})
+}
+
+func TestScopeKey_RemotePathPanicsForNonPermRemote(t *testing.T) {
+	t.Parallel()
+
+	require.Panics(t, func() {
+		_ = SKQuotaOwn().RemotePath()
 	})
 }
 
@@ -66,6 +82,7 @@ func TestScopeKey_IssueType(t *testing.T) {
 	assert.Equal(t, IssueQuotaExceeded, SKQuotaOwn().IssueType())
 	assert.Equal(t, IssueQuotaExceeded, SKQuotaShortcut("drive:item").IssueType())
 	assert.Equal(t, IssueLocalPermissionDenied, SKPermDir("/docs").IssueType())
+	assert.Equal(t, IssuePermissionDenied, SKPermRemote("/readonly").IssueType())
 	assert.Equal(t, IssueDiskFull, SKDiskLocal().IssueType())
 	assert.Empty(t, ScopeKey{}.IssueType())
 }
@@ -102,6 +119,12 @@ func TestScopeKey_BlocksAction(t *testing.T) {
 	assert.True(t, SKPermDir("/docs").BlocksAction("/docs/file.txt", "", ActionUpload, false))
 	assert.True(t, SKPermDir("/docs").BlocksAction("/docs", "", ActionUpload, false))
 	assert.False(t, SKPermDir("/docs").BlocksAction("/other/file.txt", "", ActionUpload, false))
+	assert.True(t, SKPermRemote("/readonly").BlocksAction("/readonly/file.txt", "", ActionUpload, false))
+	assert.True(t, SKPermRemote("/readonly").BlocksAction("/readonly/file.txt", "", ActionRemoteDelete, false))
+	assert.True(t, SKPermRemote("/readonly").BlocksAction("/readonly", "", ActionFolderCreate, false))
+	assert.False(t, SKPermRemote("/readonly").BlocksAction("/readonly/file.txt", "", ActionDownload, false))
+	assert.False(t, SKPermRemote("/readonly").BlocksAction("/readonly/file.txt", "", ActionLocalDelete, false))
+	assert.False(t, SKPermRemote("/readonly").BlocksAction("/other/file.txt", "", ActionUpload, false))
 }
 
 func TestScopeKeyForStatus(t *testing.T) {
