@@ -36,7 +36,10 @@ jobs:
           go-version-file: go.mod
 
       - name: Install golangci-lint
-        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v2.11.3
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.11.3
+          install-only: true
 
       - name: Verify
         env:
