@@ -83,6 +83,8 @@ Transparent token refresh on 401 inside `doOnce()`, independent of retry transpo
 - Upload URLs are sensitive credentials. The `UploadURL` type implements `slog.LogValuer` with redaction, matching the `DownloadURL` pattern.
 - Search API calls URL-escape query parameters to prevent special characters from breaking URL construction.
 - Token metadata validation is enforced on both write and read paths. Required fields must be present in non-nil metadata. `tokenfile.ValidateMeta()` validates before save, `LoadAndValidate()` validates on load.
+- Token file reads use root-based trusted-path helpers after config-driven token resolution.
+- `dispatchRequest` is the sole raw `http.Client.Do` boundary. Graph base URLs and pre-auth URLs are validated before a request reaches that call; the remaining inline `gosec` suppression there is intentional because the linter cannot prove the validation flow.
 - Per-tenant rate limit coordination: multiple drives under the same tenant share Graph API rate limits. A shared rate limiter per-tenant prevents aggregate throttling. [planned]
 - Upload and async-copy pre-auth URL validation: verify HTTPS scheme and Microsoft domain on upload session and copy monitor URLs before use. [verified]
 - Audit all `slog.*` calls for potential secret leakage (tokens, pre-auth URLs). [planned]

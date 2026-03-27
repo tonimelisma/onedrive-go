@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 // AccountProfile holds cached API data about the account owner. Persisted
@@ -79,9 +80,7 @@ func LookupAccountProfile(cid driveid.CanonicalID) (*AccountProfile, bool, error
 		return nil, false, nil
 	}
 
-	// Account profile path is derived from a canonical drive ID under the
-	// managed data directory.
-	data, err := os.ReadFile(path) //nolint:gosec // Managed data-dir path.
+	data, err := trustedpath.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, false, nil
 	}

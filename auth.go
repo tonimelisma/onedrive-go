@@ -153,11 +153,16 @@ func openBrowser(ctx context.Context, rawURL string) error {
 	return nil
 }
 
+const (
+	goosDarwin = "darwin"
+	goosLinux  = "linux"
+)
+
 func browserOpenCommand(goos string) (string, error) {
 	switch goos {
-	case "darwin":
+	case goosDarwin:
 		return "open", nil
-	case "linux":
+	case goosLinux:
 		return "xdg-open", nil
 	default:
 		return "", fmt.Errorf("unsupported platform %s: open the URL manually", goos)

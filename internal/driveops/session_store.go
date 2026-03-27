@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 // ErrCorruptSession is returned when a session file cannot be parsed as JSON.
@@ -121,9 +123,7 @@ func (s *SessionStore) Load(driveID, localPath string) (*SessionRecord, bool, er
 		return nil, false, nil
 	}
 
-	// Session path is derived from the drive ID plus local path hash under the
-	// managed data directory.
-	data, err := os.ReadFile(path) //nolint:gosec // Managed data-dir path.
+	data, err := trustedpath.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, false, nil
