@@ -709,7 +709,7 @@ func simulateBrowserCallback(t *testing.T) func(context.Context, string) error {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, authURL, http.NoBody)
 		require.NoError(t, err, "failed to create authorize request")
 
-		resp, err := client.Do(req) //nolint:gosec // Test browser callback only follows the mock auth URL and localhost callback.
+		resp, err := client.Do(req)
 		require.NoError(t, err, "failed to hit authorize endpoint")
 		require.NoError(t, resp.Body.Close())
 
@@ -720,7 +720,7 @@ func simulateBrowserCallback(t *testing.T) func(context.Context, string) error {
 		callbackReq, err := http.NewRequestWithContext(ctx, http.MethodGet, location, http.NoBody)
 		require.NoError(t, err, "failed to create callback request")
 
-		callbackResp, err := http.DefaultClient.Do(callbackReq) //nolint:gosec // Test callback request targets the local httptest callback server.
+		callbackResp, err := http.DefaultClient.Do(callbackReq)
 		require.NoError(t, err, "failed to hit callback")
 		require.NoError(t, callbackResp.Body.Close())
 
@@ -821,7 +821,7 @@ func TestDoAuthCodeLogin_ContextCancel(t *testing.T) {
 			return fmt.Errorf("build authorize request: %w", err)
 		}
 
-		resp, err := http.DefaultClient.Do(req) //nolint:gosec // Test authorize request only targets the local mock auth server.
+		resp, err := http.DefaultClient.Do(req)
 		if err == nil {
 			require.NoError(t, resp.Body.Close())
 		}

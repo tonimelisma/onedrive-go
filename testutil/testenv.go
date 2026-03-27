@@ -177,8 +177,50 @@ func CopyFile(src, dst string, perm os.FileMode) {
 		os.Exit(1)
 	}
 
-	if writeErr := os.WriteFile(dst, data, perm); writeErr != nil {
+	root, err := os.OpenRoot(filepath.Dir(dst))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: opening destination directory for %s: %v\n", dst, err)
+		os.Exit(1)
+	}
+
+	file, err := root.OpenFile(filepath.Base(dst), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		if closeErr := root.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "FATAL: opening destination file for %s: %v (close: %v)\n", dst, err, closeErr)
+			os.Exit(1)
+		}
+
+		fmt.Fprintf(os.Stderr, "FATAL: opening destination file for %s: %v\n", dst, err)
+		os.Exit(1)
+	}
+
+	if _, writeErr := file.Write(data); writeErr != nil {
+		if closeErr := file.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "FATAL: writing %s: %v (close: %v)\n", dst, writeErr, closeErr)
+			os.Exit(1)
+		}
+
+		if closeErr := root.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "FATAL: writing %s: %v (root close: %v)\n", dst, writeErr, closeErr)
+			os.Exit(1)
+		}
+
 		fmt.Fprintf(os.Stderr, "FATAL: writing %s: %v\n", dst, writeErr)
+		os.Exit(1)
+	}
+
+	if closeErr := file.Close(); closeErr != nil {
+		if rootCloseErr := root.Close(); rootCloseErr != nil {
+			fmt.Fprintf(os.Stderr, "FATAL: closing %s: %v (root close: %v)\n", dst, closeErr, rootCloseErr)
+			os.Exit(1)
+		}
+
+		fmt.Fprintf(os.Stderr, "FATAL: closing %s: %v\n", dst, closeErr)
+		os.Exit(1)
+	}
+
+	if closeErr := root.Close(); closeErr != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: closing destination directory for %s: %v\n", dst, closeErr)
 		os.Exit(1)
 	}
 }

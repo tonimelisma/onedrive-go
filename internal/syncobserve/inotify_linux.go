@@ -9,7 +9,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	stdsync "sync"
 	"syscall"
 )
 
@@ -19,11 +18,6 @@ const inotifyCapacityThreshold = 0.8
 
 // percentMultiplier converts a fraction (0.0–1.0) to a percentage (0–100).
 const percentMultiplier = 100.0
-
-// cachedInotifyLimit caches the inotify max_user_watches value for the
-// process lifetime. The limit is effectively constant — runtime sysctl
-// changes require a daemon restart to take effect.
-var cachedInotifyLimit = stdsync.OnceValues(ReadInotifyLimit)
 
 // ReadInotifyLimit reads the current inotify max_user_watches from procfs.
 // Returns 0 if procfs is unavailable (e.g., container without /proc mounted).
@@ -48,7 +42,10 @@ func ReadInotifyLimit() (int, error) {
 // CheckInotifyCapacity warns if the estimated directory count exceeds 80% of
 // the inotify max_user_watches limit. Provides sysctl advice per MULTIDRIVE.md §9.1.
 func CheckInotifyCapacity(estimatedDirs int, logger *slog.Logger) {
-	limit, err := cachedInotifyLimit()
+	// Read the current procfs value directly instead of caching it in global
+	// process state. This path runs at observer startup and the extra read is
+	// negligible compared with the clarity of having no package-level state.
+	limit, err := ReadInotifyLimit()
 	if err != nil {
 		logger.Warn("failed to read inotify watch limit",
 			slog.String("error", err.Error()))

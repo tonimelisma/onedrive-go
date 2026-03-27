@@ -357,6 +357,7 @@ func TestDepGraph_CancelByPath(t *testing.T) {
 
 	// Simulate a worker setting the cancel func.
 	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
 
 	// We need to access the TrackedAction to set Cancel — grab it via Add return.
 	// Action 1 was returned by Add (no deps), so we already have it. But since
@@ -392,6 +393,7 @@ func TestDepGraph_CancelByPath_CleansUp(t *testing.T) {
 	require.NotNil(t, ta)
 
 	ctx1, cancel1 := context.WithCancel(t.Context())
+	t.Cleanup(cancel1)
 	ta.Cancel = cancel1
 
 	dg.CancelByPath("cancel-me.txt")
@@ -416,6 +418,7 @@ func TestDepGraph_CancelByPath_CleansUp(t *testing.T) {
 	require.NotNil(t, ta2)
 
 	ctx2, cancel2 := context.WithCancel(t.Context())
+	t.Cleanup(cancel2)
 	ta2.Cancel = cancel2
 
 	dg.CancelByPath("cancel-me.txt")
@@ -588,6 +591,7 @@ func TestDepGraph_ConcurrentCancelAndComplete(t *testing.T) {
 
 		// Set a Cancel func so CancelByPath has something to call.
 		_, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
 		ta.Cancel = cancel
 	}
 

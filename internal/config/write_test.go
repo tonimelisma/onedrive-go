@@ -14,6 +14,25 @@ import (
 
 // --- AppendDriveSection tests ---
 
+func writeConfigFixture(t *testing.T, path string, data []byte) {
+	t.Helper()
+
+	root, err := os.OpenRoot(filepath.Dir(path))
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, root.Close())
+	}()
+
+	file, err := root.OpenFile(filepath.Base(path), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, configFilePermissions)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, file.Close())
+	}()
+
+	_, err = file.Write(data)
+	require.NoError(t, err)
+}
+
 func TestAppendDriveSection_AppendsToExistingFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
@@ -59,11 +78,10 @@ func TestAppendDriveSection_FileWithoutTrailingNewline(t *testing.T) {
 	path := filepath.Join(dir, "config.toml")
 
 	// Write file without trailing newline
-	err := os.WriteFile(path, []byte(`["personal:toni@outlook.com"]
-sync_dir = "~/OneDrive"`), configFilePermissions)
-	require.NoError(t, err)
+	writeConfigFixture(t, path, []byte(`["personal:toni@outlook.com"]
+sync_dir = "~/OneDrive"`))
 
-	err = AppendDriveSection(path, driveid.MustCanonicalID("business:alice@contoso.com"), "~/Work")
+	err := AppendDriveSection(path, driveid.MustCanonicalID("business:alice@contoso.com"), "~/Work")
 	require.NoError(t, err)
 
 	cfg, err := Load(path, testLogger(t))
@@ -590,8 +608,7 @@ func TestCommentPreservation_AppendDriveSection(t *testing.T) {
 	content = strings.Replace(content, `["personal:toni@outlook.com"]`,
 		"# My personal drive\n"+`["personal:toni@outlook.com"]`, 1)
 
-	err = os.WriteFile(path, []byte(content), configFilePermissions)
-	require.NoError(t, err)
+	writeConfigFixture(t, path, []byte(content))
 
 	// Now append a new section
 	err = AppendDriveSection(path, driveid.MustCanonicalID("business:alice@contoso.com"), "~/Work")
@@ -624,10 +641,9 @@ log_level = "debug"
 ["business:alice@contoso.com"]
 sync_dir = "~/Work"
 `
-	err := os.WriteFile(path, []byte(content), configFilePermissions)
-	require.NoError(t, err)
+	writeConfigFixture(t, path, []byte(content))
 
-	err = SetDriveKey(path, driveid.MustCanonicalID("business:alice@contoso.com"), "paused", "true")
+	err := SetDriveKey(path, driveid.MustCanonicalID("business:alice@contoso.com"), "paused", "true")
 	require.NoError(t, err)
 
 	result, err := os.ReadFile(path) //nolint:gosec // Test config path is created in t.TempDir and controlled by the test.
@@ -655,10 +671,9 @@ sync_dir = "~/OneDrive"
 ["business:alice@contoso.com"]
 sync_dir = "~/Work"
 `
-	err := os.WriteFile(path, []byte(content), configFilePermissions)
-	require.NoError(t, err)
+	writeConfigFixture(t, path, []byte(content))
 
-	err = DeleteDriveSection(path, driveid.MustCanonicalID("personal:toni@outlook.com"))
+	err := DeleteDriveSection(path, driveid.MustCanonicalID("personal:toni@outlook.com"))
 	require.NoError(t, err)
 
 	result, err := os.ReadFile(path) //nolint:gosec // Test config path is created in t.TempDir and controlled by the test.
@@ -756,7 +771,7 @@ func TestSetDriveKey_InlineCommentPreserved(t *testing.T) {
 sync_dir = "~/OneDrive"
 paused = true # temporarily paused
 `
-	require.NoError(t, os.WriteFile(path, []byte(content), configFilePermissions))
+	writeConfigFixture(t, path, []byte(content))
 
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 	require.NoError(t, SetDriveKey(path, cid, "paused", "false"))
@@ -777,7 +792,7 @@ sync_dir = "~/OneDrive"
 paused_until = "2026-03-01T00:00:00Z"
 paused = true
 `
-	require.NoError(t, os.WriteFile(path, []byte(content), configFilePermissions))
+	writeConfigFixture(t, path, []byte(content))
 
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 
@@ -807,7 +822,7 @@ func TestSetDriveKey_NoSpacesAroundEquals(t *testing.T) {
 	content := `["personal:toni@outlook.com"]
 sync_dir="~/OneDrive"
 `
-	require.NoError(t, os.WriteFile(path, []byte(content), configFilePermissions))
+	writeConfigFixture(t, path, []byte(content))
 
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 	require.NoError(t, SetDriveKey(path, cid, "sync_dir", "~/NewPath"))
@@ -825,7 +840,7 @@ func TestDeleteDriveKey_NoSpacesAroundEquals(t *testing.T) {
 sync_dir = "~/OneDrive"
 paused=true
 `
-	require.NoError(t, os.WriteFile(path, []byte(content), configFilePermissions))
+	writeConfigFixture(t, path, []byte(content))
 
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
@@ -842,7 +857,7 @@ func TestSetDriveKey_ValueWithHash(t *testing.T) {
 	content := `["personal:toni@outlook.com"]
 sync_dir = "~/path#with#hash"
 `
-	require.NoError(t, os.WriteFile(path, []byte(content), configFilePermissions))
+	writeConfigFixture(t, path, []byte(content))
 
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 	require.NoError(t, SetDriveKey(path, cid, "display_name", "my drive"))

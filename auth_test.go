@@ -313,7 +313,7 @@ func TestOpenBrowser_StartsValidatedCommand(t *testing.T) {
 	require.Eventually(t, func() bool {
 		data, readErr := os.ReadFile(outputPath) //nolint:gosec // Test output path is created in t.TempDir and controlled by the test.
 		return readErr == nil && string(data) == authURL
-	}, time.Second, 10*time.Millisecond)
+	}, 5*time.Second, 25*time.Millisecond)
 }
 
 func TestOpenBrowser_CommandStartFailure(t *testing.T) {

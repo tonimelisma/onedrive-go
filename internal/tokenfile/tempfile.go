@@ -27,7 +27,7 @@ func marshalTokenFile(tok *oauth2.Token) ([]byte, error) {
 func setTempFilePermissions(file *os.File) error {
 	// Temp file path is created by os.CreateTemp in the destination directory,
 	// so permission tightening applies to an internally-derived atomic-write path.
-	if err := os.Chmod(file.Name(), FilePerms); err != nil { //nolint:gosec // Trusted atomic-write temp path in the token directory.
+	if err := os.Chmod(file.Name(), FilePerms); err != nil {
 		return fmt.Errorf("tokenfile: setting permissions: %w", err)
 	}
 
@@ -81,7 +81,7 @@ func removeTempPath(path string, prior error) error {
 func renameTempFile(src, dst string) error {
 	// Source temp path is created by os.CreateTemp beside the final token file,
 	// so rename stays within the managed token directory.
-	if err := os.Rename(src, dst); err != nil { //nolint:gosec // Trusted atomic-write rename within the token directory.
+	if err := os.Rename(src, dst); err != nil {
 		return fmt.Errorf("tokenfile: renaming: %w", err)
 	}
 

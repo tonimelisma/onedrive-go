@@ -40,7 +40,7 @@ func TestSetTempFilePermissions(t *testing.T) {
 
 	require.NoError(t, setTempFilePermissions(file))
 
-	info, err := os.Stat(file.Name()) //nolint:gosec // Temp file name comes from os.CreateTemp in t.TempDir and is controlled by the test.
+	info, err := os.Stat(file.Name())
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(FilePerms), info.Mode().Perm())
 }
@@ -54,7 +54,7 @@ func TestWriteTempFileData(t *testing.T) {
 	require.NoError(t, writeTempFileData(file, []byte("token-data")))
 	require.NoError(t, file.Close())
 
-	data, err := os.ReadFile(file.Name()) //nolint:gosec // Test temp file is created in t.TempDir and controlled by the test.
+	data, err := os.ReadFile(file.Name())
 	require.NoError(t, err)
 	assert.Equal(t, []byte("token-data"), data)
 

@@ -329,6 +329,7 @@ func (o *Orchestrator) startWatchRunner(
 
 	go func() {
 		defer close(done)
+		defer driveCancel()
 
 		if watchErr := engine.RunWatch(driveCtx, mode, opts); watchErr != nil {
 			// Context cancellation is normal shutdown — don't log as error.
