@@ -41,6 +41,24 @@ type RetryTransport struct {
 	throttledUntil time.Time
 }
 
+type logTargetKey struct{}
+
+func WithLogTarget(ctx context.Context, target string) context.Context {
+	if target == "" {
+		return ctx
+	}
+
+	return context.WithValue(ctx, logTargetKey{}, target)
+}
+
+func WithRequestLogTarget(req *http.Request, target string) *http.Request {
+	if target == "" {
+		return req
+	}
+
+	return req.WithContext(context.WithValue(req.Context(), logTargetKey{}, target))
+}
+
 // RoundTrip executes the HTTP request with automatic retry on transient
 // failures. Implements http.RoundTripper. Thread-safe.
 func (rt *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -88,11 +106,12 @@ func (rt *RetryTransport) handleNetworkError(req *http.Request, err error, attem
 		return false, fmt.Errorf("retry: request canceled: %w", req.Context().Err())
 	}
 
+	logTarget := requestLogTarget(req)
 	if attempt < rt.Policy.MaxAttempts {
 		backoff := rt.Policy.Delay(attempt)
-		rt.Logger.Warn("retrying after network error",
+		rt.Logger.Debug("retrying after network error",
 			slog.String("method", req.Method),
-			slog.String("url", req.URL.String()),
+			slog.String("url", logTarget),
 			slog.Int("attempt", attempt+1),
 			slog.Duration("backoff", backoff),
 			slog.String("error", err.Error()),
@@ -105,9 +124,9 @@ func (rt *RetryTransport) handleNetworkError(req *http.Request, err error, attem
 		return true, nil
 	}
 
-	rt.Logger.Error("request failed after all retries",
+	rt.Logger.Warn("request failed after all retries",
 		slog.String("method", req.Method),
-		slog.String("url", req.URL.String()),
+		slog.String("url", logTarget),
 		slog.Int("attempts", attempt+1),
 		slog.String("error", err.Error()),
 	)
@@ -133,9 +152,9 @@ func (rt *RetryTransport) handleResponse(
 
 	// Retryable but exhausted — terminal failure (R-6.6.8).
 	if attempt >= rt.Policy.MaxAttempts {
-		rt.Logger.Error("request failed after all retries",
+		rt.Logger.Warn("request failed after all retries",
 			slog.String("method", req.Method),
-			slog.String("url", req.URL.String()),
+			slog.String("url", requestLogTarget(req)),
 			slog.Int("attempts", attempt+1),
 			slog.Int("status", resp.StatusCode),
 		)
@@ -148,18 +167,19 @@ func (rt *RetryTransport) handleResponse(
 	// Drain response body to allow connection reuse. A drain/close failure
 	// is not terminal for the retry path, but it is still operationally
 	// relevant because it can reduce connection reuse.
+	logTarget := requestLogTarget(req)
 	if drainErr := drainAndCloseBody(resp.Body); drainErr != nil {
 		rt.Logger.Warn("retry response body cleanup degraded",
 			slog.String("method", req.Method),
-			slog.String("url", req.URL.String()),
+			slog.String("url", logTarget),
 			slog.Int("status", resp.StatusCode),
 			slog.String("error", drainErr.Error()),
 		)
 	}
 
-	rt.Logger.Warn("retrying after HTTP error",
+	rt.Logger.Debug("retrying after HTTP error",
 		slog.String("method", req.Method),
-		slog.String("url", req.URL.String()),
+		slog.String("url", logTarget),
 		slog.Int("status", resp.StatusCode),
 		slog.Int("attempt", attempt+1),
 		slog.Duration("backoff", backoff),
@@ -221,6 +241,15 @@ func (rt *RetryTransport) retryBackoff(resp *http.Response, attempt int, _ Sleep
 	}
 
 	return rt.Policy.Delay(attempt)
+}
+
+func requestLogTarget(req *http.Request) string {
+	target, ok := req.Context().Value(logTargetKey{}).(string)
+	if ok && target != "" {
+		return target
+	}
+
+	return req.URL.String()
 }
 
 // parseRetryAfterHeader extracts the Retry-After header from 429 and 503

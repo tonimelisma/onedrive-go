@@ -1531,6 +1531,14 @@ func isOutagePattern(err error) bool {
 		return false
 	}
 
+	if ge.StatusCode != http.StatusBadRequest {
+		return false
+	}
+
+	if ge.Code != "" || len(ge.InnerCodes) > 0 {
+		return ge.HasCode("invalidRequest") && strings.Contains(ge.Message, "ObjectHandle is Invalid")
+	}
+
 	return strings.Contains(ge.Message, "ObjectHandle is Invalid")
 }
 

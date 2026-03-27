@@ -59,11 +59,12 @@ jobs:
 
       - name: Unit tests with coverage gate
         env:
-          COVERAGE_THRESHOLD: "75.0"
+          COVERAGE_THRESHOLD: "76.0"
         run: |
           set -euo pipefail
 
-          coverage_file=/tmp/onedrive-go-cover.out
+          coverage_file="$(mktemp /tmp/onedrive-go-cover.XXXXXX.out)"
+          trap 'rm -f "${coverage_file}"' EXIT
           go test -race -coverprofile="${coverage_file}" ./...
 
           coverage_report="$(go tool cover -func="${coverage_file}")"

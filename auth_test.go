@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -191,6 +192,31 @@ func TestPrintLoginSuccess_DoesNotPanic(t *testing.T) {
 	require.NoError(t, printLoginSuccess(&buf, "documentLibrary", "carol@example.com", "", "documentLibrary:carol@example.com", "~/SP"))
 }
 
+func TestMoveToken_Success(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+	src := filepath.Join(srcDir, "pending.json")
+	dst := filepath.Join(dstDir, "nested", "token.json")
+
+	require.NoError(t, os.WriteFile(src, []byte("token"), 0o600))
+	require.NoError(t, moveToken(src, dst))
+
+	data, err := trustedpath.ReadFile(dst)
+	require.NoError(t, err)
+	assert.Equal(t, "token", string(data))
+
+	_, statErr := os.Stat(src)
+	assert.ErrorIs(t, statErr, fs.ErrNotExist)
+}
+
+func TestMoveToken_MissingSourceReturnsError(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "nested", "token.json")
+
+	err := moveToken(filepath.Join(t.TempDir(), "missing.json"), dst)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "moving token to final path")
+}
+
 func TestValidateBrowserAuthURL(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -286,9 +312,10 @@ func TestBrowserOpenCommand(t *testing.T) {
 }
 
 func TestOpenBrowser_RejectsUntrustedURL(t *testing.T) {
-	err := openBrowser(context.Background(), "https://evil.example.com/callback")
+	err := openBrowser(context.Background(), "https://evil.example.com/callback?access_token=secret-token")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "is not allowed")
+	assert.NotContains(t, err.Error(), "secret-token")
 }
 
 func TestOpenBrowser_StartsValidatedCommand(t *testing.T) {
@@ -325,9 +352,10 @@ func TestOpenBrowser_CommandStartFailure(t *testing.T) {
 
 	t.Setenv("PATH", t.TempDir())
 
-	err = openBrowser(t.Context(), "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=test")
+	err = openBrowser(t.Context(), "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=test&nonce=secret-token")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "start browser command")
+	assert.NotContains(t, err.Error(), "secret-token")
 }
 
 // Validates: R-3.1.4

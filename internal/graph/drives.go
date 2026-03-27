@@ -3,14 +3,12 @@ package graph
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // userResponse mirrors the Graph API /me JSON response.
@@ -158,41 +156,13 @@ func (c *Client) Me(ctx context.Context) (*User, error) {
 func (c *Client) Drives(ctx context.Context) ([]Drive, error) {
 	c.logger.Info("listing accessible drives")
 
-	var lastErr error
-
-	for attempt := range c.driveDiscoveryRetries {
-		drives, err := c.drivesList(ctx)
-		if err == nil {
-			return drives, nil
-		}
-
-		// Only retry on 403 (transient accessDenied during token propagation).
-		var ge *GraphError
-		if !errors.As(err, &ge) || ge.StatusCode != http.StatusForbidden {
-			return nil, err
-		}
-
-		lastErr = err
-
-		// Don't sleep after the last attempt.
-		if attempt >= c.driveDiscoveryRetries-1 {
-			break
-		}
-
-		backoff := retry.DriveDiscoveryPolicy().Delay(attempt)
-		c.logger.Warn("retrying /me/drives after transient 403",
-			slog.Int("attempt", attempt+1),
-			slog.Int("max_attempts", c.driveDiscoveryRetries),
-			slog.Duration("backoff", backoff),
-			slog.String("request_id", ge.RequestID),
-		)
-
-		if sleepErr := retry.TimeSleep(ctx, backoff); sleepErr != nil {
-			return nil, fmt.Errorf("graph: drives discovery canceled: %w", sleepErr)
-		}
-	}
-
-	return nil, lastErr
+	return doQuirkRetry(ctx, c, quirkRetrySpec{
+		name:   "drives-token-propagation",
+		policy: c.driveDiscoveryPolicy,
+		match:  isTransientDrivesDiscoveryError,
+	}, func() ([]Drive, error) {
+		return c.drivesList(ctx)
+	})
 }
 
 // drivesList performs a single GET /me/drives call without retry.
