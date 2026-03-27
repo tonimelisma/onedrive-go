@@ -25,6 +25,11 @@ const (
 	specialFolderVault      = "vault" // Graph API personal vault folder name
 )
 
+type watchStepResult struct {
+	stop bool
+	err  error
+}
+
 // RemoteObserver transforms Graph API delta responses into []synctypes.ChangeEvent.
 // It handles pagination, path materialization, change classification, and
 // normalization (NFC, driveID zero-padding). Delegates item conversion to
@@ -167,7 +172,7 @@ func (o *RemoteObserver) Watch(ctx context.Context, savedToken string, events ch
 		slog.Bool("has_token", savedToken != ""),
 	)
 
-	bo := retry.NewBackoff(retry.WatchRemote)
+	bo := retry.NewBackoff(retry.WatchRemotePolicy())
 	bo.SetMaxOverride(interval)
 
 	for {
@@ -175,82 +180,156 @@ func (o *RemoteObserver) Watch(ctx context.Context, savedToken string, events ch
 
 		polledEvents, newToken, err := o.FullDelta(ctx, token)
 		if err != nil {
-			if ctx.Err() != nil {
-				return nil
+			result := o.handleWatchPollError(ctx, bo, err)
+			if result.err != nil {
+				return result.err
 			}
-
-			if errors.Is(err, synctypes.ErrDeltaExpired) {
-				o.logger.Warn("delta token expired during watch, resetting for full resync")
-				o.setDeltaToken("")
-				bo.Reset()
-			} else {
-				delay := bo.Next()
-				o.logger.Warn("remote watch poll failed, backing off",
-					slog.String("error", err.Error()),
-					slog.Duration("backoff", delay),
-					slog.Int("consecutive_errors", bo.Consecutive()),
-				)
-
-				if sleepErr := o.SleepFunc(ctx, delay); sleepErr != nil {
-					return nil
-				}
+			if result.stop {
+				return nil
 			}
 
 			continue
 		}
 
-		// Skip token advancement and observation commit when 0 events are
-		// returned. The old token replays the same empty window at zero cost,
-		// but avoids advancing past deletions still propagating through the
-		// Graph change log (ci_issues.md §20).
 		if len(polledEvents) == 0 {
-			o.logger.Debug("watch: delta returned 0 events, skipping token advancement")
-
-			bo.Reset()
-
-			if sleepErr := o.SleepFunc(ctx, interval); sleepErr != nil {
+			result := o.handleZeroEventPoll(ctx, interval, bo)
+			if result.err != nil {
+				return result.err
+			}
+			if result.stop {
 				return nil
 			}
 
 			continue
 		}
 
-		// Commit observations atomically with delta token before sending
-		// events to the channel. This ensures remote state is durable even
-		// if the engine crashes before processing the events.
-		if o.ObsWriter != nil {
-			observed := changeEventsToObservedItems(o.logger, polledEvents)
-			if commitErr := o.ObsWriter.CommitObservation(ctx, observed, newToken, o.driveID); commitErr != nil {
-				o.logger.Error("failed to commit observations in watch",
-					slog.String("error", commitErr.Error()),
-					slog.Int("events", len(polledEvents)),
-				)
-				// Retry on next poll — token replay is idempotent.
-				continue
-			}
+		if !o.commitWatchObservation(ctx, polledEvents, newToken) {
+			continue
 		}
 
-		// Successful poll — send events, advance token, reset backoff.
-		// Blocking send: remote delta events must not be dropped. Unlike local
-		// events (which the safety scan recovers), dropped remote events would
-		// advance the delta token past unprocessed changes — silent data loss
-		// with no recovery mechanism. Backpressure here correctly slows polling.
-		for i := range polledEvents {
-			select {
-			case events <- polledEvents[i]:
-			case <-ctx.Done():
-				return nil
-			}
+		if err := o.emitWatchEvents(ctx, events, polledEvents); err != nil {
+			return err
 		}
 
 		o.setDeltaToken(newToken)
 		bo.Reset()
 
-		// Wait for the next poll interval.
-		if sleepErr := o.SleepFunc(ctx, interval); sleepErr != nil {
+		result := o.sleepWatch(ctx, interval, "interval")
+		if result.err != nil {
+			return result.err
+		}
+		if result.stop {
 			return nil
 		}
 	}
+}
+
+func (o *RemoteObserver) handleWatchPollError(ctx context.Context, bo *retry.Backoff, err error) watchStepResult {
+	if watchShouldStop(ctx, err) {
+		return watchStepResult{stop: true}
+	}
+
+	if errors.Is(err, synctypes.ErrDeltaExpired) {
+		o.logger.Warn("delta token expired during watch, resetting for full resync")
+		o.setDeltaToken("")
+		bo.Reset()
+
+		return watchStepResult{}
+	}
+
+	delay := bo.Next()
+	o.logger.Warn("remote watch poll failed, backing off",
+		slog.String("error", err.Error()),
+		slog.Duration("backoff", delay),
+		slog.Int("consecutive_errors", bo.Consecutive()),
+	)
+
+	result := o.sleepWatch(ctx, delay, "backoff")
+	if result.stop || result.err != nil {
+		return result
+	}
+
+	return watchStepResult{}
+}
+
+func (o *RemoteObserver) handleZeroEventPoll(ctx context.Context, interval time.Duration, bo *retry.Backoff) watchStepResult {
+	// Skip token advancement and observation commit when 0 events are
+	// returned. The old token replays the same empty window at zero cost,
+	// but avoids advancing past deletions still propagating through the
+	// Graph change log (ci_issues.md §20).
+	o.logger.Debug("watch: delta returned 0 events, skipping token advancement")
+	bo.Reset()
+
+	return o.sleepWatch(ctx, interval, "zero-event")
+}
+
+func (o *RemoteObserver) commitWatchObservation(
+	ctx context.Context,
+	polledEvents []synctypes.ChangeEvent,
+	newToken string,
+) bool {
+	// Commit observations atomically with delta token before sending events
+	// to the channel. This ensures remote state is durable even if the engine
+	// crashes before processing the events.
+	if o.ObsWriter == nil {
+		return true
+	}
+
+	observed := changeEventsToObservedItems(o.logger, polledEvents)
+	if commitErr := o.ObsWriter.CommitObservation(ctx, observed, newToken, o.driveID); commitErr != nil {
+		o.logger.Error("failed to commit observations in watch",
+			slog.String("error", commitErr.Error()),
+			slog.Int("events", len(polledEvents)),
+		)
+		// Retry on next poll — token replay is idempotent.
+		return false
+	}
+
+	return true
+}
+
+func (o *RemoteObserver) emitWatchEvents(
+	ctx context.Context,
+	events chan<- synctypes.ChangeEvent,
+	polledEvents []synctypes.ChangeEvent,
+) error {
+	// Blocking send: remote delta events must not be dropped. Unlike local
+	// events (which the safety scan recovers), dropped remote events would
+	// advance the delta token past unprocessed changes — silent data loss
+	// with no recovery mechanism. Backpressure here correctly slows polling.
+	for i := range polledEvents {
+		select {
+		case events <- polledEvents[i]:
+		case <-ctx.Done():
+			return nil
+		}
+	}
+
+	return nil
+}
+
+func (o *RemoteObserver) sleepWatch(ctx context.Context, delay time.Duration, phase string) watchStepResult {
+	if sleepErr := o.SleepFunc(ctx, delay); sleepErr != nil {
+		if watchShouldStop(ctx, sleepErr) {
+			return watchStepResult{stop: true}
+		}
+
+		return watchStepResult{err: fmt.Errorf("remote watch %s sleep: %w", phase, sleepErr)}
+	}
+
+	return watchStepResult{}
+}
+
+func watchShouldStop(ctx context.Context, err error) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	return false
 }
 
 // CurrentDeltaToken returns the latest delta token observed by Watch().
@@ -306,7 +385,7 @@ func TimeSleep(ctx context.Context, d time.Duration) error {
 
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return fmt.Errorf("remote watch sleep: %w", ctx.Err())
 	case <-timer.C:
 		return nil
 	}

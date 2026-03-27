@@ -29,6 +29,11 @@ type failureGroup struct {
 	Count     int
 }
 
+type issueTextSection struct {
+	present bool
+	print   func() error
+}
+
 // groupFailures groups failures by (issue_type, scope_key), humanizing scope
 // keys using the provided shortcut list. big_delete_held entries are separated
 // into a distinct slice.
@@ -88,39 +93,55 @@ func groupFailures(
 // printGroupedFailures renders grouped failure output to the writer.
 // When verbose is true, all paths are shown; otherwise only the first
 // defaultVisiblePaths are shown with a "... and N more" suffix.
-func printGroupedFailures(w io.Writer, groups []failureGroup, verbose bool) {
+func printGroupedFailures(w io.Writer, groups []failureGroup, verbose bool) error {
 	for i, g := range groups {
 		if i > 0 {
-			fmt.Fprintln(w)
+			if err := writeln(w); err != nil {
+				return err
+			}
 		}
 
 		// Header: TITLE (N items)
-		fmt.Fprintf(w, "%s (%d %s)\n", g.Message.Title, g.Count, itemNoun(g.Count))
+		if err := writef(w, "%s (%d %s)\n", g.Message.Title, g.Count, itemNoun(g.Count)); err != nil {
+			return err
+		}
 
 		// Reason + action.
-		fmt.Fprintf(w, "  %s %s\n", g.Message.Reason, g.Message.Action)
+		if err := writef(w, "  %s %s\n", g.Message.Reason, g.Message.Action); err != nil {
+			return err
+		}
 
 		// Scope line (only when non-empty and not a file-level-only group).
 		if g.ScopeKey != "" {
-			fmt.Fprintf(w, "  Scope: %s\n", g.ScopeKey)
+			if err := writef(w, "  Scope: %s\n", g.ScopeKey); err != nil {
+				return err
+			}
 		}
 
 		// Paths.
-		fmt.Fprintln(w)
+		if err := writeln(w); err != nil {
+			return err
+		}
 		limit := len(g.Paths)
 		if !verbose && limit > defaultVisiblePaths {
 			limit = defaultVisiblePaths
 		}
 
 		for _, p := range g.Paths[:limit] {
-			fmt.Fprintf(w, "  %s\n", p)
+			if err := writef(w, "  %s\n", p); err != nil {
+				return err
+			}
 		}
 
 		remaining := g.Count - limit
 		if remaining > 0 {
-			fmt.Fprintf(w, "  ... and %d more (use --verbose to see all)\n", remaining)
+			if err := writef(w, "  ... and %d more (use --verbose to see all)\n", remaining); err != nil {
+				return err
+			}
 		}
 	}
+
+	return nil
 }
 
 // heldDeleteDirGroupThreshold is the number of held deletes above which
@@ -128,13 +149,15 @@ func printGroupedFailures(w io.Writer, groups []failureGroup, verbose bool) {
 const heldDeleteDirGroupThreshold = 20
 
 // printPendingRetries renders a summary of pending retries grouped by scope.
-func printPendingRetries(w io.Writer, groups []synctypes.PendingRetryGroup, shortcuts []synctypes.Shortcut) {
+func printPendingRetries(w io.Writer, groups []synctypes.PendingRetryGroup, shortcuts []synctypes.Shortcut) error {
 	total := 0
 	for _, g := range groups {
 		total += g.Count
 	}
 
-	fmt.Fprintf(w, "PENDING RETRIES (%d %s)\n", total, itemNoun(total))
+	if err := writef(w, "PENDING RETRIES (%d %s)\n", total, itemNoun(total)); err != nil {
+		return err
+	}
 
 	for _, g := range groups {
 		humanScope := g.ScopeKey.Humanize(shortcuts)
@@ -147,21 +170,26 @@ func printPendingRetries(w io.Writer, groups []synctypes.PendingRetryGroup, shor
 			remaining = 0
 		}
 
-		fmt.Fprintf(w, "  %-30s — %d %s, next attempt in %s\n",
-			humanScope, g.Count, itemNoun(g.Count), formatDuration(remaining))
+		if err := writef(w, "  %-30s — %d %s, next attempt in %s\n",
+			humanScope, g.Count, itemNoun(g.Count), formatDuration(remaining)); err != nil {
+			return err
+		}
 	}
+
+	return nil
 }
 
 // printHeldDeletesGrouped renders held deletes grouped by parent directory
 // when the count exceeds the threshold, or individually when small.
-func printHeldDeletesGrouped(w io.Writer, heldDeletes []synctypes.SyncFailureRow, verbose bool) {
-	fmt.Fprintf(w, "HELD DELETES (%d files — big-delete protection triggered, run `issues clear` to approve)\n",
-		len(heldDeletes))
+func printHeldDeletesGrouped(w io.Writer, heldDeletes []synctypes.SyncFailureRow, verbose bool) error {
+	if err := writef(w, "HELD DELETES (%d files — big-delete protection triggered, run `issues clear` to approve)\n",
+		len(heldDeletes)); err != nil {
+		return err
+	}
 
 	// When verbose or small count, show individual paths via the table.
 	if verbose || len(heldDeletes) <= heldDeleteDirGroupThreshold {
-		printHeldDeletesTable(w, heldDeletes)
-		return
+		return printHeldDeletesTable(w, heldDeletes)
 	}
 
 	// Group by parent directory for large sets.
@@ -195,10 +223,12 @@ func printHeldDeletesGrouped(w io.Writer, heldDeletes []synctypes.SyncFailureRow
 	})
 
 	for _, e := range entries {
-		fmt.Fprintf(w, "  %-40s — %d %s\n", e.dir+"/", e.count, itemNoun(e.count))
+		if err := writef(w, "  %-40s — %d %s\n", e.dir+"/", e.count, itemNoun(e.count)); err != nil {
+			return err
+		}
 	}
 
-	fmt.Fprintf(w, "  (use --verbose to see individual paths)\n")
+	return writef(w, "  (use --verbose to see individual paths)\n")
 }
 
 func itemNoun(n int) string {
@@ -315,38 +345,56 @@ func printGroupedIssuesText(
 	groups []failureGroup, heldDeletes []synctypes.SyncFailureRow,
 	pendingRetries []synctypes.PendingRetryGroup, shortcuts []synctypes.Shortcut,
 	history, verbose bool,
-) {
-	sections := 0
+) error {
+	sections := []issueTextSection{
+		{
+			present: len(conflicts) > 0,
+			print: func() error {
+				if err := writeln(w, "CONFLICTS"); err != nil {
+					return err
+				}
 
-	if len(conflicts) > 0 {
-		fmt.Fprintln(w, "CONFLICTS")
-		printConflictsTable(w, conflicts, history)
-		sections++
+				return printConflictsTable(w, conflicts, history)
+			},
+		},
+		{
+			present: len(groups) > 0,
+			print: func() error {
+				return printGroupedFailures(w, groups, verbose)
+			},
+		},
+		{
+			present: len(pendingRetries) > 0,
+			print: func() error {
+				return printPendingRetries(w, pendingRetries, shortcuts)
+			},
+		},
+		{
+			present: len(heldDeletes) > 0,
+			print: func() error {
+				return printHeldDeletesGrouped(w, heldDeletes, verbose)
+			},
+		},
 	}
 
-	if len(groups) > 0 {
-		if sections > 0 {
-			fmt.Fprintln(w)
+	wroteSection := false
+	for _, section := range sections {
+		if !section.present {
+			continue
 		}
 
-		printGroupedFailures(w, groups, verbose)
-		sections++
-	}
-
-	if len(pendingRetries) > 0 {
-		if sections > 0 {
-			fmt.Fprintln(w)
+		if wroteSection {
+			if err := writeln(w); err != nil {
+				return err
+			}
 		}
 
-		printPendingRetries(w, pendingRetries, shortcuts)
-		sections++
-	}
-
-	if len(heldDeletes) > 0 {
-		if sections > 0 {
-			fmt.Fprintln(w)
+		if err := section.print(); err != nil {
+			return err
 		}
 
-		printHeldDeletesGrouped(w, heldDeletes, verbose)
+		wroteSection = true
 	}
+
+	return nil
 }

@@ -1,7 +1,6 @@
 package syncdispatch
 
 import (
-	"fmt"
 	"testing"
 	"time"
 
@@ -42,12 +41,12 @@ func TestFindBlockingScope_GlobalPriorityWins(t *testing.T) {
 	t.Parallel()
 
 	blocks := []synctypes.ScopeBlock{
-		{Key: synctypes.SKService, IssueType: synctypes.IssueServiceOutage},
-		{Key: synctypes.SKThrottleAccount, IssueType: synctypes.IssueRateLimited},
+		{Key: synctypes.SKService(), IssueType: synctypes.IssueServiceOutage},
+		{Key: synctypes.SKThrottleAccount(), IssueType: synctypes.IssueRateLimited},
 	}
 
 	got := FindBlockingScope(blocks, makeTrackedAction(synctypes.ActionUpload, "file.txt"))
-	assert.Equal(t, synctypes.SKThrottleAccount, got)
+	assert.Equal(t, synctypes.SKThrottleAccount(), got)
 }
 
 // Validates: R-2.10.12
@@ -124,12 +123,12 @@ func TestFindBlockingScope_QuotaRouting(t *testing.T) {
 	t.Parallel()
 
 	blocks := []synctypes.ScopeBlock{
-		{Key: synctypes.SKQuotaOwn, IssueType: synctypes.IssueQuotaExceeded},
+		{Key: synctypes.SKQuotaOwn(), IssueType: synctypes.IssueQuotaExceeded},
 		{Key: synctypes.SKQuotaShortcut("drive1:item1"), IssueType: synctypes.IssueQuotaExceeded},
 	}
 
 	assert.Equal(t,
-		synctypes.SKQuotaOwn,
+		synctypes.SKQuotaOwn(),
 		FindBlockingScope(blocks, makeTrackedAction(synctypes.ActionUpload, "own.txt")),
 	)
 	assert.True(t,
@@ -164,24 +163,24 @@ func TestUpsertScope_ReplaceAndRemove(t *testing.T) {
 	t.Parallel()
 
 	blocks := []synctypes.ScopeBlock{
-		{Key: synctypes.SKService, IssueType: synctypes.IssueServiceOutage},
+		{Key: synctypes.SKService(), IssueType: synctypes.IssueServiceOutage},
 	}
 
 	updated := UpsertScope(blocks, synctypes.ScopeBlock{
-		Key:           synctypes.SKService,
+		Key:           synctypes.SKService(),
 		IssueType:     synctypes.IssueServiceOutage,
 		TrialInterval: 30 * time.Second,
 		TrialCount:    2,
 	})
 
 	require.Len(t, updated, 1)
-	got, ok := LookupScope(updated, synctypes.SKService)
+	got, ok := LookupScope(updated, synctypes.SKService())
 	require.True(t, ok)
 	assert.Equal(t, 30*time.Second, got.TrialInterval)
 	assert.Equal(t, 2, got.TrialCount)
 
-	removed := RemoveScope(updated, synctypes.SKService)
-	assert.False(t, HasScope(removed, synctypes.SKService))
+	removed := RemoveScope(updated, synctypes.SKService())
+	assert.False(t, HasScope(removed, synctypes.SKService()))
 }
 
 // Validates: R-2.10.5
@@ -191,7 +190,7 @@ func TestExtendScopeTrial(t *testing.T) {
 	now := time.Now().UTC()
 	blocks := []synctypes.ScopeBlock{
 		{
-			Key:           synctypes.SKThrottleAccount,
+			Key:           synctypes.SKThrottleAccount(),
 			IssueType:     synctypes.IssueRateLimited,
 			BlockedAt:     now.Add(-time.Minute),
 			NextTrialAt:   now.Add(10 * time.Second),
@@ -200,10 +199,10 @@ func TestExtendScopeTrial(t *testing.T) {
 	}
 
 	nextAt := now.Add(30 * time.Second)
-	updated, ok := ExtendScopeTrial(blocks, synctypes.SKThrottleAccount, nextAt, 20*time.Second)
+	updated, ok := ExtendScopeTrial(blocks, synctypes.SKThrottleAccount(), nextAt, 20*time.Second)
 	require.True(t, ok)
 
-	got, ok := LookupScope(updated, synctypes.SKThrottleAccount)
+	got, ok := LookupScope(updated, synctypes.SKThrottleAccount())
 	require.True(t, ok)
 	assert.Equal(t, nextAt, got.NextTrialAt)
 	assert.Equal(t, 20*time.Second, got.TrialInterval)
@@ -216,13 +215,13 @@ func TestDueTrialsAndEarliestTrialAt(t *testing.T) {
 
 	now := time.Now().UTC()
 	blocks := []synctypes.ScopeBlock{
-		{Key: synctypes.SKThrottleAccount, NextTrialAt: now.Add(-time.Second)},
-		{Key: synctypes.SKService, NextTrialAt: now.Add(2 * time.Minute)},
-		{Key: synctypes.SKQuotaOwn},
+		{Key: synctypes.SKThrottleAccount(), NextTrialAt: now.Add(-time.Second)},
+		{Key: synctypes.SKService(), NextTrialAt: now.Add(2 * time.Minute)},
+		{Key: synctypes.SKQuotaOwn()},
 	}
 
 	due := DueTrials(blocks, now)
-	assert.Equal(t, []synctypes.ScopeKey{synctypes.SKThrottleAccount}, due)
+	assert.Equal(t, []synctypes.ScopeKey{synctypes.SKThrottleAccount()}, due)
 
 	earliest, ok := EarliestTrialAt(blocks)
 	require.True(t, ok)
@@ -234,12 +233,12 @@ func TestScopeKeys(t *testing.T) {
 	t.Parallel()
 
 	blocks := []synctypes.ScopeBlock{
-		{Key: synctypes.SKService},
-		{Key: synctypes.SKThrottleAccount},
+		{Key: synctypes.SKService()},
+		{Key: synctypes.SKThrottleAccount()},
 	}
 
 	assert.Equal(t,
-		[]synctypes.ScopeKey{synctypes.SKService, synctypes.SKThrottleAccount},
+		[]synctypes.ScopeKey{synctypes.SKService(), synctypes.SKThrottleAccount()},
 		ScopeKeys(blocks),
 	)
 }
@@ -249,7 +248,7 @@ func TestFindBlockingScope_DiskLocal_DownloadsOnly(t *testing.T) {
 	t.Parallel()
 
 	blocks := []synctypes.ScopeBlock{
-		{Key: synctypes.SKDiskLocal, IssueType: synctypes.IssueDiskFull},
+		{Key: synctypes.SKDiskLocal(), IssueType: synctypes.IssueDiskFull},
 	}
 
 	tests := []struct {
@@ -263,10 +262,10 @@ func TestFindBlockingScope_DiskLocal_DownloadsOnly(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(fmt.Sprintf("%v", tt.actionType), func(t *testing.T) {
+		t.Run(tt.actionType.String(), func(t *testing.T) {
 			got := FindBlockingScope(blocks, makeTrackedAction(tt.actionType, "file.txt"))
 			if tt.wantBlocked {
-				assert.Equal(t, synctypes.SKDiskLocal, got)
+				assert.Equal(t, synctypes.SKDiskLocal(), got)
 			} else {
 				assert.True(t, got.IsZero())
 			}

@@ -166,7 +166,7 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 	// Two-source drive ID resolution: prefer drive metadata file (per-drive,
 	// accurate for SharePoint libraries and shared drives), then shared
 	// canonical ID (embeds the remote drive ID). Otherwise DriveID stays zero.
-	driveMeta, driveMetaErr := LoadDriveMetadata(canonicalID)
+	driveMeta, _, driveMetaErr := LookupDriveMetadata(canonicalID)
 	if driveMetaErr != nil {
 		logger.Debug("could not load drive metadata", "canonical_id", canonicalID.String(), "error", driveMetaErr)
 	}
@@ -232,13 +232,13 @@ func CollectOtherSyncDirs(cfg *Config, excludeID driveid.CanonicalID, logger *sl
 
 			acctCID := accountCIDForDrive(id)
 			if !acctCID.IsZero() {
-				profile, profileErr := LoadAccountProfile(acctCID)
+				profile, found, profileErr := LookupAccountProfile(acctCID)
 				if profileErr != nil {
 					logger.Debug("could not load account profile for sync dir",
 						"canonical_id", id.String(), "error", profileErr)
 				}
 
-				if profile != nil && profile.OrgName != "" {
+				if found && profile.OrgName != "" {
 					orgName = profile.OrgName
 				}
 			}
@@ -263,7 +263,7 @@ func ResolveAccountNames(cid driveid.CanonicalID, logger *slog.Logger) (orgName,
 		return "", ""
 	}
 
-	profile, profileErr := LoadAccountProfile(acctCID)
+	profile, found, profileErr := LookupAccountProfile(acctCID)
 	if profileErr != nil {
 		logger.Debug("could not load account profile for names",
 			"canonical_id", cid.String(), "error", profileErr)
@@ -271,7 +271,7 @@ func ResolveAccountNames(cid driveid.CanonicalID, logger *slog.Logger) (orgName,
 		return "", ""
 	}
 
-	if profile == nil {
+	if !found {
 		return "", ""
 	}
 

@@ -79,6 +79,15 @@ For detailed module design, see:
 | Data model (schema) | [data-model.md](data-model.md) |
 | CLI commands | [cli.md](cli.md) |
 
+## Verification Policy
+
+Static verification is a first-class architectural constraint, not a best-effort hygiene step.
+
+- `golangci-lint` runs with `default: none`; every enabled linter is an explicit policy choice.
+- `nolintlint` requires both a specific linter name and a short justification. Unused exclusions are surfaced with `linters.exclusions.warn-unused`.
+- Inline suppressions are reserved for the small documented exception set where the code is correct and the linter cannot express that shape cleanly.
+- `scripts/verify.sh` is the single repo-owned verification entry point: lint, `go build ./...`, `go test -race -coverprofile`, coverage gate, then fast E2E when credentials are present.
+
 ## Planned Improvements
 
 - Threat model document covering all attack surfaces and guards. [planned]

@@ -37,8 +37,8 @@ func newMockScopeManager(_ bool) *mockScopeManager {
 }
 
 func (m *mockScopeManager) activateScope(_ context.Context, block synctypes.ScopeBlock) error {
-	copy := block
-	m.scopeBlocks[block.Key] = &copy
+	blockCopy := block
+	m.scopeBlocks[block.Key] = &blockCopy
 	m.setScopeCount++
 	return nil
 }
@@ -123,7 +123,7 @@ func newTestPermHandler(t *testing.T, recorder *mockFailureRecorder, checker syn
 	t.Helper()
 
 	syncRoot := filepath.Join(t.TempDir(), "sync")
-	require.NoError(t, os.MkdirAll(syncRoot, 0o755))
+	require.NoError(t, os.MkdirAll(syncRoot, 0o750))
 
 	return &PermissionHandler{
 		baseline:    recorder,
@@ -201,7 +201,6 @@ func TestPermHandler_HandleLocalPermission_SyncRootInaccessible(t *testing.T) {
 
 	// Make sync root inaccessible.
 	require.NoError(t, os.Chmod(syncRoot, 0o000))
-	t.Cleanup(func() { os.Chmod(syncRoot, 0o755) })
 	r := &synctypes.WorkerResult{
 		Path:       "file.txt",
 		ActionType: synctypes.ActionDownload,
@@ -226,9 +225,8 @@ func TestPermHandler_HandleLocalPermission_DirectoryLevel(t *testing.T) {
 
 	// Create directory structure, then make subdir inaccessible.
 	subDir := filepath.Join(syncRoot, "blocked")
-	require.NoError(t, os.MkdirAll(subDir, 0o755))
+	require.NoError(t, os.MkdirAll(subDir, 0o750))
 	require.NoError(t, os.Chmod(subDir, 0o000))
-	t.Cleanup(func() { os.Chmod(subDir, 0o755) })
 	r := &synctypes.WorkerResult{
 		Path:       "blocked/file.txt",
 		ActionType: synctypes.ActionDownload,
@@ -253,7 +251,7 @@ func TestPermHandler_HandleLocalPermission_FileLevel(t *testing.T) {
 
 	// Create directory (accessible) with a file reference.
 	subDir := filepath.Join(syncRoot, "accessible")
-	require.NoError(t, os.MkdirAll(subDir, 0o755))
+	require.NoError(t, os.MkdirAll(subDir, 0o750))
 
 	r := &synctypes.WorkerResult{
 		Path:       "accessible/file.txt",
@@ -278,7 +276,7 @@ func TestPermHandler_RecheckLocalPermissions_Restored(t *testing.T) {
 
 	// Create the directory (accessible).
 	subDir := filepath.Join(syncRoot, "restored")
-	require.NoError(t, os.MkdirAll(subDir, 0o755))
+	require.NoError(t, os.MkdirAll(subDir, 0o750))
 
 	scopeKey := synctypes.SKPermDir("restored")
 	recorder.byIssueType[synctypes.IssueLocalPermissionDenied] = []synctypes.SyncFailureRow{
@@ -307,9 +305,8 @@ func TestPermHandler_RecheckLocalPermissions_StillDenied(t *testing.T) {
 
 	// Create and immediately make inaccessible.
 	subDir := filepath.Join(syncRoot, "blocked")
-	require.NoError(t, os.MkdirAll(subDir, 0o755))
+	require.NoError(t, os.MkdirAll(subDir, 0o750))
 	require.NoError(t, os.Chmod(subDir, 0o000))
-	t.Cleanup(func() { os.Chmod(subDir, 0o755) })
 	scopeKey := synctypes.SKPermDir("blocked")
 	recorder.byIssueType[synctypes.IssueLocalPermissionDenied] = []synctypes.SyncFailureRow{
 		{

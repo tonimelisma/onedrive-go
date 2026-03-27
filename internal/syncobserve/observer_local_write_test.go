@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -53,7 +54,7 @@ func TestWatch_HashFailureModifyStillEmitsEvent(t *testing.T) {
 
 	// Make file write-only (stat succeeds, hash computation fails).
 	require.NoError(t, os.Chmod(filePath, 0o200))
-	t.Cleanup(func() { _ = os.Chmod(filePath, 0o644) })
+	t.Cleanup(func() { assert.NoError(t, os.Chmod(filePath, 0o600)) })
 
 	// Write new content — triggers Write event. os.WriteFile opens O_WRONLY
 	// which succeeds with 0o200 permissions.
@@ -96,20 +97,10 @@ func TestHandleWrite_CoalescesRapidWrites(t *testing.T) {
 	})
 
 	mockWatcher := newMockFsWatcher()
-	obs := &LocalObserver{
+	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 		Baseline:              baseline,
-		Logger:                synctest.TestLogger(t),
 		WriteCoalesceCooldown: 100 * time.Millisecond,
-		SleepFunc:             func(_ context.Context, _ time.Duration) error { return nil },
-		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
-			return make(chan time.Time), func() {}
-		},
-		WatcherFactory: func() (FsWatcher, error) {
-			return mockWatcher, nil
-		},
-		PendingTimers: make(map[string]*time.Timer),
-		HashRequests:  make(chan HashRequest, HashRequestBufSize),
-	}
+	})
 
 	events := make(chan synctypes.ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -121,7 +112,7 @@ func TestHandleWrite_CoalescesRapidWrites(t *testing.T) {
 	}()
 
 	// Write new content so the hash differs from baseline.
-	require.NoError(t, os.WriteFile(filePath, []byte("v2"), 0o644))
+	require.NoError(t, os.WriteFile(filePath, []byte("v2"), 0o600))
 
 	// Send two rapid Write events (within 100ms cooldown).
 	mockWatcher.events <- fsnotify.Event{
@@ -171,20 +162,10 @@ func TestHandleWrite_EmitsAfterCooldownExpires(t *testing.T) {
 	})
 
 	mockWatcher := newMockFsWatcher()
-	obs := &LocalObserver{
+	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 		Baseline:              baseline,
-		Logger:                synctest.TestLogger(t),
 		WriteCoalesceCooldown: 50 * time.Millisecond,
-		SleepFunc:             func(_ context.Context, _ time.Duration) error { return nil },
-		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
-			return make(chan time.Time), func() {}
-		},
-		WatcherFactory: func() (FsWatcher, error) {
-			return mockWatcher, nil
-		},
-		PendingTimers: make(map[string]*time.Timer),
-		HashRequests:  make(chan HashRequest, HashRequestBufSize),
-	}
+	})
 
 	events := make(chan synctypes.ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -197,7 +178,7 @@ func TestHandleWrite_EmitsAfterCooldownExpires(t *testing.T) {
 
 	// Write new content.
 	filePath := filepath.Join(dir, "single.txt")
-	require.NoError(t, os.WriteFile(filePath, []byte("modified"), 0o644))
+	require.NoError(t, os.WriteFile(filePath, []byte("modified"), 0o600))
 
 	mockWatcher.events <- fsnotify.Event{
 		Name: filePath, Op: fsnotify.Write,
@@ -237,20 +218,10 @@ func TestHandleWrite_DifferentPathsNotCoalesced(t *testing.T) {
 	)
 
 	mockWatcher := newMockFsWatcher()
-	obs := &LocalObserver{
+	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 		Baseline:              baseline,
-		Logger:                synctest.TestLogger(t),
 		WriteCoalesceCooldown: 50 * time.Millisecond,
-		SleepFunc:             func(_ context.Context, _ time.Duration) error { return nil },
-		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
-			return make(chan time.Time), func() {}
-		},
-		WatcherFactory: func() (FsWatcher, error) {
-			return mockWatcher, nil
-		},
-		PendingTimers: make(map[string]*time.Timer),
-		HashRequests:  make(chan HashRequest, HashRequestBufSize),
-	}
+	})
 
 	events := make(chan synctypes.ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -262,8 +233,8 @@ func TestHandleWrite_DifferentPathsNotCoalesced(t *testing.T) {
 	}()
 
 	// Write new content to both files.
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "fileA.txt"), []byte("newA"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "fileB.txt"), []byte("newB"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "fileA.txt"), []byte("newA"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "fileB.txt"), []byte("newB"), 0o600))
 
 	// Send Write events for both paths within the same cooldown window.
 	mockWatcher.events <- fsnotify.Event{
@@ -312,20 +283,10 @@ func TestHandleWrite_DeleteClearsTimer(t *testing.T) {
 	})
 
 	mockWatcher := newMockFsWatcher()
-	obs := &LocalObserver{
+	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 		Baseline:              baseline,
-		Logger:                synctest.TestLogger(t),
 		WriteCoalesceCooldown: 200 * time.Millisecond,
-		SleepFunc:             func(_ context.Context, _ time.Duration) error { return nil },
-		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
-			return make(chan time.Time), func() {}
-		},
-		WatcherFactory: func() (FsWatcher, error) {
-			return mockWatcher, nil
-		},
-		PendingTimers: make(map[string]*time.Timer),
-		HashRequests:  make(chan HashRequest, HashRequestBufSize),
-	}
+	})
 
 	events := make(chan synctypes.ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -337,7 +298,7 @@ func TestHandleWrite_DeleteClearsTimer(t *testing.T) {
 	}()
 
 	// Modify and send Write event (starts 200ms timer).
-	require.NoError(t, os.WriteFile(filePath, []byte("modified"), 0o644))
+	require.NoError(t, os.WriteFile(filePath, []byte("modified"), 0o600))
 
 	mockWatcher.events <- fsnotify.Event{
 		Name: filePath, Op: fsnotify.Write,
@@ -395,20 +356,10 @@ func TestCancelPendingTimers(t *testing.T) {
 	)
 
 	mockWatcher := newMockFsWatcher()
-	obs := &LocalObserver{
+	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 		Baseline:              baseline,
-		Logger:                synctest.TestLogger(t),
 		WriteCoalesceCooldown: 5 * time.Second, // very long — timers should NOT fire
-		SleepFunc:             func(_ context.Context, _ time.Duration) error { return nil },
-		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
-			return make(chan time.Time), func() {}
-		},
-		WatcherFactory: func() (FsWatcher, error) {
-			return mockWatcher, nil
-		},
-		PendingTimers: make(map[string]*time.Timer),
-		HashRequests:  make(chan HashRequest, HashRequestBufSize),
-	}
+	})
 
 	events := make(chan synctypes.ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -568,20 +519,10 @@ func TestHashAndEmit_CaseCollision_Suppressed(t *testing.T) {
 	})
 
 	mockWatcher := newMockFsWatcher()
-	obs := &LocalObserver{
+	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 		Baseline:              baseline,
-		Logger:                synctest.TestLogger(t),
 		WriteCoalesceCooldown: 50 * time.Millisecond,
-		SleepFunc:             func(_ context.Context, _ time.Duration) error { return nil },
-		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
-			return make(chan time.Time), func() {}
-		},
-		WatcherFactory: func() (FsWatcher, error) {
-			return mockWatcher, nil
-		},
-		PendingTimers: make(map[string]*time.Timer),
-		HashRequests:  make(chan HashRequest, HashRequestBufSize),
-	}
+	})
 
 	events := make(chan synctypes.ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())

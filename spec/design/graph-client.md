@@ -32,6 +32,15 @@ All API quirks handled at the graph boundary — downstream code never sees them
 
 Paginated delta with normalization pipeline. Returns `[]Item` (clean, normalized). HTTP 410 → `ErrGone` sentinel, caller triggers full re-enumeration. Supports folder-scoped delta for shared folders.
 
+The client owns its safety guards and Graph-specific request metadata:
+
+- `maxDeltaPages`: upper bound for full delta enumeration
+- `maxRecursionDepth`: upper bound for recursive child listing
+- `driveDiscoveryRetries`: transient 403 retry budget for `/me/drives`
+- `deltaPreferHeader`: prebuilt alias-ID delta header
+
+These are instance fields on `graph.Client`, not package globals. Tests in package `graph` override them per client instance instead of mutating shared process state.
+
 ## Item Operations (`items.go`)
 
 GetItem, ListChildren, CreateFolder, MoveItem, CopyItem, DeleteItem. All operations use `graph.Item` — the clean type after normalization.
@@ -75,10 +84,14 @@ Transparent token refresh on 401 inside `doOnce()`, independent of retry transpo
 - Search API calls URL-escape query parameters to prevent special characters from breaking URL construction.
 - Token metadata validation is enforced on both write and read paths. Required fields must be present in non-nil metadata. `tokenfile.ValidateMeta()` validates before save, `LoadAndValidate()` validates on load.
 - Per-tenant rate limit coordination: multiple drives under the same tenant share Graph API rate limits. A shared rate limiter per-tenant prevents aggregate throttling. [planned]
-- Upload URL validation: verify HTTPS scheme and Microsoft domain on `UploadSession.UploadURL` before use. [planned]
+- Upload and async-copy pre-auth URL validation: verify HTTPS scheme and Microsoft domain on upload session and copy monitor URLs before use. [verified]
 - Audit all `slog.*` calls for potential secret leakage (tokens, pre-auth URLs). [planned]
 - Audit all error message strings for embedded secrets — `GraphError.Message` includes API error body. [planned]
 - Test that captures log output and verifies no tokens or pre-auth URLs appear. [planned]
 - Evaluate unexporting `graph.Client.Do`/`DoWithHeaders` if unused outside the package. [planned]
 - Monitor `search(q='*')` reliability on business accounts for shared item discovery. [planned]
 - `PermanentDeleteItem` 405→`DeleteItem` fallback for Personal accounts is a workaround. Remove when MS adds Personal support.
+
+## Struct Tag Policy
+
+Repo-wide JSON/TOML linting treats CLI and persisted payloads as snake_case by default. `internal/graph` is the deliberate exception: Graph wire structs keep upstream camelCase tags, and annotation-backed fields such as `@odata.nextLink` and `@microsoft.graph.downloadUrl` are exempted in lint configuration rather than suppressed inline.

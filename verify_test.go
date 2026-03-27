@@ -13,7 +13,7 @@ import (
 
 func TestPrintVerifyTable_NoMismatches(t *testing.T) {
 	var buf bytes.Buffer
-	printVerifyTable(&buf, &synctypes.VerifyReport{Verified: 10})
+	require.NoError(t, printVerifyTable(&buf, &synctypes.VerifyReport{Verified: 10}))
 	out := buf.String()
 
 	assert.Contains(t, out, "Verified: 10")
@@ -22,12 +22,12 @@ func TestPrintVerifyTable_NoMismatches(t *testing.T) {
 
 func TestPrintVerifyTable_WithMismatches(t *testing.T) {
 	var buf bytes.Buffer
-	printVerifyTable(&buf, &synctypes.VerifyReport{
+	require.NoError(t, printVerifyTable(&buf, &synctypes.VerifyReport{
 		Verified: 8,
 		Mismatches: []synctypes.VerifyResult{
 			{Path: "/foo.txt", Status: "hash_mismatch", Expected: "aaa", Actual: "bbb"},
 		},
-	})
+	}))
 	out := buf.String()
 
 	assert.Contains(t, out, "Mismatches: 1")

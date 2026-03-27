@@ -143,7 +143,7 @@ func TestBuildConfiguredDriveEntries_NoSyncDir_ComputesDefault(t *testing.T) {
 func TestBuildConfiguredDriveEntries_NoSyncDir_WithAccountProfile(t *testing.T) {
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
 	// Create a token file and an account profile with org_name.
 	bizCID := driveid.MustCanonicalID("business:alice@contoso.com")
@@ -175,7 +175,7 @@ func TestListAvailableDrives_Empty(t *testing.T) {
 
 func TestPrintDriveListText_EmptyBothSections(t *testing.T) {
 	var buf bytes.Buffer
-	printDriveListText(&buf, nil, nil)
+	require.NoError(t, printDriveListText(&buf, nil, nil))
 	assert.Contains(t, buf.String(), "No drives configured")
 }
 
@@ -185,7 +185,7 @@ func TestPrintDriveListText_ConfiguredOnly(t *testing.T) {
 		{CanonicalID: "personal:user@example.com", SyncDir: "~/OneDrive", State: driveStateReady, Source: "configured"},
 	}
 	var buf bytes.Buffer
-	printDriveListText(&buf, configured, nil)
+	require.NoError(t, printDriveListText(&buf, configured, nil))
 	output := buf.String()
 	assert.Contains(t, output, "Configured drives:")
 	assert.Contains(t, output, "personal:user@example.com")
@@ -197,7 +197,7 @@ func TestPrintDriveListText_AvailableOnly(t *testing.T) {
 		{CanonicalID: "business:user@contoso.com", State: "", Source: "available", SiteName: "Marketing"},
 	}
 	var buf bytes.Buffer
-	printDriveListText(&buf, nil, available)
+	require.NoError(t, printDriveListText(&buf, nil, available))
 	output := buf.String()
 	assert.Contains(t, output, "Available drives")
 	assert.Contains(t, output, "business:user@contoso.com")
@@ -212,7 +212,7 @@ func TestPrintDriveListText_BothSections(t *testing.T) {
 		{CanonicalID: "business:user@contoso.com", Source: "available"},
 	}
 	var buf bytes.Buffer
-	printDriveListText(&buf, configured, available)
+	require.NoError(t, printDriveListText(&buf, configured, available))
 	output := buf.String()
 	assert.Contains(t, output, "Configured drives:")
 	assert.Contains(t, output, "Available drives")
@@ -243,7 +243,7 @@ func TestPrintDriveListText_ShowsDisplayName(t *testing.T) {
 		},
 	}
 	var buf bytes.Buffer
-	printDriveListText(&buf, configured, nil)
+	require.NoError(t, printDriveListText(&buf, configured, nil))
 	output := buf.String()
 	assert.Contains(t, output, "user@example.com")
 	assert.Contains(t, output, "personal:user@example.com")
@@ -275,7 +275,7 @@ func TestPrintDriveListText_EmptySyncDir_ShowsNotSet(t *testing.T) {
 		{CanonicalID: "personal:user@example.com", SyncDir: "", State: driveStateReady, Source: "configured"},
 	}
 	var buf bytes.Buffer
-	printDriveListText(&buf, configured, nil)
+	require.NoError(t, printDriveListText(&buf, configured, nil))
 	output := buf.String()
 	assert.Contains(t, output, "(not set)")
 }
@@ -361,7 +361,7 @@ func TestPrintDriveListText_HasStateDB_ShowsMarker(t *testing.T) {
 		{CanonicalID: "personal:user@example.com", State: "available", Source: "available", HasStateDB: true},
 	}
 	var buf bytes.Buffer
-	printDriveListText(&buf, nil, available)
+	require.NoError(t, printDriveListText(&buf, nil, available))
 	output := buf.String()
 	assert.Contains(t, output, "[has sync data]")
 }
@@ -372,7 +372,7 @@ func TestPrintDriveListText_NoStateDB_NoMarker(t *testing.T) {
 		{CanonicalID: "personal:user@example.com", State: "available", Source: "available", HasStateDB: false},
 	}
 	var buf bytes.Buffer
-	printDriveListText(&buf, nil, available)
+	require.NoError(t, printDriveListText(&buf, nil, available))
 	output := buf.String()
 	assert.NotContains(t, output, "[has sync data]")
 }
@@ -408,7 +408,7 @@ func TestDriveListEntry_HasStateDB_OmittedWhenFalse(t *testing.T) {
 func TestPrintDriveSearchText_Empty(t *testing.T) {
 	// Should not panic with no results.
 	var buf bytes.Buffer
-	printDriveSearchText(&buf, nil, "test query")
+	require.NoError(t, printDriveSearchText(&buf, nil, "test query"))
 }
 
 // Validates: R-3.3.9
@@ -418,7 +418,7 @@ func TestPrintDriveSearchText_WithResults(t *testing.T) {
 		{CanonicalID: "sharepoint:user@contoso.com:marketing:Wiki", SiteName: "Marketing", LibraryName: "Wiki"},
 	}
 	var buf bytes.Buffer
-	assert.NotPanics(t, func() { printDriveSearchText(&buf, results, "marketing") })
+	assert.NotPanics(t, func() { require.NoError(t, printDriveSearchText(&buf, results, "marketing")) })
 }
 
 // Validates: R-3.3.9
@@ -428,7 +428,7 @@ func TestPrintDriveSearchText_MultipleSites(t *testing.T) {
 		{CanonicalID: "sharepoint:user@contoso.com:hr:Docs", SiteName: "HR", LibraryName: "Docs"},
 	}
 	var buf bytes.Buffer
-	printDriveSearchText(&buf, results, "docs")
+	require.NoError(t, printDriveSearchText(&buf, results, "docs"))
 	output := buf.String()
 	// Verify alphabetical sort: HR should appear before Marketing.
 	hrIdx := strings.Index(output, "HR")
@@ -448,7 +448,7 @@ func TestPrintDriveSearchText_DoesNotMutateInput(t *testing.T) {
 	orig1 := results[1].SiteName
 
 	var buf bytes.Buffer
-	printDriveSearchText(&buf, results, "docs")
+	require.NoError(t, printDriveSearchText(&buf, results, "docs"))
 
 	assert.Equal(t, orig0, results[0].SiteName, "input slice should not be mutated")
 	assert.Equal(t, orig1, results[1].SiteName, "input slice should not be mutated")
@@ -482,7 +482,7 @@ func TestFindBusinessTokens_NoTokens(t *testing.T) {
 func TestFindBusinessTokens_HasBusinessToken(t *testing.T) {
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
 	// Create business and personal token files.
 	writeTestTokenFile(t, dataDir, "token_business_alice@contoso.com.json")
@@ -496,7 +496,7 @@ func TestFindBusinessTokens_HasBusinessToken(t *testing.T) {
 func TestFindBusinessTokens_FilterSelectsOne(t *testing.T) {
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
 	// Two business tokens for different accounts.
 	writeTestTokenFile(t, dataDir, "token_business_alice@contoso.com.json")
@@ -510,7 +510,7 @@ func TestFindBusinessTokens_FilterSelectsOne(t *testing.T) {
 func TestFindBusinessTokens_SkipsPersonal(t *testing.T) {
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
 	writeTestTokenFile(t, dataDir, "token_personal_user@example.com.json")
 
@@ -550,10 +550,10 @@ sync_dir = "~/OneDrive"
 
 	cid := driveid.MustCanonicalID("personal:user@example.com")
 	err := removeDrive(cfgPath, cid, "~/OneDrive", testDriveLogger(t))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Verify the drive section was deleted.
-	data, readErr := os.ReadFile(cfgPath)
+	data, readErr := os.ReadFile(cfgPath) //nolint:gosec // Test config path is created in t.TempDir and controlled by the test.
 	require.NoError(t, readErr)
 	assert.NotContains(t, string(data), "personal:user@example.com")
 }
@@ -570,7 +570,7 @@ sync_dir = "~/OneDrive"
 
 	cid := driveid.MustCanonicalID("business:alice@contoso.com")
 	err := removeDrive(cfgPath, cid, "~/Work", testDriveLogger(t))
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "removing drive")
 }
 
@@ -580,7 +580,7 @@ func TestPurgeSingleDrive_DeletesStateDB(t *testing.T) {
 	// Isolate HOME so DriveStatePath uses a temp directory.
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
 	cid := driveid.MustCanonicalID("personal:user@example.com")
 
@@ -606,7 +606,7 @@ sync_dir = "~/OneDrive"
 	assert.True(t, os.IsNotExist(statErr), "state DB should be deleted")
 
 	// Config section should be gone.
-	data, readErr := os.ReadFile(cfgPath)
+	data, readErr := os.ReadFile(cfgPath) //nolint:gosec // Test config path is created in t.TempDir and controlled by the test.
 	require.NoError(t, readErr)
 	assert.NotContains(t, string(data), "personal:user@example.com")
 }
@@ -677,7 +677,7 @@ func TestAddNewDrive_NoToken(t *testing.T) {
 	cid := driveid.MustCanonicalID("personal:nobody@example.com")
 
 	err := addNewDrive(cfgPath, cid, testDriveLogger(t))
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no token file")
 }
 
@@ -685,7 +685,7 @@ func TestAddNewDrive_NoToken(t *testing.T) {
 func TestAddNewDrive_WithToken(t *testing.T) {
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
 	writeTestTokenFile(t, dataDir, "token_personal_user@example.com.json")
 
@@ -695,10 +695,10 @@ func TestAddNewDrive_WithToken(t *testing.T) {
 	cid := driveid.MustCanonicalID("personal:user@example.com")
 
 	err := addNewDrive(cfgPath, cid, testDriveLogger(t))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Verify config was updated with canonical ID and sync_dir.
-	data, readErr := os.ReadFile(cfgPath)
+	data, readErr := os.ReadFile(cfgPath) //nolint:gosec // Test config path is created in t.TempDir and controlled by the test.
 	require.NoError(t, readErr)
 	assert.Contains(t, string(data), "personal:user@example.com")
 	assert.Contains(t, string(data), "sync_dir")
@@ -794,7 +794,7 @@ func TestPrintDriveListText_SharedDrive(t *testing.T) {
 		},
 	}
 	var buf bytes.Buffer
-	printDriveListText(&buf, nil, available)
+	require.NoError(t, printDriveListText(&buf, nil, available))
 	output := buf.String()
 	assert.Contains(t, output, "shared by alice@example.com")
 }
@@ -805,7 +805,7 @@ func TestPrintDriveListText_SharedAndSharePoint(t *testing.T) {
 		{CanonicalID: "shared:u@c.com:d:i", State: "available", Source: "available", OwnerEmail: "bob@example.com"},
 	}
 	var buf bytes.Buffer
-	printDriveListText(&buf, nil, available)
+	require.NoError(t, printDriveListText(&buf, nil, available))
 	output := buf.String()
 	assert.Contains(t, output, "(Marketing)")
 	assert.Contains(t, output, "(shared by bob@example.com)")
@@ -873,7 +873,7 @@ func TestAddSharedDrive_NoToken(t *testing.T) {
 	require.NoError(t, os.WriteFile(cfgPath, []byte(""), 0o600))
 
 	err := addSharedDrive(t.Context(), cfgPath, cid, "", testDriveLogger(t))
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no token file")
 }
 
@@ -900,7 +900,7 @@ func TestExtractFirstName(t *testing.T) {
 	assert.Equal(t, "John", extractFirstName("John Doe"))
 	assert.Equal(t, "Alice", extractFirstName("Alice"))
 	assert.Equal(t, "Mary", extractFirstName("Mary Jane Watson"))
-	assert.Equal(t, "", extractFirstName(""))
+	assert.Empty(t, extractFirstName(""))
 }
 
 // --- test helpers ---
@@ -942,6 +942,10 @@ func (s staticTokenSource) Token() (string, error) { return "test-token", nil }
 func newTestGraphClient(t *testing.T, baseURL string) *graph.Client {
 	t.Helper()
 
+	if baseURL == "http://should-not-be-called" {
+		baseURL = "http://localhost"
+	}
+
 	return graph.NewClient(baseURL, http.DefaultClient, staticTokenSource{}, slog.Default(), "test")
 }
 
@@ -967,7 +971,7 @@ func TestEnrichSharedItem_MissingEmail_GetItemSucceeds(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Contains(t, r.URL.Path, "/drives/")
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "01DEFGH",
 			"name": "Shared Folder",
 			"createdDateTime": "2024-01-15T10:00:00Z",
@@ -1003,7 +1007,7 @@ func TestEnrichSharedItem_MissingEmail_GetItemSucceeds(t *testing.T) {
 func TestEnrichSharedItem_MissingEmail_GetItemFails(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, `{"error":{"code":"itemNotFound","message":"not found"}}`)
+		writeTestResponse(t, w, `{"error":{"code":"itemNotFound","message":"not found"}}`)
 	}))
 	defer srv.Close()
 
@@ -1041,7 +1045,7 @@ func TestEnrichSharedItem_NoRemoteDriveID(t *testing.T) {
 func TestEnrichSharedItem_GetItemReturnsNameOnly(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "01DEFGH",
 			"name": "Shared Folder",
 			"createdDateTime": "2024-01-15T10:00:00Z",
@@ -1099,7 +1103,7 @@ func TestSearchSharedItemsWithFallback_SearchSucceeds(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 
 		if strings.Contains(r.URL.Path, "search") {
-			fmt.Fprintf(w, `{"value": [%s]}`, sharedItemJSON("SearchResult"))
+			writeTestResponsef(t, w, `{"value": [%s]}`, sharedItemJSON("SearchResult"))
 
 			return
 		}
@@ -1127,13 +1131,13 @@ func TestSearchSharedItemsWithFallback_SearchFails_SharedWithMeSucceeds(t *testi
 
 		if strings.Contains(r.URL.Path, "search") {
 			w.WriteHeader(http.StatusForbidden)
-			fmt.Fprint(w, `{"error":{"code":"generalException","message":"search failed"}}`)
+			writeTestResponse(t, w, `{"error":{"code":"generalException","message":"search failed"}}`)
 
 			return
 		}
 
 		if strings.Contains(r.URL.Path, "sharedWithMe") {
-			fmt.Fprintf(w, `{"value": [%s]}`, sharedItemJSON("FallbackResult"))
+			writeTestResponsef(t, w, `{"value": [%s]}`, sharedItemJSON("FallbackResult"))
 
 			return
 		}
@@ -1152,7 +1156,7 @@ func TestSearchSharedItemsWithFallback_SearchFails_SharedWithMeSucceeds(t *testi
 func TestSearchSharedItemsWithFallback_BothFail(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
-		fmt.Fprint(w, `{"error":{"code":"generalException","message":"failed"}}`)
+		writeTestResponse(t, w, `{"error":{"code":"generalException","message":"failed"}}`)
 	}))
 	defer srv.Close()
 
@@ -1169,7 +1173,7 @@ func TestSearchSharedItemsWithFallback_SearchReturnsEmpty(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 
 		if strings.Contains(r.URL.Path, "search") {
-			fmt.Fprint(w, `{"value": []}`)
+			writeTestResponse(t, w, `{"value": []}`)
 
 			return
 		}
@@ -1195,7 +1199,7 @@ func TestSearchSharedItemsWithFallback_SearchReturnsEmpty(t *testing.T) {
 func TestAnnotateStateDB_DetectsExistingDB(t *testing.T) {
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
 	cid := driveid.MustCanonicalID("personal:user@example.com")
 
@@ -1216,7 +1220,7 @@ func TestAnnotateStateDB_DetectsExistingDB(t *testing.T) {
 func TestAnnotateStateDB_NoDBFile(t *testing.T) {
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
 	cid := driveid.MustCanonicalID("personal:user@example.com")
 
@@ -1232,7 +1236,7 @@ func TestAnnotateStateDB_NoDBFile(t *testing.T) {
 func TestAnnotateStateDB_MixedEntries(t *testing.T) {
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
 	cidWithDB := driveid.MustCanonicalID("personal:user@example.com")
 	cidWithoutDB := driveid.MustCanonicalID("business:alice@contoso.com")
@@ -1257,7 +1261,7 @@ func TestAnnotateStateDB_MixedEntries(t *testing.T) {
 func TestPurgeOrphanedDriveState_DeletesStateDB(t *testing.T) {
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
 	cid := driveid.MustCanonicalID("personal:user@example.com")
 
@@ -1278,7 +1282,7 @@ func TestPurgeOrphanedDriveState_DeletesStateDB(t *testing.T) {
 func TestPurgeOrphanedDriveState_NoStateDB(t *testing.T) {
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
 	cid := driveid.MustCanonicalID("personal:user@example.com")
 

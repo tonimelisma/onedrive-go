@@ -2,11 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -108,43 +111,45 @@ func TestFindTokenFallback(t *testing.T) {
 	assert.Equal(t, driveid.MustCanonicalID("personal:nobody@example.com"), got)
 }
 
-func TestFindTokenFallback_PersonalExists(t *testing.T) {
-	// Create a temp directory and a file matching the personal token path.
-	personalID := driveid.MustCanonicalID("personal:test-fallback@example.com")
-	personalPath := config.DriveTokenPath(personalID)
+func writeTokenFallbackFixture(t *testing.T, tokenID driveid.CanonicalID) {
+	t.Helper()
 
-	if personalPath == "" {
+	tokenPath := config.DriveTokenPath(tokenID)
+	if tokenPath == "" {
 		t.Skip("cannot determine token path on this platform")
 	}
 
-	// Create the directory and file.
-	dir := filepath.Dir(personalPath)
-	require.NoError(t, os.MkdirAll(dir, 0o700))
-
-	require.NoError(t, os.WriteFile(personalPath, []byte("{}"), 0o600))
-	t.Cleanup(func() { os.Remove(personalPath) })
-
-	got := findTokenFallback("test-fallback@example.com", slog.Default())
-	assert.Equal(t, personalID, got)
+	require.NoError(t, os.MkdirAll(filepath.Dir(tokenPath), 0o700))
+	require.NoError(t, os.WriteFile(tokenPath, []byte("{}"), 0o600))
+	t.Cleanup(func() { removeTestPath(t, tokenPath) })
 }
 
-func TestFindTokenFallback_BusinessExists(t *testing.T) {
-	// Create only a business token file — should return business prefix.
-	businessID := driveid.MustCanonicalID("business:test-fallback-biz@example.com")
-	businessPath := config.DriveTokenPath(businessID)
-
-	if businessPath == "" {
-		t.Skip("cannot determine token path on this platform")
+func TestFindTokenFallback_ExistingToken(t *testing.T) {
+	tests := []struct {
+		name    string
+		account string
+		tokenID driveid.CanonicalID
+	}{
+		{
+			name:    "PersonalExists",
+			account: "test-fallback@example.com",
+			tokenID: driveid.MustCanonicalID("personal:test-fallback@example.com"),
+		},
+		{
+			name:    "BusinessExists",
+			account: "test-fallback-biz@example.com",
+			tokenID: driveid.MustCanonicalID("business:test-fallback-biz@example.com"),
+		},
 	}
 
-	dir := filepath.Dir(businessPath)
-	require.NoError(t, os.MkdirAll(dir, 0o700))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			writeTokenFallbackFixture(t, tt.tokenID)
 
-	require.NoError(t, os.WriteFile(businessPath, []byte("{}"), 0o600))
-	t.Cleanup(func() { os.Remove(businessPath) })
-
-	got := findTokenFallback("test-fallback-biz@example.com", slog.Default())
-	assert.Equal(t, businessID, got)
+			got := findTokenFallback(tt.account, slog.Default())
+			assert.Equal(t, tt.tokenID, got)
+		})
+	}
 }
 
 func TestPrintWhoamiText(t *testing.T) {
@@ -165,7 +170,7 @@ func TestPrintWhoamiText(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printWhoamiText(&buf, user, drives, nil)
+	require.NoError(t, printWhoamiText(&buf, user, drives, nil))
 	output := buf.String()
 
 	assert.Contains(t, output, "Test User")
@@ -179,10 +184,149 @@ func TestPrintWhoamiText(t *testing.T) {
 func TestPrintLoginSuccess_DoesNotPanic(t *testing.T) {
 	// Verify the print functions don't panic with various inputs.
 	var buf bytes.Buffer
-	printLoginSuccess(&buf, "personal", "toni@outlook.com", "", "personal:toni@outlook.com", "~/OneDrive")
-	printLoginSuccess(&buf, "business", "alice@contoso.com", "Contoso Ltd", "business:alice@contoso.com", "~/OneDrive - Contoso")
-	printLoginSuccess(&buf, "business", "bob@example.com", "", "business:bob@example.com", "~/OneDrive - Business")
-	printLoginSuccess(&buf, "documentLibrary", "carol@example.com", "", "documentLibrary:carol@example.com", "~/SP")
+	require.NoError(t, printLoginSuccess(&buf, "personal", "toni@outlook.com", "", "personal:toni@outlook.com", "~/OneDrive"))
+	require.NoError(t, printLoginSuccess(&buf, "business", "alice@contoso.com", "Contoso Ltd", "business:alice@contoso.com", "~/OneDrive - Contoso"))
+	require.NoError(t, printLoginSuccess(&buf, "business", "bob@example.com", "", "business:bob@example.com", "~/OneDrive - Business"))
+	require.NoError(t, printLoginSuccess(&buf, "documentLibrary", "carol@example.com", "", "documentLibrary:carol@example.com", "~/SP"))
+}
+
+func TestValidateBrowserAuthURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		rawURL  string
+		wantErr string
+	}{
+		{
+			name:   "microsoft login host allowed",
+			rawURL: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=test",
+		},
+		{
+			name:   "loopback allowed for tests",
+			rawURL: "http://127.0.0.1:8080/callback",
+		},
+		{
+			name:   "localhost https allowed",
+			rawURL: "https://localhost:8443/callback",
+		},
+		{
+			name:    "rejects insecure remote host",
+			rawURL:  "http://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+			wantErr: "must use https",
+		},
+		{
+			name:    "rejects userinfo",
+			rawURL:  "https://user@login.microsoftonline.com/common/oauth2/v2.0/authorize",
+			wantErr: "must not contain userinfo",
+		},
+		{
+			name:    "rejects empty host",
+			rawURL:  "https:///callback",
+			wantErr: "host is empty",
+		},
+		{
+			name:    "rejects loopback with non-http scheme",
+			rawURL:  "ftp://127.0.0.1:8080/callback",
+			wantErr: "loopback host must use http or https",
+		},
+		{
+			name:    "rejects untrusted host",
+			rawURL:  "https://evil.example.com/callback",
+			wantErr: "is not allowed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := validateBrowserAuthURL(tt.rawURL)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				assert.Equal(t, tt.rawURL, got)
+
+				return
+			}
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestPendingTokenPath(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	assert.Equal(t, filepath.Join(config.DefaultDataDir(), pendingTokenFile), pendingTokenPath())
+}
+
+func TestBrowserHostAllowed(t *testing.T) {
+	assert.True(t, browserHostAllowed("login.microsoftonline.com"))
+	assert.True(t, browserHostAllowed("tenant.login.microsoftonline.com"))
+	assert.True(t, browserHostAllowed("tenant.login.live.com"))
+	assert.False(t, browserHostAllowed("example.com"))
+}
+
+func TestIsLoopbackBrowserHost(t *testing.T) {
+	assert.True(t, isLoopbackBrowserHost("localhost"))
+	assert.True(t, isLoopbackBrowserHost("127.0.0.1"))
+	assert.True(t, isLoopbackBrowserHost("::1"))
+	assert.False(t, isLoopbackBrowserHost("192.168.1.10"))
+}
+
+func TestBrowserOpenCommand(t *testing.T) {
+	command, err := browserOpenCommand("darwin")
+	require.NoError(t, err)
+	assert.Equal(t, "open", command)
+
+	command, err = browserOpenCommand("linux")
+	require.NoError(t, err)
+	assert.Equal(t, "xdg-open", command)
+
+	_, err = browserOpenCommand("windows")
+	require.Error(t, err)
+}
+
+func TestOpenBrowser_RejectsUntrustedURL(t *testing.T) {
+	err := openBrowser(context.Background(), "https://evil.example.com/callback")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "is not allowed")
+}
+
+func TestOpenBrowser_StartsValidatedCommand(t *testing.T) {
+	command, err := browserOpenCommand(runtime.GOOS)
+	if err != nil {
+		t.Skipf("unsupported platform for browser launch test: %v", err)
+	}
+
+	const executablePerms = 0o755
+	const authURL = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=test"
+
+	tempDir := t.TempDir()
+	outputPath := filepath.Join(tempDir, "browser-url.txt")
+	scriptPath := filepath.Join(tempDir, command)
+	script := "#!/bin/sh\nprintf '%s' \"$1\" > \"$CODEX_BROWSER_OUT\"\n"
+	require.NoError(t, os.WriteFile(scriptPath, []byte(script), executablePerms))
+
+	t.Setenv("PATH", tempDir)
+	t.Setenv("CODEX_BROWSER_OUT", outputPath)
+
+	require.NoError(t, openBrowser(t.Context(), authURL))
+
+	require.Eventually(t, func() bool {
+		data, readErr := os.ReadFile(outputPath) //nolint:gosec // Test output path is created in t.TempDir and controlled by the test.
+		return readErr == nil && string(data) == authURL
+	}, 5*time.Second, 25*time.Millisecond)
+}
+
+func TestOpenBrowser_CommandStartFailure(t *testing.T) {
+	_, err := browserOpenCommand(runtime.GOOS)
+	if err != nil {
+		t.Skipf("unsupported platform for browser launch test: %v", err)
+	}
+
+	t.Setenv("PATH", t.TempDir())
+
+	err = openBrowser(t.Context(), "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=test")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "start browser command")
 }
 
 // Validates: R-3.1.4
@@ -193,7 +337,7 @@ func TestResolveLogoutAccount_FallbackToProfiles(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	dataDir := config.DefaultDataDir()
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
 	// Create an orphaned account profile (no token).
 	require.NoError(t, os.WriteFile(
@@ -217,7 +361,7 @@ func TestResolveLogoutAccount_NoPurgeShowsOrphans(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	dataDir := config.DefaultDataDir()
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
 	require.NoError(t, os.WriteFile(
 		filepath.Join(dataDir, "account_personal_alice@outlook.com.json"),
@@ -239,7 +383,7 @@ func TestFindLoggedOutAccounts(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	dataDir := config.DefaultDataDir()
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
 	// Account profile without token → logged out.
 	require.NoError(t, os.WriteFile(
@@ -280,7 +424,7 @@ func TestPurgeOrphanedFiles(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	dataDir := config.DefaultDataDir()
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
 	// Create orphaned files for alice.
 	files := []string{
@@ -423,7 +567,7 @@ func TestPrintLoggedOutAccountsText(t *testing.T) {
 		},
 	}
 
-	printLoggedOutAccountsText(&buf, loggedOut)
+	require.NoError(t, printLoggedOutAccountsText(&buf, loggedOut))
 	output := buf.String()
 
 	assert.Contains(t, output, "Logged out accounts:")

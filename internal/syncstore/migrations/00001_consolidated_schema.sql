@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS delta_tokens (
     drive_id    TEXT    NOT NULL,
     scope_id    TEXT    NOT NULL DEFAULT '',
     scope_drive TEXT    NOT NULL DEFAULT '',
-    token       TEXT    NOT NULL,
+    cursor      TEXT    NOT NULL,
     updated_at  INTEGER NOT NULL CHECK(updated_at > 0),
     PRIMARY KEY (drive_id, scope_id)
 );

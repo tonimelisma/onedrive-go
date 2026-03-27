@@ -29,7 +29,7 @@ func TestPrintItemsTable(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printItemsTable(&buf, items)
+	require.NoError(t, printItemsTable(&buf, items))
 	output := buf.String()
 
 	// Headers should be present.

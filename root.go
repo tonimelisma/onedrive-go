@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"sync"
 
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
@@ -93,6 +94,8 @@ type CLIContext struct {
 	Cfg          *config.ResolvedDrive     // nil for auth/account commands
 	Provider     *driveops.SessionProvider // nil for auth/account commands; created in Phase 2
 	logCloser    io.Closer                 // log file closer; nil when no log file is configured
+	statusMu     sync.Mutex                // guards statusErr for concurrent progress callbacks
+	statusErr    error
 }
 
 // cliContextKey is the context key for CLIContext.
@@ -127,7 +130,12 @@ func mustCLIContext(ctx context.Context) *CLIContext {
 // Session is a shorthand for cc.Provider.Session(ctx, cc.Cfg).
 // Eliminates 7 identical boilerplate blocks across file operation commands.
 func (cc *CLIContext) Session(ctx context.Context) (*driveops.Session, error) {
-	return cc.Provider.Session(ctx, cc.Cfg)
+	session, err := cc.Provider.Session(ctx, cc.Cfg)
+	if err != nil {
+		return nil, fmt.Errorf("create drive session: %w", err)
+	}
+
+	return session, nil
 }
 
 // newGraphClient creates a graph.Client with the standard HTTP client,
@@ -283,10 +291,7 @@ func loadAndResolve(
 
 	resolved, rawCfg, err := config.ResolveDrive(env, cli, logger)
 	if err != nil {
-		// Don't wrap — ResolveDrive already wraps LoadOrDefault errors with
-		// "loading config: ", and MatchDrive errors are user-facing messages
-		// that read better without a prefix.
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("resolve drive config: %w", err)
 	}
 
 	logger.Debug("config resolved",
@@ -362,7 +367,9 @@ func buildHandler(w io.Writer, cfg *config.ResolvedDrive, opts *slog.HandlerOpti
 	case logFormatText:
 		return slog.NewTextHandler(w, opts)
 	default:
-		fmt.Fprintf(w, "warning: unknown log format %q, using text\n", format)
+		if err := writef(w, "warning: unknown log format %q, using text\n", format); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: unknown log format %q, using text\n", format)
+		}
 
 		return slog.NewTextHandler(w, opts)
 	}
@@ -410,7 +417,7 @@ func (m *multiHandler) Handle(ctx context.Context, r slog.Record) error {
 	for _, h := range m.handlers {
 		if h.Enabled(ctx, r.Level) {
 			if err := h.Handle(ctx, r); err != nil {
-				return err
+				return fmt.Errorf("handle log record: %w", err)
 			}
 		}
 	}

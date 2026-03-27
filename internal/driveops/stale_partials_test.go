@@ -16,11 +16,11 @@ func TestCleanStalePartials(t *testing.T) {
 
 	// Create a .partial file (should be deleted).
 	partialPath := filepath.Join(dir, "download.partial")
-	require.NoError(t, os.WriteFile(partialPath, []byte("partial"), 0o644))
+	require.NoError(t, os.WriteFile(partialPath, []byte("partial"), 0o600))
 
 	// Create a regular file (should be preserved).
 	regularPath := filepath.Join(dir, "document.txt")
-	require.NoError(t, os.WriteFile(regularPath, []byte("content"), 0o644))
+	require.NoError(t, os.WriteFile(regularPath, []byte("content"), 0o600))
 
 	n, err := CleanStalePartials(dir, testLogger(t))
 	require.NoError(t, err)
@@ -52,10 +52,10 @@ func TestCleanStalePartials_NestedDir(t *testing.T) {
 
 	// Create nested directories with .partial files.
 	subDir := filepath.Join(dir, "a", "b")
-	require.NoError(t, os.MkdirAll(subDir, 0o755))
+	require.NoError(t, os.MkdirAll(subDir, 0o700))
 
 	partialPath := filepath.Join(subDir, "deep.partial")
-	require.NoError(t, os.WriteFile(partialPath, []byte("nested"), 0o644))
+	require.NoError(t, os.WriteFile(partialPath, []byte("nested"), 0o600))
 
 	n, err := CleanStalePartials(dir, testLogger(t))
 	require.NoError(t, err)
@@ -72,11 +72,11 @@ func TestCleanStalePartials_MultipleFiles(t *testing.T) {
 
 	// Create 3 .partial files.
 	for _, name := range []string{"a.partial", "b.partial", "c.partial"} {
-		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600))
 	}
 
 	// Create a non-partial file.
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "keep.txt"), []byte("keep"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "keep.txt"), []byte("keep"), 0o600))
 
 	n, err := CleanStalePartials(dir, testLogger(t))
 	require.NoError(t, err)
@@ -104,16 +104,16 @@ func TestCleanStalePartials_PermissionError(t *testing.T) {
 
 	// Create a restricted subdirectory containing a .partial file.
 	restricted := filepath.Join(dir, "restricted")
-	require.NoError(t, os.MkdirAll(restricted, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(restricted, "hidden.partial"), []byte("x"), 0o644))
+	require.NoError(t, os.MkdirAll(restricted, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(restricted, "hidden.partial"), []byte("x"), 0o600))
 
 	// Create an accessible .partial at the top level.
 	topPartial := filepath.Join(dir, "top.partial")
-	require.NoError(t, os.WriteFile(topPartial, []byte("y"), 0o644))
+	require.NoError(t, os.WriteFile(topPartial, []byte("y"), 0o600))
 
 	// Remove read+execute permission on the subdirectory.
-	require.NoError(t, os.Chmod(restricted, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(restricted, 0o755) })
+	setTestDirPermissions(t, restricted, 0o000)
+	t.Cleanup(func() { setTestDirPermissions(t, restricted, 0o700) })
 
 	// Should still delete the accessible .partial and not panic.
 	n, err := CleanStalePartials(dir, testLogger(t))

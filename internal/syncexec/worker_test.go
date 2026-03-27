@@ -26,57 +26,7 @@ import (
 // Worker pool mock types (prefixed to avoid collision with executor_test.go)
 // ---------------------------------------------------------------------------
 
-type workerMockItemClient struct {
-	createFolderFn func(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
-	moveItemFn     func(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error)
-	deleteItemFn   func(ctx context.Context, driveID driveid.ID, itemID string) error
-	getItemFn      func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
-	listChildrenFn func(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
-}
-
-func (m *workerMockItemClient) GetItem(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error) {
-	if m.getItemFn != nil {
-		return m.getItemFn(ctx, driveID, itemID)
-	}
-
-	return nil, fmt.Errorf("GetItem not mocked")
-}
-
-func (m *workerMockItemClient) ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error) {
-	if m.listChildrenFn != nil {
-		return m.listChildrenFn(ctx, driveID, parentID)
-	}
-
-	return nil, fmt.Errorf("ListChildren not mocked")
-}
-
-func (m *workerMockItemClient) CreateFolder(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error) {
-	if m.createFolderFn != nil {
-		return m.createFolderFn(ctx, driveID, parentID, name)
-	}
-
-	return nil, fmt.Errorf("CreateFolder not mocked")
-}
-
-func (m *workerMockItemClient) MoveItem(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error) {
-	if m.moveItemFn != nil {
-		return m.moveItemFn(ctx, driveID, itemID, newParentID, newName)
-	}
-
-	return nil, fmt.Errorf("MoveItem not mocked")
-}
-
-func (m *workerMockItemClient) DeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error {
-	if m.deleteItemFn != nil {
-		return m.deleteItemFn(ctx, driveID, itemID)
-	}
-
-	return fmt.Errorf("DeleteItem not mocked")
-}
-
-func (m *workerMockItemClient) PermanentDeleteItem(_ context.Context, _ driveid.ID, _ string) error {
-	return fmt.Errorf("PermanentDeleteItem not mocked")
-}
+type workerMockItemClient = testMockItemClient
 
 type workerMockDownloader struct {
 	downloadFn func(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error)
@@ -206,7 +156,8 @@ func runPoolWithDrain(ctx context.Context, pool *WorkerPool, dgh *testDepGraphHe
 
 // countResults counts succeeded and failed results.
 func countResults(results []synctypes.WorkerResult) (succeeded, failed int) {
-	for _, r := range results {
+	for i := range results {
+		r := &results[i]
 		if r.Success {
 			succeeded++
 		} else {
@@ -319,7 +270,7 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 	assert.Equal(t, 2, succeeded)
 
 	// Verify file was downloaded.
-	content, readErr := os.ReadFile(filepath.Join(syncRoot, "NewDir/file.txt"))
+	content, readErr := os.ReadFile(filepath.Join(syncRoot, "NewDir", "file.txt")) //nolint:gosec // Test output file lives under the temp sync root created by the test.
 	require.NoError(t, readErr, "read file")
 	assert.Equal(t, "file-content", string(content))
 }
@@ -454,7 +405,7 @@ func TestWorkerPool_FailedOutcome(t *testing.T) {
 		if !r.Success && r.Path == "fail-me.txt" {
 			foundFailure = true
 			assert.NotEmpty(t, r.ErrMsg)
-			assert.NotNil(t, r.Err, "Err should carry the full error")
+			require.Error(t, r.Err, "Err should carry the full error")
 		}
 	}
 	assert.True(t, foundFailure, "expected failure result for fail-me.txt")
@@ -512,8 +463,8 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 
 	// Write the local file that will be uploaded.
 	absPath := filepath.Join(syncRoot, "Uploads", "doc.txt")
-	require.NoError(t, os.MkdirAll(filepath.Dir(absPath), 0o755))
-	require.NoError(t, os.WriteFile(absPath, []byte("upload content"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Dir(absPath), 0o700))
+	require.NoError(t, os.WriteFile(absPath, []byte("upload content"), 0o600))
 
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 0, nil)

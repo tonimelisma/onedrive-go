@@ -267,9 +267,9 @@ func TestE2E_Sync_BidirectionalMerge(t *testing.T) {
 
 	// Step 1: Create local files in a docs/ subfolder.
 	docsDir := filepath.Join(syncDir, testFolder, "docs")
-	require.NoError(t, os.MkdirAll(docsDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(docsDir, "readme.txt"), []byte("readme content"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(docsDir, "notes.txt"), []byte("notes content"), 0o644))
+	require.NoError(t, os.MkdirAll(docsDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(docsDir, "readme.txt"), []byte("readme content"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(docsDir, "notes.txt"), []byte("notes content"), 0o600))
 
 	// Step 2: Upload-only sync to establish baseline.
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
@@ -280,8 +280,8 @@ func TestE2E_Sync_BidirectionalMerge(t *testing.T) {
 
 	// Step 4: Create new local folder + file (EF13 + ED5).
 	localOnlyDir := filepath.Join(syncDir, testFolder, "local-only")
-	require.NoError(t, os.MkdirAll(localOnlyDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(localOnlyDir, "stuff.txt"), []byte("local stuff"), 0o644))
+	require.NoError(t, os.MkdirAll(localOnlyDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(localOnlyDir, "stuff.txt"), []byte("local stuff"), 0o600))
 
 	// Step 5: Create new remote folder + file (EF14 + ED3).
 	runCLIWithConfig(t, opsCfgPath, nil, "mkdir", "/"+testFolder+"/data")
@@ -329,15 +329,15 @@ func TestE2E_Sync_EditEditConflict_ResolveKeepRemote(t *testing.T) {
 
 	// Step 1: Create local file.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	conflictFile := filepath.Join(localDir, "conflict-file.txt")
-	require.NoError(t, os.WriteFile(conflictFile, []byte("original v1"), 0o644))
+	require.NoError(t, os.WriteFile(conflictFile, []byte("original v1"), 0o600))
 
 	// Step 2: Upload-only sync.
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Step 3: Modify local.
-	require.NoError(t, os.WriteFile(conflictFile, []byte("local edit v2"), 0o644))
+	require.NoError(t, os.WriteFile(conflictFile, []byte("local edit v2"), 0o600))
 
 	// Step 4: Modify remote with different content.
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/conflict-file.txt", "remote edit v2")
@@ -398,9 +398,9 @@ func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 
 	// Step 1: Create local file.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	fragileFile := filepath.Join(localDir, "fragile.txt")
-	require.NoError(t, os.WriteFile(fragileFile, []byte("precious data"), 0o644))
+	require.NoError(t, os.WriteFile(fragileFile, []byte("precious data"), 0o600))
 
 	// Step 2: Upload baseline.
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
@@ -410,7 +410,7 @@ func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
 
 	// Step 3: Modify local.
-	require.NoError(t, os.WriteFile(fragileFile, []byte("locally modified precious data"), 0o644))
+	require.NoError(t, os.WriteFile(fragileFile, []byte("locally modified precious data"), 0o600))
 
 	// Step 4: Delete remote.
 	runCLIWithConfig(t, opsCfgPath, nil, "rm", "/"+testFolder+"/fragile.txt")
@@ -480,16 +480,16 @@ func TestE2E_Sync_ResolveAll(t *testing.T) {
 
 	// Step 1: Create two local files.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "a.txt"), []byte("a-original"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "b.txt"), []byte("b-original"), 0o644))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "a.txt"), []byte("a-original"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "b.txt"), []byte("b-original"), 0o600))
 
 	// Step 2: Upload baseline.
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Step 3: Modify both sides with different content.
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "a.txt"), []byte("a-local-edit"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "b.txt"), []byte("b-local-edit"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "a.txt"), []byte("a-local-edit"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "b.txt"), []byte("b-local-edit"), 0o600))
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/a.txt", "a-remote-edit")
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/b.txt", "b-remote-edit")
 
@@ -539,10 +539,10 @@ func TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal(t *testing.T) {
 
 	// Step 1: Create sync dir but no initial sync (fresh — no baseline).
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 
 	// Step 2: Create local file.
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "collision.txt"), []byte("local version"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "collision.txt"), []byte("local version"), 0o600))
 
 	// Step 3: Create remote file with different content at same path.
 	runCLIWithConfig(t, opsCfgPath, nil, "mkdir", "/"+testFolder)
@@ -567,7 +567,7 @@ func TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal(t *testing.T) {
 	assert.Equal(t, "local version", string(conflictCopyData))
 
 	// Step 7: Restore local version to original path (prep for keep-local).
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "collision.txt"), []byte("local version"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "collision.txt"), []byte("local version"), 0o600))
 
 	// Step 8: Resolve --keep-local.
 	_, stderr = runCLIWithConfig(t, cfgPath, env, "issues", "resolve", testFolder+"/collision.txt", "--keep-local")
@@ -601,13 +601,13 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 	// Step 1: Create local files.
 	localDir := filepath.Join(syncDir, testFolder)
 	subDir := filepath.Join(localDir, "sub")
-	require.NoError(t, os.MkdirAll(subDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "keep.txt"), []byte("keep me"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "del-local.txt"), []byte("delete local"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "del-remote.txt"), []byte("delete remote"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "del-both.txt"), []byte("delete both"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "redownload.txt"), []byte("original version"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(subDir, "nested.txt"), []byte("nested content"), 0o644))
+	require.NoError(t, os.MkdirAll(subDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "keep.txt"), []byte("keep me"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "del-local.txt"), []byte("delete local"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "del-remote.txt"), []byte("delete remote"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "del-both.txt"), []byte("delete both"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "redownload.txt"), []byte("original version"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(subDir, "nested.txt"), []byte("nested content"), 0o600))
 
 	// Step 2: Upload baseline.
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
@@ -710,13 +710,13 @@ func TestE2E_Sync_BigDeleteProtection(t *testing.T) {
 
 	// Step 1: Create 12 local files.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 
 	const fileCount = 12
 
 	for i := 1; i <= fileCount; i++ {
 		name := fmt.Sprintf("file-%02d.txt", i)
-		require.NoError(t, os.WriteFile(filepath.Join(localDir, name), []byte(fmt.Sprintf("content %d", i)), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(localDir, name), []byte(fmt.Sprintf("content %d", i)), 0o600))
 	}
 
 	// Step 2: Upload baseline.
@@ -788,17 +788,17 @@ func TestE2E_Sync_DownloadOnlyIgnoresLocal(t *testing.T) {
 
 	// Step 1: Create local file and upload.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "shared.txt"), []byte("initial"), 0o644))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "shared.txt"), []byte("initial"), 0o600))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Step 2: Modify both sides.
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "shared.txt"), []byte("local modification"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "shared.txt"), []byte("local modification"), 0o600))
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/shared.txt", "remote modification")
 
 	// Step 3: Create new local-only file.
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "local-new.txt"), []byte("local new file"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "local-new.txt"), []byte("local new file"), 0o600))
 
 	// Step 4: Download-only sync.
 	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--download-only", "--force")
@@ -848,8 +848,8 @@ func TestE2E_Sync_UploadOnlyIgnoresRemote(t *testing.T) {
 
 	// Step 2: Modify remote, modify local, create new local file.
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/remote-file.txt", "modified remote v2")
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "remote-file.txt"), []byte("local edit v2"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "new-upload.txt"), []byte("new upload content"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "remote-file.txt"), []byte("local edit v2"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "new-upload.txt"), []byte("new upload content"), 0o600))
 
 	// Step 3: Upload-only sync.
 	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
@@ -882,11 +882,11 @@ func TestE2E_Sync_NestedFolderHierarchy(t *testing.T) {
 
 	// Step 1: Create deep local hierarchy.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(filepath.Join(localDir, "a", "b", "c"), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(localDir, "x", "y"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "a", "b", "c", "deep.txt"), []byte("deep content"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "a", "sibling.txt"), []byte("sibling content"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "x", "y", "another.txt"), []byte("another content"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(localDir, "a", "b", "c"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(localDir, "x", "y"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "a", "b", "c", "deep.txt"), []byte("deep content"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "a", "sibling.txt"), []byte("sibling content"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "x", "y", "another.txt"), []byte("another content"), 0o600))
 
 	// Step 2: Upload baseline.
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
@@ -903,11 +903,11 @@ func TestE2E_Sync_NestedFolderHierarchy(t *testing.T) {
 	require.NoError(t, os.Remove(filepath.Join(localDir, "a", "sibling.txt")))
 
 	// New local deeper folder (ED5).
-	require.NoError(t, os.MkdirAll(filepath.Join(localDir, "x", "y", "z"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "x", "y", "z", "new-leaf.txt"), []byte("leaf content"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(localDir, "x", "y", "z"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "x", "y", "z", "new-leaf.txt"), []byte("leaf content"), 0o600))
 
 	// Modify local file (EF3).
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "x", "y", "another.txt"), []byte("modified another"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "x", "y", "another.txt"), []byte("modified another"), 0o600))
 
 	// Step 4: Bidirectional sync.
 	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
@@ -954,13 +954,13 @@ func TestE2E_Sync_DryRunNonDestructive(t *testing.T) {
 
 	// Step 1: Create and sync an initial file.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "existing.txt"), []byte("existing content"), 0o644))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "existing.txt"), []byte("existing content"), 0o600))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Step 2: Set up pending changes.
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "pending-upload.txt"), []byte("to upload"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "pending-upload.txt"), []byte("to upload"), 0o600))
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/pending-download.txt", "to download")
 	require.NoError(t, os.Remove(filepath.Join(localDir, "existing.txt")))
 
@@ -1012,8 +1012,8 @@ func TestE2E_Sync_ConvergentEdit(t *testing.T) {
 
 	// Step 1: Create and sync baseline file.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "converge-edit.txt"), []byte("original"), 0o644))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "converge-edit.txt"), []byte("original"), 0o600))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
@@ -1023,12 +1023,12 @@ func TestE2E_Sync_ConvergentEdit(t *testing.T) {
 
 	// Step 2: Modify both sides to the SAME content (EF4).
 	newContent := "convergent new content"
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "converge-edit.txt"), []byte(newContent), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "converge-edit.txt"), []byte(newContent), 0o600))
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/converge-edit.txt", newContent)
 
 	// Step 3: Create new file on both sides with same content (EF11).
 	freshContent := "fresh convergent"
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "converge-create.txt"), []byte(freshContent), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "converge-create.txt"), []byte(freshContent), 0o600))
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/converge-create.txt", freshContent)
 
 	// Step 4: Bidirectional sync — convergent detection.
@@ -1060,10 +1060,10 @@ func TestE2E_Sync_VerifyDetectsTampering(t *testing.T) {
 
 	// Step 1: Create and sync files.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "good.txt"), []byte("good content"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "tampered.txt"), []byte("original content"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "missing.txt"), []byte("will be removed"), 0o644))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "good.txt"), []byte("good content"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "tampered.txt"), []byte("original content"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "missing.txt"), []byte("will be removed"), 0o600))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
@@ -1073,7 +1073,7 @@ func TestE2E_Sync_VerifyDetectsTampering(t *testing.T) {
 	assert.Contains(t, stdout, "All files verified successfully.")
 
 	// Step 3: Tamper locally WITHOUT syncing.
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "tampered.txt"), []byte("TAMPERED CONTENT"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "tampered.txt"), []byte("TAMPERED CONTENT"), 0o600))
 	require.NoError(t, os.Remove(filepath.Join(localDir, "missing.txt")))
 
 	// Step 4: Verify should detect mismatches (exit code ≠ 0).
@@ -1116,14 +1116,14 @@ func TestE2E_Sync_ResolveDryRun(t *testing.T) {
 
 	// Step 1: Create local file and upload.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	conflictFile := filepath.Join(localDir, "dryrun-conflict.txt")
-	require.NoError(t, os.WriteFile(conflictFile, []byte("original v1"), 0o644))
+	require.NoError(t, os.WriteFile(conflictFile, []byte("original v1"), 0o600))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Step 2: Modify both sides to create edit-edit conflict.
-	require.NoError(t, os.WriteFile(conflictFile, []byte("local edit v2"), 0o644))
+	require.NoError(t, os.WriteFile(conflictFile, []byte("local edit v2"), 0o600))
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/dryrun-conflict.txt", "remote edit v2")
 
 	// Step 3: Bidirectional sync — should detect conflict.

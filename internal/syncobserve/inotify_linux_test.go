@@ -19,7 +19,7 @@ func TestReadInotifyLimit_ReadsRealProc(t *testing.T) {
 
 	limit, err := ReadInotifyLimit()
 	require.NoError(t, err)
-	assert.Greater(t, limit, 0, "Linux should have a positive inotify limit")
+	assert.Positive(t, limit, "Linux should have a positive inotify limit")
 }
 
 func TestCheckInotifyCapacity_WarnsAboveThreshold(t *testing.T) {

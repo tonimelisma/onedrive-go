@@ -137,10 +137,20 @@ func (p *SessionProvider) FlushTokenCache() {
 func (s *Session) ResolveItem(ctx context.Context, remotePath string) (*graph.Item, error) {
 	clean := CleanRemotePath(remotePath)
 	if clean == "" {
-		return s.Meta.GetItem(ctx, s.DriveID, "root")
+		item, err := s.Meta.GetItem(ctx, s.DriveID, "root")
+		if err != nil {
+			return nil, fmt.Errorf("resolve root item: %w", err)
+		}
+
+		return item, nil
 	}
 
-	return s.Meta.GetItemByPath(ctx, s.DriveID, clean)
+	item, err := s.Meta.GetItemByPath(ctx, s.DriveID, clean)
+	if err != nil {
+		return nil, fmt.Errorf("resolve item path %q: %w", clean, err)
+	}
+
+	return item, nil
 }
 
 // ListChildren lists children of a remote path. For root (""), uses
@@ -148,45 +158,88 @@ func (s *Session) ResolveItem(ctx context.Context, remotePath string) (*graph.It
 func (s *Session) ListChildren(ctx context.Context, remotePath string) ([]graph.Item, error) {
 	clean := CleanRemotePath(remotePath)
 	if clean == "" {
-		return s.Meta.ListChildren(ctx, s.DriveID, "root")
+		items, err := s.Meta.ListChildren(ctx, s.DriveID, "root")
+		if err != nil {
+			return nil, fmt.Errorf("list root children: %w", err)
+		}
+
+		return items, nil
 	}
 
-	return s.Meta.ListChildrenByPath(ctx, s.DriveID, clean)
+	items, err := s.Meta.ListChildrenByPath(ctx, s.DriveID, clean)
+	if err != nil {
+		return nil, fmt.Errorf("list children for %q: %w", clean, err)
+	}
+
+	return items, nil
 }
 
 // DeleteItem moves an item to the recycle bin.
 func (s *Session) DeleteItem(ctx context.Context, itemID string) error {
-	return s.Meta.DeleteItem(ctx, s.DriveID, itemID)
+	if err := s.Meta.DeleteItem(ctx, s.DriveID, itemID); err != nil {
+		return fmt.Errorf("delete item %q: %w", itemID, err)
+	}
+
+	return nil
 }
 
 // PermanentDeleteItem permanently deletes an item (Business/SharePoint only).
 func (s *Session) PermanentDeleteItem(ctx context.Context, itemID string) error {
-	return s.Meta.PermanentDeleteItem(ctx, s.DriveID, itemID)
+	if err := s.Meta.PermanentDeleteItem(ctx, s.DriveID, itemID); err != nil {
+		return fmt.Errorf("permanent delete item %q: %w", itemID, err)
+	}
+
+	return nil
 }
 
 // CreateFolder creates a folder under the given parent.
 func (s *Session) CreateFolder(ctx context.Context, parentID, name string) (*graph.Item, error) {
-	return s.Meta.CreateFolder(ctx, s.DriveID, parentID, name)
+	item, err := s.Meta.CreateFolder(ctx, s.DriveID, parentID, name)
+	if err != nil {
+		return nil, fmt.Errorf("create folder %q: %w", name, err)
+	}
+
+	return item, nil
 }
 
 // MoveItem moves and/or renames an item.
 func (s *Session) MoveItem(ctx context.Context, itemID, newParentID, newName string) (*graph.Item, error) {
-	return s.Meta.MoveItem(ctx, s.DriveID, itemID, newParentID, newName)
+	item, err := s.Meta.MoveItem(ctx, s.DriveID, itemID, newParentID, newName)
+	if err != nil {
+		return nil, fmt.Errorf("move item %q: %w", itemID, err)
+	}
+
+	return item, nil
 }
 
 // CopyItem starts an async copy operation. Returns a monitor URL for polling.
 func (s *Session) CopyItem(ctx context.Context, itemID, destParentID, newName string) (*graph.CopyResult, error) {
-	return s.Meta.CopyItem(ctx, s.DriveID, itemID, destParentID, newName)
+	result, err := s.Meta.CopyItem(ctx, s.DriveID, itemID, destParentID, newName)
+	if err != nil {
+		return nil, fmt.Errorf("copy item %q: %w", itemID, err)
+	}
+
+	return result, nil
 }
 
 // ListRecycleBinItems returns all items in the drive's recycle bin.
 func (s *Session) ListRecycleBinItems(ctx context.Context) ([]graph.Item, error) {
-	return s.Meta.ListRecycleBinItems(ctx, s.DriveID)
+	items, err := s.Meta.ListRecycleBinItems(ctx, s.DriveID)
+	if err != nil {
+		return nil, fmt.Errorf("list recycle bin items: %w", err)
+	}
+
+	return items, nil
 }
 
 // RestoreItem restores a deleted item from the recycle bin.
 func (s *Session) RestoreItem(ctx context.Context, itemID string) (*graph.Item, error) {
-	return s.Meta.RestoreItem(ctx, s.DriveID, itemID)
+	item, err := s.Meta.RestoreItem(ctx, s.DriveID, itemID)
+	if err != nil {
+		return nil, fmt.Errorf("restore item %q: %w", itemID, err)
+	}
+
+	return item, nil
 }
 
 // CleanRemotePath strips leading/trailing slashes, returns "" for root.

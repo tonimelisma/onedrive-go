@@ -9,12 +9,7 @@ import (
 
 // Validates: R-3.2.1, R-3.2.2, R-3.2.3
 func TestNewCanonicalID(t *testing.T) {
-	tests := []struct {
-		name    string
-		raw     string
-		want    string
-		wantErr bool
-	}{
+	assertNewCanonicalIDCases(t, []parseCanonicalCase{
 		{
 			name: "personal account",
 			raw:  "personal:user@example.com",
@@ -55,20 +50,7 @@ func TestNewCanonicalID(t *testing.T) {
 			raw:     "",
 			wantErr: true,
 		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cid, err := NewCanonicalID(tt.raw)
-			if tt.wantErr {
-				require.Error(t, err)
-				return
-			}
-
-			require.NoError(t, err)
-			assert.Equal(t, tt.want, cid.String())
-		})
-	}
+	})
 }
 
 func TestNewCanonicalID_ParseOnceFields(t *testing.T) {
@@ -157,56 +139,7 @@ func TestConstruct(t *testing.T) {
 
 // Validates: R-3.2.3
 func TestConstructSharePoint(t *testing.T) {
-	tests := []struct {
-		name    string
-		email   string
-		site    string
-		library string
-		want    string
-		wantErr bool
-	}{
-		{
-			name:    "valid sharepoint",
-			email:   "alice@contoso.com",
-			site:    "marketing",
-			library: "Documents",
-			want:    "sharepoint:alice@contoso.com:marketing:Documents",
-		},
-		{
-			name:    "empty email",
-			email:   "",
-			site:    "marketing",
-			library: "Documents",
-			wantErr: true,
-		},
-		{
-			name:    "empty site",
-			email:   "alice@contoso.com",
-			site:    "",
-			library: "Documents",
-			wantErr: true,
-		},
-		{
-			name:    "empty library",
-			email:   "alice@contoso.com",
-			site:    "marketing",
-			library: "",
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cid, err := ConstructSharePoint(tt.email, tt.site, tt.library)
-			if tt.wantErr {
-				require.Error(t, err)
-				return
-			}
-
-			require.NoError(t, err)
-			assert.Equal(t, tt.want, cid.String())
-		})
-	}
+	assertConstructorCases(t, sharePointConstructorCases())
 }
 
 // Validates: R-3.2.1, R-3.2.2, R-3.2.3

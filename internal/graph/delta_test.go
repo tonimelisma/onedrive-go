@@ -1,7 +1,6 @@
 package graph
 
 import (
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,7 +20,7 @@ func TestDelta_SendsPreferHeader(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"value":[],"@odata.deltaLink":"https://example.com/delta?token=abc"}`)
+		writeTestResponse(t, w, `{"value":[],"@odata.deltaLink":"https://example.com/delta?token=abc"}`)
 	}))
 	defer srv.Close()
 
@@ -39,7 +38,7 @@ func TestDelta_SinglePage(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"value": [
 				{"id":"item-1","name":"file1.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root","driveId":"d"},"file":{"mimeType":"text/plain"}},
 				{"id":"item-2","name":"folder1","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root","driveId":"d"},"folder":{"childCount":3}}
@@ -70,14 +69,14 @@ func TestDelta_MultiPage(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 
 		if !strings.Contains(r.URL.RawQuery, "token=page2") {
-			fmt.Fprintf(w, `{
+			writeTestResponsef(t, w, `{
 				"value": [
 					{"id":"item-1","name":"file1.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root","driveId":"d"}}
 				],
 				"@odata.nextLink": "%s/drives/d/root/delta?token=page2"
 			}`, srv.URL)
 		} else {
-			fmt.Fprintf(w, `{
+			writeTestResponsef(t, w, `{
 				"value": [
 					{"id":"item-2","name":"file2.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root","driveId":"d"}}
 				],
@@ -110,7 +109,7 @@ func TestDelta_EmptyToken(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"value":[],"@odata.deltaLink":"https://example.com/delta?token=abc"}`)
+		writeTestResponse(t, w, `{"value":[],"@odata.deltaLink":"https://example.com/delta?token=abc"}`)
 	}))
 	defer srv.Close()
 
@@ -131,7 +130,7 @@ func TestDelta_WithToken(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"value": [
 				{"id":"changed-1","name":"updated.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-06-01T00:00:00Z","parentReference":{"id":"root","driveId":"d"}}
 			],
@@ -149,27 +148,13 @@ func TestDelta_WithToken(t *testing.T) {
 	assert.Equal(t, "changed-1", page.Items[0].ID)
 }
 
-func TestDelta_Gone(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("request-id", "req-gone")
-		w.WriteHeader(http.StatusGone)
-		fmt.Fprint(w, `{"error":{"code":"resyncRequired","message":"Token expired"}}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	_, err := client.Delta(t.Context(), driveid.New("d"), "")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrGone)
-}
-
 func TestDelta_EmptyPage(t *testing.T) {
 	var srv *httptest.Server
 
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"value": [],
 			"@odata.deltaLink": "%s/drives/d/root/delta?token=emptytoken"
 		}`, srv.URL)
@@ -190,7 +175,7 @@ func TestDelta_NormalizesPackages(t *testing.T) {
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"value": [
 				{"id":"file-1","name":"doc.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root","driveId":"d"},"file":{"mimeType":"text/plain"}},
 				{"id":"pkg-1","name":"Notebook.one","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root","driveId":"d"},"package":{"type":"oneNote"}}
@@ -222,7 +207,7 @@ func TestDeltaAll_SinglePage(t *testing.T) {
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"value": [
 				{"id":"item-1","name":"file1.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root","driveId":"d"}},
 				{"id":"item-2","name":"file2.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root","driveId":"d"}}
@@ -254,21 +239,21 @@ func TestDeltaAll_MultiPage(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 
 		if !strings.Contains(r.URL.RawQuery, "token=page2") && !strings.Contains(r.URL.RawQuery, "token=page3") {
-			fmt.Fprintf(w, `{
+			writeTestResponsef(t, w, `{
 				"value": [
 					{"id":"item-1","name":"file1.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root","driveId":"d"}}
 				],
 				"@odata.nextLink": "%s/drives/d/root/delta?token=page2"
 			}`, srv.URL)
 		} else if strings.Contains(r.URL.RawQuery, "token=page2") {
-			fmt.Fprintf(w, `{
+			writeTestResponsef(t, w, `{
 				"value": [
 					{"id":"item-2","name":"file2.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root","driveId":"d"}}
 				],
 				"@odata.nextLink": "%s/drives/d/root/delta?token=page3"
 			}`, srv.URL)
 		} else {
-			fmt.Fprintf(w, `{
+			writeTestResponsef(t, w, `{
 				"value": [
 					{"id":"item-3","name":"file3.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root","driveId":"d"}}
 				],
@@ -294,7 +279,7 @@ func TestDeltaAll_GoneError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("request-id", "req-gone-all")
 		w.WriteHeader(http.StatusGone)
-		fmt.Fprint(w, `{"error":{"code":"resyncRequired"}}`)
+		writeTestResponse(t, w, `{"error":{"code":"resyncRequired"}}`)
 	}))
 	defer srv.Close()
 
@@ -305,18 +290,13 @@ func TestDeltaAll_GoneError(t *testing.T) {
 }
 
 func TestDeltaAll_MaxPages(t *testing.T) {
-	// Override maxDeltaPages to a small value for fast testing.
-	origMax := maxDeltaPages
-	maxDeltaPages = 3
-	defer func() { maxDeltaPages = origMax }()
-
 	var srv *httptest.Server
 
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		// Always return a NextLink, never a DeltaLink — simulates infinite loop.
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"value": [
 				{"id":"item","name":"file.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root","driveId":"d"}}
 			],
@@ -326,6 +306,8 @@ func TestDeltaAll_MaxPages(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
+	client.maxDeltaPages = 3
+
 	_, _, err := client.DeltaAll(t.Context(), driveid.New("d"), "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exceeded")
@@ -387,7 +369,7 @@ func TestDeltaFolder_SinglePage(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"value": [
 				{"id":"item-1","name":"file1.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"folder-abc","driveId":"d"},"file":{"mimeType":"text/plain"}},
 				{"id":"item-2","name":"sub","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"folder-abc","driveId":"d"},"folder":{"childCount":1}}
@@ -418,7 +400,7 @@ func TestDeltaFolder_WithToken(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"value": [
 				{"id":"changed-1","name":"updated.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-06-01T00:00:00Z","parentReference":{"id":"folder-abc","driveId":"d"}}
 			],
@@ -440,7 +422,7 @@ func TestDeltaFolder_Gone(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("request-id", "req-gone-folder")
 		w.WriteHeader(http.StatusGone)
-		fmt.Fprint(w, `{"error":{"code":"resyncRequired","message":"Token expired"}}`)
+		writeTestResponse(t, w, `{"error":{"code":"resyncRequired","message":"Token expired"}}`)
 	}))
 	defer srv.Close()
 
@@ -456,7 +438,7 @@ func TestDeltaFolder_NormalizesPackages(t *testing.T) {
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"value": [
 				{"id":"file-1","name":"doc.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"folder-abc","driveId":"d"},"file":{"mimeType":"text/plain"}},
 				{"id":"pkg-1","name":"Notebook.one","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"folder-abc","driveId":"d"},"package":{"type":"oneNote"}}
@@ -480,7 +462,7 @@ func TestDeltaFolderAll_SinglePage(t *testing.T) {
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"value": [
 				{"id":"item-1","name":"file1.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"folder-abc","driveId":"d"}},
 				{"id":"item-2","name":"file2.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"folder-abc","driveId":"d"}}
@@ -512,14 +494,14 @@ func TestDeltaFolderAll_MultiPage(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 
 		if !strings.Contains(r.URL.RawQuery, "token=page2") {
-			fmt.Fprintf(w, `{
+			writeTestResponsef(t, w, `{
 				"value": [
 					{"id":"item-1","name":"file1.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"folder-abc","driveId":"d"}}
 				],
 				"@odata.nextLink": "%s/drives/d/items/folder-abc/delta?token=page2"
 			}`, srv.URL)
 		} else {
-			fmt.Fprintf(w, `{
+			writeTestResponsef(t, w, `{
 				"value": [
 					{"id":"item-2","name":"file2.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"folder-abc","driveId":"d"}}
 				],
@@ -541,16 +523,12 @@ func TestDeltaFolderAll_MultiPage(t *testing.T) {
 }
 
 func TestDeltaFolderAll_MaxPages(t *testing.T) {
-	origMax := maxDeltaPages
-	maxDeltaPages = 3
-	defer func() { maxDeltaPages = origMax }()
-
 	var srv *httptest.Server
 
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"value": [
 				{"id":"item","name":"file.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"folder-abc","driveId":"d"}}
 			],
@@ -560,6 +538,8 @@ func TestDeltaFolderAll_MaxPages(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
+	client.maxDeltaPages = 3
+
 	_, _, err := client.DeltaFolderAll(t.Context(), driveid.New("d"), "folder-abc", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exceeded")

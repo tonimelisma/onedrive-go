@@ -134,7 +134,7 @@ func TestE2E_SyncWatch_Bidirectional(t *testing.T) {
 
 	// Phase 1: local → remote.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "local-to-remote.txt"),
 		[]byte("from local"),
@@ -182,9 +182,9 @@ func TestE2E_SyncWatch_ConflictDuringWatch(t *testing.T) {
 
 	// Create file and wait for it to sync.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	filePath := filepath.Join(localDir, "conflict-watch.txt")
-	require.NoError(t, os.WriteFile(filePath, []byte("baseline"), 0o644))
+	require.NoError(t, os.WriteFile(filePath, []byte("baseline"), 0o600))
 
 	// Wait for upload.
 	remotePath := "/" + testFolder + "/conflict-watch.txt"
@@ -200,7 +200,7 @@ func TestE2E_SyncWatch_ConflictDuringWatch(t *testing.T) {
 
 	// Now modify local — fsnotify fires, daemon runs a sync pass that sees
 	// both the local change and the remote change from the delta feed.
-	require.NoError(t, os.WriteFile(filePath, []byte("local conflict version"), 0o644))
+	require.NoError(t, os.WriteFile(filePath, []byte("local conflict version"), 0o600))
 
 	// Wait for the daemon to detect the conflict. Poll conflicts command.
 	deadline := time.Now().Add(daemonPollTimeout)
@@ -250,16 +250,16 @@ func TestE2E_SyncWatch_FileModification(t *testing.T) {
 
 	// Create file.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	filePath := filepath.Join(localDir, "modifiable.txt")
-	require.NoError(t, os.WriteFile(filePath, []byte("version 1"), 0o644))
+	require.NoError(t, os.WriteFile(filePath, []byte("version 1"), 0o600))
 
 	// Wait for initial upload.
 	remotePath := "/" + testFolder + "/modifiable.txt"
 	pollCLIWithConfigContains(t, opsCfgPath, nil, "modifiable.txt", daemonPollTimeout, "stat", remotePath)
 
 	// Modify the file.
-	require.NoError(t, os.WriteFile(filePath, []byte("version 2 modified"), 0o644))
+	require.NoError(t, os.WriteFile(filePath, []byte("version 2 modified"), 0o600))
 
 	// Poll remote until it has the new content.
 	deadline := time.Now().Add(daemonPollTimeout)
@@ -300,9 +300,9 @@ func TestE2E_SyncWatch_FileDeletion(t *testing.T) {
 
 	// Create file.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	filePath := filepath.Join(localDir, "deleteme.txt")
-	require.NoError(t, os.WriteFile(filePath, []byte("will be deleted"), 0o644))
+	require.NoError(t, os.WriteFile(filePath, []byte("will be deleted"), 0o600))
 
 	// Wait for upload.
 	remotePath := "/" + testFolder + "/deleteme.txt"
@@ -337,7 +337,7 @@ func TestE2E_SyncWatch_FolderCreation(t *testing.T) {
 
 	// Create deeply nested structure.
 	localDir := filepath.Join(syncDir, testFolder, "a", "b", "c")
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "deep.txt"),
 		[]byte("deeply nested content"),
@@ -370,7 +370,7 @@ func TestE2E_SyncWatch_MultipleFiles(t *testing.T) {
 
 	// Create 5 files.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 
 	for i := 1; i <= 5; i++ {
 		name := fmt.Sprintf("multi-%d.txt", i)
@@ -417,8 +417,8 @@ func TestE2E_SyncWatch_LargeFile(t *testing.T) {
 	}
 
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "large-watch.bin"), data, 0o644))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "large-watch.bin"), data, 0o600))
 
 	// Poll until the file appears remotely with correct size.
 	remotePath := "/" + testFolder + "/large-watch.bin"
@@ -456,12 +456,12 @@ func TestE2E_SyncWatch_RapidChurn(t *testing.T) {
 
 	// Create file and rapidly modify it.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	filePath := filepath.Join(localDir, "churn-watch.txt")
-	require.NoError(t, os.WriteFile(filePath, []byte("v1"), 0o644))
-	require.NoError(t, os.WriteFile(filePath, []byte("v2"), 0o644))
-	require.NoError(t, os.WriteFile(filePath, []byte("v3"), 0o644))
-	require.NoError(t, os.WriteFile(filePath, []byte("final version"), 0o644))
+	require.NoError(t, os.WriteFile(filePath, []byte("v1"), 0o600))
+	require.NoError(t, os.WriteFile(filePath, []byte("v2"), 0o600))
+	require.NoError(t, os.WriteFile(filePath, []byte("v3"), 0o600))
+	require.NoError(t, os.WriteFile(filePath, []byte("final version"), 0o600))
 
 	// Wait for file to appear remotely.
 	remotePath := "/" + testFolder + "/churn-watch.txt"
@@ -507,7 +507,7 @@ func TestE2E_SyncWatch_GracefulShutdown(t *testing.T) {
 
 	// Create first file and wait for daemon to sync it.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "before-shutdown.txt"),
 		[]byte("synced by daemon"),
@@ -571,7 +571,7 @@ func TestE2E_SyncWatch_TimedPauseExpiry(t *testing.T) {
 
 	// Create local file while paused.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "paused-file.txt"),
 		[]byte("created during pause"),

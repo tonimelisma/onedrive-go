@@ -129,9 +129,9 @@ func TestFullScan_CaseCollision_InSkippedNotEvents(t *testing.T) {
 	f1 := filepath.Join(syncRoot, "File.txt")
 	f2 := filepath.Join(syncRoot, "file.txt")
 
-	require.NoError(t, os.WriteFile(f1, []byte("content1"), 0o644))
+	require.NoError(t, os.WriteFile(f1, []byte("content1"), 0o600))
 
-	if err := os.WriteFile(f2, []byte("content2"), 0o644); err != nil {
+	if err := os.WriteFile(f2, []byte("content2"), 0o600); err != nil {
 		t.Skip("case-insensitive filesystem — cannot create case-colliding files")
 	}
 
@@ -172,9 +172,9 @@ func TestFullScan_CaseCollision_NoFalseDeletion(t *testing.T) {
 	f1 := filepath.Join(syncRoot, "Doc.pdf")
 	f2 := filepath.Join(syncRoot, "doc.pdf")
 
-	require.NoError(t, os.WriteFile(f1, []byte("pdf1"), 0o644))
+	require.NoError(t, os.WriteFile(f1, []byte("pdf1"), 0o600))
 
-	if err := os.WriteFile(f2, []byte("pdf2"), 0o644); err != nil {
+	if err := os.WriteFile(f2, []byte("pdf2"), 0o600); err != nil {
 		t.Skip("case-insensitive filesystem")
 	}
 
@@ -224,7 +224,7 @@ func TestDetectCaseCollisions_CaseInsensitiveFS(t *testing.T) {
 
 	// Write File.txt — on case-insensitive FS, a subsequent write to
 	// file.txt overwrites this (same inode), so only one file exists.
-	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "File.txt"), []byte("content"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "File.txt"), []byte("content"), 0o600))
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
 
@@ -414,9 +414,9 @@ func TestDetectCaseCollisions_CaseSensitiveFS(t *testing.T) {
 	f1 := filepath.Join(syncRoot, "File.txt")
 	f2 := filepath.Join(syncRoot, "file.txt")
 
-	require.NoError(t, os.WriteFile(f1, []byte("content1"), 0o644))
+	require.NoError(t, os.WriteFile(f1, []byte("content1"), 0o600))
 
-	if err := os.WriteFile(f2, []byte("content2"), 0o644); err != nil {
+	if err := os.WriteFile(f2, []byte("content2"), 0o600); err != nil {
 		t.Skip("case-insensitive filesystem — cannot create case-colliding files")
 	}
 

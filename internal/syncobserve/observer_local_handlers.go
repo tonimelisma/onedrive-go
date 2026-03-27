@@ -1,4 +1,4 @@
-// observer_local_handlers.go — Watch-mode event processing for LocalObserver.
+// Package syncobserve watches and scans the local filesystem for sync changes.
 //
 // Contents:
 //   - watchLoop:    main select loop (fsnotify events, errors, safety scan, ctx)
@@ -47,7 +47,7 @@ func (o *LocalObserver) watchLoop(
 	tickCh, tickStop := o.SafetyTickFunc(interval)
 	defer tickStop()
 
-	errBackoff := retry.NewBackoff(retry.WatchLocal)
+	errBackoff := retry.NewBackoff(retry.WatchLocalPolicy())
 
 	for {
 		select {

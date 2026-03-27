@@ -1,8 +1,8 @@
-// active_scopes.go — stateless helpers for active scope evaluation.
+// Package syncdispatch holds sync execution primitives that are shared across
+// the engine and its tests.
 //
-// Watch-mode runtime ownership now lives in the engine event loop. This
-// package no longer owns a mirrored in-memory scope subsystem. Instead it
-// provides pure helpers over the engine-owned []ScopeBlock working set.
+// This file contains the pure helper functions for evaluating active scope
+// blocks once watch-mode runtime ownership moved fully into the engine.
 package syncdispatch
 
 import (

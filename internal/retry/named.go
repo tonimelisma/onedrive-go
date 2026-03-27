@@ -1,62 +1,84 @@
 package retry
 
-import (
-	"time"
+import "time"
+
+// Canonical retry constants. Kept local to this package so callers consume the
+// fully shaped Policy values rather than piecing them together themselves.
+const (
+	transportAttempts      = 5
+	driveDiscoveryAttempts = 3
+	infiniteAttempts       = 0
+	standardMultiplier     = 2.0
+	standardJitter         = 0.25
+	noJitter               = 0.0
+	defaultBaseDelay       = 1 * time.Second
+	transportMaxDelay      = 60 * time.Second
+	watchLocalMaxDelay     = 30 * time.Second
+	watchRemoteBaseDelay   = 5 * time.Second
+	watchRemoteMaxDelay    = 5 * time.Minute
 )
 
-// Named policy instances. Each captures the exact parameters from the original
-// implementation it replaces, preserving identical behavior. These numbers are
-// the canonical specification — they originate here and are referenced elsewhere.
-
-// Transport is the HTTP transport retry policy (graph/client.go).
+// TransportPolicy is the HTTP transport retry policy (graph/client.go).
 // 5 retries, 1s base, 60s max, 2x multiplier, ±25% jitter.
-var Transport = Policy{ //nolint:gochecknoglobals // named policy singleton
-	MaxAttempts: 5, //nolint:mnd // canonical retry count
-	Base:        1 * time.Second,
-	Max:         60 * time.Second, //nolint:mnd // canonical max backoff
-	Multiplier:  2.0,              //nolint:mnd // standard exponential factor
-	Jitter:      0.25,             //nolint:mnd // ±25% jitter fraction
+func TransportPolicy() Policy {
+	return Policy{
+		MaxAttempts: transportAttempts,
+		Base:        defaultBaseDelay,
+		Max:         transportMaxDelay,
+		Multiplier:  standardMultiplier,
+		Jitter:      standardJitter,
+	}
 }
 
-// DriveDiscovery is the transient-403 retry policy for drive enumeration
-// (graph/drives.go). 3 attempts, same backoff curve as Transport.
-var DriveDiscovery = Policy{ //nolint:gochecknoglobals // named policy singleton
-	MaxAttempts: 3,
-	Base:        1 * time.Second,
-	Max:         60 * time.Second, //nolint:mnd // canonical max backoff
-	Multiplier:  2.0,              //nolint:mnd // standard exponential factor
-	Jitter:      0.25,             //nolint:mnd // ±25% jitter fraction
+// DriveDiscoveryPolicy is the transient-403 retry policy for drive
+// enumeration (graph/drives.go). 3 attempts, same backoff curve as Transport.
+func DriveDiscoveryPolicy() Policy {
+	return Policy{
+		MaxAttempts: driveDiscoveryAttempts,
+		Base:        defaultBaseDelay,
+		Max:         transportMaxDelay,
+		Multiplier:  standardMultiplier,
+		Jitter:      standardJitter,
+	}
 }
 
-// WatchLocal is the local observer error backoff policy (observer_local.go).
-// Infinite attempts (watch loop), 1s base, 30s max, 2x multiplier, no jitter.
-var WatchLocal = Policy{ //nolint:gochecknoglobals // named policy singleton
-	MaxAttempts: 0, // infinite
-	Base:        1 * time.Second,
-	Max:         30 * time.Second, //nolint:mnd // canonical max backoff
-	Multiplier:  2.0,              //nolint:mnd // standard exponential factor
-	Jitter:      0.0,
+// WatchLocalPolicy is the local observer error backoff policy
+// (observer_local.go). Infinite attempts (watch loop), 1s base, 30s max,
+// 2x multiplier, no jitter.
+func WatchLocalPolicy() Policy {
+	return Policy{
+		MaxAttempts: infiniteAttempts,
+		Base:        defaultBaseDelay,
+		Max:         watchLocalMaxDelay,
+		Multiplier:  standardMultiplier,
+		Jitter:      noJitter,
+	}
 }
 
-// Reconcile is the single retry curve for all sync failures (sync_failures
-// table + engine retry sweep). Infinite attempts: the engine keeps retrying
-// until success or until the failure becomes actionable.
-// Curve: 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s, 512s, 1024s, 2048s, 3600s cap.
-var Reconcile = Policy{ //nolint:gochecknoglobals // named policy singleton
-	MaxAttempts: 0, // infinite — the engine retry sweep retries until success or actionable
-	Base:        1 * time.Second,
-	Max:         time.Hour,
-	Multiplier:  2.0,  //nolint:mnd // standard exponential factor
-	Jitter:      0.25, //nolint:mnd // ±25% jitter fraction
+// ReconcilePolicy is the single retry curve for all sync failures
+// (sync_failures table + engine failure retrier). Infinite attempts until the
+// failure succeeds or becomes actionable. Curve: 1s, 2s, 4s, 8s, 16s, 32s,
+// 64s, 128s, 256s, 512s, 1024s, 2048s, 3600s cap.
+func ReconcilePolicy() Policy {
+	return Policy{
+		MaxAttempts: infiniteAttempts,
+		Base:        defaultBaseDelay,
+		Max:         time.Hour,
+		Multiplier:  standardMultiplier,
+		Jitter:      standardJitter,
+	}
 }
 
-// WatchRemote is the remote observer error backoff policy (observer_remote.go).
-// Infinite attempts, 5s base, dynamic max (poll interval), 2x multiplier, no jitter.
-// The actual max is set dynamically via Backoff.SetMaxOverride().
-var WatchRemote = Policy{ //nolint:gochecknoglobals // named policy singleton
-	MaxAttempts: 0,               // infinite
-	Base:        5 * time.Second, //nolint:mnd // canonical base backoff
-	Max:         5 * time.Minute, //nolint:mnd // default ceiling; overridden by SetMaxOverride
-	Multiplier:  2.0,             //nolint:mnd // standard exponential factor
-	Jitter:      0.0,
+// WatchRemotePolicy is the remote observer error backoff policy
+// (observer_remote.go). Infinite attempts, 5s base, dynamic max (poll
+// interval), 2x multiplier, no jitter. The actual max is set dynamically via
+// Backoff.SetMaxOverride().
+func WatchRemotePolicy() Policy {
+	return Policy{
+		MaxAttempts: infiniteAttempts,
+		Base:        watchRemoteBaseDelay,
+		Max:         watchRemoteMaxDelay,
+		Multiplier:  standardMultiplier,
+		Jitter:      noJitter,
+	}
 }

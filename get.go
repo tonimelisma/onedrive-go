@@ -108,7 +108,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 			cc.Statusf("Re-run the same command to resume.\n")
 		}
 
-		return err
+		return fmt.Errorf("download file: %w", err)
 	}
 
 	logger.Debug("download complete", "local_path", localPath, "bytes", result.Size)
@@ -131,7 +131,11 @@ func printGetJSON(w io.Writer, out getJSONOutput) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 
-	return enc.Encode(out)
+	if err := enc.Encode(out); err != nil {
+		return fmt.Errorf("encode download output: %w", err)
+	}
+
+	return nil
 }
 
 // printGetFolderJSON writes the get command's folder JSON output to w.
@@ -139,7 +143,11 @@ func printGetFolderJSON(w io.Writer, out getFolderJSONOutput) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 
-	return enc.Encode(out)
+	if err := enc.Encode(out); err != nil {
+		return fmt.Errorf("encode folder download output: %w", err)
+	}
+
+	return nil
 }
 
 // downloadState holds mutable state shared across the recursive download.

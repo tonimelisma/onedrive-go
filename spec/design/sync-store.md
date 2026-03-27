@@ -45,7 +45,7 @@ Controlled by `use_local_trash` config (default: true on macOS, false on Linux).
 
 `issues` lists unresolved conflicts and failures. Sub-commands: `issues resolve <path>` (keep-local/keep-remote/keep-both), `issues clear <path>` (dismiss), `issues retry <path>` (retry failed item).
 
-**Planned: Issues Display Enhancements** — Grouped display for >10 failures of same type (count + first 5 paths, `--verbose` for all). Per-scope sub-grouping for 507/403 (own drive vs each shortcut). Human-readable shortcut names, not opaque drive IDs. Implements: R-2.3.7 [planned], R-2.3.8 [planned], R-2.3.9 [planned]
+**Issues Display** — Grouped display for >10 failures of same type (count + first 5 paths, `--verbose` for all). Per-scope sub-grouping for 507/403 (own drive vs each shortcut). Human-readable shortcut names, not opaque drive IDs. Implements: R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified]
 
 ### Verify (`verify.go` in root)
 

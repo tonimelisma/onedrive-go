@@ -24,18 +24,18 @@ func isCaseSensitiveFS(t *testing.T, dir string) bool {
 	upper := filepath.Join(dir, "CasE_ChEcK")
 	lower := filepath.Join(dir, "case_check")
 
-	err := os.WriteFile(upper, []byte("x"), 0o644)
+	err := os.WriteFile(upper, []byte("x"), 0o600)
 	require.NoError(t, err, "isCaseSensitiveFS: create upper")
 	defer os.Remove(upper)
 
 	// If creating the lowercase variant fails, FS is case-insensitive.
-	if writeErr := os.WriteFile(lower, []byte("y"), 0o644); writeErr != nil {
+	if writeErr := os.WriteFile(lower, []byte("y"), 0o600); writeErr != nil {
 		return false
 	}
 	defer os.Remove(lower)
 
 	// Both files created — check they're distinct by reading the upper file.
-	data, err := os.ReadFile(upper)
+	data, err := os.ReadFile(upper) //nolint:gosec // Test collision path lives under t.TempDir and is controlled by the test.
 	if err != nil {
 		return false
 	}
@@ -61,7 +61,7 @@ func TestHasCaseCollisionCached_Detected(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "File.txt"), []byte("a"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "File.txt"), []byte("a"), 0o600))
 
 	obs := &LocalObserver{
 		Baseline: synctest.EmptyBaseline(),
@@ -83,7 +83,7 @@ func TestHasCaseCollisionCached_NoCollision(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "other.txt"), []byte("a"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "other.txt"), []byte("a"), 0o600))
 
 	obs := &LocalObserver{
 		Baseline: synctest.EmptyBaseline(),
@@ -98,7 +98,7 @@ func TestHasCaseCollisionCached_ExactMatch_NotCollision(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "same.txt"), []byte("a"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "same.txt"), []byte("a"), 0o600))
 
 	obs := &LocalObserver{
 		Baseline: synctest.EmptyBaseline(),
@@ -202,21 +202,7 @@ func TestWatch_CaseCollision_EventSuppressed(t *testing.T) {
 	writeTestFile(t, dir, "Existing.txt", "content")
 
 	mockWatcher := newMockFsWatcher()
-	obs := &LocalObserver{
-		Baseline: synctest.EmptyBaseline(),
-		Logger:   synctest.TestLogger(t),
-		SleepFunc: func(_ context.Context, _ time.Duration) error {
-			return nil
-		},
-		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
-			return make(chan time.Time), func() {}
-		},
-		WatcherFactory: func() (FsWatcher, error) {
-			return mockWatcher, nil
-		},
-		PendingTimers: make(map[string]*time.Timer),
-		HashRequests:  make(chan HashRequest, HashRequestBufSize),
-	}
+	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
 
 	events := make(chan synctypes.ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -254,7 +240,7 @@ func TestScanNewDirectory_CaseCollision_Skipped(t *testing.T) {
 	dir := t.TempDir()
 	// Create a subdirectory with two files that differ only in case.
 	subDir := filepath.Join(dir, "subdir")
-	require.NoError(t, os.MkdirAll(subDir, 0o755))
+	require.NoError(t, os.MkdirAll(subDir, 0o700))
 	writeTestFile(t, subDir, "Existing.txt", "content1")
 
 	// On case-insensitive FS, this overwrites Existing.txt (same file).
@@ -262,21 +248,7 @@ func TestScanNewDirectory_CaseCollision_Skipped(t *testing.T) {
 	writeTestFile(t, subDir, "existing.txt", "content2")
 
 	mockWatcher := newMockFsWatcher()
-	obs := &LocalObserver{
-		Baseline: synctest.EmptyBaseline(),
-		Logger:   synctest.TestLogger(t),
-		SleepFunc: func(_ context.Context, _ time.Duration) error {
-			return nil
-		},
-		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
-			return make(chan time.Time), func() {}
-		},
-		WatcherFactory: func() (FsWatcher, error) {
-			return mockWatcher, nil
-		},
-		PendingTimers: make(map[string]*time.Timer),
-		HashRequests:  make(chan HashRequest, HashRequestBufSize),
-	}
+	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
 
 	events := make(chan synctypes.ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -346,25 +318,12 @@ func TestWatch_DirectoryCollision_Suppressed(t *testing.T) {
 	writeTestFile(t, dir, "xyz", "content")
 
 	xyzDir := filepath.Join(dir, "Xyz")
-	require.NoError(t, os.Mkdir(xyzDir, 0o755))
+	require.NoError(t, os.Mkdir(xyzDir, 0o700))
 
 	mockWatcher := newMockFsWatcher()
-	obs := &LocalObserver{
-		Baseline:       synctest.EmptyBaseline(),
-		Logger:         synctest.TestLogger(t),
+	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 		CollisionPeers: make(map[string]map[string]struct{}),
-		SleepFunc: func(_ context.Context, _ time.Duration) error {
-			return nil
-		},
-		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
-			return make(chan time.Time), func() {}
-		},
-		WatcherFactory: func() (FsWatcher, error) {
-			return mockWatcher, nil
-		},
-		PendingTimers: make(map[string]*time.Timer),
-		HashRequests:  make(chan HashRequest, HashRequestBufSize),
-	}
+	})
 
 	events := make(chan synctypes.ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -406,28 +365,15 @@ func TestWatch_TwoDirectoryCollision_Suppressed(t *testing.T) {
 
 	// Create directory "Docs" on disk.
 	docsDir := filepath.Join(dir, "Docs")
-	require.NoError(t, os.Mkdir(docsDir, 0o755))
+	require.NoError(t, os.Mkdir(docsDir, 0o700))
 
 	docsLower := filepath.Join(dir, "docs")
-	require.NoError(t, os.Mkdir(docsLower, 0o755))
+	require.NoError(t, os.Mkdir(docsLower, 0o700))
 
 	mockWatcher := newMockFsWatcher()
-	obs := &LocalObserver{
-		Baseline:       synctest.EmptyBaseline(),
-		Logger:         synctest.TestLogger(t),
+	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 		CollisionPeers: make(map[string]map[string]struct{}),
-		SleepFunc: func(_ context.Context, _ time.Duration) error {
-			return nil
-		},
-		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
-			return make(chan time.Time), func() {}
-		},
-		WatcherFactory: func() (FsWatcher, error) {
-			return mockWatcher, nil
-		},
-		PendingTimers: make(map[string]*time.Timer),
-		HashRequests:  make(chan HashRequest, HashRequestBufSize),
-	}
+	})
 
 	events := make(chan synctypes.ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -469,31 +415,18 @@ func TestScanNewDirectory_SubdirCollision_Suppressed(t *testing.T) {
 
 	// Create a parent directory with two subdirectories differing only in case.
 	parentDir := filepath.Join(dir, "parent")
-	require.NoError(t, os.Mkdir(parentDir, 0o755))
+	require.NoError(t, os.Mkdir(parentDir, 0o700))
 
 	abcDir := filepath.Join(parentDir, "ABC")
-	require.NoError(t, os.Mkdir(abcDir, 0o755))
+	require.NoError(t, os.Mkdir(abcDir, 0o700))
 
 	abcLower := filepath.Join(parentDir, "abc")
-	require.NoError(t, os.Mkdir(abcLower, 0o755))
+	require.NoError(t, os.Mkdir(abcLower, 0o700))
 
 	mockWatcher := newMockFsWatcher()
-	obs := &LocalObserver{
-		Baseline:       synctest.EmptyBaseline(),
-		Logger:         synctest.TestLogger(t),
+	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 		CollisionPeers: make(map[string]map[string]struct{}),
-		SleepFunc: func(_ context.Context, _ time.Duration) error {
-			return nil
-		},
-		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
-			return make(chan time.Time), func() {}
-		},
-		WatcherFactory: func() (FsWatcher, error) {
-			return mockWatcher, nil
-		},
-		PendingTimers: make(map[string]*time.Timer),
-		HashRequests:  make(chan HashRequest, HashRequestBufSize),
-	}
+	})
 
 	events := make(chan synctypes.ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -558,25 +491,12 @@ func TestWatch_DeleteCollider_ReEmitsSurvivor(t *testing.T) {
 	writeTestFile(t, dir, "File.txt", "content1")
 
 	lowerPath := filepath.Join(dir, "file.txt")
-	require.NoError(t, os.WriteFile(lowerPath, []byte("content2"), 0o644))
+	require.NoError(t, os.WriteFile(lowerPath, []byte("content2"), 0o600))
 
 	mockWatcher := newMockFsWatcher()
-	obs := &LocalObserver{
-		Baseline:       synctest.EmptyBaseline(),
-		Logger:         synctest.TestLogger(t),
+	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 		CollisionPeers: make(map[string]map[string]struct{}),
-		SleepFunc: func(_ context.Context, _ time.Duration) error {
-			return nil
-		},
-		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
-			return make(chan time.Time), func() {}
-		},
-		WatcherFactory: func() (FsWatcher, error) {
-			return mockWatcher, nil
-		},
-		PendingTimers: make(map[string]*time.Timer),
-		HashRequests:  make(chan HashRequest, HashRequestBufSize),
-	}
+	})
 
 	events := make(chan synctypes.ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -655,28 +575,15 @@ func TestWatch_DeleteCollider_ThreeWay_StillBlocked(t *testing.T) {
 	writeTestFile(t, dir, "File.txt", "content1")
 
 	lowerPath := filepath.Join(dir, "file.txt")
-	require.NoError(t, os.WriteFile(lowerPath, []byte("content2"), 0o644))
+	require.NoError(t, os.WriteFile(lowerPath, []byte("content2"), 0o600))
 
 	upperPath := filepath.Join(dir, "FILE.txt")
-	require.NoError(t, os.WriteFile(upperPath, []byte("content3"), 0o644))
+	require.NoError(t, os.WriteFile(upperPath, []byte("content3"), 0o600))
 
 	mockWatcher := newMockFsWatcher()
-	obs := &LocalObserver{
-		Baseline:       synctest.EmptyBaseline(),
-		Logger:         synctest.TestLogger(t),
+	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 		CollisionPeers: make(map[string]map[string]struct{}),
-		SleepFunc: func(_ context.Context, _ time.Duration) error {
-			return nil
-		},
-		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
-			return make(chan time.Time), func() {}
-		},
-		WatcherFactory: func() (FsWatcher, error) {
-			return mockWatcher, nil
-		},
-		PendingTimers: make(map[string]*time.Timer),
-		HashRequests:  make(chan HashRequest, HashRequestBufSize),
-	}
+	})
 
 	events := make(chan synctypes.ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())

@@ -91,26 +91,30 @@ func TestNamedPolicies_MatchOriginal(t *testing.T) {
 	t.Parallel()
 
 	// Transport: graph/client.go — maxRetries=5, baseBackoff=1s, maxBackoff=60s, factor=2.0, jitter=0.25
-	assert.Equal(t, 5, Transport.MaxAttempts)
-	assert.Equal(t, 1*time.Second, Transport.Base)
-	assert.Equal(t, 60*time.Second, Transport.Max)
-	assert.Equal(t, 2.0, Transport.Multiplier)
-	assert.Equal(t, 0.25, Transport.Jitter)
+	transport := TransportPolicy()
+	assert.Equal(t, 5, transport.MaxAttempts)
+	assert.Equal(t, 1*time.Second, transport.Base)
+	assert.Equal(t, 60*time.Second, transport.Max)
+	assert.InDelta(t, 2.0, transport.Multiplier, 0.0)
+	assert.InDelta(t, 0.25, transport.Jitter, 0.0)
 
 	// DriveDiscovery: graph/drives.go — driveDiscoveryRetries=3
-	assert.Equal(t, 3, DriveDiscovery.MaxAttempts)
-	assert.Equal(t, 1*time.Second, DriveDiscovery.Base)
+	driveDiscovery := DriveDiscoveryPolicy()
+	assert.Equal(t, 3, driveDiscovery.MaxAttempts)
+	assert.Equal(t, 1*time.Second, driveDiscovery.Base)
 
 	// WatchLocal: observer_local.go — watchErrInitBackoff=1s, watchErrMaxBackoff=30s, watchErrBackoffMult=2
-	assert.Equal(t, 0, WatchLocal.MaxAttempts)
-	assert.Equal(t, 1*time.Second, WatchLocal.Base)
-	assert.Equal(t, 30*time.Second, WatchLocal.Max)
-	assert.Equal(t, 0.0, WatchLocal.Jitter)
+	watchLocal := WatchLocalPolicy()
+	assert.Equal(t, 0, watchLocal.MaxAttempts)
+	assert.Equal(t, 1*time.Second, watchLocal.Base)
+	assert.Equal(t, 30*time.Second, watchLocal.Max)
+	assert.InDelta(t, 0.0, watchLocal.Jitter, 0.0)
 
 	// WatchRemote: observer_remote.go — initialWatchBackoff=5s, backoffMultiplier=2
-	assert.Equal(t, 0, WatchRemote.MaxAttempts)
-	assert.Equal(t, 5*time.Second, WatchRemote.Base)
-	assert.Equal(t, 0.0, WatchRemote.Jitter)
+	watchRemote := WatchRemotePolicy()
+	assert.Equal(t, 0, watchRemote.MaxAttempts)
+	assert.Equal(t, 5*time.Second, watchRemote.Base)
+	assert.InDelta(t, 0.0, watchRemote.Jitter, 0.0)
 }
 
 // Validates: R-6.8.1, R-6.8.2
@@ -157,7 +161,7 @@ func TestWatchLocalDelay_MatchesOriginal(t *testing.T) {
 	}
 
 	for i, exp := range expected {
-		assert.Equal(t, exp, WatchLocal.Delay(i), "attempt %d", i)
+		assert.Equal(t, exp, WatchLocalPolicy().Delay(i), "attempt %d", i)
 	}
 }
 
@@ -175,6 +179,6 @@ func TestWatchRemoteDelay_MatchesOriginal(t *testing.T) {
 	}
 
 	for i, exp := range expected {
-		assert.Equal(t, exp, WatchRemote.Delay(i), "attempt %d", i)
+		assert.Equal(t, exp, WatchRemotePolicy().Delay(i), "attempt %d", i)
 	}
 }

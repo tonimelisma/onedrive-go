@@ -176,12 +176,12 @@ type Engine struct {
 // NewEngine creates an Engine, initializing the SyncStore (which opens
 // the SQLite database and runs migrations). Returns an error if DB init fails
 // or if DriveID is zero (indicates a config/login issue).
-func NewEngine(cfg *synctypes.EngineConfig) (*Engine, error) {
+func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error) {
 	if cfg.DriveID.IsZero() {
 		return nil, fmt.Errorf("sync: engine requires non-zero drive ID")
 	}
 
-	bm, err := syncstore.NewSyncStore(cfg.DBPath, cfg.Logger)
+	bm, err := syncstore.NewSyncStore(ctx, cfg.DBPath, cfg.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("sync: creating engine: %w", err)
 	}
@@ -246,7 +246,7 @@ func NewEngine(cfg *synctypes.EngineConfig) (*Engine, error) {
 // Close releases resources held by the engine. Nil-safe for observer
 // references set during RunWatch, cleans stale upload sessions, and
 // closes the database connection last. Safe to call more than once.
-func (e *Engine) Close() error {
+func (e *Engine) Close(ctx context.Context) error {
 	// Nil out observer references to prevent dangling reads after Close.
 	if e.watch != nil {
 		e.watch.remoteObs = nil
@@ -270,7 +270,11 @@ func (e *Engine) Close() error {
 		return nil
 	}
 
-	return e.baseline.Close()
+	if err := e.baseline.Close(ctx); err != nil {
+		return fmt.Errorf("sync: closing state store: %w", err)
+	}
+
+	return nil
 }
 
 // verifyDriveIdentity checks that the configured drive ID matches the remote
@@ -324,7 +328,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 	// Crash recovery: reset any in-progress states from a previous crash.
 	// Also creates sync_failures entries so the retrier can rediscover items
 	// that were mid-execution when the crash occurred.
-	if err := e.baseline.ResetInProgressStates(ctx, e.syncRoot, retry.Reconcile.Delay); err != nil {
+	if err := e.baseline.ResetInProgressStates(ctx, e.syncRoot, retry.ReconcilePolicy().Delay); err != nil {
 		e.logger.Warn("failed to reset in-progress states", slog.String("error", err.Error()))
 	}
 
@@ -387,7 +391,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 	if err != nil {
 		// Big-delete protection (or other planner errors) — the delta token
 		// is NOT committed, so the next sync replays the same events.
-		return nil, err
+		return nil, fmt.Errorf("sync: planning actions: %w", err)
 	}
 
 	// Planner approved — commit the deferred delta token now.
@@ -566,7 +570,7 @@ func (e *Engine) observeRemote(ctx context.Context, bl *synctypes.Baseline) ([]s
 	events, token, err := obs.FullDelta(ctx, savedToken)
 	if err != nil {
 		if !errors.Is(err, synctypes.ErrDeltaExpired) {
-			return nil, "", err
+			return nil, "", fmt.Errorf("sync: observing remote delta: %w", err)
 		}
 
 		// Delta token expired — retry with empty token for full resync.
@@ -850,13 +854,23 @@ func (e *Engine) resolveSafetyConfig(force bool) *synctypes.SafetyConfig {
 
 // ListConflicts returns all unresolved conflicts from the database.
 func (e *Engine) ListConflicts(ctx context.Context) ([]synctypes.ConflictRecord, error) {
-	return e.baseline.ListConflicts(ctx)
+	conflicts, err := e.baseline.ListConflicts(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing unresolved conflicts: %w", err)
+	}
+
+	return conflicts, nil
 }
 
 // ListAllConflicts returns all conflicts (resolved and unresolved) from the
 // database. Used by 'conflicts --history'.
 func (e *Engine) ListAllConflicts(ctx context.Context) ([]synctypes.ConflictRecord, error) {
-	return e.baseline.ListAllConflicts(ctx)
+	conflicts, err := e.baseline.ListAllConflicts(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing conflict history: %w", err)
+	}
+
+	return conflicts, nil
 }
 
 // ResolveConflict resolves a single conflict by ID. For keep_both, this is
@@ -866,7 +880,7 @@ func (e *Engine) ListAllConflicts(ctx context.Context) ([]synctypes.ConflictReco
 func (e *Engine) ResolveConflict(ctx context.Context, conflictID, resolution string) error {
 	c, err := e.baseline.GetConflict(ctx, conflictID)
 	if err != nil {
-		return err
+		return fmt.Errorf("sync: loading conflict %s: %w", conflictID, err)
 	}
 
 	switch resolution {
@@ -879,21 +893,33 @@ func (e *Engine) ResolveConflict(ctx context.Context, conflictID, resolution str
 			return fmt.Errorf("sync: resolving conflict %s (%s): %w", c.ID, synctypes.ResolutionKeepBoth, err)
 		}
 
-		return e.baseline.ResolveConflict(ctx, c.ID, resolution)
+		if err := e.baseline.ResolveConflict(ctx, c.ID, resolution); err != nil {
+			return fmt.Errorf("sync: marking conflict %s resolved as %s: %w", c.ID, resolution, err)
+		}
+
+		return nil
 
 	case synctypes.ResolutionKeepLocal:
 		if err := e.resolveKeepLocal(ctx, c); err != nil {
 			return fmt.Errorf("sync: resolving conflict %s (%s): %w", c.ID, synctypes.ResolutionKeepLocal, err)
 		}
 
-		return e.baseline.ResolveConflict(ctx, c.ID, resolution)
+		if err := e.baseline.ResolveConflict(ctx, c.ID, resolution); err != nil {
+			return fmt.Errorf("sync: marking conflict %s resolved as %s: %w", c.ID, resolution, err)
+		}
+
+		return nil
 
 	case synctypes.ResolutionKeepRemote:
 		if err := e.resolveKeepRemote(ctx, c); err != nil {
 			return fmt.Errorf("sync: resolving conflict %s (%s): %w", c.ID, synctypes.ResolutionKeepRemote, err)
 		}
 
-		return e.baseline.ResolveConflict(ctx, c.ID, resolution)
+		if err := e.baseline.ResolveConflict(ctx, c.ID, resolution); err != nil {
+			return fmt.Errorf("sync: marking conflict %s resolved as %s: %w", c.ID, resolution, err)
+		}
+
+		return nil
 
 	default:
 		return fmt.Errorf("sync: unknown resolution strategy %q", resolution)
@@ -971,7 +997,7 @@ func (e *Engine) resolveTransfer(ctx context.Context, c *synctypes.ConflictRecor
 	}
 
 	if err := e.baseline.CommitOutcome(ctx, &outcome); err != nil {
-		return err
+		return fmt.Errorf("committing transfer outcome: %w", err)
 	}
 
 	// Clean up conflict copies — the user has chosen one side, so the
@@ -1047,7 +1073,11 @@ func (e *Engine) upsertBaselineFromDisk(ctx context.Context, driveID driveid.ID,
 		Mtime:     info.ModTime().UnixNano(),
 	}
 
-	return e.baseline.CommitOutcome(ctx, outcome)
+	if err := e.baseline.CommitOutcome(ctx, outcome); err != nil {
+		return fmt.Errorf("committing baseline update for %s: %w", relPath, err)
+	}
+
+	return nil
 }
 
 // cleanupConflictCopies deletes all conflict copy files for the given
@@ -1346,7 +1376,7 @@ func (e *Engine) bootstrapSync(ctx context.Context, mode synctypes.SyncMode, pip
 	}
 
 	// Crash recovery: reset in-progress states from prior crash.
-	if err := e.baseline.ResetInProgressStates(ctx, e.syncRoot, retry.Reconcile.Delay); err != nil {
+	if err := e.baseline.ResetInProgressStates(ctx, e.syncRoot, retry.ReconcilePolicy().Delay); err != nil {
 		e.logger.Warn("failed to reset in-progress states", slog.String("error", err.Error()))
 	}
 
@@ -1435,7 +1465,7 @@ func classifyResult(r *synctypes.WorkerResult) (resultClass, synctypes.ScopeKey)
 		return resultSkip, synctypes.ScopeKey{}
 
 	case r.HTTPStatus == http.StatusTooManyRequests:
-		return resultScopeBlock, synctypes.SKThrottleAccount
+		return resultScopeBlock, synctypes.SKThrottleAccount()
 
 	case r.HTTPStatus == http.StatusInsufficientStorage:
 		return resultScopeBlock, synctypes.ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
@@ -1457,7 +1487,7 @@ func classifyResult(r *synctypes.WorkerResult) (resultClass, synctypes.ScopeKey)
 
 	case errors.Is(r.Err, driveops.ErrDiskFull):
 		// Deterministic signal — immediate scope block, no sliding window (R-2.10.43).
-		return resultScopeBlock, synctypes.SKDiskLocal
+		return resultScopeBlock, synctypes.SKDiskLocal()
 
 	case errors.Is(r.Err, driveops.ErrFileTooLargeForSpace):
 		// Per-file failure, no scope escalation — smaller files may fit (R-2.10.44).
@@ -1497,7 +1527,7 @@ func (e *Engine) loadActiveScopes(ctx context.Context) error {
 
 	blocks, err := e.baseline.ListScopeBlocks(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("sync: listing active scopes: %w", err)
 	}
 
 	e.watch.activeScopes = e.watch.activeScopes[:0]
@@ -1545,7 +1575,7 @@ func (e *Engine) repairOrphanedPermissionScopes(ctx context.Context) error {
 		}
 	}
 
-	e.mustAssertScopeInvariants("repair permission scopes")
+	e.mustAssertScopeInvariants(ctx, "repair permission scopes")
 
 	return nil
 }
@@ -1610,14 +1640,14 @@ func (e *Engine) scopeBlockKeys() []synctypes.ScopeKey {
 
 func (e *Engine) activateScope(ctx context.Context, block synctypes.ScopeBlock) error {
 	if err := e.baseline.UpsertScopeBlock(ctx, &block); err != nil {
-		return err
+		return fmt.Errorf("sync: activating scope %s: %w", block.Key.String(), err)
 	}
 
 	if e.watch != nil {
 		e.watch.activeScopes = syncdispatch.UpsertScope(e.watch.activeScopes, block)
 	}
 
-	e.mustAssertScopeInvariants("activate scope")
+	e.mustAssertScopeInvariants(ctx, "activate scope")
 
 	return nil
 }
@@ -1680,7 +1710,7 @@ func computeTrialInterval(retryAfter, currentInterval time.Duration) time.Durati
 // (throttle:account or service) is active, meaning shortcut observation
 // polling should be skipped to avoid wasting API calls (R-2.10.30).
 func (e *Engine) isObservationSuppressed() bool {
-	return e.isScopeBlocked(synctypes.SKThrottleAccount) || e.isScopeBlocked(synctypes.SKService)
+	return e.isScopeBlocked(synctypes.SKThrottleAccount()) || e.isScopeBlocked(synctypes.SKService())
 }
 
 // feedScopeDetection feeds a worker result into scope detection sliding
@@ -1746,7 +1776,7 @@ func (e *Engine) applyScopeBlock(ctx context.Context, sr synctypes.ScopeUpdateRe
 // boundary row for the scope, and makes held descendants retryable now.
 func (e *Engine) releaseScope(ctx context.Context, key synctypes.ScopeKey) error {
 	if err := e.baseline.ReleaseScope(ctx, key, e.nowFunc()); err != nil {
-		return err
+		return fmt.Errorf("sync: releasing scope %s: %w", key.String(), err)
 	}
 
 	if e.watch != nil {
@@ -1759,8 +1789,8 @@ func (e *Engine) releaseScope(ctx context.Context, key synctypes.ScopeKey) error
 		slog.String("scope_key", key.String()),
 	)
 
-	e.mustAssertReleasedScope(key, "release scope")
-	e.mustAssertScopeInvariants("release scope")
+	e.mustAssertReleasedScope(ctx, key, "release scope")
+	e.mustAssertScopeInvariants(ctx, "release scope")
 
 	return nil
 }
@@ -1769,7 +1799,7 @@ func (e *Engine) releaseScope(ctx context.Context, key synctypes.ScopeKey) error
 // tied to it. Used when the blocked subtree itself disappears.
 func (e *Engine) discardScope(ctx context.Context, key synctypes.ScopeKey) error {
 	if err := e.baseline.DiscardScope(ctx, key); err != nil {
-		return err
+		return fmt.Errorf("sync: discarding scope %s: %w", key.String(), err)
 	}
 
 	if e.watch != nil {
@@ -1777,8 +1807,8 @@ func (e *Engine) discardScope(ctx context.Context, key synctypes.ScopeKey) error
 		e.armTrialTimer()
 	}
 
-	e.mustAssertDiscardedScope(key, "discard scope")
-	e.mustAssertScopeInvariants("discard scope")
+	e.mustAssertDiscardedScope(ctx, key, "discard scope")
+	e.mustAssertScopeInvariants(ctx, "discard scope")
 
 	return nil
 }
@@ -1968,7 +1998,7 @@ func (e *Engine) recordCascadeFailure(ctx context.Context, action *synctypes.Act
 		Category:  synctypes.CategoryTransient,
 		IssueType: issueType,
 		ErrMsg:    "parent action failed: " + parentResult.ErrMsg,
-	}, retry.Reconcile.Delay); err != nil {
+	}, retry.ReconcilePolicy().Delay); err != nil {
 		e.logger.Warn("failed to record cascade failure",
 			slog.String("path", action.Path),
 			slog.String("error", err.Error()),
@@ -2033,17 +2063,17 @@ func (e *Engine) applyResultSideEffects(ctx context.Context, class resultClass, 
 		}
 
 	case resultRequeue:
-		e.recordFailure(ctx, r, retry.Reconcile.Delay)
+		e.recordFailure(ctx, r, retry.ReconcilePolicy().Delay)
 		e.recordError(r)
 		e.feedScopeDetection(ctx, r)
-		e.armRetryTimer()
+		e.armRetryTimer(ctx)
 
 	case resultScopeBlock:
-		e.recordFailure(ctx, r, retry.Reconcile.Delay)
+		e.recordFailure(ctx, r, retry.ReconcilePolicy().Delay)
 		e.recordError(r)
 		e.feedScopeDetection(ctx, r)
 		e.armTrialTimer()
-		e.armRetryTimer()
+		e.armRetryTimer(ctx)
 
 	case resultSkip:
 		// Local permission errors get special handling — walk up to find the
@@ -2110,7 +2140,7 @@ func (e *Engine) processTrialResult(ctx context.Context, r *synctypes.WorkerResu
 
 	var delayFn func(int) time.Duration
 	if class == resultRequeue || class == resultScopeBlock {
-		delayFn = retry.Reconcile.Delay
+		delayFn = retry.ReconcilePolicy().Delay
 	}
 
 	e.recordFailure(ctx, r, delayFn)
@@ -2120,7 +2150,7 @@ func (e *Engine) processTrialResult(ctx context.Context, r *synctypes.WorkerResu
 	// BFS via cascadeFailAndComplete prevents grandchild stranding.
 	e.cascadeFailAndComplete(ctx, ready, r)
 
-	e.armRetryTimer()
+	e.armRetryTimer(ctx)
 
 	return nil
 }
@@ -2129,12 +2159,12 @@ func (e *Engine) processTrialResult(ctx context.Context, r *synctypes.WorkerResu
 // the earliest next_retry_at from sync_failures and sets the timer. If the
 // retry timer channel is already signaled (non-blocking send to buffered(1)
 // channel), the next owning loop iteration processes it.
-func (e *Engine) armRetryTimer() {
+func (e *Engine) armRetryTimer(ctx context.Context) {
 	if e.watch == nil {
 		return
 	}
 
-	earliest, err := e.baseline.EarliestSyncFailureRetryAt(context.Background(), e.nowFunc())
+	earliest, err := e.baseline.EarliestSyncFailureRetryAt(ctx, e.nowFunc())
 	if err != nil || earliest.IsZero() {
 		return
 	}
@@ -2202,12 +2232,12 @@ func (e *Engine) runTrialDispatch(ctx context.Context) {
 	now := e.nowFunc()
 
 	// Clean stale trial entries before dispatching new ones.
-	e.cleanStaleTrialPending(now)
+	e.cleanStaleTrialPending(ctx, now)
 
 	// Snapshot all due scopes — each visited exactly once.
 	for _, key := range syncdispatch.DueTrials(e.watch.activeScopes, now) {
 		// Pick oldest scope-blocked failure for this scope.
-		row, err := e.baseline.PickTrialCandidate(ctx, key)
+		row, found, err := e.baseline.PickTrialCandidate(ctx, key)
 		if err != nil {
 			e.logger.Warn("runTrialDispatch: failed to pick trial candidate",
 				slog.String("scope_key", key.String()),
@@ -2217,7 +2247,7 @@ func (e *Engine) runTrialDispatch(ctx context.Context) {
 			break
 		}
 
-		if row == nil {
+		if !found {
 			// No candidates — scope condition resolved externally.
 			if err := e.releaseScope(ctx, key); err != nil {
 				e.logger.Warn("runTrialDispatch: failed to release empty scope",
@@ -2330,7 +2360,7 @@ func (e *Engine) runRetrierSweep(ctx context.Context) {
 	}
 
 	// Re-arm for the next due item.
-	e.armRetryTimer()
+	e.armRetryTimer(ctx)
 }
 
 // remoteStateToChangeEvent converts a synctypes.RemoteStateRow into a full-fidelity
@@ -2469,7 +2499,7 @@ func (e *Engine) createEventFromDB(ctx context.Context, row *synctypes.SyncFailu
 		)
 
 	default: // download or delete
-		rs, err := e.baseline.GetRemoteStateByPath(ctx, row.Path, row.DriveID)
+		rs, found, err := e.baseline.GetRemoteStateByPath(ctx, row.Path, row.DriveID)
 		if err != nil {
 			e.logger.Debug("createEventFromDB: remote state lookup failed",
 				slog.String("path", row.Path),
@@ -2479,7 +2509,7 @@ func (e *Engine) createEventFromDB(ctx context.Context, row *synctypes.SyncFailu
 			return nil
 		}
 
-		if rs == nil {
+		if !found {
 			// No active remote_state → item was resolved through the normal
 			// pipeline (delta poll downloaded it, or it was deleted remotely).
 			return nil
@@ -2503,14 +2533,14 @@ func (e *Engine) isFailureResolved(ctx context.Context, row *synctypes.SyncFailu
 
 	switch row.Direction {
 	case synctypes.DirectionDownload:
-		rs, err := e.baseline.GetRemoteStateByPath(ctx, row.Path, row.DriveID)
+		rs, found, err := e.baseline.GetRemoteStateByPath(ctx, row.Path, row.DriveID)
 		if err != nil {
 			// DB error — can't determine resolution, treat as unresolved.
 			return false
 		}
 
 		// No active row means the item was deleted or never existed.
-		if rs == nil {
+		if !found {
 			resolved = true
 		} else {
 			switch rs.SyncStatus { //nolint:exhaustive // only terminal statuses mean resolved
@@ -2659,13 +2689,13 @@ func (e *Engine) reobserve(ctx context.Context, row *synctypes.SyncFailureRow) (
 // cleanStaleTrialPending removes stale entries from trialPending. Entries
 // older than trialPendingTTL are cleared and the corresponding sync_failure
 // is deleted (item is stale).
-func (e *Engine) cleanStaleTrialPending(now time.Time) {
+func (e *Engine) cleanStaleTrialPending(ctx context.Context, now time.Time) {
 	for path, entry := range e.watch.trialPending {
 		if now.Sub(entry.created) > trialPendingTTL {
 			delete(e.watch.trialPending, path)
 			// Clear the stale sync_failure — this trial candidate was never
 			// intercepted by the planner (item may have been deleted). Best-effort.
-			if err := e.baseline.ClearSyncFailureByPath(context.Background(), path); err != nil {
+			if err := e.baseline.ClearSyncFailureByPath(ctx, path); err != nil {
 				e.logger.Debug("cleanStaleTrialPending: failed to clear stale failure",
 					slog.String("path", path),
 					slog.String("error", err.Error()),
@@ -3483,7 +3513,7 @@ func (e *Engine) handleExternalChanges(ctx context.Context) {
 	// Permission clearance: if user cleared permission boundary failures via CLI,
 	// release the corresponding in-memory scope blocks.
 	e.clearResolvedPermissionScopes(ctx)
-	e.mustAssertScopeInvariants("handle external changes")
+	e.mustAssertScopeInvariants(ctx, "handle external changes")
 }
 
 // clearResolvedPermissionScopes checks if any permission scope blocks have had

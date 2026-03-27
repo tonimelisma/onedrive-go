@@ -70,34 +70,41 @@ func accountCIDForDrive(cid driveid.CanonicalID) driveid.CanonicalID {
 	}
 }
 
-// LoadAccountProfile reads the profile from an account file. Returns
-// (nil, nil) if the file does not exist.
-func LoadAccountProfile(cid driveid.CanonicalID) (*AccountProfile, error) {
+// LookupAccountProfile reads the profile from an account file. The returned
+// found flag is false when the account file is not applicable, missing, or
+// lacks a profile block.
+func LookupAccountProfile(cid driveid.CanonicalID) (*AccountProfile, bool, error) {
 	path := AccountFilePath(cid)
 	if path == "" {
-		return nil, nil //nolint:nilnil // sentinel for "not applicable"
+		return nil, false, nil
 	}
 
-	data, err := os.ReadFile(path)
+	// Account profile path is derived from a canonical drive ID under the
+	// managed data directory.
+	data, err := os.ReadFile(path) //nolint:gosec // Managed data-dir path.
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil //nolint:nilnil // sentinel for "not found"
+		return nil, false, nil
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("reading account file: %w", err)
+		return nil, false, fmt.Errorf("reading account file: %w", err)
 	}
 
 	var af accountFile
 	if err := json.Unmarshal(data, &af); err != nil {
-		return nil, fmt.Errorf("decoding account file: %w", err)
+		return nil, false, fmt.Errorf("decoding account file: %w", err)
 	}
 
-	return af.Profile, nil
+	if af.Profile == nil {
+		return nil, false, nil
+	}
+
+	return af.Profile, true, nil
 }
 
 // SaveAccountProfile writes the profile to an account file. Creates
 // parent directories as needed. Atomic write (temp file + rename).
-func SaveAccountProfile(cid driveid.CanonicalID, profile *AccountProfile) error {
+func SaveAccountProfile(cid driveid.CanonicalID, profile *AccountProfile) (err error) {
 	path := AccountFilePath(cid)
 	if path == "" {
 		return fmt.Errorf("cannot determine account file path for %s", cid)
@@ -127,32 +134,28 @@ func SaveAccountProfile(cid driveid.CanonicalID, profile *AccountProfile) error 
 	succeeded := false
 	defer func() {
 		if !succeeded {
-			os.Remove(tmpPath)
+			err = removeTempPath(tmpPath, "account temp file", err)
 		}
 	}()
 
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-
-		return fmt.Errorf("writing account file: %w", err)
+	if _, writeErr := tmp.Write(data); writeErr != nil {
+		return closeTempFile(tmp, "account temp file", fmt.Errorf("writing account file: %w", writeErr))
 	}
 
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-
-		return fmt.Errorf("syncing account file: %w", err)
+	if syncErr := tmp.Sync(); syncErr != nil {
+		return closeTempFile(tmp, "account temp file", fmt.Errorf("syncing account file: %w", syncErr))
 	}
 
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("closing account file: %w", err)
 	}
 
-	if err := os.Chmod(tmpPath, configFilePermissions); err != nil {
-		return fmt.Errorf("setting account file permissions: %w", err)
+	if err := chmodTrustedTempPath(tmpPath, configFilePermissions, "account file"); err != nil {
+		return err
 	}
 
-	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("renaming account file: %w", err)
+	if err := renameTrustedTempPath(tmpPath, path, "account file"); err != nil {
+		return err
 	}
 
 	succeeded = true

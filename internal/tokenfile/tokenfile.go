@@ -36,7 +36,7 @@ type File struct {
 // Old bare oauth2.Token files (without the "token" wrapper) will fail with
 // "missing token field" — re-login is required.
 func Load(path string) (*oauth2.Token, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // Token path comes from config-managed drive identity resolution.
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, ErrNotFound
 	}
@@ -68,16 +68,10 @@ func Load(path string) (*oauth2.Token, error) {
 // Save writes a token file to disk atomically (write-to-temp + rename)
 // with 0600 permissions. Never logs token values. Writes only the OAuth
 // token — no metadata.
-func Save(path string, tok *oauth2.Token) error {
-	if tok == nil {
-		return fmt.Errorf("tokenfile: refusing to save nil token to %s", path)
-	}
-
-	tf := File{Token: tok}
-
-	data, err := json.MarshalIndent(tf, "", "  ")
+func Save(path string, tok *oauth2.Token) (err error) {
+	data, err := marshalTokenFile(tok)
 	if err != nil {
-		return fmt.Errorf("tokenfile: encoding: %w", err)
+		return err
 	}
 
 	dir := filepath.Dir(path)
@@ -98,33 +92,30 @@ func Save(path string, tok *oauth2.Token) error {
 	success := false
 	defer func() {
 		if !success {
-			_ = os.Remove(tmpPath)
+			err = removeTempPath(tmpPath, err)
 		}
 	}()
 
-	if err := os.Chmod(tmpPath, FilePerms); err != nil {
-		tmp.Close()
-		return fmt.Errorf("tokenfile: setting permissions: %w", err)
+	if err := setTempFilePermissions(tmp); err != nil {
+		return closeTempFile(tmp, err)
 	}
 
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return fmt.Errorf("tokenfile: writing: %w", err)
+	if err := writeTempFileData(tmp, data); err != nil {
+		return closeTempFile(tmp, err)
 	}
 
 	// Flush to stable storage before rename so a power loss between close and
 	// rename cannot leave an empty or partial token file at the final path.
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return fmt.Errorf("tokenfile: syncing: %w", err)
+	if err := syncTempFile(tmp); err != nil {
+		return closeTempFile(tmp, err)
 	}
 
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("tokenfile: closing: %w", err)
+	if err := closeTempFile(tmp, nil); err != nil {
+		return err
 	}
 
-	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("tokenfile: renaming: %w", err)
+	if err := renameTempFile(tmpPath, path); err != nil {
+		return err
 	}
 
 	success = true

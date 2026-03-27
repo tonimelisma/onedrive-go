@@ -28,14 +28,12 @@ type ScopeKey struct {
 	Param string
 }
 
-// Pre-built scope keys for non-parameterized scopes. Use these instead of
-// constructing ScopeKey{Kind: ...} literals for readability.
-var (
-	SKThrottleAccount = ScopeKey{Kind: ScopeThrottleAccount}
-	SKService         = ScopeKey{Kind: ScopeService}
-	SKQuotaOwn        = ScopeKey{Kind: ScopeQuotaOwn}
-	SKDiskLocal       = ScopeKey{Kind: ScopeDiskLocal}
-)
+// Fixed scope-key constructors for non-parameterized scopes. Use these
+// instead of constructing ScopeKey{Kind: ...} literals for readability.
+func SKThrottleAccount() ScopeKey { return ScopeKey{Kind: ScopeThrottleAccount} }
+func SKService() ScopeKey         { return ScopeKey{Kind: ScopeService} }
+func SKQuotaOwn() ScopeKey        { return ScopeKey{Kind: ScopeQuotaOwn} }
+func SKDiskLocal() ScopeKey       { return ScopeKey{Kind: ScopeDiskLocal} }
 
 // SKQuotaShortcut returns the scope key for a shortcut quota block.
 func SKQuotaShortcut(compositeKey string) ScopeKey {
@@ -97,13 +95,13 @@ func (sk ScopeKey) String() string {
 func ParseScopeKey(s string) ScopeKey {
 	switch {
 	case s == WireThrottleAccount:
-		return SKThrottleAccount
+		return SKThrottleAccount()
 	case s == WireService:
-		return SKService
+		return SKService()
 	case s == WireQuotaOwn:
-		return SKQuotaOwn
+		return SKQuotaOwn()
 	case s == WireDiskLocal:
-		return SKDiskLocal
+		return SKDiskLocal()
 	case len(s) > len(WireQuotaShortcut) && s[:len(WireQuotaShortcut)] == WireQuotaShortcut:
 		return SKQuotaShortcut(s[len(WireQuotaShortcut):])
 	case len(s) > len(WirePermDir) && s[:len(WirePermDir)] == WirePermDir:
@@ -235,16 +233,16 @@ func (sk ScopeKey) BlocksAction(path, shortcutKey string, actionType ActionType,
 func ScopeKeyForStatus(httpStatus int, shortcutKey string) ScopeKey {
 	switch {
 	case httpStatus == http.StatusTooManyRequests:
-		return SKThrottleAccount
+		return SKThrottleAccount()
 	case httpStatus == http.StatusServiceUnavailable:
-		return SKService
+		return SKService()
 	case httpStatus == http.StatusInsufficientStorage:
 		if shortcutKey != "" {
 			return SKQuotaShortcut(shortcutKey)
 		}
-		return SKQuotaOwn
+		return SKQuotaOwn()
 	case httpStatus >= http.StatusInternalServerError:
-		return SKService
+		return SKService()
 	default:
 		return ScopeKey{}
 	}

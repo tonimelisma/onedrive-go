@@ -36,7 +36,7 @@ type createUploadSessionRequest struct {
 }
 
 type uploadSessionItem struct {
-	ConflictBehavior string          `json:"@microsoft.graph.conflictBehavior"` //nolint:tagliatelle // Graph API annotation key
+	ConflictBehavior string          `json:"@microsoft.graph.conflictBehavior"`
 	FileSystemInfo   *fileSystemInfo `json:"fileSystemInfo,omitempty"`
 }
 
@@ -132,7 +132,8 @@ func (c *Client) CreateUploadSession(
 }
 
 // UploadChunk uploads a chunk of data to an upload session.
-// Returns the completed Item on the final chunk (201/200), nil for intermediate chunks (202).
+// Returns the completed Item plus complete=true on the final chunk (201/200).
+// For intermediate chunks (202), it returns complete=false with a nil item.
 // offset is the byte offset, length is the chunk size, total is the full file size.
 // The session URL is pre-authenticated, so no Authorization header is sent.
 // chunk must be an io.ReaderAt — each retry creates a fresh SectionReader to avoid
@@ -140,7 +141,7 @@ func (c *Client) CreateUploadSession(
 func (c *Client) UploadChunk(
 	ctx context.Context, session *UploadSession, chunk io.ReaderAt,
 	offset, length, total int64,
-) (*Item, error) {
+) (*Item, bool, error) {
 	c.logger.Debug("uploading chunk",
 		slog.Int64("offset", offset),
 		slog.Int64("length", length),
@@ -153,8 +154,12 @@ func (c *Client) UploadChunk(
 		// Fresh SectionReader per attempt — io.ReaderAt.ReadAt is goroutine-safe,
 		// so no race with a previous attempt's transport writeLoop goroutine.
 		reader := io.NewSectionReader(chunk, 0, length)
+		uploadURL, urlErr := c.validatedUploadURL(session.UploadURL)
+		if urlErr != nil {
+			return nil, urlErr
+		}
 
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPut, string(session.UploadURL), reader)
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPut, uploadURL, reader)
 		if reqErr != nil {
 			return nil, fmt.Errorf("graph: creating chunk upload request: %w", reqErr)
 		}
@@ -167,7 +172,7 @@ func (c *Client) UploadChunk(
 		return req, nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer resp.Body.Close()
 
@@ -179,23 +184,23 @@ func (c *Client) UploadChunk(
 // (including 416 Range Not Satisfiable) are handled by doPreAuth and
 // returned as *GraphError with appropriate sentinels (e.g., ErrRangeNotSatisfiable).
 // 202 Accepted means intermediate chunk; 200/201 means upload complete with item data.
-func (c *Client) handleChunkResponse(resp *http.Response) (*Item, error) {
+func (c *Client) handleChunkResponse(resp *http.Response) (*Item, bool, error) {
 	switch resp.StatusCode {
 	case http.StatusAccepted:
 		// Intermediate chunk accepted. Drain body to reuse connection.
 		if _, drainErr := io.Copy(io.Discard, resp.Body); drainErr != nil {
-			return nil, fmt.Errorf("graph: draining chunk response body: %w", drainErr)
+			return nil, false, fmt.Errorf("graph: draining chunk response body: %w", drainErr)
 		}
 
 		c.logger.Debug("intermediate chunk accepted")
 
-		return nil, nil
+		return nil, false, nil
 
 	case http.StatusOK, http.StatusCreated:
 		// Upload complete — response contains the created/updated item.
 		var dir driveItemResponse
 		if decErr := json.NewDecoder(resp.Body).Decode(&dir); decErr != nil {
-			return nil, fmt.Errorf("graph: decoding final chunk response: %w", decErr)
+			return nil, false, fmt.Errorf("graph: decoding final chunk response: %w", decErr)
 		}
 
 		item := dir.toItem(c.logger)
@@ -205,16 +210,20 @@ func (c *Client) handleChunkResponse(resp *http.Response) (*Item, error) {
 			slog.String("item_name", item.Name),
 		)
 
-		return &item, nil
+		return &item, true, nil
 
 	default:
 		// Unexpected 2xx status (e.g., 204, 206). doPreAuth filters non-2xx.
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBodySize)) //nolint:errcheck // best-effort read for error message
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrBodySize))
+		if readErr != nil {
+			return nil, false, fmt.Errorf("graph: reading unexpected chunk response body: %w", readErr)
+		}
+
 		c.logger.Error("chunk upload returned unexpected 2xx status",
 			slog.Int("status", resp.StatusCode),
 		)
 
-		return nil, fmt.Errorf("graph: chunk upload unexpected status %d: %s", resp.StatusCode, string(body))
+		return nil, false, fmt.Errorf("graph: chunk upload unexpected status %d: %s", resp.StatusCode, string(body))
 	}
 }
 
@@ -224,7 +233,12 @@ func (c *Client) CancelUploadSession(ctx context.Context, session *UploadSession
 	c.logger.Info("canceling upload session")
 
 	resp, err := c.doPreAuth(ctx, "cancel upload session", func() (*http.Request, error) {
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodDelete, string(session.UploadURL), http.NoBody)
+		uploadURL, urlErr := c.validatedUploadURL(session.UploadURL)
+		if urlErr != nil {
+			return nil, urlErr
+		}
+
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodDelete, uploadURL, http.NoBody)
 		if reqErr != nil {
 			return nil, fmt.Errorf("graph: creating cancel session request: %w", reqErr)
 		}
@@ -284,7 +298,7 @@ func (c *Client) doRawUpload(
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("User-Agent", c.userAgent)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.dispatchRequest(req)
 	if err != nil {
 		c.logger.Error("raw upload request failed",
 			slog.String("method", method),
@@ -296,8 +310,23 @@ func (c *Client) doRawUpload(
 	}
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBodySize)) //nolint:errcheck // best-effort read for error message
-		resp.Body.Close()
+		errBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrBodySize))
+		if readErr != nil {
+			if closeErr := resp.Body.Close(); closeErr != nil {
+				c.logger.Warn("failed to close upload error response body after read failure",
+					slog.String("path", path),
+					slog.String("error", closeErr.Error()),
+				)
+			}
+			return nil, fmt.Errorf("graph: reading upload error body: %w", readErr)
+		}
+
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			c.logger.Warn("failed to close upload error response body",
+				slog.String("path", path),
+				slog.String("error", closeErr.Error()),
+			)
+		}
 
 		sentinel := classifyStatus(resp.StatusCode)
 
@@ -321,7 +350,12 @@ func (c *Client) QueryUploadSession(
 	c.logger.Info("querying upload session status")
 
 	resp, err := c.doPreAuth(ctx, "query upload session", func() (*http.Request, error) {
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, string(session.UploadURL), http.NoBody)
+		uploadURL, urlErr := c.validatedUploadURL(session.UploadURL)
+		if urlErr != nil {
+			return nil, urlErr
+		}
+
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, uploadURL, http.NoBody)
 		if reqErr != nil {
 			return nil, fmt.Errorf("graph: creating query session request: %w", reqErr)
 		}
@@ -343,6 +377,11 @@ func (c *Client) QueryUploadSession(
 		return nil, fmt.Errorf("graph: decoding session status response: %w", decErr)
 	}
 
+	uploadURL, err := c.validatedUploadURL(UploadURL(ssr.UploadURL))
+	if err != nil {
+		return nil, err
+	}
+
 	expTime, parseErr := time.Parse(time.RFC3339, ssr.ExpirationDateTime)
 	if parseErr != nil {
 		c.logger.Warn("invalid session status expiration, using zero time",
@@ -352,7 +391,7 @@ func (c *Client) QueryUploadSession(
 	}
 
 	status := &UploadSessionStatus{
-		UploadURL:          UploadURL(ssr.UploadURL),
+		UploadURL:          UploadURL(uploadURL),
 		ExpirationTime:     expTime,
 		NextExpectedRanges: ssr.NextExpectedRanges,
 	}
@@ -412,8 +451,12 @@ func (c *Client) chunkedUploadEncapsulated(
 
 	item, err := c.uploadAllChunks(ctx, session, content, size, progress)
 	if err != nil {
-		// Best-effort cancel — use background context since ctx may be canceled.
-		cancelErr := c.CancelUploadSession(context.Background(), session)
+		// Best-effort cancel — detach from cancellation so the upload session is
+		// cleaned up even when the request context has already been canceled.
+		cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+		defer cancel()
+
+		cancelErr := c.CancelUploadSession(cancelCtx, session)
 		if cancelErr != nil {
 			c.logger.Warn("failed to cancel upload session after error",
 				slog.String("error", cancelErr.Error()),
@@ -455,7 +498,7 @@ func (c *Client) uploadChunksFrom(
 
 		chunk := io.NewSectionReader(content, offset, chunkSize)
 
-		item, err := c.UploadChunk(ctx, session, chunk, offset, chunkSize, totalSize)
+		item, complete, err := c.UploadChunk(ctx, session, chunk, offset, chunkSize, totalSize)
 		if err != nil {
 			return nil, fmt.Errorf("graph: uploading chunk at offset %d: %w", offset, err)
 		}
@@ -466,7 +509,7 @@ func (c *Client) uploadChunksFrom(
 			progress(offset, totalSize)
 		}
 
-		if item != nil {
+		if complete {
 			lastItem = item
 		}
 	}
@@ -562,6 +605,11 @@ func (c *Client) parseUploadSessionResponse(resp *http.Response) (*UploadSession
 		return nil, fmt.Errorf("graph: decoding upload session response: %w", decErr)
 	}
 
+	uploadURL, err := c.validatedUploadURL(UploadURL(usr.UploadURL))
+	if err != nil {
+		return nil, err
+	}
+
 	expTime, parseErr := time.Parse(time.RFC3339, usr.ExpirationDateTime)
 	if parseErr != nil {
 		c.logger.Warn("invalid upload session expiration, using zero time",
@@ -571,7 +619,7 @@ func (c *Client) parseUploadSessionResponse(resp *http.Response) (*UploadSession
 	}
 
 	session := &UploadSession{
-		UploadURL:      UploadURL(usr.UploadURL),
+		UploadURL:      UploadURL(uploadURL),
 		ExpirationTime: expTime,
 	}
 

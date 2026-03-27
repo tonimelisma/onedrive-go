@@ -1,10 +1,12 @@
 package config
 
 import (
-	"context"
+	"bytes"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -47,7 +49,7 @@ func TestValidate_TransferWorkers_Boundaries(t *testing.T) {
 	// Min boundary (4) passes.
 	cfg := validConfig()
 	cfg.TransferWorkers = 4
-	assert.NoError(t, Validate(cfg))
+	require.NoError(t, Validate(cfg))
 
 	// Max boundary (64) passes.
 	cfg = validConfig()
@@ -75,7 +77,7 @@ func TestValidate_CheckWorkers_Boundaries(t *testing.T) {
 	// Min boundary (1) passes.
 	cfg := validConfig()
 	cfg.CheckWorkers = 1
-	assert.NoError(t, Validate(cfg))
+	require.NoError(t, Validate(cfg))
 
 	// Max boundary (16) passes.
 	cfg = validConfig()
@@ -409,8 +411,8 @@ func TestValidate_BandwidthSchedule_BadTimeFormat(t *testing.T) {
 func TestWarnDeprecatedKeys_OldKeysPresent(t *testing.T) {
 	t.Parallel()
 
-	h := &testLogHandler{}
-	logger := slog.New(h)
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
 
 	rawMap := map[string]any{
 		"parallel_downloads": 4,
@@ -420,18 +422,7 @@ func TestWarnDeprecatedKeys_OldKeysPresent(t *testing.T) {
 
 	WarnDeprecatedKeys(rawMap, logger)
 
-	// Each deprecated key should produce a warning with "key" attr.
-	var warnedKeys []string
-	for _, r := range h.records {
-		if r.Level == slog.LevelWarn {
-			r.Attrs(func(a slog.Attr) bool {
-				if a.Key == "key" {
-					warnedKeys = append(warnedKeys, a.Value.String())
-				}
-				return true
-			})
-		}
-	}
+	warnedKeys := loggedAttrValues(t, &logBuf, "key")
 
 	assert.Contains(t, warnedKeys, "parallel_downloads")
 	assert.Contains(t, warnedKeys, "parallel_uploads")
@@ -442,8 +433,8 @@ func TestWarnDeprecatedKeys_OldKeysPresent(t *testing.T) {
 func TestWarnDeprecatedKeys_NoOldKeys(t *testing.T) {
 	t.Parallel()
 
-	h := &testLogHandler{}
-	logger := slog.New(h)
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
 
 	rawMap := map[string]any{
 		"transfer_workers": 8,
@@ -452,7 +443,7 @@ func TestWarnDeprecatedKeys_NoOldKeys(t *testing.T) {
 
 	WarnDeprecatedKeys(rawMap, logger)
 
-	assert.Empty(t, h.records, "no warnings should be logged for new keys")
+	assert.Empty(t, strings.TrimSpace(logBuf.String()), "no warnings should be logged for new keys")
 }
 
 // --- ValidateResolved tests ---
@@ -500,43 +491,34 @@ func TestValidateResolved_EmptySyncDir(t *testing.T) {
 // WarnUnimplemented tests (B-141)
 // ---------------------------------------------------------------------------
 
-// testLogHandler captures slog records for assertion.
-type testLogHandler struct {
-	records []slog.Record
-}
+func loggedAttrValues(t *testing.T, logBuf *bytes.Buffer, key string) []string {
+	t.Helper()
 
-func (h *testLogHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+	text := strings.TrimSpace(logBuf.String())
+	if text == "" {
+		return nil
+	}
 
-func (h *testLogHandler) Handle(_ context.Context, r slog.Record) error {
-	h.records = append(h.records, r)
-	return nil
-}
+	lines := strings.Split(text, "\n")
+	values := make([]string, 0, len(lines))
+	for _, line := range lines {
+		var record map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &record))
 
-func (h *testLogHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
-func (h *testLogHandler) WithGroup(_ string) slog.Handler      { return h }
-
-func (h *testLogHandler) warnedFields() []string {
-	var fields []string
-
-	for _, r := range h.records {
-		if r.Level == slog.LevelWarn {
-			r.Attrs(func(a slog.Attr) bool {
-				if a.Key == "field" {
-					fields = append(fields, a.Value.String())
-				}
-				return true
-			})
+		value, ok := record[key].(string)
+		if ok {
+			values = append(values, value)
 		}
 	}
 
-	return fields
+	return values
 }
 
 func TestWarnUnimplemented_Defaults_NoWarnings(t *testing.T) {
 	t.Parallel()
 
-	h := &testLogHandler{}
-	logger := slog.New(h)
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
 
 	cfg := DefaultConfig()
 	rd := &ResolvedDrive{
@@ -548,14 +530,14 @@ func TestWarnUnimplemented_Defaults_NoWarnings(t *testing.T) {
 
 	WarnUnimplemented(rd, logger)
 
-	assert.Empty(t, h.warnedFields(), "default config should not produce warnings")
+	assert.Empty(t, loggedAttrValues(t, &logBuf, "field"), "default config should not produce warnings")
 }
 
 func TestWarnUnimplemented_NonDefaults_WarnsAll(t *testing.T) {
 	t.Parallel()
 
-	h := &testLogHandler{}
-	logger := slog.New(h)
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
 
 	cfg := DefaultConfig()
 	rd := &ResolvedDrive{
@@ -576,7 +558,7 @@ func TestWarnUnimplemented_NonDefaults_WarnsAll(t *testing.T) {
 
 	WarnUnimplemented(rd, logger)
 
-	warned := h.warnedFields()
+	warned := loggedAttrValues(t, &logBuf, "field")
 
 	expected := []string{
 		"sync_paths", "skip_files", "skip_dirs",

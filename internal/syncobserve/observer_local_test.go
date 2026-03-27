@@ -39,8 +39,8 @@ func writeTestFile(t *testing.T, dir, relPath, content string) string {
 	t.Helper()
 
 	fullPath := filepath.Join(dir, relPath)
-	require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0o755), "MkdirAll(%s)", filepath.Dir(fullPath))
-	require.NoError(t, os.WriteFile(fullPath, []byte(content), 0o644), "WriteFile(%s)", fullPath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0o700), "MkdirAll(%s)", filepath.Dir(fullPath))
+	require.NoError(t, os.WriteFile(fullPath, []byte(content), 0o600), "WriteFile(%s)", fullPath)
 
 	return fullPath
 }
@@ -102,7 +102,7 @@ func TestFullScan_NewFolder(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(dir, "photos"), 0o755), "Mkdir")
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "photos"), 0o700), "Mkdir")
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
 	result, err := obs.FullScan(t.Context(), dir)
@@ -428,9 +428,9 @@ func TestFullScan_NFCNormalization(t *testing.T) {
 
 	dir := t.TempDir()
 	// NFD decomposed: e + combining acute accent (U+0301).
-	nfdName := "re\u0301sume\u0301.txt"
+	nfdName := shortcutTestNFDResume
 	// NFC composed: precomposed characters.
-	nfcName := "r\u00e9sum\u00e9.txt"
+	nfcName := shortcutTestNFCResume
 
 	writeTestFile(t, dir, nfdName, "resume content")
 
@@ -703,7 +703,7 @@ func TestItemTypeFromDirEntry(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, dir, "file.txt", "x")
 
-	require.NoError(t, os.Mkdir(filepath.Join(dir, "subdir"), 0o755), "Mkdir")
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "subdir"), 0o700), "Mkdir")
 
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err, "ReadDir")
@@ -724,7 +724,7 @@ func TestSkipEntry_Dir(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(dir, "subdir"), 0o755), "Mkdir")
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "subdir"), 0o700), "Mkdir")
 
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err, "ReadDir")
@@ -766,7 +766,7 @@ func TestFullScan_NosyncGuardDir(t *testing.T) {
 
 	dir := t.TempDir()
 	// .nosync as a directory should also trigger the guard.
-	require.NoError(t, os.Mkdir(filepath.Join(dir, ".nosync"), 0o755), "Mkdir")
+	require.NoError(t, os.Mkdir(filepath.Join(dir, ".nosync"), 0o700), "Mkdir")
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
 	_, err := obs.FullScan(t.Context(), dir)
@@ -800,7 +800,7 @@ func TestFullScan_InvalidNameDirSkipsSubtree(t *testing.T) {
 	invalidDir := filepath.Join(dir, "bad.")
 
 	// On some filesystems, trailing dots are stripped. Create and verify.
-	if err := os.Mkdir(invalidDir, 0o755); err != nil {
+	if err := os.Mkdir(invalidDir, 0o700); err != nil {
 		t.Skipf("filesystem does not support trailing dot in directory name: %v", err)
 	}
 
@@ -843,15 +843,15 @@ func TestFullScan_PermissionDenied(t *testing.T) {
 
 	// Create readable dir with a file.
 	readableDir := filepath.Join(syncRoot, "readable")
-	require.NoError(t, os.MkdirAll(readableDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(readableDir, "file.txt"), []byte("ok"), 0o644))
+	require.NoError(t, os.MkdirAll(readableDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(readableDir, "file.txt"), []byte("ok"), 0o600))
 
 	// Create unreadable dir.
 	unreadableDir := filepath.Join(syncRoot, "unreadable")
-	require.NoError(t, os.MkdirAll(unreadableDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(unreadableDir, "hidden.txt"), []byte("secret"), 0o644))
-	require.NoError(t, os.Chmod(unreadableDir, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(unreadableDir, 0o755) })
+	require.NoError(t, os.MkdirAll(unreadableDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(unreadableDir, "hidden.txt"), []byte("secret"), 0o600))
+	setTestDirPermissions(t, unreadableDir, 0o000)
+	t.Cleanup(func() { setTestDirPermissions(t, unreadableDir, 0o700) })
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
 	result, err := obs.FullScan(t.Context(), syncRoot)
@@ -890,11 +890,34 @@ type mockDirEntry struct {
 	isDir bool
 }
 
-func (m mockDirEntry) Name() string               { return m.name }
-func (m mockDirEntry) IsDir() bool                { return m.isDir }
-func (m mockDirEntry) Info() (fs.FileInfo, error) { return nil, nil }
+func (m mockDirEntry) Name() string { return m.name }
+func (m mockDirEntry) IsDir() bool  { return m.isDir }
+func (m mockDirEntry) Info() (fs.FileInfo, error) {
+	return mockFileInfo{name: m.name, dir: m.isDir}, nil
+}
+
 func (m mockDirEntry) Type() fs.FileMode {
 	if m.isDir {
+		return fs.ModeDir
+	}
+
+	return 0
+}
+
+type mockFileInfo struct {
+	name string
+	dir  bool
+}
+
+func (m mockFileInfo) Name() string       { return m.name }
+func (m mockFileInfo) Size() int64        { return 0 }
+func (m mockFileInfo) Mode() fs.FileMode  { return m.mode() }
+func (m mockFileInfo) ModTime() time.Time { return time.Time{} }
+func (m mockFileInfo) IsDir() bool        { return m.dir }
+func (m mockFileInfo) Sys() any           { return nil }
+
+func (m mockFileInfo) mode() fs.FileMode {
+	if m.dir {
 		return fs.ModeDir
 	}
 
@@ -943,7 +966,7 @@ func TestFullScan_HashFailureStillEmitsCreate(t *testing.T) {
 	require.NoError(t, os.Chmod(path, 0o000))
 
 	t.Cleanup(func() {
-		_ = os.Chmod(path, 0o644)
+		assert.NoError(t, os.Chmod(path, 0o600))
 	})
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
@@ -982,7 +1005,7 @@ func TestFullScan_HashFailureModifyStillEmitsEvent(t *testing.T) {
 
 	// Make file unreadable -- stat still succeeds but hash computation fails.
 	require.NoError(t, os.Chmod(path, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+	t.Cleanup(func() { assert.NoError(t, os.Chmod(path, 0o600)) })
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
 	result, err := obs.FullScan(t.Context(), dir)
@@ -1029,7 +1052,7 @@ func TestSyncRootExists(t *testing.T) {
 				t.Helper()
 				dir := t.TempDir()
 				p := filepath.Join(dir, "afile")
-				require.NoError(t, os.WriteFile(p, []byte("x"), 0o644))
+				require.NoError(t, os.WriteFile(p, []byte("x"), 0o600))
 				return p
 			},
 			want: false,
@@ -1314,13 +1337,15 @@ func TestFullScan_HashPanicDoesNotAbort(t *testing.T) {
 	// The scan completes with events for successful files and SkippedItems
 	// for panicking files.
 
+	const badFileName = "bad.txt"
+
 	dir := t.TempDir()
 	writeTestFile(t, dir, "good.txt", "good content")
-	writeTestFile(t, dir, "bad.txt", "bad content")
+	writeTestFile(t, dir, badFileName, "bad content")
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
 	obs.HashFunc = func(path string) (string, error) {
-		if filepath.Base(path) == "bad.txt" {
+		if filepath.Base(path) == badFileName {
 			panic("corrupted file")
 		}
 		return hashContent(t, "good content"), nil
@@ -1335,13 +1360,13 @@ func TestFullScan_HashPanicDoesNotAbort(t *testing.T) {
 	assert.Equal(t, synctypes.ChangeCreate, goodEv.Type)
 
 	// bad.txt should NOT produce an event.
-	badEv := findEvent(result.Events, "bad.txt")
+	badEv := findEvent(result.Events, badFileName)
 	assert.Nil(t, badEv, "panicking file should not produce an event")
 
 	// bad.txt should be in Skipped.
 	var badSkip *synctypes.SkippedItem
 	for i := range result.Skipped {
-		if result.Skipped[i].Path == "bad.txt" {
+		if result.Skipped[i].Path == badFileName {
 			badSkip = &result.Skipped[i]
 			break
 		}

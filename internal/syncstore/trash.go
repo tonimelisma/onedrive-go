@@ -57,5 +57,9 @@ func moveToMacOSTrash(absPath string) error {
 		}
 	}
 
-	return os.Rename(absPath, dest)
+	if err := os.Rename(absPath, dest); err != nil {
+		return fmt.Errorf("move item to local trash: %w", err)
+	}
+
+	return nil
 }

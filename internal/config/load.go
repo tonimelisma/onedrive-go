@@ -40,7 +40,7 @@ func Load(path string, logger *slog.Logger) (*Config, error) {
 
 	cfg := DefaultConfig()
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // Config path is selected at the CLI/config boundary before loading.
 	if err != nil {
 		return nil, fmt.Errorf("reading config file %s: %w", path, err)
 	}
@@ -182,8 +182,13 @@ func decodeDriveSections(data []byte, cfg *Config) error {
 // In lenient mode, decodeDriveSectionsInternal never returns an error — it
 // collects all issues as warnings instead.
 func decodeDriveSectionsLenient(data []byte, cfg *Config) []ConfigWarning {
-	//nolint:errcheck // lenient mode never returns errors — issues become warnings
-	warnings, _ := decodeDriveSectionsInternal(data, cfg, decodeModeLenient)
+	warnings, err := decodeDriveSectionsInternal(data, cfg, decodeModeLenient)
+	if err != nil {
+		warnings = append(warnings, ConfigWarning{
+			Message: fmt.Sprintf("decoding drive sections: %v", err),
+		})
+	}
+
 	return warnings
 }
 
@@ -228,7 +233,7 @@ func LoadLenient(path string, logger *slog.Logger) (*Config, []ConfigWarning, er
 
 	cfg := DefaultConfig()
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // Config path is selected at the CLI/config boundary before loading.
 	if err != nil {
 		return nil, nil, fmt.Errorf("reading config file %s: %w", path, err)
 	}
@@ -436,7 +441,7 @@ func ClearExpiredPauses(cfgPath string, cfg *Config, now time.Time, logger *slog
 // (PersistentPreRunE, ResolveDrive, auth commands) should use this.
 func ResolveConfigPath(env EnvOverrides, cli CLIOverrides, logger *slog.Logger) string {
 	cfgPath := DefaultConfigPath()
-	source := "default"
+	source := defaultTransferOrder
 
 	if env.ConfigPath != "" {
 		cfgPath = env.ConfigPath

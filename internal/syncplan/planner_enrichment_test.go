@@ -19,108 +19,58 @@ import (
 // hashes (LocalHash vs RemoteHash) prevent infinite re-sync loops.
 // ---------------------------------------------------------------------------
 
+func assertPerSideHashNoLoop(t *testing.T, path, localHash, remoteHash string) {
+	t.Helper()
+
+	planner := NewPlanner(synctest.TestLogger(t))
+	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+		Path:       path,
+		DriveID:    driveid.New(synctest.TestDriveID),
+		ItemID:     "item1",
+		ItemType:   synctypes.ItemTypeFile,
+		LocalHash:  localHash,
+		RemoteHash: remoteHash,
+	})
+
+	changes := []synctypes.PathChanges{{
+		Path: path,
+		RemoteEvents: []synctypes.ChangeEvent{{
+			Source:   synctypes.SourceRemote,
+			Type:     synctypes.ChangeModify,
+			Path:     path,
+			ItemType: synctypes.ItemTypeFile,
+			Hash:     remoteHash,
+			ItemID:   "item1",
+			DriveID:  driveid.New(synctest.TestDriveID),
+		}},
+		LocalEvents: []synctypes.ChangeEvent{{
+			Source:   synctypes.SourceLocal,
+			Type:     synctypes.ChangeModify,
+			Path:     path,
+			ItemType: synctypes.ItemTypeFile,
+			Hash:     localHash,
+		}},
+	}}
+
+	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	require.NoError(t, err)
+	assert.Empty(t, synctest.ActionsOfType(plan.Actions, synctypes.ActionUpload))
+	assert.Empty(t, synctest.ActionsOfType(plan.Actions, synctypes.ActionDownload))
+}
+
 // Validates: R-6.7.4
 // TestPerSideHash_PreventsReUploadLoop validates that after uploading a file
 // (LocalHash=AAA), if the server modifies it (RemoteHash=BBB), the next sync
 // run does NOT produce an upload action because LocalHash still matches.
 func TestPerSideHash_PreventsReUploadLoop(t *testing.T) {
-	planner := NewPlanner(synctest.TestLogger(t))
-
-	// Baseline: local and remote hashes diverge (SharePoint enrichment).
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
-		Path:       "enriched.docx",
-		DriveID:    driveid.New(synctest.TestDriveID),
-		ItemID:     "item1",
-		ItemType:   synctypes.ItemTypeFile,
-		LocalHash:  "localHashAAA",
-		RemoteHash: "remoteHashBBB",
-	})
-
-	// Next run: local unchanged (still AAA), remote unchanged (still BBB).
-	changes := []synctypes.PathChanges{
-		{
-			Path: "enriched.docx",
-			RemoteEvents: []synctypes.ChangeEvent{
-				{
-					Source:   synctypes.SourceRemote,
-					Type:     synctypes.ChangeModify,
-					Path:     "enriched.docx",
-					ItemType: synctypes.ItemTypeFile,
-					Hash:     "remoteHashBBB",
-					ItemID:   "item1",
-					DriveID:  driveid.New(synctest.TestDriveID),
-				},
-			},
-			LocalEvents: []synctypes.ChangeEvent{
-				{
-					Source:   synctypes.SourceLocal,
-					Type:     synctypes.ChangeModify,
-					Path:     "enriched.docx",
-					ItemType: synctypes.ItemTypeFile,
-					Hash:     "localHashAAA",
-				},
-			},
-		},
-	}
-
-	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
-	require.NoError(t, err)
-
-	// No upload, no download — both sides match their respective baselines.
-	uploads := synctest.ActionsOfType(plan.Actions, synctypes.ActionUpload)
-	downloads := synctest.ActionsOfType(plan.Actions, synctypes.ActionDownload)
-	assert.Empty(t, uploads, "no re-upload when local hash matches baseline")
-	assert.Empty(t, downloads, "no re-download when remote hash matches baseline")
+	assertPerSideHashNoLoop(t, "enriched.docx", "localHashAAA", "remoteHashBBB")
 }
 
 // TestPerSideHash_PreventsReDownloadLoop validates the reverse: after
 // download, if the local file's hash differs from remote (because server
 // enriched it), the next run does NOT produce a download action.
 func TestPerSideHash_PreventsReDownloadLoop(t *testing.T) {
-	planner := NewPlanner(synctest.TestLogger(t))
-
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
-		Path:       "enriched.pptx",
-		DriveID:    driveid.New(synctest.TestDriveID),
-		ItemID:     "item1",
-		ItemType:   synctypes.ItemTypeFile,
-		LocalHash:  "downloadedHash",
-		RemoteHash: "serverEnrichedHash",
-	})
-
-	changes := []synctypes.PathChanges{
-		{
-			Path: "enriched.pptx",
-			RemoteEvents: []synctypes.ChangeEvent{
-				{
-					Source:   synctypes.SourceRemote,
-					Type:     synctypes.ChangeModify,
-					Path:     "enriched.pptx",
-					ItemType: synctypes.ItemTypeFile,
-					Hash:     "serverEnrichedHash",
-					ItemID:   "item1",
-					DriveID:  driveid.New(synctest.TestDriveID),
-				},
-			},
-			LocalEvents: []synctypes.ChangeEvent{
-				{
-					Source:   synctypes.SourceLocal,
-					Type:     synctypes.ChangeModify,
-					Path:     "enriched.pptx",
-					ItemType: synctypes.ItemTypeFile,
-					Hash:     "downloadedHash",
-				},
-			},
-		},
-	}
-
-	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
-	require.NoError(t, err)
-
-	downloads := synctest.ActionsOfType(plan.Actions, synctypes.ActionDownload)
-	uploads := synctest.ActionsOfType(plan.Actions, synctypes.ActionUpload)
-	assert.Empty(t, downloads, "no re-download when remote hash matches baseline")
-	assert.Empty(t, uploads, "no re-upload when local hash matches baseline")
+	assertPerSideHashNoLoop(t, "enriched.pptx", "downloadedHash", "serverEnrichedHash")
 }
 
 // TestPerSideHash_5RunStabilityProof runs 5 planner runs with divergent

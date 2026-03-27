@@ -8,24 +8,25 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDefaultConfigDir_NonEmpty(t *testing.T) {
 	dir := DefaultConfigDir()
 	assert.NotEmpty(t, dir)
-	assert.True(t, strings.Contains(dir, appName))
+	assert.Contains(t, dir, appName)
 }
 
 func TestDefaultDataDir_NonEmpty(t *testing.T) {
 	dir := DefaultDataDir()
 	assert.NotEmpty(t, dir)
-	assert.True(t, strings.Contains(dir, appName))
+	assert.Contains(t, dir, appName)
 }
 
 func TestDefaultCacheDir_NonEmpty(t *testing.T) {
 	dir := DefaultCacheDir()
 	assert.NotEmpty(t, dir)
-	assert.True(t, strings.Contains(dir, appName))
+	assert.Contains(t, dir, appName)
 }
 
 func TestDefaultConfigPath_EndsWithConfigToml(t *testing.T) {
@@ -42,7 +43,7 @@ func TestDefaultConfigDir_MacOS(t *testing.T) {
 
 	// Unset XDG to test platform fallback.
 	t.Setenv("XDG_CONFIG_HOME", "")
-	os.Unsetenv("XDG_CONFIG_HOME")
+	require.NoError(t, os.Unsetenv("XDG_CONFIG_HOME"))
 
 	dir := DefaultConfigDir()
 	assert.Contains(t, dir, "Library/Application Support")
@@ -55,7 +56,7 @@ func TestDefaultDataDir_MacOS(t *testing.T) {
 	}
 
 	t.Setenv("XDG_DATA_HOME", "")
-	os.Unsetenv("XDG_DATA_HOME")
+	require.NoError(t, os.Unsetenv("XDG_DATA_HOME"))
 
 	dir := DefaultDataDir()
 	assert.Contains(t, dir, "Library/Application Support")
@@ -68,7 +69,7 @@ func TestDefaultCacheDir_MacOS(t *testing.T) {
 	}
 
 	t.Setenv("XDG_CACHE_HOME", "")
-	os.Unsetenv("XDG_CACHE_HOME")
+	require.NoError(t, os.Unsetenv("XDG_CACHE_HOME"))
 
 	dir := DefaultCacheDir()
 	assert.Contains(t, dir, "Library/Caches")
@@ -87,7 +88,7 @@ func TestDefaultConfigDir_XDGOverride(t *testing.T) {
 
 func TestDefaultConfigDir_XDGFallback(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
-	os.Unsetenv("XDG_CONFIG_HOME")
+	require.NoError(t, os.Unsetenv("XDG_CONFIG_HOME"))
 
 	result := DefaultConfigDir()
 	assert.NotEmpty(t, result)
@@ -105,7 +106,7 @@ func TestDefaultDataDir_XDGOverride(t *testing.T) {
 
 func TestDefaultDataDir_XDGFallback(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "")
-	os.Unsetenv("XDG_DATA_HOME")
+	require.NoError(t, os.Unsetenv("XDG_DATA_HOME"))
 
 	result := DefaultDataDir()
 	assert.NotEmpty(t, result)
@@ -123,7 +124,7 @@ func TestDefaultCacheDir_XDGOverride(t *testing.T) {
 
 func TestDefaultCacheDir_XDGFallback(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", "")
-	os.Unsetenv("XDG_CACHE_HOME")
+	require.NoError(t, os.Unsetenv("XDG_CACHE_HOME"))
 
 	result := DefaultCacheDir()
 	assert.NotEmpty(t, result)

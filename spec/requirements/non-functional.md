@@ -121,3 +121,10 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.9.3: The system shall provide deb/rpm packages. [future]
 - R-6.9.4: The system shall provide an AUR package. [future]
 - R-6.9.5: The system shall provide a Docker image (Alpine-based, multi-arch). [future]
+
+## R-6.10 Verification and Static Analysis [verified]
+
+- R-6.10.1: The repository shall provide a single verification entry point that runs lint, build, race tests, coverage, and credential-gated fast E2E checks. [verified]
+- R-6.10.2: CI shall enforce the same lint policy as local development and pin the `golangci-lint` version used for verification. [verified]
+- R-6.10.3: Inline `//nolint` usage shall require both a specific linter name and a justification, and stale exclusions shall be surfaced automatically. [verified]
+- R-6.10.4: Total statement coverage shall not drop below 75.0% in the verification gate. [verified]

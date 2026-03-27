@@ -38,7 +38,7 @@ func defaultHTTPClient(logger *slog.Logger) *http.Client {
 		Timeout: httpClientTimeout,
 		Transport: &retry.RetryTransport{
 			Inner:  http.DefaultTransport,
-			Policy: retry.Transport,
+			Policy: retry.TransportPolicy(),
 			Logger: logger,
 		},
 	}
@@ -86,7 +86,7 @@ func transferHTTPClient(logger *slog.Logger) *http.Client {
 		Timeout: 0,
 		Transport: &retry.RetryTransport{
 			Inner:  transferTransport(),
-			Policy: retry.Transport,
+			Policy: retry.TransportPolicy(),
 			Logger: logger,
 		},
 	}

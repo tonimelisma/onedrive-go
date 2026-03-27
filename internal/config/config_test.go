@@ -50,14 +50,14 @@ func TestDefaultConfig_AllFieldsPopulated(t *testing.T) {
 
 	// Logging defaults
 	assert.Equal(t, "info", cfg.LogLevel)
-	assert.Equal(t, "", cfg.LogFile)
+	assert.Empty(t, cfg.LogFile)
 	assert.Equal(t, "auto", cfg.LogFormat)
 	assert.Equal(t, 30, cfg.LogRetentionDays)
 
 	// Network defaults
 	assert.Equal(t, "10s", cfg.ConnectTimeout)
 	assert.Equal(t, "60s", cfg.DataTimeout)
-	assert.Equal(t, "", cfg.UserAgent)
+	assert.Empty(t, cfg.UserAgent)
 	assert.False(t, cfg.ForceHTTP11)
 
 	// Drives map initialized
@@ -132,7 +132,7 @@ func TestConfig_EmbeddedStructPromotion(t *testing.T) {
 	cfg := DefaultConfig()
 
 	// These should compile and work because of struct embedding.
-	assert.Equal(t, false, cfg.SkipDotfiles)
+	assert.False(t, cfg.SkipDotfiles)
 	assert.Equal(t, 8, cfg.TransferWorkers)
 	assert.Equal(t, 1000, cfg.BigDeleteThreshold)
 	assert.Equal(t, "5m", cfg.PollInterval)

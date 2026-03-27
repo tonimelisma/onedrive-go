@@ -24,7 +24,7 @@ func TestPrintStatText(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printStatText(&buf, item)
+	require.NoError(t, printStatText(&buf, item))
 	output := buf.String()
 
 	assert.Contains(t, output, "photo.jpg")
@@ -45,7 +45,7 @@ func TestPrintStatText_Folder(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printStatText(&buf, item)
+	require.NoError(t, printStatText(&buf, item))
 	output := buf.String()
 
 	assert.Contains(t, output, "Documents")

@@ -77,5 +77,9 @@ func printMkdirJSON(w io.Writer, out mkdirJSONOutput) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 
-	return enc.Encode(out)
+	if err := enc.Encode(out); err != nil {
+		return fmt.Errorf("encode mkdir output: %w", err)
+	}
+
+	return nil
 }

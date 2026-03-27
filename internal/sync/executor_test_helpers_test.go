@@ -125,8 +125,8 @@ func writeExecTestFile(t *testing.T, dir, relPath, content string) string {
 	t.Helper()
 
 	absPath := filepath.Join(dir, relPath)
-	require.NoError(t, os.MkdirAll(filepath.Dir(absPath), 0o755))
-	require.NoError(t, os.WriteFile(absPath, []byte(content), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Dir(absPath), 0o700))
+	require.NoError(t, os.WriteFile(absPath, []byte(content), 0o600))
 
 	return absPath
 }

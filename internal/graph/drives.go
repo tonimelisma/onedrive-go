@@ -13,10 +13,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
-// driveDiscoveryRetries is the number of attempts for transient 403s on
-// /me/drives, sourced from the unified retry.DriveDiscovery policy.
-var driveDiscoveryRetries = retry.DriveDiscovery.MaxAttempts
-
 // userResponse mirrors the Graph API /me JSON response.
 // Unexported — callers use User via toUser() normalization.
 type userResponse struct {
@@ -164,7 +160,7 @@ func (c *Client) Drives(ctx context.Context) ([]Drive, error) {
 
 	var lastErr error
 
-	for attempt := range driveDiscoveryRetries {
+	for attempt := range c.driveDiscoveryRetries {
 		drives, err := c.drivesList(ctx)
 		if err == nil {
 			return drives, nil
@@ -179,14 +175,14 @@ func (c *Client) Drives(ctx context.Context) ([]Drive, error) {
 		lastErr = err
 
 		// Don't sleep after the last attempt.
-		if attempt >= driveDiscoveryRetries-1 {
+		if attempt >= c.driveDiscoveryRetries-1 {
 			break
 		}
 
-		backoff := retry.DriveDiscovery.Delay(attempt)
+		backoff := retry.DriveDiscoveryPolicy().Delay(attempt)
 		c.logger.Warn("retrying /me/drives after transient 403",
 			slog.Int("attempt", attempt+1),
-			slog.Int("max_attempts", driveDiscoveryRetries),
+			slog.Int("max_attempts", c.driveDiscoveryRetries),
 			slog.Duration("backoff", backoff),
 			slog.String("request_id", ge.RequestID),
 		)
@@ -434,7 +430,7 @@ func (c *Client) fetchItemPage(ctx context.Context, path, label string) ([]Item,
 
 	var page struct {
 		Value    []driveItemResponse `json:"value"`
-		NextLink string              `json:"@odata.nextLink"` //nolint:tagliatelle // OData annotation key
+		NextLink string              `json:"@odata.nextLink"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
 		return nil, "", fmt.Errorf("graph: decoding %s response: %w", label, err)

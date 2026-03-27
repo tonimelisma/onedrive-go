@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -23,7 +22,7 @@ func TestGroupFailures_MoreThanTen(t *testing.T) {
 		failures = append(failures, synctypes.SyncFailureRow{
 			Path:      fmt.Sprintf("/docs/file%02d.docx", i),
 			IssueType: synctypes.IssueQuotaExceeded,
-			ScopeKey:  synctypes.SKQuotaOwn,
+			ScopeKey:  synctypes.SKQuotaOwn(),
 			Category:  synctypes.CategoryActionable,
 		})
 	}
@@ -41,7 +40,7 @@ func TestGroupFailures_HumanReadableMessages(t *testing.T) {
 	t.Parallel()
 
 	failures := []synctypes.SyncFailureRow{
-		{Path: "/a.txt", IssueType: synctypes.IssueQuotaExceeded, ScopeKey: synctypes.SKQuotaOwn, Category: synctypes.CategoryActionable},
+		{Path: "/a.txt", IssueType: synctypes.IssueQuotaExceeded, ScopeKey: synctypes.SKQuotaOwn(), Category: synctypes.CategoryActionable},
 		{Path: "/b.txt", IssueType: synctypes.IssuePermissionDenied, Category: synctypes.CategoryActionable},
 	}
 
@@ -103,7 +102,7 @@ func TestGroupFailures_GroupsByScopeKey(t *testing.T) {
 	t.Parallel()
 
 	failures := []synctypes.SyncFailureRow{
-		{Path: "/a.txt", IssueType: synctypes.IssueQuotaExceeded, ScopeKey: synctypes.SKQuotaOwn, Category: synctypes.CategoryActionable},
+		{Path: "/a.txt", IssueType: synctypes.IssueQuotaExceeded, ScopeKey: synctypes.SKQuotaOwn(), Category: synctypes.CategoryActionable},
 		{Path: "/b.txt", IssueType: synctypes.IssueQuotaExceeded, ScopeKey: synctypes.SKQuotaShortcut("drive1:item1"), Category: synctypes.CategoryActionable},
 	}
 
@@ -118,9 +117,9 @@ func TestGroupFailures_SortedLargestFirst(t *testing.T) {
 
 	failures := []synctypes.SyncFailureRow{
 		{Path: "/a.txt", IssueType: synctypes.IssuePermissionDenied, Category: synctypes.CategoryActionable},
-		{Path: "/b.txt", IssueType: synctypes.IssueQuotaExceeded, ScopeKey: synctypes.SKQuotaOwn, Category: synctypes.CategoryActionable},
-		{Path: "/c.txt", IssueType: synctypes.IssueQuotaExceeded, ScopeKey: synctypes.SKQuotaOwn, Category: synctypes.CategoryActionable},
-		{Path: "/d.txt", IssueType: synctypes.IssueQuotaExceeded, ScopeKey: synctypes.SKQuotaOwn, Category: synctypes.CategoryActionable},
+		{Path: "/b.txt", IssueType: synctypes.IssueQuotaExceeded, ScopeKey: synctypes.SKQuotaOwn(), Category: synctypes.CategoryActionable},
+		{Path: "/c.txt", IssueType: synctypes.IssueQuotaExceeded, ScopeKey: synctypes.SKQuotaOwn(), Category: synctypes.CategoryActionable},
+		{Path: "/d.txt", IssueType: synctypes.IssueQuotaExceeded, ScopeKey: synctypes.SKQuotaOwn(), Category: synctypes.CategoryActionable},
 	}
 
 	groups, _ := groupFailures(failures, nil)
@@ -156,7 +155,7 @@ func TestPrintGroupedFailures_VerboseShowsAll(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printGroupedFailures(&buf, groups, true)
+	require.NoError(t, printGroupedFailures(&buf, groups, true))
 	output := buf.String()
 
 	// All 12 paths should be present.
@@ -186,7 +185,7 @@ func TestPrintGroupedFailures_NonVerboseTruncates(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printGroupedFailures(&buf, groups, false)
+	require.NoError(t, printGroupedFailures(&buf, groups, false))
 	output := buf.String()
 
 	// Only first 5 should be shown.
@@ -210,7 +209,7 @@ func TestPrintGroupedFailures_ShowsScopeKey(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printGroupedFailures(&buf, groups, false)
+	require.NoError(t, printGroupedFailures(&buf, groups, false))
 	assert.Contains(t, buf.String(), "Scope: Team Docs")
 }
 
@@ -228,7 +227,7 @@ func TestPrintGroupedFailures_NoScopeLineWhenEmpty(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printGroupedFailures(&buf, groups, false)
+	require.NoError(t, printGroupedFailures(&buf, groups, false))
 	assert.NotContains(t, buf.String(), "Scope:")
 }
 
@@ -301,24 +300,24 @@ func TestPrintGroupedIssuesText_AllSections(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printGroupedIssuesText(&buf, conflicts, groups, heldDeletes, nil, nil, false, false)
+	require.NoError(t, printGroupedIssuesText(&buf, conflicts, groups, heldDeletes, nil, nil, false, false))
 	output := buf.String()
 
-	assert.True(t, strings.Contains(output, "CONFLICTS"))
-	assert.True(t, strings.Contains(output, "HELD DELETES"))
-	assert.True(t, strings.Contains(output, "QUOTA EXCEEDED"))
+	assert.Contains(t, output, "CONFLICTS")
+	assert.Contains(t, output, "HELD DELETES")
+	assert.Contains(t, output, "QUOTA EXCEEDED")
 }
 
 func TestPrintPendingRetries(t *testing.T) {
 	t.Parallel()
 
 	groups := []synctypes.PendingRetryGroup{
-		{ScopeKey: synctypes.SKThrottleAccount, Count: 8, EarliestNext: time.Now().Add(2*time.Minute + 30*time.Second)},
-		{ScopeKey: synctypes.SKQuotaOwn, Count: 4, EarliestNext: time.Now().Add(4*time.Minute + 15*time.Second)},
+		{ScopeKey: synctypes.SKThrottleAccount(), Count: 8, EarliestNext: time.Now().Add(2*time.Minute + 30*time.Second)},
+		{ScopeKey: synctypes.SKQuotaOwn(), Count: 4, EarliestNext: time.Now().Add(4*time.Minute + 15*time.Second)},
 	}
 
 	var buf bytes.Buffer
-	printPendingRetries(&buf, groups, nil)
+	require.NoError(t, printPendingRetries(&buf, groups, nil))
 	output := buf.String()
 
 	assert.Contains(t, output, "PENDING RETRIES (12 items)")
@@ -339,7 +338,7 @@ func TestPrintHeldDeletesGrouped_SmallCount(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printHeldDeletesGrouped(&buf, heldDeletes, false)
+	require.NoError(t, printHeldDeletesGrouped(&buf, heldDeletes, false))
 	output := buf.String()
 
 	assert.Contains(t, output, "HELD DELETES (5 files")
@@ -364,7 +363,7 @@ func TestPrintHeldDeletesGrouped_LargeCount(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printHeldDeletesGrouped(&buf, heldDeletes, false)
+	require.NoError(t, printHeldDeletesGrouped(&buf, heldDeletes, false))
 	output := buf.String()
 
 	assert.Contains(t, output, "HELD DELETES (30 files")
@@ -388,7 +387,7 @@ func TestPrintHeldDeletesGrouped_LargeCountVerbose(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printHeldDeletesGrouped(&buf, heldDeletes, true)
+	require.NoError(t, printHeldDeletesGrouped(&buf, heldDeletes, true))
 	output := buf.String()
 
 	// Verbose mode should show individual paths.

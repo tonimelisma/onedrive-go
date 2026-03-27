@@ -29,8 +29,9 @@ func TestUpsertShortcut_Insert(t *testing.T) {
 	err := mgr.UpsertShortcut(ctx, &sc)
 	require.NoError(t, err)
 
-	got, err := mgr.GetShortcut(ctx, "sc-1")
+	got, found, err := mgr.GetShortcut(ctx, "sc-1")
 	require.NoError(t, err)
+	require.True(t, found)
 	require.NotNil(t, got)
 
 	assert.Equal(t, "sc-1", got.ItemID)
@@ -65,8 +66,9 @@ func TestUpsertShortcut_Update(t *testing.T) {
 	sc.Observation = synctypes.ObservationDelta
 	require.NoError(t, mgr.UpsertShortcut(ctx, &sc))
 
-	got, err := mgr.GetShortcut(ctx, "sc-1")
+	got, found, err := mgr.GetShortcut(ctx, "sc-1")
 	require.NoError(t, err)
+	require.True(t, found)
 	assert.Equal(t, "Shared/NewName", got.LocalPath)
 	assert.Equal(t, synctypes.ObservationDelta, got.Observation)
 }
@@ -89,8 +91,9 @@ func TestUpsertShortcut_PreservesDiscoveredAt(t *testing.T) {
 	sc.DiscoveredAt = 9999 // caller passes a new timestamp, but ON CONFLICT should ignore it
 	require.NoError(t, mgr.UpsertShortcut(ctx, &sc))
 
-	got, err := mgr.GetShortcut(ctx, "sc-1")
+	got, found, err := mgr.GetShortcut(ctx, "sc-1")
 	require.NoError(t, err)
+	require.True(t, found)
 	assert.Equal(t, "path2", got.LocalPath)
 	assert.Equal(t, int64(1000), got.DiscoveredAt, "discovered_at should be preserved across upserts")
 }
@@ -102,8 +105,9 @@ func TestGetShortcut_NotFound(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	got, err := mgr.GetShortcut(ctx, "nonexistent")
+	got, found, err := mgr.GetShortcut(ctx, "nonexistent")
 	require.NoError(t, err)
+	assert.False(t, found)
 	assert.Nil(t, got)
 }
 
@@ -154,8 +158,9 @@ func TestDeleteShortcut(t *testing.T) {
 	err := mgr.DeleteShortcut(ctx, "sc-1")
 	require.NoError(t, err)
 
-	got, err := mgr.GetShortcut(ctx, "sc-1")
+	got, found, err := mgr.GetShortcut(ctx, "sc-1")
 	require.NoError(t, err)
+	assert.False(t, found)
 	assert.Nil(t, got)
 }
 

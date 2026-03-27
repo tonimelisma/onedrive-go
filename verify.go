@@ -54,7 +54,9 @@ func runVerify(cmd *cobra.Command, _ []string) error {
 			return err
 		}
 	} else {
-		printVerifyTable(os.Stdout, report)
+		if err := printVerifyTable(os.Stdout, report); err != nil {
+			return err
+		}
 	}
 
 	if len(report.Mismatches) > 0 {
@@ -67,18 +69,23 @@ func runVerify(cmd *cobra.Command, _ []string) error {
 // loadAndVerify opens the baseline, loads it, and runs verification.
 // Separated so the defer Close() runs before the caller returns.
 func loadAndVerify(ctx context.Context, dbPath, syncDir string, logger *slog.Logger) (*synctypes.VerifyReport, error) {
-	mgr, err := syncstore.NewSyncStore(dbPath, logger)
+	mgr, err := syncstore.NewSyncStore(ctx, dbPath, logger)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open sync store: %w", err)
 	}
-	defer mgr.Close()
+	defer mgr.Close(ctx)
 
 	bl, err := mgr.Load(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load baseline: %w", err)
 	}
 
-	return syncstore.VerifyBaseline(ctx, bl, syncDir, logger)
+	report, err := syncstore.VerifyBaseline(ctx, bl, syncDir, logger)
+	if err != nil {
+		return nil, fmt.Errorf("verify baseline: %w", err)
+	}
+
+	return report, nil
 }
 
 func printVerifyJSON(w io.Writer, report *synctypes.VerifyReport) error {
@@ -92,15 +99,18 @@ func printVerifyJSON(w io.Writer, report *synctypes.VerifyReport) error {
 	return nil
 }
 
-func printVerifyTable(w io.Writer, report *synctypes.VerifyReport) {
-	fmt.Fprintf(w, "Verified: %d files\n", report.Verified)
-
-	if len(report.Mismatches) == 0 {
-		fmt.Fprintln(w, "All files verified successfully.")
-		return
+func printVerifyTable(w io.Writer, report *synctypes.VerifyReport) error {
+	if err := writef(w, "Verified: %d files\n", report.Verified); err != nil {
+		return err
 	}
 
-	fmt.Fprintf(w, "Mismatches: %d\n\n", len(report.Mismatches))
+	if len(report.Mismatches) == 0 {
+		return writeln(w, "All files verified successfully.")
+	}
+
+	if err := writef(w, "Mismatches: %d\n\n", len(report.Mismatches)); err != nil {
+		return err
+	}
 
 	headers := []string{"PATH", "STATUS", "EXPECTED", "ACTUAL"}
 	rows := make([][]string, len(report.Mismatches))
@@ -110,5 +120,5 @@ func printVerifyTable(w io.Writer, report *synctypes.VerifyReport) {
 		rows[i] = []string{m.Path, m.Status, m.Expected, m.Actual}
 	}
 
-	printTable(w, headers, rows)
+	return printTable(w, headers, rows)
 }

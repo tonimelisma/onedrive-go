@@ -90,7 +90,7 @@ func TestE2E_SyncWatch_BasicRoundTrip(t *testing.T) {
 
 	// Create a local file inside the sync dir.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "watch-test.txt"),
 		[]byte("created during watch mode\n"),
@@ -170,7 +170,7 @@ func TestE2E_SyncWatch_PauseResume(t *testing.T) {
 
 	// Create a local file while paused.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "paused-file.txt"),
 		[]byte("created while paused\n"),
@@ -220,7 +220,7 @@ func TestE2E_SyncWatch_SIGHUPReload(t *testing.T) {
 	perTestHome := t.TempDir()
 
 	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
-	require.NoError(t, os.MkdirAll(perTestDataDir, 0o755))
+	require.NoError(t, os.MkdirAll(perTestDataDir, 0o700))
 
 	copyTokenFile(t, testDataDir, perTestDataDir)
 	copyTokenFileForDrive(t, testDataDir, perTestDataDir, drive2)
@@ -228,7 +228,7 @@ func TestE2E_SyncWatch_SIGHUPReload(t *testing.T) {
 	// Write initial config with only drive1.
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	initialCfg := fmt.Sprintf("[%q]\nsync_dir = %q\n", drive, syncDir1)
-	require.NoError(t, os.WriteFile(cfgPath, []byte(initialCfg), 0o644))
+	require.NoError(t, os.WriteFile(cfgPath, []byte(initialCfg), 0o600))
 
 	env := map[string]string{
 		"XDG_DATA_HOME": perTestData,
@@ -273,7 +273,7 @@ func TestE2E_SyncWatch_SIGHUPReload(t *testing.T) {
 
 	// Create a file in drive1's sync dir to verify it works.
 	localDir1 := filepath.Join(syncDir1, testFolder1)
-	require.NoError(t, os.MkdirAll(localDir1, 0o755))
+	require.NoError(t, os.MkdirAll(localDir1, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir1, "before-reload.txt"),
 		[]byte("before reload\n"),
@@ -287,7 +287,7 @@ func TestE2E_SyncWatch_SIGHUPReload(t *testing.T) {
 	// Rewrite config to add drive2.
 	updatedCfg := fmt.Sprintf("[%q]\nsync_dir = %q\n\n[%q]\nsync_dir = %q\n",
 		drive, syncDir1, drive2, syncDir2)
-	require.NoError(t, os.WriteFile(cfgPath, []byte(updatedCfg), 0o644))
+	require.NoError(t, os.WriteFile(cfgPath, []byte(updatedCfg), 0o600))
 
 	// Send SIGHUP to trigger config reload.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGHUP))
@@ -297,7 +297,7 @@ func TestE2E_SyncWatch_SIGHUPReload(t *testing.T) {
 
 	// Create a file in drive2's sync dir.
 	localDir2 := filepath.Join(syncDir2, testFolder2)
-	require.NoError(t, os.MkdirAll(localDir2, 0o755))
+	require.NoError(t, os.MkdirAll(localDir2, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir2, "after-reload.txt"),
 		[]byte("after reload\n"),

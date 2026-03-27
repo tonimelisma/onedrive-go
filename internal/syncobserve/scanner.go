@@ -1,4 +1,4 @@
-// scanner.go — Local filesystem scanning for LocalObserver.
+// Package syncobserve watches and scans the local filesystem for sync changes.
 //
 // Contents:
 //   - FullScan:              orchestrates walk + hash phases → ScanResult
@@ -748,7 +748,7 @@ func ComputeStableHash(fsPath string) (string, error) {
 
 	hash, err := driveops.ComputeQuickXorHash(fsPath)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("compute quickxor hash %s: %w", fsPath, err)
 	}
 
 	post, err := os.Stat(fsPath)

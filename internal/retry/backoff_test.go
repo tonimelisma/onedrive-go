@@ -11,7 +11,7 @@ import (
 func TestBackoff_Next_IncreasesDelay(t *testing.T) {
 	t.Parallel()
 
-	b := NewBackoff(WatchLocal) // 1s base, 30s max, 2x, no jitter
+	b := NewBackoff(WatchLocalPolicy()) // 1s base, 30s max, 2x, no jitter
 
 	assert.Equal(t, 1*time.Second, b.Next())
 	assert.Equal(t, 1, b.Consecutive())
@@ -27,7 +27,7 @@ func TestBackoff_Next_IncreasesDelay(t *testing.T) {
 func TestBackoff_Reset(t *testing.T) {
 	t.Parallel()
 
-	b := NewBackoff(WatchLocal)
+	b := NewBackoff(WatchLocalPolicy())
 
 	b.Next()
 	b.Next()
@@ -42,7 +42,7 @@ func TestBackoff_Reset(t *testing.T) {
 func TestBackoff_MaxCap(t *testing.T) {
 	t.Parallel()
 
-	b := NewBackoff(WatchLocal) // max 30s
+	b := NewBackoff(WatchLocalPolicy()) // max 30s
 
 	// Advance past max.
 	for range 10 {
@@ -57,7 +57,7 @@ func TestBackoff_MaxCap(t *testing.T) {
 func TestBackoff_SetMaxOverride(t *testing.T) {
 	t.Parallel()
 
-	b := NewBackoff(WatchRemote) // 5s base, 5m default max, no jitter
+	b := NewBackoff(WatchRemotePolicy()) // 5s base, 5m default max, no jitter
 
 	// Without override: 5s * 2^4 = 80s < 5m, so no cap.
 	for range 4 {
@@ -84,7 +84,7 @@ func TestBackoff_RemoteObserverPattern(t *testing.T) {
 	// 1. Sleep with current backoff
 	// 2. Advance backoff for next error
 	// This is exactly what Next() does.
-	b := NewBackoff(WatchRemote)
+	b := NewBackoff(WatchRemotePolicy())
 	b.SetMaxOverride(60 * time.Second) // poll interval
 
 	// First error: sleep 5s, advance.

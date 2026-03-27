@@ -6,8 +6,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // DefaultBaseURL is the production Microsoft Graph API v1.0 endpoint.
@@ -19,6 +22,15 @@ const (
 	// maxErrBodySize caps error response body reads to prevent OOM from
 	// malicious or buggy servers returning enormous error responses (B-314).
 	maxErrBodySize = 64 * 1024
+
+	// maxDeltaPages is the upper bound on pages fetched by DeltaAll/DeltaFolderAll.
+	// A buggy API or circular NextLinks could loop forever without this guard.
+	defaultMaxDeltaPages = 10000
+
+	// maxRecursionDepth is the upper bound on folder nesting depth for
+	// ListChildrenRecursive. Prevents stack overflow on pathological hierarchies
+	// or circular references.
+	defaultMaxRecursionDepth = 100
 )
 
 // TokenSource provides OAuth2 bearer tokens.
@@ -36,11 +48,17 @@ type TokenSource interface {
 // caller concern (CLI: RetryTransport, sync: raw transport, single attempt,
 // engine records failure for the engine retry sweep).
 type Client struct {
-	baseURL    string
-	httpClient *http.Client
-	token      TokenSource
-	logger     *slog.Logger
-	userAgent  string
+	baseURL               string
+	httpClient            *http.Client
+	token                 TokenSource
+	logger                *slog.Logger
+	userAgent             string
+	deltaPreferHeader     http.Header
+	maxDeltaPages         int
+	maxRecursionDepth     int
+	driveDiscoveryRetries int
+	uploadURLValidator    func(*url.URL) error
+	copyMonitorValidator  func(*url.URL) error
 }
 
 // NewClient creates a Graph API client.
@@ -68,12 +86,28 @@ func NewClient(
 		userAgent = defaultUserAgent
 	}
 
+	if err := validateGraphBaseURL(baseURL); err != nil {
+		panic(fmt.Sprintf("graph.NewClient: invalid base URL: %v", err))
+	}
+
 	return &Client{
-		baseURL:    baseURL,
-		httpClient: httpClient,
-		token:      token,
-		logger:     logger,
-		userAgent:  userAgent,
+		baseURL:               baseURL,
+		httpClient:            httpClient,
+		token:                 token,
+		logger:                logger,
+		userAgent:             userAgent,
+		deltaPreferHeader:     newDeltaPreferHeader(),
+		maxDeltaPages:         defaultMaxDeltaPages,
+		maxRecursionDepth:     defaultMaxRecursionDepth,
+		driveDiscoveryRetries: retry.DriveDiscoveryPolicy().MaxAttempts,
+		uploadURLValidator:    validateUploadURL,
+		copyMonitorValidator:  validateCopyMonitorURL,
+	}
+}
+
+func newDeltaPreferHeader() http.Header {
+	return http.Header{
+		"Prefer": {"deltashowremoteitemsaliasid"},
 	}
 }
 
@@ -136,17 +170,63 @@ func (c *Client) doOnce(
 		slog.String("url", url),
 	)
 
-	req, err := http.NewRequestWithContext(ctx, method, url, body)
-	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
-	}
-
 	tok, err := c.token.Token()
 	if err != nil {
 		return nil, fmt.Errorf("obtaining token: %w", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+tok)
+	req, err := c.buildAuthorizedRequest(ctx, method, url, body, tok, extraHeaders)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := c.dispatchRequest(req)
+	if err != nil {
+		c.logger.Debug("HTTP request failed",
+			slog.String("method", method),
+			slog.String("url", url),
+			slog.String("error", err.Error()),
+		)
+
+		return nil, fmt.Errorf("HTTP %s %s: %w", method, url, err)
+	}
+
+	c.logger.Debug("HTTP response received",
+		slog.String("method", method),
+		slog.String("url", url),
+		slog.Int("status", resp.StatusCode),
+		slog.String("request_id", resp.Header.Get("request-id")),
+	)
+
+	// 401 token refresh: if the server rejects the token, try once more with
+	// a fresh token. This handles the common case where the token expires
+	// between our Token() call and the server's validation. The oauth2
+	// ReuseTokenSource underneath auto-refreshes when the cached token has
+	// expired (10-second safety margin ensures detection after HTTP RTT).
+	// This is auth lifecycle management, not transient retry.
+	if retryResp, retried, err := c.retryUnauthorized(ctx, method, url, body, extraHeaders, tok, resp); err != nil {
+		return nil, err
+	} else if retried {
+		return retryResp, nil
+	}
+
+	return resp, nil
+}
+
+func (c *Client) buildAuthorizedRequest(
+	ctx context.Context,
+	method string,
+	url string,
+	body io.Reader,
+	token string,
+	extraHeaders http.Header,
+) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, url, body)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("User-Agent", c.userAgent)
 
 	// Implicit default: when a body is present, Content-Type is set to
@@ -164,74 +244,67 @@ func (c *Client) doOnce(
 		}
 	}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		c.logger.Debug("HTTP request failed",
-			slog.String("method", method),
-			slog.String("url", url),
-			slog.String("error", err.Error()),
-		)
+	return req, nil
+}
 
-		return nil, err
+func (c *Client) retryUnauthorized(
+	ctx context.Context,
+	method string,
+	url string,
+	body io.Reader,
+	extraHeaders http.Header,
+	token string,
+	resp *http.Response,
+) (*http.Response, bool, error) {
+	if resp.StatusCode != http.StatusUnauthorized {
+		return nil, false, nil
 	}
 
-	c.logger.Debug("HTTP response received",
+	newTok, err := c.token.Token()
+	if err != nil {
+		return nil, false, fmt.Errorf("refreshing token after 401: %w", err)
+	}
+	if newTok == token {
+		return nil, false, nil
+	}
+
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		return nil, false, fmt.Errorf("closing 401 response body: %w", closeErr)
+	}
+
+	c.logger.Info("retrying after 401 with refreshed token",
 		slog.String("method", method),
 		slog.String("url", url),
-		slog.Int("status", resp.StatusCode),
-		slog.String("request_id", resp.Header.Get("request-id")),
 	)
 
-	// 401 token refresh: if the server rejects the token, try once more with
-	// a fresh token. This handles the common case where the token expires
-	// between our Token() call and the server's validation. The oauth2
-	// ReuseTokenSource underneath auto-refreshes when the cached token has
-	// expired (10-second safety margin ensures detection after HTTP RTT).
-	// This is auth lifecycle management, not transient retry.
-	if resp.StatusCode == http.StatusUnauthorized {
-		newTok, tokErr := c.token.Token()
-		if tokErr == nil && newTok != tok {
-			resp.Body.Close()
-
-			c.logger.Info("retrying after 401 with refreshed token",
-				slog.String("method", method),
-				slog.String("url", url),
-			)
-
-			if err := rewindBody(body); err != nil {
-				return nil, err
-			}
-
-			req2, reqErr := http.NewRequestWithContext(ctx, method, url, body)
-			if reqErr != nil {
-				return nil, fmt.Errorf("creating retry request: %w", reqErr)
-			}
-
-			req2.Header.Set("Authorization", "Bearer "+newTok)
-			req2.Header.Set("User-Agent", c.userAgent)
-
-			if body != nil {
-				req2.Header.Set("Content-Type", "application/json")
-			}
-
-			for key, vals := range extraHeaders {
-				for _, v := range vals {
-					req2.Header.Add(key, v)
-				}
-			}
-
-			return c.httpClient.Do(req2)
-		}
+	if rewindErr := rewindBody(body); rewindErr != nil {
+		return nil, false, rewindErr
 	}
 
-	return resp, nil
+	req, err := c.buildAuthorizedRequest(ctx, method, url, body, newTok, extraHeaders)
+	if err != nil {
+		return nil, false, fmt.Errorf("building retry request: %w", err)
+	}
+
+	retryResp, err := c.dispatchRequest(req)
+	if err != nil {
+		return nil, false, fmt.Errorf("HTTP %s %s retry: %w", method, url, err)
+	}
+
+	return retryResp, true, nil
 }
 
 // buildError reads the error response body, builds a *GraphError with the
 // appropriate sentinel, and logs the failure. Used by both Do and pre-auth paths.
 func (c *Client) buildError(method, path string, resp *http.Response) *GraphError {
 	errBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrBodySize))
-	resp.Body.Close()
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		c.logger.Warn("failed to close error response body",
+			slog.String("method", method),
+			slog.String("path", path),
+			slog.String("error", closeErr.Error()),
+		)
+	}
 
 	if readErr != nil {
 		errBody = []byte("(failed to read response body)")
@@ -288,7 +361,7 @@ func (c *Client) doPreAuth(
 		}
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.dispatchRequest(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("graph: %s canceled: %w", desc, ctx.Err())
@@ -303,7 +376,12 @@ func (c *Client) doPreAuth(
 
 	// Non-2xx → build GraphError.
 	errBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrBodySize))
-	resp.Body.Close()
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		c.logger.Warn("failed to close pre-auth error response body",
+			slog.String("desc", desc),
+			slog.String("error", closeErr.Error()),
+		)
+	}
 
 	if readErr != nil {
 		errBody = []byte("(failed to read response body)")
@@ -325,6 +403,45 @@ func (c *Client) doPreAuth(
 		Err:        classifyStatus(resp.StatusCode),
 		RetryAfter: retryAfter,
 	}
+}
+
+func (c *Client) dispatchRequest(req *http.Request) (*http.Response, error) {
+	// Callers validate the request URL before dispatch: Graph base URLs are
+	// checked in NewClient and pre-auth URLs are validated at their boundary.
+	resp, err := c.httpClient.Do(req) //nolint:gosec // Request URLs are validated by the Graph/pre-auth boundary helpers.
+	if err != nil {
+		return nil, fmt.Errorf("dispatching request: %w", err)
+	}
+
+	return resp, nil
+}
+
+func (c *Client) validatedUploadURL(raw UploadURL) (string, error) {
+	validate := c.uploadURLValidator
+	if validate == nil {
+		validate = validateUploadURL
+	}
+
+	parsedURL, err := parseAndValidateUploadURL(raw, validate)
+	if err != nil {
+		return "", fmt.Errorf("graph: validating upload URL: %w", err)
+	}
+
+	return parsedURL, nil
+}
+
+func (c *Client) validatedCopyMonitorURL(raw string) (string, error) {
+	validate := c.copyMonitorValidator
+	if validate == nil {
+		validate = validateCopyMonitorURL
+	}
+
+	parsedURL, err := parseAndValidateUploadURL(UploadURL(raw), validate)
+	if err != nil {
+		return "", fmt.Errorf("graph: validating copy monitor URL: %w", err)
+	}
+
+	return parsedURL, nil
 }
 
 // parseRetryAfter extracts the Retry-After header from 429 and 503 responses

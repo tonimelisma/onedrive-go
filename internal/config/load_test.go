@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -789,8 +790,8 @@ func TestResolveConfigPath_CLIOverridesDefault(t *testing.T) {
 }
 
 func TestLogWarnings_EmitsWarnPerWarning(t *testing.T) {
-	h := &testLogHandler{}
-	logger := slog.New(h)
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
 
 	warnings := []ConfigWarning{
 		{Message: "unknown key foo"},
@@ -799,24 +800,16 @@ func TestLogWarnings_EmitsWarnPerWarning(t *testing.T) {
 
 	LogWarnings(warnings, logger)
 
-	// Should have 2 warn-level records.
-	var warnCount int
-	for _, r := range h.records {
-		if r.Level == slog.LevelWarn {
-			warnCount++
-		}
-	}
-
-	assert.Equal(t, 2, warnCount)
+	assert.Len(t, loggedAttrValues(t, &logBuf, "msg"), 2)
 }
 
 func TestLogWarnings_EmptySlice_NoLogs(t *testing.T) {
-	h := &testLogHandler{}
-	logger := slog.New(h)
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
 
 	LogWarnings(nil, logger)
 
-	assert.Empty(t, h.records)
+	assert.Empty(t, strings.TrimSpace(logBuf.String()))
 }
 
 // --- ClearExpiredPauses ---
@@ -938,7 +931,7 @@ skip_dirs = ["vendor"]
 	assert.Empty(t, warnings, "valid config should produce no warnings in lenient mode")
 
 	// Both should produce identical drive maps.
-	require.Equal(t, len(strictCfg.Drives), len(lenientCfg.Drives))
+	require.Len(t, lenientCfg.Drives, len(strictCfg.Drives))
 
 	for cid, strictDrive := range strictCfg.Drives {
 		lenientDrive, exists := lenientCfg.Drives[cid]

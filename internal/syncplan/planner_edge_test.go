@@ -123,43 +123,37 @@ func TestS7_TempFilesFilteredSymmetrically(t *testing.T) {
 // §4: Decision Matrix Edge Cases
 // ---------------------------------------------------------------------------
 
-// Validates: R-2.3
-// TestEF6_LocalDeletedImpliesLocalChanged validates that a locally deleted
-// file (baseline exists, local absent) is correctly classified as EF6
-// (remote delete propagation), not stolen by EF3 (local changed).
-func TestEF6_LocalDeletedImpliesLocalChanged(t *testing.T) {
-	planner := NewPlanner(synctest.TestLogger(t))
+func assertDeletedLocalFileProducesRemoteDelete(t *testing.T, path string, mode synctypes.SyncMode) {
+	t.Helper()
 
+	planner := NewPlanner(synctest.TestLogger(t))
 	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
-		Path:       "deleted.txt",
+		Path:       path,
 		DriveID:    driveid.New(synctest.TestDriveID),
 		ItemID:     "item1",
 		ItemType:   synctypes.ItemTypeFile,
 		LocalHash:  "hashA",
 		RemoteHash: "hashA",
 	})
+	changes := []synctypes.PathChanges{{
+		Path: path,
+		LocalEvents: []synctypes.ChangeEvent{{
+			Source:    synctypes.SourceLocal,
+			Type:      synctypes.ChangeDelete,
+			Path:      path,
+			ItemType:  synctypes.ItemTypeFile,
+			IsDeleted: true,
+		}},
+	}}
 
-	// No local events (file absent), no remote events (unchanged).
-	changes := []synctypes.PathChanges{
-		{
-			Path: "deleted.txt",
-			LocalEvents: []synctypes.ChangeEvent{
-				{
-					Source:    synctypes.SourceLocal,
-					Type:      synctypes.ChangeDelete,
-					Path:      "deleted.txt",
-					ItemType:  synctypes.ItemTypeFile,
-					IsDeleted: true,
-				},
-			},
-		},
-	}
-
-	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(changes, baseline, mode, synctypes.DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
+	assert.Len(t, synctest.ActionsOfType(plan.Actions, synctypes.ActionRemoteDelete), 1)
+}
 
-	remoteDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionRemoteDelete)
-	assert.Len(t, remoteDeletes, 1, "EF6: local delete should propagate as remote delete")
+// Validates: R-2.3
+func TestEF6_LocalDeletedImpliesLocalChanged(t *testing.T) {
+	assertDeletedLocalFileProducesRemoteDelete(t, "deleted.txt", synctypes.SyncBidirectional)
 }
 
 // Validates: R-2.3
@@ -345,42 +339,8 @@ func TestEF9_EditDeleteAutoResolve(t *testing.T) {
 }
 
 // Validates: R-2.3
-// TestUploadOnlyMode_ProducesRemoteDeletes validates that upload-only mode
-// with locally deleted files produces ActionRemoteDelete (EF6), not
-// EF10 cleanup.
 func TestUploadOnlyMode_ProducesRemoteDeletes(t *testing.T) {
-	planner := NewPlanner(synctest.TestLogger(t))
-
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
-		Path:       "gone.txt",
-		DriveID:    driveid.New(synctest.TestDriveID),
-		ItemID:     "item1",
-		ItemType:   synctypes.ItemTypeFile,
-		LocalHash:  "hashA",
-		RemoteHash: "hashA",
-	})
-
-	changes := []synctypes.PathChanges{
-		{
-			Path: "gone.txt",
-			LocalEvents: []synctypes.ChangeEvent{
-				{
-					Source:    synctypes.SourceLocal,
-					Type:      synctypes.ChangeDelete,
-					Path:      "gone.txt",
-					ItemType:  synctypes.ItemTypeFile,
-					IsDeleted: true,
-				},
-			},
-		},
-	}
-
-	plan, err := planner.Plan(changes, baseline, synctypes.SyncUploadOnly, synctypes.DefaultSafetyConfig(), nil)
-	require.NoError(t, err)
-
-	remoteDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionRemoteDelete)
-	assert.Len(t, remoteDeletes, 1,
-		"upload-only: local delete should produce remote delete")
+	assertDeletedLocalFileProducesRemoteDelete(t, "gone.txt", synctypes.SyncUploadOnly)
 }
 
 // Validates: R-2.3

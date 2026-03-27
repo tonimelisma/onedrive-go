@@ -20,7 +20,7 @@ func TestMe_Success(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "user-abc-123",
 			"displayName": "Test User",
 			"mail": "test@example.com",
@@ -44,7 +44,7 @@ func TestMe_EmailFallbackToUPN(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		// Personal accounts often have empty mail field.
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "user-personal",
 			"displayName": "Personal User",
 			"mail": "",
@@ -63,17 +63,10 @@ func TestMe_EmailFallbackToUPN(t *testing.T) {
 }
 
 func TestMe_Error(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("request-id", "req-401")
-		w.WriteHeader(http.StatusUnauthorized)
-		fmt.Fprint(w, `{"error":{"code":"InvalidAuthenticationToken"}}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	_, err := client.Me(t.Context())
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrUnauthorized)
+	assertGraphCallError(t, http.StatusUnauthorized, "req-401", "InvalidAuthenticationToken", func(client *Client) error {
+		_, err := client.Me(t.Context())
+		return err
+	}, ErrUnauthorized)
 }
 
 // Validates: R-3.1
@@ -84,7 +77,7 @@ func TestDrives_Success(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"value": [
 				{
 					"id": "drive-1",
@@ -144,7 +137,7 @@ func TestDrives_Empty(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"value": []}`)
+		writeTestResponse(t, w, `{"value": []}`)
 	}))
 	defer srv.Close()
 
@@ -163,7 +156,7 @@ func TestPrimaryDrive_Success(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "f1da660e69bdec82",
 			"name": "OneDrive",
 			"driveType": "personal",
@@ -195,16 +188,10 @@ func TestPrimaryDrive_Success(t *testing.T) {
 }
 
 func TestPrimaryDrive_Error(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("request-id", "req-primary-500")
-		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprint(w, `{"error":{"code":"generalException"}}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	_, err := client.PrimaryDrive(t.Context())
-	require.Error(t, err)
+	assertGraphCallError(t, http.StatusInternalServerError, "req-primary-500", "generalException", func(client *Client) error {
+		_, err := client.PrimaryDrive(t.Context())
+		return err
+	}, ErrServerError)
 }
 
 // Validates: R-3.1
@@ -215,7 +202,7 @@ func TestDrive_Success(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "drive-abc",
 			"name": "My Drive",
 			"driveType": "business",
@@ -245,17 +232,10 @@ func TestDrive_Success(t *testing.T) {
 }
 
 func TestDrive_NotFound(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("request-id", "req-drive-404")
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, `{"error":{"code":"itemNotFound"}}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	_, err := client.Drive(t.Context(), driveid.New("nonexistent-drive"))
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNotFound)
+	assertGraphCallError(t, http.StatusNotFound, "req-drive-404", "itemNotFound", func(client *Client) error {
+		_, err := client.Drive(t.Context(), driveid.New("nonexistent-drive"))
+		return err
+	}, ErrNotFound)
 }
 
 func TestDrive_NilOwnerAndQuota(t *testing.T) {
@@ -263,7 +243,7 @@ func TestDrive_NilOwnerAndQuota(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		// Some drives may not have owner or quota facets.
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "drive-minimal",
 			"name": "Minimal Drive",
 			"driveType": "personal"
@@ -335,7 +315,7 @@ func TestOrganization_Business(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"value": [
 				{
 					"displayName": "Contoso Ltd"
@@ -357,7 +337,7 @@ func TestOrganization_Personal(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"value": []}`)
+		writeTestResponse(t, w, `{"value": []}`)
 	}))
 	defer srv.Close()
 
@@ -369,17 +349,10 @@ func TestOrganization_Personal(t *testing.T) {
 }
 
 func TestOrganization_Error(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("request-id", "req-org-401")
-		w.WriteHeader(http.StatusUnauthorized)
-		fmt.Fprint(w, `{"error":{"code":"InvalidAuthenticationToken"}}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	_, err := client.Organization(t.Context())
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrUnauthorized)
+	assertGraphCallError(t, http.StatusUnauthorized, "req-org-401", "InvalidAuthenticationToken", func(client *Client) error {
+		_, err := client.Organization(t.Context())
+		return err
+	}, ErrUnauthorized)
 }
 
 func TestDrives_DecodeError(t *testing.T) {
@@ -388,7 +361,7 @@ func TestDrives_DecodeError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{not valid json`)
+		writeTestResponse(t, w, `{not valid json`)
 	}))
 	defer srv.Close()
 
@@ -399,18 +372,10 @@ func TestDrives_DecodeError(t *testing.T) {
 }
 
 func TestDrives_Unauthorized(t *testing.T) {
-	// Verify that Drives returns ErrUnauthorized on 401.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("request-id", "req-drives-401")
-		w.WriteHeader(http.StatusUnauthorized)
-		fmt.Fprint(w, `{"error":{"code":"InvalidAuthenticationToken"}}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	_, err := client.Drives(t.Context())
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrUnauthorized)
+	assertGraphCallError(t, http.StatusUnauthorized, "req-drives-401", "InvalidAuthenticationToken", func(client *Client) error {
+		_, err := client.Drives(t.Context())
+		return err
+	}, ErrUnauthorized)
 }
 
 // --- SearchSites tests ---
@@ -423,7 +388,7 @@ func TestSearchSites_Success(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"value": [
 				{
 					"id": "site-abc-123",
@@ -460,7 +425,7 @@ func TestSearchSites_Empty(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"value": []}`)
+		writeTestResponse(t, w, `{"value": []}`)
 	}))
 	defer srv.Close()
 
@@ -474,7 +439,7 @@ func TestSearchSites_Error(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("request-id", "req-sites-401")
 		w.WriteHeader(http.StatusUnauthorized)
-		fmt.Fprint(w, `{"error":{"code":"InvalidAuthenticationToken"}}`)
+		writeTestResponse(t, w, `{"error":{"code":"InvalidAuthenticationToken"}}`)
 	}))
 	defer srv.Close()
 
@@ -493,7 +458,7 @@ func TestSiteDrives_Success(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"value": [
 				{
 					"id": "lib-1",
@@ -529,24 +494,16 @@ func TestSiteDrives_Success(t *testing.T) {
 }
 
 func TestSiteDrives_Empty(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"value": []}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	drives, err := client.SiteDrives(t.Context(), "site-empty")
-	require.NoError(t, err)
-	assert.Empty(t, drives)
+	assertEmptyGraphSliceCall(t, func(client *Client) ([]Drive, error) {
+		return client.SiteDrives(t.Context(), "site-empty")
+	})
 }
 
 func TestSiteDrives_Error(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("request-id", "req-sitedrives-403")
 		w.WriteHeader(http.StatusForbidden)
-		fmt.Fprint(w, `{"error":{"code":"accessDenied"}}`)
+		writeTestResponse(t, w, `{"error":{"code":"accessDenied"}}`)
 	}))
 	defer srv.Close()
 
@@ -584,14 +541,14 @@ func TestDrives_Transient403_Recovers(t *testing.T) {
 		if attempts <= 2 {
 			w.Header().Set("request-id", fmt.Sprintf("req-403-%d", attempts))
 			w.WriteHeader(http.StatusForbidden)
-			fmt.Fprint(w, `{"error":{"code":"accessDenied","message":"Access denied"}}`)
+			writeTestResponse(t, w, `{"error":{"code":"accessDenied","message":"Access denied"}}`)
 
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"value": [{"id": "drive-1", "name": "OneDrive", "driveType": "personal"}]}`)
+		writeTestResponse(t, w, `{"value": [{"id": "drive-1", "name": "OneDrive", "driveType": "personal"}]}`)
 	}))
 	defer srv.Close()
 
@@ -611,14 +568,14 @@ func TestDrives_Permanent403_ExhaustsRetries(t *testing.T) {
 		attempts++
 		w.Header().Set("request-id", fmt.Sprintf("req-perm-403-%d", attempts))
 		w.WriteHeader(http.StatusForbidden)
-		fmt.Fprint(w, `{"error":{"code":"accessDenied","message":"Access denied"}}`)
+		writeTestResponse(t, w, `{"error":{"code":"accessDenied","message":"Access denied"}}`)
 	}))
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
 	_, err := client.Drives(t.Context())
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrForbidden)
+	require.ErrorIs(t, err, ErrForbidden)
 	assert.Equal(t, 3, attempts, "should have exhausted all 3 attempts")
 }
 
@@ -629,14 +586,14 @@ func TestDrives_NonForbidden_NoRetry(t *testing.T) {
 		attempts++
 		w.Header().Set("request-id", "req-401")
 		w.WriteHeader(http.StatusUnauthorized)
-		fmt.Fprint(w, `{"error":{"code":"InvalidAuthenticationToken"}}`)
+		writeTestResponse(t, w, `{"error":{"code":"InvalidAuthenticationToken"}}`)
 	}))
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
 	_, err := client.Drives(t.Context())
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrUnauthorized)
+	require.ErrorIs(t, err, ErrUnauthorized)
 	assert.Equal(t, 1, attempts, "non-403 errors should not be retried")
 }
 
@@ -644,7 +601,7 @@ func TestToDrive_OwnerEmail(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"value": [{
 				"id": "drive-owner-email",
 				"name": "Shared Drive",
@@ -677,7 +634,7 @@ func TestSearchSites_URLEncodesQuery(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"value": []}`)
+		writeTestResponse(t, w, `{"value": []}`)
 	}))
 	defer srv.Close()
 
@@ -715,7 +672,7 @@ func TestSharedWithMe_Success(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"value": [
 				{
 					"id": "local-shortcut-1",
@@ -782,7 +739,7 @@ func TestSharedWithMe_Empty(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"value": []}`)
+		writeTestResponse(t, w, `{"value": []}`)
 	}))
 	defer srv.Close()
 
@@ -803,7 +760,7 @@ func TestSharedWithMe_Pagination(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 
 		if page == 1 {
-			fmt.Fprintf(w, `{
+			writeTestResponsef(t, w, `{
 				"value": [{
 					"id": "item-page1",
 					"name": "Page 1 Folder",
@@ -817,7 +774,7 @@ func TestSharedWithMe_Pagination(t *testing.T) {
 			return
 		}
 
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"value": [{
 				"id": "item-page2",
 				"name": "Page 2 Folder",
@@ -840,17 +797,10 @@ func TestSharedWithMe_Pagination(t *testing.T) {
 }
 
 func TestSharedWithMe_Error(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("request-id", "req-shared-401")
-		w.WriteHeader(http.StatusUnauthorized)
-		fmt.Fprint(w, `{"error":{"code":"InvalidAuthenticationToken"}}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	_, err := client.SharedWithMe(t.Context())
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrUnauthorized)
+	assertGraphCallError(t, http.StatusUnauthorized, "req-shared-401", "InvalidAuthenticationToken", func(client *Client) error {
+		_, err := client.SharedWithMe(t.Context())
+		return err
+	}, ErrUnauthorized)
 }
 
 // --- SearchDriveItems ---
@@ -862,7 +812,7 @@ func TestSearchDriveItems_Success(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"value": [
 				{
 					"id": "search-item-1",
@@ -912,24 +862,16 @@ func TestSearchDriveItems_Success(t *testing.T) {
 }
 
 func TestSearchDriveItems_Empty(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"value": []}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	items, err := client.SearchDriveItems(t.Context(), "*")
-	require.NoError(t, err)
-	assert.Empty(t, items)
+	assertEmptyGraphSliceCall(t, func(client *Client) ([]Item, error) {
+		return client.SearchDriveItems(t.Context(), "*")
+	})
 }
 
 func TestSearchDriveItems_Error(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("request-id", "req-search-401")
 		w.WriteHeader(http.StatusUnauthorized)
-		fmt.Fprint(w, `{"error":{"code":"InvalidAuthenticationToken"}}`)
+		writeTestResponse(t, w, `{"error":{"code":"InvalidAuthenticationToken"}}`)
 	}))
 	defer srv.Close()
 

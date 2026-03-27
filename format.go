@@ -7,6 +7,24 @@ import (
 	"time"
 )
 
+func writef(w io.Writer, format string, args ...any) error {
+	_, err := fmt.Fprintf(w, format, args...)
+	if err != nil {
+		return fmt.Errorf("write formatted output: %w", err)
+	}
+
+	return nil
+}
+
+func writeln(w io.Writer, args ...any) error {
+	_, err := fmt.Fprintln(w, args...)
+	if err != nil {
+		return fmt.Errorf("write line output: %w", err)
+	}
+
+	return nil
+}
+
 // Statusf prints a status message to the StatusWriter (default: stderr)
 // unless quiet mode is set.
 func (cc *CLIContext) Statusf(format string, args ...any) {
@@ -14,7 +32,29 @@ func (cc *CLIContext) Statusf(format string, args ...any) {
 		return
 	}
 
-	fmt.Fprintf(cc.StatusWriter, format, args...)
+	if err := writef(cc.StatusWriter, format, args...); err != nil {
+		cc.recordStatusError(fmt.Errorf("write status output: %w", err))
+	}
+}
+
+func (cc *CLIContext) recordStatusError(err error) {
+	if err == nil {
+		return
+	}
+
+	cc.statusMu.Lock()
+	defer cc.statusMu.Unlock()
+
+	if cc.statusErr == nil {
+		cc.statusErr = err
+	}
+}
+
+func (cc *CLIContext) StatusError() error {
+	cc.statusMu.Lock()
+	defer cc.statusMu.Unlock()
+
+	return cc.statusErr
 }
 
 // Size unit constants for human-readable formatting.
@@ -56,7 +96,7 @@ func formatTime(t time.Time) string {
 
 // printTable writes aligned columns to the given writer.
 // headers and each row must have the same length.
-func printTable(w io.Writer, headers []string, rows [][]string) {
+func printTable(w io.Writer, headers []string, rows [][]string) error {
 	// Compute column widths.
 	widths := make([]int, len(headers))
 	for i, h := range headers {
@@ -72,20 +112,26 @@ func printTable(w io.Writer, headers []string, rows [][]string) {
 	}
 
 	// Print header.
-	printRow(w, headers, widths)
+	if err := printRow(w, headers, widths); err != nil {
+		return err
+	}
 
 	// Print rows.
 	for _, row := range rows {
-		printRow(w, row, widths)
+		if err := printRow(w, row, widths); err != nil {
+			return err
+		}
 	}
+
+	return nil
 }
 
 // printRow writes a single padded row.
-func printRow(w io.Writer, cells []string, widths []int) {
+func printRow(w io.Writer, cells []string, widths []int) error {
 	parts := make([]string, len(cells))
 	for i, cell := range cells {
 		parts[i] = fmt.Sprintf("%-*s", widths[i], cell)
 	}
 
-	fmt.Fprintln(w, strings.Join(parts, "  "))
+	return writeln(w, strings.Join(parts, "  "))
 }

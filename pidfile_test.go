@@ -25,7 +25,7 @@ func TestWritePIDFile_CreatesFileWithCurrentPID(t *testing.T) {
 
 	defer cleanup()
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // Test PID file path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
@@ -71,7 +71,7 @@ func TestWritePIDFile_EmptyPathReturnsError(t *testing.T) {
 	t.Parallel()
 
 	cleanup, err := writePIDFile("")
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Nil(t, cleanup)
 	assert.Contains(t, err.Error(), "empty")
 }
@@ -94,7 +94,7 @@ func TestReadPIDFile_ReadsValidPID(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "daemon.pid")
-	require.NoError(t, os.WriteFile(path, []byte("12345\n"), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte("12345\n"), 0o600))
 
 	pid, err := readPIDFile(path)
 	require.NoError(t, err)
@@ -105,10 +105,10 @@ func TestReadPIDFile_InvalidContent(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "daemon.pid")
-	require.NoError(t, os.WriteFile(path, []byte("not-a-pid\n"), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte("not-a-pid\n"), 0o600))
 
 	_, err := readPIDFile(path)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid PID")
 }
 
@@ -116,14 +116,14 @@ func TestReadPIDFile_FileNotFound(t *testing.T) {
 	t.Parallel()
 
 	_, err := readPIDFile(filepath.Join(t.TempDir(), "nonexistent.pid"))
-	assert.Error(t, err)
+	require.Error(t, err)
 }
 
 func TestSendSIGHUP_NoPIDFile(t *testing.T) {
 	t.Parallel()
 
 	err := sendSIGHUP(filepath.Join(t.TempDir(), "nonexistent.pid"))
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no running daemon")
 }
 
@@ -132,10 +132,10 @@ func TestSendSIGHUP_StalePIDFile(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "daemon.pid")
 	// PID 999999999 is almost certainly not a running process.
-	require.NoError(t, os.WriteFile(path, []byte("999999999\n"), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte("999999999\n"), 0o600))
 
 	err := sendSIGHUP(path)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not running")
 
 	// Stale PID file should be cleaned up.
@@ -155,10 +155,10 @@ func TestSendSIGHUP_SendsToCurrentProcess(t *testing.T) {
 	defer signal.Stop(sigCh)
 
 	path := filepath.Join(t.TempDir(), "daemon.pid")
-	require.NoError(t, os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600))
 
 	err := sendSIGHUP(path)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Verify the signal was delivered.
 	sig := <-sigCh

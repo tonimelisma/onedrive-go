@@ -11,30 +11,17 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// deltaPreferHeader requests that the Graph API include remote/shared items
-// using stable alias IDs in delta responses. Without this header, Personal
-// accounts may receive incomplete delta results for shared folders.
-// See spec/reference/graph-api-quirks.md.
-var deltaPreferHeader = http.Header{
-	"Prefer": {"deltashowremoteitemsaliasid"},
-}
-
 // deltaResponse mirrors the Graph API delta response JSON structure.
 // Unexported — callers receive normalized DeltaPage values.
 type deltaResponse struct {
 	Value     []driveItemResponse `json:"value"`
-	NextLink  string              `json:"@odata.nextLink"`  //nolint:tagliatelle // OData annotation key
-	DeltaLink string              `json:"@odata.deltaLink"` //nolint:tagliatelle // OData annotation key
+	NextLink  string              `json:"@odata.nextLink"`
+	DeltaLink string              `json:"@odata.deltaLink"`
 }
 
 // deltaHTTPPrefix is the scheme prefix used to detect full URL tokens
 // returned by the Graph API delta endpoint.
 const deltaHTTPPrefix = "http"
-
-// maxDeltaPages is the upper bound on pages fetched by DeltaAll/DeltaFolderAll.
-// A buggy API or circular NextLinks could loop forever without this guard.
-// Package-level var (not const) so tests can temporarily override it.
-var maxDeltaPages = 10000 //nolint:gochecknoglobals // test-overridable guard
 
 // deltaPathBuilder constructs the initial API path for a delta request when
 // no token (or a non-HTTP token) is provided.
@@ -80,7 +67,7 @@ func (c *Client) fetchDeltaPage(
 	args = append(args, slog.Bool("initial_sync", token == ""))
 	c.logger.Info("fetching delta page", args...)
 
-	resp, err := c.DoWithHeaders(ctx, http.MethodGet, path, nil, deltaPreferHeader)
+	resp, err := c.DoWithHeaders(ctx, http.MethodGet, path, nil, c.deltaPreferHeader)
 	if err != nil {
 		return nil, err
 	}
@@ -215,8 +202,8 @@ func (c *Client) deltaAllPages(
 			currentToken = dp.NextLink
 			page++
 
-			if page > maxDeltaPages {
-				return nil, "", fmt.Errorf("graph: delta enumeration exceeded %d pages", maxDeltaPages)
+			if page > c.maxDeltaPages {
+				return nil, "", fmt.Errorf("graph: delta enumeration exceeded %d pages", c.maxDeltaPages)
 			}
 
 			continue

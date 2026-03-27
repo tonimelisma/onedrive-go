@@ -3,7 +3,6 @@ package driveid
 import (
 	"encoding"
 	"fmt"
-	"sort"
 	"strings"
 )
 
@@ -20,30 +19,25 @@ const (
 // (type:email:sourceDriveID:sourceItemID) use 4 parts.
 const canonicalIDMaxParts = 4
 
-// validDriveTypes enumerates accepted drive type prefixes in canonical IDs.
-var validDriveTypes = map[string]bool{
-	DriveTypePersonal:   true,
-	DriveTypeBusiness:   true,
-	DriveTypeSharePoint: true,
-	DriveTypeShared:     true,
-}
-
 // IsValidDriveType reports whether the given string is a valid drive type prefix.
 func IsValidDriveType(t string) bool {
-	return validDriveTypes[t]
+	switch t {
+	case DriveTypePersonal, DriveTypeBusiness, DriveTypeSharePoint, DriveTypeShared:
+		return true
+	default:
+		return false
+	}
 }
 
-// validTypeList returns a sorted, comma-separated list of valid drive types
-// for use in error messages. Derived from validDriveTypes so it never drifts.
+// validTypeList returns a comma-separated list of valid drive types for use in
+// error messages.
 func validTypeList() string {
-	types := make([]string, 0, len(validDriveTypes))
-	for t := range validDriveTypes {
-		types = append(types, t)
-	}
-
-	sort.Strings(types)
-
-	return strings.Join(types, ", ")
+	return strings.Join([]string{
+		DriveTypeBusiness,
+		DriveTypePersonal,
+		DriveTypeSharePoint,
+		DriveTypeShared,
+	}, ", ")
 }
 
 // CanonicalID is a config-level drive identifier with one of four formats:
@@ -90,7 +84,7 @@ func NewCanonicalID(raw string) (CanonicalID, error) {
 	}
 
 	driveType := parts[0]
-	if !validDriveTypes[driveType] {
+	if !IsValidDriveType(driveType) {
 		return CanonicalID{}, fmt.Errorf(
 			"driveid: canonical ID %q has unknown type %q (valid: %s)", raw, driveType, validTypeList())
 	}

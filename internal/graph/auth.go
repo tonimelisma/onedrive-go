@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net"
@@ -22,10 +23,12 @@ import (
 // Azure AD application registered for onedrive-go (public client, multi-tenant + personal).
 const defaultClientID = "8efac532-bbe7-4bc5-919c-1443ccab860a"
 
-var defaultScopes = []string{
-	"offline_access",
-	"Files.ReadWrite.All",
-	"User.Read",
+func defaultScopes() []string {
+	return []string{
+		"offline_access",
+		"Files.ReadWrite.All",
+		"User.Read",
+	}
 }
 
 // DeviceAuth holds the device code response fields that the CLI displays to the user.
@@ -140,7 +143,7 @@ type callbackResult struct {
 func LoginWithBrowser(
 	ctx context.Context,
 	tokenPath string,
-	openURL func(string) error,
+	openURL func(context.Context, string) error,
 	logger *slog.Logger,
 ) (TokenSource, error) {
 	cfg := oauthConfig(tokenPath, logger)
@@ -154,7 +157,7 @@ func doAuthCodeLogin(
 	ctx context.Context,
 	tokenPath string,
 	cfg *oauth2.Config,
-	openURL func(string) error,
+	openURL func(context.Context, string) error,
 	logger *slog.Logger,
 ) (TokenSource, error) {
 	logger.Info("starting browser auth flow (authorization code + PKCE)",
@@ -170,7 +173,7 @@ func doAuthCodeLogin(
 		return nil, err
 	}
 
-	defer shutdownCallbackServer(srv, logger)
+	defer shutdownCallbackServer(ctx, srv, logger)
 
 	// Configure redirect URL with the actual port. No path suffix — must match
 	// the registered "http://localhost" URI exactly (port is ignored by v2.0).
@@ -193,7 +196,7 @@ func doAuthCodeLogin(
 	)
 
 	// Open the browser and wait for callback.
-	launchBrowser(authURL, openURL, logger)
+	launchBrowser(ctx, authURL, openURL, logger)
 
 	code, err := waitForCallback(ctx, resultCh)
 	if err != nil {
@@ -221,8 +224,12 @@ func startCallbackServer(
 
 	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
 	if !ok {
-		listener.Close()
-		return nil, 0, fmt.Errorf("graph: listener address is not TCP")
+		baseErr := fmt.Errorf("graph: listener address is not TCP")
+		if closeErr := listener.Close(); closeErr != nil {
+			return nil, 0, errors.Join(baseErr, fmt.Errorf("graph: closing callback listener: %w", closeErr))
+		}
+
+		return nil, 0, baseErr
 	}
 
 	port := tcpAddr.Port
@@ -278,16 +285,20 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request, state string, r
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, "<html><body><h1>Authentication successful</h1>"+
-		"<p>You can close this window and return to the terminal.</p></body></html>")
+	if _, err := io.WriteString(w, "<html><body><h1>Authentication successful</h1>"+
+		"<p>You can close this window and return to the terminal.</p></body></html>"); err != nil {
+		resultCh <- callbackResult{err: fmt.Errorf("graph: writing callback success page: %w", err)}
+
+		return
+	}
 	resultCh <- callbackResult{code: code}
 }
 
 // shutdownCallbackServer gracefully shuts down the callback HTTP server.
 // Accepts an explicit logger instead of using slog.Default() so the caller
 // controls logging configuration (B-146).
-func shutdownCallbackServer(srv *http.Server, logger *slog.Logger) {
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+func shutdownCallbackServer(ctx context.Context, srv *http.Server, logger *slog.Logger) {
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
@@ -298,10 +309,10 @@ func shutdownCallbackServer(srv *http.Server, logger *slog.Logger) {
 
 // launchBrowser attempts to open the auth URL. If it fails, prints the URL
 // to stderr as a fallback so the user can copy-paste it.
-func launchBrowser(authURL string, openURL func(string) error, logger *slog.Logger) {
+func launchBrowser(ctx context.Context, authURL string, openURL func(context.Context, string) error, logger *slog.Logger) {
 	logger.Info("opening browser for authorization")
 
-	if openErr := openURL(authURL); openErr != nil {
+	if openErr := openURL(ctx, authURL); openErr != nil {
 		logger.Warn("failed to open browser, printing URL",
 			slog.String("error", openErr.Error()),
 		)
@@ -359,7 +370,7 @@ func exchangeAndSave(
 func generateState() (string, error) {
 	b := make([]byte, stateTokenBytes)
 	if _, err := rand.Read(b); err != nil {
-		return "", err
+		return "", fmt.Errorf("read random state token: %w", err)
 	}
 
 	return hex.EncodeToString(b), nil
@@ -382,7 +393,7 @@ func TokenSourceFromPath(ctx context.Context, tokenPath string, logger *slog.Log
 	}
 
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load token file: %w", err)
 	}
 
 	if tok.RefreshToken == "" {
@@ -418,7 +429,7 @@ func Logout(tokenPath string, logger *slog.Logger) error {
 	}
 
 	if err != nil {
-		return err
+		return fmt.Errorf("remove token file: %w", err)
 	}
 
 	logger.Info("logout: removed token file",
@@ -433,7 +444,7 @@ func Logout(tokenPath string, logger *slog.Logger) error {
 func oauthConfig(tokenPath string, logger *slog.Logger) *oauth2.Config {
 	return &oauth2.Config{
 		ClientID: defaultClientID,
-		Scopes:   defaultScopes,
+		Scopes:   defaultScopes(),
 		Endpoint: microsoft.AzureADEndpoint("common"),
 		// Called by ReuseTokenSource after each silent refresh, outside its mutex.
 		OnTokenChange: func(tok *oauth2.Token) {

@@ -16,51 +16,50 @@ import (
 func TestCanReuseBaselineHash_MetadataMatchOutsideRacilyCleanWindow(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	path := filepath.Join(dir, "stable.txt")
-	content := []byte("stable content")
-	oldTime := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name      string
+		path      string
+		nowOffset int64
+		wantReuse bool
+	}{
+		{
+			name:      "metadata_match_outside_racily_clean_window",
+			path:      "stable.txt",
+			nowOffset: nanosPerSecond + 1,
+			wantReuse: true,
+		},
+		{
+			name:      "racily_clean_forces_hash",
+			path:      "racy.txt",
+			nowOffset: nanosPerSecond - 1,
+			wantReuse: false,
+		},
+	}
 
-	require.NoError(t, os.WriteFile(path, content, 0o644))
-	require.NoError(t, os.Chtimes(path, oldTime, oldTime))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, tt.path)
+			content := []byte("stable content")
+			baseTime := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	info, err := os.Stat(path)
-	require.NoError(t, err)
+			require.NoError(t, os.WriteFile(path, content, 0o600))
+			require.NoError(t, os.Chtimes(path, baseTime, baseTime))
 
-	assert.True(t, CanReuseBaselineHash(info, &synctypes.BaselineEntry{
-		Path:      "stable.txt",
-		DriveID:   driveid.New("d"),
-		ItemID:    "i1",
-		ItemType:  synctypes.ItemTypeFile,
-		LocalHash: "cached-hash",
-		Size:      info.Size(),
-		Mtime:     info.ModTime().UnixNano(),
-	}, info.ModTime().UnixNano()+nanosPerSecond+1))
-}
+			info, err := os.Stat(path)
+			require.NoError(t, err)
 
-func TestCanReuseBaselineHash_RacilyCleanForcesHash(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "racy.txt")
-	content := []byte("stable content")
-	baseTime := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-
-	require.NoError(t, os.WriteFile(path, content, 0o644))
-	require.NoError(t, os.Chtimes(path, baseTime, baseTime))
-
-	info, err := os.Stat(path)
-	require.NoError(t, err)
-
-	assert.False(t, CanReuseBaselineHash(info, &synctypes.BaselineEntry{
-		Path:      "racy.txt",
-		DriveID:   driveid.New("d"),
-		ItemID:    "i1",
-		ItemType:  synctypes.ItemTypeFile,
-		LocalHash: "cached-hash",
-		Size:      info.Size(),
-		Mtime:     info.ModTime().UnixNano(),
-	}, info.ModTime().UnixNano()+nanosPerSecond-1))
+			assert.Equal(t, tt.wantReuse, CanReuseBaselineHash(info, &synctypes.BaselineEntry{
+				Path:      tt.path,
+				DriveID:   driveid.New("d"),
+				ItemID:    "i1",
+				ItemType:  synctypes.ItemTypeFile,
+				LocalHash: "cached-hash",
+				Size:      info.Size(),
+				Mtime:     info.ModTime().UnixNano(),
+			}, info.ModTime().UnixNano()+tt.nowOffset))
+		})
+	}
 }
 
 func TestCanReuseBaselineHash_MetadataMismatchRequiresHash(t *testing.T) {
@@ -71,7 +70,7 @@ func TestCanReuseBaselineHash_MetadataMismatchRequiresHash(t *testing.T) {
 	content := []byte("stable content")
 	oldTime := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	require.NoError(t, os.WriteFile(path, content, 0o644))
+	require.NoError(t, os.WriteFile(path, content, 0o600))
 	require.NoError(t, os.Chtimes(path, oldTime, oldTime))
 
 	info, err := os.Stat(path)

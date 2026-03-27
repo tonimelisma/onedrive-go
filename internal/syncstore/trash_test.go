@@ -12,7 +12,7 @@ import (
 
 // Validates: R-6.4.6
 func TestDefaultTrashFunc_NonDarwin(t *testing.T) {
-	if runtime.GOOS == "darwin" {
+	if runtime.GOOS == platformDarwin {
 		t.Skip("test only applicable on non-darwin")
 	}
 
@@ -29,7 +29,7 @@ func TestDefaultTrashFunc_NonDarwin(t *testing.T) {
 
 // Validates: R-6.4.5
 func TestMoveToMacOSTrash(t *testing.T) {
-	if runtime.GOOS != "darwin" {
+	if runtime.GOOS != platformDarwin {
 		t.Skip("macOS-only test")
 	}
 
@@ -49,13 +49,14 @@ func TestMoveToMacOSTrash(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "file should have been moved to trash")
 
 	// Clean up from trash.
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
 	trashPath := filepath.Join(home, ".Trash", "trash-test-file.txt")
-	os.Remove(trashPath) // best-effort cleanup
+	assert.NoError(t, os.Remove(trashPath))
 }
 
 func TestMoveToMacOSTrash_NameCollision(t *testing.T) {
-	if runtime.GOOS != "darwin" {
+	if runtime.GOOS != platformDarwin {
 		t.Skip("macOS-only test")
 	}
 
@@ -70,7 +71,9 @@ func TestMoveToMacOSTrash_NameCollision(t *testing.T) {
 	collisionPath := filepath.Join(trashDir, "trash-collision-test.txt")
 	require.NoError(t, os.WriteFile(collisionPath, []byte("existing"), 0o600))
 
-	defer os.Remove(collisionPath)
+	defer func() {
+		assert.NoError(t, os.Remove(collisionPath))
+	}()
 
 	// Now try to trash a file with the same name.
 	dir := t.TempDir()
@@ -85,5 +88,5 @@ func TestMoveToMacOSTrash_NameCollision(t *testing.T) {
 
 	// Clean up: the collision file should be "trash-collision-test 2.txt".
 	suffix2 := filepath.Join(trashDir, "trash-collision-test 2.txt")
-	os.Remove(suffix2) // best-effort cleanup
+	assert.NoError(t, os.Remove(suffix2))
 }

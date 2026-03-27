@@ -35,7 +35,7 @@ func TestE2E_Sync_IncrementalDeltaToken(t *testing.T) {
 
 	// Create 3 local files and sync.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 
 	for i := 1; i <= 3; i++ {
 		name := fmt.Sprintf("delta-%d.txt", i)
@@ -85,7 +85,7 @@ func TestE2E_Sync_CrashRecoveryIdempotent(t *testing.T) {
 
 	// Create 5 files and sync.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 
 	for i := 1; i <= 5; i++ {
 		name := fmt.Sprintf("crash-%d.txt", i)
@@ -136,9 +136,9 @@ func TestE2E_Sync_DriveRemovePurgeResetsState(t *testing.T) {
 
 	// Create files and sync.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "purge-a.txt"), []byte("purge a"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "purge-b.txt"), []byte("purge b"), 0o644))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "purge-a.txt"), []byte("purge a"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "purge-b.txt"), []byte("purge b"), 0o600))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 

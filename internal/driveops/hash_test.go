@@ -33,7 +33,7 @@ func TestComputeQuickXorHash(t *testing.T) {
 	content := "hello world"
 	path := filepath.Join(dir, "test.txt")
 
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 
 	hash, err := ComputeQuickXorHash(path)
 	require.NoError(t, err, "ComputeQuickXorHash")
@@ -48,7 +48,7 @@ func TestComputeQuickXorHash_EmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "empty.txt")
 
-	require.NoError(t, os.WriteFile(path, []byte(""), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(""), 0o600))
 
 	hash, err := ComputeQuickXorHash(path)
 	require.NoError(t, err, "ComputeQuickXorHash")

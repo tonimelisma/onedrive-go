@@ -90,7 +90,7 @@ func newIntegrationClient(t *testing.T) *Client {
 	}
 	require.NoError(t, err, "loading token for drive %q", drive)
 
-	httpClient := retryHTTPClient(http.DefaultClient, retry.Transport)
+	httpClient := retryHTTPClient(http.DefaultClient, retry.TransportPolicy())
 
 	return NewClient(DefaultBaseURL, httpClient, ts, logger, "onedrive-go/test")
 }
@@ -106,9 +106,10 @@ func driveIDForTest(t *testing.T) driveid.ID {
 
 	cid := driveid.MustCanonicalID(drive)
 
-	meta, err := config.LoadDriveMetadata(cid)
+	meta, found, err := config.LookupDriveMetadata(cid)
 	require.NoError(t, err, "reading drive metadata for drive %q", drive)
-	require.NotNil(t, meta, "drive metadata file missing — re-run scripts/bootstrap-test-credentials.sh")
+	require.True(t, found, "drive metadata file missing — re-run scripts/bootstrap-test-credentials.sh")
+	require.NotNil(t, meta, "drive metadata should be present when found is true")
 	require.NotEmpty(t, meta.DriveID, "drive metadata has empty drive_id")
 
 	return driveid.New(meta.DriveID)

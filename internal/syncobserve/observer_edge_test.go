@@ -125,7 +125,7 @@ func TestNosyncGuard_PreventsAllSync(t *testing.T) {
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
 
 	result, err := obs.FullScan(t.Context(), syncRoot)
-	assert.ErrorIs(t, err, synctypes.ErrNosyncGuard)
+	require.ErrorIs(t, err, synctypes.ErrNosyncGuard)
 	assert.Empty(t, result.Events, ".nosync should prevent all events")
 }
 

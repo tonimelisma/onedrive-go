@@ -18,23 +18,26 @@ import (
 // Follows the CleanStale pattern: per-file errors are logged and skipped,
 // returns (count, scanError). The caller logs a summary.
 func CleanStalePartials(syncRoot string, logger *slog.Logger) (int, error) {
-	// Pre-check: return error for nonexistent root (WalkDir would swallow it).
-	if _, err := os.Stat(syncRoot); err != nil {
-		return 0, fmt.Errorf("scanning for partial files: %w", err)
+	root, err := os.OpenRoot(syncRoot)
+	if err != nil {
+		return 0, fmt.Errorf("opening sync root: %w", err)
 	}
+	defer func() {
+		if closeErr := root.Close(); closeErr != nil {
+			logger.Warn("closing sync root after partial cleanup failed",
+				slog.String("root", syncRoot),
+				slog.String("error", closeErr.Error()),
+			)
+		}
+	}()
 
 	deleted := 0
 
-	err := filepath.WalkDir(syncRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			rel, relErr := filepath.Rel(syncRoot, path)
-			if relErr != nil {
-				rel = path
-			}
-
+	err = fs.WalkDir(root.FS(), ".", func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
 			logger.Warn("skipping path due to error",
-				slog.String("path", rel),
-				slog.String("error", err.Error()),
+				slog.String("path", path),
+				slog.String("error", walkErr.Error()),
 			)
 
 			return nil
@@ -48,21 +51,16 @@ func CleanStalePartials(syncRoot string, logger *slog.Logger) (int, error) {
 			return nil
 		}
 
-		rel, relErr := filepath.Rel(syncRoot, path)
-		if relErr != nil {
-			rel = path
-		}
-
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		if removeErr := root.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
 			logger.Warn("failed to delete partial file",
-				slog.String("path", rel),
-				slog.String("error", err.Error()),
+				slog.String("path", path),
+				slog.String("error", removeErr.Error()),
 			)
 
 			return nil
 		}
 
-		logger.Info("deleted stale partial file", slog.String("path", rel))
+		logger.Info("deleted stale partial file", slog.String("path", path))
 
 		deleted++
 

@@ -45,7 +45,7 @@ one-way sync. Use --dry-run to preview what would happen without making changes.
 func runSync(cmd *cobra.Command, _ []string) error {
 	watch, err := cmd.Flags().GetBool("watch")
 	if err != nil {
-		return err
+		return fmt.Errorf("read --watch flag: %w", err)
 	}
 
 	mode := syncModeFromFlags(cmd)
@@ -59,7 +59,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 
 	force, err := cmd.Flags().GetBool("force")
 	if err != nil {
-		return err
+		return fmt.Errorf("read --force flag: %w", err)
 	}
 
 	// Load raw config and resolve drives (sync does its own multi-drive
@@ -99,13 +99,13 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	// One-shot: resolve drives (excludes paused drives).
 	drives, err := config.ResolveDrives(rawCfg, selectors, false, logger)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve drives: %w", err)
 	}
 
 	// Sync requires sync_dir on every drive (file ops like ls/get don't).
 	for _, rd := range drives {
 		if syncErr := config.ValidateResolvedForSync(rd); syncErr != nil {
-			return syncErr
+			return fmt.Errorf("validate drive %s: %w", rd.CanonicalID, syncErr)
 		}
 	}
 
@@ -121,12 +121,12 @@ func runSync(cmd *cobra.Command, _ []string) error {
 
 	dryRun, err := cmd.Flags().GetBool("dry-run")
 	if err != nil {
-		return err
+		return fmt.Errorf("read --dry-run flag: %w", err)
 	}
 
 	fullReconcile, err := cmd.Flags().GetBool("full")
 	if err != nil {
-		return err
+		return fmt.Errorf("read --full flag: %w", err)
 	}
 
 	holder := config.NewHolder(rawCfg, cc.CfgPath)
@@ -161,13 +161,13 @@ func runSyncDaemon(
 	// Include paused drives — Orchestrator handles pause/resume internally.
 	drives, err := config.ResolveDrives(holder.Config(), selectors, true, logger)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve drives: %w", err)
 	}
 
 	// Sync requires sync_dir on every drive (file ops like ls/get don't).
 	for _, rd := range drives {
 		if syncErr := config.ValidateResolvedForSync(rd); syncErr != nil {
-			return syncErr
+			return fmt.Errorf("validate drive %s: %w", rd.CanonicalID, syncErr)
 		}
 	}
 
@@ -195,7 +195,11 @@ func runSyncDaemon(
 		SIGHUPChan: sighup,
 	})
 
-	return orch.RunWatch(ctx, mode, opts)
+	if err := orch.RunWatch(ctx, mode, opts); err != nil {
+		return fmt.Errorf("run watch sync: %w", err)
+	}
+
+	return nil
 }
 
 // syncModeFromFlags determines the SyncMode from CLI flags.

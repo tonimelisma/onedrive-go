@@ -24,6 +24,24 @@ func (errorWriter) Write(_ []byte) (int, error) {
 	return 0, errors.New("write failed")
 }
 
+func writeDownloadTestBody(t *testing.T, w http.ResponseWriter, body string) {
+	t.Helper()
+
+	_, err := w.Write([]byte(body))
+	require.NoError(t, err)
+}
+
+func assertDownloadError(t *testing.T, srv *httptest.Server, itemID string, want error) {
+	t.Helper()
+	t.Cleanup(srv.Close)
+
+	client := newTestClient(t, srv.URL)
+	var buf bytes.Buffer
+	_, err := client.Download(t.Context(), driveid.New("d"), itemID, &buf)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, want)
+}
+
 // Validates: R-1.2
 func TestDownload_Success(t *testing.T) {
 	fileContent := "Hello, this is the file content for download testing."
@@ -32,7 +50,7 @@ func TestDownload_Success(t *testing.T) {
 		assert.Equal(t, http.MethodGet, r.Method)
 		assert.Empty(t, r.Header.Get("Authorization"))
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(fileContent))
+		writeDownloadTestBody(t, w, fileContent)
 	}))
 	defer downloadSrv.Close()
 
@@ -40,7 +58,7 @@ func TestDownload_Success(t *testing.T) {
 		assert.Equal(t, "/drives/000000000000000d/items/item-1", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"id": "item-1",
 			"name": "test.txt",
 			"size": %d,
@@ -65,7 +83,7 @@ func TestDownload_EmptyDownloadURL(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "folder-1",
 			"name": "Documents",
 			"createdDateTime": "2024-01-01T00:00:00Z",
@@ -74,42 +92,25 @@ func TestDownload_EmptyDownloadURL(t *testing.T) {
 			"folder": {"childCount": 5}
 		}`)
 	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	var buf bytes.Buffer
-	_, err := client.Download(t.Context(), driveid.New("d"), "folder-1", &buf)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNoDownloadURL)
+	assertDownloadError(t, srv, "folder-1", ErrNoDownloadURL)
 }
 
 func TestDownload_ItemNotFound(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("request-id", "req-dl-404")
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, `{"error":{"code":"itemNotFound"}}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	var buf bytes.Buffer
-	_, err := client.Download(t.Context(), driveid.New("d"), "nonexistent", &buf)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNotFound)
+	assertDownloadError(t, newGraphErrorServer(t, http.StatusNotFound, "req-dl-404", "itemNotFound", nil), "nonexistent", ErrNotFound)
 }
 
 func TestDownload_VerifyBytesWritten(t *testing.T) {
 	content := "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	dlSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(content))
+		writeDownloadTestBody(t, w, content)
 	}))
 	defer dlSrv.Close()
 
 	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"id": "item-2", "name": "data.bin", "size": %d,
 			"createdDateTime": "2024-01-01T00:00:00Z",
 			"lastModifiedDateTime": "2024-01-01T00:00:00Z",
@@ -137,7 +138,7 @@ func TestDownload_ServerError(t *testing.T) {
 	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"id": "item-3", "name": "fail.txt",
 			"createdDateTime": "2024-01-01T00:00:00Z",
 			"lastModifiedDateTime": "2024-01-01T00:00:00Z",
@@ -160,7 +161,7 @@ func TestDownload_NetworkError(t *testing.T) {
 	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "item-net", "name": "net.txt",
 			"createdDateTime": "2024-01-01T00:00:00Z",
 			"lastModifiedDateTime": "2024-01-01T00:00:00Z",
@@ -183,14 +184,14 @@ func TestDownloadFromURL_WriterError(t *testing.T) {
 	// Verify that downloadFromURL returns an error when the writer fails mid-stream.
 	dlSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("some data that will fail to write"))
+		writeDownloadTestBody(t, w, "some data that will fail to write")
 	}))
 	defer dlSrv.Close()
 
 	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"id": "item-ew", "name": "fail-write.txt",
 			"createdDateTime": "2024-01-01T00:00:00Z",
 			"lastModifiedDateTime": "2024-01-01T00:00:00Z",
@@ -212,14 +213,14 @@ func TestDownload_NoAuthOnPreAuthURL(t *testing.T) {
 		assert.Empty(t, r.Header.Get("Authorization"))
 		assert.Equal(t, "test-agent", r.Header.Get("User-Agent"))
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
+		writeDownloadTestBody(t, w, "ok")
 	}))
 	defer dlSrv.Close()
 
 	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"id": "item-4", "name": "noauth.txt",
 			"createdDateTime": "2024-01-01T00:00:00Z",
 			"lastModifiedDateTime": "2024-01-01T00:00:00Z",
@@ -246,14 +247,14 @@ func TestDownloadRange_Success(t *testing.T) {
 		rangeHdr := r.Header.Get("Range")
 		assert.Equal(t, fmt.Sprintf("bytes=%d-", offset), rangeHdr)
 		w.WriteHeader(http.StatusPartialContent)
-		_, _ = w.Write([]byte(fullContent[offset:]))
+		writeDownloadTestBody(t, w, fullContent[offset:])
 	}))
 	defer dlSrv.Close()
 
 	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"id": "item-range", "name": "range.txt", "size": %d,
 			"createdDateTime": "2024-01-01T00:00:00Z",
 			"lastModifiedDateTime": "2024-01-01T00:00:00Z",
@@ -276,7 +277,7 @@ func TestDownloadRange_NoDownloadURL(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "folder-r", "name": "Folder",
 			"createdDateTime": "2024-01-01T00:00:00Z",
 			"lastModifiedDateTime": "2024-01-01T00:00:00Z",
@@ -304,14 +305,14 @@ func TestDownload_RetriesOn503(t *testing.T) {
 		}
 
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("retry success"))
+		writeDownloadTestBody(t, w, "retry success")
 	}))
 	defer dlSrv.Close()
 
 	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"id": "item-retry", "name": "retry.txt",
 			"createdDateTime": "2024-01-01T00:00:00Z",
 			"lastModifiedDateTime": "2024-01-01T00:00:00Z",

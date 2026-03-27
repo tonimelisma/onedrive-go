@@ -32,7 +32,7 @@ func TestDriveRunner_Run_Success(t *testing.T) {
 
 	assert.Equal(t, cid, result.CanonicalID)
 	assert.Equal(t, "Test Drive", result.DisplayName)
-	assert.NoError(t, result.Err)
+	require.NoError(t, result.Err)
 	require.NotNil(t, result.Report)
 	assert.Equal(t, 3, result.Report.Downloads)
 	assert.Equal(t, 2, result.Report.Uploads)
@@ -54,7 +54,7 @@ func TestDriveRunner_Run_Error(t *testing.T) {
 
 	assert.Equal(t, cid, result.CanonicalID)
 	assert.Equal(t, "Failing Drive", result.DisplayName)
-	assert.ErrorIs(t, result.Err, errSync)
+	require.ErrorIs(t, result.Err, errSync)
 	assert.Nil(t, result.Report)
 }
 
@@ -112,6 +112,6 @@ func TestDriveRunner_Run_ContextCanceled(t *testing.T) {
 		return nil, c.Err()
 	})
 
-	assert.ErrorIs(t, result.Err, context.Canceled)
+	require.ErrorIs(t, result.Err, context.Canceled)
 	assert.Nil(t, result.Report)
 }

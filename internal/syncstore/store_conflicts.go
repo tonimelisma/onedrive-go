@@ -1,4 +1,4 @@
-// store_conflicts.go — Conflict management for SyncStore.
+// Package syncstore persists sync baseline, observation, conflict, failure, and scope state.
 //
 // Contents:
 //   - ListConflicts:           unresolved conflicts only
@@ -16,6 +16,7 @@ package syncstore
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path"
@@ -102,7 +103,7 @@ func (m *SyncStore) GetConflict(ctx context.Context, idOrPath string) (*synctype
 		return c, nil
 	}
 
-	if err != sql.ErrNoRows {
+	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("sync: getting conflict by ID %q: %w", idOrPath, err)
 	}
 
@@ -110,7 +111,7 @@ func (m *SyncStore) GetConflict(ctx context.Context, idOrPath string) (*synctype
 	row = m.db.QueryRowContext(ctx, sqlGetConflictByPath, idOrPath)
 
 	c, err = scanConflictRowSingle(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("sync: conflict not found for %q", idOrPath)
 	}
 
@@ -222,7 +223,7 @@ func scanConflict(s conflictScanner) (*synctypes.ConflictRecord, error) {
 		&c.Resolution, &resolvedAt, &resolvedBy,
 	)
 	if err != nil {
-		return nil, err //nolint:wrapcheck // callers wrap with context
+		return nil, fmt.Errorf("sync: scanning conflict row: %w", err)
 	}
 
 	c.ItemID = itemID.String

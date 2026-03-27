@@ -33,6 +33,30 @@ type mockDeltaFetcher struct {
 	driveIDs []driveid.ID // records driveID passed to each Delta call
 }
 
+func twoPageDeltaPages(firstLinkType, firstLink, secondDeltaLink string) []mockDeltaPage {
+	firstPage := &graph.DeltaPage{
+		Items: []graph.Item{
+			{ID: "root", IsRoot: true, DriveID: driveid.New(synctest.TestDriveID)},
+			{ID: "f1", Name: "a.txt", ParentID: "root", DriveID: driveid.New(synctest.TestDriveID)},
+		},
+	}
+	if firstLinkType == "next" {
+		firstPage.NextLink = firstLink
+	} else {
+		firstPage.DeltaLink = firstLink
+	}
+
+	return []mockDeltaPage{
+		{page: firstPage},
+		{page: &graph.DeltaPage{
+			Items: []graph.Item{
+				{ID: "f2", Name: "b.txt", ParentID: "root", DriveID: driveid.New(synctest.TestDriveID)},
+			},
+			DeltaLink: secondDeltaLink,
+		}},
+	}
+}
+
 func (m *mockDeltaFetcher) Delta(_ context.Context, driveID driveid.ID, _ string) (*graph.DeltaPage, error) {
 	m.driveIDs = append(m.driveIDs, driveID)
 
@@ -124,7 +148,7 @@ func TestFullDelta_ModifiedFile(t *testing.T) {
 	// Find the file event.
 	var fileEvent *synctypes.ChangeEvent
 	for i := range events {
-		if events[i].ItemID == "f1" {
+		if events[i].ItemID == shortcutTestFileItemID {
 			fileEvent = &events[i]
 
 			break
@@ -192,7 +216,7 @@ func TestFullDelta_MovedFile(t *testing.T) {
 				Items: []graph.Item{
 					{ID: "root", IsRoot: true, DriveID: driveid.New(synctest.TestDriveID)},
 					// File moved from old-folder to new-folder.
-					{ID: "f1", Name: "doc.txt", ParentID: "folder-new", DriveID: driveid.New(synctest.TestDriveID)},
+					{ID: shortcutTestFileItemID, Name: "doc.txt", ParentID: "folder-new", DriveID: driveid.New(synctest.TestDriveID)},
 				},
 				DeltaLink: "delta-link",
 			},
@@ -205,7 +229,7 @@ func TestFullDelta_MovedFile(t *testing.T) {
 
 	var moveEvent *synctypes.ChangeEvent
 	for i := range events {
-		if events[i].ItemID == "f1" {
+		if events[i].ItemID == shortcutTestFileItemID {
 			moveEvent = &events[i]
 
 			break
@@ -223,25 +247,7 @@ func TestFullDelta_MultiPage(t *testing.T) {
 	t.Parallel()
 
 	fetcher := &mockDeltaFetcher{
-		pages: []mockDeltaPage{
-			{
-				page: &graph.DeltaPage{
-					Items: []graph.Item{
-						{ID: "root", IsRoot: true, DriveID: driveid.New(synctest.TestDriveID)},
-						{ID: "f1", Name: "a.txt", ParentID: "root", DriveID: driveid.New(synctest.TestDriveID)},
-					},
-					NextLink: "next-page-url",
-				},
-			},
-			{
-				page: &graph.DeltaPage{
-					Items: []graph.Item{
-						{ID: "f2", Name: "b.txt", ParentID: "root", DriveID: driveid.New(synctest.TestDriveID)},
-					},
-					DeltaLink: "final-delta-link",
-				},
-			},
-		},
+		pages: twoPageDeltaPages("next", "next-page-url", "final-delta-link"),
 	}
 
 	obs := NewRemoteObserver(fetcher, synctest.EmptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
@@ -346,7 +352,7 @@ func TestFullDelta_PathMaterialization_InFlight(t *testing.T) {
 			{
 				page: &graph.DeltaPage{
 					Items: []graph.Item{
-						{ID: "f1", Name: "report.pdf", ParentID: "d1", DriveID: driveid.New(synctest.TestDriveID)},
+						{ID: shortcutTestFileItemID, Name: "report.pdf", ParentID: "d1", DriveID: driveid.New(synctest.TestDriveID)},
 					},
 					DeltaLink: "delta-link",
 				},
@@ -361,7 +367,7 @@ func TestFullDelta_PathMaterialization_InFlight(t *testing.T) {
 	// Find file event.
 	var fileEvent *synctypes.ChangeEvent
 	for i := range events {
-		if events[i].ItemID == "f1" {
+		if events[i].ItemID == shortcutTestFileItemID {
 			fileEvent = &events[i]
 
 			break
@@ -428,7 +434,7 @@ func TestFullDelta_PathMaterialization_Mixed(t *testing.T) {
 
 	var fileEvent *synctypes.ChangeEvent
 	for i := range events {
-		if events[i].ItemID == "f1" {
+		if events[i].ItemID == shortcutTestFileItemID {
 			fileEvent = &events[i]
 
 			break
@@ -807,21 +813,7 @@ func TestWatch_PollsAtInterval(t *testing.T) {
 	t.Parallel()
 
 	fetcher := &sequentialFetcher{
-		pages: []mockDeltaPage{
-			{page: &graph.DeltaPage{
-				Items: []graph.Item{
-					{ID: "root", IsRoot: true, DriveID: driveid.New(synctest.TestDriveID)},
-					{ID: "f1", Name: "a.txt", ParentID: "root", DriveID: driveid.New(synctest.TestDriveID)},
-				},
-				DeltaLink: "token-1",
-			}},
-			{page: &graph.DeltaPage{
-				Items: []graph.Item{
-					{ID: "f2", Name: "b.txt", ParentID: "root", DriveID: driveid.New(synctest.TestDriveID)},
-				},
-				DeltaLink: "token-2",
-			}},
-		},
+		pages: twoPageDeltaPages("delta", "token-1", "token-2"),
 	}
 
 	obs := NewRemoteObserver(fetcher, synctest.EmptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
@@ -887,8 +879,8 @@ func TestWatch_BackoffOnError(t *testing.T) {
 
 	// First sleep should be 5s (initial backoff), second should be 10s (doubled).
 	require.GreaterOrEqual(t, len(sleepDurations), 2, "sleep should be called for backoff")
-	assert.Equal(t, retry.WatchRemote.Base, sleepDurations[0])
-	assert.Equal(t, time.Duration(float64(retry.WatchRemote.Base)*retry.WatchRemote.Multiplier), sleepDurations[1])
+	assert.Equal(t, retry.WatchRemotePolicy().Base, sleepDurations[0])
+	assert.Equal(t, time.Duration(float64(retry.WatchRemotePolicy().Base)*retry.WatchRemotePolicy().Multiplier), sleepDurations[1])
 }
 
 func TestWatch_DeltaExpiredResets(t *testing.T) {
@@ -959,7 +951,7 @@ func TestWatch_ContextCancellation(t *testing.T) {
 
 	select {
 	case err := <-done:
-		assert.NoError(t, err, "Watch returned error")
+		require.NoError(t, err, "Watch returned error")
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "Watch did not return after context cancellation")
 	}
@@ -1042,7 +1034,9 @@ func TestWatch_IntervalClamping(t *testing.T) {
 
 	events := make(chan synctypes.ChangeEvent, 10)
 	// Pass zero interval — should be clamped to MinPollInterval (30s).
-	_ = obs.Watch(t.Context(), "", events, 0)
+	err := obs.Watch(t.Context(), "", events, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "stop after first sleep")
 
 	assert.Equal(t, MinPollInterval, actualSleepDuration, "clamped from 0")
 }
@@ -1558,16 +1552,18 @@ func TestWatch_ObsWriterError_ContinuesRetry(t *testing.T) {
 	writer := &mockObservationWriter{err: fmt.Errorf("simulated commit error")}
 	obs := NewRemoteObserver(fetcher, synctest.EmptyBaseline(), driveID, synctest.TestLogger(t))
 	obs.ObsWriter = writer
-	obs.SleepFunc = func(_ context.Context, _ time.Duration) error {
+	ctx, cancel := context.WithCancel(t.Context())
+	obs.SleepFunc = func(ctx context.Context, _ time.Duration) error {
 		pollCount++
 		if pollCount >= 3 {
-			return fmt.Errorf("stop")
+			cancel()
+			return ctx.Err()
 		}
 		return nil
 	}
 
 	events := make(chan synctypes.ChangeEvent, 10)
-	err := obs.Watch(t.Context(), "", events, time.Millisecond)
+	err := obs.Watch(ctx, "", events, time.Millisecond)
 	require.NoError(t, err)
 
 	// Should have retried — multiple commit attempts.
@@ -1594,17 +1590,19 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	writer := &mockObservationWriter{}
 	obs := NewRemoteObserver(fetcher, synctest.EmptyBaseline(), driveID, synctest.TestLogger(t))
 	obs.ObsWriter = writer
-	obs.SleepFunc = func(_ context.Context, _ time.Duration) error {
+	ctx, cancel := context.WithCancel(t.Context())
+	obs.SleepFunc = func(ctx context.Context, _ time.Duration) error {
 		pollCount++
 		if pollCount >= 1 {
-			return fmt.Errorf("stop")
+			cancel()
+			return ctx.Err()
 		}
 
 		return nil
 	}
 
 	events := make(chan synctypes.ChangeEvent, 10)
-	err := obs.Watch(t.Context(), "old-token", events, time.Millisecond)
+	err := obs.Watch(ctx, "old-token", events, time.Millisecond)
 	require.NoError(t, err)
 
 	// CommitObservation should NOT have been called (0 events).

@@ -3,8 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -30,7 +28,7 @@ func makeTestSession(t *testing.T, handler http.Handler) *driveops.Session {
 	t.Cleanup(srv.Close)
 
 	client := graph.NewClient(srv.URL, srv.Client(), stubTS{},
-		slog.New(slog.NewTextHandler(io.Discard, nil)), "test/1.0")
+		slog.New(slog.DiscardHandler), "test/1.0")
 
 	return &driveops.Session{
 		Meta:    client,
@@ -45,7 +43,7 @@ func TestResolveDest_ForceReturnsExistingID(t *testing.T) {
 
 	session := makeTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// ResolveItem("dest.txt") → returns existing file
-		fmt.Fprintf(w, `{"id":"existing-file-id","name":"dest.txt","parentReference":{"id":"parent-folder-id"}}`)
+		writeTestResponsef(t, w, `{"id":"existing-file-id","name":"dest.txt","parentReference":{"id":"parent-folder-id"}}`)
 	}))
 
 	dest, err := resolveDest(t.Context(), session, "dest.txt", "source.txt", true)
@@ -60,7 +58,7 @@ func TestResolveDest_ForceEmptyParentID(t *testing.T) {
 
 	session := makeTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// File exists but has no parentReference (shouldn't happen, but defensive)
-		fmt.Fprintf(w, `{"id":"file-id","name":"dest.txt"}`)
+		writeTestResponsef(t, w, `{"id":"file-id","name":"dest.txt"}`)
 	}))
 
 	dest, err := resolveDest(t.Context(), session, "dest.txt", "source.txt", true)
@@ -73,7 +71,7 @@ func TestResolveDest_NoForceFileExists(t *testing.T) {
 	t.Parallel()
 
 	session := makeTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, `{"id":"file-id","name":"dest.txt","parentReference":{"id":"p1"}}`)
+		writeTestResponsef(t, w, `{"id":"file-id","name":"dest.txt","parentReference":{"id":"p1"}}`)
 	}))
 
 	dest, err := resolveDest(t.Context(), session, "dest.txt", "source.txt", false)
@@ -86,7 +84,7 @@ func TestResolveDest_FolderDest(t *testing.T) {
 	t.Parallel()
 
 	session := makeTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, `{"id":"folder-id","name":"destdir","folder":{}}`)
+		writeTestResponsef(t, w, `{"id":"folder-id","name":"destdir","folder":{}}`)
 	}))
 
 	dest, err := resolveDest(t.Context(), session, "destdir", "source.txt", false)
@@ -106,12 +104,12 @@ func TestResolveDest_NotFound(t *testing.T) {
 		if callCount == 1 {
 			// dest doesn't exist
 			w.WriteHeader(http.StatusNotFound)
-			fmt.Fprintf(w, `{"error":{"code":"itemNotFound"}}`)
+			writeTestResponsef(t, w, `{"error":{"code":"itemNotFound"}}`)
 
 			return
 		}
 		// parent exists
-		fmt.Fprintf(w, `{"id":"parent-id","name":"parentdir","folder":{}}`)
+		writeTestResponsef(t, w, `{"id":"parent-id","name":"parentdir","folder":{}}`)
 	}))
 
 	dest, err := resolveDest(t.Context(), session, "parentdir/newname.txt", "source.txt", false)
@@ -127,7 +125,7 @@ func TestResolveDest_SelfReferenceDetected(t *testing.T) {
 	t.Parallel()
 
 	session := makeTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprintf(w, `{"id":"item-1","name":"file.txt","parentReference":{"id":"parent-1"}}`)
+		writeTestResponsef(t, w, `{"id":"item-1","name":"file.txt","parentReference":{"id":"parent-1"}}`)
 	}))
 
 	dest, err := resolveDest(t.Context(), session, "file.txt", "file.txt", true)
@@ -191,7 +189,7 @@ func TestNoOpMoveProducesOutput(t *testing.T) {
 	cc := &CLIContext{StatusWriter: &buf}
 
 	// Simulate a no-op move output.
-	emitMoveResult(cc, "file.txt", "file.txt", "item-1")
+	require.NoError(t, emitMoveResult(cc, "file.txt", "file.txt", "item-1"))
 	assert.Contains(t, buf.String(), "file.txt")
 }
 

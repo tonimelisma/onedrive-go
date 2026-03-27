@@ -1,4 +1,4 @@
-// delete_counter.go — Rolling-window delete counter for watch-mode big-delete protection.
+// Package syncdispatch manages execution-time scope admission and delete safety.
 //
 // The counter tracks planned delete actions within a configurable time window.
 // When the cumulative count exceeds the threshold, all subsequent deletes are

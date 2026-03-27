@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -116,7 +117,11 @@ func printPutJSON(w io.Writer, out putJSONOutput) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 
-	return enc.Encode(out)
+	if err := enc.Encode(out); err != nil {
+		return fmt.Errorf("encode upload output: %w", err)
+	}
+
+	return nil
 }
 
 // printPutFolderJSON writes the put command's folder JSON output to w.
@@ -124,7 +129,11 @@ func printPutFolderJSON(w io.Writer, out putFolderJSONOutput) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 
-	return enc.Encode(out)
+	if err := enc.Encode(out); err != nil {
+		return fmt.Errorf("encode folder upload output: %w", err)
+	}
+
+	return nil
 }
 
 // uploadWalkState holds mutable state for the upload walk callback.
@@ -167,24 +176,17 @@ func uploadFolder(
 	}
 	state.result.FoldersCreated = 1
 
-	// Count total files for progress.
-	walkErr := filepath.WalkDir(localPath, func(_ string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil //nolint:nilerr // skip inaccessible entries
-		}
-
-		if !d.IsDir() {
-			state.total++
-		}
-
-		return nil
-	})
+	// Count total files for progress using the same partial-failure traversal
+	// policy as the upload pass.
+	walkErr := countUploadFiles(localPath, state)
 	if walkErr != nil {
 		return walkErr
 	}
 
-	walkErr = filepath.WalkDir(localPath, func(path string, d os.DirEntry, err error) error {
-		return uploadWalkEntry(ctx, cc, session, tm, state, localPath, remotePath, path, d, err)
+	walkErr = walkUploadTree(localPath, func(path string, d os.DirEntry) error {
+		return uploadWalkEntry(ctx, cc, session, tm, state, localPath, remotePath, path, d)
+	}, func(path string, err error) {
+		appendUploadWalkError(state, path, err)
 	})
 	if walkErr != nil {
 		return walkErr
@@ -204,6 +206,72 @@ func uploadFolder(
 	return nil
 }
 
+func countUploadFiles(localRoot string, state *uploadWalkState) error {
+	return walkUploadTree(localRoot, func(_ string, d os.DirEntry) error {
+		if !d.IsDir() {
+			state.total++
+		}
+
+		return nil
+	}, func(path string, err error) {
+		appendUploadWalkError(state, path, err)
+	})
+}
+
+func walkUploadTree(root string, visit func(path string, d os.DirEntry) error, onError func(path string, err error)) error {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return fmt.Errorf("reading upload root %s: %w", root, err)
+	}
+
+	for i := range entries {
+		entryPath := filepath.Join(root, entries[i].Name())
+		if err := walkUploadTreeEntry(entryPath, entries[i], visit, onError); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func walkUploadTreeEntry(
+	path string,
+	d os.DirEntry,
+	visit func(path string, d os.DirEntry) error,
+	onError func(path string, err error),
+) error {
+	if err := visit(path, d); err != nil {
+		return err
+	}
+
+	if !d.IsDir() {
+		return nil
+	}
+
+	children, err := os.ReadDir(path)
+	if err != nil {
+		onError(path, err)
+		return nil
+	}
+
+	for i := range children {
+		childPath := filepath.Join(path, children[i].Name())
+		if err := walkUploadTreeEntry(childPath, children[i], visit, onError); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func appendUploadWalkError(state *uploadWalkState, path string, err error) {
+	state.result.Errors = append(state.result.Errors, fmt.Sprintf("%s: %v", path, err))
+}
+
+func isFatalUploadWalkError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
 func uploadWalkEntry(
 	ctx context.Context,
 	cc *CLIContext,
@@ -212,23 +280,12 @@ func uploadWalkEntry(
 	state *uploadWalkState,
 	localRoot, remotePath, path string,
 	d os.DirEntry,
-	walkErr error,
 ) error {
-	if walkErr != nil {
-		state.result.Errors = append(state.result.Errors, fmt.Sprintf("%s: %v", path, walkErr))
-
-		return nil
-	}
-
-	if path == localRoot {
-		return nil // skip root, already created
-	}
-
 	parentDir := filepath.Dir(path)
 	parentID, ok := state.dirIDs[parentDir]
 
 	if !ok {
-		state.result.Errors = append(state.result.Errors, fmt.Sprintf("%s: parent folder ID not found", path))
+		appendUploadWalkError(state, path, errors.New("parent folder ID not found"))
 
 		return nil
 	}
@@ -236,7 +293,11 @@ func uploadWalkEntry(
 	if d.IsDir() {
 		folder, folderErr := session.EnsureFolder(ctx, parentID, d.Name())
 		if folderErr != nil {
-			state.result.Errors = append(state.result.Errors, fmt.Sprintf("%s: %v", path, folderErr))
+			if isFatalUploadWalkError(folderErr) {
+				return fmt.Errorf("ensure folder %q: %w", d.Name(), folderErr)
+			}
+
+			appendUploadWalkError(state, path, folderErr)
 
 			return nil
 		}
@@ -262,7 +323,7 @@ func uploadFileEntry(
 ) error {
 	fi, statErr := d.Info()
 	if statErr != nil {
-		state.result.Errors = append(state.result.Errors, fmt.Sprintf("%s: %v", path, statErr))
+		appendUploadWalkError(state, path, statErr)
 
 		return nil
 	}
@@ -276,7 +337,11 @@ func uploadFileEntry(
 		Progress: progress,
 	})
 	if uploadErr != nil {
-		state.result.Errors = append(state.result.Errors, fmt.Sprintf("%s: %v", path, uploadErr))
+		if isFatalUploadWalkError(uploadErr) {
+			return fmt.Errorf("upload file %q: %w", path, uploadErr)
+		}
+
+		appendUploadWalkError(state, path, uploadErr)
 
 		return nil
 	}

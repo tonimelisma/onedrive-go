@@ -306,7 +306,7 @@ func TestExpandTilde(t *testing.T) {
 	assert.Equal(t, filepath.Join(home, "OneDrive"), expandTilde("~/OneDrive"))
 	assert.Equal(t, "/absolute/path", expandTilde("/absolute/path"))
 	assert.Equal(t, "relative/path", expandTilde("relative/path"))
-	assert.Equal(t, "", expandTilde(""))
+	assert.Empty(t, expandTilde(""))
 }
 
 // --- DriveStatePath ---
@@ -526,7 +526,7 @@ func TestDiscoverTokensIn_IgnoresDirectories(t *testing.T) {
 	writeTokenFile(t, dir, "token_personal_user@example.com.json")
 
 	// Create a subdirectory that matches the token naming pattern.
-	require.NoError(t, os.Mkdir(filepath.Join(dir, "token_personal_dir@example.com.json"), 0o755))
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "token_personal_dir@example.com.json"), 0o700))
 
 	ids := discoverTokensIn(dir, testLogger(t))
 	require.Len(t, ids, 1)
@@ -735,7 +735,7 @@ func setTestDataDir(t *testing.T) string {
 
 	// DefaultDataDir() derives from HOME — create the expected directory structure.
 	dataDir := DefaultDataDir()
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
 	return dataDir
 }

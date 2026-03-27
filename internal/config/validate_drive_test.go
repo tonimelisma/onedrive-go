@@ -157,7 +157,7 @@ func TestValidateDrives_SymlinkedSyncDir_DetectedAsDuplicate(t *testing.T) {
 	realDir := filepath.Join(dir, "real")
 	linkDir := filepath.Join(dir, "link")
 
-	require.NoError(t, os.MkdirAll(realDir, 0o755))
+	require.NoError(t, os.MkdirAll(realDir, 0o700))
 	require.NoError(t, os.Symlink(realDir, linkDir))
 
 	cfg := DefaultConfig()

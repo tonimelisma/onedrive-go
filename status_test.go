@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"path/filepath"
 	"testing"
@@ -374,7 +373,7 @@ func TestBuildStatusAccountsWith_NilSyncState(t *testing.T) {
 func TestQuerySyncState_NoDB(t *testing.T) {
 	t.Parallel()
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := slog.New(slog.DiscardHandler)
 
 	info := querySyncState("/nonexistent/path/state.db", logger)
 	assert.Nil(t, info)
@@ -383,7 +382,7 @@ func TestQuerySyncState_NoDB(t *testing.T) {
 func TestQuerySyncState_EmptyDB(t *testing.T) {
 	t.Parallel()
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := slog.New(slog.DiscardHandler)
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "state.db")
 
@@ -400,7 +399,7 @@ func TestQuerySyncState_EmptyDB(t *testing.T) {
 func TestQuerySyncState_WithMetadata(t *testing.T) {
 	t.Parallel()
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := slog.New(slog.DiscardHandler)
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "state.db")
 
@@ -429,7 +428,7 @@ func TestQuerySyncState_WithMetadata(t *testing.T) {
 		VALUES ('c1', '/conflict.txt', 'd!123', 'item2', 'root', 'file', 'edit_edit', 'unresolved', 0)`)
 	require.NoError(t, err)
 
-	db.Close()
+	require.NoError(t, db.Close())
 
 	info := querySyncState(dbPath, logger)
 	require.NotNil(t, info)
@@ -443,7 +442,7 @@ func TestQuerySyncState_WithMetadata(t *testing.T) {
 func TestQuerySyncState_PendingSyncAndIssues(t *testing.T) {
 	t.Parallel()
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := slog.New(slog.DiscardHandler)
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "state.db")
 
@@ -470,7 +469,7 @@ func TestQuerySyncState_PendingSyncAndIssues(t *testing.T) {
 		('/z.txt', 'd!1', 'upload', 'actionable', 1, 0, 0)`)
 	require.NoError(t, err)
 
-	db.Close()
+	require.NoError(t, db.Close())
 
 	info := querySyncState(dbPath, logger)
 	require.NotNil(t, info)
@@ -563,7 +562,7 @@ func TestPrintStatusText_NoDrives(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	printStatusText(&buf, nil)
+	require.NoError(t, printStatusText(&buf, nil))
 
 	output := buf.String()
 	// Should still print summary line.
@@ -591,7 +590,7 @@ func TestPrintStatusText_WithDisplayNameAndOrg(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printStatusText(&buf, accounts)
+	require.NoError(t, printStatusText(&buf, accounts))
 
 	output := buf.String()
 	assert.Contains(t, output, "Alice Smith (alice@contoso.com)")
@@ -619,7 +618,7 @@ func TestPrintStatusText_SyncStateNever(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printStatusText(&buf, accounts)
+	require.NoError(t, printStatusText(&buf, accounts))
 
 	output := buf.String()
 	assert.Contains(t, output, "Last sync: never")
@@ -648,7 +647,7 @@ func TestPrintStatusText_SyncStateWithError(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printStatusText(&buf, accounts)
+	require.NoError(t, printStatusText(&buf, accounts))
 
 	output := buf.String()
 	assert.Contains(t, output, "Last error: network timeout")
@@ -673,7 +672,7 @@ func TestPrintStatusText_EmptySyncDir(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printStatusText(&buf, accounts)
+	require.NoError(t, printStatusText(&buf, accounts))
 
 	output := buf.String()
 	assert.Contains(t, output, syncDirNotSet)
@@ -691,7 +690,7 @@ func TestPrintSummaryText_AllStates(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printSummaryText(&buf, s)
+	require.NoError(t, printSummaryText(&buf, s))
 
 	output := buf.String()
 	assert.Contains(t, output, "4 drives")
@@ -713,7 +712,7 @@ func TestPrintSummaryText_WithPendingAndRetrying(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printSummaryText(&buf, s)
+	require.NoError(t, printSummaryText(&buf, s))
 
 	output := buf.String()
 	assert.Contains(t, output, "5 pending")
@@ -732,7 +731,7 @@ func TestPrintSyncStateText_WithPendingAndIssues(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printSyncStateText(&buf, ss)
+	require.NoError(t, printSyncStateText(&buf, ss))
 
 	output := buf.String()
 	assert.Contains(t, output, "Pending:   3 items")

@@ -21,61 +21,16 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
+const (
+	execHelloWorldContent      = "hello world"
+	execHelloWorldQuickXorHash = "aCgDG9jwBhDc4Q1yawMZAAAAAAA="
+)
+
 // ---------------------------------------------------------------------------
 // Mock types (prefixed to avoid collision with other test files)
 // ---------------------------------------------------------------------------
 
-type executorMockItemClient struct {
-	createFolderFn func(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
-	moveItemFn     func(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error)
-	deleteItemFn   func(ctx context.Context, driveID driveid.ID, itemID string) error
-	getItemFn      func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
-	listChildrenFn func(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
-}
-
-func (m *executorMockItemClient) GetItem(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error) {
-	if m.getItemFn != nil {
-		return m.getItemFn(ctx, driveID, itemID)
-	}
-
-	return nil, fmt.Errorf("GetItem not mocked")
-}
-
-func (m *executorMockItemClient) ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error) {
-	if m.listChildrenFn != nil {
-		return m.listChildrenFn(ctx, driveID, parentID)
-	}
-
-	return nil, fmt.Errorf("ListChildren not mocked")
-}
-
-func (m *executorMockItemClient) CreateFolder(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error) {
-	if m.createFolderFn != nil {
-		return m.createFolderFn(ctx, driveID, parentID, name)
-	}
-
-	return nil, fmt.Errorf("CreateFolder not mocked")
-}
-
-func (m *executorMockItemClient) MoveItem(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error) {
-	if m.moveItemFn != nil {
-		return m.moveItemFn(ctx, driveID, itemID, newParentID, newName)
-	}
-
-	return nil, fmt.Errorf("MoveItem not mocked")
-}
-
-func (m *executorMockItemClient) DeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error {
-	if m.deleteItemFn != nil {
-		return m.deleteItemFn(ctx, driveID, itemID)
-	}
-
-	return fmt.Errorf("DeleteItem not mocked")
-}
-
-func (m *executorMockItemClient) PermanentDeleteItem(_ context.Context, _ driveid.ID, _ string) error {
-	return fmt.Errorf("PermanentDeleteItem not mocked")
-}
+type executorMockItemClient = testMockItemClient
 
 type executorMockDownloader struct {
 	downloadFn func(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error)
@@ -123,19 +78,19 @@ func writeExecTestFile(t *testing.T, dir, relPath, content string) string {
 	t.Helper()
 
 	absPath := filepath.Join(dir, relPath)
-	require.NoError(t, os.MkdirAll(filepath.Dir(absPath), 0o755))
-	require.NoError(t, os.WriteFile(absPath, []byte(content), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Dir(absPath), 0o700))
+	require.NoError(t, os.WriteFile(absPath, []byte(content), 0o600))
 
 	return absPath
 }
 
-func requireOutcomeSuccess(t *testing.T, o synctypes.Outcome) {
+func requireOutcomeSuccess(t *testing.T, o *synctypes.Outcome) {
 	t.Helper()
 
 	require.True(t, o.Success, "expected success but got error: %v", o.Error)
 }
 
-func requireOutcomeFailure(t *testing.T, o synctypes.Outcome) {
+func requireOutcomeFailure(t *testing.T, o *synctypes.Outcome) {
 	t.Helper()
 
 	require.False(t, o.Success, "expected failure but got success")
@@ -165,9 +120,9 @@ func TestExecutor_CreateLocalFolder(t *testing.T) {
 	}
 
 	o := e.ExecuteFolderCreate(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
-	info, err := os.Stat(filepath.Join(syncRoot, "docs/notes"))
+	info, err := os.Stat(filepath.Join(syncRoot, "docs", "notes"))
 	require.NoError(t, err, "folder not created")
 	require.True(t, info.IsDir(), "expected directory")
 }
@@ -195,7 +150,7 @@ func TestExecutor_CreateRemoteFolder(t *testing.T) {
 	}
 
 	o := e.ExecuteFolderCreate(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	assert.Equal(t, "new-folder-id", o.ItemID)
 }
@@ -220,7 +175,7 @@ func TestExecutor_CreateRemoteFolder_Error(t *testing.T) {
 	}
 
 	o := e.ExecuteFolderCreate(t.Context(), action)
-	requireOutcomeFailure(t, o)
+	requireOutcomeFailure(t, &o)
 }
 
 // ---------------------------------------------------------------------------
@@ -243,7 +198,7 @@ func TestExecutor_LocalMove(t *testing.T) {
 	}
 
 	o := e.ExecuteMove(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	assert.NoFileExists(t, filepath.Join(syncRoot, "old-name.txt"), "old path still exists")
 	assert.FileExists(t, filepath.Join(syncRoot, "new-name.txt"), "new path not created")
@@ -263,7 +218,7 @@ func TestExecutor_LocalMove_SourceMissing(t *testing.T) {
 	}
 
 	o := e.ExecuteMove(t.Context(), action)
-	requireOutcomeFailure(t, o)
+	requireOutcomeFailure(t, &o)
 }
 
 func TestExecutor_RemoteMove(t *testing.T) {
@@ -292,7 +247,7 @@ func TestExecutor_RemoteMove(t *testing.T) {
 	}
 
 	o := e.ExecuteMove(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	assert.Equal(t, "renamed.txt", o.Path)
 	assert.Equal(t, "original.txt", o.OldPath)
@@ -306,7 +261,7 @@ func TestExecutor_RemoteMove(t *testing.T) {
 func TestExecutor_Download_Success(t *testing.T) {
 	t.Parallel()
 
-	execFileContent := "hello world"
+	execFileContent := execHelloWorldContent
 
 	dl := &executorMockDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
@@ -334,9 +289,9 @@ func TestExecutor_Download_Success(t *testing.T) {
 	}
 
 	o := e.ExecuteDownload(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
-	data, err := os.ReadFile(filepath.Join(syncRoot, "greetings.txt"))
+	data, err := os.ReadFile(filepath.Join(syncRoot, "greetings.txt")) //nolint:gosec // Test output file lives under the temp sync root created by the test.
 	require.NoError(t, err, "file not created")
 	assert.Equal(t, execFileContent, string(data))
 
@@ -366,7 +321,7 @@ func TestExecutor_Download_APIError(t *testing.T) {
 	}
 
 	o := e.ExecuteDownload(t.Context(), action)
-	requireOutcomeFailure(t, o)
+	requireOutcomeFailure(t, &o)
 }
 
 func TestExecutor_Download_ParentDirCreated(t *testing.T) {
@@ -391,9 +346,9 @@ func TestExecutor_Download_ParentDirCreated(t *testing.T) {
 	}
 
 	o := e.ExecuteDownload(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
-	assert.FileExists(t, filepath.Join(syncRoot, "deep/nested/dir/exec-dl.txt"), "file not created in nested dir")
+	assert.FileExists(t, filepath.Join(syncRoot, "deep", "nested", "dir", "exec-dl.txt"), "file not created in nested dir")
 }
 
 func TestExecutor_Download_ZeroByte(t *testing.T) {
@@ -417,7 +372,7 @@ func TestExecutor_Download_ZeroByte(t *testing.T) {
 	}
 
 	o := e.ExecuteDownload(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	info, err := os.Stat(filepath.Join(syncRoot, "exec-empty.txt"))
 	require.NoError(t, err)
@@ -443,7 +398,7 @@ func TestExecutor_Download_HashMismatch_Retries(t *testing.T) {
 				return int64(n), err
 			}
 
-			n, err := w.Write([]byte("hello world"))
+			n, err := w.Write([]byte(execHelloWorldContent))
 			return int64(n), err
 		},
 	}
@@ -451,7 +406,7 @@ func TestExecutor_Download_HashMismatch_Retries(t *testing.T) {
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
 	e := NewExecution(cfg, synctest.EmptyBaseline())
 
-	correctHash := "aCgDG9jwBhDc4Q1yawMZAAAAAAA=" // QuickXorHash of "hello world"
+	correctHash := execHelloWorldQuickXorHash // QuickXorHash of hello world.
 	action := &synctypes.Action{
 		Type:    synctypes.ActionDownload,
 		Path:    "hash-retry.txt",
@@ -461,16 +416,16 @@ func TestExecutor_Download_HashMismatch_Retries(t *testing.T) {
 	}
 
 	o := e.ExecuteDownload(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	assert.Equal(t, 3, callCount, "expected 3 download calls")
 	assert.Equal(t, correctHash, o.LocalHash)
 	assert.Equal(t, correctHash, o.RemoteHash)
 
 	// File should contain correct content.
-	data, err := os.ReadFile(filepath.Join(syncRoot, "hash-retry.txt"))
+	data, err := os.ReadFile(filepath.Join(syncRoot, "hash-retry.txt")) //nolint:gosec // Test output file lives under the temp sync root created by the test.
 	require.NoError(t, err)
-	assert.Equal(t, "hello world", string(data))
+	assert.Equal(t, execHelloWorldContent, string(data))
 }
 
 func TestExecutor_Download_HashMismatch_Accepted(t *testing.T) {
@@ -499,7 +454,7 @@ func TestExecutor_Download_HashMismatch_Accepted(t *testing.T) {
 	}
 
 	o := e.ExecuteDownload(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	// All retries exhausted: 1 initial + 2 retries = 3.
 	assert.Equal(t, 3, callCount, "expected 3 download calls")
@@ -512,7 +467,7 @@ func TestExecutor_Download_HashMatch_NoRetry(t *testing.T) {
 	t.Parallel()
 
 	callCount := 0
-	content := "hello world"
+	content := execHelloWorldContent
 
 	dl := &executorMockDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
@@ -525,7 +480,7 @@ func TestExecutor_Download_HashMatch_NoRetry(t *testing.T) {
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
 	e := NewExecution(cfg, synctest.EmptyBaseline())
 
-	correctHash := "aCgDG9jwBhDc4Q1yawMZAAAAAAA="
+	correctHash := execHelloWorldQuickXorHash
 	action := &synctypes.Action{
 		Type:    synctypes.ActionDownload,
 		Path:    "hash-ok.txt",
@@ -535,7 +490,7 @@ func TestExecutor_Download_HashMatch_NoRetry(t *testing.T) {
 	}
 
 	o := e.ExecuteDownload(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	assert.Equal(t, 1, callCount, "expected 1 download call")
 	assert.Equal(t, correctHash, o.LocalHash)
@@ -571,7 +526,7 @@ func TestExecutor_Upload_SimpleSuccess(t *testing.T) {
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	assert.Equal(t, "uploaded1", o.ItemID)
 	assert.Equal(t, "root", o.ParentID)
@@ -606,7 +561,7 @@ func TestExecutor_Upload_ParentFromBaseline(t *testing.T) {
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	assert.Equal(t, "baseline-folder-id", capturedParentID)
 }
@@ -636,7 +591,7 @@ func TestExecutor_Upload_B068_ZeroDriveIDFilled(t *testing.T) {
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	// Executor should have filled driveID from its own context.
 	assert.Equal(t, driveid.New(synctest.TestDriveID), capturedDriveID)
@@ -666,7 +621,7 @@ func TestExecutor_Upload_LargeFileSuccess(t *testing.T) {
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	assert.Equal(t, "chunked1", o.ItemID)
 }
@@ -697,7 +652,7 @@ func TestExecutor_LocalDelete_HashMatch(t *testing.T) {
 	}
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	_, statErr := os.Stat(absPath)
 	assert.True(t, os.IsNotExist(statErr), "file should have been deleted")
@@ -725,7 +680,7 @@ func TestExecutor_LocalDelete_HashMismatch_ConflictCopy(t *testing.T) {
 	}
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	// B-133: outcome should be ActionConflict (not ActionLocalDelete) so it's tracked.
 	assert.Equal(t, synctypes.ActionConflict, o.Action, "expected ActionConflict")
@@ -737,7 +692,8 @@ func TestExecutor_LocalDelete_HashMismatch_ConflictCopy(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "original file should have been renamed")
 
 	// Conflict copy should exist.
-	entries, _ := os.ReadDir(syncRoot)
+	entries, err := os.ReadDir(syncRoot)
+	require.NoError(t, err)
 	found := false
 
 	for _, entry := range entries {
@@ -763,7 +719,7 @@ func TestExecutor_LocalDelete_AlreadyGone(t *testing.T) {
 	}
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 }
 
 func TestExecutor_LocalDelete_FolderEmpty(t *testing.T) {
@@ -772,7 +728,7 @@ func TestExecutor_LocalDelete_FolderEmpty(t *testing.T) {
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	e := NewExecution(cfg, synctest.EmptyBaseline())
 
-	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "exec-empty-dir"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "exec-empty-dir"), 0o700))
 
 	action := &synctypes.Action{
 		Type:   synctypes.ActionLocalDelete,
@@ -782,7 +738,7 @@ func TestExecutor_LocalDelete_FolderEmpty(t *testing.T) {
 	}
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	_, statErr := os.Stat(filepath.Join(syncRoot, "exec-empty-dir"))
 	assert.True(t, os.IsNotExist(statErr), "directory should have been removed")
@@ -804,7 +760,7 @@ func TestExecutor_LocalDelete_FolderNotEmpty(t *testing.T) {
 	}
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
-	requireOutcomeFailure(t, o)
+	requireOutcomeFailure(t, &o)
 }
 
 // ---------------------------------------------------------------------------
@@ -834,55 +790,53 @@ func TestExecutor_RemoteDelete_Success(t *testing.T) {
 	}
 
 	o := e.ExecuteRemoteDelete(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 }
 
-func TestExecutor_RemoteDelete_404IsSuccess(t *testing.T) {
+func TestExecutor_RemoteDelete_ErrorHandling(t *testing.T) {
 	t.Parallel()
 
-	items := &executorMockItemClient{
-		deleteItemFn: func(_ context.Context, _ driveid.ID, _ string) error {
-			return graph.ErrNotFound
-		},
+	tests := []struct {
+		name      string
+		path      string
+		itemID    string
+		deleteErr error
+		wantOK    bool
+	}{
+		{name: "404IsSuccess", path: "exec-already-deleted.txt", itemID: "item2", deleteErr: graph.ErrNotFound, wantOK: true},
+		{name: "403Skip", path: "exec-forbidden-del.txt", itemID: "item3", deleteErr: graph.ErrForbidden},
 	}
 
-	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionRemoteDelete,
-		Path:    "exec-already-deleted.txt",
-		ItemID:  "item2",
-		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &synctypes.PathView{},
+			items := &executorMockItemClient{
+				deleteItemFn: func(_ context.Context, _ driveid.ID, _ string) error {
+					return tt.deleteErr
+				},
+			}
+
+			cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
+			e := NewExecution(cfg, synctest.EmptyBaseline())
+
+			action := &synctypes.Action{
+				Type:    synctypes.ActionRemoteDelete,
+				Path:    tt.path,
+				ItemID:  tt.itemID,
+				DriveID: driveid.New(synctest.TestDriveID),
+				View:    &synctypes.PathView{},
+			}
+
+			o := e.ExecuteRemoteDelete(t.Context(), action)
+			if tt.wantOK {
+				requireOutcomeSuccess(t, &o)
+				return
+			}
+
+			requireOutcomeFailure(t, &o)
+		})
 	}
-
-	o := e.ExecuteRemoteDelete(t.Context(), action)
-	requireOutcomeSuccess(t, o)
-}
-
-func TestExecutor_RemoteDelete_403Skip(t *testing.T) {
-	t.Parallel()
-
-	items := &executorMockItemClient{
-		deleteItemFn: func(_ context.Context, _ driveid.ID, _ string) error {
-			return graph.ErrForbidden
-		},
-	}
-
-	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
-
-	action := &synctypes.Action{
-		Type:    synctypes.ActionRemoteDelete,
-		Path:    "exec-forbidden-del.txt",
-		ItemID:  "item3",
-		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &synctypes.PathView{},
-	}
-
-	o := e.ExecuteRemoteDelete(t.Context(), action)
-	requireOutcomeFailure(t, o)
 }
 
 // ---------------------------------------------------------------------------
@@ -921,22 +875,24 @@ func TestExecutor_Conflict_EditEdit_KeepBoth(t *testing.T) {
 	}
 
 	o := e.ExecuteConflict(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	assert.Equal(t, "edit_edit", o.ConflictType)
 
 	// Original path should have remote content.
-	data, err := os.ReadFile(filepath.Join(syncRoot, "exec-conflict.txt"))
+	data, err := os.ReadFile(filepath.Join(syncRoot, "exec-conflict.txt")) //nolint:gosec // Test output file lives under the temp sync root created by the test.
 	require.NoError(t, err)
 	assert.Equal(t, "remote version", string(data))
 
 	// Conflict copy should have local content.
-	entries, _ := os.ReadDir(syncRoot)
+	entries, err := os.ReadDir(syncRoot)
+	require.NoError(t, err)
 	conflictFound := false
 
 	for _, entry := range entries {
 		if strings.Contains(entry.Name(), ".conflict-") {
-			conflictData, _ := os.ReadFile(filepath.Join(syncRoot, entry.Name()))
+			conflictData, readErr := os.ReadFile(filepath.Join(syncRoot, entry.Name())) //nolint:gosec // Test conflict artifact lives under the temp sync root created by the test.
+			require.NoError(t, readErr)
 			if string(conflictData) == "local version" {
 				conflictFound = true
 			}
@@ -982,7 +938,7 @@ func TestExecutor_Conflict_EditDelete_AutoResolve(t *testing.T) {
 	}
 
 	o := e.ExecuteConflict(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	assert.True(t, uploadCalled, "expected upload to be called for edit-delete auto-resolve")
 	assert.Equal(t, synctypes.ActionConflict, o.Action)
@@ -991,7 +947,7 @@ func TestExecutor_Conflict_EditDelete_AutoResolve(t *testing.T) {
 	assert.Equal(t, "new-item", o.ItemID)
 
 	// Local file should still exist with original content (not modified by upload).
-	data, err := os.ReadFile(filepath.Join(syncRoot, "exec-ed-file.txt"))
+	data, err := os.ReadFile(filepath.Join(syncRoot, "exec-ed-file.txt")) //nolint:gosec // Test output file lives under the temp sync root created by the test.
 	require.NoError(t, err)
 	assert.Equal(t, "locally modified data", string(data))
 }
@@ -1062,7 +1018,7 @@ func TestExecutor_SyncedUpdate(t *testing.T) {
 	}
 
 	o := e.ExecuteSyncedUpdate(action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	assert.Equal(t, "hash1", o.RemoteHash)
 	assert.Equal(t, "hash1", o.LocalHash)
@@ -1088,7 +1044,7 @@ func TestExecutor_Cleanup(t *testing.T) {
 	}
 
 	o := e.ExecuteCleanup(action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	assert.Equal(t, synctypes.ActionCleanup, o.Action)
 	assert.Equal(t, "exec-ghost.txt", o.Path)
@@ -1196,10 +1152,10 @@ func TestExecutor_Conflict_DownloadFails_RestoresLocal(t *testing.T) {
 	}
 
 	o := e.ExecuteConflict(t.Context(), action)
-	requireOutcomeFailure(t, o)
+	requireOutcomeFailure(t, &o)
 
 	// Original file should be restored after download failure.
-	data, err := os.ReadFile(filepath.Join(syncRoot, "exec-restore.txt"))
+	data, err := os.ReadFile(filepath.Join(syncRoot, "exec-restore.txt")) //nolint:gosec // Test output file lives under the temp sync root created by the test.
 	require.NoError(t, err, "original file should have been restored")
 	assert.Equal(t, originalContent, string(data))
 }
@@ -1227,7 +1183,7 @@ func TestExecutor_RemoteMove_Error(t *testing.T) {
 	}
 
 	o := e.ExecuteMove(t.Context(), action)
-	requireOutcomeFailure(t, o)
+	requireOutcomeFailure(t, &o)
 
 	assert.ErrorIs(t, o.Error, graph.ErrForbidden)
 }
@@ -1263,7 +1219,7 @@ func TestExecutor_LocalMove_ViewFields(t *testing.T) {
 	}
 
 	o := e.ExecuteMove(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	assert.Equal(t, "remotehash", o.RemoteHash)
 	assert.Equal(t, int64(42), o.Size)
@@ -1301,7 +1257,7 @@ func TestExecutor_Upload_LargeFileSizePassedToUploader(t *testing.T) {
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	assert.Equal(t, expectedSize, capturedSize)
 }
@@ -1348,7 +1304,7 @@ func TestExecutor_DeleteOutcome_FolderType(t *testing.T) {
 	}
 
 	o := e.ExecuteRemoteDelete(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	assert.Equal(t, synctypes.ItemTypeFolder, o.ItemType)
 }
@@ -1370,7 +1326,7 @@ func TestExecutor_Cleanup_FolderType(t *testing.T) {
 	}
 
 	o := e.ExecuteCleanup(action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	assert.Equal(t, synctypes.ItemTypeFolder, o.ItemType)
 }
@@ -1394,7 +1350,7 @@ func TestExecutor_SyncedUpdate_BaselineFallback(t *testing.T) {
 	}
 
 	o := e.ExecuteSyncedUpdate(action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	assert.Equal(t, synctypes.ItemTypeFolder, o.ItemType)
 }
@@ -1428,7 +1384,7 @@ func TestExecutor_LocalDelete_TrashSuccess(t *testing.T) {
 	}
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	assert.True(t, trashCalled, "trashFunc should have been called")
 }
@@ -1455,7 +1411,7 @@ func TestExecutor_LocalDelete_TrashFailure_FallsBackToRemove(t *testing.T) {
 	}
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	// File should still be deleted (via os.Remove fallback).
 	_, statErr := os.Stat(absPath)
@@ -1480,7 +1436,7 @@ func TestExecutor_LocalDelete_NoTrashFunc_DirectRemove(t *testing.T) {
 	}
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	_, statErr := os.Stat(absPath)
 	assert.True(t, os.IsNotExist(statErr), "file should have been deleted")
@@ -1501,7 +1457,7 @@ func TestExecutor_LocalDeleteFolder_TrashSuccess(t *testing.T) {
 
 	e := NewExecution(cfg, synctest.EmptyBaseline())
 
-	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "trash-dir"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "trash-dir"), 0o700))
 
 	action := &synctypes.Action{
 		Type:   synctypes.ActionLocalDelete,
@@ -1511,7 +1467,7 @@ func TestExecutor_LocalDeleteFolder_TrashSuccess(t *testing.T) {
 	}
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	assert.True(t, trashCalled, "trashFunc should have been called for folder")
 }
@@ -1552,7 +1508,7 @@ func TestExecutor_Download_PartialFileCleanedOnMidStreamError(t *testing.T) {
 	}
 
 	o := e.ExecuteDownload(t.Context(), action)
-	requireOutcomeFailure(t, o)
+	requireOutcomeFailure(t, &o)
 
 	// The .partial file must not remain on disk after the error.
 	partialPath := filepath.Join(syncRoot, "partial-cleanup.txt.partial")
@@ -1601,7 +1557,7 @@ func TestExecutor_Upload_MtimePassedToUploader(t *testing.T) {
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 
 	// Verify the uploader received the file's mtime.
 	assert.True(t, capturedMtime.Equal(targetMtime), "uploader received mtime %v, want %v", capturedMtime, targetMtime)
@@ -1617,16 +1573,16 @@ func TestExecutor_Upload_MtimePassedToUploader(t *testing.T) {
 func TestContainedPath_ValidPaths(t *testing.T) {
 	t.Parallel()
 
-	root := "/sync/root"
+	root := t.TempDir()
 
 	tests := []struct {
 		name    string
 		relPath string
 		want    string
 	}{
-		{"simple file", "file.txt", "/sync/root/file.txt"},
-		{"nested path", "dir/subdir/file.txt", "/sync/root/dir/subdir/file.txt"},
-		{"deep nesting", "a/b/c/d/e.txt", "/sync/root/a/b/c/d/e.txt"},
+		{"simple file", "file.txt", filepath.Join(root, "file.txt")},
+		{"nested path", "dir/subdir/file.txt", filepath.Join(root, "dir", "subdir", "file.txt")},
+		{"deep nesting", "a/b/c/d/e.txt", filepath.Join(root, "a", "b", "c", "d", "e.txt")},
 	}
 
 	for _, tt := range tests {
@@ -1643,7 +1599,7 @@ func TestContainedPath_ValidPaths(t *testing.T) {
 func TestContainedPath_TraversalAttempts(t *testing.T) {
 	t.Parallel()
 
-	root := "/sync/root"
+	root := t.TempDir()
 
 	tests := []struct {
 		name    string
@@ -1680,7 +1636,7 @@ func TestCreateLocalFolder_TraversalBlocked(t *testing.T) {
 	}
 
 	o := e.ExecuteFolderCreate(t.Context(), action)
-	requireOutcomeFailure(t, o)
+	requireOutcomeFailure(t, &o)
 	assert.ErrorIs(t, o.Error, synctypes.ErrPathEscapesSyncRoot)
 }
 
@@ -1709,12 +1665,12 @@ func TestContainedPath_SymlinkWithinRoot(t *testing.T) {
 
 	// Create a real target directory and a symlink to it, both within root.
 	target := filepath.Join(root, "real")
-	require.NoError(t, os.MkdirAll(target, 0o755))
+	require.NoError(t, os.MkdirAll(target, 0o700))
 	require.NoError(t, os.Symlink(target, filepath.Join(root, "link")))
 
 	got, err := ContainedPath(root, "link/file.txt")
 	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(root, "link/file.txt"), got)
+	assert.Equal(t, filepath.Join(root, "link", "file.txt"), got)
 }
 
 func TestContainedPath_NonexistentPath_StillAllowed(t *testing.T) {
@@ -1726,7 +1682,17 @@ func TestContainedPath_NonexistentPath_StillAllowed(t *testing.T) {
 	// ContainedPath should fall back to lexical-only (still safe).
 	got, err := ContainedPath(root, "does/not/exist.txt")
 	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(root, "does/not/exist.txt"), got)
+	assert.Equal(t, filepath.Join(root, "does", "not", "exist.txt"), got)
+}
+
+func TestContainedPath_MissingSyncRootReturnsError(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(t.TempDir(), "missing-root")
+
+	_, err := ContainedPath(root, "file.txt")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "evaluating sync root symlinks")
 }
 
 // ---------------------------------------------------------------------------
@@ -1746,7 +1712,7 @@ func TestExecutor_Upload_WatchMode_ETagMismatch(t *testing.T) {
 	ul := &executorMockUploader{
 		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			require.FailNow(t, "upload should not be called when eTag mismatches")
-			return nil, nil
+			return nil, fmt.Errorf("unexpected upload call")
 		},
 	}
 
@@ -1770,7 +1736,7 @@ func TestExecutor_Upload_WatchMode_ETagMismatch(t *testing.T) {
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
-	requireOutcomeFailure(t, o)
+	requireOutcomeFailure(t, &o)
 	assert.Contains(t, o.Error.Error(), "remote eTag changed since last sync")
 }
 
@@ -1810,7 +1776,7 @@ func TestExecutor_Upload_WatchMode_ETagMatch(t *testing.T) {
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 }
 
 func TestExecutor_Upload_NonWatchMode_NoFreshnessCheck(t *testing.T) {
@@ -1819,7 +1785,7 @@ func TestExecutor_Upload_NonWatchMode_NoFreshnessCheck(t *testing.T) {
 	items := &executorMockItemClient{
 		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
 			require.FailNow(t, "GetItem should not be called in non-watch mode")
-			return nil, nil
+			return nil, fmt.Errorf("unexpected GetItem call")
 		},
 	}
 
@@ -1849,5 +1815,5 @@ func TestExecutor_Upload_NonWatchMode_NoFreshnessCheck(t *testing.T) {
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
-	requireOutcomeSuccess(t, o)
+	requireOutcomeSuccess(t, &o)
 }

@@ -14,6 +14,12 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
+const (
+	shortcutTestFileItemID = "f1"
+	shortcutTestNFDResume  = "re\u0301sume\u0301.txt"
+	shortcutTestNFCResume  = "r\u00e9sum\u00e9.txt"
+)
+
 // ---------------------------------------------------------------------------
 // Constructor tests
 // ---------------------------------------------------------------------------
@@ -71,9 +77,9 @@ func TestShortcutConverter_NFCNormalization(t *testing.T) {
 	remoteDriveID := driveid.New("0000000000000099")
 
 	// NFD decomposed: e + combining acute accent (U+0301).
-	nfd := "re\u0301sume\u0301.txt"
+	nfd := shortcutTestNFDResume
 	// NFC composed: precomposed characters.
-	nfc := "r\u00e9sum\u00e9.txt"
+	nfc := shortcutTestNFCResume
 
 	sc := &synctypes.Shortcut{
 		ItemID:      "sc-1",
@@ -84,7 +90,7 @@ func TestShortcutConverter_NFCNormalization(t *testing.T) {
 
 	items := []graph.Item{
 		{
-			ID:       "f1",
+			ID:       shortcutTestFileItemID,
 			Name:     nfd,
 			ParentID: "scope-root",
 			DriveID:  remoteDriveID,
@@ -119,12 +125,12 @@ func TestShortcutConverter_MoveDetection(t *testing.T) {
 	bl := synctest.BaselineWith(&synctypes.BaselineEntry{
 		Path:    "SharedFolder/old-name.txt",
 		DriveID: remoteDriveID,
-		ItemID:  "f1",
+		ItemID:  shortcutTestFileItemID,
 	})
 
 	items := []graph.Item{
 		{
-			ID:       "f1",
+			ID:       shortcutTestFileItemID,
 			Name:     "new-name.txt",
 			ParentID: "scope-root",
 			DriveID:  remoteDriveID,
@@ -159,13 +165,13 @@ func TestShortcutConverter_DeletedItemNameRecovery(t *testing.T) {
 	bl := synctest.BaselineWith(&synctypes.BaselineEntry{
 		Path:    "SharedFolder/budget.xlsx",
 		DriveID: remoteDriveID,
-		ItemID:  "f1",
+		ItemID:  shortcutTestFileItemID,
 	})
 
 	// Business API: deleted item with empty Name.
 	items := []graph.Item{
 		{
-			ID:        "f1",
+			ID:        shortcutTestFileItemID,
 			Name:      "",
 			ParentID:  "scope-root",
 			DriveID:   remoteDriveID,
@@ -200,7 +206,7 @@ func TestShortcutConverter_OrphanWarning(t *testing.T) {
 	// Item whose parent is not in the batch or baseline.
 	items := []graph.Item{
 		{
-			ID:       "f1",
+			ID:       shortcutTestFileItemID,
 			Name:     "orphan.txt",
 			ParentID: "unknown-parent",
 			DriveID:  remoteDriveID,
@@ -243,7 +249,7 @@ func TestShortcutConverter_PathPrefix(t *testing.T) {
 			IsFolder: true,
 		},
 		{
-			ID:       "f1",
+			ID:       shortcutTestFileItemID,
 			Name:     "file.txt",
 			ParentID: "d1",
 			DriveID:  remoteDriveID,
@@ -282,7 +288,7 @@ func TestShortcutConverter_ScopeRootSkip(t *testing.T) {
 		},
 		// A child of the scope root — should produce an event.
 		{
-			ID:       "f1",
+			ID:       shortcutTestFileItemID,
 			Name:     "file.txt",
 			ParentID: "scope-root",
 			DriveID:  remoteDriveID,
@@ -292,7 +298,7 @@ func TestShortcutConverter_ScopeRootSkip(t *testing.T) {
 	events := ConvertShortcutItems(items, sc, remoteDriveID, synctest.EmptyBaseline(), synctest.TestLogger(t))
 
 	require.Len(t, events, 1)
-	assert.Equal(t, "f1", events[0].ItemID, "only the child should produce an event")
+	assert.Equal(t, shortcutTestFileItemID, events[0].ItemID, "only the child should produce an event")
 	assert.Equal(t, "SharedFolder/file.txt", events[0].Path)
 }
 
@@ -312,7 +318,7 @@ func TestShortcutConverter_NestedShortcutSkip(t *testing.T) {
 
 	items := []graph.Item{
 		// Normal file.
-		{ID: "f1", Name: "normal.txt", ParentID: "scope-root", DriveID: remoteDriveID},
+		{ID: shortcutTestFileItemID, Name: "normal.txt", ParentID: "scope-root", DriveID: remoteDriveID},
 		// Nested shortcut — should be skipped.
 		{
 			ID: "nested-sc", Name: "NestedShared", ParentID: "scope-root",
@@ -324,7 +330,7 @@ func TestShortcutConverter_NestedShortcutSkip(t *testing.T) {
 	events := ConvertShortcutItems(items, sc, remoteDriveID, synctest.EmptyBaseline(), synctest.TestLogger(t))
 
 	require.Len(t, events, 1)
-	assert.Equal(t, "f1", events[0].ItemID)
+	assert.Equal(t, shortcutTestFileItemID, events[0].ItemID)
 }
 
 // ---------------------------------------------------------------------------
@@ -438,7 +444,7 @@ func TestPrimaryConverter_RegularFileNotShortcut(t *testing.T) {
 	}
 
 	item := &graph.Item{
-		ID: "f1", Name: "document.txt", ParentID: "root", DriveID: driveID,
+		ID: shortcutTestFileItemID, Name: "document.txt", ParentID: "root", DriveID: driveID,
 		Size: 256,
 	}
 
@@ -469,7 +475,7 @@ func TestPrimaryConverter_NilStatsIsSafe(t *testing.T) {
 	}
 
 	item := &graph.Item{
-		ID: "f1", Name: "file.txt", ParentID: "root", DriveID: driveID,
+		ID: shortcutTestFileItemID, Name: "file.txt", ParentID: "root", DriveID: driveID,
 		QuickXorHash: "hash123",
 	}
 
@@ -499,7 +505,7 @@ func TestConvertItems_TwoPassProcessing(t *testing.T) {
 
 	// Child before parent in the array.
 	items := []graph.Item{
-		{ID: "f1", Name: "deep.txt", ParentID: "d1", DriveID: remoteDriveID},
+		{ID: shortcutTestFileItemID, Name: "deep.txt", ParentID: "d1", DriveID: remoteDriveID},
 		{ID: "d1", Name: "SubDir", ParentID: "scope-root", DriveID: remoteDriveID, IsFolder: true},
 	}
 
@@ -510,7 +516,7 @@ func TestConvertItems_TwoPassProcessing(t *testing.T) {
 	// Find the file event regardless of output order.
 	var fileEvent *synctypes.ChangeEvent
 	for i := range events {
-		if events[i].ItemID == "f1" {
+		if events[i].ItemID == shortcutTestFileItemID {
 			fileEvent = &events[i]
 
 			break
@@ -538,7 +544,7 @@ func TestConvertItems_HashAndTimestamp(t *testing.T) {
 
 	items := []graph.Item{
 		{
-			ID: "f1", Name: "data.csv", ParentID: "scope-root", DriveID: remoteDriveID,
+			ID: shortcutTestFileItemID, Name: "data.csv", ParentID: "scope-root", DriveID: remoteDriveID,
 			QuickXorHash: "qxh123", Size: 500, ModifiedAt: ts,
 		},
 	}
@@ -565,7 +571,7 @@ func TestConvertShortcutItems_NilLogger(t *testing.T) {
 	}
 
 	items := []graph.Item{
-		{ID: "f1", Name: "file.txt", ParentID: "scope-root", DriveID: remoteDriveID},
+		{ID: shortcutTestFileItemID, Name: "file.txt", ParentID: "scope-root", DriveID: remoteDriveID},
 	}
 
 	// Should not panic with nil logger.
@@ -588,7 +594,7 @@ func TestConvertShortcutItems_NilLoggerPassedDefault(t *testing.T) {
 
 	// Item with unknown parent to trigger orphan warning log.
 	items := []graph.Item{
-		{ID: "f1", Name: "orphan.txt", ParentID: "unknown", DriveID: remoteDriveID},
+		{ID: shortcutTestFileItemID, Name: "orphan.txt", ParentID: "unknown", DriveID: remoteDriveID},
 	}
 
 	// nil logger falls back to slog.Default(), should not panic.
@@ -619,7 +625,7 @@ func TestShortcutConverter_CrossSubfolderMove(t *testing.T) {
 	bl := synctest.BaselineWith(&synctypes.BaselineEntry{
 		Path:    "Shared/FolderA/file.txt",
 		DriveID: remoteDriveID,
-		ItemID:  "f1",
+		ItemID:  shortcutTestFileItemID,
 	})
 
 	// Delta batch: scope root, two subfolders, and the file now under FolderB.
@@ -627,7 +633,7 @@ func TestShortcutConverter_CrossSubfolderMove(t *testing.T) {
 		{ID: "scope-root", Name: "ScopeRoot", DriveID: remoteDriveID, IsFolder: true},
 		{ID: "d1", Name: "FolderA", ParentID: "scope-root", DriveID: remoteDriveID, IsFolder: true},
 		{ID: "d2", Name: "FolderB", ParentID: "scope-root", DriveID: remoteDriveID, IsFolder: true},
-		{ID: "f1", Name: "file.txt", ParentID: "d2", DriveID: remoteDriveID, Size: 200},
+		{ID: shortcutTestFileItemID, Name: "file.txt", ParentID: "d2", DriveID: remoteDriveID, Size: 200},
 	}
 
 	events := ConvertShortcutItems(items, sc, remoteDriveID, bl, synctest.TestLogger(t))
@@ -635,7 +641,7 @@ func TestShortcutConverter_CrossSubfolderMove(t *testing.T) {
 	// Find the file event (folders also produce events).
 	var fileEvent *synctypes.ChangeEvent
 	for i := range events {
-		if events[i].ItemID == "f1" {
+		if events[i].ItemID == shortcutTestFileItemID {
 			fileEvent = &events[i]
 
 			break
@@ -668,7 +674,7 @@ func TestShortcutConverter_MixedDriveIDs(t *testing.T) {
 		// Scope root — needed for parent-chain resolution.
 		{ID: "scope-root", Name: "ScopeRoot", DriveID: remoteDriveID, IsFolder: true},
 		// Item with zero DriveID — should inherit remoteDriveID.
-		{ID: "f1", Name: "inherited.txt", ParentID: "scope-root", Size: 100},
+		{ID: shortcutTestFileItemID, Name: "inherited.txt", ParentID: "scope-root", Size: 100},
 		// Item with explicit cross-drive DriveID.
 		{ID: "f2", Name: "cross.txt", ParentID: "scope-root", DriveID: crossDriveID, Size: 200},
 	}
@@ -683,7 +689,7 @@ func TestShortcutConverter_MixedDriveIDs(t *testing.T) {
 		byID[events[i].ItemID] = &events[i]
 	}
 
-	assert.Equal(t, remoteDriveID, byID["f1"].DriveID, "zero-DriveID item should inherit remoteDriveID")
+	assert.Equal(t, remoteDriveID, byID[shortcutTestFileItemID].DriveID, "zero-DriveID item should inherit remoteDriveID")
 	assert.Equal(t, crossDriveID, byID["f2"].DriveID, "explicit DriveID should be preserved")
 }
 
@@ -713,7 +719,7 @@ func TestShortcutConverter_VaultItemsPassThrough(t *testing.T) {
 			SpecialFolderName: "vault",
 		},
 		{
-			ID: "f1", Name: "secret.pdf", ParentID: "v1",
+			ID: shortcutTestFileItemID, Name: "secret.pdf", ParentID: "v1",
 			DriveID: remoteDriveID, Size: 5000,
 		},
 	}
@@ -741,7 +747,7 @@ func TestShortcutConverter_ContentEventsCarryShortcutIdentity(t *testing.T) {
 	}
 
 	items := []graph.Item{
-		{ID: "f1", Name: "report.txt", ParentID: "source-folder-1", DriveID: remoteDriveID, Size: 100},
+		{ID: shortcutTestFileItemID, Name: "report.txt", ParentID: "source-folder-1", DriveID: remoteDriveID, Size: 100},
 		{ID: "d1", Name: "SubDir", ParentID: "source-folder-1", DriveID: remoteDriveID, IsFolder: true},
 	}
 
@@ -769,7 +775,7 @@ func TestPrimaryConverter_ContentEventsHaveEmptyShortcutIdentity(t *testing.T) {
 	}
 
 	item := &graph.Item{
-		ID: "f1", Name: "own-file.txt", ParentID: "root",
+		ID: shortcutTestFileItemID, Name: "own-file.txt", ParentID: "root",
 		DriveID: driveID, Size: 256,
 	}
 

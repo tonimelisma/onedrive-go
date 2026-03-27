@@ -43,7 +43,7 @@ type StateReader interface {
 // SyncFailureRecorder is called by the engine to persist all failure types
 // (upload, download, delete) in the unified sync_failures table.
 // The delayFn parameter computes backoff from failure count: engine passes
-// retry.Reconcile.Delay for transient failures, nil for actionable (no retry).
+// retry.ReconcilePolicy().Delay for transient failures, nil for actionable (no retry).
 // The store calls delayFn atomically inside the transaction — it never imports
 // the retry package.
 type SyncFailureRecorder interface {

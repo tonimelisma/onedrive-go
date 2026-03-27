@@ -60,7 +60,7 @@ func (r *SessionRecord) UnmarshalJSON(data []byte) error {
 	}
 
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
+		return fmt.Errorf("decode session record: %w", err)
 	}
 
 	*r = SessionRecord(raw.alias)
@@ -89,19 +89,19 @@ func NewSessionStore(dataDir string, logger *slog.Logger) *SessionStore {
 	}
 }
 
-// Load reads a session record for the given drive and local path.
-// Returns nil, nil if no session file exists or if the session file is
+// Load reads a session record for the given drive and local path. The returned
+// found flag is false when no session file exists or when the session file is
 // older than StaleSessionAge (Graph API upload sessions expire in ~48h).
-func (s *SessionStore) Load(driveID, localPath string) (*SessionRecord, error) {
+func (s *SessionStore) Load(driveID, localPath string) (*SessionRecord, bool, error) {
 	path := s.filePath(driveID, localPath)
 
 	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, false, nil
 		}
 
-		return nil, fmt.Errorf("stat session file: %w", err)
+		return nil, false, fmt.Errorf("stat session file: %w", err)
 	}
 
 	// Delete expired sessions eagerly so callers don't attempt a doomed resume.
@@ -118,16 +118,18 @@ func (s *SessionStore) Load(driveID, localPath string) (*SessionRecord, error) {
 			)
 		}
 
-		return nil, nil
+		return nil, false, nil
 	}
 
-	data, err := os.ReadFile(path)
+	// Session path is derived from the drive ID plus local path hash under the
+	// managed data directory.
+	data, err := os.ReadFile(path) //nolint:gosec // Managed data-dir path.
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, false, nil
 		}
 
-		return nil, fmt.Errorf("reading session file: %w", err)
+		return nil, false, fmt.Errorf("reading session file: %w", err)
 	}
 
 	var rec SessionRecord
@@ -145,10 +147,10 @@ func (s *SessionStore) Load(driveID, localPath string) (*SessionRecord, error) {
 			)
 		}
 
-		return nil, fmt.Errorf("%w: %w", ErrCorruptSession, err)
+		return nil, false, fmt.Errorf("%w: %w", ErrCorruptSession, err)
 	}
 
-	return &rec, nil
+	return &rec, true, nil
 }
 
 // Save persists a session record. Creates the session directory if needed.
@@ -178,8 +180,12 @@ func (s *SessionStore) Save(driveID, localPath string, rec *SessionRecord) error
 	}
 
 	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath) // best-effort cleanup
-		return fmt.Errorf("renaming session temp file: %w", err)
+		baseErr := fmt.Errorf("renaming session temp file: %w", err)
+		if cleanupErr := os.Remove(tmpPath); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrNotExist) {
+			return errors.Join(baseErr, fmt.Errorf("removing session temp file: %w", cleanupErr))
+		}
+
+		return baseErr
 	}
 
 	return nil

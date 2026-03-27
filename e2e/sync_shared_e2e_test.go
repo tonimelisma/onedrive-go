@@ -43,7 +43,7 @@ func writeSyncConfigForDrive2(t *testing.T, syncDir string) (string, map[string]
 	perTestHome := t.TempDir()
 
 	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
-	require.NoError(t, os.MkdirAll(perTestDataDir, 0o755))
+	require.NoError(t, os.MkdirAll(perTestDataDir, 0o700))
 	copyTokenFileForDrive(t, testDataDir, perTestDataDir, drive2)
 
 	content := fmt.Sprintf(`["%s"]
@@ -51,7 +51,7 @@ sync_dir = %q
 `, drive2, syncDir)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o600))
 
 	env := map[string]string{
 		"XDG_DATA_HOME": perTestData,

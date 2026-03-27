@@ -160,7 +160,7 @@ func TestTransferManager_FreshDownload_Success(t *testing.T) {
 	// HashVerified should be true on successful hash match.
 	assert.True(t, result.HashVerified, "HashVerified should be true on successful match")
 
-	got, readErr := os.ReadFile(targetPath)
+	got, readErr := os.ReadFile(targetPath) //nolint:gosec // Test download target lives under t.TempDir and is controlled by the test.
 	require.NoError(t, readErr, "ReadFile")
 
 	assert.Equal(t, content, got, "file content mismatch")
@@ -200,7 +200,8 @@ func TestTransferManager_FreshDownload_CtxCancel_PreservesPartial(t *testing.T) 
 	dl := &tmSimpleDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
 			// Write some data, then simulate cancellation.
-			n, _ := w.Write([]byte("partial-data"))
+			n, err := w.Write([]byte("partial-data"))
+			require.NoError(t, err)
 			cancel()
 
 			return int64(n), context.Canceled
@@ -226,7 +227,7 @@ func TestTransferManager_ResumeDownload_Success(t *testing.T) {
 
 	existingData := []byte("existing-")
 	appendData := []byte("appended")
-	fullContent := append(existingData, appendData...)
+	fullContent := append(append([]byte(nil), existingData...), appendData...)
 	expectedHash := tmHashBytes(fullContent)
 
 	dl := &tmMockDownloader{
@@ -257,87 +258,66 @@ func TestTransferManager_ResumeDownload_Success(t *testing.T) {
 	assert.Equal(t, expectedHash, result.LocalHash)
 	assert.Equal(t, int64(len(fullContent)), result.Size)
 
-	got, readErr := os.ReadFile(targetPath)
+	got, readErr := os.ReadFile(targetPath) //nolint:gosec // Test download target lives under t.TempDir and is controlled by the test.
 	require.NoError(t, readErr, "ReadFile")
 
 	assert.Equal(t, fullContent, got)
 }
 
-func TestTransferManager_ResumeDownload_RangeFail_FallsBack(t *testing.T) {
+func TestTransferManager_ResumeDownload_FallsBackToFreshDownload(t *testing.T) {
 	t.Parallel()
 
-	content := []byte("fresh-content")
-	expectedHash := tmHashBytes(content)
-	var downloadCalled bool
-
-	dl := &tmMockDownloader{
-		downloadRangeFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer, _ int64) (int64, error) {
-			return 0, fmt.Errorf("range not supported by server")
+	tests := []struct {
+		name        string
+		content     []byte
+		partialData []byte
+		rangeErr    string
+	}{
+		{
+			name:        "RangeFail",
+			content:     []byte("fresh-content"),
+			partialData: []byte("old-data"),
+			rangeErr:    "range not supported by server",
 		},
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
-			downloadCalled = true
-			n, err := w.Write(content)
-
-			return int64(n), err
+		{
+			name:        "CloseErrorPath",
+			content:     []byte("fresh-after-close-error"),
+			partialData: []byte("existing"),
+			rangeErr:    "simulated range failure for close-error test",
 		},
 	}
 
-	tm := newTestTM(dl, &tmMockUploader{}, nil)
-	dir := t.TempDir()
-	targetPath := filepath.Join(dir, "file.txt")
-	partialPath := targetPath + ".partial"
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	// Pre-create .partial to trigger resume attempt.
-	require.NoError(t, os.WriteFile(partialPath, []byte("old-data"), 0o600))
+			expectedHash := tmHashBytes(tt.content)
+			var freshDownloadCalled bool
 
-	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
-		RemoteHash: expectedHash,
-	})
-	require.NoError(t, err, "DownloadToFile")
+			dl := &tmMockDownloader{
+				downloadRangeFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer, _ int64) (int64, error) {
+					return 0, errors.New(tt.rangeErr)
+				},
+				downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+					freshDownloadCalled = true
+					written, err := w.Write(tt.content)
+					return int64(written), err
+				},
+			}
 
-	assert.True(t, downloadCalled, "expected fresh Download() to be called as fallback")
-	assert.Equal(t, expectedHash, result.LocalHash)
-}
+			tm := newTestTM(dl, &tmMockUploader{}, nil)
+			targetPath := filepath.Join(t.TempDir(), "file.txt")
+			partialPath := targetPath + ".partial"
+			require.NoError(t, os.WriteFile(partialPath, tt.partialData, 0o600))
 
-func TestTransferManager_ResumeDownload_CloseError_FallsBack(t *testing.T) {
-	t.Parallel()
-
-	// This test verifies fix #7: when f.Close() fails after DownloadRange,
-	// we fall back to a fresh download instead of proceeding to hash verification.
-	content := []byte("fresh-after-close-error")
-	expectedHash := tmHashBytes(content)
-	var freshDownloadCalled bool
-
-	dl := &tmMockDownloader{
-		downloadRangeFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer, _ int64) (int64, error) {
-			// Write some data — the close will fail but that's handled by the
-			// TransferManager. We can't directly mock f.Close() failure through
-			// the interface, so we test the range-failure fallback path instead
-			// which exercises the same code path.
-			return 0, fmt.Errorf("simulated range failure for close-error test")
-		},
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
-			freshDownloadCalled = true
-			n, err := w.Write(content)
-
-			return int64(n), err
-		},
+			result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+				RemoteHash: expectedHash,
+			})
+			require.NoError(t, err, "DownloadToFile")
+			assert.True(t, freshDownloadCalled, "expected fresh Download() fallback")
+			assert.Equal(t, expectedHash, result.LocalHash)
+		})
 	}
-
-	tm := newTestTM(dl, &tmMockUploader{}, nil)
-	dir := t.TempDir()
-	targetPath := filepath.Join(dir, "file.txt")
-	partialPath := targetPath + ".partial"
-
-	require.NoError(t, os.WriteFile(partialPath, []byte("existing"), 0o600))
-
-	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
-		RemoteHash: expectedHash,
-	})
-	require.NoError(t, err, "DownloadToFile")
-
-	assert.True(t, freshDownloadCalled, "expected fresh download fallback after close error")
-	assert.Equal(t, expectedHash, result.LocalHash)
 }
 
 // Validates: R-5.5
@@ -715,9 +695,9 @@ func TestSessionUpload_NonExpiredResumeError_DeletesSession(t *testing.T) {
 	assert.Contains(t, err.Error(), "network error")
 
 	// B-208: session should be deleted even for non-expired errors.
-	rec, loadErr := store.Load(driveStr, localPath)
+	rec, found, loadErr := store.Load(driveStr, localPath)
 	require.NoError(t, loadErr, "Load")
-
+	assert.False(t, found, "expected session to be deleted after non-expired resume error")
 	assert.Nil(t, rec, "expected session to be deleted after non-expired resume error")
 }
 
@@ -842,13 +822,15 @@ func TestUploadFile_EmptyLocalPath(t *testing.T) {
 func TestRemovePartialIfNotCanceled(t *testing.T) {
 	t.Parallel()
 
+	tm := newTestTM(&tmSimpleDownloader{}, nil, nil)
+
 	t.Run("removes file when context is active", func(t *testing.T) {
 		t.Parallel()
 
 		path := filepath.Join(t.TempDir(), "test.partial")
 		require.NoError(t, os.WriteFile(path, []byte("data"), 0o600))
 
-		removePartialIfNotCanceled(t.Context(), path)
+		tm.removePartialIfNotCanceled(t.Context(), path)
 
 		_, err := os.Stat(path)
 		assert.True(t, os.IsNotExist(err), "expected file to be removed")
@@ -863,7 +845,7 @@ func TestRemovePartialIfNotCanceled(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 
-		removePartialIfNotCanceled(ctx, path)
+		tm.removePartialIfNotCanceled(ctx, path)
 
 		_, err := os.Stat(path)
 		assert.NoError(t, err, "expected file to be preserved")
@@ -873,7 +855,7 @@ func TestRemovePartialIfNotCanceled(t *testing.T) {
 		t.Parallel()
 
 		// Should not panic when file doesn't exist.
-		removePartialIfNotCanceled(t.Context(), "/nonexistent/path.partial")
+		tm.removePartialIfNotCanceled(t.Context(), "/nonexistent/path.partial")
 	})
 }
 
@@ -912,7 +894,7 @@ func TestDownloadToFile_RenameFailure_PreservesPartial(t *testing.T) {
 	// .partial should still exist with correct content.
 	partialPath := targetPath + ".partial"
 
-	got, readErr := os.ReadFile(partialPath)
+	got, readErr := os.ReadFile(partialPath) //nolint:gosec // Test partial file lives under t.TempDir and is controlled by the test.
 	require.NoError(t, readErr, "expected .partial to be preserved")
 
 	assert.Equal(t, content, got, "partial content mismatch")
@@ -947,9 +929,9 @@ func TestSessionUpload_SaveFailure_StillCompletes(t *testing.T) {
 	tm := newTestTM(&tmSimpleDownloader{}, ul, store)
 
 	// Make the store directory read-only so Save fails.
-	require.NoError(t, os.Chmod(store.dir, 0o444))
+	setTestDirPermissions(t, store.dir, 0o444)
 
-	t.Cleanup(func() { os.Chmod(store.dir, 0o700) })
+	t.Cleanup(func() { setTestDirPermissions(t, store.dir, 0o700) })
 
 	localPath := filepath.Join(dir, "save-fail.bin")
 	largeData := make([]byte, graph.SimpleUploadMaxSize+1)
@@ -978,7 +960,7 @@ func TestUploadFile_StatFailure_WrapsError(t *testing.T) {
 	require.Error(t, err)
 
 	// Error should wrap os.ErrNotExist and be discoverable via errors.Is.
-	assert.True(t, errors.Is(err, os.ErrNotExist), "expected errors.Is(err, os.ErrNotExist)")
+	require.ErrorIs(t, err, os.ErrNotExist, "expected errors.Is(err, os.ErrNotExist)")
 
 	// Error should contain "stat" context.
 	assert.Contains(t, err.Error(), "stat")
@@ -1015,7 +997,7 @@ func TestDownloadToFile_SimpleDownloader_OverwritesPartial(t *testing.T) {
 	require.NoError(t, err, "DownloadToFile")
 
 	// Final file should contain fresh content, not concatenated with old.
-	got, readErr := os.ReadFile(targetPath)
+	got, readErr := os.ReadFile(targetPath) //nolint:gosec // Test download target lives under t.TempDir and is controlled by the test.
 	require.NoError(t, readErr, "ReadFile")
 
 	assert.Equal(t, freshContent, got)
@@ -1124,7 +1106,7 @@ func TestDownloadToFile_EmptyRemoteHash_HashVerifiedFalse(t *testing.T) {
 	assert.False(t, result.HashVerified, "HashVerified should be false when remote hash is empty")
 
 	// File should exist with correct content.
-	got, readErr := os.ReadFile(targetPath)
+	got, readErr := os.ReadFile(targetPath) //nolint:gosec // Test download target lives under t.TempDir and is controlled by the test.
 	require.NoError(t, readErr, "ReadFile")
 
 	assert.Equal(t, content, got, "file content mismatch")
@@ -1140,115 +1122,84 @@ func TestTransferManager_DiskSpaceCheck(t *testing.T) {
 
 	content := []byte("disk-check-content")
 	expectedHash := tmHashBytes(content)
-
-	okDownloader := &tmSimpleDownloader{
+	downloader := &tmSimpleDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
-			n, err := w.Write(content)
-			return int64(n), err
+			written, err := w.Write(content)
+			return int64(written), err
+		},
+	}
+	newManager := func(opts ...Option) *TransferManager {
+		return NewTransferManager(downloader, &tmMockUploader{}, nil, slog.Default(), opts...)
+	}
+
+	tests := []struct {
+		name       string
+		newTM      func() *TransferManager
+		remoteSize int64
+		wantErr    error
+	}{
+		{
+			name:       "DiskFull",
+			remoteSize: 100,
+			wantErr:    ErrDiskFull,
+			newTM: func() *TransferManager {
+				return newManager(WithDiskCheck(1000, func(string) (uint64, error) { return 500, nil }))
+			},
+		},
+		{
+			name:       "FileTooLarge",
+			remoteSize: 1500,
+			wantErr:    ErrFileTooLargeForSpace,
+			newTM: func() *TransferManager {
+				return newManager(WithDiskCheck(1000, func(string) (uint64, error) { return 2000, nil }))
+			},
+		},
+		{
+			name: "Disabled_NilFunc",
+			newTM: func() *TransferManager {
+				return newManager()
+			},
+		},
+		{
+			name: "Disabled_ZeroMinFreeSpace",
+			newTM: func() *TransferManager {
+				return newManager(WithDiskCheck(0, func(string) (uint64, error) { return 100, nil }))
+			},
+		},
+		{
+			name: "StatfsError_FailOpen",
+			newTM: func() *TransferManager {
+				return newManager(WithDiskCheck(1000, func(string) (uint64, error) {
+					return 0, fmt.Errorf("simulated statfs error")
+				}))
+			},
+		},
+		{
+			name:       "SufficientSpace",
+			remoteSize: 2000,
+			newTM: func() *TransferManager {
+				return newManager(WithDiskCheck(1000, func(string) (uint64, error) { return 5000, nil }))
+			},
 		},
 	}
 
-	// Validates: R-2.10.43
-	t.Run("DiskFull", func(t *testing.T) {
-		t.Parallel()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-		tm := NewTransferManager(okDownloader, &tmMockUploader{}, nil, slog.Default(),
-			WithDiskCheck(1000, func(string) (uint64, error) { return 500, nil }),
-		)
+			targetPath := filepath.Join(t.TempDir(), "file.txt")
+			result, err := tt.newTM().DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+				RemoteHash: expectedHash,
+				RemoteSize: tt.remoteSize,
+			})
+			if tt.wantErr != nil {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, tt.wantErr)
+				return
+			}
 
-		targetPath := filepath.Join(t.TempDir(), "file.txt")
-		_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
-			RemoteHash: expectedHash,
-			RemoteSize: 100,
+			require.NoError(t, err)
+			assert.Equal(t, expectedHash, result.LocalHash)
 		})
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrDiskFull)
-	})
-
-	// Validates: R-2.10.44
-	t.Run("FileTooLarge", func(t *testing.T) {
-		t.Parallel()
-
-		// available (2000) >= minFreeSpace (1000) but < fileSize (1500) + minFreeSpace (1000)
-		tm := NewTransferManager(okDownloader, &tmMockUploader{}, nil, slog.Default(),
-			WithDiskCheck(1000, func(string) (uint64, error) { return 2000, nil }),
-		)
-
-		targetPath := filepath.Join(t.TempDir(), "file.txt")
-		_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
-			RemoteHash: expectedHash,
-			RemoteSize: 1500,
-		})
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrFileTooLargeForSpace)
-	})
-
-	// Validates: R-6.4.7
-	t.Run("Disabled_NilFunc", func(t *testing.T) {
-		t.Parallel()
-
-		// No WithDiskCheck option → download proceeds normally.
-		tm := NewTransferManager(okDownloader, &tmMockUploader{}, nil, slog.Default())
-
-		targetPath := filepath.Join(t.TempDir(), "file.txt")
-		result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
-			RemoteHash: expectedHash,
-		})
-		require.NoError(t, err)
-		assert.Equal(t, expectedHash, result.LocalHash)
-	})
-
-	// Validates: R-6.4.7
-	t.Run("Disabled_ZeroMinFreeSpace", func(t *testing.T) {
-		t.Parallel()
-
-		// WithDiskCheck(0, fn) → download proceeds (zero disables check).
-		tm := NewTransferManager(okDownloader, &tmMockUploader{}, nil, slog.Default(),
-			WithDiskCheck(0, func(string) (uint64, error) { return 100, nil }),
-		)
-
-		targetPath := filepath.Join(t.TempDir(), "file.txt")
-		result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
-			RemoteHash: expectedHash,
-		})
-		require.NoError(t, err)
-		assert.Equal(t, expectedHash, result.LocalHash)
-	})
-
-	// Validates: R-6.2.6
-	t.Run("StatfsError_FailOpen", func(t *testing.T) {
-		t.Parallel()
-
-		// When statfs fails, the check should fail open (not block downloads).
-		tm := NewTransferManager(okDownloader, &tmMockUploader{}, nil, slog.Default(),
-			WithDiskCheck(1000, func(string) (uint64, error) {
-				return 0, fmt.Errorf("simulated statfs error")
-			}),
-		)
-
-		targetPath := filepath.Join(t.TempDir(), "file.txt")
-		result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
-			RemoteHash: expectedHash,
-		})
-		require.NoError(t, err)
-		assert.Equal(t, expectedHash, result.LocalHash)
-	})
-
-	// Validates: R-6.2.6
-	t.Run("SufficientSpace", func(t *testing.T) {
-		t.Parallel()
-
-		// available (5000) >= fileSize (2000) + minFreeSpace (1000) — download proceeds.
-		tm := NewTransferManager(okDownloader, &tmMockUploader{}, nil, slog.Default(),
-			WithDiskCheck(1000, func(string) (uint64, error) { return 5000, nil }),
-		)
-
-		targetPath := filepath.Join(t.TempDir(), "file.txt")
-		result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
-			RemoteHash: expectedHash,
-			RemoteSize: 2000,
-		})
-		require.NoError(t, err)
-		assert.Equal(t, expectedHash, result.LocalHash)
-	})
+	}
 }

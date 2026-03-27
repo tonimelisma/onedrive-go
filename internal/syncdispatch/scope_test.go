@@ -1,7 +1,6 @@
 package syncdispatch
 
 import (
-	"io"
 	"log/slog"
 	"testing"
 	"time"
@@ -14,7 +13,7 @@ import (
 
 // discardLogger returns a logger that writes to nowhere, suitable for tests.
 func discardLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
+	return slog.New(slog.DiscardHandler)
 }
 
 // controllableClock returns a nowFunc and a function to advance the clock.
@@ -23,27 +22,6 @@ func controllableClock() (nowFunc func() time.Time, advance func(d time.Duration
 	now := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	return func() time.Time { return now },
 		func(d time.Duration) { now = now.Add(d) }
-}
-
-// Validates: R-2.10.3, R-2.10.26
-func TestScope_429Immediate(t *testing.T) {
-	t.Parallel()
-
-	clock, _ := controllableClock()
-	ss := NewScopeState(clock, discardLogger())
-
-	// A single 429 must immediately trigger a throttle:account block.
-	r := synctypes.WorkerResult{
-		Path:       "/file-a.txt",
-		HTTPStatus: 429,
-		RetryAfter: 90 * time.Second,
-	}
-	result := ss.UpdateScope(&r)
-
-	require.True(t, result.Block, "single 429 must trigger immediate block")
-	assert.Equal(t, synctypes.SKThrottleAccount, result.ScopeKey)
-	assert.Equal(t, "rate_limited", result.IssueType)
-	assert.Equal(t, 90*time.Second, result.RetryAfter, "RetryAfter should be passed through")
 }
 
 // Validates: R-2.10.3, R-2.10.26
@@ -61,29 +39,57 @@ func TestScope_429FallbackInterval(t *testing.T) {
 	result := ss.UpdateScope(&r)
 
 	require.True(t, result.Block)
-	assert.Equal(t, synctypes.SKThrottleAccount, result.ScopeKey)
+	assert.Equal(t, synctypes.SKThrottleAccount(), result.ScopeKey)
 	assert.Zero(t, result.RetryAfter, "429 without Retry-After should have zero RetryAfter")
 }
 
-// Validates: R-2.10.3
-func TestScope_503WithRetryAfter(t *testing.T) {
+// Validates: R-2.10.3, R-2.10.26
+func TestScope_ImmediateRetryAfterBlocks(t *testing.T) {
 	t.Parallel()
 
-	clock, _ := controllableClock()
-	ss := NewScopeState(clock, discardLogger())
-
-	// A 503 with Retry-After must immediately trigger a service block.
-	r := synctypes.WorkerResult{
-		Path:       "/doc.docx",
-		HTTPStatus: 503,
-		RetryAfter: 120 * time.Second,
+	tests := []struct {
+		name       string
+		path       string
+		status     int
+		retryAfter time.Duration
+		wantScope  synctypes.ScopeKey
+		wantIssue  string
+	}{
+		{
+			name:       "rate_limited",
+			path:       "/file-a.txt",
+			status:     429,
+			retryAfter: 90 * time.Second,
+			wantScope:  synctypes.SKThrottleAccount(),
+			wantIssue:  "rate_limited",
+		},
+		{
+			name:       "service_outage",
+			path:       "/doc.docx",
+			status:     503,
+			retryAfter: 120 * time.Second,
+			wantScope:  synctypes.SKService(),
+			wantIssue:  "service_outage",
+		},
 	}
-	result := ss.UpdateScope(&r)
 
-	require.True(t, result.Block, "503 with Retry-After must trigger immediate service block")
-	assert.Equal(t, synctypes.SKService, result.ScopeKey)
-	assert.Equal(t, "service_outage", result.IssueType)
-	assert.Equal(t, 120*time.Second, result.RetryAfter, "RetryAfter should be passed through")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clock, _ := controllableClock()
+			ss := NewScopeState(clock, discardLogger())
+
+			result := ss.UpdateScope(&synctypes.WorkerResult{
+				Path:       tt.path,
+				HTTPStatus: tt.status,
+				RetryAfter: tt.retryAfter,
+			})
+
+			require.True(t, result.Block, "Retry-After should force an immediate scope block")
+			assert.Equal(t, tt.wantScope, result.ScopeKey)
+			assert.Equal(t, tt.wantIssue, result.IssueType)
+			assert.Equal(t, tt.retryAfter, result.RetryAfter, "RetryAfter should be passed through")
+		})
+	}
 }
 
 // Validates: R-2.10.3
@@ -123,7 +129,7 @@ func TestScope_507OwnDrive(t *testing.T) {
 			assert.False(t, result.Block, "path %d (%s) should not trigger block yet", i, p)
 		} else {
 			require.True(t, result.Block, "third unique path must trigger quota:own block")
-			assert.Equal(t, synctypes.SKQuotaOwn, result.ScopeKey)
+			assert.Equal(t, synctypes.SKQuotaOwn(), result.ScopeKey)
 			assert.Equal(t, "quota_exceeded", result.IssueType)
 			assert.Zero(t, result.RetryAfter)
 		}
@@ -219,7 +225,7 @@ func TestScope_5xxSlidingWindow(t *testing.T) {
 			assert.False(t, result.Block, "path %d should not trigger block yet", i)
 		} else {
 			require.True(t, result.Block, "fifth unique path must trigger service block")
-			assert.Equal(t, synctypes.SKService, result.ScopeKey)
+			assert.Equal(t, synctypes.SKService(), result.ScopeKey)
 			assert.Equal(t, "service_outage", result.IssueType)
 			assert.Zero(t, result.RetryAfter)
 		}
@@ -284,7 +290,7 @@ func TestScope_SuccessResetsWindow(t *testing.T) {
 	r := synctypes.WorkerResult{Path: "/e.txt", HTTPStatus: 507}
 	result := ss.UpdateScope(&r)
 	require.True(t, result.Block, "third unique path after reset should trigger quota:own")
-	assert.Equal(t, synctypes.SKQuotaOwn, result.ScopeKey)
+	assert.Equal(t, synctypes.SKQuotaOwn(), result.ScopeKey)
 }
 
 // Validates: R-2.10.42
@@ -359,7 +365,7 @@ func TestScope_UpdateScopeOutagePattern(t *testing.T) {
 			assert.False(t, result.Block, "outage pattern path %d should not trigger block yet", i)
 		} else {
 			require.True(t, result.Block, "fifth unique outage-pattern path must trigger service block")
-			assert.Equal(t, synctypes.SKService, result.ScopeKey)
+			assert.Equal(t, synctypes.SKService(), result.ScopeKey)
 			assert.Equal(t, "service_outage", result.IssueType)
 			assert.Zero(t, result.RetryAfter)
 		}
@@ -393,7 +399,7 @@ func TestScope_OutagePatternSharesWindowWith5xx(t *testing.T) {
 	// 5xx and outage patterns share the same "service" window.
 	result = ss.UpdateScopeOutagePattern("/e.txt")
 	require.True(t, result.Block, "outage patterns and 5xx share the service window")
-	assert.Equal(t, synctypes.SKService, result.ScopeKey)
+	assert.Equal(t, synctypes.SKService(), result.ScopeKey)
 }
 
 // Validates: R-2.10.3
@@ -468,10 +474,10 @@ func TestScopeKey_StringRoundTrip(t *testing.T) {
 		key  synctypes.ScopeKey
 		wire string
 	}{
-		{"throttle:account", synctypes.SKThrottleAccount, "throttle:account"},
-		{"service", synctypes.SKService, "service"},
-		{"quota:own", synctypes.SKQuotaOwn, "quota:own"},
-		{"disk:local", synctypes.SKDiskLocal, "disk:local"},
+		{"throttle:account", synctypes.SKThrottleAccount(), "throttle:account"},
+		{"service", synctypes.SKService(), "service"},
+		{"quota:own", synctypes.SKQuotaOwn(), "quota:own"},
+		{"disk:local", synctypes.SKDiskLocal(), "disk:local"},
 		{"quota:shortcut", synctypes.SKQuotaShortcut("driveA:itemB"), "quota:shortcut:driveA:itemB"},
 		{"perm:dir", synctypes.SKPermDir("Documents/Private"), "perm:dir:Documents/Private"},
 		{"perm:remote", synctypes.SKPermRemote("Shared/TeamDocs"), "perm:remote:Shared/TeamDocs"},
@@ -504,7 +510,7 @@ func TestScopeKey_IsZero(t *testing.T) {
 	t.Parallel()
 
 	assert.True(t, synctypes.ScopeKey{}.IsZero())
-	assert.False(t, synctypes.SKThrottleAccount.IsZero())
+	assert.False(t, synctypes.SKThrottleAccount().IsZero())
 	assert.False(t, synctypes.SKPermDir("x").IsZero())
 }
 
@@ -512,13 +518,13 @@ func TestScopeKey_IsZero(t *testing.T) {
 func TestScopeKey_IsGlobal(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, synctypes.SKThrottleAccount.IsGlobal())
-	assert.True(t, synctypes.SKService.IsGlobal())
-	assert.False(t, synctypes.SKQuotaOwn.IsGlobal())
+	assert.True(t, synctypes.SKThrottleAccount().IsGlobal())
+	assert.True(t, synctypes.SKService().IsGlobal())
+	assert.False(t, synctypes.SKQuotaOwn().IsGlobal())
 	assert.False(t, synctypes.SKQuotaShortcut("a:b").IsGlobal())
 	assert.False(t, synctypes.SKPermDir("x").IsGlobal())
 	assert.False(t, synctypes.SKPermRemote("x").IsGlobal())
-	assert.False(t, synctypes.SKDiskLocal.IsGlobal())
+	assert.False(t, synctypes.SKDiskLocal().IsGlobal())
 }
 
 // Validates: R-2.10
@@ -526,8 +532,8 @@ func TestScopeKey_IsPermDir(t *testing.T) {
 	t.Parallel()
 
 	assert.True(t, synctypes.SKPermDir("Documents").IsPermDir())
-	assert.False(t, synctypes.SKThrottleAccount.IsPermDir())
-	assert.False(t, synctypes.SKQuotaOwn.IsPermDir())
+	assert.False(t, synctypes.SKThrottleAccount().IsPermDir())
+	assert.False(t, synctypes.SKQuotaOwn().IsPermDir())
 }
 
 // Validates: R-2.10.34
@@ -536,7 +542,7 @@ func TestScopeKey_IsPermRemote(t *testing.T) {
 
 	assert.True(t, synctypes.SKPermRemote("Shared/TeamDocs").IsPermRemote())
 	assert.False(t, synctypes.SKPermDir("Documents").IsPermRemote())
-	assert.False(t, synctypes.SKThrottleAccount.IsPermRemote())
+	assert.False(t, synctypes.SKThrottleAccount().IsPermRemote())
 }
 
 // Validates: R-2.10
@@ -546,7 +552,7 @@ func TestScopeKey_DirPath(t *testing.T) {
 	assert.Equal(t, "Documents/Private", synctypes.SKPermDir("Documents/Private").DirPath())
 
 	// DirPath on non-PermDir should panic.
-	assert.Panics(t, func() { synctypes.SKThrottleAccount.DirPath() })
+	assert.Panics(t, func() { synctypes.SKThrottleAccount().DirPath() })
 }
 
 // Validates: R-2.10.34
@@ -554,7 +560,7 @@ func TestScopeKey_RemotePath(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, "Shared/TeamDocs", synctypes.SKPermRemote("Shared/TeamDocs").RemotePath())
-	assert.Panics(t, func() { synctypes.SKThrottleAccount.RemotePath() })
+	assert.Panics(t, func() { synctypes.SKThrottleAccount().RemotePath() })
 }
 
 // Validates: R-2.10
@@ -565,13 +571,13 @@ func TestScopeKey_IssueType(t *testing.T) {
 		key  synctypes.ScopeKey
 		want string
 	}{
-		{synctypes.SKThrottleAccount, synctypes.IssueRateLimited},
-		{synctypes.SKService, synctypes.IssueServiceOutage},
-		{synctypes.SKQuotaOwn, synctypes.IssueQuotaExceeded},
+		{synctypes.SKThrottleAccount(), synctypes.IssueRateLimited},
+		{synctypes.SKService(), synctypes.IssueServiceOutage},
+		{synctypes.SKQuotaOwn(), synctypes.IssueQuotaExceeded},
 		{synctypes.SKQuotaShortcut("a:b"), synctypes.IssueQuotaExceeded},
 		{synctypes.SKPermDir("x"), synctypes.IssueLocalPermissionDenied},
 		{synctypes.SKPermRemote("Shared/TeamDocs"), synctypes.IssuePermissionDenied},
-		{synctypes.SKDiskLocal, synctypes.IssueDiskFull},
+		{synctypes.SKDiskLocal(), synctypes.IssueDiskFull},
 		{synctypes.ScopeKey{}, ""}, // zero value
 	}
 
@@ -588,10 +594,10 @@ func TestScopeKey_Humanize(t *testing.T) {
 		{RemoteDrive: "driveA", RemoteItem: "itemB", LocalPath: "/mnt/shared/TeamDocs"},
 	}
 
-	assert.Equal(t, "your OneDrive account (rate limited)", synctypes.SKThrottleAccount.Humanize(nil))
-	assert.Equal(t, "OneDrive service", synctypes.SKService.Humanize(nil))
-	assert.Equal(t, "your OneDrive storage", synctypes.SKQuotaOwn.Humanize(nil))
-	assert.Equal(t, "local disk", synctypes.SKDiskLocal.Humanize(nil))
+	assert.Equal(t, "your OneDrive account (rate limited)", synctypes.SKThrottleAccount().Humanize(nil))
+	assert.Equal(t, "OneDrive service", synctypes.SKService().Humanize(nil))
+	assert.Equal(t, "your OneDrive storage", synctypes.SKQuotaOwn().Humanize(nil))
+	assert.Equal(t, "local disk", synctypes.SKDiskLocal().Humanize(nil))
 	assert.Equal(t, "Documents/Private", synctypes.SKPermDir("Documents/Private").Humanize(nil))
 	assert.Equal(t, "Shared/TeamDocs", synctypes.SKPermRemote("Shared/TeamDocs").Humanize(nil))
 
@@ -616,18 +622,18 @@ func TestScopeKey_BlocksAction(t *testing.T) {
 		want            bool
 	}{
 		// Global scopes block everything.
-		{"throttle blocks upload", synctypes.SKThrottleAccount, "/a.txt", "", synctypes.ActionUpload, true, true},
-		{"throttle blocks download", synctypes.SKThrottleAccount, "/a.txt", "", synctypes.ActionDownload, true, true},
-		{"service blocks all", synctypes.SKService, "/a.txt", "sc:1", synctypes.ActionUpload, false, true},
+		{"throttle blocks upload", synctypes.SKThrottleAccount(), "/a.txt", "", synctypes.ActionUpload, true, true},
+		{"throttle blocks download", synctypes.SKThrottleAccount(), "/a.txt", "", synctypes.ActionDownload, true, true},
+		{"service blocks all", synctypes.SKService(), "/a.txt", "sc:1", synctypes.ActionUpload, false, true},
 
 		// Disk:local blocks downloads only.
-		{"disk blocks download", synctypes.SKDiskLocal, "/a.txt", "", synctypes.ActionDownload, true, true},
-		{"disk passes upload", synctypes.SKDiskLocal, "/a.txt", "", synctypes.ActionUpload, true, false},
+		{"disk blocks download", synctypes.SKDiskLocal(), "/a.txt", "", synctypes.ActionDownload, true, true},
+		{"disk passes upload", synctypes.SKDiskLocal(), "/a.txt", "", synctypes.ActionUpload, true, false},
 
 		// Quota:own blocks own-drive uploads.
-		{"quota own blocks own upload", synctypes.SKQuotaOwn, "/a.txt", "", synctypes.ActionUpload, true, true},
-		{"quota own passes download", synctypes.SKQuotaOwn, "/a.txt", "", synctypes.ActionDownload, true, false},
-		{"quota own passes shortcut upload", synctypes.SKQuotaOwn, "/a.txt", "sc:1", synctypes.ActionUpload, false, false},
+		{"quota own blocks own upload", synctypes.SKQuotaOwn(), "/a.txt", "", synctypes.ActionUpload, true, true},
+		{"quota own passes download", synctypes.SKQuotaOwn(), "/a.txt", "", synctypes.ActionDownload, true, false},
+		{"quota own passes shortcut upload", synctypes.SKQuotaOwn(), "/a.txt", "sc:1", synctypes.ActionUpload, false, false},
 
 		// Quota:shortcut blocks matching shortcut uploads.
 		{"shortcut blocks matching upload", synctypes.SKQuotaShortcut("sc:1"), "/a.txt", "sc:1", synctypes.ActionUpload, false, true},
@@ -658,12 +664,12 @@ func TestScopeKey_BlocksAction(t *testing.T) {
 func TestScopeKeyForStatus(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, synctypes.SKThrottleAccount, synctypes.ScopeKeyForStatus(429, ""))
-	assert.Equal(t, synctypes.SKThrottleAccount, synctypes.ScopeKeyForStatus(429, "sc:1")) // 429 is always account-level
-	assert.Equal(t, synctypes.SKService, synctypes.ScopeKeyForStatus(503, ""))
-	assert.Equal(t, synctypes.SKService, synctypes.ScopeKeyForStatus(500, ""))
-	assert.Equal(t, synctypes.SKService, synctypes.ScopeKeyForStatus(502, ""))
-	assert.Equal(t, synctypes.SKQuotaOwn, synctypes.ScopeKeyForStatus(507, ""))
+	assert.Equal(t, synctypes.SKThrottleAccount(), synctypes.ScopeKeyForStatus(429, ""))
+	assert.Equal(t, synctypes.SKThrottleAccount(), synctypes.ScopeKeyForStatus(429, "sc:1")) // 429 is always account-level
+	assert.Equal(t, synctypes.SKService(), synctypes.ScopeKeyForStatus(503, ""))
+	assert.Equal(t, synctypes.SKService(), synctypes.ScopeKeyForStatus(500, ""))
+	assert.Equal(t, synctypes.SKService(), synctypes.ScopeKeyForStatus(502, ""))
+	assert.Equal(t, synctypes.SKQuotaOwn(), synctypes.ScopeKeyForStatus(507, ""))
 	assert.Equal(t, synctypes.SKQuotaShortcut("drive1:item1"), synctypes.ScopeKeyForStatus(507, "drive1:item1"))
 	assert.True(t, synctypes.ScopeKeyForStatus(404, "").IsZero(), "non-scope status should be zero")
 	assert.True(t, synctypes.ScopeKeyForStatus(200, "").IsZero(), "success status should be zero")
