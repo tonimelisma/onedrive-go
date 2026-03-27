@@ -269,6 +269,86 @@ func TestDo_ErrorClassification(t *testing.T) {
 	}
 }
 
+func TestDo_ParsesStructuredGraphErrors(t *testing.T) {
+	t.Run("top level and nested codes", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("request-id", "test-req-id")
+			w.WriteHeader(http.StatusBadRequest)
+			writeClientTestBody(t, w, `{
+				"error": {
+					"code": "badRequest",
+					"message": "outer message",
+					"innerError": {
+						"code": "invalidRequest",
+						"innerError": {
+							"code": "deepCode"
+						}
+					}
+				}
+			}`)
+		}))
+		defer srv.Close()
+
+		client := newNoRetryTestClient(t, srv.URL)
+		resp, err := client.Do(t.Context(), http.MethodGet, "/test", nil)
+		closeClientTestResponse(t, resp)
+		require.Error(t, err)
+
+		var graphErr *GraphError
+		require.ErrorAs(t, err, &graphErr)
+		assert.Equal(t, http.StatusBadRequest, graphErr.StatusCode)
+		assert.Equal(t, "badRequest", graphErr.Code)
+		assert.Equal(t, []string{"invalidRequest", "deepCode"}, graphErr.InnerCodes)
+		assert.Equal(t, "deepCode", graphErr.MostSpecificCode())
+		assert.True(t, graphErr.HasCode("badRequest"))
+		assert.True(t, graphErr.HasCode("invalidRequest"))
+		assert.True(t, graphErr.HasCode("deepCode"))
+		assert.False(t, graphErr.HasCode("itemNotFound"))
+		assert.Equal(t, "outer message", graphErr.Message)
+		assert.Contains(t, graphErr.RawBody, `"deepCode"`)
+	})
+
+	t.Run("malformed and non-json responses fall back to raw body", func(t *testing.T) {
+		tests := []struct {
+			name      string
+			body      string
+			expectRaw bool
+		}{
+			{name: "non-json", body: `plain text error body`, expectRaw: true},
+			{name: "json without graph envelope", body: `{"error":"something"}`},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("request-id", "test-req-id")
+					w.WriteHeader(http.StatusBadRequest)
+					writeClientTestBody(t, w, tt.body)
+				}))
+				defer srv.Close()
+
+				client := newNoRetryTestClient(t, srv.URL)
+				resp, err := client.Do(t.Context(), http.MethodGet, "/test", nil)
+				closeClientTestResponse(t, resp)
+				require.Error(t, err)
+
+				var graphErr *GraphError
+				require.ErrorAs(t, err, &graphErr)
+				assert.Empty(t, graphErr.Code)
+				assert.Empty(t, graphErr.InnerCodes)
+				if tt.expectRaw {
+					assert.Equal(t, tt.body, graphErr.Message)
+					assert.Equal(t, tt.body, graphErr.RawBody)
+					return
+				}
+
+				assert.JSONEq(t, tt.body, graphErr.Message)
+				assert.JSONEq(t, tt.body, graphErr.RawBody)
+			})
+		}
+	})
+}
+
 // Validates: R-6.8.2
 func TestDo_RetryOn5xx(t *testing.T) {
 	var calls atomic.Int32
@@ -407,6 +487,24 @@ func TestDo_AuthorizationHeader(t *testing.T) {
 	defer resp.Body.Close()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestDo_DebugLogsNeverExposeBearerToken(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, http.DefaultClient, staticToken("my-secret-token"), logger, "test-agent")
+
+	resp, err := client.Do(t.Context(), http.MethodGet, "/auth", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.NotContains(t, logBuf.String(), "my-secret-token")
 }
 
 func TestDo_ContextCancellation(t *testing.T) {

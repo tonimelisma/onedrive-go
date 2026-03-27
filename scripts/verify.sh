@@ -2,8 +2,22 @@
 
 set -euo pipefail
 
-coverage_file="${COVERAGE_FILE:-/tmp/onedrive-go-cover.out}"
-coverage_threshold="${COVERAGE_THRESHOLD:-75.0}"
+coverage_threshold="${COVERAGE_THRESHOLD:-76.0}"
+coverage_file="${COVERAGE_FILE:-}"
+cleanup_coverage_file=false
+
+if [[ -z "${coverage_file}" ]]; then
+	coverage_file="$(mktemp "${TMPDIR:-/tmp}/onedrive-go-cover.XXXXXX.out")"
+	cleanup_coverage_file=true
+fi
+
+cleanup() {
+	if [[ "${cleanup_coverage_file}" == "true" ]]; then
+		rm -f "${coverage_file}"
+	fi
+}
+
+trap cleanup EXIT
 
 echo "==> golangci-lint"
 golangci-lint run --allow-parallel-runners

@@ -710,7 +710,7 @@ func simulateBrowserCallback(t *testing.T) func(context.Context, string) error {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, authURL, http.NoBody)
 		require.NoError(t, err, "failed to create authorize request")
 
-		resp, err := client.Do(req)
+		resp, err := doLocalTestRequest(client, req)
 		require.NoError(t, err, "failed to hit authorize endpoint")
 		require.NoError(t, resp.Body.Close())
 
@@ -721,7 +721,7 @@ func simulateBrowserCallback(t *testing.T) func(context.Context, string) error {
 		callbackReq, err := http.NewRequestWithContext(ctx, http.MethodGet, location, http.NoBody)
 		require.NoError(t, err, "failed to create callback request")
 
-		callbackResp, err := http.DefaultClient.Do(callbackReq)
+		callbackResp, err := doLocalTestRequest(http.DefaultClient, callbackReq)
 		require.NoError(t, err, "failed to hit callback")
 		require.NoError(t, callbackResp.Body.Close())
 
@@ -822,7 +822,7 @@ func TestDoAuthCodeLogin_ContextCancel(t *testing.T) {
 			return fmt.Errorf("build authorize request: %w", err)
 		}
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := doLocalTestRequest(http.DefaultClient, req)
 		if err == nil {
 			require.NoError(t, resp.Body.Close())
 		}
