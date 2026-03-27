@@ -34,6 +34,17 @@ func newSingleOwnerEngine(t *testing.T) *Engine {
 	return eng
 }
 
+func newSingleOwnerEngineWithContext(t *testing.T, ctx context.Context) *Engine {
+	t.Helper()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngineWithContext(t, ctx, mock)
+	eng.nowFn = func() time.Time { return time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC) }
+	setupWatchEngine(t, eng)
+
+	return eng
+}
+
 // ---------------------------------------------------------------------------
 // cascadeRecordAndComplete
 // ---------------------------------------------------------------------------
@@ -184,7 +195,7 @@ func TestEngine_AssertCurrentScopeInvariants_DetectsDuplicateActiveScopes(t *tes
 
 	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
-	scopeKey := synctypes.SKService
+	scopeKey := synctypes.SKService()
 
 	eng.watch.activeScopes = []synctypes.ScopeBlock{
 		{Key: scopeKey, IssueType: synctypes.IssueServiceOutage},
@@ -220,7 +231,7 @@ func TestEngine_ReleaseAndDiscardScope_MaintainInvariantsInOneShotMode(t *testin
 	ctx := context.Background()
 
 	t.Run("release", func(t *testing.T) {
-		eng := newSingleOwnerEngine(t)
+		eng := newSingleOwnerEngineWithContext(t, ctx)
 		scopeKey := synctypes.SKPermRemote("Shared/Docs")
 
 		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
@@ -254,7 +265,7 @@ func TestEngine_ReleaseAndDiscardScope_MaintainInvariantsInOneShotMode(t *testin
 	})
 
 	t.Run("discard", func(t *testing.T) {
-		eng := newSingleOwnerEngine(t)
+		eng := newSingleOwnerEngineWithContext(t, ctx)
 		scopeKey := synctypes.SKQuotaShortcut("drive:item")
 
 		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{

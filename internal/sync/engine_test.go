@@ -157,6 +157,14 @@ const engineTestDriveID = "0000000000000001"
 func newTestEngine(t *testing.T, mock *engineMockClient) (*Engine, string) {
 	t.Helper()
 
+	return newTestEngineWithContext(t, t.Context(), mock)
+}
+
+// newTestEngineWithContext is like newTestEngine but lets callers thread a
+// specific context through engine construction and cleanup-sensitive helpers.
+func newTestEngineWithContext(t *testing.T, ctx context.Context, mock *engineMockClient) (*Engine, string) {
+	t.Helper()
+
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 	syncRoot := filepath.Join(tmpDir, "sync")
@@ -166,7 +174,7 @@ func newTestEngine(t *testing.T, mock *engineMockClient) (*Engine, string) {
 	logger := testLogger(t)
 	driveID := driveid.New(engineTestDriveID)
 
-	eng, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	eng, err := NewEngine(ctx, &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncRoot,
 		DriveID:   driveID,
@@ -180,7 +188,7 @@ func newTestEngine(t *testing.T, mock *engineMockClient) (*Engine, string) {
 	eng.assertScopeInvariants = true
 
 	t.Cleanup(func() {
-		assert.NoError(t, eng.Close(t.Context()), "Engine.Close")
+		assert.NoError(t, eng.Close(context.WithoutCancel(ctx)), "Engine.Close")
 	})
 
 	return eng, syncRoot
@@ -191,6 +199,14 @@ func newTestEngine(t *testing.T, mock *engineMockClient) (*Engine, string) {
 func newTestEngineWithLogger(t *testing.T, mock *engineMockClient, logger *slog.Logger) (*Engine, string) {
 	t.Helper()
 
+	return newTestEngineWithLoggerContext(t, t.Context(), mock, logger)
+}
+
+// newTestEngineWithLoggerContext is like newTestEngineWithContext but accepts a
+// custom logger for tests that need to capture or filter log output.
+func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *engineMockClient, logger *slog.Logger) (*Engine, string) {
+	t.Helper()
+
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 	syncRoot := filepath.Join(tmpDir, "sync")
@@ -199,7 +215,7 @@ func newTestEngineWithLogger(t *testing.T, mock *engineMockClient, logger *slog.
 
 	driveID := driveid.New(engineTestDriveID)
 
-	eng, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	eng, err := NewEngine(ctx, &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncRoot,
 		DriveID:   driveID,
@@ -213,7 +229,7 @@ func newTestEngineWithLogger(t *testing.T, mock *engineMockClient, logger *slog.
 	eng.assertScopeInvariants = true
 
 	t.Cleanup(func() {
-		assert.NoError(t, eng.Close(t.Context()), "Engine.Close")
+		assert.NoError(t, eng.Close(context.WithoutCancel(ctx)), "Engine.Close")
 	})
 
 	return eng, syncRoot
@@ -4026,14 +4042,21 @@ func startDrainLoop(t *testing.T) (chan synctypes.WorkerResult, <-chan struct{},
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
+	errCh := make(chan error, 1)
 	go func() {
 		defer close(done)
 		defer eng.stopTrialTimer()
-		require.NoError(t, eng.runEngineLoop(ctx, &engineLoopConfig{
+		errCh <- eng.runEngineLoop(ctx, &engineLoopConfig{
 			results:              results,
 			stopWhenResultsClose: true,
-		}))
+		})
 	}()
+
+	t.Cleanup(func() {
+		cancel()
+		<-done
+		require.NoError(t, <-errCh)
+	})
 
 	return results, done, cancel, eng
 }

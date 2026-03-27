@@ -1425,193 +1425,6 @@ func (e *Engine) bootstrapSync(ctx context.Context, mode synctypes.SyncMode, pip
 	return nil
 }
 
-// runWatchUntilQuiescent drives the watch control flow until the dependency
-// graph empties. Used by bootstrapSync so the initial sync executes through
-// the same single-owner result/admission loop as steady-state watch mode.
-func (e *Engine) runWatchUntilQuiescent(
-	ctx context.Context,
-	p *watchPipeline,
-	initialOutbox []*synctypes.TrackedAction,
-) error {
-	emptyCh := e.depGraph.WaitForEmpty()
-	ticker := time.NewTicker(quiescenceLogInterval)
-	defer ticker.Stop()
-	outbox := append([]*synctypes.TrackedAction(nil), initialOutbox...)
-
-	for {
-		var outCh chan<- *synctypes.TrackedAction
-		var outVal *synctypes.TrackedAction
-		if len(outbox) > 0 {
-			outCh = e.readyCh
-			outVal = outbox[0]
-		}
-
-		select {
-		case outCh <- outVal:
-			outbox = outbox[1:]
-		case batch, ok := <-p.ready:
-			if !ok {
-				return nil
-			}
-			outbox = append(outbox, e.processBatch(ctx, batch, p.bl, p.mode, p.safety)...)
-		case r, ok := <-p.results:
-			if !ok {
-				return fmt.Errorf("sync: worker results closed during bootstrap")
-			}
-			outbox = append(outbox, e.processWorkerResult(ctx, &r, p.bl)...)
-		case <-e.trialTimerChan():
-			e.handleTrialTimer(ctx)
-		case <-e.retryTimerChan():
-			e.handleRetryTimer(ctx)
-		case <-emptyCh:
-			return nil
-		case <-ticker.C:
-			e.logger.Info("bootstrap: waiting for in-flight actions",
-				slog.Int("in_flight", e.depGraph.InFlightCount()),
-			)
-		case <-ctx.Done():
-			return fmt.Errorf("waiting for bootstrap quiescence: %w", ctx.Err())
-		}
-	}
-}
-
-// waitForQuiescence is the compatibility wrapper for callers and tests that
-// only need to wait for the dependency graph to drain, without a full watch
-// pipeline. It reuses the same single-owner quiescence loop used by bootstrap.
-func (e *Engine) waitForQuiescence(ctx context.Context) error {
-	return e.runWatchUntilQuiescent(ctx, &watchPipeline{}, nil)
-}
-
-// runWatchLoop runs the steady-state watch-mode select loop. The same goroutine
-// owns batch intake, result processing, retry/trial timers, and worker outbox
-// draining.
-func (e *Engine) runWatchLoop(ctx context.Context, p *watchPipeline) error {
-	var outbox []*synctypes.TrackedAction
-
-	for {
-		var (
-			done bool
-			err  error
-		)
-
-		if len(outbox) == 0 {
-			outbox, done, err = e.runWatchLoopIdle(ctx, p)
-		} else {
-			outbox, done, err = e.runWatchLoopWithOutbox(ctx, p, outbox)
-		}
-		if err != nil {
-			return err
-		}
-		if done {
-			return nil
-		}
-	}
-}
-
-func (e *Engine) runWatchLoopIdle(
-	ctx context.Context,
-	p *watchPipeline,
-) ([]*synctypes.TrackedAction, bool, error) {
-	select {
-	case batch, ok := <-p.ready:
-		if !ok {
-			return nil, true, nil
-		}
-		return e.processBatch(ctx, batch, p.bl, p.mode, p.safety), false, nil
-	case r, ok := <-p.results:
-		if !ok {
-			select {
-			case <-ctx.Done():
-				return nil, true, nil
-			default:
-			}
-			return nil, false, fmt.Errorf("sync: worker results channel closed unexpectedly")
-		}
-		return e.processWorkerResult(ctx, &r, p.bl), false, nil
-	case skipped := <-p.skippedCh:
-		e.recordSkippedItems(ctx, skipped)
-		e.clearResolvedSkippedItems(ctx, skipped)
-		return nil, false, nil
-	case <-p.recheckC:
-		e.handleRecheckTick(ctx)
-		return nil, false, nil
-	case <-p.reconcileC:
-		e.runFullReconciliationAsync(ctx, p.bl)
-		return nil, false, nil
-	case obsErr := <-p.errs:
-		return nil, false, e.handleObserverExit(p, obsErr)
-	case <-e.trialTimerChan():
-		e.handleTrialTimer(ctx)
-		return nil, false, nil
-	case <-e.retryTimerChan():
-		e.handleRetryTimer(ctx)
-		return nil, false, nil
-	case <-ctx.Done():
-		return nil, true, nil
-	}
-}
-
-func (e *Engine) runWatchLoopWithOutbox(
-	ctx context.Context,
-	p *watchPipeline,
-	outbox []*synctypes.TrackedAction,
-) ([]*synctypes.TrackedAction, bool, error) {
-	select {
-	case e.readyCh <- outbox[0]:
-		return outbox[1:], false, nil
-	case batch, ok := <-p.ready:
-		if !ok {
-			return outbox, true, nil
-		}
-		return append(outbox, e.processBatch(ctx, batch, p.bl, p.mode, p.safety)...), false, nil
-	case r, ok := <-p.results:
-		if !ok {
-			select {
-			case <-ctx.Done():
-				return outbox, true, nil
-			default:
-			}
-			return outbox, false, fmt.Errorf("sync: worker results channel closed unexpectedly")
-		}
-		return append(outbox, e.processWorkerResult(ctx, &r, p.bl)...), false, nil
-	case skipped := <-p.skippedCh:
-		e.recordSkippedItems(ctx, skipped)
-		e.clearResolvedSkippedItems(ctx, skipped)
-		return outbox, false, nil
-	case <-p.recheckC:
-		e.handleRecheckTick(ctx)
-		return outbox, false, nil
-	case <-p.reconcileC:
-		e.runFullReconciliationAsync(ctx, p.bl)
-		return outbox, false, nil
-	case obsErr := <-p.errs:
-		return outbox, false, e.handleObserverExit(p, obsErr)
-	case <-e.trialTimerChan():
-		e.handleTrialTimer(ctx)
-		return outbox, false, nil
-	case <-e.retryTimerChan():
-		e.handleRetryTimer(ctx)
-		return outbox, false, nil
-	case <-ctx.Done():
-		return outbox, true, nil
-	}
-}
-
-func (e *Engine) handleObserverExit(p *watchPipeline, obsErr error) error {
-	if obsErr != nil {
-		e.logger.Warn("observer error",
-			slog.String("error", obsErr.Error()),
-		)
-	}
-
-	p.activeObs--
-	if p.activeObs > 0 {
-		return nil
-	}
-
-	e.logger.Error("all observers have exited, stopping watch mode")
-	return fmt.Errorf("sync: all observers exited")
-}
 // ---------------------------------------------------------------------------
 // Result classification (R-6.8.15)
 // ---------------------------------------------------------------------------
@@ -1762,7 +1575,7 @@ func (e *Engine) repairOrphanedPermissionScopes(ctx context.Context) error {
 		}
 	}
 
-	e.mustAssertScopeInvariants("repair permission scopes")
+	e.mustAssertScopeInvariants(ctx, "repair permission scopes")
 
 	return nil
 }
@@ -1834,7 +1647,7 @@ func (e *Engine) activateScope(ctx context.Context, block synctypes.ScopeBlock) 
 		e.watch.activeScopes = syncdispatch.UpsertScope(e.watch.activeScopes, block)
 	}
 
-	e.mustAssertScopeInvariants("activate scope")
+	e.mustAssertScopeInvariants(ctx, "activate scope")
 
 	return nil
 }
@@ -1976,8 +1789,8 @@ func (e *Engine) releaseScope(ctx context.Context, key synctypes.ScopeKey) error
 		slog.String("scope_key", key.String()),
 	)
 
-	e.mustAssertReleasedScope(key, "release scope")
-	e.mustAssertScopeInvariants("release scope")
+	e.mustAssertReleasedScope(ctx, key, "release scope")
+	e.mustAssertScopeInvariants(ctx, "release scope")
 
 	return nil
 }
@@ -1994,8 +1807,8 @@ func (e *Engine) discardScope(ctx context.Context, key synctypes.ScopeKey) error
 		e.armTrialTimer()
 	}
 
-	e.mustAssertDiscardedScope(key, "discard scope")
-	e.mustAssertScopeInvariants("discard scope")
+	e.mustAssertDiscardedScope(ctx, key, "discard scope")
+	e.mustAssertScopeInvariants(ctx, "discard scope")
 
 	return nil
 }
@@ -3700,7 +3513,7 @@ func (e *Engine) handleExternalChanges(ctx context.Context) {
 	// Permission clearance: if user cleared permission boundary failures via CLI,
 	// release the corresponding in-memory scope blocks.
 	e.clearResolvedPermissionScopes(ctx)
-	e.mustAssertScopeInvariants("handle external changes")
+	e.mustAssertScopeInvariants(ctx, "handle external changes")
 }
 
 // clearResolvedPermissionScopes checks if any permission scope blocks have had

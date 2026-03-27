@@ -305,7 +305,7 @@ func TestOpenBrowser_StartsValidatedCommand(t *testing.T) {
 	script := "#!/bin/sh\nprintf '%s' \"$1\" > \"$CODEX_BROWSER_OUT\"\n"
 	require.NoError(t, os.WriteFile(scriptPath, []byte(script), executablePerms))
 
-	t.Setenv("PATH", tempDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("PATH", tempDir)
 	t.Setenv("CODEX_BROWSER_OUT", outputPath)
 
 	require.NoError(t, openBrowser(t.Context(), authURL))

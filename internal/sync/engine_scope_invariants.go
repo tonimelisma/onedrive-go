@@ -13,35 +13,31 @@ func (e *Engine) scopeInvariantChecksEnabled() bool {
 	return e.assertScopeInvariants
 }
 
-func (e *Engine) mustAssertScopeInvariants(stage string) {
+func (e *Engine) mustAssertScopeInvariants(ctx context.Context, stage string) {
 	if !e.scopeInvariantChecksEnabled() {
 		return
 	}
-	if err := e.assertCurrentScopeInvariants(e.invariantContext()); err != nil {
+	if err := e.assertCurrentScopeInvariants(context.WithoutCancel(ctx)); err != nil {
 		panic(fmt.Sprintf("%s: %v", stage, err))
 	}
 }
 
-func (e *Engine) mustAssertReleasedScope(key synctypes.ScopeKey, stage string) {
+func (e *Engine) mustAssertReleasedScope(ctx context.Context, key synctypes.ScopeKey, stage string) {
 	if !e.scopeInvariantChecksEnabled() {
 		return
 	}
-	if err := e.assertReleasedScope(e.invariantContext(), key); err != nil {
+	if err := e.assertReleasedScope(context.WithoutCancel(ctx), key); err != nil {
 		panic(fmt.Sprintf("%s: %v", stage, err))
 	}
 }
 
-func (e *Engine) mustAssertDiscardedScope(key synctypes.ScopeKey, stage string) {
+func (e *Engine) mustAssertDiscardedScope(ctx context.Context, key synctypes.ScopeKey, stage string) {
 	if !e.scopeInvariantChecksEnabled() {
 		return
 	}
-	if err := e.assertDiscardedScope(e.invariantContext(), key); err != nil {
+	if err := e.assertDiscardedScope(context.WithoutCancel(ctx), key); err != nil {
 		panic(fmt.Sprintf("%s: %v", stage, err))
 	}
-}
-
-func (e *Engine) invariantContext() context.Context {
-	return context.Background()
 }
 
 func (e *Engine) assertCurrentScopeInvariants(ctx context.Context) error {
