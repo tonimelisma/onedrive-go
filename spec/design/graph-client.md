@@ -6,7 +6,7 @@ Implements: R-3.1 [verified], R-6.7 [implemented], R-6.8 [verified], R-1.1 [veri
 
 ## Overview
 
-All Microsoft Graph API communication flows through `graph.Client`. The client is a pure API mapper: authentication, API quirk normalization, and error construction. No retry logic, no throttle state, no sleep. Callers receive clean, consistent data via `graph.Item` and never deal with API inconsistencies.
+All Microsoft Graph API communication flows through `graph.Client`. The client is a pure API mapper plus a narrow Graph-quirk normalizer: authentication, quirk-specific retries, and error construction. Generic transient retry, throttle state, and backoff coordination stay in the transport layer. Callers receive clean, consistent data via `graph.Item` and never deal with API inconsistencies.
 
 Retry lives in the transport layer via `retry.RetryTransport` (an `http.RoundTripper`). CLI callers wrap their HTTP client with `RetryTransport{Policy: Transport}` (5 retries). Sync callers use a raw HTTP client — failed requests return immediately for engine-level classification.
 
@@ -27,6 +27,7 @@ All API quirks handled at the graph boundary — downstream code never sees them
 - Missing field recovery (name, size for deleted items)
 - Timestamp validation
 - `parentReference.path` is never returned in delta — items tracked by ID
+- Root-child transient 404 retry on `GET /drives/{driveID}/items/root/children`
 
 ## Delta Queries (`delta.go`)
 
@@ -60,7 +61,7 @@ Sentinel errors: `ErrGone` (410), `ErrNotFound` (404), `ErrThrottled` (429), `Er
 
 Implements: R-6.8.8 [verified]
 
-Retry has been extracted from the graph client into `retry.RetryTransport`, an `http.RoundTripper` wrapper. The graph client no longer has retry loops (`doRetry`/`doPreAuthRetry` deleted), sleep functions, retry policies, or throttle state. All retry, backoff, Retry-After parsing, and 429 throttle coordination live in the transport layer.
+Generic retry has been extracted from the graph client into `retry.RetryTransport`, an `http.RoundTripper` wrapper. The graph client no longer has generic retry loops (`doRetry`/`doPreAuthRetry` deleted), throttle state, or transport-layer Retry-After coordination. The only client-local retries are documented Graph API quirk normalizations: transient 403 on `/me/drives` and transient 404 on root-child listing. All other retry, backoff, Retry-After parsing, and 429 throttle coordination live in the transport layer.
 
 `NewClient` accepts an `*http.Client` — the caller decides whether that client's transport includes retry. CLI callers wrap with `RetryTransport`. Sync callers pass a raw client.
 
