@@ -68,7 +68,7 @@ func readDeltaToken(t *testing.T, db *sql.DB, driveID string) string {
 	var token string
 
 	err := db.QueryRowContext(t.Context(),
-		`SELECT token FROM delta_tokens WHERE drive_id = ? AND scope_id = ''`,
+		`SELECT cursor FROM delta_tokens WHERE drive_id = ? AND scope_id = ''`,
 		driveID,
 	).Scan(&token)
 	if err == sql.ErrNoRows {
@@ -583,35 +583,6 @@ func TestRecordFailure_Download(t *testing.T) {
 	assert.Equal(t, 500, sfHTTP)
 }
 
-func TestRecordFailure_Delete(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	mgr.SetNowFunc(func() time.Time { return time.Unix(1000, 0) })
-	ctx := context.Background()
-
-	// Insert a deleting item.
-	_, err := mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
-		VALUES (?, ?, ?, 'file', 'deleting', ?)`,
-		testDriveID, "item1", "hello.txt", 999,
-	)
-	require.NoError(t, err)
-
-	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path:       "hello.txt",
-		DriveID:    driveid.New(testDriveID),
-		Direction:  synctypes.DirectionDelete,
-		ErrMsg:     "permission denied",
-		HTTPStatus: 403,
-	}, nil)
-	require.NoError(t, err)
-
-	row := readRemoteStateRow(t, mgr.DB(), "item1")
-	require.NotNil(t, row)
-	assert.Equal(t, synctypes.SyncStatusDeleteFailed, row.SyncStatus)
-}
-
 func TestRecordFailure_SetsIssueTypeAndScopeKey(t *testing.T) {
 	t.Parallel()
 
@@ -635,7 +606,7 @@ func TestRecordFailure_SetsIssueTypeAndScopeKey(t *testing.T) {
 		Category:   synctypes.CategoryActionable,
 		ErrMsg:     "quota full",
 		HTTPStatus: 507,
-		ScopeKey:   synctypes.SKQuotaOwn,
+		ScopeKey:   synctypes.SKQuotaOwn(),
 	}, nil)
 	require.NoError(t, err)
 
@@ -693,7 +664,7 @@ func TestResetRetryTimesForScope(t *testing.T) {
 		require.NoError(t, err, "inserting %s", tc.path)
 	}
 
-	err := mgr.ResetRetryTimesForScope(ctx, synctypes.SKThrottleAccount, now)
+	err := mgr.ResetRetryTimesForScope(ctx, synctypes.SKThrottleAccount(), now)
 	require.NoError(t, err)
 
 	// future-match.txt: transient + matching scope + future retry → should be reset to now

@@ -39,7 +39,7 @@ func TestClearPausedKeys_RemovesBothKeys(t *testing.T) {
 	require.NoError(t, config.SetDriveKey(cfgPath, cid, "paused_until", "2026-03-01T00:00:00Z"))
 
 	// Verify keys exist before clearing.
-	data, err := os.ReadFile(cfgPath)
+	data, err := os.ReadFile(cfgPath) //nolint:gosec // Test config path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "paused = true")
 	assert.Contains(t, string(data), "paused_until")
@@ -48,7 +48,7 @@ func TestClearPausedKeys_RemovesBothKeys(t *testing.T) {
 	require.NoError(t, clearPausedKeys(cfgPath, cid))
 
 	// Verify keys are removed.
-	data, err = os.ReadFile(cfgPath)
+	data, err = os.ReadFile(cfgPath) //nolint:gosec // Test config path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), "paused")
 	assert.NotContains(t, string(data), "paused_until")
@@ -87,7 +87,7 @@ func TestClearPausedKeys_ExpiredTimedPause_ClearedByResume(t *testing.T) {
 	require.NoError(t, resumeSingleDrive(cc, cfg, cid.String()))
 
 	// Verify stale keys were removed from config file.
-	data, err := os.ReadFile(cfgPath)
+	data, err := os.ReadFile(cfgPath) //nolint:gosec // Test config path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), "paused")
 	assert.NotContains(t, string(data), "paused_until")

@@ -7,6 +7,7 @@ package syncstore
 // (which use package syncstore to access unexported symbols) cannot import synctest.
 
 import (
+	"context"
 	"log/slog"
 	"path/filepath"
 	stdsync "sync"
@@ -21,10 +22,10 @@ const testDriveID = "0000000000000001"
 
 // newTestLogger returns a debug-level slog.Logger that writes via t.Log.
 // Safe for concurrent use; silently discards writes after the test finishes.
-func newTestLogger(t testing.TB) *slog.Logger {
-	t.Helper()
+func newTestLogger(tb testing.TB) *slog.Logger {
+	tb.Helper()
 
-	return slog.New(slog.NewTextHandler(newTestLogWriter(t), &slog.HandlerOptions{
+	return slog.New(slog.NewTextHandler(newTestLogWriter(tb), &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	}))
 }
@@ -37,13 +38,27 @@ type testLogWriter struct {
 	once stdsync.Once
 }
 
-func newTestLogWriter(t testing.TB) *testLogWriter {
-	t.Helper()
+func newTestLogWriter(tb testing.TB) *testLogWriter {
+	tb.Helper()
 
-	w := &testLogWriter{t: t, done: make(chan struct{})}
-	t.Cleanup(func() { w.once.Do(func() { close(w.done) }) })
+	w := &testLogWriter{t: tb, done: make(chan struct{})}
+	tb.Cleanup(func() { w.once.Do(func() { close(w.done) }) })
 
 	return w
+}
+
+type testContextProvider interface {
+	Context() context.Context
+}
+
+func testContext(tb testing.TB) context.Context {
+	tb.Helper()
+
+	if provider, ok := tb.(testContextProvider); ok {
+		return provider.Context()
+	}
+
+	return context.Background()
 }
 
 func (w *testLogWriter) Write(p []byte) (int, error) {
@@ -62,17 +77,19 @@ func (w *testLogWriter) Write(p []byte) (int, error) {
 // newTestStore creates a SyncStore backed by a temp directory,
 // registering cleanup with t.Cleanup. Does not import synctest to avoid a
 // cycle (synctest → syncstore → synctest).
-func newTestStore(t testing.TB) *SyncStore {
-	t.Helper()
+func newTestStore(tb testing.TB) *SyncStore {
+	tb.Helper()
 
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	logger := newTestLogger(t)
+	dbPath := filepath.Join(tb.TempDir(), "test.db")
+	logger := newTestLogger(tb)
 
-	mgr, err := NewSyncStore(dbPath, logger)
-	require.NoError(t, err, "NewSyncStore(%q)", dbPath)
+	ctx := testContext(tb)
 
-	t.Cleanup(func() {
-		assert.NoError(t, mgr.Close(), "Close()")
+	mgr, err := NewSyncStore(ctx, dbPath, logger)
+	require.NoError(tb, err, "NewSyncStore(%q)", dbPath)
+
+	tb.Cleanup(func() {
+		assert.NoError(tb, mgr.Close(ctx), "Close()")
 	})
 
 	return mgr

@@ -162,9 +162,16 @@ func (e *Engine) loopWorkerResult(
 	ok bool,
 ) ([]*synctypes.TrackedAction, bool, error) {
 	if !ok {
-		if cfg.stopWhenResultsClose || ctx.Err() != nil {
+		if cfg.stopWhenResultsClose {
 			return outbox, true, nil
 		}
+
+		select {
+		case <-ctx.Done():
+			return e.loopContextDone(ctx, cfg, outbox)
+		default:
+		}
+
 		return outbox, false, fmt.Errorf("sync: worker results channel closed unexpectedly")
 	}
 
@@ -222,7 +229,7 @@ func (e *Engine) loopContextDone(
 	outbox []*synctypes.TrackedAction,
 ) ([]*synctypes.TrackedAction, bool, error) {
 	if cfg.returnContextErr {
-		return outbox, false, ctx.Err()
+		return outbox, false, fmt.Errorf("sync: engine loop context done: %w", ctx.Err())
 	}
 
 	return outbox, true, nil

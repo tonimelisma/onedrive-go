@@ -1,4 +1,4 @@
-// Buffer groups change events by path, preparing them for the planner.
+// Package syncobserve watches and scans the local filesystem for sync changes.
 // It sits between observers and planner in the sync pipeline: observers
 // produce []synctypes.ChangeEvent, Buffer groups them into []synctypes.PathChanges,
 // planner consumes the grouped view. Thread-safe for concurrent observer output.

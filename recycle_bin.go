@@ -84,9 +84,7 @@ func runRecycleBinList(cmd *cobra.Command, _ []string) error {
 		return formatRecycleBinJSON(os.Stdout, items)
 	}
 
-	formatRecycleBinTable(os.Stdout, items)
-
-	return nil
+	return formatRecycleBinTable(os.Stdout, items)
 }
 
 func runRecycleBinRestore(cmd *cobra.Command, args []string) error {
@@ -129,7 +127,7 @@ func runRecycleBinEmpty(cmd *cobra.Command, _ []string) error {
 
 	confirm, err := cmd.Flags().GetBool("confirm")
 	if err != nil {
-		return err
+		return fmt.Errorf("read --confirm flag: %w", err)
 	}
 
 	if !confirm {
@@ -213,11 +211,9 @@ func itemType(item *graph.Item) string {
 	return typeFile
 }
 
-func formatRecycleBinTable(w io.Writer, items []graph.Item) {
+func formatRecycleBinTable(w io.Writer, items []graph.Item) error {
 	if len(items) == 0 {
-		fmt.Fprintln(w, "Recycle bin is empty")
-
-		return
+		return writeln(w, "Recycle bin is empty")
 	}
 
 	headers := []string{"NAME", "SIZE", "TYPE", "DELETED", "ID"}
@@ -238,7 +234,7 @@ func formatRecycleBinTable(w io.Writer, items []graph.Item) {
 		})
 	}
 
-	printTable(w, headers, rows)
+	return printTable(w, headers, rows)
 }
 
 // printRecycleBinRestoreJSON writes the restore command's JSON output to w.
@@ -246,7 +242,11 @@ func printRecycleBinRestoreJSON(w io.Writer, item recycleBinJSONItem) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 
-	return enc.Encode(item)
+	if err := enc.Encode(item); err != nil {
+		return fmt.Errorf("encode recycle bin restore output: %w", err)
+	}
+
+	return nil
 }
 
 func formatRecycleBinJSON(w io.Writer, items []graph.Item) error {
@@ -269,5 +269,9 @@ func formatRecycleBinJSON(w io.Writer, items []graph.Item) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 
-	return enc.Encode(out)
+	if err := enc.Encode(out); err != nil {
+		return fmt.Errorf("encode recycle bin output: %w", err)
+	}
+
+	return nil
 }

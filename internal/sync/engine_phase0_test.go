@@ -275,14 +275,12 @@ func TestPhase0_ExecutePlan_WaitsForDrainSideEffects(t *testing.T) {
 func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testing.T) {
 	t.Parallel()
 
-	results, ready, done, cancel, eng, buf := startOneShotEngineLoop(t)
+	results, done, cancel, eng := startDrainLoop(t)
 	defer cancel()
-	_ = ready
 	_ = done
-	_ = buf
 
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
-		Key:           synctypes.SKService,
+		Key:           synctypes.SKService(),
 		IssueType:     synctypes.IssueServiceOutage,
 		BlockedAt:     eng.nowFunc(),
 		TrialInterval: 30 * time.Millisecond,
@@ -307,15 +305,15 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 		Err:           graph.ErrServerError,
 		ErrMsg:        "trial failure",
 		IsTrial:       true,
-		TrialScopeKey: synctypes.SKService,
+		TrialScopeKey: synctypes.SKService(),
 	}
 
 	require.Eventually(t, func() bool {
-		block, ok := getTestScopeBlock(eng, synctypes.SKService)
+		block, ok := getTestScopeBlock(eng, synctypes.SKService())
 		return ok && block.TrialInterval == 60*time.Millisecond
 	}, time.Second, 10*time.Millisecond, "trial failure should only extend the active scope interval")
 
-	assert.True(t, isTestScopeBlocked(eng, synctypes.SKService),
+	assert.True(t, isTestScopeBlocked(eng, synctypes.SKService()),
 		"trial failure must not clear the blocked scope via the normal result path")
 }
 
@@ -323,9 +321,10 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation(t *testing.T) {
 	t.Parallel()
 
-	results, ready, done, cancel, eng, buf := startOneShotEngineLoop(t)
+	const blockedPath = "blocked.txt"
+
+	results, done, cancel, eng := startDrainLoop(t)
 	defer cancel()
-	_ = ready
 	_ = done
 
 	ctx := t.Context()
@@ -341,19 +340,19 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 	}}, "", driveID))
 
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
-		Key:           synctypes.SKThrottleAccount,
+		Key:           synctypes.SKThrottleAccount(),
 		IssueType:     synctypes.IssueRateLimited,
 		BlockedAt:     eng.nowFunc(),
 		TrialInterval: 10 * time.Millisecond,
 		NextTrialAt:   eng.nowFunc().Add(10 * time.Millisecond),
 	})
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path:      "blocked.txt",
+		Path:      blockedPath,
 		DriveID:   driveID,
 		Direction: synctypes.DirectionDownload,
 		Category:  synctypes.CategoryTransient,
 		ErrMsg:    "rate limited",
-		ScopeKey:  synctypes.SKThrottleAccount,
+		ScopeKey:  synctypes.SKThrottleAccount(),
 		ItemID:    "blocked-item",
 	}, nil))
 
@@ -372,21 +371,21 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 		DriveID:       driveID,
 		Success:       true,
 		IsTrial:       true,
-		TrialScopeKey: synctypes.SKThrottleAccount,
+		TrialScopeKey: synctypes.SKThrottleAccount(),
 	}
 
 	require.Eventually(t, func() bool {
-		return !isTestScopeBlocked(eng, synctypes.SKThrottleAccount)
+		return !isTestScopeBlocked(eng, synctypes.SKThrottleAccount())
 	}, time.Second, 10*time.Millisecond, "trial success should clear the scope block")
 
 	var batch []synctypes.PathChanges
 	require.Eventually(t, func() bool {
-		batch = buf.FlushImmediate()
+		batch = eng.watch.buf.FlushImmediate()
 		if len(batch) == 0 {
 			return false
 		}
 
-		return batch[0].Path == "blocked.txt"
+		return batch[0].Path == blockedPath
 	}, time.Second, 10*time.Millisecond, "trial success should re-inject the held failure without external observation")
 }
 
@@ -402,7 +401,7 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 
 	scopeKey := synctypes.SKPermDir("Private")
 	accessibleDir := filepath.Join(syncRoot, "Private")
-	require.NoError(t, os.MkdirAll(accessibleDir, 0o755))
+	require.NoError(t, os.MkdirAll(accessibleDir, 0o750))
 
 	require.NoError(t, eng.baseline.CommitObservation(ctx, []synctypes.ObservedItem{{
 		DriveID:  eng.driveID,
@@ -457,7 +456,7 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 func TestPhase0_ScopeBlockFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	t.Parallel()
 
-	results, ready, _, cancel, eng, _ := startOneShotEngineLoop(t)
+	results, _, cancel, eng := startDrainLoop(t)
 	defer cancel()
 
 	ctx := t.Context()
@@ -480,7 +479,7 @@ func TestPhase0_ScopeBlockFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	require.Nil(t, child)
 
 	eng.readyCh <- parent
-	readReady(t, ready)
+	readReady(t, eng.readyCh)
 
 	results <- synctypes.WorkerResult{
 		ActionID:   1,
@@ -495,13 +494,13 @@ func TestPhase0_ScopeBlockFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	}
 
 	select {
-	case ta := <-ready:
+	case ta := <-eng.readyCh:
 		require.Failf(t, "dependent dispatched early", "unexpected path %s", ta.Action.Path)
 	case <-time.After(150 * time.Millisecond):
 	}
 
 	require.Eventually(t, func() bool {
-		return isTestScopeBlocked(eng, synctypes.SKThrottleAccount)
+		return isTestScopeBlocked(eng, synctypes.SKThrottleAccount())
 	}, time.Second, 10*time.Millisecond, "scope block should be activated from the worker result")
 
 	failures, err := eng.baseline.ListSyncFailures(ctx)

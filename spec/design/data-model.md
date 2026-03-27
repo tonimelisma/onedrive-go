@@ -61,7 +61,7 @@ Unified failure tracking for download, upload, and delete failures. Two categori
 
 ### delta_tokens
 
-Delta API cursor per drive scope. `scope_id = ""` for primary scope. Drives with shortcuts to shared folders have additional scopes (one per shortcut). The token is committed atomically with `remote_state` observations — it tracks what the API has reported, not what has been synced.
+Delta API cursor per drive scope. `scope_id = ""` for primary scope. Drives with shortcuts to shared folders have additional scopes (one per shortcut). The cursor is committed atomically with `remote_state` observations — it tracks what the API has reported, not what has been synced.
 
 ### conflicts
 

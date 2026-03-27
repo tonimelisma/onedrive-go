@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -132,9 +131,7 @@ func runDriveList(cmd *cobra.Command, _ []string) error {
 		return printDriveListJSON(os.Stdout, configured, available)
 	}
 
-	printDriveListText(os.Stdout, configured, available)
-
-	return nil
+	return printDriveListText(os.Stdout, configured, available)
 }
 
 // buildConfiguredDriveEntries creates list entries from the config.
@@ -198,22 +195,21 @@ func discoverAvailableDrives(ctx context.Context, cfg *config.Config, spSiteLimi
 		entries []driveListEntry
 	)
 
-	g, gctx := errgroup.WithContext(ctx)
+	var wg sync.WaitGroup
 
 	for _, tokenCID := range tokens {
-		g.Go(func() error {
-			tokenEntries := discoverDrivesForToken(gctx, tokenCID, cfg, spSiteLimit, logger)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 
+			tokenEntries := discoverDrivesForToken(ctx, tokenCID, cfg, spSiteLimit, logger)
 			mu.Lock()
 			entries = append(entries, tokenEntries...)
 			mu.Unlock()
-
-			return nil
-		})
+		}()
 	}
 
-	//nolint:errcheck // errors are logged per-token goroutines, never returned
-	g.Wait()
+	wg.Wait()
 
 	slices.SortFunc(entries, func(a, b driveListEntry) int {
 		return cmp.Compare(a.CanonicalID, b.CanonicalID)
@@ -412,21 +408,31 @@ func filterSharedFolders(
 	// Phase 2: Enrich — parallel identity resolution (up to 5 concurrent).
 	const enrichConcurrency = 5
 
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(enrichConcurrency)
+	var wg sync.WaitGroup
+	sema := make(chan struct{}, enrichConcurrency)
 
+launchEnrichment:
 	for i := range candidates {
 		item := candidates[i].item
 
-		g.Go(func() error {
-			enrichSharedItem(gctx, client, item, logger)
+		select {
+		case sema <- struct{}{}:
+		case <-ctx.Done():
+			break launchEnrichment
+		}
 
-			return nil
-		})
+		wg.Add(1)
+		go func(item *graph.Item) {
+			defer wg.Done()
+			defer func() {
+				<-sema
+			}()
+
+			enrichSharedItem(ctx, client, item, logger)
+		}(item)
 	}
 
-	//nolint:errcheck // enrichment is best-effort; errors logged inside enrichSharedItem
-	g.Wait()
+	wg.Wait()
 
 	// Phase 3: Name — sequential display name derivation with collision tracking.
 	var folders []sharedFolderInfo
@@ -580,28 +586,36 @@ func driveLabel(e *driveListEntry) string {
 	return e.CanonicalID
 }
 
-func printDriveListText(w io.Writer, configured, available []driveListEntry) {
+func printDriveListText(w io.Writer, configured, available []driveListEntry) error {
 	if len(configured) == 0 && len(available) == 0 {
-		fmt.Fprintln(w, "No drives configured. Run 'onedrive-go login' to get started.")
-
-		return
+		return writeln(w, "No drives configured. Run 'onedrive-go login' to get started.")
 	}
 
 	if len(configured) > 0 {
-		printConfiguredDrives(w, configured)
+		if err := printConfiguredDrives(w, configured); err != nil {
+			return err
+		}
 	}
 
 	if len(available) > 0 {
 		if len(configured) > 0 {
-			fmt.Fprintln(w)
+			if err := writeln(w); err != nil {
+				return err
+			}
 		}
 
-		printAvailableDrives(w, available)
+		if err := printAvailableDrives(w, available); err != nil {
+			return err
+		}
 	}
+
+	return nil
 }
 
-func printConfiguredDrives(w io.Writer, entries []driveListEntry) {
-	fmt.Fprintln(w, "Configured drives:")
+func printConfiguredDrives(w io.Writer, entries []driveListEntry) error {
+	if err := writeln(w, "Configured drives:"); err != nil {
+		return err
+	}
 
 	maxName, maxDir := 0, 0
 	for i := range entries {
@@ -631,8 +645,12 @@ func printConfiguredDrives(w io.Writer, entries []driveListEntry) {
 			syncDir = syncDirNotSet
 		}
 
-		fmt.Fprintf(w, fmtStr, driveLabel(&entries[i]), syncDir, entries[i].State)
+		if err := writef(w, fmtStr, driveLabel(&entries[i]), syncDir, entries[i].State); err != nil {
+			return err
+		}
 	}
+
+	return nil
 }
 
 // annotateStateDB sets HasStateDB on available drive entries that have a state
@@ -657,8 +675,10 @@ func annotateStateDB(entries []driveListEntry) {
 	}
 }
 
-func printAvailableDrives(w io.Writer, entries []driveListEntry) {
-	fmt.Fprintln(w, "Available drives (not configured):")
+func printAvailableDrives(w io.Writer, entries []driveListEntry) error {
+	if err := writeln(w, "Available drives (not configured):"); err != nil {
+		return err
+	}
 
 	for i := range entries {
 		var parts []string
@@ -680,10 +700,12 @@ func printAvailableDrives(w io.Writer, entries []driveListEntry) {
 			stateDBMarker = " [has sync data]"
 		}
 
-		fmt.Fprintf(w, "  %s%s%s\n", driveLabel(&entries[i]), label, stateDBMarker)
+		if err := writef(w, "  %s%s%s\n", driveLabel(&entries[i]), label, stateDBMarker); err != nil {
+			return err
+		}
 	}
 
-	fmt.Fprintln(w, "\nRun 'onedrive-go drive add <canonical-id>' to add a drive.")
+	return writeln(w, "\nRun 'onedrive-go drive add <canonical-id>' to add a drive.")
 }
 
 // --- drive add ---
@@ -872,7 +894,7 @@ func resolveSharedDisplayName(
 ) (string, error) {
 	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("load token source: %w", err)
 	}
 
 	client := newGraphClient(ts, logger)
@@ -1227,9 +1249,7 @@ func runDriveSearch(cmd *cobra.Command, args []string) error {
 		return printDriveSearchJSON(os.Stdout, results)
 	}
 
-	printDriveSearchText(os.Stdout, results, query)
-
-	return nil
+	return printDriveSearchText(os.Stdout, results, query)
 }
 
 // findBusinessTokens returns all business account tokens, optionally filtered
@@ -1318,11 +1338,9 @@ func printDriveSearchJSON(w io.Writer, results []driveSearchResult) error {
 	return nil
 }
 
-func printDriveSearchText(w io.Writer, results []driveSearchResult, query string) {
+func printDriveSearchText(w io.Writer, results []driveSearchResult, query string) error {
 	if len(results) == 0 {
-		fmt.Fprintf(w, "No SharePoint sites found matching %q.\n", query)
-
-		return
+		return writef(w, "No SharePoint sites found matching %q.\n", query)
 	}
 
 	// Sort a copy so the caller's slice is not mutated.
@@ -1336,14 +1354,18 @@ func printDriveSearchText(w io.Writer, results []driveSearchResult, query string
 	})
 
 	// Group by site for readable output.
-	fmt.Fprintf(w, "SharePoint sites matching %q:\n", query)
+	if err := writef(w, "SharePoint sites matching %q:\n", query); err != nil {
+		return err
+	}
 
 	currentSite := ""
 
 	for _, r := range sorted {
 		if r.SiteName != currentSite {
 			if currentSite != "" {
-				fmt.Fprintln(w)
+				if err := writeln(w); err != nil {
+					return err
+				}
 			}
 
 			currentSite = r.SiteName
@@ -1352,11 +1374,15 @@ func printDriveSearchText(w io.Writer, results []driveSearchResult, query string
 				label = fmt.Sprintf("%s (%s)", r.SiteName, r.WebURL)
 			}
 
-			fmt.Fprintf(w, "\n  %s\n", label)
+			if err := writef(w, "\n  %s\n", label); err != nil {
+				return err
+			}
 		}
 
-		fmt.Fprintf(w, "    %s\n", r.CanonicalID)
+		if err := writef(w, "    %s\n", r.CanonicalID); err != nil {
+			return err
+		}
 	}
 
-	fmt.Fprintf(w, "\nRun 'onedrive-go drive add <canonical-id>' to add a drive.\n")
+	return writef(w, "\nRun 'onedrive-go drive add <canonical-id>' to add a drive.\n")
 }

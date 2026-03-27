@@ -22,7 +22,7 @@ func TestSyncStore_UpsertScopeBlock(t *testing.T) {
 	ctx := context.Background()
 
 	block := &synctypes.ScopeBlock{
-		Key:           synctypes.SKThrottleAccount,
+		Key:           synctypes.SKThrottleAccount(),
 		IssueType:     synctypes.IssueRateLimited,
 		BlockedAt:     time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
 		TrialInterval: 5 * time.Second,
@@ -37,7 +37,7 @@ func TestSyncStore_UpsertScopeBlock(t *testing.T) {
 	blocks, err := mgr.ListScopeBlocks(ctx)
 	require.NoError(t, err)
 	require.Len(t, blocks, 1)
-	assert.Equal(t, synctypes.SKThrottleAccount, blocks[0].Key)
+	assert.Equal(t, synctypes.SKThrottleAccount(), blocks[0].Key)
 	assert.Equal(t, synctypes.IssueRateLimited, blocks[0].IssueType)
 	assert.Equal(t, 0, blocks[0].TrialCount)
 
@@ -65,7 +65,7 @@ func TestSyncStore_DeleteScopeBlock(t *testing.T) {
 	ctx := context.Background()
 
 	block := &synctypes.ScopeBlock{
-		Key:           synctypes.SKService,
+		Key:           synctypes.SKService(),
 		IssueType:     synctypes.IssueServiceOutage,
 		BlockedAt:     time.Now().UTC(),
 		TrialInterval: 10 * time.Second,
@@ -76,7 +76,7 @@ func TestSyncStore_DeleteScopeBlock(t *testing.T) {
 	require.NoError(t, mgr.UpsertScopeBlock(ctx, block))
 
 	// Delete it.
-	err := mgr.DeleteScopeBlock(ctx, synctypes.SKService)
+	err := mgr.DeleteScopeBlock(ctx, synctypes.SKService())
 	require.NoError(t, err)
 
 	// Verify it's gone.
@@ -85,7 +85,7 @@ func TestSyncStore_DeleteScopeBlock(t *testing.T) {
 	assert.Empty(t, blocks)
 
 	// Delete non-existent — should not error (DELETE WHERE is no-op).
-	err = mgr.DeleteScopeBlock(ctx, synctypes.SKQuotaOwn)
+	err = mgr.DeleteScopeBlock(ctx, synctypes.SKQuotaOwn())
 	require.NoError(t, err)
 }
 
@@ -103,7 +103,7 @@ func TestSyncStore_ListScopeBlocks(t *testing.T) {
 
 	blocks := []*synctypes.ScopeBlock{
 		{
-			Key:           synctypes.SKThrottleAccount,
+			Key:           synctypes.SKThrottleAccount(),
 			IssueType:     synctypes.IssueRateLimited,
 			BlockedAt:     now,
 			TrialInterval: 5 * time.Second,
@@ -111,7 +111,7 @@ func TestSyncStore_ListScopeBlocks(t *testing.T) {
 			TrialCount:    0,
 		},
 		{
-			Key:           synctypes.SKService,
+			Key:           synctypes.SKService(),
 			IssueType:     synctypes.IssueServiceOutage,
 			BlockedAt:     now.Add(-time.Minute),
 			TrialInterval: 30 * time.Second,
@@ -143,7 +143,7 @@ func TestSyncStore_ListScopeBlocks(t *testing.T) {
 	}
 
 	// Verify throttle:account round-trip.
-	ta := byKey[synctypes.SKThrottleAccount]
+	ta := byKey[synctypes.SKThrottleAccount()]
 	require.NotNil(t, ta, "throttle:account block should be listed")
 	assert.Equal(t, synctypes.IssueRateLimited, ta.IssueType)
 	assert.Equal(t, now, ta.BlockedAt)

@@ -125,9 +125,7 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 		return printStatusJSON(os.Stdout, accounts)
 	}
 
-	printStatusText(os.Stdout, accounts)
-
-	return nil
+	return printStatusText(os.Stdout, accounts)
 }
 
 // accountNameReader abstracts reading display name and org name from account
@@ -463,78 +461,130 @@ func printStatusJSON(w io.Writer, accounts []statusAccount) error {
 	return nil
 }
 
-func printStatusText(w io.Writer, accounts []statusAccount) {
+func printStatusText(w io.Writer, accounts []statusAccount) error {
 	for i, acct := range accounts {
-		if i > 0 {
-			fmt.Fprintln(w)
-		}
-
-		label := acct.Email
-		if acct.DisplayName != "" {
-			label = fmt.Sprintf("%s (%s)", acct.DisplayName, acct.Email)
-		}
-
-		fmt.Fprintf(w, "Account: %s [%s]\n", label, acct.DriveType)
-
-		if acct.OrgName != "" {
-			fmt.Fprintf(w, "  Org:   %s\n", acct.OrgName)
-		}
-
-		fmt.Fprintf(w, "  Token: %s\n", acct.TokenState)
-
-		for _, d := range acct.Drives {
-			syncDir := d.SyncDir
-			if syncDir == "" {
-				syncDir = syncDirNotSet
-			}
-
-			driveLabel := d.CanonicalID
-			if d.DisplayName != "" && d.DisplayName != d.CanonicalID {
-				driveLabel = fmt.Sprintf("%s (%s)", d.DisplayName, d.CanonicalID)
-			}
-
-			fmt.Fprintf(w, "  %s\n", driveLabel)
-			fmt.Fprintf(w, "    Sync dir:  %s\n", syncDir)
-			fmt.Fprintf(w, "    State:     %s\n", d.State)
-
-			if d.SyncState != nil {
-				printSyncStateText(w, d.SyncState)
-			}
+		if err := printAccountStatus(w, acct, i > 0); err != nil {
+			return err
 		}
 	}
 
 	// Print health summary.
 	summary := computeSummary(accounts)
-	fmt.Fprintln(w)
-	printSummaryText(w, summary)
+	if err := writeln(w); err != nil {
+		return err
+	}
+
+	return printSummaryText(w, summary)
 }
 
-func printSyncStateText(w io.Writer, ss *syncStateInfo) {
+func printAccountStatus(w io.Writer, acct statusAccount, leadingBlank bool) error {
+	if leadingBlank {
+		if err := writeln(w); err != nil {
+			return err
+		}
+	}
+
+	if err := writef(w, "Account: %s [%s]\n", statusAccountLabel(acct), acct.DriveType); err != nil {
+		return err
+	}
+
+	if acct.OrgName != "" {
+		if err := writef(w, "  Org:   %s\n", acct.OrgName); err != nil {
+			return err
+		}
+	}
+
+	if err := writef(w, "  Token: %s\n", acct.TokenState); err != nil {
+		return err
+	}
+
+	for _, drive := range acct.Drives {
+		if err := printDriveStatus(w, drive); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func statusAccountLabel(acct statusAccount) string {
+	if acct.DisplayName == "" {
+		return acct.Email
+	}
+
+	return fmt.Sprintf("%s (%s)", acct.DisplayName, acct.Email)
+}
+
+func printDriveStatus(w io.Writer, drive statusDrive) error {
+	syncDir := drive.SyncDir
+	if syncDir == "" {
+		syncDir = syncDirNotSet
+	}
+
+	if err := writef(w, "  %s\n", statusDriveLabel(drive)); err != nil {
+		return err
+	}
+	if err := writef(w, "    Sync dir:  %s\n", syncDir); err != nil {
+		return err
+	}
+	if err := writef(w, "    State:     %s\n", drive.State); err != nil {
+		return err
+	}
+	if drive.SyncState == nil {
+		return nil
+	}
+
+	return printSyncStateText(w, drive.SyncState)
+}
+
+func statusDriveLabel(drive statusDrive) string {
+	if drive.DisplayName == "" || drive.DisplayName == drive.CanonicalID {
+		return drive.CanonicalID
+	}
+
+	return fmt.Sprintf("%s (%s)", drive.DisplayName, drive.CanonicalID)
+}
+
+func printSyncStateText(w io.Writer, ss *syncStateInfo) error {
 	if ss.LastSyncTime != "" {
-		fmt.Fprintf(w, "    Last sync: %s (%d files)\n",
-			ss.LastSyncTime, ss.FileCount)
+		if err := writef(w, "    Last sync: %s (%d files)\n",
+			ss.LastSyncTime, ss.FileCount); err != nil {
+			return err
+		}
 	} else {
-		fmt.Fprintf(w, "    Last sync: never\n")
+		if err := writef(w, "    Last sync: never\n"); err != nil {
+			return err
+		}
 	}
 
 	if ss.PendingSync > 0 {
-		fmt.Fprintf(w, "    Pending:   %d items\n", ss.PendingSync)
+		if err := writef(w, "    Pending:   %d items\n", ss.PendingSync); err != nil {
+			return err
+		}
 	}
 
 	if ss.Issues > 0 {
-		fmt.Fprintf(w, "    Issues:    %d (run 'onedrive-go issues')\n", ss.Issues)
+		if err := writef(w, "    Issues:    %d (run 'onedrive-go issues')\n", ss.Issues); err != nil {
+			return err
+		}
 	}
 
 	if ss.Retrying > 0 {
-		fmt.Fprintf(w, "    Retrying:  %d items\n", ss.Retrying)
+		if err := writef(w, "    Retrying:  %d items\n", ss.Retrying); err != nil {
+			return err
+		}
 	}
 
 	if ss.LastError != "" {
-		fmt.Fprintf(w, "    Last error: %s\n", ss.LastError)
+		if err := writef(w, "    Last error: %s\n", ss.LastError); err != nil {
+			return err
+		}
 	}
+
+	return nil
 }
 
-func printSummaryText(w io.Writer, s statusSummary) {
+func printSummaryText(w io.Writer, s statusSummary) error {
 	var parts []string
 
 	if s.Ready > 0 {
@@ -561,6 +611,6 @@ func printSummaryText(w io.Writer, s statusSummary) {
 		extra += fmt.Sprintf(", %d retrying", s.TotalRetrying)
 	}
 
-	fmt.Fprintf(w, "Summary: %d drives (%s), %s\n",
+	return writef(w, "Summary: %d drives (%s), %s\n",
 		s.TotalDrives, stateStr, extra)
 }

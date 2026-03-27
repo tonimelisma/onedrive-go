@@ -1,4 +1,4 @@
-// store.go — SyncStore type definition, constructor, lifecycle, and helpers.
+// Package syncstore persists sync baseline, observation, conflict, failure, and scope state.
 //
 // Contents:
 //   - SyncStore:    struct definition (db, baseline, logger, nowFunc)
@@ -20,6 +20,7 @@ package syncstore
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	stdsync "sync"
@@ -54,7 +55,7 @@ type SyncStore struct {
 // NewSyncStore opens the SQLite database at dbPath, runs migrations,
 // and returns a ready-to-use manager. The database uses WAL mode with
 // synchronous=FULL for crash-safe durability.
-func NewSyncStore(dbPath string, logger *slog.Logger) (*SyncStore, error) {
+func NewSyncStore(ctx context.Context, dbPath string, logger *slog.Logger) (*SyncStore, error) {
 	// DSN parameters ensure pragmas apply to every connection from the pool.
 	dsn := fmt.Sprintf(
 		"file:%s?_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)"+
@@ -71,10 +72,13 @@ func NewSyncStore(dbPath string, logger *slog.Logger) (*SyncStore, error) {
 	// Sole-writer pattern: only one connection writes at a time.
 	db.SetMaxOpenConns(1)
 
-	ctx := context.Background()
 	if err := runMigrations(ctx, db, logger); err != nil {
-		db.Close()
-		return nil, err
+		baseErr := fmt.Errorf("run sync store migrations: %w", err)
+		if closeErr := db.Close(); closeErr != nil {
+			return nil, errors.Join(baseErr, fmt.Errorf("close sync store database: %w", closeErr))
+		}
+
+		return nil, baseErr
 	}
 
 	logger.Info("baseline manager initialized", slog.String("db_path", dbPath))
@@ -90,13 +94,17 @@ func NewSyncStore(dbPath string, logger *slog.Logger) (*SyncStore, error) {
 // The explicit checkpoint ensures cross-process readers (e.g., `issues
 // --history` after `sync`) see all committed data when they open a new
 // connection to the same database file.
-func (m *SyncStore) Close() error {
+func (m *SyncStore) Close(ctx context.Context) error {
 	// WAL checkpoint only (no pruning) on close.
-	if err := m.Checkpoint(context.Background(), 0); err != nil {
+	if err := m.Checkpoint(ctx, 0); err != nil {
 		m.logger.Warn("checkpoint failed on close", slog.String("error", err.Error()))
 	}
 
-	return m.db.Close()
+	if err := m.db.Close(); err != nil {
+		return fmt.Errorf("close sync store database: %w", err)
+	}
+
+	return nil
 }
 
 // Checkpoint performs WAL checkpoint and optionally prunes soft-deleted rows

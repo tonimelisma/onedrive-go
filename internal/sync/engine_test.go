@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sync"
+	"strings"
 	"testing"
 	"time"
 
@@ -157,16 +157,24 @@ const engineTestDriveID = "0000000000000001"
 func newTestEngine(t *testing.T, mock *engineMockClient) (*Engine, string) {
 	t.Helper()
 
+	return newTestEngineWithContext(t, t.Context(), mock)
+}
+
+// newTestEngineWithContext is like newTestEngine but lets callers thread a
+// specific context through engine construction and cleanup-sensitive helpers.
+func newTestEngineWithContext(t *testing.T, ctx context.Context, mock *engineMockClient) (*Engine, string) {
+	t.Helper()
+
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 	syncRoot := filepath.Join(tmpDir, "sync")
 
-	require.NoError(t, os.MkdirAll(syncRoot, 0o755), "creating sync root")
+	require.NoError(t, os.MkdirAll(syncRoot, 0o750), "creating sync root")
 
 	logger := testLogger(t)
 	driveID := driveid.New(engineTestDriveID)
 
-	eng, err := NewEngine(&synctypes.EngineConfig{
+	eng, err := NewEngine(ctx, &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncRoot,
 		DriveID:   driveID,
@@ -180,7 +188,7 @@ func newTestEngine(t *testing.T, mock *engineMockClient) (*Engine, string) {
 	eng.assertScopeInvariants = true
 
 	t.Cleanup(func() {
-		assert.NoError(t, eng.Close(), "Engine.Close")
+		assert.NoError(t, eng.Close(context.WithoutCancel(ctx)), "Engine.Close")
 	})
 
 	return eng, syncRoot
@@ -191,15 +199,23 @@ func newTestEngine(t *testing.T, mock *engineMockClient) (*Engine, string) {
 func newTestEngineWithLogger(t *testing.T, mock *engineMockClient, logger *slog.Logger) (*Engine, string) {
 	t.Helper()
 
+	return newTestEngineWithLoggerContext(t, t.Context(), mock, logger)
+}
+
+// newTestEngineWithLoggerContext is like newTestEngineWithContext but accepts a
+// custom logger for tests that need to capture or filter log output.
+func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *engineMockClient, logger *slog.Logger) (*Engine, string) {
+	t.Helper()
+
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 	syncRoot := filepath.Join(tmpDir, "sync")
 
-	require.NoError(t, os.MkdirAll(syncRoot, 0o755), "creating sync root")
+	require.NoError(t, os.MkdirAll(syncRoot, 0o750), "creating sync root")
 
 	driveID := driveid.New(engineTestDriveID)
 
-	eng, err := NewEngine(&synctypes.EngineConfig{
+	eng, err := NewEngine(ctx, &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncRoot,
 		DriveID:   driveID,
@@ -213,10 +229,39 @@ func newTestEngineWithLogger(t *testing.T, mock *engineMockClient, logger *slog.
 	eng.assertScopeInvariants = true
 
 	t.Cleanup(func() {
-		assert.NoError(t, eng.Close(), "Engine.Close")
+		assert.NoError(t, eng.Close(context.WithoutCancel(ctx)), "Engine.Close")
 	})
 
 	return eng, syncRoot
+}
+
+func newDownloadDeltaMock(driveID driveid.ID, item *graph.Item, token string, content []byte) *engineMockClient {
+	return &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+				*item,
+			}, token), nil
+		},
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, err := w.Write(content)
+			return int64(n), err
+		},
+	}
+}
+
+func mustReadFileUnderRoot(t *testing.T, root, relativePath string) []byte {
+	t.Helper()
+
+	cleanRoot := filepath.Clean(root)
+	fullPath := filepath.Clean(filepath.Join(cleanRoot, relativePath))
+	rootPrefix := cleanRoot + string(os.PathSeparator)
+	require.True(t, strings.HasPrefix(fullPath, rootPrefix), "path must stay within sync root")
+
+	data, err := os.ReadFile(fullPath)
+	require.NoError(t, err, "reading resolved file")
+
+	return data
 }
 
 // setupWatchEngine initializes an engine with syncdispatch.DepGraph + readyCh + watchState
@@ -296,8 +341,8 @@ func writeLocalFile(t *testing.T, syncRoot, relPath, content string) {
 	t.Helper()
 
 	absPath := filepath.Join(syncRoot, relPath)
-	require.NoError(t, os.MkdirAll(filepath.Dir(absPath), 0o755), "MkdirAll")
-	require.NoError(t, os.WriteFile(absPath, []byte(content), 0o644), "WriteFile")
+	require.NoError(t, os.MkdirAll(filepath.Dir(absPath), 0o750), "MkdirAll")
+	require.NoError(t, os.WriteFile(absPath, []byte(content), 0o600), "WriteFile")
 }
 
 // seedBaseline commits outcomes and an optional delta token to the baseline,
@@ -324,12 +369,12 @@ func TestNewEngine_ZeroDriveID_ReturnsError(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 	syncRoot := filepath.Join(tmpDir, "sync")
-	require.NoError(t, os.MkdirAll(syncRoot, 0o755))
+	require.NoError(t, os.MkdirAll(syncRoot, 0o750))
 
 	mock := &engineMockClient{}
 	logger := testLogger(t)
 
-	_, err := NewEngine(&synctypes.EngineConfig{
+	_, err := NewEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncRoot,
 		DriveID:   driveid.ID{}, // zero — should be rejected
@@ -656,21 +701,15 @@ func TestRunOnce_DeltaTokenPersisted(t *testing.T) {
 
 	driveID := driveid.New(engineTestDriveID)
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
-				{ID: "root", IsRoot: true, DriveID: driveID},
-				{
-					ID: "f1", Name: "file.txt", ParentID: "root",
-					DriveID: driveID, Size: 5, QuickXorHash: "hash1",
-				},
-			}, "new-delta-token"), nil
+	mock := newDownloadDeltaMock(
+		driveID,
+		&graph.Item{
+			ID: "f1", Name: "file.txt", ParentID: "root",
+			DriveID: driveID, Size: 5, QuickXorHash: "hash1",
 		},
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
-			n, err := w.Write([]byte("data"))
-			return int64(n), err
-		},
-	}
+		"new-delta-token",
+		[]byte("data"),
+	)
 
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
@@ -689,21 +728,15 @@ func TestRunOnce_BaselineUpdatedAfterRun(t *testing.T) {
 
 	driveID := driveid.New(engineTestDriveID)
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
-				{ID: "root", IsRoot: true, DriveID: driveID},
-				{
-					ID: "item-a", Name: "alpha.txt", ParentID: "root",
-					DriveID: driveID, Size: 7, QuickXorHash: "alphahash",
-				},
-			}, "token-v2"), nil
+	mock := newDownloadDeltaMock(
+		driveID,
+		&graph.Item{
+			ID: "item-a", Name: "alpha.txt", ParentID: "root",
+			DriveID: driveID, Size: 7, QuickXorHash: "alphahash",
 		},
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
-			n, err := w.Write([]byte("alpha!!"))
-			return int64(n), err
-		},
-	}
+		"token-v2",
+		[]byte("alpha!!"),
+	)
 
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
@@ -726,7 +759,7 @@ func TestNewEngine_InvalidDBPath(t *testing.T) {
 
 	logger := testLogger(t)
 
-	_, err := NewEngine(&synctypes.EngineConfig{
+	_, err := NewEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    "/nonexistent/deeply/nested/path/test.db",
 		SyncRoot:  t.TempDir(),
 		DriveID:   driveid.New(engineTestDriveID),
@@ -1004,7 +1037,7 @@ func TestResolveConflict_KeepBoth(t *testing.T) {
 	ctx := t.Context()
 
 	// Create the file on disk — resolveKeepBoth hashes it to update baseline.
-	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "conflict-file.txt"), []byte("local content"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "conflict-file.txt"), []byte("local content"), 0o600))
 
 	// Seed a conflict.
 	outcomes := []synctypes.Outcome{{
@@ -1209,8 +1242,7 @@ func TestResolveConflict_KeepRemote(t *testing.T) {
 	assert.Empty(t, remaining, "expected 0 unresolved conflicts")
 
 	// Verify the local file has remote content.
-	data, readErr := os.ReadFile(filepath.Join(syncRoot, "keep-remote.txt"))
-	require.NoError(t, readErr, "reading resolved file")
+	data := mustReadFileUnderRoot(t, syncRoot, "keep-remote.txt")
 	assert.Equal(t, downloadContent, string(data))
 }
 
@@ -1389,7 +1421,7 @@ func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
 	// Verify held deletes were recorded as actionable issues.
 	rows, listErr := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueBigDeleteHeld)
 	require.NoError(t, listErr, "ListSyncFailuresByIssueType")
-	assert.Equal(t, 20, len(rows), "should have 20 big_delete_held entries")
+	assert.Len(t, rows, 20, "should have 20 big_delete_held entries")
 }
 
 // TestRunWatch_ProcessBatch_BigDelete_NonDeletesFlow verifies that non-delete
@@ -1479,7 +1511,7 @@ func TestRunWatch_ProcessBatch_BigDelete_NonDeletesFlow(t *testing.T) {
 	// 15 held delete entries should exist.
 	rows, listErr := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueBigDeleteHeld)
 	require.NoError(t, listErr, "ListSyncFailuresByIssueType")
-	assert.Equal(t, 15, len(rows), "should have 15 big_delete_held entries")
+	assert.Len(t, rows, 15, "should have 15 big_delete_held entries")
 }
 
 // TestRunWatch_ProcessBatch_BigDelete_BelowThreshold verifies that the
@@ -1985,7 +2017,7 @@ func TestRunWatch_WatchLimitExhausted_FallsBackToPolling(t *testing.T) {
 	eng, syncRoot := newTestEngine(t, mock)
 
 	// Create a subdirectory so the ENOSPC watcher has something to fail on.
-	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "subdir"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "subdir"), 0o750))
 
 	// Inject a watcher factory that returns ENOSPC after the first Add (root).
 	eng.localWatcherFactory = func() (syncobserve.FsWatcher, error) {
@@ -2010,7 +2042,7 @@ func TestRunWatch_WatchLimitExhausted_FallsBackToPolling(t *testing.T) {
 	select {
 	case err := <-done:
 		// RunWatch should return nil (clean shutdown), NOT an "all observers exited" error.
-		assert.NoError(t, err, "RunWatch should return nil on clean shutdown with fallback polling")
+		require.NoError(t, err, "RunWatch should return nil on clean shutdown with fallback polling")
 	case <-time.After(10 * time.Second):
 		require.Fail(t, "RunWatch did not return within timeout")
 	}
@@ -2232,13 +2264,13 @@ func TestEngine_Close_NilsObserversAndCleansStale(t *testing.T) {
 	syncRoot := filepath.Join(tmpDir, "sync")
 	dataDir := filepath.Join(tmpDir, "data")
 
-	require.NoError(t, os.MkdirAll(syncRoot, 0o755))
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	require.NoError(t, os.MkdirAll(syncRoot, 0o750))
+	require.NoError(t, os.MkdirAll(dataDir, 0o750))
 
 	logger := testLogger(t)
 	driveID := driveid.New(engineTestDriveID)
 
-	eng, err := NewEngine(&synctypes.EngineConfig{
+	eng, err := NewEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncRoot,
 		DataDir:   dataDir,
@@ -2257,14 +2289,14 @@ func TestEngine_Close_NilsObserversAndCleansStale(t *testing.T) {
 	eng.watch.localObs = &syncobserve.LocalObserver{}
 
 	// First Close should succeed and nil out references.
-	require.NoError(t, eng.Close())
+	require.NoError(t, eng.Close(t.Context()))
 	assert.Nil(t, eng.watch.remoteObs, "remoteObs should be nil after Close")
 	assert.Nil(t, eng.watch.localObs, "localObs should be nil after Close")
 
 	// Second Close must not panic (idempotency). The baseline DB is already
-	// closed so the second call returns an error, which is acceptable.
+	// closed. A second Close should still be a clean no-op.
 	assert.NotPanics(t, func() {
-		_ = eng.Close()
+		assert.NoError(t, eng.Close(t.Context()))
 	}, "second Close must not panic")
 }
 
@@ -2355,7 +2387,7 @@ func TestObserveAndCommitRemote_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	e, err := NewEngine(&synctypes.EngineConfig{
+	e, err := NewEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -2366,7 +2398,7 @@ func TestObserveAndCommitRemote_ZeroEvents_NoTokenAdvance(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
-	defer e.Close()
+	defer e.Close(t.Context())
 
 	ctx := t.Context()
 
@@ -2409,7 +2441,7 @@ func TestObserveAndCommitRemote_WithEvents_TokenDeferred(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	e, err := NewEngine(&synctypes.EngineConfig{
+	e, err := NewEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -2420,7 +2452,7 @@ func TestObserveAndCommitRemote_WithEvents_TokenDeferred(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
-	defer e.Close()
+	defer e.Close(t.Context())
 
 	ctx := t.Context()
 
@@ -2558,7 +2590,7 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	e, err := NewEngine(&synctypes.EngineConfig{
+	e, err := NewEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -2569,7 +2601,7 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
-	defer e.Close()
+	defer e.Close(t.Context())
 
 	ctx := t.Context()
 
@@ -2714,7 +2746,7 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	e, err := NewEngine(&synctypes.EngineConfig{
+	e, err := NewEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -2725,7 +2757,7 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
-	defer e.Close()
+	defer e.Close(t.Context())
 
 	ctx := t.Context()
 
@@ -2807,7 +2839,7 @@ func TestRunFullReconciliationAsync_NoChanges(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	e, err := NewEngine(&synctypes.EngineConfig{
+	e, err := NewEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -2818,7 +2850,7 @@ func TestRunFullReconciliationAsync_NoChanges(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
-	defer e.Close()
+	defer e.Close(t.Context())
 
 	ctx := t.Context()
 
@@ -2919,7 +2951,7 @@ func TestRunFullReconciliationAsync_SkipsIfRunning(t *testing.T) {
 		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			deltaCalled = true
 			require.Fail(t, "deltaFn should not be called when reconciliation is already running")
-			return nil, nil
+			return nil, assert.AnError
 		},
 	}
 
@@ -2965,7 +2997,7 @@ func TestRunFullReconciliationAsync_FeedsBuffer(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	e, err := NewEngine(&synctypes.EngineConfig{
+	e, err := NewEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -2976,7 +3008,7 @@ func TestRunFullReconciliationAsync_FeedsBuffer(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
-	defer e.Close()
+	defer e.Close(t.Context())
 
 	ctx := t.Context()
 
@@ -3016,7 +3048,7 @@ func TestRunFullReconciliationAsync_ShutdownAfterCommit(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	e, err := NewEngine(&synctypes.EngineConfig{
+	e, err := NewEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -3027,7 +3059,7 @@ func TestRunFullReconciliationAsync_ShutdownAfterCommit(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
-	defer e.Close()
+	defer e.Close(t.Context())
 
 	// Context with manual cancel — cancel is triggered by the
 	// afterReconcileCommit hook at the exact point between
@@ -3077,7 +3109,7 @@ func TestRunFullReconciliationAsync_SkipLogPromotedToInfo(t *testing.T) {
 	mock := &engineMockClient{
 		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			require.Fail(t, "deltaFn should not be called when reconciliation is already running")
-			return nil, nil
+			return nil, assert.AnError
 		},
 	}
 
@@ -3131,7 +3163,7 @@ func TestRunFullReconciliationAsync_DurationInCompletionLog(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	syncDir := t.TempDir()
 
-	e, err := NewEngine(&synctypes.EngineConfig{
+	e, err := NewEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -3142,7 +3174,7 @@ func TestRunFullReconciliationAsync_DurationInCompletionLog(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
-	defer e.Close()
+	defer e.Close(t.Context())
 
 	ctx := t.Context()
 
@@ -3189,7 +3221,7 @@ func TestRunFullReconciliationAsync_DurationInNoChangesLog(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	syncDir := t.TempDir()
 
-	e, err := NewEngine(&synctypes.EngineConfig{
+	e, err := NewEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -3200,7 +3232,7 @@ func TestRunFullReconciliationAsync_DurationInNoChangesLog(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
-	defer e.Close()
+	defer e.Close(t.Context())
 
 	ctx := t.Context()
 
@@ -3355,7 +3387,7 @@ func TestProcessWorkerResult_UploadFailure_RecordsLocalIssue(t *testing.T) {
 func TestProcessWorkerResult_403ReadOnly_SkipsRemoteState(t *testing.T) {
 	t.Parallel()
 
-	remoteDriveID := "remote-drive-1"
+	remoteDriveID := permissionsRemoteDriveID
 
 	checker := &mockPermChecker{
 		perms: map[string][]graph.Permission{
@@ -3439,44 +3471,35 @@ func TestProcessWorkerResult_Success_NoRecords(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // Validates: R-6.8.15, R-6.7.12, R-6.7.14
-func TestClassifyResult(t *testing.T) {
+type classifyResultCase struct {
+	name      string
+	result    synctypes.WorkerResult
+	wantClass resultClass
+	wantScope synctypes.ScopeKey
+}
+
+func assertClassifyResultCases(t *testing.T, tests []classifyResultCase) {
+	t.Helper()
+
+	for i := range tests {
+		tt := tests[i]
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			gotClass, gotScope := classifyResult(&tt.result)
+			assert.Equal(t, tt.wantClass, gotClass, "resultClass mismatch")
+			assert.Equal(t, tt.wantScope, gotScope, "scope key mismatch")
+		})
+	}
+}
+
+func TestClassifyResult_LifecycleAndAuth(t *testing.T) {
 	t.Parallel()
 
-	// outageErr is a GraphError whose Message triggers isOutagePattern.
-	outageErr := &graph.GraphError{
-		StatusCode: http.StatusBadRequest,
-		Message:    "ObjectHandle is Invalid for operation",
-		Err:        graph.ErrBadRequest,
-	}
-
-	// normalBadRequest is a 400 that does NOT match the outage pattern.
-	normalBadRequestErr := &graph.GraphError{
-		StatusCode: http.StatusBadRequest,
-		Message:    "invalid payload",
-		Err:        graph.ErrBadRequest,
-	}
-
-	tests := []struct {
-		name      string
-		result    synctypes.WorkerResult
-		wantClass resultClass
-		wantScope synctypes.ScopeKey
-	}{
-		{
-			name:      "success",
-			result:    synctypes.WorkerResult{Success: true},
-			wantClass: resultSuccess,
-		},
-		{
-			name:      "context_canceled",
-			result:    synctypes.WorkerResult{Err: context.Canceled},
-			wantClass: resultShutdown,
-		},
-		{
-			name:      "context_deadline_exceeded",
-			result:    synctypes.WorkerResult{Err: context.DeadlineExceeded},
-			wantClass: resultShutdown,
-		},
+	assertClassifyResultCases(t, []classifyResultCase{
+		{name: "success", result: synctypes.WorkerResult{Success: true}, wantClass: resultSuccess},
+		{name: "context_canceled", result: synctypes.WorkerResult{Err: context.Canceled}, wantClass: resultShutdown},
+		{name: "context_deadline_exceeded", result: synctypes.WorkerResult{Err: context.DeadlineExceeded}, wantClass: resultShutdown},
 		{
 			name:      "wrapped_context_canceled",
 			result:    synctypes.WorkerResult{Err: fmt.Errorf("operation failed: %w", context.Canceled)},
@@ -3492,67 +3515,45 @@ func TestClassifyResult(t *testing.T) {
 			result:    synctypes.WorkerResult{HTTPStatus: http.StatusForbidden, Err: graph.ErrForbidden},
 			wantClass: resultSkip,
 		},
-		{
-			name:      "404_not_found",
-			result:    synctypes.WorkerResult{HTTPStatus: http.StatusNotFound, Err: graph.ErrNotFound},
-			wantClass: resultRequeue,
-		},
-		{
-			name:      "408_request_timeout",
-			result:    synctypes.WorkerResult{HTTPStatus: http.StatusRequestTimeout, Err: errors.New("timeout")},
-			wantClass: resultRequeue,
-		},
-		{
-			name:      "412_precondition_failed",
-			result:    synctypes.WorkerResult{HTTPStatus: http.StatusPreconditionFailed, Err: errors.New("etag mismatch")},
-			wantClass: resultRequeue,
-		},
-		{
-			name:      "423_locked",
-			result:    synctypes.WorkerResult{HTTPStatus: http.StatusLocked, Err: graph.ErrLocked},
-			wantClass: resultRequeue,
-		},
-		{
-			name:      "429_too_many_requests",
-			result:    synctypes.WorkerResult{HTTPStatus: http.StatusTooManyRequests, Err: graph.ErrThrottled},
-			wantClass: resultScopeBlock,
-			wantScope: synctypes.SKThrottleAccount,
-		},
-		{
-			name:      "400_outage_pattern",
-			result:    synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: outageErr},
-			wantClass: resultRequeue,
-		},
-		{
-			name:      "400_normal",
-			result:    synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: normalBadRequestErr},
-			wantClass: resultSkip,
-		},
-		{
-			name:      "500_internal_server_error",
-			result:    synctypes.WorkerResult{HTTPStatus: http.StatusInternalServerError, Err: graph.ErrServerError},
-			wantClass: resultRequeue,
-		},
-		{
-			name:      "502_bad_gateway",
-			result:    synctypes.WorkerResult{HTTPStatus: http.StatusBadGateway, Err: graph.ErrServerError},
-			wantClass: resultRequeue,
-		},
-		{
-			name:      "503_service_unavailable",
-			result:    synctypes.WorkerResult{HTTPStatus: http.StatusServiceUnavailable, Err: graph.ErrServerError},
-			wantClass: resultRequeue,
-		},
-		{
-			name:      "504_gateway_timeout",
-			result:    synctypes.WorkerResult{HTTPStatus: http.StatusGatewayTimeout, Err: graph.ErrServerError},
-			wantClass: resultRequeue,
-		},
-		{
-			name:      "509_bandwidth_limit",
-			result:    synctypes.WorkerResult{HTTPStatus: 509, Err: graph.ErrServerError},
-			wantClass: resultRequeue,
-		},
+	})
+}
+
+func TestClassifyResult_RemoteRetriesAndSkips(t *testing.T) {
+	t.Parallel()
+
+	outageErr := &graph.GraphError{
+		StatusCode: http.StatusBadRequest,
+		Message:    "ObjectHandle is Invalid for operation",
+		Err:        graph.ErrBadRequest,
+	}
+	normalBadRequestErr := &graph.GraphError{
+		StatusCode: http.StatusBadRequest,
+		Message:    "invalid payload",
+		Err:        graph.ErrBadRequest,
+	}
+
+	assertClassifyResultCases(t, []classifyResultCase{
+		{name: "404_not_found", result: synctypes.WorkerResult{HTTPStatus: http.StatusNotFound, Err: graph.ErrNotFound}, wantClass: resultRequeue},
+		{name: "408_request_timeout", result: synctypes.WorkerResult{HTTPStatus: http.StatusRequestTimeout, Err: errors.New("timeout")}, wantClass: resultRequeue},
+		{name: "412_precondition_failed", result: synctypes.WorkerResult{HTTPStatus: http.StatusPreconditionFailed, Err: errors.New("etag mismatch")}, wantClass: resultRequeue},
+		{name: "423_locked", result: synctypes.WorkerResult{HTTPStatus: http.StatusLocked, Err: graph.ErrLocked}, wantClass: resultRequeue},
+		{name: "429_too_many_requests", result: synctypes.WorkerResult{HTTPStatus: http.StatusTooManyRequests, Err: graph.ErrThrottled}, wantClass: resultScopeBlock, wantScope: synctypes.SKThrottleAccount()},
+		{name: "400_outage_pattern", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: outageErr}, wantClass: resultRequeue},
+		{name: "400_normal", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: normalBadRequestErr}, wantClass: resultSkip},
+		{name: "500_internal_server_error", result: synctypes.WorkerResult{HTTPStatus: http.StatusInternalServerError, Err: graph.ErrServerError}, wantClass: resultRequeue},
+		{name: "502_bad_gateway", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadGateway, Err: graph.ErrServerError}, wantClass: resultRequeue},
+		{name: "503_service_unavailable", result: synctypes.WorkerResult{HTTPStatus: http.StatusServiceUnavailable, Err: graph.ErrServerError}, wantClass: resultRequeue},
+		{name: "504_gateway_timeout", result: synctypes.WorkerResult{HTTPStatus: http.StatusGatewayTimeout, Err: graph.ErrServerError}, wantClass: resultRequeue},
+		{name: "509_bandwidth_limit", result: synctypes.WorkerResult{HTTPStatus: 509, Err: graph.ErrServerError}, wantClass: resultRequeue},
+		{name: "409_conflict", result: synctypes.WorkerResult{HTTPStatus: http.StatusConflict, Err: graph.ErrConflict}, wantClass: resultSkip},
+		{name: "other_4xx_falls_to_skip", result: synctypes.WorkerResult{HTTPStatus: http.StatusMethodNotAllowed, Err: graph.ErrMethodNotAllowed}, wantClass: resultSkip},
+	})
+}
+
+func TestClassifyResult_StorageScopes(t *testing.T) {
+	t.Parallel()
+
+	assertClassifyResultCases(t, []classifyResultCase{
 		{
 			name: "507_own_drive",
 			result: synctypes.WorkerResult{
@@ -3561,7 +3562,7 @@ func TestClassifyResult(t *testing.T) {
 				ShortcutKey: "",
 			},
 			wantClass: resultScopeBlock,
-			wantScope: synctypes.SKQuotaOwn,
+			wantScope: synctypes.SKQuotaOwn(),
 		},
 		{
 			name: "507_shortcut_drive",
@@ -3573,50 +3574,31 @@ func TestClassifyResult(t *testing.T) {
 			wantClass: resultScopeBlock,
 			wantScope: synctypes.SKQuotaShortcut("drive1:item1"),
 		},
-		{
-			name:      "409_conflict",
-			result:    synctypes.WorkerResult{HTTPStatus: http.StatusConflict, Err: graph.ErrConflict},
-			wantClass: resultSkip,
-		},
-		{
-			name:      "other_4xx_falls_to_skip",
-			result:    synctypes.WorkerResult{HTTPStatus: http.StatusMethodNotAllowed, Err: graph.ErrMethodNotAllowed},
-			wantClass: resultSkip,
-		},
-		{
-			name:      "os_err_permission",
-			result:    synctypes.WorkerResult{Err: os.ErrPermission},
-			wantClass: resultSkip,
-		},
+	})
+}
+
+func TestClassifyResult_LocalErrors(t *testing.T) {
+	t.Parallel()
+
+	assertClassifyResultCases(t, []classifyResultCase{
+		{name: "os_err_permission", result: synctypes.WorkerResult{Err: os.ErrPermission}, wantClass: resultSkip},
 		{
 			name:      "wrapped_os_err_permission",
 			result:    synctypes.WorkerResult{Err: fmt.Errorf("cannot write: %w", os.ErrPermission)},
 			wantClass: resultSkip,
 		},
-		// Validates: R-2.10.43
 		{
 			name:      "disk_full",
 			result:    synctypes.WorkerResult{Err: fmt.Errorf("download failed: %w", driveops.ErrDiskFull)},
 			wantClass: resultScopeBlock,
-			wantScope: synctypes.SKDiskLocal,
+			wantScope: synctypes.SKDiskLocal(),
 		},
-		// Validates: R-2.10.44
 		{
 			name:      "file_too_large_for_space",
 			result:    synctypes.WorkerResult{Err: fmt.Errorf("download failed: %w", driveops.ErrFileTooLargeForSpace)},
 			wantClass: resultSkip,
 		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			gotClass, gotScope := classifyResult(&tt.result)
-			assert.Equal(t, tt.wantClass, gotClass, "resultClass mismatch")
-			assert.Equal(t, tt.wantScope, gotScope, "scope key mismatch")
-		})
-	}
+	})
 }
 
 // computeBackoff tests removed — backoff is now handled by retry.Reconcile
@@ -3636,7 +3618,7 @@ func TestProcessTrialResultV2_Success_ClearsScope(t *testing.T) {
 	// Set up an active persisted scope block.
 	now := eng.nowFunc()
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
-		Key:           synctypes.SKThrottleAccount,
+		Key:           synctypes.SKThrottleAccount(),
 		IssueType:     synctypes.IssueRateLimited,
 		BlockedAt:     now,
 		TrialInterval: 10 * time.Second,
@@ -3646,7 +3628,7 @@ func TestProcessTrialResultV2_Success_ClearsScope(t *testing.T) {
 	// Add scope-blocked failures to the DB (these would be unblocked on success).
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "first.txt", DriveID: driveid.New("d"), Direction: synctypes.DirectionUpload,
-		Category: synctypes.CategoryTransient, ErrMsg: "rate limited", ScopeKey: synctypes.SKThrottleAccount,
+		Category: synctypes.CategoryTransient, ErrMsg: "rate limited", ScopeKey: synctypes.SKThrottleAccount(),
 	}, nil)) // nil delayFn → scope-blocked (next_retry_at = NULL)
 
 	// Add the trial action to the syncdispatch.DepGraph.
@@ -3656,12 +3638,12 @@ func TestProcessTrialResultV2_Success_ClearsScope(t *testing.T) {
 	eng.processTrialResult(ctx, &synctypes.WorkerResult{
 		ActionID:      1,
 		IsTrial:       true,
-		TrialScopeKey: synctypes.SKThrottleAccount,
+		TrialScopeKey: synctypes.SKThrottleAccount(),
 		Success:       true,
 	})
 
 	// Scope block should be cleared.
-	assert.False(t, isTestScopeBlocked(eng, synctypes.SKThrottleAccount),
+	assert.False(t, isTestScopeBlocked(eng, synctypes.SKThrottleAccount()),
 		"scope block should be removed after successful trial")
 
 	// Scope-blocked failures should now be retryable (next_retry_at set to ~now).
@@ -3679,7 +3661,7 @@ func TestProcessTrialResultV2_Failure_DoublesInterval(t *testing.T) {
 
 	now := eng.nowFunc()
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
-		Key:           synctypes.SKService,
+		Key:           synctypes.SKService(),
 		IssueType:     synctypes.IssueServiceOutage,
 		BlockedAt:     now,
 		TrialInterval: 30 * time.Second,
@@ -3692,14 +3674,14 @@ func TestProcessTrialResultV2_Failure_DoublesInterval(t *testing.T) {
 	eng.processTrialResult(ctx, &synctypes.WorkerResult{
 		ActionID:      99,
 		IsTrial:       true,
-		TrialScopeKey: synctypes.SKService,
+		TrialScopeKey: synctypes.SKService(),
 		Success:       false,
 		HTTPStatus:    503,
 		ErrMsg:        "service unavailable",
 	})
 
 	// Verify block's TrialInterval was doubled.
-	got, ok := getTestScopeBlock(eng, synctypes.SKService)
+	got, ok := getTestScopeBlock(eng, synctypes.SKService())
 	require.True(t, ok)
 	assert.Equal(t, 60*time.Second, got.TrialInterval, "interval should be doubled")
 }
@@ -3715,9 +3697,9 @@ func TestProcessTrialResultV2_Failure_CapsAt5m(t *testing.T) {
 		httpStatus int
 		actionType synctypes.ActionType
 	}{
-		{"quota", synctypes.SKQuotaOwn, synctypes.IssueQuotaExceeded, 507, synctypes.ActionUpload},
-		{"service", synctypes.SKService, synctypes.IssueServiceOutage, 500, synctypes.ActionDownload},
-		{"throttle", synctypes.SKThrottleAccount, synctypes.IssueRateLimited, 429, synctypes.ActionUpload},
+		{"quota", synctypes.SKQuotaOwn(), synctypes.IssueQuotaExceeded, 507, synctypes.ActionUpload},
+		{"service", synctypes.SKService(), synctypes.IssueServiceOutage, 500, synctypes.ActionDownload},
+		{"throttle", synctypes.SKThrottleAccount(), synctypes.IssueRateLimited, 429, synctypes.ActionUpload},
 	}
 
 	for _, tt := range tests {
@@ -3769,7 +3751,7 @@ func TestProcessTrialResultV2_Failure_NoScopeDetection(t *testing.T) {
 
 	now := eng.nowFunc()
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
-		Key:           synctypes.SKService,
+		Key:           synctypes.SKService(),
 		IssueType:     synctypes.IssueServiceOutage,
 		BlockedAt:     now,
 		TrialInterval: 30 * time.Second,
@@ -3781,13 +3763,13 @@ func TestProcessTrialResultV2_Failure_NoScopeDetection(t *testing.T) {
 	eng.processTrialResult(ctx, &synctypes.WorkerResult{
 		ActionID:      99,
 		IsTrial:       true,
-		TrialScopeKey: synctypes.SKService,
+		TrialScopeKey: synctypes.SKService(),
 		Success:       false,
 		HTTPStatus:    500,
 		ErrMsg:        "internal server error",
 	})
 
-	got, ok := getTestScopeBlock(eng, synctypes.SKService)
+	got, ok := getTestScopeBlock(eng, synctypes.SKService())
 	require.True(t, ok, "scope block should still exist")
 	assert.Equal(t, 60*time.Second, got.TrialInterval, "interval should be doubled, not reset")
 }
@@ -3834,7 +3816,7 @@ func TestExtendTrialInterval_WithRetryAfter(t *testing.T) {
 
 	now := eng.nowFunc()
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
-		Key:           synctypes.SKThrottleAccount,
+		Key:           synctypes.SKThrottleAccount(),
 		IssueType:     synctypes.IssueRateLimited,
 		BlockedAt:     now,
 		TrialInterval: 30 * time.Second,
@@ -3848,14 +3830,14 @@ func TestExtendTrialInterval_WithRetryAfter(t *testing.T) {
 	eng.processTrialResult(ctx, &synctypes.WorkerResult{
 		ActionID:      99,
 		IsTrial:       true,
-		TrialScopeKey: synctypes.SKThrottleAccount,
+		TrialScopeKey: synctypes.SKThrottleAccount(),
 		Success:       false,
 		HTTPStatus:    429,
 		RetryAfter:    30 * time.Minute,
 		ErrMsg:        "too many requests",
 	})
 
-	got, ok := getTestScopeBlock(eng, synctypes.SKThrottleAccount)
+	got, ok := getTestScopeBlock(eng, synctypes.SKThrottleAccount())
 	require.True(t, ok)
 	assert.Equal(t, 30*time.Minute, got.TrialInterval,
 		"Retry-After must be used directly with no cap — server is ground truth")
@@ -3875,11 +3857,11 @@ func TestDiskLocalScopeBlock_FullCycle(t *testing.T) {
 		Err: fmt.Errorf("download failed: %w", driveops.ErrDiskFull),
 	})
 	require.Equal(t, resultScopeBlock, class)
-	require.Equal(t, synctypes.SKDiskLocal, scope)
+	require.Equal(t, synctypes.SKDiskLocal(), scope)
 
 	// 2. Establish the active scope block.
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
-		Key:           synctypes.SKDiskLocal,
+		Key:           synctypes.SKDiskLocal(),
 		IssueType:     synctypes.IssueDiskFull,
 		BlockedAt:     now,
 		TrialInterval: 10 * time.Second,
@@ -3894,7 +3876,7 @@ func TestDiskLocalScopeBlock_FullCycle(t *testing.T) {
 	assert.True(t, eng.activeBlockingScope(ulAction).IsZero(), "upload should NOT be blocked by disk:local scope")
 
 	// 4. Release scope block (simulating trial success / disk space freed).
-	require.NoError(t, eng.releaseScope(ctx, synctypes.SKDiskLocal))
+	require.NoError(t, eng.releaseScope(ctx, synctypes.SKDiskLocal()))
 
 	// 5. Download should now be admitted.
 	assert.True(t, eng.activeBlockingScope(dlAction).IsZero(), "download should be admitted after scope release")
@@ -3914,12 +3896,12 @@ func TestDeriveScopeKey(t *testing.T) {
 		shortcutKey string
 		want        synctypes.ScopeKey
 	}{
-		{"429_throttle", 429, "", synctypes.SKThrottleAccount},
-		{"503_service", 503, "", synctypes.SKService},
-		{"507_own", 507, "", synctypes.SKQuotaOwn},
+		{"429_throttle", 429, "", synctypes.SKThrottleAccount()},
+		{"503_service", 503, "", synctypes.SKService()},
+		{"507_own", 507, "", synctypes.SKQuotaOwn()},
 		{"507_shortcut", 507, "drive1:item1", synctypes.SKQuotaShortcut("drive1:item1")},
-		{"500_service", 500, "", synctypes.SKService},
-		{"502_service", 502, "", synctypes.SKService},
+		{"500_service", 500, "", synctypes.SKService()},
+		{"502_service", 502, "", synctypes.SKService()},
 		{"200_empty", 200, "", synctypes.ScopeKey{}},
 		{"404_empty", 404, "", synctypes.ScopeKey{}},
 	}
@@ -3948,7 +3930,7 @@ func TestApplyScopeBlock_ArmsTrialTimer(t *testing.T) {
 	// applyScopeBlock persists the scope and arms the trial timer.
 	eng.applyScopeBlock(ctx, synctypes.ScopeUpdateResult{
 		Block:      true,
-		ScopeKey:   synctypes.SKThrottleAccount,
+		ScopeKey:   synctypes.SKThrottleAccount(),
 		IssueType:  synctypes.IssueRateLimited,
 		RetryAfter: 30 * time.Second,
 	})
@@ -3988,7 +3970,7 @@ func TestRecordFailure_PopulatesScopeKey(t *testing.T) {
 	issues, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
-	assert.Equal(t, synctypes.SKQuotaOwn, issues[0].ScopeKey, "507 own-drive should populate scope key")
+	assert.Equal(t, synctypes.SKQuotaOwn(), issues[0].ScopeKey, "507 own-drive should populate scope key")
 }
 
 // Validates: R-2.10.11
@@ -4012,7 +3994,7 @@ func TestRecordFailure_PopulatesScopeKey_429(t *testing.T) {
 	issues, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
-	assert.Equal(t, synctypes.SKThrottleAccount, issues[0].ScopeKey)
+	assert.Equal(t, synctypes.SKThrottleAccount(), issues[0].ScopeKey)
 }
 
 // Validates: R-2.10.11
@@ -4044,47 +4026,39 @@ func TestRecordFailure_PopulatesScopeKey_507Shortcut(t *testing.T) {
 // One-shot engine-loop integration tests (single-owner result processing)
 // ---------------------------------------------------------------------------
 
-// startOneShotEngineLoop creates a real engine with DepGraph, watch-mode scope
-// state, readyCh, buf, and retryTimerCh — the full one-shot engine loop used
-// by the characterization tests — and starts runEngineLoop. Returns:
-//   - results chan: test sends WorkerResults here (simulating workers)
-//   - ready chan: test reads dispatched actions from readyCh
-//   - done chan: closes when the loop exits
-//   - cancel func: stops the drain goroutine
-//   - eng: the engine (for state inspection)
-//   - buf: the syncobserve.Buffer (for verifying retrier re-injection)
-func startOneShotEngineLoop(t *testing.T) (chan synctypes.WorkerResult, <-chan *synctypes.TrackedAction, <-chan struct{}, context.CancelFunc, *Engine, *syncobserve.Buffer) {
+// startDrainLoop creates a real engine with DepGraph, watch-mode scope state,
+// readyCh, buf, and retryTimerCh — the full one-shot drain pipeline used by
+// the characterization tests — and starts drainWorkerResults. Tests access
+// the ready channel and buffer via the returned engine.
+func startDrainLoop(t *testing.T) (chan synctypes.WorkerResult, <-chan struct{}, context.CancelFunc, *Engine) {
 	t.Helper()
 
 	eng := newSingleOwnerEngine(t)
 	eng.watch.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
 
-	buf := syncobserve.NewBuffer(eng.logger)
-	eng.watch.buf = buf
+	eng.watch.buf = syncobserve.NewBuffer(eng.logger)
 
 	results := make(chan synctypes.WorkerResult, 16)
-	ready := eng.readyCh
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
+	errCh := make(chan error, 1)
 	go func() {
 		defer close(done)
 		defer eng.stopTrialTimer()
-		require.NoError(t, eng.runEngineLoop(ctx, &engineLoopConfig{
+		errCh <- eng.runEngineLoop(ctx, &engineLoopConfig{
 			results:              results,
 			stopWhenResultsClose: true,
-		}))
+		})
 	}()
 
-	var cancelOnce sync.Once
-	cancelAndWait := func() {
-		cancelOnce.Do(func() {
-			cancel()
-			<-done
-		})
-	}
+	t.Cleanup(func() {
+		cancel()
+		<-done
+		require.NoError(t, <-errCh)
+	})
 
-	return results, ready, done, cancelAndWait, eng, buf
+	return results, done, cancel, eng
 }
 
 // readReadyAction reads one synctypes.TrackedAction from the ready channel
@@ -4111,7 +4085,7 @@ func readReady(t *testing.T, ready <-chan *synctypes.TrackedAction) {
 func TestE2E_OneShotEngineLoop_ProcessesAndRoutes(t *testing.T) {
 	t.Parallel()
 
-	results, ready, _, cancel, eng, _ := startOneShotEngineLoop(t)
+	results, _, cancel, eng := startDrainLoop(t)
 	defer cancel()
 
 	ctx := t.Context()
@@ -4120,7 +4094,7 @@ func TestE2E_OneShotEngineLoop_ProcessesAndRoutes(t *testing.T) {
 	ta := eng.depGraph.Add(&synctypes.Action{Type: synctypes.ActionUpload, Path: "a.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 0, nil)
 	require.NotNil(t, ta)
 	eng.readyCh <- ta
-	readReady(t, ready)
+	readReady(t, eng.readyCh)
 
 	// Send 429 result — scope detection creates block + records failure.
 	results <- synctypes.WorkerResult{
@@ -4137,7 +4111,7 @@ func TestE2E_OneShotEngineLoop_ProcessesAndRoutes(t *testing.T) {
 
 	// Verify scope block created and failure recorded.
 	require.Eventually(t, func() bool {
-		return isTestScopeBlocked(eng, synctypes.SKThrottleAccount)
+		return isTestScopeBlocked(eng, synctypes.SKThrottleAccount())
 	}, time.Second, time.Millisecond, "scope block should be created")
 
 	issues, err := eng.baseline.ListSyncFailures(ctx)
@@ -4239,25 +4213,24 @@ func TestWatchLoop_SteadyStateContinuesAfterGraphDrains(t *testing.T) {
 func TestE2E_OneShotLoop_TrialResultSuccess(t *testing.T) {
 	t.Parallel()
 
-	results, ready, done, cancel, eng, buf := startOneShotEngineLoop(t)
+	results, done, cancel, eng := startDrainLoop(t)
 	defer cancel()
-	_ = ready
 	_ = done
 
 	ctx := t.Context()
 
 	// Set up scope block and a scope-blocked failure.
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
-		Key:           synctypes.SKThrottleAccount,
+		Key:           synctypes.SKThrottleAccount(),
 		IssueType:     synctypes.IssueRateLimited,
 		BlockedAt:     eng.nowFunc(),
 		TrialInterval: 10 * time.Millisecond,
 		NextTrialAt:   eng.nowFunc().Add(10 * time.Millisecond),
 	})
-	require.NoError(t, os.WriteFile(filepath.Join(eng.syncRoot, "blocked.txt"), []byte("blocked payload"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(eng.syncRoot, "blocked.txt"), []byte("blocked payload"), 0o600))
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "blocked.txt", DriveID: driveid.New(engineTestDriveID), Direction: synctypes.DirectionUpload,
-		Category: synctypes.CategoryTransient, ErrMsg: "rate limited", ScopeKey: synctypes.SKThrottleAccount,
+		Category: synctypes.CategoryTransient, ErrMsg: "rate limited", ScopeKey: synctypes.SKThrottleAccount(),
 	}, nil))
 
 	// Add trial action to depGraph.
@@ -4272,17 +4245,17 @@ func TestE2E_OneShotLoop_TrialResultSuccess(t *testing.T) {
 		DriveID:       driveid.New(engineTestDriveID),
 		Success:       true,
 		IsTrial:       true,
-		TrialScopeKey: synctypes.SKThrottleAccount,
+		TrialScopeKey: synctypes.SKThrottleAccount(),
 	}
 
 	// Scope block should be cleared.
 	require.Eventually(t, func() bool {
-		return !isTestScopeBlocked(eng, synctypes.SKThrottleAccount)
+		return !isTestScopeBlocked(eng, synctypes.SKThrottleAccount())
 	}, time.Second, time.Millisecond, "scope block should be cleared after trial success")
 
 	var released []synctypes.PathChanges
 	require.Eventually(t, func() bool {
-		released = buf.FlushImmediate()
+		released = eng.watch.buf.FlushImmediate()
 		if len(released) == 0 {
 			return false
 		}
@@ -4295,14 +4268,12 @@ func TestE2E_OneShotLoop_TrialResultSuccess(t *testing.T) {
 func TestE2E_OneShotLoop_TrialResultFailure(t *testing.T) {
 	t.Parallel()
 
-	results, ready, done, cancel, eng, buf := startOneShotEngineLoop(t)
+	results, done, cancel, eng := startDrainLoop(t)
 	defer cancel()
-	_ = ready
 	_ = done
-	_ = buf
 
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
-		Key:           synctypes.SKService,
+		Key:           synctypes.SKService(),
 		IssueType:     synctypes.IssueServiceOutage,
 		BlockedAt:     eng.nowFunc(),
 		TrialInterval: 10 * time.Millisecond,
@@ -4322,12 +4293,12 @@ func TestE2E_OneShotLoop_TrialResultFailure(t *testing.T) {
 		ErrMsg:        "internal server error",
 		Err:           fmt.Errorf("internal server error"),
 		IsTrial:       true,
-		TrialScopeKey: synctypes.SKService,
+		TrialScopeKey: synctypes.SKService(),
 	}
 
 	// Interval should be doubled from 10ms to 20ms.
 	require.Eventually(t, func() bool {
-		block, ok := getTestScopeBlock(eng, synctypes.SKService)
+		block, ok := getTestScopeBlock(eng, synctypes.SKService())
 		return ok && block.TrialInterval == 20*time.Millisecond
 	}, time.Second, time.Millisecond, "trial failure should double interval")
 }
@@ -4335,16 +4306,14 @@ func TestE2E_OneShotLoop_TrialResultFailure(t *testing.T) {
 func TestE2E_OneShotLoopExit_StopsTimer(t *testing.T) {
 	t.Parallel()
 
-	results, ready, done, cancel, eng, buf := startOneShotEngineLoop(t)
+	results, done, cancel, eng := startDrainLoop(t)
 	defer cancel()
-	_ = ready
-	_ = buf
 	ctx := t.Context()
 
 	// Create scope block → arms trial timer.
 	eng.applyScopeBlock(ctx, synctypes.ScopeUpdateResult{
 		Block:      true,
-		ScopeKey:   synctypes.SKService,
+		ScopeKey:   synctypes.SKService(),
 		IssueType:  synctypes.IssueServiceOutage,
 		RetryAfter: time.Hour, // long interval so it doesn't fire during test
 	})
@@ -4369,30 +4338,64 @@ func TestE2E_OneShotLoopExit_StopsTimer(t *testing.T) {
 // Unit tests — trial timing initial intervals and caps (R-2.10.6, R-2.10.7, R-2.10.8)
 // ---------------------------------------------------------------------------
 
+func assertScopeWindowBlock(
+	t *testing.T,
+	httpStatus int,
+	threshold int,
+	wantScope synctypes.ScopeKey,
+	wantIssue string,
+) {
+	t.Helper()
+
+	clock := controllableClock()
+	ss := syncdispatch.NewScopeState(clock, discardLogger())
+
+	for i := range threshold {
+		sr := ss.UpdateScope(&synctypes.WorkerResult{
+			Path:       fmt.Sprintf("/file-%d.txt", i),
+			HTTPStatus: httpStatus,
+		})
+		if i < threshold-1 {
+			assert.False(t, sr.Block, "should not trigger before threshold")
+			continue
+		}
+
+		require.True(t, sr.Block, "should trigger at threshold")
+		assert.Equal(t, wantScope, sr.ScopeKey)
+		assert.Equal(t, wantIssue, sr.IssueType)
+		assert.Zero(t, sr.RetryAfter, "sliding window trigger should have zero RetryAfter")
+	}
+}
+
+func assertImmediateRetryAfterBlock(
+	t *testing.T,
+	httpStatus int,
+	retryAfter time.Duration,
+	wantScope synctypes.ScopeKey,
+	wantIssue string,
+) {
+	t.Helper()
+
+	clock := controllableClock()
+	ss := syncdispatch.NewScopeState(clock, discardLogger())
+
+	sr := ss.UpdateScope(&synctypes.WorkerResult{
+		Path:       "/file.txt",
+		HTTPStatus: httpStatus,
+		RetryAfter: retryAfter,
+	})
+
+	require.True(t, sr.Block, "Retry-After should trigger an immediate scope block")
+	assert.Equal(t, wantScope, sr.ScopeKey)
+	assert.Equal(t, wantIssue, sr.IssueType)
+	assert.Equal(t, retryAfter, sr.RetryAfter, "RetryAfter should pass through")
+}
+
 // Validates: R-2.10.6
 func TestTrialTimer_QuotaStartsAt5s(t *testing.T) {
 	t.Parallel()
 
-	clock, _ := controllableClock()
-	ss := syncdispatch.NewScopeState(clock, discardLogger())
-
-	// Feed 3 unique paths with 507 within 10s → triggers quota:own block.
-	for i := range 3 {
-		r := &synctypes.WorkerResult{
-			Path:       fmt.Sprintf("/file-%d.txt", i),
-			HTTPStatus: 507,
-		}
-		sr := ss.UpdateScope(r)
-		if i < 2 {
-			assert.False(t, sr.Block, "should not trigger before threshold")
-		} else {
-			require.True(t, sr.Block, "should trigger at threshold")
-			assert.Equal(t, synctypes.SKQuotaOwn, sr.ScopeKey)
-			assert.Equal(t, "quota_exceeded", sr.IssueType)
-			assert.Zero(t, sr.RetryAfter,
-				"sliding window trigger should have zero RetryAfter")
-		}
-	}
+	assertScopeWindowBlock(t, 507, 3, synctypes.SKQuotaOwn(), "quota_exceeded")
 }
 
 // TestTrialTimer_BackoffCapsAt5m is covered by
@@ -4403,21 +4406,7 @@ func TestTrialTimer_QuotaStartsAt5s(t *testing.T) {
 func TestTrialTimer_RateLimited_StartsAtRetryAfter(t *testing.T) {
 	t.Parallel()
 
-	clock, _ := controllableClock()
-	ss := syncdispatch.NewScopeState(clock, discardLogger())
-
-	r := &synctypes.WorkerResult{
-		Path:       "/file.txt",
-		HTTPStatus: 429,
-		RetryAfter: 90 * time.Second,
-	}
-
-	sr := ss.UpdateScope(r)
-	require.True(t, sr.Block, "429 should immediately trigger block")
-	assert.Equal(t, synctypes.SKThrottleAccount, sr.ScopeKey)
-	assert.Equal(t, "rate_limited", sr.IssueType)
-	assert.Equal(t, 90*time.Second, sr.RetryAfter,
-		"rate_limited RetryAfter should pass through server value")
+	assertImmediateRetryAfterBlock(t, 429, 90*time.Second, synctypes.SKThrottleAccount(), "rate_limited")
 }
 
 // TestTrialTimer_RateLimited_BlocksAllActionTypes is covered by
@@ -4428,47 +4417,14 @@ func TestTrialTimer_RateLimited_StartsAtRetryAfter(t *testing.T) {
 func TestTrialTimer_Service_StartsAt5s(t *testing.T) {
 	t.Parallel()
 
-	clock, _ := controllableClock()
-	ss := syncdispatch.NewScopeState(clock, discardLogger())
-
-	// Feed 5 unique paths with 500 within 30s → triggers service block.
-	for i := range 5 {
-		r := &synctypes.WorkerResult{
-			Path:       fmt.Sprintf("/file-%d.txt", i),
-			HTTPStatus: 500,
-		}
-		sr := ss.UpdateScope(r)
-		if i < 4 {
-			assert.False(t, sr.Block, "should not trigger before threshold")
-		} else {
-			require.True(t, sr.Block, "should trigger at threshold")
-			assert.Equal(t, synctypes.SKService, sr.ScopeKey)
-			assert.Equal(t, "service_outage", sr.IssueType)
-			assert.Zero(t, sr.RetryAfter,
-				"sliding window trigger should have zero RetryAfter")
-		}
-	}
+	assertScopeWindowBlock(t, 500, 5, synctypes.SKService(), "service_outage")
 }
 
 // Validates: R-2.10.8
 func TestTrialTimer_Service_503RetryAfterOverride(t *testing.T) {
 	t.Parallel()
 
-	clock, _ := controllableClock()
-	ss := syncdispatch.NewScopeState(clock, discardLogger())
-
-	r := &synctypes.WorkerResult{
-		Path:       "/file.txt",
-		HTTPStatus: 503,
-		RetryAfter: 120 * time.Second,
-	}
-
-	sr := ss.UpdateScope(r)
-	require.True(t, sr.Block, "503 with Retry-After should immediately trigger block")
-	assert.Equal(t, synctypes.SKService, sr.ScopeKey)
-	assert.Equal(t, "service_outage", sr.IssueType)
-	assert.Equal(t, 120*time.Second, sr.RetryAfter,
-		"503+Retry-After should pass through server value")
+	assertImmediateRetryAfterBlock(t, 503, 120*time.Second, synctypes.SKService(), "service_outage")
 }
 
 // clearResolvedSkippedItems
@@ -4645,9 +4601,9 @@ func TestFeedScopeDetection_LocalErrorIgnored(t *testing.T) {
 	}
 
 	// No scope block should have been created.
-	assert.False(t, isTestScopeBlocked(eng, synctypes.SKService),
+	assert.False(t, isTestScopeBlocked(eng, synctypes.SKService()),
 		"local errors with HTTPStatus=0 must not trigger service scope")
-	assert.False(t, isTestScopeBlocked(eng, synctypes.SKThrottleAccount),
+	assert.False(t, isTestScopeBlocked(eng, synctypes.SKThrottleAccount()),
 		"local errors with HTTPStatus=0 must not trigger throttle scope")
 }
 
@@ -4662,7 +4618,7 @@ func TestIsObservationSuppressed_Throttled(t *testing.T) {
 
 	// After throttle block, should be suppressed.
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
-		Key:           synctypes.SKThrottleAccount,
+		Key:           synctypes.SKThrottleAccount(),
 		IssueType:     synctypes.IssueRateLimited,
 		TrialInterval: 30 * time.Second,
 	})
@@ -4677,7 +4633,7 @@ func TestIsObservationSuppressed_ServiceOutage(t *testing.T) {
 
 	// Service outage should also suppress.
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
-		Key:           synctypes.SKService,
+		Key:           synctypes.SKService(),
 		IssueType:     synctypes.IssueServiceOutage,
 		TrialInterval: 60 * time.Second,
 	})
@@ -4703,7 +4659,7 @@ func TestIsObservationSuppressed_QuotaDoesNotSuppress(t *testing.T) {
 
 	// Quota scope block should NOT suppress observation (R-2.10.31).
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
-		Key:           synctypes.SKQuotaOwn,
+		Key:           synctypes.SKQuotaOwn(),
 		IssueType:     synctypes.IssueQuotaExceeded,
 		TrialInterval: 5 * time.Minute,
 	})
@@ -4840,9 +4796,8 @@ func TestLogFailureSummary_NoErrors(t *testing.T) {
 func TestRetryPipeline_TransientFailure_IntegratedRetrier(t *testing.T) {
 	t.Parallel()
 
-	results, ready, done, cancel, eng, buf := startOneShotEngineLoop(t)
+	results, done, cancel, eng := startDrainLoop(t)
 	defer cancel()
-	_ = ready
 	_ = done
 
 	ctx := t.Context()
@@ -4896,9 +4851,9 @@ func TestRetryPipeline_TransientFailure_IntegratedRetrier(t *testing.T) {
 	eng.runRetrierSweep(ctx)
 
 	// Verify: retrier injected event into buffer.
-	assert.Greater(t, buf.Len(), 0, "retrier should inject event into buffer")
+	assert.Positive(t, eng.watch.buf.Len(), "retrier should inject event into buffer")
 
-	flushed := buf.FlushImmediate()
+	flushed := eng.watch.buf.FlushImmediate()
 	require.Len(t, flushed, 1, "should have exactly one path in buffer")
 	assert.Equal(t, testPath, flushed[0].Path, "buffered path")
 }
@@ -4907,11 +4862,9 @@ func TestRetryPipeline_TransientFailure_IntegratedRetrier(t *testing.T) {
 func TestOneShotEngineLoop_Success_ClearsSyncFailure(t *testing.T) {
 	t.Parallel()
 
-	results, ready, done, cancel, eng, buf := startOneShotEngineLoop(t)
+	results, done, cancel, eng := startDrainLoop(t)
 	defer cancel()
-	_ = ready
 	_ = done
-	_ = buf
 
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
@@ -5162,7 +5115,7 @@ func TestBootstrapSync_WithChanges(t *testing.T) {
 
 	// Verify the file was downloaded.
 	_, statErr := os.Stat(filepath.Join(syncRoot, "newfile.txt"))
-	assert.NoError(t, statErr, "newfile.txt should have been downloaded")
+	require.NoError(t, statErr, "newfile.txt should have been downloaded")
 
 	// syncdispatch.DepGraph should be empty — all actions completed.
 	assert.Equal(t, 0, eng.depGraph.InFlightCount())

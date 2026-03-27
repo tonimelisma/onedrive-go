@@ -57,7 +57,7 @@ func runRm(cmd *cobra.Command, args []string) error {
 	// Require --recursive for folder deletion (B-156).
 	recursive, err := cmd.Flags().GetBool("recursive")
 	if err != nil {
-		return err
+		return fmt.Errorf("read --recursive flag: %w", err)
 	}
 
 	if item.IsFolder && !recursive {
@@ -66,7 +66,7 @@ func runRm(cmd *cobra.Command, args []string) error {
 
 	permanent, err := cmd.Flags().GetBool("permanent")
 	if err != nil {
-		return err
+		return fmt.Errorf("read --permanent flag: %w", err)
 	}
 
 	if permanent {
@@ -101,5 +101,9 @@ func printRmJSON(w io.Writer, out rmJSONOutput) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 
-	return enc.Encode(out)
+	if err := enc.Encode(out); err != nil {
+		return fmt.Errorf("encode remove output: %w", err)
+	}
+
+	return nil
 }

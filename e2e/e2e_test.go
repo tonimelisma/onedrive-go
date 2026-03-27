@@ -70,7 +70,7 @@ func TestMain(m *testing.M) {
 
 	// Set up debug log directory for E2E visibility.
 	if dir := os.Getenv("E2E_LOG_DIR"); dir != "" {
-		if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
+		if mkErr := os.MkdirAll(dir, 0o700); mkErr != nil {
 			fmt.Fprintf(os.Stderr, "creating E2E log dir: %v\n", mkErr)
 			os.Exit(1)
 		}
@@ -165,7 +165,7 @@ func writeMinimalConfig(t *testing.T) string {
 
 	content := fmt.Sprintf("[%q]\n", drive)
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o600))
 
 	return cfgPath
 }

@@ -1,11 +1,22 @@
 package graph
 
 import (
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 )
+
+func assertNormalizedItems(
+	t *testing.T,
+	items []Item,
+	want []Item,
+	normalize func([]Item, *slog.Logger) []Item,
+) {
+	t.Helper()
+	assert.Equal(t, want, normalize(items, testNoopLogger()))
+}
 
 // Validates: R-6.7.8
 func TestDecodeURLEncodedNames(t *testing.T) {
@@ -16,13 +27,12 @@ func TestDecodeURLEncodedNames(t *testing.T) {
 		{ID: "item-4", Name: "%E6%97%A5%E6%9C%AC%E8%AA%9E.txt"},
 	}
 
-	result := decodeURLEncodedNames(items, testNoopLogger())
-
-	assert.Len(t, result, 4)
-	assert.Equal(t, "my file.txt", result[0].Name)
-	assert.Equal(t, "normal.txt", result[1].Name)
-	assert.Equal(t, "path/slash.txt", result[2].Name)
-	assert.Equal(t, "日本語.txt", result[3].Name)
+	assertNormalizedItems(t, items, []Item{
+		{ID: "item-1", Name: "my file.txt"},
+		{ID: "item-2", Name: "normal.txt"},
+		{ID: "item-3", Name: "path/slash.txt"},
+		{ID: "item-4", Name: "日本語.txt"},
+	}, decodeURLEncodedNames)
 }
 
 func TestDecodeURLEncodedNames_NoEncoding(t *testing.T) {
@@ -118,9 +128,9 @@ func TestClearDeletedHashes(t *testing.T) {
 
 	result := clearDeletedHashes(items, testNoopLogger())
 
-	assert.Equal(t, "", result[0].QuickXorHash)
-	assert.Equal(t, "", result[0].SHA1Hash)
-	assert.Equal(t, "", result[0].SHA256Hash)
+	assert.Empty(t, result[0].QuickXorHash)
+	assert.Empty(t, result[0].SHA1Hash)
+	assert.Empty(t, result[0].SHA256Hash)
 
 	assert.Equal(t, "bGl2ZQ==", result[1].QuickXorHash)
 	assert.Equal(t, "789xyz", result[1].SHA1Hash)
@@ -134,9 +144,9 @@ func TestClearDeletedHashes_DeletedWithNoHashes(t *testing.T) {
 
 	result := clearDeletedHashes(items, testNoopLogger())
 
-	assert.Equal(t, "", result[0].QuickXorHash)
-	assert.Equal(t, "", result[0].SHA1Hash)
-	assert.Equal(t, "", result[0].SHA256Hash)
+	assert.Empty(t, result[0].QuickXorHash)
+	assert.Empty(t, result[0].SHA1Hash)
+	assert.Empty(t, result[0].SHA256Hash)
 }
 
 // Validates: R-6.7.10
@@ -148,13 +158,10 @@ func TestDeduplicateItems(t *testing.T) {
 		{ID: "item-2", Name: "other"},
 	}
 
-	result := deduplicateItems(items, testNoopLogger())
-
-	assert.Len(t, result, 2)
-	assert.Equal(t, "item-1", result[0].ID)
-	assert.Equal(t, "v3", result[0].Name)
-	assert.Equal(t, "item-2", result[1].ID)
-	assert.Equal(t, "other", result[1].Name)
+	assertNormalizedItems(t, items, []Item{
+		{ID: "item-1", Name: "v3"},
+		{ID: "item-2", Name: "other"},
+	}, deduplicateItems)
 }
 
 func TestDeduplicateItems_NoDuplicates(t *testing.T) {
@@ -247,7 +254,7 @@ func TestNormalizeDeltaItems_FullPipeline(t *testing.T) {
 
 	assert.Equal(t, "deleted-1", result[0].ID)
 	assert.True(t, result[0].IsDeleted)
-	assert.Equal(t, "", result[0].QuickXorHash)
+	assert.Empty(t, result[0].QuickXorHash)
 
 	assert.False(t, result[1].IsDeleted)
 	assert.False(t, result[2].IsDeleted)

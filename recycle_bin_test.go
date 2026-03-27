@@ -16,7 +16,7 @@ func TestFormatRecycleBinTable_Empty(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	formatRecycleBinTable(&buf, nil)
+	require.NoError(t, formatRecycleBinTable(&buf, nil))
 	assert.Equal(t, "Recycle bin is empty\n", buf.String())
 }
 
@@ -42,7 +42,7 @@ func TestFormatRecycleBinTable_Items(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	formatRecycleBinTable(&buf, items)
+	require.NoError(t, formatRecycleBinTable(&buf, items))
 	output := buf.String()
 
 	assert.Contains(t, output, "NAME")
@@ -73,7 +73,7 @@ func TestFormatRecycleBinJSON(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := formatRecycleBinJSON(&buf, items)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	output := buf.String()
 	assert.Contains(t, output, `"name": "file.txt"`)
@@ -103,7 +103,7 @@ func TestNewRecycleBinCmd_EmptyRequiresConfirm(t *testing.T) {
 
 	cmd := newRecycleBinCmd()
 	emptySub, _, err := cmd.Find([]string{"empty"})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, emptySub.Flags().Lookup("confirm"))
 }
 
@@ -126,7 +126,7 @@ func TestFormatRecycleBinJSON_Empty(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := formatRecycleBinJSON(&buf, nil)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "[]")
 }
 

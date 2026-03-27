@@ -8,17 +8,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestDownloadURL_LogValuer verifies that DownloadURL implements slog.LogValuer
-// and redacts the actual URL when logged, preventing accidental exposure of
-// embedded authentication tokens (B-158).
-func TestDownloadURL_LogValuer(t *testing.T) {
-	t.Parallel()
-
-	secretURL := DownloadURL("https://public.bn1304.livefilestore.com/y4msecret-token-here/file.txt")
+func assertRedactedURLLogValue(t *testing.T, message string, urlValue any, secretFragment string) {
+	t.Helper()
 
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
-		// Remove time for deterministic output.
 		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
 			if a.Key == slog.TimeKey {
 				return slog.Attr{}
@@ -28,12 +22,25 @@ func TestDownloadURL_LogValuer(t *testing.T) {
 		},
 	}))
 
-	logger.Info("download started", "url", secretURL)
+	logger.Info(message, "url", urlValue)
 
 	output := buf.String()
-
 	assert.Contains(t, output, "[REDACTED]")
-	assert.NotContains(t, output, "secret-token-here")
+	assert.NotContains(t, output, secretFragment)
+}
+
+// TestDownloadURL_LogValuer verifies that DownloadURL implements slog.LogValuer
+// and redacts the actual URL when logged, preventing accidental exposure of
+// embedded authentication tokens (B-158).
+func TestDownloadURL_LogValuer(t *testing.T) {
+	t.Parallel()
+
+	assertRedactedURLLogValue(
+		t,
+		"download started",
+		DownloadURL("https://public.bn1304.livefilestore.com/y4msecret-token-here/file.txt"),
+		"secret-token-here",
+	)
 }
 
 // TestDownloadURL_EmptyComparison verifies that an empty DownloadURL compares
@@ -65,25 +72,12 @@ func TestDownloadURL_StringConversion(t *testing.T) {
 func TestUploadURL_LogValuer(t *testing.T) {
 	t.Parallel()
 
-	secretURL := UploadURL("https://storage.live.com/uploadSession/secret-token-here")
-
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
-		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
-			if a.Key == slog.TimeKey {
-				return slog.Attr{}
-			}
-
-			return a
-		},
-	}))
-
-	logger.Info("upload started", "url", secretURL)
-
-	output := buf.String()
-
-	assert.Contains(t, output, "[REDACTED]")
-	assert.NotContains(t, output, "secret-token-here")
+	assertRedactedURLLogValue(
+		t,
+		"upload started",
+		UploadURL("https://storage.live.com/uploadSession/secret-token-here"),
+		"secret-token-here",
+	)
 }
 
 // TestUploadURL_EmptyComparison verifies that an empty UploadURL compares

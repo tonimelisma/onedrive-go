@@ -69,7 +69,7 @@ func TestWatch_DeleteDirectoryRemovesWatch(t *testing.T) {
 
 	dir := t.TempDir()
 	subDir := filepath.Join(dir, "subdir")
-	require.NoError(t, os.Mkdir(subDir, 0o755))
+	require.NoError(t, os.Mkdir(subDir, 0o700))
 
 	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
 		Path: "subdir", DriveID: driveid.New("d"), ItemID: "d1",
@@ -115,7 +115,7 @@ func TestAddWatchesRecursive_SkipsSymlinks(t *testing.T) {
 
 	// Create a real directory and a symlink to it.
 	realDir := filepath.Join(root, "realdir")
-	require.NoError(t, os.MkdirAll(realDir, 0o755))
+	require.NoError(t, os.MkdirAll(realDir, 0o700))
 
 	symlinkDir := filepath.Join(root, "linkdir")
 	require.NoError(t, os.Symlink(realDir, symlinkDir))
@@ -129,7 +129,7 @@ func TestAddWatchesRecursive_SkipsSymlinks(t *testing.T) {
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
 
-	err := obs.AddWatchesRecursive(tracker, root)
+	err := obs.AddWatchesRecursive(t.Context(), tracker, root)
 	require.NoError(t, err)
 
 	// The root and realdir should be watched, but NOT the symlink.
@@ -350,7 +350,7 @@ func TestHandleFsEvent_DeletePassesFsPath(t *testing.T) {
 
 	syncRoot := t.TempDir()
 	dirPath := filepath.Join(syncRoot, "folder")
-	require.NoError(t, os.MkdirAll(dirPath, 0o755))
+	require.NoError(t, os.MkdirAll(dirPath, 0o700))
 
 	watcher := newRecordingFsWatcher()
 	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{

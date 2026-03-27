@@ -18,6 +18,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
+const updatedHash = "h2"
+
 // commitAll is a test helper that commits outcomes one by one via CommitOutcome.
 func commitAll(t *testing.T, mgr *SyncStore, ctx context.Context, outcomes []synctypes.Outcome) {
 	t.Helper()
@@ -33,9 +35,9 @@ func TestNewSyncStore_CreatesDB(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	logger := newTestLogger(t)
 
-	mgr, err := NewSyncStore(dbPath, logger)
+	mgr, err := NewSyncStore(t.Context(), dbPath, logger)
 	require.NoError(t, err)
-	defer mgr.Close()
+	defer mgr.Close(t.Context())
 
 	// Verify DB file exists by opening a direct connection.
 	db, err := sql.Open("sqlite", "file:"+dbPath)
@@ -66,7 +68,7 @@ func TestSyncStore_Close_CheckpointsWAL(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	logger := newTestLogger(t)
 
-	mgr, err := NewSyncStore(dbPath, logger)
+	mgr, err := NewSyncStore(t.Context(), dbPath, logger)
 	require.NoError(t, err)
 
 	// Write some data to ensure WAL has content.
@@ -80,7 +82,7 @@ func TestSyncStore_Close_CheckpointsWAL(t *testing.T) {
 	require.NoError(t, err)
 
 	// Close should checkpoint and remove the WAL file.
-	require.NoError(t, mgr.Close())
+	require.NoError(t, mgr.Close(t.Context()))
 
 	// After TRUNCATE checkpoint, the WAL file should be empty or absent.
 	walPath := dbPath + "-wal"
@@ -362,106 +364,58 @@ func TestCommit_UpdateSynced(t *testing.T) {
 	mgr.SetNowFunc(func() time.Time { return t2 })
 
 	outcomes[0].Action = synctypes.ActionUpdateSynced
-	outcomes[0].LocalHash = "h2"
-	outcomes[0].RemoteHash = "h2"
+	outcomes[0].LocalHash = updatedHash
+	outcomes[0].RemoteHash = updatedHash
 
 	commitAll(t, mgr, ctx, outcomes)
 
 	entry, ok := mgr.Baseline().GetByPath("file.txt")
 	require.True(t, ok)
 	assert.Equal(t, t2.UnixNano(), entry.SyncedAt)
-	assert.Equal(t, "h2", entry.LocalHash)
+	assert.Equal(t, updatedHash, entry.LocalHash)
 }
 
-// Validates: R-6.5.2
-func TestCommit_LocalDelete(t *testing.T) {
+// Validates: R-6.5.2, R-2.2
+func TestCommit_DeleteLikeActionsRemoveBaseline(t *testing.T) {
 	t.Parallel()
 
-	mgr := newTestStore(t)
-	ctx := t.Context()
+	cases := []struct {
+		name         string
+		path         string
+		deleteAction synctypes.ActionType
+	}{
+		{name: "LocalDelete", path: "delete-me.txt", deleteAction: synctypes.ActionLocalDelete},
+		{name: "RemoteDelete", path: "remote-del.txt", deleteAction: synctypes.ActionRemoteDelete},
+		{name: "Cleanup", path: "cleanup.txt", deleteAction: synctypes.ActionCleanup},
+	}
 
-	mgr.SetNowFunc(func() time.Time {
-		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	})
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	// Create, then delete.
-	create := []synctypes.Outcome{{
-		Action: synctypes.ActionDownload, Success: true,
-		Path: "delete-me.txt", DriveID: driveid.New("d"), ItemID: "i",
-		ItemType: synctypes.ItemTypeFile, LocalHash: "h", RemoteHash: "h",
-		Size: 50, Mtime: 1,
-	}}
+			mgr := newTestStore(t)
+			ctx := t.Context()
+			mgr.SetNowFunc(func() time.Time {
+				return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+			})
 
-	commitAll(t, mgr, ctx, create)
+			create := []synctypes.Outcome{{
+				Action: synctypes.ActionDownload, Success: true,
+				Path: tc.path, DriveID: driveid.New("d"), ItemID: "i",
+				ItemType: synctypes.ItemTypeFile, LocalHash: "h", RemoteHash: "h",
+				Size: 50, Mtime: 1,
+			}}
+			commitAll(t, mgr, ctx, create)
 
-	del := []synctypes.Outcome{{
-		Action: synctypes.ActionLocalDelete, Success: true, Path: "delete-me.txt",
-	}}
+			remove := []synctypes.Outcome{{
+				Action: tc.deleteAction, Success: true, Path: tc.path,
+			}}
+			commitAll(t, mgr, ctx, remove)
 
-	commitAll(t, mgr, ctx, del)
-
-	_, ok := mgr.Baseline().GetByPath("delete-me.txt")
-	assert.False(t, ok, "entry still exists after local delete")
-}
-
-// Validates: R-6.5.2
-func TestCommit_RemoteDelete(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := t.Context()
-
-	mgr.SetNowFunc(func() time.Time {
-		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	})
-
-	create := []synctypes.Outcome{{
-		Action: synctypes.ActionDownload, Success: true,
-		Path: "remote-del.txt", DriveID: driveid.New("d"), ItemID: "i",
-		ItemType: synctypes.ItemTypeFile, LocalHash: "h", RemoteHash: "h",
-		Size: 50, Mtime: 1,
-	}}
-
-	commitAll(t, mgr, ctx, create)
-
-	del := []synctypes.Outcome{{
-		Action: synctypes.ActionRemoteDelete, Success: true, Path: "remote-del.txt",
-	}}
-
-	commitAll(t, mgr, ctx, del)
-
-	_, ok := mgr.Baseline().GetByPath("remote-del.txt")
-	assert.False(t, ok, "entry still exists after remote delete")
-}
-
-// Validates: R-2.2
-func TestCommit_Cleanup(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := t.Context()
-
-	mgr.SetNowFunc(func() time.Time {
-		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	})
-
-	create := []synctypes.Outcome{{
-		Action: synctypes.ActionDownload, Success: true,
-		Path: "cleanup.txt", DriveID: driveid.New("d"), ItemID: "i",
-		ItemType: synctypes.ItemTypeFile, LocalHash: "h", RemoteHash: "h",
-		Size: 50, Mtime: 1,
-	}}
-
-	commitAll(t, mgr, ctx, create)
-
-	cleanup := []synctypes.Outcome{{
-		Action: synctypes.ActionCleanup, Success: true, Path: "cleanup.txt",
-	}}
-
-	commitAll(t, mgr, ctx, cleanup)
-
-	_, ok := mgr.Baseline().GetByPath("cleanup.txt")
-	assert.False(t, ok, "entry still exists after cleanup")
+			_, ok := mgr.Baseline().GetByPath(tc.path)
+			assert.False(t, ok, "entry still exists after %s", tc.name)
+		})
+	}
 }
 
 // Validates: R-2.2
@@ -536,7 +490,7 @@ func TestCommit_Conflict(t *testing.T) {
 	require.NoError(t, err)
 
 	_, uuidErr := uuid.Parse(id)
-	assert.NoError(t, uuidErr, "conflict id = %q is not a valid UUID", id)
+	require.NoError(t, uuidErr, "conflict id = %q is not a valid UUID", id)
 	assert.Equal(t, "conflict.txt", conflictPath)
 	assert.Equal(t, "edit_edit", conflictType)
 	assert.Equal(t, "unresolved", resolution)
@@ -607,63 +561,47 @@ func TestCommit_SkipsFailedOutcomes(t *testing.T) {
 }
 
 // Validates: R-2.2
-func TestCommit_DeltaToken(t *testing.T) {
+func TestCommit_DeltaTokenRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	mgr := newTestStore(t)
-	ctx := t.Context()
+	cases := []struct {
+		name       string
+		driveID    string
+		tokenSteps []string
+	}{
+		{name: "Commit", driveID: "d", tokenSteps: []string{"token-abc"}},
+		{name: "CommitUpdate", driveID: "d", tokenSteps: []string{"token-1", "token-2"}},
+		{name: "GetAfterCommit", driveID: "mydrv", tokenSteps: []string{"saved-token"}},
+	}
 
-	mgr.SetNowFunc(func() time.Time {
-		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	})
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	// Commit with a delta token.
-	outcomes := []synctypes.Outcome{{
-		Action: synctypes.ActionDownload, Success: true,
-		Path: "f.txt", DriveID: driveid.New("d"), ItemID: "i", ItemType: synctypes.ItemTypeFile,
-		LocalHash: "h", RemoteHash: "h", Size: 10, Mtime: 1,
-	}}
+			mgr := newTestStore(t)
+			ctx := t.Context()
+			mgr.SetNowFunc(func() time.Time {
+				return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+			})
 
-	commitAll(t, mgr, ctx, outcomes)
+			outcomes := []synctypes.Outcome{{
+				Action: synctypes.ActionDownload, Success: true,
+				Path: "f.txt", DriveID: driveid.New(tc.driveID), ItemID: "i", ItemType: synctypes.ItemTypeFile,
+				LocalHash: "h", RemoteHash: "h", Size: 10, Mtime: 1,
+			}}
 
-	require.NoError(t, mgr.CommitDeltaToken(ctx, "token-abc", "d", "", "d"))
+			for step, token := range tc.tokenSteps {
+				commitAll(t, mgr, ctx, outcomes)
+				require.NoError(t, mgr.CommitDeltaToken(ctx, token, tc.driveID, "", tc.driveID))
+				outcomes[0].LocalHash = fmt.Sprintf("h-%d", step+2)
+				outcomes[0].RemoteHash = outcomes[0].LocalHash
+			}
 
-	token, err := mgr.GetDeltaToken(ctx, "d", "")
-	require.NoError(t, err)
-	assert.Equal(t, "token-abc", token)
-}
-
-// Validates: R-2.2
-func TestCommit_DeltaTokenUpdate(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := t.Context()
-
-	mgr.SetNowFunc(func() time.Time {
-		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	})
-
-	outcomes := []synctypes.Outcome{{
-		Action: synctypes.ActionDownload, Success: true,
-		Path: "f.txt", DriveID: driveid.New("d"), ItemID: "i", ItemType: synctypes.ItemTypeFile,
-		LocalHash: "h", RemoteHash: "h", Size: 10, Mtime: 1,
-	}}
-
-	// First commit with token.
-	commitAll(t, mgr, ctx, outcomes)
-	require.NoError(t, mgr.CommitDeltaToken(ctx, "token-1", "d", "", "d"))
-
-	// Second commit updates token.
-	outcomes[0].LocalHash = "h2"
-	outcomes[0].RemoteHash = "h2"
-
-	commitAll(t, mgr, ctx, outcomes)
-	require.NoError(t, mgr.CommitDeltaToken(ctx, "token-2", "d", "", "d"))
-
-	token, err := mgr.GetDeltaToken(ctx, "d", "")
-	require.NoError(t, err)
-	assert.Equal(t, "token-2", token)
+			savedToken, err := mgr.GetDeltaToken(ctx, tc.driveID, "")
+			require.NoError(t, err)
+			assert.Equal(t, tc.tokenSteps[len(tc.tokenSteps)-1], savedToken)
+		})
+	}
 }
 
 // Validates: R-2.2
@@ -726,31 +664,6 @@ func TestGetDeltaToken_Empty(t *testing.T) {
 	token, err := mgr.GetDeltaToken(ctx, "nonexistent-drive", "")
 	require.NoError(t, err)
 	assert.Empty(t, token)
-}
-
-// Validates: R-2.2
-func TestGetDeltaToken_AfterCommit(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := t.Context()
-
-	mgr.SetNowFunc(func() time.Time {
-		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	})
-
-	outcomes := []synctypes.Outcome{{
-		Action: synctypes.ActionDownload, Success: true,
-		Path: "f.txt", DriveID: driveid.New("mydrv"), ItemID: "i", ItemType: synctypes.ItemTypeFile,
-		LocalHash: "h", RemoteHash: "h", Size: 10, Mtime: 1,
-	}}
-
-	commitAll(t, mgr, ctx, outcomes)
-	require.NoError(t, mgr.CommitDeltaToken(ctx, "saved-token", "mydrv", "", "mydrv"))
-
-	token, err := mgr.GetDeltaToken(ctx, "mydrv", "")
-	require.NoError(t, err)
-	assert.Equal(t, "saved-token", token)
 }
 
 // Validates: R-2.2
@@ -1006,7 +919,7 @@ func TestLoad_CacheInvalidatedByCommit(t *testing.T) {
 	outcomes2 := []synctypes.Outcome{{
 		Action: synctypes.ActionDownload, Success: true,
 		Path: "second.txt", DriveID: driveid.New("d"), ItemID: "i2", ItemType: synctypes.ItemTypeFile,
-		LocalHash: "h2", RemoteHash: "h2", Size: 20, Mtime: 2,
+		LocalHash: updatedHash, RemoteHash: updatedHash, Size: 20, Mtime: 2,
 	}}
 
 	commitAll(t, mgr, ctx, outcomes2)
@@ -1024,14 +937,14 @@ func TestMigrations_Idempotent(t *testing.T) {
 	logger := newTestLogger(t)
 
 	// First open: runs migrations.
-	mgr1, err := NewSyncStore(dbPath, logger)
+	mgr1, err := NewSyncStore(t.Context(), dbPath, logger)
 	require.NoError(t, err)
-	mgr1.Close()
+	require.NoError(t, mgr1.Close(t.Context()))
 
 	// Second open: migrations should be a no-op.
-	mgr2, err := NewSyncStore(dbPath, logger)
+	mgr2, err := NewSyncStore(t.Context(), dbPath, logger)
 	require.NoError(t, err)
-	defer mgr2.Close()
+	defer mgr2.Close(t.Context())
 
 	// Verify the DB is still functional.
 	ctx := t.Context()
@@ -1898,9 +1811,9 @@ func setupPruneTestConflicts(t *testing.T, mgr *SyncStore, ctx context.Context, 
 	conflicts, err = mgr.ListConflicts(ctx)
 	require.NoError(t, err)
 
-	for _, c := range conflicts {
-		if c.Path == "new-resolved.txt" {
-			newID = c.ID
+	for i := range conflicts {
+		if conflicts[i].Path == "new-resolved.txt" {
+			newID = conflicts[i].ID
 		}
 	}
 
@@ -2020,14 +1933,14 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 	// Verify delta_tokens composite key: two tokens for same drive_id,
 	// different scope_id should coexist.
 	_, err := mgr.DB().ExecContext(ctx,
-		`INSERT INTO delta_tokens (drive_id, scope_id, scope_drive, token, updated_at)
-		 VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO delta_tokens (drive_id, scope_id, scope_drive, cursor, updated_at)
+		VALUES (?, ?, ?, ?, ?)`,
 		"d!abc123", "", "d!abc123", "primary-token", 1700000000)
 	require.NoError(t, err)
 
 	_, err = mgr.DB().ExecContext(ctx,
-		`INSERT INTO delta_tokens (drive_id, scope_id, scope_drive, token, updated_at)
-		 VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO delta_tokens (drive_id, scope_id, scope_drive, cursor, updated_at)
+		VALUES (?, ?, ?, ?, ?)`,
 		"d!abc123", "shared-folder-id", "d!other456", "scoped-token", 1700000001)
 	require.NoError(t, err)
 
@@ -2163,6 +2076,21 @@ func TestReadSyncMetadata_EmptyDB(t *testing.T) {
 }
 
 // Validates: R-2.2
+func TestReadSyncMetadata_MissingTableReturnsEmpty(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	ctx := t.Context()
+
+	_, err := mgr.db.ExecContext(ctx, `DROP TABLE sync_metadata`)
+	require.NoError(t, err)
+
+	meta, err := mgr.ReadSyncMetadata(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, meta)
+}
+
+// Validates: R-2.2
 func TestBaselineEntryCount_Empty(t *testing.T) {
 	t.Parallel()
 
@@ -2216,99 +2144,64 @@ func TestUnresolvedConflictCount_Empty(t *testing.T) {
 // --- SetDispatchStatus tests (5.7.2) ---
 
 // Validates: R-2.5
-func TestSetDispatchStatus_Download(t *testing.T) {
+func TestSetDispatchStatus_Transitions(t *testing.T) {
 	t.Parallel()
 
-	mgr := newTestStore(t)
-	ctx := t.Context()
+	cases := []struct {
+		name          string
+		initialStatus synctypes.SyncStatus
+		action        synctypes.ActionType
+		wantStatus    synctypes.SyncStatus
+	}{
+		{
+			name:          "Download",
+			initialStatus: synctypes.SyncStatusPendingDownload,
+			action:        synctypes.ActionDownload,
+			wantStatus:    synctypes.SyncStatusDownloading,
+		},
+		{
+			name:          "DownloadFromFailed",
+			initialStatus: synctypes.SyncStatusDownloadFailed,
+			action:        synctypes.ActionDownload,
+			wantStatus:    synctypes.SyncStatusDownloading,
+		},
+		{
+			name:          "LocalDelete",
+			initialStatus: synctypes.SyncStatusPendingDelete,
+			action:        synctypes.ActionLocalDelete,
+			wantStatus:    synctypes.SyncStatusDeleting,
+		},
+		{
+			name:          "DeleteFromFailed",
+			initialStatus: synctypes.SyncStatusDeleteFailed,
+			action:        synctypes.ActionLocalDelete,
+			wantStatus:    synctypes.SyncStatusDeleting,
+		},
+	}
 
-	// Insert a pending_download row.
-	_, err := mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"d!abc", "item1", "/test.txt", "file", synctypes.SyncStatusPendingDownload, 1700000000)
-	require.NoError(t, err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", synctypes.ActionDownload))
+			mgr := newTestStore(t)
+			ctx := t.Context()
 
-	var status synctypes.SyncStatus
-	err = mgr.DB().QueryRowContext(ctx,
-		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
-		"d!abc", "item1").Scan(&status)
-	require.NoError(t, err)
-	assert.Equal(t, synctypes.SyncStatusDownloading, status)
-}
+			_, err := mgr.DB().ExecContext(ctx,
+				`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+				 VALUES (?, ?, ?, ?, ?, ?)`,
+				"d!abc", "item1", "/test.txt", "file", tc.initialStatus, 1700000000)
+			require.NoError(t, err)
 
-// Validates: R-2.5
-func TestSetDispatchStatus_DownloadFromFailed(t *testing.T) {
-	t.Parallel()
+			require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", tc.action))
 
-	mgr := newTestStore(t)
-	ctx := t.Context()
-
-	// Insert a download_failed row.
-	_, err := mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"d!abc", "item1", "/test.txt", "file", synctypes.SyncStatusDownloadFailed, 1700000000)
-	require.NoError(t, err)
-
-	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", synctypes.ActionDownload))
-
-	var status synctypes.SyncStatus
-	err = mgr.DB().QueryRowContext(ctx,
-		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
-		"d!abc", "item1").Scan(&status)
-	require.NoError(t, err)
-	assert.Equal(t, synctypes.SyncStatusDownloading, status)
-}
-
-// Validates: R-2.5
-func TestSetDispatchStatus_LocalDelete(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := t.Context()
-
-	// Insert a pending_delete row.
-	_, err := mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"d!abc", "item1", "/test.txt", "file", synctypes.SyncStatusPendingDelete, 1700000000)
-	require.NoError(t, err)
-
-	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", synctypes.ActionLocalDelete))
-
-	var status synctypes.SyncStatus
-	err = mgr.DB().QueryRowContext(ctx,
-		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
-		"d!abc", "item1").Scan(&status)
-	require.NoError(t, err)
-	assert.Equal(t, synctypes.SyncStatusDeleting, status)
-}
-
-// Validates: R-2.5
-func TestSetDispatchStatus_DeleteFromFailed(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := t.Context()
-
-	// Insert a delete_failed row.
-	_, err := mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"d!abc", "item1", "/test.txt", "file", synctypes.SyncStatusDeleteFailed, 1700000000)
-	require.NoError(t, err)
-
-	require.NoError(t, mgr.SetDispatchStatus(ctx, "d!abc", "item1", synctypes.ActionLocalDelete))
-
-	var status synctypes.SyncStatus
-	err = mgr.DB().QueryRowContext(ctx,
-		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
-		"d!abc", "item1").Scan(&status)
-	require.NoError(t, err)
-	assert.Equal(t, synctypes.SyncStatusDeleting, status)
+			var status synctypes.SyncStatus
+			err = mgr.DB().QueryRowContext(ctx,
+				`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
+				"d!abc", "item1").Scan(&status)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantStatus, status)
+		})
+	}
 }
 
 // Validates: R-2.5

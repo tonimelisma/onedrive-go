@@ -54,8 +54,6 @@ func (rt *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 
-	var lastErr error
-
 	for attempt := 0; ; attempt++ {
 		// Rewind seekable bodies so retries send the full payload.
 		// Skipped on the first attempt (nothing to rewind).
@@ -69,81 +67,124 @@ func (rt *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 
 		resp, err := rt.Inner.RoundTrip(req)
-		// --- Network error ---
 		if err != nil {
-			lastErr = err
-
-			if req.Context().Err() != nil {
-				return nil, fmt.Errorf("retry: request canceled: %w", req.Context().Err())
-			}
-
-			if attempt < rt.Policy.MaxAttempts {
-				backoff := rt.Policy.Delay(attempt)
-				rt.Logger.Warn("retrying after network error",
-					slog.String("method", req.Method),
-					slog.String("url", req.URL.String()),
-					slog.Int("attempt", attempt+1),
-					slog.Duration("backoff", backoff),
-					slog.String("error", err.Error()),
-				)
-
-				if sleepErr := sleepFn(req.Context(), backoff); sleepErr != nil {
-					return nil, fmt.Errorf("retry: request canceled during backoff: %w", sleepErr)
-				}
-
+			retryRequest, finalErr := rt.handleNetworkError(req, err, attempt, sleepFn)
+			if retryRequest {
 				continue
 			}
 
-			// All retries exhausted — terminal failure (R-6.6.8).
-			rt.Logger.Error("request failed after all retries",
-				slog.String("method", req.Method),
-				slog.String("url", req.URL.String()),
-				slog.Int("attempts", attempt+1),
-				slog.String("error", lastErr.Error()),
-			)
-
-			return nil, lastErr
+			return nil, finalErr
 		}
 
-		// --- 2xx success ---
-		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
-			return resp, nil
+		done, finalResp, finalErr := rt.handleResponse(req, resp, attempt, sleepFn)
+		if done {
+			return finalResp, finalErr
 		}
+	}
+}
 
-		// --- Non-retryable status (4xx except 408/429, 507) → return as-is ---
-		if !isRetryable(resp.StatusCode) {
-			return resp, nil
-		}
-		// Retryable but exhausted — terminal failure (R-6.6.8).
-		if attempt >= rt.Policy.MaxAttempts {
-			rt.Logger.Error("request failed after all retries",
-				slog.String("method", req.Method),
-				slog.String("url", req.URL.String()),
-				slog.Int("attempts", attempt+1),
-				slog.Int("status", resp.StatusCode),
-			)
-			return resp, nil
-		}
+func (rt *RetryTransport) handleNetworkError(req *http.Request, err error, attempt int, sleepFn SleepFunc) (bool, error) {
+	if req.Context().Err() != nil {
+		return false, fmt.Errorf("retry: request canceled: %w", req.Context().Err())
+	}
 
-		// --- Retryable status → extract backoff, discard body, retry ---
-		backoff := rt.retryBackoff(resp, attempt, sleepFn)
-
-		// Drain response body to allow connection reuse.
-		_, _ = io.Copy(io.Discard, resp.Body) //nolint:errcheck // best-effort drain
-		resp.Body.Close()
-
-		rt.Logger.Warn("retrying after HTTP error",
+	if attempt < rt.Policy.MaxAttempts {
+		backoff := rt.Policy.Delay(attempt)
+		rt.Logger.Warn("retrying after network error",
 			slog.String("method", req.Method),
 			slog.String("url", req.URL.String()),
-			slog.Int("status", resp.StatusCode),
 			slog.Int("attempt", attempt+1),
 			slog.Duration("backoff", backoff),
+			slog.String("error", err.Error()),
 		)
 
 		if sleepErr := sleepFn(req.Context(), backoff); sleepErr != nil {
-			return nil, fmt.Errorf("retry: request canceled during backoff: %w", sleepErr)
+			return false, fmt.Errorf("retry: request canceled during backoff: %w", sleepErr)
 		}
+
+		return true, nil
 	}
+
+	rt.Logger.Error("request failed after all retries",
+		slog.String("method", req.Method),
+		slog.String("url", req.URL.String()),
+		slog.Int("attempts", attempt+1),
+		slog.String("error", err.Error()),
+	)
+
+	return false, err
+}
+
+func (rt *RetryTransport) handleResponse(
+	req *http.Request,
+	resp *http.Response,
+	attempt int,
+	sleepFn SleepFunc,
+) (bool, *http.Response, error) {
+	// --- 2xx success ---
+	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+		return true, resp, nil
+	}
+
+	// --- Non-retryable status (4xx except 408/429, 507) → return as-is ---
+	if !isRetryable(resp.StatusCode) {
+		return true, resp, nil
+	}
+
+	// Retryable but exhausted — terminal failure (R-6.6.8).
+	if attempt >= rt.Policy.MaxAttempts {
+		rt.Logger.Error("request failed after all retries",
+			slog.String("method", req.Method),
+			slog.String("url", req.URL.String()),
+			slog.Int("attempts", attempt+1),
+			slog.Int("status", resp.StatusCode),
+		)
+		return true, resp, nil
+	}
+
+	// --- Retryable status → extract backoff, discard body, retry ---
+	backoff := rt.retryBackoff(resp, attempt, sleepFn)
+
+	// Drain response body to allow connection reuse. A drain/close failure
+	// is not terminal for the retry path, but it is still operationally
+	// relevant because it can reduce connection reuse.
+	if drainErr := drainAndCloseBody(resp.Body); drainErr != nil {
+		rt.Logger.Warn("retry response body cleanup degraded",
+			slog.String("method", req.Method),
+			slog.String("url", req.URL.String()),
+			slog.Int("status", resp.StatusCode),
+			slog.String("error", drainErr.Error()),
+		)
+	}
+
+	rt.Logger.Warn("retrying after HTTP error",
+		slog.String("method", req.Method),
+		slog.String("url", req.URL.String()),
+		slog.Int("status", resp.StatusCode),
+		slog.Int("attempt", attempt+1),
+		slog.Duration("backoff", backoff),
+	)
+
+	if sleepErr := sleepFn(req.Context(), backoff); sleepErr != nil {
+		return true, nil, fmt.Errorf("retry: request canceled during backoff: %w", sleepErr)
+	}
+
+	return false, nil, nil
+}
+
+func drainAndCloseBody(body io.ReadCloser) error {
+	_, drainErr := io.Copy(io.Discard, body)
+	closeErr := body.Close()
+
+	if drainErr != nil {
+		return fmt.Errorf("draining body: %w", drainErr)
+	}
+
+	if closeErr != nil {
+		return fmt.Errorf("closing body: %w", closeErr)
+	}
+
+	return nil
 }
 
 // waitForThrottle blocks until the account-wide throttle deadline passes.

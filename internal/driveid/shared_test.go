@@ -12,12 +12,7 @@ import (
 
 // Validates: R-3.2.4
 func TestNewCanonicalID_SharedType(t *testing.T) {
-	tests := []struct {
-		name    string
-		raw     string
-		want    string
-		wantErr bool
-	}{
+	assertNewCanonicalIDCases(t, []parseCanonicalCase{
 		{
 			name: "shared with all parts",
 			raw:  "shared:me@outlook.com:b!TG9yZW0:01ABCDEF",
@@ -38,20 +33,7 @@ func TestNewCanonicalID_SharedType(t *testing.T) {
 			raw:     "shared:",
 			wantErr: true,
 		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cid, err := NewCanonicalID(tt.raw)
-			if tt.wantErr {
-				assert.Error(t, err)
-				return
-			}
-
-			require.NoError(t, err)
-			assert.Equal(t, tt.want, cid.String())
-		})
-	}
+	})
 }
 
 // Validates: R-3.2.4
@@ -81,56 +63,7 @@ func TestNewCanonicalID_BusinessRejectsExtraParts(t *testing.T) {
 
 // Validates: R-3.2.4
 func TestConstructShared(t *testing.T) {
-	tests := []struct {
-		name          string
-		email         string
-		sourceDriveID string
-		sourceItemID  string
-		want          string
-		wantErr       bool
-	}{
-		{
-			name:          "valid shared",
-			email:         "me@outlook.com",
-			sourceDriveID: "b!TG9yZW0",
-			sourceItemID:  "01ABCDEF",
-			want:          "shared:me@outlook.com:b!TG9yZW0:01ABCDEF",
-		},
-		{
-			name:          "empty email",
-			email:         "",
-			sourceDriveID: "b!TG9yZW0",
-			sourceItemID:  "01ABCDEF",
-			wantErr:       true,
-		},
-		{
-			name:          "empty source drive ID",
-			email:         "me@outlook.com",
-			sourceDriveID: "",
-			sourceItemID:  "01ABCDEF",
-			wantErr:       true,
-		},
-		{
-			name:          "empty source item ID",
-			email:         "me@outlook.com",
-			sourceDriveID: "b!TG9yZW0",
-			sourceItemID:  "",
-			wantErr:       true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cid, err := ConstructShared(tt.email, tt.sourceDriveID, tt.sourceItemID)
-			if tt.wantErr {
-				assert.Error(t, err)
-				return
-			}
-
-			require.NoError(t, err)
-			assert.Equal(t, tt.want, cid.String())
-		})
-	}
+	assertConstructorCases(t, sharedConstructorCases())
 }
 
 // Validates: R-3.2.4

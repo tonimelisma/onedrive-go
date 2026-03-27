@@ -2,11 +2,9 @@ package driveops
 
 import (
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,10 +13,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testSessionDriveID = "drive-1"
+
 func testLogger(t *testing.T) *slog.Logger {
 	t.Helper()
 
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
+	return slog.New(slog.DiscardHandler)
 }
 
 // Validates: R-5.2
@@ -28,12 +28,13 @@ func TestSessionStore_SaveLoadDelete(t *testing.T) {
 	dir := t.TempDir()
 	store := NewSessionStore(dir, testLogger(t))
 
-	driveID := "drive-1"
+	driveID := testSessionDriveID
 	localPath := "/docs/report.docx"
 
 	// Load from empty store returns nil.
-	rec, err := store.Load(driveID, localPath)
+	rec, found, err := store.Load(driveID, localPath)
 	require.NoError(t, err)
+	require.False(t, found)
 	require.Nil(t, rec)
 
 	// Save a record.
@@ -47,8 +48,9 @@ func TestSessionStore_SaveLoadDelete(t *testing.T) {
 	require.NoError(t, err)
 
 	// Load it back.
-	rec, err = store.Load(driveID, localPath)
+	rec, found, err = store.Load(driveID, localPath)
 	require.NoError(t, err)
+	require.True(t, found)
 	require.NotNil(t, rec)
 
 	assert.Equal(t, driveID, rec.DriveID)
@@ -62,8 +64,9 @@ func TestSessionStore_SaveLoadDelete(t *testing.T) {
 	require.NoError(t, store.Delete(driveID, localPath))
 
 	// Load after delete returns nil.
-	rec, err = store.Load(driveID, localPath)
+	rec, found, err = store.Load(driveID, localPath)
 	require.NoError(t, err)
+	require.False(t, found)
 	require.Nil(t, rec)
 }
 
@@ -84,8 +87,9 @@ func TestSessionStore_VersionField(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	rec, err := store.Load(driveID, localPath)
+	rec, found, err := store.Load(driveID, localPath)
 	require.NoError(t, err)
+	require.True(t, found)
 	assert.Equal(t, currentSessionVersion, rec.Version)
 }
 
@@ -106,8 +110,9 @@ func TestSessionStore_OldFormatVersionZero(t *testing.T) {
 	fpath := store.filePath(driveID, localPath)
 	require.NoError(t, os.WriteFile(fpath, []byte(oldJSON), 0o600))
 
-	rec, err := store.Load(driveID, localPath)
+	rec, found, err := store.Load(driveID, localPath)
 	require.NoError(t, err)
+	require.True(t, found)
 
 	// Old format has no "version" key — JSON unmarshal leaves int at zero.
 	assert.Equal(t, 0, rec.Version)
@@ -135,8 +140,9 @@ func TestSessionStore_V1ToV2Migration(t *testing.T) {
 	fpath := store.filePath(driveID, localPath)
 	require.NoError(t, os.WriteFile(fpath, []byte(v1JSON), 0o600))
 
-	rec, err := store.Load(driveID, localPath)
+	rec, found, err := store.Load(driveID, localPath)
 	require.NoError(t, err)
+	require.True(t, found)
 
 	assert.Equal(t, 1, rec.Version)
 	assert.Equal(t, "/docs/migrated.txt", rec.LocalPath)
@@ -161,8 +167,9 @@ func TestSessionStore_V2RoundTrip(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	rec, err := store.Load(driveID, localPath)
+	rec, found, err := store.Load(driveID, localPath)
 	require.NoError(t, err)
+	require.True(t, found)
 
 	assert.Equal(t, currentSessionVersion, rec.Version)
 	assert.Equal(t, localPath, rec.LocalPath)
@@ -189,12 +196,12 @@ func TestSessionStore_SaveWritesV2JSON(t *testing.T) {
 
 	// Read raw JSON to verify key names.
 	fpath := store.filePath(driveID, localPath)
-	data, err := os.ReadFile(fpath)
+	data, err := os.ReadFile(fpath) //nolint:gosec // Test session file lives under t.TempDir and is controlled by the test.
 	require.NoError(t, err)
 
 	raw := string(data)
-	assert.True(t, strings.Contains(raw, `"local_path"`), "saved JSON should contain \"local_path\" key, got: %s", raw)
-	assert.False(t, strings.Contains(raw, `"remote_path"`), "saved JSON should NOT contain \"remote_path\" key, got: %s", raw)
+	assert.Contains(t, raw, `"local_path"`, "saved JSON should contain \"local_path\" key, got: %s", raw)
+	assert.NotContains(t, raw, `"remote_path"`, "saved JSON should NOT contain \"remote_path\" key, got: %s", raw)
 }
 
 func TestSessionStore_DeleteNonexistent(t *testing.T) {
@@ -204,7 +211,7 @@ func TestSessionStore_DeleteNonexistent(t *testing.T) {
 	store := NewSessionStore(dir, testLogger(t))
 
 	// Delete of non-existent file should not error.
-	require.NoError(t, store.Delete("drive-1", "/nonexistent"))
+	require.NoError(t, store.Delete(testSessionDriveID, "/nonexistent"))
 }
 
 func TestSessionStore_CorruptFile(t *testing.T) {
@@ -213,7 +220,7 @@ func TestSessionStore_CorruptFile(t *testing.T) {
 	dir := t.TempDir()
 	store := NewSessionStore(dir, testLogger(t))
 
-	driveID := "drive-1"
+	driveID := testSessionDriveID
 	localPath := "/corrupt.txt"
 
 	// Write a corrupt JSON file at the expected path.
@@ -225,8 +232,9 @@ func TestSessionStore_CorruptFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(corruptPath, []byte("{not valid json"), sessionFilePerms))
 
 	// Load should return ErrCorruptSession (corrupt file deleted).
-	rec, err := store.Load(driveID, localPath)
+	rec, found, err := store.Load(driveID, localPath)
 	require.ErrorIs(t, err, ErrCorruptSession)
+	require.False(t, found)
 	require.Nil(t, rec)
 
 	// Corrupt file should have been cleaned up.
@@ -240,7 +248,7 @@ func TestSessionStore_Overwrite(t *testing.T) {
 	dir := t.TempDir()
 	store := NewSessionStore(dir, testLogger(t))
 
-	driveID := "drive-1"
+	driveID := testSessionDriveID
 	localPath := "/overwrite.txt"
 
 	// Save first record.
@@ -258,8 +266,9 @@ func TestSessionStore_Overwrite(t *testing.T) {
 	}))
 
 	// Load should return the new record.
-	rec, err := store.Load(driveID, localPath)
+	rec, found, err := store.Load(driveID, localPath)
 	require.NoError(t, err)
+	require.True(t, found)
 
 	assert.Equal(t, "https://example.com/new", rec.SessionURL)
 	assert.Equal(t, "new-hash", rec.FileHash)
@@ -272,23 +281,25 @@ func TestSessionStore_DifferentKeys(t *testing.T) {
 	store := NewSessionStore(dir, testLogger(t))
 
 	// Two different local paths should produce different session files.
-	require.NoError(t, store.Save("drive-1", "/path-a", &SessionRecord{
+	require.NoError(t, store.Save(testSessionDriveID, "/path-a", &SessionRecord{
 		SessionURL: "https://example.com/a",
 		FileHash:   "hash-a",
 		FileSize:   100,
 	}))
 
-	require.NoError(t, store.Save("drive-1", "/path-b", &SessionRecord{
+	require.NoError(t, store.Save(testSessionDriveID, "/path-b", &SessionRecord{
 		SessionURL: "https://example.com/b",
 		FileHash:   "hash-b",
 		FileSize:   200,
 	}))
 
-	recA, err := store.Load("drive-1", "/path-a")
+	recA, foundA, err := store.Load(testSessionDriveID, "/path-a")
 	require.NoError(t, err)
+	require.True(t, foundA)
 
-	recB, err := store.Load("drive-1", "/path-b")
+	recB, foundB, err := store.Load(testSessionDriveID, "/path-b")
 	require.NoError(t, err)
+	require.True(t, foundB)
 
 	assert.Equal(t, "hash-a", recA.FileHash)
 	assert.Equal(t, "hash-b", recB.FileHash)
@@ -316,8 +327,9 @@ func TestSessionStore_Load_StaleSessionReturnsNil(t *testing.T) {
 	require.NoError(t, os.Chtimes(sessionPath, oldTime, oldTime))
 
 	// Load should return nil (session expired) and delete the file.
-	rec, err := store.Load(driveID, localPath)
+	rec, found, err := store.Load(driveID, localPath)
 	require.NoError(t, err)
+	assert.False(t, found)
 	assert.Nil(t, rec, "stale session should return nil")
 
 	// File should be deleted.
@@ -333,7 +345,7 @@ func TestSessionStore_CleanStale(t *testing.T) {
 	store := NewSessionStore(dir, testLogger(t))
 
 	// Save a session record.
-	require.NoError(t, store.Save("drive-1", "/stale.txt", &SessionRecord{
+	require.NoError(t, store.Save(testSessionDriveID, "/stale.txt", &SessionRecord{
 		SessionURL: "https://example.com/stale",
 		FileHash:   "hash-stale",
 		FileSize:   100,
@@ -341,13 +353,13 @@ func TestSessionStore_CleanStale(t *testing.T) {
 
 	// Back-date the file to make it stale.
 	sessionDir := filepath.Join(dir, sessionSubdir)
-	key := sessionKey("drive-1", "/stale.txt")
+	key := sessionKey(testSessionDriveID, "/stale.txt")
 	filePath := filepath.Join(sessionDir, key)
 	staleTime := time.Now().Add(-8 * 24 * time.Hour)
 	require.NoError(t, os.Chtimes(filePath, staleTime, staleTime))
 
 	// Save a fresh session that should NOT be cleaned.
-	require.NoError(t, store.Save("drive-1", "/fresh.txt", &SessionRecord{
+	require.NoError(t, store.Save(testSessionDriveID, "/fresh.txt", &SessionRecord{
 		SessionURL: "https://example.com/fresh",
 		FileHash:   "hash-fresh",
 		FileSize:   200,
@@ -359,13 +371,15 @@ func TestSessionStore_CleanStale(t *testing.T) {
 	assert.Equal(t, 1, deleted)
 
 	// Stale session should be gone.
-	rec, err := store.Load("drive-1", "/stale.txt")
+	rec, found, err := store.Load(testSessionDriveID, "/stale.txt")
 	require.NoError(t, err)
+	assert.False(t, found)
 	assert.Nil(t, rec, "stale session still exists after cleanup")
 
 	// Fresh session should remain.
-	rec, err = store.Load("drive-1", "/fresh.txt")
+	rec, found, err = store.Load(testSessionDriveID, "/fresh.txt")
 	require.NoError(t, err)
+	assert.True(t, found)
 	assert.NotNil(t, rec, "fresh session was incorrectly deleted")
 }
 
@@ -387,14 +401,14 @@ func TestSessionStore_FilePermissions(t *testing.T) {
 	dir := t.TempDir()
 	store := NewSessionStore(dir, testLogger(t))
 
-	require.NoError(t, store.Save("drive-1", "/perms.txt", &SessionRecord{
+	require.NoError(t, store.Save(testSessionDriveID, "/perms.txt", &SessionRecord{
 		SessionURL: "https://example.com/perms",
 		FileHash:   "hash",
 		FileSize:   100,
 	}))
 
 	// Check file permissions.
-	key := sessionKey("drive-1", "/perms.txt")
+	key := sessionKey(testSessionDriveID, "/perms.txt")
 	filePath := filepath.Join(dir, sessionSubdir, key)
 
 	info, err := os.Stat(filePath)
@@ -410,7 +424,7 @@ func TestSessionStore_SaveSetsCreatedAt(t *testing.T) {
 
 	before := time.Now().UTC()
 
-	require.NoError(t, store.Save("drive-1", "/auto-time.txt", &SessionRecord{
+	require.NoError(t, store.Save(testSessionDriveID, "/auto-time.txt", &SessionRecord{
 		SessionURL: "https://example.com/auto",
 		FileHash:   "hash",
 		FileSize:   100,
@@ -419,8 +433,9 @@ func TestSessionStore_SaveSetsCreatedAt(t *testing.T) {
 
 	after := time.Now().UTC()
 
-	rec, err := store.Load("drive-1", "/auto-time.txt")
+	rec, found, err := store.Load(testSessionDriveID, "/auto-time.txt")
 	require.NoError(t, err)
+	require.True(t, found)
 
 	assert.False(t, rec.CreatedAt.Before(before), "CreatedAt %v is before %v", rec.CreatedAt, before)
 	assert.False(t, rec.CreatedAt.After(after), "CreatedAt %v is after %v", rec.CreatedAt, after)
@@ -429,8 +444,8 @@ func TestSessionStore_SaveSetsCreatedAt(t *testing.T) {
 func TestSessionKey_Deterministic(t *testing.T) {
 	t.Parallel()
 
-	key1 := sessionKey("drive-1", "/path/file.txt")
-	key2 := sessionKey("drive-1", "/path/file.txt")
+	key1 := sessionKey(testSessionDriveID, "/path/file.txt")
+	key2 := sessionKey(testSessionDriveID, "/path/file.txt")
 
 	assert.Equal(t, key1, key2)
 
@@ -438,7 +453,7 @@ func TestSessionKey_Deterministic(t *testing.T) {
 	key3 := sessionKey("drive-2", "/path/file.txt")
 	assert.NotEqual(t, key1, key3, "different drive IDs produced same key")
 
-	key4 := sessionKey("drive-1", "/other/file.txt")
+	key4 := sessionKey(testSessionDriveID, "/other/file.txt")
 	assert.NotEqual(t, key1, key4, "different paths produced same key")
 }
 
@@ -458,7 +473,7 @@ func TestSessionStore_AtomicSave_NoTmpLeftover(t *testing.T) {
 	dir := t.TempDir()
 	store := NewSessionStore(dir, testLogger(t))
 
-	require.NoError(t, store.Save("drive-1", "/atomic.txt", &SessionRecord{
+	require.NoError(t, store.Save(testSessionDriveID, "/atomic.txt", &SessionRecord{
 		SessionURL: "https://example.com/atomic",
 		FileHash:   "hash",
 		FileSize:   100,
@@ -507,12 +522,12 @@ func TestSessionStore_ConcurrentSaveLoadDelete(t *testing.T) {
 				}
 
 				// Load.
-				rec, err := store.Load(drive, path)
+				rec, found, err := store.Load(drive, path)
 				if !assert.NoError(t, err, "Load") {
 					return
 				}
 
-				if rec == nil {
+				if !found {
 					// Concurrent delete may have removed it.
 					continue
 				}

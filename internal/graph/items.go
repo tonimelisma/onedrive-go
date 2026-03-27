@@ -70,7 +70,7 @@ type driveItemResponse struct {
 	Root                 *json.RawMessage    `json:"root"`
 	Deleted              *json.RawMessage    `json:"deleted"`
 	Package              *json.RawMessage    `json:"package"`
-	DownloadURL          string              `json:"@microsoft.graph.downloadUrl"` //nolint:tagliatelle // Graph API annotation key
+	DownloadURL          string              `json:"@microsoft.graph.downloadUrl"`
 	SpecialFolder        *specialFolderFacet `json:"specialFolder"`
 	RemoteItem           *remoteItemFacet    `json:"remoteItem"`
 	Shared               *sharedFacet        `json:"shared"`
@@ -131,13 +131,13 @@ type sharedUserFacet struct {
 
 type listChildrenResponse struct {
 	Value    []driveItemResponse `json:"value"`
-	NextLink string              `json:"@odata.nextLink"` //nolint:tagliatelle // OData annotation key
+	NextLink string              `json:"@odata.nextLink"`
 }
 
 type createFolderRequest struct {
 	Name             string      `json:"name"`
 	Folder           folderFacet `json:"folder"`
-	ConflictBehavior string      `json:"@microsoft.graph.conflictBehavior"` //nolint:tagliatelle // Graph API annotation key
+	ConflictBehavior string      `json:"@microsoft.graph.conflictBehavior"`
 }
 
 type moveItemRequest struct {
@@ -406,11 +406,6 @@ func (c *Client) ListChildrenByPath(ctx context.Context, driveID driveid.ID, rem
 	)
 }
 
-// maxRecursionDepth is the upper bound on folder nesting depth for
-// ListChildrenRecursive. Prevents stack overflow on pathological hierarchies
-// or circular references. Package-level var so tests can override.
-var maxRecursionDepth = 100 //nolint:gochecknoglobals // test-overridable guard
-
 // ListChildrenRecursive returns all descendants of a folder by recursively
 // listing children of subfolders. Returns a flat list including both files
 // and folders. Used for enumerating shared folder content on Business/SharePoint
@@ -437,8 +432,8 @@ func (c *Client) ListChildrenRecursive(ctx context.Context, driveID driveid.ID, 
 
 // listChildrenRecursiveDepth is the depth-tracked implementation of ListChildrenRecursive.
 func (c *Client) listChildrenRecursiveDepth(ctx context.Context, driveID driveid.ID, folderID string, depth int) ([]Item, error) {
-	if depth >= maxRecursionDepth {
-		return nil, fmt.Errorf("graph: recursive listing exceeded max depth %d at folder %s", maxRecursionDepth, folderID)
+	if depth >= c.maxRecursionDepth {
+		return nil, fmt.Errorf("graph: recursive listing exceeded max depth %d at folder %s", c.maxRecursionDepth, folderID)
 	}
 
 	children, err := c.ListChildren(ctx, driveID, folderID)
@@ -729,18 +724,28 @@ func (c *Client) CopyItem(
 		return nil, fmt.Errorf("graph: copy response missing Location header")
 	}
 
-	return &CopyResult{MonitorURL: monitorURL}, nil
+	validatedMonitorURL, err := c.validatedCopyMonitorURL(monitorURL)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CopyResult{MonitorURL: validatedMonitorURL}, nil
 }
 
 // PollCopyStatus checks the progress of an async copy operation.
 // The monitor URL is a pre-authenticated Azure URL — no auth header needed.
 func (c *Client) PollCopyStatus(ctx context.Context, monitorURL string) (*CopyStatus, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, monitorURL, http.NoBody)
+	validatedMonitorURL, err := c.validatedCopyMonitorURL(monitorURL)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, validatedMonitorURL, http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("graph: creating copy status request: %w", err)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.dispatchRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("graph: polling copy status: %w", err)
 	}

@@ -41,9 +41,7 @@ func runStat(cmd *cobra.Command, args []string) error {
 		return printStatJSON(os.Stdout, item)
 	}
 
-	printStatText(os.Stdout, item)
-
-	return nil
+	return printStatText(os.Stdout, item)
 }
 
 // statJSONOutput is the JSON output schema for the stat command.
@@ -73,23 +71,43 @@ func printStatJSON(w io.Writer, item *graph.Item) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 
-	return enc.Encode(out)
+	if err := enc.Encode(out); err != nil {
+		return fmt.Errorf("encode stat output: %w", err)
+	}
+
+	return nil
 }
 
-func printStatText(w io.Writer, item *graph.Item) {
+func printStatText(w io.Writer, item *graph.Item) error {
 	itemType := "file"
 	if item.IsFolder {
 		itemType = "folder"
 	}
 
-	fmt.Fprintf(w, "Name:     %s\n", item.Name)
-	fmt.Fprintf(w, "Type:     %s\n", itemType)
-	fmt.Fprintf(w, "Size:     %s (%d bytes)\n", formatSize(item.Size), item.Size)
-	fmt.Fprintf(w, "Modified: %s\n", item.ModifiedAt.Format("2006-01-02 15:04:05 UTC"))
-	fmt.Fprintf(w, "Created:  %s\n", item.CreatedAt.Format("2006-01-02 15:04:05 UTC"))
-	fmt.Fprintf(w, "ID:       %s\n", item.ID)
+	if err := writef(w, "Name:     %s\n", item.Name); err != nil {
+		return err
+	}
+	if err := writef(w, "Type:     %s\n", itemType); err != nil {
+		return err
+	}
+	if err := writef(w, "Size:     %s (%d bytes)\n", formatSize(item.Size), item.Size); err != nil {
+		return err
+	}
+	if err := writef(w, "Modified: %s\n", item.ModifiedAt.Format("2006-01-02 15:04:05 UTC")); err != nil {
+		return err
+	}
+	if err := writef(w, "Created:  %s\n", item.CreatedAt.Format("2006-01-02 15:04:05 UTC")); err != nil {
+		return err
+	}
+	if err := writef(w, "ID:       %s\n", item.ID); err != nil {
+		return err
+	}
 
 	if item.MimeType != "" {
-		fmt.Fprintf(w, "MIME:     %s\n", item.MimeType)
+		if err := writef(w, "MIME:     %s\n", item.MimeType); err != nil {
+			return err
+		}
 	}
+
+	return nil
 }

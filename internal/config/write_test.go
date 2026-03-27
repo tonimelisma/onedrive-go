@@ -14,6 +14,25 @@ import (
 
 // --- AppendDriveSection tests ---
 
+func writeConfigFixture(t *testing.T, path string, data []byte) {
+	t.Helper()
+
+	root, err := os.OpenRoot(filepath.Dir(path))
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, root.Close())
+	}()
+
+	file, err := root.OpenFile(filepath.Base(path), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, configFilePermissions)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, file.Close())
+	}()
+
+	_, err = file.Write(data)
+	require.NoError(t, err)
+}
+
 func TestAppendDriveSection_AppendsToExistingFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
@@ -24,7 +43,7 @@ func TestAppendDriveSection_AppendsToExistingFile(t *testing.T) {
 	err = AppendDriveSection(path, driveid.MustCanonicalID("business:alice@contoso.com"), "~/OneDrive - Contoso")
 	require.NoError(t, err)
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // Test config path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 	content := string(data)
 
@@ -59,11 +78,10 @@ func TestAppendDriveSection_FileWithoutTrailingNewline(t *testing.T) {
 	path := filepath.Join(dir, "config.toml")
 
 	// Write file without trailing newline
-	err := os.WriteFile(path, []byte(`["personal:toni@outlook.com"]
-sync_dir = "~/OneDrive"`), configFilePermissions)
-	require.NoError(t, err)
+	writeConfigFixture(t, path, []byte(`["personal:toni@outlook.com"]
+sync_dir = "~/OneDrive"`))
 
-	err = AppendDriveSection(path, driveid.MustCanonicalID("business:alice@contoso.com"), "~/Work")
+	err := AppendDriveSection(path, driveid.MustCanonicalID("business:alice@contoso.com"), "~/Work")
 	require.NoError(t, err)
 
 	cfg, err := Load(path, testLogger(t))
@@ -80,7 +98,7 @@ func TestAppendDriveSection_CreatesFileWhenMissing(t *testing.T) {
 	err := AppendDriveSection(path, driveid.MustCanonicalID("personal:toni@outlook.com"), "~/OneDrive")
 	require.NoError(t, err)
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // Test config path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 	content := string(data)
 
@@ -115,7 +133,7 @@ func TestAppendDriveSection_FileNotFoundUnwritablePath(t *testing.T) {
 	// A truly unwritable path (parent is a file, not a directory) should still fail.
 	dir := t.TempDir()
 	blocker := filepath.Join(dir, "blocker")
-	require.NoError(t, os.WriteFile(blocker, []byte("I'm a file"), 0o644))
+	require.NoError(t, os.WriteFile(blocker, []byte("I'm a file"), 0o600))
 
 	err := AppendDriveSection(filepath.Join(blocker, "sub", "config.toml"),
 		driveid.MustCanonicalID("personal:test@test.com"), "~/OneDrive")
@@ -176,7 +194,7 @@ func TestSetDriveKey_BooleanFormatting(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify the raw file content has bare true (not "true")
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // Test config path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "paused = true")
 	assert.NotContains(t, string(data), `paused = "true"`)
@@ -200,7 +218,7 @@ func TestSetDriveKey_StringFormatting(t *testing.T) {
 	err = SetDriveKey(path, cid, "display_name", "work")
 	require.NoError(t, err)
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // Test config path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 	assert.Contains(t, string(data), `display_name = "work"`)
 }
@@ -283,14 +301,14 @@ func TestDeleteDriveKey_KeyExists(t *testing.T) {
 	require.NoError(t, SetDriveKey(path, cid, "paused", "true"))
 
 	// Verify key exists before deletion.
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // Test config path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "paused = true")
 
 	// Delete the key.
 	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
 
-	data, err = os.ReadFile(path)
+	data, err = os.ReadFile(path) //nolint:gosec // Test config path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), "paused")
 
@@ -342,7 +360,7 @@ func TestDeleteDriveKey_IdempotentDoubleDelete(t *testing.T) {
 	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
 	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // Test config path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), "paused")
 }
@@ -405,29 +423,6 @@ func TestDeleteDriveSection_DeleteFromMiddle(t *testing.T) {
 	assert.Contains(t, cfg.Drives, personalCID)
 	assert.Contains(t, cfg.Drives, spCID)
 	assert.NotContains(t, cfg.Drives, businessCID)
-}
-
-func TestDeleteDriveSection_DeleteFromEnd(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.toml")
-
-	personalCID := driveid.MustCanonicalID("personal:toni@outlook.com")
-	businessCID := driveid.MustCanonicalID("business:alice@contoso.com")
-
-	err := AppendDriveSection(path, personalCID, "~/OneDrive")
-	require.NoError(t, err)
-
-	err = AppendDriveSection(path, businessCID, "~/Work")
-	require.NoError(t, err)
-
-	// Delete the last section
-	err = DeleteDriveSection(path, businessCID)
-	require.NoError(t, err)
-
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
-	require.Len(t, cfg.Drives, 1)
-	assert.Contains(t, cfg.Drives, personalCID)
 }
 
 func TestDeleteDriveSection_RoundTrip(t *testing.T) {
@@ -548,7 +543,7 @@ func TestSanitizePathComponent_UnsafeChars(t *testing.T) {
 }
 
 func TestSanitizePathComponent_Empty(t *testing.T) {
-	assert.Equal(t, "", SanitizePathComponent(""))
+	assert.Empty(t, SanitizePathComponent(""))
 }
 
 // --- BaseSyncDir tests ---
@@ -606,21 +601,20 @@ func TestCommentPreservation_AppendDriveSection(t *testing.T) {
 	require.NoError(t, err)
 
 	// Add a user comment by directly modifying the file
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // Test config path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 
 	content := string(data)
 	content = strings.Replace(content, `["personal:toni@outlook.com"]`,
 		"# My personal drive\n"+`["personal:toni@outlook.com"]`, 1)
 
-	err = os.WriteFile(path, []byte(content), configFilePermissions)
-	require.NoError(t, err)
+	writeConfigFixture(t, path, []byte(content))
 
 	// Now append a new section
 	err = AppendDriveSection(path, driveid.MustCanonicalID("business:alice@contoso.com"), "~/Work")
 	require.NoError(t, err)
 
-	result, err := os.ReadFile(path)
+	result, err := os.ReadFile(path) //nolint:gosec // Test config path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 	resultStr := string(result)
 
@@ -647,13 +641,12 @@ log_level = "debug"
 ["business:alice@contoso.com"]
 sync_dir = "~/Work"
 `
-	err := os.WriteFile(path, []byte(content), configFilePermissions)
+	writeConfigFixture(t, path, []byte(content))
+
+	err := SetDriveKey(path, driveid.MustCanonicalID("business:alice@contoso.com"), "paused", "true")
 	require.NoError(t, err)
 
-	err = SetDriveKey(path, driveid.MustCanonicalID("business:alice@contoso.com"), "paused", "true")
-	require.NoError(t, err)
-
-	result, err := os.ReadFile(path)
+	result, err := os.ReadFile(path) //nolint:gosec // Test config path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 	resultStr := string(result)
 
@@ -678,13 +671,12 @@ sync_dir = "~/OneDrive"
 ["business:alice@contoso.com"]
 sync_dir = "~/Work"
 `
-	err := os.WriteFile(path, []byte(content), configFilePermissions)
+	writeConfigFixture(t, path, []byte(content))
+
+	err := DeleteDriveSection(path, driveid.MustCanonicalID("personal:toni@outlook.com"))
 	require.NoError(t, err)
 
-	err = DeleteDriveSection(path, driveid.MustCanonicalID("personal:toni@outlook.com"))
-	require.NoError(t, err)
-
-	result, err := os.ReadFile(path)
+	result, err := os.ReadFile(path) //nolint:gosec // Test config path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 	resultStr := string(result)
 
@@ -708,7 +700,7 @@ func TestAtomicWriteFile_WritesFile(t *testing.T) {
 	err := atomicWriteFile(path, []byte("hello"))
 	require.NoError(t, err)
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // Test config path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 	assert.Equal(t, "hello", string(data))
 }
@@ -720,7 +712,7 @@ func TestAtomicWriteFile_CreatesParentDirectory(t *testing.T) {
 	err := atomicWriteFile(path, []byte("hello"))
 	require.NoError(t, err)
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // Test config path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 	assert.Equal(t, "hello", string(data))
 }
@@ -779,12 +771,12 @@ func TestSetDriveKey_InlineCommentPreserved(t *testing.T) {
 sync_dir = "~/OneDrive"
 paused = true # temporarily paused
 `
-	require.NoError(t, os.WriteFile(path, []byte(content), configFilePermissions))
+	writeConfigFixture(t, path, []byte(content))
 
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 	require.NoError(t, SetDriveKey(path, cid, "paused", "false"))
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // Test config path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 	resultStr := string(data)
 
@@ -800,14 +792,14 @@ sync_dir = "~/OneDrive"
 paused_until = "2026-03-01T00:00:00Z"
 paused = true
 `
-	require.NoError(t, os.WriteFile(path, []byte(content), configFilePermissions))
+	writeConfigFixture(t, path, []byte(content))
 
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 
 	// Deleting "paused" must NOT delete "paused_until".
 	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // Test config path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 	resultStr := string(data)
 
@@ -830,7 +822,7 @@ func TestSetDriveKey_NoSpacesAroundEquals(t *testing.T) {
 	content := `["personal:toni@outlook.com"]
 sync_dir="~/OneDrive"
 `
-	require.NoError(t, os.WriteFile(path, []byte(content), configFilePermissions))
+	writeConfigFixture(t, path, []byte(content))
 
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 	require.NoError(t, SetDriveKey(path, cid, "sync_dir", "~/NewPath"))
@@ -848,12 +840,12 @@ func TestDeleteDriveKey_NoSpacesAroundEquals(t *testing.T) {
 sync_dir = "~/OneDrive"
 paused=true
 `
-	require.NoError(t, os.WriteFile(path, []byte(content), configFilePermissions))
+	writeConfigFixture(t, path, []byte(content))
 
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // Test config path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), "paused")
 }
@@ -865,7 +857,7 @@ func TestSetDriveKey_ValueWithHash(t *testing.T) {
 	content := `["personal:toni@outlook.com"]
 sync_dir = "~/path#with#hash"
 `
-	require.NoError(t, os.WriteFile(path, []byte(content), configFilePermissions))
+	writeConfigFixture(t, path, []byte(content))
 
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 	require.NoError(t, SetDriveKey(path, cid, "display_name", "my drive"))
@@ -925,29 +917,6 @@ func TestScenario_DriveRemove(t *testing.T) {
 	require.Len(t, cfg.Drives, 1)
 	assert.Contains(t, cfg.Drives, personalCID)
 	assert.NotContains(t, cfg.Drives, businessCID)
-}
-
-func TestScenario_DriveRemovePurge(t *testing.T) {
-	// Simulates: login two drives, purge one
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.toml")
-
-	personalCID := driveid.MustCanonicalID("personal:toni@outlook.com")
-	businessCID := driveid.MustCanonicalID("business:alice@contoso.com")
-
-	err := AppendDriveSection(path, personalCID, "~/OneDrive")
-	require.NoError(t, err)
-
-	err = AppendDriveSection(path, businessCID, "~/Work")
-	require.NoError(t, err)
-
-	err = DeleteDriveSection(path, businessCID)
-	require.NoError(t, err)
-
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
-	require.Len(t, cfg.Drives, 1)
-	assert.Contains(t, cfg.Drives, personalCID)
 }
 
 func TestScenario_LogoutPurge_AllDrives(t *testing.T) {
@@ -1055,9 +1024,9 @@ func TestScenario_LogoutRegular(t *testing.T) {
 
 	// Verify state DB files are still on disk (not deleted by config operations).
 	_, err = os.Stat(stateDB1)
-	assert.NoError(t, err, "state DB for personal drive should still exist")
+	require.NoError(t, err, "state DB for personal drive should still exist")
 	_, err = os.Stat(stateDB2)
-	assert.NoError(t, err, "state DB for business drive should still exist")
+	require.NoError(t, err, "state DB for business drive should still exist")
 }
 
 func TestScenario_DriveRemoveThenReAdd(t *testing.T) {
@@ -1119,7 +1088,7 @@ func TestEnsureDriveInConfig_NewDrive_NoConfigFile(t *testing.T) {
 	assert.Equal(t, "~/OneDrive", syncDir)
 
 	// Config file should have been created with template + drive section.
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // Test config path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "# onedrive-go configuration")
 	assert.Contains(t, string(data), `["personal:user@example.com"]`)

@@ -33,8 +33,8 @@ func (m *SyncStore) UpsertShortcut(ctx context.Context, sc *synctypes.Shortcut) 
 	return nil
 }
 
-// GetShortcut returns a shortcut by item ID, or nil if not found.
-func (m *SyncStore) GetShortcut(ctx context.Context, itemID string) (*synctypes.Shortcut, error) {
+// GetShortcut returns a shortcut by item ID.
+func (m *SyncStore) GetShortcut(ctx context.Context, itemID string) (*synctypes.Shortcut, bool, error) {
 	row := m.db.QueryRowContext(ctx,
 		`SELECT item_id, remote_drive, remote_item, local_path, drive_type, observation, discovered_at
 		FROM shortcuts WHERE item_id = ?`, itemID)
@@ -44,14 +44,14 @@ func (m *SyncStore) GetShortcut(ctx context.Context, itemID string) (*synctypes.
 	err := row.Scan(&sc.ItemID, &sc.RemoteDrive, &sc.RemoteItem, &sc.LocalPath,
 		&sc.DriveType, &sc.Observation, &sc.DiscoveredAt)
 	if err == sql.ErrNoRows {
-		return nil, nil
+		return nil, false, nil
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("sync: getting shortcut %s: %w", itemID, err)
+		return nil, false, fmt.Errorf("sync: getting shortcut %s: %w", itemID, err)
 	}
 
-	return &sc, nil
+	return &sc, true, nil
 }
 
 // ListShortcuts returns all registered shortcuts.
@@ -76,7 +76,11 @@ func (m *SyncStore) ListShortcuts(ctx context.Context) ([]synctypes.Shortcut, er
 		shortcuts = append(shortcuts, sc)
 	}
 
-	return shortcuts, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate shortcut rows: %w", err)
+	}
+
+	return shortcuts, nil
 }
 
 // DeleteShortcut removes a shortcut by item ID. No error if not found.

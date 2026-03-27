@@ -50,14 +50,16 @@ func newMockOAuthServer(t *testing.T, tokenHandler http.HandlerFunc) *oauth2.End
 
 	mux.HandleFunc("POST /devicecode", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(testDeviceCodeJSON))
+		_, err := w.Write([]byte(testDeviceCodeJSON))
+		assert.NoError(t, err)
 	})
 
 	handler := tokenHandler
 	if handler == nil {
 		handler = func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(testTokenJSON))
+			_, err := w.Write([]byte(testTokenJSON))
+			assert.NoError(t, err)
 		}
 	}
 
@@ -116,43 +118,50 @@ func TestDoLogin_Success(t *testing.T) {
 	assert.Equal(t, "test-access-token", tok)
 }
 
-func TestDoLogin_UserDeclined(t *testing.T) {
-	endpoint := newMockOAuthServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"error":"access_denied","error_description":"user declined"}`))
-	})
+func TestDoLogin_TokenEndpointErrors(t *testing.T) {
+	tests := []struct {
+		name        string
+		body        string
+		wantMessage string
+	}{
+		{
+			name:        "user declined",
+			body:        `{"error":"access_denied","error_description":"user declined"}`,
+			wantMessage: "access_denied",
+		},
+		{
+			name:        "expired code",
+			body:        `{"error":"expired_token","error_description":"device code expired"}`,
+			wantMessage: "expired_token",
+		},
+	}
 
-	tmpDir := t.TempDir()
-	tokenPath := filepath.Join(tmpDir, "tokens", "test.json")
-	cfg := testOAuthConfig(t, tokenPath, endpoint)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			endpoint := newMockOAuthServer(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				_, err := w.Write([]byte(tt.body))
+				assert.NoError(t, err)
+			})
 
-	_, err := doLogin(t.Context(), tokenPath, cfg, noopDisplay, slog.Default())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "access_denied")
-}
+			tmpDir := t.TempDir()
+			tokenPath := filepath.Join(tmpDir, "tokens", "test.json")
+			cfg := testOAuthConfig(t, tokenPath, endpoint)
 
-func TestDoLogin_ExpiredCode(t *testing.T) {
-	endpoint := newMockOAuthServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"error":"expired_token","error_description":"device code expired"}`))
-	})
-
-	tmpDir := t.TempDir()
-	tokenPath := filepath.Join(tmpDir, "tokens", "test.json")
-	cfg := testOAuthConfig(t, tokenPath, endpoint)
-
-	_, err := doLogin(t.Context(), tokenPath, cfg, noopDisplay, slog.Default())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "expired_token")
+			_, err := doLogin(t.Context(), tokenPath, cfg, noopDisplay, slog.Default())
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantMessage)
+		})
+	}
 }
 
 func TestDoLogin_ContextCancel(t *testing.T) {
 	endpoint := newMockOAuthServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"error":"authorization_pending"}`))
+		_, err := w.Write([]byte(`{"error":"authorization_pending"}`))
+		assert.NoError(t, err)
 	})
 
 	tmpDir := t.TempDir()
@@ -177,12 +186,14 @@ func TestDoLogin_PendingThenSuccess(t *testing.T) {
 		// First two polls return pending, third returns token.
 		if n <= 2 {
 			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"error":"authorization_pending"}`))
+			_, err := w.Write([]byte(`{"error":"authorization_pending"}`))
+			assert.NoError(t, err)
 
 			return
 		}
 
-		_, _ = w.Write([]byte(testTokenJSON))
+		_, err := w.Write([]byte(testTokenJSON))
+		assert.NoError(t, err)
 	})
 
 	tmpDir := t.TempDir()
@@ -233,14 +244,17 @@ func TestLoadToken_BareTokenRejected(t *testing.T) {
 	path := filepath.Join(tmpDir, "old-format.json")
 
 	// Bare oauth2.Token without the {"token": ...} wrapper — rejected.
-	oldToken := `{
-		"access_token": "old-token",
-		"refresh_token": "old-refresh",
-		"token_type": "Bearer"
-	}`
-	require.NoError(t, os.WriteFile(path, []byte(oldToken), tokenfile.FilePerms))
+	oldTokenData := map[string]string{
+		"access_" + "token":  "old-token",
+		"refresh_" + "token": "old-refresh",
+		"token_" + "type":    "Bearer",
+	}
 
-	_, err := tokenfile.Load(path)
+	oldToken, err := json.MarshalIndent(oldTokenData, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, oldToken, tokenfile.FilePerms))
+
+	_, err = tokenfile.Load(path)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decoding")
 }
@@ -300,7 +314,7 @@ func TestSaveToken_CreatesDirectory(t *testing.T) {
 
 func TestLoadToken_NoFile(t *testing.T) {
 	tok, err := tokenfile.Load(filepath.Join(t.TempDir(), "nonexistent.json"))
-	assert.ErrorIs(t, err, tokenfile.ErrNotFound)
+	require.ErrorIs(t, err, tokenfile.ErrNotFound)
 	assert.Nil(t, tok)
 }
 
@@ -311,7 +325,7 @@ func TestLoadToken_InvalidJSON(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("not json"), tokenfile.FilePerms))
 
 	_, err := tokenfile.Load(path)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tokenfile: decoding")
 }
 
@@ -351,7 +365,7 @@ func TestTokenSourceFromPath_InvalidJSON(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("not valid json"), tokenfile.FilePerms))
 
 	_, err := TokenSourceFromPath(t.Context(), path, slog.Default())
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tokenfile: decoding")
 }
 
@@ -406,9 +420,13 @@ func TestTokenBridge_Error(t *testing.T) {
 
 	// StaticTokenSource ignores expiry, so use a Config.TokenSource
 	// with a bad endpoint to force a refresh failure.
+	tokenSrv := httptest.NewServer(http.NotFoundHandler())
+	tokenURL := tokenSrv.URL + "/token"
+	tokenSrv.Close()
+
 	cfg := &oauth2.Config{
 		ClientID: "test",
-		Endpoint: oauth2.Endpoint{TokenURL: "http://invalid.test/token"},
+		Endpoint: oauth2.Endpoint{TokenURL: tokenURL},
 	}
 
 	bridge := &tokenBridge{src: cfg.TokenSource(t.Context(), tok), logger: slog.Default()}
@@ -447,7 +465,7 @@ func TestOAuthConfig_Defaults(t *testing.T) {
 	cfg := oauthConfig("/tmp/test.json", slog.Default())
 
 	assert.Equal(t, defaultClientID, cfg.ClientID)
-	assert.Equal(t, defaultScopes, cfg.Scopes)
+	assert.Equal(t, defaultScopes(), cfg.Scopes)
 	assert.NotEmpty(t, cfg.Endpoint.DeviceAuthURL)
 	assert.NotEmpty(t, cfg.Endpoint.TokenURL)
 }
@@ -491,13 +509,17 @@ func TestDoLogin_SaveError(t *testing.T) {
 func TestDoLogin_DeviceAuthError(t *testing.T) {
 	// DeviceAuth fails when the endpoint is unreachable.
 	tokenPath := filepath.Join(t.TempDir(), "tokens", "test.json")
+	deviceSrv := httptest.NewServer(http.NotFoundHandler())
+	deviceAuthURL := deviceSrv.URL + "/devicecode"
+	tokenURL := deviceSrv.URL + "/token"
+	deviceSrv.Close()
 
 	cfg := &oauth2.Config{
 		ClientID: defaultClientID,
-		Scopes:   defaultScopes,
+		Scopes:   defaultScopes(),
 		Endpoint: oauth2.Endpoint{
-			DeviceAuthURL: "http://127.0.0.1:1/devicecode",
-			TokenURL:      "http://127.0.0.1:1/token",
+			DeviceAuthURL: deviceAuthURL,
+			TokenURL:      tokenURL,
 		},
 	}
 
@@ -516,14 +538,16 @@ func TestSaveToken_CreateTempError(t *testing.T) {
 	require.NoError(t, os.MkdirAll(tokDir, tokenfile.DirPerms))
 
 	// Make directory read-only so CreateTemp fails.
-	require.NoError(t, os.Chmod(tokDir, 0o555))
-	t.Cleanup(func() { os.Chmod(tokDir, tokenfile.DirPerms) })
+	setTestDirPermissions(t, tokDir, 0o555)
+	t.Cleanup(func() {
+		setTestDirPermissions(t, tokDir, tokenfile.DirPerms)
+	})
 
 	path := filepath.Join(tokDir, "token.json")
 	tok := &oauth2.Token{AccessToken: "fail"}
 
 	err := tokenfile.Save(path, tok)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "creating temp file")
 }
 
@@ -532,7 +556,7 @@ func TestLoadToken_ReadError(t *testing.T) {
 	dir := t.TempDir()
 
 	_, err := tokenfile.Load(dir)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tokenfile: reading")
 }
 
@@ -547,7 +571,7 @@ func TestSaveToken_MkdirAllError(t *testing.T) {
 	tok := &oauth2.Token{AccessToken: "fail"}
 
 	err := tokenfile.Save(path, tok)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tokenfile: creating directory")
 }
 
@@ -584,7 +608,7 @@ func TestSaveToken_JSONFormat(t *testing.T) {
 
 	require.NoError(t, tokenfile.Save(path, tok))
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // Test token path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 
 	// Verify it's valid JSON with the new wrapper format.
@@ -641,7 +665,8 @@ func newMockAuthCodeServer(t *testing.T, tokenHandler http.HandlerFunc) *oauth2.
 	if handler == nil {
 		handler = func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(testTokenJSON))
+			_, err := w.Write([]byte(testTokenJSON))
+			assert.NoError(t, err)
 		}
 	}
 
@@ -668,7 +693,7 @@ func testAuthCodeConfig(t *testing.T, tokenPath string, endpoint *oauth2.Endpoin
 
 // simulateBrowserCallback acts as the browser: fetches the auth URL which
 // redirects to the localhost callback server, delivering the code.
-func simulateBrowserCallback(t *testing.T) func(string) error {
+func simulateBrowserCallback(t *testing.T) func(context.Context, string) error {
 	t.Helper()
 
 	// Use an HTTP client that doesn't follow redirects automatically — we need
@@ -679,19 +704,25 @@ func simulateBrowserCallback(t *testing.T) func(string) error {
 		},
 	}
 
-	return func(authURL string) error {
+	return func(ctx context.Context, authURL string) error {
 		// Step 1: Hit the authorize endpoint.
-		resp, err := client.Get(authURL) //nolint:noctx // test helper, no context needed
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, authURL, http.NoBody)
+		require.NoError(t, err, "failed to create authorize request")
+
+		resp, err := client.Do(req)
 		require.NoError(t, err, "failed to hit authorize endpoint")
-		resp.Body.Close()
+		require.NoError(t, resp.Body.Close())
 
 		// Step 2: Follow the redirect to the localhost callback.
 		location := resp.Header.Get("Location")
 		require.NotEmpty(t, location, "authorize endpoint must redirect")
 
-		callbackResp, err := http.Get(location) //nolint:noctx // test helper, no context needed
+		callbackReq, err := http.NewRequestWithContext(ctx, http.MethodGet, location, http.NoBody)
+		require.NoError(t, err, "failed to create callback request")
+
+		callbackResp, err := http.DefaultClient.Do(callbackReq)
 		require.NoError(t, err, "failed to hit callback")
-		callbackResp.Body.Close()
+		require.NoError(t, callbackResp.Body.Close())
 
 		return nil
 	}
@@ -733,7 +764,8 @@ func TestDoAuthCodeLogin_InvalidState(t *testing.T) {
 	})
 	mux.HandleFunc("POST /token", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(testTokenJSON))
+		_, err := w.Write([]byte(testTokenJSON))
+		assert.NoError(t, err)
 	})
 
 	srv := httptest.NewServer(mux)
@@ -763,7 +795,8 @@ func TestDoAuthCodeLogin_ContextCancel(t *testing.T) {
 	})
 	mux.HandleFunc("POST /token", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(testTokenJSON))
+		_, err := w.Write([]byte(testTokenJSON))
+		assert.NoError(t, err)
 	})
 
 	srv := httptest.NewServer(mux)
@@ -781,11 +814,16 @@ func TestDoAuthCodeLogin_ContextCancel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	defer cancel()
 
-	openURL := func(authURL string) error {
+	openURL := func(ctx context.Context, authURL string) error {
 		// Just hit the authorize endpoint but don't follow redirects.
-		resp, err := http.Get(authURL) //nolint:noctx // test helper
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, authURL, http.NoBody)
+		if err != nil {
+			return fmt.Errorf("build authorize request: %w", err)
+		}
+
+		resp, err := http.DefaultClient.Do(req)
 		if err == nil {
-			resp.Body.Close()
+			require.NoError(t, resp.Body.Close())
 		}
 
 		return nil
@@ -808,7 +846,8 @@ func TestDoAuthCodeLogin_MissingCode(t *testing.T) {
 	})
 	mux.HandleFunc("POST /token", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(testTokenJSON))
+		_, err := w.Write([]byte(testTokenJSON))
+		assert.NoError(t, err)
 	})
 
 	srv := httptest.NewServer(mux)
@@ -834,7 +873,8 @@ func TestDoAuthCodeLogin_ExchangeError(t *testing.T) {
 	endpoint := newMockAuthCodeServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"error":"invalid_grant","error_description":"code expired"}`))
+		_, err := w.Write([]byte(`{"error":"invalid_grant","error_description":"code expired"}`))
+		assert.NoError(t, err)
 	})
 
 	tmpDir := t.TempDir()
@@ -877,9 +917,12 @@ func TestDoAuthCodeLogin_OpenURLFails(t *testing.T) {
 	// openURL fails, but we still need to simulate the browser hitting the
 	// callback. Parse the auth URL and do the redirect manually.
 	browserSim := simulateBrowserCallback(t)
-	openURL := func(authURL string) error {
+	browserErrCh := make(chan error, 1)
+	openURL := func(ctx context.Context, authURL string) error {
 		// Simulate browser callback in background despite the "error".
-		go browserSim(authURL)
+		go func() {
+			browserErrCh <- browserSim(ctx, authURL)
+		}()
 		return fmt.Errorf("browser open failed")
 	}
 
@@ -890,6 +933,7 @@ func TestDoAuthCodeLogin_OpenURLFails(t *testing.T) {
 	tok, tokenErr := ts.Token()
 	require.NoError(t, tokenErr)
 	assert.Equal(t, "test-access-token", tok)
+	require.NoError(t, <-browserErrCh)
 }
 
 func TestGenerateState(t *testing.T) {

@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -130,7 +131,7 @@ func TestRunOnce_OneDrive_Success(t *testing.T) {
 	}
 
 	orch := NewOrchestrator(cfg)
-	orch.engineFactory = func(_ *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
 		return &mockEngine{report: expectedReport}, nil
 	}
 
@@ -138,7 +139,7 @@ func TestRunOnce_OneDrive_Success(t *testing.T) {
 	require.Len(t, reports, 1)
 	assert.Equal(t, rd.CanonicalID, reports[0].CanonicalID)
 	assert.Equal(t, "Test", reports[0].DisplayName)
-	assert.NoError(t, reports[0].Err)
+	require.NoError(t, reports[0].Err)
 	require.NotNil(t, reports[0].Report)
 	assert.Equal(t, 5, reports[0].Report.Downloads)
 }
@@ -154,7 +155,7 @@ func TestRunOnce_TwoDrives_OneFailsOneSucceeds(t *testing.T) {
 	okReport := &synctypes.SyncReport{Mode: synctypes.SyncBidirectional, Uploads: 2}
 
 	orch := NewOrchestrator(cfg)
-	orch.engineFactory = func(ecfg *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, ecfg *synctypes.EngineConfig) (engineRunner, error) {
 		if ecfg.SyncRoot == rd1.SyncDir {
 			return &mockEngine{err: errDelta}, nil
 		}
@@ -176,11 +177,11 @@ func TestRunOnce_TwoDrives_OneFailsOneSucceeds(t *testing.T) {
 	}
 
 	require.NotNil(t, failReport)
-	assert.ErrorIs(t, failReport.Err, errDelta)
+	require.ErrorIs(t, failReport.Err, errDelta)
 	assert.Nil(t, failReport.Report)
 
 	require.NotNil(t, okDriveReport)
-	assert.NoError(t, okDriveReport.Err)
+	require.NoError(t, okDriveReport.Err)
 	assert.Equal(t, 2, okDriveReport.Report.Uploads)
 }
 
@@ -194,7 +195,7 @@ func TestRunOnce_PanicRecovery(t *testing.T) {
 	stableReport := &synctypes.SyncReport{Mode: synctypes.SyncBidirectional, Downloads: 1}
 
 	orch := NewOrchestrator(cfg)
-	orch.engineFactory = func(ecfg *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, ecfg *synctypes.EngineConfig) (engineRunner, error) {
 		if ecfg.SyncRoot == rd1.SyncDir {
 			return &mockEngine{shouldPanic: true}, nil
 		}
@@ -215,12 +216,12 @@ func TestRunOnce_PanicRecovery(t *testing.T) {
 	}
 
 	require.NotNil(t, panicReport)
-	assert.Error(t, panicReport.Err)
+	require.Error(t, panicReport.Err)
 	assert.Contains(t, panicReport.Err.Error(), "panic")
 	assert.Nil(t, panicReport.Report)
 
 	require.NotNil(t, stableDriveReport)
-	assert.NoError(t, stableDriveReport.Err)
+	require.NoError(t, stableDriveReport.Err)
 	assert.Equal(t, 1, stableDriveReport.Report.Downloads)
 }
 
@@ -234,7 +235,7 @@ func TestRunOnce_ContextCanceled(t *testing.T) {
 	cancel()
 
 	orch := NewOrchestrator(cfg)
-	orch.engineFactory = func(_ *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
 		return &mockEngine{err: context.Canceled}, nil
 	}
 
@@ -250,13 +251,13 @@ func TestRunOnce_EngineFactoryError(t *testing.T) {
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
-	orch.engineFactory = func(_ *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
 		return nil, errors.New("db init failed")
 	}
 
 	reports := orch.RunOnce(t.Context(), synctypes.SyncBidirectional, synctypes.RunOpts{})
 	require.Len(t, reports, 1)
-	assert.Error(t, reports[0].Err)
+	require.Error(t, reports[0].Err)
 	assert.Contains(t, reports[0].Err.Error(), "db init failed")
 }
 
@@ -272,7 +273,7 @@ func TestRunOnce_TokenError_ReportsPerDrive(t *testing.T) {
 
 	reports := orch.RunOnce(t.Context(), synctypes.SyncBidirectional, synctypes.RunOpts{})
 	require.Len(t, reports, 1)
-	assert.Error(t, reports[0].Err)
+	require.Error(t, reports[0].Err)
 	assert.Contains(t, reports[0].Err.Error(), "token")
 }
 
@@ -297,7 +298,7 @@ func TestRunOnce_ZeroDriveID_ReportsError(t *testing.T) {
 
 	reports := orch.RunOnce(t.Context(), synctypes.SyncBidirectional, synctypes.RunOpts{})
 	require.Len(t, reports, 1)
-	assert.Error(t, reports[0].Err)
+	require.Error(t, reports[0].Err)
 	assert.Contains(t, reports[0].Err.Error(), "drive ID not resolved")
 	assert.Contains(t, reports[0].Err.Error(), "login")
 }
@@ -329,10 +330,10 @@ func (m *mockEngine) RunWatch(ctx context.Context, mode synctypes.SyncMode, opts
 	// Default: block until context is canceled.
 	<-ctx.Done()
 
-	return ctx.Err()
+	return fmt.Errorf("watch context: %w", ctx.Err())
 }
 
-func (m *mockEngine) Close() error {
+func (m *mockEngine) Close(context.Context) error {
 	m.closed = true
 	return nil
 }
@@ -350,7 +351,7 @@ func TestOrchestrator_RunWatch_SingleDrive(t *testing.T) {
 
 	watchStarted := make(chan struct{})
 
-	orch.engineFactory = func(_ *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
 		return &mockEngine{
 			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
 				close(watchStarted)
@@ -379,7 +380,7 @@ func TestOrchestrator_RunWatch_SingleDrive(t *testing.T) {
 
 	select {
 	case err := <-errCh:
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "RunWatch did not stop in time")
 	}
@@ -397,7 +398,7 @@ func TestOrchestrator_RunWatch_MultiDrive(t *testing.T) {
 
 	var started atomic.Int32
 
-	orch.engineFactory = func(_ *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
 		return &mockEngine{
 			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
 				started.Add(1)
@@ -424,7 +425,7 @@ func TestOrchestrator_RunWatch_MultiDrive(t *testing.T) {
 
 	select {
 	case err := <-errCh:
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "RunWatch did not stop in time")
 	}
@@ -448,7 +449,7 @@ func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 
 	var started atomic.Int32
 
-	orch.engineFactory = func(_ *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
 		return &mockEngine{
 			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
 				started.Add(1)
@@ -485,7 +486,7 @@ func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 
 	select {
 	case err := <-errCh:
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "RunWatch did not stop in time")
 	}
@@ -506,7 +507,7 @@ func TestOrchestrator_Reload_RemoveDrive(t *testing.T) {
 	var started atomic.Int32
 	var stopped atomic.Int32
 
-	orch.engineFactory = func(_ *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
 		return &mockEngine{
 			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
 				started.Add(1)
@@ -543,7 +544,7 @@ func TestOrchestrator_Reload_RemoveDrive(t *testing.T) {
 
 	select {
 	case err := <-errCh:
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "RunWatch did not stop in time")
 	}
@@ -563,7 +564,7 @@ func TestOrchestrator_Reload_PausedDrive(t *testing.T) {
 	var started atomic.Int32
 	var stopped atomic.Int32
 
-	orch.engineFactory = func(_ *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
 		return &mockEngine{
 			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
 				started.Add(1)
@@ -600,7 +601,7 @@ func TestOrchestrator_Reload_PausedDrive(t *testing.T) {
 
 	select {
 	case err := <-errCh:
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "RunWatch did not stop in time")
 	}
@@ -619,7 +620,7 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 
 	var started atomic.Int32
 
-	orch.engineFactory = func(_ *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
 		return &mockEngine{
 			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
 				started.Add(1)
@@ -654,7 +655,7 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 
 	select {
 	case err := <-errCh:
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "RunWatch did not stop in time")
 	}
@@ -679,7 +680,7 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 	var started atomic.Int32
 	var stopped atomic.Int32
 
-	orch.engineFactory = func(_ *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
 		return &mockEngine{
 			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
 				started.Add(1)
@@ -726,7 +727,7 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 
 	select {
 	case err := <-errCh:
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "RunWatch did not stop in time")
 	}
@@ -738,7 +739,7 @@ func TestOrchestrator_RunWatch_ZeroDrives(t *testing.T) {
 	orch := NewOrchestrator(cfg)
 
 	err := orch.RunWatch(t.Context(), synctypes.SyncBidirectional, synctypes.WatchOpts{})
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no drives")
 }
 

@@ -57,17 +57,17 @@ func runIssuesList(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("cannot determine state DB path for drive %q", cc.Cfg.CanonicalID)
 	}
 
-	mgr, err := syncstore.NewSyncStore(dbPath, cc.Logger)
+	mgr, err := syncstore.NewSyncStore(cmd.Context(), dbPath, cc.Logger)
 	if err != nil {
-		return err
+		return fmt.Errorf("open sync store: %w", err)
 	}
-	defer mgr.Close()
+	defer mgr.Close(cmd.Context())
 
 	ctx := cmd.Context()
 
 	history, err := cmd.Flags().GetBool("history")
 	if err != nil {
-		return err
+		return fmt.Errorf("read --history flag: %w", err)
 	}
 
 	var conflicts []synctypes.ConflictRecord
@@ -78,18 +78,18 @@ func runIssuesList(cmd *cobra.Command, _ []string) error {
 	}
 
 	if err != nil {
-		return err
+		return fmt.Errorf("list conflicts: %w", err)
 	}
 
 	failures, err := mgr.ListActionableFailures(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("list actionable failures: %w", err)
 	}
 
 	// Load shortcuts for humanizing scope keys in the grouped display (R-2.10.22).
 	shortcuts, err := mgr.ListShortcuts(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("list shortcuts: %w", err)
 	}
 
 	groups, heldDeletes := groupFailures(failures, shortcuts)
@@ -97,7 +97,7 @@ func runIssuesList(cmd *cobra.Command, _ []string) error {
 	// Query pending retries for the PENDING RETRIES section.
 	pendingRetries, err := mgr.PendingRetrySummary(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("summarize pending retries: %w", err)
 	}
 
 	if len(conflicts) == 0 && len(groups) == 0 && len(heldDeletes) == 0 && len(pendingRetries) == 0 {
@@ -114,9 +114,7 @@ func runIssuesList(cmd *cobra.Command, _ []string) error {
 		return printGroupedIssuesJSON(os.Stdout, conflicts, groups, heldDeletes)
 	}
 
-	printGroupedIssuesText(os.Stdout, conflicts, groups, heldDeletes, pendingRetries, shortcuts, history, cc.Flags.Verbose)
-
-	return nil
+	return printGroupedIssuesText(os.Stdout, conflicts, groups, heldDeletes, pendingRetries, shortcuts, history, cc.Flags.Verbose)
 }
 
 // --- issues resolve ---
@@ -159,7 +157,7 @@ func runResolve(cmd *cobra.Command, args []string) error {
 
 	dryRun, err := cmd.Flags().GetBool("dry-run")
 	if err != nil {
-		return err
+		return fmt.Errorf("read --dry-run flag: %w", err)
 	}
 
 	if !resolveAll && len(args) == 0 {
@@ -234,11 +232,11 @@ func resolveWithTransfers(
 		return err
 	}
 
-	engine, err := newSyncEngine(session, cc.Cfg, false, cc.Logger)
+	engine, err := newSyncEngine(ctx, session, cc.Cfg, false, cc.Logger)
 	if err != nil {
-		return err
+		return fmt.Errorf("create sync engine: %w", err)
 	}
-	defer engine.Close()
+	defer engine.Close(ctx)
 
 	if all {
 		return resolveAllWithEngine(ctx, cc, engine, resolution, dryRun)
@@ -250,7 +248,7 @@ func resolveWithTransfers(
 func resolveAllWithEngine(ctx context.Context, cc *CLIContext, engine *sync.Engine, resolution string, dryRun bool) error {
 	conflicts, err := engine.ListConflicts(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("list conflicts: %w", err)
 	}
 
 	return resolveEachConflict(cc, conflicts, resolution, dryRun, func(id, res string) error {
@@ -275,12 +273,12 @@ func resolveSingleConflict(
 		return err
 	}
 
-	target, findErr := findConflict(conflicts, idOrPath)
+	target, found, findErr := findConflict(conflicts, idOrPath)
 	if findErr != nil {
 		return findErr
 	}
 
-	if target == nil {
+	if !found {
 		return fmt.Errorf("conflict not found: %s", idOrPath)
 	}
 
@@ -302,16 +300,16 @@ func errAmbiguousPrefix(prefix string) error {
 	return fmt.Errorf("ambiguous conflict ID prefix %q — provide more characters", prefix)
 }
 
-func findConflict(conflicts []synctypes.ConflictRecord, idOrPath string) (*synctypes.ConflictRecord, error) {
+func findConflict(conflicts []synctypes.ConflictRecord, idOrPath string) (*synctypes.ConflictRecord, bool, error) {
 	if idOrPath == "" {
-		return nil, nil
+		return nil, false, nil
 	}
 
 	// First pass: exact matches (ID or path) take priority.
 	for i := range conflicts {
 		c := &conflicts[i]
 		if c.ID == idOrPath || c.Path == idOrPath {
-			return c, nil
+			return c, true, nil
 		}
 	}
 
@@ -322,14 +320,14 @@ func findConflict(conflicts []synctypes.ConflictRecord, idOrPath string) (*synct
 		c := &conflicts[i]
 		if len(c.ID) >= len(idOrPath) && c.ID[:len(idOrPath)] == idOrPath {
 			if match != nil {
-				return nil, errAmbiguousPrefix(idOrPath)
+				return nil, false, errAmbiguousPrefix(idOrPath)
 			}
 
 			match = c
 		}
 	}
 
-	return match, nil
+	return match, match != nil, nil
 }
 
 // --- issues clear ---
@@ -407,17 +405,17 @@ func runFailureAction(cmd *cobra.Command, args []string, action failureAction) e
 		return fmt.Errorf("cannot determine state DB path for drive %q", cc.Cfg.CanonicalID)
 	}
 
-	mgr, err := syncstore.NewSyncStore(dbPath, cc.Logger)
+	mgr, err := syncstore.NewSyncStore(cmd.Context(), dbPath, cc.Logger)
 	if err != nil {
-		return err
+		return fmt.Errorf("open sync store: %w", err)
 	}
-	defer mgr.Close()
+	defer mgr.Close(cmd.Context())
 
 	ctx := cmd.Context()
 
 	doAll, err := cmd.Flags().GetBool("all")
 	if err != nil {
-		return err
+		return fmt.Errorf("read --all flag: %w", err)
 	}
 
 	if doAll {
@@ -489,7 +487,7 @@ func toConflictJSON(c *synctypes.ConflictRecord) conflictJSON {
 	}
 }
 
-func printConflictsTable(w io.Writer, conflicts []synctypes.ConflictRecord, history bool) {
+func printConflictsTable(w io.Writer, conflicts []synctypes.ConflictRecord, history bool) error {
 	var headers []string
 	if history {
 		headers = []string{"ID", "PATH", "TYPE", "RESOLUTION", "RESOLVED BY", "DETECTED"}
@@ -510,12 +508,12 @@ func printConflictsTable(w io.Writer, conflicts []synctypes.ConflictRecord, hist
 		}
 	}
 
-	printTable(w, headers, rows)
+	return printTable(w, headers, rows)
 }
 
 // printHeldDeletesTable renders held-delete entries with a simplified table
 // (path only — direction is always "delete" and error is always the same).
-func printHeldDeletesTable(w io.Writer, failures []synctypes.SyncFailureRow) {
+func printHeldDeletesTable(w io.Writer, failures []synctypes.SyncFailureRow) error {
 	headers := []string{"PATH", "LAST SEEN"}
 
 	rows := make([][]string, len(failures))
@@ -530,5 +528,5 @@ func printHeldDeletesTable(w io.Writer, failures []synctypes.SyncFailureRow) {
 		rows[i] = []string{row.Path, lastSeen}
 	}
 
-	printTable(w, headers, rows)
+	return printTable(w, headers, rows)
 }

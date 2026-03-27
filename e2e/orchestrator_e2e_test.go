@@ -47,12 +47,12 @@ func TestE2E_Orchestrator_SimultaneousSync(t *testing.T) {
 
 	// Create local files in each drive's sync dir.
 	localDir1 := filepath.Join(syncDir1, testFolder1)
-	require.NoError(t, os.MkdirAll(localDir1, 0o755))
+	require.NoError(t, os.MkdirAll(localDir1, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir1, "drive1-file.txt"), []byte("from drive1\n"), 0o644))
 
 	localDir2 := filepath.Join(syncDir2, testFolder2)
-	require.NoError(t, os.MkdirAll(localDir2, 0o755))
+	require.NoError(t, os.MkdirAll(localDir2, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir2, "drive2-file.txt"), []byte("from drive2\n"), 0o644))
 
@@ -146,7 +146,7 @@ func TestE2E_Orchestrator_OneDriveFails(t *testing.T) {
 	perTestData := t.TempDir()
 	perTestHome := t.TempDir()
 	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
-	require.NoError(t, os.MkdirAll(perTestDataDir, 0o755))
+	require.NoError(t, os.MkdirAll(perTestDataDir, 0o700))
 
 	// Only copy drive1's token — deliberately omit drive2's token.
 	copyTokenFile(t, testDataDir, perTestDataDir)
@@ -155,7 +155,7 @@ func TestE2E_Orchestrator_OneDriveFails(t *testing.T) {
 		drive, syncDir1, drive2, syncDir2)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o600))
 
 	env := map[string]string{
 		"XDG_DATA_HOME": perTestData,
@@ -164,7 +164,7 @@ func TestE2E_Orchestrator_OneDriveFails(t *testing.T) {
 
 	testFolder := fmt.Sprintf("e2e-orch-fail-%d", time.Now().UnixNano())
 	localDir := filepath.Join(syncDir1, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "survive.txt"), []byte("should survive\n"), 0o644))
 
@@ -212,12 +212,12 @@ func TestE2E_Orchestrator_SelectiveDrive(t *testing.T) {
 
 	// Create files in both sync dirs.
 	localDir1 := filepath.Join(syncDir1, testFolder1)
-	require.NoError(t, os.MkdirAll(localDir1, 0o755))
+	require.NoError(t, os.MkdirAll(localDir1, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir1, "selected.txt"), []byte("selected drive\n"), 0o644))
 
 	localDir2 := filepath.Join(syncDir2, testFolder2)
-	require.NoError(t, os.MkdirAll(localDir2, 0o755))
+	require.NoError(t, os.MkdirAll(localDir2, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir2, "not-selected.txt"), []byte("not selected\n"), 0o644))
 
@@ -292,12 +292,12 @@ func TestE2E_Orchestrator_WatchSimultaneous(t *testing.T) {
 
 	// Create files in each sync dir.
 	localDir1 := filepath.Join(syncDir1, testFolder1)
-	require.NoError(t, os.MkdirAll(localDir1, 0o755))
+	require.NoError(t, os.MkdirAll(localDir1, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir1, "watch-d1.txt"), []byte("watch drive1"), 0o644))
 
 	localDir2 := filepath.Join(syncDir2, testFolder2)
-	require.NoError(t, os.MkdirAll(localDir2, 0o755))
+	require.NoError(t, os.MkdirAll(localDir2, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir2, "watch-d2.txt"), []byte("watch drive2"), 0o644))
 
@@ -354,7 +354,7 @@ func TestE2E_Orchestrator_WatchDriveIsolation(t *testing.T) {
 
 	// Create file only in drive1's sync dir.
 	localDir1 := filepath.Join(syncDir1, testFolder)
-	require.NoError(t, os.MkdirAll(localDir1, 0o755))
+	require.NoError(t, os.MkdirAll(localDir1, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir1, "isolated.txt"), []byte("drive1 only"), 0o644))
 
@@ -387,7 +387,7 @@ func TestE2E_Orchestrator_WatchPausedDrive(t *testing.T) {
 	perTestHome := t.TempDir()
 
 	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
-	require.NoError(t, os.MkdirAll(perTestDataDir, 0o755))
+	require.NoError(t, os.MkdirAll(perTestDataDir, 0o700))
 
 	copyTokenFile(t, testDataDir, perTestDataDir)
 	copyTokenFileForDrive(t, testDataDir, perTestDataDir, drive2)
@@ -396,7 +396,7 @@ func TestE2E_Orchestrator_WatchPausedDrive(t *testing.T) {
 		drive, syncDir1, drive2, syncDir2)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o600))
 
 	env := map[string]string{
 		"XDG_DATA_HOME": perTestData,
@@ -440,12 +440,12 @@ func TestE2E_Orchestrator_WatchPausedDrive(t *testing.T) {
 
 	// Create files in both sync dirs.
 	localDir1 := filepath.Join(syncDir1, testFolder1)
-	require.NoError(t, os.MkdirAll(localDir1, 0o755))
+	require.NoError(t, os.MkdirAll(localDir1, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir1, "active.txt"), []byte("active drive"), 0o644))
 
 	localDir2 := filepath.Join(syncDir2, testFolder2)
-	require.NoError(t, os.MkdirAll(localDir2, 0o755))
+	require.NoError(t, os.MkdirAll(localDir2, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir2, "paused.txt"), []byte("paused drive"), 0o644))
 

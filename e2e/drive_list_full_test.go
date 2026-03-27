@@ -84,7 +84,7 @@ func TestE2E_DriveList_StaleStateDB(t *testing.T) {
 	// Step 1: Create a file and sync it up to establish a state DB.
 	testFolder := fmt.Sprintf("e2e-stale-db-%d", time.Now().UnixNano())
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "stale-test.txt"),
 		[]byte("stale db test\n"), 0o644))

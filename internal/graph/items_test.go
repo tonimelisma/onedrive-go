@@ -2,7 +2,6 @@ package graph
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -26,7 +25,7 @@ func TestGetItem_Success(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "item-123",
 			"name": "test-file.txt",
 			"size": 1024,
@@ -77,7 +76,7 @@ func TestGetItem_Folder(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "folder-789",
 			"name": "Documents",
 			"size": 0,
@@ -100,17 +99,10 @@ func TestGetItem_Folder(t *testing.T) {
 }
 
 func TestGetItem_NotFound(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("request-id", "req-404")
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, `{"error":{"code":"itemNotFound"}}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	_, err := client.GetItem(t.Context(), driveid.New("drive-1"), "nonexistent")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNotFound)
+	assertGraphCallError(t, http.StatusNotFound, "req-404", "itemNotFound", func(client *Client) error {
+		_, err := client.GetItem(t.Context(), driveid.New("drive-1"), "nonexistent")
+		return err
+	}, ErrNotFound)
 }
 
 func TestGetItem_DriveIDNormalization(t *testing.T) {
@@ -118,7 +110,7 @@ func TestGetItem_DriveIDNormalization(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		// Graph API sometimes returns uppercase drive IDs
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "item-1",
 			"name": "test.txt",
 			"createdDateTime": "2024-01-01T00:00:00Z",
@@ -140,7 +132,7 @@ func TestGetItem_InvalidTimestamp(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "item-ts",
 			"name": "bad-time.txt",
 			"createdDateTime": "not-a-date",
@@ -164,7 +156,7 @@ func TestGetItem_FutureTimestamp(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "item-future",
 			"name": "future.txt",
 			"createdDateTime": "2200-01-01T00:00:00Z",
@@ -186,7 +178,7 @@ func TestGetItem_PackageAndDeleted(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "item-pkg",
 			"name": "Notebook.one",
 			"createdDateTime": "2024-01-01T00:00:00Z",
@@ -211,7 +203,7 @@ func TestGetItem_NilParentReference(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		// Root items may not have parentReference
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "root-item",
 			"name": "root",
 			"createdDateTime": "2024-01-01T00:00:00Z",
@@ -235,7 +227,7 @@ func TestGetItem_NilFileFacet(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "folder-1",
 			"name": "Folder",
 			"createdDateTime": "2024-01-01T00:00:00Z",
@@ -267,7 +259,7 @@ func TestListChildren_SinglePage(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"value": [
 				{"id":"a","name":"file-a.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"parent","driveId":"d"},"file":{"mimeType":"text/plain"}},
 				{"id":"b","name":"file-b.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"parent","driveId":"d"},"file":{"mimeType":"text/plain"}},
@@ -300,7 +292,7 @@ func TestListChildren_MultiPage(t *testing.T) {
 
 		if strings.Contains(r.URL.Path, "/children") && !strings.Contains(r.URL.RawQuery, "page=2") {
 			// First page — includes nextLink
-			fmt.Fprintf(w, `{
+			writeTestResponsef(t, w, `{
 				"value": [
 					{"id":"a","name":"item-a","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"p","driveId":"d"}}
 				],
@@ -308,7 +300,7 @@ func TestListChildren_MultiPage(t *testing.T) {
 			}`, srv.URL)
 		} else {
 			// Second page — no nextLink
-			fmt.Fprint(w, `{
+			writeTestResponse(t, w, `{
 				"value": [
 					{"id":"b","name":"item-b","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"p","driveId":"d"}}
 				]
@@ -327,25 +319,16 @@ func TestListChildren_MultiPage(t *testing.T) {
 }
 
 func TestListChildren_Empty(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"value": []}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	items, err := client.ListChildren(t.Context(), driveid.New("d"), "empty-folder")
-	require.NoError(t, err)
-
-	assert.Empty(t, items)
+	assertEmptyGraphSliceCall(t, func(client *Client) ([]Item, error) {
+		return client.ListChildren(t.Context(), driveid.New("d"), "empty-folder")
+	})
 }
 
 func TestListChildren_MixedTypes(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"value": [
 				{"id":"file-1","name":"doc.pdf","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"p","driveId":"d"},"file":{"mimeType":"application/pdf"}},
 				{"id":"folder-1","name":"Photos","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"p","driveId":"d"},"folder":{"childCount":100}},
@@ -372,7 +355,7 @@ func TestListChildren_InvalidNextLink(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		// nextLink points to a different host — should be rejected
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"value": [{"id":"a","name":"a","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z"}],
 			"@odata.nextLink": "https://evil.example.com/next-page"
 		}`)
@@ -394,17 +377,21 @@ func TestCreateFolder_Success(t *testing.T) {
 		assert.Equal(t, "/drives/000000000000000d/items/parent/children", r.URL.Path)
 
 		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 
 		var req map[string]interface{}
-		require.NoError(t, json.Unmarshal(body, &req))
+		if !assert.NoError(t, json.Unmarshal(body, &req)) {
+			return
+		}
 		assert.Equal(t, "New Folder", req["name"])
 		assert.NotNil(t, req["folder"])
 		assert.Equal(t, "fail", req["@microsoft.graph.conflictBehavior"])
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "new-folder-id",
 			"name": "New Folder",
 			"createdDateTime": "2024-06-01T12:00:00Z",
@@ -426,17 +413,10 @@ func TestCreateFolder_Success(t *testing.T) {
 }
 
 func TestCreateFolder_Conflict(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("request-id", "req-conflict")
-		w.WriteHeader(http.StatusConflict)
-		fmt.Fprint(w, `{"error":{"code":"nameAlreadyExists"}}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	_, err := client.CreateFolder(t.Context(), driveid.New("d"), "parent", "Existing")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrConflict)
+	assertGraphCallError(t, http.StatusConflict, "req-conflict", "nameAlreadyExists", func(client *Client) error {
+		_, err := client.CreateFolder(t.Context(), driveid.New("d"), "parent", "Existing")
+		return err
+	}, ErrConflict)
 }
 
 // --- MoveItem tests ---
@@ -447,20 +427,26 @@ func TestMoveItem_MoveAndRename(t *testing.T) {
 		assert.Equal(t, "/drives/000000000000000d/items/item-1", r.URL.Path)
 
 		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 
 		var req map[string]interface{}
-		require.NoError(t, json.Unmarshal(body, &req))
+		if !assert.NoError(t, json.Unmarshal(body, &req)) {
+			return
+		}
 
 		// Both parentReference and name should be present
 		parentRef, ok := req["parentReference"].(map[string]interface{})
-		require.True(t, ok)
+		if !assert.True(t, ok) {
+			return
+		}
 		assert.Equal(t, "new-parent", parentRef["id"])
 		assert.Equal(t, "renamed.txt", req["name"])
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "item-1",
 			"name": "renamed.txt",
 			"createdDateTime": "2024-01-01T00:00:00Z",
@@ -481,10 +467,14 @@ func TestMoveItem_MoveAndRename(t *testing.T) {
 func TestMoveItem_RenameOnly(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 
 		var req map[string]interface{}
-		require.NoError(t, json.Unmarshal(body, &req))
+		if !assert.NoError(t, json.Unmarshal(body, &req)) {
+			return
+		}
 
 		// Only name, no parentReference
 		assert.Equal(t, "new-name.txt", req["name"])
@@ -492,7 +482,7 @@ func TestMoveItem_RenameOnly(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "item-1",
 			"name": "new-name.txt",
 			"createdDateTime": "2024-01-01T00:00:00Z",
@@ -513,20 +503,26 @@ func TestMoveItem_RenameOnly(t *testing.T) {
 func TestMoveItem_MoveOnly(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 
 		var req map[string]interface{}
-		require.NoError(t, json.Unmarshal(body, &req))
+		if !assert.NoError(t, json.Unmarshal(body, &req)) {
+			return
+		}
 
 		// Only parentReference, no name
 		parentRef, ok := req["parentReference"].(map[string]interface{})
-		require.True(t, ok)
+		if !assert.True(t, ok) {
+			return
+		}
 		assert.Equal(t, "new-parent", parentRef["id"])
 		assert.Empty(t, req["name"])
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "item-1",
 			"name": "unchanged.txt",
 			"createdDateTime": "2024-01-01T00:00:00Z",
@@ -552,17 +548,10 @@ func TestMoveItem_BothEmpty(t *testing.T) {
 }
 
 func TestMoveItem_NotFound(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("request-id", "req-move-404")
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, `{"error":{"code":"itemNotFound"}}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	_, err := client.MoveItem(t.Context(), driveid.New("d"), "nonexistent", "new-parent", "")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNotFound)
+	assertGraphCallError(t, http.StatusNotFound, "req-move-404", "itemNotFound", func(client *Client) error {
+		_, err := client.MoveItem(t.Context(), driveid.New("d"), "nonexistent", "new-parent", "")
+		return err
+	}, ErrNotFound)
 }
 
 // --- DeleteItem tests ---
@@ -582,17 +571,9 @@ func TestDeleteItem_Success(t *testing.T) {
 }
 
 func TestDeleteItem_NotFound(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("request-id", "req-del-404")
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, `{"error":{"code":"itemNotFound"}}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	err := client.DeleteItem(t.Context(), driveid.New("d"), "nonexistent")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNotFound)
+	assertGraphCallError(t, http.StatusNotFound, "req-del-404", "itemNotFound", func(client *Client) error {
+		return client.DeleteItem(t.Context(), driveid.New("d"), "nonexistent")
+	}, ErrNotFound)
 }
 
 // --- toItem edge cases ---
@@ -648,7 +629,7 @@ func TestGetItem_RootItem(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "root-id",
 			"name": "root",
 			"size": 0,
@@ -722,7 +703,9 @@ func TestUpdateFileSystemInfo_Success(t *testing.T) {
 		assert.Equal(t, "/drives/000000000000000d/items/item-fsi", r.URL.Path)
 
 		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 
 		bodyStr := string(body)
 		assert.Contains(t, bodyStr, `"lastModifiedDateTime":"2024-08-15T14:30:00Z"`)
@@ -730,7 +713,7 @@ func TestUpdateFileSystemInfo_Success(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "item-fsi",
 			"name": "patched.txt",
 			"size": 100,
@@ -758,7 +741,7 @@ func TestUpdateFileSystemInfo_DecodeError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{not valid json`)
+		writeTestResponse(t, w, `{not valid json`)
 	}))
 	defer srv.Close()
 
@@ -772,20 +755,13 @@ func TestUpdateFileSystemInfo_DecodeError(t *testing.T) {
 }
 
 func TestUpdateFileSystemInfo_NotFound(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("request-id", "req-fsi-404")
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, `{"error":{"code":"itemNotFound"}}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	_, err := client.UpdateFileSystemInfo(
-		t.Context(), driveid.New("d"), "nonexistent",
-		time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
-	)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNotFound)
+	assertGraphCallError(t, http.StatusNotFound, "req-fsi-404", "itemNotFound", func(client *Client) error {
+		_, err := client.UpdateFileSystemInfo(
+			t.Context(), driveid.New("d"), "nonexistent",
+			time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		)
+		return err
+	}, ErrNotFound)
 }
 
 // --- GetItemByPath tests ---
@@ -798,7 +774,7 @@ func TestGetItemByPath_Success(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "item-path-1",
 			"name": "file.txt",
 			"size": 2048,
@@ -848,7 +824,7 @@ func TestGetItemByPath_EncodesSpecialChars(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "encoded-item",
 			"name": "my file#2.txt",
 			"createdDateTime": "2024-01-01T00:00:00Z",
@@ -890,17 +866,10 @@ func TestEncodePathSegments(t *testing.T) {
 }
 
 func TestGetItemByPath_NotFound(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("request-id", "req-path-404")
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, `{"error":{"code":"itemNotFound"}}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	_, err := client.GetItemByPath(t.Context(), driveid.New("d"), "nonexistent/path.txt")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNotFound)
+	assertGraphCallError(t, http.StatusNotFound, "req-path-404", "itemNotFound", func(client *Client) error {
+		_, err := client.GetItemByPath(t.Context(), driveid.New("d"), "nonexistent/path.txt")
+		return err
+	}, ErrNotFound)
 }
 
 // --- ListChildrenByPath tests ---
@@ -914,7 +883,7 @@ func TestListChildrenByPath_SinglePage(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"value": [
 				{"id":"a","name":"report.pdf","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"docs","driveId":"d"},"file":{"mimeType":"application/pdf"}},
 				{"id":"b","name":"notes.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"docs","driveId":"d"},"file":{"mimeType":"text/plain"}},
@@ -948,7 +917,7 @@ func TestListChildrenByPath_MultiPage(t *testing.T) {
 
 		if !strings.Contains(r.URL.RawQuery, "page=2") {
 			// First page — includes nextLink
-			fmt.Fprintf(w, `{
+			writeTestResponsef(t, w, `{
 				"value": [
 					{"id":"a","name":"first.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"p","driveId":"d"}}
 				],
@@ -956,7 +925,7 @@ func TestListChildrenByPath_MultiPage(t *testing.T) {
 			}`, srv.URL)
 		} else {
 			// Second page — no nextLink
-			fmt.Fprint(w, `{
+			writeTestResponse(t, w, `{
 				"value": [
 					{"id":"b","name":"second.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"p","driveId":"d"}}
 				]
@@ -975,182 +944,161 @@ func TestListChildrenByPath_MultiPage(t *testing.T) {
 }
 
 func TestListChildrenByPath_Empty(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"value": []}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	items, err := client.ListChildrenByPath(t.Context(), driveid.New("d"), "EmptyFolder")
-	require.NoError(t, err)
-
-	assert.Empty(t, items)
+	assertEmptyGraphSliceCall(t, func(client *Client) ([]Item, error) {
+		return client.ListChildrenByPath(t.Context(), driveid.New("d"), "EmptyFolder")
+	})
 }
 
 // --- Path validation tests ---
 
-func TestGetItemByPath_EmptyPath(t *testing.T) {
-	client := newTestClient(t, "http://localhost")
-	_, err := client.GetItemByPath(t.Context(), driveid.New("d"), "")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrInvalidPath)
-}
+func TestRemotePathValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(*Client) error
+	}{
+		{
+			name: "GetItemByPath rejects empty path",
+			call: func(client *Client) error {
+				_, err := client.GetItemByPath(t.Context(), driveid.New("d"), "")
+				return err
+			},
+		},
+		{
+			name: "GetItemByPath rejects leading slash",
+			call: func(client *Client) error {
+				_, err := client.GetItemByPath(t.Context(), driveid.New("d"), "/foo/bar.txt")
+				return err
+			},
+		},
+		{
+			name: "ListChildrenByPath rejects empty path",
+			call: func(client *Client) error {
+				_, err := client.ListChildrenByPath(t.Context(), driveid.New("d"), "")
+				return err
+			},
+		},
+		{
+			name: "ListChildrenByPath rejects leading slash",
+			call: func(client *Client) error {
+				_, err := client.ListChildrenByPath(t.Context(), driveid.New("d"), "/Documents")
+				return err
+			},
+		},
+	}
 
-func TestGetItemByPath_LeadingSlash(t *testing.T) {
-	client := newTestClient(t, "http://localhost")
-	_, err := client.GetItemByPath(t.Context(), driveid.New("d"), "/foo/bar.txt")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrInvalidPath)
-}
-
-func TestListChildrenByPath_EmptyPath(t *testing.T) {
-	client := newTestClient(t, "http://localhost")
-	_, err := client.ListChildrenByPath(t.Context(), driveid.New("d"), "")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrInvalidPath)
-}
-
-func TestListChildrenByPath_LeadingSlash(t *testing.T) {
-	client := newTestClient(t, "http://localhost")
-	_, err := client.ListChildrenByPath(t.Context(), driveid.New("d"), "/Documents")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrInvalidPath)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertInvalidRemotePath(t, tt.call)
+		})
+	}
 }
 
 // --- remoteItem + shared facet tests ---
 
-func TestToItem_SharedOwner_FallbackChain(t *testing.T) {
-	// Fallback chain: remoteItem.shared.sharedBy > remoteItem.shared.owner >
-	// remoteItem.createdBy > top-level shared.owner
-	tests := []struct {
-		name         string
-		json         string
-		wantName     string
-		wantEmail    string
-		wantRemoteID string
-		wantDriveID  string
-		wantIsFolder bool
-		wantChildCnt int
-	}{
+type sharedOwnerFallbackCase struct {
+	name         string
+	response     *driveItemResponse
+	wantName     string
+	wantEmail    string
+	wantRemoteID string
+	wantDriveID  string
+	wantChildCnt int
+}
+
+func sharedOwnerFallbackCases() []sharedOwnerFallbackCase {
+	return []sharedOwnerFallbackCase{
 		{
 			name: "level 1: remoteItem.shared.sharedBy wins",
-			json: `{
-				"id": "item-1", "name": "Shared Folder",
-				"createdDateTime": "2024-01-01T00:00:00Z",
-				"lastModifiedDateTime": "2024-01-01T00:00:00Z",
-				"folder": {"childCount": 5},
-				"remoteItem": {
-					"id": "source-item-id",
-					"parentReference": {"driveId": "source-drive-id"},
-					"shared": {
-						"sharedBy": {"user": {"displayName": "Sharer", "email": "sharer@example.com"}},
-						"owner": {"user": {"displayName": "Owner", "email": "owner@example.com"}}
-					},
-					"createdBy": {"user": {"displayName": "Creator", "email": "creator@example.com"}}
-				},
-				"shared": {"owner": {"user": {"displayName": "TopLevel", "email": "toplevel@example.com"}}}
-			}`,
-			wantName: "Sharer", wantEmail: "sharer@example.com",
-			wantRemoteID: "source-item-id", wantDriveID: "source-drive-id",
-			wantIsFolder: true, wantChildCnt: 5,
+			response: withTopLevelSharedOwner(
+				withRemoteCreatedBy(
+					withRemoteOwner(
+						withRemoteSharedBy(
+							sharedFolderResponse("item-1", "source-item-id", "source-drive-id", 5),
+							"Sharer", "sharer@example.com",
+						),
+						"Owner", "owner@example.com",
+					),
+					"Creator", "creator@example.com",
+				),
+				"TopLevel", "toplevel@example.com",
+			),
+			wantName:     "Sharer",
+			wantEmail:    "sharer@example.com",
+			wantRemoteID: "source-item-id",
+			wantDriveID:  "source-drive-id",
+			wantChildCnt: 5,
 		},
 		{
 			name: "level 2: remoteItem.shared.owner when no sharedBy",
-			json: `{
-				"id": "item-2", "name": "Shared Folder",
-				"createdDateTime": "2024-01-01T00:00:00Z",
-				"lastModifiedDateTime": "2024-01-01T00:00:00Z",
-				"folder": {"childCount": 3},
-				"remoteItem": {
-					"id": "src-id",
-					"parentReference": {"driveId": "src-drive"},
-					"shared": {
-						"owner": {"user": {"displayName": "Owner", "email": "owner@example.com"}}
-					},
-					"createdBy": {"user": {"displayName": "Creator", "email": "creator@example.com"}}
-				},
-				"shared": {"owner": {"user": {"displayName": "TopLevel", "email": "toplevel@example.com"}}}
-			}`,
-			wantName: "Owner", wantEmail: "owner@example.com",
-			wantRemoteID: "src-id", wantDriveID: "src-drive",
-			wantIsFolder: true, wantChildCnt: 3,
+			response: withTopLevelSharedOwner(
+				withRemoteCreatedBy(
+					withRemoteOwner(
+						sharedFolderResponse("item-2", "src-id", "src-drive", 3),
+						"Owner", "owner@example.com",
+					),
+					"Creator", "creator@example.com",
+				),
+				"TopLevel", "toplevel@example.com",
+			),
+			wantName:     "Owner",
+			wantEmail:    "owner@example.com",
+			wantRemoteID: "src-id",
+			wantDriveID:  "src-drive",
+			wantChildCnt: 3,
 		},
 		{
 			name: "level 3: remoteItem.createdBy when no shared facet",
-			json: `{
-				"id": "item-3", "name": "Shared Folder",
-				"createdDateTime": "2024-01-01T00:00:00Z",
-				"lastModifiedDateTime": "2024-01-01T00:00:00Z",
-				"folder": {"childCount": 0},
-				"remoteItem": {
-					"id": "src-id",
-					"parentReference": {"driveId": "src-drive"},
-					"createdBy": {"user": {"displayName": "Creator", "email": "creator@example.com"}}
-				},
-				"shared": {"owner": {"user": {"displayName": "TopLevel", "email": "toplevel@example.com"}}}
-			}`,
-			wantName: "Creator", wantEmail: "creator@example.com",
-			wantRemoteID: "src-id", wantDriveID: "src-drive",
-			wantIsFolder: true, wantChildCnt: 0,
+			response: withTopLevelSharedOwner(
+				withRemoteCreatedBy(
+					sharedFolderResponse("item-3", "src-id", "src-drive", 0),
+					"Creator", "creator@example.com",
+				),
+				"TopLevel", "toplevel@example.com",
+			),
+			wantName:     "Creator",
+			wantEmail:    "creator@example.com",
+			wantRemoteID: "src-id",
+			wantDriveID:  "src-drive",
+			wantChildCnt: 0,
 		},
 		{
 			name: "level 4: top-level shared.owner (no remoteItem identity)",
-			json: `{
-				"id": "item-4", "name": "Shared Folder",
-				"createdDateTime": "2024-01-01T00:00:00Z",
-				"lastModifiedDateTime": "2024-01-01T00:00:00Z",
-				"folder": {"childCount": 5},
-				"remoteItem": {
-					"id": "source-item-id",
-					"parentReference": {"driveId": "source-drive-id"}
-				},
-				"shared": {
-					"owner": {
-						"user": {
-							"displayName": "John Doe",
-							"email": "john@example.com"
-						}
-					}
-				}
-			}`,
-			wantName: "John Doe", wantEmail: "john@example.com",
-			wantRemoteID: "source-item-id", wantDriveID: "source-drive-id",
-			wantIsFolder: true, wantChildCnt: 5,
+			response: withTopLevelSharedOwner(
+				sharedFolderResponse("item-4", "source-item-id", "source-drive-id", 5),
+				"John Doe", "john@example.com",
+			),
+			wantName:     "John Doe",
+			wantEmail:    "john@example.com",
+			wantRemoteID: "source-item-id",
+			wantDriveID:  "source-drive-id",
+			wantChildCnt: 5,
 		},
 		{
-			name: "createdBy displayName only (no email — search endpoint pattern)",
-			json: `{
-				"id": "item-5", "name": "Shared Folder",
-				"createdDateTime": "2024-01-01T00:00:00Z",
-				"lastModifiedDateTime": "2024-01-01T00:00:00Z",
-				"folder": {"childCount": 0},
-				"remoteItem": {
-					"id": "src-id",
-					"parentReference": {"driveId": "src-drive"},
-					"createdBy": {"user": {"displayName": "Creator Only"}}
-				}
-			}`,
-			wantName: "Creator Only", wantEmail: "",
-			wantRemoteID: "src-id", wantDriveID: "src-drive",
-			wantIsFolder: true, wantChildCnt: 0,
+			name: "createdBy displayName only (no email - search endpoint pattern)",
+			response: withRemoteCreatedBy(
+				sharedFolderResponse("item-5", "src-id", "src-drive", 0),
+				"Creator Only", "",
+			),
+			wantName:     "Creator Only",
+			wantRemoteID: "src-id",
+			wantDriveID:  "src-drive",
+			wantChildCnt: 0,
 		},
 	}
+}
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+func TestToItem_SharedOwner_FallbackChain(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
 
-	for _, tt := range tests {
+	for _, tt := range sharedOwnerFallbackCases() {
 		t.Run(tt.name, func(t *testing.T) {
-			var dir driveItemResponse
-			require.NoError(t, json.Unmarshal([]byte(tt.json), &dir))
-			item := dir.toItem(logger)
+			item := tt.response.toItem(logger)
 
 			assert.Equal(t, tt.wantName, item.SharedOwnerName)
 			assert.Equal(t, tt.wantEmail, item.SharedOwnerEmail)
 			assert.Equal(t, tt.wantRemoteID, item.RemoteItemID)
 			assert.Equal(t, tt.wantDriveID, item.RemoteDriveID)
-			assert.Equal(t, tt.wantIsFolder, item.IsFolder)
+			assert.True(t, item.IsFolder)
 			assert.Equal(t, tt.wantChildCnt, item.ChildCount)
 		})
 	}
@@ -1170,7 +1118,7 @@ func TestToItem_SharedWithMe_NilRemoteItem(t *testing.T) {
 	var dir driveItemResponse
 	require.NoError(t, json.Unmarshal([]byte(raw), &dir))
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := slog.New(slog.DiscardHandler)
 	item := dir.toItem(logger)
 
 	assert.Empty(t, item.RemoteItemID)
@@ -1193,7 +1141,7 @@ func TestToItem_SharedWithMe_NilSharedOwner(t *testing.T) {
 	var dir driveItemResponse
 	require.NoError(t, json.Unmarshal([]byte(raw), &dir))
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := slog.New(slog.DiscardHandler)
 	item := dir.toItem(logger)
 
 	assert.Empty(t, item.SharedOwnerName)
@@ -1216,7 +1164,7 @@ func TestToItem_RemoteItem_NilParentReference(t *testing.T) {
 	var dir driveItemResponse
 	require.NoError(t, json.Unmarshal([]byte(raw), &dir))
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := slog.New(slog.DiscardHandler)
 	item := dir.toItem(logger)
 
 	assert.Equal(t, "remote-id", item.RemoteItemID)
@@ -1232,14 +1180,18 @@ func TestCopyItem_Success(t *testing.T) {
 		assert.Equal(t, "/drives/000000000000000d/items/item-to-copy/copy", r.URL.Path)
 
 		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 
 		var req copyItemRequest
-		require.NoError(t, json.Unmarshal(body, &req))
+		if !assert.NoError(t, json.Unmarshal(body, &req)) {
+			return
+		}
 		assert.Equal(t, "dest-folder-id", req.ParentReference.ID)
 		assert.Equal(t, "copy-of-file.txt", req.Name)
 
-		w.Header().Set("Location", "https://monitor.example.com/status/abc")
+		w.Header().Set("Location", "https://operations.contoso.sharepoint.com/status/abc")
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer srv.Close()
@@ -1248,20 +1200,24 @@ func TestCopyItem_Success(t *testing.T) {
 	result, err := client.CopyItem(t.Context(), driveid.New("d"), "item-to-copy", "dest-folder-id", "copy-of-file.txt")
 	require.NoError(t, err)
 
-	assert.Equal(t, "https://monitor.example.com/status/abc", result.MonitorURL)
+	assert.Equal(t, "https://operations.contoso.sharepoint.com/status/abc", result.MonitorURL)
 }
 
 func TestCopyItem_NoName(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 
 		var req copyItemRequest
-		require.NoError(t, json.Unmarshal(body, &req))
+		if !assert.NoError(t, json.Unmarshal(body, &req)) {
+			return
+		}
 		assert.Empty(t, req.Name)
 		assert.Equal(t, "dest-id", req.ParentReference.ID)
 
-		w.Header().Set("Location", "https://monitor.example.com/status/def")
+		w.Header().Set("Location", "https://operations.contoso.sharepoint.com/status/def")
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer srv.Close()
@@ -1270,7 +1226,7 @@ func TestCopyItem_NoName(t *testing.T) {
 	result, err := client.CopyItem(t.Context(), driveid.New("d"), "item-1", "dest-id", "")
 	require.NoError(t, err)
 
-	assert.Equal(t, "https://monitor.example.com/status/def", result.MonitorURL)
+	assert.Equal(t, "https://operations.contoso.sharepoint.com/status/def", result.MonitorURL)
 }
 
 func TestCopyItem_MissingLocationHeader(t *testing.T) {
@@ -1286,24 +1242,17 @@ func TestCopyItem_MissingLocationHeader(t *testing.T) {
 }
 
 func TestCopyItem_NotFound(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("request-id", "req-copy-404")
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, `{"error":{"code":"itemNotFound"}}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	_, err := client.CopyItem(t.Context(), driveid.New("d"), "nonexistent", "dest-id", "name.txt")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNotFound)
+	assertGraphCallError(t, http.StatusNotFound, "req-copy-404", "itemNotFound", func(client *Client) error {
+		_, err := client.CopyItem(t.Context(), driveid.New("d"), "nonexistent", "dest-id", "name.txt")
+		return err
+	}, ErrNotFound)
 }
 
 func TestPollCopyStatus_Completed(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"status": "completed",
 			"percentageComplete": 100.0,
 			"resourceId": "new-item-id"
@@ -1316,7 +1265,7 @@ func TestPollCopyStatus_Completed(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "completed", status.Status)
-	assert.Equal(t, 100.0, status.PercentageComplete)
+	assert.InDelta(t, 100.0, status.PercentageComplete, 0.0)
 	assert.Equal(t, "new-item-id", status.ResourceID)
 }
 
@@ -1324,7 +1273,7 @@ func TestPollCopyStatus_InProgress(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"status": "inProgress",
 			"percentageComplete": 45.5,
 			"resourceId": ""
@@ -1337,7 +1286,7 @@ func TestPollCopyStatus_InProgress(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "inProgress", status.Status)
-	assert.Equal(t, 45.5, status.PercentageComplete)
+	assert.InDelta(t, 45.5, status.PercentageComplete, 0.0)
 	assert.Empty(t, status.ResourceID)
 }
 
@@ -1345,7 +1294,7 @@ func TestPollCopyStatus_Failed(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"status": "failed",
 			"percentageComplete": 0,
 			"resourceId": ""
@@ -1369,7 +1318,7 @@ func TestListChildrenRecursive_FlatFolder(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"value": [
 				{"id":"f1","name":"a.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"folder-root","driveId":"d"},"file":{"mimeType":"text/plain"},"size":100},
 				{"id":"f2","name":"b.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"folder-root","driveId":"d"},"file":{"mimeType":"text/plain"},"size":200}
@@ -1396,14 +1345,14 @@ func TestListChildrenRecursive_NestedFolders(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 
 		if strings.Contains(r.URL.Path, "/items/root-folder/children") {
-			fmt.Fprint(w, `{
+			writeTestResponse(t, w, `{
 				"value": [
 					{"id":"f1","name":"file1.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root-folder","driveId":"d"},"file":{"mimeType":"text/plain"}},
 					{"id":"sub1","name":"subdir","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root-folder","driveId":"d"},"folder":{"childCount":1}}
 				]
 			}`)
 		} else if strings.Contains(r.URL.Path, "/items/sub1/children") {
-			fmt.Fprint(w, `{
+			writeTestResponse(t, w, `{
 				"value": [
 					{"id":"f2","name":"nested.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"sub1","driveId":"d"},"file":{"mimeType":"text/plain"}}
 				]
@@ -1440,19 +1389,19 @@ func TestListChildrenRecursive_DeeplyNested(t *testing.T) {
 
 		switch {
 		case strings.Contains(r.URL.Path, "/items/root-folder/children"):
-			fmt.Fprint(w, `{
+			writeTestResponse(t, w, `{
 				"value": [
 					{"id":"sub1","name":"level1","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root-folder","driveId":"d"},"folder":{"childCount":1}}
 				]
 			}`)
 		case strings.Contains(r.URL.Path, "/items/sub1/children"):
-			fmt.Fprint(w, `{
+			writeTestResponse(t, w, `{
 				"value": [
 					{"id":"sub2","name":"level2","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"sub1","driveId":"d"},"folder":{"childCount":1}}
 				]
 			}`)
 		case strings.Contains(r.URL.Path, "/items/sub2/children"):
-			fmt.Fprint(w, `{
+			writeTestResponse(t, w, `{
 				"value": [
 					{"id":"f1","name":"deep.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"sub2","driveId":"d"},"file":{"mimeType":"text/plain"}}
 				]
@@ -1472,18 +1421,9 @@ func TestListChildrenRecursive_DeeplyNested(t *testing.T) {
 }
 
 func TestListChildrenRecursive_EmptyFolder(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"value": []}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	items, err := client.ListChildrenRecursive(t.Context(), driveid.New("d"), "empty-folder")
-	require.NoError(t, err)
-
-	assert.Empty(t, items)
+	assertEmptyGraphSliceCall(t, func(client *Client) ([]Item, error) {
+		return client.ListChildrenRecursive(t.Context(), driveid.New("d"), "empty-folder")
+	})
 }
 
 func TestListChildrenRecursive_WithPagination(t *testing.T) {
@@ -1495,14 +1435,14 @@ func TestListChildrenRecursive_WithPagination(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 
 		if strings.Contains(r.URL.Path, "/items/root-folder/children") && !strings.Contains(r.URL.RawQuery, "page=2") {
-			fmt.Fprintf(w, `{
+			writeTestResponsef(t, w, `{
 				"value": [
 					{"id":"f1","name":"file1.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root-folder","driveId":"d"},"file":{"mimeType":"text/plain"}}
 				],
 				"@odata.nextLink": "%s/drives/d/items/root-folder/children?$top=200&page=2"
 			}`, srv.URL)
 		} else if strings.Contains(r.URL.RawQuery, "page=2") {
-			fmt.Fprint(w, `{
+			writeTestResponse(t, w, `{
 				"value": [
 					{"id":"f2","name":"file2.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root-folder","driveId":"d"},"file":{"mimeType":"text/plain"}}
 				]
@@ -1526,7 +1466,7 @@ func TestListChildrenRecursive_ErrorPropagation(t *testing.T) {
 		if strings.Contains(r.URL.Path, "/items/root-folder/children") {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, `{
+			writeTestResponse(t, w, `{
 				"value": [
 					{"id":"sub1","name":"subdir","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root-folder","driveId":"d"},"folder":{"childCount":1}}
 				]
@@ -1534,7 +1474,7 @@ func TestListChildrenRecursive_ErrorPropagation(t *testing.T) {
 		} else {
 			w.Header().Set("request-id", "req-err")
 			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprint(w, `{"error":{"code":"internalError","message":"something broke"}}`)
+			writeTestResponse(t, w, `{"error":{"code":"internalError","message":"something broke"}}`)
 		}
 	}))
 	defer srv.Close()
@@ -1546,16 +1486,12 @@ func TestListChildrenRecursive_ErrorPropagation(t *testing.T) {
 }
 
 func TestListChildrenRecursive_MaxDepth(t *testing.T) {
-	origMax := maxRecursionDepth
-	maxRecursionDepth = 2
-	defer func() { maxRecursionDepth = origMax }()
-
 	// Each folder contains one subfolder — will exceed depth 2.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		// Always return a single subfolder, creating infinite depth.
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"value": [
 				{"id":"sub","name":"deep","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"p","driveId":"d"},"folder":{"childCount":1}}
 			]
@@ -1564,6 +1500,8 @@ func TestListChildrenRecursive_MaxDepth(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
+	client.maxRecursionDepth = 2
+
 	_, err := client.ListChildrenRecursive(t.Context(), driveid.New("d"), "root-folder")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exceeded max depth")
@@ -1580,7 +1518,7 @@ func TestListItemPermissions_ReadOnly(t *testing.T) {
 		assert.Contains(t, r.URL.Path, "/permissions")
 
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"value": [{"id": "perm-1", "roles": ["read"]}]}`)
+		writeTestResponse(t, w, `{"value": [{"id": "perm-1", "roles": ["read"]}]}`)
 	}))
 	defer srv.Close()
 
@@ -1595,7 +1533,7 @@ func TestListItemPermissions_ReadOnly(t *testing.T) {
 func TestListItemPermissions_Writable(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"value": [{"id": "perm-1", "roles": ["read", "write"]}]}`)
+		writeTestResponse(t, w, `{"value": [{"id": "perm-1", "roles": ["read", "write"]}]}`)
 	}))
 	defer srv.Close()
 
@@ -1610,7 +1548,7 @@ func TestListItemPermissions_Error(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, `{"error":{"code":"itemNotFound","message":"not found"}}`)
+		writeTestResponse(t, w, `{"error":{"code":"itemNotFound","message":"not found"}}`)
 	}))
 	defer srv.Close()
 
@@ -1648,7 +1586,7 @@ func TestListRecycleBinItems_Success(t *testing.T) {
 		assert.Equal(t, http.MethodGet, r.Method)
 		assert.Contains(t, r.URL.Path, "/drives/000000000000000d/special/recyclebin/children")
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"value": [
 				{
 					"id": "deleted-1",
@@ -1685,30 +1623,16 @@ func TestListRecycleBinItems_Success(t *testing.T) {
 }
 
 func TestListRecycleBinItems_Empty(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"value": []}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	items, err := client.ListRecycleBinItems(t.Context(), driveid.New("d"))
-	require.NoError(t, err)
-	assert.Empty(t, items)
+	assertEmptyGraphSliceCall(t, func(client *Client) ([]Item, error) {
+		return client.ListRecycleBinItems(t.Context(), driveid.New("d"))
+	})
 }
 
 func TestListRecycleBinItems_NotFound(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("request-id", "req-rb-404")
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, `{"error":{"code":"itemNotFound"}}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	_, err := client.ListRecycleBinItems(t.Context(), driveid.New("d"))
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNotFound)
+	assertGraphCallError(t, http.StatusNotFound, "req-rb-404", "itemNotFound", func(client *Client) error {
+		_, err := client.ListRecycleBinItems(t.Context(), driveid.New("d"))
+		return err
+	}, ErrNotFound)
 }
 
 // --- RestoreItem tests ---
@@ -1718,7 +1642,7 @@ func TestRestoreItem_Success(t *testing.T) {
 		assert.Equal(t, http.MethodPost, r.Method)
 		assert.Equal(t, "/drives/000000000000000d/items/deleted-1/restore", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "restored-1",
 			"name": "old-file.txt",
 			"size": 1024,
@@ -1739,29 +1663,15 @@ func TestRestoreItem_Success(t *testing.T) {
 }
 
 func TestRestoreItem_NotFound(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("request-id", "req-restore-404")
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, `{"error":{"code":"itemNotFound"}}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	_, err := client.RestoreItem(t.Context(), driveid.New("d"), "nonexistent")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNotFound)
+	assertGraphCallError(t, http.StatusNotFound, "req-restore-404", "itemNotFound", func(client *Client) error {
+		_, err := client.RestoreItem(t.Context(), driveid.New("d"), "nonexistent")
+		return err
+	}, ErrNotFound)
 }
 
 func TestRestoreItem_Conflict(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("request-id", "req-restore-409")
-		w.WriteHeader(http.StatusConflict)
-		fmt.Fprint(w, `{"error":{"code":"nameAlreadyExists"}}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	_, err := client.RestoreItem(t.Context(), driveid.New("d"), "conflict-item")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrConflict)
+	assertGraphCallError(t, http.StatusConflict, "req-restore-409", "nameAlreadyExists", func(client *Client) error {
+		_, err := client.RestoreItem(t.Context(), driveid.New("d"), "conflict-item")
+		return err
+	}, ErrConflict)
 }

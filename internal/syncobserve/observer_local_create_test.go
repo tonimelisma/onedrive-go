@@ -72,7 +72,7 @@ func TestWatch_NewDirectoryWatched(t *testing.T) {
 
 	// Create a subdirectory and a file inside it.
 	subDir := filepath.Join(dir, "subdir")
-	require.NoError(t, os.Mkdir(subDir, 0o755))
+	require.NoError(t, os.Mkdir(subDir, 0o700))
 
 	// Give the watcher time to add the new directory watch.
 	time.Sleep(200 * time.Millisecond)
@@ -127,10 +127,10 @@ func TestWatch_NewDirectoryPreExistingFiles(t *testing.T) {
 	// create event fires, and the file is already present when handleCreate
 	// runs scanNewDirectory).
 	subDir := filepath.Join(dir, "pre-populated")
-	require.NoError(t, os.MkdirAll(subDir, 0o755))
+	require.NoError(t, os.MkdirAll(subDir, 0o700))
 
 	preExistingFile := filepath.Join(subDir, "already-here.txt")
-	require.NoError(t, os.WriteFile(preExistingFile, []byte("pre-existing"), 0o644))
+	require.NoError(t, os.WriteFile(preExistingFile, []byte("pre-existing"), 0o600))
 
 	// Collect events. The file should appear without a separate fsnotify event
 	// because scanNewDirectory picks it up during directory creation handling.
@@ -179,10 +179,10 @@ func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
 
 	// Create a 3-level nested directory structure with a file at the bottom.
 	deepDir := filepath.Join(dir, "level1", "level2", "level3")
-	require.NoError(t, os.MkdirAll(deepDir, 0o755))
+	require.NoError(t, os.MkdirAll(deepDir, 0o700))
 
 	deepFile := filepath.Join(deepDir, "deep-file.txt")
-	require.NoError(t, os.WriteFile(deepFile, []byte("deep content"), 0o644))
+	require.NoError(t, os.WriteFile(deepFile, []byte("deep content"), 0o600))
 
 	// Collect events — look for the deep file and all intermediate directories.
 	foundDirs := make(map[string]bool)
@@ -261,7 +261,7 @@ func TestWatch_HashFailureStillEmitsCreate(t *testing.T) {
 
 	t.Cleanup(func() {
 		// Restore permissions so TempDir cleanup works.
-		_ = os.Chmod(path, 0o644)
+		assert.NoError(t, os.Chmod(path, 0o600))
 	})
 
 	var ev synctypes.ChangeEvent

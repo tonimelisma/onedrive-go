@@ -118,11 +118,11 @@ func TestE2E_DriveList_AccountsNoDrives(t *testing.T) {
 	perTestHome := t.TempDir()
 
 	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
-	require.NoError(t, os.MkdirAll(perTestDataDir, 0o755))
+	require.NoError(t, os.MkdirAll(perTestDataDir, 0o700))
 	copyTokenFile(t, testDataDir, perTestDataDir)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, os.WriteFile(cfgPath, []byte("# no drives configured\n"), 0o644))
+	require.NoError(t, os.WriteFile(cfgPath, []byte("# no drives configured\n"), 0o600))
 
 	env := map[string]string{
 		"XDG_DATA_HOME": perTestData,
@@ -182,12 +182,12 @@ func TestE2E_DriveList_ConfigTolerance(t *testing.T) {
 	perTestHome := t.TempDir()
 
 	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
-	require.NoError(t, os.MkdirAll(perTestDataDir, 0o755))
+	require.NoError(t, os.MkdirAll(perTestDataDir, 0o700))
 	copyTokenFile(t, testDataDir, perTestDataDir)
 
 	content := fmt.Sprintf("unknown_global_key = \"should warn not crash\"\n\n[%q]\nsync_dir = %q\n", drive, syncDir)
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o600))
 
 	env := map[string]string{
 		"XDG_DATA_HOME": perTestData,
@@ -216,12 +216,12 @@ func TestE2E_Status_ConfigTolerance(t *testing.T) {
 	perTestHome := t.TempDir()
 
 	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
-	require.NoError(t, os.MkdirAll(perTestDataDir, 0o755))
+	require.NoError(t, os.MkdirAll(perTestDataDir, 0o700))
 	copyTokenFile(t, testDataDir, perTestDataDir)
 
 	content := fmt.Sprintf("unknown_global_key = \"should warn not crash\"\n\n[%q]\nsync_dir = %q\n", drive, syncDir)
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o600))
 
 	env := map[string]string{
 		"XDG_DATA_HOME": perTestData,
@@ -253,12 +253,12 @@ func TestE2E_Whoami_ConfigTolerance(t *testing.T) {
 	perTestHome := t.TempDir()
 
 	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
-	require.NoError(t, os.MkdirAll(perTestDataDir, 0o755))
+	require.NoError(t, os.MkdirAll(perTestDataDir, 0o700))
 	copyTokenFile(t, testDataDir, perTestDataDir)
 
 	content := fmt.Sprintf("unknown_global_key = \"should warn not crash\"\n\n[%q]\nsync_dir = %q\n", drive, syncDir)
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o600))
 
 	env := map[string]string{
 		"XDG_DATA_HOME": perTestData,

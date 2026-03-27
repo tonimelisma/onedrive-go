@@ -165,21 +165,14 @@ func validateChunkSize(s string) []error {
 	return nil
 }
 
-var validTransferOrders = map[string]bool{
-	"default":   true,
-	"size_asc":  true,
-	"size_desc": true,
-	"name_asc":  true,
-	"name_desc": true,
-}
-
 func validateTransferOrder(order string) []error {
-	if !validTransferOrders[order] {
+	switch order {
+	case "default", "size_asc", "size_desc", "name_asc", "name_desc":
+		return nil
+	default:
 		return []error{fmt.Errorf(
 			"transfer_order: must be one of default, size_asc, size_desc, name_asc, name_desc; got %q", order)}
 	}
-
-	return nil
 }
 
 func validateBandwidthSchedule(entries []BandwidthScheduleEntry) []error {
@@ -356,29 +349,26 @@ func validateLogging(l *LoggingConfig) []error {
 	return errs
 }
 
-var validLogLevels = map[string]bool{
-	"debug": true,
-	"info":  true,
-	"warn":  true,
-	"error": true,
-}
+const (
+	logLevelDebug = "debug"
+	logLevelInfo  = "info"
+	logLevelWarn  = "warn"
+	logLevelError = "error"
+	logFormatAuto = "auto"
+	logFormatText = "text"
+	logFormatJSON = "json"
+)
 
 func validateLogLevel(level string) []error {
-	if !validLogLevels[level] {
+	if !isValidLogLevel(level) {
 		return []error{fmt.Errorf("log_level: must be one of debug, info, warn, error; got %q", level)}
 	}
 
 	return nil
 }
 
-var validLogFormats = map[string]bool{
-	"auto": true,
-	"text": true,
-	"json": true,
-}
-
 func validateLogFormat(format string) []error {
-	if !validLogFormats[format] {
+	if !isValidLogFormat(format) {
 		return []error{fmt.Errorf("log_format: must be one of auto, text, json; got %q", format)}
 	}
 
@@ -394,24 +384,43 @@ func validateNetwork(n *NetworkConfig) []error {
 	return errs
 }
 
-// deprecatedTransferKeys maps old config key names to their replacements.
-var deprecatedTransferKeys = map[string]string{
-	"parallel_downloads": "transfer_workers",
-	"parallel_uploads":   "transfer_workers",
-	"parallel_checkers":  "check_workers",
-}
-
 // WarnDeprecatedKeys checks raw TOML metadata for deprecated config keys and
 // logs a warning for each one found. The deprecated keys still parse without
 // error (they're in knownGlobalKeys) but their values are silently ignored.
 func WarnDeprecatedKeys(md map[string]any, logger *slog.Logger) {
-	for oldKey, newKey := range deprecatedTransferKeys {
+	for oldKey, newKey := range deprecatedTransferKeys() {
 		if _, ok := md[oldKey]; ok {
 			logger.Warn("deprecated config key (value ignored)",
 				slog.String("key", oldKey),
 				slog.String("replacement", newKey),
 			)
 		}
+	}
+}
+
+func isValidLogLevel(level string) bool {
+	switch level {
+	case logLevelDebug, logLevelInfo, logLevelWarn, logLevelError:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidLogFormat(format string) bool {
+	switch format {
+	case logFormatAuto, logFormatText, logFormatJSON:
+		return true
+	default:
+		return false
+	}
+}
+
+func deprecatedTransferKeys() map[string]string {
+	return map[string]string{
+		"parallel_downloads": "transfer_workers",
+		"parallel_uploads":   "transfer_workers",
+		"parallel_checkers":  "check_workers",
 	}
 }
 

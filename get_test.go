@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"testing"
 
@@ -39,7 +38,7 @@ func TestCountRemoteFiles_PopulatesCache(t *testing.T) {
 
 	session := makeTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		// Root listing: two files, no folders.
-		fmt.Fprintf(w, `{"value":[
+		writeTestResponsef(t, w, `{"value":[
 			{"id":"f1","name":"a.txt"},
 			{"id":"f2","name":"b.txt"}
 		]}`)
@@ -67,7 +66,7 @@ func TestCountRemoteFiles_SurvivesSubdirError(t *testing.T) {
 		callCount++
 		if callCount == 1 {
 			// Root listing: one file + one folder
-			fmt.Fprintf(w, `{"value":[
+			writeTestResponsef(t, w, `{"value":[
 				{"id":"f1","name":"a.txt"},
 				{"id":"d1","name":"subdir","folder":{}}
 			]}`)
@@ -76,7 +75,7 @@ func TestCountRemoteFiles_SurvivesSubdirError(t *testing.T) {
 		}
 		// Subdir listing fails
 		w.WriteHeader(http.StatusForbidden)
-		fmt.Fprintf(w, `{"error":{"code":"accessDenied"}}`)
+		writeTestResponsef(t, w, `{"error":{"code":"accessDenied"}}`)
 	}))
 
 	state := &downloadState{
@@ -187,8 +186,8 @@ func TestGetFolderJSONOutput_EmptyErrors(t *testing.T) {
 	var decoded map[string]interface{}
 	require.NoError(t, json.Unmarshal(data, &decoded))
 
-	assert.Equal(t, float64(1), decoded["folders_created"])
-	assert.Equal(t, float64(0), decoded["total_size"])
+	assert.InDelta(t, 1, decoded["folders_created"], 0)
+	assert.InDelta(t, 0, decoded["total_size"], 0)
 }
 
 // Validates: R-1.2.4

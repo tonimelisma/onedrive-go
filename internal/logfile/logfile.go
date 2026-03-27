@@ -2,6 +2,8 @@
 package logfile
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,14 +22,21 @@ const (
 func Open(path string, retentionDays int) (*os.File, error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, dirPerm); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create log directory: %w", err)
 	}
 
 	if retentionDays > 0 {
 		cleanOld(dir, retentionDays)
 	}
 
-	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, filePerm)
+	// The path is the CLI-selected log destination after config/flag resolution;
+	// logfile owns the append/open mechanics, not user-input validation.
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, filePerm) //nolint:gosec // CLI/config path boundary.
+	if err != nil {
+		return nil, fmt.Errorf("open log file: %w", err)
+	}
+
+	return file, nil
 }
 
 // cleanOld deletes *.log files in dir that are older than retentionDays.
@@ -50,7 +59,10 @@ func cleanOld(dir string, retentionDays int) {
 		}
 
 		if info.ModTime().Before(cutoff) {
-			_ = os.Remove(filepath.Join(dir, entry.Name()))
+			removeErr := os.Remove(filepath.Join(dir, entry.Name()))
+			if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				fmt.Fprintf(os.Stderr, "warning: removing old log file %s: %v\n", entry.Name(), removeErr)
+			}
 		}
 	}
 }

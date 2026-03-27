@@ -6,14 +6,15 @@ package sync
 // that the engine tests compile without change.
 
 import (
-	"io"
 	"log/slog"
+	"os"
 	stdsync "sync"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
@@ -39,6 +40,12 @@ func testLogger(t *testing.T) *slog.Logger {
 	return synctest.TestLogger(t)
 }
 
+func setTestDirPermissions(t *testing.T, path string, perms os.FileMode) {
+	t.Helper()
+
+	require.NoError(t, os.Chmod(path, perms))
+}
+
 // newTestManager creates a syncstore.SyncStore backed by a temp directory for use in
 // engine tests that need database access (shortcut storage, etc.).
 func newTestManager(t *testing.T) *syncstore.SyncStore {
@@ -48,17 +55,13 @@ func newTestManager(t *testing.T) *syncstore.SyncStore {
 
 // discardLogger returns a logger that writes to nowhere, suitable for tests.
 func discardLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
+	return slog.New(slog.DiscardHandler)
 }
 
-// controllableClock returns a nowFunc and a function to advance the clock.
-// The clock starts at a fixed epoch to keep tests deterministic.
-//
-//nolint:unparam // advance is used by scope_test.go callers; here only nowFunc is needed
-func controllableClock() (nowFunc func() time.Time, advance func(d time.Duration)) {
+// controllableClock returns a nowFunc fixed at a known epoch to keep tests deterministic.
+func controllableClock() func() time.Time {
 	now := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	return func() time.Time { return now },
-		func(d time.Duration) { now = now.Add(d) }
+	return func() time.Time { return now }
 }
 
 // enospcWatcher returns ENOSPC after N successful Add calls.

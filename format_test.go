@@ -2,10 +2,12 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestFormatSize(t *testing.T) {
@@ -49,6 +51,26 @@ func TestFormatTime(t *testing.T) {
 	})
 }
 
+type errWriter struct{}
+
+func (errWriter) Write(_ []byte) (int, error) {
+	return 0, errors.New("write failed")
+}
+
+func TestStatusf_RecordsWriterError(t *testing.T) {
+	t.Parallel()
+
+	cc := &CLIContext{
+		StatusWriter: errWriter{},
+	}
+
+	cc.Statusf("hello")
+
+	err := cc.StatusError()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "write status output")
+}
+
 func TestPrintTable(t *testing.T) {
 	var buf bytes.Buffer
 
@@ -58,7 +80,7 @@ func TestPrintTable(t *testing.T) {
 		{"folder/", "0 B", "Feb  1 09:00"},
 	}
 
-	printTable(&buf, headers, rows)
+	require.NoError(t, printTable(&buf, headers, rows))
 	output := buf.String()
 
 	assert.Contains(t, output, "NAME")

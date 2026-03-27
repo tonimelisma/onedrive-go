@@ -18,6 +18,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
+const permissionsRemoteDriveID = "remote-drive-1"
+
 // ---------------------------------------------------------------------------
 // Mock permission checker
 // ---------------------------------------------------------------------------
@@ -107,13 +109,13 @@ func newTestEngineWithPerms(
 	dbPath := filepath.Join(tmpDir, "test.db")
 	syncRoot := filepath.Join(tmpDir, "sync")
 
-	require.NoError(t, os.MkdirAll(syncRoot, 0o755))
+	require.NoError(t, os.MkdirAll(syncRoot, 0o700))
 
 	mock := &engineMockClient{}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	driveID := driveid.New(engineTestDriveID)
 
-	eng, err := NewEngine(&synctypes.EngineConfig{
+	eng, err := NewEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:      dbPath,
 		SyncRoot:    syncRoot,
 		DriveID:     driveID,
@@ -143,7 +145,7 @@ func newTestEngineWithPerms(
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
-		assert.NoError(t, eng.Close())
+		assert.NoError(t, eng.Close(t.Context()))
 	})
 
 	return eng, bl, syncRoot
@@ -153,7 +155,7 @@ func newTestEngineWithPerms(
 func TestHandle403_ReadOnlyFolder_RecordsIssueAtBoundary(t *testing.T) {
 	t.Parallel()
 
-	remoteDriveID := "remote-drive-1"
+	remoteDriveID := permissionsRemoteDriveID
 
 	checker := &mockPermChecker{
 		perms: map[string][]graph.Permission{
@@ -248,7 +250,7 @@ func TestHandle403_ReadOnlyFolder_RecordsIssueAtBoundary(t *testing.T) {
 func TestHandle403_TransientError_NoSuppression(t *testing.T) {
 	t.Parallel()
 
-	remoteDriveID := "remote-drive-1"
+	remoteDriveID := permissionsRemoteDriveID
 
 	checker := &mockPermChecker{
 		perms: map[string][]graph.Permission{
@@ -289,7 +291,7 @@ func TestHandle403_TransientError_NoSuppression(t *testing.T) {
 func TestHandle403_WholeShareReadOnly_BoundaryAtRoot(t *testing.T) {
 	t.Parallel()
 
-	remoteDriveID := "remote-drive-1"
+	remoteDriveID := permissionsRemoteDriveID
 
 	checker := &mockPermChecker{
 		perms: map[string][]graph.Permission{
@@ -331,7 +333,7 @@ func TestHandle403_WholeShareReadOnly_BoundaryAtRoot(t *testing.T) {
 func TestHandle403_APIFailure_FailOpen(t *testing.T) {
 	t.Parallel()
 
-	remoteDriveID := "remote-drive-1"
+	remoteDriveID := permissionsRemoteDriveID
 
 	checker := &mockPermChecker{
 		err: fmt.Errorf("network error"),
@@ -389,7 +391,7 @@ func TestHandle403_NoShortcutMatch_Ignored(t *testing.T) {
 func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 	t.Parallel()
 
-	remoteDriveID := "remote-drive-1"
+	remoteDriveID := permissionsRemoteDriveID
 
 	checker := &mockPermChecker{
 		perms: map[string][]graph.Permission{
@@ -479,7 +481,7 @@ func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 func TestHandle403_ExistingRemoteScope_AvoidsAPICall(t *testing.T) {
 	t.Parallel()
 
-	remoteDriveID := "remote-drive-1"
+	remoteDriveID := permissionsRemoteDriveID
 	checker := &mockPermChecker{
 		perms: map[string][]graph.Permission{
 			driveid.New(remoteDriveID).String() + ":parent-folder-id": {{ID: "p1", Roles: []string{"read"}}},
@@ -526,7 +528,7 @@ func TestHandle403_ExistingRemoteScope_AvoidsAPICall(t *testing.T) {
 func TestRecheckPermissions_APIFailure_FailsOpenAndReleasesScope(t *testing.T) {
 	t.Parallel()
 
-	remoteDriveID := "remote-drive-1"
+	remoteDriveID := permissionsRemoteDriveID
 	checker := &mockPermChecker{
 		err: fmt.Errorf("graph unavailable"),
 	}
@@ -587,7 +589,7 @@ func TestRecheckPermissions_APIFailure_FailsOpenAndReleasesScope(t *testing.T) {
 func TestRecheckPermissions_StillDenied_NoChange(t *testing.T) {
 	t.Parallel()
 
-	remoteDriveID := "remote-drive-1"
+	remoteDriveID := permissionsRemoteDriveID
 
 	checker := &mockPermChecker{
 		perms: map[string][]graph.Permission{
@@ -694,7 +696,7 @@ func TestRecheckPermissions_UnresolvableIssues_FailOpenClearsStaleBoundaries(t *
 func TestRecheckPermissions_UnresolvedItemID_FailOpenClearsStaleBoundary(t *testing.T) {
 	t.Parallel()
 
-	remoteDriveID := "remote-drive-1"
+	remoteDriveID := permissionsRemoteDriveID
 
 	checker := &mockPermChecker{}
 
@@ -770,7 +772,7 @@ func TestDeniedPrefixes_RemoteScopesOnly(t *testing.T) {
 func TestHandle403_FolderNotFound_RecordsIssue(t *testing.T) {
 	t.Parallel()
 
-	remoteDriveID := "remote-drive-1"
+	remoteDriveID := permissionsRemoteDriveID
 
 	checker := &mockPermChecker{
 		perms:      map[string][]graph.Permission{},
@@ -813,7 +815,7 @@ func TestHandle403_FolderNotFound_RecordsIssue(t *testing.T) {
 func TestHandle403_UnresolvedParent_FallsBackToRoot(t *testing.T) {
 	t.Parallel()
 
-	remoteDriveID := "remote-drive-1"
+	remoteDriveID := permissionsRemoteDriveID
 
 	checker := &mockPermChecker{
 		perms: map[string][]graph.Permission{
@@ -856,7 +858,7 @@ func TestHandle403_UnresolvedParent_FallsBackToRoot(t *testing.T) {
 func TestRecheckPermissions_StillDenied_KeepsDeniedPrefix(t *testing.T) {
 	t.Parallel()
 
-	remoteDriveID := "remote-drive-1"
+	remoteDriveID := permissionsRemoteDriveID
 
 	checker := &mockPermChecker{
 		perms: map[string][]graph.Permission{
@@ -962,7 +964,7 @@ func TestHandle403_ShortcutUsesRemoteDrive(t *testing.T) {
 func TestWalkPermissionBoundary_StopsAtShortcutRoot(t *testing.T) {
 	t.Parallel()
 
-	remoteDriveID := "remote-drive-1"
+	remoteDriveID := permissionsRemoteDriveID
 
 	// All folders including root are read-only. The walk MUST stop at the
 	// shortcut root and not try to go above it.
@@ -1024,7 +1026,7 @@ func TestWalkPermissionBoundary_StopsAtShortcutRoot(t *testing.T) {
 func TestRecheckPermissions_MultipleIssues_PartialResolution(t *testing.T) {
 	t.Parallel()
 
-	remoteDriveID := "remote-drive-1"
+	remoteDriveID := permissionsRemoteDriveID
 
 	checker := &mockPermChecker{
 		perms: map[string][]graph.Permission{
@@ -1110,12 +1112,12 @@ func TestHandleLocalPermission_DirectoryLevel(t *testing.T) {
 
 	// Create a directory, then make it inaccessible.
 	deniedDir := filepath.Join(syncRoot, "Private")
-	require.NoError(t, os.MkdirAll(deniedDir, 0o755))
-	require.NoError(t, os.Chmod(deniedDir, 0o000))
+	require.NoError(t, os.MkdirAll(deniedDir, 0o700))
+	setTestDirPermissions(t, deniedDir, 0o000)
 
 	t.Cleanup(func() {
 		// Restore permissions so t.TempDir cleanup works.
-		_ = os.Chmod(deniedDir, 0o755)
+		setTestDirPermissions(t, deniedDir, 0o700)
 	})
 
 	// Set up watch state so the test can install an active scope block.
@@ -1152,7 +1154,7 @@ func TestHandleLocalPermission_FileLevel(t *testing.T) {
 
 	// Create a directory (accessible) with an inaccessible file.
 	dir := filepath.Join(syncRoot, "Docs")
-	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.MkdirAll(dir, 0o700))
 
 	// Parent dir is accessible — this should be file-level only.
 	r := &synctypes.WorkerResult{
@@ -1185,7 +1187,7 @@ func TestRecheckLocalPermissions_Restored(t *testing.T) {
 	ctx := t.Context()
 
 	deniedDir := filepath.Join(syncRoot, "Private")
-	require.NoError(t, os.MkdirAll(deniedDir, 0o755))
+	require.NoError(t, os.MkdirAll(deniedDir, 0o700))
 
 	// Set up watch state so the test can install an active scope block.
 	newTestWatchState(t, eng)
@@ -1232,11 +1234,11 @@ func TestRecheckLocalPermissions_StillDenied(t *testing.T) {
 	ctx := t.Context()
 
 	deniedDir := filepath.Join(syncRoot, "Private")
-	require.NoError(t, os.MkdirAll(deniedDir, 0o755))
-	require.NoError(t, os.Chmod(deniedDir, 0o000))
+	require.NoError(t, os.MkdirAll(deniedDir, 0o700))
+	setTestDirPermissions(t, deniedDir, 0o000)
 
 	t.Cleanup(func() {
-		_ = os.Chmod(deniedDir, 0o755)
+		setTestDirPermissions(t, deniedDir, 0o700)
 	})
 
 	newTestWatchState(t, eng)

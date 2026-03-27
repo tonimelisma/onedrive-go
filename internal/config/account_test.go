@@ -63,12 +63,13 @@ func TestSaveAndLoadAccountProfile(t *testing.T) {
 	err := SaveAccountProfile(cid, profile)
 	require.NoError(t, err)
 
-	loaded, err := LoadAccountProfile(cid)
+	loaded, found, err := LookupAccountProfile(cid)
 	require.NoError(t, err)
+	require.True(t, found)
 	require.NotNil(t, loaded)
 	assert.Equal(t, "u123", loaded.UserID)
 	assert.Equal(t, "Alice Smith", loaded.DisplayName)
-	assert.Equal(t, "", loaded.OrgName)
+	assert.Empty(t, loaded.OrgName)
 	assert.Equal(t, "abc123", loaded.PrimaryDriveID)
 }
 
@@ -76,8 +77,9 @@ func TestLoadAccountProfile_NotFound(t *testing.T) {
 	setTestDataDir(t)
 	cid := driveid.MustCanonicalID("personal:nobody@example.com")
 
-	profile, err := LoadAccountProfile(cid)
-	assert.NoError(t, err)
+	profile, found, err := LookupAccountProfile(cid)
+	require.NoError(t, err)
+	assert.False(t, found)
 	assert.Nil(t, profile)
 }
 
@@ -95,8 +97,9 @@ func TestSaveAccountProfile_Business(t *testing.T) {
 	err := SaveAccountProfile(cid, profile)
 	require.NoError(t, err)
 
-	loaded, err := LoadAccountProfile(cid)
+	loaded, found, err := LookupAccountProfile(cid)
 	require.NoError(t, err)
+	require.True(t, found)
 	require.NotNil(t, loaded)
 	assert.Equal(t, "Contoso Ltd", loaded.OrgName)
 }
@@ -112,8 +115,9 @@ func TestSaveAccountProfile_Overwrites(t *testing.T) {
 		UserID: "new", DisplayName: "New Name", PrimaryDriveID: "new-id",
 	}))
 
-	loaded, err := LoadAccountProfile(cid)
+	loaded, found, err := LookupAccountProfile(cid)
 	require.NoError(t, err)
+	require.True(t, found)
 	assert.Equal(t, "new", loaded.UserID)
 	assert.Equal(t, "New Name", loaded.DisplayName)
 }

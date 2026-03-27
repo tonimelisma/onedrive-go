@@ -207,7 +207,7 @@ func TestNewRootCmd_AuthSkipsConfig(t *testing.T) {
 			sub.SetContext(t.Context())
 
 			err = cmd.PersistentPreRunE(sub, nil)
-			assert.NoError(t, err, "%s should skip config loading", name)
+			require.NoError(t, err, "%s should skip config loading", name)
 
 			// Verify CLIContext is populated (Phase 1 runs for all commands).
 			cc := cliContextFrom(sub.Context())
@@ -472,7 +472,7 @@ func TestCLIFlags_PopulatedByPersistentPreRunE(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"--verbose", "status"})
 
-	_ = cmd.Execute()
+	require.NoError(t, cmd.Execute())
 
 	statusSub, _, err := cmd.Find([]string{"status"})
 	require.NoError(t, err)
@@ -783,14 +783,14 @@ func TestBuildLogger_FromRawConfigLogLevel(t *testing.T) {
 func TestSingleDrive_Empty(t *testing.T) {
 	flags := CLIFlags{}
 	got, err := flags.SingleDrive()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Empty(t, got)
 }
 
 func TestSingleDrive_One(t *testing.T) {
 	flags := CLIFlags{Drive: []string{"personal:user@example.com"}}
 	got, err := flags.SingleDrive()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, "personal:user@example.com", got)
 }
 
@@ -975,7 +975,7 @@ func TestBuildLoggerDual_WithLogFile(t *testing.T) {
 	logger.Info("test log message", slog.String("key", "value"))
 	require.NoError(t, closer.Close())
 
-	data, err := os.ReadFile(logPath)
+	data, err := os.ReadFile(logPath) //nolint:gosec // Test log path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "test log message")
 	assert.Contains(t, string(data), "key")
@@ -1000,7 +1000,7 @@ func TestBuildLoggerDual_FileGetsJSON(t *testing.T) {
 	logger.Info("json check")
 	require.NoError(t, closer.Close())
 
-	data, err := os.ReadFile(logPath)
+	data, err := os.ReadFile(logPath) //nolint:gosec // Test log path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 
 	// File output should be JSON.
@@ -1029,7 +1029,7 @@ func TestBuildLoggerDual_IndependentLevels(t *testing.T) {
 	logger.Debug("debug for file only")
 	require.NoError(t, closer.Close())
 
-	data, err := os.ReadFile(logPath)
+	data, err := os.ReadFile(logPath) //nolint:gosec // Test log path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "debug for file only",
 		"file handler should receive debug messages regardless of CLI flags")

@@ -32,12 +32,12 @@ func TestE2E_ZeroByteFileSync(t *testing.T) {
 
 	testFolder := fmt.Sprintf("e2e-zero-byte-%d", time.Now().UnixNano())
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Create a zero-byte file locally and upload.
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "empty.txt"), []byte{}, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "empty.txt"), []byte{}, 0o600))
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Verify it exists remotely (poll for eventual consistency).
@@ -64,14 +64,14 @@ func TestE2E_UnicodeFilenameRoundtrip(t *testing.T) {
 
 	testFolder := fmt.Sprintf("e2e-unicode-%d", time.Now().UnixNano())
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Create file with accented characters and upload.
 	unicodeName := "café résumé.txt"
 	content := "Unicode content: àéîõü"
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, unicodeName), []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, unicodeName), []byte(content), 0o600))
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Verify it exists remotely via ls (poll for eventual consistency).
@@ -98,14 +98,14 @@ func TestE2E_InvalidFilenameRejection(t *testing.T) {
 
 	testFolder := fmt.Sprintf("e2e-invalid-name-%d", time.Now().UnixNano())
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Create a valid file (for folder structure).
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "valid.txt"), []byte("valid"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "valid.txt"), []byte("valid"), 0o600))
 	// Create an invalid file (CON is a Windows reserved name).
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "CON"), []byte("invalid"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "CON"), []byte("invalid"), 0o600))
 
 	// Upload.
 	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
@@ -133,19 +133,19 @@ func TestE2E_RapidFileChurn(t *testing.T) {
 
 	testFolder := fmt.Sprintf("e2e-churn-%d", time.Now().UnixNano())
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	filePath := filepath.Join(localDir, "churn.txt")
 
 	// Create → modify → modify → delete → re-create with final content.
-	require.NoError(t, os.WriteFile(filePath, []byte("v1"), 0o644))
-	require.NoError(t, os.WriteFile(filePath, []byte("v2"), 0o644))
-	require.NoError(t, os.WriteFile(filePath, []byte("v3"), 0o644))
+	require.NoError(t, os.WriteFile(filePath, []byte("v1"), 0o600))
+	require.NoError(t, os.WriteFile(filePath, []byte("v2"), 0o600))
+	require.NoError(t, os.WriteFile(filePath, []byte("v3"), 0o600))
 	require.NoError(t, os.Remove(filePath))
 	finalContent := "final version after churn"
-	require.NoError(t, os.WriteFile(filePath, []byte(finalContent), 0o644))
+	require.NoError(t, os.WriteFile(filePath, []byte(finalContent), 0o600))
 
 	// Upload.
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
@@ -169,7 +169,7 @@ func TestE2E_ConflictDetectionAndResolution(t *testing.T) {
 
 	testFolder := fmt.Sprintf("e2e-conflict-%d", time.Now().UnixNano())
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 

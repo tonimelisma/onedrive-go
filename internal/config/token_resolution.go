@@ -49,8 +49,8 @@ func tokenAccountCID(cid driveid.CanonicalID) driveid.CanonicalID {
 // to find its parent account's canonical ID. Returns a zero CID if the
 // drive metadata is missing or lacks an account_canonical_id.
 func resolveSharedTokenCID(cid driveid.CanonicalID) driveid.CanonicalID {
-	meta, err := LoadDriveMetadata(cid)
-	if err != nil || meta == nil || meta.AccountCanonicalID == "" {
+	meta, found, err := LookupDriveMetadata(cid)
+	if err != nil || !found || meta.AccountCanonicalID == "" {
 		return driveid.CanonicalID{}
 	}
 

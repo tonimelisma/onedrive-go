@@ -23,7 +23,7 @@ func TestSyncStore_PickTrialCandidate_ReturnsOldestScopeBlockedFailure(t *testin
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
-	sk := synctypes.SKQuotaOwn
+	sk := synctypes.SKQuotaOwn()
 
 	// Insert two scope-blocked failures (next_retry_at = NULL, scope_key matches).
 	mgr.SetNowFunc(func() time.Time { return time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC) })
@@ -47,8 +47,9 @@ func TestSyncStore_PickTrialCandidate_ReturnsOldestScopeBlockedFailure(t *testin
 	}, nil))
 
 	// PickTrialCandidate should return a.txt (earliest first_seen_at).
-	row, err := mgr.PickTrialCandidate(ctx, sk)
+	row, found, err := mgr.PickTrialCandidate(ctx, sk)
 	require.NoError(t, err)
+	require.True(t, found, "should find a scope-blocked failure")
 	require.NotNil(t, row, "should find a scope-blocked failure")
 	assert.Equal(t, "a.txt", row.Path)
 	assert.Equal(t, sk, row.ScopeKey)
@@ -61,7 +62,7 @@ func TestSyncStore_PickTrialCandidate_SkipsRetriedFailures(t *testing.T) {
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
-	sk := synctypes.SKQuotaOwn
+	sk := synctypes.SKQuotaOwn()
 
 	// Insert a failure WITH next_retry_at set (already being retried).
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
@@ -74,8 +75,9 @@ func TestSyncStore_PickTrialCandidate_SkipsRetriedFailures(t *testing.T) {
 	}, func(int) time.Duration { return time.Minute })) // sets next_retry_at
 
 	// PickTrialCandidate should return nil — no NULL next_retry_at rows.
-	row, err := mgr.PickTrialCandidate(ctx, sk)
+	row, found, err := mgr.PickTrialCandidate(ctx, sk)
 	require.NoError(t, err)
+	assert.False(t, found, "should not return failures with next_retry_at set")
 	assert.Nil(t, row, "should not return failures with next_retry_at set")
 }
 
@@ -86,8 +88,9 @@ func TestSyncStore_PickTrialCandidate_NoMatches(t *testing.T) {
 	ctx := context.Background()
 
 	// Empty table → nil, nil.
-	row, err := mgr.PickTrialCandidate(ctx, synctypes.SKQuotaOwn)
+	row, found, err := mgr.PickTrialCandidate(ctx, synctypes.SKQuotaOwn())
 	require.NoError(t, err)
+	assert.False(t, found)
 	assert.Nil(t, row)
 }
 
@@ -102,7 +105,7 @@ func TestSyncStore_SetScopeRetryAtNow_UnblocksScopeFailures(t *testing.T) {
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
-	sk := synctypes.SKQuotaOwn
+	sk := synctypes.SKQuotaOwn()
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
 	// Insert 2 scope-blocked (NULL next_retry_at) + 1 with next_retry_at set.
@@ -140,7 +143,7 @@ func TestSyncStore_SetScopeRetryAtNow_NoMatches(t *testing.T) {
 
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
-	affected, err := mgr.SetScopeRetryAtNow(ctx, synctypes.SKService, now)
+	affected, err := mgr.SetScopeRetryAtNow(ctx, synctypes.SKService(), now)
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), affected)
 }
@@ -156,7 +159,7 @@ func TestSyncStore_ReleaseScope(t *testing.T) {
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
-	sk := synctypes.SKQuotaOwn
+	sk := synctypes.SKQuotaOwn()
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
 	// Create a scope block.
@@ -209,7 +212,7 @@ func TestSyncStore_ReleaseScope_NoScopeBlock(t *testing.T) {
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
 	// Should not error even if scope block doesn't exist.
-	err := mgr.ReleaseScope(ctx, synctypes.SKService, now)
+	err := mgr.ReleaseScope(ctx, synctypes.SKService(), now)
 	require.NoError(t, err)
 }
 

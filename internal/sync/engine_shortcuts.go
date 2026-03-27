@@ -53,10 +53,12 @@ func (e *Engine) processShortcuts(
 	removedShortcutIDs := make(map[string]bool)
 
 	for i := range remoteEvents {
-		switch remoteEvents[i].Type { //nolint:exhaustive // only synctypes.ChangeShortcut and synctypes.ChangeDelete are relevant here
-		case synctypes.ChangeShortcut:
+		if remoteEvents[i].Type == synctypes.ChangeShortcut {
 			shortcutEvents = append(shortcutEvents, remoteEvents[i])
-		case synctypes.ChangeDelete:
+			continue
+		}
+
+		if remoteEvents[i].Type == synctypes.ChangeDelete {
 			removedShortcutIDs[remoteEvents[i].ItemID] = true
 		}
 	}
@@ -114,7 +116,7 @@ func (e *Engine) registerShortcuts(ctx context.Context, events []synctypes.Chang
 	for i := range events {
 		ev := &events[i]
 
-		existing, err := e.baseline.GetShortcut(ctx, ev.ItemID)
+		existing, found, err := e.baseline.GetShortcut(ctx, ev.ItemID)
 		if err != nil {
 			return fmt.Errorf("sync: checking shortcut %s: %w", ev.ItemID, err)
 		}
@@ -129,7 +131,7 @@ func (e *Engine) registerShortcuts(ctx context.Context, events []synctypes.Chang
 		}
 
 		// Preserve existing values on update.
-		if existing != nil {
+		if found {
 			sc.DriveType = existing.DriveType
 			sc.Observation = existing.Observation
 			sc.DiscoveredAt = existing.DiscoveredAt

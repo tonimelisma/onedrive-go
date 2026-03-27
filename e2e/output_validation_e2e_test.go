@@ -36,14 +36,14 @@ func TestE2E_Verify_JSON(t *testing.T) {
 
 	// Create files and sync.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "good.txt"), []byte("good"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "tamper.txt"), []byte("original"), 0o644))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "good.txt"), []byte("good"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "tamper.txt"), []byte("original"), 0o600))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Tamper with local file.
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "tamper.txt"), []byte("TAMPERED"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "tamper.txt"), []byte("TAMPERED"), 0o600))
 
 	// Verify --json should detect mismatch.
 	stdout, _, verifyErr := runCLIWithConfigAllowError(t, cfgPath, env, "verify", "--json")
@@ -105,8 +105,8 @@ func TestE2E_Sync_QuietMode(t *testing.T) {
 
 	// Create a file.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "quiet.txt"), []byte("quiet test"), 0o644))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "quiet.txt"), []byte("quiet test"), 0o600))
 
 	// Sync with --quiet.
 	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--quiet", "--upload-only", "--force")
@@ -141,12 +141,12 @@ func TestE2E_Sync_MultiDriveReport(t *testing.T) {
 
 	// Create files in both sync dirs.
 	localDir1 := filepath.Join(syncDir1, testFolder1)
-	require.NoError(t, os.MkdirAll(localDir1, 0o755))
+	require.NoError(t, os.MkdirAll(localDir1, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir1, "multi1.txt"), []byte("drive 1 content"), 0o644))
 
 	localDir2 := filepath.Join(syncDir2, testFolder2)
-	require.NoError(t, os.MkdirAll(localDir2, 0o755))
+	require.NoError(t, os.MkdirAll(localDir2, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir2, "multi2.txt"), []byte("drive 2 content"), 0o644))
 

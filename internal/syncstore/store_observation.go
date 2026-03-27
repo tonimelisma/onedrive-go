@@ -1,4 +1,4 @@
-// store_observation.go — Remote state observation persistence for SyncStore.
+// Package syncstore persists sync baseline, observation, conflict, failure, and scope state.
 //
 // Contents:
 //   - CommitObservation:        atomically persist remote state + advance delta token
@@ -168,14 +168,17 @@ func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx *sql.Tx, driveID,
 
 // GetRemoteStateByPath looks up the active remote_state row for a path+drive
 // combination. Uses the idx_remote_state_active_path partial index, which
-// excludes deleted/pending_delete rows. Returns (nil, nil) when no active
-// row exists — the caller must check for nil.
+// excludes deleted/pending_delete rows.
 //
 // Used by:
 //   - isFailureResolved: to detect whether a download failure's underlying
 //     remote state has been resolved (synced/deleted/filtered).
 //   - createEventFromDB: to build full-fidelity ChangeEvents for the retrier.
-func (m *SyncStore) GetRemoteStateByPath(ctx context.Context, path string, driveID driveid.ID) (*synctypes.RemoteStateRow, error) {
+func (m *SyncStore) GetRemoteStateByPath(
+	ctx context.Context,
+	path string,
+	driveID driveid.ID,
+) (*synctypes.RemoteStateRow, bool, error) {
 	var (
 		row      synctypes.RemoteStateRow
 		parentID sql.NullString
@@ -193,10 +196,10 @@ func (m *SyncStore) GetRemoteStateByPath(ctx context.Context, path string, drive
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, nil
+			return nil, false, nil
 		}
 
-		return nil, fmt.Errorf("sync: GetRemoteStateByPath %s: %w", path, err)
+		return nil, false, fmt.Errorf("sync: GetRemoteStateByPath %s: %w", path, err)
 	}
 
 	row.ParentID = parentID.String
@@ -212,7 +215,7 @@ func (m *SyncStore) GetRemoteStateByPath(ctx context.Context, path string, drive
 		row.Mtime = mtime.Int64
 	}
 
-	return &row, nil
+	return &row, true, nil
 }
 
 // insertRemoteState inserts a new remote_state row for a newly observed item.

@@ -24,6 +24,13 @@ const defaultMaxHashRetries = 2
 // `range maxRetries + 1` loop. Any value above this is almost certainly a bug.
 const maxSaneRetries = 100
 
+// Download temp files may contain credentials or personal data, so both the
+// partial file and its parent directory stay owner-only.
+const (
+	downloadTempDirPerms  = 0o700
+	downloadTempFilePerms = 0o600
+)
+
 // resolveMaxRetries returns the effective max hash retries, applying the
 // default and overflow-safe upper bound.
 func resolveMaxRetries(configured int) int {
@@ -149,7 +156,7 @@ func (tm *TransferManager) DownloadToFile(
 	}
 
 	// Ensure parent directory exists.
-	if err := os.MkdirAll(filepath.Dir(targetPath), 0o700); err != nil { //nolint:mnd // owner-only dir perms
+	if err := os.MkdirAll(filepath.Dir(targetPath), downloadTempDirPerms); err != nil {
 		return nil, fmt.Errorf("creating parent dir for %s: %w", targetPath, err)
 	}
 
@@ -247,7 +254,11 @@ func (tm *TransferManager) downloadWithHashRetry(
 		}
 
 		if attempt < maxRetries {
-			os.Remove(partialPath)
+			if cleanupErr := os.Remove(partialPath); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrNotExist) {
+				tm.logger.Warn("failed to remove partial download before retry",
+					slog.String("path", partialPath),
+					slog.String("error", cleanupErr.Error()))
+			}
 			tm.logger.Warn("download hash mismatch, retrying",
 				slog.String("target", targetPath),
 				slog.Int("attempt", attempt+1),
@@ -284,12 +295,17 @@ func (tm *TransferManager) downloadToPartial(
 ) (string, int64, error) {
 	// Attempt resume: open existing .partial, then stat the handle.
 	if rd, ok := tm.downloads.(RangeDownloader); ok {
-		f, openErr := os.OpenFile(partialPath, os.O_APPEND|os.O_WRONLY, 0o600) //nolint:mnd // owner-only
+		// Partial path is derived from the managed local sync target.
+		f, openErr := os.OpenFile(partialPath, os.O_APPEND|os.O_WRONLY, downloadTempFilePerms) //nolint:gosec // Managed sync path.
 		if openErr == nil {
 			info, statErr := f.Stat()
 			if statErr != nil || info.Size() == 0 {
 				// Empty or unreadable — close and start fresh.
-				f.Close()
+				if closeErr := f.Close(); closeErr != nil {
+					tm.logger.Warn("failed to close partial file before fresh download",
+						slog.String("path", partialPath),
+						slog.String("error", closeErr.Error()))
+				}
 			} else {
 				return tm.resumeDownloadFromFile(ctx, driveID, itemID, rd, f, partialPath, info.Size())
 			}
@@ -305,9 +321,11 @@ func (tm *TransferManager) downloadToPartial(
 // removePartialIfNotCanceled removes a .partial file unless the context was
 // canceled (preserving the partial for future resume). Extracted to deduplicate
 // the identical pattern in freshDownload and resumeDownload.
-func removePartialIfNotCanceled(ctx context.Context, path string) {
+func (tm *TransferManager) removePartialIfNotCanceled(ctx context.Context, path string) {
 	if ctx.Err() == nil {
-		os.Remove(path)
+		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			tm.logger.Warn("failed to remove partial file after interrupted transfer")
+		}
 	}
 }
 
@@ -315,7 +333,8 @@ func removePartialIfNotCanceled(ctx context.Context, path string) {
 func (tm *TransferManager) freshDownload(
 	ctx context.Context, driveID driveid.ID, itemID, partialPath string,
 ) (string, int64, error) {
-	f, err := os.OpenFile(partialPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600) //nolint:mnd // owner-only file perms
+	// Partial path is derived from the managed local sync target.
+	f, err := os.OpenFile(partialPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, downloadTempFilePerms) //nolint:gosec // Managed sync path.
 	if err != nil {
 		return "", 0, fmt.Errorf("creating partial file %s: %w", partialPath, err)
 	}
@@ -331,15 +350,19 @@ func (tm *TransferManager) freshDownload(
 		}
 
 		// Preserve partial on context cancellation so resume can reuse it.
-		removePartialIfNotCanceled(ctx, partialPath)
+		tm.removePartialIfNotCanceled(ctx, partialPath)
 
 		return "", 0, fmt.Errorf("downloading to %s: %w", partialPath, err)
 	}
 
 	if err := f.Close(); err != nil {
 		// Close failure is always an error regardless of context — the file is corrupt.
-		os.Remove(partialPath)
-		return "", 0, fmt.Errorf("closing partial file %s: %w", partialPath, err)
+		baseErr := fmt.Errorf("closing partial file %s: %w", partialPath, err)
+		if removeErr := os.Remove(partialPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return "", 0, errors.Join(baseErr, fmt.Errorf("removing corrupt partial file %s: %w", partialPath, removeErr))
+		}
+
+		return "", 0, baseErr
 	}
 
 	localHash := base64.StdEncoding.EncodeToString(h.Sum(nil))
@@ -365,7 +388,7 @@ func (tm *TransferManager) resumeDownloadFromFile(
 		tm.logger.Warn("failed to close partial file after range download",
 			slog.String("path", partialPath), slog.String("error", closeErr.Error()))
 
-		removePartialIfNotCanceled(ctx, partialPath)
+		tm.removePartialIfNotCanceled(ctx, partialPath)
 
 		return tm.freshDownload(ctx, driveID, itemID, partialPath)
 	}
@@ -374,7 +397,7 @@ func (tm *TransferManager) resumeDownloadFromFile(
 		tm.logger.Warn("range download failed, falling back to fresh download",
 			slog.String("path", partialPath), slog.String("error", err.Error()))
 
-		removePartialIfNotCanceled(ctx, partialPath)
+		tm.removePartialIfNotCanceled(ctx, partialPath)
 
 		return tm.freshDownload(ctx, driveID, itemID, partialPath)
 	}
@@ -383,7 +406,7 @@ func (tm *TransferManager) resumeDownloadFromFile(
 
 	localHash, err := tm.hashFunc(partialPath)
 	if err != nil {
-		removePartialIfNotCanceled(ctx, partialPath)
+		tm.removePartialIfNotCanceled(ctx, partialPath)
 
 		return "", 0, fmt.Errorf("hashing resumed partial file %s: %w", partialPath, err)
 	}
@@ -446,7 +469,8 @@ func (tm *TransferManager) UploadFile(
 		mtime = info.ModTime()
 	}
 
-	f, err := os.Open(localPath)
+	// Upload path is the caller-selected local source file.
+	f, err := os.Open(localPath) //nolint:gosec // Caller-selected source path.
 	if err != nil {
 		return nil, fmt.Errorf("opening %s for upload: %w", localPath, err)
 	}
@@ -513,7 +537,7 @@ func (tm *TransferManager) sessionUpload(
 	driveStr := driveID.String()
 
 	// Check for existing session.
-	rec, loadErr := tm.sessionStore.Load(driveStr, localPath)
+	rec, found, loadErr := tm.sessionStore.Load(driveStr, localPath)
 	if loadErr != nil {
 		tm.logger.Warn("failed to load upload session",
 			slog.String("path", localPath),
@@ -521,7 +545,7 @@ func (tm *TransferManager) sessionUpload(
 		)
 	}
 
-	if rec != nil && rec.FileHash == localHash {
+	if found && rec.FileHash == localHash {
 		tm.logger.Debug("attempting upload session resume", slog.String("path", localPath))
 
 		session := &graph.UploadSession{UploadURL: graph.UploadURL(rec.SessionURL)}

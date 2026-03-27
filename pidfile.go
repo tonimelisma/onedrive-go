@@ -29,48 +29,66 @@ func writePIDFile(path string) (cleanup func(), err error) {
 		return nil, fmt.Errorf("creating PID file directory: %w", mkdirErr)
 	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, pidFilePermissions)
+	// PID file path is derived from the managed data directory.
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, pidFilePermissions) //nolint:gosec // Managed data-dir path.
 	if err != nil {
 		return nil, fmt.Errorf("opening PID file: %w", err)
 	}
 
 	// Non-blocking exclusive lock — fails immediately if another process holds it.
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
+		baseErr := fmt.Errorf("another sync --watch is already running (could not lock %s)", path)
+		if closeErr := closePIDFile(f); closeErr != nil {
+			return nil, errors.Join(baseErr, closeErr)
+		}
 
-		return nil, fmt.Errorf("another sync --watch is already running (could not lock %s)", path)
+		return nil, baseErr
 	}
 
 	// Truncate and write current PID.
 	if err := f.Truncate(0); err != nil {
-		f.Close()
+		baseErr := fmt.Errorf("truncating PID file: %w", err)
+		if closeErr := closePIDFile(f); closeErr != nil {
+			return nil, errors.Join(baseErr, closeErr)
+		}
 
-		return nil, fmt.Errorf("truncating PID file: %w", err)
+		return nil, baseErr
 	}
 
 	if _, err := fmt.Fprintf(f, "%d\n", os.Getpid()); err != nil {
-		f.Close()
+		baseErr := fmt.Errorf("writing PID file: %w", err)
+		if closeErr := closePIDFile(f); closeErr != nil {
+			return nil, errors.Join(baseErr, closeErr)
+		}
 
-		return nil, fmt.Errorf("writing PID file: %w", err)
+		return nil, baseErr
 	}
 
 	// Sync to disk so readers see the PID immediately.
 	if err := f.Sync(); err != nil {
-		f.Close()
+		baseErr := fmt.Errorf("syncing PID file: %w", err)
+		if closeErr := closePIDFile(f); closeErr != nil {
+			return nil, errors.Join(baseErr, closeErr)
+		}
 
-		return nil, fmt.Errorf("syncing PID file: %w", err)
+		return nil, baseErr
 	}
 
 	return func() {
-		os.Remove(path)
-		f.Close()
+		if cleanupErr := removePathIfExists(path); cleanupErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: %v\n", cleanupErr)
+		}
+		if closeErr := closePIDFile(f); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: %v\n", closeErr)
+		}
 	}, nil
 }
 
 // readPIDFile reads the PID from the given file path. Returns 0 and an error
 // if the file does not exist or contains invalid content.
 func readPIDFile(path string) (int, error) {
-	data, err := os.ReadFile(path)
+	// PID file path is derived from the managed data directory.
+	data, err := os.ReadFile(path) //nolint:gosec // Managed data-dir path.
 	if err != nil {
 		return 0, fmt.Errorf("reading PID file: %w", err)
 	}
@@ -104,7 +122,9 @@ func sendSIGHUP(pidPath string) error {
 	// Check if the process is alive with signal 0.
 	if err := proc.Signal(syscall.Signal(0)); err != nil {
 		// Process is dead — clean up stale PID file.
-		os.Remove(pidPath)
+		if removeErr := removePathIfExists(pidPath); removeErr != nil {
+			return errors.Join(fmt.Errorf("daemon (PID %d) is not running", pid), removeErr)
+		}
 
 		return fmt.Errorf("daemon (PID %d) is not running (stale PID file removed)", pid)
 	}
