@@ -1,5 +1,7 @@
 # Engine Event Loop Refactoring
 
+> Historical note: This document captures the pre-implementation proposal state for the event-loop refactor. The current implemented architecture is documented in `spec/design/sync-engine.md` and `spec/design/sync-execution.md`. Names such as `ScopeGate`, `drainWorkerResults`, and `onScopeClear` are preserved here for historical context and are no longer the current runtime model.
+
 ## 1. Why This Refactoring
 
 ### Context

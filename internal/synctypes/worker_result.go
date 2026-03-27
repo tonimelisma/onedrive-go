@@ -9,7 +9,7 @@ import (
 // WorkerResult reports the outcome of a single action execution. The engine
 // reads these from the Results channel, classifies them, and calls
 // depGraph.Complete. Failed items are recorded in sync_failures for retry
-// by the drain-loop retrier.
+// by the engine retry sweep.
 type WorkerResult struct {
 	Path       string
 	DriveID    driveid.ID

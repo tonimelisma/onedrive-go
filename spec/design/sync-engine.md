@@ -179,9 +179,16 @@ single-threaded within one select loop, and ready actions are collected into an
 outbox slice before being sent to `readyCh`. This prevents deadlock that would
 occur if result handling tried to synchronously send to a full `readyCh` while
 workers tried to synchronously send to a full results channel. One-shot mode
-still uses `drainWorkerResults()` because it has no long-lived watch loop.
+uses the same internal result loop with a one-shot configuration instead of a
+separate drain subsystem.
 
-`recordFailure()` sets category based on `delayFn`: non-nil → `"transient"`, nil → `"actionable"`. Populates `scope_key` via `ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)` — returns a typed `ScopeKey`, serialized to wire format via `String()` for SQLite storage. Delegates to `SyncStore.RecordFailure()` which computes `next_retry_at` via the `delayFn`. The drain-loop retrier sweeps `sync_failures` for due items and re-injects them via buffer → planner → DepGraph.
+`recordFailure()` sets category based on `delayFn`: non-nil → `"transient"`, nil → `"actionable"`. Populates `scope_key` via `ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)` — returns a typed `ScopeKey`, serialized to wire format via `String()` for SQLite storage. Delegates to `SyncStore.RecordFailure()` which computes `next_retry_at` via the `delayFn`. The engine retry sweep scans `sync_failures` for due items and re-injects them via buffer → planner → DepGraph.
+
+**Scope lifecycle terminology**:
+- `activateScope()` means "this blocking condition is now active" — persist the scope row, refresh watch-mode active scope state, and arm trial timing if the scope is trial-driven.
+- `extendScopeTrial()` means "the scope is still blocked" — update `next_trial_at`, `trial_interval`, and `trial_count` for an existing scope.
+- `releaseScope()` means "the blocking condition resolved" — delete the persisted scope row, delete the actionable boundary row for that scope, and make held descendants retryable immediately.
+- `discardScope()` means "the blocked subtree/work is gone" — delete the persisted scope row and delete all scoped failure rows without retrying them.
 
 ### ScopeState
 
@@ -353,5 +360,5 @@ In watch mode, the planner-level big-delete check is disabled (`threshold=MaxInt
 
 ### Rationale
 
-- **Crash recovery requires explicit bridging**: On restart after crash, `ResetInProgressStates` resets `remote_state` items stuck mid-execution to pending, AND creates `sync_failures` entries so the drain-loop retrier's bootstrap sweep can rediscover them. This is necessary because the delta token was already advanced before execution — items that crashed mid-execution won't appear in the next delta response. The planner is idempotent for items that DO appear in observations, but crash recovery items need the `sync_failures` → retrier → buffer → planner path.
+- **Crash recovery requires explicit bridging**: On restart after crash, `ResetInProgressStates` resets `remote_state` items stuck mid-execution to pending, AND creates `sync_failures` entries so the engine retry sweep can rediscover them. This is necessary because the delta token was already advanced before execution — items that crashed mid-execution won't appear in the next delta response. The planner is idempotent for items that DO appear in observations, but crash recovery items need the `sync_failures` → retrier → buffer → planner path.
 - **Always use Orchestrator, even for single drive**: N=1 means one DriveRunner — same logic, no special case. Prevents "works for N=1 but breaks for N=2" class of bugs.

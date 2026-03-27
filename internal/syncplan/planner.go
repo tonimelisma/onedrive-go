@@ -776,8 +776,8 @@ func MakeAction(actionType synctypes.ActionType, view *synctypes.PathView) synct
 	}
 
 	// Shortcut scope enrichment (D-5): flow shortcut identity from
-	// observation through to the action so ScopeGate can distinguish
-	// own-drive vs shortcut-scoped failures (R-6.8.12, R-6.8.13).
+	// observation through to the action so active-scope matching can
+	// distinguish own-drive vs shortcut-scoped failures (R-6.8.12, R-6.8.13).
 	if view.Remote != nil && view.Remote.RemoteDriveID != "" {
 		a.TargetShortcutKey = view.Remote.RemoteDriveID + ":" + view.Remote.RemoteItemID
 		a.TargetDriveID = driveid.New(view.Remote.RemoteDriveID)

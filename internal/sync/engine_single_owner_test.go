@@ -18,10 +18,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
-// newPhase4Engine creates a minimal engine with syncdispatch.DepGraph plus the
-// watch-mode active-scope working set for testing Phase 4 methods. Uses a real
-// syncstore.SyncStore (in-memory SQLite).
-func newPhase4Engine(t *testing.T) *Engine {
+// newSingleOwnerEngine creates a minimal engine with syncdispatch.DepGraph plus the
+// watch-mode active-scope working set for testing the single-owner engine
+// methods. Uses a real syncstore.SyncStore (in-memory SQLite).
+func newSingleOwnerEngine(t *testing.T) *Engine {
 	t.Helper()
 
 	mock := &engineMockClient{}
@@ -38,7 +38,7 @@ func newPhase4Engine(t *testing.T) *Engine {
 
 func TestEngine_CascadeRecordAndComplete_SingleAction(t *testing.T) {
 	t.Parallel()
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	// Add a single action to the graph.
@@ -67,7 +67,7 @@ func TestEngine_CascadeRecordAndComplete_SingleAction(t *testing.T) {
 
 func TestEngine_CascadeRecordAndComplete_WithDependents(t *testing.T) {
 	t.Parallel()
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -103,13 +103,13 @@ func TestEngine_CascadeRecordAndComplete_WithDependents(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// onScopeClear
+// releaseScope
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.10.11
-func TestEngine_OnScopeClear(t *testing.T) {
+func TestEngine_ReleaseScope(t *testing.T) {
 	t.Parallel()
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -133,7 +133,7 @@ func TestEngine_OnScopeClear(t *testing.T) {
 	}, nil))
 
 	// Clear the scope.
-	eng.onScopeClear(ctx, sk)
+	require.NoError(t, eng.releaseScope(ctx, sk))
 
 	// Scope block should be gone.
 	assert.False(t, isTestScopeBlocked(eng, sk))
@@ -146,10 +146,10 @@ func TestEngine_OnScopeClear(t *testing.T) {
 }
 
 // Validates: R-2.10.11
-func TestEngine_OnScopeClear_SignalsImmediateRetrySweep(t *testing.T) {
+func TestEngine_ReleaseScope_SignalsImmediateRetrySweep(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 	scopeKey := synctypes.SKQuotaOwn
 
@@ -168,13 +168,113 @@ func TestEngine_OnScopeClear_SignalsImmediateRetrySweep(t *testing.T) {
 		ErrMsg:    "scope blocked",
 	}, nil))
 
-	eng.onScopeClear(ctx, scopeKey)
+	require.NoError(t, eng.releaseScope(ctx, scopeKey))
 
 	select {
 	case <-eng.watch.retryTimerCh:
 	case <-time.After(time.Second):
-		require.Fail(t, "onScopeClear should signal retryTimerCh for due-now failures")
+		require.Fail(t, "releaseScope should signal retryTimerCh for due-now failures")
 	}
+}
+
+func TestEngine_AssertCurrentScopeInvariants_DetectsDuplicateActiveScopes(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	ctx := context.Background()
+	scopeKey := synctypes.SKService
+
+	eng.watch.activeScopes = []synctypes.ScopeBlock{
+		{Key: scopeKey, IssueType: synctypes.IssueServiceOutage},
+		{Key: scopeKey, IssueType: synctypes.IssueServiceOutage},
+	}
+
+	err := eng.assertCurrentScopeInvariants(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate active scope key")
+}
+
+func TestEngine_AssertCurrentScopeInvariants_DetectsOrphanedPermissionScope(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	ctx := context.Background()
+	scopeKey := synctypes.SKPermRemote("Shared/Docs")
+
+	require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
+		Key:       scopeKey,
+		IssueType: synctypes.IssuePermissionDenied,
+		BlockedAt: eng.nowFn(),
+	}))
+
+	err := eng.assertCurrentScopeInvariants(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "has no actionable boundary row")
+}
+
+func TestEngine_ReleaseAndDiscardScope_MaintainInvariantsInOneShotMode(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	t.Run("release", func(t *testing.T) {
+		eng := newSingleOwnerEngine(t)
+		scopeKey := synctypes.SKPermRemote("Shared/Docs")
+
+		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
+			Key:       scopeKey,
+			IssueType: synctypes.IssuePermissionDenied,
+			BlockedAt: eng.nowFn(),
+		}))
+		require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+			Path:      "Shared/Docs",
+			DriveID:   driveid.New("drive1"),
+			Direction: synctypes.DirectionUpload,
+			Category:  synctypes.CategoryActionable,
+			IssueType: synctypes.IssuePermissionDenied,
+			ScopeKey:  scopeKey,
+			ErrMsg:    "read-only boundary",
+		}, nil))
+		require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+			Path:      "Shared/Docs/file.txt",
+			DriveID:   driveid.New("drive1"),
+			Direction: synctypes.DirectionUpload,
+			Category:  synctypes.CategoryTransient,
+			ScopeKey:  scopeKey,
+			ErrMsg:    "held by scope",
+		}, nil))
+
+		eng.watch = nil
+
+		require.NoError(t, eng.releaseScope(ctx, scopeKey))
+		require.NoError(t, eng.assertReleasedScope(ctx, scopeKey))
+		require.NoError(t, eng.assertCurrentScopeInvariants(ctx))
+	})
+
+	t.Run("discard", func(t *testing.T) {
+		eng := newSingleOwnerEngine(t)
+		scopeKey := synctypes.SKQuotaShortcut("drive:item")
+
+		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
+			Key:       scopeKey,
+			IssueType: synctypes.IssueQuotaExceeded,
+			BlockedAt: eng.nowFn(),
+		}))
+		require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+			Path:      "Shared/Docs/file.txt",
+			DriveID:   driveid.New("drive1"),
+			Direction: synctypes.DirectionUpload,
+			Category:  synctypes.CategoryTransient,
+			ScopeKey:  scopeKey,
+			ErrMsg:    "held by scope",
+		}, nil))
+
+		eng.watch = nil
+
+		require.NoError(t, eng.discardScope(ctx, scopeKey))
+		require.NoError(t, eng.assertDiscardedScope(ctx, scopeKey))
+		require.NoError(t, eng.assertCurrentScopeInvariants(ctx))
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -183,7 +283,7 @@ func TestEngine_OnScopeClear_SignalsImmediateRetrySweep(t *testing.T) {
 
 func TestEngine_AdmitReady_OneShotMode_NoActiveScopes(t *testing.T) {
 	t.Parallel()
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	// nil watch → one-shot mode, all actions pass through.
@@ -202,7 +302,7 @@ func TestEngine_AdmitReady_OneShotMode_NoActiveScopes(t *testing.T) {
 
 func TestEngine_AdmitReady_ScopeBlocked(t *testing.T) {
 	t.Parallel()
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	// Set up a scope block.
@@ -237,7 +337,7 @@ func TestEngine_AdmitReady_ScopeBlocked(t *testing.T) {
 
 func TestEngine_ProcessAndRoute_Success(t *testing.T) {
 	t.Parallel()
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -273,7 +373,7 @@ func TestEngine_ProcessAndRoute_Success(t *testing.T) {
 
 func TestEngine_ProcessAndRoute_FailureCascadesChildren(t *testing.T) {
 	t.Parallel()
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -321,7 +421,7 @@ func TestEngine_ProcessAndRoute_FailureCascadesChildren(t *testing.T) {
 // Validates: R-2.10.5
 func TestCascadeFailAndComplete_Grandchildren(t *testing.T) {
 	t.Parallel()
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -367,7 +467,7 @@ func TestCascadeFailAndComplete_Grandchildren(t *testing.T) {
 // Validates: R-6.8.9
 func TestCompleteSubtree_Grandchildren(t *testing.T) {
 	t.Parallel()
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -411,7 +511,7 @@ func TestCompleteSubtree_Grandchildren(t *testing.T) {
 // Validates: R-2.10.5
 func TestCascadeFailAndComplete_Diamond(t *testing.T) {
 	t.Parallel()
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -499,7 +599,7 @@ func TestDepGraph_DoneClosesWhenAllComplete(t *testing.T) {
 func TestRetrierSweep_BatchLimit(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -565,7 +665,7 @@ func TestRetrierSweep_BatchLimit(t *testing.T) {
 func TestRetrierSweep_SkipsInFlight(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -626,7 +726,7 @@ func TestRetrierSweep_SkipsInFlight(t *testing.T) {
 func TestTrialDispatch_NoCandidates_ClearsScope(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 	now := eng.nowFn()
 
@@ -657,7 +757,7 @@ func TestTrialDispatch_NoCandidates_ClearsScope(t *testing.T) {
 func TestGetRemoteStateByPath_Found(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -694,7 +794,7 @@ func TestGetRemoteStateByPath_Found(t *testing.T) {
 func TestGetRemoteStateByPath_NotFound(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -707,7 +807,7 @@ func TestGetRemoteStateByPath_NotFound(t *testing.T) {
 func TestGetRemoteStateByPath_NullableFields(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -817,7 +917,7 @@ func TestRemoteStateToChangeEvent_Folder(t *testing.T) {
 func TestCreateEventFromDB_Upload_FileExists(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -854,7 +954,7 @@ func TestCreateEventFromDB_Upload_FileExists(t *testing.T) {
 func TestCreateEventFromDB_Upload_ReusesBaselineHashWhenMetadataMatches(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -899,7 +999,7 @@ func TestCreateEventFromDB_Upload_ReusesBaselineHashWhenMetadataMatches(t *testi
 func TestCreateEventFromDB_Upload_FileGone(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -921,7 +1021,7 @@ func TestCreateEventFromDB_Upload_FileGone(t *testing.T) {
 func TestCreateEventFromDB_Download_RemoteStateExists(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -963,7 +1063,7 @@ func TestCreateEventFromDB_Download_RemoteStateExists(t *testing.T) {
 func TestCreateEventFromDB_Download_RemoteStateGone(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -987,7 +1087,7 @@ func TestCreateEventFromDB_Download_RemoteStateGone(t *testing.T) {
 func TestIsFailureResolved_Download_Synced(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -1037,7 +1137,7 @@ func TestIsFailureResolved_Download_Synced(t *testing.T) {
 func TestIsFailureResolved_Download_NoRemoteState(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -1055,7 +1155,7 @@ func TestIsFailureResolved_Download_NoRemoteState(t *testing.T) {
 func TestIsFailureResolved_Download_StillPending(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -1084,7 +1184,7 @@ func TestIsFailureResolved_Download_StillPending(t *testing.T) {
 func TestIsFailureResolved_Upload_FileGone(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -1102,7 +1202,7 @@ func TestIsFailureResolved_Upload_FileGone(t *testing.T) {
 func TestIsFailureResolved_Upload_FileExists(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -1127,7 +1227,7 @@ func TestIsFailureResolved_Upload_FileExists(t *testing.T) {
 func TestIsFailureResolved_Delete_NoBaseline(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -1145,7 +1245,7 @@ func TestIsFailureResolved_Delete_NoBaseline(t *testing.T) {
 func TestIsFailureResolved_Delete_BaselineExists(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -1477,7 +1577,7 @@ func TestReobserve_Local_Gone(t *testing.T) {
 func TestRetrierSweep_FullFidelityEvents_D9(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -1534,7 +1634,7 @@ func TestRetrierSweep_FullFidelityEvents_D9(t *testing.T) {
 func TestRetrierSweep_SkipsResolvedFailures_D11(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
@@ -1745,7 +1845,7 @@ func TestTrialDispatch_ForwardsRetryAfter(t *testing.T) {
 func TestTrialDispatch_CleansStaleTrialPending(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 	now := eng.nowFn()
 

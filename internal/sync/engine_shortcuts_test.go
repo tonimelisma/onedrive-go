@@ -444,7 +444,7 @@ func TestHandleRemovedShortcuts_IgnoresNonShortcutDeletes(t *testing.T) {
 func TestHandleRemovedShortcuts_ClearsRemotePermissionScopesUnderRemovedShortcut(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := t.Context()
 
 	require.NoError(t, eng.baseline.UpsertShortcut(ctx, &synctypes.Shortcut{

@@ -1,4 +1,4 @@
-// scope_gate.go — stateless helpers for active scope evaluation.
+// active_scopes.go — stateless helpers for active scope evaluation.
 //
 // Watch-mode runtime ownership now lives in the engine event loop. This
 // package no longer owns a mirrored in-memory scope subsystem. Instead it

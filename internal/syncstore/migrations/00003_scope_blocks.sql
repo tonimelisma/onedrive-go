@@ -1,11 +1,11 @@
 -- +goose Up
 -- scope_blocks persists active scope-level failure blocks so they survive
--- crashes. ScopeGate loads all rows at startup and maintains a write-through
--- in-memory cache. Typically 0-5 rows.
+-- crashes. Watch startup loads these rows into the engine-owned active scope
+-- working set. Typically 0-5 rows.
 --
 -- No FK to sync_failures — intentional. sync_failures rows must survive
--- scope_blocks deletion (onScopeClear queries them AFTER deleting the
--- scope_blocks row). Per-item failures may also have empty scope_key.
+-- scope_blocks deletion during release/discard transactions. Per-item
+-- failures may also have empty scope_key.
 CREATE TABLE scope_blocks (
     scope_key      TEXT PRIMARY KEY,
     issue_type     TEXT NOT NULL,

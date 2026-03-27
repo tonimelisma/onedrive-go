@@ -8,7 +8,7 @@
 // needed — single-row operations are sufficient.
 //
 // Related files:
-//   - scope_gate.go:    stateless active-scope helper functions
+//   - active_scopes.go: stateless active-scope helper functions
 //   - scope.go:         ScopeKey, ParseScopeKey, ScopeKey.String()
 //   - migrations/:      00003_scope_blocks.sql creates the table
 package syncstore

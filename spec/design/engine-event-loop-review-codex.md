@@ -1,5 +1,7 @@
 # Engine Event Loop Refactor Review
 
+> Historical note: This review captures an earlier point-in-time evaluation of the event-loop refactor. The current implemented architecture is documented in `spec/design/sync-engine.md` and `spec/design/sync-execution.md`. Any references here to `ScopeGate`, `drainWorkerResults`, or `onScopeClear` describe superseded structure.
+
 ## Purpose
 
 This document records my independent point of view on the proposed sync-engine event-loop refactor.

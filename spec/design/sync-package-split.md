@@ -1,5 +1,10 @@
 # Sync Package Modularization
 
+> Historical note: this document describes the package-split plan before the
+> single-owner engine loop and active-scope refactor. Treat it as archival
+> context only. The current authoritative runtime ownership model lives in
+> [sync-engine.md](sync-engine.md) and [sync-execution.md](sync-execution.md).
+
 **Status**: Complete — review findings resolved
 **Depends on**: Tracker & engine pipeline redesign (complete)
 **Scope**: All files previously in `internal/sync/` — split into 7 focused packages

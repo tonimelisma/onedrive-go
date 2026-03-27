@@ -192,7 +192,7 @@ func (m *SyncStore) ResetAllFailures(ctx context.Context) error {
 //
 // After resetting remote_state, creates corresponding sync_failures entries
 // for items that transitioned to pending states. This bridges remote_state
-// to the sole retry mechanism (drain-loop retrier + sync_failures): without
+// to the sole retry mechanism (engine retry sweep + sync_failures): without
 // these entries, items stuck mid-execution during a crash would become
 // zombies — the delta token was already advanced, so no new events arrive,
 // and the retrier only queries sync_failures.

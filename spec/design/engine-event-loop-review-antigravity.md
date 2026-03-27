@@ -1,5 +1,7 @@
 # Engine Event Loop Refactoring: deep-dive Review
 
+> Historical note: This review captures an earlier analysis of the event-loop proposal before the single-owner implementation landed. The current implemented architecture is documented in `spec/design/sync-engine.md` and `spec/design/sync-execution.md`. References here to `ScopeGate`, `drainWorkerResults`, and `onScopeClear` are preserved only for historical context.
+
 This document provides an independent, deep-dive architectural review of the `engine-event-loop.md` refactoring plan. It examines the assumptions, verifies the logic against the current codebase, highlights edge cases, and provides specific recommendations to strengthen the final implementation.
 
 ## 1. Executive Summary

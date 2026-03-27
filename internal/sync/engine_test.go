@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -176,6 +177,7 @@ func newTestEngine(t *testing.T, mock *engineMockClient) (*Engine, string) {
 		Logger:    logger,
 	})
 	require.NoError(t, err, "NewEngine")
+	eng.assertScopeInvariants = true
 
 	t.Cleanup(func() {
 		assert.NoError(t, eng.Close(), "Engine.Close")
@@ -208,6 +210,7 @@ func newTestEngineWithLogger(t *testing.T, mock *engineMockClient, logger *slog.
 		Logger:    logger,
 	})
 	require.NoError(t, err, "NewEngine")
+	eng.assertScopeInvariants = true
 
 	t.Cleanup(func() {
 		assert.NoError(t, eng.Close(), "Engine.Close")
@@ -248,7 +251,10 @@ func newTestWatchState(t *testing.T, eng *Engine) {
 
 func setTestScopeBlock(t *testing.T, eng *Engine, block synctypes.ScopeBlock) {
 	t.Helper()
-	require.NoError(t, eng.activateScope(context.Background(), block))
+	require.NoError(t, eng.baseline.UpsertScopeBlock(context.Background(), &block))
+	if eng.watch != nil {
+		eng.watch.activeScopes = syncdispatch.UpsertScope(eng.watch.activeScopes, block)
+	}
 }
 
 func isTestScopeBlocked(eng *Engine, key synctypes.ScopeKey) bool {
@@ -3270,12 +3276,11 @@ func TestRunOnce_PathTooLong_RecordsIssue(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Issue #10: drainWorkerResults upload failure recording
+// Issue #10: one-shot engine-loop upload failure recording
 // ---------------------------------------------------------------------------
 
-// TestDrainWorkerResults_MultipleResults verifies the drain loop processes
-// all buffered results before returning when the channel is closed.
-func TestDrainWorkerResults_MultipleResults(t *testing.T) {
+// Validates: R-6.8.9
+func TestOneShotEngineLoop_ClosedResultsStillProcessBufferedSideEffects(t *testing.T) {
 	t.Parallel()
 
 	mock := &engineMockClient{}
@@ -3295,12 +3300,15 @@ func TestDrainWorkerResults_MultipleResults(t *testing.T) {
 	results <- synctypes.WorkerResult{Path: "c.txt", ActionType: synctypes.ActionDownload, Success: true, ActionID: 3}
 	close(results)
 
-	eng.drainWorkerResults(ctx, results, nil)
+	require.NoError(t, eng.runEngineLoop(ctx, &engineLoopConfig{
+		results:              results,
+		stopWhenResultsClose: true,
+	}))
 
 	// Both upload failures should produce sync_failures.
 	issues, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
-	assert.Len(t, issues, 2, "drain loop should process all results")
+	assert.Len(t, issues, 2, "one-shot engine loop should process all buffered results before exiting")
 }
 
 // ---------------------------------------------------------------------------
@@ -3612,7 +3620,7 @@ func TestClassifyResult(t *testing.T) {
 }
 
 // computeBackoff tests removed — backoff is now handled by retry.Reconcile
-// policy via sync_failures + drain-loop retrier. See internal/retry/named_test.go.
+// policy via sync_failures + the integrated retrier. See internal/retry/named_test.go.
 
 // ---------------------------------------------------------------------------
 // processTrialResult (R-2.10.5, R-2.10.6, R-2.10.8, R-2.10.14)
@@ -3622,7 +3630,7 @@ func TestClassifyResult(t *testing.T) {
 func TestProcessTrialResultV2_Success_ClearsScope(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := t.Context()
 
 	// Set up an active persisted scope block.
@@ -3666,7 +3674,7 @@ func TestProcessTrialResultV2_Success_ClearsScope(t *testing.T) {
 func TestProcessTrialResultV2_Failure_DoublesInterval(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := t.Context()
 
 	now := eng.nowFunc()
@@ -3716,7 +3724,7 @@ func TestProcessTrialResultV2_Failure_CapsAt5m(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			eng := newPhase4Engine(t)
+			eng := newSingleOwnerEngine(t)
 			ctx := t.Context()
 
 			now := eng.nowFunc()
@@ -3753,7 +3761,7 @@ func TestProcessTrialResultV2_Failure_CapsAt5m(t *testing.T) {
 func TestProcessTrialResultV2_Failure_NoScopeDetection(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := t.Context()
 
 	ss := syncdispatch.NewScopeState(eng.nowFn, eng.logger)
@@ -3821,7 +3829,7 @@ func TestComputeTrialInterval(t *testing.T) {
 func TestExtendTrialInterval_WithRetryAfter(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := t.Context()
 
 	now := eng.nowFunc()
@@ -3858,7 +3866,7 @@ func TestExtendTrialInterval_WithRetryAfter(t *testing.T) {
 func TestDiskLocalScopeBlock_FullCycle(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := t.Context()
 	now := eng.nowFunc()
 
@@ -3885,11 +3893,11 @@ func TestDiskLocalScopeBlock_FullCycle(t *testing.T) {
 	assert.False(t, eng.activeBlockingScope(dlAction).IsZero(), "download should be blocked by disk:local scope")
 	assert.True(t, eng.activeBlockingScope(ulAction).IsZero(), "upload should NOT be blocked by disk:local scope")
 
-	// 4. Clear scope block (simulating trial success / disk space freed).
-	eng.onScopeClear(ctx, synctypes.SKDiskLocal)
+	// 4. Release scope block (simulating trial success / disk space freed).
+	require.NoError(t, eng.releaseScope(ctx, synctypes.SKDiskLocal))
 
 	// 5. Download should now be admitted.
-	assert.True(t, eng.activeBlockingScope(dlAction).IsZero(), "download should be admitted after scope clear")
+	assert.True(t, eng.activeBlockingScope(dlAction).IsZero(), "download should be admitted after scope release")
 }
 
 // ---------------------------------------------------------------------------
@@ -3933,7 +3941,7 @@ func TestDeriveScopeKey(t *testing.T) {
 func TestApplyScopeBlock_ArmsTrialTimer(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	ctx := t.Context()
 	now := eng.nowFunc()
 
@@ -4033,22 +4041,22 @@ func TestRecordFailure_PopulatesScopeKey_507Shortcut(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Drain loop integration tests (Phase 4 architecture: DepGraph + active scopes)
+// One-shot engine-loop integration tests (single-owner result processing)
 // ---------------------------------------------------------------------------
 
-// startDrainLoop creates a real engine with DepGraph, watch-mode scope state,
-// readyCh, buf, and retryTimerCh — the full one-shot drain pipeline used by
-// the characterization tests — and starts drainWorkerResults. Returns:
+// startOneShotEngineLoop creates a real engine with DepGraph, watch-mode scope
+// state, readyCh, buf, and retryTimerCh — the full one-shot engine loop used
+// by the characterization tests — and starts runEngineLoop. Returns:
 //   - results chan: test sends WorkerResults here (simulating workers)
 //   - ready chan: test reads dispatched actions from readyCh
-//   - done chan: closes when drainWorkerResults exits
+//   - done chan: closes when the loop exits
 //   - cancel func: stops the drain goroutine
 //   - eng: the engine (for state inspection)
 //   - buf: the syncobserve.Buffer (for verifying retrier re-injection)
-func startDrainLoop(t *testing.T) (chan synctypes.WorkerResult, <-chan *synctypes.TrackedAction, <-chan struct{}, context.CancelFunc, *Engine, *syncobserve.Buffer) {
+func startOneShotEngineLoop(t *testing.T) (chan synctypes.WorkerResult, <-chan *synctypes.TrackedAction, <-chan struct{}, context.CancelFunc, *Engine, *syncobserve.Buffer) {
 	t.Helper()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	eng.watch.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
 
 	buf := syncobserve.NewBuffer(eng.logger)
@@ -4061,28 +4069,49 @@ func startDrainLoop(t *testing.T) (chan synctypes.WorkerResult, <-chan *synctype
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		eng.drainWorkerResults(ctx, results, nil)
+		defer eng.stopTrialTimer()
+		require.NoError(t, eng.runEngineLoop(ctx, &engineLoopConfig{
+			results:              results,
+			stopWhenResultsClose: true,
+		}))
 	}()
 
-	return results, ready, done, cancel, eng, buf
+	var cancelOnce sync.Once
+	cancelAndWait := func() {
+		cancelOnce.Do(func() {
+			cancel()
+			<-done
+		})
+	}
+
+	return results, ready, done, cancelAndWait, eng, buf
 }
 
-// readReady reads one synctypes.TrackedAction from the ready channel with a 1s timeout.
-func readReady(t *testing.T, ready <-chan *synctypes.TrackedAction) {
+// readReadyAction reads one synctypes.TrackedAction from the ready channel
+// with a 1s timeout.
+func readReadyAction(t *testing.T, ready <-chan *synctypes.TrackedAction) *synctypes.TrackedAction {
 	t.Helper()
 
 	select {
-	case <-ready:
+	case ta := <-ready:
+		return ta
 	case <-time.After(time.Second):
 		require.Fail(t, "timed out waiting for action on ready channel")
 	}
+
+	return nil
 }
 
-// Validates: R-2.10.5 — drain loop processes results and routes dependents.
-func TestE2E_DrainLoop_ProcessesAndRoutes(t *testing.T) {
+func readReady(t *testing.T, ready <-chan *synctypes.TrackedAction) {
+	t.Helper()
+	_ = readReadyAction(t, ready)
+}
+
+// Validates: R-2.10.5 — the one-shot engine loop processes results and routes dependents.
+func TestE2E_OneShotEngineLoop_ProcessesAndRoutes(t *testing.T) {
 	t.Parallel()
 
-	results, ready, _, cancel, eng, _ := startDrainLoop(t)
+	results, ready, _, cancel, eng, _ := startOneShotEngineLoop(t)
 	defer cancel()
 
 	ctx := t.Context()
@@ -4116,13 +4145,101 @@ func TestE2E_DrainLoop_ProcessesAndRoutes(t *testing.T) {
 	assert.NotEmpty(t, issues, "failure should be recorded")
 }
 
-// Validates: R-2.10.5, R-2.10.11
-// TestE2E_DrainLoop_TrialResultSuccess verifies that trial success clears the
-// scope block and re-injects held failures without waiting for a new external observation.
-func TestE2E_DrainLoop_TrialResultSuccess(t *testing.T) {
+// Validates: R-2.1.2, R-6.8.9
+func TestWatchLoop_SteadyStateContinuesAfterGraphDrains(t *testing.T) {
 	t.Parallel()
 
-	results, ready, done, cancel, eng, buf := startDrainLoop(t)
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	ready := setupWatchEngine(t, eng)
+	batches := make(chan []synctypes.PathChanges, 2)
+	results := make(chan synctypes.WorkerResult, 2)
+	done := make(chan error, 1)
+
+	go func() {
+		done <- eng.runWatchLoop(ctx, &watchPipeline{
+			bl:      bl,
+			safety:  synctypes.DefaultSafetyConfig(),
+			ready:   batches,
+			results: results,
+			mode:    synctypes.SyncBidirectional,
+		})
+	}()
+
+	batches <- []synctypes.PathChanges{{
+		Path: "alpha.txt",
+		RemoteEvents: []synctypes.ChangeEvent{{
+			Source:  synctypes.SourceRemote,
+			Type:    synctypes.ChangeCreate,
+			Path:    "alpha.txt",
+			DriveID: driveID,
+			ItemID:  "alpha-item",
+			Hash:    "alpha-hash",
+			Size:    10,
+		}},
+	}}
+
+	first := readReadyAction(t, ready)
+	require.Equal(t, "alpha.txt", first.Action.Path)
+
+	results <- synctypes.WorkerResult{
+		ActionID:   first.ID,
+		Path:       first.Action.Path,
+		DriveID:    driveID,
+		ActionType: first.Action.Type,
+		Success:    true,
+	}
+
+	require.Eventually(t, func() bool {
+		return eng.depGraph.InFlightCount() == 0
+	}, time.Second, 10*time.Millisecond, "first batch should drain completely")
+
+	select {
+	case err := <-done:
+		require.Failf(t, "watch loop exited after graph drained", "err=%v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	batches <- []synctypes.PathChanges{{
+		Path: "beta.txt",
+		RemoteEvents: []synctypes.ChangeEvent{{
+			Source:  synctypes.SourceRemote,
+			Type:    synctypes.ChangeCreate,
+			Path:    "beta.txt",
+			DriveID: driveID,
+			ItemID:  "beta-item",
+			Hash:    "beta-hash",
+			Size:    12,
+		}},
+	}}
+
+	second := readReadyAction(t, ready)
+	require.Equal(t, "beta.txt", second.Action.Path, "steady-state watch loop should keep processing later batches")
+
+	cancel()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "watch loop did not exit after cancellation")
+	}
+}
+
+// Validates: R-2.10.5, R-2.10.11
+// TestE2E_OneShotLoop_TrialResultSuccess verifies that trial success clears the
+// scope block and re-injects held failures without waiting for a new external observation.
+func TestE2E_OneShotLoop_TrialResultSuccess(t *testing.T) {
+	t.Parallel()
+
+	results, ready, done, cancel, eng, buf := startOneShotEngineLoop(t)
 	defer cancel()
 	_ = ready
 	_ = done
@@ -4174,11 +4291,11 @@ func TestE2E_DrainLoop_TrialResultSuccess(t *testing.T) {
 	}, time.Second, 10*time.Millisecond, "trial success should re-inject the held failure without external observation")
 }
 
-// TestE2E_DrainLoop_TrialResultFailure verifies trial failure doubles the interval.
-func TestE2E_DrainLoop_TrialResultFailure(t *testing.T) {
+// TestE2E_OneShotLoop_TrialResultFailure verifies trial failure doubles the interval.
+func TestE2E_OneShotLoop_TrialResultFailure(t *testing.T) {
 	t.Parallel()
 
-	results, ready, done, cancel, eng, buf := startDrainLoop(t)
+	results, ready, done, cancel, eng, buf := startOneShotEngineLoop(t)
 	defer cancel()
 	_ = ready
 	_ = done
@@ -4215,10 +4332,10 @@ func TestE2E_DrainLoop_TrialResultFailure(t *testing.T) {
 	}, time.Second, time.Millisecond, "trial failure should double interval")
 }
 
-func TestE2E_DrainExit_StopsTimer(t *testing.T) {
+func TestE2E_OneShotLoopExit_StopsTimer(t *testing.T) {
 	t.Parallel()
 
-	results, ready, done, cancel, eng, buf := startDrainLoop(t)
+	results, ready, done, cancel, eng, buf := startOneShotEngineLoop(t)
 	defer cancel()
 	_ = ready
 	_ = buf
@@ -4237,12 +4354,12 @@ func TestE2E_DrainExit_StopsTimer(t *testing.T) {
 		return eng.watch.trialTimer != nil
 	}, time.Second, time.Millisecond)
 
-	// Close results channel → drainWorkerResults returns → defer stopTrialTimer.
+	// Close results channel → the one-shot loop returns → defer stopTrialTimer.
 	close(results)
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		require.Fail(t, "drain loop did not exit after results channel close")
+		require.Fail(t, "one-shot engine loop did not exit after results channel close")
 	}
 
 	assert.Nil(t, eng.watch.trialTimer, "drain exit should stop and clear the trial timer")
@@ -4513,7 +4630,7 @@ func TestClearResolvedSkippedItems_CaseCollision(t *testing.T) {
 func TestFeedScopeDetection_LocalErrorIgnored(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 	eng.watch.scopeState = syncdispatch.NewScopeState(time.Now, eng.logger)
 
 	// Feed several local errors (HTTPStatus=0) — should not trigger a scope block.
@@ -4538,7 +4655,7 @@ func TestFeedScopeDetection_LocalErrorIgnored(t *testing.T) {
 func TestIsObservationSuppressed_Throttled(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 
 	// Initially not suppressed.
 	assert.False(t, eng.isObservationSuppressed())
@@ -4556,7 +4673,7 @@ func TestIsObservationSuppressed_Throttled(t *testing.T) {
 func TestIsObservationSuppressed_ServiceOutage(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 
 	// Service outage should also suppress.
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
@@ -4582,7 +4699,7 @@ func TestIsObservationSuppressed_OneShotMode_NoWatchState(t *testing.T) {
 func TestIsObservationSuppressed_QuotaDoesNotSuppress(t *testing.T) {
 	t.Parallel()
 
-	eng := newPhase4Engine(t)
+	eng := newSingleOwnerEngine(t)
 
 	// Quota scope block should NOT suppress observation (R-2.10.31).
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
@@ -4713,17 +4830,17 @@ func TestLogFailureSummary_NoErrors(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Retrier pipeline integration test (Phase 4 architecture)
+// Retrier pipeline integration test (single-owner architecture)
 //
-// Exercises the drain-loop integrated retrier: action → failure → sync_failures
+// Exercises the integrated retrier: action → failure → sync_failures
 // → retry timer fires → runRetrierSweep → createEventFromDB → syncobserve.Buffer.
 // ---------------------------------------------------------------------------
 
 // Validates: R-6.8.10, R-6.8.11, R-6.8.7
-func TestRetryPipeline_TransientFailure_DrainLoopRetrier(t *testing.T) {
+func TestRetryPipeline_TransientFailure_IntegratedRetrier(t *testing.T) {
 	t.Parallel()
 
-	results, ready, done, cancel, eng, buf := startDrainLoop(t)
+	results, ready, done, cancel, eng, buf := startOneShotEngineLoop(t)
 	defer cancel()
 	_ = ready
 	_ = done
@@ -4787,10 +4904,10 @@ func TestRetryPipeline_TransientFailure_DrainLoopRetrier(t *testing.T) {
 }
 
 // Validates: R-6.8.10
-func TestDrainLoop_Success_ClearsSyncFailure(t *testing.T) {
+func TestOneShotEngineLoop_Success_ClearsSyncFailure(t *testing.T) {
 	t.Parallel()
 
-	results, ready, done, cancel, eng, buf := startDrainLoop(t)
+	results, ready, done, cancel, eng, buf := startOneShotEngineLoop(t)
 	defer cancel()
 	_ = ready
 	_ = done

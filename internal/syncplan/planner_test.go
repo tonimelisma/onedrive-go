@@ -2440,7 +2440,7 @@ func TestPlan_DeniedPrefix_LocalMove_Suppressed(t *testing.T) {
 func TestPlan_ShortcutAction_HasTargetShortcutKey(t *testing.T) {
 	// Integration test: a shortcut ChangeEvent flows through Plan() and the
 	// resulting Action carries targetShortcutKey and targetDriveID so that
-	// ScopeGate can distinguish own-drive vs shortcut-scoped failures.
+	// active-scope matching can distinguish own-drive vs shortcut-scoped failures.
 	t.Parallel()
 
 	const (
