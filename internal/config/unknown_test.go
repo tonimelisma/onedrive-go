@@ -109,7 +109,7 @@ func TestClosestMatch_Found(t *testing.T) {
 
 func TestClosestMatch_NotFound(t *testing.T) {
 	known := []string{"skip_files", "skip_dirs"}
-	assert.Equal(t, "", closestMatch("completely_unrelated", known))
+	assert.Empty(t, closestMatch("completely_unrelated", known))
 }
 
 // --- Edge case: known parent with sub-field is not flagged ---
@@ -118,13 +118,13 @@ func TestBuildGlobalKeyError_KnownParent_SubField(t *testing.T) {
 	// A nested key like "bandwidth_schedule.time" has a known parent,
 	// so buildGlobalKeyError should return nil.
 	err := buildGlobalKeyError("bandwidth_schedule.time")
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 }
 
 func TestBuildGlobalKeyError_UnknownParent_SubField(t *testing.T) {
 	// An unknown nested key should still return an error.
 	err := buildGlobalKeyError("nonexistent_section.field")
-	assert.NotNil(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown config key")
 }
 

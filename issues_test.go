@@ -155,7 +155,7 @@ func TestPrintConflictsTable(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printConflictsTable(&buf, conflicts, false)
+	require.NoError(t, printConflictsTable(&buf, conflicts, false))
 
 	output := buf.String()
 	assert.Contains(t, output, "abcdefgh") // truncated ID
@@ -178,7 +178,7 @@ func TestPrintConflictsTable_WithHistory(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printConflictsTable(&buf, conflicts, true)
+	require.NoError(t, printConflictsTable(&buf, conflicts, true))
 
 	output := buf.String()
 	assert.Contains(t, output, "RESOLUTION")
@@ -220,7 +220,7 @@ func TestFindConflict(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := findConflict(conflicts, tt.idOrPath)
+			got, found, err := findConflict(conflicts, tt.idOrPath)
 			if tt.wantErr {
 				require.Error(t, err)
 
@@ -234,11 +234,13 @@ func TestFindConflict(t *testing.T) {
 			require.NoError(t, err)
 
 			if tt.wantNil {
+				assert.False(t, found)
 				assert.Nil(t, got)
 
 				return
 			}
 
+			assert.True(t, found)
 			require.NotNil(t, got)
 			assert.Equal(t, tt.wantID, got.ID)
 		})
@@ -250,7 +252,7 @@ func TestFindConflict(t *testing.T) {
 func newTestCLIContext(w io.Writer) *CLIContext {
 	return &CLIContext{
 		StatusWriter: w,
-		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:       slog.New(slog.DiscardHandler),
 	}
 }
 
@@ -472,7 +474,7 @@ func TestPrintGroupedIssuesText_BothSections(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printGroupedIssuesText(&buf, conflicts, groups, nil, nil, nil, false, false)
+	require.NoError(t, printGroupedIssuesText(&buf, conflicts, groups, nil, nil, nil, false, false))
 
 	output := buf.String()
 	assert.Contains(t, output, "CONFLICTS")
@@ -489,7 +491,7 @@ func TestPrintGroupedIssuesText_OnlyConflicts(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printGroupedIssuesText(&buf, conflicts, nil, nil, nil, nil, false, false)
+	require.NoError(t, printGroupedIssuesText(&buf, conflicts, nil, nil, nil, nil, false, false))
 
 	output := buf.String()
 	assert.Contains(t, output, "CONFLICTS")
@@ -508,7 +510,7 @@ func TestPrintGroupedIssuesText_OnlyFailures(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printGroupedIssuesText(&buf, nil, groups, nil, nil, nil, false, false)
+	require.NoError(t, printGroupedIssuesText(&buf, nil, groups, nil, nil, nil, false, false))
 
 	output := buf.String()
 	assert.NotContains(t, output, "CONFLICTS")
@@ -524,7 +526,7 @@ func TestPrintGroupedIssuesText_HeldDeletes(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printGroupedIssuesText(&buf, nil, nil, heldDeletes, nil, nil, false, false)
+	require.NoError(t, printGroupedIssuesText(&buf, nil, nil, heldDeletes, nil, nil, false, false))
 
 	output := buf.String()
 	assert.Contains(t, output, "HELD DELETES")
@@ -550,7 +552,7 @@ func TestPrintGroupedIssuesText_MixedHeldAndOther(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printGroupedIssuesText(&buf, nil, groups, heldDeletes, nil, nil, false, false)
+	require.NoError(t, printGroupedIssuesText(&buf, nil, groups, heldDeletes, nil, nil, false, false))
 
 	output := buf.String()
 	assert.Contains(t, output, "HELD DELETES")
@@ -571,10 +573,10 @@ func newSeededIssuesCmd(t *testing.T) (*cobra.Command, string) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test-issues.db")
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := slog.New(slog.DiscardHandler)
 
 	// Create and seed the DB.
-	mgr, err := syncstore.NewSyncStore(dbPath, logger)
+	mgr, err := syncstore.NewSyncStore(t.Context(), dbPath, logger)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -610,7 +612,7 @@ func newSeededIssuesCmd(t *testing.T) (*cobra.Command, string) {
 	}, nil)
 	require.NoError(t, err)
 
-	mgr.Close()
+	require.NoError(t, mgr.Close(t.Context()))
 
 	// Build a CLIContext whose Cfg.StatePath() returns our temp DB path.
 	// We override XDG_DATA_HOME and pick a CanonicalID that resolves to our path.
@@ -657,10 +659,10 @@ func TestIssuesClear_SinglePath(t *testing.T) {
 	require.NoError(t, cmd.Execute())
 
 	// Verify: "docs/CON" is gone, other failures remain.
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mgr, err := syncstore.NewSyncStore(dbPath, logger)
+	logger := slog.New(slog.DiscardHandler)
+	mgr, err := syncstore.NewSyncStore(t.Context(), dbPath, logger)
 	require.NoError(t, err)
-	defer mgr.Close()
+	defer mgr.Close(t.Context())
 
 	ctx := context.Background()
 	actionable, err := mgr.ListActionableFailures(ctx)
@@ -679,10 +681,10 @@ func TestIssuesClear_All(t *testing.T) {
 	require.NoError(t, cmd.Execute())
 
 	// Verify: all actionable failures gone, transient remains.
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mgr, err := syncstore.NewSyncStore(dbPath, logger)
+	logger := slog.New(slog.DiscardHandler)
+	mgr, err := syncstore.NewSyncStore(t.Context(), dbPath, logger)
 	require.NoError(t, err)
-	defer mgr.Close()
+	defer mgr.Close(t.Context())
 
 	ctx := context.Background()
 	actionable, err := mgr.ListActionableFailures(ctx)
@@ -704,10 +706,10 @@ func TestIssuesRetry_SinglePath(t *testing.T) {
 	require.NoError(t, cmd.Execute())
 
 	// Verify: the transient failure for "data/report.xlsx" is cleared.
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mgr, err := syncstore.NewSyncStore(dbPath, logger)
+	logger := slog.New(slog.DiscardHandler)
+	mgr, err := syncstore.NewSyncStore(t.Context(), dbPath, logger)
 	require.NoError(t, err)
-	defer mgr.Close()
+	defer mgr.Close(t.Context())
 
 	ctx := context.Background()
 	all, err := mgr.ListSyncFailures(ctx)
@@ -728,10 +730,10 @@ func TestIssuesRetry_All(t *testing.T) {
 	require.NoError(t, cmd.Execute())
 
 	// Verify: transient failures are cleared; actionable remain.
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mgr, err := syncstore.NewSyncStore(dbPath, logger)
+	logger := slog.New(slog.DiscardHandler)
+	mgr, err := syncstore.NewSyncStore(t.Context(), dbPath, logger)
 	require.NoError(t, err)
-	defer mgr.Close()
+	defer mgr.Close(t.Context())
 
 	ctx := context.Background()
 	all, err := mgr.ListSyncFailures(ctx)

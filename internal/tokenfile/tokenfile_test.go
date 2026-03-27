@@ -61,7 +61,7 @@ func TestLoad_BareTokenRejected(t *testing.T) {
 
 	tok, err := Load(path)
 	assert.Nil(t, tok)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decoding")
 }
 
@@ -73,7 +73,7 @@ func TestLoad_InvalidJSON(t *testing.T) {
 
 	tok, err := Load(path)
 	assert.Nil(t, tok)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decoding")
 }
 
@@ -86,7 +86,7 @@ func TestLoad_EmptyCredentials(t *testing.T) {
 
 	tok, err := Load(path)
 	assert.Nil(t, tok)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "empty credentials")
 }
 
@@ -110,7 +110,7 @@ func TestLoad_RejectsUnknownKeys(t *testing.T) {
 
 	tok, err := Load(path)
 	assert.Nil(t, tok)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decoding")
 }
 
@@ -165,7 +165,7 @@ func TestSave_NilToken(t *testing.T) {
 	path := filepath.Join(dir, "token.json")
 
 	err := Save(path, nil)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "refusing to save nil token")
 }
 
@@ -177,7 +177,7 @@ func TestSave_NoMetaInOutput(t *testing.T) {
 
 	require.NoError(t, Save(path, testToken()))
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // Test token path is created in t.TempDir and controlled by the test.
 	require.NoError(t, err)
 
 	// Verify no "meta" key in the output JSON.
@@ -185,4 +185,16 @@ func TestSave_NoMetaInOutput(t *testing.T) {
 	require.NoError(t, json.Unmarshal(data, &raw))
 	_, hasMeta := raw["meta"]
 	assert.False(t, hasMeta, "saved token file should not contain a meta key")
+}
+
+func TestRemoveTempPath(t *testing.T) {
+	dir := t.TempDir()
+	existing := filepath.Join(dir, "temp.json")
+	require.NoError(t, os.WriteFile(existing, []byte("temp"), 0o600))
+
+	assert.NoError(t, removeTempPath(existing, nil))
+
+	_, err := os.Stat(existing)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	assert.NoError(t, removeTempPath(existing, nil))
 }

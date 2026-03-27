@@ -77,7 +77,7 @@ func setupIntegrationIsolation() func() {
 	tempCache := filepath.Join(tempRoot, "cache")
 
 	for _, d := range []string{tempHome, tempConfig, tempData, tempCache} {
-		if mkErr := os.MkdirAll(d, 0o755); mkErr != nil {
+		if mkErr := os.MkdirAll(d, 0o700); mkErr != nil {
 			fmt.Fprintf(os.Stderr, "FATAL: creating dir %s: %v\n", d, mkErr)
 			os.Exit(1)
 		}
@@ -90,7 +90,7 @@ func setupIntegrationIsolation() func() {
 
 	// Copy token file from .testdata/ to isolated data dir.
 	appDataDir := filepath.Join(tempData, "onedrive-go")
-	if mkErr := os.MkdirAll(appDataDir, 0o755); mkErr != nil {
+	if mkErr := os.MkdirAll(appDataDir, 0o700); mkErr != nil {
 		fmt.Fprintf(os.Stderr, "FATAL: creating app data dir: %v\n", mkErr)
 		os.Exit(1)
 	}
@@ -108,7 +108,7 @@ func setupIntegrationIsolation() func() {
 
 	// Copy config.toml from .testdata/ to isolated config dir.
 	appConfigDir := filepath.Join(tempConfig, "onedrive-go")
-	if mkErr := os.MkdirAll(appConfigDir, 0o755); mkErr != nil {
+	if mkErr := os.MkdirAll(appConfigDir, 0o700); mkErr != nil {
 		fmt.Fprintf(os.Stderr, "FATAL: creating app config dir: %v\n", mkErr)
 		os.Exit(1)
 	}

@@ -141,129 +141,97 @@ func TestIsCrossDriveRemoteMove_NoBaseline(t *testing.T) {
 
 // Validates: R-6.7.21
 func TestPlan_CrossDriveLocalMove_DecomposesToDeleteAndUpload(t *testing.T) {
-	// Move from own drive (driveA) to shared folder (driveB).
-	// Should NOT produce a move action — should decompose to delete + upload.
-	driveA := driveid.New("driveA")
-	driveB := driveid.New("driveB")
-	planner := NewPlanner(synctest.TestLogger(t))
-
-	bl := synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{
-		{Path: "own/file.txt", DriveID: driveA, ItemID: "item1", ItemType: synctypes.ItemTypeFile, LocalHash: "hash1", RemoteHash: "hash1"},
-		{Path: "shared", DriveID: driveB, ItemID: "sfolder", ItemType: synctypes.ItemTypeFolder},
-	})
-
-	changes := []synctypes.PathChanges{
+	tests := []struct {
+		name       string
+		sourcePath string
+		targetPath string
+		sourceRoot string
+		targetRoot string
+		sourceID   string
+		targetID   string
+	}{
 		{
-			// Delete from own drive (local file disappeared).
-			Path: "own/file.txt",
-			LocalEvents: []synctypes.ChangeEvent{
-				{
-					Source:    synctypes.SourceLocal,
-					Type:      synctypes.ChangeDelete,
-					Path:      "own/file.txt",
-					ItemType:  synctypes.ItemTypeFile,
-					IsDeleted: true,
-				},
-			},
+			name:       "OwnDriveToShortcut",
+			sourcePath: "own/file.txt",
+			targetPath: "shared/file.txt",
+			sourceRoot: "own",
+			targetRoot: "shared",
+			sourceID:   "sfolder",
+			targetID:   "item1",
 		},
 		{
-			// Create in shared folder (local file appeared).
-			Path: "shared/file.txt",
-			LocalEvents: []synctypes.ChangeEvent{
-				{
-					Source:   synctypes.SourceLocal,
-					Type:     synctypes.ChangeCreate,
-					Path:     "shared/file.txt",
-					ItemType: synctypes.ItemTypeFile,
-					Name:     "file.txt",
-					Hash:     "hash1",
-				},
-			},
+			name:       "ShortcutToOwnDrive",
+			sourcePath: "shared/doc.txt",
+			targetPath: "own/doc.txt",
+			sourceRoot: "shared",
+			targetRoot: "own",
+			sourceID:   "ownfolder",
+			targetID:   "item1",
 		},
 	}
 
-	plan, err := planner.Plan(changes, bl, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
-	require.NoError(t, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			driveA := driveid.New("driveA")
+			driveB := driveid.New("driveB")
+			planner := NewPlanner(synctest.TestLogger(t))
 
-	// Should have NO move actions.
-	mvs := moves(plan)
-	assert.Empty(t, mvs, "cross-drive move should not produce a move action")
+			bl := synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{
+				{Path: tt.sourcePath, DriveID: driveB, ItemID: tt.targetID, ItemType: synctypes.ItemTypeFile, LocalHash: "hash1", RemoteHash: "hash1"},
+				{Path: tt.targetRoot, DriveID: driveA, ItemID: tt.sourceID, ItemType: synctypes.ItemTypeFolder},
+			})
+			if tt.name == "OwnDriveToShortcut" {
+				bl = synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{
+					{Path: tt.sourcePath, DriveID: driveA, ItemID: tt.targetID, ItemType: synctypes.ItemTypeFile, LocalHash: "hash1", RemoteHash: "hash1"},
+					{Path: tt.targetRoot, DriveID: driveB, ItemID: tt.sourceID, ItemType: synctypes.ItemTypeFolder},
+				})
+			}
 
-	// Should have a remote delete (for the deleted path on driveA) and
-	// an upload (for the new file in driveB).
-	var hasDelete, hasUpload bool
-	for i := range plan.Actions {
-		if plan.Actions[i].Type == synctypes.ActionRemoteDelete && plan.Actions[i].Path == "own/file.txt" {
-			hasDelete = true
-		}
-		if plan.Actions[i].Type == synctypes.ActionUpload && plan.Actions[i].Path == "shared/file.txt" {
-			hasUpload = true
-		}
-	}
-
-	assert.True(t, hasDelete, "should have ActionRemoteDelete for own/file.txt")
-	assert.True(t, hasUpload, "should have ActionUpload for shared/file.txt")
-}
-
-// Validates: R-6.7.21
-func TestPlan_CrossDriveLocalMove_ShortcutToOwnDrive(t *testing.T) {
-	// Reverse direction: move from shared folder (driveB) to own drive (driveA).
-	driveA := driveid.New("driveA")
-	driveB := driveid.New("driveB")
-	planner := NewPlanner(synctest.TestLogger(t))
-
-	bl := synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{
-		{Path: "shared/doc.txt", DriveID: driveB, ItemID: "item1", ItemType: synctypes.ItemTypeFile, LocalHash: "hash1", RemoteHash: "hash1"},
-		{Path: "own", DriveID: driveA, ItemID: "ownfolder", ItemType: synctypes.ItemTypeFolder},
-	})
-
-	changes := []synctypes.PathChanges{
-		{
-			Path: "shared/doc.txt",
-			LocalEvents: []synctypes.ChangeEvent{
+			changes := []synctypes.PathChanges{
 				{
-					Source:    synctypes.SourceLocal,
-					Type:      synctypes.ChangeDelete,
-					Path:      "shared/doc.txt",
-					ItemType:  synctypes.ItemTypeFile,
-					IsDeleted: true,
+					Path: tt.sourcePath,
+					LocalEvents: []synctypes.ChangeEvent{{
+						Source:    synctypes.SourceLocal,
+						Type:      synctypes.ChangeDelete,
+						Path:      tt.sourcePath,
+						ItemType:  synctypes.ItemTypeFile,
+						IsDeleted: true,
+					}},
 				},
-			},
-		},
-		{
-			Path: "own/doc.txt",
-			LocalEvents: []synctypes.ChangeEvent{
 				{
-					Source:   synctypes.SourceLocal,
-					Type:     synctypes.ChangeCreate,
-					Path:     "own/doc.txt",
-					ItemType: synctypes.ItemTypeFile,
-					Name:     "doc.txt",
-					Hash:     "hash1",
+					Path: tt.targetPath,
+					LocalEvents: []synctypes.ChangeEvent{{
+						Source:   synctypes.SourceLocal,
+						Type:     synctypes.ChangeCreate,
+						Path:     tt.targetPath,
+						ItemType: synctypes.ItemTypeFile,
+						Name:     "file.txt",
+						Hash:     "hash1",
+					}},
 				},
-			},
-		},
+			}
+			if tt.name == "ShortcutToOwnDrive" {
+				changes[1].LocalEvents[0].Name = "doc.txt"
+			}
+
+			plan, err := planner.Plan(changes, bl, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+			require.NoError(t, err)
+			assert.Empty(t, moves(plan), "cross-drive move should not produce a move action")
+
+			var hasDelete, hasUpload bool
+			for i := range plan.Actions {
+				if plan.Actions[i].Type == synctypes.ActionRemoteDelete && plan.Actions[i].Path == tt.sourcePath {
+					hasDelete = true
+				}
+				if plan.Actions[i].Type == synctypes.ActionUpload && plan.Actions[i].Path == tt.targetPath {
+					hasUpload = true
+				}
+			}
+
+			assert.True(t, hasDelete)
+			assert.True(t, hasUpload)
+		})
 	}
-
-	plan, err := planner.Plan(changes, bl, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
-	require.NoError(t, err)
-
-	mvs := moves(plan)
-	assert.Empty(t, mvs, "cross-drive move should not produce a move action")
-
-	// Verify decomposition.
-	var hasDelete, hasUpload bool
-	for i := range plan.Actions {
-		if plan.Actions[i].Type == synctypes.ActionRemoteDelete && plan.Actions[i].Path == "shared/doc.txt" {
-			hasDelete = true
-		}
-		if plan.Actions[i].Type == synctypes.ActionUpload && plan.Actions[i].Path == "own/doc.txt" {
-			hasUpload = true
-		}
-	}
-
-	assert.True(t, hasDelete, "should have ActionRemoteDelete for shared/doc.txt")
-	assert.True(t, hasUpload, "should have ActionUpload for own/doc.txt")
 }
 
 // Validates: R-2.10.16

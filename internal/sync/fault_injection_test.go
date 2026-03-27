@@ -74,7 +74,7 @@ func TestFault_BaselineCommitError(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	mgr, err := syncstore.NewSyncStore(dbPath, testLogger(t))
+	mgr, err := syncstore.NewSyncStore(t.Context(), dbPath, testLogger(t))
 	require.NoError(t, err)
 
 	ctx := t.Context()
@@ -88,7 +88,7 @@ func TestFault_BaselineCommitError(t *testing.T) {
 	}))
 
 	// Close the DB to simulate a fault.
-	require.NoError(t, mgr.Close())
+	require.NoError(t, mgr.Close(t.Context()))
 
 	// CommitOutcome should return an error, not panic.
 	err = mgr.CommitOutcome(ctx, &synctypes.Outcome{
@@ -109,7 +109,7 @@ func TestFault_PartialFileCleanup(t *testing.T) {
 
 	// Create a .partial file simulating an interrupted download.
 	partialPath := filepath.Join(syncRoot, "doc.txt.partial")
-	require.NoError(t, os.WriteFile(partialPath, []byte("partial data"), 0o644))
+	require.NoError(t, os.WriteFile(partialPath, []byte("partial data"), 0o600))
 
 	// CleanTransferArtifacts should remove it.
 	driveops.CleanTransferArtifacts(syncRoot, nil, testLogger(t))

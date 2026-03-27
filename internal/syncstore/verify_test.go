@@ -15,17 +15,13 @@ import (
 )
 
 // writeTestFile creates a file with the given content under dir/relPath,
-// creating parent directories as needed. Returns the absolute path.
-//
-//nolint:unparam // return value used by callers in verify_test.go for path assertions
-func writeTestFile(t *testing.T, dir, relPath, content string) string {
+// creating parent directories as needed.
+func writeTestFile(t *testing.T, dir, relPath, content string) {
 	t.Helper()
 
 	fullPath := filepath.Join(dir, relPath)
-	require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0o755), "MkdirAll(%s)", filepath.Dir(fullPath))
-	require.NoError(t, os.WriteFile(fullPath, []byte(content), 0o644), "WriteFile(%s)", fullPath)
-
-	return fullPath
+	require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0o700), "MkdirAll(%s)", filepath.Dir(fullPath))
+	require.NoError(t, os.WriteFile(fullPath, []byte(content), 0o600), "WriteFile(%s)", fullPath)
 }
 
 // hashContent computes the QuickXorHash of a string, returning the

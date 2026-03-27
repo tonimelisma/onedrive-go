@@ -15,5 +15,5 @@ func TestDiskAvailable_ReturnsPositiveValue(t *testing.T) {
 
 	avail, err := DiskAvailable(".")
 	require.NoError(t, err)
-	assert.Greater(t, avail, uint64(0), "disk available should be > 0 for current directory")
+	assert.Positive(t, avail, "disk available should be > 0 for current directory")
 }

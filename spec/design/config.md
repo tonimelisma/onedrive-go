@@ -42,6 +42,16 @@ Default sync directories are computed deterministically from the canonical ID + 
 
 `TokenCanonicalID()` determines which OAuth token file a drive uses. Shared and SharePoint drives share their account's primary token. Resolution scans configured drives to determine account type — this is business logic in `config`, not identity logic in `driveid`.
 
+## Optional Metadata Lookups
+
+Cached account and drive metadata are optional state, not exceptional control flow. `LookupAccountProfile(cid)` and `LookupDriveMetadata(cid)` both return `(*T, found bool, error)`:
+
+- `found=false, err=nil`: no cached metadata applies to that canonical ID (missing file, wrong drive type, shared drive, or metadata intentionally absent)
+- `found=true, err=nil`: valid cached metadata loaded
+- `err!=nil`: malformed JSON, I/O failure, or invariant violation
+
+Callers branch on `found` instead of overloading `(nil, nil)` as both “missing” and “success”.
+
 ## Validation
 
 Implements: R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified]

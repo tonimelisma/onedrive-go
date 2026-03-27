@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -22,6 +24,15 @@ import (
 // noopSleep is a sleep function that returns immediately, for fast tests.
 func noopSleep(_ context.Context, _ time.Duration) error {
 	return nil
+}
+
+func closeClientTestResponse(t *testing.T, resp *http.Response) {
+	t.Helper()
+	if resp == nil || resp.Body == nil {
+		return
+	}
+
+	require.NoError(t, resp.Body.Close())
 }
 
 // failingSeeker is an io.ReadSeeker where Read succeeds but Seek always fails.
@@ -53,12 +64,14 @@ func (failingToken) Token() (string, error) {
 }
 
 // testRetryPolicy is a fast retry policy for tests.
-var testRetryPolicy = retry.Policy{
-	MaxAttempts: 5,
-	Base:        1 * time.Millisecond,
-	Max:         10 * time.Millisecond,
-	Multiplier:  2.0,
-	Jitter:      0.0,
+func testRetryPolicy() retry.Policy {
+	return retry.Policy{
+		MaxAttempts: 5,
+		Base:        1 * time.Millisecond,
+		Max:         10 * time.Millisecond,
+		Multiplier:  2.0,
+		Jitter:      0.0,
+	}
 }
 
 // retryHTTPClient wraps an http.Client with a fast RetryTransport for tests.
@@ -84,20 +97,55 @@ func retryHTTPClient(inner *http.Client, policy retry.Policy) *http.Client {
 func newTestClient(t *testing.T, url string) *Client {
 	t.Helper()
 
-	return NewClient(url, retryHTTPClient(http.DefaultClient, testRetryPolicy), staticToken("test-token"), slog.Default(), "test-agent")
+	client := NewClient(normalizeTestBaseURL(url), retryHTTPClient(http.DefaultClient, testRetryPolicy()), staticToken("test-token"), slog.Default(), "test-agent")
+	client.uploadURLValidator = allowTestUploadURL
+	client.copyMonitorValidator = allowTestUploadURL
+
+	return client
 }
 
 // newNoRetryTestClient creates a Client with no retry — for testing single-request behavior.
 func newNoRetryTestClient(t *testing.T, url string) *Client {
 	t.Helper()
 
-	return NewClient(url, http.DefaultClient, staticToken("test-token"), slog.Default(), "test-agent")
+	client := NewClient(normalizeTestBaseURL(url), http.DefaultClient, staticToken("test-token"), slog.Default(), "test-agent")
+	client.uploadURLValidator = allowTestUploadURL
+	client.copyMonitorValidator = allowTestUploadURL
+
+	return client
+}
+
+func normalizeTestBaseURL(raw string) string {
+	if raw == "http://unused" {
+		return "http://localhost"
+	}
+
+	return raw
+}
+
+func allowTestUploadURL(parsed *url.URL) error {
+	if parsed == nil {
+		return fmt.Errorf("graph: upload URL is nil")
+	}
+
+	if isLoopbackHostname(parsed.Hostname()) && (parsed.Scheme == "http" || parsed.Scheme == "https") {
+		return nil
+	}
+
+	return validateUploadURL(parsed)
+}
+
+func writeClientTestBody(t *testing.T, w http.ResponseWriter, body string) {
+	t.Helper()
+
+	_, err := w.Write([]byte(body))
+	require.NoError(t, err)
 }
 
 func TestDo_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"value":"ok"}`))
+		writeClientTestBody(t, w, `{"value":"ok"}`)
 	}))
 	defer srv.Close()
 
@@ -108,7 +156,7 @@ func TestDo_Success(t *testing.T) {
 
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	assert.Equal(t, `{"value":"ok"}`, string(body))
+	assert.JSONEq(t, `{"value":"ok"}`, string(body))
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
@@ -132,15 +180,16 @@ func TestDo_ErrorClassification(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("request-id", "test-req-id")
 				w.WriteHeader(tt.status)
-				_, _ = w.Write([]byte(`{"error":"something"}`))
+				writeClientTestBody(t, w, `{"error":"something"}`)
 			}))
 			defer srv.Close()
 
 			// Use no-retry client — these are non-retryable codes.
 			client := newNoRetryTestClient(t, srv.URL)
-			_, err := client.Do(t.Context(), http.MethodGet, "/test", nil)
+			resp, err := client.Do(t.Context(), http.MethodGet, "/test", nil)
+			closeClientTestResponse(t, resp)
 			require.Error(t, err)
-			assert.ErrorIs(t, err, tt.sentinel)
+			require.ErrorIs(t, err, tt.sentinel)
 
 			var graphErr *GraphError
 			require.ErrorAs(t, err, &graphErr)
@@ -163,7 +212,7 @@ func TestDo_RetryOn5xx(t *testing.T) {
 		}
 
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`ok`))
+		writeClientTestBody(t, w, `ok`)
 	}))
 	defer srv.Close()
 
@@ -177,66 +226,95 @@ func TestDo_RetryOn5xx(t *testing.T) {
 }
 
 // Validates: R-6.8.1
-func TestDo_RetryOn429WithRetryAfter(t *testing.T) {
-	var calls atomic.Int32
+func TestDo_RetryAfterHandling(t *testing.T) {
+	tests := []struct {
+		name         string
+		retryAfter   string
+		wantAttempts int32
+	}{
+		{
+			name:         "numeric Retry-After",
+			retryAfter:   "1",
+			wantAttempts: 2,
+		},
+		{
+			name:         "malformed Retry-After falls back to backoff",
+			retryAfter:   "not-a-number",
+			wantAttempts: 2,
+		},
+	}
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		n := calls.Add(1)
-		if n <= 1 {
-			w.Header().Set("Retry-After", "1")
-			w.WriteHeader(http.StatusTooManyRequests)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var calls atomic.Int32
 
-			return
-		}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				n := calls.Add(1)
+				if n <= 1 {
+					w.Header().Set("Retry-After", tt.retryAfter)
+					w.WriteHeader(http.StatusTooManyRequests)
 
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`ok`))
-	}))
-	defer srv.Close()
+					return
+				}
 
-	client := newTestClient(t, srv.URL)
-	resp, err := client.Do(t.Context(), http.MethodGet, "/throttle", nil)
-	require.NoError(t, err)
-	defer resp.Body.Close()
+				w.WriteHeader(http.StatusOK)
+				writeClientTestBody(t, w, `ok`)
+			}))
+			defer srv.Close()
 
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, int32(2), calls.Load())
+			client := newTestClient(t, srv.URL)
+			resp, err := client.Do(t.Context(), http.MethodGet, "/throttle", nil)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+			assert.Equal(t, tt.wantAttempts, calls.Load())
+		})
+	}
 }
 
-func TestDo_MaxRetriesExhausted(t *testing.T) {
-	var calls atomic.Int32
+func TestDo_RetryPolicyDecisions(t *testing.T) {
+	tests := []struct {
+		name         string
+		status       int
+		path         string
+		wantErr      error
+		wantAttempts int32
+	}{
+		{
+			name:         "retryable 5xx exhausts retries",
+			status:       http.StatusServiceUnavailable,
+			path:         "/fail",
+			wantErr:      ErrServerError,
+			wantAttempts: 6,
+		},
+		{
+			name:         "non-retryable 4xx does not retry",
+			status:       http.StatusNotFound,
+			path:         "/missing",
+			wantErr:      ErrNotFound,
+			wantAttempts: 1,
+		},
+	}
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls.Add(1)
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer srv.Close()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var calls atomic.Int32
 
-	client := newTestClient(t, srv.URL)
-	_, err := client.Do(t.Context(), http.MethodGet, "/fail", nil)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrServerError)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				w.WriteHeader(tt.status)
+			}))
+			defer srv.Close()
 
-	// 1 initial + 5 retries = 6 total attempts.
-	assert.Equal(t, int32(6), calls.Load())
-}
-
-func TestDo_NoRetryOn4xx(t *testing.T) {
-	var calls atomic.Int32
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls.Add(1)
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	_, err := client.Do(t.Context(), http.MethodGet, "/missing", nil)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNotFound)
-
-	// No retries for non-retryable 4xx.
-	assert.Equal(t, int32(1), calls.Load())
+			client := newTestClient(t, srv.URL)
+			resp, err := client.Do(t.Context(), http.MethodGet, tt.path, nil)
+			closeClientTestResponse(t, resp)
+			require.Error(t, err)
+			require.ErrorIs(t, err, tt.wantErr)
+			assert.Equal(t, tt.wantAttempts, calls.Load())
+		})
+	}
 }
 
 func TestDo_AuthorizationHeader(t *testing.T) {
@@ -271,7 +349,8 @@ func TestDo_ContextCancellation(t *testing.T) {
 	cancel()
 
 	client := newNoRetryTestClient(t, srv.URL)
-	_, err := client.Do(ctx, http.MethodGet, "/cancel", nil)
+	resp, err := client.Do(ctx, http.MethodGet, "/cancel", nil)
+	closeClientTestResponse(t, resp)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
 }
@@ -284,8 +363,8 @@ func TestGraphError_ErrorsIs(t *testing.T) {
 		Err:        ErrNotFound,
 	}
 
-	assert.ErrorIs(t, graphErr, ErrNotFound)
-	assert.True(t, !errors.Is(graphErr, ErrConflict))
+	require.ErrorIs(t, graphErr, ErrNotFound)
+	assert.NotErrorIs(t, graphErr, ErrConflict)
 }
 
 func TestGraphError_Unwrap(t *testing.T) {
@@ -328,7 +407,8 @@ func TestDo_ContentTypeForBody(t *testing.T) {
 func TestDo_TokenError(t *testing.T) {
 	client := NewClient("http://localhost", http.DefaultClient, failingToken{}, slog.Default(), "test-agent")
 
-	_, err := client.Do(t.Context(), http.MethodGet, "/test", nil)
+	resp, err := client.Do(t.Context(), http.MethodGet, "/test", nil)
+	closeClientTestResponse(t, resp)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "token error")
 }
@@ -404,7 +484,7 @@ func TestDoWithHeaders_SendsExtraHeaders(t *testing.T) {
 		assert.Equal(t, "deltashowremoteitemsaliasid", r.Header.Get("Prefer"))
 		assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"value":"ok"}`))
+		writeClientTestBody(t, w, `{"value":"ok"}`)
 	}))
 	defer srv.Close()
 
@@ -447,7 +527,7 @@ func TestDoWithHeaders_RetriesWithHeaders(t *testing.T) {
 		}
 
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`ok`))
+		writeClientTestBody(t, w, `ok`)
 	}))
 	defer srv.Close()
 
@@ -470,7 +550,9 @@ func TestDo_RetryWithBody(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, readErr := io.ReadAll(r.Body)
-		require.NoError(t, readErr)
+		if !assert.NoError(t, readErr) {
+			return
+		}
 		assert.Equal(t, expectedBody, string(body))
 
 		n := calls.Add(1)
@@ -480,7 +562,7 @@ func TestDo_RetryWithBody(t *testing.T) {
 		}
 
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"id":"created"}`))
+		writeClientTestBody(t, w, `{"id":"created"}`)
 	}))
 	defer srv.Close()
 
@@ -510,40 +592,13 @@ func TestRewindBody_SeekError(t *testing.T) {
 	assert.Contains(t, err.Error(), "seek failed")
 }
 
-func TestRetryBackoff_MalformedRetryAfter(t *testing.T) {
-	// Verify that a non-numeric Retry-After header falls back to exponential backoff
-	// instead of crashing or using a zero duration.
-	var calls atomic.Int32
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		n := calls.Add(1)
-		if n <= 1 {
-			w.Header().Set("Retry-After", "not-a-number")
-			w.WriteHeader(http.StatusTooManyRequests)
-
-			return
-		}
-
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`ok`))
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	resp, err := client.Do(t.Context(), http.MethodGet, "/throttle", nil)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, int32(2), calls.Load())
-}
-
 func TestDo_NetworkError_MaxRetries(t *testing.T) {
 	// Point the client at an unreachable address and verify that all retries
 	// are exhausted before returning an error.
-	client := NewClient("http://127.0.0.1:1", retryHTTPClient(http.DefaultClient, testRetryPolicy), staticToken("tok"), slog.Default(), "test-agent")
+	client := NewClient("http://127.0.0.1:1", retryHTTPClient(http.DefaultClient, testRetryPolicy()), staticToken("tok"), slog.Default(), "test-agent")
 
-	_, err := client.Do(t.Context(), http.MethodGet, "/unreachable", nil)
+	resp, err := client.Do(t.Context(), http.MethodGet, "/unreachable", nil)
+	closeClientTestResponse(t, resp)
 	require.Error(t, err)
 }
 
@@ -555,7 +610,7 @@ func TestDoPreAuth_SuccessFirstTry(t *testing.T) {
 		assert.Empty(t, r.Header.Get("Authorization"))
 		assert.Equal(t, "test-agent", r.Header.Get("User-Agent"))
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`ok`))
+		writeClientTestBody(t, w, `ok`)
 	}))
 	defer srv.Close()
 
@@ -564,7 +619,7 @@ func TestDoPreAuth_SuccessFirstTry(t *testing.T) {
 	resp, err := client.doPreAuth(t.Context(), "test op", func() (*http.Request, error) {
 		req, reqErr := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/test", http.NoBody)
 		if reqErr != nil {
-			return nil, reqErr
+			return nil, fmt.Errorf("build pre-auth request: %w", reqErr)
 		}
 
 		req.Header.Set("User-Agent", "test-agent")
@@ -589,11 +644,12 @@ func TestDoPreAuth_NonRetryable4xx(t *testing.T) {
 
 	client := newTestClient(t, "http://unused")
 
-	_, err := client.doPreAuth(t.Context(), "404 test", func() (*http.Request, error) {
+	resp, err := client.doPreAuth(t.Context(), "404 test", func() (*http.Request, error) {
 		return http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/missing", http.NoBody)
 	})
+	closeClientTestResponse(t, resp)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNotFound)
+	require.ErrorIs(t, err, ErrNotFound)
 
 	var graphErr *GraphError
 	require.ErrorAs(t, err, &graphErr)
@@ -606,9 +662,10 @@ func TestDoPreAuth_NonRetryable4xx(t *testing.T) {
 func TestDoPreAuth_MakeReqError(t *testing.T) {
 	client := newTestClient(t, "http://unused")
 
-	_, err := client.doPreAuth(t.Context(), "bad factory", func() (*http.Request, error) {
+	resp, err := client.doPreAuth(t.Context(), "bad factory", func() (*http.Request, error) {
 		return nil, errors.New("factory failed")
 	})
+	closeClientTestResponse(t, resp)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "factory failed")
 }
@@ -620,19 +677,20 @@ func TestDo_ErrorBodyCappedAt64KiB(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(bigBody))
+		writeClientTestBody(t, w, bigBody)
 	}))
 	defer srv.Close()
 
 	client := newNoRetryTestClient(t, srv.URL)
 
-	_, err := client.Do(t.Context(), http.MethodGet, "/big-error", nil)
+	resp, err := client.Do(t.Context(), http.MethodGet, "/big-error", nil)
+	closeClientTestResponse(t, resp)
 	require.Error(t, err)
 
 	var ge *GraphError
 	require.ErrorAs(t, err, &ge)
 	assert.LessOrEqual(t, len(ge.Message), maxErrBodySize, "error body should be capped at 64 KiB")
-	assert.Equal(t, maxErrBodySize, len(ge.Message), "error body should be exactly 64 KiB (truncated)")
+	assert.Len(t, ge.Message, maxErrBodySize, "error body should be exactly 64 KiB (truncated)")
 }
 
 func TestDoPreAuth_ErrorBodyCappedAt64KiB(t *testing.T) {
@@ -641,15 +699,16 @@ func TestDoPreAuth_ErrorBodyCappedAt64KiB(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(bigBody))
+		writeClientTestBody(t, w, bigBody)
 	}))
 	defer srv.Close()
 
 	client := newTestClient(t, "http://unused")
 
-	_, err := client.doPreAuth(t.Context(), "big error", func() (*http.Request, error) {
+	resp, err := client.doPreAuth(t.Context(), "big error", func() (*http.Request, error) {
 		return http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/big", http.NoBody)
 	})
+	closeClientTestResponse(t, resp)
 	require.Error(t, err)
 
 	var ge *GraphError
@@ -669,7 +728,7 @@ func TestDo_CustomPolicy_LimitsAttempts(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			attempts.Add(1)
 			w.WriteHeader(http.StatusInternalServerError)
-			_, _ = w.Write([]byte(`{"error":"server error"}`))
+			writeClientTestBody(t, w, `{"error":"server error"}`)
 		}))
 		defer srv.Close()
 
@@ -683,7 +742,8 @@ func TestDo_CustomPolicy_LimitsAttempts(t *testing.T) {
 
 		client := NewClient(srv.URL, retryHTTPClient(http.DefaultClient, twoRetryPolicy), staticToken("tok"), slog.Default(), "test-agent")
 
-		_, err := client.Do(t.Context(), http.MethodGet, "/fail", nil)
+		resp, err := client.Do(t.Context(), http.MethodGet, "/fail", nil)
+		closeClientTestResponse(t, resp)
 		require.Error(t, err)
 		// MaxAttempts=2 means 2 retries after the initial attempt = 3 total server hits.
 		assert.Equal(t, int32(3), attempts.Load(), "MaxAttempts=2 should make 1 initial + 2 retries = 3 total")
@@ -697,13 +757,14 @@ func TestDo_CustomPolicy_LimitsAttempts(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			attempts.Add(1)
 			w.WriteHeader(http.StatusInternalServerError)
-			_, _ = w.Write([]byte(`{"error":"server error"}`))
+			writeClientTestBody(t, w, `{"error":"server error"}`)
 		}))
 		defer srv.Close()
 
 		client := newNoRetryTestClient(t, srv.URL)
 
-		_, err := client.Do(t.Context(), http.MethodGet, "/fail", nil)
+		resp, err := client.Do(t.Context(), http.MethodGet, "/fail", nil)
+		closeClientTestResponse(t, resp)
 		require.Error(t, err)
 		assert.Equal(t, int32(1), attempts.Load(), "no-retry client should make exactly 1 attempt")
 	})
@@ -713,65 +774,62 @@ func TestDo_CustomPolicy_LimitsAttempts(t *testing.T) {
 func TestTerminalError_RetryAfter(t *testing.T) {
 	t.Parallel()
 
-	t.Run("429 with Retry-After populates RetryAfter", func(t *testing.T) {
-		t.Parallel()
+	tests := []struct {
+		name           string
+		path           string
+		status         int
+		retryAfter     string
+		body           string
+		wantRetryAfter time.Duration
+	}{
+		{
+			name:           "429 with Retry-After populates RetryAfter",
+			path:           "/throttle",
+			status:         http.StatusTooManyRequests,
+			retryAfter:     "42",
+			body:           `{"error":"throttled"}`,
+			wantRetryAfter: 42 * time.Second,
+		},
+		{
+			name:           "503 with Retry-After populates RetryAfter",
+			path:           "/unavail",
+			status:         http.StatusServiceUnavailable,
+			retryAfter:     "10",
+			body:           `{"error":"service unavailable"}`,
+			wantRetryAfter: 10 * time.Second,
+		},
+		{
+			name:           "500 without Retry-After has zero RetryAfter",
+			path:           "/fail",
+			status:         http.StatusInternalServerError,
+			body:           `{"error":"server error"}`,
+			wantRetryAfter: 0,
+		},
+	}
 
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Retry-After", "42")
-			w.WriteHeader(http.StatusTooManyRequests)
-			_, _ = w.Write([]byte(`{"error":"throttled"}`))
-		}))
-		defer srv.Close()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-		// No retry client — single attempt, hits terminal immediately.
-		client := newNoRetryTestClient(t, srv.URL)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if tt.retryAfter != "" {
+					w.Header().Set("Retry-After", tt.retryAfter)
+				}
+				w.WriteHeader(tt.status)
+				writeClientTestBody(t, w, tt.body)
+			}))
+			defer srv.Close()
 
-		_, err := client.Do(t.Context(), http.MethodGet, "/throttle", nil)
-		require.Error(t, err)
+			client := newNoRetryTestClient(t, srv.URL)
+			resp, err := client.Do(t.Context(), http.MethodGet, tt.path, nil)
+			closeClientTestResponse(t, resp)
+			require.Error(t, err)
 
-		var graphErr *GraphError
-		require.ErrorAs(t, err, &graphErr)
-		assert.Equal(t, 42*time.Second, graphErr.RetryAfter)
-	})
-
-	t.Run("503 with Retry-After populates RetryAfter", func(t *testing.T) {
-		t.Parallel()
-
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Retry-After", "10")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte(`{"error":"service unavailable"}`))
-		}))
-		defer srv.Close()
-
-		client := newNoRetryTestClient(t, srv.URL)
-
-		_, err := client.Do(t.Context(), http.MethodGet, "/unavail", nil)
-		require.Error(t, err)
-
-		var graphErr *GraphError
-		require.ErrorAs(t, err, &graphErr)
-		assert.Equal(t, 10*time.Second, graphErr.RetryAfter)
-	})
-
-	t.Run("500 without Retry-After has zero RetryAfter", func(t *testing.T) {
-		t.Parallel()
-
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusInternalServerError)
-			_, _ = w.Write([]byte(`{"error":"server error"}`))
-		}))
-		defer srv.Close()
-
-		client := newNoRetryTestClient(t, srv.URL)
-
-		_, err := client.Do(t.Context(), http.MethodGet, "/fail", nil)
-		require.Error(t, err)
-
-		var graphErr *GraphError
-		require.ErrorAs(t, err, &graphErr)
-		assert.Equal(t, time.Duration(0), graphErr.RetryAfter)
-	})
+			var graphErr *GraphError
+			require.ErrorAs(t, err, &graphErr)
+			assert.Equal(t, tt.wantRetryAfter, graphErr.RetryAfter)
+		})
+	}
 }
 
 // switchingToken returns different tokens on successive calls, simulating a
@@ -803,14 +861,14 @@ func TestDoOnce_401_RefreshSucceeds(t *testing.T) {
 
 		if auth == "Bearer refreshed-token" {
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"value":"ok"}`))
+			writeClientTestBody(t, w, `{"value":"ok"}`)
 
 			return
 		}
 
 		// Old token → 401.
 		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"error":"expired"}`))
+		writeClientTestBody(t, w, `{"error":"expired"}`)
 	}))
 	defer srv.Close()
 
@@ -832,14 +890,15 @@ func TestDoOnce_401_SameToken_Returns401(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"error":"invalid"}`))
+		writeClientTestBody(t, w, `{"error":"invalid"}`)
 	}))
 	defer srv.Close()
 
 	// Static token — second Token() call returns the same value, so no refresh.
 	client := NewClient(srv.URL, http.DefaultClient, staticToken("same-token"), slog.Default(), "test-agent")
 
-	_, err := client.Do(t.Context(), http.MethodGet, "/me", nil)
+	resp, err := client.Do(t.Context(), http.MethodGet, "/me", nil)
+	closeClientTestResponse(t, resp)
 	require.Error(t, err)
 
 	var graphErr *GraphError

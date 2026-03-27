@@ -14,7 +14,7 @@ import (
 func TestRemoveDriveDataFiles_BothExist(t *testing.T) {
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
 	cid := driveid.MustCanonicalID("personal:user@example.com")
 
@@ -41,7 +41,7 @@ func TestRemoveDriveDataFiles_BothExist(t *testing.T) {
 func TestRemoveDriveDataFiles_OnlyStateDB(t *testing.T) {
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
 	cid := driveid.MustCanonicalID("personal:user@example.com")
 
@@ -60,7 +60,7 @@ func TestRemoveDriveDataFiles_OnlyStateDB(t *testing.T) {
 func TestRemoveDriveDataFiles_NeitherExists(t *testing.T) {
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
 	cid := driveid.MustCanonicalID("personal:user@example.com")
 

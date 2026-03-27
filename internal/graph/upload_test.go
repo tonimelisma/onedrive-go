@@ -3,6 +3,7 @@ package graph
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -33,6 +34,13 @@ func (errorReadCloser) Close() error {
 	return nil
 }
 
+func writeUploadTestBody(t *testing.T, w http.ResponseWriter, body string) {
+	t.Helper()
+
+	_, err := w.Write([]byte(body))
+	require.NoError(t, err)
+}
+
 // Validates: R-1.3, R-5.3
 func TestSimpleUpload_Success(t *testing.T) {
 	content := "simple upload file content"
@@ -43,12 +51,14 @@ func TestSimpleUpload_Success(t *testing.T) {
 		assert.Equal(t, "replace", r.URL.Query().Get("@microsoft.graph.conflictBehavior"))
 
 		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 		assert.Equal(t, content, string(body))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"id": "new-item-1",
 			"name": "upload.txt",
 			"size": %d,
@@ -83,7 +93,7 @@ func TestSimpleUpload_ConflictBehaviorReplace(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "cb-item",
 			"name": "conflict.txt",
 			"size": 4,
@@ -112,7 +122,7 @@ func TestSimpleUpload_ContentType(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "ct-item",
 			"name": "binary.dat",
 			"size": 4,
@@ -136,7 +146,7 @@ func TestSimpleUpload_Error(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("request-id", "req-upload-err")
 		w.WriteHeader(http.StatusForbidden)
-		fmt.Fprint(w, `{"error":{"code":"accessDenied"}}`)
+		writeTestResponse(t, w, `{"error":{"code":"accessDenied"}}`)
 	}))
 	defer srv.Close()
 
@@ -174,7 +184,7 @@ func TestSimpleUpload_NetworkError(t *testing.T) {
 func TestSimpleUpload_DecodeError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusCreated)
-		fmt.Fprint(w, `{not valid json`)
+		writeTestResponse(t, w, `{not valid json`)
 	}))
 	defer srv.Close()
 
@@ -193,13 +203,15 @@ func TestCreateUploadSession_Success(t *testing.T) {
 		assert.Contains(t, r.URL.Path, "createUploadSession")
 
 		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 		assert.Contains(t, string(body), `"@microsoft.graph.conflictBehavior":"replace"`)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
-			"uploadUrl": "https://upload.example.com/session/abc123",
+		writeTestResponse(t, w, `{
+			"uploadUrl": "https://uploads.contoso.sharepoint.com/session/abc123",
 			"expirationDateTime": "2024-12-31T23:59:59Z"
 		}`)
 	}))
@@ -211,7 +223,7 @@ func TestCreateUploadSession_Success(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	assert.Equal(t, UploadURL("https://upload.example.com/session/abc123"), session.UploadURL)
+	assert.Equal(t, UploadURL("https://uploads.contoso.sharepoint.com/session/abc123"), session.UploadURL)
 	assert.Equal(t, 2024, session.ExpirationTime.Year())
 	assert.Equal(t, 12, int(session.ExpirationTime.Month()))
 	assert.Equal(t, 31, session.ExpirationTime.Day())
@@ -221,8 +233,8 @@ func TestCreateUploadSession_InvalidExpiration(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
-			"uploadUrl": "https://upload.example.com/session/xyz",
+		writeTestResponse(t, w, `{
+			"uploadUrl": "https://uploads.contoso.sharepoint.com/session/xyz",
 			"expirationDateTime": "not-a-date"
 		}`)
 	}))
@@ -234,7 +246,7 @@ func TestCreateUploadSession_InvalidExpiration(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	assert.Equal(t, UploadURL("https://upload.example.com/session/xyz"), session.UploadURL)
+	assert.Equal(t, UploadURL("https://uploads.contoso.sharepoint.com/session/xyz"), session.UploadURL)
 	assert.True(t, session.ExpirationTime.IsZero())
 }
 
@@ -242,7 +254,7 @@ func TestCreateUploadSession_APIError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("request-id", "req-session-err")
 		w.WriteHeader(http.StatusForbidden)
-		fmt.Fprint(w, `{"error":{"code":"accessDenied"}}`)
+		writeTestResponse(t, w, `{"error":{"code":"accessDenied"}}`)
 	}))
 	defer srv.Close()
 
@@ -258,7 +270,7 @@ func TestCreateUploadSession_DecodeError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{invalid json`)
+		writeTestResponse(t, w, `{invalid json`)
 	}))
 	defer srv.Close()
 
@@ -278,7 +290,7 @@ func TestUploadChunk_Intermediate(t *testing.T) {
 		assert.Empty(t, r.Header.Get("Authorization"))
 
 		w.WriteHeader(http.StatusAccepted)
-		fmt.Fprint(w, `{"nextExpectedRanges":["327680-"]}`)
+		writeTestResponse(t, w, `{"nextExpectedRanges":["327680-"]}`)
 	}))
 	defer chunkSrv.Close()
 
@@ -286,12 +298,13 @@ func TestUploadChunk_Intermediate(t *testing.T) {
 	session := &UploadSession{UploadURL: UploadURL(chunkSrv.URL + "/upload")}
 
 	chunkData := bytes.Repeat([]byte("A"), ChunkAlignment)
-	item, err := client.UploadChunk(
+	item, complete, err := client.UploadChunk(
 		t.Context(), session,
 		bytes.NewReader(chunkData),
 		0, int64(ChunkAlignment), 2*int64(ChunkAlignment),
 	)
 	require.NoError(t, err)
+	assert.False(t, complete)
 	assert.Nil(t, item, "intermediate chunk should return nil item")
 }
 
@@ -301,7 +314,7 @@ func TestUploadChunk_Final(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "completed-item",
 			"name": "large-file.bin",
 			"size": 655360,
@@ -321,12 +334,13 @@ func TestUploadChunk_Final(t *testing.T) {
 
 	chunkData := bytes.Repeat([]byte("B"), ChunkAlignment)
 	totalSize := 2 * int64(ChunkAlignment)
-	item, err := client.UploadChunk(
+	item, complete, err := client.UploadChunk(
 		t.Context(), session,
 		bytes.NewReader(chunkData),
 		int64(ChunkAlignment), int64(ChunkAlignment), totalSize,
 	)
 	require.NoError(t, err)
+	assert.True(t, complete)
 	require.NotNil(t, item, "final chunk should return completed item")
 
 	assert.Equal(t, "completed-item", item.ID)
@@ -338,7 +352,7 @@ func TestUploadChunk_FinalWith200(t *testing.T) {
 	chunkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "updated-item",
 			"name": "updated-file.bin",
 			"size": 327680,
@@ -353,12 +367,13 @@ func TestUploadChunk_FinalWith200(t *testing.T) {
 	client := newTestClient(t, "http://unused")
 	session := &UploadSession{UploadURL: UploadURL(chunkSrv.URL + "/upload")}
 
-	item, err := client.UploadChunk(
+	item, complete, err := client.UploadChunk(
 		t.Context(), session,
 		strings.NewReader("final-data"),
 		0, 10, 10,
 	)
 	require.NoError(t, err)
+	assert.True(t, complete)
 	require.NotNil(t, item)
 	assert.Equal(t, "updated-item", item.ID)
 }
@@ -369,7 +384,7 @@ func TestUploadChunk_ContentRange(t *testing.T) {
 		assert.Equal(t, "bytes 327680-655359/983040", contentRange)
 
 		w.WriteHeader(http.StatusAccepted)
-		fmt.Fprint(w, `{}`)
+		writeTestResponse(t, w, `{}`)
 	}))
 	defer chunkSrv.Close()
 
@@ -380,32 +395,57 @@ func TestUploadChunk_ContentRange(t *testing.T) {
 	length := int64(ChunkAlignment)
 	total := int64(3 * ChunkAlignment)
 
-	_, err := client.UploadChunk(
+	_, complete, err := client.UploadChunk(
 		t.Context(), session,
 		bytes.NewReader(make([]byte, ChunkAlignment)),
 		offset, length, total,
 	)
 	require.NoError(t, err)
+	assert.False(t, complete)
 }
 
-func TestUploadChunk_ServerError(t *testing.T) {
-	chunkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprint(w, `{"error":"internal"}`)
-	}))
-	defer chunkSrv.Close()
+func TestUploadChunk_ErrorClassification(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  int
+		body    string
+		wantErr error
+	}{
+		{
+			name:    "server error",
+			status:  http.StatusInternalServerError,
+			body:    `{"error":"internal"}`,
+			wantErr: ErrServerError,
+		},
+		{
+			name:    "range not satisfiable",
+			status:  http.StatusRequestedRangeNotSatisfiable,
+			body:    `{"error":"range not satisfiable"}`,
+			wantErr: ErrRangeNotSatisfiable,
+		},
+	}
 
-	client := newTestClient(t, "http://unused")
-	session := &UploadSession{UploadURL: UploadURL(chunkSrv.URL + "/upload")}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chunkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.status)
+				_, err := fmt.Fprint(w, tt.body)
+				assert.NoError(t, err)
+			}))
+			defer chunkSrv.Close()
 
-	_, err := client.UploadChunk(
-		t.Context(), session,
-		strings.NewReader("data"),
-		0, 4, 4,
-	)
-	require.Error(t, err)
-	// 500 is retryable; after exhausting retries, doPreAuth returns *GraphError.
-	assert.ErrorIs(t, err, ErrServerError)
+			client := newTestClient(t, "http://unused")
+			session := &UploadSession{UploadURL: UploadURL(chunkSrv.URL + "/upload")}
+
+			_, _, err := client.UploadChunk(
+				t.Context(), session,
+				strings.NewReader("data"),
+				0, 4, 4,
+			)
+			require.Error(t, err)
+			assert.ErrorIs(t, err, tt.wantErr)
+		})
+	}
 }
 
 func TestUploadChunk_ContextCanceled(t *testing.T) {
@@ -415,7 +455,7 @@ func TestUploadChunk_ContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	_, err := client.UploadChunk(
+	_, _, err := client.UploadChunk(
 		ctx, session,
 		strings.NewReader("data"),
 		0, 4, 4,
@@ -481,7 +521,9 @@ func TestCreateUploadSession_WithFileSystemInfo(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 
 		// Verify fileSystemInfo is included with the correct timestamp.
 		bodyStr := string(body)
@@ -490,8 +532,8 @@ func TestCreateUploadSession_WithFileSystemInfo(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
-			"uploadUrl": "https://upload.example.com/session/fsi",
+		writeTestResponse(t, w, `{
+			"uploadUrl": "https://uploads.contoso.sharepoint.com/session/fsi",
 			"expirationDateTime": "2024-12-31T23:59:59Z"
 		}`)
 	}))
@@ -502,14 +544,16 @@ func TestCreateUploadSession_WithFileSystemInfo(t *testing.T) {
 		t.Context(), driveid.New("d"), "parent", "timestamped.bin", 5242880, mtime,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, UploadURL("https://upload.example.com/session/fsi"), session.UploadURL)
+	assert.Equal(t, UploadURL("https://uploads.contoso.sharepoint.com/session/fsi"), session.UploadURL)
 }
 
 // Validates: R-5.6.4
 func TestCreateUploadSession_WithoutFileSystemInfo(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 
 		// Verify fileSystemInfo is NOT included when mtime is zero.
 		bodyStr := string(body)
@@ -518,8 +562,8 @@ func TestCreateUploadSession_WithoutFileSystemInfo(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
-			"uploadUrl": "https://upload.example.com/session/nofsi",
+		writeTestResponse(t, w, `{
+			"uploadUrl": "https://uploads.contoso.sharepoint.com/session/nofsi",
 			"expirationDateTime": "2024-12-31T23:59:59Z"
 		}`)
 	}))
@@ -530,26 +574,7 @@ func TestCreateUploadSession_WithoutFileSystemInfo(t *testing.T) {
 		t.Context(), driveid.New("d"), "parent", "no-timestamp.bin", 5242880, time.Time{},
 	)
 	require.NoError(t, err)
-	assert.Equal(t, UploadURL("https://upload.example.com/session/nofsi"), session.UploadURL)
-}
-
-func TestUploadChunk_416_RangeNotSatisfiable(t *testing.T) {
-	chunkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
-		fmt.Fprint(w, `{"error":"range not satisfiable"}`)
-	}))
-	defer chunkSrv.Close()
-
-	client := newTestClient(t, "http://unused")
-	session := &UploadSession{UploadURL: UploadURL(chunkSrv.URL + "/upload")}
-
-	_, err := client.UploadChunk(
-		t.Context(), session,
-		strings.NewReader("data"),
-		0, 4, 4,
-	)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrRangeNotSatisfiable)
+	assert.Equal(t, UploadURL("https://uploads.contoso.sharepoint.com/session/nofsi"), session.UploadURL)
 }
 
 func TestErrRangeNotSatisfiable_Classification(t *testing.T) {
@@ -565,8 +590,8 @@ func TestQueryUploadSession_Success(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
-			"uploadUrl": "https://upload.example.com/session/resume",
+		writeTestResponse(t, w, `{
+			"uploadUrl": "https://uploads.contoso.sharepoint.com/session/resume",
 			"expirationDateTime": "2024-12-31T23:59:59Z",
 			"nextExpectedRanges": ["327680-"]
 		}`)
@@ -579,7 +604,7 @@ func TestQueryUploadSession_Success(t *testing.T) {
 	status, err := client.QueryUploadSession(t.Context(), session)
 	require.NoError(t, err)
 
-	assert.Equal(t, UploadURL("https://upload.example.com/session/resume"), status.UploadURL)
+	assert.Equal(t, UploadURL("https://uploads.contoso.sharepoint.com/session/resume"), status.UploadURL)
 	assert.Equal(t, 2024, status.ExpirationTime.Year())
 	assert.Equal(t, []string{"327680-"}, status.NextExpectedRanges)
 }
@@ -587,7 +612,7 @@ func TestQueryUploadSession_Success(t *testing.T) {
 func TestQueryUploadSession_Expired(t *testing.T) {
 	sessionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, `{"error":"session not found"}`)
+		writeTestResponse(t, w, `{"error":"session not found"}`)
 	}))
 	defer sessionSrv.Close()
 
@@ -615,14 +640,14 @@ func TestHandleChunkResponse_FinalDecodeError(t *testing.T) {
 	chunkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		fmt.Fprint(w, `{not valid json`)
+		writeTestResponse(t, w, `{not valid json`)
 	}))
 	defer chunkSrv.Close()
 
 	client := newTestClient(t, "http://unused")
 	session := &UploadSession{UploadURL: UploadURL(chunkSrv.URL + "/upload")}
 
-	_, err := client.UploadChunk(
+	_, _, err := client.UploadChunk(
 		t.Context(), session,
 		strings.NewReader("final-data"),
 		0, 10, 10,
@@ -642,7 +667,7 @@ func TestHandleChunkResponse_IntermediateDrainError(t *testing.T) {
 		Body:       errorReadCloser{},
 	}
 
-	_, err := client.handleChunkResponse(resp)
+	_, _, err := client.handleChunkResponse(resp)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "draining chunk response body")
 }
@@ -653,7 +678,7 @@ func TestQueryUploadSession_DecodeError(t *testing.T) {
 	sessionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{not valid json`)
+		writeTestResponse(t, w, `{not valid json`)
 	}))
 	defer sessionSrv.Close()
 
@@ -671,8 +696,8 @@ func TestQueryUploadSession_InvalidExpiration(t *testing.T) {
 	sessionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
-			"uploadUrl": "https://upload.example.com/session/inv-exp",
+		writeTestResponse(t, w, `{
+			"uploadUrl": "https://uploads.contoso.sharepoint.com/session/inv-exp",
 			"expirationDateTime": "not-a-date",
 			"nextExpectedRanges": ["0-"]
 		}`)
@@ -685,7 +710,7 @@ func TestQueryUploadSession_InvalidExpiration(t *testing.T) {
 	status, err := client.QueryUploadSession(t.Context(), session)
 	require.NoError(t, err)
 
-	assert.Equal(t, UploadURL("https://upload.example.com/session/inv-exp"), status.UploadURL)
+	assert.Equal(t, UploadURL("https://uploads.contoso.sharepoint.com/session/inv-exp"), status.UploadURL)
 	assert.True(t, status.ExpirationTime.IsZero(), "invalid expiration should produce zero time")
 	assert.Equal(t, []string{"0-"}, status.NextExpectedRanges)
 }
@@ -701,12 +726,14 @@ func TestUpload_SimpleForSmallFile(t *testing.T) {
 		assert.NotContains(t, r.URL.Path, "createUploadSession")
 
 		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 		assert.Equal(t, content, body)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"id": "simple-item-id",
 			"name": "small.txt",
 			"size": %d,
@@ -743,7 +770,7 @@ func TestUpload_SimplePreservesMtime(t *testing.T) {
 		if r.Method == http.MethodPut {
 			// Simple upload — return item.
 			w.WriteHeader(http.StatusCreated)
-			fmt.Fprintf(w, `{
+			writeTestResponsef(t, w, `{
 				"id": "mtime-item",
 				"name": "mtime.txt",
 				"size": %d,
@@ -761,12 +788,14 @@ func TestUpload_SimplePreservesMtime(t *testing.T) {
 			patchCalled = true
 
 			body, err := io.ReadAll(r.Body)
-			require.NoError(t, err)
+			if !assert.NoError(t, err) {
+				return
+			}
 			assert.Contains(t, string(body), `"lastModifiedDateTime":"2024-07-10T09:00:00Z"`)
 			assert.Equal(t, "/drives/000000000000000d/items/mtime-item", r.URL.Path)
 
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprintf(w, `{
+			writeTestResponsef(t, w, `{
 				"id": "mtime-item",
 				"name": "mtime.txt",
 				"size": %d,
@@ -806,7 +835,7 @@ func TestUpload_SimpleSkipsPatchForZeroMtime(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"id": "no-mtime-item",
 			"name": "no-mtime.txt",
 			"size": %d,
@@ -837,7 +866,7 @@ func TestUpload_SimpleMtimePatchFailure(t *testing.T) {
 
 		if r.Method == http.MethodPut {
 			w.WriteHeader(http.StatusCreated)
-			fmt.Fprintf(w, `{
+			writeTestResponsef(t, w, `{
 				"id": "patch-fail-item",
 				"name": "fail.txt",
 				"size": %d,
@@ -853,7 +882,7 @@ func TestUpload_SimpleMtimePatchFailure(t *testing.T) {
 		if r.Method == http.MethodPatch {
 			w.Header().Set("request-id", "req-patch-fail")
 			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprint(w, `{"error":"server error"}`)
+			writeTestResponse(t, w, `{"error":"server error"}`)
 
 			return
 		}
@@ -895,13 +924,15 @@ func TestUpload_ChunkedForLargeFile(t *testing.T) {
 
 		// Drain the body.
 		n, err := io.Copy(io.Discard, r.Body)
-		require.NoError(t, err)
-		assert.Greater(t, n, int64(0))
+		if !assert.NoError(t, err) {
+			return
+		}
+		assert.Positive(t, n)
 
 		// Final chunk — return completed item.
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"id": "chunked-item-id",
 			"name": "large.bin",
 			"size": %d,
@@ -920,7 +951,7 @@ func TestUpload_ChunkedForLargeFile(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"uploadUrl": "%s/upload",
 			"expirationDateTime": "2024-12-31T23:59:59Z"
 		}`, chunkSrv.URL)
@@ -956,14 +987,14 @@ func TestUpload_ChunkedCancelsSessionOnError(t *testing.T) {
 
 		// Fail the chunk upload.
 		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprint(w, `{"error":"server error"}`)
+		writeTestResponse(t, w, `{"error":"server error"}`)
 	}))
 	defer chunkSrv.Close()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"uploadUrl": "%s/upload",
 			"expirationDateTime": "2024-12-31T23:59:59Z"
 		}`, chunkSrv.URL)
@@ -997,12 +1028,16 @@ func TestUpload_ProgressCallback(t *testing.T) {
 		chunkCount++
 
 		// Drain body.
-		_, _ = io.Copy(io.Discard, r.Body)
+		_, err := io.Copy(io.Discard, r.Body)
+		assert.NoError(t, err)
+		if err != nil {
+			return
+		}
 
 		if chunkCount < 2 {
 			// Intermediate chunk.
 			w.WriteHeader(http.StatusAccepted)
-			fmt.Fprint(w, `{}`)
+			writeTestResponse(t, w, `{}`)
 
 			return
 		}
@@ -1010,7 +1045,7 @@ func TestUpload_ProgressCallback(t *testing.T) {
 		// Final chunk.
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"id": "progress-item",
 			"name": "progress.bin",
 			"size": %d,
@@ -1025,7 +1060,7 @@ func TestUpload_ProgressCallback(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"uploadUrl": "%s/upload",
 			"expirationDateTime": "2024-12-31T23:59:59Z"
 		}`, chunkSrv.URL)
@@ -1061,7 +1096,7 @@ func TestUpload_NilProgress(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"id": "nil-prog-item",
 			"name": "nilprog.txt",
 			"size": %d,
@@ -1099,8 +1134,10 @@ func TestUploadChunk_RetriesOn503(t *testing.T) {
 
 		// Verify body is re-read on each attempt.
 		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		assert.Equal(t, 4, len(body), "retry attempt %d should have full body", n)
+		if !assert.NoError(t, err) {
+			return
+		}
+		assert.Len(t, body, 4, "retry attempt %d should have full body", n)
 
 		if n <= 2 {
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -1108,19 +1145,20 @@ func TestUploadChunk_RetriesOn503(t *testing.T) {
 		}
 
 		w.WriteHeader(http.StatusAccepted)
-		fmt.Fprint(w, `{}`)
+		writeTestResponse(t, w, `{}`)
 	}))
 	defer chunkSrv.Close()
 
 	client := newTestClient(t, "http://unused")
 	session := &UploadSession{UploadURL: UploadURL(chunkSrv.URL + "/upload")}
 
-	item, err := client.UploadChunk(
+	item, complete, err := client.UploadChunk(
 		t.Context(), session,
 		strings.NewReader("data"),
 		0, 4, 8,
 	)
 	require.NoError(t, err)
+	assert.False(t, complete)
 	assert.Nil(t, item, "intermediate chunk should return nil item")
 	assert.Equal(t, int32(3), calls.Load())
 }
@@ -1130,7 +1168,7 @@ func TestCancelUploadSession_Unexpected2xx(t *testing.T) {
 	// If the server returns 200, the explicit 204 check should fail.
 	chunkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"unexpected":"response"}`))
+		writeUploadTestBody(t, w, `{"unexpected":"response"}`)
 	}))
 	defer chunkSrv.Close()
 
@@ -1181,11 +1219,11 @@ func TestResumeUpload_Success(t *testing.T) {
 			// QueryUploadSession — return status with resume offset.
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprintf(w, `{
-				"uploadUrl": %q,
+			assert.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+				"uploadUrl":          "http://" + r.Host + r.URL.Path,
 				"expirationDateTime": "2025-12-31T23:59:59Z",
-				"nextExpectedRanges": ["%d-"]
-			}`, "http://"+r.Host+r.URL.Path, resumeOffset)
+				"nextExpectedRanges": []string{fmt.Sprintf("%d-", resumeOffset)},
+			}))
 
 		case http.MethodPut:
 			// Chunk upload — final chunk.
@@ -1196,11 +1234,11 @@ func TestResumeUpload_Success(t *testing.T) {
 			}
 
 			expectedLen := totalSize - resumeOffset
-			assert.Equal(t, int(expectedLen), len(body))
+			assert.Len(t, body, int(expectedLen))
 
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
-			fmt.Fprint(w, `{
+			writeTestResponse(t, w, `{
 				"id": "resumed-item",
 				"name": "big.bin",
 				"size": `+fmt.Sprintf("%d", totalSize)+`,
@@ -1232,7 +1270,7 @@ func TestResumeUpload_Success(t *testing.T) {
 func TestResumeUpload_SessionExpired(t *testing.T) {
 	sessionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, `{"error":{"code":"itemNotFound"}}`)
+		writeTestResponse(t, w, `{"error":{"code":"itemNotFound"}}`)
 	}))
 	defer sessionSrv.Close()
 
@@ -1255,8 +1293,8 @@ func TestCreateUploadSession_NoIfMatchHeader(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
-			"uploadUrl": "https://upload.example.com/session/no-if-match",
+		writeTestResponse(t, w, `{
+			"uploadUrl": "https://uploads.contoso.sharepoint.com/session/no-if-match",
 			"expirationDateTime": "2024-12-31T23:59:59Z"
 		}`)
 	}))
@@ -1294,14 +1332,14 @@ func TestUpload_ChunkedCancelsSession_CanceledContext(t *testing.T) {
 		cancel()
 
 		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprint(w, `{"error":"server error"}`)
+		writeTestResponse(t, w, `{"error":"server error"}`)
 	}))
 	defer chunkSrv.Close()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"uploadUrl": "%s/upload",
 			"expirationDateTime": "2024-12-31T23:59:59Z"
 		}`, chunkSrv.URL)
@@ -1331,12 +1369,14 @@ func TestUpload_ZeroByte_UsesSimple(t *testing.T) {
 			"zero-byte upload must not create an upload session")
 
 		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 		assert.Empty(t, body, "zero-byte upload body should be empty")
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		fmt.Fprint(w, `{
+		writeTestResponse(t, w, `{
 			"id": "zero-byte-item",
 			"name": "empty.txt",
 			"size": 0,
@@ -1377,7 +1417,7 @@ func TestUpload_NoPostUploadMetadataQuery(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		fmt.Fprintf(w, `{
+		writeTestResponsef(t, w, `{
 			"id": "no-requery-item",
 			"name": "norequery.txt",
 			"size": %d,
@@ -1413,8 +1453,8 @@ func TestQueryUploadSession_RetriesOn429(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{
-			"uploadUrl": "https://upload.example.com/session/retry",
+		writeTestResponse(t, w, `{
+			"uploadUrl": "https://uploads.contoso.sharepoint.com/session/retry",
 			"expirationDateTime": "2024-12-31T23:59:59Z",
 			"nextExpectedRanges": ["0-"]
 		}`)
@@ -1426,6 +1466,6 @@ func TestQueryUploadSession_RetriesOn429(t *testing.T) {
 
 	status, err := client.QueryUploadSession(t.Context(), session)
 	require.NoError(t, err)
-	assert.Equal(t, UploadURL("https://upload.example.com/session/retry"), status.UploadURL)
+	assert.Equal(t, UploadURL("https://uploads.contoso.sharepoint.com/session/retry"), status.UploadURL)
 	assert.Equal(t, int32(2), calls.Load())
 }

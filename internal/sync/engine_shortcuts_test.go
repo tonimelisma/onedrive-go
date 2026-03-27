@@ -317,8 +317,9 @@ func TestRegisterShortcuts_NewShortcut(t *testing.T) {
 	err := e.registerShortcuts(ctx, events)
 	require.NoError(t, err)
 
-	sc, err := mgr.GetShortcut(ctx, "sc-1")
+	sc, found, err := mgr.GetShortcut(ctx, "sc-1")
 	require.NoError(t, err)
+	require.True(t, found)
 	require.NotNil(t, sc)
 	assert.Equal(t, "remote-drive-1", sc.RemoteDrive)
 	assert.Equal(t, "remote-item-1", sc.RemoteItem)
@@ -361,8 +362,9 @@ func TestRegisterShortcuts_UpdateExisting(t *testing.T) {
 	err := e.registerShortcuts(ctx, events)
 	require.NoError(t, err)
 
-	sc, err := mgr.GetShortcut(ctx, "sc-1")
+	sc, found, err := mgr.GetShortcut(ctx, "sc-1")
 	require.NoError(t, err)
+	require.True(t, found)
 	require.NotNil(t, sc)
 	assert.Equal(t, "NewPath", sc.LocalPath)
 	// DriveType and Observation should be preserved from the existing record.
@@ -375,69 +377,56 @@ func TestRegisterShortcuts_UpdateExisting(t *testing.T) {
 // handleRemovedShortcuts (integration with syncstore.SyncStore)
 // ---------------------------------------------------------------------------
 
-// Validates: R-2.10.17
-func TestHandleRemovedShortcuts_RemovesKnownShortcut(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestManager(t)
-	ctx := t.Context()
-
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
-		ItemID:       "sc-1",
-		RemoteDrive:  "remote-drive-1",
-		RemoteItem:   "remote-item-1",
-		LocalPath:    "SharedFolder",
+func shortcutRecord(itemID, remoteDrive, remoteItem, localPath string) *synctypes.Shortcut {
+	return &synctypes.Shortcut{
+		ItemID:       itemID,
+		RemoteDrive:  remoteDrive,
+		RemoteItem:   remoteItem,
+		LocalPath:    localPath,
 		Observation:  synctypes.ObservationUnknown,
 		DiscoveredAt: 1000,
-	}))
-
-	shortcuts, err := mgr.ListShortcuts(ctx)
-	require.NoError(t, err)
-
-	e := &Engine{
-		baseline: mgr,
-		logger:   testLogger(t),
 	}
-
-	err = e.handleRemovedShortcuts(ctx, map[string]bool{"sc-1": true}, shortcuts)
-	require.NoError(t, err)
-
-	sc, err := mgr.GetShortcut(ctx, "sc-1")
-	require.NoError(t, err)
-	assert.Nil(t, sc, "shortcut should be deleted")
 }
 
 // Validates: R-2.10.17
-func TestHandleRemovedShortcuts_IgnoresNonShortcutDeletes(t *testing.T) {
+func TestHandleRemovedShortcuts(t *testing.T) {
 	t.Parallel()
 
-	mgr := newTestManager(t)
-	ctx := t.Context()
-
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
-		ItemID:       "sc-1",
-		RemoteDrive:  "remote-drive-1",
-		RemoteItem:   "remote-item-1",
-		LocalPath:    "SharedFolder",
-		Observation:  synctypes.ObservationUnknown,
-		DiscoveredAt: 1000,
-	}))
-
-	shortcuts, err := mgr.ListShortcuts(ctx)
-	require.NoError(t, err)
-
-	e := &Engine{
-		baseline: mgr,
-		logger:   testLogger(t),
+	tests := []struct {
+		name       string
+		removedIDs map[string]bool
+		wantFound  bool
+		wantNil    bool
+	}{
+		{name: "RemovesKnownShortcut", removedIDs: map[string]bool{"sc-1": true}, wantNil: true},
+		{name: "IgnoresNonShortcutDeletes", removedIDs: map[string]bool{"other-item": true}, wantFound: true},
 	}
 
-	// Delete a different item ID — shortcut should remain.
-	err = e.handleRemovedShortcuts(ctx, map[string]bool{"other-item": true}, shortcuts)
-	require.NoError(t, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	sc, err := mgr.GetShortcut(ctx, "sc-1")
-	require.NoError(t, err)
-	assert.NotNil(t, sc, "shortcut should still exist")
+			mgr := newTestManager(t)
+			ctx := t.Context()
+			require.NoError(t, mgr.UpsertShortcut(ctx, shortcutRecord("sc-1", "remote-drive-1", "remote-item-1", "SharedFolder")))
+
+			shortcuts, err := mgr.ListShortcuts(ctx)
+			require.NoError(t, err)
+
+			e := &Engine{baseline: mgr, logger: testLogger(t)}
+			require.NoError(t, e.handleRemovedShortcuts(ctx, tt.removedIDs, shortcuts))
+
+			sc, found, err := mgr.GetShortcut(ctx, "sc-1")
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantFound, found)
+			if tt.wantNil {
+				assert.Nil(t, sc, "shortcut should be deleted")
+				return
+			}
+
+			assert.NotNil(t, sc, "shortcut should still exist")
+		})
+	}
 }
 
 // Validates: R-2.10.17, R-2.10.38
@@ -563,39 +552,6 @@ func TestDetectShortcutCollisions_NoCollisions(t *testing.T) {
 }
 
 // Validates: R-2.10.16
-func TestDetectShortcutCollisions_DuplicatePath(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestManager(t)
-	ctx := t.Context()
-
-	// Two shortcuts at the same local path.
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
-		ItemID:       "sc-1",
-		RemoteDrive:  "remote-drive-1",
-		RemoteItem:   "remote-item-1",
-		LocalPath:    "SharedDocs",
-		Observation:  synctypes.ObservationUnknown,
-		DiscoveredAt: 1000,
-	}))
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
-		ItemID:       "sc-2",
-		RemoteDrive:  "remote-drive-2",
-		RemoteItem:   "remote-item-2",
-		LocalPath:    "SharedDocs",
-		Observation:  synctypes.ObservationUnknown,
-		DiscoveredAt: 1000,
-	}))
-
-	shortcuts, err := mgr.ListShortcuts(ctx)
-	require.NoError(t, err)
-
-	collisions := detectShortcutCollisionsFromList(shortcuts, emptyBaseline(), testLogger(t))
-	assert.True(t, collisions["sc-2"], "later duplicate should be in collisions set")
-	assert.False(t, collisions["sc-1"], "first shortcut should be kept")
-}
-
-// Validates: R-2.10.16
 func TestDetectShortcutCollisions_PrimaryDriveConflict(t *testing.T) {
 	t.Parallel()
 
@@ -628,35 +584,51 @@ func TestDetectShortcutCollisions_PrimaryDriveConflict(t *testing.T) {
 }
 
 // Validates: R-2.10.16
-func TestDetectShortcutCollisions_NestedPaths(t *testing.T) {
+func TestDetectShortcutCollisions_PathConflicts(t *testing.T) {
 	t.Parallel()
 
-	mgr := newTestManager(t)
-	ctx := t.Context()
+	tests := []struct {
+		name           string
+		shortcuts      []*synctypes.Shortcut
+		wantCollisions map[string]bool
+	}{
+		{
+			name: "DuplicatePath",
+			shortcuts: []*synctypes.Shortcut{
+				shortcutRecord("sc-1", "remote-drive-1", "remote-item-1", "SharedDocs"),
+				shortcutRecord("sc-2", "remote-drive-2", "remote-item-2", "SharedDocs"),
+			},
+			wantCollisions: map[string]bool{"sc-2": true},
+		},
+		{
+			name: "NestedPaths",
+			shortcuts: []*synctypes.Shortcut{
+				shortcutRecord("sc-parent", "remote-drive-1", "remote-item-1", "Shared"),
+				shortcutRecord("sc-child", "remote-drive-2", "remote-item-2", "Shared/Sub"),
+			},
+			wantCollisions: map[string]bool{"sc-child": true},
+		},
+	}
 
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
-		ItemID:       "sc-parent",
-		RemoteDrive:  "remote-drive-1",
-		RemoteItem:   "remote-item-1",
-		LocalPath:    "Shared",
-		Observation:  synctypes.ObservationUnknown,
-		DiscoveredAt: 1000,
-	}))
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
-		ItemID:       "sc-child",
-		RemoteDrive:  "remote-drive-2",
-		RemoteItem:   "remote-item-2",
-		LocalPath:    "Shared/Sub",
-		Observation:  synctypes.ObservationUnknown,
-		DiscoveredAt: 1000,
-	}))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	shortcuts, err := mgr.ListShortcuts(ctx)
-	require.NoError(t, err)
+			mgr := newTestManager(t)
+			ctx := t.Context()
+			for _, sc := range tt.shortcuts {
+				require.NoError(t, mgr.UpsertShortcut(ctx, sc))
+			}
 
-	collisions := detectShortcutCollisionsFromList(shortcuts, emptyBaseline(), testLogger(t))
-	assert.True(t, collisions["sc-child"], "child nested under parent shortcut should be in collisions set")
-	assert.False(t, collisions["sc-parent"], "parent shortcut should be kept")
+			shortcuts, err := mgr.ListShortcuts(ctx)
+			require.NoError(t, err)
+
+			collisions := detectShortcutCollisionsFromList(shortcuts, emptyBaseline(), testLogger(t))
+			for _, sc := range tt.shortcuts {
+				assert.Equal(t, tt.wantCollisions[sc.ItemID], collisions[sc.ItemID], "collision mismatch for %s", sc.ItemID)
+			}
+		})
+	}
 }
 
 // Validates: R-2.10.16
@@ -771,7 +743,7 @@ func TestDetectDriveType_ErrorFallsBackToEnumerate(t *testing.T) {
 	}
 
 	driveType, obs := e.detectDriveType(t.Context(), "0000000000000099")
-	assert.Equal(t, "", driveType)
+	assert.Empty(t, driveType)
 	assert.Equal(t, synctypes.ObservationEnumerate, obs)
 }
 
@@ -1020,8 +992,9 @@ func TestProcessShortcuts_RegistersAndObserves(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should have registered the shortcut.
-	sc, err := mgr.GetShortcut(ctx, "sc-1")
+	sc, found, err := mgr.GetShortcut(ctx, "sc-1")
 	require.NoError(t, err)
+	require.True(t, found)
 	require.NotNil(t, sc)
 	assert.Equal(t, "SharedDocs", sc.LocalPath)
 
@@ -1059,8 +1032,9 @@ func TestProcessShortcuts_DryRunSkipsObservation(t *testing.T) {
 	assert.Nil(t, events, "dry-run should skip observation")
 
 	// synctypes.Shortcut should still be registered.
-	sc, err := mgr.GetShortcut(ctx, "sc-1")
+	sc, found, err := mgr.GetShortcut(ctx, "sc-1")
 	require.NoError(t, err)
+	require.True(t, found)
 	require.NotNil(t, sc)
 }
 
@@ -1300,11 +1274,13 @@ func TestReconcileShortcutScopes_DeltaReconciliation(t *testing.T) {
 
 	var creates, deletes int
 	for _, ev := range events {
-		switch ev.Type { //nolint:exhaustive // only create and delete are relevant
-		case synctypes.ChangeCreate:
+		if ev.Type == synctypes.ChangeCreate {
 			creates++
 			assert.Equal(t, "Shared/Delta/new.txt", ev.Path)
-		case synctypes.ChangeDelete:
+			continue
+		}
+
+		if ev.Type == synctypes.ChangeDelete {
 			deletes++
 			assert.Equal(t, "Shared/Delta/old.txt", ev.Path)
 		}

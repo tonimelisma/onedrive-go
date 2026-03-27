@@ -19,7 +19,7 @@ func TestNewSyncEngine_EmptySyncDir(t *testing.T) {
 	}
 	logger := buildLogger(nil, CLIFlags{})
 
-	_, err := newSyncEngine(session, resolved, false, logger)
+	_, err := newSyncEngine(t.Context(), session, resolved, false, logger)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sync_dir not configured")
 }
@@ -33,7 +33,7 @@ func TestNewSyncEngine_EmptyStatePath(t *testing.T) {
 	}
 	logger := buildLogger(nil, CLIFlags{})
 
-	_, err := newSyncEngine(session, resolved, false, logger)
+	_, err := newSyncEngine(t.Context(), session, resolved, false, logger)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "state DB path")
 }

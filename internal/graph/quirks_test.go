@@ -41,6 +41,13 @@ func (f *failOnSecondSeeker) Seek(_ int64, _ int) (int64, error) {
 	return 0, nil
 }
 
+func writeQuirksTestBody(t *testing.T, w http.ResponseWriter, body string) {
+	t.Helper()
+
+	_, err := w.Write([]byte(body))
+	require.NoError(t, err)
+}
+
 // ---------------------------------------------------------------------------
 // §1: Delta normalization pipeline quirk tests
 // ---------------------------------------------------------------------------
@@ -230,7 +237,7 @@ func TestPreAuthURL_NoAuthorizationHeader(t *testing.T) {
 		auth := r.Header.Get("Authorization")
 		assert.Empty(t, auth, "pre-auth URL must not have Authorization header")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("content"))
+		writeQuirksTestBody(t, w, "content")
 	}))
 	defer srv.Close()
 
@@ -239,7 +246,7 @@ func TestPreAuthURL_NoAuthorizationHeader(t *testing.T) {
 	resp, err := client.doPreAuth(t.Context(), "test", func() (*http.Request, error) {
 		req, reqErr := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/download", http.NoBody)
 		if reqErr != nil {
-			return nil, reqErr
+			return nil, fmt.Errorf("build pre-auth request: %w", reqErr)
 		}
 		req.Header.Set("User-Agent", client.userAgent)
 		return req, nil
@@ -262,11 +269,11 @@ func TestSimpleUpload_OctetStreamContentType(t *testing.T) {
 			"simple upload is authenticated")
 
 		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(driveItemResponse{
+		assert.NoError(t, json.NewEncoder(w).Encode(driveItemResponse{
 			ID:   "item-1",
 			Name: "test.txt",
 			File: &fileFacet{Hashes: &hashFacet{QuickXorHash: "abc"}},
-		})
+		}))
 	}))
 	defer srv.Close()
 
@@ -288,7 +295,7 @@ func TestSimpleUpload_OctetStreamContentType(t *testing.T) {
 func TestHandleChunkResponse_Intermediate202(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
-		_, _ = w.Write([]byte(`{"nextExpectedRanges":["10485760-"]}`))
+		writeQuirksTestBody(t, w, `{"nextExpectedRanges":["10485760-"]}`)
 	}))
 	defer srv.Close()
 
@@ -300,8 +307,9 @@ func TestHandleChunkResponse_Intermediate202(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	item, err := client.handleChunkResponse(resp)
+	item, complete, err := client.handleChunkResponse(resp)
 	require.NoError(t, err)
+	assert.False(t, complete)
 	assert.Nil(t, item, "intermediate chunk should return nil item")
 }
 
@@ -310,11 +318,11 @@ func TestHandleChunkResponse_Intermediate202(t *testing.T) {
 func TestHandleChunkResponse_Final201(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(driveItemResponse{
+		assert.NoError(t, json.NewEncoder(w).Encode(driveItemResponse{
 			ID:   "completed-item",
 			Name: "uploaded.txt",
 			File: &fileFacet{Hashes: &hashFacet{QuickXorHash: "hash123"}},
-		})
+		}))
 	}))
 	defer srv.Close()
 
@@ -326,8 +334,9 @@ func TestHandleChunkResponse_Final201(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	item, err := client.handleChunkResponse(resp)
+	item, complete, err := client.handleChunkResponse(resp)
 	require.NoError(t, err)
+	assert.True(t, complete)
 	require.NotNil(t, item, "final chunk should return item")
 	assert.Equal(t, "completed-item", item.ID)
 }
@@ -337,10 +346,10 @@ func TestHandleChunkResponse_Final201(t *testing.T) {
 func TestHandleChunkResponse_Final200(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(driveItemResponse{
+		assert.NoError(t, json.NewEncoder(w).Encode(driveItemResponse{
 			ID:   "completed-item",
 			Name: "uploaded.txt",
-		})
+		}))
 	}))
 	defer srv.Close()
 
@@ -352,8 +361,9 @@ func TestHandleChunkResponse_Final200(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	item, err := client.handleChunkResponse(resp)
+	item, complete, err := client.handleChunkResponse(resp)
 	require.NoError(t, err)
+	assert.True(t, complete)
 	require.NotNil(t, item)
 	assert.Equal(t, "completed-item", item.ID)
 }
@@ -369,8 +379,9 @@ func TestHandleChunkResponse_Unexpected2xx(t *testing.T) {
 
 	client := newTestClient(t, "http://unused")
 
-	item, err := client.handleChunkResponse(resp)
+	item, complete, err := client.handleChunkResponse(resp)
 	require.Error(t, err)
+	assert.False(t, complete)
 	assert.Nil(t, item)
 	assert.Contains(t, err.Error(), "unexpected status 204")
 }
@@ -385,7 +396,7 @@ func TestDelta_HTTP410_TokenExpired(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("request-id", "gone-req")
 		w.WriteHeader(http.StatusGone)
-		_, _ = w.Write([]byte(`{"error":{"code":"resyncRequired"}}`))
+		writeQuirksTestBody(t, w, `{"error":{"code":"resyncRequired"}}`)
 	}))
 	defer srv.Close()
 
@@ -421,7 +432,7 @@ func TestRewindBody_FailOnSecondSeek(t *testing.T) {
 
 	// First seek succeeds.
 	err := rewindBody(body)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Second seek fails — this is what happens on retry.
 	err = rewindBody(body)
@@ -454,7 +465,7 @@ func TestClassifyStatus_UnmappedCodes(t *testing.T) {
 		t.Run(fmt.Sprintf("HTTP_%d", tt.code), func(t *testing.T) {
 			got := classifyStatus(tt.code)
 			if tt.want == nil {
-				assert.Nil(t, got)
+				assert.NoError(t, got)
 			} else {
 				assert.Equal(t, tt.want, got)
 			}
@@ -478,17 +489,20 @@ func TestUpload_SessionCanceledOnChunkError(t *testing.T) {
 		switch {
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "createUploadSession"):
 			// Create session succeeds — use the stored server URL.
-			url := srvURL.Load().(string)
-			_ = json.NewEncoder(w).Encode(uploadSessionResponse{
+			url, ok := srvURL.Load().(string)
+			if !assert.True(t, ok) {
+				return
+			}
+			assert.NoError(t, json.NewEncoder(w).Encode(uploadSessionResponse{
 				UploadURL:          url + "/upload-session",
 				ExpirationDateTime: time.Now().Add(time.Hour).Format(time.RFC3339),
-			})
+			}))
 
 		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "upload-session"):
 			// Chunk upload fails with non-retryable error.
 			w.Header().Set("request-id", "chunk-fail")
 			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(`{"error":"forbidden"}`))
+			writeQuirksTestBody(t, w, `{"error":"forbidden"}`)
 
 		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "upload-session"):
 			// Session cancel.
@@ -497,7 +511,7 @@ func TestUpload_SessionCanceledOnChunkError(t *testing.T) {
 
 		default:
 			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(driveItemResponse{ID: "parent-1"})
+			assert.NoError(t, json.NewEncoder(w).Encode(driveItemResponse{ID: "parent-1"}))
 		}
 	})
 
@@ -515,7 +529,7 @@ func TestUpload_SessionCanceledOnChunkError(t *testing.T) {
 		content, int64(content.Len()), time.Time{}, nil,
 	)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrForbidden)
+	require.ErrorIs(t, err, ErrForbidden)
 	assert.Equal(t, int32(1), sessionCanceled.Load(),
 		"upload session should be canceled on error")
 }
@@ -533,26 +547,28 @@ func TestUpload_SimpleUploadFollowedByMtimePatch(t *testing.T) {
 			// Simple upload.
 			assert.Equal(t, "application/octet-stream", r.Header.Get("Content-Type"))
 			w.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(w).Encode(driveItemResponse{
+			assert.NoError(t, json.NewEncoder(w).Encode(driveItemResponse{
 				ID:   "new-item",
 				Name: "small.txt",
-			})
+			}))
 
 		case r.Method == http.MethodPatch:
 			// Mtime PATCH.
 			patchCalled.Add(1)
 			var body map[string]any
-			_ = json.NewDecoder(r.Body).Decode(&body)
+			assert.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 
 			fsInfo, ok := body["fileSystemInfo"].(map[string]any)
-			require.True(t, ok, "PATCH should include fileSystemInfo")
+			if !assert.True(t, ok, "PATCH should include fileSystemInfo") {
+				return
+			}
 			assert.Contains(t, fsInfo["lastModifiedDateTime"], "2025-06-15")
 
 			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(driveItemResponse{
+			assert.NoError(t, json.NewEncoder(w).Encode(driveItemResponse{
 				ID:   "new-item",
 				Name: "small.txt",
-			})
+			}))
 
 		default:
 			w.WriteHeader(http.StatusOK)
@@ -586,7 +602,7 @@ func TestUpload_SimpleUploadNoMtime(t *testing.T) {
 
 		if r.Method == http.MethodPut && strings.Contains(r.URL.Path, "content") {
 			w.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(w).Encode(driveItemResponse{ID: "item-1", Name: "test.txt"})
+			assert.NoError(t, json.NewEncoder(w).Encode(driveItemResponse{ID: "item-1", Name: "test.txt"}))
 			return
 		}
 
@@ -620,7 +636,9 @@ func TestUploadChunk_ReaderAtEnablesRetrySafe(t *testing.T) {
 
 		// Read entire body to verify data integrity.
 		body, readErr := io.ReadAll(r.Body)
-		require.NoError(t, readErr)
+		if !assert.NoError(t, readErr) {
+			return
+		}
 
 		n := attempts.Add(1)
 		if n <= 1 {
@@ -632,7 +650,7 @@ func TestUploadChunk_ReaderAtEnablesRetrySafe(t *testing.T) {
 		// Second attempt succeeds: verify body is complete (not empty from exhausted reader).
 		assert.Len(t, body, 1024, "retry should have full body via fresh SectionReader")
 		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(driveItemResponse{ID: "item-1", Name: "file.txt"})
+		assert.NoError(t, json.NewEncoder(w).Encode(driveItemResponse{ID: "item-1", Name: "file.txt"}))
 	}))
 	defer srv.Close()
 
@@ -646,8 +664,9 @@ func TestUploadChunk_ReaderAtEnablesRetrySafe(t *testing.T) {
 	session := &UploadSession{UploadURL: UploadURL(srv.URL + "/upload")}
 	chunk := bytes.NewReader(data)
 
-	item, err := client.UploadChunk(t.Context(), session, chunk, 0, 1024, 1024)
+	item, complete, err := client.UploadChunk(t.Context(), session, chunk, 0, 1024, 1024)
 	require.NoError(t, err)
+	assert.True(t, complete)
 	require.NotNil(t, item)
 	assert.Equal(t, int32(2), attempts.Load(), "should have retried once")
 }
@@ -658,7 +677,7 @@ func TestUploadChunk_416_ClassifiedAsRangeError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("request-id", "range-err")
 		w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
-		_, _ = w.Write([]byte(`{"error":"range"}`))
+		writeQuirksTestBody(t, w, `{"error":"range"}`)
 	}))
 	defer srv.Close()
 
@@ -667,11 +686,11 @@ func TestUploadChunk_416_ClassifiedAsRangeError(t *testing.T) {
 	session := &UploadSession{UploadURL: UploadURL(srv.URL + "/upload")}
 	chunk := bytes.NewReader(make([]byte, 1024))
 
-	_, err := client.UploadChunk(t.Context(), session, chunk, 0, 1024, 2048)
+	_, _, err := client.UploadChunk(t.Context(), session, chunk, 0, 1024, 2048)
 	require.Error(t, err)
 
 	var graphErr *GraphError
-	require.True(t, errors.As(err, &graphErr), "error should be a GraphError")
+	require.ErrorAs(t, err, &graphErr, "error should be a GraphError")
 	assert.Equal(t, http.StatusRequestedRangeNotSatisfiable, graphErr.StatusCode)
 }
 
@@ -684,13 +703,16 @@ func TestQueryUploadSession_ReturnsNextExpectedRanges(t *testing.T) {
 		assert.Equal(t, http.MethodGet, r.Method)
 		assert.Empty(t, r.Header.Get("Authorization"), "session URL is pre-authenticated")
 
-		url := srvURL.Load().(string)
+		url, ok := srvURL.Load().(string)
+		if !assert.True(t, ok) {
+			return
+		}
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(uploadSessionStatusResponse{
+		assert.NoError(t, json.NewEncoder(w).Encode(uploadSessionStatusResponse{
 			UploadURL:          url + "/upload",
 			ExpirationDateTime: time.Now().Add(time.Hour).Format(time.RFC3339),
 			NextExpectedRanges: []string{"327680-"},
-		})
+		}))
 	}))
 	defer srv.Close()
 	srvURL.Store(srv.URL)
@@ -713,7 +735,7 @@ func TestQueryUploadSession_ReturnsNextExpectedRanges(t *testing.T) {
 func TestDeltaAll_HTTP410_ReturnsGone(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusGone)
-		_, _ = w.Write([]byte(`{"error":{"code":"resyncRequired"}}`))
+		writeQuirksTestBody(t, w, `{"error":{"code":"resyncRequired"}}`)
 	}))
 	defer srv.Close()
 

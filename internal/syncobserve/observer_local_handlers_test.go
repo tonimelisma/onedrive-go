@@ -137,7 +137,7 @@ func TestWatch_DetectsFileModify(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Modify the file.
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "existing.txt"), []byte("modified"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "existing.txt"), []byte("modified"), 0o600))
 
 	var ev synctypes.ChangeEvent
 	select {
@@ -226,7 +226,7 @@ func TestLocalWatch_ContextCancellation(t *testing.T) {
 
 	select {
 	case err := <-done:
-		assert.NoError(t, err, "Watch should return nil after context cancellation")
+		require.NoError(t, err, "Watch should return nil after context cancellation")
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "Watch did not return after context cancellation")
 	}
@@ -277,11 +277,11 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 	recorder.waitForCalls(t, 1)
 
 	calls := recorder.getCalls()
-	require.Equal(t, retry.WatchLocal.Base, calls[0],
+	require.Equal(t, retry.WatchLocalPolicy().Base, calls[0],
 		"first error should use initial backoff")
 
 	// Step 2: Fire the safety scan tick deterministically (no time.Sleep).
-	// The safety scan resets errBackoff to retry.WatchLocal.Base.
+	// The safety scan resets errBackoff to retry.WatchLocalPolicy().Base.
 	tickCh <- time.Now()
 
 	// Give watchLoop time to process the tick before we send the next error.
@@ -296,7 +296,7 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 	recorder.waitForCalls(t, 2)
 
 	calls = recorder.getCalls()
-	require.Equal(t, retry.WatchLocal.Base, calls[1],
+	require.Equal(t, retry.WatchLocalPolicy().Base, calls[1],
 		"second error after safety scan should use initial backoff (reset)")
 
 	cancel()
@@ -345,8 +345,8 @@ func TestWatchLoop_BackoffEscalatesWithoutReset(t *testing.T) {
 	recorder.waitForCalls(t, 2)
 
 	calls := recorder.getCalls()
-	require.Equal(t, retry.WatchLocal.Base, calls[0], "first error: initial backoff")
-	require.Equal(t, retry.WatchLocal.Base*time.Duration(retry.WatchLocal.Multiplier), calls[1],
+	require.Equal(t, retry.WatchLocalPolicy().Base, calls[0], "first error: initial backoff")
+	require.Equal(t, retry.WatchLocalPolicy().Base*time.Duration(retry.WatchLocalPolicy().Multiplier), calls[1],
 		"second error: escalated backoff (no safety scan to reset)")
 
 	cancel()
@@ -368,19 +368,7 @@ func TestWatchLoop_ChmodCreateCombinedEvent(t *testing.T) {
 	writeTestFile(t, dir, "combo.txt", "combined event content")
 
 	mockWatcher := newMockFsWatcher()
-	obs := &LocalObserver{
-		Baseline:  synctest.EmptyBaseline(),
-		Logger:    synctest.TestLogger(t),
-		SleepFunc: func(_ context.Context, _ time.Duration) error { return nil },
-		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
-			return make(chan time.Time), func() {}
-		},
-		WatcherFactory: func() (FsWatcher, error) {
-			return mockWatcher, nil
-		},
-		PendingTimers: make(map[string]*time.Timer),
-		HashRequests:  make(chan HashRequest, HashRequestBufSize),
-	}
+	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
 
 	events := make(chan synctypes.ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -422,19 +410,7 @@ func TestWatchLoop_TransientFileCreateDelete(t *testing.T) {
 	dir := t.TempDir()
 
 	mockWatcher := newMockFsWatcher()
-	obs := &LocalObserver{
-		Baseline:  synctest.EmptyBaseline(),
-		Logger:    synctest.TestLogger(t),
-		SleepFunc: func(_ context.Context, _ time.Duration) error { return nil },
-		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
-			return make(chan time.Time), func() {}
-		},
-		WatcherFactory: func() (FsWatcher, error) {
-			return mockWatcher, nil
-		},
-		PendingTimers: make(map[string]*time.Timer),
-		HashRequests:  make(chan HashRequest, HashRequestBufSize),
-	}
+	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
 
 	events := make(chan synctypes.ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -481,7 +457,7 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create destination directory and the moved file.
-	require.NoError(t, os.Mkdir(filepath.Join(dir, "dest"), 0o755))
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "dest"), 0o700))
 	writeTestFile(t, dir, "dest/moved.txt", "moved content")
 
 	// Baseline has the file at the old path.
@@ -545,10 +521,12 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 	// Find the Create and Delete events (order may vary).
 	var createEv, deleteEv *synctypes.ChangeEvent
 	for i := range collected {
-		switch collected[i].Type { //nolint:exhaustive // only checking the two expected types
-		case synctypes.ChangeCreate:
+		if collected[i].Type == synctypes.ChangeCreate {
 			createEv = &collected[i]
-		case synctypes.ChangeDelete:
+			continue
+		}
+
+		if collected[i].Type == synctypes.ChangeDelete {
 			deleteEv = &collected[i]
 		}
 	}

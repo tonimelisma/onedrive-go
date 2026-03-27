@@ -3,8 +3,6 @@ package driveops
 import (
 	"context"
 	"errors"
-	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -25,7 +23,7 @@ type stubTokenSource struct{}
 func (s *stubTokenSource) Token() (string, error) { return "test-token", nil }
 
 func discardLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
+	return slog.New(slog.DiscardHandler)
 }
 
 // --- CleanRemotePath ---
@@ -281,7 +279,7 @@ func TestSession_ResolveItem_Root(t *testing.T) {
 
 	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
-		fmt.Fprintf(w, `{"id":"root-id","name":"root"}`)
+		writeTestResponsef(t, w, `{"id":"root-id","name":"root"}`)
 	}))
 
 	item, err := s.ResolveItem(t.Context(), "")
@@ -297,7 +295,7 @@ func TestSession_ResolveItem_Path(t *testing.T) {
 
 	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
-		fmt.Fprintf(w, `{"id":"doc-id","name":"file.txt"}`)
+		writeTestResponsef(t, w, `{"id":"doc-id","name":"file.txt"}`)
 	}))
 
 	item, err := s.ResolveItem(t.Context(), "Documents/file.txt")
@@ -313,7 +311,7 @@ func TestSession_ResolveItem_SlashRoot(t *testing.T) {
 
 	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
-		fmt.Fprintf(w, `{"id":"root-id","name":"root"}`)
+		writeTestResponsef(t, w, `{"id":"root-id","name":"root"}`)
 	}))
 
 	item, err := s.ResolveItem(t.Context(), "/")
@@ -324,38 +322,50 @@ func TestSession_ResolveItem_SlashRoot(t *testing.T) {
 
 // --- ListChildren ---
 
-func TestSession_ListChildren_Root(t *testing.T) {
+func TestSession_ListChildren(t *testing.T) {
 	t.Parallel()
 
-	var gotPath string
+	tests := []struct {
+		name         string
+		path         string
+		responseID   string
+		responseName string
+		wantPath     string
+	}{
+		{
+			name:         "Root",
+			path:         "",
+			responseID:   "child1",
+			responseName: "docs",
+			wantPath:     "/drives/abcdef0123456789/items/root/children",
+		},
+		{
+			name:         "Path",
+			path:         "Documents",
+			responseID:   "child2",
+			responseName: "report.docx",
+			wantPath:     "/drives/abcdef0123456789/root:/Documents:/children",
+		},
+	}
 
-	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		fmt.Fprintf(w, `{"value":[{"id":"child1","name":"docs"}]}`)
-	}))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	items, err := s.ListChildren(t.Context(), "")
-	require.NoError(t, err)
-	assert.Len(t, items, 1)
-	assert.Equal(t, "child1", items[0].ID)
-	assert.Contains(t, gotPath, "/drives/abcdef0123456789/items/root/children")
-}
+			var gotPath string
 
-func TestSession_ListChildren_Path(t *testing.T) {
-	t.Parallel()
+			s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath = r.URL.Path
+				writeTestResponsef(t, w, `{"value":[{"id":%q,"name":%q}]}`, tt.responseID, tt.responseName)
+			}))
 
-	var gotPath string
-
-	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		fmt.Fprintf(w, `{"value":[{"id":"child2","name":"report.docx"}]}`)
-	}))
-
-	items, err := s.ListChildren(t.Context(), "Documents")
-	require.NoError(t, err)
-	assert.Len(t, items, 1)
-	assert.Equal(t, "child2", items[0].ID)
-	assert.Contains(t, gotPath, "/drives/abcdef0123456789/root:/Documents:/children")
+			items, err := s.ListChildren(t.Context(), tt.path)
+			require.NoError(t, err)
+			assert.Len(t, items, 1)
+			assert.Equal(t, tt.responseID, items[0].ID)
+			assert.Contains(t, gotPath, tt.wantPath)
+		})
+	}
 }
 
 // --- Delegation methods ---
@@ -404,7 +414,7 @@ func TestSession_CreateFolder(t *testing.T) {
 		gotMethod = r.Method
 		gotPath = r.URL.Path
 		w.WriteHeader(http.StatusCreated)
-		fmt.Fprintf(w, `{"id":"new-folder-id","name":"NewFolder"}`)
+		writeTestResponsef(t, w, `{"id":"new-folder-id","name":"NewFolder"}`)
 	}))
 
 	item, err := s.CreateFolder(t.Context(), "parent-id", "NewFolder")
@@ -446,7 +456,7 @@ func TestEnsureFolder_Created(t *testing.T) {
 
 	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
-		fmt.Fprintf(w, `{"id":"new-id","name":"docs","folder":{}}`)
+		writeTestResponsef(t, w, `{"id":"new-id","name":"docs","folder":{}}`)
 	}))
 
 	item, err := s.EnsureFolder(t.Context(), "parent-id", "docs")
@@ -462,12 +472,12 @@ func TestEnsureFolder_Conflict(t *testing.T) {
 		// CreateFolder = POST, ListChildren = GET — both hit /children
 		if r.Method == http.MethodPost {
 			w.WriteHeader(http.StatusConflict)
-			fmt.Fprintf(w, `{"error":{"code":"nameAlreadyExists"}}`)
+			writeTestResponsef(t, w, `{"error":{"code":"nameAlreadyExists"}}`)
 
 			return
 		}
 		// GET /children → returns matching folder
-		fmt.Fprintf(w, `{"value":[{"id":"existing-id","name":"docs","folder":{}}]}`)
+		writeTestResponsef(t, w, `{"value":[{"id":"existing-id","name":"docs","folder":{}}]}`)
 	}))
 
 	item, err := s.EnsureFolder(t.Context(), "parent-id", "docs")
@@ -481,12 +491,12 @@ func TestEnsureFolder_ConflictNotFound(t *testing.T) {
 	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			w.WriteHeader(http.StatusConflict)
-			fmt.Fprintf(w, `{"error":{"code":"nameAlreadyExists"}}`)
+			writeTestResponsef(t, w, `{"error":{"code":"nameAlreadyExists"}}`)
 
 			return
 		}
 		// GET /children → no matching folder
-		fmt.Fprintf(w, `{"value":[{"id":"other-id","name":"other","folder":{}}]}`)
+		writeTestResponsef(t, w, `{"value":[{"id":"other-id","name":"other","folder":{}}]}`)
 	}))
 
 	_, err := s.EnsureFolder(t.Context(), "parent-id", "docs")

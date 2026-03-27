@@ -157,7 +157,7 @@ func TestParseAndRenderLines_EmptyContent(t *testing.T) {
 
 	lines := parseLines("")
 	assert.Len(t, lines, 1) // strings.Split("", "\n") returns [""]
-	assert.Equal(t, "", renderLines(lines))
+	assert.Empty(t, renderLines(lines))
 }
 
 // --- renderKeyValueLine ---
@@ -288,7 +288,7 @@ func TestSplitInlineComment_NoComment(t *testing.T) {
 
 	value, comment := splitInlineComment(`"~/OneDrive"`)
 	assert.Equal(t, `"~/OneDrive"`, value)
-	assert.Equal(t, "", comment)
+	assert.Empty(t, comment)
 }
 
 func TestSplitInlineComment_WithComment(t *testing.T) {
@@ -304,7 +304,7 @@ func TestSplitInlineComment_HashInsideQuotes(t *testing.T) {
 
 	value, comment := splitInlineComment(`"path#with#hash"`)
 	assert.Equal(t, `"path#with#hash"`, value)
-	assert.Equal(t, "", comment)
+	assert.Empty(t, comment)
 }
 
 func TestSplitInlineComment_HashInsideQuotesWithRealComment(t *testing.T) {

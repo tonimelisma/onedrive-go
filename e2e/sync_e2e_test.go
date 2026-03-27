@@ -36,7 +36,7 @@ func writeSyncConfig(t *testing.T, syncDir string) (string, map[string]string) {
 	perTestHome := t.TempDir()
 
 	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
-	require.NoError(t, os.MkdirAll(perTestDataDir, 0o755))
+	require.NoError(t, os.MkdirAll(perTestDataDir, 0o700))
 	copyTokenFile(t, testDataDir, perTestDataDir)
 
 	content := fmt.Sprintf(`["%s"]
@@ -44,7 +44,7 @@ sync_dir = %q
 `, drive, syncDir)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o600))
 
 	env := map[string]string{
 		"XDG_DATA_HOME": perTestData,
@@ -164,8 +164,8 @@ func TestE2E_Sync_UploadOnly(t *testing.T) {
 	// Create unique test folder and files.
 	testFolder := fmt.Sprintf("e2e-sync-up-%d", time.Now().UnixNano())
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "upload-test.txt"), []byte("sync upload test\n"), 0o644))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "upload-test.txt"), []byte("sync upload test\n"), 0o600))
 
 	// Cleanup remote after test.
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -231,8 +231,8 @@ func TestE2E_Sync_DryRun(t *testing.T) {
 	// Create a local file.
 	testFolder := fmt.Sprintf("e2e-sync-dry-%d", time.Now().UnixNano())
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "dryrun.txt"), []byte("dry run test\n"), 0o644))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "dryrun.txt"), []byte("dry run test\n"), 0o600))
 
 	// Cleanup remote (should not exist, but best-effort).
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -257,8 +257,8 @@ func TestE2E_Sync_Verify(t *testing.T) {
 	// Create and sync a file.
 	testFolder := fmt.Sprintf("e2e-sync-ver-%d", time.Now().UnixNano())
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "verify-me.txt"), []byte("verify test\n"), 0o644))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "verify-me.txt"), []byte("verify test\n"), 0o600))
 
 	// Cleanup remote after test.
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -305,7 +305,7 @@ func TestE2E_Sync_DriveRemoveAndReAdd(t *testing.T) {
 	perTestHome := t.TempDir()
 
 	tempDataDir := filepath.Join(perTestData, "onedrive-go")
-	require.NoError(t, os.MkdirAll(tempDataDir, 0o755))
+	require.NoError(t, os.MkdirAll(tempDataDir, 0o700))
 	copyTokenFile(t, testDataDir, tempDataDir)
 
 	env := map[string]string{
@@ -324,14 +324,14 @@ func TestE2E_Sync_DriveRemoveAndReAdd(t *testing.T) {
 sync_dir = %q
 `, drive, syncDir)
 		cfgPath := filepath.Join(t.TempDir(), "config.toml")
-		require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o644))
+		require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o600))
 
 		return cfgPath
 	}
 
 	// Step 1: Create a local file and sync it up.
 	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "file1.txt"), []byte("first file\n"), 0o644))
 
@@ -346,7 +346,7 @@ sync_dir = %q
 	// Step 2: Delete the drive section from config (simulate "drive remove").
 	// Write an empty config — the drive section is gone.
 	emptyConfig := filepath.Join(t.TempDir(), "empty.toml")
-	require.NoError(t, os.WriteFile(emptyConfig, []byte(""), 0o644))
+	require.NoError(t, os.WriteFile(emptyConfig, []byte(""), 0o600))
 
 	// Step 3: Re-add the drive section with the same sync_dir.
 	cfgPath2 := writeConfig(t)
@@ -469,13 +469,13 @@ func writeSyncConfigWithOptions(t *testing.T, syncDir string, extraTOML string) 
 	perTestHome := t.TempDir()
 
 	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
-	require.NoError(t, os.MkdirAll(perTestDataDir, 0o755))
+	require.NoError(t, os.MkdirAll(perTestDataDir, 0o700))
 	copyTokenFile(t, testDataDir, perTestDataDir)
 
 	content := fmt.Sprintf("%s\n[%q]\nsync_dir = %q\n", extraTOML, drive, syncDir)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o600))
 
 	env := map[string]string{
 		"XDG_DATA_HOME": perTestData,
@@ -494,7 +494,7 @@ func writeSyncConfigNoDrive(t *testing.T) (string, map[string]string) {
 	perTestHome := t.TempDir()
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, os.WriteFile(cfgPath, []byte("# no drives configured\n"), 0o644))
+	require.NoError(t, os.WriteFile(cfgPath, []byte("# no drives configured\n"), 0o600))
 
 	env := map[string]string{
 		"XDG_DATA_HOME": perTestData,
@@ -519,7 +519,7 @@ func writeMultiDriveConfig(t *testing.T, syncDir1, syncDir2 string) (string, map
 	perTestHome := t.TempDir()
 
 	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
-	require.NoError(t, os.MkdirAll(perTestDataDir, 0o755))
+	require.NoError(t, os.MkdirAll(perTestDataDir, 0o700))
 
 	// Copy both token files.
 	copyTokenFile(t, testDataDir, perTestDataDir)
@@ -529,7 +529,7 @@ func writeMultiDriveConfig(t *testing.T, syncDir1, syncDir2 string) (string, map
 		drive, syncDir1, drive2, syncDir2)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o600))
 
 	env := map[string]string{
 		"XDG_DATA_HOME": perTestData,

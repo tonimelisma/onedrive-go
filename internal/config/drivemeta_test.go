@@ -61,8 +61,9 @@ func TestSaveAndLoadDriveMetadata_Personal(t *testing.T) {
 	err := SaveDriveMetadata(cid, meta)
 	require.NoError(t, err)
 
-	loaded, err := LoadDriveMetadata(cid)
+	loaded, found, err := LookupDriveMetadata(cid)
 	require.NoError(t, err)
+	require.True(t, found)
 	require.NotNil(t, loaded)
 	assert.Equal(t, "abc123", loaded.DriveID)
 	assert.Equal(t, "2026-03-06T10:00:00Z", loaded.CachedAt)
@@ -80,8 +81,9 @@ func TestSaveAndLoadDriveMetadata_SharePoint(t *testing.T) {
 
 	require.NoError(t, SaveDriveMetadata(cid, meta))
 
-	loaded, err := LoadDriveMetadata(cid)
+	loaded, found, err := LookupDriveMetadata(cid)
 	require.NoError(t, err)
+	require.True(t, found)
 	require.NotNil(t, loaded)
 	assert.Equal(t, "sp789", loaded.DriveID)
 	assert.Equal(t, "site123", loaded.SiteID)
@@ -100,8 +102,9 @@ func TestSaveAndLoadDriveMetadata_Shared(t *testing.T) {
 
 	require.NoError(t, SaveDriveMetadata(cid, meta))
 
-	loaded, err := LoadDriveMetadata(cid)
+	loaded, found, err := LookupDriveMetadata(cid)
 	require.NoError(t, err)
+	require.True(t, found)
 	require.NotNil(t, loaded)
 	assert.Equal(t, "personal:alice@outlook.com", loaded.AccountCanonicalID)
 	assert.Equal(t, "Bob Jones", loaded.OwnerName)
@@ -112,8 +115,9 @@ func TestLoadDriveMetadata_NotFound(t *testing.T) {
 	setTestDataDir(t)
 	cid := driveid.MustCanonicalID("personal:nobody@example.com")
 
-	meta, err := LoadDriveMetadata(cid)
-	assert.NoError(t, err)
+	meta, found, err := LookupDriveMetadata(cid)
+	require.NoError(t, err)
+	assert.False(t, found)
 	assert.Nil(t, meta)
 }
 
@@ -124,8 +128,9 @@ func TestSaveDriveMetadata_Overwrites(t *testing.T) {
 	require.NoError(t, SaveDriveMetadata(cid, &DriveMetadata{DriveID: "old"}))
 	require.NoError(t, SaveDriveMetadata(cid, &DriveMetadata{DriveID: "new"}))
 
-	loaded, err := LoadDriveMetadata(cid)
+	loaded, found, err := LookupDriveMetadata(cid)
 	require.NoError(t, err)
+	require.True(t, found)
 	assert.Equal(t, "new", loaded.DriveID)
 }
 

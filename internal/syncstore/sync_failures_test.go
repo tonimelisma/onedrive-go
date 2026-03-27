@@ -292,83 +292,68 @@ func TestCommitOutcome_DownloadSuccess_DoesNotClearSyncFailures(t *testing.T) {
 }
 
 // Validates: R-2.10.41, D-6
-func TestCommitOutcome_DeleteSuccess_DoesNotClearSyncFailures(t *testing.T) {
-	mgr, _ := newTestSyncStoreForFailures(t)
-	ctx := context.Background()
-
-	// Record a sync failure for the file.
-	err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path:      "docs/old.txt",
-		DriveID:   driveid.ID{},
-		Direction: synctypes.DirectionDelete,
-		IssueType: "delete_failed",
-		ErrMsg:    "timeout",
-	}, nil)
-	require.NoError(t, err)
-
-	// Insert a remote_state row in deleting status.
-	_, err = mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state
-			(drive_id, item_id, path, parent_id, item_type, sync_status, observed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		driveid.New(testDriveID).String(), "item-1", "docs/old.txt", "root", "file", synctypes.SyncStatusDeleting, 1)
-	require.NoError(t, err)
-
-	// Commit a successful local delete outcome.
-	outcome := &synctypes.Outcome{
-		Action:  synctypes.ActionLocalDelete,
-		Success: true,
-		Path:    "docs/old.txt",
-		DriveID: driveid.New(testDriveID),
-		ItemID:  "item-1",
+func TestCommitOutcome_Success_DoesNotClearSyncFailures(t *testing.T) {
+	tests := []struct {
+		name         string
+		path         string
+		direction    synctypes.Direction
+		issueType    string
+		remoteStatus synctypes.SyncStatus
+		action       synctypes.ActionType
+	}{
+		{
+			name:         "DeleteSuccess",
+			path:         "docs/old.txt",
+			direction:    synctypes.DirectionDelete,
+			issueType:    "delete_failed",
+			remoteStatus: synctypes.SyncStatusDeleting,
+			action:       synctypes.ActionLocalDelete,
+		},
+		{
+			name:         "MoveSuccess",
+			path:         "docs/moved.txt",
+			direction:    synctypes.DirectionUpload,
+			issueType:    "upload_failed",
+			remoteStatus: synctypes.SyncStatusSynced,
+			action:       synctypes.ActionLocalMove,
+		},
 	}
-	err = mgr.CommitOutcome(ctx, outcome)
-	require.NoError(t, err)
 
-	// D-6: CommitOutcome does NOT clear sync_failures — engine owns that.
-	issues, err := mgr.ListSyncFailures(ctx)
-	require.NoError(t, err)
-	assert.Len(t, issues, 1, "sync_failures should survive CommitOutcome")
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr, _ := newTestSyncStoreForFailures(t)
+			ctx := context.Background()
 
-// Validates: R-2.10.41, D-6
-func TestCommitOutcome_MoveSuccess_DoesNotClearSyncFailures(t *testing.T) {
-	mgr, _ := newTestSyncStoreForFailures(t)
-	ctx := context.Background()
+			err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
+				Path:      tt.path,
+				DriveID:   driveid.ID{},
+				Direction: tt.direction,
+				IssueType: tt.issueType,
+				ErrMsg:    "timeout",
+			}, nil)
+			require.NoError(t, err)
 
-	// Record a sync failure at the old path.
-	err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path:      "docs/moved.txt",
-		DriveID:   driveid.ID{},
-		Direction: synctypes.DirectionUpload,
-		IssueType: "upload_failed",
-		ErrMsg:    "timeout",
-	}, nil)
-	require.NoError(t, err)
+			_, err = mgr.DB().ExecContext(ctx,
+				`INSERT INTO remote_state
+					(drive_id, item_id, path, parent_id, item_type, sync_status, observed_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				driveid.New(testDriveID).String(), "item-1", tt.path, "root", "file", tt.remoteStatus, 1)
+			require.NoError(t, err)
 
-	// Insert a remote_state row for the item.
-	_, err = mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state
-			(drive_id, item_id, path, parent_id, item_type, sync_status, observed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		driveid.New(testDriveID).String(), "item-1", "docs/moved.txt", "root", "file", synctypes.SyncStatusSynced, 1)
-	require.NoError(t, err)
+			outcome := &synctypes.Outcome{
+				Action:  tt.action,
+				Success: true,
+				Path:    tt.path,
+				DriveID: driveid.New(testDriveID),
+				ItemID:  "item-1",
+			}
+			require.NoError(t, mgr.CommitOutcome(ctx, outcome))
 
-	// Commit a successful move outcome (path stays the same in outcome).
-	outcome := &synctypes.Outcome{
-		Action:  synctypes.ActionLocalMove,
-		Success: true,
-		Path:    "docs/moved.txt",
-		DriveID: driveid.New(testDriveID),
-		ItemID:  "item-1",
+			issues, err := mgr.ListSyncFailures(ctx)
+			require.NoError(t, err)
+			assert.Len(t, issues, 1, "sync_failures should survive CommitOutcome")
+		})
 	}
-	err = mgr.CommitOutcome(ctx, outcome)
-	require.NoError(t, err)
-
-	// D-6: CommitOutcome does NOT clear sync_failures — engine owns that.
-	issues, err := mgr.ListSyncFailures(ctx)
-	require.NoError(t, err)
-	assert.Len(t, issues, 1, "sync_failures should survive CommitOutcome")
 }
 
 func TestLocalIssueSyncStatus(t *testing.T) {
@@ -408,7 +393,7 @@ func TestRecordFailure_TransientHasNextRetryAt(t *testing.T) {
 		Direction: synctypes.DirectionUpload,
 		IssueType: "upload_failed",
 		ErrMsg:    "timeout",
-	}, retry.Reconcile.Delay)
+	}, retry.ReconcilePolicy().Delay)
 	require.NoError(t, err)
 
 	issues, err := mgr.ListSyncFailures(ctx)
@@ -416,7 +401,7 @@ func TestRecordFailure_TransientHasNextRetryAt(t *testing.T) {
 	require.Len(t, issues, 1)
 
 	// Transient issues should have a next_retry_at computed by the delay function.
-	assert.Greater(t, issues[0].NextRetryAt, int64(0),
+	assert.Positive(t, issues[0].NextRetryAt,
 		"transient issue should have next_retry_at set by delay function")
 }
 
@@ -453,7 +438,7 @@ func TestRecordFailure_RepeatIncrementsCount(t *testing.T) {
 		Direction: synctypes.DirectionUpload,
 		IssueType: "upload_failed",
 		ErrMsg:    "timeout",
-	}, retry.Reconcile.Delay)
+	}, retry.ReconcilePolicy().Delay)
 	require.NoError(t, err)
 
 	issues, err := mgr.ListSyncFailures(ctx)
@@ -471,7 +456,7 @@ func TestRecordFailure_RepeatIncrementsCount(t *testing.T) {
 		Direction: synctypes.DirectionUpload,
 		IssueType: "upload_failed",
 		ErrMsg:    "timeout again",
-	}, retry.Reconcile.Delay)
+	}, retry.ReconcilePolicy().Delay)
 	require.NoError(t, err)
 
 	issues, err = mgr.ListSyncFailures(ctx)
@@ -482,7 +467,7 @@ func TestRecordFailure_RepeatIncrementsCount(t *testing.T) {
 	assert.Equal(t, 2, issues[0].FailureCount,
 		"failure count should increase on repeated failures")
 	// next_retry_at should be set by the delay function.
-	assert.Greater(t, issues[0].NextRetryAt, int64(0))
+	assert.Positive(t, issues[0].NextRetryAt)
 }
 
 func TestListLocalIssuesForRetry_ReturnsResults(t *testing.T) {
@@ -496,7 +481,7 @@ func TestListLocalIssuesForRetry_ReturnsResults(t *testing.T) {
 		Direction: synctypes.DirectionUpload,
 		IssueType: "upload_failed",
 		ErrMsg:    "timeout",
-	}, retry.Reconcile.Delay)
+	}, retry.ReconcilePolicy().Delay)
 	require.NoError(t, err)
 
 	// ListSyncFailuresForRetry finds rows with next_retry_at <= the given time.
@@ -524,7 +509,7 @@ func TestEarliestLocalIssueRetryAt_ReturnsFutureTime(t *testing.T) {
 		Direction: synctypes.DirectionUpload,
 		IssueType: "upload_failed",
 		ErrMsg:    "timeout",
-	}, retry.Reconcile.Delay)
+	}, retry.ReconcilePolicy().Delay)
 	require.NoError(t, err)
 
 	// With a delay function, transient issues have next_retry_at set, so
@@ -670,14 +655,14 @@ func TestRecordFailure_ScopeKeyStored(t *testing.T) {
 		IssueType: synctypes.IssueQuotaExceeded,
 		ErrMsg:    "quota exceeded",
 		FileSize:  5000,
-		ScopeKey:  synctypes.SKQuotaOwn,
+		ScopeKey:  synctypes.SKQuotaOwn(),
 	}, nil)
 	require.NoError(t, err)
 
 	issues, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
-	assert.Equal(t, synctypes.SKQuotaOwn, issues[0].ScopeKey)
+	assert.Equal(t, synctypes.SKQuotaOwn(), issues[0].ScopeKey)
 }
 
 func TestRecordFailure_ScopeKeyDefaultEmpty(t *testing.T) {
@@ -880,7 +865,7 @@ func TestRecordFailure_TransientHasDatabaseBackoff(t *testing.T) {
 		Direction:  synctypes.DirectionUpload,
 		ErrMsg:     "timeout",
 		HTTPStatus: 503,
-	}, retry.Reconcile.Delay)
+	}, retry.ReconcilePolicy().Delay)
 	require.NoError(t, err)
 
 	issues, err := mgr.ListSyncFailures(ctx)
@@ -889,7 +874,7 @@ func TestRecordFailure_TransientHasDatabaseBackoff(t *testing.T) {
 
 	assert.Equal(t, synctypes.CategoryTransient, issues[0].Category)
 	// next_retry_at should be set by the delay function.
-	assert.Greater(t, issues[0].NextRetryAt, int64(0),
+	assert.Positive(t, issues[0].NextRetryAt,
 		"transient issues should have next_retry_at set by delay function")
 }
 
@@ -1009,7 +994,7 @@ func TestDeleteSyncFailuresByScope(t *testing.T) {
 	}{
 		{"a.txt", synctypes.SKQuotaShortcut("drive1:item1")},
 		{"b.txt", synctypes.SKQuotaShortcut("drive1:item1")},
-		{"c.txt", synctypes.SKThrottleAccount},
+		{"c.txt", synctypes.SKThrottleAccount()},
 		{"d.txt", synctypes.SKQuotaShortcut("drive2:item2")},
 	} {
 		err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
@@ -1060,11 +1045,11 @@ func TestPendingRetrySummary(t *testing.T) {
 		path     string
 		scopeKey synctypes.ScopeKey
 	}{
-		{"a.txt", synctypes.SKThrottleAccount},
-		{"b.txt", synctypes.SKThrottleAccount},
-		{"c.txt", synctypes.SKThrottleAccount},
-		{"d.txt", synctypes.SKQuotaOwn},
-		{"e.txt", synctypes.SKQuotaOwn},
+		{"a.txt", synctypes.SKThrottleAccount()},
+		{"b.txt", synctypes.SKThrottleAccount()},
+		{"c.txt", synctypes.SKThrottleAccount()},
+		{"d.txt", synctypes.SKQuotaOwn()},
+		{"e.txt", synctypes.SKQuotaOwn()},
 	} {
 		recErr := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 			Path:      p.path,
@@ -1073,7 +1058,7 @@ func TestPendingRetrySummary(t *testing.T) {
 			IssueType: "upload_failed",
 			ErrMsg:    "timeout",
 			ScopeKey:  p.scopeKey,
-		}, retry.Reconcile.Delay)
+		}, retry.ReconcilePolicy().Delay)
 		require.NoError(t, recErr)
 	}
 
@@ -1093,10 +1078,10 @@ func TestPendingRetrySummary(t *testing.T) {
 	require.Len(t, groups, 2, "should have 2 scope groups")
 
 	// Ordered by count DESC, so throttle:account (3) comes first.
-	assert.Equal(t, synctypes.SKThrottleAccount, groups[0].ScopeKey)
+	assert.Equal(t, synctypes.SKThrottleAccount(), groups[0].ScopeKey)
 	assert.Equal(t, 3, groups[0].Count)
 	assert.True(t, groups[0].EarliestNext.After(fixedTime), "earliest retry should be after now")
 
-	assert.Equal(t, synctypes.SKQuotaOwn, groups[1].ScopeKey)
+	assert.Equal(t, synctypes.SKQuotaOwn(), groups[1].ScopeKey)
 	assert.Equal(t, 2, groups[1].Count)
 }

@@ -16,18 +16,31 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
+const retryExhaustedLogMessage = "request failed after all retries"
+
 // testPolicy is a fast retry policy for tests: 3 attempts, tiny delays, no jitter.
-var testPolicy = retry.Policy{
-	MaxAttempts: 3,
-	Base:        1 * time.Millisecond,
-	Max:         10 * time.Millisecond,
-	Multiplier:  2.0,
-	Jitter:      0.0,
+func testPolicy() retry.Policy {
+	return retry.Policy{
+		MaxAttempts: 3,
+		Base:        1 * time.Millisecond,
+		Max:         10 * time.Millisecond,
+		Multiplier:  2.0,
+		Jitter:      0.0,
+	}
 }
 
 // noopSleep returns immediately, eliminating real delays in tests.
 func noopSleep(_ context.Context, _ time.Duration) error {
 	return nil
+}
+
+func closeTestResponse(t *testing.T, resp *http.Response) {
+	t.Helper()
+	if resp == nil || resp.Body == nil {
+		return
+	}
+
+	require.NoError(t, resp.Body.Close())
 }
 
 // roundTripFunc adapts a function to http.RoundTripper for test injection.
@@ -67,7 +80,7 @@ func TestRetryTransport_NetworkRetry(t *testing.T) {
 
 	rt := &retry.RetryTransport{
 		Inner:  inner,
-		Policy: testPolicy,
+		Policy: testPolicy(),
 		Logger: slog.Default(),
 		Sleep:  noopSleep,
 	}
@@ -79,7 +92,7 @@ func TestRetryTransport_NetworkRetry(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 200, resp.StatusCode)
 	assert.Equal(t, int32(3), attempts.Load(), "should have retried twice then succeeded")
-	resp.Body.Close()
+	require.NoError(t, resp.Body.Close())
 }
 
 // Validates: R-6.8.8
@@ -95,7 +108,7 @@ func TestRetryTransport_NetworkRetryExhausted(t *testing.T) {
 
 	rt := &retry.RetryTransport{
 		Inner:  inner,
-		Policy: testPolicy,
+		Policy: testPolicy(),
 		Logger: slog.Default(),
 		Sleep:  noopSleep,
 	}
@@ -104,7 +117,8 @@ func TestRetryTransport_NetworkRetryExhausted(t *testing.T) {
 	require.NoError(t, err)
 
 	resp, err := rt.RoundTrip(req)
-	assert.Error(t, err)
+	closeTestResponse(t, resp)
+	require.Error(t, err)
 	assert.Nil(t, resp)
 	// MaxAttempts=3: initial + 3 retries = 4 total attempts
 	assert.Equal(t, int32(4), attempts.Load())
@@ -127,7 +141,7 @@ func TestRetryTransport_429RetryAfter(t *testing.T) {
 
 	rt := &retry.RetryTransport{
 		Inner:  inner,
-		Policy: testPolicy,
+		Policy: testPolicy(),
 		Logger: slog.Default(),
 		Sleep: func(_ context.Context, d time.Duration) error {
 			sleepDurations = append(sleepDurations, d)
@@ -146,38 +160,7 @@ func TestRetryTransport_429RetryAfter(t *testing.T) {
 	// 429 Retry-After should be honored instead of computed backoff.
 	require.Len(t, sleepDurations, 1)
 	assert.Equal(t, 5*time.Second, sleepDurations[0])
-	resp.Body.Close()
-}
-
-// Validates: R-6.8.8
-func TestRetryTransport_503Retry(t *testing.T) {
-	t.Parallel()
-
-	var attempts atomic.Int32
-	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
-		n := attempts.Add(1)
-		if n == 1 {
-			return makeResponse(503, nil), nil
-		}
-
-		return makeResponse(200, nil), nil
-	})
-
-	rt := &retry.RetryTransport{
-		Inner:  inner,
-		Policy: testPolicy,
-		Logger: slog.Default(),
-		Sleep:  noopSleep,
-	}
-
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.com/test", http.NoBody)
-	require.NoError(t, err)
-
-	resp, err := rt.RoundTrip(req)
-	require.NoError(t, err)
-	assert.Equal(t, 200, resp.StatusCode)
-	assert.Equal(t, int32(2), attempts.Load())
-	resp.Body.Close()
+	require.NoError(t, resp.Body.Close())
 }
 
 // Validates: R-6.8.8
@@ -193,7 +176,7 @@ func TestRetryTransport_400NoRetry(t *testing.T) {
 
 	rt := &retry.RetryTransport{
 		Inner:  inner,
-		Policy: testPolicy,
+		Policy: testPolicy(),
 		Logger: slog.Default(),
 		Sleep:  noopSleep,
 	}
@@ -205,7 +188,7 @@ func TestRetryTransport_400NoRetry(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 400, resp.StatusCode, "non-retryable status should be returned as-is")
 	assert.Equal(t, int32(1), attempts.Load(), "should not retry 400")
-	resp.Body.Close()
+	require.NoError(t, resp.Body.Close())
 }
 
 // Validates: R-6.8.8
@@ -217,7 +200,8 @@ func TestRetryTransport_BodyRewind(t *testing.T) {
 
 	inner := roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		n := attempts.Add(1)
-		body, _ := io.ReadAll(req.Body)
+		body, err := io.ReadAll(req.Body)
+		require.NoError(t, err)
 		bodies = append(bodies, string(body))
 
 		if n == 1 {
@@ -229,7 +213,7 @@ func TestRetryTransport_BodyRewind(t *testing.T) {
 
 	rt := &retry.RetryTransport{
 		Inner:  inner,
-		Policy: testPolicy,
+		Policy: testPolicy(),
 		Logger: slog.Default(),
 		Sleep:  noopSleep,
 	}
@@ -247,7 +231,7 @@ func TestRetryTransport_BodyRewind(t *testing.T) {
 	require.Len(t, bodies, 2)
 	assert.Equal(t, "hello world", bodies[0])
 	assert.Equal(t, "hello world", bodies[1])
-	resp.Body.Close()
+	require.NoError(t, resp.Body.Close())
 }
 
 // Validates: R-6.8.8
@@ -264,7 +248,7 @@ func TestRetryTransport_ThrottleCoordination(t *testing.T) {
 
 	rt := &retry.RetryTransport{
 		Inner:  inner,
-		Policy: testPolicy,
+		Policy: testPolicy(),
 		Logger: slog.Default(),
 		Sleep: func(_ context.Context, d time.Duration) error {
 			sleepCalls = append(sleepCalls, d)
@@ -286,7 +270,7 @@ func TestRetryTransport_ThrottleCoordination(t *testing.T) {
 	require.Len(t, sleepCalls, 1)
 	assert.True(t, sleepCalls[0] > 0 && sleepCalls[0] <= 2*time.Second,
 		"throttle wait should be between 0 and 2s, got %v", sleepCalls[0])
-	resp.Body.Close()
+	require.NoError(t, resp.Body.Close())
 }
 
 // Validates: R-6.8.8
@@ -302,7 +286,7 @@ func TestRetryTransport_MaxAttemptsExhausted(t *testing.T) {
 
 	rt := &retry.RetryTransport{
 		Inner:  inner,
-		Policy: testPolicy,
+		Policy: testPolicy(),
 		Logger: slog.Default(),
 		Sleep:  noopSleep,
 	}
@@ -315,7 +299,7 @@ func TestRetryTransport_MaxAttemptsExhausted(t *testing.T) {
 	assert.Equal(t, 500, resp.StatusCode, "exhausted retries should return last response")
 	// MaxAttempts=3: initial + 3 retries = 4 total attempts
 	assert.Equal(t, int32(4), attempts.Load())
-	resp.Body.Close()
+	require.NoError(t, resp.Body.Close())
 }
 
 // Validates: R-6.8.8
@@ -330,7 +314,7 @@ func TestRetryTransport_ContextCanceled(t *testing.T) {
 
 	rt := &retry.RetryTransport{
 		Inner:  inner,
-		Policy: testPolicy,
+		Policy: testPolicy(),
 		Logger: slog.Default(),
 		Sleep: func(ctx context.Context, _ time.Duration) error {
 			cancel() // cancel during sleep
@@ -342,7 +326,8 @@ func TestRetryTransport_ContextCanceled(t *testing.T) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://example.com/test", http.NoBody)
 	require.NoError(t, err)
 
-	_, err = rt.RoundTrip(req)
+	resp, err := rt.RoundTrip(req)
+	closeTestResponse(t, resp)
 	assert.Error(t, err)
 }
 
@@ -362,7 +347,7 @@ func TestRetryTransport_429SetsThrottleDeadline(t *testing.T) {
 
 	rt := &retry.RetryTransport{
 		Inner:  inner,
-		Policy: testPolicy,
+		Policy: testPolicy(),
 		Logger: slog.Default(),
 		Sleep:  noopSleep,
 	}
@@ -372,7 +357,7 @@ func TestRetryTransport_429SetsThrottleDeadline(t *testing.T) {
 
 	resp, err := rt.RoundTrip(req)
 	require.NoError(t, err)
-	resp.Body.Close()
+	require.NoError(t, resp.Body.Close())
 
 	// The throttle deadline should be set after seeing 429 with Retry-After.
 	deadline := rt.ThrottleDeadline()
@@ -397,7 +382,7 @@ func TestRetryTransport_RetryAfterHeader_503(t *testing.T) {
 
 	rt := &retry.RetryTransport{
 		Inner:  inner,
-		Policy: testPolicy,
+		Policy: testPolicy(),
 		Logger: slog.Default(),
 		Sleep: func(_ context.Context, d time.Duration) error {
 			sleepDurations = append(sleepDurations, d)
@@ -414,7 +399,7 @@ func TestRetryTransport_RetryAfterHeader_503(t *testing.T) {
 	assert.Equal(t, 200, resp.StatusCode)
 	require.Len(t, sleepDurations, 1)
 	assert.Equal(t, 3*time.Second, sleepDurations[0], "503 Retry-After should be honored")
-	resp.Body.Close()
+	require.NoError(t, resp.Body.Close())
 }
 
 // Validates: R-6.8.8
@@ -430,7 +415,7 @@ func TestRetryTransport_NoRetryOn401(t *testing.T) {
 
 	rt := &retry.RetryTransport{
 		Inner:  inner,
-		Policy: testPolicy,
+		Policy: testPolicy(),
 		Logger: slog.Default(),
 		Sleep:  noopSleep,
 	}
@@ -442,7 +427,7 @@ func TestRetryTransport_NoRetryOn401(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 401, resp.StatusCode)
 	assert.Equal(t, int32(1), attempts.Load(), "401 should not be retried at transport level")
-	resp.Body.Close()
+	require.NoError(t, resp.Body.Close())
 }
 
 // Validates: R-6.8.8
@@ -457,7 +442,8 @@ func TestRetryTransport_SectionReaderBody(t *testing.T) {
 
 	inner := roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		callNum++
-		b, _ := io.ReadAll(req.Body)
+		b, err := io.ReadAll(req.Body)
+		require.NoError(t, err)
 		bodies = append(bodies, string(b))
 
 		if callNum == 1 {
@@ -469,7 +455,7 @@ func TestRetryTransport_SectionReaderBody(t *testing.T) {
 
 	rt := &retry.RetryTransport{
 		Inner:  inner,
-		Policy: testPolicy,
+		Policy: testPolicy(),
 		Logger: slog.Default(),
 		Sleep:  noopSleep,
 	}
@@ -493,38 +479,51 @@ func TestRetryTransport_SectionReaderBody(t *testing.T) {
 	require.Len(t, bodies, 2)
 	assert.Equal(t, "chunk data for upload", bodies[0])
 	assert.Equal(t, "chunk data for upload", bodies[1])
-	resp.Body.Close()
+	require.NoError(t, resp.Body.Close())
 }
 
 // Validates: R-6.8.8
-func TestRetryTransport_509BandwidthRetry(t *testing.T) {
+func TestRetryTransport_RetryableStatusCodes(t *testing.T) {
 	t.Parallel()
 
-	var attempts atomic.Int32
-	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
-		n := attempts.Add(1)
-		if n == 1 {
-			return makeResponse(509, nil), nil
-		}
-
-		return makeResponse(200, nil), nil
-	})
-
-	rt := &retry.RetryTransport{
-		Inner:  inner,
-		Policy: testPolicy,
-		Logger: slog.Default(),
-		Sleep:  noopSleep,
+	tests := []struct {
+		name       string
+		statusCode int
+	}{
+		{name: "503Retry", statusCode: http.StatusServiceUnavailable},
+		{name: "509BandwidthRetry", statusCode: 509},
 	}
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.com/test", http.NoBody)
-	require.NoError(t, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	resp, err := rt.RoundTrip(req)
-	require.NoError(t, err)
-	assert.Equal(t, 200, resp.StatusCode)
-	assert.Equal(t, int32(2), attempts.Load())
-	resp.Body.Close()
+			var attempts atomic.Int32
+			inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+				if attempts.Add(1) == 1 {
+					return makeResponse(tt.statusCode, nil), nil
+				}
+
+				return makeResponse(200, nil), nil
+			})
+
+			rt := &retry.RetryTransport{
+				Inner:  inner,
+				Policy: testPolicy(),
+				Logger: slog.Default(),
+				Sleep:  noopSleep,
+			}
+
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.com/test", http.NoBody)
+			require.NoError(t, err)
+
+			resp, err := rt.RoundTrip(req)
+			require.NoError(t, err)
+			assert.Equal(t, 200, resp.StatusCode)
+			assert.Equal(t, int32(2), attempts.Load())
+			closeTestResponse(t, resp)
+		})
+	}
 }
 
 // Validates: R-6.8.8
@@ -566,7 +565,7 @@ func TestRetryTransport_RetryAfterParsing(t *testing.T) {
 
 			rt := &retry.RetryTransport{
 				Inner:  inner,
-				Policy: testPolicy,
+				Policy: testPolicy(),
 				Logger: slog.Default(),
 				Sleep: func(_ context.Context, d time.Duration) error {
 					sleepDurations = append(sleepDurations, d)
@@ -580,7 +579,7 @@ func TestRetryTransport_RetryAfterParsing(t *testing.T) {
 
 			resp, err := rt.RoundTrip(req)
 			require.NoError(t, err)
-			resp.Body.Close()
+			require.NoError(t, resp.Body.Close())
 
 			if tc.expectDelay > 0 {
 				require.Len(t, sleepDurations, 1)
@@ -588,7 +587,7 @@ func TestRetryTransport_RetryAfterParsing(t *testing.T) {
 			} else {
 				// Falls back to policy-computed delay.
 				require.Len(t, sleepDurations, 1)
-				assert.True(t, sleepDurations[0] > 0, "should use policy delay when Retry-After invalid")
+				assert.Positive(t, sleepDurations[0], "should use policy delay when Retry-After invalid")
 			}
 		})
 	}
@@ -616,7 +615,7 @@ func TestRetryTransport_StripeRetryCount(t *testing.T) {
 
 	rt := &retry.RetryTransport{
 		Inner:  inner,
-		Policy: testPolicy,
+		Policy: testPolicy(),
 		Logger: slog.Default(),
 		Sleep:  noopSleep,
 	}
@@ -626,10 +625,10 @@ func TestRetryTransport_StripeRetryCount(t *testing.T) {
 
 	resp, err := rt.RoundTrip(req)
 	require.NoError(t, err)
-	resp.Body.Close()
+	require.NoError(t, resp.Body.Close())
 
 	require.Len(t, retryHeaders, 3)
-	assert.Equal(t, "", retryHeaders[0], "first attempt has no retry count header")
+	assert.Empty(t, retryHeaders[0], "first attempt has no retry count header")
 	assert.Equal(t, "1", retryHeaders[1])
 	assert.Equal(t, "2", retryHeaders[2])
 }
@@ -639,9 +638,8 @@ func TestRetryTransport_NetworkError_ExhaustionLogsError(t *testing.T) {
 	t.Parallel()
 
 	// Use a log handler that captures log records to verify the ERROR log.
-	var logRecords []slog.Record
-	handler := &captureHandler{records: &logRecords}
-	logger := slog.New(handler)
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
 
 	var attempts atomic.Int32
 	inner := roundTripFunc(func(*http.Request) (*http.Response, error) {
@@ -651,36 +649,31 @@ func TestRetryTransport_NetworkError_ExhaustionLogsError(t *testing.T) {
 
 	rt := &retry.RetryTransport{
 		Inner:  inner,
-		Policy: testPolicy,
+		Policy: testPolicy(),
 		Logger: logger,
 		Sleep:  noopSleep,
 	}
 
-	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://example.com", nil)
-	_, err := rt.RoundTrip(req)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://example.com", http.NoBody)
+	require.NoError(t, err)
+
+	resp, err := rt.RoundTrip(req)
+	closeTestResponse(t, resp)
 	require.Error(t, err)
 
 	// All retries exhausted (1 initial + 3 retries = 4 attempts).
 	assert.Equal(t, int32(4), attempts.Load())
 
-	// Verify that an ERROR log was emitted.
-	var foundError bool
-	for _, rec := range logRecords {
-		if rec.Level == slog.LevelError && rec.Message == "request failed after all retries" {
-			foundError = true
-			break
-		}
-	}
-	assert.True(t, foundError, "expected ERROR log on retry exhaustion")
+	assert.Contains(t, logBuf.String(), retryExhaustedLogMessage)
+	assert.Contains(t, logBuf.String(), `"level":"ERROR"`)
 }
 
 // Validates: R-6.6.8
 func TestRetryTransport_HTTPError_ExhaustionLogsError(t *testing.T) {
 	t.Parallel()
 
-	var logRecords []slog.Record
-	handler := &captureHandler{records: &logRecords}
-	logger := slog.New(handler)
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
 
 	var attempts atomic.Int32
 	inner := roundTripFunc(func(*http.Request) (*http.Response, error) {
@@ -693,39 +686,21 @@ func TestRetryTransport_HTTPError_ExhaustionLogsError(t *testing.T) {
 
 	rt := &retry.RetryTransport{
 		Inner:  inner,
-		Policy: testPolicy,
+		Policy: testPolicy(),
 		Logger: logger,
 		Sleep:  noopSleep,
 	}
 
-	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://example.com", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://example.com", http.NoBody)
+	require.NoError(t, err)
+
 	resp, err := rt.RoundTrip(req)
 	require.NoError(t, err)
-	resp.Body.Close()
+	require.NoError(t, resp.Body.Close())
 
 	// All retries exhausted (1 initial + 3 retries = 4 attempts).
 	assert.Equal(t, int32(4), attempts.Load())
 
-	// Verify that an ERROR log was emitted.
-	var foundError bool
-	for _, rec := range logRecords {
-		if rec.Level == slog.LevelError && rec.Message == "request failed after all retries" {
-			foundError = true
-			break
-		}
-	}
-	assert.True(t, foundError, "expected ERROR log on HTTP retry exhaustion")
+	assert.Contains(t, logBuf.String(), retryExhaustedLogMessage)
+	assert.Contains(t, logBuf.String(), `"level":"ERROR"`)
 }
-
-// captureHandler is a slog.Handler that captures log records for assertion.
-type captureHandler struct {
-	records *[]slog.Record
-}
-
-func (h *captureHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
-func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
-	*h.records = append(*h.records, r)
-	return nil
-}
-func (h *captureHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
-func (h *captureHandler) WithGroup(_ string) slog.Handler      { return h }
