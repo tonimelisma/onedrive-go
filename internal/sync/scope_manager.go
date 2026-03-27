@@ -1,4 +1,4 @@
-// scope_manager.go — scopeManager interface for Engine scope lifecycle.
+// Package sync coordinates end-to-end sync engine behavior.
 //
 // Extracted so that PermissionHandler (and future extracted structs) can depend
 // on a narrow interface rather than function callbacks. Engine satisfies this

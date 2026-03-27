@@ -500,8 +500,9 @@ func TestHandleRemovedShortcuts_ClearsRemotePermissionScopesUnderRemovedShortcut
 	err = eng.handleRemovedShortcuts(ctx, map[string]bool{"sc-1": true}, shortcuts)
 	require.NoError(t, err)
 
-	sc, err := eng.baseline.GetShortcut(ctx, "sc-1")
+	sc, found, err := eng.baseline.GetShortcut(ctx, "sc-1")
 	require.NoError(t, err)
+	assert.False(t, found, "removed shortcut should no longer exist")
 	assert.Nil(t, sc, "removed shortcut should be deleted")
 
 	assert.False(t, isTestScopeBlocked(eng, removedScope),

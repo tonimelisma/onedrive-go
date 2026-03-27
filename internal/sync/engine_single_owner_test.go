@@ -18,6 +18,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
+const cachedLocalHash = "cached-local-hash"
+
 // newSingleOwnerEngine creates a minimal engine with syncdispatch.DepGraph plus the
 // watch-mode active-scope working set for testing the single-owner engine
 // methods. Uses a real syncstore.SyncStore (in-memory SQLite).
@@ -51,7 +53,7 @@ func TestEngine_CascadeRecordAndComplete_SingleAction(t *testing.T) {
 	require.NotNil(t, ta, "action should be immediately ready")
 
 	// Cascade-record it as scope-blocked.
-	eng.cascadeRecordAndComplete(ctx, ta, synctypes.SKQuotaOwn)
+	eng.cascadeRecordAndComplete(ctx, ta, synctypes.SKQuotaOwn())
 
 	// Verify it was completed in the graph.
 	assert.Equal(t, 0, eng.depGraph.InFlightCount())
@@ -61,7 +63,7 @@ func TestEngine_CascadeRecordAndComplete_SingleAction(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, failures, 1)
 	assert.Equal(t, "test.txt", failures[0].Path)
-	assert.Equal(t, synctypes.SKQuotaOwn, failures[0].ScopeKey)
+	assert.Equal(t, synctypes.SKQuotaOwn(), failures[0].ScopeKey)
 	assert.Equal(t, int64(0), failures[0].NextRetryAt, "scope-blocked failure should have next_retry_at = 0 (NULL)")
 }
 
@@ -91,7 +93,7 @@ func TestEngine_CascadeRecordAndComplete_WithDependents(t *testing.T) {
 	assert.Nil(t, childTA, "child should wait on parent")
 
 	// Cascade-record parent → child should also be recorded.
-	eng.cascadeRecordAndComplete(ctx, parentTA, synctypes.SKQuotaOwn)
+	eng.cascadeRecordAndComplete(ctx, parentTA, synctypes.SKQuotaOwn())
 
 	// Both should be completed.
 	assert.Equal(t, 0, eng.depGraph.InFlightCount())
@@ -113,7 +115,7 @@ func TestEngine_ReleaseScope(t *testing.T) {
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
-	sk := synctypes.SKQuotaOwn
+	sk := synctypes.SKQuotaOwn()
 
 	// Create a scope block.
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
@@ -151,7 +153,7 @@ func TestEngine_ReleaseScope_SignalsImmediateRetrySweep(t *testing.T) {
 
 	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
-	scopeKey := synctypes.SKQuotaOwn
+	scopeKey := synctypes.SKQuotaOwn()
 
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:       scopeKey,
@@ -307,7 +309,7 @@ func TestEngine_AdmitReady_ScopeBlocked(t *testing.T) {
 
 	// Set up a scope block.
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
-		Key:       synctypes.SKQuotaOwn,
+		Key:       synctypes.SKQuotaOwn(),
 		IssueType: synctypes.IssueQuotaExceeded,
 		BlockedAt: eng.nowFn(),
 	})
@@ -731,7 +733,7 @@ func TestTrialDispatch_NoCandidates_ClearsScope(t *testing.T) {
 	now := eng.nowFn()
 
 	// Set a scope block with NextTrialAt in the past.
-	sk := synctypes.SKQuotaOwn
+	sk := synctypes.SKQuotaOwn()
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:           sk,
 		IssueType:     synctypes.IssueQuotaExceeded,
@@ -777,8 +779,9 @@ func TestGetRemoteStateByPath_Found(t *testing.T) {
 		},
 	}, "", driveID))
 
-	row, err := eng.baseline.GetRemoteStateByPath(ctx, "docs/report.pdf", driveID)
+	row, found, err := eng.baseline.GetRemoteStateByPath(ctx, "docs/report.pdf", driveID)
 	require.NoError(t, err)
+	require.True(t, found, "should find the row")
 	require.NotNil(t, row, "should find the row")
 
 	assert.Equal(t, "item-abc", row.ItemID)
@@ -799,8 +802,9 @@ func TestGetRemoteStateByPath_NotFound(t *testing.T) {
 
 	driveID := driveid.New("drive1")
 
-	row, err := eng.baseline.GetRemoteStateByPath(ctx, "nonexistent.txt", driveID)
+	row, found, err := eng.baseline.GetRemoteStateByPath(ctx, "nonexistent.txt", driveID)
 	require.NoError(t, err)
+	assert.False(t, found, "missing path should report found=false")
 	assert.Nil(t, row, "should return nil for missing path")
 }
 
@@ -822,11 +826,12 @@ func TestGetRemoteStateByPath_NullableFields(t *testing.T) {
 		},
 	}, "", driveID))
 
-	row, err := eng.baseline.GetRemoteStateByPath(ctx, "folder/", driveID)
+	row, found, err := eng.baseline.GetRemoteStateByPath(ctx, "folder/", driveID)
 	require.NoError(t, err)
+	require.True(t, found)
 	require.NotNil(t, row)
 
-	assert.Equal(t, "", row.Hash, "hash should be empty string from NULL")
+	assert.Empty(t, row.Hash, "hash should be empty string from NULL")
 	assert.Equal(t, int64(0), row.Size, "size should be 0 from NULL")
 	assert.Equal(t, int64(0), row.Mtime, "mtime should be 0 from NULL")
 }
@@ -928,7 +933,7 @@ func TestCreateEventFromDB_Upload_FileExists(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(syncRoot, testFile),
 		[]byte("hello world"),
-		0o644,
+		0o600,
 	))
 
 	row := &synctypes.SyncFailureRow{
@@ -945,9 +950,9 @@ func TestCreateEventFromDB_Upload_FileExists(t *testing.T) {
 	assert.Equal(t, testFile, ev.Path)
 	assert.Equal(t, "upload-test.txt", ev.Name)
 	assert.Equal(t, synctypes.ItemTypeFile, ev.ItemType)
-	assert.Greater(t, ev.Size, int64(0), "size should be populated")
+	assert.Positive(t, ev.Size, "size should be populated")
 	assert.NotEmpty(t, ev.Hash, "hash should be computed")
-	assert.Greater(t, ev.Mtime, int64(0), "mtime should be populated")
+	assert.Positive(t, ev.Mtime, "mtime should be populated")
 }
 
 // Validates: R-2.10.7
@@ -960,10 +965,10 @@ func TestCreateEventFromDB_Upload_ReusesBaselineHashWhenMetadataMatches(t *testi
 	driveID := driveid.New("drive1")
 	testFile := "upload-fast-path.txt"
 	actualContent := []byte("actual data")
-	cachedHash := "cached-local-hash"
+	cachedHash := cachedLocalHash
 	oldTime := eng.nowFn().Add(-2 * time.Second)
 
-	require.NoError(t, os.WriteFile(filepath.Join(eng.syncRoot, testFile), actualContent, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(eng.syncRoot, testFile), actualContent, 0o600))
 	require.NoError(t, os.Chtimes(filepath.Join(eng.syncRoot, testFile), oldTime, oldTime))
 
 	info, err := os.Stat(filepath.Join(eng.syncRoot, testFile))
@@ -1211,7 +1216,7 @@ func TestIsFailureResolved_Upload_FileExists(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(eng.syncRoot, "still-here.txt"),
 		[]byte("content"),
-		0o644,
+		0o600,
 	))
 
 	row := &synctypes.SyncFailureRow{
@@ -1399,68 +1404,66 @@ func TestReobserve_Remote_429(t *testing.T) {
 	assert.Equal(t, time.Duration(0), retryAfter, "429 without Retry-After header should return 0")
 }
 
-func TestReobserve_Remote_429_WithRetryAfter(t *testing.T) {
+func TestReobserve_Remote_RetryAfterErrors(t *testing.T) {
 	t.Parallel()
 
-	mock := &engineMockClient{
-		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
-			return nil, &graph.GraphError{
-				StatusCode: 429,
-				Err:        graph.ErrThrottled,
-				Message:    "too many requests",
-				RetryAfter: 90 * time.Second,
-			}
+	tests := []struct {
+		name       string
+		statusCode int
+		err        error
+		message    string
+		retryAfter time.Duration
+		path       string
+		itemID     string
+	}{
+		{
+			name:       "throttled",
+			statusCode: 429,
+			err:        graph.ErrThrottled,
+			message:    "too many requests",
+			retryAfter: 90 * time.Second,
+			path:       "throttled-retry.txt",
+			itemID:     "throttled-retry-item",
+		},
+		{
+			name:       "insufficient_storage",
+			statusCode: 507,
+			err:        graph.ErrServerError,
+			message:    "insufficient storage",
+			retryAfter: 120 * time.Second,
+			path:       "storage-full.txt",
+			itemID:     "storage-full-item",
 		},
 	}
 
-	eng, _ := newTestEngine(t, mock)
-	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
-	ctx := context.Background()
-
-	row := &synctypes.SyncFailureRow{
-		Path:      "throttled-retry.txt",
-		DriveID:   driveid.New("drive1"),
-		ItemID:    "throttled-retry-item",
-		Direction: synctypes.DirectionDownload,
-	}
-
-	ev, retryAfter := eng.reobserve(ctx, row)
-
-	assert.Nil(t, ev, "should return nil when scope condition persists (429)")
-	assert.Equal(t, 90*time.Second, retryAfter,
-		"should forward RetryAfter from GraphError")
-}
-
-func TestReobserve_Remote_507_WithRetryAfter(t *testing.T) {
-	t.Parallel()
-
-	mock := &engineMockClient{
-		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
-			return nil, &graph.GraphError{
-				StatusCode: 507,
-				Err:        graph.ErrServerError,
-				Message:    "insufficient storage",
-				RetryAfter: 120 * time.Second,
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &engineMockClient{
+				getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+					return nil, &graph.GraphError{
+						StatusCode: tt.statusCode,
+						Err:        tt.err,
+						Message:    tt.message,
+						RetryAfter: tt.retryAfter,
+					}
+				},
 			}
-		},
+
+			eng, _ := newTestEngine(t, mock)
+			eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
+			ctx := context.Background()
+
+			ev, retryAfter := eng.reobserve(ctx, &synctypes.SyncFailureRow{
+				Path:      tt.path,
+				DriveID:   driveid.New("drive1"),
+				ItemID:    tt.itemID,
+				Direction: synctypes.DirectionDownload,
+			})
+
+			assert.Nil(t, ev, "should return nil when scope condition persists")
+			assert.Equal(t, tt.retryAfter, retryAfter, "should forward RetryAfter from GraphError")
+		})
 	}
-
-	eng, _ := newTestEngine(t, mock)
-	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
-	ctx := context.Background()
-
-	row := &synctypes.SyncFailureRow{
-		Path:      "storage-full.txt",
-		DriveID:   driveid.New("drive1"),
-		ItemID:    "storage-full-item",
-		Direction: synctypes.DirectionDownload,
-	}
-
-	ev, retryAfter := eng.reobserve(ctx, row)
-
-	assert.Nil(t, ev, "should return nil when scope condition persists (507)")
-	assert.Equal(t, 120*time.Second, retryAfter,
-		"should forward RetryAfter from 507 GraphError")
 }
 
 func TestReobserve_Local_Exists(t *testing.T) {
@@ -1477,7 +1480,7 @@ func TestReobserve_Local_Exists(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(syncRoot, "local-exists.txt"),
 		[]byte("local content"),
-		0o644,
+		0o600,
 	))
 
 	row := &synctypes.SyncFailureRow{
@@ -1493,7 +1496,7 @@ func TestReobserve_Local_Exists(t *testing.T) {
 	assert.Equal(t, synctypes.SourceLocal, ev.Source)
 	assert.Equal(t, synctypes.ChangeModify, ev.Type)
 	assert.NotEmpty(t, ev.Hash)
-	assert.Greater(t, ev.Size, int64(0))
+	assert.Positive(t, ev.Size)
 }
 
 // Validates: R-2.10.7
@@ -1508,10 +1511,10 @@ func TestReobserve_Local_ReusesBaselineHashWhenMetadataMatches(t *testing.T) {
 	driveID := driveid.New("drive1")
 	testFile := "local-fast-path.txt"
 	actualContent := []byte("actual data")
-	cachedHash := "cached-local-hash"
+	cachedHash := cachedLocalHash
 	oldTime := eng.nowFn().Add(-2 * time.Second)
 
-	require.NoError(t, os.WriteFile(filepath.Join(eng.syncRoot, testFile), actualContent, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(eng.syncRoot, testFile), actualContent, 0o600))
 	require.NoError(t, os.Chtimes(filepath.Join(eng.syncRoot, testFile), oldTime, oldTime))
 
 	info, err := os.Stat(filepath.Join(eng.syncRoot, testFile))
@@ -1730,7 +1733,7 @@ func TestTrialDispatch_UsesReobserve(t *testing.T) {
 	driveID := driveid.New("drive1")
 	now := eng.nowFn()
 
-	sk := synctypes.SKQuotaOwn
+	sk := synctypes.SKQuotaOwn()
 
 	// Set up a scope block with NextTrialAt in the past.
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
@@ -1807,7 +1810,7 @@ func TestTrialDispatch_ForwardsRetryAfter(t *testing.T) {
 	driveID := driveid.New("drive1")
 	now := eng.nowFn()
 
-	sk := synctypes.SKQuotaOwn
+	sk := synctypes.SKQuotaOwn()
 
 	// Set up a scope block with a small TrialInterval and NextTrialAt in the past.
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
@@ -1851,7 +1854,7 @@ func TestTrialDispatch_CleansStaleTrialPending(t *testing.T) {
 
 	// Insert a stale trial entry (older than trialPendingTTL).
 	eng.watch.trialPending["stale.txt"] = trialEntry{
-		scopeKey: synctypes.SKQuotaOwn,
+		scopeKey: synctypes.SKQuotaOwn(),
 		created:  now.Add(-2 * trialPendingTTL),
 	}
 

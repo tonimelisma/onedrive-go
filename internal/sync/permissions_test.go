@@ -481,7 +481,7 @@ func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 func TestHandle403_ExistingRemoteScope_AvoidsAPICall(t *testing.T) {
 	t.Parallel()
 
-	remoteDriveID := "remote-drive-1"
+	remoteDriveID := permissionsRemoteDriveID
 	checker := &mockPermChecker{
 		perms: map[string][]graph.Permission{
 			driveid.New(remoteDriveID).String() + ":parent-folder-id": {{ID: "p1", Roles: []string{"read"}}},
@@ -528,7 +528,7 @@ func TestHandle403_ExistingRemoteScope_AvoidsAPICall(t *testing.T) {
 func TestRecheckPermissions_APIFailure_FailsOpenAndReleasesScope(t *testing.T) {
 	t.Parallel()
 
-	remoteDriveID := "remote-drive-1"
+	remoteDriveID := permissionsRemoteDriveID
 	checker := &mockPermChecker{
 		err: fmt.Errorf("graph unavailable"),
 	}

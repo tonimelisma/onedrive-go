@@ -176,12 +176,12 @@ type Engine struct {
 // NewEngine creates an Engine, initializing the SyncStore (which opens
 // the SQLite database and runs migrations). Returns an error if DB init fails
 // or if DriveID is zero (indicates a config/login issue).
-func NewEngine(cfg *synctypes.EngineConfig) (*Engine, error) {
+func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error) {
 	if cfg.DriveID.IsZero() {
 		return nil, fmt.Errorf("sync: engine requires non-zero drive ID")
 	}
 
-	bm, err := syncstore.NewSyncStore(cfg.DBPath, cfg.Logger)
+	bm, err := syncstore.NewSyncStore(ctx, cfg.DBPath, cfg.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("sync: creating engine: %w", err)
 	}
@@ -246,7 +246,7 @@ func NewEngine(cfg *synctypes.EngineConfig) (*Engine, error) {
 // Close releases resources held by the engine. Nil-safe for observer
 // references set during RunWatch, cleans stale upload sessions, and
 // closes the database connection last. Safe to call more than once.
-func (e *Engine) Close() error {
+func (e *Engine) Close(ctx context.Context) error {
 	// Nil out observer references to prevent dangling reads after Close.
 	if e.watch != nil {
 		e.watch.remoteObs = nil
@@ -270,7 +270,11 @@ func (e *Engine) Close() error {
 		return nil
 	}
 
-	return e.baseline.Close()
+	if err := e.baseline.Close(ctx); err != nil {
+		return fmt.Errorf("sync: closing state store: %w", err)
+	}
+
+	return nil
 }
 
 // verifyDriveIdentity checks that the configured drive ID matches the remote
@@ -324,7 +328,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 	// Crash recovery: reset any in-progress states from a previous crash.
 	// Also creates sync_failures entries so the retrier can rediscover items
 	// that were mid-execution when the crash occurred.
-	if err := e.baseline.ResetInProgressStates(ctx, e.syncRoot, retry.Reconcile.Delay); err != nil {
+	if err := e.baseline.ResetInProgressStates(ctx, e.syncRoot, retry.ReconcilePolicy().Delay); err != nil {
 		e.logger.Warn("failed to reset in-progress states", slog.String("error", err.Error()))
 	}
 
@@ -387,7 +391,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 	if err != nil {
 		// Big-delete protection (or other planner errors) — the delta token
 		// is NOT committed, so the next sync replays the same events.
-		return nil, err
+		return nil, fmt.Errorf("sync: planning actions: %w", err)
 	}
 
 	// Planner approved — commit the deferred delta token now.
@@ -566,7 +570,7 @@ func (e *Engine) observeRemote(ctx context.Context, bl *synctypes.Baseline) ([]s
 	events, token, err := obs.FullDelta(ctx, savedToken)
 	if err != nil {
 		if !errors.Is(err, synctypes.ErrDeltaExpired) {
-			return nil, "", err
+			return nil, "", fmt.Errorf("sync: observing remote delta: %w", err)
 		}
 
 		// Delta token expired — retry with empty token for full resync.
@@ -850,13 +854,23 @@ func (e *Engine) resolveSafetyConfig(force bool) *synctypes.SafetyConfig {
 
 // ListConflicts returns all unresolved conflicts from the database.
 func (e *Engine) ListConflicts(ctx context.Context) ([]synctypes.ConflictRecord, error) {
-	return e.baseline.ListConflicts(ctx)
+	conflicts, err := e.baseline.ListConflicts(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing unresolved conflicts: %w", err)
+	}
+
+	return conflicts, nil
 }
 
 // ListAllConflicts returns all conflicts (resolved and unresolved) from the
 // database. Used by 'conflicts --history'.
 func (e *Engine) ListAllConflicts(ctx context.Context) ([]synctypes.ConflictRecord, error) {
-	return e.baseline.ListAllConflicts(ctx)
+	conflicts, err := e.baseline.ListAllConflicts(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing conflict history: %w", err)
+	}
+
+	return conflicts, nil
 }
 
 // ResolveConflict resolves a single conflict by ID. For keep_both, this is
@@ -866,7 +880,7 @@ func (e *Engine) ListAllConflicts(ctx context.Context) ([]synctypes.ConflictReco
 func (e *Engine) ResolveConflict(ctx context.Context, conflictID, resolution string) error {
 	c, err := e.baseline.GetConflict(ctx, conflictID)
 	if err != nil {
-		return err
+		return fmt.Errorf("sync: loading conflict %s: %w", conflictID, err)
 	}
 
 	switch resolution {
@@ -879,21 +893,33 @@ func (e *Engine) ResolveConflict(ctx context.Context, conflictID, resolution str
 			return fmt.Errorf("sync: resolving conflict %s (%s): %w", c.ID, synctypes.ResolutionKeepBoth, err)
 		}
 
-		return e.baseline.ResolveConflict(ctx, c.ID, resolution)
+		if err := e.baseline.ResolveConflict(ctx, c.ID, resolution); err != nil {
+			return fmt.Errorf("sync: marking conflict %s resolved as %s: %w", c.ID, resolution, err)
+		}
+
+		return nil
 
 	case synctypes.ResolutionKeepLocal:
 		if err := e.resolveKeepLocal(ctx, c); err != nil {
 			return fmt.Errorf("sync: resolving conflict %s (%s): %w", c.ID, synctypes.ResolutionKeepLocal, err)
 		}
 
-		return e.baseline.ResolveConflict(ctx, c.ID, resolution)
+		if err := e.baseline.ResolveConflict(ctx, c.ID, resolution); err != nil {
+			return fmt.Errorf("sync: marking conflict %s resolved as %s: %w", c.ID, resolution, err)
+		}
+
+		return nil
 
 	case synctypes.ResolutionKeepRemote:
 		if err := e.resolveKeepRemote(ctx, c); err != nil {
 			return fmt.Errorf("sync: resolving conflict %s (%s): %w", c.ID, synctypes.ResolutionKeepRemote, err)
 		}
 
-		return e.baseline.ResolveConflict(ctx, c.ID, resolution)
+		if err := e.baseline.ResolveConflict(ctx, c.ID, resolution); err != nil {
+			return fmt.Errorf("sync: marking conflict %s resolved as %s: %w", c.ID, resolution, err)
+		}
+
+		return nil
 
 	default:
 		return fmt.Errorf("sync: unknown resolution strategy %q", resolution)
@@ -971,7 +997,7 @@ func (e *Engine) resolveTransfer(ctx context.Context, c *synctypes.ConflictRecor
 	}
 
 	if err := e.baseline.CommitOutcome(ctx, &outcome); err != nil {
-		return err
+		return fmt.Errorf("committing transfer outcome: %w", err)
 	}
 
 	// Clean up conflict copies — the user has chosen one side, so the
@@ -1047,7 +1073,11 @@ func (e *Engine) upsertBaselineFromDisk(ctx context.Context, driveID driveid.ID,
 		Mtime:     info.ModTime().UnixNano(),
 	}
 
-	return e.baseline.CommitOutcome(ctx, outcome)
+	if err := e.baseline.CommitOutcome(ctx, outcome); err != nil {
+		return fmt.Errorf("committing baseline update for %s: %w", relPath, err)
+	}
+
+	return nil
 }
 
 // cleanupConflictCopies deletes all conflict copy files for the given
@@ -1346,7 +1376,7 @@ func (e *Engine) bootstrapSync(ctx context.Context, mode synctypes.SyncMode, pip
 	}
 
 	// Crash recovery: reset in-progress states from prior crash.
-	if err := e.baseline.ResetInProgressStates(ctx, e.syncRoot, retry.Reconcile.Delay); err != nil {
+	if err := e.baseline.ResetInProgressStates(ctx, e.syncRoot, retry.ReconcilePolicy().Delay); err != nil {
 		e.logger.Warn("failed to reset in-progress states", slog.String("error", err.Error()))
 	}
 
@@ -1395,6 +1425,193 @@ func (e *Engine) bootstrapSync(ctx context.Context, mode synctypes.SyncMode, pip
 	return nil
 }
 
+// runWatchUntilQuiescent drives the watch control flow until the dependency
+// graph empties. Used by bootstrapSync so the initial sync executes through
+// the same single-owner result/admission loop as steady-state watch mode.
+func (e *Engine) runWatchUntilQuiescent(
+	ctx context.Context,
+	p *watchPipeline,
+	initialOutbox []*synctypes.TrackedAction,
+) error {
+	emptyCh := e.depGraph.WaitForEmpty()
+	ticker := time.NewTicker(quiescenceLogInterval)
+	defer ticker.Stop()
+	outbox := append([]*synctypes.TrackedAction(nil), initialOutbox...)
+
+	for {
+		var outCh chan<- *synctypes.TrackedAction
+		var outVal *synctypes.TrackedAction
+		if len(outbox) > 0 {
+			outCh = e.readyCh
+			outVal = outbox[0]
+		}
+
+		select {
+		case outCh <- outVal:
+			outbox = outbox[1:]
+		case batch, ok := <-p.ready:
+			if !ok {
+				return nil
+			}
+			outbox = append(outbox, e.processBatch(ctx, batch, p.bl, p.mode, p.safety)...)
+		case r, ok := <-p.results:
+			if !ok {
+				return fmt.Errorf("sync: worker results closed during bootstrap")
+			}
+			outbox = append(outbox, e.processWorkerResult(ctx, &r, p.bl)...)
+		case <-e.trialTimerChan():
+			e.handleTrialTimer(ctx)
+		case <-e.retryTimerChan():
+			e.handleRetryTimer(ctx)
+		case <-emptyCh:
+			return nil
+		case <-ticker.C:
+			e.logger.Info("bootstrap: waiting for in-flight actions",
+				slog.Int("in_flight", e.depGraph.InFlightCount()),
+			)
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for bootstrap quiescence: %w", ctx.Err())
+		}
+	}
+}
+
+// waitForQuiescence is the compatibility wrapper for callers and tests that
+// only need to wait for the dependency graph to drain, without a full watch
+// pipeline. It reuses the same single-owner quiescence loop used by bootstrap.
+func (e *Engine) waitForQuiescence(ctx context.Context) error {
+	return e.runWatchUntilQuiescent(ctx, &watchPipeline{}, nil)
+}
+
+// runWatchLoop runs the steady-state watch-mode select loop. The same goroutine
+// owns batch intake, result processing, retry/trial timers, and worker outbox
+// draining.
+func (e *Engine) runWatchLoop(ctx context.Context, p *watchPipeline) error {
+	var outbox []*synctypes.TrackedAction
+
+	for {
+		var (
+			done bool
+			err  error
+		)
+
+		if len(outbox) == 0 {
+			outbox, done, err = e.runWatchLoopIdle(ctx, p)
+		} else {
+			outbox, done, err = e.runWatchLoopWithOutbox(ctx, p, outbox)
+		}
+		if err != nil {
+			return err
+		}
+		if done {
+			return nil
+		}
+	}
+}
+
+func (e *Engine) runWatchLoopIdle(
+	ctx context.Context,
+	p *watchPipeline,
+) ([]*synctypes.TrackedAction, bool, error) {
+	select {
+	case batch, ok := <-p.ready:
+		if !ok {
+			return nil, true, nil
+		}
+		return e.processBatch(ctx, batch, p.bl, p.mode, p.safety), false, nil
+	case r, ok := <-p.results:
+		if !ok {
+			select {
+			case <-ctx.Done():
+				return nil, true, nil
+			default:
+			}
+			return nil, false, fmt.Errorf("sync: worker results channel closed unexpectedly")
+		}
+		return e.processWorkerResult(ctx, &r, p.bl), false, nil
+	case skipped := <-p.skippedCh:
+		e.recordSkippedItems(ctx, skipped)
+		e.clearResolvedSkippedItems(ctx, skipped)
+		return nil, false, nil
+	case <-p.recheckC:
+		e.handleRecheckTick(ctx)
+		return nil, false, nil
+	case <-p.reconcileC:
+		e.runFullReconciliationAsync(ctx, p.bl)
+		return nil, false, nil
+	case obsErr := <-p.errs:
+		return nil, false, e.handleObserverExit(p, obsErr)
+	case <-e.trialTimerChan():
+		e.handleTrialTimer(ctx)
+		return nil, false, nil
+	case <-e.retryTimerChan():
+		e.handleRetryTimer(ctx)
+		return nil, false, nil
+	case <-ctx.Done():
+		return nil, true, nil
+	}
+}
+
+func (e *Engine) runWatchLoopWithOutbox(
+	ctx context.Context,
+	p *watchPipeline,
+	outbox []*synctypes.TrackedAction,
+) ([]*synctypes.TrackedAction, bool, error) {
+	select {
+	case e.readyCh <- outbox[0]:
+		return outbox[1:], false, nil
+	case batch, ok := <-p.ready:
+		if !ok {
+			return outbox, true, nil
+		}
+		return append(outbox, e.processBatch(ctx, batch, p.bl, p.mode, p.safety)...), false, nil
+	case r, ok := <-p.results:
+		if !ok {
+			select {
+			case <-ctx.Done():
+				return outbox, true, nil
+			default:
+			}
+			return outbox, false, fmt.Errorf("sync: worker results channel closed unexpectedly")
+		}
+		return append(outbox, e.processWorkerResult(ctx, &r, p.bl)...), false, nil
+	case skipped := <-p.skippedCh:
+		e.recordSkippedItems(ctx, skipped)
+		e.clearResolvedSkippedItems(ctx, skipped)
+		return outbox, false, nil
+	case <-p.recheckC:
+		e.handleRecheckTick(ctx)
+		return outbox, false, nil
+	case <-p.reconcileC:
+		e.runFullReconciliationAsync(ctx, p.bl)
+		return outbox, false, nil
+	case obsErr := <-p.errs:
+		return outbox, false, e.handleObserverExit(p, obsErr)
+	case <-e.trialTimerChan():
+		e.handleTrialTimer(ctx)
+		return outbox, false, nil
+	case <-e.retryTimerChan():
+		e.handleRetryTimer(ctx)
+		return outbox, false, nil
+	case <-ctx.Done():
+		return outbox, true, nil
+	}
+}
+
+func (e *Engine) handleObserverExit(p *watchPipeline, obsErr error) error {
+	if obsErr != nil {
+		e.logger.Warn("observer error",
+			slog.String("error", obsErr.Error()),
+		)
+	}
+
+	p.activeObs--
+	if p.activeObs > 0 {
+		return nil
+	}
+
+	e.logger.Error("all observers have exited, stopping watch mode")
+	return fmt.Errorf("sync: all observers exited")
+}
 // ---------------------------------------------------------------------------
 // Result classification (R-6.8.15)
 // ---------------------------------------------------------------------------
@@ -1497,7 +1714,7 @@ func (e *Engine) loadActiveScopes(ctx context.Context) error {
 
 	blocks, err := e.baseline.ListScopeBlocks(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("sync: listing active scopes: %w", err)
 	}
 
 	e.watch.activeScopes = e.watch.activeScopes[:0]
@@ -1610,7 +1827,7 @@ func (e *Engine) scopeBlockKeys() []synctypes.ScopeKey {
 
 func (e *Engine) activateScope(ctx context.Context, block synctypes.ScopeBlock) error {
 	if err := e.baseline.UpsertScopeBlock(ctx, &block); err != nil {
-		return err
+		return fmt.Errorf("sync: activating scope %s: %w", block.Key.String(), err)
 	}
 
 	if e.watch != nil {
@@ -1746,7 +1963,7 @@ func (e *Engine) applyScopeBlock(ctx context.Context, sr synctypes.ScopeUpdateRe
 // boundary row for the scope, and makes held descendants retryable now.
 func (e *Engine) releaseScope(ctx context.Context, key synctypes.ScopeKey) error {
 	if err := e.baseline.ReleaseScope(ctx, key, e.nowFunc()); err != nil {
-		return err
+		return fmt.Errorf("sync: releasing scope %s: %w", key.String(), err)
 	}
 
 	if e.watch != nil {
@@ -1769,7 +1986,7 @@ func (e *Engine) releaseScope(ctx context.Context, key synctypes.ScopeKey) error
 // tied to it. Used when the blocked subtree itself disappears.
 func (e *Engine) discardScope(ctx context.Context, key synctypes.ScopeKey) error {
 	if err := e.baseline.DiscardScope(ctx, key); err != nil {
-		return err
+		return fmt.Errorf("sync: discarding scope %s: %w", key.String(), err)
 	}
 
 	if e.watch != nil {
@@ -1968,7 +2185,7 @@ func (e *Engine) recordCascadeFailure(ctx context.Context, action *synctypes.Act
 		Category:  synctypes.CategoryTransient,
 		IssueType: issueType,
 		ErrMsg:    "parent action failed: " + parentResult.ErrMsg,
-	}, retry.Reconcile.Delay); err != nil {
+	}, retry.ReconcilePolicy().Delay); err != nil {
 		e.logger.Warn("failed to record cascade failure",
 			slog.String("path", action.Path),
 			slog.String("error", err.Error()),
@@ -2033,13 +2250,13 @@ func (e *Engine) applyResultSideEffects(ctx context.Context, class resultClass, 
 		}
 
 	case resultRequeue:
-		e.recordFailure(ctx, r, retry.Reconcile.Delay)
+		e.recordFailure(ctx, r, retry.ReconcilePolicy().Delay)
 		e.recordError(r)
 		e.feedScopeDetection(ctx, r)
 		e.armRetryTimer(ctx)
 
 	case resultScopeBlock:
-		e.recordFailure(ctx, r, retry.Reconcile.Delay)
+		e.recordFailure(ctx, r, retry.ReconcilePolicy().Delay)
 		e.recordError(r)
 		e.feedScopeDetection(ctx, r)
 		e.armTrialTimer()
@@ -2110,7 +2327,7 @@ func (e *Engine) processTrialResult(ctx context.Context, r *synctypes.WorkerResu
 
 	var delayFn func(int) time.Duration
 	if class == resultRequeue || class == resultScopeBlock {
-		delayFn = retry.Reconcile.Delay
+		delayFn = retry.ReconcilePolicy().Delay
 	}
 
 	e.recordFailure(ctx, r, delayFn)
@@ -2202,12 +2419,12 @@ func (e *Engine) runTrialDispatch(ctx context.Context) {
 	now := e.nowFunc()
 
 	// Clean stale trial entries before dispatching new ones.
-	e.cleanStaleTrialPending(now)
+	e.cleanStaleTrialPending(ctx, now)
 
 	// Snapshot all due scopes — each visited exactly once.
 	for _, key := range syncdispatch.DueTrials(e.watch.activeScopes, now) {
 		// Pick oldest scope-blocked failure for this scope.
-		row, err := e.baseline.PickTrialCandidate(ctx, key)
+		row, found, err := e.baseline.PickTrialCandidate(ctx, key)
 		if err != nil {
 			e.logger.Warn("runTrialDispatch: failed to pick trial candidate",
 				slog.String("scope_key", key.String()),
@@ -2217,7 +2434,7 @@ func (e *Engine) runTrialDispatch(ctx context.Context) {
 			break
 		}
 
-		if row == nil {
+		if !found {
 			// No candidates — scope condition resolved externally.
 			if err := e.releaseScope(ctx, key); err != nil {
 				e.logger.Warn("runTrialDispatch: failed to release empty scope",
@@ -2659,13 +2876,13 @@ func (e *Engine) reobserve(ctx context.Context, row *synctypes.SyncFailureRow) (
 // cleanStaleTrialPending removes stale entries from trialPending. Entries
 // older than trialPendingTTL are cleared and the corresponding sync_failure
 // is deleted (item is stale).
-func (e *Engine) cleanStaleTrialPending(now time.Time) {
+func (e *Engine) cleanStaleTrialPending(ctx context.Context, now time.Time) {
 	for path, entry := range e.watch.trialPending {
 		if now.Sub(entry.created) > trialPendingTTL {
 			delete(e.watch.trialPending, path)
 			// Clear the stale sync_failure — this trial candidate was never
 			// intercepted by the planner (item may have been deleted). Best-effort.
-			if err := e.baseline.ClearSyncFailureByPath(context.Background(), path); err != nil {
+			if err := e.baseline.ClearSyncFailureByPath(ctx, path); err != nil {
 				e.logger.Debug("cleanStaleTrialPending: failed to clear stale failure",
 					slog.String("path", path),
 					slog.String("error", err.Error()),
