@@ -2,7 +2,7 @@
 //
 // Extracted so that PermissionHandler (and future extracted structs) can depend
 // on a narrow interface rather than function callbacks. Engine satisfies this
-// interface implicitly via its existing setScopeBlock and onScopeClear methods.
+// interface via its explicit scope lifecycle operations.
 package sync
 
 import (

@@ -1,5 +1,7 @@
 # Engine Event Loop Design Review
 
+> Historical note: This review evaluates the pre-implementation event-loop proposal. The current implemented architecture is documented in `spec/design/sync-engine.md` and `spec/design/sync-execution.md`. References here to `ScopeGate`, `drainWorkerResults`, and related pre-refactor structure are historical.
+
 Comprehensive review of [engine-event-loop.md](file:///Users/tonimelisma/Development/onedrive-go/spec/design/engine-event-loop.md) against the codebase, requirements, and design specs.
 
 ---

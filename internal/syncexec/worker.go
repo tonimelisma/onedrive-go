@@ -99,7 +99,7 @@ func (wp *WorkerPool) Wait() {
 }
 
 // Stop cancels all in-flight work, waits for goroutines to exit, and closes
-// the results channel so consumers (drainWorkerResults) can terminate.
+// the results channel so the engine-owned result loop can terminate.
 func (wp *WorkerPool) Stop() {
 	if wp.cancel != nil {
 		wp.cancel()
@@ -230,7 +230,7 @@ func (wp *WorkerPool) dispatchAction(
 
 // Results returns a read-only channel of per-action results. The engine
 // reads from this channel, classifies each result, and calls
-// depGraph.Complete. Failed items go to sync_failures for drain-loop retry.
+// depGraph.Complete. Failed items go to sync_failures for the engine retry sweep.
 func (wp *WorkerPool) Results() <-chan synctypes.WorkerResult {
 	return wp.results
 }
@@ -242,7 +242,7 @@ func (wp *WorkerPool) Results() <-chan synctypes.WorkerResult {
 //
 // If the context is canceled before the result is sent (engine shutdown),
 // the WorkerResult is silently dropped. The engine handles shutdown via
-// context cancellation on the drain goroutine (resultShutdown classification).
+// context cancellation on the result-processing loop (resultShutdown classification).
 func (wp *WorkerPool) sendResult(ctx context.Context, ta *synctypes.TrackedAction, outcome *synctypes.Outcome, actionErr error) {
 	r := synctypes.WorkerResult{
 		Path:          ta.Action.Path,

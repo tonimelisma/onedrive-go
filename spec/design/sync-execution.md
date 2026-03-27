@@ -1,6 +1,6 @@
 # Sync Execution
 
-GOVERNS: internal/syncexec/executor.go, internal/syncexec/executor_conflict.go, internal/syncexec/executor_delete.go, internal/syncexec/executor_transfer.go, internal/syncexec/worker.go, internal/syncdispatch/dep_graph.go, internal/syncdispatch/scope_gate.go, internal/syncdispatch/scope.go, internal/syncdispatch/delete_counter.go, status.go
+GOVERNS: internal/syncexec/executor.go, internal/syncexec/executor_conflict.go, internal/syncexec/executor_delete.go, internal/syncexec/executor_transfer.go, internal/syncexec/worker.go, internal/syncdispatch/dep_graph.go, internal/syncdispatch/active_scopes.go, internal/syncdispatch/scope.go, internal/syncdispatch/delete_counter.go, status.go
 
 Implements: R-2.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.5.3 [verified], R-6.7.25 [planned], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.16 [verified], R-2.10.41 [verified], R-2.10.42 [verified], R-2.10.43 [verified], R-2.10.44 [verified], R-2.14.2 [verified]
 
@@ -29,9 +29,9 @@ The D-10 fix ensures completed actions are removed from the `actions` map. Witho
 
 `TrackedAction` struct is defined here: pairs an `Action` with an ID, cancel function, trial metadata (`IsTrial`, `TrialScopeKey`), and dependency tracking (`depsLeft`, `dependents`).
 
-## Active Scope Helpers (`scope_gate.go`)
+## Active Scope Helpers (`active_scopes.go`)
 
-`scope_gate.go` no longer owns a runtime subsystem. It provides pure helper
+`active_scopes.go` no longer owns a runtime subsystem. It provides pure helper
 functions over an engine-owned `[]ScopeBlock` working set. There is no mutex,
 no write-through cache, and no persistence layer in `syncdispatch`.
 
@@ -47,7 +47,7 @@ no write-through cache, and no persistence layer in `syncdispatch`.
   active block.
 - **`ExtendScopeTrial(blocks, key, nextAt, interval)`**: Return a copy with the
   scope's trial metadata updated and `TrialCount` incremented.
-- **`DueTrials(now)` / `EarliestTrialAt()` / `ScopeKeys()`**: Pure helpers for
+- **`DueTrials(blocks, now)` / `EarliestTrialAt(blocks)` / `ScopeKeys(blocks)`**: Pure helpers for
   watch-loop timer scheduling and scope iteration.
 
 The watch loop owns runtime scope state. `scope_blocks` remains the persisted
@@ -140,8 +140,8 @@ ownership rules:
   cancellation instead of ranging on channel close.
 - **Worker `results` channel**: owned by `WorkerPool`. Created in
   `NewWorkerPool`, written only by workers through `sendResult`, read by
-  `drainWorkerResults` in one-shot mode and by the watch loop in watch mode.
-  Closed exactly once by `WorkerPool.Stop()` after all worker goroutines exit.
+  the engine-owned result loop in both one-shot and watch mode. Closed exactly
+  once by `WorkerPool.Stop()` after all worker goroutines exit.
 - **Trial timer delivery (`trialCh`)**: owned by the engine and created once
   in `NewEngine`. Written only by `time.AfterFunc` callbacks scheduled by
   `armTrialTimer`. Read by the watch loop in watch mode. The channel is never

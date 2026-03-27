@@ -509,7 +509,7 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *synctypes.Ou
 // them with the in-memory cache. Returns the number of mismatches found (report-only,
 // no auto-fix). Intended for periodic verification in watch mode (B-198).
 //
-// Thread-safety: called from the engine's drain loop (single-goroutine context)
+// Thread-safety: called from the engine-owned result loop (single-goroutine context)
 // after all workers complete. The Baseline cache is stable at this point —
 // no concurrent mutation is possible.
 func (m *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
