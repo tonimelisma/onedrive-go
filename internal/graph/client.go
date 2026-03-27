@@ -34,7 +34,7 @@ type TokenSource interface {
 // http.Client's Transport — the graph Client itself never retries or sleeps.
 // This separation keeps the client stateless and makes the retry decision a
 // caller concern (CLI: RetryTransport, sync: raw transport, single attempt,
-// engine records failure for drain-loop retrier).
+// engine records failure for the engine retry sweep).
 type Client struct {
 	baseURL    string
 	httpClient *http.Client

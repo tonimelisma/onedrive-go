@@ -1,5 +1,7 @@
 # Engine Event Loop: Deep Research & Concrete Solutions
 
+> Historical note: This research document analyzes the pre-implementation event-loop proposal. The current implemented architecture is documented in `spec/design/sync-engine.md` and `spec/design/sync-execution.md`. Mentions of `ScopeGate`, `drainWorkerResults`, and related topology are historical.
+
 Based on the initial review of `spec/design/engine-event-loop.md`, I've conducted a deep dive into the `internal/sync` package to validate the identified gaps and risks. This document details the exact nature of these issues based on the current codebase and proposes concrete, deeply-researched solutions to fix the design document before execution.
 
 ---

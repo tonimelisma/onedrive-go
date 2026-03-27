@@ -272,10 +272,10 @@ func TestPhase0_ExecutePlan_WaitsForDrainSideEffects(t *testing.T) {
 }
 
 // Validates: R-2.10.5
-func TestPhase0_DrainLoop_TrialFailureKeepsBlockedScopeIsolated(t *testing.T) {
+func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testing.T) {
 	t.Parallel()
 
-	results, ready, done, cancel, eng, buf := startDrainLoop(t)
+	results, ready, done, cancel, eng, buf := startOneShotEngineLoop(t)
 	defer cancel()
 	_ = ready
 	_ = done
@@ -320,10 +320,10 @@ func TestPhase0_DrainLoop_TrialFailureKeepsBlockedScopeIsolated(t *testing.T) {
 }
 
 // Validates: R-2.10.5, R-2.10.11
-func TestPhase0_DrainLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation(t *testing.T) {
+func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation(t *testing.T) {
 	t.Parallel()
 
-	results, ready, done, cancel, eng, buf := startDrainLoop(t)
+	results, ready, done, cancel, eng, buf := startOneShotEngineLoop(t)
 	defer cancel()
 	_ = ready
 	_ = done
@@ -457,7 +457,7 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 func TestPhase0_ScopeBlockFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	t.Parallel()
 
-	results, ready, _, cancel, eng, _ := startDrainLoop(t)
+	results, ready, _, cancel, eng, _ := startOneShotEngineLoop(t)
 	defer cancel()
 
 	ctx := t.Context()

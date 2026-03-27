@@ -1,8 +1,8 @@
 // store_failures.go — Sync failure recording and queries for SyncStore.
 //
 // sync_failures is the active retry queue. Transient failures get next_retry_at
-// computed by a caller-provided delayFn (retry.Reconcile.Delay). The
-// The drain-loop retrier re-injects due items via buffer → planner → executor (R-6.8.10).
+// computed by a caller-provided delayFn (retry.Reconcile.Delay). The engine's
+// retry sweep re-injects due items via buffer → planner → executor (R-6.8.10).
 //
 // Contents:
 //   - IsActionableIssue:                classify issue types requiring user action
