@@ -85,9 +85,7 @@ func renameTempFile(src, dst string) error {
 }
 
 func chmodTrustedTempPath(path string, mode os.FileMode) error {
-	// Path is created by os.CreateTemp in the destination directory, so it is
-	// an internally-derived atomic-write temp file rather than external input.
-	if err := os.Chmod(path, mode); err != nil { //nolint:gosec // Path is an os.CreateTemp-managed temp file in the token directory.
+	if err := chmodManagedTempPath(path, mode); err != nil {
 		return fmt.Errorf("tokenfile: setting permissions: %w", err)
 	}
 
@@ -95,9 +93,7 @@ func chmodTrustedTempPath(path string, mode os.FileMode) error {
 }
 
 func renameTrustedTempPath(src, dst string) error {
-	// Source temp path is internally-derived and the destination is the final
-	// token-managed path in the same directory for an atomic rename.
-	if err := os.Rename(src, dst); err != nil { //nolint:gosec // Source and destination are managed atomic-write paths in the token directory.
+	if err := renameManagedTempPath(src, dst); err != nil {
 		return fmt.Errorf("tokenfile: renaming: %w", err)
 	}
 
