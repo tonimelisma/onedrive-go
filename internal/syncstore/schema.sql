@@ -1,7 +1,7 @@
--- +goose Up
-
--- Consolidated schema for the sync engine state database.
--- Single DDL script — no incremental migration chain needed.
+-- Canonical schema for the sync engine state database.
+-- The project has no launched users and no state-compatibility burden, so the
+-- schema is defined directly in its final shape. There is no incremental
+-- migration chain carrying legacy architecture forward.
 
 -- Core sync state: confirmed synced state per (drive_id, item_id).
 CREATE TABLE IF NOT EXISTS baseline (
@@ -93,12 +93,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_state_active_path
     ON remote_state(path)
     WHERE sync_status NOT IN ('deleted', 'pending_delete');
 
--- Unified failure tracking for all sync failure types (download, upload, delete).
+-- Unified per-item failure tracking.
+--
+-- Explicit failure_role replaces implicit interpretation via category,
+-- scope_key, and next_retry_at:
+--   - item: ordinary per-path failure or actionable issue
+--   - held: path currently blocked behind an active scope
+--   - boundary: actionable row that defines a scope-backed condition
 CREATE TABLE IF NOT EXISTS sync_failures (
     path           TEXT    NOT NULL,
     drive_id       TEXT    NOT NULL,
     direction      TEXT    NOT NULL CHECK(direction IN ('download', 'upload', 'delete')),
     category       TEXT    NOT NULL CHECK(category IN ('transient', 'actionable')),
+    failure_role   TEXT    NOT NULL CHECK(failure_role IN ('item', 'held', 'boundary')),
     issue_type     TEXT,
     item_id        TEXT,
     failure_count  INTEGER NOT NULL DEFAULT 0,
@@ -109,11 +116,42 @@ CREATE TABLE IF NOT EXISTS sync_failures (
     last_seen_at   INTEGER NOT NULL,
     file_size      INTEGER,
     local_hash     TEXT,
+    scope_key      TEXT    NOT NULL DEFAULT '',
+    CHECK (
+        failure_role = 'item'
+        OR (failure_role = 'held'
+            AND category = 'transient'
+            AND scope_key <> ''
+            AND next_retry_at IS NULL)
+        OR (failure_role = 'boundary'
+            AND category = 'actionable'
+            AND scope_key <> ''
+            AND next_retry_at IS NULL)
+    ),
     PRIMARY KEY (path, drive_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_sync_failures_retry ON sync_failures(next_retry_at)
     WHERE next_retry_at IS NOT NULL AND category = 'transient';
+CREATE INDEX IF NOT EXISTS idx_sync_failures_scope_role
+    ON sync_failures(scope_key, failure_role);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_failures_boundary_scope
+    ON sync_failures(scope_key)
+    WHERE failure_role = 'boundary';
+
+-- Persisted scope-level blocking conditions.
+--
+-- Runtime ownership lives in the watch event loop. This table is only the
+-- crash-safe record used for startup repair and recovery.
+CREATE TABLE IF NOT EXISTS scope_blocks (
+    scope_key      TEXT PRIMARY KEY,
+    issue_type     TEXT NOT NULL,
+    timing_source  TEXT NOT NULL CHECK(timing_source IN ('none', 'backoff', 'server_retry_after')),
+    blocked_at     INTEGER NOT NULL,
+    trial_interval INTEGER NOT NULL,
+    next_trial_at  INTEGER NOT NULL,
+    trial_count    INTEGER NOT NULL DEFAULT 0
+);
 
 -- Shortcut registry for shared folder sync.
 CREATE TABLE IF NOT EXISTS shortcuts (
@@ -127,12 +165,3 @@ CREATE TABLE IF NOT EXISTS shortcuts (
     read_only      INTEGER NOT NULL DEFAULT 0,
     discovered_at  INTEGER NOT NULL CHECK(discovered_at > 0)
 );
-
--- +goose Down
-DROP TABLE IF EXISTS shortcuts;
-DROP TABLE IF EXISTS sync_failures;
-DROP TABLE IF EXISTS remote_state;
-DROP TABLE IF EXISTS sync_metadata;
-DROP TABLE IF EXISTS conflicts;
-DROP TABLE IF EXISTS delta_tokens;
-DROP TABLE IF EXISTS baseline;

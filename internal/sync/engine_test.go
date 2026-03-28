@@ -296,6 +296,20 @@ func newTestWatchState(t *testing.T, eng *Engine) {
 
 func setTestScopeBlock(t *testing.T, eng *Engine, block synctypes.ScopeBlock) {
 	t.Helper()
+
+	if block.BlockedAt.IsZero() {
+		block.BlockedAt = eng.nowFunc()
+	}
+	if block.TimingSource == "" {
+		if block.NextTrialAt.IsZero() && block.TrialInterval == 0 {
+			block.TimingSource = synctypes.ScopeTimingNone
+		} else {
+			block.TimingSource = synctypes.ScopeTimingBackoff
+		}
+	}
+	if block.TimingSource != synctypes.ScopeTimingNone && block.NextTrialAt.IsZero() {
+		block.NextTrialAt = block.BlockedAt.Add(block.TrialInterval)
+	}
 	require.NoError(t, eng.baseline.UpsertScopeBlock(context.Background(), &block))
 	if eng.watch != nil {
 		eng.watch.activeScopes = syncdispatch.UpsertScope(eng.watch.activeScopes, block)
@@ -1731,6 +1745,7 @@ func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 		Path:      "Shared/TeamDocs",
 		DriveID:   driveID,
 		Direction: synctypes.DirectionUpload,
+		Role:      synctypes.FailureRoleBoundary,
 		Category:  synctypes.CategoryActionable,
 		IssueType: synctypes.IssuePermissionDenied,
 		ErrMsg:    "read-only boundary",
@@ -1740,6 +1755,7 @@ func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 		Path:      "Shared/TeamDocs/file.txt",
 		DriveID:   driveID,
 		Direction: synctypes.DirectionUpload,
+		Role:      synctypes.FailureRoleHeld,
 		Category:  synctypes.CategoryTransient,
 		ErrMsg:    "blocked by remote permission scope",
 		ScopeKey:  clearedScope,
@@ -1748,6 +1764,7 @@ func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 		Path:      "Shared/Other",
 		DriveID:   driveID,
 		Direction: synctypes.DirectionUpload,
+		Role:      synctypes.FailureRoleBoundary,
 		Category:  synctypes.CategoryActionable,
 		IssueType: synctypes.IssuePermissionDenied,
 		ErrMsg:    "read-only boundary",
@@ -2798,7 +2815,7 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// runFullReconciliationAsync tests (Item 6 + Phase 10)
+// runFullReconciliationAsync tests
 // ---------------------------------------------------------------------------
 
 // waitForReconcileDone polls until reconcileRunning becomes false.
@@ -3472,10 +3489,14 @@ func TestProcessWorkerResult_Success_NoRecords(t *testing.T) {
 
 // Validates: R-6.8.15, R-6.7.12, R-6.7.14
 type classifyResultCase struct {
-	name      string
-	result    synctypes.WorkerResult
-	wantClass resultClass
-	wantScope synctypes.ScopeKey
+	name              string
+	result            synctypes.WorkerResult
+	wantClass         resultClass
+	wantScope         synctypes.ScopeKey
+	wantRecordMode    failureRecordMode
+	wantPermission    permissionFlow
+	wantScopeDetect   bool
+	wantRecordSuccess bool
 }
 
 func assertClassifyResultCases(t *testing.T, tests []classifyResultCase) {
@@ -3486,9 +3507,13 @@ func assertClassifyResultCases(t *testing.T, tests []classifyResultCase) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			gotClass, gotScope := classifyResult(&tt.result)
-			assert.Equal(t, tt.wantClass, gotClass, "resultClass mismatch")
-			assert.Equal(t, tt.wantScope, gotScope, "scope key mismatch")
+			got := classifyResult(&tt.result)
+			assert.Equal(t, tt.wantClass, got.Class, "resultClass mismatch")
+			assert.Equal(t, tt.wantScope, got.ScopeKey, "scope key mismatch")
+			assert.Equal(t, tt.wantRecordMode, got.RecordMode, "record mode mismatch")
+			assert.Equal(t, tt.wantPermission, got.PermissionFlow, "permission flow mismatch")
+			assert.Equal(t, tt.wantScopeDetect, got.RunScopeDetection, "scope detection mismatch")
+			assert.Equal(t, tt.wantRecordSuccess, got.RecordSuccess, "record success mismatch")
 		})
 	}
 }
@@ -3497,7 +3522,7 @@ func TestClassifyResult_LifecycleAndAuth(t *testing.T) {
 	t.Parallel()
 
 	assertClassifyResultCases(t, []classifyResultCase{
-		{name: "success", result: synctypes.WorkerResult{Success: true}, wantClass: resultSuccess},
+		{name: "success", result: synctypes.WorkerResult{Success: true}, wantClass: resultSuccess, wantRecordSuccess: true},
 		{name: "context_canceled", result: synctypes.WorkerResult{Err: context.Canceled}, wantClass: resultShutdown},
 		{name: "context_deadline_exceeded", result: synctypes.WorkerResult{Err: context.DeadlineExceeded}, wantClass: resultShutdown},
 		{
@@ -3506,14 +3531,17 @@ func TestClassifyResult_LifecycleAndAuth(t *testing.T) {
 			wantClass: resultShutdown,
 		},
 		{
-			name:      "401_unauthorized",
-			result:    synctypes.WorkerResult{HTTPStatus: http.StatusUnauthorized, Err: graph.ErrUnauthorized},
-			wantClass: resultFatal,
+			name:           "401_unauthorized",
+			result:         synctypes.WorkerResult{HTTPStatus: http.StatusUnauthorized, Err: graph.ErrUnauthorized},
+			wantClass:      resultFatal,
+			wantRecordMode: recordFailureActionable,
 		},
 		{
-			name:      "403_forbidden",
-			result:    synctypes.WorkerResult{HTTPStatus: http.StatusForbidden, Err: graph.ErrForbidden},
-			wantClass: resultSkip,
+			name:           "403_forbidden",
+			result:         synctypes.WorkerResult{HTTPStatus: http.StatusForbidden, Err: graph.ErrForbidden},
+			wantClass:      resultSkip,
+			wantRecordMode: recordFailureActionable,
+			wantPermission: permissionFlowRemote403,
 		},
 	})
 }
@@ -3549,22 +3577,22 @@ func TestClassifyResult_RemoteRetriesAndSkips(t *testing.T) {
 	}
 
 	assertClassifyResultCases(t, []classifyResultCase{
-		{name: "404_not_found", result: synctypes.WorkerResult{HTTPStatus: http.StatusNotFound, Err: graph.ErrNotFound}, wantClass: resultRequeue},
-		{name: "408_request_timeout", result: synctypes.WorkerResult{HTTPStatus: http.StatusRequestTimeout, Err: errors.New("timeout")}, wantClass: resultRequeue},
-		{name: "412_precondition_failed", result: synctypes.WorkerResult{HTTPStatus: http.StatusPreconditionFailed, Err: errors.New("etag mismatch")}, wantClass: resultRequeue},
-		{name: "423_locked", result: synctypes.WorkerResult{HTTPStatus: http.StatusLocked, Err: graph.ErrLocked}, wantClass: resultRequeue},
-		{name: "429_too_many_requests", result: synctypes.WorkerResult{HTTPStatus: http.StatusTooManyRequests, Err: graph.ErrThrottled}, wantClass: resultScopeBlock, wantScope: synctypes.SKThrottleAccount()},
-		{name: "400_outage_pattern", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: outageErr}, wantClass: resultRequeue},
-		{name: "400_outage_pattern_legacy_body_only", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: legacyOutageErr}, wantClass: resultRequeue},
-		{name: "400_outage_message_wrong_code", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: wrongCodeOutageErr}, wantClass: resultSkip},
-		{name: "400_normal", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: normalBadRequestErr}, wantClass: resultSkip},
-		{name: "500_internal_server_error", result: synctypes.WorkerResult{HTTPStatus: http.StatusInternalServerError, Err: graph.ErrServerError}, wantClass: resultRequeue},
-		{name: "502_bad_gateway", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadGateway, Err: graph.ErrServerError}, wantClass: resultRequeue},
-		{name: "503_service_unavailable", result: synctypes.WorkerResult{HTTPStatus: http.StatusServiceUnavailable, Err: graph.ErrServerError}, wantClass: resultRequeue},
-		{name: "504_gateway_timeout", result: synctypes.WorkerResult{HTTPStatus: http.StatusGatewayTimeout, Err: graph.ErrServerError}, wantClass: resultRequeue},
-		{name: "509_bandwidth_limit", result: synctypes.WorkerResult{HTTPStatus: 509, Err: graph.ErrServerError}, wantClass: resultRequeue},
-		{name: "409_conflict", result: synctypes.WorkerResult{HTTPStatus: http.StatusConflict, Err: graph.ErrConflict}, wantClass: resultSkip},
-		{name: "other_4xx_falls_to_skip", result: synctypes.WorkerResult{HTTPStatus: http.StatusMethodNotAllowed, Err: graph.ErrMethodNotAllowed}, wantClass: resultSkip},
+		{name: "404_not_found", result: synctypes.WorkerResult{HTTPStatus: http.StatusNotFound, Err: graph.ErrNotFound}, wantClass: resultRequeue, wantRecordMode: recordFailureReconcile, wantScopeDetect: true},
+		{name: "408_request_timeout", result: synctypes.WorkerResult{HTTPStatus: http.StatusRequestTimeout, Err: errors.New("timeout")}, wantClass: resultRequeue, wantRecordMode: recordFailureReconcile, wantScopeDetect: true},
+		{name: "412_precondition_failed", result: synctypes.WorkerResult{HTTPStatus: http.StatusPreconditionFailed, Err: errors.New("etag mismatch")}, wantClass: resultRequeue, wantRecordMode: recordFailureReconcile, wantScopeDetect: true},
+		{name: "423_locked", result: synctypes.WorkerResult{HTTPStatus: http.StatusLocked, Err: graph.ErrLocked}, wantClass: resultRequeue, wantRecordMode: recordFailureReconcile, wantScopeDetect: true},
+		{name: "429_too_many_requests", result: synctypes.WorkerResult{HTTPStatus: http.StatusTooManyRequests, Err: graph.ErrThrottled}, wantClass: resultScopeBlock, wantScope: synctypes.SKThrottleAccount(), wantRecordMode: recordFailureReconcile, wantScopeDetect: true},
+		{name: "400_outage_pattern", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: outageErr}, wantClass: resultRequeue, wantRecordMode: recordFailureReconcile, wantScopeDetect: true},
+		{name: "400_outage_pattern_legacy_body_only", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: legacyOutageErr}, wantClass: resultRequeue, wantRecordMode: recordFailureReconcile, wantScopeDetect: true},
+		{name: "400_outage_message_wrong_code", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: wrongCodeOutageErr}, wantClass: resultRequeue, wantRecordMode: recordFailureReconcile, wantScopeDetect: true},
+		{name: "400_normal", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: normalBadRequestErr}, wantClass: resultSkip, wantRecordMode: recordFailureActionable},
+		{name: "500_internal_server_error", result: synctypes.WorkerResult{HTTPStatus: http.StatusInternalServerError, Err: graph.ErrServerError}, wantClass: resultRequeue, wantRecordMode: recordFailureReconcile, wantScopeDetect: true},
+		{name: "502_bad_gateway", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadGateway, Err: graph.ErrServerError}, wantClass: resultRequeue, wantRecordMode: recordFailureReconcile, wantScopeDetect: true},
+		{name: "503_service_unavailable", result: synctypes.WorkerResult{HTTPStatus: http.StatusServiceUnavailable, Err: graph.ErrServerError}, wantClass: resultRequeue, wantRecordMode: recordFailureReconcile, wantScopeDetect: true},
+		{name: "504_gateway_timeout", result: synctypes.WorkerResult{HTTPStatus: http.StatusGatewayTimeout, Err: graph.ErrServerError}, wantClass: resultRequeue, wantRecordMode: recordFailureReconcile, wantScopeDetect: true},
+		{name: "509_bandwidth_limit", result: synctypes.WorkerResult{HTTPStatus: 509, Err: graph.ErrServerError}, wantClass: resultRequeue, wantRecordMode: recordFailureReconcile, wantScopeDetect: true},
+		{name: "409_conflict", result: synctypes.WorkerResult{HTTPStatus: http.StatusConflict, Err: graph.ErrConflict}, wantClass: resultSkip, wantRecordMode: recordFailureActionable},
+		{name: "other_4xx_falls_to_skip", result: synctypes.WorkerResult{HTTPStatus: http.StatusMethodNotAllowed, Err: graph.ErrMethodNotAllowed}, wantClass: resultSkip, wantRecordMode: recordFailureActionable},
 	})
 }
 
@@ -3579,8 +3607,10 @@ func TestClassifyResult_StorageScopes(t *testing.T) {
 				Err:         errors.New("insufficient storage"),
 				ShortcutKey: "",
 			},
-			wantClass: resultScopeBlock,
-			wantScope: synctypes.SKQuotaOwn(),
+			wantClass:       resultScopeBlock,
+			wantScope:       synctypes.SKQuotaOwn(),
+			wantRecordMode:  recordFailureReconcile,
+			wantScopeDetect: true,
 		},
 		{
 			name: "507_shortcut_drive",
@@ -3589,8 +3619,10 @@ func TestClassifyResult_StorageScopes(t *testing.T) {
 				Err:         errors.New("insufficient storage"),
 				ShortcutKey: "drive1:item1",
 			},
-			wantClass: resultScopeBlock,
-			wantScope: synctypes.SKQuotaShortcut("drive1:item1"),
+			wantClass:       resultScopeBlock,
+			wantScope:       synctypes.SKQuotaShortcut("drive1:item1"),
+			wantRecordMode:  recordFailureReconcile,
+			wantScopeDetect: true,
 		},
 	})
 }
@@ -3599,22 +3631,26 @@ func TestClassifyResult_LocalErrors(t *testing.T) {
 	t.Parallel()
 
 	assertClassifyResultCases(t, []classifyResultCase{
-		{name: "os_err_permission", result: synctypes.WorkerResult{Err: os.ErrPermission}, wantClass: resultSkip},
+		{name: "os_err_permission", result: synctypes.WorkerResult{Err: os.ErrPermission}, wantClass: resultSkip, wantRecordMode: recordFailureActionable, wantPermission: permissionFlowLocalPermission},
 		{
-			name:      "wrapped_os_err_permission",
-			result:    synctypes.WorkerResult{Err: fmt.Errorf("cannot write: %w", os.ErrPermission)},
-			wantClass: resultSkip,
+			name:           "wrapped_os_err_permission",
+			result:         synctypes.WorkerResult{Err: fmt.Errorf("cannot write: %w", os.ErrPermission)},
+			wantClass:      resultSkip,
+			wantRecordMode: recordFailureActionable,
+			wantPermission: permissionFlowLocalPermission,
 		},
 		{
-			name:      "disk_full",
-			result:    synctypes.WorkerResult{Err: fmt.Errorf("download failed: %w", driveops.ErrDiskFull)},
-			wantClass: resultScopeBlock,
-			wantScope: synctypes.SKDiskLocal(),
+			name:           "disk_full",
+			result:         synctypes.WorkerResult{Err: fmt.Errorf("download failed: %w", driveops.ErrDiskFull)},
+			wantClass:      resultScopeBlock,
+			wantScope:      synctypes.SKDiskLocal(),
+			wantRecordMode: recordFailureReconcile,
 		},
 		{
-			name:      "file_too_large_for_space",
-			result:    synctypes.WorkerResult{Err: fmt.Errorf("download failed: %w", driveops.ErrFileTooLargeForSpace)},
-			wantClass: resultSkip,
+			name:           "file_too_large_for_space",
+			result:         synctypes.WorkerResult{Err: fmt.Errorf("download failed: %w", driveops.ErrFileTooLargeForSpace)},
+			wantClass:      resultSkip,
+			wantRecordMode: recordFailureActionable,
 		},
 	})
 }
@@ -3646,6 +3682,7 @@ func TestProcessTrialResultV2_Success_ClearsScope(t *testing.T) {
 	// Add scope-blocked failures to the DB (these would be unblocked on success).
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "first.txt", DriveID: driveid.New("d"), Direction: synctypes.DirectionUpload,
+		Role:     synctypes.FailureRoleHeld,
 		Category: synctypes.CategoryTransient, ErrMsg: "rate limited", ScopeKey: synctypes.SKThrottleAccount(),
 	}, nil)) // nil delayFn → scope-blocked (next_retry_at = NULL)
 
@@ -3799,27 +3836,31 @@ func TestComputeTrialInterval(t *testing.T) {
 
 	tests := []struct {
 		name            string
+		scopeKey        synctypes.ScopeKey
 		retryAfter      time.Duration
 		currentInterval time.Duration
 		want            time.Duration
 	}{
 		// Retry-After: used directly, no cap (R-2.10.7).
-		{"retry-after honored", 90 * time.Second, 0, 90 * time.Second},
-		{"retry-after exceeds max", 30 * time.Minute, 0, 30 * time.Minute},
-		{"retry-after with current", 2 * time.Minute, 30 * time.Second, 2 * time.Minute},
+		{"retry-after honored", synctypes.SKService(), 90 * time.Second, 0, 90 * time.Second},
+		{"retry-after exceeds max", synctypes.SKService(), 30 * time.Minute, 0, 30 * time.Minute},
+		{"retry-after with current", synctypes.SKService(), 2 * time.Minute, 30 * time.Second, 2 * time.Minute},
 
 		// No Retry-After, no current: initial interval.
-		{"initial interval", 0, 0, syncdispatch.DefaultInitialTrialInterval},
+		{"initial interval", synctypes.SKService(), 0, 0, syncdispatch.DefaultInitialTrialInterval},
+		{"disk initial interval", synctypes.SKDiskLocal(), 0, 0, diskScopeInitialTrialInterval},
 
 		// No Retry-After, with current: double + cap.
-		{"double interval", 0, 30 * time.Second, 60 * time.Second},
-		{"double caps at max", 0, 4 * time.Minute, syncdispatch.DefaultMaxTrialInterval},
-		{"already at max stays", 0, syncdispatch.DefaultMaxTrialInterval, syncdispatch.DefaultMaxTrialInterval},
+		{"double interval", synctypes.SKService(), 0, 30 * time.Second, 60 * time.Second},
+		{"double caps at max", synctypes.SKService(), 0, 4 * time.Minute, syncdispatch.DefaultMaxTrialInterval},
+		{"already at max stays", synctypes.SKService(), 0, syncdispatch.DefaultMaxTrialInterval, syncdispatch.DefaultMaxTrialInterval},
+		{"disk double interval", synctypes.SKDiskLocal(), 0, 30 * time.Minute, 60 * time.Minute},
+		{"disk caps at max", synctypes.SKDiskLocal(), 0, 45 * time.Minute, diskScopeMaxTrialInterval},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := computeTrialInterval(tt.retryAfter, tt.currentInterval)
+			got := computeTrialInterval(tt.scopeKey, tt.retryAfter, tt.currentInterval)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -3871,11 +3912,13 @@ func TestDiskLocalScopeBlock_FullCycle(t *testing.T) {
 	now := eng.nowFunc()
 
 	// 1. classifyResult maps ErrDiskFull to disk:local scope block.
-	class, scope := classifyResult(&synctypes.WorkerResult{
+	decision := classifyResult(&synctypes.WorkerResult{
 		Err: fmt.Errorf("download failed: %w", driveops.ErrDiskFull),
 	})
-	require.Equal(t, resultScopeBlock, class)
-	require.Equal(t, synctypes.SKDiskLocal(), scope)
+	require.Equal(t, resultScopeBlock, decision.Class)
+	require.Equal(t, synctypes.SKDiskLocal(), decision.ScopeKey)
+	require.Equal(t, recordFailureReconcile, decision.RecordMode)
+	assert.False(t, decision.RunScopeDetection, "disk:local uses direct scope activation, not HTTP scope detection")
 
 	// 2. Establish the active scope block.
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
@@ -4045,9 +4088,9 @@ func TestRecordFailure_PopulatesScopeKey_507Shortcut(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // startDrainLoop creates a real engine with DepGraph, watch-mode scope state,
-// readyCh, buf, and retryTimerCh — the full one-shot drain pipeline used by
-// the characterization tests — and starts drainWorkerResults. Tests access
-// the ready channel and buffer via the returned engine.
+// readyCh, buf, and retryTimerCh — the full one-shot engine-loop pipeline used
+// by these tests. Tests access the ready channel and buffer via the returned
+// engine.
 func startDrainLoop(t *testing.T) (chan synctypes.WorkerResult, <-chan struct{}, context.CancelFunc, *Engine) {
 	t.Helper()
 
@@ -4248,6 +4291,7 @@ func TestE2E_OneShotLoop_TrialResultSuccess(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(eng.syncRoot, "blocked.txt"), []byte("blocked payload"), 0o600))
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "blocked.txt", DriveID: driveid.New(engineTestDriveID), Direction: synctypes.DirectionUpload,
+		Role:     synctypes.FailureRoleHeld,
 		Category: synctypes.CategoryTransient, ErrMsg: "rate limited", ScopeKey: synctypes.SKThrottleAccount(),
 	}, nil))
 
@@ -4685,7 +4729,7 @@ func TestIsObservationSuppressed_QuotaDoesNotSuppress(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// watchState nil invariant (Phase 8)
+// watchState nil invariant
 // ---------------------------------------------------------------------------
 
 func TestWatchState_NilInOneShotMode(t *testing.T) {

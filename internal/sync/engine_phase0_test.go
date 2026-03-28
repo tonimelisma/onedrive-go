@@ -350,6 +350,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 		Path:      blockedPath,
 		DriveID:   driveID,
 		Direction: synctypes.DirectionDownload,
+		Role:      synctypes.FailureRoleHeld,
 		Category:  synctypes.CategoryTransient,
 		ErrMsg:    "rate limited",
 		ScopeKey:  synctypes.SKThrottleAccount(),
@@ -416,6 +417,7 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 		Path:      "Private",
 		DriveID:   eng.driveID,
 		Direction: synctypes.DirectionDownload,
+		Role:      synctypes.FailureRoleBoundary,
 		IssueType: synctypes.IssueLocalPermissionDenied,
 		Category:  synctypes.CategoryActionable,
 		ErrMsg:    "directory not accessible",
@@ -425,6 +427,7 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 		Path:      "Private/doc.txt",
 		DriveID:   eng.driveID,
 		Direction: synctypes.DirectionDownload,
+		Role:      synctypes.FailureRoleHeld,
 		Category:  synctypes.CategoryTransient,
 		ErrMsg:    "blocked by perm scope",
 		ScopeKey:  scopeKey,
@@ -436,7 +439,8 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 		BlockedAt: eng.nowFunc(),
 	})
 
-	eng.permHandler.recheckLocalPermissions(ctx)
+	decisions := applyLocalPermissionRecheck(t, eng, ctx)
+	requireSinglePermissionDecision(t, decisions, permissionRecheckReleaseScope)
 
 	assert.False(t, isTestScopeBlocked(eng, scopeKey),
 		"local permission recheck should clear the active scope block")

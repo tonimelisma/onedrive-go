@@ -186,8 +186,9 @@ func TestHandle403_ReadOnlyFolder_RecordsIssueAtBoundary(t *testing.T) {
 	ctx := t.Context()
 	newTestWatchState(t, eng)
 
-	result := eng.permHandler.handle403(ctx, bl, "Shared/TeamDocs/sub/file.txt", shortcuts)
-	assert.True(t, result, "handle403 should return true for read-only folder")
+	decision := applyRemote403Decision(t, eng, ctx, bl, "Shared/TeamDocs/sub/file.txt", shortcuts)
+	assert.True(t, decision.Matched, "handle403 should match a confirmed read-only folder")
+	assert.Equal(t, permissionCheckActivateBoundaryScope, decision.Kind)
 
 	// Should have recorded a permission_denied issue at the boundary (sub folder).
 	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
@@ -278,8 +279,8 @@ func TestHandle403_TransientError_NoSuppression(t *testing.T) {
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
-	result := eng.permHandler.handle403(ctx, bl, "Shared/TeamDocs/sub/file.txt", shortcuts)
-	assert.False(t, result, "handle403 should return false for transient 403")
+	decision := eng.permHandler.handle403(ctx, bl, "Shared/TeamDocs/sub/file.txt", shortcuts)
+	assert.False(t, decision.Matched, "handle403 should fail open for transient 403")
 
 	// No issue should be recorded — transient 403.
 	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
@@ -320,7 +321,8 @@ func TestHandle403_WholeShareReadOnly_BoundaryAtRoot(t *testing.T) {
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
-	eng.permHandler.handle403(ctx, bl, "Shared/TeamDocs/sub/file.txt", shortcuts)
+	decision := applyRemote403Decision(t, eng, ctx, bl, "Shared/TeamDocs/sub/file.txt", shortcuts)
+	assert.True(t, decision.Matched)
 
 	// Boundary should walk all the way up to the shortcut root.
 	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
@@ -358,7 +360,8 @@ func TestHandle403_APIFailure_FailOpen(t *testing.T) {
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
-	eng.permHandler.handle403(ctx, bl, "Shared/TeamDocs/sub/file.txt", shortcuts)
+	decision := eng.permHandler.handle403(ctx, bl, "Shared/TeamDocs/sub/file.txt", shortcuts)
+	assert.False(t, decision.Matched, "API failures should fail open")
 
 	// No issue — fail-open when API is unavailable.
 	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
@@ -375,7 +378,8 @@ func TestHandle403_NoShortcutMatch_Ignored(t *testing.T) {
 	ctx := t.Context()
 
 	// Path not under any shortcut.
-	eng.permHandler.handle403(ctx, bl, "Documents/file.txt", nil)
+	decision := eng.permHandler.handle403(ctx, bl, "Documents/file.txt", nil)
+	assert.False(t, decision.Matched, "non-shortcut paths should not trigger permission suppression")
 
 	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
 	require.NoError(t, err)
@@ -421,6 +425,7 @@ func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "Shared/TeamDocs/sub",
 		Direction:  synctypes.DirectionUpload,
+		Role:       synctypes.FailureRoleBoundary,
 		Category:   synctypes.CategoryActionable,
 		IssueType:  synctypes.IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
@@ -436,6 +441,7 @@ func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 		Path:      "Shared/TeamDocs/sub/file.txt",
 		DriveID:   eng.driveID,
 		Direction: synctypes.DirectionUpload,
+		Role:      synctypes.FailureRoleHeld,
 		Category:  synctypes.CategoryTransient,
 		ScopeKey:  scopeKey,
 		ErrMsg:    "scope blocked: " + scopeKey.String(),
@@ -446,7 +452,8 @@ func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, before, 1)
 
-	eng.permHandler.recheckPermissions(ctx, bl, shortcuts)
+	decisions := applyRemotePermissionRecheck(t, eng, ctx, bl, shortcuts)
+	requireSinglePermissionDecision(t, decisions, permissionRecheckReleaseScope)
 
 	// Issue should be cleared.
 	after, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
@@ -509,13 +516,14 @@ func TestHandle403_ExistingRemoteScope_AvoidsAPICall(t *testing.T) {
 	ctx := t.Context()
 	newTestWatchState(t, eng)
 
-	first := eng.permHandler.handle403(ctx, bl, "Shared/TeamDocs/sub/file-a.txt", shortcuts)
-	require.True(t, first)
+	first := applyRemote403Decision(t, eng, ctx, bl, "Shared/TeamDocs/sub/file-a.txt", shortcuts)
+	require.True(t, first.Matched)
 	callCount := len(checker.calls)
 	require.NotZero(t, callCount, "initial 403 should consult Graph permissions")
 
 	second := eng.permHandler.handle403(ctx, bl, "Shared/TeamDocs/sub/deeper/file-b.txt", shortcuts)
-	require.True(t, second)
+	require.True(t, second.Matched)
+	assert.Equal(t, permissionCheckNone, second.Kind, "known denied boundary should short-circuit to a no-op decision")
 	assert.Len(t, checker.calls, callCount, "known denied boundary should short-circuit further permission API calls")
 
 	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
@@ -553,6 +561,7 @@ func TestRecheckPermissions_APIFailure_FailsOpenAndReleasesScope(t *testing.T) {
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "Shared/TeamDocs/sub",
 		Direction:  synctypes.DirectionUpload,
+		Role:       synctypes.FailureRoleBoundary,
 		Category:   synctypes.CategoryActionable,
 		IssueType:  synctypes.IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
@@ -568,12 +577,14 @@ func TestRecheckPermissions_APIFailure_FailsOpenAndReleasesScope(t *testing.T) {
 		Path:      "Shared/TeamDocs/sub/file.txt",
 		DriveID:   eng.driveID,
 		Direction: synctypes.DirectionUpload,
+		Role:      synctypes.FailureRoleHeld,
 		Category:  synctypes.CategoryTransient,
 		ScopeKey:  scopeKey,
 		ErrMsg:    "scope blocked: " + scopeKey.String(),
 	}, nil))
 
-	eng.permHandler.recheckPermissions(ctx, bl, shortcuts)
+	decisions := applyRemotePermissionRecheck(t, eng, ctx, bl, shortcuts)
+	requireSinglePermissionDecision(t, decisions, permissionRecheckReleaseScope)
 
 	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
 	require.NoError(t, err)
@@ -618,14 +629,21 @@ func TestRecheckPermissions_StillDenied_NoChange(t *testing.T) {
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "Shared/TeamDocs/sub",
 		Direction:  synctypes.DirectionUpload,
+		Role:       synctypes.FailureRoleBoundary,
 		Category:   synctypes.CategoryActionable,
 		IssueType:  synctypes.IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
 		HTTPStatus: http.StatusForbidden,
 		ScopeKey:   scopeKey,
 	}, nil))
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+		Key:       scopeKey,
+		IssueType: synctypes.IssuePermissionDenied,
+		BlockedAt: eng.nowFn().Add(-time.Minute),
+	})
 
-	eng.permHandler.recheckPermissions(ctx, bl, shortcuts)
+	decisions := applyRemotePermissionRecheck(t, eng, ctx, bl, shortcuts)
+	requireSinglePermissionDecision(t, decisions, permissionRecheckKeepScope)
 
 	// Issue should remain.
 	after, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
@@ -643,7 +661,8 @@ func TestRecheckPermissions_NoIssues_NoAPICalls(t *testing.T) {
 	eng, bl, _ := newTestEngineWithPerms(t, checker, nil, nil)
 	ctx := t.Context()
 
-	eng.permHandler.recheckPermissions(ctx, bl, nil)
+	decisions := applyRemotePermissionRecheck(t, eng, ctx, bl, nil)
+	assert.Empty(t, decisions)
 
 	assert.Empty(t, checker.calls, "should not call API when there are no issues")
 }
@@ -666,6 +685,7 @@ func TestRecheckPermissions_UnresolvableIssues_FailOpenClearsStaleBoundaries(t *
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "Shared/NoShortcut/sub",
 		Direction:  synctypes.DirectionUpload,
+		Role:       synctypes.FailureRoleBoundary,
 		Category:   synctypes.CategoryActionable,
 		IssueType:  synctypes.IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
@@ -675,6 +695,7 @@ func TestRecheckPermissions_UnresolvableIssues_FailOpenClearsStaleBoundaries(t *
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "Shared/Other/locked",
 		Direction:  synctypes.DirectionUpload,
+		Role:       synctypes.FailureRoleBoundary,
 		Category:   synctypes.CategoryActionable,
 		IssueType:  synctypes.IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
@@ -683,7 +704,8 @@ func TestRecheckPermissions_UnresolvableIssues_FailOpenClearsStaleBoundaries(t *
 	}, nil))
 
 	// Recheck with no shortcuts — both issues have sc == nil.
-	eng.permHandler.recheckPermissions(ctx, bl, nil)
+	decisions := applyRemotePermissionRecheck(t, eng, ctx, bl, nil)
+	require.Len(t, decisions, 2)
 
 	remaining, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
 	require.NoError(t, err)
@@ -713,6 +735,7 @@ func TestRecheckPermissions_UnresolvedItemID_FailOpenClearsStaleBoundary(t *test
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "Shared/TeamDocs/missing",
 		Direction:  synctypes.DirectionUpload,
+		Role:       synctypes.FailureRoleBoundary,
 		Category:   synctypes.CategoryActionable,
 		IssueType:  synctypes.IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
@@ -720,7 +743,8 @@ func TestRecheckPermissions_UnresolvedItemID_FailOpenClearsStaleBoundary(t *test
 		ScopeKey:   synctypes.SKPermRemote("Shared/TeamDocs/missing"),
 	}, nil))
 
-	eng.permHandler.recheckPermissions(ctx, bl, shortcuts)
+	decisions := applyRemotePermissionRecheck(t, eng, ctx, bl, shortcuts)
+	requireSinglePermissionDecision(t, decisions, permissionRecheckReleaseScope)
 
 	remaining, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
 	require.NoError(t, err)
@@ -740,6 +764,7 @@ func TestDeniedPrefixes_RemoteScopesOnly(t *testing.T) {
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "Shared/TeamDocs",
 		Direction:  synctypes.DirectionUpload,
+		Role:       synctypes.FailureRoleBoundary,
 		Category:   synctypes.CategoryActionable,
 		IssueType:  synctypes.IssuePermissionDenied,
 		ErrMsg:     "read-only",
@@ -757,6 +782,8 @@ func TestDeniedPrefixes_RemoteScopesOnly(t *testing.T) {
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "Private",
 		Direction: synctypes.DirectionUpload,
+		Role:      synctypes.FailureRoleBoundary,
+		Category:  synctypes.CategoryActionable,
 		IssueType: synctypes.IssueLocalPermissionDenied,
 		ErrMsg:    "local permission denied",
 		ScopeKey:  synctypes.SKPermDir("Private"),
@@ -798,7 +825,8 @@ func TestHandle403_FolderNotFound_RecordsIssue(t *testing.T) {
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
-	eng.permHandler.handle403(ctx, bl, "Shared/TeamDocs/sub/file.txt", shortcuts)
+	decision := applyRemote403Decision(t, eng, ctx, bl, "Shared/TeamDocs/sub/file.txt", shortcuts)
+	assert.True(t, decision.Matched)
 
 	// Should record an issue because the folder returned 404.
 	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
@@ -841,7 +869,8 @@ func TestHandle403_UnresolvedParent_FallsBackToRoot(t *testing.T) {
 	ctx := t.Context()
 
 	// File in a folder that's not in baseline yet.
-	eng.permHandler.handle403(ctx, bl, "Shared/TeamDocs/newdir/file.txt", shortcuts)
+	decision := applyRemote403Decision(t, eng, ctx, bl, "Shared/TeamDocs/newdir/file.txt", shortcuts)
+	assert.True(t, decision.Matched)
 
 	// Should fall back to root and record issue there.
 	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
@@ -887,14 +916,21 @@ func TestRecheckPermissions_StillDenied_KeepsDeniedPrefix(t *testing.T) {
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "Shared/TeamDocs/sub",
 		Direction:  synctypes.DirectionUpload,
+		Role:       synctypes.FailureRoleBoundary,
 		Category:   synctypes.CategoryActionable,
 		IssueType:  synctypes.IssuePermissionDenied,
 		ErrMsg:     "folder is read-only",
 		HTTPStatus: http.StatusForbidden,
 		ScopeKey:   scopeKey,
 	}, nil))
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+		Key:       scopeKey,
+		IssueType: synctypes.IssuePermissionDenied,
+		BlockedAt: eng.nowFn().Add(-time.Minute),
+	})
 
-	eng.permHandler.recheckPermissions(ctx, bl, shortcuts)
+	decisions := applyRemotePermissionRecheck(t, eng, ctx, bl, shortcuts)
+	requireSinglePermissionDecision(t, decisions, permissionRecheckKeepScope)
 
 	remaining, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
 	require.NoError(t, err)
@@ -942,8 +978,9 @@ func TestHandle403_ShortcutUsesRemoteDrive(t *testing.T) {
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
-	result := eng.permHandler.handle403(ctx, bl, "Shared/Special/sub/file.txt", shortcuts)
-	assert.True(t, result, "handle403 should return true for read-only folder")
+	decision := eng.permHandler.handle403(ctx, bl, "Shared/Special/sub/file.txt", shortcuts)
+	assert.True(t, decision.Matched, "handle403 should match a read-only shortcut folder")
+	assert.Equal(t, permissionCheckActivateBoundaryScope, decision.Kind)
 
 	// Verify ALL API calls used the shortcut's remote drive, not the engine's primary drive.
 	remoteDriveStr := driveid.New(remoteDriveID).String()
@@ -1062,11 +1099,13 @@ func TestRecheckPermissions_MultipleIssues_PartialResolution(t *testing.T) {
 	// Record two permission_denied issues.
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "Shared/TeamDocs/folderA", Direction: synctypes.DirectionUpload,
+		Role:      synctypes.FailureRoleBoundary,
 		Category:  synctypes.CategoryActionable,
 		IssueType: synctypes.IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: http.StatusForbidden, ScopeKey: scopeA,
 	}, nil))
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "Shared/TeamDocs/folderB", Direction: synctypes.DirectionUpload,
+		Role:      synctypes.FailureRoleBoundary,
 		Category:  synctypes.CategoryActionable,
 		IssueType: synctypes.IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: http.StatusForbidden, ScopeKey: scopeB,
 	}, nil))
@@ -1081,7 +1120,8 @@ func TestRecheckPermissions_MultipleIssues_PartialResolution(t *testing.T) {
 		BlockedAt: eng.nowFn().Add(-time.Minute),
 	})
 
-	eng.permHandler.recheckPermissions(ctx, bl, shortcuts)
+	decisions := applyRemotePermissionRecheck(t, eng, ctx, bl, shortcuts)
+	require.Len(t, decisions, 2)
 
 	// Folder A should be cleared (now writable).
 	// Folder B should remain (still read-only).
@@ -1131,7 +1171,9 @@ func TestHandleLocalPermission_DirectoryLevel(t *testing.T) {
 		ErrMsg:     "permission denied",
 	}
 
-	eng.permHandler.handleLocalPermission(ctx, r)
+	decision := applyLocalPermissionDecision(t, eng, ctx, r)
+	assert.True(t, decision.Matched)
+	assert.Equal(t, permissionCheckActivateBoundaryScope, decision.Kind)
 
 	// Should have recorded a directory-level local_permission_denied.
 	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueLocalPermissionDenied)
@@ -1164,7 +1206,9 @@ func TestHandleLocalPermission_FileLevel(t *testing.T) {
 		ErrMsg:     "permission denied",
 	}
 
-	eng.permHandler.handleLocalPermission(ctx, r)
+	decision := applyLocalPermissionDecision(t, eng, ctx, r)
+	assert.True(t, decision.Matched)
+	assert.Equal(t, permissionCheckRecordFileFailure, decision.Kind)
 
 	// Should have recorded a file-level local_permission_denied (no scope key).
 	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueLocalPermissionDenied)
@@ -1199,6 +1243,7 @@ func TestRecheckLocalPermissions_Restored(t *testing.T) {
 		Path:      "Private",
 		DriveID:   eng.driveID,
 		Direction: synctypes.DirectionDownload,
+		Role:      synctypes.FailureRoleBoundary,
 		IssueType: synctypes.IssueLocalPermissionDenied,
 		Category:  synctypes.CategoryActionable,
 		ErrMsg:    "directory not accessible",
@@ -1210,7 +1255,8 @@ func TestRecheckLocalPermissions_Restored(t *testing.T) {
 	})
 
 	// Directory is now accessible (we didn't chmod 000 it).
-	eng.permHandler.recheckLocalPermissions(ctx)
+	decisions := applyLocalPermissionRecheck(t, eng, ctx)
+	requireSinglePermissionDecision(t, decisions, permissionRecheckReleaseScope)
 
 	// Failure should be cleared.
 	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueLocalPermissionDenied)
@@ -1249,6 +1295,7 @@ func TestRecheckLocalPermissions_StillDenied(t *testing.T) {
 		Path:      "Private",
 		DriveID:   eng.driveID,
 		Direction: synctypes.DirectionDownload,
+		Role:      synctypes.FailureRoleBoundary,
 		IssueType: synctypes.IssueLocalPermissionDenied,
 		Category:  synctypes.CategoryActionable,
 		ErrMsg:    "directory not accessible",
@@ -1259,7 +1306,8 @@ func TestRecheckLocalPermissions_StillDenied(t *testing.T) {
 		Key: scopeKey, IssueType: synctypes.IssueLocalPermissionDenied,
 	})
 
-	eng.permHandler.recheckLocalPermissions(ctx)
+	decisions := applyLocalPermissionRecheck(t, eng, ctx)
+	requireSinglePermissionDecision(t, decisions, permissionRecheckKeepScope)
 
 	// Failure should remain.
 	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueLocalPermissionDenied)
@@ -1294,7 +1342,8 @@ func TestClearScannerResolvedPermissions_FileLevel(t *testing.T) {
 
 	// Scanner observes the file — proof of accessibility.
 	observed := map[string]bool{"secret.txt": true}
-	eng.permHandler.clearScannerResolvedPermissions(ctx, observed)
+	decisions := applyScannerResolvedPermissions(t, eng, ctx, observed)
+	requireSinglePermissionDecision(t, decisions, permissionRecheckClearFileFailure)
 
 	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueLocalPermissionDenied)
 	require.NoError(t, err)
@@ -1318,6 +1367,7 @@ func TestClearScannerResolvedPermissions_DirLevel(t *testing.T) {
 		Path:      "Private",
 		DriveID:   eng.driveID,
 		Direction: synctypes.DirectionDownload,
+		Role:      synctypes.FailureRoleBoundary,
 		IssueType: synctypes.IssueLocalPermissionDenied,
 		Category:  synctypes.CategoryActionable,
 		ErrMsg:    "directory not accessible",
@@ -1331,7 +1381,8 @@ func TestClearScannerResolvedPermissions_DirLevel(t *testing.T) {
 	// Scanner observes a file under the blocked directory — proof that the
 	// directory is now traversable.
 	observed := map[string]bool{"Private/doc.txt": true}
-	eng.permHandler.clearScannerResolvedPermissions(ctx, observed)
+	decisions := applyScannerResolvedPermissions(t, eng, ctx, observed)
+	requireSinglePermissionDecision(t, decisions, permissionRecheckReleaseScope)
 
 	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueLocalPermissionDenied)
 	require.NoError(t, err)
@@ -1356,6 +1407,7 @@ func TestClearScannerResolvedPermissions_NoFalsePositives(t *testing.T) {
 		Path:      "Private",
 		DriveID:   eng.driveID,
 		Direction: synctypes.DirectionDownload,
+		Role:      synctypes.FailureRoleBoundary,
 		IssueType: synctypes.IssueLocalPermissionDenied,
 		Category:  synctypes.CategoryActionable,
 		ErrMsg:    "directory not accessible",
@@ -1368,7 +1420,8 @@ func TestClearScannerResolvedPermissions_NoFalsePositives(t *testing.T) {
 
 	// Scanner observes an unrelated path — should NOT clear the permission failure.
 	observed := map[string]bool{"Public/readme.txt": true}
-	eng.permHandler.clearScannerResolvedPermissions(ctx, observed)
+	decisions := applyScannerResolvedPermissions(t, eng, ctx, observed)
+	assert.Empty(t, decisions)
 
 	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueLocalPermissionDenied)
 	require.NoError(t, err)

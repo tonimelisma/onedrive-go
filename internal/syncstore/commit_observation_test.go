@@ -602,6 +602,7 @@ func TestRecordFailure_SetsIssueTypeAndScopeKey(t *testing.T) {
 		Path:       "hello.txt",
 		DriveID:    driveid.New(testDriveID),
 		Direction:  synctypes.DirectionDownload,
+		Role:       synctypes.FailureRoleBoundary,
 		IssueType:  synctypes.IssueQuotaExceeded,
 		Category:   synctypes.CategoryActionable,
 		ErrMsg:     "quota full",
@@ -645,26 +646,34 @@ func TestResetRetryTimesForScope(t *testing.T) {
 	// Insert failures: one with future retry (matching scope), one with past retry (matching scope),
 	// one with future retry (different scope), one actionable (matching scope).
 	for _, tc := range []struct {
-		path, scope, category string
-		retryAt               int64
+		path, scope, role, category string
+		retryAt                     int64
 	}{
-		{"future-match.txt", "throttle:account", "transient", futureNano},
-		{"past-match.txt", "throttle:account", "transient", pastNano},
-		{"future-other.txt", "service", "transient", futureNano},
-		{"actionable-match.txt", "throttle:account", "actionable", futureNano},
+		{"future-match.txt", "throttle:account", "item", "transient", futureNano},
+		{"past-match.txt", "throttle:account", "item", "transient", pastNano},
+		{"future-other.txt", "service", "item", "transient", futureNano},
 	} {
 		_, err := mgr.DB().ExecContext(ctx,
 			`INSERT INTO sync_failures
-				(path, drive_id, direction, category, failure_count, next_retry_at,
+				(path, drive_id, direction, failure_role, category, failure_count, next_retry_at,
 				 last_error, http_status, first_seen_at, last_seen_at, scope_key)
-			VALUES (?, ?, 'download', ?, 1, ?, 'err', 429, ?, ?, ?)`,
-			tc.path, testDriveID, tc.category, tc.retryAt,
+			VALUES (?, ?, 'download', ?, ?, 1, ?, 'err', 429, ?, ?, ?)`,
+			tc.path, testDriveID, tc.role, tc.category, tc.retryAt,
 			now.UnixNano(), now.UnixNano(), tc.scope,
 		)
 		require.NoError(t, err, "inserting %s", tc.path)
 	}
 
-	err := mgr.ResetRetryTimesForScope(ctx, synctypes.SKThrottleAccount(), now)
+	_, err := mgr.DB().ExecContext(ctx,
+		`INSERT INTO sync_failures
+			(path, drive_id, direction, failure_role, category, failure_count, next_retry_at,
+			 last_error, http_status, first_seen_at, last_seen_at, scope_key)
+		VALUES (?, ?, 'download', 'item', 'actionable', 1, NULL, 'err', 429, ?, ?, ?)`,
+		"actionable-match.txt", testDriveID, now.UnixNano(), now.UnixNano(), "throttle:account",
+	)
+	require.NoError(t, err)
+
+	err = mgr.ResetRetryTimesForScope(ctx, synctypes.SKThrottleAccount(), now)
 	require.NoError(t, err)
 
 	// future-match.txt: transient + matching scope + future retry → should be reset to now
@@ -689,12 +698,13 @@ func TestResetRetryTimesForScope(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, futureNano, retryAt, "different scope should not be changed")
 
-	// actionable-match.txt: actionable category → should NOT be changed
+	// actionable-match.txt: actionable category -> should remain NULL
+	var actionableRetry sql.NullInt64
 	err = mgr.DB().QueryRowContext(ctx,
 		"SELECT next_retry_at FROM sync_failures WHERE path = ?", "actionable-match.txt",
-	).Scan(&retryAt)
+	).Scan(&actionableRetry)
 	require.NoError(t, err)
-	assert.Equal(t, futureNano, retryAt, "actionable failures should not be changed")
+	assert.False(t, actionableRetry.Valid, "actionable failures should not be changed")
 }
 
 // ---------------------------------------------------------------------------
@@ -937,8 +947,8 @@ func TestFailureCount(t *testing.T) {
 		{"c.txt", "actionable", "download"}, // actionable should not be counted
 	} {
 		_, err := mgr.DB().ExecContext(ctx,
-			`INSERT INTO sync_failures (path, drive_id, direction, category, failure_count, first_seen_at, last_seen_at)
-			VALUES (?, ?, ?, ?, 1, ?, ?)`,
+			`INSERT INTO sync_failures (path, drive_id, direction, failure_role, category, failure_count, first_seen_at, last_seen_at)
+			VALUES (?, ?, ?, 'item', ?, 1, ?, ?)`,
 			s.path, testDriveID, s.direction, s.category, nowNano, nowNano,
 		)
 		require.NoError(t, err)
@@ -965,9 +975,9 @@ func TestResetFailure(t *testing.T) {
 
 	// Insert a corresponding sync_failures row.
 	_, err = mgr.DB().ExecContext(ctx,
-		`INSERT INTO sync_failures (path, drive_id, direction, category, failure_count,
+		`INSERT INTO sync_failures (path, drive_id, direction, failure_role, category, failure_count,
 			next_retry_at, last_error, first_seen_at, last_seen_at)
-		VALUES (?, ?, 'download', 'transient', 5, 9999, 'old error', ?, ?)`,
+		VALUES (?, ?, 'download', 'item', 'transient', 5, 9999, 'old error', ?, ?)`,
 		"hello.txt", testDriveID, nowNano, nowNano,
 	)
 	require.NoError(t, err)
@@ -1007,9 +1017,9 @@ func TestResetFailure_DeleteFailedTransitionsToPendingDelete(t *testing.T) {
 
 	// Insert corresponding sync_failures row.
 	_, err = mgr.DB().ExecContext(ctx,
-		`INSERT INTO sync_failures (path, drive_id, direction, category, failure_count,
+		`INSERT INTO sync_failures (path, drive_id, direction, failure_role, category, failure_count,
 			next_retry_at, last_error, first_seen_at, last_seen_at)
-		VALUES (?, ?, 'delete', 'transient', 3, 9999, 'delete failed', ?, ?)`,
+		VALUES (?, ?, 'delete', 'item', 'transient', 3, 9999, 'delete failed', ?, ?)`,
 		"deleted.txt", testDriveID, nowNano, nowNano,
 	)
 	require.NoError(t, err)

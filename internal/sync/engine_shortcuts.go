@@ -323,40 +323,32 @@ func (e *Engine) handleRemovedShortcuts(ctx context.Context, deletedItemIDs map[
 			return fmt.Errorf("sync: deleting shortcut %s: %w", sc.ItemID, err)
 		}
 
-		// When a shortcut disappears, quota-scoped held work is no longer
-		// meaningful. Discard the scope and every failure tied to it instead of
-		// releasing the subtree back into dispatch.
-		scKey := sc.RemoteDrive + ":" + sc.RemoteItem
-		scopeKey := synctypes.SKQuotaShortcut(scKey)
-		if err := e.discardScope(ctx, scopeKey); err != nil {
-			e.logger.Warn("failed to discard removed shortcut scope",
-				slog.String("scope_key", scopeKey.String()),
-				slog.String("error", err.Error()),
-			)
-		}
-
-		e.clearRemovedShortcutRemotePermissionScopes(ctx, sc.LocalPath)
+		e.applyShortcutRemovalDecisions(ctx, e.shortcutRemovalDecisions(ctx, sc))
 	}
 
 	return nil
 }
 
-// clearRemovedShortcutRemotePermissionScopes removes all remote permission
-// boundaries rooted under a shortcut that has disappeared. Those held actions
-// are no longer valid once the shortcut is gone, so they must be discarded,
-// not released back into dispatch.
-func (e *Engine) clearRemovedShortcutRemotePermissionScopes(ctx context.Context, localPath string) {
+// shortcutRemovalDecisions returns the scopes that become invalid when a
+// shortcut disappears. These scopes are discarded, not released, because the
+// blocked subtree itself no longer exists.
+func (e *Engine) shortcutRemovalDecisions(ctx context.Context, sc *synctypes.Shortcut) []ShortcutRemovalDecision {
+	decisions := []ShortcutRemovalDecision{{
+		ScopeKey: synctypes.SKQuotaShortcut(sc.RemoteDrive + ":" + sc.RemoteItem),
+	}}
+
 	issues, err := e.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
 	if err != nil {
 		e.logger.Warn("failed to list remote permission scopes for removed shortcut",
-			slog.String("shortcut_path", localPath),
+			slog.String("shortcut_path", sc.LocalPath),
 			slog.String("error", err.Error()),
 		)
-
-		return
+		return decisions
 	}
 
-	clearedScopes := make(map[synctypes.ScopeKey]bool)
+	seen := map[synctypes.ScopeKey]bool{
+		decisions[0].ScopeKey: true,
+	}
 
 	for i := range issues {
 		issue := &issues[i]
@@ -365,30 +357,19 @@ func (e *Engine) clearRemovedShortcutRemotePermissionScopes(ctx context.Context,
 		}
 
 		boundary := issue.ScopeKey.RemotePath()
-		if boundary != localPath && !strings.HasPrefix(boundary, localPath+"/") {
+		if boundary != sc.LocalPath && !strings.HasPrefix(boundary, sc.LocalPath+"/") {
 			continue
 		}
 
-		if clearedScopes[issue.ScopeKey] {
+		if seen[issue.ScopeKey] {
 			continue
 		}
 
-		if err := e.discardScope(ctx, issue.ScopeKey); err != nil {
-			e.logger.Warn("failed to discard remote permission scope for removed shortcut",
-				slog.String("scope_key", issue.ScopeKey.String()),
-				slog.String("error", err.Error()),
-			)
-		}
-
-		clearedScopes[issue.ScopeKey] = true
+		seen[issue.ScopeKey] = true
+		decisions = append(decisions, ShortcutRemovalDecision{ScopeKey: issue.ScopeKey})
 	}
 
-	if err := e.baseline.ClearSyncFailuresByPrefix(ctx, localPath, synctypes.IssuePermissionDenied); err != nil {
-		e.logger.Warn("failed to clear legacy remote permission failures for removed shortcut",
-			slog.String("shortcut_path", localPath),
-			slog.String("error", err.Error()),
-		)
-	}
+	return decisions
 }
 
 // scopeResult holds the observation output for a single shortcut scope.

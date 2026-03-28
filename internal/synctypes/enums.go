@@ -12,24 +12,30 @@ import (
 // Unexported: only used within this file for typed constant definitions
 // and String()/Parse* methods.
 const (
-	strRemote       = "remote"
-	strLocal        = "local"
-	strFile         = "file"
-	strFolder       = "folder"
-	strRoot         = "root"
-	strDownload     = "download"
-	strUpload       = "upload"
-	strDelete       = "delete"
-	strActionable   = "actionable"
-	strTransient    = "transient"
-	strLocalDelete  = "local_delete"
-	strRemoteDelete = "remote_delete"
-	strLocalMove    = "local_move"
-	strRemoteMove   = "remote_move"
-	strFolderCreate = "folder_create"
-	strConflict     = "conflict"
-	strUpdateSynced = "update_synced"
-	strCleanup      = "cleanup"
+	strRemote           = "remote"
+	strLocal            = "local"
+	strFile             = "file"
+	strFolder           = "folder"
+	strRoot             = "root"
+	strDownload         = "download"
+	strUpload           = "upload"
+	strDelete           = "delete"
+	strActionable       = "actionable"
+	strTransient        = "transient"
+	strFailureItem      = "item"
+	strFailureHeld      = "held"
+	strFailureBound     = "boundary"
+	strTimingNone       = "none"
+	strTimingBackoff    = "backoff"
+	strTimingRetryAfter = "server_retry_after"
+	strLocalDelete      = "local_delete"
+	strRemoteDelete     = "remote_delete"
+	strLocalMove        = "local_move"
+	strRemoteMove       = "remote_move"
+	strFolderCreate     = "folder_create"
+	strConflict         = "conflict"
+	strUpdateSynced     = "update_synced"
+	strCleanup          = "cleanup"
 
 	// SyncStatus string constants — remote_state sync_status column values.
 	strPendingDownload = "pending_download"
@@ -61,6 +67,28 @@ type FailureCategory string
 const (
 	CategoryTransient  FailureCategory = strTransient
 	CategoryActionable FailureCategory = strActionable
+)
+
+// FailureRole identifies what a sync_failures row means in the engine model.
+// item = normal per-path failure, held = scope-blocked descendant, boundary =
+// actionable scope-defining row.
+type FailureRole string
+
+const (
+	FailureRoleItem     FailureRole = strFailureItem
+	FailureRoleHeld     FailureRole = strFailureHeld
+	FailureRoleBoundary FailureRole = strFailureBound
+)
+
+// ScopeTimingSource identifies how a scope block's trial timing was chosen.
+// none = no trials, backoff = locally computed, server_retry_after = Graph
+// supplied Retry-After and must survive restart until trial time.
+type ScopeTimingSource string
+
+const (
+	ScopeTimingNone             ScopeTimingSource = strTimingNone
+	ScopeTimingBackoff          ScopeTimingSource = strTimingBackoff
+	ScopeTimingServerRetryAfter ScopeTimingSource = strTimingRetryAfter
 )
 
 // SyncStatus represents the sync_status of a remote_state row. Stored as TEXT
