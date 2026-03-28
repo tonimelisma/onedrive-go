@@ -6,7 +6,7 @@
 //
 // Detection thresholds (failure-redesign.md §7.3.1):
 //   - throttle:account (429) — immediate, single response
-//   - service (5xx, 503+Retry-After, 400+outage) — 5 unique paths in 30s
+//   - service (5xx, 503+Retry-After) — 5 unique paths in 30s
 //   - quota:own (507, own-drive) — 3 unique paths in 10s
 //   - quota:shortcut:$key (507, shortcut) — 3 unique paths in 10s
 //
@@ -33,7 +33,7 @@ const (
 	quotaWindowDuration  = 10 * time.Second
 
 	// serviceWindowThreshold is the number of unique paths that must fail
-	// with 5xx (or 400 outage pattern) within serviceWindowDuration to
+	// with 5xx within serviceWindowDuration to
 	// trigger a service scope block.
 	serviceWindowThreshold = 5
 	serviceWindowDuration  = 30 * time.Second
@@ -75,7 +75,6 @@ func NewScopeState(nowFunc func() time.Time, logger *slog.Logger) *ScopeState {
 //   - 507 own-drive → sliding window quota:own (3 unique paths / 10s)
 //   - 507 shortcut → sliding window quota:shortcut:$key (3 unique paths / 10s)
 //   - 5xx (no Retry-After) → sliding window service (5 unique paths / 30s)
-//   - 400 + outage pattern → sliding window service (same as 5xx)
 func (ss *ScopeState) UpdateScope(r *synctypes.WorkerResult) synctypes.ScopeUpdateResult {
 	switch {
 	case r.HTTPStatus == http.StatusTooManyRequests:
@@ -111,14 +110,6 @@ func (ss *ScopeState) UpdateScope(r *synctypes.WorkerResult) synctypes.ScopeUpda
 	default:
 		return synctypes.ScopeUpdateResult{}
 	}
-}
-
-// UpdateScopeOutagePattern feeds a 400 outage-pattern result into the
-// service sliding window. Called separately from UpdateScope because
-// outage patterns are classified as resultRequeue (not resultScopeBlock)
-// by classifyResult but still need to feed scope detection.
-func (ss *ScopeState) UpdateScopeOutagePattern(path string) synctypes.ScopeUpdateResult {
-	return ss.checkWindow(synctypes.SKService(), path, serviceWindowThreshold, serviceWindowDuration, synctypes.IssueServiceOutage)
 }
 
 // RecordSuccess resets the sliding window for scopes relevant to the

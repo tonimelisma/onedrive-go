@@ -126,12 +126,12 @@ Core result classes:
 Classification uses `ScopeKeyForStatus(httpStatus, shortcutKey)` as the single
 source of truth for HTTP status -> scope key mapping: 401 -> fatal, 403 -> skip
 with permission flow, 429 -> scope block `SKThrottleAccount`, 507 -> scope
-block `SKQuotaOwn` or `SKQuotaShortcut(key)`, 400 + outage pattern -> requeue,
-5xx -> requeue, 408/412/404/423 -> requeue, context cancellation -> shutdown,
+block `SKQuotaOwn` or `SKQuotaShortcut(key)`, 5xx -> requeue,
+408/412/404/423 -> requeue, context cancellation -> shutdown,
 `os.ErrPermission` -> skip with local-permission flow, `ErrDiskFull` ->
-direct `disk:local` scope activation.
-
-`isOutagePattern()` detects known 400 outage patterns (e.g., "ObjectHandle is Invalid") that are actually transient service outages. Distinguished from phantom drive 400s (R-6.7.11) by error body inspection.
+direct `disk:local` scope activation. HTTP 400 stays on the ordinary
+non-retryable path unless a separately evidenced quirk is documented and
+implemented.
 
 ### Scope Detection and Management
 

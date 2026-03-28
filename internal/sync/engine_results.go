@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -122,12 +121,6 @@ func classifyHTTPResult(r *synctypes.WorkerResult) (ResultDecision, bool) {
 			RecordMode:        recordFailureReconcile,
 			RunScopeDetection: true,
 		}, true
-	case r.HTTPStatus == http.StatusBadRequest && isOutagePattern(r.Err):
-		return ResultDecision{
-			Class:             resultRequeue,
-			RecordMode:        recordFailureReconcile,
-			RunScopeDetection: true,
-		}, true
 	case r.HTTPStatus >= http.StatusInternalServerError:
 		return ResultDecision{
 			Class:             resultRequeue,
@@ -193,22 +186,6 @@ func isResolvedRemoteSyncStatus(status synctypes.SyncStatus) bool {
 	return status == synctypes.SyncStatusSynced ||
 		status == synctypes.SyncStatusDeleted ||
 		status == synctypes.SyncStatusFiltered
-}
-
-// isOutagePattern returns true if the error matches known transient 400
-// outage patterns. Per failure-redesign.md §7.6, some 400 errors (e.g.,
-// "ObjectHandle is Invalid") are actually transient service outages.
-func isOutagePattern(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	var ge *graph.GraphError
-	if !errors.As(err, &ge) {
-		return false
-	}
-
-	return strings.Contains(ge.Message, "ObjectHandle is Invalid")
 }
 
 // processWorkerResult replaces processWorkerResult + routeReadyActions with
@@ -1104,8 +1081,6 @@ func issueTypeForHTTPStatus(httpStatus int, err error) string {
 		return synctypes.IssueQuotaExceeded
 	case httpStatus == http.StatusForbidden:
 		return synctypes.IssuePermissionDenied
-	case httpStatus == http.StatusBadRequest && isOutagePattern(err):
-		return synctypes.IssueServiceOutage
 	case httpStatus >= http.StatusInternalServerError:
 		return synctypes.IssueServiceOutage
 	case httpStatus == http.StatusRequestTimeout:
