@@ -6,8 +6,9 @@ import "time"
 // service outage, rate limited). While a block is active, all actions matching
 // that scope are deferred (recorded as sync_failures with scope_key).
 type ScopeBlock struct {
-	Key       ScopeKey // typed scope key
-	IssueType string   // "service_outage", "quota_exceeded", "rate_limited"
+	Key          ScopeKey          // typed scope key
+	IssueType    string            // "service_outage", "quota_exceeded", "rate_limited"
+	TimingSource ScopeTimingSource // none, backoff, server_retry_after
 
 	BlockedAt     time.Time     // when the block was created
 	TrialInterval time.Duration // current interval between trial actions (grows with backoff)

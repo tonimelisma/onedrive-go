@@ -95,21 +95,19 @@ func TestSyncStore_Close_CheckpointsWAL(t *testing.T) {
 }
 
 // Validates: R-2.2
-func TestNewSyncStore_RunsMigrations(t *testing.T) {
+func TestNewSyncStore_AppliesSchema(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
-
-	// goose creates a goose_db_version table automatically.
 	ctx := t.Context()
 
 	var count int
 
 	err := mgr.DB().QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM goose_db_version WHERE version_id > 0",
+		"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('baseline', 'remote_state', 'sync_failures', 'scope_blocks')",
 	).Scan(&count)
 	require.NoError(t, err)
-	assert.NotZero(t, count, "no migrations applied (goose_db_version has no entries)")
+	assert.Equal(t, 4, count, "canonical schema should create all core tables")
 }
 
 // Validates: R-2.2
@@ -168,23 +166,23 @@ func TestCheckpoint_PrunesActionableSyncFailures(t *testing.T) {
 
 	// Insert an actionable failure older than retention (should be pruned).
 	_, err := mgr.DB().ExecContext(ctx,
-		`INSERT INTO sync_failures (path, drive_id, direction, category, first_seen_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"/old-issue.txt", "", "upload", "actionable", oldTime, oldTime)
+		`INSERT INTO sync_failures (path, drive_id, direction, failure_role, category, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"/old-issue.txt", "", "upload", "item", "actionable", oldTime, oldTime)
 	require.NoError(t, err)
 
 	// Insert an actionable failure newer than retention (should survive).
 	_, err = mgr.DB().ExecContext(ctx,
-		`INSERT INTO sync_failures (path, drive_id, direction, category, first_seen_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"/new-issue.txt", "", "upload", "actionable", newTime, newTime)
+		`INSERT INTO sync_failures (path, drive_id, direction, failure_role, category, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"/new-issue.txt", "", "upload", "item", "actionable", newTime, newTime)
 	require.NoError(t, err)
 
 	// Insert a transient failure (should never be pruned regardless of age).
 	_, err = mgr.DB().ExecContext(ctx,
-		`INSERT INTO sync_failures (path, drive_id, direction, category, first_seen_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"/pending-issue.txt", "", "upload", "transient", oldTime, oldTime)
+		`INSERT INTO sync_failures (path, drive_id, direction, failure_role, category, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"/pending-issue.txt", "", "upload", "item", "transient", oldTime, oldTime)
 	require.NoError(t, err)
 
 	require.NoError(t, mgr.Checkpoint(ctx, retention))
@@ -930,18 +928,18 @@ func TestLoad_CacheInvalidatedByCommit(t *testing.T) {
 }
 
 // Validates: R-2.2
-func TestMigrations_Idempotent(t *testing.T) {
+func TestSchemaBootstrap_Idempotent(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	logger := newTestLogger(t)
 
-	// First open: runs migrations.
+	// First open: applies canonical schema.
 	mgr1, err := NewSyncStore(t.Context(), dbPath, logger)
 	require.NoError(t, err)
 	require.NoError(t, mgr1.Close(t.Context()))
 
-	// Second open: migrations should be a no-op.
+	// Second open: schema bootstrap should be a no-op.
 	mgr2, err := NewSyncStore(t.Context(), dbPath, logger)
 	require.NoError(t, err)
 	defer mgr2.Close(t.Context())
@@ -1960,9 +1958,9 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 
 	// Verify sync_failures table structure: insert + query.
 	_, err = mgr.DB().ExecContext(ctx,
-		`INSERT INTO sync_failures (path, drive_id, direction, category, issue_type, first_seen_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		"/bad-file.txt", "d!abc123", "upload", "transient", "invalid_filename", 1700000000, 1700000000)
+		`INSERT INTO sync_failures (path, drive_id, direction, failure_role, category, issue_type, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"/bad-file.txt", "d!abc123", "upload", "item", "transient", "invalid_filename", 1700000000, 1700000000)
 	require.NoError(t, err)
 
 	// Verify remote_state CHECK constraint rejects invalid status.

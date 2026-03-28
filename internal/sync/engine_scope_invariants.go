@@ -57,22 +57,32 @@ func (e *Engine) assertCurrentScopeInvariants(ctx context.Context) error {
 		return fmt.Errorf("listing scope blocks: %w", err)
 	}
 
-	localIssues, err := e.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueLocalPermissionDenied)
+	rows, err := e.baseline.ListSyncFailures(ctx)
 	if err != nil {
-		return fmt.Errorf("listing local permission failures: %w", err)
+		return fmt.Errorf("listing sync failures: %w", err)
 	}
-	remoteIssues, err := e.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
-	if err != nil {
-		return fmt.Errorf("listing remote permission failures: %w", err)
+	facts := summarizePersistedScopeFailures(rows)
+	boundaryKeys := make(map[synctypes.ScopeKey]struct{})
+
+	for i := range rows {
+		if err := validatePersistedFailureRow(&rows[i]); err != nil {
+			return err
+		}
+		if rows[i].Role != synctypes.FailureRoleBoundary {
+			continue
+		}
+		if _, ok := boundaryKeys[rows[i].ScopeKey]; ok {
+			return fmt.Errorf("duplicate boundary row for scope %s", rows[i].ScopeKey.String())
+		}
+		boundaryKeys[rows[i].ScopeKey] = struct{}{}
 	}
-	active := activePermissionScopes(localIssues, remoteIssues)
 
 	for i := range blocks {
 		key := blocks[i].Key
 		if !isPermissionScopeKey(key) {
 			continue
 		}
-		if !active[key] {
+		if !facts.boundaryKeys[key] {
 			return fmt.Errorf("permission scope %s has no actionable boundary row", key.String())
 		}
 	}
@@ -103,11 +113,16 @@ func (e *Engine) assertReleasedScope(ctx context.Context, key synctypes.ScopeKey
 		if rows[i].ScopeKey != key {
 			continue
 		}
-		if rows[i].Category == synctypes.CategoryActionable {
+		if rows[i].Role == synctypes.FailureRoleBoundary {
 			return fmt.Errorf("released scope %s still has actionable boundary row %s", key.String(), rows[i].Path)
 		}
-		if rows[i].Category == synctypes.CategoryTransient && rows[i].NextRetryAt == 0 {
+		if rows[i].Role == synctypes.FailureRoleHeld {
 			return fmt.Errorf("released scope %s still has held transient row %s", key.String(), rows[i].Path)
+		}
+		if rows[i].Role == synctypes.FailureRoleItem &&
+			rows[i].Category == synctypes.CategoryTransient &&
+			rows[i].NextRetryAt <= 0 {
+			return fmt.Errorf("released scope %s still has non-retryable transient row %s", key.String(), rows[i].Path)
 		}
 	}
 
@@ -137,6 +152,36 @@ func (e *Engine) assertDiscardedScope(ctx context.Context, key synctypes.ScopeKe
 		if rows[i].ScopeKey == key {
 			return fmt.Errorf("discarded scope %s still has failure row %s", key.String(), rows[i].Path)
 		}
+	}
+
+	return nil
+}
+
+func validatePersistedFailureRow(row *synctypes.SyncFailureRow) error {
+	switch row.Role {
+	case synctypes.FailureRoleHeld:
+		if row.ScopeKey.IsZero() {
+			return fmt.Errorf("held row %s is missing scope key", row.Path)
+		}
+		if row.Category != synctypes.CategoryTransient {
+			return fmt.Errorf("held row %s must be transient", row.Path)
+		}
+		if row.NextRetryAt != 0 {
+			return fmt.Errorf("held row %s must not be retryable before release", row.Path)
+		}
+	case synctypes.FailureRoleBoundary:
+		if row.ScopeKey.IsZero() {
+			return fmt.Errorf("boundary row %s is missing scope key", row.Path)
+		}
+		if row.Category != synctypes.CategoryActionable {
+			return fmt.Errorf("boundary row %s must be actionable", row.Path)
+		}
+		if row.NextRetryAt != 0 {
+			return fmt.Errorf("boundary row %s must not have retry timing", row.Path)
+		}
+	case synctypes.FailureRoleItem:
+	default:
+		return fmt.Errorf("row %s has invalid failure role %q", row.Path, row.Role)
 	}
 
 	return nil

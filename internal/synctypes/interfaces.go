@@ -87,6 +87,7 @@ type SyncFailureParams struct {
 	Path       string          // required
 	DriveID    driveid.ID      // required
 	Direction  Direction       // DirectionUpload, DirectionDownload, DirectionDelete
+	Role       FailureRole     // item, held, boundary
 	IssueType  string          // e.g. IssueQuotaExceeded; empty = generic transient
 	Category   FailureCategory // CategoryTransient or CategoryActionable — set by the engine, never by the store
 	ErrMsg     string
@@ -101,7 +102,8 @@ type SyncFailureParams struct {
 type SyncFailureRow struct {
 	Path         string
 	DriveID      driveid.ID
-	Direction    Direction       // DirectionDownload, DirectionUpload, DirectionDelete
+	Direction    Direction // DirectionDownload, DirectionUpload, DirectionDelete
+	Role         FailureRole
 	Category     FailureCategory // CategoryTransient, CategoryActionable
 	IssueType    string
 	ItemID       string
@@ -122,6 +124,7 @@ type ActionableFailure struct {
 	Path      string
 	DriveID   driveid.ID
 	Direction Direction
+	Role      FailureRole
 	IssueType string
 	Error     string
 	ScopeKey  ScopeKey // typed scope key; zero value = unscoped

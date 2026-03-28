@@ -19,9 +19,9 @@ The sync database uses remote state separation: three core tables decouple API o
 |-------|---------|-----|
 | `remote_state` | Full mirror of every item the delta API reports | `(drive_id, item_id)` |
 | `baseline` | Confirmed synced state | `(drive_id, item_id)`, `path` UNIQUE |
-| `sync_failures` | Unified failure tracking with retry scheduling | `(path, drive_id)` |
+| `sync_failures` | Unified item failure tracking with explicit role semantics | `(path, drive_id)` |
 
-Supporting tables: `delta_tokens`, `conflicts`, `sync_metadata`, `shortcuts`, `schema_migrations`.
+Supporting tables: `delta_tokens`, `conflicts`, `sync_metadata`, `shortcuts`, `scope_blocks`.
 
 ### remote_state
 
@@ -53,11 +53,36 @@ Zero-byte files map to `NULL` in SQLite — indistinguishable from "size unknown
 
 ### sync_failures
 
-Unified failure tracking for download, upload, and delete failures. Two categories:
-- `transient` — retried with exponential backoff via `next_retry_at`
-- `actionable` — require user intervention (`next_retry_at = NULL`)
+Unified item failure tracking for download, upload, and delete work. Each row
+records one path-level failure state with an explicit `failure_role`:
 
-14 columns. Keyed by `(path, drive_id)`. Surfaced via the `issues` CLI command.
+- `item` — ordinary failed work item, either transient or actionable
+- `held` — work item blocked behind an active scope until release
+- `boundary` — actionable scope-defining row for a permission boundary
+
+Categories remain:
+- `transient` — retried via `next_retry_at`
+- `actionable` — require user intervention or boundary recheck
+
+The role model makes row meaning explicit instead of inferring it from
+`scope_key` and `next_retry_at`. Keyed by `(path, drive_id)`. Surfaced via the
+`issues` CLI command.
+
+### scope_blocks
+
+Durable per-scope blocking conditions. This table stores the restart/recovery
+record for active scopes together with trial timing metadata.
+
+Key columns:
+- `scope_key` — unique scope identity
+- `issue_type` — scope-level user/reporting classification
+- `timing_source` — `none`, `backoff`, or `server_retry_after`
+- `blocked_at`, `trial_interval`, `next_trial_at`, `trial_count`
+
+`scope_blocks` is separate from `sync_failures` because scope-level timing state
+and item-level failure state are different entities with different cardinality.
+The watch loop keeps only a rebuildable in-memory working set; durable truth
+remains in SQLite.
 
 ### delta_tokens
 
@@ -87,14 +112,16 @@ All database writes flow through typed sub-interfaces, enforcing transition owne
 
 Resumable upload sessions are tracked as JSON files in the data directory (not in the database). On resume, the local file's hash is compared against the hash at session start — if it differs, the session is discarded.
 
-## Migrations
+## Schema Bootstrap
 
-Schema migrations use embedded `.sql` files applied in order on startup. The `schema_migrations` table tracks applied versions. Forward-only — rollback via database backup restore. The engine backs up the DB file before destructive migrations.
+The sync store applies one canonical embedded schema on database creation. The
+repository does not carry migration-era compatibility paths or version-tracking
+tables. Tests and CI create fresh databases directly from the current schema.
 
 ## Performance
 
 - **WAL checkpointing**: After initial sync, every 30 minutes, and on shutdown. Explicit `PRAGMA wal_checkpoint(TRUNCATE)` before database close ensures all WAL data is flushed to the main file.
 - **Prepared statements**: Cached for connection lifetime
 - **Per-action commits**: Each completed action committed individually for incremental durability
-- **VACUUM**: On schema migrations only, not routine maintenance
+- **VACUUM**: Not part of normal sync-store bootstrap
 - **Batched commits**: Per-action commit is ~0.5ms. For high-throughput workloads, batched commits could reduce overhead. Currently bottleneck is network I/O, not SQLite. [planned]

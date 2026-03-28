@@ -9,8 +9,8 @@
 //
 // Related files:
 //   - active_scopes.go: stateless active-scope helper functions
-//   - scope.go:         ScopeKey, ParseScopeKey, ScopeKey.String()
-//   - migrations/:      00003_scope_blocks.sql creates the table
+//   - scope_key.go:     ScopeKey, ParseScopeKey, ScopeKey.String()
+//   - schema.sql:       canonical schema definition
 package syncstore
 
 import (
@@ -21,11 +21,46 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
+func validateScopeBlock(block *synctypes.ScopeBlock) error {
+	if block.Key.IsZero() {
+		return fmt.Errorf("sync: upserting scope block: missing scope key")
+	}
+
+	if block.BlockedAt.IsZero() {
+		return fmt.Errorf("sync: upserting scope block %s: missing blocked_at", block.Key.String())
+	}
+
+	switch block.TimingSource {
+	case synctypes.ScopeTimingNone:
+		if block.TrialInterval != 0 {
+			return fmt.Errorf("sync: upserting scope block %s: timing_source none requires zero trial interval", block.Key.String())
+		}
+		if !block.NextTrialAt.IsZero() {
+			return fmt.Errorf("sync: upserting scope block %s: timing_source none requires zero next_trial_at", block.Key.String())
+		}
+	case synctypes.ScopeTimingBackoff, synctypes.ScopeTimingServerRetryAfter:
+		if block.TrialInterval <= 0 {
+			return fmt.Errorf("sync: upserting scope block %s: timed scope requires positive trial interval", block.Key.String())
+		}
+		if block.NextTrialAt.IsZero() {
+			return fmt.Errorf("sync: upserting scope block %s: timed scope requires next_trial_at", block.Key.String())
+		}
+	default:
+		return fmt.Errorf("sync: upserting scope block %s: invalid timing source %q", block.Key.String(), block.TimingSource)
+	}
+
+	return nil
+}
+
 // UpsertScopeBlock persists a scope block to the scope_blocks table.
 // INSERT OR REPLACE — the scope_key is the primary key, so this handles
 // both insert and update. All fields are serialized: ScopeKey.String() for
 // the key, UnixNano for timestamps, nanoseconds for Duration.
 func (m *SyncStore) UpsertScopeBlock(ctx context.Context, block *synctypes.ScopeBlock) error {
+	if err := validateScopeBlock(block); err != nil {
+		return err
+	}
+
 	nextTrialAtNano := int64(0)
 	if !block.NextTrialAt.IsZero() {
 		nextTrialAtNano = block.NextTrialAt.UnixNano()
@@ -33,10 +68,11 @@ func (m *SyncStore) UpsertScopeBlock(ctx context.Context, block *synctypes.Scope
 
 	_, err := m.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO scope_blocks
-			(scope_key, issue_type, blocked_at, trial_interval, next_trial_at, trial_count)
-		VALUES (?, ?, ?, ?, ?, ?)`,
+			(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		block.Key.String(),
 		block.IssueType,
+		block.TimingSource,
 		block.BlockedAt.UnixNano(),
 		int64(block.TrialInterval),
 		nextTrialAtNano,
@@ -68,7 +104,7 @@ func (m *SyncStore) DeleteScopeBlock(ctx context.Context, key synctypes.ScopeKey
 // (not nil) if no rows exist.
 func (m *SyncStore) ListScopeBlocks(ctx context.Context) ([]*synctypes.ScopeBlock, error) {
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT scope_key, issue_type, blocked_at, trial_interval, next_trial_at, trial_count
+		`SELECT scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count
 		FROM scope_blocks`)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing scope blocks: %w", err)
@@ -81,6 +117,7 @@ func (m *SyncStore) ListScopeBlocks(ctx context.Context) ([]*synctypes.ScopeBloc
 		var (
 			wireKey       string
 			issueType     string
+			timingSource  string
 			blockedAtNano int64
 			intervalNano  int64
 			nextTrialNano int64
@@ -88,7 +125,7 @@ func (m *SyncStore) ListScopeBlocks(ctx context.Context) ([]*synctypes.ScopeBloc
 		)
 
 		if scanErr := rows.Scan(
-			&wireKey, &issueType, &blockedAtNano,
+			&wireKey, &issueType, &timingSource, &blockedAtNano,
 			&intervalNano, &nextTrialNano, &trialCount,
 		); scanErr != nil {
 			return nil, fmt.Errorf("sync: scanning scope block row: %w", scanErr)
@@ -102,6 +139,7 @@ func (m *SyncStore) ListScopeBlocks(ctx context.Context) ([]*synctypes.ScopeBloc
 		block := &synctypes.ScopeBlock{
 			Key:           synctypes.ParseScopeKey(wireKey),
 			IssueType:     issueType,
+			TimingSource:  synctypes.ScopeTimingSource(timingSource),
 			BlockedAt:     time.Unix(0, blockedAtNano).UTC(),
 			TrialInterval: time.Duration(intervalNano),
 			NextTrialAt:   nextTrialAt,

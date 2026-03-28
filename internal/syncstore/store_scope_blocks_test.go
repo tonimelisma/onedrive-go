@@ -24,6 +24,7 @@ func TestSyncStore_UpsertScopeBlock(t *testing.T) {
 	block := &synctypes.ScopeBlock{
 		Key:           synctypes.SKThrottleAccount(),
 		IssueType:     synctypes.IssueRateLimited,
+		TimingSource:  synctypes.ScopeTimingServerRetryAfter,
 		BlockedAt:     time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
 		TrialInterval: 5 * time.Second,
 		NextTrialAt:   time.Date(2025, 6, 15, 10, 0, 5, 0, time.UTC),
@@ -67,6 +68,7 @@ func TestSyncStore_DeleteScopeBlock(t *testing.T) {
 	block := &synctypes.ScopeBlock{
 		Key:           synctypes.SKService(),
 		IssueType:     synctypes.IssueServiceOutage,
+		TimingSource:  synctypes.ScopeTimingBackoff,
 		BlockedAt:     time.Now().UTC(),
 		TrialInterval: 10 * time.Second,
 		NextTrialAt:   time.Now().Add(10 * time.Second).UTC(),
@@ -105,6 +107,7 @@ func TestSyncStore_ListScopeBlocks(t *testing.T) {
 		{
 			Key:           synctypes.SKThrottleAccount(),
 			IssueType:     synctypes.IssueRateLimited,
+			TimingSource:  synctypes.ScopeTimingServerRetryAfter,
 			BlockedAt:     now,
 			TrialInterval: 5 * time.Second,
 			NextTrialAt:   now.Add(5 * time.Second),
@@ -113,6 +116,7 @@ func TestSyncStore_ListScopeBlocks(t *testing.T) {
 		{
 			Key:           synctypes.SKService(),
 			IssueType:     synctypes.IssueServiceOutage,
+			TimingSource:  synctypes.ScopeTimingBackoff,
 			BlockedAt:     now.Add(-time.Minute),
 			TrialInterval: 30 * time.Second,
 			NextTrialAt:   now.Add(29 * time.Second),
@@ -121,6 +125,7 @@ func TestSyncStore_ListScopeBlocks(t *testing.T) {
 		{
 			Key:           synctypes.SKQuotaShortcut("drive1:item1"),
 			IssueType:     synctypes.IssueQuotaExceeded,
+			TimingSource:  synctypes.ScopeTimingBackoff,
 			BlockedAt:     now.Add(-5 * time.Minute),
 			TrialInterval: time.Minute,
 			NextTrialAt:   now.Add(55 * time.Second),
@@ -185,8 +190,9 @@ func TestSyncStore_ScopeBlock_Roundtrip(t *testing.T) {
 	// - Duration in nanoseconds
 	// - Parameterized scope key (perm:dir)
 	original := &synctypes.ScopeBlock{
-		Key:           synctypes.SKPermDir("/home/user/Private"),
-		IssueType:     synctypes.IssueLocalPermissionDenied,
+		Key:           synctypes.SKQuotaShortcut("drive1:item1"),
+		IssueType:     synctypes.IssueQuotaExceeded,
+		TimingSource:  synctypes.ScopeTimingBackoff,
 		BlockedAt:     time.Date(2025, 3, 14, 9, 26, 53, 123456789, time.UTC),
 		TrialInterval: 2*time.Minute + 500*time.Millisecond,
 		NextTrialAt:   time.Date(2025, 3, 14, 9, 28, 53, 987654321, time.UTC),
@@ -217,6 +223,7 @@ func TestSyncStore_ScopeBlock_Roundtrip_ZeroNextTrialAt(t *testing.T) {
 	original := &synctypes.ScopeBlock{
 		Key:           synctypes.SKPermRemote("Shared/TeamDocs"),
 		IssueType:     synctypes.IssuePermissionDenied,
+		TimingSource:  synctypes.ScopeTimingNone,
 		BlockedAt:     time.Date(2025, 3, 14, 9, 26, 53, 123456789, time.UTC),
 		TrialInterval: 0,
 		NextTrialAt:   time.Time{},

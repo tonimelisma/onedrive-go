@@ -455,44 +455,11 @@ func TestHandleRemovedShortcuts_ClearsRemotePermissionScopesUnderRemovedShortcut
 
 	removedScope := synctypes.SKPermRemote("SharedFolder/locked")
 	otherScope := synctypes.SKPermRemote("OtherFolder/locked")
+	removedQuotaScope := synctypes.SKQuotaShortcut("remote-drive-1:remote-item-1")
+	otherQuotaScope := synctypes.SKQuotaShortcut("remote-drive-2:remote-item-2")
 
-	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path:      "SharedFolder/locked",
-		DriveID:   eng.driveID,
-		Direction: synctypes.DirectionUpload,
-		Category:  synctypes.CategoryActionable,
-		IssueType: synctypes.IssuePermissionDenied,
-		ErrMsg:    "read-only boundary",
-		ScopeKey:  removedScope,
-	}, nil))
-	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path:      "SharedFolder/locked/file.txt",
-		DriveID:   eng.driveID,
-		Direction: synctypes.DirectionUpload,
-		Category:  synctypes.CategoryTransient,
-		ErrMsg:    "blocked by remote permission scope",
-		ScopeKey:  removedScope,
-	}, nil))
-	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path:      "OtherFolder/locked",
-		DriveID:   eng.driveID,
-		Direction: synctypes.DirectionUpload,
-		Category:  synctypes.CategoryActionable,
-		IssueType: synctypes.IssuePermissionDenied,
-		ErrMsg:    "read-only boundary",
-		ScopeKey:  otherScope,
-	}, nil))
-
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
-		Key:       removedScope,
-		IssueType: synctypes.IssuePermissionDenied,
-		BlockedAt: eng.nowFn(),
-	})
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
-		Key:       otherScope,
-		IssueType: synctypes.IssuePermissionDenied,
-		BlockedAt: eng.nowFn(),
-	})
+	seedShortcutRemovalFailures(t, eng, ctx, removedScope, removedQuotaScope, otherScope, otherQuotaScope)
+	seedShortcutRemovalScopeBlocks(t, eng, removedScope, removedQuotaScope, otherScope, otherQuotaScope)
 
 	shortcuts, err := eng.baseline.ListShortcuts(ctx)
 	require.NoError(t, err)
@@ -507,14 +474,128 @@ func TestHandleRemovedShortcuts_ClearsRemotePermissionScopesUnderRemovedShortcut
 
 	assert.False(t, isTestScopeBlocked(eng, removedScope),
 		"remote permission scope under the removed shortcut should be cleared")
+	assert.False(t, isTestScopeBlocked(eng, removedQuotaScope),
+		"quota scope under the removed shortcut should be discarded")
 	assert.True(t, isTestScopeBlocked(eng, otherScope),
 		"remote permission scopes under other shortcuts must remain intact")
+	assert.True(t, isTestScopeBlocked(eng, otherQuotaScope),
+		"quota scopes under other shortcuts must remain intact")
 
 	failures, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
-	require.Len(t, failures, 1, "removed shortcut should discard its remote permission failures recursively")
-	assert.Equal(t, "OtherFolder/locked", failures[0].Path)
-	assert.Equal(t, otherScope, failures[0].ScopeKey)
+	require.Len(t, failures, 2, "removed shortcut should discard both quota and remote permission failures recursively")
+	assert.ElementsMatch(t, []string{"OtherFolder/locked", "OtherFolder/quota/file.txt"}, []string{failures[0].Path, failures[1].Path})
+}
+
+func seedShortcutRemovalFailures(
+	t *testing.T,
+	eng *Engine,
+	ctx context.Context,
+	removedScope synctypes.ScopeKey,
+	removedQuotaScope synctypes.ScopeKey,
+	otherScope synctypes.ScopeKey,
+	otherQuotaScope synctypes.ScopeKey,
+) {
+	t.Helper()
+
+	failures := []synctypes.SyncFailureParams{
+		{
+			Path:      "SharedFolder/locked",
+			DriveID:   eng.driveID,
+			Direction: synctypes.DirectionUpload,
+			Role:      synctypes.FailureRoleBoundary,
+			Category:  synctypes.CategoryActionable,
+			IssueType: synctypes.IssuePermissionDenied,
+			ErrMsg:    "read-only boundary",
+			ScopeKey:  removedScope,
+		},
+		{
+			Path:      "SharedFolder/locked/file.txt",
+			DriveID:   eng.driveID,
+			Direction: synctypes.DirectionUpload,
+			Role:      synctypes.FailureRoleHeld,
+			Category:  synctypes.CategoryTransient,
+			ErrMsg:    "blocked by remote permission scope",
+			ScopeKey:  removedScope,
+		},
+		{
+			Path:      "SharedFolder/quota/file.txt",
+			DriveID:   eng.driveID,
+			Direction: synctypes.DirectionUpload,
+			Role:      synctypes.FailureRoleHeld,
+			Category:  synctypes.CategoryTransient,
+			ErrMsg:    "blocked by shortcut quota scope",
+			ScopeKey:  removedQuotaScope,
+		},
+		{
+			Path:      "OtherFolder/locked",
+			DriveID:   eng.driveID,
+			Direction: synctypes.DirectionUpload,
+			Role:      synctypes.FailureRoleBoundary,
+			Category:  synctypes.CategoryActionable,
+			IssueType: synctypes.IssuePermissionDenied,
+			ErrMsg:    "read-only boundary",
+			ScopeKey:  otherScope,
+		},
+		{
+			Path:      "OtherFolder/quota/file.txt",
+			DriveID:   eng.driveID,
+			Direction: synctypes.DirectionUpload,
+			Role:      synctypes.FailureRoleHeld,
+			Category:  synctypes.CategoryTransient,
+			ErrMsg:    "blocked by shortcut quota scope",
+			ScopeKey:  otherQuotaScope,
+		},
+	}
+
+	for i := range failures {
+		require.NoError(t, eng.baseline.RecordFailure(ctx, &failures[i], nil))
+	}
+}
+
+func seedShortcutRemovalScopeBlocks(
+	t *testing.T,
+	eng *Engine,
+	removedScope synctypes.ScopeKey,
+	removedQuotaScope synctypes.ScopeKey,
+	otherScope synctypes.ScopeKey,
+	otherQuotaScope synctypes.ScopeKey,
+) {
+	t.Helper()
+
+	now := eng.nowFn()
+	blocks := []synctypes.ScopeBlock{
+		{
+			Key:       removedScope,
+			IssueType: synctypes.IssuePermissionDenied,
+			BlockedAt: now,
+		},
+		{
+			Key:           removedQuotaScope,
+			IssueType:     synctypes.IssueQuotaExceeded,
+			TimingSource:  synctypes.ScopeTimingBackoff,
+			BlockedAt:     now,
+			TrialInterval: time.Minute,
+			NextTrialAt:   now.Add(time.Minute),
+		},
+		{
+			Key:       otherScope,
+			IssueType: synctypes.IssuePermissionDenied,
+			BlockedAt: now,
+		},
+		{
+			Key:           otherQuotaScope,
+			IssueType:     synctypes.IssueQuotaExceeded,
+			TimingSource:  synctypes.ScopeTimingBackoff,
+			BlockedAt:     now,
+			TrialInterval: time.Minute,
+			NextTrialAt:   now.Add(time.Minute),
+		},
+	}
+
+	for i := range blocks {
+		setTestScopeBlock(t, eng, blocks[i])
+	}
 }
 
 // ---------------------------------------------------------------------------

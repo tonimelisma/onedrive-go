@@ -138,10 +138,12 @@ func TestEngine_ReleaseScope(t *testing.T) {
 	// Create scope-blocked failures.
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "a.txt", DriveID: driveID, Direction: synctypes.DirectionUpload,
+		Role:     synctypes.FailureRoleHeld,
 		Category: synctypes.CategoryTransient, ScopeKey: sk,
 	}, nil))
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "b.txt", DriveID: driveID, Direction: synctypes.DirectionUpload,
+		Role:     synctypes.FailureRoleHeld,
 		Category: synctypes.CategoryTransient, ScopeKey: sk,
 	}, nil))
 
@@ -165,6 +167,10 @@ func TestEngine_ReleaseScope_SignalsImmediateRetrySweep(t *testing.T) {
 	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 	scopeKey := synctypes.SKQuotaOwn()
+	var events []engineDebugEventType
+	eng.debugEventHook = func(event engineDebugEvent) {
+		events = append(events, event.Type)
+	}
 
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:       scopeKey,
@@ -176,6 +182,7 @@ func TestEngine_ReleaseScope_SignalsImmediateRetrySweep(t *testing.T) {
 		Path:      "blocked.txt",
 		DriveID:   driveid.New("drive1"),
 		Direction: synctypes.DirectionUpload,
+		Role:      synctypes.FailureRoleHeld,
 		Category:  synctypes.CategoryTransient,
 		ScopeKey:  scopeKey,
 		ErrMsg:    "scope blocked",
@@ -188,6 +195,11 @@ func TestEngine_ReleaseScope_SignalsImmediateRetrySweep(t *testing.T) {
 	case <-time.After(time.Second):
 		require.Fail(t, "releaseScope should signal retryTimerCh for due-now failures")
 	}
+
+	assert.Equal(t, []engineDebugEventType{
+		engineDebugEventScopeReleased,
+		engineDebugEventRetryKicked,
+	}, events)
 }
 
 func TestEngine_AssertCurrentScopeInvariants_DetectsDuplicateActiveScopes(t *testing.T) {
@@ -215,9 +227,10 @@ func TestEngine_AssertCurrentScopeInvariants_DetectsOrphanedPermissionScope(t *t
 	scopeKey := synctypes.SKPermRemote("Shared/Docs")
 
 	require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
-		Key:       scopeKey,
-		IssueType: synctypes.IssuePermissionDenied,
-		BlockedAt: eng.nowFn(),
+		Key:          scopeKey,
+		IssueType:    synctypes.IssuePermissionDenied,
+		TimingSource: synctypes.ScopeTimingNone,
+		BlockedAt:    eng.nowFn(),
 	}))
 
 	err := eng.assertCurrentScopeInvariants(ctx)
@@ -235,14 +248,16 @@ func TestEngine_ReleaseAndDiscardScope_MaintainInvariantsInOneShotMode(t *testin
 		scopeKey := synctypes.SKPermRemote("Shared/Docs")
 
 		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
-			Key:       scopeKey,
-			IssueType: synctypes.IssuePermissionDenied,
-			BlockedAt: eng.nowFn(),
+			Key:          scopeKey,
+			IssueType:    synctypes.IssuePermissionDenied,
+			TimingSource: synctypes.ScopeTimingNone,
+			BlockedAt:    eng.nowFn(),
 		}))
 		require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 			Path:      "Shared/Docs",
 			DriveID:   driveid.New("drive1"),
 			Direction: synctypes.DirectionUpload,
+			Role:      synctypes.FailureRoleBoundary,
 			Category:  synctypes.CategoryActionable,
 			IssueType: synctypes.IssuePermissionDenied,
 			ScopeKey:  scopeKey,
@@ -252,6 +267,7 @@ func TestEngine_ReleaseAndDiscardScope_MaintainInvariantsInOneShotMode(t *testin
 			Path:      "Shared/Docs/file.txt",
 			DriveID:   driveid.New("drive1"),
 			Direction: synctypes.DirectionUpload,
+			Role:      synctypes.FailureRoleHeld,
 			Category:  synctypes.CategoryTransient,
 			ScopeKey:  scopeKey,
 			ErrMsg:    "held by scope",
@@ -269,14 +285,18 @@ func TestEngine_ReleaseAndDiscardScope_MaintainInvariantsInOneShotMode(t *testin
 		scopeKey := synctypes.SKQuotaShortcut("drive:item")
 
 		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
-			Key:       scopeKey,
-			IssueType: synctypes.IssueQuotaExceeded,
-			BlockedAt: eng.nowFn(),
+			Key:           scopeKey,
+			IssueType:     synctypes.IssueQuotaExceeded,
+			TimingSource:  synctypes.ScopeTimingBackoff,
+			BlockedAt:     eng.nowFn(),
+			TrialInterval: time.Minute,
+			NextTrialAt:   eng.nowFn().Add(time.Minute),
 		}))
 		require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 			Path:      "Shared/Docs/file.txt",
 			DriveID:   driveid.New("drive1"),
 			Direction: synctypes.DirectionUpload,
+			Role:      synctypes.FailureRoleHeld,
 			Category:  synctypes.CategoryTransient,
 			ScopeKey:  scopeKey,
 			ErrMsg:    "held by scope",
@@ -287,6 +307,270 @@ func TestEngine_ReleaseAndDiscardScope_MaintainInvariantsInOneShotMode(t *testin
 		require.NoError(t, eng.discardScope(ctx, scopeKey))
 		require.NoError(t, eng.assertDiscardedScope(ctx, scopeKey))
 		require.NoError(t, eng.assertCurrentScopeInvariants(ctx))
+	})
+}
+
+func TestEngine_RepairPersistedScopes_ReleasesOrphanedRemotePermissionScope(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	ctx := t.Context()
+	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+	eng.nowFn = func() time.Time { return now }
+
+	scopeKey := synctypes.SKPermRemote("Shared/Docs")
+	require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
+		Key:          scopeKey,
+		IssueType:    synctypes.IssuePermissionDenied,
+		TimingSource: synctypes.ScopeTimingNone,
+		BlockedAt:    now.Add(-time.Minute),
+	}))
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:      "Shared/Docs/file.txt",
+		DriveID:   driveid.New("drive1"),
+		Direction: synctypes.DirectionUpload,
+		Role:      synctypes.FailureRoleHeld,
+		Category:  synctypes.CategoryTransient,
+		ScopeKey:  scopeKey,
+		ErrMsg:    "blocked by remote permission scope",
+	}, nil))
+
+	require.NoError(t, eng.repairPersistedScopes(ctx))
+
+	assert.False(t, isTestScopeBlocked(eng, scopeKey))
+
+	retryable, err := eng.baseline.ListSyncFailuresForRetry(ctx, now)
+	require.NoError(t, err)
+	require.Len(t, retryable, 1)
+	assert.Equal(t, "Shared/Docs/file.txt", retryable[0].Path)
+	assert.Equal(t, synctypes.FailureRoleItem, retryable[0].Role)
+}
+
+func TestEngine_RepairPersistedScopes_QuotaPolicy(t *testing.T) {
+	t.Parallel()
+
+	t.Run("keeps scoped quota with failures", func(t *testing.T) {
+		t.Parallel()
+
+		eng, _ := newTestEngine(t, &engineMockClient{})
+		ctx := t.Context()
+		now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+		eng.nowFn = func() time.Time { return now }
+
+		scopeKey := synctypes.SKQuotaOwn()
+		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
+			Key:           scopeKey,
+			IssueType:     synctypes.IssueQuotaExceeded,
+			TimingSource:  synctypes.ScopeTimingBackoff,
+			BlockedAt:     now.Add(-time.Minute),
+			TrialInterval: 30 * time.Second,
+			NextTrialAt:   now.Add(30 * time.Second),
+		}))
+		require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+			Path:      "upload.txt",
+			DriveID:   driveid.New("drive1"),
+			Direction: synctypes.DirectionUpload,
+			Role:      synctypes.FailureRoleHeld,
+			Category:  synctypes.CategoryTransient,
+			ScopeKey:  scopeKey,
+			ErrMsg:    "quota blocked",
+		}, nil))
+
+		require.NoError(t, eng.repairPersistedScopes(ctx))
+
+		assert.True(t, isTestScopeBlocked(eng, scopeKey))
+	})
+
+	t.Run("discards empty scoped quota", func(t *testing.T) {
+		t.Parallel()
+
+		eng, _ := newTestEngine(t, &engineMockClient{})
+		ctx := t.Context()
+		now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+		eng.nowFn = func() time.Time { return now }
+
+		scopeKey := synctypes.SKQuotaShortcut("drive:item")
+		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
+			Key:           scopeKey,
+			IssueType:     synctypes.IssueQuotaExceeded,
+			TimingSource:  synctypes.ScopeTimingBackoff,
+			BlockedAt:     now.Add(-time.Minute),
+			TrialInterval: 30 * time.Second,
+			NextTrialAt:   now.Add(30 * time.Second),
+		}))
+
+		require.NoError(t, eng.repairPersistedScopes(ctx))
+
+		assert.False(t, isTestScopeBlocked(eng, scopeKey))
+
+		failures, err := eng.baseline.ListSyncFailures(ctx)
+		require.NoError(t, err)
+		assert.Empty(t, failures)
+	})
+}
+
+func TestEngine_RepairPersistedScopes_ThrottleAndServicePolicy(t *testing.T) {
+	t.Parallel()
+
+	t.Run("keeps server timed throttle and schedules immediate trial when overdue", func(t *testing.T) {
+		t.Parallel()
+
+		eng, _ := newTestEngine(t, &engineMockClient{})
+		ctx := t.Context()
+		now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+		eng.nowFn = func() time.Time { return now }
+
+		scopeKey := synctypes.SKThrottleAccount()
+		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
+			Key:           scopeKey,
+			IssueType:     synctypes.IssueRateLimited,
+			TimingSource:  synctypes.ScopeTimingServerRetryAfter,
+			BlockedAt:     now.Add(-time.Minute),
+			TrialInterval: 20 * time.Second,
+			NextTrialAt:   now.Add(-time.Second),
+		}))
+
+		require.NoError(t, eng.repairPersistedScopes(ctx))
+		newTestWatchState(t, eng)
+		require.NoError(t, eng.loadActiveScopes(ctx))
+		eng.armTrialTimer()
+
+		select {
+		case <-eng.trialCh:
+		case <-time.After(time.Second):
+			require.Fail(t, "expired server-timed throttle scope should schedule an immediate trial on startup")
+		}
+	})
+
+	t.Run("releases non server timed throttle", func(t *testing.T) {
+		t.Parallel()
+
+		eng, _ := newTestEngine(t, &engineMockClient{})
+		ctx := t.Context()
+		now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+		eng.nowFn = func() time.Time { return now }
+
+		scopeKey := synctypes.SKThrottleAccount()
+		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
+			Key:           scopeKey,
+			IssueType:     synctypes.IssueRateLimited,
+			TimingSource:  synctypes.ScopeTimingBackoff,
+			BlockedAt:     now.Add(-time.Minute),
+			TrialInterval: 20 * time.Second,
+			NextTrialAt:   now.Add(20 * time.Second),
+		}))
+		require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+			Path:      "upload.txt",
+			DriveID:   driveid.New("drive1"),
+			Direction: synctypes.DirectionUpload,
+			Role:      synctypes.FailureRoleHeld,
+			Category:  synctypes.CategoryTransient,
+			ScopeKey:  scopeKey,
+			ErrMsg:    "rate limited",
+		}, nil))
+
+		require.NoError(t, eng.repairPersistedScopes(ctx))
+
+		assert.False(t, isTestScopeBlocked(eng, scopeKey))
+		retryable, err := eng.baseline.ListSyncFailuresForRetry(ctx, now)
+		require.NoError(t, err)
+		require.Len(t, retryable, 1)
+		assert.Equal(t, synctypes.FailureRoleItem, retryable[0].Role)
+	})
+
+	t.Run("keeps server timed service scope", func(t *testing.T) {
+		t.Parallel()
+
+		eng, _ := newTestEngine(t, &engineMockClient{})
+		ctx := t.Context()
+		now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+		eng.nowFn = func() time.Time { return now }
+
+		scopeKey := synctypes.SKService()
+		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
+			Key:           scopeKey,
+			IssueType:     synctypes.IssueServiceOutage,
+			TimingSource:  synctypes.ScopeTimingServerRetryAfter,
+			BlockedAt:     now.Add(-time.Minute),
+			TrialInterval: time.Minute,
+			NextTrialAt:   now.Add(time.Minute),
+		}))
+
+		require.NoError(t, eng.repairPersistedScopes(ctx))
+		assert.True(t, isTestScopeBlocked(eng, scopeKey))
+	})
+}
+
+func TestEngine_RepairPersistedScopes_DiskPolicy(t *testing.T) {
+	t.Parallel()
+
+	t.Run("releases recovered disk scope", func(t *testing.T) {
+		t.Parallel()
+
+		eng, _ := newTestEngine(t, &engineMockClient{})
+		ctx := t.Context()
+		now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+		eng.nowFn = func() time.Time { return now }
+		eng.minFreeSpace = 1024
+		eng.diskAvailableFn = func(string) (uint64, error) { return 4096, nil }
+
+		scopeKey := synctypes.SKDiskLocal()
+		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
+			Key:           scopeKey,
+			IssueType:     synctypes.IssueDiskFull,
+			TimingSource:  synctypes.ScopeTimingBackoff,
+			BlockedAt:     now.Add(-time.Minute),
+			TrialInterval: time.Minute,
+			NextTrialAt:   now.Add(time.Minute),
+		}))
+		require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+			Path:      "download.bin",
+			DriveID:   driveid.New("drive1"),
+			Direction: synctypes.DirectionDownload,
+			Role:      synctypes.FailureRoleHeld,
+			Category:  synctypes.CategoryTransient,
+			ScopeKey:  scopeKey,
+			ErrMsg:    "disk full",
+		}, nil))
+
+		require.NoError(t, eng.repairPersistedScopes(ctx))
+
+		assert.False(t, isTestScopeBlocked(eng, scopeKey))
+		retryable, err := eng.baseline.ListSyncFailuresForRetry(ctx, now)
+		require.NoError(t, err)
+		require.Len(t, retryable, 1)
+	})
+
+	t.Run("refreshes unhealthy disk scope from current truth", func(t *testing.T) {
+		t.Parallel()
+
+		eng, _ := newTestEngine(t, &engineMockClient{})
+		ctx := t.Context()
+		now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+		eng.nowFn = func() time.Time { return now }
+		eng.minFreeSpace = 4096
+		eng.diskAvailableFn = func(string) (uint64, error) { return 512, nil }
+
+		scopeKey := synctypes.SKDiskLocal()
+		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
+			Key:           scopeKey,
+			IssueType:     synctypes.IssueDiskFull,
+			TimingSource:  synctypes.ScopeTimingServerRetryAfter,
+			BlockedAt:     now.Add(-10 * time.Minute),
+			TrialInterval: 10 * time.Minute,
+			NextTrialAt:   now.Add(10 * time.Minute),
+			TrialCount:    7,
+		}))
+
+		require.NoError(t, eng.repairPersistedScopes(ctx))
+
+		block, ok := getTestScopeBlock(eng, scopeKey)
+		require.True(t, ok)
+		assert.Equal(t, synctypes.ScopeTimingBackoff, block.TimingSource)
+		assert.Equal(t, diskScopeInitialTrialInterval, block.TrialInterval)
+		assert.Equal(t, now, block.BlockedAt)
+		assert.Equal(t, now.Add(diskScopeInitialTrialInterval), block.NextTrialAt)
+		assert.Zero(t, block.TrialCount)
 	})
 }
 
@@ -1739,6 +2023,10 @@ func TestTrialDispatch_UsesReobserve(t *testing.T) {
 	eng.nowFn = func() time.Time { return time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC) }
 	setupWatchEngine(t, eng)
 	eng.watch.buf = syncobserve.NewBuffer(eng.logger)
+	var events []engineDebugEvent
+	eng.debugEventHook = func(event engineDebugEvent) {
+		events = append(events, event)
+	}
 
 	ctx := context.Background()
 	driveID := driveid.New("drive1")
@@ -1760,6 +2048,7 @@ func TestTrialDispatch_UsesReobserve(t *testing.T) {
 		Path:      "trial.txt",
 		DriveID:   driveID,
 		Direction: synctypes.DirectionDownload,
+		Role:      synctypes.FailureRoleHeld,
 		Category:  synctypes.CategoryTransient,
 		ScopeKey:  sk,
 		ItemID:    "trial-item",
@@ -1786,6 +2075,11 @@ func TestTrialDispatch_UsesReobserve(t *testing.T) {
 	_, hasTrial := eng.watch.trialPending["trial.txt"]
 
 	assert.True(t, hasTrial, "trial should be registered in trialPending")
+	require.Contains(t, events, engineDebugEvent{
+		Type:     engineDebugEventTrialDispatched,
+		ScopeKey: sk,
+		Path:     "trial.txt",
+	})
 
 	// After successful dispatch, the scope block's TrialInterval should NOT
 	// be extended — interval stays unmutated until the worker result arrives.
@@ -1837,6 +2131,7 @@ func TestTrialDispatch_ForwardsRetryAfter(t *testing.T) {
 		Path:      "throttled.txt",
 		DriveID:   driveID,
 		Direction: synctypes.DirectionDownload,
+		Role:      synctypes.FailureRoleHeld,
 		Category:  synctypes.CategoryTransient,
 		ScopeKey:  sk,
 		ItemID:    "throttled-item",

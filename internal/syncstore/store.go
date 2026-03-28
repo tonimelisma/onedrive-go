@@ -2,7 +2,7 @@
 //
 // Contents:
 //   - SyncStore:    struct definition (db, baseline, logger, nowFunc)
-//   - NewSyncStore: open database, run migrations, return ready store
+//   - NewSyncStore: open database, apply canonical schema, return ready store
 //   - Close:        WAL checkpoint + close database
 //   - Checkpoint:   WAL checkpoint + optional pruning
 //   - rawDB:        test-only access to underlying *sql.DB
@@ -52,8 +52,8 @@ type SyncStore struct {
 	nowFunc    func() time.Time // injectable for deterministic tests
 }
 
-// NewSyncStore opens the SQLite database at dbPath, runs migrations,
-// and returns a ready-to-use manager. The database uses WAL mode with
+// NewSyncStore opens the SQLite database at dbPath, applies the canonical
+// schema, and returns a ready-to-use manager. The database uses WAL mode with
 // synchronous=FULL for crash-safe durability.
 func NewSyncStore(ctx context.Context, dbPath string, logger *slog.Logger) (*SyncStore, error) {
 	// DSN parameters ensure pragmas apply to every connection from the pool.
@@ -72,8 +72,8 @@ func NewSyncStore(ctx context.Context, dbPath string, logger *slog.Logger) (*Syn
 	// Sole-writer pattern: only one connection writes at a time.
 	db.SetMaxOpenConns(1)
 
-	if err := runMigrations(ctx, db, logger); err != nil {
-		baseErr := fmt.Errorf("run sync store migrations: %w", err)
+	if err := applySchema(ctx, db); err != nil {
+		baseErr := fmt.Errorf("apply sync store schema: %w", err)
 		if closeErr := db.Close(); closeErr != nil {
 			return nil, errors.Join(baseErr, fmt.Errorf("close sync store database: %w", closeErr))
 		}

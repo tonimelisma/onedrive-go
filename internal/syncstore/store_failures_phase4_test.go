@@ -31,6 +31,7 @@ func TestSyncStore_PickTrialCandidate_ReturnsOldestScopeBlockedFailure(t *testin
 		Path:      "b.txt",
 		DriveID:   driveID,
 		Direction: synctypes.DirectionUpload,
+		Role:      synctypes.FailureRoleHeld,
 		Category:  synctypes.CategoryTransient,
 		ErrMsg:    "quota exceeded",
 		ScopeKey:  sk,
@@ -41,6 +42,7 @@ func TestSyncStore_PickTrialCandidate_ReturnsOldestScopeBlockedFailure(t *testin
 		Path:      "a.txt",
 		DriveID:   driveID,
 		Direction: synctypes.DirectionUpload,
+		Role:      synctypes.FailureRoleHeld,
 		Category:  synctypes.CategoryTransient,
 		ErrMsg:    "quota exceeded",
 		ScopeKey:  sk,
@@ -69,6 +71,7 @@ func TestSyncStore_PickTrialCandidate_SkipsRetriedFailures(t *testing.T) {
 		Path:      "retried.txt",
 		DriveID:   driveID,
 		Direction: synctypes.DirectionUpload,
+		Role:      synctypes.FailureRoleItem,
 		Category:  synctypes.CategoryTransient,
 		ErrMsg:    "quota exceeded",
 		ScopeKey:  sk,
@@ -111,17 +114,17 @@ func TestSyncStore_SetScopeRetryAtNow_UnblocksScopeFailures(t *testing.T) {
 	// Insert 2 scope-blocked (NULL next_retry_at) + 1 with next_retry_at set.
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "a.txt", DriveID: driveID, Direction: synctypes.DirectionUpload,
-		Category: synctypes.CategoryTransient, ScopeKey: sk,
+		Role: synctypes.FailureRoleHeld, Category: synctypes.CategoryTransient, ScopeKey: sk,
 	}, nil))
 
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "b.txt", DriveID: driveID, Direction: synctypes.DirectionUpload,
-		Category: synctypes.CategoryTransient, ScopeKey: sk,
+		Role: synctypes.FailureRoleHeld, Category: synctypes.CategoryTransient, ScopeKey: sk,
 	}, nil))
 
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "c.txt", DriveID: driveID, Direction: synctypes.DirectionUpload,
-		Category: synctypes.CategoryTransient, ScopeKey: sk,
+		Role: synctypes.FailureRoleItem, Category: synctypes.CategoryTransient, ScopeKey: sk,
 	}, func(int) time.Duration { return time.Hour })) // already has retry time
 
 	// Unblock scope failures.
@@ -164,25 +167,29 @@ func TestSyncStore_ReleaseScope(t *testing.T) {
 
 	// Create a scope block.
 	require.NoError(t, mgr.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
-		Key:       sk,
-		IssueType: synctypes.IssueQuotaExceeded,
-		BlockedAt: now.Add(-time.Minute),
+		Key:           sk,
+		IssueType:     synctypes.IssueQuotaExceeded,
+		TimingSource:  synctypes.ScopeTimingBackoff,
+		BlockedAt:     now.Add(-time.Minute),
+		TrialInterval: time.Minute,
+		NextTrialAt:   now.Add(time.Minute),
 	}))
 
 	// Create the actionable boundary row plus held descendants.
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "quota-boundary", DriveID: driveID, Direction: synctypes.DirectionUpload,
+		Role:     synctypes.FailureRoleBoundary,
 		Category: synctypes.CategoryActionable, IssueType: synctypes.IssueQuotaExceeded, ScopeKey: sk,
 	}, nil))
 
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "x.txt", DriveID: driveID, Direction: synctypes.DirectionUpload,
-		Category: synctypes.CategoryTransient, ScopeKey: sk,
+		Role: synctypes.FailureRoleHeld, Category: synctypes.CategoryTransient, ScopeKey: sk,
 	}, nil))
 
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "y.txt", DriveID: driveID, Direction: synctypes.DirectionUpload,
-		Category: synctypes.CategoryTransient, ScopeKey: sk,
+		Role: synctypes.FailureRoleHeld, Category: synctypes.CategoryTransient, ScopeKey: sk,
 	}, nil))
 
 	err := mgr.ReleaseScope(ctx, sk, now)
@@ -227,18 +234,20 @@ func TestSyncStore_DiscardScope(t *testing.T) {
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
 	require.NoError(t, mgr.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
-		Key:       scopeKey,
-		IssueType: synctypes.IssuePermissionDenied,
-		BlockedAt: now.Add(-time.Minute),
+		Key:          scopeKey,
+		IssueType:    synctypes.IssuePermissionDenied,
+		TimingSource: synctypes.ScopeTimingNone,
+		BlockedAt:    now.Add(-time.Minute),
 	}))
 
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "Shared/Docs", DriveID: driveID, Direction: synctypes.DirectionUpload,
+		Role:     synctypes.FailureRoleBoundary,
 		Category: synctypes.CategoryActionable, IssueType: synctypes.IssuePermissionDenied, ScopeKey: scopeKey,
 	}, nil))
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "Shared/Docs/a.txt", DriveID: driveID, Direction: synctypes.DirectionUpload,
-		Category: synctypes.CategoryTransient, ScopeKey: scopeKey,
+		Role: synctypes.FailureRoleHeld, Category: synctypes.CategoryTransient, ScopeKey: scopeKey,
 	}, nil))
 
 	err := mgr.DiscardScope(ctx, scopeKey)

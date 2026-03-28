@@ -1,6 +1,6 @@
 # Sync Engine
 
-GOVERNS: internal/sync/engine.go, internal/sync/engine_shortcuts.go, internal/sync/orchestrator.go, internal/sync/drive_runner.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/scope_manager.go, sync.go, sync_helpers.go
+GOVERNS: internal/sync/engine.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/engine_shortcuts.go, internal/sync/orchestrator.go, internal/sync/drive_runner.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_decisions.go, sync.go, sync_helpers.go
 
 Implements: R-2.1 [verified], R-2.6 [verified], R-2.8 [verified], R-3.4.2 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.35 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [planned], R-6.6.10 [verified], R-6.6.12 [verified], R-6.7.27 [verified], R-6.8.15 [verified]
 
@@ -17,11 +17,11 @@ admission. Filesystem events are debounced by the change buffer, remote changes
 are polled at `poll_interval` (default 5 minutes), and periodic full
 reconciliation runs every 24 hours to detect missed delta deletions.
 
-### Unified Bootstrap (Engine Pipeline Redesign Phase 9)
+### Watch Bootstrap
 
 `RunWatch` no longer calls `RunOnce` for its initial sync. Instead:
 
-1. **`initWatchInfra`** creates watchState, DepGraph, WorkerPool, Buffer, and tickers, repairs orphaned persisted permission scopes, and loads persisted `scope_blocks` into watch-owned runtime state — but does NOT load baseline or start observers.
+1. **`initWatchInfra`** creates watchState, DepGraph, WorkerPool, Buffer, and tickers, repairs persisted scopes according to the startup policy matrix, and loads surviving `scope_blocks` into watch-owned runtime state — but does NOT load baseline or start observers.
 2. **`bootstrapSync`** loads baseline, observes initial changes, and dispatches them through the same single-owner watch loop machinery that steady-state mode uses. It runs until the graph is empty and no more bootstrap work is pending.
 3. **`startObservers`** launches remote and local observers AFTER bootstrap — they see the post-bootstrap baseline.
 4. **`runWatchLoop`** runs the steady-state select loop.
@@ -33,22 +33,20 @@ state.
 
 `RunOnce` remains unchanged as a standalone one-shot entry point.
 
-### Event-Loop Refactor Safety Invariants (Phase 0)
+### Runtime Invariants
 
-Phase 0 adds characterization coverage only. It does not change production
-control flow, goroutine topology, or retry semantics. Any future event-loop
-refactor must preserve the following behavior observed in the current code:
+The engine relies on a few non-negotiable behavioral invariants:
 
 1. **Bootstrap ordering**: `RunWatch` must finish bootstrap dispatch and
    `waitForQuiescence` before `startObservers` creates either observer.
    Bootstrap actions run through the live watch-mode `DepGraph`, worker pool,
    and single-owner watch loop; observer startup is intentionally delayed
    until that graph reaches zero in-flight actions.
-2. **One-shot drain barrier**: `executePlan` must not return its report until
-   the worker pool has stopped, the results channel has been closed, and the
-   drain goroutine has finished all side effects. The correctness boundary is
-   `pool.Wait() -> pool.Stop() -> <-drainDone`, not merely "all workers
-   finished executing syscalls."
+2. **One-shot completion barrier**: `executePlan` must not return its report
+   until the worker pool has stopped, the results channel has been closed, and
+   the unified engine loop has applied all result side effects. The barrier is
+   “workers finished + results drained + side effects applied”, not merely
+   “all workers exited”.
 3. **Trial failure isolation**: trial results are handled only by
    `processTrialResult`. Trial failures extend the active trial interval and
    record the failed attempt, but they must not re-enter normal scope
@@ -76,7 +74,7 @@ refactor must preserve the following behavior observed in the current code:
    engine-owned watch buffer. It must never dispatch directly to `readyCh`
    from the reconciliation goroutine.
 
-### watchState (Engine Pipeline Redesign Phase 8)
+### watchState
 
 `watchState` bundles all watch-mode-only Engine fields. `e.watch` is nil in
 one-shot mode (`RunOnce`), non-nil in watch mode (`RunWatch`). Methods use
@@ -98,11 +96,25 @@ delete counter creation. `retryTimer` requires a specific nil check
 (`e.watch.retryTimer != nil`) because it is lazily created via
 `time.AfterFunc`.
 
-### Error Classification (`classifyResult()`)
+### Result Classification (`classifyResult()`)
 
 Implements: R-6.8.9 [verified], R-6.8.15 [verified], R-6.7.27 [verified]
 
-Pure function `classifyResult(*WorkerResult) → (resultClass, ScopeKey)`. Single classification point for all worker results. Returns a typed `ScopeKey` (not a string) for scope-block results; zero-value `ScopeKey` for non-scope classes. No side effects — classification is separate from routing ("functions do one thing"). Six result classes:
+Pure function `classifyResult(*WorkerResult) -> ResultDecision`. The classifier
+is the single policy entry point for worker results. It returns a decision
+object, not a partial tuple, so downstream code does not re-derive policy from
+raw HTTP/local error facts.
+
+`ResultDecision` carries:
+
+- `Class`
+- `ScopeKey`
+- `FailureRecordMode`
+- `PermissionFlow`
+- `RunScopeDetection`
+- `RecordSuccess`
+
+Core result classes:
 
 - `resultSuccess`: action succeeded
 - `resultRequeue`: transient failure — re-queue with backoff
@@ -111,7 +123,13 @@ Pure function `classifyResult(*WorkerResult) → (resultClass, ScopeKey)`. Singl
 - `resultShutdown`: context canceled — discard silently, no failure recorded
 - `resultFatal`: abort sync pass (401 unrecoverable auth)
 
-Classification uses `ScopeKeyForStatus(httpStatus, shortcutKey)` as the single source of truth for HTTP status → scope key mapping: 401 → fatal, 403 → skip (with handle403 side effect), 429 → scopeBlock `SKThrottleAccount`, 507 → scopeBlock `SKQuotaOwn` or `SKQuotaShortcut(key)`, 400 + outage pattern → requeue, 5xx → requeue, 408/412/404/423 → requeue, context.Canceled → shutdown, os.ErrPermission → skip.
+Classification uses `ScopeKeyForStatus(httpStatus, shortcutKey)` as the single
+source of truth for HTTP status -> scope key mapping: 401 -> fatal, 403 -> skip
+with permission flow, 429 -> scope block `SKThrottleAccount`, 507 -> scope
+block `SKQuotaOwn` or `SKQuotaShortcut(key)`, 400 + outage pattern -> requeue,
+5xx -> requeue, 408/412/404/423 -> requeue, context cancellation -> shutdown,
+`os.ErrPermission` -> skip with local-permission flow, `ErrDiskFull` ->
+direct `disk:local` scope activation.
 
 `isOutagePattern()` detects known 400 outage patterns (e.g., "ObjectHandle is Invalid") that are actually transient service outages. Distinguished from phantom drive 400s (R-6.7.11) by error body inspection.
 
@@ -170,7 +188,9 @@ through the normal buffer, planner, and DepGraph pipeline.
 
 `feedScopeDetection()` feeds results into `ScopeState.UpdateScope()`. When a
 threshold is crossed, it creates or refreshes a persisted scope block via
-`activateScope()` and then re-arms trial timing.
+`activateScope()` and then re-arms trial timing. Direct scopes such as
+`disk:local` bypass the sliding window and activate immediately from the
+classifier's `ResultDecision`.
 
 The engine owns all completion decisions — workers are pure executors. In
 watch mode the single watch loop uses an actor-with-outbox pattern: results,
@@ -182,13 +202,35 @@ workers tried to synchronously send to a full results channel. One-shot mode
 uses the same internal result loop with a one-shot configuration instead of a
 separate drain subsystem.
 
-`recordFailure()` sets category based on `delayFn`: non-nil → `"transient"`, nil → `"actionable"`. Populates `scope_key` via `ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)` — returns a typed `ScopeKey`, serialized to wire format via `String()` for SQLite storage. Delegates to `SyncStore.RecordFailure()` which computes `next_retry_at` via the `delayFn`. The engine retry sweep scans `sync_failures` for due items and re-injects them via buffer → planner → DepGraph.
+`recordFailure()` writes explicit durable semantics into `sync_failures`:
+
+- ordinary failures use `failure_role='item'`
+- scope-blocked descendants use `failure_role='held'`
+- scope-defining actionable rows use `failure_role='boundary'`
+
+`SyncStore.RecordFailure()` persists the row transactionally and computes
+`next_retry_at` only when the engine provides a retry delay function.
 
 **Scope lifecycle terminology**:
 - `activateScope()` means "this blocking condition is now active" — persist the scope row, refresh watch-mode active scope state, and arm trial timing if the scope is trial-driven.
 - `extendScopeTrial()` means "the scope is still blocked" — update `next_trial_at`, `trial_interval`, and `trial_count` for an existing scope.
 - `releaseScope()` means "the blocking condition resolved" — delete the persisted scope row, delete the actionable boundary row for that scope, and make held descendants retryable immediately.
 - `discardScope()` means "the blocked subtree/work is gone" — delete the persisted scope row and delete all scoped failure rows without retrying them.
+
+### Startup Repair
+
+Before watch admission begins, and before one-shot observation starts, the
+engine runs `repairPersistedScopes()` against durable store state.
+
+Policy matrix:
+
+- `perm:dir` and `perm:remote` survive only while a matching `boundary` row exists
+- `quota:own` and `quota:shortcut:*` survive only while at least one scoped failure row exists
+- `throttle:account` and `service` survive restart only when `timing_source='server_retry_after'`; expired deadlines trial immediately rather than auto-releasing
+- `disk:local` is revalidated from current local free-space truth and refreshed or released accordingly
+
+The repair pass runs before `activeScopes` is loaded, so the watch loop starts
+from repaired durable state rather than trusting stale persisted scope rows.
 
 ### ScopeState
 
@@ -212,9 +254,9 @@ Unlike `SKThrottleAccount` and `SKService` which block ALL actions (via
 `ScopeKey.BlocksAction()` returns true only for `ActionDownload`. Uploads,
 deletes, and moves continue because they either free space or don't consume it.
 Admission priority still places `SKDiskLocal` between `SKService` and
-`SKQuotaOwn`. Trial timing uses unified parameters: 5-second initial interval,
-2× backoff, 5-minute max cap (computed by `computeTrialInterval()` in
-engine.go).
+`SKQuotaOwn`. `disk:local` uses its own trial curve: 5-minute initial
+interval, 2x backoff, 1-hour max. Startup repair revalidates current free
+space instead of trusting stale persisted timing.
 
 ### Scanner ScanResult Contract
 
@@ -235,33 +277,52 @@ When >10 items share the same warning category, log 1 WARN summary with count an
 
 Implements: R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.10 [verified]
 
-`os.ErrPermission` → check parent directory accessibility via `handleLocalPermission()`. Inaccessible directory: one `local_permission_denied` at directory level with `SKPermDir(path)` scope block, suppress operations under it. Accessible directory: file-level failure. Recheck directory-level issues at start of each sync pass via `recheckLocalPermissions()`.
+`PermissionHandler` is a policy layer. It does not mutate engine state
+directly. Local permission detection returns explicit decisions that the engine
+applies through its owned lifecycle methods.
 
-**Scanner-driven auto-clear** (R-2.10.10): `clearScannerResolvedPermissions()` checks whether the scanner observed paths that were previously blocked by `local_permission_denied` failures. If the scanner successfully accessed a path (it appeared in events), the permission issue is resolved — clear the failure and release any scope block. File-level: cleared if the path itself was observed. Directory-level (`ScopePermDir` scope): cleared if any observed path falls under the directory prefix (checked via `ScopeKey.IsPermDir()` and `ScopeKey.DirPath()`). Called after `clearResolvedSkippedItems()` in one-shot mode, and after `recheckLocalPermissions()` in watch mode. Complements `recheckLocalPermissions()` — both may clear the same failure (idempotent).
+`os.ErrPermission` -> check parent directory accessibility via
+`handleLocalPermission()`. Inaccessible directory: return an
+`activate_boundary_scope` decision for `SKPermDir(path)`. Accessible
+directory: return a `record_file_failure` decision. Directory-level issues are
+rechecked at the start of each sync pass via `recheckLocalPermissions()`.
+
+**Scanner-driven auto-clear** (R-2.10.10): `clearScannerResolvedPermissions()`
+returns `PermissionRecheckDecision` values when the scanner proves previously
+blocked paths are accessible again. File-level failures are cleared directly.
+Directory-level permission scopes are released through `releaseScope()`.
 
 ### Remote Shared Permission Handling
 
 Implements: R-2.10.9 [verified], R-2.10.17 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.38 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified]
 
-`handle403()` is the single remote-permission entry point for write failures on shared content:
+`handle403()` is the single remote-permission entry point for write failures on
+shared content. Like the local permission path, it returns a decision for the
+engine to apply:
 
 - First it checks whether the failing path is already under an active persisted `perm:remote:{localPath}` boundary. If so, it short-circuits without another Graph permission walk.
 - Otherwise it resolves the relevant shortcut, calls `ListItemPermissions` on the target folder, and confirms whether the 403 is a real write denial or a transient/inconclusive failure.
 - On confirmed denial it walks upward, still using `ListItemPermissions`, to find the highest denied ancestor but never above the shortcut root.
-- It records one actionable `permission_denied` failure at that boundary with scope key `perm:remote:{localPath}` and persists the same scope in `scope_blocks`.
+- On confirmed denial it returns one `activate_boundary_scope` decision with
+  a `permission_denied` boundary row and matching `perm:remote:{localPath}`
+  scope block.
 
 `perm:remote` is recursive and download-only:
 
 - uploads, folder creates, remote moves, and remote deletes are blocked for the boundary path and every descendant
 - downloads continue so the subtree remains readable and delta/reconciliation can keep it current
 
-`recheckPermissions()` revisits persisted `perm:remote` boundaries at the start of each sync pass:
+`recheckPermissions()` revisits persisted `perm:remote` boundaries at the start
+of each sync pass and returns explicit release/keep decisions:
 
-- writable again → `releaseScope`
-- Graph/API failure or stale shortcut boundary → fail open via `releaseScope`
-- still denied → keep the boundary active and refresh its persisted/runtime state
+- writable again -> `releaseScope`
+- Graph/API failure or stale shortcut boundary -> fail open via `releaseScope`
+- still denied -> keep the boundary active
 
-Shortcut removal also clears any `perm:remote` scope rooted under the removed shortcut and deletes all held failures for that scope. Removed shortcuts discard blocked work instead of releasing it back into dispatch.
+Shortcut removal also returns explicit discard decisions for any
+`perm:remote:*` boundary under the removed shortcut plus the matching
+`quota:shortcut:*` scope. Removed shortcuts discard blocked work instead of
+releasing it back into dispatch.
 
 ### Planned: Observation Suppression
 
@@ -325,7 +386,7 @@ Cobra command wiring. Sets up the orchestrator, handles `--watch`, `--download-o
 - Two-signal shutdown (drain, then force)
 - Periodic full reconciliation (default 24h, async — see below)
 
-### Async Full Reconciliation (Engine Pipeline Redesign Phase 10)
+### Async Full Reconciliation
 
 `runFullReconciliationAsync` spawns a goroutine for full delta enumeration + orphan detection. Non-blocking — the watch loop continues processing events while reconciliation runs.
 

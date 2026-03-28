@@ -97,7 +97,7 @@ All scope keys are typed `ScopeKey{Kind ScopeKeyKind, Param string}` — a compa
 
 Methods on `ScopeKey` centralize logic that was previously scattered across 9+ files:
 - **`BlocksAction(path, shortcutKey, actionType, targetsOwnDrive)`** — scope-specific action blocking (used by `blockedScope()`)
-- ~~`MaxTrialInterval()`~~ — removed; interval computation centralized in `computeTrialInterval()` (engine.go)
+- ~~`MaxTrialInterval()`~~ — removed; interval computation is centralized in the engine's scope-aware trial timing helper
 - **`Humanize(shortcuts)`** — user-friendly description for display
 - **`IssueType()`** — maps scope kind to `sync_failures.issue_type` constant
 - **`IsGlobal()`** — true for scopes that block ALL actions (throttle, service)
@@ -108,6 +108,20 @@ Methods on `ScopeKey` centralize logic that was previously scattered across 9+ f
 - **`ScopeKeyForStatus(httpStatus, shortcutKey)`** — single source of truth for HTTP status → scope key classification, replacing scattered switch/if chains in `classifyResult` and `deriveScopeKey`.
 
 `ScopePermRemote` is the recursive download-only shared-folder scope. `BlocksAction` returns true for uploads, folder creates, remote moves, and remote deletes at the boundary path and every descendant, while allowing downloads to continue.
+
+### Persisted Failure And Scope Shapes
+
+The execution layer relies on two explicit persisted models:
+
+- `sync_failures.failure_role` = `item`, `held`, `boundary`
+- `scope_blocks.timing_source` = `none`, `backoff`, `server_retry_after`
+
+Those columns are important to execution correctness:
+
+- trial dispatch reads only `held` rows
+- permission and startup repair reason about `boundary` rows explicitly
+- restart logic preserves only server-timed throttle/service scopes
+- watch-mode `activeScopes` is rebuilt from persisted scope rows and never becomes a peer source of truth
 
 ### Scope Escalation
 
@@ -154,10 +168,11 @@ ownership rules:
   the timer object is replaced or stopped as needed.
 - **Bootstrap completion barrier**: there is no separate "bootstrap finished"
   signal channel between bootstrap and observer startup. The barrier is the
-  bootstrap event loop itself: `bootstrapSync` keeps consuming ready batches,
+  unified engine loop itself: `bootstrapSync` keeps consuming ready batches,
   worker results, retry ticks, and trial ticks until the graph is empty and no
-  bootstrap work remains. One-shot mode still uses a `drainDone` goroutine
-  barrier inside `executePlan`.
+  bootstrap work remains. One-shot mode uses the same internal loop with a
+  one-shot configuration and returns only after the results channel closes and
+  all result side effects have been applied.
 - **Observer error signaling (`errs`)**: owned by `startObservers`. Created by
   the engine, written once per observer goroutine on exit, read only by the
   watch loop. It is not explicitly closed because the watch loop tracks

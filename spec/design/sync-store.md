@@ -1,76 +1,127 @@
 # Sync Store
 
-GOVERNS: internal/syncstore/store.go, internal/syncstore/store_baseline.go, internal/syncstore/store_observation.go, internal/syncstore/store_conflicts.go, internal/syncstore/store_failures.go, internal/syncstore/store_admin.go, internal/syncstore/store_scope_blocks.go, internal/syncstore/migrations.go, internal/syncstore/verify.go, internal/syncstore/trash.go, internal/syncstore/shortcuts.go, issues.go, failure_display.go, verify.go
+GOVERNS: internal/syncstore/store.go, internal/syncstore/schema.go, internal/syncstore/schema.sql, internal/syncstore/store_baseline.go, internal/syncstore/store_observation.go, internal/syncstore/store_conflicts.go, internal/syncstore/store_failures.go, internal/syncstore/store_admin.go, internal/syncstore/store_scope_blocks.go, internal/syncstore/verify.go, internal/syncstore/trash.go, internal/syncstore/shortcuts.go, issues.go, failure_display.go, verify.go
 
 Implements: R-2.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.7 [verified], R-6.4.4 [verified], R-6.4.5 [verified], R-2.15.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.4 [verified], R-2.10.22 [verified], R-2.10.33 [verified], R-2.10.34 [verified], R-2.10.41 [verified], R-6.6.11 [verified]
 
 ## SyncStore (`store.go`)
 
-Database access layer exposing typed sub-interfaces. See [data-model.md](data-model.md) for the sub-interface table and schema details.
+`SyncStore` is the sole durable authority for sync state. It owns baseline,
+remote observation state, conflicts, per-item failures, persisted scope
+blocks, shortcut metadata, and sync metadata. Runtime watch state is never a
+peer authority; it is rebuilt from store state when the engine starts.
+
+`NewSyncStore()` opens SQLite in WAL mode and applies the canonical schema from
+[`schema.sql`](/Users/tonimelisma/Development/onedrive-go-engine-end-state-cleanup/internal/syncstore/schema.sql)
+through [`schema.go`](/Users/tonimelisma/Development/onedrive-go-engine-end-state-cleanup/internal/syncstore/schema.go).
+There is no incremental migration chain and no compatibility bootstrap path.
+The repository has no launched users, so the store defines the final schema
+directly.
 
 Key operations:
-- `CommitObservation()`: atomically writes `remote_state` rows + advances delta token in a single transaction
-- `CommitOutcome()`: updates baseline + `remote_state` status per action
-- `RecordFailure(ctx, SyncFailureParams, delayFn func(int) time.Duration)`: unified failure recording — always transactional, handles all failure types. For download/delete: atomically transitions `remote_state` and records `sync_failures`. The `delayFn` parameter computes `next_retry_at` from failure count: non-nil → transient (computes delay for retry scheduling), nil → actionable (no `next_retry_at`, no retry). The store does not classify failures or import the retry package — category is set by the engine caller. UPSERT with COALESCE preserves existing `file_size`, `local_hash`, `item_id` on conflict. Auto-resolves `item_id` from `remote_state` for download/delete when not provided
-- `ReleaseScope(ctx, scopeKey, now time.Time)`: single transaction for "the scope condition resolved". Deletes the persisted `scope_blocks` row, deletes boundary issue rows for the scope, and marks held transient descendants retryable immediately.
-- `DiscardScope(ctx, scopeKey)`: single transaction for "the blocked subtree/work is gone". Deletes the persisted `scope_blocks` row and all `sync_failures` rows for the scope.
 
-All write methods use optimistic concurrency (WHERE clauses preventing stale updates). Concurrency safety from SQLite WAL mode with 5-second busy timeout. Implements: R-6.3.2 [verified]
+- `CommitObservation()` atomically writes `remote_state` rows and advances the relevant delta token.
+- `CommitOutcome()` updates `baseline`, clears success-side failures, and finalizes remote-state transitions per action.
+- `RecordFailure(ctx, SyncFailureParams, delayFn)` is the single failure writer. The engine provides classification and retry policy; the store provides transactional persistence and conflict-safe upsert behavior.
+- `ReleaseScope(ctx, scopeKey, now)` is the single durable “scope resolved” transition. It deletes the `scope_blocks` row, deletes any `boundary` failure row for that scope, and converts all `held` failures for that scope into retryable `item` rows with `next_retry_at = now`.
+- `DiscardScope(ctx, scopeKey)` is the single durable “scope and blocked work are gone” transition. It deletes the `scope_blocks` row and every `sync_failures` row for that scope.
+
+All write methods are transactional. SQLite WAL mode plus a single writer
+connection gives crash-safe durability without introducing another source of
+truth.
+
+## Canonical Schema (`schema.sql`)
+
+The schema is defined directly in final form. The important tables for failure
+and scope management are:
+
+### `sync_failures`
+
+One row represents one concrete path/item failure state.
+
+Important columns:
+
+- `path`, `drive_id`, `direction`
+- `category` = `transient` or `actionable`
+- `failure_role` = `item`, `held`, or `boundary`
+- `issue_type`
+- `next_retry_at`
+- `scope_key`
+
+`failure_role` makes the row meaning explicit:
+
+- `item`: ordinary file/path failure or actionable issue
+- `held`: work currently blocked behind an active scope
+- `boundary`: the actionable row that defines a scope-backed condition
+
+Store-level constraints enforce the legal combinations:
+
+- `held` rows must be transient, scoped, and non-retryable until release
+- `boundary` rows must be actionable, scoped, and non-retryable
+- boundary scope keys are unique via a partial unique index
+
+This keeps `sync_failures` as one durable failure ledger while removing the
+implicit role inference that used to depend on `category`, `scope_key`, and
+`next_retry_at`.
+
+### `scope_blocks`
+
+One row represents one active blocking condition.
+
+Important columns:
+
+- `scope_key`
+- `issue_type`
+- `timing_source` = `none`, `backoff`, or `server_retry_after`
+- `blocked_at`
+- `trial_interval`
+- `next_trial_at`
+- `trial_count`
+
+`scope_blocks` stores scope-level timing state only. Runtime watch admission
+still uses the engine-owned `activeScopes` working set, but that working set
+is ephemeral and rebuildable from this table.
+
+`timing_source` distinguishes locally computed backoff from explicit server
+deadlines. Startup repair uses this to decide whether a persisted
+`throttle:account` or `service` scope should survive restart.
+
+## Failure And Scope Lifecycle
+
+The store models two different entities that stay separate on purpose:
+
+- `sync_failures`: concrete failed or held items
+- `scope_blocks`: active blocking conditions
+
+The engine is responsible for deciding when to create, release, or discard a
+scope. The store is responsible for persisting those transitions atomically.
+
+That split keeps the data model honest:
+
+- one `perm:remote:Shared/Docs` scope can block many held upload rows
+- one `throttle:account` scope can block work across all drives
+- one `quota:shortcut:*` scope can outlive many individual path failures
 
 ## Store Interfaces (`store_interfaces.go`)
 
-Typed sub-interfaces enforce transition ownership at compile time. Each caller receives the narrowest interface it needs. See [data-model.md](data-model.md) for the full interface-to-caller mapping.
+Typed sub-interfaces enforce transition ownership at compile time. Callers get
+the narrowest store surface they need.
 
-`SyncStore.Load()` uses a cache-through pattern: returns cached `*Baseline` if non-nil. `Commit()` invalidates the cache before calling `Load()` to refresh. For N conflict resolutions, this reduces 2N DB loads to 1 initial load + N refreshes.
+`SyncStore.Load()` uses a cache-through baseline strategy: the store caches the
+most recently loaded baseline in memory, invalidates it before outcome commits,
+and rebuilds it after writes. That cache is internal to the store and is
+rebuildable from durable state; it is not a competing authority.
 
-## Migrations (`migrations.go`)
+## Verification And Trash
 
-Embedded `.sql` files via Go `embed.FS`. Applied in order on startup. The `schema_migrations` table tracks versions. DB backed up before destructive migrations.
+[`verify.go`](/Users/tonimelisma/Development/onedrive-go-engine-end-state-cleanup/internal/syncstore/verify.go)
+re-hashes local files against baseline and remote state.
 
-## Verification (`verify.go`)
+[`trash.go`](/Users/tonimelisma/Development/onedrive-go-engine-end-state-cleanup/internal/syncstore/trash.go)
+implements OS trash integration for local deletes triggered by remote changes.
 
-`verify` command re-hashes local files and compares against baseline and remote state. Reports discrepancies: missing files, hash mismatches, extra files not in baseline.
+## Issues CLI
 
-## Trash (`trash.go`)
-
-OS trash integration for local deletions triggered by remote changes:
-- **macOS**: moves to `~/.Trash/` with collision handling (append numeric suffix)
-- **Linux**: returns error (opt-in only, XDG trash not implemented)
-
-Controlled by `use_local_trash` config (default: true on macOS, false on Linux).
-
-## CLI Commands
-
-### Issues (`issues.go`)
-
-`issues` lists unresolved conflicts and failures. Sub-commands: `issues resolve <path>` (keep-local/keep-remote/keep-both), `issues clear <path>` (dismiss), `issues retry <path>` (retry failed item).
-
-**Issues Display** — Grouped display for >10 failures of same type (count + first 5 paths, `--verbose` for all). Per-scope sub-grouping for 507/403 (own drive vs each shortcut). Human-readable shortcut names, not opaque drive IDs. Implements: R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified]
-
-### Verify (`verify.go` in root)
-
-CLI wiring for the verification command. Opens state DB read-only, runs verification, displays results.
-
-## SyncStore Planned Improvements
-
-- Audit `ForEachPath` callers for re-entrancy safety: holds read lock during callback — write from callback causes deadlock. [planned]
-- ~~Mutex or `sync.Once` on `SyncStore.Load`~~: resolved — `Load` is protected by `baselineMu` (`sync.Mutex`). [verified]
-- Disk full during baseline commit: in-memory cache consistency when SQLite write fails. [planned]
-- Evaluate `BaselineStore` interface abstraction for storage backend flexibility. [planned]
-
-## Planned: Failure Management Enhancements
-
-Implements: R-2.10.1 [planned], R-2.10.2 [planned], R-2.10.33 [implemented], R-2.10.34 [planned], R-2.10.41 [implemented]
-
-**New issue types**: `quota_exceeded`, `local_permission_denied`, `case_collision`, `disk_full`, `service_outage`, `file_too_large_for_space`.
-
-**Scope key column**: `scope_key TEXT NOT NULL DEFAULT ''` added to `sync_failures` table (migration). Format: `quota:own`, `quota:shortcut:{localPath}`, `perm:remote:{localPath}`, `disk:local`, `throttle:account`, `service`. Enables `issues` display grouping without re-deriving scope.
-
-**Store method changes**:
-- `RecordFailure(ctx, SyncFailureParams, delayFn func(int) time.Duration)`: unified method replacing both `RecordSyncFailure` (11-param, non-transactional) and `RecordFailureWithStateTransition` (8-param, transactional). Always transactional, handles state transitions for download/delete as a safe no-op for uploads. `SyncFailureParams` struct bundles all inputs with named fields. The `delayFn` parameter decouples the store from the retry package — the engine passes `retry.Reconcile.Delay` for transient failures and nil for actionable/fatal. The store reads existing `failure_count`, increments it, and calls `delayFn(count)` to compute `next_retry_at`. `sync_failures` serves as the active retry queue: rows with non-null `next_retry_at` are swept by the `FailureRetrier`.
-- `ReleaseScope(ctx, scopeKey, now)`: transactional scope release — delete `scope_blocks`, delete boundary issue rows, set held descendants `next_retry_at = now`.
-- `DiscardScope(ctx, scopeKey)`: transactional scope discard — delete `scope_blocks` and all `sync_failures` rows for that scope.
-- `UpsertActionableFailures([]ActionableFailure)`: batch upsert for scanner-detected naming/collision issues.
-- `ClearResolvedActionableFailures(issueType, currentPaths)`: compare current skipped paths against recorded `sync_failures`; delete entries for paths no longer in the skipped set. Uses `strings.Repeat` for SQL placeholder construction.
-- `CommitOutcome`: success cleanup for download/delete/move clears `sync_failures` entries.
-- `ListSyncFailuresByIssueType(ctx, issueType)`: added to `SyncFailureRecorder` interface (was concrete-only).
+`issues` reads conflicts and actionable failures directly from the store.
+Grouping and display use the persisted `scope_key`, `issue_type`, and
+shortcut metadata instead of re-deriving scope context from runtime state.
