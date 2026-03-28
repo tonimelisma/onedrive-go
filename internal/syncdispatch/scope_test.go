@@ -348,60 +348,6 @@ func TestScope_SameFileDoesNotEscalate(t *testing.T) {
 	}
 }
 
-// Validates: R-2.10.3, R-2.10.28
-// TestScope_UpdateScopeOutagePattern verifies that 400 outage patterns
-// feed the service sliding window and can trigger a service block.
-func TestScope_UpdateScopeOutagePattern(t *testing.T) {
-	t.Parallel()
-
-	clock, advance := controllableClock()
-	ss := NewScopeState(clock, discardLogger())
-
-	// Five unique paths via outage pattern should trigger a service block.
-	paths := []string{"/a.txt", "/b.txt", "/c.txt", "/d.txt", "/e.txt"}
-	for i, p := range paths {
-		result := ss.UpdateScopeOutagePattern(p)
-		if i < len(paths)-1 {
-			assert.False(t, result.Block, "outage pattern path %d should not trigger block yet", i)
-		} else {
-			require.True(t, result.Block, "fifth unique outage-pattern path must trigger service block")
-			assert.Equal(t, synctypes.SKService(), result.ScopeKey)
-			assert.Equal(t, "service_outage", result.IssueType)
-			assert.Zero(t, result.RetryAfter)
-		}
-		advance(2 * time.Second)
-	}
-}
-
-// Validates: R-2.10.3, R-2.10.28
-// TestScope_OutagePatternSharesWindowWith5xx verifies that 400 outage
-// patterns and 5xx errors feed the same service sliding window.
-func TestScope_OutagePatternSharesWindowWith5xx(t *testing.T) {
-	t.Parallel()
-
-	clock, advance := controllableClock()
-	ss := NewScopeState(clock, discardLogger())
-
-	// Three 5xx failures.
-	for _, p := range []string{"/a.txt", "/b.txt", "/c.txt"} {
-		r := synctypes.WorkerResult{Path: p, HTTPStatus: 502}
-		result := ss.UpdateScope(&r)
-		assert.False(t, result.Block)
-		advance(1 * time.Second)
-	}
-
-	// One outage pattern.
-	result := ss.UpdateScopeOutagePattern("/d.txt")
-	assert.False(t, result.Block)
-	advance(1 * time.Second)
-
-	// Fifth unique path via outage pattern — should trigger because
-	// 5xx and outage patterns share the same "service" window.
-	result = ss.UpdateScopeOutagePattern("/e.txt")
-	require.True(t, result.Block, "outage patterns and 5xx share the service window")
-	assert.Equal(t, synctypes.SKService(), result.ScopeKey)
-}
-
 // Validates: R-2.10.3
 // TestScope_NonScopeStatusReturnsEmpty verifies that non-scope HTTP
 // statuses (e.g. 404, 409) produce a zero-value ScopeUpdateResult.

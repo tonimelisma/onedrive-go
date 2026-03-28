@@ -131,7 +131,6 @@ single-owner watch loop. Windows are keyed by `ScopeKey` (not string).
 
 - **Immediate blocks** (server signals): 429 → `SKThrottleAccount` (single response triggers). 503 with Retry-After → `SKService` (single response triggers).
 - **Sliding window detection**: 507 → 3 unique paths in 10s → `SKQuotaOwn` or `SKQuotaShortcut(key)`. 5xx → 5 unique paths in 30s → `SKService`.
-- **400 outage patterns**: `UpdateScopeOutagePattern()` feeds 400 outage patterns (e.g., "ObjectHandle is Invalid") into the service sliding window.
 - **Success resets**: `RecordSuccess()` clears sliding windows for the relevant scope — a successful request proves the service is up.
 
 ## Worker Pool (`worker.go`)
