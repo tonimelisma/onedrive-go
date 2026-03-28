@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/retry"
@@ -359,10 +358,10 @@ func (e *Engine) isObservationSuppressed() bool {
 }
 
 // feedScopeDetection feeds a worker result into scope detection sliding
-// windows. If a threshold is crossed, creates a scope block. Handles both
-// regular failures and 400 outage patterns. Called directly from the normal
-// processWorkerResult switch — never called for trial results (the scope is
-// already blocked, and re-detecting would overwrite the doubled interval).
+// windows. If a threshold is crossed, creates a scope block. Called directly
+// from the normal processWorkerResult switch — never called for trial results
+// (the scope is already blocked, and re-detecting would overwrite the doubled
+// interval).
 func (e *Engine) feedScopeDetection(ctx context.Context, r *synctypes.WorkerResult) {
 	if e.watch == nil {
 		return
@@ -377,13 +376,6 @@ func (e *Engine) feedScopeDetection(ctx context.Context, r *synctypes.WorkerResu
 	sr := e.watch.scopeState.UpdateScope(r)
 	if sr.Block {
 		e.applyScopeBlock(ctx, sr)
-	}
-	// Also check outage pattern for 400s.
-	if r.HTTPStatus == http.StatusBadRequest && isOutagePattern(r.Err) {
-		osr := e.watch.scopeState.UpdateScopeOutagePattern(r.Path)
-		if osr.Block {
-			e.applyScopeBlock(ctx, osr)
-		}
 	}
 }
 

@@ -94,9 +94,9 @@ After token refresh, `/me/drives` returns HTTP 403 with Graph code `accessDenied
 
 Webhook subscription renewal (PATCH to `/v1.0/subscriptions/{id}`) returns HTTP 308 (Permanent Redirect) without a `Location` header, violating RFC 7538. Observed on Personal accounts migrated to the new backend, specifically in the West Europe data center. Filed as [onedrive-api-docs#1895](https://github.com/OneDrive/onedrive-api-docs/issues/1895).
 
-### HTTP 400 "ObjectHandle is Invalid" (Outage Pattern)
+### Historical HTTP 400 "ObjectHandle is Invalid" Incident
 
-Multi-hour Microsoft-side backend failures return HTTP 400 with a Graph code chain containing `invalidRequest` plus message text such as `"ObjectHandle is Invalid"` on every Graph API call. Not endpoint-specific — affects all operations. Non-retryable (400 is a client error code). The only resolution is to wait for Microsoft to fix it. Observed: one 3.5-hour incident.
+One multi-hour Microsoft-side backend incident was observed returning HTTP 400 with message text such as `"ObjectHandle is Invalid"` across Graph API calls. The repository no longer has recoverable CI payload evidence for the exact body shape, so the runtime does **not** implement a special classifier for this incident. If the behavior reappears and CI captures the payload, targeted handling can be reconsidered. Observed: one 3.5-hour incident.
 
 ### HTTP 507 Wraps ErrServerError
 

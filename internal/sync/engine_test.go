@@ -3487,7 +3487,7 @@ func TestProcessWorkerResult_Success_NoRecords(t *testing.T) {
 // classifyResult — pure classification of synctypes.WorkerResult (R-6.8.15)
 // ---------------------------------------------------------------------------
 
-// Validates: R-6.8.15, R-6.7.12, R-6.7.14
+// Validates: R-6.8.15, R-6.7.12
 type classifyResultCase struct {
 	name              string
 	result            synctypes.WorkerResult
@@ -3549,18 +3549,11 @@ func TestClassifyResult_LifecycleAndAuth(t *testing.T) {
 func TestClassifyResult_RemoteRetriesAndSkips(t *testing.T) {
 	t.Parallel()
 
-	outageErr := &graph.GraphError{
+	genericInvalidRequestErr := &graph.GraphError{
 		StatusCode: http.StatusBadRequest,
 		Code:       "badRequest",
 		InnerCodes: []string{"invalidRequest"},
-		Message:    "ObjectHandle is Invalid for operation",
-		Err:        graph.ErrBadRequest,
-	}
-	normalBadRequestErr := &graph.GraphError{
-		StatusCode: http.StatusBadRequest,
-		Code:       "badRequest",
-		InnerCodes: []string{"somethingElse"},
-		Message:    "invalid payload",
+		Message:    "Invalid request",
 		Err:        graph.ErrBadRequest,
 	}
 	wrongCodeOutageErr := &graph.GraphError{
@@ -3582,10 +3575,9 @@ func TestClassifyResult_RemoteRetriesAndSkips(t *testing.T) {
 		{name: "412_precondition_failed", result: synctypes.WorkerResult{HTTPStatus: http.StatusPreconditionFailed, Err: errors.New("etag mismatch")}, wantClass: resultRequeue, wantRecordMode: recordFailureReconcile, wantScopeDetect: true},
 		{name: "423_locked", result: synctypes.WorkerResult{HTTPStatus: http.StatusLocked, Err: graph.ErrLocked}, wantClass: resultRequeue, wantRecordMode: recordFailureReconcile, wantScopeDetect: true},
 		{name: "429_too_many_requests", result: synctypes.WorkerResult{HTTPStatus: http.StatusTooManyRequests, Err: graph.ErrThrottled}, wantClass: resultScopeBlock, wantScope: synctypes.SKThrottleAccount(), wantRecordMode: recordFailureReconcile, wantScopeDetect: true},
-		{name: "400_outage_pattern", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: outageErr}, wantClass: resultRequeue, wantRecordMode: recordFailureReconcile, wantScopeDetect: true},
-		{name: "400_outage_pattern_legacy_body_only", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: legacyOutageErr}, wantClass: resultRequeue, wantRecordMode: recordFailureReconcile, wantScopeDetect: true},
-		{name: "400_outage_message_wrong_code", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: wrongCodeOutageErr}, wantClass: resultRequeue, wantRecordMode: recordFailureReconcile, wantScopeDetect: true},
-		{name: "400_normal", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: normalBadRequestErr}, wantClass: resultSkip, wantRecordMode: recordFailureActionable},
+		{name: "400_invalid_request_is_skip", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: genericInvalidRequestErr}, wantClass: resultSkip, wantRecordMode: recordFailureActionable},
+		{name: "400_object_handle_message_only_is_skip", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: legacyOutageErr}, wantClass: resultSkip, wantRecordMode: recordFailureActionable},
+		{name: "400_object_handle_wrong_code_is_skip", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: wrongCodeOutageErr}, wantClass: resultSkip, wantRecordMode: recordFailureActionable},
 		{name: "500_internal_server_error", result: synctypes.WorkerResult{HTTPStatus: http.StatusInternalServerError, Err: graph.ErrServerError}, wantClass: resultRequeue, wantRecordMode: recordFailureReconcile, wantScopeDetect: true},
 		{name: "502_bad_gateway", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadGateway, Err: graph.ErrServerError}, wantClass: resultRequeue, wantRecordMode: recordFailureReconcile, wantScopeDetect: true},
 		{name: "503_service_unavailable", result: synctypes.WorkerResult{HTTPStatus: http.StatusServiceUnavailable, Err: graph.ErrServerError}, wantClass: resultRequeue, wantRecordMode: recordFailureReconcile, wantScopeDetect: true},
@@ -4766,10 +4758,15 @@ func TestWatchState_NilInOneShotMode(t *testing.T) {
 func TestIssueTypeForHTTPStatus(t *testing.T) {
 	t.Parallel()
 
-	outageErr := &graph.GraphError{
+	genericInvalidRequestErr := &graph.GraphError{
 		StatusCode: http.StatusBadRequest,
 		Code:       "badRequest",
 		InnerCodes: []string{"invalidRequest"},
+		Message:    "Invalid request",
+		Err:        graph.ErrBadRequest,
+	}
+	objectHandleErr := &graph.GraphError{
+		StatusCode: http.StatusBadRequest,
 		Message:    "ObjectHandle is Invalid for operation",
 		Err:        graph.ErrBadRequest,
 	}
@@ -4783,7 +4780,8 @@ func TestIssueTypeForHTTPStatus(t *testing.T) {
 		{"429_rate_limited", http.StatusTooManyRequests, nil, synctypes.IssueRateLimited},
 		{"507_quota_exceeded", http.StatusInsufficientStorage, nil, synctypes.IssueQuotaExceeded},
 		{"403_permission_denied", http.StatusForbidden, nil, synctypes.IssuePermissionDenied},
-		{"400_outage_pattern", http.StatusBadRequest, outageErr, synctypes.IssueServiceOutage},
+		{"400_invalid_request", http.StatusBadRequest, genericInvalidRequestErr, ""},
+		{"400_object_handle_message_only", http.StatusBadRequest, objectHandleErr, ""},
 		{"400_normal", http.StatusBadRequest, errors.New("bad request"), ""},
 		{"500_service_outage", http.StatusInternalServerError, nil, synctypes.IssueServiceOutage},
 		{"503_service_outage", http.StatusServiceUnavailable, nil, synctypes.IssueServiceOutage},
