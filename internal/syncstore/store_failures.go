@@ -1,9 +1,15 @@
 // Package syncstore persists sync baseline, observation, conflict, failure, and scope state.
 //
-// sync_failures is the active retry queue. Transient failures get next_retry_at
-// computed by a caller-provided delayFn (typically retry.ReconcilePolicy().Delay).
-// The engine failure retrier re-injects due items via buffer → planner →
-// executor (R-6.8.10).
+// sync_failures is the durable per-item failure table.
+//
+// failure_role makes row meaning explicit:
+//   - item: ordinary per-path failure or actionable issue
+//   - held: path currently blocked behind an active scope
+//   - boundary: actionable row that defines a scope-backed condition
+//
+// Transient item failures get next_retry_at computed by a caller-provided
+// delayFn (typically retry.ReconcilePolicy().Delay). The engine failure retrier
+// re-injects due items via buffer -> planner -> executor (R-6.8.10).
 //
 // Contents:
 //   - IsActionableIssue:                classify issue types requiring user action
@@ -46,13 +52,116 @@ import (
 
 // Shared column list for all sync_failures SELECT queries. Must match
 // the scan order in scanSyncFailureRows. Update both when adding columns.
-const sqlSelectSyncFailureCols = `path, drive_id, direction, category,
+const sqlSelectSyncFailureCols = `path, drive_id, direction, failure_role, category,
 		COALESCE(issue_type, ''), COALESCE(item_id, ''),
 		failure_count, COALESCE(next_retry_at, 0),
 		COALESCE(last_error, ''), COALESCE(http_status, 0),
 		first_seen_at, last_seen_at,
 		COALESCE(file_size, 0), COALESCE(local_hash, ''),
 		scope_key`
+
+func normalizeFailureParams(
+	params *synctypes.SyncFailureParams,
+	delayFn func(int) time.Duration,
+) (synctypes.FailureCategory, synctypes.FailureRole, string, error) {
+	role, err := resolveFailureRole(params)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	category := resolveFailureCategory(params, role)
+	scopeWire := params.ScopeKey.String()
+	if err := validateFailureRoleParams(params, role, category, delayFn); err != nil {
+		return "", "", "", err
+	}
+
+	if category == synctypes.CategoryActionable && delayFn != nil {
+		return "", "", "", fmt.Errorf("sync: recording failure for %s: actionable failures cannot schedule retry", params.Path)
+	}
+
+	return category, role, scopeWire, nil
+}
+
+func resolveFailureRole(params *synctypes.SyncFailureParams) (synctypes.FailureRole, error) {
+	if params.Role != "" {
+		return params.Role, nil
+	}
+	if params.ScopeKey.IsZero() {
+		return synctypes.FailureRoleItem, nil
+	}
+	return "", fmt.Errorf("sync: recording failure for %s: scoped failure requires explicit role", params.Path)
+}
+
+func resolveFailureCategory(
+	params *synctypes.SyncFailureParams,
+	role synctypes.FailureRole,
+) synctypes.FailureCategory {
+	if params.Category != "" {
+		return params.Category
+	}
+	if role == synctypes.FailureRoleBoundary {
+		return synctypes.CategoryActionable
+	}
+	return synctypes.CategoryTransient
+}
+
+func validateFailureRoleParams(
+	params *synctypes.SyncFailureParams,
+	role synctypes.FailureRole,
+	category synctypes.FailureCategory,
+	delayFn func(int) time.Duration,
+) error {
+	switch role {
+	case synctypes.FailureRoleItem:
+		return nil
+	case synctypes.FailureRoleHeld:
+		if params.ScopeKey.IsZero() {
+			return fmt.Errorf("sync: recording failure for %s: held failures require a scope key", params.Path)
+		}
+		if category != synctypes.CategoryTransient {
+			return fmt.Errorf("sync: recording failure for %s: held failures must be transient", params.Path)
+		}
+		if delayFn != nil {
+			return fmt.Errorf("sync: recording failure for %s: held failures cannot schedule retry until release", params.Path)
+		}
+		return nil
+	case synctypes.FailureRoleBoundary:
+		if params.ScopeKey.IsZero() {
+			return fmt.Errorf("sync: recording failure for %s: boundary failures require a scope key", params.Path)
+		}
+		if category != synctypes.CategoryActionable {
+			return fmt.Errorf("sync: recording failure for %s: boundary failures must be actionable", params.Path)
+		}
+		if delayFn != nil {
+			return fmt.Errorf("sync: recording failure for %s: boundary failures cannot schedule retry", params.Path)
+		}
+		return nil
+	default:
+		return fmt.Errorf("sync: recording failure for %s: invalid failure role %q", params.Path, role)
+	}
+}
+
+func normalizeActionableFailure(failure *synctypes.ActionableFailure) (synctypes.FailureRole, string, error) {
+	role := failure.Role
+	if role == "" {
+		role = synctypes.FailureRoleItem
+	}
+
+	scopeWire := failure.ScopeKey.String()
+	switch role {
+	case synctypes.FailureRoleItem:
+	case synctypes.FailureRoleBoundary:
+		if failure.ScopeKey.IsZero() {
+			return "", "", fmt.Errorf("sync: upserting actionable failure for %s: boundary failures require a scope key", failure.Path)
+		}
+	case synctypes.FailureRoleHeld:
+		return "", "", fmt.Errorf("sync: upserting actionable failure for %s: held failures are never actionable upserts", failure.Path)
+	default:
+		return "", "", fmt.Errorf("sync: upserting actionable failure for %s: invalid failure role %q", failure.Path, role)
+	}
+
+	return role, scopeWire, nil
+}
 
 // IsActionableIssue returns true for issue types that require user action and
 // should not be auto-retried. Transient issues (e.g. IssueServiceOutage)
@@ -88,6 +197,10 @@ func IsActionableIssue(issueType string) bool {
 // local_hash to preserve existing values when new values are empty/zero.
 func (m *SyncStore) RecordFailure(ctx context.Context, p *synctypes.SyncFailureParams, delayFn func(int) time.Duration) error {
 	now := m.nowFunc()
+	category, role, scopeWire, err := normalizeFailureParams(p, delayFn)
+	if err != nil {
+		return err
+	}
 
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -103,11 +216,6 @@ func (m *SyncStore) RecordFailure(ctx context.Context, p *synctypes.SyncFailureP
 	}
 
 	// Step 2: Read current failure count and compute backoff.
-	category := p.Category
-	if category == "" {
-		category = synctypes.CategoryTransient
-	}
-
 	currentFailures := m.readFailureCount(ctx, tx, p)
 	nextRetryNano := m.computeNextRetry(now, currentFailures, delayFn)
 	newCount := currentFailures + 1
@@ -126,12 +234,13 @@ func (m *SyncStore) RecordFailure(ctx context.Context, p *synctypes.SyncFailureP
 	// ON CONFLICT semantics — update both when adding columns.
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO sync_failures
-			(path, drive_id, direction, category, issue_type, item_id,
+			(path, drive_id, direction, failure_role, category, issue_type, item_id,
 			 failure_count, next_retry_at, last_error, http_status,
 			 first_seen_at, last_seen_at, file_size, local_hash, scope_key)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(path, drive_id) DO UPDATE SET
 			direction = excluded.direction,
+			failure_role = excluded.failure_role,
 			category = excluded.category,
 			issue_type = COALESCE(excluded.issue_type, sync_failures.issue_type),
 			item_id = COALESCE(excluded.item_id, sync_failures.item_id),
@@ -143,10 +252,10 @@ func (m *SyncStore) RecordFailure(ctx context.Context, p *synctypes.SyncFailureP
 			file_size = COALESCE(excluded.file_size, sync_failures.file_size),
 			local_hash = COALESCE(excluded.local_hash, sync_failures.local_hash),
 			scope_key = excluded.scope_key`,
-		p.Path, p.DriveID.String(), p.Direction, category,
+		p.Path, p.DriveID.String(), p.Direction, role, category,
 		nullString(p.IssueType), nullString(itemID),
 		newCount, nextRetryNano, p.ErrMsg, p.HTTPStatus,
-		nowNano, nowNano, nullInt64(p.FileSize), nullString(p.LocalHash), p.ScopeKey.String(),
+		nowNano, nowNano, nullInt64(p.FileSize), nullString(p.LocalHash), scopeWire,
 	)
 	if err != nil {
 		return fmt.Errorf("sync: recording sync failure for %s: %w", p.Path, err)
@@ -310,7 +419,8 @@ func (m *SyncStore) ClearActionableSyncFailures(ctx context.Context) error {
 // and clears its next_retry_at.
 func (m *SyncStore) MarkSyncFailureActionable(ctx context.Context, path string, driveID driveid.ID) error {
 	_, err := m.db.ExecContext(ctx,
-		`UPDATE sync_failures SET category = 'actionable', next_retry_at = NULL
+		`UPDATE sync_failures
+		SET category = 'actionable', failure_role = 'item', next_retry_at = NULL
 		WHERE path = ? AND drive_id = ?`,
 		path, driveID.String())
 	if err != nil {
@@ -343,12 +453,13 @@ func (m *SyncStore) UpsertActionableFailures(ctx context.Context, failures []syn
 	// adding columns.
 	stmt, err := tx.PrepareContext(ctx,
 		`INSERT INTO sync_failures
-			(path, drive_id, direction, category, issue_type, item_id,
+			(path, drive_id, direction, failure_role, category, issue_type, item_id,
 			 failure_count, next_retry_at, last_error, http_status,
 			 first_seen_at, last_seen_at, file_size, local_hash, scope_key)
-		VALUES (?, ?, ?, 'actionable', ?, '', 1, NULL, ?, 0, ?, ?, ?, '', ?)
+		VALUES (?, ?, ?, ?, 'actionable', ?, '', 1, NULL, ?, 0, ?, ?, ?, '', ?)
 		ON CONFLICT(path, drive_id) DO UPDATE SET
 			direction = excluded.direction,
+			failure_role = excluded.failure_role,
 			category = 'actionable',
 			issue_type = excluded.issue_type,
 			next_retry_at = NULL,
@@ -363,10 +474,15 @@ func (m *SyncStore) UpsertActionableFailures(ctx context.Context, failures []syn
 
 	for i := range failures {
 		f := &failures[i]
+		role, scopeWire, err := normalizeActionableFailure(f)
+		if err != nil {
+			return err
+		}
+
 		if _, err := stmt.ExecContext(ctx,
-			f.Path, f.DriveID.String(), f.Direction,
+			f.Path, f.DriveID.String(), f.Direction, role,
 			nullString(f.IssueType), f.Error,
-			nowNano, nowNano, f.FileSize, f.ScopeKey.String(),
+			nowNano, nowNano, f.FileSize, scopeWire,
 		); err != nil {
 			return fmt.Errorf("sync: upsert actionable failure for %s: %w", f.Path, err)
 		}
@@ -391,7 +507,8 @@ func (m *SyncStore) ClearResolvedActionableFailures(ctx context.Context, issueTy
 	if len(currentPaths) == 0 {
 		// No current paths → all entries for this issue type are resolved.
 		_, err := m.db.ExecContext(ctx,
-			`DELETE FROM sync_failures WHERE category = 'actionable' AND issue_type = ?`,
+			`DELETE FROM sync_failures
+			WHERE category = 'actionable' AND failure_role = 'item' AND issue_type = ?`,
 			issueType)
 		if err != nil {
 			return fmt.Errorf("sync: clearing resolved actionable failures for %s: %w", issueType, err)
@@ -410,7 +527,8 @@ func (m *SyncStore) ClearResolvedActionableFailures(ctx context.Context, issueTy
 	}
 
 	//nolint:gosec // G202: placeholders is strings.Repeat(",?", n) — literal, not user input
-	query := `DELETE FROM sync_failures WHERE category = 'actionable' AND issue_type = ? AND path NOT IN (` +
+	query := `DELETE FROM sync_failures
+		WHERE category = 'actionable' AND failure_role = 'item' AND issue_type = ? AND path NOT IN (` +
 		placeholders + `)`
 
 	_, err := m.db.ExecContext(ctx, query, args...)
@@ -596,17 +714,17 @@ func (m *SyncStore) PickTrialCandidate(
 
 	row := m.db.QueryRowContext(ctx,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
-		WHERE scope_key = ? AND next_retry_at IS NULL
+		WHERE scope_key = ? AND failure_role = ? AND next_retry_at IS NULL
 		ORDER BY first_seen_at ASC
 		LIMIT 1`,
-		wire,
+		wire, synctypes.FailureRoleHeld,
 	)
 
 	var r synctypes.SyncFailureRow
 	var wireScopeKey string
 
 	err := row.Scan(
-		&r.Path, &r.DriveID, &r.Direction, &r.Category,
+		&r.Path, &r.DriveID, &r.Direction, &r.Role, &r.Category,
 		&r.IssueType, &r.ItemID,
 		&r.FailureCount, &r.NextRetryAt,
 		&r.LastError, &r.HTTPStatus,
@@ -639,9 +757,10 @@ func (m *SyncStore) SetScopeRetryAtNow(ctx context.Context, scopeKey synctypes.S
 	nowNano := now.UnixNano()
 
 	result, err := m.db.ExecContext(ctx,
-		`UPDATE sync_failures SET next_retry_at = ?
-		WHERE scope_key = ? AND next_retry_at IS NULL AND category = 'transient'`,
-		nowNano, wire,
+		`UPDATE sync_failures
+		SET failure_role = ?, next_retry_at = ?
+		WHERE scope_key = ? AND failure_role = ? AND next_retry_at IS NULL AND category = ?`,
+		synctypes.FailureRoleItem, nowNano, wire, synctypes.FailureRoleHeld, synctypes.CategoryTransient,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("sync: setting scope retry-at for %s: %w", wire, err)
@@ -663,7 +782,7 @@ func scanSyncFailureRows(rows *sql.Rows) ([]synctypes.SyncFailureRow, error) {
 		var r synctypes.SyncFailureRow
 		var wireScopeKey string
 		if scanErr := rows.Scan(
-			&r.Path, &r.DriveID, &r.Direction, &r.Category,
+			&r.Path, &r.DriveID, &r.Direction, &r.Role, &r.Category,
 			&r.IssueType, &r.ItemID,
 			&r.FailureCount, &r.NextRetryAt,
 			&r.LastError, &r.HTTPStatus,

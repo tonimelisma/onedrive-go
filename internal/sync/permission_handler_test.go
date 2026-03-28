@@ -17,47 +17,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
-// ---------------------------------------------------------------------------
-// mockScopeManager — test double for the scopeManager interface
-// ---------------------------------------------------------------------------
-
-type mockScopeManager struct {
-	scopeBlocks     map[synctypes.ScopeKey]*synctypes.ScopeBlock
-	scopeClears     []synctypes.ScopeKey
-	scopeDiscards   []synctypes.ScopeKey
-	setScopeCount   int
-	clearScopeCount int
-	discardCount    int
-}
-
-func newMockScopeManager(_ bool) *mockScopeManager {
-	return &mockScopeManager{
-		scopeBlocks: make(map[synctypes.ScopeKey]*synctypes.ScopeBlock),
-	}
-}
-
-func (m *mockScopeManager) activateScope(_ context.Context, block synctypes.ScopeBlock) error {
-	blockCopy := block
-	m.scopeBlocks[block.Key] = &blockCopy
-	m.setScopeCount++
-	return nil
-}
-
-func (m *mockScopeManager) releaseScope(_ context.Context, key synctypes.ScopeKey) error {
-	m.scopeClears = append(m.scopeClears, key)
-	m.clearScopeCount++
-	delete(m.scopeBlocks, key)
-	return nil
-}
-
-func (m *mockScopeManager) discardScope(_ context.Context, key synctypes.ScopeKey) error {
-	m.scopeDiscards = append(m.scopeDiscards, key)
-	m.discardCount++
-	delete(m.scopeBlocks, key)
-	return nil
-}
-
-// ---------------------------------------------------------------------------
 // mockFailureRecorder — minimal SyncFailureRecorder for direct tests
 // ---------------------------------------------------------------------------
 
@@ -119,7 +78,7 @@ func (m *mockFailureRecorder) ResetRetryTimesForScope(_ context.Context, _ synct
 // Direct PermissionHandler unit tests
 // ---------------------------------------------------------------------------
 
-func newTestPermHandler(t *testing.T, recorder *mockFailureRecorder, checker synctypes.PermissionChecker, sm *mockScopeManager) (*PermissionHandler, string) {
+func newTestPermHandler(t *testing.T, recorder *mockFailureRecorder, checker synctypes.PermissionChecker) (*PermissionHandler, string) {
 	t.Helper()
 
 	syncRoot := filepath.Join(t.TempDir(), "sync")
@@ -132,7 +91,6 @@ func newTestPermHandler(t *testing.T, recorder *mockFailureRecorder, checker syn
 		driveID:     driveid.New("test-drive"),
 		logger:      slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		nowFn:       time.Now,
-		scopeMgr:    sm,
 	}, syncRoot
 }
 
@@ -141,12 +99,11 @@ func TestPermHandler_Handle403_NilChecker(t *testing.T) {
 	t.Parallel()
 
 	recorder := newMockFailureRecorder()
-	sm := newMockScopeManager(false)
-	ph, _ := newTestPermHandler(t, recorder, nil, sm)
+	ph, _ := newTestPermHandler(t, recorder, nil)
 
 	// nil permChecker → always returns false.
 	result := ph.handle403(t.Context(), &synctypes.Baseline{}, "some/path.txt", nil)
-	assert.False(t, result)
+	assert.False(t, result.Matched)
 	assert.Empty(t, recorder.failures, "should not record any failure")
 }
 
@@ -156,39 +113,36 @@ func TestPermHandler_Handle403_NoShortcutMatch(t *testing.T) {
 
 	checker := &mockPermChecker{perms: map[string][]graph.Permission{}}
 	recorder := newMockFailureRecorder()
-	sm := newMockScopeManager(false)
-	ph, _ := newTestPermHandler(t, recorder, checker, sm)
+	ph, _ := newTestPermHandler(t, recorder, checker)
 
 	// No shortcuts → returns false.
 	result := ph.handle403(t.Context(), &synctypes.Baseline{}, "unmatched/path.txt", nil)
-	assert.False(t, result)
+	assert.False(t, result.Matched)
 }
 
 func TestPermHandler_HandlePermissionCheckError_NotFound(t *testing.T) {
 	t.Parallel()
 
 	recorder := newMockFailureRecorder()
-	sm := newMockScopeManager(false)
-	ph, _ := newTestPermHandler(t, recorder, nil, sm)
+	ph, _ := newTestPermHandler(t, recorder, nil)
 
 	// ErrNotFound → records failure and returns true.
 	result := ph.handlePermissionCheckError(t.Context(), graph.ErrNotFound, "failed/file.txt", "failed")
-	assert.True(t, result)
-	require.Len(t, recorder.failures, 1)
-	assert.Equal(t, "failed", recorder.failures[0].Path)
-	assert.Equal(t, synctypes.IssuePermissionDenied, recorder.failures[0].IssueType)
+	assert.True(t, result.Matched)
+	assert.Equal(t, permissionCheckActivateBoundaryScope, result.Kind)
+	assert.Equal(t, "failed", result.Failure.Path)
+	assert.Equal(t, synctypes.IssuePermissionDenied, result.Failure.IssueType)
 }
 
 func TestPermHandler_HandlePermissionCheckError_OtherError(t *testing.T) {
 	t.Parallel()
 
 	recorder := newMockFailureRecorder()
-	sm := newMockScopeManager(false)
-	ph, _ := newTestPermHandler(t, recorder, nil, sm)
+	ph, _ := newTestPermHandler(t, recorder, nil)
 
 	// Other errors → returns false, no failure recorded.
 	result := ph.handlePermissionCheckError(t.Context(), errors.New("timeout"), "failed/file.txt", "failed")
-	assert.False(t, result)
+	assert.False(t, result.Matched)
 	assert.Empty(t, recorder.failures)
 }
 
@@ -196,8 +150,7 @@ func TestPermHandler_HandleLocalPermission_SyncRootInaccessible(t *testing.T) {
 	t.Parallel()
 
 	recorder := newMockFailureRecorder()
-	sm := newMockScopeManager(false)
-	ph, syncRoot := newTestPermHandler(t, recorder, nil, sm)
+	ph, syncRoot := newTestPermHandler(t, recorder, nil)
 
 	// Make sync root inaccessible.
 	require.NoError(t, os.Chmod(syncRoot, 0o000))
@@ -207,21 +160,19 @@ func TestPermHandler_HandleLocalPermission_SyncRootInaccessible(t *testing.T) {
 		ErrMsg:     "permission denied",
 	}
 
-	ph.handleLocalPermission(t.Context(), r)
+	decision := ph.handleLocalPermission(t.Context(), r)
 
-	// Should record a top-level failure, not a scope block.
-	require.Len(t, recorder.failures, 1)
-	assert.Equal(t, synctypes.IssueLocalPermissionDenied, recorder.failures[0].IssueType)
-	assert.Equal(t, synctypes.CategoryActionable, recorder.failures[0].Category)
-	assert.Empty(t, sm.scopeBlocks, "no scope block for sync root failure")
+	require.True(t, decision.Matched)
+	assert.Equal(t, permissionCheckRecordFileFailure, decision.Kind)
+	assert.Equal(t, synctypes.IssueLocalPermissionDenied, decision.Failure.IssueType)
+	assert.Equal(t, synctypes.CategoryActionable, decision.Failure.Category)
 }
 
 func TestPermHandler_HandleLocalPermission_DirectoryLevel(t *testing.T) {
 	t.Parallel()
 
 	recorder := newMockFailureRecorder()
-	sm := newMockScopeManager(false)
-	ph, syncRoot := newTestPermHandler(t, recorder, nil, sm)
+	ph, syncRoot := newTestPermHandler(t, recorder, nil)
 
 	// Create directory structure, then make subdir inaccessible.
 	subDir := filepath.Join(syncRoot, "blocked")
@@ -233,21 +184,20 @@ func TestPermHandler_HandleLocalPermission_DirectoryLevel(t *testing.T) {
 		ErrMsg:     "permission denied",
 	}
 
-	ph.handleLocalPermission(t.Context(), r)
+	decision := ph.handleLocalPermission(t.Context(), r)
 
-	// Should record failure at directory level and create scope block.
-	require.Len(t, recorder.failures, 1)
-	assert.Equal(t, "blocked", recorder.failures[0].Path)
-	assert.Equal(t, synctypes.IssueLocalPermissionDenied, recorder.failures[0].IssueType)
-	assert.Len(t, sm.scopeBlocks, 1, "should create scope block for directory")
+	require.True(t, decision.Matched)
+	assert.Equal(t, permissionCheckActivateBoundaryScope, decision.Kind)
+	assert.Equal(t, "blocked", decision.Failure.Path)
+	assert.Equal(t, synctypes.IssueLocalPermissionDenied, decision.Failure.IssueType)
+	assert.Equal(t, synctypes.SKPermDir("blocked"), decision.ScopeBlock.Key)
 }
 
 func TestPermHandler_HandleLocalPermission_FileLevel(t *testing.T) {
 	t.Parallel()
 
 	recorder := newMockFailureRecorder()
-	sm := newMockScopeManager(false)
-	ph, syncRoot := newTestPermHandler(t, recorder, nil, sm)
+	ph, syncRoot := newTestPermHandler(t, recorder, nil)
 
 	// Create directory (accessible) with a file reference.
 	subDir := filepath.Join(syncRoot, "accessible")
@@ -259,20 +209,18 @@ func TestPermHandler_HandleLocalPermission_FileLevel(t *testing.T) {
 		ErrMsg:     "permission denied",
 	}
 
-	ph.handleLocalPermission(t.Context(), r)
+	decision := ph.handleLocalPermission(t.Context(), r)
 
-	// File-level: no scope block, failure at file level.
-	require.Len(t, recorder.failures, 1)
-	assert.Equal(t, "accessible/file.txt", recorder.failures[0].Path)
-	assert.Empty(t, sm.scopeBlocks, "no scope block for file-level issues")
+	require.True(t, decision.Matched)
+	assert.Equal(t, permissionCheckRecordFileFailure, decision.Kind)
+	assert.Equal(t, "accessible/file.txt", decision.Failure.Path)
 }
 
 func TestPermHandler_RecheckLocalPermissions_Restored(t *testing.T) {
 	t.Parallel()
 
 	recorder := newMockFailureRecorder()
-	sm := newMockScopeManager(true)
-	ph, syncRoot := newTestPermHandler(t, recorder, nil, sm)
+	ph, syncRoot := newTestPermHandler(t, recorder, nil)
 
 	// Create the directory (accessible).
 	subDir := filepath.Join(syncRoot, "restored")
@@ -287,21 +235,18 @@ func TestPermHandler_RecheckLocalPermissions_Restored(t *testing.T) {
 		},
 	}
 
-	ph.recheckLocalPermissions(t.Context())
+	decisions := ph.recheckLocalPermissions(t.Context())
 
-	// Scoped restoration should request a scope release rather than a
-	// file-by-file clear.
-	assert.Empty(t, recorder.clearPaths)
-	require.Len(t, sm.scopeClears, 1)
-	assert.Equal(t, scopeKey, sm.scopeClears[0])
+	require.Len(t, decisions, 1)
+	assert.Equal(t, permissionRecheckReleaseScope, decisions[0].Kind)
+	assert.Equal(t, scopeKey, decisions[0].ScopeKey)
 }
 
 func TestPermHandler_RecheckLocalPermissions_StillDenied(t *testing.T) {
 	t.Parallel()
 
 	recorder := newMockFailureRecorder()
-	sm := newMockScopeManager(true)
-	ph, syncRoot := newTestPermHandler(t, recorder, nil, sm)
+	ph, syncRoot := newTestPermHandler(t, recorder, nil)
 
 	// Create and immediately make inaccessible.
 	subDir := filepath.Join(syncRoot, "blocked")
@@ -316,19 +261,17 @@ func TestPermHandler_RecheckLocalPermissions_StillDenied(t *testing.T) {
 		},
 	}
 
-	ph.recheckLocalPermissions(t.Context())
+	decisions := ph.recheckLocalPermissions(t.Context())
 
-	// Should NOT clear — directory still inaccessible.
-	assert.Empty(t, recorder.clearPaths)
-	assert.Empty(t, sm.scopeClears)
+	require.Len(t, decisions, 1)
+	assert.Equal(t, permissionRecheckKeepScope, decisions[0].Kind)
 }
 
 func TestPermHandler_ClearScannerResolved_FileLevel(t *testing.T) {
 	t.Parallel()
 
 	recorder := newMockFailureRecorder()
-	sm := newMockScopeManager(false)
-	ph, _ := newTestPermHandler(t, recorder, nil, sm)
+	ph, _ := newTestPermHandler(t, recorder, nil)
 
 	recorder.byIssueType[synctypes.IssueLocalPermissionDenied] = []synctypes.SyncFailureRow{
 		{
@@ -338,18 +281,18 @@ func TestPermHandler_ClearScannerResolved_FileLevel(t *testing.T) {
 	}
 
 	observed := map[string]bool{"docs/file.txt": true}
-	ph.clearScannerResolvedPermissions(t.Context(), observed)
+	decisions := ph.clearScannerResolvedPermissions(t.Context(), observed)
 
-	require.Len(t, recorder.clearPaths, 1)
-	assert.Equal(t, "docs/file.txt", recorder.clearPaths[0])
+	require.Len(t, decisions, 1)
+	assert.Equal(t, permissionRecheckClearFileFailure, decisions[0].Kind)
+	assert.Equal(t, "docs/file.txt", decisions[0].Path)
 }
 
 func TestPermHandler_ClearScannerResolved_DirLevel(t *testing.T) {
 	t.Parallel()
 
 	recorder := newMockFailureRecorder()
-	sm := newMockScopeManager(true)
-	ph, _ := newTestPermHandler(t, recorder, nil, sm)
+	ph, _ := newTestPermHandler(t, recorder, nil)
 
 	scopeKey := synctypes.SKPermDir("blocked")
 	recorder.byIssueType[synctypes.IssueLocalPermissionDenied] = []synctypes.SyncFailureRow{
@@ -362,19 +305,18 @@ func TestPermHandler_ClearScannerResolved_DirLevel(t *testing.T) {
 
 	// Observed a path under the blocked directory.
 	observed := map[string]bool{"blocked/child.txt": true}
-	ph.clearScannerResolvedPermissions(t.Context(), observed)
+	decisions := ph.clearScannerResolvedPermissions(t.Context(), observed)
 
-	assert.Empty(t, recorder.clearPaths)
-	require.Len(t, sm.scopeClears, 1)
-	assert.Equal(t, scopeKey, sm.scopeClears[0])
+	require.Len(t, decisions, 1)
+	assert.Equal(t, permissionRecheckReleaseScope, decisions[0].Kind)
+	assert.Equal(t, scopeKey, decisions[0].ScopeKey)
 }
 
 func TestPermHandler_ClearScannerResolved_ReleasesScopedIssueInOneShotMode(t *testing.T) {
 	t.Parallel()
 
 	recorder := newMockFailureRecorder()
-	sm := newMockScopeManager(false) // NOT watch mode
-	ph, _ := newTestPermHandler(t, recorder, nil, sm)
+	ph, _ := newTestPermHandler(t, recorder, nil)
 
 	scopeKey := synctypes.SKPermDir("blocked")
 	recorder.byIssueType[synctypes.IssueLocalPermissionDenied] = []synctypes.SyncFailureRow{
@@ -386,9 +328,9 @@ func TestPermHandler_ClearScannerResolved_ReleasesScopedIssueInOneShotMode(t *te
 	}
 
 	observed := map[string]bool{"blocked/child.txt": true}
-	ph.clearScannerResolvedPermissions(t.Context(), observed)
+	decisions := ph.clearScannerResolvedPermissions(t.Context(), observed)
 
-	assert.Empty(t, recorder.clearPaths)
-	require.Len(t, sm.scopeClears, 1)
-	assert.Equal(t, scopeKey, sm.scopeClears[0], "scoped permission recovery should release the scope in one-shot mode too")
+	require.Len(t, decisions, 1)
+	assert.Equal(t, permissionRecheckReleaseScope, decisions[0].Kind)
+	assert.Equal(t, scopeKey, decisions[0].ScopeKey, "scoped permission recovery should release the scope in one-shot mode too")
 }

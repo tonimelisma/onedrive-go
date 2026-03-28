@@ -212,8 +212,8 @@ func (b *Buffer) addLocked(ev *synctypes.ChangeEvent) {
 	// Currently only RemoteObserver produces ChangeMove events (from
 	// delta's parentReference changes). LocalObserver detects moves via
 	// hash correlation in the planner, not ChangeMove events. This
-	// dual-keying is forward-compatible for Phase 5 (watch mode) when
-	// LocalObserver.Watch() may detect renames via inotify/FSEvents.
+	// dual-keying stays correct if watch-mode local observation later emits
+	// rename events directly instead of relying only on planner correlation.
 	if ev.Type == synctypes.ChangeMove && ev.OldPath != "" {
 		synthetic := synctypes.ChangeEvent{
 			Source:    ev.Source,
