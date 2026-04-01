@@ -361,6 +361,8 @@ func TestWatch_DirectoryCollision_Suppressed(t *testing.T) {
 func TestWatch_TwoDirectoryCollision_Suppressed(t *testing.T) {
 	t.Parallel()
 
+	const docsName = "docs"
+
 	dir := t.TempDir()
 	skipIfCaseInsensitiveFS(t, dir)
 
@@ -368,7 +370,7 @@ func TestWatch_TwoDirectoryCollision_Suppressed(t *testing.T) {
 	docsDir := filepath.Join(dir, "Docs")
 	require.NoError(t, os.Mkdir(docsDir, 0o700))
 
-	docsLower := filepath.Join(dir, "docs")
+	docsLower := filepath.Join(dir, docsName)
 	require.NoError(t, os.Mkdir(docsLower, 0o700))
 
 	mockWatcher := newMockFsWatcher()
@@ -396,7 +398,7 @@ func TestWatch_TwoDirectoryCollision_Suppressed(t *testing.T) {
 	// The directory create should be suppressed.
 	select {
 	case ev := <-events:
-		if ev.ItemType == synctypes.ItemTypeFolder && ev.Name == "docs" {
+		if ev.ItemType == synctypes.ItemTypeFolder && ev.Name == docsName {
 			require.FailNow(t, "directory event should be suppressed due to case collision", "got %+v", ev)
 		}
 	case <-time.After(500 * time.Millisecond):

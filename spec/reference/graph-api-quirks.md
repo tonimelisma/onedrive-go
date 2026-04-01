@@ -94,6 +94,10 @@ After token refresh, `/me/drives` returns HTTP 403 with Graph code `accessDenied
 
 Webhook subscription renewal (PATCH to `/v1.0/subscriptions/{id}`) returns HTTP 308 (Permanent Redirect) without a `Location` header, violating RFC 7538. Observed on Personal accounts migrated to the new backend, specifically in the West Europe data center. Filed as [onedrive-api-docs#1895](https://github.com/OneDrive/onedrive-api-docs/issues/1895).
 
+### Personal Async Copy Monitor Host
+
+Async copy responses on Personal accounts can return monitor URLs on `*.microsoftpersonalcontent.com` rather than Graph or SharePoint hosts. The client treats this host family as trusted for copy monitor polling only. This host is not automatically trusted for upload-session URLs or Graph base URLs without separate evidence.
+
 ### Historical HTTP 400 "ObjectHandle is Invalid" Incident
 
 One multi-hour Microsoft-side backend incident was observed returning HTTP 400 with message text such as `"ObjectHandle is Invalid"` across Graph API calls. The repository no longer has recoverable CI payload evidence for the exact body shape, so the runtime does **not** implement a special classifier for this incident. If the behavior reappears and CI captures the payload, targeted handling can be reconsidered. Observed: one 3.5-hour incident.

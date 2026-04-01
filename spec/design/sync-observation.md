@@ -70,7 +70,9 @@ Extracted filesystem walker for full-scan mode. Produces change events by walkin
 
 **`SkippedItem`** — Defined in `types.go`: `{Path string, Reason string, Detail string, FileSize int64}`. Represents a file that was observed but excluded from the event stream due to validation failure. `FileSize` is populated for `IssueFileTooLarge` (after stat). Collected during full scan and returned in `ScanResult.Skipped`. The engine processes these via `recordSkippedItems()` and `clearResolvedSkippedItems()`.
 
-**Shared local metadata fast path** — `CanReuseBaselineHash(info, base, observeStartNano)` centralizes the scanner's mtime+size fast path plus the 1-second racily-clean guard. The scanner uses it during full scans, and the sync engine reuses the same helper for upload retry/reobserve paths. This keeps "unchanged local file" detection consistent across full scans, retrier sweeps, and trial re-observation.
+**Shared local metadata fast path** — `CanReuseBaselineHash(info, base, observeStartNano)` centralizes the scanner's mtime+size fast path plus the 1-second racily-clean guard. The scanner uses it during full scans, and the sync engine reuses the same helper when retry/trial planner work reconstructs upload-side local observation. This keeps "unchanged local file" detection consistent across full scans, retrier sweeps, and trial redispatch.
+
+**Single-path local reconstruction** — `ObserveSinglePath()` rebuilds one local path from current truth for engine-owned retry/trial work. It applies the same per-path rules as normal observation: `ShouldObserve`, oversized-file rejection, baseline-hash reuse, and “emit with empty hash” behavior when hashing fails. Internal exclusions resolve the retry/trial candidate silently; actionable validation failures become `SkippedItem`s that the engine records into `sync_failures`.
 
 **Case Collision Detection** (`detectCaseCollisions`) — Post-walk pure function that detects local files whose names differ only in case. OneDrive uses a case-insensitive namespace — uploading both would cause one to silently overwrite the other. Implements: R-2.12 [verified]
 
@@ -97,7 +99,8 @@ Remote shared-folder permission handling lives in the sync engine (`permission_h
 The observation layer only intersects with permission handling in two places:
 
 - the local scanner can prove a previously inaccessible local path is accessible again, which lets the engine auto-clear `perm:dir` failures
-- the shared `CanReuseBaselineHash` helper keeps upload retry/reobserve logic consistent with normal local observation
+- the shared `CanReuseBaselineHash` helper keeps upload retry/trial reconstruction logic consistent with normal local observation
+- `ObserveSinglePath` keeps retry/trial reconstruction aligned with current local validation and hash-failure semantics instead of maintaining a separate engine-local observer variant
 
 Remote 403 detection itself is engine-owned: the engine confirms denials with
 `ListItemPermissions`, records one persisted `perm:remote:{localPath}`

@@ -1,6 +1,6 @@
 # Sync Engine
 
-GOVERNS: internal/sync/engine.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/engine_shortcuts.go, internal/sync/orchestrator.go, internal/sync/drive_runner.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_decisions.go, sync.go, sync_helpers.go
+GOVERNS: internal/sync/engine*.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/engine_shortcuts.go, internal/sync/orchestrator.go, internal/sync/drive_runner.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_decisions.go, sync.go, sync_helpers.go
 
 Implements: R-2.1 [verified], R-2.6 [verified], R-2.8 [verified], R-3.4.2 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.35 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [planned], R-6.6.10 [verified], R-6.6.12 [verified], R-6.7.27 [verified], R-6.8.15 [verified]
 
@@ -55,7 +55,7 @@ The engine relies on a few non-negotiable behavioral invariants:
 4. **Trial success release**: a successful trial must clear the persistent
    scope block and make held transient failures retryable immediately via the
    scope-release path. Scope release also triggers an immediate retrier wakeup,
-   so re-entry happens through the normal retrier/buffer/planner path without
+   so re-entry happens through the normal retrier/planner path without
    any new external observation.
 5. **Permission recheck release**: both local permission recovery paths
    (`recheckLocalPermissions` and `clearScannerResolvedPermissions`) and the
@@ -80,15 +80,17 @@ The engine relies on a few non-negotiable behavioral invariants:
 one-shot mode (`RunOnce`), non-nil in watch mode (`RunWatch`). Methods use
 `e.watch != nil` as a single guard replacing individual field nil-checks.
 
-Fields on watchState: activeScopes, scopeState, buf, deleteCounter,
-lastDataVersion, trialPending, trialTimer, retryTimer, retryTimerCh,
-remoteObs, localObs, nextActionID, lastPermRecheck, lastSummaryTotal,
-reconcileRunning.
+`watchState` is grouped by ownership domain:
 
-Fields remaining on Engine (used in both modes): depGraph, readyCh,
-trialCh, watchShortcuts, watchShortcutsMu. `watchShortcuts` stays on Engine
-because `setWatchShortcuts` is called from `RunOnce` where `e.watch == nil`;
-moving it would break 403 handling in one-shot mode.
+- `watchRuntimeState`: active scopes, scope detection state, next action ID
+- `watchObservationState`: buffer, delete counter, data-version snapshot, observer references
+- `watchTimerState`: retry/trial timers and permission-recheck timing
+- `watchReconcileState`: reconcile handoff channel, in-flight flag, summary cache, test hook
+
+Fields remaining on Engine (used in both modes): depGraph, readyCh, trialCh,
+shortcuts. `shortcuts` stays on Engine because one-shot result handling and
+watch reconciliation both need the latest shared-folder snapshot even when
+`e.watch == nil`.
 
 `deleteCounter` requires a double guard (`e.watch != nil &&
 e.watch.deleteCounter != nil`) because watch mode with `force=true` skips
@@ -153,7 +155,8 @@ Scope-blocked actions are not held in memory. Instead, `processWorkerResult`
 records the failure in `sync_failures` and calls `depGraph.Complete()`. When
 the scope clears, `releaseScope` deletes the persisted scope row, deletes the
 boundary issue row, marks held descendants retryable immediately, and kicks the
-retry sweep so they re-enter via buffer → planner → DepGraph.
+retry sweep so they re-enter via the engine-owned retry work path and the
+normal planner/DepGraph flow.
 
 Trial result routing: `processTrialResult()` handles all trial outcomes with an
 early return — trial results never enter the normal `processWorkerResult()`
@@ -169,22 +172,27 @@ service 10m (R-2.10.6/R-2.10.8/R-2.10.14).
 **Trial dispatch**: `runTrialDispatch()` is called from the watch loop when the
 trial timer fires. It snapshots due scope keys from the watch-owned
 `activeScopes` slice, then iterates each exactly once. For each scope it uses
-`PickTrialCandidate` from `sync_failures` to find an actual blocked item for
-re-observation and dispatch. `reobserve` returns `(*ChangeEvent, time.Duration)`
-— the `RetryAfter` duration is forwarded to `extendScopeTrial` when the scope
-condition persists (R-2.10.7). On successful dispatch, the trial interval is
-NOT extended until the worker result arrives. Trial actions are marked
-`IsTrial=true` with `TrialScopeKey` set.
+`PickTrialCandidate` from `sync_failures` to find an actual blocked item,
+rebuilds planner input from durable state plus current local truth, and sends
+that through the normal planner/admission path as an explicit internal trial
+work request. No bespoke `reobserve` API path remains. If current local
+observation now rejects the candidate (for example, oversized file), the held
+row is converted into an actionable failure and trial selection continues. On
+successful dispatch, the trial interval is NOT extended until the worker result
+arrives. Trial actions are marked `IsTrial=true` with `TrialScopeKey` set.
 
 **Retry sweep**: Retry is integrated directly into the watch loop via
 `runRetrierSweep()` — no separate goroutine. The watch loop's select includes
 a retry timer that triggers sweeps of `sync_failures` for items whose
 `next_retry_at` has expired. Each sweep is batch-limited with zero-delay re-arm
 when the batch is full. Items are checked via `isFailureResolved()` before
-re-injection (D-11 fix: prevents re-dispatching items whose underlying
-condition has resolved). Re-injection uses `createEventFromDB` (full
-`remote_state` for downloads, `observeLocalFile` for uploads) to feed items
-through the normal buffer, planner, and DepGraph pipeline.
+redispatch (D-11 fix: prevents re-dispatching items whose underlying condition
+has resolved). Redispatch rebuilds planner input from durable state via the
+retry/trial rebuild path (full `remote_state` for downloads, `ObserveSinglePath`
+for upload-side local truth) and sends it through the same engine-owned planner
+work path that normal observation uses after buffering. Current local
+validation failures are converted into actionable failures instead of being
+silently dropped.
 
 `feedScopeDetection()` feeds results into `ScopeState.UpdateScope()`. When a
 threshold is crossed, it creates or refreshes a persisted scope block via
@@ -390,9 +398,19 @@ Cobra command wiring. Sets up the orchestrator, handles `--watch`, `--download-o
 
 `runFullReconciliationAsync` spawns a goroutine for full delta enumeration + orphan detection. Non-blocking — the watch loop continues processing events while reconciliation runs.
 
-**Event flow**: Events are fed into the watch buffer via `buf.Add()` (mutex-protected), then flow through `FlushDebounced → processBatch` in the watch loop. This avoids calling `processBatch` directly from the goroutine, which would race with the watch loop's own `processBatch` calls.
+**Event flow**: The reconciliation goroutine never dispatches directly. It
+observes and commits, packages the resulting events plus refreshed shortcut
+snapshot into a `reconcileResult`, and sends that result back over the
+watch-owned `reconcileResults` channel. The watch loop then applies the result
+on its own goroutine by updating `shortcuts`, clearing `reconcileActive`, and
+feeding any resulting events into `buf.Add()`.
 
-**Concurrency guard**: `watchState.reconcileRunning` (`atomic.Bool`) prevents overlapping reconciliations. `CompareAndSwap(false, true)` at entry; `Store(false)` in defer. If a previous reconciliation is still running when the next tick fires, it is skipped and logged at Info level (lifecycle event, not debug detail).
+**Concurrency guard**: `watchState.reconcileActive` is owned by the watch loop.
+`runFullReconciliationAsync` sets it before launching the goroutine and skips a
+new launch while it remains true. The goroutine never clears the flag directly;
+only the watch loop clears it when it applies the returned `reconcileResult`.
+This preserves single-owner engine state while still allowing asynchronous
+observation/commit work.
 
 **Shutdown awareness**: After `CommitObservation` succeeds, a `ctx.Err()` check detects shutdown — if the context is canceled, the function returns immediately without feeding events to the buffer (the watch loop is also shutting down and won't process them). Next startup re-observes idempotently. Error logging during delta observation is also suppressed when `ctx.Err() != nil` — context cancellation during shutdown is not a terminal failure.
 
@@ -421,5 +439,5 @@ In watch mode, the planner-level big-delete check is disabled (`threshold=MaxInt
 
 ### Rationale
 
-- **Crash recovery requires explicit bridging**: On restart after crash, `ResetInProgressStates` resets `remote_state` items stuck mid-execution to pending, AND creates `sync_failures` entries so the engine retry sweep can rediscover them. This is necessary because the delta token was already advanced before execution — items that crashed mid-execution won't appear in the next delta response. The planner is idempotent for items that DO appear in observations, but crash recovery items need the `sync_failures` → retrier → buffer → planner path.
+- **Crash recovery requires explicit bridging**: On restart after crash, `ResetInProgressStates` resets `remote_state` items stuck mid-execution to pending, AND creates `sync_failures` entries so the engine retry sweep can rediscover them. This is necessary because the delta token was already advanced before execution — items that crashed mid-execution won't appear in the next delta response. The planner is idempotent for items that DO appear in observations, but crash recovery items need the `sync_failures` → retrier → planner path.
 - **Always use Orchestrator, even for single drive**: N=1 means one DriveRunner — same logic, no special case. Prevents "works for N=1 but breaks for N=2" class of bugs.
