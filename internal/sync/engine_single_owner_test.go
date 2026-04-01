@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
 	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
@@ -665,7 +664,7 @@ func TestEngine_ProcessAndRoute_Success(t *testing.T) {
 	assert.Equal(t, "child.txt", dispatched[0].Action.Path)
 
 	// Succeeded counter should increment.
-	assert.Equal(t, int32(1), eng.succeeded.Load())
+	assert.Equal(t, 1, eng.succeeded)
 }
 
 func TestEngine_ProcessAndRoute_FailureCascadesChildren(t *testing.T) {
@@ -942,12 +941,10 @@ func TestRetrierSweep_BatchLimit(t *testing.T) {
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(rows), total)
 
-	eng.watch.buf = syncobserve.NewBuffer(eng.logger)
-
-	eng.runRetrierSweep(ctx)
+	outbox := runTestRetrierSweep(t, eng, ctx)
 
 	// Should dispatch exactly retryBatchSize items.
-	assert.Equal(t, retryBatchSize, eng.watch.buf.Len(),
+	assert.Len(t, outbox, retryBatchSize,
 		"sweep should be batch-limited to retryBatchSize")
 
 	// retryTimerCh should have a signal for remaining items.
@@ -1007,13 +1004,10 @@ func TestRetrierSweep_SkipsInFlight(t *testing.T) {
 		ItemID:  "in-flight-item",
 	}, 1, nil)
 
-	eng.watch.buf = syncobserve.NewBuffer(eng.logger)
-
-	eng.runRetrierSweep(ctx)
+	outbox := runTestRetrierSweep(t, eng, ctx)
 
 	// Should dispatch 2 items (a.txt and c.txt), skipping b.txt.
-	assert.Equal(t, 2, eng.watch.buf.Len(),
-		"sweep should skip in-flight items")
+	assert.Len(t, outbox, 2, "sweep should skip in-flight items")
 }
 
 // ---------------------------------------------------------------------------
@@ -1038,9 +1032,8 @@ func TestTrialDispatch_NoCandidates_ClearsScope(t *testing.T) {
 	})
 
 	// Do NOT seed any sync_failures for this scope — no candidates.
-	eng.watch.buf = syncobserve.NewBuffer(eng.logger)
-
-	eng.runTrialDispatch(ctx)
+	outbox := runTestTrialDispatch(t, eng, ctx)
+	assert.Empty(t, outbox)
 
 	// Scope should be cleared because there are no candidates.
 	assert.False(t, isTestScopeBlocked(eng, sk),
@@ -1312,10 +1305,7 @@ func TestCreateEventFromDB_Upload_FileGone(t *testing.T) {
 
 	ev := eng.createEventFromDB(ctx, row)
 
-	require.NotNil(t, ev, "should create delete event for missing file")
-	assert.Equal(t, synctypes.SourceLocal, ev.Source)
-	assert.Equal(t, synctypes.ChangeDelete, ev.Type)
-	assert.True(t, ev.IsDeleted)
+	assert.Nil(t, ev, "missing upload paths are treated as resolved retry candidates")
 }
 
 func TestCreateEventFromDB_Download_RemoteStateExists(t *testing.T) {
@@ -1585,289 +1575,6 @@ func TestIsFailureResolved_Delete_BaselineExists(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// reobserve
-// ---------------------------------------------------------------------------
-
-func TestReobserve_Remote_200(t *testing.T) {
-	t.Parallel()
-
-	mock := &engineMockClient{
-		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
-			return &graph.Item{
-				ID:           "live-item",
-				Name:         "live-file.txt",
-				DriveID:      driveid.New("drive1"),
-				ParentID:     "live-parent",
-				Size:         2048,
-				QuickXorHash: "live-hash",
-				ETag:         "live-etag",
-				ModifiedAt:   time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC),
-			}, nil
-		},
-	}
-
-	eng, _ := newTestEngine(t, mock)
-	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
-	ctx := context.Background()
-
-	driveID := driveid.New("drive1")
-
-	row := &synctypes.SyncFailureRow{
-		Path:      "live-file.txt",
-		DriveID:   driveID,
-		ItemID:    "live-item",
-		Direction: synctypes.DirectionDownload,
-	}
-
-	ev, retryAfter := eng.reobserve(ctx, row)
-
-	require.NotNil(t, ev)
-	assert.Equal(t, time.Duration(0), retryAfter, "200 should have zero RetryAfter")
-	assert.Equal(t, synctypes.SourceRemote, ev.Source)
-	assert.Equal(t, synctypes.ChangeModify, ev.Type)
-	assert.Equal(t, "live-item", ev.ItemID)
-	assert.Equal(t, "live-hash", ev.Hash)
-	assert.Equal(t, int64(2048), ev.Size)
-	assert.Equal(t, "live-etag", ev.ETag)
-	assert.Equal(t, "live-file.txt", ev.Name)
-}
-
-func TestReobserve_Remote_404(t *testing.T) {
-	t.Parallel()
-
-	mock := &engineMockClient{
-		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
-			return nil, &graph.GraphError{
-				StatusCode: 404,
-				Err:        graph.ErrNotFound,
-				Message:    "item not found",
-			}
-		},
-	}
-
-	eng, _ := newTestEngine(t, mock)
-	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
-	ctx := context.Background()
-
-	driveID := driveid.New("drive1")
-
-	row := &synctypes.SyncFailureRow{
-		Path:      "deleted-remotely.txt",
-		DriveID:   driveID,
-		ItemID:    "deleted-item",
-		Direction: synctypes.DirectionDownload,
-	}
-
-	ev, retryAfter := eng.reobserve(ctx, row)
-
-	require.NotNil(t, ev)
-	assert.Equal(t, time.Duration(0), retryAfter, "404 should have zero RetryAfter")
-	assert.Equal(t, synctypes.ChangeDelete, ev.Type)
-	assert.True(t, ev.IsDeleted)
-	assert.Equal(t, "deleted-item", ev.ItemID)
-}
-
-func TestReobserve_Remote_429(t *testing.T) {
-	t.Parallel()
-
-	mock := &engineMockClient{
-		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
-			return nil, &graph.GraphError{
-				StatusCode: 429,
-				Err:        graph.ErrThrottled,
-				Message:    "too many requests",
-			}
-		},
-	}
-
-	eng, _ := newTestEngine(t, mock)
-	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
-	ctx := context.Background()
-
-	driveID := driveid.New("drive1")
-
-	row := &synctypes.SyncFailureRow{
-		Path:      "throttled.txt",
-		DriveID:   driveID,
-		ItemID:    "throttled-item",
-		Direction: synctypes.DirectionDownload,
-	}
-
-	ev, retryAfter := eng.reobserve(ctx, row)
-
-	assert.Nil(t, ev, "should return nil when scope condition persists (429)")
-	assert.Equal(t, time.Duration(0), retryAfter, "429 without Retry-After header should return 0")
-}
-
-func TestReobserve_Remote_RetryAfterErrors(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name       string
-		statusCode int
-		err        error
-		message    string
-		retryAfter time.Duration
-		path       string
-		itemID     string
-	}{
-		{
-			name:       "throttled",
-			statusCode: 429,
-			err:        graph.ErrThrottled,
-			message:    "too many requests",
-			retryAfter: 90 * time.Second,
-			path:       "throttled-retry.txt",
-			itemID:     "throttled-retry-item",
-		},
-		{
-			name:       "insufficient_storage",
-			statusCode: 507,
-			err:        graph.ErrServerError,
-			message:    "insufficient storage",
-			retryAfter: 120 * time.Second,
-			path:       "storage-full.txt",
-			itemID:     "storage-full-item",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			mock := &engineMockClient{
-				getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
-					return nil, &graph.GraphError{
-						StatusCode: tt.statusCode,
-						Err:        tt.err,
-						Message:    tt.message,
-						RetryAfter: tt.retryAfter,
-					}
-				},
-			}
-
-			eng, _ := newTestEngine(t, mock)
-			eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
-			ctx := context.Background()
-
-			ev, retryAfter := eng.reobserve(ctx, &synctypes.SyncFailureRow{
-				Path:      tt.path,
-				DriveID:   driveid.New("drive1"),
-				ItemID:    tt.itemID,
-				Direction: synctypes.DirectionDownload,
-			})
-
-			assert.Nil(t, ev, "should return nil when scope condition persists")
-			assert.Equal(t, tt.retryAfter, retryAfter, "should forward RetryAfter from GraphError")
-		})
-	}
-}
-
-func TestReobserve_Local_Exists(t *testing.T) {
-	t.Parallel()
-
-	mock := &engineMockClient{}
-	eng, syncRoot := newTestEngine(t, mock)
-	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
-	ctx := context.Background()
-
-	driveID := driveid.New("drive1")
-
-	// Create a real file.
-	require.NoError(t, os.WriteFile(
-		filepath.Join(syncRoot, "local-exists.txt"),
-		[]byte("local content"),
-		0o600,
-	))
-
-	row := &synctypes.SyncFailureRow{
-		Path:      "local-exists.txt",
-		DriveID:   driveID,
-		Direction: synctypes.DirectionUpload,
-	}
-
-	ev, retryAfter := eng.reobserve(ctx, row)
-
-	require.NotNil(t, ev)
-	assert.Equal(t, time.Duration(0), retryAfter, "local reobserve should have zero RetryAfter")
-	assert.Equal(t, synctypes.SourceLocal, ev.Source)
-	assert.Equal(t, synctypes.ChangeModify, ev.Type)
-	assert.NotEmpty(t, ev.Hash)
-	assert.Positive(t, ev.Size)
-}
-
-// Validates: R-2.10.7
-func TestReobserve_Local_ReusesBaselineHashWhenMetadataMatches(t *testing.T) {
-	t.Parallel()
-
-	mock := &engineMockClient{}
-	eng, _ := newTestEngine(t, mock)
-	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
-	ctx := context.Background()
-
-	driveID := driveid.New("drive1")
-	testFile := "local-fast-path.txt"
-	actualContent := []byte("actual data")
-	cachedHash := cachedLocalHash
-	oldTime := eng.nowFn().Add(-2 * time.Second)
-
-	require.NoError(t, os.WriteFile(filepath.Join(eng.syncRoot, testFile), actualContent, 0o600))
-	require.NoError(t, os.Chtimes(filepath.Join(eng.syncRoot, testFile), oldTime, oldTime))
-
-	info, err := os.Stat(filepath.Join(eng.syncRoot, testFile))
-	require.NoError(t, err)
-
-	actualHash, err := syncobserve.ComputeStableHash(filepath.Join(eng.syncRoot, testFile))
-	require.NoError(t, err)
-	require.NotEqual(t, actualHash, cachedHash, "test needs a distinct cached hash to prove reuse")
-
-	require.NoError(t, eng.baseline.CommitOutcome(ctx, &synctypes.Outcome{
-		Action:     synctypes.ActionUpload,
-		Success:    true,
-		Path:       testFile,
-		DriveID:    driveID,
-		ItemID:     "local-fast-path-item",
-		ItemType:   synctypes.ItemTypeFile,
-		LocalHash:  cachedHash,
-		RemoteHash: cachedHash,
-		Size:       info.Size(),
-		Mtime:      info.ModTime().UnixNano(),
-	}))
-
-	ev, retryAfter := eng.reobserve(ctx, &synctypes.SyncFailureRow{
-		Path:      testFile,
-		DriveID:   driveID,
-		Direction: synctypes.DirectionUpload,
-	})
-
-	require.NotNil(t, ev)
-	assert.Zero(t, retryAfter)
-	assert.Equal(t, cachedHash, ev.Hash, "local reobserve should share the same safe metadata fast path as the scanner")
-}
-
-func TestReobserve_Local_Gone(t *testing.T) {
-	t.Parallel()
-
-	mock := &engineMockClient{}
-	eng, _ := newTestEngine(t, mock)
-	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
-	ctx := context.Background()
-
-	driveID := driveid.New("drive1")
-
-	row := &synctypes.SyncFailureRow{
-		Path:      "gone-local.txt",
-		DriveID:   driveID,
-		Direction: synctypes.DirectionUpload,
-	}
-
-	ev, retryAfter := eng.reobserve(ctx, row)
-
-	require.NotNil(t, ev)
-	assert.Equal(t, time.Duration(0), retryAfter, "local gone should have zero RetryAfter")
-	assert.Equal(t, synctypes.ChangeDelete, ev.Type)
-	assert.True(t, ev.IsDeleted)
-}
-
-// ---------------------------------------------------------------------------
 // Integration: D-9 — retrier sweep creates full-fidelity events
 // ---------------------------------------------------------------------------
 
@@ -1906,22 +1613,12 @@ func TestRetrierSweep_FullFidelityEvents_D9(t *testing.T) {
 		return -time.Minute
 	}))
 
-	eng.watch.buf = syncobserve.NewBuffer(eng.logger)
-	eng.runRetrierSweep(ctx)
+	outbox := runTestRetrierSweep(t, eng, ctx)
 
-	// Verify the buffer contains a full-fidelity event.
-	result := eng.watch.buf.FlushImmediate()
-	require.Len(t, result, 1)
-	require.Len(t, result[0].RemoteEvents, 1)
-
-	ev := result[0].RemoteEvents[0]
-	assert.Equal(t, "d9-test.txt", ev.Path)
-	assert.Equal(t, "d9-item", ev.ItemID)
-	assert.Equal(t, "d9-hash", ev.Hash, "D-9: hash must be populated")
-	assert.Equal(t, int64(9999), ev.Size, "D-9: size must be populated")
-	assert.Equal(t, int64(7777777777), ev.Mtime, "D-9: mtime must be populated")
-	assert.Equal(t, "d9-etag", ev.ETag, "D-9: etag must be populated")
-	assert.Equal(t, "d9-test.txt", ev.Name, "D-9: name must be populated")
+	require.Len(t, outbox, 1)
+	assert.Equal(t, synctypes.ActionDownload, outbox[0].Action.Type)
+	assert.Equal(t, "d9-test.txt", outbox[0].Action.Path)
+	assert.Equal(t, driveID, outbox[0].Action.DriveID)
 }
 
 // ---------------------------------------------------------------------------
@@ -1980,13 +1677,11 @@ func TestRetrierSweep_SkipsResolvedFailures_D11(t *testing.T) {
 		}))
 	}
 
-	eng.watch.buf = syncobserve.NewBuffer(eng.logger)
-	eng.runRetrierSweep(ctx)
+	outbox := runTestRetrierSweep(t, eng, ctx)
 
 	// Only d11-pending should be dispatched (d11-synced is resolved).
-	result := eng.watch.buf.FlushImmediate()
-	require.Len(t, result, 1, "D-11: resolved failure should be skipped")
-	assert.Equal(t, "d11-pending.txt", result[0].Path)
+	require.Len(t, outbox, 1, "D-11: resolved failure should be skipped")
+	assert.Equal(t, "d11-pending.txt", outbox[0].Action.Path)
 
 	// The resolved failure should have been cleared from the DB.
 	failures, err := eng.baseline.ListSyncFailures(ctx)
@@ -1998,38 +1693,20 @@ func TestRetrierSweep_SkipsResolvedFailures_D11(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Integration: D-9 — trial dispatch uses reobserve
+// Integration: D-9 — trial dispatch uses engine-owned planner work
 // ---------------------------------------------------------------------------
 
-func TestTrialDispatch_UsesReobserve(t *testing.T) {
+func TestTrialDispatch_UsesPlannerWorkRequest(t *testing.T) {
 	t.Parallel()
 
-	mock := &engineMockClient{
-		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
-			return &graph.Item{
-				ID:           "trial-item",
-				Name:         "trial.txt",
-				DriveID:      driveid.New("drive1"),
-				ParentID:     "trial-parent",
-				Size:         4096,
-				QuickXorHash: "trial-hash",
-				ETag:         "trial-etag",
-				ModifiedAt:   time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC),
-			}, nil
-		},
-	}
-
-	eng, _ := newTestEngine(t, mock)
+	eng := newSingleOwnerEngine(t)
 	eng.nowFn = func() time.Time { return time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC) }
-	setupWatchEngine(t, eng)
-	eng.watch.buf = syncobserve.NewBuffer(eng.logger)
 	var events []engineDebugEvent
 	eng.debugEventHook = func(event engineDebugEvent) {
 		events = append(events, event)
 	}
 
 	ctx := context.Background()
-	driveID := driveid.New("drive1")
 	now := eng.nowFn()
 
 	sk := synctypes.SKQuotaOwn()
@@ -2043,15 +1720,17 @@ func TestTrialDispatch_UsesReobserve(t *testing.T) {
 		TrialInterval: 10 * time.Second,
 	})
 
+	absPath := filepath.Join(eng.syncRoot, "trial.txt")
+	require.NoError(t, os.WriteFile(absPath, []byte("trial payload"), 0o600))
+
 	// Seed a scope-blocked failure.
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "trial.txt",
-		DriveID:   driveID,
-		Direction: synctypes.DirectionDownload,
+		DriveID:   eng.driveID,
+		Direction: synctypes.DirectionUpload,
 		Role:      synctypes.FailureRoleHeld,
 		Category:  synctypes.CategoryTransient,
 		ScopeKey:  sk,
-		ItemID:    "trial-item",
 	}, nil))
 
 	// Capture the scope block's TrialInterval before dispatch.
@@ -2059,22 +1738,12 @@ func TestTrialDispatch_UsesReobserve(t *testing.T) {
 	require.True(t, ok)
 	intervalBefore := blockBefore.TrialInterval
 
-	eng.runTrialDispatch(ctx)
-
-	// The buffer should have a full-fidelity event from reobserve (not synthesized).
-	result := eng.watch.buf.FlushImmediate()
-	require.Len(t, result, 1)
-	require.Len(t, result[0].RemoteEvents, 1)
-
-	ev := result[0].RemoteEvents[0]
-	assert.Equal(t, "trial-hash", ev.Hash, "D-9: reobserve should populate hash")
-	assert.Equal(t, int64(4096), ev.Size, "D-9: reobserve should populate size")
-	assert.Equal(t, "trial-etag", ev.ETag, "D-9: reobserve should populate etag")
-
-	// trialPending should have an entry.
-	_, hasTrial := eng.watch.trialPending["trial.txt"]
-
-	assert.True(t, hasTrial, "trial should be registered in trialPending")
+	outbox := runTestTrialDispatch(t, eng, ctx)
+	require.Len(t, outbox, 1)
+	assert.Equal(t, "trial.txt", outbox[0].Action.Path)
+	assert.Equal(t, synctypes.ActionUpload, outbox[0].Action.Type)
+	assert.True(t, outbox[0].IsTrial)
+	assert.Equal(t, sk, outbox[0].TrialScopeKey)
 	require.Contains(t, events, engineDebugEvent{
 		Type:     engineDebugEventTrialDispatched,
 		ScopeKey: sk,
@@ -2089,88 +1758,205 @@ func TestTrialDispatch_UsesReobserve(t *testing.T) {
 		"trial interval should NOT be extended after successful dispatch")
 }
 
-// TestTrialDispatch_ForwardsRetryAfter verifies that when reobserve returns
-// a RetryAfter duration from a 429 response, runTrialDispatch forwards it
-// to extendTrialInterval, which uses the server value instead of doubling.
-func TestTrialDispatch_ForwardsRetryAfter(t *testing.T) {
+func TestTrialDispatch_NoEventWhenCurrentStateMissing(t *testing.T) {
 	t.Parallel()
 
-	mock := &engineMockClient{
-		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
-			return nil, &graph.GraphError{
-				StatusCode: 429,
-				Err:        graph.ErrThrottled,
-				Message:    "too many requests",
-				RetryAfter: 90 * time.Second,
-			}
-		},
-	}
-
-	eng, _ := newTestEngine(t, mock)
-	eng.nowFn = func() time.Time { return time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC) }
-	setupWatchEngine(t, eng)
-	eng.watch.buf = syncobserve.NewBuffer(eng.logger)
+	eng := newSingleOwnerEngine(t)
 
 	ctx := context.Background()
 	driveID := driveid.New("drive1")
-	now := eng.nowFn()
 
 	sk := synctypes.SKQuotaOwn()
 
-	// Set up a scope block with a small TrialInterval and NextTrialAt in the past.
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:           sk,
 		IssueType:     synctypes.IssueQuotaExceeded,
-		BlockedAt:     now.Add(-time.Minute),
-		NextTrialAt:   now.Add(-time.Second),
+		BlockedAt:     eng.nowFn().Add(-time.Minute),
+		NextTrialAt:   eng.nowFn().Add(-time.Second),
 		TrialInterval: 10 * time.Second,
 	})
 
-	// Seed a scope-blocked failure.
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path:      "throttled.txt",
+		Path:      "missing.txt",
 		DriveID:   driveID,
 		Direction: synctypes.DirectionDownload,
 		Role:      synctypes.FailureRoleHeld,
 		Category:  synctypes.CategoryTransient,
 		ScopeKey:  sk,
-		ItemID:    "throttled-item",
+		ItemID:    "missing-item",
 	}, nil))
 
-	eng.runTrialDispatch(ctx)
+	outbox := runTestTrialDispatch(t, eng, ctx)
+	assert.Empty(t, outbox, "missing current state should not dispatch a trial action")
 
-	// syncobserve.Buffer should be empty — reobserve returned nil (scope persists).
-	result := eng.watch.buf.FlushImmediate()
-	assert.Empty(t, result, "no event should be dispatched when scope condition persists")
+	failures, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, failures, "resolved held candidate should be cleared from sync_failures")
 
-	// The scope block's TrialInterval should now be 90s (from server's
-	// Retry-After), not 20s (doubled from 10s).
-	blockAfter, ok := getTestScopeBlock(eng, sk)
-	require.True(t, ok)
-	assert.Equal(t, 90*time.Second, blockAfter.TrialInterval,
-		"trial interval should use server's Retry-After (90s), not exponential backoff (20s)")
+	_, ok := getTestScopeBlock(eng, sk)
+	assert.False(t, ok, "scope should release when no remaining trial candidates exist")
 }
 
-func TestTrialDispatch_CleansStaleTrialPending(t *testing.T) {
+func TestRetrierSweep_UploadSkippedCandidateBecomesActionableFailure(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	ctx := context.Background()
+
+	eng.baseline.SetNowFunc(eng.nowFn)
+
+	file, err := os.Create(filepath.Join(eng.syncRoot, "oversized.bin"))
+	require.NoError(t, err)
+	require.NoError(t, file.Truncate(syncobserve.MaxOneDriveFileSize+1))
+	require.NoError(t, file.Close())
+
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:      "oversized.bin",
+		DriveID:   eng.driveID,
+		Direction: synctypes.DirectionUpload,
+		Category:  synctypes.CategoryTransient,
+	}, func(int) time.Duration {
+		return -time.Minute
+	}))
+
+	outbox := runTestRetrierSweep(t, eng, ctx)
+	assert.Empty(t, outbox)
+
+	failures, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, failures, 1)
+	assert.Equal(t, synctypes.CategoryActionable, failures[0].Category)
+	assert.Equal(t, synctypes.FailureRoleItem, failures[0].Role)
+	assert.Equal(t, synctypes.IssueFileTooLarge, failures[0].IssueType)
+}
+
+func TestTrialDispatch_SkippedHeldCandidateBecomesActionableAndContinues(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	ctx := context.Background()
+	sk := synctypes.SKQuotaOwn()
+
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+		Key:           sk,
+		IssueType:     synctypes.IssueQuotaExceeded,
+		BlockedAt:     eng.nowFn().Add(-time.Minute),
+		NextTrialAt:   eng.nowFn().Add(-time.Second),
+		TrialInterval: 10 * time.Second,
+	})
+
+	oversized, err := os.Create(filepath.Join(eng.syncRoot, "oversized.bin"))
+	require.NoError(t, err)
+	require.NoError(t, oversized.Truncate(syncobserve.MaxOneDriveFileSize+1))
+	require.NoError(t, oversized.Close())
+
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:      "oversized.bin",
+		DriveID:   eng.driveID,
+		Direction: synctypes.DirectionUpload,
+		Role:      synctypes.FailureRoleHeld,
+		Category:  synctypes.CategoryTransient,
+		ScopeKey:  sk,
+	}, nil))
+
+	absPath := filepath.Join(eng.syncRoot, "trial.txt")
+	require.NoError(t, os.WriteFile(absPath, []byte("trial payload"), 0o600))
+
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:      "trial.txt",
+		DriveID:   eng.driveID,
+		Direction: synctypes.DirectionUpload,
+		Role:      synctypes.FailureRoleHeld,
+		Category:  synctypes.CategoryTransient,
+		ScopeKey:  sk,
+	}, nil))
+
+	outbox := runTestTrialDispatch(t, eng, ctx)
+	require.Len(t, outbox, 1)
+	assert.Equal(t, "trial.txt", outbox[0].Action.Path)
+
+	failures, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, failures, 2)
+
+	var actionableBad, heldTrial bool
+	for i := range failures {
+		switch failures[i].Path {
+		case "oversized.bin":
+			actionableBad = true
+			assert.Equal(t, synctypes.CategoryActionable, failures[i].Category)
+			assert.Equal(t, synctypes.IssueFileTooLarge, failures[i].IssueType)
+		case "trial.txt":
+			heldTrial = true
+			assert.Equal(t, synctypes.FailureRoleHeld, failures[i].Role)
+		}
+	}
+
+	assert.True(t, actionableBad)
+	assert.True(t, heldTrial)
+	assert.True(t, isTestScopeBlocked(eng, sk))
+}
+
+func TestTrialDispatch_OnlySkippedHeldCandidatesReleaseScope(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	ctx := context.Background()
+	sk := synctypes.SKQuotaOwn()
+
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+		Key:           sk,
+		IssueType:     synctypes.IssueQuotaExceeded,
+		BlockedAt:     eng.nowFn().Add(-time.Minute),
+		NextTrialAt:   eng.nowFn().Add(-time.Second),
+		TrialInterval: 10 * time.Second,
+	})
+
+	oversized, err := os.Create(filepath.Join(eng.syncRoot, "oversized.bin"))
+	require.NoError(t, err)
+	require.NoError(t, oversized.Truncate(syncobserve.MaxOneDriveFileSize+1))
+	require.NoError(t, oversized.Close())
+
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:      "oversized.bin",
+		DriveID:   eng.driveID,
+		Direction: synctypes.DirectionUpload,
+		Role:      synctypes.FailureRoleHeld,
+		Category:  synctypes.CategoryTransient,
+		ScopeKey:  sk,
+	}, nil))
+
+	outbox := runTestTrialDispatch(t, eng, ctx)
+	assert.Empty(t, outbox)
+
+	failures, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, failures, 1)
+	assert.Equal(t, synctypes.CategoryActionable, failures[0].Category)
+	assert.Equal(t, synctypes.IssueFileTooLarge, failures[0].IssueType)
+	assert.False(t, isTestScopeBlocked(eng, sk))
+}
+
+func TestTrialDispatch_DoesNotMutateStateWhenNoScopeIsDue(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 	now := eng.nowFn()
 
-	// Insert a stale trial entry (older than trialPendingTTL).
-	eng.watch.trialPending["stale.txt"] = trialEntry{
-		scopeKey: synctypes.SKQuotaOwn(),
-		created:  now.Add(-2 * trialPendingTTL),
-	}
+	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+		Key:           synctypes.SKQuotaOwn(),
+		IssueType:     synctypes.IssueQuotaExceeded,
+		BlockedAt:     now.Add(-time.Minute),
+		NextTrialAt:   now.Add(time.Minute),
+		TrialInterval: 10 * time.Second,
+	})
 
-	eng.watch.buf = syncobserve.NewBuffer(eng.logger)
+	outbox := runTestTrialDispatch(t, eng, ctx)
+	assert.Empty(t, outbox)
 
-	// No due scopes needed — stale cleanup runs first in runTrialDispatch.
-	eng.runTrialDispatch(ctx)
-
-	remaining := len(eng.watch.trialPending)
-
-	assert.Equal(t, 0, remaining,
-		"stale trial entries should be cleaned up")
+	blocks, err := eng.baseline.ListScopeBlocks(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+	assert.Equal(t, synctypes.SKQuotaOwn(), blocks[0].Key)
 }

@@ -198,6 +198,23 @@ func (g *DepGraph) WireDeps(id int64, depIDs []int64) *synctypes.TrackedAction {
 	return nil
 }
 
+// MarkTrial marks an already-registered action as a scope trial. This lets the
+// engine tag an action before it becomes ready, so the metadata survives normal
+// dependency resolution instead of relying on a separate pending-trial map.
+func (g *DepGraph) MarkTrial(id int64, scopeKey synctypes.ScopeKey) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	node, ok := g.actions[id]
+	if !ok {
+		return false
+	}
+
+	node.IsTrial = true
+	node.TrialScopeKey = scopeKey
+	return true
+}
+
 // Complete marks an action as done, deletes it from both the actions and
 // byPath maps (D-10 fix), and decrements the depsLeft counter on all
 // dependents. Returns (newly-ready dependents as TrackedAction pointers, true)

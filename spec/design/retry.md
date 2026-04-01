@@ -59,7 +59,8 @@ engine.
 
 - transient failures are recorded in `sync_failures` with `failure_role='item'`
 - `next_retry_at` is computed from `ReconcilePolicy()`
-- the engine-owned retry sweep re-observes due rows and feeds them back through the normal buffer -> planner -> dispatch pipeline
+- the engine-owned retry sweep rebuilds planner input from durable state and feeds it back through the normal planner -> dispatch pipeline
+- upload-side redispatch uses `ObserveSinglePath()` so retry/trial reconstruction follows the same local validation, oversized-file, and empty-hash-on-failure rules as normal observation
 
 ### Scope retry via trial actions
 
@@ -68,9 +69,10 @@ When the engine activates a scope block, blocked descendants are recorded in
 actions:
 
 - `runTrialDispatch()` picks a held row for each due scope via `PickTrialCandidate`
-- `reobserve()` hits the live source of truth again
+- `createEventFromDB()` / the retry-trial rebuild path reconstruct planner input from current durable state or single-path local observation
 - success -> `releaseScope`
 - failure -> `extendScopeTrial`
+- actionable current-local rejections during retry/trial reconstruction replace the held/transient row with an actionable item failure instead of being silently dropped
 
 `releaseScope` is the single “scope resolved” transition:
 
