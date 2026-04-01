@@ -379,15 +379,18 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 		return !isTestScopeBlocked(eng, synctypes.SKThrottleAccount())
 	}, time.Second, 10*time.Millisecond, "trial success should clear the scope block")
 
-	var batch []synctypes.PathChanges
+	var retried *synctypes.TrackedAction
 	require.Eventually(t, func() bool {
-		batch = eng.watch.buf.FlushImmediate()
-		if len(batch) == 0 {
+		select {
+		case retried = <-eng.readyCh:
+			return retried != nil && retried.Action.Path == blockedPath
+		default:
 			return false
 		}
+	}, time.Second, 10*time.Millisecond, "trial success should re-dispatch the held failure without external observation")
 
-		return batch[0].Path == blockedPath
-	}, time.Second, 10*time.Millisecond, "trial success should re-inject the held failure without external observation")
+	require.NotNil(t, retried)
+	assert.Equal(t, synctypes.ActionDownload, retried.Action.Type)
 }
 
 // Validates: R-2.10.13, R-2.10.11
@@ -450,10 +453,9 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 	require.Len(t, rows, 1)
 	assert.Equal(t, "Private/doc.txt", rows[0].Path)
 
-	eng.runRetrierSweep(ctx)
-	batch := eng.watch.buf.FlushImmediate()
-	require.Len(t, batch, 1, "released failure should be dispatchable immediately via the retrier")
-	assert.Equal(t, "Private/doc.txt", batch[0].Path)
+	outbox := runTestRetrierSweep(t, eng, ctx)
+	require.Len(t, outbox, 1, "released failure should be dispatchable immediately via the retrier")
+	assert.Equal(t, "Private/doc.txt", outbox[0].Action.Path)
 }
 
 // Validates: R-2.10.5
@@ -546,7 +548,7 @@ func TestPhase0_RunFullReconciliationAsync_UsesBufferHandoffInsteadOfDirectDispa
 	eng.watch.buf = syncobserve.NewBuffer(eng.logger)
 
 	eng.runFullReconciliationAsync(ctx, bl)
-	waitForReconcileDone(t, eng.watch)
+	waitForReconcileDone(t, eng)
 
 	select {
 	case ta := <-ready:

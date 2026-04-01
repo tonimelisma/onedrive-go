@@ -137,6 +137,10 @@ func TestValidateCopyMonitorURL(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, validateCopyMonitorURL(parsed))
 
+	personal, err := url.Parse("https://my.microsoftpersonalcontent.com/personal/monitor")
+	require.NoError(t, err)
+	require.NoError(t, validateCopyMonitorURL(personal))
+
 	untrusted, err := url.Parse("https://example.com/v1.0/monitor")
 	require.NoError(t, err)
 

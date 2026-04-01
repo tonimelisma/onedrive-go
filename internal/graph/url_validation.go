@@ -71,6 +71,7 @@ func validateCopyMonitorURL(parsed *url.URL) error {
 		parsed,
 		"copy monitor",
 		"1drv.com",
+		"microsoftpersonalcontent.com",
 		"onedrive.com",
 		"sharepoint.com",
 		"sharepoint-df.com",

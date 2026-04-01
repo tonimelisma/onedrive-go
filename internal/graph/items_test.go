@@ -1348,6 +1348,20 @@ func TestCopyItem_NoName(t *testing.T) {
 	assert.Equal(t, "https://operations.contoso.sharepoint.com/status/def", result.MonitorURL)
 }
 
+func TestCopyItem_PersonalMonitorHost(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", "https://my.microsoftpersonalcontent.com/personal/status/ghi")
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	result, err := client.CopyItem(t.Context(), driveid.New("d"), "item-1", "dest-id", "name.txt")
+	require.NoError(t, err)
+
+	assert.Equal(t, "https://my.microsoftpersonalcontent.com/personal/status/ghi", result.MonitorURL)
+}
+
 func TestCopyItem_MissingLocationHeader(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusAccepted)

@@ -472,22 +472,10 @@ func (e *Engine) admitReady(ctx context.Context, ready []*synctypes.TrackedActio
 	var dispatch []*synctypes.TrackedAction
 
 	for _, ta := range ready {
-		// Trial interception — watch mode only (one-shot has no trials).
-		var isTrial bool
-		var entry trialEntry
-		if e.watch != nil {
-			entry, isTrial = e.watch.trialPending[ta.Action.Path]
-			if isTrial {
-				delete(e.watch.trialPending, ta.Action.Path)
-			}
-		}
-
-		if isTrial {
-			if entry.scopeKey.BlocksAction(ta.Action.Path,
+		if ta.IsTrial {
+			if ta.TrialScopeKey.BlocksAction(ta.Action.Path,
 				ta.Action.ShortcutKey(), ta.Action.Type,
 				ta.Action.TargetsOwnDrive()) {
-				ta.IsTrial = true
-				ta.TrialScopeKey = entry.scopeKey
 				dispatch = append(dispatch, ta)
 			} else {
 				// Trial candidate no longer matches scope — clear stale failure,
@@ -499,8 +487,6 @@ func (e *Engine) admitReady(ctx context.Context, ready []*synctypes.TrackedActio
 					)
 				}
 
-				// e.watch is guaranteed non-nil — admitReady is only
-				// called from processBatch (watch-mode only).
 				if key := e.activeBlockingScope(ta); key.IsZero() {
 					e.setDispatch(ctx, &ta.Action)
 					dispatch = append(dispatch, ta)

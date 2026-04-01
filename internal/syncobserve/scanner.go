@@ -19,6 +19,7 @@ package syncobserve
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -33,6 +34,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 // Constants for the local scanner.
@@ -741,17 +743,25 @@ func (o *LocalObserver) detectDeletions(observed map[string]bool) []synctypes.Ch
 // stat cannot substitute because time may pass between the caller's stat and
 // the hash operation.
 func ComputeStableHash(fsPath string) (string, error) {
-	pre, err := os.Stat(fsPath)
+	return computeStableHashWith(fsPath, driveops.ComputeQuickXorHash)
+}
+
+func computeStableHashWith(fsPath string, hashFunc func(string) (string, error)) (string, error) {
+	pre, err := trustedStat(fsPath)
 	if err != nil {
 		return "", fmt.Errorf("sync: pre-hash stat %s: %w", fsPath, err)
 	}
 
-	hash, err := driveops.ComputeQuickXorHash(fsPath)
+	if hashFunc == nil {
+		hashFunc = driveops.ComputeQuickXorHash
+	}
+
+	hash, err := hashFunc(fsPath)
 	if err != nil {
 		return "", fmt.Errorf("compute quickxor hash %s: %w", fsPath, err)
 	}
 
-	post, err := os.Stat(fsPath)
+	post, err := trustedStat(fsPath)
 	if err != nil {
 		return "", fmt.Errorf("sync: post-hash stat %s: %w", fsPath, err)
 	}
@@ -761,6 +771,28 @@ func ComputeStableHash(fsPath string) (string, error) {
 	}
 
 	return hash, nil
+}
+
+func trustedStat(path string) (os.FileInfo, error) {
+	file, err := trustedpath.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open trusted path %s: %w", path, err)
+	}
+
+	info, statErr := file.Stat()
+	closeErr := file.Close()
+	if statErr != nil {
+		if closeErr != nil {
+			return nil, errors.Join(statErr, closeErr)
+		}
+
+		return nil, fmt.Errorf("stat %s: %w", path, statErr)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("closing %s: %w", path, closeErr)
+	}
+
+	return info, nil
 }
 
 // ---------------------------------------------------------------------------

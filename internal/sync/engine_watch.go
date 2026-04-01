@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
-	"sort"
-	"strings"
 	stdsync "sync"
 	"time"
 
@@ -62,18 +60,13 @@ const quiescenceLogInterval = 30 * time.Second
 // handling.
 // Called by the watch goroutine after observation when shortcuts may have changed.
 func (e *Engine) setShortcuts(shortcuts []synctypes.Shortcut) {
-	e.watchShortcutsMu.Lock()
-	e.watchShortcuts = shortcuts
-	e.watchShortcutsMu.Unlock()
+	e.shortcuts = shortcuts
 }
 
 // getShortcuts returns the latest shortcuts for result processing and
 // permission handling.
 func (e *Engine) getShortcuts() []synctypes.Shortcut {
-	e.watchShortcutsMu.RLock()
-	defer e.watchShortcutsMu.RUnlock()
-
-	return e.watchShortcuts
+	return e.shortcuts
 }
 
 // initDeleteProtection sets up the rolling delete counter and clears stale
@@ -158,18 +151,19 @@ func (e *Engine) RunWatch(ctx context.Context, mode synctypes.SyncMode, opts syn
 // watchPipeline holds all handles needed by the watch select loop.
 // Created by initWatchInfra; cleaned up by its cleanup method.
 type watchPipeline struct {
-	bl         *synctypes.Baseline
-	safety     *synctypes.SafetyConfig
-	ready      <-chan []synctypes.PathChanges
-	results    <-chan synctypes.WorkerResult
-	errs       <-chan error
-	skippedCh  <-chan []synctypes.SkippedItem
-	reconcileC <-chan time.Time
-	recheckC   <-chan time.Time
-	activeObs  int
-	mode       synctypes.SyncMode
-	pool       *syncexec.WorkerPool // for bootstrapSync to access Results()
-	cleanup    func()
+	bl               *synctypes.Baseline
+	safety           *synctypes.SafetyConfig
+	ready            <-chan []synctypes.PathChanges
+	results          <-chan synctypes.WorkerResult
+	errs             <-chan error
+	skippedCh        <-chan []synctypes.SkippedItem
+	reconcileC       <-chan time.Time
+	reconcileResults <-chan reconcileResult
+	recheckC         <-chan time.Time
+	activeObs        int
+	mode             synctypes.SyncMode
+	pool             *syncexec.WorkerPool // for bootstrapSync to access Results()
+	cleanup          func()
 }
 
 // initWatchInfra sets up watch-mode infrastructure: watchState, DepGraph,
@@ -181,15 +175,19 @@ type watchPipeline struct {
 //   - Done channel is never-closing — DepGraph.Done() fires when completed >= total,
 //     which would prematurely close between batches. Workers exit only via ctx.Done().
 //   - Retrier and trials are handled by the watch control flow itself
-//   - Buffer is promoted to e.watch.buf so retrier/trial work can re-enter
-//     via buffer → planner → tracker.
+//   - Buffer is promoted to e.watch.buf for observed and reconciliation work;
+//     retry/trial work now enters through explicit engine-owned planner requests.
 func (e *Engine) initWatchInfra(
 	ctx context.Context, mode synctypes.SyncMode, opts synctypes.WatchOpts,
 ) (*watchPipeline, error) {
 	// Create watchState — all watch-mode-only fields live here.
 	e.watch = &watchState{
-		trialPending: make(map[string]trialEntry),
-		retryTimerCh: make(chan struct{}, 1),
+		watchTimerState: watchTimerState{
+			retryTimerCh: make(chan struct{}, 1),
+		},
+		watchReconcileState: watchReconcileState{
+			reconcileResults: make(chan reconcileResult, 1),
+		},
 	}
 
 	// Enable watch-mode-specific executor behavior (pre-upload eTag
@@ -229,8 +227,8 @@ func (e *Engine) initWatchInfra(
 	pool := syncexec.NewWorkerPool(e.execCfg, e.readyCh, neverDone, e.baseline, e.logger, watchResultBuf)
 	pool.Start(ctx, e.transferWorkers)
 
-	// Buffer promoted to watchState so retry/trial work can re-enter via
-	// e.watch.buf.Add() and follow the normal planner/admission path.
+	// Buffer promoted to watchState so observed and reconciliation work share
+	// the same debounce/planning path the watch loop already owns.
 	buf := syncobserve.NewBuffer(e.logger)
 	e.watch.buf = buf
 	ready := buf.FlushDebounced(ctx, e.resolveDebounce(opts))
@@ -244,13 +242,14 @@ func (e *Engine) initWatchInfra(
 	e.armTrialTimer()
 
 	pipe := &watchPipeline{
-		safety:     e.resolveSafetyConfig(opts.Force),
-		ready:      ready,
-		results:    pool.Results(),
-		reconcileC: reconcileC,
-		recheckC:   recheckTicker.C,
-		mode:       mode,
-		pool:       pool,
+		safety:           e.resolveSafetyConfig(opts.Force),
+		ready:            ready,
+		results:          pool.Results(),
+		reconcileC:       reconcileC,
+		reconcileResults: e.watch.reconcileResults,
+		recheckC:         recheckTicker.C,
+		mode:             mode,
+		pool:             pool,
 	}
 
 	pipe.cleanup = func() {
@@ -492,170 +491,6 @@ func (e *Engine) runPeriodicFullScan(
 	}
 }
 
-// processBatch plans and dispatches a batch of path changes. On planner
-// error (e.g. big-delete protection), the batch is skipped and the loop
-// continues. In-flight actions for overlapping paths are canceled and
-// replaced (B-122 deduplication).
-func (e *Engine) processBatch(
-	ctx context.Context, batch []synctypes.PathChanges, bl *synctypes.Baseline,
-	mode synctypes.SyncMode, safety *synctypes.SafetyConfig,
-) []*synctypes.TrackedAction {
-	e.logger.Info("processing watch batch",
-		slog.Int("paths", len(batch)),
-	)
-
-	e.periodicPermRecheck(ctx, bl)
-
-	// R-2.10.10: use scanner output as proof-of-accessibility to clear
-	// permission denials for paths observed in this batch.
-	e.applyPermissionRecheckDecisions(ctx, e.permHandler.clearScannerResolvedPermissions(ctx, pathSetFromBatch(batch)))
-
-	denied := e.permHandler.DeniedPrefixes(ctx)
-	plan, err := e.planner.Plan(batch, bl, mode, safety, denied)
-	if err != nil {
-		if errors.Is(err, synctypes.ErrBigDeleteTriggered) {
-			e.logger.Warn("big-delete protection triggered, skipping batch",
-				slog.Int("paths", len(batch)),
-			)
-
-			return nil
-		}
-
-		e.logger.Error("planner error, skipping batch",
-			slog.String("error", err.Error()),
-		)
-
-		return nil
-	}
-
-	if len(plan.Actions) == 0 {
-		e.logger.Debug("empty plan for batch, nothing to do")
-		return nil
-	}
-
-	// Rolling-window big-delete protection: count planned deletes and
-	// filter them out if the counter trips. Non-delete actions continue
-	// flowing. The planner-level check is disabled in watch mode
-	// (threshold=MaxInt32) — this counter replaces it.
-	if e.watch != nil && e.watch.deleteCounter != nil {
-		plan = e.applyDeleteCounter(ctx, plan)
-		if len(plan.Actions) == 0 {
-			return nil
-		}
-	}
-
-	e.deduplicateInFlight(plan)
-	return e.dispatchBatchActions(ctx, plan)
-}
-
-// periodicPermRecheck runs permission rechecks at most once per 60 seconds.
-// Throttled to avoid API hammering (R-2.10.9).
-func (e *Engine) periodicPermRecheck(ctx context.Context, bl *synctypes.Baseline) {
-	const permRecheckInterval = 60 * time.Second
-
-	now := time.Now()
-	if now.Sub(e.watch.lastPermRecheck) < permRecheckInterval {
-		return
-	}
-
-	e.watch.lastPermRecheck = now
-
-	// recheckPermissions calls the Graph API — skip during outage or
-	// throttle to avoid wasting API calls (R-2.10.30). Local permission
-	// rechecks (filesystem-only) proceed regardless.
-	if e.permHandler.HasPermChecker() && !e.isObservationSuppressed() {
-		shortcuts, err := e.baseline.ListShortcuts(ctx)
-		if err == nil {
-			e.applyPermissionRecheckDecisions(ctx, e.permHandler.recheckPermissions(ctx, bl, shortcuts))
-		}
-	}
-
-	e.applyPermissionRecheckDecisions(ctx, e.permHandler.recheckLocalPermissions(ctx))
-}
-
-// deduplicateInFlight cancels in-flight actions for paths that appear in the
-// plan. B-122: newer observation supersedes in-progress action.
-func (e *Engine) deduplicateInFlight(plan *synctypes.ActionPlan) {
-	for i := range plan.Actions {
-		if e.depGraph.HasInFlight(plan.Actions[i].Path) {
-			e.logger.Info("canceling in-flight action for updated path",
-				slog.String("path", plan.Actions[i].Path),
-			)
-
-			e.depGraph.CancelByPath(plan.Actions[i].Path)
-		}
-	}
-}
-
-// dispatchBatchActions adds plan actions to the DepGraph with monotonic IDs,
-// then admits ready actions through active-scope checks.
-func (e *Engine) dispatchBatchActions(ctx context.Context, plan *synctypes.ActionPlan) []*synctypes.TrackedAction {
-	// Invariant: Planner always builds Deps with len(Actions).
-	if len(plan.Actions) != len(plan.Deps) {
-		e.logger.Error("plan invariant violation: Actions/Deps length mismatch",
-			slog.Int("actions", len(plan.Actions)),
-			slog.Int("deps", len(plan.Deps)),
-		)
-
-		return nil
-	}
-
-	// Allocate monotonic action IDs for this batch. Using a global atomic
-	// counter prevents ID collisions across batches — loop indices (int64(i))
-	// would collide when multiple batches are processed.
-	batchBaseID := e.watch.nextActionID
-	e.watch.nextActionID += int64(len(plan.Actions))
-
-	// Map from plan index → action ID for dependency resolution.
-	actionIDs := make([]int64, len(plan.Actions))
-	for i := range plan.Actions {
-		actionIDs[i] = batchBaseID + int64(i)
-	}
-
-	// Add actions to DepGraph and collect immediately-ready ones. Dispatch
-	// transitions (setDispatch) are deferred to admission, which runs AFTER
-	// active-scope checks — setDispatch on a blocked action would be incorrect
-	// (section 2.2: no dispatch before admission).
-	var ready []*synctypes.TrackedAction
-
-	for i := range plan.Actions {
-		id := actionIDs[i]
-
-		var depIDs []int64
-		for _, depIdx := range plan.Deps[i] {
-			depIDs = append(depIDs, actionIDs[depIdx])
-		}
-
-		if ta := e.depGraph.Add(&plan.Actions[i], id, depIDs); ta != nil {
-			ready = append(ready, ta)
-		}
-	}
-
-	// Admit ready actions through the active-scope working set. The watch loop
-	// owns actual sends to readyCh via its outbox.
-	if len(ready) > 0 {
-		ready = e.admitReady(ctx, ready)
-	}
-
-	e.logger.Info("watch batch dispatched",
-		slog.Int("actions", len(plan.Actions)),
-	)
-
-	return ready
-}
-
-// setDispatch writes the dispatch state transition for an action before it
-// enters the tracker. Only applies to downloads and local deletes (the action
-// types that have remote_state lifecycle).
-func (e *Engine) setDispatch(ctx context.Context, action *synctypes.Action) {
-	if err := e.baseline.SetDispatchStatus(ctx, action.DriveID.String(), action.ItemID, action.Type); err != nil {
-		e.logger.Warn("failed to set dispatch status",
-			slog.String("path", action.Path),
-			slog.String("error", err.Error()),
-		)
-	}
-}
-
 // resolvePollInterval returns the configured poll interval or the default.
 func (e *Engine) resolvePollInterval(opts synctypes.WatchOpts) time.Duration {
 	if opts.PollInterval > 0 {
@@ -672,523 +507,4 @@ func (e *Engine) resolveDebounce(opts synctypes.WatchOpts) time.Duration {
 	}
 
 	return defaultDebounce
-}
-
-// isDeleteAction returns true if the action type is a local or remote delete.
-func isDeleteAction(t synctypes.ActionType) bool {
-	return t == synctypes.ActionLocalDelete || t == synctypes.ActionRemoteDelete
-}
-
-// applyDeleteCounter counts planned deletes in the plan, feeds them to the
-// rolling counter, and — if the counter is held — filters delete actions out
-// of the plan and records them as actionable issues. Returns the (possibly
-// filtered) plan. When all actions are filtered, returns a plan with empty
-// Actions/Deps.
-func (e *Engine) applyDeleteCounter(ctx context.Context, plan *synctypes.ActionPlan) *synctypes.ActionPlan {
-	// Count planned deletes.
-	deleteCount := 0
-	for i := range plan.Actions {
-		if isDeleteAction(plan.Actions[i].Type) {
-			deleteCount++
-		}
-	}
-
-	if deleteCount == 0 {
-		return plan
-	}
-
-	// Feed to the rolling counter. tripped=true means this call caused
-	// the first transition from not-held → held.
-	tripped := e.watch.deleteCounter.Add(deleteCount)
-	if tripped {
-		e.logger.Warn("big-delete protection triggered in watch mode",
-			slog.Int("delete_count", e.watch.deleteCounter.Count()),
-			slog.Int("threshold", e.watch.deleteCounter.Threshold()),
-		)
-	}
-
-	if !e.watch.deleteCounter.IsHeld() {
-		return plan
-	}
-
-	// Filter: separate deletes from non-deletes and rebuild the plan.
-	// Dependency indices must be remapped to the new action positions.
-	kept := make([]synctypes.Action, 0, len(plan.Actions))
-	keptDeps := make([][]int, 0, len(plan.Deps))
-	oldToNew := make(map[int]int, len(plan.Actions))
-
-	var heldDeletes []synctypes.Action
-
-	for i := range plan.Actions {
-		if isDeleteAction(plan.Actions[i].Type) {
-			heldDeletes = append(heldDeletes, plan.Actions[i])
-			continue
-		}
-
-		oldToNew[i] = len(kept)
-		kept = append(kept, plan.Actions[i])
-		keptDeps = append(keptDeps, nil) // placeholder, remap below
-	}
-
-	// Remap dependency indices for kept actions. Drop deps pointing to
-	// filtered-out (delete) actions — the non-delete action can proceed
-	// independently since the delete won't run.
-	for newIdx := range kept {
-		// Find the original index by scanning oldToNew (small N, fast enough).
-		var origIdx int
-		for oi, ni := range oldToNew {
-			if ni == newIdx {
-				origIdx = oi
-				break
-			}
-		}
-
-		for _, depOld := range plan.Deps[origIdx] {
-			if depNew, ok := oldToNew[depOld]; ok {
-				keptDeps[newIdx] = append(keptDeps[newIdx], depNew)
-			}
-		}
-	}
-
-	plan.Actions = kept
-	plan.Deps = keptDeps
-
-	// Record held deletes as actionable issues for user visibility.
-	e.recordHeldDeletes(ctx, heldDeletes)
-
-	return plan
-}
-
-// recordHeldDeletes writes held delete actions to sync_failures as actionable
-// issues with type big_delete_held. Uses UpsertActionableFailures for batch
-// upsert — idempotent when the same deletes are re-observed.
-func (e *Engine) recordHeldDeletes(ctx context.Context, actions []synctypes.Action) {
-	if len(actions) == 0 {
-		return
-	}
-
-	failures := make([]synctypes.ActionableFailure, len(actions))
-	for i := range actions {
-		failures[i] = synctypes.ActionableFailure{
-			Path:      actions[i].Path,
-			DriveID:   actions[i].DriveID,
-			Direction: synctypes.DirectionDelete,
-			IssueType: synctypes.IssueBigDeleteHeld,
-			Error:     fmt.Sprintf("held by big-delete protection (threshold: %d)", e.bigDeleteThreshold),
-		}
-	}
-
-	if err := e.baseline.UpsertActionableFailures(ctx, failures); err != nil {
-		e.logger.Error("failed to record held deletes",
-			slog.Int("count", len(failures)),
-			slog.String("error", err.Error()),
-		)
-	}
-
-	e.logger.Info("held delete actions recorded as issues",
-		slog.Int("count", len(failures)),
-	)
-}
-
-// externalDBChanged checks whether another process (e.g., the CLI) wrote to
-// the database since the last check. Uses PRAGMA data_version — changes every
-// time another connection commits a write. The engine's own writes don't
-// change it. Returns true if the version advanced.
-func (e *Engine) externalDBChanged(ctx context.Context) bool {
-	dv, err := e.baseline.DataVersion(ctx)
-	if err != nil {
-		e.logger.Warn("failed to check data_version",
-			slog.String("error", err.Error()),
-		)
-
-		return false
-	}
-
-	if dv == e.watch.lastDataVersion {
-		return false
-	}
-
-	e.watch.lastDataVersion = dv
-
-	return true
-}
-
-// handleRecheckTick processes a recheck timer tick: detects external DB
-// changes (e.g., `issues clear`) and logs a watch summary.
-func (e *Engine) handleRecheckTick(ctx context.Context) {
-	if e.externalDBChanged(ctx) {
-		e.handleExternalChanges(ctx)
-	}
-
-	e.logWatchSummary(ctx)
-}
-
-// handleExternalChanges reacts to external DB modifications detected via
-// PRAGMA data_version. Currently handles big-delete clearance: if the
-// counter is held but all big_delete_held rows have been cleared (via
-// `issues clear`), releases the counter so deletes resume on the next
-// observation cycle.
-func (e *Engine) handleExternalChanges(ctx context.Context) {
-	// Big-delete clearance: check if user approved held deletes.
-	if e.watch != nil && e.watch.deleteCounter != nil && e.watch.deleteCounter.IsHeld() {
-		rows, err := e.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueBigDeleteHeld)
-		if err != nil {
-			e.logger.Warn("failed to check big-delete-held entries",
-				slog.String("error", err.Error()),
-			)
-
-			return
-		}
-
-		if len(rows) == 0 {
-			e.watch.deleteCounter.Release()
-			e.logger.Info("big-delete protection cleared by user")
-		}
-	}
-
-	// Permission clearance: if user cleared permission boundary failures via CLI,
-	// release the corresponding in-memory scope blocks.
-	e.clearResolvedPermissionScopes(ctx)
-	e.mustAssertScopeInvariants(ctx, "handle external changes")
-}
-
-// clearResolvedPermissionScopes checks if any permission scope blocks have had
-// their sync_failures cleared (by user action via CLI), and releases the
-// corresponding scope blocks.
-func (e *Engine) clearResolvedPermissionScopes(ctx context.Context) {
-	if e.watch == nil {
-		return
-	}
-
-	scopeKeys := e.scopeBlockKeys()
-	if len(scopeKeys) == 0 {
-		return
-	}
-
-	localIssues, err := e.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueLocalPermissionDenied)
-	if err != nil {
-		e.logger.Warn("failed to check local permission failures",
-			slog.String("error", err.Error()),
-		)
-
-		return
-	}
-
-	remoteIssues, err := e.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
-	if err != nil {
-		e.logger.Warn("failed to check remote permission failures",
-			slog.String("error", err.Error()),
-		)
-
-		return
-	}
-
-	// Build set of still-active scope keys from DB.
-	activeScopes := make(map[synctypes.ScopeKey]bool, len(localIssues)+len(remoteIssues))
-	for i := range localIssues {
-		if localIssues[i].ScopeKey.IsPermDir() {
-			activeScopes[localIssues[i].ScopeKey] = true
-		}
-	}
-	for i := range remoteIssues {
-		if remoteIssues[i].ScopeKey.IsPermRemote() {
-			activeScopes[remoteIssues[i].ScopeKey] = true
-		}
-	}
-
-	// Release any scope blocks whose failures were cleared.
-	for _, key := range scopeKeys {
-		if (key.IsPermDir() || key.IsPermRemote()) && !activeScopes[key] {
-			if err := e.releaseScope(ctx, key); err != nil {
-				e.logger.Warn("failed to release externally-cleared permission scope",
-					slog.String("scope", key.String()),
-					slog.String("error", err.Error()),
-				)
-				continue
-			}
-
-			e.logger.Info("permission scope block cleared by user",
-				slog.String("scope", key.String()),
-			)
-		}
-	}
-}
-
-// logWatchSummary logs a periodic one-liner summary of actionable issues
-// in watch mode. Only logs when the count changes since the last summary
-// to avoid noisy repeated output.
-func (e *Engine) logWatchSummary(ctx context.Context) {
-	issues, err := e.baseline.ListActionableFailures(ctx)
-	if err != nil || len(issues) == 0 {
-		if e.watch.lastSummaryTotal != 0 {
-			e.watch.lastSummaryTotal = 0
-		}
-
-		return
-	}
-
-	// Only log if count changed since last summary.
-	if len(issues) == e.watch.lastSummaryTotal {
-		return
-	}
-
-	e.watch.lastSummaryTotal = len(issues)
-
-	// Group by issue_type, emit one-liner.
-	counts := make(map[string]int)
-	for i := range issues {
-		counts[issues[i].IssueType]++
-	}
-
-	parts := make([]string, 0, len(counts))
-	for typ, n := range counts {
-		parts = append(parts, fmt.Sprintf("%d %s", n, typ))
-	}
-
-	sort.Strings(parts)
-
-	e.logger.Warn("actionable issues",
-		slog.Int("total", len(issues)),
-		slog.String("breakdown", strings.Join(parts, ", ")),
-	)
-}
-
-// recordSkippedItems records observation-time rejections (invalid names,
-// path too long, file too large) as actionable failures in sync_failures.
-// Groups items by issue type and uses UpsertActionableFailures for efficient
-// batch upserts. Aggregated logging: >10 same-type items → 1 WARN with
-// count + sample paths; ≤10 → per-file WARN.
-func (e *Engine) recordSkippedItems(ctx context.Context, skipped []synctypes.SkippedItem) {
-	if len(skipped) == 0 {
-		return
-	}
-
-	// Group by issue type for batch upsert and aggregated logging.
-	byReason := make(map[string][]synctypes.SkippedItem)
-	for i := range skipped {
-		byReason[skipped[i].Reason] = append(byReason[skipped[i].Reason], skipped[i])
-	}
-
-	for reason, items := range byReason {
-		// Aggregated logging.
-		const aggregateThreshold = 10
-		if len(items) > aggregateThreshold {
-			// Log summary with sample paths.
-			const sampleCount = 3
-			samples := make([]string, 0, sampleCount)
-			for i := range items {
-				if i >= sampleCount {
-					break
-				}
-				samples = append(samples, items[i].Path)
-			}
-
-			e.logger.Warn("observation filter: skipped files",
-				slog.String("issue_type", reason),
-				slog.Int("count", len(items)),
-				slog.Any("sample_paths", samples),
-			)
-		} else {
-			for i := range items {
-				e.logger.Warn("observation filter: skipped file",
-					slog.String("path", items[i].Path),
-					slog.String("issue_type", reason),
-					slog.String("detail", items[i].Detail),
-				)
-			}
-		}
-
-		// Build synctypes.ActionableFailure slice for batch upsert.
-		failures := make([]synctypes.ActionableFailure, len(items))
-		for i := range items {
-			failures[i] = synctypes.ActionableFailure{
-				Path:      items[i].Path,
-				DriveID:   e.driveID,
-				Direction: synctypes.DirectionUpload,
-				IssueType: reason,
-				Error:     items[i].Detail,
-				FileSize:  items[i].FileSize,
-			}
-		}
-
-		if err := e.baseline.UpsertActionableFailures(ctx, failures); err != nil {
-			e.logger.Error("failed to record skipped items",
-				slog.String("issue_type", reason),
-				slog.Int("count", len(failures)),
-				slog.String("error", err.Error()),
-			)
-		}
-	}
-}
-
-// clearResolvedSkippedItems removes sync_failures entries for scanner-detectable
-// issue types that are no longer present in the current scan. For example, if a
-// user renames an invalid file to a valid name, the old failure is auto-cleared.
-func (e *Engine) clearResolvedSkippedItems(ctx context.Context, skipped []synctypes.SkippedItem) {
-	// Collect current paths per scanner-detectable issue type.
-	currentByType := make(map[string][]string)
-	for i := range skipped {
-		currentByType[skipped[i].Reason] = append(currentByType[skipped[i].Reason], skipped[i].Path)
-	}
-
-	// For each scanner-detectable issue type, clear entries not in the current scan.
-	// If no items of that type were found, pass empty slice (clears all of that type).
-	scannerIssueTypes := []string{
-		synctypes.IssueInvalidFilename, synctypes.IssuePathTooLong,
-		synctypes.IssueFileTooLarge, synctypes.IssueCaseCollision,
-	}
-	for _, issueType := range scannerIssueTypes {
-		paths := currentByType[issueType] // nil if no items — that's fine (clears all)
-		if err := e.baseline.ClearResolvedActionableFailures(ctx, issueType, paths); err != nil {
-			e.logger.Error("failed to clear resolved failures",
-				slog.String("issue_type", issueType),
-				slog.String("error", err.Error()),
-			)
-		}
-	}
-}
-
-// resolveReconcileInterval returns the configured reconcile interval or the
-// default. Negative values disable periodic reconciliation. Values below
-// minReconcileInterval are clamped up.
-func (e *Engine) resolveReconcileInterval(opts synctypes.WatchOpts) time.Duration {
-	if opts.ReconcileInterval < 0 {
-		return 0 // disabled
-	}
-
-	if opts.ReconcileInterval > 0 {
-		if opts.ReconcileInterval < minReconcileInterval {
-			e.logger.Warn("reconcile interval below minimum, clamping",
-				slog.Duration("requested", opts.ReconcileInterval),
-				slog.Duration("minimum", minReconcileInterval),
-			)
-
-			return minReconcileInterval
-		}
-
-		return opts.ReconcileInterval
-	}
-
-	return defaultReconcileInterval
-}
-
-// newReconcileTicker creates a ticker for periodic reconciliation. Returns
-// nil if the interval is 0 (disabled).
-func (e *Engine) newReconcileTicker(interval time.Duration) *time.Ticker {
-	if interval <= 0 {
-		return nil
-	}
-
-	return time.NewTicker(interval)
-}
-
-// initReconcileTicker creates the periodic full-reconciliation timer and
-// returns its channel plus a stop function. If reconciliation is disabled,
-// both the channel and stop function are nil.
-func (e *Engine) initReconcileTicker(opts synctypes.WatchOpts) (<-chan time.Time, func()) {
-	interval := e.resolveReconcileInterval(opts)
-	ticker := e.newReconcileTicker(interval)
-
-	if ticker == nil {
-		return nil, nil
-	}
-
-	e.logger.Info("periodic full reconciliation enabled",
-		slog.Duration("interval", interval),
-	)
-
-	return ticker.C, ticker.Stop
-}
-
-// runFullReconciliationAsync spawns a goroutine for full delta enumeration +
-// orphan detection. Non-blocking — the watch loop continues processing events
-// while reconciliation runs. Events are fed into the watch buffer so they flow
-// through the normal pipeline (FlushDebounced → processBatch).
-func (e *Engine) runFullReconciliationAsync(ctx context.Context, bl *synctypes.Baseline) {
-	if !e.watch.reconcileRunning.CompareAndSwap(false, true) {
-		e.logger.Info("full reconciliation skipped — previous still running")
-		return
-	}
-
-	go func() {
-		defer e.watch.reconcileRunning.Store(false)
-
-		start := time.Now()
-		e.logger.Info("periodic full reconciliation starting")
-
-		events, deltaToken, err := e.observeRemoteFull(ctx, bl)
-		if err != nil {
-			// Suppress error logging during shutdown — context cancellation
-			// is expected when the daemon is stopping.
-			if ctx.Err() == nil {
-				e.logger.Error("full reconciliation failed",
-					slog.String("error", err.Error()),
-				)
-			}
-
-			return
-		}
-
-		// Commit observations and delta token.
-		observed := changeEventsToObservedItems(e.logger, events)
-		if commitErr := e.baseline.CommitObservation(
-			ctx, observed, deltaToken, e.driveID,
-		); commitErr != nil {
-			e.logger.Error("failed to commit full reconciliation observations",
-				slog.String("error", commitErr.Error()),
-			)
-
-			return
-		}
-
-		if e.watch.afterReconcileCommit != nil {
-			e.watch.afterReconcileCommit()
-		}
-
-		// Observations are durably committed. If we're shutting down, skip
-		// feeding events to the buffer — the watch loop is also stopping and
-		// won't process them. Next startup will re-observe idempotently.
-		if ctx.Err() != nil {
-			e.logger.Info("full reconciliation: observations committed, stopping for shutdown")
-			return
-		}
-
-		// Filter out shortcut events and process shortcut scopes.
-		events = filterOutShortcuts(events)
-
-		shortcutEvents, scErr := e.reconcileShortcutScopes(ctx, bl)
-		if scErr != nil {
-			e.logger.Warn("shortcut reconciliation failed during full reconciliation",
-				slog.String("error", scErr.Error()),
-			)
-		}
-
-		events = append(events, shortcutEvents...)
-
-		if len(events) == 0 {
-			e.logger.Info("periodic full reconciliation complete: no changes",
-				slog.Duration("duration", time.Since(start)),
-			)
-			return
-		}
-
-		// Feed events into the watch buffer — they flow through
-		// FlushDebounced → processBatch in the watch loop. This avoids
-		// calling processBatch directly from this goroutine, which would
-		// race with the watch loop's own processBatch calls.
-		for i := range events {
-			e.watch.buf.Add(&events[i])
-		}
-
-		// Refresh watch shortcuts — reconcileShortcutScopes may have
-		// added or removed shortcuts.
-		if refreshed, refreshErr := e.baseline.ListShortcuts(ctx); refreshErr == nil {
-			e.setShortcuts(refreshed)
-		}
-
-		e.logger.Info("periodic full reconciliation complete",
-			slog.Int("events", len(events)),
-			slog.Duration("duration", time.Since(start)),
-		)
-	}()
 }

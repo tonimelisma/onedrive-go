@@ -92,7 +92,7 @@ Transparent token refresh on 401 inside `doOnce()`, independent of retry transpo
 - `dispatchRequest` is the sole raw `http.Client.Do` boundary. Graph base URLs and pre-auth URLs are validated before a request reaches that call; the remaining inline `gosec` suppression there is intentional because the linter cannot prove the validation flow.
 - Graph/API quirk handling requires either captured payload evidence in CI/tests/logs or a reproducible documented observation with enough detail to classify safely. One-off incidents without recoverable payload evidence stay documented as reference notes only and do not become permanent runtime normalization rules.
 - Per-tenant rate limit coordination: multiple drives under the same tenant share Graph API rate limits. A shared rate limiter per-tenant prevents aggregate throttling. [planned]
-- Upload and async-copy pre-auth URL validation: verify HTTPS scheme and Microsoft domain on upload session and copy monitor URLs before use. [verified]
+- Upload and async-copy pre-auth URL validation: verify HTTPS scheme and trusted Microsoft hosts on upload session and copy monitor URLs before use. Copy monitor validation explicitly allows Personal-account monitor URLs on `microsoftpersonalcontent.com`; upload-session validation remains narrower until separate evidence appears. [verified]
 - Audit all `slog.*` calls for potential secret leakage (tokens, pre-auth URLs). [verified]
 - Audit all error message strings for embedded secrets — `GraphError.Message` includes API error body. [planned]
 - Test that captures log output and verifies no tokens or pre-auth URLs appear. [verified]

@@ -99,7 +99,7 @@ func newTestClient(t *testing.T, url string) *Client {
 
 	client := NewClient(normalizeTestBaseURL(url), retryHTTPClient(http.DefaultClient, testRetryPolicy()), staticToken("test-token"), slog.Default(), "test-agent")
 	client.uploadURLValidator = allowTestUploadURL
-	client.copyMonitorValidator = allowTestUploadURL
+	client.copyMonitorValidator = allowTestCopyMonitorURL
 
 	return client
 }
@@ -110,7 +110,7 @@ func newNoRetryTestClient(t *testing.T, url string) *Client {
 
 	client := NewClient(normalizeTestBaseURL(url), http.DefaultClient, staticToken("test-token"), slog.Default(), "test-agent")
 	client.uploadURLValidator = allowTestUploadURL
-	client.copyMonitorValidator = allowTestUploadURL
+	client.copyMonitorValidator = allowTestCopyMonitorURL
 
 	return client
 }
@@ -128,11 +128,23 @@ func allowTestUploadURL(parsed *url.URL) error {
 		return fmt.Errorf("graph: upload URL is nil")
 	}
 
-	if isLoopbackHostname(parsed.Hostname()) && (parsed.Scheme == "http" || parsed.Scheme == "https") {
+	if isLoopbackHostname(parsed.Hostname()) && (parsed.Scheme == deltaHTTPPrefix || parsed.Scheme == httpsScheme) {
 		return nil
 	}
 
 	return validateUploadURL(parsed)
+}
+
+func allowTestCopyMonitorURL(parsed *url.URL) error {
+	if parsed == nil {
+		return fmt.Errorf("graph: copy monitor URL is nil")
+	}
+
+	if isLoopbackHostname(parsed.Hostname()) && (parsed.Scheme == deltaHTTPPrefix || parsed.Scheme == httpsScheme) {
+		return nil
+	}
+
+	return validateCopyMonitorURL(parsed)
 }
 
 func writeClientTestBody(t *testing.T, w http.ResponseWriter, body string) {
@@ -228,6 +240,16 @@ func TestValidatedCopyMonitorURL(t *testing.T) {
 		"https://example.com/v1.0/operations/copy",
 		"validating copy monitor URL",
 	)
+}
+
+func TestValidatedCopyMonitorURL_AllowsPersonalCopyMonitorHost(t *testing.T) {
+	t.Parallel()
+
+	client := &Client{}
+
+	validated, err := client.validatedCopyMonitorURL("https://my.microsoftpersonalcontent.com/personal/operations/copy")
+	require.NoError(t, err)
+	assert.Equal(t, "https://my.microsoftpersonalcontent.com/personal/operations/copy", validated)
 }
 
 func TestDo_ErrorClassification(t *testing.T) {

@@ -7,8 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	stdsync "sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -21,18 +19,12 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
-// trialEntry tracks a pending trial action in the pipeline. Created when
-// the trial timer fires and reobserve succeeds, consumed when the planner's
-// fresh action arrives at admitAndDispatch or admitReady.
-type trialEntry struct {
-	scopeKey synctypes.ScopeKey
-	created  time.Time
+type reconcileResult struct {
+	events    []synctypes.ChangeEvent
+	shortcuts []synctypes.Shortcut
 }
 
-// watchState bundles all watch-mode-only state. Nil in one-shot mode.
-// Active scope runtime state lives here as a plain engine-owned slice; the
-// database remains the durable record for restart/recovery.
-type watchState struct {
+type watchRuntimeState struct {
 	// Active scope blocks owned by the watch control flow. The slice is tiny
 	// (usually 0-5 entries), so linear scans keep the logic simple and avoid a
 	// second mirrored subsystem.
@@ -41,6 +33,12 @@ type watchState struct {
 	// Scope detection — sliding window failure tracking.
 	scopeState *syncdispatch.ScopeState
 
+	// Monotonic action ID counter owned by the watch control flow. Prevents
+	// ID collisions across batches without introducing cross-goroutine sync.
+	nextActionID int64
+}
+
+type watchObservationState struct {
 	// Event buffer — watch-loop retry/trial work injects events via buf.Add().
 	buf *syncobserve.Buffer
 
@@ -49,38 +47,52 @@ type watchState struct {
 	deleteCounter   *syncdispatch.DeleteCounter
 	lastDataVersion int64
 
-	// Trial management (watch-loop-owned state).
-	trialPending map[string]trialEntry
-	trialTimer   *time.Timer
+	// Observer references — set in startObservers, nil'd on Close.
+	remoteObs *syncobserve.RemoteObserver
+	localObs  *syncobserve.LocalObserver
+}
+
+type watchTimerState struct {
+	// Trial and retry timers are armed by the watch loop. The channels stay
+	// persistent so timer callbacks only signal the loop; they never mutate
+	// loop-owned state directly.
+	trialTimer *time.Timer
 
 	// Retry timer — watch loop retrier sweeps sync_failures on each tick.
 	retryTimer   *time.Timer
 	retryTimerCh chan struct{} // persistent, buffered(1)
 
-	// Observer references — set in startObservers, nil'd on Close.
-	remoteObs *syncobserve.RemoteObserver
-	localObs  *syncobserve.LocalObserver
-
-	// Monotonic action ID counter owned by the watch control flow. Prevents
-	// ID collisions across batches without introducing cross-goroutine sync.
-	nextActionID int64
-
 	// Throttling: tracks last recheckPermissions call time (R-2.10.9).
 	lastPermRecheck time.Time
+}
 
+type watchReconcileState struct {
 	// Deduplication: caches last actionable issue count for watch summaries.
 	lastSummaryTotal int
 
-	// Async reconciliation guard — prevents concurrent full reconciliations.
-	// CompareAndSwap(false, true) at start, Store(false) in defer.
-	// Zero value (false) is the correct initial state.
-	reconcileRunning atomic.Bool
+	// Full reconciliation is started by the watch loop and hands its result
+	// back over reconcileResults. The loop owns reconcileActive and applies the
+	// returned events/shortcut snapshot on receipt.
+	reconcileActive  bool
+	reconcileResults chan reconcileResult
 
 	// afterReconcileCommit is a test-only hook called after CommitObservation
 	// succeeds in runFullReconciliationAsync. Nil in production. Allows tests
 	// to inject actions (e.g. context cancellation) at an otherwise unreachable
 	// point between commit and buffer feeding.
 	afterReconcileCommit func()
+}
+
+// watchState bundles all watch-mode-only state. Nil in one-shot mode.
+// Embedded sub-structs keep the watch-only ownership domains explicit without
+// flattening them into Engine or forcing a noisy field-renaming pass through
+// the runtime/tests. The database remains the durable record; this is only the
+// engine-owned working set.
+type watchState struct {
+	watchRuntimeState
+	watchObservationState
+	watchTimerState
+	watchReconcileState
 }
 
 // Engine orchestrates a complete sync pass: observe → plan → execute → commit.
@@ -104,12 +116,11 @@ type Engine struct {
 	minFreeSpace       int64                  // startup disk-scope revalidation threshold
 	diskAvailableFn    func(string) (uint64, error)
 
-	// watchShortcuts holds the latest shortcuts for permission and shortcut
-	// handling. Stays on Engine because both one-shot result draining and the
-	// watch loop need access, while setShortcuts is also called from RunOnce
-	// where e.watch is nil.
-	watchShortcuts   []synctypes.Shortcut
-	watchShortcutsMu stdsync.RWMutex
+	// shortcuts is the latest shortcut snapshot used by permission and shortcut
+	// handling. One-shot sets it before executePlan; watch mode updates it only
+	// from the watch loop after observation or reconciliation hands back a new
+	// snapshot.
+	shortcuts []synctypes.Shortcut
 
 	// depGraph is the pure dependency graph. Tracks action dependencies and
 	// readiness. Set during executePlan (one-shot) or initWatchPipeline
@@ -134,12 +145,11 @@ type Engine struct {
 	assertScopeInvariants bool
 	debugEventHook        func(engineDebugEvent)
 
-	// Engine-owned result counters. Workers are pure executors — the engine
-	// classifies results and owns all final disposition counts (R-6.8.9).
-	succeeded    atomic.Int32
-	failed       atomic.Int32
-	syncErrors   []error
-	syncErrorsMu stdsync.Mutex
+	// Engine-owned result counters. The engine loop is the only writer; callers
+	// read them only after the loop barrier completes.
+	succeeded  int
+	failed     int
+	syncErrors []error
 
 	// nowFn is the engine's clock. Defaults to time.Now. Tests inject a
 	// controllable clock for deterministic trial timer and scope timing.

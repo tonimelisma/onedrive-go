@@ -273,25 +273,59 @@ func setupWatchEngine(t *testing.T, eng *Engine) <-chan *synctypes.TrackedAction
 	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
 	eng.readyCh = make(chan *synctypes.TrackedAction, 1024)
 	eng.watch = &watchState{
-		scopeState:   syncdispatch.NewScopeState(eng.nowFunc, eng.logger),
-		trialPending: make(map[string]trialEntry),
-		retryTimerCh: make(chan struct{}, 1),
+		watchRuntimeState: watchRuntimeState{
+			scopeState: syncdispatch.NewScopeState(eng.nowFunc, eng.logger),
+		},
+		watchTimerState: watchTimerState{
+			retryTimerCh: make(chan struct{}, 1),
+		},
+		watchReconcileState: watchReconcileState{
+			reconcileResults: make(chan reconcileResult, 1),
+		},
 	}
 
 	return eng.readyCh
 }
 
 // newTestWatchState initializes watch state on an engine for testing.
-// Creates trialPending, retryTimerCh, and scope detection state — the minimum
-// set needed for watch-mode tests.
+// Creates retryTimerCh, reconcileResults, and scope detection state — the
+// minimum set needed for watch-mode tests.
 func newTestWatchState(t *testing.T, eng *Engine) {
 	t.Helper()
 
 	eng.watch = &watchState{
-		scopeState:   syncdispatch.NewScopeState(eng.nowFunc, eng.logger),
-		trialPending: make(map[string]trialEntry),
-		retryTimerCh: make(chan struct{}, 1),
+		watchRuntimeState: watchRuntimeState{
+			scopeState: syncdispatch.NewScopeState(eng.nowFunc, eng.logger),
+		},
+		watchTimerState: watchTimerState{
+			retryTimerCh: make(chan struct{}, 1),
+		},
+		watchReconcileState: watchReconcileState{
+			reconcileResults: make(chan reconcileResult, 1),
+		},
 	}
+}
+
+func testWorkDispatchState(t *testing.T, eng *Engine, ctx context.Context) (*synctypes.Baseline, *synctypes.SafetyConfig) {
+	t.Helper()
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+	return bl, synctypes.DefaultSafetyConfig()
+}
+
+func runTestRetrierSweep(t *testing.T, eng *Engine, ctx context.Context) []*synctypes.TrackedAction {
+	t.Helper()
+
+	bl, safety := testWorkDispatchState(t, eng, ctx)
+	return eng.runRetrierSweep(ctx, bl, synctypes.SyncBidirectional, safety)
+}
+
+func runTestTrialDispatch(t *testing.T, eng *Engine, ctx context.Context) []*synctypes.TrackedAction {
+	t.Helper()
+
+	bl, safety := testWorkDispatchState(t, eng, ctx)
+	return eng.runTrialDispatch(ctx, bl, synctypes.SyncBidirectional, safety)
 }
 
 func setTestScopeBlock(t *testing.T, eng *Engine, block synctypes.ScopeBlock) {
@@ -2818,20 +2852,22 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 // runFullReconciliationAsync tests
 // ---------------------------------------------------------------------------
 
-// waitForReconcileDone polls until reconcileRunning becomes false.
-// Fails the test if it doesn't complete within 10 seconds.
-func waitForReconcileDone(t *testing.T, ws *watchState) {
+// waitForReconcileDone applies the next reconcile result the same way the
+// watch loop would and waits for reconcileActive to clear.
+func waitForReconcileDone(t *testing.T, eng *Engine) {
 	t.Helper()
 
-	deadline := time.After(10 * time.Second)
-	for ws.reconcileRunning.Load() {
-		select {
-		case <-deadline:
-			require.Fail(t, "reconcileRunning did not become false within 10s")
-		default:
-			time.Sleep(5 * time.Millisecond)
-		}
+	require.NotNil(t, eng.watch)
+	require.NotNil(t, eng.watch.reconcileResults)
+
+	select {
+	case result := <-eng.watch.reconcileResults:
+		eng.applyReconcileResult(result)
+	case <-time.After(10 * time.Second):
+		require.Fail(t, "reconcile result was not delivered within 10s")
 	}
+
+	assert.False(t, eng.watch.reconcileActive, "reconcileActive should be false after applying reconcile result")
 }
 
 // Validates: R-2.1.6
@@ -2884,7 +2920,7 @@ func TestRunFullReconciliationAsync_NoChanges(t *testing.T) {
 	// buffer, even when the later planner pass reduces them to a no-op. The
 	// important boundary here is "no direct dispatch from the goroutine."
 	e.runFullReconciliationAsync(ctx, bl)
-	waitForReconcileDone(t, e.watch)
+	waitForReconcileDone(t, e)
 
 	select {
 	case ta := <-ready:
@@ -2918,7 +2954,7 @@ func TestRunFullReconciliationAsync_DeltaError(t *testing.T) {
 
 	// Should not panic — error is logged and function returns.
 	e.runFullReconciliationAsync(ctx, bl)
-	waitForReconcileDone(t, e.watch)
+	waitForReconcileDone(t, e)
 
 	// syncobserve.Buffer should be empty — no events were produced.
 	batch := e.watch.buf.FlushImmediate()
@@ -2951,12 +2987,12 @@ func TestRunFullReconciliationAsync_NonBlocking(t *testing.T) {
 	// Call should return immediately — goroutine is blocked in deltaFn.
 	e.runFullReconciliationAsync(ctx, bl)
 
-	// reconcileRunning should be true while delta is blocked.
-	assert.True(t, e.watch.reconcileRunning.Load(), "reconcileRunning should be true while goroutine runs")
+	// reconcileActive should be true while delta is blocked.
+	assert.True(t, e.watch.reconcileActive, "reconcileActive should be true while goroutine runs")
 
 	// Unblock delta and wait for completion.
 	close(unblock)
-	waitForReconcileDone(t, e.watch)
+	waitForReconcileDone(t, e)
 }
 
 func TestRunFullReconciliationAsync_SkipsIfRunning(t *testing.T) {
@@ -2981,16 +3017,15 @@ func TestRunFullReconciliationAsync_SkipsIfRunning(t *testing.T) {
 	setupWatchEngine(t, e)
 	e.watch.buf = syncobserve.NewBuffer(e.logger)
 
-	// Pre-set reconcileRunning — simulates a reconciliation already in progress.
-	e.watch.reconcileRunning.Store(true)
+	// Pre-set reconcileActive — simulates a reconciliation already in progress.
+	e.watch.reconcileActive = true
 
 	e.runFullReconciliationAsync(ctx, bl)
 
 	// deltaFn should not have been invoked.
 	assert.False(t, deltaCalled, "deltaFn should not be called when reconciliation is already running")
 
-	// Clean up: reset so waitForReconcileDone doesn't hang.
-	e.watch.reconcileRunning.Store(false)
+	e.watch.reconcileActive = false
 }
 
 func TestRunFullReconciliationAsync_FeedsBuffer(t *testing.T) {
@@ -3038,7 +3073,7 @@ func TestRunFullReconciliationAsync_FeedsBuffer(t *testing.T) {
 	// synctypes.Baseline is empty — delta returns a new file → orphan detection
 	// produces a download event that gets fed into the buffer.
 	e.runFullReconciliationAsync(ctx, bl)
-	waitForReconcileDone(t, e.watch)
+	waitForReconcileDone(t, e)
 
 	batch := e.watch.buf.FlushImmediate()
 	assert.NotEmpty(t, batch, "buffer should contain events from reconciliation")
@@ -3097,7 +3132,7 @@ func TestRunFullReconciliationAsync_ShutdownAfterCommit(t *testing.T) {
 	}
 
 	e.runFullReconciliationAsync(ctx, bl)
-	waitForReconcileDone(t, e.watch)
+	waitForReconcileDone(t, e)
 
 	// Verify observations WERE committed to SQLite — proving we took
 	// the post-commit shutdown path, not the commit-failed path.
@@ -3139,8 +3174,8 @@ func TestRunFullReconciliationAsync_SkipLogPromotedToInfo(t *testing.T) {
 	setupWatchEngine(t, e)
 	e.watch.buf = syncobserve.NewBuffer(e.logger)
 
-	// Pre-set reconcileRunning — simulates a reconciliation already in progress.
-	e.watch.reconcileRunning.Store(true)
+	// Pre-set reconcileActive — simulates a reconciliation already in progress.
+	e.watch.reconcileActive = true
 
 	e.runFullReconciliationAsync(ctx, bl)
 
@@ -3150,8 +3185,7 @@ func TestRunFullReconciliationAsync_SkipLogPromotedToInfo(t *testing.T) {
 	assert.Contains(t, logOutput, "full reconciliation skipped",
 		"skip message should be logged at Info level (not Debug)")
 
-	// Clean up.
-	e.watch.reconcileRunning.Store(false)
+	e.watch.reconcileActive = false
 }
 
 func TestRunFullReconciliationAsync_DurationInCompletionLog(t *testing.T) {
@@ -3202,7 +3236,7 @@ func TestRunFullReconciliationAsync_DurationInCompletionLog(t *testing.T) {
 	e.watch.buf = syncobserve.NewBuffer(e.logger)
 
 	e.runFullReconciliationAsync(ctx, bl)
-	waitForReconcileDone(t, e.watch)
+	waitForReconcileDone(t, e)
 
 	logOutput := logBuf.String()
 	assert.Contains(t, logOutput, "periodic full reconciliation complete",
@@ -3260,7 +3294,7 @@ func TestRunFullReconciliationAsync_DurationInNoChangesLog(t *testing.T) {
 	e.watch.buf = syncobserve.NewBuffer(e.logger)
 
 	e.runFullReconciliationAsync(ctx, bl)
-	waitForReconcileDone(t, e.watch)
+	waitForReconcileDone(t, e)
 
 	logOutput := logBuf.String()
 	assert.Contains(t, logOutput, "no changes",
@@ -3428,10 +3462,8 @@ func TestProcessWorkerResult_403ReadOnly_SkipsRemoteState(t *testing.T) {
 	ctx := t.Context()
 	setupEngineDepGraph(t, eng, 0)
 
-	// Set watchShortcuts so getShortcuts() returns them for handle403.
-	eng.watchShortcutsMu.Lock()
-	eng.watchShortcuts = shortcuts
-	eng.watchShortcutsMu.Unlock()
+	// Seed the latest shortcut snapshot so getShortcuts() returns it for handle403.
+	eng.shortcuts = shortcuts
 
 	eng.processWorkerResult(ctx, &synctypes.WorkerResult{
 		Path:       "Shared/TeamDocs/file.txt",
@@ -4094,12 +4126,18 @@ func startDrainLoop(t *testing.T) (chan synctypes.WorkerResult, <-chan struct{},
 	results := make(chan synctypes.WorkerResult, 16)
 
 	ctx, cancel := context.WithCancel(t.Context())
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+	safety := synctypes.DefaultSafetyConfig()
 	done := make(chan struct{})
 	errCh := make(chan error, 1)
 	go func() {
 		defer close(done)
 		defer eng.stopTrialTimer()
 		errCh <- eng.runEngineLoop(ctx, &engineLoopConfig{
+			bl:                   bl,
+			safety:               safety,
+			mode:                 synctypes.SyncBidirectional,
 			results:              results,
 			stopWhenResultsClose: true,
 		})
@@ -4307,15 +4345,18 @@ func TestE2E_OneShotLoop_TrialResultSuccess(t *testing.T) {
 		return !isTestScopeBlocked(eng, synctypes.SKThrottleAccount())
 	}, time.Second, time.Millisecond, "scope block should be cleared after trial success")
 
-	var released []synctypes.PathChanges
+	var released *synctypes.TrackedAction
 	require.Eventually(t, func() bool {
-		released = eng.watch.buf.FlushImmediate()
-		if len(released) == 0 {
+		select {
+		case released = <-eng.readyCh:
+			return released != nil && released.Action.Path == "blocked.txt"
+		default:
 			return false
 		}
+	}, time.Second, 10*time.Millisecond, "trial success should re-dispatch the held failure without external observation")
 
-		return released[0].Path == "blocked.txt"
-	}, time.Second, 10*time.Millisecond, "trial success should re-inject the held failure without external observation")
+	require.NotNil(t, released)
+	assert.Equal(t, synctypes.ActionUpload, released.Action.Type)
 }
 
 // TestE2E_OneShotLoop_TrialResultFailure verifies trial failure doubles the interval.
@@ -4819,18 +4860,14 @@ func TestLogFailureSummary_AggregatesAboveThreshold(t *testing.T) {
 	eng, _ := newTestEngine(t, &engineMockClient{})
 
 	// Add 15 errors with the same message prefix — should aggregate.
-	eng.syncErrorsMu.Lock()
 	for i := range 15 {
 		eng.syncErrors = append(eng.syncErrors, fmt.Errorf("quota_exceeded: upload failed for file %d", i))
 	}
-	eng.syncErrorsMu.Unlock()
 
 	// Should not panic; clears syncErrors after logging.
 	eng.logFailureSummary()
 
-	eng.syncErrorsMu.Lock()
 	assert.Empty(t, eng.syncErrors, "syncErrors should be cleared after summary")
-	eng.syncErrorsMu.Unlock()
 }
 
 // Validates: R-6.6.12
@@ -4842,9 +4879,7 @@ func TestLogFailureSummary_NoErrors(t *testing.T) {
 	// Should be a no-op with no errors.
 	eng.logFailureSummary()
 
-	eng.syncErrorsMu.Lock()
 	assert.Empty(t, eng.syncErrors)
-	eng.syncErrorsMu.Unlock()
 }
 
 // ---------------------------------------------------------------------------
@@ -4910,14 +4945,11 @@ func TestRetryPipeline_TransientFailure_IntegratedRetrier(t *testing.T) {
 	}, time.Second, time.Millisecond, "sync_failures row should be created")
 
 	// Trigger retrier sweep manually (in production this fires from retry timer).
-	eng.runRetrierSweep(ctx)
+	outbox := runTestRetrierSweep(t, eng, ctx)
 
-	// Verify: retrier injected event into buffer.
-	assert.Positive(t, eng.watch.buf.Len(), "retrier should inject event into buffer")
-
-	flushed := eng.watch.buf.FlushImmediate()
-	require.Len(t, flushed, 1, "should have exactly one path in buffer")
-	assert.Equal(t, testPath, flushed[0].Path, "buffered path")
+	require.Len(t, outbox, 1, "retrier should dispatch one action through the planner path")
+	assert.Equal(t, testPath, outbox[0].Action.Path)
+	assert.Equal(t, synctypes.ActionDownload, outbox[0].Action.Type)
 }
 
 // Validates: R-6.8.10
@@ -4963,7 +4995,7 @@ func TestOneShotEngineLoop_Success_ClearsSyncFailure(t *testing.T) {
 		return err == nil && len(rows) == 0
 	}, time.Second, time.Millisecond, "sync_failures row should be cleared on success")
 
-	assert.Equal(t, int32(1), eng.succeeded.Load(), "succeeded counter")
+	assert.Equal(t, 1, eng.succeeded, "succeeded counter")
 }
 
 // ---------------------------------------------------------------------------
@@ -5103,8 +5135,12 @@ func TestBootstrapSync_NoChanges(t *testing.T) {
 
 	// Set up watch infrastructure manually (simulating initWatchInfra).
 	eng.watch = &watchState{
-		trialPending: make(map[string]trialEntry),
-		retryTimerCh: make(chan struct{}, 1),
+		watchTimerState: watchTimerState{
+			retryTimerCh: make(chan struct{}, 1),
+		},
+		watchReconcileState: watchReconcileState{
+			reconcileResults: make(chan reconcileResult, 1),
+		},
 	}
 	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
 	eng.readyCh = make(chan *synctypes.TrackedAction, 1024)
@@ -5153,8 +5189,12 @@ func TestBootstrapSync_WithChanges(t *testing.T) {
 
 	// Set up watch infrastructure manually.
 	eng.watch = &watchState{
-		trialPending: make(map[string]trialEntry),
-		retryTimerCh: make(chan struct{}, 1),
+		watchTimerState: watchTimerState{
+			retryTimerCh: make(chan struct{}, 1),
+		},
+		watchReconcileState: watchReconcileState{
+			reconcileResults: make(chan reconcileResult, 1),
+		},
 	}
 	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
 	eng.readyCh = make(chan *synctypes.TrackedAction, 1024)

@@ -20,13 +20,14 @@ type engineLoopConfig struct {
 
 	initialOutbox []*synctypes.TrackedAction
 
-	readyBatches <-chan []synctypes.PathChanges
-	results      <-chan synctypes.WorkerResult
-	skippedCh    <-chan []synctypes.SkippedItem
-	recheckC     <-chan time.Time
-	reconcileC   <-chan time.Time
-	observerErrs <-chan error
-	heartbeatC   <-chan time.Time
+	readyBatches     <-chan []synctypes.PathChanges
+	results          <-chan synctypes.WorkerResult
+	skippedCh        <-chan []synctypes.SkippedItem
+	recheckC         <-chan time.Time
+	reconcileC       <-chan time.Time
+	reconcileResults <-chan reconcileResult
+	observerErrs     <-chan error
+	heartbeatC       <-chan time.Time
 
 	stopWhenEmpty        bool
 	stopWhenResultsClose bool
@@ -85,16 +86,16 @@ func (e *Engine) runEngineLoopIdle(
 	case <-cfg.reconcileC:
 		e.runFullReconciliationAsync(ctx, cfg.bl)
 		return nil, false, nil
+	case result, ok := <-cfg.reconcileResults:
+		return e.loopReconcileResult(cfg, nil, result, ok)
 	case obsErr, ok := <-cfg.observerErrs:
 		return e.loopObserverError(cfg, nil, obsErr, ok)
 	case <-cfg.heartbeatC:
 		return e.loopHeartbeat(cfg, nil)
 	case <-e.trialTimerChan():
-		e.handleTrialTimer(ctx)
-		return nil, false, nil
+		return append([]*synctypes.TrackedAction(nil), e.runTrialDispatch(ctx, cfg.bl, cfg.mode, cfg.safety)...), false, nil
 	case <-e.retryTimerChan():
-		e.handleRetryTimer(ctx)
-		return nil, false, nil
+		return append([]*synctypes.TrackedAction(nil), e.runRetrierSweep(ctx, cfg.bl, cfg.mode, cfg.safety)...), false, nil
 	case <-emptyCh:
 		return nil, true, nil
 	case <-ctx.Done():
@@ -123,16 +124,16 @@ func (e *Engine) runEngineLoopWithOutbox(
 	case <-cfg.reconcileC:
 		e.runFullReconciliationAsync(ctx, cfg.bl)
 		return outbox, false, nil
+	case result, ok := <-cfg.reconcileResults:
+		return e.loopReconcileResult(cfg, outbox, result, ok)
 	case obsErr, ok := <-cfg.observerErrs:
 		return e.loopObserverError(cfg, outbox, obsErr, ok)
 	case <-cfg.heartbeatC:
 		return e.loopHeartbeat(cfg, outbox)
 	case <-e.trialTimerChan():
-		e.handleTrialTimer(ctx)
-		return outbox, false, nil
+		return append(outbox, e.runTrialDispatch(ctx, cfg.bl, cfg.mode, cfg.safety)...), false, nil
 	case <-e.retryTimerChan():
-		e.handleRetryTimer(ctx)
-		return outbox, false, nil
+		return append(outbox, e.runRetrierSweep(ctx, cfg.bl, cfg.mode, cfg.safety)...), false, nil
 	case <-emptyCh:
 		return outbox, true, nil
 	case <-ctx.Done():
@@ -192,6 +193,21 @@ func (e *Engine) loopSkipped(
 
 	e.recordSkippedItems(ctx, skipped)
 	e.clearResolvedSkippedItems(ctx, skipped)
+	return outbox, false, nil
+}
+
+func (e *Engine) loopReconcileResult(
+	cfg *engineLoopConfig,
+	outbox []*synctypes.TrackedAction,
+	result reconcileResult,
+	ok bool,
+) ([]*synctypes.TrackedAction, bool, error) {
+	if !ok {
+		cfg.reconcileResults = nil
+		return outbox, false, nil
+	}
+
+	e.applyReconcileResult(result)
 	return outbox, false, nil
 }
 
@@ -276,15 +292,16 @@ func (e *Engine) waitForQuiescence(ctx context.Context) error {
 // draining.
 func (e *Engine) runWatchLoop(ctx context.Context, p *watchPipeline) error {
 	return e.runEngineLoop(ctx, &engineLoopConfig{
-		bl:           p.bl,
-		safety:       p.safety,
-		mode:         p.mode,
-		readyBatches: p.ready,
-		results:      p.results,
-		skippedCh:    p.skippedCh,
-		recheckC:     p.recheckC,
-		reconcileC:   p.reconcileC,
-		observerErrs: p.errs,
+		bl:               p.bl,
+		safety:           p.safety,
+		mode:             p.mode,
+		readyBatches:     p.ready,
+		results:          p.results,
+		skippedCh:        p.skippedCh,
+		recheckC:         p.recheckC,
+		reconcileC:       p.reconcileC,
+		reconcileResults: p.reconcileResults,
+		observerErrs:     p.errs,
 		onObserverError: func(obsErr error) error {
 			return e.handleObserverExit(p, obsErr)
 		},
