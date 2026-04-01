@@ -46,7 +46,7 @@ func ObserveSinglePath(
 	absPath := filepath.Join(syncRoot, path)
 	info, err := trustedStat(absPath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) || os.IsNotExist(err) {
 			return SinglePathObservation{Resolved: true}, nil
 		}
 

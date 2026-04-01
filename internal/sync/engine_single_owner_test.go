@@ -1937,6 +1937,81 @@ func TestTrialDispatch_OnlySkippedHeldCandidatesReleaseScope(t *testing.T) {
 	assert.False(t, isTestScopeBlocked(eng, sk))
 }
 
+func TestEngine_ClearFailureCandidate_RemovesSyncFailure(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	ctx := context.Background()
+	row := &synctypes.SyncFailureRow{
+		Path:    "clear-me.txt",
+		DriveID: eng.driveID,
+	}
+
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:      row.Path,
+		DriveID:   row.DriveID,
+		Direction: synctypes.DirectionUpload,
+		Category:  synctypes.CategoryTransient,
+	}, nil))
+
+	eng.clearFailureCandidate(ctx, row, "TestEngine_ClearFailureCandidate_RemovesSyncFailure")
+
+	failures, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, failures)
+}
+
+func TestEngine_RecordRetryTrialSkippedItem_ReasonlessSkipClearsFailure(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	ctx := context.Background()
+	row := &synctypes.SyncFailureRow{
+		Path:    "internal.tmp",
+		DriveID: eng.driveID,
+	}
+
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:      row.Path,
+		DriveID:   row.DriveID,
+		Direction: synctypes.DirectionUpload,
+		Category:  synctypes.CategoryTransient,
+	}, nil))
+
+	eng.recordRetryTrialSkippedItem(ctx, row, &synctypes.SkippedItem{Path: row.Path})
+
+	failures, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, failures)
+}
+
+func TestEngine_RecordRetryTrialSkippedItem_ZeroDriveIDFallsBackToEngineDrive(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	ctx := context.Background()
+	row := &synctypes.SyncFailureRow{
+		Path:      "oversized.bin",
+		Direction: synctypes.DirectionUpload,
+	}
+
+	eng.recordRetryTrialSkippedItem(ctx, row, &synctypes.SkippedItem{
+		Path:     row.Path,
+		Reason:   synctypes.IssueFileTooLarge,
+		Detail:   "file size exceeds limit",
+		FileSize: syncobserve.MaxOneDriveFileSize + 1,
+	})
+
+	failures, err := eng.baseline.ListActionableFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, failures, 1)
+	assert.Equal(t, row.Path, failures[0].Path)
+	assert.Equal(t, eng.driveID, failures[0].DriveID)
+	assert.Equal(t, synctypes.CategoryActionable, failures[0].Category)
+	assert.Equal(t, synctypes.IssueFileTooLarge, failures[0].IssueType)
+	assert.Equal(t, synctypes.FailureRoleItem, failures[0].Role)
+}
+
 func TestTrialDispatch_DoesNotMutateStateWhenNoScopeIsDue(t *testing.T) {
 	t.Parallel()
 
