@@ -17,7 +17,8 @@ Fast, safe OneDrive CLI and sync client in Go. Unix-style file ops (`ls`, `get`,
 | `internal/syncobserve/` | `spec/design/sync-observation.md` | `spec/reference/onedrive-sync-behavior.md` |
 | `internal/syncplan/`, `internal/synctypes/` | `spec/design/sync-planning.md` | `spec/reference/onedrive-sync-behavior.md` |
 | `internal/syncexec/`, `internal/syncdispatch/` | `spec/design/sync-execution.md` | |
-| `internal/sync/engine*.go`, `orchestrator.go`, `drive_runner.go`, `permissions.go`, `sync.go` | `spec/design/sync-engine.md` | |
+| `internal/sync/engine*.go`, `internal/sync/permissions.go`, `internal/sync/permission_*.go`, `sync_helpers.go` | `spec/design/sync-engine.md` | |
+| `internal/multisync/`, `sync.go` | `spec/design/sync-control-plane.md` | `spec/design/sync-engine.md`, `spec/design/config.md` |
 | `internal/syncstore/` | `spec/design/sync-store.md` | `spec/design/data-model.md` |
 | Root package CLI files | `spec/design/cli.md` | |
 
@@ -176,7 +177,7 @@ Project-specific consequences:
 
 ### E2E & Integration Tests
 
-Run against live OneDrive accounts. Test account names are never committed — use `.env` (gitignored) or environment variables. Both suites require `ONEDRIVE_ALLOWED_TEST_ACCOUNTS` and `ONEDRIVE_TEST_DRIVE` to be set (crashes without them). Copy `.env.example` to `.env` and fill in your test accounts. E2E tests are tiered: `e2e` tag (fast, every CI push) vs `e2e_full` tag (slow, nightly/manual, 30-min timeout).
+Run against live OneDrive accounts. Test account names are never committed — use `.env` (gitignored) or environment variables. Both suites require `ONEDRIVE_ALLOWED_TEST_ACCOUNTS` and `ONEDRIVE_TEST_DRIVE` to be set (crashes without them). Copy `.env.example` to `.env` and fill in your test accounts. E2E tests are tiered: `e2e` tag (fast, every CI push) vs `e2e_full` tag (slow, nightly/manual, 30-min timeout). The full suite builds on top of the fast suite, so the canonical invocation is `./scripts/verify.sh e2e-full` rather than `go test -tags=e2e_full` alone.
 
 **Test credential pipeline** (one-time setup, then CI is self-sustaining):
 

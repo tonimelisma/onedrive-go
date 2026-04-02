@@ -1,4 +1,4 @@
-package sync
+package multisync
 
 import (
 	"context"
@@ -11,11 +11,12 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // engineRunner is the interface the Orchestrator uses to run sync passes.
-// Implemented by *Engine; mock implementations are used in tests.
+// Implemented by *sync.Engine; mock implementations are used in tests.
 type engineRunner interface {
 	RunOnce(ctx context.Context, mode synctypes.SyncMode, opts synctypes.RunOpts) (*synctypes.SyncReport, error)
 	RunWatch(ctx context.Context, mode synctypes.SyncMode, opts synctypes.WatchOpts) error
@@ -38,8 +39,8 @@ type OrchestratorConfig struct {
 	SIGHUPChan <-chan os.Signal // injectable for tests; nil uses no-op channel
 }
 
-// Orchestrator manages per-drive sync runners. It is ALWAYS used, even
-// for a single drive — no separate single-drive code path (MULTIDRIVE.md §11.7).
+// Orchestrator manages per-drive sync runners. It is always used, even for a
+// single drive, so one-shot and watch mode share the same top-level lifecycle.
 type Orchestrator struct {
 	cfg           *OrchestratorConfig
 	engineFactory engineFactoryFunc // injectable for tests
@@ -53,7 +54,7 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 	return &Orchestrator{
 		cfg: cfg,
 		engineFactory: func(ctx context.Context, ecfg *synctypes.EngineConfig) (engineRunner, error) {
-			return NewEngine(ctx, ecfg)
+			return syncengine.NewEngine(ctx, ecfg)
 		},
 		logger: cfg.Logger,
 	}

@@ -90,6 +90,15 @@ func TestFindTestCredentialDir(t *testing.T) {
 	assert.Equal(t, credentialDir, FindTestCredentialDir(moduleRoot))
 }
 
+func TestFindTestCredentialDir_Symlink(t *testing.T) {
+	moduleRoot := t.TempDir()
+	realCredentialDir := t.TempDir()
+	credentialLink := filepath.Join(moduleRoot, ".testdata")
+	require.NoError(t, os.Symlink(realCredentialDir, credentialLink))
+
+	assert.Equal(t, credentialLink, FindTestCredentialDir(moduleRoot))
+}
+
 func TestValidateAllowlist(t *testing.T) {
 	t.Setenv("ONEDRIVE_ALLOWED_TEST_ACCOUNTS", "personal:user@example.com,business:user@contoso.com")
 	t.Setenv("ONEDRIVE_TEST_DRIVE", "business:user@contoso.com")

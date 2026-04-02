@@ -40,7 +40,8 @@ func ReadInotifyLimit() (int, error) {
 }
 
 // CheckInotifyCapacity warns if the estimated directory count exceeds 80% of
-// the inotify max_user_watches limit. Provides sysctl advice per MULTIDRIVE.md §9.1.
+// the inotify max_user_watches limit and points operators at the sysctl knob
+// they need to raise before watch startup becomes fragile.
 func CheckInotifyCapacity(estimatedDirs int, logger *slog.Logger) {
 	// Read the current procfs value directly instead of caching it in global
 	// process state. This path runs at observer startup and the extra read is

@@ -137,19 +137,6 @@ func (m *engineMockClient) Upload(ctx context.Context, driveID driveid.ID, paren
 	}, nil
 }
 
-// ---------------------------------------------------------------------------
-// Test helpers (shared across engine, drive_runner, and orchestrator tests)
-// ---------------------------------------------------------------------------
-
-func testCanonicalID(t *testing.T, s string) driveid.CanonicalID {
-	t.Helper()
-
-	cid, err := driveid.NewCanonicalID(s)
-	require.NoError(t, err)
-
-	return cid
-}
-
 const engineTestDriveID = "0000000000000001"
 
 type testEngine struct {

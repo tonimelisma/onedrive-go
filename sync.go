@@ -11,7 +11,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	isync "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -133,7 +133,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	provider := driveops.NewSessionProvider(holder,
 		syncMetaHTTPClient(), syncTransferHTTPClient(), "onedrive-go/"+version, logger)
 
-	orch := isync.NewOrchestrator(&isync.OrchestratorConfig{
+	orch := multisync.NewOrchestrator(&multisync.OrchestratorConfig{
 		Holder:   holder,
 		Drives:   drives,
 		Provider: provider,
@@ -187,7 +187,7 @@ func runSyncDaemon(
 	provider := driveops.NewSessionProvider(holder,
 		syncMetaHTTPClient(), syncTransferHTTPClient(), "onedrive-go/"+version, logger)
 
-	orch := isync.NewOrchestrator(&isync.OrchestratorConfig{
+	orch := multisync.NewOrchestrator(&multisync.OrchestratorConfig{
 		Holder:     holder,
 		Drives:     drives,
 		Provider:   provider,

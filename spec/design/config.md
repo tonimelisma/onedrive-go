@@ -32,11 +32,11 @@ Each drive section contains per-drive settings (sync_dir, filters, paused state)
 
 ### Pause State
 
-`Drive.IsPaused(now time.Time) bool` is the single source of truth for whether a drive is currently paused. All callers (CLI commands, orchestrator, drive resolution) use this method instead of checking `Paused`/`PausedUntil` fields directly. Logic: nil/false → not paused; true without expiry → indefinite; true with future expiry → active; true with past expiry → expired (not paused); true with unparseable expiry → indefinite (safe default).
+`Drive.IsPaused(now time.Time) bool` is the single source of truth for whether a drive is currently paused. All callers (CLI commands, the multi-drive control plane, drive resolution) use this method instead of checking `Paused`/`PausedUntil` fields directly. Logic: nil/false → not paused; true without expiry → indefinite; true with future expiry → active; true with past expiry → expired (not paused); true with unparseable expiry → indefinite (safe default).
 
 `ResolvedDrive.Paused` is expiry-aware: `buildResolvedDrive` calls `IsPaused(time.Now())`, so `ResolveDrives(includePaused=false)` correctly includes drives with expired timed pauses.
 
-`ClearExpiredPauses(cfgPath, cfg, now, logger)` is config-level housekeeping: removes stale `paused`/`paused_until` keys from config for drives whose timed pause has expired. Updates both in-memory config and on-disk file. Called by the orchestrator's reload path before resolving drives.
+`ClearExpiredPauses(cfgPath, cfg, now, logger)` is config-level housekeeping: removes stale `paused`/`paused_until` keys from config for drives whose timed pause has expired. Updates both in-memory config and on-disk file. Called by the control-plane reload path before resolving drives.
 
 Default sync directories are computed deterministically from the canonical ID + cached metadata using a two-level collision scheme: base name → + display_name → + email. `DefaultSyncDir()` is the single entry point.
 
@@ -58,7 +58,7 @@ Callers branch on `found` instead of overloading `(nil, nil)` as both “missing
 
 Implements: R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified]
 
-Unknown config keys are fatal errors (`unknown.go`). Per-drive validation checks sync_dir, filter patterns, size parsing, and drive-specific constraints. Global validation checks log level, transfer workers, and safety thresholds. `checkSyncDirOverlap()` prevents overlapping sync directories using `filepath.Clean` + `strings.HasPrefix` with separator suffix. Called at both config load and Orchestrator start.
+Unknown config keys are fatal errors (`unknown.go`). Per-drive validation checks sync_dir, filter patterns, size parsing, and drive-specific constraints. Global validation checks log level, transfer workers, and safety thresholds. `checkSyncDirOverlap()` prevents overlapping sync directories using `filepath.Clean` + `strings.HasPrefix` with separator suffix. Called at both config load and control-plane startup.
 
 ### Validation Tiers [verified]
 
@@ -76,7 +76,7 @@ Internal refactoring supports both paths cleanly: `collectUnknownGlobalKeyErrors
 
 ## Config Holder
 
-`config.Holder` wraps `*Config` + immutable config path behind an `RWMutex`. Both `SessionProvider` and `OrchestratorConfig` share the same `*Holder` instance. On SIGHUP reload, one `holder.Update(newCfg)` call atomically updates config for all consumers.
+`config.Holder` wraps `*Config` + immutable config path behind an `RWMutex`. Both `SessionProvider` and `multisync.OrchestratorConfig` share the same `*Holder` instance. On SIGHUP reload, one `holder.Update(newCfg)` call atomically updates config for all consumers.
 
 ## Auto-Creation
 
