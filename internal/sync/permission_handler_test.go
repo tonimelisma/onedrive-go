@@ -14,6 +14,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -83,11 +84,13 @@ func newTestPermHandler(t *testing.T, recorder *mockFailureRecorder, checker syn
 
 	syncRoot := filepath.Join(t.TempDir(), "sync")
 	require.NoError(t, os.MkdirAll(syncRoot, 0o750))
+	tree, err := synctree.Open(syncRoot)
+	require.NoError(t, err)
 
 	return &PermissionHandler{
 		baseline:    recorder,
 		permChecker: checker,
-		syncRoot:    syncRoot,
+		syncTree:    tree,
 		driveID:     driveid.New("test-drive"),
 		logger:      slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		nowFn:       time.Now,

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -26,7 +27,7 @@ type SinglePathObservation struct {
 // reuse, and "emit with empty hash" behavior when hashing fails.
 func ObserveSinglePath(
 	logger *slog.Logger,
-	syncRoot string,
+	syncTree *synctree.Root,
 	relPath string,
 	base *synctypes.BaselineEntry,
 	observeStartNano int64,
@@ -43,8 +44,12 @@ func ObserveSinglePath(
 		return SinglePathObservation{Skipped: skip}, nil
 	}
 
-	absPath := filepath.Join(syncRoot, path)
-	info, err := trustedStat(absPath)
+	absPath, err := syncTree.Abs(path)
+	if err != nil {
+		return SinglePathObservation{}, fmt.Errorf("observe single path %s: resolve: %w", path, err)
+	}
+
+	info, err := syncTree.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) || os.IsNotExist(err) {
 			return SinglePathObservation{Resolved: true}, nil
@@ -67,30 +72,9 @@ func ObserveSinglePath(
 		}}, nil
 	}
 
-	var hash string
+	hash := ""
 	if itemType == synctypes.ItemTypeFile {
-		if CanReuseBaselineHash(info, base, observeStartNano) {
-			hash = base.LocalHash
-		} else {
-			if hashFunc == nil {
-				hashFunc = driveops.ComputeQuickXorHash
-			}
-
-			hash, err = computeStableHashWith(absPath, hashFunc)
-			if err != nil {
-				if logger != nil {
-					if errors.Is(err, synctypes.ErrFileChangedDuringHash) {
-						logger.Debug("file metadata still settling, emitting with empty hash",
-							slog.String("path", path))
-					} else {
-						logger.Warn("hash failed, emitting event with empty hash",
-							slog.String("path", path),
-							slog.String("error", err.Error()))
-					}
-				}
-				hash = ""
-			}
-		}
+		hash = observeSinglePathHash(logger, path, absPath, info, base, observeStartNano, hashFunc)
 	}
 
 	return SinglePathObservation{
@@ -105,4 +89,40 @@ func ObserveSinglePath(
 			Mtime:    info.ModTime().UnixNano(),
 		},
 	}, nil
+}
+
+func observeSinglePathHash(
+	logger *slog.Logger,
+	path string,
+	absPath string,
+	info os.FileInfo,
+	base *synctypes.BaselineEntry,
+	observeStartNano int64,
+	hashFunc func(string) (string, error),
+) string {
+	if CanReuseBaselineHash(info, base, observeStartNano) {
+		return base.LocalHash
+	}
+
+	if hashFunc == nil {
+		hashFunc = driveops.ComputeQuickXorHash
+	}
+
+	hash, err := computeStableHashWith(absPath, hashFunc)
+	if err == nil {
+		return hash
+	}
+
+	if logger != nil {
+		if errors.Is(err, synctypes.ErrFileChangedDuringHash) {
+			logger.Debug("file metadata still settling, emitting with empty hash",
+				slog.String("path", path))
+		} else {
+			logger.Warn("hash failed, emitting event with empty hash",
+				slog.String("path", path),
+				slog.String("error", err.Error()))
+		}
+	}
+
+	return ""
 }

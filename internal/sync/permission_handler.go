@@ -12,6 +12,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -21,7 +22,7 @@ import (
 type PermissionHandler struct {
 	baseline    synctypes.SyncFailureRecorder
 	permChecker synctypes.PermissionChecker
-	syncRoot    string
+	syncTree    *synctree.Root
 	driveID     driveid.ID
 	logger      *slog.Logger
 	nowFn       func() time.Time
@@ -336,9 +337,9 @@ func (ph *PermissionHandler) handleLocalPermission(
 	// block everything behind a scope block. The sync root being inaccessible
 	// is fundamentally different from a subdirectory denial: ALL operations
 	// will fail, and the user needs a clear, actionable message.
-	if !isDirAccessible(ph.syncRoot) {
+	if !isDirAccessible(ph.syncTree, ".") {
 		ph.logger.Warn("sync root directory is inaccessible",
-			slog.String("path", ph.syncRoot),
+			slog.String("path", ph.syncTree.Path()),
 			slog.String("error", r.ErrMsg),
 		)
 
@@ -350,13 +351,25 @@ func (ph *PermissionHandler) handleLocalPermission(
 	}
 
 	// Walk up from the file's parent directory to find the deepest inaccessible ancestor.
-	absPath := filepath.Join(ph.syncRoot, r.Path)
+	absPath, absErr := ph.syncTree.Abs(r.Path)
+	if absErr != nil {
+		ph.logger.Warn("handleLocalPermission: failed to resolve sync-tree path",
+			slog.String("path", r.Path),
+			slog.String("error", absErr.Error()),
+		)
+
+		return ph.localFilePermissionDecision(
+			r.Path,
+			r.ActionType,
+			"file not accessible (check filesystem permissions)",
+		)
+	}
 	parentDir := filepath.Dir(absPath)
 
 	// Check if the parent directory is accessible (readable). os.Stat is
 	// insufficient — it succeeds on chmod 000 dirs because stat() only needs
 	// parent execute permission. os.Open tests actual read access.
-	if isDirAccessible(parentDir) {
+	if isDirAccessible(ph.syncTree, parentDir) {
 		// Parent directory is accessible — this is a file-level permission issue.
 		return ph.localFilePermissionDecision(
 			r.Path,
@@ -369,7 +382,7 @@ func (ph *PermissionHandler) handleLocalPermission(
 	boundary := ph.deepestDeniedBoundary(parentDir)
 
 	// Convert boundary to relative path for recording.
-	relBoundary, relErr := filepath.Rel(ph.syncRoot, boundary)
+	relBoundary, relErr := ph.syncTree.Rel(boundary)
 	if relErr != nil {
 		// Shouldn't happen — boundary is under syncRoot. Fall back to recording at file level.
 		ph.logger.Warn("handleLocalPermission: failed to relativize boundary path",
@@ -445,7 +458,7 @@ func (ph *PermissionHandler) deepestDeniedBoundary(parentDir string) string {
 		if parent == boundary {
 			return boundary
 		}
-		if isDirAccessible(parent) {
+		if isDirAccessible(ph.syncTree, parent) {
 			return boundary
 		}
 		boundary = parent
@@ -472,9 +485,7 @@ func (ph *PermissionHandler) recheckLocalPermissions(ctx context.Context) []Perm
 		}
 
 		dirPath := issue.ScopeKey.DirPath()
-		absDir := filepath.Join(ph.syncRoot, dirPath)
-
-		if !isDirAccessible(absDir) {
+		if !isDirAccessible(ph.syncTree, dirPath) {
 			// Still inaccessible — keep the block.
 			decisions = append(decisions, PermissionRecheckDecision{
 				Kind:     permissionRecheckKeepScope,

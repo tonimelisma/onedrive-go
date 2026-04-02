@@ -96,7 +96,7 @@ func TestAddWatchesRecursive_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 	watcher := newEnospcWatcher(1) // fail after first successful Add (root)
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	err := obs.AddWatchesRecursive(t.Context(), watcher, root)
+	err := obs.AddWatchesRecursive(t.Context(), watcher, mustOpenSyncTree(t, root))
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, synctypes.ErrWatchLimitExhausted,
@@ -117,7 +117,7 @@ func TestAddWatchesRecursive_NonENOSPC_ContinuesNormally(t *testing.T) {
 	}
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	err := obs.AddWatchesRecursive(t.Context(), watcher, root)
+	err := obs.AddWatchesRecursive(t.Context(), watcher, mustOpenSyncTree(t, root))
 
 	// Non-ENOSPC errors should NOT return ErrWatchLimitExhausted.
 	assert.NoError(t, err) // walks continue, failures are just logged
@@ -169,7 +169,7 @@ func TestWatch_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 	events := make(chan synctypes.ChangeEvent, 256)
 	ctx := t.Context()
 
-	err := obs.Watch(ctx, root, events)
+	err := obs.Watch(ctx, mustOpenSyncTree(t, root), events)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, synctypes.ErrWatchLimitExhausted,
@@ -186,7 +186,7 @@ func TestFullScan_NonexistentSyncRoot_ReturnsError(t *testing.T) {
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
 	nonexistent := filepath.Join(t.TempDir(), "does-not-exist")
 
-	_, err := obs.FullScan(t.Context(), nonexistent)
+	_, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, nonexistent))
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, synctypes.ErrSyncRootMissing,

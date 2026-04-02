@@ -131,7 +131,7 @@ func TestWatch_DetectsFileModify(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	time.Sleep(100 * time.Millisecond)
@@ -167,7 +167,7 @@ func TestWatch_IgnoresExcludedFiles(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	time.Sleep(100 * time.Millisecond)
@@ -202,7 +202,7 @@ func TestWatch_NosyncGuard(t *testing.T) {
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
 	events := make(chan synctypes.ChangeEvent, 10)
 
-	err := obs.Watch(t.Context(), dir, events)
+	err := obs.Watch(t.Context(), mustOpenSyncTree(t, dir), events)
 	assert.ErrorIs(t, err, synctypes.ErrNosyncGuard)
 }
 
@@ -217,7 +217,7 @@ func TestLocalWatch_ContextCancellation(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	// Let the watcher start, then cancel.
@@ -269,7 +269,7 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	// Step 1: Inject a watcher error → watchLoop sleeps with initial backoff (1s).
@@ -334,7 +334,7 @@ func TestWatchLoop_BackoffEscalatesWithoutReset(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	// Inject two consecutive errors.
@@ -376,7 +376,7 @@ func TestWatchLoop_ChmodCreateCombinedEvent(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	// Inject a combined Chmod|Create event — macOS FSEvents edge case.
@@ -418,7 +418,7 @@ func TestWatchLoop_TransientFileCreateDelete(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	// Inject a Remove event for a path that was never created (from the
@@ -487,7 +487,7 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	// Inject events in REVERSED order: Create at new path before Rename

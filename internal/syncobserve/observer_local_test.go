@@ -81,7 +81,7 @@ func TestFullScan_NewFiles(t *testing.T) {
 	writeTestFile(t, dir, "data.csv", "a,b,c")
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	result, err := obs.FullScan(t.Context(), dir)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
 	require.Len(t, result.Events, 2)
@@ -105,7 +105,7 @@ func TestFullScan_NewFolder(t *testing.T) {
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "photos"), 0o700), "Mkdir")
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	result, err := obs.FullScan(t.Context(), dir)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
 	require.Len(t, result.Events, 1)
@@ -129,7 +129,7 @@ func TestFullScan_ModifiedFile(t *testing.T) {
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	result, err := obs.FullScan(t.Context(), dir)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
 	require.Len(t, result.Events, 1)
@@ -153,7 +153,7 @@ func TestFullScan_UnchangedFile(t *testing.T) {
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	result, err := obs.FullScan(t.Context(), dir)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
 	assert.Empty(t, result.Events, "file unchanged")
@@ -172,7 +172,7 @@ func TestFullScan_DeletedFile(t *testing.T) {
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	result, err := obs.FullScan(t.Context(), dir)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
 	require.Len(t, result.Events, 1)
@@ -199,7 +199,7 @@ func TestFullScan_DeletedFolder(t *testing.T) {
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	result, err := obs.FullScan(t.Context(), dir)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
 	require.Len(t, result.Events, 1)
@@ -224,7 +224,7 @@ func TestFullScan_MtimeChangeNoContentChange(t *testing.T) {
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	result, err := obs.FullScan(t.Context(), dir)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
 	assert.Empty(t, result.Events, "mtime change only, hash matches")
@@ -252,7 +252,7 @@ func TestFullScan_MtimeSizeFastPath(t *testing.T) {
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	result, err := obs.FullScan(t.Context(), dir)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
 	assert.Empty(t, result.Events, "fast path should skip unchanged file")
@@ -280,7 +280,7 @@ func TestFullScan_RacilyCleanForcesHash(t *testing.T) {
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	result, err := obs.FullScan(t.Context(), dir)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
 	// Racily-clean guard should force hash, detect the mismatch -> ChangeModify.
@@ -313,7 +313,7 @@ func TestFullScan_SizeChangeForcesHash(t *testing.T) {
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	result, err := obs.FullScan(t.Context(), dir)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
 	require.Len(t, result.Events, 1, "size change should force hash")
@@ -327,7 +327,7 @@ func TestFullScan_NosyncGuard(t *testing.T) {
 	writeTestFile(t, dir, ".nosync", "")
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	_, err := obs.FullScan(t.Context(), dir)
+	_, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 
 	assert.ErrorIs(t, err, synctypes.ErrNosyncGuard)
 }
@@ -338,7 +338,7 @@ func TestFullScan_EmptyDir(t *testing.T) {
 	dir := t.TempDir()
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	result, err := obs.FullScan(t.Context(), dir)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
 	assert.Empty(t, result.Events)
@@ -354,7 +354,7 @@ func TestFullScan_Symlink(t *testing.T) {
 	require.NoError(t, os.Symlink(filepath.Join(dir, "real.txt"), filepath.Join(dir, "link.txt")), "Symlink")
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	result, err := obs.FullScan(t.Context(), dir)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
 	// Only the real file should produce an event, not the symlink.
@@ -370,7 +370,7 @@ func TestFullScan_InvalidName(t *testing.T) {
 	writeTestFile(t, dir, "valid.txt", "ok")
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	result, err := obs.FullScan(t.Context(), dir)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
 	// CON should be skipped; only valid.txt produces an event.
@@ -395,7 +395,7 @@ func TestFullScan_AlwaysExcluded(t *testing.T) {
 	writeTestFile(t, dir, "legit.txt", "keep me")
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	result, err := obs.FullScan(t.Context(), dir)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
 	// Only legit.txt should produce an event.
@@ -416,7 +416,7 @@ func TestFullScan_ContextCanceled(t *testing.T) {
 	cancel()
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	_, err := obs.FullScan(ctx, dir)
+	_, err := obs.FullScan(ctx, mustOpenSyncTree(t, dir))
 
 	require.Error(t, err, "expected error")
 	assert.ErrorIs(t, err, context.Canceled)
@@ -435,7 +435,7 @@ func TestFullScan_NFCNormalization(t *testing.T) {
 	writeTestFile(t, dir, nfdName, "resume content")
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	result, err := obs.FullScan(t.Context(), dir)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
 	require.Len(t, result.Events, 1)
@@ -451,7 +451,7 @@ func TestFullScan_NestedDirs(t *testing.T) {
 	writeTestFile(t, dir, "top.txt", "top content")
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	result, err := obs.FullScan(t.Context(), dir)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
 	// Expect: folder "a", folder "a/b", file "a/b/deep.txt", file "top.txt".
@@ -477,7 +477,7 @@ func TestFullScan_EmptyFile(t *testing.T) {
 	writeTestFile(t, dir, "empty.txt", "")
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	result, err := obs.FullScan(t.Context(), dir)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
 	require.Len(t, result.Events, 1)
@@ -521,7 +521,7 @@ func TestFullScan_MixedChanges(t *testing.T) {
 	)
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	result, err := obs.FullScan(t.Context(), dir)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
 	// 3 events: new, modified, deleted. Unchanged produces no event.
@@ -769,7 +769,7 @@ func TestFullScan_NosyncGuardDir(t *testing.T) {
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".nosync"), 0o700), "Mkdir")
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	_, err := obs.FullScan(t.Context(), dir)
+	_, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 
 	assert.ErrorIs(t, err, synctypes.ErrNosyncGuard)
 }
@@ -784,7 +784,7 @@ func TestFullScan_ExcludedDirSkipsSubtree(t *testing.T) {
 	writeTestFile(t, dir, "visible.txt", "shown")
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	result, err := obs.FullScan(t.Context(), dir)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
 	// Only visible.txt should appear; ~excluded dir and its contents are skipped.
@@ -824,7 +824,7 @@ func TestFullScan_InvalidNameDirSkipsSubtree(t *testing.T) {
 	writeTestFile(t, dir, "good.txt", "good")
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	result, err := obs.FullScan(t.Context(), dir)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
 	// Only good.txt should appear; bad. dir and its contents are skipped.
@@ -854,7 +854,7 @@ func TestFullScan_PermissionDenied(t *testing.T) {
 	t.Cleanup(func() { setTestDirPermissions(t, unreadableDir, 0o700) })
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	result, err := obs.FullScan(t.Context(), syncRoot)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
 
 	// Should see events for readable dir + file, but not unreadable contents.
@@ -970,7 +970,7 @@ func TestFullScan_HashFailureStillEmitsCreate(t *testing.T) {
 	})
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	result, err := obs.FullScan(t.Context(), dir)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err)
 
 	ev := findEvent(result.Events, "unreadable.txt")
@@ -1008,7 +1008,7 @@ func TestFullScan_HashFailureModifyStillEmitsEvent(t *testing.T) {
 	t.Cleanup(func() { assert.NoError(t, os.Chmod(path, 0o600)) })
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	result, err := obs.FullScan(t.Context(), dir)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err)
 
 	ev := findEvent(result.Events, "unreadable.txt")
@@ -1096,7 +1096,7 @@ func TestFullScan_PathTooLong(t *testing.T) {
 	writeTestFile(t, dir, "normal.txt", "ok")
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	result, err := obs.FullScan(t.Context(), dir)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
 	// normal.txt should be in Events.
@@ -1307,7 +1307,7 @@ func TestHashPhase_PanicRecovery(t *testing.T) {
 				return hashContent(t, "content of "+filepath.Base(path)), nil
 			}
 
-			result, err := obs.FullScan(t.Context(), dir)
+			result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 			require.NoError(t, err, "FullScan should not fail due to panic in hash worker")
 
 			// Non-panicking files should still produce events.
@@ -1351,7 +1351,7 @@ func TestFullScan_HashPanicDoesNotAbort(t *testing.T) {
 		return hashContent(t, "good content"), nil
 	}
 
-	result, err := obs.FullScan(t.Context(), dir)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan must not return error on hash panic")
 
 	// good.txt should produce an event.

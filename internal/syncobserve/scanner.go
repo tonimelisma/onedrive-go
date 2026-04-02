@@ -34,6 +34,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -84,7 +85,8 @@ func (o *LocalObserver) resolveCheckWorkers() int {
 //     for invalid names, too-long paths, and too-large files.
 //  2. Hash (parallel): errgroup.SetLimit(checkWorkers) hashes files concurrently.
 //  3. Deletion detection (sequential): compare observed vs baseline.
-func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) (synctypes.ScanResult, error) {
+func (o *LocalObserver) FullScan(ctx context.Context, tree *synctree.Root) (synctypes.ScanResult, error) {
+	syncRoot := tree.Path()
 	o.Logger.Info("local observer starting full scan",
 		slog.String("sync_root", syncRoot),
 		slog.Int("baseline_entries", o.Baseline.Len()),
@@ -100,7 +102,7 @@ func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) (synctype
 	}
 
 	// Guard: abort if .nosync file is present (sync dir may be unmounted).
-	if _, err := localpath.Stat(filepath.Join(syncRoot, nosyncFileName)); err == nil {
+	if _, err := tree.Stat(nosyncFileName); err == nil {
 		o.Logger.Warn("nosync guard file detected, aborting scan",
 			slog.String("sync_root", syncRoot))
 		return synctypes.ScanResult{}, synctypes.ErrNosyncGuard
@@ -114,8 +116,8 @@ func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) (synctype
 	observed := make(map[string]bool)
 	scanStartNano := time.Now().UnixNano()
 
-	walkFn := o.makeWalkFunc(ctx, syncRoot, observed, &events, &jobs, &skipped, &skippedEntries, scanStartNano)
-	if err := filepath.WalkDir(syncRoot, walkFn); err != nil {
+	walkFn := o.makeWalkFunc(ctx, tree, observed, &events, &jobs, &skipped, &skippedEntries, scanStartNano)
+	if err := tree.WalkDir(walkFn); err != nil {
 		if ctx.Err() != nil {
 			return synctypes.ScanResult{}, fmt.Errorf("sync: local scan canceled: %w", ctx.Err())
 		}
@@ -275,10 +277,12 @@ func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]syncty
 // Files that need hashing are appended to jobs for phase 2. User-actionable
 // rejections are appended to skipped for engine recording.
 func (o *LocalObserver) makeWalkFunc(
-	ctx context.Context, syncRoot string, observed map[string]bool,
+	ctx context.Context, tree *synctree.Root, observed map[string]bool,
 	events *[]synctypes.ChangeEvent, jobs *[]hashJob, skipped *[]synctypes.SkippedItem,
 	skippedEntries *atomic.Int64, scanStartNano int64,
 ) fs.WalkDirFunc {
+	syncRoot := tree.Path()
+
 	return func(fsPath string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			o.Logger.Warn("walk error", slog.String("path", fsPath), slog.String("error", walkErr.Error()))
@@ -295,7 +299,7 @@ func (o *LocalObserver) makeWalkFunc(
 			return nil
 		}
 
-		relPath, err := filepath.Rel(syncRoot, fsPath)
+		relPath, err := tree.Rel(fsPath)
 		if err != nil {
 			return fmt.Errorf("sync: computing relative path for %s: %w", fsPath, err)
 		}
@@ -893,7 +897,12 @@ func ValidateOneDriveName(name string) (reason, detail string) {
 
 // SyncRootExists returns true if the sync root directory exists and is a directory.
 func SyncRootExists(syncRoot string) bool {
-	info, err := localpath.Stat(syncRoot)
+	tree, err := synctree.Open(syncRoot)
+	if err != nil {
+		return false
+	}
+
+	info, err := tree.Stat(".")
 	return err == nil && info.IsDir()
 }
 

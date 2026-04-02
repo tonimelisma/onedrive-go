@@ -6,6 +6,7 @@ package sync
 // that the engine tests compile without change.
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	stdsync "sync"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -44,6 +46,17 @@ func setTestDirPermissions(t *testing.T, path string, perms os.FileMode) {
 	t.Helper()
 
 	require.NoError(t, os.Chmod(path, perms))
+}
+
+func mustOpenSyncTree(t *testing.T, path string) *synctree.Root {
+	t.Helper()
+
+	tree, err := synctree.Open(path)
+	if err != nil {
+		panic(fmt.Sprintf("open sync tree %s: %v", path, err))
+	}
+
+	return tree
 }
 
 // newTestManager creates a syncstore.SyncStore backed by a temp directory for use in

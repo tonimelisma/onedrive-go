@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 // buildPeerRelPath constructs the db-relative path for a collision peer
@@ -30,17 +32,17 @@ func (o *LocalObserver) buildPeerRelPath(dbRelPath, collidingName string) string
 
 // HasCaseCollisionCached checks if name collides with an existing sibling
 // using a per-directory name cache (filesystem) and the baseline (synced
-// files). Falls back to os.ReadDir on cache miss. The dbDir parameter is
+// files). Falls back to synctree.ReadDirAbs on cache miss. The dbDir parameter is
 // the db-relative directory path used for baseline cross-check.
 // Single-goroutine (watchLoop) access — no mutex needed.
-func (o *LocalObserver) HasCaseCollisionCached(dirPath, name, dbDir string) (string, bool) {
+func (o *LocalObserver) HasCaseCollisionCached(tree *synctree.Root, dirPath, name, dbDir string) (string, bool) {
 	if o.DirNameCache == nil {
 		o.DirNameCache = make(map[string]map[string][]string)
 	}
 
 	cache, ok := o.DirNameCache[dirPath]
 	if !ok {
-		entries, err := os.ReadDir(dirPath)
+		entries, err := tree.ReadDirAbs(dirPath)
 		if err != nil {
 			return "", false
 		}

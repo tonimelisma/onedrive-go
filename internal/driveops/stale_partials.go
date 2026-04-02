@@ -6,9 +6,11 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
-// CleanStalePartials deletes all .partial files found under syncRoot.
+// CleanStalePartials deletes all .partial files found under the sync tree.
 // After a sync run completes, any surviving .partial files are guaranteed
 // garbage: successful downloads rename them away, failed downloads delete
 // them via removePartialIfNotCanceled, and context cancellation aborts the
@@ -17,23 +19,10 @@ import (
 //
 // Follows the CleanStale pattern: per-file errors are logged and skipped,
 // returns (count, scanError). The caller logs a summary.
-func CleanStalePartials(syncRoot string, logger *slog.Logger) (int, error) {
-	root, err := os.OpenRoot(syncRoot)
-	if err != nil {
-		return 0, fmt.Errorf("opening sync root: %w", err)
-	}
-	defer func() {
-		if closeErr := root.Close(); closeErr != nil {
-			logger.Warn("closing sync root after partial cleanup failed",
-				slog.String("root", syncRoot),
-				slog.String("error", closeErr.Error()),
-			)
-		}
-	}()
-
+func CleanStalePartials(tree *synctree.Root, logger *slog.Logger) (int, error) {
 	deleted := 0
 
-	err = fs.WalkDir(root.FS(), ".", func(path string, d fs.DirEntry, walkErr error) error {
+	err := tree.WalkDir(func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			logger.Warn("skipping path due to error",
 				slog.String("path", path),
@@ -51,16 +40,26 @@ func CleanStalePartials(syncRoot string, logger *slog.Logger) (int, error) {
 			return nil
 		}
 
-		if removeErr := root.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
-			logger.Warn("failed to delete partial file",
+		relPath, relErr := tree.Rel(path)
+		if relErr != nil {
+			logger.Warn("failed to relativize partial file for cleanup",
 				slog.String("path", path),
+				slog.String("error", relErr.Error()),
+			)
+
+			return nil
+		}
+
+		if removeErr := tree.Remove(relPath); removeErr != nil && !os.IsNotExist(removeErr) {
+			logger.Warn("failed to delete partial file",
+				slog.String("path", relPath),
 				slog.String("error", removeErr.Error()),
 			)
 
 			return nil
 		}
 
-		logger.Info("deleted stale partial file", slog.String("path", path))
+		logger.Info("deleted stale partial file", slog.String("path", relPath))
 
 		deleted++
 

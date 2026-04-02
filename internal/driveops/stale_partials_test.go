@@ -22,7 +22,7 @@ func TestCleanStalePartials(t *testing.T) {
 	regularPath := filepath.Join(dir, "document.txt")
 	require.NoError(t, os.WriteFile(regularPath, []byte("content"), 0o600))
 
-	n, err := CleanStalePartials(dir, testLogger(t))
+	n, err := CleanStalePartials(mustOpenSyncTree(t, dir), testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
 
@@ -40,7 +40,7 @@ func TestCleanStalePartials_EmptyDir(t *testing.T) {
 
 	dir := t.TempDir()
 
-	n, err := CleanStalePartials(dir, testLogger(t))
+	n, err := CleanStalePartials(mustOpenSyncTree(t, dir), testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, 0, n)
 }
@@ -57,7 +57,7 @@ func TestCleanStalePartials_NestedDir(t *testing.T) {
 	partialPath := filepath.Join(subDir, "deep.partial")
 	require.NoError(t, os.WriteFile(partialPath, []byte("nested"), 0o600))
 
-	n, err := CleanStalePartials(dir, testLogger(t))
+	n, err := CleanStalePartials(mustOpenSyncTree(t, dir), testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
 
@@ -78,7 +78,7 @@ func TestCleanStalePartials_MultipleFiles(t *testing.T) {
 	// Create a non-partial file.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "keep.txt"), []byte("keep"), 0o600))
 
-	n, err := CleanStalePartials(dir, testLogger(t))
+	n, err := CleanStalePartials(mustOpenSyncTree(t, dir), testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, 3, n)
 
@@ -116,7 +116,7 @@ func TestCleanStalePartials_PermissionError(t *testing.T) {
 	t.Cleanup(func() { setTestDirPermissions(t, restricted, 0o700) })
 
 	// Should still delete the accessible .partial and not panic.
-	n, err := CleanStalePartials(dir, testLogger(t))
+	n, err := CleanStalePartials(mustOpenSyncTree(t, dir), testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
 
@@ -128,6 +128,6 @@ func TestCleanStalePartials_PermissionError(t *testing.T) {
 func TestCleanStalePartials_NonexistentDir(t *testing.T) {
 	t.Parallel()
 
-	_, err := CleanStalePartials("/nonexistent/path/that/does/not/exist", testLogger(t))
+	_, err := CleanStalePartials(mustOpenSyncTree(t, "/nonexistent/path/that/does/not/exist"), testLogger(t))
 	assert.Error(t, err)
 }

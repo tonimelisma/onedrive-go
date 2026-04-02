@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"sync/atomic"
 	"time"
@@ -26,6 +25,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -278,13 +278,14 @@ func (o *LocalObserver) EstimateDirCount() int {
 // size: 256). An unbuffered channel blocks on every event. If the channel is
 // full, TrySend drops the event and increments the drop counter — the safety
 // scan provides eventual consistency for any dropped events.
-func (o *LocalObserver) Watch(ctx context.Context, syncRoot string, events chan<- synctypes.ChangeEvent) error {
+func (o *LocalObserver) Watch(ctx context.Context, tree *synctree.Root, events chan<- synctypes.ChangeEvent) error {
+	syncRoot := tree.Path()
 	o.Logger.Info("local observer starting watch",
 		slog.String("sync_root", syncRoot),
 	)
 
 	// Guard: abort if .nosync file is present.
-	if _, err := os.Stat(filepath.Join(syncRoot, nosyncFileName)); err == nil {
+	if _, err := tree.Stat(nosyncFileName); err == nil {
 		o.Logger.Warn("nosync guard file detected, aborting watch",
 			slog.String("sync_root", syncRoot))
 
@@ -303,7 +304,7 @@ func (o *LocalObserver) Watch(ctx context.Context, syncRoot string, events chan<
 	CheckInotifyCapacity(o.EstimateDirCount(), o.Logger)
 
 	// Walk the sync root to add watches on all existing directories.
-	if walkErr := o.AddWatchesRecursive(ctx, watcher, syncRoot); walkErr != nil {
+	if walkErr := o.AddWatchesRecursive(ctx, watcher, tree); walkErr != nil {
 		if errors.Is(walkErr, synctypes.ErrWatchLimitExhausted) {
 			return synctypes.ErrWatchLimitExhausted
 		}
@@ -311,7 +312,7 @@ func (o *LocalObserver) Watch(ctx context.Context, syncRoot string, events chan<
 		return fmt.Errorf("sync: adding initial watches: %w", walkErr)
 	}
 
-	return o.watchLoop(ctx, watcher, syncRoot, events)
+	return o.watchLoop(ctx, watcher, tree, events)
 }
 
 // cancelPendingTimers stops and clears all pending write coalesce timers.
@@ -328,10 +329,11 @@ func (o *LocalObserver) cancelPendingTimers() {
 }
 
 // AddWatchesRecursive walks the sync root and adds a watch on every directory.
-func (o *LocalObserver) AddWatchesRecursive(ctx context.Context, watcher FsWatcher, syncRoot string) error {
+func (o *LocalObserver) AddWatchesRecursive(ctx context.Context, watcher FsWatcher, tree *synctree.Root) error {
 	var watched, failed int
+	syncRoot := tree.Path()
 
-	err := filepath.WalkDir(syncRoot, func(fsPath string, d fs.DirEntry, walkErr error) error {
+	err := tree.WalkDir(func(fsPath string, d fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("watch setup context: %w", err)
 		}
@@ -362,7 +364,7 @@ func (o *LocalObserver) AddWatchesRecursive(ctx context.Context, watcher FsWatch
 		// the convention used by scanner and watch handlers.
 		name := nfcNormalize(d.Name())
 		if fsPath != syncRoot {
-			relPath, relErr := filepath.Rel(syncRoot, fsPath)
+			relPath, relErr := tree.Rel(fsPath)
 			if relErr != nil {
 				o.Logger.Warn("failed to compute relative path during watch setup",
 					slog.String("path", fsPath), slog.String("error", relErr.Error()))

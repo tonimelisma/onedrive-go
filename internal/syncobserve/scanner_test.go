@@ -144,7 +144,7 @@ func TestFullScan_CaseCollision_InSkippedNotEvents(t *testing.T) {
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
 
-	result, err := obs.FullScan(t.Context(), syncRoot)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
 
 	// Both colliders should be in Skipped, not in Events.
@@ -193,7 +193,7 @@ func TestFullScan_CaseCollision_NoFalseDeletion(t *testing.T) {
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
 
-	result, err := obs.FullScan(t.Context(), syncRoot)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
 
 	// Colliders should NOT generate ChangeDelete events — they stay in the
@@ -228,7 +228,7 @@ func TestDetectCaseCollisions_CaseInsensitiveFS(t *testing.T) {
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
 
-	result, err := obs.FullScan(t.Context(), syncRoot)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
 
 	// No collision — the FS itself prevents the scenario from arising.
@@ -429,7 +429,7 @@ func TestDetectCaseCollisions_CaseSensitiveFS(t *testing.T) {
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
 
-	result, err := obs.FullScan(t.Context(), syncRoot)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
 
 	// Both files should appear in Skipped with IssueCaseCollision.

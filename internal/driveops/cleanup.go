@@ -1,6 +1,10 @@
 package driveops
 
-import "log/slog"
+import (
+	"log/slog"
+
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
+)
 
 // CleanTransferArtifacts runs non-critical post-sync housekeeping:
 //   - Deletes orphaned .partial files (always garbage after sync completes)
@@ -8,8 +12,8 @@ import "log/slog"
 //
 // Errors are logged but not propagated — housekeeping should never
 // fail a sync run.
-func CleanTransferArtifacts(syncRoot string, sessionStore *SessionStore, logger *slog.Logger) {
-	if n, err := CleanStalePartials(syncRoot, logger); err != nil {
+func CleanTransferArtifacts(tree *synctree.Root, sessionStore *SessionStore, logger *slog.Logger) {
+	if n, err := CleanStalePartials(tree, logger); err != nil {
 		logger.Warn("partial file cleanup failed", slog.String("error", err.Error()))
 	} else if n > 0 {
 		logger.Info("cleaned stale partial files", slog.Int("count", n))

@@ -38,7 +38,7 @@ QuickXorHash computation for local files (`hash.go`). The `pkg/quickxorhash/` pa
 
 ## Cleanup
 
-`cleanup.go` removes stale `.partial` files and expired upload sessions on startup. `stale_partials.go` detects orphaned partial files from interrupted downloads.
+`cleanup.go` removes stale `.partial` files and expired upload sessions on startup. `stale_partials.go` detects orphaned partial files from interrupted downloads. Session files live under the managed-state boundary (`internal/fsroot` via `SessionStore`). Orphaned `.partial` files live in the sync tree and are cleaned through `internal/synctree`.
 
 ## Disk Space Pre-Check
 
@@ -59,7 +59,9 @@ Design properties:
 ## Design Constraints
 
 - `Upload()` accepts `io.ReaderAt` (not `io.Reader`): enables retry-safe uploads without re-opening the file. `io.NewSectionReader` creates independent readers for each chunk.
-- Managed partial/session files use `internal/fsroot`. Arbitrary local source/target paths use `internal/localpath`, making the two filesystem trust boundaries explicit instead of routing both through one helper package.
+- Managed session files use `internal/fsroot`.
+- Sync-engine runtime cleanup of `.partial` files under one configured sync root uses `internal/synctree`.
+- Arbitrary local source/target paths use `internal/localpath`, making the three filesystem trust boundaries explicit instead of routing them through one helper package.
 - Guard `.partial` file cleanup with `ctx.Err() == nil`: a 3.9 GB partial of a 4 GB download should survive Ctrl-C for resume. Only intentional deletions (hash mismatch) should remove partials.
 - **Connection-level deadlines** (`transferTransport()`): `transferHTTPClient()` and `syncTransferHTTPClient()` use a shared `transferTransport()` with `ResponseHeaderTimeout: 2m` (detects servers that accept but never respond) and TCP keepalives (30s idle, 10s interval, 3 probes — detects dead connections within ~60s). No `http.Client.Timeout` — transfer duration varies with file size and bandwidth. [implemented]
 - Transfer manager resume edge case tests: corrupt partial file, changed remote content, oversized partial. [planned]

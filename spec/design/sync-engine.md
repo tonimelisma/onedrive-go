@@ -81,6 +81,12 @@ The engine relies on a few non-negotiable behavioral invariants:
 shared collaborators such as config, planner, store, logger, and executor
 factories. It does not own mode-specific mutable control state.
 
+Filesystem boundaries are explicit:
+
+- managed repo-state files use `internal/fsroot`
+- sync-runtime local filesystem work under one configured sync root uses `internal/synctree`
+- arbitrary one-off local paths outside those rooted domains use `internal/localpath`
+
 Run-scoped state lives in two dedicated owners:
 
 - `oneShotRunner`: one-shot mutable state (`engineFlow`, depGraph, readyCh,
