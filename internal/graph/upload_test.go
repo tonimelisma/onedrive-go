@@ -229,6 +229,33 @@ func TestCreateUploadSession_Success(t *testing.T) {
 	assert.Equal(t, 31, session.ExpirationTime.Day())
 }
 
+func TestCreateUploadSession_PersonalUploadHost(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Contains(t, r.URL.Path, "createUploadSession")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeTestResponse(t, w, `{
+			"uploadUrl": "https://my.microsoftpersonalcontent.com/personal/upload/session-abc123",
+			"expirationDateTime": "2024-12-31T23:59:59Z"
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	session, err := client.CreateUploadSession(
+		t.Context(), driveid.New("d"), "parent", "large-file.bin", 10485760, time.Time{},
+	)
+	require.NoError(t, err)
+
+	assert.Equal(
+		t,
+		UploadURL("https://my.microsoftpersonalcontent.com/personal/upload/session-abc123"),
+		session.UploadURL,
+	)
+}
+
 func TestCreateUploadSession_InvalidExpiration(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

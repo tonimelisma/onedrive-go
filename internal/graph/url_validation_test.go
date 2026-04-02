@@ -83,6 +83,10 @@ func TestValidateUploadURL(t *testing.T) {
 			rawURL: "https://contoso.sharepoint.com/upload",
 		},
 		{
+			name:   "allows personal upload host",
+			rawURL: "https://my.microsoftpersonalcontent.com/personal/upload",
+		},
+		{
 			name:    "rejects nil URL",
 			wantErr: "upload URL is nil",
 		},
