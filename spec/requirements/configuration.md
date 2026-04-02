@@ -42,7 +42,7 @@ The system shall resolve settings with a four-layer override chain: defaults →
 - R-4.7.2: The log file shall use structured JSON format. [verified]
 - R-4.7.3: The system shall support configurable log retention (`log_retention_days`). [verified]
 
-## R-4.8 Config Validation [implemented]
+## R-4.8 Config Validation [verified]
 
 - R-4.8.1: The system shall reject unknown config keys with "did you mean?"
   suggestions. [verified]
