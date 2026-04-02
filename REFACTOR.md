@@ -89,7 +89,7 @@ The main internal types and modules implicated by the next increment are:
 - [`internal/sync/engine_result_flow.go`](/Users/tonimelisma/Development/onedrive-go/internal/sync/engine_result_flow.go)
 - [`internal/sync/engine_retry_trial.go`](/Users/tonimelisma/Development/onedrive-go/internal/sync/engine_retry_trial.go)
 - [`internal/syncobserve/single_path.go`](/Users/tonimelisma/Development/onedrive-go/internal/syncobserve/single_path.go)
-- [`scripts/verify.sh`](/Users/tonimelisma/Development/onedrive-go/scripts/verify.sh)
+- [`cmd/devtool`](/Users/tonimelisma/Development/onedrive-go/cmd/devtool)
 - [`.github/workflows/ci.yml`](/Users/tonimelisma/Development/onedrive-go/.github/workflows/ci.yml)
 
 The authoritative current design docs that should stay authoritative are:
@@ -273,7 +273,7 @@ What does **not** exist:
 
 - no repeated `-count` runs in CI
 - no dedicated stress script
-- no focused lifecycle stress profile in [`scripts/verify.sh`](/Users/tonimelisma/Development/onedrive-go/scripts/verify.sh)
+- no focused lifecycle stress profile in [`cmd/devtool`](/Users/tonimelisma/Development/onedrive-go/cmd/devtool)
 - no scheduled or manual non-blocking sync stress job
 - no required PR stress subset
 
@@ -396,7 +396,7 @@ Recommended buckets:
 
 ### Recommended CI shape
 
-Because there was already unrelated local CI/verify WIP around `scripts/verify.sh` profiles, future stress coverage should **not** be casually coupled to that work unless that coupling is deliberate.
+Because there was already unrelated local CI/verify WIP around `cmd/devtool verify` profiles, future stress coverage should **not** be casually coupled to that work unless that coupling is deliberate.
 
 The clean future shape is:
 
@@ -579,7 +579,7 @@ Good:
 
 - [`spec/design/engine-event-loop.md`](/Users/tonimelisma/Development/onedrive-go/spec/design/engine-event-loop.md) and [`spec/design/sync-package-split.md`](/Users/tonimelisma/Development/onedrive-go/spec/design/sync-package-split.md) already have historical notes near the top
 - [`spec/design/sync-engine.md`](/Users/tonimelisma/Development/onedrive-go/spec/design/sync-engine.md) is the current authoritative design doc
-- [`scripts/verify.sh`](/Users/tonimelisma/Development/onedrive-go/scripts/verify.sh) already checks a few stale phrases
+- [`cmd/devtool`](/Users/tonimelisma/Development/onedrive-go/cmd/devtool) already checks a few stale phrases
 
 Still bad:
 

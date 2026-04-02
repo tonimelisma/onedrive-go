@@ -8,6 +8,8 @@ Implements: R-6.1.4 [verified], R-6.1.5 [verified], R-6.9.1 [verified]
 
 ```
 .                             Root package (Cobra CLI commands)
+cmd/
+  devtool/                    Repo-owned verification and worktree bootstrap tooling
 internal/
   config/                     TOML config, drive sections, XDG paths, override chain
   driveid/                    Type-safe drive identity: ID, CanonicalID, ItemKey (leaf, stdlib-only)
@@ -92,7 +94,8 @@ Static verification is a first-class architectural constraint, not a best-effort
 - `golangci-lint` runs with `default: none`; every enabled linter is an explicit policy choice.
 - `nolintlint` requires both a specific linter name and a short justification. Unused exclusions are surfaced with `linters.exclusions.warn-unused`.
 - Inline suppressions are reserved for the small documented exception set where the code is correct and the linter cannot express that shape cleanly: interface-mandated receiver shapes, validated subprocess/request dispatch that the linter cannot follow across helper boundaries, non-cryptographic jitter, `driver.Valuer` SQL `NULL` semantics, fixed placeholder SQL, and intentional test fixtures/mocks.
-- `scripts/verify.sh` is the single repo-owned verification entry point. It exposes explicit profiles: `default` (default local run: lint, build, race+coverage, coverage gate, stale-doc checks, fast E2E), `public`, `e2e`, `e2e-full`, and `integration`.
+- `cmd/devtool` is the single repo-owned verification and worktree-bootstrap entry point. `go run ./cmd/devtool verify` exposes explicit profiles: `default` (default local run: format, lint, build, race+coverage, coverage gate, repo-consistency checks, fast E2E), `public`, `e2e`, `e2e-full`, and `integration`.
+- `go run ./cmd/devtool worktree add --path <path> --branch <branch>` is the canonical way to create new worktrees from `origin/main`. It applies `.worktreeinclude` immediately so the new worktree is ready for fast E2E and local development.
 - Fast E2E is mandatory in the default local `default` profile. The harness loads `.env` and `.testdata` itself; verification does not silently skip fast E2E based on exported shell variables.
 - The nightly/manual full E2E suite is layered on top of the fast suite. Its files use `//go:build e2e && e2e_full`, so the canonical invocation is the verifier's `e2e-full` profile, which sets both tags and preserves the fast-then-full ordering.
 - Managed repo-state files use `internal/fsroot` root capabilities.

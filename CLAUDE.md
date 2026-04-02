@@ -178,7 +178,7 @@ Project-specific consequences:
 
 ### E2E & Integration Tests
 
-Run against live OneDrive accounts. Test account names are never committed — use `.env` (gitignored) or environment variables. Both suites require `ONEDRIVE_ALLOWED_TEST_ACCOUNTS` and `ONEDRIVE_TEST_DRIVE` to be set (crashes without them). Copy `.env.example` to `.env` and fill in your test accounts. E2E tests are tiered: `e2e` tag (fast, every CI push) vs `e2e_full` tag (slow, nightly/manual, 30-min timeout). The full suite builds on top of the fast suite, so the canonical invocation is `./scripts/verify.sh e2e-full` rather than `go test -tags=e2e_full` alone.
+Run against live OneDrive accounts. Test account names are never committed — use `.env` (gitignored) or environment variables. Both suites require `ONEDRIVE_ALLOWED_TEST_ACCOUNTS` and `ONEDRIVE_TEST_DRIVE` to be set (crashes without them). Copy `.env.example` to `.env` and fill in your test accounts. E2E tests are tiered: `e2e` tag (fast, every CI push) vs `e2e_full` tag (slow, nightly/manual, 30-min timeout). The full suite builds on top of the fast suite, so the canonical invocation is `go run ./cmd/devtool verify e2e-full` rather than `go test -tags=e2e_full` alone.
 
 **Test credential pipeline** (one-time setup, then CI is self-sustaining):
 
@@ -203,11 +203,11 @@ Work is done in increments. Do not ask permission, do not skip any step.
 ### Step 2: Set up worktree
 
 1. `git fetch origin` before creating the worktree so new work starts from the current `origin/main`, not a stale local `main`
-2. Create the worktree from `origin/main` using tool
+2. Create the worktree from `origin/main` with `go run ./cmd/devtool worktree add --path <path> --branch <branch>`
 3. Create a branch with the naming convention: `<type>/<task-name>` (e.g., `feat/cli-auth`). Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`.
 4. All changes go through PRs
 
-`.worktreeinclude` lists files to copy into new worktrees. Entries prefixed with `@` are symlinked instead of copied
+`.worktreeinclude` lists local adjuncts to apply into new worktrees. Plain entries are copied as files; entries prefixed with `@` are symlinked instead of copied. Use `go run ./cmd/devtool worktree bootstrap --path <path>` to repair an existing worktree if needed.
 
 ### Step 3: Develop with TDD
 
@@ -233,12 +233,12 @@ Self-review every change against coding standards proceeding to the Definition o
 
 After each increment, run through this entire checklist. If something fails, fix and re-run from the top. If you rebase, resolve conflicts, or otherwise rewrite branch history, re-run the checklist from item 1 on the rebased branch before creating the PR. **When complete, present this checklist to the human with pass/fail status for each item.**
 
-1. [ ] **Format**: `gofumpt -w . && goimports -local github.com/tonimelisma/onedrive-go -w .`
-2. [ ] **Lint**: `golangci-lint run`
-3. [ ] **Build**: `go build ./...`
-4. [ ] **Unit tests**: `go test -race -coverprofile=/tmp/cover.out ./...`
-5. [ ] **Coverage**: `go tool cover -func=/tmp/cover.out | grep total`
-6. [ ] **Fast E2E**: `go test -tags=e2e -race -v -parallel 5 -timeout=10m ./e2e/...`
+1. [ ] **Format**: reported by `go run ./cmd/devtool verify default`
+2. [ ] **Lint**: reported by `go run ./cmd/devtool verify default`
+3. [ ] **Build**: reported by `go run ./cmd/devtool verify default`
+4. [ ] **Unit tests**: reported by `go run ./cmd/devtool verify default`
+5. [ ] **Coverage**: reported by `go run ./cmd/devtool verify default`
+6. [ ] **Fast E2E**: reported by `go run ./cmd/devtool verify default`
 7. [ ] **Docs updated**: CLAUDE.md, spec/design/, spec/requirements/ as needed
 8. [ ] **Rebase onto latest main**: Immediately before any `gh pr create`, run `git fetch origin` and `git rebase origin/main` in the worktree branch, then verify with `git merge-base --is-ancestor origin/main HEAD`. Never create a PR from a stale merge base. If that verification fails, do not open the PR. If the rebase changes the branch or you resolve conflicts, restart this checklist at item 1 and only continue once the rebased branch is green.
 9. [ ] **Push and CI green**: After item 8 passes, push branch, using `git push --force-with-lease` if the rebase rewrote history, open PR with `gh pr create`, then enable auto-merge with `gh pr merge --auto --squash --delete-branch`. Branch protection requires CI to pass before merge. Monitor with `gh pr checks <pr_number> --watch`
