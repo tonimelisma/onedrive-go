@@ -9,6 +9,7 @@ cleanup_coverage_file=false
 
 run_public_checks=false
 run_e2e=false
+run_e2e_full=false
 run_integration=false
 
 case "${profile}" in
@@ -22,11 +23,15 @@ public)
 e2e)
 	run_e2e=true
 	;;
+e2e-full)
+	run_e2e=true
+	run_e2e_full=true
+	;;
 integration)
 	run_integration=true
 	;;
 *)
-	echo "usage: ./scripts/verify.sh [default|public|e2e|integration]" >&2
+	echo "usage: ./scripts/verify.sh [default|public|e2e|e2e-full|integration]" >&2
 	exit 1
 	;;
 esac
@@ -113,6 +118,12 @@ fi
 if [[ "${run_e2e}" == "true" ]]; then
 	echo "==> go test -tags=e2e"
 	go test -tags=e2e -race -v -parallel 5 -timeout=10m ./e2e/...
+fi
+
+if [[ "${run_e2e_full}" == "true" ]]; then
+	echo "==> go test -tags='e2e e2e_full'"
+	E2E_LOG_DIR="${E2E_LOG_DIR:-/tmp/e2e-debug-logs}" \
+		go test -tags='e2e e2e_full' -race -v -parallel 5 -timeout=30m ./e2e/...
 fi
 
 if [[ "${run_integration}" == "true" ]]; then

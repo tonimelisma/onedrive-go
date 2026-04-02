@@ -91,8 +91,9 @@ Static verification is a first-class architectural constraint, not a best-effort
 - `golangci-lint` runs with `default: none`; every enabled linter is an explicit policy choice.
 - `nolintlint` requires both a specific linter name and a short justification. Unused exclusions are surfaced with `linters.exclusions.warn-unused`.
 - Inline suppressions are reserved for the small documented exception set where the code is correct and the linter cannot express that shape cleanly: interface-mandated receiver shapes, validated subprocess/request dispatch that the linter cannot follow across helper boundaries, non-cryptographic jitter, `driver.Valuer` SQL `NULL` semantics, fixed placeholder SQL, and intentional test fixtures/mocks.
-- `scripts/verify.sh` is the single repo-owned verification entry point. It exposes explicit profiles: `default` (default local run: lint, build, race+coverage, coverage gate, stale-doc checks, fast E2E), `public`, `e2e`, and `integration`.
+- `scripts/verify.sh` is the single repo-owned verification entry point. It exposes explicit profiles: `default` (default local run: lint, build, race+coverage, coverage gate, stale-doc checks, fast E2E), `public`, `e2e`, `e2e-full`, and `integration`.
 - Fast E2E is mandatory in the default local `default` profile. The harness loads `.env` and `.testdata` itself; verification does not silently skip fast E2E based on exported shell variables.
+- The nightly/manual full E2E suite is layered on top of the fast suite. Its files use `//go:build e2e && e2e_full`, so the canonical invocation is the verifier's `e2e-full` profile, which sets both tags and preserves the fast-then-full ordering.
 - Managed repo-state files use `internal/fsroot` root capabilities. Arbitrary local file paths use `internal/localpath` as the explicit trust boundary.
 
 ## Planned Improvements
