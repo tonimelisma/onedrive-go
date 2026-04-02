@@ -1,6 +1,7 @@
 package synctree
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -144,4 +145,216 @@ func TestRoot_NotExistErrors(t *testing.T) {
 
 	_, err = root.ReadDir("missing")
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+// Validates: R-2.10, R-6.2
+func TestRoot_Open_FailureInjection(t *testing.T) {
+	t.Parallel()
+
+	runRootHandleErrorCase(t,
+		func(root *Root, targetErr error) {
+			root.ops.openRoot = func(dir string) (rootHandle, error) {
+				return &fakeRootHandle{openErr: targetErr}, nil
+			}
+		},
+		func(root *Root) error {
+			file, err := root.Open("file.txt")
+			assert.Nil(t, file)
+
+			return err
+		},
+		errors.New("open failed"),
+		"open failed",
+	)
+}
+
+// Validates: R-2.10, R-6.2
+func TestRoot_OpenRootFailureInjection(t *testing.T) {
+	t.Parallel()
+
+	root, err := Open(t.TempDir())
+	require.NoError(t, err)
+
+	openRootErr := errors.New("open root failed")
+	root.ops.openRoot = func(dir string) (rootHandle, error) {
+		return nil, openRootErr
+	}
+
+	file, err := root.Open("file.txt")
+	require.Error(t, err)
+	assert.Nil(t, file)
+	require.ErrorIs(t, err, openRootErr)
+	assert.Contains(t, err.Error(), "opening sync root")
+}
+
+// Validates: R-2.10, R-6.2
+func TestRoot_Stat_FailureInjection(t *testing.T) {
+	t.Parallel()
+
+	runRootHandleErrorCase(t,
+		func(root *Root, targetErr error) {
+			root.ops.openRoot = func(dir string) (rootHandle, error) {
+				return &fakeRootHandle{statErr: targetErr}, nil
+			}
+		},
+		func(root *Root) error {
+			info, err := root.Stat("file.txt")
+			assert.Nil(t, info)
+
+			return err
+		},
+		errors.New("stat failed"),
+		"stating",
+	)
+}
+
+// Validates: R-2.10, R-6.2
+func TestRoot_ReadDir_FailureInjection(t *testing.T) {
+	t.Parallel()
+
+	root, err := Open(t.TempDir())
+	require.NoError(t, err)
+
+	readDirErr := errors.New("readdir failed")
+	root.ops.lstat = nonNormalizingLstat
+	root.ops.openRoot = func(dir string) (rootHandle, error) {
+		return &fakeRootHandle{fsys: errorFS{err: readDirErr}}, nil
+	}
+
+	entries, err := root.ReadDir("nested")
+	require.Error(t, err)
+	assert.Nil(t, entries)
+	require.ErrorIs(t, err, readDirErr)
+	assert.Contains(t, err.Error(), "reading directory")
+}
+
+// Validates: R-2.10, R-6.2
+func TestRoot_WalkDir_FailureInjection(t *testing.T) {
+	t.Parallel()
+
+	root, err := Open(t.TempDir())
+	require.NoError(t, err)
+
+	walkErr := errors.New("walk failed")
+	root.ops.openRoot = func(dir string) (rootHandle, error) {
+		return &fakeRootHandle{fsys: errorFS{err: walkErr}}, nil
+	}
+
+	err = root.WalkDir(func(path string, d fs.DirEntry, walkErr error) error {
+		return walkErr
+	})
+	require.Error(t, err)
+	require.ErrorIs(t, err, walkErr)
+	assert.Contains(t, err.Error(), "walking sync tree")
+}
+
+// Validates: R-2.10, R-6.2
+func TestRoot_Remove_FailureInjection(t *testing.T) {
+	t.Parallel()
+
+	root, err := Open(t.TempDir())
+	require.NoError(t, err)
+
+	removeErr := errors.New("remove failed")
+	root.ops.remove = func(path string) error {
+		return removeErr
+	}
+
+	err = root.Remove("file.txt")
+	require.Error(t, err)
+	require.ErrorIs(t, err, removeErr)
+	assert.Contains(t, err.Error(), "removing")
+}
+
+// Validates: R-2.10, R-6.2
+func TestRoot_Rename_FailureInjection(t *testing.T) {
+	t.Parallel()
+
+	root, err := Open(t.TempDir())
+	require.NoError(t, err)
+
+	renameErr := errors.New("rename failed")
+	root.ops.rename = func(oldpath, newpath string) error {
+		return renameErr
+	}
+
+	err = root.Rename("old.txt", "new.txt")
+	require.Error(t, err)
+	require.ErrorIs(t, err, renameErr)
+	assert.Contains(t, err.Error(), "renaming")
+}
+
+type fakeRootHandle struct {
+	openErr     error
+	openFileErr error
+	statErr     error
+	closeErr    error
+	fsys        fs.FS
+}
+
+func (h *fakeRootHandle) Open(name string) (*os.File, error) {
+	if h.openErr != nil {
+		return nil, h.openErr
+	}
+
+	return nil, errUnexpectedFakeRootCall
+}
+
+func (h *fakeRootHandle) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
+	if h.openFileErr != nil {
+		return nil, h.openFileErr
+	}
+
+	return nil, errUnexpectedFakeRootCall
+}
+
+func (h *fakeRootHandle) Stat(name string) (os.FileInfo, error) {
+	if h.statErr != nil {
+		return nil, h.statErr
+	}
+
+	return nil, errUnexpectedFakeRootCall
+}
+
+func (h *fakeRootHandle) FS() fs.FS {
+	return h.fsys
+}
+
+func (h *fakeRootHandle) Close() error {
+	return h.closeErr
+}
+
+type errorFS struct {
+	err error
+}
+
+var errUnexpectedFakeRootCall = errors.New("unexpected fake root success path")
+
+func nonNormalizingLstat(path string) (os.FileInfo, error) {
+	return nil, errors.New("non-normalizing stat")
+}
+
+func runRootHandleErrorCase(
+	t *testing.T,
+	configure func(root *Root, targetErr error),
+	run func(root *Root) error,
+	targetErr error,
+	wantContains string,
+) {
+	t.Helper()
+
+	root, err := Open(t.TempDir())
+	require.NoError(t, err)
+
+	root.ops.lstat = nonNormalizingLstat
+	configure(root, targetErr)
+
+	err = run(root)
+	require.Error(t, err)
+	require.ErrorIs(t, err, targetErr)
+	assert.Contains(t, err.Error(), wantContains)
+}
+
+func (f errorFS) Open(name string) (fs.File, error) {
+	return nil, f.err
 }

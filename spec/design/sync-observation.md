@@ -50,6 +50,9 @@ Key properties:
 - The scanner/watch path boundary is a rooted `internal/synctree.Root`, so the
   observer establishes the sync root once and then operates on rooted paths
   instead of rebuilding arbitrary local paths at each call site
+- `synctree.Root` stores unexported injectable ops on the root value so local
+  observation can test `Stat`, `ReadDir`, and tree-walk failure paths
+  deterministically without exposing new production APIs
 - Racily-clean guard: same-second mtime triggers hash verification
 - Dual-path threading: `fsRelPath` (filesystem I/O) and `dbRelPath` (NFC-normalized for baseline lookup). `handleDelete` receives `fsPath` (the original `fsEvent.Name`) directly and passes it to `watcher.Remove()` — never reconstructs the filesystem path from NFC-normalized `dbRelPath` (B-312). On macOS HFS+ where fsnotify delivers NFD-encoded paths, reconstructing with NFC causes `watcher.Remove()` to silently fail and leak watch resources.
 - Symlinked directories always excluded from watch mode
