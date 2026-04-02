@@ -14,7 +14,6 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 // ConfigWarning represents a non-fatal issue found during lenient config
@@ -41,7 +40,7 @@ func Load(path string, logger *slog.Logger) (*Config, error) {
 
 	cfg := DefaultConfig()
 
-	data, err := trustedpath.ReadFile(path)
+	data, err := readManagedFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading config file %s: %w", path, err)
 	}
@@ -234,7 +233,7 @@ func LoadLenient(path string, logger *slog.Logger) (*Config, []ConfigWarning, er
 
 	cfg := DefaultConfig()
 
-	data, err := trustedpath.ReadFile(path)
+	data, err := readManagedFile(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("reading config file %s: %w", path, err)
 	}

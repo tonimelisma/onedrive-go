@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -67,7 +66,7 @@ func (c *Client) fetchDeltaPage(
 	args = append(args, slog.Bool("initial_sync", token == ""))
 	c.logger.Info("fetching delta page", args...)
 
-	resp, err := c.DoWithHeaders(ctx, http.MethodGet, path, nil, c.deltaPreferHeader)
+	resp, err := c.doGetWithHeaders(ctx, path, c.deltaPreferHeader)
 	if err != nil {
 		return nil, err
 	}

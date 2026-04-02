@@ -5,11 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
+	"github.com/tonimelisma/onedrive-go/internal/fsroot"
 )
 
 // configFilePermissions is the standard permission mode for config files.
@@ -71,7 +70,7 @@ func AppendDriveSection(path string, canonicalID driveid.CanonicalID, syncDir st
 		"sync_dir", syncDir,
 	)
 
-	data, err := trustedpath.ReadFile(path)
+	data, err := readManagedFile(path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("reading config file: %w", err)
@@ -140,7 +139,7 @@ func SetDriveKey(path string, canonicalID driveid.CanonicalID, key, value string
 		"value", value,
 	)
 
-	data, err := trustedpath.ReadFile(path)
+	data, err := readManagedFile(path)
 	if err != nil {
 		return fmt.Errorf("reading config file: %w", err)
 	}
@@ -177,7 +176,7 @@ func DeleteDriveKey(path string, canonicalID driveid.CanonicalID, key string) er
 		"key", key,
 	)
 
-	data, err := trustedpath.ReadFile(path)
+	data, err := readManagedFile(path)
 	if err != nil {
 		return fmt.Errorf("reading config file: %w", err)
 	}
@@ -208,7 +207,7 @@ func DeleteDriveSection(path string, canonicalID driveid.CanonicalID) error {
 		"canonical_id", canonicalID.String(),
 	)
 
-	data, err := trustedpath.ReadFile(path)
+	data, err := readManagedFile(path)
 	if err != nil {
 		return fmt.Errorf("reading config file: %w", err)
 	}
@@ -357,49 +356,18 @@ func formatTOMLValue(value string) string {
 // from corrupting the config file on crash. Parent directories are created
 // as needed. Files are created with configFilePermissions (0644).
 func atomicWriteFile(path string, data []byte) (err error) {
-	dir := filepath.Dir(path)
-	if mkErr := os.MkdirAll(dir, configDirPermissions); mkErr != nil {
-		return fmt.Errorf("creating config directory: %w", mkErr)
-	}
-
-	f, err := os.CreateTemp(dir, ".config-*.tmp")
+	root, name, err := fsroot.OpenPath(path)
 	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
+		return fmt.Errorf("opening config root: %w", err)
 	}
 
-	tempPath := f.Name()
-
-	// Clean up the temp file on any error path.
-	succeeded := false
-	defer func() {
-		if !succeeded {
-			err = removeTempPath(tempPath, "config temp file", err)
-		}
-	}()
-
-	if _, writeErr := f.Write(data); writeErr != nil {
-		return closeTempFile(f, "config temp file", fmt.Errorf("writing temp file: %w", writeErr))
+	if err := root.MkdirAll(configDirPermissions); err != nil {
+		return fmt.Errorf("creating config directory: %w", err)
 	}
 
-	// Flush data to disk before rename. Without fsync, a power loss after
-	// rename could leave the file empty (rename is metadata-only on POSIX).
-	if syncErr := f.Sync(); syncErr != nil {
-		return closeTempFile(f, "config temp file", fmt.Errorf("syncing temp file: %w", syncErr))
+	if err := root.AtomicWrite(name, data, configFilePermissions, configDirPermissions, ".config-*.tmp"); err != nil {
+		return fmt.Errorf("writing config file: %w", err)
 	}
-
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("closing temp file: %w", err)
-	}
-
-	if err := chmodTrustedTempPath(tempPath, configFilePermissions, "config file"); err != nil {
-		return err
-	}
-
-	if err := renameTrustedTempPath(tempPath, path, "config file"); err != nil {
-		return err
-	}
-
-	succeeded = true
 
 	return nil
 }

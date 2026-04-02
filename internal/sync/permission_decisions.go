@@ -54,9 +54,10 @@ type ShortcutRemovalDecision struct {
 	ScopeKey synctypes.ScopeKey
 }
 
-func (e *Engine) applyPermissionCheckDecision(
+func (flow *engineFlow) applyPermissionCheckDecision(
 	ctx context.Context,
-	flow permissionFlow,
+	watch *watchRuntime,
+	flowKind permissionFlow,
 	decision *PermissionCheckDecision,
 ) bool {
 	if decision == nil || !decision.Matched {
@@ -66,11 +67,11 @@ func (e *Engine) applyPermissionCheckDecision(
 	switch decision.Kind {
 	case permissionCheckNone:
 	case permissionCheckRecordFileFailure:
-		e.recordExplicitFailure(ctx, &decision.Failure)
+		flow.recordExplicitFailure(ctx, &decision.Failure)
 	case permissionCheckActivateBoundaryScope:
-		e.recordExplicitFailure(ctx, &decision.Failure)
-		if err := e.activateScope(ctx, decision.ScopeBlock); err != nil {
-			e.logger.Warn("failed to activate permission scope",
+		flow.recordExplicitFailure(ctx, &decision.Failure)
+		if err := flow.activateScope(ctx, watch, decision.ScopeBlock); err != nil {
+			flow.engine.logger.Warn("failed to activate permission scope",
 				slog.String("scope_key", decision.ScopeBlock.Key.String()),
 				slog.String("error", err.Error()),
 			)
@@ -79,11 +80,11 @@ func (e *Engine) applyPermissionCheckDecision(
 		panic(fmt.Sprintf("unknown permission check decision kind %d", decision.Kind))
 	}
 
-	switch flow {
+	switch flowKind {
 	case permissionFlowNone:
 	case permissionFlowRemote403:
 		if decision.Kind == permissionCheckActivateBoundaryScope {
-			e.logger.Info("handle403: read-only remote boundary detected, writes suppressed recursively",
+			flow.engine.logger.Info("handle403: read-only remote boundary detected, writes suppressed recursively",
 				slog.String("boundary", decision.BoundaryPath),
 				slog.String("trigger_path", decision.TriggerPath),
 				slog.String("scope_key", decision.ScopeBlock.Key.String()),
@@ -91,7 +92,7 @@ func (e *Engine) applyPermissionCheckDecision(
 		}
 	case permissionFlowLocalPermission:
 		if decision.Kind == permissionCheckActivateBoundaryScope {
-			e.logger.Info("local permission denied: directory blocked",
+			flow.engine.logger.Info("local permission denied: directory blocked",
 				slog.String("boundary", decision.BoundaryPath),
 				slog.String("trigger_path", decision.TriggerPath),
 			)
@@ -101,8 +102,9 @@ func (e *Engine) applyPermissionCheckDecision(
 	return true
 }
 
-func (e *Engine) applyPermissionRecheckDecisions(
+func (flow *engineFlow) applyPermissionRecheckDecisions(
 	ctx context.Context,
+	watch *watchRuntime,
 	decisions []PermissionRecheckDecision,
 ) {
 	for i := range decisions {
@@ -111,16 +113,16 @@ func (e *Engine) applyPermissionRecheckDecisions(
 		case permissionRecheckKeepScope:
 			continue
 		case permissionRecheckReleaseScope:
-			if err := e.releaseScope(ctx, decision.ScopeKey); err != nil {
-				e.logger.Warn("failed to release permission scope",
+			if err := flow.releaseScope(ctx, watch, decision.ScopeKey); err != nil {
+				flow.engine.logger.Warn("failed to release permission scope",
 					slog.String("scope_key", decision.ScopeKey.String()),
 					slog.String("error", err.Error()),
 				)
 				continue
 			}
 		case permissionRecheckClearFileFailure:
-			if err := e.baseline.ClearSyncFailure(ctx, decision.Path, decision.DriveID); err != nil {
-				e.logger.Warn("failed to clear permission failure",
+			if err := flow.engine.baseline.ClearSyncFailure(ctx, decision.Path, decision.DriveID); err != nil {
+				flow.engine.logger.Warn("failed to clear permission failure",
 					slog.String("path", decision.Path),
 					slog.String("error", err.Error()),
 				)
@@ -130,26 +132,26 @@ func (e *Engine) applyPermissionRecheckDecisions(
 			panic(fmt.Sprintf("unknown permission recheck decision kind %d", decision.Kind))
 		}
 
-		e.logger.Info(decision.Reason,
+		flow.engine.logger.Info(decision.Reason,
 			slog.String("path", decision.Path),
 			slog.String("scope_key", decision.ScopeKey.String()),
 		)
 	}
 }
 
-func (e *Engine) recordExplicitFailure(ctx context.Context, params *synctypes.SyncFailureParams) {
-	if err := e.baseline.RecordFailure(ctx, params, nil); err != nil {
-		e.logger.Warn("failed to record permission failure",
+func (flow *engineFlow) recordExplicitFailure(ctx context.Context, params *synctypes.SyncFailureParams) {
+	if err := flow.engine.baseline.RecordFailure(ctx, params, nil); err != nil {
+		flow.engine.logger.Warn("failed to record permission failure",
 			slog.String("path", params.Path),
 			slog.String("error", err.Error()),
 		)
 	}
 }
 
-func (e *Engine) applyShortcutRemovalDecisions(ctx context.Context, decisions []ShortcutRemovalDecision) {
+func (flow *engineFlow) applyShortcutRemovalDecisions(ctx context.Context, decisions []ShortcutRemovalDecision) {
 	for i := range decisions {
-		if err := e.discardScope(ctx, decisions[i].ScopeKey); err != nil {
-			e.logger.Warn("failed to discard shortcut scope",
+		if err := flow.discardScope(ctx, nil, decisions[i].ScopeKey); err != nil {
+			flow.engine.logger.Warn("failed to discard shortcut scope",
 				slog.String("scope_key", decisions[i].ScopeKey.String()),
 				slog.String("error", err.Error()),
 			)

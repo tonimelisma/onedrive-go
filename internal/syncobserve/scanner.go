@@ -33,8 +33,8 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
-	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 // Constants for the local scanner.
@@ -100,7 +100,7 @@ func (o *LocalObserver) FullScan(ctx context.Context, syncRoot string) (synctype
 	}
 
 	// Guard: abort if .nosync file is present (sync dir may be unmounted).
-	if _, err := os.Stat(filepath.Join(syncRoot, nosyncFileName)); err == nil {
+	if _, err := localpath.Stat(filepath.Join(syncRoot, nosyncFileName)); err == nil {
 		o.Logger.Warn("nosync guard file detected, aborting scan",
 			slog.String("sync_root", syncRoot))
 		return synctypes.ScanResult{}, synctypes.ErrNosyncGuard
@@ -774,7 +774,7 @@ func computeStableHashWith(fsPath string, hashFunc func(string) (string, error))
 }
 
 func trustedStat(path string) (os.FileInfo, error) {
-	file, err := trustedpath.Open(path)
+	file, err := localpath.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open trusted path %s: %w", path, err)
 	}
@@ -893,7 +893,7 @@ func ValidateOneDriveName(name string) (reason, detail string) {
 
 // SyncRootExists returns true if the sync root directory exists and is a directory.
 func SyncRootExists(syncRoot string) bool {
-	info, err := os.Stat(syncRoot)
+	info, err := localpath.Stat(syncRoot)
 	return err == nil && info.IsDir()
 }
 

@@ -336,7 +336,10 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 func discoverAccount(
 	ctx context.Context, ts graph.TokenSource, logger *slog.Logger,
 ) (driveid.CanonicalID, *graph.User, string, driveid.ID, error) {
-	client := newGraphClient(ts, logger)
+	client, err := newGraphClient(ts, logger)
+	if err != nil {
+		return driveid.CanonicalID{}, nil, "", driveid.ID{}, err
+	}
 
 	// GET /me -> email, user GUID
 	user, err := client.Me(ctx)
@@ -913,7 +916,10 @@ func fetchAuthenticatedAccount(
 		return nil, nil, "", false, fmt.Errorf("load token source: %w", tsErr)
 	}
 
-	client := newGraphClient(ts, logger)
+	client, err := newGraphClient(ts, logger)
+	if err != nil {
+		return nil, nil, "", false, err
+	}
 
 	user, err := client.Me(ctx)
 	if err != nil {

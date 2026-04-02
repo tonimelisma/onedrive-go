@@ -9,42 +9,42 @@ import (
 
 // scopeInvariantChecksEnabled gates expensive invariant assertions used by
 // tests and debug sessions. Production keeps this disabled by default.
-func (e *Engine) scopeInvariantChecksEnabled() bool {
-	return e.assertScopeInvariants
+func (flow *engineFlow) scopeInvariantChecksEnabled() bool {
+	return flow.engine.assertScopeInvariants
 }
 
-func (e *Engine) mustAssertScopeInvariants(ctx context.Context, stage string) {
-	if !e.scopeInvariantChecksEnabled() {
+func (flow *engineFlow) mustAssertScopeInvariants(ctx context.Context, watch *watchRuntime, stage string) {
+	if !flow.scopeInvariantChecksEnabled() {
 		return
 	}
-	if err := e.assertCurrentScopeInvariants(context.WithoutCancel(ctx)); err != nil {
+	if err := flow.assertCurrentScopeInvariants(context.WithoutCancel(ctx), watch); err != nil {
 		panic(fmt.Sprintf("%s: %v", stage, err))
 	}
 }
 
-func (e *Engine) mustAssertReleasedScope(ctx context.Context, key synctypes.ScopeKey, stage string) {
-	if !e.scopeInvariantChecksEnabled() {
+func (flow *engineFlow) mustAssertReleasedScope(ctx context.Context, watch *watchRuntime, key synctypes.ScopeKey, stage string) {
+	if !flow.scopeInvariantChecksEnabled() {
 		return
 	}
-	if err := e.assertReleasedScope(context.WithoutCancel(ctx), key); err != nil {
+	if err := flow.assertReleasedScope(context.WithoutCancel(ctx), watch, key); err != nil {
 		panic(fmt.Sprintf("%s: %v", stage, err))
 	}
 }
 
-func (e *Engine) mustAssertDiscardedScope(ctx context.Context, key synctypes.ScopeKey, stage string) {
-	if !e.scopeInvariantChecksEnabled() {
+func (flow *engineFlow) mustAssertDiscardedScope(ctx context.Context, watch *watchRuntime, key synctypes.ScopeKey, stage string) {
+	if !flow.scopeInvariantChecksEnabled() {
 		return
 	}
-	if err := e.assertDiscardedScope(context.WithoutCancel(ctx), key); err != nil {
+	if err := flow.assertDiscardedScope(context.WithoutCancel(ctx), watch, key); err != nil {
 		panic(fmt.Sprintf("%s: %v", stage, err))
 	}
 }
 
-func (e *Engine) assertCurrentScopeInvariants(ctx context.Context) error {
-	if e.watch != nil {
-		seen := make(map[synctypes.ScopeKey]struct{}, len(e.watch.activeScopes))
-		for i := range e.watch.activeScopes {
-			key := e.watch.activeScopes[i].Key
+func (flow *engineFlow) assertCurrentScopeInvariants(ctx context.Context, watch *watchRuntime) error {
+	if watch != nil {
+		seen := make(map[synctypes.ScopeKey]struct{}, len(watch.activeScopes))
+		for i := range watch.activeScopes {
+			key := watch.activeScopes[i].Key
 			if _, ok := seen[key]; ok {
 				return fmt.Errorf("duplicate active scope key %s", key.String())
 			}
@@ -52,12 +52,12 @@ func (e *Engine) assertCurrentScopeInvariants(ctx context.Context) error {
 		}
 	}
 
-	blocks, err := e.baseline.ListScopeBlocks(ctx)
+	blocks, err := flow.engine.baseline.ListScopeBlocks(ctx)
 	if err != nil {
 		return fmt.Errorf("listing scope blocks: %w", err)
 	}
 
-	rows, err := e.baseline.ListSyncFailures(ctx)
+	rows, err := flow.engine.baseline.ListSyncFailures(ctx)
 	if err != nil {
 		return fmt.Errorf("listing sync failures: %w", err)
 	}
@@ -90,12 +90,12 @@ func (e *Engine) assertCurrentScopeInvariants(ctx context.Context) error {
 	return nil
 }
 
-func (e *Engine) assertReleasedScope(ctx context.Context, key synctypes.ScopeKey) error {
-	if e.watch != nil && e.isScopeBlocked(key) {
+func (flow *engineFlow) assertReleasedScope(ctx context.Context, watch *watchRuntime, key synctypes.ScopeKey) error {
+	if watch != nil && flow.isScopeBlocked(watch, key) {
 		return fmt.Errorf("released scope %s still active in watch state", key.String())
 	}
 
-	blocks, err := e.baseline.ListScopeBlocks(ctx)
+	blocks, err := flow.engine.baseline.ListScopeBlocks(ctx)
 	if err != nil {
 		return fmt.Errorf("listing scope blocks: %w", err)
 	}
@@ -105,7 +105,7 @@ func (e *Engine) assertReleasedScope(ctx context.Context, key synctypes.ScopeKey
 		}
 	}
 
-	rows, err := e.baseline.ListSyncFailures(ctx)
+	rows, err := flow.engine.baseline.ListSyncFailures(ctx)
 	if err != nil {
 		return fmt.Errorf("listing sync failures: %w", err)
 	}
@@ -129,12 +129,12 @@ func (e *Engine) assertReleasedScope(ctx context.Context, key synctypes.ScopeKey
 	return nil
 }
 
-func (e *Engine) assertDiscardedScope(ctx context.Context, key synctypes.ScopeKey) error {
-	if e.watch != nil && e.isScopeBlocked(key) {
+func (flow *engineFlow) assertDiscardedScope(ctx context.Context, watch *watchRuntime, key synctypes.ScopeKey) error {
+	if watch != nil && flow.isScopeBlocked(watch, key) {
 		return fmt.Errorf("discarded scope %s still active in watch state", key.String())
 	}
 
-	blocks, err := e.baseline.ListScopeBlocks(ctx)
+	blocks, err := flow.engine.baseline.ListScopeBlocks(ctx)
 	if err != nil {
 		return fmt.Errorf("listing scope blocks: %w", err)
 	}
@@ -144,7 +144,7 @@ func (e *Engine) assertDiscardedScope(ctx context.Context, key synctypes.ScopeKe
 		}
 	}
 
-	rows, err := e.baseline.ListSyncFailures(ctx)
+	rows, err := flow.engine.baseline.ListSyncFailures(ctx)
 	if err != nil {
 		return fmt.Errorf("listing sync failures: %w", err)
 	}

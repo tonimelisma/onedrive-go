@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 // --- AppendDriveSection tests ---
@@ -44,7 +44,7 @@ func TestAppendDriveSection_AppendsToExistingFile(t *testing.T) {
 	err = AppendDriveSection(path, driveid.MustCanonicalID("business:alice@contoso.com"), "~/OneDrive - Contoso")
 	require.NoError(t, err)
 
-	data, err := trustedpath.ReadFile(path)
+	data, err := localpath.ReadFile(path)
 	require.NoError(t, err)
 	content := string(data)
 
@@ -99,7 +99,7 @@ func TestAppendDriveSection_CreatesFileWhenMissing(t *testing.T) {
 	err := AppendDriveSection(path, driveid.MustCanonicalID("personal:toni@outlook.com"), "~/OneDrive")
 	require.NoError(t, err)
 
-	data, err := trustedpath.ReadFile(path)
+	data, err := localpath.ReadFile(path)
 	require.NoError(t, err)
 	content := string(data)
 
@@ -195,7 +195,7 @@ func TestSetDriveKey_BooleanFormatting(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify the raw file content has bare true (not "true")
-	data, err := trustedpath.ReadFile(path)
+	data, err := localpath.ReadFile(path)
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "paused = true")
 	assert.NotContains(t, string(data), `paused = "true"`)
@@ -219,7 +219,7 @@ func TestSetDriveKey_StringFormatting(t *testing.T) {
 	err = SetDriveKey(path, cid, "display_name", "work")
 	require.NoError(t, err)
 
-	data, err := trustedpath.ReadFile(path)
+	data, err := localpath.ReadFile(path)
 	require.NoError(t, err)
 	assert.Contains(t, string(data), `display_name = "work"`)
 }
@@ -302,14 +302,14 @@ func TestDeleteDriveKey_KeyExists(t *testing.T) {
 	require.NoError(t, SetDriveKey(path, cid, "paused", "true"))
 
 	// Verify key exists before deletion.
-	data, err := trustedpath.ReadFile(path)
+	data, err := localpath.ReadFile(path)
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "paused = true")
 
 	// Delete the key.
 	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
 
-	data, err = trustedpath.ReadFile(path)
+	data, err = localpath.ReadFile(path)
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), "paused")
 
@@ -361,7 +361,7 @@ func TestDeleteDriveKey_IdempotentDoubleDelete(t *testing.T) {
 	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
 	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
 
-	data, err := trustedpath.ReadFile(path)
+	data, err := localpath.ReadFile(path)
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), "paused")
 }
@@ -602,7 +602,7 @@ func TestCommentPreservation_AppendDriveSection(t *testing.T) {
 	require.NoError(t, err)
 
 	// Add a user comment by directly modifying the file
-	data, err := trustedpath.ReadFile(path)
+	data, err := localpath.ReadFile(path)
 	require.NoError(t, err)
 
 	content := string(data)
@@ -615,7 +615,7 @@ func TestCommentPreservation_AppendDriveSection(t *testing.T) {
 	err = AppendDriveSection(path, driveid.MustCanonicalID("business:alice@contoso.com"), "~/Work")
 	require.NoError(t, err)
 
-	result, err := trustedpath.ReadFile(path)
+	result, err := localpath.ReadFile(path)
 	require.NoError(t, err)
 	resultStr := string(result)
 
@@ -647,7 +647,7 @@ sync_dir = "~/Work"
 	err := SetDriveKey(path, driveid.MustCanonicalID("business:alice@contoso.com"), "paused", "true")
 	require.NoError(t, err)
 
-	result, err := trustedpath.ReadFile(path)
+	result, err := localpath.ReadFile(path)
 	require.NoError(t, err)
 	resultStr := string(result)
 
@@ -677,7 +677,7 @@ sync_dir = "~/Work"
 	err := DeleteDriveSection(path, driveid.MustCanonicalID("personal:toni@outlook.com"))
 	require.NoError(t, err)
 
-	result, err := trustedpath.ReadFile(path)
+	result, err := localpath.ReadFile(path)
 	require.NoError(t, err)
 	resultStr := string(result)
 
@@ -701,7 +701,7 @@ func TestAtomicWriteFile_WritesFile(t *testing.T) {
 	err := atomicWriteFile(path, []byte("hello"))
 	require.NoError(t, err)
 
-	data, err := trustedpath.ReadFile(path)
+	data, err := localpath.ReadFile(path)
 	require.NoError(t, err)
 	assert.Equal(t, "hello", string(data))
 }
@@ -713,7 +713,7 @@ func TestAtomicWriteFile_CreatesParentDirectory(t *testing.T) {
 	err := atomicWriteFile(path, []byte("hello"))
 	require.NoError(t, err)
 
-	data, err := trustedpath.ReadFile(path)
+	data, err := localpath.ReadFile(path)
 	require.NoError(t, err)
 	assert.Equal(t, "hello", string(data))
 }
@@ -777,7 +777,7 @@ paused = true # temporarily paused
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 	require.NoError(t, SetDriveKey(path, cid, "paused", "false"))
 
-	data, err := trustedpath.ReadFile(path)
+	data, err := localpath.ReadFile(path)
 	require.NoError(t, err)
 	resultStr := string(data)
 
@@ -800,7 +800,7 @@ paused = true
 	// Deleting "paused" must NOT delete "paused_until".
 	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
 
-	data, err := trustedpath.ReadFile(path)
+	data, err := localpath.ReadFile(path)
 	require.NoError(t, err)
 	resultStr := string(data)
 
@@ -846,7 +846,7 @@ paused=true
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
 
-	data, err := trustedpath.ReadFile(path)
+	data, err := localpath.ReadFile(path)
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), "paused")
 }
@@ -1089,7 +1089,7 @@ func TestEnsureDriveInConfig_NewDrive_NoConfigFile(t *testing.T) {
 	assert.Equal(t, "~/OneDrive", syncDir)
 
 	// Config file should have been created with template + drive section.
-	data, err := trustedpath.ReadFile(path)
+	data, err := localpath.ReadFile(path)
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "# onedrive-go configuration")
 	assert.Contains(t, string(data), `["personal:user@example.com"]`)

@@ -140,8 +140,13 @@ func (cc *CLIContext) Session(ctx context.Context) (*driveops.Session, error) {
 
 // newGraphClient creates a graph.Client with the standard HTTP client,
 // user-agent, and base URL. Eliminates boilerplate repeated across commands.
-func newGraphClient(ts graph.TokenSource, logger *slog.Logger) *graph.Client {
-	return graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(logger), ts, logger, "onedrive-go/"+version)
+func newGraphClient(ts graph.TokenSource, logger *slog.Logger) (*graph.Client, error) {
+	client, err := graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(logger), ts, logger, "onedrive-go/"+version)
+	if err != nil {
+		return nil, fmt.Errorf("creating graph client: %w", err)
+	}
+
+	return client, nil
 }
 
 // newRootCmd builds and returns the fully-assembled root command with all

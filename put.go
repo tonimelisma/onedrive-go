@@ -13,6 +13,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 func newPutCmd() *cobra.Command {
@@ -43,7 +44,7 @@ func runPut(cmd *cobra.Command, args []string) error {
 	localPath := args[0]
 	ctx := cmd.Context()
 
-	fi, err := os.Stat(localPath)
+	fi, err := localpath.Stat(localPath)
 	if err != nil {
 		return fmt.Errorf("stating local path: %w", err)
 	}
@@ -219,7 +220,7 @@ func countUploadFiles(localRoot string, state *uploadWalkState) error {
 }
 
 func walkUploadTree(root string, visit func(path string, d os.DirEntry) error, onError func(path string, err error)) error {
-	entries, err := os.ReadDir(root)
+	entries, err := localpath.ReadDir(root)
 	if err != nil {
 		return fmt.Errorf("reading upload root %s: %w", root, err)
 	}
@@ -248,7 +249,7 @@ func walkUploadTreeEntry(
 		return nil
 	}
 
-	children, err := os.ReadDir(path)
+	children, err := localpath.ReadDir(path)
 	if err != nil {
 		onError(path, err)
 		return nil

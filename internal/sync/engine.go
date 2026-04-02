@@ -11,7 +11,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
 	"github.com/tonimelisma/onedrive-go/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/syncplan"
@@ -22,77 +21,6 @@ import (
 type reconcileResult struct {
 	events    []synctypes.ChangeEvent
 	shortcuts []synctypes.Shortcut
-}
-
-type watchRuntimeState struct {
-	// Active scope blocks owned by the watch control flow. The slice is tiny
-	// (usually 0-5 entries), so linear scans keep the logic simple and avoid a
-	// second mirrored subsystem.
-	activeScopes []synctypes.ScopeBlock
-
-	// Scope detection — sliding window failure tracking.
-	scopeState *syncdispatch.ScopeState
-
-	// Monotonic action ID counter owned by the watch control flow. Prevents
-	// ID collisions across batches without introducing cross-goroutine sync.
-	nextActionID int64
-}
-
-type watchObservationState struct {
-	// Event buffer — watch-loop retry/trial work injects events via buf.Add().
-	buf *syncobserve.Buffer
-
-	// Big-delete protection: rolling counter + external change detection.
-	// deleteCounter is nil even in watch mode when force=true.
-	deleteCounter   *syncdispatch.DeleteCounter
-	lastDataVersion int64
-
-	// Observer references — set in startObservers, nil'd on Close.
-	remoteObs *syncobserve.RemoteObserver
-	localObs  *syncobserve.LocalObserver
-}
-
-type watchTimerState struct {
-	// Trial and retry timers are armed by the watch loop. The channels stay
-	// persistent so timer callbacks only signal the loop; they never mutate
-	// loop-owned state directly.
-	trialTimer *time.Timer
-
-	// Retry timer — watch loop retrier sweeps sync_failures on each tick.
-	retryTimer   *time.Timer
-	retryTimerCh chan struct{} // persistent, buffered(1)
-
-	// Throttling: tracks last recheckPermissions call time (R-2.10.9).
-	lastPermRecheck time.Time
-}
-
-type watchReconcileState struct {
-	// Deduplication: caches last actionable issue count for watch summaries.
-	lastSummaryTotal int
-
-	// Full reconciliation is started by the watch loop and hands its result
-	// back over reconcileResults. The loop owns reconcileActive and applies the
-	// returned events/shortcut snapshot on receipt.
-	reconcileActive  bool
-	reconcileResults chan reconcileResult
-
-	// afterReconcileCommit is a test-only hook called after CommitObservation
-	// succeeds in runFullReconciliationAsync. Nil in production. Allows tests
-	// to inject actions (e.g. context cancellation) at an otherwise unreachable
-	// point between commit and buffer feeding.
-	afterReconcileCommit func()
-}
-
-// watchState bundles all watch-mode-only state. Nil in one-shot mode.
-// Embedded sub-structs keep the watch-only ownership domains explicit without
-// flattening them into Engine or forcing a noisy field-renaming pass through
-// the runtime/tests. The database remains the durable record; this is only the
-// engine-owned working set.
-type watchState struct {
-	watchRuntimeState
-	watchObservationState
-	watchTimerState
-	watchReconcileState
 }
 
 // Engine orchestrates a complete sync pass: observe → plan → execute → commit.
@@ -116,40 +44,10 @@ type Engine struct {
 	minFreeSpace       int64                  // startup disk-scope revalidation threshold
 	diskAvailableFn    func(string) (uint64, error)
 
-	// shortcuts is the latest shortcut snapshot used by permission and shortcut
-	// handling. One-shot sets it before executePlan; watch mode updates it only
-	// from the watch loop after observation or reconciliation hands back a new
-	// snapshot.
-	shortcuts []synctypes.Shortcut
-
-	// depGraph is the pure dependency graph. Tracks action dependencies and
-	// readiness. Set during executePlan (one-shot) or initWatchPipeline
-	// (watch mode).
-	depGraph *syncdispatch.DepGraph
-
-	// readyCh feeds admitted actions to the worker pool. In watch mode actions
-	// pass through active-scope admission first; one-shot mode bypasses that
-	// runtime check. Workers read from this channel via the WorkerPool.
-	readyCh chan *synctypes.TrackedAction
-
-	// trialCh is the persistent, buffered(1) channel for trial timer signals.
-	// Created in NewEngine. In one-shot mode, no writer → harmlessly blocks
-	// in select.
-	trialCh chan struct{}
-
-	// watch bundles all watch-mode-only state. Nil in one-shot mode.
-	watch *watchState
-
 	// Test/debug-only invariant checks. Production keeps this disabled;
 	// tests enable it to catch scope lifecycle regressions immediately.
 	assertScopeInvariants bool
 	debugEventHook        func(engineDebugEvent)
-
-	// Engine-owned result counters. The engine loop is the only writer; callers
-	// read them only after the loop barrier completes.
-	succeeded  int
-	failed     int
-	syncErrors []error
 
 	// nowFn is the engine's clock. Defaults to time.Now. Tests inject a
 	// controllable clock for deterministic trial timer and scope timing.
@@ -217,7 +115,6 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 		minFreeSpace:       cfg.MinFreeSpace,
 		diskAvailableFn:    driveops.DiskAvailable,
 		nowFn:              time.Now,
-		trialCh:            make(chan struct{}, 1),
 	}
 
 	e.permHandler = &PermissionHandler{
@@ -236,12 +133,6 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 // references set during RunWatch, cleans stale upload sessions, and
 // closes the database connection last. Safe to call more than once.
 func (e *Engine) Close(ctx context.Context) error {
-	// Nil out observer references to prevent dangling reads after Close.
-	if e.watch != nil {
-		e.watch.remoteObs = nil
-		e.watch.localObs = nil
-	}
-
 	// Clean stale upload session files (best-effort).
 	if e.sessionStore != nil {
 		if n, err := e.sessionStore.CleanStale(driveops.StaleSessionAge); err != nil {

@@ -210,7 +210,8 @@ func TestPhase0_ExecutePlan_WaitsForDrainSideEffects(t *testing.T) {
 	}}
 
 	eng, bl, syncRoot := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
-	eng.setShortcuts(shortcuts)
+	runner := newOneShotRunner(eng.Engine)
+	runner.setShortcuts(shortcuts)
 	writeLocalFile(t, syncRoot, "Shared/TeamDocs/file.txt", "phase0")
 
 	uploadMock := &engineMockClient{
@@ -239,7 +240,7 @@ func TestPhase0_ExecutePlan_WaitsForDrainSideEffects(t *testing.T) {
 	report := &synctypes.SyncReport{}
 	done := make(chan struct{})
 	go func() {
-		eng.executePlan(t.Context(), plan, report, bl)
+		runner.executePlan(t.Context(), plan, report, bl)
 		close(done)
 	}()
 
@@ -278,6 +279,7 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 	results, done, cancel, eng := startDrainLoop(t)
 	defer cancel()
 	_ = done
+	rt := testWatchRuntime(t, eng)
 
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
 		Key:           synctypes.SKService(),
@@ -287,7 +289,7 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 		NextTrialAt:   eng.nowFunc().Add(30 * time.Millisecond),
 	})
 
-	ta := eng.depGraph.Add(&synctypes.Action{
+	ta := rt.depGraph.Add(&synctypes.Action{
 		Type:    synctypes.ActionDownload,
 		Path:    "trial.txt",
 		DriveID: driveid.New(engineTestDriveID),
@@ -326,6 +328,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 	results, done, cancel, eng := startDrainLoop(t)
 	defer cancel()
 	_ = done
+	rt := testWatchRuntime(t, eng)
 
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
@@ -357,7 +360,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 		ItemID:    "blocked-item",
 	}, nil))
 
-	ta := eng.depGraph.Add(&synctypes.Action{
+	ta := rt.depGraph.Add(&synctypes.Action{
 		Type:    synctypes.ActionUpload,
 		Path:    "trial.txt",
 		DriveID: driveID,
@@ -382,7 +385,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 	var retried *synctypes.TrackedAction
 	require.Eventually(t, func() bool {
 		select {
-		case retried = <-eng.readyCh:
+		case retried = <-rt.readyCh:
 			return retried != nil && retried.Action.Path == blockedPath
 		default:
 			return false
@@ -401,7 +404,8 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 	eng, syncRoot := newTestEngine(t, mock)
 	ctx := t.Context()
 	setupWatchEngine(t, eng)
-	eng.watch.buf = syncobserve.NewBuffer(eng.logger)
+	rt := testWatchRuntime(t, eng)
+	rt.buf = syncobserve.NewBuffer(eng.logger)
 
 	scopeKey := synctypes.SKPermDir("Private")
 	accessibleDir := filepath.Join(syncRoot, "Private")
@@ -464,11 +468,12 @@ func TestPhase0_ScopeBlockFailureDoesNotReadmitDependentEarly(t *testing.T) {
 
 	results, _, cancel, eng := startDrainLoop(t)
 	defer cancel()
+	rt := testWatchRuntime(t, eng)
 
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
 
-	parent := eng.depGraph.Add(&synctypes.Action{
+	parent := rt.depGraph.Add(&synctypes.Action{
 		Type:    synctypes.ActionUpload,
 		Path:    "parent.txt",
 		DriveID: driveID,
@@ -476,7 +481,7 @@ func TestPhase0_ScopeBlockFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	}, 1, nil)
 	require.NotNil(t, parent)
 
-	child := eng.depGraph.Add(&synctypes.Action{
+	child := rt.depGraph.Add(&synctypes.Action{
 		Type:    synctypes.ActionUpload,
 		Path:    "child.txt",
 		DriveID: driveID,
@@ -484,8 +489,8 @@ func TestPhase0_ScopeBlockFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	}, 2, []int64{1})
 	require.Nil(t, child)
 
-	eng.readyCh <- parent
-	readReady(t, eng.readyCh)
+	rt.readyCh <- parent
+	readReady(t, rt.readyCh)
 
 	results <- synctypes.WorkerResult{
 		ActionID:   1,
@@ -500,7 +505,7 @@ func TestPhase0_ScopeBlockFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	}
 
 	select {
-	case ta := <-eng.readyCh:
+	case ta := <-rt.readyCh:
 		require.Failf(t, "dependent dispatched early", "unexpected path %s", ta.Action.Path)
 	case <-time.After(150 * time.Millisecond):
 	}
@@ -545,9 +550,10 @@ func TestPhase0_RunFullReconciliationAsync_UsesBufferHandoffInsteadOfDirectDispa
 	require.NoError(t, err)
 
 	ready := setupWatchEngine(t, eng)
-	eng.watch.buf = syncobserve.NewBuffer(eng.logger)
+	rt := testWatchRuntime(t, eng)
+	rt.buf = syncobserve.NewBuffer(eng.logger)
 
-	eng.runFullReconciliationAsync(ctx, bl)
+	rt.runFullReconciliationAsync(ctx, bl)
 	waitForReconcileDone(t, eng)
 
 	select {
@@ -556,7 +562,7 @@ func TestPhase0_RunFullReconciliationAsync_UsesBufferHandoffInsteadOfDirectDispa
 	default:
 	}
 
-	batch := eng.watch.buf.FlushImmediate()
+	batch := rt.buf.FlushImmediate()
 	require.NotEmpty(t, batch)
 	assert.Equal(t, "reconcile.txt", batch[0].Path)
 }

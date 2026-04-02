@@ -22,7 +22,7 @@ const cachedLocalHash = "cached-local-hash"
 // newSingleOwnerEngine creates a minimal engine with syncdispatch.DepGraph plus the
 // watch-mode active-scope working set for testing the single-owner engine
 // methods. Uses a real syncstore.SyncStore (in-memory SQLite).
-func newSingleOwnerEngine(t *testing.T) *Engine {
+func newSingleOwnerEngine(t *testing.T) *testEngine {
 	t.Helper()
 
 	mock := &engineMockClient{}
@@ -33,7 +33,7 @@ func newSingleOwnerEngine(t *testing.T) *Engine {
 	return eng
 }
 
-func newSingleOwnerEngineWithContext(t *testing.T, ctx context.Context) *Engine {
+func newSingleOwnerEngineWithContext(t *testing.T, ctx context.Context) *testEngine {
 	t.Helper()
 
 	mock := &engineMockClient{}
@@ -59,14 +59,14 @@ func TestEngine_CascadeRecordAndComplete_SingleAction(t *testing.T) {
 		Path:    "test.txt",
 		DriveID: driveid.New("drive1"),
 	}
-	ta := eng.depGraph.Add(&action, 1, nil)
+	ta := &synctypes.TrackedAction{ID: 1, Action: action}
 	require.NotNil(t, ta, "action should be immediately ready")
 
 	// Cascade-record it as scope-blocked.
-	eng.cascadeRecordAndComplete(ctx, ta, synctypes.SKQuotaOwn())
+	cascadeRecordAndCompleteForTest(t, eng, ctx, ta, synctypes.SKQuotaOwn())
 
 	// Verify it was completed in the graph.
-	assert.Equal(t, 0, eng.depGraph.InFlightCount())
+	assert.Equal(t, 0, testWatchRuntime(t, eng).depGraph.InFlightCount())
 
 	// Verify sync_failure was recorded with scope_key.
 	failures, err := eng.baseline.ListSyncFailures(ctx)
@@ -90,7 +90,7 @@ func TestEngine_CascadeRecordAndComplete_WithDependents(t *testing.T) {
 		Path:    "dir",
 		DriveID: driveID,
 	}
-	parentTA := eng.depGraph.Add(&parent, 1, nil)
+	parentTA := testWatchRuntime(t, eng).depGraph.Add(&parent, 1, nil)
 	require.NotNil(t, parentTA)
 
 	// Add child that depends on parent.
@@ -99,14 +99,14 @@ func TestEngine_CascadeRecordAndComplete_WithDependents(t *testing.T) {
 		Path:    "dir/file.txt",
 		DriveID: driveID,
 	}
-	childTA := eng.depGraph.Add(&child, 2, []int64{1})
+	childTA := testWatchRuntime(t, eng).depGraph.Add(&child, 2, []int64{1})
 	assert.Nil(t, childTA, "child should wait on parent")
 
 	// Cascade-record parent → child should also be recorded.
-	eng.cascadeRecordAndComplete(ctx, parentTA, synctypes.SKQuotaOwn())
+	cascadeRecordAndCompleteForTest(t, eng, ctx, parentTA, synctypes.SKQuotaOwn())
 
 	// Both should be completed.
-	assert.Equal(t, 0, eng.depGraph.InFlightCount())
+	assert.Equal(t, 0, testWatchRuntime(t, eng).depGraph.InFlightCount())
 
 	// Both should have sync_failures.
 	failures, err := eng.baseline.ListSyncFailures(ctx)
@@ -147,7 +147,7 @@ func TestEngine_ReleaseScope(t *testing.T) {
 	}, nil))
 
 	// Clear the scope.
-	require.NoError(t, eng.releaseScope(ctx, sk))
+	require.NoError(t, releaseTestScope(t, eng, ctx, sk))
 
 	// Scope block should be gone.
 	assert.False(t, isTestScopeBlocked(eng, sk))
@@ -187,10 +187,10 @@ func TestEngine_ReleaseScope_SignalsImmediateRetrySweep(t *testing.T) {
 		ErrMsg:    "scope blocked",
 	}, nil))
 
-	require.NoError(t, eng.releaseScope(ctx, scopeKey))
+	require.NoError(t, releaseTestScope(t, eng, ctx, scopeKey))
 
 	select {
-	case <-eng.watch.retryTimerCh:
+	case <-testWatchRuntime(t, eng).retryTimerCh:
 	case <-time.After(time.Second):
 		require.Fail(t, "releaseScope should signal retryTimerCh for due-now failures")
 	}
@@ -208,12 +208,12 @@ func TestEngine_AssertCurrentScopeInvariants_DetectsDuplicateActiveScopes(t *tes
 	ctx := context.Background()
 	scopeKey := synctypes.SKService()
 
-	eng.watch.activeScopes = []synctypes.ScopeBlock{
+	testWatchRuntime(t, eng).activeScopes = []synctypes.ScopeBlock{
 		{Key: scopeKey, IssueType: synctypes.IssueServiceOutage},
 		{Key: scopeKey, IssueType: synctypes.IssueServiceOutage},
 	}
 
-	err := eng.assertCurrentScopeInvariants(ctx)
+	err := assertTestCurrentScopeInvariants(t, eng, ctx)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate active scope key")
 }
@@ -232,7 +232,7 @@ func TestEngine_AssertCurrentScopeInvariants_DetectsOrphanedPermissionScope(t *t
 		BlockedAt:    eng.nowFn(),
 	}))
 
-	err := eng.assertCurrentScopeInvariants(ctx)
+	err := assertTestCurrentScopeInvariants(t, eng, ctx)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "has no actionable boundary row")
 }
@@ -272,11 +272,11 @@ func TestEngine_ReleaseAndDiscardScope_MaintainInvariantsInOneShotMode(t *testin
 			ErrMsg:    "held by scope",
 		}, nil))
 
-		eng.watch = nil
+		clearTestWatchRuntime(eng)
 
-		require.NoError(t, eng.releaseScope(ctx, scopeKey))
-		require.NoError(t, eng.assertReleasedScope(ctx, scopeKey))
-		require.NoError(t, eng.assertCurrentScopeInvariants(ctx))
+		require.NoError(t, releaseTestScope(t, eng, ctx, scopeKey))
+		require.NoError(t, assertReleasedScopeForTest(t, eng, ctx, scopeKey))
+		require.NoError(t, assertTestCurrentScopeInvariants(t, eng, ctx))
 	})
 
 	t.Run("discard", func(t *testing.T) {
@@ -301,11 +301,11 @@ func TestEngine_ReleaseAndDiscardScope_MaintainInvariantsInOneShotMode(t *testin
 			ErrMsg:    "held by scope",
 		}, nil))
 
-		eng.watch = nil
+		clearTestWatchRuntime(eng)
 
-		require.NoError(t, eng.discardScope(ctx, scopeKey))
-		require.NoError(t, eng.assertDiscardedScope(ctx, scopeKey))
-		require.NoError(t, eng.assertCurrentScopeInvariants(ctx))
+		require.NoError(t, discardTestScope(t, eng, ctx, scopeKey))
+		require.NoError(t, assertDiscardedScopeForTest(t, eng, ctx, scopeKey))
+		require.NoError(t, assertTestCurrentScopeInvariants(t, eng, ctx))
 	})
 }
 
@@ -334,7 +334,7 @@ func TestEngine_RepairPersistedScopes_ReleasesOrphanedRemotePermissionScope(t *t
 		ErrMsg:    "blocked by remote permission scope",
 	}, nil))
 
-	require.NoError(t, eng.repairPersistedScopes(ctx))
+	require.NoError(t, repairPersistedScopesForTest(t, eng, ctx))
 
 	assert.False(t, isTestScopeBlocked(eng, scopeKey))
 
@@ -375,7 +375,7 @@ func TestEngine_RepairPersistedScopes_QuotaPolicy(t *testing.T) {
 			ErrMsg:    "quota blocked",
 		}, nil))
 
-		require.NoError(t, eng.repairPersistedScopes(ctx))
+		require.NoError(t, repairPersistedScopesForTest(t, eng, ctx))
 
 		assert.True(t, isTestScopeBlocked(eng, scopeKey))
 	})
@@ -398,7 +398,7 @@ func TestEngine_RepairPersistedScopes_QuotaPolicy(t *testing.T) {
 			NextTrialAt:   now.Add(30 * time.Second),
 		}))
 
-		require.NoError(t, eng.repairPersistedScopes(ctx))
+		require.NoError(t, repairPersistedScopesForTest(t, eng, ctx))
 
 		assert.False(t, isTestScopeBlocked(eng, scopeKey))
 
@@ -429,13 +429,13 @@ func TestEngine_RepairPersistedScopes_ThrottleAndServicePolicy(t *testing.T) {
 			NextTrialAt:   now.Add(-time.Second),
 		}))
 
-		require.NoError(t, eng.repairPersistedScopes(ctx))
+		require.NoError(t, repairPersistedScopesForTest(t, eng, ctx))
 		newTestWatchState(t, eng)
-		require.NoError(t, eng.loadActiveScopes(ctx))
-		eng.armTrialTimer()
+		require.NoError(t, eng.loadActiveScopes(ctx, testWatchRuntime(t, eng)))
+		testWatchRuntime(t, eng).armTrialTimer()
 
 		select {
-		case <-eng.trialCh:
+		case <-testWatchRuntime(t, eng).trialCh:
 		case <-time.After(time.Second):
 			require.Fail(t, "expired server-timed throttle scope should schedule an immediate trial on startup")
 		}
@@ -468,7 +468,7 @@ func TestEngine_RepairPersistedScopes_ThrottleAndServicePolicy(t *testing.T) {
 			ErrMsg:    "rate limited",
 		}, nil))
 
-		require.NoError(t, eng.repairPersistedScopes(ctx))
+		require.NoError(t, repairPersistedScopesForTest(t, eng, ctx))
 
 		assert.False(t, isTestScopeBlocked(eng, scopeKey))
 		retryable, err := eng.baseline.ListSyncFailuresForRetry(ctx, now)
@@ -495,7 +495,7 @@ func TestEngine_RepairPersistedScopes_ThrottleAndServicePolicy(t *testing.T) {
 			NextTrialAt:   now.Add(time.Minute),
 		}))
 
-		require.NoError(t, eng.repairPersistedScopes(ctx))
+		require.NoError(t, repairPersistedScopesForTest(t, eng, ctx))
 		assert.True(t, isTestScopeBlocked(eng, scopeKey))
 	})
 }
@@ -532,7 +532,7 @@ func TestEngine_RepairPersistedScopes_DiskPolicy(t *testing.T) {
 			ErrMsg:    "disk full",
 		}, nil))
 
-		require.NoError(t, eng.repairPersistedScopes(ctx))
+		require.NoError(t, repairPersistedScopesForTest(t, eng, ctx))
 
 		assert.False(t, isTestScopeBlocked(eng, scopeKey))
 		retryable, err := eng.baseline.ListSyncFailuresForRetry(ctx, now)
@@ -561,7 +561,7 @@ func TestEngine_RepairPersistedScopes_DiskPolicy(t *testing.T) {
 			TrialCount:    7,
 		}))
 
-		require.NoError(t, eng.repairPersistedScopes(ctx))
+		require.NoError(t, repairPersistedScopesForTest(t, eng, ctx))
 
 		block, ok := getTestScopeBlock(eng, scopeKey)
 		require.True(t, ok)
@@ -583,16 +583,16 @@ func TestEngine_AdmitReady_OneShotMode_NoActiveScopes(t *testing.T) {
 	ctx := context.Background()
 
 	// nil watch → one-shot mode, all actions pass through.
-	eng.watch = nil
+	clearTestWatchRuntime(eng)
 
 	action := synctypes.Action{
 		Type:    synctypes.ActionUpload,
 		Path:    "test.txt",
 		DriveID: driveid.New("drive1"),
 	}
-	ta := eng.depGraph.Add(&action, 1, nil)
+	ta := testEngineFlow(t, eng).depGraph.Add(&action, 1, nil)
 
-	dispatched := eng.admitReady(ctx, []*synctypes.TrackedAction{ta})
+	dispatched := admitReadyForTest(t, eng, ctx, []*synctypes.TrackedAction{ta})
 	assert.Len(t, dispatched, 1, "without watch-mode active scopes, action should pass through")
 }
 
@@ -613,13 +613,13 @@ func TestEngine_AdmitReady_ScopeBlocked(t *testing.T) {
 		Path:    "test.txt",
 		DriveID: eng.driveID, // own drive
 	}
-	ta := eng.depGraph.Add(&action, 1, nil)
+	ta := testWatchRuntime(t, eng).depGraph.Add(&action, 1, nil)
 
-	dispatched := eng.admitReady(ctx, []*synctypes.TrackedAction{ta})
+	dispatched := admitReadyForTest(t, eng, ctx, []*synctypes.TrackedAction{ta})
 	assert.Empty(t, dispatched, "scope-blocked action should not be dispatched")
 
 	// Action should be completed in graph (cascade).
-	assert.Equal(t, 0, eng.depGraph.InFlightCount())
+	assert.Equal(t, 0, testWatchRuntime(t, eng).depGraph.InFlightCount())
 
 	// sync_failure should exist.
 	failures, err := eng.baseline.ListSyncFailures(ctx)
@@ -640,10 +640,10 @@ func TestEngine_ProcessAndRoute_Success(t *testing.T) {
 
 	// Add parent + child to syncdispatch.DepGraph.
 	parent := synctypes.Action{Type: synctypes.ActionUpload, Path: "parent.txt", DriveID: driveID}
-	eng.depGraph.Add(&parent, 1, nil)
+	testWatchRuntime(t, eng).depGraph.Add(&parent, 1, nil)
 
 	child := synctypes.Action{Type: synctypes.ActionUpload, Path: "child.txt", DriveID: driveID}
-	eng.depGraph.Add(&child, 2, []int64{1})
+	testWatchRuntime(t, eng).depGraph.Add(&child, 2, []int64{1})
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
@@ -657,14 +657,14 @@ func TestEngine_ProcessAndRoute_Success(t *testing.T) {
 		ActionID:   1,
 	}
 
-	dispatched := eng.processWorkerResult(ctx, r, bl)
+	dispatched := processWorkerResultForTest(t, eng, ctx, r, bl)
 
 	// Child should be returned as ready (no scope gate → dispatched).
 	assert.Len(t, dispatched, 1)
 	assert.Equal(t, "child.txt", dispatched[0].Action.Path)
 
 	// Succeeded counter should increment.
-	assert.Equal(t, 1, eng.succeeded)
+	assert.Equal(t, 1, testEngineFlow(t, eng).succeeded)
 }
 
 func TestEngine_ProcessAndRoute_FailureCascadesChildren(t *testing.T) {
@@ -676,10 +676,10 @@ func TestEngine_ProcessAndRoute_FailureCascadesChildren(t *testing.T) {
 
 	// Add parent + child.
 	parent := synctypes.Action{Type: synctypes.ActionFolderCreate, Path: "dir", DriveID: driveID}
-	eng.depGraph.Add(&parent, 1, nil)
+	testWatchRuntime(t, eng).depGraph.Add(&parent, 1, nil)
 
 	child := synctypes.Action{Type: synctypes.ActionUpload, Path: "dir/file.txt", DriveID: driveID}
-	eng.depGraph.Add(&child, 2, []int64{1})
+	testWatchRuntime(t, eng).depGraph.Add(&child, 2, []int64{1})
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
@@ -695,13 +695,13 @@ func TestEngine_ProcessAndRoute_FailureCascadesChildren(t *testing.T) {
 		ActionID:   1,
 	}
 
-	dispatched := eng.processWorkerResult(ctx, r, bl)
+	dispatched := processWorkerResultForTest(t, eng, ctx, r, bl)
 
 	// Child should NOT be dispatched — it's cascade-recorded.
 	assert.Empty(t, dispatched)
 
 	// Both actions should be completed.
-	assert.Equal(t, 0, eng.depGraph.InFlightCount())
+	assert.Equal(t, 0, testWatchRuntime(t, eng).depGraph.InFlightCount())
 
 	// Child should have a cascade sync_failure.
 	failures, err := eng.baseline.ListSyncFailures(ctx)
@@ -724,13 +724,13 @@ func TestCascadeFailAndComplete_Grandchildren(t *testing.T) {
 
 	// 3-level chain: A → B → C
 	a := synctypes.Action{Type: synctypes.ActionFolderCreate, Path: "a", DriveID: driveID}
-	eng.depGraph.Add(&a, 1, nil)
+	testWatchRuntime(t, eng).depGraph.Add(&a, 1, nil)
 
 	b := synctypes.Action{Type: synctypes.ActionFolderCreate, Path: "a/b", DriveID: driveID}
-	eng.depGraph.Add(&b, 2, []int64{1})
+	testWatchRuntime(t, eng).depGraph.Add(&b, 2, []int64{1})
 
 	c := synctypes.Action{Type: synctypes.ActionDownload, Path: "a/b/c.txt", DriveID: driveID, ItemID: "ic"}
-	eng.depGraph.Add(&c, 3, []int64{2})
+	testWatchRuntime(t, eng).depGraph.Add(&c, 3, []int64{2})
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
@@ -746,11 +746,11 @@ func TestCascadeFailAndComplete_Grandchildren(t *testing.T) {
 		ActionID:   1,
 	}
 
-	dispatched := eng.processWorkerResult(ctx, r, bl)
+	dispatched := processWorkerResultForTest(t, eng, ctx, r, bl)
 	assert.Empty(t, dispatched, "no actions should be dispatched on failure")
 
 	// All 3 actions should be completed — none stranded.
-	assert.Equal(t, 0, eng.depGraph.InFlightCount(),
+	assert.Equal(t, 0, testWatchRuntime(t, eng).depGraph.InFlightCount(),
 		"grandchild must not be stranded in DepGraph")
 
 	// B and C should both have cascade sync_failures.
@@ -770,13 +770,13 @@ func TestCompleteSubtree_Grandchildren(t *testing.T) {
 
 	// 3-level chain: A → B → C
 	a := synctypes.Action{Type: synctypes.ActionFolderCreate, Path: "a", DriveID: driveID}
-	eng.depGraph.Add(&a, 1, nil)
+	testWatchRuntime(t, eng).depGraph.Add(&a, 1, nil)
 
 	b := synctypes.Action{Type: synctypes.ActionFolderCreate, Path: "a/b", DriveID: driveID}
-	eng.depGraph.Add(&b, 2, []int64{1})
+	testWatchRuntime(t, eng).depGraph.Add(&b, 2, []int64{1})
 
 	c := synctypes.Action{Type: synctypes.ActionDownload, Path: "a/b/c.txt", DriveID: driveID, ItemID: "ic"}
-	eng.depGraph.Add(&c, 3, []int64{2})
+	testWatchRuntime(t, eng).depGraph.Add(&c, 3, []int64{2})
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
@@ -791,11 +791,11 @@ func TestCompleteSubtree_Grandchildren(t *testing.T) {
 		ActionID:   1,
 	}
 
-	dispatched := eng.processWorkerResult(ctx, r, bl)
+	dispatched := processWorkerResultForTest(t, eng, ctx, r, bl)
 	assert.Empty(t, dispatched)
 
 	// All 3 actions should be completed.
-	assert.Equal(t, 0, eng.depGraph.InFlightCount(),
+	assert.Equal(t, 0, testWatchRuntime(t, eng).depGraph.InFlightCount(),
 		"grandchild must not be stranded on shutdown")
 
 	// No cascade failures should be recorded (shutdown is not a failure).
@@ -814,16 +814,16 @@ func TestCascadeFailAndComplete_Diamond(t *testing.T) {
 
 	// Diamond: A → B, A → C, B → D, C → D
 	a := synctypes.Action{Type: synctypes.ActionFolderCreate, Path: "a", DriveID: driveID}
-	eng.depGraph.Add(&a, 1, nil)
+	testWatchRuntime(t, eng).depGraph.Add(&a, 1, nil)
 
 	b := synctypes.Action{Type: synctypes.ActionFolderCreate, Path: "a/b", DriveID: driveID}
-	eng.depGraph.Add(&b, 2, []int64{1})
+	testWatchRuntime(t, eng).depGraph.Add(&b, 2, []int64{1})
 
 	c := synctypes.Action{Type: synctypes.ActionFolderCreate, Path: "a/c", DriveID: driveID}
-	eng.depGraph.Add(&c, 3, []int64{1})
+	testWatchRuntime(t, eng).depGraph.Add(&c, 3, []int64{1})
 
 	d := synctypes.Action{Type: synctypes.ActionDownload, Path: "a/d.txt", DriveID: driveID, ItemID: "id"}
-	eng.depGraph.Add(&d, 4, []int64{2, 3})
+	testWatchRuntime(t, eng).depGraph.Add(&d, 4, []int64{2, 3})
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
@@ -839,11 +839,11 @@ func TestCascadeFailAndComplete_Diamond(t *testing.T) {
 		ActionID:   1,
 	}
 
-	dispatched := eng.processWorkerResult(ctx, r, bl)
+	dispatched := processWorkerResultForTest(t, eng, ctx, r, bl)
 	assert.Empty(t, dispatched)
 
 	// All 4 actions should be completed — D completed exactly once.
-	assert.Equal(t, 0, eng.depGraph.InFlightCount(),
+	assert.Equal(t, 0, testWatchRuntime(t, eng).depGraph.InFlightCount(),
 		"diamond dependency must not strand any action")
 }
 
@@ -949,7 +949,7 @@ func TestRetrierSweep_BatchLimit(t *testing.T) {
 
 	// retryTimerCh should have a signal for remaining items.
 	select {
-	case <-eng.watch.retryTimerCh:
+	case <-testWatchRuntime(t, eng).retryTimerCh:
 		// Good — re-arm signal sent.
 	default:
 		require.Fail(t, "retryTimerCh should have a signal for remaining batch items")
@@ -997,7 +997,7 @@ func TestRetrierSweep_SkipsInFlight(t *testing.T) {
 	}
 
 	// Add "b.txt" to the syncdispatch.DepGraph so it's in-flight.
-	eng.depGraph.Add(&synctypes.Action{
+	testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{
 		Type:    synctypes.ActionDownload,
 		Path:    "b.txt",
 		DriveID: driveID,

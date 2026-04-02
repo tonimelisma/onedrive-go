@@ -2,9 +2,7 @@ package tokenfile
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
-	"os"
 
 	"golang.org/x/oauth2"
 )
@@ -22,80 +20,4 @@ func marshalTokenFile(tok *oauth2.Token) ([]byte, error) {
 	}
 
 	return data, nil
-}
-
-func setTempFilePermissions(file *os.File) error {
-	if err := chmodTrustedTempPath(file.Name(), FilePerms); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func writeTempFileData(file *os.File, data []byte) error {
-	if _, err := file.Write(data); err != nil {
-		return fmt.Errorf("tokenfile: writing: %w", err)
-	}
-
-	return nil
-}
-
-func syncTempFile(file *os.File) error {
-	if err := file.Sync(); err != nil {
-		return fmt.Errorf("tokenfile: syncing: %w", err)
-	}
-
-	return nil
-}
-
-func closeTempFile(file *os.File, prior error) error {
-	closeErr := file.Close()
-	if closeErr != nil {
-		wrapped := fmt.Errorf("tokenfile: closing temp file: %w", closeErr)
-		if prior == nil {
-			return wrapped
-		}
-
-		return errors.Join(prior, wrapped)
-	}
-
-	return prior
-}
-
-func removeTempPath(path string, prior error) error {
-	removeErr := os.Remove(path)
-	if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-		wrapped := fmt.Errorf("tokenfile: removing temp file: %w", removeErr)
-		if prior == nil {
-			return wrapped
-		}
-
-		return errors.Join(prior, wrapped)
-	}
-
-	return prior
-}
-
-func renameTempFile(src, dst string) error {
-	if err := renameTrustedTempPath(src, dst); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func chmodTrustedTempPath(path string, mode os.FileMode) error {
-	if err := chmodManagedTempPath(path, mode); err != nil {
-		return fmt.Errorf("tokenfile: setting permissions: %w", err)
-	}
-
-	return nil
-}
-
-func renameTrustedTempPath(src, dst string) error {
-	if err := renameManagedTempPath(src, dst); err != nil {
-		return fmt.Errorf("tokenfile: renaming: %w", err)
-	}
-
-	return nil
 }

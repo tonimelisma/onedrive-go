@@ -25,7 +25,7 @@ jobs:
   # so push-to-main CI is effectively always skipped. Schedule and
   # dispatch still trigger all jobs.
 
-  lint:
+  verify:
     runs-on: ubuntu-latest
     if: github.event_name != 'push' || !contains(github.event.head_commit.message, '(#')
     steps:
@@ -41,50 +41,10 @@ jobs:
           version: v2.11.3
           install-only: true
 
-      - name: Lint
-        run: golangci-lint run --allow-parallel-runners
-
-  test:
-    runs-on: ubuntu-latest
-    if: github.event_name != 'push' || !contains(github.event.head_commit.message, '(#')
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Build
-        run: go build ./...
-
-      - name: Unit tests with coverage gate
+      - name: Verify
         env:
           COVERAGE_THRESHOLD: "76.0"
-        run: |
-          set -euo pipefail
-
-          coverage_file="$(mktemp /tmp/onedrive-go-cover.XXXXXX.out)"
-          trap 'rm -f "${coverage_file}"' EXIT
-          go test -race -coverprofile="${coverage_file}" ./...
-
-          coverage_report="$(go tool cover -func="${coverage_file}")"
-          echo "${coverage_report}"
-
-          coverage_total="$(
-            echo "${coverage_report}" |
-            awk '/^total:/ {gsub(/%/, "", $3); print $3}'
-          )"
-
-          awk -v actual="${coverage_total}" -v minimum="${COVERAGE_THRESHOLD}" '
-          BEGIN {
-            if ((actual + 0) < (minimum + 0)) {
-              exit 1
-            }
-          }
-          ' || {
-            echo "coverage gate failed: ${coverage_total}% < ${COVERAGE_THRESHOLD}%"
-            exit 1
-          }
+        run: ./scripts/verify.sh public
 
   # --- Live API jobs (skip on forks — no OIDC trust) ---
   # Each job uses its own dedicated test account so they run in parallel
@@ -178,7 +138,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "=== Integration tests for: ${ONEDRIVE_TEST_DRIVE} ==="
-          go test -tags=integration -race -v -timeout=5m ./internal/graph/...
+          ./scripts/verify.sh integration
 
       - name: Save rotated token to Key Vault
         if: always()
@@ -297,16 +257,13 @@ jobs:
       - name: Run E2E tests
         run: |
           set -euo pipefail
+          ./scripts/verify.sh e2e
 
-          # Full suite on schedule/dispatch, fast-only on push/PR.
-          E2E_TAGS="e2e"
           if [[ "${{ github.event_name }}" == "schedule" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            E2E_TAGS="e2e,e2e_full"
+            echo "=== E2E full suite (tag: e2e_full) ==="
+            E2E_LOG_DIR=/tmp/e2e-debug-logs \
+              go test -tags=e2e_full -race -v -parallel 5 -timeout=30m ./e2e/...
           fi
-
-          echo "=== E2E tests (tags: ${E2E_TAGS}) ==="
-          E2E_LOG_DIR=/tmp/e2e-debug-logs \
-            go test -tags="${E2E_TAGS}" -race -v -parallel 5 -timeout=30m ./e2e/...
 
       - name: Upload E2E debug logs
         if: failure()

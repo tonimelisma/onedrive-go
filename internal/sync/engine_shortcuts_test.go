@@ -489,7 +489,7 @@ func TestHandleRemovedShortcuts_ClearsRemotePermissionScopesUnderRemovedShortcut
 
 func seedShortcutRemovalFailures(
 	t *testing.T,
-	eng *Engine,
+	eng *testEngine,
 	ctx context.Context,
 	removedScope synctypes.ScopeKey,
 	removedQuotaScope synctypes.ScopeKey,
@@ -555,7 +555,7 @@ func seedShortcutRemovalFailures(
 
 func seedShortcutRemovalScopeBlocks(
 	t *testing.T,
-	eng *Engine,
+	eng *testEngine,
 	removedScope synctypes.ScopeKey,
 	removedQuotaScope synctypes.ScopeKey,
 	otherScope synctypes.ScopeKey,
