@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
+	"github.com/tonimelisma/onedrive-go/internal/fsroot"
 )
 
 // ErrCorruptSession is returned when a session file cannot be parsed as JSON.
@@ -96,10 +96,15 @@ func NewSessionStore(dataDir string, logger *slog.Logger) *SessionStore {
 // older than StaleSessionAge (Graph API upload sessions expire in ~48h).
 func (s *SessionStore) Load(driveID, localPath string) (*SessionRecord, bool, error) {
 	path := s.filePath(driveID, localPath)
-
-	info, err := os.Stat(path)
+	root, err := fsroot.Open(s.dir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		return nil, false, fmt.Errorf("opening session root: %w", err)
+	}
+	name := filepath.Base(path)
+
+	info, err := root.Stat(name)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, false, nil
 		}
 
@@ -113,7 +118,7 @@ func (s *SessionStore) Load(driveID, localPath string) (*SessionRecord, bool, er
 			slog.Duration("age", time.Since(info.ModTime()).Truncate(time.Hour)),
 		)
 
-		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+		if rmErr := root.Remove(name); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 			s.logger.Warn("failed to remove expired session file",
 				slog.String("path", path),
 				slog.String("error", rmErr.Error()),
@@ -123,9 +128,9 @@ func (s *SessionStore) Load(driveID, localPath string) (*SessionRecord, bool, er
 		return nil, false, nil
 	}
 
-	data, err := trustedpath.ReadFile(path)
+	data, err := root.ReadFile(name)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, false, nil
 		}
 
@@ -140,7 +145,12 @@ func (s *SessionStore) Load(driveID, localPath string) (*SessionRecord, bool, er
 			slog.String("error", err.Error()),
 		)
 
-		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+		if root, openErr := fsroot.Open(s.dir); openErr != nil {
+			s.logger.Warn("failed to open session root for corrupt-file cleanup",
+				slog.String("path", path),
+				slog.String("error", openErr.Error()),
+			)
+		} else if rmErr := root.Remove(filepath.Base(path)); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 			s.logger.Warn("failed to remove corrupt session file",
 				slog.String("path", path),
 				slog.String("error", rmErr.Error()),
@@ -155,8 +165,9 @@ func (s *SessionStore) Load(driveID, localPath string) (*SessionRecord, bool, er
 
 // Save persists a session record. Creates the session directory if needed.
 func (s *SessionStore) Save(driveID, localPath string, rec *SessionRecord) error {
-	if err := os.MkdirAll(s.dir, sessionDirPerms); err != nil {
-		return fmt.Errorf("creating session dir: %w", err)
+	root, err := fsroot.Open(s.dir)
+	if err != nil {
+		return fmt.Errorf("opening session root: %w", err)
 	}
 
 	rec.Version = currentSessionVersion
@@ -172,20 +183,9 @@ func (s *SessionStore) Save(driveID, localPath string, rec *SessionRecord) error
 		return fmt.Errorf("marshaling session record: %w", err)
 	}
 
-	path := s.filePath(driveID, localPath)
-	tmpPath := path + ".tmp"
-
-	if err := os.WriteFile(tmpPath, data, sessionFilePerms); err != nil {
-		return fmt.Errorf("writing session temp file: %w", err)
-	}
-
-	if err := os.Rename(tmpPath, path); err != nil {
-		baseErr := fmt.Errorf("renaming session temp file: %w", err)
-		if cleanupErr := os.Remove(tmpPath); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrNotExist) {
-			return errors.Join(baseErr, fmt.Errorf("removing session temp file: %w", cleanupErr))
-		}
-
-		return baseErr
+	name := filepath.Base(s.filePath(driveID, localPath))
+	if err := root.AtomicWrite(name, data, sessionFilePerms, sessionDirPerms, ".session-*.tmp"); err != nil {
+		return fmt.Errorf("writing session file: %w", err)
 	}
 
 	return nil
@@ -194,9 +194,12 @@ func (s *SessionStore) Save(driveID, localPath string, rec *SessionRecord) error
 // Delete removes the session file for the given drive and local path.
 // No error if the file doesn't exist.
 func (s *SessionStore) Delete(driveID, localPath string) error {
-	path := s.filePath(driveID, localPath)
+	root, err := fsroot.Open(s.dir)
+	if err != nil {
+		return fmt.Errorf("opening session root: %w", err)
+	}
 
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	if err := root.Remove(filepath.Base(s.filePath(driveID, localPath))); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("deleting session file: %w", err)
 	}
 
@@ -206,9 +209,14 @@ func (s *SessionStore) Delete(driveID, localPath string) error {
 // CleanStale removes session files older than maxAge. Returns the number
 // of files deleted. Safe to call concurrently.
 func (s *SessionStore) CleanStale(maxAge time.Duration) (int, error) {
-	entries, err := os.ReadDir(s.dir)
+	root, err := fsroot.Open(s.dir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		return 0, fmt.Errorf("opening session root: %w", err)
+	}
+
+	entries, err := root.ReadDir("")
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			return 0, nil
 		}
 
@@ -229,8 +237,7 @@ func (s *SessionStore) CleanStale(maxAge time.Duration) (int, error) {
 		}
 
 		if info.ModTime().Before(cutoff) {
-			path := filepath.Join(s.dir, e.Name())
-			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			if err := root.Remove(e.Name()); err != nil && !errors.Is(err, os.ErrNotExist) {
 				s.logger.Warn("failed to clean stale session",
 					slog.String("file", e.Name()),
 					slog.String("error", err.Error()),

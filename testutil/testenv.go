@@ -11,14 +11,16 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
+
+const metadataDirPerms = 0o755
 
 // LoadDotEnv reads KEY=VALUE pairs from a .env file at the given path.
 // Missing file is not an error (CI sets env vars directly).
 // Existing env vars take precedence over .env values.
 func LoadDotEnv(envPath string) {
-	f, err := trustedpath.Open(envPath)
+	f, err := localpath.Open(envPath)
 	if err != nil {
 		return
 	}
@@ -112,7 +114,7 @@ func FindModuleRoot(fallback string) string {
 		return fallback
 	}
 	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+		if _, err := localpath.Stat(filepath.Join(dir, "go.mod")); err == nil {
 			return dir
 		}
 
@@ -130,7 +132,7 @@ func FindModuleRoot(fallback string) string {
 func FindTestCredentialDir(moduleRoot string) string {
 	dir := filepath.Join(moduleRoot, ".testdata")
 
-	if _, err := os.Stat(dir); err != nil {
+	if _, err := localpath.Stat(dir); err != nil {
 		fmt.Fprintln(os.Stderr, "FATAL: .testdata/ directory not found at "+dir)
 		fmt.Fprintln(os.Stderr, "Run scripts/bootstrap-test-credentials.sh to create test credentials.")
 		os.Exit(1)
@@ -172,26 +174,20 @@ func CopyMetadataFiles(srcDir, dstDir string) {
 // CopyFile copies a file from src to dst with the given permissions.
 // Crashes on failure because tests cannot proceed without the file.
 func CopyFile(src, dst string, perm os.FileMode) {
-	data, err := trustedpath.ReadFile(src)
+	data, err := localpath.ReadFile(src)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FATAL: cannot read %s: %v\n", src, err)
 		fmt.Fprintln(os.Stderr, "Run scripts/bootstrap-test-credentials.sh to create test credentials.")
 		os.Exit(1)
 	}
 
-	root, err := os.OpenRoot(filepath.Dir(dst))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "FATAL: opening destination directory for %s: %v\n", dst, err)
+	if mkdirErr := localpath.MkdirAll(filepath.Dir(dst), metadataDirPerms); mkdirErr != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: creating destination directory for %s: %v\n", dst, mkdirErr)
 		os.Exit(1)
 	}
 
-	file, err := root.OpenFile(filepath.Base(dst), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	file, err := localpath.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
 	if err != nil {
-		if closeErr := root.Close(); closeErr != nil {
-			fmt.Fprintf(os.Stderr, "FATAL: opening destination file for %s: %v (close: %v)\n", dst, err, closeErr)
-			os.Exit(1)
-		}
-
 		fmt.Fprintf(os.Stderr, "FATAL: opening destination file for %s: %v\n", dst, err)
 		os.Exit(1)
 	}
@@ -202,27 +198,12 @@ func CopyFile(src, dst string, perm os.FileMode) {
 			os.Exit(1)
 		}
 
-		if closeErr := root.Close(); closeErr != nil {
-			fmt.Fprintf(os.Stderr, "FATAL: writing %s: %v (root close: %v)\n", dst, writeErr, closeErr)
-			os.Exit(1)
-		}
-
 		fmt.Fprintf(os.Stderr, "FATAL: writing %s: %v\n", dst, writeErr)
 		os.Exit(1)
 	}
 
 	if closeErr := file.Close(); closeErr != nil {
-		if rootCloseErr := root.Close(); rootCloseErr != nil {
-			fmt.Fprintf(os.Stderr, "FATAL: closing %s: %v (root close: %v)\n", dst, closeErr, rootCloseErr)
-			os.Exit(1)
-		}
-
 		fmt.Fprintf(os.Stderr, "FATAL: closing %s: %v\n", dst, closeErr)
-		os.Exit(1)
-	}
-
-	if closeErr := root.Close(); closeErr != nil {
-		fmt.Fprintf(os.Stderr, "FATAL: closing destination directory for %s: %v\n", dst, closeErr)
 		os.Exit(1)
 	}
 }

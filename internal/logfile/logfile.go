@@ -5,11 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
+	"github.com/tonimelisma/onedrive-go/internal/fsroot"
 )
 
 // File permission constants.
@@ -22,16 +21,20 @@ const (
 // Parent directories are created if they don't exist. If retentionDays > 0,
 // old *.log files in the same directory are deleted.
 func Open(path string, retentionDays int) (*os.File, error) {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, dirPerm); err != nil {
-		return nil, fmt.Errorf("create log directory: %w", err)
+	root, name, err := fsroot.OpenPath(path)
+	if err != nil {
+		return nil, fmt.Errorf("open log root: %w", err)
+	}
+
+	if mkdirErr := root.MkdirAll(dirPerm); mkdirErr != nil {
+		return nil, fmt.Errorf("create log directory: %w", mkdirErr)
 	}
 
 	if retentionDays > 0 {
-		cleanOld(dir, retentionDays)
+		cleanOld(root, retentionDays)
 	}
 
-	file, err := trustedpath.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, filePerm)
+	file, err := root.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_APPEND, filePerm)
 	if err != nil {
 		return nil, fmt.Errorf("open log file: %w", err)
 	}
@@ -40,10 +43,10 @@ func Open(path string, retentionDays int) (*os.File, error) {
 }
 
 // cleanOld deletes *.log files in dir that are older than retentionDays.
-func cleanOld(dir string, retentionDays int) {
+func cleanOld(root *fsroot.Root, retentionDays int) {
 	cutoff := time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour)
 
-	entries, err := os.ReadDir(dir)
+	entries, err := root.ReadDir("")
 	if err != nil {
 		return // best-effort cleanup
 	}
@@ -59,7 +62,7 @@ func cleanOld(dir string, retentionDays int) {
 		}
 
 		if info.ModTime().Before(cutoff) {
-			removeErr := os.Remove(filepath.Join(dir, entry.Name()))
+			removeErr := root.Remove(entry.Name())
 			if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 				fmt.Fprintf(os.Stderr, "warning: removing old log file %s: %v\n", entry.Name(), removeErr)
 			}

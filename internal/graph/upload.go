@@ -122,7 +122,7 @@ func (c *Client) CreateUploadSession(
 		return nil, fmt.Errorf("graph: marshaling upload session request: %w", err)
 	}
 
-	resp, err := c.Do(ctx, http.MethodPost, path, bytes.NewReader(bodyBytes))
+	resp, err := c.do(ctx, http.MethodPost, path, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, err
 	}
@@ -272,7 +272,7 @@ func (c *Client) CancelUploadSession(ctx context.Context, session *UploadSession
 
 // doRawUpload sends an authenticated request with a custom content type.
 // Used for SimpleUpload where application/octet-stream is needed instead of application/json.
-// Unlike Do(), this does not retry — retrying a partially-consumed reader is not safe.
+// Unlike do(), this does not retry — retrying a partially-consumed reader is not safe.
 func (c *Client) doRawUpload(
 	ctx context.Context, method, path, contentType string, body io.Reader,
 ) (*http.Response, error) {

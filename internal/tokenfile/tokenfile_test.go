@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/oauth2"
 
-	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 func testToken() *oauth2.Token {
@@ -179,7 +179,7 @@ func TestSave_NoMetaInOutput(t *testing.T) {
 
 	require.NoError(t, Save(path, testToken()))
 
-	data, err := trustedpath.ReadFile(path)
+	data, err := localpath.ReadFile(path)
 	require.NoError(t, err)
 
 	// Verify no "meta" key in the output JSON.
@@ -187,16 +187,4 @@ func TestSave_NoMetaInOutput(t *testing.T) {
 	require.NoError(t, json.Unmarshal(data, &raw))
 	_, hasMeta := raw["meta"]
 	assert.False(t, hasMeta, "saved token file should not contain a meta key")
-}
-
-func TestRemoveTempPath(t *testing.T) {
-	dir := t.TempDir()
-	existing := filepath.Join(dir, "temp.json")
-	require.NoError(t, os.WriteFile(existing, []byte("temp"), 0o600))
-
-	assert.NoError(t, removeTempPath(existing, nil))
-
-	_, err := os.Stat(existing)
-	require.ErrorIs(t, err, os.ErrNotExist)
-	assert.NoError(t, removeTempPath(existing, nil))
 }

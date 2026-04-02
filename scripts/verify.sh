@@ -2,12 +2,37 @@
 
 set -euo pipefail
 
+profile="${1:-default}"
 coverage_threshold="${COVERAGE_THRESHOLD:-76.0}"
 coverage_file="${COVERAGE_FILE:-}"
 cleanup_coverage_file=false
 
-if [[ -z "${coverage_file}" ]]; then
-	coverage_file="$(mktemp "${TMPDIR:-/tmp}/onedrive-go-cover.XXXXXX.out")"
+run_public_checks=false
+run_e2e=false
+run_integration=false
+
+case "${profile}" in
+default)
+	run_public_checks=true
+	run_e2e=true
+	;;
+public)
+	run_public_checks=true
+	;;
+e2e)
+	run_e2e=true
+	;;
+integration)
+	run_integration=true
+	;;
+*)
+	echo "usage: ./scripts/verify.sh [default|public|e2e|integration]" >&2
+	exit 1
+	;;
+esac
+
+if [[ "${run_public_checks}" == "true" && -z "${coverage_file}" ]]; then
+	coverage_file="$(mktemp "${TMPDIR:-/tmp}/onedrive-go-cover.XXXXXX")"
 	cleanup_coverage_file=true
 fi
 
@@ -19,38 +44,78 @@ cleanup() {
 
 trap cleanup EXIT
 
-echo "==> golangci-lint"
-golangci-lint run --allow-parallel-runners
+if [[ "${run_public_checks}" == "true" ]]; then
+	echo "==> golangci-lint"
+	golangci-lint run --allow-parallel-runners
 
-echo "==> go build"
-go build ./...
+	echo "==> go build"
+	go build ./...
 
-echo "==> go test -race -coverprofile"
-go test -race -coverprofile="${coverage_file}" ./...
+	echo "==> go test -race -coverprofile"
+	go test -race -coverprofile="${coverage_file}" ./...
 
-echo "==> coverage"
-coverage_report="$(go tool cover -func="${coverage_file}")"
-echo "${coverage_report}"
+	echo "==> coverage"
+	coverage_report="$(go tool cover -func="${coverage_file}")"
+	echo "${coverage_report}"
 
-coverage_total="$(
-	echo "${coverage_report}" |
-	awk '/^total:/ {gsub(/%/, "", $3); print $3}'
-)"
+	coverage_total="$(
+		echo "${coverage_report}" |
+		awk '/^total:/ {gsub(/%/, "", $3); print $3}'
+	)"
 
-awk -v actual="${coverage_total}" -v minimum="${coverage_threshold}" '
+	awk -v actual="${coverage_total}" -v minimum="${coverage_threshold}" '
 BEGIN {
 	if ((actual + 0) < (minimum + 0)) {
 		exit 1
 	}
 }
 ' || {
-	echo "coverage gate failed: ${coverage_total}% < ${coverage_threshold}%"
-	exit 1
-}
+		echo "coverage gate failed: ${coverage_total}% < ${coverage_threshold}%"
+		exit 1
+	}
 
-if [[ -n "${ONEDRIVE_ALLOWED_TEST_ACCOUNTS:-}" && -n "${ONEDRIVE_TEST_DRIVE:-}" ]]; then
+	echo "==> docs consistency"
+	stale_checks=(
+		"RunWatch calls"" RunOnce"
+		"retry\\.Reconcile""\\.Delay"
+		"RetryTransport\\{Policy: ""Transport\\}"
+		"compatibility"" wrapper"
+		"migration"" bridge"
+	)
+	check_paths=(
+		spec/design
+		internal
+		scripts
+		.github/workflows
+	)
+
+	for pattern in "${stale_checks[@]}"; do
+		if rg -n "${pattern}" "${check_paths[@]}" >/tmp/onedrive-go-doc-check.out; then
+			echo "stale architecture/documentation phrase detected: ${pattern}"
+			cat /tmp/onedrive-go-doc-check.out
+			exit 1
+		fi
+	done
+
+	if rg -n 'graph\.MustNewClient\(' --glob '*.go' -g '!**/*_test.go' . >/tmp/onedrive-go-mustnewclient.out; then
+		echo "production MustNewClient call detected"
+		cat /tmp/onedrive-go-mustnewclient.out
+		exit 1
+	fi
+
+	if rg -n 'internal/trustedpath|trustedpath\.' --glob '*.go' . >/tmp/onedrive-go-trustedpath.out; then
+		echo "trustedpath usage detected"
+		cat /tmp/onedrive-go-trustedpath.out
+		exit 1
+	fi
+fi
+
+if [[ "${run_e2e}" == "true" ]]; then
 	echo "==> go test -tags=e2e"
 	go test -tags=e2e -race -v -parallel 5 -timeout=10m ./e2e/...
-else
-	echo "==> skipping e2e (credentials not configured)"
+fi
+
+if [[ "${run_integration}" == "true" ]]; then
+	echo "==> go test -tags=integration"
+	go test -tags=integration -race -v -timeout=5m ./internal/graph/...
 fi

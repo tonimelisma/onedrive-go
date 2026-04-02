@@ -13,52 +13,40 @@ import (
 // the earliest next_retry_at from sync_failures and sets the timer. If the
 // retry timer channel is already signaled (non-blocking send to buffered(1)
 // channel), the next owning loop iteration processes it.
-func (e *Engine) armRetryTimer(ctx context.Context) {
-	if e.watch == nil {
-		return
-	}
-
-	earliest, err := e.baseline.EarliestSyncFailureRetryAt(ctx, e.nowFunc())
+func (rt *watchRuntime) armRetryTimer(ctx context.Context) {
+	earliest, err := rt.engine.baseline.EarliestSyncFailureRetryAt(ctx, rt.engine.nowFunc())
 	if err != nil || earliest.IsZero() {
 		return
 	}
 
 	delay := time.Until(earliest)
 	if delay <= 0 {
-		e.kickRetrySweepNow()
+		rt.kickRetrySweepNow()
 		return
 	}
 
-	if e.watch.retryTimer != nil {
-		e.watch.retryTimer.Stop()
+	if rt.retryTimer != nil {
+		rt.retryTimer.Stop()
 	}
-	e.watch.retryTimer = time.AfterFunc(delay, func() {
-		e.kickRetrySweepNow()
+	rt.retryTimer = time.AfterFunc(delay, func() {
+		rt.kickRetrySweepNow()
 	})
 }
 
-func (e *Engine) stopRetryTimer() {
-	if e.watch == nil {
-		return
-	}
-
-	if e.watch.retryTimer != nil {
-		e.watch.retryTimer.Stop()
-		e.watch.retryTimer = nil
+func (rt *watchRuntime) stopRetryTimer() {
+	if rt.retryTimer != nil {
+		rt.retryTimer.Stop()
+		rt.retryTimer = nil
 	}
 }
 
 // kickRetrySweepNow is the single immediate wakeup path for the watch-mode
 // retrier. Centralizing the non-blocking send keeps retry timer ownership
 // explicit and avoids scattering direct channel writes across the engine.
-func (e *Engine) kickRetrySweepNow() {
-	if e.watch == nil {
-		return
-	}
-
+func (rt *watchRuntime) kickRetrySweepNow() {
 	select {
-	case e.watch.retryTimerCh <- struct{}{}:
-		e.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetryKicked})
+	case rt.retryTimerCh <- struct{}{}:
+		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetryKicked})
 	default:
 	}
 }
@@ -66,20 +54,16 @@ func (e *Engine) kickRetrySweepNow() {
 // retryTimerChan returns the retry timer notification channel. Returns a nil
 // channel when retryTimerCh is not initialized (one-shot mode), which blocks
 // forever in a select — effectively disabling the case.
-func (e *Engine) retryTimerChan() <-chan struct{} {
-	if e.watch == nil {
-		return nil // nil channel blocks in select — disables retry case
-	}
-
-	return e.watch.retryTimerCh
+func (rt *watchRuntime) retryTimerChan() <-chan struct{} {
+	return rt.retryTimerCh
 }
 
 // recordError increments the failed counter and appends the error to the
 // diagnostic error list.
-func (e *Engine) recordError(r *synctypes.WorkerResult) {
-	e.failed++
+func (f *engineFlow) recordError(r *synctypes.WorkerResult) {
+	f.failed++
 	if r.Err != nil {
-		e.syncErrors = append(e.syncErrors, r.Err)
+		f.syncErrors = append(f.syncErrors, r.Err)
 	}
 }
 
@@ -88,9 +72,9 @@ func (e *Engine) recordError(r *synctypes.WorkerResult) {
 // one WARN per group with count + sample paths when count > 10, or per-item
 // WARN otherwise. Mirrors the scanner aggregation pattern in
 // recordSkippedItems (R-6.6.12). Resets syncErrors after logging.
-func (e *Engine) logFailureSummary() {
-	errs := e.syncErrors
-	e.syncErrors = nil
+func (f *engineFlow) logFailureSummary() {
+	errs := f.syncErrors
+	f.syncErrors = nil
 
 	if len(errs) == 0 {
 		return
@@ -127,14 +111,14 @@ func (e *Engine) logFailureSummary() {
 	const aggregateThreshold = 10
 	for key, g := range groups {
 		if g.count > aggregateThreshold {
-			e.logger.Warn("sync failures (aggregated)",
+			f.engine.logger.Warn("sync failures (aggregated)",
 				slog.String("error_prefix", key),
 				slog.Int("count", g.count),
 				slog.Any("samples", g.msgs),
 			)
 		} else {
 			for _, msg := range g.msgs {
-				e.logger.Warn("sync failure",
+				f.engine.logger.Warn("sync failure",
 					slog.String("error", msg),
 				)
 			}
@@ -149,17 +133,17 @@ func (e *Engine) nowFunc() time.Time {
 }
 
 // resultStats returns the engine-owned counters and error list.
-func (e *Engine) resultStats() (succeeded, failed int, errs []error) {
-	errs = make([]error, len(e.syncErrors))
-	copy(errs, e.syncErrors)
-	return e.succeeded, e.failed, errs
+func (f *engineFlow) resultStats() (succeeded, failed int, errs []error) {
+	errs = make([]error, len(f.syncErrors))
+	copy(errs, f.syncErrors)
+	return f.succeeded, f.failed, errs
 }
 
 // resetResultStats resets the engine-owned counters for a new pass.
-func (e *Engine) resetResultStats() {
-	e.succeeded = 0
-	e.failed = 0
-	e.syncErrors = nil
+func (f *engineFlow) resetResultStats() {
+	f.succeeded = 0
+	f.failed = 0
+	f.syncErrors = nil
 }
 
 // armTrialTimer sets (or resets) the trial timer to fire at the earliest
@@ -167,17 +151,13 @@ func (e *Engine) resetResultStats() {
 // persistent trialCh channel, avoiding a race where the watch loop's select
 // watches the old timer's channel after replacement. Called after scope blocks
 // are created, trials dispatched, or trial results processed (R-2.10.5).
-func (e *Engine) armTrialTimer() {
-	if e.watch == nil {
-		return
+func (rt *watchRuntime) armTrialTimer() {
+	if rt.trialTimer != nil {
+		rt.trialTimer.Stop()
+		rt.trialTimer = nil
 	}
 
-	if e.watch.trialTimer != nil {
-		e.watch.trialTimer.Stop()
-		e.watch.trialTimer = nil
-	}
-
-	earliest, ok := syncdispatch.EarliestTrialAt(e.watch.activeScopes)
+	earliest, ok := syncdispatch.EarliestTrialAt(rt.activeScopes)
 	if !ok {
 		return
 	}
@@ -192,9 +172,9 @@ func (e *Engine) armTrialTimer() {
 	// the watch loop calls DueTrials, so even if a second AfterFunc
 	// fires while a signal is pending, all due scopes are still processed
 	// on the next loop iteration.
-	e.watch.trialTimer = time.AfterFunc(delay, func() {
+	rt.trialTimer = time.AfterFunc(delay, func() {
 		select {
-		case e.trialCh <- struct{}{}:
+		case rt.trialCh <- struct{}{}:
 		default:
 		}
 	})
@@ -203,18 +183,14 @@ func (e *Engine) armTrialTimer() {
 // trialTimerChan returns the persistent trial notification channel.
 // time.AfterFunc sends to this channel when a trial timer fires.
 // The channel is always non-nil after NewEngine.
-func (e *Engine) trialTimerChan() <-chan struct{} {
-	return e.trialCh
+func (rt *watchRuntime) trialTimerChan() <-chan struct{} {
+	return rt.trialCh
 }
 
 // stopTrialTimer stops and clears the trial timer. Called on shutdown.
-func (e *Engine) stopTrialTimer() {
-	if e.watch == nil {
-		return
-	}
-
-	if e.watch.trialTimer != nil {
-		e.watch.trialTimer.Stop()
-		e.watch.trialTimer = nil
+func (rt *watchRuntime) stopTrialTimer() {
+	if rt.trialTimer != nil {
+		rt.trialTimer.Stop()
+		rt.trialTimer = nil
 	}
 }

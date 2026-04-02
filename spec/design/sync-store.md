@@ -12,8 +12,8 @@ blocks, shortcut metadata, and sync metadata. Runtime watch state is never a
 peer authority; it is rebuilt from store state when the engine starts.
 
 `NewSyncStore()` opens SQLite in WAL mode and applies the canonical schema from
-[`schema.sql`](/Users/tonimelisma/Development/onedrive-go-engine-end-state-cleanup/internal/syncstore/schema.sql)
-through [`schema.go`](/Users/tonimelisma/Development/onedrive-go-engine-end-state-cleanup/internal/syncstore/schema.go).
+[`schema.sql`](/Users/tonimelisma/Development/onedrive-go/internal/syncstore/schema.sql)
+through [`schema.go`](/Users/tonimelisma/Development/onedrive-go/internal/syncstore/schema.go).
 There is no incremental migration chain and no compatibility bootstrap path.
 The repository has no launched users, so the store defines the final schema
 directly.
@@ -21,7 +21,7 @@ directly.
 Key operations:
 
 - `CommitObservation()` atomically writes `remote_state` rows and advances the relevant delta token.
-- `CommitOutcome()` updates `baseline`, clears success-side failures, and finalizes remote-state transitions per action.
+- `CommitOutcome()` updates `baseline` and finalizes remote-state transitions per action. Success-side `sync_failures` cleanup is engine-owned and happens before or after the store commit depending on the result flow.
 - `RecordFailure(ctx, SyncFailureParams, delayFn)` is the single failure writer. The engine provides classification and retry policy; the store provides transactional persistence and conflict-safe upsert behavior.
 - `ReleaseScope(ctx, scopeKey, now)` is the single durable “scope resolved” transition. It deletes the `scope_blocks` row, deletes any `boundary` failure row for that scope, and converts all `held` failures for that scope into retryable `item` rows with `next_retry_at = now`.
 - `DiscardScope(ctx, scopeKey)` is the single durable “scope and blocked work are gone” transition. It deletes the `scope_blocks` row and every `sync_failures` row for that scope.
@@ -114,10 +114,10 @@ rebuildable from durable state; it is not a competing authority.
 
 ## Verification And Trash
 
-[`verify.go`](/Users/tonimelisma/Development/onedrive-go-engine-end-state-cleanup/internal/syncstore/verify.go)
+[`verify.go`](/Users/tonimelisma/Development/onedrive-go/internal/syncstore/verify.go)
 re-hashes local files against baseline and remote state.
 
-[`trash.go`](/Users/tonimelisma/Development/onedrive-go-engine-end-state-cleanup/internal/syncstore/trash.go)
+[`trash.go`](/Users/tonimelisma/Development/onedrive-go/internal/syncstore/trash.go)
 implements OS trash integration for local deletes triggered by remote changes.
 
 ## Issues CLI

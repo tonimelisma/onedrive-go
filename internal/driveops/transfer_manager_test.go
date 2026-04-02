@@ -18,7 +18,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
 
@@ -161,7 +161,7 @@ func TestTransferManager_FreshDownload_Success(t *testing.T) {
 	// HashVerified should be true on successful hash match.
 	assert.True(t, result.HashVerified, "HashVerified should be true on successful match")
 
-	got, readErr := trustedpath.ReadFile(targetPath)
+	got, readErr := localpath.ReadFile(targetPath)
 	require.NoError(t, readErr, "ReadFile")
 
 	assert.Equal(t, content, got, "file content mismatch")
@@ -259,7 +259,7 @@ func TestTransferManager_ResumeDownload_Success(t *testing.T) {
 	assert.Equal(t, expectedHash, result.LocalHash)
 	assert.Equal(t, int64(len(fullContent)), result.Size)
 
-	got, readErr := trustedpath.ReadFile(targetPath)
+	got, readErr := localpath.ReadFile(targetPath)
 	require.NoError(t, readErr, "ReadFile")
 
 	assert.Equal(t, fullContent, got)
@@ -895,7 +895,7 @@ func TestDownloadToFile_RenameFailure_PreservesPartial(t *testing.T) {
 	// .partial should still exist with correct content.
 	partialPath := targetPath + ".partial"
 
-	got, readErr := trustedpath.ReadFile(partialPath)
+	got, readErr := localpath.ReadFile(partialPath)
 	require.NoError(t, readErr, "expected .partial to be preserved")
 
 	assert.Equal(t, content, got, "partial content mismatch")
@@ -998,7 +998,7 @@ func TestDownloadToFile_SimpleDownloader_OverwritesPartial(t *testing.T) {
 	require.NoError(t, err, "DownloadToFile")
 
 	// Final file should contain fresh content, not concatenated with old.
-	got, readErr := trustedpath.ReadFile(targetPath)
+	got, readErr := localpath.ReadFile(targetPath)
 	require.NoError(t, readErr, "ReadFile")
 
 	assert.Equal(t, freshContent, got)
@@ -1107,7 +1107,7 @@ func TestDownloadToFile_EmptyRemoteHash_HashVerifiedFalse(t *testing.T) {
 	assert.False(t, result.HashVerified, "HashVerified should be false when remote hash is empty")
 
 	// File should exist with correct content.
-	got, readErr := trustedpath.ReadFile(targetPath)
+	got, readErr := localpath.ReadFile(targetPath)
 	require.NoError(t, readErr, "ReadFile")
 
 	assert.Equal(t, content, got, "file content mismatch")

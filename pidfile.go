@@ -4,12 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 
-	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
+	"github.com/tonimelisma/onedrive-go/internal/fsroot"
 )
 
 // pidFilePermissions matches the standard config file permissions (owner rw, group/other r).
@@ -26,12 +25,16 @@ func writePIDFile(path string) (cleanup func(), err error) {
 		return nil, fmt.Errorf("pid file path is empty — cannot determine data directory")
 	}
 
-	dir := filepath.Dir(path)
-	if mkdirErr := os.MkdirAll(dir, pidDirPermissions); mkdirErr != nil {
+	root, name, err := fsroot.OpenPath(path)
+	if err != nil {
+		return nil, fmt.Errorf("opening PID root: %w", err)
+	}
+
+	if mkdirErr := root.MkdirAll(pidDirPermissions); mkdirErr != nil {
 		return nil, fmt.Errorf("creating PID file directory: %w", mkdirErr)
 	}
 
-	f, err := trustedpath.OpenFile(path, os.O_CREATE|os.O_RDWR, pidFilePermissions)
+	f, err := root.OpenFile(name, os.O_CREATE|os.O_RDWR, pidFilePermissions)
 	if err != nil {
 		return nil, fmt.Errorf("opening PID file: %w", err)
 	}
@@ -88,7 +91,12 @@ func writePIDFile(path string) (cleanup func(), err error) {
 // readPIDFile reads the PID from the given file path. Returns 0 and an error
 // if the file does not exist or contains invalid content.
 func readPIDFile(path string) (int, error) {
-	data, err := trustedpath.ReadFile(path)
+	root, name, err := fsroot.OpenPath(path)
+	if err != nil {
+		return 0, fmt.Errorf("opening PID root: %w", err)
+	}
+
+	data, err := root.ReadFile(name)
 	if err != nil {
 		return 0, fmt.Errorf("reading PID file: %w", err)
 	}

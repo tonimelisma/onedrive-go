@@ -27,7 +27,7 @@ func makeTestSession(t *testing.T, handler http.Handler) *driveops.Session {
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
-	client := graph.NewClient(srv.URL, srv.Client(), stubTS{},
+	client := graph.MustNewClient(srv.URL, srv.Client(), stubTS{},
 		slog.New(slog.DiscardHandler), "test/1.0")
 
 	return &driveops.Session{

@@ -152,9 +152,15 @@ func testCanonicalID(t *testing.T, s string) driveid.CanonicalID {
 
 const engineTestDriveID = "0000000000000001"
 
+type testEngine struct {
+	*Engine
+	runtime *watchRuntime
+	flow    *engineFlow
+}
+
 // newTestEngine creates an Engine backed by a temp dir with real SQLite
 // and the given mock client. Returns the engine and sync root path.
-func newTestEngine(t *testing.T, mock *engineMockClient) (*Engine, string) {
+func newTestEngine(t *testing.T, mock *engineMockClient) (*testEngine, string) {
 	t.Helper()
 
 	return newTestEngineWithContext(t, t.Context(), mock)
@@ -162,7 +168,7 @@ func newTestEngine(t *testing.T, mock *engineMockClient) (*Engine, string) {
 
 // newTestEngineWithContext is like newTestEngine but lets callers thread a
 // specific context through engine construction and cleanup-sensitive helpers.
-func newTestEngineWithContext(t *testing.T, ctx context.Context, mock *engineMockClient) (*Engine, string) {
+func newTestEngineWithContext(t *testing.T, ctx context.Context, mock *engineMockClient) (*testEngine, string) {
 	t.Helper()
 
 	tmpDir := t.TempDir()
@@ -186,17 +192,18 @@ func newTestEngineWithContext(t *testing.T, ctx context.Context, mock *engineMoc
 	})
 	require.NoError(t, err, "NewEngine")
 	eng.assertScopeInvariants = true
+	testEng := &testEngine{Engine: eng}
 
 	t.Cleanup(func() {
-		assert.NoError(t, eng.Close(context.WithoutCancel(ctx)), "Engine.Close")
+		assert.NoError(t, testEng.Close(context.WithoutCancel(ctx)), "Engine.Close")
 	})
 
-	return eng, syncRoot
+	return testEng, syncRoot
 }
 
 // newTestEngineWithLogger is like newTestEngine but accepts a custom logger
 // for tests that need to capture or filter log output.
-func newTestEngineWithLogger(t *testing.T, mock *engineMockClient, logger *slog.Logger) (*Engine, string) {
+func newTestEngineWithLogger(t *testing.T, mock *engineMockClient, logger *slog.Logger) (*testEngine, string) {
 	t.Helper()
 
 	return newTestEngineWithLoggerContext(t, t.Context(), mock, logger)
@@ -204,7 +211,7 @@ func newTestEngineWithLogger(t *testing.T, mock *engineMockClient, logger *slog.
 
 // newTestEngineWithLoggerContext is like newTestEngineWithContext but accepts a
 // custom logger for tests that need to capture or filter log output.
-func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *engineMockClient, logger *slog.Logger) (*Engine, string) {
+func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *engineMockClient, logger *slog.Logger) (*testEngine, string) {
 	t.Helper()
 
 	tmpDir := t.TempDir()
@@ -227,12 +234,13 @@ func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *eng
 	})
 	require.NoError(t, err, "NewEngine")
 	eng.assertScopeInvariants = true
+	testEng := &testEngine{Engine: eng}
 
 	t.Cleanup(func() {
-		assert.NoError(t, eng.Close(context.WithoutCancel(ctx)), "Engine.Close")
+		assert.NoError(t, testEng.Close(context.WithoutCancel(ctx)), "Engine.Close")
 	})
 
-	return eng, syncRoot
+	return testEng, syncRoot
 }
 
 func newDownloadDeltaMock(driveID driveid.ID, item *graph.Item, token string, content []byte) *engineMockClient {
@@ -264,49 +272,32 @@ func mustReadFileUnderRoot(t *testing.T, root, relativePath string) []byte {
 	return data
 }
 
-// setupWatchEngine initializes an engine with syncdispatch.DepGraph + readyCh + watchState
+// setupWatchEngine initializes an engine with syncdispatch.DepGraph + readyCh + watchRuntime
 // for processBatch tests. Returns the readyCh for reading dispatched actions.
 // Replaces the old two-call pattern of setupWatchEngine + newTestWatchState.
-func setupWatchEngine(t *testing.T, eng *Engine) <-chan *synctypes.TrackedAction {
+func setupWatchEngine(t *testing.T, eng *testEngine) <-chan *synctypes.TrackedAction {
 	t.Helper()
 
-	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
-	eng.readyCh = make(chan *synctypes.TrackedAction, 1024)
-	eng.watch = &watchState{
-		watchRuntimeState: watchRuntimeState{
-			scopeState: syncdispatch.NewScopeState(eng.nowFunc, eng.logger),
-		},
-		watchTimerState: watchTimerState{
-			retryTimerCh: make(chan struct{}, 1),
-		},
-		watchReconcileState: watchReconcileState{
-			reconcileResults: make(chan reconcileResult, 1),
-		},
-	}
+	rt := newWatchRuntime(eng.Engine)
+	rt.depGraph = syncdispatch.NewDepGraph(eng.logger)
+	rt.readyCh = make(chan *synctypes.TrackedAction, 1024)
+	rt.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
+	eng.runtime = rt
+	eng.flow = &rt.engineFlow
 
-	return eng.readyCh
+	return rt.readyCh
 }
 
 // newTestWatchState initializes watch state on an engine for testing.
 // Creates retryTimerCh, reconcileResults, and scope detection state — the
 // minimum set needed for watch-mode tests.
-func newTestWatchState(t *testing.T, eng *Engine) {
+func newTestWatchState(t *testing.T, eng *testEngine) {
 	t.Helper()
 
-	eng.watch = &watchState{
-		watchRuntimeState: watchRuntimeState{
-			scopeState: syncdispatch.NewScopeState(eng.nowFunc, eng.logger),
-		},
-		watchTimerState: watchTimerState{
-			retryTimerCh: make(chan struct{}, 1),
-		},
-		watchReconcileState: watchReconcileState{
-			reconcileResults: make(chan reconcileResult, 1),
-		},
-	}
+	_ = setupWatchEngine(t, eng)
 }
 
-func testWorkDispatchState(t *testing.T, eng *Engine, ctx context.Context) (*synctypes.Baseline, *synctypes.SafetyConfig) {
+func testWorkDispatchState(t *testing.T, eng *testEngine, ctx context.Context) (*synctypes.Baseline, *synctypes.SafetyConfig) {
 	t.Helper()
 
 	bl, err := eng.baseline.Load(ctx)
@@ -314,21 +305,21 @@ func testWorkDispatchState(t *testing.T, eng *Engine, ctx context.Context) (*syn
 	return bl, synctypes.DefaultSafetyConfig()
 }
 
-func runTestRetrierSweep(t *testing.T, eng *Engine, ctx context.Context) []*synctypes.TrackedAction {
+func runTestRetrierSweep(t *testing.T, eng *testEngine, ctx context.Context) []*synctypes.TrackedAction {
 	t.Helper()
 
 	bl, safety := testWorkDispatchState(t, eng, ctx)
-	return eng.runRetrierSweep(ctx, bl, synctypes.SyncBidirectional, safety)
+	return testWatchRuntime(t, eng).runRetrierSweep(ctx, bl, synctypes.SyncBidirectional, safety)
 }
 
-func runTestTrialDispatch(t *testing.T, eng *Engine, ctx context.Context) []*synctypes.TrackedAction {
+func runTestTrialDispatch(t *testing.T, eng *testEngine, ctx context.Context) []*synctypes.TrackedAction {
 	t.Helper()
 
 	bl, safety := testWorkDispatchState(t, eng, ctx)
-	return eng.runTrialDispatch(ctx, bl, synctypes.SyncBidirectional, safety)
+	return testWatchRuntime(t, eng).runTrialDispatch(ctx, bl, synctypes.SyncBidirectional, safety)
 }
 
-func setTestScopeBlock(t *testing.T, eng *Engine, block synctypes.ScopeBlock) {
+func setTestScopeBlock(t *testing.T, eng *testEngine, block synctypes.ScopeBlock) {
 	t.Helper()
 
 	if block.BlockedAt.IsZero() {
@@ -345,12 +336,212 @@ func setTestScopeBlock(t *testing.T, eng *Engine, block synctypes.ScopeBlock) {
 		block.NextTrialAt = block.BlockedAt.Add(block.TrialInterval)
 	}
 	require.NoError(t, eng.baseline.UpsertScopeBlock(context.Background(), &block))
-	if eng.watch != nil {
-		eng.watch.activeScopes = syncdispatch.UpsertScope(eng.watch.activeScopes, block)
+	if eng.runtime != nil {
+		eng.runtime.activeScopes = syncdispatch.UpsertScope(eng.runtime.activeScopes, block)
 	}
 }
 
-func isTestScopeBlocked(eng *Engine, key synctypes.ScopeKey) bool {
+func lookupTestWatchRuntime(eng *testEngine) (*watchRuntime, bool) {
+	return eng.runtime, eng.runtime != nil
+}
+
+func lookupTestEngineFlow(eng *testEngine) (*engineFlow, bool) {
+	if eng.flow != nil {
+		return eng.flow, true
+	}
+	if eng.runtime != nil {
+		return &eng.runtime.engineFlow, true
+	}
+
+	return nil, false
+}
+
+func clearTestWatchRuntime(eng *testEngine) {
+	eng.runtime = nil
+}
+
+func testWatchRuntime(t *testing.T, eng *testEngine) *watchRuntime {
+	t.Helper()
+
+	rt, ok := lookupTestWatchRuntime(eng)
+	require.True(t, ok, "watch runtime must be initialized for this test")
+
+	return rt
+}
+
+func testEngineFlow(t *testing.T, eng any) *engineFlow {
+	t.Helper()
+
+	switch typed := eng.(type) {
+	case *testEngine:
+		flow, ok := lookupTestEngineFlow(typed)
+		if !ok {
+			fallback := newEngineFlow(typed.Engine)
+			return &fallback
+		}
+		return flow
+	case *Engine:
+		fallback := newEngineFlow(typed)
+		return &fallback
+	default:
+		require.FailNowf(t, "unsupported engine test value", "got %T", eng)
+		return nil
+	}
+}
+
+func releaseTestScope(t *testing.T, eng *testEngine, ctx context.Context, key synctypes.ScopeKey) error {
+	t.Helper()
+	rt, _ := lookupTestWatchRuntime(eng)
+	return eng.releaseScope(ctx, rt, key)
+}
+
+func discardTestScope(t *testing.T, eng *testEngine, ctx context.Context, key synctypes.ScopeKey) error {
+	t.Helper()
+	rt, _ := lookupTestWatchRuntime(eng)
+	return eng.discardScope(ctx, rt, key)
+}
+
+func assertTestCurrentScopeInvariants(t *testing.T, eng *testEngine, ctx context.Context) error {
+	t.Helper()
+	rt, _ := lookupTestWatchRuntime(eng)
+	return eng.assertCurrentScopeInvariants(ctx, rt)
+}
+
+func assertReleasedScopeForTest(t *testing.T, eng *testEngine, ctx context.Context, key synctypes.ScopeKey) error {
+	t.Helper()
+	rt, _ := lookupTestWatchRuntime(eng)
+	return eng.assertReleasedScope(ctx, rt, key)
+}
+
+func assertDiscardedScopeForTest(t *testing.T, eng *testEngine, ctx context.Context, key synctypes.ScopeKey) error {
+	t.Helper()
+	rt, _ := lookupTestWatchRuntime(eng)
+	return eng.assertDiscardedScope(ctx, rt, key)
+}
+
+func repairPersistedScopesForTest(t *testing.T, eng *testEngine, ctx context.Context) error {
+	t.Helper()
+	rt, _ := lookupTestWatchRuntime(eng)
+	return eng.repairPersistedScopes(ctx, rt)
+}
+
+func admitReadyForTest(t *testing.T, eng *testEngine, ctx context.Context, ready []*synctypes.TrackedAction) []*synctypes.TrackedAction {
+	t.Helper()
+	if rt, ok := lookupTestWatchRuntime(eng); ok {
+		return eng.admitReady(ctx, &rt.engineFlow, rt, ready)
+	}
+
+	flow, ok := lookupTestEngineFlow(eng)
+	require.True(t, ok, "engine flow must be initialized for this test")
+	return eng.admitReady(ctx, flow, nil, ready)
+}
+
+func cascadeRecordAndCompleteForTest(t *testing.T, eng *testEngine, ctx context.Context, ta *synctypes.TrackedAction, scopeKey synctypes.ScopeKey) {
+	t.Helper()
+	rt := testWatchRuntime(t, eng)
+	eng.cascadeRecordAndComplete(ctx, &rt.engineFlow, ta, scopeKey)
+}
+
+func processWorkerResultForTest(
+	t *testing.T,
+	eng *testEngine,
+	ctx context.Context,
+	r *synctypes.WorkerResult,
+	bl *synctypes.Baseline,
+) []*synctypes.TrackedAction {
+	t.Helper()
+	if rt, ok := lookupTestWatchRuntime(eng); ok {
+		return rt.processWorkerResult(ctx, rt, r, bl)
+	}
+
+	flow, ok := lookupTestEngineFlow(eng)
+	require.True(t, ok, "engine flow must be initialized for this test")
+	return flow.processWorkerResult(ctx, nil, r, bl)
+}
+
+func processTrialResultForTest(t *testing.T, eng *testEngine, ctx context.Context, r *synctypes.WorkerResult) {
+	t.Helper()
+	if rt, ok := lookupTestWatchRuntime(eng); ok {
+		rt.processTrialResult(ctx, rt, r)
+		return
+	}
+
+	flow, ok := lookupTestEngineFlow(eng)
+	require.True(t, ok, "engine flow must be initialized for this test")
+	flow.processTrialResult(ctx, nil, r)
+}
+
+func processBatchForTest(
+	t *testing.T,
+	eng *testEngine,
+	ctx context.Context,
+	batch []synctypes.PathChanges,
+	bl *synctypes.Baseline,
+	safety *synctypes.SafetyConfig,
+) []*synctypes.TrackedAction {
+	t.Helper()
+	return testWatchRuntime(t, eng).processBatch(ctx, batch, bl, synctypes.SyncBidirectional, safety)
+}
+
+func externalDBChangedForTest(t *testing.T, eng *testEngine, ctx context.Context) bool {
+	t.Helper()
+	return testWatchRuntime(t, eng).externalDBChanged(ctx)
+}
+
+func handleExternalChangesForTest(t *testing.T, eng *testEngine, ctx context.Context) {
+	t.Helper()
+	testWatchRuntime(t, eng).handleExternalChanges(ctx)
+}
+
+func runFullReconciliationAsyncForTest(t *testing.T, eng *testEngine, ctx context.Context, bl *synctypes.Baseline) {
+	t.Helper()
+	testWatchRuntime(t, eng).runFullReconciliationAsync(ctx, bl)
+}
+
+func runWatchLoopForTest(eng *testEngine, ctx context.Context, p *watchPipeline) error {
+	rt, ok := lookupTestWatchRuntime(eng)
+	if !ok {
+		return fmt.Errorf("watch runtime must be initialized for this test")
+	}
+	p.runtime = rt
+	if p.reconcileResults == nil {
+		p.reconcileResults = rt.reconcileResults
+	}
+	return rt.runWatchLoop(ctx, p)
+}
+
+func waitForQuiescenceForTest(t *testing.T, eng *testEngine, ctx context.Context) error {
+	t.Helper()
+	rt := testWatchRuntime(t, eng)
+	return rt.runWatchUntilQuiescent(ctx, &watchPipeline{runtime: rt}, nil)
+}
+
+func bootstrapSyncForTest(t *testing.T, eng *testEngine, ctx context.Context, mode synctypes.SyncMode, pipe *watchPipeline) error {
+	t.Helper()
+	rt := testWatchRuntime(t, eng)
+	pipe.runtime = rt
+	return rt.bootstrapSync(ctx, mode, pipe)
+}
+
+func activeBlockingScopeForTest(t *testing.T, eng *testEngine, ta *synctypes.TrackedAction) synctypes.ScopeKey {
+	t.Helper()
+	rt, _ := lookupTestWatchRuntime(eng)
+	return eng.activeBlockingScope(rt, ta)
+}
+
+func applyScopeBlockForTest(t *testing.T, eng *testEngine, ctx context.Context, sr synctypes.ScopeUpdateResult) {
+	t.Helper()
+	rt := testWatchRuntime(t, eng)
+	eng.applyScopeBlock(ctx, rt, sr)
+}
+
+func feedScopeDetectionForTest(t *testing.T, eng *testEngine, ctx context.Context, r *synctypes.WorkerResult) {
+	t.Helper()
+	rt, _ := lookupTestWatchRuntime(eng)
+	eng.feedScopeDetection(ctx, rt, r)
+}
+
+func isTestScopeBlocked(eng *testEngine, key synctypes.ScopeKey) bool {
 	blocks, err := eng.baseline.ListScopeBlocks(context.Background())
 	if err != nil {
 		panic(fmt.Sprintf("ListScopeBlocks: %v", err))
@@ -363,7 +554,7 @@ func isTestScopeBlocked(eng *Engine, key synctypes.ScopeKey) bool {
 	return false
 }
 
-func getTestScopeBlock(eng *Engine, key synctypes.ScopeKey) (synctypes.ScopeBlock, bool) {
+func getTestScopeBlock(eng *testEngine, key synctypes.ScopeKey) (synctypes.ScopeBlock, bool) {
 	blocks, err := eng.baseline.ListScopeBlocks(context.Background())
 	if err != nil {
 		panic(fmt.Sprintf("ListScopeBlocks: %v", err))
@@ -1025,7 +1216,7 @@ func TestResolveSafetyConfig_Default(t *testing.T) {
 	t.Parallel()
 
 	eng := &Engine{bigDeleteThreshold: synctypes.DefaultBigDeleteThreshold}
-	cfg := eng.resolveSafetyConfig(false)
+	cfg := eng.resolveSafetyConfig(false, false)
 
 	assert.Equal(t, synctypes.DefaultBigDeleteThreshold, cfg.BigDeleteThreshold)
 }
@@ -1034,7 +1225,7 @@ func TestResolveSafetyConfig_Force(t *testing.T) {
 	t.Parallel()
 
 	eng := &Engine{bigDeleteThreshold: synctypes.DefaultBigDeleteThreshold}
-	cfg := eng.resolveSafetyConfig(true)
+	cfg := eng.resolveSafetyConfig(true, false)
 
 	assert.Equal(t, forceSafetyMax, cfg.BigDeleteThreshold)
 }
@@ -1045,7 +1236,7 @@ func TestResolveSafetyConfig_UsesConfiguredThreshold(t *testing.T) {
 	// Verify the config bug is fixed: engine uses the configured threshold,
 	// not a hardcoded default.
 	eng := &Engine{bigDeleteThreshold: 500}
-	cfg := eng.resolveSafetyConfig(false)
+	cfg := eng.resolveSafetyConfig(false, false)
 
 	assert.Equal(t, 500, cfg.BigDeleteThreshold)
 }
@@ -1053,13 +1244,8 @@ func TestResolveSafetyConfig_UsesConfiguredThreshold(t *testing.T) {
 func TestResolveSafetyConfig_WatchMode_DisablesThreshold(t *testing.T) {
 	t.Parallel()
 
-	// When watch is non-nil (watch mode), the planner-level
-	// big-delete threshold is disabled regardless of force flag.
-	eng := &Engine{
-		bigDeleteThreshold: 500,
-		watch:              &watchState{},
-	}
-	cfg := eng.resolveSafetyConfig(false)
+	eng := &Engine{bigDeleteThreshold: 500}
+	cfg := eng.resolveSafetyConfig(false, true)
 
 	assert.Equal(t, forceSafetyMax, cfg.BigDeleteThreshold,
 		"watch mode should disable planner-level big-delete threshold")
@@ -1368,7 +1554,8 @@ func TestRunWatch_UploadOnly_SkipsRemoteObserver(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		// Mark init as done just before RunWatch's observer phase.
-		// Since RunWatch calls RunOnce first, the delta call during init is expected.
+		// RunWatch performs its own bootstrap sync before observers start, so the
+		// initial delta call during startup is expected.
 		close(initDone)
 		done <- eng.RunWatch(ctx, synctypes.SyncUploadOnly, synctypes.WatchOpts{
 			PollInterval: 50 * time.Millisecond,
@@ -1391,8 +1578,9 @@ func TestRunWatch_UploadOnly_SkipsRemoteObserver(t *testing.T) {
 	// In upload-only mode, no delta calls should happen after initial sync.
 	assert.Equal(t, 0, deltaCalledAfterInit, "delta should not be called after init in upload-only mode")
 
-	// remoteObs should not be set in upload-only mode.
-	assert.Nil(t, eng.watch.remoteObs, "remoteObs should be nil in upload-only mode")
+	// Upload-only mode proves the remote observer is absent by never issuing
+	// delta calls after bootstrap; the runtime itself is no longer exposed
+	// through production test hooks.
 }
 
 // TestRunWatch_ProcessBatch_BigDelete verifies that the rolling delete
@@ -1454,17 +1642,17 @@ func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
 	// Install a rolling delete counter with threshold=10 on the engine.
 	// The planner-level check is disabled (forceSafetyMax) — the counter
 	// handles protection in watch mode.
-	eng.watch.deleteCounter = syncdispatch.NewDeleteCounter(10, 5*time.Minute, time.Now)
+	testWatchRuntime(t, eng).deleteCounter = syncdispatch.NewDeleteCounter(10, 5*time.Minute, time.Now)
 	safety := &synctypes.SafetyConfig{BigDeleteThreshold: forceSafetyMax}
 
-	outbox := eng.processBatch(ctx, batch, bl, synctypes.SyncBidirectional, safety)
+	outbox := processBatchForTest(t, eng, ctx, batch, bl, safety)
 
 	// Verify no actions were admitted into the watch loop outbox (all 20 are
 	// deletes and the rolling counter held them as issues).
 	assert.Empty(t, outbox)
 
 	// Verify counter is now held.
-	assert.True(t, eng.watch.deleteCounter.IsHeld(), "counter should be held")
+	assert.True(t, testWatchRuntime(t, eng).deleteCounter.IsHeld(), "counter should be held")
 
 	// Verify held deletes were recorded as actionable issues.
 	rows, listErr := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueBigDeleteHeld)
@@ -1544,13 +1732,13 @@ func TestRunWatch_ProcessBatch_BigDelete_NonDeletesFlow(t *testing.T) {
 	setupWatchEngine(t, eng)
 
 	// Install counter with threshold=10. 15 deletes > 10 → trips.
-	eng.watch.deleteCounter = syncdispatch.NewDeleteCounter(10, 5*time.Minute, time.Now)
+	testWatchRuntime(t, eng).deleteCounter = syncdispatch.NewDeleteCounter(10, 5*time.Minute, time.Now)
 	safety := &synctypes.SafetyConfig{BigDeleteThreshold: forceSafetyMax}
 
-	outbox := eng.processBatch(ctx, batch, bl, synctypes.SyncBidirectional, safety)
+	outbox := processBatchForTest(t, eng, ctx, batch, bl, safety)
 
 	// Counter should be held.
-	assert.True(t, eng.watch.deleteCounter.IsHeld(), "counter should be held")
+	assert.True(t, testWatchRuntime(t, eng).deleteCounter.IsHeld(), "counter should be held")
 
 	require.Len(t, outbox, 1, "one non-delete action should be admitted into the watch loop outbox")
 	assert.Equal(t, synctypes.ActionDownload, outbox[0].Action.Type)
@@ -1617,13 +1805,13 @@ func TestRunWatch_ProcessBatch_BigDelete_BelowThreshold(t *testing.T) {
 
 	setupWatchEngine(t, eng)
 
-	eng.watch.deleteCounter = syncdispatch.NewDeleteCounter(10, 5*time.Minute, time.Now)
+	testWatchRuntime(t, eng).deleteCounter = syncdispatch.NewDeleteCounter(10, 5*time.Minute, time.Now)
 	safety := &synctypes.SafetyConfig{BigDeleteThreshold: forceSafetyMax}
 
-	outbox := eng.processBatch(ctx, batch, bl, synctypes.SyncBidirectional, safety)
+	outbox := processBatchForTest(t, eng, ctx, batch, bl, safety)
 
 	// Counter should NOT be held.
-	assert.False(t, eng.watch.deleteCounter.IsHeld(), "counter should not trip at 5 < 10")
+	assert.False(t, testWatchRuntime(t, eng).deleteCounter.IsHeld(), "counter should not trip at 5 < 10")
 
 	require.Len(t, outbox, 5, "all 5 delete actions should be admitted into the watch loop outbox")
 	for i := range outbox {
@@ -1652,14 +1840,14 @@ func TestEngine_ExternalDBChanged(t *testing.T) {
 	// Seed the initial data_version.
 	dv, err := eng.baseline.DataVersion(ctx)
 	require.NoError(t, err)
-	eng.watch.lastDataVersion = dv
+	testWatchRuntime(t, eng).lastDataVersion = dv
 
 	// No external changes yet — should return false.
-	assert.False(t, eng.externalDBChanged(ctx), "no external changes")
+	assert.False(t, externalDBChangedForTest(t, eng, ctx), "no external changes")
 
 	// Engine's own writes don't change data_version, so repeated checks
 	// should still return false.
-	assert.False(t, eng.externalDBChanged(ctx), "still no external changes")
+	assert.False(t, externalDBChangedForTest(t, eng, ctx), "still no external changes")
 }
 
 // TestEngine_HandleExternalChanges_BigDeleteClearance verifies that
@@ -1683,9 +1871,9 @@ func TestEngine_HandleExternalChanges_BigDeleteClearance(t *testing.T) {
 	newTestWatchState(t, eng)
 
 	// Install a held delete counter.
-	eng.watch.deleteCounter = syncdispatch.NewDeleteCounter(10, 5*time.Minute, time.Now)
-	eng.watch.deleteCounter.Add(15) // trips the counter
-	require.True(t, eng.watch.deleteCounter.IsHeld())
+	testWatchRuntime(t, eng).deleteCounter = syncdispatch.NewDeleteCounter(10, 5*time.Minute, time.Now)
+	testWatchRuntime(t, eng).deleteCounter.Add(15) // trips the counter
+	require.True(t, testWatchRuntime(t, eng).deleteCounter.IsHeld())
 
 	// Record some big_delete_held issues.
 	failures := []synctypes.ActionableFailure{
@@ -1695,15 +1883,15 @@ func TestEngine_HandleExternalChanges_BigDeleteClearance(t *testing.T) {
 	require.NoError(t, eng.baseline.UpsertActionableFailures(ctx, failures))
 
 	// handleExternalChanges should NOT release — rows still present.
-	eng.handleExternalChanges(ctx)
-	assert.True(t, eng.watch.deleteCounter.IsHeld(), "should still be held with entries present")
+	handleExternalChangesForTest(t, eng, ctx)
+	assert.True(t, testWatchRuntime(t, eng).deleteCounter.IsHeld(), "should still be held with entries present")
 
 	// Clear all big_delete_held entries (simulates `issues clear --all`).
 	require.NoError(t, eng.baseline.ClearResolvedActionableFailures(ctx, synctypes.IssueBigDeleteHeld, nil))
 
 	// Now handleExternalChanges should release.
-	eng.handleExternalChanges(ctx)
-	assert.False(t, eng.watch.deleteCounter.IsHeld(), "should be released after entries cleared")
+	handleExternalChangesForTest(t, eng, ctx)
+	assert.False(t, testWatchRuntime(t, eng).deleteCounter.IsHeld(), "should be released after entries cleared")
 }
 
 // TestEngine_HandleExternalChanges_PartialClear verifies that the counter
@@ -1725,9 +1913,9 @@ func TestEngine_HandleExternalChanges_PartialClear(t *testing.T) {
 	ctx := t.Context()
 	newTestWatchState(t, eng)
 
-	eng.watch.deleteCounter = syncdispatch.NewDeleteCounter(10, 5*time.Minute, time.Now)
-	eng.watch.deleteCounter.Add(15)
-	require.True(t, eng.watch.deleteCounter.IsHeld())
+	testWatchRuntime(t, eng).deleteCounter = syncdispatch.NewDeleteCounter(10, 5*time.Minute, time.Now)
+	testWatchRuntime(t, eng).deleteCounter.Add(15)
+	require.True(t, testWatchRuntime(t, eng).deleteCounter.IsHeld())
 
 	// Record two big_delete_held entries.
 	failures := []synctypes.ActionableFailure{
@@ -1739,8 +1927,8 @@ func TestEngine_HandleExternalChanges_PartialClear(t *testing.T) {
 	// Clear only file1.txt — one entry remains (file2.txt is the "current" path).
 	require.NoError(t, eng.baseline.ClearResolvedActionableFailures(ctx, synctypes.IssueBigDeleteHeld, []string{"file2.txt"}))
 
-	eng.handleExternalChanges(ctx)
-	assert.True(t, eng.watch.deleteCounter.IsHeld(), "should remain held with one entry still present")
+	handleExternalChangesForTest(t, eng, ctx)
+	assert.True(t, testWatchRuntime(t, eng).deleteCounter.IsHeld(), "should remain held with one entry still present")
 }
 
 // Validates: R-2.10.9, R-2.14.3
@@ -1807,7 +1995,7 @@ func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 
 	require.NoError(t, eng.baseline.ClearSyncFailure(ctx, "Shared/TeamDocs", driveID))
 
-	eng.handleExternalChanges(ctx)
+	handleExternalChangesForTest(t, eng, ctx)
 
 	assert.False(t, isTestScopeBlocked(eng, clearedScope),
 		"clearing a remote permission issue externally should release that scope")
@@ -1825,7 +2013,7 @@ func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 	assert.Equal(t, "Shared/Other", remainingIssues[0].Path)
 
 	select {
-	case <-eng.watch.retryTimerCh:
+	case <-testWatchRuntime(t, eng).retryTimerCh:
 	default:
 		require.Fail(t, "expected immediate retry wakeup after remote permission clearance")
 	}
@@ -1884,7 +2072,7 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 	safety := synctypes.DefaultSafetyConfig()
 
 	// Should return without error or dispatching actions.
-	eng.processBatch(ctx, batch, bl, synctypes.SyncBidirectional, safety)
+	processBatchForTest(t, eng, ctx, batch, bl, safety)
 }
 
 // TestRunWatch_Deduplication verifies that processBatch cancels in-flight
@@ -1926,10 +2114,10 @@ func TestRunWatch_Deduplication(t *testing.T) {
 		}},
 	}}
 
-	eng.processBatch(ctx, batch1, bl, synctypes.SyncBidirectional, safety)
+	processBatchForTest(t, eng, ctx, batch1, bl, safety)
 
 	// Verify the action is in-flight.
-	require.True(t, eng.depGraph.HasInFlight("overlapping.txt"), "expected in-flight action for overlapping.txt after first batch")
+	require.True(t, testWatchRuntime(t, eng).depGraph.HasInFlight("overlapping.txt"), "expected in-flight action for overlapping.txt after first batch")
 
 	// Second batch: same path, different content. Should cancel the first.
 	batch2 := []synctypes.PathChanges{{
@@ -1945,12 +2133,12 @@ func TestRunWatch_Deduplication(t *testing.T) {
 		}},
 	}}
 
-	eng.processBatch(ctx, batch2, bl, synctypes.SyncBidirectional, safety)
+	processBatchForTest(t, eng, ctx, batch2, bl, safety)
 
 	// The second batch should have replaced the first.
 	// We can't easily verify cancellation directly, but we can verify
 	// the path is still tracked (new action replaced old one).
-	assert.True(t, eng.depGraph.HasInFlight("overlapping.txt"), "expected in-flight action for overlapping.txt after second batch")
+	assert.True(t, testWatchRuntime(t, eng).depGraph.HasInFlight("overlapping.txt"), "expected in-flight action for overlapping.txt after second batch")
 }
 
 // TestRunWatch_DownloadOnly_SkipsLocalObserver verifies that download-only mode
@@ -1989,7 +2177,7 @@ func TestRunWatch_DownloadOnly_SkipsLocalObserver(t *testing.T) {
 	// local observer is skipped, so this file should be invisible to sync.
 	writeLocalFile(t, syncRoot, "local-only.txt", "should-be-ignored")
 
-	// Give time for any observer to fire (if incorrectly started).
+	// Give time for any incorrectly-started local observer to fire.
 	time.Sleep(200 * time.Millisecond)
 
 	cancel()
@@ -2001,8 +2189,10 @@ func TestRunWatch_DownloadOnly_SkipsLocalObserver(t *testing.T) {
 		require.Fail(t, "RunWatch did not return within timeout")
 	}
 
-	// In download-only mode, the remote observer should be set.
-	assert.NotNil(t, eng.watch.remoteObs, "remoteObs should be set in download-only mode")
+	bl, err := eng.baseline.Load(context.Background())
+	require.NoError(t, err)
+	_, found := bl.GetByPath("local-only.txt")
+	assert.False(t, found, "download-only watch mode must ignore local-only files created after bootstrap")
 }
 
 // TestRunWatch_AllObserversDead_ReturnsError verifies that RunWatch returns an
@@ -2290,7 +2480,7 @@ func TestExecutePlan_ActionsDepsLengthMismatch(t *testing.T) {
 	report := &synctypes.SyncReport{}
 
 	// Should return cleanly without panic.
-	eng.executePlan(t.Context(), plan, report, nil)
+	newOneShotRunner(eng.Engine).executePlan(t.Context(), plan, report, nil)
 
 	// Invariant violation should surface in the report.
 	assert.Equal(t, len(plan.Actions), report.Failed)
@@ -2302,10 +2492,9 @@ func TestExecutePlan_ActionsDepsLengthMismatch(t *testing.T) {
 // Close() cleanup and idempotency
 // ---------------------------------------------------------------------------
 
-// TestEngine_Close_NilsObserversAndCleansStale verifies that Close() nils out
-// observer references and cleans stale session files. Also tests idempotency —
-// calling Close() twice must not panic.
-func TestEngine_Close_NilsObserversAndCleansStale(t *testing.T) {
+// TestEngine_Close_CleansStaleAndIsIdempotent verifies that Close() cleans
+// stale session files and remains idempotent even when a test runtime exists.
+func TestEngine_Close_CleansStaleAndIsIdempotent(t *testing.T) {
 	t.Parallel()
 
 	mock := &engineMockClient{}
@@ -2333,16 +2522,17 @@ func TestEngine_Close_NilsObserversAndCleansStale(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
+	testEng := &testEngine{Engine: eng}
 
-	// Simulate observers being set (as RunWatch does).
-	eng.watch = &watchState{}
-	eng.watch.remoteObs = &syncobserve.RemoteObserver{}
-	eng.watch.localObs = &syncobserve.LocalObserver{}
+	// Register a test runtime to prove Close operates on engine-owned resources
+	// only; watch observers now belong to the runtime and are cleaned up by the
+	// watch coordinator, not by Engine.Close.
+	setupWatchEngine(t, testEng)
+	testWatchRuntime(t, testEng).remoteObs = &syncobserve.RemoteObserver{}
+	testWatchRuntime(t, testEng).localObs = &syncobserve.LocalObserver{}
 
-	// First Close should succeed and nil out references.
+	// First Close should succeed.
 	require.NoError(t, eng.Close(t.Context()))
-	assert.Nil(t, eng.watch.remoteObs, "remoteObs should be nil after Close")
-	assert.Nil(t, eng.watch.localObs, "localObs should be nil after Close")
 
 	// Second Close must not panic (idempotency). The baseline DB is already
 	// closed. A second Close should still be a clean no-op.
@@ -2438,7 +2628,7 @@ func TestObserveAndCommitRemote_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	e, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := NewEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -2449,6 +2639,7 @@ func TestObserveAndCommitRemote_ZeroEvents_NoTokenAdvance(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
+	e := &testEngine{Engine: rawEngine}
 	defer e.Close(t.Context())
 
 	ctx := t.Context()
@@ -2460,7 +2651,7 @@ func TestObserveAndCommitRemote_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	require.NoError(t, err)
 
 	// observeAndCommitRemote with 0 events (only root, which is skipped).
-	events, pendingToken, err := e.observeAndCommitRemote(ctx, bl)
+	events, pendingToken, err := testEngineFlow(t, e).observeAndCommitRemote(ctx, bl)
 	require.NoError(t, err)
 	assert.Empty(t, events, "should return 0 events (root is skipped)")
 	assert.Empty(t, pendingToken, "no pending token when 0 events")
@@ -2492,7 +2683,7 @@ func TestObserveAndCommitRemote_WithEvents_TokenDeferred(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	e, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := NewEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -2503,6 +2694,7 @@ func TestObserveAndCommitRemote_WithEvents_TokenDeferred(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
+	e := &testEngine{Engine: rawEngine}
 	defer e.Close(t.Context())
 
 	ctx := t.Context()
@@ -2514,7 +2706,7 @@ func TestObserveAndCommitRemote_WithEvents_TokenDeferred(t *testing.T) {
 	require.NoError(t, err)
 
 	// observeAndCommitRemote with actual events.
-	events, pendingToken, err := e.observeAndCommitRemote(ctx, bl)
+	events, pendingToken, err := testEngineFlow(t, e).observeAndCommitRemote(ctx, bl)
 	require.NoError(t, err)
 	assert.Len(t, events, 1, "should return 1 event (root is skipped)")
 
@@ -2641,7 +2833,7 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	e, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := NewEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -2652,6 +2844,7 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
+	e := &testEngine{Engine: rawEngine}
 	defer e.Close(t.Context())
 
 	ctx := t.Context()
@@ -2663,7 +2856,7 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 	bl.Put(&synctypes.BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: synctypes.ItemTypeFile})
 	bl.Put(&synctypes.BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: synctypes.ItemTypeFile})
 
-	events, token, err := e.observeRemoteFull(ctx, bl)
+	events, token, err := testEngineFlow(t, e).observeRemoteFull(ctx, bl)
 	require.NoError(t, err)
 	assert.Equal(t, "full-token", token)
 
@@ -2797,7 +2990,7 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	e, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := NewEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -2808,6 +3001,7 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
+	e := &testEngine{Engine: rawEngine}
 	defer e.Close(t.Context())
 
 	ctx := t.Context()
@@ -2819,7 +3013,7 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 	bl.Put(&synctypes.BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: synctypes.ItemTypeFile})
 	bl.Put(&synctypes.BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: synctypes.ItemTypeFile})
 
-	events, pendingToken, err := e.observeAndCommitRemoteFull(ctx, bl)
+	events, pendingToken, err := testEngineFlow(t, e).observeAndCommitRemoteFull(ctx, bl)
 	require.NoError(t, err)
 
 	// Should have modify (file1) + orphan delete (file2).
@@ -2854,20 +3048,20 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 
 // waitForReconcileDone applies the next reconcile result the same way the
 // watch loop would and waits for reconcileActive to clear.
-func waitForReconcileDone(t *testing.T, eng *Engine) {
+func waitForReconcileDone(t *testing.T, eng *testEngine) {
 	t.Helper()
 
-	require.NotNil(t, eng.watch)
-	require.NotNil(t, eng.watch.reconcileResults)
+	rt := testWatchRuntime(t, eng)
+	require.NotNil(t, rt.reconcileResults)
 
 	select {
-	case result := <-eng.watch.reconcileResults:
-		eng.applyReconcileResult(result)
+	case result := <-rt.reconcileResults:
+		rt.applyReconcileResult(result)
 	case <-time.After(10 * time.Second):
 		require.Fail(t, "reconcile result was not delivered within 10s")
 	}
 
-	assert.False(t, eng.watch.reconcileActive, "reconcileActive should be false after applying reconcile result")
+	assert.False(t, rt.reconcileActive, "reconcileActive should be false after applying reconcile result")
 }
 
 // Validates: R-2.1.6
@@ -2892,7 +3086,7 @@ func TestRunFullReconciliationAsync_NoChanges(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	e, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := NewEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -2903,6 +3097,7 @@ func TestRunFullReconciliationAsync_NoChanges(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
+	e := &testEngine{Engine: rawEngine}
 	defer e.Close(t.Context())
 
 	ctx := t.Context()
@@ -2914,12 +3109,12 @@ func TestRunFullReconciliationAsync_NoChanges(t *testing.T) {
 	bl.Put(&synctypes.BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: synctypes.ItemTypeFile})
 
 	ready := setupWatchEngine(t, e)
-	e.watch.buf = syncobserve.NewBuffer(e.logger)
+	testWatchRuntime(t, e).buf = syncobserve.NewBuffer(e.logger)
 
 	// Full reconciliation always hands observed changes back through the watch
 	// buffer, even when the later planner pass reduces them to a no-op. The
 	// important boundary here is "no direct dispatch from the goroutine."
-	e.runFullReconciliationAsync(ctx, bl)
+	runFullReconciliationAsyncForTest(t, e, ctx, bl)
 	waitForReconcileDone(t, e)
 
 	select {
@@ -2928,7 +3123,7 @@ func TestRunFullReconciliationAsync_NoChanges(t *testing.T) {
 	default:
 	}
 
-	batch := e.watch.buf.FlushImmediate()
+	batch := testWatchRuntime(t, e).buf.FlushImmediate()
 	require.Len(t, batch, 1, "reconciliation should hand observed state back through the watch buffer")
 	assert.Equal(t, "file1.txt", batch[0].Path)
 }
@@ -2950,14 +3145,14 @@ func TestRunFullReconciliationAsync_DeltaError(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	e.watch.buf = syncobserve.NewBuffer(e.logger)
+	testWatchRuntime(t, e).buf = syncobserve.NewBuffer(e.logger)
 
 	// Should not panic — error is logged and function returns.
-	e.runFullReconciliationAsync(ctx, bl)
+	runFullReconciliationAsyncForTest(t, e, ctx, bl)
 	waitForReconcileDone(t, e)
 
 	// syncobserve.Buffer should be empty — no events were produced.
-	batch := e.watch.buf.FlushImmediate()
+	batch := testWatchRuntime(t, e).buf.FlushImmediate()
 	assert.Empty(t, batch)
 }
 
@@ -2982,13 +3177,13 @@ func TestRunFullReconciliationAsync_NonBlocking(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	e.watch.buf = syncobserve.NewBuffer(e.logger)
+	testWatchRuntime(t, e).buf = syncobserve.NewBuffer(e.logger)
 
 	// Call should return immediately — goroutine is blocked in deltaFn.
-	e.runFullReconciliationAsync(ctx, bl)
+	runFullReconciliationAsyncForTest(t, e, ctx, bl)
 
 	// reconcileActive should be true while delta is blocked.
-	assert.True(t, e.watch.reconcileActive, "reconcileActive should be true while goroutine runs")
+	assert.True(t, testWatchRuntime(t, e).reconcileActive, "reconcileActive should be true while goroutine runs")
 
 	// Unblock delta and wait for completion.
 	close(unblock)
@@ -3015,17 +3210,17 @@ func TestRunFullReconciliationAsync_SkipsIfRunning(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	e.watch.buf = syncobserve.NewBuffer(e.logger)
+	testWatchRuntime(t, e).buf = syncobserve.NewBuffer(e.logger)
 
 	// Pre-set reconcileActive — simulates a reconciliation already in progress.
-	e.watch.reconcileActive = true
+	testWatchRuntime(t, e).reconcileActive = true
 
-	e.runFullReconciliationAsync(ctx, bl)
+	runFullReconciliationAsyncForTest(t, e, ctx, bl)
 
 	// deltaFn should not have been invoked.
 	assert.False(t, deltaCalled, "deltaFn should not be called when reconciliation is already running")
 
-	e.watch.reconcileActive = false
+	testWatchRuntime(t, e).reconcileActive = false
 }
 
 func TestRunFullReconciliationAsync_FeedsBuffer(t *testing.T) {
@@ -3049,7 +3244,7 @@ func TestRunFullReconciliationAsync_FeedsBuffer(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	e, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := NewEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -3060,6 +3255,7 @@ func TestRunFullReconciliationAsync_FeedsBuffer(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
+	e := &testEngine{Engine: rawEngine}
 	defer e.Close(t.Context())
 
 	ctx := t.Context()
@@ -3068,14 +3264,14 @@ func TestRunFullReconciliationAsync_FeedsBuffer(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	e.watch.buf = syncobserve.NewBuffer(e.logger)
+	testWatchRuntime(t, e).buf = syncobserve.NewBuffer(e.logger)
 
 	// synctypes.Baseline is empty — delta returns a new file → orphan detection
 	// produces a download event that gets fed into the buffer.
-	e.runFullReconciliationAsync(ctx, bl)
+	runFullReconciliationAsyncForTest(t, e, ctx, bl)
 	waitForReconcileDone(t, e)
 
-	batch := e.watch.buf.FlushImmediate()
+	batch := testWatchRuntime(t, e).buf.FlushImmediate()
 	assert.NotEmpty(t, batch, "buffer should contain events from reconciliation")
 }
 
@@ -3100,7 +3296,7 @@ func TestRunFullReconciliationAsync_ShutdownAfterCommit(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	e, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := NewEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -3111,6 +3307,7 @@ func TestRunFullReconciliationAsync_ShutdownAfterCommit(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
+	e := &testEngine{Engine: rawEngine}
 	defer e.Close(t.Context())
 
 	// Context with manual cancel — cancel is triggered by the
@@ -3122,16 +3319,16 @@ func TestRunFullReconciliationAsync_ShutdownAfterCommit(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	e.watch.buf = syncobserve.NewBuffer(e.logger)
+	testWatchRuntime(t, e).buf = syncobserve.NewBuffer(e.logger)
 
 	// Hook: cancel context immediately after CommitObservation succeeds.
 	// This guarantees we test the exact shutdown-after-commit code path,
 	// not the commit-failed path or the normal completion path.
-	e.watch.afterReconcileCommit = func() {
+	testWatchRuntime(t, e).afterReconcileCommit = func() {
 		cancel()
 	}
 
-	e.runFullReconciliationAsync(ctx, bl)
+	runFullReconciliationAsyncForTest(t, e, ctx, bl)
 	waitForReconcileDone(t, e)
 
 	// Verify observations WERE committed to SQLite — proving we took
@@ -3144,7 +3341,7 @@ func TestRunFullReconciliationAsync_ShutdownAfterCommit(t *testing.T) {
 
 	// syncobserve.Buffer should be empty — events were committed to SQLite but
 	// not fed to the buffer because shutdown was detected after commit.
-	batch := e.watch.buf.FlushImmediate()
+	batch := testWatchRuntime(t, e).buf.FlushImmediate()
 	assert.Empty(t, batch, "buffer should be empty after shutdown-aware early exit")
 }
 
@@ -3172,12 +3369,12 @@ func TestRunFullReconciliationAsync_SkipLogPromotedToInfo(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	e.watch.buf = syncobserve.NewBuffer(e.logger)
+	testWatchRuntime(t, e).buf = syncobserve.NewBuffer(e.logger)
 
 	// Pre-set reconcileActive — simulates a reconciliation already in progress.
-	e.watch.reconcileActive = true
+	testWatchRuntime(t, e).reconcileActive = true
 
-	e.runFullReconciliationAsync(ctx, bl)
+	runFullReconciliationAsyncForTest(t, e, ctx, bl)
 
 	// The skip message should appear in the Info-level log buffer.
 	// If it were still at Debug level, the Info-level handler would exclude it.
@@ -3185,7 +3382,7 @@ func TestRunFullReconciliationAsync_SkipLogPromotedToInfo(t *testing.T) {
 	assert.Contains(t, logOutput, "full reconciliation skipped",
 		"skip message should be logged at Info level (not Debug)")
 
-	e.watch.reconcileActive = false
+	testWatchRuntime(t, e).reconcileActive = false
 }
 
 func TestRunFullReconciliationAsync_DurationInCompletionLog(t *testing.T) {
@@ -3214,7 +3411,7 @@ func TestRunFullReconciliationAsync_DurationInCompletionLog(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	syncDir := t.TempDir()
 
-	e, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := NewEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -3225,6 +3422,7 @@ func TestRunFullReconciliationAsync_DurationInCompletionLog(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
+	e := &testEngine{Engine: rawEngine}
 	defer e.Close(t.Context())
 
 	ctx := t.Context()
@@ -3233,9 +3431,9 @@ func TestRunFullReconciliationAsync_DurationInCompletionLog(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	e.watch.buf = syncobserve.NewBuffer(e.logger)
+	testWatchRuntime(t, e).buf = syncobserve.NewBuffer(e.logger)
 
-	e.runFullReconciliationAsync(ctx, bl)
+	runFullReconciliationAsyncForTest(t, e, ctx, bl)
 	waitForReconcileDone(t, e)
 
 	logOutput := logBuf.String()
@@ -3272,7 +3470,7 @@ func TestRunFullReconciliationAsync_DurationInNoChangesLog(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	syncDir := t.TempDir()
 
-	e, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := NewEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -3283,6 +3481,7 @@ func TestRunFullReconciliationAsync_DurationInNoChangesLog(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
+	e := &testEngine{Engine: rawEngine}
 	defer e.Close(t.Context())
 
 	ctx := t.Context()
@@ -3291,9 +3490,9 @@ func TestRunFullReconciliationAsync_DurationInNoChangesLog(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	e.watch.buf = syncobserve.NewBuffer(e.logger)
+	testWatchRuntime(t, e).buf = syncobserve.NewBuffer(e.logger)
 
-	e.runFullReconciliationAsync(ctx, bl)
+	runFullReconciliationAsyncForTest(t, e, ctx, bl)
 	waitForReconcileDone(t, e)
 
 	logOutput := logBuf.String()
@@ -3370,11 +3569,11 @@ func TestOneShotEngineLoop_ClosedResultsStillProcessBufferedSideEffects(t *testi
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	// Set up depGraph with actions for each result.
-	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
-	eng.readyCh = make(chan *synctypes.TrackedAction, 16)
+	runner := newOneShotRunner(eng.Engine)
+	runner.depGraph = syncdispatch.NewDepGraph(eng.logger)
+	runner.readyCh = make(chan *synctypes.TrackedAction, 16)
 	for _, id := range []int64{1, 2, 3} {
-		eng.depGraph.Add(&synctypes.Action{Path: fmt.Sprintf("action-%d", id), Type: synctypes.ActionUpload}, id, nil)
+		runner.depGraph.Add(&synctypes.Action{Path: fmt.Sprintf("action-%d", id), Type: synctypes.ActionUpload}, id, nil)
 	}
 
 	results := make(chan synctypes.WorkerResult, 3)
@@ -3383,10 +3582,7 @@ func TestOneShotEngineLoop_ClosedResultsStillProcessBufferedSideEffects(t *testi
 	results <- synctypes.WorkerResult{Path: "c.txt", ActionType: synctypes.ActionDownload, Success: true, ActionID: 3}
 	close(results)
 
-	require.NoError(t, eng.runEngineLoop(ctx, &engineLoopConfig{
-		results:              results,
-		stopWhenResultsClose: true,
-	}))
+	runner.runResultsLoop(ctx, nil, results)
 
 	// Both upload failures should produce sync_failures.
 	issues, err := eng.baseline.ListSyncFailures(ctx)
@@ -3401,12 +3597,19 @@ func TestOneShotEngineLoop_ClosedResultsStillProcessBufferedSideEffects(t *testi
 // setupEngineDepGraph creates a syncdispatch.DepGraph on the engine and adds a dummy action
 // for the given actionID so that processWorkerResult can call Complete without
 // panicking on nil depGraph or unknown ID.
-func setupEngineDepGraph(t *testing.T, eng *Engine, actionID int64) {
+func setupEngineDepGraph(t *testing.T, eng *testEngine, actionID int64) *engineFlow {
 	t.Helper()
-	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
-	eng.readyCh = make(chan *synctypes.TrackedAction, 16)
+
+	flow := &engineFlow{
+		engine:   eng.Engine,
+		depGraph: syncdispatch.NewDepGraph(eng.logger),
+		readyCh:  make(chan *synctypes.TrackedAction, 16),
+	}
 	dummyAction := &synctypes.Action{Path: "dummy", Type: synctypes.ActionDownload}
-	eng.depGraph.Add(dummyAction, actionID, nil)
+	flow.depGraph.Add(dummyAction, actionID, nil)
+	eng.flow = flow
+
+	return flow
 }
 
 func TestProcessWorkerResult_UploadFailure_RecordsLocalIssue(t *testing.T) {
@@ -3417,7 +3620,7 @@ func TestProcessWorkerResult_UploadFailure_RecordsLocalIssue(t *testing.T) {
 	ctx := t.Context()
 	setupEngineDepGraph(t, eng, 0)
 
-	eng.processWorkerResult(ctx, &synctypes.WorkerResult{
+	processWorkerResultForTest(t, eng, ctx, &synctypes.WorkerResult{
 		Path:       "docs/report.xlsx",
 		ActionType: synctypes.ActionUpload,
 		Success:    false,
@@ -3460,12 +3663,12 @@ func TestProcessWorkerResult_403ReadOnly_SkipsRemoteState(t *testing.T) {
 
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
-	setupEngineDepGraph(t, eng, 0)
+	flow := setupEngineDepGraph(t, eng, 0)
 
 	// Seed the latest shortcut snapshot so getShortcuts() returns it for handle403.
-	eng.shortcuts = shortcuts
+	flow.setShortcuts(shortcuts)
 
-	eng.processWorkerResult(ctx, &synctypes.WorkerResult{
+	flow.processWorkerResult(ctx, nil, &synctypes.WorkerResult{
 		Path:       "Shared/TeamDocs/file.txt",
 		ActionType: synctypes.ActionUpload,
 		Success:    false,
@@ -3499,7 +3702,7 @@ func TestProcessWorkerResult_Success_NoRecords(t *testing.T) {
 	ctx := t.Context()
 	setupEngineDepGraph(t, eng, 0)
 
-	eng.processWorkerResult(ctx, &synctypes.WorkerResult{
+	processWorkerResultForTest(t, eng, ctx, &synctypes.WorkerResult{
 		Path:       "docs/report.xlsx",
 		ActionType: synctypes.ActionDownload,
 		Success:    true,
@@ -3711,10 +3914,10 @@ func TestProcessTrialResultV2_Success_ClearsScope(t *testing.T) {
 	}, nil)) // nil delayFn → scope-blocked (next_retry_at = NULL)
 
 	// Add the trial action to the syncdispatch.DepGraph.
-	eng.depGraph.Add(&synctypes.Action{Type: synctypes.ActionUpload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
+	testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{Type: synctypes.ActionUpload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
 
 	// Simulate successful trial result.
-	eng.processTrialResult(ctx, &synctypes.WorkerResult{
+	processTrialResultForTest(t, eng, ctx, &synctypes.WorkerResult{
 		ActionID:      1,
 		IsTrial:       true,
 		TrialScopeKey: synctypes.SKThrottleAccount(),
@@ -3748,9 +3951,9 @@ func TestProcessTrialResultV2_Failure_DoublesInterval(t *testing.T) {
 	})
 
 	// Add the trial action to the syncdispatch.DepGraph.
-	eng.depGraph.Add(&synctypes.Action{Type: synctypes.ActionDownload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 99, nil)
+	testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{Type: synctypes.ActionDownload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 99, nil)
 
-	eng.processTrialResult(ctx, &synctypes.WorkerResult{
+	processTrialResultForTest(t, eng, ctx, &synctypes.WorkerResult{
 		ActionID:      99,
 		IsTrial:       true,
 		TrialScopeKey: synctypes.SKService(),
@@ -3799,9 +4002,9 @@ func TestProcessTrialResultV2_Failure_CapsAt5m(t *testing.T) {
 				NextTrialAt:   now.Add(4 * time.Minute),
 			})
 
-			eng.depGraph.Add(&synctypes.Action{Type: tt.actionType, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 99, nil)
+			testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{Type: tt.actionType, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 99, nil)
 
-			eng.processTrialResult(ctx, &synctypes.WorkerResult{
+			processTrialResultForTest(t, eng, ctx, &synctypes.WorkerResult{
 				ActionID:      99,
 				IsTrial:       true,
 				TrialScopeKey: tt.scopeKey,
@@ -3826,7 +4029,7 @@ func TestProcessTrialResultV2_Failure_NoScopeDetection(t *testing.T) {
 	ctx := t.Context()
 
 	ss := syncdispatch.NewScopeState(eng.nowFn, eng.logger)
-	eng.watch.scopeState = ss
+	testWatchRuntime(t, eng).scopeState = ss
 
 	now := eng.nowFunc()
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
@@ -3837,9 +4040,9 @@ func TestProcessTrialResultV2_Failure_NoScopeDetection(t *testing.T) {
 		NextTrialAt:   now.Add(30 * time.Second),
 	})
 
-	eng.depGraph.Add(&synctypes.Action{Type: synctypes.ActionDownload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 99, nil)
+	testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{Type: synctypes.ActionDownload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 99, nil)
 
-	eng.processTrialResult(ctx, &synctypes.WorkerResult{
+	processTrialResultForTest(t, eng, ctx, &synctypes.WorkerResult{
 		ActionID:      99,
 		IsTrial:       true,
 		TrialScopeKey: synctypes.SKService(),
@@ -3906,11 +4109,11 @@ func TestExtendTrialInterval_WithRetryAfter(t *testing.T) {
 		NextTrialAt:   now.Add(30 * time.Second),
 	})
 
-	eng.depGraph.Add(&synctypes.Action{Type: synctypes.ActionUpload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 99, nil)
+	testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{Type: synctypes.ActionUpload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 99, nil)
 
 	// Retry-After of 30 minutes exceeds syncdispatch.DefaultMaxTrialInterval (5m) — must be
 	// honored directly with no cap, because the server is ground truth.
-	eng.processTrialResult(ctx, &synctypes.WorkerResult{
+	processTrialResultForTest(t, eng, ctx, &synctypes.WorkerResult{
 		ActionID:      99,
 		IsTrial:       true,
 		TrialScopeKey: synctypes.SKThrottleAccount(),
@@ -3957,14 +4160,14 @@ func TestDiskLocalScopeBlock_FullCycle(t *testing.T) {
 	dlAction := &synctypes.TrackedAction{ID: 1, Action: synctypes.Action{Type: synctypes.ActionDownload, Path: "big.zip", DriveID: driveid.New("d"), ItemID: "dl1"}}
 	ulAction := &synctypes.TrackedAction{ID: 2, Action: synctypes.Action{Type: synctypes.ActionUpload, Path: "small.txt", DriveID: driveid.New("d"), ItemID: "ul1"}}
 
-	assert.False(t, eng.activeBlockingScope(dlAction).IsZero(), "download should be blocked by disk:local scope")
-	assert.True(t, eng.activeBlockingScope(ulAction).IsZero(), "upload should NOT be blocked by disk:local scope")
+	assert.False(t, activeBlockingScopeForTest(t, eng, dlAction).IsZero(), "download should be blocked by disk:local scope")
+	assert.True(t, activeBlockingScopeForTest(t, eng, ulAction).IsZero(), "upload should NOT be blocked by disk:local scope")
 
 	// 4. Release scope block (simulating trial success / disk space freed).
-	require.NoError(t, eng.releaseScope(ctx, synctypes.SKDiskLocal()))
+	require.NoError(t, releaseTestScope(t, eng, ctx, synctypes.SKDiskLocal()))
 
 	// 5. Download should now be admitted.
-	assert.True(t, eng.activeBlockingScope(dlAction).IsZero(), "download should be admitted after scope release")
+	assert.True(t, activeBlockingScopeForTest(t, eng, dlAction).IsZero(), "download should be admitted after scope release")
 }
 
 // ---------------------------------------------------------------------------
@@ -4013,7 +4216,7 @@ func TestApplyScopeBlock_ArmsTrialTimer(t *testing.T) {
 	now := eng.nowFunc()
 
 	// applyScopeBlock persists the scope and arms the trial timer.
-	eng.applyScopeBlock(ctx, synctypes.ScopeUpdateResult{
+	applyScopeBlockForTest(t, eng, ctx, synctypes.ScopeUpdateResult{
 		Block:      true,
 		ScopeKey:   synctypes.SKThrottleAccount(),
 		IssueType:  synctypes.IssueRateLimited,
@@ -4021,12 +4224,12 @@ func TestApplyScopeBlock_ArmsTrialTimer(t *testing.T) {
 	})
 
 	// Verify the block has the correct NextTrialAt from the injectable clock.
-	earliest, ok := syncdispatch.EarliestTrialAt(eng.watch.activeScopes)
+	earliest, ok := syncdispatch.EarliestTrialAt(testWatchRuntime(t, eng).activeScopes)
 	require.True(t, ok, "EarliestTrialAt should find the scope block")
 	assert.Equal(t, now.Add(30*time.Second), earliest, "NextTrialAt should be now + trial interval")
 
 	// Trial timer should be armed.
-	timerSet := eng.watch.trialTimer != nil
+	timerSet := testWatchRuntime(t, eng).trialTimer != nil
 	assert.True(t, timerSet, "trial timer should be armed after applyScopeBlock")
 }
 
@@ -4043,7 +4246,7 @@ func TestRecordFailure_PopulatesScopeKey(t *testing.T) {
 	ctx := t.Context()
 	setupEngineDepGraph(t, eng, 1)
 
-	eng.processWorkerResult(ctx, &synctypes.WorkerResult{
+	processWorkerResultForTest(t, eng, ctx, &synctypes.WorkerResult{
 		Path:       "quota-fail.txt",
 		ActionType: synctypes.ActionUpload,
 		Success:    false,
@@ -4067,7 +4270,7 @@ func TestRecordFailure_PopulatesScopeKey_429(t *testing.T) {
 	ctx := t.Context()
 	setupEngineDepGraph(t, eng, 1)
 
-	eng.processWorkerResult(ctx, &synctypes.WorkerResult{
+	processWorkerResultForTest(t, eng, ctx, &synctypes.WorkerResult{
 		Path:       "throttled.txt",
 		ActionType: synctypes.ActionDownload,
 		Success:    false,
@@ -4091,7 +4294,7 @@ func TestRecordFailure_PopulatesScopeKey_507Shortcut(t *testing.T) {
 	ctx := t.Context()
 	setupEngineDepGraph(t, eng, 1)
 
-	eng.processWorkerResult(ctx, &synctypes.WorkerResult{
+	processWorkerResultForTest(t, eng, ctx, &synctypes.WorkerResult{
 		Path:        "shared/file.txt",
 		ActionType:  synctypes.ActionUpload,
 		Success:     false,
@@ -4115,13 +4318,13 @@ func TestRecordFailure_PopulatesScopeKey_507Shortcut(t *testing.T) {
 // readyCh, buf, and retryTimerCh — the full one-shot engine-loop pipeline used
 // by these tests. Tests access the ready channel and buffer via the returned
 // engine.
-func startDrainLoop(t *testing.T) (chan synctypes.WorkerResult, <-chan struct{}, context.CancelFunc, *Engine) {
+func startDrainLoop(t *testing.T) (chan synctypes.WorkerResult, <-chan struct{}, context.CancelFunc, *testEngine) {
 	t.Helper()
 
 	eng := newSingleOwnerEngine(t)
-	eng.watch.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
-
-	eng.watch.buf = syncobserve.NewBuffer(eng.logger)
+	rt := testWatchRuntime(t, eng)
+	rt.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
+	rt.buf = syncobserve.NewBuffer(eng.logger)
 
 	results := make(chan synctypes.WorkerResult, 16)
 
@@ -4130,26 +4333,63 @@ func startDrainLoop(t *testing.T) (chan synctypes.WorkerResult, <-chan struct{},
 	require.NoError(t, err)
 	safety := synctypes.DefaultSafetyConfig()
 	done := make(chan struct{})
-	errCh := make(chan error, 1)
 	go func() {
 		defer close(done)
-		defer eng.stopTrialTimer()
-		errCh <- eng.runEngineLoop(ctx, &engineLoopConfig{
-			bl:                   bl,
-			safety:               safety,
-			mode:                 synctypes.SyncBidirectional,
-			results:              results,
-			stopWhenResultsClose: true,
-		})
+		defer rt.stopTrialTimer()
+		runResultDrainLoopForTest(ctx, rt, bl, safety, results)
 	}()
 
 	t.Cleanup(func() {
 		cancel()
 		<-done
-		require.NoError(t, <-errCh)
 	})
 
 	return results, done, cancel, eng
+}
+
+func runResultDrainLoopForTest(
+	ctx context.Context,
+	rt *watchRuntime,
+	bl *synctypes.Baseline,
+	safety *synctypes.SafetyConfig,
+	results <-chan synctypes.WorkerResult,
+) {
+	var outbox []*synctypes.TrackedAction
+
+	for {
+		if len(outbox) == 0 {
+			select {
+			case workerResult, ok := <-results:
+				if !ok {
+					return
+				}
+				outbox = append(outbox, rt.processWorkerResult(ctx, rt, &workerResult, bl)...)
+			case <-rt.trialTimerChan():
+				outbox = append(outbox, rt.runTrialDispatch(ctx, bl, synctypes.SyncBidirectional, safety)...)
+			case <-rt.retryTimerChan():
+				outbox = append(outbox, rt.runRetrierSweep(ctx, bl, synctypes.SyncBidirectional, safety)...)
+			case <-ctx.Done():
+				return
+			}
+			continue
+		}
+
+		select {
+		case rt.readyCh <- outbox[0]:
+			outbox = outbox[1:]
+		case workerResult, ok := <-results:
+			if !ok {
+				return
+			}
+			outbox = append(outbox, rt.processWorkerResult(ctx, rt, &workerResult, bl)...)
+		case <-rt.trialTimerChan():
+			outbox = append(outbox, rt.runTrialDispatch(ctx, bl, synctypes.SyncBidirectional, safety)...)
+		case <-rt.retryTimerChan():
+			outbox = append(outbox, rt.runRetrierSweep(ctx, bl, synctypes.SyncBidirectional, safety)...)
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 // readReadyAction reads one synctypes.TrackedAction from the ready channel
@@ -4182,10 +4422,10 @@ func TestE2E_OneShotEngineLoop_ProcessesAndRoutes(t *testing.T) {
 	ctx := t.Context()
 
 	// Add parent action to syncdispatch.DepGraph, send to readyCh.
-	ta := eng.depGraph.Add(&synctypes.Action{Type: synctypes.ActionUpload, Path: "a.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 0, nil)
+	ta := testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{Type: synctypes.ActionUpload, Path: "a.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 0, nil)
 	require.NotNil(t, ta)
-	eng.readyCh <- ta
-	readReady(t, eng.readyCh)
+	testWatchRuntime(t, eng).readyCh <- ta
+	readReady(t, testWatchRuntime(t, eng).readyCh)
 
 	// Send 429 result — scope detection creates block + records failure.
 	results <- synctypes.WorkerResult{
@@ -4229,7 +4469,7 @@ func TestWatchLoop_SteadyStateContinuesAfterGraphDrains(t *testing.T) {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- eng.runWatchLoop(ctx, &watchPipeline{
+		done <- runWatchLoopForTest(eng, ctx, &watchPipeline{
 			bl:      bl,
 			safety:  synctypes.DefaultSafetyConfig(),
 			ready:   batches,
@@ -4263,7 +4503,7 @@ func TestWatchLoop_SteadyStateContinuesAfterGraphDrains(t *testing.T) {
 	}
 
 	require.Eventually(t, func() bool {
-		return eng.depGraph.InFlightCount() == 0
+		return testWatchRuntime(t, eng).depGraph.InFlightCount() == 0
 	}, time.Second, 10*time.Millisecond, "first batch should drain completely")
 
 	select {
@@ -4326,7 +4566,7 @@ func TestE2E_OneShotLoop_TrialResultSuccess(t *testing.T) {
 	}, nil))
 
 	// Add trial action to depGraph.
-	ta := eng.depGraph.Add(&synctypes.Action{Type: synctypes.ActionUpload, Path: "trial.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 1, nil)
+	ta := testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{Type: synctypes.ActionUpload, Path: "trial.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 1, nil)
 	require.NotNil(t, ta)
 
 	// Send trial success via results channel.
@@ -4348,7 +4588,7 @@ func TestE2E_OneShotLoop_TrialResultSuccess(t *testing.T) {
 	var released *synctypes.TrackedAction
 	require.Eventually(t, func() bool {
 		select {
-		case released = <-eng.readyCh:
+		case released = <-testWatchRuntime(t, eng).readyCh:
 			return released != nil && released.Action.Path == "blocked.txt"
 		default:
 			return false
@@ -4375,7 +4615,7 @@ func TestE2E_OneShotLoop_TrialResultFailure(t *testing.T) {
 		NextTrialAt:   eng.nowFunc().Add(10 * time.Millisecond),
 	})
 
-	ta := eng.depGraph.Add(&synctypes.Action{Type: synctypes.ActionDownload, Path: "trial.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 99, nil)
+	ta := testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{Type: synctypes.ActionDownload, Path: "trial.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 99, nil)
 	require.NotNil(t, ta)
 
 	results <- synctypes.WorkerResult{
@@ -4406,7 +4646,7 @@ func TestE2E_OneShotLoopExit_StopsTimer(t *testing.T) {
 	ctx := t.Context()
 
 	// Create scope block → arms trial timer.
-	eng.applyScopeBlock(ctx, synctypes.ScopeUpdateResult{
+	applyScopeBlockForTest(t, eng, ctx, synctypes.ScopeUpdateResult{
 		Block:      true,
 		ScopeKey:   synctypes.SKService(),
 		IssueType:  synctypes.IssueServiceOutage,
@@ -4415,7 +4655,7 @@ func TestE2E_OneShotLoopExit_StopsTimer(t *testing.T) {
 
 	// Verify timer is armed.
 	require.Eventually(t, func() bool {
-		return eng.watch.trialTimer != nil
+		return testWatchRuntime(t, eng).trialTimer != nil
 	}, time.Second, time.Millisecond)
 
 	// Close results channel → the one-shot loop returns → defer stopTrialTimer.
@@ -4426,7 +4666,7 @@ func TestE2E_OneShotLoopExit_StopsTimer(t *testing.T) {
 		require.Fail(t, "one-shot engine loop did not exit after results channel close")
 	}
 
-	assert.Nil(t, eng.watch.trialTimer, "drain exit should stop and clear the trial timer")
+	assert.Nil(t, testWatchRuntime(t, eng).trialTimer, "drain exit should stop and clear the trial timer")
 }
 
 // ---------------------------------------------------------------------------
@@ -4565,7 +4805,7 @@ func TestClearResolvedSkippedItems_AllThreeIssueTypes(t *testing.T) {
 		{Path: "still-bad\x02.txt", Reason: synctypes.IssueInvalidFilename},
 	}
 
-	eng.clearResolvedSkippedItems(ctx, currentSkipped)
+	testEngineFlow(t, eng).clearResolvedSkippedItems(ctx, currentSkipped)
 
 	// Only the still-existing invalid filename should remain.
 	remaining, err := eng.baseline.ListSyncFailures(ctx)
@@ -4596,7 +4836,7 @@ func TestClearResolvedSkippedItems_EmptySkipped_ClearsAll(t *testing.T) {
 	}, nil))
 
 	// Empty scan — all problematic files were resolved.
-	eng.clearResolvedSkippedItems(ctx, nil)
+	testEngineFlow(t, eng).clearResolvedSkippedItems(ctx, nil)
 
 	remaining, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
@@ -4627,7 +4867,7 @@ func TestClearResolvedSkippedItems_DoesNotAffectRuntimeIssues(t *testing.T) {
 	}, nil))
 
 	// Clear all scanner-detectable items (empty = all resolved).
-	eng.clearResolvedSkippedItems(ctx, nil)
+	testEngineFlow(t, eng).clearResolvedSkippedItems(ctx, nil)
 
 	// Runtime failure should survive — clearResolvedSkippedItems only
 	// clears invalid_filename, path_too_long, file_too_large.
@@ -4665,7 +4905,7 @@ func TestClearResolvedSkippedItems_CaseCollision(t *testing.T) {
 	require.Len(t, all, 2)
 
 	// Simulate user renaming one collider — next scan finds zero case collisions.
-	eng.clearResolvedSkippedItems(ctx, nil)
+	testEngineFlow(t, eng).clearResolvedSkippedItems(ctx, nil)
 
 	// Both case collision entries should be cleared.
 	remaining, err := eng.baseline.ListSyncFailures(ctx)
@@ -4682,11 +4922,11 @@ func TestFeedScopeDetection_LocalErrorIgnored(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
-	eng.watch.scopeState = syncdispatch.NewScopeState(time.Now, eng.logger)
+	testWatchRuntime(t, eng).scopeState = syncdispatch.NewScopeState(time.Now, eng.logger)
 
 	// Feed several local errors (HTTPStatus=0) — should not trigger a scope block.
 	for i := range 10 {
-		eng.feedScopeDetection(t.Context(), &synctypes.WorkerResult{
+		feedScopeDetectionForTest(t, eng, t.Context(), &synctypes.WorkerResult{
 			Path:       fmt.Sprintf("file-%d.txt", i),
 			ActionType: synctypes.ActionDownload,
 			HTTPStatus: 0, // local error — no HTTP status
@@ -4709,7 +4949,7 @@ func TestIsObservationSuppressed_Throttled(t *testing.T) {
 	eng := newSingleOwnerEngine(t)
 
 	// Initially not suppressed.
-	assert.False(t, eng.isObservationSuppressed())
+	assert.False(t, eng.isObservationSuppressed(testWatchRuntime(t, eng)))
 
 	// After throttle block, should be suppressed.
 	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
@@ -4717,7 +4957,7 @@ func TestIsObservationSuppressed_Throttled(t *testing.T) {
 		IssueType:     synctypes.IssueRateLimited,
 		TrialInterval: 30 * time.Second,
 	})
-	assert.True(t, eng.isObservationSuppressed())
+	assert.True(t, eng.isObservationSuppressed(testWatchRuntime(t, eng)))
 }
 
 // Validates: R-2.10.30
@@ -4732,7 +4972,7 @@ func TestIsObservationSuppressed_ServiceOutage(t *testing.T) {
 		IssueType:     synctypes.IssueServiceOutage,
 		TrialInterval: 60 * time.Second,
 	})
-	assert.True(t, eng.isObservationSuppressed())
+	assert.True(t, eng.isObservationSuppressed(testWatchRuntime(t, eng)))
 }
 
 // Validates: R-2.10.30
@@ -4742,8 +4982,9 @@ func TestIsObservationSuppressed_OneShotMode_NoWatchState(t *testing.T) {
 	eng, _ := newTestEngine(t, &engineMockClient{})
 
 	// With nil watch (one-shot mode), should not panic and should return false.
-	assert.Nil(t, eng.watch, "watch state should be nil after NewEngine")
-	assert.False(t, eng.isObservationSuppressed())
+	_, ok := lookupTestWatchRuntime(eng)
+	assert.False(t, ok, "watch runtime should be nil after NewEngine")
+	assert.False(t, eng.isObservationSuppressed(nil))
 }
 
 // Validates: R-2.10.30, R-2.10.31
@@ -4758,11 +4999,11 @@ func TestIsObservationSuppressed_QuotaDoesNotSuppress(t *testing.T) {
 		IssueType:     synctypes.IssueQuotaExceeded,
 		TrialInterval: 5 * time.Minute,
 	})
-	assert.False(t, eng.isObservationSuppressed())
+	assert.False(t, eng.isObservationSuppressed(testWatchRuntime(t, eng)))
 }
 
 // ---------------------------------------------------------------------------
-// watchState nil invariant
+// watch runtime absence invariant
 // ---------------------------------------------------------------------------
 
 func TestWatchState_NilInOneShotMode(t *testing.T) {
@@ -4781,14 +5022,16 @@ func TestWatchState_NilInOneShotMode(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	// After construction, watch state must be nil.
-	assert.Nil(t, eng.watch, "watch state should be nil after NewEngine")
+	// After construction, the engine should not retain a watch runtime.
+	_, ok := lookupTestWatchRuntime(eng)
+	assert.False(t, ok, "watch runtime should be absent after NewEngine")
 
 	// After RunOnce, watch state must still be nil.
 	report, err := eng.RunOnce(ctx, synctypes.SyncDownloadOnly, synctypes.RunOpts{})
 	require.NoError(t, err)
 	assert.NotNil(t, report)
-	assert.Nil(t, eng.watch, "watch state should be nil after RunOnce")
+	_, ok = lookupTestWatchRuntime(eng)
+	assert.False(t, ok, "watch runtime should still be absent after RunOnce")
 }
 
 // ---------------------------------------------------------------------------
@@ -4858,16 +5101,17 @@ func TestLogFailureSummary_AggregatesAboveThreshold(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
+	flow := newEngineFlow(eng.Engine)
 
 	// Add 15 errors with the same message prefix — should aggregate.
 	for i := range 15 {
-		eng.syncErrors = append(eng.syncErrors, fmt.Errorf("quota_exceeded: upload failed for file %d", i))
+		flow.syncErrors = append(flow.syncErrors, fmt.Errorf("quota_exceeded: upload failed for file %d", i))
 	}
 
 	// Should not panic; clears syncErrors after logging.
-	eng.logFailureSummary()
+	flow.logFailureSummary()
 
-	assert.Empty(t, eng.syncErrors, "syncErrors should be cleared after summary")
+	assert.Empty(t, flow.syncErrors, "syncErrors should be cleared after summary")
 }
 
 // Validates: R-6.6.12
@@ -4875,11 +5119,12 @@ func TestLogFailureSummary_NoErrors(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
+	flow := newEngineFlow(eng.Engine)
 
 	// Should be a no-op with no errors.
-	eng.logFailureSummary()
+	flow.logFailureSummary()
 
-	assert.Empty(t, eng.syncErrors)
+	assert.Empty(t, flow.syncErrors)
 }
 
 // ---------------------------------------------------------------------------
@@ -4915,12 +5160,12 @@ func TestRetryPipeline_TransientFailure_IntegratedRetrier(t *testing.T) {
 	}, "", driveID))
 
 	// Add action to depGraph, send to readyCh, drain it.
-	ta := eng.depGraph.Add(&synctypes.Action{
+	ta := testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{
 		Type: synctypes.ActionDownload, Path: testPath, DriveID: driveID, ItemID: "item-abc",
 	}, 0, nil)
 	require.NotNil(t, ta)
-	eng.readyCh <- ta
-	readReady(t, eng.readyCh)
+	testWatchRuntime(t, eng).readyCh <- ta
+	readReady(t, testWatchRuntime(t, eng).readyCh)
 
 	// Use a nowFn that's 1 hour in the future so retrier sees rows as due.
 	futureTime := time.Now().Add(time.Hour)
@@ -4976,12 +5221,12 @@ func TestOneShotEngineLoop_Success_ClearsSyncFailure(t *testing.T) {
 	require.Len(t, rows, 1, "seeded failure should exist")
 
 	// Add action, send to readyCh, drain it.
-	ta := eng.depGraph.Add(&synctypes.Action{
+	ta := testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{
 		Type: synctypes.ActionDownload, Path: testPath, DriveID: driveID, ItemID: "item-ok",
 	}, 0, nil)
 	require.NotNil(t, ta)
-	eng.readyCh <- ta
-	readReady(t, eng.readyCh)
+	testWatchRuntime(t, eng).readyCh <- ta
+	readReady(t, testWatchRuntime(t, eng).readyCh)
 
 	// Send a success result — defensive clear removes the row.
 	results <- synctypes.WorkerResult{
@@ -4995,7 +5240,7 @@ func TestOneShotEngineLoop_Success_ClearsSyncFailure(t *testing.T) {
 		return err == nil && len(rows) == 0
 	}, time.Second, time.Millisecond, "sync_failures row should be cleared on success")
 
-	assert.Equal(t, 1, eng.succeeded, "succeeded counter")
+	assert.Equal(t, 1, testEngineFlow(t, eng).succeeded, "succeeded counter")
 }
 
 // ---------------------------------------------------------------------------
@@ -5026,7 +5271,8 @@ func TestClearFailureOnSuccess_RemovesFailureRow(t *testing.T) {
 	require.Len(t, rows, 1, "failure should be recorded")
 
 	// clearFailureOnSuccess should remove it.
-	eng.clearFailureOnSuccess(ctx, &synctypes.WorkerResult{
+	flow := newEngineFlow(eng.Engine)
+	flow.clearFailureOnSuccess(ctx, &synctypes.WorkerResult{
 		Path:       "clear-test/file.txt",
 		DriveID:    driveID,
 		ActionType: synctypes.ActionDownload,
@@ -5063,7 +5309,8 @@ func TestClearFailureOnSuccess_FallbackDriveID(t *testing.T) {
 
 	// Call clearFailureOnSuccess with a zero DriveID — should fall back
 	// to eng.driveID and still clear the failure.
-	eng.clearFailureOnSuccess(ctx, &synctypes.WorkerResult{
+	flow := newEngineFlow(eng.Engine)
+	flow.clearFailureOnSuccess(ctx, &synctypes.WorkerResult{
 		Path:       "fallback-test/file.txt",
 		DriveID:    driveid.ID{}, // zero value
 		ActionType: synctypes.ActionUpload,
@@ -5089,7 +5336,7 @@ func TestWaitForQuiescence_EmptyGraph(t *testing.T) {
 	ctx := t.Context()
 
 	// Empty graph — should return immediately.
-	err := eng.waitForQuiescence(ctx)
+	err := waitForQuiescenceForTest(t, eng, ctx)
 	require.NoError(t, err)
 }
 
@@ -5101,7 +5348,7 @@ func TestWaitForQuiescence_ContextCancel(t *testing.T) {
 	setupWatchEngine(t, eng)
 
 	// Add an action that will never complete — quiescence depends on cancel.
-	eng.depGraph.Add(&synctypes.Action{
+	testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{
 		Type: synctypes.ActionDownload, Path: "stuck.txt",
 		DriveID: driveid.New(engineTestDriveID), ItemID: "stuck-item",
 	}, 1, nil)
@@ -5109,7 +5356,7 @@ func TestWaitForQuiescence_ContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // cancel immediately
 
-	err := eng.waitForQuiescence(ctx)
+	err := waitForQuiescenceForTest(t, eng, ctx)
 	require.ErrorIs(t, err, context.Canceled)
 }
 
@@ -5134,20 +5381,12 @@ func TestBootstrapSync_NoChanges(t *testing.T) {
 	ctx := t.Context()
 
 	// Set up watch infrastructure manually (simulating initWatchInfra).
-	eng.watch = &watchState{
-		watchTimerState: watchTimerState{
-			retryTimerCh: make(chan struct{}, 1),
-		},
-		watchReconcileState: watchReconcileState{
-			reconcileResults: make(chan reconcileResult, 1),
-		},
-	}
-	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
-	eng.readyCh = make(chan *synctypes.TrackedAction, 1024)
-	eng.watch.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	rt.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
 
 	neverDone := make(chan struct{})
-	pool := syncexec.NewWorkerPool(eng.execCfg, eng.readyCh, neverDone, eng.baseline, eng.logger, 1024)
+	pool := syncexec.NewWorkerPool(eng.execCfg, rt.readyCh, neverDone, eng.baseline, eng.logger, 1024)
 	pool.Start(ctx, 1)
 	defer pool.Stop()
 
@@ -5159,7 +5398,7 @@ func TestBootstrapSync_NoChanges(t *testing.T) {
 	}
 
 	// No changes expected — bootstrapSync should return nil.
-	err := eng.bootstrapSync(ctx, synctypes.SyncBidirectional, pipe)
+	err := bootstrapSyncForTest(t, eng, ctx, synctypes.SyncBidirectional, pipe)
 	require.NoError(t, err)
 }
 
@@ -5188,20 +5427,12 @@ func TestBootstrapSync_WithChanges(t *testing.T) {
 	ctx := t.Context()
 
 	// Set up watch infrastructure manually.
-	eng.watch = &watchState{
-		watchTimerState: watchTimerState{
-			retryTimerCh: make(chan struct{}, 1),
-		},
-		watchReconcileState: watchReconcileState{
-			reconcileResults: make(chan reconcileResult, 1),
-		},
-	}
-	eng.depGraph = syncdispatch.NewDepGraph(eng.logger)
-	eng.readyCh = make(chan *synctypes.TrackedAction, 1024)
-	eng.watch.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	rt.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
 
 	neverDone := make(chan struct{})
-	pool := syncexec.NewWorkerPool(eng.execCfg, eng.readyCh, neverDone, eng.baseline, eng.logger, 1024)
+	pool := syncexec.NewWorkerPool(eng.execCfg, rt.readyCh, neverDone, eng.baseline, eng.logger, 1024)
 	pool.Start(ctx, 2)
 	defer pool.Stop()
 
@@ -5212,7 +5443,7 @@ func TestBootstrapSync_WithChanges(t *testing.T) {
 		mode:    synctypes.SyncDownloadOnly,
 	}
 
-	err := eng.bootstrapSync(ctx, synctypes.SyncDownloadOnly, pipe)
+	err := bootstrapSyncForTest(t, eng, ctx, synctypes.SyncDownloadOnly, pipe)
 	require.NoError(t, err)
 
 	// Verify the file was downloaded.
@@ -5220,5 +5451,5 @@ func TestBootstrapSync_WithChanges(t *testing.T) {
 	require.NoError(t, statErr, "newfile.txt should have been downloaded")
 
 	// syncdispatch.DepGraph should be empty — all actions completed.
-	assert.Equal(t, 0, eng.depGraph.InFlightCount())
+	assert.Equal(t, 0, rt.depGraph.InFlightCount())
 }

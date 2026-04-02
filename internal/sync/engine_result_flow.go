@@ -16,86 +16,99 @@ type resultContext struct {
 
 // processWorkerResult replaces processWorkerResult + routeReadyActions with
 // failure-aware dependent dispatch.
-func (e *Engine) processWorkerResult(ctx context.Context, r *synctypes.WorkerResult, bl *synctypes.Baseline) []*synctypes.TrackedAction {
+func (flow *engineFlow) processWorkerResult(
+	ctx context.Context,
+	watch *watchRuntime,
+	r *synctypes.WorkerResult,
+	bl *synctypes.Baseline,
+) []*synctypes.TrackedAction {
 	if r.IsTrial && !r.TrialScopeKey.IsZero() {
-		return e.processResult(ctx, resultContext{
+		return flow.processResult(ctx, watch, resultContext{
 			isTrial:       true,
 			trialScopeKey: r.TrialScopeKey,
 		}, r, bl)
 	}
 
-	return e.processResult(ctx, resultContext{}, r, bl)
+	return flow.processResult(ctx, watch, resultContext{}, r, bl)
 }
 
-func (e *Engine) processResult(
+func (flow *engineFlow) processResult(
 	ctx context.Context,
+	watch *watchRuntime,
 	resultCtx resultContext,
 	r *synctypes.WorkerResult,
 	bl *synctypes.Baseline,
 ) []*synctypes.TrackedAction {
 	decision := classifyResult(r)
-	ready, _ := e.depGraph.Complete(r.ActionID)
+	ready, _ := flow.depGraph.Complete(r.ActionID)
 
 	if resultCtx.isTrial {
-		return e.processTrialDecision(ctx, resultCtx.trialScopeKey, decision, ready, r)
+		return flow.processTrialDecision(ctx, watch, resultCtx.trialScopeKey, decision, ready, r)
 	}
 
-	return e.processNormalDecision(ctx, decision, ready, r, bl)
+	return flow.processNormalDecision(ctx, watch, decision, ready, r, bl)
 }
 
 // applyResultDecision handles per-class side effects after dependent routing.
-func (e *Engine) applyResultDecision(ctx context.Context, decision ResultDecision, r *synctypes.WorkerResult, bl *synctypes.Baseline) {
+func (flow *engineFlow) applyResultDecision(
+	ctx context.Context,
+	watch *watchRuntime,
+	decision ResultDecision,
+	r *synctypes.WorkerResult,
+	bl *synctypes.Baseline,
+) {
 	switch decision.Class {
 	case resultSuccess:
 		if decision.RecordSuccess {
-			e.succeeded++
-			e.clearFailureOnSuccess(ctx, r)
-			if e.watch != nil {
-				e.watch.scopeState.RecordSuccess(r)
+			flow.succeeded++
+			flow.clearFailureOnSuccess(ctx, r)
+			if watch != nil {
+				watch.scopeState.RecordSuccess(r)
 			}
 		}
 	case resultSkip, resultShutdown, resultRequeue, resultScopeBlock, resultFatal:
 	}
 
-	if e.applyPermissionDecisionFlow(ctx, decision, r, bl) {
-		e.recordError(r)
+	if flow.applyPermissionDecisionFlow(ctx, watch, decision, r, bl) {
+		flow.recordError(r)
 		return
 	}
 
-	e.applyFailureRecordMode(ctx, decision.RecordMode, r)
+	flow.applyFailureRecordMode(ctx, decision.RecordMode, r)
 
 	if decision.RunScopeDetection {
-		e.feedScopeDetection(ctx, r)
+		flow.feedScopeDetection(ctx, watch, r)
 	} else if decision.Class == resultScopeBlock && !decision.ScopeKey.IsZero() {
-		e.applyScopeBlock(ctx, synctypes.ScopeUpdateResult{
+		flow.applyScopeBlock(ctx, watch, synctypes.ScopeUpdateResult{
 			Block:     true,
 			ScopeKey:  decision.ScopeKey,
 			IssueType: decision.ScopeKey.IssueType(),
 		})
 	}
 
-	if decision.Class == resultScopeBlock {
-		e.armTrialTimer()
+	if decision.Class == resultScopeBlock && watch != nil {
+		watch.armTrialTimer()
 	}
-	if decision.RecordMode == recordFailureReconcile {
-		e.armRetryTimer(ctx)
+	if decision.RecordMode == recordFailureReconcile && watch != nil {
+		watch.armRetryTimer(ctx)
 	}
 
 	if decision.Class != resultShutdown && decision.Class != resultSuccess {
-		e.recordError(r)
+		flow.recordError(r)
 	}
 }
 
 // processTrialResult handles trial results using the engine-owned result flow.
-func (e *Engine) processTrialResult(ctx context.Context, r *synctypes.WorkerResult) {
-	e.processResult(ctx, resultContext{
+func (flow *engineFlow) processTrialResult(ctx context.Context, watch *watchRuntime, r *synctypes.WorkerResult) {
+	flow.processResult(ctx, watch, resultContext{
 		isTrial:       true,
 		trialScopeKey: r.TrialScopeKey,
 	}, r, nil)
 }
 
-func (e *Engine) processNormalDecision(
+func (flow *engineFlow) processNormalDecision(
 	ctx context.Context,
+	watch *watchRuntime,
 	decision ResultDecision,
 	ready []*synctypes.TrackedAction,
 	r *synctypes.WorkerResult,
@@ -105,55 +118,59 @@ func (e *Engine) processNormalDecision(
 
 	switch decision.Class {
 	case resultSuccess:
-		dispatched = e.admitReady(ctx, ready)
+		dispatched = flow.admitReady(ctx, watch, ready)
 	case resultShutdown:
-		e.completeSubtree(ready)
+		flow.completeSubtree(ready)
 	case resultRequeue, resultScopeBlock, resultSkip, resultFatal:
-		e.cascadeFailAndComplete(ctx, ready, r)
+		flow.cascadeFailAndComplete(ctx, ready, r)
 	}
 
-	e.applyResultDecision(ctx, decision, r, bl)
+	flow.applyResultDecision(ctx, watch, decision, r, bl)
 
 	return dispatched
 }
 
-func (e *Engine) processTrialDecision(
+func (flow *engineFlow) processTrialDecision(
 	ctx context.Context,
+	watch *watchRuntime,
 	trialScopeKey synctypes.ScopeKey,
 	decision ResultDecision,
 	ready []*synctypes.TrackedAction,
 	r *synctypes.WorkerResult,
 ) []*synctypes.TrackedAction {
 	if decision.Class == resultSuccess {
-		if err := e.releaseScope(ctx, trialScopeKey); err != nil {
-			e.logger.Warn("processTrialResult: failed to release scope",
+		if err := flow.releaseScope(ctx, watch, trialScopeKey); err != nil {
+			flow.engine.logger.Warn("processTrialResult: failed to release scope",
 				slog.String("scope_key", trialScopeKey.String()),
 				slog.String("error", err.Error()),
 			)
 		}
-		e.succeeded++
-		if e.watch != nil {
-			e.watch.scopeState.RecordSuccess(r)
+		flow.succeeded++
+		if watch != nil {
+			watch.scopeState.RecordSuccess(r)
 		}
-		return e.admitReady(ctx, ready)
+		return flow.admitReady(ctx, watch, ready)
 	}
 
 	if decision.Class == resultShutdown {
-		e.completeSubtree(ready)
+		flow.completeSubtree(ready)
 		return nil
 	}
 
-	e.extendScopeTrial(ctx, trialScopeKey, r.RetryAfter)
-	e.applyFailureRecordMode(ctx, decision.RecordMode, r)
-	e.recordError(r)
-	e.cascadeFailAndComplete(ctx, ready, r)
-	e.armRetryTimer(ctx)
+	flow.extendScopeTrial(ctx, watch, trialScopeKey, r.RetryAfter)
+	flow.applyFailureRecordMode(ctx, decision.RecordMode, r)
+	flow.recordError(r)
+	flow.cascadeFailAndComplete(ctx, ready, r)
+	if watch != nil {
+		watch.armRetryTimer(ctx)
+	}
 
 	return nil
 }
 
-func (e *Engine) applyPermissionDecisionFlow(
+func (flow *engineFlow) applyPermissionDecisionFlow(
 	ctx context.Context,
+	watch *watchRuntime,
 	decision ResultDecision,
 	r *synctypes.WorkerResult,
 	bl *synctypes.Baseline,
@@ -162,19 +179,21 @@ func (e *Engine) applyPermissionDecisionFlow(
 	case permissionFlowNone:
 		return false
 	case permissionFlowRemote403:
-		if !e.permHandler.HasPermChecker() {
+		if !flow.engine.permHandler.HasPermChecker() {
 			return false
 		}
-		decision := e.permHandler.handle403(ctx, bl, r.Path, e.getShortcuts())
-		return e.applyPermissionCheckDecision(
+		decision := flow.engine.permHandler.handle403(ctx, bl, r.Path, flow.getShortcuts())
+		return flow.applyPermissionCheckDecision(
 			ctx,
+			watch,
 			permissionFlowRemote403,
 			&decision,
 		)
 	case permissionFlowLocalPermission:
-		decision := e.permHandler.handleLocalPermission(ctx, r)
-		return e.applyPermissionCheckDecision(
+		decision := flow.engine.permHandler.handleLocalPermission(ctx, r)
+		return flow.applyPermissionCheckDecision(
 			ctx,
+			watch,
 			permissionFlowLocalPermission,
 			&decision,
 		)
@@ -185,12 +204,12 @@ func (e *Engine) applyPermissionDecisionFlow(
 
 // recordFailure writes a failure to sync_failures with the given delay
 // function for computing next_retry_at.
-func (e *Engine) recordFailure(ctx context.Context, r *synctypes.WorkerResult, delayFn func(int) time.Duration) {
+func (flow *engineFlow) recordFailure(ctx context.Context, r *synctypes.WorkerResult, delayFn func(int) time.Duration) {
 	direction := directionFromAction(r.ActionType)
 
 	driveID := r.DriveID
 	if driveID.String() == "" {
-		driveID = e.driveID
+		driveID = flow.engine.driveID
 	}
 
 	category := synctypes.CategoryTransient
@@ -201,7 +220,7 @@ func (e *Engine) recordFailure(ctx context.Context, r *synctypes.WorkerResult, d
 	issueType := issueTypeForHTTPStatus(r.HTTPStatus, r.Err)
 	scopeKey := deriveScopeKey(r)
 
-	if recErr := e.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+	if recErr := flow.engine.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       r.Path,
 		DriveID:    driveID,
 		Direction:  direction,
@@ -212,7 +231,7 @@ func (e *Engine) recordFailure(ctx context.Context, r *synctypes.WorkerResult, d
 		HTTPStatus: r.HTTPStatus,
 		ScopeKey:   scopeKey,
 	}, delayFn); recErr != nil {
-		e.logger.Warn("failed to record failure",
+		flow.engine.logger.Warn("failed to record failure",
 			slog.String("path", r.Path),
 			slog.String("error", recErr.Error()),
 		)
@@ -220,7 +239,7 @@ func (e *Engine) recordFailure(ctx context.Context, r *synctypes.WorkerResult, d
 		return
 	}
 
-	e.logger.Debug("sync failure recorded",
+	flow.engine.logger.Debug("sync failure recorded",
 		slog.String("path", r.Path),
 		slog.String("action", r.ActionType.String()),
 		slog.Int("http_status", r.HTTPStatus),

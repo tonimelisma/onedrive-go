@@ -84,8 +84,15 @@ func (p *SessionProvider) Session(ctx context.Context, rd *config.ResolvedDrive)
 		)
 	}
 
-	meta := graph.NewClient(graph.DefaultBaseURL, p.metaHTTP, ts, p.logger, p.userAgent)
-	transfer := graph.NewClient(graph.DefaultBaseURL, p.transferHTTP, ts, p.logger, p.userAgent)
+	meta, err := graph.NewClient(graph.DefaultBaseURL, p.metaHTTP, ts, p.logger, p.userAgent)
+	if err != nil {
+		return nil, fmt.Errorf("create metadata graph client: %w", err)
+	}
+
+	transfer, err := graph.NewClient(graph.DefaultBaseURL, p.transferHTTP, ts, p.logger, p.userAgent)
+	if err != nil {
+		return nil, fmt.Errorf("create transfer graph client: %w", err)
+	}
 
 	p.logger.Debug("session created",
 		slog.String("drive_id", rd.DriveID.String()),
