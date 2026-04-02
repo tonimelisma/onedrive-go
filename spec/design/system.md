@@ -7,10 +7,11 @@ Implements: R-6.2.1 [verified], R-6.2.2 [verified], R-6.3.1 [verified]
 Implements: R-6.1.4 [verified], R-6.1.5 [verified], R-6.9.1 [verified]
 
 ```
-.                             Root package (Cobra CLI commands)
+.                             Root package (thin process entrypoint)
 cmd/
   devtool/                    Repo-owned verification and worktree bootstrap tooling
 internal/
+  cli/                        Cobra command tree, CLI bootstrap, output formatting, command handlers
   config/                     TOML config, drive sections, XDG paths, override chain
   driveid/                    Type-safe drive identity: ID, CanonicalID, ItemKey (leaf, stdlib-only)
   driveops/                   Authenticated drive access: sessions, transfers, hashing
@@ -32,9 +33,9 @@ testutil/                     Shared test helpers (not production code)
 ## Dependency Rules
 
 ```
-root pkg (CLI) → internal/driveops/ → internal/graph/ → pkg/*
-                 internal/multisync/ → internal/sync/ → internal/driveops/
-                 internal/config/  → internal/driveid/
+root pkg → internal/cli/ → internal/driveops/ → internal/graph/ → pkg/*
+                         → internal/multisync/ → internal/sync/ → internal/driveops/
+                         → internal/config/  → internal/driveid/
 ```
 
 - No cycles. `driveops` does NOT import `sync`. `graph` does NOT import `config`.
@@ -114,4 +115,4 @@ Static verification is a first-class architectural constraint, not a best-effort
 - Degraded-mode behavior guarantees documented (what happens when components fail). [planned]
 - Evaluate `sync` → `graph` error coupling — decouple via interface if warranted. [planned]
 - Evaluate deeper `internal/sync/` runtime package splitting after the control-plane split. [planned]
-- Evaluate CLI structure scaling — 21 files / 4k+ lines in root package, consider domain grouping. [planned]
+- Evaluate deeper `internal/cli/` service extraction and domain grouping now that the root package is thin. [planned]

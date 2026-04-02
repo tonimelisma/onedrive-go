@@ -1,16 +1,15 @@
 package main
 
 import (
-	"errors"
 	"os"
+
+	"github.com/tonimelisma/onedrive-go/internal/cli"
 )
 
-func main() {
-	if err := newRootCmd().Execute(); err != nil {
-		if errors.Is(err, errVerifyMismatch) {
-			os.Exit(1)
-		}
+func run(args []string) int {
+	return cli.Main(args)
+}
 
-		exitOnError(err)
-	}
+func main() {
+	os.Exit(run(os.Args[1:]))
 }
