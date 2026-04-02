@@ -94,9 +94,9 @@ After token refresh, `/me/drives` returns HTTP 403 with Graph code `accessDenied
 
 Webhook subscription renewal (PATCH to `/v1.0/subscriptions/{id}`) returns HTTP 308 (Permanent Redirect) without a `Location` header, violating RFC 7538. Observed on Personal accounts migrated to the new backend, specifically in the West Europe data center. Filed as [onedrive-api-docs#1895](https://github.com/OneDrive/onedrive-api-docs/issues/1895).
 
-### Personal Async Copy Monitor Host
+### Personal Async Copy And Upload Hosts
 
-Async copy responses on Personal accounts can return monitor URLs on `*.microsoftpersonalcontent.com` rather than Graph or SharePoint hosts. The client treats this host family as trusted for copy monitor polling only. This host is not automatically trusted for upload-session URLs or Graph base URLs without separate evidence.
+Personal-account pre-auth URLs can use `*.microsoftpersonalcontent.com` rather than Graph or SharePoint hosts. This is now observed on both async-copy monitor URLs and upload-session URLs. The client treats this host family as trusted for those pre-auth flows only. This host is still not trusted for Graph base URLs.
 
 ### Historical HTTP 400 "ObjectHandle is Invalid" Incident
 
