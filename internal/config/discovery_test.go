@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -39,6 +40,16 @@ func TestDiscoverFilesForEmail_EmptyInputs(t *testing.T) {
 
 	assert.Nil(t, discoverFilesForEmail("", "state_", ".db", "a@b.com", slog.Default()))
 	assert.Nil(t, discoverFilesForEmail(dir, "state_", ".db", "", slog.Default()))
+}
+
+func TestDiscoverCIDFiles_ReadDirError(t *testing.T) {
+	ids := discoverCIDFilesWithIO("/missing", "token_", slog.Default(), configIO{
+		readManagedDir: func(path string) ([]os.DirEntry, error) {
+			return nil, errors.New("boom")
+		},
+	})
+
+	assert.Nil(t, ids)
 }
 
 func TestContainsEmailBoundary_EdgeCases(t *testing.T) {
