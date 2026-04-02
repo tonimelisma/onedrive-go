@@ -15,33 +15,33 @@ import (
 // the database since the last check. Uses PRAGMA data_version — changes every
 // time another connection commits a write. The engine's own writes don't
 // change it. Returns true if the version advanced.
-func (e *Engine) externalDBChanged(ctx context.Context) bool {
-	dv, err := e.baseline.DataVersion(ctx)
+func (rt *watchRuntime) externalDBChanged(ctx context.Context) bool {
+	dv, err := rt.engine.baseline.DataVersion(ctx)
 	if err != nil {
-		e.logger.Warn("failed to check data_version",
+		rt.engine.logger.Warn("failed to check data_version",
 			slog.String("error", err.Error()),
 		)
 
 		return false
 	}
 
-	if dv == e.watch.lastDataVersion {
+	if dv == rt.lastDataVersion {
 		return false
 	}
 
-	e.watch.lastDataVersion = dv
+	rt.lastDataVersion = dv
 
 	return true
 }
 
 // handleRecheckTick processes a recheck timer tick: detects external DB
 // changes (e.g., `issues clear`) and logs a watch summary.
-func (e *Engine) handleRecheckTick(ctx context.Context) {
-	if e.externalDBChanged(ctx) {
-		e.handleExternalChanges(ctx)
+func (rt *watchRuntime) handleRecheckTick(ctx context.Context) {
+	if rt.externalDBChanged(ctx) {
+		rt.handleExternalChanges(ctx)
 	}
 
-	e.logWatchSummary(ctx)
+	rt.logWatchSummary(ctx)
 }
 
 // handleExternalChanges reacts to external DB modifications detected via
@@ -49,11 +49,11 @@ func (e *Engine) handleRecheckTick(ctx context.Context) {
 // counter is held but all big_delete_held rows have been cleared (via
 // `issues clear`), releases the counter so deletes resume on the next
 // observation cycle.
-func (e *Engine) handleExternalChanges(ctx context.Context) {
-	if e.watch != nil && e.watch.deleteCounter != nil && e.watch.deleteCounter.IsHeld() {
-		rows, err := e.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueBigDeleteHeld)
+func (rt *watchRuntime) handleExternalChanges(ctx context.Context) {
+	if rt.deleteCounter != nil && rt.deleteCounter.IsHeld() {
+		rows, err := rt.engine.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueBigDeleteHeld)
 		if err != nil {
-			e.logger.Warn("failed to check big-delete-held entries",
+			rt.engine.logger.Warn("failed to check big-delete-held entries",
 				slog.String("error", err.Error()),
 			)
 
@@ -61,40 +61,36 @@ func (e *Engine) handleExternalChanges(ctx context.Context) {
 		}
 
 		if len(rows) == 0 {
-			e.watch.deleteCounter.Release()
-			e.logger.Info("big-delete protection cleared by user")
+			rt.deleteCounter.Release()
+			rt.engine.logger.Info("big-delete protection cleared by user")
 		}
 	}
 
-	e.clearResolvedPermissionScopes(ctx)
-	e.mustAssertScopeInvariants(ctx, "handle external changes")
+	rt.clearResolvedPermissionScopes(ctx)
+	rt.mustAssertScopeInvariants(ctx, rt, "handle external changes")
 }
 
 // clearResolvedPermissionScopes checks if any permission scope blocks have had
 // their sync_failures cleared (by user action via CLI), and releases the
 // corresponding scope blocks.
-func (e *Engine) clearResolvedPermissionScopes(ctx context.Context) {
-	if e.watch == nil {
-		return
-	}
-
-	scopeKeys := e.scopeBlockKeys()
+func (rt *watchRuntime) clearResolvedPermissionScopes(ctx context.Context) {
+	scopeKeys := rt.scopeBlockKeys(rt)
 	if len(scopeKeys) == 0 {
 		return
 	}
 
-	localIssues, err := e.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueLocalPermissionDenied)
+	localIssues, err := rt.engine.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueLocalPermissionDenied)
 	if err != nil {
-		e.logger.Warn("failed to check local permission failures",
+		rt.engine.logger.Warn("failed to check local permission failures",
 			slog.String("error", err.Error()),
 		)
 
 		return
 	}
 
-	remoteIssues, err := e.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
+	remoteIssues, err := rt.engine.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
 	if err != nil {
-		e.logger.Warn("failed to check remote permission failures",
+		rt.engine.logger.Warn("failed to check remote permission failures",
 			slog.String("error", err.Error()),
 		)
 
@@ -115,15 +111,15 @@ func (e *Engine) clearResolvedPermissionScopes(ctx context.Context) {
 
 	for _, key := range scopeKeys {
 		if (key.IsPermDir() || key.IsPermRemote()) && !activeScopes[key] {
-			if err := e.releaseScope(ctx, key); err != nil {
-				e.logger.Warn("failed to release externally-cleared permission scope",
+			if err := rt.releaseScope(ctx, rt, key); err != nil {
+				rt.engine.logger.Warn("failed to release externally-cleared permission scope",
 					slog.String("scope", key.String()),
 					slog.String("error", err.Error()),
 				)
 				continue
 			}
 
-			e.logger.Info("permission scope block cleared by user",
+			rt.engine.logger.Info("permission scope block cleared by user",
 				slog.String("scope", key.String()),
 			)
 		}
@@ -133,21 +129,21 @@ func (e *Engine) clearResolvedPermissionScopes(ctx context.Context) {
 // logWatchSummary logs a periodic one-liner summary of actionable issues
 // in watch mode. Only logs when the count changes since the last summary
 // to avoid noisy repeated output.
-func (e *Engine) logWatchSummary(ctx context.Context) {
-	issues, err := e.baseline.ListActionableFailures(ctx)
+func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
+	issues, err := rt.engine.baseline.ListActionableFailures(ctx)
 	if err != nil || len(issues) == 0 {
-		if e.watch.lastSummaryTotal != 0 {
-			e.watch.lastSummaryTotal = 0
+		if rt.lastSummaryTotal != 0 {
+			rt.lastSummaryTotal = 0
 		}
 
 		return
 	}
 
-	if len(issues) == e.watch.lastSummaryTotal {
+	if len(issues) == rt.lastSummaryTotal {
 		return
 	}
 
-	e.watch.lastSummaryTotal = len(issues)
+	rt.lastSummaryTotal = len(issues)
 
 	counts := make(map[string]int)
 	for i := range issues {
@@ -161,7 +157,7 @@ func (e *Engine) logWatchSummary(ctx context.Context) {
 
 	sort.Strings(parts)
 
-	e.logger.Warn("actionable issues",
+	rt.engine.logger.Warn("actionable issues",
 		slog.Int("total", len(issues)),
 		slog.String("breakdown", strings.Join(parts, ", ")),
 	)
@@ -169,7 +165,9 @@ func (e *Engine) logWatchSummary(ctx context.Context) {
 
 // recordSkippedItems records observation-time rejections (invalid names,
 // path too long, file too large) as actionable failures in sync_failures.
-func (e *Engine) recordSkippedItems(ctx context.Context, skipped []synctypes.SkippedItem) {
+func (flow *engineFlow) recordSkippedItems(ctx context.Context, skipped []synctypes.SkippedItem) {
+	eng := flow.engine
+
 	if len(skipped) == 0 {
 		return
 	}
@@ -191,14 +189,14 @@ func (e *Engine) recordSkippedItems(ctx context.Context, skipped []synctypes.Ski
 				samples = append(samples, items[i].Path)
 			}
 
-			e.logger.Warn("observation filter: skipped files",
+			eng.logger.Warn("observation filter: skipped files",
 				slog.String("issue_type", reason),
 				slog.Int("count", len(items)),
 				slog.Any("sample_paths", samples),
 			)
 		} else {
 			for i := range items {
-				e.logger.Warn("observation filter: skipped file",
+				eng.logger.Warn("observation filter: skipped file",
 					slog.String("path", items[i].Path),
 					slog.String("issue_type", reason),
 					slog.String("detail", items[i].Detail),
@@ -210,7 +208,7 @@ func (e *Engine) recordSkippedItems(ctx context.Context, skipped []synctypes.Ski
 		for i := range items {
 			failures[i] = synctypes.ActionableFailure{
 				Path:      items[i].Path,
-				DriveID:   e.driveID,
+				DriveID:   eng.driveID,
 				Direction: synctypes.DirectionUpload,
 				IssueType: reason,
 				Error:     items[i].Detail,
@@ -218,8 +216,8 @@ func (e *Engine) recordSkippedItems(ctx context.Context, skipped []synctypes.Ski
 			}
 		}
 
-		if err := e.baseline.UpsertActionableFailures(ctx, failures); err != nil {
-			e.logger.Error("failed to record skipped items",
+		if err := eng.baseline.UpsertActionableFailures(ctx, failures); err != nil {
+			eng.logger.Error("failed to record skipped items",
 				slog.String("issue_type", reason),
 				slog.Int("count", len(failures)),
 				slog.String("error", err.Error()),
@@ -230,7 +228,9 @@ func (e *Engine) recordSkippedItems(ctx context.Context, skipped []synctypes.Ski
 
 // clearResolvedSkippedItems removes sync_failures entries for scanner-detectable
 // issue types that are no longer present in the current scan.
-func (e *Engine) clearResolvedSkippedItems(ctx context.Context, skipped []synctypes.SkippedItem) {
+func (flow *engineFlow) clearResolvedSkippedItems(ctx context.Context, skipped []synctypes.SkippedItem) {
+	eng := flow.engine
+
 	currentByType := make(map[string][]string)
 	for i := range skipped {
 		currentByType[skipped[i].Reason] = append(currentByType[skipped[i].Reason], skipped[i].Path)
@@ -242,8 +242,8 @@ func (e *Engine) clearResolvedSkippedItems(ctx context.Context, skipped []syncty
 	}
 	for _, issueType := range scannerIssueTypes {
 		paths := currentByType[issueType]
-		if err := e.baseline.ClearResolvedActionableFailures(ctx, issueType, paths); err != nil {
-			e.logger.Error("failed to clear resolved failures",
+		if err := eng.baseline.ClearResolvedActionableFailures(ctx, issueType, paths); err != nil {
+			eng.logger.Error("failed to clear resolved failures",
 				slog.String("issue_type", issueType),
 				slog.String("error", err.Error()),
 			)
@@ -308,60 +308,56 @@ func (e *Engine) initReconcileTicker(opts synctypes.WatchOpts) (<-chan time.Time
 // while reconciliation runs. The goroutine sends a reconcileResult back to the
 // watch loop, and the loop applies shortcut snapshot updates plus buffer
 // injection from its own goroutine.
-func (e *Engine) runFullReconciliationAsync(ctx context.Context, bl *synctypes.Baseline) {
-	if e.watch == nil {
+func (rt *watchRuntime) runFullReconciliationAsync(ctx context.Context, bl *synctypes.Baseline) {
+	if rt.reconcileActive {
+		rt.engine.logger.Info("full reconciliation skipped — previous still running")
 		return
 	}
-
-	if e.watch.reconcileActive {
-		e.logger.Info("full reconciliation skipped — previous still running")
-		return
-	}
-	e.watch.reconcileActive = true
+	rt.reconcileActive = true
 
 	go func() {
 		result := reconcileResult{}
 
 		start := time.Now()
-		e.logger.Info("periodic full reconciliation starting")
+		rt.engine.logger.Info("periodic full reconciliation starting")
 
-		events, deltaToken, err := e.observeRemoteFull(ctx, bl)
+		events, deltaToken, err := rt.observeRemoteFull(ctx, bl)
 		if err != nil {
 			if ctx.Err() == nil {
-				e.logger.Error("full reconciliation failed",
+				rt.engine.logger.Error("full reconciliation failed",
 					slog.String("error", err.Error()),
 				)
 			}
-			e.finishFullReconciliation(ctx, result)
+			rt.finishFullReconciliation(ctx, result)
 			return
 		}
 
-		observed := changeEventsToObservedItems(e.logger, events)
-		if commitErr := e.baseline.CommitObservation(
-			ctx, observed, deltaToken, e.driveID,
+		observed := changeEventsToObservedItems(rt.engine.logger, events)
+		if commitErr := rt.engine.baseline.CommitObservation(
+			ctx, observed, deltaToken, rt.engine.driveID,
 		); commitErr != nil {
-			e.logger.Error("failed to commit full reconciliation observations",
+			rt.engine.logger.Error("failed to commit full reconciliation observations",
 				slog.String("error", commitErr.Error()),
 			)
-			e.finishFullReconciliation(ctx, result)
+			rt.finishFullReconciliation(ctx, result)
 			return
 		}
 
-		if e.watch.afterReconcileCommit != nil {
-			e.watch.afterReconcileCommit()
+		if rt.afterReconcileCommit != nil {
+			rt.afterReconcileCommit()
 		}
 
 		if ctx.Err() != nil {
-			e.logger.Info("full reconciliation: observations committed, stopping for shutdown")
-			e.finishFullReconciliation(ctx, result)
+			rt.engine.logger.Info("full reconciliation: observations committed, stopping for shutdown")
+			rt.finishFullReconciliation(ctx, result)
 			return
 		}
 
 		events = filterOutShortcuts(events)
 
-		shortcutEvents, scErr := e.reconcileShortcutScopes(ctx, bl)
+		shortcutEvents, scErr := rt.reconcileShortcutScopes(ctx, bl)
 		if scErr != nil {
-			e.logger.Warn("shortcut reconciliation failed during full reconciliation",
+			rt.engine.logger.Warn("shortcut reconciliation failed during full reconciliation",
 				slog.String("error", scErr.Error()),
 			)
 		}
@@ -369,53 +365,45 @@ func (e *Engine) runFullReconciliationAsync(ctx context.Context, bl *synctypes.B
 		events = append(events, shortcutEvents...)
 
 		if len(events) == 0 {
-			e.logger.Info("periodic full reconciliation complete: no changes",
+			rt.engine.logger.Info("periodic full reconciliation complete: no changes",
 				slog.Duration("duration", time.Since(start)),
 			)
-			e.finishFullReconciliation(ctx, result)
+			rt.finishFullReconciliation(ctx, result)
 			return
 		}
 		result.events = events
-		if refreshed, refreshErr := e.baseline.ListShortcuts(ctx); refreshErr == nil {
+		if refreshed, refreshErr := rt.engine.baseline.ListShortcuts(ctx); refreshErr == nil {
 			result.shortcuts = refreshed
 		}
 
-		e.logger.Info("periodic full reconciliation complete",
+		rt.engine.logger.Info("periodic full reconciliation complete",
 			slog.Int("events", len(events)),
 			slog.Duration("duration", time.Since(start)),
 		)
 
-		e.finishFullReconciliation(ctx, result)
+		rt.finishFullReconciliation(ctx, result)
 	}()
 }
 
-func (e *Engine) finishFullReconciliation(ctx context.Context, result reconcileResult) {
-	if e.watch == nil {
-		return
-	}
-
+func (rt *watchRuntime) finishFullReconciliation(ctx context.Context, result reconcileResult) {
 	select {
-	case e.watch.reconcileResults <- result:
+	case rt.reconcileResults <- result:
 	case <-ctx.Done():
 		select {
-		case e.watch.reconcileResults <- result:
+		case rt.reconcileResults <- result:
 		default:
 		}
 	}
 }
 
-func (e *Engine) applyReconcileResult(result reconcileResult) {
-	if e.watch == nil {
-		return
-	}
-
-	e.watch.reconcileActive = false
+func (rt *watchRuntime) applyReconcileResult(result reconcileResult) {
+	rt.reconcileActive = false
 
 	if len(result.shortcuts) > 0 {
-		e.setShortcuts(result.shortcuts)
+		rt.setShortcuts(result.shortcuts)
 	}
 
 	for i := range result.events {
-		e.watch.buf.Add(&result.events[i])
+		rt.buf.Add(&result.events[i])
 	}
 }

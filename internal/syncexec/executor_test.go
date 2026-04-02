@@ -16,10 +16,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
-	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 const (
@@ -292,7 +292,7 @@ func TestExecutor_Download_Success(t *testing.T) {
 	o := e.ExecuteDownload(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
 
-	data, err := trustedpath.ReadFile(filepath.Join(syncRoot, "greetings.txt"))
+	data, err := localpath.ReadFile(filepath.Join(syncRoot, "greetings.txt"))
 	require.NoError(t, err, "file not created")
 	assert.Equal(t, execFileContent, string(data))
 
@@ -424,7 +424,7 @@ func TestExecutor_Download_HashMismatch_Retries(t *testing.T) {
 	assert.Equal(t, correctHash, o.RemoteHash)
 
 	// File should contain correct content.
-	data, err := trustedpath.ReadFile(filepath.Join(syncRoot, "hash-retry.txt"))
+	data, err := localpath.ReadFile(filepath.Join(syncRoot, "hash-retry.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, execHelloWorldContent, string(data))
 }
@@ -881,7 +881,7 @@ func TestExecutor_Conflict_EditEdit_KeepBoth(t *testing.T) {
 	assert.Equal(t, "edit_edit", o.ConflictType)
 
 	// Original path should have remote content.
-	data, err := trustedpath.ReadFile(filepath.Join(syncRoot, "exec-conflict.txt"))
+	data, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-conflict.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, "remote version", string(data))
 
@@ -892,7 +892,7 @@ func TestExecutor_Conflict_EditEdit_KeepBoth(t *testing.T) {
 
 	for _, entry := range entries {
 		if strings.Contains(entry.Name(), ".conflict-") {
-			conflictData, readErr := trustedpath.ReadFile(filepath.Join(syncRoot, entry.Name()))
+			conflictData, readErr := localpath.ReadFile(filepath.Join(syncRoot, entry.Name()))
 			require.NoError(t, readErr)
 			if string(conflictData) == "local version" {
 				conflictFound = true
@@ -948,7 +948,7 @@ func TestExecutor_Conflict_EditDelete_AutoResolve(t *testing.T) {
 	assert.Equal(t, "new-item", o.ItemID)
 
 	// Local file should still exist with original content (not modified by upload).
-	data, err := trustedpath.ReadFile(filepath.Join(syncRoot, "exec-ed-file.txt"))
+	data, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-ed-file.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, "locally modified data", string(data))
 }
@@ -1156,7 +1156,7 @@ func TestExecutor_Conflict_DownloadFails_RestoresLocal(t *testing.T) {
 	requireOutcomeFailure(t, &o)
 
 	// Original file should be restored after download failure.
-	data, err := trustedpath.ReadFile(filepath.Join(syncRoot, "exec-restore.txt"))
+	data, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-restore.txt"))
 	require.NoError(t, err, "original file should have been restored")
 	assert.Equal(t, originalContent, string(data))
 }

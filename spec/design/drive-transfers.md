@@ -26,7 +26,7 @@ Implements: R-6.2.3 [verified]
 
 ## SessionStore
 
-File-based upload session persistence. Each session is a JSON file in the data directory containing the upload URL, byte offset, file hash, and expiry. Atomic writes (write-to-temp + rename). On resume, local file hash is recomputed — if it differs from the stored hash, the session is discarded.
+File-based upload session persistence. Each session is a JSON file in the data directory containing the upload URL, byte offset, file hash, and expiry. Managed-state access goes through `internal/fsroot` so directory creation, temp files, chmod, fsync, and rename stay under one root capability. On resume, local file hash is recomputed — if it differs from the stored hash, the session is discarded.
 
 ## Transfer Interfaces
 
@@ -59,7 +59,7 @@ Design properties:
 ## Design Constraints
 
 - `Upload()` accepts `io.ReaderAt` (not `io.Reader`): enables retry-safe uploads without re-opening the file. `io.NewSectionReader` creates independent readers for each chunk.
-- Local file opens and managed partial/session file access use root-based trusted-path helpers instead of raw `os.Open`/`os.OpenFile`, keeping path handling explicit at the trust boundary.
+- Managed partial/session files use `internal/fsroot`. Arbitrary local source/target paths use `internal/localpath`, making the two filesystem trust boundaries explicit instead of routing both through one helper package.
 - Guard `.partial` file cleanup with `ctx.Err() == nil`: a 3.9 GB partial of a 4 GB download should survive Ctrl-C for resume. Only intentional deletions (hash mismatch) should remove partials.
 - **Connection-level deadlines** (`transferTransport()`): `transferHTTPClient()` and `syncTransferHTTPClient()` use a shared `transferTransport()` with `ResponseHeaderTimeout: 2m` (detects servers that accept but never respond) and TCP keepalives (30s idle, 10s interval, 3 probes — detects dead connections within ~60s). No `http.Client.Timeout` — transfer duration varies with file size and bandwidth. [implemented]
 - Transfer manager resume edge case tests: corrupt partial file, changed remote content, oversized partial. [planned]

@@ -17,8 +17,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
-	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 // --- buildLogger tests ---
@@ -133,6 +136,58 @@ func TestCliContextFrom_WithCLIContext(t *testing.T) {
 	assert.Equal(t, expected, cc)
 	assert.Equal(t, "/test", cc.Cfg.SyncDir)
 	assert.NotNil(t, cc.Logger)
+}
+
+func TestCLIContextSession_WrapsProviderError(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	provider := driveops.NewSessionProvider(nil, defaultHTTPClient(logger), transferHTTPClient(logger), "test-agent", logger)
+	provider.TokenSourceFn = func(context.Context, string, *slog.Logger) (graph.TokenSource, error) {
+		return nil, graph.ErrNotLoggedIn
+	}
+
+	cc := &CLIContext{
+		Logger: logger,
+		Cfg: &config.ResolvedDrive{
+			CanonicalID: driveid.MustCanonicalID("personal:user@example.com"),
+			DriveID:     driveid.New("0000000000000001"),
+		},
+		Provider: provider,
+	}
+
+	session, err := cc.Session(t.Context())
+	require.Error(t, err)
+	assert.Nil(t, session)
+	assert.Contains(t, err.Error(), "create drive session")
+	assert.ErrorIs(t, err, graph.ErrNotLoggedIn)
+}
+
+func TestCLIContextSession_Success(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	provider := driveops.NewSessionProvider(nil, defaultHTTPClient(logger), transferHTTPClient(logger), "test-agent", logger)
+	provider.TokenSourceFn = func(context.Context, string, *slog.Logger) (graph.TokenSource, error) {
+		return staticTokenSource{}, nil
+	}
+
+	cc := &CLIContext{
+		Logger: logger,
+		Cfg: &config.ResolvedDrive{
+			CanonicalID: driveid.MustCanonicalID("personal:user@example.com"),
+			DriveID:     driveid.New("0000000000000001"),
+		},
+		Provider: provider,
+	}
+
+	session, err := cc.Session(t.Context())
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, cc.Cfg.DriveID, session.DriveID)
+}
+
+func TestNewGraphClient_ReturnsConstructionError(t *testing.T) {
+	client, err := newGraphClient(nil, slog.New(slog.DiscardHandler))
+	require.Error(t, err)
+	assert.Nil(t, client)
+	assert.Contains(t, err.Error(), "creating graph client")
 }
 
 // --- Cobra structure tests ---
@@ -976,7 +1031,7 @@ func TestBuildLoggerDual_WithLogFile(t *testing.T) {
 	logger.Info("test log message", slog.String("key", "value"))
 	require.NoError(t, closer.Close())
 
-	data, err := trustedpath.ReadFile(logPath)
+	data, err := localpath.ReadFile(logPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "test log message")
 	assert.Contains(t, string(data), "key")
@@ -1001,7 +1056,7 @@ func TestBuildLoggerDual_FileGetsJSON(t *testing.T) {
 	logger.Info("json check")
 	require.NoError(t, closer.Close())
 
-	data, err := trustedpath.ReadFile(logPath)
+	data, err := localpath.ReadFile(logPath)
 	require.NoError(t, err)
 
 	// File output should be JSON.
@@ -1030,7 +1085,7 @@ func TestBuildLoggerDual_IndependentLevels(t *testing.T) {
 	logger.Debug("debug for file only")
 	require.NoError(t, closer.Close())
 
-	data, err := trustedpath.ReadFile(logPath)
+	data, err := localpath.ReadFile(logPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "debug for file only",
 		"file handler should receive debug messages regardless of CLI flags")

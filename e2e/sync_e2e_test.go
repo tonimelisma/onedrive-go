@@ -153,9 +153,12 @@ func cleanupRemoteFolder(t *testing.T, folder string) {
 // ---------------------------------------------------------------------------
 // Fast sync tests (run on every CI push under the "e2e" tag)
 // ---------------------------------------------------------------------------
+//
+// These tests intentionally run sequentially. Sync currently observes the
+// whole drive, so concurrent remote mutations from sibling tests can pollute
+// the delta feed and make fixture expectations nondeterministic.
 
 func TestE2E_Sync_UploadOnly(t *testing.T) {
-	t.Parallel()
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
@@ -182,7 +185,6 @@ func TestE2E_Sync_UploadOnly(t *testing.T) {
 }
 
 func TestE2E_Sync_DownloadOnly(t *testing.T) {
-	t.Parallel()
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
@@ -222,7 +224,6 @@ func TestE2E_Sync_DownloadOnly(t *testing.T) {
 }
 
 func TestE2E_Sync_DryRun(t *testing.T) {
-	t.Parallel()
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
@@ -248,7 +249,6 @@ func TestE2E_Sync_DryRun(t *testing.T) {
 }
 
 func TestE2E_Sync_Verify(t *testing.T) {
-	t.Parallel()
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
@@ -278,7 +278,6 @@ func TestE2E_Sync_Verify(t *testing.T) {
 }
 
 func TestE2E_Sync_Conflicts(t *testing.T) {
-	t.Parallel()
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
@@ -292,7 +291,6 @@ func TestE2E_Sync_Conflicts(t *testing.T) {
 }
 
 func TestE2E_Sync_DriveRemoveAndReAdd(t *testing.T) {
-	t.Parallel()
 	registerLogDump(t)
 
 	// Proves that removing and re-adding a drive preserves the state DB

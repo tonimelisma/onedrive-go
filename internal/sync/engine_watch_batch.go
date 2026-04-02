@@ -15,11 +15,11 @@ import (
 // error (e.g. big-delete protection), the batch is skipped and the loop
 // continues. In-flight actions for overlapping paths are canceled and
 // replaced (B-122 deduplication).
-func (e *Engine) processBatch(
+func (rt *watchRuntime) processBatch(
 	ctx context.Context, batch []synctypes.PathChanges, bl *synctypes.Baseline,
 	mode synctypes.SyncMode, safety *synctypes.SafetyConfig,
 ) []*synctypes.TrackedAction {
-	return e.planAndDispatchBatch(ctx, batch, bl, mode, safety, dispatchBatchOptions{
+	return rt.planAndDispatchBatch(ctx, batch, bl, mode, safety, dispatchBatchOptions{
 		applyDeleteCounter:   true,
 		deduplicateInFlight:  true,
 		runPeriodicPermCheck: true,
@@ -37,7 +37,7 @@ type dispatchBatchOptions struct {
 	trialDriveID         driveid.ID
 }
 
-func (e *Engine) planAndDispatchBatch(
+func (rt *watchRuntime) planAndDispatchBatch(
 	ctx context.Context,
 	batch []synctypes.PathChanges,
 	bl *synctypes.Baseline,
@@ -45,32 +45,32 @@ func (e *Engine) planAndDispatchBatch(
 	safety *synctypes.SafetyConfig,
 	opts dispatchBatchOptions,
 ) []*synctypes.TrackedAction {
-	e.logger.Info("processing watch batch",
+	rt.engine.logger.Info("processing watch batch",
 		slog.Int("paths", len(batch)),
 	)
 
 	if opts.runPeriodicPermCheck {
-		e.periodicPermRecheck(ctx, bl)
+		rt.periodicPermRecheck(ctx, bl)
 	}
 
 	// R-2.10.10: use scanner output as proof-of-accessibility to clear
 	// permission denials for paths observed in this batch.
 	if opts.clearScannerResolved {
-		e.applyPermissionRecheckDecisions(ctx, e.permHandler.clearScannerResolvedPermissions(ctx, pathSetFromBatch(batch)))
+		rt.applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.clearScannerResolvedPermissions(ctx, pathSetFromBatch(batch)))
 	}
 
-	denied := e.permHandler.DeniedPrefixes(ctx)
-	plan, err := e.planner.Plan(batch, bl, mode, safety, denied)
+	denied := rt.engine.permHandler.DeniedPrefixes(ctx)
+	plan, err := rt.engine.planner.Plan(batch, bl, mode, safety, denied)
 	if err != nil {
 		if errors.Is(err, synctypes.ErrBigDeleteTriggered) {
-			e.logger.Warn("big-delete protection triggered, skipping batch",
+			rt.engine.logger.Warn("big-delete protection triggered, skipping batch",
 				slog.Int("paths", len(batch)),
 			)
 
 			return nil
 		}
 
-		e.logger.Error("planner error, skipping batch",
+		rt.engine.logger.Error("planner error, skipping batch",
 			slog.String("error", err.Error()),
 		)
 
@@ -78,7 +78,7 @@ func (e *Engine) planAndDispatchBatch(
 	}
 
 	if len(plan.Actions) == 0 {
-		e.logger.Debug("empty plan for batch, nothing to do")
+		rt.engine.logger.Debug("empty plan for batch, nothing to do")
 		return nil
 	}
 
@@ -86,70 +86,70 @@ func (e *Engine) planAndDispatchBatch(
 	// filter them out if the counter trips. Non-delete actions continue
 	// flowing. The planner-level check is disabled in watch mode
 	// (threshold=MaxInt32) — this counter replaces it.
-	if opts.applyDeleteCounter && e.watch != nil && e.watch.deleteCounter != nil {
-		plan = e.applyDeleteCounter(ctx, plan)
+	if opts.applyDeleteCounter && rt.deleteCounter != nil {
+		plan = rt.applyDeleteCounter(ctx, plan)
 		if len(plan.Actions) == 0 {
 			return nil
 		}
 	}
 
 	if opts.deduplicateInFlight {
-		e.deduplicateInFlight(plan)
+		rt.deduplicateInFlight(plan)
 	}
 
-	dispatch, _ := e.dispatchBatchActions(ctx, plan, opts)
+	dispatch, _ := rt.dispatchBatchActions(ctx, plan, opts)
 	return dispatch
 }
 
 // periodicPermRecheck runs permission rechecks at most once per 60 seconds.
 // Throttled to avoid API hammering (R-2.10.9).
-func (e *Engine) periodicPermRecheck(ctx context.Context, bl *synctypes.Baseline) {
+func (rt *watchRuntime) periodicPermRecheck(ctx context.Context, bl *synctypes.Baseline) {
 	const permRecheckInterval = 60 * time.Second
 
 	now := time.Now()
-	if now.Sub(e.watch.lastPermRecheck) < permRecheckInterval {
+	if now.Sub(rt.lastPermRecheck) < permRecheckInterval {
 		return
 	}
 
-	e.watch.lastPermRecheck = now
+	rt.lastPermRecheck = now
 
 	// recheckPermissions calls the Graph API — skip during outage or
 	// throttle to avoid wasting API calls (R-2.10.30). Local permission
 	// rechecks (filesystem-only) proceed regardless.
-	if e.permHandler.HasPermChecker() && !e.isObservationSuppressed() {
-		shortcuts, err := e.baseline.ListShortcuts(ctx)
+	if rt.engine.permHandler.HasPermChecker() && !rt.isObservationSuppressed(rt) {
+		shortcuts, err := rt.engine.baseline.ListShortcuts(ctx)
 		if err == nil {
-			e.applyPermissionRecheckDecisions(ctx, e.permHandler.recheckPermissions(ctx, bl, shortcuts))
+			rt.applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckPermissions(ctx, bl, shortcuts))
 		}
 	}
 
-	e.applyPermissionRecheckDecisions(ctx, e.permHandler.recheckLocalPermissions(ctx))
+	rt.applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckLocalPermissions(ctx))
 }
 
 // deduplicateInFlight cancels in-flight actions for paths that appear in the
 // plan. B-122: newer observation supersedes in-progress action.
-func (e *Engine) deduplicateInFlight(plan *synctypes.ActionPlan) {
+func (rt *watchRuntime) deduplicateInFlight(plan *synctypes.ActionPlan) {
 	for i := range plan.Actions {
-		if e.depGraph.HasInFlight(plan.Actions[i].Path) {
-			e.logger.Info("canceling in-flight action for updated path",
+		if rt.depGraph.HasInFlight(plan.Actions[i].Path) {
+			rt.engine.logger.Info("canceling in-flight action for updated path",
 				slog.String("path", plan.Actions[i].Path),
 			)
 
-			e.depGraph.CancelByPath(plan.Actions[i].Path)
+			rt.depGraph.CancelByPath(plan.Actions[i].Path)
 		}
 	}
 }
 
 // dispatchBatchActions adds plan actions to the DepGraph with monotonic IDs,
 // then admits ready actions through active-scope checks.
-func (e *Engine) dispatchBatchActions(
+func (rt *watchRuntime) dispatchBatchActions(
 	ctx context.Context,
 	plan *synctypes.ActionPlan,
 	opts dispatchBatchOptions,
 ) ([]*synctypes.TrackedAction, bool) {
 	// Invariant: Planner always builds Deps with len(Actions).
 	if len(plan.Actions) != len(plan.Deps) {
-		e.logger.Error("plan invariant violation: Actions/Deps length mismatch",
+		rt.engine.logger.Error("plan invariant violation: Actions/Deps length mismatch",
 			slog.Int("actions", len(plan.Actions)),
 			slog.Int("deps", len(plan.Deps)),
 		)
@@ -157,10 +157,10 @@ func (e *Engine) dispatchBatchActions(
 		return nil, false
 	}
 
-	trialIndex := e.findTrialActionIndex(plan, opts)
+	trialIndex := rt.findTrialActionIndex(plan, opts)
 	if !opts.trialScopeKey.IsZero() && trialIndex < 0 {
-		if err := e.baseline.ClearSyncFailure(ctx, opts.trialPath, opts.trialDriveID); err != nil {
-			e.logger.Debug("dispatchBatchActions: failed to clear stale trial failure",
+		if err := rt.engine.baseline.ClearSyncFailure(ctx, opts.trialPath, opts.trialDriveID); err != nil {
+			rt.engine.logger.Debug("dispatchBatchActions: failed to clear stale trial failure",
 				slog.String("path", opts.trialPath),
 				slog.String("error", err.Error()),
 			)
@@ -170,8 +170,8 @@ func (e *Engine) dispatchBatchActions(
 
 	// Allocate monotonic action IDs for this batch. Using a global monotonic
 	// counter prevents ID collisions across batches without cross-goroutine sync.
-	batchBaseID := e.watch.nextActionID
-	e.watch.nextActionID += int64(len(plan.Actions))
+	batchBaseID := rt.nextActionID
+	rt.nextActionID += int64(len(plan.Actions))
 
 	actionIDs := make([]int64, len(plan.Actions))
 	for i := range plan.Actions {
@@ -188,7 +188,7 @@ func (e *Engine) dispatchBatchActions(
 			depIDs = append(depIDs, actionIDs[depIdx])
 		}
 
-		if ta := e.depGraph.Add(&plan.Actions[i], id, depIDs); ta != nil {
+		if ta := rt.depGraph.Add(&plan.Actions[i], id, depIDs); ta != nil {
 			if trialIndex == i {
 				ta.IsTrial = true
 				ta.TrialScopeKey = opts.trialScopeKey
@@ -197,20 +197,20 @@ func (e *Engine) dispatchBatchActions(
 		}
 
 		if trialIndex == i {
-			e.depGraph.MarkTrial(id, opts.trialScopeKey)
+			rt.depGraph.MarkTrial(id, opts.trialScopeKey)
 		}
 	}
 
 	if len(ready) > 0 {
-		ready = e.admitReady(ctx, ready)
+		ready = rt.admitReady(ctx, rt, ready)
 	}
 
-	e.logger.Info("watch batch dispatched",
+	rt.engine.logger.Info("watch batch dispatched",
 		slog.Int("actions", len(plan.Actions)),
 	)
 
 	if trialIndex >= 0 {
-		e.emitDebugEvent(engineDebugEvent{
+		rt.engine.emitDebugEvent(engineDebugEvent{
 			Type:     engineDebugEventTrialDispatched,
 			ScopeKey: opts.trialScopeKey,
 			Path:     opts.trialPath,
@@ -220,7 +220,7 @@ func (e *Engine) dispatchBatchActions(
 	return ready, true
 }
 
-func (e *Engine) findTrialActionIndex(plan *synctypes.ActionPlan, opts dispatchBatchOptions) int {
+func (rt *watchRuntime) findTrialActionIndex(plan *synctypes.ActionPlan, opts dispatchBatchOptions) int {
 	if opts.trialScopeKey.IsZero() {
 		return -1
 	}
@@ -249,9 +249,9 @@ func (e *Engine) findTrialActionIndex(plan *synctypes.ActionPlan, opts dispatchB
 // setDispatch writes the dispatch state transition for an action before it
 // enters the tracker. Only applies to downloads and local deletes (the action
 // types that have remote_state lifecycle).
-func (e *Engine) setDispatch(ctx context.Context, action *synctypes.Action) {
-	if err := e.baseline.SetDispatchStatus(ctx, action.DriveID.String(), action.ItemID, action.Type); err != nil {
-		e.logger.Warn("failed to set dispatch status",
+func (flow *engineFlow) setDispatch(ctx context.Context, action *synctypes.Action) {
+	if err := flow.engine.baseline.SetDispatchStatus(ctx, action.DriveID.String(), action.ItemID, action.Type); err != nil {
+		flow.engine.logger.Warn("failed to set dispatch status",
 			slog.String("path", action.Path),
 			slog.String("error", err.Error()),
 		)
@@ -268,7 +268,7 @@ func isDeleteAction(t synctypes.ActionType) bool {
 // of the plan and records them as actionable issues. Returns the (possibly
 // filtered) plan. When all actions are filtered, returns a plan with empty
 // Actions/Deps.
-func (e *Engine) applyDeleteCounter(ctx context.Context, plan *synctypes.ActionPlan) *synctypes.ActionPlan {
+func (rt *watchRuntime) applyDeleteCounter(ctx context.Context, plan *synctypes.ActionPlan) *synctypes.ActionPlan {
 	deleteCount := 0
 	for i := range plan.Actions {
 		if isDeleteAction(plan.Actions[i].Type) {
@@ -280,15 +280,15 @@ func (e *Engine) applyDeleteCounter(ctx context.Context, plan *synctypes.ActionP
 		return plan
 	}
 
-	tripped := e.watch.deleteCounter.Add(deleteCount)
+	tripped := rt.deleteCounter.Add(deleteCount)
 	if tripped {
-		e.logger.Warn("big-delete protection triggered in watch mode",
-			slog.Int("delete_count", e.watch.deleteCounter.Count()),
-			slog.Int("threshold", e.watch.deleteCounter.Threshold()),
+		rt.engine.logger.Warn("big-delete protection triggered in watch mode",
+			slog.Int("delete_count", rt.deleteCounter.Count()),
+			slog.Int("threshold", rt.deleteCounter.Threshold()),
 		)
 	}
 
-	if !e.watch.deleteCounter.IsHeld() {
+	if !rt.deleteCounter.IsHeld() {
 		return plan
 	}
 
@@ -328,7 +328,7 @@ func (e *Engine) applyDeleteCounter(ctx context.Context, plan *synctypes.ActionP
 	plan.Actions = kept
 	plan.Deps = keptDeps
 
-	e.recordHeldDeletes(ctx, heldDeletes)
+	rt.recordHeldDeletes(ctx, heldDeletes)
 
 	return plan
 }
@@ -336,7 +336,7 @@ func (e *Engine) applyDeleteCounter(ctx context.Context, plan *synctypes.ActionP
 // recordHeldDeletes writes held delete actions to sync_failures as actionable
 // issues with type big_delete_held. Uses UpsertActionableFailures for batch
 // upsert — idempotent when the same deletes are re-observed.
-func (e *Engine) recordHeldDeletes(ctx context.Context, actions []synctypes.Action) {
+func (rt *watchRuntime) recordHeldDeletes(ctx context.Context, actions []synctypes.Action) {
 	if len(actions) == 0 {
 		return
 	}
@@ -348,18 +348,18 @@ func (e *Engine) recordHeldDeletes(ctx context.Context, actions []synctypes.Acti
 			DriveID:   actions[i].DriveID,
 			Direction: synctypes.DirectionDelete,
 			IssueType: synctypes.IssueBigDeleteHeld,
-			Error:     fmt.Sprintf("held by big-delete protection (threshold: %d)", e.bigDeleteThreshold),
+			Error:     fmt.Sprintf("held by big-delete protection (threshold: %d)", rt.engine.bigDeleteThreshold),
 		}
 	}
 
-	if err := e.baseline.UpsertActionableFailures(ctx, failures); err != nil {
-		e.logger.Error("failed to record held deletes",
+	if err := rt.engine.baseline.UpsertActionableFailures(ctx, failures); err != nil {
+		rt.engine.logger.Error("failed to record held deletes",
 			slog.Int("count", len(failures)),
 			slog.String("error", err.Error()),
 		)
 	}
 
-	e.logger.Info("held delete actions recorded as issues",
+	rt.engine.logger.Info("held delete actions recorded as issues",
 		slog.Int("count", len(failures)),
 	)
 }

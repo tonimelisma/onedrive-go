@@ -14,6 +14,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 // defaultDirPerm is the permission mode for directories created during recursive get.
@@ -103,7 +104,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 	})
 	if err != nil {
 		partialPath := localPath + ".partial"
-		if _, statErr := os.Stat(partialPath); statErr == nil {
+		if _, statErr := localpath.Stat(partialPath); statErr == nil {
 			cc.Statusf("Partial download saved: %s\n", partialPath)
 			cc.Statusf("Re-run the same command to resume.\n")
 		}
@@ -248,7 +249,7 @@ func downloadRecursive(
 	state *downloadState,
 	remotePath, localPath string,
 ) {
-	if err := os.MkdirAll(localPath, defaultDirPerm); err != nil {
+	if err := localpath.MkdirAll(localPath, defaultDirPerm); err != nil {
 		state.mu.Lock()
 		state.result.Errors = append(state.result.Errors, fmt.Sprintf("creating %q: %v", localPath, err))
 		state.mu.Unlock()

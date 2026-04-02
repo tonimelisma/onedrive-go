@@ -21,7 +21,7 @@ reconciliation runs every 24 hours to detect missed delta deletions.
 
 `RunWatch` no longer calls `RunOnce` for its initial sync. Instead:
 
-1. **`initWatchInfra`** creates watchState, DepGraph, WorkerPool, Buffer, and tickers, repairs persisted scopes according to the startup policy matrix, and loads surviving `scope_blocks` into watch-owned runtime state — but does NOT load baseline or start observers.
+1. **`initWatchInfra`** creates `watchRuntime`, DepGraph, WorkerPool, Buffer, and tickers, repairs persisted scopes according to the startup policy matrix, and loads surviving `scope_blocks` into watch-owned runtime state — but does NOT load baseline or start observers.
 2. **`bootstrapSync`** loads baseline, observes initial changes, and dispatches them through the same single-owner watch loop machinery that steady-state mode uses. It runs until the graph is empty and no more bootstrap work is pending.
 3. **`startObservers`** launches remote and local observers AFTER bootstrap — they see the post-bootstrap baseline.
 4. **`runWatchLoop`** runs the steady-state select loop.
@@ -31,7 +31,8 @@ initial sync, then created a second watch pipeline. Unified bootstrap creates
 the watch pipeline once and reuses it for both the initial sync and steady
 state.
 
-`RunOnce` remains unchanged as a standalone one-shot entry point.
+`RunOnce` remains a standalone one-shot entry point, but its mutable execution
+state now lives on `oneShotRunner`, not on `Engine`.
 
 ### Runtime Invariants
 
@@ -74,29 +75,32 @@ The engine relies on a few non-negotiable behavioral invariants:
    engine-owned watch buffer. It must never dispatch directly to `readyCh`
    from the reconciliation goroutine.
 
-### watchState
+### Runtime Ownership
 
-`watchState` bundles all watch-mode-only Engine fields. `e.watch` is nil in
-one-shot mode (`RunOnce`), non-nil in watch mode (`RunWatch`). Methods use
-`e.watch != nil` as a single guard replacing individual field nil-checks.
+`Engine` is the immutable dependency container plus public entrypoints. It owns
+shared collaborators such as config, planner, store, logger, and executor
+factories. It does not own mode-specific mutable control state.
 
-`watchState` is grouped by ownership domain:
+Run-scoped state lives in two dedicated owners:
 
-- `watchRuntimeState`: active scopes, scope detection state, next action ID
-- `watchObservationState`: buffer, delete counter, data-version snapshot, observer references
-- `watchTimerState`: retry/trial timers and permission-recheck timing
-- `watchReconcileState`: reconcile handoff channel, in-flight flag, summary cache, test hook
+- `oneShotRunner`: one-shot mutable state (`engineFlow`, depGraph, readyCh,
+  shortcut snapshot, result counters)
+- `watchRuntime`: watch-mode mutable state (`engineFlow`, active scopes,
+  scope detection state, buffer, delete counter, observer references,
+  retry/trial timers, reconciliation state, next action ID)
 
-Fields remaining on Engine (used in both modes): depGraph, readyCh, trialCh,
-shortcuts. `shortcuts` stays on Engine because one-shot result handling and
-watch reconciliation both need the latest shared-folder snapshot even when
-`e.watch == nil`.
+The shared `engineFlow` object carries the mutable execution state common to
+both coordinators: dependency graph, ready channel, shortcut snapshot,
+aggregated success/error counters, shared observation helpers, shortcut
+observation/reconciliation, skipped-item failure maintenance, and shared
+result-routing side effects. `watchRuntime` embeds `engineFlow` and adds
+watch-only state; `oneShotRunner` embeds `engineFlow` without watch-specific
+fields.
 
-`deleteCounter` requires a double guard (`e.watch != nil &&
-e.watch.deleteCounter != nil`) because watch mode with `force=true` skips
-delete counter creation. `retryTimer` requires a specific nil check
-(`e.watch.retryTimer != nil`) because it is lazily created via
-`time.AfterFunc`.
+Tests use same-package helpers that construct `watchRuntime` / `engineFlow`
+directly when they need internal characterization. Production code does not
+publish a runtime-registration hook just so tests can discover live watch
+state.
 
 ### Result Classification (`classifyResult()`)
 
@@ -142,8 +146,8 @@ Implements: R-2.10.3 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2
 `processWorkerResult()` classifies each result and routes it — all cases call `depGraph.Complete()`:
 
 - **success** → `Complete` + `RecordSuccess` (scope window reset) + counter + `clearFailureOnSuccess` (engine owns failure lifecycle exclusively — D-6)
-- **requeue** (transient) → `recordFailure` with `retry.Reconcile.Delay` + `Complete` + `feedScopeDetection` + arm retry timer
-- **scopeBlock** (429, 507) → `recordFailure` with `retry.Reconcile.Delay` + `feedScopeDetection` + `Complete` + `armTrialTimer()` (belt-and-suspenders)
+- **requeue** (transient) → `recordFailure` with `retry.ReconcilePolicy().Delay` + `Complete` + `feedScopeDetection` + arm retry timer
+- **scopeBlock** (429, 507) → `recordFailure` with `retry.ReconcilePolicy().Delay` + `feedScopeDetection` + `Complete` + `armTrialTimer()` (belt-and-suspenders)
 - **skip** (non-retryable) → `handle403` side effect. Confirmed remote read-only
   403s record one actionable boundary failure (`perm:remote:{localPath}`) and
   skip duplicate file-level failure recording; other skips use `recordFailure`
@@ -201,14 +205,15 @@ threshold is crossed, it creates or refreshes a persisted scope block via
 classifier's `ResultDecision`.
 
 The engine owns all completion decisions — workers are pure executors. In
-watch mode the single watch loop uses an actor-with-outbox pattern: results,
-buffer flushes, trial ticks, retry ticks, and dependent admission are processed
-single-threaded within one select loop, and ready actions are collected into an
-outbox slice before being sent to `readyCh`. This prevents deadlock that would
-occur if result handling tried to synchronously send to a full `readyCh` while
-workers tried to synchronously send to a full results channel. One-shot mode
-uses the same internal result loop with a one-shot configuration instead of a
-separate drain subsystem.
+watch mode the single watch loop on `watchRuntime` uses an actor-with-outbox
+pattern: results, buffer flushes, trial ticks, retry ticks, and dependent
+admission are processed single-threaded within one select loop, and ready
+actions are collected into an outbox slice before being sent to `readyCh`.
+This prevents deadlock that would occur if result handling tried to
+synchronously send to a full `readyCh` while workers tried to synchronously
+send to a full results channel. One-shot mode keeps a separate coordinator,
+`oneShotRunner.runResultsLoop`, with the same shared result-routing semantics
+but without watch-only mutable state.
 
 `recordFailure()` writes explicit durable semantics into `sync_failures`:
 
@@ -405,7 +410,7 @@ watch-owned `reconcileResults` channel. The watch loop then applies the result
 on its own goroutine by updating `shortcuts`, clearing `reconcileActive`, and
 feeding any resulting events into `buf.Add()`.
 
-**Concurrency guard**: `watchState.reconcileActive` is owned by the watch loop.
+**Concurrency guard**: `watchRuntime.reconcileActive` is owned by the watch loop.
 `runFullReconciliationAsync` sets it before launching the goroutine and skips a
 new launch while it remains true. The goroutine never clears the flag directly;
 only the watch loop clears it when it applies the returned `reconcileResult`.

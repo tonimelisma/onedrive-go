@@ -26,11 +26,14 @@ import (
 	stdsync "sync"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/fsroot"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 
 	// Pure-Go SQLite driver (no CGO).
 	_ "modernc.org/sqlite"
 )
+
+const syncStoreDirPerm = 0o700
 
 // Compile-time interface satisfaction checks.
 var (
@@ -56,6 +59,14 @@ type SyncStore struct {
 // schema, and returns a ready-to-use manager. The database uses WAL mode with
 // synchronous=FULL for crash-safe durability.
 func NewSyncStore(ctx context.Context, dbPath string, logger *slog.Logger) (*SyncStore, error) {
+	root, _, err := fsroot.OpenPath(dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("prepare sync store path: %w", err)
+	}
+	if mkdirErr := root.MkdirAll(syncStoreDirPerm); mkdirErr != nil {
+		return nil, fmt.Errorf("create sync store directory: %w", mkdirErr)
+	}
+
 	// DSN parameters ensure pragmas apply to every connection from the pool.
 	dsn := fmt.Sprintf(
 		"file:%s?_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)"+

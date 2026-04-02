@@ -92,7 +92,7 @@ func newIntegrationClient(t *testing.T) *Client {
 
 	httpClient := retryHTTPClient(http.DefaultClient, retry.TransportPolicy())
 
-	return NewClient(DefaultBaseURL, httpClient, ts, logger, "onedrive-go/test")
+	return MustNewClient(DefaultBaseURL, httpClient, ts, logger, "onedrive-go/test")
 }
 
 // driveIDForTest reads drive_id from the drive metadata file for the test drive.

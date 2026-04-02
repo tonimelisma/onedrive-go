@@ -13,7 +13,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
 
@@ -157,7 +157,7 @@ func (tm *TransferManager) DownloadToFile(
 	}
 
 	// Ensure parent directory exists.
-	if err := os.MkdirAll(filepath.Dir(targetPath), downloadTempDirPerms); err != nil {
+	if err := localpath.MkdirAll(filepath.Dir(targetPath), downloadTempDirPerms); err != nil {
 		return nil, fmt.Errorf("creating parent dir for %s: %w", targetPath, err)
 	}
 
@@ -211,7 +211,7 @@ func (tm *TransferManager) DownloadToFile(
 	// Atomic rename: .partial -> target. On failure the .partial file is
 	// intentionally preserved so the next attempt can resume from it rather
 	// than re-downloading the entire file (B-207).
-	if err := os.Rename(partialPath, targetPath); err != nil {
+	if err := localpath.Rename(partialPath, targetPath); err != nil {
 		return nil, fmt.Errorf("renaming partial to %s: %w", targetPath, err)
 	}
 
@@ -255,7 +255,7 @@ func (tm *TransferManager) downloadWithHashRetry(
 		}
 
 		if attempt < maxRetries {
-			if cleanupErr := os.Remove(partialPath); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrNotExist) {
+			if cleanupErr := localpath.Remove(partialPath); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrNotExist) {
 				tm.logger.Warn("failed to remove partial download before retry",
 					slog.String("path", partialPath),
 					slog.String("error", cleanupErr.Error()))
@@ -296,7 +296,7 @@ func (tm *TransferManager) downloadToPartial(
 ) (string, int64, error) {
 	// Attempt resume: open existing .partial, then stat the handle.
 	if rd, ok := tm.downloads.(RangeDownloader); ok {
-		f, openErr := trustedpath.OpenFile(partialPath, os.O_APPEND|os.O_WRONLY, downloadTempFilePerms)
+		f, openErr := localpath.OpenFile(partialPath, os.O_APPEND|os.O_WRONLY, downloadTempFilePerms)
 		if openErr == nil {
 			info, statErr := f.Stat()
 			if statErr != nil || info.Size() == 0 {
@@ -323,7 +323,7 @@ func (tm *TransferManager) downloadToPartial(
 // the identical pattern in freshDownload and resumeDownload.
 func (tm *TransferManager) removePartialIfNotCanceled(ctx context.Context, path string) {
 	if ctx.Err() == nil {
-		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+		if removeErr := localpath.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			tm.logger.Warn("failed to remove partial file after interrupted transfer")
 		}
 	}
@@ -333,7 +333,7 @@ func (tm *TransferManager) removePartialIfNotCanceled(ctx context.Context, path 
 func (tm *TransferManager) freshDownload(
 	ctx context.Context, driveID driveid.ID, itemID, partialPath string,
 ) (string, int64, error) {
-	f, err := trustedpath.OpenFile(partialPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, downloadTempFilePerms)
+	f, err := localpath.OpenFile(partialPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, downloadTempFilePerms)
 	if err != nil {
 		return "", 0, fmt.Errorf("creating partial file %s: %w", partialPath, err)
 	}
@@ -357,7 +357,7 @@ func (tm *TransferManager) freshDownload(
 	if err := f.Close(); err != nil {
 		// Close failure is always an error regardless of context — the file is corrupt.
 		baseErr := fmt.Errorf("closing partial file %s: %w", partialPath, err)
-		if removeErr := os.Remove(partialPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+		if removeErr := localpath.Remove(partialPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			return "", 0, errors.Join(baseErr, fmt.Errorf("removing corrupt partial file %s: %w", partialPath, removeErr))
 		}
 
@@ -447,7 +447,7 @@ func (tm *TransferManager) UploadFile(
 		slog.String("name", name),
 	)
 
-	info, err := os.Stat(localPath)
+	info, err := localpath.Stat(localPath)
 	if err != nil {
 		return nil, fmt.Errorf("stat %s: %w", localPath, err)
 	}
@@ -468,7 +468,7 @@ func (tm *TransferManager) UploadFile(
 		mtime = info.ModTime()
 	}
 
-	f, err := trustedpath.Open(localPath)
+	f, err := localpath.Open(localPath)
 	if err != nil {
 		return nil, fmt.Errorf("opening %s for upload: %w", localPath, err)
 	}

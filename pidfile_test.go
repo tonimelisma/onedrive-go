@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 // Validates: R-6.3.1
@@ -27,7 +27,7 @@ func TestWritePIDFile_CreatesFileWithCurrentPID(t *testing.T) {
 
 	defer cleanup()
 
-	data, err := trustedpath.ReadFile(path)
+	data, err := localpath.ReadFile(path)
 	require.NoError(t, err)
 
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))

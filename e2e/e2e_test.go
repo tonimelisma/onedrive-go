@@ -316,9 +316,12 @@ func pollCLIWithConfigNotContains(
 }
 
 // --- File operation tests ---
+//
+// These top-level tests mutate the shared remote drive, so they stay
+// sequential even under `go test -parallel` to keep the fast E2E suite
+// deterministic.
 
 func TestE2E_RoundTrip(t *testing.T) {
-	t.Parallel()
 	registerLogDump(t)
 
 	cfgPath := writeMinimalConfig(t)
@@ -442,7 +445,6 @@ func TestE2E_RoundTrip(t *testing.T) {
 // TestE2E_ErrorCases verifies that the CLI returns non-zero exit codes
 // and meaningful error messages for invalid operations.
 func TestE2E_ErrorCases(t *testing.T) {
-	t.Parallel()
 	registerLogDump(t)
 
 	cfgPath := writeMinimalConfig(t)
@@ -480,7 +482,6 @@ func TestE2E_ErrorCases(t *testing.T) {
 // TestE2E_JSONOutput validates that --json flags produce well-formed JSON
 // with the expected schema for ls and stat commands.
 func TestE2E_JSONOutput(t *testing.T) {
-	t.Parallel()
 	registerLogDump(t)
 
 	cfgPath := writeMinimalConfig(t)
@@ -515,7 +516,6 @@ func TestE2E_JSONOutput(t *testing.T) {
 // TestE2E_QuietFlag verifies that --quiet suppresses informational output
 // on stderr during file operations.
 func TestE2E_QuietFlag(t *testing.T) {
-	t.Parallel()
 	registerLogDump(t)
 
 	cfgPath := writeMinimalConfig(t)

@@ -19,8 +19,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/oauth2"
 
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
-	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 // testTokenJSON is the canonical token response for tests.
@@ -609,7 +609,7 @@ func TestSaveToken_JSONFormat(t *testing.T) {
 
 	require.NoError(t, tokenfile.Save(path, tok))
 
-	data, err := trustedpath.ReadFile(path)
+	data, err := localpath.ReadFile(path)
 	require.NoError(t, err)
 
 	// Verify it's valid JSON with the new wrapper format.

@@ -160,7 +160,7 @@ func TestSimpleUpload_Error(t *testing.T) {
 }
 
 func TestSimpleUpload_TokenError(t *testing.T) {
-	client := NewClient("http://localhost", http.DefaultClient, failingToken{}, slog.Default(), "test-agent")
+	client := MustNewClient("http://localhost", http.DefaultClient, failingToken{}, slog.Default(), "test-agent")
 
 	_, err := client.SimpleUpload(
 		t.Context(), driveid.New("d"), "p", "file.txt",
@@ -171,7 +171,7 @@ func TestSimpleUpload_TokenError(t *testing.T) {
 }
 
 func TestSimpleUpload_NetworkError(t *testing.T) {
-	client := NewClient("http://127.0.0.1:1", http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent")
+	client := MustNewClient("http://127.0.0.1:1", http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent")
 
 	_, err := client.SimpleUpload(
 		t.Context(), driveid.New("d"), "p", "file.txt",

@@ -129,7 +129,7 @@ type orgEntry struct {
 func (c *Client) Me(ctx context.Context) (*User, error) {
 	c.logger.Info("fetching authenticated user profile")
 
-	resp, err := c.Do(ctx, http.MethodGet, "/me", nil)
+	resp, err := c.do(ctx, http.MethodGet, "/me", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +167,7 @@ func (c *Client) Drives(ctx context.Context) ([]Drive, error) {
 
 // drivesList performs a single GET /me/drives call without retry.
 func (c *Client) drivesList(ctx context.Context) ([]Drive, error) {
-	resp, err := c.Do(ctx, http.MethodGet, "/me/drives", nil)
+	resp, err := c.do(ctx, http.MethodGet, "/me/drives", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +198,7 @@ func (c *Client) drivesList(ctx context.Context) ([]Drive, error) {
 func (c *Client) PrimaryDrive(ctx context.Context) (*Drive, error) {
 	c.logger.Info("fetching primary drive")
 
-	resp, err := c.Do(ctx, http.MethodGet, "/me/drive", nil)
+	resp, err := c.do(ctx, http.MethodGet, "/me/drive", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +228,7 @@ func (c *Client) Drive(ctx context.Context, driveID driveid.ID) (*Drive, error) 
 
 	path := fmt.Sprintf("/drives/%s", driveID)
 
-	resp, err := c.Do(ctx, http.MethodGet, path, nil)
+	resp, err := c.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +259,7 @@ func (c *Client) SearchSites(ctx context.Context, query string, limit int) ([]Si
 
 	path := fmt.Sprintf("/sites?search=%s&$top=%d&$select=id,displayName,name,webUrl", url.QueryEscape(query), limit)
 
-	resp, err := c.Do(ctx, http.MethodGet, path, nil)
+	resp, err := c.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -287,7 +287,7 @@ func (c *Client) SiteDrives(ctx context.Context, siteID string) ([]Drive, error)
 
 	path := fmt.Sprintf("/sites/%s/drives?$select=id,name,driveType,quota", siteID)
 
-	resp, err := c.Do(ctx, http.MethodGet, path, nil)
+	resp, err := c.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -315,7 +315,7 @@ func (c *Client) SiteDrives(ctx context.Context, siteID string) ([]Drive, error)
 func (c *Client) Organization(ctx context.Context) (*Organization, error) {
 	c.logger.Info("fetching user organization")
 
-	resp, err := c.Do(ctx, http.MethodGet, "/me/organization", nil)
+	resp, err := c.do(ctx, http.MethodGet, "/me/organization", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -392,7 +392,7 @@ func (c *Client) SearchDriveItems(ctx context.Context, query string) ([]Item, er
 // (SharedWithMe, search, etc.). Handles response decoding, item normalization,
 // and @odata.nextLink extraction. The label is used in error messages only.
 func (c *Client) fetchItemPage(ctx context.Context, path, label string) ([]Item, string, error) {
-	resp, err := c.Do(ctx, http.MethodGet, path, nil)
+	resp, err := c.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, "", err
 	}

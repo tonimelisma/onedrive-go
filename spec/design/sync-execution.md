@@ -216,7 +216,7 @@ Issue type constants for failure classification (e.g., `IssueInvalidFilename`, `
 
 Implements: R-2.10.41 [verified]
 
-`ResetInProgressStates()` handles crash recovery: on startup, resets items stuck in `downloading`/`deleting` state to `pending_download`/`pending_delete`. In watch mode, `RunWatch` calls `RunOnce` on startup which calls `ResetInProgressStates`, rediscovering all pending items.
+`ResetInProgressStates()` handles crash recovery: on startup, resets items stuck in `downloading`/`deleting` state to `pending_download`/`pending_delete`. One-shot mode does this in `prepareRunOnceState`; watch mode does it during watch bootstrap before observation starts. Both modes therefore rediscover crash-recovery items without relying on `RunWatch` calling `RunOnce`.
 
 Implements: R-2.5.4 [verified]
 
@@ -237,9 +237,10 @@ is no long-lived retry loop. `runRetrierSweep()` periodically sweeps
 `sync_failures` for items whose `next_retry_at` has expired and re-injects them
 into the pipeline via buffer → planner → DepGraph. The engine calls
 `DepGraph.Complete` on every worker result and records failures in
-`sync_failures` with exponential backoff via `retry.Reconcile.Delay`.
-`CommitOutcome` success cleanup clears `sync_failures` for all action types
-(upload, download, delete, move). `runTrialDispatch()` handles scope trial
+`sync_failures` with exponential backoff via `retry.ReconcilePolicy().Delay`.
+`CommitOutcome` updates baseline and `remote_state`, but it does not clear
+`sync_failures`; the engine owns success-side failure cleanup explicitly via
+`clearFailureOnSuccess`. `runTrialDispatch()` handles scope trial
 candidate selection via `PickTrialCandidate` and re-observation.
 
 ## Status Computation (`compute_status.go`)

@@ -10,12 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
-	"path/filepath"
 
 	"golang.org/x/oauth2"
 
-	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
+	"github.com/tonimelisma/onedrive-go/internal/fsroot"
 )
 
 // ErrNotFound is returned by Load when the token file does not exist.
@@ -38,7 +36,12 @@ type File struct {
 // Old bare oauth2.Token files (without the "token" wrapper) will fail with
 // "missing token field" — re-login is required.
 func Load(path string) (*oauth2.Token, error) {
-	data, err := trustedpath.ReadFile(path)
+	root, name, err := fsroot.OpenPath(path)
+	if err != nil {
+		return nil, fmt.Errorf("tokenfile: opening token root: %w", err)
+	}
+
+	data, err := root.ReadFile(name)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, ErrNotFound
 	}
@@ -76,51 +79,18 @@ func Save(path string, tok *oauth2.Token) (err error) {
 		return err
 	}
 
-	dir := filepath.Dir(path)
-	if mkErr := os.MkdirAll(dir, DirPerms); mkErr != nil {
-		return fmt.Errorf("tokenfile: creating directory %s: %w", dir, mkErr)
-	}
-
-	// Atomic write: temp file in the same directory, then rename.
-	// Same directory guarantees same filesystem for rename(2).
-	tmp, err := os.CreateTemp(dir, ".token-*.tmp")
+	root, name, err := fsroot.OpenPath(path)
 	if err != nil {
-		return fmt.Errorf("tokenfile: creating temp file: %w", err)
+		return fmt.Errorf("tokenfile: opening managed root: %w", err)
 	}
 
-	tmpPath := tmp.Name()
-
-	// Clean up temp file on any error path.
-	success := false
-	defer func() {
-		if !success {
-			err = removeTempPath(tmpPath, err)
-		}
-	}()
-
-	if err := setTempFilePermissions(tmp); err != nil {
-		return closeTempFile(tmp, err)
+	if err := root.MkdirAll(DirPerms); err != nil {
+		return fmt.Errorf("tokenfile: creating directory: %w", err)
 	}
 
-	if err := writeTempFileData(tmp, data); err != nil {
-		return closeTempFile(tmp, err)
+	if err := root.AtomicWrite(name, data, FilePerms, DirPerms, ".token-*.tmp"); err != nil {
+		return fmt.Errorf("tokenfile: writing token file: %w", err)
 	}
-
-	// Flush to stable storage before rename so a power loss between close and
-	// rename cannot leave an empty or partial token file at the final path.
-	if err := syncTempFile(tmp); err != nil {
-		return closeTempFile(tmp, err)
-	}
-
-	if err := closeTempFile(tmp, nil); err != nil {
-		return err
-	}
-
-	if err := renameTempFile(tmpPath, path); err != nil {
-		return err
-	}
-
-	success = true
 
 	return nil
 }

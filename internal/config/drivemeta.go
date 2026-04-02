@@ -6,12 +6,11 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
+	"github.com/tonimelisma/onedrive-go/internal/fsroot"
 )
 
 // DriveMetadata holds cached API data for a specific drive. Persisted as a
@@ -52,7 +51,12 @@ func LookupDriveMetadata(cid driveid.CanonicalID) (*DriveMetadata, bool, error) 
 		return nil, false, nil
 	}
 
-	data, err := trustedpath.ReadFile(path)
+	root, name, err := fsroot.OpenPath(path)
+	if err != nil {
+		return nil, false, fmt.Errorf("opening drive metadata root: %w", err)
+	}
+
+	data, err := root.ReadFile(name)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, false, nil
 	}
@@ -83,47 +87,14 @@ func SaveDriveMetadata(cid driveid.CanonicalID, meta *DriveMetadata) (err error)
 		return fmt.Errorf("encoding drive metadata: %w", err)
 	}
 
-	dir := filepath.Dir(path)
-
-	if mkdirErr := os.MkdirAll(dir, configDirPermissions); mkdirErr != nil {
-		return fmt.Errorf("creating data directory: %w", mkdirErr)
-	}
-
-	tmp, err := os.CreateTemp(dir, ".drivemeta-*.tmp")
+	root, name, err := fsroot.OpenPath(path)
 	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
+		return fmt.Errorf("opening drive metadata root: %w", err)
 	}
 
-	tmpPath := tmp.Name()
-
-	succeeded := false
-	defer func() {
-		if !succeeded {
-			err = removeTempPath(tmpPath, "drive metadata temp file", err)
-		}
-	}()
-
-	if _, writeErr := tmp.Write(data); writeErr != nil {
-		return closeTempFile(tmp, "drive metadata temp file", fmt.Errorf("writing drive metadata: %w", writeErr))
+	if err := root.AtomicWrite(name, data, configFilePermissions, configDirPermissions, ".drivemeta-*.tmp"); err != nil {
+		return fmt.Errorf("writing drive metadata: %w", err)
 	}
-
-	if syncErr := tmp.Sync(); syncErr != nil {
-		return closeTempFile(tmp, "drive metadata temp file", fmt.Errorf("syncing drive metadata: %w", syncErr))
-	}
-
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("closing drive metadata: %w", err)
-	}
-
-	if err := chmodTrustedTempPath(tmpPath, configFilePermissions, "drive metadata"); err != nil {
-		return err
-	}
-
-	if err := renameTrustedTempPath(tmpPath, path, "drive metadata"); err != nil {
-		return err
-	}
-
-	succeeded = true
 
 	return nil
 }

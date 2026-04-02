@@ -20,7 +20,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
@@ -554,7 +554,7 @@ sync_dir = "~/OneDrive"
 	require.NoError(t, err)
 
 	// Verify the drive section was deleted.
-	data, readErr := trustedpath.ReadFile(cfgPath)
+	data, readErr := localpath.ReadFile(cfgPath)
 	require.NoError(t, readErr)
 	assert.NotContains(t, string(data), "personal:user@example.com")
 }
@@ -607,7 +607,7 @@ sync_dir = "~/OneDrive"
 	assert.True(t, os.IsNotExist(statErr), "state DB should be deleted")
 
 	// Config section should be gone.
-	data, readErr := trustedpath.ReadFile(cfgPath)
+	data, readErr := localpath.ReadFile(cfgPath)
 	require.NoError(t, readErr)
 	assert.NotContains(t, string(data), "personal:user@example.com")
 }
@@ -699,7 +699,7 @@ func TestAddNewDrive_WithToken(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify config was updated with canonical ID and sync_dir.
-	data, readErr := trustedpath.ReadFile(cfgPath)
+	data, readErr := localpath.ReadFile(cfgPath)
 	require.NoError(t, readErr)
 	assert.Contains(t, string(data), "personal:user@example.com")
 	assert.Contains(t, string(data), "sync_dir")
@@ -947,7 +947,7 @@ func newTestGraphClient(t *testing.T, baseURL string) *graph.Client {
 		baseURL = "http://localhost"
 	}
 
-	return graph.NewClient(baseURL, http.DefaultClient, staticTokenSource{}, slog.Default(), "test")
+	return graph.MustNewClient(baseURL, http.DefaultClient, staticTokenSource{}, slog.Default(), "test")
 }
 
 func TestEnrichSharedItem_AlreadyHasEmail(t *testing.T) {

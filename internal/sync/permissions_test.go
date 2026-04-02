@@ -102,7 +102,7 @@ func newTestEngineWithPerms(
 	checker synctypes.PermissionChecker,
 	shortcuts []synctypes.Shortcut,
 	baselineEntries []synctypes.Outcome,
-) (*Engine, *synctypes.Baseline, string) {
+) (*testEngine, *synctypes.Baseline, string) {
 	t.Helper()
 
 	tmpDir := t.TempDir()
@@ -127,6 +127,7 @@ func newTestEngineWithPerms(
 		Logger:      logger,
 	})
 	require.NoError(t, err)
+	testEng := &testEngine{Engine: eng}
 
 	ctx := t.Context()
 
@@ -145,10 +146,10 @@ func newTestEngineWithPerms(
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
-		assert.NoError(t, eng.Close(t.Context()))
+		assert.NoError(t, testEng.Close(t.Context()))
 	})
 
-	return eng, bl, syncRoot
+	return testEng, bl, syncRoot
 }
 
 // Validates: R-2.14.1, R-2.10.23
@@ -241,10 +242,10 @@ func TestHandle403_ReadOnlyFolder_RecordsIssueAtBoundary(t *testing.T) {
 		},
 	}
 
-	assert.Equal(t, scopeKey, eng.activeBlockingScope(nestedUpload), "all uploads under the denied boundary should be blocked recursively")
-	assert.Equal(t, scopeKey, eng.activeBlockingScope(nestedDelete), "all remote deletes under the denied boundary should be blocked recursively")
-	assert.True(t, eng.activeBlockingScope(nestedDownload).IsZero(), "downloads must remain allowed in download-only mode")
-	assert.True(t, eng.activeBlockingScope(siblingUpload).IsZero(), "siblings outside the denied boundary must remain admissible")
+	assert.Equal(t, scopeKey, activeBlockingScopeForTest(t, eng, nestedUpload), "all uploads under the denied boundary should be blocked recursively")
+	assert.Equal(t, scopeKey, activeBlockingScopeForTest(t, eng, nestedDelete), "all remote deletes under the denied boundary should be blocked recursively")
+	assert.True(t, activeBlockingScopeForTest(t, eng, nestedDownload).IsZero(), "downloads must remain allowed in download-only mode")
+	assert.True(t, activeBlockingScopeForTest(t, eng, siblingUpload).IsZero(), "siblings outside the denied boundary must remain admissible")
 }
 
 // Validates: R-2.14.1
@@ -467,12 +468,12 @@ func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 	assert.Equal(t, "Shared/TeamDocs/sub/file.txt", retryable[0].Path, "held child work should become retryable immediately when permissions return")
 
 	select {
-	case <-eng.watch.retryTimerCh:
+	case <-testWatchRuntime(t, eng).retryTimerCh:
 	case <-time.After(time.Second):
 		require.Fail(t, "recheckPermissions should signal retryTimerCh when a remote scope clears")
 	}
 
-	admitted := eng.activeBlockingScope(&synctypes.TrackedAction{
+	admitted := activeBlockingScopeForTest(t, eng, &synctypes.TrackedAction{
 		ID: 10,
 		Action: synctypes.Action{
 			Type:    synctypes.ActionUpload,

@@ -6,11 +6,10 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"os"
 	"path/filepath"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
+	"github.com/tonimelisma/onedrive-go/internal/fsroot"
 )
 
 // AccountProfile holds cached API data about the account owner. Persisted
@@ -80,7 +79,12 @@ func LookupAccountProfile(cid driveid.CanonicalID) (*AccountProfile, bool, error
 		return nil, false, nil
 	}
 
-	data, err := trustedpath.ReadFile(path)
+	root, name, err := fsroot.OpenPath(path)
+	if err != nil {
+		return nil, false, fmt.Errorf("opening account root: %w", err)
+	}
+
+	data, err := root.ReadFile(name)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, false, nil
 	}
@@ -116,48 +120,14 @@ func SaveAccountProfile(cid driveid.CanonicalID, profile *AccountProfile) (err e
 		return fmt.Errorf("encoding account profile: %w", err)
 	}
 
-	dir := filepath.Dir(path)
-
-	if mkdirErr := os.MkdirAll(dir, configDirPermissions); mkdirErr != nil {
-		return fmt.Errorf("creating data directory: %w", mkdirErr)
-	}
-
-	// Atomic write: temp file in same dir, then rename.
-	tmp, err := os.CreateTemp(dir, ".account-*.tmp")
+	root, name, err := fsroot.OpenPath(path)
 	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
+		return fmt.Errorf("opening account root: %w", err)
 	}
 
-	tmpPath := tmp.Name()
-
-	succeeded := false
-	defer func() {
-		if !succeeded {
-			err = removeTempPath(tmpPath, "account temp file", err)
-		}
-	}()
-
-	if _, writeErr := tmp.Write(data); writeErr != nil {
-		return closeTempFile(tmp, "account temp file", fmt.Errorf("writing account file: %w", writeErr))
+	if err := root.AtomicWrite(name, data, configFilePermissions, configDirPermissions, ".account-*.tmp"); err != nil {
+		return fmt.Errorf("writing account file: %w", err)
 	}
-
-	if syncErr := tmp.Sync(); syncErr != nil {
-		return closeTempFile(tmp, "account temp file", fmt.Errorf("syncing account file: %w", syncErr))
-	}
-
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("closing account file: %w", err)
-	}
-
-	if err := chmodTrustedTempPath(tmpPath, configFilePermissions, "account file"); err != nil {
-		return err
-	}
-
-	if err := renameTrustedTempPath(tmpPath, path, "account file"); err != nil {
-		return err
-	}
-
-	succeeded = true
 
 	return nil
 }

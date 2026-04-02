@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 // Validates: R-4.7.3
@@ -50,7 +50,7 @@ func TestOpen_AppendsToExisting(t *testing.T) {
 	require.NoError(t, writeErr)
 	require.NoError(t, f.Close())
 
-	data, readErr := trustedpath.ReadFile(path)
+	data, readErr := localpath.ReadFile(path)
 	require.NoError(t, readErr)
 	assert.Equal(t, "existing content\nnew content\n", string(data))
 }

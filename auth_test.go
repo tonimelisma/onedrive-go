@@ -18,7 +18,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 func TestUniqueAccounts(t *testing.T) {
@@ -201,7 +201,7 @@ func TestMoveToken_Success(t *testing.T) {
 	require.NoError(t, os.WriteFile(src, []byte("token"), 0o600))
 	require.NoError(t, moveToken(src, dst))
 
-	data, err := trustedpath.ReadFile(dst)
+	data, err := localpath.ReadFile(dst)
 	require.NoError(t, err)
 	assert.Equal(t, "token", string(data))
 
@@ -339,7 +339,7 @@ func TestOpenBrowser_StartsValidatedCommand(t *testing.T) {
 	require.NoError(t, openBrowser(t.Context(), authURL))
 
 	require.Eventually(t, func() bool {
-		data, readErr := trustedpath.ReadFile(outputPath)
+		data, readErr := localpath.ReadFile(outputPath)
 		return readErr == nil && string(data) == authURL
 	}, 5*time.Second, 25*time.Millisecond)
 }

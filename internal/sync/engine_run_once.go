@@ -34,6 +34,7 @@ const forceSafetyMax = math.MaxInt32
 //  9. Wait for completion, commit delta token
 func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts synctypes.RunOpts) (*synctypes.SyncReport, error) {
 	start := time.Now()
+	runner := newOneShotRunner(e)
 
 	e.logger.Info("sync pass starting",
 		slog.String("mode", mode.String()),
@@ -41,7 +42,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 		slog.Bool("force", opts.Force),
 	)
 
-	bl, shortcuts, err := e.prepareRunOnceState(ctx)
+	bl, shortcuts, err := runner.prepareRunOnceState(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +50,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 	// Steps 2-4: Observe remote + local, buffer, and flush.
 	// The pending delta token is returned but NOT committed yet — it is
 	// deferred until after the planner approves the changes (step 6).
-	changes, pendingDeltaToken, err := e.observeChanges(ctx, bl, mode, opts.DryRun, opts.FullReconcile)
+	changes, pendingDeltaToken, err := runner.observeChanges(ctx, nil, bl, mode, opts.DryRun, opts.FullReconcile)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +75,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 	}
 
 	// Step 6: Plan actions.
-	safety := e.resolveSafetyConfig(opts.Force)
+	safety := e.resolveSafetyConfig(opts.Force, false)
 	denied := e.permHandler.DeniedPrefixes(ctx)
 
 	plan, err := e.planner.Plan(changes, bl, mode, safety, denied)
@@ -85,7 +86,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 	}
 
 	// Planner approved — commit the deferred delta token now.
-	if err := e.commitDeferredDeltaToken(ctx, pendingDeltaToken); err != nil {
+	if err := runner.commitDeferredDeltaToken(ctx, pendingDeltaToken); err != nil {
 		return nil, err
 	}
 
@@ -105,10 +106,10 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 
 	// Store shortcuts so result handling and permission rechecks can access
 	// them during plan execution.
-	e.setShortcuts(shortcuts)
+	runner.setShortcuts(shortcuts)
 
 	// Execute plan: run workers, drain results (failures, 403s, upload issues).
-	e.executePlan(ctx, plan, report, bl)
+	runner.executePlan(ctx, plan, report, bl)
 
 	report.Duration = time.Since(start)
 
@@ -118,7 +119,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 		slog.Int("failed", report.Failed),
 	)
 
-	e.postSyncHousekeeping()
+	runner.postSyncHousekeeping()
 
 	// Persist sync metadata for status command queries.
 	if metaErr := e.baseline.WriteSyncMetadata(ctx, report); metaErr != nil {
@@ -128,42 +129,45 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 	return report, nil
 }
 
-func (e *Engine) prepareRunOnceState(ctx context.Context) (*synctypes.Baseline, []synctypes.Shortcut, error) {
+func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) (*synctypes.Baseline, []synctypes.Shortcut, error) {
+	eng := r.engine
+	flow := &r.engineFlow
+
 	// Step 0: Verify drive identity (B-074).
-	if err := e.verifyDriveIdentity(ctx); err != nil {
+	if err := eng.verifyDriveIdentity(ctx); err != nil {
 		return nil, nil, err
 	}
 
 	// Crash recovery: reset any in-progress states from a previous crash.
 	// Also creates sync_failures entries so the retrier can rediscover items
 	// that were mid-execution when the crash occurred.
-	if err := e.baseline.ResetInProgressStates(ctx, e.syncRoot, retry.ReconcilePolicy().Delay); err != nil {
-		e.logger.Warn("failed to reset in-progress states", slog.String("error", err.Error()))
+	if err := eng.baseline.ResetInProgressStates(ctx, eng.syncRoot, retry.ReconcilePolicy().Delay); err != nil {
+		eng.logger.Warn("failed to reset in-progress states", slog.String("error", err.Error()))
 	}
 
-	if err := e.repairPersistedScopes(ctx); err != nil {
+	if err := flow.repairPersistedScopes(ctx, nil); err != nil {
 		return nil, nil, fmt.Errorf("sync: repairing persisted scopes: %w", err)
 	}
 
-	bl, err := e.baseline.Load(ctx)
+	bl, err := eng.baseline.Load(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("sync: loading baseline: %w", err)
 	}
 
-	shortcuts, scErr := e.baseline.ListShortcuts(ctx)
+	shortcuts, scErr := eng.baseline.ListShortcuts(ctx)
 	if scErr != nil {
-		e.logger.Warn("failed to load shortcuts", slog.String("error", scErr.Error()))
+		eng.logger.Warn("failed to load shortcuts", slog.String("error", scErr.Error()))
 	}
 
 	// Recheck permissions — clear any permission_denied issues
 	// for folders that have become writable since the last pass.
-	if e.permHandler.HasPermChecker() && scErr == nil {
-		e.applyPermissionRecheckDecisions(ctx, e.permHandler.recheckPermissions(ctx, bl, shortcuts))
+	if eng.permHandler.HasPermChecker() && scErr == nil {
+		flow.applyPermissionRecheckDecisions(ctx, nil, eng.permHandler.recheckPermissions(ctx, bl, shortcuts))
 	}
 
 	// Recheck local permission denials — clear scope blocks for
 	// directories that have become accessible since the last pass (R-2.10.13).
-	e.applyPermissionRecheckDecisions(ctx, e.permHandler.recheckLocalPermissions(ctx))
+	flow.applyPermissionRecheckDecisions(ctx, nil, eng.permHandler.recheckLocalPermissions(ctx))
 
 	return bl, shortcuts, nil
 }
@@ -171,8 +175,8 @@ func (e *Engine) prepareRunOnceState(ctx context.Context) (*synctypes.Baseline, 
 // postSyncHousekeeping runs non-critical cleanup after a sync pass:
 // .partial deletion and session file cleanup. Synchronous — completes
 // before RunOnce returns to guarantee cleanup on process exit.
-func (e *Engine) postSyncHousekeeping() {
-	driveops.CleanTransferArtifacts(e.syncRoot, e.sessionStore, e.logger)
+func (flow *engineFlow) postSyncHousekeeping() {
+	driveops.CleanTransferArtifacts(flow.engine.syncRoot, flow.engine.sessionStore, flow.engine.logger)
 }
 
 // executePlan populates the dependency graph and runs the worker pool.
@@ -181,8 +185,8 @@ func (e *Engine) postSyncHousekeeping() {
 //
 // One-shot mode has NO watch-mode active-scope admission loop — all actions
 // with satisfied deps go directly to readyCh. Scope detection (ScopeState) is
-// nil in one-shot; feedScopeDetection is nil-guarded → no-op.
-func (e *Engine) executePlan(
+// absent in one-shot; watch-only lifecycle paths are nil-guarded → no-op.
+func (r *oneShotRunner) executePlan(
 	ctx context.Context, plan *synctypes.ActionPlan, report *synctypes.SyncReport,
 	bl *synctypes.Baseline,
 ) {
@@ -193,7 +197,7 @@ func (e *Engine) executePlan(
 	// Invariant: Planner.Plan() always builds Deps with len(Actions).
 	// Assert here to catch any future regression that breaks this contract.
 	if len(plan.Actions) != len(plan.Deps) {
-		e.logger.Error("plan invariant violation: Actions/Deps length mismatch",
+		r.engine.logger.Error("plan invariant violation: Actions/Deps length mismatch",
 			slog.Int("actions", len(plan.Actions)),
 			slog.Int("deps", len(plan.Deps)),
 		)
@@ -206,21 +210,21 @@ func (e *Engine) executePlan(
 	}
 
 	// Reset engine counters for this pass.
-	e.resetResultStats()
+	r.resetResultStats()
 
 	// One-shot mode: DepGraph + readyCh, no watch-mode active-scope admission
 	// loop (e.watch == nil). Actions that pass dependency resolution go
 	// straight to workers. Scope blocking is watch-mode only (§2.3).
-	depGraph := syncdispatch.NewDepGraph(e.logger)
-	e.depGraph = depGraph
-	e.readyCh = make(chan *synctypes.TrackedAction, len(plan.Actions))
+	depGraph := syncdispatch.NewDepGraph(r.engine.logger)
+	r.depGraph = depGraph
+	r.readyCh = make(chan *synctypes.TrackedAction, len(plan.Actions))
 
 	// Two-phase graph population: Register all actions first, then wire
 	// dependencies. This avoids forward-reference issues where a parent
 	// folder delete at index 0 depends on a child file delete at index 5 —
 	// single-pass Add would silently drop the unregistered depID.
 	for i := range plan.Actions {
-		e.setDispatch(ctx, &plan.Actions[i])
+		r.setDispatch(ctx, &plan.Actions[i])
 		depGraph.Register(&plan.Actions[i], int64(i))
 	}
 
@@ -231,12 +235,12 @@ func (e *Engine) executePlan(
 		}
 
 		if ta := depGraph.WireDeps(int64(i), depIDs); ta != nil {
-			e.readyCh <- ta
+			r.readyCh <- ta
 		}
 	}
 
-	pool := syncexec.NewWorkerPool(e.execCfg, e.readyCh, depGraph.Done(), e.baseline, e.logger, len(plan.Actions))
-	pool.Start(ctx, e.transferWorkers)
+	pool := syncexec.NewWorkerPool(r.engine.execCfg, r.readyCh, depGraph.Done(), r.engine.baseline, r.engine.logger, len(plan.Actions))
+	pool.Start(ctx, r.engine.transferWorkers)
 
 	// Process results concurrently — engine classifies and calls Complete.
 	// The one-shot engine loop reads from the results channel while workers
@@ -244,30 +248,20 @@ func (e *Engine) executePlan(
 	// including side effects (counter updates, failure recording). Without
 	// this barrier, resultStats() could race with result processing.
 	drainDone := make(chan struct{})
-	loopErrCh := make(chan error, 1)
 	go func() {
 		defer close(drainDone)
-		loopErrCh <- e.runEngineLoop(ctx, &engineLoopConfig{
-			bl:                   bl,
-			results:              pool.Results(),
-			stopWhenResultsClose: true,
-		})
+		r.runResultsLoop(ctx, bl, pool.Results())
 	}()
 
 	pool.Wait() // blocks until depGraph.Done() (all actions at terminal state)
 	pool.Stop() // cancels workers and closes results once workers exit
 	<-drainDone // wait for the one-shot engine loop to finish all side effects
-	if err := <-loopErrCh; err != nil {
-		e.logger.Error("one-shot engine loop failed",
-			slog.String("error", err.Error()),
-		)
-	}
 
 	// End-of-pass failure summary — aggregates failures by issue type so
 	// bulk sync produces WARN summaries instead of per-item noise (R-6.6.12).
-	e.logFailureSummary()
+	r.logFailureSummary()
 
-	report.Succeeded, report.Failed, report.Errors = e.resultStats()
+	report.Succeeded, report.Failed, report.Errors = r.resultStats()
 }
 
 // buildReportFromCounts populates a synctypes.SyncReport with plan counts.
@@ -289,13 +283,15 @@ func buildReportFromCounts(counts map[synctypes.ActionType]int, mode synctypes.S
 
 // observeRemote fetches delta changes from the Graph API. Automatically
 // retries with an empty token if synctypes.ErrDeltaExpired is returned (full resync).
-func (e *Engine) observeRemote(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, string, error) {
-	savedToken, err := e.baseline.GetDeltaToken(ctx, e.driveID.String(), "")
+func (flow *engineFlow) observeRemote(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, string, error) {
+	eng := flow.engine
+
+	savedToken, err := eng.baseline.GetDeltaToken(ctx, eng.driveID.String(), "")
 	if err != nil {
 		return nil, "", fmt.Errorf("sync: getting delta token: %w", err)
 	}
 
-	obs := syncobserve.NewRemoteObserver(e.fetcher, bl, e.driveID, e.logger)
+	obs := syncobserve.NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
 
 	events, token, err := obs.FullDelta(ctx, savedToken)
 	if err != nil {
@@ -304,7 +300,7 @@ func (e *Engine) observeRemote(ctx context.Context, bl *synctypes.Baseline) ([]s
 		}
 
 		// Delta token expired — retry with empty token for full resync.
-		e.logger.Warn("delta token expired, performing full resync")
+		eng.logger.Warn("delta token expired, performing full resync")
 
 		events, token, err = obs.FullDelta(ctx, "")
 		if err != nil {
@@ -317,10 +313,12 @@ func (e *Engine) observeRemote(ctx context.Context, bl *synctypes.Baseline) ([]s
 
 // observeLocal scans the local filesystem for changes and collects skipped
 // items (invalid names, path too long, file too large) for failure recording.
-func (e *Engine) observeLocal(ctx context.Context, bl *synctypes.Baseline) (synctypes.ScanResult, error) {
-	obs := syncobserve.NewLocalObserver(bl, e.logger, e.checkWorkers)
+func (flow *engineFlow) observeLocal(ctx context.Context, bl *synctypes.Baseline) (synctypes.ScanResult, error) {
+	eng := flow.engine
 
-	result, err := obs.FullScan(ctx, e.syncRoot)
+	obs := syncobserve.NewLocalObserver(bl, eng.logger, eng.checkWorkers)
+
+	result, err := obs.FullScan(ctx, eng.syncRoot)
 	if err != nil {
 		return synctypes.ScanResult{}, fmt.Errorf("sync: local scan: %w", err)
 	}
@@ -339,9 +337,14 @@ func (e *Engine) observeLocal(ctx context.Context, bl *synctypes.Baseline) (sync
 // When fullReconcile is true, runs a fresh delta with empty token (enumerates
 // ALL remote items) and detects orphans — baseline entries not in the full
 // enumeration, representing missed delta deletions.
-func (e *Engine) observeChanges(
-	ctx context.Context, bl *synctypes.Baseline, mode synctypes.SyncMode, dryRun, fullReconcile bool,
+func (flow *engineFlow) observeChanges(
+	ctx context.Context,
+	watch *watchRuntime,
+	bl *synctypes.Baseline,
+	mode synctypes.SyncMode,
+	dryRun, fullReconcile bool,
 ) ([]synctypes.PathChanges, string, error) {
+	eng := flow.engine
 	var remoteEvents []synctypes.ChangeEvent
 	var pendingDeltaToken string
 
@@ -349,14 +352,14 @@ func (e *Engine) observeChanges(
 
 	if mode != synctypes.SyncUploadOnly {
 		if fullReconcile {
-			e.logger.Info("full reconciliation: enumerating all remote items")
-			remoteEvents, pendingDeltaToken, err = e.observeAndCommitRemoteFull(ctx, bl)
+			eng.logger.Info("full reconciliation: enumerating all remote items")
+			remoteEvents, pendingDeltaToken, err = flow.observeAndCommitRemoteFull(ctx, bl)
 		} else if dryRun {
 			// Dry-run: observe without committing delta token or observations.
 			// A subsequent real sync must see the same remote changes.
-			remoteEvents, _, err = e.observeRemote(ctx, bl)
+			remoteEvents, _, err = flow.observeRemote(ctx, bl)
 		} else {
-			remoteEvents, pendingDeltaToken, err = e.observeAndCommitRemote(ctx, bl)
+			remoteEvents, pendingDeltaToken, err = flow.observeAndCommitRemote(ctx, bl)
 		}
 
 		if err != nil {
@@ -369,12 +372,12 @@ func (e *Engine) observeChanges(
 	// observation to avoid wasting API calls (R-2.10.30).
 	var shortcutEvents []synctypes.ChangeEvent
 
-	if e.isObservationSuppressed() {
-		e.logger.Debug("suppressing shortcut observation — global scope block active")
+	if flow.isObservationSuppressed(watch) {
+		eng.logger.Debug("suppressing shortcut observation — global scope block active")
 	} else {
-		shortcutEvents, err = e.processShortcuts(ctx, remoteEvents, bl, dryRun)
+		shortcutEvents, err = flow.processShortcuts(ctx, remoteEvents, bl, dryRun)
 		if err != nil {
-			e.logger.Warn("shortcut processing failed, continuing without shortcut content",
+			eng.logger.Warn("shortcut processing failed, continuing without shortcut content",
 				slog.String("error", err.Error()),
 			)
 		}
@@ -387,22 +390,26 @@ func (e *Engine) observeChanges(
 	var localResult synctypes.ScanResult
 
 	if mode != synctypes.SyncDownloadOnly {
-		localResult, err = e.observeLocal(ctx, bl)
+		localResult, err = flow.observeLocal(ctx, bl)
 		if err != nil {
 			return nil, "", err
 		}
 
 		// Record observation-time issues (invalid names, path too long, file too large).
-		e.recordSkippedItems(ctx, localResult.Skipped)
-		e.clearResolvedSkippedItems(ctx, localResult.Skipped)
+		flow.recordSkippedItems(ctx, localResult.Skipped)
+		flow.clearResolvedSkippedItems(ctx, localResult.Skipped)
 
 		// R-2.10.10: If the scanner observed paths that were previously blocked
 		// by local permission denials, clear the failures (scanner success = proof
 		// of accessibility).
-		e.applyPermissionRecheckDecisions(ctx, e.permHandler.clearScannerResolvedPermissions(ctx, pathSetFromEvents(localResult.Events)))
+		flow.applyPermissionRecheckDecisions(
+			ctx,
+			watch,
+			eng.permHandler.clearScannerResolvedPermissions(ctx, pathSetFromEvents(localResult.Events)),
+		)
 	}
 
-	buf := syncobserve.NewBuffer(e.logger)
+	buf := syncobserve.NewBuffer(eng.logger)
 	buf.AddAll(remoteEvents)
 	buf.AddAll(shortcutEvents)
 	buf.AddAll(localResult.Events)
@@ -425,8 +432,10 @@ func (e *Engine) observeChanges(
 // a deletion was still propagating to the Graph change log, advancing would
 // permanently skip it. Deletions are delivered exactly once in a narrow
 // window (ci_issues.md §20).
-func (e *Engine) observeAndCommitRemote(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, string, error) {
-	events, deltaToken, err := e.observeRemote(ctx, bl)
+func (flow *engineFlow) observeAndCommitRemote(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, string, error) {
+	eng := flow.engine
+
+	events, deltaToken, err := flow.observeRemote(ctx, bl)
 	if err != nil {
 		return nil, "", err
 	}
@@ -435,14 +444,14 @@ func (e *Engine) observeAndCommitRemote(ctx context.Context, bl *synctypes.Basel
 	// replays the same empty window at zero cost, but avoids advancing
 	// past deletions still propagating through the Graph change log.
 	if len(events) == 0 {
-		e.logger.Debug("delta returned 0 events, skipping token advancement")
+		eng.logger.Debug("delta returned 0 events, skipping token advancement")
 		return events, "", nil
 	}
 
 	// Commit observations WITHOUT the delta token. The token is deferred
 	// until after the planner approves the changes.
-	observed := changeEventsToObservedItems(e.logger, events)
-	if commitErr := e.baseline.CommitObservation(ctx, observed, "", e.driveID); commitErr != nil {
+	observed := changeEventsToObservedItems(eng.logger, events)
+	if commitErr := eng.baseline.CommitObservation(ctx, observed, "", eng.driveID); commitErr != nil {
 		return nil, "", fmt.Errorf("sync: committing observations: %w", commitErr)
 	}
 
@@ -454,13 +463,15 @@ func (e *Engine) observeAndCommitRemote(ctx context.Context, bl *synctypes.Basel
 // If the process crashes between this call and execution, the next sync
 // replays the same delta window — the state machine handles re-observation
 // idempotently (same hash → no-op, same delete → no-op).
-func (e *Engine) commitDeferredDeltaToken(ctx context.Context, token string) error {
+func (flow *engineFlow) commitDeferredDeltaToken(ctx context.Context, token string) error {
+	eng := flow.engine
+
 	if token == "" {
 		return nil
 	}
 
-	if err := e.baseline.CommitDeltaToken(
-		ctx, token, e.driveID.String(), "", e.driveID.String(),
+	if err := eng.baseline.CommitDeltaToken(
+		ctx, token, eng.driveID.String(), "", eng.driveID.String(),
 	); err != nil {
 		return fmt.Errorf("sync: committing deferred delta token: %w", err)
 	}
@@ -473,8 +484,10 @@ func (e *Engine) commitDeferredDeltaToken(ctx context.Context, token string) err
 // but not in the full enumeration = deleted remotely but missed by incremental
 // delta. Returns all events (creates/modifies from the full enumeration +
 // synthesized deletes for orphans) and the new delta token.
-func (e *Engine) observeRemoteFull(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, string, error) {
-	obs := syncobserve.NewRemoteObserver(e.fetcher, bl, e.driveID, e.logger)
+func (flow *engineFlow) observeRemoteFull(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, string, error) {
+	eng := flow.engine
+
+	obs := syncobserve.NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
 
 	// Full enumeration: empty token returns ALL items as create/modify events.
 	events, token, err := obs.FullDelta(ctx, "")
@@ -494,17 +507,17 @@ func (e *Engine) observeRemoteFull(ctx context.Context, bl *synctypes.Baseline) 
 	}
 
 	// Detect orphans: baseline entries whose ItemID is not in the seen set.
-	orphans := bl.FindOrphans(seen, e.driveID, "")
+	orphans := bl.FindOrphans(seen, eng.driveID, "")
 
 	if len(orphans) > 0 {
-		e.logger.Info("full reconciliation: detected orphaned items",
+		eng.logger.Info("full reconciliation: detected orphaned items",
 			slog.Int("orphans", len(orphans)),
 		)
 
 		events = append(events, orphans...)
 	}
 
-	e.logger.Info("full reconciliation complete",
+	eng.logger.Info("full reconciliation complete",
 		slog.Int("total_events", len(events)),
 		slog.Int("orphans", len(orphans)),
 	)
@@ -515,15 +528,17 @@ func (e *Engine) observeRemoteFull(ctx context.Context, bl *synctypes.Baseline) 
 // observeAndCommitRemoteFull wraps observeRemoteFull to persist observations
 // and return the pending delta token for deferred commitment (same deferral
 // pattern as observeAndCommitRemote — see its doc comment for rationale).
-func (e *Engine) observeAndCommitRemoteFull(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, string, error) {
-	events, deltaToken, err := e.observeRemoteFull(ctx, bl)
+func (flow *engineFlow) observeAndCommitRemoteFull(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, string, error) {
+	eng := flow.engine
+
+	events, deltaToken, err := flow.observeRemoteFull(ctx, bl)
 	if err != nil {
 		return nil, "", err
 	}
 
 	// Commit observations without the delta token — token deferred to caller.
-	observed := changeEventsToObservedItems(e.logger, events)
-	if commitErr := e.baseline.CommitObservation(ctx, observed, "", e.driveID); commitErr != nil {
+	observed := changeEventsToObservedItems(eng.logger, events)
+	if commitErr := eng.baseline.CommitObservation(ctx, observed, "", eng.driveID); commitErr != nil {
 		return nil, "", fmt.Errorf("sync: committing full reconciliation: %w", commitErr)
 	}
 
@@ -570,8 +585,8 @@ func changeEventsToObservedItems(logger *slog.Logger, events []synctypes.ChangeE
 // big-delete check is disabled (threshold=MaxInt32) when force is set or when
 // the engine has a deleteCounter (watch mode — the rolling counter handles
 // big-delete protection instead).
-func (e *Engine) resolveSafetyConfig(force bool) *synctypes.SafetyConfig {
-	if force || e.watch != nil {
+func (e *Engine) resolveSafetyConfig(force, watchMode bool) *synctypes.SafetyConfig {
+	if force || watchMode {
 		return &synctypes.SafetyConfig{
 			BigDeleteThreshold: forceSafetyMax,
 		}

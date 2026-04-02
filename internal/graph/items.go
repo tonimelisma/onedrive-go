@@ -290,7 +290,7 @@ func parseTimestamp(raw, field, itemID string, isDeleted bool, logger *slog.Logg
 // fetchItem fetches a single drive item from the given API path and decodes it.
 // Shared by GetItem (ID-based) and GetItemByPath (path-based) to avoid duplication.
 func (c *Client) fetchItem(ctx context.Context, apiPath string) (*Item, error) {
-	resp, err := c.Do(ctx, http.MethodGet, apiPath, nil)
+	resp, err := c.do(ctx, http.MethodGet, apiPath, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -468,7 +468,7 @@ func (c *Client) listChildrenPage(ctx context.Context, path string, page int) ([
 	}
 
 	op := func() (childrenPage, error) {
-		resp, err := c.Do(ctx, http.MethodGet, path, nil)
+		resp, err := c.do(ctx, http.MethodGet, path, nil)
 		if err != nil {
 			return childrenPage{}, err
 		}
@@ -524,7 +524,7 @@ func (c *Client) listChildrenPage(ctx context.Context, path string, page int) ([
 }
 
 // stripBaseURL removes the client's base URL prefix from a full URL,
-// returning the path + query string for use with Do().
+// returning the path + query string for use with do().
 // Returns an error if the URL doesn't start with the expected base.
 func (c *Client) stripBaseURL(fullURL string) (string, error) {
 	if !strings.HasPrefix(fullURL, c.baseURL) {
@@ -556,7 +556,7 @@ func (c *Client) CreateFolder(ctx context.Context, driveID driveid.ID, parentID,
 		return nil, fmt.Errorf("graph: marshaling create folder request: %w", err)
 	}
 
-	resp, err := c.Do(ctx, http.MethodPost, path, bytes.NewReader(bodyBytes))
+	resp, err := c.do(ctx, http.MethodPost, path, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, err
 	}
@@ -605,7 +605,7 @@ func (c *Client) MoveItem(ctx context.Context, driveID driveid.ID, itemID, newPa
 		return nil, fmt.Errorf("graph: marshaling move request: %w", err)
 	}
 
-	resp, err := c.Do(ctx, http.MethodPatch, path, bytes.NewReader(bodyBytes))
+	resp, err := c.do(ctx, http.MethodPatch, path, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, err
 	}
@@ -652,7 +652,7 @@ func (c *Client) UpdateFileSystemInfo(
 		return nil, fmt.Errorf("graph: marshaling fileSystemInfo request: %w", err)
 	}
 
-	resp, err := c.Do(ctx, http.MethodPatch, path, bytes.NewReader(bodyBytes))
+	resp, err := c.do(ctx, http.MethodPatch, path, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, err
 	}
@@ -736,7 +736,7 @@ func (c *Client) CopyItem(
 		return nil, fmt.Errorf("graph: marshaling copy request: %w", err)
 	}
 
-	resp, err := c.Do(ctx, http.MethodPost, apiPath, bytes.NewReader(bodyBytes))
+	resp, err := c.do(ctx, http.MethodPost, apiPath, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, err
 	}
@@ -822,7 +822,7 @@ func (c *Client) ListItemPermissions(ctx context.Context, driveID driveid.ID, it
 
 	apiPath := fmt.Sprintf("/drives/%s/items/%s/permissions", driveID, itemID)
 
-	resp, err := c.Do(ctx, http.MethodGet, apiPath, nil)
+	resp, err := c.do(ctx, http.MethodGet, apiPath, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -865,7 +865,7 @@ func (c *Client) RestoreItem(
 
 	apiPath := fmt.Sprintf("/drives/%s/items/%s/restore", driveID, itemID)
 
-	resp, err := c.Do(ctx, http.MethodPost, apiPath, http.NoBody)
+	resp, err := c.do(ctx, http.MethodPost, apiPath, http.NoBody)
 	if err != nil {
 		return nil, err
 	}
@@ -883,7 +883,7 @@ func (c *Client) RestoreItem(
 
 // deleteAndDrain sends a request and drains the response body to reuse the connection.
 func (c *Client) deleteAndDrain(ctx context.Context, method, path string) error {
-	resp, err := c.Do(ctx, method, path, nil)
+	resp, err := c.do(ctx, method, path, nil)
 	if err != nil {
 		return err
 	}

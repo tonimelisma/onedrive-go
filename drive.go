@@ -235,7 +235,12 @@ func discoverDrivesForToken(
 		return nil
 	}
 
-	client := newGraphClient(ts, logger)
+	client, clientErr := newGraphClient(ts, logger)
+	if clientErr != nil {
+		logger.Debug("skipping token for drive discovery", "token", tokenCID.String(), "error", clientErr)
+
+		return nil
+	}
 
 	var entries []driveListEntry
 
@@ -897,7 +902,10 @@ func resolveSharedDisplayName(
 		return "", fmt.Errorf("load token source: %w", err)
 	}
 
-	client := newGraphClient(ts, logger)
+	client, err := newGraphClient(ts, logger)
+	if err != nil {
+		return "", err
+	}
 	existingNames := collectExistingDisplayNames(cfg)
 
 	items := searchSharedItemsWithFallback(ctx, client, cid.Email(), logger)
@@ -1016,7 +1024,10 @@ func searchSharedDrives(
 			continue
 		}
 
-		client := newGraphClient(ts, logger)
+		client, clientErr := newGraphClient(ts, logger)
+		if clientErr != nil {
+			continue
+		}
 		email := tokenCID.Email()
 
 		items := searchSharedItemsWithFallback(ctx, client, email, logger)
@@ -1286,7 +1297,12 @@ func searchAccountSharePoint(
 		return nil
 	}
 
-	client := newGraphClient(ts, logger)
+	client, err := newGraphClient(ts, logger)
+	if err != nil {
+		logger.Debug("skipping token for search", "token", tokenCID.String(), "error", err)
+
+		return nil
+	}
 
 	sites, err := client.SearchSites(ctx, query, sharePointSearchLimit)
 	if err != nil {

@@ -56,56 +56,43 @@ const minReconcileInterval = 15 * time.Minute
 // for in-flight actions to complete.
 const quiescenceLogInterval = 30 * time.Second
 
-// setShortcuts updates the shortcuts used by result processing and permission
-// handling.
-// Called by the watch goroutine after observation when shortcuts may have changed.
-func (e *Engine) setShortcuts(shortcuts []synctypes.Shortcut) {
-	e.shortcuts = shortcuts
-}
-
-// getShortcuts returns the latest shortcuts for result processing and
-// permission handling.
-func (e *Engine) getShortcuts() []synctypes.Shortcut {
-	return e.shortcuts
-}
-
 // initDeleteProtection sets up the rolling delete counter and clears stale
 // big_delete_held entries from a prior daemon session. Force mode disables
 // the counter (deleteCounter stays nil). Also seeds lastDataVersion so
 // the first recheck tick doesn't fire spuriously.
-func (e *Engine) initDeleteProtection(ctx context.Context, force bool) {
+func (rt *watchRuntime) initDeleteProtection(ctx context.Context, force bool) {
 	if !force {
-		e.watch.deleteCounter = syncdispatch.NewDeleteCounter(e.bigDeleteThreshold, deleteCounterWindow, time.Now)
+		rt.deleteCounter = syncdispatch.NewDeleteCounter(rt.engine.bigDeleteThreshold, deleteCounterWindow, time.Now)
 	}
 
-	if err := e.baseline.ClearResolvedActionableFailures(ctx, synctypes.IssueBigDeleteHeld, nil); err != nil {
-		e.logger.Warn("failed to clear stale big-delete-held entries",
+	if err := rt.engine.baseline.ClearResolvedActionableFailures(ctx, synctypes.IssueBigDeleteHeld, nil); err != nil {
+		rt.engine.logger.Warn("failed to clear stale big-delete-held entries",
 			slog.String("error", err.Error()),
 		)
 	}
 
-	if dv, dvErr := e.baseline.DataVersion(ctx); dvErr == nil {
-		e.watch.lastDataVersion = dv
+	if dv, dvErr := rt.engine.baseline.DataVersion(ctx); dvErr == nil {
+		rt.lastDataVersion = dv
 	}
 }
 
 // loadWatchState loads the baseline and shortcuts for the watch session.
 // Both are loaded once after the initial sync. synctypes.Baseline is live-mutated
 // under RWMutex; shortcuts are updated via setShortcuts when they change.
-func (e *Engine) loadWatchState(ctx context.Context) (*synctypes.Baseline, error) {
-	bl, err := e.baseline.Load(ctx)
+func (rt *watchRuntime) loadWatchState(ctx context.Context) (*synctypes.Baseline, error) {
+	bl, err := rt.engine.baseline.Load(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("sync: loading baseline for watch: %w", err)
 	}
 
-	shortcuts, scErr := e.baseline.ListShortcuts(ctx)
+	shortcuts, scErr := rt.engine.baseline.ListShortcuts(ctx)
 	if scErr != nil {
-		e.logger.Warn("failed to load shortcuts for watch mode",
+		rt.engine.logger.Warn("failed to load shortcuts for watch mode",
 			slog.String("error", scErr.Error()),
 		)
 	}
 
-	e.setShortcuts(shortcuts)
+	rt.setShortcuts(shortcuts)
 
 	return bl, nil
 }
@@ -126,31 +113,34 @@ func (e *Engine) RunWatch(ctx context.Context, mode synctypes.SyncMode, opts syn
 		slog.Duration("debounce", e.resolveDebounce(opts)),
 	)
 
+	rt := newWatchRuntime(e)
+
 	// Step 1: Set up watch infrastructure (no observers yet).
-	pipe, err := e.initWatchInfra(ctx, mode, opts)
+	pipe, err := rt.initWatchInfra(ctx, mode, opts)
 	if err != nil {
 		return err
 	}
 	defer pipe.cleanup()
 
 	// Step 2: Bootstrap — observe, plan, execute through watch pipeline.
-	if err := e.bootstrapSync(ctx, mode, pipe); err != nil {
+	if err := rt.bootstrapSync(ctx, mode, pipe); err != nil {
 		return fmt.Errorf("sync: initial sync failed: %w", err)
 	}
 
 	// Step 3: Start observers AFTER bootstrap — they see the post-bootstrap baseline.
-	errs, activeObs, skippedCh := e.startObservers(ctx, pipe.bl, mode, e.watch.buf, opts)
+	errs, activeObs, skippedCh := rt.startObservers(ctx, pipe.bl, mode, rt.buf, opts)
 	pipe.errs = errs
 	pipe.activeObs = activeObs
 	pipe.skippedCh = skippedCh
 
 	// Step 4: Run the watch loop.
-	return e.runWatchLoop(ctx, pipe)
+	return rt.runWatchLoop(ctx, pipe)
 }
 
 // watchPipeline holds all handles needed by the watch select loop.
 // Created by initWatchInfra; cleaned up by its cleanup method.
 type watchPipeline struct {
+	runtime          *watchRuntime
 	bl               *synctypes.Baseline
 	safety           *synctypes.SafetyConfig
 	ready            <-chan []synctypes.PathChanges
@@ -166,7 +156,7 @@ type watchPipeline struct {
 	cleanup          func()
 }
 
-// initWatchInfra sets up watch-mode infrastructure: watchState, DepGraph,
+// initWatchInfra sets up watch-mode infrastructure: watchRuntime, DepGraph,
 // worker pool, buffer, persisted scope state, and tickers. Does NOT load
 // baseline or start observers — those happen in bootstrapSync and RunWatch.
 //
@@ -177,76 +167,67 @@ type watchPipeline struct {
 //   - Retrier and trials are handled by the watch control flow itself
 //   - Buffer is promoted to e.watch.buf for observed and reconciliation work;
 //     retry/trial work now enters through explicit engine-owned planner requests.
-func (e *Engine) initWatchInfra(
+func (rt *watchRuntime) initWatchInfra(
 	ctx context.Context, mode synctypes.SyncMode, opts synctypes.WatchOpts,
 ) (*watchPipeline, error) {
-	// Create watchState — all watch-mode-only fields live here.
-	e.watch = &watchState{
-		watchTimerState: watchTimerState{
-			retryTimerCh: make(chan struct{}, 1),
-		},
-		watchReconcileState: watchReconcileState{
-			reconcileResults: make(chan reconcileResult, 1),
-		},
-	}
-
 	// Enable watch-mode-specific executor behavior (pre-upload eTag
 	// freshness checks to prevent silently overwriting concurrent remote
 	// changes — see executor_transfer.go).
-	e.execCfg.SetWatchMode(true)
+	rt.engine.execCfg.SetWatchMode(true)
 
-	e.initDeleteProtection(ctx, opts.Force)
+	rt.initDeleteProtection(ctx, opts.Force)
 
 	// Normalize persisted scope rows before loading runtime scope state.
 	// Startup must not trust stale scope rows blindly; the durable store is
 	// repaired against current persisted evidence before the watch loop loads
 	// its ephemeral activeScopes working set.
-	if err := e.repairPersistedScopes(ctx); err != nil {
+	if err := rt.repairPersistedScopes(ctx, rt); err != nil {
 		return nil, fmt.Errorf("sync: repairing persisted scopes: %w", err)
 	}
 
 	// DepGraph tracks action dependencies. Active scope state is loaded from
 	// the persisted scope_blocks table into watch-owned runtime state.
-	depGraph := syncdispatch.NewDepGraph(e.logger)
-	e.depGraph = depGraph
-	if err := e.loadActiveScopes(ctx); err != nil {
+	depGraph := syncdispatch.NewDepGraph(rt.engine.logger)
+	rt.depGraph = depGraph
+	if err := rt.loadActiveScopes(ctx, rt); err != nil {
 		return nil, fmt.Errorf("sync: loading active scopes: %w", err)
 	}
 
-	e.watch.scopeState = syncdispatch.NewScopeState(e.nowFunc, e.logger)
-	e.watch.nextActionID = 0
+	rt.scopeState = syncdispatch.NewScopeState(rt.engine.nowFunc, rt.engine.logger)
+	rt.nextActionID = 0
 
 	// readyCh feeds admitted actions to workers. Buffer is generous to avoid
 	// backpressure when a batch produces many immediately-ready actions.
-	e.readyCh = make(chan *synctypes.TrackedAction, watchResultBuf)
+	rt.readyCh = make(chan *synctypes.TrackedAction, watchResultBuf)
 
 	// Never-closing done channel — DepGraph.Done() would fire prematurely
 	// between batches when completed == total. Workers exit only via ctx.Done().
 	neverDone := make(chan struct{})
 
-	pool := syncexec.NewWorkerPool(e.execCfg, e.readyCh, neverDone, e.baseline, e.logger, watchResultBuf)
-	pool.Start(ctx, e.transferWorkers)
+	pool := syncexec.NewWorkerPool(rt.engine.execCfg, rt.readyCh, neverDone, rt.engine.baseline, rt.engine.logger, watchResultBuf)
+	pool.Start(ctx, rt.engine.transferWorkers)
 
-	// Buffer promoted to watchState so observed and reconciliation work share
+	// Buffer promoted to watchRuntime so observed and reconciliation work share
 	// the same debounce/planning path the watch loop already owns.
-	buf := syncobserve.NewBuffer(e.logger)
-	e.watch.buf = buf
-	ready := buf.FlushDebounced(ctx, e.resolveDebounce(opts))
+	buf := syncobserve.NewBuffer(rt.engine.logger)
+	rt.buf = buf
+	ready := buf.FlushDebounced(ctx, rt.engine.resolveDebounce(opts))
 
 	// Tickers.
-	reconcileC, stopReconcile := e.initReconcileTicker(opts)
+	reconcileC, stopReconcile := rt.engine.initReconcileTicker(opts)
 	recheckTicker := time.NewTicker(recheckInterval)
 
 	// Arm retrier timer from DB — picks up items from prior crash or prior pass.
-	e.kickRetrySweepNow()
-	e.armTrialTimer()
+	rt.kickRetrySweepNow()
+	rt.armTrialTimer()
 
 	pipe := &watchPipeline{
-		safety:           e.resolveSafetyConfig(opts.Force),
+		runtime:          rt,
+		safety:           rt.engine.resolveSafetyConfig(opts.Force, true),
 		ready:            ready,
 		results:          pool.Results(),
 		reconcileC:       reconcileC,
-		reconcileResults: e.watch.reconcileResults,
+		reconcileResults: rt.reconcileResults,
 		recheckC:         recheckTicker.C,
 		mode:             mode,
 		pool:             pool,
@@ -260,15 +241,17 @@ func (e *Engine) initWatchInfra(
 
 		inFlight := depGraph.InFlightCount()
 		if inFlight > 0 {
-			e.logger.Info("graceful shutdown: draining in-flight actions",
+			rt.engine.logger.Info("graceful shutdown: draining in-flight actions",
 				slog.Int("in_flight", inFlight),
 			)
 		}
 
-		e.stopRetryTimer()
-		e.stopTrialTimer()
+		rt.stopRetryTimer()
+		rt.stopTrialTimer()
 		pool.Stop() // closes results channel after workers exit
-		e.logger.Info("watch mode stopped")
+		rt.remoteObs = nil
+		rt.localObs = nil
+		rt.engine.logger.Info("watch mode stopped")
 	}
 
 	return pipe, nil
@@ -280,61 +263,61 @@ func (e *Engine) initWatchInfra(
 // the watch loop uses. Blocks until all bootstrap actions complete.
 //
 // Must be called after initWatchInfra and before startObservers.
-func (e *Engine) bootstrapSync(ctx context.Context, mode synctypes.SyncMode, pipe *watchPipeline) error {
-	e.logger.Info("bootstrap sync starting", slog.String("mode", mode.String()))
+func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode synctypes.SyncMode, pipe *watchPipeline) error {
+	rt.engine.logger.Info("bootstrap sync starting", slog.String("mode", mode.String()))
 
 	// Drive identity check (B-074).
-	if err := e.verifyDriveIdentity(ctx); err != nil {
+	if err := rt.engine.verifyDriveIdentity(ctx); err != nil {
 		return err
 	}
 
 	// Crash recovery: reset in-progress states from prior crash.
-	if err := e.baseline.ResetInProgressStates(ctx, e.syncRoot, retry.ReconcilePolicy().Delay); err != nil {
-		e.logger.Warn("failed to reset in-progress states", slog.String("error", err.Error()))
+	if err := rt.engine.baseline.ResetInProgressStates(ctx, rt.engine.syncRoot, retry.ReconcilePolicy().Delay); err != nil {
+		rt.engine.logger.Warn("failed to reset in-progress states", slog.String("error", err.Error()))
 	}
 
 	// Load baseline + shortcuts.
-	bl, err := e.loadWatchState(ctx)
+	bl, err := rt.loadWatchState(ctx)
 	if err != nil {
 		return err
 	}
 	pipe.bl = bl
 
 	// Permission rechecks.
-	if e.permHandler.HasPermChecker() {
-		shortcuts := e.getShortcuts()
-		e.applyPermissionRecheckDecisions(ctx, e.permHandler.recheckPermissions(ctx, bl, shortcuts))
+	if rt.engine.permHandler.HasPermChecker() {
+		shortcuts := rt.getShortcuts()
+		rt.applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckPermissions(ctx, bl, shortcuts))
 	}
-	e.applyPermissionRecheckDecisions(ctx, e.permHandler.recheckLocalPermissions(ctx))
+	rt.applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckLocalPermissions(ctx))
 
 	// Observe changes.
-	changes, pendingToken, err := e.observeChanges(ctx, bl, mode, false, false)
+	changes, pendingToken, err := rt.observeChanges(ctx, rt, bl, mode, false, false)
 	if err != nil {
 		return fmt.Errorf("sync: bootstrap observation failed: %w", err)
 	}
 
 	if len(changes) == 0 {
-		e.logger.Info("bootstrap sync complete: no changes detected")
+		rt.engine.logger.Info("bootstrap sync complete: no changes detected")
 		return nil
 	}
 
 	// Commit the deferred delta token before dispatching bootstrap actions.
 	// Bootstrap uses watch-mode big-delete (rolling counter), not planner-level
 	// threshold, so the token is always safe to commit here.
-	if err := e.commitDeferredDeltaToken(ctx, pendingToken); err != nil {
+	if err := rt.commitDeferredDeltaToken(ctx, pendingToken); err != nil {
 		return err
 	}
 
 	// Dispatch through watch pipeline (same path as steady-state batches).
-	initialOutbox := e.processBatch(ctx, changes, bl, mode, pipe.safety)
+	initialOutbox := rt.processBatch(ctx, changes, bl, mode, pipe.safety)
 
 	// Wait for all bootstrap actions to complete.
-	if err := e.runWatchUntilQuiescent(ctx, pipe, initialOutbox); err != nil {
+	if err := rt.runWatchUntilQuiescent(ctx, pipe, initialOutbox); err != nil {
 		return fmt.Errorf("sync: bootstrap quiescence failed: %w", err)
 	}
 
-	e.postSyncHousekeeping()
-	e.logger.Info("bootstrap sync complete")
+	rt.postSyncHousekeeping()
+	rt.engine.logger.Info("bootstrap sync complete")
 	return nil
 }
 
@@ -342,7 +325,7 @@ func (e *Engine) bootstrapSync(ctx context.Context, mode synctypes.SyncMode, pip
 // events into the buffer. Returns an error channel for observer failures and
 // the number of observers started. The events channel is closed automatically
 // when all observers exit, allowing the bridge goroutine to drain cleanly.
-func (e *Engine) startObservers(
+func (rt *watchRuntime) startObservers(
 	ctx context.Context, bl *synctypes.Baseline, mode synctypes.SyncMode, buf *syncobserve.Buffer, opts synctypes.WatchOpts,
 ) (<-chan error, int, <-chan []synctypes.SkippedItem) {
 	events := make(chan synctypes.ChangeEvent, watchEventBuf)
@@ -371,13 +354,13 @@ func (e *Engine) startObservers(
 
 	// Remote observer (skip for upload-only mode).
 	if mode != synctypes.SyncUploadOnly {
-		remoteObs := syncobserve.NewRemoteObserver(e.fetcher, bl, e.driveID, e.logger)
-		remoteObs.SetObsWriter(e.baseline)
-		e.watch.remoteObs = remoteObs
+		remoteObs := syncobserve.NewRemoteObserver(rt.engine.fetcher, bl, rt.engine.driveID, rt.engine.logger)
+		remoteObs.SetObsWriter(rt.engine.baseline)
+		rt.remoteObs = remoteObs
 
-		savedToken, tokenErr := e.baseline.GetDeltaToken(ctx, e.driveID.String(), "")
+		savedToken, tokenErr := rt.engine.baseline.GetDeltaToken(ctx, rt.engine.driveID.String(), "")
 		if tokenErr != nil {
-			e.logger.Warn("failed to get delta token for watch",
+			rt.engine.logger.Warn("failed to get delta token for watch",
 				slog.String("error", tokenErr.Error()),
 			)
 		}
@@ -387,7 +370,7 @@ func (e *Engine) startObservers(
 
 		go func() {
 			defer obsWg.Done()
-			errs <- remoteObs.Watch(ctx, savedToken, events, e.resolvePollInterval(opts))
+			errs <- remoteObs.Watch(ctx, savedToken, events, rt.engine.resolvePollInterval(opts))
 		}()
 	}
 
@@ -397,15 +380,15 @@ func (e *Engine) startObservers(
 
 	// Local observer (skip for download-only mode).
 	if mode != synctypes.SyncDownloadOnly {
-		localObs := syncobserve.NewLocalObserver(bl, e.logger, e.checkWorkers)
+		localObs := syncobserve.NewLocalObserver(bl, rt.engine.logger, rt.engine.checkWorkers)
 		localObs.SetSafetyScanInterval(opts.SafetyScanInterval)
 		localObs.SetSkippedChannel(skippedCh)
 
-		if e.localWatcherFactory != nil {
-			localObs.SetWatcherFactory(e.localWatcherFactory)
+		if rt.engine.localWatcherFactory != nil {
+			localObs.SetWatcherFactory(rt.engine.localWatcherFactory)
 		}
 
-		e.watch.localObs = localObs
+		rt.localObs = localObs
 
 		obsWg.Add(1)
 		count++
@@ -413,13 +396,13 @@ func (e *Engine) startObservers(
 		go func() {
 			defer obsWg.Done()
 
-			watchErr := localObs.Watch(ctx, e.syncRoot, events)
+			watchErr := localObs.Watch(ctx, rt.engine.syncRoot, events)
 			if errors.Is(watchErr, synctypes.ErrWatchLimitExhausted) {
-				e.logger.Warn("inotify watch limit exhausted, falling back to periodic full scan",
-					slog.Duration("poll_interval", e.resolvePollInterval(opts)),
+				rt.engine.logger.Warn("inotify watch limit exhausted, falling back to periodic full scan",
+					slog.Duration("poll_interval", rt.engine.resolvePollInterval(opts)),
 				)
 
-				e.runPeriodicFullScan(ctx, localObs, e.syncRoot, events, e.resolvePollInterval(opts))
+				rt.runPeriodicFullScan(ctx, localObs, rt.engine.syncRoot, events, rt.engine.resolvePollInterval(opts))
 				errs <- nil // clean exit after context cancel
 
 				return
@@ -442,14 +425,14 @@ func (e *Engine) startObservers(
 // runPeriodicFullScan runs periodic full filesystem scans as a fallback when
 // inotify watch limits are exhausted. Blocks until the context is canceled.
 // Each scan's events are forwarded to the events channel via trySend.
-func (e *Engine) runPeriodicFullScan(
+func (rt *watchRuntime) runPeriodicFullScan(
 	ctx context.Context, obs *syncobserve.LocalObserver, syncRoot string,
 	events chan<- synctypes.ChangeEvent, interval time.Duration,
 ) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	e.logger.Info("periodic full scan fallback started",
+	rt.engine.logger.Info("periodic full scan fallback started",
 		slog.Duration("interval", interval),
 	)
 
@@ -468,7 +451,7 @@ func (e *Engine) runPeriodicFullScan(
 					return
 				}
 
-				e.logger.Warn("periodic full scan failed",
+				rt.engine.logger.Warn("periodic full scan failed",
 					slog.String("error", err.Error()),
 				)
 
@@ -482,7 +465,7 @@ func (e *Engine) runPeriodicFullScan(
 			}
 
 			if len(result.Skipped) > 0 {
-				e.logger.Debug("periodic scan: skipped items",
+				rt.engine.logger.Debug("periodic scan: skipped items",
 					slog.Int("count", len(result.Skipped)))
 			}
 		case <-ctx.Done():

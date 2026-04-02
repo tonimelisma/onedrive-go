@@ -264,7 +264,7 @@ func newTestSession(t *testing.T, handler http.Handler) *Session {
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
-	client := graph.NewClient(srv.URL, srv.Client(), &stubTokenSource{}, slog.Default(), "test/1.0")
+	client := graph.MustNewClient(srv.URL, srv.Client(), &stubTokenSource{}, slog.Default(), "test/1.0")
 
 	return &Session{
 		Meta:    client,

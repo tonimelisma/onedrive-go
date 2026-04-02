@@ -9,252 +9,45 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
-// engineLoopConfig describes one invocation of the engine-owned result/admission
-// loop. Nil channels disable the corresponding select cases, which lets the same
-// loop drive one-shot execution, watch bootstrap, and steady-state watch mode
-// without inventing a second control subsystem.
-type engineLoopConfig struct {
-	bl     *synctypes.Baseline
-	safety *synctypes.SafetyConfig
-	mode   synctypes.SyncMode
-
-	initialOutbox []*synctypes.TrackedAction
-
-	readyBatches     <-chan []synctypes.PathChanges
-	results          <-chan synctypes.WorkerResult
-	skippedCh        <-chan []synctypes.SkippedItem
-	recheckC         <-chan time.Time
-	reconcileC       <-chan time.Time
-	reconcileResults <-chan reconcileResult
-	observerErrs     <-chan error
-	heartbeatC       <-chan time.Time
-
-	stopWhenEmpty        bool
-	stopWhenResultsClose bool
-	returnContextErr     bool
-
-	onObserverError func(error) error
-	onHeartbeat     func()
-}
-
-// runEngineLoop is the single internal control loop for result processing and
-// dependent admission. Watch mode uses it directly, bootstrap uses it until the
-// graph drains, and one-shot mode runs it over worker results only.
-func (e *Engine) runEngineLoop(ctx context.Context, cfg *engineLoopConfig) error {
-	outbox := append([]*synctypes.TrackedAction(nil), cfg.initialOutbox...)
-
-	var emptyCh <-chan struct{}
-	if cfg.stopWhenEmpty {
-		emptyCh = e.depGraph.WaitForEmpty()
-	}
+func (r *oneShotRunner) runResultsLoop(
+	ctx context.Context,
+	bl *synctypes.Baseline,
+	results <-chan synctypes.WorkerResult,
+) {
+	var outbox []*synctypes.TrackedAction
 
 	for {
-		var (
-			done bool
-			err  error
-		)
-
 		if len(outbox) == 0 {
-			outbox, done, err = e.runEngineLoopIdle(ctx, cfg, emptyCh)
-		} else {
-			outbox, done, err = e.runEngineLoopWithOutbox(ctx, cfg, emptyCh, outbox)
-		}
-		if err != nil {
-			return err
-		}
-		if done {
-			return nil
-		}
-	}
-}
-
-func (e *Engine) runEngineLoopIdle(
-	ctx context.Context,
-	cfg *engineLoopConfig,
-	emptyCh <-chan struct{},
-) ([]*synctypes.TrackedAction, bool, error) {
-	select {
-	case batch, ok := <-cfg.readyBatches:
-		return e.loopReadyBatch(ctx, cfg, nil, batch, ok)
-	case r, ok := <-cfg.results:
-		return e.loopWorkerResult(ctx, cfg, nil, &r, ok)
-	case skipped, ok := <-cfg.skippedCh:
-		return e.loopSkipped(ctx, cfg, nil, skipped, ok)
-	case <-cfg.recheckC:
-		e.handleRecheckTick(ctx)
-		return nil, false, nil
-	case <-cfg.reconcileC:
-		e.runFullReconciliationAsync(ctx, cfg.bl)
-		return nil, false, nil
-	case result, ok := <-cfg.reconcileResults:
-		return e.loopReconcileResult(cfg, nil, result, ok)
-	case obsErr, ok := <-cfg.observerErrs:
-		return e.loopObserverError(cfg, nil, obsErr, ok)
-	case <-cfg.heartbeatC:
-		return e.loopHeartbeat(cfg, nil)
-	case <-e.trialTimerChan():
-		return append([]*synctypes.TrackedAction(nil), e.runTrialDispatch(ctx, cfg.bl, cfg.mode, cfg.safety)...), false, nil
-	case <-e.retryTimerChan():
-		return append([]*synctypes.TrackedAction(nil), e.runRetrierSweep(ctx, cfg.bl, cfg.mode, cfg.safety)...), false, nil
-	case <-emptyCh:
-		return nil, true, nil
-	case <-ctx.Done():
-		return e.loopContextDone(ctx, cfg, nil)
-	}
-}
-
-func (e *Engine) runEngineLoopWithOutbox(
-	ctx context.Context,
-	cfg *engineLoopConfig,
-	emptyCh <-chan struct{},
-	outbox []*synctypes.TrackedAction,
-) ([]*synctypes.TrackedAction, bool, error) {
-	select {
-	case e.readyCh <- outbox[0]:
-		return outbox[1:], false, nil
-	case batch, ok := <-cfg.readyBatches:
-		return e.loopReadyBatch(ctx, cfg, outbox, batch, ok)
-	case r, ok := <-cfg.results:
-		return e.loopWorkerResult(ctx, cfg, outbox, &r, ok)
-	case skipped, ok := <-cfg.skippedCh:
-		return e.loopSkipped(ctx, cfg, outbox, skipped, ok)
-	case <-cfg.recheckC:
-		e.handleRecheckTick(ctx)
-		return outbox, false, nil
-	case <-cfg.reconcileC:
-		e.runFullReconciliationAsync(ctx, cfg.bl)
-		return outbox, false, nil
-	case result, ok := <-cfg.reconcileResults:
-		return e.loopReconcileResult(cfg, outbox, result, ok)
-	case obsErr, ok := <-cfg.observerErrs:
-		return e.loopObserverError(cfg, outbox, obsErr, ok)
-	case <-cfg.heartbeatC:
-		return e.loopHeartbeat(cfg, outbox)
-	case <-e.trialTimerChan():
-		return append(outbox, e.runTrialDispatch(ctx, cfg.bl, cfg.mode, cfg.safety)...), false, nil
-	case <-e.retryTimerChan():
-		return append(outbox, e.runRetrierSweep(ctx, cfg.bl, cfg.mode, cfg.safety)...), false, nil
-	case <-emptyCh:
-		return outbox, true, nil
-	case <-ctx.Done():
-		return e.loopContextDone(ctx, cfg, outbox)
-	}
-}
-
-func (e *Engine) loopReadyBatch(
-	ctx context.Context,
-	cfg *engineLoopConfig,
-	outbox []*synctypes.TrackedAction,
-	batch []synctypes.PathChanges,
-	ok bool,
-) ([]*synctypes.TrackedAction, bool, error) {
-	if !ok {
-		return outbox, true, nil
-	}
-
-	return append(outbox, e.processBatch(ctx, batch, cfg.bl, cfg.mode, cfg.safety)...), false, nil
-}
-
-func (e *Engine) loopWorkerResult(
-	ctx context.Context,
-	cfg *engineLoopConfig,
-	outbox []*synctypes.TrackedAction,
-	r *synctypes.WorkerResult,
-	ok bool,
-) ([]*synctypes.TrackedAction, bool, error) {
-	if !ok {
-		if cfg.stopWhenResultsClose {
-			return outbox, true, nil
+			select {
+			case workerResult, ok := <-results:
+				if !ok {
+					return
+				}
+				outbox = append(outbox, r.processWorkerResult(ctx, nil, &workerResult, bl)...)
+			case <-ctx.Done():
+				return
+			}
+			continue
 		}
 
 		select {
+		case r.readyCh <- outbox[0]:
+			outbox = outbox[1:]
+		case workerResult, ok := <-results:
+			if !ok {
+				return
+			}
+			outbox = append(outbox, r.processWorkerResult(ctx, nil, &workerResult, bl)...)
 		case <-ctx.Done():
-			return e.loopContextDone(ctx, cfg, outbox)
-		default:
+			return
 		}
-
-		return outbox, false, fmt.Errorf("sync: worker results channel closed unexpectedly")
 	}
-
-	return append(outbox, e.processWorkerResult(ctx, r, cfg.bl)...), false, nil
 }
 
-func (e *Engine) loopSkipped(
-	ctx context.Context,
-	cfg *engineLoopConfig,
-	outbox []*synctypes.TrackedAction,
-	skipped []synctypes.SkippedItem,
-	ok bool,
-) ([]*synctypes.TrackedAction, bool, error) {
-	if !ok {
-		cfg.skippedCh = nil
-		return outbox, false, nil
-	}
-
-	e.recordSkippedItems(ctx, skipped)
-	e.clearResolvedSkippedItems(ctx, skipped)
-	return outbox, false, nil
-}
-
-func (e *Engine) loopReconcileResult(
-	cfg *engineLoopConfig,
-	outbox []*synctypes.TrackedAction,
-	result reconcileResult,
-	ok bool,
-) ([]*synctypes.TrackedAction, bool, error) {
-	if !ok {
-		cfg.reconcileResults = nil
-		return outbox, false, nil
-	}
-
-	e.applyReconcileResult(result)
-	return outbox, false, nil
-}
-
-func (e *Engine) loopObserverError(
-	cfg *engineLoopConfig,
-	outbox []*synctypes.TrackedAction,
-	obsErr error,
-	ok bool,
-) ([]*synctypes.TrackedAction, bool, error) {
-	if !ok {
-		cfg.observerErrs = nil
-		return outbox, false, nil
-	}
-	if cfg.onObserverError == nil {
-		return outbox, false, nil
-	}
-
-	return outbox, false, cfg.onObserverError(obsErr)
-}
-
-func (e *Engine) loopHeartbeat(
-	cfg *engineLoopConfig,
-	outbox []*synctypes.TrackedAction,
-) ([]*synctypes.TrackedAction, bool, error) {
-	if cfg.onHeartbeat != nil {
-		cfg.onHeartbeat()
-	}
-
-	return outbox, false, nil
-}
-
-func (e *Engine) loopContextDone(
-	ctx context.Context,
-	cfg *engineLoopConfig,
-	outbox []*synctypes.TrackedAction,
-) ([]*synctypes.TrackedAction, bool, error) {
-	if cfg.returnContextErr {
-		return outbox, false, fmt.Errorf("sync: engine loop context done: %w", ctx.Err())
-	}
-
-	return outbox, true, nil
-}
-
-// runWatchUntilQuiescent drives the engine loop until the dependency graph
-// empties. Used by bootstrapSync so the initial sync executes through the same
-// single-owner result/admission loop as steady-state watch mode.
-func (e *Engine) runWatchUntilQuiescent(
+// runWatchUntilQuiescent drives the bootstrap watch loop until the dependency
+// graph empties. Bootstrap uses the same watch-owned result/admission logic as
+// steady-state watch mode but stops once there is no remaining in-flight work.
+func (rt *watchRuntime) runWatchUntilQuiescent(
 	ctx context.Context,
 	p *watchPipeline,
 	initialOutbox []*synctypes.TrackedAction,
@@ -262,55 +55,129 @@ func (e *Engine) runWatchUntilQuiescent(
 	ticker := time.NewTicker(quiescenceLogInterval)
 	defer ticker.Stop()
 
-	return e.runEngineLoop(ctx, &engineLoopConfig{
-		bl:               p.bl,
-		safety:           p.safety,
-		mode:             p.mode,
-		initialOutbox:    initialOutbox,
-		readyBatches:     p.ready,
-		results:          p.results,
-		heartbeatC:       ticker.C,
-		stopWhenEmpty:    true,
-		returnContextErr: true,
-		onHeartbeat: func() {
-			e.logger.Info("bootstrap: waiting for in-flight actions",
-				slog.Int("in_flight", e.depGraph.InFlightCount()),
-			)
-		},
-	})
+	outbox := append([]*synctypes.TrackedAction(nil), initialOutbox...)
+	emptyCh := rt.depGraph.WaitForEmpty()
+
+	for {
+		if len(outbox) == 0 {
+			nextOutbox, done, err := rt.runBootstrapLoop(ctx, p, ticker.C, emptyCh, outbox)
+			if err != nil {
+				return err
+			}
+			if done {
+				return nil
+			}
+			outbox = nextOutbox
+			continue
+		}
+
+		nextOutbox, done, err := rt.runBootstrapLoop(ctx, p, ticker.C, emptyCh, outbox)
+		if err != nil {
+			return err
+		}
+		if done {
+			return nil
+		}
+		outbox = nextOutbox
+	}
 }
 
-// waitForQuiescence is the compatibility wrapper for callers and tests that
-// only need to wait for the dependency graph to drain, without a full watch
-// pipeline. It reuses the same single-owner loop used by bootstrap.
-func (e *Engine) waitForQuiescence(ctx context.Context) error {
-	return e.runWatchUntilQuiescent(ctx, &watchPipeline{}, nil)
+// runWatchLoop owns steady-state watch execution. The same goroutine handles
+// observed batches, worker results, retry/trial timers, reconcile completions,
+// and outbox draining.
+func (rt *watchRuntime) runWatchLoop(ctx context.Context, p *watchPipeline) error {
+	var outbox []*synctypes.TrackedAction
+
+	for {
+		if len(outbox) == 0 {
+			nextOutbox, done, err := rt.runWatchLoopIdle(ctx, p)
+			if err != nil {
+				return err
+			}
+			if done {
+				return nil
+			}
+			outbox = nextOutbox
+			continue
+		}
+
+		nextOutbox, done, err := rt.runWatchLoopWithOutbox(ctx, p, outbox)
+		if err != nil {
+			return err
+		}
+		if done {
+			return nil
+		}
+		outbox = nextOutbox
+	}
 }
 
-// runWatchLoop runs the steady-state watch-mode select loop. The same goroutine
-// owns batch intake, result processing, retry/trial timers, and worker outbox
-// draining.
-func (e *Engine) runWatchLoop(ctx context.Context, p *watchPipeline) error {
-	return e.runEngineLoop(ctx, &engineLoopConfig{
-		bl:               p.bl,
-		safety:           p.safety,
-		mode:             p.mode,
-		readyBatches:     p.ready,
-		results:          p.results,
-		skippedCh:        p.skippedCh,
-		recheckC:         p.recheckC,
-		reconcileC:       p.reconcileC,
-		reconcileResults: p.reconcileResults,
-		observerErrs:     p.errs,
-		onObserverError: func(obsErr error) error {
-			return e.handleObserverExit(p, obsErr)
-		},
-	})
+func (rt *watchRuntime) runWatchLoopIdle(
+	ctx context.Context,
+	p *watchPipeline,
+) ([]*synctypes.TrackedAction, bool, error) {
+	select {
+	case batch, ok := <-p.ready:
+		return rt.handleWatchBatch(ctx, p, nil, batch, ok)
+	case workerResult, ok := <-p.results:
+		return rt.handleWatchWorkerResult(ctx, p, nil, &workerResult, ok)
+	case skipped, ok := <-p.skippedCh:
+		return rt.handleWatchSkipped(ctx, p, nil, skipped, ok)
+	case <-p.recheckC:
+		rt.handleRecheckTick(ctx)
+		return nil, false, nil
+	case <-p.reconcileC:
+		rt.runFullReconciliationAsync(ctx, p.bl)
+		return nil, false, nil
+	case result, ok := <-p.reconcileResults:
+		return rt.handleWatchReconcileResult(p, nil, result, ok)
+	case obsErr, ok := <-p.errs:
+		return rt.handleWatchObserverError(p, nil, obsErr, ok)
+	case <-rt.trialTimerChan():
+		return rt.runTrialDispatch(ctx, p.bl, p.mode, p.safety), false, nil
+	case <-rt.retryTimerChan():
+		return rt.runRetrierSweep(ctx, p.bl, p.mode, p.safety), false, nil
+	case <-ctx.Done():
+		return nil, true, nil
+	}
 }
 
-func (e *Engine) handleObserverExit(p *watchPipeline, obsErr error) error {
+func (rt *watchRuntime) runWatchLoopWithOutbox(
+	ctx context.Context,
+	p *watchPipeline,
+	outbox []*synctypes.TrackedAction,
+) ([]*synctypes.TrackedAction, bool, error) {
+	select {
+	case rt.readyCh <- outbox[0]:
+		return outbox[1:], false, nil
+	case batch, ok := <-p.ready:
+		return rt.handleWatchBatch(ctx, p, outbox, batch, ok)
+	case workerResult, ok := <-p.results:
+		return rt.handleWatchWorkerResult(ctx, p, outbox, &workerResult, ok)
+	case skipped, ok := <-p.skippedCh:
+		return rt.handleWatchSkipped(ctx, p, outbox, skipped, ok)
+	case <-p.recheckC:
+		rt.handleRecheckTick(ctx)
+		return outbox, false, nil
+	case <-p.reconcileC:
+		rt.runFullReconciliationAsync(ctx, p.bl)
+		return outbox, false, nil
+	case result, ok := <-p.reconcileResults:
+		return rt.handleWatchReconcileResult(p, outbox, result, ok)
+	case obsErr, ok := <-p.errs:
+		return rt.handleWatchObserverError(p, outbox, obsErr, ok)
+	case <-rt.trialTimerChan():
+		return append(outbox, rt.runTrialDispatch(ctx, p.bl, p.mode, p.safety)...), false, nil
+	case <-rt.retryTimerChan():
+		return append(outbox, rt.runRetrierSweep(ctx, p.bl, p.mode, p.safety)...), false, nil
+	case <-ctx.Done():
+		return outbox, true, nil
+	}
+}
+
+func (rt *watchRuntime) handleObserverExit(p *watchPipeline, obsErr error) error {
 	if obsErr != nil {
-		e.logger.Warn("observer error",
+		rt.engine.logger.Warn("observer error",
 			slog.String("error", obsErr.Error()),
 		)
 	}
@@ -320,6 +187,180 @@ func (e *Engine) handleObserverExit(p *watchPipeline, obsErr error) error {
 		return nil
 	}
 
-	e.logger.Error("all observers have exited, stopping watch mode")
+	rt.engine.logger.Error("all observers have exited, stopping watch mode")
 	return fmt.Errorf("sync: all observers exited")
+}
+
+func (rt *watchRuntime) runBootstrapLoop(
+	ctx context.Context,
+	p *watchPipeline,
+	logC <-chan time.Time,
+	emptyCh <-chan struct{},
+	outbox []*synctypes.TrackedAction,
+) ([]*synctypes.TrackedAction, bool, error) {
+	readyCh := rt.readyCh
+	nextAction := firstOutbox(outbox)
+	if nextAction == nil {
+		readyCh = nil
+	}
+
+	select {
+	case readyCh <- nextAction:
+		return outbox[1:], false, nil
+	case batch, ok := <-p.ready:
+		return rt.handleBootstrapBatch(ctx, p, outbox, batch, ok)
+	case workerResult, ok := <-p.results:
+		return rt.handleBootstrapWorkerResult(ctx, p, outbox, &workerResult, ok)
+	case <-rt.trialTimerChan():
+		return append(outbox, rt.runTrialDispatch(ctx, p.bl, p.mode, p.safety)...), false, nil
+	case <-rt.retryTimerChan():
+		return append(outbox, rt.runRetrierSweep(ctx, p.bl, p.mode, p.safety)...), false, nil
+	case <-logC:
+		rt.logBootstrapWait()
+		return outbox, false, nil
+	case <-emptyCh:
+		return outbox, true, nil
+	case <-ctx.Done():
+		return nil, false, fmt.Errorf("sync: watch bootstrap context done: %w", ctx.Err())
+	}
+}
+
+func (rt *watchRuntime) handleBootstrapBatch(
+	ctx context.Context,
+	p *watchPipeline,
+	outbox []*synctypes.TrackedAction,
+	batch []synctypes.PathChanges,
+	ok bool,
+) ([]*synctypes.TrackedAction, bool, error) {
+	if !ok {
+		return outbox, true, nil
+	}
+
+	return append(outbox, rt.processBatch(ctx, batch, p.bl, p.mode, p.safety)...), false, nil
+}
+
+func (rt *watchRuntime) handleBootstrapWorkerResult(
+	ctx context.Context,
+	p *watchPipeline,
+	outbox []*synctypes.TrackedAction,
+	workerResult *synctypes.WorkerResult,
+	ok bool,
+) ([]*synctypes.TrackedAction, bool, error) {
+	if !ok {
+		return rt.handleBootstrapResultsClosed(ctx)
+	}
+
+	nextOutbox := rt.processWorkerResult(ctx, rt, workerResult, p.bl)
+	return append(outbox, nextOutbox...), false, nil
+}
+
+func (rt *watchRuntime) handleBootstrapResultsClosed(
+	ctx context.Context,
+) ([]*synctypes.TrackedAction, bool, error) {
+	select {
+	case <-ctx.Done():
+		return nil, false, fmt.Errorf("sync: watch bootstrap context done: %w", ctx.Err())
+	default:
+	}
+
+	return nil, false, fmt.Errorf("sync: worker results channel closed unexpectedly")
+}
+
+func (rt *watchRuntime) logBootstrapWait() {
+	rt.engine.logger.Info("bootstrap: waiting for in-flight actions",
+		slog.Int("in_flight", rt.depGraph.InFlightCount()),
+	)
+}
+
+func (rt *watchRuntime) handleWatchBatch(
+	ctx context.Context,
+	p *watchPipeline,
+	outbox []*synctypes.TrackedAction,
+	batch []synctypes.PathChanges,
+	ok bool,
+) ([]*synctypes.TrackedAction, bool, error) {
+	if !ok {
+		return outbox, true, nil
+	}
+
+	return append(outbox, rt.processBatch(ctx, batch, p.bl, p.mode, p.safety)...), false, nil
+}
+
+func (rt *watchRuntime) handleWatchWorkerResult(
+	ctx context.Context,
+	p *watchPipeline,
+	outbox []*synctypes.TrackedAction,
+	workerResult *synctypes.WorkerResult,
+	ok bool,
+) ([]*synctypes.TrackedAction, bool, error) {
+	if !ok {
+		select {
+		case <-ctx.Done():
+			return outbox, true, nil
+		default:
+		}
+
+		return outbox, false, fmt.Errorf("sync: worker results channel closed unexpectedly")
+	}
+
+	nextOutbox := rt.processWorkerResult(ctx, rt, workerResult, p.bl)
+	return append(outbox, nextOutbox...), false, nil
+}
+
+func (rt *watchRuntime) handleWatchSkipped(
+	ctx context.Context,
+	p *watchPipeline,
+	outbox []*synctypes.TrackedAction,
+	skipped []synctypes.SkippedItem,
+	ok bool,
+) ([]*synctypes.TrackedAction, bool, error) {
+	if !ok {
+		p.skippedCh = nil
+		return outbox, false, nil
+	}
+
+	rt.recordSkippedItems(ctx, skipped)
+	rt.clearResolvedSkippedItems(ctx, skipped)
+	return outbox, false, nil
+}
+
+func (rt *watchRuntime) handleWatchReconcileResult(
+	p *watchPipeline,
+	outbox []*synctypes.TrackedAction,
+	result reconcileResult,
+	ok bool,
+) ([]*synctypes.TrackedAction, bool, error) {
+	if !ok {
+		p.reconcileResults = nil
+		return outbox, false, nil
+	}
+
+	rt.applyReconcileResult(result)
+	return outbox, false, nil
+}
+
+func (rt *watchRuntime) handleWatchObserverError(
+	p *watchPipeline,
+	outbox []*synctypes.TrackedAction,
+	obsErr error,
+	ok bool,
+) ([]*synctypes.TrackedAction, bool, error) {
+	if !ok {
+		p.errs = nil
+		return outbox, false, nil
+	}
+
+	if err := rt.handleObserverExit(p, obsErr); err != nil {
+		return outbox, false, err
+	}
+
+	return outbox, false, nil
+}
+
+func firstOutbox(outbox []*synctypes.TrackedAction) *synctypes.TrackedAction {
+	if len(outbox) == 0 {
+		return nil
+	}
+
+	return outbox[0]
 }

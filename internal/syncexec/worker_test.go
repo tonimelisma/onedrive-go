@@ -16,11 +16,11 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
-	"github.com/tonimelisma/onedrive-go/internal/trustedpath"
 )
 
 // ---------------------------------------------------------------------------
@@ -271,7 +271,7 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 	assert.Equal(t, 2, succeeded)
 
 	// Verify file was downloaded.
-	content, readErr := trustedpath.ReadFile(filepath.Join(syncRoot, "NewDir", "file.txt"))
+	content, readErr := localpath.ReadFile(filepath.Join(syncRoot, "NewDir", "file.txt"))
 	require.NoError(t, readErr, "read file")
 	assert.Equal(t, "file-content", string(content))
 }
