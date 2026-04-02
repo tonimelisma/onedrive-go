@@ -13,12 +13,87 @@ import (
 	"strings"
 )
 
+type rootHandle interface {
+	Open(name string) (*os.File, error)
+	OpenFile(name string, flag int, perm os.FileMode) (*os.File, error)
+	Stat(name string) (os.FileInfo, error)
+	FS() fs.FS
+	Close() error
+}
+
+type osRootHandle struct {
+	root *os.Root
+}
+
+func (h *osRootHandle) Open(name string) (*os.File, error) {
+	//nolint:wrapcheck // openWithRoot adds the managed-root boundary context.
+	return h.root.Open(name)
+}
+
+func (h *osRootHandle) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
+	//nolint:wrapcheck // openWithRoot adds the managed-root boundary context.
+	return h.root.OpenFile(name, flag, perm)
+}
+
+func (h *osRootHandle) Stat(name string) (os.FileInfo, error) {
+	//nolint:wrapcheck // caller adds path-specific context after containment checks.
+	return h.root.Stat(name)
+}
+
+func (h *osRootHandle) FS() fs.FS {
+	return h.root.FS()
+}
+
+func (h *osRootHandle) Close() error {
+	//nolint:wrapcheck // caller owns the close-site context.
+	return h.root.Close()
+}
+
+type tempFile interface {
+	Name() string
+	Chmod(perm os.FileMode) error
+	Write(p []byte) (n int, err error)
+	Sync() error
+	Close() error
+}
+
+type rootOps struct {
+	openRoot   func(dir string) (rootHandle, error)
+	mkdirAll   func(path string, perm os.FileMode) error
+	remove     func(path string) error
+	rename     func(oldpath, newpath string) error
+	createTemp func(dir, pattern string) (tempFile, error)
+	lstat      func(path string) (os.FileInfo, error)
+}
+
+func defaultRootOps() rootOps {
+	return rootOps{
+		openRoot: func(dir string) (rootHandle, error) {
+			root, err := os.OpenRoot(dir)
+			if err != nil {
+				//nolint:wrapcheck // callers add the concrete managed-root path context.
+				return nil, err
+			}
+
+			return &osRootHandle{root: root}, nil
+		},
+		mkdirAll: os.MkdirAll,
+		remove:   os.Remove,
+		rename:   os.Rename,
+		createTemp: func(dir, pattern string) (tempFile, error) {
+			return os.CreateTemp(dir, pattern)
+		},
+		lstat: os.Lstat,
+	}
+}
+
 // Root is a capability for managed files rooted under one trusted directory.
 // Callers establish trust once by constructing the root, then operate on
 // relative names within it. This keeps managed-state I/O explicit and avoids
 // repeating ad hoc path handling at every call site.
 type Root struct {
 	dir string
+	ops rootOps
 }
 
 // Open constructs a managed root for dir. The directory does not need to
@@ -28,7 +103,10 @@ func Open(dir string) (*Root, error) {
 		return nil, fmt.Errorf("root directory is empty")
 	}
 
-	return &Root{dir: filepath.Clean(dir)}, nil
+	return &Root{
+		dir: filepath.Clean(dir),
+		ops: defaultRootOps(),
+	}, nil
 }
 
 // OpenPath splits a managed file path into its parent root capability plus the
@@ -84,16 +162,16 @@ func (r *Root) pathFor(name string) (string, error) {
 
 func (r *Root) openWithRoot(
 	name string,
-	opener func(root *os.Root, clean string) (*os.File, error),
+	opener func(root rootHandle, clean string) (*os.File, error),
 ) (*os.File, error) {
 	clean, err := cleanRelative(name)
 	if err != nil {
 		return nil, err
 	}
 
-	root, err := os.OpenRoot(r.dir)
+	root, err := r.ops.openRoot(r.dir)
 	if err != nil {
-		return nil, fmt.Errorf("opening root %s: %w", r.dir, normalizeNotExist(filepath.Join(r.dir, clean), err))
+		return nil, fmt.Errorf("opening root %s: %w", r.dir, r.normalizeNotExist(filepath.Join(r.dir, clean), err))
 	}
 
 	file, openErr := opener(root, clean)
@@ -103,7 +181,7 @@ func (r *Root) openWithRoot(
 			return nil, errors.Join(openErr, closeErr)
 		}
 
-		return nil, normalizeNotExist(filepath.Join(r.dir, clean), openErr)
+		return nil, r.normalizeNotExist(filepath.Join(r.dir, clean), openErr)
 	}
 
 	if closeErr != nil {
@@ -118,7 +196,7 @@ func (r *Root) openWithRoot(
 }
 
 func (r *Root) Open(name string) (*os.File, error) {
-	file, err := r.openWithRoot(name, func(root *os.Root, clean string) (*os.File, error) {
+	file, err := r.openWithRoot(name, func(root rootHandle, clean string) (*os.File, error) {
 		f, openErr := root.Open(clean)
 		if openErr != nil {
 			return nil, fmt.Errorf("opening %s: %w", clean, openErr)
@@ -134,7 +212,7 @@ func (r *Root) Open(name string) (*os.File, error) {
 }
 
 func (r *Root) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
-	file, err := r.openWithRoot(name, func(root *os.Root, clean string) (*os.File, error) {
+	file, err := r.openWithRoot(name, func(root rootHandle, clean string) (*os.File, error) {
 		f, openErr := root.OpenFile(clean, flag, perm)
 		if openErr != nil {
 			return nil, fmt.Errorf("opening %s: %w", clean, openErr)
@@ -178,9 +256,9 @@ func (r *Root) Stat(name string) (os.FileInfo, error) {
 		return nil, err
 	}
 
-	root, err := os.OpenRoot(r.dir)
+	root, err := r.ops.openRoot(r.dir)
 	if err != nil {
-		return nil, fmt.Errorf("opening root %s: %w", r.dir, normalizeNotExist(r.dir, err))
+		return nil, fmt.Errorf("opening root %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
 	}
 
 	info, statErr := root.Stat(clean)
@@ -190,7 +268,7 @@ func (r *Root) Stat(name string) (os.FileInfo, error) {
 			return nil, errors.Join(statErr, closeErr)
 		}
 
-		return nil, fmt.Errorf("stating %s: %w", clean, normalizeNotExist(filepath.Join(r.dir, clean), statErr))
+		return nil, fmt.Errorf("stating %s: %w", clean, r.normalizeNotExist(filepath.Join(r.dir, clean), statErr))
 	}
 
 	if closeErr != nil {
@@ -210,9 +288,9 @@ func (r *Root) ReadDir(dirName string) ([]os.DirEntry, error) {
 		}
 	}
 
-	root, err := os.OpenRoot(r.dir)
+	root, err := r.ops.openRoot(r.dir)
 	if err != nil {
-		return nil, fmt.Errorf("opening root %s: %w", r.dir, normalizeNotExist(r.dir, err))
+		return nil, fmt.Errorf("opening root %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
 	}
 
 	entries, readErr := fs.ReadDir(root.FS(), cleanDir)
@@ -227,7 +305,7 @@ func (r *Root) ReadDir(dirName string) ([]os.DirEntry, error) {
 			dirPath = filepath.Join(r.dir, cleanDir)
 		}
 
-		return nil, fmt.Errorf("reading directory %s: %w", cleanDir, normalizeNotExist(dirPath, readErr))
+		return nil, fmt.Errorf("reading directory %s: %w", cleanDir, r.normalizeNotExist(dirPath, readErr))
 	}
 
 	if closeErr != nil {
@@ -238,7 +316,7 @@ func (r *Root) ReadDir(dirName string) ([]os.DirEntry, error) {
 }
 
 func (r *Root) MkdirAll(perm os.FileMode) error {
-	if err := os.MkdirAll(r.dir, perm); err != nil {
+	if err := r.ops.mkdirAll(r.dir, perm); err != nil {
 		return fmt.Errorf("creating root directory %s: %w", r.dir, err)
 	}
 
@@ -251,7 +329,7 @@ func (r *Root) Remove(name string) error {
 		return err
 	}
 
-	if err := os.Remove(path); err != nil {
+	if err := r.ops.remove(path); err != nil {
 		return fmt.Errorf("removing %s: %w", name, err)
 	}
 
@@ -268,7 +346,7 @@ func (r *Root) Rename(src, dst string) error {
 		return err
 	}
 
-	if err := os.Rename(srcPath, dstPath); err != nil {
+	if err := r.ops.rename(srcPath, dstPath); err != nil {
 		return fmt.Errorf("renaming %s to %s: %w", src, dst, err)
 	}
 
@@ -276,6 +354,25 @@ func (r *Root) Rename(src, dst string) error {
 }
 
 func (r *Root) CreateTemp(dirName, pattern string) (*os.File, string, error) {
+	temp, name, err := r.createTempFile(dirName, pattern)
+	if err != nil {
+		return nil, "", err
+	}
+
+	osTemp, ok := temp.(*os.File)
+	if !ok {
+		closeErr := temp.Close()
+		if closeErr != nil {
+			return nil, "", errors.Join(fmt.Errorf("creating temp file for %s: temp handle is not *os.File", name), closeErr)
+		}
+
+		return nil, "", fmt.Errorf("creating temp file for %s: temp handle is not *os.File", name)
+	}
+
+	return osTemp, name, nil
+}
+
+func (r *Root) createTempFile(dirName, pattern string) (tempFile, string, error) {
 	cleanDir := "."
 	if dirName != "" && filepath.Clean(dirName) != "." {
 		var err error
@@ -290,7 +387,7 @@ func (r *Root) CreateTemp(dirName, pattern string) (*os.File, string, error) {
 		tempDir = filepath.Join(r.dir, cleanDir)
 	}
 
-	temp, err := os.CreateTemp(tempDir, pattern)
+	temp, err := r.ops.createTemp(tempDir, pattern)
 	if err != nil {
 		return nil, "", fmt.Errorf("creating temp file in %s: %w", tempDir, err)
 	}
@@ -316,11 +413,11 @@ func (r *Root) AtomicWrite(
 	}
 
 	targetDir, dirPath := r.targetDir(cleanName)
-	if mkErr := os.MkdirAll(dirPath, dirPerm); mkErr != nil {
+	if mkErr := r.ops.mkdirAll(dirPath, dirPerm); mkErr != nil {
 		return fmt.Errorf("creating target directory %s: %w", dirPath, mkErr)
 	}
 
-	temp, tempName, err := r.CreateTemp(targetDir, pattern)
+	temp, tempName, err := r.createTempFile(targetDir, pattern)
 	if err != nil {
 		return err
 	}
@@ -363,7 +460,7 @@ func (r *Root) cleanupTempOnError(tempName string, currentErr error) error {
 	return errors.Join(currentErr, removeErr)
 }
 
-func writeTempFile(temp *os.File, data []byte, filePerm os.FileMode) error {
+func writeTempFile(temp tempFile, data []byte, filePerm os.FileMode) error {
 	if chmodErr := temp.Chmod(filePerm); chmodErr != nil {
 		return closeWithContext(temp, "setting temp file permissions", chmodErr)
 	}
@@ -383,19 +480,19 @@ func writeTempFile(temp *os.File, data []byte, filePerm os.FileMode) error {
 	return nil
 }
 
-func normalizeNotExist(path string, original error) error {
+func (r *Root) normalizeNotExist(path string, original error) error {
 	if original == nil {
 		return nil
 	}
 
-	if _, statErr := os.Lstat(path); errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := r.ops.lstat(path); errors.Is(statErr, os.ErrNotExist) {
 		return os.ErrNotExist
 	}
 
 	return original
 }
 
-func closeWithContext(temp *os.File, action string, cause error) error {
+func closeWithContext(temp tempFile, action string, cause error) error {
 	closeErr := temp.Close()
 	baseErr := fmt.Errorf("%s: %w", action, cause)
 	if closeErr != nil {

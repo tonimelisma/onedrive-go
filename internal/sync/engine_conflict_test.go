@@ -13,6 +13,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -243,6 +244,73 @@ func TestResolveConflict_KeepRemote(t *testing.T) {
 	// Verify the local file has remote content.
 	data := mustReadFileUnderRoot(t, syncRoot, "keep-remote.txt")
 	assert.Equal(t, downloadContent, string(data))
+}
+
+func TestResolveConflict_KeepLocal_RestoreFailure(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	outcomes := []synctypes.Outcome{{
+		Action:       synctypes.ActionConflict,
+		Success:      true,
+		Path:         "keep-local.txt",
+		DriveID:      driveID,
+		ItemID:       "item-kl",
+		ItemType:     synctypes.ItemTypeFile,
+		LocalHash:    "local-h",
+		RemoteHash:   "remote-h",
+		ConflictType: "edit_edit",
+	}}
+	seedBaseline(t, eng.baseline, ctx, outcomes, "")
+
+	conflictCopy := syncexec.ConflictCopyPath(filepath.Join(syncRoot, "keep-local.txt"), time.Unix(1, 0))
+	require.NoError(t, os.WriteFile(conflictCopy, []byte("local"), 0o600))
+	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, "keep-local.txt"), 0o700))
+
+	conflicts, err := eng.ListConflicts(ctx)
+	require.NoError(t, err)
+	require.Len(t, conflicts, 1)
+
+	err = eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepLocal)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "restoring conflict copy")
+}
+
+func TestResolveConflict_KeepBoth_MissingOriginalReturnsError(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	outcomes := []synctypes.Outcome{{
+		Action:       synctypes.ActionConflict,
+		Success:      true,
+		Path:         "missing-original.txt",
+		DriveID:      driveID,
+		ItemID:       "item-kb",
+		ItemType:     synctypes.ItemTypeFile,
+		LocalHash:    "local-h",
+		RemoteHash:   "remote-h",
+		ConflictType: "edit_edit",
+	}}
+	seedBaseline(t, eng.baseline, ctx, outcomes, "")
+
+	conflicts, err := eng.ListConflicts(ctx)
+	require.NoError(t, err)
+	require.Len(t, conflicts, 1)
+
+	err = eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepBoth)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "updating baseline for original")
+	assert.Contains(t, err.Error(), "stat missing-original.txt")
 }
 
 // ---------------------------------------------------------------------------

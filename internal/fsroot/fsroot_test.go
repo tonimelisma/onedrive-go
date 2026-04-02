@@ -241,3 +241,159 @@ func TestWriteTempFile_ClosedFileReturnsCloseContext(t *testing.T) {
 	assert.Contains(t, err.Error(), "setting temp file permissions")
 	assert.Contains(t, err.Error(), "closing temp file")
 }
+
+// Validates: R-6.2.3
+func TestRoot_AtomicWrite_FailureInjection(t *testing.T) {
+	t.Parallel()
+
+	errDiskFull := errors.New("disk full")
+	errWriteFailed := errors.New("write failed")
+	errSyncFailed := errors.New("sync failed")
+	errCloseFailed := errors.New("close failed")
+	errRenameFailed := errors.New("rename failed")
+	errRemoveFailed := errors.New("remove failed")
+
+	testCases := []atomicWriteFailureCase{
+		{
+			name:          "create temp failure",
+			createTempErr: errDiskFull,
+			wantErr:       errDiskFull,
+			wantContains:  "creating temp file",
+		},
+		{
+			name: "write failure cleans temp",
+			tempFile: &fakeTempFile{
+				basename: "managed-write.tmp",
+				writeErr: errWriteFailed,
+			},
+			wantErr:         errWriteFailed,
+			wantContains:    "writing temp file",
+			wantRemovedBase: "managed-write.tmp",
+		},
+		{
+			name: "sync failure cleans temp",
+			tempFile: &fakeTempFile{
+				basename: "managed-sync.tmp",
+				syncErr:  errSyncFailed,
+			},
+			wantErr:         errSyncFailed,
+			wantContains:    "syncing temp file",
+			wantRemovedBase: "managed-sync.tmp",
+		},
+		{
+			name: "close failure cleans temp",
+			tempFile: &fakeTempFile{
+				basename: "managed-close.tmp",
+				closeErr: errCloseFailed,
+			},
+			wantErr:         errCloseFailed,
+			wantContains:    "closing temp file",
+			wantRemovedBase: "managed-close.tmp",
+		},
+		{
+			name: "rename failure joins cleanup failure",
+			tempFile: &fakeTempFile{
+				basename: "managed-rename.tmp",
+			},
+			renameErr:       errRenameFailed,
+			removeErr:       errRemoveFailed,
+			wantErr:         errRenameFailed,
+			wantContains:    "renaming",
+			wantRemovedBase: "managed-rename.tmp",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			runAtomicWriteFailureCase(t, testCase)
+		})
+	}
+}
+
+type atomicWriteFailureCase struct {
+	name            string
+	createTempErr   error
+	tempFile        *fakeTempFile
+	renameErr       error
+	removeErr       error
+	wantErr         error
+	wantContains    string
+	wantRemovedBase string
+}
+
+func runAtomicWriteFailureCase(t *testing.T, testCase atomicWriteFailureCase) {
+	t.Helper()
+
+	root, err := Open(t.TempDir())
+	require.NoError(t, err)
+
+	var removedPath string
+	root.ops.createTemp = func(dir, pattern string) (tempFile, error) {
+		if testCase.createTempErr != nil {
+			return nil, testCase.createTempErr
+		}
+
+		require.NotNil(t, testCase.tempFile)
+		testCase.tempFile.name = filepath.Join(dir, testCase.tempFile.basename)
+
+		return testCase.tempFile, nil
+	}
+	root.ops.rename = func(oldpath, newpath string) error {
+		if testCase.renameErr != nil {
+			return testCase.renameErr
+		}
+
+		return nil
+	}
+	root.ops.remove = func(path string) error {
+		removedPath = path
+		return testCase.removeErr
+	}
+
+	err = root.AtomicWrite("config.toml", []byte("payload"), 0o600, 0o700, ".tmp-*.tmp")
+	require.Error(t, err)
+	require.ErrorIs(t, err, testCase.wantErr)
+	assert.Contains(t, err.Error(), testCase.wantContains)
+
+	if testCase.wantRemovedBase != "" {
+		assert.Equal(t, filepath.Join(root.dir, testCase.wantRemovedBase), removedPath)
+	}
+
+	if testCase.removeErr != nil {
+		assert.ErrorIs(t, err, testCase.removeErr)
+	}
+}
+
+type fakeTempFile struct {
+	name     string
+	basename string
+	chmodErr error
+	writeErr error
+	syncErr  error
+	closeErr error
+}
+
+func (f *fakeTempFile) Name() string {
+	return f.name
+}
+
+func (f *fakeTempFile) Chmod(os.FileMode) error {
+	return f.chmodErr
+}
+
+func (f *fakeTempFile) Write(p []byte) (int, error) {
+	if f.writeErr != nil {
+		return 0, f.writeErr
+	}
+
+	return len(p), nil
+}
+
+func (f *fakeTempFile) Sync() error {
+	return f.syncErr
+}
+
+func (f *fakeTempFile) Close() error {
+	return f.closeErr
+}

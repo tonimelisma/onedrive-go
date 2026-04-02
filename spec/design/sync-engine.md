@@ -87,6 +87,12 @@ Filesystem boundaries are explicit:
 - sync-runtime local filesystem work under one configured sync root uses `internal/synctree`
 - arbitrary one-off local paths outside those rooted domains use `internal/localpath`
 
+The rooted filesystem capabilities (`fsroot.Root` and `synctree.Root`) are
+deliberately failure-injectable through unexported ops stored on the root
+value. This keeps the engine's managed-state writes, conflict-resolution file
+operations, and retry/trial local rebuild paths covered by deterministic I/O
+fault tests without reintroducing package-level test hooks.
+
 Run-scoped state lives in two dedicated owners:
 
 - `oneShotRunner`: one-shot mutable state (`engineFlow`, depGraph, readyCh,

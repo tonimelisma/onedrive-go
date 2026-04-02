@@ -141,6 +141,18 @@ func TestSave_FilePermissions(t *testing.T) {
 	assert.Equal(t, os.FileMode(FilePerms), info.Mode().Perm())
 }
 
+func TestSave_InvalidParentDirectory(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "blocker")
+	require.NoError(t, os.WriteFile(blocker, []byte("not a directory"), 0o600))
+
+	err := Save(filepath.Join(blocker, "token.json"), testToken())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "tokenfile: creating directory")
+}
+
 func TestSave_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "token.json")

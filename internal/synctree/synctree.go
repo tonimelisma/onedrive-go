@@ -13,9 +13,74 @@ import (
 	"strings"
 )
 
+type rootHandle interface {
+	Open(name string) (*os.File, error)
+	OpenFile(name string, flag int, perm os.FileMode) (*os.File, error)
+	Stat(name string) (os.FileInfo, error)
+	FS() fs.FS
+	Close() error
+}
+
+type osRootHandle struct {
+	root *os.Root
+}
+
+func (h *osRootHandle) Open(name string) (*os.File, error) {
+	//nolint:wrapcheck // openWithRoot adds the sync-tree boundary context.
+	return h.root.Open(name)
+}
+
+func (h *osRootHandle) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
+	//nolint:wrapcheck // openWithRoot adds the sync-tree boundary context.
+	return h.root.OpenFile(name, flag, perm)
+}
+
+func (h *osRootHandle) Stat(name string) (os.FileInfo, error) {
+	//nolint:wrapcheck // caller adds rooted path context after containment checks.
+	return h.root.Stat(name)
+}
+
+func (h *osRootHandle) FS() fs.FS {
+	return h.root.FS()
+}
+
+func (h *osRootHandle) Close() error {
+	//nolint:wrapcheck // caller owns the close-site context.
+	return h.root.Close()
+}
+
+type rootOps struct {
+	openRoot func(dir string) (rootHandle, error)
+	mkdirAll func(path string, perm os.FileMode) error
+	remove   func(path string) error
+	rename   func(oldpath, newpath string) error
+	lstat    func(path string) (os.FileInfo, error)
+	glob     func(pattern string) ([]string, error)
+}
+
+func defaultRootOps() rootOps {
+	return rootOps{
+		openRoot: func(dir string) (rootHandle, error) {
+			root, err := os.OpenRoot(dir)
+			if err != nil {
+				//nolint:wrapcheck // callers add the concrete sync-root path context.
+				return nil, err
+			}
+
+			return &osRootHandle{root: root}, nil
+		},
+		mkdirAll: os.MkdirAll,
+		remove:   os.Remove,
+		rename:   os.Rename,
+		lstat:    os.Lstat,
+		glob:     filepath.Glob,
+	}
+}
+
 // Root is a rooted capability for sync-runtime filesystem operations.
 type Root struct {
 	dir string
+	ops rootOps
 }
 
 // Open establishes a rooted sync-tree capability for dir.
@@ -30,7 +95,14 @@ func Open(dir string) (*Root, error) {
 		return nil, fmt.Errorf("resolving sync root %s: %w", clean, err)
 	}
 
-	return &Root{dir: abs}, nil
+	return newRoot(abs), nil
+}
+
+func newRoot(dir string) *Root {
+	return &Root{
+		dir: dir,
+		ops: defaultRootOps(),
+	}
 }
 
 // Path returns the absolute sync-root path backing this capability.
@@ -100,16 +172,16 @@ func (r *Root) Rel(abs string) (string, error) {
 
 func (r *Root) openWithRoot(
 	rel string,
-	opener func(root *os.Root, clean string) (*os.File, error),
+	opener func(root rootHandle, clean string) (*os.File, error),
 ) (*os.File, error) {
 	clean, err := cleanRelative(rel)
 	if err != nil {
 		return nil, err
 	}
 
-	root, err := os.OpenRoot(r.dir)
+	root, err := r.ops.openRoot(r.dir)
 	if err != nil {
-		return nil, fmt.Errorf("opening sync root %s: %w", r.dir, normalizeNotExist(r.dir, err))
+		return nil, fmt.Errorf("opening sync root %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
 	}
 
 	file, openErr := opener(root, clean)
@@ -124,7 +196,7 @@ func (r *Root) openWithRoot(
 			target = filepath.Join(r.dir, clean)
 		}
 
-		return nil, normalizeNotExist(target, openErr)
+		return nil, r.normalizeNotExist(target, openErr)
 	}
 
 	if closeErr != nil {
@@ -139,7 +211,7 @@ func (r *Root) openWithRoot(
 }
 
 func (r *Root) Open(rel string) (*os.File, error) {
-	file, err := r.openWithRoot(rel, func(root *os.Root, clean string) (*os.File, error) {
+	file, err := r.openWithRoot(rel, func(root rootHandle, clean string) (*os.File, error) {
 		f, openErr := root.Open(clean)
 		if openErr != nil {
 			return nil, fmt.Errorf("opening %s: %w", clean, openErr)
@@ -164,7 +236,7 @@ func (r *Root) OpenAbs(abs string) (*os.File, error) {
 }
 
 func (r *Root) OpenFile(rel string, flag int, perm os.FileMode) (*os.File, error) {
-	file, err := r.openWithRoot(rel, func(root *os.Root, clean string) (*os.File, error) {
+	file, err := r.openWithRoot(rel, func(root rootHandle, clean string) (*os.File, error) {
 		f, openErr := root.OpenFile(clean, flag, perm)
 		if openErr != nil {
 			return nil, fmt.Errorf("opening %s: %w", clean, openErr)
@@ -185,9 +257,9 @@ func (r *Root) Stat(rel string) (os.FileInfo, error) {
 		return nil, err
 	}
 
-	root, err := os.OpenRoot(r.dir)
+	root, err := r.ops.openRoot(r.dir)
 	if err != nil {
-		return nil, fmt.Errorf("opening sync root %s: %w", r.dir, normalizeNotExist(r.dir, err))
+		return nil, fmt.Errorf("opening sync root %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
 	}
 
 	info, statErr := root.Stat(clean)
@@ -202,7 +274,7 @@ func (r *Root) Stat(rel string) (os.FileInfo, error) {
 			target = filepath.Join(r.dir, clean)
 		}
 
-		return nil, fmt.Errorf("stating %s: %w", target, normalizeNotExist(target, statErr))
+		return nil, fmt.Errorf("stating %s: %w", target, r.normalizeNotExist(target, statErr))
 	}
 
 	if closeErr != nil {
@@ -227,9 +299,9 @@ func (r *Root) ReadDir(rel string) ([]os.DirEntry, error) {
 		return nil, err
 	}
 
-	root, err := os.OpenRoot(r.dir)
+	root, err := r.ops.openRoot(r.dir)
 	if err != nil {
-		return nil, fmt.Errorf("opening sync root %s: %w", r.dir, normalizeNotExist(r.dir, err))
+		return nil, fmt.Errorf("opening sync root %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
 	}
 
 	entries, readErr := fs.ReadDir(root.FS(), clean)
@@ -244,7 +316,7 @@ func (r *Root) ReadDir(rel string) ([]os.DirEntry, error) {
 			target = filepath.Join(r.dir, clean)
 		}
 
-		return nil, fmt.Errorf("reading directory %s: %w", target, normalizeNotExist(target, readErr))
+		return nil, fmt.Errorf("reading directory %s: %w", target, r.normalizeNotExist(target, readErr))
 	}
 
 	if closeErr != nil {
@@ -269,7 +341,7 @@ func (r *Root) MkdirAll(rel string, perm os.FileMode) error {
 		return err
 	}
 
-	if err := os.MkdirAll(path, perm); err != nil {
+	if err := r.ops.mkdirAll(path, perm); err != nil {
 		return fmt.Errorf("creating directory %s: %w", path, err)
 	}
 
@@ -282,7 +354,7 @@ func (r *Root) Remove(rel string) error {
 		return err
 	}
 
-	if err := os.Remove(path); err != nil {
+	if err := r.ops.remove(path); err != nil {
 		return fmt.Errorf("removing %s: %w", path, err)
 	}
 
@@ -308,7 +380,7 @@ func (r *Root) Rename(srcRel, dstRel string) error {
 		return err
 	}
 
-	if err := os.Rename(srcPath, dstPath); err != nil {
+	if err := r.ops.rename(srcPath, dstPath); err != nil {
 		return fmt.Errorf("renaming %s to %s: %w", srcPath, dstPath, err)
 	}
 
@@ -317,9 +389,9 @@ func (r *Root) Rename(srcRel, dstRel string) error {
 
 // WalkDir walks the sync tree and calls fn with absolute paths rooted under r.
 func (r *Root) WalkDir(fn fs.WalkDirFunc) error {
-	root, err := os.OpenRoot(r.dir)
+	root, err := r.ops.openRoot(r.dir)
 	if err != nil {
-		return fmt.Errorf("opening sync root %s: %w", r.dir, normalizeNotExist(r.dir, err))
+		return fmt.Errorf("opening sync root %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
 	}
 	defer root.Close()
 
@@ -352,7 +424,7 @@ func (r *Root) Glob(pattern string) ([]string, error) {
 		return nil, err
 	}
 
-	matches, err := filepath.Glob(filepath.Join(dirPath, basePattern))
+	matches, err := r.ops.glob(filepath.Join(dirPath, basePattern))
 	if err != nil {
 		return nil, fmt.Errorf("globbing %s: %w", filepath.Join(dirPath, basePattern), err)
 	}
@@ -369,12 +441,12 @@ func (r *Root) Glob(pattern string) ([]string, error) {
 	return relMatches, nil
 }
 
-func normalizeNotExist(path string, original error) error {
+func (r *Root) normalizeNotExist(path string, original error) error {
 	if original == nil {
 		return nil
 	}
 
-	if _, statErr := os.Lstat(path); errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := r.ops.lstat(path); errors.Is(statErr, os.ErrNotExist) {
 		return os.ErrNotExist
 	}
 
