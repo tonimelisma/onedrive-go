@@ -16,8 +16,9 @@ internal/
   graph/                      Graph API client: auth, retry, items CRUD, delta, transfers
   localpath/                  Explicit arbitrary-local-path boundary helpers
   logfile/                    Log file creation, rotation, retention
+  multisync/                  Multi-drive sync control plane and watch reload
   retry/                      Retry policies, exponential backoff with jitter (leaf, stdlib-only)
-  sync/                       Event-driven sync engine (see pipeline below)
+  sync/                       Single-drive sync engine (see pipeline below)
   tokenfile/                  Pure OAuth token file I/O (leaf, stdlib + oauth2 only)
 pkg/
   quickxorhash/               QuickXorHash algorithm (vendored from rclone, BSD-0)
@@ -29,11 +30,12 @@ testutil/                     Shared test helpers (not production code)
 
 ```
 root pkg (CLI) → internal/driveops/ → internal/graph/ → pkg/*
-                 internal/sync/    → internal/driveops/
+                 internal/multisync/ → internal/sync/ → internal/driveops/
                  internal/config/  → internal/driveid/
 ```
 
 - No cycles. `driveops` does NOT import `sync`. `graph` does NOT import `config`.
+- `multisync` owns multi-drive lifecycle; `sync` owns the single-drive runtime.
 - `driveid`, `tokenfile`, and `retry` are leaf packages (no internal imports).
 - Both `graph` and `config` import `tokenfile` for token file I/O.
 - Callers pass token paths to `graph` — no config coupling.
@@ -77,6 +79,7 @@ For detailed module design, see:
 | Sync planning | [sync-planning.md](sync-planning.md) |
 | Sync execution | [sync-execution.md](sync-execution.md) |
 | Sync engine | [sync-engine.md](sync-engine.md) |
+| Sync control plane | [sync-control-plane.md](sync-control-plane.md) |
 | Sync store | [sync-store.md](sync-store.md) |
 | Data model (schema) | [data-model.md](data-model.md) |
 | CLI commands | [cli.md](cli.md) |
@@ -102,5 +105,5 @@ Static verification is a first-class architectural constraint, not a best-effort
 - Audit deferred `Close` on write paths — errors universally ignored. [planned]
 - Degraded-mode behavior guarantees documented (what happens when components fail). [planned]
 - Evaluate `sync` → `graph` error coupling — decouple via interface if warranted. [planned]
-- Evaluate `internal/sync/` package splitting — 8k+ lines in one package. [planned]
+- Evaluate deeper `internal/sync/` runtime package splitting after the control-plane split. [planned]
 - Evaluate CLI structure scaling — 21 files / 4k+ lines in root package, consider domain grouping. [planned]

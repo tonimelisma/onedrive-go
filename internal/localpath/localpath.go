@@ -7,10 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 func cleanPath(path string) (string, error) {
@@ -40,88 +38,31 @@ func absolutePath(path string) (string, error) {
 	return abs, nil
 }
 
-func rootName(path string) (string, error) {
+func Open(path string) (*os.File, error) {
 	abs, err := absolutePath(path)
 	if err != nil {
-		return "", err
-	}
-
-	name := strings.TrimPrefix(abs, string(filepath.Separator))
-	if name == "" {
-		return ".", nil
-	}
-
-	return name, nil
-}
-
-func openRoot() (*os.Root, error) {
-	root, err := os.OpenRoot(string(filepath.Separator))
-	if err != nil {
-		return nil, fmt.Errorf("opening local root: %w", err)
-	}
-
-	return root, nil
-}
-
-func Open(path string) (*os.File, error) {
-	name, err := rootName(path)
-	if err != nil {
 		return nil, err
 	}
 
-	root, err := openRoot()
+	//nolint:gosec // localpath is the explicit arbitrary-path boundary after clean+Abs validation.
+	file, err := os.Open(abs)
 	if err != nil {
-		return nil, err
-	}
-
-	file, openErr := root.Open(name)
-	closeErr := root.Close()
-	if openErr != nil {
-		if closeErr != nil {
-			return nil, errors.Join(openErr, closeErr)
-		}
-
-		return nil, fmt.Errorf("opening %s: %w", path, openErr)
-	}
-
-	if closeErr != nil {
-		if fileCloseErr := file.Close(); fileCloseErr != nil {
-			return nil, errors.Join(closeErr, fileCloseErr)
-		}
-
-		return nil, fmt.Errorf("closing local root: %w", closeErr)
+		return nil, fmt.Errorf("opening %s: %w", path, err)
 	}
 
 	return file, nil
 }
 
 func OpenFile(path string, flag int, perm os.FileMode) (*os.File, error) {
-	name, err := rootName(path)
+	abs, err := absolutePath(path)
 	if err != nil {
 		return nil, err
 	}
 
-	root, err := openRoot()
+	//nolint:gosec // localpath is the explicit arbitrary-path boundary after clean+Abs validation.
+	file, err := os.OpenFile(abs, flag, perm)
 	if err != nil {
-		return nil, err
-	}
-
-	file, openErr := root.OpenFile(name, flag, perm)
-	closeErr := root.Close()
-	if openErr != nil {
-		if closeErr != nil {
-			return nil, errors.Join(openErr, closeErr)
-		}
-
-		return nil, fmt.Errorf("opening %s: %w", path, openErr)
-	}
-
-	if closeErr != nil {
-		if fileCloseErr := file.Close(); fileCloseErr != nil {
-			return nil, errors.Join(closeErr, fileCloseErr)
-		}
-
-		return nil, fmt.Errorf("closing local root: %w", closeErr)
+		return nil, fmt.Errorf("opening %s: %w", path, err)
 	}
 
 	return file, nil
@@ -151,28 +92,14 @@ func ReadFile(path string) ([]byte, error) {
 }
 
 func Stat(path string) (os.FileInfo, error) {
-	name, err := rootName(path)
+	abs, err := absolutePath(path)
 	if err != nil {
 		return nil, err
 	}
 
-	root, err := openRoot()
+	info, err := os.Stat(abs)
 	if err != nil {
-		return nil, err
-	}
-
-	info, statErr := root.Stat(name)
-	closeErr := root.Close()
-	if statErr != nil {
-		if closeErr != nil {
-			return nil, errors.Join(statErr, closeErr)
-		}
-
-		return nil, fmt.Errorf("stating %s: %w", path, statErr)
-	}
-
-	if closeErr != nil {
-		return nil, fmt.Errorf("closing local root: %w", closeErr)
+		return nil, fmt.Errorf("stating %s: %w", path, err)
 	}
 
 	return info, nil
@@ -192,28 +119,13 @@ func MkdirAll(path string, perm os.FileMode) error {
 }
 
 func Remove(path string) error {
-	name, err := rootName(path)
+	abs, err := absolutePath(path)
 	if err != nil {
 		return err
 	}
 
-	root, err := openRoot()
-	if err != nil {
-		return err
-	}
-
-	removeErr := root.Remove(name)
-	closeErr := root.Close()
-	if removeErr != nil {
-		if closeErr != nil {
-			return errors.Join(removeErr, closeErr)
-		}
-
-		return fmt.Errorf("removing %s: %w", path, removeErr)
-	}
-
-	if closeErr != nil {
-		return fmt.Errorf("closing local root: %w", closeErr)
+	if err := os.Remove(abs); err != nil {
+		return fmt.Errorf("removing %s: %w", path, err)
 	}
 
 	return nil
@@ -237,28 +149,14 @@ func Rename(src, dst string) error {
 }
 
 func ReadDir(path string) ([]os.DirEntry, error) {
-	name, err := rootName(path)
+	abs, err := absolutePath(path)
 	if err != nil {
 		return nil, err
 	}
 
-	root, err := openRoot()
+	entries, err := os.ReadDir(abs)
 	if err != nil {
-		return nil, err
-	}
-
-	entries, readErr := fs.ReadDir(root.FS(), name)
-	closeErr := root.Close()
-	if readErr != nil {
-		if closeErr != nil {
-			return nil, errors.Join(readErr, closeErr)
-		}
-
-		return nil, fmt.Errorf("reading directory %s: %w", path, readErr)
-	}
-
-	if closeErr != nil {
-		return nil, fmt.Errorf("closing local root: %w", closeErr)
+		return nil, fmt.Errorf("reading directory %s: %w", path, err)
 	}
 
 	return entries, nil

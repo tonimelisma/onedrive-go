@@ -43,10 +43,10 @@ The process of scanning for changes — either locally (filesystem walk + inotif
 The component that detects items stuck in `syncing` state after a crash and resets them to `observed` for re-planning. Runs at the start of each sync cycle.
 
 ### Orchestrator
-The top-level sync coordinator. Manages multiple DriveRunners, handles SIGHUP config reload, and coordinates pause/resume. Even single-drive sync goes through the Orchestrator.
+The top-level multi-drive sync coordinator. Manages multiple DriveRunners, handles SIGHUP config reload, and coordinates pause/resume. Implemented in `internal/multisync`. Even single-drive `sync` still goes through the control plane so watch and one-shot share the same drive-lifecycle rules.
 
 ### DriveRunner
-A per-drive goroutine wrapping a sync Engine. Provides panic recovery and error isolation between drives.
+A per-drive goroutine wrapping a sync Engine. Provides panic recovery and error isolation between drives. Implemented in `internal/multisync`.
 
 ### Full Reconciliation
 A sync mode (`sync --full`) that runs a fresh delta with no token (enumerates ALL remote items) and compares against baseline to detect orphans — items present in baseline but absent from the server. Corrects deletions missed by incremental delta.

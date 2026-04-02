@@ -499,7 +499,8 @@ func enrichSharedItem(
 }
 
 // deriveSharedDisplayName builds a human-friendly name for a shared folder.
-// Three-step uniqueness escalation per MULTIDRIVE.md §2.1:
+// Use escalating owner identity detail so shared-folder names stay readable
+// without sacrificing uniqueness:
 //  1. "{FirstName}'s {FolderName}" — if unique
 //  2. "{FullName}'s {FolderName}" — if step 1 collides
 //  3. "{FullName}'s {FolderName} ({email})" — if step 2 collides
