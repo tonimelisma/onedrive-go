@@ -98,6 +98,7 @@ Static verification is a first-class architectural constraint, not a best-effort
 - Managed repo-state files use `internal/fsroot` root capabilities.
 - Sync-runtime filesystem operations under one configured sync root use `internal/synctree`.
 - Arbitrary local file paths outside those rooted domains use `internal/localpath` as the explicit trust boundary.
+- `fsroot.Root` and `synctree.Root` carry unexported injectable ops so managed-state and sync-runtime I/O failure paths can be tested deterministically without package-level test hooks.
 
 ## Planned Improvements
 

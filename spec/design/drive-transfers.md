@@ -38,7 +38,7 @@ QuickXorHash computation for local files (`hash.go`). The `pkg/quickxorhash/` pa
 
 ## Cleanup
 
-`cleanup.go` removes stale `.partial` files and expired upload sessions on startup. `stale_partials.go` detects orphaned partial files from interrupted downloads. Session files live under the managed-state boundary (`internal/fsroot` via `SessionStore`). Orphaned `.partial` files live in the sync tree and are cleaned through `internal/synctree`.
+`cleanup.go` removes stale `.partial` files and expired upload sessions on startup. `stale_partials.go` detects orphaned partial files from interrupted downloads. Session files live under the managed-state boundary (`internal/fsroot` via `SessionStore`). Orphaned `.partial` files live in the sync tree and are cleaned through `internal/synctree`. Both rooted boundaries carry unexported injectable ops so cleanup paths can be covered by deterministic create/write/rename/walk/remove failure tests.
 
 ## Disk Space Pre-Check
 

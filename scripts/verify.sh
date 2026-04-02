@@ -113,6 +113,16 @@ BEGIN {
 		cat /tmp/onedrive-go-trustedpath.out
 		exit 1
 	fi
+
+	if [[ -e internal/sync/orchestrator.go || -e internal/sync/drive_runner.go ]]; then
+		echo "control-plane files resurrected under internal/sync"
+		exit 1
+	fi
+
+	if [[ -e internal/sync/engine_flow_test_helpers_test.go ]]; then
+		echo "sync test shim resurrected"
+		exit 1
+	fi
 fi
 
 if [[ "${run_e2e}" == "true" ]]; then
