@@ -176,7 +176,7 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) (*synctypes.Bas
 // .partial deletion and session file cleanup. Synchronous — completes
 // before RunOnce returns to guarantee cleanup on process exit.
 func (flow *engineFlow) postSyncHousekeeping() {
-	driveops.CleanTransferArtifacts(flow.engine.syncRoot, flow.engine.sessionStore, flow.engine.logger)
+	driveops.CleanTransferArtifacts(flow.engine.syncTree, flow.engine.sessionStore, flow.engine.logger)
 }
 
 // executePlan populates the dependency graph and runs the worker pool.
@@ -318,7 +318,7 @@ func (flow *engineFlow) observeLocal(ctx context.Context, bl *synctypes.Baseline
 
 	obs := syncobserve.NewLocalObserver(bl, eng.logger, eng.checkWorkers)
 
-	result, err := obs.FullScan(ctx, eng.syncRoot)
+	result, err := obs.FullScan(ctx, eng.syncTree)
 	if err != nil {
 		return synctypes.ScanResult{}, fmt.Errorf("sync: local scan: %w", err)
 	}

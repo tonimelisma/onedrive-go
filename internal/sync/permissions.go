@@ -1,10 +1,12 @@
 package sync
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -39,8 +41,16 @@ func findShortcutForPath(shortcuts []synctypes.Shortcut, filePath string) *synct
 // isDirAccessible returns true if the directory can be opened for reading.
 // os.Stat is insufficient — it succeeds on chmod 000 dirs because stat()
 // only requires execute on the parent. os.Open tests actual read access.
-func isDirAccessible(dir string) bool {
-	f, err := localpath.Open(dir)
+func isDirAccessible(tree *synctree.Root, dir string) bool {
+	var (
+		f   *os.File
+		err error
+	)
+	if filepath.IsAbs(dir) {
+		f, err = tree.OpenAbs(dir)
+	} else {
+		f, err = tree.Open(dir)
+	}
 	if err != nil {
 		return false
 	}

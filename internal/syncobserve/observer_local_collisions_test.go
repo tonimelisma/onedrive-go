@@ -72,7 +72,7 @@ func TestHasCaseCollisionCached_Detected(t *testing.T) {
 	// On case-insensitive FS (macOS), creating "File.txt" means "file.txt"
 	// refers to the same inode, so os.ReadDir returns "File.txt" and the
 	// exact-match check fails → no collision detected. Correct on both.
-	collidingName, found := obs.HasCaseCollisionCached(dir, "file.txt", ".")
+	collidingName, found := obs.HasCaseCollisionCached(mustOpenSyncTree(t, dir), dir, "file.txt", ".")
 	if found {
 		assert.Equal(t, "File.txt", collidingName,
 			"should return the name of the existing colliding file")
@@ -90,7 +90,7 @@ func TestHasCaseCollisionCached_NoCollision(t *testing.T) {
 		Baseline: synctest.EmptyBaseline(),
 	}
 
-	_, found := obs.HasCaseCollisionCached(dir, "newfile.txt", ".")
+	_, found := obs.HasCaseCollisionCached(mustOpenSyncTree(t, dir), dir, "newfile.txt", ".")
 	assert.False(t, found, "unrelated files should not trigger collision")
 }
 
@@ -105,7 +105,7 @@ func TestHasCaseCollisionCached_ExactMatch_NotCollision(t *testing.T) {
 		Baseline: synctest.EmptyBaseline(),
 	}
 
-	_, found := obs.HasCaseCollisionCached(dir, "same.txt", ".")
+	_, found := obs.HasCaseCollisionCached(mustOpenSyncTree(t, dir), dir, "same.txt", ".")
 	assert.False(t, found, "exact name match should not be a collision")
 }
 
@@ -118,7 +118,7 @@ func TestHasCaseCollisionCached_UnreadableDir_FailOpen(t *testing.T) {
 	}
 
 	// Non-existent directory → ReadDir fails → returns false (fail-open).
-	_, found := obs.HasCaseCollisionCached("/nonexistent/path", "anything.txt", ".")
+	_, found := obs.HasCaseCollisionCached(mustOpenSyncTree(t, "/nonexistent/path"), "/nonexistent/path", "anything.txt", ".")
 	assert.False(t, found, "unreadable directory should fail open")
 }
 
@@ -132,7 +132,7 @@ func TestHasCaseCollisionCached_EmptyDir(t *testing.T) {
 		Baseline: synctest.EmptyBaseline(),
 	}
 
-	_, found := obs.HasCaseCollisionCached(dir, "anything.txt", ".")
+	_, found := obs.HasCaseCollisionCached(mustOpenSyncTree(t, dir), dir, "anything.txt", ".")
 	assert.False(t, found, "empty directory should have no collisions")
 }
 
@@ -152,7 +152,7 @@ func TestHasCaseCollisionCached_BaselineCollision(t *testing.T) {
 		Baseline: bl,
 	}
 
-	collidingName, found := obs.HasCaseCollisionCached(dir, "file.txt", ".")
+	collidingName, found := obs.HasCaseCollisionCached(mustOpenSyncTree(t, dir), dir, "file.txt", ".")
 	assert.True(t, found, "should detect baseline collision")
 	assert.Equal(t, "File.txt", collidingName)
 }
@@ -168,7 +168,7 @@ func TestHasCaseCollisionCached_BaselineExactMatch(t *testing.T) {
 		Baseline: bl,
 	}
 
-	_, found := obs.HasCaseCollisionCached(dir, "File.txt", ".")
+	_, found := obs.HasCaseCollisionCached(mustOpenSyncTree(t, dir), dir, "File.txt", ".")
 	assert.False(t, found, "same casing in baseline should not be a collision")
 }
 
@@ -184,7 +184,7 @@ func TestHasCaseCollisionCached_BaselineSkipsRecentDelete(t *testing.T) {
 		RecentLocalDeletes: map[string]struct{}{"File.txt": {}},
 	}
 
-	_, found := obs.HasCaseCollisionCached(dir, "file.txt", ".")
+	_, found := obs.HasCaseCollisionCached(mustOpenSyncTree(t, dir), dir, "file.txt", ".")
 	assert.False(t, found, "recently deleted baseline entry should not trigger collision")
 }
 
@@ -211,7 +211,7 @@ func TestWatch_CaseCollision_EventSuppressed(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	// Wait for watcher setup, then send a synthetic Create event for
@@ -257,7 +257,7 @@ func TestScanNewDirectory_CaseCollision_Skipped(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	// Wait for watcher setup, then send a Create event for the subdirectory
@@ -332,7 +332,7 @@ func TestWatch_DirectoryCollision_Suppressed(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	// Wait for watcher setup, then send Create event for the directory "Xyz"
@@ -384,7 +384,7 @@ func TestWatch_TwoDirectoryCollision_Suppressed(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	time.Sleep(100 * time.Millisecond)
@@ -437,7 +437,7 @@ func TestScanNewDirectory_SubdirCollision_Suppressed(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	time.Sleep(100 * time.Millisecond)
@@ -507,7 +507,7 @@ func TestWatch_DeleteCollider_ReEmitsSurvivor(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	time.Sleep(100 * time.Millisecond)
@@ -594,7 +594,7 @@ func TestWatch_DeleteCollider_ThreeWay_StillBlocked(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	time.Sleep(100 * time.Millisecond)
@@ -699,7 +699,7 @@ func TestWatch_SafetyScan_ClearsPeers(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	time.Sleep(100 * time.Millisecond)

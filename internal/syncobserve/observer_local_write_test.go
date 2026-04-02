@@ -46,7 +46,7 @@ func TestWatch_HashFailureModifyStillEmitsEvent(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	// Let the watcher settle.
@@ -108,7 +108,7 @@ func TestHandleWrite_CoalescesRapidWrites(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	// Write new content so the hash differs from baseline.
@@ -173,7 +173,7 @@ func TestHandleWrite_EmitsAfterCooldownExpires(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	// Write new content.
@@ -229,7 +229,7 @@ func TestHandleWrite_DifferentPathsNotCoalesced(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	// Write new content to both files.
@@ -294,7 +294,7 @@ func TestHandleWrite_DeleteClearsTimer(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	// Modify and send Write event (starts 200ms timer).
@@ -366,7 +366,7 @@ func TestCancelPendingTimers(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	// Send Write events for two paths (creates timers with 5s cooldown).
@@ -433,7 +433,7 @@ func TestHashAndEmit_RetriesExhausted_EmitsEvent(t *testing.T) {
 	// Call hashAndEmit with retries at the cap. Even though the file is
 	// stable (no errFileChangedDuringHash), this verifies the code path
 	// works correctly at the retry boundary.
-	obs.HashAndEmit(ctx, HashRequest{
+	obs.HashAndEmit(ctx, mustOpenSyncTree(t, dir), HashRequest{
 		FsPath:    filePath,
 		DbRelPath: "exhausted.txt",
 		Name:      "exhausted.txt",
@@ -478,7 +478,7 @@ func TestHashAndEmit_BaselineMatch_NoEvent(t *testing.T) {
 	events := make(chan synctypes.ChangeEvent, 5)
 	ctx := t.Context()
 
-	obs.HashAndEmit(ctx, HashRequest{
+	obs.HashAndEmit(ctx, mustOpenSyncTree(t, dir), HashRequest{
 		FsPath:    filePath,
 		DbRelPath: "noop.txt",
 		Name:      "noop.txt",
@@ -530,7 +530,7 @@ func TestHashAndEmit_CaseCollision_Suppressed(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	time.Sleep(100 * time.Millisecond)
@@ -594,7 +594,7 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	// Wait for watcher setup.

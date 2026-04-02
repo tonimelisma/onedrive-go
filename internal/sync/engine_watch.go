@@ -13,6 +13,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
 	"github.com/tonimelisma/onedrive-go/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -396,13 +397,13 @@ func (rt *watchRuntime) startObservers(
 		go func() {
 			defer obsWg.Done()
 
-			watchErr := localObs.Watch(ctx, rt.engine.syncRoot, events)
+			watchErr := localObs.Watch(ctx, rt.engine.syncTree, events)
 			if errors.Is(watchErr, synctypes.ErrWatchLimitExhausted) {
 				rt.engine.logger.Warn("inotify watch limit exhausted, falling back to periodic full scan",
 					slog.Duration("poll_interval", rt.engine.resolvePollInterval(opts)),
 				)
 
-				rt.runPeriodicFullScan(ctx, localObs, rt.engine.syncRoot, events, rt.engine.resolvePollInterval(opts))
+				rt.runPeriodicFullScan(ctx, localObs, rt.engine.syncTree, events, rt.engine.resolvePollInterval(opts))
 				errs <- nil // clean exit after context cancel
 
 				return
@@ -426,7 +427,7 @@ func (rt *watchRuntime) startObservers(
 // inotify watch limits are exhausted. Blocks until the context is canceled.
 // Each scan's events are forwarded to the events channel via trySend.
 func (rt *watchRuntime) runPeriodicFullScan(
-	ctx context.Context, obs *syncobserve.LocalObserver, syncRoot string,
+	ctx context.Context, obs *syncobserve.LocalObserver, tree *synctree.Root,
 	events chan<- synctypes.ChangeEvent, interval time.Duration,
 ) {
 	ticker := time.NewTicker(interval)
@@ -445,7 +446,7 @@ func (rt *watchRuntime) runPeriodicFullScan(
 				time.Sleep(rand.N(jitter)) //nolint:gosec // non-cryptographic jitter for I/O scheduling
 			}
 
-			result, err := obs.FullScan(ctx, syncRoot)
+			result, err := obs.FullScan(ctx, tree)
 			if err != nil {
 				if ctx.Err() != nil {
 					return
