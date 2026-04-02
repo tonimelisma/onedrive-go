@@ -1,12 +1,14 @@
 # CLI
 
-GOVERNS: main.go, root.go, httpclient.go, format.go, signal.go, pidfile.go, auth.go, ls.go, rm.go, mkdir.go, mv.go, cp.go, stat.go, pause.go, resume.go, recycle_bin.go, internal/logfile/logfile.go
+GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go
 
 Implements: R-1 [implemented], R-3.1 [verified], R-4.7 [verified], R-4.8.4 [verified], R-1.9 [verified], R-1.2.4 [verified], R-1.3.4 [verified], R-1.4.3 [verified], R-1.5.1 [verified], R-1.6.1 [verified], R-1.7.1 [verified], R-1.8.1 [verified], R-1.9.4 [verified], R-3.1.6 [verified], R-3.3.10 [verified], R-3.3.11 [verified], R-2.3.10 [verified], R-2.7.1 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-6.6.11 [verified]
 
 ## Overview
 
-Cobra CLI with Unix-style verbs. Root command (`root.go`) handles global flags (`--config`, `--drive`, `--verbose`, `--quiet`, `--debug`, `--json`), config loading via `PersistentPreRunE`, and drive resolution.
+The root package is a thin process entrypoint. The Cobra command tree, CLI bootstrap, output formatting, and command handlers live in `internal/cli`.
+
+`internal/cli/root.go` handles global flags (`--config`, `--drive`, `--verbose`, `--quiet`, `--debug`, `--json`), config loading via `PersistentPreRunE`, and single-drive resolution. `internal/cli/sync.go` stays in the same package because multi-drive sync reuses the same Phase 1 CLI context but performs its own multi-drive resolution.
 
 ## Command Structure
 
@@ -93,7 +95,7 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
 - The status command uses a testable service layer with narrowed interfaces (`accountMetaReader`, `tokenStateChecker`, `syncStateQuerier`), decoupling status aggregation from Cobra wiring.
 - Informational commands (`drive list`, `status`, `whoami`) use lenient config loading (`LoadOrDefaultLenient`) that collects validation errors as warnings instead of failing. This allows users to inspect their configuration and see drive status even when config has errors. Each of these commands (and `drive search`) must have `skipConfigAnnotation` on the leaf Cobra command — not just the parent — because Cobra checks annotations on the executing command, not parent commands. Safety net: `TestAnnotationTreeWalk` walks the entire command tree and fails if any leaf command with `RunE` is not explicitly classified as either a data command (no annotation) or an annotated command. New commands must be added to the `dataCommands` set or given the annotation. [verified]
 - `loadAndResolve` passes errors from `ResolveDrive` unwrapped. `ResolveDrive` already wraps `LoadOrDefault` errors with `"loading config: "`, and `MatchDrive` errors are user-facing messages that read better without a prefix (e.g., `"no drives configured — ..."` instead of `"loading config: no drives configured — ..."`). [verified]
-- Extract `multiHandler` from `root.go` to `internal/slogutil/` if logging grows (structured error reporting, log sampling). [planned]
+- Extract `multiHandler` from `internal/cli/root.go` to `internal/slogutil/` if logging grows (structured error reporting, log sampling). [planned]
 
 ## Issues Display
 
@@ -103,4 +105,4 @@ Implements: R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-6.6.11
 - **Per-scope sub-grouping**: 507 quota and 403 permissions grouped by scope (own drive vs each shortcut). Different scopes = different owners = different user actions.
 - **Human-readable names**: Shortcut-scoped failures display local path name, not internal drive IDs.
 - **Per-error-type user action text**: Every failure includes plain-language reason + concrete user action. Scope-owner-specific variants: "Your OneDrive storage is full" (own drive) vs "Shared folder '{name}' owner's storage is full" (shortcut).
-- Root package unit test coverage target: 60%+ (currently ~47%). CLI `RunE` handlers need interface-based mock injection. [planned]
+- `internal/cli` unit test coverage target: 60%+ (currently ~51%). CLI `RunE` handlers still need narrower interface-based injection to make more `RunE` flows directly testable. [planned]
