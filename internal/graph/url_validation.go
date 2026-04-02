@@ -57,6 +57,7 @@ func validateUploadURL(parsed *url.URL) error {
 		parsed,
 		"upload",
 		"1drv.com",
+		"microsoftpersonalcontent.com",
 		"onedrive.com",
 		"sharepoint.com",
 		"sharepoint-df.com",
