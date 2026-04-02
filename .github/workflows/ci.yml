@@ -35,6 +35,13 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Install format tools
+        run: |
+          set -euo pipefail
+          go install mvdan.cc/gofumpt@v0.9.2
+          go install golang.org/x/tools/cmd/goimports@v0.41.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
       - name: Install golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
@@ -44,7 +51,7 @@ jobs:
       - name: Verify
         env:
           COVERAGE_THRESHOLD: "76.0"
-        run: ./scripts/verify.sh public
+        run: go run ./cmd/devtool verify public --coverage-threshold "${COVERAGE_THRESHOLD}"
 
   # --- Live API jobs (skip on forks — no OIDC trust) ---
   # Each job uses its own dedicated test account so they run in parallel
@@ -138,7 +145,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "=== Integration tests for: ${ONEDRIVE_TEST_DRIVE} ==="
-          ./scripts/verify.sh integration
+          go run ./cmd/devtool verify integration
 
       - name: Save rotated token to Key Vault
         if: always()
@@ -261,7 +268,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "schedule" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             profile=e2e-full
           fi
-          E2E_LOG_DIR=/tmp/e2e-debug-logs ./scripts/verify.sh "$profile"
+          go run ./cmd/devtool verify "$profile" --e2e-log-dir /tmp/e2e-debug-logs
 
       - name: Upload E2E debug logs
         if: failure()
