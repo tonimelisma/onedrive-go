@@ -257,13 +257,11 @@ jobs:
       - name: Run E2E tests
         run: |
           set -euo pipefail
-          ./scripts/verify.sh e2e
-
+          profile=e2e
           if [[ "${{ github.event_name }}" == "schedule" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "=== E2E full suite (tag: e2e_full) ==="
-            E2E_LOG_DIR=/tmp/e2e-debug-logs \
-              go test -tags=e2e_full -race -v -parallel 5 -timeout=30m ./e2e/...
+            profile=e2e-full
           fi
+          E2E_LOG_DIR=/tmp/e2e-debug-logs ./scripts/verify.sh "$profile"
 
       - name: Upload E2E debug logs
         if: failure()

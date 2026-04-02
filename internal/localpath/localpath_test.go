@@ -72,6 +72,37 @@ func TestOpenSuccess(t *testing.T) {
 	assert.Equal(t, "opened", string(data))
 }
 
+func TestSymlinkTargetsBehaveLikeOrdinaryPaths(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	targetDir := filepath.Join(base, "target-dir")
+	targetFile := filepath.Join(targetDir, "file.txt")
+	require.NoError(t, os.MkdirAll(targetDir, 0o700))
+	require.NoError(t, os.WriteFile(targetFile, []byte("through-link"), 0o600))
+
+	dirLink := filepath.Join(base, "dir-link")
+	fileLink := filepath.Join(base, "file-link.txt")
+	require.NoError(t, os.Symlink(targetDir, dirLink))
+	require.NoError(t, os.Symlink(targetFile, fileLink))
+
+	info, err := Stat(dirLink)
+	require.NoError(t, err)
+	assert.True(t, info.IsDir())
+
+	entries, err := ReadDir(dirLink)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "file.txt", entries[0].Name())
+
+	file, err := Open(fileLink)
+	require.NoError(t, err)
+	data, err := io.ReadAll(file)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	assert.Equal(t, "through-link", string(data))
+}
+
 func TestOpenAndReadDirMissingPath(t *testing.T) {
 	t.Parallel()
 

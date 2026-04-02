@@ -16,8 +16,9 @@ internal/
   graph/                      Graph API client: auth, retry, items CRUD, delta, transfers
   localpath/                  Explicit arbitrary-local-path boundary helpers
   logfile/                    Log file creation, rotation, retention
+  multisync/                  Multi-drive sync control plane and watch reload
   retry/                      Retry policies, exponential backoff with jitter (leaf, stdlib-only)
-  sync/                       Event-driven sync engine (see pipeline below)
+  sync/                       Single-drive sync engine (see pipeline below)
   tokenfile/                  Pure OAuth token file I/O (leaf, stdlib + oauth2 only)
 pkg/
   quickxorhash/               QuickXorHash algorithm (vendored from rclone, BSD-0)
@@ -29,11 +30,12 @@ testutil/                     Shared test helpers (not production code)
 
 ```
 root pkg (CLI) → internal/driveops/ → internal/graph/ → pkg/*
-                 internal/sync/    → internal/driveops/
+                 internal/multisync/ → internal/sync/ → internal/driveops/
                  internal/config/  → internal/driveid/
 ```
 
 - No cycles. `driveops` does NOT import `sync`. `graph` does NOT import `config`.
+- `multisync` owns multi-drive lifecycle; `sync` owns the single-drive runtime.
 - `driveid`, `tokenfile`, and `retry` are leaf packages (no internal imports).
 - Both `graph` and `config` import `tokenfile` for token file I/O.
 - Callers pass token paths to `graph` — no config coupling.
@@ -77,6 +79,7 @@ For detailed module design, see:
 | Sync planning | [sync-planning.md](sync-planning.md) |
 | Sync execution | [sync-execution.md](sync-execution.md) |
 | Sync engine | [sync-engine.md](sync-engine.md) |
+| Sync control plane | [sync-control-plane.md](sync-control-plane.md) |
 | Sync store | [sync-store.md](sync-store.md) |
 | Data model (schema) | [data-model.md](data-model.md) |
 | CLI commands | [cli.md](cli.md) |
@@ -88,8 +91,9 @@ Static verification is a first-class architectural constraint, not a best-effort
 - `golangci-lint` runs with `default: none`; every enabled linter is an explicit policy choice.
 - `nolintlint` requires both a specific linter name and a short justification. Unused exclusions are surfaced with `linters.exclusions.warn-unused`.
 - Inline suppressions are reserved for the small documented exception set where the code is correct and the linter cannot express that shape cleanly: interface-mandated receiver shapes, validated subprocess/request dispatch that the linter cannot follow across helper boundaries, non-cryptographic jitter, `driver.Valuer` SQL `NULL` semantics, fixed placeholder SQL, and intentional test fixtures/mocks.
-- `scripts/verify.sh` is the single repo-owned verification entry point. It exposes explicit profiles: `default` (default local run: lint, build, race+coverage, coverage gate, stale-doc checks, fast E2E), `public`, `e2e`, and `integration`.
+- `scripts/verify.sh` is the single repo-owned verification entry point. It exposes explicit profiles: `default` (default local run: lint, build, race+coverage, coverage gate, stale-doc checks, fast E2E), `public`, `e2e`, `e2e-full`, and `integration`.
 - Fast E2E is mandatory in the default local `default` profile. The harness loads `.env` and `.testdata` itself; verification does not silently skip fast E2E based on exported shell variables.
+- The nightly/manual full E2E suite is layered on top of the fast suite. Its files use `//go:build e2e && e2e_full`, so the canonical invocation is the verifier's `e2e-full` profile, which sets both tags and preserves the fast-then-full ordering.
 - Managed repo-state files use `internal/fsroot` root capabilities. Arbitrary local file paths use `internal/localpath` as the explicit trust boundary.
 
 ## Planned Improvements
@@ -102,5 +106,5 @@ Static verification is a first-class architectural constraint, not a best-effort
 - Audit deferred `Close` on write paths — errors universally ignored. [planned]
 - Degraded-mode behavior guarantees documented (what happens when components fail). [planned]
 - Evaluate `sync` → `graph` error coupling — decouple via interface if warranted. [planned]
-- Evaluate `internal/sync/` package splitting — 8k+ lines in one package. [planned]
+- Evaluate deeper `internal/sync/` runtime package splitting after the control-plane split. [planned]
 - Evaluate CLI structure scaling — 21 files / 4k+ lines in root package, consider domain grouping. [planned]

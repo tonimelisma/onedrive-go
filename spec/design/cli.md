@@ -23,7 +23,7 @@ Implements: R-6.2.8 [verified]
 | `mv` | `mv.go` | Server-side move/rename |
 | `cp` | `cp.go` | Server-side async copy with polling |
 | `stat` | `stat.go` | Display item metadata |
-| `sync` | `sync.go` | Sync (see [sync-engine.md](sync-engine.md)) |
+| `sync` | `sync.go` | Multi-drive sync command (see [sync-control-plane.md](sync-control-plane.md)) |
 | `pause`, `resume` | `pause.go`, `resume.go` | Pause/resume sync. `resume` also cleans up stale config keys from expired timed pauses (paused=true + past paused_until). |
 | `status` | `status.go` | Display account/drive status |
 | `issues` | `issues.go` | Conflict and failure management (grouped display, per-scope sub-grouping) |

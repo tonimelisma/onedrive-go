@@ -1,7 +1,7 @@
 // Package driveops provides authenticated drive access, token caching, and
 // transfer operations. It is the single owner of the "resolved drive →
 // authenticated Graph API client" glue logic, shared between the CLI (file-op
-// commands) and the sync engine (Orchestrator).
+// commands), the multi-drive control plane, and the sync engine.
 //
 // SessionProvider caches TokenSources by token file path, preventing OAuth2
 // refresh token rotation races when multiple drives share a token path.

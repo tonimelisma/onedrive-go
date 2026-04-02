@@ -24,7 +24,7 @@ type reconcileResult struct {
 }
 
 // Engine orchestrates a complete sync pass: observe → plan → execute → commit.
-// Single-drive only; multi-drive orchestration is handled by the Orchestrator.
+// Single-drive only; multi-drive orchestration is handled by internal/multisync.
 type Engine struct {
 	baseline           *syncstore.SyncStore
 	planner            *syncplan.Planner

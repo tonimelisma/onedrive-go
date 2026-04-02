@@ -1,4 +1,4 @@
-package sync
+package multisync
 
 import (
 	"context"
@@ -9,17 +9,17 @@ import (
 )
 
 // DriveRunner manages a single drive's sync lifecycle with panic recovery
-// and error isolation. Each DriveRunner runs independently — a panic or
-// error in one drive does not affect others.
+// and error isolation. Each DriveRunner runs independently, so one drive can
+// fail without destabilizing the rest of the multi-drive control plane.
 type DriveRunner struct {
 	canonID     driveid.CanonicalID
 	displayName string
 }
 
-// run executes the provided sync function with panic recovery. The fn
-// parameter is a closure binding engine.RunOnce(ctx, mode, opts) — using
-// function injection rather than a direct Engine reference enables testing
-// panic recovery without real Engines.
+// run executes the provided sync function with panic recovery. The control
+// plane injects the per-drive RunOnce closure instead of holding a direct
+// Engine reference so tests can exercise panic isolation without a real
+// engine stack.
 func (dr *DriveRunner) run(ctx context.Context, fn func(context.Context) (*synctypes.SyncReport, error)) (result *synctypes.DriveReport) {
 	result = &synctypes.DriveReport{
 		CanonicalID: dr.canonID,
