@@ -100,7 +100,9 @@ fields.
 Tests use same-package helpers that construct `watchRuntime` / `engineFlow`
 directly when they need internal characterization. Production code does not
 publish a runtime-registration hook just so tests can discover live watch
-state.
+state. The sync test suite is organized by runtime concern (`RunOnce`, watch,
+reconcile, conflicts, result/scope flow) rather than a single mixed
+`engine_test.go` file.
 
 ### Result Classification (`classifyResult()`)
 

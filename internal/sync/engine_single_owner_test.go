@@ -431,7 +431,7 @@ func TestEngine_RepairPersistedScopes_ThrottleAndServicePolicy(t *testing.T) {
 
 		require.NoError(t, repairPersistedScopesForTest(t, eng, ctx))
 		newTestWatchState(t, eng)
-		require.NoError(t, eng.loadActiveScopes(ctx, testWatchRuntime(t, eng)))
+		require.NoError(t, loadActiveScopesForTest(t, eng, ctx))
 		testWatchRuntime(t, eng).armTrialTimer()
 
 		select {
@@ -1230,7 +1230,7 @@ func TestCreateEventFromDB_Upload_FileExists(t *testing.T) {
 		Direction: synctypes.DirectionUpload,
 	}
 
-	ev := eng.createEventFromDB(ctx, row)
+	ev := createEventFromDBForTest(t, eng, ctx, row)
 
 	require.NotNil(t, ev, "should create event for existing file")
 	assert.Equal(t, synctypes.SourceLocal, ev.Source)
@@ -1279,7 +1279,7 @@ func TestCreateEventFromDB_Upload_ReusesBaselineHashWhenMetadataMatches(t *testi
 		Mtime:      info.ModTime().UnixNano(),
 	}))
 
-	ev := eng.createEventFromDB(ctx, &synctypes.SyncFailureRow{
+	ev := createEventFromDBForTest(t, eng, ctx, &synctypes.SyncFailureRow{
 		Path:      testFile,
 		DriveID:   driveID,
 		Direction: synctypes.DirectionUpload,
@@ -1303,7 +1303,7 @@ func TestCreateEventFromDB_Upload_FileGone(t *testing.T) {
 		Direction: synctypes.DirectionUpload,
 	}
 
-	ev := eng.createEventFromDB(ctx, row)
+	ev := createEventFromDBForTest(t, eng, ctx, row)
 
 	assert.Nil(t, ev, "missing upload paths are treated as resolved retry candidates")
 }
@@ -1336,7 +1336,7 @@ func TestCreateEventFromDB_Download_RemoteStateExists(t *testing.T) {
 		Direction: synctypes.DirectionDownload,
 	}
 
-	ev := eng.createEventFromDB(ctx, row)
+	ev := createEventFromDBForTest(t, eng, ctx, row)
 
 	require.NotNil(t, ev, "should create event from remote_state")
 	assert.Equal(t, synctypes.SourceRemote, ev.Source)
@@ -1365,7 +1365,7 @@ func TestCreateEventFromDB_Download_RemoteStateGone(t *testing.T) {
 		Direction: synctypes.DirectionDownload,
 	}
 
-	ev := eng.createEventFromDB(ctx, row)
+	ev := createEventFromDBForTest(t, eng, ctx, row)
 
 	assert.Nil(t, ev, "should return nil when no remote_state")
 }
@@ -1415,7 +1415,7 @@ func TestIsFailureResolved_Download_Synced(t *testing.T) {
 		Direction: synctypes.DirectionDownload,
 	}
 
-	assert.True(t, eng.isFailureResolved(ctx, row),
+	assert.True(t, isFailureResolvedForTest(t, eng, ctx, row),
 		"download with synced remote_state should be resolved")
 
 	// The sync_failure should have been cleared.
@@ -1438,7 +1438,7 @@ func TestIsFailureResolved_Download_NoRemoteState(t *testing.T) {
 		Direction: synctypes.DirectionDownload,
 	}
 
-	assert.True(t, eng.isFailureResolved(ctx, row),
+	assert.True(t, isFailureResolvedForTest(t, eng, ctx, row),
 		"download with no remote_state should be resolved")
 }
 
@@ -1467,7 +1467,7 @@ func TestIsFailureResolved_Download_StillPending(t *testing.T) {
 		Direction: synctypes.DirectionDownload,
 	}
 
-	assert.False(t, eng.isFailureResolved(ctx, row),
+	assert.False(t, isFailureResolvedForTest(t, eng, ctx, row),
 		"download with pending_download remote_state should NOT be resolved")
 }
 
@@ -1485,7 +1485,7 @@ func TestIsFailureResolved_Upload_FileGone(t *testing.T) {
 		Direction: synctypes.DirectionUpload,
 	}
 
-	assert.True(t, eng.isFailureResolved(ctx, row),
+	assert.True(t, isFailureResolvedForTest(t, eng, ctx, row),
 		"upload for non-existent file should be resolved")
 }
 
@@ -1510,7 +1510,7 @@ func TestIsFailureResolved_Upload_FileExists(t *testing.T) {
 		Direction: synctypes.DirectionUpload,
 	}
 
-	assert.False(t, eng.isFailureResolved(ctx, row),
+	assert.False(t, isFailureResolvedForTest(t, eng, ctx, row),
 		"upload for existing file should NOT be resolved")
 }
 
@@ -1528,7 +1528,7 @@ func TestIsFailureResolved_Delete_NoBaseline(t *testing.T) {
 		Direction: synctypes.DirectionDelete,
 	}
 
-	assert.True(t, eng.isFailureResolved(ctx, row),
+	assert.True(t, isFailureResolvedForTest(t, eng, ctx, row),
 		"delete with no baseline entry should be resolved")
 }
 
@@ -1570,7 +1570,7 @@ func TestIsFailureResolved_Delete_BaselineExists(t *testing.T) {
 		Direction: synctypes.DirectionDelete,
 	}
 
-	assert.False(t, eng.isFailureResolved(ctx, row),
+	assert.False(t, isFailureResolvedForTest(t, eng, ctx, row),
 		"delete with baseline entry should NOT be resolved")
 }
 
@@ -1954,7 +1954,7 @@ func TestEngine_ClearFailureCandidate_RemovesSyncFailure(t *testing.T) {
 		Category:  synctypes.CategoryTransient,
 	}, nil))
 
-	eng.clearFailureCandidate(ctx, row, "TestEngine_ClearFailureCandidate_RemovesSyncFailure")
+	clearFailureCandidateForTest(t, eng, ctx, row, "TestEngine_ClearFailureCandidate_RemovesSyncFailure")
 
 	failures, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
@@ -1978,7 +1978,7 @@ func TestEngine_RecordRetryTrialSkippedItem_ReasonlessSkipClearsFailure(t *testi
 		Category:  synctypes.CategoryTransient,
 	}, nil))
 
-	eng.recordRetryTrialSkippedItem(ctx, row, &synctypes.SkippedItem{Path: row.Path})
+	recordRetryTrialSkippedItemForTest(t, eng, ctx, row, &synctypes.SkippedItem{Path: row.Path})
 
 	failures, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
@@ -1995,7 +1995,7 @@ func TestEngine_RecordRetryTrialSkippedItem_ZeroDriveIDFallsBackToEngineDrive(t 
 		Direction: synctypes.DirectionUpload,
 	}
 
-	eng.recordRetryTrialSkippedItem(ctx, row, &synctypes.SkippedItem{
+	recordRetryTrialSkippedItemForTest(t, eng, ctx, row, &synctypes.SkippedItem{
 		Path:     row.Path,
 		Reason:   synctypes.IssueFileTooLarge,
 		Detail:   "file size exceeds limit",
