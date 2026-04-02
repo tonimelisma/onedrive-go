@@ -1,6 +1,6 @@
 # Configuration
 
-GOVERNS: internal/config/account.go, internal/config/config.go, internal/config/defaults.go, internal/config/discovery.go, internal/config/display_name.go, internal/config/drive.go, internal/config/drivemeta.go, internal/config/env.go, internal/config/holder.go, internal/config/load.go, internal/config/paths.go, internal/config/size.go, internal/config/token_resolution.go, internal/config/toml_lines.go, internal/config/unknown.go, internal/config/validate.go, internal/config/validate_drive.go, internal/config/write.go
+GOVERNS: internal/config/account.go, internal/config/config.go, internal/config/defaults.go, internal/config/discovery.go, internal/config/display_name.go, internal/config/drive.go, internal/config/drivemeta.go, internal/config/env.go, internal/config/holder.go, internal/config/load.go, internal/config/managed_io.go, internal/config/paths.go, internal/config/size.go, internal/config/token_resolution.go, internal/config/toml_lines.go, internal/config/unknown.go, internal/config/validate.go, internal/config/validate_drive.go, internal/config/write.go
 
 Implements: R-4.1 [verified], R-4.2 [verified], R-4.3 [verified], R-4.4 [verified], R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-4.8.4 [verified], R-4.8.5 [verified], R-4.8.6 [verified], R-4.9.2 [verified], R-4.9.3 [verified]
 
@@ -18,7 +18,12 @@ Only two environment variables: `ONEDRIVE_GO_CONFIG` (config path override) and 
 
 Platform-specific paths following XDG (Linux) and Application Support (macOS) conventions. Config and data may share the same directory on macOS.
 
-Managed config/account/drive-metadata reads use root-based trusted-path opens once the CLI/config layer has selected the file path. This keeps the path trust boundary explicit without broad `gosec` carve-outs.
+`config` uses two filesystem boundaries, not ad hoc `os.*` calls:
+
+- `fsroot` for repo-managed state selected by the config layer: config files, tokens, account metadata, drive metadata, state DB path discovery
+- `localpath` for arbitrary local paths supplied by the user or derived from config semantics: `sync_dir` existence/type validation
+
+Config entrypoints still accept full path strings, so `managed_io.go` establishes the managed root per call via `fsroot.OpenPath` or `fsroot.Open`. This keeps the path trust boundary explicit without broad `gosec` carve-outs.
 
 ## Config File Manipulation
 
@@ -60,6 +65,8 @@ Implements: R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified]
 
 Unknown config keys are fatal errors (`unknown.go`). Per-drive validation checks sync_dir, filter patterns, size parsing, and drive-specific constraints. Global validation checks log level, transfer workers, and safety thresholds. `checkSyncDirOverlap()` prevents overlapping sync directories using `filepath.Clean` + `strings.HasPrefix` with separator suffix. Called at both config load and control-plane startup.
 
+`ValidateResolved` and `ValidateResolvedForSync` treat only `os.ErrNotExist` as an acceptable sync-dir stat result. If the local path is unreadable or the filesystem returns another error, validation fails instead of silently accepting a broken path.
+
 ### Validation Tiers [verified]
 
 Implements: R-4.8.4 [verified]
@@ -72,7 +79,7 @@ Two loading paths: strict (`Load`/`LoadOrDefault`) for data commands, lenient (`
 
 Internal refactoring supports both paths cleanly: `collectUnknownGlobalKeyErrors`, `collectDriveUnknownKeyErrors`, and `collectValidationErrors` return `[]error` slices. The strict wrappers (`checkUnknownKeys`, `Validate`) join them into a single error. The lenient path converts them to warnings.
 
-**Sync-specific validation** (`ValidateResolvedForSync`): enforces sync_dir is set, absolute, and not a regular file. Called only by the `sync` command — file operations don't require sync_dir.
+**Sync-specific validation** (`ValidateResolvedForSync`): enforces sync_dir is set, absolute, and not a regular file. Non-existent paths are allowed because sync creates them on first run; other stat failures are fatal. Called only by the `sync` command — file operations don't require sync_dir.
 
 ## Config Holder
 

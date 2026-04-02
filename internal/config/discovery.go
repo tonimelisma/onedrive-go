@@ -3,7 +3,6 @@ package config
 import (
 	"cmp"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -20,11 +19,15 @@ const cidFileSuffix = ".json"
 // implementation behind DiscoverTokens and DiscoverAccountProfiles — both follow
 // the same naming convention, differing only in prefix ("token_" vs "account_").
 func discoverCIDFiles(dir, prefix string, logger *slog.Logger) []driveid.CanonicalID {
+	return discoverCIDFilesWithIO(dir, prefix, logger, defaultConfigIO())
+}
+
+func discoverCIDFilesWithIO(dir, prefix string, logger *slog.Logger, io configIO) []driveid.CanonicalID {
 	if dir == "" {
 		return nil
 	}
 
-	entries, err := os.ReadDir(dir)
+	entries, err := io.readManagedDir(dir)
 	if err != nil {
 		logger.Debug("cannot read data directory for file discovery",
 			"dir", dir, "prefix", prefix, "error", err)
@@ -80,11 +83,19 @@ func discoverCIDFiles(dir, prefix string, logger *slog.Logger) []driveid.Canonic
 // This is the shared implementation behind DiscoverStateDBsForEmail and
 // DiscoverDriveMetadataForEmail.
 func discoverFilesForEmail(dir, prefix, suffix, email string, logger *slog.Logger) []string {
+	return discoverFilesForEmailWithIO(dir, prefix, suffix, email, logger, defaultConfigIO())
+}
+
+func discoverFilesForEmailWithIO(
+	dir, prefix, suffix, email string,
+	logger *slog.Logger,
+	io configIO,
+) []string {
 	if dir == "" || email == "" {
 		return nil
 	}
 
-	entries, err := os.ReadDir(dir)
+	entries, err := io.readManagedDir(dir)
 	if err != nil {
 		logger.Debug("cannot read data directory for email-based file discovery",
 			"dir", dir, "prefix", prefix, "error", err)

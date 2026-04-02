@@ -36,11 +36,15 @@ func LogWarnings(warnings []ConfigWarning, logger *slog.Logger) {
 // into embedded structs. Pass 2 extracts drive sections (keys containing ":").
 // Unknown keys are treated as fatal errors with "did you mean?" suggestions.
 func Load(path string, logger *slog.Logger) (*Config, error) {
+	return loadWithIO(path, logger, defaultConfigIO())
+}
+
+func loadWithIO(path string, logger *slog.Logger, io configIO) (*Config, error) {
 	logger.Debug("loading config file", "path", path)
 
 	cfg := DefaultConfig()
 
-	data, err := readManagedFile(path)
+	data, err := io.readManagedFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading config file %s: %w", path, err)
 	}
@@ -215,13 +219,19 @@ func mapToDrive(m map[string]any, d *Drive) error {
 // (config creation path) and callers that want smart error messages when
 // config is missing rather than raw file-not-found errors.
 func LoadOrDefault(path string, logger *slog.Logger) (*Config, error) {
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+	return loadOrDefaultWithIO(path, logger, defaultConfigIO())
+}
+
+func loadOrDefaultWithIO(path string, logger *slog.Logger, io configIO) (*Config, error) {
+	if _, err := io.statManagedPath(path); errors.Is(err, os.ErrNotExist) {
 		logger.Debug("config file not found, using defaults", "path", path)
 
 		return DefaultConfig(), nil
+	} else if err != nil {
+		return nil, fmt.Errorf("stating config file %s: %w", path, err)
 	}
 
-	return Load(path, logger)
+	return loadWithIO(path, logger, io)
 }
 
 // LoadLenient reads and parses a TOML config file, collecting unknown keys and
@@ -229,11 +239,15 @@ func LoadOrDefault(path string, logger *slog.Logger) (*Config, error) {
 // file read errors remain fatal. Used by informational commands (drive list,
 // status, whoami) that need to show what they can even when config has errors.
 func LoadLenient(path string, logger *slog.Logger) (*Config, []ConfigWarning, error) {
+	return loadLenientWithIO(path, logger, defaultConfigIO())
+}
+
+func loadLenientWithIO(path string, logger *slog.Logger, io configIO) (*Config, []ConfigWarning, error) {
 	logger.Debug("loading config file (lenient)", "path", path)
 
 	cfg := DefaultConfig()
 
-	data, err := readManagedFile(path)
+	data, err := io.readManagedFile(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("reading config file %s: %w", path, err)
 	}
@@ -280,13 +294,19 @@ func LoadLenient(path string, logger *slog.Logger) (*Config, []ConfigWarning, er
 // LoadOrDefaultLenient reads a TOML config file leniently if it exists,
 // otherwise returns default Config with no warnings.
 func LoadOrDefaultLenient(path string, logger *slog.Logger) (*Config, []ConfigWarning, error) {
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+	return loadOrDefaultLenientWithIO(path, logger, defaultConfigIO())
+}
+
+func loadOrDefaultLenientWithIO(path string, logger *slog.Logger, io configIO) (*Config, []ConfigWarning, error) {
+	if _, err := io.statManagedPath(path); errors.Is(err, os.ErrNotExist) {
 		logger.Debug("config file not found, using defaults", "path", path)
 
 		return DefaultConfig(), nil, nil
+	} else if err != nil {
+		return nil, nil, fmt.Errorf("stating config file %s: %w", path, err)
 	}
 
-	return LoadLenient(path, logger)
+	return loadLenientWithIO(path, logger, io)
 }
 
 // ResolveDrive loads configuration and applies the four-layer override chain:

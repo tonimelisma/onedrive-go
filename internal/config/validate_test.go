@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -487,6 +488,19 @@ func TestValidateResolved_EmptySyncDir(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestValidateResolved_SyncDirStatError(t *testing.T) {
+	rd := &ResolvedDrive{SyncDir: "/tmp/sync-dir"}
+	err := validateResolvedWithIO(rd, configIO{
+		statLocalPath: func(path string) (os.FileInfo, error) {
+			return nil, errors.New("boom")
+		},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sync_dir")
+	assert.Contains(t, err.Error(), "boom")
+}
+
 // ---------------------------------------------------------------------------
 // WarnUnimplemented tests (B-141)
 // ---------------------------------------------------------------------------
@@ -628,4 +642,21 @@ func TestValidateResolvedForSync_NonExistentDir_OK(t *testing.T) {
 	}
 	err := ValidateResolvedForSync(rd)
 	assert.NoError(t, err)
+}
+
+// Validates: R-4.8.6
+func TestValidateResolvedForSync_SyncDirStatError(t *testing.T) {
+	rd := &ResolvedDrive{
+		CanonicalID: driveid.MustCanonicalID("personal:user@example.com"),
+		SyncDir:     "/tmp/sync-dir",
+	}
+	err := validateResolvedForSyncWithIO(rd, configIO{
+		statLocalPath: func(path string) (os.FileInfo, error) {
+			return nil, errors.New("boom")
+		},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sync_dir")
+	assert.Contains(t, err.Error(), "boom")
 }

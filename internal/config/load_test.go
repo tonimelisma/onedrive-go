@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -196,6 +197,30 @@ func TestLoadOrDefault_FileNotFound(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "info", cfg.LogLevel)
 	assert.Equal(t, 8, cfg.TransferWorkers)
+}
+
+func TestLoad_ReadManagedFileError(t *testing.T) {
+	_, err := loadWithIO("/tmp/config.toml", testLogger(t), configIO{
+		readManagedFile: func(path string) ([]byte, error) {
+			return nil, errors.New("boom")
+		},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading config file")
+	assert.Contains(t, err.Error(), "boom")
+}
+
+func TestLoadOrDefault_StatError(t *testing.T) {
+	_, err := loadOrDefaultWithIO("/tmp/config.toml", testLogger(t), configIO{
+		statManagedPath: func(path string) (os.FileInfo, error) {
+			return nil, errors.New("boom")
+		},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "stating config file")
+	assert.Contains(t, err.Error(), "boom")
 }
 
 func TestLoad_PartialConfig_UsesDefaults(t *testing.T) {
