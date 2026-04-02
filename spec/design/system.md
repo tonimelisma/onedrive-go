@@ -19,6 +19,7 @@ internal/
   multisync/                  Multi-drive sync control plane and watch reload
   retry/                      Retry policies, exponential backoff with jitter (leaf, stdlib-only)
   sync/                       Single-drive sync engine (see pipeline below)
+  synctree/                   Root-bound sync runtime filesystem capability
   tokenfile/                  Pure OAuth token file I/O (leaf, stdlib + oauth2 only)
 pkg/
   quickxorhash/               QuickXorHash algorithm (vendored from rclone, BSD-0)
@@ -94,7 +95,9 @@ Static verification is a first-class architectural constraint, not a best-effort
 - `scripts/verify.sh` is the single repo-owned verification entry point. It exposes explicit profiles: `default` (default local run: lint, build, race+coverage, coverage gate, stale-doc checks, fast E2E), `public`, `e2e`, `e2e-full`, and `integration`.
 - Fast E2E is mandatory in the default local `default` profile. The harness loads `.env` and `.testdata` itself; verification does not silently skip fast E2E based on exported shell variables.
 - The nightly/manual full E2E suite is layered on top of the fast suite. Its files use `//go:build e2e && e2e_full`, so the canonical invocation is the verifier's `e2e-full` profile, which sets both tags and preserves the fast-then-full ordering.
-- Managed repo-state files use `internal/fsroot` root capabilities. Arbitrary local file paths use `internal/localpath` as the explicit trust boundary.
+- Managed repo-state files use `internal/fsroot` root capabilities.
+- Sync-runtime filesystem operations under one configured sync root use `internal/synctree`.
+- Arbitrary local file paths outside those rooted domains use `internal/localpath` as the explicit trust boundary.
 
 ## Planned Improvements
 

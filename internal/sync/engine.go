@@ -15,6 +15,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/syncplan"
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -35,6 +36,7 @@ type Engine struct {
 	recursiveLister    synctypes.RecursiveLister    // optional: for shortcut observation (6.4b)
 	permHandler        *PermissionHandler           // encapsulates all permission logic (6.4c)
 	syncRoot           string
+	syncTree           *synctree.Root
 	driveID            driveid.ID
 	logger             *slog.Logger
 	sessionStore       *driveops.SessionStore // for CleanStale() housekeeping
@@ -91,6 +93,11 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 		driveops.WithDiskCheck(cfg.MinFreeSpace, driveops.DiskAvailable),
 	))
 
+	syncTree, err := synctree.Open(cfg.SyncRoot)
+	if err != nil {
+		return nil, fmt.Errorf("sync: opening sync tree: %w", err)
+	}
+
 	// Default threshold if not set by config.
 	bdThreshold := cfg.BigDeleteThreshold
 	if bdThreshold == 0 {
@@ -107,6 +114,7 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 		recursiveLister:    cfg.RecursiveLister,
 		sessionStore:       sessionStore,
 		syncRoot:           cfg.SyncRoot,
+		syncTree:           syncTree,
 		driveID:            cfg.DriveID,
 		logger:             cfg.Logger,
 		transferWorkers:    cfg.TransferWorkers,
@@ -120,7 +128,7 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 	e.permHandler = &PermissionHandler{
 		baseline:    e.baseline,
 		permChecker: cfg.PermChecker,
-		syncRoot:    cfg.SyncRoot,
+		syncTree:    syncTree,
 		driveID:     cfg.DriveID,
 		logger:      cfg.Logger,
 		nowFn:       e.nowFunc,
@@ -272,10 +280,7 @@ func (e *Engine) ResolveConflict(ctx context.Context, conflictID, resolution str
 // the remote content to the original path. "Keep local" means the user wants
 // their pre-conflict local content — which lives in the conflict copy.
 func (e *Engine) resolveKeepLocal(ctx context.Context, c *synctypes.ConflictRecord) error {
-	absPath := filepath.Join(e.syncRoot, c.Path)
-	pattern := syncexec.ConflictCopyGlob(absPath)
-
-	matches, err := filepath.Glob(pattern)
+	matches, err := e.syncTree.Glob(conflictCopyGlob(c.Path))
 	if err != nil {
 		return fmt.Errorf("glob conflict copies for keep-local: %w", err)
 	}
@@ -284,7 +289,7 @@ func (e *Engine) resolveKeepLocal(ctx context.Context, c *synctypes.ConflictReco
 	// conflict copies exist (shouldn't normally happen), the first one is
 	// the user's local version.
 	if len(matches) > 0 {
-		if renameErr := os.Rename(matches[0], absPath); renameErr != nil {
+		if renameErr := e.syncTree.Rename(matches[0], c.Path); renameErr != nil {
 			return fmt.Errorf("restoring conflict copy to %s: %w", c.Path, renameErr)
 		}
 
@@ -353,10 +358,8 @@ func (e *Engine) resolveTransfer(ctx context.Context, c *synctypes.ConflictRecor
 // conflicts intentionally skip baseline upsert), so it still has a stale hash.
 // Conflict copies have no baseline entry at all.
 func (e *Engine) resolveKeepBoth(ctx context.Context, c *synctypes.ConflictRecord) error {
-	absPath := filepath.Join(e.syncRoot, c.Path)
-
 	// Update baseline for the original file with its current on-disk hash.
-	if err := e.upsertBaselineFromDisk(ctx, c.DriveID, c.ItemID, c.Path, absPath); err != nil {
+	if err := e.upsertBaselineFromDisk(ctx, c.DriveID, c.ItemID, c.Path); err != nil {
 		return fmt.Errorf("updating baseline for original: %w", err)
 	}
 
@@ -364,21 +367,14 @@ func (e *Engine) resolveKeepBoth(ctx context.Context, c *synctypes.ConflictRecor
 	// item ID is used because the conflict copy has no remote counterpart yet.
 	// The next upload-capable sync or full reconciliation will upload the file
 	// and replace this entry with a real item ID.
-	pattern := syncexec.ConflictCopyGlob(absPath)
-
-	matches, err := filepath.Glob(pattern)
+	matches, err := e.syncTree.Glob(conflictCopyGlob(c.Path))
 	if err != nil {
 		return fmt.Errorf("glob conflict copies: %w", err)
 	}
 
 	for _, m := range matches {
-		relPath, relErr := filepath.Rel(e.syncRoot, m)
-		if relErr != nil {
-			return fmt.Errorf("computing relative path for conflict copy: %w", relErr)
-		}
-
 		syntheticID := "conflict-copy-placeholder"
-		if upsertErr := e.upsertBaselineFromDisk(ctx, c.DriveID, syntheticID, relPath, m); upsertErr != nil {
+		if upsertErr := e.upsertBaselineFromDisk(ctx, c.DriveID, syntheticID, m); upsertErr != nil {
 			return fmt.Errorf("updating baseline for conflict copy %s: %w", filepath.Base(m), upsertErr)
 		}
 	}
@@ -390,8 +386,13 @@ func (e *Engine) resolveKeepBoth(ctx context.Context, c *synctypes.ConflictRecor
 // commits a synthetic UpdateSynced outcome to the baseline. Used during
 // conflict resolution to bring baseline entries up to date without a real
 // transfer.
-func (e *Engine) upsertBaselineFromDisk(ctx context.Context, driveID driveid.ID, itemID, relPath, absPath string) error {
-	info, err := os.Stat(absPath)
+func (e *Engine) upsertBaselineFromDisk(ctx context.Context, driveID driveid.ID, itemID, relPath string) error {
+	absPath, err := e.syncTree.Abs(relPath)
+	if err != nil {
+		return fmt.Errorf("resolving %s under sync tree: %w", relPath, err)
+	}
+
+	info, err := e.syncTree.Stat(relPath)
 	if err != nil {
 		return fmt.Errorf("stat %s: %w", relPath, err)
 	}
@@ -424,10 +425,7 @@ func (e *Engine) upsertBaselineFromDisk(ctx context.Context, driveID driveid.ID,
 // relative path. Called after keep-local or keep-remote resolution — the
 // user has chosen one side, so the other side's content is no longer needed.
 func (e *Engine) cleanupConflictCopies(relPath string) {
-	absPath := filepath.Join(e.syncRoot, relPath)
-	pattern := syncexec.ConflictCopyGlob(absPath)
-
-	matches, err := filepath.Glob(pattern)
+	matches, err := e.syncTree.Glob(conflictCopyGlob(relPath))
 	if err != nil {
 		e.logger.Warn("glob for conflict copies",
 			slog.String("path", relPath),
@@ -438,7 +436,7 @@ func (e *Engine) cleanupConflictCopies(relPath string) {
 	}
 
 	for _, m := range matches {
-		if removeErr := os.Remove(m); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+		if removeErr := e.syncTree.Remove(m); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			e.logger.Warn("removing conflict copy",
 				slog.String("file", filepath.Base(m)),
 				slog.String("error", removeErr.Error()),
@@ -449,4 +447,16 @@ func (e *Engine) cleanupConflictCopies(relPath string) {
 			)
 		}
 	}
+}
+
+func conflictCopyGlob(relPath string) string {
+	dir := filepath.Dir(relPath)
+	name := filepath.Base(relPath)
+	stem, ext := syncexec.ConflictStemExt(name)
+	pattern := fmt.Sprintf("%s.conflict-*%s", stem, ext)
+	if dir == "." {
+		return pattern
+	}
+
+	return filepath.Join(dir, pattern)
 }

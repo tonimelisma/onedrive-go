@@ -18,13 +18,13 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 
 	"github.com/tonimelisma/onedrive-go/internal/retry"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -37,8 +37,9 @@ import (
 // (every 5 minutes) provides eventual consistency for any events missed
 // or dropped by fsnotify, regardless of select scheduling order.
 func (o *LocalObserver) watchLoop(
-	ctx context.Context, watcher FsWatcher, syncRoot string, events chan<- synctypes.ChangeEvent,
+	ctx context.Context, watcher FsWatcher, tree *synctree.Root, events chan<- synctypes.ChangeEvent,
 ) error {
+	syncRoot := tree.Path()
 	interval := o.safetyScanInterval
 	if interval == 0 {
 		interval = safetyScanInterval
@@ -59,14 +60,14 @@ func (o *LocalObserver) watchLoop(
 				return nil
 			}
 
-			o.HandleFsEvent(ctx, fsEvent, watcher, syncRoot, events)
+			o.HandleFsEvent(ctx, fsEvent, watcher, tree, events)
 
 			// Successful event resets error backoff.
 			errBackoff.Reset()
 
 		case req := <-o.HashRequests:
 			// Deferred hash from write coalesce timer (B-107).
-			o.HashAndEmit(ctx, req, events)
+			o.HashAndEmit(ctx, tree, req, events)
 
 		case watchErr, ok := <-watcher.Errors():
 			if !ok {
@@ -103,7 +104,7 @@ func (o *LocalObserver) watchLoop(
 				return synctypes.ErrSyncRootDeleted
 			}
 
-			o.runSafetyScan(ctx, syncRoot, events)
+			o.runSafetyScan(ctx, tree, events)
 			errBackoff.Reset()
 		}
 	}
@@ -113,14 +114,14 @@ func (o *LocalObserver) watchLoop(
 // ChangeEvent to the output channel.
 func (o *LocalObserver) HandleFsEvent(
 	ctx context.Context, fsEvent fsnotify.Event, watcher FsWatcher,
-	syncRoot string, events chan<- synctypes.ChangeEvent,
+	tree *synctree.Root, events chan<- synctypes.ChangeEvent,
 ) {
 	// Ignore chmod events — mode changes are not synced.
 	if fsEvent.Has(fsnotify.Chmod) && !fsEvent.Has(fsnotify.Create) && !fsEvent.Has(fsnotify.Write) {
 		return
 	}
 
-	relPath, err := filepath.Rel(syncRoot, fsEvent.Name)
+	relPath, err := tree.Rel(fsEvent.Name)
 	if err != nil {
 		o.Logger.Warn("failed to compute relative path",
 			slog.String("path", fsEvent.Name), slog.String("error", err.Error()))
@@ -146,26 +147,27 @@ func (o *LocalObserver) HandleFsEvent(
 
 	switch {
 	case fsEvent.Has(fsnotify.Create):
-		o.handleCreate(ctx, fsEvent.Name, dbRelPath, name, watcher, events)
+		o.handleCreate(ctx, tree, fsEvent.Name, dbRelPath, name, watcher, events)
 
 	case fsEvent.Has(fsnotify.Write):
-		o.handleWrite(fsEvent.Name, dbRelPath, name)
+		o.handleWrite(tree, fsEvent.Name, dbRelPath, name)
 
 	case fsEvent.Has(fsnotify.Remove) || fsEvent.Has(fsnotify.Rename):
 		// Pass the original filesystem path (fsEvent.Name) rather than
 		// reconstructing from syncRoot + dbRelPath. The NFC-normalized
 		// dbRelPath may differ from the filesystem's encoding (NFD on
 		// macOS HFS+), causing watcher.Remove() to silently fail.
-		o.HandleDelete(ctx, watcher, fsEvent.Name, dbRelPath, name, events)
+		o.HandleDelete(ctx, watcher, tree, fsEvent.Name, dbRelPath, name, events)
 	}
 }
 
 // handleCreate processes a Create event: stat, hash (files), add watch (dirs).
 func (o *LocalObserver) handleCreate(
-	ctx context.Context, fsPath, dbRelPath, name string,
+	ctx context.Context, tree *synctree.Root,
+	fsPath, dbRelPath, name string,
 	watcher FsWatcher, events chan<- synctypes.ChangeEvent,
 ) {
-	info, err := os.Stat(fsPath)
+	info, err := tree.StatAbs(fsPath)
 	if err != nil {
 		// File may have been removed immediately after creation.
 		o.Logger.Debug("stat failed for created path",
@@ -179,7 +181,7 @@ func (o *LocalObserver) handleCreate(
 	// namespace cannot host both Xyz/ and xyz in the same parent.
 	// The authoritative check is FullScan's post-walk DetectCaseCollisions;
 	// this rejects obvious collisions between safety scans.
-	if collidingName, hasCollision := o.HasCaseCollisionCached(filepath.Dir(fsPath), name, filepath.Dir(dbRelPath)); hasCollision {
+	if collidingName, hasCollision := o.HasCaseCollisionCached(tree, filepath.Dir(fsPath), name, filepath.Dir(dbRelPath)); hasCollision {
 		// Track peer for re-emission when the collider is deleted.
 		peerRelPath := o.buildPeerRelPath(dbRelPath, collidingName)
 		o.AddCollisionPeer(dbRelPath, peerRelPath)
@@ -211,7 +213,7 @@ func (o *LocalObserver) handleCreate(
 		// Scan directory contents for files created before the watch was
 		// registered. Duplicates from fsnotify are harmless — the buffer's
 		// per-path deduplication handles them.
-		o.scanNewDirectory(ctx, fsPath, dbRelPath, watcher, events)
+		o.scanNewDirectory(ctx, tree, fsPath, dbRelPath, watcher, events)
 	} else {
 		// Stage 2 observation filter: file size check (requires stat).
 		if o.IsOversizedFile(info.Size(), dbRelPath) {
@@ -254,10 +256,10 @@ func (o *LocalObserver) stableHashOrEmpty(fsPath, dbRelPath string) string {
 // events for any files already present. This catches files created between
 // the directory's creation and the fsnotify watch registration.
 func (o *LocalObserver) scanNewDirectory(
-	ctx context.Context, dirPath, dirRelPath string,
+	ctx context.Context, tree *synctree.Root, dirPath, dirRelPath string,
 	watcher FsWatcher, events chan<- synctypes.ChangeEvent,
 ) {
-	entries, err := os.ReadDir(dirPath)
+	entries, err := tree.ReadDirAbs(dirPath)
 	if err != nil {
 		o.Logger.Debug("scan new directory failed",
 			slog.String("path", dirRelPath), slog.String("error", err.Error()))
@@ -286,7 +288,7 @@ func (o *LocalObserver) scanNewDirectory(
 
 		// Early rejection for case collisions in directory scan (R-2.12.2).
 		// Applies to both files and directories — checked before branching.
-		if collidingName, hasCollision := o.HasCaseCollisionCached(dirPath, entryName, dirRelPath); hasCollision {
+		if collidingName, hasCollision := o.HasCaseCollisionCached(tree, dirPath, entryName, dirRelPath); hasCollision {
 			o.Logger.Debug("case collision detected in directory scan, skipping",
 				slog.String("path", entryRelPath),
 				slog.String("collides_with", collidingName))
@@ -311,7 +313,7 @@ func (o *LocalObserver) scanNewDirectory(
 
 			o.TrySend(ctx, events, &dirEv)
 
-			o.scanNewDirectory(ctx, entryFsPath, entryRelPath, watcher, events)
+			o.scanNewDirectory(ctx, tree, entryFsPath, entryRelPath, watcher, events)
 
 			continue
 		}
@@ -355,8 +357,8 @@ func (o *LocalObserver) scanNewDirectory(
 // in-flight (dispatched to workers but not yet committed to baseline), the safety scan
 // may re-emit an event for something already being processed. This is safe:
 // processBatch deduplicates via HasInFlight + CancelByPath (B-122).
-func (o *LocalObserver) handleWrite(fsPath, dbRelPath, name string) {
-	info, err := os.Stat(fsPath)
+func (o *LocalObserver) handleWrite(tree *synctree.Root, fsPath, dbRelPath, name string) {
+	info, err := tree.StatAbs(fsPath)
 	if err != nil {
 		o.Logger.Debug("stat failed for modified path",
 			slog.String("path", dbRelPath), slog.String("error", err.Error()))
@@ -396,10 +398,10 @@ func (o *LocalObserver) handleWrite(fsPath, dbRelPath, name string) {
 // HashAndEmit is called from the watchLoop when a write coalesce timer fires.
 // It hashes the file and emits a ChangeModify event if the content differs
 // from the baseline. Runs in the watchLoop goroutine (same thread as handleWrite).
-func (o *LocalObserver) HashAndEmit(ctx context.Context, req HashRequest, events chan<- synctypes.ChangeEvent) {
+func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, req HashRequest, events chan<- synctypes.ChangeEvent) {
 	delete(o.PendingTimers, req.DbRelPath)
 
-	info, err := os.Stat(req.FsPath)
+	info, err := tree.StatAbs(req.FsPath)
 	if err != nil {
 		o.Logger.Debug("stat failed for deferred hash",
 			slog.String("path", req.DbRelPath), slog.String("error", err.Error()))
@@ -420,7 +422,7 @@ func (o *LocalObserver) HashAndEmit(ctx context.Context, req HashRequest, events
 	// The authoritative check is FullScan's DetectCaseCollisions; this
 	// rejects obvious collisions between safety scans.
 	if collidingName, hasCollision := o.HasCaseCollisionCached(
-		filepath.Dir(req.FsPath), filepath.Base(req.FsPath), filepath.Dir(req.DbRelPath),
+		tree, filepath.Dir(req.FsPath), filepath.Base(req.FsPath), filepath.Dir(req.DbRelPath),
 	); hasCollision {
 		o.Logger.Debug("case collision detected for modified file, skipping event",
 			slog.String("path", req.DbRelPath),
@@ -500,7 +502,7 @@ func (o *LocalObserver) HashAndEmit(ctx context.Context, req HashRequest, events
 // paths while dbRelPath is NFC-normalized. Using the original fsPath for
 // watcher.Remove() ensures the removal matches the path registered by fsnotify.
 func (o *LocalObserver) HandleDelete(
-	ctx context.Context, watcher FsWatcher, fsPath, dbRelPath, name string,
+	ctx context.Context, watcher FsWatcher, tree *synctree.Root, fsPath, dbRelPath, name string,
 	events chan<- synctypes.ChangeEvent,
 ) {
 	// Clean up write coalesce timer for deleted path (B-107).
@@ -528,7 +530,7 @@ func (o *LocalObserver) HandleDelete(
 		for peerPath := range peers {
 			peerFsPath := filepath.Join(filepath.Dir(fsPath), filepath.Base(peerPath))
 			peerName := filepath.Base(peerPath)
-			o.handleCreate(ctx, peerFsPath, peerPath, peerName, watcher, events)
+			o.handleCreate(ctx, tree, peerFsPath, peerPath, peerName, watcher, events)
 		}
 	}
 
@@ -568,12 +570,12 @@ func (o *LocalObserver) HandleDelete(
 // detected changes to the events channel. This catches events that fsnotify
 // may have missed. Skipped items are logged at DEBUG — the engine's primary
 // scan handles recording to sync_failures.
-func (o *LocalObserver) runSafetyScan(ctx context.Context, syncRoot string, events chan<- synctypes.ChangeEvent) {
+func (o *LocalObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, events chan<- synctypes.ChangeEvent) {
 	o.Logger.Debug("running safety scan")
 
 	start := time.Now()
 
-	result, err := o.FullScan(ctx, syncRoot)
+	result, err := o.FullScan(ctx, tree)
 	if err != nil {
 		o.Logger.Warn("safety scan failed", slog.String("error", err.Error()))
 		return

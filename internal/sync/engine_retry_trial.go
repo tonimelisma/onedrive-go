@@ -388,7 +388,7 @@ func (flow *engineFlow) rebuildFailureWork(ctx context.Context, row *synctypes.S
 	if row.Direction == synctypes.DirectionUpload {
 		result, err := syncobserve.ObserveSinglePath(
 			flow.engine.logger,
-			flow.engine.syncRoot,
+			flow.engine.syncTree,
 			row.Path,
 			flow.baselineEntryForPath(ctx, row.Path, row.DriveID),
 			flow.engine.nowFunc().UnixNano(),
@@ -441,8 +441,7 @@ func (flow *engineFlow) isFailureResolved(ctx context.Context, row *synctypes.Sy
 		}
 
 	case synctypes.DirectionUpload:
-		absPath := filepath.Join(flow.engine.syncRoot, row.Path)
-		_, err := os.Stat(absPath)
+		_, err := flow.engine.syncTree.Stat(row.Path)
 		if errors.Is(err, os.ErrNotExist) {
 			resolved = true
 		}

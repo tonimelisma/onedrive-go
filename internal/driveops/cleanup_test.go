@@ -40,7 +40,7 @@ func TestCleanTransferArtifacts_BothPaths(t *testing.T) {
 	require.NoError(t, os.Chtimes(sessionFile, oldTime, oldTime))
 
 	// Run the unified cleanup (StaleSessionAge is inlined).
-	CleanTransferArtifacts(syncRoot, store, testLogger(t))
+	CleanTransferArtifacts(mustOpenSyncTree(t, syncRoot), store, testLogger(t))
 
 	// Verify the .partial file was deleted.
 	_, statErr := os.Stat(partialPath)
@@ -59,5 +59,5 @@ func TestCleanTransferArtifacts_NilSessionStore(t *testing.T) {
 	dir := t.TempDir()
 
 	// Should not panic with nil sessionStore.
-	CleanTransferArtifacts(dir, nil, testLogger(t))
+	CleanTransferArtifacts(mustOpenSyncTree(t, dir), nil, testLogger(t))
 }

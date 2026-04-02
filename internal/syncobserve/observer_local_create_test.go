@@ -30,7 +30,7 @@ func TestWatch_DetectsFileCreate(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	// Let the watcher settle, then create a file.
@@ -65,7 +65,7 @@ func TestWatch_NewDirectoryWatched(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	time.Sleep(100 * time.Millisecond)
@@ -117,7 +117,7 @@ func TestWatch_NewDirectoryPreExistingFiles(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	time.Sleep(100 * time.Millisecond)
@@ -172,7 +172,7 @@ func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	time.Sleep(100 * time.Millisecond)
@@ -248,7 +248,7 @@ func TestWatch_HashFailureStillEmitsCreate(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, dir, events)
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
 	// Let the watcher settle, then create an unreadable file.
