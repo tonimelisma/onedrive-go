@@ -25,6 +25,7 @@ const (
 	// Runtime (execution-time).
 	IssueUnauthorized          = "unauthorized"
 	IssuePermissionDenied      = "permission_denied"
+	IssueSharedFolderBlocked   = "shared_folder_write_blocked"
 	IssueQuotaExceeded         = "quota_exceeded"
 	IssueRateLimited           = "rate_limited"
 	IssueLocalPermissionDenied = "local_permission_denied"

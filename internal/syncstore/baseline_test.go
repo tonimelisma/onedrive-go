@@ -166,23 +166,23 @@ func TestCheckpoint_PrunesActionableSyncFailures(t *testing.T) {
 
 	// Insert an actionable failure older than retention (should be pruned).
 	_, err := mgr.DB().ExecContext(ctx,
-		`INSERT INTO sync_failures (path, drive_id, direction, failure_role, category, first_seen_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		"/old-issue.txt", "", "upload", "item", "actionable", oldTime, oldTime)
+		`INSERT INTO sync_failures (path, drive_id, direction, action_type, failure_role, category, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"/old-issue.txt", "", "upload", "upload", "item", "actionable", oldTime, oldTime)
 	require.NoError(t, err)
 
 	// Insert an actionable failure newer than retention (should survive).
 	_, err = mgr.DB().ExecContext(ctx,
-		`INSERT INTO sync_failures (path, drive_id, direction, failure_role, category, first_seen_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		"/new-issue.txt", "", "upload", "item", "actionable", newTime, newTime)
+		`INSERT INTO sync_failures (path, drive_id, direction, action_type, failure_role, category, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"/new-issue.txt", "", "upload", "upload", "item", "actionable", newTime, newTime)
 	require.NoError(t, err)
 
 	// Insert a transient failure (should never be pruned regardless of age).
 	_, err = mgr.DB().ExecContext(ctx,
-		`INSERT INTO sync_failures (path, drive_id, direction, failure_role, category, first_seen_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		"/pending-issue.txt", "", "upload", "item", "transient", oldTime, oldTime)
+		`INSERT INTO sync_failures (path, drive_id, direction, action_type, failure_role, category, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"/pending-issue.txt", "", "upload", "upload", "item", "transient", oldTime, oldTime)
 	require.NoError(t, err)
 
 	require.NoError(t, mgr.Checkpoint(ctx, retention))
@@ -1958,9 +1958,9 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 
 	// Verify sync_failures table structure: insert + query.
 	_, err = mgr.DB().ExecContext(ctx,
-		`INSERT INTO sync_failures (path, drive_id, direction, failure_role, category, issue_type, first_seen_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		"/bad-file.txt", "d!abc123", "upload", "item", "transient", "invalid_filename", 1700000000, 1700000000)
+		`INSERT INTO sync_failures (path, drive_id, direction, action_type, failure_role, category, issue_type, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"/bad-file.txt", "d!abc123", "upload", "upload", "item", "transient", "invalid_filename", 1700000000, 1700000000)
 	require.NoError(t, err)
 
 	// Verify remote_state CHECK constraint rejects invalid status.

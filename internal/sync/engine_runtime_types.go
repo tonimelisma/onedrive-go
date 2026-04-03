@@ -14,6 +14,7 @@ import (
 // container; run-scoped state lives here instead.
 type engineFlow struct {
 	engine *Engine
+	watch  *watchRuntime
 
 	depGraph  *syncdispatch.DepGraph
 	readyCh   chan *synctypes.TrackedAction
@@ -132,7 +133,7 @@ type watchRuntime struct {
 }
 
 func newWatchRuntime(engine *Engine) *watchRuntime {
-	return &watchRuntime{
+	rt := &watchRuntime{
 		engineFlow: newEngineFlow(engine),
 		watchTimerState: watchTimerState{
 			trialCh:      make(chan struct{}, 1),
@@ -142,4 +143,7 @@ func newWatchRuntime(engine *Engine) *watchRuntime {
 			reconcileResults: make(chan reconcileResult, 1),
 		},
 	}
+	rt.watch = rt
+
+	return rt
 }

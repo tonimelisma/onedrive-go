@@ -278,33 +278,25 @@ func querySyncState(statePath string, logger *slog.Logger) *syncStateInfo {
 	ctx := context.Background()
 	info := &syncStateInfo{}
 
-	readSyncMetadata(ctx, db, info, logger)
-	info.FileCount = queryCount(ctx, db, logger, "could not count baseline entries", "SELECT COUNT(*) FROM baseline")
-	info.Issues = statusIssueCount(ctx, db, logger)
-	info.PendingSync = queryCount(
-		ctx,
-		db,
-		logger,
-		"could not count pending sync items",
-		"SELECT COUNT(*) FROM remote_state WHERE sync_status NOT IN ('synced','deleted','filtered')",
+	loadSyncMetadata(ctx, db, info, logger)
+	info.FileCount = countStatusMetric(ctx, db, logger,
+		"SELECT COUNT(*) FROM baseline",
+		"could not count baseline entries",
 	)
-	info.Retrying = queryCount(
-		ctx,
-		db,
-		logger,
-		"could not count retrying failures",
+	info.Issues = queryIssueCount(ctx, db, logger)
+	info.PendingSync = countStatusMetric(ctx, db, logger,
+		"SELECT COUNT(*) FROM remote_state WHERE sync_status NOT IN ('synced','deleted','filtered')",
+		"could not count pending sync items",
+	)
+	info.Retrying = countStatusMetric(ctx, db, logger,
 		"SELECT COUNT(*) FROM sync_failures WHERE category = 'transient' AND failure_count >= 3",
+		"could not count retrying failures",
 	)
 
 	return info
 }
 
-func readSyncMetadata(
-	ctx context.Context,
-	db *sql.DB,
-	info *syncStateInfo,
-	logger *slog.Logger,
-) {
+func loadSyncMetadata(ctx context.Context, db *sql.DB, info *syncStateInfo, logger *slog.Logger) {
 	rows, err := db.QueryContext(ctx, "SELECT key, value FROM sync_metadata")
 	if err != nil {
 		return
@@ -312,16 +304,17 @@ func readSyncMetadata(
 	defer rows.Close()
 
 	for rows.Next() {
-		var key, value string
-		if scanErr := rows.Scan(&key, &value); scanErr == nil {
-			switch key {
-			case "last_sync_time":
-				info.LastSyncTime = value
-			case "last_sync_duration_ms":
-				info.LastSyncDuration = value
-			case "last_sync_error":
-				info.LastError = value
-			}
+		var k, v string
+		if scanErr := rows.Scan(&k, &v); scanErr != nil {
+			continue
+		}
+		switch k {
+		case "last_sync_time":
+			info.LastSyncTime = v
+		case "last_sync_duration_ms":
+			info.LastSyncDuration = v
+		case "last_sync_error":
+			info.LastError = v
 		}
 	}
 
@@ -330,46 +323,41 @@ func readSyncMetadata(
 	}
 }
 
-func statusIssueCount(ctx context.Context, db *sql.DB, logger *slog.Logger) int {
-	conflicts := queryCount(
-		ctx,
-		db,
-		logger,
-		"could not count conflicts",
-		"SELECT COUNT(*) FROM conflicts WHERE resolution = 'unresolved'",
-	)
-	actionable := queryCount(
-		ctx,
-		db,
-		logger,
-		"could not count actionable failures",
-		"SELECT COUNT(*) FROM sync_failures WHERE category = 'actionable'",
-	)
-	authScopes := queryCount(
-		ctx,
-		db,
-		logger,
-		"could not count auth scope blocks",
-		"SELECT COUNT(*) FROM scope_blocks WHERE scope_key = 'auth:account'",
-	)
-
-	return conflicts + actionable + authScopes
-}
-
-func queryCount(
+func countStatusMetric(
 	ctx context.Context,
 	db *sql.DB,
 	logger *slog.Logger,
-	logMessage string,
 	query string,
+	logMessage string,
 ) int {
 	var count int
 	if err := db.QueryRowContext(ctx, query).Scan(&count); err != nil {
 		logger.Debug(logMessage, slog.String("error", err.Error()))
-		return 0
 	}
 
 	return count
+}
+
+func queryIssueCount(ctx context.Context, db *sql.DB, logger *slog.Logger) int {
+	conflicts := countStatusMetric(ctx, db, logger,
+		"SELECT COUNT(*) FROM conflicts WHERE resolution = 'unresolved'",
+		"could not count conflicts",
+	)
+	actionable := countStatusMetric(ctx, db, logger,
+		"SELECT COUNT(*) FROM sync_failures WHERE category = 'actionable'",
+		"could not count actionable failures",
+	)
+	remoteBlocked := countStatusMetric(ctx, db, logger,
+		`SELECT COUNT(DISTINCT scope_key) FROM sync_failures
+		WHERE failure_role = 'held' AND scope_key LIKE 'perm:remote:%'`,
+		"could not count remote blocked scopes",
+	)
+	authScopes := countStatusMetric(ctx, db, logger,
+		"SELECT COUNT(*) FROM scope_blocks WHERE scope_key = 'auth:account'",
+		"could not count auth scope blocks",
+	)
+
+	return conflicts + actionable + remoteBlocked + authScopes
 }
 
 // computeSummary aggregates health information across all status accounts.

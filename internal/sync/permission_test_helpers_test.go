@@ -20,7 +20,7 @@ func applyRemote403Decision(
 ) PermissionCheckDecision {
 	t.Helper()
 
-	decision := eng.permHandler.handle403(ctx, bl, path, shortcuts)
+	decision := eng.permHandler.handle403(ctx, bl, path, synctypes.ActionUpload, shortcuts)
 	rt, ok := lookupTestWatchRuntime(eng)
 	if !ok {
 		rt = newWatchRuntime(eng.Engine)

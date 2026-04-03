@@ -265,10 +265,10 @@ func TestPhase0_ExecutePlan_WaitsForDrainSideEffects(t *testing.T) {
 		require.Fail(t, "executePlan did not finish after permission check released")
 	}
 
-	permIssues, err := eng.baseline.ListSyncFailuresByIssueType(t.Context(), synctypes.IssuePermissionDenied)
+	permIssues, err := eng.baseline.ListRemoteBlockedFailures(t.Context())
 	require.NoError(t, err)
-	require.Len(t, permIssues, 1, "executePlan should wait for the boundary permission issue to be recorded before returning")
-	assert.Equal(t, "Shared/TeamDocs", permIssues[0].Path)
+	require.Len(t, permIssues, 1, "executePlan should wait for the blocked write row to be recorded before returning")
+	assert.Equal(t, "Shared/TeamDocs/file.txt", permIssues[0].Path)
 	assert.Equal(t, synctypes.SKPermRemote("Shared/TeamDocs"), permIssues[0].ScopeKey)
 	assert.GreaterOrEqual(t, report.Failed, 1)
 }

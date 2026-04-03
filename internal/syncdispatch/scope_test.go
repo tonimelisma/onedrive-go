@@ -522,7 +522,7 @@ func TestScopeKey_IssueType(t *testing.T) {
 		{synctypes.SKQuotaOwn(), synctypes.IssueQuotaExceeded},
 		{synctypes.SKQuotaShortcut("a:b"), synctypes.IssueQuotaExceeded},
 		{synctypes.SKPermDir("x"), synctypes.IssueLocalPermissionDenied},
-		{synctypes.SKPermRemote("Shared/TeamDocs"), synctypes.IssuePermissionDenied},
+		{synctypes.SKPermRemote("Shared/TeamDocs"), synctypes.IssueSharedFolderBlocked},
 		{synctypes.SKDiskLocal(), synctypes.IssueDiskFull},
 		{synctypes.ScopeKey{}, ""}, // zero value
 	}

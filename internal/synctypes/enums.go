@@ -306,6 +306,63 @@ func (a ActionType) String() string {
 	}
 }
 
+// ParseActionType converts the SQLite wire value back into an ActionType.
+func ParseActionType(s string) (ActionType, error) {
+	switch s {
+	case strDownload:
+		return ActionDownload, nil
+	case strUpload:
+		return ActionUpload, nil
+	case strLocalDelete:
+		return ActionLocalDelete, nil
+	case strRemoteDelete:
+		return ActionRemoteDelete, nil
+	case strLocalMove:
+		return ActionLocalMove, nil
+	case strRemoteMove:
+		return ActionRemoteMove, nil
+	case strFolderCreate:
+		return ActionFolderCreate, nil
+	case strConflict:
+		return ActionConflict, nil
+	case strUpdateSynced:
+		return ActionUpdateSynced, nil
+	case strCleanup:
+		return ActionCleanup, nil
+	default:
+		return 0, fmt.Errorf("synctypes: invalid ActionType %q", s)
+	}
+}
+
+// Scan implements sql.Scanner for ActionType TEXT columns.
+func (a *ActionType) Scan(src any) error {
+	s, ok := src.(string)
+	if !ok {
+		return fmt.Errorf("synctypes: ActionType.Scan: expected string, got %T", src)
+	}
+
+	parsed, err := ParseActionType(s)
+	if err != nil {
+		return err
+	}
+
+	*a = parsed
+
+	return nil
+}
+
+// Value implements driver.Valuer for ActionType TEXT columns.
+func (a ActionType) Value() (driver.Value, error) {
+	switch a {
+	case ActionDownload, ActionUpload, ActionLocalDelete, ActionRemoteDelete,
+		ActionLocalMove, ActionRemoteMove, ActionFolderCreate, ActionConflict,
+		ActionUpdateSynced, ActionCleanup:
+		return a.String(), nil
+	default:
+		return nil, fmt.Errorf("synctypes: invalid ActionType %d", a)
+	}
+}
+
 // FolderCreateSide specifies where a new folder should be created.
 type FolderCreateSide int
 

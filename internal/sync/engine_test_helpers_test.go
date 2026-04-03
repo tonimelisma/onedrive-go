@@ -336,7 +336,9 @@ func setTestScopeBlock(t *testing.T, eng *testEngine, block *synctypes.ScopeBloc
 	if block.TimingSource != synctypes.ScopeTimingNone && block.NextTrialAt.IsZero() {
 		block.NextTrialAt = block.BlockedAt.Add(block.TrialInterval)
 	}
-	require.NoError(t, eng.baseline.UpsertScopeBlock(context.Background(), block))
+	if !block.Key.IsPermRemote() {
+		require.NoError(t, eng.baseline.UpsertScopeBlock(context.Background(), block))
+	}
 	if eng.runtime != nil {
 		eng.runtime.upsertActiveScope(block)
 	}
@@ -605,6 +607,12 @@ func feedScopeDetectionForTest(t *testing.T, eng *testEngine, ctx context.Contex
 }
 
 func isTestScopeBlocked(eng *testEngine, key synctypes.ScopeKey) bool {
+	if eng.runtime != nil {
+		if eng.runtime.hasActiveScope(key) {
+			return true
+		}
+	}
+
 	blocks, err := eng.baseline.ListScopeBlocks(context.Background())
 	if err != nil {
 		panic(fmt.Sprintf("ListScopeBlocks: %v", err))
@@ -618,6 +626,12 @@ func isTestScopeBlocked(eng *testEngine, key synctypes.ScopeKey) bool {
 }
 
 func getTestScopeBlock(eng *testEngine, key synctypes.ScopeKey) (synctypes.ScopeBlock, bool) {
+	if eng.runtime != nil {
+		if block, ok := eng.runtime.lookupActiveScope(key); ok {
+			return block, true
+		}
+	}
+
 	blocks, err := eng.baseline.ListScopeBlocks(context.Background())
 	if err != nil {
 		panic(fmt.Sprintf("ListScopeBlocks: %v", err))

@@ -287,12 +287,31 @@ actionable failures.`,
 
 func runIssuesClear(cmd *cobra.Command, args []string) error {
 	return runFailureAction(cmd, args, failureAction{
-		allFn: func(ctx context.Context, mgr *syncstore.SyncStore) error { return mgr.ClearActionableSyncFailures(ctx) },
+		allFn: func(ctx context.Context, mgr *syncstore.SyncStore) error {
+			if err := mgr.ClearActionableSyncFailures(ctx); err != nil {
+				return fmt.Errorf("clear actionable failures: %w", err)
+			}
+			if err := mgr.ClearAllRemoteBlockedFailures(ctx); err != nil {
+				return fmt.Errorf("clear blocked shared-folder writes: %w", err)
+			}
+			return nil
+		},
 		singleFn: func(ctx context.Context, mgr *syncstore.SyncStore, p string) error {
-			return mgr.ClearSyncFailureByPath(ctx, p)
+			if target, found, err := mgr.FindRemoteBlockedTarget(ctx, p); err != nil {
+				return fmt.Errorf("find blocked shared-folder write for %s: %w", p, err)
+			} else if found {
+				if err := mgr.ClearRemoteBlockedTarget(ctx, target); err != nil {
+					return fmt.Errorf("clear blocked shared-folder write for %s: %w", p, err)
+				}
+				return nil
+			}
+			if err := mgr.ClearSyncFailureByPath(ctx, p); err != nil {
+				return fmt.Errorf("clear actionable failure for %s: %w", p, err)
+			}
+			return nil
 		},
 		noArgMsg:  "provide a path to clear, or use --all to clear all actionable failures",
-		allMsg:    "Cleared all actionable failures.",
+		allMsg:    "Cleared actionable failures and blocked shared-folder writes.",
 		singleFmt: "Cleared failure for %s.",
 	})
 }
@@ -317,11 +336,27 @@ failed items.`,
 
 func runIssuesRetry(cmd *cobra.Command, args []string) error {
 	return runFailureAction(cmd, args, failureAction{
-		allFn:     func(ctx context.Context, mgr *syncstore.SyncStore) error { return mgr.ResetAllFailures(ctx) },
-		singleFn:  func(ctx context.Context, mgr *syncstore.SyncStore, p string) error { return mgr.ResetFailure(ctx, p) },
+		allFn: func(ctx context.Context, mgr *syncstore.SyncStore) error { return mgr.ResetAllFailures(ctx) },
+		singleFn: func(ctx context.Context, mgr *syncstore.SyncStore, p string) error {
+			if target, found, err := mgr.FindRemoteBlockedTarget(ctx, p); err != nil {
+				return fmt.Errorf("find blocked shared-folder write for %s: %w", p, err)
+			} else if found {
+				if target.Kind == syncstore.RemoteBlockedTargetBoundary {
+					return fmt.Errorf("shared-folder write blocks must be retried by blocked path, not boundary")
+				}
+				if err := mgr.RequestRemoteBlockedTrial(ctx, target); err != nil {
+					return fmt.Errorf("request blocked shared-folder retry for %s: %w", p, err)
+				}
+				return nil
+			}
+			if err := mgr.ResetFailure(ctx, p); err != nil {
+				return fmt.Errorf("reset failure for %s: %w", p, err)
+			}
+			return nil
+		},
 		noArgMsg:  "provide a path to retry, or use --all to retry all failures",
 		allMsg:    "Reset all failures for retry.",
-		singleFmt: "Reset failure for %s — will retry on next sync.",
+		singleFmt: "Requested retry for %s.",
 	})
 }
 

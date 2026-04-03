@@ -435,6 +435,7 @@ func TestHandleRemovedShortcuts_ClearsRemotePermissionScopesUnderRemovedShortcut
 
 	eng := newSingleOwnerEngine(t)
 	ctx := t.Context()
+	newTestWatchState(t, eng)
 
 	require.NoError(t, eng.baseline.UpsertShortcut(ctx, &synctypes.Shortcut{
 		ItemID:       "sc-1",
@@ -484,7 +485,7 @@ func TestHandleRemovedShortcuts_ClearsRemotePermissionScopesUnderRemovedShortcut
 	failures, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, failures, 2, "removed shortcut should discard both quota and remote permission failures recursively")
-	assert.ElementsMatch(t, []string{"OtherFolder/locked", "OtherFolder/quota/file.txt"}, []string{failures[0].Path, failures[1].Path})
+	assert.ElementsMatch(t, []string{"OtherFolder/locked/file.txt", "OtherFolder/quota/file.txt"}, []string{failures[0].Path, failures[1].Path})
 }
 
 func seedShortcutRemovalFailures(
@@ -500,51 +501,46 @@ func seedShortcutRemovalFailures(
 
 	failures := []synctypes.SyncFailureParams{
 		{
-			Path:      "SharedFolder/locked",
-			DriveID:   eng.driveID,
-			Direction: synctypes.DirectionUpload,
-			Role:      synctypes.FailureRoleBoundary,
-			Category:  synctypes.CategoryActionable,
-			IssueType: synctypes.IssuePermissionDenied,
-			ErrMsg:    "read-only boundary",
-			ScopeKey:  removedScope,
+			Path:       "SharedFolder/locked/file.txt",
+			DriveID:    eng.driveID,
+			Direction:  synctypes.DirectionUpload,
+			ActionType: synctypes.ActionUpload,
+			Role:       synctypes.FailureRoleHeld,
+			Category:   synctypes.CategoryTransient,
+			IssueType:  synctypes.IssueSharedFolderBlocked,
+			ErrMsg:     "blocked by remote permission scope",
+			ScopeKey:   removedScope,
 		},
 		{
-			Path:      "SharedFolder/locked/file.txt",
-			DriveID:   eng.driveID,
-			Direction: synctypes.DirectionUpload,
-			Role:      synctypes.FailureRoleHeld,
-			Category:  synctypes.CategoryTransient,
-			ErrMsg:    "blocked by remote permission scope",
-			ScopeKey:  removedScope,
+			Path:       "SharedFolder/quota/file.txt",
+			DriveID:    eng.driveID,
+			Direction:  synctypes.DirectionUpload,
+			ActionType: synctypes.ActionUpload,
+			Role:       synctypes.FailureRoleHeld,
+			Category:   synctypes.CategoryTransient,
+			ErrMsg:     "blocked by shortcut quota scope",
+			ScopeKey:   removedQuotaScope,
 		},
 		{
-			Path:      "SharedFolder/quota/file.txt",
-			DriveID:   eng.driveID,
-			Direction: synctypes.DirectionUpload,
-			Role:      synctypes.FailureRoleHeld,
-			Category:  synctypes.CategoryTransient,
-			ErrMsg:    "blocked by shortcut quota scope",
-			ScopeKey:  removedQuotaScope,
+			Path:       "OtherFolder/locked/file.txt",
+			DriveID:    eng.driveID,
+			Direction:  synctypes.DirectionUpload,
+			ActionType: synctypes.ActionUpload,
+			Role:       synctypes.FailureRoleHeld,
+			Category:   synctypes.CategoryTransient,
+			IssueType:  synctypes.IssueSharedFolderBlocked,
+			ErrMsg:     "blocked by remote permission scope",
+			ScopeKey:   otherScope,
 		},
 		{
-			Path:      "OtherFolder/locked",
-			DriveID:   eng.driveID,
-			Direction: synctypes.DirectionUpload,
-			Role:      synctypes.FailureRoleBoundary,
-			Category:  synctypes.CategoryActionable,
-			IssueType: synctypes.IssuePermissionDenied,
-			ErrMsg:    "read-only boundary",
-			ScopeKey:  otherScope,
-		},
-		{
-			Path:      "OtherFolder/quota/file.txt",
-			DriveID:   eng.driveID,
-			Direction: synctypes.DirectionUpload,
-			Role:      synctypes.FailureRoleHeld,
-			Category:  synctypes.CategoryTransient,
-			ErrMsg:    "blocked by shortcut quota scope",
-			ScopeKey:  otherQuotaScope,
+			Path:       "OtherFolder/quota/file.txt",
+			DriveID:    eng.driveID,
+			Direction:  synctypes.DirectionUpload,
+			ActionType: synctypes.ActionUpload,
+			Role:       synctypes.FailureRoleHeld,
+			Category:   synctypes.CategoryTransient,
+			ErrMsg:     "blocked by shortcut quota scope",
+			ScopeKey:   otherQuotaScope,
 		},
 	}
 
@@ -567,7 +563,7 @@ func seedShortcutRemovalScopeBlocks(
 	blocks := []synctypes.ScopeBlock{
 		{
 			Key:       removedScope,
-			IssueType: synctypes.IssuePermissionDenied,
+			IssueType: synctypes.IssueSharedFolderBlocked,
 			BlockedAt: now,
 		},
 		{
@@ -580,7 +576,7 @@ func seedShortcutRemovalScopeBlocks(
 		},
 		{
 			Key:       otherScope,
-			IssueType: synctypes.IssuePermissionDenied,
+			IssueType: synctypes.IssueSharedFolderBlocked,
 			BlockedAt: now,
 		},
 		{

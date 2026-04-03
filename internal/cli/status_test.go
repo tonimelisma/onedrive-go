@@ -560,10 +560,10 @@ func TestQuerySyncState_PendingSyncAndIssues(t *testing.T) {
 	require.NoError(t, err)
 
 	// Insert sync_failures rows.
-	_, err = db.ExecContext(ctx, `INSERT INTO sync_failures (path, drive_id, direction, category, failure_count, first_seen_at, last_seen_at) VALUES
-		('/x.txt', 'd!1', 'upload', 'transient', 3, 0, 0),
-		('/y.txt', 'd!1', 'upload', 'transient', 5, 0, 0),
-		('/z.txt', 'd!1', 'upload', 'actionable', 1, 0, 0)`)
+	_, err = db.ExecContext(ctx, `INSERT INTO sync_failures (path, drive_id, direction, action_type, failure_role, category, failure_count, first_seen_at, last_seen_at) VALUES
+		('/x.txt', 'd!1', 'upload', 'upload', 'item', 'transient', 3, 0, 0),
+		('/y.txt', 'd!1', 'upload', 'upload', 'item', 'transient', 5, 0, 0),
+		('/z.txt', 'd!1', 'upload', 'upload', 'item', 'actionable', 1, 0, 0)`)
 	require.NoError(t, err)
 
 	require.NoError(t, db.Close())
@@ -945,17 +945,21 @@ func createTestStateDB(t *testing.T, dbPath string) {
 			path TEXT NOT NULL,
 			drive_id TEXT NOT NULL,
 			direction TEXT NOT NULL CHECK(direction IN ('download', 'upload', 'delete')),
+			action_type TEXT NOT NULL CHECK(action_type IN ('download', 'upload', 'local_delete', 'remote_delete', 'local_move', 'remote_move', 'folder_create', 'conflict', 'update_synced', 'cleanup')),
+			failure_role TEXT NOT NULL DEFAULT 'item' CHECK(failure_role IN ('item', 'held', 'boundary')),
 			category TEXT NOT NULL CHECK(category IN ('transient', 'actionable')),
 			issue_type TEXT,
 			item_id TEXT,
 			failure_count INTEGER NOT NULL DEFAULT 0,
 			next_retry_at INTEGER,
+			manual_trial_requested_at INTEGER NOT NULL DEFAULT 0,
 			last_error TEXT,
 			http_status INTEGER,
 			first_seen_at INTEGER NOT NULL,
 			last_seen_at INTEGER NOT NULL,
 			file_size INTEGER,
 			local_hash TEXT,
+			scope_key TEXT,
 			PRIMARY KEY (path, drive_id)
 		);
 	`)
