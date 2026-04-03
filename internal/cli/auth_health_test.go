@@ -143,3 +143,50 @@ func TestAuthErrorMessage_UsesUnifiedAuthenticationRequiredWording(t *testing.T)
 	assert.Contains(t, unauthorized, "Authentication required:")
 	assert.Contains(t, unauthorized, "OneDrive rejected the saved login")
 }
+
+func TestMergeAuthRequirements_PrefersExistingFieldsAndSorts(t *testing.T) {
+	t.Parallel()
+
+	merged := mergeAuthRequirements(
+		[]accountAuthRequirement{
+			authRequirement("b@example.com", "", "", 0, accountAuthHealth{
+				Reason: authReasonMissingLogin,
+				Action: authAction(authReasonMissingLogin),
+			}),
+			authRequirement("a@example.com", "Alpha", "personal", 1, accountAuthHealth{
+				Reason: authReasonSyncAuthRejected,
+				Action: authAction(authReasonSyncAuthRejected),
+			}),
+		},
+		[]accountAuthRequirement{
+			authRequirement("b@example.com", "Bravo", "business", 2, accountAuthHealth{
+				Reason: authReasonInvalidSavedLogin,
+				Action: authAction(authReasonInvalidSavedLogin),
+			}),
+			{},
+		},
+	)
+
+	require.Len(t, merged, 2)
+	assert.Equal(t, "a@example.com", merged[0].Email)
+	assert.Equal(t, "b@example.com", merged[1].Email)
+	assert.Equal(t, "Bravo", merged[1].DisplayName)
+	assert.Equal(t, "business", merged[1].DriveType)
+	assert.Equal(t, 2, merged[1].StateDBs)
+	assert.Equal(t, authReasonMissingLogin, merged[1].Reason)
+	assert.Equal(t, authAction(authReasonMissingLogin), merged[1].Action)
+}
+
+func TestAuthReasonTextAndAction_ReturnExpectedStrings(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "No saved login was found for this account.", authReasonText(authReasonMissingLogin))
+	assert.Equal(t, "The saved login for this account is invalid or unreadable.", authReasonText(authReasonInvalidSavedLogin))
+	assert.Equal(t, "The last sync attempt for this account was rejected by OneDrive.", authReasonText(authReasonSyncAuthRejected))
+	assert.Empty(t, authReasonText("unknown"))
+
+	assert.Equal(t, "Run 'onedrive-go login' to sign in.", authAction(authReasonMissingLogin))
+	assert.Equal(t, "Run 'onedrive-go login' to sign in.", authAction(authReasonInvalidSavedLogin))
+	assert.Equal(t, "Run 'onedrive-go whoami' to re-check access, or 'onedrive-go login' to sign in again.", authAction(authReasonSyncAuthRejected))
+	assert.Empty(t, authAction("unknown"))
+}

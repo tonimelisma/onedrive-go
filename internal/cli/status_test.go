@@ -575,6 +575,44 @@ func TestQuerySyncState_PendingSyncAndIssues(t *testing.T) {
 	assert.Equal(t, 2, info.Retrying)    // 2 transient with failure_count >= 3
 }
 
+// Validates: R-2.10.47, R-2.14.3
+func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsIssues(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.DiscardHandler)
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "state.db")
+
+	createTestStateDB(t, dbPath)
+
+	db, err := sql.Open("sqlite", "file:"+dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+
+	ctx := t.Context()
+
+	_, err = db.ExecContext(ctx, `INSERT INTO conflicts (id, path, drive_id, item_id, parent_id, item_type, conflict_type, resolution, detected_at)
+		VALUES ('c1', '/conflict.txt', 'd!123', 'item2', 'root', 'file', 'edit_edit', 'unresolved', 0)`)
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(ctx, `INSERT INTO sync_failures
+		(path, drive_id, direction, action_type, failure_role, category, issue_type, scope_key, failure_count, first_seen_at, last_seen_at)
+		VALUES
+		('/blocked/a.txt', 'd!1', 'upload', 'upload', 'held', 'transient', 'shared_folder_write_blocked', 'perm:remote:Shared/Docs', 1, 0, 0),
+		('/blocked/b.txt', 'd!1', 'upload', 'upload', 'held', 'transient', 'shared_folder_write_blocked', 'perm:remote:Shared/Docs', 1, 0, 0),
+		('/actionable.txt', 'd!1', 'upload', 'upload', 'item', 'actionable', 'invalid_filename', '', 1, 0, 0)`)
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(ctx, `INSERT INTO scope_blocks
+		(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count)
+		VALUES ('auth:account', 'unauthorized', 'none', 1, 0, 0, 0, 0)`)
+	require.NoError(t, err)
+
+	info := querySyncState(dbPath, logger)
+	require.NotNil(t, info)
+	assert.Equal(t, 4, info.Issues)
+}
+
 func TestComputeSummary_Mixed(t *testing.T) {
 	t.Parallel()
 
@@ -961,6 +999,16 @@ func createTestStateDB(t *testing.T, dbPath string) {
 			local_hash TEXT,
 			scope_key TEXT,
 			PRIMARY KEY (path, drive_id)
+		);
+		CREATE TABLE IF NOT EXISTS scope_blocks (
+			scope_key TEXT PRIMARY KEY,
+			issue_type TEXT NOT NULL,
+			timing_source TEXT NOT NULL,
+			blocked_at INTEGER NOT NULL,
+			trial_interval INTEGER NOT NULL,
+			next_trial_at INTEGER NOT NULL,
+			preserve_until INTEGER NOT NULL,
+			trial_count INTEGER NOT NULL
 		);
 	`)
 	require.NoError(t, err)
