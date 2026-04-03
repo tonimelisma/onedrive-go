@@ -77,7 +77,9 @@ func (flow *engineFlow) routeReadyForClass(
 		return flow.scopeController().admitReady(ctx, watch, ready)
 	case resultShutdown:
 		flow.scopeController().completeSubtree(ready)
-	case resultRequeue, resultScopeBlock, resultSkip, resultFatal:
+	case resultFatal:
+		flow.scopeController().completeSubtree(ready)
+	case resultRequeue, resultScopeBlock, resultSkip:
 		flow.scopeController().cascadeFailAndComplete(ctx, ready, r)
 	}
 
@@ -147,12 +149,13 @@ func (flow *engineFlow) processNormalDecision(
 		flow.applySuccessEffects(ctx, watch, r)
 	case resultShutdown:
 		return outcome
-	case resultRequeue, resultScopeBlock, resultSkip, resultFatal:
+	case resultFatal:
+		flow.applyFatalAuthEffects(ctx, watch, r)
+		flow.recordError(r)
+		outcome.terminate = true
+		outcome.terminateErr = fatalResultError(r)
+	case resultRequeue, resultScopeBlock, resultSkip:
 		flow.applyOrdinaryFailureEffects(ctx, watch, decision, r, bl)
-		if decision.Class == resultFatal {
-			outcome.terminate = true
-			outcome.terminateErr = fatalResultError(r)
-		}
 	}
 
 	return outcome
@@ -193,7 +196,7 @@ func (flow *engineFlow) processTrialDecision(
 		flow.recordError(r)
 	case trialOutcomeFatal:
 		flow.routeReadyForClass(ctx, watch, resultFatal, ready, r)
-		flow.applyFailureRecordMode(ctx, decision.RecordMode, r)
+		flow.applyFatalAuthEffects(ctx, watch, r)
 		flow.recordError(r)
 		outcome.terminate = true
 		outcome.terminateErr = fatalResultError(r)
@@ -275,6 +278,15 @@ func fatalResultError(r *synctypes.WorkerResult) error {
 	}
 
 	return fmt.Errorf("sync: unauthorized worker result for %s", r.Path)
+}
+
+func (flow *engineFlow) applyFatalAuthEffects(ctx context.Context, watch *watchRuntime, r *synctypes.WorkerResult) {
+	if err := flow.scopeController().activateAuthScope(ctx, watch); err != nil {
+		flow.engine.logger.Warn("fatal unauthorized: failed to persist auth scope",
+			slog.String("path", r.Path),
+			slog.String("error", err.Error()),
+		)
+	}
 }
 
 func (controller *scopeController) applyPermissionDecisionFlow(

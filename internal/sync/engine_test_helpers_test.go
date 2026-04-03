@@ -477,7 +477,7 @@ func assertDiscardedScopeForTest(t *testing.T, eng *testEngine, ctx context.Cont
 func repairPersistedScopesForTest(t *testing.T, eng *testEngine, ctx context.Context) error {
 	t.Helper()
 	rt, _ := lookupTestWatchRuntime(eng)
-	return testScopeController(t, eng).repairPersistedScopes(ctx, rt)
+	return testScopeController(t, eng).repairPersistedScopes(ctx, rt, driveIdentityProof{}, nil)
 }
 
 func admitReadyForTest(t *testing.T, eng *testEngine, ctx context.Context, ready []*synctypes.TrackedAction) []*synctypes.TrackedAction {

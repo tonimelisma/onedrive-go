@@ -116,12 +116,29 @@ func (e *Engine) RunWatch(ctx context.Context, mode synctypes.SyncMode, opts syn
 	)
 
 	rt := newWatchRuntime(e)
+	proof, proofErr := e.proveDriveIdentity(ctx)
+	if proofErr != nil {
+		// Startup auth repair is the only case that should proceed past a
+		// failing proof. Without a persisted auth scope there is nothing to
+		// repair, so watch mode must abort before it allocates workers/timers.
+		hasAuthScope, err := e.hasPersistedAuthScope(ctx)
+		if err != nil {
+			return err
+		}
+		if !hasAuthScope {
+			return proofErr
+		}
+	}
 
 	// Step 1: Set up watch infrastructure (no observers yet).
-	pipe, err := rt.initWatchInfra(ctx, mode, opts)
+	pipe, err := rt.initWatchInfra(ctx, mode, opts, proof, proofErr)
 	if err != nil {
 		return err
 	}
+	if proofErr != nil {
+		return proofErr
+	}
+	e.logVerifiedDrive(proof)
 	defer pipe.cleanup()
 
 	// Step 2: Bootstrap — observe, plan, execute through watch pipeline.
@@ -170,7 +187,11 @@ type watchPipeline struct {
 //   - Buffer is promoted to e.watch.buf for observed and reconciliation work;
 //     retry/trial work now enters through explicit engine-owned planner requests.
 func (rt *watchRuntime) initWatchInfra(
-	ctx context.Context, mode synctypes.SyncMode, opts synctypes.WatchOpts,
+	ctx context.Context,
+	mode synctypes.SyncMode,
+	opts synctypes.WatchOpts,
+	proof driveIdentityProof,
+	proofErr error,
 ) (*watchPipeline, error) {
 	// Enable watch-mode-specific executor behavior (pre-upload eTag
 	// freshness checks to prevent silently overwriting concurrent remote
@@ -183,7 +204,7 @@ func (rt *watchRuntime) initWatchInfra(
 	// Startup must not trust stale scope rows blindly; the durable store is
 	// repaired against current persisted evidence before the watch loop loads
 	// its ephemeral activeScopes working set.
-	if err := rt.scopeController().repairPersistedScopes(ctx, rt); err != nil {
+	if err := rt.scopeController().repairPersistedScopes(ctx, rt, proof, proofErr); err != nil {
 		return nil, fmt.Errorf("sync: repairing persisted scopes: %w", err)
 	}
 
@@ -267,11 +288,6 @@ func (rt *watchRuntime) initWatchInfra(
 // Must be called after initWatchInfra and before startObservers.
 func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode synctypes.SyncMode, pipe *watchPipeline) error {
 	rt.engine.logger.Info("bootstrap sync starting", slog.String("mode", mode.String()))
-
-	// Drive identity check (B-074).
-	if err := rt.engine.verifyDriveIdentity(ctx); err != nil {
-		return err
-	}
 
 	// Crash recovery: reset in-progress states from prior crash.
 	if err := syncrecovery.ResetInProgressStates(

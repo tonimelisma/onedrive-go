@@ -12,6 +12,7 @@ func TestScopeKey_StringParseRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	keys := []ScopeKey{
+		SKAuthAccount(),
 		SKThrottleAccount(),
 		SKService(),
 		SKQuotaOwn(),
@@ -37,6 +38,7 @@ func TestParseScopeKey_UnknownReturnsZero(t *testing.T) {
 func TestScopeKey_IsGlobal(t *testing.T) {
 	t.Parallel()
 
+	assert.True(t, SKAuthAccount().IsGlobal())
 	assert.True(t, SKThrottleAccount().IsGlobal())
 	assert.True(t, SKService().IsGlobal())
 	assert.False(t, SKQuotaOwn().IsGlobal())
@@ -77,6 +79,7 @@ func TestScopeKey_RemotePathPanicsForNonPermRemote(t *testing.T) {
 func TestScopeKey_IssueType(t *testing.T) {
 	t.Parallel()
 
+	assert.Equal(t, IssueUnauthorized, SKAuthAccount().IssueType())
 	assert.Equal(t, IssueRateLimited, SKThrottleAccount().IssueType())
 	assert.Equal(t, IssueServiceOutage, SKService().IssueType())
 	assert.Equal(t, IssueQuotaExceeded, SKQuotaOwn().IssueType())
@@ -96,6 +99,7 @@ func TestScopeKey_Humanize(t *testing.T) {
 		LocalPath:   "Team Docs",
 	}}
 
+	assert.Equal(t, "your OneDrive account authorization", SKAuthAccount().Humanize(shortcuts))
 	assert.Equal(t, "your OneDrive account (rate limited)", SKThrottleAccount().Humanize(shortcuts))
 	assert.Equal(t, "OneDrive service", SKService().Humanize(shortcuts))
 	assert.Equal(t, "your OneDrive storage", SKQuotaOwn().Humanize(shortcuts))
@@ -108,6 +112,8 @@ func TestScopeKey_Humanize(t *testing.T) {
 func TestScopeKey_BlocksAction(t *testing.T) {
 	t.Parallel()
 
+	assert.True(t, SKAuthAccount().BlocksAction("/docs/file.txt", "", ActionDownload, false))
+	assert.True(t, SKAuthAccount().BlocksAction("/docs/file.txt", "", ActionUpload, true))
 	assert.True(t, SKThrottleAccount().BlocksAction("/docs/file.txt", "", ActionDownload, false))
 	assert.True(t, SKService().BlocksAction("/docs/file.txt", "", ActionUpload, true))
 	assert.True(t, SKDiskLocal().BlocksAction("/docs/file.txt", "", ActionDownload, false))
