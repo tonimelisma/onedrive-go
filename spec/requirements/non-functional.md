@@ -79,7 +79,7 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.7.8: The system shall unconditionally URL-decode item names in all API responses. [verified]
 - R-6.7.9: The system shall filter out OneNote package items (`type: "oneNote"`) that lack standard file/folder facets. [verified]
 - R-6.7.10: The system shall deduplicate identical items appearing multiple times within a single delta response, keeping the last occurrence per item ID. [verified]
-- R-6.7.11: The system shall filter out phantom system drives provisioned by Microsoft for Personal accounts (face crops, albums) that return HTTP 400 on access. For Personal accounts, the system shall use `GET /me/drive` (singular) to discover the primary drive. [planned]
+- R-6.7.11: The system shall filter out phantom system drives provisioned by Microsoft for Personal accounts (face crops, albums) that return HTTP 400 on access. For Personal accounts, the system shall use `GET /me/drive` (singular) to discover the primary drive. [verified]
 - R-6.7.12: When `GET /drives/{driveID}/items/root/children` returns transient HTTP 404 with Graph code `itemNotFound` for a valid resource (cross-datacenter load balancer timeout), the system shall classify it as transient and retry with backoff. [verified]
 - R-6.7.13: When `GET /me/drives` returns HTTP 403 with Graph code `accessDenied` shortly after token refresh (eventual consistency), the system shall classify it as transient and retry with backoff. [verified]
 - R-6.7.15: The system shall truncate local timestamps to zero fractional seconds before comparing with OneDrive's whole-second precision. [planned]
