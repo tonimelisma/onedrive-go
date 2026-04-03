@@ -70,8 +70,65 @@ type PendingRetrySnapshot struct {
 // IssueGroupCount is one derived visible issue family with its aggregated
 // count in the read-only status projection.
 type IssueGroupCount struct {
-	Key   synctypes.SummaryKey
-	Count int
+	Key       synctypes.SummaryKey
+	Count     int
+	ScopeKind string
+	Scope     string
+}
+
+const (
+	statusScopeFile      = "file"
+	statusScopeDirectory = "directory"
+	statusScopeDrive     = "drive"
+	statusScopeShortcut  = "shortcut"
+	statusScopeAccount   = "account"
+	statusScopeService   = "service"
+	statusScopeDisk      = "disk"
+)
+
+type issueGroupIdentity struct {
+	Key       synctypes.SummaryKey
+	ScopeKind string
+	Scope     string
+}
+
+type issueGroupAccumulator map[issueGroupIdentity]int
+
+func (a issueGroupAccumulator) Add(key synctypes.SummaryKey, count int, scopeKind, scope string) {
+	if key == "" || count <= 0 || scopeKind == "" {
+		return
+	}
+
+	a[issueGroupIdentity{
+		Key:       key,
+		ScopeKind: scopeKind,
+		Scope:     scope,
+	}] += count
+}
+
+func (a issueGroupAccumulator) Groups() []IssueGroupCount {
+	groups := make([]IssueGroupCount, 0, len(a))
+	for identity, count := range a {
+		groups = append(groups, IssueGroupCount{
+			Key:       identity.Key,
+			Count:     count,
+			ScopeKind: identity.ScopeKind,
+			Scope:     identity.Scope,
+		})
+	}
+
+	sort.Slice(groups, func(i, j int) bool {
+		if groups[i].Key != groups[j].Key {
+			return string(groups[i].Key) < string(groups[j].Key)
+		}
+		if groups[i].ScopeKind != groups[j].ScopeKind {
+			return groups[i].ScopeKind < groups[j].ScopeKind
+		}
+
+		return groups[i].Scope < groups[j].Scope
+	})
+
+	return groups
 }
 
 // IssueSummary is the store-owned aggregate view of visible issues for the
@@ -304,7 +361,7 @@ type issueGroupKey struct {
 
 type issuesProjectionBuilder struct {
 	shortcuts   []synctypes.Shortcut
-	groupCounts map[synctypes.SummaryKey]int
+	groupCounts issueGroupAccumulator
 	groupIndex  map[issueGroupKey]int
 	snapshot    IssuesSnapshot
 }
@@ -312,7 +369,7 @@ type issuesProjectionBuilder struct {
 func newIssuesProjectionBuilder(shortcuts []synctypes.Shortcut, pendingRetryCap int) *issuesProjectionBuilder {
 	return &issuesProjectionBuilder{
 		shortcuts:   shortcuts,
-		groupCounts: make(map[synctypes.SummaryKey]int),
+		groupCounts: make(issueGroupAccumulator),
 		groupIndex:  make(map[issueGroupKey]int),
 		snapshot: IssuesSnapshot{
 			Groups:         make([]IssueGroupSnapshot, 0),
@@ -322,11 +379,13 @@ func newIssuesProjectionBuilder(shortcuts []synctypes.Shortcut, pendingRetryCap 
 	}
 }
 
-func (b *issuesProjectionBuilder) addSummaryKey(key synctypes.SummaryKey) {
-	if key == "" {
-		return
-	}
-	b.groupCounts[key]++
+func (b *issuesProjectionBuilder) addSummary(
+	key synctypes.SummaryKey,
+	scopeKey synctypes.ScopeKey,
+	role synctypes.FailureRole,
+) {
+	scopeKind, scope := statusIssueScope(scopeKey, role, b.shortcuts)
+	b.groupCounts.Add(key, 1, scopeKind, scope)
 }
 
 func (b *issuesProjectionBuilder) addGroupedPath(
@@ -393,12 +452,12 @@ func (b *issuesProjectionBuilder) addActionableFailures(rows []synctypes.SyncFai
 				Path:       row.Path,
 				LastSeenAt: row.LastSeenAt,
 			})
-			b.addSummaryKey(summaryKey)
+			b.addSummary(summaryKey, row.ScopeKey, row.Role)
 			continue
 		}
 
 		b.addGroupedPath(summaryKey, row.IssueType, row.ScopeKey, row.Path)
-		b.addSummaryKey(summaryKey)
+		b.addSummary(summaryKey, row.ScopeKey, row.Role)
 	}
 }
 
@@ -407,7 +466,7 @@ func (b *issuesProjectionBuilder) addRemoteBlocked(rows []synctypes.SyncFailureR
 		row := rows[i]
 		summaryKey := synctypes.SummaryKeyForPersistedFailure(row.IssueType, row.Category, row.Role)
 		if b.addGroupedPath(summaryKey, row.IssueType, row.ScopeKey, row.Path) {
-			b.addSummaryKey(summaryKey)
+			b.addSummary(summaryKey, row.ScopeKey, row.Role)
 		}
 	}
 }
@@ -421,7 +480,7 @@ func (b *issuesProjectionBuilder) addAuthScopeBlocks(blocks []*synctypes.ScopeBl
 
 		summaryKey := synctypes.SummaryKeyForScopeBlock(block.IssueType, block.Key)
 		if b.addScopeOnlyGroup(summaryKey, block.IssueType, block.Key) {
-			b.addSummaryKey(summaryKey)
+			b.addSummary(summaryKey, block.Key, synctypes.FailureRoleBoundary)
 		}
 	}
 }
@@ -442,14 +501,8 @@ func (b *issuesProjectionBuilder) projection() issuesProjection {
 	sortIssueGroups(b.snapshot.Groups)
 
 	summary := IssueSummary{
-		Groups: make([]IssueGroupCount, 0, len(b.groupCounts)),
+		Groups: b.groupCounts.Groups(),
 	}
-	for key, count := range b.groupCounts {
-		summary.Groups = append(summary.Groups, IssueGroupCount{Key: key, Count: count})
-	}
-	sort.Slice(summary.Groups, func(i, j int) bool {
-		return string(summary.Groups[i].Key) < string(summary.Groups[j].Key)
-	})
 
 	return issuesProjection{
 		snapshot: b.snapshot,
@@ -463,14 +516,51 @@ func appendConflictSummaryCount(groups []IssueGroupCount, count int) []IssueGrou
 	}
 
 	groups = append(groups, IssueGroupCount{
-		Key:   synctypes.SummaryConflictUnresolved,
-		Count: count,
+		Key:       synctypes.SummaryConflictUnresolved,
+		Count:     count,
+		ScopeKind: statusScopeFile,
 	})
 	sort.Slice(groups, func(i, j int) bool {
-		return string(groups[i].Key) < string(groups[j].Key)
+		if groups[i].Key != groups[j].Key {
+			return string(groups[i].Key) < string(groups[j].Key)
+		}
+		if groups[i].ScopeKind != groups[j].ScopeKind {
+			return groups[i].ScopeKind < groups[j].ScopeKind
+		}
+
+		return groups[i].Scope < groups[j].Scope
 	})
 
 	return groups
+}
+
+func statusIssueScope(
+	scopeKey synctypes.ScopeKey,
+	role synctypes.FailureRole,
+	shortcuts []synctypes.Shortcut,
+) (string, string) {
+	if !scopeKey.IsZero() {
+		switch scopeKey.Kind {
+		case synctypes.ScopeAuthAccount, synctypes.ScopeThrottleAccount:
+			return statusScopeAccount, scopeKey.Humanize(shortcuts)
+		case synctypes.ScopeService:
+			return statusScopeService, scopeKey.Humanize(shortcuts)
+		case synctypes.ScopeQuotaOwn:
+			return statusScopeDrive, scopeKey.Humanize(shortcuts)
+		case synctypes.ScopeQuotaShortcut, synctypes.ScopePermRemote:
+			return statusScopeShortcut, scopeKey.Humanize(shortcuts)
+		case synctypes.ScopePermDir:
+			return statusScopeDirectory, scopeKey.Humanize(shortcuts)
+		case synctypes.ScopeDiskLocal:
+			return statusScopeDisk, scopeKey.Humanize(shortcuts)
+		}
+	}
+
+	if role == synctypes.FailureRoleBoundary {
+		return statusScopeDirectory, ""
+	}
+
+	return statusScopeFile, ""
 }
 
 func sortIssueGroups(groups []IssueGroupSnapshot) {
