@@ -97,6 +97,35 @@ func TestGroupFailures_ShortcutScopeKeyHumanized(t *testing.T) {
 	assert.Equal(t, "Team Docs", groups[0].ScopeKey)
 }
 
+// Validates: R-2.3.8, R-2.10.22, R-6.6.11
+func TestGroupFailures_ShortcutQuotaUsesOwnerSpecificCopy(t *testing.T) {
+	t.Parallel()
+
+	shortcuts := []synctypes.Shortcut{
+		{
+			RemoteDrive: "driveAAA",
+			RemoteItem:  "itemBBB",
+			LocalPath:   "Team Docs",
+			Observation: synctypes.ObservationDelta,
+		},
+	}
+
+	failures := []synctypes.SyncFailureRow{
+		{
+			Path:      "/Team Docs/report.docx",
+			IssueType: synctypes.IssueQuotaExceeded,
+			ScopeKey:  synctypes.SKQuotaShortcut("driveAAA:itemBBB"),
+			Category:  synctypes.CategoryActionable,
+		},
+	}
+
+	groups, _ := groupFailures(failures, shortcuts)
+	require.Len(t, groups, 1)
+	assert.Equal(t, "Team Docs", groups[0].ScopeKey)
+	assert.Equal(t, `Shared folder "Team Docs" owner's storage is full.`, groups[0].Message.Reason)
+	assert.Equal(t, "Ask the shared folder owner to free up space or upgrade their plan.", groups[0].Message.Action)
+}
+
 // Validates: R-2.10.4
 func TestGroupFailures_GroupsByScopeKey(t *testing.T) {
 	t.Parallel()
@@ -275,7 +304,7 @@ func TestPrintGroupedFailures_ScopeOnlyIssueOmitsPathSection(t *testing.T) {
 	assert.NotContains(t, output, "  /")
 }
 
-// Validates: R-2.3.9
+// Validates: R-2.3.10
 func TestPrintGroupedIssuesJSON_StructuredOutput(t *testing.T) {
 	t.Parallel()
 
@@ -321,6 +350,41 @@ func TestPrintGroupedIssuesJSON_StructuredOutput(t *testing.T) {
 
 	require.Len(t, out.HeldDeletes, 1)
 	assert.Equal(t, "/deleted.txt", out.HeldDeletes[0].Path)
+}
+
+// Validates: R-2.3.10, R-6.6.11
+func TestPrintGroupedIssuesJSON_UsesScopedFailureCopy(t *testing.T) {
+	t.Parallel()
+
+	shortcuts := []synctypes.Shortcut{
+		{
+			RemoteDrive: "driveAAA",
+			RemoteItem:  "itemBBB",
+			LocalPath:   "Team Docs",
+			Observation: synctypes.ObservationDelta,
+		},
+	}
+	failures := []synctypes.SyncFailureRow{
+		{
+			Path:      "/Team Docs/report.docx",
+			IssueType: synctypes.IssueQuotaExceeded,
+			ScopeKey:  synctypes.SKQuotaShortcut("driveAAA:itemBBB"),
+			Category:  synctypes.CategoryActionable,
+		},
+	}
+
+	groups, _ := groupFailures(failures, shortcuts)
+	require.Len(t, groups, 1)
+
+	var buf bytes.Buffer
+	require.NoError(t, printGroupedIssuesJSON(&buf, nil, groups, nil))
+
+	var out issuesOutputJSON
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &out))
+	require.Len(t, out.FailureGroups, 1)
+	assert.Equal(t, "Team Docs", out.FailureGroups[0].Scope)
+	assert.Equal(t, `Shared folder "Team Docs" owner's storage is full.`, out.FailureGroups[0].Reason)
+	assert.Equal(t, "Ask the shared folder owner to free up space or upgrade their plan.", out.FailureGroups[0].Action)
 }
 
 func TestPrintGroupedIssuesText_AllSections(t *testing.T) {
