@@ -2,7 +2,7 @@
 
 GOVERNS: internal/syncobserve/observer_local.go, internal/syncobserve/observer_local_handlers.go, internal/syncobserve/observer_local_collisions.go, internal/syncobserve/observer_remote.go, internal/syncobserve/item_converter.go, internal/syncobserve/scanner.go, internal/syncobserve/buffer.go, internal/syncobserve/inotify_linux.go, internal/syncobserve/inotify_other.go
 
-Implements: R-2.1.2 [verified], R-2.4 [implemented], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.15 [planned], R-6.7.16 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [planned], R-6.7.24 [verified], R-6.7.26 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-2.11 [implemented], R-2.11.5 [implemented], R-2.12 [verified], R-2.13.1 [verified], R-6.3.4 [verified], R-6.10.6 [verified]
+Implements: R-2.1.2 [verified], R-2.4 [implemented], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.15 [verified], R-6.7.16 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [planned], R-6.7.24 [verified], R-6.7.26 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-2.11 [implemented], R-2.11.5 [implemented], R-2.12 [verified], R-2.13.1 [verified], R-6.3.4 [verified], R-6.10.6 [verified]
 
 ## Ownership Contract
 
@@ -69,7 +69,7 @@ Key properties:
 - `synctree.Root` stores unexported injectable ops on the root value so local
   observation can test `Stat`, `ReadDir`, and tree-walk failure paths
   deterministically without exposing new production APIs
-- Racily-clean guard: same-second mtime triggers hash verification
+- Local-vs-baseline mtime comparisons truncate both sides to whole-second UTC to match OneDrive precision, but the racily-clean guard still uses the raw observed local mtime against scan start so recently-written files are always re-hashed
 - Dual-path threading: `fsRelPath` (filesystem I/O) and `dbRelPath` (NFC-normalized for baseline lookup). `handleDelete` receives `fsPath` (the original `fsEvent.Name`) directly and passes it to `watcher.Remove()` — never reconstructs the filesystem path from NFC-normalized `dbRelPath` (B-312). On macOS HFS+ where fsnotify delivers NFD-encoded paths, reconstructing with NFC causes `watcher.Remove()` to silently fail and leak watch resources.
 - `skip_symlinks = false` follows symlink targets at the alias path for full scans, watch-mode create/write handling, retry/trial single-path reconstruction, and watch setup. `skip_symlinks = true` excludes them entirely. Followed directory symlinks use a real-path ancestry guard so cycles stop at the alias boundary instead of recursing forever. Excluded symlink aliases stay silent: watch mode remembers skipped alias paths so later remove events and safety scans do not resurrect them as synthetic deletes.
 - inotify watch limit detection on Linux (`inotify_linux.go`)
@@ -93,7 +93,7 @@ Extracted filesystem walker for full-scan mode. Produces change events by walkin
 
 **`SkippedItem`** — Defined in `types.go`: `{Path string, Reason string, Detail string, FileSize int64}`. Represents a file that was observed but excluded from the event stream due to validation failure. `FileSize` is populated for `IssueFileTooLarge` (after stat). Collected during full scan and returned in `ScanResult.Skipped`. The engine processes these via `recordSkippedItems()` and `clearResolvedSkippedItems()`.
 
-**Shared local metadata fast path** — `CanReuseBaselineHash(info, base, observeStartNano)` centralizes the scanner's mtime+size fast path plus the 1-second racily-clean guard. The scanner uses it during full scans, and the sync engine reuses the same helper when retry/trial planner work reconstructs upload-side local observation. This keeps "unchanged local file" detection consistent across full scans, retrier sweeps, and trial redispatch.
+**Shared local metadata fast path** — `CanReuseBaselineHash(info, base, observeStartNano)` centralizes the scanner's mtime+size fast path plus the 1-second racily-clean guard. The equality check truncates both local and baseline mtimes to whole-second UTC before comparing, because Graph/OneDrive do not preserve fractional seconds. The scanner uses the helper during full scans, and the sync engine reuses the same helper when retry/trial planner work reconstructs upload-side local observation. This keeps "unchanged local file" detection consistent across full scans, retrier sweeps, and trial redispatch without forcing unnecessary re-hash work after a lossless OneDrive round-trip.
 
 **Single-path local reconstruction** — `ObserveSinglePathWithFilter()` rebuilds one local path from current truth for engine-owned retry/trial work. It takes a rooted `synctree.Root` instead of a raw sync-root string and applies the same per-path rules as normal observation: configured local filters, `ShouldObserve`, oversized-file rejection, baseline-hash reuse, and “emit with empty hash” behavior when hashing fails. Internal exclusions resolve the retry/trial candidate silently; actionable validation failures become `SkippedItem`s that the engine records into `sync_failures`. `ObserveSinglePath()` is the zero-filter convenience wrapper used by tests and call sites that do not need resolved config.
 

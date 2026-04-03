@@ -82,7 +82,7 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.7.11: The system shall filter out phantom system drives provisioned by Microsoft for Personal accounts (face crops, albums) that return HTTP 400 on access. For Personal accounts, the system shall use `GET /me/drive` (singular) to discover the primary drive. [verified]
 - R-6.7.12: When `GET /drives/{driveID}/items/root/children` returns transient HTTP 404 with Graph code `itemNotFound` for a valid resource (cross-datacenter load balancer timeout), the system shall classify it as transient and retry with backoff. [verified]
 - R-6.7.13: When `GET /me/drives` returns HTTP 403 with Graph code `accessDenied` shortly after token refresh (eventual consistency), the system shall classify it as transient and retry with backoff. [verified]
-- R-6.7.15: The system shall truncate local timestamps to zero fractional seconds before comparing with OneDrive's whole-second precision. [planned]
+- R-6.7.15: The system shall truncate local timestamps to zero fractional seconds before comparing with OneDrive's whole-second precision. [verified]
 - R-6.7.16: The system shall safely handle missing or invalid timestamps (`0001-01-01T00:00:00Z`, absent `lastModifiedDateTime` on deletions) without panicking, preserving them as unknown rather than fabricating replacement values. [verified]
 - R-6.7.17: When a file completely lacks hashes (zero-byte files, certain Business/SharePoint files), the system shall use a fallback comparison of size + mtime + eTag. [implemented]
 - R-6.7.18: When extracting identity data for shared items, the system shall use a four-level fallback chain: `remoteItem.shared.sharedBy` → `.owner` → `remoteItem.createdBy` → top-level `shared.owner`. [verified]

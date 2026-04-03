@@ -3,6 +3,7 @@ package syncobserve
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -256,6 +257,38 @@ func TestFullScan_MtimeSizeFastPath(t *testing.T) {
 	require.NoError(t, err, "FullScan")
 
 	assert.Empty(t, result.Events, "fast path should skip unchanged file")
+}
+
+// Validates: R-6.7.15
+func TestFullScan_SameSecondSubsecondDifferenceSkipsFalseModify(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	content := "whole-second-stable"
+	writeTestFile(t, dir, "stable.txt", content)
+
+	fileTime := time.Now().Add(-time.Hour).UTC().Truncate(time.Second).Add(200 * time.Millisecond)
+	require.NoError(t, os.Chtimes(filepath.Join(dir, "stable.txt"), fileTime, fileTime), "Chtimes")
+
+	info, err := os.Stat(filepath.Join(dir, "stable.txt"))
+	require.NoError(t, err, "Stat")
+
+	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+		Path: "stable.txt", DriveID: driveid.New("d"), ItemID: "i1",
+		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, content),
+		Size: info.Size(), Mtime: fileTime.Add(700 * time.Millisecond).UnixNano(),
+	})
+
+	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs.HashFunc = func(string) (string, error) {
+		return "", errors.New("hash function should not run for same-second timestamp drift")
+	}
+
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
+	require.NoError(t, err, "FullScan")
+
+	assert.Empty(t, result.Events, "same-second fractional drift should not emit ChangeModify")
+	assert.Empty(t, result.Skipped, "same-second fractional drift should not force a fallback hash path")
 }
 
 func TestFullScan_RacilyCleanForcesHash(t *testing.T) {

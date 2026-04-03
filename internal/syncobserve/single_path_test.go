@@ -77,6 +77,38 @@ func TestObserveSinglePath_ReusesBaselineHashWhenMetadataMatches(t *testing.T) {
 	assert.False(t, result.Resolved)
 }
 
+// Validates: R-6.7.15
+func TestObserveSinglePath_ReusesBaselineHashWhenSameSecondMtimeDiffersByFractionalSecond(t *testing.T) {
+	t.Parallel()
+
+	syncRoot := t.TempDir()
+	relPath := "baseline-reuse-fractional.txt"
+	absPath := filepath.Join(syncRoot, relPath)
+	content := []byte("payload")
+	fileTime := time.Now().Add(-2 * time.Second).UTC().Truncate(time.Second).Add(150 * time.Millisecond)
+
+	require.NoError(t, os.WriteFile(absPath, content, 0o600))
+	require.NoError(t, os.Chtimes(absPath, fileTime, fileTime))
+
+	info, err := os.Stat(absPath)
+	require.NoError(t, err)
+
+	result, err := ObserveSinglePath(nil, mustOpenSyncTree(t, syncRoot), relPath, &synctypes.BaselineEntry{
+		Path:      relPath,
+		ItemType:  synctypes.ItemTypeFile,
+		Size:      info.Size(),
+		Mtime:     fileTime.Add(600 * time.Millisecond).UnixNano(),
+		LocalHash: "cached-hash",
+	}, time.Now().UnixNano(), func(string) (string, error) {
+		return "", errors.New("hash function should not be called for same-second timestamp drift")
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result.Event)
+	assert.Equal(t, "cached-hash", result.Event.Hash)
+	assert.Nil(t, result.Skipped)
+	assert.False(t, result.Resolved)
+}
+
 func TestObserveSinglePath_DirectoryProducesFolderEvent(t *testing.T) {
 	t.Parallel()
 
