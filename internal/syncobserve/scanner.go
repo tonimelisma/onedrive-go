@@ -24,6 +24,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	slashpath "path"
 	"path/filepath"
 	"strings"
 	stdsync "sync"
@@ -54,6 +55,14 @@ const (
 // defaultCheckWorkers is the default parallel hash goroutine limit when
 // checkWorkers is zero (not configured).
 const defaultCheckWorkers = 4
+
+type observedKind uint8
+
+const (
+	observedKindUnknown observedKind = iota
+	observedKindFile
+	observedKindDir
+)
 
 // hashJob describes a file that needs hashing during FullScan phase 2.
 type hashJob struct {
@@ -315,7 +324,7 @@ func (o *LocalObserver) makeWalkFunc(
 		}
 
 		// Stage 1 observation filter: name validation + path length (cheap, no syscall).
-		if skipItem := ShouldObserve(name, dbRelPath); skipItem != nil {
+		if skipItem := shouldObserveWithFilter(name, dbRelPath, dirEntryKind(d), o.filterConfig); skipItem != nil {
 			if skipItem.Reason != "" {
 				*skipped = append(*skipped, *skipItem)
 				o.Logger.Debug("skipping invalid entry",
@@ -827,8 +836,20 @@ func (o *LocalObserver) IsOversizedFile(size int64, path string) bool {
 // observation filter — cheap string checks only (no syscall). Stage 2
 // (file size > 250GB) is checked after stat in processEntry/hashAndEmit.
 func ShouldObserve(name, path string) *synctypes.SkippedItem {
+	return shouldObserveWithFilter(name, path, observedKindUnknown, synctypes.LocalFilterConfig{})
+}
+
+func shouldObserveWithFilter(
+	name, path string,
+	kind observedKind,
+	filter synctypes.LocalFilterConfig,
+) *synctypes.SkippedItem {
 	if IsAlwaysExcluded(name) {
 		return &synctypes.SkippedItem{} // internal exclusion, not reportable
+	}
+
+	if shouldSkipConfiguredPath(name, path, kind, filter) {
+		return &synctypes.SkippedItem{}
 	}
 
 	if reason, detail := ValidateOneDriveName(name); reason != "" {
@@ -844,6 +865,104 @@ func ShouldObserve(name, path string) *synctypes.SkippedItem {
 	}
 
 	return nil
+}
+
+func dirEntryKind(d fs.DirEntry) observedKind {
+	if d.IsDir() {
+		return observedKindDir
+	}
+
+	return observedKindFile
+}
+
+func shouldSkipConfiguredPath(
+	name, path string,
+	kind observedKind,
+	filter synctypes.LocalFilterConfig,
+) bool {
+	parts := observedPathParts(path)
+	if len(parts) == 0 {
+		return false
+	}
+
+	if filter.SkipDotfiles && hasDotfileComponent(parts) {
+		return true
+	}
+
+	if hasSkippedParentDir(parts, filter.SkipDirs) {
+		return true
+	}
+
+	if kind == observedKindDir && matchesConfiguredDir(name, filter.SkipDirs) {
+		return true
+	}
+
+	if kind == observedKindFile && matchesConfiguredFile(name, path, filter.SkipFiles) {
+		return true
+	}
+
+	return false
+}
+
+func observedPathParts(path string) []string {
+	return strings.Split(path, "/")
+}
+
+func hasDotfileComponent(parts []string) bool {
+	for _, part := range parts {
+		if strings.HasPrefix(part, ".") {
+			return true
+		}
+	}
+
+	return false
+}
+
+func hasSkippedParentDir(parts, skipDirs []string) bool {
+	if len(skipDirs) == 0 || len(parts) < 2 {
+		return false
+	}
+
+	for _, part := range parts[:len(parts)-1] {
+		if matchesConfiguredDir(part, skipDirs) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func matchesConfiguredDir(name string, skipDirs []string) bool {
+	for _, skipDir := range skipDirs {
+		if name == skipDir {
+			return true
+		}
+	}
+
+	return false
+}
+
+func matchesConfiguredFile(name, path string, skipFiles []string) bool {
+	for _, pattern := range skipFiles {
+		normalized := strings.TrimPrefix(filepath.ToSlash(pattern), "/")
+		if normalized == "" {
+			continue
+		}
+
+		if strings.Contains(normalized, "/") {
+			if matched, err := slashpath.Match(normalized, path); err == nil && matched {
+				return true
+			}
+
+			continue
+		}
+
+		if matched, err := slashpath.Match(normalized, name); err == nil && matched {
+			return true
+		}
+	}
+
+	return false
 }
 
 // ValidateOneDriveName checks whether a filename is valid for OneDrive.

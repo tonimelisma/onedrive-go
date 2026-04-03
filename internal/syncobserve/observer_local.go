@@ -107,6 +107,7 @@ type LocalObserver struct {
 	Baseline           *synctypes.Baseline
 	Logger             *slog.Logger
 	checkWorkers       int // parallel hash goroutine limit for FullScan (0 → defaultCheckWorkers)
+	filterConfig       synctypes.LocalFilterConfig
 	WatcherFactory     func() (FsWatcher, error)
 	droppedEvents      atomic.Int64                                     // events dropped by TrySend due to full channel
 	droppedRetries     atomic.Int64                                     // hash requests dropped due to full channel
@@ -184,6 +185,17 @@ func NewLocalObserver(baseline *synctypes.Baseline, logger *slog.Logger, checkWo
 // scans to the engine. Must be called before Watch. Nil disables forwarding.
 func (o *LocalObserver) SetSkippedChannel(ch chan<- []synctypes.SkippedItem) {
 	o.skippedCh = ch
+}
+
+// SetFilterConfig installs user-configured local observation filters. The
+// observer copies the slices so later config mutations cannot silently change
+// an already-running watch/scanner.
+func (o *LocalObserver) SetFilterConfig(cfg synctypes.LocalFilterConfig) {
+	o.filterConfig = synctypes.LocalFilterConfig{
+		SkipDotfiles: cfg.SkipDotfiles,
+		SkipDirs:     append([]string(nil), cfg.SkipDirs...),
+		SkipFiles:    append([]string(nil), cfg.SkipFiles...),
+	}
 }
 
 // SetSafetyScanInterval overrides the default 5-minute safety scan interval.
@@ -373,7 +385,7 @@ func (o *LocalObserver) AddWatchesRecursive(ctx context.Context, watcher FsWatch
 
 			dbRelPath := nfcNormalize(filepath.ToSlash(relPath))
 
-			if ShouldObserve(name, dbRelPath) != nil {
+			if shouldObserveWithFilter(name, dbRelPath, observedKindDir, o.filterConfig) != nil {
 				return filepath.SkipDir
 			}
 		}

@@ -303,7 +303,7 @@ This is the operating dashboard for completeness, not a verdict of quality. A pa
 | Workstream | Req | Design | Code | Ref | Meta | Body | Kill | Verified reconcile | Highest unresolved risk |
 |---|---|---|---|---|---|---|---|---|---|
 | W1 | done | done | partial | partial | done | partial | partial | partial | periodic reconciliation, aggregated logging, and big-delete traceability still lag |
-| W2 | done | done | partial | partial | done | no | partial | no | filtering and naming rules not yet traceable |
+| W2 | done | done | done | partial | done | partial | partial | partial | actionable-issue lifecycle, symlink semantics, and sparse-payload hardening still need body audit |
 | W3 | done | done | partial | n/a | done | no | partial | no | big-delete and cross-drive proof paths unclear |
 | W4 | done | done | partial | n/a | done | no | partial | no | user-facing JSON/message semantics not yet audited |
 | W5 | done | done | done | partial | done | partial | partial | done | upload-session traceability tags still lag the body-level coverage |
@@ -599,6 +599,28 @@ Key W1 gap notes:
   - No explicit claim surfaced yet for `R-2.4.1` through `R-2.4.3`, `R-2.4.6`, `R-2.4.7`, `R-2.11.1` through `R-2.11.5`, or `R-6.7.19`
   - Design hardening notes also look unclaimed from metadata: sparse payload nil-guarding, buffer overflow behavior, and inotify partial-watch cleanup
   - First body-audit target inside W2 should be naming/filtering coverage, because collisions and watch mechanics are visibly tagged while filter/naming guarantees are not
+- Body-audit notes from `internal/syncobserve/*_test.go`, `internal/sync/*_test.go`, and observation/config wiring:
+  - Investigation outcome: the original W2 suspicion was real. `skip_dotfiles`, `skip_dirs`, and `skip_files` were marked verified in requirements/design, but the resolved config never reached `LocalObserver` or retry/trial single-path reconstruction.
+  - Production fix: the sync engine now carries a resolved `LocalFilterConfig`, applies it to one-shot scans and watch mode via `LocalObserver.SetFilterConfig`, and threads the same filter state into retry/trial reconstruction through `ObserveSinglePathWithFilter`.
+  - Regression coverage now exists at multiple layers:
+    - `internal/syncobserve/filter_test.go` proves full-scan filtering, watch setup subtree exclusion, watch write suppression, and single-path retry/trial reconstruction semantics
+    - `internal/sync/engine_filter_test.go` proves the engine suppresses uploads for configured exclusions instead of merely unit-testing the observer in isolation
+    - `internal/cli/sync_helpers_test.go` proves `newSyncEngine` propagates resolved config into the engine instead of dropping it on the floor
+    - `internal/config/validate_test.go` now proves `skip_files` / `skip_dirs` no longer warn as unimplemented
+- Verified-claim reconciliation snapshot:
+
+| Contract | Basis | Current evidence | Reconciliation | Gap label / note |
+|---|---|---|---|---|
+| `skip_dotfiles` excludes hidden files and directories from full-scan observation | `REQ+DESIGN+CODE+BODY` | `internal/syncobserve/filter_test.go` creates dotfile files/dirs and proves they do not produce `ChangeEvent`s or `SkippedItem`s | `proven` | Direct scanner/body proof added |
+| `skip_dirs` excludes configured directory names from scan and watch setup | `REQ+DESIGN+CODE+BODY` | `internal/syncobserve/filter_test.go` proves `vendor/` is absent from full scans and does not receive watches in `AddWatchesRecursive` | `proven` | Covers both scan and watch-start behavior |
+| `skip_files` excludes matching file globs from scan and watch write handling | `REQ+DESIGN+CODE+BODY` | `internal/syncobserve/filter_test.go` proves `*.log` files are omitted from full scans and suppressed on write events | `proven` | Direct file-glob regression coverage added |
+| Retry/trial single-path reconstruction must honor the same local filters as normal observation | `DESIGN+CODE+BODY` | `internal/syncobserve/filter_test.go` proves `ObserveSinglePathWithFilter` resolves configured exclusions silently | `proven` | Important design-only invariant now covered |
+| Resolved config must reach the engine and observer instead of being dropped in CLI setup | `REQ+CODE+BODY` | `internal/cli/sync_helpers_test.go` plus `internal/sync/engine_filter_test.go` prove config propagation and end-to-end upload suppression | `proven` | Fixed production wiring gap |
+
+Key W2 gap notes:
+
+- `CODE+BODY`: the filter-config wiring gap was a real production defect, not a metadata illusion. It is now fixed with regression coverage at observer, engine, and CLI wiring layers.
+- `META`: W2 still needs deeper reconciliation on actionable-issue lifecycle (`R-2.11.*`), symlink semantics (`R-2.4.6`), and sparse remote payload hardening.
 
 ### W3. Planner Safety, Conflict Resolution, And Delete Protection
 
@@ -937,5 +959,9 @@ Key W5 gap notes:
    - `R-2.8.4` periodic full reconciliation
    - `R-6.4.2` and `R-6.4.3` watch-mode big-delete guarantees
    - `R-6.6.7` aggregated warning logging
-2. Start body-level audits for W2 and W4, because filtering/naming semantics and user-facing issues/verify output are the next easiest places for weak tests to hide.
+2. Continue W2 body-level reconciliation for:
+   - `R-2.11.*` actionable-issue recording and auto-clear semantics
+   - `R-2.4.6` / `R-2.4.7` symlink and always-excluded behavior
+   - sparse remote-payload hardening and nil-guard proof paths
 3. Tighten W5 traceability for upload-session rules that are already strongly tested in body-level graph tests but still under-tagged at the `// Validates:` level.
+4. Start the W4 body audit on `issues` / `verify` output semantics and recycle-bin defaults, because that remains a likely weak-test area.

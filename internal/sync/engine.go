@@ -43,8 +43,9 @@ type Engine struct {
 	sessionStore       *driveops.SessionStore // for CleanStale() housekeeping
 	transferWorkers    int                    // goroutine count for the worker pool
 	checkWorkers       int                    // goroutine limit for parallel file hashing
-	bigDeleteThreshold int                    // from config; 0 means use default
-	minFreeSpace       int64                  // startup disk-scope revalidation threshold
+	localFilter        synctypes.LocalFilterConfig
+	bigDeleteThreshold int   // from config; 0 means use default
+	minFreeSpace       int64 // startup disk-scope revalidation threshold
 	diskAvailableFn    func(string) (uint64, error)
 
 	// Test/debug-only invariant checks. Production keeps this disabled;
@@ -120,6 +121,7 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 		logger:             cfg.Logger,
 		transferWorkers:    cfg.TransferWorkers,
 		checkWorkers:       cfg.CheckWorkers,
+		localFilter:        cfg.LocalFilter,
 		bigDeleteThreshold: bdThreshold,
 		minFreeSpace:       cfg.MinFreeSpace,
 		diskAvailableFn:    driveops.DiskAvailable,
