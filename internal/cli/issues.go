@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -50,71 +49,12 @@ conflicts or clear failures.`,
 // --- issues list ---
 
 func runIssuesList(cmd *cobra.Command, _ []string) error {
-	cc := mustCLIContext(cmd.Context())
-
-	dbPath := cc.Cfg.StatePath()
-	if dbPath == "" {
-		return fmt.Errorf("cannot determine state DB path for drive %q", cc.Cfg.CanonicalID)
-	}
-
-	mgr, err := syncstore.NewSyncStore(cmd.Context(), dbPath, cc.Logger)
-	if err != nil {
-		return fmt.Errorf("open sync store: %w", err)
-	}
-	defer mgr.Close(cmd.Context())
-
-	ctx := cmd.Context()
-
 	history, err := cmd.Flags().GetBool("history")
 	if err != nil {
 		return fmt.Errorf("read --history flag: %w", err)
 	}
 
-	var conflicts []synctypes.ConflictRecord
-	if history {
-		conflicts, err = mgr.ListAllConflicts(ctx)
-	} else {
-		conflicts, err = mgr.ListConflicts(ctx)
-	}
-
-	if err != nil {
-		return fmt.Errorf("list conflicts: %w", err)
-	}
-
-	failures, err := mgr.ListActionableFailures(ctx)
-	if err != nil {
-		return fmt.Errorf("list actionable failures: %w", err)
-	}
-
-	// Load shortcuts for humanizing scope keys in the grouped display (R-2.10.22).
-	shortcuts, err := mgr.ListShortcuts(ctx)
-	if err != nil {
-		return fmt.Errorf("list shortcuts: %w", err)
-	}
-
-	groups, heldDeletes := groupFailures(failures, shortcuts)
-
-	// Query pending retries for the PENDING RETRIES section.
-	pendingRetries, err := mgr.PendingRetrySummary(ctx)
-	if err != nil {
-		return fmt.Errorf("summarize pending retries: %w", err)
-	}
-
-	if len(conflicts) == 0 && len(groups) == 0 && len(heldDeletes) == 0 && len(pendingRetries) == 0 {
-		if history {
-			fmt.Println("No issues in history.")
-		} else {
-			fmt.Println("No issues.")
-		}
-
-		return nil
-	}
-
-	if cc.Flags.JSON {
-		return printGroupedIssuesJSON(os.Stdout, conflicts, groups, heldDeletes)
-	}
-
-	return printGroupedIssuesText(os.Stdout, conflicts, groups, heldDeletes, pendingRetries, shortcuts, history, cc.Flags.Verbose)
+	return newIssuesService(mustCLIContext(cmd.Context())).runList(cmd.Context(), history)
 }
 
 // --- issues resolve ---
@@ -168,14 +108,11 @@ func runResolve(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--all and a specific conflict argument are mutually exclusive")
 	}
 
-	ctx := cmd.Context()
-	cc := mustCLIContext(ctx)
-
 	// All resolution strategies go through the engine: keep_local and
 	// keep_remote need the graph client for transfers, and keep_both needs
 	// the sync root to update baseline entries for the original file and
 	// its conflict copies.
-	return resolveWithTransfers(ctx, cc, args, resolution, resolveAll, dryRun)
+	return newIssuesService(mustCLIContext(cmd.Context())).runResolve(cmd.Context(), args, resolution, resolveAll, dryRun)
 }
 
 // resolveStrategy returns the chosen resolution string from flags.
@@ -398,47 +335,12 @@ type failureAction struct {
 }
 
 func runFailureAction(cmd *cobra.Command, args []string, action failureAction) error {
-	cc := mustCLIContext(cmd.Context())
-
-	dbPath := cc.Cfg.StatePath()
-	if dbPath == "" {
-		return fmt.Errorf("cannot determine state DB path for drive %q", cc.Cfg.CanonicalID)
-	}
-
-	mgr, err := syncstore.NewSyncStore(cmd.Context(), dbPath, cc.Logger)
-	if err != nil {
-		return fmt.Errorf("open sync store: %w", err)
-	}
-	defer mgr.Close(cmd.Context())
-
-	ctx := cmd.Context()
-
 	doAll, err := cmd.Flags().GetBool("all")
 	if err != nil {
 		return fmt.Errorf("read --all flag: %w", err)
 	}
 
-	if doAll {
-		if err := action.allFn(ctx, mgr); err != nil {
-			return err
-		}
-
-		fmt.Println(action.allMsg)
-
-		return nil
-	}
-
-	if len(args) == 0 {
-		return fmt.Errorf("%s", action.noArgMsg)
-	}
-
-	if err := action.singleFn(ctx, mgr, args[0]); err != nil {
-		return err
-	}
-
-	fmt.Printf(action.singleFmt+"\n", args[0])
-
-	return nil
+	return newIssuesService(mustCLIContext(cmd.Context())).runFailureAction(cmd.Context(), args, doAll, action)
 }
 
 // --- helpers ---

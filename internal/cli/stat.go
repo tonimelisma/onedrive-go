@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/spf13/cobra"
 
@@ -38,10 +37,10 @@ func runStat(cmd *cobra.Command, args []string) error {
 	}
 
 	if cc.Flags.JSON {
-		return printStatJSON(os.Stdout, item)
+		return printStatJSON(cc.Output(), item)
 	}
 
-	return printStatText(os.Stdout, item)
+	return printStatText(cc.Output(), item)
 }
 
 // statJSONOutput is the JSON output schema for the stat command.

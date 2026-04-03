@@ -62,63 +62,6 @@ func runSync(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("read --force flag: %w", err)
 	}
 
-	// Load raw config and resolve drives (sync does its own multi-drive
-	// resolution instead of relying on PersistentPreRunE Phase 2).
-	rawCfg, err := config.LoadOrDefault(cc.CfgPath, logger)
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
-
-	// Rebuild logger now that we have the config-file log_level. CLI flags
-	// still override (--verbose, --debug, --quiet). This mirrors Phase 2
-	// logger construction in PersistentPreRunE, which is skipped for sync
-	// because it uses skipConfigAnnotation to handle multi-drive resolution
-	// itself.
-	cfgForLog := &config.ResolvedDrive{LoggingConfig: rawCfg.LoggingConfig}
-	dualLogger, logCloser := buildLoggerDual(cfgForLog, cc.Flags)
-	logger = dualLogger
-	cc.Logger = logger
-	cc.logCloser = logCloser
-
-	if logCloser != nil {
-		defer func() { _ = logCloser.Close() }()
-	}
-
-	selectors := cc.Flags.Drive
-
-	if watch {
-		holder := config.NewHolder(rawCfg, cc.CfgPath)
-
-		return runSyncDaemon(ctx, holder, selectors, mode, synctypes.WatchOpts{
-			Force:              force,
-			PollInterval:       parsePollInterval(rawCfg.PollInterval),
-			SafetyScanInterval: parseDurationOrZero(rawCfg.SafetyScanInterval),
-		}, logger)
-	}
-
-	// One-shot: resolve drives (excludes paused drives).
-	drives, err := config.ResolveDrives(rawCfg, selectors, false, logger)
-	if err != nil {
-		return fmt.Errorf("resolve drives: %w", err)
-	}
-
-	// Sync requires sync_dir on every drive (file ops like ls/get don't).
-	for _, rd := range drives {
-		if syncErr := config.ValidateResolvedForSync(rd); syncErr != nil {
-			return fmt.Errorf("validate drive %s: %w", rd.CanonicalID, syncErr)
-		}
-	}
-
-	if len(drives) == 0 {
-		// Distinguish "all paused" from "none configured" for a clearer message.
-		allDrives, resolveErr := config.ResolveDrives(rawCfg, selectors, true, logger)
-		if resolveErr == nil && len(allDrives) > 0 {
-			return fmt.Errorf("all drives are paused — run 'onedrive-go resume' to unpause")
-		}
-
-		return fmt.Errorf("no drives configured — run 'onedrive-go drive add' to add a drive")
-	}
-
 	dryRun, err := cmd.Flags().GetBool("dry-run")
 	if err != nil {
 		return fmt.Errorf("read --dry-run flag: %w", err)
@@ -129,26 +72,13 @@ func runSync(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("read --full flag: %w", err)
 	}
 
-	holder := config.NewHolder(rawCfg, cc.CfgPath)
-	provider := driveops.NewSessionProvider(holder,
-		syncMetaHTTPClient(), syncTransferHTTPClient(), "onedrive-go/"+version, logger)
-
-	orch := multisync.NewOrchestrator(&multisync.OrchestratorConfig{
-		Holder:   holder,
-		Drives:   drives,
-		Provider: provider,
-		Logger:   logger,
-	})
-
-	reports := orch.RunOnce(ctx, mode, synctypes.RunOpts{
-		DryRun:        dryRun,
+	return newSyncService(cc).run(ctx, syncCommandOptions{
+		Mode:          mode,
+		Watch:         watch,
 		Force:         force,
+		DryRun:        dryRun,
 		FullReconcile: fullReconcile,
 	})
-
-	printDriveReports(reports, cc)
-
-	return driveReportsError(reports)
 }
 
 // runSyncDaemon starts multi-drive watch mode via the Orchestrator. PID file

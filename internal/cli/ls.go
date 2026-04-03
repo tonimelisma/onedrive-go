@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 
 	"github.com/spf13/cobra"
@@ -43,10 +42,10 @@ func runLs(cmd *cobra.Command, args []string) error {
 	}
 
 	if cc.Flags.JSON {
-		return printItemsJSON(os.Stdout, items)
+		return printItemsJSON(cc.Output(), items)
 	}
 
-	return printItemsTable(os.Stdout, items)
+	return printItemsTable(cc.Output(), items)
 }
 
 // lsJSONItem is the JSON output schema for a single item in ls output.

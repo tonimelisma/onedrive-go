@@ -91,47 +91,12 @@ type driveListEntry struct {
 }
 
 func runDriveList(cmd *cobra.Command, _ []string) error {
-	cc := mustCLIContext(cmd.Context())
-	logger := cc.Logger
-	ctx := cmd.Context()
-	cfgPath := cc.CfgPath
-
-	cfg, warnings, err := config.LoadOrDefaultLenient(cfgPath, logger)
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
-
-	config.LogWarnings(warnings, logger)
-
-	// Section 1: configured drives.
-	configured := buildConfiguredDriveEntries(cfg, logger)
-
 	showAll, err := cmd.Flags().GetBool("all")
 	if err != nil {
 		return fmt.Errorf("reading --all flag: %w", err)
 	}
 
-	// Compute SharePoint site limit once — intermediate functions receive the
-	// concrete limit rather than a boolean flag they must interpret.
-	siteLimit := sharePointSiteLimit
-	if showAll {
-		siteLimit = sharePointSiteUnlimited
-	}
-
-	// Section 2: available drives from network (best-effort).
-	available := discoverAvailableDrives(ctx, cfg, siteLimit, logger)
-
-	// Annotate available drives with local state DB presence. This is a
-	// separate pass from discovery — discovery is network I/O, state DB
-	// detection is local filesystem I/O. Keeping them separate makes
-	// discovery functions pure and this annotation independently testable.
-	annotateStateDB(available)
-
-	if cc.Flags.JSON {
-		return printDriveListJSON(os.Stdout, configured, available)
-	}
-
-	return printDriveListText(os.Stdout, configured, available)
+	return newDriveService(mustCLIContext(cmd.Context())).runList(cmd.Context(), showAll)
 }
 
 // buildConfiguredDriveEntries creates list entries from the config.
@@ -741,53 +706,13 @@ Examples:
 }
 
 func runDriveAdd(cmd *cobra.Command, args []string) error {
-	cc := mustCLIContext(cmd.Context())
-	logger := cc.Logger
-	cfgPath := cc.CfgPath
-
-	// If a positional arg is provided, use it as the canonical ID.
-	selector := ""
-	if len(args) > 0 {
-		selector = args[0]
-	}
-
-	// Also accept --drive.
-	if selector == "" {
-		var driveErr error
-		selector, driveErr = cc.Flags.SingleDrive()
-		if driveErr != nil {
-			return driveErr
-		}
-	}
-
-	if selector == "" {
-		return listAvailableDrives()
-	}
-
-	cid, err := driveid.NewCanonicalID(selector)
-	if err != nil {
-		// If selector looks like a partial canonical ID (contains ':'), reject
-		// with a clear error instead of falling through to substring search.
-		if strings.Contains(selector, ":") {
-			return fmt.Errorf("invalid canonical ID %q: %w\n"+
-				"Run 'onedrive-go drive list' to see valid canonical IDs", selector, err)
-		}
-
-		// Not a canonical ID — try substring matching against shared drives.
-		return addSharedDriveByName(cmd.Context(), selector, cfgPath, logger)
-	}
-
-	if cid.IsShared() {
-		return addSharedDrive(cmd.Context(), cfgPath, cid, "", logger)
-	}
-
-	return addNewDrive(cfgPath, cid, logger)
+	return newDriveService(mustCLIContext(cmd.Context())).runAdd(cmd.Context(), args)
 }
 
 // addNewDrive adds a new drive to the config with a computed default sync_dir.
 // If the drive already exists, reports it as already configured. Token
 // existence is verified as a precondition before writing config.
-func addNewDrive(cfgPath string, cid driveid.CanonicalID, logger *slog.Logger) error {
+func addNewDrive(w io.Writer, cfgPath string, cid driveid.CanonicalID, logger *slog.Logger) error {
 	// Verify a token exists for this drive's account.
 	tokenPath := config.DriveTokenPath(cid)
 	if tokenPath == "" {
@@ -804,24 +729,21 @@ func addNewDrive(cfgPath string, cid driveid.CanonicalID, logger *slog.Logger) e
 	}
 
 	if !added {
-		fmt.Printf("Drive %s is already configured.\n", cid.String())
-
-		return nil
+		return writef(w, "Drive %s is already configured.\n", cid.String())
 	}
 
 	driveDisplayName := config.DefaultDisplayName(cid)
-	fmt.Printf("Added drive %s (%s) -> %s\n", driveDisplayName, cid.String(), syncDir)
-
-	return nil
+	return writef(w, "Added drive %s (%s) -> %s\n", driveDisplayName, cid.String(), syncDir)
 }
 
 // listAvailableDrives lists drives that can be added. Shows usage guidance
 // when no canonical ID argument is provided.
-func listAvailableDrives() error {
-	fmt.Println("Run 'onedrive-go drive add <canonical-id>' to add a drive.")
-	fmt.Println("Run 'onedrive-go drive list' to see available drives.")
+func listAvailableDrives(w io.Writer) error {
+	if err := writeln(w, "Run 'onedrive-go drive add <canonical-id>' to add a drive."); err != nil {
+		return err
+	}
 
-	return nil
+	return writeln(w, "Run 'onedrive-go drive list' to see available drives.")
 }
 
 // addSharedDrive adds a shared drive to config by canonical ID.
@@ -829,7 +751,7 @@ func listAvailableDrives() error {
 // the API when the caller already has the display name from search results).
 // If empty, the display name is resolved via the API.
 func addSharedDrive(
-	ctx context.Context, cfgPath string, cid driveid.CanonicalID,
+	ctx context.Context, cfgPath string, w io.Writer, cid driveid.CanonicalID,
 	preResolvedName string, logger *slog.Logger,
 ) error {
 	cfg, err := config.LoadOrDefault(cfgPath, logger)
@@ -838,9 +760,7 @@ func addSharedDrive(
 	}
 
 	if _, exists := cfg.Drives[cid]; exists {
-		fmt.Printf("Drive %s is already configured.\n", cid.String())
-
-		return nil
+		return writef(w, "Drive %s is already configured.\n", cid.String())
 	}
 
 	// Shared drives don't have their own token — find the parent account.
@@ -887,9 +807,7 @@ func addSharedDrive(
 		return fmt.Errorf("writing display_name to config: %w", err)
 	}
 
-	fmt.Printf("Added drive %s (%s) -> %s\n", displayName, cid.String(), syncDir)
-
-	return nil
+	return writef(w, "Added drive %s (%s) -> %s\n", displayName, cid.String(), syncDir)
 }
 
 // resolveSharedDisplayName finds the matching shared item and derives a
@@ -962,7 +880,7 @@ type sharedMatch struct {
 // given search term (case-insensitive substring match against folder name
 // and derived display name). Single match → add. Multiple → show list.
 func addSharedDriveByName(
-	ctx context.Context, selector, cfgPath string, logger *slog.Logger,
+	ctx context.Context, selector, cfgPath string, w io.Writer, logger *slog.Logger,
 ) error {
 	cfg, err := config.LoadOrDefault(cfgPath, logger)
 	if err != nil {
@@ -978,10 +896,12 @@ func addSharedDriveByName(
 			selector)
 
 	case 1:
-		return addSharedDrive(ctx, cfgPath, matches[0].cid, matches[0].displayName, logger)
+		return addSharedDrive(ctx, cfgPath, w, matches[0].cid, matches[0].displayName, logger)
 
 	default:
-		fmt.Printf("Multiple shared folders match %q — be more specific:\n\n", selector)
+		if err := writef(w, "Multiple shared folders match %q — be more specific:\n\n", selector); err != nil {
+			return err
+		}
 
 		for i := range matches {
 			ownerInfo := ""
@@ -994,13 +914,20 @@ func addSharedDriveByName(
 				viaInfo = fmt.Sprintf(" [via %s]", matches[i].tokenEmail)
 			}
 
-			fmt.Printf("  %d. %s%s%s\n     %s\n",
-				i+1, matches[i].displayName, ownerInfo, viaInfo, matches[i].cid.String())
+			if err := writef(
+				w,
+				"  %d. %s%s%s\n     %s\n",
+				i+1,
+				matches[i].displayName,
+				ownerInfo,
+				viaInfo,
+				matches[i].cid.String(),
+			); err != nil {
+				return err
+			}
 		}
 
-		fmt.Println("\nRun 'onedrive-go drive add <canonical-id>' to add a specific drive.")
-
-		return nil
+		return writeln(w, "\nRun 'onedrive-go drive add <canonical-id>' to add a specific drive.")
 	}
 }
 
@@ -1097,61 +1024,17 @@ The sync directory is never deleted automatically.`,
 }
 
 func runDriveRemove(cmd *cobra.Command, _ []string) error {
-	cc := mustCLIContext(cmd.Context())
-	logger := cc.Logger
-
-	driveSelector, driveErr := cc.Flags.SingleDrive()
-	if driveErr != nil {
-		return driveErr
-	}
-
-	if driveSelector == "" {
-		return fmt.Errorf("--drive is required (specify which drive to remove)")
-	}
-
 	purge, err := cmd.Flags().GetBool("purge")
 	if err != nil {
 		return fmt.Errorf("reading --purge flag: %w", err)
 	}
 
-	cfgPath := cc.CfgPath
-
-	cfg, err := config.LoadOrDefault(cfgPath, logger)
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
-
-	cid, cidErr := driveid.NewCanonicalID(driveSelector)
-	if cidErr != nil {
-		return fmt.Errorf("invalid drive ID %q: %w", driveSelector, cidErr)
-	}
-
-	_, inConfig := cfg.Drives[cid]
-
-	if !inConfig && !purge {
-		return fmt.Errorf("drive %q not found in config — use --purge to clean up leftover state", driveSelector)
-	}
-
-	// Purge orphaned state: drive not in config but state DB may exist on disk
-	// from a previous configuration. Only removes state DB + drive metadata.
-	if !inConfig && purge {
-		logger.Info("purging orphaned drive state", "drive", cid.String())
-
-		return purgeOrphanedDriveState(cid, logger)
-	}
-
-	logger.Info("removing drive", "drive", cid.String(), "purge", purge)
-
-	if purge {
-		return purgeDrive(cfgPath, cid, logger)
-	}
-
-	return removeDrive(cfgPath, cid, cfg.Drives[cid].SyncDir, logger)
+	return newDriveService(mustCLIContext(cmd.Context())).runRemove(purge)
 }
 
 // removeDrive deletes the config section for the drive, preserving token,
 // state database, and sync directory.
-func removeDrive(cfgPath string, driveID driveid.CanonicalID, syncDir string, logger *slog.Logger) error {
+func removeDrive(w io.Writer, cfgPath string, driveID driveid.CanonicalID, syncDir string, logger *slog.Logger) error {
 	if err := config.DeleteDriveSection(cfgPath, driveID); err != nil {
 		return fmt.Errorf("removing drive: %w", err)
 	}
@@ -1159,44 +1042,48 @@ func removeDrive(cfgPath string, driveID driveid.CanonicalID, syncDir string, lo
 	logger.Info("removed drive config section", "drive", driveID.String())
 
 	idStr := driveID.String()
-	fmt.Printf("Removed drive %s from config.\n", idStr)
-	fmt.Printf("Token and state database kept for %s.\n", idStr)
-	fmt.Printf("Sync directory untouched: %s\n", syncDir)
-	fmt.Println("Run 'onedrive-go drive add " + idStr + "' to re-add.")
+	if err := writef(w, "Removed drive %s from config.\n", idStr); err != nil {
+		return err
+	}
+	if err := writef(w, "Token and state database kept for %s.\n", idStr); err != nil {
+		return err
+	}
+	if err := writef(w, "Sync directory untouched: %s\n", syncDir); err != nil {
+		return err
+	}
 
-	return nil
+	return writeln(w, "Run 'onedrive-go drive add "+idStr+"' to re-add.")
 }
 
 // purgeDrive deletes the config section and state database for a drive.
 // The token is NOT deleted here — it may be shared with other drives (SharePoint).
-func purgeDrive(cfgPath string, driveID driveid.CanonicalID, logger *slog.Logger) error {
+func purgeDrive(w io.Writer, cfgPath string, driveID driveid.CanonicalID, logger *slog.Logger) error {
 	if err := purgeSingleDrive(cfgPath, driveID, logger); err != nil {
 		return err
 	}
 
-	fmt.Printf("Purged config and state for %s.\n", driveID.String())
-	fmt.Println("Sync directory untouched — delete manually if desired.")
+	if err := writef(w, "Purged config and state for %s.\n", driveID.String()); err != nil {
+		return err
+	}
 
-	return nil
+	return writeln(w, "Sync directory untouched — delete manually if desired.")
 }
 
 // purgeOrphanedDriveState removes state DB and drive metadata files for a
 // drive that is no longer in config. Unlike purgeSingleDrive (which also
 // removes config sections and account profiles), this only deletes data files
 // left behind from a previous `drive remove` without --purge.
-func purgeOrphanedDriveState(cid driveid.CanonicalID, logger *slog.Logger) error {
+func purgeOrphanedDriveState(w io.Writer, cid driveid.CanonicalID, logger *slog.Logger) error {
 	removed, err := removeDriveDataFiles(cid, logger)
 	if err != nil {
 		return err
 	}
 
 	if removed == 0 {
-		fmt.Printf("No orphaned state found for %s.\n", cid.String())
-	} else {
-		fmt.Printf("Purged %d orphaned data file(s) for %s.\n", removed, cid.String())
+		return writef(w, "No orphaned state found for %s.\n", cid.String())
 	}
 
-	return nil
+	return writef(w, "Purged %d orphaned data file(s) for %s.\n", removed, cid.String())
 }
 
 // --- drive search ---
@@ -1235,33 +1122,7 @@ type driveSearchResult struct {
 const sharePointSearchLimit = 50
 
 func runDriveSearch(cmd *cobra.Command, args []string) error {
-	cc := mustCLIContext(cmd.Context())
-	logger := cc.Logger
-	ctx := cmd.Context()
-	query := args[0]
-
-	businessTokens := findBusinessTokens(cc.Flags.Account, logger)
-
-	if len(businessTokens) == 0 {
-		if cc.Flags.Account != "" {
-			return fmt.Errorf("no business account found for %s — run 'onedrive-go login' first", cc.Flags.Account)
-		}
-
-		return fmt.Errorf("no business accounts found — SharePoint search requires a business account")
-	}
-
-	var results []driveSearchResult
-
-	for _, tokenCID := range businessTokens {
-		accountResults := searchAccountSharePoint(ctx, tokenCID, query, logger)
-		results = append(results, accountResults...)
-	}
-
-	if cc.Flags.JSON {
-		return printDriveSearchJSON(os.Stdout, results)
-	}
-
-	return printDriveSearchText(os.Stdout, results, query)
+	return newDriveService(mustCLIContext(cmd.Context())).runSearch(cmd.Context(), args[0])
 }
 
 // findBusinessTokens returns all business account tokens, optionally filtered

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -168,7 +169,7 @@ func TestBuildConfiguredDriveEntries_NoSyncDir_WithAccountProfile(t *testing.T) 
 // --- listAvailableDrives ---
 
 func TestListAvailableDrives_Empty(t *testing.T) {
-	err := listAvailableDrives()
+	err := listAvailableDrives(io.Discard)
 	assert.NoError(t, err)
 }
 
@@ -550,7 +551,7 @@ sync_dir = "~/OneDrive"
 `), 0o600))
 
 	cid := driveid.MustCanonicalID("personal:user@example.com")
-	err := removeDrive(cfgPath, cid, "~/OneDrive", testDriveLogger(t))
+	err := removeDrive(io.Discard, cfgPath, cid, "~/OneDrive", testDriveLogger(t))
 	require.NoError(t, err)
 
 	// Verify the drive section was deleted.
@@ -570,7 +571,7 @@ sync_dir = "~/OneDrive"
 `), 0o600))
 
 	cid := driveid.MustCanonicalID("business:alice@contoso.com")
-	err := removeDrive(cfgPath, cid, "~/Work", testDriveLogger(t))
+	err := removeDrive(io.Discard, cfgPath, cid, "~/Work", testDriveLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "removing drive")
 }
@@ -677,7 +678,7 @@ func TestAddNewDrive_NoToken(t *testing.T) {
 
 	cid := driveid.MustCanonicalID("personal:nobody@example.com")
 
-	err := addNewDrive(cfgPath, cid, testDriveLogger(t))
+	err := addNewDrive(io.Discard, cfgPath, cid, testDriveLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no token file")
 }
@@ -695,7 +696,7 @@ func TestAddNewDrive_WithToken(t *testing.T) {
 
 	cid := driveid.MustCanonicalID("personal:user@example.com")
 
-	err := addNewDrive(cfgPath, cid, testDriveLogger(t))
+	err := addNewDrive(io.Discard, cfgPath, cid, testDriveLogger(t))
 	require.NoError(t, err)
 
 	// Verify config was updated with canonical ID and sync_dir.
@@ -859,7 +860,7 @@ sync_dir = "~/OneDrive"
 sync_dir = "~/OneDrive-Shared/Test"
 `), 0o600))
 
-	err := addSharedDrive(t.Context(), cfgPath, cid, "", testDriveLogger(t))
+	err := addSharedDrive(t.Context(), cfgPath, io.Discard, cid, "", testDriveLogger(t))
 	assert.NoError(t, err)
 }
 
@@ -873,7 +874,7 @@ func TestAddSharedDrive_NoToken(t *testing.T) {
 	// Empty config — no primary drive to resolve token from.
 	require.NoError(t, os.WriteFile(cfgPath, []byte(""), 0o600))
 
-	err := addSharedDrive(t.Context(), cfgPath, cid, "", testDriveLogger(t))
+	err := addSharedDrive(t.Context(), cfgPath, io.Discard, cid, "", testDriveLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no token file")
 }
@@ -1271,7 +1272,7 @@ func TestPurgeOrphanedDriveState_DeletesStateDB(t *testing.T) {
 	require.NotEmpty(t, statePath)
 	require.NoError(t, os.WriteFile(statePath, []byte("fake-db"), 0o600))
 
-	err := purgeOrphanedDriveState(cid, testDriveLogger(t))
+	err := purgeOrphanedDriveState(io.Discard, cid, testDriveLogger(t))
 	require.NoError(t, err)
 
 	// State DB should be deleted.
@@ -1288,6 +1289,6 @@ func TestPurgeOrphanedDriveState_NoStateDB(t *testing.T) {
 	cid := driveid.MustCanonicalID("personal:user@example.com")
 
 	// No state DB on disk — should succeed with "no orphaned state" message.
-	err := purgeOrphanedDriveState(cid, testDriveLogger(t))
+	err := purgeOrphanedDriveState(io.Discard, cid, testDriveLogger(t))
 	assert.NoError(t, err)
 }

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/spf13/cobra"
 
@@ -108,7 +107,7 @@ func isNoOpMove(dest destInfo, sourceParentID, sourceName string) bool {
 // emitMoveResult writes the move result as JSON or status text.
 func emitMoveResult(cc *CLIContext, sourcePath, displayDest, itemID string) error {
 	if cc.Flags.JSON {
-		return printMvJSON(os.Stdout, mvJSONOutput{
+		return printMvJSON(cc.Output(), mvJSONOutput{
 			Source:      sourcePath,
 			Destination: displayDest,
 			ID:          itemID,

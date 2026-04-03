@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"sync"
 
@@ -115,7 +114,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 	logger.Debug("download complete", "local_path", localPath, "bytes", result.Size)
 
 	if cc.Flags.JSON {
-		return printGetJSON(os.Stdout, getJSONOutput{
+		return printGetJSON(cc.Output(), getJSONOutput{
 			Path:         localPath,
 			Size:         result.Size,
 			HashVerified: result.HashVerified,
@@ -205,7 +204,7 @@ func downloadFolder(
 	state.wg.Wait()
 
 	if cc.Flags.JSON {
-		return printGetFolderJSON(os.Stdout, state.result)
+		return printGetFolderJSON(cc.Output(), state.result)
 	}
 
 	cc.Statusf("Downloaded %d files, %d folders (%s)\n",

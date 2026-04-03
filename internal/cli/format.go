@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 )
@@ -55,6 +56,15 @@ func (cc *CLIContext) StatusError() error {
 	defer cc.statusMu.Unlock()
 
 	return cc.statusErr
+}
+
+// Output returns the configured primary output writer, defaulting to stdout.
+func (cc *CLIContext) Output() io.Writer {
+	if cc == nil || cc.OutputWriter == nil {
+		return os.Stdout
+	}
+
+	return cc.OutputWriter
 }
 
 // Size unit constants for human-readable formatting.

@@ -115,4 +115,4 @@ Static verification is a first-class architectural constraint, not a best-effort
 - Degraded-mode behavior guarantees documented (what happens when components fail). [planned]
 - Evaluate `sync` → `graph` error coupling — decouple via interface if warranted. [planned]
 - Evaluate deeper `internal/sync/` runtime package splitting after the control-plane split. [planned]
-- Evaluate deeper `internal/cli/` service extraction and domain grouping now that the root package is thin. [planned]
+- Continue expanding direct handler/service coverage over the new `internal/cli/` service split so the package reaches its 60%+ coverage target. [planned]
