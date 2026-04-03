@@ -101,6 +101,12 @@ Run-scoped state lives in two dedicated owners:
   scope detection state, buffer, delete counter, observer references,
   retry/trial timers, reconciliation state, next action ID)
 
+`watchRuntime` keeps its `activeScopes` slice and retry/trial timer pointers
+behind unexported runtime accessors. The watch loop still owns the semantics,
+but those accessors snapshot or replace the tiny working sets under
+per-runtime locks so tests, startup repair, and timer re-arming cannot race on
+raw slice or timer-pointer fields.
+
 The shared `engineFlow` object carries the mutable execution state common to
 both coordinators: dependency graph, ready channel, shortcut snapshot,
 aggregated success/error counters, shared observation helpers, skipped-item
@@ -199,7 +205,8 @@ service 10m (R-2.10.6/R-2.10.8/R-2.10.14).
 
 **Trial dispatch**: `runTrialDispatch()` is called from the watch loop when the
 trial timer fires. It snapshots due scope keys from the watch-owned
-`activeScopes` slice, then iterates each exactly once. For each scope it uses
+`activeScopes` working set through the runtime accessor, then iterates each
+exactly once. For each scope it uses
 `PickTrialCandidate` from `sync_failures` to find an actual blocked item,
 rebuilds planner input from durable state plus current local truth, and sends
 that through the normal planner/admission path as an explicit internal trial

@@ -1,6 +1,6 @@
 # Configuration
 
-GOVERNS: internal/config/account.go, internal/config/config.go, internal/config/defaults.go, internal/config/discovery.go, internal/config/display_name.go, internal/config/drive.go, internal/config/drivemeta.go, internal/config/env.go, internal/config/holder.go, internal/config/load.go, internal/config/managed_io.go, internal/config/paths.go, internal/config/size.go, internal/config/token_resolution.go, internal/config/toml_lines.go, internal/config/unknown.go, internal/config/validate.go, internal/config/validate_drive.go, internal/config/write.go
+GOVERNS: internal/config/account.go, internal/config/config.go, internal/config/decoder.go, internal/config/defaults.go, internal/config/discovery.go, internal/config/display_name.go, internal/config/drive.go, internal/config/drivemeta.go, internal/config/env.go, internal/config/holder.go, internal/config/load.go, internal/config/managed_io.go, internal/config/paths.go, internal/config/resolved_validator.go, internal/config/resolver.go, internal/config/size.go, internal/config/token_resolution.go, internal/config/toml_lines.go, internal/config/unknown.go, internal/config/validate.go, internal/config/validate_drive.go, internal/config/validator.go, internal/config/write.go
 
 Implements: R-4.1 [verified], R-4.2 [verified], R-4.3 [verified], R-4.4 [verified], R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-4.8.4 [verified], R-4.8.5 [verified], R-4.8.6 [verified], R-4.9.2 [verified], R-4.9.3 [verified]
 
@@ -24,6 +24,19 @@ Platform-specific paths following XDG (Linux) and Application Support (macOS) co
 - `localpath` for arbitrary local paths supplied by the user or derived from config semantics: `sync_dir` existence/type validation
 
 Config entrypoints still accept full path strings, so `managed_io.go` establishes the managed root per call via `fsroot.OpenPath` or `fsroot.Open`. This keeps the path trust boundary explicit without broad `gosec` carve-outs.
+
+## Internal Organization
+
+`config` stays one package, but the responsibilities are separated internally so each layer has one job:
+
+- `load.go`: public config-loading entrypoints and the `configLoader` coordinator
+- `decoder.go`: second-pass drive-section decoding for strict and lenient loads
+- `resolver.go`: config-path selection plus single-drive and multi-drive resolution
+- `validator.go`: whole-config validation orchestration
+- `resolved_validator.go`: post-override resolved-drive validation against the local filesystem
+- `validate.go` and `validate_drive.go`: field- and drive-specific validation rules
+
+The public API stays stable (`Load*`, `Resolve*`, `Validate*`), but those entrypoints delegate into these internal collaborators instead of re-mixing decode, resolution, and validation logic in one file.
 
 ## Config File Manipulation
 
@@ -78,6 +91,8 @@ Two loading paths: strict (`Load`/`LoadOrDefault`) for data commands, lenient (`
 **Lenient path**: TOML syntax errors remain fatal (can't produce Config). Unknown keys, validation errors, and drive section issues (type mismatches, unknown drive keys) are collected as `ConfigWarning` values. Malformed drive sections are skipped — other drives remain usable. Used by `drive list`, `status`, `whoami`.
 
 Internal refactoring supports both paths cleanly: `collectUnknownGlobalKeyErrors`, `collectDriveUnknownKeyErrors`, and `collectValidationErrors` return `[]error` slices. The strict wrappers (`checkUnknownKeys`, `Validate`) join them into a single error. The lenient path converts them to warnings.
+
+Strict and lenient loading also share one loader/decoder pipeline: `configLoader` owns managed-file reads and base TOML decode, while `driveSectionDecoder` owns the second pass that extracts and validates drive tables. That keeps strict and lenient behavior aligned instead of maintaining two separate decode implementations.
 
 **Sync-specific validation** (`ValidateResolvedForSync`): enforces sync_dir is set, absolute, and not a regular file. Non-existent paths are allowed because sync creates them on first run; other stat failures are fatal. Called only by the `sync` command — file operations don't require sync_dir.
 

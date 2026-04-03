@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -25,19 +24,13 @@ func (rt *watchRuntime) armRetryTimer(ctx context.Context) {
 		return
 	}
 
-	if rt.retryTimer != nil {
-		rt.retryTimer.Stop()
-	}
-	rt.retryTimer = time.AfterFunc(delay, func() {
+	rt.resetRetryTimer(time.AfterFunc(delay, func() {
 		rt.kickRetrySweepNow()
-	})
+	}))
 }
 
 func (rt *watchRuntime) stopRetryTimer() {
-	if rt.retryTimer != nil {
-		rt.retryTimer.Stop()
-		rt.retryTimer = nil
-	}
+	rt.resetRetryTimer(nil)
 }
 
 // kickRetrySweepNow is the single immediate wakeup path for the watch-mode
@@ -152,13 +145,9 @@ func (f *engineFlow) resetResultStats() {
 // watches the old timer's channel after replacement. Called after scope blocks
 // are created, trials dispatched, or trial results processed (R-2.10.5).
 func (rt *watchRuntime) armTrialTimer() {
-	if rt.trialTimer != nil {
-		rt.trialTimer.Stop()
-		rt.trialTimer = nil
-	}
-
-	earliest, ok := syncdispatch.EarliestTrialAt(rt.activeScopes)
+	earliest, ok := rt.earliestTrialAt()
 	if !ok {
+		rt.resetTrialTimer(nil)
 		return
 	}
 
@@ -172,12 +161,12 @@ func (rt *watchRuntime) armTrialTimer() {
 	// the watch loop calls DueTrials, so even if a second AfterFunc
 	// fires while a signal is pending, all due scopes are still processed
 	// on the next loop iteration.
-	rt.trialTimer = time.AfterFunc(delay, func() {
+	rt.resetTrialTimer(time.AfterFunc(delay, func() {
 		select {
 		case rt.trialCh <- struct{}{}:
 		default:
 		}
-	})
+	}))
 }
 
 // trialTimerChan returns the persistent trial notification channel.
@@ -189,8 +178,5 @@ func (rt *watchRuntime) trialTimerChan() <-chan struct{} {
 
 // stopTrialTimer stops and clears the trial timer. Called on shutdown.
 func (rt *watchRuntime) stopTrialTimer() {
-	if rt.trialTimer != nil {
-		rt.trialTimer.Stop()
-		rt.trialTimer = nil
-	}
+	rt.resetTrialTimer(nil)
 }

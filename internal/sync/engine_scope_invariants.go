@@ -42,9 +42,10 @@ func (flow *engineFlow) mustAssertDiscardedScope(ctx context.Context, watch *wat
 
 func (flow *engineFlow) assertCurrentScopeInvariants(ctx context.Context, watch *watchRuntime) error {
 	if watch != nil {
-		seen := make(map[synctypes.ScopeKey]struct{}, len(watch.activeScopes))
-		for i := range watch.activeScopes {
-			key := watch.activeScopes[i].Key
+		activeScopes := watch.snapshotActiveScopes()
+		seen := make(map[synctypes.ScopeKey]struct{}, len(activeScopes))
+		for i := range activeScopes {
+			key := activeScopes[i].Key
 			if _, ok := seen[key]; ok {
 				return fmt.Errorf("duplicate active scope key %s", key.String())
 			}
