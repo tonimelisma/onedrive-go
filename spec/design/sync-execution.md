@@ -1,8 +1,8 @@
 # Sync Execution
 
-GOVERNS: internal/syncexec/executor.go, internal/syncexec/executor_conflict.go, internal/syncexec/executor_delete.go, internal/syncexec/executor_transfer.go, internal/syncexec/worker.go, internal/syncdispatch/dep_graph.go, internal/syncdispatch/active_scopes.go, internal/syncdispatch/scope.go, internal/syncdispatch/delete_counter.go, status.go
+GOVERNS: internal/syncexec/executor.go, internal/syncexec/executor_conflict.go, internal/syncexec/executor_delete.go, internal/syncexec/executor_transfer.go, internal/syncexec/worker.go, internal/syncdispatch/dep_graph.go, internal/syncdispatch/active_scopes.go, internal/syncdispatch/scope.go, internal/syncdispatch/delete_counter.go, internal/localtrash/trash.go, status.go
 
-Implements: R-2.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.5.3 [verified], R-6.7.25 [planned], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.16 [verified], R-2.10.41 [verified], R-2.10.42 [verified], R-2.10.43 [verified], R-2.10.44 [verified], R-2.14.2 [verified]
+Implements: R-2.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.4.4 [verified], R-6.4.5 [verified], R-6.4.6 [verified], R-6.5.3 [verified], R-6.7.25 [planned], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.16 [verified], R-2.10.41 [verified], R-2.10.42 [verified], R-2.10.43 [verified], R-2.10.44 [verified], R-2.14.2 [verified]
 
 ## Executor (`executor.go`)
 
@@ -201,7 +201,7 @@ Simple PUT (≤4 MiB) or resumable session (>4 MiB). Post-upload validation dete
 ### Deletes (`executor_delete.go`)
 Implements: R-6.2.4 [verified]
 
-Hash-before-delete guard for local deletions (verifies the file hasn't changed since planning). Remote deletes use `If-Match` with eTag. Local deletes go to OS trash if configured. When a local folder delete would fail due to non-empty directory containing only disposable files (OS junk like `.DS_Store`, editor temps like `.swp`, invalid OneDrive names), `deleteLocalFolder` auto-removes them before retrying the folder delete.
+Hash-before-delete guard for local deletions (verifies the file hasn't changed since planning). Remote deletes use `If-Match` with eTag. Local deletes go to OS trash if configured via [`internal/localtrash/trash.go`](/Users/tonimelisma/Development/onedrive-go/internal/localtrash/trash.go). When a local folder delete would fail due to non-empty directory containing only disposable files (OS junk like `.DS_Store`, editor temps like `.swp`, invalid OneDrive names), `deleteLocalFolder` auto-removes them before retrying the folder delete.
 
 ### Conflicts (`executor_conflict.go`)
 Default: keep both versions. Remote version at original path, local version renamed to `<name>.conflict-<timestamp>.<ext>`. Conflict recorded in `conflicts` table.
@@ -216,11 +216,11 @@ Issue type constants for failure classification (e.g., `IssueInvalidFilename`, `
 
 Implements: R-2.10.41 [verified]
 
-`ResetInProgressStates()` handles crash recovery: on startup, resets items stuck in `downloading`/`deleting` state to `pending_download`/`pending_delete`. One-shot mode does this in `prepareRunOnceState`; watch mode does it during watch bootstrap before observation starts. Both modes therefore rediscover crash-recovery items without relying on `RunWatch` calling `RunOnce`.
+[`internal/syncrecovery/recovery.go`](/Users/tonimelisma/Development/onedrive-go/internal/syncrecovery/recovery.go) handles crash recovery: on startup, it resets items stuck in `downloading`/`deleting` state to `pending_download`, `pending_delete`, or `deleted`. The sync tree decides whether a local delete completed before the crash; the store applies only the durable state transitions. One-shot mode does this in `prepareRunOnceState`; watch mode does it during watch bootstrap before observation starts. Both modes therefore rediscover crash-recovery items without relying on `RunWatch` calling `RunOnce`.
 
 Implements: R-2.5.4 [verified]
 
-After resetting `remote_state`, `ResetInProgressStates` also creates
+After resetting `remote_state`, crash recovery also creates
 corresponding `sync_failures` entries (category=`transient`, direction matching
 the action, `next_retry_at` computed via `delayFn`) for each item that
 transitioned to a pending state. This bridges `remote_state` to the retry queue

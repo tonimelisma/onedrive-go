@@ -12,9 +12,13 @@ import (
 	"path/filepath"
 	stdsync "sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/syncrecovery"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 // testDriveID is a canonical test drive ID for all syncstore tests.
@@ -93,4 +97,13 @@ func newTestStore(tb testing.TB) *SyncStore {
 	})
 
 	return mgr
+}
+
+func resetInProgressStates(tb testing.TB, mgr *SyncStore, syncRoot string, delayFn func(int) time.Duration) {
+	tb.Helper()
+
+	tree, err := synctree.Open(syncRoot)
+	require.NoError(tb, err, "synctree.Open(%q)", syncRoot)
+
+	require.NoError(tb, syncrecovery.ResetInProgressStates(testContext(tb), mgr, tree, delayFn, newTestLogger(tb)))
 }

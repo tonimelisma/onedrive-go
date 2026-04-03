@@ -1,13 +1,16 @@
-package syncstore
+// Package syncverify re-hashes local files against the persisted sync baseline
+// through a rooted sync-tree capability.
+package syncverify
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -20,10 +23,15 @@ const (
 )
 
 // VerifyBaseline performs a full-tree hash verification of local files against
-// baseline entries. Read-only — no database writes, no graph client needed.
+// baseline entries. Read-only — no database writes, no Graph client needed.
 // Files on disk not in the baseline are ignored (not yet synced). Folders are
 // skipped (no content hash).
-func VerifyBaseline(ctx context.Context, bl *synctypes.Baseline, syncRoot string, logger *slog.Logger) (*synctypes.VerifyReport, error) {
+func VerifyBaseline(
+	ctx context.Context,
+	bl *synctypes.Baseline,
+	tree *synctree.Root,
+	logger *slog.Logger,
+) (*synctypes.VerifyReport, error) {
 	report := &synctypes.VerifyReport{}
 
 	var ctxErr error
@@ -43,9 +51,7 @@ func VerifyBaseline(ctx context.Context, bl *synctypes.Baseline, syncRoot string
 			return
 		}
 
-		absPath := filepath.Join(syncRoot, relPath)
-		result := verifyEntry(absPath, entry, logger)
-
+		result := verifyEntry(tree, relPath, entry, logger)
 		if result.Status == VerifyOK {
 			report.Verified++
 		} else {
@@ -61,10 +67,15 @@ func VerifyBaseline(ctx context.Context, bl *synctypes.Baseline, syncRoot string
 }
 
 // verifyEntry checks a single baseline entry against the local filesystem.
-func verifyEntry(absPath string, entry *synctypes.BaselineEntry, logger *slog.Logger) synctypes.VerifyResult {
-	info, err := os.Stat(absPath)
+func verifyEntry(
+	tree *synctree.Root,
+	relPath string,
+	entry *synctypes.BaselineEntry,
+	logger *slog.Logger,
+) synctypes.VerifyResult {
+	info, err := tree.Stat(relPath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return synctypes.VerifyResult{
 				Path:     entry.Path,
 				Status:   VerifyMissing,
@@ -72,7 +83,6 @@ func verifyEntry(absPath string, entry *synctypes.BaselineEntry, logger *slog.Lo
 			}
 		}
 
-		// Stat error (permission etc.) — treat as missing with note.
 		logger.Warn("verify: stat failed", slog.String("path", entry.Path), slog.String("error", err.Error()))
 
 		return synctypes.VerifyResult{
@@ -97,6 +107,18 @@ func verifyEntry(absPath string, entry *synctypes.BaselineEntry, logger *slog.Lo
 	// files where only remote_hash is populated).
 	if entry.LocalHash == "" {
 		return synctypes.VerifyResult{Path: entry.Path, Status: VerifyOK}
+	}
+
+	absPath, err := tree.Abs(relPath)
+	if err != nil {
+		logger.Warn("verify: rooted path failed", slog.String("path", entry.Path), slog.String("error", err.Error()))
+
+		return synctypes.VerifyResult{
+			Path:     entry.Path,
+			Status:   VerifyHashMismatch,
+			Expected: entry.LocalHash,
+			Actual:   err.Error(),
+		}
 	}
 
 	hash, err := driveops.ComputeQuickXorHash(absPath)

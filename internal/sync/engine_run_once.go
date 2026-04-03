@@ -15,6 +15,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/syncplan"
+	"github.com/tonimelisma/onedrive-go/internal/syncrecovery"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -141,7 +142,7 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) (*synctypes.Bas
 	// Crash recovery: reset any in-progress states from a previous crash.
 	// Also creates sync_failures entries so the retrier can rediscover items
 	// that were mid-execution when the crash occurred.
-	if err := eng.baseline.ResetInProgressStates(ctx, eng.syncRoot, retry.ReconcilePolicy().Delay); err != nil {
+	if err := syncrecovery.ResetInProgressStates(ctx, eng.baseline, eng.syncTree, retry.ReconcilePolicy().Delay, eng.logger); err != nil {
 		eng.logger.Warn("failed to reset in-progress states", slog.String("error", err.Error()))
 	}
 

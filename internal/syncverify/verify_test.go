@@ -1,7 +1,8 @@
-package syncstore
+package syncverify
 
 import (
 	"encoding/base64"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
@@ -37,6 +39,10 @@ func hashContent(t *testing.T, content string) string {
 	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
 
+func newTestLogger() *slog.Logger {
+	return slog.New(slog.DiscardHandler)
+}
+
 // Validates: R-2.7
 func TestVerifyBaseline_AllMatch(t *testing.T) {
 	t.Parallel()
@@ -62,10 +68,10 @@ func TestVerifyBaseline_AllMatch(t *testing.T) {
 		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),
 	}
 
-	ctx := t.Context()
-	logger := newTestLogger(t)
+	tree, err := synctree.Open(dir)
+	require.NoError(t, err)
 
-	report, err := VerifyBaseline(ctx, bl, dir, logger)
+	report, err := VerifyBaseline(t.Context(), bl, tree, newTestLogger())
 	require.NoError(t, err)
 	assert.Equal(t, 2, report.Verified)
 	assert.Empty(t, report.Mismatches)
@@ -76,8 +82,9 @@ func TestVerifyBaseline_MissingFile(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
+	tree, err := synctree.Open(dir)
+	require.NoError(t, err)
 
-	// Baseline references a file that doesn't exist on disk.
 	bl := &synctypes.Baseline{
 		ByPath: map[string]*synctypes.BaselineEntry{
 			"ghost.txt": {
@@ -88,10 +95,7 @@ func TestVerifyBaseline_MissingFile(t *testing.T) {
 		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),
 	}
 
-	ctx := t.Context()
-	logger := newTestLogger(t)
-
-	report, err := VerifyBaseline(ctx, bl, dir, logger)
+	report, err := VerifyBaseline(t.Context(), bl, tree, newTestLogger())
 	require.NoError(t, err)
 	assert.Equal(t, 0, report.Verified)
 	require.Len(t, report.Mismatches, 1)
@@ -106,8 +110,9 @@ func TestVerifyBaseline_HashMismatch(t *testing.T) {
 	content := "modified content"
 
 	writeTestFile(t, dir, "changed.txt", content)
+	tree, err := synctree.Open(dir)
+	require.NoError(t, err)
 
-	// Baseline has a different hash than what's on disk.
 	bl := &synctypes.Baseline{
 		ByPath: map[string]*synctypes.BaselineEntry{
 			"changed.txt": {
@@ -118,18 +123,12 @@ func TestVerifyBaseline_HashMismatch(t *testing.T) {
 		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),
 	}
 
-	ctx := t.Context()
-	logger := newTestLogger(t)
-
-	report, err := VerifyBaseline(ctx, bl, dir, logger)
+	report, err := VerifyBaseline(t.Context(), bl, tree, newTestLogger())
 	require.NoError(t, err)
 	assert.Equal(t, 0, report.Verified)
 	require.Len(t, report.Mismatches, 1)
 	assert.Equal(t, VerifyHashMismatch, report.Mismatches[0].Status)
-
-	// Actual should be the real hash.
-	actualHash := hashContent(t, content)
-	assert.Equal(t, actualHash, report.Mismatches[0].Actual)
+	assert.Equal(t, hashContent(t, content), report.Mismatches[0].Actual)
 }
 
 // Validates: R-2.7
@@ -137,15 +136,15 @@ func TestVerifyBaseline_EmptyBaseline(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
+	tree, err := synctree.Open(dir)
+	require.NoError(t, err)
+
 	bl := &synctypes.Baseline{
 		ByPath:     make(map[string]*synctypes.BaselineEntry),
 		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),
 	}
 
-	ctx := t.Context()
-	logger := newTestLogger(t)
-
-	report, err := VerifyBaseline(ctx, bl, dir, logger)
+	report, err := VerifyBaseline(t.Context(), bl, tree, newTestLogger())
 	require.NoError(t, err)
 	assert.Equal(t, 0, report.Verified)
 	assert.Empty(t, report.Mismatches)
@@ -159,6 +158,8 @@ func TestVerifyBaseline_SkipsFolders(t *testing.T) {
 	content := "file content"
 
 	writeTestFile(t, dir, "docs/file.txt", content)
+	tree, err := synctree.Open(dir)
+	require.NoError(t, err)
 
 	hash := hashContent(t, content)
 	bl := &synctypes.Baseline{
@@ -175,12 +176,8 @@ func TestVerifyBaseline_SkipsFolders(t *testing.T) {
 		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),
 	}
 
-	ctx := t.Context()
-	logger := newTestLogger(t)
-
-	report, err := VerifyBaseline(ctx, bl, dir, logger)
+	report, err := VerifyBaseline(t.Context(), bl, tree, newTestLogger())
 	require.NoError(t, err)
-	// Only the file should be verified, not the folder.
 	assert.Equal(t, 1, report.Verified)
 	assert.Empty(t, report.Mismatches)
 }
@@ -193,6 +190,8 @@ func TestVerifyBaseline_SizeMismatch(t *testing.T) {
 	content := "short"
 
 	writeTestFile(t, dir, "size.txt", content)
+	tree, err := synctree.Open(dir)
+	require.NoError(t, err)
 
 	bl := &synctypes.Baseline{
 		ByPath: map[string]*synctypes.BaselineEntry{
@@ -204,10 +203,7 @@ func TestVerifyBaseline_SizeMismatch(t *testing.T) {
 		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),
 	}
 
-	ctx := t.Context()
-	logger := newTestLogger(t)
-
-	report, err := VerifyBaseline(ctx, bl, dir, logger)
+	report, err := VerifyBaseline(t.Context(), bl, tree, newTestLogger())
 	require.NoError(t, err)
 	require.Len(t, report.Mismatches, 1)
 	assert.Equal(t, VerifySizeMismatch, report.Mismatches[0].Status)
