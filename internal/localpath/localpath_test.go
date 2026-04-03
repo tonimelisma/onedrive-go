@@ -157,6 +157,43 @@ func TestWriteFileAndRemoveAll(t *testing.T) {
 	assert.ErrorIs(t, err, os.ErrNotExist)
 }
 
+func TestAtomicWrite(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	target := filepath.Join(base, "nested", "config.toml")
+
+	require.NoError(t, AtomicWrite(target, []byte("hello = true\n"), 0o600, 0o700, ".localpath-*.tmp"))
+
+	data, err := ReadFile(target)
+	require.NoError(t, err)
+	assert.Equal(t, "hello = true\n", string(data))
+}
+
+func TestAtomicWrite_CleansTempOnRenameFailure(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	targetDir := filepath.Join(base, "nested")
+	target := filepath.Join(targetDir, "config.toml")
+
+	require.NoError(t, MkdirAll(target, 0o700))
+
+	err := AtomicWrite(target, []byte("hello = true\n"), 0o600, 0o700, ".localpath-*.tmp")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "renaming temp file")
+
+	entries, readErr := os.ReadDir(targetDir)
+	require.NoError(t, readErr)
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+
+	assert.Equal(t, []string{"config.toml"}, names, "rename failure should not leave temp files behind")
+}
+
 func TestOpenAndReadDirMissingPath(t *testing.T) {
 	t.Parallel()
 

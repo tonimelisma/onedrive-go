@@ -2,24 +2,62 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 func newServiceContext(output *bytes.Buffer, cfgPath string) *CLIContext {
 	return &CLIContext{
 		Logger:       slog.New(slog.DiscardHandler),
 		OutputWriter: output,
+		StatusWriter: output,
 		CfgPath:      cfgPath,
 	}
+}
+
+type mockRecycleBinSession struct {
+	items              []graph.Item
+	listErr            error
+	restoreItem        *graph.Item
+	restoreErr         error
+	permanentDeleteErr error
+	deleteErr          error
+	deletedIDs         []string
+}
+
+func (m *mockRecycleBinSession) ListRecycleBinItems(context.Context) ([]graph.Item, error) {
+	return m.items, m.listErr
+}
+
+func (m *mockRecycleBinSession) RestoreItem(context.Context, string) (*graph.Item, error) {
+	return m.restoreItem, m.restoreErr
+}
+
+func (m *mockRecycleBinSession) PermanentDeleteItem(_ context.Context, itemID string) error {
+	if m.permanentDeleteErr == nil {
+		m.deletedIDs = append(m.deletedIDs, itemID)
+	}
+
+	return m.permanentDeleteErr
+}
+
+func (m *mockRecycleBinSession) DeleteItem(_ context.Context, itemID string) error {
+	if m.deleteErr == nil {
+		m.deletedIDs = append(m.deletedIDs, itemID)
+	}
+
+	return m.deleteErr
 }
 
 // Validates: R-4.8.4
@@ -91,4 +129,89 @@ func TestVerifyService_Run_WritesConfiguredOutput(t *testing.T) {
 
 	require.NoError(t, newVerifyService(cc).run(t.Context()))
 	assert.Contains(t, out.String(), "All files verified successfully.")
+}
+
+// Validates: R-2.6
+func TestSyncControlService_RunPause_PersistsTimedPause(t *testing.T) {
+	setTestDriveHome(t)
+
+	var out bytes.Buffer
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:pause@example.com")
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+
+	cc := newServiceContext(&out, cfgPath)
+	cc.Flags.Drive = []string{cid.String()}
+
+	svc := newSyncControlService(cc)
+	now := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+
+	require.NoError(t, svc.runPause([]string{"2h"}))
+
+	cfg, err := config.LoadOrDefault(cfgPath, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	drive := cfg.Drives[cid]
+	require.NotNil(t, drive.Paused)
+	assert.True(t, *drive.Paused)
+	require.NotNil(t, drive.PausedUntil)
+	assert.Equal(t, now.Add(2*time.Hour).Format(time.RFC3339), *drive.PausedUntil)
+	assert.Contains(t, out.String(), "paused until")
+}
+
+// Validates: R-2.6
+func TestSyncControlService_RunResume_ClearsPausedKeys(t *testing.T) {
+	setTestDriveHome(t)
+
+	var out bytes.Buffer
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:resume@example.com")
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.SetDriveKey(cfgPath, cid, "paused", "true"))
+
+	cc := newServiceContext(&out, cfgPath)
+	cc.Flags.Drive = []string{cid.String()}
+
+	require.NoError(t, newSyncControlService(cc).runResume())
+
+	cfg, err := config.LoadOrDefault(cfgPath, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	assert.Nil(t, cfg.Drives[cid].Paused)
+	assert.Nil(t, cfg.Drives[cid].PausedUntil)
+	assert.Contains(t, out.String(), "resumed")
+}
+
+// Validates: R-1.9
+func TestRecycleBinService_RunList_PersonalAccountMessage(t *testing.T) {
+	setTestDriveHome(t)
+
+	var out bytes.Buffer
+	svc := newRecycleBinService(newServiceContext(&out, filepath.Join(t.TempDir(), "config.toml")))
+	svc.session = func(context.Context) (recycleBinSession, error) {
+		return &mockRecycleBinSession{listErr: graph.ErrBadRequest}, nil
+	}
+
+	err := svc.runList(t.Context())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Personal OneDrive accounts")
+}
+
+// Validates: R-1.9
+func TestRecycleBinService_RunEmpty_FallsBackToDelete(t *testing.T) {
+	setTestDriveHome(t)
+
+	var out bytes.Buffer
+	mockSession := &mockRecycleBinSession{
+		items:              []graph.Item{{ID: "item-1", Name: "old.txt"}},
+		permanentDeleteErr: graph.ErrMethodNotAllowed,
+	}
+
+	svc := newRecycleBinService(newServiceContext(&out, filepath.Join(t.TempDir(), "config.toml")))
+	svc.session = func(context.Context) (recycleBinSession, error) {
+		return mockSession, nil
+	}
+
+	require.NoError(t, svc.runEmpty(t.Context(), true))
+	assert.Equal(t, []string{"item-1"}, mockSession.deletedIDs)
+	assert.Contains(t, out.String(), "Recycle bin emptied")
 }

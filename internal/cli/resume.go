@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -28,107 +27,11 @@ Examples:
 }
 
 func runResume(cmd *cobra.Command, _ []string) error {
-	cc := mustCLIContext(cmd.Context())
-
-	cfg, err := config.LoadOrDefault(cc.CfgPath, cc.Logger)
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
-
-	driveSelector, driveErr := cc.Flags.SingleDrive()
-	if driveErr != nil {
-		return driveErr
-	}
-
-	if driveSelector != "" {
-		return resumeSingleDrive(cc, cfg, driveSelector)
-	}
-
-	return resumeAllDrives(cc, cfg)
+	return newSyncControlService(mustCLIContext(cmd.Context())).runResume()
 }
 
-// resumeSingleDrive resumes a specific drive by canonical ID.
 func resumeSingleDrive(cc *CLIContext, cfg *config.Config, selector string) error {
-	cid, err := driveid.NewCanonicalID(selector)
-	if err != nil {
-		return fmt.Errorf("invalid drive ID %q: %w", selector, err)
-	}
-
-	d, exists := cfg.Drives[cid]
-	if !exists {
-		return fmt.Errorf("drive %q not found in config", selector)
-	}
-
-	if !d.IsPaused(time.Now()) {
-		// Clean up stale keys from expired timed pauses. The drive is
-		// functionally unpaused, but the user explicitly asked to resume,
-		// so remove leftover config keys.
-		if d.Paused != nil && *d.Paused {
-			if err := clearPausedKeys(cc.CfgPath, cid); err != nil {
-				return err
-			}
-
-			cc.Statusf("Drive %s: expired timed pause cleared\n", cid.String())
-
-			return nil
-		}
-
-		cc.Statusf("Drive %s is not paused\n", cid.String())
-
-		return nil
-	}
-
-	if err := clearPausedKeys(cc.CfgPath, cid); err != nil {
-		return err
-	}
-
-	cc.Statusf("Drive %s resumed\n", cid.String())
-	notifyDaemon(cc)
-
-	return nil
-}
-
-// resumeAllDrives resumes every paused drive in the config.
-func resumeAllDrives(cc *CLIContext, cfg *config.Config) error {
-	if len(cfg.Drives) == 0 {
-		return fmt.Errorf("no drives configured")
-	}
-
-	resumed := 0
-
-	for cid := range cfg.Drives {
-		d := cfg.Drives[cid]
-		if !d.IsPaused(time.Now()) {
-			// Clean up stale keys from expired timed pauses.
-			if d.Paused != nil && *d.Paused {
-				if err := clearPausedKeys(cc.CfgPath, cid); err != nil {
-					return fmt.Errorf("clearing expired pause for %s: %w", cid.String(), err)
-				}
-
-				cc.Statusf("Drive %s: expired timed pause cleared\n", cid.String())
-				resumed++
-			}
-
-			continue
-		}
-
-		if err := clearPausedKeys(cc.CfgPath, cid); err != nil {
-			return fmt.Errorf("resuming %s: %w", cid.String(), err)
-		}
-
-		cc.Statusf("Drive %s resumed\n", cid.String())
-		resumed++
-	}
-
-	if resumed == 0 {
-		cc.Statusf("No paused drives found\n")
-
-		return nil
-	}
-
-	notifyDaemon(cc)
-
-	return nil
+	return newSyncControlService(cc).resumeSingleDrive(cfg, selector)
 }
 
 // clearPausedKeys removes both paused and paused_until keys from a drive section.

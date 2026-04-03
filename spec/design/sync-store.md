@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/syncstore/store.go, internal/syncstore/schema.go, internal/syncstore/schema.sql, internal/syncstore/store_baseline.go, internal/syncstore/store_observation.go, internal/syncstore/store_conflicts.go, internal/syncstore/store_failures.go, internal/syncstore/store_admin.go, internal/syncstore/store_scope_blocks.go, internal/syncstore/shortcuts.go, internal/syncverify/verify.go, internal/syncrecovery/recovery.go, internal/cli/verify.go, internal/cli/issues.go, internal/cli/failure_display.go
+GOVERNS: internal/syncstore/store.go, internal/syncstore/inspector.go, internal/syncstore/schema.go, internal/syncstore/schema.sql, internal/syncstore/store_baseline.go, internal/syncstore/store_observation.go, internal/syncstore/store_conflicts.go, internal/syncstore/store_failures.go, internal/syncstore/store_admin.go, internal/syncstore/store_scope_blocks.go, internal/syncstore/shortcuts.go, internal/syncverify/verify.go, internal/syncrecovery/recovery.go, internal/cli/verify.go, internal/cli/issues.go, internal/cli/failure_display.go
 
 Implements: R-2.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.7 [verified], R-2.15.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.14 [verified], R-2.10.22 [verified], R-2.10.33 [verified], R-2.10.34 [verified], R-2.10.41 [verified], R-2.10.45 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
 
@@ -17,7 +17,7 @@ peer authority; it is rebuilt from store state when the engine starts.
 - Does Not Own: Graph calls, sync-root filesystem probing, failure classification policy, or multi-drive lifecycle.
 - Source of Truth: The SQLite schema and rows defined by `schema.sql`.
 - Allowed Side Effects: SQLite reads/writes and schema application only.
-- Mutable Runtime Owner: `SyncStore` owns its DB handle and internal rebuildable baseline cache. It runs no background goroutines and exposes synchronous transactional methods only.
+- Mutable Runtime Owner: `SyncStore` owns its writable DB handle and internal rebuildable baseline cache. `Inspector` owns its own read-only DB handle. Neither runs background goroutines; both expose synchronous methods only.
 - Error Boundary: The store persists already-classified failure roles and categories from [error-model.md](error-model.md). It does not reinterpret raw external errors into new policy classes.
 
 `NewSyncStore()` opens SQLite in WAL mode and applies the canonical schema from
@@ -144,6 +144,17 @@ the narrowest store surface they need.
 most recently loaded baseline in memory, invalidates it before outcome commits,
 and rebuilds it after writes. That cache is internal to the store and is
 rebuildable from durable state; it is not a competing authority.
+
+## Read-Only Inspection
+
+`Inspector` is the read-only companion to `SyncStore`. It is opened only from
+`internal/syncstore` and gives administrative readers a narrow projection of
+state without handing them raw SQL ownership.
+
+- `OpenInspector(dbPath, logger)` opens SQLite in read-only mode.
+- `ReadStatusSnapshot(ctx)` returns metadata and aggregate counts only.
+- CLI `status` consumes `StatusSnapshot`; it does not build its own DSN or call
+  `sql.Open` directly.
 
 ## Verification
 
