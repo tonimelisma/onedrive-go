@@ -130,6 +130,7 @@ func TestNewSyncEngine_PropagatesLocalFilters(t *testing.T) {
 		CanonicalID: driveid.MustCanonicalID("personal:test@example.com"),
 		FilterConfig: config.FilterConfig{
 			SkipDotfiles: true,
+			SkipSymlinks: true,
 			SkipDirs:     []string{"vendor"},
 			SkipFiles:    []string{"*.log"},
 		},
@@ -145,6 +146,7 @@ func TestNewSyncEngine_PropagatesLocalFilters(t *testing.T) {
 	localFilter := reflect.ValueOf(engine).Elem().FieldByName("localFilter")
 	require.True(t, localFilter.IsValid(), "Engine should retain configured local filters")
 	assert.True(t, localFilter.FieldByName("SkipDotfiles").Bool())
+	assert.True(t, localFilter.FieldByName("SkipSymlinks").Bool())
 	assert.Equal(t, 1, localFilter.FieldByName("SkipDirs").Len())
 	assert.Equal(t, 1, localFilter.FieldByName("SkipFiles").Len())
 }

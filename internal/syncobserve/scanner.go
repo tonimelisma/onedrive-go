@@ -124,8 +124,9 @@ func (o *LocalObserver) FullScan(ctx context.Context, tree *synctree.Root) (sync
 	var skippedEntries atomic.Int64
 	observed := make(map[string]bool)
 	scanStartNano := time.Now().UnixNano()
+	dirStack := rootObservedDirStack(syncRoot, o.Logger)
 
-	walkFn := o.makeWalkFunc(ctx, tree, observed, &events, &jobs, &skipped, &skippedEntries, scanStartNano)
+	walkFn := o.makeWalkFunc(ctx, tree, observed, &events, &jobs, &skipped, &skippedEntries, scanStartNano, dirStack)
 	if err := tree.WalkDir(walkFn); err != nil {
 		if ctx.Err() != nil {
 			return synctypes.ScanResult{}, fmt.Errorf("sync: local scan canceled: %w", ctx.Err())
@@ -288,7 +289,7 @@ func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]syncty
 func (o *LocalObserver) makeWalkFunc(
 	ctx context.Context, tree *synctree.Root, observed map[string]bool,
 	events *[]synctypes.ChangeEvent, jobs *[]hashJob, skipped *[]synctypes.SkippedItem,
-	skippedEntries *atomic.Int64, scanStartNano int64,
+	skippedEntries *atomic.Int64, scanStartNano int64, dirStack map[string]struct{},
 ) fs.WalkDirFunc {
 	syncRoot := tree.Path()
 
@@ -317,10 +318,24 @@ func (o *LocalObserver) makeWalkFunc(
 		dbRelPath := nfcNormalize(filepath.ToSlash(relPath))
 		name := nfcNormalize(d.Name())
 
-		// Symlinks are never synced, not a naming issue — skip silently.
 		if d.Type()&fs.ModeSymlink != 0 {
-			o.Logger.Debug("skipping symlink", slog.String("path", dbRelPath))
-			return SkipEntry(d)
+			if o.filterConfig.SkipSymlinks {
+				o.Logger.Debug("skipping symlink", slog.String("path", dbRelPath))
+				return SkipEntry(d)
+			}
+
+			return o.processSymlinkPath(
+				ctx,
+				fsPath,
+				dbRelPath,
+				name,
+				observed,
+				events,
+				jobs,
+				skipped,
+				scanStartNano,
+				dirStack,
+			)
 		}
 
 		// Stage 1 observation filter: name validation + path length (cheap, no syscall).
@@ -357,36 +372,65 @@ func (o *LocalObserver) processEntry(
 		return nil
 	}
 
+	return o.processObservedInfo(
+		fsPath,
+		dbRelPath,
+		name,
+		info,
+		dirEntryKind(d),
+		observed,
+		events,
+		jobs,
+		skipped,
+		scanStartNano,
+	)
+}
+
+func (o *LocalObserver) processObservedInfo(
+	fsPath, dbRelPath, name string,
+	info fs.FileInfo,
+	kind observedKind,
+	observed map[string]bool,
+	events *[]synctypes.ChangeEvent,
+	jobs *[]hashJob,
+	skipped *[]synctypes.SkippedItem,
+	scanStartNano int64,
+) error {
 	// Stage 2 observation filter: file size check (requires stat, hence here).
 	// FullScan records SkippedItems for oversized files; watch handlers don't
 	// (the safety scan catches them).
-	if !d.IsDir() && o.IsOversizedFile(info.Size(), dbRelPath) {
+	if kind == observedKindFile && o.IsOversizedFile(info.Size(), dbRelPath) {
 		*skipped = append(*skipped, synctypes.SkippedItem{
 			Path:     dbRelPath,
 			Reason:   synctypes.IssueFileTooLarge,
 			Detail:   fmt.Sprintf("file size %d bytes exceeds 250 GB limit", info.Size()),
 			FileSize: info.Size(),
 		})
-		return nil // skip — don't create event or hash job
+		return nil
 	}
 
 	observed[dbRelPath] = true
 
-	return o.classifyLocalChange(fsPath, dbRelPath, name, d, info, events, jobs, scanStartNano)
+	return o.classifyObservedInfo(fsPath, dbRelPath, name, info, kind, events, jobs, scanStartNano)
 }
 
-// classifyLocalChange determines the change type for a single local entry
-// by comparing it against the baseline. Folder events go directly to events;
-// files that need hashing are appended to jobs for the parallel hash phase.
-func (o *LocalObserver) classifyLocalChange(
-	fsPath, dbRelPath, name string, d fs.DirEntry, info fs.FileInfo,
-	events *[]synctypes.ChangeEvent, jobs *[]hashJob, scanStartNano int64,
+// classifyObservedInfo determines the change type for a single observed local
+// entry by comparing it against the baseline. Folder events go directly to
+// events; files that need hashing are appended to jobs for the parallel hash
+// phase.
+func (o *LocalObserver) classifyObservedInfo(
+	fsPath, dbRelPath, name string,
+	info fs.FileInfo,
+	kind observedKind,
+	events *[]synctypes.ChangeEvent,
+	jobs *[]hashJob,
+	scanStartNano int64,
 ) error {
 	existing, _ := o.Baseline.GetByPath(dbRelPath)
 
 	// No baseline entry — this is a new item.
 	if existing == nil {
-		if d.IsDir() {
+		if kind == observedKindDir {
 			// Folder creates go directly to events (no hashing needed).
 			*events = append(*events, synctypes.ChangeEvent{
 				Source:   synctypes.SourceLocal,
@@ -414,7 +458,7 @@ func (o *LocalObserver) classifyLocalChange(
 
 	// Existing folder — OS-level mtime changes (e.g. adding a file) are noise;
 	// the contained files generate their own events.
-	if d.IsDir() {
+	if kind == observedKindDir {
 		return nil
 	}
 

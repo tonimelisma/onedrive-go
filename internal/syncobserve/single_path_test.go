@@ -94,6 +94,22 @@ func TestObserveSinglePath_DirectoryProducesFolderEvent(t *testing.T) {
 	assert.False(t, result.Resolved)
 }
 
+// Validates: R-2.4.6
+func TestObserveSinglePath_SymlinkFollowedByDefault(t *testing.T) {
+	t.Parallel()
+
+	syncRoot := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "real.txt"), []byte("payload"), 0o600))
+	require.NoError(t, os.Symlink(filepath.Join(syncRoot, "real.txt"), filepath.Join(syncRoot, "link.txt")))
+
+	result, err := ObserveSinglePath(nil, mustOpenSyncTree(t, syncRoot), "link.txt", nil, time.Now().UnixNano(), nil)
+	require.NoError(t, err)
+	require.NotNil(t, result.Event)
+	assert.Equal(t, synctypes.ItemTypeFile, result.Event.ItemType)
+	assert.Nil(t, result.Skipped)
+	assert.False(t, result.Resolved)
+}
+
 func TestObserveSinglePath_UnexpectedStatErrorReturnsWrappedError(t *testing.T) {
 	t.Parallel()
 

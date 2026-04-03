@@ -49,7 +49,7 @@ Explicit non-goals:
 | Graph payloads | Missing fields, malformed names, unexpected enum/status combinations | Graph normalization, bounded reads, nil/shape validation |
 | Token persistence | Secret leakage or silent corruption | `tokenfile` validation plus managed-root writes |
 | Pre-auth URLs | Secret leakage or SSRF-like misuse | redaction, host/scheme validation, one raw dispatch boundary |
-| Local observation | Symlink escape, invalid names, watch exhaustion | rooted walk/watch helpers, symlink exclusion, inotify limit detection |
+| Local observation | Symlink escape, invalid names, watch exhaustion | rooted walk/watch helpers, configurable symlink following with cycle guard, inotify limit detection |
 | Logs | Token or pre-auth URL disclosure | redaction types, structured logging policy, no secret logging |
 | SQLite state | Corruption or split-brain state | WAL mode, single durable authority, transactional writes |
 | Resource exhaustion | unbounded response bodies, runaway pagination, too many events | response-body caps, page/depth guards, debounced buffering, bounded workers |

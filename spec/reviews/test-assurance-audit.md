@@ -303,7 +303,7 @@ This is the operating dashboard for completeness, not a verdict of quality. A pa
 | Workstream | Req | Design | Code | Ref | Meta | Body | Kill | Verified reconcile | Highest unresolved risk |
 |---|---|---|---|---|---|---|---|---|---|
 | W1 | done | done | partial | partial | done | partial | partial | partial | periodic reconciliation, aggregated logging, and big-delete traceability still lag |
-| W2 | done | done | done | partial | done | partial | partial | partial | actionable-issue lifecycle, symlink semantics, and sparse-payload hardening still need body audit |
+| W2 | done | done | done | partial | done | partial | partial | partial | actionable-issue lifecycle and sparse-payload hardening still need body audit |
 | W3 | done | done | partial | n/a | done | no | partial | no | big-delete and cross-drive proof paths unclear |
 | W4 | done | done | partial | n/a | done | no | partial | no | user-facing JSON/message semantics not yet audited |
 | W5 | done | done | done | partial | done | partial | partial | done | upload-session traceability tags still lag the body-level coverage |
@@ -566,7 +566,8 @@ Key W1 gap notes:
   - item conversion handles missing optional fields without panic
   - rename of a remote folder recalculates descendant paths correctly
   - zero-event delta page does not advance the token
-  - filter cascade rejects dotfiles, marker patterns, symlinks, vault items, and OneDrive-invalid filenames with actionable issue output where required
+  - filter cascade rejects dotfiles, marker patterns, configured symlink exclusions, vault items, and OneDrive-invalid filenames with actionable issue output where required
+  - default symlink following dereferences both file and directory symlinks without infinite recursion
   - case-collision detection covers file/file, file/baseline, directory/directory, and N-way peer tracking on resolution
   - NFC normalization makes macOS NFD and NFC names compare equal
 - Ideal integration coverage:
@@ -607,6 +608,11 @@ Key W1 gap notes:
     - `internal/sync/engine_filter_test.go` proves the engine suppresses uploads for configured exclusions instead of merely unit-testing the observer in isolation
     - `internal/cli/sync_helpers_test.go` proves `newSyncEngine` propagates resolved config into the engine instead of dropping it on the floor
     - `internal/config/validate_test.go` now proves `skip_files` / `skip_dirs` no longer warn as unimplemented
+  - Follow-up symlink audit outcome: `skip_symlinks` had the same shape of defect. The config/default existed, but `LocalFilterConfig` dropped the field and the observer hard-skipped symlinks regardless of configuration. That is now fixed.
+  - New W2 symlink regression coverage proves:
+    - default `skip_symlinks = false` follows file and directory symlinks during full scan and single-path reconstruction
+    - `skip_symlinks = true` excludes symlink entries from full scan, watch setup, and single-path reconstruction
+    - directory symlink cycles stop at the alias boundary instead of recursing forever
 - Verified-claim reconciliation snapshot:
 
 | Contract | Basis | Current evidence | Reconciliation | Gap label / note |
@@ -614,13 +620,15 @@ Key W1 gap notes:
 | `skip_dotfiles` excludes hidden files and directories from full-scan observation | `REQ+DESIGN+CODE+BODY` | `internal/syncobserve/filter_test.go` creates dotfile files/dirs and proves they do not produce `ChangeEvent`s or `SkippedItem`s | `proven` | Direct scanner/body proof added |
 | `skip_dirs` excludes configured directory names from scan and watch setup | `REQ+DESIGN+CODE+BODY` | `internal/syncobserve/filter_test.go` proves `vendor/` is absent from full scans and does not receive watches in `AddWatchesRecursive` | `proven` | Covers both scan and watch-start behavior |
 | `skip_files` excludes matching file globs from scan and watch write handling | `REQ+DESIGN+CODE+BODY` | `internal/syncobserve/filter_test.go` proves `*.log` files are omitted from full scans and suppressed on write events | `proven` | Direct file-glob regression coverage added |
+| `skip_symlinks = false` follows symlink targets by default, while `skip_symlinks = true` excludes them | `REQ+DESIGN+CODE+BODY+REF` | `internal/syncobserve/observer_local_test.go`, `internal/syncobserve/filter_test.go`, `internal/syncobserve/single_path_test.go`, and `internal/syncobserve/observer_local_delete_test.go` now prove default follow, configured skip, watch setup parity, and cycle-stop behavior. External behavior was cross-checked against `abraunegg/onedrive` docs before implementation. | `proven` | Real prod gap fixed; now aligned with researched client behavior |
 | Retry/trial single-path reconstruction must honor the same local filters as normal observation | `DESIGN+CODE+BODY` | `internal/syncobserve/filter_test.go` proves `ObserveSinglePathWithFilter` resolves configured exclusions silently | `proven` | Important design-only invariant now covered |
 | Resolved config must reach the engine and observer instead of being dropped in CLI setup | `REQ+CODE+BODY` | `internal/cli/sync_helpers_test.go` plus `internal/sync/engine_filter_test.go` prove config propagation and end-to-end upload suppression | `proven` | Fixed production wiring gap |
 
 Key W2 gap notes:
 
 - `CODE+BODY`: the filter-config wiring gap was a real production defect, not a metadata illusion. It is now fixed with regression coverage at observer, engine, and CLI wiring layers.
-- `META`: W2 still needs deeper reconciliation on actionable-issue lifecycle (`R-2.11.*`), symlink semantics (`R-2.4.6`), and sparse remote payload hardening.
+- `CODE+BODY`: `skip_symlinks` was also a real runtime gap. The config/default existed, but local observation ignored it and always skipped symlinks. The observer now matches `abraunegg/onedrive`: default `false` follows symlink targets, `true` excludes them, and directory cycles stop at the alias boundary.
+- `META`: W2 still needs deeper reconciliation on actionable-issue lifecycle (`R-2.11.*`) and sparse remote payload hardening.
 
 ### W3. Planner Safety, Conflict Resolution, And Delete Protection
 

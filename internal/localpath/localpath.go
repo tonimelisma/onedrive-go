@@ -107,6 +107,21 @@ func Stat(path string) (os.FileInfo, error) {
 	return info, nil
 }
 
+func Lstat(path string) (os.FileInfo, error) {
+	abs, err := absolutePath(path)
+	if err != nil {
+		return nil, err
+	}
+
+	// #nosec G703 -- localpath is the explicit arbitrary-path boundary after clean+Abs validation.
+	info, err := os.Lstat(abs)
+	if err != nil {
+		return nil, fmt.Errorf("lstating %s: %w", path, err)
+	}
+
+	return info, nil
+}
+
 func MkdirAll(path string, perm os.FileMode) error {
 	abs, err := absolutePath(path)
 	if err != nil {
@@ -162,6 +177,20 @@ func ReadDir(path string) ([]os.DirEntry, error) {
 	}
 
 	return entries, nil
+}
+
+func EvalSymlinks(path string) (string, error) {
+	abs, err := absolutePath(path)
+	if err != nil {
+		return "", err
+	}
+
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("resolving symlinks for %s: %w", path, err)
+	}
+
+	return resolved, nil
 }
 
 func Chtimes(path string, atime, mtime time.Time) error {
