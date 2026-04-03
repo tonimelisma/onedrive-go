@@ -33,13 +33,23 @@ func ObserveSinglePath(
 	observeStartNano int64,
 	hashFunc func(string) (string, error),
 ) (SinglePathObservation, error) {
-	return ObserveSinglePathWithFilter(logger, syncTree, relPath, base, observeStartNano, hashFunc, synctypes.LocalFilterConfig{})
+	return ObserveSinglePathWithFilter(
+		logger,
+		syncTree,
+		relPath,
+		base,
+		observeStartNano,
+		hashFunc,
+		synctypes.LocalFilterConfig{},
+		synctypes.LocalObservationRules{},
+	)
 }
 
 // ObserveSinglePathWithFilter applies the same single-path reconstruction as
-// ObserveSinglePath, but with explicit local filter configuration from the
-// engine. Retry/trial work uses this so configured exclusions stay aligned
-// with full-scan and watch semantics.
+// ObserveSinglePath, but with explicit local filter configuration and
+// platform-derived observation rules from the engine. Retry/trial work uses
+// this so configured exclusions and drive-type-specific validation stay
+// aligned with full-scan and watch semantics.
 func ObserveSinglePathWithFilter(
 	logger *slog.Logger,
 	syncTree *synctree.Root,
@@ -48,11 +58,12 @@ func ObserveSinglePathWithFilter(
 	observeStartNano int64,
 	hashFunc func(string) (string, error),
 	filter synctypes.LocalFilterConfig,
+	rules synctypes.LocalObservationRules,
 ) (SinglePathObservation, error) {
 	path := nfcNormalize(filepath.ToSlash(relPath))
 	name := nfcNormalize(filepath.Base(path))
 
-	if skip := shouldObserveWithFilter(name, path, observedKindUnknown, filter); skip != nil {
+	if skip := shouldObserveWithFilter(name, path, observedKindUnknown, filter, rules); skip != nil {
 		if skip.Reason == "" {
 			return SinglePathObservation{Resolved: true}, nil
 		}
@@ -78,7 +89,7 @@ func ObserveSinglePathWithFilter(
 		return SinglePathObservation{Resolved: true}, nil
 	}
 
-	if skip := shouldObserveWithFilter(name, path, infoKind(info), filter); skip != nil {
+	if skip := shouldObserveWithFilter(name, path, infoKind(info), filter, rules); skip != nil {
 		if skip.Reason == "" {
 			return SinglePathObservation{Resolved: true}, nil
 		}

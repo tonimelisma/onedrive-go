@@ -165,6 +165,27 @@ func TestObserveSinglePath_InvalidNameReturnsSkipped(t *testing.T) {
 	assert.Equal(t, synctypes.IssueInvalidFilename, result.Skipped.Reason)
 }
 
+// Validates: R-2.11.3
+func TestObserveSinglePathWithFilter_SharePointRootFormsReturnsSkipped(t *testing.T) {
+	t.Parallel()
+
+	result, err := ObserveSinglePathWithFilter(
+		nil,
+		mustOpenSyncTree(t, t.TempDir()),
+		"forms",
+		nil,
+		time.Now().UnixNano(),
+		nil,
+		synctypes.LocalFilterConfig{},
+		synctypes.LocalObservationRules{RejectSharePointRootForms: true},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result.Skipped)
+	assert.Nil(t, result.Event)
+	assert.False(t, result.Resolved)
+	assert.Equal(t, synctypes.IssueInvalidFilename, result.Skipped.Reason)
+}
+
 func TestObserveSinglePath_PathTooLongReturnsSkipped(t *testing.T) {
 	t.Parallel()
 

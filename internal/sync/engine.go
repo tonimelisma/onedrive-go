@@ -50,6 +50,7 @@ type Engine struct {
 	transferWorkers    int                    // goroutine count for the worker pool
 	checkWorkers       int                    // goroutine limit for parallel file hashing
 	localFilter        synctypes.LocalFilterConfig
+	localRules         synctypes.LocalObservationRules
 	bigDeleteThreshold int   // from config; 0 means use default
 	minFreeSpace       int64 // startup disk-scope revalidation threshold
 	diskAvailableFn    func(string) (uint64, error)
@@ -128,6 +129,7 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 		transferWorkers:    cfg.TransferWorkers,
 		checkWorkers:       cfg.CheckWorkers,
 		localFilter:        cfg.LocalFilter,
+		localRules:         cfg.LocalRules,
 		bigDeleteThreshold: bdThreshold,
 		minFreeSpace:       cfg.MinFreeSpace,
 		diskAvailableFn:    driveops.DiskAvailable,

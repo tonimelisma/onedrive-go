@@ -303,7 +303,7 @@ This is the operating dashboard for completeness, not a verdict of quality. A pa
 | Workstream | Req | Design | Code | Ref | Meta | Body | Kill | Verified reconcile | Highest unresolved risk |
 |---|---|---|---|---|---|---|---|---|---|
 | W1 | done | done | partial | partial | done | partial | partial | partial | periodic reconciliation, aggregated logging, and big-delete traceability still lag |
-| W2 | done | done | done | partial | done | partial | partial | partial | actionable-issue lifecycle and remaining sparse-payload nil/parent-chain hardening still need body audit |
+| W2 | done | done | done | partial | done | partial | partial | partial | remaining sparse-payload nil/parent-chain hardening and broader symlink/always-excluded reconciliation still need body audit |
 | W3 | done | done | partial | n/a | done | no | partial | no | big-delete and cross-drive proof paths unclear |
 | W4 | done | done | partial | n/a | done | no | partial | no | user-facing JSON/message semantics not yet audited |
 | W5 | done | done | done | partial | done | partial | partial | done | upload-session traceability tags still lag the body-level coverage |
@@ -597,8 +597,8 @@ Key W1 gap notes:
   - note: planned requirements `R-2.4.4`, `R-2.4.5`, `R-6.7.15`, `R-6.7.21` stay out of the current strong/weak audit until implemented
 - Claim mapping snapshot from filenames and `// Validates:` only:
   - Candidate test surface is strong around observation mechanics: `scanner_test.go`, `observer_remote_test.go`, `buffer_test.go`, `observer_local_*_test.go`, `item_converter_test.go`, and `inotify*_test.go`
-  - Explicit comment claims already exist for `R-2.1.2`, `R-2.12.1`, `R-2.12.2`, `R-2.13.1`, `R-6.7.1`, `R-6.7.3`, `R-6.7.5`, `R-6.7.20`, and `R-6.7.24`
-  - No explicit claim surfaced yet for `R-2.4.1` through `R-2.4.3`, `R-2.4.6`, `R-2.4.7`, `R-2.11.1` through `R-2.11.5`, or `R-6.7.19`
+  - Explicit comment claims already exist for `R-2.1.2`, `R-2.11.1` through `R-2.11.5`, `R-2.12.1`, `R-2.12.2`, `R-2.13.1`, `R-6.7.1`, `R-6.7.3`, `R-6.7.5`, `R-6.7.20`, and `R-6.7.24`
+  - No explicit claim surfaced yet for `R-2.4.1` through `R-2.4.3`, `R-2.4.6`, `R-2.4.7`, or `R-6.7.19`
   - Design hardening notes also look unclaimed from metadata: sparse payload nil-guarding, buffer overflow behavior, and inotify partial-watch cleanup
   - First body-audit target inside W2 should be naming/filtering coverage, because collisions and watch mechanics are visibly tagged while filter/naming guarantees are not
 - Body-audit notes from `internal/syncobserve/*_test.go`, `internal/sync/*_test.go`, and observation/config wiring:
@@ -608,6 +608,12 @@ Key W1 gap notes:
     - `internal/syncobserve/filter_test.go` proves full-scan filtering, watch setup subtree exclusion, watch write suppression, and single-path retry/trial reconstruction semantics
     - `internal/sync/engine_filter_test.go` proves the engine suppresses uploads for configured exclusions instead of merely unit-testing the observer in isolation
     - `internal/cli/sync_helpers_test.go` proves `newSyncEngine` propagates resolved config into the engine instead of dropping it on the floor
+  - Deeper W2 naming audit found two more real production gaps inside `R-2.11.*`: the broad internal `~...` exclusion swallowed OneDrive-reserved `~$...` names before they could become actionable invalid-filename skips, and SharePoint root-level `forms` was present in requirements/reference docs but observation had no drive-type rule context to enforce it.
+  - Production fix: internal temp-file exclusion now keeps `~foo` / `.~foo` silent while letting `~$foo` flow into OneDrive name validation, and the engine now threads `LocalObservationRules` into full scans, watch mode, and retry/trial single-path reconstruction so SharePoint root-level `forms` is rejected consistently.
+  - Regression coverage now also proves:
+    - `internal/syncobserve/observer_local_test.go` records `~$...` and other OneDrive-invalid names as actionable skipped items instead of treating them as silent temp files
+    - `internal/syncobserve/observer_local_test.go` and `internal/syncobserve/single_path_test.go` reject SharePoint root-level `forms` in both full-scan and retry/trial reconstruction paths
+    - `internal/sync/engine_run_once_test.go` and `internal/cli/sync_helpers_test.go` prove the SharePoint-only rule survives engine runtime and CLI config wiring instead of living only in unit-level validation helpers
     - `internal/config/validate_test.go` now proves `skip_files` / `skip_dirs` no longer warn as unimplemented
   - Follow-up symlink audit outcome: `skip_symlinks` had the same shape of defect. The config/default existed, but `LocalFilterConfig` dropped the field and the observer hard-skipped symlinks regardless of configuration. That is now fixed.
   - New W2 symlink regression coverage proves:
@@ -649,6 +655,7 @@ Key W1 gap notes:
 | `skip_symlinks = false` follows symlink targets by default, while `skip_symlinks = true` excludes them | `REQ+DESIGN+CODE+BODY+REF` | `internal/syncobserve/observer_local_test.go`, `internal/syncobserve/filter_test.go`, `internal/syncobserve/single_path_test.go`, and `internal/syncobserve/observer_local_delete_test.go` now prove default follow, configured skip, watch setup parity, and cycle-stop behavior. External behavior was cross-checked against `abraunegg/onedrive` docs before implementation. | `proven` | Real prod gap fixed; now aligned with researched client behavior |
 | Silent local exclusions must not later reappear as synthetic deletes | `REQ+DESIGN+CODE+BODY` | `internal/syncobserve/filter_test.go` now proves full scans suppress deletes for baseline paths hidden by `skip_dotfiles`, `skip_dirs`, `skip_files`, and `skip_symlinks`, including skipped symlink-directory descendants; `internal/syncobserve/observer_local_delete_test.go` proves skipped symlink remove events stay silent and remain suppressed through the next safety scan | `proven` | Real prod gap fixed in both scanner and watch mode |
 | Retry/trial single-path reconstruction must honor the same local filters as normal observation | `DESIGN+CODE+BODY` | `internal/syncobserve/filter_test.go` proves `ObserveSinglePathWithFilter` resolves configured exclusions silently | `proven` | Important design-only invariant now covered |
+| OneDrive-invalid local names, including `~$...` and SharePoint root-level `forms`, must surface as actionable skips instead of silent exclusions | `REQ+DESIGN+CODE+BODY+WEB` | `internal/syncobserve/observer_local_test.go`, `internal/syncobserve/single_path_test.go`, `internal/sync/engine_run_once_test.go`, and `internal/cli/sync_helpers_test.go` now prove invalid characters, reserved names/patterns, `~$...`, and SharePoint root `forms` all route through `SkippedItem` / actionable-failure handling rather than disappearing behind internal exclusions. Microsoft’s restrictions page is the governing external source for the `~$` and SharePoint-root `forms` rules. | `proven` | Two real prod gaps fixed: broad `~` exclusion and missing SharePoint drive-type validation context |
 | Retry/trial actionable maintenance must normalize missing drive IDs for both upsert and clear paths | `REQ+DESIGN+CODE+BODY` | `internal/sync/engine_single_owner_test.go` now proves zero-drive retry/trial rows clear stale actionable failures against the engine drive and that same-path scanner-issue replacement updates the existing actionable row in place | `proven` | Real prod gap fixed in retry/trial failure maintenance |
 | Remote observation must skip malformed sparse items it cannot identify or materialize safely | `DESIGN+CODE+BODY` | `internal/syncobserve/observer_remote_test.go` now proves remote items with empty `ItemID`, non-deleted items with empty `Name`, and delete entries without any recoverable path are warned and skipped instead of emitting empty-path or empty-ID events | `proven` | Real prod gap fixed in remote item conversion |
 | Invalid or absent remote timestamps must remain unknown instead of being synthesized into current time | `REQ+DESIGN+CODE+BODY+WEB` | Official Graph delta docs describe sparse changed-property payloads, while `internal/graph/items_test.go`, `internal/syncobserve/observer_remote_test.go`, and CLI formatting tests now prove invalid, empty, future, and delete-null timestamps stay zero/unknown through parsing, observation, and presentation | `proven` | Real prod gap fixed at the graph boundary; spec now marks `R-6.7.16` and `R-6.7.26` verified |
@@ -664,7 +671,9 @@ Key W2 gap notes:
 - `CODE+BODY`: sparse remote payload handling also had a real conversion gap. Malformed remote items could still produce empty-ID or empty-path events and reach planner input. That is now fixed for the highest-risk identity/materialization cases with regression coverage, without regressing ordinary deleted-item path recovery from delta data.
 - `CODE+BODY+WEB`: sparse remote timestamps also had a real normalization gap. Empty, invalid, and out-of-range timestamps were being rewritten to `time.Now()`, which hid malformed Graph payloads behind fake metadata. That is now fixed and covered through graph parsing, remote conversion, and CLI presentation tests.
 - `CODE+BODY+WEB`: sparse non-delete delta items also had a real recovery gap. When Graph omitted unchanged path fields, the converter could skip valid updates or accidentally re-root them. That is now fixed with regression coverage for primary and shortcut scopes.
-- `META`: W2 still needs deeper reconciliation on the rest of actionable-issue lifecycle (`R-2.11.*`) and the remaining sparse-payload edge cases (deeper parent-chain oddities and other zero-value Graph fields).
+- `CODE+BODY`: scanner-time `hash_panic` rows also had a real lifecycle gap. They were recorded as actionable skipped items, but healthy later scans did not include `hash_panic` in the stale-row auto-clear sweep, so one-off hash panics could linger forever. That is now fixed with regression coverage.
+- `CODE+BODY+WEB`: filename validation/actionability also had two real gaps. OneDrive-reserved `~$...` names were being swallowed by the generic internal `~...` exclusion, and SharePoint root-level `forms` was specified but unenforced because observation lacked drive-type rule context. Both are now fixed with regression coverage and Microsoft-source alignment.
+- `META`: W2 still needs deeper reconciliation on the remaining sparse-payload edge cases (deeper parent-chain oddities and other zero-value Graph fields) plus the rest of the symlink/always-excluded behavior surface.
 
 ### W3. Planner Safety, Conflict Resolution, And Delete Protection
 
@@ -1004,7 +1013,6 @@ Key W5 gap notes:
    - `R-6.4.2` and `R-6.4.3` watch-mode big-delete guarantees
    - `R-6.6.7` aggregated warning logging
 2. Continue W2 body-level reconciliation for:
-   - `R-2.11.*` actionable-issue recording and auto-clear semantics
    - `R-2.4.6` / `R-2.4.7` symlink and always-excluded behavior
    - remaining sparse remote-payload hardening and nil-guard proof paths
 3. Tighten W5 traceability for upload-session rules that are already strongly tested in body-level graph tests but still under-tagged at the `// Validates:` level.

@@ -35,6 +35,10 @@ reconciliation runs every 24 hours to detect missed delta deletions.
 3. **`startObservers`** launches remote and local observers AFTER bootstrap — they see the post-bootstrap baseline.
 4. **`runWatchLoop`** runs the steady-state select loop.
 
+Cancellation is normalized across all four phases: if the watch context is
+canceled during proof, startup repair, bootstrap observation, or bootstrap
+quiescence, `RunWatch` returns `nil` just like a steady-state watch shutdown.
+
 **Why not RunOnce?** The old approach created throwaway infrastructure for the
 initial sync, then created a second watch pipeline. Unified bootstrap creates
 the watch pipeline once and reuses it for both the initial sync and steady
@@ -344,12 +348,12 @@ space instead of trusting stale persisted timing.
 
 ### Scanner ScanResult Contract
 
-Implements: R-2.11.5 [implemented], R-2.10.2 [verified]
+Implements: R-2.11.5 [verified], R-2.10.2 [verified]
 
-Scanner returns `ScanResult{Events []ChangeEvent, Skipped []SkippedItem}` instead of `[]ChangeEvent`. Engine processes skipped items via two methods:
+Scanner returns `ScanResult{Events []ChangeEvent, Skipped []SkippedItem}` instead of `[]ChangeEvent`. Engine processes skipped items via two methods. The engine also threads platform-derived local observation rules into the observer, so drive-type-specific naming constraints such as SharePoint root-level `forms` are enforced in full scans, watch mode, and retry/trial single-path reconstruction:
 
 - **`recordSkippedItems(skipped []SkippedItem)`** — Groups skipped items by reason, batch-upserts to `sync_failures` as actionable failures. Uses aggregated logging: when >10 items share the same reason, logs 1 WARN summary with count and sample paths, individual paths at DEBUG. When <=10 items, logs each as an individual WARN.
-- **`clearResolvedSkippedItems(skipped []SkippedItem)`** — Deletes `sync_failures` entries for files that are no longer skipped (e.g., user renamed a previously invalid file). Compares current skipped paths against recorded failures and removes stale entries.
+- **`clearResolvedSkippedItems(skipped []SkippedItem)`** — Deletes `sync_failures` entries for scanner-detectable file-scoped actionable issues that are no longer skipped (e.g., user renamed a previously invalid file or a one-off hash panic no longer reproduces). Compares current skipped paths against recorded failures and removes stale entries.
 
 ### Aggregated Logging
 

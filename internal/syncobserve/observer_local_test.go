@@ -439,24 +439,59 @@ func TestFullScan_SymlinkDirectoryCycleStopsAtAliasBoundary(t *testing.T) {
 	assert.Nil(t, findEvent(result.Events, "loop/real.txt"))
 }
 
+// Validates: R-2.11.2, R-2.11.3, R-2.11.5
 func TestFullScan_InvalidName(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
 	writeTestFile(t, dir, "CON", "reserved")
+	writeTestFile(t, dir, "~$Budget.xlsx", "reserved pattern")
 	writeTestFile(t, dir, "valid.txt", "ok")
 
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
-	// CON should be skipped; only valid.txt produces an event.
+	// OneDrive-invalid names should be skipped; only valid.txt produces an event.
 	require.Len(t, result.Events, 1)
 	assert.Equal(t, "valid.txt", result.Events[0].Path)
 
-	// CON should appear in Skipped with IssueInvalidFilename.
-	require.Len(t, result.Skipped, 1, "CON should be in Skipped")
-	assert.Equal(t, "CON", result.Skipped[0].Path)
+	require.Len(t, result.Skipped, 2, "invalid OneDrive names should be reported in Skipped")
+
+	skipped := make(map[string]synctypes.SkippedItem, len(result.Skipped))
+	for i := range result.Skipped {
+		skipped[result.Skipped[i].Path] = result.Skipped[i]
+	}
+
+	for _, path := range []string{"CON", "~$Budget.xlsx"} {
+		item, ok := skipped[path]
+		require.True(t, ok, "%s should be in Skipped", path)
+		assert.Equal(t, synctypes.IssueInvalidFilename, item.Reason)
+		assert.NotEmpty(t, item.Detail)
+	}
+}
+
+// Validates: R-2.11.3, R-2.11.5
+func TestFullScan_SharePointRootFormsProducesSkippedItem(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeTestFile(t, dir, "forms", "reserved root name")
+	writeTestFile(t, dir, "docs/forms", "allowed below root")
+	writeTestFile(t, dir, "valid.txt", "ok")
+
+	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs.SetObservationRules(synctypes.LocalObservationRules{RejectSharePointRootForms: true})
+
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
+	require.NoError(t, err, "FullScan")
+
+	assert.NotNil(t, findEvent(result.Events, "valid.txt"))
+	assert.NotNil(t, findEvent(result.Events, "docs/forms"))
+	assert.Nil(t, findEvent(result.Events, "forms"))
+
+	require.Len(t, result.Skipped, 1, "SharePoint root-level forms should be reported as actionable")
+	assert.Equal(t, "forms", result.Skipped[0].Path)
 	assert.Equal(t, synctypes.IssueInvalidFilename, result.Skipped[0].Reason)
 	assert.NotEmpty(t, result.Skipped[0].Detail)
 }
@@ -646,7 +681,7 @@ func TestIsAlwaysExcluded(t *testing.T) {
 		// Prefix-based exclusions.
 		{"tilde prefix", "~backup", true},
 		{"dot-tilde prefix", ".~lock.file", true},
-		{"tilde-dollar", "~$Budget.xlsx", true},
+		{"tilde-dollar", "~$Budget.xlsx", false},
 
 		// Not excluded.
 		{"normal txt", "hello.txt", false},
@@ -1202,6 +1237,7 @@ func TestFullScan_PathTooLong(t *testing.T) {
 // ShouldObserve unit tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.11.1, R-2.11.2, R-2.11.3, R-2.11.4
 func TestShouldObserve_AllCases(t *testing.T) {
 	t.Parallel()
 
@@ -1209,6 +1245,8 @@ func TestShouldObserve_AllCases(t *testing.T) {
 		name       string
 		fileName   string
 		path       string
+		filter     synctypes.LocalFilterConfig
+		rules      synctypes.LocalObservationRules
 		wantNil    bool   // expect nil (observe)
 		wantReason string // expected Reason if non-nil; "" for internal exclusions
 	}{
@@ -1232,6 +1270,44 @@ func TestShouldObserve_AllCases(t *testing.T) {
 			wantReason: synctypes.IssueInvalidFilename,
 		},
 		{
+			name:       "invalid char",
+			fileName:   "bad?.txt",
+			path:       "bad?.txt",
+			wantReason: synctypes.IssueInvalidFilename,
+		},
+		{
+			name:       "reserved pattern (~$)",
+			fileName:   "~$Budget.xlsx",
+			path:       "~$Budget.xlsx",
+			wantReason: synctypes.IssueInvalidFilename,
+		},
+		{
+			name:       "reserved pattern (_vti_)",
+			fileName:   "_vti_history",
+			path:       "_vti_history",
+			wantReason: synctypes.IssueInvalidFilename,
+		},
+		{
+			name:       "trailing dot",
+			fileName:   "bad.",
+			path:       "bad.",
+			wantReason: synctypes.IssueInvalidFilename,
+		},
+		{
+			name:       "sharepoint root forms",
+			fileName:   "forms",
+			path:       "forms",
+			rules:      synctypes.LocalObservationRules{RejectSharePointRootForms: true},
+			wantReason: synctypes.IssueInvalidFilename,
+		},
+		{
+			name:     "sharepoint nested forms allowed",
+			fileName: "forms",
+			path:     "team/forms",
+			rules:    synctypes.LocalObservationRules{RejectSharePointRootForms: true},
+			wantNil:  true,
+		},
+		{
 			name:       "path too long (>400 chars)",
 			fileName:   "file.txt",
 			path:       strings.Repeat("a", 401),
@@ -1243,7 +1319,7 @@ func TestShouldObserve_AllCases(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			skip := ShouldObserve(tt.fileName, tt.path)
+			skip := shouldObserveWithFilter(tt.fileName, tt.path, observedKindUnknown, tt.filter, tt.rules)
 
 			if tt.wantNil {
 				assert.Nil(t, skip, "ShouldObserve(%q, %q) should return nil", tt.fileName, tt.path)

@@ -263,6 +263,7 @@ func (flow *engineFlow) clearResolvedSkippedItems(ctx context.Context, skipped [
 	scannerIssueTypes := []string{
 		synctypes.IssueInvalidFilename, synctypes.IssuePathTooLong,
 		synctypes.IssueFileTooLarge, synctypes.IssueCaseCollision,
+		synctypes.IssueHashPanic,
 	}
 	for _, issueType := range scannerIssueTypes {
 		paths := currentByType[issueType]
