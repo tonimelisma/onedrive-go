@@ -33,7 +33,9 @@ type persistedScopeFacts struct {
 // loadActiveScopes refreshes watch runtime scope state from the persisted
 // scope_blocks table. The store remains the restart/recovery record; watch
 // mode keeps only the current working set in memory.
-func (flow *engineFlow) loadActiveScopes(ctx context.Context, watch *watchRuntime) error {
+func (controller *scopeController) loadActiveScopes(ctx context.Context, watch *watchRuntime) error {
+	flow := controller.flow
+
 	if watch == nil {
 		return nil
 	}
@@ -54,7 +56,9 @@ func (flow *engineFlow) loadActiveScopes(ctx context.Context, watch *watchRuntim
 // repairPersistedScopes normalizes persisted scope rows against current store
 // evidence before any admission begins. The store remains authoritative for
 // restart state; watch mode loads activeScopes only after this repair pass.
-func (flow *engineFlow) repairPersistedScopes(ctx context.Context, watch *watchRuntime) error {
+func (controller *scopeController) repairPersistedScopes(ctx context.Context, watch *watchRuntime) error {
+	flow := controller.flow
+
 	blocks, err := flow.engine.baseline.ListScopeBlocks(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: listing scope blocks: %w", err)
@@ -71,7 +75,7 @@ func (flow *engineFlow) repairPersistedScopes(ctx context.Context, watch *watchR
 	facts := summarizePersistedScopeFailures(failures)
 
 	for i := range blocks {
-		if err := flow.repairPersistedScope(ctx, blocks[i], facts); err != nil {
+		if err := controller.repairPersistedScope(ctx, blocks[i], facts); err != nil {
 			return err
 		}
 	}
@@ -81,7 +85,7 @@ func (flow *engineFlow) repairPersistedScopes(ctx context.Context, watch *watchR
 	return nil
 }
 
-func (flow *engineFlow) repairPersistedScope(
+func (controller *scopeController) repairPersistedScope(
 	ctx context.Context,
 	block *synctypes.ScopeBlock,
 	facts persistedScopeFacts,
@@ -91,25 +95,27 @@ func (flow *engineFlow) repairPersistedScope(
 		if facts.boundaryKeys[block.Key] {
 			return nil
 		}
-		return flow.releaseStartupScope(ctx, block.Key, "released scope without boundary evidence")
+		return controller.releaseStartupScope(ctx, block.Key, "released scope without boundary evidence")
 	case scopeStartupRequiresScopedFailures:
 		if facts.failureCountByScope[block.Key] > 0 {
 			return nil
 		}
-		return flow.discardStartupScope(ctx, block.Key, "discarded scope without scoped failures")
+		return controller.discardStartupScope(ctx, block.Key, "discarded scope without scoped failures")
 	case scopeStartupServerTimedOnly:
 		if block.TimingSource == synctypes.ScopeTimingServerRetryAfter {
 			return nil
 		}
-		return flow.releaseStartupScope(ctx, block.Key, "released non-server-timed restart scope")
+		return controller.releaseStartupScope(ctx, block.Key, "released non-server-timed restart scope")
 	case scopeStartupRevalidateDisk:
-		return flow.repairDiskScope(ctx, block)
+		return controller.repairDiskScope(ctx, block)
 	default:
 		panic(fmt.Sprintf("unknown startup policy %d", scopeStartupPolicyFor(block.Key)))
 	}
 }
 
-func (flow *engineFlow) releaseStartupScope(ctx context.Context, key synctypes.ScopeKey, note string) error {
+func (controller *scopeController) releaseStartupScope(ctx context.Context, key synctypes.ScopeKey, note string) error {
+	flow := controller.flow
+
 	if err := flow.engine.baseline.ReleaseScope(ctx, key, flow.engine.nowFunc()); err != nil {
 		return fmt.Errorf("sync: releasing startup scope %s: %w", key.String(), err)
 	}
@@ -121,7 +127,9 @@ func (flow *engineFlow) releaseStartupScope(ctx context.Context, key synctypes.S
 	return nil
 }
 
-func (flow *engineFlow) discardStartupScope(ctx context.Context, key synctypes.ScopeKey, note string) error {
+func (controller *scopeController) discardStartupScope(ctx context.Context, key synctypes.ScopeKey, note string) error {
+	flow := controller.flow
+
 	if err := flow.engine.baseline.DiscardScope(ctx, key); err != nil {
 		return fmt.Errorf("sync: discarding startup scope %s: %w", key.String(), err)
 	}
@@ -171,7 +179,9 @@ func isPermissionScopeKey(key synctypes.ScopeKey) bool {
 	return key.IsPermDir() || key.IsPermRemote()
 }
 
-func (flow *engineFlow) repairDiskScope(ctx context.Context, block *synctypes.ScopeBlock) error {
+func (controller *scopeController) repairDiskScope(ctx context.Context, block *synctypes.ScopeBlock) error {
+	flow := controller.flow
+
 	if flow.engine.minFreeSpace <= 0 {
 		if err := flow.engine.baseline.ReleaseScope(ctx, block.Key, flow.engine.nowFunc()); err != nil {
 			return fmt.Errorf("sync: releasing disk scope %s with disabled min_free_space: %w", block.Key.String(), err)
@@ -234,35 +244,37 @@ func (flow *engineFlow) repairDiskScope(ctx context.Context, block *synctypes.Sc
 	return nil
 }
 
-func (flow *engineFlow) getScopeBlock(watch *watchRuntime, key synctypes.ScopeKey) (synctypes.ScopeBlock, bool) {
+func (controller *scopeController) getScopeBlock(watch *watchRuntime, key synctypes.ScopeKey) (synctypes.ScopeBlock, bool) {
 	if watch == nil {
 		return synctypes.ScopeBlock{}, false
 	}
 	return syncdispatch.LookupScope(watch.activeScopes, key)
 }
 
-func (flow *engineFlow) isScopeBlocked(watch *watchRuntime, key synctypes.ScopeKey) bool {
+func (controller *scopeController) isScopeBlocked(watch *watchRuntime, key synctypes.ScopeKey) bool {
 	if watch == nil {
 		return false
 	}
 	return syncdispatch.HasScope(watch.activeScopes, key)
 }
 
-func (flow *engineFlow) activeBlockingScope(watch *watchRuntime, ta *synctypes.TrackedAction) synctypes.ScopeKey {
+func (controller *scopeController) activeBlockingScope(watch *watchRuntime, ta *synctypes.TrackedAction) synctypes.ScopeKey {
 	if watch == nil {
 		return synctypes.ScopeKey{}
 	}
 	return syncdispatch.FindBlockingScope(watch.activeScopes, ta)
 }
 
-func (flow *engineFlow) scopeBlockKeys(watch *watchRuntime) []synctypes.ScopeKey {
+func (controller *scopeController) scopeBlockKeys(watch *watchRuntime) []synctypes.ScopeKey {
 	if watch == nil {
 		return nil
 	}
 	return syncdispatch.ScopeKeys(watch.activeScopes)
 }
 
-func (flow *engineFlow) activateScope(ctx context.Context, watch *watchRuntime, block synctypes.ScopeBlock) error {
+func (controller *scopeController) activateScope(ctx context.Context, watch *watchRuntime, block synctypes.ScopeBlock) error {
+	flow := controller.flow
+
 	if err := flow.engine.baseline.UpsertScopeBlock(ctx, &block); err != nil {
 		return fmt.Errorf("sync: activating scope %s: %w", block.Key.String(), err)
 	}
@@ -280,12 +292,19 @@ func (flow *engineFlow) activateScope(ctx context.Context, watch *watchRuntime, 
 	return nil
 }
 
-func (flow *engineFlow) extendScopeTrial(ctx context.Context, watch *watchRuntime, scopeKey synctypes.ScopeKey, retryAfter time.Duration) {
+func (controller *scopeController) extendScopeTrial(
+	ctx context.Context,
+	watch *watchRuntime,
+	scopeKey synctypes.ScopeKey,
+	retryAfter time.Duration,
+) {
+	flow := controller.flow
+
 	if watch == nil {
 		return
 	}
 
-	block, ok := flow.getScopeBlock(watch, scopeKey)
+	block, ok := controller.getScopeBlock(watch, scopeKey)
 	if !ok {
 		return
 	}
@@ -303,7 +322,7 @@ func (flow *engineFlow) extendScopeTrial(ctx context.Context, watch *watchRuntim
 	block.TrialInterval = newInterval
 	block.TrialCount++
 	block.TimingSource = scopeTimingSource(retryAfter)
-	if err := flow.activateScope(ctx, watch, block); err != nil {
+	if err := controller.activateScope(ctx, watch, block); err != nil {
 		flow.engine.logger.Warn("extendScopeTrial: failed to persist interval extension",
 			slog.String("scope_key", scopeKey.String()),
 			slog.String("error", err.Error()),
@@ -353,8 +372,8 @@ func scopeTimingSource(retryAfter time.Duration) synctypes.ScopeTimingSource {
 // isObservationSuppressed returns true if a global scope block
 // (throttle:account or service) is active, meaning shortcut observation
 // polling should be skipped to avoid wasting API calls (R-2.10.30).
-func (flow *engineFlow) isObservationSuppressed(watch *watchRuntime) bool {
-	return flow.isScopeBlocked(watch, synctypes.SKThrottleAccount()) || flow.isScopeBlocked(watch, synctypes.SKService())
+func (controller *scopeController) isObservationSuppressed(watch *watchRuntime) bool {
+	return controller.isScopeBlocked(watch, synctypes.SKThrottleAccount()) || controller.isScopeBlocked(watch, synctypes.SKService())
 }
 
 // feedScopeDetection feeds a worker result into scope detection sliding
@@ -362,7 +381,7 @@ func (flow *engineFlow) isObservationSuppressed(watch *watchRuntime) bool {
 // from the normal processWorkerResult switch — never called for trial results
 // (the scope is already blocked, and re-detecting would overwrite the doubled
 // interval).
-func (flow *engineFlow) feedScopeDetection(ctx context.Context, watch *watchRuntime, r *synctypes.WorkerResult) {
+func (controller *scopeController) feedScopeDetection(ctx context.Context, watch *watchRuntime, r *synctypes.WorkerResult) {
 	if watch == nil {
 		return
 	}
@@ -375,18 +394,20 @@ func (flow *engineFlow) feedScopeDetection(ctx context.Context, watch *watchRunt
 
 	sr := watch.scopeState.UpdateScope(r)
 	if sr.Block {
-		flow.applyScopeBlock(ctx, watch, sr)
+		controller.applyScopeBlock(ctx, watch, sr)
 	}
 }
 
 // applyScopeBlock persists and activates a new scope block. Uses
 // computeTrialInterval for the initial interval, ensuring the same
 // Retry-After-vs-backoff policy as extendScopeTrial.
-func (flow *engineFlow) applyScopeBlock(ctx context.Context, watch *watchRuntime, sr synctypes.ScopeUpdateResult) {
+func (controller *scopeController) applyScopeBlock(ctx context.Context, watch *watchRuntime, sr synctypes.ScopeUpdateResult) {
+	flow := controller.flow
+
 	now := flow.engine.nowFunc()
 	interval := computeTrialInterval(sr.ScopeKey, sr.RetryAfter, 0)
 
-	if err := flow.activateScope(ctx, watch, synctypes.ScopeBlock{
+	if err := controller.activateScope(ctx, watch, synctypes.ScopeBlock{
 		Key:           sr.ScopeKey,
 		IssueType:     sr.IssueType,
 		TimingSource:  scopeTimingSource(sr.RetryAfter),
@@ -414,7 +435,9 @@ func (flow *engineFlow) applyScopeBlock(ctx context.Context, watch *watchRuntime
 
 // releaseScope atomically removes the scope block, deletes any actionable
 // boundary row for the scope, and makes held descendants retryable now.
-func (flow *engineFlow) releaseScope(ctx context.Context, watch *watchRuntime, key synctypes.ScopeKey) error {
+func (controller *scopeController) releaseScope(ctx context.Context, watch *watchRuntime, key synctypes.ScopeKey) error {
+	flow := controller.flow
+
 	if err := flow.engine.baseline.ReleaseScope(ctx, key, flow.engine.nowFunc()); err != nil {
 		return fmt.Errorf("sync: releasing scope %s: %w", key.String(), err)
 	}
@@ -446,7 +469,9 @@ func (flow *engineFlow) releaseScope(ctx context.Context, watch *watchRuntime, k
 
 // discardScope atomically removes the scope block and deletes all failure rows
 // tied to it. Used when the blocked subtree itself disappears.
-func (flow *engineFlow) discardScope(ctx context.Context, watch *watchRuntime, key synctypes.ScopeKey) error {
+func (controller *scopeController) discardScope(ctx context.Context, watch *watchRuntime, key synctypes.ScopeKey) error {
+	flow := controller.flow
+
 	if err := flow.engine.baseline.DiscardScope(ctx, key); err != nil {
 		return fmt.Errorf("sync: discarding scope %s: %w", key.String(), err)
 	}
@@ -470,11 +495,13 @@ func (flow *engineFlow) discardScope(ctx context.Context, watch *watchRuntime, k
 // ready action set, returning the actions that should enter the watch loop's
 // outbox. It is the single admission path used by both newly-planned actions
 // and newly-ready dependents from result processing.
-func (flow *engineFlow) admitReady(
+func (controller *scopeController) admitReady(
 	ctx context.Context,
 	watch *watchRuntime,
 	ready []*synctypes.TrackedAction,
 ) []*synctypes.TrackedAction {
+	flow := controller.flow
+
 	var dispatch []*synctypes.TrackedAction
 
 	for _, ta := range ready {
@@ -493,7 +520,7 @@ func (flow *engineFlow) admitReady(
 					)
 				}
 
-				if key := flow.activeBlockingScope(watch, ta); key.IsZero() {
+				if key := controller.activeBlockingScope(watch, ta); key.IsZero() {
 					flow.setDispatch(ctx, &ta.Action)
 					dispatch = append(dispatch, ta)
 				}
@@ -507,8 +534,8 @@ func (flow *engineFlow) admitReady(
 
 		// Normal scope admission.
 		if watch != nil {
-			if key := flow.activeBlockingScope(watch, ta); !key.IsZero() {
-				flow.cascadeRecordAndComplete(ctx, ta, key)
+			if key := controller.activeBlockingScope(watch, ta); !key.IsZero() {
+				controller.cascadeRecordAndComplete(ctx, ta, key)
 				continue
 			}
 		}
@@ -528,11 +555,13 @@ func (flow *engineFlow) admitReady(
 // Safe for concurrent use — depGraph.Complete uses a mutex. Two cascades
 // from different goroutines cannot return the same dependent (depsLeft is
 // atomic — the last parent to complete returns the dependent).
-func (flow *engineFlow) cascadeRecordAndComplete(
+func (controller *scopeController) cascadeRecordAndComplete(
 	ctx context.Context,
 	ta *synctypes.TrackedAction,
 	scopeKey synctypes.ScopeKey,
 ) {
+	flow := controller.flow
+
 	seen := make(map[int64]bool)
 	queue := []*synctypes.TrackedAction{ta}
 
@@ -545,7 +574,7 @@ func (flow *engineFlow) cascadeRecordAndComplete(
 		}
 		seen[current.ID] = true
 
-		flow.recordScopeBlockedFailure(ctx, &current.Action, scopeKey)
+		controller.recordScopeBlockedFailure(ctx, &current.Action, scopeKey)
 		// No resetDispatchStatus — setDispatch was never called for blocked
 		// actions (active-scope admission runs BEFORE setDispatch, per section 2.2).
 		ready, _ := flow.depGraph.Complete(current.ID)
@@ -556,11 +585,13 @@ func (flow *engineFlow) cascadeRecordAndComplete(
 // cascadeFailAndComplete records each transitive dependent as a cascade
 // failure and completes it in the DepGraph. BFS ensures grandchildren are
 // not stranded. Used for worker failures (non-scope-related).
-func (flow *engineFlow) cascadeFailAndComplete(
+func (controller *scopeController) cascadeFailAndComplete(
 	ctx context.Context,
 	ready []*synctypes.TrackedAction,
 	r *synctypes.WorkerResult,
 ) {
+	flow := controller.flow
+
 	seen := make(map[int64]bool)
 	queue := ready
 
@@ -573,7 +604,7 @@ func (flow *engineFlow) cascadeFailAndComplete(
 		}
 		seen[current.ID] = true
 
-		flow.recordCascadeFailure(ctx, &current.Action, r)
+		controller.recordCascadeFailure(ctx, &current.Action, r)
 		next, _ := flow.depGraph.Complete(current.ID)
 		queue = append(queue, next...)
 	}
@@ -581,7 +612,9 @@ func (flow *engineFlow) cascadeFailAndComplete(
 
 // completeSubtree silently completes all transitive dependents without
 // recording failures. Used for shutdown (context canceled — not a failure).
-func (flow *engineFlow) completeSubtree(ready []*synctypes.TrackedAction) {
+func (controller *scopeController) completeSubtree(ready []*synctypes.TrackedAction) {
+	flow := controller.flow
+
 	seen := make(map[int64]bool)
 	queue := ready
 
@@ -602,7 +635,9 @@ func (flow *engineFlow) completeSubtree(ready []*synctypes.TrackedAction) {
 // recordScopeBlockedFailure records a sync_failure for an action that was
 // blocked by an active scope. Uses next_retry_at = NULL (nil delayFn) so the
 // retry sweep ignores it until releaseScope sets next_retry_at.
-func (flow *engineFlow) recordScopeBlockedFailure(ctx context.Context, action *synctypes.Action, scopeKey synctypes.ScopeKey) {
+func (controller *scopeController) recordScopeBlockedFailure(ctx context.Context, action *synctypes.Action, scopeKey synctypes.ScopeKey) {
+	flow := controller.flow
+
 	direction := directionFromAction(action.Type)
 
 	driveID := action.DriveID
@@ -631,7 +666,13 @@ func (flow *engineFlow) recordScopeBlockedFailure(ctx context.Context, action *s
 // failed. The dependent inherits the parent's error context but gets its
 // own direction and a fresh failure_count. Uses retry.ReconcilePolicy().Delay for
 // exponential backoff — the dependent retries independently.
-func (flow *engineFlow) recordCascadeFailure(ctx context.Context, action *synctypes.Action, parentResult *synctypes.WorkerResult) {
+func (controller *scopeController) recordCascadeFailure(
+	ctx context.Context,
+	action *synctypes.Action,
+	parentResult *synctypes.WorkerResult,
+) {
+	flow := controller.flow
+
 	direction := directionFromAction(action.Type)
 
 	driveID := action.DriveID

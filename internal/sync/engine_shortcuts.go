@@ -40,9 +40,10 @@ func filterOutShortcuts(events []synctypes.ChangeEvent) []synctypes.ChangeEvent 
 // the shortcuts table, and observes content on each shortcut's source drive.
 // Returns additional ChangeEvents for shortcut content that should be fed
 // into the planner alongside primary drive events.
-func (flow *engineFlow) processShortcuts(
+func (coordinator *shortcutCoordinator) processShortcuts(
 	ctx context.Context, remoteEvents []synctypes.ChangeEvent, bl *synctypes.Baseline, dryRun bool,
 ) ([]synctypes.ChangeEvent, error) {
+	flow := coordinator.flow
 	eng := flow.engine
 
 	if eng.folderDelta == nil && eng.recursiveLister == nil {
@@ -84,13 +85,13 @@ func (flow *engineFlow) processShortcuts(
 			}
 		}
 
-		if err := flow.handleRemovedShortcuts(ctx, removedShortcutIDs, preFilterShortcuts); err != nil {
+		if err := coordinator.handleRemovedShortcuts(ctx, removedShortcutIDs, preFilterShortcuts); err != nil {
 			return nil, err
 		}
 	}
 
 	// Step 3: Register/update shortcuts from shortcut events.
-	if err := flow.registerShortcuts(ctx, shortcutEvents); err != nil {
+	if err := coordinator.registerShortcuts(ctx, shortcutEvents); err != nil {
 		return nil, err
 	}
 
@@ -109,13 +110,14 @@ func (flow *engineFlow) processShortcuts(
 	}
 
 	// Step 5: Observe content for all active shortcuts (excluding collisions).
-	return flow.observeShortcutContentFromList(ctx, shortcuts, bl, collisions)
+	return coordinator.observeShortcutContentFromList(ctx, shortcuts, bl, collisions)
 }
 
 // registerShortcuts upserts shortcuts from synctypes.ChangeShortcut events.
 // For new shortcuts, detects the source drive type to determine the
 // observation strategy (delta vs enumerate).
-func (flow *engineFlow) registerShortcuts(ctx context.Context, events []synctypes.ChangeEvent) error {
+func (coordinator *shortcutCoordinator) registerShortcuts(ctx context.Context, events []synctypes.ChangeEvent) error {
+	flow := coordinator.flow
 	eng := flow.engine
 
 	for i := range events {
@@ -144,7 +146,7 @@ func (flow *engineFlow) registerShortcuts(ctx context.Context, events []synctype
 
 		// Detect drive type for new shortcuts.
 		if sc.DriveType == "" && eng.driveVerifier != nil {
-			driveType, obsStrategy := flow.detectDriveType(ctx, ev.RemoteDriveID)
+			driveType, obsStrategy := coordinator.detectDriveType(ctx, ev.RemoteDriveID)
 			sc.DriveType = driveType
 			sc.Observation = obsStrategy
 		}
@@ -275,7 +277,8 @@ func detectShortcutCollisionsFromList(shortcuts []synctypes.Shortcut, bl *syncty
 
 // detectDriveType queries the source drive to determine its type and the
 // appropriate observation strategy.
-func (flow *engineFlow) detectDriveType(ctx context.Context, remoteDriveID string) (string, string) {
+func (coordinator *shortcutCoordinator) detectDriveType(ctx context.Context, remoteDriveID string) (string, string) {
+	flow := coordinator.flow
 	eng := flow.engine
 
 	drive, err := eng.driveVerifier.Drive(ctx, driveid.New(remoteDriveID))
@@ -300,7 +303,12 @@ func (flow *engineFlow) detectDriveType(ctx context.Context, remoteDriveID strin
 
 // handleRemovedShortcuts processes synctypes.ChangeDelete events for known shortcuts.
 // Takes pre-loaded shortcuts to avoid a redundant DB query.
-func (flow *engineFlow) handleRemovedShortcuts(ctx context.Context, deletedItemIDs map[string]bool, shortcuts []synctypes.Shortcut) error {
+func (coordinator *shortcutCoordinator) handleRemovedShortcuts(
+	ctx context.Context,
+	deletedItemIDs map[string]bool,
+	shortcuts []synctypes.Shortcut,
+) error {
+	flow := coordinator.flow
 	eng := flow.engine
 
 	if len(deletedItemIDs) == 0 {
@@ -332,7 +340,7 @@ func (flow *engineFlow) handleRemovedShortcuts(ctx context.Context, deletedItemI
 			return fmt.Errorf("sync: deleting shortcut %s: %w", sc.ItemID, err)
 		}
 
-		flow.applyShortcutRemovalDecisions(ctx, flow.shortcutRemovalDecisions(ctx, sc))
+		flow.scopeController().applyShortcutRemovalDecisions(ctx, coordinator.shortcutRemovalDecisions(ctx, sc))
 	}
 
 	return nil
@@ -341,7 +349,8 @@ func (flow *engineFlow) handleRemovedShortcuts(ctx context.Context, deletedItemI
 // shortcutRemovalDecisions returns the scopes that become invalid when a
 // shortcut disappears. These scopes are discarded, not released, because the
 // blocked subtree itself no longer exists.
-func (flow *engineFlow) shortcutRemovalDecisions(ctx context.Context, sc *synctypes.Shortcut) []ShortcutRemovalDecision {
+func (coordinator *shortcutCoordinator) shortcutRemovalDecisions(ctx context.Context, sc *synctypes.Shortcut) []ShortcutRemovalDecision {
+	flow := coordinator.flow
 	eng := flow.engine
 
 	decisions := []ShortcutRemovalDecision{{
@@ -402,10 +411,11 @@ type shortcutDispatchFunc func(ctx context.Context, sc *synctypes.Shortcut) (sco
 // skipping, error logging, result collection, delta token commit, and
 // completion logging. The dispatch func contains the per-scope observation
 // strategy — callers only need to supply a closure and a log label.
-func (flow *engineFlow) observeShortcutsConcurrently(
+func (coordinator *shortcutCoordinator) observeShortcutsConcurrently(
 	ctx context.Context, shortcuts []synctypes.Shortcut, collisions map[string]bool,
 	dispatch shortcutDispatchFunc, logContext string,
 ) ([]synctypes.ChangeEvent, error) {
+	flow := coordinator.flow
 	eng := flow.engine
 
 	if len(shortcuts) == 0 {
@@ -490,12 +500,12 @@ func (flow *engineFlow) observeShortcutsConcurrently(
 // concurrently. Takes pre-loaded shortcuts to avoid redundant DB queries
 // (B-333). Delta tokens are deferred until all scopes complete, ensuring
 // atomicity.
-func (flow *engineFlow) observeShortcutContentFromList(
+func (coordinator *shortcutCoordinator) observeShortcutContentFromList(
 	ctx context.Context, shortcuts []synctypes.Shortcut, bl *synctypes.Baseline, collisions map[string]bool,
 ) ([]synctypes.ChangeEvent, error) {
-	return flow.observeShortcutsConcurrently(ctx, shortcuts, collisions,
+	return coordinator.observeShortcutsConcurrently(ctx, shortcuts, collisions,
 		func(gCtx context.Context, sc *synctypes.Shortcut) (scopeResult, error) {
-			return flow.observeSingleShortcut(gCtx, sc, bl)
+			return coordinator.observeSingleShortcut(gCtx, sc, bl)
 		},
 		"observation",
 	)
@@ -503,15 +513,19 @@ func (flow *engineFlow) observeShortcutContentFromList(
 
 // observeSingleShortcut observes content for one shortcut scope.
 // Returns a scopeResult with events and an optional delta token to commit.
-func (flow *engineFlow) observeSingleShortcut(ctx context.Context, sc *synctypes.Shortcut, bl *synctypes.Baseline) (scopeResult, error) {
+func (coordinator *shortcutCoordinator) observeSingleShortcut(
+	ctx context.Context,
+	sc *synctypes.Shortcut,
+	bl *synctypes.Baseline,
+) (scopeResult, error) {
 	remoteDriveID := driveid.New(sc.RemoteDrive)
 
 	switch sc.Observation {
 	case synctypes.ObservationDelta:
-		return flow.observeShortcutDelta(ctx, sc, remoteDriveID, bl)
+		return coordinator.observeShortcutDelta(ctx, sc, remoteDriveID, bl)
 	default:
 		// B-335: synctypes.ObservationEnumerate and synctypes.ObservationUnknown both use enumerate.
-		return flow.observeShortcutEnumerate(ctx, sc, remoteDriveID, bl)
+		return coordinator.observeShortcutEnumerate(ctx, sc, remoteDriveID, bl)
 	}
 }
 
@@ -523,9 +537,10 @@ func (flow *engineFlow) observeSingleShortcut(ctx context.Context, sc *synctypes
 // partial set against the baseline would incorrectly flag unchanged items as
 // deleted. Orphan detection for delta-observed shortcuts is handled by
 // reconcileShortcutDelta, which uses an empty token to enumerate all items.
-func (flow *engineFlow) observeShortcutDelta(
+func (coordinator *shortcutCoordinator) observeShortcutDelta(
 	ctx context.Context, sc *synctypes.Shortcut, remoteDriveID driveid.ID, bl *synctypes.Baseline,
 ) (scopeResult, error) {
+	flow := coordinator.flow
 	eng := flow.engine
 
 	if eng.folderDelta == nil {
@@ -563,9 +578,10 @@ func (flow *engineFlow) observeShortcutDelta(
 }
 
 // observeShortcutEnumerate uses recursive listing to observe shortcut content.
-func (flow *engineFlow) observeShortcutEnumerate(
+func (coordinator *shortcutCoordinator) observeShortcutEnumerate(
 	ctx context.Context, sc *synctypes.Shortcut, remoteDriveID driveid.ID, bl *synctypes.Baseline,
 ) (scopeResult, error) {
+	flow := coordinator.flow
 	eng := flow.engine
 
 	if eng.recursiveLister == nil {
@@ -593,7 +609,11 @@ func (flow *engineFlow) observeShortcutEnumerate(
 // scopes. For delta-capable shortcuts, runs a fresh delta with empty token.
 // For enumerate-capable shortcuts, runs ListChildrenRecursive. Both detect
 // orphans against the baseline.
-func (flow *engineFlow) reconcileShortcutScopes(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, error) {
+func (coordinator *shortcutCoordinator) reconcileShortcutScopes(
+	ctx context.Context,
+	bl *synctypes.Baseline,
+) ([]synctypes.ChangeEvent, error) {
+	flow := coordinator.flow
 	eng := flow.engine
 
 	if eng.folderDelta == nil && eng.recursiveLister == nil {
@@ -611,15 +631,15 @@ func (flow *engineFlow) reconcileShortcutScopes(ctx context.Context, bl *synctyp
 
 	collisions := detectShortcutCollisionsFromList(shortcuts, bl, eng.logger)
 
-	return flow.observeShortcutsConcurrently(ctx, shortcuts, collisions,
+	return coordinator.observeShortcutsConcurrently(ctx, shortcuts, collisions,
 		func(gCtx context.Context, sc *synctypes.Shortcut) (scopeResult, error) {
 			remoteDriveID := driveid.New(sc.RemoteDrive)
 
 			switch sc.Observation {
 			case synctypes.ObservationDelta:
-				return flow.reconcileShortcutDelta(gCtx, sc, remoteDriveID, bl)
+				return coordinator.reconcileShortcutDelta(gCtx, sc, remoteDriveID, bl)
 			default:
-				return flow.observeShortcutEnumerate(gCtx, sc, remoteDriveID, bl)
+				return coordinator.observeShortcutEnumerate(gCtx, sc, remoteDriveID, bl)
 			}
 		},
 		"reconciliation",
@@ -629,9 +649,10 @@ func (flow *engineFlow) reconcileShortcutScopes(ctx context.Context, bl *synctyp
 // reconcileShortcutDelta performs a full delta enumeration for a shortcut
 // by using an empty token. This enumerates all items via delta and detects
 // orphans that may have been missed by incremental delta.
-func (flow *engineFlow) reconcileShortcutDelta(
+func (coordinator *shortcutCoordinator) reconcileShortcutDelta(
 	ctx context.Context, sc *synctypes.Shortcut, remoteDriveID driveid.ID, bl *synctypes.Baseline,
 ) (scopeResult, error) {
+	flow := coordinator.flow
 	eng := flow.engine
 
 	if eng.folderDelta == nil {
