@@ -4,6 +4,12 @@
 // single source of truth for all user-facing failure text (R-2.3.8).
 package synctypes
 
+import (
+	"strings"
+
+	"github.com/tonimelisma/onedrive-go/internal/authstate"
+)
+
 // IssueMessage holds the user-facing text for each issue type.
 type IssueMessage struct {
 	Title  string // e.g. "QUOTA EXCEEDED"
@@ -22,10 +28,11 @@ func MessageForIssueType(issueType string) IssueMessage {
 			Action: "Free up space or upgrade your plan.",
 		}
 	case IssueUnauthorized:
+		presentation := authstate.UnauthorizedIssuePresentation()
 		return IssueMessage{
-			Title:  "AUTHENTICATION REQUIRED",
-			Reason: "The last sync attempt for this account was rejected by OneDrive.",
-			Action: "Run 'onedrive-go whoami' to re-check access, or 'onedrive-go login' to sign in again.",
+			Title:  strings.ToUpper(presentation.Title),
+			Reason: presentation.Reason,
+			Action: presentation.Action,
 		}
 	case IssuePermissionDenied:
 		return IssueMessage{

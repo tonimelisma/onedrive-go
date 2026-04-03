@@ -32,8 +32,9 @@ func (s *driveService) runList(ctx context.Context, showAll bool) error {
 		config.LogWarnings(warnings, logger)
 	}
 
+	catalog := buildAccountCatalog(ctx, cfg, logger)
 	configured := buildConfiguredDriveEntries(cfg, logger)
-	configuredAuth := buildConfiguredAccountAuthHealth(ctx, cfg, logger)
+	configuredAuth := catalogAuthByEmail(catalog)
 	annotateConfiguredDriveAuth(configured, configuredAuth)
 
 	siteLimit := sharePointSiteLimit
@@ -41,9 +42,11 @@ func (s *driveService) runList(ctx context.Context, showAll bool) error {
 		siteLimit = sharePointSiteUnlimited
 	}
 
-	available, discoveredAuthRequired := discoverAvailableDrives(ctx, cfg, siteLimit, logger, recorder)
+	available, discoveredAuthRequired := discoverAvailableDrives(ctx, cfg, siteLimit, logger, recorder, s.cc.GraphBaseURL)
 	annotateStateDB(available)
-	authRequired := mergeAuthRequirements(buildConfiguredAuthRequirements(cfg, configuredAuth, logger), discoveredAuthRequired)
+	authRequired := mergeAuthRequirements(catalogAuthRequirements(catalog, func(entry accountCatalogEntry) bool {
+		return entry.Configured
+	}), discoveredAuthRequired)
 
 	if s.cc.Flags.JSON {
 		return printDriveListJSON(s.cc.Output(), configured, available, authRequired)
@@ -140,8 +143,17 @@ func (s *driveService) runSearch(ctx context.Context, query string) error {
 
 	config.LogWarnings(warnings, logger)
 
-	businessTokens := findBusinessTokens(s.cc.Flags.Account, logger)
-	configuredAuthRequired := configuredBusinessAuthRequirements(ctx, cfg, s.cc.Flags.Account, logger)
+	catalog := buildAccountCatalog(ctx, cfg, logger)
+	businessTokens := searchableBusinessTokenIDs(catalog, s.cc.Flags.Account)
+	configuredAuthRequired := catalogAuthRequirements(catalog, func(entry accountCatalogEntry) bool {
+		if !entry.Configured {
+			return false
+		}
+		if s.cc.Flags.Account != "" && entry.Email != s.cc.Flags.Account {
+			return false
+		}
+		return entry.DriveType == driveid.DriveTypeBusiness
+	})
 	if len(businessTokens) == 0 && len(configuredAuthRequired) == 0 {
 		if s.cc.Flags.Account != "" {
 			return fmt.Errorf("no business account found for %s — run 'onedrive-go login' first", s.cc.Flags.Account)
@@ -155,7 +167,14 @@ func (s *driveService) runSearch(ctx context.Context, query string) error {
 		discoveredAuthRequired []accountAuthRequirement
 	)
 	for _, tokenCID := range businessTokens {
-		accountResults, accountAuthRequired := searchAccountSharePoint(ctx, tokenCID, query, logger, recorder)
+		accountResults, accountAuthRequired := searchAccountSharePoint(
+			ctx,
+			tokenCID,
+			query,
+			logger,
+			recorder,
+			s.cc.GraphBaseURL,
+		)
 		results = append(results, accountResults...)
 		discoveredAuthRequired = append(discoveredAuthRequired, accountAuthRequired...)
 	}

@@ -805,3 +805,25 @@ func TestIssuesRetry_All(t *testing.T) {
 			"only actionable failures should remain after retry --all")
 	}
 }
+
+// Validates: R-2.10.47
+func TestIssuesService_RunList_DoesNotClearPersistedAuthScope(t *testing.T) {
+	setTestDriveHome(t)
+
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	seedAuthScope(t, cid)
+
+	var out bytes.Buffer
+	svc := newIssuesService(&CLIContext{
+		Logger:       testDriveLogger(t),
+		OutputWriter: &out,
+		StatusWriter: &out,
+		Cfg: &config.ResolvedDrive{
+			CanonicalID: cid,
+			SyncDir:     t.TempDir(),
+		},
+	})
+
+	require.NoError(t, svc.runList(t.Context(), false))
+	assert.True(t, hasPersistedAuthScope(t.Context(), cid.Email(), testDriveLogger(t)))
+}

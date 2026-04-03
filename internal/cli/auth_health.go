@@ -9,6 +9,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/tonimelisma/onedrive-go/internal/authstate"
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
@@ -17,18 +18,14 @@ import (
 )
 
 const (
-	authStateReady                = "ready"
-	authStateAuthenticationNeeded = "authentication_required"
-	authReasonMissingLogin        = "missing_login"
-	authReasonInvalidSavedLogin   = "invalid_saved_login"
-	authReasonSyncAuthRejected    = "sync_auth_rejected"
+	authStateReady                = authstate.StateReady
+	authStateAuthenticationNeeded = authstate.StateAuthenticationRequired
+	authReasonMissingLogin        = authstate.ReasonMissingLogin
+	authReasonInvalidSavedLogin   = authstate.ReasonInvalidSavedLogin
+	authReasonSyncAuthRejected    = authstate.ReasonSyncAuthRejected
 )
 
-type accountAuthHealth struct {
-	State  string
-	Reason string
-	Action string
-}
+type accountAuthHealth = authstate.Health
 
 type accountAuthRequirement struct {
 	Email       string `json:"email"`
@@ -41,18 +38,6 @@ type accountAuthRequirement struct {
 
 type accountAuthChecker interface {
 	CheckAccountAuth(ctx context.Context, account string, driveIDs []driveid.CanonicalID) accountAuthHealth
-}
-
-type liveAccountAuthChecker struct {
-	logger *slog.Logger
-}
-
-func (c *liveAccountAuthChecker) CheckAccountAuth(
-	ctx context.Context,
-	account string,
-	driveIDs []driveid.CanonicalID,
-) accountAuthHealth {
-	return inspectAccountAuth(ctx, account, driveIDs, c.logger)
 }
 
 type authProofRecorder struct {
@@ -68,13 +53,13 @@ func newAuthProofRecorder(logger *slog.Logger) *authProofRecorder {
 	}
 }
 
-func (r *authProofRecorder) Hook(email string) func(context.Context) {
+func (r *authProofRecorder) Hook(email, proofSource string) func(context.Context) {
 	return func(ctx context.Context) {
-		r.recordSuccess(ctx, email)
+		r.recordSuccess(ctx, email, proofSource)
 	}
 }
 
-func (r *authProofRecorder) recordSuccess(ctx context.Context, email string) {
+func (r *authProofRecorder) recordSuccess(ctx context.Context, email, proofSource string) {
 	if email == "" {
 		return
 	}
@@ -87,26 +72,37 @@ func (r *authProofRecorder) recordSuccess(ctx context.Context, email string) {
 	r.cleared[email] = true
 	r.mu.Unlock()
 
-	if err := clearAccountAuthScopes(ctx, email, r.logger); err != nil {
+	clearedCount, err := clearAccountAuthScopesWithCount(ctx, email, r.logger)
+	if err != nil {
 		r.logger.Warn("clearing stale auth scopes after successful graph proof",
 			"account", email,
+			"proof_source", proofSource,
 			"error", err,
+		)
+		return
+	}
+
+	if clearedCount > 0 {
+		r.logger.Info("cleared stale auth scopes after successful graph proof",
+			"account", email,
+			"proof_source", proofSource,
+			"state_dbs", clearedCount,
 		)
 	}
 }
 
-func attachAccountAuthProof(client *graph.Client, recorder *authProofRecorder, email string) {
+func attachAccountAuthProof(client *graph.Client, recorder *authProofRecorder, email, proofSource string) {
 	if client == nil || recorder == nil || email == "" {
 		return
 	}
 
-	client.SetAuthenticatedSuccessHook(recorder.Hook(email))
+	client.SetAuthenticatedSuccessHook(recorder.Hook(email, proofSource))
 }
 
 func attachDriveAuthProof(session interface {
 	ResolvedDriveEmail() string
 	SetAuthenticatedSuccessHooks(func(context.Context))
-}, recorder *authProofRecorder,
+}, recorder *authProofRecorder, proofSource string,
 ) {
 	if session == nil || recorder == nil {
 		return
@@ -117,7 +113,7 @@ func attachDriveAuthProof(session interface {
 		return
 	}
 
-	session.SetAuthenticatedSuccessHooks(recorder.Hook(email))
+	session.SetAuthenticatedSuccessHooks(recorder.Hook(email, proofSource))
 }
 
 func inspectAccountAuth(
@@ -128,22 +124,14 @@ func inspectAccountAuth(
 ) accountAuthHealth {
 	savedLoginReason := inspectSavedLogin(ctx, account, driveIDs, logger)
 	if savedLoginReason != "" {
-		return accountAuthHealth{
-			State:  authStateAuthenticationNeeded,
-			Reason: savedLoginReason,
-			Action: authAction(savedLoginReason),
-		}
+		return authstate.RequiredHealth(savedLoginReason)
 	}
 
 	if hasPersistedAuthScope(ctx, account, logger) {
-		return accountAuthHealth{
-			State:  authStateAuthenticationNeeded,
-			Reason: authReasonSyncAuthRejected,
-			Action: authAction(authReasonSyncAuthRejected),
-		}
+		return authstate.RequiredHealth(authReasonSyncAuthRejected)
 	}
 
-	return accountAuthHealth{State: authStateReady}
+	return authstate.ReadyHealth()
 }
 
 func inspectSavedLogin(
@@ -223,11 +211,17 @@ func hasPersistedAuthScope(ctx context.Context, account string, logger *slog.Log
 }
 
 func clearAccountAuthScopes(ctx context.Context, email string, logger *slog.Logger) error {
+	_, err := clearAccountAuthScopesWithCount(ctx, email, logger)
+	return err
+}
+
+func clearAccountAuthScopesWithCount(ctx context.Context, email string, logger *slog.Logger) (int, error) {
 	if email == "" {
-		return nil
+		return 0, nil
 	}
 
 	var errs []error
+	clearedCount := 0
 
 	for _, statePath := range config.DiscoverStateDBsForEmail(email, logger) {
 		store, err := syncstore.NewSyncStore(ctx, statePath, logger)
@@ -236,8 +230,15 @@ func clearAccountAuthScopes(ctx context.Context, email string, logger *slog.Logg
 			continue
 		}
 
-		if err := store.DeleteScopeBlock(ctx, synctypes.SKAuthAccount()); err != nil {
-			errs = append(errs, fmt.Errorf("delete auth scope from %s: %w", statePath, err))
+		blocks, listErr := store.ListScopeBlocks(ctx)
+		if listErr != nil {
+			errs = append(errs, fmt.Errorf("list scope blocks %s: %w", statePath, listErr))
+		} else if scopeBlocksContainAuth(blocks) {
+			if err := store.DeleteScopeBlock(ctx, synctypes.SKAuthAccount()); err != nil {
+				errs = append(errs, fmt.Errorf("delete auth scope from %s: %w", statePath, err))
+			} else {
+				clearedCount++
+			}
 		}
 
 		if err := store.Close(ctx); err != nil {
@@ -245,31 +246,25 @@ func clearAccountAuthScopes(ctx context.Context, email string, logger *slog.Logg
 		}
 	}
 
-	return errors.Join(errs...)
+	return clearedCount, errors.Join(errs...)
+}
+
+func scopeBlocksContainAuth(blocks []*synctypes.ScopeBlock) bool {
+	for _, block := range blocks {
+		if block.Key == synctypes.SKAuthAccount() {
+			return true
+		}
+	}
+
+	return false
 }
 
 func authReasonText(reason string) string {
-	switch reason {
-	case authReasonMissingLogin:
-		return "No saved login was found for this account."
-	case authReasonInvalidSavedLogin:
-		return "The saved login for this account is invalid or unreadable."
-	case authReasonSyncAuthRejected:
-		return "The last sync attempt for this account was rejected by OneDrive."
-	default:
-		return ""
-	}
+	return authstate.PresentationForReason(reason).Reason
 }
 
 func authAction(reason string) string {
-	switch reason {
-	case authReasonSyncAuthRejected:
-		return "Run 'onedrive-go whoami' to re-check access, or 'onedrive-go login' to sign in again."
-	case authReasonMissingLogin, authReasonInvalidSavedLogin:
-		return "Run 'onedrive-go login' to sign in."
-	default:
-		return ""
-	}
+	return authstate.PresentationForReason(reason).Action
 }
 
 func authRequirement(
@@ -382,12 +377,5 @@ func printAccountAuthRequirementsText(w io.Writer, header string, items []accoun
 }
 
 func authErrorMessage(err error) string {
-	switch {
-	case errors.Is(err, graph.ErrNotLoggedIn):
-		return "Authentication required: no saved login was found for this account. Run 'onedrive-go login'."
-	case errors.Is(err, graph.ErrUnauthorized):
-		return "Authentication required: OneDrive rejected the saved login for this account. Run 'onedrive-go login'."
-	default:
-		return ""
-	}
+	return authstate.ErrorMessage(err)
 }

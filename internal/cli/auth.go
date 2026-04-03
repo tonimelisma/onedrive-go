@@ -789,6 +789,7 @@ func runWhoamiWithContext(ctx context.Context, cc *CLIContext) error {
 		config.LogWarnings(warnings, logger)
 	}
 
+	catalog := buildAccountCatalog(ctx, cfg, logger)
 	driveSelector, driveErr := cc.Flags.SingleDrive()
 	if driveErr != nil {
 		return driveErr
@@ -797,13 +798,13 @@ func runWhoamiWithContext(ctx context.Context, cc *CLIContext) error {
 	recorder := newAuthProofRecorder(logger)
 
 	// Try the authenticated path: match drive → fetch from Graph API.
-	authResult, authErr := fetchAuthenticatedAccount(ctx, cfg, driveSelector, logger, recorder)
+	authResult, authErr := fetchAuthenticatedAccount(ctx, cfg, catalog, driveSelector, logger, recorder, cc.GraphBaseURL)
 	if authErr != nil {
 		return authErr
 	}
 
 	// Discover offline auth-required accounts from orphaned account profiles.
-	authRequired := findWhoamiAuthRequiredAccounts(ctx, cfg, authResult.authenticatedEmail, logger)
+	authRequired := whoamiAuthRequiredAccounts(catalog, authResult.authenticatedEmail)
 	if authResult.authRequired != nil {
 		authRequired = mergeAuthRequirements(authRequired, []accountAuthRequirement{*authResult.authRequired})
 	}
@@ -834,7 +835,13 @@ type authenticatedAccountResult struct {
 // when no authenticated account is available. Returns a non-nil error only
 // for hard failures after a token is located.
 func fetchAuthenticatedAccount(
-	ctx context.Context, cfg *config.Config, driveSelector string, logger *slog.Logger, recorder *authProofRecorder,
+	ctx context.Context,
+	cfg *config.Config,
+	catalog []accountCatalogEntry,
+	driveSelector string,
+	logger *slog.Logger,
+	recorder *authProofRecorder,
+	baseURL string,
 ) (authenticatedAccountResult, error) {
 	cid, found := matchAuthenticatedDrive(cfg, driveSelector, logger)
 	if !found {
@@ -846,17 +853,25 @@ func fetchAuthenticatedAccount(
 	if len(accountDriveIDs) == 0 {
 		accountDriveIDs = []driveid.CanonicalID{cid}
 	}
-	displayName, _ := readAccountMeta(accountEmail, accountDriveIDs, logger)
-	stateDBCount := len(config.DiscoverStateDBsForEmail(accountEmail, logger))
+	catalogEntry, found := catalogEntryByEmail(catalog, accountEmail)
+	if !found {
+		catalogEntry = accountCatalogEntry{
+			DriveType:    accountDriveType(accountDriveIDs),
+			DisplayName:  "",
+			StateDBCount: len(config.DiscoverStateDBsForEmail(accountEmail, logger)),
+			AuthHealth:   inspectAccountAuth(ctx, accountEmail, accountDriveIDs, logger),
+		}
+		catalogEntry.DisplayName, _ = readAccountMeta(accountEmail, accountDriveIDs, logger)
+	}
 	authRequired := authRequirement(
 		accountEmail,
-		displayName,
-		accountDriveType(accountDriveIDs),
-		stateDBCount,
+		catalogEntry.DisplayName,
+		catalogEntry.DriveType,
+		catalogEntry.StateDBCount,
 		accountAuthHealth{},
 	)
 
-	accountAuth := inspectAccountAuth(ctx, accountEmail, accountDriveIDs, logger)
+	accountAuth := catalogEntry.AuthHealth
 	if accountAuth.State == authStateAuthenticationNeeded && accountAuth.Reason != authReasonSyncAuthRejected {
 		authRequired.Reason = accountAuth.Reason
 		authRequired.Action = accountAuth.Action
@@ -883,11 +898,11 @@ func fetchAuthenticatedAccount(
 		return authenticatedAccountResult{authRequired: &authRequired}, nil
 	}
 
-	client, err := newGraphClient(ts, logger)
+	client, err := newGraphClientWithBaseURL(baseURL, ts, logger)
 	if err != nil {
 		return authenticatedAccountResult{}, err
 	}
-	attachAccountAuthProof(client, recorder, accountEmail)
+	attachAccountAuthProof(client, recorder, accountEmail, "whoami")
 
 	user, err := client.Me(ctx)
 	if err != nil {
@@ -961,63 +976,16 @@ func findWhoamiAuthRequiredAccounts(
 	authenticatedEmail string,
 	logger *slog.Logger,
 ) []accountAuthRequirement {
-	profiles := config.DiscoverAccountProfiles(logger)
-	if len(profiles) == 0 {
-		return nil
-	}
+	return whoamiAuthRequiredAccounts(buildAccountCatalog(ctx, cfg, logger), authenticatedEmail)
+}
 
-	// Build set of emails that are still authenticated (in config).
-	configEmails := make(map[string]bool)
-	for id := range cfg.Drives {
-		configEmails[id.Email()] = true
-	}
-
-	if authenticatedEmail != "" {
-		configEmails[authenticatedEmail] = true
-	}
-
-	var result []accountAuthRequirement
-
-	for _, profileCID := range profiles {
-		email := profileCID.Email()
-
-		// Skip if this account is still in config (authenticated).
-		if configEmails[email] {
-			continue
+func whoamiAuthRequiredAccounts(catalog []accountCatalogEntry, authenticatedEmail string) []accountAuthRequirement {
+	return catalogAuthRequirements(catalog, func(entry accountCatalogEntry) bool {
+		if entry.Configured {
+			return false
 		}
-
-		health := inspectAccountAuth(ctx, email, []driveid.CanonicalID{profileCID}, logger)
-		if health.State != authStateAuthenticationNeeded {
-			continue
-		}
-
-		// Load profile for display name.
-		profile, found, profileErr := config.LookupAccountProfile(profileCID)
-		if profileErr != nil {
-			logger.Debug("could not load account profile for logged-out display",
-				"canonical_id", profileCID.String(), "error", profileErr)
-		}
-
-		var displayName string
-		if found {
-			displayName = profile.DisplayName
-		}
-
-		// Count state DBs for this email.
-		stateDBs := config.DiscoverStateDBsForEmail(email, logger)
-
-		result = append(result, authRequirement(
-			email,
-			displayName,
-			profileCID.DriveType(),
-			len(stateDBs),
-			health,
-		))
-	}
-
-	sortAccountAuthRequirements(result)
-
-	return result
+		return entry.Email != authenticatedEmail
+	})
 }
 
 func printWhoamiJSON(w io.Writer, user *graph.User, drives []graph.Drive, authRequired []accountAuthRequirement) error {

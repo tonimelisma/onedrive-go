@@ -60,6 +60,7 @@ type SessionProvider struct {
 	transferHTTP *http.Client
 	userAgent    string
 	logger       *slog.Logger
+	GraphBaseURL string
 
 	// TokenSourceFn creates a TokenSource from a token file path. Exported
 	// for test injection; defaults to graph.TokenSourceFromPath.
@@ -110,12 +111,17 @@ func (p *SessionProvider) Session(ctx context.Context, rd *config.ResolvedDrive)
 		)
 	}
 
-	meta, err := graph.NewClient(graph.DefaultBaseURL, p.metaHTTP, ts, p.logger, p.userAgent)
+	baseURL := graph.DefaultBaseURL
+	if p.GraphBaseURL != "" {
+		baseURL = p.GraphBaseURL
+	}
+
+	meta, err := graph.NewClient(baseURL, p.metaHTTP, ts, p.logger, p.userAgent)
 	if err != nil {
 		return nil, fmt.Errorf("create metadata graph client: %w", err)
 	}
 
-	transfer, err := graph.NewClient(graph.DefaultBaseURL, p.transferHTTP, ts, p.logger, p.userAgent)
+	transfer, err := graph.NewClient(baseURL, p.transferHTTP, ts, p.logger, p.userAgent)
 	if err != nil {
 		return nil, fmt.Errorf("create transfer graph client: %w", err)
 	}

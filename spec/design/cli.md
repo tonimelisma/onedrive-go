@@ -65,6 +65,19 @@ purpose:
 token/account-profile state plus persisted sync state to show best-known auth
 health, but they never probe Graph and never mutate `auth:account`.
 
+`internal/authstate` is the leaf package that owns the shared auth-health
+vocabulary and copy:
+
+- states: `ready`, `authentication_required`
+- reasons: `missing_login`, `invalid_saved_login`, `sync_auth_rejected`
+- shared title/reason/action text for CLI auth surfaces and `IssueUnauthorized`
+
+`internal/cli` builds one offline account catalog from configured drives,
+discovered account profiles, discovered token files, and persisted
+`auth:account` scope presence. `status`, `whoami`, `drive list`, and
+`drive search` all read from that same catalog so account discovery and auth
+projection stay consistent across surfaces.
+
 `whoami`, `drive list`, `drive search`, and ordinary single-drive file commands
 are proof surfaces because they already perform authenticated Graph requests.
 The first successful authenticated Graph response for an account clears stale
@@ -156,7 +169,7 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
   - `authService`: login/logout/whoami flows
   - `driveService`: drive list/add/remove/search flows
   - `issuesService`: issue listing and failure/conflict mutations
-  - `statusService`: account/drive status aggregation, lenient config warning handling, token checks, and read-only sync-state inspection
+  - `statusService`: account/drive status aggregation, lenient config warning handling, offline auth-health projection, and read-only sync-state inspection
   - `syncControlService`: pause/resume config mutation flows
   - `recycleBinService`: recycle-bin list/restore/empty flows
   - `syncService`: multi-drive sync command assembly
@@ -175,6 +188,7 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
 - CLI presentation is the final error boundary. `classifyCommandError` and `commandFailurePresentationForClass` map the domain classes from [error-model.md](error-model.md) to process exit behavior and user-facing reason/action text, while `authErrorMessage` specializes the user-facing auth copy for saved-login failures without re-inspecting raw transport payloads.
 - The root error boundary maps both `graph.ErrNotLoggedIn` and `graph.ErrUnauthorized` into the same user-facing family, `Authentication required`, with cause-specific detail and a shared remediation path (`onedrive-go login`).
 - Offline auth surfaces (`status`, `issues`) never mutate `auth:account`. Live proof surfaces clear `auth:account` only after an authenticated Graph response succeeds. Pre-authenticated upload/download URL success is not treated as auth proof.
+- The authenticated-success proof recorder logs one attributed scope-repair event per account and proof source (`whoami`, `drive-list`, `drive-search`, `drive-session`) when it clears stale `auth:account` blocks. It does not log every successful request and does not create a persistent audit trail.
 - Extract `multiHandler` from `internal/cli/root.go` to `internal/slogutil/` if logging grows (structured error reporting, log sampling). [planned]
 
 ## Issues Display

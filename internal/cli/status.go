@@ -27,10 +27,10 @@ const (
 func newStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
-		Short: "Show all accounts, drives, and token status",
+		Short: "Show all accounts, drives, and authentication health",
 		Long: `Display the status of all configured accounts and drives.
 
-Shows token validity, sync directory, and paused/ready status for each drive.
+Shows authentication health, sync directory, and paused/ready status for each drive.
 Reads from config only — does not discover drives from tokens on disk.`,
 		Annotations: map[string]string{skipConfigAnnotation: "true"},
 		RunE:        runStatus,
@@ -102,15 +102,6 @@ type syncStateQuerier interface {
 	QuerySyncState(cid driveid.CanonicalID) *syncStateInfo
 }
 
-// liveAccountNames reads display name and org name from account profile files on disk.
-type liveAccountNames struct {
-	logger *slog.Logger
-}
-
-func (m *liveAccountNames) ReadAccountNames(account string, driveIDs []driveid.CanonicalID) (string, string) {
-	return readAccountMeta(account, driveIDs, m.logger)
-}
-
 // liveSyncStateQuerier queries per-drive sync state from real state DBs.
 type liveSyncStateQuerier struct {
 	logger *slog.Logger
@@ -121,14 +112,11 @@ func (q *liveSyncStateQuerier) QuerySyncState(cid driveid.CanonicalID) *syncStat
 	return querySyncState(statePath, q.logger)
 }
 
-// buildStatusAccounts groups configured drives by account email and checks
-// token validity for each account.
+// buildStatusAccounts groups configured drives by account email and projects
+// offline authentication health for each account from local state only.
 func buildStatusAccounts(cfg *config.Config, logger *slog.Logger) []statusAccount {
-	return buildStatusAccountsWith(cfg,
-		&liveAccountNames{logger: logger},
-		&liveAccountAuthChecker{logger: logger},
-		&liveSyncStateQuerier{logger: logger},
-	)
+	catalog := buildAccountCatalog(context.Background(), cfg, logger)
+	return buildStatusAccountsFromCatalog(cfg, catalog, &liveSyncStateQuerier{logger: logger})
 }
 
 // buildStatusAccountsWith is the testable core of buildStatusAccounts.
@@ -146,6 +134,61 @@ func buildStatusAccountsWith(
 		})
 
 		acct := buildSingleAccountStatusWith(cfg, email, driveIDs, names, checker, syncQ)
+		accounts = append(accounts, acct)
+	}
+
+	return accounts
+}
+
+func buildStatusAccountsFromCatalog(
+	cfg *config.Config,
+	catalog []accountCatalogEntry,
+	syncQ syncStateQuerier,
+) []statusAccount {
+	grouped, order := groupDrivesByAccount(cfg)
+	accounts := make([]statusAccount, 0, len(order))
+
+	for _, email := range order {
+		driveIDs := grouped[email]
+		sort.Slice(driveIDs, func(i, j int) bool {
+			return driveIDs[i].String() < driveIDs[j].String()
+		})
+
+		entry, _ := catalogEntryByEmail(catalog, email)
+		acct := statusAccount{
+			Email:       email,
+			DriveType:   entry.DriveType,
+			AuthState:   entry.AuthHealth.State,
+			AuthReason:  entry.AuthHealth.Reason,
+			AuthAction:  entry.AuthHealth.Action,
+			DisplayName: entry.DisplayName,
+			OrgName:     entry.OrgName,
+			Drives:      make([]statusDrive, 0, len(driveIDs)),
+		}
+
+		for _, cid := range driveIDs {
+			d := cfg.Drives[cid]
+			state := driveState(&d)
+
+			driveDisplayName := d.DisplayName
+			if driveDisplayName == "" {
+				driveDisplayName = config.DefaultDisplayName(cid)
+			}
+
+			sd := statusDrive{
+				CanonicalID: cid.String(),
+				DisplayName: driveDisplayName,
+				SyncDir:     d.SyncDir,
+				State:       state,
+			}
+
+			if syncQ != nil {
+				sd.SyncState = syncQ.QuerySyncState(cid)
+			}
+
+			acct.Drives = append(acct.Drives, sd)
+		}
+
 		accounts = append(accounts, acct)
 	}
 
