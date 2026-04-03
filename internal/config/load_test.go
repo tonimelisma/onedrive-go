@@ -223,6 +223,30 @@ func TestLoadOrDefault_StatError(t *testing.T) {
 	assert.Contains(t, err.Error(), "boom")
 }
 
+func TestLoadLenient_ReadManagedFileError(t *testing.T) {
+	_, _, err := loadLenientWithIO("/tmp/config.toml", testLogger(t), configIO{
+		readManagedFile: func(path string) ([]byte, error) {
+			return nil, errors.New("boom")
+		},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading config file")
+	assert.Contains(t, err.Error(), "boom")
+}
+
+func TestLoadOrDefaultLenient_StatError(t *testing.T) {
+	_, _, err := loadOrDefaultLenientWithIO("/tmp/config.toml", testLogger(t), configIO{
+		statManagedPath: func(path string) (os.FileInfo, error) {
+			return nil, errors.New("boom")
+		},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "stating config file")
+	assert.Contains(t, err.Error(), "boom")
+}
+
 func TestLoad_PartialConfig_UsesDefaults(t *testing.T) {
 	path := writeTestConfig(t, `log_level = "warn"`)
 	cfg, err := Load(path, testLogger(t))

@@ -2,6 +2,7 @@ package syncrecovery
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -21,16 +22,19 @@ type fakeStore struct {
 	finalizeDeleted        []synctypes.RecoveryCandidate
 	finalizePending        []synctypes.RecoveryCandidate
 	candidates             []synctypes.RecoveryCandidate
+	resetDownloadingErr    error
+	listDeletingErr        error
+	finalizeErr            error
 }
 
 func (s *fakeStore) ResetDownloadingStates(_ context.Context, _ func(int) time.Duration) error {
 	s.resetDownloadingCalled = true
-	return nil
+	return s.resetDownloadingErr
 }
 
 func (s *fakeStore) ListDeletingCandidates(_ context.Context) ([]synctypes.RecoveryCandidate, error) {
 	s.listDeletingCalled = true
-	return s.candidates, nil
+	return s.candidates, s.listDeletingErr
 }
 
 func (s *fakeStore) FinalizeDeletingStates(
@@ -41,7 +45,7 @@ func (s *fakeStore) FinalizeDeletingStates(
 ) error {
 	s.finalizeDeleted = append([]synctypes.RecoveryCandidate(nil), deleted...)
 	s.finalizePending = append([]synctypes.RecoveryCandidate(nil), pending...)
-	return nil
+	return s.finalizeErr
 }
 
 func discardLogger() *slog.Logger {
@@ -93,4 +97,51 @@ func TestResetInProgressStates_StatErrorRetriesDelete(t *testing.T) {
 	assert.Empty(t, store.finalizeDeleted)
 	require.Len(t, store.finalizePending, 1)
 	assert.Equal(t, "bad", store.finalizePending[0].ItemID)
+}
+
+// Validates: R-2.5.1
+func TestResetInProgressStates_ResetDownloadingError(t *testing.T) {
+	t.Parallel()
+
+	tree, err := synctree.Open(t.TempDir())
+	require.NoError(t, err)
+
+	store := &fakeStore{resetDownloadingErr: errors.New("boom")}
+
+	err = ResetInProgressStates(t.Context(), store, tree, func(int) time.Duration { return time.Second }, discardLogger())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reset downloading states")
+}
+
+// Validates: R-2.5.1
+func TestResetInProgressStates_ListDeletingCandidatesError(t *testing.T) {
+	t.Parallel()
+
+	tree, err := synctree.Open(t.TempDir())
+	require.NoError(t, err)
+
+	store := &fakeStore{listDeletingErr: errors.New("boom")}
+
+	err = ResetInProgressStates(t.Context(), store, tree, func(int) time.Duration { return time.Second }, discardLogger())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "list deleting candidates")
+}
+
+// Validates: R-2.5.1
+func TestResetInProgressStates_FinalizeDeletingStatesError(t *testing.T) {
+	t.Parallel()
+
+	tree, err := synctree.Open(t.TempDir())
+	require.NoError(t, err)
+
+	store := &fakeStore{
+		finalizeErr: errors.New("boom"),
+		candidates: []synctypes.RecoveryCandidate{
+			{DriveID: "d1", ItemID: "gone", Path: "gone.txt"},
+		},
+	}
+
+	err = ResetInProgressStates(t.Context(), store, tree, func(int) time.Duration { return time.Second }, discardLogger())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "finalize deleting states")
 }

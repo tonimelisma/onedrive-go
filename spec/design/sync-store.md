@@ -143,6 +143,12 @@ rows as completed deletes or pending retries via
 then calls the store’s state-only recovery primitives. `SyncStore` no longer
 joins sync-root paths or calls `os.Stat` itself.
 
+Per-candidate stat failures do not abort recovery; they downgrade that path to
+the pending-delete set so the next engine pass retries it. Store-boundary
+failures (`ResetDownloadingStates`, `ListDeletingCandidates`,
+`FinalizeDeletingStates`) still abort the recovery pass with context-wrapped
+errors because the durable-state transition itself is incomplete.
+
 ## Issues CLI
 
 `issues` reads conflicts and actionable failures directly from the store.
