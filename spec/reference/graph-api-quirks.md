@@ -182,7 +182,7 @@ OneDrive does not store fractional seconds. Timestamps must be truncated to zero
 
 ### Invalid Timestamps
 
-The API can return `0001-01-01T00:00:00Z` or far-future dates. `lastModifiedDateTime` may be absent for API-initiated deletions.
+The API can return `0001-01-01T00:00:00Z` or far-future dates. `lastModifiedDateTime` may be absent or explicitly `null` for API-initiated deletions.
 
 The client treats these as unknown metadata, not as clock values to repair locally. The graph boundary leaves invalid or absent timestamps as zero `time.Time`, sync observation/store persist that as unknown/NULL state, and CLI JSON/text output renders the unknown state explicitly instead of inventing a replacement timestamp.
 
