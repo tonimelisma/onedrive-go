@@ -105,6 +105,13 @@ Implements: R-6.8.14 [implemented]
 
 Transparent token refresh on 401 inside `doOnce()`, independent of retry transport. On 401: refresh token → retry once. If still 401 → return `ErrUnauthorized` (fatal). Auth refresh is lifecycle management, not transient retry — it works regardless of whether the HTTP client has a `RetryTransport`.
 
+`Client` also exposes an optional per-instance authenticated-success hook. The
+hook fires only after a normal authenticated Graph request succeeds. CLI code
+uses this as a proof boundary to clear stale `auth:account` scope blocks after
+live account or drive commands succeed. Pre-authenticated upload/download URLs
+never invoke the hook, so pre-auth transport success is not mistaken for proof
+that ordinary Graph auth is healthy.
+
 ## Runtime Ownership
 
 The graph package intentionally keeps runtime ownership narrow:
@@ -121,6 +128,7 @@ The graph package intentionally keeps runtime ownership narrow:
 - `tokenfile/` is a leaf package (stdlib + oauth2 only)
 - Token refresh uses a forked `golang.org/x/oauth2` (`github.com/tonimelisma/oauth2`, branch `on-token-change`) with `Config.OnTokenChange` callback for persistence. Tracks upstream proposal `golang/go#77502`.
 - Pre-authenticated URLs (`@microsoft.graph.downloadUrl`, upload session URLs) bypass the Graph API — use `httpClient.Do(req)` directly, no base URL prefix, no auth headers. Never log these URLs.
+- The authenticated-success hook is only a proof signal. It must remain optional, per-client, and side-effect free from the graph package's perspective. Graph owns when the hook fires; callers own any resulting state repair.
 - Two HTTP clients: `defaultHTTPClient()` (30-second timeout for metadata) and `transferHTTPClient()` (no client-level timeout for large file transfers). Transfer clients use `transferTransport()` with `ResponseHeaderTimeout` and TCP keepalives to detect stalled/dead connections without bounding total transfer time.
 - Upload URLs are sensitive credentials. The `UploadURL` type implements `slog.LogValuer` with redaction, matching the `DownloadURL` pattern.
 - Search API calls URL-escape query parameters to prevent special characters from breaking URL construction.

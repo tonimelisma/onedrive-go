@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -49,6 +50,7 @@ type Client struct {
 	token                TokenSource
 	logger               *slog.Logger
 	userAgent            string
+	authSuccessHook      func(context.Context)
 	deltaPreferHeader    http.Header
 	maxDeltaPages        int
 	maxRecursionDepth    int
@@ -56,4 +58,11 @@ type Client struct {
 	rootChildrenPolicy   retry.Policy
 	uploadURLValidator   func(*url.URL) error
 	copyMonitorValidator func(*url.URL) error
+}
+
+// SetAuthenticatedSuccessHook installs a best-effort callback that runs after
+// each successful authenticated Graph API response. Pre-authenticated upload,
+// download, and copy-monitor URLs do not flow through this hook.
+func (c *Client) SetAuthenticatedSuccessHook(hook func(context.Context)) {
+	c.authSuccessHook = hook
 }

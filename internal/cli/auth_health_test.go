@@ -1,0 +1,145 @@
+package cli
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+)
+
+func seedAuthScope(t *testing.T, cid driveid.CanonicalID) {
+	t.Helper()
+
+	store, err := syncstore.NewSyncStore(t.Context(), config.DriveStatePath(cid), testDriveLogger(t))
+	require.NoError(t, err)
+	defer store.Close(t.Context())
+
+	require.NoError(t, store.UpsertScopeBlock(t.Context(), &synctypes.ScopeBlock{
+		Key:          synctypes.SKAuthAccount(),
+		IssueType:    synctypes.IssueUnauthorized,
+		TimingSource: synctypes.ScopeTimingNone,
+		BlockedAt:    time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC),
+	}))
+}
+
+// Validates: R-2.10.47
+func TestClearAccountAuthScopes_ClearsPersistedAuthScope(t *testing.T) {
+	setTestDriveHome(t)
+
+	cids := []driveid.CanonicalID{
+		driveid.MustCanonicalID("personal:user@example.com"),
+		driveid.MustCanonicalID("business:user@example.com"),
+	}
+	for _, cid := range cids {
+		seedAuthScope(t, cid)
+	}
+
+	logger := testDriveLogger(t)
+	require.True(t, hasPersistedAuthScope(t.Context(), "user@example.com", logger))
+
+	require.NoError(t, clearAccountAuthScopes(t.Context(), "user@example.com", logger))
+	assert.False(t, hasPersistedAuthScope(t.Context(), "user@example.com", logger))
+}
+
+// Validates: R-2.10.47
+func TestAttachAccountAuthProof_ClearsOnAuthenticatedSuccess(t *testing.T) {
+	setTestDriveHome(t)
+
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	seedAuthScope(t, cid)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/me", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, err := w.Write([]byte(`{
+			"id": "user-123",
+			"displayName": "Test User",
+			"mail": "user@example.com",
+			"userPrincipalName": "user@example.com"
+		}`))
+		assert.NoError(t, err)
+	}))
+	defer srv.Close()
+
+	client := newTestGraphClient(t, srv.URL)
+	attachAccountAuthProof(client, newAuthProofRecorder(testDriveLogger(t)), cid.Email())
+
+	_, err := client.Me(t.Context())
+	require.NoError(t, err)
+	assert.False(t, hasPersistedAuthScope(t.Context(), cid.Email(), testDriveLogger(t)))
+}
+
+// Validates: R-2.10.47
+func TestAttachAccountAuthProof_DoesNotClearOnUnauthorized(t *testing.T) {
+	setTestDriveHome(t)
+
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	seedAuthScope(t, cid)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, err := w.Write([]byte(`{"error":{"code":"InvalidAuthenticationToken","message":"unauthorized"}}`))
+		assert.NoError(t, err)
+	}))
+	defer srv.Close()
+
+	client := newTestGraphClient(t, srv.URL)
+	attachAccountAuthProof(client, newAuthProofRecorder(testDriveLogger(t)), cid.Email())
+
+	_, err := client.Me(t.Context())
+	require.ErrorIs(t, err, graph.ErrUnauthorized)
+	assert.True(t, hasPersistedAuthScope(t.Context(), cid.Email(), testDriveLogger(t)))
+}
+
+// Validates: R-2.10.45, R-2.10.47
+func TestStatusService_Run_JSONSurfacesSyncAuthRejectedOffline(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
+	seedAuthScope(t, cid)
+
+	var out bytes.Buffer
+	svc := newStatusService(&CLIContext{
+		Logger:       testDriveLogger(t),
+		OutputWriter: &out,
+		CfgPath:      cfgPath,
+		Flags:        CLIFlags{JSON: true},
+	})
+
+	require.NoError(t, svc.run())
+
+	var decoded statusOutput
+	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
+	require.Len(t, decoded.Accounts, 1)
+	assert.Equal(t, authStateAuthenticationNeeded, decoded.Accounts[0].AuthState)
+	assert.Equal(t, authReasonSyncAuthRejected, decoded.Accounts[0].AuthReason)
+	assert.Equal(t, 1, decoded.Summary.AccountsRequiringAuth)
+}
+
+// Validates: R-2.10.45
+func TestAuthErrorMessage_UsesUnifiedAuthenticationRequiredWording(t *testing.T) {
+	notLoggedIn := authErrorMessage(graph.ErrNotLoggedIn)
+	assert.Contains(t, notLoggedIn, "Authentication required:")
+	assert.Contains(t, notLoggedIn, "onedrive-go login")
+
+	unauthorized := authErrorMessage(graph.ErrUnauthorized)
+	assert.Contains(t, unauthorized, "Authentication required:")
+	assert.Contains(t, unauthorized, "OneDrive rejected the saved login")
+}

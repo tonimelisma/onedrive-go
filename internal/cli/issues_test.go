@@ -596,7 +596,7 @@ func TestIssuesService_RunList_SurfacesAuthScopeWithoutFakePaths(t *testing.T) {
 		require.NoError(t, svc.runList(t.Context(), false))
 
 		output := buf.String()
-		assert.Contains(t, output, "AUTHORIZATION EXPIRED")
+		assert.Contains(t, output, "AUTHENTICATION REQUIRED")
 		assert.Contains(t, output, "Scope: your OneDrive account authorization")
 		assert.NotContains(t, output, "No issues.")
 		assert.NotContains(t, output, "  /")

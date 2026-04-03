@@ -21,6 +21,12 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
+const (
+	tokenStateMissing = "missing"
+	tokenStateExpired = "expired"
+	tokenStateValid   = "valid"
+)
+
 // mockNameReader returns fixed display name and org name for testing.
 type mockNameReader struct {
 	displayName string
@@ -36,8 +42,23 @@ type mockTokenChecker struct {
 	state string
 }
 
-func (m *mockTokenChecker) CheckToken(_ context.Context, _ string, _ []driveid.CanonicalID) string {
-	return m.state
+func (m *mockTokenChecker) CheckAccountAuth(_ context.Context, _ string, _ []driveid.CanonicalID) accountAuthHealth {
+	switch m.state {
+	case tokenStateMissing:
+		return accountAuthHealth{
+			State:  authStateAuthenticationNeeded,
+			Reason: authReasonMissingLogin,
+			Action: authAction(authReasonMissingLogin),
+		}
+	case tokenStateExpired:
+		return accountAuthHealth{
+			State:  authStateAuthenticationNeeded,
+			Reason: authReasonInvalidSavedLogin,
+			Action: authAction(authReasonInvalidSavedLogin),
+		}
+	default:
+		return accountAuthHealth{State: authStateReady}
+	}
 }
 
 // mockSyncStateQuerier returns a fixed sync state for all drives.
@@ -51,25 +72,20 @@ func (m *mockSyncStateQuerier) QuerySyncState(_ driveid.CanonicalID) *syncStateI
 
 func TestDriveState_Ready(t *testing.T) {
 	d := &config.Drive{}
-	assert.Equal(t, "ready", driveState(d, tokenStateValid))
+	assert.Equal(t, "ready", driveState(d))
 }
 
 func TestDriveState_Paused(t *testing.T) {
 	paused := true
 	d := &config.Drive{Paused: &paused}
-	assert.Equal(t, "paused", driveState(d, tokenStateValid))
-}
-
-func TestDriveState_NoToken(t *testing.T) {
-	d := &config.Drive{}
-	assert.Equal(t, "no token", driveState(d, tokenStateMissing))
+	assert.Equal(t, "paused", driveState(d))
 }
 
 func TestDriveState_PausedOverridesNoToken(t *testing.T) {
-	// Paused takes priority over no token — the drive is intentionally paused.
+	// Paused remains an explicit operational state regardless of auth health.
 	paused := true
 	d := &config.Drive{Paused: &paused}
-	assert.Equal(t, "paused", driveState(d, tokenStateMissing))
+	assert.Equal(t, "paused", driveState(d))
 }
 
 func TestGroupDrivesByAccount(t *testing.T) {
@@ -153,7 +169,7 @@ func TestBuildStatusAccountsWith_SingleAccount(t *testing.T) {
 	acct := accounts[0]
 	assert.Equal(t, "alice@example.com", acct.Email)
 	assert.Equal(t, "personal", acct.DriveType)
-	assert.Equal(t, tokenStateValid, acct.TokenState)
+	assert.Equal(t, authStateReady, acct.AuthState)
 	assert.Equal(t, "Alice", acct.DisplayName)
 
 	require.Len(t, acct.Drives, 1)
@@ -191,41 +207,45 @@ func TestBuildStatusAccountsWith_MultiAccountGrouping(t *testing.T) {
 	assert.Equal(t, "charlie@example.com", accounts[2].Email)
 }
 
-func TestBuildStatusAccountsWith_MissingToken(t *testing.T) {
-	cfg := &config.Config{
-		Drives: map[driveid.CanonicalID]config.Drive{
-			driveid.MustCanonicalID("personal:alice@example.com"): {SyncDir: "~/OneDrive"},
+// Validates: R-2.10.47
+func TestBuildStatusAccountsWith_AuthenticationRequiredStates(t *testing.T) {
+	tests := []struct {
+		name       string
+		tokenState string
+		wantReason string
+	}{
+		{
+			name:       "missing token",
+			tokenState: tokenStateMissing,
+			wantReason: authReasonMissingLogin,
+		},
+		{
+			name:       "invalid saved login",
+			tokenState: tokenStateExpired,
+			wantReason: authReasonInvalidSavedLogin,
 		},
 	}
 
-	accounts := buildStatusAccountsWith(cfg,
-		&mockNameReader{},
-		&mockTokenChecker{state: tokenStateMissing},
-		&mockSyncStateQuerier{},
-	)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{
+				Drives: map[driveid.CanonicalID]config.Drive{
+					driveid.MustCanonicalID("personal:alice@example.com"): {SyncDir: "~/OneDrive"},
+				},
+			}
 
-	require.Len(t, accounts, 1)
-	assert.Equal(t, tokenStateMissing, accounts[0].TokenState)
-	assert.Equal(t, driveStateNoToken, accounts[0].Drives[0].State)
-}
+			accounts := buildStatusAccountsWith(cfg,
+				&mockNameReader{},
+				&mockTokenChecker{state: tc.tokenState},
+				&mockSyncStateQuerier{},
+			)
 
-func TestBuildStatusAccountsWith_ExpiredToken(t *testing.T) {
-	cfg := &config.Config{
-		Drives: map[driveid.CanonicalID]config.Drive{
-			driveid.MustCanonicalID("personal:alice@example.com"): {SyncDir: "~/OneDrive"},
-		},
+			require.Len(t, accounts, 1)
+			assert.Equal(t, authStateAuthenticationNeeded, accounts[0].AuthState)
+			assert.Equal(t, tc.wantReason, accounts[0].AuthReason)
+			assert.Equal(t, driveStateReady, accounts[0].Drives[0].State)
+		})
 	}
-
-	accounts := buildStatusAccountsWith(cfg,
-		&mockNameReader{},
-		&mockTokenChecker{state: tokenStateExpired},
-		&mockSyncStateQuerier{},
-	)
-
-	require.Len(t, accounts, 1)
-	assert.Equal(t, tokenStateExpired, accounts[0].TokenState)
-	// Expired token still shows "ready" — token state is shown separately.
-	assert.Equal(t, driveStateReady, accounts[0].Drives[0].State)
 }
 
 func TestBuildStatusAccountsWith_EmptySyncDir(t *testing.T) {
@@ -305,14 +325,14 @@ func TestReadAccountMeta_FallsBackToTokenProbe(t *testing.T) {
 	assert.Equal(t, "Contoso", orgName)
 }
 
-func TestCheckTokenState_MissingTokenUsesFallback(t *testing.T) {
+func TestInspectSavedLogin_MissingTokenUsesFallback(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
-	state := checkTokenState(t.Context(), "missing@example.com", nil, slog.New(slog.DiscardHandler))
-	assert.Equal(t, tokenStateMissing, state)
+	state := inspectSavedLogin(t.Context(), "missing@example.com", nil, slog.New(slog.DiscardHandler))
+	assert.Equal(t, authReasonMissingLogin, state)
 }
 
-func TestCheckTokenState_ValidToken(t *testing.T) {
+func TestInspectSavedLogin_ValidToken(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	cid := driveid.MustCanonicalID("personal:alice@example.com")
@@ -325,11 +345,11 @@ func TestCheckTokenState_ValidToken(t *testing.T) {
 		Expiry:       time.Now().Add(time.Hour),
 	}))
 
-	state := checkTokenState(t.Context(), "alice@example.com", []driveid.CanonicalID{cid}, slog.New(slog.DiscardHandler))
-	assert.Equal(t, tokenStateValid, state)
+	state := inspectSavedLogin(t.Context(), "alice@example.com", []driveid.CanonicalID{cid}, slog.New(slog.DiscardHandler))
+	assert.Empty(t, state)
 }
 
-func TestCheckTokenState_InvalidTokenFileReturnsExpired(t *testing.T) {
+func TestInspectSavedLogin_InvalidTokenFileReturnsInvalidSavedLogin(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	cid := driveid.MustCanonicalID("personal:alice@example.com")
@@ -337,8 +357,8 @@ func TestCheckTokenState_InvalidTokenFileReturnsExpired(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(tokenPath), 0o700))
 	require.NoError(t, os.WriteFile(tokenPath, []byte("{invalid-json"), 0o600))
 
-	state := checkTokenState(t.Context(), "alice@example.com", []driveid.CanonicalID{cid}, slog.New(slog.DiscardHandler))
-	assert.Equal(t, tokenStateExpired, state)
+	state := inspectSavedLogin(t.Context(), "alice@example.com", []driveid.CanonicalID{cid}, slog.New(slog.DiscardHandler))
+	assert.Equal(t, authReasonInvalidSavedLogin, state)
 }
 
 func TestBuildStatusAccountsWith_DisplayNameFromConfig(t *testing.T) {
@@ -380,6 +400,7 @@ func TestBuildStatusAccountsWith_PausedOverridesNoToken(t *testing.T) {
 
 	require.Len(t, accounts, 1)
 	assert.Equal(t, driveStatePaused, accounts[0].Drives[0].State)
+	assert.Equal(t, authStateAuthenticationNeeded, accounts[0].AuthState)
 }
 
 func TestBuildStatusAccountsWith_EmptyConfig(t *testing.T) {
@@ -559,14 +580,16 @@ func TestComputeSummary_Mixed(t *testing.T) {
 
 	accounts := []statusAccount{
 		{
+			AuthState: authStateReady,
 			Drives: []statusDrive{
 				{State: driveStateReady, SyncState: &syncStateInfo{Issues: 3}},
 				{State: driveStatePaused},
 			},
 		},
 		{
+			AuthState: authStateAuthenticationNeeded,
 			Drives: []statusDrive{
-				{State: driveStateNoToken},
+				{State: driveStateReady},
 				{State: driveStateReady, SyncState: &syncStateInfo{Issues: 1}},
 			},
 		},
@@ -574,9 +597,9 @@ func TestComputeSummary_Mixed(t *testing.T) {
 
 	s := computeSummary(accounts)
 	assert.Equal(t, 4, s.TotalDrives)
-	assert.Equal(t, 2, s.Ready)
+	assert.Equal(t, 3, s.Ready)
 	assert.Equal(t, 1, s.Paused)
-	assert.Equal(t, 1, s.NoToken)
+	assert.Equal(t, 1, s.AccountsRequiringAuth)
 	assert.Equal(t, 4, s.TotalIssues)
 }
 
@@ -607,9 +630,9 @@ func TestPrintStatusJSON_WithAccounts(t *testing.T) {
 
 	accounts := []statusAccount{
 		{
-			Email:      "alice@example.com",
-			DriveType:  "personal",
-			TokenState: tokenStateValid,
+			Email:     "alice@example.com",
+			DriveType: "personal",
+			AuthState: authStateReady,
 			Drives: []statusDrive{
 				{
 					CanonicalID: "personal:alice@example.com",
@@ -654,7 +677,7 @@ func TestPrintStatusText_WithDisplayNameAndOrg(t *testing.T) {
 			DisplayName: "Alice Smith",
 			DriveType:   "business",
 			OrgName:     "Contoso",
-			TokenState:  tokenStateValid,
+			AuthState:   authStateReady,
 			Drives: []statusDrive{
 				{
 					CanonicalID: "business:alice@contoso.com",
@@ -671,7 +694,37 @@ func TestPrintStatusText_WithDisplayNameAndOrg(t *testing.T) {
 	output := buf.String()
 	assert.Contains(t, output, "Alice Smith (alice@contoso.com)")
 	assert.Contains(t, output, "Org:   Contoso")
+	assert.Contains(t, output, "Auth:  ready")
 	assert.Contains(t, output, "~/Work")
+}
+
+func TestPrintStatusText_WithAuthRequiredReasonAndAction(t *testing.T) {
+	t.Parallel()
+
+	accounts := []statusAccount{
+		{
+			Email:      "alice@example.com",
+			DriveType:  "personal",
+			AuthState:  authStateAuthenticationNeeded,
+			AuthReason: authReasonSyncAuthRejected,
+			AuthAction: authAction(authReasonSyncAuthRejected),
+			Drives: []statusDrive{
+				{
+					CanonicalID: "personal:alice@example.com",
+					SyncDir:     "~/OneDrive",
+					State:       driveStateReady,
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, printStatusText(&buf, accounts))
+
+	output := buf.String()
+	assert.Contains(t, output, "Auth:  authentication_required")
+	assert.Contains(t, output, "The last sync attempt for this account was rejected by OneDrive.")
+	assert.Contains(t, output, "whoami")
 }
 
 func TestPrintStatusText_SyncStateNever(t *testing.T) {
@@ -679,9 +732,9 @@ func TestPrintStatusText_SyncStateNever(t *testing.T) {
 
 	accounts := []statusAccount{
 		{
-			Email:      "bob@example.com",
-			DriveType:  "personal",
-			TokenState: tokenStateValid,
+			Email:     "bob@example.com",
+			DriveType: "personal",
+			AuthState: authStateReady,
 			Drives: []statusDrive{
 				{
 					CanonicalID: "personal:bob@example.com",
@@ -705,9 +758,9 @@ func TestPrintStatusText_SyncStateWithError(t *testing.T) {
 
 	accounts := []statusAccount{
 		{
-			Email:      "bob@example.com",
-			DriveType:  "personal",
-			TokenState: tokenStateValid,
+			Email:     "bob@example.com",
+			DriveType: "personal",
+			AuthState: authStateReady,
 			Drives: []statusDrive{
 				{
 					CanonicalID: "personal:bob@example.com",
@@ -734,9 +787,9 @@ func TestPrintStatusText_EmptySyncDir(t *testing.T) {
 
 	accounts := []statusAccount{
 		{
-			Email:      "bob@example.com",
-			DriveType:  "personal",
-			TokenState: tokenStateValid,
+			Email:     "bob@example.com",
+			DriveType: "personal",
+			AuthState: authStateReady,
 			Drives: []statusDrive{
 				{
 					CanonicalID: "personal:bob@example.com",
@@ -758,11 +811,11 @@ func TestPrintSummaryText_AllStates(t *testing.T) {
 	t.Parallel()
 
 	s := statusSummary{
-		TotalDrives: 4,
-		Ready:       2,
-		Paused:      1,
-		NoToken:     1,
-		TotalIssues: 3,
+		TotalDrives:           4,
+		Ready:                 3,
+		Paused:                1,
+		AccountsRequiringAuth: 1,
+		TotalIssues:           3,
 	}
 
 	var buf bytes.Buffer
@@ -770,9 +823,9 @@ func TestPrintSummaryText_AllStates(t *testing.T) {
 
 	output := buf.String()
 	assert.Contains(t, output, "4 drives")
-	assert.Contains(t, output, "2 ready")
+	assert.Contains(t, output, "3 ready")
 	assert.Contains(t, output, "1 paused")
-	assert.Contains(t, output, "1 no token")
+	assert.Contains(t, output, "1 accounts requiring auth")
 	assert.Contains(t, output, "3 issues")
 }
 

@@ -136,6 +136,11 @@ func (cc *CLIContext) Session(ctx context.Context) (*driveops.Session, error) {
 		return nil, fmt.Errorf("create drive session: %w", err)
 	}
 
+	// Successful authenticated Graph calls prove the saved login still works.
+	// Attach a best-effort hook so live CLI commands clear stale auth:account
+	// scope blocks without treating session construction itself as proof.
+	attachDriveAuthProof(session, newAuthProofRecorder(cc.Logger))
+
 	return session, nil
 }
 
@@ -292,7 +297,11 @@ func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) int {
 			return 1
 		}
 
-		writeWarningf(statusWriter, "Error: %v\n", err)
+		if authMessage := authErrorMessage(err); authMessage != "" {
+			writeWarningf(statusWriter, "%s\n", authMessage)
+		} else {
+			writeWarningf(statusWriter, "Error: %v\n", err)
+		}
 
 		return 1
 	}

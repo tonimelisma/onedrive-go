@@ -290,6 +290,7 @@ func TestPrintDriveListJSON_Empty(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// Validates: R-3.3.10
 func TestPrintDriveListJSON_VerifyOutput(t *testing.T) {
 	configured := []driveListEntry{
 		{CanonicalID: "personal:user@example.com", SyncDir: "~/OneDrive", State: driveStateReady, Source: "configured"},
@@ -297,18 +298,28 @@ func TestPrintDriveListJSON_VerifyOutput(t *testing.T) {
 	available := []driveListEntry{
 		{CanonicalID: "business:user@contoso.com", Source: "available", SiteName: "Marketing"},
 	}
+	authRequired := []accountAuthRequirement{
+		{
+			Email:     "user@example.com",
+			DriveType: "personal",
+			Reason:    authReasonSyncAuthRejected,
+			Action:    authAction(authReasonSyncAuthRejected),
+		},
+	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printDriveListJSON(&buf, configured, available))
+	require.NoError(t, printDriveListJSON(&buf, configured, available, authRequired))
 
 	var output driveListJSONOutput
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &output))
 	require.Len(t, output.Configured, 1)
 	require.Len(t, output.Available, 1)
+	require.Len(t, output.AccountsRequiringAuth, 1)
 	assert.Equal(t, "personal:user@example.com", output.Configured[0].CanonicalID)
 	assert.Equal(t, "configured", output.Configured[0].Source)
 	assert.Equal(t, "business:user@contoso.com", output.Available[0].CanonicalID)
 	assert.Equal(t, "available", output.Available[0].Source)
+	assert.Equal(t, authReasonSyncAuthRejected, output.AccountsRequiringAuth[0].Reason)
 }
 
 func TestPrintDriveListJSON_NilSlicesRenderAsEmptyArrays(t *testing.T) {
@@ -465,6 +476,30 @@ func TestPrintDriveSearchJSON_NoError(t *testing.T) {
 	var buf bytes.Buffer
 	err := printDriveSearchJSON(&buf, results)
 	assert.NoError(t, err)
+}
+
+// Validates: R-3.3.11
+func TestPrintDriveSearchJSON_IncludesAuthRequiredAccounts(t *testing.T) {
+	results := []driveSearchResult{
+		{CanonicalID: "sharepoint:user@contoso.com:marketing:Docs", SiteName: "Marketing", LibraryName: "Docs"},
+	}
+	authRequired := []accountAuthRequirement{
+		{
+			Email:     "user@contoso.com",
+			DriveType: "business",
+			Reason:    authReasonMissingLogin,
+			Action:    authAction(authReasonMissingLogin),
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, printDriveSearchJSON(&buf, results, authRequired))
+
+	var decoded driveSearchJSONOutput
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
+	require.Len(t, decoded.Results, 1)
+	require.Len(t, decoded.AccountsRequiringAuth, 1)
+	assert.Equal(t, authReasonMissingLogin, decoded.AccountsRequiringAuth[0].Reason)
 }
 
 func TestPrintDriveSearchJSON_EmptySlice(t *testing.T) {
