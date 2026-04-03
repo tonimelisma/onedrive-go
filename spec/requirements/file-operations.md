@@ -30,7 +30,7 @@ When the user runs `put <local> [remote]`, the system shall upload the specified
 
 ## R-1.4 Delete (`rm`) [verified]
 
-When the user runs `rm <path>`, the system shall delete the item (to recycle bin by default).
+When the user runs `rm <path>`, the system shall delete the item (to recycle bin by default; `--permanent` bypasses the recycle bin).
 
 - R-1.4.1: When the path is a folder, the system shall delete recursively. [verified]
 - R-1.4.2: Deletions shall go to the OneDrive recycle bin by default. [verified]

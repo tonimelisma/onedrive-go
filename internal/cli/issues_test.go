@@ -420,7 +420,7 @@ func TestResolveStrategy_NoFlag(t *testing.T) {
 
 // --- unified issues JSON ---
 
-// Validates: R-2.3.9
+// Validates: R-2.3.10
 func TestPrintGroupedIssuesJSON_MixedOutput(t *testing.T) {
 	t.Parallel()
 

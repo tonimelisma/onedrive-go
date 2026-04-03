@@ -68,15 +68,12 @@ func groupFailures(
 			groups[j].Count++
 		} else {
 			idx[gk] = len(groups)
+			message := synctypes.MessageForFailure(f.IssueType, f.ScopeKey, humanScope)
 			groups = append(groups, failureGroup{
 				IssueType:  f.IssueType,
 				SummaryKey: summaryKey,
 				ScopeKey:   humanScope,
-				Message: synctypes.IssueMessage{
-					Title:  descriptor.Title,
-					Reason: descriptor.Reason,
-					Action: descriptor.Action,
-				},
+				Message:    message,
 				LogSummary: descriptor.LogSummary,
 				Paths:      []string{f.Path},
 				Count:      1,
@@ -103,15 +100,12 @@ func appendScopeOnlyGroups(
 		// surface it from scope_blocks instead of fabricating sentinel paths.
 		summaryKey := synctypes.SummaryKeyForScopeBlock(blocks[i].IssueType, blocks[i].Key)
 		descriptor := synctypes.DescribeSummary(summaryKey)
+		humanScope := blocks[i].Key.Humanize(shortcuts)
 		groups = append(groups, failureGroup{
 			IssueType:  blocks[i].IssueType,
 			SummaryKey: summaryKey,
-			ScopeKey:   blocks[i].Key.Humanize(shortcuts),
-			Message: synctypes.IssueMessage{
-				Title:  descriptor.Title,
-				Reason: descriptor.Reason,
-				Action: descriptor.Action,
-			},
+			ScopeKey:   humanScope,
+			Message:    synctypes.MessageForFailure(blocks[i].IssueType, blocks[i].Key, humanScope),
 			LogSummary: descriptor.LogSummary,
 			Paths:      []string{},
 			Count:      1,

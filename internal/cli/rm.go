@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 
 	"github.com/spf13/cobra"
 )
@@ -18,8 +20,7 @@ recycle bin by default and can be restored from the OneDrive web interface.
 Folder deletion is recursive — all contents will be deleted.
 Use --recursive (-r) to confirm intent when deleting folders.
 
-Use --permanent for permanent deletion (Business/SharePoint accounts only;
-Personal accounts always use the recycle bin).`,
+Use --permanent for permanent deletion (bypasses the recycle bin).`,
 		Args: cobra.ExactArgs(1),
 		RunE: runRm,
 	}
@@ -34,6 +35,13 @@ Personal accounts always use the recycle bin).`,
 type rmJSONOutput struct {
 	Deleted string `json:"deleted"`
 }
+
+type rmDeleteMode int
+
+const (
+	rmDeleteRecycleBin rmDeleteMode = iota + 1
+	rmDeletePermanent
+)
 
 func runRm(cmd *cobra.Command, args []string) error {
 	remotePath := args[0]
@@ -63,36 +71,74 @@ func runRm(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("cannot delete folder %q without --recursive (-r) flag", remotePath)
 	}
 
-	permanent, err := cmd.Flags().GetBool("permanent")
+	deleteMode, err := resolveRmDeleteMode(cmd)
 	if err != nil {
-		return fmt.Errorf("read --permanent flag: %w", err)
+		return err
 	}
 
-	if permanent {
-		if err := session.PermanentDeleteItem(ctx, item.ID); err != nil {
-			return fmt.Errorf("permanently deleting %q: %w", remotePath, err)
-		}
-
-		logger.Debug("permanent delete complete", "path", remotePath, "item_id", item.ID)
-	} else {
-		if err := session.DeleteItem(ctx, item.ID); err != nil {
-			return fmt.Errorf("deleting %q: %w", remotePath, err)
-		}
-
-		logger.Debug("delete complete", "path", remotePath, "item_id", item.ID)
+	if err := executeRmDelete(ctx, session, item.ID, remotePath, deleteMode, logger); err != nil {
+		return err
 	}
 
 	if cc.Flags.JSON {
 		return printRmJSON(cc.Output(), rmJSONOutput{Deleted: remotePath})
 	}
 
-	if permanent {
-		cc.Statusf("Permanently deleted %s\n", remotePath)
-	} else {
-		cc.Statusf("Deleted %s (moved to recycle bin)\n", remotePath)
+	writeRmStatus(cc, remotePath, deleteMode)
+
+	return nil
+}
+
+func resolveRmDeleteMode(
+	cmd *cobra.Command,
+) (rmDeleteMode, error) {
+	permanent, err := cmd.Flags().GetBool("permanent")
+	if err != nil {
+		return 0, fmt.Errorf("read --permanent flag: %w", err)
+	}
+
+	if !permanent {
+		return rmDeleteRecycleBin, nil
+	}
+
+	return rmDeletePermanent, nil
+}
+
+func executeRmDelete(
+	ctx context.Context,
+	session interface {
+		DeleteItem(context.Context, string) error
+		PermanentDeleteItem(context.Context, string) error
+	},
+	itemID, remotePath string,
+	deleteMode rmDeleteMode,
+	logger *slog.Logger,
+) error {
+	switch deleteMode {
+	case rmDeletePermanent:
+		if err := session.PermanentDeleteItem(ctx, itemID); err != nil {
+			return fmt.Errorf("permanently deleting %q: %w", remotePath, err)
+		}
+
+		logger.Debug("permanent delete complete", "path", remotePath, "item_id", itemID)
+	case rmDeleteRecycleBin:
+		if err := session.DeleteItem(ctx, itemID); err != nil {
+			return fmt.Errorf("deleting %q: %w", remotePath, err)
+		}
+
+		logger.Debug("delete complete", "path", remotePath, "item_id", itemID)
 	}
 
 	return nil
+}
+
+func writeRmStatus(cc *CLIContext, remotePath string, deleteMode rmDeleteMode) {
+	switch deleteMode {
+	case rmDeletePermanent:
+		cc.Statusf("Permanently deleted %s\n", remotePath)
+	case rmDeleteRecycleBin:
+		cc.Statusf("Deleted %s (moved to recycle bin)\n", remotePath)
+	}
 }
 
 // printRmJSON writes the rm command's JSON output to w.

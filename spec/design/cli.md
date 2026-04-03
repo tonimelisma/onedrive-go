@@ -37,7 +37,7 @@ Implements: R-6.2.8 [verified]
 | `ls` | `ls.go` | List remote files |
 | `get` | `get.go` | Download files (via `driveops.TransferManager`, with disk space pre-check) |
 | `put` | `put.go` | Upload files (via `driveops.TransferManager`) |
-| `rm` | `rm.go` | Delete remote items (recycle bin by default) |
+| `rm` | `rm.go` | Delete remote items (recycle bin by default; `--permanent` bypasses the recycle bin) |
 | `mkdir` | `mkdir.go` | Create remote folders |
 | `mv` | `mv.go` | Server-side move/rename |
 | `cp` | `cp.go` | Server-side async copy with polling |
@@ -203,6 +203,8 @@ Implements: R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.14.3
 - **Grouped display**: >10 failures of same `issue_type` → single heading with count, first 5 paths shown. `--verbose` shows all paths.
 - **Per-scope sub-grouping**: 507 quota and shared-folder write blocks are grouped by scope (own drive vs each shortcut). Different scopes = different owners = different user actions.
 - **Human-readable names**: Shortcut-scoped failures display local path name, not internal drive IDs.
+- **Scope-aware reason/action copy**: Failure text is selected from `issue_type` plus the raw scope key, so shortcut-scoped quota failures say the shared-folder owner is out of space instead of implying the user's own drive is full.
+- **JSON shape**: `issues --json` emits separate `conflicts`, `failure_groups`, and `held_deletes` arrays instead of a heterogeneous mixed list. This keeps grouped failure metadata and held-delete history stable for machine readers.
 - **Derived shared-folder issues**: `perm:remote` is displayed from held blocked-write rows, not from a standalone boundary issue. The CLI shows one visible issue per denied boundary only while blocked write intent still exists.
 - **Retry semantics**: `issues retry` on shared-folder write blocks is path-specific manual trial. Retrying the boundary name is rejected; the user must retry one blocked child path.
 - **Shared summary descriptors**: Every sync issue renders from the shared `SummaryKey` descriptor table, with the humanized scope shown separately. This keeps sync logs, `status`, and `issues` grouped by the same normalized issue family without duplicating display taxonomies in each layer.

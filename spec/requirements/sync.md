@@ -29,7 +29,7 @@ When the same file has been modified on both the local filesystem and OneDrive s
 - R-2.3.7: When the `issues` command encounters more than 10 failures of the same issue type, the system shall group them under a single heading with count and show the first 5 paths. When `--verbose` is passed, the system shall show all paths. [verified]
 - R-2.3.8: When displaying scope-level issues where drives have independent scopes (507 quota, shared-folder write blocks), the system shall sub-group by scope (own drive vs each shortcut). [verified]
 - R-2.3.9: When displaying shortcut-scoped failures, the system shall use the shortcut's local path name (human-readable), not internal drive IDs or scope keys. [verified]
-- R-2.3.10: When `--json` is passed, `issues` shall output structured JSON with unified conflicts and failures array. [verified]
+- R-2.3.10: When `--json` is passed, `issues` shall output structured JSON with separate `conflicts`, `failure_groups`, and `held_deletes` arrays. [verified]
 
 ## R-2.4 Filtering [implemented]
 

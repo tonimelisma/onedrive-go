@@ -42,6 +42,7 @@ func TestPrintVerifyTable_WithMismatches(t *testing.T) {
 	assert.Contains(t, out, "/foo.txt")
 }
 
+// Validates: R-2.7.1
 func TestPrintVerifyJSON(t *testing.T) {
 	var buf bytes.Buffer
 	require.NoError(t, printVerifyJSON(&buf, &synctypes.VerifyReport{Verified: 5}))
@@ -152,7 +153,7 @@ func TestRunVerify_Success(t *testing.T) {
 	assert.Contains(t, out.String(), "All files verified successfully.")
 }
 
-// Validates: R-2.7
+// Validates: R-2.7.1
 func TestRunVerify_SuccessJSON(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
