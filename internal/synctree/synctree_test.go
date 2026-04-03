@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -129,6 +130,34 @@ func TestRoot_FileLifecycleOperations(t *testing.T) {
 	absExtra := filepath.Join(dir, "nested", "abs-remove.txt")
 	require.NoError(t, os.WriteFile(absExtra, []byte("extra"), 0o600))
 	require.NoError(t, root.RemoveAbs(absExtra))
+}
+
+// Validates: R-2.10, R-6.2
+func TestRoot_RemoveAllAndChtimes(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	root, err := Open(dir)
+	require.NoError(t, err)
+
+	require.NoError(t, root.MkdirAll(filepath.Join("nested", "child"), 0o700))
+
+	file, err := root.OpenFile(filepath.Join("nested", "child", "file.txt"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	require.NoError(t, err)
+	_, err = file.WriteString("payload")
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+
+	targetTime := time.Date(2025, 6, 15, 10, 30, 0, 0, time.UTC)
+	require.NoError(t, root.Chtimes(filepath.Join("nested", "child", "file.txt"), targetTime, targetTime))
+
+	info, err := root.Stat(filepath.Join("nested", "child", "file.txt"))
+	require.NoError(t, err)
+	assert.True(t, info.ModTime().Equal(targetTime), "mtime should be updated")
+
+	require.NoError(t, root.RemoveAll("nested"))
+	_, err = root.Stat("nested")
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 // Validates: R-2.10, R-6.2

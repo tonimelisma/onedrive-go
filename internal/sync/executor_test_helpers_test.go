@@ -22,6 +22,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 // executorMockItemClient is a test double for synctypes.ItemClient.
@@ -111,8 +112,10 @@ func newTestExecutorConfig(t *testing.T, items *executorMockItemClient, dl *exec
 	syncRoot := t.TempDir()
 	driveID := driveid.New(testDriveID)
 	logger := testLogger(t)
+	syncTree, err := synctree.Open(syncRoot)
+	require.NoError(t, err)
 
-	cfg := syncexec.NewExecutorConfig(items, dl, ul, syncRoot, driveID, logger)
+	cfg := syncexec.NewExecutorConfig(items, dl, ul, syncTree, driveID, logger)
 	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
 	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) })
 

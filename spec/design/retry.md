@@ -2,7 +2,7 @@
 
 GOVERNS: internal/retry/backoff.go, internal/retry/doc.go, internal/retry/named.go, internal/retry/policy.go, internal/retry/transport.go
 
-Implements: R-6.8.1 [verified], R-6.8.2 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.10 [verified], R-6.8.11 [verified], R-6.6.8 [verified], R-2.10.3 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.14 [verified]
+Implements: R-6.8.1 [verified], R-6.8.2 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.10 [verified], R-6.8.11 [verified], R-6.6.8 [verified], R-2.10.3 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.14 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
 
 ## Overview
 
@@ -10,6 +10,15 @@ Implements: R-6.8.1 [verified], R-6.8.2 [verified], R-6.8.7 [verified], R-6.8.8 
 backoff policies and the optional HTTP retry transport used by CLI-style
 callers. Sync itself does not rely on transport-level retry loops for action
 execution.
+
+## Ownership Contract
+
+- Owns: Backoff policy definitions, retry timing, and the optional CLI-oriented HTTP retry transport.
+- Does Not Own: Graph wire normalization, sync failure classification, scope activation, durable retry persistence, or user-facing error messaging.
+- Source of Truth: `retry.Policy` values plus the HTTP/request outcomes presented to `RetryTransport`.
+- Allowed Side Effects: Sleeping/backoff and HTTP request redispatch inside `RetryTransport`.
+- Mutable Runtime Owner: Backoff counters and retry deadlines are request-scoped. The package has no shared mutable state, background goroutines, or long-lived channels.
+- Error Boundary: `retry` consumes already-normalized retryable signals from [error-model.md](error-model.md). It never upgrades actionable or fatal conditions into retryable ones on its own.
 
 ## Named Policies
 

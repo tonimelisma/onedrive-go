@@ -203,7 +203,7 @@ type watchRunner struct {
 	canonID driveid.CanonicalID
 	engine  engineRunner
 	cancel  context.CancelFunc
-	done    chan struct{}
+	done    chan struct{} // closed exactly once by the goroutine started in startWatchRunner
 }
 
 // RunWatch runs all configured (non-paused) drives in watch mode. On SIGHUP,

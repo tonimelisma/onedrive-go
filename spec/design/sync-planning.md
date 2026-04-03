@@ -2,11 +2,20 @@
 
 GOVERNS: internal/syncplan/planner.go, internal/synctypes/*.go, internal/sync/types.go
 
-Implements: R-2.2 [verified], R-2.3.1 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.7.7 [verified], R-2.14.2 [verified]
+Implements: R-2.2 [verified], R-2.3.1 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.7.7 [verified], R-2.14.2 [verified], R-6.10.6 [verified]
 
 ## Overview
 
 The planner is the intellectual core of the sync engine. It is a pure function — no I/O, no database access. Takes `([]PathChanges, *Baseline, SyncMode, *SafetyConfig, deniedPrefixes)` and returns `(*ActionPlan, error)`.
+
+## Ownership Contract
+
+- Owns: Deterministic path classification, move detection, action ordering, and delete-safety checks.
+- Does Not Own: Observation, execution, retry scheduling, Graph access, or store persistence.
+- Source of Truth: `PathChanges`, baseline snapshots, sync mode, and safety inputs supplied by the engine.
+- Allowed Side Effects: None. The planner is intentionally pure and performs no I/O.
+- Mutable Runtime Owner: None. Planning state is stack-local to each call.
+- Error Boundary: Planner errors are deterministic contract violations or safety aborts. It does not translate transport or filesystem failures.
 
 ## Pipeline
 

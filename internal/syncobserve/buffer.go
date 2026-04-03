@@ -19,7 +19,7 @@ import (
 // by path into PathChanges values for the planner. All methods are
 // safe for concurrent use.
 type Buffer struct {
-	mu      sync.Mutex
+	mu      sync.Mutex // guards pending and notify
 	pending map[string]*synctypes.PathChanges
 	notify  chan struct{} // signaled on Add/AddAll when FlushDebounced is active; nil otherwise
 	logger  *slog.Logger

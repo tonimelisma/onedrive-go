@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -419,8 +418,8 @@ func TokenSourceFromPath(ctx context.Context, tokenPath string, logger *slog.Log
 // The caller is responsible for computing tokenPath (via config.DriveTokenPath).
 // This decouples graph/ from config/ — graph/ has no config import.
 func Logout(tokenPath string, logger *slog.Logger) error {
-	err := os.Remove(tokenPath)
-	if errors.Is(err, fs.ErrNotExist) {
+	err := tokenfile.Delete(tokenPath)
+	if errors.Is(err, tokenfile.ErrNotFound) {
 		logger.Info("logout: no token file to remove (already logged out)",
 			slog.String("path", tokenPath),
 		)

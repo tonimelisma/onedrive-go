@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -52,8 +53,8 @@ func IsDisposable(name string) bool {
 // FindNonDisposable recursively checks a directory for non-disposable files.
 // Returns the relative path to the first non-disposable file found, or ""
 // if all contents are disposable.
-func FindNonDisposable(dirPath string) string {
-	entries, err := os.ReadDir(dirPath)
+func FindNonDisposable(tree *synctree.Root, dirPath string) string {
+	entries, err := tree.ReadDir(dirPath)
 	if err != nil {
 		return "" // can't read → treat as disposable (will fail on RemoveAll anyway)
 	}
@@ -64,7 +65,7 @@ func FindNonDisposable(dirPath string) string {
 		}
 
 		if entry.IsDir() {
-			if sub := FindNonDisposable(filepath.Join(dirPath, entry.Name())); sub != "" {
+			if sub := FindNonDisposable(tree, filepath.Join(dirPath, entry.Name())); sub != "" {
 				return entry.Name() + "/" + sub
 			}
 		}
@@ -76,20 +77,20 @@ func FindNonDisposable(dirPath string) string {
 // ExecuteLocalDelete removes a local file or folder with S4 safety:
 // for files, verifies hash before delete; mismatch triggers conflict copy.
 func (e *Executor) ExecuteLocalDelete(_ context.Context, action *synctypes.Action) synctypes.Outcome {
-	absPath, err := ContainedPath(e.syncRoot, action.Path)
+	info, err := e.syncTree.Stat(action.Path)
 	if err != nil {
-		return e.failedOutcome(action, synctypes.ActionLocalDelete, err)
+		if errors.Is(err, os.ErrNotExist) {
+			// Already gone — success.
+			e.logger.Debug("local delete: already absent", slog.String("path", action.Path))
+			return e.DeleteOutcome(action, synctypes.ActionLocalDelete)
+		}
+
+		return e.failedOutcome(action, synctypes.ActionLocalDelete, normalizeSyncTreePathError(err))
 	}
 
-	info, err := os.Stat(absPath)
-	if errors.Is(err, os.ErrNotExist) {
-		// Already gone — success.
-		e.logger.Debug("local delete: already absent", slog.String("path", action.Path))
-		return e.DeleteOutcome(action, synctypes.ActionLocalDelete)
-	}
-
+	absPath, err := e.syncTree.Abs(action.Path)
 	if err != nil {
-		return e.failedOutcome(action, synctypes.ActionLocalDelete, fmt.Errorf("stat %s: %w", action.Path, err))
+		return e.failedOutcome(action, synctypes.ActionLocalDelete, normalizeSyncTreePathError(err))
 	}
 
 	if info.IsDir() {
@@ -105,7 +106,12 @@ func (e *Executor) ExecuteLocalDelete(_ context.Context, action *synctypes.Actio
 // guarantees child deletes complete before parent folder deletes, and new
 // creations would be caught in the next sync pass.
 func (e *Executor) DeleteLocalFolder(action *synctypes.Action, absPath string) synctypes.Outcome {
-	entries, err := os.ReadDir(absPath)
+	relPath, err := e.syncTree.Rel(absPath)
+	if err != nil {
+		return e.failedOutcome(action, synctypes.ActionLocalDelete, normalizeSyncTreePathError(err))
+	}
+
+	entries, err := e.syncTree.ReadDir(relPath)
 	if err != nil {
 		return e.failedOutcome(action, synctypes.ActionLocalDelete, fmt.Errorf("reading dir %s: %w", action.Path, err))
 	}
@@ -116,11 +122,11 @@ func (e *Executor) DeleteLocalFolder(action *synctypes.Action, absPath string) s
 		// could contain non-disposable files that would be silently lost.
 		var blockers []string
 		for _, entry := range entries {
-			entryPath := filepath.Join(absPath, entry.Name())
+			entryPath := filepath.Join(relPath, entry.Name())
 			if !IsDisposable(entry.Name()) {
 				blockers = append(blockers, entry.Name())
 			} else if entry.IsDir() {
-				if nonDisp := FindNonDisposable(entryPath); nonDisp != "" {
+				if nonDisp := FindNonDisposable(e.syncTree, entryPath); nonDisp != "" {
 					blockers = append(blockers, entry.Name()+"/"+nonDisp)
 				}
 			}
@@ -133,11 +139,11 @@ func (e *Executor) DeleteLocalFolder(action *synctypes.Action, absPath string) s
 
 		// All entries are disposable — remove them before deleting the folder.
 		for _, entry := range entries {
-			entryPath := filepath.Join(absPath, entry.Name())
-			if rmErr := os.RemoveAll(entryPath); rmErr != nil {
+			entryPath := filepath.Join(relPath, entry.Name())
+			if rmErr := e.syncTree.RemoveAll(entryPath); rmErr != nil {
 				e.logger.Warn("failed to remove disposable file",
 					slog.String("path", entryPath),
-					slog.String("error", rmErr.Error()),
+					slog.String("error", normalizeSyncTreePathError(rmErr).Error()),
 				)
 			}
 		}
@@ -154,8 +160,12 @@ func (e *Executor) DeleteLocalFolder(action *synctypes.Action, absPath string) s
 		}
 	}
 
-	if err := os.Remove(absPath); err != nil {
-		return e.failedOutcome(action, synctypes.ActionLocalDelete, fmt.Errorf("removing dir %s: %w", action.Path, err))
+	if err := e.syncTree.Remove(relPath); err != nil {
+		return e.failedOutcome(
+			action,
+			synctypes.ActionLocalDelete,
+			fmt.Errorf("removing dir %s: %w", action.Path, normalizeSyncTreePathError(err)),
+		)
 	}
 
 	e.logger.Debug("deleted local folder", slog.String("path", action.Path))
@@ -186,9 +196,14 @@ func (e *Executor) DeleteLocalFile(action *synctypes.Action, absPath string, inf
 		if currentHash != baselineHash {
 			// File was modified — save as conflict copy instead of deleting.
 			conflictPath := ConflictCopyPath(absPath, e.nowFunc())
-			if renameErr := os.Rename(absPath, conflictPath); renameErr != nil {
+			conflictRel, relErr := e.syncTree.Rel(conflictPath)
+			if relErr != nil {
+				return e.failedOutcome(action, synctypes.ActionLocalDelete, normalizeSyncTreePathError(relErr))
+			}
+
+			if renameErr := e.syncTree.Rename(action.Path, conflictRel); renameErr != nil {
 				return e.failedOutcome(action, synctypes.ActionLocalDelete,
-					fmt.Errorf("renaming modified file to conflict copy %s: %w", conflictPath, renameErr))
+					fmt.Errorf("renaming modified file to conflict copy %s: %w", conflictPath, normalizeSyncTreePathError(renameErr)))
 			}
 
 			e.logger.Warn("local delete: hash mismatch, saved conflict copy",
@@ -230,8 +245,8 @@ func (e *Executor) DeleteLocalFile(action *synctypes.Action, absPath string, inf
 		}
 	}
 
-	if err := os.Remove(absPath); err != nil {
-		return e.failedOutcome(action, synctypes.ActionLocalDelete, fmt.Errorf("removing %s: %w", action.Path, err))
+	if err := e.syncTree.Remove(action.Path); err != nil {
+		return e.failedOutcome(action, synctypes.ActionLocalDelete, fmt.Errorf("removing %s: %w", action.Path, normalizeSyncTreePathError(err)))
 	}
 
 	e.logger.Debug("deleted local file", slog.String("path", action.Path))

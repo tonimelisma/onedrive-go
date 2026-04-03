@@ -2,7 +2,7 @@
 
 GOVERNS: internal/syncstore/store.go, internal/syncstore/schema.go, internal/syncstore/schema.sql, internal/syncstore/store_baseline.go, internal/syncstore/store_observation.go, internal/syncstore/store_conflicts.go, internal/syncstore/store_failures.go, internal/syncstore/store_admin.go, internal/syncstore/store_scope_blocks.go, internal/syncstore/shortcuts.go, internal/syncverify/verify.go, internal/syncrecovery/recovery.go, internal/cli/verify.go, internal/cli/issues.go, internal/cli/failure_display.go
 
-Implements: R-2.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.7 [verified], R-2.15.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.4 [verified], R-2.10.22 [verified], R-2.10.33 [verified], R-2.10.34 [verified], R-2.10.41 [verified], R-6.6.11 [verified]
+Implements: R-2.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.7 [verified], R-2.15.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.4 [verified], R-2.10.22 [verified], R-2.10.33 [verified], R-2.10.34 [verified], R-2.10.41 [verified], R-6.6.11 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
 
 ## SyncStore (`store.go`)
 
@@ -10,6 +10,15 @@ Implements: R-2.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [v
 remote observation state, conflicts, per-item failures, persisted scope
 blocks, shortcut metadata, and sync metadata. Runtime watch state is never a
 peer authority; it is rebuilt from store state when the engine starts.
+
+## Ownership Contract
+
+- Owns: Durable sync state in SQLite, transactional state transitions, conflict/failure/scope persistence, and restart/recovery records.
+- Does Not Own: Graph calls, sync-root filesystem probing, failure classification policy, or multi-drive lifecycle.
+- Source of Truth: The SQLite schema and rows defined by `schema.sql`.
+- Allowed Side Effects: SQLite reads/writes and schema application only.
+- Mutable Runtime Owner: `SyncStore` owns its DB handle and internal rebuildable baseline cache. It runs no background goroutines and exposes synchronous transactional methods only.
+- Error Boundary: The store persists already-classified failure roles and categories from [error-model.md](error-model.md). It does not reinterpret raw external errors into new policy classes.
 
 `NewSyncStore()` opens SQLite in WAL mode and applies the canonical schema from
 [`schema.sql`](/Users/tonimelisma/Development/onedrive-go/internal/syncstore/schema.sql)
@@ -64,6 +73,10 @@ Store-level constraints enforce the legal combinations:
 This keeps `sync_failures` as one durable failure ledger while removing the
 implicit role inference that used to depend on `category`, `scope_key`, and
 `next_retry_at`.
+
+The store's role in the shared error model is persistence, not classification:
+`category` and `failure_role` are the durable projection of higher-layer
+decisions documented in [error-model.md](error-model.md).
 
 ### `scope_blocks`
 

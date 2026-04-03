@@ -2,11 +2,20 @@
 
 GOVERNS: internal/driveops/cleanup.go, internal/driveops/disk_unix.go, internal/driveops/doc.go, internal/driveops/errors.go, internal/driveops/hash.go, internal/driveops/interfaces.go, internal/driveops/session.go, internal/driveops/session_store.go, internal/driveops/stale_partials.go, internal/driveops/transfer_manager.go, pkg/quickxorhash/quickxorhash.go, get.go, put.go
 
-Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [implemented], R-5.5 [verified], R-1.2 [verified], R-1.3 [verified], R-5.6 [implemented], R-5.7 [verified], R-5.8 [planned], R-6.8.3 [verified], R-6.2.6 [verified], R-6.4.7 [verified], R-6.2.10 [implemented]
+Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [implemented], R-5.5 [verified], R-1.2 [verified], R-1.3 [verified], R-5.6 [implemented], R-5.7 [verified], R-5.8 [planned], R-6.8.3 [verified], R-6.2.6 [verified], R-6.4.7 [verified], R-6.2.10 [implemented], R-6.10.6 [verified]
 
 ## TransferManager
 
 Unified download/upload manager shared by both CLI file operations and the sync engine. Handles resume, hash verification, and cleanup.
+
+## Ownership Contract
+
+- Owns: Download/upload session mechanics, partial-file lifecycle, resumable upload bookkeeping, content-hash verification, and disk-space pre-check mechanics.
+- Does Not Own: Graph auth/token lifecycle, sync planning/classification, or durable sync-failure persistence.
+- Source of Truth: Local file content, remote metadata, and managed upload-session files.
+- Allowed Side Effects: HTTP transfer calls plus local filesystem mutation through `synctree`, `localpath`, and `fsroot` according to the path trust boundary.
+- Mutable Runtime Owner: Each `TransferManager` instance owns only request-scoped transfer state and managed session cleanup work. The package has no package-level mutable state or long-lived goroutines.
+- Error Boundary: `driveops` translates transfer-specific failures into domain sentinels such as disk-space and hash errors. Retry scheduling and user-facing remediation are owned by higher layers.
 
 ### Download
 

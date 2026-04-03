@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 func cleanPath(path string) (string, error) {
@@ -97,6 +98,7 @@ func Stat(path string) (os.FileInfo, error) {
 		return nil, err
 	}
 
+	//nolint:gosec // localpath is the explicit arbitrary-path boundary after clean+Abs validation.
 	info, err := os.Stat(abs)
 	if err != nil {
 		return nil, fmt.Errorf("stating %s: %w", path, err)
@@ -160,4 +162,74 @@ func ReadDir(path string) ([]os.DirEntry, error) {
 	}
 
 	return entries, nil
+}
+
+func Chtimes(path string, atime, mtime time.Time) error {
+	abs, err := absolutePath(path)
+	if err != nil {
+		return err
+	}
+
+	if err := os.Chtimes(abs, atime, mtime); err != nil {
+		return fmt.Errorf("setting times on %s: %w", path, err)
+	}
+
+	return nil
+}
+
+func CreateTemp(dir, pattern string) (*os.File, error) {
+	abs, err := absolutePath(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	file, err := os.CreateTemp(abs, pattern)
+	if err != nil {
+		return nil, fmt.Errorf("creating temp file in %s: %w", dir, err)
+	}
+
+	return file, nil
+}
+
+func RemoveAll(path string) error {
+	abs, err := absolutePath(path)
+	if err != nil {
+		return err
+	}
+
+	if err := os.RemoveAll(abs); err != nil {
+		return fmt.Errorf("removing tree %s: %w", path, err)
+	}
+
+	return nil
+}
+
+func Symlink(src, dst string) error {
+	srcPath, err := absolutePath(src)
+	if err != nil {
+		return err
+	}
+	dstPath, err := absolutePath(dst)
+	if err != nil {
+		return err
+	}
+
+	if err := os.Symlink(srcPath, dstPath); err != nil {
+		return fmt.Errorf("symlinking %s to %s: %w", src, dst, err)
+	}
+
+	return nil
+}
+
+func WriteFile(path string, data []byte, perm os.FileMode) error {
+	abs, err := absolutePath(path)
+	if err != nil {
+		return err
+	}
+
+	if err := os.WriteFile(abs, data, perm); err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+
+	return nil
 }

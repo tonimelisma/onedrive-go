@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go
 
-Implements: R-1 [implemented], R-3.1 [verified], R-4.7 [verified], R-4.8.4 [verified], R-1.9 [verified], R-1.2.4 [verified], R-1.3.4 [verified], R-1.4.3 [verified], R-1.5.1 [verified], R-1.6.1 [verified], R-1.7.1 [verified], R-1.8.1 [verified], R-1.9.4 [verified], R-3.1.6 [verified], R-3.3.10 [verified], R-3.3.11 [verified], R-2.3.10 [verified], R-2.7.1 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-6.6.11 [verified]
+Implements: R-1 [implemented], R-3.1 [verified], R-4.7 [verified], R-4.8.4 [verified], R-1.9 [verified], R-1.2.4 [verified], R-1.3.4 [verified], R-1.4.3 [verified], R-1.5.1 [verified], R-1.6.1 [verified], R-1.7.1 [verified], R-1.8.1 [verified], R-1.9.4 [verified], R-3.1.6 [verified], R-3.3.10 [verified], R-3.3.11 [verified], R-2.3.10 [verified], R-2.7.1 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-6.6.11 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
 
 ## Overview
 
@@ -16,6 +16,15 @@ The root package is a thin process entrypoint. The Cobra command tree, CLI boots
 - `StatusWriter`: progress/status output (default `stderr`)
 
 This keeps human/JSON command results separate from progress/status messages and avoids direct process-global `os.Stdout` writes inside command families.
+
+## Ownership Contract
+
+- Owns: Cobra command wiring, CLI bootstrap, signal and PID-file lifecycle, output formatting, and user-facing reason/action text for failures and issues.
+- Does Not Own: Graph wire behavior, config semantics, sync planning/execution policy, or durable sync-state mutation rules.
+- Source of Truth: `CLIContext`, parsed flags/args, and the domain results returned by lower layers.
+- Allowed Side Effects: stdout/stderr output, log-file creation, PID-file lifecycle, signal handling, and calls into service packages.
+- Mutable Runtime Owner: Each command invocation owns its own runtime state. `internal/cli` keeps no package-level mutable state and relies on lower layers for long-lived watch ownership.
+- Error Boundary: The CLI turns lower-layer results into exit behavior plus human-readable reason/action text. It consumes the domain model from [error-model.md](error-model.md) instead of inventing a second classification scheme.
 
 ## Command Structure
 
@@ -110,6 +119,7 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
 - The status command uses a testable service layer with narrowed interfaces (`accountMetaReader`, `tokenStateChecker`, `syncStateQuerier`), decoupling status aggregation from Cobra wiring.
 - Informational commands (`drive list`, `status`, `whoami`) use lenient config loading (`LoadOrDefaultLenient`) that collects validation errors as warnings instead of failing. This allows users to inspect their configuration and see drive status even when config has errors. Each of these commands (and `drive search`) must have `skipConfigAnnotation` on the leaf Cobra command — not just the parent — because Cobra checks annotations on the executing command, not parent commands. Safety net: `TestAnnotationTreeWalk` walks the entire command tree and fails if any leaf command with `RunE` is not explicitly classified as either a data command (no annotation) or an annotated command. New commands must be added to the `dataCommands` set or given the annotation. [verified]
 - `loadAndResolve` passes errors from `ResolveDrive` unwrapped. `ResolveDrive` already wraps `LoadOrDefault` errors with `"loading config: "`, and `MatchDrive` errors are user-facing messages that read better without a prefix (e.g., `"no drives configured — ..."` instead of `"loading config: no drives configured — ..."`). [verified]
+- CLI presentation is the final error boundary. It maps the domain classes from [error-model.md](error-model.md) to process exit behavior and user-facing reason/action text, but it does not inspect raw transport payloads directly.
 - Extract `multiHandler` from `internal/cli/root.go` to `internal/slogutil/` if logging grows (structured error reporting, log sampling). [planned]
 
 ## Issues Display

@@ -4,12 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 type VerifyProfile string
@@ -137,7 +142,7 @@ func prepareCoverageFile(plan verifyPlan, coverageFile string) (string, func() e
 		return coverageFile, func() error { return nil }, nil
 	}
 
-	f, err := os.CreateTemp("", defaultCoveragePattern)
+	f, err := localpath.CreateTemp(os.TempDir(), defaultCoveragePattern)
 	if err != nil {
 		return "", nil, fmt.Errorf("create coverage file: %w", err)
 	}
@@ -148,7 +153,7 @@ func prepareCoverageFile(plan verifyPlan, coverageFile string) (string, func() e
 	}
 
 	return coverageFile, func() error {
-		if err := os.Remove(coverageFile); err != nil && !os.IsNotExist(err) {
+		if err := localpath.Remove(coverageFile); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("remove coverage file %s: %w", coverageFile, err)
 		}
 
@@ -472,6 +477,16 @@ func runRepoConsistencyChecks(repoRoot string) error {
 		}
 	}
 
+	if err := ensureGovernedDesignDocsHaveOwnershipContracts(repoRoot); err != nil {
+		return err
+	}
+	if err := ensureCrossCuttingDesignDocs(repoRoot); err != nil {
+		return err
+	}
+	if err := ensureHTTPClientDoStaysAtApprovedBoundary(repoRoot); err != nil {
+		return err
+	}
+
 	goRoots := []string{repoRoot}
 	match, err := findTextMatch(goRoots, regexp.MustCompile(`graph\.MustNewClient\(`), func(path string) bool {
 		return strings.HasSuffix(path, "_test.go") || !strings.HasSuffix(path, ".go")
@@ -493,17 +508,169 @@ func runRepoConsistencyChecks(repoRoot string) error {
 		return fmt.Errorf("trustedpath usage detected: %s", match)
 	}
 
-	if _, err := os.Stat(filepath.Join(repoRoot, "internal", "sync", "orchestrator.go")); err == nil {
+	if _, err := localpath.Stat(filepath.Join(repoRoot, "internal", "sync", "orchestrator.go")); err == nil {
 		return fmt.Errorf("control-plane files resurrected under internal/sync")
 	}
-	if _, err := os.Stat(filepath.Join(repoRoot, "internal", "sync", "drive_runner.go")); err == nil {
+	if _, err := localpath.Stat(filepath.Join(repoRoot, "internal", "sync", "drive_runner.go")); err == nil {
 		return fmt.Errorf("control-plane files resurrected under internal/sync")
 	}
-	if _, err := os.Stat(filepath.Join(repoRoot, "internal", "sync", "engine_flow_test_helpers_test.go")); err == nil {
+	if _, err := localpath.Stat(filepath.Join(repoRoot, "internal", "sync", "engine_flow_test_helpers_test.go")); err == nil {
 		return fmt.Errorf("sync test shim resurrected")
 	}
 
 	return nil
+}
+
+func ensureGovernedDesignDocsHaveOwnershipContracts(repoRoot string) error {
+	designDocs, err := filepath.Glob(filepath.Join(repoRoot, "spec", "design", "*.md"))
+	if err != nil {
+		return fmt.Errorf("glob design docs: %w", err)
+	}
+
+	for _, path := range designDocs {
+		data, readErr := localpath.ReadFile(path)
+		if readErr != nil {
+			return fmt.Errorf("read %s: %w", path, readErr)
+		}
+
+		content := string(data)
+		if !strings.Contains(content, "GOVERNS:") {
+			continue
+		}
+
+		if !strings.Contains(content, "## Ownership Contract") {
+			return fmt.Errorf("governed design doc missing Ownership Contract section: %s", path)
+		}
+
+		for _, bullet := range ownershipContractBullets() {
+			if !strings.Contains(content, bullet) {
+				return fmt.Errorf("governed design doc missing Ownership Contract bullet %q: %s", strings.TrimPrefix(bullet, "- "), path)
+			}
+		}
+	}
+
+	return nil
+}
+
+func ownershipContractBullets() []string {
+	return []string{
+		"- Owns:",
+		"- Does Not Own:",
+		"- Source of Truth:",
+		"- Allowed Side Effects:",
+		"- Mutable Runtime Owner:",
+		"- Error Boundary:",
+	}
+}
+
+func ensureCrossCuttingDesignDocs(repoRoot string) error {
+	systemPath := filepath.Join(repoRoot, "spec", "design", "system.md")
+	systemData, err := localpath.ReadFile(systemPath)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", systemPath, err)
+	}
+
+	systemText := string(systemData)
+	for _, name := range requiredCrossCuttingDesignDocs() {
+		path := filepath.Join(repoRoot, "spec", "design", name)
+		if _, statErr := localpath.Stat(path); statErr != nil {
+			return fmt.Errorf("required cross-cutting design doc missing: %s", path)
+		}
+		if !strings.Contains(systemText, name) {
+			return fmt.Errorf("system.md missing required design doc reference %s: %s", name, systemPath)
+		}
+	}
+
+	return nil
+}
+
+func requiredCrossCuttingDesignDocs() []string {
+	return []string{"error-model.md", "threat-model.md", "degraded-mode.md"}
+}
+
+func ensureHTTPClientDoStaysAtApprovedBoundary(repoRoot string) error {
+	allowedPath := filepath.Join(repoRoot, "internal", "graph", "client_preauth.go")
+	internalRoot := filepath.Join(repoRoot, "internal")
+
+	walkErr := filepath.WalkDir(internalRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || path == allowedPath || strings.HasSuffix(path, "_test.go") || !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+
+		match, findErr := findHTTPClientDoCall(path)
+		if findErr != nil {
+			return findErr
+		}
+		if match != "" {
+			return matchFoundError{value: match}
+		}
+
+		return nil
+	})
+	if walkErr == nil {
+		return nil
+	}
+
+	var matchErr matchFoundError
+	if errors.As(walkErr, &matchErr) {
+		return fmt.Errorf("http.Client.Do is only allowed in internal/graph/client_preauth.go: %s", matchErr.value)
+	}
+
+	return fmt.Errorf("walk %s: %w", internalRoot, walkErr)
+}
+
+func findHTTPClientDoCall(path string) (string, error) {
+	data, readErr := localpath.ReadFile(path)
+	if readErr != nil {
+		return "", fmt.Errorf("read %s: %w", path, readErr)
+	}
+	if !strings.Contains(string(data), ".Do(") {
+		return "", nil
+	}
+
+	fset := token.NewFileSet()
+	file, parseErr := parser.ParseFile(fset, path, data, 0)
+	if parseErr != nil {
+		return "", fmt.Errorf("parse %s: %w", path, parseErr)
+	}
+	if !importsPackage(file, "net/http") {
+		return "", nil
+	}
+
+	return firstHTTPDoCallLocation(path, file, fset), nil
+}
+
+func firstHTTPDoCallLocation(path string, file *ast.File, fset *token.FileSet) string {
+	var match string
+	ast.Inspect(file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Do" {
+			return true
+		}
+
+		match = fmt.Sprintf("%s:%d", path, fset.Position(sel.Pos()).Line)
+		return false
+	})
+
+	return match
+}
+
+func importsPackage(file *ast.File, target string) bool {
+	for _, imp := range file.Imports {
+		if strings.Trim(imp.Path.Value, "\"") == target {
+			return true
+		}
+	}
+
+	return false
 }
 
 func findTextMatch(roots []string, pattern *regexp.Regexp, skip func(path string) bool) (string, error) {
@@ -521,7 +688,7 @@ func findTextMatch(roots []string, pattern *regexp.Regexp, skip func(path string
 }
 
 func findTextMatchInRoot(root string, pattern *regexp.Regexp, skip func(path string) bool) (string, error) {
-	info, err := os.Stat(root)
+	info, err := localpath.Stat(root)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", nil
@@ -585,8 +752,7 @@ func (f matchFoundError) Error() string {
 }
 
 func scanFileForPattern(path string, pattern *regexp.Regexp) (string, error) {
-	//nolint:gosec // paths come from repo-root walking under fixed directories, not external input.
-	data, err := os.ReadFile(path)
+	data, err := localpath.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("read %s: %w", path, err)
 	}

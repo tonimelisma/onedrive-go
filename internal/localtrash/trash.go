@@ -2,11 +2,14 @@
 package localtrash
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
+
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 const platformDarwin = "darwin"
@@ -33,7 +36,7 @@ func moveToMacOSTrash(absPath string) error {
 	trashDir := filepath.Join(home, ".Trash")
 
 	// Verify the trash directory exists (it always does on macOS, but be safe).
-	if _, statErr := os.Stat(trashDir); statErr != nil {
+	if _, statErr := localpath.Stat(trashDir); statErr != nil {
 		return fmt.Errorf("trash directory not found: %w", statErr)
 	}
 
@@ -41,7 +44,7 @@ func moveToMacOSTrash(absPath string) error {
 	dest := filepath.Join(trashDir, name)
 
 	// Handle name collisions: append " 2", " 3", etc. (matching Finder behavior).
-	if _, statErr := os.Stat(dest); statErr == nil {
+	if _, statErr := localpath.Stat(dest); statErr == nil {
 		stem := name
 		ext := filepath.Ext(name)
 
@@ -51,14 +54,14 @@ func moveToMacOSTrash(absPath string) error {
 
 		for i := 2; ; i++ {
 			candidate := filepath.Join(trashDir, stem+" "+strconv.Itoa(i)+ext)
-			if _, statErr := os.Stat(candidate); os.IsNotExist(statErr) {
+			if _, statErr := localpath.Stat(candidate); errors.Is(statErr, os.ErrNotExist) {
 				dest = candidate
 				break
 			}
 		}
 	}
 
-	if err := os.Rename(absPath, dest); err != nil {
+	if err := localpath.Rename(absPath, dest); err != nil {
 		return fmt.Errorf("move item to local trash: %w", err)
 	}
 
