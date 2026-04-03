@@ -1,4 +1,5 @@
-package syncstore
+// Package localtrash owns OS-local trash behavior for sync execution.
+package localtrash
 
 import (
 	"fmt"
@@ -10,10 +11,10 @@ import (
 
 const platformDarwin = "darwin"
 
-// DefaultTrashFunc moves a file or directory to the OS trash.
-// On macOS, items are moved to ~/.Trash/ (always available).
+// Default moves a file or directory to the OS trash.
+// On macOS, items are moved to ~/.Trash/.
 // On Linux, this returns an error — opt-in only via XDG trash (future).
-func DefaultTrashFunc(absPath string) error {
+func Default(absPath string) error {
 	if runtime.GOOS != platformDarwin {
 		return fmt.Errorf("trash not available on %s", runtime.GOOS)
 	}

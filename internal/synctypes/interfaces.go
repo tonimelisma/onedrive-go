@@ -59,12 +59,25 @@ type SyncFailureRecorder interface {
 	ResetRetryTimesForScope(ctx context.Context, scopeKey ScopeKey, now time.Time) error
 }
 
-// StateAdmin is called by CLI commands and daemon maintenance.
-// Write operations that don't fit the hot path.
+// StateAdmin is called by CLI commands for administrative writes that do not
+// fit the hot path.
 type StateAdmin interface {
 	ResetFailure(ctx context.Context, path string) error
 	ResetAllFailures(ctx context.Context) error
-	ResetInProgressStates(ctx context.Context, syncRoot string, delayFn func(int) time.Duration) error
+}
+
+// CrashRecoveryStore persists the state-only half of crash recovery. The
+// caller decides local filesystem presence under the sync root; the store
+// owns only remote_state transitions and sync_failures persistence.
+type CrashRecoveryStore interface {
+	ResetDownloadingStates(ctx context.Context, delayFn func(int) time.Duration) error
+	ListDeletingCandidates(ctx context.Context) ([]RecoveryCandidate, error)
+	FinalizeDeletingStates(
+		ctx context.Context,
+		deleted []RecoveryCandidate,
+		pending []RecoveryCandidate,
+		delayFn func(int) time.Duration,
+	) error
 }
 
 // ScopeBlockStore persists scope blocks to durable storage. The engine loads
@@ -161,6 +174,14 @@ type RemoteStateRow struct {
 	PreviousPath string
 	SyncStatus   SyncStatus
 	ObservedAt   int64
+}
+
+// RecoveryCandidate identifies one remote_state row that crash recovery must
+// resolve after a previous in-progress execution was interrupted.
+type RecoveryCandidate struct {
+	DriveID string
+	ItemID  string
+	Path    string
 }
 
 // PendingRetryGroup aggregates transient failures by scope_key, with the

@@ -41,6 +41,7 @@ var (
 	_ synctypes.OutcomeWriter       = (*SyncStore)(nil)
 	_ synctypes.StateReader         = (*SyncStore)(nil)
 	_ synctypes.StateAdmin          = (*SyncStore)(nil)
+	_ synctypes.CrashRecoveryStore  = (*SyncStore)(nil)
 	_ synctypes.SyncFailureRecorder = (*SyncStore)(nil)
 	_ synctypes.ScopeBlockStore     = (*SyncStore)(nil)
 )

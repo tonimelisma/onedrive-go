@@ -13,6 +13,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
 	"github.com/tonimelisma/onedrive-go/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/syncrecovery"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -273,7 +274,13 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode synctypes.SyncMo
 	}
 
 	// Crash recovery: reset in-progress states from prior crash.
-	if err := rt.engine.baseline.ResetInProgressStates(ctx, rt.engine.syncRoot, retry.ReconcilePolicy().Delay); err != nil {
+	if err := syncrecovery.ResetInProgressStates(
+		ctx,
+		rt.engine.baseline,
+		rt.engine.syncTree,
+		retry.ReconcilePolicy().Delay,
+		rt.engine.logger,
+	); err != nil {
 		rt.engine.logger.Warn("failed to reset in-progress states", slog.String("error", err.Error()))
 	}
 

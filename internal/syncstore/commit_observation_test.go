@@ -1108,8 +1108,7 @@ func TestResetInProgressStates(t *testing.T) {
 	}
 
 	testDelay := func(_ int) time.Duration { return time.Second }
-	err := mgr.ResetInProgressStates(ctx, syncRoot, testDelay)
-	require.NoError(t, err)
+	resetInProgressStates(t, mgr, syncRoot, testDelay)
 
 	rowA := readRemoteStateRow(t, mgr.DB(), "a")
 	assert.Equal(t, synctypes.SyncStatusPendingDownload, rowA.SyncStatus, "downloading→pending_download")
