@@ -146,6 +146,54 @@ func TestShortcutConverter_MoveDetection(t *testing.T) {
 	assert.Equal(t, "SharedFolder/old-name.txt", events[0].OldPath, "old path")
 }
 
+// Validates: R-6.7.29
+func TestShortcutConverter_SparseRenameReusesBaselineDirectory(t *testing.T) {
+	t.Parallel()
+
+	remoteDriveID := driveid.New("0000000000000099")
+
+	sc := &synctypes.Shortcut{
+		ItemID:      "sc-1",
+		RemoteDrive: "0000000000000099",
+		RemoteItem:  "scope-root",
+		LocalPath:   "SharedFolder",
+	}
+
+	bl := synctest.BaselineWith(
+		&synctypes.BaselineEntry{
+			Path:     "SharedFolder/Subdir",
+			DriveID:  remoteDriveID,
+			ItemID:   "subdir",
+			ParentID: "scope-root",
+			ItemType: synctypes.ItemTypeFolder,
+		},
+		&synctypes.BaselineEntry{
+			Path:     "SharedFolder/Subdir/old-name.txt",
+			DriveID:  remoteDriveID,
+			ItemID:   shortcutTestFileItemID,
+			ParentID: "subdir",
+			ItemType: synctypes.ItemTypeFile,
+		},
+	)
+
+	items := []graph.Item{
+		{
+			ID:       shortcutTestFileItemID,
+			Name:     "new-name.txt",
+			ParentID: "",
+			DriveID:  remoteDriveID,
+			Size:     100,
+		},
+	}
+
+	events := ConvertShortcutItems(items, sc, remoteDriveID, bl, synctest.TestLogger(t))
+
+	require.Len(t, events, 1)
+	assert.Equal(t, synctypes.ChangeMove, events[0].Type, "sparse rename should still be ChangeMove")
+	assert.Equal(t, "SharedFolder/Subdir/new-name.txt", events[0].Path, "sparse rename should preserve baseline parent directory")
+	assert.Equal(t, "SharedFolder/Subdir/old-name.txt", events[0].OldPath, "old path")
+}
+
 // TestShortcutConverter_DeletedItemNameRecovery verifies that deleted items in
 // shortcut scope recover their Name from the baseline when the Graph API
 // returns an empty Name (Business API behavior). The old code path did not

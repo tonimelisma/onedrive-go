@@ -15,8 +15,9 @@ import (
 // 200 is the maximum allowed by the Graph API for drive item collections.
 const listChildrenPageSize = 200
 
-// Timestamp validation bounds — timestamps outside this range are replaced
-// with the current time and a warning is logged.
+// Timestamp validation bounds — timestamps outside this range are treated as
+// unknown and logged. Unknown is represented as the zero time so downstream
+// sync code can persist NULL/0 instead of fabricating "now".
 const (
 	minValidYear = 1970
 	maxValidYear = 2100
@@ -276,9 +277,10 @@ func (d *driveItemResponse) resolveSharedOwner() (name, email string) {
 }
 
 // parseTimestamp parses an RFC3339 timestamp and validates the year range.
-// Invalid or out-of-range timestamps are replaced with time.Now().UTC() and logged.
-// For deleted items, anomalies are logged at DEBUG (expected API behavior);
-// for live items, they're logged at WARN (genuinely unexpected).
+// Invalid, missing, or out-of-range timestamps remain unknown and are
+// represented as the zero time instead of fabricating a current timestamp.
+// For deleted items, anomalies are logged at DEBUG (expected sparse API
+// behavior); for live items, they're logged at WARN (genuinely unexpected).
 func parseTimestamp(raw, field, itemID string, isDeleted bool, logger *slog.Logger) time.Time {
 	logFunc := logger.Warn
 	if isDeleted {
@@ -286,34 +288,34 @@ func parseTimestamp(raw, field, itemID string, isDeleted bool, logger *slog.Logg
 	}
 
 	if raw == "" {
-		logFunc("empty timestamp, using current time",
+		logFunc("empty timestamp, leaving unknown",
 			slog.String("field", field),
 			slog.String("item_id", itemID),
 		)
 
-		return time.Now().UTC()
+		return time.Time{}
 	}
 
 	t, err := time.Parse(time.RFC3339, raw)
 	if err != nil {
-		logFunc("invalid timestamp, using current time",
+		logFunc("invalid timestamp, leaving unknown",
 			slog.String("field", field),
 			slog.String("item_id", itemID),
 			slog.String("raw", raw),
 			slog.String("error", err.Error()),
 		)
 
-		return time.Now().UTC()
+		return time.Time{}
 	}
 
 	if t.Year() < minValidYear || t.Year() > maxValidYear {
-		logFunc("timestamp out of valid range, using current time",
+		logFunc("timestamp out of valid range, leaving unknown",
 			slog.String("field", field),
 			slog.String("item_id", itemID),
 			slog.String("raw", raw),
 		)
 
-		return time.Now().UTC()
+		return time.Time{}
 	}
 
 	return t

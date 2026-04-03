@@ -105,6 +105,8 @@ Two modes: human-readable (default) and JSON (`--json`). Primary command output 
 
 All commands with `--json` support use extracted `printXxxJSON(w io.Writer, out T) error` functions that encode via `json.NewEncoder(w)` with 2-space indent. This enables unit testing via `bytes.Buffer` roundtrip without CLI wiring.
 
+Timestamp presentation follows one rule across command families: zero `time.Time` means "unknown". Human-readable output renders that as `unknown`; JSON output emits an empty string instead of a fabricated RFC3339 value or Go's year-0001 zero timestamp.
+
 | Command | JSON function(s) | Schema type(s) |
 |---------|------------------|----------------|
 | `ls` | `printItemsJSON` | `lsJSONItem` |

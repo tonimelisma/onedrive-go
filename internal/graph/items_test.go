@@ -161,6 +161,7 @@ func TestGetItem_DecodesParentReferencePath(t *testing.T) {
 	assert.Equal(t, "Team Docs/Specs #1", item.ParentPath)
 }
 
+// Validates: R-6.7.16
 func TestGetItem_InvalidTimestamp(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -179,12 +180,13 @@ func TestGetItem_InvalidTimestamp(t *testing.T) {
 	item, err := client.GetItem(t.Context(), driveid.New("d"), "item-ts")
 	require.NoError(t, err)
 
-	// Invalid timestamp should fall back to approximately now
-	assert.InDelta(t, time.Now().Unix(), item.CreatedAt.Unix(), 5)
+	// Invalid timestamp should stay unknown instead of being fabricated.
+	assert.True(t, item.CreatedAt.IsZero(), "invalid created timestamp should stay unknown")
 	// Valid timestamp should parse correctly
 	assert.Equal(t, 2024, item.ModifiedAt.Year())
 }
 
+// Validates: R-6.7.16
 func TestGetItem_FutureTimestamp(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -203,8 +205,8 @@ func TestGetItem_FutureTimestamp(t *testing.T) {
 	item, err := client.GetItem(t.Context(), driveid.New("d"), "item-future")
 	require.NoError(t, err)
 
-	// Year 2200 exceeds maxValidYear — should fall back to now
-	assert.InDelta(t, time.Now().Unix(), item.CreatedAt.Unix(), 5)
+	// Year 2200 exceeds maxValidYear — should stay unknown.
+	assert.True(t, item.CreatedAt.IsZero(), "out-of-range created timestamp should stay unknown")
 }
 
 func TestGetItem_PackageAndDeleted(t *testing.T) {
@@ -729,6 +731,7 @@ func TestDeleteItem_NotFound(t *testing.T) {
 
 // --- toItem edge cases ---
 
+// Validates: R-6.7.16
 func TestToItem_EmptyTimestamp(t *testing.T) {
 	dir := &driveItemResponse{
 		ID:                   "item-empty-ts",
@@ -739,8 +742,24 @@ func TestToItem_EmptyTimestamp(t *testing.T) {
 	}
 
 	item := dir.toItem(testNoopLogger())
-	assert.InDelta(t, time.Now().Unix(), item.CreatedAt.Unix(), 5)
-	assert.InDelta(t, time.Now().Unix(), item.ModifiedAt.Unix(), 5)
+	assert.True(t, item.CreatedAt.IsZero(), "missing created timestamp should stay unknown")
+	assert.True(t, item.ModifiedAt.IsZero(), "missing modified timestamp should stay unknown")
+}
+
+// Validates: R-6.7.26
+func TestToItem_DeletedItem_EmptyModifiedTimestampStaysUnknown(t *testing.T) {
+	dir := &driveItemResponse{
+		ID:                   "item-deleted-empty-modified",
+		Name:                 "gone.txt",
+		CreatedDateTime:      "2024-01-01T00:00:00Z",
+		LastModifiedDateTime: "",
+		ParentReference:      &parentRef{ID: "p", DriveID: "d"},
+		Deleted:              ptrRawMsg(json.RawMessage(`{}`)),
+	}
+
+	item := dir.toItem(testNoopLogger())
+	assert.Equal(t, 2024, item.CreatedAt.Year())
+	assert.True(t, item.ModifiedAt.IsZero(), "deleted item with empty modified timestamp should stay unknown")
 }
 
 func TestToItem_RootFacet(t *testing.T) {

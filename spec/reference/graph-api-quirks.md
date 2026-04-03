@@ -162,6 +162,8 @@ OneDrive does not store fractional seconds. Timestamps must be truncated to zero
 
 The API can return `0001-01-01T00:00:00Z` or far-future dates. `lastModifiedDateTime` may be absent for API-initiated deletions.
 
+The client treats these as unknown metadata, not as clock values to repair locally. The graph boundary leaves invalid or absent timestamps as zero `time.Time`, sync observation/store persist that as unknown/NULL state, and CLI JSON/text output renders the unknown state explicitly instead of inventing a replacement timestamp.
+
 ### URL-Encoded Paths
 
 `parentReference.path` (when present in non-delta responses) contains URL-encoded characters (`%20` for spaces). The client decodes it at the Graph boundary and stores the root-relative result on `graph.Item.ParentPath`.

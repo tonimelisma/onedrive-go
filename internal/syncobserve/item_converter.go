@@ -168,9 +168,14 @@ func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[driveid.Item
 		return nil
 	}
 
+	baselineKey := driveid.NewItemKey(itemDriveID, item.ID)
+	existing, _ := c.Baseline.GetByID(baselineKey)
+
 	// Non-deleted items need a materializable leaf name. Deleted items may
 	// recover their name from the baseline later in classifyAndConvert.
-	if !item.IsDeleted && item.Name == "" {
+	// Delta query updates are allowed to omit unchanged properties, so an
+	// existing baseline entry can supply the missing name safely.
+	if !item.IsDeleted && item.Name == "" && existing == nil {
 		c.Logger.Warn("skipping remote item with empty name",
 			slog.String("item_id", item.ID),
 			slog.String("parent_id", item.ParentID),
@@ -200,16 +205,8 @@ func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[driveid.Item
 
 	// Personal Vault exclusion (B-271): skip the vault folder itself and
 	// any items whose parent chain includes a vault folder.
-	if c.EnableVaultFilter {
-		isVault := item.SpecialFolderName == specialFolderVault
-		if isVault || c.isDescendantOfVault(item, inflight, itemDriveID) {
-			c.Logger.Info("skipping vault item",
-				slog.String("item_id", item.ID),
-				slog.String("name", item.Name),
-			)
-
-			return nil
-		}
+	if c.shouldSkipVaultItem(item, inflight, itemDriveID) {
+		return nil
 	}
 
 	// Shortcut detection (6.4a.2): items with a remoteItem facet pointing to
@@ -217,20 +214,18 @@ func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[driveid.Item
 	// folder shortcuts returned by the delta endpoint — RemoteDriveID alone
 	// is sufficient to identify a shortcut.
 	if c.EnableShortcutDetect && item.RemoteDriveID != "" && !item.IsDeleted {
-		return c.classifyShortcut(item, inflight, itemDriveID)
+		return c.classifyShortcut(item, inflight, itemDriveID, existing)
 	}
 
-	return c.classifyAndConvert(item, inflight, itemDriveID)
+	return c.classifyAndConvert(item, inflight, itemDriveID, existing)
 }
 
 // classifyAndConvert classifies the change type and builds a ChangeEvent.
 // Handles NFC normalization, move detection, and deleted-item name recovery.
 func (c *ItemConverter) classifyAndConvert(
-	item *graph.Item, inflight map[driveid.ItemKey]InflightParent, itemDriveID driveid.ID,
+	item *graph.Item, inflight map[driveid.ItemKey]InflightParent, itemDriveID driveid.ID, existing *synctypes.BaselineEntry,
 ) *synctypes.ChangeEvent {
-	name := nfcNormalize(item.Name)
-	baselineKey := driveid.NewItemKey(itemDriveID, item.ID)
-	existing, _ := c.Baseline.GetByID(baselineKey)
+	name := effectiveItemName(item, existing)
 
 	hash := driveops.SelectHash(item)
 	if hash != "" && c.Stats != nil {
@@ -282,7 +277,7 @@ func (c *ItemConverter) classifyAndConvert(
 		}
 
 	case existing != nil:
-		ev.Path = c.materializePath(item, inflight, itemDriveID)
+		ev.Path = c.materializePathWithBaselineFallback(item, inflight, itemDriveID, existing, name)
 		if ev.Path != existing.Path {
 			ev.Type = synctypes.ChangeMove
 			ev.OldPath = existing.Path
@@ -300,13 +295,17 @@ func (c *ItemConverter) classifyAndConvert(
 
 // classifyShortcut builds a ChangeShortcut event for a shortcut/shared folder.
 func (c *ItemConverter) classifyShortcut(
-	item *graph.Item, inflight map[driveid.ItemKey]InflightParent, itemDriveID driveid.ID,
+	item *graph.Item,
+	inflight map[driveid.ItemKey]InflightParent,
+	itemDriveID driveid.ID,
+	existing *synctypes.BaselineEntry,
 ) *synctypes.ChangeEvent {
-	relPath := c.materializePath(item, inflight, itemDriveID)
+	name := effectiveItemName(item, existing)
+	relPath := c.materializePathWithBaselineFallback(item, inflight, itemDriveID, existing, name)
 
 	c.Logger.Info("detected shortcut",
 		slog.String("item_id", item.ID),
-		slog.String("name", item.Name),
+		slog.String("name", name),
 		slog.String("path", relPath),
 		slog.String("remote_drive", item.RemoteDriveID),
 		slog.String("remote_item", item.RemoteItemID),
@@ -320,7 +319,7 @@ func (c *ItemConverter) classifyShortcut(
 		ParentID:      item.ParentID,
 		DriveID:       itemDriveID,
 		ItemType:      synctypes.ItemTypeFolder,
-		Name:          nfcNormalize(item.Name),
+		Name:          name,
 		Mtime:         ToUnixNano(item.ModifiedAt),
 		ETag:          item.ETag,
 		CTag:          item.CTag,
@@ -329,14 +328,60 @@ func (c *ItemConverter) classifyShortcut(
 	}
 }
 
+func effectiveItemName(item *graph.Item, existing *synctypes.BaselineEntry) string {
+	name := nfcNormalize(item.Name)
+	if name != "" || existing == nil {
+		return name
+	}
+
+	return path.Base(existing.Path)
+}
+
+func (c *ItemConverter) materializePathWithBaselineFallback(
+	item *graph.Item,
+	inflight map[driveid.ItemKey]InflightParent,
+	itemDriveID driveid.ID,
+	existing *synctypes.BaselineEntry,
+	name string,
+) string {
+	if name == "" {
+		return ""
+	}
+
+	if item.ParentID == "" && existing != nil && existing.Path != "" {
+		parentDir := path.Dir(existing.Path)
+		if parentDir == "." {
+			return name
+		}
+
+		return path.Join(parentDir, name)
+	}
+
+	return c.materializePathFromParts(item.ID, name, item.ParentID, resolveParentDriveID(item, itemDriveID), inflight)
+}
+
 // materializePath builds the full relative path by walking the parent chain.
 // Checks inflight first, then baseline. Applies PathPrefix after resolution.
 func (c *ItemConverter) materializePath(
 	item *graph.Item, inflight map[driveid.ItemKey]InflightParent, itemDriveID driveid.ID,
 ) string {
-	segments := []string{nfcNormalize(item.Name)}
-	parentDriveID := resolveParentDriveID(item, itemDriveID)
-	parentID := item.ParentID
+	return c.materializePathFromParts(
+		item.ID,
+		nfcNormalize(item.Name),
+		item.ParentID,
+		resolveParentDriveID(item, itemDriveID),
+		inflight,
+	)
+}
+
+func (c *ItemConverter) materializePathFromParts(
+	itemID string,
+	name string,
+	parentID string,
+	parentDriveID driveid.ID,
+	inflight map[driveid.ItemKey]InflightParent,
+) string {
+	segments := []string{name}
 
 	for range maxPathDepth {
 		if parentID == "" {
@@ -374,7 +419,7 @@ func (c *ItemConverter) materializePath(
 
 		// Parent not found — orphaned item.
 		c.Logger.Warn("orphaned item: parent not found in inflight or baseline",
-			slog.String("item_id", item.ID),
+			slog.String("item_id", itemID),
 			slog.String("parent_id", parentID),
 			slog.String("parent_drive_id", parentDriveID.String()),
 		)
@@ -396,6 +441,26 @@ func (c *ItemConverter) applyPrefix(relPath string) string {
 	}
 
 	return path.Join(c.PathPrefix, relPath)
+}
+
+func (c *ItemConverter) shouldSkipVaultItem(
+	item *graph.Item, inflight map[driveid.ItemKey]InflightParent, itemDriveID driveid.ID,
+) bool {
+	if !c.EnableVaultFilter {
+		return false
+	}
+
+	isVault := item.SpecialFolderName == specialFolderVault
+	if !isVault && !c.isDescendantOfVault(item, inflight, itemDriveID) {
+		return false
+	}
+
+	c.Logger.Info("skipping vault item",
+		slog.String("item_id", item.ID),
+		slog.String("name", item.Name),
+	)
+
+	return true
 }
 
 // isDescendantOfVault walks the parent chain in the inflight map to check

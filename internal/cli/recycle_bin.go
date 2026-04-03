@@ -152,7 +152,7 @@ func formatRecycleBinJSON(w io.Writer, items []graph.Item) error {
 			Name:    items[i].Name,
 			Size:    items[i].Size,
 			Type:    typ,
-			Deleted: items[i].ModifiedAt.Format("2006-01-02T15:04:05Z"),
+			Deleted: formatAPITime(items[i].ModifiedAt),
 		})
 	}
 

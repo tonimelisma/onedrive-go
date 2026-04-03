@@ -62,6 +62,20 @@ func TestPrintItemsJSON(t *testing.T) {
 	assert.Len(t, parsed, 2)
 }
 
+func TestPrintItemsJSON_ZeroTimestampUsesEmptyString(t *testing.T) {
+	items := []graph.Item{
+		{Name: "file.txt", Size: 100, ID: "id1", ModifiedAt: time.Time{}},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, printItemsJSON(&buf, items))
+
+	var parsed []lsJSONItem
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &parsed))
+	require.Len(t, parsed, 1)
+	assert.Empty(t, parsed[0].ModifiedAt, "unknown timestamps should not serialize as year 0001")
+}
+
 // --- newLsCmd ---
 
 // Validates: R-1.1
