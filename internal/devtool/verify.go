@@ -477,14 +477,17 @@ func runRepoConsistencyChecks(repoRoot string) error {
 		}
 	}
 
-	if err := ensureGovernedDesignDocsHaveOwnershipContracts(repoRoot); err != nil {
-		return err
-	}
-	if err := ensureCrossCuttingDesignDocs(repoRoot); err != nil {
-		return err
-	}
-	if err := ensureHTTPClientDoStaysAtApprovedBoundary(repoRoot); err != nil {
-		return err
+	for _, check := range []func(string) error{
+		ensureGovernedDesignDocsHaveOwnershipContracts,
+		ensureCrossCuttingDesignDocs,
+		ensureCLIOutputBoundary,
+		ensureGuardedPackagesAvoidRawOS,
+		ensureFilterSemanticsWording,
+		ensureHTTPClientDoStaysAtApprovedBoundary,
+	} {
+		if err := check(repoRoot); err != nil {
+			return err
+		}
 	}
 
 	goRoots := []string{repoRoot}
@@ -516,6 +519,85 @@ func runRepoConsistencyChecks(repoRoot string) error {
 	}
 	if _, err := localpath.Stat(filepath.Join(repoRoot, "internal", "sync", "engine_flow_test_helpers_test.go")); err == nil {
 		return fmt.Errorf("sync test shim resurrected")
+	}
+
+	return nil
+}
+
+func ensureCLIOutputBoundary(repoRoot string) error {
+	cliRoots := []string{filepath.Join(repoRoot, "internal", "cli")}
+	skip := func(path string) bool {
+		return strings.HasSuffix(path, "_test.go") || !strings.HasSuffix(path, ".go")
+	}
+
+	checks := []staleCheck{
+		{
+			name:    "direct fmt.Print in production CLI code",
+			pattern: regexp.MustCompile(`fmt\.Print(f|ln)?\(`),
+		},
+		{
+			name:    "direct process-global fmt.Fprint in production CLI code",
+			pattern: regexp.MustCompile(`fmt\.Fprint(f|ln)?\(\s*os\.(Stdout|Stderr)\b`),
+		},
+		{
+			name:    "direct process-global writer call in production CLI code",
+			pattern: regexp.MustCompile(`os\.(Stdout|Stderr)\.(Write|WriteString)\(`),
+		},
+	}
+
+	for _, check := range checks {
+		match, err := findTextMatch(cliRoots, check.pattern, skip)
+		if err != nil {
+			return err
+		}
+		if match != "" {
+			return fmt.Errorf("cli output boundary violation (%s): %s", check.name, match)
+		}
+	}
+
+	return nil
+}
+
+func ensureGuardedPackagesAvoidRawOS(repoRoot string) error {
+	guardedRoots := []string{
+		filepath.Join(repoRoot, "internal", "cli"),
+		filepath.Join(repoRoot, "internal", "config"),
+		filepath.Join(repoRoot, "internal", "sync"),
+		filepath.Join(repoRoot, "internal", "syncrecovery"),
+		filepath.Join(repoRoot, "internal", "syncverify"),
+	}
+	skip := func(path string) bool {
+		return strings.HasSuffix(path, "_test.go") || !strings.HasSuffix(path, ".go")
+	}
+
+	const guardedOSPattern = `os\.(Stat|ReadDir|Open|OpenFile|Create|CreateTemp|ReadFile|WriteFile|` +
+		`Remove|RemoveAll|Rename|Mkdir|MkdirAll|Lstat|Readlink|Symlink|Chmod|Chtimes)\(`
+
+	match, err := findTextMatch(guardedRoots, regexp.MustCompile(guardedOSPattern), skip)
+	if err != nil {
+		return err
+	}
+	if match != "" {
+		return fmt.Errorf("raw os filesystem call detected outside boundary packages: %s", match)
+	}
+
+	return nil
+}
+
+func ensureFilterSemanticsWording(repoRoot string) error {
+	roots := []string{
+		filepath.Join(repoRoot, "spec", "design"),
+		filepath.Join(repoRoot, "spec", "requirements"),
+		filepath.Join(repoRoot, "CLAUDE.md"),
+		filepath.Join(repoRoot, "README.md"),
+	}
+
+	match, err := findTextMatch(roots, regexp.MustCompile(`per-drive only`), nil)
+	if err != nil {
+		return err
+	}
+	if match != "" {
+		return fmt.Errorf("stale filter semantics wording detected: %s", match)
 	}
 
 	return nil
@@ -690,7 +772,7 @@ func findTextMatch(roots []string, pattern *regexp.Regexp, skip func(path string
 func findTextMatchInRoot(root string, pattern *regexp.Regexp, skip func(path string) bool) (string, error) {
 	info, err := localpath.Stat(root)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return "", nil
 		}
 

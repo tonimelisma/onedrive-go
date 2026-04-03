@@ -314,11 +314,97 @@ func TestRunRepoConsistencyChecksAllowsApprovedHTTPClientDoBoundary(t *testing.T
 	require.NoError(t, runRepoConsistencyChecks(repoRoot))
 }
 
+// Validates: R-6.2.1
+func TestRunRepoConsistencyChecksFailsOnCLIProcessGlobalOutput(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	cliDir := filepath.Join(repoRoot, "internal", "cli")
+	require.NoError(t, os.MkdirAll(cliDir, 0o750))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(cliDir, "bad_output.go"),
+		[]byte(strings.Join([]string{
+			"package cli",
+			"",
+			"import (",
+			"\t\"fmt\"",
+			"\t\"os\"",
+			")",
+			"",
+			"func badOutput() {",
+			"\tfmt.Fprintln(os.Stderr, \"oops\")",
+			"}",
+			"",
+		}, "\n")),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cli output boundary violation")
+	assert.Contains(t, err.Error(), "bad_output.go")
+}
+
+// Validates: R-6.2.1
+func TestRunRepoConsistencyChecksFailsOnRawOSFilesystemCallInGuardedPackage(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	syncDir := filepath.Join(repoRoot, "internal", "sync")
+	require.NoError(t, os.MkdirAll(syncDir, 0o750))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(syncDir, "bad_fs.go"),
+		[]byte(strings.Join([]string{
+			"package sync",
+			"",
+			"import \"os\"",
+			"",
+			"func badFS(path string) error {",
+			"\t_, err := os.Stat(path)",
+			"\treturn err",
+			"}",
+			"",
+		}, "\n")),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "raw os filesystem call detected")
+	assert.Contains(t, err.Error(), "bad_fs.go")
+}
+
+// Validates: R-6.2.1
+func TestRunRepoConsistencyChecksFailsOnStaleFilterSemanticsWording(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	requirementsDir := filepath.Join(repoRoot, "spec", "requirements")
+	require.NoError(t, os.MkdirAll(requirementsDir, 0o750))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(requirementsDir, "sync.md"),
+		[]byte("Filter settings are per-drive only.\n"),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "stale filter semantics wording")
+	assert.Contains(t, err.Error(), "sync.md")
+}
+
 func writeRepoConsistencyFixtures(t *testing.T, repoRoot string) {
 	t.Helper()
 
 	for _, dir := range []string{
 		filepath.Join(repoRoot, "spec", "design"),
+		filepath.Join(repoRoot, "spec", "requirements"),
 		filepath.Join(repoRoot, "internal"),
 		filepath.Join(repoRoot, "cmd"),
 		filepath.Join(repoRoot, ".github", "workflows"),
