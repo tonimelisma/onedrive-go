@@ -138,7 +138,7 @@ func (o *LocalObserver) HandleFsEvent(
 	// Unified observation filter (Stage 1: name + path length).
 	// Watch handlers don't collect SkippedItems — the safety scan (FullScan
 	// every 5 min) catches them for recording to sync_failures.
-	if skip := shouldObserveWithFilter(name, dbRelPath, observedKindUnknown, o.filterConfig); skip != nil {
+	if skip := shouldObserveWithFilter(name, dbRelPath, observedKindUnknown, o.filterConfig, o.observationRules); skip != nil {
 		if skip.Reason != "" {
 			o.Logger.Debug("watch: skipping file",
 				slog.String("path", dbRelPath),
@@ -186,7 +186,7 @@ func (o *LocalObserver) handleCreate(
 
 	o.forgetExcludedSymlink(dbRelPath)
 
-	if skip := shouldObserveWithFilter(name, dbRelPath, infoKind(info), o.filterConfig); skip != nil {
+	if skip := shouldObserveWithFilter(name, dbRelPath, infoKind(info), o.filterConfig, o.observationRules); skip != nil {
 		return
 	}
 
@@ -339,7 +339,7 @@ func (o *LocalObserver) scanNewDirectoryEntry(
 		}
 	}
 
-	if shouldObserveWithFilter(entryName, entryRelPath, kind, o.filterConfig) != nil {
+	if shouldObserveWithFilter(entryName, entryRelPath, kind, o.filterConfig, o.observationRules) != nil {
 		return
 	}
 

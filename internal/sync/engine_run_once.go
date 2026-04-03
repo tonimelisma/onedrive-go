@@ -336,11 +336,15 @@ func (flow *engineFlow) observeRemote(ctx context.Context, bl *synctypes.Baselin
 
 // observeLocal scans the local filesystem for changes and collects skipped
 // items (invalid names, path too long, file too large) for failure recording.
+// The observer also receives platform-derived naming rules from the engine so
+// SharePoint-specific validation stays aligned across one-shot, watch, and
+// retry/trial observation paths.
 func (flow *engineFlow) observeLocal(ctx context.Context, bl *synctypes.Baseline) (synctypes.ScanResult, error) {
 	eng := flow.engine
 
 	obs := syncobserve.NewLocalObserver(bl, eng.logger, eng.checkWorkers)
 	obs.SetFilterConfig(eng.localFilter)
+	obs.SetObservationRules(eng.localRules)
 
 	result, err := obs.FullScan(ctx, eng.syncTree)
 	if err != nil {

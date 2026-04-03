@@ -129,15 +129,15 @@ Failure tracking, scope-based classification, and lifecycle management. Each fai
 - R-2.10.46: When a persisted `auth:account` scope exists at startup, the system shall revalidate it exactly once with `DriveVerifier.Drive(ctx, driveID)`. Successful proof shall clear the scope and continue startup. Unauthorized proof shall keep the scope and abort startup. Non-auth probe failures, or a missing `DriveVerifier`, shall leave the scope untouched and abort startup. [verified]
 - R-2.10.47: Offline read-only CLI surfaces (`status`, `issues`) shall never mutate persisted `auth:account`. Successful authenticated live CLI proof surfaces may clear persisted `auth:account` for the proved account after the first successful authenticated Graph response. Pre-authenticated upload or download URL success shall not count as proof. [verified]
 
-## R-2.11 Filename Validation [implemented]
+## R-2.11 Filename Validation [verified]
 
 The system shall validate filenames against OneDrive naming restrictions before upload and during remote observation.
 
-- R-2.11.1: The system shall reject local files with characters invalid on OneDrive (`"`, `*`, `:`, `<`, `>`, `?`, `/`, `\`, `|`) before upload. [implemented]
-- R-2.11.2: The system shall reject local files with OneDrive reserved names (case-insensitive): `.lock`, `desktop.ini`, `CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`, `LPT0`-`LPT9`. [implemented]
-- R-2.11.3: The system shall reject local files matching OneDrive reserved patterns: names starting with `~$`, names containing `_vti_`, and `forms` at root level on SharePoint drives. [implemented]
-- R-2.11.4: The system shall reject local files with trailing dots or leading/trailing whitespace. [implemented]
-- R-2.11.5: When the scanner filters a file due to naming restrictions, the system shall record it as an actionable issue (not silently skip with only a DEBUG log). [implemented]
+- R-2.11.1: The system shall reject local files with characters invalid on OneDrive (`"`, `*`, `:`, `<`, `>`, `?`, `/`, `\`, `|`) before upload. [verified]
+- R-2.11.2: The system shall reject local files with OneDrive reserved names (case-insensitive): `.lock`, `desktop.ini`, `CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`, `LPT0`-`LPT9`. [verified]
+- R-2.11.3: The system shall reject local files matching OneDrive reserved patterns: names starting with `~$`, names containing `_vti_`, and `forms` at root level on SharePoint drives. [verified]
+- R-2.11.4: The system shall reject local files with trailing dots or leading/trailing whitespace. [verified]
+- R-2.11.5: When the scanner filters a file due to naming restrictions, the system shall record it as an actionable issue (not silently skip with only a DEBUG log). [verified]
 
 ## R-2.12 Case Collision Handling [verified]
 

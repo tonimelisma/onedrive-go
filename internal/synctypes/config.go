@@ -18,6 +18,13 @@ type LocalFilterConfig struct {
 	SkipFiles    []string
 }
 
+// LocalObservationRules controls platform-derived local validation semantics.
+// These are not user-configured exclusions; they encode rules that depend on
+// the target drive type or sync surface.
+type LocalObservationRules struct {
+	RejectSharePointRootForms bool
+}
+
 // EngineConfig holds the options for NewEngine. Uses a struct because
 // seven fields is too many for positional parameters.
 type EngineConfig struct {
@@ -35,6 +42,7 @@ type EngineConfig struct {
 	PermChecker        PermissionChecker   // optional: permission checking for shared folders (6.4c)
 	Logger             *slog.Logger
 	LocalFilter        LocalFilterConfig
+	LocalRules         LocalObservationRules
 	UseLocalTrash      bool  // move deleted local files to OS trash instead of permanent delete
 	TransferWorkers    int   // goroutine count for the worker pool (0 → minWorkers)
 	CheckWorkers       int   // goroutine limit for parallel file hashing (0 → 4)

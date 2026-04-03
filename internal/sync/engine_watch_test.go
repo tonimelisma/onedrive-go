@@ -26,17 +26,17 @@ import (
 
 // Validates: R-2.8
 // TestRunWatch_ContextCancel verifies that canceling the context causes
-// RunWatch to return nil (clean shutdown).
+// RunWatch to return nil (clean shutdown), including during bootstrap.
 func TestRunWatch_ContextCancel(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	started := make(chan struct{})
 
 	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
-				{ID: "root", IsRoot: true, DriveID: driveID},
-			}, "token-1"), nil
+		deltaFn: func(ctx context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
 		},
 	}
 
@@ -53,8 +53,11 @@ func TestRunWatch_ContextCancel(t *testing.T) {
 		})
 	}()
 
-	// Give RunWatch time to start (initial sync + observers).
-	time.Sleep(200 * time.Millisecond)
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		require.Fail(t, "RunWatch did not enter bootstrap observation before timeout")
+	}
 
 	cancel()
 

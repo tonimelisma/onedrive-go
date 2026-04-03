@@ -143,3 +143,36 @@ func TestBuildSyncEngineConfig_PropagatesLocalFilters(t *testing.T) {
 	assert.Equal(t, []string{"vendor"}, ecfg.LocalFilter.SkipDirs)
 	assert.Equal(t, []string{"*.log"}, ecfg.LocalFilter.SkipFiles)
 }
+
+func TestBuildSyncEngineConfig_SharePointEnablesRootFormsValidation(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	logger := buildLogger(nil, CLIFlags{})
+	meta, err := newGraphClient(staticTokenSource{}, logger)
+	require.NoError(t, err)
+	transfer, err := newGraphClient(staticTokenSource{}, logger)
+	require.NoError(t, err)
+
+	syncDir := filepath.Join(t.TempDir(), "sync")
+	require.NoError(t, os.MkdirAll(syncDir, 0o700))
+
+	session := &driveops.Session{
+		Meta:     meta,
+		Transfer: transfer,
+		DriveID:  driveid.New("abc123"),
+	}
+
+	personal, err := buildSyncEngineConfig(session, &config.ResolvedDrive{
+		SyncDir:     syncDir,
+		CanonicalID: driveid.MustCanonicalID("personal:test@example.com"),
+	}, false, logger)
+	require.NoError(t, err)
+	assert.False(t, personal.LocalRules.RejectSharePointRootForms)
+
+	sharePoint, err := buildSyncEngineConfig(session, &config.ResolvedDrive{
+		SyncDir:     syncDir,
+		CanonicalID: driveid.MustCanonicalID("sharepoint:test@example.com:site:Documents"),
+	}, false, logger)
+	require.NoError(t, err)
+	assert.True(t, sharePoint.LocalRules.RejectSharePointRootForms)
+}

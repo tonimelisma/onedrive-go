@@ -72,6 +72,9 @@ func buildSyncEngineConfig(
 			SkipDirs:     resolved.SkipDirs,
 			SkipFiles:    resolved.SkipFiles,
 		},
+		LocalRules: synctypes.LocalObservationRules{
+			RejectSharePointRootForms: resolved.CanonicalID.IsSharePoint(),
+		},
 		UseLocalTrash:      resolved.UseLocalTrash,
 		TransferWorkers:    resolved.TransferWorkers,
 		CheckWorkers:       resolved.CheckWorkers,

@@ -106,6 +106,7 @@ type LocalObserver struct {
 	Logger             *slog.Logger
 	checkWorkers       int // parallel hash goroutine limit for FullScan (0 → defaultCheckWorkers)
 	filterConfig       synctypes.LocalFilterConfig
+	observationRules   synctypes.LocalObservationRules
 	WatcherFactory     func() (FsWatcher, error)
 	droppedEvents      atomic.Int64                                     // events dropped by TrySend due to full channel
 	droppedRetries     atomic.Int64                                     // hash requests dropped due to full channel
@@ -203,6 +204,13 @@ func (o *LocalObserver) SetFilterConfig(cfg synctypes.LocalFilterConfig) {
 		SkipDirs:     append([]string(nil), cfg.SkipDirs...),
 		SkipFiles:    append([]string(nil), cfg.SkipFiles...),
 	}
+}
+
+// SetObservationRules installs platform-derived local validation rules. These
+// stay separate from user-configured filter knobs so drive semantics do not
+// get conflated with local exclusions.
+func (o *LocalObserver) SetObservationRules(rules synctypes.LocalObservationRules) {
+	o.observationRules = rules
 }
 
 // SetSafetyScanInterval overrides the default 5-minute safety scan interval.

@@ -1854,7 +1854,7 @@ func TestTrialTimer_Service_503RetryAfterOverride(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.10.2
-func TestClearResolvedSkippedItems_AllThreeIssueTypes(t *testing.T) {
+func TestClearResolvedSkippedItems_AllScannerIssueTypes(t *testing.T) {
 	t.Parallel()
 
 	mock := &engineMockClient{}
@@ -1880,15 +1880,19 @@ func TestClearResolvedSkippedItems_AllThreeIssueTypes(t *testing.T) {
 		Path: "huge-file.bin", DriveID: driveID, Direction: synctypes.DirectionUpload,
 		IssueType: synctypes.IssueFileTooLarge, Category: synctypes.CategoryActionable, ErrMsg: "file too large",
 	}, nil))
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path: "fragile.bin", DriveID: driveID, Direction: synctypes.DirectionUpload,
+		IssueType: synctypes.IssueHashPanic, Category: synctypes.CategoryActionable, ErrMsg: "panic: boom",
+	}, nil))
 
-	// Verify all 4 failures exist.
+	// Verify all 5 failures exist.
 	all, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
-	require.Len(t, all, 4)
+	require.Len(t, all, 5)
 
 	// Simulate a new scan where only "still-bad\x02.txt" still exists as skipped.
 	// "bad\x01name.txt" was renamed, "very/long/path.txt" was shortened,
-	// "huge-file.bin" was deleted.
+	// "huge-file.bin" was deleted, and "fragile.bin" hashed successfully.
 	currentSkipped := []synctypes.SkippedItem{
 		{Path: "still-bad\x02.txt", Reason: synctypes.IssueInvalidFilename},
 	}
@@ -1958,11 +1962,33 @@ func TestClearResolvedSkippedItems_DoesNotAffectRuntimeIssues(t *testing.T) {
 	testEngineFlow(t, eng).clearResolvedSkippedItems(ctx, nil)
 
 	// Runtime failure should survive — clearResolvedSkippedItems only
-	// clears invalid_filename, path_too_long, file_too_large.
+	// clears scanner-detectable issue types.
 	remaining, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, remaining, 1)
 	assert.Equal(t, synctypes.IssuePermissionDenied, remaining[0].IssueType)
+}
+
+// Validates: R-2.10.2
+func TestClearResolvedSkippedItems_HashPanicAutoClearsWhenScanRecovers(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path: "fragile.bin", DriveID: driveID, Direction: synctypes.DirectionUpload,
+		IssueType: synctypes.IssueHashPanic, Category: synctypes.CategoryActionable, ErrMsg: "panic: boom",
+	}, nil))
+
+	testEngineFlow(t, eng).clearResolvedSkippedItems(ctx, nil)
+
+	remaining, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, remaining, "scanner-time hash panics should auto-clear after a healthy scan")
 }
 
 // Validates: R-2.12.2

@@ -469,6 +469,7 @@ func (flow *engineFlow) observeLocalFailurePath(ctx context.Context, row *syncty
 		flow.engine.nowFunc().UnixNano(),
 		nil,
 		flow.engine.localFilter,
+		flow.engine.localRules,
 	)
 	if err != nil {
 		return failureRebuildResult{err: err}

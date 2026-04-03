@@ -75,6 +75,34 @@ func TestRunOnce_NoChanges(t *testing.T) {
 	assert.Equal(t, 0, report.Failed, "failed")
 }
 
+// Validates: R-2.11.3, R-2.11.5
+func TestRunOnce_SharePointRootFormsRecordsActionableFailure(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveid.New(engineTestDriveID)},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	eng.localRules = synctypes.LocalObservationRules{RejectSharePointRootForms: true}
+	writeLocalFile(t, syncRoot, "forms", "reserved root name")
+
+	report, err := eng.RunOnce(t.Context(), synctypes.SyncBidirectional, synctypes.RunOpts{})
+	require.NoError(t, err, "RunOnce")
+	assert.Equal(t, 0, report.Uploads, "reserved SharePoint root names must not produce upload actions")
+
+	failures, err := eng.baseline.ListActionableFailures(t.Context())
+	require.NoError(t, err)
+	require.Len(t, failures, 1)
+	assert.Equal(t, "forms", failures[0].Path)
+	assert.Equal(t, synctypes.IssueInvalidFilename, failures[0].IssueType)
+	assert.Equal(t, synctypes.CategoryActionable, failures[0].Category)
+}
+
 // Validates: R-2.1.3
 func TestRunOnce_DownloadOnly_SkipsLocalScan(t *testing.T) {
 	t.Parallel()
