@@ -58,11 +58,11 @@ func TestVerifyBaseline_AllMatch(t *testing.T) {
 		ByPath: map[string]*synctypes.BaselineEntry{
 			"docs/readme.md": {
 				Path: "docs/readme.md", DriveID: driveid.New("d"), ItemID: "i1",
-				ItemType: synctypes.ItemTypeFile, LocalHash: hash, Size: int64(len(content)),
+				ItemType: synctypes.ItemTypeFile, LocalHash: hash, LocalSize: int64(len(content)), LocalSizeKnown: true,
 			},
 			"notes.txt": {
 				Path: "notes.txt", DriveID: driveid.New("d"), ItemID: "i2",
-				ItemType: synctypes.ItemTypeFile, LocalHash: hash, Size: int64(len(content)),
+				ItemType: synctypes.ItemTypeFile, LocalHash: hash, LocalSize: int64(len(content)), LocalSizeKnown: true,
 			},
 		},
 		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),
@@ -89,7 +89,7 @@ func TestVerifyBaseline_MissingFile(t *testing.T) {
 		ByPath: map[string]*synctypes.BaselineEntry{
 			"ghost.txt": {
 				Path: "ghost.txt", DriveID: driveid.New("d"), ItemID: "i1",
-				ItemType: synctypes.ItemTypeFile, LocalHash: "somehash", Size: 100,
+				ItemType: synctypes.ItemTypeFile, LocalHash: "somehash", LocalSize: 100, LocalSizeKnown: true,
 			},
 		},
 		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),
@@ -117,7 +117,7 @@ func TestVerifyBaseline_HashMismatch(t *testing.T) {
 		ByPath: map[string]*synctypes.BaselineEntry{
 			"changed.txt": {
 				Path: "changed.txt", DriveID: driveid.New("d"), ItemID: "i1",
-				ItemType: synctypes.ItemTypeFile, LocalHash: "wrong-hash", Size: int64(len(content)),
+				ItemType: synctypes.ItemTypeFile, LocalHash: "wrong-hash", LocalSize: int64(len(content)), LocalSizeKnown: true,
 			},
 		},
 		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),
@@ -170,7 +170,7 @@ func TestVerifyBaseline_SkipsFolders(t *testing.T) {
 			},
 			"docs/file.txt": {
 				Path: "docs/file.txt", DriveID: driveid.New("d"), ItemID: "i1",
-				ItemType: synctypes.ItemTypeFile, LocalHash: hash, Size: int64(len(content)),
+				ItemType: synctypes.ItemTypeFile, LocalHash: hash, LocalSize: int64(len(content)), LocalSizeKnown: true,
 			},
 		},
 		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),
@@ -197,7 +197,7 @@ func TestVerifyBaseline_SizeMismatch(t *testing.T) {
 		ByPath: map[string]*synctypes.BaselineEntry{
 			"size.txt": {
 				Path: "size.txt", DriveID: driveid.New("d"), ItemID: "i1",
-				ItemType: synctypes.ItemTypeFile, LocalHash: "somehash", Size: 99999,
+				ItemType: synctypes.ItemTypeFile, LocalHash: "somehash", LocalSize: 99999, LocalSizeKnown: true,
 			},
 		},
 		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),

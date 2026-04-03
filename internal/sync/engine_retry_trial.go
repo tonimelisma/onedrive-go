@@ -542,8 +542,8 @@ func (flow *engineFlow) rebuildRemoteDeleteFailure(ctx context.Context, row *syn
 		DriveID:   row.DriveID,
 		ItemType:  entry.ItemType,
 		Name:      filepath.Base(row.Path),
-		Size:      entry.Size,
-		Mtime:     entry.Mtime,
+		Size:      entry.LocalSize,
+		Mtime:     entry.LocalMtime,
 		IsDeleted: true,
 	}}
 }

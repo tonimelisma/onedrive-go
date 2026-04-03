@@ -263,15 +263,18 @@ func TestRunOnce_BigDelete_WithoutForce(t *testing.T) {
 	seedOutcomes := make([]synctypes.Outcome, 20)
 	for i := range 20 {
 		seedOutcomes[i] = synctypes.Outcome{
-			Action:     synctypes.ActionDownload,
-			Success:    true,
-			Path:       fmt.Sprintf("file%02d.txt", i),
-			DriveID:    driveID,
-			ItemID:     fmt.Sprintf("item-%02d", i),
-			ItemType:   synctypes.ItemTypeFile,
-			RemoteHash: fmt.Sprintf("hash%02d", i),
-			LocalHash:  fmt.Sprintf("hash%02d", i),
-			Size:       100,
+			Action:          synctypes.ActionDownload,
+			Success:         true,
+			Path:            fmt.Sprintf("file%02d.txt", i),
+			DriveID:         driveID,
+			ItemID:          fmt.Sprintf("item-%02d", i),
+			ItemType:        synctypes.ItemTypeFile,
+			RemoteHash:      fmt.Sprintf("hash%02d", i),
+			LocalHash:       fmt.Sprintf("hash%02d", i),
+			LocalSize:       100,
+			LocalSizeKnown:  true,
+			RemoteSize:      100,
+			RemoteSizeKnown: true,
 		}
 	}
 
@@ -296,15 +299,18 @@ func TestRunOnce_BigDelete_WithForce(t *testing.T) {
 	seedOutcomes := make([]synctypes.Outcome, 20)
 	for i := range 20 {
 		seedOutcomes[i] = synctypes.Outcome{
-			Action:     synctypes.ActionDownload,
-			Success:    true,
-			Path:       fmt.Sprintf("file%02d.txt", i),
-			DriveID:    driveID,
-			ItemID:     fmt.Sprintf("item-%02d", i),
-			ItemType:   synctypes.ItemTypeFile,
-			RemoteHash: fmt.Sprintf("hash%02d", i),
-			LocalHash:  fmt.Sprintf("hash%02d", i),
-			Size:       100,
+			Action:          synctypes.ActionDownload,
+			Success:         true,
+			Path:            fmt.Sprintf("file%02d.txt", i),
+			DriveID:         driveID,
+			ItemID:          fmt.Sprintf("item-%02d", i),
+			ItemType:        synctypes.ItemTypeFile,
+			RemoteHash:      fmt.Sprintf("hash%02d", i),
+			LocalHash:       fmt.Sprintf("hash%02d", i),
+			LocalSize:       100,
+			LocalSizeKnown:  true,
+			RemoteSize:      100,
+			RemoteSizeKnown: true,
 		}
 	}
 
@@ -533,15 +539,18 @@ func TestRunOnce_EmptyPlan_NoPanic(t *testing.T) {
 
 	// Seed baseline so the file appears as already synced with matching hash.
 	seedOutcomes := []synctypes.Outcome{{
-		Action:     synctypes.ActionDownload,
-		Success:    true,
-		Path:       "unchanged.txt",
-		DriveID:    driveID,
-		ItemID:     "f1",
-		ItemType:   synctypes.ItemTypeFile,
-		RemoteHash: "matchhash",
-		LocalHash:  "matchhash",
-		Size:       5,
+		Action:          synctypes.ActionDownload,
+		Success:         true,
+		Path:            "unchanged.txt",
+		DriveID:         driveID,
+		ItemID:          "f1",
+		ItemType:        synctypes.ItemTypeFile,
+		RemoteHash:      "matchhash",
+		LocalHash:       "matchhash",
+		LocalSize:       5,
+		LocalSizeKnown:  true,
+		RemoteSize:      5,
+		RemoteSizeKnown: true,
 	}}
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "old-token")
 

@@ -1509,16 +1509,20 @@ func TestCreateEventFromDB_Upload_ReusesBaselineHashWhenMetadataMatches(t *testi
 	require.NotEqual(t, actualHash, cachedHash, "test needs a distinct cached hash to prove reuse")
 
 	require.NoError(t, eng.baseline.CommitOutcome(ctx, &synctypes.Outcome{
-		Action:     synctypes.ActionUpload,
-		Success:    true,
-		Path:       testFile,
-		DriveID:    driveID,
-		ItemID:     "upload-fast-path-item",
-		ItemType:   synctypes.ItemTypeFile,
-		LocalHash:  cachedHash,
-		RemoteHash: cachedHash,
-		Size:       info.Size(),
-		Mtime:      info.ModTime().UnixNano(),
+		Action:          synctypes.ActionUpload,
+		Success:         true,
+		Path:            testFile,
+		DriveID:         driveID,
+		ItemID:          "upload-fast-path-item",
+		ItemType:        synctypes.ItemTypeFile,
+		LocalHash:       cachedHash,
+		RemoteHash:      cachedHash,
+		LocalSize:       info.Size(),
+		LocalSizeKnown:  true,
+		RemoteSize:      info.Size(),
+		RemoteSizeKnown: true,
+		LocalMtime:      info.ModTime().UnixNano(),
+		RemoteMtime:     info.ModTime().UnixNano(),
 	}))
 
 	ev := createEventFromDBForTest(t, eng, ctx, &synctypes.SyncFailureRow{
@@ -1801,15 +1805,18 @@ func TestIsFailureResolved_Delete_BaselineExists(t *testing.T) {
 	}, "", driveID))
 
 	require.NoError(t, eng.baseline.CommitOutcome(ctx, &synctypes.Outcome{
-		Action:     synctypes.ActionDownload,
-		Success:    true,
-		Path:       "still-in-baseline.txt",
-		DriveID:    driveID,
-		ItemID:     "baseline-item",
-		ItemType:   synctypes.ItemTypeFile,
-		LocalHash:  "bl-hash",
-		RemoteHash: "bl-hash",
-		Size:       100,
+		Action:          synctypes.ActionDownload,
+		Success:         true,
+		Path:            "still-in-baseline.txt",
+		DriveID:         driveID,
+		ItemID:          "baseline-item",
+		ItemType:        synctypes.ItemTypeFile,
+		LocalHash:       "bl-hash",
+		RemoteHash:      "bl-hash",
+		LocalSize:       100,
+		LocalSizeKnown:  true,
+		RemoteSize:      100,
+		RemoteSizeKnown: true,
 	}))
 
 	row := &synctypes.SyncFailureRow{

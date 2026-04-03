@@ -93,12 +93,12 @@ func verifyEntry(
 		}
 	}
 
-	// Check size first (fast path).
-	if entry.Size > 0 && info.Size() != entry.Size {
+	// Check size first (fast path) when the baseline knows the local file size.
+	if entry.LocalSizeKnown && info.Size() != entry.LocalSize {
 		return synctypes.VerifyResult{
 			Path:     entry.Path,
 			Status:   VerifySizeMismatch,
-			Expected: fmt.Sprintf("%d", entry.Size),
+			Expected: fmt.Sprintf("%d", entry.LocalSize),
 			Actual:   fmt.Sprintf("%d", info.Size()),
 		}
 	}

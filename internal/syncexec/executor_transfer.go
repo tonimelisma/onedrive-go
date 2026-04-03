@@ -50,22 +50,26 @@ func (e *Executor) downloadOutcome(
 	action *synctypes.Action, driveID driveid.ID, localHash, remoteHash string, size int64,
 ) synctypes.Outcome {
 	o := synctypes.Outcome{
-		Action:     synctypes.ActionDownload,
-		Success:    true,
-		Path:       action.Path,
-		DriveID:    driveID,
-		ItemID:     action.ItemID,
-		ItemType:   synctypes.ItemTypeFile,
-		LocalHash:  localHash,
-		RemoteHash: remoteHash,
-		Size:       size,
+		Action:          synctypes.ActionDownload,
+		Success:         true,
+		Path:            action.Path,
+		DriveID:         driveID,
+		ItemID:          action.ItemID,
+		ItemType:        synctypes.ItemTypeFile,
+		LocalHash:       localHash,
+		RemoteHash:      remoteHash,
+		LocalSize:       size,
+		LocalSizeKnown:  true,
+		RemoteSize:      size,
+		RemoteSizeKnown: true,
 	}
 
 	if action.View != nil && action.View.Remote != nil {
 		o.ETag = action.View.Remote.ETag
 		o.ParentID = action.View.Remote.ParentID
-		o.Mtime = action.View.Remote.Mtime
+		o.LocalMtime = action.View.Remote.Mtime
 		o.RemoteMtime = action.View.Remote.Mtime
+		o.RemoteSize = action.View.Remote.Size
 
 		if remoteHash == "" {
 			o.RemoteHash = action.View.Remote.Hash
@@ -123,19 +127,27 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *synctypes.Action) 
 
 	// driveops.SelectHash picks the best available hash from the item metadata (B-222).
 	remoteHash := driveops.SelectHash(result.Item)
+	remoteMtime := int64(0)
+	if !result.Item.ModifiedAt.IsZero() {
+		remoteMtime = result.Item.ModifiedAt.UnixNano()
+	}
 
 	return synctypes.Outcome{
-		Action:     synctypes.ActionUpload,
-		Success:    true,
-		Path:       action.Path,
-		DriveID:    driveID,
-		ItemID:     result.Item.ID,
-		ParentID:   parentID,
-		ItemType:   synctypes.ItemTypeFile,
-		LocalHash:  result.LocalHash,
-		RemoteHash: remoteHash,
-		Size:       result.Size,
-		Mtime:      result.Mtime.UnixNano(),
-		ETag:       result.Item.ETag,
+		Action:          synctypes.ActionUpload,
+		Success:         true,
+		Path:            action.Path,
+		DriveID:         driveID,
+		ItemID:          result.Item.ID,
+		ParentID:        parentID,
+		ItemType:        synctypes.ItemTypeFile,
+		LocalHash:       result.LocalHash,
+		RemoteHash:      remoteHash,
+		LocalSize:       result.Size,
+		LocalSizeKnown:  true,
+		RemoteSize:      result.Item.Size,
+		RemoteSizeKnown: true,
+		LocalMtime:      result.Mtime.UnixNano(),
+		RemoteMtime:     remoteMtime,
+		ETag:            result.Item.ETag,
 	}
 }

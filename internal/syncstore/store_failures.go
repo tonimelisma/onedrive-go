@@ -289,7 +289,7 @@ func (m *SyncStore) RecordFailure(ctx context.Context, p *synctypes.SyncFailureP
 		p.Path, p.DriveID.String(), p.Direction, normalizeFailureActionType(p.Direction, p.ActionType), role, category,
 		nullString(p.IssueType), nullString(itemID),
 		newCount, nextRetryNano, int64(0), p.ErrMsg, p.HTTPStatus,
-		nowNano, nowNano, nullInt64(p.FileSize), nullString(p.LocalHash), scopeWire,
+		nowNano, nowNano, nullOptionalInt64(p.FileSize), nullString(p.LocalHash), scopeWire,
 	)
 	if err != nil {
 		return fmt.Errorf("sync: recording sync failure for %s: %w", p.Path, err)

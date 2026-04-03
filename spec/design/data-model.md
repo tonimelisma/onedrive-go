@@ -1,6 +1,6 @@
 # Data Model
 
-Implements: R-6.5.1 [verified], R-6.5.2 [verified], R-2.5.1 [verified], R-2.5.2 [verified], R-2.3.2 [verified]
+Implements: R-6.5.1 [verified], R-6.5.2 [verified], R-2.5.1 [verified], R-2.5.2 [verified], R-2.3.2 [verified], R-6.7.17 [verified]
 
 ## One Database per Drive
 
@@ -45,11 +45,25 @@ Confirmed synced state per `(drive_id, item_id)`. Each row represents content th
 
 Per-side hashes (`local_hash`, `remote_hash`) handle SharePoint enrichment: when SharePoint modifies a file server-side, the remote hash changes but the local content hasn't changed. The planner compares new hashes against the correct side's baseline hash to avoid false conflicts.
 
+File baselines also persist side-specific comparison metadata:
+
+- local side: `local_size`, `local_mtime`
+- remote side: `remote_size`, `remote_mtime`, `etag`
+
+This makes hashless comparison durable across restarts. When both local-side
+hashes are absent, the planner falls back to `local_size + local_mtime`. When
+both remote-side hashes are absent, it falls back to
+`remote_size + remote_mtime + etag`. Unknown metadata is preserved as unknown
+and never treated as equality.
+
 `path` is a UNIQUE secondary key for fast local lookups. Moves are a single UPDATE (atomic) rather than DELETE+INSERT, enabled by the ID-based primary key.
 
 Baseline memory footprint is ~19 MB per 100K files, additive across drives. Monitor under profiling. [planned]
 
-Zero-byte files map to `NULL` in SQLite — indistinguishable from "size unknown". Fix: use `sql.NullInt64{Valid: true, Int64: 0}`. [planned]
+SQLite stores zero-byte known sizes as `sql.NullInt64{Valid: true, Int64: 0}`.
+`NULL` means "unknown size", not "zero". This matters for hashless comparison:
+zero-byte OneDrive files often have no hash, so `0` must remain distinguishable
+from missing metadata.
 
 ### sync_failures
 
@@ -128,9 +142,19 @@ Resumable upload sessions are tracked as JSON files in the data directory (not i
 
 ## Schema Bootstrap
 
-The sync store applies one canonical embedded schema on database creation. The
-repository does not carry migration-era compatibility paths or version-tracking
-tables. Tests and CI create fresh databases directly from the current schema.
+The sync store applies one canonical embedded schema on database creation.
+Fresh databases are created directly from that schema.
+
+There is one narrow inline repair path for legacy `baseline` tables created
+before side-aware file metadata existed. On open, the store detects the old
+`size`/`mtime` shape, rewrites the table to the canonical
+`local_size`/`remote_size`/`local_mtime`/`remote_mtime` layout, and backfills
+only the local-side fields that can be reconstructed safely from the legacy
+row. Unrecoverable remote-side metadata remains unknown rather than invented.
+
+This is intentionally not a general migration framework: there are no version
+tables, no migration chain, and no compatibility shims beyond the one
+data-repair step needed to keep old baseline rows conservative and safe.
 
 ## Performance
 

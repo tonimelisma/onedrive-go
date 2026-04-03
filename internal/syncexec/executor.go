@@ -295,7 +295,9 @@ func (e *Executor) ExecuteSyncedUpdate(action *synctypes.Action) synctypes.Outco
 	if action.View != nil {
 		if action.View.Remote != nil {
 			o.RemoteHash = action.View.Remote.Hash
-			o.Size = action.View.Remote.Size
+			o.RemoteSize = action.View.Remote.Size
+			o.RemoteSizeKnown = true
+			o.RemoteMtime = action.View.Remote.Mtime
 			o.ETag = action.View.Remote.ETag
 			o.ParentID = action.View.Remote.ParentID
 			o.ItemType = action.View.Remote.ItemType
@@ -303,8 +305,12 @@ func (e *Executor) ExecuteSyncedUpdate(action *synctypes.Action) synctypes.Outco
 
 		if action.View.Local != nil {
 			o.LocalHash = action.View.Local.Hash
-			o.Mtime = action.View.Local.Mtime
+			o.LocalSize = action.View.Local.Size
+			o.LocalSizeKnown = true
+			o.LocalMtime = action.View.Local.Mtime
 		}
+
+		fillOutcomeFromBaseline(&o, action.View.Baseline)
 
 		// Fall back to baseline ItemType when Remote is absent or had zero value.
 		if o.ItemType == synctypes.ItemTypeFile && action.View.Baseline != nil && action.View.Baseline.ItemType != synctypes.ItemTypeFile {
@@ -500,16 +506,52 @@ func (e *Executor) moveOutcome(action *synctypes.Action) synctypes.Outcome {
 	if action.View != nil {
 		if action.View.Remote != nil {
 			o.RemoteHash = action.View.Remote.Hash
-			o.Size = action.View.Remote.Size
+			o.RemoteSize = action.View.Remote.Size
+			o.RemoteSizeKnown = true
+			o.RemoteMtime = action.View.Remote.Mtime
 			o.ETag = action.View.Remote.ETag
 			o.ItemType = action.View.Remote.ItemType
 		}
 
 		if action.View.Local != nil {
 			o.LocalHash = action.View.Local.Hash
-			o.Mtime = action.View.Local.Mtime
+			o.LocalSize = action.View.Local.Size
+			o.LocalSizeKnown = true
+			o.LocalMtime = action.View.Local.Mtime
 		}
+
+		fillOutcomeFromBaseline(&o, action.View.Baseline)
 	}
 
 	return o
+}
+
+func fillOutcomeFromBaseline(o *synctypes.Outcome, baseline *synctypes.BaselineEntry) {
+	if baseline == nil {
+		return
+	}
+
+	if o.LocalHash == "" {
+		o.LocalHash = baseline.LocalHash
+	}
+	if !o.LocalSizeKnown {
+		o.LocalSize = baseline.LocalSize
+		o.LocalSizeKnown = baseline.LocalSizeKnown
+	}
+	if o.LocalMtime == 0 {
+		o.LocalMtime = baseline.LocalMtime
+	}
+	if o.RemoteHash == "" {
+		o.RemoteHash = baseline.RemoteHash
+	}
+	if !o.RemoteSizeKnown {
+		o.RemoteSize = baseline.RemoteSize
+		o.RemoteSizeKnown = baseline.RemoteSizeKnown
+	}
+	if o.RemoteMtime == 0 {
+		o.RemoteMtime = baseline.RemoteMtime
+	}
+	if o.ETag == "" {
+		o.ETag = baseline.ETag
+	}
 }

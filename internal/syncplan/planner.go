@@ -649,9 +649,9 @@ func localStateFromBaseline(entry *synctypes.BaselineEntry) *synctypes.LocalStat
 	return &synctypes.LocalState{
 		Name:     path.Base(entry.Path),
 		ItemType: entry.ItemType,
-		Size:     entry.Size,
+		Size:     entry.LocalSize,
 		Hash:     entry.LocalHash,
-		Mtime:    entry.Mtime,
+		Mtime:    entry.LocalMtime,
 	}
 }
 
@@ -672,7 +672,19 @@ func detectLocalChange(view *synctypes.PathView) bool {
 		return false
 	}
 
-	return view.Local.Hash != view.Baseline.LocalHash
+	return fileSideChanged(
+		view.Local.Hash,
+		view.Baseline.LocalHash,
+		view.Local.Size,
+		true,
+		view.Baseline.LocalSize,
+		view.Baseline.LocalSizeKnown,
+		view.Local.Mtime,
+		view.Baseline.LocalMtime,
+		"",
+		"",
+		false,
+	)
 }
 
 // detectRemoteChange returns true if the remote state differs from the
@@ -695,7 +707,62 @@ func detectRemoteChange(view *synctypes.PathView) bool {
 		return false
 	}
 
-	return view.Remote.Hash != view.Baseline.RemoteHash
+	return fileSideChanged(
+		view.Remote.Hash,
+		view.Baseline.RemoteHash,
+		view.Remote.Size,
+		true,
+		view.Baseline.RemoteSize,
+		view.Baseline.RemoteSizeKnown,
+		view.Remote.Mtime,
+		view.Baseline.RemoteMtime,
+		view.Remote.ETag,
+		view.Baseline.ETag,
+		true,
+	)
+}
+
+func fileSideChanged(
+	currentHash, baselineHash string,
+	currentSize int64, currentSizeKnown bool,
+	baselineSize int64, baselineSizeKnown bool,
+	currentMtime, baselineMtime int64,
+	currentETag, baselineETag string,
+	requireETag bool,
+) bool {
+	if currentHash != "" || baselineHash != "" {
+		return currentHash != baselineHash
+	}
+
+	if !currentSizeKnown || !baselineSizeKnown {
+		return true
+	}
+
+	if currentSize != baselineSize {
+		return true
+	}
+
+	// Unknown timestamps are never treated as equality for hashless files.
+	if currentMtime == 0 || baselineMtime == 0 {
+		return true
+	}
+
+	if currentMtime != baselineMtime {
+		return true
+	}
+
+	if requireETag {
+		// Unknown eTags are never equality signals for remote hashless files.
+		if currentETag == "" || baselineETag == "" {
+			return true
+		}
+
+		if currentETag != baselineETag {
+			return true
+		}
+	}
+
+	return false
 }
 
 // resolveItemType determines the item type by checking Remote, Local,

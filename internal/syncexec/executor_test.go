@@ -301,7 +301,8 @@ func TestExecutor_Download_Success(t *testing.T) {
 
 	// Partial file should not exist.
 	assert.NoFileExists(t, filepath.Join(syncRoot, "greetings.txt.partial"), ".partial file still exists")
-	assert.Equal(t, int64(len(execFileContent)), o.Size)
+	assert.Equal(t, int64(len(execFileContent)), o.LocalSize)
+	assert.True(t, o.LocalSizeKnown)
 }
 
 func TestExecutor_Download_APIError(t *testing.T) {
@@ -1026,8 +1027,9 @@ func TestExecutor_SyncedUpdate(t *testing.T) {
 
 	assert.Equal(t, "hash1", o.RemoteHash)
 	assert.Equal(t, "hash1", o.LocalHash)
-	assert.Equal(t, int64(1024), o.Size)
-	assert.Equal(t, int64(1234567890), o.Mtime)
+	assert.Equal(t, int64(1024), o.RemoteSize)
+	assert.True(t, o.RemoteSizeKnown)
+	assert.Equal(t, int64(1234567890), o.LocalMtime)
 }
 
 // ---------------------------------------------------------------------------
@@ -1226,10 +1228,11 @@ func TestExecutor_LocalMove_ViewFields(t *testing.T) {
 	requireOutcomeSuccess(t, &o)
 
 	assert.Equal(t, "remotehash", o.RemoteHash)
-	assert.Equal(t, int64(42), o.Size)
+	assert.Equal(t, int64(42), o.RemoteSize)
+	assert.True(t, o.RemoteSizeKnown)
 	assert.Equal(t, "etag-move", o.ETag)
 	assert.Equal(t, "localhash", o.LocalHash)
-	assert.Equal(t, int64(9876543210), o.Mtime)
+	assert.Equal(t, int64(9876543210), o.LocalMtime)
 	assert.Equal(t, synctypes.ItemTypeFile, o.ItemType)
 }
 
@@ -1567,7 +1570,7 @@ func TestExecutor_Upload_MtimePassedToUploader(t *testing.T) {
 	assert.True(t, capturedMtime.Equal(targetMtime), "uploader received mtime %v, want %v", capturedMtime, targetMtime)
 
 	// Verify the outcome also records the mtime.
-	assert.Equal(t, targetMtime.UnixNano(), o.Mtime)
+	assert.Equal(t, targetMtime.UnixNano(), o.LocalMtime)
 }
 
 // ---------------------------------------------------------------------------

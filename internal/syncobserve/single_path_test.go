@@ -62,11 +62,12 @@ func TestObserveSinglePath_ReusesBaselineHashWhenMetadataMatches(t *testing.T) {
 	require.NotEqual(t, "cached-hash", actualHash)
 
 	result, err := ObserveSinglePath(nil, mustOpenSyncTree(t, syncRoot), relPath, &synctypes.BaselineEntry{
-		Path:      relPath,
-		ItemType:  synctypes.ItemTypeFile,
-		Size:      info.Size(),
-		Mtime:     info.ModTime().UnixNano(),
-		LocalHash: "cached-hash",
+		Path:           relPath,
+		ItemType:       synctypes.ItemTypeFile,
+		LocalSize:      info.Size(),
+		LocalSizeKnown: true,
+		LocalMtime:     info.ModTime().UnixNano(),
+		LocalHash:      "cached-hash",
 	}, time.Now().UnixNano(), func(string) (string, error) {
 		return "", errors.New("hash function should not be called when metadata matches")
 	})
@@ -94,11 +95,12 @@ func TestObserveSinglePath_ReusesBaselineHashWhenSameSecondMtimeDiffersByFractio
 	require.NoError(t, err)
 
 	result, err := ObserveSinglePath(nil, mustOpenSyncTree(t, syncRoot), relPath, &synctypes.BaselineEntry{
-		Path:      relPath,
-		ItemType:  synctypes.ItemTypeFile,
-		Size:      info.Size(),
-		Mtime:     fileTime.Add(600 * time.Millisecond).UnixNano(),
-		LocalHash: "cached-hash",
+		Path:           relPath,
+		ItemType:       synctypes.ItemTypeFile,
+		LocalSize:      info.Size(),
+		LocalSizeKnown: true,
+		LocalMtime:     fileTime.Add(600 * time.Millisecond).UnixNano(),
+		LocalHash:      "cached-hash",
 	}, time.Now().UnixNano(), func(string) (string, error) {
 		return "", errors.New("hash function should not be called for same-second timestamp drift")
 	})

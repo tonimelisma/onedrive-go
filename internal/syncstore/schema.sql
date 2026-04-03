@@ -12,8 +12,10 @@ CREATE TABLE IF NOT EXISTS baseline (
     item_type       TEXT    NOT NULL CHECK(item_type IN ('file', 'folder', 'root')),
     local_hash      TEXT,
     remote_hash     TEXT,
-    size            INTEGER,
-    mtime           INTEGER,
+    local_size      INTEGER,
+    remote_size     INTEGER,
+    local_mtime     INTEGER,
+    remote_mtime    INTEGER,
     synced_at       INTEGER NOT NULL CHECK(synced_at > 0),
     etag            TEXT,
     PRIMARY KEY (drive_id, item_id)

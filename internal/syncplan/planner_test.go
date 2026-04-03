@@ -1984,6 +1984,266 @@ func TestDetectChange_UsesPerSideHashes(t *testing.T) {
 	}
 }
 
+type changeDetectionCase struct {
+	name string
+	view *synctypes.PathView
+	want bool
+}
+
+func metadataFallbackLocalCases() []changeDetectionCase {
+	return []changeDetectionCase{
+		{
+			name: "local_fallback_matches_when_size_and_mtime_match",
+			view: &synctypes.PathView{
+				Local: &synctypes.LocalState{
+					ItemType: synctypes.ItemTypeFile,
+					Size:     0,
+					Mtime:    100,
+				},
+				Baseline: &synctypes.BaselineEntry{
+					ItemType:       synctypes.ItemTypeFile,
+					LocalSize:      0,
+					LocalSizeKnown: true,
+					LocalMtime:     100,
+				},
+			},
+		},
+		{
+			name: "local_fallback_detects_size_change",
+			view: &synctypes.PathView{
+				Local: &synctypes.LocalState{
+					ItemType: synctypes.ItemTypeFile,
+					Size:     2,
+					Mtime:    100,
+				},
+				Baseline: &synctypes.BaselineEntry{
+					ItemType:       synctypes.ItemTypeFile,
+					LocalSize:      1,
+					LocalSizeKnown: true,
+					LocalMtime:     100,
+				},
+			},
+			want: true,
+		},
+		{
+			name: "local_fallback_treats_unknown_size_as_changed",
+			view: &synctypes.PathView{
+				Local: &synctypes.LocalState{
+					ItemType: synctypes.ItemTypeFile,
+					Size:     0,
+					Mtime:    100,
+				},
+				Baseline: &synctypes.BaselineEntry{
+					ItemType:   synctypes.ItemTypeFile,
+					LocalMtime: 100,
+				},
+			},
+			want: true,
+		},
+		{
+			name: "local_hash_appearing_counts_as_change",
+			view: &synctypes.PathView{
+				Local: &synctypes.LocalState{
+					ItemType: synctypes.ItemTypeFile,
+					Hash:     "hash-now-present",
+					Size:     10,
+					Mtime:    100,
+				},
+				Baseline: &synctypes.BaselineEntry{
+					ItemType:       synctypes.ItemTypeFile,
+					LocalSize:      10,
+					LocalSizeKnown: true,
+					LocalMtime:     100,
+				},
+			},
+			want: true,
+		},
+		{
+			name: "local_hash_disappearing_counts_as_change",
+			view: &synctypes.PathView{
+				Local: &synctypes.LocalState{
+					ItemType: synctypes.ItemTypeFile,
+					Size:     10,
+					Mtime:    100,
+				},
+				Baseline: &synctypes.BaselineEntry{
+					ItemType:       synctypes.ItemTypeFile,
+					LocalHash:      "hash-was-present",
+					LocalSize:      10,
+					LocalSizeKnown: true,
+					LocalMtime:     100,
+				},
+			},
+			want: true,
+		},
+	}
+}
+
+func metadataFallbackRemoteMetadataCases() []changeDetectionCase {
+	return []changeDetectionCase{
+		{
+			name: "remote_fallback_matches_when_size_mtime_and_etag_match",
+			view: &synctypes.PathView{
+				Remote: &synctypes.RemoteState{
+					ItemType: synctypes.ItemTypeFile,
+					Size:     0,
+					Mtime:    200,
+					ETag:     "etag-1",
+				},
+				Baseline: &synctypes.BaselineEntry{
+					ItemType:        synctypes.ItemTypeFile,
+					RemoteSize:      0,
+					RemoteSizeKnown: true,
+					RemoteMtime:     200,
+					ETag:            "etag-1",
+				},
+			},
+		},
+		{
+			name: "remote_fallback_detects_etag_change",
+			view: &synctypes.PathView{
+				Remote: &synctypes.RemoteState{
+					ItemType: synctypes.ItemTypeFile,
+					Size:     0,
+					Mtime:    200,
+					ETag:     "etag-new",
+				},
+				Baseline: &synctypes.BaselineEntry{
+					ItemType:        synctypes.ItemTypeFile,
+					RemoteSize:      0,
+					RemoteSizeKnown: true,
+					RemoteMtime:     200,
+					ETag:            "etag-old",
+				},
+			},
+			want: true,
+		},
+		{
+			name: "remote_fallback_detects_remote_mtime_change",
+			view: &synctypes.PathView{
+				Remote: &synctypes.RemoteState{
+					ItemType: synctypes.ItemTypeFile,
+					Size:     10,
+					Mtime:    201,
+					ETag:     "etag-1",
+				},
+				Baseline: &synctypes.BaselineEntry{
+					ItemType:        synctypes.ItemTypeFile,
+					RemoteSize:      10,
+					RemoteSizeKnown: true,
+					RemoteMtime:     200,
+					ETag:            "etag-1",
+				},
+			},
+			want: true,
+		},
+		{
+			name: "remote_fallback_detects_remote_size_change",
+			view: &synctypes.PathView{
+				Remote: &synctypes.RemoteState{
+					ItemType: synctypes.ItemTypeFile,
+					Size:     11,
+					Mtime:    200,
+					ETag:     "etag-1",
+				},
+				Baseline: &synctypes.BaselineEntry{
+					ItemType:        synctypes.ItemTypeFile,
+					RemoteSize:      10,
+					RemoteSizeKnown: true,
+					RemoteMtime:     200,
+					ETag:            "etag-1",
+				},
+			},
+			want: true,
+		},
+		{
+			name: "remote_fallback_treats_missing_etag_as_changed",
+			view: &synctypes.PathView{
+				Remote: &synctypes.RemoteState{
+					ItemType: synctypes.ItemTypeFile,
+					Size:     10,
+					Mtime:    200,
+				},
+				Baseline: &synctypes.BaselineEntry{
+					ItemType:        synctypes.ItemTypeFile,
+					RemoteSize:      10,
+					RemoteSizeKnown: true,
+					RemoteMtime:     200,
+					ETag:            "etag-1",
+				},
+			},
+			want: true,
+		},
+	}
+}
+
+func metadataFallbackRemoteHashTransitionCases() []changeDetectionCase {
+	return []changeDetectionCase{
+		{
+			name: "remote_hash_appearing_counts_as_change",
+			view: &synctypes.PathView{
+				Remote: &synctypes.RemoteState{
+					ItemType: synctypes.ItemTypeFile,
+					Hash:     "hash-now-present",
+					Size:     10,
+					Mtime:    200,
+					ETag:     "etag-1",
+				},
+				Baseline: &synctypes.BaselineEntry{
+					ItemType:        synctypes.ItemTypeFile,
+					RemoteSize:      10,
+					RemoteSizeKnown: true,
+					RemoteMtime:     200,
+					ETag:            "etag-1",
+				},
+			},
+			want: true,
+		},
+		{
+			name: "remote_hash_disappearing_counts_as_change",
+			view: &synctypes.PathView{
+				Remote: &synctypes.RemoteState{
+					ItemType: synctypes.ItemTypeFile,
+					Size:     10,
+					Mtime:    200,
+					ETag:     "etag-1",
+				},
+				Baseline: &synctypes.BaselineEntry{
+					ItemType:        synctypes.ItemTypeFile,
+					RemoteHash:      "hash-was-present",
+					RemoteSize:      10,
+					RemoteSizeKnown: true,
+					RemoteMtime:     200,
+					ETag:            "etag-1",
+				},
+			},
+			want: true,
+		},
+	}
+}
+
+func metadataFallbackRemoteCases() []changeDetectionCase {
+	return append(metadataFallbackRemoteMetadataCases(), metadataFallbackRemoteHashTransitionCases()...)
+}
+
+// Validates: R-6.7.17
+func TestDetectLocalChange_UsesMetadataFallbackWhenHashesMissing(t *testing.T) {
+	for _, tt := range metadataFallbackLocalCases() {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, detectLocalChange(tt.view))
+		})
+	}
+}
+
+// Validates: R-6.7.17
+func TestDetectRemoteChange_UsesMetadataFallbackWhenHashesMissing(t *testing.T) {
+	for _, tt := range metadataFallbackRemoteCases() {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, detectRemoteChange(tt.view))
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Move Detection: Old Path Reused
 // ---------------------------------------------------------------------------

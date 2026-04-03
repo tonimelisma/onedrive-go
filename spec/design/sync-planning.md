@@ -2,7 +2,7 @@
 
 GOVERNS: internal/syncplan/planner.go, internal/synctypes/*.go, internal/sync/types.go
 
-Implements: R-2.2 [verified], R-2.3.1 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.7.7 [verified], R-2.14.2 [verified], R-6.10.6 [verified]
+Implements: R-2.2 [verified], R-2.3.1 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.7.7 [verified], R-6.7.17 [verified], R-2.14.2 [verified], R-6.10.6 [verified]
 
 ## Overview
 
@@ -65,6 +65,19 @@ Folders use existence-based reconciliation — no hash check needed.
 Per-side baselines for SharePoint enrichment correctness:
 - `detectLocalChange`: compares `Local.Hash` against `Baseline.LocalHash`
 - `detectRemoteChange`: compares `Remote.Hash` against `Baseline.RemoteHash`
+
+Hash comparison is not the whole file-equality contract:
+
+- if both local-side hashes are present, compare `Local.Hash` vs `Baseline.LocalHash`
+- if both local-side hashes are absent, compare `Local.Size + Local.Mtime` vs `Baseline.LocalSize + Baseline.LocalMtime`
+- if exactly one local-side hash is present, treat the file as changed
+- if both remote-side hashes are present, compare `Remote.Hash` vs `Baseline.RemoteHash`
+- if both remote-side hashes are absent, compare `Remote.Size + Remote.Mtime + Remote.ETag` vs `Baseline.RemoteSize + Baseline.RemoteMtime + Baseline.ETag`
+- if exactly one remote-side hash is present, treat the file as changed
+
+The important invariant is that missing hashes are never equality by
+themselves. `"" == ""` is not sufficient to declare a hashless file unchanged.
+Unknown fallback metadata is also never treated as equality.
 
 ## Big-Delete Protection (One-Shot)
 

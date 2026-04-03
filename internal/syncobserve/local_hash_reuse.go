@@ -24,7 +24,7 @@ func CanReuseBaselineHash(info fs.FileInfo, base *synctypes.BaselineEntry, obser
 	}
 
 	currentMtime := info.ModTime().UnixNano()
-	if info.Size() != base.Size || !sameOneDriveComparableMtime(currentMtime, base.Mtime) {
+	if !base.LocalSizeKnown || info.Size() != base.LocalSize || !sameOneDriveComparableMtime(currentMtime, base.LocalMtime) {
 		return false
 	}
 

@@ -38,23 +38,25 @@ import (
 // SQL statements for baseline operations.
 const (
 	sqlLoadBaseline = `SELECT drive_id, item_id, path, parent_id, item_type,
-		local_hash, remote_hash, size, mtime, synced_at, etag
+		local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, synced_at, etag
 		FROM baseline`
 
 	sqlGetDeltaCursor = `SELECT cursor FROM delta_tokens WHERE drive_id = ? AND scope_id = ?`
 
 	sqlUpsertBaseline = `INSERT INTO baseline
 		(drive_id, item_id, path, parent_id, item_type, local_hash, remote_hash,
-		 size, mtime, synced_at, etag)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 local_size, remote_size, local_mtime, remote_mtime, synced_at, etag)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(drive_id, item_id) DO UPDATE SET
 		 path = excluded.path,
 		 parent_id = excluded.parent_id,
 		 item_type = excluded.item_type,
 		 local_hash = excluded.local_hash,
 		 remote_hash = excluded.remote_hash,
-		 size = excluded.size,
-		 mtime = excluded.mtime,
+		 local_size = excluded.local_size,
+		 remote_size = excluded.remote_size,
+		 local_mtime = excluded.local_mtime,
+		 remote_mtime = excluded.remote_mtime,
 		 synced_at = excluded.synced_at,
 		 etag = excluded.etag`
 
@@ -128,18 +130,20 @@ func (m *SyncStore) Load(ctx context.Context) (*synctypes.Baseline, error) {
 // nullable columns with sql.Null* types.
 func scanBaselineRow(rows *sql.Rows) (*synctypes.BaselineEntry, error) {
 	var (
-		e          synctypes.BaselineEntry
-		parentID   sql.NullString
-		localHash  sql.NullString
-		remoteHash sql.NullString
-		size       sql.NullInt64
-		mtime      sql.NullInt64
-		etag       sql.NullString
+		e           synctypes.BaselineEntry
+		parentID    sql.NullString
+		localHash   sql.NullString
+		remoteHash  sql.NullString
+		localSize   sql.NullInt64
+		remoteSize  sql.NullInt64
+		localMtime  sql.NullInt64
+		remoteMtime sql.NullInt64
+		etag        sql.NullString
 	)
 
 	err := rows.Scan(
 		&e.DriveID, &e.ItemID, &e.Path, &parentID, &e.ItemType,
-		&localHash, &remoteHash, &size, &mtime, &e.SyncedAt, &etag,
+		&localHash, &remoteHash, &localSize, &remoteSize, &localMtime, &remoteMtime, &e.SyncedAt, &etag,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("sync: scanning baseline row: %w", err)
@@ -150,12 +154,22 @@ func scanBaselineRow(rows *sql.Rows) (*synctypes.BaselineEntry, error) {
 	e.RemoteHash = remoteHash.String
 	e.ETag = etag.String
 
-	if size.Valid {
-		e.Size = size.Int64
+	if localSize.Valid {
+		e.LocalSize = localSize.Int64
+		e.LocalSizeKnown = true
 	}
 
-	if mtime.Valid {
-		e.Mtime = mtime.Int64
+	if remoteSize.Valid {
+		e.RemoteSize = remoteSize.Int64
+		e.RemoteSizeKnown = true
+	}
+
+	if localMtime.Valid {
+		e.LocalMtime = localMtime.Int64
+	}
+
+	if remoteMtime.Valid {
+		e.RemoteMtime = remoteMtime.Int64
 	}
 
 	return &e, nil
@@ -264,17 +278,21 @@ func (m *SyncStore) updateBaselineCache(o *synctypes.Outcome, syncedAt int64) {
 // outcomeToEntry converts an Outcome into a BaselineEntry for cache update.
 func outcomeToEntry(o *synctypes.Outcome, syncedAt int64) *synctypes.BaselineEntry {
 	return &synctypes.BaselineEntry{
-		Path:       o.Path,
-		DriveID:    o.DriveID,
-		ItemID:     o.ItemID,
-		ParentID:   o.ParentID,
-		ItemType:   o.ItemType,
-		LocalHash:  o.LocalHash,
-		RemoteHash: o.RemoteHash,
-		Size:       o.Size,
-		Mtime:      o.Mtime,
-		SyncedAt:   syncedAt,
-		ETag:       o.ETag,
+		Path:            o.Path,
+		DriveID:         o.DriveID,
+		ItemID:          o.ItemID,
+		ParentID:        o.ParentID,
+		ItemType:        o.ItemType,
+		LocalHash:       o.LocalHash,
+		RemoteHash:      o.RemoteHash,
+		LocalSize:       o.LocalSize,
+		LocalSizeKnown:  o.LocalSizeKnown,
+		RemoteSize:      o.RemoteSize,
+		RemoteSizeKnown: o.RemoteSizeKnown,
+		LocalMtime:      o.LocalMtime,
+		RemoteMtime:     o.RemoteMtime,
+		SyncedAt:        syncedAt,
+		ETag:            o.ETag,
 	}
 }
 
@@ -358,8 +376,10 @@ func commitUpsert(ctx context.Context, tx *sql.Tx, o *synctypes.Outcome, syncedA
 		o.ItemType.String(),
 		nullString(o.LocalHash),
 		nullString(o.RemoteHash),
-		nullInt64(o.Size),
-		nullInt64(o.Mtime),
+		nullKnownInt64(o.LocalSize, o.LocalSizeKnown),
+		nullKnownInt64(o.RemoteSize, o.RemoteSizeKnown),
+		nullOptionalInt64(o.LocalMtime),
+		nullOptionalInt64(o.RemoteMtime),
 		syncedAt,
 		nullString(o.ETag),
 	)
@@ -412,8 +432,8 @@ func commitConflict(ctx context.Context, tx *sql.Tx, o *synctypes.Outcome, synce
 		o.Path, o.ConflictType, syncedAt,
 		nullString(o.LocalHash),
 		nullString(o.RemoteHash),
-		nullInt64(o.Mtime),
-		nullInt64(o.RemoteMtime),
+		nullOptionalInt64(o.LocalMtime),
+		nullOptionalInt64(o.RemoteMtime),
 		resolution, resolvedAt, resolvedBy,
 	)
 	if err != nil {
@@ -484,7 +504,10 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *synctypes.Ou
 		_, err := tx.ExecContext(ctx,
 			`UPDATE remote_state SET sync_status = ?, hash = ?, size = ?, mtime = ?
 			WHERE drive_id = ? AND item_id = ?`,
-			synctypes.SyncStatusSynced, nullString(o.RemoteHash), nullInt64(o.Size), nullInt64(o.Mtime),
+			synctypes.SyncStatusSynced,
+			nullString(o.RemoteHash),
+			nullKnownInt64(o.RemoteSize, o.RemoteSizeKnown),
+			nullOptionalInt64(o.RemoteMtime),
 			o.DriveID.String(), o.ItemID,
 		)
 		if err != nil {
@@ -558,8 +581,7 @@ func (m *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 			continue
 		}
 
-		if cached.LocalHash != dbEntry.LocalHash || cached.RemoteHash != dbEntry.RemoteHash ||
-			cached.Size != dbEntry.Size || cached.ItemID != dbEntry.ItemID {
+		if !baselineEntriesEqual(cached, dbEntry) {
 			m.logger.Warn("cache consistency: field mismatch",
 				slog.String("path", p),
 			)
@@ -586,4 +608,16 @@ func (m *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 	}
 
 	return mismatches, nil
+}
+
+func baselineEntriesEqual(a, b *synctypes.BaselineEntry) bool {
+	return a.LocalHash == b.LocalHash &&
+		a.RemoteHash == b.RemoteHash &&
+		a.LocalSize == b.LocalSize &&
+		a.LocalSizeKnown == b.LocalSizeKnown &&
+		a.RemoteSize == b.RemoteSize &&
+		a.RemoteSizeKnown == b.RemoteSizeKnown &&
+		a.LocalMtime == b.LocalMtime &&
+		a.RemoteMtime == b.RemoteMtime &&
+		a.ItemID == b.ItemID
 }
