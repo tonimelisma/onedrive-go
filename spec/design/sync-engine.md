@@ -237,7 +237,10 @@ that through the normal planner/admission path as an explicit internal trial
 work request. No bespoke `reobserve` API path remains. If current local
 observation now rejects the candidate (for example, oversized file), the held
 row is converted into an actionable failure and trial selection continues. If
-no usable trial candidate exists, the engine preserves the scope at the current
+the rebuilt candidate resolves silently, the engine clears the stale failure
+row using the same normalized drive identity it would use to re-record it, so
+legacy zero-drive rows cannot survive by missing the `(path, drive_id)` delete.
+If no usable trial candidate exists, the engine preserves the scope at the current
 interval instead of auto-releasing it. On successful dispatch, the trial
 interval is NOT extended until the worker result arrives. Trial actions are
 marked `IsTrial=true` with `TrialScopeKey` set.
