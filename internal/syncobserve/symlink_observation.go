@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
@@ -88,6 +89,47 @@ func resolvedObservedDirPath(fsPath string) (string, error) {
 
 func shouldSkipObservedSymlink(isSymlink bool, filter synctypes.LocalFilterConfig) bool {
 	return isSymlink && filter.SkipSymlinks
+}
+
+func (o *LocalObserver) rememberExcludedSymlink(path string) {
+	if path == "" || path == "." {
+		return
+	}
+
+	if o.excludedSymlinkPaths == nil {
+		o.excludedSymlinkPaths = make(map[string]struct{})
+	}
+
+	o.excludedSymlinkPaths[path] = struct{}{}
+}
+
+func (o *LocalObserver) forgetExcludedSymlink(path string) {
+	if o.excludedSymlinkPaths == nil {
+		return
+	}
+
+	delete(o.excludedSymlinkPaths, path)
+}
+
+func (o *LocalObserver) hasExcludedSymlinkAncestor(path string) bool {
+	if o.excludedSymlinkPaths == nil {
+		return false
+	}
+
+	for current := path; current != ""; {
+		if _, ok := o.excludedSymlinkPaths[current]; ok {
+			return true
+		}
+
+		idx := strings.LastIndex(current, "/")
+		if idx < 0 {
+			break
+		}
+
+		current = current[:idx]
+	}
+
+	return false
 }
 
 func (o *LocalObserver) nextObservedDirStack(
@@ -352,10 +394,13 @@ func (o *LocalObserver) addObservedDirWatches(
 	}
 
 	if shouldSkipObservedSymlink(isSymlink, o.filterConfig) {
+		o.rememberExcludedSymlink(dbRelPath)
 		o.Logger.Debug("skipping symlink in watch setup",
 			slog.String("path", fsPath))
 		return nil
 	}
+
+	o.forgetExcludedSymlink(dbRelPath)
 
 	if !info.IsDir() {
 		return nil
@@ -463,11 +508,14 @@ func (o *LocalObserver) addObservedChildWatch(
 
 	if entry.Type()&fs.ModeSymlink != 0 {
 		if o.filterConfig.SkipSymlinks {
+			o.rememberExcludedSymlink(childRelPath)
 			return nil
 		}
 
 		return o.addObservedDirWatches(ctx, watcher, childFsPath, childRelPath, counts, dirStack)
 	}
+
+	o.forgetExcludedSymlink(childRelPath)
 
 	if !entry.IsDir() {
 		return nil
@@ -505,6 +553,8 @@ func (o *LocalObserver) processSymlinkPath(
 			slog.String("path", dbRelPath))
 		return nil
 	}
+
+	o.forgetExcludedSymlink(dbRelPath)
 
 	kind := observedKindFromInfo(info)
 	if skipItem := shouldObserveWithFilter(name, dbRelPath, kind, o.filterConfig); skipItem != nil {

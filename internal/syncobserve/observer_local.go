@@ -147,6 +147,13 @@ type LocalObserver struct {
 	// Cleared on safety scan (authoritative DetectCaseCollisions replaces this).
 	// Single-goroutine access (watchLoop) — no mutex.
 	CollisionPeers map[string]map[string]struct{} // dbRelPath → set of peer dbRelPaths
+
+	// excludedSymlinkPaths tracks alias paths that local observation excluded
+	// because skip_symlinks=true. Delete detection consults this set so a
+	// silently excluded symlink does not later reappear as a synthetic delete.
+	// Paths stay recorded until the same alias is observed as a real file/dir
+	// again or the observer is recreated. Single-goroutine access only.
+	excludedSymlinkPaths map[string]struct{}
 }
 
 // NewLocalObserver creates a LocalObserver. checkWorkers controls the number
@@ -155,16 +162,17 @@ type LocalObserver struct {
 // during observation.
 func NewLocalObserver(baseline *synctypes.Baseline, logger *slog.Logger, checkWorkers int) *LocalObserver {
 	return &LocalObserver{
-		Baseline:           baseline,
-		Logger:             logger,
-		checkWorkers:       checkWorkers,
-		HashFunc:           driveops.ComputeQuickXorHash,
-		SleepFunc:          TimeSleep,
-		PendingTimers:      make(map[string]*time.Timer),
-		HashRequests:       make(chan HashRequest, HashRequestBufSize),
-		DirNameCache:       make(map[string]map[string][]string),
-		RecentLocalDeletes: make(map[string]struct{}),
-		CollisionPeers:     make(map[string]map[string]struct{}),
+		Baseline:             baseline,
+		Logger:               logger,
+		checkWorkers:         checkWorkers,
+		HashFunc:             driveops.ComputeQuickXorHash,
+		SleepFunc:            TimeSleep,
+		PendingTimers:        make(map[string]*time.Timer),
+		HashRequests:         make(chan HashRequest, HashRequestBufSize),
+		DirNameCache:         make(map[string]map[string][]string),
+		RecentLocalDeletes:   make(map[string]struct{}),
+		CollisionPeers:       make(map[string]map[string]struct{}),
+		excludedSymlinkPaths: make(map[string]struct{}),
 		SafetyTickFunc: func(d time.Duration) (<-chan time.Time, func()) {
 			t := time.NewTicker(d)
 			return t.C, t.Stop

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -65,6 +66,77 @@ func TestFullScan_SkipSymlinksExcludesSymlinkEntries(t *testing.T) {
 	assert.Nil(t, findEvent(result.Events, "link.txt"))
 	assert.Nil(t, findEvent(result.Events, "alias"))
 	assert.Nil(t, findEvent(result.Events, "alias/nested.txt"))
+}
+
+// Validates: R-2.4.1, R-2.4.2, R-2.4.3, R-2.4.6
+func TestFullScan_ConfiguredSilentFiltersSuppressDeleteForExcludedBaselineEntries(t *testing.T) {
+	t.Parallel()
+
+	syncRoot := t.TempDir()
+	writeTestFile(t, syncRoot, ".env", "secret")
+	writeTestFile(t, syncRoot, "vendor/lib.txt", "vendored")
+	writeTestFile(t, syncRoot, "debug.log", "noise")
+	writeTestFile(t, syncRoot, "real.txt", "content")
+	writeTestFile(t, syncRoot, "realdir/nested.txt", "nested")
+	require.NoError(t, os.Symlink(filepath.Join(syncRoot, "real.txt"), filepath.Join(syncRoot, "link.txt")))
+	require.NoError(t, os.Symlink(filepath.Join(syncRoot, "realdir"), filepath.Join(syncRoot, "aliasdir")))
+
+	baseline := synctest.BaselineWith(
+		&synctypes.BaselineEntry{
+			Path: "real.txt", DriveID: driveid.New("d"), ItemID: "real",
+			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "content"),
+		},
+		&synctypes.BaselineEntry{
+			Path: "realdir", DriveID: driveid.New("d"), ItemID: "realdir",
+			ItemType: synctypes.ItemTypeFolder,
+		},
+		&synctypes.BaselineEntry{
+			Path: "realdir/nested.txt", DriveID: driveid.New("d"), ItemID: "realdir-nested",
+			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "nested"),
+		},
+		&synctypes.BaselineEntry{
+			Path: ".env", DriveID: driveid.New("d"), ItemID: "dot",
+			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "secret"),
+		},
+		&synctypes.BaselineEntry{
+			Path: "vendor", DriveID: driveid.New("d"), ItemID: "vendor",
+			ItemType: synctypes.ItemTypeFolder,
+		},
+		&synctypes.BaselineEntry{
+			Path: "vendor/lib.txt", DriveID: driveid.New("d"), ItemID: "vendor-lib",
+			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "vendored"),
+		},
+		&synctypes.BaselineEntry{
+			Path: "debug.log", DriveID: driveid.New("d"), ItemID: "log",
+			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "noise"),
+		},
+		&synctypes.BaselineEntry{
+			Path: "link.txt", DriveID: driveid.New("d"), ItemID: "link",
+			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "content"),
+		},
+		&synctypes.BaselineEntry{
+			Path: "aliasdir", DriveID: driveid.New("d"), ItemID: "aliasdir",
+			ItemType: synctypes.ItemTypeFolder,
+		},
+		&synctypes.BaselineEntry{
+			Path: "aliasdir/nested.txt", DriveID: driveid.New("d"), ItemID: "aliasdir-nested",
+			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "nested"),
+		},
+	)
+
+	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs.SetFilterConfig(synctypes.LocalFilterConfig{
+		SkipDotfiles: true,
+		SkipDirs:     []string{"vendor"},
+		SkipFiles:    []string{"*.log"},
+		SkipSymlinks: true,
+	})
+
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
+	require.NoError(t, err)
+
+	assert.Empty(t, result.Events, "silent exclusions should not synthesize deletes for filtered baseline entries")
+	assert.Empty(t, result.Skipped, "configured exclusions stay silent even when baseline already contains the path")
 }
 
 // Validates: R-2.4.1, R-2.4.2, R-2.4.3

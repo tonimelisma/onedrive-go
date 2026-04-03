@@ -180,8 +180,11 @@ func (o *LocalObserver) handleCreate(
 	}
 
 	if shouldSkipObservedSymlink(isSymlink, o.filterConfig) {
+		o.rememberExcludedSymlink(dbRelPath)
 		return
 	}
+
+	o.forgetExcludedSymlink(dbRelPath)
 
 	if skip := shouldObserveWithFilter(name, dbRelPath, infoKind(info), o.filterConfig); skip != nil {
 		return
@@ -319,11 +322,14 @@ func (o *LocalObserver) scanNewDirectoryEntry(
 		}
 
 		if shouldSkipObservedSymlink(isSymlink, o.filterConfig) {
+			o.rememberExcludedSymlink(entryRelPath)
 			return
 		}
 
+		o.forgetExcludedSymlink(entryRelPath)
 		kind = observedKindFromInfo(info)
 	} else {
+		o.forgetExcludedSymlink(entryRelPath)
 		kind = dirEntryKind(entry)
 		info, err = entry.Info()
 		if err != nil {
@@ -402,8 +408,11 @@ func (o *LocalObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath, name st
 	}
 
 	if shouldSkipObservedSymlink(isSymlink, o.filterConfig) {
+		o.rememberExcludedSymlink(dbRelPath)
 		return
 	}
+
+	o.forgetExcludedSymlink(dbRelPath)
 
 	// Ignore directory write events — folder mtime changes are noise.
 	if info.IsDir() {
@@ -449,8 +458,11 @@ func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 	}
 
 	if shouldSkipObservedSymlink(isSymlink, o.filterConfig) {
+		o.rememberExcludedSymlink(req.DbRelPath)
 		return
 	}
+
+	o.forgetExcludedSymlink(req.DbRelPath)
 
 	if info.IsDir() {
 		return
@@ -556,6 +568,14 @@ func (o *LocalObserver) HandleDelete(
 
 	// Invalidate directory name cache so collision checks see the deletion.
 	o.removeDirNameCache(filepath.Dir(fsPath), name)
+
+	if o.hasExcludedSymlinkAncestor(dbRelPath) {
+		if _, ok := o.Baseline.GetByPath(dbRelPath); !ok {
+			o.forgetExcludedSymlink(dbRelPath)
+		}
+
+		return
+	}
 
 	// Track recent deletion so baseline cross-check doesn't false-positive
 	// on case-only renames (File.txt → file.txt). The baseline is updated
