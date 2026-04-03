@@ -703,20 +703,29 @@ func requiredCrossCuttingDesignDocs() []string {
 
 func ensureCrossCuttingDesignDocEvidence(repoRoot string) error {
 	checks := []struct {
-		path    string
-		snippet string
+		path     string
+		snippets []string
 	}{
 		{
-			path:    filepath.Join(repoRoot, "spec", "design", "error-model.md"),
-			snippet: "## Verified By",
+			path: filepath.Join(repoRoot, "spec", "design", "error-model.md"),
+			snippets: []string{
+				"## Verified By",
+				"| Boundary | Evidence |",
+			},
 		},
 		{
-			path:    filepath.Join(repoRoot, "spec", "design", "degraded-mode.md"),
-			snippet: "Evidence",
+			path: filepath.Join(repoRoot, "spec", "design", "degraded-mode.md"),
+			snippets: []string{
+				"| ID |",
+				"| Evidence |",
+			},
 		},
 		{
-			path:    filepath.Join(repoRoot, "spec", "design", "threat-model.md"),
-			snippet: "Mitigation Evidence",
+			path: filepath.Join(repoRoot, "spec", "design", "threat-model.md"),
+			snippets: []string{
+				"## Mitigation Evidence",
+				"| Mitigation | Evidence |",
+			},
 		},
 	}
 
@@ -725,8 +734,11 @@ func ensureCrossCuttingDesignDocEvidence(repoRoot string) error {
 		if err != nil {
 			return fmt.Errorf("read %s: %w", check.path, err)
 		}
-		if !strings.Contains(string(data), check.snippet) {
-			return fmt.Errorf("cross-cutting design doc missing required evidence snippet %q: %s", check.snippet, check.path)
+		content := string(data)
+		for _, snippet := range check.snippets {
+			if !strings.Contains(content, snippet) {
+				return fmt.Errorf("cross-cutting design doc missing required evidence snippet %q: %s", snippet, check.path)
+			}
 		}
 	}
 

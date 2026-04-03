@@ -23,11 +23,13 @@ const defaultVisiblePaths = 5
 
 // failureGroup aggregates failures sharing the same issue type and scope.
 type failureGroup struct {
-	IssueType string
-	ScopeKey  string // humanized (e.g. "Team Docs" instead of internal drive ID)
-	Message   synctypes.IssueMessage
-	Paths     []string
-	Count     int
+	IssueType  string
+	SummaryKey synctypes.SummaryKey
+	ScopeKey   string // humanized (e.g. "Team Docs" instead of internal drive ID)
+	Message    synctypes.IssueMessage
+	LogSummary string
+	Paths      []string
+	Count      int
 }
 
 type issueTextSection struct {
@@ -42,8 +44,8 @@ func groupFailures(
 	failures []synctypes.SyncFailureRow, shortcuts []synctypes.Shortcut,
 ) (groups []failureGroup, heldDeletes []synctypes.SyncFailureRow) {
 	type groupKey struct {
-		issueType string
-		scopeKey  string
+		summaryKey synctypes.SummaryKey
+		scopeKey   string
 	}
 
 	idx := map[groupKey]int{} // groupKey → index in groups slice
@@ -57,7 +59,9 @@ func groupFailures(
 		}
 
 		humanScope := f.ScopeKey.Humanize(shortcuts)
-		gk := groupKey{issueType: f.IssueType, scopeKey: humanScope}
+		summaryKey := synctypes.SummaryKeyForPersistedFailure(f.IssueType, f.Category, f.Role)
+		descriptor := synctypes.DescribeSummary(summaryKey)
+		gk := groupKey{summaryKey: summaryKey, scopeKey: humanScope}
 
 		if j, ok := idx[gk]; ok {
 			groups[j].Paths = append(groups[j].Paths, f.Path)
@@ -65,11 +69,17 @@ func groupFailures(
 		} else {
 			idx[gk] = len(groups)
 			groups = append(groups, failureGroup{
-				IssueType: f.IssueType,
-				ScopeKey:  humanScope,
-				Message:   synctypes.MessageForIssueType(f.IssueType),
-				Paths:     []string{f.Path},
-				Count:     1,
+				IssueType:  f.IssueType,
+				SummaryKey: summaryKey,
+				ScopeKey:   humanScope,
+				Message: synctypes.IssueMessage{
+					Title:  descriptor.Title,
+					Reason: descriptor.Reason,
+					Action: descriptor.Action,
+				},
+				LogSummary: descriptor.LogSummary,
+				Paths:      []string{f.Path},
+				Count:      1,
 			})
 		}
 	}
@@ -91,12 +101,20 @@ func appendScopeOnlyGroups(
 
 		// auth:account is durable scope state with no path owner, so issues must
 		// surface it from scope_blocks instead of fabricating sentinel paths.
+		summaryKey := synctypes.SummaryKeyForScopeBlock(blocks[i].IssueType, blocks[i].Key)
+		descriptor := synctypes.DescribeSummary(summaryKey)
 		groups = append(groups, failureGroup{
-			IssueType: blocks[i].IssueType,
-			ScopeKey:  blocks[i].Key.Humanize(shortcuts),
-			Message:   synctypes.MessageForIssueType(blocks[i].IssueType),
-			Paths:     []string{},
-			Count:     1,
+			IssueType:  blocks[i].IssueType,
+			SummaryKey: summaryKey,
+			ScopeKey:   blocks[i].Key.Humanize(shortcuts),
+			Message: synctypes.IssueMessage{
+				Title:  descriptor.Title,
+				Reason: descriptor.Reason,
+				Action: descriptor.Action,
+			},
+			LogSummary: descriptor.LogSummary,
+			Paths:      []string{},
+			Count:      1,
 		})
 	}
 
@@ -125,14 +143,14 @@ func sortFailureGroups(groups []failureGroup) {
 // When verbose is true, all paths are shown; otherwise only the first
 // defaultVisiblePaths are shown with a "... and N more" suffix.
 func printGroupedFailures(w io.Writer, groups []failureGroup, verbose bool) error {
-	for i, g := range groups {
+	for i := range groups {
 		if i > 0 {
 			if err := writeln(w); err != nil {
 				return err
 			}
 		}
 
-		if err := printFailureGroup(w, g, verbose); err != nil {
+		if err := printFailureGroup(w, &groups[i], verbose); err != nil {
 			return err
 		}
 	}
@@ -140,7 +158,7 @@ func printGroupedFailures(w io.Writer, groups []failureGroup, verbose bool) erro
 	return nil
 }
 
-func printFailureGroup(w io.Writer, group failureGroup, verbose bool) error {
+func printFailureGroup(w io.Writer, group *failureGroup, verbose bool) error {
 	if err := writef(w, "%s (%d %s)\n", group.Message.Title, group.Count, itemNoun(group.Count)); err != nil {
 		return err
 	}
@@ -156,7 +174,7 @@ func printFailureGroup(w io.Writer, group failureGroup, verbose bool) error {
 	return printFailurePaths(w, group, verbose)
 }
 
-func printFailurePaths(w io.Writer, group failureGroup, verbose bool) error {
+func printFailurePaths(w io.Writer, group *failureGroup, verbose bool) error {
 	if len(group.Paths) == 0 {
 		return nil
 	}
@@ -349,19 +367,19 @@ func printGroupedIssuesJSON(
 		out.Conflicts[i] = toConflictJSON(&conflicts[i])
 	}
 
-	for i, g := range groups {
-		paths := g.Paths
+	for i := range groups {
+		paths := groups[i].Paths
 		if paths == nil {
 			paths = []string{}
 		}
 
 		out.FailureGroups[i] = failureGroupJSON{
-			IssueType: g.IssueType,
-			Title:     g.Message.Title,
-			Reason:    g.Message.Reason,
-			Action:    g.Message.Action,
-			Scope:     g.ScopeKey,
-			Count:     g.Count,
+			IssueType: groups[i].IssueType,
+			Title:     groups[i].Message.Title,
+			Reason:    groups[i].Message.Reason,
+			Action:    groups[i].Message.Action,
+			Scope:     groups[i].ScopeKey,
+			Count:     groups[i].Count,
 			Paths:     paths,
 		}
 	}
