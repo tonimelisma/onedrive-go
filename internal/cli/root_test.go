@@ -685,6 +685,23 @@ func TestBuildHandler_UnknownFormatWarnsAndFallsBack(t *testing.T) {
 	assert.Contains(t, buf.String(), `unknown log format "xml"`)
 }
 
+func TestBuildHandlerWithStatusWriter_UnknownFormatWarnsToStatusWriter(t *testing.T) {
+	t.Parallel()
+
+	var logBuf bytes.Buffer
+	var statusBuf bytes.Buffer
+	cfg := &config.ResolvedDrive{
+		LoggingConfig: config.LoggingConfig{LogFormat: "xml"},
+	}
+
+	handler := buildHandlerWithStatusWriter(&logBuf, cfg, &slog.HandlerOptions{}, &statusBuf)
+
+	_, ok := handler.(*slog.TextHandler)
+	assert.True(t, ok, "unknown format should fall back to *slog.TextHandler")
+	assert.Empty(t, logBuf.String(), "format warning should not leak into the log stream")
+	assert.Contains(t, statusBuf.String(), `unknown log format "xml"`)
+}
+
 // Validates: R-4.7.2, R-6.6.4
 func TestBuildHandler_JSONOutputFormat(t *testing.T) {
 	t.Parallel()
@@ -768,6 +785,19 @@ func TestBuildLogger_UnknownLogLevel(t *testing.T) {
 	// Should fall back to warn level.
 	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelWarn))
 	assert.False(t, logger.Handler().Enabled(t.Context(), slog.LevelInfo))
+}
+
+func TestBuildLoggerWithStatusWriter_UnknownLogLevelWarnsToProvidedWriter(t *testing.T) {
+	var statusBuf bytes.Buffer
+	cfg := &config.ResolvedDrive{
+		LoggingConfig: config.LoggingConfig{LogLevel: "bogus"},
+	}
+
+	logger := buildLoggerWithStatusWriter(cfg, CLIFlags{}, &statusBuf)
+
+	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelWarn))
+	assert.False(t, logger.Handler().Enabled(t.Context(), slog.LevelInfo))
+	assert.Contains(t, statusBuf.String(), `unknown log level "bogus"`)
 }
 
 // --- B-296: sync command log_level fix ---
@@ -1027,6 +1057,25 @@ func TestBuildLoggerDual_LogFileOpenFailureFallsBack(t *testing.T) {
 	assert.Nil(t, closer, "log open failure should fall back to console-only logging")
 }
 
+func TestBuildLoggerDualWithStatusWriter_LogFileOpenFailureWritesWarning(t *testing.T) {
+	parentFile := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(parentFile, []byte("x"), 0o600))
+
+	cfg := &config.ResolvedDrive{
+		LoggingConfig: config.LoggingConfig{
+			LogFile:  filepath.Join(parentFile, "test.log"),
+			LogLevel: "debug",
+		},
+	}
+
+	var statusBuf bytes.Buffer
+
+	logger, closer := buildLoggerDualWithStatusWriter(cfg, CLIFlags{}, &statusBuf)
+	assert.NotNil(t, logger)
+	assert.Nil(t, closer)
+	assert.Contains(t, statusBuf.String(), "cannot open log file")
+}
+
 // Validates: R-4.7.1, R-6.6.1
 func TestBuildLoggerDual_WithLogFile(t *testing.T) {
 	t.Parallel()
@@ -1113,4 +1162,15 @@ func TestMain_HelpReturnsSuccess(t *testing.T) {
 
 func TestMain_UnknownCommandReturnsFailure(t *testing.T) {
 	assert.Equal(t, 1, Main([]string{"definitely-not-a-real-command"}))
+}
+
+func TestMainWithWriters_UnknownCommandWritesToProvidedStatusWriter(t *testing.T) {
+	var stdoutBuf bytes.Buffer
+	var stderrBuf bytes.Buffer
+
+	exitCode := mainWithWriters([]string{"definitely-not-a-real-command"}, &stdoutBuf, &stderrBuf)
+	assert.Equal(t, 1, exitCode)
+	assert.Empty(t, stdoutBuf.String())
+	assert.Contains(t, stderrBuf.String(), "Error:")
+	assert.Contains(t, stderrBuf.String(), "unknown command")
 }

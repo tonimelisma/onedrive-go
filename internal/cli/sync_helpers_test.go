@@ -3,7 +3,6 @@ package cli
 import (
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -108,7 +107,7 @@ func TestNewSyncEngine_Success(t *testing.T) {
 	require.NoError(t, engine.Close(t.Context()))
 }
 
-func TestNewSyncEngine_PropagatesLocalFilters(t *testing.T) {
+func TestBuildSyncEngineConfig_PropagatesLocalFilters(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	logger := buildLogger(nil, CLIFlags{})
@@ -136,17 +135,11 @@ func TestNewSyncEngine_PropagatesLocalFilters(t *testing.T) {
 		},
 	}
 
-	engine, err := newSyncEngine(t.Context(), session, resolved, false, logger)
+	ecfg, err := buildSyncEngineConfig(session, resolved, false, logger)
 	require.NoError(t, err)
-	require.NotNil(t, engine)
-	defer func() {
-		require.NoError(t, engine.Close(t.Context()))
-	}()
-
-	localFilter := reflect.ValueOf(engine).Elem().FieldByName("localFilter")
-	require.True(t, localFilter.IsValid(), "Engine should retain configured local filters")
-	assert.True(t, localFilter.FieldByName("SkipDotfiles").Bool())
-	assert.True(t, localFilter.FieldByName("SkipSymlinks").Bool())
-	assert.Equal(t, 1, localFilter.FieldByName("SkipDirs").Len())
-	assert.Equal(t, 1, localFilter.FieldByName("SkipFiles").Len())
+	require.NotNil(t, ecfg)
+	assert.True(t, ecfg.LocalFilter.SkipDotfiles)
+	assert.True(t, ecfg.LocalFilter.SkipSymlinks)
+	assert.Equal(t, []string{"vendor"}, ecfg.LocalFilter.SkipDirs)
+	assert.Equal(t, []string{"*.log"}, ecfg.LocalFilter.SkipFiles)
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
@@ -34,8 +33,8 @@ func (s *authService) runLogin(ctx context.Context, useBrowser bool) error {
 		ts, err = graph.LoginWithBrowser(ctx, tempPath, openBrowser, logger)
 	} else {
 		ts, err = graph.Login(ctx, tempPath, func(da graph.DeviceAuth) {
-			fmt.Fprintf(os.Stderr, "To sign in, visit: %s\n", da.VerificationURI)
-			fmt.Fprintf(os.Stderr, "Enter code: %s\n", da.UserCode)
+			writeWarningf(s.cc.Status(), "To sign in, visit: %s\n", da.VerificationURI)
+			writeWarningf(s.cc.Status(), "Enter code: %s\n", da.UserCode)
 		}, logger)
 	}
 

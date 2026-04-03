@@ -35,7 +35,7 @@ func (s *syncService) run(ctx context.Context, opts syncCommandOptions) error {
 	}
 
 	cfgForLog := &config.ResolvedDrive{LoggingConfig: rawCfg.LoggingConfig}
-	dualLogger, logCloser := buildLoggerDual(cfgForLog, s.cc.Flags)
+	dualLogger, logCloser := buildLoggerDualWithStatusWriter(cfgForLog, s.cc.Flags, s.cc.Status())
 	logger = dualLogger
 	s.cc.Logger = logger
 	s.cc.logCloser = logCloser
@@ -52,7 +52,7 @@ func (s *syncService) run(ctx context.Context, opts syncCommandOptions) error {
 			Force:              opts.Force,
 			PollInterval:       parsePollInterval(rawCfg.PollInterval),
 			SafetyScanInterval: parseDurationOrZero(rawCfg.SafetyScanInterval),
-		}, logger)
+		}, logger, s.cc.Status())
 	}
 
 	drives, err := config.ResolveDrives(rawCfg, selectors, false, logger)
