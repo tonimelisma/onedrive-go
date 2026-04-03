@@ -1,7 +1,7 @@
 -- Canonical schema for the sync engine state database.
 -- The project has no launched users and no state-compatibility burden, so the
--- schema is defined directly in its final shape. There is no incremental
--- migration chain carrying legacy architecture forward.
+-- schema is defined directly in its final shape. One narrow legacy baseline
+-- repair path lives in schema.go; there is no stepwise schema-runner stack.
 
 -- Core sync state: confirmed synced state per (drive_id, item_id).
 CREATE TABLE IF NOT EXISTS baseline (

@@ -51,7 +51,7 @@ const (
 
 // Direction represents the direction of a sync action (upload, download, delete).
 // Stored as TEXT in SQLite — type Direction string serializes identically to
-// raw strings, so no migration is needed.
+// raw strings, so no compatibility rewrite is needed.
 type Direction string
 
 const (
@@ -93,8 +93,8 @@ const (
 
 // SyncStatus represents the sync_status of a remote_state row. Stored as TEXT
 // in SQLite — type SyncStatus string serializes identically to raw strings,
-// so no migration is needed. Matches the CHECK constraint in the remote_state
-// table (migrations/00001_consolidated_schema.sql).
+// so no compatibility shim is needed. Matches the CHECK constraint in the
+// canonical remote_state schema.
 type SyncStatus string
 
 const (

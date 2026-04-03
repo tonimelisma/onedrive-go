@@ -11,7 +11,7 @@ import (
 
 // schemaSQL is the canonical sync-store schema. The project has no launched
 // users and no state-compatibility burden, so the store applies the final
-// schema directly instead of carrying an incremental migration chain.
+// schema directly and keeps only one narrow legacy baseline repair path.
 //
 //go:embed schema.sql
 var schemaSQL string
@@ -22,15 +22,15 @@ func applySchema(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("sync: begin schema bootstrap: %w", err)
 	}
 
-	if err := migrateLegacyBaselineTable(ctx, tx); err != nil {
+	if err := repairLegacyBaselineTable(ctx, tx); err != nil {
 		if rollbackErr := tx.Rollback(); rollbackErr != nil {
 			return errors.Join(
-				fmt.Errorf("sync: migrate legacy baseline: %w", err),
+				fmt.Errorf("sync: repair legacy baseline: %w", err),
 				fmt.Errorf("sync: rollback schema bootstrap: %w", rollbackErr),
 			)
 		}
 
-		return fmt.Errorf("sync: migrate legacy baseline: %w", err)
+		return fmt.Errorf("sync: repair legacy baseline: %w", err)
 	}
 
 	if _, err := tx.ExecContext(ctx, schemaSQL); err != nil {
@@ -50,7 +50,7 @@ func applySchema(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-func migrateLegacyBaselineTable(ctx context.Context, tx *sql.Tx) error {
+func repairLegacyBaselineTable(ctx context.Context, tx *sql.Tx) error {
 	cols, err := tableColumns(ctx, tx, "baseline")
 	if err != nil {
 		return err
@@ -61,7 +61,7 @@ func migrateLegacyBaselineTable(ctx context.Context, tx *sql.Tx) error {
 	}
 
 	if !cols["size"] || !cols["mtime"] {
-		return fmt.Errorf("baseline table missing required legacy columns for migration")
+		return fmt.Errorf("baseline table missing required legacy columns for repair")
 	}
 
 	if _, err := tx.ExecContext(ctx, `

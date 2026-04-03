@@ -453,6 +453,7 @@ func runIntegration(ctx context.Context, runner commandRunner, repoRoot string, 
 func runRepoConsistencyChecks(repoRoot string) error {
 	for _, check := range []func(string) error{
 		ensureNoStaleArchitecturePhrases,
+		ensureNoSchemaFrameworkTraces,
 		ensureGovernedDesignDocsHaveOwnershipContracts,
 		ensureCrossCuttingDesignDocs,
 		ensureCrossCuttingDesignDocEvidence,
@@ -478,7 +479,7 @@ func ensureNoStaleArchitecturePhrases(repoRoot string) error {
 		{name: "stale retry delay phrase", pattern: regexp.MustCompile(`retry\.Reconcile` + `\.Delay`)},
 		{name: "stale retry transport phrase", pattern: regexp.MustCompile(`RetryTransport\{Policy:\s*` + `Transport\}`)},
 		{name: "stale compatibility-wrapper phrase", pattern: regexp.MustCompile("compatibility" + " wrapper")},
-		{name: "stale migration-bridge phrase", pattern: regexp.MustCompile("migration" + " bridge")},
+		{name: "stale legacy-bridge phrase", pattern: regexp.MustCompile("migra" + "tion" + " bridge")},
 	}
 
 	checkRoots := []string{
@@ -496,6 +497,38 @@ func ensureNoStaleArchitecturePhrases(repoRoot string) error {
 		}
 		if match != "" {
 			return fmt.Errorf("stale architecture/documentation phrase detected (%s): %s", check.name, match)
+		}
+	}
+
+	return nil
+}
+
+func ensureNoSchemaFrameworkTraces(repoRoot string) error {
+	roots := []string{
+		filepath.Join(repoRoot, "internal"),
+		filepath.Join(repoRoot, "cmd"),
+		filepath.Join(repoRoot, "spec", "design"),
+		filepath.Join(repoRoot, "spec", "reference"),
+		filepath.Join(repoRoot, "spec", "requirements"),
+		filepath.Join(repoRoot, "README.md"),
+		filepath.Join(repoRoot, "CLAUDE.md"),
+	}
+
+	checks := []staleCheck{
+		{name: "stale third-party schema runner reference", pattern: regexp.MustCompile(`go` + `ose`)},
+		{name: "stale numbered schema path reference", pattern: regexp.MustCompile(`migra` + `tions/`)},
+		{name: "stale schema metadata table reference", pattern: regexp.MustCompile(`schema_` + `version`)},
+		{name: "stale sqlite version pragma reference", pattern: regexp.MustCompile(`user_` + `version`)},
+		{name: "stale numbered schema file reference", pattern: regexp.MustCompile(`0000\d_.*\.sql`)},
+	}
+
+	for _, check := range checks {
+		match, err := findTextMatch(roots, check.pattern, nil)
+		if err != nil {
+			return err
+		}
+		if match != "" {
+			return fmt.Errorf("stale schema-framework trace detected (%s): %s", check.name, match)
 		}
 	}
 
