@@ -118,11 +118,19 @@ func (e *Engine) RunWatch(ctx context.Context, mode synctypes.SyncMode, opts syn
 	rt := newWatchRuntime(e)
 	proof, proofErr := e.proveDriveIdentity(ctx)
 	if proofErr != nil {
+		if isWatchShutdownError(ctx, proofErr) {
+			return nil
+		}
+
 		// Startup auth repair is the only case that should proceed past a
 		// failing proof. Without a persisted auth scope there is nothing to
 		// repair, so watch mode must abort before it allocates workers/timers.
 		hasAuthScope, err := e.hasPersistedAuthScope(ctx)
 		if err != nil {
+			if isWatchShutdownError(ctx, err) {
+				return nil
+			}
+
 			return err
 		}
 		if !hasAuthScope {
@@ -133,9 +141,17 @@ func (e *Engine) RunWatch(ctx context.Context, mode synctypes.SyncMode, opts syn
 	// Step 1: Set up watch infrastructure (no observers yet).
 	pipe, err := rt.initWatchInfra(ctx, mode, opts, proof, proofErr)
 	if err != nil {
+		if isWatchShutdownError(ctx, err) {
+			return nil
+		}
+
 		return err
 	}
 	if proofErr != nil {
+		if isWatchShutdownError(ctx, proofErr) {
+			return nil
+		}
+
 		return proofErr
 	}
 	e.logVerifiedDrive(proof)
@@ -143,6 +159,10 @@ func (e *Engine) RunWatch(ctx context.Context, mode synctypes.SyncMode, opts syn
 
 	// Step 2: Bootstrap — observe, plan, execute through watch pipeline.
 	if err := rt.bootstrapSync(ctx, mode, pipe); err != nil {
+		if isWatchShutdownError(ctx, err) {
+			return nil
+		}
+
 		return fmt.Errorf("sync: initial sync failed: %w", err)
 	}
 
@@ -154,6 +174,14 @@ func (e *Engine) RunWatch(ctx context.Context, mode synctypes.SyncMode, opts syn
 
 	// Step 4: Run the watch loop.
 	return rt.runWatchLoop(ctx, pipe)
+}
+
+func isWatchShutdownError(ctx context.Context, err error) bool {
+	if err == nil || ctx.Err() == nil {
+		return false
+	}
+
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 // watchPipeline holds all handles needed by the watch select loop.

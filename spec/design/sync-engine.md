@@ -35,6 +35,10 @@ reconciliation runs every 24 hours to detect missed delta deletions.
 3. **`startObservers`** launches remote and local observers AFTER bootstrap — they see the post-bootstrap baseline.
 4. **`runWatchLoop`** runs the steady-state select loop.
 
+Cancellation is normalized across all four phases: if the watch context is
+canceled during proof, startup repair, bootstrap observation, or bootstrap
+quiescence, `RunWatch` returns `nil` just like a steady-state watch shutdown.
+
 **Why not RunOnce?** The old approach created throwaway infrastructure for the
 initial sync, then created a second watch pipeline. Unified bootstrap creates
 the watch pipeline once and reuses it for both the initial sync and steady
