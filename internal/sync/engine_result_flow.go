@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/failures"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -68,18 +69,20 @@ func (flow *engineFlow) processResult(
 func (flow *engineFlow) routeReadyForClass(
 	ctx context.Context,
 	watch *watchRuntime,
-	class resultClass,
+	class failures.Class,
 	ready []*synctypes.TrackedAction,
 	r *synctypes.WorkerResult,
 ) []*synctypes.TrackedAction {
 	switch class {
-	case resultSuccess:
+	case failures.ClassInvalid:
+		flow.scopeController().cascadeFailAndComplete(ctx, ready, r)
+	case failures.ClassSuccess:
 		return flow.scopeController().admitReady(ctx, watch, ready)
-	case resultShutdown:
+	case failures.ClassShutdown:
 		flow.scopeController().completeSubtree(ready)
-	case resultFatal:
+	case failures.ClassFatal:
 		flow.scopeController().completeSubtree(ready)
-	case resultRequeue, resultScopeBlock, resultSkip:
+	case failures.ClassRetryableTransient, failures.ClassScopeBlockingTransient, failures.ClassActionable:
 		flow.scopeController().cascadeFailAndComplete(ctx, ready, r)
 	}
 
@@ -110,11 +113,11 @@ func (flow *engineFlow) applyOrdinaryFailureEffects(
 		return
 	}
 
-	flow.applyFailureRecordMode(ctx, decision.RecordMode, r)
+	flow.applyFailurePersistence(ctx, decision, r)
 
 	if decision.RunScopeDetection {
 		flow.scopeController().feedScopeDetection(ctx, watch, r)
-	} else if decision.Class == resultScopeBlock && !decision.ScopeKey.IsZero() {
+	} else if decision.Class == failures.ClassScopeBlockingTransient && !decision.ScopeKey.IsZero() {
 		flow.scopeController().applyScopeBlock(ctx, watch, synctypes.ScopeUpdateResult{
 			Block:     true,
 			ScopeKey:  decision.ScopeKey,
@@ -122,10 +125,10 @@ func (flow *engineFlow) applyOrdinaryFailureEffects(
 		})
 	}
 
-	if decision.Class == resultScopeBlock && watch != nil {
+	if decision.Class == failures.ClassScopeBlockingTransient && watch != nil {
 		watch.armTrialTimer()
 	}
-	if decision.RecordMode == recordFailureReconcile && watch != nil {
+	if decision.Persistence == persistTransientFailure && watch != nil {
 		watch.armRetryTimer(ctx)
 	}
 
@@ -175,16 +178,20 @@ func (flow *engineFlow) processNormalDecision(
 	}
 
 	switch decision.Class {
-	case resultSuccess:
+	case failures.ClassInvalid:
+		flow.applyOrdinaryFailureEffects(ctx, watch, decision, r, bl)
+		outcome.terminate = true
+		outcome.terminateErr = fmt.Errorf("classify worker result: invalid failure class")
+	case failures.ClassSuccess:
 		flow.applySuccessEffects(ctx, watch, r)
-	case resultShutdown:
+	case failures.ClassShutdown:
 		return outcome
-	case resultFatal:
+	case failures.ClassFatal:
 		scopeCtrl.applyFatalAuthEffects(ctx, watch, r)
 		flow.recordError(r)
 		outcome.terminate = true
 		outcome.terminateErr = fatalResultError(r)
-	case resultRequeue, resultScopeBlock, resultSkip:
+	case failures.ClassRetryableTransient, failures.ClassScopeBlockingTransient, failures.ClassActionable:
 		flow.applyOrdinaryFailureEffects(ctx, watch, decision, r, bl)
 	}
 
@@ -203,7 +210,7 @@ func (flow *engineFlow) processTrialDecision(
 	scopeCtrl := flow.scopeController()
 	outcome := routeOutcome{}
 
-	switch flow.evaluateTrialOutcome(trialScopeKey, decision, r) {
+	switch flow.evaluateTrialOutcome(trialScopeKey, decision) {
 	case trialOutcomeRelease:
 		flow.applySuccessEffects(ctx, watch, r)
 		if err := scopeCtrl.releaseScope(ctx, watch, trialScopeKey); err != nil {
@@ -214,19 +221,19 @@ func (flow *engineFlow) processTrialDecision(
 		}
 		outcome.dispatched = flow.routeReadyForClass(ctx, watch, resultSuccess, ready, r)
 	case trialOutcomeShutdown:
-		flow.routeReadyForClass(ctx, watch, resultShutdown, ready, r)
+		flow.routeReadyForClass(ctx, watch, failures.ClassShutdown, ready, r)
 	case trialOutcomeExtend:
-		flow.routeReadyForClass(ctx, watch, resultRequeue, ready, r)
+		flow.routeReadyForClass(ctx, watch, decision.Class, ready, r)
 		scopeCtrl.rehomeHeldFailure(ctx, r, trialScopeKey)
 		scopeCtrl.extendScopeTrial(ctx, watch, trialScopeKey, r.RetryAfter)
 		flow.recordError(r)
 	case trialOutcomePreserve:
-		flow.routeReadyForClass(ctx, watch, resultRequeue, ready, r)
+		flow.routeReadyForClass(ctx, watch, decision.Class, ready, r)
 		scopeCtrl.preserveScopeTrial(ctx, watch, trialScopeKey)
 		scopeCtrl.applyTrialPreserveEffects(ctx, watch, decision, r, bl)
 		flow.recordError(r)
 	case trialOutcomeFatal:
-		flow.routeReadyForClass(ctx, watch, resultFatal, ready, r)
+		flow.routeReadyForClass(ctx, watch, failures.ClassFatal, ready, r)
 		scopeCtrl.applyFatalAuthEffects(ctx, watch, r)
 		flow.recordError(r)
 		outcome.terminate = true
@@ -239,40 +246,31 @@ func (flow *engineFlow) processTrialDecision(
 func (flow *engineFlow) evaluateTrialOutcome(
 	trialScopeKey synctypes.ScopeKey,
 	decision ResultDecision,
-	r *synctypes.WorkerResult,
 ) trialOutcome {
-	switch decision.Class {
-	case resultSuccess:
+	switch decision.TrialHint {
+	case trialHintRelease:
 		return trialOutcomeRelease
-	case resultRequeue, resultScopeBlock, resultSkip:
-		if flow.trialScopePersists(trialScopeKey, decision, r) {
+	case trialHintExtendOnMatchingScope:
+		if flow.trialScopePersists(trialScopeKey, decision) {
 			return trialOutcomeExtend
 		}
 		return trialOutcomePreserve
-	case resultShutdown:
+	case trialHintPreserve:
+		return trialOutcomePreserve
+	case trialHintShutdown:
 		return trialOutcomeShutdown
-	case resultFatal:
+	case trialHintFatal:
 		return trialOutcomeFatal
 	}
 
-	panic(fmt.Sprintf("unknown result class %d", decision.Class))
+	panic(fmt.Sprintf("unknown trial hint %d", decision.TrialHint))
 }
 
 func (flow *engineFlow) trialScopePersists(
 	trialScopeKey synctypes.ScopeKey,
 	decision ResultDecision,
-	r *synctypes.WorkerResult,
 ) bool {
-	switch trialScopeKey {
-	case synctypes.SKThrottleAccount():
-		return decision.Class == resultScopeBlock && decision.ScopeKey == synctypes.SKThrottleAccount()
-	case synctypes.SKService():
-		return r.HTTPStatus >= 500 && r.HTTPStatus < 600
-	case synctypes.SKDiskLocal():
-		return decision.Class == resultScopeBlock && decision.ScopeKey == synctypes.SKDiskLocal()
-	default:
-		return decision.Class == resultScopeBlock && decision.ScopeKey == trialScopeKey
-	}
+	return !decision.ScopeEvidence.IsZero() && decision.ScopeEvidence == trialScopeKey
 }
 
 func (controller *scopeController) applyTrialPreserveEffects(
@@ -289,7 +287,7 @@ func (controller *scopeController) applyTrialPreserveEffects(
 		return
 	}
 
-	if decision.Class == resultScopeBlock && decision.ScopeKey == synctypes.SKDiskLocal() {
+	if decision.Class == failures.ClassScopeBlockingTransient && decision.ScopeKey == synctypes.SKDiskLocal() {
 		controller.applyScopeBlock(ctx, watch, synctypes.ScopeUpdateResult{
 			Block:     true,
 			ScopeKey:  decision.ScopeKey,
@@ -364,7 +362,12 @@ func (controller *scopeController) resolvePermissionDecision(
 
 // recordFailure writes a failure to sync_failures with the given delay
 // function for computing next_retry_at.
-func (flow *engineFlow) recordFailure(ctx context.Context, r *synctypes.WorkerResult, delayFn func(int) time.Duration) {
+func (flow *engineFlow) recordFailure(
+	ctx context.Context,
+	decision ResultDecision,
+	r *synctypes.WorkerResult,
+	delayFn func(int) time.Duration,
+) {
 	direction := directionFromAction(r.ActionType)
 
 	driveID := r.DriveID
@@ -372,13 +375,8 @@ func (flow *engineFlow) recordFailure(ctx context.Context, r *synctypes.WorkerRe
 		driveID = flow.engine.driveID
 	}
 
-	category := synctypes.CategoryTransient
-	if delayFn == nil {
-		category = synctypes.CategoryActionable
-	}
-
-	issueType := issueTypeForHTTPStatus(r.HTTPStatus, r.Err)
-	scopeKey := deriveScopeKey(r)
+	category := decision.Persistence.failureCategory()
+	scopeKey := decision.ScopeEvidence
 
 	if recErr := flow.engine.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       r.Path,
@@ -387,7 +385,7 @@ func (flow *engineFlow) recordFailure(ctx context.Context, r *synctypes.WorkerRe
 		ActionType: r.ActionType,
 		Role:       synctypes.FailureRoleItem,
 		Category:   category,
-		IssueType:  issueType,
+		IssueType:  decision.IssueType,
 		ErrMsg:     r.ErrMsg,
 		HTTPStatus: r.HTTPStatus,
 		ScopeKey:   scopeKey,

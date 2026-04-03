@@ -9,7 +9,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 func newPauseCmd() *cobra.Command {
@@ -33,60 +32,7 @@ Examples:
 }
 
 func runPause(cmd *cobra.Command, args []string) error {
-	cc := mustCLIContext(cmd.Context())
-	logger := cc.Logger
-
-	driveSelector, driveErr := cc.Flags.SingleDrive()
-	if driveErr != nil {
-		return driveErr
-	}
-
-	if driveSelector == "" {
-		return fmt.Errorf("--drive is required (specify which drive to pause)")
-	}
-
-	cfgPath := cc.CfgPath
-
-	cfg, err := config.LoadOrDefault(cfgPath, logger)
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
-
-	cid, err := driveid.NewCanonicalID(driveSelector)
-	if err != nil {
-		return fmt.Errorf("invalid drive ID %q: %w", driveSelector, err)
-	}
-
-	if _, exists := cfg.Drives[cid]; !exists {
-		return fmt.Errorf("drive %q not found in config", driveSelector)
-	}
-
-	// Set paused = true.
-	if err := config.SetDriveKey(cfgPath, cid, "paused", "true"); err != nil {
-		return fmt.Errorf("setting paused flag: %w", err)
-	}
-
-	// If a duration argument is provided, set paused_until.
-	if len(args) > 0 {
-		duration, err := parseDuration(args[0])
-		if err != nil {
-			return fmt.Errorf("invalid duration %q: %w", args[0], err)
-		}
-
-		until := time.Now().Add(duration).Format(time.RFC3339)
-		if err := config.SetDriveKey(cfgPath, cid, "paused_until", until); err != nil {
-			return fmt.Errorf("setting paused_until: %w", err)
-		}
-
-		cc.Statusf("Drive %s paused until %s\n", cid.String(), until)
-	} else {
-		cc.Statusf("Drive %s paused\n", cid.String())
-	}
-
-	// Notify running daemon, if any.
-	notifyDaemon(cc)
-
-	return nil
+	return newSyncControlService(mustCLIContext(cmd.Context())).runPause(args)
 }
 
 // notifyDaemon attempts to send SIGHUP to a running sync --watch daemon.

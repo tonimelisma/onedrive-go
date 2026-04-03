@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/failures"
 )
 
 type statusService struct {
@@ -19,11 +20,14 @@ func (s *statusService) run() error {
 	cfgPath := s.cc.CfgPath
 
 	cfg, warnings, err := config.LoadOrDefaultLenient(cfgPath, logger)
+	outcome := config.ClassifyLoadOutcome(err, warnings)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	config.LogWarnings(warnings, logger)
+	if outcome.Class == failures.ClassActionable {
+		config.LogWarnings(warnings, logger)
+	}
 
 	if len(cfg.Drives) == 0 {
 		tokens := config.DiscoverTokens(logger)

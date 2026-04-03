@@ -451,6 +451,28 @@ func runIntegration(ctx context.Context, runner commandRunner, repoRoot string, 
 }
 
 func runRepoConsistencyChecks(repoRoot string) error {
+	for _, check := range []func(string) error{
+		ensureNoStaleArchitecturePhrases,
+		ensureGovernedDesignDocsHaveOwnershipContracts,
+		ensureCrossCuttingDesignDocs,
+		ensureCrossCuttingDesignDocEvidence,
+		ensureCLIOutputBoundary,
+		ensureGuardedPackagesAvoidRawOS,
+		ensureFilterSemanticsWording,
+		ensureHTTPClientDoStaysAtApprovedBoundary,
+		ensurePrivilegedPackageCallsStayAtApprovedBoundaries,
+		ensureNoForbiddenProductionPatterns,
+		ensureNoResurrectedFiles,
+	} {
+		if err := check(repoRoot); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func ensureNoStaleArchitecturePhrases(repoRoot string) error {
 	staleChecks := []staleCheck{
 		{name: "stale watch-startup phrase", pattern: regexp.MustCompile("RunWatch calls" + " RunOnce")},
 		{name: "stale retry delay phrase", pattern: regexp.MustCompile(`retry\.Reconcile` + `\.Delay`)},
@@ -477,19 +499,10 @@ func runRepoConsistencyChecks(repoRoot string) error {
 		}
 	}
 
-	for _, check := range []func(string) error{
-		ensureGovernedDesignDocsHaveOwnershipContracts,
-		ensureCrossCuttingDesignDocs,
-		ensureCLIOutputBoundary,
-		ensureGuardedPackagesAvoidRawOS,
-		ensureFilterSemanticsWording,
-		ensureHTTPClientDoStaysAtApprovedBoundary,
-	} {
-		if err := check(repoRoot); err != nil {
-			return err
-		}
-	}
+	return nil
+}
 
+func ensureNoForbiddenProductionPatterns(repoRoot string) error {
 	goRoots := []string{repoRoot}
 	match, err := findTextMatch(goRoots, regexp.MustCompile(`graph\.MustNewClient\(`), func(path string) bool {
 		return strings.HasSuffix(path, "_test.go") || !strings.HasSuffix(path, ".go")
@@ -511,14 +524,32 @@ func runRepoConsistencyChecks(repoRoot string) error {
 		return fmt.Errorf("trustedpath usage detected: %s", match)
 	}
 
-	if _, err := localpath.Stat(filepath.Join(repoRoot, "internal", "sync", "orchestrator.go")); err == nil {
-		return fmt.Errorf("control-plane files resurrected under internal/sync")
+	return nil
+}
+
+func ensureNoResurrectedFiles(repoRoot string) error {
+	checks := []struct {
+		path string
+		err  string
+	}{
+		{
+			path: filepath.Join(repoRoot, "internal", "sync", "orchestrator.go"),
+			err:  "control-plane files resurrected under internal/sync",
+		},
+		{
+			path: filepath.Join(repoRoot, "internal", "sync", "drive_runner.go"),
+			err:  "control-plane files resurrected under internal/sync",
+		},
+		{
+			path: filepath.Join(repoRoot, "internal", "sync", "engine_flow_test_helpers_test.go"),
+			err:  "sync test shim resurrected",
+		},
 	}
-	if _, err := localpath.Stat(filepath.Join(repoRoot, "internal", "sync", "drive_runner.go")); err == nil {
-		return fmt.Errorf("control-plane files resurrected under internal/sync")
-	}
-	if _, err := localpath.Stat(filepath.Join(repoRoot, "internal", "sync", "engine_flow_test_helpers_test.go")); err == nil {
-		return fmt.Errorf("sync test shim resurrected")
+
+	for _, check := range checks {
+		if _, err := localpath.Stat(check.path); err == nil {
+			return errors.New(check.err)
+		}
 	}
 
 	return nil
@@ -670,6 +701,38 @@ func requiredCrossCuttingDesignDocs() []string {
 	return []string{"error-model.md", "threat-model.md", "degraded-mode.md"}
 }
 
+func ensureCrossCuttingDesignDocEvidence(repoRoot string) error {
+	checks := []struct {
+		path    string
+		snippet string
+	}{
+		{
+			path:    filepath.Join(repoRoot, "spec", "design", "error-model.md"),
+			snippet: "## Verified By",
+		},
+		{
+			path:    filepath.Join(repoRoot, "spec", "design", "degraded-mode.md"),
+			snippet: "Evidence",
+		},
+		{
+			path:    filepath.Join(repoRoot, "spec", "design", "threat-model.md"),
+			snippet: "Mitigation Evidence",
+		},
+	}
+
+	for _, check := range checks {
+		data, err := localpath.ReadFile(check.path)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", check.path, err)
+		}
+		if !strings.Contains(string(data), check.snippet) {
+			return fmt.Errorf("cross-cutting design doc missing required evidence snippet %q: %s", check.snippet, check.path)
+		}
+	}
+
+	return nil
+}
+
 func ensureHTTPClientDoStaysAtApprovedBoundary(repoRoot string) error {
 	allowedPath := filepath.Join(repoRoot, "internal", "graph", "client_preauth.go")
 	internalRoot := filepath.Join(repoRoot, "internal")
@@ -704,6 +767,92 @@ func ensureHTTPClientDoStaysAtApprovedBoundary(repoRoot string) error {
 	return fmt.Errorf("walk %s: %w", internalRoot, walkErr)
 }
 
+type packageSelectorBoundaryRule struct {
+	importPath  string
+	selector    string
+	description string
+	allowed     func(string) bool
+}
+
+func ensurePrivilegedPackageCallsStayAtApprovedBoundaries(repoRoot string) error {
+	rules := []packageSelectorBoundaryRule{
+		{
+			importPath:  "os/exec",
+			selector:    "CommandContext",
+			description: "exec.CommandContext is only allowed in internal/cli/auth.go and internal/devtool/runner.go",
+			allowed: func(path string) bool {
+				return path == filepath.Join(repoRoot, "internal", "cli", "auth.go") ||
+					path == filepath.Join(repoRoot, "internal", "devtool", "runner.go")
+			},
+		},
+		{
+			importPath:  "database/sql",
+			selector:    "Open",
+			description: "sql.Open is only allowed in internal/syncstore production files",
+			allowed: func(path string) bool {
+				allowedDir := filepath.Join(repoRoot, "internal", "syncstore") + string(os.PathSeparator)
+				return strings.HasPrefix(path, allowedDir)
+			},
+		},
+		{
+			importPath:  "os/signal",
+			selector:    "Notify",
+			description: "signal.Notify is only allowed in internal/cli/signal.go",
+			allowed: func(path string) bool {
+				return path == filepath.Join(repoRoot, "internal", "cli", "signal.go")
+			},
+		},
+	}
+
+	for _, rule := range rules {
+		if err := ensurePackageSelectorStaysAtApprovedBoundary(repoRoot, rule); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func ensurePackageSelectorStaysAtApprovedBoundary(repoRoot string, rule packageSelectorBoundaryRule) error {
+	roots := []string{
+		filepath.Join(repoRoot, "internal"),
+		filepath.Join(repoRoot, "cmd"),
+	}
+
+	for _, root := range roots {
+		walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() || rule.allowed(path) || strings.HasSuffix(path, "_test.go") || !strings.HasSuffix(path, ".go") {
+				return nil
+			}
+
+			match, findErr := findPackageSelectorCall(path, rule.importPath, rule.selector)
+			if findErr != nil {
+				return findErr
+			}
+			if match != "" {
+				return matchFoundError{value: match}
+			}
+
+			return nil
+		})
+		if walkErr == nil {
+			continue
+		}
+
+		var matchErr matchFoundError
+		if errors.As(walkErr, &matchErr) {
+			return fmt.Errorf("%s: %s", rule.description, matchErr.value)
+		}
+
+		return fmt.Errorf("walk %s: %w", root, walkErr)
+	}
+
+	return nil
+}
+
 func findHTTPClientDoCall(path string) (string, error) {
 	data, readErr := localpath.ReadFile(path)
 	if readErr != nil {
@@ -723,6 +872,53 @@ func findHTTPClientDoCall(path string) (string, error) {
 	}
 
 	return firstHTTPDoCallLocation(path, file, fset), nil
+}
+
+func findPackageSelectorCall(path string, importPath, selector string) (string, error) {
+	data, readErr := localpath.ReadFile(path)
+	if readErr != nil {
+		return "", fmt.Errorf("read %s: %w", path, readErr)
+	}
+	if !strings.Contains(string(data), "."+selector+"(") {
+		return "", nil
+	}
+
+	fset := token.NewFileSet()
+	file, parseErr := parser.ParseFile(fset, path, data, 0)
+	if parseErr != nil {
+		return "", fmt.Errorf("parse %s: %w", path, parseErr)
+	}
+
+	aliases := importedNamesForPath(file, importPath)
+	if len(aliases) == 0 {
+		return "", nil
+	}
+
+	var match string
+	ast.Inspect(file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != selector {
+			return true
+		}
+
+		x, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if _, ok := aliases[x.Name]; !ok {
+			return true
+		}
+
+		match = fmt.Sprintf("%s:%d", path, fset.Position(sel.Pos()).Line)
+		return false
+	})
+
+	return match, nil
 }
 
 func firstHTTPDoCallLocation(path string, file *ast.File, fset *token.FileSet) string {
@@ -753,6 +949,28 @@ func importsPackage(file *ast.File, target string) bool {
 	}
 
 	return false
+}
+
+func importedNamesForPath(file *ast.File, target string) map[string]struct{} {
+	names := make(map[string]struct{})
+
+	for _, imp := range file.Imports {
+		if strings.Trim(imp.Path.Value, "\"") != target {
+			continue
+		}
+
+		name := filepath.Base(target)
+		if imp.Name != nil {
+			name = imp.Name.Name
+		}
+		if name == "_" || name == "." {
+			continue
+		}
+
+		names[name] = struct{}{}
+	}
+
+	return names
 }
 
 func findTextMatch(roots []string, pattern *regexp.Regexp, skip func(path string) bool) (string, error) {

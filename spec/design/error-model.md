@@ -9,6 +9,10 @@ sync runtime, durable persistence, and CLI presentation. Each boundary owns
 one translation step from raw errors into this shared model. Higher layers may
 add context, but they do not invent a second classification scheme.
 
+`internal/failures` is the executable leaf package that names the shared
+classes and log owners. Boundary packages consume that shared vocabulary rather
+than re-declaring local enums.
+
 ## Canonical Classes
 
 | Class | Meaning | Automatic Follow-Up |
@@ -30,6 +34,20 @@ Each boundary owns exactly one translation step:
 - `syncstore`: persist the engine's classification using `category`, `failure_role`, `scope_key`, and `next_retry_at`; it never reclassifies raw transport failures.
 - `cli`: map fatal/actionable/transient outcomes into command exit errors and user-facing reason/action text.
 
+## Executable Mapping
+
+The docs and code stay aligned through a small number of explicit classifier
+entry points:
+
+- `internal/failures`: shared `Class` and `LogOwner` definitions.
+- `internal/config/failure_class.go`: classify config load results into
+  `success`, `actionable`, or `fatal`.
+- `internal/sync/engine_result_classify.go`: classify each `WorkerResult` into
+  a full `ResultDecision` carrying class, persistence mode, trial hint, scope
+  evidence, and log ownership.
+- `internal/cli/failure_class.go`: classify command-returned errors into exit
+  behavior and reason/action text without inspecting raw transport payloads.
+
 ## Persistence Mapping
 
 The durable projection of the error model is intentionally small:
@@ -49,3 +67,15 @@ raw error string seen in the process.
 - The boundary that understands the invariant owns the classification.
 - Retry/backoff consumes the classified result; it does not classify on its own.
 - User-facing messaging consumes the classified result; it does not inspect raw HTTP or filesystem payloads directly.
+- Logging ownership follows the classified result (`failures.LogOwner`) instead
+  of duplicate per-layer ad hoc logging.
+
+## Verified By
+
+| Boundary | Evidence |
+|----------|----------|
+| Shared failure classes | `internal/failures/failures_test.go`, `internal/config/failure_class_test.go`, `internal/cli/failure_class_test.go` |
+| Sync result classification and persistence mapping | `internal/sync/engine_result_scope_test.go` (`TestClassifyResult_LifecycleAndAuth`, `TestClassifyResult_StorageScopes`, `TestDiskLocalScopeBlock_FullCycle`, `TestRetryPipeline_TransientFailure_IntegratedRetrier`) |
+| Trial routing from classified decisions | `internal/sync/engine_result_scope_test.go` (`TestProcessTrialResultV2_Success_ClearsScope`, `TestProcessTrialResultV2_Preserve_LocalPermissionRecordsCandidateFailure`, `TestEvaluateTrialOutcome_OnlyMatchingScopeEvidenceExtends`) |
+| CLI exit/presentation mapping | `internal/cli/failure_class_test.go`, `internal/cli/root_test.go` (`TestErrVerifyMismatch_IsSentinel`) |
+| Read-only/persistent store projection of classified failures | `internal/syncstore/inspector_test.go`, `internal/cli/status_test.go` (`TestQuerySyncState_WithMetadata`, `TestQuerySyncState_PendingSyncAndIssues`) |

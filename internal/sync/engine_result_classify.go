@@ -3,31 +3,30 @@ package sync
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/failures"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
-// resultClass categorizes a synctypes.WorkerResult for routing by processWorkerResult.
-type resultClass int
-
 const (
-	resultSuccess resultClass = iota
-	resultRequeue
-	resultScopeBlock
-	resultSkip
-	resultShutdown
-	resultFatal
+	resultSuccess    = failures.ClassSuccess
+	resultRequeue    = failures.ClassRetryableTransient
+	resultScopeBlock = failures.ClassScopeBlockingTransient
+	resultSkip       = failures.ClassActionable
+	resultShutdown   = failures.ClassShutdown
+	resultFatal      = failures.ClassFatal
 )
 
-type failureRecordMode int
+type resultPersistenceMode int
 
 const (
-	recordFailureNone failureRecordMode = iota
-	recordFailureActionable
-	recordFailureReconcile
+	persistNone resultPersistenceMode = iota
+	persistActionableFailure
+	persistTransientFailure
 )
 
 type permissionFlow int
@@ -38,16 +37,31 @@ const (
 	permissionFlowLocalPermission
 )
 
+type trialHint int
+
+const (
+	trialHintRelease trialHint = iota
+	trialHintExtendOnMatchingScope
+	trialHintPreserve
+	trialHintShutdown
+	trialHintFatal
+)
+
 // ResultDecision is the single classification output consumed by result
 // routing. The decision is behavior-complete so downstream code does not
 // re-derive policy from raw HTTP/local error facts.
 type ResultDecision struct {
-	Class             resultClass
+	Class             failures.Class
 	ScopeKey          synctypes.ScopeKey
-	RecordMode        failureRecordMode
+	ScopeEvidence     synctypes.ScopeKey
+	Persistence       resultPersistenceMode
 	PermissionFlow    permissionFlow
 	RunScopeDetection bool
 	RecordSuccess     bool
+	TrialHint         trialHint
+	IssueType         string
+	LogOwner          failures.LogOwner
+	LogLevel          slog.Level
 }
 
 // classifyResult is a pure function that maps a synctypes.WorkerResult to a
@@ -58,11 +72,19 @@ func classifyResult(r *synctypes.WorkerResult) ResultDecision {
 		return ResultDecision{
 			Class:         resultSuccess,
 			RecordSuccess: true,
+			TrialHint:     trialHintRelease,
+			LogOwner:      failures.LogOwnerSync,
+			LogLevel:      slog.LevelInfo,
 		}
 	}
 
 	if errors.Is(r.Err, context.Canceled) || errors.Is(r.Err, context.DeadlineExceeded) {
-		return ResultDecision{Class: resultShutdown}
+		return ResultDecision{
+			Class:     resultShutdown,
+			TrialHint: trialHintShutdown,
+			LogOwner:  failures.LogOwnerSync,
+			LogLevel:  slog.LevelInfo,
+		}
 	}
 
 	if decision, handled := classifyHTTPResult(r); handled {
@@ -73,50 +95,85 @@ func classifyResult(r *synctypes.WorkerResult) ResultDecision {
 }
 
 func classifyHTTPResult(r *synctypes.WorkerResult) (ResultDecision, bool) {
+	scopeEvidence := deriveScopeKey(r)
+	issueType := issueTypeForHTTPStatus(r.HTTPStatus, r.Err)
+
 	switch {
 	case r.HTTPStatus == 0:
 		return ResultDecision{}, false
 	case r.HTTPStatus == http.StatusUnauthorized:
 		return ResultDecision{
-			Class:      resultFatal,
-			RecordMode: recordFailureNone,
+			Class:       resultFatal,
+			Persistence: persistActionableFailure,
+			TrialHint:   trialHintFatal,
+			IssueType:   issueType,
+			LogOwner:    failures.LogOwnerSync,
+			LogLevel:    slog.LevelError,
 		}, true
 	case r.HTTPStatus == http.StatusForbidden:
 		return ResultDecision{
 			Class:          resultSkip,
-			RecordMode:     recordFailureActionable,
+			Persistence:    persistActionableFailure,
 			PermissionFlow: permissionFlowRemote403,
+			TrialHint:      trialHintPreserve,
+			IssueType:      issueType,
+			LogOwner:       failures.LogOwnerSync,
+			LogLevel:       slog.LevelWarn,
 		}, true
 	case r.HTTPStatus == http.StatusTooManyRequests:
 		return ResultDecision{
 			Class:             resultScopeBlock,
-			ScopeKey:          synctypes.SKThrottleAccount(),
-			RecordMode:        recordFailureReconcile,
+			ScopeKey:          scopeEvidence,
+			ScopeEvidence:     scopeEvidence,
+			Persistence:       persistTransientFailure,
 			RunScopeDetection: true,
+			TrialHint:         trialHintExtendOnMatchingScope,
+			IssueType:         issueType,
+			LogOwner:          failures.LogOwnerSync,
+			LogLevel:          slog.LevelWarn,
 		}, true
 	case r.HTTPStatus == http.StatusInsufficientStorage:
 		return ResultDecision{
 			Class:             resultScopeBlock,
-			ScopeKey:          synctypes.ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey),
-			RecordMode:        recordFailureReconcile,
+			ScopeKey:          scopeEvidence,
+			ScopeEvidence:     scopeEvidence,
+			Persistence:       persistTransientFailure,
 			RunScopeDetection: true,
+			TrialHint:         trialHintExtendOnMatchingScope,
+			IssueType:         issueType,
+			LogOwner:          failures.LogOwnerSync,
+			LogLevel:          slog.LevelWarn,
 		}, true
 	case r.HTTPStatus >= http.StatusInternalServerError:
 		return ResultDecision{
 			Class:             resultRequeue,
-			RecordMode:        recordFailureReconcile,
+			ScopeEvidence:     scopeEvidence,
+			Persistence:       persistTransientFailure,
 			RunScopeDetection: true,
+			TrialHint:         trialHintExtendOnMatchingScope,
+			IssueType:         issueType,
+			LogOwner:          failures.LogOwnerSync,
+			LogLevel:          slog.LevelWarn,
 		}, true
 	case isRetryableHTTPStatus(r.HTTPStatus):
 		return ResultDecision{
 			Class:             resultRequeue,
-			RecordMode:        recordFailureReconcile,
+			ScopeEvidence:     scopeEvidence,
+			Persistence:       persistTransientFailure,
 			RunScopeDetection: true,
+			TrialHint:         trialHintExtendOnMatchingScope,
+			IssueType:         issueType,
+			LogOwner:          failures.LogOwnerSync,
+			LogLevel:          slog.LevelWarn,
 		}, true
 	default:
 		return ResultDecision{
-			Class:      resultSkip,
-			RecordMode: recordFailureActionable,
+			Class:       resultSkip,
+			Persistence: persistActionableFailure,
+			TrialHint:   trialHintPreserve,
+			IssueType:   issueType,
+			LogOwner:    failures.LogOwnerSync,
+			LogLevel:    slog.LevelWarn,
 		}, true
 	}
 }
@@ -129,33 +186,56 @@ func isRetryableHTTPStatus(status int) bool {
 }
 
 func classifyLocalResult(r *synctypes.WorkerResult) ResultDecision {
+	issueType := issueTypeForHTTPStatus(r.HTTPStatus, r.Err)
+
 	switch {
 	case errors.Is(r.Err, driveops.ErrDiskFull):
 		return ResultDecision{
-			Class:      resultScopeBlock,
-			ScopeKey:   synctypes.SKDiskLocal(),
-			RecordMode: recordFailureReconcile,
+			Class:         resultScopeBlock,
+			ScopeKey:      synctypes.SKDiskLocal(),
+			ScopeEvidence: synctypes.SKDiskLocal(),
+			Persistence:   persistTransientFailure,
+			TrialHint:     trialHintExtendOnMatchingScope,
+			IssueType:     issueType,
+			LogOwner:      failures.LogOwnerSync,
+			LogLevel:      slog.LevelWarn,
 		}
 	case errors.Is(r.Err, driveops.ErrFileTooLargeForSpace):
 		return ResultDecision{
-			Class:      resultSkip,
-			RecordMode: recordFailureActionable,
+			Class:       resultSkip,
+			Persistence: persistActionableFailure,
+			TrialHint:   trialHintPreserve,
+			IssueType:   issueType,
+			LogOwner:    failures.LogOwnerSync,
+			LogLevel:    slog.LevelWarn,
 		}
 	case errors.Is(r.Err, driveops.ErrFileExceedsOneDriveLimit):
 		return ResultDecision{
-			Class:      resultSkip,
-			RecordMode: recordFailureActionable,
+			Class:       resultSkip,
+			Persistence: persistActionableFailure,
+			TrialHint:   trialHintPreserve,
+			IssueType:   issueType,
+			LogOwner:    failures.LogOwnerSync,
+			LogLevel:    slog.LevelWarn,
 		}
 	case errors.Is(r.Err, os.ErrPermission):
 		return ResultDecision{
 			Class:          resultSkip,
-			RecordMode:     recordFailureActionable,
+			Persistence:    persistActionableFailure,
 			PermissionFlow: permissionFlowLocalPermission,
+			TrialHint:      trialHintPreserve,
+			IssueType:      issueType,
+			LogOwner:       failures.LogOwnerSync,
+			LogLevel:       slog.LevelWarn,
 		}
 	default:
 		return ResultDecision{
-			Class:      resultSkip,
-			RecordMode: recordFailureActionable,
+			Class:       resultSkip,
+			Persistence: persistActionableFailure,
+			TrialHint:   trialHintPreserve,
+			IssueType:   issueType,
+			LogOwner:    failures.LogOwnerSync,
+			LogLevel:    slog.LevelWarn,
 		}
 	}
 }
@@ -214,6 +294,19 @@ func issueTypeForHTTPStatus(httpStatus int, err error) string {
 	default:
 		return ""
 	}
+}
+
+func (m resultPersistenceMode) failureCategory() synctypes.FailureCategory {
+	switch m {
+	case persistNone:
+		return ""
+	case persistActionableFailure:
+		return synctypes.CategoryActionable
+	case persistTransientFailure:
+		return synctypes.CategoryTransient
+	}
+
+	return ""
 }
 
 // directionFromAction maps a synctypes.ActionType to a typed Direction enum.

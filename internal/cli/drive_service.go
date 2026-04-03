@@ -7,6 +7,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/failures"
 )
 
 type driveService struct {
@@ -22,11 +23,14 @@ func (s *driveService) runList(ctx context.Context, showAll bool) error {
 	recorder := newAuthProofRecorder(logger)
 
 	cfg, warnings, err := config.LoadOrDefaultLenient(s.cc.CfgPath, logger)
+	outcome := config.ClassifyLoadOutcome(err, warnings)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	config.LogWarnings(warnings, logger)
+	if outcome.Class == failures.ClassActionable {
+		config.LogWarnings(warnings, logger)
+	}
 
 	configured := buildConfiguredDriveEntries(cfg, logger)
 	configuredAuth := buildConfiguredAccountAuthHealth(ctx, cfg, logger)

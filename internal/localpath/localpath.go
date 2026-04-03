@@ -262,3 +262,65 @@ func WriteFile(path string, data []byte, perm os.FileMode) error {
 
 	return nil
 }
+
+// AtomicWrite writes data to path via a temp file created in the target
+// directory, then fsyncs, closes, and renames it into place.
+func AtomicWrite(path string, data []byte, filePerm, dirPerm os.FileMode, pattern string) (err error) {
+	abs, err := absolutePath(path)
+	if err != nil {
+		return err
+	}
+
+	targetDir := filepath.Dir(abs)
+	if mkErr := os.MkdirAll(targetDir, dirPerm); mkErr != nil {
+		return fmt.Errorf("creating target directory %s: %w", targetDir, mkErr)
+	}
+
+	temp, err := os.CreateTemp(targetDir, pattern)
+	if err != nil {
+		return fmt.Errorf("creating temp file in %s: %w", targetDir, err)
+	}
+
+	tempPath := temp.Name()
+	defer func() {
+		if err == nil {
+			return
+		}
+		if removeErr := os.Remove(tempPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			err = errors.Join(err, fmt.Errorf("removing temp file %s: %w", tempPath, removeErr))
+		}
+	}()
+
+	if chmodErr := temp.Chmod(filePerm); chmodErr != nil {
+		return closeWithContext(temp, "setting temp file permissions", chmodErr)
+	}
+
+	if _, writeErr := temp.Write(data); writeErr != nil {
+		return closeWithContext(temp, "writing temp file", writeErr)
+	}
+
+	if syncErr := temp.Sync(); syncErr != nil {
+		return closeWithContext(temp, "syncing temp file", syncErr)
+	}
+
+	if closeErr := temp.Close(); closeErr != nil {
+		return fmt.Errorf("closing temp file: %w", closeErr)
+	}
+
+	// #nosec G703 -- tempPath is created in targetDir and abs is normalized by absolutePath.
+	if renameErr := os.Rename(tempPath, abs); renameErr != nil {
+		return fmt.Errorf("renaming temp file into %s: %w", path, renameErr)
+	}
+
+	return nil
+}
+
+func closeWithContext(temp *os.File, action string, cause error) error {
+	closeErr := temp.Close()
+	baseErr := fmt.Errorf("%s: %w", action, cause)
+	if closeErr != nil {
+		return errors.Join(baseErr, fmt.Errorf("closing temp file: %w", closeErr))
+	}
+
+	return baseErr
+}

@@ -53,6 +53,7 @@ Explicit non-goals:
 | Logs | Token or pre-auth URL disclosure | redaction types, structured logging policy, no secret logging |
 | SQLite state | Corruption or split-brain state | WAL mode, single durable authority, transactional writes |
 | Resource exhaustion | unbounded response bodies, runaway pagination, too many events | response-body caps, page/depth guards, debounced buffering, bounded workers |
+| Privileged subprocess / signal / SQL entrypoints | hidden side effects or widened trust boundaries | verifier-enforced allowlist for `exec.CommandContext`, `signal.Notify`, `sql.Open`, and raw `http.Client.Do` |
 
 ## Existing Mitigations
 
@@ -62,6 +63,17 @@ Explicit non-goals:
 - Local observation filters invalid uploads before they become actions, while remote observation remains server-trusting to avoid silent data loss; see [sync-observation.md](sync-observation.md).
 - Durable state is transactional and rebuildable; see [sync-store.md](sync-store.md) and [data-model.md](data-model.md).
 - Retry, scope blocking, and graceful degradation are explicit runtime behaviors instead of ad hoc loops; see [retry.md](retry.md), [sync-engine.md](sync-engine.md), and [degraded-mode.md](degraded-mode.md).
+
+## Mitigation Evidence
+
+| Mitigation | Evidence |
+|------------|----------|
+| Rooted filesystem boundaries and atomic replacement writes | `internal/fsroot/fsroot_test.go` (`TestRoot_AtomicWrite_WritesFileAtomically`, `TestRoot_AtomicWrite_RejectsRootEscape`), `internal/localpath/localpath_test.go` (`TestAtomicWrite`, `TestAtomicWrite_CleansTempOnRenameFailure`) |
+| Graph normalization, redaction, and pre-auth boundary discipline | `internal/graph/client_test.go` (`TestDo_DebugLogsNeverExposeBearerToken`, `TestDoPreAuth_ErrorBodyCappedAt64KiB`, `TestDoOnce_401_RefreshSucceeds`), `internal/devtool/verify_test.go` (`TestRunRepoConsistencyChecksFailsOnHTTPClientDoOutsideApprovedBoundary`) |
+| Managed token/config file validation and rooted writes | `internal/graph/auth_test.go` (`TestSaveToken_AtomicWrite`, `TestLoadToken_InvalidJSON`), `internal/config/write_test.go` (`TestAtomicWriteFile_WritesFile`) |
+| Observer-side invalid-path and permission containment | `internal/sync/permissions_test.go` (`TestHandleLocalPermission_DirectoryLevel`, `TestHandle403_ExistingRemoteScope_AvoidsAPICall`), `internal/sync/engine_watch_test.go` (`TestRunWatch_AllObserversDead_ReturnsError`) |
+| Durable state authority and crash recovery | `internal/syncstore/baseline_test.go` (`TestResetInProgressStates_MixedStates`, `TestResetInProgressStates_CreatesSyncFailures_Download`), `internal/sync/engine_single_owner_test.go` (`TestEngine_RepairPersistedScopes_ThrottleAndServicePolicy`) |
+| Privileged API boundaries kept narrow by repo verification | `internal/devtool/verify_test.go` (`TestRunRepoConsistencyChecksFailsOnExecCommandContextOutsideApprovedBoundary`, `TestRunRepoConsistencyChecksFailsOnSQLOpenOutsideApprovedBoundary`, `TestRunRepoConsistencyChecksFailsOnSignalNotifyOutsideApprovedBoundary`) |
 
 ## Residual Risks And Follow-Ups
 

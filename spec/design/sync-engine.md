@@ -160,23 +160,20 @@ raw HTTP/local error facts.
 
 - `Class`
 - `ScopeKey`
-- `FailureRecordMode`
+- `ScopeEvidence`
+- `Persistence`
 - `PermissionFlow`
 - `RunScopeDetection`
 - `RecordSuccess`
+- `TrialHint`
+- `IssueType`
+- `LogOwner`
+- `LogLevel`
 
-Core result classes:
-
-The engine-level result classes are the sync-runtime realization of the shared
-domain failure model in [error-model.md](error-model.md): success, shutdown,
-retryable transient, scope-blocking transient, actionable, and fatal.
-
-- `resultSuccess`: action succeeded
-- `resultRequeue`: transient failure — re-queue with backoff
-- `resultScopeBlock`: scope-level failure (429, 507, 5xx pattern) — feed scope detection
-- `resultSkip`: non-retryable — record and move on
-- `resultShutdown`: context canceled — discard silently, no failure recorded
-- `resultFatal`: abort sync pass (401 unrecoverable auth)
+The engine-level result classes are direct aliases of the shared
+`internal/failures` classes documented in [error-model.md](error-model.md):
+success, shutdown, retryable transient, scope-blocking transient, actionable,
+and fatal.
 
 Classification uses `ScopeKeyForStatus(httpStatus, shortcutKey)` as the single
 source of truth for HTTP status -> scope key mapping: 401 -> fatal, 403 -> skip
@@ -187,6 +184,11 @@ block `SKQuotaOwn` or `SKQuotaShortcut(key)`, 5xx -> requeue,
 direct `disk:local` scope activation. HTTP 400 stays on the ordinary
 non-retryable path unless a separately evidenced quirk is documented and
 implemented.
+
+All downstream result flow consumes the `ResultDecision` only. Trial handling,
+failure persistence shape, retry/trial timing, and log ownership are not
+re-derived from raw `HTTPStatus`, wrapped errors, or `RetryAfter` headers after
+classification.
 
 ### Scope Detection and Management
 

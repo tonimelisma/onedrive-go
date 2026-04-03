@@ -18,6 +18,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/failures"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
@@ -779,11 +780,14 @@ func runWhoami(cmd *cobra.Command, _ []string) error {
 func runWhoamiWithContext(ctx context.Context, cc *CLIContext) error {
 	logger := cc.Logger
 	cfg, warnings, err := config.LoadOrDefaultLenient(cc.CfgPath, logger)
+	outcome := config.ClassifyLoadOutcome(err, warnings)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	config.LogWarnings(warnings, logger)
+	if outcome.Class == failures.ClassActionable {
+		config.LogWarnings(warnings, logger)
+	}
 
 	driveSelector, driveErr := cc.Flags.SingleDrive()
 	if driveErr != nil {

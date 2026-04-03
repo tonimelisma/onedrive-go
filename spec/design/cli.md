@@ -2,14 +2,14 @@
 
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go
 
-Implements: R-1 [implemented], R-3.1 [verified], R-4.7 [verified], R-4.8.4 [verified], R-1.9 [verified], R-1.2.4 [verified], R-1.3.4 [verified], R-1.4.3 [verified], R-1.5.1 [verified], R-1.6.1 [verified], R-1.7.1 [verified], R-1.8.1 [verified], R-1.9.4 [verified], R-3.1.6 [verified], R-3.3.10 [verified], R-3.3.11 [verified], R-2.3.10 [verified], R-2.7.1 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.10.47 [verified], R-6.6.11 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
 Implements: R-1 [implemented], R-3.1 [verified], R-4.7 [verified], R-4.8.4 [verified], R-1.9 [verified], R-1.2.4 [verified], R-1.3.4 [verified], R-1.4.3 [verified], R-1.5.1 [verified], R-1.6.1 [verified], R-1.7.1 [verified], R-1.8.1 [verified], R-1.9.4 [verified], R-3.1.6 [verified], R-3.3.10 [verified], R-3.3.11 [verified], R-2.3.10 [verified], R-2.7.1 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.10.47 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
 
 ## Overview
 
 The root package is a thin process entrypoint. The Cobra command tree, CLI bootstrap, output formatting, and command handlers live in `internal/cli`.
 
-`internal/cli/root.go` handles global flags (`--config`, `--drive`, `--verbose`, `--quiet`, `--debug`, `--json`), config loading via `PersistentPreRunE`, and single-drive resolution. Cobra `RunE` functions are intentionally thin: they parse command-local flags and delegate to service-layer collaborators (`authService`, `driveService`, `issuesService`, `statusService`, `syncService`, `verifyService`). Sync-specific report rendering and watch bootstrap helpers stay in the same package, but they live outside the Cobra wiring file so `internal/cli/sync.go` remains focused on command construction and flag parsing.
+`internal/cli/root.go` handles global flags (`--config`, `--drive`, `--verbose`, `--quiet`, `--debug`, `--json`), config loading via `PersistentPreRunE`, and single-drive resolution. Cobra `RunE` functions are intentionally thin: they parse command-local flags and delegate to service-layer collaborators (`authService`, `driveService`, `issuesService`, `statusService`, `syncControlService`, `recycleBinService`, `syncService`, `verifyService`). `internal/cli/sync.go` stays in the same package because multi-drive sync reuses the same Phase 1 CLI context but performs its own multi-drive resolution.
+Sync-specific report rendering and watch bootstrap helpers stay in the same package, but they live outside the Cobra wiring file so `internal/cli/sync.go` remains focused on command construction, flag parsing, and multi-drive resolution.
 
 `CLIContext` owns two distinct output boundaries:
 
@@ -43,12 +43,12 @@ Implements: R-6.2.8 [verified]
 | `cp` | `cp.go` | Server-side async copy with polling |
 | `stat` | `stat.go` | Display item metadata |
 | `sync` | `sync.go` | Multi-drive sync command (see [sync-control-plane.md](sync-control-plane.md)) |
-| `pause`, `resume` | `pause.go`, `resume.go` | Pause/resume sync. `resume` also cleans up stale config keys from expired timed pauses (paused=true + past paused_until). |
-| `status` | `status.go` | Display account/drive status |
+| `pause`, `resume` | `pause.go`, `resume.go` | Pause/resume sync through `syncControlService`. `resume` also cleans up stale config keys from expired timed pauses (paused=true + past paused_until). |
+| `status` | `status.go` | Display account/drive status via `statusService` and read-only `syncstore.Inspector` snapshots |
 | `issues` | `issues.go` | Conflict and failure management (grouped display, per-scope sub-grouping) |
 | `verify` | `verify.go` | Post-sync verification |
 | `drive` | `drive.go` | Drive management (list/add/remove/search) |
-| `recycle-bin` | `recycle_bin.go` | Recycle bin operations (list/restore/empty) |
+| `recycle-bin` | `recycle_bin.go` | Recycle bin operations (list/restore/empty) via `recycleBinService` |
 
 ## Auth Lifecycle, Auth Health, And Proof Boundaries
 
@@ -126,7 +126,13 @@ All commands with `--json` support use extracted `printXxxJSON(w io.Writer, out 
 
 ## Signal Handling (`signal.go`)
 
-Two-signal shutdown for watch mode: first SIGINT = drain current operations, second SIGINT = force exit.
+Two-signal shutdown for watch mode:
+
+- first SIGINT/SIGTERM = cancel the shared shutdown context and let the engine drain
+- second SIGINT/SIGTERM = force process exit with status 1
+
+`sighupChannel()` is separate because config reload is a control-plane signal,
+not a shutdown request.
 
 ## PID File (`pidfile.go`)
 
@@ -148,7 +154,9 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
   - `authService`: login/logout/whoami flows
   - `driveService`: drive list/add/remove/search flows
   - `issuesService`: issue listing and failure/conflict mutations
-  - `statusService`: account/drive status aggregation
+  - `statusService`: account/drive status aggregation, lenient config warning handling, token checks, and read-only sync-state inspection
+  - `syncControlService`: pause/resume config mutation flows
+  - `recycleBinService`: recycle-bin list/restore/empty flows
   - `syncService`: multi-drive sync command assembly
   - `verifyService`: baseline verification flow
 - `SessionProvider` caches `TokenSource`s by token file path — multiple drives sharing an account share one `TokenSource`, preventing OAuth2 refresh token rotation races.
@@ -159,10 +167,10 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
 - PID file and log file opens use root-based trusted-path helpers once the CLI/config layer has resolved the target path.
 - If the configured log file cannot be opened, CLI bootstrap warns through the CLI status writer and falls back to console-only logging instead of failing the command before any user-facing work can run.
 - Direct `runSync` and service-level tests cover caller-visible failure paths such as config-load errors, all-drives-paused/no-drives guidance, and log-file-open fallback warnings through the injected status/output writers rather than process-global stderr assumptions.
-- The status command uses a testable service layer with narrowed interfaces (`accountMetaReader`, `accountAuthChecker`, `syncStateQuerier`), decoupling status aggregation from Cobra wiring.
+- The status command uses a testable service layer with narrowed interfaces (`accountMetaReader`, `accountAuthChecker`, `syncStateQuerier`), decoupling status aggregation from Cobra wiring. The concrete state reader is `syncstore.Inspector`; CLI code no longer opens SQLite directly.
 - Informational commands (`drive list`, `status`, `whoami`) use lenient config loading (`LoadOrDefaultLenient`) that collects validation errors as warnings instead of failing. This allows users to inspect their configuration and see drive status even when config has errors. Each of these commands (and `drive search`) must have `skipConfigAnnotation` on the leaf Cobra command — not just the parent — because Cobra checks annotations on the executing command, not parent commands. Safety net: `TestAnnotationTreeWalk` walks the entire command tree and fails if any leaf command with `RunE` is not explicitly classified as either a data command (no annotation) or an annotated command. New commands must be added to the `dataCommands` set or given the annotation. [verified]
 - `loadAndResolve` passes errors from `ResolveDrive` unwrapped. `ResolveDrive` already wraps `LoadOrDefault` errors with `"loading config: "`, and `MatchDrive` errors are user-facing messages that read better without a prefix (e.g., `"no drives configured — ..."` instead of `"loading config: no drives configured — ..."`). [verified]
-- CLI presentation is the final error boundary. It maps the domain classes from [error-model.md](error-model.md) to process exit behavior and user-facing reason/action text, but it does not inspect raw transport payloads directly.
+- CLI presentation is the final error boundary. `classifyCommandError` and `commandFailurePresentationForClass` map the domain classes from [error-model.md](error-model.md) to process exit behavior and user-facing reason/action text, while `authErrorMessage` specializes the user-facing auth copy for saved-login failures without re-inspecting raw transport payloads.
 - The root error boundary maps both `graph.ErrNotLoggedIn` and `graph.ErrUnauthorized` into the same user-facing family, `Authentication required`, with cause-specific detail and a shared remediation path (`onedrive-go login`).
 - Offline auth surfaces (`status`, `issues`) never mutate `auth:account`. Live proof surfaces clear `auth:account` only after an authenticated Graph response succeeds. Pre-authenticated upload/download URL success is not treated as auth proof.
 - Extract `multiHandler` from `internal/cli/root.go` to `internal/slogutil/` if logging grows (structured error reporting, log sampling). [planned]
