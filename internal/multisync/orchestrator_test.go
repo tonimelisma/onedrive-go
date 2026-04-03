@@ -261,6 +261,48 @@ func TestRunOnce_EngineFactoryError(t *testing.T) {
 	assert.Contains(t, reports[0].Err.Error(), "db init failed")
 }
 
+// Validates: R-6.10.7
+func TestRunOnce_EngineFactoryError_IsolatesAffectedDrive(t *testing.T) {
+	rd1 := testResolvedDrive(t, "personal:storefail@example.com", "StoreFail")
+	rd2 := testResolvedDrive(t, "personal:healthy@example.com", "Healthy")
+	cfg := testOrchestratorConfig(t, rd1, rd2)
+	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+
+	okReport := &synctypes.SyncReport{Mode: synctypes.SyncBidirectional, Downloads: 1}
+
+	orch := NewOrchestrator(cfg)
+	orch.engineFactory = func(_ context.Context, ecfg *synctypes.EngineConfig) (engineRunner, error) {
+		if ecfg.SyncRoot == rd1.SyncDir {
+			return nil, errors.New("open sync store: corrupted database")
+		}
+
+		return &mockEngine{report: okReport}, nil
+	}
+
+	reports := orch.RunOnce(t.Context(), synctypes.SyncBidirectional, synctypes.RunOpts{})
+	require.Len(t, reports, 2)
+
+	var failedReport, healthyReport *synctypes.DriveReport
+	for i := range reports {
+		switch reports[i].CanonicalID {
+		case rd1.CanonicalID:
+			failedReport = reports[i]
+		case rd2.CanonicalID:
+			healthyReport = reports[i]
+		}
+	}
+
+	require.NotNil(t, failedReport)
+	require.Error(t, failedReport.Err)
+	assert.Contains(t, failedReport.Err.Error(), "open sync store")
+	assert.Nil(t, failedReport.Report)
+
+	require.NotNil(t, healthyReport)
+	require.NoError(t, healthyReport.Err)
+	require.NotNil(t, healthyReport.Report)
+	assert.Equal(t, 1, healthyReport.Report.Downloads)
+}
+
 // Validates: R-2.4
 func TestRunOnce_TokenError_ReportsPerDrive(t *testing.T) {
 	rd := testResolvedDrive(t, "personal:notoken@example.com", "NoToken")

@@ -60,10 +60,10 @@ func (flow *engineFlow) processResult(
 	ready, _ := flow.depGraph.Complete(r.ActionID)
 
 	if resultCtx.isTrial {
-		return flow.processTrialDecision(ctx, watch, resultCtx.trialScopeKey, decision, ready, r, bl)
+		return flow.processTrialDecision(ctx, watch, resultCtx.trialScopeKey, &decision, ready, r, bl)
 	}
 
-	return flow.processNormalDecision(ctx, watch, decision, ready, r, bl)
+	return flow.processNormalDecision(ctx, watch, &decision, ready, r, bl)
 }
 
 func (flow *engineFlow) routeReadyForClass(
@@ -104,7 +104,7 @@ func (flow *engineFlow) applySuccessEffects(ctx context.Context, watch *watchRun
 func (flow *engineFlow) applyOrdinaryFailureEffects(
 	ctx context.Context,
 	watch *watchRuntime,
-	decision ResultDecision,
+	decision *ResultDecision,
 	r *synctypes.WorkerResult,
 	bl *synctypes.Baseline,
 ) {
@@ -138,7 +138,7 @@ func (flow *engineFlow) applyOrdinaryFailureEffects(
 func (flow *engineFlow) processNormalDecision(
 	ctx context.Context,
 	watch *watchRuntime,
-	decision ResultDecision,
+	decision *ResultDecision,
 	ready []*synctypes.TrackedAction,
 	r *synctypes.WorkerResult,
 	bl *synctypes.Baseline,
@@ -187,7 +187,7 @@ func (flow *engineFlow) processNormalDecision(
 	case failures.ClassShutdown:
 		return outcome
 	case failures.ClassFatal:
-		scopeCtrl.applyFatalAuthEffects(ctx, watch, r)
+		scopeCtrl.applyFatalAuthEffects(ctx, watch, r, decision.SummaryKey)
 		flow.recordError(r)
 		outcome.terminate = true
 		outcome.terminateErr = fatalResultError(r)
@@ -202,7 +202,7 @@ func (flow *engineFlow) processTrialDecision(
 	ctx context.Context,
 	watch *watchRuntime,
 	trialScopeKey synctypes.ScopeKey,
-	decision ResultDecision,
+	decision *ResultDecision,
 	ready []*synctypes.TrackedAction,
 	r *synctypes.WorkerResult,
 	bl *synctypes.Baseline,
@@ -234,7 +234,7 @@ func (flow *engineFlow) processTrialDecision(
 		flow.recordError(r)
 	case trialOutcomeFatal:
 		flow.routeReadyForClass(ctx, watch, failures.ClassFatal, ready, r)
-		scopeCtrl.applyFatalAuthEffects(ctx, watch, r)
+		scopeCtrl.applyFatalAuthEffects(ctx, watch, r, decision.SummaryKey)
 		flow.recordError(r)
 		outcome.terminate = true
 		outcome.terminateErr = fatalResultError(r)
@@ -245,7 +245,7 @@ func (flow *engineFlow) processTrialDecision(
 
 func (flow *engineFlow) evaluateTrialOutcome(
 	trialScopeKey synctypes.ScopeKey,
-	decision ResultDecision,
+	decision *ResultDecision,
 ) trialOutcome {
 	switch decision.TrialHint {
 	case trialHintRelease:
@@ -268,7 +268,7 @@ func (flow *engineFlow) evaluateTrialOutcome(
 
 func (flow *engineFlow) trialScopePersists(
 	trialScopeKey synctypes.ScopeKey,
-	decision ResultDecision,
+	decision *ResultDecision,
 ) bool {
 	return !decision.ScopeEvidence.IsZero() && decision.ScopeEvidence == trialScopeKey
 }
@@ -276,7 +276,7 @@ func (flow *engineFlow) trialScopePersists(
 func (controller *scopeController) applyTrialPreserveEffects(
 	ctx context.Context,
 	watch *watchRuntime,
-	decision ResultDecision,
+	decision *ResultDecision,
 	r *synctypes.WorkerResult,
 	bl *synctypes.Baseline,
 ) {
@@ -309,12 +309,14 @@ func (controller *scopeController) applyFatalAuthEffects(
 	ctx context.Context,
 	watch *watchRuntime,
 	r *synctypes.WorkerResult,
+	summaryKey synctypes.SummaryKey,
 ) {
 	flow := controller.flow
 
 	if err := controller.activateAuthScope(ctx, watch); err != nil {
 		flow.engine.logger.Warn("fatal unauthorized: failed to persist auth scope",
 			slog.String("path", r.Path),
+			slog.String("summary_key", string(summaryKey)),
 			slog.String("error", err.Error()),
 		)
 	}
@@ -323,7 +325,7 @@ func (controller *scopeController) applyFatalAuthEffects(
 func (controller *scopeController) applyPermissionDecisionFlow(
 	ctx context.Context,
 	watch *watchRuntime,
-	decision ResultDecision,
+	decision *ResultDecision,
 	r *synctypes.WorkerResult,
 	bl *synctypes.Baseline,
 ) bool {
@@ -337,7 +339,7 @@ func (controller *scopeController) applyPermissionDecisionFlow(
 
 func (controller *scopeController) resolvePermissionDecision(
 	ctx context.Context,
-	decision ResultDecision,
+	decision *ResultDecision,
 	r *synctypes.WorkerResult,
 	bl *synctypes.Baseline,
 ) (*PermissionCheckDecision, bool) {
@@ -364,7 +366,7 @@ func (controller *scopeController) resolvePermissionDecision(
 // function for computing next_retry_at.
 func (flow *engineFlow) recordFailure(
 	ctx context.Context,
-	decision ResultDecision,
+	decision *ResultDecision,
 	r *synctypes.WorkerResult,
 	delayFn func(int) time.Duration,
 ) {
@@ -392,6 +394,7 @@ func (flow *engineFlow) recordFailure(
 	}, delayFn); recErr != nil {
 		flow.engine.logger.Warn("failed to record failure",
 			slog.String("path", r.Path),
+			slog.String("summary_key", string(decision.SummaryKey)),
 			slog.String("error", recErr.Error()),
 		)
 
@@ -402,6 +405,8 @@ func (flow *engineFlow) recordFailure(
 		slog.String("path", r.Path),
 		slog.String("action", r.ActionType.String()),
 		slog.Int("http_status", r.HTTPStatus),
+		slog.String("summary_key", string(decision.SummaryKey)),
+		slog.String("issue_type", decision.IssueType),
 		slog.String("error", r.ErrMsg),
 		slog.String("scope_key", scopeKey.String()),
 	)

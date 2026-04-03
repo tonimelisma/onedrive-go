@@ -68,6 +68,12 @@ type Engine struct {
 	// for the local observer. Tests inject a mock factory to simulate
 	// inotify watch limit exhaustion (ENOSPC).
 	localWatcherFactory func() (syncobserve.FsWatcher, error)
+
+	// retryBatchLimit lets tests lower the retrier sweep batch size so stress
+	// runs can exercise the batching contract without seeding thousands of
+	// durable failures per iteration. Production leaves this zero and uses the
+	// compiled default in engine_retry_trial.go.
+	retryBatchLimit int
 }
 
 // NewEngine creates an Engine, initializing the SyncStore (which opens

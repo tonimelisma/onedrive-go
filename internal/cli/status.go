@@ -324,9 +324,9 @@ func querySyncState(statePath string, logger *slog.Logger) *syncStateInfo {
 	snapshot := inspector.ReadStatusSnapshot(ctx)
 	info := &syncStateInfo{
 		FileCount:   snapshot.BaselineEntryCount,
-		Issues:      snapshot.UnresolvedConflicts + snapshot.ActionableFailures + snapshot.RemoteBlockedScopes + snapshot.AuthScopeBlocks,
+		Issues:      snapshot.Issues.VisibleTotal(),
 		PendingSync: snapshot.PendingSyncItems,
-		Retrying:    snapshot.RetryingFailures,
+		Retrying:    snapshot.Issues.RetryingCount(),
 	}
 	info.LastSyncTime = snapshot.SyncMetadata["last_sync_time"]
 	info.LastSyncDuration = snapshot.SyncMetadata["last_sync_duration_ms"]
