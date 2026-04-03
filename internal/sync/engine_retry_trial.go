@@ -10,7 +10,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
-	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
 	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -133,7 +132,7 @@ func (rt *watchRuntime) runTrialDispatch(
 	now := rt.engine.nowFunc()
 	var dispatch []*synctypes.TrackedAction
 
-	for _, key := range syncdispatch.DueTrials(rt.activeScopes, now) {
+	for _, key := range rt.dueTrials(now) {
 		outbox, _ := rt.dispatchDueTrialScope(ctx, bl, mode, safety, key)
 		dispatch = append(dispatch, outbox...)
 	}

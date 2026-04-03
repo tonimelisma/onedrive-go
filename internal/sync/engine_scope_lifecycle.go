@@ -45,10 +45,11 @@ func (controller *scopeController) loadActiveScopes(ctx context.Context, watch *
 		return fmt.Errorf("sync: listing active scopes: %w", err)
 	}
 
-	watch.activeScopes = watch.activeScopes[:0]
+	activeScopes := make([]synctypes.ScopeBlock, 0, len(blocks))
 	for i := range blocks {
-		watch.activeScopes = append(watch.activeScopes, *blocks[i])
+		activeScopes = append(activeScopes, *blocks[i])
 	}
+	watch.replaceActiveScopes(activeScopes)
 
 	return nil
 }
@@ -248,28 +249,28 @@ func (controller *scopeController) getScopeBlock(watch *watchRuntime, key syncty
 	if watch == nil {
 		return synctypes.ScopeBlock{}, false
 	}
-	return syncdispatch.LookupScope(watch.activeScopes, key)
+	return watch.lookupActiveScope(key)
 }
 
 func (controller *scopeController) isScopeBlocked(watch *watchRuntime, key synctypes.ScopeKey) bool {
 	if watch == nil {
 		return false
 	}
-	return syncdispatch.HasScope(watch.activeScopes, key)
+	return watch.hasActiveScope(key)
 }
 
 func (controller *scopeController) activeBlockingScope(watch *watchRuntime, ta *synctypes.TrackedAction) synctypes.ScopeKey {
 	if watch == nil {
 		return synctypes.ScopeKey{}
 	}
-	return syncdispatch.FindBlockingScope(watch.activeScopes, ta)
+	return watch.findBlockingScope(ta)
 }
 
 func (controller *scopeController) scopeBlockKeys(watch *watchRuntime) []synctypes.ScopeKey {
 	if watch == nil {
 		return nil
 	}
-	return syncdispatch.ScopeKeys(watch.activeScopes)
+	return watch.activeScopeKeys()
 }
 
 func (controller *scopeController) activateScope(ctx context.Context, watch *watchRuntime, block synctypes.ScopeBlock) error {
@@ -280,7 +281,7 @@ func (controller *scopeController) activateScope(ctx context.Context, watch *wat
 	}
 
 	if watch != nil {
-		watch.activeScopes = syncdispatch.UpsertScope(watch.activeScopes, block)
+		watch.upsertActiveScope(block)
 	}
 	flow.engine.emitDebugEvent(engineDebugEvent{
 		Type:     engineDebugEventScopeActivated,
@@ -443,7 +444,7 @@ func (controller *scopeController) releaseScope(ctx context.Context, watch *watc
 	}
 
 	if watch != nil {
-		watch.activeScopes = syncdispatch.RemoveScope(watch.activeScopes, key)
+		watch.removeActiveScope(key)
 		flow.engine.emitDebugEvent(engineDebugEvent{
 			Type:     engineDebugEventScopeReleased,
 			ScopeKey: key,
@@ -477,7 +478,7 @@ func (controller *scopeController) discardScope(ctx context.Context, watch *watc
 	}
 
 	if watch != nil {
-		watch.activeScopes = syncdispatch.RemoveScope(watch.activeScopes, key)
+		watch.removeActiveScope(key)
 		watch.armTrialTimer()
 	}
 	flow.engine.emitDebugEvent(engineDebugEvent{
