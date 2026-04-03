@@ -166,7 +166,7 @@ func TestUpsertScope_ReplaceAndRemove(t *testing.T) {
 		{Key: synctypes.SKService(), IssueType: synctypes.IssueServiceOutage},
 	}
 
-	updated := UpsertScope(blocks, synctypes.ScopeBlock{
+	updated := UpsertScope(blocks, &synctypes.ScopeBlock{
 		Key:           synctypes.SKService(),
 		IssueType:     synctypes.IssueServiceOutage,
 		TrialInterval: 30 * time.Second,

@@ -72,7 +72,7 @@ func (controller *scopeController) applyPermissionCheckDecision(
 		controller.recordExplicitFailure(ctx, &decision.Failure)
 	case permissionCheckActivateBoundaryScope:
 		controller.recordExplicitFailure(ctx, &decision.Failure)
-		if err := controller.activateScope(ctx, watch, decision.ScopeBlock); err != nil {
+		if err := controller.activateScope(ctx, watch, &decision.ScopeBlock); err != nil {
 			flow.engine.logger.Warn("failed to activate permission scope",
 				slog.String("scope_key", decision.ScopeBlock.Key.String()),
 				slog.String("error", err.Error()),

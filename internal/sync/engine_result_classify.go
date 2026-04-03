@@ -180,6 +180,8 @@ func deriveScopeKey(r *synctypes.WorkerResult) synctypes.ScopeKey {
 // column. Returns empty string for generic/unknown failures.
 func issueTypeForHTTPStatus(httpStatus int, err error) string {
 	switch {
+	case httpStatus == http.StatusUnauthorized:
+		return synctypes.IssueUnauthorized
 	case httpStatus == http.StatusTooManyRequests:
 		return synctypes.IssueRateLimited
 	case httpStatus == http.StatusInsufficientStorage:

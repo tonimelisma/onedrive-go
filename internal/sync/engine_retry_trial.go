@@ -122,7 +122,9 @@ func (rt *watchRuntime) dispatchPlannerWork(
 // runTrialDispatch handles due scope trials without re-observing through a
 // bespoke API path. Trial candidates are reconstructed from current durable
 // state, planned through the normal engine path, and marked explicitly as
-// trials in the dependency graph.
+// trials in the dependency graph. Lack of a usable candidate is not proof that
+// the scope recovered; preserve semantics keep the scope active until an
+// actual release signal arrives.
 func (rt *watchRuntime) runTrialDispatch(
 	ctx context.Context,
 	bl *synctypes.Baseline,
@@ -159,12 +161,10 @@ func (rt *watchRuntime) dispatchDueTrialScope(
 		}
 
 		if !found {
-			if err := rt.scopeController().releaseScope(ctx, rt, key); err != nil {
-				rt.engine.logger.Warn("runTrialDispatch: failed to release empty scope",
-					slog.String("scope_key", key.String()),
-					slog.String("error", err.Error()),
-				)
-			}
+			rt.engine.logger.Debug("runTrialDispatch: no usable trial candidate; preserving scope",
+				slog.String("scope_key", key.String()),
+			)
+			rt.scopeController().preserveScopeTrial(ctx, rt, key)
 			return nil, false
 		}
 

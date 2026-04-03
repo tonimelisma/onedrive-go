@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -128,7 +129,7 @@ func TestEngine_ReleaseScope(t *testing.T) {
 	sk := synctypes.SKQuotaOwn()
 
 	// Create a scope block.
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:       sk,
 		IssueType: synctypes.IssueQuotaExceeded,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
@@ -171,7 +172,7 @@ func TestEngine_ReleaseScope_SignalsImmediateRetrySweep(t *testing.T) {
 		events = append(events, event.Type)
 	}
 
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:       scopeKey,
 		IssueType: synctypes.IssueQuotaExceeded,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
@@ -345,159 +346,306 @@ func TestEngine_RepairPersistedScopes_ReleasesOrphanedRemotePermissionScope(t *t
 	assert.Equal(t, synctypes.FailureRoleItem, retryable[0].Role)
 }
 
+type repairPersistedScopesCase struct {
+	name       string
+	scopeBlock synctypes.ScopeBlock
+	seed       func(t *testing.T, env repairPersistedScopesEnv)
+	verify     func(t *testing.T, env repairPersistedScopesEnv)
+}
+
+type repairPersistedScopesEnv struct {
+	eng *testEngine
+	ctx func() context.Context
+	now time.Time
+}
+
+func newRepairPersistedScopesEnv(t *testing.T) repairPersistedScopesEnv {
+	t.Helper()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	ctx := t.Context()
+	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+	eng.nowFn = func() time.Time { return now }
+
+	return repairPersistedScopesEnv{
+		eng: eng,
+		ctx: func() context.Context { return ctx },
+		now: now,
+	}
+}
+
+func runRepairPersistedScopesCase(t *testing.T, tc *repairPersistedScopesCase) {
+	t.Helper()
+	t.Parallel()
+
+	env := newRepairPersistedScopesEnv(t)
+	block := tc.scopeBlock
+	if block.BlockedAt.IsZero() {
+		block.BlockedAt = env.now.Add(-time.Minute)
+	}
+	require.NoError(t, env.eng.baseline.UpsertScopeBlock(env.ctx(), &block))
+	if tc.seed != nil {
+		tc.seed(t, env)
+	}
+
+	require.NoError(t, repairPersistedScopesForTest(t, env.eng, env.ctx()))
+	tc.verify(t, env)
+}
+
+func requireTrialDispatchScheduled(t *testing.T, env repairPersistedScopesEnv) {
+	t.Helper()
+
+	newTestWatchState(t, env.eng)
+	require.NoError(t, loadActiveScopesForTest(t, env.eng, env.ctx()))
+	testWatchRuntime(t, env.eng).armTrialTimer()
+
+	select {
+	case <-testWatchRuntime(t, env.eng).trialCh:
+	case <-time.After(time.Second):
+		require.Fail(t, "expired server-timed scope should schedule an immediate trial on startup")
+	}
+}
+
+func quotaRepairPersistedScopesCases() []*repairPersistedScopesCase {
+	return []*repairPersistedScopesCase{
+		quotaRepairCaseWithHeldFailure(),
+		quotaRepairCaseWithActivePreserve(),
+		quotaRepairCaseWithExpiredPreserve(),
+		quotaRepairCaseWithRehomedCandidate(),
+		quotaRepairCaseWithActionableCandidate(),
+	}
+}
+
+func quotaRepairCaseWithHeldFailure() *repairPersistedScopesCase {
+	return &repairPersistedScopesCase{
+		name: "keeps scoped quota with failures",
+		scopeBlock: synctypes.ScopeBlock{
+			Key:           synctypes.SKQuotaOwn(),
+			IssueType:     synctypes.IssueQuotaExceeded,
+			TimingSource:  synctypes.ScopeTimingBackoff,
+			TrialInterval: 30 * time.Second,
+			NextTrialAt:   time.Date(2025, 6, 15, 12, 0, 30, 0, time.UTC),
+		},
+		seed: func(t *testing.T, env repairPersistedScopesEnv) {
+			t.Helper()
+			require.NoError(t, env.eng.baseline.RecordFailure(env.ctx(), &synctypes.SyncFailureParams{
+				Path:      "upload.txt",
+				DriveID:   driveid.New("drive1"),
+				Direction: synctypes.DirectionUpload,
+				Role:      synctypes.FailureRoleHeld,
+				Category:  synctypes.CategoryTransient,
+				ScopeKey:  synctypes.SKQuotaOwn(),
+				ErrMsg:    "quota blocked",
+			}, nil))
+		},
+		verify: func(t *testing.T, env repairPersistedScopesEnv) {
+			t.Helper()
+			assert.True(t, isTestScopeBlocked(env.eng, synctypes.SKQuotaOwn()))
+		},
+	}
+}
+
+func quotaRepairCaseWithActivePreserve() *repairPersistedScopesCase {
+	return &repairPersistedScopesCase{
+		name: "preserves empty scoped quota while preserve deadline is active",
+		scopeBlock: synctypes.ScopeBlock{
+			Key:           synctypes.SKQuotaShortcut("drive:item"),
+			IssueType:     synctypes.IssueQuotaExceeded,
+			TimingSource:  synctypes.ScopeTimingBackoff,
+			TrialInterval: 30 * time.Second,
+			NextTrialAt:   time.Date(2025, 6, 15, 12, 0, 30, 0, time.UTC),
+			PreserveUntil: time.Date(2025, 6, 15, 12, 0, 30, 0, time.UTC),
+		},
+		verify: func(t *testing.T, env repairPersistedScopesEnv) {
+			t.Helper()
+			assert.True(t, isTestScopeBlocked(env.eng, synctypes.SKQuotaShortcut("drive:item")))
+		},
+	}
+}
+
+func quotaRepairCaseWithExpiredPreserve() *repairPersistedScopesCase {
+	return &repairPersistedScopesCase{
+		name: "discards empty scoped quota after preserve deadline expires",
+		scopeBlock: synctypes.ScopeBlock{
+			Key:           synctypes.SKQuotaShortcut("drive:item"),
+			IssueType:     synctypes.IssueQuotaExceeded,
+			TimingSource:  synctypes.ScopeTimingBackoff,
+			TrialInterval: 30 * time.Second,
+			NextTrialAt:   time.Date(2025, 6, 15, 11, 59, 59, 0, time.UTC),
+			PreserveUntil: time.Date(2025, 6, 15, 11, 59, 59, 0, time.UTC),
+		},
+		verify: func(t *testing.T, env repairPersistedScopesEnv) {
+			t.Helper()
+			assert.False(t, isTestScopeBlocked(env.eng, synctypes.SKQuotaShortcut("drive:item")))
+
+			failures, err := env.eng.baseline.ListSyncFailures(env.ctx())
+			require.NoError(t, err)
+			assert.Empty(t, failures)
+		},
+	}
+}
+
+func quotaRepairCaseWithRehomedCandidate() *repairPersistedScopesCase {
+	return &repairPersistedScopesCase{
+		name: "preserved quota survives after candidate rehomes to a more specific scope",
+		scopeBlock: synctypes.ScopeBlock{
+			Key:           synctypes.SKQuotaOwn(),
+			IssueType:     synctypes.IssueQuotaExceeded,
+			TimingSource:  synctypes.ScopeTimingBackoff,
+			TrialInterval: 45 * time.Second,
+			NextTrialAt:   time.Date(2025, 6, 15, 12, 0, 45, 0, time.UTC),
+			PreserveUntil: time.Date(2025, 6, 15, 12, 0, 45, 0, time.UTC),
+		},
+		seed: func(t *testing.T, env repairPersistedScopesEnv) {
+			t.Helper()
+			require.NoError(t, env.eng.baseline.RecordFailure(env.ctx(), &synctypes.SyncFailureParams{
+				Path:       "Shared/Docs",
+				DriveID:    driveid.New("drive1"),
+				Direction:  synctypes.DirectionUpload,
+				Role:       synctypes.FailureRoleBoundary,
+				Category:   synctypes.CategoryActionable,
+				IssueType:  synctypes.IssuePermissionDenied,
+				HTTPStatus: http.StatusForbidden,
+				ScopeKey:   synctypes.SKPermRemote("Shared/Docs"),
+				ErrMsg:     "boundary rehomed from preserved quota candidate",
+			}, nil))
+		},
+		verify: func(t *testing.T, env repairPersistedScopesEnv) {
+			t.Helper()
+			assert.True(t, isTestScopeBlocked(env.eng, synctypes.SKQuotaOwn()))
+		},
+	}
+}
+
+func quotaRepairCaseWithActionableCandidate() *repairPersistedScopesCase {
+	return &repairPersistedScopesCase{
+		name: "preserved quota survives after candidate becomes actionable item failure",
+		scopeBlock: synctypes.ScopeBlock{
+			Key:           synctypes.SKQuotaOwn(),
+			IssueType:     synctypes.IssueQuotaExceeded,
+			TimingSource:  synctypes.ScopeTimingBackoff,
+			TrialInterval: 45 * time.Second,
+			NextTrialAt:   time.Date(2025, 6, 15, 12, 0, 45, 0, time.UTC),
+			PreserveUntil: time.Date(2025, 6, 15, 12, 0, 45, 0, time.UTC),
+		},
+		seed: func(t *testing.T, env repairPersistedScopesEnv) {
+			t.Helper()
+			require.NoError(t, env.eng.baseline.RecordFailure(env.ctx(), &synctypes.SyncFailureParams{
+				Path:      "upload.txt",
+				DriveID:   driveid.New("drive1"),
+				Direction: synctypes.DirectionUpload,
+				Role:      synctypes.FailureRoleItem,
+				Category:  synctypes.CategoryActionable,
+				IssueType: synctypes.IssueInvalidFilename,
+				ErrMsg:    "candidate became actionable while original scope stayed preserved",
+			}, nil))
+		},
+		verify: func(t *testing.T, env repairPersistedScopesEnv) {
+			t.Helper()
+			assert.True(t, isTestScopeBlocked(env.eng, synctypes.SKQuotaOwn()))
+		},
+	}
+}
+
+// Validates: R-2.10.5
 func TestEngine_RepairPersistedScopes_QuotaPolicy(t *testing.T) {
 	t.Parallel()
 
-	t.Run("keeps scoped quota with failures", func(t *testing.T) {
-		t.Parallel()
-
-		eng, _ := newTestEngine(t, &engineMockClient{})
-		ctx := t.Context()
-		now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
-		eng.nowFn = func() time.Time { return now }
-
-		scopeKey := synctypes.SKQuotaOwn()
-		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
-			Key:           scopeKey,
-			IssueType:     synctypes.IssueQuotaExceeded,
-			TimingSource:  synctypes.ScopeTimingBackoff,
-			BlockedAt:     now.Add(-time.Minute),
-			TrialInterval: 30 * time.Second,
-			NextTrialAt:   now.Add(30 * time.Second),
-		}))
-		require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
-			Path:      "upload.txt",
-			DriveID:   driveid.New("drive1"),
-			Direction: synctypes.DirectionUpload,
-			Role:      synctypes.FailureRoleHeld,
-			Category:  synctypes.CategoryTransient,
-			ScopeKey:  scopeKey,
-			ErrMsg:    "quota blocked",
-		}, nil))
-
-		require.NoError(t, repairPersistedScopesForTest(t, eng, ctx))
-
-		assert.True(t, isTestScopeBlocked(eng, scopeKey))
-	})
-
-	t.Run("discards empty scoped quota", func(t *testing.T) {
-		t.Parallel()
-
-		eng, _ := newTestEngine(t, &engineMockClient{})
-		ctx := t.Context()
-		now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
-		eng.nowFn = func() time.Time { return now }
-
-		scopeKey := synctypes.SKQuotaShortcut("drive:item")
-		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
-			Key:           scopeKey,
-			IssueType:     synctypes.IssueQuotaExceeded,
-			TimingSource:  synctypes.ScopeTimingBackoff,
-			BlockedAt:     now.Add(-time.Minute),
-			TrialInterval: 30 * time.Second,
-			NextTrialAt:   now.Add(30 * time.Second),
-		}))
-
-		require.NoError(t, repairPersistedScopesForTest(t, eng, ctx))
-
-		assert.False(t, isTestScopeBlocked(eng, scopeKey))
-
-		failures, err := eng.baseline.ListSyncFailures(ctx)
-		require.NoError(t, err)
-		assert.Empty(t, failures)
-	})
+	for _, tc := range quotaRepairPersistedScopesCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			runRepairPersistedScopesCase(t, tc)
+		})
+	}
 }
 
+func throttleAndServiceRepairPersistedScopesCases() []*repairPersistedScopesCase {
+	return []*repairPersistedScopesCase{
+		{
+			name: "keeps server timed throttle and schedules immediate trial when overdue",
+			scopeBlock: synctypes.ScopeBlock{
+				Key:           synctypes.SKThrottleAccount(),
+				IssueType:     synctypes.IssueRateLimited,
+				TimingSource:  synctypes.ScopeTimingServerRetryAfter,
+				TrialInterval: 20 * time.Second,
+				NextTrialAt:   time.Date(2025, 6, 15, 11, 59, 59, 0, time.UTC),
+			},
+			verify: func(t *testing.T, env repairPersistedScopesEnv) {
+				t.Helper()
+				requireTrialDispatchScheduled(t, env)
+			},
+		},
+		{
+			name: "releases non server timed throttle",
+			scopeBlock: synctypes.ScopeBlock{
+				Key:           synctypes.SKThrottleAccount(),
+				IssueType:     synctypes.IssueRateLimited,
+				TimingSource:  synctypes.ScopeTimingBackoff,
+				TrialInterval: 20 * time.Second,
+				NextTrialAt:   time.Date(2025, 6, 15, 12, 0, 20, 0, time.UTC),
+				PreserveUntil: time.Date(2025, 6, 15, 12, 0, 20, 0, time.UTC),
+			},
+			seed: func(t *testing.T, env repairPersistedScopesEnv) {
+				t.Helper()
+				require.NoError(t, env.eng.baseline.RecordFailure(env.ctx(), &synctypes.SyncFailureParams{
+					Path:      "upload.txt",
+					DriveID:   driveid.New("drive1"),
+					Direction: synctypes.DirectionUpload,
+					Role:      synctypes.FailureRoleHeld,
+					Category:  synctypes.CategoryTransient,
+					ScopeKey:  synctypes.SKThrottleAccount(),
+					ErrMsg:    "rate limited",
+				}, nil))
+			},
+			verify: func(t *testing.T, env repairPersistedScopesEnv) {
+				t.Helper()
+				assert.False(t, isTestScopeBlocked(env.eng, synctypes.SKThrottleAccount()))
+				retryable, err := env.eng.baseline.ListSyncFailuresForRetry(env.ctx(), env.now)
+				require.NoError(t, err)
+				require.Len(t, retryable, 1)
+				assert.Equal(t, synctypes.FailureRoleItem, retryable[0].Role)
+			},
+		},
+		{
+			name: "releases preserved non server timed service scope",
+			scopeBlock: synctypes.ScopeBlock{
+				Key:           synctypes.SKService(),
+				IssueType:     synctypes.IssueServiceOutage,
+				TimingSource:  synctypes.ScopeTimingBackoff,
+				TrialInterval: 20 * time.Second,
+				NextTrialAt:   time.Date(2025, 6, 15, 12, 0, 20, 0, time.UTC),
+				PreserveUntil: time.Date(2025, 6, 15, 12, 0, 20, 0, time.UTC),
+			},
+			verify: func(t *testing.T, env repairPersistedScopesEnv) {
+				t.Helper()
+				assert.False(t, isTestScopeBlocked(env.eng, synctypes.SKService()))
+			},
+		},
+		{
+			name: "keeps server timed service scope",
+			scopeBlock: synctypes.ScopeBlock{
+				Key:           synctypes.SKService(),
+				IssueType:     synctypes.IssueServiceOutage,
+				TimingSource:  synctypes.ScopeTimingServerRetryAfter,
+				TrialInterval: time.Minute,
+				NextTrialAt:   time.Date(2025, 6, 15, 12, 1, 0, 0, time.UTC),
+			},
+			verify: func(t *testing.T, env repairPersistedScopesEnv) {
+				t.Helper()
+				assert.True(t, isTestScopeBlocked(env.eng, synctypes.SKService()))
+			},
+		},
+	}
+}
+
+// Validates: R-2.10.5
 func TestEngine_RepairPersistedScopes_ThrottleAndServicePolicy(t *testing.T) {
 	t.Parallel()
 
-	t.Run("keeps server timed throttle and schedules immediate trial when overdue", func(t *testing.T) {
-		t.Parallel()
-
-		eng, _ := newTestEngine(t, &engineMockClient{})
-		ctx := t.Context()
-		now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
-		eng.nowFn = func() time.Time { return now }
-
-		scopeKey := synctypes.SKThrottleAccount()
-		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
-			Key:           scopeKey,
-			IssueType:     synctypes.IssueRateLimited,
-			TimingSource:  synctypes.ScopeTimingServerRetryAfter,
-			BlockedAt:     now.Add(-time.Minute),
-			TrialInterval: 20 * time.Second,
-			NextTrialAt:   now.Add(-time.Second),
-		}))
-
-		require.NoError(t, repairPersistedScopesForTest(t, eng, ctx))
-		newTestWatchState(t, eng)
-		require.NoError(t, loadActiveScopesForTest(t, eng, ctx))
-		testWatchRuntime(t, eng).armTrialTimer()
-
-		select {
-		case <-testWatchRuntime(t, eng).trialCh:
-		case <-time.After(time.Second):
-			require.Fail(t, "expired server-timed throttle scope should schedule an immediate trial on startup")
-		}
-	})
-
-	t.Run("releases non server timed throttle", func(t *testing.T) {
-		t.Parallel()
-
-		eng, _ := newTestEngine(t, &engineMockClient{})
-		ctx := t.Context()
-		now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
-		eng.nowFn = func() time.Time { return now }
-
-		scopeKey := synctypes.SKThrottleAccount()
-		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
-			Key:           scopeKey,
-			IssueType:     synctypes.IssueRateLimited,
-			TimingSource:  synctypes.ScopeTimingBackoff,
-			BlockedAt:     now.Add(-time.Minute),
-			TrialInterval: 20 * time.Second,
-			NextTrialAt:   now.Add(20 * time.Second),
-		}))
-		require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
-			Path:      "upload.txt",
-			DriveID:   driveid.New("drive1"),
-			Direction: synctypes.DirectionUpload,
-			Role:      synctypes.FailureRoleHeld,
-			Category:  synctypes.CategoryTransient,
-			ScopeKey:  scopeKey,
-			ErrMsg:    "rate limited",
-		}, nil))
-
-		require.NoError(t, repairPersistedScopesForTest(t, eng, ctx))
-
-		assert.False(t, isTestScopeBlocked(eng, scopeKey))
-		retryable, err := eng.baseline.ListSyncFailuresForRetry(ctx, now)
-		require.NoError(t, err)
-		require.Len(t, retryable, 1)
-		assert.Equal(t, synctypes.FailureRoleItem, retryable[0].Role)
-	})
-
-	t.Run("keeps server timed service scope", func(t *testing.T) {
-		t.Parallel()
-
-		eng, _ := newTestEngine(t, &engineMockClient{})
-		ctx := t.Context()
-		now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
-		eng.nowFn = func() time.Time { return now }
-
-		scopeKey := synctypes.SKService()
-		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
-			Key:           scopeKey,
-			IssueType:     synctypes.IssueServiceOutage,
-			TimingSource:  synctypes.ScopeTimingServerRetryAfter,
-			BlockedAt:     now.Add(-time.Minute),
-			TrialInterval: time.Minute,
-			NextTrialAt:   now.Add(time.Minute),
-		}))
-
-		require.NoError(t, repairPersistedScopesForTest(t, eng, ctx))
-		assert.True(t, isTestScopeBlocked(eng, scopeKey))
-	})
+	for _, tc := range throttleAndServiceRepairPersistedScopesCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			runRepairPersistedScopesCase(t, tc)
+		})
+	}
 }
 
 func TestEngine_RepairPersistedScopes_DiskPolicy(t *testing.T) {
@@ -602,7 +750,7 @@ func TestEngine_AdmitReady_ScopeBlocked(t *testing.T) {
 	ctx := context.Background()
 
 	// Set up a scope block.
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:       synctypes.SKQuotaOwn(),
 		IssueType: synctypes.IssueQuotaExceeded,
 		BlockedAt: eng.nowFn(),
@@ -1014,7 +1162,8 @@ func TestRetrierSweep_SkipsInFlight(t *testing.T) {
 // runTrialDispatch
 // ---------------------------------------------------------------------------
 
-func TestTrialDispatch_NoCandidates_ClearsScope(t *testing.T) {
+// Validates: R-2.10.5
+func TestTrialDispatch_NoCandidates_PreservesScope(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -1023,7 +1172,7 @@ func TestTrialDispatch_NoCandidates_ClearsScope(t *testing.T) {
 
 	// Set a scope block with NextTrialAt in the past.
 	sk := synctypes.SKQuotaOwn()
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:           sk,
 		IssueType:     synctypes.IssueQuotaExceeded,
 		BlockedAt:     now.Add(-time.Minute),
@@ -1035,9 +1184,10 @@ func TestTrialDispatch_NoCandidates_ClearsScope(t *testing.T) {
 	outbox := runTestTrialDispatch(t, eng, ctx)
 	assert.Empty(t, outbox)
 
-	// Scope should be cleared because there are no candidates.
-	assert.False(t, isTestScopeBlocked(eng, sk),
-		"scope should be cleared when no trial candidates exist")
+	block, ok := getTestScopeBlock(eng, sk)
+	require.True(t, ok)
+	assert.Equal(t, 10*time.Second, block.TrialInterval)
+	assert.Equal(t, now.Add(10*time.Second), block.NextTrialAt)
 }
 
 // ---------------------------------------------------------------------------
@@ -1712,7 +1862,7 @@ func TestTrialDispatch_UsesPlannerWorkRequest(t *testing.T) {
 	sk := synctypes.SKQuotaOwn()
 
 	// Set up a scope block with NextTrialAt in the past.
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:           sk,
 		IssueType:     synctypes.IssueQuotaExceeded,
 		BlockedAt:     now.Add(-time.Minute),
@@ -1758,7 +1908,8 @@ func TestTrialDispatch_UsesPlannerWorkRequest(t *testing.T) {
 		"trial interval should NOT be extended after successful dispatch")
 }
 
-func TestTrialDispatch_NoEventWhenCurrentStateMissing(t *testing.T) {
+// Validates: R-2.10.5
+func TestTrialDispatch_NoEventWhenCurrentStateMissingPreservesScope(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -1768,7 +1919,7 @@ func TestTrialDispatch_NoEventWhenCurrentStateMissing(t *testing.T) {
 
 	sk := synctypes.SKQuotaOwn()
 
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:           sk,
 		IssueType:     synctypes.IssueQuotaExceeded,
 		BlockedAt:     eng.nowFn().Add(-time.Minute),
@@ -1793,8 +1944,10 @@ func TestTrialDispatch_NoEventWhenCurrentStateMissing(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, failures, "resolved held candidate should be cleared from sync_failures")
 
-	_, ok := getTestScopeBlock(eng, sk)
-	assert.False(t, ok, "scope should release when no remaining trial candidates exist")
+	block, ok := getTestScopeBlock(eng, sk)
+	require.True(t, ok)
+	assert.Equal(t, 10*time.Second, block.TrialInterval)
+	assert.Equal(t, eng.nowFn().Add(10*time.Second), block.NextTrialAt)
 }
 
 func TestRetrierSweep_UploadSkippedCandidateBecomesActionableFailure(t *testing.T) {
@@ -1837,7 +1990,7 @@ func TestTrialDispatch_SkippedHeldCandidateBecomesActionableAndContinues(t *test
 	ctx := context.Background()
 	sk := synctypes.SKQuotaOwn()
 
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:           sk,
 		IssueType:     synctypes.IssueQuotaExceeded,
 		BlockedAt:     eng.nowFn().Add(-time.Minute),
@@ -1897,14 +2050,15 @@ func TestTrialDispatch_SkippedHeldCandidateBecomesActionableAndContinues(t *test
 	assert.True(t, isTestScopeBlocked(eng, sk))
 }
 
-func TestTrialDispatch_OnlySkippedHeldCandidatesReleaseScope(t *testing.T) {
+// Validates: R-2.10.5
+func TestTrialDispatch_OnlySkippedHeldCandidatesPreserveScope(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 	sk := synctypes.SKQuotaOwn()
 
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:           sk,
 		IssueType:     synctypes.IssueQuotaExceeded,
 		BlockedAt:     eng.nowFn().Add(-time.Minute),
@@ -1934,7 +2088,10 @@ func TestTrialDispatch_OnlySkippedHeldCandidatesReleaseScope(t *testing.T) {
 	require.Len(t, failures, 1)
 	assert.Equal(t, synctypes.CategoryActionable, failures[0].Category)
 	assert.Equal(t, synctypes.IssueFileTooLarge, failures[0].IssueType)
-	assert.False(t, isTestScopeBlocked(eng, sk))
+	block, ok := getTestScopeBlock(eng, sk)
+	require.True(t, ok)
+	assert.Equal(t, 10*time.Second, block.TrialInterval)
+	assert.Equal(t, eng.nowFn().Add(10*time.Second), block.NextTrialAt)
 }
 
 func TestEngine_ClearFailureCandidate_RemovesSyncFailure(t *testing.T) {
@@ -2019,7 +2176,7 @@ func TestTrialDispatch_DoesNotMutateStateWhenNoScopeIsDue(t *testing.T) {
 	ctx := context.Background()
 	now := eng.nowFn()
 
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:           synctypes.SKQuotaOwn(),
 		IssueType:     synctypes.IssueQuotaExceeded,
 		BlockedAt:     now.Add(-time.Minute),

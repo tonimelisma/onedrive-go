@@ -433,7 +433,7 @@ func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 		HTTPStatus: http.StatusForbidden,
 		ScopeKey:   scopeKey,
 	}, nil))
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:       scopeKey,
 		IssueType: synctypes.IssuePermissionDenied,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
@@ -569,7 +569,7 @@ func TestRecheckPermissions_APIFailure_FailsOpenAndReleasesScope(t *testing.T) {
 		HTTPStatus: http.StatusForbidden,
 		ScopeKey:   scopeKey,
 	}, nil))
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:       scopeKey,
 		IssueType: synctypes.IssuePermissionDenied,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
@@ -637,7 +637,7 @@ func TestRecheckPermissions_StillDenied_NoChange(t *testing.T) {
 		HTTPStatus: http.StatusForbidden,
 		ScopeKey:   scopeKey,
 	}, nil))
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:       scopeKey,
 		IssueType: synctypes.IssuePermissionDenied,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
@@ -924,7 +924,7 @@ func TestRecheckPermissions_StillDenied_KeepsDeniedPrefix(t *testing.T) {
 		HTTPStatus: http.StatusForbidden,
 		ScopeKey:   scopeKey,
 	}, nil))
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:       scopeKey,
 		IssueType: synctypes.IssuePermissionDenied,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
@@ -1110,12 +1110,12 @@ func TestRecheckPermissions_MultipleIssues_PartialResolution(t *testing.T) {
 		Category:  synctypes.CategoryActionable,
 		IssueType: synctypes.IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: http.StatusForbidden, ScopeKey: scopeB,
 	}, nil))
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:       scopeA,
 		IssueType: synctypes.IssuePermissionDenied,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
 	})
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:       scopeB,
 		IssueType: synctypes.IssuePermissionDenied,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
@@ -1251,7 +1251,7 @@ func TestRecheckLocalPermissions_Restored(t *testing.T) {
 		ScopeKey:  scopeKey,
 	}, nil))
 
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key: scopeKey, IssueType: synctypes.IssueLocalPermissionDenied,
 	})
 
@@ -1303,7 +1303,7 @@ func TestRecheckLocalPermissions_StillDenied(t *testing.T) {
 		ScopeKey:  scopeKey,
 	}, nil))
 
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key: scopeKey, IssueType: synctypes.IssueLocalPermissionDenied,
 	})
 
@@ -1375,7 +1375,7 @@ func TestClearScannerResolvedPermissions_DirLevel(t *testing.T) {
 		ScopeKey:  scopeKey,
 	}, nil))
 
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key: scopeKey, IssueType: synctypes.IssueLocalPermissionDenied,
 	})
 
@@ -1415,7 +1415,7 @@ func TestClearScannerResolvedPermissions_NoFalsePositives(t *testing.T) {
 		ScopeKey:  scopeKey,
 	}, nil))
 
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key: scopeKey, IssueType: synctypes.IssueLocalPermissionDenied,
 	})
 

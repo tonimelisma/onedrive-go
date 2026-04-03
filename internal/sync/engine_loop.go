@@ -11,37 +11,139 @@ import (
 
 func (r *oneShotRunner) runResultsLoop(
 	ctx context.Context,
+	cancel context.CancelFunc,
 	bl *synctypes.Baseline,
 	results <-chan synctypes.WorkerResult,
-) {
+) error {
 	var outbox []*synctypes.TrackedAction
+	var fatalErr error
 
 	for {
+		if fatalErr != nil && len(outbox) > 0 {
+			r.completeOutboxAsShutdown(outbox)
+			outbox = nil
+			continue
+		}
+
 		if len(outbox) == 0 {
-			select {
-			case workerResult, ok := <-results:
-				if !ok {
-					return
-				}
-				outbox = append(outbox, r.processWorkerResult(ctx, nil, &workerResult, bl)...)
-			case <-ctx.Done():
-				return
+			nextOutbox, nextFatal, done := r.runResultsLoopIdle(ctx, cancel, bl, results, fatalErr)
+			outbox = nextOutbox
+			fatalErr = nextFatal
+			if done {
+				return fatalErr
 			}
 			continue
 		}
 
+		nextOutbox, nextFatal, done := r.runResultsLoopWithOutbox(ctx, cancel, bl, results, outbox, fatalErr)
+		outbox = nextOutbox
+		fatalErr = nextFatal
+		if done {
+			return fatalErr
+		}
+	}
+}
+
+func (r *oneShotRunner) runResultsLoopIdle(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	bl *synctypes.Baseline,
+	results <-chan synctypes.WorkerResult,
+	fatalErr error,
+) ([]*synctypes.TrackedAction, error, bool) {
+	select {
+	case workerResult, ok := <-results:
+		if !ok {
+			return nil, fatalErr, true
+		}
+		nextOutbox, nextFatal := r.handleOneShotWorkerResult(ctx, cancel, bl, nil, fatalErr, &workerResult)
+		return nextOutbox, nextFatal, false
+	case <-resultsLoopCtxDone(ctx, fatalErr):
+		return nil, fatalErr, true
+	}
+}
+
+func (r *oneShotRunner) runResultsLoopWithOutbox(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	bl *synctypes.Baseline,
+	results <-chan synctypes.WorkerResult,
+	outbox []*synctypes.TrackedAction,
+	fatalErr error,
+) ([]*synctypes.TrackedAction, error, bool) {
+	select {
+	case r.readyCh <- outbox[0]:
+		return outbox[1:], fatalErr, false
+	case workerResult, ok := <-results:
+		if !ok {
+			return outbox, fatalErr, true
+		}
+		nextOutbox, nextFatal := r.handleOneShotWorkerResult(ctx, cancel, bl, outbox, fatalErr, &workerResult)
+		return nextOutbox, nextFatal, false
+	case <-resultsLoopCtxDone(ctx, fatalErr):
+		return outbox, fatalErr, true
+	}
+}
+
+func (r *oneShotRunner) handleOneShotWorkerResult(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	bl *synctypes.Baseline,
+	outbox []*synctypes.TrackedAction,
+	fatalErr error,
+	workerResult *synctypes.WorkerResult,
+) ([]*synctypes.TrackedAction, error) {
+	outcome := r.processWorkerResult(ctx, nil, workerResult, bl)
+	outbox = append(outbox, outcome.dispatched...)
+	if !outcome.terminate || fatalErr != nil {
+		return outbox, fatalErr
+	}
+
+	fatalErr = outcome.terminateErr
+	if cancel != nil {
+		cancel()
+	}
+	if len(outbox) > 0 {
+		r.completeOutboxAsShutdown(outbox)
+		outbox = nil
+	}
+	r.completeQueuedReadyAsShutdown()
+
+	return outbox, fatalErr
+}
+
+func resultsLoopCtxDone(ctx context.Context, fatalErr error) <-chan struct{} {
+	if fatalErr != nil {
+		return nil
+	}
+
+	return ctx.Done()
+}
+
+func (r *oneShotRunner) completeQueuedReadyAsShutdown() {
+	for {
 		select {
-		case r.readyCh <- outbox[0]:
-			outbox = outbox[1:]
-		case workerResult, ok := <-results:
-			if !ok {
-				return
-			}
-			outbox = append(outbox, r.processWorkerResult(ctx, nil, &workerResult, bl)...)
-		case <-ctx.Done():
+		case ta := <-r.readyCh:
+			r.completeTrackedActionAsShutdown(ta)
+		default:
 			return
 		}
 	}
+}
+
+func (r *oneShotRunner) completeOutboxAsShutdown(outbox []*synctypes.TrackedAction) {
+	for _, ta := range outbox {
+		r.completeTrackedActionAsShutdown(ta)
+	}
+}
+
+func (r *oneShotRunner) completeTrackedActionAsShutdown(ta *synctypes.TrackedAction) {
+	if ta == nil {
+		return
+	}
+
+	ready, _ := r.depGraph.Complete(ta.ID)
+	r.scopeController().completeSubtree(ready)
 }
 
 // runWatchUntilQuiescent drives the bootstrap watch loop until the dependency
@@ -250,8 +352,11 @@ func (rt *watchRuntime) handleBootstrapWorkerResult(
 		return rt.handleBootstrapResultsClosed(ctx)
 	}
 
-	nextOutbox := rt.processWorkerResult(ctx, rt, workerResult, p.bl)
-	return append(outbox, nextOutbox...), false, nil
+	outcome := rt.processWorkerResult(ctx, rt, workerResult, p.bl)
+	if outcome.terminate {
+		return outbox, false, outcome.terminateErr
+	}
+	return append(outbox, outcome.dispatched...), false, nil
 }
 
 func (rt *watchRuntime) handleBootstrapResultsClosed(
@@ -303,8 +408,11 @@ func (rt *watchRuntime) handleWatchWorkerResult(
 		return outbox, false, fmt.Errorf("sync: worker results channel closed unexpectedly")
 	}
 
-	nextOutbox := rt.processWorkerResult(ctx, rt, workerResult, p.bl)
-	return append(outbox, nextOutbox...), false, nil
+	outcome := rt.processWorkerResult(ctx, rt, workerResult, p.bl)
+	if outcome.terminate {
+		return outbox, false, outcome.terminateErr
+	}
+	return append(outbox, outcome.dispatched...), false, nil
 }
 
 func (rt *watchRuntime) handleWatchSkipped(

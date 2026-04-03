@@ -15,7 +15,7 @@ func (rt *watchRuntime) replaceActiveScopes(blocks []synctypes.ScopeBlock) {
 	rt.activeScopes = append(rt.activeScopes, blocks...)
 }
 
-func (rt *watchRuntime) upsertActiveScope(block synctypes.ScopeBlock) {
+func (rt *watchRuntime) upsertActiveScope(block *synctypes.ScopeBlock) {
 	rt.activeScopesMu.Lock()
 	defer rt.activeScopesMu.Unlock()
 

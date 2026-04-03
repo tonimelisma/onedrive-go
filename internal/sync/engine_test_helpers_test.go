@@ -318,8 +318,10 @@ func runTestTrialDispatch(t *testing.T, eng *testEngine, ctx context.Context) []
 	return testWatchRuntime(t, eng).runTrialDispatch(ctx, bl, synctypes.SyncBidirectional, safety)
 }
 
-func setTestScopeBlock(t *testing.T, eng *testEngine, block synctypes.ScopeBlock) {
+func setTestScopeBlock(t *testing.T, eng *testEngine, block *synctypes.ScopeBlock) {
 	t.Helper()
+
+	require.NotNil(t, block)
 
 	if block.BlockedAt.IsZero() {
 		block.BlockedAt = eng.nowFunc()
@@ -334,7 +336,7 @@ func setTestScopeBlock(t *testing.T, eng *testEngine, block synctypes.ScopeBlock
 	if block.TimingSource != synctypes.ScopeTimingNone && block.NextTrialAt.IsZero() {
 		block.NextTrialAt = block.BlockedAt.Add(block.TrialInterval)
 	}
-	require.NoError(t, eng.baseline.UpsertScopeBlock(context.Background(), &block))
+	require.NoError(t, eng.baseline.UpsertScopeBlock(context.Background(), block))
 	if eng.runtime != nil {
 		eng.runtime.upsertActiveScope(block)
 	}
@@ -500,6 +502,17 @@ func processWorkerResultForTest(
 	bl *synctypes.Baseline,
 ) []*synctypes.TrackedAction {
 	t.Helper()
+	return processWorkerResultDetailedForTest(t, eng, ctx, r, bl).dispatched
+}
+
+func processWorkerResultDetailedForTest(
+	t *testing.T,
+	eng *testEngine,
+	ctx context.Context,
+	r *synctypes.WorkerResult,
+	bl *synctypes.Baseline,
+) routeOutcome {
+	t.Helper()
 	if rt, ok := lookupTestWatchRuntime(eng); ok {
 		return rt.processWorkerResult(ctx, rt, r, bl)
 	}
@@ -512,13 +525,13 @@ func processWorkerResultForTest(
 func processTrialResultForTest(t *testing.T, eng *testEngine, ctx context.Context, r *synctypes.WorkerResult) {
 	t.Helper()
 	if rt, ok := lookupTestWatchRuntime(eng); ok {
-		rt.processTrialResult(ctx, rt, r)
+		rt.processWorkerResult(ctx, rt, r, nil)
 		return
 	}
 
 	flow, ok := lookupTestEngineFlow(eng)
 	require.True(t, ok, "engine flow must be initialized for this test")
-	flow.processTrialResult(ctx, nil, r)
+	flow.processWorkerResult(ctx, nil, r, nil)
 }
 
 func processBatchForTest(

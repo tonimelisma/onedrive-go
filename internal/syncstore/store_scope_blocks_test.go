@@ -28,6 +28,7 @@ func TestSyncStore_UpsertScopeBlock(t *testing.T) {
 		BlockedAt:     time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
 		TrialInterval: 5 * time.Second,
 		NextTrialAt:   time.Date(2025, 6, 15, 10, 0, 5, 0, time.UTC),
+		PreserveUntil: time.Date(2025, 6, 15, 10, 0, 5, 0, time.UTC),
 		TrialCount:    0,
 	}
 
@@ -53,6 +54,7 @@ func TestSyncStore_UpsertScopeBlock(t *testing.T) {
 	require.Len(t, blocks, 1, "upsert should not create duplicate rows")
 	assert.Equal(t, 3, blocks[0].TrialCount, "upsert should update trial count")
 	assert.Equal(t, 20*time.Second, blocks[0].TrialInterval, "upsert should update interval")
+	assert.Equal(t, block.PreserveUntil, blocks[0].PreserveUntil, "upsert should update preserve deadline")
 }
 
 // ---------------------------------------------------------------------------
@@ -111,6 +113,7 @@ func TestSyncStore_ListScopeBlocks(t *testing.T) {
 			BlockedAt:     now,
 			TrialInterval: 5 * time.Second,
 			NextTrialAt:   now.Add(5 * time.Second),
+			PreserveUntil: now.Add(5 * time.Second),
 			TrialCount:    0,
 		},
 		{
@@ -154,6 +157,7 @@ func TestSyncStore_ListScopeBlocks(t *testing.T) {
 	assert.Equal(t, now, ta.BlockedAt)
 	assert.Equal(t, 5*time.Second, ta.TrialInterval)
 	assert.Equal(t, now.Add(5*time.Second), ta.NextTrialAt)
+	assert.Equal(t, now.Add(5*time.Second), ta.PreserveUntil)
 	assert.Equal(t, 0, ta.TrialCount)
 
 	// Verify quota:shortcut round-trip (parameterized key).
@@ -196,6 +200,7 @@ func TestSyncStore_ScopeBlock_Roundtrip(t *testing.T) {
 		BlockedAt:     time.Date(2025, 3, 14, 9, 26, 53, 123456789, time.UTC),
 		TrialInterval: 2*time.Minute + 500*time.Millisecond,
 		NextTrialAt:   time.Date(2025, 3, 14, 9, 28, 53, 987654321, time.UTC),
+		PreserveUntil: time.Date(2025, 3, 14, 9, 28, 53, 987654321, time.UTC),
 		TrialCount:    42,
 	}
 
@@ -211,6 +216,7 @@ func TestSyncStore_ScopeBlock_Roundtrip(t *testing.T) {
 	assert.Equal(t, original.BlockedAt, got[0].BlockedAt, "blocked_at should round-trip with nanosecond precision")
 	assert.Equal(t, original.TrialInterval, got[0].TrialInterval, "trial_interval should round-trip")
 	assert.Equal(t, original.NextTrialAt, got[0].NextTrialAt, "next_trial_at should round-trip with nanosecond precision")
+	assert.Equal(t, original.PreserveUntil, got[0].PreserveUntil, "preserve_until should round-trip with nanosecond precision")
 	assert.Equal(t, original.TrialCount, got[0].TrialCount, "trial_count should round-trip")
 }
 
@@ -236,5 +242,6 @@ func TestSyncStore_ScopeBlock_Roundtrip_ZeroNextTrialAt(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.True(t, got[0].NextTrialAt.IsZero(), "zero trial timestamps must round-trip as a true zero time")
+	assert.True(t, got[0].PreserveUntil.IsZero(), "zero preserve deadlines must round-trip as a true zero time")
 	assert.Equal(t, original.TrialInterval, got[0].TrialInterval)
 }

@@ -74,9 +74,11 @@ subsystem. Typically 0-5 rows.
 CREATE TABLE scope_blocks (
     scope_key      TEXT PRIMARY KEY,
     issue_type     TEXT NOT NULL,
+    timing_source  TEXT NOT NULL,
     blocked_at     INTEGER NOT NULL,     -- unix nanos
     trial_interval INTEGER NOT NULL,     -- nanoseconds
     next_trial_at  INTEGER NOT NULL,     -- unix nanos
+    preserve_until INTEGER NOT NULL,     -- unix nanos, 0 when not preserved
     trial_count    INTEGER NOT NULL DEFAULT 0
 );
 ```
@@ -124,12 +126,13 @@ The execution layer relies on two explicit persisted models:
 
 - `sync_failures.failure_role` = `item`, `held`, `boundary`
 - `scope_blocks.timing_source` = `none`, `backoff`, `server_retry_after`
+- `scope_blocks.preserve_until` = bounded preserve deadline for scoped-failure-backed restart repair
 
 Those columns are important to execution correctness:
 
 - trial dispatch reads only `held` rows
 - permission and startup repair reason about `boundary` rows explicitly
-- restart logic preserves only server-timed throttle/service scopes
+- restart logic preserves only server-timed throttle/service scopes, but may keep scoped-failure-backed scopes while `preserve_until` is still active
 - watch-mode `activeScopes` is rebuilt from persisted scope rows and never becomes a peer source of truth
 
 ### Scope Escalation

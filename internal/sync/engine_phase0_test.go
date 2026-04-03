@@ -238,10 +238,9 @@ func TestPhase0_ExecutePlan_WaitsForDrainSideEffects(t *testing.T) {
 	}
 
 	report := &synctypes.SyncReport{}
-	done := make(chan struct{})
+	done := make(chan error, 1)
 	go func() {
-		runner.executePlan(t.Context(), plan, report, bl)
-		close(done)
+		done <- runner.executePlan(t.Context(), plan, report, bl)
 	}()
 
 	select {
@@ -251,7 +250,8 @@ func TestPhase0_ExecutePlan_WaitsForDrainSideEffects(t *testing.T) {
 	}
 
 	select {
-	case <-done:
+	case err := <-done:
+		require.NoError(t, err)
 		require.Fail(t, "executePlan returned before drain side effects finished")
 	case <-time.After(150 * time.Millisecond):
 	}
@@ -259,7 +259,8 @@ func TestPhase0_ExecutePlan_WaitsForDrainSideEffects(t *testing.T) {
 	close(checker.releaseCh)
 
 	select {
-	case <-done:
+	case err := <-done:
+		require.NoError(t, err)
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "executePlan did not finish after permission check released")
 	}
@@ -281,7 +282,7 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 	_ = done
 	rt := testWatchRuntime(t, eng)
 
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:           synctypes.SKService(),
 		IssueType:     synctypes.IssueServiceOutage,
 		BlockedAt:     eng.nowFunc(),
@@ -342,7 +343,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 		Size:     42,
 	}}, "", driveID))
 
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:           synctypes.SKThrottleAccount(),
 		IssueType:     synctypes.IssueRateLimited,
 		BlockedAt:     eng.nowFunc(),
@@ -440,7 +441,7 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 		ScopeKey:  scopeKey,
 		ItemID:    "private-item",
 	}, nil))
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:       scopeKey,
 		IssueType: synctypes.IssueLocalPermissionDenied,
 		BlockedAt: eng.nowFunc(),

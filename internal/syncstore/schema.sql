@@ -150,6 +150,7 @@ CREATE TABLE IF NOT EXISTS scope_blocks (
     blocked_at     INTEGER NOT NULL,
     trial_interval INTEGER NOT NULL,
     next_trial_at  INTEGER NOT NULL,
+    preserve_until INTEGER NOT NULL DEFAULT 0,
     trial_count    INTEGER NOT NULL DEFAULT 0
 );
 

@@ -594,7 +594,7 @@ func seedShortcutRemovalScopeBlocks(
 	}
 
 	for i := range blocks {
-		setTestScopeBlock(t, eng, blocks[i])
+		setTestScopeBlock(t, eng, &blocks[i])
 	}
 }
 

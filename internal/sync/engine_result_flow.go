@@ -14,6 +14,22 @@ type resultContext struct {
 	trialScopeKey synctypes.ScopeKey
 }
 
+type trialOutcome int
+
+const (
+	trialOutcomeRelease trialOutcome = iota
+	trialOutcomeExtend
+	trialOutcomePreserve
+	trialOutcomeShutdown
+	trialOutcomeFatal
+)
+
+type routeOutcome struct {
+	dispatched   []*synctypes.TrackedAction
+	terminate    bool
+	terminateErr error
+}
+
 // processWorkerResult replaces processWorkerResult + routeReadyActions with
 // failure-aware dependent dispatch.
 func (flow *engineFlow) processWorkerResult(
@@ -21,7 +37,7 @@ func (flow *engineFlow) processWorkerResult(
 	watch *watchRuntime,
 	r *synctypes.WorkerResult,
 	bl *synctypes.Baseline,
-) []*synctypes.TrackedAction {
+) routeOutcome {
 	if r.IsTrial && !r.TrialScopeKey.IsZero() {
 		return flow.processResult(ctx, watch, resultContext{
 			isTrial:       true,
@@ -38,37 +54,55 @@ func (flow *engineFlow) processResult(
 	resultCtx resultContext,
 	r *synctypes.WorkerResult,
 	bl *synctypes.Baseline,
-) []*synctypes.TrackedAction {
+) routeOutcome {
 	decision := classifyResult(r)
 	ready, _ := flow.depGraph.Complete(r.ActionID)
 
 	if resultCtx.isTrial {
-		return flow.processTrialDecision(ctx, watch, resultCtx.trialScopeKey, decision, ready, r)
+		return flow.processTrialDecision(ctx, watch, resultCtx.trialScopeKey, decision, ready, r, bl)
 	}
 
 	return flow.processNormalDecision(ctx, watch, decision, ready, r, bl)
 }
 
-// applyResultDecision handles per-class side effects after dependent routing.
-func (flow *engineFlow) applyResultDecision(
+func (flow *engineFlow) routeReadyForClass(
+	ctx context.Context,
+	watch *watchRuntime,
+	class resultClass,
+	ready []*synctypes.TrackedAction,
+	r *synctypes.WorkerResult,
+) []*synctypes.TrackedAction {
+	switch class {
+	case resultSuccess:
+		return flow.scopeController().admitReady(ctx, watch, ready)
+	case resultShutdown:
+		flow.scopeController().completeSubtree(ready)
+	case resultRequeue, resultScopeBlock, resultSkip, resultFatal:
+		flow.scopeController().cascadeFailAndComplete(ctx, ready, r)
+	}
+
+	return nil
+}
+
+func (flow *engineFlow) applySuccessEffects(ctx context.Context, watch *watchRuntime, r *synctypes.WorkerResult) {
+	flow.succeeded++
+	flow.clearFailureOnSuccess(ctx, r)
+	if watch != nil {
+		watch.scopeState.RecordSuccess(r)
+	}
+}
+
+// applyOrdinaryFailureEffects handles post-routing side effects for normal
+// worker failures. Trial results intentionally use separate scope-relative
+// policy so they do not accidentally mutate the original scope via generic
+// failure recording or scope detection.
+func (flow *engineFlow) applyOrdinaryFailureEffects(
 	ctx context.Context,
 	watch *watchRuntime,
 	decision ResultDecision,
 	r *synctypes.WorkerResult,
 	bl *synctypes.Baseline,
 ) {
-	switch decision.Class {
-	case resultSuccess:
-		if decision.RecordSuccess {
-			flow.succeeded++
-			flow.clearFailureOnSuccess(ctx, r)
-			if watch != nil {
-				watch.scopeState.RecordSuccess(r)
-			}
-		}
-	case resultSkip, resultShutdown, resultRequeue, resultScopeBlock, resultFatal:
-	}
-
 	if flow.scopeController().applyPermissionDecisionFlow(ctx, watch, decision, r, bl) {
 		flow.recordError(r)
 		return
@@ -93,17 +127,7 @@ func (flow *engineFlow) applyResultDecision(
 		watch.armRetryTimer(ctx)
 	}
 
-	if decision.Class != resultShutdown && decision.Class != resultSuccess {
-		flow.recordError(r)
-	}
-}
-
-// processTrialResult handles trial results using the engine-owned result flow.
-func (flow *engineFlow) processTrialResult(ctx context.Context, watch *watchRuntime, r *synctypes.WorkerResult) {
-	flow.processResult(ctx, watch, resultContext{
-		isTrial:       true,
-		trialScopeKey: r.TrialScopeKey,
-	}, r, nil)
+	flow.recordError(r)
 }
 
 func (flow *engineFlow) processNormalDecision(
@@ -113,21 +137,25 @@ func (flow *engineFlow) processNormalDecision(
 	ready []*synctypes.TrackedAction,
 	r *synctypes.WorkerResult,
 	bl *synctypes.Baseline,
-) []*synctypes.TrackedAction {
-	var dispatched []*synctypes.TrackedAction
+) routeOutcome {
+	outcome := routeOutcome{
+		dispatched: flow.routeReadyForClass(ctx, watch, decision.Class, ready, r),
+	}
 
 	switch decision.Class {
 	case resultSuccess:
-		dispatched = flow.scopeController().admitReady(ctx, watch, ready)
+		flow.applySuccessEffects(ctx, watch, r)
 	case resultShutdown:
-		flow.scopeController().completeSubtree(ready)
+		return outcome
 	case resultRequeue, resultScopeBlock, resultSkip, resultFatal:
-		flow.scopeController().cascadeFailAndComplete(ctx, ready, r)
+		flow.applyOrdinaryFailureEffects(ctx, watch, decision, r, bl)
+		if decision.Class == resultFatal {
+			outcome.terminate = true
+			outcome.terminateErr = fatalResultError(r)
+		}
 	}
 
-	flow.applyResultDecision(ctx, watch, decision, r, bl)
-
-	return dispatched
+	return outcome
 }
 
 func (flow *engineFlow) processTrialDecision(
@@ -137,35 +165,116 @@ func (flow *engineFlow) processTrialDecision(
 	decision ResultDecision,
 	ready []*synctypes.TrackedAction,
 	r *synctypes.WorkerResult,
-) []*synctypes.TrackedAction {
-	if decision.Class == resultSuccess {
+	bl *synctypes.Baseline,
+) routeOutcome {
+	outcome := routeOutcome{}
+
+	switch flow.evaluateTrialOutcome(trialScopeKey, decision, r) {
+	case trialOutcomeRelease:
+		flow.applySuccessEffects(ctx, watch, r)
 		if err := flow.scopeController().releaseScope(ctx, watch, trialScopeKey); err != nil {
-			flow.engine.logger.Warn("processTrialResult: failed to release scope",
+			flow.engine.logger.Warn("trial result: failed to release scope",
 				slog.String("scope_key", trialScopeKey.String()),
 				slog.String("error", err.Error()),
 			)
 		}
-		flow.succeeded++
-		if watch != nil {
-			watch.scopeState.RecordSuccess(r)
+		outcome.dispatched = flow.routeReadyForClass(ctx, watch, resultSuccess, ready, r)
+	case trialOutcomeShutdown:
+		flow.routeReadyForClass(ctx, watch, resultShutdown, ready, r)
+	case trialOutcomeExtend:
+		flow.routeReadyForClass(ctx, watch, resultRequeue, ready, r)
+		flow.rehomeHeldFailure(ctx, r, trialScopeKey)
+		flow.scopeController().extendScopeTrial(ctx, watch, trialScopeKey, r.RetryAfter)
+		flow.recordError(r)
+	case trialOutcomePreserve:
+		flow.routeReadyForClass(ctx, watch, resultRequeue, ready, r)
+		flow.scopeController().preserveScopeTrial(ctx, watch, trialScopeKey)
+		flow.applyTrialPreserveEffects(ctx, watch, decision, r, bl)
+		flow.recordError(r)
+	case trialOutcomeFatal:
+		flow.routeReadyForClass(ctx, watch, resultFatal, ready, r)
+		flow.applyFailureRecordMode(ctx, decision.RecordMode, r)
+		flow.recordError(r)
+		outcome.terminate = true
+		outcome.terminateErr = fatalResultError(r)
+	}
+
+	return outcome
+}
+
+func (flow *engineFlow) evaluateTrialOutcome(
+	trialScopeKey synctypes.ScopeKey,
+	decision ResultDecision,
+	r *synctypes.WorkerResult,
+) trialOutcome {
+	switch decision.Class {
+	case resultSuccess:
+		return trialOutcomeRelease
+	case resultRequeue, resultScopeBlock, resultSkip:
+		if flow.trialScopePersists(trialScopeKey, decision, r) {
+			return trialOutcomeExtend
 		}
-		return flow.scopeController().admitReady(ctx, watch, ready)
+		return trialOutcomePreserve
+	case resultShutdown:
+		return trialOutcomeShutdown
+	case resultFatal:
+		return trialOutcomeFatal
 	}
 
-	if decision.Class == resultShutdown {
-		flow.scopeController().completeSubtree(ready)
-		return nil
+	panic(fmt.Sprintf("unknown result class %d", decision.Class))
+}
+
+func (flow *engineFlow) trialScopePersists(
+	trialScopeKey synctypes.ScopeKey,
+	decision ResultDecision,
+	r *synctypes.WorkerResult,
+) bool {
+	switch trialScopeKey {
+	case synctypes.SKThrottleAccount():
+		return decision.Class == resultScopeBlock && decision.ScopeKey == synctypes.SKThrottleAccount()
+	case synctypes.SKService():
+		return r.HTTPStatus >= 500 && r.HTTPStatus < 600
+	case synctypes.SKDiskLocal():
+		return decision.Class == resultScopeBlock && decision.ScopeKey == synctypes.SKDiskLocal()
+	default:
+		return decision.Class == resultScopeBlock && decision.ScopeKey == trialScopeKey
+	}
+}
+
+func (flow *engineFlow) applyTrialPreserveEffects(
+	ctx context.Context,
+	watch *watchRuntime,
+	decision ResultDecision,
+	r *synctypes.WorkerResult,
+	bl *synctypes.Baseline,
+) {
+	if decision.PermissionFlow != permissionFlowNone {
+		if permDecision, handled := flow.scopeController().resolvePermissionDecision(ctx, decision, r, bl); handled {
+			if flow.scopeController().applyPermissionCheckDecision(ctx, watch, decision.PermissionFlow, permDecision) &&
+				permDecision.Kind == permissionCheckActivateBoundaryScope &&
+				permDecision.BoundaryPath != r.Path {
+				flow.rehomeHeldFailure(ctx, r, permDecision.ScopeBlock.Key)
+			}
+		}
+		return
 	}
 
-	flow.scopeController().extendScopeTrial(ctx, watch, trialScopeKey, r.RetryAfter)
-	flow.applyFailureRecordMode(ctx, decision.RecordMode, r)
-	flow.recordError(r)
-	flow.scopeController().cascadeFailAndComplete(ctx, ready, r)
-	if watch != nil {
-		watch.armRetryTimer(ctx)
+	if decision.Class == resultScopeBlock && decision.ScopeKey == synctypes.SKDiskLocal() {
+		flow.scopeController().applyScopeBlock(ctx, watch, synctypes.ScopeUpdateResult{
+			Block:     true,
+			ScopeKey:  decision.ScopeKey,
+			IssueType: decision.ScopeKey.IssueType(),
+		})
+		flow.rehomeHeldFailure(ctx, r, decision.ScopeKey)
+	}
+}
+
+func fatalResultError(r *synctypes.WorkerResult) error {
+	if r.Err != nil {
+		return fmt.Errorf("sync: unauthorized worker result for %s: %w", r.Path, r.Err)
 	}
 
-	return nil
+	return fmt.Errorf("sync: unauthorized worker result for %s", r.Path)
 }
 
 func (controller *scopeController) applyPermissionDecisionFlow(
@@ -175,30 +284,34 @@ func (controller *scopeController) applyPermissionDecisionFlow(
 	r *synctypes.WorkerResult,
 	bl *synctypes.Baseline,
 ) bool {
+	permDecision, handled := controller.resolvePermissionDecision(ctx, decision, r, bl)
+	if !handled {
+		return false
+	}
+
+	return controller.applyPermissionCheckDecision(ctx, watch, decision.PermissionFlow, permDecision)
+}
+
+func (controller *scopeController) resolvePermissionDecision(
+	ctx context.Context,
+	decision ResultDecision,
+	r *synctypes.WorkerResult,
+	bl *synctypes.Baseline,
+) (*PermissionCheckDecision, bool) {
 	flow := controller.flow
 
 	switch decision.PermissionFlow {
 	case permissionFlowNone:
-		return false
+		return nil, false
 	case permissionFlowRemote403:
-		if !flow.engine.permHandler.HasPermChecker() {
-			return false
+		if bl == nil || !flow.engine.permHandler.HasPermChecker() {
+			return nil, false
 		}
-		decision := flow.engine.permHandler.handle403(ctx, bl, r.Path, flow.getShortcuts())
-		return controller.applyPermissionCheckDecision(
-			ctx,
-			watch,
-			permissionFlowRemote403,
-			&decision,
-		)
+		permDecision := flow.engine.permHandler.handle403(ctx, bl, r.Path, flow.getShortcuts())
+		return &permDecision, true
 	case permissionFlowLocalPermission:
-		decision := flow.engine.permHandler.handleLocalPermission(ctx, r)
-		return controller.applyPermissionCheckDecision(
-			ctx,
-			watch,
-			permissionFlowLocalPermission,
-			&decision,
-		)
+		permDecision := flow.engine.permHandler.handleLocalPermission(ctx, r)
+		return &permDecision, true
 	default:
 		panic(fmt.Sprintf("unknown permission flow %d", decision.PermissionFlow))
 	}
