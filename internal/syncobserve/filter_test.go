@@ -40,6 +40,33 @@ func TestFullScan_ConfiguredFiltersExcludeConfiguredEntries(t *testing.T) {
 	assert.Empty(t, result.Skipped, "configured filters are silent exclusions, not actionable issues")
 }
 
+// Validates: R-2.4.6
+func TestFullScan_SkipSymlinksExcludesSymlinkEntries(t *testing.T) {
+	t.Parallel()
+
+	syncRoot := t.TempDir()
+	writeTestFile(t, syncRoot, "real.txt", "content")
+	writeTestFile(t, syncRoot, "real/nested.txt", "payload")
+
+	require.NoError(t, os.Symlink(filepath.Join(syncRoot, "real.txt"), filepath.Join(syncRoot, "link.txt")))
+	require.NoError(t, os.Symlink(filepath.Join(syncRoot, "real"), filepath.Join(syncRoot, "alias")))
+
+	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs.SetFilterConfig(synctypes.LocalFilterConfig{
+		SkipSymlinks: true,
+	})
+
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
+	require.NoError(t, err)
+
+	assert.NotNil(t, findEvent(result.Events, "real.txt"))
+	assert.NotNil(t, findEvent(result.Events, "real"))
+	assert.NotNil(t, findEvent(result.Events, "real/nested.txt"))
+	assert.Nil(t, findEvent(result.Events, "link.txt"))
+	assert.Nil(t, findEvent(result.Events, "alias"))
+	assert.Nil(t, findEvent(result.Events, "alias/nested.txt"))
+}
+
 // Validates: R-2.4.1, R-2.4.2, R-2.4.3
 func TestObserveSinglePathWithFilter_ConfiguredFiltersResolveSilently(t *testing.T) {
 	t.Parallel()
@@ -75,6 +102,29 @@ func TestObserveSinglePathWithFilter_ConfiguredFiltersResolveSilently(t *testing
 	}
 }
 
+// Validates: R-2.4.6
+func TestObserveSinglePathWithFilter_SkipSymlinksResolvesSilently(t *testing.T) {
+	t.Parallel()
+
+	syncRoot := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "real.txt"), []byte("payload"), 0o600))
+	require.NoError(t, os.Symlink(filepath.Join(syncRoot, "real.txt"), filepath.Join(syncRoot, "link.txt")))
+
+	result, err := ObserveSinglePathWithFilter(
+		nil,
+		mustOpenSyncTree(t, syncRoot),
+		"link.txt",
+		nil,
+		time.Now().UnixNano(),
+		nil,
+		synctypes.LocalFilterConfig{SkipSymlinks: true},
+	)
+	require.NoError(t, err)
+	assert.Nil(t, result.Event)
+	assert.Nil(t, result.Skipped)
+	assert.True(t, result.Resolved)
+}
+
 // Validates: R-2.4.1, R-2.4.2
 func TestAddWatchesRecursive_ConfiguredDirectoryFiltersSkipWatchedSubtrees(t *testing.T) {
 	t.Parallel()
@@ -103,6 +153,44 @@ func TestAddWatchesRecursive_ConfiguredDirectoryFiltersSkipWatchedSubtrees(t *te
 	assert.True(t, tracker.addedPaths[filepath.Join(syncRoot, "docs")], "non-filtered directories should be watched")
 	assert.False(t, tracker.addedPaths[filepath.Join(syncRoot, ".git")], "dotfile directories should be skipped by watch setup")
 	assert.False(t, tracker.addedPaths[filepath.Join(syncRoot, "vendor")], "configured skipped directories should be skipped by watch setup")
+}
+
+// Validates: R-2.4.6
+func TestAddWatchesRecursive_SkipSymlinksControlsSymlinkedDirectories(t *testing.T) {
+	t.Parallel()
+
+	syncRoot := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, "real"), 0o700))
+	require.NoError(t, os.Symlink(filepath.Join(syncRoot, "real"), filepath.Join(syncRoot, "alias")))
+
+	testCases := []struct {
+		name          string
+		skipSymlinks  bool
+		expectWatched bool
+	}{
+		{name: "default follows", skipSymlinks: false, expectWatched: true},
+		{name: "configured skip", skipSymlinks: true, expectWatched: false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+			obs.SetFilterConfig(synctypes.LocalFilterConfig{
+				SkipSymlinks: tc.skipSymlinks,
+			})
+
+			tracker := &addTrackingWatcher{
+				events:     make(chan fsnotify.Event, 10),
+				errs:       make(chan error, 10),
+				addedPaths: make(map[string]bool),
+			}
+
+			err := obs.AddWatchesRecursive(context.Background(), tracker, mustOpenSyncTree(t, syncRoot))
+			require.NoError(t, err)
+
+			assert.Equal(t, tc.expectWatched, tracker.addedPaths[filepath.Join(syncRoot, "alias")])
+		})
+	}
 }
 
 // Validates: R-2.4.3

@@ -13,6 +13,7 @@ import (
 // rewrite remote observation semantics.
 type LocalFilterConfig struct {
 	SkipDotfiles bool
+	SkipSymlinks bool
 	SkipDirs     []string
 	SkipFiles    []string
 }

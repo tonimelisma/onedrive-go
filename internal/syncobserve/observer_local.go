@@ -16,9 +16,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
-	"path/filepath"
 	"sync/atomic"
 	"time"
 
@@ -193,6 +191,7 @@ func (o *LocalObserver) SetSkippedChannel(ch chan<- []synctypes.SkippedItem) {
 func (o *LocalObserver) SetFilterConfig(cfg synctypes.LocalFilterConfig) {
 	o.filterConfig = synctypes.LocalFilterConfig{
 		SkipDotfiles: cfg.SkipDotfiles,
+		SkipSymlinks: cfg.SkipSymlinks,
 		SkipDirs:     append([]string(nil), cfg.SkipDirs...),
 		SkipFiles:    append([]string(nil), cfg.SkipFiles...),
 	}
@@ -342,83 +341,19 @@ func (o *LocalObserver) cancelPendingTimers() {
 
 // AddWatchesRecursive walks the sync root and adds a watch on every directory.
 func (o *LocalObserver) AddWatchesRecursive(ctx context.Context, watcher FsWatcher, tree *synctree.Root) error {
-	var watched, failed int
 	syncRoot := tree.Path()
-
-	err := tree.WalkDir(func(fsPath string, d fs.DirEntry, walkErr error) error {
-		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("watch setup context: %w", err)
-		}
-
-		if walkErr != nil {
-			o.Logger.Warn("walk error during watch setup",
-				slog.String("path", fsPath), slog.String("error", walkErr.Error()))
-
-			return SkipEntry(d)
-		}
-
-		if !d.IsDir() {
-			return nil
-		}
-
-		// Symlinked directories cannot be reliably watched (the watcher
-		// follows the real path, not the symlink) and are excluded from
-		// sync. Log a warning so the user knows why the directory is
-		// skipped (B-120).
-		if d.Type()&fs.ModeSymlink != 0 {
-			o.Logger.Warn("skipping symlinked directory in watch setup",
-				slog.String("path", fsPath))
-
-			return filepath.SkipDir
-		}
-
-		// Unified observation filter for directory names. NFC-normalize to match
-		// the convention used by scanner and watch handlers.
-		name := nfcNormalize(d.Name())
-		if fsPath != syncRoot {
-			relPath, relErr := tree.Rel(fsPath)
-			if relErr != nil {
-				o.Logger.Warn("failed to compute relative path during watch setup",
-					slog.String("path", fsPath), slog.String("error", relErr.Error()))
-				return filepath.SkipDir
-			}
-
-			dbRelPath := nfcNormalize(filepath.ToSlash(relPath))
-
-			if shouldObserveWithFilter(name, dbRelPath, observedKindDir, o.filterConfig) != nil {
-				return filepath.SkipDir
-			}
-		}
-
-		if addErr := watcher.Add(fsPath); addErr != nil {
-			if IsWatchLimitError(addErr) {
-				o.Logger.Error("inotify watch limit exhausted",
-					slog.String("path", fsPath),
-					slog.Int("watches_added", watched),
-				)
-
-				return synctypes.ErrWatchLimitExhausted
-			}
-
-			failed++
-			o.Logger.Warn("failed to add watch",
-				slog.String("path", fsPath), slog.String("error", addErr.Error()))
-		} else {
-			watched++
-		}
-
-		return nil
-	})
+	counts := &watchSetupCounts{}
+	err := o.addObservedDirWatches(ctx, watcher, syncRoot, ".", counts, make(map[string]struct{}))
 
 	// Use Info when failures occurred (operator needs to know), Debug otherwise.
 	logLevel := slog.LevelDebug
-	if failed > 0 {
+	if counts.failed > 0 {
 		logLevel = slog.LevelInfo
 	}
 
 	o.Logger.Log(ctx, logLevel, "watch setup complete",
-		slog.Int("watches_added", watched),
-		slog.Int("watches_failed", failed),
+		slog.Int("watches_added", counts.watched),
+		slog.Int("watches_failed", counts.failed),
 	)
 
 	if err != nil {

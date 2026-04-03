@@ -108,9 +108,8 @@ func TestWatch_DeleteDirectoryRemovesWatch(t *testing.T) {
 	require.True(t, ev.IsDeleted)
 }
 
-// TestAddWatchesRecursive_SkipsSymlinks verifies that symlinked directories
-// are skipped during watch setup with a Warn log (B-120).
-func TestAddWatchesRecursive_SkipsSymlinks(t *testing.T) {
+// Validates: R-2.4.6
+func TestAddWatchesRecursive_FollowsSymlinksByDefault(t *testing.T) {
 	root := t.TempDir()
 
 	// Create a real directory and a symlink to it.
@@ -132,10 +131,11 @@ func TestAddWatchesRecursive_SkipsSymlinks(t *testing.T) {
 	err := obs.AddWatchesRecursive(t.Context(), tracker, mustOpenSyncTree(t, root))
 	require.NoError(t, err)
 
-	// The root and realdir should be watched, but NOT the symlink.
+	// The root, realdir, and symlink alias should all be watched when
+	// skip_symlinks remains at its default false value.
 	assert.True(t, tracker.addedPaths[root], "expected root to be watched")
 	assert.True(t, tracker.addedPaths[realDir], "expected realdir to be watched")
-	assert.False(t, tracker.addedPaths[symlinkDir], "symlinked directory should NOT be watched")
+	assert.True(t, tracker.addedPaths[symlinkDir], "symlinked directory should be watched by default")
 }
 
 // addTrackingWatcher implements FsWatcher and records which paths are added.

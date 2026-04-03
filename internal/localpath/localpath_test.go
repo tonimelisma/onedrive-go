@@ -113,6 +113,16 @@ func TestSymlinkTargetsBehaveLikeOrdinaryPaths(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, info.IsDir())
 
+	linkInfo, err := Lstat(fileLink)
+	require.NoError(t, err)
+	assert.NotZero(t, linkInfo.Mode()&os.ModeSymlink)
+
+	resolvedDir, err := EvalSymlinks(dirLink)
+	require.NoError(t, err)
+	expectedResolvedDir, err := filepath.EvalSymlinks(targetDir)
+	require.NoError(t, err)
+	assert.Equal(t, expectedResolvedDir, resolvedDir)
+
 	entries, err := ReadDir(dirLink)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)

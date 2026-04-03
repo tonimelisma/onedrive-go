@@ -49,6 +49,7 @@ func newSyncEngine(
 		Logger:    logger,
 		LocalFilter: synctypes.LocalFilterConfig{
 			SkipDotfiles: resolved.SkipDotfiles,
+			SkipSymlinks: resolved.SkipSymlinks,
 			SkipDirs:     resolved.SkipDirs,
 			SkipFiles:    resolved.SkipFiles,
 		},

@@ -65,13 +65,17 @@ func ObserveSinglePathWithFilter(
 		return SinglePathObservation{}, fmt.Errorf("observe single path %s: resolve: %w", path, err)
 	}
 
-	info, err := syncTree.Stat(path)
+	info, isSymlink, err := statObservedPath(absPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) || os.IsNotExist(err) {
 			return SinglePathObservation{Resolved: true}, nil
 		}
 
 		return SinglePathObservation{}, fmt.Errorf("observe single path %s: stat: %w", path, err)
+	}
+
+	if shouldSkipObservedSymlink(isSymlink, filter) {
+		return SinglePathObservation{Resolved: true}, nil
 	}
 
 	if skip := shouldObserveWithFilter(name, path, infoKind(info), filter); skip != nil {
