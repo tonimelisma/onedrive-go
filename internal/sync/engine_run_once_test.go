@@ -631,6 +631,59 @@ func TestRunOnce_CrashRecovery_ResetsInProgressStates(t *testing.T) {
 	assert.Equal(t, synctypes.SyncStatusDeleted, delStatus, "deleting with no local file should be marked deleted")
 }
 
+// Validates: R-2.10.41
+func TestRunOnce_CrashRecovery_MixedDeletingCandidates(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	writeLocalFile(t, syncRoot, "exists.txt", "still here")
+
+	now := time.Now().Unix()
+	_, err := eng.baseline.DB().ExecContext(ctx, `
+		INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		VALUES (?, 'gone', '/gone.txt', 'file', 'deleting', ?),
+		       (?, 'exists', '/exists.txt', 'file', 'deleting', ?),
+		       (?, 'bad', '/../bad.txt', 'file', 'deleting', ?)`,
+		engineTestDriveID, now,
+		engineTestDriveID, now,
+		engineTestDriveID, now,
+	)
+	require.NoError(t, err, "seed crash-recovery rows")
+
+	_, runErr := eng.RunOnce(ctx, synctypes.SyncBidirectional, synctypes.RunOpts{})
+	require.NoError(t, runErr, "RunOnce")
+
+	var goneStatus synctypes.SyncStatus
+	err = eng.baseline.DB().QueryRowContext(ctx,
+		`SELECT sync_status FROM remote_state WHERE item_id = 'gone'`).Scan(&goneStatus)
+	require.NoError(t, err)
+	assert.Equal(t, synctypes.SyncStatusDeleted, goneStatus)
+
+	var existsStatus synctypes.SyncStatus
+	err = eng.baseline.DB().QueryRowContext(ctx,
+		`SELECT sync_status FROM remote_state WHERE item_id = 'exists'`).Scan(&existsStatus)
+	require.NoError(t, err)
+	assert.Equal(t, synctypes.SyncStatusPendingDelete, existsStatus)
+
+	var badStatus synctypes.SyncStatus
+	err = eng.baseline.DB().QueryRowContext(ctx,
+		`SELECT sync_status FROM remote_state WHERE item_id = 'bad'`).Scan(&badStatus)
+	require.NoError(t, err)
+	assert.Equal(t, synctypes.SyncStatusPendingDelete, badStatus)
+}
+
 func TestResolveSafetyConfig_Default(t *testing.T) {
 	t.Parallel()
 

@@ -340,6 +340,45 @@ func TestDevtoolBinary_WorktreeBootstrapCopiesAndSymlinks(t *testing.T) {
 }
 
 // Validates: R-6.2.1
+func TestDevtoolBinary_WorktreeBootstrapHonorsExplicitSourceRoot(t *testing.T) {
+	binPath := buildDevtoolBinary(t)
+
+	cwdRoot := t.TempDir()
+	sourceRoot := t.TempDir()
+	targetRoot := t.TempDir()
+
+	require.NoError(t, os.WriteFile(filepath.Join(cwdRoot, ".worktreeinclude"), []byte(".env\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(cwdRoot, ".env"), []byte("TOKEN=wrong\n"), 0o600))
+
+	require.NoError(t, os.WriteFile(filepath.Join(sourceRoot, ".worktreeinclude"), []byte("@.testdata\n.env\n"), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(sourceRoot, ".testdata"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(sourceRoot, ".testdata", "config.toml"), []byte("x"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(sourceRoot, ".env"), []byte("TOKEN=right\n"), 0o600))
+
+	stdout, stderr, err := runBinary(
+		t,
+		cwdRoot,
+		binPath,
+		"worktree",
+		"bootstrap",
+		"--source-root",
+		sourceRoot,
+		"--path",
+		targetRoot,
+	)
+	require.NoError(t, err, stdout+stderr)
+
+	//nolint:gosec // test reads a temp file created under the test-owned target root.
+	envData, readErr := os.ReadFile(filepath.Join(targetRoot, ".env"))
+	require.NoError(t, readErr)
+	assert.Equal(t, "TOKEN=right\n", string(envData))
+
+	linkTarget, linkErr := os.Readlink(filepath.Join(targetRoot, ".testdata"))
+	require.NoError(t, linkErr)
+	assert.Equal(t, filepath.Join(sourceRoot, ".testdata"), linkTarget)
+}
+
+// Validates: R-6.2.1
 func TestDevtoolBinary_WorktreeAddCreatesBootstrappedWorktree(t *testing.T) {
 	binPath := buildDevtoolBinary(t)
 

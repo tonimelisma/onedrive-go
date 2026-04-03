@@ -2557,3 +2557,72 @@ func TestBootstrapSync_WithChanges(t *testing.T) {
 	// syncdispatch.DepGraph should be empty — all actions completed.
 	assert.Equal(t, 0, rt.depGraph.InFlightCount())
 }
+
+// Validates: R-2.10.41
+func TestBootstrapSync_CrashRecovery_MixedDeletingCandidates(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	writeLocalFile(t, syncRoot, "exists.txt", "still here")
+
+	now := time.Now().Unix()
+	_, err := eng.baseline.DB().ExecContext(ctx, `
+		INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		VALUES (?, 'gone', '/gone.txt', 'file', 'deleting', ?),
+		       (?, 'exists', '/exists.txt', 'file', 'deleting', ?),
+		       (?, 'bad', '/../bad.txt', 'file', 'deleting', ?)`,
+		engineTestDriveID, now,
+		engineTestDriveID, now,
+		engineTestDriveID, now,
+	)
+	require.NoError(t, err, "seed crash-recovery rows")
+
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	rt.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
+
+	neverDone := make(chan struct{})
+	pool := syncexec.NewWorkerPool(eng.execCfg, rt.readyCh, neverDone, eng.baseline, eng.logger, 1024)
+	pool.Start(ctx, 1)
+	defer pool.Stop()
+
+	pipe := &watchPipeline{
+		safety:  synctypes.DefaultSafetyConfig(),
+		pool:    pool,
+		results: pool.Results(),
+		mode:    synctypes.SyncBidirectional,
+	}
+
+	err = bootstrapSyncForTest(t, eng, ctx, synctypes.SyncBidirectional, pipe)
+	require.NoError(t, err)
+
+	var goneStatus synctypes.SyncStatus
+	err = eng.baseline.DB().QueryRowContext(ctx,
+		`SELECT sync_status FROM remote_state WHERE item_id = 'gone'`).Scan(&goneStatus)
+	require.NoError(t, err)
+	assert.Equal(t, synctypes.SyncStatusDeleted, goneStatus)
+
+	var existsStatus synctypes.SyncStatus
+	err = eng.baseline.DB().QueryRowContext(ctx,
+		`SELECT sync_status FROM remote_state WHERE item_id = 'exists'`).Scan(&existsStatus)
+	require.NoError(t, err)
+	assert.Equal(t, synctypes.SyncStatusPendingDelete, existsStatus)
+
+	var badStatus synctypes.SyncStatus
+	err = eng.baseline.DB().QueryRowContext(ctx,
+		`SELECT sync_status FROM remote_state WHERE item_id = 'bad'`).Scan(&badStatus)
+	require.NoError(t, err)
+	assert.Equal(t, synctypes.SyncStatusPendingDelete, badStatus)
+}

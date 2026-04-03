@@ -237,6 +237,8 @@ Implements: R-2.10.41 [verified]
 
 [`internal/syncrecovery/recovery.go`](/Users/tonimelisma/Development/onedrive-go/internal/syncrecovery/recovery.go) handles crash recovery: on startup, it resets items stuck in `downloading`/`deleting` state to `pending_download`, `pending_delete`, or `deleted`. The sync tree decides whether a local delete completed before the crash; the store applies only the durable state transitions. One-shot mode does this in `prepareRunOnceState`; watch mode does it during watch bootstrap before observation starts. Both modes therefore rediscover crash-recovery items without relying on `RunWatch` calling `RunOnce`.
 
+Engine-level startup characterization covers both one-shot startup and watch bootstrap with mixed deleting candidate sets: missing local paths finalize as `deleted`, existing local paths return to `pending_delete`, and malformed or unreadable local paths fail open to `pending_delete` instead of being treated as successful deletes.
+
 Implements: R-2.5.4 [verified]
 
 After resetting `remote_state`, crash recovery also creates
