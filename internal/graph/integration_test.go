@@ -212,6 +212,30 @@ func TestIntegration_Drives(t *testing.T) {
 	}
 }
 
+// Validates: R-6.7.11
+func TestIntegration_Drives_PersonalAccountFiltersPhantomDrives(t *testing.T) {
+	if !strings.HasPrefix(os.Getenv(driveEnvVar), "personal:") {
+		t.Skip("skipping: test requires a Personal account")
+	}
+
+	client := newIntegrationClient(t)
+
+	ctx, cancel := context.WithTimeout(t.Context(), integrationTimeout)
+	defer cancel()
+
+	drives, err := client.Drives(ctx)
+	require.NoError(t, err)
+
+	personalCount := 0
+	for _, drive := range drives {
+		if drive.DriveType == driveid.DriveTypePersonal {
+			personalCount++
+		}
+	}
+
+	assert.Equal(t, 1, personalCount, "personal drive discovery should return exactly one authoritative personal drive")
+}
+
 // TestIntegration_SharedWithMe verifies SharedWithMe() returns without error.
 // The result may be empty if no items have been shared with the test account.
 func TestIntegration_SharedWithMe(t *testing.T) {

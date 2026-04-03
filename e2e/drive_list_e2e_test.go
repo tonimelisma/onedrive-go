@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -145,6 +146,50 @@ func TestE2E_DriveList_AccountsNoDrives(t *testing.T) {
 		"should show footer with add command hint")
 }
 
+// Validates: R-6.7.11
+func TestE2E_DriveList_PersonalAccountDoesNotDuplicateCanonicalDrive(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
+	if !strings.HasPrefix(drive, "personal:") {
+		t.Skip("skipping: test requires a Personal account")
+	}
+
+	perTestData := t.TempDir()
+	perTestHome := t.TempDir()
+
+	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
+	require.NoError(t, os.MkdirAll(perTestDataDir, 0o700))
+	copyTokenFile(t, testDataDir, perTestDataDir)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte("# no drives configured\n"), 0o600))
+
+	env := map[string]string{
+		"XDG_DATA_HOME": perTestData,
+		"HOME":          perTestHome,
+	}
+
+	stdout, _, err := runCLICore(t, cfgPath, env, "", "drive", "list", "--json")
+	require.NoError(t, err, "drive list --json should succeed\nstdout: %s", stdout)
+
+	var result struct {
+		Available []struct {
+			CanonicalID string `json:"canonical_id"`
+		} `json:"available"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &result))
+
+	matchCount := 0
+	for _, entry := range result.Available {
+		if entry.CanonicalID == drive {
+			matchCount++
+		}
+	}
+
+	assert.Equal(t, 1, matchCount, "personal drive discovery should expose the canonical personal drive only once")
+}
+
 // Validates: R-3.3.2
 // TestE2E_DriveList_ConfiguredNoSyncDir verifies that a configured drive
 // without sync_dir still appears in the output with "(not set)".
@@ -271,4 +316,36 @@ func TestE2E_Whoami_ConfigTolerance(t *testing.T) {
 	// Whoami output should contain user/account information.
 	assert.NotEmpty(t, stdout,
 		"whoami should produce output despite unknown config key")
+}
+
+// Validates: R-6.7.11
+func TestE2E_Whoami_PersonalAccountShowsSinglePersonalDrive(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
+	if !strings.HasPrefix(drive, "personal:") {
+		t.Skip("skipping: test requires a Personal account")
+	}
+
+	syncDir := t.TempDir()
+	cfgPath, env := writeSyncConfig(t, syncDir)
+
+	stdout, _, err := runCLICore(t, cfgPath, env, "", "whoami", "--json")
+	require.NoError(t, err, "whoami --json should succeed\nstdout: %s", stdout)
+
+	var result struct {
+		Drives []struct {
+			DriveType string `json:"drive_type"`
+		} `json:"drives"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &result))
+
+	personalCount := 0
+	for _, driveInfo := range result.Drives {
+		if driveInfo.DriveType == "personal" {
+			personalCount++
+		}
+	}
+
+	assert.Equal(t, 1, personalCount, "whoami should show exactly one personal drive for Personal accounts")
 }

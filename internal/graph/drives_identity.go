@@ -46,7 +46,12 @@ func (c *Client) Drives(ctx context.Context) ([]Drive, error) {
 		policy: c.driveDiscoveryPolicy,
 		match:  isTransientDrivesDiscoveryError,
 	}, func() ([]Drive, error) {
-		return c.drivesList(ctx)
+		drives, err := c.drivesList(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		return c.normalizeDrives(ctx, drives)
 	})
 }
 
@@ -73,6 +78,63 @@ func (c *Client) drivesList(ctx context.Context) ([]Drive, error) {
 	)
 
 	return drives, nil
+}
+
+// normalizeDrives applies Graph discovery quirks after a successful /me/drives
+// response. Personal accounts expose hidden Photos/album system drives through
+// /me/drives; they look like normal personal drives but fail when used. The
+// only authoritative primary-drive source for Personal accounts is /me/drive,
+// so replace every personal entry with that single drive before returning.
+func (c *Client) normalizeDrives(ctx context.Context, drives []Drive) ([]Drive, error) {
+	if !hasPersonalDrive(drives) {
+		return drives, nil
+	}
+
+	primary, err := c.PrimaryDrive(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("fetching primary drive: %w", err)
+	}
+
+	normalized := replacePersonalDrives(drives, *primary)
+
+	c.logger.Info("normalized personal drive discovery",
+		slog.Int("raw_count", len(drives)),
+		slog.Int("normalized_count", len(normalized)),
+		slog.String("primary_drive_id", primary.ID.String()),
+	)
+
+	return normalized, nil
+}
+
+func hasPersonalDrive(drives []Drive) bool {
+	for _, drive := range drives {
+		if drive.DriveType == driveid.DriveTypePersonal {
+			return true
+		}
+	}
+
+	return false
+}
+
+func replacePersonalDrives(drives []Drive, primary Drive) []Drive {
+	normalized := make([]Drive, 0, len(drives))
+	insertedPrimary := false
+
+	for _, drive := range drives {
+		if drive.DriveType != driveid.DriveTypePersonal {
+			normalized = append(normalized, drive)
+			continue
+		}
+
+		if insertedPrimary {
+			continue
+		}
+
+		normalized = append(normalized, primary)
+		insertedPrimary = true
+	}
+
+	return normalized
 }
 
 // PrimaryDrive returns the authenticated user's primary OneDrive via GET /me/drive.

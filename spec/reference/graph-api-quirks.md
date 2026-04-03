@@ -80,6 +80,11 @@ Mitigation requires both a zero-event token guard (don't advance token on empty 
 
 Every Personal account has 2-3 hidden system drives (face crops, albums) created by Microsoft for the Photos app. They report `driveType: "personal"` and share quota numbers with the real OneDrive, but return HTTP 400 `ObjectHandle is Invalid` when accessed. `GET /me/drive` (singular) returns the real drive. `GET /me/drives` (plural) returns all drives in non-deterministic order.
 
+Runtime policy:
+- Authentication/bootstrap uses `GET /me/drive` directly for the primary drive.
+- General drive discovery still starts with `GET /me/drives` so business and document-library entries are preserved, but any returned personal entries are replaced with the single authoritative `GET /me/drive` result before the list reaches callers.
+- The client does not currently synthesize a missing personal drive if `/me/drives` omits it entirely; that would require repo-local evidence before adding another normalization rule.
+
 ## HTTP Protocol Violations
 
 ### Transient 404 on Valid Resources

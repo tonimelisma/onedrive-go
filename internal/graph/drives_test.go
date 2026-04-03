@@ -12,6 +12,11 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
+const (
+	testMeDrivesPath = "/me/drives"
+	testMeDrivePath  = "/me/drive"
+)
+
 func TestMe_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
@@ -73,42 +78,63 @@ func TestMe_Error(t *testing.T) {
 func TestDrives_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
-		assert.Equal(t, "/me/drives", r.URL.Path)
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		writeTestResponse(t, w, `{
-			"value": [
-				{
-					"id": "drive-1",
-					"name": "OneDrive",
-					"driveType": "personal",
-					"owner": {
-						"user": {
-							"displayName": "Test User"
+		switch r.URL.Path {
+		case testMeDrivesPath:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			writeTestResponse(t, w, `{
+				"value": [
+					{
+						"id": "drive-1",
+						"name": "OneDrive",
+						"driveType": "personal",
+						"owner": {
+							"user": {
+								"displayName": "Test User"
+							}
+						},
+						"quota": {
+							"used": 1073741824,
+							"total": 5368709120
 						}
 					},
-					"quota": {
-						"used": 1073741824,
-						"total": 5368709120
+					{
+						"id": "drive-2",
+						"name": "SharePoint Docs",
+						"driveType": "documentLibrary",
+						"owner": {
+							"user": {
+								"displayName": "SharePoint"
+							}
+						},
+						"quota": {
+							"used": 524288,
+							"total": 1099511627776
+						}
+					}
+				]
+			}`)
+		case testMeDrivePath:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			writeTestResponse(t, w, `{
+				"id": "drive-1",
+				"name": "OneDrive",
+				"driveType": "personal",
+				"owner": {
+					"user": {
+						"displayName": "Test User",
+						"email": "test@example.com"
 					}
 				},
-				{
-					"id": "drive-2",
-					"name": "SharePoint Docs",
-					"driveType": "documentLibrary",
-					"owner": {
-						"user": {
-							"displayName": "SharePoint"
-						}
-					},
-					"quota": {
-						"used": 524288,
-						"total": 1099511627776
-					}
+				"quota": {
+					"used": 1073741824,
+					"total": 5368709120
 				}
-			]
-		}`)
+			}`)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
 	}))
 	defer srv.Close()
 
@@ -122,6 +148,7 @@ func TestDrives_Success(t *testing.T) {
 	assert.Equal(t, "OneDrive", drives[0].Name)
 	assert.Equal(t, "personal", drives[0].DriveType)
 	assert.Equal(t, "Test User", drives[0].OwnerName)
+	assert.Equal(t, "test@example.com", drives[0].OwnerEmail)
 	assert.Equal(t, int64(1073741824), drives[0].QuotaUsed)
 	assert.Equal(t, int64(5368709120), drives[0].QuotaTotal)
 
@@ -131,6 +158,154 @@ func TestDrives_Success(t *testing.T) {
 	assert.Equal(t, "SharePoint", drives[1].OwnerName)
 	assert.Equal(t, int64(524288), drives[1].QuotaUsed)
 	assert.Equal(t, int64(1099511627776), drives[1].QuotaTotal)
+}
+
+// Validates: R-6.7.11
+func TestDrives_NormalizesPersonalPhantomDrives(t *testing.T) {
+	var primaryCalls int
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case testMeDrivesPath:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			writeTestResponse(t, w, `{
+				"value": [
+					{
+						"id": "phantom-1",
+						"name": "Face Crop Cache",
+						"driveType": "personal"
+					},
+					{
+						"id": "real-drive-from-list",
+						"name": "OneDrive",
+						"driveType": "personal"
+					},
+					{
+						"id": "phantom-2",
+						"name": "Albums",
+						"driveType": "personal"
+					},
+					{
+						"id": "sharepoint-1",
+						"name": "Marketing",
+						"driveType": "documentLibrary"
+					}
+				]
+			}`)
+		case testMeDrivePath:
+			primaryCalls++
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			writeTestResponse(t, w, `{
+				"id": "primary-drive",
+				"name": "OneDrive",
+				"driveType": "personal",
+				"owner": {
+					"user": {
+						"displayName": "Test User",
+						"email": "test@outlook.com"
+					}
+				}
+			}`)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	drives, err := client.Drives(t.Context())
+	require.NoError(t, err)
+
+	require.Len(t, drives, 2)
+	assert.Equal(t, 1, primaryCalls)
+	assert.Equal(t, driveid.New("primary-drive"), drives[0].ID)
+	assert.Equal(t, "personal", drives[0].DriveType)
+	assert.Equal(t, "Test User", drives[0].OwnerName)
+	assert.Equal(t, "test@outlook.com", drives[0].OwnerEmail)
+	assert.Equal(t, driveid.New("sharepoint-1"), drives[1].ID)
+	assert.Equal(t, "documentLibrary", drives[1].DriveType)
+}
+
+// Validates: R-6.7.11
+func TestDrives_NoPersonalDriveSkipsPrimaryLookup(t *testing.T) {
+	var primaryCalls int
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case testMeDrivesPath:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			writeTestResponse(t, w, `{
+				"value": [
+					{
+						"id": "biz-1",
+						"name": "Business",
+						"driveType": "business"
+					},
+					{
+						"id": "sharepoint-1",
+						"name": "Marketing",
+						"driveType": "documentLibrary"
+					}
+				]
+			}`)
+		case testMeDrivePath:
+			primaryCalls++
+			t.Fatalf("unexpected primary drive lookup")
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	drives, err := client.Drives(t.Context())
+	require.NoError(t, err)
+
+	require.Len(t, drives, 2)
+	assert.Equal(t, 0, primaryCalls)
+	assert.Equal(t, "business", drives[0].DriveType)
+	assert.Equal(t, "documentLibrary", drives[1].DriveType)
+}
+
+// Validates: R-6.7.11
+func TestDrives_PersonalNormalizationPropagatesPrimaryDriveError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/me/drives":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			writeTestResponse(t, w, `{
+				"value": [
+					{
+						"id": "phantom-1",
+						"name": "Face Crop Cache",
+						"driveType": "personal"
+					}
+				]
+			}`)
+		case "/me/drive":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			writeTestResponse(t, w, `{
+				"error": {
+					"code": "generalException",
+					"message": "primary drive unavailable"
+				}
+			}`)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.Drives(t.Context())
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrServerError)
+	assert.Contains(t, err.Error(), "fetching primary drive")
 }
 
 func TestDrives_Empty(t *testing.T) {
@@ -536,19 +711,28 @@ func TestDrives_Transient403_Recovers(t *testing.T) {
 	// Microsoft Graph occasionally returns transient 403 on /me/drives
 	// during token propagation. Drives() should retry and succeed.
 	var attempts int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		attempts++
-		if attempts <= 2 {
-			w.Header().Set("request-id", fmt.Sprintf("req-403-%d", attempts))
-			w.WriteHeader(http.StatusForbidden)
-			writeTestResponse(t, w, `{"error":{"code":"accessDenied","message":"Access denied"}}`)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case testMeDrivesPath:
+			attempts++
+			if attempts <= 2 {
+				w.Header().Set("request-id", fmt.Sprintf("req-403-%d", attempts))
+				w.WriteHeader(http.StatusForbidden)
+				writeTestResponse(t, w, `{"error":{"code":"accessDenied","message":"Access denied"}}`)
 
-			return
+				return
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			writeTestResponse(t, w, `{"value": [{"id": "drive-1", "name": "OneDrive", "driveType": "personal"}]}`)
+		case testMeDrivePath:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			writeTestResponse(t, w, `{"id": "drive-1", "name": "OneDrive", "driveType": "personal"}`)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		writeTestResponse(t, w, `{"value": [{"id": "drive-1", "name": "OneDrive", "driveType": "personal"}]}`)
 	}))
 	defer srv.Close()
 
@@ -625,11 +809,28 @@ func TestDrives_NonRetryableErrorsDoNotRetry(t *testing.T) {
 }
 
 func TestToDrive_OwnerEmail(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		writeTestResponse(t, w, `{
-			"value": [{
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case testMeDrivesPath:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			writeTestResponse(t, w, `{
+				"value": [{
+					"id": "drive-owner-email",
+					"name": "Shared Drive",
+					"driveType": "personal",
+					"owner": {
+						"user": {
+							"displayName": "Alice",
+							"email": "alice@contoso.com"
+						}
+					}
+				}]
+			}`)
+		case testMeDrivePath:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			writeTestResponse(t, w, `{
 				"id": "drive-owner-email",
 				"name": "Shared Drive",
 				"driveType": "personal",
@@ -639,8 +840,10 @@ func TestToDrive_OwnerEmail(t *testing.T) {
 						"email": "alice@contoso.com"
 					}
 				}
-			}]
-		}`)
+			}`)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
 	}))
 	defer srv.Close()
 
