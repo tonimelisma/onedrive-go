@@ -64,7 +64,7 @@ func printItemsJSON(w io.Writer, items []graph.Item) error {
 			Name:       items[i].Name,
 			Size:       items[i].Size,
 			IsFolder:   items[i].IsFolder,
-			ModifiedAt: items[i].ModifiedAt.Format("2006-01-02T15:04:05Z"),
+			ModifiedAt: formatAPITime(items[i].ModifiedAt),
 			ID:         items[i].ID,
 		})
 	}

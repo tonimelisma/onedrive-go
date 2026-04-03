@@ -2,7 +2,7 @@
 
 GOVERNS: internal/syncobserve/observer_local.go, internal/syncobserve/observer_local_handlers.go, internal/syncobserve/observer_local_collisions.go, internal/syncobserve/observer_remote.go, internal/syncobserve/item_converter.go, internal/syncobserve/scanner.go, internal/syncobserve/buffer.go, internal/syncobserve/inotify_linux.go, internal/syncobserve/inotify_other.go
 
-Implements: R-2.1.2 [verified], R-2.4 [implemented], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.15 [planned], R-6.7.16 [planned], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [planned], R-6.7.24 [verified], R-6.7.28 [verified], R-2.11 [implemented], R-2.11.5 [implemented], R-2.12 [verified], R-2.13.1 [verified], R-6.3.4 [verified], R-6.10.6 [verified]
+Implements: R-2.1.2 [verified], R-2.4 [implemented], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.15 [planned], R-6.7.16 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [planned], R-6.7.24 [verified], R-6.7.26 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-2.11 [implemented], R-2.11.5 [implemented], R-2.12 [verified], R-2.13.1 [verified], R-6.3.4 [verified], R-6.10.6 [verified]
 
 ## Ownership Contract
 
@@ -23,6 +23,8 @@ Key properties:
 - Normalization (driveId casing, missing fields, timestamps) happens here
 - Within each delta page, deletions are buffered and processed before creations (API reordering bug)
 - HTTP 410 (expired delta token) returns `ErrGone` sentinel; engine restarts with full delta
+- Unknown remote timestamps stay unknown. If Graph omits `lastModifiedDateTime` or sends an invalid/out-of-range value, observation carries zero `Mtime` instead of fabricating a local clock value.
+- Sparse non-delete updates reuse baseline path context. When delta omits unchanged `name` or `parentReference`, conversion recovers the missing leaf or parent directory from the existing baseline entry so modifies and moves stay correctly rooted.
 - **Progress logging**: `FullDelta` emits periodic Info-level progress logs every 30 seconds during enumeration, reporting pages fetched and events accumulated so far. For 100K+ item drives where enumeration can take minutes, this gives operators visibility between the start and completion logs. Time-based rather than page-based to produce evenly-spaced logs regardless of page size or API latency.
 
 **Server-trusted observation**: The remote observer does NOT filter items by name validity or always-excluded patterns. If OneDrive sends an item in a delta response, it exists on OneDrive — filtering it would be silent data loss. Name-based filtering is a local-only concern (upload validation). Only root items and vault descendants are excluded from remote observation.
@@ -42,6 +44,8 @@ Key properties:
 - Move detection via baseline comparison (existing item at different path → ChangeMove)
 - Deleted-item name recovery from baseline (Business API items may lack Name on delete)
 - Malformed sparse items with empty identity are skipped before event emission
+- Sparse remote timestamps are normalized at the graph boundary; item conversion preserves zero/unknown timestamps instead of synthesizing current time
+- Sparse non-delete items recover omitted `name` / `parentReference` from the baseline when possible, instead of treating partial delta payloads as malformed
 - Orphan items (missing parent) produce a warning log and partial path
 - The inflight map is a parameter, not a field — RemoteObserver accumulates it across pages; shortcuts populate it once per batch
 

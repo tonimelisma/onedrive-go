@@ -49,6 +49,10 @@ func TestFormatTime(t *testing.T) {
 		assert.Contains(t, result, "25")
 		assert.Contains(t, result, "2020")
 	})
+
+	t.Run("zero time", func(t *testing.T) {
+		assert.Equal(t, "unknown", formatTime(time.Time{}))
+	})
 }
 
 type errWriter struct{}

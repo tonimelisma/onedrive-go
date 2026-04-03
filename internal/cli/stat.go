@@ -61,8 +61,8 @@ func printStatJSON(w io.Writer, item *graph.Item) error {
 		Name:       item.Name,
 		Size:       item.Size,
 		IsFolder:   item.IsFolder,
-		ModifiedAt: item.ModifiedAt.Format("2006-01-02T15:04:05Z"),
-		CreatedAt:  item.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		ModifiedAt: formatAPITime(item.ModifiedAt),
+		CreatedAt:  formatAPITime(item.CreatedAt),
 		MimeType:   item.MimeType,
 		ETag:       item.ETag,
 	}
@@ -92,10 +92,10 @@ func printStatText(w io.Writer, item *graph.Item) error {
 	if err := writef(w, "Size:     %s (%d bytes)\n", formatSize(item.Size), item.Size); err != nil {
 		return err
 	}
-	if err := writef(w, "Modified: %s\n", item.ModifiedAt.Format("2006-01-02 15:04:05 UTC")); err != nil {
+	if err := writef(w, "Modified: %s\n", formatExactTime(item.ModifiedAt)); err != nil {
 		return err
 	}
-	if err := writef(w, "Created:  %s\n", item.CreatedAt.Format("2006-01-02 15:04:05 UTC")); err != nil {
+	if err := writef(w, "Created:  %s\n", formatExactTime(item.CreatedAt)); err != nil {
 		return err
 	}
 	if err := writef(w, "ID:       %s\n", item.ID); err != nil {
