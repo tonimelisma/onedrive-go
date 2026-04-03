@@ -74,7 +74,7 @@ func (rt *watchRuntime) handleExternalChanges(ctx context.Context) {
 // their sync_failures cleared (by user action via CLI), and releases the
 // corresponding scope blocks.
 func (rt *watchRuntime) clearResolvedPermissionScopes(ctx context.Context) {
-	scopeKeys := rt.scopeBlockKeys(rt)
+	scopeKeys := rt.scopeController().scopeBlockKeys(rt)
 	if len(scopeKeys) == 0 {
 		return
 	}
@@ -111,7 +111,7 @@ func (rt *watchRuntime) clearResolvedPermissionScopes(ctx context.Context) {
 
 	for _, key := range scopeKeys {
 		if (key.IsPermDir() || key.IsPermRemote()) && !activeScopes[key] {
-			if err := rt.releaseScope(ctx, rt, key); err != nil {
+			if err := rt.scopeController().releaseScope(ctx, rt, key); err != nil {
 				rt.engine.logger.Warn("failed to release externally-cleared permission scope",
 					slog.String("scope", key.String()),
 					slog.String("error", err.Error()),
@@ -355,7 +355,7 @@ func (rt *watchRuntime) runFullReconciliationAsync(ctx context.Context, bl *sync
 
 		events = filterOutShortcuts(events)
 
-		shortcutEvents, scErr := rt.reconcileShortcutScopes(ctx, bl)
+		shortcutEvents, scErr := rt.shortcutCoordinator().reconcileShortcutScopes(ctx, bl)
 		if scErr != nil {
 			rt.engine.logger.Warn("shortcut reconciliation failed during full reconciliation",
 				slog.String("error", scErr.Error()),

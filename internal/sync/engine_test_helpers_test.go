@@ -140,6 +140,15 @@ type testEngine struct {
 	flow    *engineFlow
 }
 
+func newFlowBackedTestEngine(engine *Engine) *testEngine {
+	flow := newEngineFlow(engine)
+
+	return &testEngine{
+		Engine: engine,
+		flow:   &flow,
+	}
+}
+
 // newTestEngine creates an Engine backed by a temp dir with real SQLite
 // and the given mock client. Returns the engine and sync root path.
 func newTestEngine(t *testing.T, mock *engineMockClient) (*testEngine, string) {
@@ -174,7 +183,11 @@ func newTestEngineWithContext(t *testing.T, ctx context.Context, mock *engineMoc
 	})
 	require.NoError(t, err, "NewEngine")
 	eng.assertScopeInvariants = true
-	testEng := &testEngine{Engine: eng}
+	flow := newEngineFlow(eng)
+	testEng := &testEngine{
+		Engine: eng,
+		flow:   &flow,
+	}
 
 	t.Cleanup(func() {
 		assert.NoError(t, testEng.Close(context.WithoutCancel(ctx)), "Engine.Close")
@@ -216,7 +229,11 @@ func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *eng
 	})
 	require.NoError(t, err, "NewEngine")
 	eng.assertScopeInvariants = true
-	testEng := &testEngine{Engine: eng}
+	flow := newEngineFlow(eng)
+	testEng := &testEngine{
+		Engine: eng,
+		flow:   &flow,
+	}
 
 	t.Cleanup(func() {
 		assert.NoError(t, testEng.Close(context.WithoutCancel(ctx)), "Engine.Close")
@@ -328,11 +345,11 @@ func lookupTestWatchRuntime(eng *testEngine) (*watchRuntime, bool) {
 }
 
 func lookupTestEngineFlow(eng *testEngine) (*engineFlow, bool) {
-	if eng.flow != nil {
-		return eng.flow, true
-	}
 	if eng.runtime != nil {
 		return &eng.runtime.engineFlow, true
+	}
+	if eng.flow != nil {
+		return eng.flow, true
 	}
 
 	return nil, false
@@ -355,17 +372,21 @@ func testEngineFlow(t *testing.T, eng *testEngine) *engineFlow {
 	t.Helper()
 
 	flow, ok := lookupTestEngineFlow(eng)
-	if !ok {
-		fallback := newEngineFlow(eng.Engine)
-		return &fallback
-	}
+	require.True(t, ok, "engine flow must be initialized for this test")
 
 	return flow
 }
 
-func testEngineFlowFromEngine(e *Engine) *engineFlow {
-	flow := newEngineFlow(e)
-	return &flow
+func testScopeController(t *testing.T, eng *testEngine) *scopeController {
+	t.Helper()
+
+	return testEngineFlow(t, eng).scopeController()
+}
+
+func testShortcutCoordinator(t *testing.T, eng *testEngine) *shortcutCoordinator {
+	t.Helper()
+
+	return testEngineFlow(t, eng).shortcutCoordinator()
 }
 
 func handleRemovedShortcutsForTest(
@@ -376,12 +397,12 @@ func handleRemovedShortcutsForTest(
 	shortcuts []synctypes.Shortcut,
 ) error {
 	t.Helper()
-	return testEngineFlow(t, eng).handleRemovedShortcuts(ctx, deletedItemIDs, shortcuts)
+	return testShortcutCoordinator(t, eng).handleRemovedShortcuts(ctx, deletedItemIDs, shortcuts)
 }
 
 func loadActiveScopesForTest(t *testing.T, eng *testEngine, ctx context.Context) error {
 	t.Helper()
-	return testEngineFlow(t, eng).loadActiveScopes(ctx, testWatchRuntime(t, eng))
+	return testScopeController(t, eng).loadActiveScopes(ctx, testWatchRuntime(t, eng))
 }
 
 func createEventFromDBForTest(t *testing.T, eng *testEngine, ctx context.Context, row *synctypes.SyncFailureRow) *synctypes.ChangeEvent {
@@ -418,19 +439,19 @@ func recordRetryTrialSkippedItemForTest(
 
 func isObservationSuppressedForTest(t *testing.T, eng *testEngine, watch *watchRuntime) bool {
 	t.Helper()
-	return testEngineFlow(t, eng).isObservationSuppressed(watch)
+	return testScopeController(t, eng).isObservationSuppressed(watch)
 }
 
 func releaseTestScope(t *testing.T, eng *testEngine, ctx context.Context, key synctypes.ScopeKey) error {
 	t.Helper()
 	rt, _ := lookupTestWatchRuntime(eng)
-	return testEngineFlow(t, eng).releaseScope(ctx, rt, key)
+	return testScopeController(t, eng).releaseScope(ctx, rt, key)
 }
 
 func discardTestScope(t *testing.T, eng *testEngine, ctx context.Context, key synctypes.ScopeKey) error {
 	t.Helper()
 	rt, _ := lookupTestWatchRuntime(eng)
-	return testEngineFlow(t, eng).discardScope(ctx, rt, key)
+	return testScopeController(t, eng).discardScope(ctx, rt, key)
 }
 
 func assertTestCurrentScopeInvariants(t *testing.T, eng *testEngine, ctx context.Context) error {
@@ -454,21 +475,21 @@ func assertDiscardedScopeForTest(t *testing.T, eng *testEngine, ctx context.Cont
 func repairPersistedScopesForTest(t *testing.T, eng *testEngine, ctx context.Context) error {
 	t.Helper()
 	rt, _ := lookupTestWatchRuntime(eng)
-	return testEngineFlow(t, eng).repairPersistedScopes(ctx, rt)
+	return testScopeController(t, eng).repairPersistedScopes(ctx, rt)
 }
 
 func admitReadyForTest(t *testing.T, eng *testEngine, ctx context.Context, ready []*synctypes.TrackedAction) []*synctypes.TrackedAction {
 	t.Helper()
 	if rt, ok := lookupTestWatchRuntime(eng); ok {
-		return testEngineFlow(t, eng).admitReady(ctx, rt, ready)
+		return testScopeController(t, eng).admitReady(ctx, rt, ready)
 	}
 
-	return testEngineFlow(t, eng).admitReady(ctx, nil, ready)
+	return testScopeController(t, eng).admitReady(ctx, nil, ready)
 }
 
 func cascadeRecordAndCompleteForTest(t *testing.T, eng *testEngine, ctx context.Context, ta *synctypes.TrackedAction, scopeKey synctypes.ScopeKey) {
 	t.Helper()
-	testEngineFlow(t, eng).cascadeRecordAndComplete(ctx, ta, scopeKey)
+	testScopeController(t, eng).cascadeRecordAndComplete(ctx, ta, scopeKey)
 }
 
 func processWorkerResultForTest(
@@ -555,19 +576,19 @@ func bootstrapSyncForTest(t *testing.T, eng *testEngine, ctx context.Context, mo
 func activeBlockingScopeForTest(t *testing.T, eng *testEngine, ta *synctypes.TrackedAction) synctypes.ScopeKey {
 	t.Helper()
 	rt, _ := lookupTestWatchRuntime(eng)
-	return testEngineFlow(t, eng).activeBlockingScope(rt, ta)
+	return testScopeController(t, eng).activeBlockingScope(rt, ta)
 }
 
 func applyScopeBlockForTest(t *testing.T, eng *testEngine, ctx context.Context, sr synctypes.ScopeUpdateResult) {
 	t.Helper()
 	rt := testWatchRuntime(t, eng)
-	testEngineFlow(t, eng).applyScopeBlock(ctx, rt, sr)
+	testScopeController(t, eng).applyScopeBlock(ctx, rt, sr)
 }
 
 func feedScopeDetectionForTest(t *testing.T, eng *testEngine, ctx context.Context, r *synctypes.WorkerResult) {
 	t.Helper()
 	rt, _ := lookupTestWatchRuntime(eng)
-	testEngineFlow(t, eng).feedScopeDetection(ctx, rt, r)
+	testScopeController(t, eng).feedScopeDetection(ctx, rt, r)
 }
 
 func isTestScopeBlocked(eng *testEngine, key synctypes.ScopeKey) bool {

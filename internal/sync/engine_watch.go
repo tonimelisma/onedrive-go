@@ -183,7 +183,7 @@ func (rt *watchRuntime) initWatchInfra(
 	// Startup must not trust stale scope rows blindly; the durable store is
 	// repaired against current persisted evidence before the watch loop loads
 	// its ephemeral activeScopes working set.
-	if err := rt.repairPersistedScopes(ctx, rt); err != nil {
+	if err := rt.scopeController().repairPersistedScopes(ctx, rt); err != nil {
 		return nil, fmt.Errorf("sync: repairing persisted scopes: %w", err)
 	}
 
@@ -191,7 +191,7 @@ func (rt *watchRuntime) initWatchInfra(
 	// the persisted scope_blocks table into watch-owned runtime state.
 	depGraph := syncdispatch.NewDepGraph(rt.engine.logger)
 	rt.depGraph = depGraph
-	if err := rt.loadActiveScopes(ctx, rt); err != nil {
+	if err := rt.scopeController().loadActiveScopes(ctx, rt); err != nil {
 		return nil, fmt.Errorf("sync: loading active scopes: %w", err)
 	}
 
@@ -294,9 +294,9 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode synctypes.SyncMo
 	// Permission rechecks.
 	if rt.engine.permHandler.HasPermChecker() {
 		shortcuts := rt.getShortcuts()
-		rt.applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckPermissions(ctx, bl, shortcuts))
+		rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckPermissions(ctx, bl, shortcuts))
 	}
-	rt.applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckLocalPermissions(ctx))
+	rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckLocalPermissions(ctx))
 
 	// Observe changes.
 	changes, pendingToken, err := rt.observeChanges(ctx, rt, bl, mode, false, false)

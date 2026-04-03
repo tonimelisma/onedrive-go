@@ -127,7 +127,7 @@ func newTestEngineWithPerms(
 		Logger:      logger,
 	})
 	require.NoError(t, err)
-	testEng := &testEngine{Engine: eng}
+	testEng := newFlowBackedTestEngine(eng)
 
 	ctx := t.Context()
 

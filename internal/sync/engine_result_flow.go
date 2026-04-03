@@ -69,7 +69,7 @@ func (flow *engineFlow) applyResultDecision(
 	case resultSkip, resultShutdown, resultRequeue, resultScopeBlock, resultFatal:
 	}
 
-	if flow.applyPermissionDecisionFlow(ctx, watch, decision, r, bl) {
+	if flow.scopeController().applyPermissionDecisionFlow(ctx, watch, decision, r, bl) {
 		flow.recordError(r)
 		return
 	}
@@ -77,9 +77,9 @@ func (flow *engineFlow) applyResultDecision(
 	flow.applyFailureRecordMode(ctx, decision.RecordMode, r)
 
 	if decision.RunScopeDetection {
-		flow.feedScopeDetection(ctx, watch, r)
+		flow.scopeController().feedScopeDetection(ctx, watch, r)
 	} else if decision.Class == resultScopeBlock && !decision.ScopeKey.IsZero() {
-		flow.applyScopeBlock(ctx, watch, synctypes.ScopeUpdateResult{
+		flow.scopeController().applyScopeBlock(ctx, watch, synctypes.ScopeUpdateResult{
 			Block:     true,
 			ScopeKey:  decision.ScopeKey,
 			IssueType: decision.ScopeKey.IssueType(),
@@ -118,11 +118,11 @@ func (flow *engineFlow) processNormalDecision(
 
 	switch decision.Class {
 	case resultSuccess:
-		dispatched = flow.admitReady(ctx, watch, ready)
+		dispatched = flow.scopeController().admitReady(ctx, watch, ready)
 	case resultShutdown:
-		flow.completeSubtree(ready)
+		flow.scopeController().completeSubtree(ready)
 	case resultRequeue, resultScopeBlock, resultSkip, resultFatal:
-		flow.cascadeFailAndComplete(ctx, ready, r)
+		flow.scopeController().cascadeFailAndComplete(ctx, ready, r)
 	}
 
 	flow.applyResultDecision(ctx, watch, decision, r, bl)
@@ -139,7 +139,7 @@ func (flow *engineFlow) processTrialDecision(
 	r *synctypes.WorkerResult,
 ) []*synctypes.TrackedAction {
 	if decision.Class == resultSuccess {
-		if err := flow.releaseScope(ctx, watch, trialScopeKey); err != nil {
+		if err := flow.scopeController().releaseScope(ctx, watch, trialScopeKey); err != nil {
 			flow.engine.logger.Warn("processTrialResult: failed to release scope",
 				slog.String("scope_key", trialScopeKey.String()),
 				slog.String("error", err.Error()),
@@ -149,18 +149,18 @@ func (flow *engineFlow) processTrialDecision(
 		if watch != nil {
 			watch.scopeState.RecordSuccess(r)
 		}
-		return flow.admitReady(ctx, watch, ready)
+		return flow.scopeController().admitReady(ctx, watch, ready)
 	}
 
 	if decision.Class == resultShutdown {
-		flow.completeSubtree(ready)
+		flow.scopeController().completeSubtree(ready)
 		return nil
 	}
 
-	flow.extendScopeTrial(ctx, watch, trialScopeKey, r.RetryAfter)
+	flow.scopeController().extendScopeTrial(ctx, watch, trialScopeKey, r.RetryAfter)
 	flow.applyFailureRecordMode(ctx, decision.RecordMode, r)
 	flow.recordError(r)
-	flow.cascadeFailAndComplete(ctx, ready, r)
+	flow.scopeController().cascadeFailAndComplete(ctx, ready, r)
 	if watch != nil {
 		watch.armRetryTimer(ctx)
 	}
@@ -168,13 +168,15 @@ func (flow *engineFlow) processTrialDecision(
 	return nil
 }
 
-func (flow *engineFlow) applyPermissionDecisionFlow(
+func (controller *scopeController) applyPermissionDecisionFlow(
 	ctx context.Context,
 	watch *watchRuntime,
 	decision ResultDecision,
 	r *synctypes.WorkerResult,
 	bl *synctypes.Baseline,
 ) bool {
+	flow := controller.flow
+
 	switch decision.PermissionFlow {
 	case permissionFlowNone:
 		return false
@@ -183,7 +185,7 @@ func (flow *engineFlow) applyPermissionDecisionFlow(
 			return false
 		}
 		decision := flow.engine.permHandler.handle403(ctx, bl, r.Path, flow.getShortcuts())
-		return flow.applyPermissionCheckDecision(
+		return controller.applyPermissionCheckDecision(
 			ctx,
 			watch,
 			permissionFlowRemote403,
@@ -191,7 +193,7 @@ func (flow *engineFlow) applyPermissionDecisionFlow(
 		)
 	case permissionFlowLocalPermission:
 		decision := flow.engine.permHandler.handleLocalPermission(ctx, r)
-		return flow.applyPermissionCheckDecision(
+		return controller.applyPermissionCheckDecision(
 			ctx,
 			watch,
 			permissionFlowLocalPermission,

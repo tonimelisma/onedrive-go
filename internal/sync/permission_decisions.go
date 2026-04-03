@@ -54,12 +54,14 @@ type ShortcutRemovalDecision struct {
 	ScopeKey synctypes.ScopeKey
 }
 
-func (flow *engineFlow) applyPermissionCheckDecision(
+func (controller *scopeController) applyPermissionCheckDecision(
 	ctx context.Context,
 	watch *watchRuntime,
 	flowKind permissionFlow,
 	decision *PermissionCheckDecision,
 ) bool {
+	flow := controller.flow
+
 	if decision == nil || !decision.Matched {
 		return false
 	}
@@ -67,10 +69,10 @@ func (flow *engineFlow) applyPermissionCheckDecision(
 	switch decision.Kind {
 	case permissionCheckNone:
 	case permissionCheckRecordFileFailure:
-		flow.recordExplicitFailure(ctx, &decision.Failure)
+		controller.recordExplicitFailure(ctx, &decision.Failure)
 	case permissionCheckActivateBoundaryScope:
-		flow.recordExplicitFailure(ctx, &decision.Failure)
-		if err := flow.activateScope(ctx, watch, decision.ScopeBlock); err != nil {
+		controller.recordExplicitFailure(ctx, &decision.Failure)
+		if err := controller.activateScope(ctx, watch, decision.ScopeBlock); err != nil {
 			flow.engine.logger.Warn("failed to activate permission scope",
 				slog.String("scope_key", decision.ScopeBlock.Key.String()),
 				slog.String("error", err.Error()),
@@ -102,18 +104,20 @@ func (flow *engineFlow) applyPermissionCheckDecision(
 	return true
 }
 
-func (flow *engineFlow) applyPermissionRecheckDecisions(
+func (controller *scopeController) applyPermissionRecheckDecisions(
 	ctx context.Context,
 	watch *watchRuntime,
 	decisions []PermissionRecheckDecision,
 ) {
+	flow := controller.flow
+
 	for i := range decisions {
 		decision := decisions[i]
 		switch decision.Kind {
 		case permissionRecheckKeepScope:
 			continue
 		case permissionRecheckReleaseScope:
-			if err := flow.releaseScope(ctx, watch, decision.ScopeKey); err != nil {
+			if err := controller.releaseScope(ctx, watch, decision.ScopeKey); err != nil {
 				flow.engine.logger.Warn("failed to release permission scope",
 					slog.String("scope_key", decision.ScopeKey.String()),
 					slog.String("error", err.Error()),
@@ -139,7 +143,9 @@ func (flow *engineFlow) applyPermissionRecheckDecisions(
 	}
 }
 
-func (flow *engineFlow) recordExplicitFailure(ctx context.Context, params *synctypes.SyncFailureParams) {
+func (controller *scopeController) recordExplicitFailure(ctx context.Context, params *synctypes.SyncFailureParams) {
+	flow := controller.flow
+
 	if err := flow.engine.baseline.RecordFailure(ctx, params, nil); err != nil {
 		flow.engine.logger.Warn("failed to record permission failure",
 			slog.String("path", params.Path),
@@ -148,9 +154,11 @@ func (flow *engineFlow) recordExplicitFailure(ctx context.Context, params *synct
 	}
 }
 
-func (flow *engineFlow) applyShortcutRemovalDecisions(ctx context.Context, decisions []ShortcutRemovalDecision) {
+func (controller *scopeController) applyShortcutRemovalDecisions(ctx context.Context, decisions []ShortcutRemovalDecision) {
+	flow := controller.flow
+
 	for i := range decisions {
-		if err := flow.discardScope(ctx, nil, decisions[i].ScopeKey); err != nil {
+		if err := controller.discardScope(ctx, nil, decisions[i].ScopeKey); err != nil {
 			flow.engine.logger.Warn("failed to discard shortcut scope",
 				slog.String("scope_key", decisions[i].ScopeKey.String()),
 				slog.String("error", err.Error()),

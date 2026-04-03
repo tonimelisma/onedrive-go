@@ -26,7 +26,7 @@ func applyRemote403Decision(
 		rt = newWatchRuntime(eng.Engine)
 		rt.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
 	}
-	rt.applyPermissionCheckDecision(ctx, rt, permissionFlowRemote403, &decision)
+	rt.scopeController().applyPermissionCheckDecision(ctx, rt, permissionFlowRemote403, &decision)
 	return decision
 }
 
@@ -44,7 +44,7 @@ func applyLocalPermissionDecision(
 		rt = newWatchRuntime(eng.Engine)
 		rt.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
 	}
-	rt.applyPermissionCheckDecision(ctx, rt, permissionFlowLocalPermission, &decision)
+	rt.scopeController().applyPermissionCheckDecision(ctx, rt, permissionFlowLocalPermission, &decision)
 	return decision
 }
 
@@ -63,7 +63,7 @@ func applyRemotePermissionRecheck(
 		rt = newWatchRuntime(eng.Engine)
 		rt.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
 	}
-	rt.applyPermissionRecheckDecisions(ctx, rt, decisions)
+	rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, decisions)
 	return decisions
 }
 
@@ -76,7 +76,7 @@ func applyLocalPermissionRecheck(t *testing.T, eng *testEngine, ctx context.Cont
 		rt = newWatchRuntime(eng.Engine)
 		rt.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
 	}
-	rt.applyPermissionRecheckDecisions(ctx, rt, decisions)
+	rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, decisions)
 	return decisions
 }
 
@@ -94,7 +94,7 @@ func applyScannerResolvedPermissions(
 		rt = newWatchRuntime(eng.Engine)
 		rt.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
 	}
-	rt.applyPermissionRecheckDecisions(ctx, rt, decisions)
+	rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, decisions)
 	return decisions
 }
 

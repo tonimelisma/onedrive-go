@@ -103,18 +103,28 @@ Run-scoped state lives in two dedicated owners:
 
 The shared `engineFlow` object carries the mutable execution state common to
 both coordinators: dependency graph, ready channel, shortcut snapshot,
-aggregated success/error counters, shared observation helpers, shortcut
-observation/reconciliation, skipped-item failure maintenance, and shared
-result-routing side effects. `watchRuntime` embeds `engineFlow` and adds
-watch-only state; `oneShotRunner` embeds `engineFlow` without watch-specific
-fields.
+aggregated success/error counters, shared observation helpers, skipped-item
+failure maintenance, and coordinator-level result routing. `watchRuntime`
+embeds `engineFlow` and adds watch-only state; `oneShotRunner` embeds
+`engineFlow` without watch-specific fields.
+
+Policy-heavy behavior lives behind dedicated collaborators owned by the flow:
+
+- `scopeController`: persisted-scope repair, scope activation/release/discard,
+  scope-detection application, cascade blocked-failure recording, and
+  permission decision application
+- `shortcutCoordinator`: shortcut discovery, registration, removal handling,
+  delta/full observation, and shortcut-scope reconciliation
+- `PermissionHandler`: permission evidence interpreter only; it returns
+  decisions that the engine applies through `scopeController`
 
 Tests use same-package helpers that construct `watchRuntime` / `engineFlow`
-directly when they need internal characterization. Production code does not
-publish a runtime-registration hook just so tests can discover live watch
-state. The sync test suite is organized by runtime concern (`RunOnce`, watch,
-reconcile, conflicts, result/scope flow) rather than a single mixed
-`engine_test.go` file.
+and the flow-backed collaborators directly when they need internal
+characterization. Production code does not publish a runtime-registration hook
+just so tests can discover live watch state, and test helpers do not synthesize
+an `engineFlow` behind the caller's back. The sync test suite is organized by
+runtime concern (`RunOnce`, watch, reconcile, conflicts, result/scope flow)
+rather than a single mixed `engine_test.go` file.
 
 ### Result Classification (`classifyResult()`)
 
@@ -306,7 +316,7 @@ Implements: R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.10 [verified]
 
 `PermissionHandler` is a policy layer. It does not mutate engine state
 directly. Local permission detection returns explicit decisions that the engine
-applies through its owned lifecycle methods.
+applies through `scopeController`, which owns the actual lifecycle mutation.
 
 `os.ErrPermission` -> check parent directory accessibility via
 `handleLocalPermission()`. Inaccessible directory: return an
@@ -317,7 +327,7 @@ rechecked at the start of each sync pass via `recheckLocalPermissions()`.
 **Scanner-driven auto-clear** (R-2.10.10): `clearScannerResolvedPermissions()`
 returns `PermissionRecheckDecision` values when the scanner proves previously
 blocked paths are accessible again. File-level failures are cleared directly.
-Directory-level permission scopes are released through `releaseScope()`.
+Directory-level permission scopes are released through `scopeController.releaseScope()`.
 
 ### Remote Shared Permission Handling
 
@@ -325,7 +335,7 @@ Implements: R-2.10.9 [verified], R-2.10.17 [verified], R-2.10.23 [verified], R-2
 
 `handle403()` is the single remote-permission entry point for write failures on
 shared content. Like the local permission path, it returns a decision for the
-engine to apply:
+engine to apply through `scopeController`:
 
 - First it checks whether the failing path is already under an active persisted `perm:remote:{localPath}` boundary. If so, it short-circuits without another Graph permission walk.
 - Otherwise it resolves the relevant shortcut, calls `ListItemPermissions` on the target folder, and confirms whether the 403 is a real write denial or a transient/inconclusive failure.
@@ -357,7 +367,7 @@ Implements: R-2.10.30 [verified], R-2.10.31 [verified]
 
 During `SKThrottleAccount` or `SKService` scope block (detected via `ScopeKey.IsGlobal()`), suppress shortcut observation polling (wastes API calls). During `quota:shortcut:*` block, observation continues (read-only).
 
-Observation suppression (`isObservationSuppressed()`) suppresses the entire `processShortcuts()` call, which includes both shortcut discovery and delta polling. Also suppresses `recheckPermissions()` API calls since those are equally wasteful during an outage. Suppressing discovery is acceptable — new shortcuts during an outage would fail immediately anyway. Discovery resumes when the scope clears. Local permission rechecks (`recheckLocalPermissions`) proceed regardless since they are filesystem-only.
+Observation suppression (`scopeController.isObservationSuppressed()`) suppresses the entire `shortcutCoordinator.processShortcuts()` call, which includes both shortcut discovery and delta polling. Also suppresses `recheckPermissions()` API calls since those are equally wasteful during an outage. Suppressing discovery is acceptable — new shortcuts during an outage would fail immediately anyway. Discovery resumes when the scope clears. Local permission rechecks (`recheckLocalPermissions`) proceed regardless since they are filesystem-only.
 
 **Trial dispatch correctness**: `runTrialDispatch()` uses `AllDueTrials()` snapshot iteration — each due scope is visited exactly once per tick, making infinite iteration structurally impossible. On successful dispatch, the trial interval is NOT mutated (awaiting worker result). On scope-persists, `extendTrialInterval` uses the server's `RetryAfter` if provided (R-2.10.7). The timer re-arms after the trial result via `processTrialResult()` → `armTrialTimer()`.
 
@@ -385,7 +395,11 @@ Sync failure logging follows a tiered approach matching CLAUDE.md policy — ind
 
 ### Shortcut Integration (`engine_shortcuts.go`)
 
-Detects shortcuts to shared folders in the delta stream. Creates additional delta scopes for shared folder observation. Shortcut removal also clears any persisted `perm:remote` scope under the removed shortcut and discards its held failures, preventing stale recursive write suppression after the share disappears.
+`shortcutCoordinator` detects shortcuts to shared folders in the delta stream,
+creates additional delta scopes for shared-folder observation, and owns
+shortcut removal side effects. Shortcut removal clears any persisted
+`perm:remote` scope under the removed shortcut and discards its held failures,
+preventing stale recursive write suppression after the share disappears.
 
 ## CLI / Engine Boundary (`sync_helpers.go`)
 

@@ -1062,7 +1062,7 @@ func TestEngine_Close_CleansStaleAndIsIdempotent(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
-	testEng := &testEngine{Engine: eng}
+	testEng := newFlowBackedTestEngine(eng)
 
 	// Register a test runtime to prove Close operates on engine-owned resources
 	// only; watch observers now belong to the runtime and are cleaned up by the

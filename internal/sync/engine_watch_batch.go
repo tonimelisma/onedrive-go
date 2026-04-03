@@ -56,7 +56,11 @@ func (rt *watchRuntime) planAndDispatchBatch(
 	// R-2.10.10: use scanner output as proof-of-accessibility to clear
 	// permission denials for paths observed in this batch.
 	if opts.clearScannerResolved {
-		rt.applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.clearScannerResolvedPermissions(ctx, pathSetFromBatch(batch)))
+		rt.scopeController().applyPermissionRecheckDecisions(
+			ctx,
+			rt,
+			rt.engine.permHandler.clearScannerResolvedPermissions(ctx, pathSetFromBatch(batch)),
+		)
 	}
 
 	denied := rt.engine.permHandler.DeniedPrefixes(ctx)
@@ -116,14 +120,14 @@ func (rt *watchRuntime) periodicPermRecheck(ctx context.Context, bl *synctypes.B
 	// recheckPermissions calls the Graph API — skip during outage or
 	// throttle to avoid wasting API calls (R-2.10.30). Local permission
 	// rechecks (filesystem-only) proceed regardless.
-	if rt.engine.permHandler.HasPermChecker() && !rt.isObservationSuppressed(rt) {
+	if rt.engine.permHandler.HasPermChecker() && !rt.scopeController().isObservationSuppressed(rt) {
 		shortcuts, err := rt.engine.baseline.ListShortcuts(ctx)
 		if err == nil {
-			rt.applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckPermissions(ctx, bl, shortcuts))
+			rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckPermissions(ctx, bl, shortcuts))
 		}
 	}
 
-	rt.applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckLocalPermissions(ctx))
+	rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckLocalPermissions(ctx))
 }
 
 // deduplicateInFlight cancels in-flight actions for paths that appear in the
@@ -202,7 +206,7 @@ func (rt *watchRuntime) dispatchBatchActions(
 	}
 
 	if len(ready) > 0 {
-		ready = rt.admitReady(ctx, rt, ready)
+		ready = rt.scopeController().admitReady(ctx, rt, ready)
 	}
 
 	rt.engine.logger.Info("watch batch dispatched",
