@@ -33,7 +33,9 @@ When the same file has been modified on both the local filesystem and OneDrive s
 
 ## R-2.4 Filtering [implemented]
 
-All filter settings are per-drive (no global filter defaults).
+Filter settings support global defaults with per-drive overrides. These
+filters apply to local observation only; remote observation continues to
+trust the server and does not silently drop remote-only items.
 
 - R-2.4.1: When `skip_dotfiles = true`, the system shall exclude files and folders starting with `.`. [verified]
 - R-2.4.2: When `skip_dirs` is set, the system shall exclude matching directory names. [verified]

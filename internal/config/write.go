@@ -49,8 +49,7 @@ const configTemplate = `# onedrive-go configuration
 # ── Drives ──
 # Added automatically by 'login' and 'drive add'.
 # Each section name is the canonical drive identifier.
-# Filter settings (skip_dotfiles, skip_dirs, skip_files, etc.) are
-# per-drive only — configure them inside each drive section below.
+# Filter settings may be set globally and overridden per drive below.
 `
 
 // driveSection generates the TOML text for a new drive section. The blank

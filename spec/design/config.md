@@ -17,6 +17,8 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 - Mutable Runtime Owner: `config.Holder` owns the current `*Config` pointer behind `Holder.mu`. The package starts no background goroutines, owns no long-lived channels, and uses no timers.
 - Error Boundary: `config` translates parse/load/validation outcomes into either fatal errors or warnings before callers act, following [error-model.md](error-model.md).
 
+Transfer validation behavior is not user-disableable. The config surface intentionally has no `disable_download_validation` or `disable_upload_validation` escape hatches; transfer correctness policy lives in the transfer and observation layers, not in mutable config toggles.
+
 ## Override Chain
 
 Four-layer resolution: defaults → config file → environment → CLI flags. CLI flags replace (never merge) config values.
@@ -55,7 +57,9 @@ The config file is read with a TOML parser (`BurntSushi/toml`) but written with 
 
 Implements: R-3.4.1 [verified], R-3.4.3 [verified], R-6.2.9 [verified]
 
-Each drive section contains per-drive settings (sync_dir, filters, paused state). Drive resolution (`ResolveDrive`) matches by exact canonical ID → exact display_name (case-insensitive) → substring. Ambiguous matches produce an error with suggestions. `ResolveDrive()` returns both `*ResolvedDrive` and `*Config` — the raw config is needed by shared drive token resolution.
+Each drive section contains per-drive settings (sync_dir, filter overrides, paused state). `buildResolvedDrive` starts from global defaults and then applies per-drive overrides for filter and sync behavior fields, so drives can share sane defaults without forcing identical filter policy. Drive resolution (`ResolveDrive`) matches by exact canonical ID → exact display_name (case-insensitive) → substring. Ambiguous matches produce an error with suggestions. `ResolveDrive()` returns both `*ResolvedDrive` and `*Config` — the raw config is needed by shared drive token resolution.
+
+`skip_dotfiles`, `skip_dirs`, and `skip_files` are live local-observation controls. The sync engine threads their resolved values into the local observer so full scans, watch mode, and retry/trial single-path reconstruction all apply the same exclusions. `sync_paths` and `ignore_marker` remain planned and still warn when configured.
 
 ### Pause State
 
@@ -128,5 +132,5 @@ When no config file exists, `DiscoverTokens()` scans the data dir for `token_*.j
 
 - **Flat structure** (no `[filter]` sub-sections): simpler to read/write/manipulate. Drive sections are the only nesting.
 - **Text-level writes**: TOML libraries strip comments on round-trip. Users care about their comments.
-- **Per-drive filters only** (no global filter defaults): different drives have fundamentally different content. Global defaults create confusing inheritance.
+- **Global defaults with per-drive overrides**: shared defaults keep common policy centralized, while drive sections can still diverge when a specific library or account needs different exclusions.
 - **Fatal on unknown keys**: prevents silent misconfiguration from typos.

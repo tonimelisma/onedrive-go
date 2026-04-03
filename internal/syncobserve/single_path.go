@@ -33,10 +33,26 @@ func ObserveSinglePath(
 	observeStartNano int64,
 	hashFunc func(string) (string, error),
 ) (SinglePathObservation, error) {
+	return ObserveSinglePathWithFilter(logger, syncTree, relPath, base, observeStartNano, hashFunc, synctypes.LocalFilterConfig{})
+}
+
+// ObserveSinglePathWithFilter applies the same single-path reconstruction as
+// ObserveSinglePath, but with explicit local filter configuration from the
+// engine. Retry/trial work uses this so configured exclusions stay aligned
+// with full-scan and watch semantics.
+func ObserveSinglePathWithFilter(
+	logger *slog.Logger,
+	syncTree *synctree.Root,
+	relPath string,
+	base *synctypes.BaselineEntry,
+	observeStartNano int64,
+	hashFunc func(string) (string, error),
+	filter synctypes.LocalFilterConfig,
+) (SinglePathObservation, error) {
 	path := nfcNormalize(filepath.ToSlash(relPath))
 	name := nfcNormalize(filepath.Base(path))
 
-	if skip := ShouldObserve(name, path); skip != nil {
+	if skip := shouldObserveWithFilter(name, path, observedKindUnknown, filter); skip != nil {
 		if skip.Reason == "" {
 			return SinglePathObservation{Resolved: true}, nil
 		}
@@ -56,6 +72,14 @@ func ObserveSinglePath(
 		}
 
 		return SinglePathObservation{}, fmt.Errorf("observe single path %s: stat: %w", path, err)
+	}
+
+	if skip := shouldObserveWithFilter(name, path, infoKind(info), filter); skip != nil {
+		if skip.Reason == "" {
+			return SinglePathObservation{Resolved: true}, nil
+		}
+
+		return SinglePathObservation{Skipped: skip}, nil
 	}
 
 	itemType := synctypes.ItemTypeFile
@@ -89,6 +113,14 @@ func ObserveSinglePath(
 			Mtime:    info.ModTime().UnixNano(),
 		},
 	}, nil
+}
+
+func infoKind(info os.FileInfo) observedKind {
+	if info.IsDir() {
+		return observedKindDir
+	}
+
+	return observedKindFile
 }
 
 func observeSinglePathHash(

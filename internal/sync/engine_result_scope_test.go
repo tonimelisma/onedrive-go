@@ -535,6 +535,12 @@ func TestClassifyResult_LocalErrors(t *testing.T) {
 			wantClass:      resultSkip,
 			wantRecordMode: recordFailureActionable,
 		},
+		{
+			name:           "file_exceeds_onedrive_limit",
+			result:         synctypes.WorkerResult{Err: fmt.Errorf("upload failed: %w", driveops.ErrFileExceedsOneDriveLimit)},
+			wantClass:      resultSkip,
+			wantRecordMode: recordFailureActionable,
+		},
 	})
 }
 
@@ -2138,6 +2144,7 @@ func TestIssueTypeForHTTPStatus(t *testing.T) {
 		{"wrapped_disk_full", 0, fmt.Errorf("download: %w", driveops.ErrDiskFull), synctypes.IssueDiskFull},
 		// Validates: R-2.10.44
 		{"file_too_large_for_space", 0, driveops.ErrFileTooLargeForSpace, synctypes.IssueFileTooLargeForSpace},
+		{"file_exceeds_onedrive_limit", 0, driveops.ErrFileExceedsOneDriveLimit, synctypes.IssueFileTooLarge},
 		{"unknown_status", 418, nil, ""},
 		{"zero_status_no_error", 0, nil, ""},
 	}

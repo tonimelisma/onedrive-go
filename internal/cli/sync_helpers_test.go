@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -105,4 +106,45 @@ func TestNewSyncEngine_Success(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, engine)
 	require.NoError(t, engine.Close(t.Context()))
+}
+
+func TestNewSyncEngine_PropagatesLocalFilters(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	logger := buildLogger(nil, CLIFlags{})
+	meta, err := newGraphClient(staticTokenSource{}, logger)
+	require.NoError(t, err)
+	transfer, err := newGraphClient(staticTokenSource{}, logger)
+	require.NoError(t, err)
+
+	syncDir := filepath.Join(t.TempDir(), "sync")
+	require.NoError(t, os.MkdirAll(syncDir, 0o700))
+
+	session := &driveops.Session{
+		Meta:     meta,
+		Transfer: transfer,
+		DriveID:  driveid.New("abc123"),
+	}
+	resolved := &config.ResolvedDrive{
+		SyncDir:     syncDir,
+		CanonicalID: driveid.MustCanonicalID("personal:test@example.com"),
+		FilterConfig: config.FilterConfig{
+			SkipDotfiles: true,
+			SkipDirs:     []string{"vendor"},
+			SkipFiles:    []string{"*.log"},
+		},
+	}
+
+	engine, err := newSyncEngine(t.Context(), session, resolved, false, logger)
+	require.NoError(t, err)
+	require.NotNil(t, engine)
+	defer func() {
+		require.NoError(t, engine.Close(t.Context()))
+	}()
+
+	localFilter := reflect.ValueOf(engine).Elem().FieldByName("localFilter")
+	require.True(t, localFilter.IsValid(), "Engine should retain configured local filters")
+	assert.True(t, localFilter.FieldByName("SkipDotfiles").Bool())
+	assert.Equal(t, 1, localFilter.FieldByName("SkipDirs").Len())
+	assert.Equal(t, 1, localFilter.FieldByName("SkipFiles").Len())
 }

@@ -1,0 +1,967 @@
+# Test Assurance Audit
+
+Last updated: 2026-04-02
+
+Purpose: build a spec-first model of the ideal test suite, then compare the real suite against that model to catch missing, weak, or nerfed tests before we start patching coverage.
+
+Current phase: Phase 1. This document is being built from requirements, design docs, and code ownership only. Do not read test bodies for a workstream until its ideal model is written down here.
+
+## How To Use This Document
+
+1. Pick the highest-risk workstream that is still in `ideal-model` or `claims-mapping`.
+2. Read the governing requirements and design docs first. Read package/file ownership next. Do not read test bodies yet.
+3. Write down the ideal contract:
+   - what behavior must be proven
+   - which layer should prove it: unit, integration, e2e, stress, fuzz
+   - what failure injection is mandatory
+   - what bug or regression should definitely make a test fail
+4. Only after the ideal contract is stable, map existing test claims:
+   - test file names
+   - `// Validates:` tags
+   - package coverage shape
+5. Only after claim mapping, read the actual test bodies and grade them:
+   - `strong`
+   - `weak`
+   - `missing`
+   - `blocked-by-planned`
+6. Fix the weakest or highest-risk gap first.
+7. Update this file every time a workstream moves phase or a new risk is discovered.
+
+## Phase Legend
+
+- `ideal-model`: ideal suite defined from spec/design only
+- `claims-mapping`: existing test claims may be mapped, but bodies not yet audited
+- `test-audit`: test bodies have been reviewed against the ideal contract
+- `remediation`: concrete test or production fixes in flight
+- `strong-enough`: current suite appears to meet the ideal contract for now
+- `blocked-by-planned`: requirement is still planned or future, so only a placeholder is tracked
+
+## Strength Rubric
+
+- `strong`: test would fail for the obvious regression and exercises the contract at the right layer with meaningful assertions
+- `weak`: test exists, but could be nerfed without detection because it only checks shallow output, only `no error`, over-mocks reality, or misses failure paths
+- `missing`: no test appears to prove the contract
+- `blocked-by-planned`: the requirement is not implemented yet, so only future ideal coverage is described
+
+## Weak-Test Smell Checklist
+
+- Asserts only `no error` or exit code without checking state changes or side effects
+- Over-mocks collaborators so the real boundary behavior cannot fail
+- Covers only the happy path for an I/O feature with no failure injection
+- Verifies logs or strings but not the persisted state transition behind them
+- Uses a golden file without semantic spot-checks for the critical fields
+- Proves that something happened, but not that the wrong thing did not happen
+- Does not include a kill switch: an obvious one-line production regression that would make the test fail
+- Exercises a code path only indirectly when the requirement is actually about sequencing, durability, cancellation, or cleanup
+
+## Audit Rules
+
+- Organize by requirement and invariant first, not by current tests.
+- Treat design invariants as first-class audit targets even when no single requirement line captures them.
+- Distinguish missing coverage from unimplemented product work.
+- Prefer one authoritative proof point per contract plus supporting lower-level tests, instead of many shallow duplicates.
+- Add audit notes for production risks discovered during reading, even if test work comes later.
+
+## Completeness Protocol
+
+Use this section to reduce the chance that the audit misses an entire class of behavior.
+
+### Sources Of Truth To Mine
+
+Every workstream should be built from all relevant source types, not just requirements:
+
+- Requirements:
+  - user-visible product behavior
+  - success-path command contracts
+  - verification status claims already present in spec
+- Technical design:
+  - sequencing rules
+  - ownership boundaries
+  - state transitions
+  - non-obvious rationale and constraints
+- Code:
+  - actual branch structure
+  - error paths
+  - cleanup behavior
+  - concurrency and cancellation points
+  - any implemented behavior not yet reflected cleanly in spec
+- Reference docs:
+  - API quirks
+  - platform differences
+  - external constraints that can create hidden regressions
+- Existing test metadata:
+  - `// Validates:` tags
+  - test filenames
+  - package test layout
+- Historical signals:
+  - archived design reviews
+  - bug-fix comments in tests
+  - TODO or `[planned]` notes that imply currently untested edges
+
+### Discovery Passes
+
+For each workstream, do all of these passes before calling the ideal model complete:
+
+1. Requirement pass:
+   - enumerate every directly governed requirement ID
+   - break umbrella requirements into concrete observable contracts
+2. Design invariant pass:
+   - extract all “must happen before”, “must never”, “single owner”, “durable only”, “fail open/closed”, and “one source of truth” rules
+3. Boundary pass:
+   - CLI boundary
+   - config boundary
+   - filesystem boundary
+   - network/API boundary
+   - persistence boundary
+   - signal/shutdown boundary
+4. Lifecycle pass:
+   - startup
+   - steady state
+   - reload/reconfigure
+   - shutdown
+   - crash and restart
+   - cleanup after failure
+5. Failure-mode pass:
+   - transient failures
+   - terminal failures
+   - partial failures
+   - malformed input
+   - missing fields
+   - timeout/cancellation
+   - permission errors
+   - disk/full resource exhaustion
+6. Platform pass:
+   - Linux vs macOS
+   - case-sensitive vs case-insensitive filesystems
+   - path and permission differences
+7. Scale pass:
+   - zero items
+   - one item
+   - many items
+   - threshold edges
+   - concurrency limits
+   - long-running watch behavior
+8. Observability pass:
+   - logs
+   - user-facing messages
+   - JSON output
+   - durable state visibility
+9. Negative-space pass:
+   - what must not happen
+   - what must not be retried
+   - what must not be deleted
+   - what state must not be advanced
+10. Kill-switch pass:
+   - list 3 to 10 obvious regressions that should definitely break tests
+
+### Coverage Dimensions Checklist
+
+A workstream is not “fully modeled” until we have considered all applicable dimensions below:
+
+- Happy path
+- Boundary values
+- Invalid input
+- Retry and backoff
+- Cancellation
+- Cleanup and resource release
+- Crash consistency
+- Restart behavior
+- Concurrency/races
+- Idempotency
+- Durability and persistence
+- Security and containment
+- Platform variance
+- Human-readable output
+- Machine-readable output
+- External API quirks
+- Performance-sensitive thresholds
+
+### Code-Mining Checklist
+
+When moving beyond spec into code, look for these structures because each often implies a test obligation:
+
+- `switch` on status/error/action type
+- retry loops and retry scheduling
+- goroutine starts and channel ownership
+- timer creation and timer reset logic
+- `defer` cleanup paths
+- transaction boundaries
+- `os.Rename`, temp files, and atomic-write flows
+- path sanitization and containment checks
+- “fail open” / “fail closed” comments
+- TODO, FIXME, and bug-number comments in tests or production code
+- sentinel errors used in `errors.Is`
+
+### Missing-Ideal Questions
+
+Before marking a workstream complete, answer these:
+
+- What contract is only described in code comments and nowhere in requirements?
+- What contract is only described in a design rationale paragraph and nowhere else?
+- What would break if we reordered lifecycle steps?
+- What user data could be lost, duplicated, or hidden if this behavior regressed?
+- What stale durable state could survive a crash and poison the next run?
+- What platform-specific behavior could pass on one OS and fail on another?
+- What requirement is marked verified but has weak or missing traceability?
+- What is implemented in code but not claimed in the spec, or claimed in the spec but not wired in code?
+
+### Stronger Row Schema
+
+When a workstream starts getting deep, add this per-contract schema instead of relying only on bullets:
+
+- Contract / invariant ID
+- Source type:
+  - requirement
+  - design invariant
+  - code-derived
+  - external quirk
+- Why it matters
+- Code entry points
+- Ideal proving layer
+- Mandatory failure injections
+- Kill switch
+- Existing claim coverage
+- Body-audit verdict
+- Follow-up
+
+### Confidence Rule
+
+Do not say “we know everything we should ideally test” until:
+
+- every workstream has completed the discovery passes above
+- every high-risk workstream has at least one code-derived pass, not just spec-derived coverage
+- every verified requirement has either a convincing proof path or an explicit audit note explaining the gap
+- every design doc with operational invariants has had those invariants copied into this audit
+
+## Gap Taxonomy
+
+Use precise labels so we do not blur together very different problems.
+
+- `missing-test`:
+  - the ideal contract is implemented, but no convincing test exists
+- `weak-test`:
+  - a test exists, but an obvious regression could slip through
+- `traceability-gap`:
+  - coverage may exist, but the proof path is hard to locate because `// Validates:` tags or audit notes are missing
+- `spec-drift`:
+  - requirement or design status claims do not match the current code or audit evidence
+- `implementation-gap`:
+  - the requirement is claimed as implemented or verified, but the code path appears absent or only partially wired
+- `planned-gap`:
+  - the ideal contract is known, but the feature is still planned
+- `benchmark-gap`:
+  - the contract is about performance or scale and needs benchmark/profile evidence rather than ordinary correctness tests
+- `env-gap`:
+  - ideal coverage requires live credentials, OS-specific behavior, or stress infrastructure not yet available in the normal suite
+
+## Evidence Tags
+
+When writing future notes, use these tags inline so the basis of a claim stays obvious:
+
+- `REQ`: requirement-derived
+- `DESIGN`: technical design invariant or rationale
+- `CODE`: production-code-derived behavior
+- `REF`: external API or platform quirk
+- `META`: test metadata only
+- `BODY`: test body reviewed
+- `E2E`: live or end-to-end evidence
+- `SUSPECT`: likely gap, not yet proven
+
+Example:
+
+- `REQ+DESIGN`: one-shot execution must not return before results are drained
+- `CODE+SUSPECT`: disable-upload-validation appears in config but no runtime wiring found yet
+- `META`: many tests claim `R-2.10.*`, but bootstrap ordering is still not visibly tagged
+
+## Ideal Proving Layers
+
+Use the narrowest layer that can prove the contract honestly, then add higher layers only when they catch different failure classes.
+
+- `unit`:
+  - pure logic, branching, formatting, classification, small state transitions
+- `component`:
+  - a package plus realistic collaborators or fakes, useful for persistence, timer, and sequencing behavior
+- `integration`:
+  - multiple real packages together, usually including filesystem, DB, HTTP test server, or signal flow
+- `e2e`:
+  - full CLI or sync behavior through real entry points
+- `live-e2e`:
+  - OneDrive-backed or environment-backed proof against actual external behavior
+- `stress`:
+  - repeated or high-concurrency runs intended to expose flakiness and ownership bugs
+- `race`:
+  - correctness under `-race`, usually paired with concurrency-focused tests
+- `fuzz`:
+  - parser, normalization, and API-shape hardening where malformed input matters
+- `benchmark`:
+  - required for target or scale claims, not just performance curiosity
+
+## Coverage Ledger
+
+This is the operating dashboard for completeness, not a verdict of quality. A pass is only `done` when the workstream section contains the harvested results, not just a verbal claim.
+
+| Workstream | Req | Design | Code | Ref | Meta | Body | Kill | Verified reconcile | Highest unresolved risk |
+|---|---|---|---|---|---|---|---|---|---|
+| W1 | done | done | partial | partial | done | partial | partial | partial | periodic reconciliation, aggregated logging, and big-delete traceability still lag |
+| W2 | done | done | done | partial | done | partial | partial | partial | actionable-issue lifecycle, symlink semantics, and sparse-payload hardening still need body audit |
+| W3 | done | done | partial | n/a | done | no | partial | no | big-delete and cross-drive proof paths unclear |
+| W4 | done | done | partial | n/a | done | no | partial | no | user-facing JSON/message semantics not yet audited |
+| W5 | done | done | done | partial | done | partial | partial | done | upload-session traceability tags still lag the body-level coverage |
+| W6 | done | done | partial | partial | done | partial | partial | no | pagination and transport split still need body audit |
+| W7 | done | done | partial | n/a | done | no | no | no | output semantics can still be shallowly tested |
+| W8 | done | done | partial | n/a | done | no | no | no | validation-tier coverage may be over-claimed |
+| W9 | done | done | partial | partial | done | no | no | no | shared-drive identity fallback details still need confirmation |
+
+Legend:
+
+- `done`: harvested into this doc
+- `partial`: started, but not enough to close
+- `no`: not yet done
+- `n/a`: not expected for this workstream
+
+## Source Harvest Commands
+
+These commands are meant to make future audit passes reproducible instead of intuition-driven.
+
+Requirement and design harvesting:
+
+```bash
+rg -n '^\#\#? |^Implements:|^GOVERNS:' spec/design spec/requirements
+rg -n '\[planned\]|\[verified\]|\[implemented\]|\[future\]' spec
+```
+
+Test traceability harvesting:
+
+```bash
+rg -n 'Validates:' -g '*_test.go'
+rg --files | rg '(_test\.go$|e2e|testdata)'
+```
+
+Invariant and risk harvesting from code:
+
+```bash
+rg -n 'TODO|FIXME|BUG|panic\\(|errors\\.Is|context\\.With|go func|time\\.New|NewTicker|Retry-After|If-Match|os\\.Rename|CreateTemp|Close\\(' internal
+rg -n 'fail open|fail closed|single owner|must not|invariant|atomic|durable|quiesc|drain' spec internal
+```
+
+Potential implementation-gap harvesting:
+
+```bash
+rg -n 'disable_download_validation|disable_upload_validation|transfer_workers|check_workers|MaxOneDriveFileSize|SimpleUploadMaxSize' .
+rg -n 'TODO|planned' spec/design spec/requirements internal
+```
+
+Platform and environment harvesting:
+
+```bash
+rg -n 'linux|darwin|fsevents|inotify|case-insensitive|case-sensitive|permission|symlink|trash' internal spec
+rg -n 'e2e|e2e_full|ONEDRIVE_ALLOWED_TEST_ACCOUNTS|ONEDRIVE_TEST_DRIVE' .
+```
+
+## Per-Workstream Exit Criteria
+
+Do not move a workstream to `strong-enough` until all of these are true:
+
+- The workstream section lists every applicable requirement and design invariant we know about.
+- At least one code-derived pass has been done and documented.
+- Every verified requirement in the governed docs has either:
+  - a convincing proof path, or
+  - an explicit gap label from the gap taxonomy.
+- The section names the highest-risk missing kill switches.
+- We can point to at least one ideal proving layer per major contract family.
+- Cross-cutting concerns are covered where applicable:
+  - cancellation
+  - cleanup
+  - crash/restart
+  - observability
+  - platform variance
+
+## Cross-Cutting Contract Families
+
+These should be checked for every workstream so we do not over-focus on happy-path functional behavior.
+
+- Correctness:
+  - the intended result happens
+- Safety:
+  - the wrong destructive result does not happen
+- Durability:
+  - state survives crashes and restarts correctly
+- Recovery:
+  - interrupted or degraded operations can resume or clear cleanly
+- Containment:
+  - writes, deletes, permissions, and paths stay inside allowed boundaries
+- Coordination:
+  - concurrent work, retries, and timers do not violate ownership rules
+- Observability:
+  - users and operators can understand what happened
+- Compatibility-with-quirks:
+  - external API and platform oddities are handled deliberately
+
+## Verified-Claim Reconciliation
+
+One explicit goal of this audit is to challenge every `[verified]` claim in the spec.
+
+For each governed requirement marked `[verified]`, record one of:
+
+- `proven`:
+  - test path is known and believable
+- `proven-but-weak`:
+  - a test exists but likely would not catch an obvious nerf
+- `traceability-gap`:
+  - likely covered but hard to prove quickly
+- `suspect-impl-gap`:
+  - code path itself looks questionable
+- `not-yet-audited`:
+  - we have not read enough yet
+
+When a design doc says `Implements: R-X [verified]`, the audit should verify both:
+
+- the code appears to implement it
+- a believable proof path exists
+
+## Contract Template
+
+Copy this block when a workstream needs finer-grained rows:
+
+```text
+Contract:
+Source:
+Why it matters:
+Requirement IDs:
+Design sections:
+Code entry points:
+Ideal proving layer:
+Mandatory failure injection:
+Negative-space assertion:
+Kill switch:
+Existing evidence:
+Gap label:
+Confidence:
+Follow-up:
+```
+
+## Review Cadence
+
+Use this cadence so the document keeps compounding instead of drifting:
+
+1. After each new workstream pass, update the coverage ledger.
+2. After each body audit, add at least one `Gap Taxonomy` label or a `proven`/`proven-but-weak` reconciliation note.
+3. After each production or test fix, update both:
+   - the affected workstream section
+   - the highest unresolved risk column in the coverage ledger
+4. When a spec status changes, update the audit in the same increment so spec drift does not accumulate.
+
+## Workstream Backlog
+
+| ID | Workstream | Governing docs | Primary code areas | Risk | Phase |
+|---|---|---|---|---|---|
+| W1 | Sync engine runtime, retry, and watch ownership invariants | `spec/requirements/sync.md`, `spec/requirements/non-functional.md`, `spec/design/sync-engine.md`, `spec/design/retry.md`, `spec/design/sync-control-plane.md`, `spec/design/sync-execution.md` | `internal/sync/`, `internal/multisync/`, `internal/syncdispatch/`, `internal/syncexec/` | Critical | `test-audit` |
+| W2 | Observation correctness, filtering, collisions, normalization | `spec/requirements/sync.md`, `spec/requirements/non-functional.md`, `spec/design/sync-observation.md` | `internal/syncobserve/` | Critical | `claims-mapping` |
+| W3 | Planner safety, conflict resolution, delete safety | `spec/requirements/sync.md`, `spec/requirements/non-functional.md`, `spec/design/sync-planning.md`, `spec/design/system.md` | `internal/syncplan/`, `internal/synctypes/` | Critical | `claims-mapping` |
+| W4 | Sync store durability, issues lifecycle, verification/trash behavior | `spec/requirements/sync.md`, `spec/requirements/non-functional.md`, `spec/design/sync-store.md`, `spec/design/data-model.md` | `internal/syncstore/`, `internal/cli/issues.go`, `internal/cli/verify.go` | Critical | `claims-mapping` |
+| W5 | Transfer manager, resumable transfer robustness, local disk safety | `spec/requirements/file-operations.md`, `spec/requirements/transfers.md`, `spec/requirements/non-functional.md`, `spec/design/drive-transfers.md` | `internal/driveops/`, `pkg/quickxorhash/`, `internal/cli/get.go`, `internal/cli/put.go` | Critical | `test-audit` |
+| W6 | Graph client quirks, pagination, auth refresh, retry transport | `spec/requirements/file-operations.md`, `spec/requirements/drive-management.md`, `spec/requirements/non-functional.md`, `spec/design/graph-client.md`, `spec/design/retry.md` | `internal/graph/`, `internal/tokenfile/` | Critical | `claims-mapping` |
+| W7 | CLI contracts, formatting, command independence from sync state | `spec/requirements/file-operations.md`, `spec/requirements/drive-management.md`, `spec/design/cli.md` | `internal/cli/`, `main.go` | Medium | `claims-mapping` |
+| W8 | Configuration discovery, validation tiers, token resolution | `spec/requirements/configuration.md`, `spec/design/config.md` | `internal/config/` | Medium | `claims-mapping` |
+| W9 | Drive identity and shared-drive discovery semantics | `spec/requirements/drive-management.md`, `spec/requirements/non-functional.md`, `spec/design/drive-identity.md` | `internal/driveid/`, `internal/cli/drive.go` | Medium | `claims-mapping` |
+
+## First-Pass Risk Notes
+
+These are not test results yet. They are likely weak spots inferred from requirements and design docs alone.
+
+- Watch-loop sequencing and single-owner behavior are easy to nerf with refactors and hard to validate with shallow tests.
+- Transfer resume robustness has explicit planned edge cases in the design doc: corrupt partial files, changed remote content, oversized partials.
+- Observation has multiple planned hardening notes: nil field guards, buffer overflow verification, inotify setup cleanup, timestamp edge cases.
+- Sync execution still calls out missing targeted `-race` stress tests for DepGraph, active scopes, Buffer, and WorkerPool.
+- The system architecture doc explicitly calls out bare `assert.NoError` patterns and ignored `Close` errors as areas worth auditing for weak tests.
+
+## Workstream Details
+
+### W1. Sync Engine Runtime, Retry, And Watch Ownership Invariants
+
+- Requirements and invariants:
+  - `R-2.1`
+  - `R-2.8.4`
+  - `R-2.10.1` through `R-2.10.15`
+  - `R-2.10.17` through `R-2.10.31`
+  - `R-2.10.35` through `R-2.10.38`
+  - `R-2.10.43`
+  - `R-2.14.1` through `R-2.14.4`
+  - `R-6.4.1` through `R-6.4.3`
+  - `R-6.6.7`, `R-6.6.8`, `R-6.6.10`, `R-6.6.12`
+  - `R-6.7.27`
+  - `R-6.8.7`, `R-6.8.9`, `R-6.8.10`, `R-6.8.11`, `R-6.8.15`
+  - Design-only runtime invariants from `sync-engine.md`: bootstrap ordering, one-shot completion barrier, trial failure isolation, trial success release, permission recheck release
+- Ideal unit coverage:
+  - `classifyResult()` proves exact routing for 401, 403, 404, 408, 412, 423, 429, 5xx, 507, `os.ErrPermission`, disk-full, and context cancellation
+  - `ScopeKeyForStatus` and related routing prove shortcut-vs-own-drive-vs-account-vs-service scoping with empty `TargetDriveID` handled safely
+  - timer math proves local timing defaults, `Retry-After` override, and per-scope caps
+  - local permission classification proves directory-vs-file scope and auto-clear preconditions
+  - shared-permission release logic proves fail-open behavior on inconclusive Graph checks
+- Ideal integration coverage:
+  - watch bootstrap uses one runtime pipeline and does not start observers until bootstrap work is quiescent
+  - one-shot execution does not return before workers stop, results drain, and side effects are applied
+  - persisted scope blocks survive restart with deadlines preserved for server-timed scopes
+  - trial success releases held failures immediately and wakes retry processing without new external observation
+  - trial failure extends only the active trial interval and does not re-enter normal result handling
+  - scope-blocked work is durable in `sync_failures` instead of hidden only in memory
+  - big-delete hold in watch mode blocks deletes while allowing non-delete work to continue
+- Ideal e2e coverage:
+  - watch startup with pre-existing divergence completes bootstrap before steady-state observation begins
+  - `pause` and `resume` preserve accumulated work and do not lose changes
+  - permission-denied subtree becomes download-only, then auto-recovers when permissions are restored
+  - restart after mid-run failure rehydrates retryable work from durable state
+- Mandatory failure injection:
+  - fake worker results interleaving successes and failures across concurrent scopes
+  - injected `Retry-After` on 429 and 503
+  - injected local permission errors at both file and directory boundaries
+  - restart with persisted `scope_blocks` plus `sync_failures`
+  - context cancellation during active work and during cleanup
+- Kill switches that must fail tests:
+  - start observers before bootstrap quiescence
+  - return from one-shot execution before result side effects are drained
+  - route trial failure through normal `processWorkerResult`
+  - clear a scope but forget to wake the retrier
+  - treat `os.ErrPermission` as a remote-scoped failure requiring drive identity
+- Audit status:
+  - initial body audit started
+  - still far from full verified-claim reconciliation
+- Claim mapping snapshot from filenames and `// Validates:` only:
+  - Candidate test surface is broad: `internal/sync/engine_*_test.go`, `internal/sync/permissions_test.go`, `internal/syncdispatch/{active_scopes,scope,dep_graph,delete_counter}_test.go`, `internal/multisync/{orchestrator,drive_runner}_test.go`, plus `e2e/sync*_test.go` and `e2e/orchestrator_e2e_test.go`
+  - Explicit comment claims already exist for `R-2.1.1` through `R-2.1.6`, many `R-2.10.*` items, `R-2.14.1` through `R-2.14.4`, `R-6.8.7`, `R-6.8.9`, `R-6.8.10`, `R-6.8.11`, `R-6.8.15`, `R-6.6.10`, and `R-6.6.12`
+  - No explicit claim surfaced yet for `R-2.8.4`, `R-6.4.2`, `R-6.4.3`, or `R-6.6.7`
+  - Design-only invariants still look comment-invisible: bootstrap ordering, one-shot completion barrier, trial failure isolation, and retrier wakeup on scope release
+  - First body-audit target inside W1 should be sequencing tests, not simple classifier tests, because that is where nerfs are hardest to spot from metadata alone
+- Verified-claim reconciliation snapshot:
+
+| Contract | Basis | Current evidence | Reconciliation | Gap label / note |
+|---|---|---|---|---|
+| Bootstrap must quiesce before local observer starts | `REQ+DESIGN+BODY` | `internal/sync/engine_phase0_test.go:44` proves bootstrap upload starts first and watcher creation is delayed | `proven` | Strong sequencing proof |
+| Bootstrap must quiesce before remote polling starts | `REQ+DESIGN+BODY` | `internal/sync/engine_phase0_test.go:106` proves no second delta poll occurs until bootstrap download drains | `proven` | Strong sequencing proof |
+| One-shot execution must not return before drain side effects finish | `DESIGN+BODY` | `internal/sync/engine_phase0_test.go:177` blocks permission resolution and asserts `executePlan` does not return early | `proven` | Important design-only invariant |
+| Trial failure must stay isolated from normal result handling | `DESIGN+BODY` | `internal/sync/engine_phase0_test.go:269` and `internal/sync/engine_result_scope_test.go:531` show interval extension without scope clearing or re-detection | `proven` | Strong regression detector |
+| Trial success must release held failures without new external observation | `REQ+DESIGN+BODY` | `internal/sync/engine_phase0_test.go:323` and `internal/sync/engine_result_scope_test.go:1061` show immediate re-dispatch after scope release | `proven` | Covers the core retry-path invariant |
+| Scope release must kick the retrier immediately | `DESIGN+BODY` | `internal/sync/engine_single_owner_test.go:121` and `internal/sync/engine_watch_test.go:558` assert retry wakeup after release | `proven` | Good watch-loop ownership proof |
+| Watch-mode big-delete hold must block deletes while allowing non-deletes | `REQ+DESIGN+BODY` | `internal/sync/engine_watch_test.go:220` keeps one download flowing while 15 delete actions are held | `proven-but-weak` | Behavior looks correct, but traceability to `R-6.4.2` / `R-6.4.3` is poor |
+| Periodic full reconciliation in watch mode | `REQ+DESIGN+META` | Mentioned in spec/design, but this pass has not yet reconciled a strong body-level proof | `not-yet-audited` | `traceability-gap` for `R-2.8.4` |
+| Aggregated warning logging behavior | `REQ+DESIGN+META` | Design claims `R-6.6.7`, but this pass has not confirmed a convincing proof path yet | `not-yet-audited` | `traceability-gap` |
+
+Key W1 gap notes:
+
+- `META+SUSPECT`: the most valuable sequencing guarantees are real and covered, but still hard to discover from `// Validates:` tags alone.
+- `REQ+DESIGN`: `R-2.8.4`, `R-6.4.2`, `R-6.4.3`, and `R-6.6.7` need explicit reconciliation next so the audit can challenge their `[verified]` status cleanly.
+- `BODY`: W1 is now body-audited enough for `test-audit`, but nowhere near `strong-enough`.
+
+### W2. Observation Correctness, Filtering, Collisions, And Normalization
+
+- Requirements and invariants:
+  - `R-2.1.2`
+  - `R-2.4.1` through `R-2.4.3`, `R-2.4.6`, `R-2.4.7`
+  - `R-2.11.1` through `R-2.11.5`
+  - `R-2.12.1`, `R-2.12.2`
+  - `R-2.13.1`
+  - `R-6.7.1`, `R-6.7.3`, `R-6.7.5`, `R-6.7.19`, `R-6.7.20`, `R-6.7.24`
+  - Design constraints and planned hardening from `sync-observation.md`: nil guards, buffer overflow verification, inotify setup cleanup
+- Ideal unit coverage:
+  - item conversion handles missing optional fields without panic
+  - rename of a remote folder recalculates descendant paths correctly
+  - zero-event delta page does not advance the token
+  - filter cascade rejects dotfiles, marker patterns, symlinks, vault items, and OneDrive-invalid filenames with actionable issue output where required
+  - case-collision detection covers file/file, file/baseline, directory/directory, and N-way peer tracking on resolution
+  - NFC normalization makes macOS NFD and NFC names compare equal
+- Ideal integration coverage:
+  - local observer coalesces bursty writes into correct buffered outcomes without losing the final state
+  - remote observer handles paginated delta, duplicate items, 410 reset, and cross-drive shortcut parent chains
+  - buffer overflow behavior is explicit and observable
+  - partial inotify setup failure cleans up already-added watches
+  - scanner permission interaction emits releasable failures instead of silent skips
+- Ideal e2e coverage:
+  - live watch mode catches local create, modify, delete, and rename with remote convergence
+  - shared-folder observation differs correctly across Personal and Business/SharePoint drive types
+  - case collisions block uploads until resolved and re-emit promptly on delete resolution
+- Mandatory failure injection:
+  - delta stream with reordered operations and duplicate IDs
+  - missing `Name`, `ParentReference`, or `lastModifiedDateTime`
+  - buffer overflow or flood conditions
+  - symlink loops or unreadable directories
+- Kill switches that must fail tests:
+  - advance delta token on an empty delta response
+  - drop descendant path recalculation on folder rename
+  - silently skip invalid OneDrive filenames instead of recording an actionable issue
+  - fail to re-emit colliding peers after one side is deleted
+  - panic on sparse delta payloads
+- Audit status:
+  - ideal model drafted
+  - note: planned requirements `R-2.4.4`, `R-2.4.5`, `R-6.7.15`, `R-6.7.16`, `R-6.7.21` stay out of the current strong/weak audit until implemented
+- Claim mapping snapshot from filenames and `// Validates:` only:
+  - Candidate test surface is strong around observation mechanics: `scanner_test.go`, `observer_remote_test.go`, `buffer_test.go`, `observer_local_*_test.go`, `item_converter_test.go`, and `inotify*_test.go`
+  - Explicit comment claims already exist for `R-2.1.2`, `R-2.12.1`, `R-2.12.2`, `R-2.13.1`, `R-6.7.1`, `R-6.7.3`, `R-6.7.5`, `R-6.7.20`, and `R-6.7.24`
+  - No explicit claim surfaced yet for `R-2.4.1` through `R-2.4.3`, `R-2.4.6`, `R-2.4.7`, `R-2.11.1` through `R-2.11.5`, or `R-6.7.19`
+  - Design hardening notes also look unclaimed from metadata: sparse payload nil-guarding, buffer overflow behavior, and inotify partial-watch cleanup
+  - First body-audit target inside W2 should be naming/filtering coverage, because collisions and watch mechanics are visibly tagged while filter/naming guarantees are not
+- Body-audit notes from `internal/syncobserve/*_test.go`, `internal/sync/*_test.go`, and observation/config wiring:
+  - Investigation outcome: the original W2 suspicion was real. `skip_dotfiles`, `skip_dirs`, and `skip_files` were marked verified in requirements/design, but the resolved config never reached `LocalObserver` or retry/trial single-path reconstruction.
+  - Production fix: the sync engine now carries a resolved `LocalFilterConfig`, applies it to one-shot scans and watch mode via `LocalObserver.SetFilterConfig`, and threads the same filter state into retry/trial reconstruction through `ObserveSinglePathWithFilter`.
+  - Regression coverage now exists at multiple layers:
+    - `internal/syncobserve/filter_test.go` proves full-scan filtering, watch setup subtree exclusion, watch write suppression, and single-path retry/trial reconstruction semantics
+    - `internal/sync/engine_filter_test.go` proves the engine suppresses uploads for configured exclusions instead of merely unit-testing the observer in isolation
+    - `internal/cli/sync_helpers_test.go` proves `newSyncEngine` propagates resolved config into the engine instead of dropping it on the floor
+    - `internal/config/validate_test.go` now proves `skip_files` / `skip_dirs` no longer warn as unimplemented
+- Verified-claim reconciliation snapshot:
+
+| Contract | Basis | Current evidence | Reconciliation | Gap label / note |
+|---|---|---|---|---|
+| `skip_dotfiles` excludes hidden files and directories from full-scan observation | `REQ+DESIGN+CODE+BODY` | `internal/syncobserve/filter_test.go` creates dotfile files/dirs and proves they do not produce `ChangeEvent`s or `SkippedItem`s | `proven` | Direct scanner/body proof added |
+| `skip_dirs` excludes configured directory names from scan and watch setup | `REQ+DESIGN+CODE+BODY` | `internal/syncobserve/filter_test.go` proves `vendor/` is absent from full scans and does not receive watches in `AddWatchesRecursive` | `proven` | Covers both scan and watch-start behavior |
+| `skip_files` excludes matching file globs from scan and watch write handling | `REQ+DESIGN+CODE+BODY` | `internal/syncobserve/filter_test.go` proves `*.log` files are omitted from full scans and suppressed on write events | `proven` | Direct file-glob regression coverage added |
+| Retry/trial single-path reconstruction must honor the same local filters as normal observation | `DESIGN+CODE+BODY` | `internal/syncobserve/filter_test.go` proves `ObserveSinglePathWithFilter` resolves configured exclusions silently | `proven` | Important design-only invariant now covered |
+| Resolved config must reach the engine and observer instead of being dropped in CLI setup | `REQ+CODE+BODY` | `internal/cli/sync_helpers_test.go` plus `internal/sync/engine_filter_test.go` prove config propagation and end-to-end upload suppression | `proven` | Fixed production wiring gap |
+
+Key W2 gap notes:
+
+- `CODE+BODY`: the filter-config wiring gap was a real production defect, not a metadata illusion. It is now fixed with regression coverage at observer, engine, and CLI wiring layers.
+- `META`: W2 still needs deeper reconciliation on actionable-issue lifecycle (`R-2.11.*`), symlink semantics (`R-2.4.6`), and sparse remote payload hardening.
+
+### W3. Planner Safety, Conflict Resolution, And Delete Protection
+
+- Requirements and invariants:
+  - `R-2.2.1`, `R-2.2.2`
+  - `R-2.3.1`
+  - `R-6.2.1`, `R-6.2.2`, `R-6.2.5`
+  - `R-6.4.1`, `R-6.4.2`, `R-6.4.3`
+  - `R-6.7.7`
+  - `R-2.14.2`
+  - design matrix and cross-drive guard from `sync-planning.md`
+- Ideal unit coverage:
+  - file and folder decision matrices across unchanged, local-only, remote-only, both-changed, deleted, and conflict states
+  - fast-path timestamp matching never suppresses a required hash comparison when baseline or mtime contract does not allow it
+  - read-only subtree planning suppresses uploads, remote moves, and remote deletes while still permitting downloads
+  - cross-drive moves are decomposed into safe operations instead of server-side move attempts
+- Ideal integration coverage:
+  - one-shot big-delete protection aborts the run and requires explicit `--force`
+  - watch-mode big-delete hold pauses only delete actions while other work keeps flowing
+  - conflict resolution preserves both versions at the correct paths with durable issue recording
+  - planner never schedules a remote delete from local absence unless a baseline entry exists
+  - planner never compares hashes for deleted items
+- Ideal e2e coverage:
+  - simultaneous local and remote edit produces rename-aside conflict behavior visible to the user
+  - large accidental delete wave is blocked in one-shot and held in watch mode
+  - shared read-only subtree still downloads remote changes
+- Mandatory failure injection:
+  - stale or absent baseline
+  - mismatched hashes during local delete verification
+  - cross-drive shortcut moves
+  - interleaved deletions near big-delete threshold
+- Kill switches that must fail tests:
+  - allow a remote delete with no baseline record
+  - compare hashes for deleted items and plan nonsense work
+  - let watch-mode big-delete hold freeze the entire engine instead of deletes only
+  - allow uploads inside a download-only permission subtree
+  - attempt a server-side move across drives
+- Audit status:
+  - ideal model drafted
+- Claim mapping snapshot from filenames and `// Validates:` only:
+  - Candidate test surface includes `internal/syncplan/{planner,planner_edge,planner_crossdrive,planner_cascade,planner_enrichment}_test.go`, `internal/syncexec/executor_test.go`, and several sync e2e suites
+  - Explicit comment claims already exist for `R-2.2`, `R-2.3.1`, `R-6.2.1`, `R-6.4.1`, `R-6.7.7`, and `R-2.14.2`
+  - No explicit claim surfaced yet for `R-6.2.2`, `R-6.2.5`, `R-6.4.2`, or `R-6.4.3`
+  - The presence of `planner_crossdrive_test.go` is encouraging, but no matching `// Validates:` hit surfaced for the cross-drive move guard, so the body audit should confirm both the behavior and the missing traceability tag
+  - Conflict handling appears split between planner and executor tests, which is another place where shallow “happy path only” testing can hide
+
+### W4. Sync Store Durability, Issues Lifecycle, And Verification/Trash Behavior
+
+- Requirements and invariants:
+  - `R-2.3.2` through `R-2.3.10`
+  - `R-2.5.1` through `R-2.5.4`
+  - `R-2.7.1`
+  - `R-2.10.1`, `R-2.10.2`, `R-2.10.4`, `R-2.10.22`, `R-2.10.33`, `R-2.10.34`, `R-2.10.41`
+  - `R-2.15.1`
+  - `R-6.4.4`, `R-6.4.5`
+  - `R-6.6.11`
+- Ideal unit coverage:
+  - schema/formatter helpers prove stable scope-key representation and human-readable issue messages
+  - issue grouping uses shortcut display names instead of opaque identifiers
+  - verify output formats preserve mismatch semantics
+- Ideal integration coverage:
+  - transactional writes survive interruption and leave no half-committed state
+  - reset of in-progress actions creates `sync_failures` bridge rows so crashed work is rediscoverable
+  - success paths clear stale failure rows for download, delete, and move
+  - scope release deletes `scope_blocks`, updates `sync_failures`, and keeps per-item failure counts
+  - `issues clear` and `issues retry` mutate only the targeted durable rows
+  - local trash and remote recycle-bin flows preserve user-recoverable deletion semantics
+- Ideal e2e coverage:
+  - `issues`, `issues clear`, `issues retry`, and `verify` reflect durable store state after real sync activity
+  - crash/restart leaves the next run able to continue from store truth
+- Mandatory failure injection:
+  - simulated crash between observation and execution bookkeeping
+  - stale failures whose underlying path has been renamed, moved, or deleted
+  - shortcut-scoped failures needing display-time metadata lookup
+- Kill switches that must fail tests:
+  - advance delta checkpoint without persisting individual item failure state
+  - leave stale `sync_failures` rows after successful delete or move
+  - group shortcut-scoped issues under opaque scope keys instead of human names
+  - clear one issue command and accidentally clear siblings in the same scope
+- Audit status:
+  - ideal model drafted
+- Claim mapping snapshot from filenames and `// Validates:` only:
+  - Candidate test surface is rich: `internal/syncstore/{baseline,sync_failures,store_scope_blocks,commit_observation,trash,verify}_test.go`, `internal/cli/{issues,failure_display,verify,status}_test.go`, plus sync recovery and CLI e2e suites
+  - Explicit comment claims already exist for `R-2.3.2` through `R-2.3.9`, `R-2.5`, `R-2.5.1`, `R-2.5.4`, `R-2.10.1`, `R-2.10.2`, `R-2.10.4`, `R-2.10.22`, `R-2.10.33`, `R-2.10.34`, `R-2.10.41`, `R-2.15.1`, and `R-6.4.5`
+  - No explicit claim surfaced yet for `R-2.3.10`, `R-2.7.1`, `R-6.4.4`, or `R-6.6.11`
+  - This is a good example of why the audit matters: store mechanics appear well tagged, but user-facing JSON/reporting guarantees may be easier to weaken without tripping metadata-covered tests
+  - First body-audit target inside W4 should be `issues`/`verify` output semantics and recycle-bin defaults, not just low-level store row mutation
+
+### W5. Transfer Manager, Resume Robustness, And Local Disk Safety
+
+- Requirements and invariants:
+  - `R-1.2`, `R-1.3`
+  - `R-5.1.1`, `R-5.1.2`
+  - `R-5.2.1` through `R-5.2.4`
+  - `R-5.3.1`, `R-5.3.3`
+  - `R-5.5.1` through `R-5.5.2`
+  - `R-5.6.2` through `R-5.6.9`
+  - `R-5.7.1`
+  - `R-6.2.3`, `R-6.2.6`, `R-6.2.10`
+  - `R-6.4.7`
+  - `R-6.8.3`
+- Ideal unit coverage:
+  - upload mode selection: zero-byte, <= 4 MiB, > 4 MiB, over max size
+  - chunk alignment is exact and rejects invalid configurable sizes once that feature exists
+  - session cancellation uses `context.Background()` on failure
+  - fragment requests omit Bearer tokens for pre-authenticated upload URLs
+  - disk-space precheck distinguishes scope-level disk exhaustion from per-file insufficiency
+- Ideal integration coverage:
+  - interrupted download resumes from `.partial` using range requests and validates before final rename
+  - interrupted upload resumes from persisted session state after process restart
+  - successful download performs atomic write sequence and only renames after validation
+  - simple upload performs timestamp preservation patch
+  - resumable upload session includes `fileSystemInfo` for atomic timestamps
+  - validation-disabled modes skip the right checks without silently skipping unrelated safety steps
+- Ideal e2e coverage:
+  - large file upload/download over the resumable threshold
+  - zero-byte file upload
+  - restart after interrupted transfer resumes instead of restarting from byte zero
+  - disk threshold behavior blocks downloads cleanly
+- Mandatory failure injection:
+  - interrupted connections mid-transfer
+  - hash mismatch after download
+  - expired OAuth token during upload fragment dispatch
+  - corrupt or oversized `.partial` file
+  - remote file changed since partial download began
+- Kill switches that must fail tests:
+  - rename `.partial` into place before validation
+  - send Bearer token on upload fragments
+  - skip the post-simple-upload timestamp patch
+  - leak upload sessions on failed transfer
+  - treat low free space for one large file as a global download scope block when smaller files still fit
+- Audit status:
+  - first body audit completed for key transfer contracts
+  - note: planned requirements `R-5.3.2`, `R-5.6.1`, `R-5.8.1` stay as future placeholders for now
+- Claim mapping snapshot from filenames and `// Validates:` only:
+  - Candidate test surface includes `internal/driveops/{transfer_manager,session_store,session,stale_partials,disk_unix,cleanup,hash}_test.go`, `pkg/quickxorhash/quickxorhash_test.go`, `internal/cli/{get,put,root}_test.go`, plus transfer-related e2e suites
+  - Explicit comment claims already exist for `R-1.2`, `R-1.2.4`, `R-1.3`, `R-1.3.4`, `R-5.2`, `R-5.5`, `R-5.7.1`, `R-6.2.3`, `R-6.2.6`, `R-6.2.10`, and `R-6.8.3`
+  - No explicit claim surfaced yet for `R-5.1.1`, `R-5.1.2`, `R-5.3.1`, `R-5.3.3`, `R-5.6.2` through `R-5.6.9`, or `R-6.4.7`
+  - This is currently the loudest metadata gap in the audit: several of the most subtle and regression-prone upload rules appear either untagged or uncovered from the outside
+  - First body-audit target inside W5 should be resumable upload invariants and cleanup behavior, because that is exactly where a test can exist but still be too shallow to catch a nerf
+- Body-audit notes from `internal/driveops/*_test.go` and `internal/graph/upload_test.go`:
+  - The earlier metadata gap was partly misleading: nuanced upload-session rules are heavily covered in `internal/graph/upload_test.go`, including explicit tests for `R-5.6.2`, `R-5.6.3`, `R-5.6.4`, `R-5.6.5`, `R-5.6.7`, `R-5.6.8`, and `R-5.6.9`, plus chunk-auth behavior (`R-5.6.6`) and chunk alignment behavior
+  - `internal/driveops/transfer_manager_test.go` does a solid job on download atomicity, resume behavior, hash mismatch handling, session-store resume, delete-on-resume-error, rename-failure preservation, and disk-space prechecks
+  - The planned edge cases called out in `drive-transfers.md` now have direct body-level proof in `internal/driveops/transfer_manager_test.go`: corrupt partial bytes trigger hash-mismatch retry, changed remote content during resume forces a fresh re-download, and oversized partial state is discarded via the same retry path
+  - Investigation outcome: the former `R-5.5.3` validation-disable requirement was not backed by any runtime path. The config keys existed only in parsing/tests, so the correct fix was to remove the dead config/spec surface instead of wiring a fake feature.
+  - Investigation outcome: `R-5.7.1` was a real boundary gap. Sync observation already enforced the 250 GB limit, but direct file operations did not. `TransferManager.UploadFile` now rejects oversized files before hashing or any network transfer, and the branch has a regression test for that boundary.
+  - Follow-up for W5:
+    - add more traceability tags for subtle upload-session behaviors that are well tested but still under-tagged
+- Verified-claim reconciliation snapshot:
+
+| Contract | Basis | Current evidence | Reconciliation | Gap label / note |
+|---|---|---|---|---|
+| Fresh download uses `.partial`, verifies, then atomically renames | `REQ+DESIGN+BODY` | `internal/driveops/transfer_manager_test.go:137` and `:867` cover success and rename-failure preservation | `proven` | Strong atomic-write proof |
+| Interrupted download resumes via `.partial` and range requests | `REQ+DESIGN+BODY` | `internal/driveops/transfer_manager_test.go:226`, `:268`, and `:1043` cover resume, fallback-to-fresh, and TOCTOU partial disappearance | `proven` | Good main-path resume coverage |
+| Upload session state persists and is reused across retries/restarts | `REQ+DESIGN+BODY` | `internal/driveops/session_store_test.go` plus `internal/driveops/transfer_manager_test.go:500` and `:548` cover persisted resume and expired-session fallback | `proven` | Crosses storage and transfer layers well |
+| Upload session creation must omit `If-Match` | `REQ+BODY` | `internal/graph/upload_test.go:1313` asserts no `If-Match` header on session creation | `proven` | Strong targeted regression test |
+| Failed chunked upload must cancel the session even after caller cancellation | `REQ+DESIGN+BODY` | `internal/graph/upload_test.go:1338` proves cancel still fires after parent context cancellation | `proven` | Implementation uses detached timeout context, which satisfies the requirement intent |
+| Upload-session chunk requests must omit Bearer tokens | `REQ+BODY` | `internal/graph/upload_test.go:313` asserts empty `Authorization` header for pre-auth chunk uploads | `proven` | Strong protocol-boundary test |
+| Resumable-session request should include `fileSystemInfo` when mtime is known | `REQ+BODY` | `internal/graph/upload_test.go:546` and `:578` cover with/without `fileSystemInfo` | `proven` | Good API-shape proof |
+| Simple upload must PATCH mtime afterward when needed | `REQ+BODY` | `internal/graph/upload_test.go:786`, `:854`, and `:886` cover patch, skip, and patch failure | `proven` | Strong contract proof |
+| Zero-byte files must use simple upload, not sessions | `REQ+BODY` | `internal/graph/upload_test.go:1387` proves PUT `/content` path with empty body and no session creation | `proven` | Strong edge-case proof |
+| Post-upload code must not re-query metadata immediately | `REQ+BODY` | `internal/graph/upload_test.go:1429` fails on unexpected GET after upload | `proven` | Strong anti-regression test |
+| Direct upload rejects files over 250 GB before hashing or attempting transfer | `REQ+CODE+BODY` | `internal/driveops/transfer_manager.go` now rejects above `driveops.MaxOneDriveFileSize` before hashing or upload, and `internal/driveops/transfer_manager_test.go` proves hash and upload are both bypassed | `proven` | Fixed production gap and added explicit regression coverage |
+| Resume edge cases: corrupt partial, changed remote content, oversized partial | `DESIGN+BODY` | `internal/driveops/transfer_manager_test.go` now covers corrupt partial bytes, stale remote content during resume, and oversized partial state via resume-then-fresh retry assertions | `proven` | Direct regression coverage added at the transfer-manager boundary |
+
+Key W5 gap notes:
+
+- `CODE+DOC`: dead validation-disable toggles were removed rather than implemented, because they had no runtime contract and would only create a misleading escape hatch.
+- `CODE+BODY`: direct `put` / transfer-layer 250 GB rejection is now explicitly implemented and regression-tested at the shared transfer boundary.
+- `BODY`: W5 is stronger than the metadata first suggested because much of the subtle behavior lives in graph-layer tests, not just transfer-manager tests.
+
+### W6. Graph Client Quirks, Pagination, Auth Refresh, And Retry Transport
+
+- Requirements and invariants:
+  - `R-1.1`, `R-1.4`, `R-1.5`, `R-1.6`, `R-1.7`, `R-1.8`
+  - `R-3.1`
+  - implemented portions of `R-6.7`
+  - `R-6.8.1`, `R-6.8.2`, `R-6.8.4`, `R-6.8.6`, `R-6.8.8`, `R-6.8.14`
+- Ideal unit coverage:
+  - URL decoding and drive ID normalization are applied consistently across API surfaces
+  - duplicate delta items keep the last occurrence per ID
+  - item-type filtering excludes OneNote package items correctly
+  - `Retry-After` parsing covers both 429 and 503
+  - 401 refresh path preserves the original request semantics and returns fatal unauthorized on failure
+- Ideal integration coverage:
+  - paginated list and delta follow every `@odata.nextLink`
+  - transient 404 `itemNotFound`, transient 403 after refresh, and 410 delta expiry all route correctly
+  - sync callers use raw `http.DefaultTransport` while CLI callers use retry transport
+  - copy polling continues until completion and handles non-terminal responses correctly
+  - path-based queries validate that the returned item actually matches the requested path once `R-6.7.22` is implemented
+- Ideal e2e coverage:
+  - drive listing across account and shared-drive shapes
+  - login/logout/token refresh flow for CLI commands
+  - server-side copy and move behavior against live Graph API
+- Mandatory failure injection:
+  - paginated multi-page responses
+  - malformed or sparse payload fields
+  - expired token followed by refresh success and failure
+  - retryable 429/503 with and without `Retry-After`
+- Kill switches that must fail tests:
+  - stop after the first page when `@odata.nextLink` exists
+  - fail to decode URL-encoded item names
+  - treat sync traffic as if retry transport were active
+  - swallow refresh failure instead of returning fatal unauthorized
+  - keep the first duplicate delta item instead of the last
+- Audit status:
+  - ideal model drafted
+  - note: planned requirements `R-6.7.11`, `R-6.7.18`, `R-6.7.22`, `R-6.7.23` stay as future placeholders for now
+- Claim mapping snapshot from filenames and `// Validates:` only:
+  - Candidate test surface is broad: `internal/graph/{client,items,drives,delta,download,upload,normalize,quirks,types,url_validation}_test.go`, `internal/tokenfile/tokenfile_test.go`, `internal/cli/{ls,stat,mv,cp,auth}_test.go`, and drive-list plus CLI e2e suites
+  - Explicit comment claims already exist for `R-1.1`, `R-1.1.1`, `R-1.1.2`, `R-1.1.3`, `R-1.4`, `R-1.5`, `R-1.6`, `R-1.7`, `R-1.8`, `R-3.1`, `R-6.7.8`, `R-6.7.9`, `R-6.7.10`, `R-6.7.12`, `R-6.7.13`, `R-6.8.1`, `R-6.8.2`, `R-6.8.6`, `R-6.8.8`, and `R-6.8.14`
+  - No explicit claim surfaced yet for `R-6.7.4` or `R-6.8.4`
+  - `internal/tokenfile/tokenfile_test.go` exists, but no `// Validates:` hit surfaced in this pass, so auth/token durability traceability likely needs cleanup even if the tests are solid
+  - First body-audit target inside W6 should be pagination and retry/auth boundary tests, because those can be partially covered while still missing the exact transport split or refresh failure semantics
+
+### W7. CLI Contracts, Formatting, And Command Independence From Sync State
+
+- Requirements and invariants:
+  - `R-1.1.1`, `R-1.2.4`, `R-1.3.4`, `R-1.4.3`, `R-1.5.1`, `R-1.6.1`, `R-1.7.1`, `R-1.8.1`, `R-1.9.4`
+  - `R-2.3.7`, `R-2.3.8`, `R-2.3.9`, `R-2.3.10`
+  - `R-2.7.1`
+  - `R-3.1.3`, `R-3.1.4`, `R-3.1.5`, `R-3.1.6`
+  - `R-6.2.8`
+  - `R-6.6.11`
+- Ideal unit coverage:
+  - formatting helpers prove stable text and JSON shape for each command
+  - failure rendering proves plain-language reason and actionable remediation text
+  - logout/purge display paths prove exactly which resources are removed and which are preserved
+- Ideal integration coverage:
+  - each CLI `RunE` path proves flag parsing, backend invocation, exit behavior, and emitted output
+  - file operation commands prove independence from sync state and sync database availability
+  - issues and verify commands prove JSON and human-readable output shapes from realistic store-backed inputs
+- Ideal e2e coverage:
+  - CLI commands produce machine-consumable JSON with the documented keys
+  - auth/logout/purge flows work against real config and token files without collateral deletion
+  - user-facing failure output is readable and stable under common failure classes
+- Mandatory failure injection:
+  - backend command errors
+  - malformed or empty result sets
+  - logged-out state and partial local credential state
+  - sync store unavailable while file commands still run
+- Kill switches that must fail tests:
+  - a file command accidentally touches sync state to complete its work
+  - a JSON output path silently drops a required field
+  - `issues` output loses human-readable scope/action text
+  - logout or purge deletes more state than the contract allows
+- Audit status:
+  - ideal model drafted
+- Claim mapping snapshot from filenames and `// Validates:` only:
+  - Candidate test surface is broad across `internal/cli/*_test.go` plus `e2e/cli_commands_e2e_test.go` and `e2e/output_validation_e2e_test.go`
+  - Explicit comment claims already exist for many command outputs: `R-1.1.1`, `R-1.2.4`, `R-1.3.4`, `R-1.4.3`, `R-1.5.1`, `R-1.6`, `R-1.7.1`, `R-1.8.1`, `R-1.9`, `R-1.9.4`, `R-3.1.4`, `R-3.1.5`, `R-3.1.6`, `R-2.3.7`, `R-2.3.8`, `R-2.3.9`, and `R-6.2.8`
+  - No explicit claim surfaced yet for `R-2.3.10`, `R-2.7.1`, or `R-6.6.11`
+  - CLI output is likely one of the easier places for a test to look busy while only checking superficial strings, so the body audit here should favor semantic assertions over formatting-only checks
+
+### W8. Configuration Discovery, Validation Tiers, And Token Resolution
+
+- Requirements and invariants:
+  - `R-4.1`
+  - `R-4.2`
+  - `R-4.3`
+  - `R-4.4`
+  - `R-4.8.1` through `R-4.8.6`
+  - `R-4.9.2`, `R-4.9.3`
+  - `R-3.4.1`
+  - `R-3.4.3`
+  - `R-6.2.9`
+- Ideal unit coverage:
+  - path resolution, env overrides, display-name selection, token resolution, and size parsing
+  - validation helpers prove exact rejection reasons for missing, invalid, or out-of-range config
+  - write helpers preserve intended structure and unknown fields according to contract
+- Ideal integration coverage:
+  - load/write round-trips preserve semantic configuration state
+  - validation tiers distinguish command classes correctly
+  - sync config requires absolute and creatable `sync_dir`, while non-sync commands do not
+  - token lookup follows the documented override chain without ambiguity
+- Ideal e2e coverage:
+  - CLI commands behave correctly with minimal valid config, fully populated config, and environment overrides
+  - auto-created config files land in the expected locations with correct defaults
+- Mandatory failure injection:
+  - relative and non-creatable sync paths
+  - missing drive sections
+  - unknown fields and malformed TOML
+  - conflicting override sources
+- Kill switches that must fail tests:
+  - config precedence order is inverted
+  - write path drops required fields or silently rewrites unrelated content
+  - sync validation accepts an invalid `sync_dir`
+  - token resolution ignores an explicit override and falls back to stale state
+- Audit status:
+  - ideal model drafted
+- Claim mapping snapshot from filenames and `// Validates:` only:
+  - Candidate test surface is rich across `internal/config/{load,write,validate,paths,env,holder,drive,token_resolution}_test.go` and related package tests
+  - Explicit comment claims already exist for `R-4.1.1`, `R-4.1.2`, `R-4.1.3`, `R-4.2.1`, `R-4.2.2`, `R-4.3`, `R-4.4.1`, `R-4.4.2`, `R-4.8.4`, `R-4.8.6`, `R-3.4.1`, `R-3.4.3`, and `R-6.2.9`
+  - No explicit claim surfaced yet for `R-4.8.1`, `R-4.8.2`, `R-4.8.3`, `R-4.9.2`, or `R-4.9.3`
+  - This may partly be a traceability gap rather than a test gap, but the body audit should confirm whether validation-tier coverage is as complete as the design doc claims
+
+### W9. Drive Identity And Shared-Drive Discovery Semantics
+
+- Requirements and invariants:
+  - `R-3.2`
+  - `R-3.3`
+  - `R-3.5`
+  - `R-3.6.1`, `R-3.6.2`, `R-3.6.3`
+  - `R-6.7.2`
+  - planned placeholders: `R-3.6.4`, `R-3.6.5`
+- Ideal unit coverage:
+  - drive ID canonicalization and equality across casing/truncation variants
+  - item-key construction and shared-drive identity extraction
+  - drive selector matching and ambiguity handling
+- Ideal integration coverage:
+  - CLI drive listing and selection prove display naming, matching, and config interaction
+  - shared-drive discovery handles shortcuts and shared-folder surfaces without identity drift
+  - canonical IDs stay stable across all API entry points
+- Ideal e2e coverage:
+  - drive listing against live Personal and shared-drive setups
+  - shared-folder sync and `drive` command workflows behave correctly with real Graph identities
+- Mandatory failure injection:
+  - inconsistent drive ID casing/truncation
+  - ambiguous drive-name matches
+  - shared item identity with partial metadata
+- Kill switches that must fail tests:
+  - two canonical-equivalent drive IDs compare unequal
+  - drive selection accepts an ambiguous match
+  - shared item display falls back to unstable or opaque identifiers when better identity exists
+- Audit status:
+  - ideal model drafted
+- Claim mapping snapshot from filenames and `// Validates:` only:
+  - Candidate test surface includes `internal/driveid/{canonical,id,itemkey,shared,edge}_test.go`, `internal/cli/drive_test.go`, and `e2e/drive_list*_test.go` plus shared-sync e2e coverage
+  - Explicit comment claims already exist for `R-3.2.1` through `R-3.2.4`, `R-3.3.2` through `R-3.3.10`, `R-3.5.1`, `R-3.6.1`, `R-3.6.2`, `R-3.6.3`, and `R-6.7.2`
+  - This currently looks like one of the healthiest traceability areas in the repo from metadata alone
+  - Planned items `R-3.6.4` and `R-3.6.5` should stay parked until implemented
+
+## Next Moves
+
+1. Continue W1 verified-claim reconciliation for:
+   - `R-2.8.4` periodic full reconciliation
+   - `R-6.4.2` and `R-6.4.3` watch-mode big-delete guarantees
+   - `R-6.6.7` aggregated warning logging
+2. Continue W2 body-level reconciliation for:
+   - `R-2.11.*` actionable-issue recording and auto-clear semantics
+   - `R-2.4.6` / `R-2.4.7` symlink and always-excluded behavior
+   - sparse remote-payload hardening and nil-guard proof paths
+3. Tighten W5 traceability for upload-session rules that are already strongly tested in body-level graph tests but still under-tagged at the `// Validates:` level.
+4. Start the W4 body audit on `issues` / `verify` output semantics and recycle-bin defaults, because that remains a likely weak-test area.

@@ -385,13 +385,14 @@ func (flow *engineFlow) recordRetryTrialSkippedItem(
 
 func (flow *engineFlow) rebuildFailureWork(ctx context.Context, row *synctypes.SyncFailureRow) failureRebuildResult {
 	if row.Direction == synctypes.DirectionUpload {
-		result, err := syncobserve.ObserveSinglePath(
+		result, err := syncobserve.ObserveSinglePathWithFilter(
 			flow.engine.logger,
 			flow.engine.syncTree,
 			row.Path,
 			flow.baselineEntryForPath(ctx, row.Path, row.DriveID),
 			flow.engine.nowFunc().UnixNano(),
 			nil,
+			flow.engine.localFilter,
 		)
 		if err != nil {
 			return failureRebuildResult{err: err}

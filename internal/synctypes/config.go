@@ -8,6 +8,15 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 )
 
+// LocalFilterConfig controls local-only observation exclusions. These filters
+// affect what the scanner/watch pipeline turns into change events; they do not
+// rewrite remote observation semantics.
+type LocalFilterConfig struct {
+	SkipDotfiles bool
+	SkipDirs     []string
+	SkipFiles    []string
+}
+
 // EngineConfig holds the options for NewEngine. Uses a struct because
 // seven fields is too many for positional parameters.
 type EngineConfig struct {
@@ -24,6 +33,7 @@ type EngineConfig struct {
 	RecursiveLister    RecursiveLister     // optional: recursive listing for shortcut observation (6.4b)
 	PermChecker        PermissionChecker   // optional: permission checking for shared folders (6.4c)
 	Logger             *slog.Logger
+	LocalFilter        LocalFilterConfig
 	UseLocalTrash      bool  // move deleted local files to OS trash instead of permanent delete
 	TransferWorkers    int   // goroutine count for the worker pool (0 → minWorkers)
 	CheckWorkers       int   // goroutine limit for parallel file hashing (0 → 4)

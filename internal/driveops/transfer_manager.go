@@ -452,6 +452,12 @@ func (tm *TransferManager) UploadFile(
 		return nil, fmt.Errorf("stat %s: %w", localPath, err)
 	}
 
+	size := info.Size()
+	if size > MaxOneDriveFileSize {
+		return nil, fmt.Errorf("%w: %s size %d bytes exceeds OneDrive 250 GB limit (%d bytes)",
+			ErrFileExceedsOneDriveLimit, localPath, size, MaxOneDriveFileSize)
+	}
+
 	// Hash the file first (opens, reads, closes internally). The hash is
 	// needed before upload starts for session record matching. The file is
 	// then re-opened below for the actual upload. This double-open is
@@ -462,7 +468,6 @@ func (tm *TransferManager) UploadFile(
 		return nil, fmt.Errorf("hashing %s: %w", localPath, err)
 	}
 
-	size := info.Size()
 	mtime := opts.Mtime
 	if mtime.IsZero() {
 		mtime = info.ModTime()

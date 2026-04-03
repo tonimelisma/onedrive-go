@@ -362,14 +362,6 @@ func WarnUnimplemented(rd *ResolvedDrive, logger *slog.Logger) {
 		warn("sync_paths")
 	}
 
-	if len(rd.SkipFiles) > 0 {
-		warn("skip_files")
-	}
-
-	if len(rd.SkipDirs) > 0 {
-		warn("skip_dirs")
-	}
-
 	if rd.BandwidthLimit != "0" && rd.BandwidthLimit != defaultBandwidthLimit {
 		warn("bandwidth_limit")
 	}

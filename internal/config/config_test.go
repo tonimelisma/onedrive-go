@@ -33,8 +33,6 @@ func TestDefaultConfig_AllFieldsPopulated(t *testing.T) {
 	assert.Equal(t, 1000, cfg.BigDeleteThreshold)
 	assert.Equal(t, "1GB", cfg.MinFreeSpace)
 	assert.Equal(t, runtime.GOOS == "darwin", cfg.UseLocalTrash) // platform-specific default
-	assert.False(t, cfg.DisableDownloadValidation)
-	assert.False(t, cfg.DisableUploadValidation)
 	assert.Equal(t, "0700", cfg.SyncDirPermissions)
 	assert.Equal(t, "0600", cfg.SyncFilePermissions)
 
