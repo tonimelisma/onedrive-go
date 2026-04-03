@@ -524,6 +524,10 @@ func executeLogout(cfg *config.Config, cfgPath string, w io.Writer, account stri
 
 		return writeln(w, "Sync directories untouched — your files remain on disk.")
 	} else {
+		if clearErr := clearAccountAuthScopes(context.Background(), account, logger); clearErr != nil {
+			logger.Warn("clearing stale auth scopes during logout", "account", account, "error", clearErr)
+		}
+
 		if err := removeAccountDriveConfigs(cfgPath, affected, logger); err != nil {
 			return fmt.Errorf("removing drive configs: %w", err)
 		}
@@ -749,9 +753,9 @@ func removeAccountDriveConfigs(cfgPath string, affected []driveid.CanonicalID, l
 
 // whoamiOutput is the JSON schema for `whoami --json`.
 type whoamiOutput struct {
-	User              *whoamiUser        `json:"user,omitempty"`
-	Drives            []whoamiDrive      `json:"drives,omitempty"`
-	LoggedOutAccounts []loggedOutAccount `json:"logged_out_accounts,omitempty"`
+	User                  *whoamiUser              `json:"user,omitempty"`
+	Drives                []whoamiDrive            `json:"drives,omitempty"`
+	AccountsRequiringAuth []accountAuthRequirement `json:"accounts_requiring_auth,omitempty"`
 }
 
 type whoamiUser struct {
@@ -766,15 +770,6 @@ type whoamiDrive struct {
 	DriveType  string `json:"drive_type"`
 	QuotaUsed  int64  `json:"quota_used"`
 	QuotaTotal int64  `json:"quota_total"`
-}
-
-// loggedOutAccount represents an account that was logged out but not purged.
-// The account profile file still exists on disk, but the token file is gone.
-type loggedOutAccount struct {
-	Email       string `json:"email"`
-	DriveType   string `json:"drive_type"`
-	DisplayName string `json:"display_name,omitempty"`
-	StateDBs    int    `json:"state_dbs"`
 }
 
 func runWhoami(cmd *cobra.Command, _ []string) error {
@@ -795,27 +790,39 @@ func runWhoamiWithContext(ctx context.Context, cc *CLIContext) error {
 		return driveErr
 	}
 
+	recorder := newAuthProofRecorder(logger)
+
 	// Try the authenticated path: match drive → fetch from Graph API.
-	user, drives, authenticatedEmail, hasAuthenticatedAccount, authErr := fetchAuthenticatedAccount(
-		ctx, cfg, driveSelector, logger,
-	)
+	authResult, authErr := fetchAuthenticatedAccount(ctx, cfg, driveSelector, logger, recorder)
 	if authErr != nil {
 		return authErr
 	}
 
-	// Discover logged-out accounts: profile files on disk without a token file.
-	loggedOut := findLoggedOutAccounts(cfg, authenticatedEmail, logger)
+	// Discover offline auth-required accounts from orphaned account profiles.
+	authRequired := findWhoamiAuthRequiredAccounts(ctx, cfg, authResult.authenticatedEmail, logger)
+	if authResult.authRequired != nil {
+		authRequired = mergeAuthRequirements(authRequired, []accountAuthRequirement{*authResult.authRequired})
+	}
 
-	// If no authenticated account and no logged-out accounts, give a helpful error.
-	if !hasAuthenticatedAccount && len(loggedOut) == 0 {
-		return fmt.Errorf("not logged in — run 'onedrive-go login' first")
+	// If no authenticated account and no offline auth-required accounts, give a
+	// clean auth-required error instead of a whoami-specific special case.
+	if !authResult.hasAuthenticatedAccount && len(authRequired) == 0 {
+		return graph.ErrNotLoggedIn
 	}
 
 	if cc.Flags.JSON {
-		return printWhoamiJSON(cc.Output(), user, drives, loggedOut)
+		return printWhoamiJSON(cc.Output(), authResult.user, authResult.drives, authRequired)
 	}
 
-	return printWhoamiText(cc.Output(), user, drives, loggedOut)
+	return printWhoamiText(cc.Output(), authResult.user, authResult.drives, authRequired)
+}
+
+type authenticatedAccountResult struct {
+	user                    *graph.User
+	drives                  []graph.Drive
+	authenticatedEmail      string
+	authRequired            *accountAuthRequirement
+	hasAuthenticatedAccount bool
 }
 
 // fetchAuthenticatedAccount attempts to resolve a drive from config, load its
@@ -823,16 +830,38 @@ func runWhoamiWithContext(ctx context.Context, cc *CLIContext) error {
 // when no authenticated account is available. Returns a non-nil error only
 // for hard failures after a token is located.
 func fetchAuthenticatedAccount(
-	ctx context.Context, cfg *config.Config, driveSelector string, logger *slog.Logger,
-) (*graph.User, []graph.Drive, string, bool, error) {
+	ctx context.Context, cfg *config.Config, driveSelector string, logger *slog.Logger, recorder *authProofRecorder,
+) (authenticatedAccountResult, error) {
 	cid, found := matchAuthenticatedDrive(cfg, driveSelector, logger)
 	if !found {
-		return nil, nil, "", false, nil
+		return authenticatedAccountResult{}, nil
+	}
+
+	accountEmail := cid.Email()
+	accountDriveIDs := drivesForAccount(cfg, accountEmail)
+	if len(accountDriveIDs) == 0 {
+		accountDriveIDs = []driveid.CanonicalID{cid}
+	}
+	displayName, _ := readAccountMeta(accountEmail, accountDriveIDs, logger)
+	stateDBCount := len(config.DiscoverStateDBsForEmail(accountEmail, logger))
+	authRequired := authRequirement(
+		accountEmail,
+		displayName,
+		accountDriveType(accountDriveIDs),
+		stateDBCount,
+		accountAuthHealth{},
+	)
+
+	accountAuth := inspectAccountAuth(ctx, accountEmail, accountDriveIDs, logger)
+	if accountAuth.State == authStateAuthenticationNeeded && accountAuth.Reason != authReasonSyncAuthRejected {
+		authRequired.Reason = accountAuth.Reason
+		authRequired.Action = accountAuth.Action
+		return authenticatedAccountResult{authRequired: &authRequired}, nil
 	}
 
 	tokenPath := config.DriveTokenPath(cid)
 	if tokenPath == "" {
-		return nil, nil, "", false, nil
+		return authenticatedAccountResult{authRequired: &authRequired}, nil
 	}
 
 	logger.Debug("whoami", "drive", cid.String(), "token_path", tokenPath)
@@ -840,28 +869,64 @@ func fetchAuthenticatedAccount(
 	ts, tsErr := graph.TokenSourceFromPath(ctx, tokenPath, logger)
 	if tsErr != nil {
 		if errors.Is(tsErr, graph.ErrNotLoggedIn) {
-			return nil, nil, "", false, nil
+			authRequired.Reason = authReasonMissingLogin
+			authRequired.Action = authAction(authReasonMissingLogin)
+			return authenticatedAccountResult{authRequired: &authRequired}, nil
 		}
 
-		return nil, nil, "", false, fmt.Errorf("load token source: %w", tsErr)
+		authRequired.Reason = authReasonInvalidSavedLogin
+		authRequired.Action = authAction(authReasonInvalidSavedLogin)
+		return authenticatedAccountResult{authRequired: &authRequired}, nil
 	}
 
 	client, err := newGraphClient(ts, logger)
 	if err != nil {
-		return nil, nil, "", false, err
+		return authenticatedAccountResult{}, err
 	}
+	attachAccountAuthProof(client, recorder, accountEmail)
 
 	user, err := client.Me(ctx)
 	if err != nil {
-		return nil, nil, "", false, fmt.Errorf("fetching user profile: %w", err)
+		if errors.Is(err, graph.ErrUnauthorized) {
+			authRequired.Reason = authReasonSyncAuthRejected
+			authRequired.Action = authAction(authReasonSyncAuthRejected)
+			return authenticatedAccountResult{authRequired: &authRequired}, nil
+		}
+
+		return authenticatedAccountResult{}, fmt.Errorf("fetching user profile: %w", err)
 	}
 
 	drives, err := client.Drives(ctx)
 	if err != nil {
-		return nil, nil, "", false, fmt.Errorf("listing drives: %w", err)
+		if errors.Is(err, graph.ErrUnauthorized) {
+			authRequired.Reason = authReasonSyncAuthRejected
+			authRequired.Action = authAction(authReasonSyncAuthRejected)
+			return authenticatedAccountResult{authRequired: &authRequired}, nil
+		}
+
+		return authenticatedAccountResult{}, fmt.Errorf("listing drives: %w", err)
 	}
 
-	return user, drives, user.Email, true, nil
+	return authenticatedAccountResult{
+		user:                    user,
+		drives:                  drives,
+		authenticatedEmail:      user.Email,
+		hasAuthenticatedAccount: true,
+	}, nil
+}
+
+func accountDriveType(driveIDs []driveid.CanonicalID) string {
+	for _, cid := range driveIDs {
+		if cid.DriveType() != driveid.DriveTypeSharePoint {
+			return cid.DriveType()
+		}
+	}
+
+	if len(driveIDs) == 0 {
+		return ""
+	}
+
+	return driveIDs[0].DriveType()
 }
 
 func matchAuthenticatedDrive(
@@ -882,10 +947,16 @@ func matchAuthenticatedDrive(
 	return cid, true
 }
 
-// findLoggedOutAccounts discovers account profiles on disk that lack a token
-// file (i.e. logged out but not purged). Accounts still in config or matching
-// the authenticated email are excluded.
-func findLoggedOutAccounts(cfg *config.Config, authenticatedEmail string, logger *slog.Logger) []loggedOutAccount {
+// findWhoamiAuthRequiredAccounts discovers orphaned account profiles whose
+// local saved-login state currently requires user attention. Accounts still in
+// config or matching the authenticated email are excluded so the command keeps
+// one live account plus a separate auth-required list.
+func findWhoamiAuthRequiredAccounts(
+	ctx context.Context,
+	cfg *config.Config,
+	authenticatedEmail string,
+	logger *slog.Logger,
+) []accountAuthRequirement {
 	profiles := config.DiscoverAccountProfiles(logger)
 	if len(profiles) == 0 {
 		return nil
@@ -901,7 +972,7 @@ func findLoggedOutAccounts(cfg *config.Config, authenticatedEmail string, logger
 		configEmails[authenticatedEmail] = true
 	}
 
-	var result []loggedOutAccount
+	var result []accountAuthRequirement
 
 	for _, profileCID := range profiles {
 		email := profileCID.Email()
@@ -911,9 +982,8 @@ func findLoggedOutAccounts(cfg *config.Config, authenticatedEmail string, logger
 			continue
 		}
 
-		// Check if token file exists — if it does, this isn't a logged-out account.
-		tokenPath := config.DriveTokenPath(profileCID)
-		if tokenPath != "" && managedPathExists(tokenPath) {
+		health := inspectAccountAuth(ctx, email, []driveid.CanonicalID{profileCID}, logger)
+		if health.State != authStateAuthenticationNeeded {
 			continue
 		}
 
@@ -932,20 +1002,23 @@ func findLoggedOutAccounts(cfg *config.Config, authenticatedEmail string, logger
 		// Count state DBs for this email.
 		stateDBs := config.DiscoverStateDBsForEmail(email, logger)
 
-		result = append(result, loggedOutAccount{
-			Email:       email,
-			DriveType:   profileCID.DriveType(),
-			DisplayName: displayName,
-			StateDBs:    len(stateDBs),
-		})
+		result = append(result, authRequirement(
+			email,
+			displayName,
+			profileCID.DriveType(),
+			len(stateDBs),
+			health,
+		))
 	}
+
+	sortAccountAuthRequirements(result)
 
 	return result
 }
 
-func printWhoamiJSON(w io.Writer, user *graph.User, drives []graph.Drive, loggedOut []loggedOutAccount) error {
+func printWhoamiJSON(w io.Writer, user *graph.User, drives []graph.Drive, authRequired []accountAuthRequirement) error {
 	out := whoamiOutput{
-		LoggedOutAccounts: loggedOut,
+		AccountsRequiringAuth: authRequired,
 	}
 
 	if user != nil {
@@ -977,7 +1050,7 @@ func printWhoamiJSON(w io.Writer, user *graph.User, drives []graph.Drive, logged
 	return nil
 }
 
-func printWhoamiText(w io.Writer, user *graph.User, drives []graph.Drive, loggedOut []loggedOutAccount) error {
+func printWhoamiText(w io.Writer, user *graph.User, drives []graph.Drive, authRequired []accountAuthRequirement) error {
 	if user != nil {
 		if err := writef(w, "User:  %s (%s)\n", user.DisplayName, user.Email); err != nil {
 			return err
@@ -999,38 +1072,11 @@ func printWhoamiText(w io.Writer, user *graph.User, drives []graph.Drive, logged
 		}
 	}
 
-	return printLoggedOutAccountsText(w, loggedOut)
+	return printWhoamiAuthRequiredText(w, authRequired)
 }
 
-// printLoggedOutAccountsText prints the logged-out accounts section in
-// human-readable text format. Shows each account's email, display name,
-// and how many state DBs remain.
-func printLoggedOutAccountsText(w io.Writer, loggedOut []loggedOutAccount) error {
-	if len(loggedOut) == 0 {
-		return nil
-	}
-
-	if err := writeln(w, "\nLogged out accounts:"); err != nil {
-		return err
-	}
-
-	for _, acct := range loggedOut {
-		nameLabel := acct.Email
-		if acct.DisplayName != "" {
-			nameLabel = fmt.Sprintf("%s (%s)", acct.DisplayName, acct.Email)
-		}
-
-		dbLabel := "no state databases"
-		if acct.StateDBs == 1 {
-			dbLabel = "1 state database"
-		} else if acct.StateDBs > 1 {
-			dbLabel = fmt.Sprintf("%d state databases", acct.StateDBs)
-		}
-
-		if err := writef(w, "  %s — %s, %s\n", nameLabel, acct.DriveType, dbLabel); err != nil {
-			return err
-		}
-	}
-
-	return writeln(w, "  Run 'onedrive-go logout --purge' to remove remaining data.")
+// printWhoamiAuthRequiredText prints accounts that need user re-authentication
+// in a consistent, account-scoped format.
+func printWhoamiAuthRequiredText(w io.Writer, authRequired []accountAuthRequirement) error {
+	return printAccountAuthRequirementsText(w, "\nAccounts requiring authentication:", authRequired)
 }

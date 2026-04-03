@@ -8,8 +8,8 @@ Authentication, account management, drive types, and shared drive support.
 - R-3.1.2: When `--browser` is passed, the system shall use PKCE authorization code flow with localhost callback. [verified]
 - R-3.1.3: When the user runs `logout`, the system shall remove the authentication token and config sections, preserving state databases, account profiles, and drive metadata. [verified]
 - R-3.1.4: When `--purge` is passed with logout, the system shall also delete state databases, account profiles, and drive metadata. `--purge` shall work after a prior non-purge logout. [verified]
-- R-3.1.5: When the user runs `whoami`, the system shall display authenticated accounts and logged-out accounts whose account profile files remain (not yet purged). [verified]
-- R-3.1.6: When `--json` is passed, `whoami` shall output structured JSON with user info, drives, and logged-out accounts. [verified]
+- R-3.1.5: When the user runs `whoami`, the system shall display authenticated account information plus any accounts requiring authentication. The auth-required set may come from orphaned account profiles with no saved login, invalid saved-login files on disk, or persisted sync-time `auth:account` rejection. Each auth-required entry shall include the account identity, drive type, and retained state-database count when known. [verified]
+- R-3.1.6: When `--json` is passed, `whoami` shall output structured JSON with user info, drives, and `accounts_requiring_auth`. [verified]
 
 ## R-3.2 Drive Types [verified]
 
@@ -26,14 +26,7 @@ The system shall support all four drive types:
   primary drive to the configuration: `personal:<email>` for consumer Microsoft
   accounts, `business:<email>` for work/school accounts. Re-login shall refresh
   the token and metadata without duplicating the drive section. [verified]
-- R-3.3.2: When the user runs `drive list`, the system shall show two sections.
-  Section 1 ("Configured drives"): every drive in config with display name,
-  sync directory (blank if not set), and state (ready or paused). Section 2
-  ("Available drives"): all not-yet-added drives discovered from authenticated
-  accounts — personal and business drives, SharePoint document libraries
-  (business accounts only, capped at 10 sites), and shared folders (all
-  account types). Drives already in config shall not appear in the available
-  section. [verified]
+- R-3.3.2: When the user runs `drive list`, the system shall show two drive sections plus account-level auth warnings when needed. Section 1 ("Configured drives") shall list every drive in config with display name, sync directory (blank if not set), operational state (ready or paused), and auth status. Section 2 ("Available drives") shall list all not-yet-added drives discovered from authenticated accounts — personal and business drives, SharePoint document libraries (business accounts only, capped at 10 sites), and shared folders (all account types). Drives already in config shall not appear in the available section. If account discovery cannot proceed because authentication is required, the command shall surface that as an account-level warning instead of silently omitting the account. [verified]
 - R-3.3.3: Available drives in `drive list` that retain a state database from a
   previous configuration shall be marked as such, indicating they can be
   re-added without a full re-sync or purged with `drive remove --purge`.
@@ -62,13 +55,9 @@ The system shall support all four drive types:
   config section and state database) and for available drives that retain a
   state database from a previous removal (deleting only the state database).
   The account token and sync directory are always preserved. [verified]
-- R-3.3.9: When the user runs `drive search <term>`, the system shall search
-  SharePoint sites by name across all business accounts, returning up to 50
-  matching sites with their document libraries and canonical IDs. When
-  `--account` is passed, the search is restricted to that business account.
-  [verified]
-- R-3.3.10: When `--json` is passed, `drive list` shall output structured JSON with configured and available drive arrays. [verified]
-- R-3.3.11: When `--json` is passed, `drive search` shall output structured JSON with results array. [verified]
+- R-3.3.9: When the user runs `drive search <term>`, the system shall search SharePoint sites by name across all business accounts, returning up to 50 matching sites with their document libraries and canonical IDs. When `--account` is passed, the search is restricted to that business account. Business accounts that cannot be searched because authentication is required shall be reported as account-level auth-required results instead of being silently skipped. [verified]
+- R-3.3.10: When `--json` is passed, `drive list` shall output structured JSON with `configured`, `available`, and `accounts_requiring_auth` arrays. Configured drive entries shall include auth status when authentication is required. [verified]
+- R-3.3.11: When `--json` is passed, `drive search` shall output structured JSON with `results` and `accounts_requiring_auth` arrays. [verified]
 
 ## R-3.4 Multi-Account [verified]
 

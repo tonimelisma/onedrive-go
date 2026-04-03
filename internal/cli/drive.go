@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -76,6 +77,8 @@ type driveListEntry struct {
 	DisplayName string `json:"display_name,omitempty"`
 	SyncDir     string `json:"sync_dir,omitempty"`
 	State       string `json:"state"`
+	AuthState   string `json:"auth_state,omitempty"`
+	AuthReason  string `json:"auth_reason,omitempty"`
 	Source      string `json:"source"` // "configured" or "available"
 	SiteName    string `json:"site_name,omitempty"`
 	LibraryName string `json:"library_name,omitempty"`
@@ -143,19 +146,119 @@ func buildConfiguredDriveEntries(cfg *config.Config, logger *slog.Logger) []driv
 	return entries
 }
 
+func buildConfiguredAccountAuthHealth(
+	ctx context.Context,
+	cfg *config.Config,
+	logger *slog.Logger,
+) map[string]accountAuthHealth {
+	grouped, order := groupDrivesByAccount(cfg)
+	result := make(map[string]accountAuthHealth, len(order))
+
+	for _, email := range order {
+		result[email] = inspectAccountAuth(ctx, email, grouped[email], logger)
+	}
+
+	return result
+}
+
+func buildConfiguredAuthRequirements(
+	cfg *config.Config,
+	authByEmail map[string]accountAuthHealth,
+	logger *slog.Logger,
+) []accountAuthRequirement {
+	grouped, order := groupDrivesByAccount(cfg)
+	var result []accountAuthRequirement
+
+	for _, email := range order {
+		health := authByEmail[email]
+		if health.State != authStateAuthenticationNeeded {
+			continue
+		}
+
+		driveIDs := grouped[email]
+		displayName, _ := readAccountMeta(email, driveIDs, logger)
+		result = append(result, authRequirement(
+			email,
+			displayName,
+			accountDriveType(driveIDs),
+			len(config.DiscoverStateDBsForEmail(email, logger)),
+			health,
+		))
+	}
+
+	return result
+}
+
+func annotateConfiguredDriveAuth(entries []driveListEntry, authByEmail map[string]accountAuthHealth) {
+	for i := range entries {
+		email := entries[i].parsedCID.Email()
+		health, ok := authByEmail[email]
+		if !ok {
+			continue
+		}
+
+		entries[i].AuthState = health.State
+		entries[i].AuthReason = health.Reason
+	}
+}
+
+func configuredBusinessAuthRequirements(
+	ctx context.Context,
+	cfg *config.Config,
+	accountFilter string,
+	logger *slog.Logger,
+) []accountAuthRequirement {
+	grouped, order := groupDrivesByAccount(cfg)
+	var result []accountAuthRequirement
+
+	for _, email := range order {
+		if accountFilter != "" && email != accountFilter {
+			continue
+		}
+
+		driveIDs := grouped[email]
+		if accountDriveType(driveIDs) != driveid.DriveTypeBusiness {
+			continue
+		}
+
+		health := inspectAccountAuth(ctx, email, driveIDs, logger)
+		if health.State != authStateAuthenticationNeeded {
+			continue
+		}
+
+		displayName, _ := readAccountMeta(email, driveIDs, logger)
+		result = append(result, authRequirement(
+			email,
+			displayName,
+			driveid.DriveTypeBusiness,
+			len(config.DiscoverStateDBsForEmail(email, logger)),
+			health,
+		))
+	}
+
+	return result
+}
+
 // discoverAvailableDrives queries the network for all drives accessible via
 // existing tokens. Filters out drives already in config. spSiteLimit controls
 // how many SharePoint sites are fetched (sharePointSiteLimit for default,
 // sharePointSiteUnlimited when --all is passed).
-func discoverAvailableDrives(ctx context.Context, cfg *config.Config, spSiteLimit int, logger *slog.Logger) []driveListEntry {
+func discoverAvailableDrives(
+	ctx context.Context,
+	cfg *config.Config,
+	spSiteLimit int,
+	logger *slog.Logger,
+	recorder *authProofRecorder,
+) ([]driveListEntry, []accountAuthRequirement) {
 	tokens := config.DiscoverTokens(logger)
 	if len(tokens) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	var (
-		mu      sync.Mutex
-		entries []driveListEntry
+		mu           sync.Mutex
+		entries      []driveListEntry
+		authRequired []accountAuthRequirement
 	)
 
 	var wg sync.WaitGroup
@@ -165,9 +268,10 @@ func discoverAvailableDrives(ctx context.Context, cfg *config.Config, spSiteLimi
 		go func() {
 			defer wg.Done()
 
-			tokenEntries := discoverDrivesForToken(ctx, tokenCID, cfg, spSiteLimit, logger)
+			tokenEntries, tokenAuthRequired := discoverDrivesForToken(ctx, tokenCID, cfg, spSiteLimit, logger, recorder)
 			mu.Lock()
 			entries = append(entries, tokenEntries...)
+			authRequired = append(authRequired, tokenAuthRequired...)
 			mu.Unlock()
 		}()
 	}
@@ -178,32 +282,33 @@ func discoverAvailableDrives(ctx context.Context, cfg *config.Config, spSiteLimi
 		return cmp.Compare(a.CanonicalID, b.CanonicalID)
 	})
 
-	return entries
+	return entries, mergeAuthRequirements(authRequired)
 }
 
 // discoverDrivesForToken discovers all available drives for a single token.
 func discoverDrivesForToken(
 	ctx context.Context, tokenCID driveid.CanonicalID,
-	cfg *config.Config, spSiteLimit int, logger *slog.Logger,
-) []driveListEntry {
+	cfg *config.Config, spSiteLimit int, logger *slog.Logger, recorder *authProofRecorder,
+) ([]driveListEntry, []accountAuthRequirement) {
 	tokenPath := config.DriveTokenPath(tokenCID)
 	if tokenPath == "" {
-		return nil
+		return nil, nil
 	}
 
 	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
 	if err != nil {
 		logger.Debug("skipping token for drive discovery", "token", tokenCID.String(), "error", err)
 
-		return nil
+		return nil, []accountAuthRequirement{tokenDiscoveryAuthRequirement(tokenCID, err, logger)}
 	}
 
 	client, clientErr := newGraphClient(ts, logger)
 	if clientErr != nil {
 		logger.Debug("skipping token for drive discovery", "token", tokenCID.String(), "error", clientErr)
 
-		return nil
+		return nil, nil
 	}
+	attachAccountAuthProof(client, recorder, tokenCID.Email())
 
 	var entries []driveListEntry
 
@@ -212,7 +317,11 @@ func discoverDrivesForToken(
 	if err != nil {
 		logger.Debug("failed to list drives for token", "token", tokenCID.String(), "error", err)
 
-		return nil
+		if errors.Is(err, graph.ErrUnauthorized) {
+			return nil, []accountAuthRequirement{tokenAuthRequirement(tokenCID, authReasonSyncAuthRejected, logger)}
+		}
+
+		return nil, nil
 	}
 
 	email := tokenCID.Email()
@@ -245,7 +354,39 @@ func discoverDrivesForToken(
 	sharedEntries := discoverSharedDrives(ctx, client, cfg, email, logger)
 	entries = append(entries, sharedEntries...)
 
-	return entries
+	return entries, nil
+}
+
+func tokenDiscoveryAuthRequirement(
+	tokenCID driveid.CanonicalID,
+	err error,
+	logger *slog.Logger,
+) accountAuthRequirement {
+	switch {
+	case errors.Is(err, graph.ErrNotLoggedIn):
+		return tokenAuthRequirement(tokenCID, authReasonMissingLogin, logger)
+	default:
+		return tokenAuthRequirement(tokenCID, authReasonInvalidSavedLogin, logger)
+	}
+}
+
+func tokenAuthRequirement(
+	tokenCID driveid.CanonicalID,
+	reason string,
+	logger *slog.Logger,
+) accountAuthRequirement {
+	displayName, _ := readAccountMeta(tokenCID.Email(), []driveid.CanonicalID{tokenCID}, logger)
+	return authRequirement(
+		tokenCID.Email(),
+		displayName,
+		tokenCID.DriveType(),
+		len(config.DiscoverStateDBsForEmail(tokenCID.Email(), logger)),
+		accountAuthHealth{
+			State:  authStateAuthenticationNeeded,
+			Reason: reason,
+			Action: authAction(reason),
+		},
+	)
 }
 
 // discoverSharePointDrives queries SharePoint sites and their document libraries.
@@ -515,11 +656,21 @@ func extractFirstName(fullName string) string {
 // Separates configured and available drives into distinct top-level keys,
 // replacing the flat array that required callers to filter by "source" field.
 type driveListJSONOutput struct {
-	Configured []driveListEntry `json:"configured"`
-	Available  []driveListEntry `json:"available"`
+	Configured            []driveListEntry         `json:"configured"`
+	Available             []driveListEntry         `json:"available"`
+	AccountsRequiringAuth []accountAuthRequirement `json:"accounts_requiring_auth,omitempty"`
 }
 
-func printDriveListJSON(w io.Writer, configured, available []driveListEntry) error {
+func printDriveListJSON(
+	w io.Writer,
+	configured, available []driveListEntry,
+	authRequiredOpt ...[]accountAuthRequirement,
+) error {
+	var authRequired []accountAuthRequirement
+	if len(authRequiredOpt) > 0 {
+		authRequired = authRequiredOpt[0]
+	}
+
 	// Initialize nil slices to empty so JSON renders [] not null.
 	if configured == nil {
 		configured = []driveListEntry{}
@@ -530,8 +681,9 @@ func printDriveListJSON(w io.Writer, configured, available []driveListEntry) err
 	}
 
 	out := driveListJSONOutput{
-		Configured: configured,
-		Available:  available,
+		Configured:            configured,
+		Available:             available,
+		AccountsRequiringAuth: authRequired,
 	}
 
 	enc := json.NewEncoder(w)
@@ -555,30 +707,18 @@ func driveLabel(e *driveListEntry) string {
 	return e.CanonicalID
 }
 
-func printDriveListText(w io.Writer, configured, available []driveListEntry) error {
-	if len(configured) == 0 && len(available) == 0 {
+func printDriveListText(
+	w io.Writer,
+	configured, available []driveListEntry,
+	authRequiredOpt ...[]accountAuthRequirement,
+) error {
+	authRequired := optionalAuthRequirements(authRequiredOpt)
+
+	if len(configured) == 0 && len(available) == 0 && len(authRequired) == 0 {
 		return writeln(w, "No drives configured. Run 'onedrive-go login' to get started.")
 	}
 
-	if len(configured) > 0 {
-		if err := printConfiguredDrives(w, configured); err != nil {
-			return err
-		}
-	}
-
-	if len(available) > 0 {
-		if len(configured) > 0 {
-			if err := writeln(w); err != nil {
-				return err
-			}
-		}
-
-		if err := printAvailableDrives(w, available); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return printDriveListSections(w, configured, available, authRequired)
 }
 
 func printConfiguredDrives(w io.Writer, entries []driveListEntry) error {
@@ -586,7 +726,7 @@ func printConfiguredDrives(w io.Writer, entries []driveListEntry) error {
 		return err
 	}
 
-	maxName, maxDir := 0, 0
+	maxName, maxDir, maxAuth := 0, 0, 0
 	for i := range entries {
 		label := driveLabel(&entries[i])
 		if len(label) > maxName {
@@ -601,12 +741,21 @@ func printConfiguredDrives(w io.Writer, entries []driveListEntry) error {
 		if len(sd) > maxDir {
 			maxDir = len(sd)
 		}
+
+		authLabel := driveAuthLabel(&entries[i])
+		if len(authLabel) > maxAuth {
+			maxAuth = len(authLabel)
+		}
 	}
 
 	maxName = max(maxName, minColumnWidth)
 	maxDir = max(maxDir, minColumnWidth)
+	maxAuth = max(maxAuth, len("AUTH"))
 
-	fmtStr := fmt.Sprintf("  %%-%ds  %%-%ds  %%s\n", maxName, maxDir)
+	fmtStr := fmt.Sprintf("  %%-%ds  %%-%ds  %%-%ds  %%s\n", maxName, maxDir, maxAuth)
+	if err := writef(w, fmtStr, "DRIVE", "SYNC DIR", "AUTH", "STATE"); err != nil {
+		return err
+	}
 
 	for i := range entries {
 		syncDir := entries[i].SyncDir
@@ -614,12 +763,91 @@ func printConfiguredDrives(w io.Writer, entries []driveListEntry) error {
 			syncDir = syncDirNotSet
 		}
 
-		if err := writef(w, fmtStr, driveLabel(&entries[i]), syncDir, entries[i].State); err != nil {
+		if err := writef(w, fmtStr, driveLabel(&entries[i]), syncDir, driveAuthLabel(&entries[i]), entries[i].State); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func driveAuthLabel(entry *driveListEntry) string {
+	if entry == nil {
+		return authStateReady
+	}
+
+	if entry.AuthState == authStateAuthenticationNeeded {
+		return "required"
+	}
+
+	return authStateReady
+}
+
+func optionalAuthRequirements(authRequiredOpt [][]accountAuthRequirement) []accountAuthRequirement {
+	if len(authRequiredOpt) == 0 {
+		return nil
+	}
+
+	return authRequiredOpt[0]
+}
+
+func printDriveListSections(
+	w io.Writer,
+	configured, available []driveListEntry,
+	authRequired []accountAuthRequirement,
+) error {
+	if err := printConfiguredSection(w, configured); err != nil {
+		return err
+	}
+
+	if err := printAvailableSection(w, configured, available); err != nil {
+		return err
+	}
+
+	return printAuthRequiredSection(w, len(configured) > 0 || len(available) > 0, authRequired)
+}
+
+func printConfiguredSection(w io.Writer, configured []driveListEntry) error {
+	if len(configured) == 0 {
+		return nil
+	}
+
+	return printConfiguredDrives(w, configured)
+}
+
+func printAvailableSection(
+	w io.Writer,
+	configured, available []driveListEntry,
+) error {
+	if len(available) == 0 {
+		return nil
+	}
+
+	if len(configured) > 0 {
+		if err := writeln(w); err != nil {
+			return err
+		}
+	}
+
+	return printAvailableDrives(w, available)
+}
+
+func printAuthRequiredSection(
+	w io.Writer,
+	hasPriorSection bool,
+	authRequired []accountAuthRequirement,
+) error {
+	if len(authRequired) == 0 {
+		return nil
+	}
+
+	if hasPriorSection {
+		if err := writeln(w); err != nil {
+			return err
+		}
+	}
+
+	return printAccountAuthRequirementsText(w, "Authentication required:", authRequired)
 }
 
 // annotateStateDB sets HasStateDB on available drive entries that have a state
@@ -1116,6 +1344,11 @@ type driveSearchResult struct {
 	WebURL      string `json:"web_url,omitempty"`
 }
 
+type driveSearchJSONOutput struct {
+	Results               []driveSearchResult      `json:"results"`
+	AccountsRequiringAuth []accountAuthRequirement `json:"accounts_requiring_auth,omitempty"`
+}
+
 // sharePointSearchLimit caps the number of SharePoint sites returned per search query.
 const sharePointSearchLimit = 50
 
@@ -1143,32 +1376,37 @@ func findBusinessTokens(accountFilter string, logger *slog.Logger) []driveid.Can
 
 // searchAccountSharePoint searches SharePoint sites for a single business account.
 func searchAccountSharePoint(
-	ctx context.Context, tokenCID driveid.CanonicalID, query string, logger *slog.Logger,
-) []driveSearchResult {
+	ctx context.Context, tokenCID driveid.CanonicalID, query string, logger *slog.Logger, recorder *authProofRecorder,
+) ([]driveSearchResult, []accountAuthRequirement) {
 	tokenPath := config.DriveTokenPath(tokenCID)
 	if tokenPath == "" {
-		return nil
+		return nil, nil
 	}
 
 	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
 	if err != nil {
 		logger.Debug("skipping token for search", "token", tokenCID.String(), "error", err)
 
-		return nil
+		return nil, []accountAuthRequirement{tokenDiscoveryAuthRequirement(tokenCID, err, logger)}
 	}
 
 	client, err := newGraphClient(ts, logger)
 	if err != nil {
 		logger.Debug("skipping token for search", "token", tokenCID.String(), "error", err)
 
-		return nil
+		return nil, nil
 	}
+	attachAccountAuthProof(client, recorder, tokenCID.Email())
 
 	sites, err := client.SearchSites(ctx, query, sharePointSearchLimit)
 	if err != nil {
 		logger.Warn("SharePoint search failed", "account", tokenCID.Email(), "error", err)
 
-		return nil
+		if errors.Is(err, graph.ErrUnauthorized) {
+			return nil, []accountAuthRequirement{tokenAuthRequirement(tokenCID, authReasonSyncAuthRejected, logger)}
+		}
+
+		return nil, nil
 	}
 
 	email := tokenCID.Email()
@@ -1200,26 +1438,76 @@ func searchAccountSharePoint(
 		}
 	}
 
-	return results
+	return results, nil
 }
 
-func printDriveSearchJSON(w io.Writer, results []driveSearchResult) error {
+func printDriveSearchJSON(
+	w io.Writer,
+	results []driveSearchResult,
+	authRequiredOpt ...[]accountAuthRequirement,
+) error {
+	var authRequired []accountAuthRequirement
+	if len(authRequiredOpt) > 0 {
+		authRequired = authRequiredOpt[0]
+	}
+
+	if results == nil {
+		results = []driveSearchResult{}
+	}
+
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 
-	if err := enc.Encode(results); err != nil {
+	if err := enc.Encode(driveSearchJSONOutput{
+		Results:               results,
+		AccountsRequiringAuth: authRequired,
+	}); err != nil {
 		return fmt.Errorf("encoding JSON output: %w", err)
 	}
 
 	return nil
 }
 
-func printDriveSearchText(w io.Writer, results []driveSearchResult, query string) error {
-	if len(results) == 0 {
+func printDriveSearchText(
+	w io.Writer,
+	results []driveSearchResult,
+	query string,
+	authRequiredOpt ...[]accountAuthRequirement,
+) error {
+	authRequired := optionalAuthRequirements(authRequiredOpt)
+
+	if len(results) == 0 && len(authRequired) == 0 {
 		return writef(w, "No SharePoint sites found matching %q.\n", query)
 	}
 
-	// Sort a copy so the caller's slice is not mutated.
+	if err := printDriveSearchAuthSection(w, authRequired, len(results) > 0); err != nil {
+		return err
+	}
+
+	return printDriveSearchResults(w, sortedDriveSearchResults(results), query)
+}
+
+func printDriveSearchAuthSection(
+	w io.Writer,
+	authRequired []accountAuthRequirement,
+	hasResults bool,
+) error {
+	if len(authRequired) == 0 {
+		return nil
+	}
+
+	if err := printAccountAuthRequirementsText(w, "Authentication required:", authRequired); err != nil {
+		return err
+	}
+
+	if !hasResults {
+		return nil
+	}
+
+	return writeln(w)
+}
+
+func sortedDriveSearchResults(results []driveSearchResult) []driveSearchResult {
 	sorted := slices.Clone(results)
 	slices.SortFunc(sorted, func(a, b driveSearchResult) int {
 		if c := cmp.Compare(a.SiteName, b.SiteName); c != 0 {
@@ -1229,36 +1517,55 @@ func printDriveSearchText(w io.Writer, results []driveSearchResult, query string
 		return cmp.Compare(a.LibraryName, b.LibraryName)
 	})
 
-	// Group by site for readable output.
+	return sorted
+}
+
+func printDriveSearchResults(
+	w io.Writer,
+	results []driveSearchResult,
+	query string,
+) error {
 	if err := writef(w, "SharePoint sites matching %q:\n", query); err != nil {
 		return err
 	}
 
 	currentSite := ""
 
-	for _, r := range sorted {
-		if r.SiteName != currentSite {
-			if currentSite != "" {
-				if err := writeln(w); err != nil {
-					return err
-				}
-			}
-
-			currentSite = r.SiteName
-			label := r.SiteName
-			if r.WebURL != "" {
-				label = fmt.Sprintf("%s (%s)", r.SiteName, r.WebURL)
-			}
-
-			if err := writef(w, "\n  %s\n", label); err != nil {
-				return err
-			}
-		}
-
-		if err := writef(w, "    %s\n", r.CanonicalID); err != nil {
+	for i := range results {
+		if err := printDriveSearchSiteEntry(w, &results[i], &currentSite); err != nil {
 			return err
 		}
 	}
 
 	return writef(w, "\nRun 'onedrive-go drive add <canonical-id>' to add a drive.\n")
+}
+
+func printDriveSearchSiteEntry(
+	w io.Writer,
+	result *driveSearchResult,
+	currentSite *string,
+) error {
+	if result == nil || currentSite == nil {
+		return nil
+	}
+
+	if result.SiteName != *currentSite {
+		if *currentSite != "" {
+			if err := writeln(w); err != nil {
+				return err
+			}
+		}
+
+		*currentSite = result.SiteName
+		label := result.SiteName
+		if result.WebURL != "" {
+			label = fmt.Sprintf("%s (%s)", result.SiteName, result.WebURL)
+		}
+
+		if err := writef(w, "\n  %s\n", label); err != nil {
+			return err
+		}
+	}
+
+	return writef(w, "    %s\n", result.CanonicalID)
 }
