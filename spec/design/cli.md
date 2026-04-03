@@ -3,6 +3,7 @@
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go
 
 Implements: R-1 [implemented], R-3.1 [verified], R-4.7 [verified], R-4.8.4 [verified], R-1.9 [verified], R-1.2.4 [verified], R-1.3.4 [verified], R-1.4.3 [verified], R-1.5.1 [verified], R-1.6.1 [verified], R-1.7.1 [verified], R-1.8.1 [verified], R-1.9.4 [verified], R-3.1.6 [verified], R-3.3.10 [verified], R-3.3.11 [verified], R-2.3.10 [verified], R-2.7.1 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.10.47 [verified], R-6.6.11 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
+Implements: R-1 [implemented], R-3.1 [verified], R-4.7 [verified], R-4.8.4 [verified], R-1.9 [verified], R-1.2.4 [verified], R-1.3.4 [verified], R-1.4.3 [verified], R-1.5.1 [verified], R-1.6.1 [verified], R-1.7.1 [verified], R-1.8.1 [verified], R-1.9.4 [verified], R-3.1.6 [verified], R-3.3.10 [verified], R-3.3.11 [verified], R-2.3.10 [verified], R-2.7.1 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.10.47 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
 
 ## Overview
 
@@ -168,11 +169,13 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
 
 ## Issues Display
 
-Implements: R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-6.6.11 [verified]
+Implements: R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified]
 
 - **Grouped display**: >10 failures of same `issue_type` → single heading with count, first 5 paths shown. `--verbose` shows all paths.
-- **Per-scope sub-grouping**: 507 quota and 403 permissions grouped by scope (own drive vs each shortcut). Different scopes = different owners = different user actions.
+- **Per-scope sub-grouping**: 507 quota and shared-folder write blocks are grouped by scope (own drive vs each shortcut). Different scopes = different owners = different user actions.
 - **Human-readable names**: Shortcut-scoped failures display local path name, not internal drive IDs.
+- **Derived shared-folder issues**: `perm:remote` is displayed from held blocked-write rows, not from a standalone boundary issue. The CLI shows one visible issue per denied boundary only while blocked write intent still exists.
+- **Retry semantics**: `issues retry` on shared-folder write blocks is path-specific manual trial. Retrying the boundary name is rejected; the user must retry one blocked child path.
 - **Per-error-type user action text**: Every failure includes plain-language reason + concrete user action. Scope-owner-specific variants: "Your OneDrive storage is full" (own drive) vs "Shared folder '{name}' owner's storage is full" (shortcut).
 - **Auth scope display**: `auth:account` renders as an account-level `Authentication required` issue with no path list.
 - `internal/cli` unit test coverage target: 60%+ (currently ~53.7%). The service split and output-writer injection are in place, but more direct `RunE`/service black-box coverage is still needed to reach the target. [planned]

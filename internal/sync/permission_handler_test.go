@@ -52,6 +52,18 @@ func (m *mockFailureRecorder) ListActionableFailures(_ context.Context) ([]synct
 	return m.actionable, nil
 }
 
+func (m *mockFailureRecorder) ListRemoteBlockedFailures(_ context.Context) ([]synctypes.SyncFailureRow, error) {
+	var rows []synctypes.SyncFailureRow
+	for i := range m.failureRows {
+		row := m.failureRows[i]
+		if row.Role == synctypes.FailureRoleHeld && row.ScopeKey.IsPermRemote() {
+			rows = append(rows, row)
+		}
+	}
+
+	return rows, nil
+}
+
 func (m *mockFailureRecorder) ClearSyncFailure(_ context.Context, path string, _ driveid.ID) error {
 	m.clearPaths = append(m.clearPaths, path)
 	return nil
@@ -105,7 +117,7 @@ func TestPermHandler_Handle403_NilChecker(t *testing.T) {
 	ph, _ := newTestPermHandler(t, recorder, nil)
 
 	// nil permChecker → always returns false.
-	result := ph.handle403(t.Context(), &synctypes.Baseline{}, "some/path.txt", nil)
+	result := ph.handle403(t.Context(), &synctypes.Baseline{}, "some/path.txt", synctypes.ActionUpload, nil)
 	assert.False(t, result.Matched)
 	assert.Empty(t, recorder.failures, "should not record any failure")
 }
@@ -119,7 +131,7 @@ func TestPermHandler_Handle403_NoShortcutMatch(t *testing.T) {
 	ph, _ := newTestPermHandler(t, recorder, checker)
 
 	// No shortcuts → returns false.
-	result := ph.handle403(t.Context(), &synctypes.Baseline{}, "unmatched/path.txt", nil)
+	result := ph.handle403(t.Context(), &synctypes.Baseline{}, "unmatched/path.txt", synctypes.ActionUpload, nil)
 	assert.False(t, result.Matched)
 }
 
@@ -130,11 +142,12 @@ func TestPermHandler_HandlePermissionCheckError_NotFound(t *testing.T) {
 	ph, _ := newTestPermHandler(t, recorder, nil)
 
 	// ErrNotFound → records failure and returns true.
-	result := ph.handlePermissionCheckError(t.Context(), graph.ErrNotFound, "failed/file.txt", "failed")
+	result := ph.handlePermissionCheckError(t.Context(), graph.ErrNotFound, "failed/file.txt", "failed", synctypes.ActionUpload)
 	assert.True(t, result.Matched)
-	assert.Equal(t, permissionCheckActivateBoundaryScope, result.Kind)
-	assert.Equal(t, "failed", result.Failure.Path)
-	assert.Equal(t, synctypes.IssuePermissionDenied, result.Failure.IssueType)
+	assert.Equal(t, permissionCheckActivateDerivedScope, result.Kind)
+	assert.Equal(t, "failed/file.txt", result.Failure.Path)
+	assert.Equal(t, synctypes.IssueSharedFolderBlocked, result.Failure.IssueType)
+	assert.Equal(t, synctypes.SKPermRemote("failed"), result.ScopeKey)
 }
 
 func TestPermHandler_HandlePermissionCheckError_OtherError(t *testing.T) {
@@ -144,7 +157,7 @@ func TestPermHandler_HandlePermissionCheckError_OtherError(t *testing.T) {
 	ph, _ := newTestPermHandler(t, recorder, nil)
 
 	// Other errors → returns false, no failure recorded.
-	result := ph.handlePermissionCheckError(t.Context(), errors.New("timeout"), "failed/file.txt", "failed")
+	result := ph.handlePermissionCheckError(t.Context(), errors.New("timeout"), "failed/file.txt", "failed", synctypes.ActionUpload)
 	assert.False(t, result.Matched)
 	assert.Empty(t, recorder.failures)
 }

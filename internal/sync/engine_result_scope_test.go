@@ -319,12 +319,11 @@ func TestProcessWorkerResult_403ReadOnly_SkipsRemoteState(t *testing.T) {
 		HTTPStatus: 403,
 	}, bl)
 
-	// Confirmed remote read-only should collapse to one actionable boundary
-	// issue instead of leaving both a file-level failure and a boundary row.
-	permIssues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
+	// Confirmed remote read-only should collapse to one held blocked-write row.
+	permIssues, err := eng.baseline.ListRemoteBlockedFailures(ctx)
 	require.NoError(t, err)
-	require.Len(t, permIssues, 1, "confirmed remote denial should record one boundary issue")
-	assert.Equal(t, "Shared/TeamDocs", permIssues[0].Path)
+	require.Len(t, permIssues, 1, "confirmed remote denial should record one blocked write row")
+	assert.Equal(t, "Shared/TeamDocs/file.txt", permIssues[0].Path)
 	assert.Equal(t, synctypes.SKPermRemote("Shared/TeamDocs"), permIssues[0].ScopeKey)
 
 	// remote_state should be empty.
@@ -1022,24 +1021,10 @@ func TestProcessTrialResultV2_Preserve_Remote403RehomesCandidateToPermissionScop
 
 	failures, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
-	require.Len(t, failures, 2)
-
-	var boundaryFound, rehomedFound bool
-	for i := range failures {
-		switch failures[i].Path {
-		case "Shared/TeamDocs":
-			boundaryFound = true
-			assert.Equal(t, synctypes.FailureRoleBoundary, failures[i].Role)
-			assert.Equal(t, synctypes.SKPermRemote("Shared/TeamDocs"), failures[i].ScopeKey)
-		case "Shared/TeamDocs/file.txt":
-			rehomedFound = true
-			assert.Equal(t, synctypes.FailureRoleHeld, failures[i].Role)
-			assert.Equal(t, synctypes.SKPermRemote("Shared/TeamDocs"), failures[i].ScopeKey)
-		}
-	}
-
-	assert.True(t, boundaryFound)
-	assert.True(t, rehomedFound)
+	require.Len(t, failures, 1)
+	assert.Equal(t, "Shared/TeamDocs/file.txt", failures[0].Path)
+	assert.Equal(t, synctypes.FailureRoleHeld, failures[0].Role)
+	assert.Equal(t, synctypes.SKPermRemote("Shared/TeamDocs"), failures[0].ScopeKey)
 }
 
 // Validates: R-2.10.5, R-2.10.6, R-2.10.7, R-2.10.8, R-2.10.43

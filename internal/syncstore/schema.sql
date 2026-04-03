@@ -104,12 +104,17 @@ CREATE TABLE IF NOT EXISTS sync_failures (
     path           TEXT    NOT NULL,
     drive_id       TEXT    NOT NULL,
     direction      TEXT    NOT NULL CHECK(direction IN ('download', 'upload', 'delete')),
+    action_type    TEXT    NOT NULL CHECK(action_type IN (
+                    'download', 'upload', 'local_delete', 'remote_delete',
+                    'local_move', 'remote_move', 'folder_create', 'conflict',
+                    'update_synced', 'cleanup')),
     category       TEXT    NOT NULL CHECK(category IN ('transient', 'actionable')),
     failure_role   TEXT    NOT NULL CHECK(failure_role IN ('item', 'held', 'boundary')),
     issue_type     TEXT,
     item_id        TEXT,
     failure_count  INTEGER NOT NULL DEFAULT 0,
     next_retry_at  INTEGER,
+    manual_trial_requested_at INTEGER NOT NULL DEFAULT 0,
     last_error     TEXT,
     http_status    INTEGER,
     first_seen_at  INTEGER NOT NULL,
@@ -135,6 +140,12 @@ CREATE INDEX IF NOT EXISTS idx_sync_failures_retry ON sync_failures(next_retry_a
     WHERE next_retry_at IS NOT NULL AND category = 'transient';
 CREATE INDEX IF NOT EXISTS idx_sync_failures_scope_role
     ON sync_failures(scope_key, failure_role);
+CREATE INDEX IF NOT EXISTS idx_sync_failures_remote_blocked
+    ON sync_failures(scope_key, last_seen_at DESC)
+    WHERE failure_role = 'held' AND scope_key LIKE 'perm:remote:%';
+CREATE INDEX IF NOT EXISTS idx_sync_failures_manual_trial
+    ON sync_failures(manual_trial_requested_at, scope_key)
+    WHERE manual_trial_requested_at > 0;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_failures_boundary_scope
     ON sync_failures(scope_key)
     WHERE failure_role = 'boundary';

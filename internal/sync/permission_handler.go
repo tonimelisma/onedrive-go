@@ -39,9 +39,9 @@ func (ph *PermissionHandler) HasPermChecker() bool {
 // uses these prefixes to suppress remote-mutating actions under known
 // read-only subtrees before they reach execution.
 func (ph *PermissionHandler) DeniedPrefixes(ctx context.Context) []string {
-	issues, err := ph.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
+	issues, err := ph.baseline.ListRemoteBlockedFailures(ctx)
 	if err != nil {
-		ph.logger.Warn("DeniedPrefixes: failed to list permission failures",
+		ph.logger.Warn("DeniedPrefixes: failed to list remote blocked failures",
 			slog.String("error", err.Error()),
 		)
 
@@ -52,9 +52,6 @@ func (ph *PermissionHandler) DeniedPrefixes(ctx context.Context) []string {
 	var prefixes []string
 
 	for i := range issues {
-		if issues[i].Role != synctypes.FailureRoleBoundary {
-			continue
-		}
 		if !issues[i].ScopeKey.IsPermRemote() {
 			continue
 		}
@@ -77,7 +74,11 @@ func (ph *PermissionHandler) DeniedPrefixes(ctx context.Context) []string {
 // It queries the Graph API to determine whether the folder is truly read-only
 // and returns a decision for the engine to apply.
 func (ph *PermissionHandler) handle403(
-	ctx context.Context, bl *synctypes.Baseline, failedPath string, shortcuts []synctypes.Shortcut,
+	ctx context.Context,
+	bl *synctypes.Baseline,
+	failedPath string,
+	actionType synctypes.ActionType,
+	shortcuts []synctypes.Shortcut,
 ) PermissionCheckDecision {
 	if ph.permChecker == nil {
 		return PermissionCheckDecision{}
@@ -120,7 +121,7 @@ func (ph *PermissionHandler) handle403(
 	// Query permissions on the parent folder.
 	perms, err := ph.permChecker.ListItemPermissions(ctx, remoteDriveID, parentItemID)
 	if err != nil {
-		return ph.handlePermissionCheckError(ctx, err, failedPath, parentFolder)
+		return ph.handlePermissionCheckError(ctx, err, failedPath, parentFolder, actionType)
 	}
 
 	if graph.HasWriteAccess(perms) {
@@ -134,7 +135,7 @@ func (ph *PermissionHandler) handle403(
 	// Folder is read-only. Walk up to find the highest read-only ancestor.
 	boundary := ph.walkPermissionBoundary(ctx, bl, parentFolder, sc, remoteDriveID)
 
-	return ph.remoteBoundaryDecision(boundary, "folder is read-only (no write access)", http.StatusForbidden, failedPath)
+	return ph.remoteBoundaryDecision(boundary, "folder is read-only (no write access)", http.StatusForbidden, failedPath, actionType)
 }
 
 // handlePermissionCheckError handles errors from ListItemPermissions during
@@ -146,6 +147,7 @@ func (ph *PermissionHandler) handlePermissionCheckError(
 	err error,
 	failedPath,
 	parentFolder string,
+	actionType synctypes.ActionType,
 ) PermissionCheckDecision {
 	if errors.Is(err, graph.ErrNotFound) {
 		ph.logger.Warn("handle403: folder not found, recording as permission denied",
@@ -157,6 +159,7 @@ func (ph *PermissionHandler) handlePermissionCheckError(
 			"folder not found on remote (deleted or inaccessible)",
 			http.StatusNotFound,
 			failedPath,
+			actionType,
 		)
 	}
 
@@ -183,29 +186,26 @@ func (ph *PermissionHandler) remoteBoundaryDecision(
 	errMsg string,
 	httpStatus int,
 	failedPath string,
+	actionType synctypes.ActionType,
 ) PermissionCheckDecision {
 	scopeKey := synctypes.SKPermRemote(boundary)
 
 	return PermissionCheckDecision{
 		Matched: true,
-		Kind:    permissionCheckActivateBoundaryScope,
+		Kind:    permissionCheckActivateDerivedScope,
 		Failure: synctypes.SyncFailureParams{
-			Path:       boundary,
+			Path:       failedPath,
 			DriveID:    ph.driveID,
-			Direction:  synctypes.DirectionUpload,
-			Role:       synctypes.FailureRoleBoundary,
-			Category:   synctypes.CategoryActionable,
-			IssueType:  synctypes.IssuePermissionDenied,
+			Direction:  directionFromAction(actionType),
+			ActionType: actionType,
+			Role:       synctypes.FailureRoleHeld,
+			Category:   synctypes.CategoryTransient,
+			IssueType:  synctypes.IssueSharedFolderBlocked,
 			ErrMsg:     errMsg,
 			HTTPStatus: httpStatus,
 			ScopeKey:   scopeKey,
 		},
-		ScopeBlock: synctypes.ScopeBlock{
-			Key:          scopeKey,
-			IssueType:    synctypes.IssuePermissionDenied,
-			TimingSource: synctypes.ScopeTimingNone,
-			BlockedAt:    ph.nowFn(),
-		},
+		ScopeKey:     scopeKey,
 		BoundaryPath: boundary,
 		TriggerPath:  failedPath,
 	}
@@ -256,24 +256,31 @@ func (ph *PermissionHandler) recheckPermissions(
 		return nil
 	}
 
-	issues, err := ph.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
+	issues, err := ph.baseline.ListRemoteBlockedFailures(ctx)
 	if err != nil || len(issues) == 0 {
 		return nil
 	}
 
 	var decisions []PermissionRecheckDecision
+	seen := make(map[synctypes.ScopeKey]bool, len(issues))
 
 	for i := range issues {
 		issue := &issues[i]
 		if !issue.ScopeKey.IsPermRemote() {
 			continue
 		}
+		if seen[issue.ScopeKey] {
+			continue
+		}
+		seen[issue.ScopeKey] = true
 
-		sc := findShortcutForPath(shortcuts, issue.Path)
+		boundaryPath := issue.ScopeKey.RemotePath()
+
+		sc := findShortcutForPath(shortcuts, boundaryPath)
 		if sc == nil {
 			decisions = append(decisions, PermissionRecheckDecision{
 				Kind:     permissionRecheckReleaseScope,
-				Path:     issue.Path,
+				Path:     boundaryPath,
 				ScopeKey: issue.ScopeKey,
 				Reason:   "shortcut no longer present; releasing remote permission boundary",
 			})
@@ -281,12 +288,12 @@ func (ph *PermissionHandler) recheckPermissions(
 		}
 
 		remoteDriveID := driveid.New(sc.RemoteDrive)
-		remoteItemID := resolveRemoteItemID(bl, issue.Path, remoteDriveID)
+		remoteItemID := resolveRemoteItemID(bl, boundaryPath, remoteDriveID)
 
 		if remoteItemID == "" {
 			decisions = append(decisions, PermissionRecheckDecision{
 				Kind:     permissionRecheckReleaseScope,
-				Path:     issue.Path,
+				Path:     boundaryPath,
 				ScopeKey: issue.ScopeKey,
 				Reason:   "remote permission boundary no longer resolvable; releasing stale scope",
 			})
@@ -297,7 +304,7 @@ func (ph *PermissionHandler) recheckPermissions(
 		if permErr != nil {
 			decisions = append(decisions, PermissionRecheckDecision{
 				Kind:     permissionRecheckReleaseScope,
-				Path:     issue.Path,
+				Path:     boundaryPath,
 				ScopeKey: issue.ScopeKey,
 				Reason:   "permission recheck inconclusive; failing open",
 			})
@@ -307,7 +314,7 @@ func (ph *PermissionHandler) recheckPermissions(
 		if graph.HasWriteAccess(perms) {
 			decisions = append(decisions, PermissionRecheckDecision{
 				Kind:     permissionRecheckReleaseScope,
-				Path:     issue.Path,
+				Path:     boundaryPath,
 				ScopeKey: issue.ScopeKey,
 				Reason:   "permission granted; releasing remote permission boundary",
 			})
@@ -316,7 +323,7 @@ func (ph *PermissionHandler) recheckPermissions(
 
 		decisions = append(decisions, PermissionRecheckDecision{
 			Kind:     permissionRecheckKeepScope,
-			Path:     issue.Path,
+			Path:     boundaryPath,
 			ScopeKey: issue.ScopeKey,
 			Reason:   "remote permission boundary still denied",
 		})
@@ -409,13 +416,14 @@ func (ph *PermissionHandler) localFilePermissionDecision(
 		Matched: true,
 		Kind:    permissionCheckRecordFileFailure,
 		Failure: synctypes.SyncFailureParams{
-			Path:      path,
-			DriveID:   ph.driveID,
-			Direction: directionFromAction(actionType),
-			Role:      synctypes.FailureRoleItem,
-			IssueType: synctypes.IssueLocalPermissionDenied,
-			Category:  synctypes.CategoryActionable,
-			ErrMsg:    errMsg,
+			Path:       path,
+			DriveID:    ph.driveID,
+			Direction:  directionFromAction(actionType),
+			ActionType: actionType,
+			Role:       synctypes.FailureRoleItem,
+			IssueType:  synctypes.IssueLocalPermissionDenied,
+			Category:   synctypes.CategoryActionable,
+			ErrMsg:     errMsg,
 		},
 	}
 }
@@ -428,17 +436,19 @@ func (ph *PermissionHandler) localDirectoryPermissionDecision(
 	scopeKey := synctypes.SKPermDir(boundaryPath)
 
 	return PermissionCheckDecision{
-		Matched: true,
-		Kind:    permissionCheckActivateBoundaryScope,
+		Matched:  true,
+		Kind:     permissionCheckActivateBoundaryScope,
+		ScopeKey: scopeKey,
 		Failure: synctypes.SyncFailureParams{
-			Path:      boundaryPath,
-			DriveID:   ph.driveID,
-			Direction: directionFromAction(actionType),
-			Role:      synctypes.FailureRoleBoundary,
-			IssueType: synctypes.IssueLocalPermissionDenied,
-			Category:  synctypes.CategoryActionable,
-			ErrMsg:    "directory not accessible (check filesystem permissions)",
-			ScopeKey:  scopeKey,
+			Path:       boundaryPath,
+			DriveID:    ph.driveID,
+			Direction:  directionFromAction(actionType),
+			ActionType: actionType,
+			Role:       synctypes.FailureRoleBoundary,
+			IssueType:  synctypes.IssueLocalPermissionDenied,
+			Category:   synctypes.CategoryActionable,
+			ErrMsg:     "directory not accessible (check filesystem permissions)",
+			ScopeKey:   scopeKey,
 		},
 		ScopeBlock: synctypes.ScopeBlock{
 			Key:          scopeKey,

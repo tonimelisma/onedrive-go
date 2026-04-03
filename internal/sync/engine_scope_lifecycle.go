@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
@@ -50,7 +51,26 @@ func (controller *scopeController) loadActiveScopes(ctx context.Context, watch *
 
 	activeScopes := make([]synctypes.ScopeBlock, 0, len(blocks))
 	for i := range blocks {
+		if blocks[i].Key.IsPermRemote() {
+			continue
+		}
 		activeScopes = append(activeScopes, *blocks[i])
+	}
+
+	remoteHeld, err := flow.engine.baseline.ListRemoteBlockedFailures(ctx)
+	if err != nil {
+		return fmt.Errorf("sync: listing remote blocked failures: %w", err)
+	}
+	seenRemote := make(map[synctypes.ScopeKey]bool, len(remoteHeld))
+	for i := range remoteHeld {
+		if !remoteHeld[i].ScopeKey.IsPermRemote() || seenRemote[remoteHeld[i].ScopeKey] {
+			continue
+		}
+		seenRemote[remoteHeld[i].ScopeKey] = true
+		activeScopes = append(activeScopes, synctypes.ScopeBlock{
+			Key:       remoteHeld[i].ScopeKey,
+			IssueType: remoteHeld[i].ScopeKey.IssueType(),
+		})
 	}
 	watch.replaceActiveScopes(activeScopes)
 
@@ -72,40 +92,119 @@ func (controller *scopeController) repairPersistedScopes(
 	if listScopeErr != nil {
 		return fmt.Errorf("sync: listing scope blocks: %w", listScopeErr)
 	}
-	if len(blocks) == 0 {
-		return nil
+	if err := controller.dropLegacyRemoteScopes(ctx, blocks); err != nil {
+		return err
+	}
+	if err := controller.repairPersistedAuthScope(ctx, blocks, proof, proofErr); err != nil {
+		return err
 	}
 
+	failures, err := controller.loadRepairedPersistedFailures(ctx)
+	if err != nil {
+		return err
+	}
+	if err := controller.repairPersistedNonAuthScopes(ctx, blocks, failures, proof, proofErr); err != nil {
+		return err
+	}
+
+	flow.mustAssertScopeInvariants(ctx, watch, "repair persisted scopes")
+
+	return nil
+}
+
+func (controller *scopeController) dropLegacyRemoteScopes(
+	ctx context.Context,
+	blocks []*synctypes.ScopeBlock,
+) error {
+	flow := controller.flow
+
+	for i := range blocks {
+		if !blocks[i].Key.IsPermRemote() {
+			continue
+		}
+		if err := flow.engine.baseline.DropLegacyRemoteBlockedScope(ctx, blocks[i].Key); err != nil {
+			return fmt.Errorf("sync: dropping legacy remote scope %s: %w", blocks[i].Key.String(), err)
+		}
+	}
+
+	return nil
+}
+
+func (controller *scopeController) repairPersistedAuthScope(
+	ctx context.Context,
+	blocks []*synctypes.ScopeBlock,
+	proof driveIdentityProof,
+	proofErr error,
+) error {
 	for i := range blocks {
 		if blocks[i].Key != synctypes.SKAuthAccount() {
 			continue
 		}
 
-		if repairErr := controller.repairPersistedScope(ctx, blocks[i], persistedScopeFacts{}, proof, proofErr); repairErr != nil {
-			return repairErr
+		return controller.repairPersistedScope(ctx, blocks[i], persistedScopeFacts{}, proof, proofErr)
+	}
+
+	return nil
+}
+
+func (controller *scopeController) loadRepairedPersistedFailures(
+	ctx context.Context,
+) ([]synctypes.SyncFailureRow, error) {
+	flow := controller.flow
+
+	failures, err := flow.engine.baseline.ListSyncFailures(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing sync failures: %w", err)
+	}
+	if !controller.clearResolvedPersistedRemoteFailures(ctx, failures) {
+		return failures, nil
+	}
+
+	failures, err = flow.engine.baseline.ListSyncFailures(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: relisting sync failures after remote cleanup: %w", err)
+	}
+
+	return failures, nil
+}
+
+func (controller *scopeController) clearResolvedPersistedRemoteFailures(
+	ctx context.Context,
+	failures []synctypes.SyncFailureRow,
+) bool {
+	flow := controller.flow
+
+	remoteResolved := false
+	for i := range failures {
+		if failures[i].Role != synctypes.FailureRoleHeld || !failures[i].ScopeKey.IsPermRemote() {
+			continue
 		}
-
-		break
+		if flow.isFailureResolved(ctx, &failures[i]) {
+			remoteResolved = true
+		}
 	}
 
-	failures, listFailureErr := flow.engine.baseline.ListSyncFailures(ctx)
-	if listFailureErr != nil {
-		return fmt.Errorf("sync: listing sync failures: %w", listFailureErr)
-	}
+	return remoteResolved
+}
 
+func (controller *scopeController) repairPersistedNonAuthScopes(
+	ctx context.Context,
+	blocks []*synctypes.ScopeBlock,
+	failures []synctypes.SyncFailureRow,
+	proof driveIdentityProof,
+	proofErr error,
+) error {
 	facts := summarizePersistedScopeFailures(failures)
 
 	for i := range blocks {
-		if blocks[i].Key == synctypes.SKAuthAccount() {
+		if blocks[i].Key == synctypes.SKAuthAccount() || blocks[i].Key.IsPermRemote() {
 			continue
 		}
 
-		if repairErr := controller.repairPersistedScope(ctx, blocks[i], facts, proof, proofErr); repairErr != nil {
-			return repairErr
+		if err := controller.repairPersistedScope(ctx, blocks[i], facts, proof, proofErr); err != nil {
+			return err
 		}
 	}
-
-	flow.mustAssertScopeInvariants(ctx, watch, "repair persisted scopes")
 
 	return nil
 }
@@ -209,10 +308,6 @@ func scopeStartupPolicyFor(key synctypes.ScopeKey) scopeStartupPolicy {
 	default:
 		return scopeStartupRequiresScopedFailures
 	}
-}
-
-func isPermissionScopeKey(key synctypes.ScopeKey) bool {
-	return key.IsPermDir() || key.IsPermRemote()
 }
 
 func hasActivePreserveDeadline(block *synctypes.ScopeBlock, now time.Time) bool {
@@ -617,6 +712,107 @@ func (controller *scopeController) discardScope(ctx context.Context, watch *watc
 	return nil
 }
 
+func pathMatchesPrefix(path string, prefix string) bool {
+	return path == prefix || strings.HasPrefix(path, prefix+"/")
+}
+
+func (controller *scopeController) clearResolvedRemoteBlockedFailures(
+	ctx context.Context,
+	watch *watchRuntime,
+	changedPaths map[string]bool,
+) {
+	if len(changedPaths) == 0 {
+		return
+	}
+
+	flow := controller.flow
+	rows, err := flow.engine.baseline.ListRemoteBlockedFailures(ctx)
+	if err != nil {
+		flow.engine.logger.Warn("failed to list remote blocked failures for cleanup",
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+
+	clearedScopes := make(map[synctypes.ScopeKey]bool)
+	for i := range rows {
+		if !remoteBlockedFailureRelevant(&rows[i], changedPaths) {
+			continue
+		}
+		if flow.isFailureResolved(ctx, &rows[i]) {
+			clearedScopes[rows[i].ScopeKey] = true
+		}
+	}
+
+	if watch == nil || len(clearedScopes) == 0 {
+		return
+	}
+
+	controller.releaseResolvedRemoteScopes(ctx, watch, clearedScopes)
+}
+
+func remoteBlockedFailureRelevant(
+	row *synctypes.SyncFailureRow,
+	changedPaths map[string]bool,
+) bool {
+	boundary := row.ScopeKey.RemotePath()
+	for changedPath := range changedPaths {
+		if pathMatchesPrefix(row.Path, changedPath) ||
+			pathMatchesPrefix(changedPath, row.Path) ||
+			pathMatchesPrefix(boundary, changedPath) ||
+			pathMatchesPrefix(changedPath, boundary) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (controller *scopeController) releaseResolvedRemoteScopes(
+	ctx context.Context,
+	watch *watchRuntime,
+	clearedScopes map[synctypes.ScopeKey]bool,
+) {
+	flow := controller.flow
+	remainingScopes, ok := controller.remainingRemoteBlockedScopes(ctx)
+	if !ok {
+		return
+	}
+
+	for key := range clearedScopes {
+		if remainingScopes[key] {
+			continue
+		}
+		if err := controller.releaseScope(ctx, watch, key); err != nil {
+			flow.engine.logger.Warn("failed to clear resolved remote blocked scope",
+				slog.String("scope_key", key.String()),
+				slog.String("error", err.Error()),
+			)
+		}
+	}
+}
+
+func (controller *scopeController) remainingRemoteBlockedScopes(
+	ctx context.Context,
+) (map[synctypes.ScopeKey]bool, bool) {
+	flow := controller.flow
+
+	remainingRows, err := flow.engine.baseline.ListRemoteBlockedFailures(ctx)
+	if err != nil {
+		flow.engine.logger.Warn("failed to relist remote blocked failures after cleanup",
+			slog.String("error", err.Error()),
+		)
+		return nil, false
+	}
+
+	remainingScopes := make(map[synctypes.ScopeKey]bool, len(remainingRows))
+	for i := range remainingRows {
+		remainingScopes[remainingRows[i].ScopeKey] = true
+	}
+
+	return remainingScopes, true
+}
+
 // admitReady applies watch-mode trial interception and scope admission to a
 // ready action set, returning the actions that should enter the watch loop's
 // outbox. It is the single admission path used by both newly-planned actions
@@ -772,13 +968,16 @@ func (controller *scopeController) recordScopeBlockedFailure(ctx context.Context
 	}
 
 	if err := flow.engine.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path:      action.Path,
-		DriveID:   driveID,
-		Direction: direction,
-		Role:      synctypes.FailureRoleHeld,
-		Category:  synctypes.CategoryTransient,
-		ScopeKey:  scopeKey,
-		ErrMsg:    "scope blocked: " + scopeKey.String(),
+		Path:       action.Path,
+		DriveID:    driveID,
+		Direction:  direction,
+		ActionType: action.Type,
+		ItemID:     action.ItemID,
+		Role:       synctypes.FailureRoleHeld,
+		Category:   synctypes.CategoryTransient,
+		IssueType:  scopeKey.IssueType(),
+		ScopeKey:   scopeKey,
+		ErrMsg:     "scope blocked: " + scopeKey.String(),
 	}, nil); err != nil { // nil delayFn → next_retry_at = NULL
 		flow.engine.logger.Warn("failed to record scope-blocked failure",
 			slog.String("path", action.Path),
@@ -806,8 +1005,10 @@ func (controller *scopeController) rehomeHeldFailure(
 		Path:       r.Path,
 		DriveID:    driveID,
 		Direction:  direction,
+		ActionType: r.ActionType,
 		Role:       synctypes.FailureRoleHeld,
 		Category:   synctypes.CategoryTransient,
+		IssueType:  scopeKey.IssueType(),
 		ScopeKey:   scopeKey,
 		ErrMsg:     "scope blocked: " + scopeKey.String(),
 		HTTPStatus: r.HTTPStatus,
@@ -841,12 +1042,13 @@ func (controller *scopeController) recordCascadeFailure(
 	issueType := issueTypeForHTTPStatus(parentResult.HTTPStatus, parentResult.Err)
 
 	if err := flow.engine.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path:      action.Path,
-		DriveID:   driveID,
-		Direction: direction,
-		Category:  synctypes.CategoryTransient,
-		IssueType: issueType,
-		ErrMsg:    "parent action failed: " + parentResult.ErrMsg,
+		Path:       action.Path,
+		DriveID:    driveID,
+		Direction:  direction,
+		ActionType: action.Type,
+		Category:   synctypes.CategoryTransient,
+		IssueType:  issueType,
+		ErrMsg:     "parent action failed: " + parentResult.ErrMsg,
 	}, retry.ReconcilePolicy().Delay); err != nil {
 		flow.engine.logger.Warn("failed to record cascade failure",
 			slog.String("path", action.Path),

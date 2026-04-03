@@ -169,7 +169,7 @@ func (sk ScopeKey) IssueType() string {
 	case ScopePermDir:
 		return IssueLocalPermissionDenied
 	case ScopePermRemote:
-		return IssuePermissionDenied
+		return IssueSharedFolderBlocked
 	case ScopeDiskLocal:
 		return IssueDiskFull
 	default:

@@ -66,7 +66,9 @@ Categories remain:
 
 The role model makes row meaning explicit instead of inferring it from
 `scope_key` and `next_retry_at`. Keyed by `(path, drive_id)`. Surfaced via the
-`issues` CLI command.
+`issues` CLI command. Shared-folder read-only state is modeled as `held`
+blocked-write rows only; it does not keep a durable `boundary` row once the
+blocked write intent is gone.
 
 ### scope_blocks
 
@@ -82,7 +84,8 @@ Key columns:
 `scope_blocks` is separate from `sync_failures` because scope-level timing state
 and item-level failure state are different entities with different cardinality.
 The watch loop keeps only a rebuildable in-memory working set; durable truth
-remains in SQLite.
+remains in SQLite. `perm:remote` is the exception: its scope is derived from
+held blocked-write rows and is not persisted in `scope_blocks`.
 
 `preserve_until` makes preserve semantics durable without inventing duplicate
 held rows. A preserved scope may therefore survive restart even when no
@@ -104,7 +107,7 @@ Per-file conflict tracking. Three types: `edit_edit`, `edit_delete`, `create_cre
 
 ### shortcuts
 
-Shortcut-to-shared-folder registry. Tracks `remote_drive`, `remote_item`, observation method (`delta` or `enumerate`), and `read_only` status.
+Shortcut-to-shared-folder registry. Tracks `remote_drive`, `remote_item`, and observation method (`delta` or `enumerate`). Shared-folder read-only state is not stored here.
 
 ## SyncStore Sub-Interfaces
 

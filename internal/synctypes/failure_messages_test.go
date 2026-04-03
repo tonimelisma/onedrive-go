@@ -14,6 +14,7 @@ func TestMessageForIssueType_AllKnownTypes(t *testing.T) {
 		IssueQuotaExceeded,
 		IssueUnauthorized,
 		IssuePermissionDenied,
+		IssueSharedFolderBlocked,
 		IssueLocalPermissionDenied,
 		IssueInvalidFilename,
 		IssuePathTooLong,
