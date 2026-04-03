@@ -31,6 +31,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.3.1: Only one sync process per configuration shall run at a time. [verified]
 - R-6.3.2: Status and query commands shall be concurrent-reader safe while sync is running. [verified]
 - R-6.3.3: The system shall enforce single-instance via PID file with advisory lock. [verified]
+- R-6.3.4: Concurrent and runtime components shall document the single owner of mutable state, goroutines, channels, timers, and mutex-guarded fields. [verified]
 
 ## R-6.4 Safety [implemented]
 
@@ -112,6 +113,7 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.8.13: `Action` shall expose `TargetsOwnDrive() bool` and `ShortcutKey() string` as the only drive-identity accessors for scope matching and routing. [verified]
 - R-6.8.14: Sync callers use raw `http.DefaultTransport`. The graph client's `doOnce()` still performs transparent 401 token refresh. Auth refresh is lifecycle, not transient retry. When refresh fails, the system shall return `ErrUnauthorized` (fatal). [verified]
 - R-6.8.15: The engine shall classify the following HTTP status codes as transient: 5xx (issue_type: server_error), 408 (request_timeout), 412 (transient_conflict), 404 (transient_not_found), 423 (resource_locked). Transient errors are recorded in `sync_failures` with `next_retry_at` (backoff via `retry.Reconcile`: 1s-1h). The `FailureRetrier` re-injects due items through the full pipeline (buffer → planner → tracker). In one-shot mode, failed items remain in sync_failures for the next `onedrive sync` invocation to replan. HTTP 423 (SharePoint co-authoring lock) was previously classified as skip — the persistent retry architecture handles multi-hour locks naturally via escalating backoff in sync_failures. [verified]
+- R-6.8.16: External and runtime failures shall be translated into the documented domain error model before retry, durable persistence, or user presentation. [verified]
 
 ## R-6.9 Packaging [future]
 
@@ -127,3 +129,6 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.10.2: CI shall enforce the same lint policy as local development and pin the `golangci-lint` version used for verification. [verified]
 - R-6.10.3: Inline `//nolint` usage shall require both a specific linter name and a justification, and stale exclusions shall be surfaced automatically. [verified]
 - R-6.10.4: Total statement coverage shall not drop below 76.0% in the verification gate. [verified]
+- R-6.10.5: Architecture-boundary violations shall fail static verification, with code-shape rules enforced by linting and repo-level invariants enforced by `cmd/devtool verify`. [verified]
+- R-6.10.6: Every governed module design doc shall include an ownership contract that states what the module owns, what it does not own, its source of truth, allowed side effects, mutable runtime owner, and error boundary. [verified]
+- R-6.10.7: The architecture shall include verified threat-model and degraded-mode design docs, and `system.md` shall link to them as required cross-cutting references. [verified]

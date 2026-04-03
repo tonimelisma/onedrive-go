@@ -2,13 +2,22 @@
 
 GOVERNS: internal/graph/auth.go, internal/graph/client.go, internal/graph/client_auth.go, internal/graph/client_construction.go, internal/graph/client_preauth.go, internal/graph/delta.go, internal/graph/download.go, internal/graph/drives.go, internal/graph/errors.go, internal/graph/items.go, internal/graph/normalize.go, internal/graph/types.go, internal/graph/upload.go, internal/tokenfile/tokenfile.go
 
-Implements: R-3.1 [verified], R-6.7 [implemented], R-6.8 [verified], R-1.1 [verified], R-1.4 [verified], R-1.5 [verified], R-1.6 [verified], R-1.7 [verified], R-1.8 [verified], R-6.7.4 [verified], R-6.7.8 [verified], R-6.7.9 [verified], R-6.7.10 [verified], R-6.7.11 [planned], R-6.7.12 [verified], R-6.7.13 [verified], R-6.7.17 [implemented], R-6.7.18 [planned], R-6.7.22 [planned], R-6.7.23 [planned], R-6.8.4 [planned], R-6.8.6 [verified], R-6.8.8 [verified], R-6.8.14 [verified]
+Implements: R-3.1 [verified], R-6.7 [implemented], R-6.8 [verified], R-1.1 [verified], R-1.4 [verified], R-1.5 [verified], R-1.6 [verified], R-1.7 [verified], R-1.8 [verified], R-6.7.4 [verified], R-6.7.8 [verified], R-6.7.9 [verified], R-6.7.10 [verified], R-6.7.11 [planned], R-6.7.12 [verified], R-6.7.13 [verified], R-6.7.17 [implemented], R-6.7.18 [planned], R-6.7.22 [planned], R-6.7.23 [planned], R-6.8.4 [planned], R-6.8.6 [verified], R-6.8.8 [verified], R-6.8.14 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
 
 ## Overview
 
 All Microsoft Graph API communication flows through `graph.Client`. The client is a pure API mapper plus a narrow Graph-quirk normalizer: authentication, quirk-specific retries, and error construction. Generic transient retry, throttle state, and backoff coordination stay in the transport layer. Callers receive clean, consistent data via `graph.Item` and never deal with API inconsistencies.
 
 Retry lives in the transport layer via `retry.RetryTransport` (an `http.RoundTripper`). CLI callers wrap their HTTP client with `RetryTransport{Policy: retry.TransportPolicy()}`. Sync callers use a raw HTTP client so failures return immediately for engine-level classification.
+
+## Ownership Contract
+
+- Owns: Graph request construction, authentication flows, token persistence callbacks, Graph-specific normalization, and `GraphError`/sentinel creation.
+- Does Not Own: Config discovery, sync retry scheduling, scope activation, store persistence, or CLI presentation.
+- Source of Truth: Graph HTTP responses plus token file contents loaded and written through `tokenfile`.
+- Allowed Side Effects: HTTP requests, loopback callback-server startup during browser auth, and token-file I/O through `tokenfile` and rooted managed-state helpers.
+- Mutable Runtime Owner: `Client` instances are immutable after construction except for request-scoped state inside individual method calls. Browser auth owns its callback goroutine, server, and result channel only for the lifetime of `LoginWithBrowser`.
+- Error Boundary: `graph` is the first translation boundary from wire/auth/HTTP failures into the domain model described in [error-model.md](error-model.md). Higher layers may add context, but they do not reinterpret raw Graph payloads directly.
 
 ## Authentication (`auth.go`)
 
@@ -59,6 +68,11 @@ Sentinel errors: `ErrGone` (410), `ErrNotFound` (404), `ErrThrottled` (429), `Er
 
 `GraphError` preserves Graph's structured error metadata: `Code`, `InnerCodes`, capped `RawBody`, and helper methods `MostSpecificCode()` / `HasCode()`. Quirk retries key on the code chain first. One-off incident signatures without recoverable payload evidence stay in the reference layer and are not special-cased in runtime classification.
 
+This package owns the wire-to-domain normalization step for remote failures:
+raw HTTP and Graph payloads become `GraphError` values plus sentinels such as
+`ErrGone` and `ErrUnauthorized`. Retry, persistence, and user-facing decisions
+consume that normalized boundary contract via [error-model.md](error-model.md).
+
 **RetryAfter Header** — `RetryAfter time.Duration` field on `GraphError`. Parsed from `Retry-After` header for 429 and 503 responses. Implements: R-6.8.6 [implemented]
 
 ## Transport-Layer Retry
@@ -77,6 +91,15 @@ Implements: R-6.8.14 [implemented]
 
 Transparent token refresh on 401 inside `doOnce()`, independent of retry transport. On 401: refresh token → retry once. If still 401 → return `ErrUnauthorized` (fatal). Auth refresh is lifecycle management, not transient retry — it works regardless of whether the HTTP client has a `RetryTransport`.
 
+## Runtime Ownership
+
+The graph package intentionally keeps runtime ownership narrow:
+
+- `Client` holds immutable dependencies and per-instance policy knobs only; it owns no background goroutines, channels, or timers.
+- Browser auth owns one callback server goroutine plus one result channel per login attempt. `doAuthCodeLogin` starts them, waits for the callback, and shuts them down before returning.
+- Token refresh state is delegated to the token source implementation. `graph` consumes it synchronously; it does not run a background refresh coordinator.
+- The sole raw `http.Client.Do` production boundary is `client_preauth.go`, where validated pre-authenticated URLs are dispatched.
+
 ## Design Constraints
 
 - `graph/` exposes concrete types, not interfaces (`graph.Client`, `graph.Item`)
@@ -89,7 +112,7 @@ Transparent token refresh on 401 inside `doOnce()`, independent of retry transpo
 - Search API calls URL-escape query parameters to prevent special characters from breaking URL construction.
 - Token metadata validation is enforced on both write and read paths. Required fields must be present in non-nil metadata. `tokenfile.ValidateMeta()` validates before save, `LoadAndValidate()` validates on load.
 - Token file reads and writes use `internal/fsroot` after config-driven token resolution, so open/read/temp-file creation/chmod/fsync/rename all stay inside one managed-state root capability.
-- `dispatchRequest` is the sole raw `http.Client.Do` boundary. Graph base URLs and pre-auth URLs are validated before a request reaches that call; the remaining inline `gosec` suppression there is intentional because the linter cannot prove the validation flow.
+- `client_preauth.go` is the sole raw `http.Client.Do` production boundary. Graph base URLs and pre-auth URLs are validated before a request reaches that call; the remaining inline `gosec` suppression there is intentional because the linter cannot prove the validation flow.
 - Graph/API quirk handling requires either captured payload evidence in CI/tests/logs or a reproducible documented observation with enough detail to classify safely. One-off incidents without recoverable payload evidence stay documented as reference notes only and do not become permanent runtime normalization rules.
 - Per-tenant rate limit coordination: multiple drives under the same tenant share Graph API rate limits. A shared rate limiter per-tenant prevents aggregate throttling. [planned]
 - Upload and async-copy pre-auth URL validation: verify HTTPS scheme and trusted Microsoft hosts on upload session and copy monitor URLs before use. Both copy monitor and upload-session validation explicitly allow Personal-account URLs on `microsoftpersonalcontent.com` after live `e2e_full` coverage captured upload-session URLs on that host family. [verified]

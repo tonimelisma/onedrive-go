@@ -175,6 +175,145 @@ func TestResolveVerifyPlanRejectsUnknownProfile(t *testing.T) {
 	assert.Contains(t, err.Error(), "usage")
 }
 
+// Validates: R-6.10.6
+func TestRunRepoConsistencyChecksFailsWithoutOwnershipContract(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoRoot, "spec", "design", "cli.md"),
+		[]byte("# CLI\n\nGOVERNS: internal/cli/*.go\n"),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Ownership Contract")
+	assert.Contains(t, err.Error(), "cli.md")
+}
+
+// Validates: R-6.10.6
+func TestRunRepoConsistencyChecksFailsWithoutOwnershipContractBullet(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoRoot, "spec", "design", "cli.md"),
+		[]byte(strings.Join([]string{
+			"# CLI",
+			"",
+			"GOVERNS: internal/cli/*.go",
+			"",
+			"## Ownership Contract",
+			"- Owns: CLI entrypoints",
+			"- Does Not Own: sync runtime",
+			"- Source of Truth: Cobra command definitions",
+			"- Allowed Side Effects: config I/O and stdout",
+			"- Mutable Runtime Owner: process-local command execution",
+			"",
+		}, "\n")),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Error Boundary")
+	assert.Contains(t, err.Error(), "cli.md")
+}
+
+// Validates: R-6.10.7
+func TestRunRepoConsistencyChecksFailsWithoutCrossCuttingDesignDocReference(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoRoot, "spec", "design", "system.md"),
+		[]byte(strings.Join([]string{
+			"# System",
+			"",
+			"## Design Docs",
+			"- [error-model.md](error-model.md)",
+			"- [degraded-mode.md](degraded-mode.md)",
+			"",
+		}, "\n")),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "threat-model.md")
+	assert.Contains(t, err.Error(), "system.md")
+}
+
+// Validates: R-6.10.5
+func TestRunRepoConsistencyChecksFailsOnHTTPClientDoOutsideApprovedBoundary(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoRoot, "internal", "bad_http.go"),
+		[]byte(strings.Join([]string{
+			"package bad",
+			"",
+			"import \"net/http\"",
+			"",
+			"type wrapper struct {",
+			"\tclient *http.Client",
+			"}",
+			"",
+			"func do(req *http.Request, w wrapper) (*http.Response, error) {",
+			"\treturn w.client.Do(req)",
+			"}",
+			"",
+		}, "\n")),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "http.Client.Do")
+	assert.Contains(t, err.Error(), "bad_http.go")
+}
+
+// Validates: R-6.10.5
+func TestRunRepoConsistencyChecksAllowsApprovedHTTPClientDoBoundary(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	graphDir := filepath.Join(repoRoot, "internal", "graph")
+	require.NoError(t, os.MkdirAll(graphDir, 0o750))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(graphDir, "client_preauth.go"),
+		[]byte(strings.Join([]string{
+			"package graph",
+			"",
+			"import \"net/http\"",
+			"",
+			"type client struct {",
+			"\thttpClient *http.Client",
+			"}",
+			"",
+			"func (c *client) do(req *http.Request) (*http.Response, error) {",
+			"\treturn c.httpClient.Do(req)",
+			"}",
+			"",
+		}, "\n")),
+		0o600,
+	))
+
+	require.NoError(t, runRepoConsistencyChecks(repoRoot))
+}
+
 func writeRepoConsistencyFixtures(t *testing.T, repoRoot string) {
 	t.Helper()
 
@@ -188,7 +327,40 @@ func writeRepoConsistencyFixtures(t *testing.T, repoRoot string) {
 	}
 
 	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "CLAUDE.md"), []byte("clean\n"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "spec", "design", "system.md"), []byte("clean\n"), 0o600))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoRoot, "spec", "design", "system.md"),
+		[]byte(strings.Join([]string{
+			"# System",
+			"",
+			"## Design Docs",
+			"- [error-model.md](error-model.md)",
+			"- [threat-model.md](threat-model.md)",
+			"- [degraded-mode.md](degraded-mode.md)",
+			"",
+		}, "\n")),
+		0o600,
+	))
+	for _, name := range []string{"error-model.md", "threat-model.md", "degraded-mode.md"} {
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "spec", "design", name), []byte("clean\n"), 0o600))
+	}
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoRoot, "spec", "design", "cli.md"),
+		[]byte(strings.Join([]string{
+			"# CLI",
+			"",
+			"GOVERNS: internal/cli/*.go",
+			"",
+			"## Ownership Contract",
+			"- Owns: CLI entrypoints",
+			"- Does Not Own: sync runtime",
+			"- Source of Truth: Cobra command definitions",
+			"- Allowed Side Effects: config I/O and stdout",
+			"- Mutable Runtime Owner: process-local command execution",
+			"- Error Boundary: CLI error rendering",
+			"",
+		}, "\n")),
+		0o600,
+	))
 	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "internal", "clean.go"), []byte("package clean\n"), 0o600))
 }
 

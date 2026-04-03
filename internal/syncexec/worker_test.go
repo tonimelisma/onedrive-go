@@ -20,6 +20,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -67,6 +68,8 @@ func newWorkerTestSetup(t *testing.T) (
 	syncRoot := t.TempDir()
 	driveID := driveid.New("0000000000000001")
 	logger := synctest.TestLogger(t)
+	syncTree, err := synctree.Open(syncRoot)
+	require.NoError(t, err)
 
 	items := &workerMockItemClient{
 		createFolderFn: func(_ context.Context, _ driveid.ID, _, name string) (*graph.Item, error) {
@@ -84,7 +87,7 @@ func newWorkerTestSetup(t *testing.T) (
 	}
 	ul := &workerMockUploader{}
 
-	cfg := NewExecutorConfig(items, dl, ul, syncRoot, driveID, logger)
+	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger)
 	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
 	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 	return cfg, mgr, syncRoot

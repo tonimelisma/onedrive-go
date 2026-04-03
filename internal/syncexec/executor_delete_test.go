@@ -12,6 +12,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -79,12 +80,14 @@ func newDeleteTestExecutor(t *testing.T) (*Executor, string) {
 	syncRoot := t.TempDir()
 	driveID := driveid.New(synctest.TestDriveID)
 	logger := synctest.TestLogger(t)
+	syncTree, err := synctree.Open(syncRoot)
+	require.NoError(t, err)
 
 	items := &executorMockItemClient{}
 	dl := &executorMockDownloader{}
 	ul := &executorMockUploader{}
 
-	cfg := NewExecutorConfig(items, dl, ul, syncRoot, driveID, logger)
+	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger)
 	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
 	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) })
 	e := NewExecution(cfg, synctest.EmptyBaseline())
@@ -230,15 +233,17 @@ func TestFindNonDisposable(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
+	tree, err := synctree.Open(dir)
+	require.NoError(t, err)
 
 	// All disposable.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".DS_Store"), []byte{0}, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "._foo"), []byte{0}, 0o600))
-	assert.Empty(t, FindNonDisposable(dir))
+	assert.Empty(t, FindNonDisposable(tree, ""))
 
 	// Add a non-disposable file.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "real.txt"), []byte("data"), 0o600))
-	assert.Equal(t, "real.txt", FindNonDisposable(dir))
+	assert.Equal(t, "real.txt", FindNonDisposable(tree, ""))
 }
 
 func TestDeleteLocalFolder_EmptyDir_Succeeds(t *testing.T) {

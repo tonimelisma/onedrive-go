@@ -2,11 +2,20 @@
 
 GOVERNS: internal/driveid/canonical.go, internal/driveid/id.go, internal/driveid/itemkey.go, drive.go, purge.go
 
-Implements: R-3.2 [verified], R-3.5 [verified], R-6.7.2 [verified], R-3.6.4 [planned], R-3.6.5 [planned]
+Implements: R-3.2 [verified], R-3.5 [verified], R-6.7.2 [verified], R-3.6.4 [planned], R-3.6.5 [planned], R-6.10.6 [verified]
 
 ## Core Concepts
 
 **Accounts** are what you authenticate with (Microsoft accounts). **Drives** are what you sync. Each drive has a canonical identifier derived from real data — no arbitrary names.
+
+## Ownership Contract
+
+- Owns: Canonical drive-identity formats, parsing/formatting, display-name rules, and CLI drive matching semantics.
+- Does Not Own: Config scanning, token resolution, Graph discovery, or sync runtime policy.
+- Source of Truth: Canonical IDs derived from authenticated account and drive metadata; display names are config-owned user-facing labels layered on top of those identities.
+- Allowed Side Effects: The leaf `driveid` package is pure. CLI drive commands governed here perform config mutations through the config layer, not through identity types.
+- Mutable Runtime Owner: None. Identity values are pure value types and CLI-local state is invocation-scoped.
+- Error Boundary: Parsing and matching errors stop at the CLI/config boundary; identity types do not translate transport or filesystem failures.
 
 ## Canonical Drive ID
 

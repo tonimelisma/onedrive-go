@@ -43,6 +43,7 @@ type RemoteObserver struct {
 	ObsWriter synctypes.ObservationWriter // nil-safe: when set, observations are committed atomically with delta token
 
 	// mu protects deltaToken for concurrent reads via CurrentDeltaToken().
+	// The watch loop is the only writer; helper calls may read concurrently.
 	mu         stdsync.Mutex
 	deltaToken string
 

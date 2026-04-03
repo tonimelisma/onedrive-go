@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 type includeEntry struct {
@@ -26,12 +28,12 @@ type worktreeFS struct {
 
 func defaultWorktreeFS() worktreeFS {
 	return worktreeFS{
-		readFile:  os.ReadFile,
-		stat:      os.Stat,
-		mkdirAll:  os.MkdirAll,
-		removeAll: os.RemoveAll,
-		symlink:   os.Symlink,
-		writeFile: os.WriteFile,
+		readFile:  localpath.ReadFile,
+		stat:      localpath.Stat,
+		mkdirAll:  localpath.MkdirAll,
+		removeAll: localpath.RemoveAll,
+		symlink:   localpath.Symlink,
+		writeFile: localpath.WriteFile,
 	}
 }
 

@@ -4,11 +4,9 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -640,7 +638,7 @@ func annotateStateDB(entries []driveListEntry) {
 			continue
 		}
 
-		if _, statErr := os.Stat(path); statErr == nil {
+		if managedPathExists(path) {
 			entries[i].HasStateDB = true
 		}
 	}
@@ -719,7 +717,7 @@ func addNewDrive(w io.Writer, cfgPath string, cid driveid.CanonicalID, logger *s
 		return fmt.Errorf("cannot determine data directory for %s", cid.Email())
 	}
 
-	if _, statErr := os.Stat(tokenPath); errors.Is(statErr, os.ErrNotExist) {
+	if !managedPathExists(tokenPath) {
 		return fmt.Errorf("no token file for %s — run 'onedrive-go login' first", cid.Email())
 	}
 
@@ -773,7 +771,7 @@ func addSharedDrive(
 		return fmt.Errorf("cannot determine data directory for %s", cid.Email())
 	}
 
-	if _, statErr := os.Stat(tokenPath); errors.Is(statErr, os.ErrNotExist) {
+	if !managedPathExists(tokenPath) {
 		return fmt.Errorf("no token file for %s — run 'onedrive-go login' first", cid.Email())
 	}
 

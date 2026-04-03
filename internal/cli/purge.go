@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -26,10 +25,11 @@ func removeDriveDataFiles(cid driveid.CanonicalID, logger *slog.Logger) (int, er
 	// Remove state database.
 	statePath := config.DriveStatePath(cid)
 	if statePath != "" {
-		if err := os.Remove(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		removedPath, err := removeManagedPath(statePath)
+		if err != nil {
 			logger.Warn("failed to remove state database", "path", statePath, "error", err)
 			errs = append(errs, fmt.Errorf("removing state database %s: %w", statePath, err))
-		} else if err == nil {
+		} else if removedPath {
 			logger.Info("removed state database", "path", statePath)
 			removed++
 		}
@@ -38,10 +38,11 @@ func removeDriveDataFiles(cid driveid.CanonicalID, logger *slog.Logger) (int, er
 	// Remove drive metadata file.
 	metaPath := config.DriveMetadataPath(cid)
 	if metaPath != "" {
-		if err := os.Remove(metaPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		removedPath, err := removeManagedPath(metaPath)
+		if err != nil {
 			logger.Warn("failed to remove drive metadata", "path", metaPath, "error", err)
 			errs = append(errs, fmt.Errorf("removing drive metadata %s: %w", metaPath, err))
-		} else if err == nil {
+		} else if removedPath {
 			logger.Info("removed drive metadata", "path", metaPath)
 			removed++
 		}

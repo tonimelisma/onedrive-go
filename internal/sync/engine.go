@@ -75,7 +75,12 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 		return nil, fmt.Errorf("sync: creating engine: %w", err)
 	}
 
-	execCfg := syncexec.NewExecutorConfig(cfg.Items, cfg.Downloads, cfg.Uploads, cfg.SyncRoot, cfg.DriveID, cfg.Logger)
+	syncTree, err := synctree.Open(cfg.SyncRoot)
+	if err != nil {
+		return nil, fmt.Errorf("sync: opening sync tree: %w", err)
+	}
+
+	execCfg := syncexec.NewExecutorConfig(cfg.Items, cfg.Downloads, cfg.Uploads, syncTree, cfg.DriveID, cfg.Logger)
 
 	if cfg.UseLocalTrash {
 		execCfg.SetTrashFunc(localtrash.Default)
@@ -93,11 +98,6 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 	execCfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads, cfg.Uploads, sessionStore, cfg.Logger,
 		driveops.WithDiskCheck(cfg.MinFreeSpace, driveops.DiskAvailable),
 	))
-
-	syncTree, err := synctree.Open(cfg.SyncRoot)
-	if err != nil {
-		return nil, fmt.Errorf("sync: opening sync tree: %w", err)
-	}
 
 	// Default threshold if not set by config.
 	bdThreshold := cfg.BigDeleteThreshold

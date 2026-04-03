@@ -2,7 +2,16 @@
 
 GOVERNS: internal/sync/engine*.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/engine_shortcuts.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_decisions.go, sync_helpers.go
 
-Implements: R-2.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [planned], R-6.6.10 [verified], R-6.6.12 [verified], R-6.7.27 [verified], R-6.8.15 [verified]
+Implements: R-2.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [planned], R-6.6.10 [verified], R-6.6.12 [verified], R-6.7.27 [verified], R-6.8.15 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
+
+## Ownership Contract
+
+- Owns: Single-drive runtime orchestration, watch-mode control state, retry/trial scheduling, permission-scope lifecycle, and result classification.
+- Does Not Own: Multi-drive lifecycle, Graph wire normalization, config file policy, or SQLite schema ownership.
+- Source of Truth: Durable sync state lives in `SyncStore`; watch-mode runtime state is the single-owner in-memory projection rebuilt from store data plus live observations.
+- Allowed Side Effects: Coordinating observers, planner, executor, and store writes; reading local/remote state only through injected collaborators and rooted filesystem capabilities.
+- Mutable Runtime Owner: `oneShotRunner` owns one-shot mutable state; `watchRuntime` owns watch-mode mutable state. `Engine` itself remains an immutable dependency container.
+- Error Boundary: The engine turns observer and worker outcomes into `ResultDecision`, scope actions, retry scheduling, and success cleanup according to [error-model.md](error-model.md).
 
 ## Engine (`engine.go`)
 
@@ -151,6 +160,10 @@ raw HTTP/local error facts.
 - `RecordSuccess`
 
 Core result classes:
+
+The engine-level result classes are the sync-runtime realization of the shared
+domain failure model in [error-model.md](error-model.md): success, shutdown,
+retryable transient, scope-blocking transient, actionable, and fatal.
 
 - `resultSuccess`: action succeeded
 - `resultRequeue`: transient failure — re-queue with backoff

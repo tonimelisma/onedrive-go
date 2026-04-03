@@ -7,7 +7,7 @@ import "sync"
 // read through a shared Holder, so SIGHUP reload updates config in exactly
 // one place.
 type Holder struct {
-	mu   sync.RWMutex
+	mu   sync.RWMutex // guards cfg
 	cfg  *Config
 	path string // immutable after construction
 }

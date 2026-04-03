@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 // inotifyCapacityThreshold is the fraction of max_user_watches that triggers
@@ -22,7 +24,7 @@ const percentMultiplier = 100.0
 // ReadInotifyLimit reads the current inotify max_user_watches from procfs.
 // Returns 0 if procfs is unavailable (e.g., container without /proc mounted).
 func ReadInotifyLimit() (int, error) {
-	data, err := os.ReadFile("/proc/sys/fs/inotify/max_user_watches")
+	data, err := localpath.ReadFile("/proc/sys/fs/inotify/max_user_watches")
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return 0, nil

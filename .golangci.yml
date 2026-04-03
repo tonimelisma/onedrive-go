@@ -30,6 +30,7 @@ linters:
     - errname
     - errorlint
     - exhaustive
+    - forbidigo
     - funlen
     - gocheckcompilerdirectives
     - gochecknoglobals
@@ -94,6 +95,35 @@ linters:
             - github.com/fsnotify/fsnotify
             - golang.org/x/sync
             - github.com/mattn/go-isatty
+        graph-no-config:
+          files:
+            - internal/graph/*.go
+            - "!$test"
+          deny:
+            - pkg: github.com/tonimelisma/onedrive-go/internal/config$
+              desc: graph boundary must not import internal/config
+        driveops-no-sync:
+          files:
+            - internal/driveops/*.go
+            - "!$test"
+          deny:
+            - pkg: github.com/tonimelisma/onedrive-go/internal/sync$
+              desc: driveops must not import internal/sync
+        leaf-internal:
+          files:
+            - internal/driveid/*.go
+            - internal/tokenfile/*.go
+            - internal/retry/*.go
+            - "!$test"
+          deny:
+            - pkg: github.com/tonimelisma/onedrive-go/internal/
+              desc: leaf packages must not import other internal packages
+
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: ^os\.(Open|OpenFile|ReadFile|WriteFile|Create|CreateTemp|Mkdir|MkdirAll|ReadDir|Stat|Lstat|Remove|RemoveAll|Rename|Chmod|Chtimes|Symlink|Readlink|Truncate)$
+          msg: use fsroot, synctree, or localpath filesystem boundaries instead of raw os.* calls
 
     gocyclo:
       min-complexity: 15
@@ -222,3 +252,9 @@ linters:
       - linters:
           - errcheck
         source: "defer "
+      - path: _test\.go
+        linters:
+          - forbidigo
+      - path: internal/(fsroot|synctree|localpath)/
+        linters:
+          - forbidigo
