@@ -80,8 +80,15 @@ actions:
 - `runTrialDispatch()` picks a held row for each due scope via `PickTrialCandidate`
 - `createEventFromDB()` / the retry-trial rebuild path reconstruct planner input from current durable state or single-path local observation
 - success -> `releaseScope`
-- failure -> `extendScopeTrial`
-- actionable current-local rejections during retry/trial reconstruction replace the held/transient row with an actionable item failure instead of being silently dropped
+- matching-scope persistence evidence -> `extendScopeTrial`
+- inconclusive trial outcomes -> `preserveScopeTrial`
+- actionable current-local rejections during retry/trial reconstruction replace or re-home the candidate failure without silently clearing the original scope
+
+`preserveScopeTrial` is intentionally different from backoff extension:
+
+- it re-arms `next_trial_at` at the current interval
+- it does not increment `trial_count`
+- it keeps scope authority in `scope_blocks`, not in synthetic duplicate failure rows
 
 `releaseScope` is the single “scope resolved” transition:
 
@@ -98,7 +105,10 @@ Trial timing is scope-aware:
 - `disk:local` uses 5m initial, 2x backoff, 1h max
 
 The persisted `timing_source` on `scope_blocks` records whether a scope was
-timed by local backoff or explicit server `Retry-After`.
+timed by local backoff or explicit server `Retry-After`. The persisted
+`preserve_until` timestamp records bounded restart-safe preserve state for
+scoped-failure-backed scopes whose held rows may temporarily disappear or
+change shape during preserve handling.
 
 ### Restart semantics
 
@@ -107,6 +117,7 @@ Startup repair applies persisted-scope policy before any admission begins:
 - `throttle:account` and `service` survive restart only when `timing_source='server_retry_after'`
 - expired server-timed scopes are trialed immediately, not auto-released
 - non-server-timed throttle/service scopes are cleared on startup
+- scoped-failure-backed scopes may survive restart while `preserve_until` is still in the future even if no same-scope held rows remain
 - `disk:local` is revalidated against current free space instead of trusting stale persisted timing
 
 ## Deleted Mechanisms

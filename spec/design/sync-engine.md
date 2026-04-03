@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/engine*.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/engine_shortcuts.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_decisions.go, sync_helpers.go
 
-Implements: R-2.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [planned], R-6.6.10 [verified], R-6.6.12 [verified], R-6.7.27 [verified], R-6.8.15 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
+Implements: R-2.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-2.10.45 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified], R-6.3.4 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [planned], R-6.6.10 [verified], R-6.6.12 [verified], R-6.7.27 [verified], R-6.8.15 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
 
 ## Ownership Contract
 
@@ -57,11 +57,12 @@ The engine relies on a few non-negotiable behavioral invariants:
    the unified engine loop has applied all result side effects. The barrier is
    “workers finished + results drained + side effects applied”, not merely
    “all workers exited”.
-3. **Trial failure isolation**: trial results are handled only by
-   `processTrialResult`. Trial failures extend the active trial interval and
-   record the failed attempt, but they must not re-enter normal scope
-   detection, overwrite the blocked scope with a fresh interval, or clear the
-   scope through the standard result path.
+3. **Trial policy isolation**: trial results enter the same shared result
+   router as normal results, but they branch immediately into explicit
+   trial-only policy. Matching-scope evidence may extend the active interval,
+   inconclusive outcomes preserve the current interval, and trial failures must
+   never feed normal scope detection or overwrite the original scope with a new
+   unrelated block.
 4. **Trial success release**: a successful trial must clear the persistent
    scope block and make held transient failures retryable immediately via the
    scope-release path. Scope release also triggers an immediate retrier wakeup,
@@ -196,7 +197,7 @@ Implements: R-2.10.3 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2
   skip duplicate file-level failure recording; other skips use `recordFailure`
   with nil delayFn (no `next_retry_at`) + `Complete`
 - **shutdown** → `Complete` (no failure recorded)
-- **fatal** (401) → `recordFailure` with nil delayFn + `Complete`
+- **fatal** (401) → `recordFailure` with nil delayFn + `Complete` + terminate one-shot/watch execution with issue type `unauthorized`
 
 Scope-blocked actions are not held in memory. Instead, `processWorkerResult`
 records the failure in `sync_failures` and calls `depGraph.Complete()`. When
@@ -205,16 +206,21 @@ boundary issue row, marks held descendants retryable immediately, and kicks the
 retry sweep so they re-enter via the engine-owned retry work path and the
 normal planner/DepGraph flow.
 
-Trial result routing: `processTrialResult()` handles all trial outcomes with an
-early return — trial results never enter the normal `processWorkerResult()`
-switch. The `TrialScopeKey ScopeKey` from `WorkerResult` identifies the scope.
-Trial success calls `releaseScope(scopeKey)` and re-arms trial timing for any
-remaining scopes. Trial failure calls `extendScopeTrial(scopeKey, nextAt,
-newInterval)`, updating both persisted `scope_blocks` and the watch loop's
-`activeScopes` working set. Scope detection is intentionally NOT called for
-trial failures — the scope is already blocked, and re-detecting would
-overwrite the doubled interval. Per-scope caps: quota 1h, rate_limited 10m,
-service 10m (R-2.10.6/R-2.10.8/R-2.10.14).
+Trial result routing uses the shared `processResult()` entry with explicit
+trial policy. The `TrialScopeKey ScopeKey` from `WorkerResult` identifies the
+currently blocked scope. Trial outcomes are:
+
+- success -> `releaseScope(scopeKey)`
+- matching-scope persistence evidence -> `extendScopeTrial(scopeKey, ...)`
+- inconclusive candidate failure -> `preserveScopeTrial(scopeKey)` plus
+  candidate-specific handling (for example item failure replacement, permission
+  scope activation, or disk-scope re-home)
+- fatal unauthorized -> record `IssueUnauthorized` and terminate the current
+  one-shot pass or watch session
+
+Scope detection is intentionally NOT called for trial failures — the scope is
+already blocked, and re-detecting would overwrite or duplicate the original
+state.
 
 **Trial dispatch**: `runTrialDispatch()` is called from the watch loop when the
 trial timer fires. It snapshots due scope keys from the watch-owned
@@ -225,9 +231,11 @@ rebuilds planner input from durable state plus current local truth, and sends
 that through the normal planner/admission path as an explicit internal trial
 work request. No bespoke `reobserve` API path remains. If current local
 observation now rejects the candidate (for example, oversized file), the held
-row is converted into an actionable failure and trial selection continues. On
-successful dispatch, the trial interval is NOT extended until the worker result
-arrives. Trial actions are marked `IsTrial=true` with `TrialScopeKey` set.
+row is converted into an actionable failure and trial selection continues. If
+no usable trial candidate exists, the engine preserves the scope at the current
+interval instead of auto-releasing it. On successful dispatch, the trial
+interval is NOT extended until the worker result arrives. Trial actions are
+marked `IsTrial=true` with `TrialScopeKey` set.
 
 **Retry sweep**: Retry is integrated directly into the watch loop via
 `runRetrierSweep()` — no separate goroutine. The watch loop's select includes
@@ -270,7 +278,8 @@ but without watch-only mutable state.
 
 **Scope lifecycle terminology**:
 - `activateScope()` means "this blocking condition is now active" — persist the scope row, refresh watch-mode active scope state, and arm trial timing if the scope is trial-driven.
-- `extendScopeTrial()` means "the scope is still blocked" — update `next_trial_at`, `trial_interval`, and `trial_count` for an existing scope.
+- `extendScopeTrial()` means "the same scope is still blocked" — update `next_trial_at`, `trial_interval`, and `trial_count` for an existing scope.
+- `preserveScopeTrial()` means "the original scope is still plausible, but this candidate did not prove it" — update `next_trial_at`, set `preserve_until`, and keep `trial_count` unchanged.
 - `releaseScope()` means "the blocking condition resolved" — delete the persisted scope row, delete the actionable boundary row for that scope, and make held descendants retryable immediately.
 - `discardScope()` means "the blocked subtree/work is gone" — delete the persisted scope row and delete all scoped failure rows without retrying them.
 
@@ -283,6 +292,7 @@ Policy matrix:
 
 - `perm:dir` and `perm:remote` survive only while a matching `boundary` row exists
 - `quota:own` and `quota:shortcut:*` survive only while at least one scoped failure row exists
+- scoped-failure-backed scopes survive restart when they still have scoped failures or when `preserve_until` is still in the future
 - `throttle:account` and `service` survive restart only when `timing_source='server_retry_after'`; expired deadlines trial immediately rather than auto-releasing
 - `disk:local` is revalidated from current local free-space truth and refreshed or released accordingly
 
@@ -389,9 +399,9 @@ During `SKThrottleAccount` or `SKService` scope block (detected via `ScopeKey.Is
 
 Observation suppression (`scopeController.isObservationSuppressed()`) suppresses the entire `shortcutCoordinator.processShortcuts()` call, which includes both shortcut discovery and delta polling. Also suppresses `recheckPermissions()` API calls since those are equally wasteful during an outage. Suppressing discovery is acceptable — new shortcuts during an outage would fail immediately anyway. Discovery resumes when the scope clears. Local permission rechecks (`recheckLocalPermissions`) proceed regardless since they are filesystem-only.
 
-**Trial dispatch correctness**: `runTrialDispatch()` uses `AllDueTrials()` snapshot iteration — each due scope is visited exactly once per tick, making infinite iteration structurally impossible. On successful dispatch, the trial interval is NOT mutated (awaiting worker result). On scope-persists, `extendTrialInterval` uses the server's `RetryAfter` if provided (R-2.10.7). The timer re-arms after the trial result via `processTrialResult()` → `armTrialTimer()`.
+**Trial dispatch correctness**: `runTrialDispatch()` uses due-scope snapshot iteration — each due scope is visited exactly once per tick, making infinite iteration structurally impossible. On successful dispatch, the trial interval is NOT mutated (awaiting worker result). When no usable candidate exists, the engine preserves the scope at the same interval instead of auto-releasing it. The timer re-arms after each trial decision.
 
-**Trial path separation**: `processWorkerResult()` checks `IsTrial` and returns early via `processTrialResult()` — trial results never enter the normal switch. This eliminates the prior fragile pattern where trial failures fell through into the normal result switch and required `maybeFeedScopeDetection` guards. `processTrialResult()` handles all trial outcomes self-contained: success releases the scope, failure extends the interval via `extendTrialInterval()`, and scope detection is never called (the scope is already blocked).
+**Trial path separation**: `processWorkerResult()` checks `IsTrial` and routes through explicit trial policy inside the shared result router. This eliminates the prior fragile pattern where all trial failures collapsed into one branch. Success releases the scope, matching evidence extends it, inconclusive outcomes preserve it, and scope detection is never called for trial results because the original scope is already blocked.
 
 **External perm:dir clearance**: `handleExternalChanges()` checks whether
 `local_permission_denied` failures were cleared via CLI (`issues clear`).
@@ -408,8 +418,8 @@ Sync failure logging follows a tiered approach matching CLAUDE.md policy — ind
 
 - **Per-failure DEBUG**: `recordFailure()` logs each failure with path, action, HTTP status, error, and scope_key. This is the per-item detail (matching CLAUDE.md Debug = "file read/write").
 - **Scope block WARN**: `applyScopeBlock()` logs when a scope block activates with scope_key, issue_type, and trial_interval. This is a degraded-but-recoverable event (matching CLAUDE.md Warn).
-- **Scope release INFO**: `processTrialResult()` logs when a scope block clears. This is a lifecycle state transition (matching CLAUDE.md Info).
-- **Trial failure DEBUG**: `processTrialResult()` logs failed trials with scope_key and new_interval. This is retry detail.
+- **Scope release INFO**: `releaseScope()` logs when a scope block clears. This is a lifecycle state transition (matching CLAUDE.md Info).
+- **Trial preserve/extend DEBUG**: trial routing logs whether a trial extended or preserved a scope, including scope_key and interval. This is retry detail.
 - **End-of-pass summary**: `logFailureSummary()` aggregates syncErrors by error message prefix. Groups with >10 items get one WARN with count + 3 samples. Groups with ≤10 items get per-item WARN. Mirrors the scanner aggregation in `recordSkippedItems()` (R-6.6.7). Called at end of `executePlan()`.
 - **IssueType population**: `recordFailure()` derives issue_type from HTTP status via `issueTypeForHTTPStatus()` and stores it in sync_failures for display grouping.
 

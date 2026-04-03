@@ -21,6 +21,12 @@ func MessageForIssueType(issueType string) IssueMessage {
 			Reason: "Your OneDrive storage is full.",
 			Action: "Free up space or upgrade your plan.",
 		}
+	case IssueUnauthorized:
+		return IssueMessage{
+			Title:  "AUTHORIZATION EXPIRED",
+			Reason: "The current OneDrive session is no longer authorized.",
+			Action: "Sign in again to refresh access before retrying sync.",
+		}
 	case IssuePermissionDenied:
 		return IssueMessage{
 			Title:  "PERMISSION DENIED",

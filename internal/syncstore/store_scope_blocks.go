@@ -38,12 +38,18 @@ func validateScopeBlock(block *synctypes.ScopeBlock) error {
 		if !block.NextTrialAt.IsZero() {
 			return fmt.Errorf("sync: upserting scope block %s: timing_source none requires zero next_trial_at", block.Key.String())
 		}
+		if !block.PreserveUntil.IsZero() {
+			return fmt.Errorf("sync: upserting scope block %s: timing_source none requires zero preserve_until", block.Key.String())
+		}
 	case synctypes.ScopeTimingBackoff, synctypes.ScopeTimingServerRetryAfter:
 		if block.TrialInterval <= 0 {
 			return fmt.Errorf("sync: upserting scope block %s: timed scope requires positive trial interval", block.Key.String())
 		}
 		if block.NextTrialAt.IsZero() {
 			return fmt.Errorf("sync: upserting scope block %s: timed scope requires next_trial_at", block.Key.String())
+		}
+		if !block.PreserveUntil.IsZero() && block.PreserveUntil.Before(block.NextTrialAt) {
+			return fmt.Errorf("sync: upserting scope block %s: preserve_until must not be before next_trial_at", block.Key.String())
 		}
 	default:
 		return fmt.Errorf("sync: upserting scope block %s: invalid timing source %q", block.Key.String(), block.TimingSource)
@@ -65,17 +71,22 @@ func (m *SyncStore) UpsertScopeBlock(ctx context.Context, block *synctypes.Scope
 	if !block.NextTrialAt.IsZero() {
 		nextTrialAtNano = block.NextTrialAt.UnixNano()
 	}
+	preserveUntilNano := int64(0)
+	if !block.PreserveUntil.IsZero() {
+		preserveUntilNano = block.PreserveUntil.UnixNano()
+	}
 
 	_, err := m.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO scope_blocks
-			(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		block.Key.String(),
 		block.IssueType,
 		block.TimingSource,
 		block.BlockedAt.UnixNano(),
 		int64(block.TrialInterval),
 		nextTrialAtNano,
+		preserveUntilNano,
 		block.TrialCount,
 	)
 	if err != nil {
@@ -104,7 +115,7 @@ func (m *SyncStore) DeleteScopeBlock(ctx context.Context, key synctypes.ScopeKey
 // (not nil) if no rows exist.
 func (m *SyncStore) ListScopeBlocks(ctx context.Context) ([]*synctypes.ScopeBlock, error) {
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count
+		`SELECT scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count
 		FROM scope_blocks`)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing scope blocks: %w", err)
@@ -121,12 +132,13 @@ func (m *SyncStore) ListScopeBlocks(ctx context.Context) ([]*synctypes.ScopeBloc
 			blockedAtNano int64
 			intervalNano  int64
 			nextTrialNano int64
+			preserveNano  int64
 			trialCount    int
 		)
 
 		if scanErr := rows.Scan(
 			&wireKey, &issueType, &timingSource, &blockedAtNano,
-			&intervalNano, &nextTrialNano, &trialCount,
+			&intervalNano, &nextTrialNano, &preserveNano, &trialCount,
 		); scanErr != nil {
 			return nil, fmt.Errorf("sync: scanning scope block row: %w", scanErr)
 		}
@@ -134,6 +146,10 @@ func (m *SyncStore) ListScopeBlocks(ctx context.Context) ([]*synctypes.ScopeBloc
 		nextTrialAt := time.Time{}
 		if nextTrialNano != 0 {
 			nextTrialAt = time.Unix(0, nextTrialNano).UTC()
+		}
+		preserveUntil := time.Time{}
+		if preserveNano != 0 {
+			preserveUntil = time.Unix(0, preserveNano).UTC()
 		}
 
 		block := &synctypes.ScopeBlock{
@@ -143,6 +159,7 @@ func (m *SyncStore) ListScopeBlocks(ctx context.Context) ([]*synctypes.ScopeBloc
 			BlockedAt:     time.Unix(0, blockedAtNano).UTC(),
 			TrialInterval: time.Duration(intervalNano),
 			NextTrialAt:   nextTrialAt,
+			PreserveUntil: preserveUntil,
 			TrialCount:    trialCount,
 		}
 		result = append(result, block)

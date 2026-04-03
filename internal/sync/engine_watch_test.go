@@ -492,12 +492,12 @@ func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 	clearedScope := synctypes.SKPermRemote("Shared/TeamDocs")
 	retainedScope := synctypes.SKPermRemote("Shared/Other")
 
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:       clearedScope,
 		IssueType: synctypes.IssuePermissionDenied,
 		BlockedAt: eng.nowFunc(),
 	})
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:       retainedScope,
 		IssueType: synctypes.IssuePermissionDenied,
 		BlockedAt: eng.nowFunc(),
@@ -1020,7 +1020,7 @@ func TestExecutePlan_ActionsDepsLengthMismatch(t *testing.T) {
 	report := &synctypes.SyncReport{}
 
 	// Should return cleanly without panic.
-	newOneShotRunner(eng.Engine).executePlan(t.Context(), plan, report, nil)
+	require.NoError(t, newOneShotRunner(eng.Engine).executePlan(t.Context(), plan, report, nil))
 
 	// Invariant violation should surface in the report.
 	assert.Equal(t, len(plan.Actions), report.Failed)
