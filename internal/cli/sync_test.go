@@ -1,7 +1,13 @@
 package cli
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -83,6 +89,17 @@ func TestDriveReportsError(t *testing.T) {
 // functions. Only populates the Flags field — other fields are nil/zero.
 func quietCC() *CLIContext {
 	return &CLIContext{Flags: CLIFlags{Quiet: true}}
+}
+
+func newSyncTestContext(parent context.Context, cfgPath string, statusWriter io.Writer) context.Context {
+	cc := &CLIContext{
+		Logger:       slog.New(slog.DiscardHandler),
+		OutputWriter: io.Discard,
+		StatusWriter: statusWriter,
+		CfgPath:      cfgPath,
+	}
+
+	return context.WithValue(parent, cliContextKey{}, cc)
 }
 
 func TestPrintDriveReports_SingleDrive_NoHeader(t *testing.T) {
@@ -220,4 +237,85 @@ func TestParsePollInterval(t *testing.T) {
 
 	assert.Equal(t, 30*time.Second, parsePollInterval("30s"))
 	assert.Zero(t, parsePollInterval("bogus"))
+}
+
+func TestRunSync_LoadConfigError(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`["personal:test@example.com"`), 0o600))
+
+	parent, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	cmd := newSyncCmd()
+	cmd.SetContext(newSyncTestContext(parent, cfgPath, io.Discard))
+
+	err := runSync(cmd, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "loading config")
+}
+
+func TestRunSync_NoDrivesConfigured(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "missing-config.toml")
+
+	parent, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	cmd := newSyncCmd()
+	cmd.SetContext(newSyncTestContext(parent, cfgPath, io.Discard))
+
+	err := runSync(cmd, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no drives configured")
+}
+
+func TestRunSync_AllDrivesPaused(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	syncDir := t.TempDir()
+	configBody := fmt.Sprintf(`
+["personal:test@example.com"]
+sync_dir = %q
+paused = true
+`, syncDir)
+	require.NoError(t, os.WriteFile(cfgPath, []byte(configBody), 0o600))
+
+	parent, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	cmd := newSyncCmd()
+	cmd.SetContext(newSyncTestContext(parent, cfgPath, io.Discard))
+
+	err := runSync(cmd, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "all drives are paused")
+}
+
+// Validates: R-6.6.4
+func TestRunSync_LogFileOpenFailureWarnsToStatusWriter(t *testing.T) {
+	setTestDriveHome(t)
+
+	parentDir := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(parentDir, []byte("x"), 0o600))
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	configBody := fmt.Sprintf("log_file = %q\n", filepath.Join(parentDir, "sync.log"))
+	require.NoError(t, os.WriteFile(cfgPath, []byte(configBody), 0o600))
+
+	var statusBuf bytes.Buffer
+
+	parent, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	cmd := newSyncCmd()
+	cmd.SetContext(newSyncTestContext(parent, cfgPath, &statusBuf))
+
+	err := runSync(cmd, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no drives configured")
+	assert.Contains(t, statusBuf.String(), "cannot open log file")
 }
