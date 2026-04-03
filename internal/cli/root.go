@@ -89,6 +89,7 @@ func (f CLIFlags) SingleDrive() (string, error) {
 type CLIContext struct {
 	Flags        CLIFlags
 	Logger       *slog.Logger
+	OutputWriter io.Writer                 // destination for primary command output (default: os.Stdout)
 	StatusWriter io.Writer                 // destination for Statusf output (default: os.Stderr)
 	CfgPath      string                    // resolved config file path (always set)
 	Env          config.EnvOverrides       // env overrides (always set in Phase 1)
@@ -193,6 +194,7 @@ func newRootCmd() *cobra.Command {
 			logger := buildLogger(nil, flags)
 			env := config.ReadEnvOverrides(logger)
 			cc := &CLIContext{
+				OutputWriter: os.Stdout,
 				Flags:        flags,
 				Logger:       logger,
 				StatusWriter: os.Stderr,
@@ -252,7 +254,12 @@ func newRootCmd() *cobra.Command {
 
 	cmd.MarkFlagsMutuallyExclusive("verbose", "debug", "quiet")
 
-	// Register subcommands.
+	addRootSubcommands(cmd)
+
+	return cmd
+}
+
+func addRootSubcommands(cmd *cobra.Command) {
 	cmd.AddCommand(
 		newLoginCmd(), newLogoutCmd(), newWhoamiCmd(), newStatusCmd(),
 		newDriveCmd(), newLsCmd(), newGetCmd(), newPutCmd(),
@@ -261,8 +268,6 @@ func newRootCmd() *cobra.Command {
 		newVerifyCmd(), newMvCmd(), newCpCmd(),
 		newRecycleBinCmd(),
 	)
-
-	return cmd
 }
 
 // Main executes the CLI with the provided args and returns the desired

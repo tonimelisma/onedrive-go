@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -230,104 +229,12 @@ func isLoopbackBrowserHost(host string) bool {
 // runLogin implements the discovery-based login flow per accounts.md section 9:
 // device code auth -> /me -> /me/drive -> /me/organization -> construct canonical ID -> config.
 func runLogin(cmd *cobra.Command, _ []string) error {
-	cc := mustCLIContext(cmd.Context())
-	logger := cc.Logger
-	ctx := cmd.Context()
-
 	useBrowser, err := cmd.Flags().GetBool("browser")
 	if err != nil {
 		return fmt.Errorf("reading --browser flag: %w", err)
 	}
 
-	logger.Info("login started", slog.Bool("browser", useBrowser))
-
-	// Step 1: Authenticate with a temporary token path. The real token path
-	// depends on the canonical ID, which we discover after authentication.
-	tempPath := pendingTokenPath()
-
-	var ts graph.TokenSource
-
-	if useBrowser {
-		ts, err = graph.LoginWithBrowser(ctx, tempPath, openBrowser, logger)
-	} else {
-		ts, err = graph.Login(ctx, tempPath, func(da graph.DeviceAuth) {
-			// Device code prompts must always be visible -- not suppressed by --quiet.
-			fmt.Fprintf(os.Stderr, "To sign in, visit: %s\n", da.VerificationURI)
-			fmt.Fprintf(os.Stderr, "Enter code: %s\n", da.UserCode)
-		}, logger)
-	}
-
-	if err != nil {
-		// Clean up the pending token on auth failure.
-		if cleanupErr := removePathIfExists(tempPath); cleanupErr != nil {
-			logger.Warn("failed to remove pending token after login failure", "path", tempPath, "error", cleanupErr)
-		}
-
-		return fmt.Errorf("authenticate account: %w", err)
-	}
-
-	// Step 2-4: Discover account details from the Graph API.
-	canonicalID, user, orgName, primaryDriveID, err := discoverAccount(ctx, ts, logger)
-	if err != nil {
-		if cleanupErr := removePathIfExists(tempPath); cleanupErr != nil {
-			logger.Warn("failed to remove pending token after discovery failure", "path", tempPath, "error", cleanupErr)
-		}
-
-		return fmt.Errorf("discovering account: %w", err)
-	}
-
-	// Step 5: Move token from temp path to its canonical location.
-	finalTokenPath := config.DriveTokenPath(canonicalID)
-	if finalTokenPath == "" {
-		if cleanupErr := removePathIfExists(tempPath); cleanupErr != nil {
-			logger.Warn("failed to remove pending token after path resolution failure", "path", tempPath, "error", cleanupErr)
-		}
-
-		return fmt.Errorf("cannot determine token path for drive %q", canonicalID.String())
-	}
-
-	if moveErr := moveToken(tempPath, finalTokenPath); moveErr != nil {
-		return moveErr
-	}
-
-	// Step 5b: Save account profile and drive metadata files.
-	// These files are used by DriveTokenPath for shared/SharePoint
-	// resolution and by buildResolvedDrive for drive_id lookup.
-	now := time.Now().UTC().Format(time.RFC3339)
-
-	if profileErr := config.SaveAccountProfile(canonicalID, &config.AccountProfile{
-		UserID:         user.ID,
-		DisplayName:    user.DisplayName,
-		OrgName:        orgName,
-		PrimaryDriveID: primaryDriveID.String(),
-	}); profileErr != nil {
-		logger.Warn("failed to save account profile", "error", profileErr)
-	}
-
-	if driveMetaErr := config.SaveDriveMetadata(canonicalID, &config.DriveMetadata{
-		DriveID:  primaryDriveID.String(),
-		CachedAt: now,
-	}); driveMetaErr != nil {
-		logger.Warn("failed to save drive metadata", "error", driveMetaErr)
-	}
-
-	// Step 6: Ensure drive is in config (idempotent — handles both new login and re-login).
-	email := canonicalID.Email()
-	cfgPath := cc.CfgPath
-
-	syncDir, added, err := config.EnsureDriveInConfig(cfgPath, canonicalID, logger)
-	if err != nil {
-		return fmt.Errorf("configuring drive: %w", err)
-	}
-
-	if !added {
-		logger.Info("re-login detected, token and metadata refreshed", "canonical_id", canonicalID.String())
-		fmt.Printf("Token refreshed for %s.\n", email)
-
-		return nil
-	}
-
-	return printLoginSuccess(os.Stdout, canonicalID.DriveType(), email, orgName, canonicalID.String(), syncDir)
+	return newAuthService(mustCLIContext(cmd.Context())).runLogin(cmd.Context(), useBrowser)
 }
 
 // discoverAccount calls /me, /me/drive, and /me/organization to build the
@@ -463,32 +370,12 @@ func printLoginSuccess(w io.Writer, driveType, email, orgName, canonicalID, sync
 // runLogout removes the authentication token for an account. Identifies the
 // account via --account flag or auto-selects if only one account exists.
 func runLogout(cmd *cobra.Command, _ []string) error {
-	cc := mustCLIContext(cmd.Context())
-	logger := cc.Logger
-
 	purge, err := cmd.Flags().GetBool("purge")
 	if err != nil {
 		return fmt.Errorf("reading --purge flag: %w", err)
 	}
 
-	cfgPath := cc.CfgPath
-
-	// Load config to find drives associated with the account.
-	cfg, loadErr := config.LoadOrDefault(cfgPath, logger)
-	if loadErr != nil {
-		logger.Warn("failed to load config, proceeding with --account only", "error", loadErr)
-		cfg = config.DefaultConfig()
-	}
-
-	// Determine which account to log out.
-	account, autoErr := resolveLogoutAccount(cfg, cc.Flags.Account, purge, logger)
-	if autoErr != nil {
-		return autoErr
-	}
-
-	logger.Info("logout started", "account", account, "purge", purge)
-
-	return executeLogout(cfg, cfgPath, account, purge, logger)
+	return newAuthService(mustCLIContext(cmd.Context())).runLogout(purge)
 }
 
 // resolveLogoutAccount determines the account email for logout. Uses the
@@ -588,7 +475,7 @@ func uniqueAccounts(cfg *config.Config) []string {
 
 // executeLogout performs the actual logout: finds affected drives, deletes
 // token, and optionally purges config sections and state databases.
-func executeLogout(cfg *config.Config, cfgPath, account string, purge bool, logger *slog.Logger) error {
+func executeLogout(cfg *config.Config, cfgPath string, w io.Writer, account string, purge bool, logger *slog.Logger) error {
 	// Find all drives belonging to this account.
 	affected := drivesForAccount(cfg, account)
 
@@ -609,68 +496,80 @@ func executeLogout(cfg *config.Config, cfgPath, account string, purge bool, logg
 			return fmt.Errorf("remove token file: %w", err)
 		}
 
-		fmt.Printf("Token removed for %s.\n", account)
+		if err := writef(w, "Token removed for %s.\n", account); err != nil {
+			return err
+		}
 	} else if !purge {
 		return fmt.Errorf("cannot determine token path for account %q", account)
 	} else {
 		// Purge after prior logout — token already gone, that's fine.
-		fmt.Printf("Token already removed for %s.\n", account)
+		if err := writef(w, "Token already removed for %s.\n", account); err != nil {
+			return err
+		}
 	}
 
-	if err := printAffectedDrives(os.Stdout, cfg, affected); err != nil {
+	if err := printAffectedDrives(w, cfg, affected); err != nil {
 		return err
 	}
 
 	if purge {
-		if err := purgeAccountDrives(cfgPath, affected, logger); err != nil {
+		if err := purgeAccountDrives(w, cfgPath, affected, logger); err != nil {
 			return fmt.Errorf("purging account drives: %w", err)
 		}
 
 		// Also purge orphaned files (state DBs, drive metadata, account profiles)
 		// that may remain from a prior non-purge logout or from drives that were
 		// removed from config but left data on disk.
-		if err := purgeOrphanedFiles(account, logger); err != nil {
+		if err := purgeOrphanedFiles(w, account, logger); err != nil {
 			return fmt.Errorf("purging orphaned files: %w", err)
 		}
 
-		fmt.Println("Sync directories untouched — your files remain on disk.")
+		return writeln(w, "Sync directories untouched — your files remain on disk.")
 	} else {
 		if err := removeAccountDriveConfigs(cfgPath, affected, logger); err != nil {
 			return fmt.Errorf("removing drive configs: %w", err)
 		}
 
-		fmt.Println("\nState databases kept. Run 'onedrive-go login' to re-authenticate.")
-		fmt.Println("Sync directories untouched — your files remain on disk.")
-	}
+		if err := writeln(w, "\nState databases kept. Run 'onedrive-go login' to re-authenticate."); err != nil {
+			return err
+		}
 
-	return nil
+		return writeln(w, "Sync directories untouched — your files remain on disk.")
+	}
 }
 
 // purgeOrphanedFiles removes state databases, drive metadata files, and
 // account profile files for the given email. Idempotent — ignores files
 // that don't exist. This handles cleanup after a prior non-purge logout
 // where config sections and tokens were removed but data files remained.
-func purgeOrphanedFiles(email string, logger *slog.Logger) error {
+func purgeOrphanedFiles(w io.Writer, email string, logger *slog.Logger) error {
 	var errs []error
 
 	// Remove orphaned state databases.
 	for _, path := range config.DiscoverStateDBsForEmail(email, logger) {
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			logger.Warn("failed to remove orphaned state DB", "path", path, "error", err)
-			errs = append(errs, fmt.Errorf("removing %s: %w", path, err))
-		} else if err == nil {
-			logger.Info("removed orphaned state DB", "path", path)
-			fmt.Printf("Purged orphaned state DB: %s\n", filepath.Base(path))
+		if err := removeOrphanedPath(
+			path,
+			logger,
+			"failed to remove orphaned state DB",
+			"removed orphaned state DB",
+			func(removedPath string) error {
+				return writef(w, "Purged orphaned state DB: %s\n", filepath.Base(removedPath))
+			},
+		); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
 	// Remove orphaned drive metadata files.
 	for _, path := range config.DiscoverDriveMetadataForEmail(email, logger) {
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			logger.Warn("failed to remove orphaned drive metadata", "path", path, "error", err)
-			errs = append(errs, fmt.Errorf("removing %s: %w", path, err))
-		} else if err == nil {
-			logger.Info("removed orphaned drive metadata", "path", path)
+		if err := removeOrphanedPath(
+			path,
+			logger,
+			"failed to remove orphaned drive metadata",
+			"removed orphaned drive metadata",
+			nil,
+		); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
@@ -686,15 +585,44 @@ func purgeOrphanedFiles(email string, logger *slog.Logger) error {
 			continue
 		}
 
-		if err := os.Remove(profilePath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			logger.Warn("failed to remove account profile", "path", profilePath, "error", err)
-			errs = append(errs, fmt.Errorf("removing %s: %w", profilePath, err))
-		} else if err == nil {
-			logger.Info("removed account profile", "path", profilePath)
+		if err := removeOrphanedPath(
+			profilePath,
+			logger,
+			"failed to remove account profile",
+			"removed account profile",
+			nil,
+		); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
 	return errors.Join(errs...)
+}
+
+func removeOrphanedPath(
+	path string,
+	logger *slog.Logger,
+	warnMsg string,
+	infoMsg string,
+	onRemoved func(path string) error,
+) error {
+	if err := os.Remove(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+
+		logger.Warn(warnMsg, "path", path, "error", err)
+		return fmt.Errorf("removing %s: %w", path, err)
+	}
+
+	logger.Info(infoMsg, "path", path)
+	if onRemoved != nil {
+		if err := onRemoved(path); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // drivesForAccount returns all canonical IDs whose email matches the given account.
@@ -782,8 +710,10 @@ func purgeSingleDrive(cfgPath string, canonicalID driveid.CanonicalID, logger *s
 
 // purgeAccountDrives removes drive config sections and state databases for
 // all affected drives. Token deletion is already handled before this call.
-func purgeAccountDrives(cfgPath string, affected []driveid.CanonicalID, logger *slog.Logger) error {
-	fmt.Println()
+func purgeAccountDrives(w io.Writer, cfgPath string, affected []driveid.CanonicalID, logger *slog.Logger) error {
+	if err := writeln(w); err != nil {
+		return err
+	}
 
 	var errs []error
 
@@ -792,7 +722,9 @@ func purgeAccountDrives(cfgPath string, affected []driveid.CanonicalID, logger *
 			logger.Warn("failed to purge drive", "drive", cid.String(), "error", err)
 			errs = append(errs, fmt.Errorf("purging drive %s: %w", cid.String(), err))
 		} else {
-			fmt.Printf("Purged config and state for %s.\n", cid.String())
+			if writeErr := writef(w, "Purged config and state for %s.\n", cid.String()); writeErr != nil {
+				errs = append(errs, writeErr)
+			}
 		}
 	}
 
@@ -847,13 +779,12 @@ type loggedOutAccount struct {
 }
 
 func runWhoami(cmd *cobra.Command, _ []string) error {
-	cc := mustCLIContext(cmd.Context())
+	return newAuthService(mustCLIContext(cmd.Context())).runWhoami(cmd.Context())
+}
+
+func runWhoamiWithContext(ctx context.Context, cc *CLIContext) error {
 	logger := cc.Logger
-	ctx := cmd.Context()
-
-	cfgPath := cc.CfgPath
-
-	cfg, warnings, err := config.LoadOrDefaultLenient(cfgPath, logger)
+	cfg, warnings, err := config.LoadOrDefaultLenient(cc.CfgPath, logger)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
@@ -882,10 +813,10 @@ func runWhoami(cmd *cobra.Command, _ []string) error {
 	}
 
 	if cc.Flags.JSON {
-		return printWhoamiJSON(os.Stdout, user, drives, loggedOut)
+		return printWhoamiJSON(cc.Output(), user, drives, loggedOut)
 	}
 
-	return printWhoamiText(os.Stdout, user, drives, loggedOut)
+	return printWhoamiText(cc.Output(), user, drives, loggedOut)
 }
 
 // fetchAuthenticatedAccount attempts to resolve a drive from config, load its

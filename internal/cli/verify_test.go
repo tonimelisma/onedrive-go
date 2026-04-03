@@ -62,33 +62,11 @@ func TestNewVerifyCmd_Structure(t *testing.T) {
 	assert.Equal(t, "verify", cmd.Use)
 }
 
-func captureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-
-	oldStdout := os.Stdout
-	reader, writer, err := os.Pipe()
-	require.NoError(t, err)
-
-	os.Stdout = writer
-	defer func() {
-		os.Stdout = oldStdout
-	}()
-
-	fn()
-
-	require.NoError(t, writer.Close())
-
-	out, err := io.ReadAll(reader)
-	require.NoError(t, err)
-	require.NoError(t, reader.Close())
-
-	return string(out)
-}
-
-func newVerifyContext(jsonOutput bool, syncDir string, cid driveid.CanonicalID) context.Context {
+func newVerifyContext(output io.Writer, jsonOutput bool, syncDir string, cid driveid.CanonicalID) context.Context {
 	cc := &CLIContext{
-		Flags:  CLIFlags{JSON: jsonOutput},
-		Logger: slog.New(slog.DiscardHandler),
+		Flags:        CLIFlags{JSON: jsonOutput},
+		Logger:       slog.New(slog.DiscardHandler),
+		OutputWriter: output,
 		Cfg: &config.ResolvedDrive{
 			CanonicalID: cid,
 			SyncDir:     syncDir,
@@ -115,7 +93,7 @@ func TestLoadAndVerify_EmptyBaseline(t *testing.T) {
 // Validates: R-2.7
 func TestRunVerify_RequiresSyncDir(t *testing.T) {
 	cmd := newVerifyCmd()
-	cmd.SetContext(newVerifyContext(false, "", driveid.MustCanonicalID("personal:test@example.com")))
+	cmd.SetContext(newVerifyContext(io.Discard, false, "", driveid.MustCanonicalID("personal:test@example.com")))
 
 	err := runVerify(cmd, nil)
 	require.Error(t, err)
@@ -125,7 +103,7 @@ func TestRunVerify_RequiresSyncDir(t *testing.T) {
 // Validates: R-2.7
 func TestRunVerify_RequiresStatePath(t *testing.T) {
 	cmd := newVerifyCmd()
-	cmd.SetContext(newVerifyContext(false, t.TempDir(), driveid.CanonicalID{}))
+	cmd.SetContext(newVerifyContext(io.Discard, false, t.TempDir(), driveid.CanonicalID{}))
 
 	err := runVerify(cmd, nil)
 	require.Error(t, err)
@@ -140,13 +118,12 @@ func TestRunVerify_Success(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(config.DriveStatePath(cid)), 0o700))
 
 	cmd := newVerifyCmd()
-	cmd.SetContext(newVerifyContext(false, t.TempDir(), cid))
+	var out bytes.Buffer
+	cmd.SetContext(newVerifyContext(&out, false, t.TempDir(), cid))
 
-	out := captureStdout(t, func() {
-		require.NoError(t, runVerify(cmd, nil))
-	})
+	require.NoError(t, runVerify(cmd, nil))
 
-	assert.Contains(t, out, "All files verified successfully.")
+	assert.Contains(t, out.String(), "All files verified successfully.")
 }
 
 // Validates: R-2.7
@@ -157,14 +134,13 @@ func TestRunVerify_SuccessJSON(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(config.DriveStatePath(cid)), 0o700))
 
 	cmd := newVerifyCmd()
-	cmd.SetContext(newVerifyContext(true, t.TempDir(), cid))
+	var out bytes.Buffer
+	cmd.SetContext(newVerifyContext(&out, true, t.TempDir(), cid))
 
-	out := captureStdout(t, func() {
-		require.NoError(t, runVerify(cmd, nil))
-	})
+	require.NoError(t, runVerify(cmd, nil))
 
 	var report synctypes.VerifyReport
-	require.NoError(t, json.Unmarshal([]byte(out), &report))
+	require.NoError(t, json.Unmarshal(out.Bytes(), &report))
 	assert.Zero(t, report.Verified)
 	assert.Empty(t, report.Mismatches)
 }
@@ -195,12 +171,11 @@ func TestRunVerify_ReturnsMismatchSentinel(t *testing.T) {
 	require.NoError(t, mgr.Close(t.Context()))
 
 	cmd := newVerifyCmd()
-	cmd.SetContext(newVerifyContext(false, syncDir, cid))
+	var out bytes.Buffer
+	cmd.SetContext(newVerifyContext(&out, false, syncDir, cid))
 
-	out := captureStdout(t, func() {
-		err = runVerify(cmd, nil)
-	})
+	err = runVerify(cmd, nil)
 
 	require.ErrorIs(t, err, errVerifyMismatch)
-	assert.Contains(t, out, "Mismatches: 1")
+	assert.Contains(t, out.String(), "Mismatches: 1")
 }

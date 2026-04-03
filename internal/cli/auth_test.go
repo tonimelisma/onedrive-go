@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -472,7 +473,7 @@ func TestPurgeOrphanedFiles(t *testing.T) {
 	))
 
 	logger := slog.Default()
-	err := purgeOrphanedFiles("alice@outlook.com", logger)
+	err := purgeOrphanedFiles(io.Discard, "alice@outlook.com", logger)
 	require.NoError(t, err)
 
 	// Alice's files should be gone.

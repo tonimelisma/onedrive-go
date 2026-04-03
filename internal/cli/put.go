@@ -101,7 +101,7 @@ func runPut(cmd *cobra.Command, args []string) error {
 	logger.Debug("upload complete", "remote_path", remotePath, "item_id", result.Item.ID, "size", fi.Size())
 
 	if cc.Flags.JSON {
-		return printPutJSON(os.Stdout, putJSONOutput{
+		return printPutJSON(cc.Output(), putJSONOutput{
 			Path: remotePath,
 			ID:   result.Item.ID,
 			Size: fi.Size(),
@@ -194,7 +194,7 @@ func uploadFolder(
 	}
 
 	if cc.Flags.JSON {
-		return printPutFolderJSON(os.Stdout, state.result)
+		return printPutFolderJSON(cc.Output(), state.result)
 	}
 
 	cc.Statusf("Uploaded %d files, %d folders (%s)\n",

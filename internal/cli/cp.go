@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -110,7 +109,7 @@ func runCp(cmd *cobra.Command, args []string, force bool) error {
 	}
 
 	if cc.Flags.JSON {
-		return printCpJSON(os.Stdout, cpJSONOutput{
+		return printCpJSON(cc.Output(), cpJSONOutput{
 			Source:      sourcePath,
 			Destination: displayDest,
 			ID:          resourceID,

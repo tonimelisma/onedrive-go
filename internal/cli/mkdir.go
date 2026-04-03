@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -64,7 +63,7 @@ func runMkdir(cmd *cobra.Command, args []string) error {
 	logger.Debug("mkdir complete", "path", remotePath, "folder_id", parentID)
 
 	if cc.Flags.JSON {
-		return printMkdirJSON(os.Stdout, mkdirJSONOutput{Created: remotePath, ID: parentID})
+		return printMkdirJSON(cc.Output(), mkdirJSONOutput{Created: remotePath, ID: parentID})
 	}
 
 	cc.Statusf("Created %s\n", remotePath)

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/spf13/cobra"
 )
@@ -84,7 +83,7 @@ func runRm(cmd *cobra.Command, args []string) error {
 	}
 
 	if cc.Flags.JSON {
-		return printRmJSON(os.Stdout, rmJSONOutput{Deleted: remotePath})
+		return printRmJSON(cc.Output(), rmJSONOutput{Deleted: remotePath})
 	}
 
 	if permanent {
