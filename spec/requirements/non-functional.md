@@ -85,7 +85,7 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.7.15: The system shall truncate local timestamps to zero fractional seconds before comparing with OneDrive's whole-second precision. [planned]
 - R-6.7.16: The system shall safely handle missing or invalid timestamps (`0001-01-01T00:00:00Z`, absent `lastModifiedDateTime` on deletions) without panicking. [planned]
 - R-6.7.17: When a file completely lacks hashes (zero-byte files, certain Business/SharePoint files), the system shall use a fallback comparison of size + mtime + eTag. [implemented]
-- R-6.7.18: When extracting identity data for shared items, the system shall use a four-level fallback chain: `remoteItem.shared.sharedBy` → `.owner` → `remoteItem.createdBy` → top-level `shared.owner`. [planned]
+- R-6.7.18: When extracting identity data for shared items, the system shall use a four-level fallback chain: `remoteItem.shared.sharedBy` → `.owner` → `remoteItem.createdBy` → top-level `shared.owner`. [verified]
 - R-6.7.19: The system shall not advance the delta token when a delta response contains zero events, to prevent permanently missing ephemeral deletion events. [verified]
 - R-6.7.20: The system shall adapt observation methods based on drive type: folder-scoped delta for Personal shared folders, standard enumeration for Business/SharePoint (which do not support folder-scoped delta). [verified]
 - R-6.7.21: The system shall handle shared folder items whose parent IDs reference a different drive (the sharer's drive), including driveId truncation and casing normalization on cross-drive references. The planner detects and decomposes cross-drive moves into separate delete + upload actions since MoveItem is a single-drive API. [verified]
