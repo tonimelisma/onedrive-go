@@ -1419,6 +1419,7 @@ func TestDriveService_RunList_ClearsPersistedAuthScopeAfterSuccessfulDiscovery(t
 	setTestDriveHome(t)
 
 	const graphDrivesPath = "/me/drives"
+	const primaryDrivePath = "/me/drive"
 
 	cid := driveid.MustCanonicalID("personal:user@example.com")
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
@@ -1430,6 +1431,8 @@ func TestDriveService_RunList_ClearsPersistedAuthScopeAfterSuccessfulDiscovery(t
 		switch {
 		case r.URL.Path == graphDrivesPath:
 			writeTestResponse(t, w, `{"value":[{"id":"drive-123","name":"OneDrive","driveType":"personal"}]}`)
+		case r.URL.Path == primaryDrivePath:
+			writeTestResponse(t, w, `{"id":"drive-123","name":"OneDrive","driveType":"personal"}`)
 		case strings.HasPrefix(r.URL.Path, "/me/drive/search("):
 			writeTestResponse(t, w, `{"value":[]}`)
 		default:

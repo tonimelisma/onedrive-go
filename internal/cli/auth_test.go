@@ -624,6 +624,7 @@ func TestRunWhoamiWithContext_ClearsPersistedAuthScopeAfterSuccessfulAuthenticat
 	setTestDriveHome(t)
 
 	const graphDrivesPath = "/me/drives"
+	const primaryDrivePath = "/me/drive"
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:user@example.com")
@@ -644,6 +645,8 @@ func TestRunWhoamiWithContext_ClearsPersistedAuthScopeAfterSuccessfulAuthenticat
 			}`)
 		case graphDrivesPath:
 			writeTestResponse(t, w, `{"value":[{"id":"drive-123","name":"OneDrive","driveType":"personal","quota":{"used":1,"total":2}}]}`)
+		case primaryDrivePath:
+			writeTestResponse(t, w, `{"id":"drive-123","name":"OneDrive","driveType":"personal","quota":{"used":1,"total":2}}`)
 		default:
 			assert.Fail(t, "unexpected graph path", "path=%s", r.URL.Path)
 			http.Error(w, "unexpected graph path", http.StatusInternalServerError)
