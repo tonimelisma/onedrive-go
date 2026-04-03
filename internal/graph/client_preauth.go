@@ -174,11 +174,13 @@ func parseRetryAfter(resp *http.Response) time.Duration {
 }
 
 func buildGraphError(statusCode int, requestID string, retryAfter time.Duration, rawBody []byte) *GraphError {
-	raw := string(rawBody)
 	code, message, innerCodes := parseGraphErrorBody(rawBody)
 	if message == "" {
-		message = raw
+		message = string(rawBody)
 	}
+
+	message = sanitizeGraphErrorText(message)
+	raw := sanitizeGraphErrorText(string(rawBody))
 
 	return &GraphError{
 		StatusCode: statusCode,
