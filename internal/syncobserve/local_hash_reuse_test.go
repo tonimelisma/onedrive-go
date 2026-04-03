@@ -50,13 +50,14 @@ func TestCanReuseBaselineHash_MetadataMatchOutsideRacilyCleanWindow(t *testing.T
 			require.NoError(t, err)
 
 			assert.Equal(t, tt.wantReuse, CanReuseBaselineHash(info, &synctypes.BaselineEntry{
-				Path:      tt.path,
-				DriveID:   driveid.New("d"),
-				ItemID:    "i1",
-				ItemType:  synctypes.ItemTypeFile,
-				LocalHash: "cached-hash",
-				Size:      info.Size(),
-				Mtime:     info.ModTime().UnixNano(),
+				Path:           tt.path,
+				DriveID:        driveid.New("d"),
+				ItemID:         "i1",
+				ItemType:       synctypes.ItemTypeFile,
+				LocalHash:      "cached-hash",
+				LocalSize:      info.Size(),
+				LocalSizeKnown: true,
+				LocalMtime:     info.ModTime().UnixNano(),
 			}, info.ModTime().UnixNano()+tt.nowOffset))
 		})
 	}
@@ -79,13 +80,14 @@ func TestCanReuseBaselineHash_SameSecondSubsecondDifferenceStillMatches(t *testi
 
 	baselineTime := fileTime.Add(700 * time.Millisecond)
 	assert.True(t, CanReuseBaselineHash(info, &synctypes.BaselineEntry{
-		Path:      "same-second.txt",
-		DriveID:   driveid.New("d"),
-		ItemID:    "i1",
-		ItemType:  synctypes.ItemTypeFile,
-		LocalHash: "cached-hash",
-		Size:      info.Size(),
-		Mtime:     baselineTime.UnixNano(),
+		Path:           "same-second.txt",
+		DriveID:        driveid.New("d"),
+		ItemID:         "i1",
+		ItemType:       synctypes.ItemTypeFile,
+		LocalHash:      "cached-hash",
+		LocalSize:      info.Size(),
+		LocalSizeKnown: true,
+		LocalMtime:     baselineTime.UnixNano(),
 	}, info.ModTime().UnixNano()+nanosPerSecond+1))
 }
 
@@ -104,12 +106,13 @@ func TestCanReuseBaselineHash_MetadataMismatchRequiresHash(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.False(t, CanReuseBaselineHash(info, &synctypes.BaselineEntry{
-		Path:      "changed.txt",
-		DriveID:   driveid.New("d"),
-		ItemID:    "i1",
-		ItemType:  synctypes.ItemTypeFile,
-		LocalHash: "cached-hash",
-		Size:      info.Size() + 1,
-		Mtime:     info.ModTime().UnixNano(),
+		Path:           "changed.txt",
+		DriveID:        driveid.New("d"),
+		ItemID:         "i1",
+		ItemType:       synctypes.ItemTypeFile,
+		LocalHash:      "cached-hash",
+		LocalSize:      info.Size() + 1,
+		LocalSizeKnown: true,
+		LocalMtime:     info.ModTime().UnixNano(),
 	}, info.ModTime().UnixNano()+nanosPerSecond+1))
 }

@@ -32,7 +32,9 @@ func TestClockSkew_BackwardJump_BaselineSyncedAt(t *testing.T) {
 	require.NoError(t, mgr.CommitOutcome(ctx, &synctypes.Outcome{
 		Action: synctypes.ActionDownload, Success: true, Path: "file.txt",
 		DriveID: driveID, ItemID: "item-1", ParentID: "root",
-		ItemType: synctypes.ItemTypeFile, RemoteHash: "h1", Size: 100,
+		ItemType: synctypes.ItemTypeFile, RemoteHash: "h1",
+		LocalSize: 100, LocalSizeKnown: true,
+		RemoteSize: 100, RemoteSizeKnown: true,
 	}))
 
 	bl, err := mgr.Load(ctx)
@@ -48,7 +50,9 @@ func TestClockSkew_BackwardJump_BaselineSyncedAt(t *testing.T) {
 	require.NoError(t, mgr.CommitOutcome(ctx, &synctypes.Outcome{
 		Action: synctypes.ActionDownload, Success: true, Path: "file.txt",
 		DriveID: driveID, ItemID: "item-1", ParentID: "root",
-		ItemType: synctypes.ItemTypeFile, RemoteHash: "h2", Size: 200,
+		ItemType: synctypes.ItemTypeFile, RemoteHash: "h2",
+		LocalSize: 200, LocalSizeKnown: true,
+		RemoteSize: 200, RemoteSizeKnown: true,
 	}))
 
 	bl, err = mgr.Load(ctx)

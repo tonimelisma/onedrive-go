@@ -124,6 +124,61 @@ func TestPerSideHash_5RunStabilityProof(t *testing.T) {
 	}
 }
 
+// Validates: R-6.7.17
+func TestZeroHashFallback_5RunStabilityProof(t *testing.T) {
+	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+		Path:            "hashless.docx",
+		DriveID:         driveid.New(synctest.TestDriveID),
+		ItemID:          "item1",
+		ItemType:        synctypes.ItemTypeFile,
+		LocalSize:       0,
+		LocalSizeKnown:  true,
+		RemoteSize:      0,
+		RemoteSizeKnown: true,
+		LocalMtime:      100,
+		RemoteMtime:     100,
+		ETag:            "etag-stable",
+	})
+
+	for run := range 5 {
+		planner := NewPlanner(synctest.TestLogger(t))
+
+		changes := []synctypes.PathChanges{
+			{
+				Path: "hashless.docx",
+				RemoteEvents: []synctypes.ChangeEvent{
+					{
+						Source:   synctypes.SourceRemote,
+						Type:     synctypes.ChangeModify,
+						Path:     "hashless.docx",
+						ItemType: synctypes.ItemTypeFile,
+						ItemID:   "item1",
+						DriveID:  driveid.New(synctest.TestDriveID),
+						Size:     0,
+						Mtime:    100,
+						ETag:     "etag-stable",
+					},
+				},
+				LocalEvents: []synctypes.ChangeEvent{
+					{
+						Source:   synctypes.SourceLocal,
+						Type:     synctypes.ChangeModify,
+						Path:     "hashless.docx",
+						ItemType: synctypes.ItemTypeFile,
+						Size:     0,
+						Mtime:    100,
+					},
+				},
+			},
+		}
+
+		plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+		require.NoError(t, err, "run %d", run)
+		assert.Empty(t, synctest.ActionsOfType(plan.Actions, synctypes.ActionUpload), "run %d", run)
+		assert.Empty(t, synctest.ActionsOfType(plan.Actions, synctypes.ActionDownload), "run %d", run)
+	}
+}
+
 // TestPerSideHash_NormalDriveUnaffected validates that for normal (non-enriched)
 // files where LocalHash == RemoteHash, the per-side hash scheme does not
 // interfere with normal change detection.

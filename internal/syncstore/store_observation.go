@@ -223,7 +223,7 @@ func (m *SyncStore) insertRemoteState(ctx context.Context, tx *sql.Tx, item *syn
 	_, err := tx.ExecContext(ctx, sqlInsertRemoteState,
 		item.DriveID.String(), item.ItemID, item.Path,
 		nullString(item.ParentID), item.ItemType,
-		nullString(item.Hash), nullInt64(item.Size), nullInt64(item.Mtime),
+		nullString(item.Hash), nullKnownInt64(item.Size, true), nullOptionalInt64(item.Mtime),
 		nullString(item.ETag),
 		synctypes.SyncStatusPendingDownload, now,
 	)
@@ -241,7 +241,7 @@ func (m *SyncStore) updateRemoteStateFromObs(
 ) error {
 	_, err := tx.ExecContext(ctx, sqlUpdateRemoteState,
 		item.Path, nullString(item.ParentID), item.ItemType,
-		nullString(item.Hash), nullInt64(item.Size), nullInt64(item.Mtime),
+		nullString(item.Hash), nullKnownInt64(item.Size, true), nullOptionalInt64(item.Mtime),
 		nullString(item.ETag),
 		nullString(previousPath), newStatus, now,
 		item.DriveID.String(), item.ItemID,

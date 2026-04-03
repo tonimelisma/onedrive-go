@@ -731,17 +731,21 @@ func TestCommitOutcome_UpdatesRemoteState_Download(t *testing.T) {
 	require.NoError(t, err)
 
 	outcome := &synctypes.Outcome{
-		Action:     synctypes.ActionDownload,
-		Success:    true,
-		Path:       "hello.txt",
-		DriveID:    driveid.New(testDriveID),
-		ItemID:     "item1",
-		ItemType:   synctypes.ItemTypeFile,
-		LocalHash:  "hash1",
-		RemoteHash: "hash1",
-		Size:       100,
-		Mtime:      2000000,
-		ETag:       "etag1",
+		Action:          synctypes.ActionDownload,
+		Success:         true,
+		Path:            "hello.txt",
+		DriveID:         driveid.New(testDriveID),
+		ItemID:          "item1",
+		ItemType:        synctypes.ItemTypeFile,
+		LocalHash:       "hash1",
+		RemoteHash:      "hash1",
+		LocalSize:       100,
+		LocalSizeKnown:  true,
+		RemoteSize:      100,
+		RemoteSizeKnown: true,
+		LocalMtime:      2000000,
+		RemoteMtime:     2000000,
+		ETag:            "etag1",
 	}
 
 	err = mgr.CommitOutcome(ctx, outcome)
@@ -810,16 +814,20 @@ func TestCommitOutcome_Upload_UnconditionalUpdate(t *testing.T) {
 	require.NoError(t, err)
 
 	outcome := &synctypes.Outcome{
-		Action:     synctypes.ActionUpload,
-		Success:    true,
-		Path:       "hello.txt",
-		DriveID:    driveid.New(testDriveID),
-		ItemID:     "item1",
-		ItemType:   synctypes.ItemTypeFile,
-		LocalHash:  "upload-hash",
-		RemoteHash: "upload-hash",
-		Size:       500,
-		Mtime:      3000000,
+		Action:          synctypes.ActionUpload,
+		Success:         true,
+		Path:            "hello.txt",
+		DriveID:         driveid.New(testDriveID),
+		ItemID:          "item1",
+		ItemType:        synctypes.ItemTypeFile,
+		LocalHash:       "upload-hash",
+		RemoteHash:      "upload-hash",
+		LocalSize:       500,
+		LocalSizeKnown:  true,
+		RemoteSize:      500,
+		RemoteSizeKnown: true,
+		LocalMtime:      3000000,
+		RemoteMtime:     3000000,
 	}
 
 	err = mgr.CommitOutcome(ctx, outcome)

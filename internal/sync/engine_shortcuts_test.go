@@ -1325,7 +1325,9 @@ func TestReconcileShortcutScopes_DeltaReconciliation(t *testing.T) {
 	require.NoError(t, mgr.CommitOutcome(ctx, &synctypes.Outcome{
 		Action: synctypes.ActionDownload, Success: true, Path: "Shared/Delta/old.txt",
 		DriveID: remoteDriveID, ItemID: "old-file", ParentID: "root-1", ItemType: synctypes.ItemTypeFile,
-		RemoteHash: "oldhash", Size: 100,
+		RemoteHash: "oldhash",
+		LocalSize:  100, LocalSizeKnown: true,
+		RemoteSize: 100, RemoteSizeKnown: true,
 	}))
 
 	mockDelta := &mockFolderDeltaFetcher{

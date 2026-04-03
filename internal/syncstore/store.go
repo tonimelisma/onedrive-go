@@ -5,9 +5,10 @@
 //   - NewSyncStore: open database, apply canonical schema, return ready store
 //   - Close:        WAL checkpoint + close database
 //   - Checkpoint:   WAL checkpoint + optional pruning
-//   - rawDB:        test-only access to underlying *sql.DB
-//   - nullString:   empty string → SQL NULL
-//   - nullInt64:    zero → SQL NULL
+//   - rawDB:            test-only access to underlying *sql.DB
+//   - nullString:       empty string → SQL NULL
+//   - nullOptionalInt64: zero → SQL NULL for optional fields like mtimes
+//   - nullKnownInt64:   preserve zero for known values like file sizes
 //
 // Related files:
 //   - store_baseline.go:    baseline CRUD, delta tokens, outcome commits
@@ -189,7 +190,8 @@ func (m *SyncStore) Baseline() *synctypes.Baseline {
 }
 
 // ---------------------------------------------------------------------------
-// Nullable helpers: empty string / zero int → NULL in SQLite.
+// Nullable helpers. Strings use empty = NULL. Integers are split by
+// semantics: optional values use 0 = NULL, while known values preserve 0.
 // ---------------------------------------------------------------------------
 
 func nullString(s string) sql.NullString {
@@ -200,12 +202,16 @@ func nullString(s string) sql.NullString {
 	return sql.NullString{String: s, Valid: true}
 }
 
-// nullInt64 maps Go zero (0) to SQL NULL. This conflates "actual zero" with
-// "absent" — acceptable for Size (zero-byte files are rare edge cases) and
-// Mtime (Unix epoch is not a realistic modification time). If a legitimate
-// zero value needs to be stored in the future, use a separate sentinel.
-func nullInt64(n int64) sql.NullInt64 {
+func nullOptionalInt64(n int64) sql.NullInt64 {
 	if n == 0 {
+		return sql.NullInt64{}
+	}
+
+	return sql.NullInt64{Int64: n, Valid: true}
+}
+
+func nullKnownInt64(n int64, known bool) sql.NullInt64 {
+	if !known {
 		return sql.NullInt64{}
 	}
 

@@ -26,7 +26,14 @@ Delta responses include QuickXorHash, SHA1, or SHA256 hashes on items marked as 
 
 ### Files Without Any Hash
 
-Some Business/SharePoint files have no hash values at all. Microsoft confirmed this is a known issue: for enumeration/delta scenarios, hash generation may be "too expensive" for certain files. Zero-byte files consistently have no hash. Fallback: size + mtime + eTag comparison.
+Some Business/SharePoint files have no hash values at all. Microsoft confirmed this is a known issue: for enumeration/delta scenarios, hash generation may be "too expensive" for certain files. Zero-byte files consistently have no hash.
+
+Runtime policy:
+- the Graph boundary preserves the file's size, mtime, and eTag even when every hash field is empty
+- the sync baseline persists that metadata per side instead of collapsing it into one shared file record
+- remote equality falls back to `size + mtime + eTag` only when both remote-side hashes are absent
+- local equality falls back to `size + mtime` only when both local-side hashes are absent
+- missing hashes are never equality by themselves; unknown metadata stays conservative
 
 ### iOS HEIC File Metadata Mismatch
 
