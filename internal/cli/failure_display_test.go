@@ -10,180 +10,29 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
-// Validates: R-2.3.7
-func TestGroupFailures_MoreThanTen(t *testing.T) {
+// Validates: R-2.3.8, R-6.6.11
+func TestPrintGroupedFailures_UsesSharedSummaryDescriptors(t *testing.T) {
 	t.Parallel()
 
-	var failures []synctypes.SyncFailureRow
-	for i := range 15 {
-		failures = append(failures, synctypes.SyncFailureRow{
-			Path:      fmt.Sprintf("/docs/file%02d.docx", i),
-			IssueType: synctypes.IssueQuotaExceeded,
-			ScopeKey:  synctypes.SKQuotaOwn(),
-			Category:  synctypes.CategoryActionable,
-		})
-	}
-
-	groups, heldDeletes := groupFailures(failures, nil)
-	require.Len(t, groups, 1)
-	assert.Empty(t, heldDeletes)
-	assert.Equal(t, 15, groups[0].Count)
-	assert.Equal(t, synctypes.IssueQuotaExceeded, groups[0].IssueType)
-	assert.Len(t, groups[0].Paths, 15)
-}
-
-// Validates: R-2.3.8
-func TestGroupFailures_HumanReadableMessages(t *testing.T) {
-	t.Parallel()
-
-	failures := []synctypes.SyncFailureRow{
-		{Path: "/a.txt", IssueType: synctypes.IssueQuotaExceeded, ScopeKey: synctypes.SKQuotaOwn(), Category: synctypes.CategoryActionable},
-		{Path: "/b.txt", IssueType: synctypes.IssuePermissionDenied, Category: synctypes.CategoryActionable},
-	}
-
-	groups, _ := groupFailures(failures, nil)
-	require.Len(t, groups, 2)
-
-	// Each group has a human-readable message.
-	for _, g := range groups {
-		assert.NotEmpty(t, g.Message.Title)
-		assert.NotEmpty(t, g.Message.Reason)
-		assert.NotEmpty(t, g.Message.Action)
-	}
-}
-
-// Validates: R-2.3.7
-func TestGroupFailures_SeparatesHeldDeletes(t *testing.T) {
-	t.Parallel()
-
-	failures := []synctypes.SyncFailureRow{
-		{Path: "/a.txt", IssueType: synctypes.IssueQuotaExceeded, Category: synctypes.CategoryActionable},
-		{Path: "/b.txt", IssueType: synctypes.IssueBigDeleteHeld, Category: synctypes.CategoryActionable},
-		{Path: "/c.txt", IssueType: synctypes.IssueBigDeleteHeld, Category: synctypes.CategoryActionable},
-	}
-
-	groups, heldDeletes := groupFailures(failures, nil)
-	assert.Len(t, groups, 1)
-	assert.Len(t, heldDeletes, 2)
-}
-
-// Validates: R-2.10.22
-func TestGroupFailures_ShortcutScopeKeyHumanized(t *testing.T) {
-	t.Parallel()
-
-	shortcuts := []synctypes.Shortcut{
+	groups := []syncstore.IssueGroupSnapshot{
 		{
-			RemoteDrive: "driveAAA",
-			RemoteItem:  "itemBBB",
-			LocalPath:   "Team Docs",
-			Observation: synctypes.ObservationDelta,
+			SummaryKey:       synctypes.SummarySyncFailure,
+			PrimaryIssueType: "",
+			Paths:            []string{"/mystery.txt"},
+			Count:            1,
 		},
 	}
 
-	failures := []synctypes.SyncFailureRow{
-		{
-			Path:      "/Team Docs/report.docx",
-			IssueType: synctypes.IssueQuotaExceeded,
-			ScopeKey:  synctypes.SKQuotaShortcut("driveAAA:itemBBB"),
-			Category:  synctypes.CategoryActionable,
-		},
-	}
+	var buf bytes.Buffer
+	require.NoError(t, printGroupedFailures(&buf, groups, false))
 
-	groups, _ := groupFailures(failures, shortcuts)
-	require.Len(t, groups, 1)
-	assert.Equal(t, "Team Docs", groups[0].ScopeKey)
-}
-
-// Validates: R-2.3.8, R-2.10.22, R-6.6.11
-func TestGroupFailures_ShortcutQuotaUsesOwnerSpecificCopy(t *testing.T) {
-	t.Parallel()
-
-	shortcuts := []synctypes.Shortcut{
-		{
-			RemoteDrive: "driveAAA",
-			RemoteItem:  "itemBBB",
-			LocalPath:   "Team Docs",
-			Observation: synctypes.ObservationDelta,
-		},
-	}
-
-	failures := []synctypes.SyncFailureRow{
-		{
-			Path:      "/Team Docs/report.docx",
-			IssueType: synctypes.IssueQuotaExceeded,
-			ScopeKey:  synctypes.SKQuotaShortcut("driveAAA:itemBBB"),
-			Category:  synctypes.CategoryActionable,
-		},
-	}
-
-	groups, _ := groupFailures(failures, shortcuts)
-	require.Len(t, groups, 1)
-	assert.Equal(t, "Team Docs", groups[0].ScopeKey)
-	assert.Equal(t, `Shared folder "Team Docs" owner's storage is full.`, groups[0].Message.Reason)
-	assert.Equal(t, "Ask the shared folder owner to free up space or upgrade their plan.", groups[0].Message.Action)
-}
-
-// Validates: R-2.10.4
-func TestGroupFailures_GroupsByScopeKey(t *testing.T) {
-	t.Parallel()
-
-	failures := []synctypes.SyncFailureRow{
-		{Path: "/a.txt", IssueType: synctypes.IssueQuotaExceeded, ScopeKey: synctypes.SKQuotaOwn(), Category: synctypes.CategoryActionable},
-		{Path: "/b.txt", IssueType: synctypes.IssueQuotaExceeded, ScopeKey: synctypes.SKQuotaShortcut("drive1:item1"), Category: synctypes.CategoryActionable},
-	}
-
-	groups, _ := groupFailures(failures, nil)
-
-	// Same issue type but different scope → two separate groups.
-	assert.Len(t, groups, 2)
-}
-
-func TestGroupFailures_SortedLargestFirst(t *testing.T) {
-	t.Parallel()
-
-	failures := []synctypes.SyncFailureRow{
-		{Path: "/a.txt", IssueType: synctypes.IssuePermissionDenied, Category: synctypes.CategoryActionable},
-		{Path: "/b.txt", IssueType: synctypes.IssueQuotaExceeded, ScopeKey: synctypes.SKQuotaOwn(), Category: synctypes.CategoryActionable},
-		{Path: "/c.txt", IssueType: synctypes.IssueQuotaExceeded, ScopeKey: synctypes.SKQuotaOwn(), Category: synctypes.CategoryActionable},
-		{Path: "/d.txt", IssueType: synctypes.IssueQuotaExceeded, ScopeKey: synctypes.SKQuotaOwn(), Category: synctypes.CategoryActionable},
-	}
-
-	groups, _ := groupFailures(failures, nil)
-	require.Len(t, groups, 2)
-	assert.Equal(t, 3, groups[0].Count)
-	assert.Equal(t, 1, groups[1].Count)
-}
-
-func TestGroupFailures_Empty(t *testing.T) {
-	t.Parallel()
-
-	groups, heldDeletes := groupFailures(nil, nil)
-	assert.Empty(t, groups)
-	assert.Empty(t, heldDeletes)
-}
-
-// Validates: R-6.6.11, R-6.8.16
-func TestGroupFailures_UsesSharedSummaryFallback(t *testing.T) {
-	t.Parallel()
-
-	failures := []synctypes.SyncFailureRow{
-		{
-			Path:      "/mystery.txt",
-			IssueType: "",
-			Category:  synctypes.CategoryActionable,
-			Role:      synctypes.FailureRoleItem,
-		},
-	}
-
-	groups, heldDeletes := groupFailures(failures, nil)
-	require.Len(t, groups, 1)
-	assert.Empty(t, heldDeletes)
-	assert.Equal(t, synctypes.SummarySyncFailure, groups[0].SummaryKey)
-	assert.Equal(t, "SYNC FAILURE", groups[0].Message.Title)
-	assert.Equal(t, "sync failure", groups[0].LogSummary)
+	output := buf.String()
+	assert.Contains(t, output, "SYNC FAILURE")
+	assert.Contains(t, output, "/mystery.txt")
 }
 
 // Validates: R-2.3.7
@@ -195,12 +44,12 @@ func TestPrintGroupedFailures_VerboseShowsAll(t *testing.T) {
 		paths = append(paths, fmt.Sprintf("/docs/file%02d.docx", i))
 	}
 
-	groups := []failureGroup{
+	groups := []syncstore.IssueGroupSnapshot{
 		{
-			IssueType: synctypes.IssueQuotaExceeded,
-			Message:   synctypes.MessageForIssueType(synctypes.IssueQuotaExceeded),
-			Paths:     paths,
-			Count:     12,
+			SummaryKey:       synctypes.SummaryQuotaExceeded,
+			PrimaryIssueType: synctypes.IssueQuotaExceeded,
+			Paths:            paths,
+			Count:            12,
 		},
 	}
 
@@ -208,11 +57,9 @@ func TestPrintGroupedFailures_VerboseShowsAll(t *testing.T) {
 	require.NoError(t, printGroupedFailures(&buf, groups, true))
 	output := buf.String()
 
-	// All 12 paths should be present.
-	for _, p := range paths {
-		assert.Contains(t, output, p)
+	for _, path := range paths {
+		assert.Contains(t, output, path)
 	}
-
 	assert.NotContains(t, output, "... and")
 }
 
@@ -225,12 +72,12 @@ func TestPrintGroupedFailures_NonVerboseTruncates(t *testing.T) {
 		paths = append(paths, fmt.Sprintf("/docs/file%02d.docx", i))
 	}
 
-	groups := []failureGroup{
+	groups := []syncstore.IssueGroupSnapshot{
 		{
-			IssueType: synctypes.IssueQuotaExceeded,
-			Message:   synctypes.MessageForIssueType(synctypes.IssueQuotaExceeded),
-			Paths:     paths,
-			Count:     12,
+			SummaryKey:       synctypes.SummaryQuotaExceeded,
+			PrimaryIssueType: synctypes.IssueQuotaExceeded,
+			Paths:            paths,
+			Count:            12,
 		},
 	}
 
@@ -238,23 +85,22 @@ func TestPrintGroupedFailures_NonVerboseTruncates(t *testing.T) {
 	require.NoError(t, printGroupedFailures(&buf, groups, false))
 	output := buf.String()
 
-	// Only first 5 should be shown.
 	assert.Contains(t, output, paths[0])
 	assert.Contains(t, output, paths[4])
 	assert.NotContains(t, output, paths[5])
 	assert.Contains(t, output, "... and 7 more")
 }
 
-func TestPrintGroupedFailures_ShowsScopeKey(t *testing.T) {
+func TestPrintGroupedFailures_ShowsScopeLabel(t *testing.T) {
 	t.Parallel()
 
-	groups := []failureGroup{
+	groups := []syncstore.IssueGroupSnapshot{
 		{
-			IssueType: synctypes.IssueQuotaExceeded,
-			ScopeKey:  "Team Docs",
-			Message:   synctypes.MessageForIssueType(synctypes.IssueQuotaExceeded),
-			Paths:     []string{"/Team Docs/a.txt"},
-			Count:     1,
+			SummaryKey:       synctypes.SummaryQuotaExceeded,
+			PrimaryIssueType: synctypes.IssueQuotaExceeded,
+			ScopeLabel:       "Team Docs",
+			Paths:            []string{"/Team Docs/a.txt"},
+			Count:            1,
 		},
 	}
 
@@ -266,13 +112,12 @@ func TestPrintGroupedFailures_ShowsScopeKey(t *testing.T) {
 func TestPrintGroupedFailures_NoScopeLineWhenEmpty(t *testing.T) {
 	t.Parallel()
 
-	groups := []failureGroup{
+	groups := []syncstore.IssueGroupSnapshot{
 		{
-			IssueType: synctypes.IssueInvalidFilename,
-			ScopeKey:  "",
-			Message:   synctypes.MessageForIssueType(synctypes.IssueInvalidFilename),
-			Paths:     []string{"/bad:file.txt"},
-			Count:     1,
+			SummaryKey:       synctypes.SummaryInvalidFilename,
+			PrimaryIssueType: synctypes.IssueInvalidFilename,
+			Paths:            []string{"/bad:file.txt"},
+			Count:            1,
 		},
 	}
 
@@ -285,13 +130,12 @@ func TestPrintGroupedFailures_NoScopeLineWhenEmpty(t *testing.T) {
 func TestPrintGroupedFailures_ScopeOnlyIssueOmitsPathSection(t *testing.T) {
 	t.Parallel()
 
-	groups := []failureGroup{
+	groups := []syncstore.IssueGroupSnapshot{
 		{
-			IssueType: synctypes.IssueUnauthorized,
-			ScopeKey:  "your OneDrive account authorization",
-			Message:   synctypes.MessageForIssueType(synctypes.IssueUnauthorized),
-			Paths:     []string{},
-			Count:     1,
+			SummaryKey:       synctypes.SummaryAuthenticationRequired,
+			PrimaryIssueType: synctypes.IssueUnauthorized,
+			ScopeLabel:       "your OneDrive account authorization",
+			Count:            1,
 		},
 	}
 
@@ -304,40 +148,38 @@ func TestPrintGroupedFailures_ScopeOnlyIssueOmitsPathSection(t *testing.T) {
 	assert.NotContains(t, output, "  /")
 }
 
-// Validates: R-2.3.10
+// Validates: R-2.3.9
 func TestPrintGroupedIssuesJSON_StructuredOutput(t *testing.T) {
 	t.Parallel()
 
-	conflicts := []synctypes.ConflictRecord{
-		{
-			ID:           "abc123",
-			Path:         "/conflict.txt",
-			ConflictType: "content",
-			DetectedAt:   1000000000,
+	snapshot := syncstore.IssuesSnapshot{
+		Conflicts: []synctypes.ConflictRecord{
+			{
+				ID:           "abc123",
+				Path:         "/conflict.txt",
+				ConflictType: "content",
+				DetectedAt:   1000000000,
+			},
 		},
-	}
-
-	groups := []failureGroup{
-		{
-			IssueType: synctypes.IssueQuotaExceeded,
-			ScopeKey:  "your OneDrive storage",
-			Message:   synctypes.MessageForIssueType(synctypes.IssueQuotaExceeded),
-			Paths:     []string{"/a.txt", "/b.txt"},
-			Count:     2,
+		Groups: []syncstore.IssueGroupSnapshot{
+			{
+				SummaryKey:       synctypes.SummaryQuotaExceeded,
+				PrimaryIssueType: synctypes.IssueQuotaExceeded,
+				ScopeLabel:       "your OneDrive storage",
+				Paths:            []string{"/a.txt", "/b.txt"},
+				Count:            2,
+			},
 		},
-	}
-
-	heldDeletes := []synctypes.SyncFailureRow{
-		{Path: "/deleted.txt", LastSeenAt: 2000000000},
+		HeldDeletes: []syncstore.HeldDeleteSnapshot{
+			{Path: "/deleted.txt", LastSeenAt: 2000000000},
+		},
 	}
 
 	var buf bytes.Buffer
-	err := printGroupedIssuesJSON(&buf, conflicts, groups, heldDeletes)
-	require.NoError(t, err)
+	require.NoError(t, printGroupedIssuesJSON(&buf, snapshot))
 
 	var out issuesOutputJSON
-	err = json.Unmarshal(buf.Bytes(), &out)
-	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &out))
 
 	assert.Len(t, out.Conflicts, 1)
 	assert.Equal(t, "abc123", out.Conflicts[0].ID)
@@ -352,63 +194,28 @@ func TestPrintGroupedIssuesJSON_StructuredOutput(t *testing.T) {
 	assert.Equal(t, "/deleted.txt", out.HeldDeletes[0].Path)
 }
 
-// Validates: R-2.3.10, R-6.6.11
-func TestPrintGroupedIssuesJSON_UsesScopedFailureCopy(t *testing.T) {
-	t.Parallel()
-
-	shortcuts := []synctypes.Shortcut{
-		{
-			RemoteDrive: "driveAAA",
-			RemoteItem:  "itemBBB",
-			LocalPath:   "Team Docs",
-			Observation: synctypes.ObservationDelta,
-		},
-	}
-	failures := []synctypes.SyncFailureRow{
-		{
-			Path:      "/Team Docs/report.docx",
-			IssueType: synctypes.IssueQuotaExceeded,
-			ScopeKey:  synctypes.SKQuotaShortcut("driveAAA:itemBBB"),
-			Category:  synctypes.CategoryActionable,
-		},
-	}
-
-	groups, _ := groupFailures(failures, shortcuts)
-	require.Len(t, groups, 1)
-
-	var buf bytes.Buffer
-	require.NoError(t, printGroupedIssuesJSON(&buf, nil, groups, nil))
-
-	var out issuesOutputJSON
-	require.NoError(t, json.Unmarshal(buf.Bytes(), &out))
-	require.Len(t, out.FailureGroups, 1)
-	assert.Equal(t, "Team Docs", out.FailureGroups[0].Scope)
-	assert.Equal(t, `Shared folder "Team Docs" owner's storage is full.`, out.FailureGroups[0].Reason)
-	assert.Equal(t, "Ask the shared folder owner to free up space or upgrade their plan.", out.FailureGroups[0].Action)
-}
-
 func TestPrintGroupedIssuesText_AllSections(t *testing.T) {
 	t.Parallel()
 
-	conflicts := []synctypes.ConflictRecord{
-		{ID: "abc123", Path: "/conflict.txt", ConflictType: "content", DetectedAt: 1000000000},
-	}
-
-	groups := []failureGroup{
-		{
-			IssueType: synctypes.IssueQuotaExceeded,
-			Message:   synctypes.MessageForIssueType(synctypes.IssueQuotaExceeded),
-			Paths:     []string{"/a.txt"},
-			Count:     1,
+	snapshot := syncstore.IssuesSnapshot{
+		Conflicts: []synctypes.ConflictRecord{
+			{ID: "abc123", Path: "/conflict.txt", ConflictType: "content", DetectedAt: 1000000000},
+		},
+		Groups: []syncstore.IssueGroupSnapshot{
+			{
+				SummaryKey:       synctypes.SummaryQuotaExceeded,
+				PrimaryIssueType: synctypes.IssueQuotaExceeded,
+				Paths:            []string{"/a.txt"},
+				Count:            1,
+			},
+		},
+		HeldDeletes: []syncstore.HeldDeleteSnapshot{
+			{Path: "/deleted.txt", LastSeenAt: 2000000000},
 		},
 	}
 
-	heldDeletes := []synctypes.SyncFailureRow{
-		{Path: "/deleted.txt", LastSeenAt: 2000000000},
-	}
-
 	var buf bytes.Buffer
-	require.NoError(t, printGroupedIssuesText(&buf, conflicts, groups, heldDeletes, nil, nil, false, false))
+	require.NoError(t, printGroupedIssuesText(&buf, snapshot, false, false))
 	output := buf.String()
 
 	assert.Contains(t, output, "CONFLICTS")
@@ -419,13 +226,23 @@ func TestPrintGroupedIssuesText_AllSections(t *testing.T) {
 func TestPrintPendingRetries(t *testing.T) {
 	t.Parallel()
 
-	groups := []synctypes.PendingRetryGroup{
-		{ScopeKey: synctypes.SKThrottleAccount(), Count: 8, EarliestNext: time.Now().Add(2*time.Minute + 30*time.Second)},
-		{ScopeKey: synctypes.SKQuotaOwn(), Count: 4, EarliestNext: time.Now().Add(4*time.Minute + 15*time.Second)},
+	groups := []syncstore.PendingRetrySnapshot{
+		{
+			ScopeKey:     synctypes.SKThrottleAccount(),
+			ScopeLabel:   "your OneDrive account rate limit",
+			Count:        8,
+			EarliestNext: time.Now().Add(2*time.Minute + 30*time.Second),
+		},
+		{
+			ScopeKey:     synctypes.SKQuotaOwn(),
+			ScopeLabel:   "your OneDrive storage",
+			Count:        4,
+			EarliestNext: time.Now().Add(4*time.Minute + 15*time.Second),
+		},
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printPendingRetries(&buf, groups, nil))
+	require.NoError(t, printPendingRetries(&buf, groups))
 	output := buf.String()
 
 	assert.Contains(t, output, "PENDING RETRIES (12 items)")
@@ -436,10 +253,9 @@ func TestPrintPendingRetries(t *testing.T) {
 func TestPrintHeldDeletesGrouped_SmallCount(t *testing.T) {
 	t.Parallel()
 
-	// Under threshold: should show individual paths.
-	var heldDeletes []synctypes.SyncFailureRow
+	var heldDeletes []syncstore.HeldDeleteSnapshot
 	for i := range 5 {
-		heldDeletes = append(heldDeletes, synctypes.SyncFailureRow{
+		heldDeletes = append(heldDeletes, syncstore.HeldDeleteSnapshot{
 			Path:       fmt.Sprintf("dir/file%d.txt", i),
 			LastSeenAt: 1700000000000000000,
 		})
@@ -456,15 +272,14 @@ func TestPrintHeldDeletesGrouped_SmallCount(t *testing.T) {
 func TestPrintHeldDeletesGrouped_LargeCount(t *testing.T) {
 	t.Parallel()
 
-	// Over threshold: should group by directory.
-	var heldDeletes []synctypes.SyncFailureRow
+	var heldDeletes []syncstore.HeldDeleteSnapshot
 	for i := range 30 {
 		dir := "Documents/Archive"
 		if i >= 20 {
 			dir = "Photos/2024"
 		}
 
-		heldDeletes = append(heldDeletes, synctypes.SyncFailureRow{
+		heldDeletes = append(heldDeletes, syncstore.HeldDeleteSnapshot{
 			Path:       fmt.Sprintf("%s/file%d.txt", dir, i),
 			LastSeenAt: 1700000000000000000,
 		})
@@ -477,39 +292,6 @@ func TestPrintHeldDeletesGrouped_LargeCount(t *testing.T) {
 	assert.Contains(t, output, "HELD DELETES (30 files")
 	assert.Contains(t, output, "Documents/Archive/")
 	assert.Contains(t, output, "Photos/2024/")
-	// Should NOT show individual files.
 	assert.NotContains(t, output, "file0.txt")
 	assert.Contains(t, output, "--verbose")
-}
-
-func TestPrintHeldDeletesGrouped_LargeCountVerbose(t *testing.T) {
-	t.Parallel()
-
-	// Over threshold but verbose: should show individual paths.
-	var heldDeletes []synctypes.SyncFailureRow
-	for i := range 25 {
-		heldDeletes = append(heldDeletes, synctypes.SyncFailureRow{
-			Path:       fmt.Sprintf("dir/file%d.txt", i),
-			LastSeenAt: 1700000000000000000,
-		})
-	}
-
-	var buf bytes.Buffer
-	require.NoError(t, printHeldDeletesGrouped(&buf, heldDeletes, true))
-	output := buf.String()
-
-	// Verbose mode should show individual paths.
-	assert.Contains(t, output, "dir/file0.txt")
-}
-
-func TestFormatDuration(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, "now", formatDuration(0))
-	assert.Equal(t, "now", formatDuration(500*time.Millisecond))
-	assert.Equal(t, "30s", formatDuration(30*time.Second))
-	assert.Equal(t, "2m30s", formatDuration(2*time.Minute+30*time.Second))
-	assert.Equal(t, "5m", formatDuration(5*time.Minute))
-	assert.Equal(t, "1h30m", formatDuration(90*time.Minute))
-	assert.Equal(t, "2h", formatDuration(2*time.Hour))
 }

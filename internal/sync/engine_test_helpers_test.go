@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -551,6 +552,114 @@ func processBatchForTest(
 func externalDBChangedForTest(t *testing.T, eng *testEngine, ctx context.Context) bool {
 	t.Helper()
 	return testWatchRuntime(t, eng).externalDBChanged(ctx)
+}
+
+type debugEventRecorder struct {
+	events  chan engineDebugEvent
+	mu      sync.Mutex
+	history []engineDebugEvent
+}
+
+const debugEventTimeout = 2 * time.Second
+
+func attachDebugEventRecorder(eng *testEngine) *debugEventRecorder {
+	recorder := &debugEventRecorder{
+		events: make(chan engineDebugEvent, 128),
+	}
+	eng.debugEventHook = func(event engineDebugEvent) {
+		recorder.mu.Lock()
+		recorder.history = append(recorder.history, event)
+		recorder.mu.Unlock()
+		recorder.events <- event
+	}
+	return recorder
+}
+
+func (r *debugEventRecorder) waitForEvent(
+	t *testing.T,
+	match func(engineDebugEvent) bool,
+	description string,
+) {
+	t.Helper()
+
+	timer := time.NewTimer(debugEventTimeout)
+	defer timer.Stop()
+
+	for {
+		select {
+		case event := <-r.events:
+			if match(event) {
+				return
+			}
+		case <-timer.C:
+			require.FailNow(t, "timed out waiting for debug event", description)
+		}
+	}
+}
+
+func (r *debugEventRecorder) waitUntilSeen(
+	t *testing.T,
+	match func(engineDebugEvent) bool,
+	description string,
+) {
+	t.Helper()
+
+	if r.findEvent(match) {
+		return
+	}
+
+	timer := time.NewTimer(debugEventTimeout)
+	defer timer.Stop()
+
+	for {
+		select {
+		case event := <-r.events:
+			if match(event) {
+				return
+			}
+			if r.findEvent(match) {
+				return
+			}
+		case <-timer.C:
+			require.FailNow(t, "timed out waiting for debug event", description)
+		}
+	}
+}
+
+func (r *debugEventRecorder) findEvent(match func(engineDebugEvent) bool) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for i := range r.history {
+		if match(r.history[i]) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func syncStorePathForTest(t *testing.T, eng *testEngine) string {
+	t.Helper()
+
+	rows, err := eng.baseline.DB().Query("PRAGMA database_list")
+	require.NoError(t, err, "PRAGMA database_list")
+	defer rows.Close()
+
+	for rows.Next() {
+		var seq int
+		var name string
+		var file string
+		require.NoError(t, rows.Scan(&seq, &name, &file), "scan PRAGMA database_list")
+		if name == "main" {
+			require.NotEmpty(t, file, "main database path should not be empty")
+			return file
+		}
+	}
+
+	require.NoError(t, rows.Err(), "iterate PRAGMA database_list")
+	require.FailNow(t, "main database path not found")
+	return ""
 }
 
 func handleExternalChangesForTest(t *testing.T, eng *testEngine, ctx context.Context) {

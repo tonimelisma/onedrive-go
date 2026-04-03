@@ -8,135 +8,27 @@ import (
 	"sort"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
-// Grouped display of sync failures for the `issues` command.
-//
-// Groups failures by (issue_type, scope_key) and renders human-readable
-// output with titles, reasons, and suggested actions. Implements R-2.3.7,
-// R-2.3.8, R-2.3.9, R-2.10.4, R-2.10.22, R-6.6.11.
+// Grouped display of sync failures for the `issues` command. The store owns
+// issue grouping/counting; CLI formatting only renders the read-only snapshot.
+// Implements R-2.3.7, R-2.3.8, R-2.3.9, R-2.10.4, R-2.10.22, R-6.6.11.
 
 // defaultVisiblePaths is the maximum number of paths shown per group
 // in non-verbose mode.
 const defaultVisiblePaths = 5
-
-// failureGroup aggregates failures sharing the same issue type and scope.
-type failureGroup struct {
-	IssueType  string
-	SummaryKey synctypes.SummaryKey
-	ScopeKey   string // humanized (e.g. "Team Docs" instead of internal drive ID)
-	Message    synctypes.IssueMessage
-	LogSummary string
-	Paths      []string
-	Count      int
-}
 
 type issueTextSection struct {
 	present bool
 	print   func() error
 }
 
-// groupFailures groups failures by (issue_type, scope_key), humanizing scope
-// keys using the provided shortcut list. big_delete_held entries are separated
-// into a distinct slice.
-func groupFailures(
-	failures []synctypes.SyncFailureRow, shortcuts []synctypes.Shortcut,
-) (groups []failureGroup, heldDeletes []synctypes.SyncFailureRow) {
-	type groupKey struct {
-		summaryKey synctypes.SummaryKey
-		scopeKey   string
-	}
-
-	idx := map[groupKey]int{} // groupKey → index in groups slice
-
-	for i := range failures {
-		f := &failures[i]
-
-		if f.IssueType == synctypes.IssueBigDeleteHeld {
-			heldDeletes = append(heldDeletes, *f)
-			continue
-		}
-
-		humanScope := f.ScopeKey.Humanize(shortcuts)
-		summaryKey := synctypes.SummaryKeyForPersistedFailure(f.IssueType, f.Category, f.Role)
-		descriptor := synctypes.DescribeSummary(summaryKey)
-		gk := groupKey{summaryKey: summaryKey, scopeKey: humanScope}
-
-		if j, ok := idx[gk]; ok {
-			groups[j].Paths = append(groups[j].Paths, f.Path)
-			groups[j].Count++
-		} else {
-			idx[gk] = len(groups)
-			message := synctypes.MessageForFailure(f.IssueType, f.ScopeKey, humanScope)
-			groups = append(groups, failureGroup{
-				IssueType:  f.IssueType,
-				SummaryKey: summaryKey,
-				ScopeKey:   humanScope,
-				Message:    message,
-				LogSummary: descriptor.LogSummary,
-				Paths:      []string{f.Path},
-				Count:      1,
-			})
-		}
-	}
-
-	sortFailureGroups(groups)
-
-	return groups, heldDeletes
-}
-
-func appendScopeOnlyGroups(
-	groups []failureGroup,
-	blocks []*synctypes.ScopeBlock,
-	shortcuts []synctypes.Shortcut,
-) []failureGroup {
-	for i := range blocks {
-		if blocks[i].Key != synctypes.SKAuthAccount() {
-			continue
-		}
-
-		// auth:account is durable scope state with no path owner, so issues must
-		// surface it from scope_blocks instead of fabricating sentinel paths.
-		summaryKey := synctypes.SummaryKeyForScopeBlock(blocks[i].IssueType, blocks[i].Key)
-		descriptor := synctypes.DescribeSummary(summaryKey)
-		humanScope := blocks[i].Key.Humanize(shortcuts)
-		groups = append(groups, failureGroup{
-			IssueType:  blocks[i].IssueType,
-			SummaryKey: summaryKey,
-			ScopeKey:   humanScope,
-			Message:    synctypes.MessageForFailure(blocks[i].IssueType, blocks[i].Key, humanScope),
-			LogSummary: descriptor.LogSummary,
-			Paths:      []string{},
-			Count:      1,
-		})
-	}
-
-	sortFailureGroups(groups)
-
-	return groups
-}
-
-func sortFailureGroups(groups []failureGroup) {
-	// Sort groups: largest first for visibility, then alphabetically by title
-	// for deterministic output.
-	sort.Slice(groups, func(i, j int) bool {
-		if groups[i].Count != groups[j].Count {
-			return groups[i].Count > groups[j].Count
-		}
-		return groups[i].Message.Title < groups[j].Message.Title
-	})
-
-	// Sort paths within each group for consistent output.
-	for i := range groups {
-		sort.Strings(groups[i].Paths)
-	}
-}
-
 // printGroupedFailures renders grouped failure output to the writer.
 // When verbose is true, all paths are shown; otherwise only the first
 // defaultVisiblePaths are shown with a "... and N more" suffix.
-func printGroupedFailures(w io.Writer, groups []failureGroup, verbose bool) error {
+func printGroupedFailures(w io.Writer, groups []syncstore.IssueGroupSnapshot, verbose bool) error {
 	for i := range groups {
 		if i > 0 {
 			if err := writeln(w); err != nil {
@@ -152,15 +44,16 @@ func printGroupedFailures(w io.Writer, groups []failureGroup, verbose bool) erro
 	return nil
 }
 
-func printFailureGroup(w io.Writer, group *failureGroup, verbose bool) error {
-	if err := writef(w, "%s (%d %s)\n", group.Message.Title, group.Count, itemNoun(group.Count)); err != nil {
+func printFailureGroup(w io.Writer, group *syncstore.IssueGroupSnapshot, verbose bool) error {
+	descriptor := synctypes.DescribeSummary(group.SummaryKey)
+	if err := writef(w, "%s (%d %s)\n", descriptor.Title, group.Count, itemNoun(group.Count)); err != nil {
 		return err
 	}
-	if err := writef(w, "  %s %s\n", group.Message.Reason, group.Message.Action); err != nil {
+	if err := writef(w, "  %s %s\n", descriptor.Reason, descriptor.Action); err != nil {
 		return err
 	}
-	if group.ScopeKey != "" {
-		if err := writef(w, "  Scope: %s\n", group.ScopeKey); err != nil {
+	if group.ScopeLabel != "" {
+		if err := writef(w, "  Scope: %s\n", group.ScopeLabel); err != nil {
 			return err
 		}
 	}
@@ -168,7 +61,7 @@ func printFailureGroup(w io.Writer, group *failureGroup, verbose bool) error {
 	return printFailurePaths(w, group, verbose)
 }
 
-func printFailurePaths(w io.Writer, group *failureGroup, verbose bool) error {
+func printFailurePaths(w io.Writer, group *syncstore.IssueGroupSnapshot, verbose bool) error {
 	if len(group.Paths) == 0 {
 		return nil
 	}
@@ -202,7 +95,7 @@ func printFailurePaths(w io.Writer, group *failureGroup, verbose bool) error {
 const heldDeleteDirGroupThreshold = 20
 
 // printPendingRetries renders a summary of pending retries grouped by scope.
-func printPendingRetries(w io.Writer, groups []synctypes.PendingRetryGroup, shortcuts []synctypes.Shortcut) error {
+func printPendingRetries(w io.Writer, groups []syncstore.PendingRetrySnapshot) error {
 	total := 0
 	for _, g := range groups {
 		total += g.Count
@@ -213,7 +106,10 @@ func printPendingRetries(w io.Writer, groups []synctypes.PendingRetryGroup, shor
 	}
 
 	for _, g := range groups {
-		humanScope := g.ScopeKey.Humanize(shortcuts)
+		humanScope := g.ScopeLabel
+		if humanScope == "" {
+			humanScope = g.ScopeKey.Humanize(nil)
+		}
 		if humanScope == "" {
 			humanScope = "(unscoped)"
 		}
@@ -234,7 +130,7 @@ func printPendingRetries(w io.Writer, groups []synctypes.PendingRetryGroup, shor
 
 // printHeldDeletesGrouped renders held deletes grouped by parent directory
 // when the count exceeds the threshold, or individually when small.
-func printHeldDeletesGrouped(w io.Writer, heldDeletes []synctypes.SyncFailureRow, verbose bool) error {
+func printHeldDeletesGrouped(w io.Writer, heldDeletes []syncstore.HeldDeleteSnapshot, verbose bool) error {
 	if err := writef(w, "HELD DELETES (%d files — big-delete protection triggered, run `issues clear` to approve)\n",
 		len(heldDeletes)); err != nil {
 		return err
@@ -349,39 +245,40 @@ type heldDeleteJSON struct {
 
 // printGroupedIssuesJSON writes the structured JSON output for issues.
 func printGroupedIssuesJSON(
-	w io.Writer, conflicts []synctypes.ConflictRecord,
-	groups []failureGroup, heldDeletes []synctypes.SyncFailureRow,
+	w io.Writer,
+	snapshot syncstore.IssuesSnapshot,
 ) error {
 	out := issuesOutputJSON{
-		Conflicts:     make([]conflictJSON, len(conflicts)),
-		FailureGroups: make([]failureGroupJSON, len(groups)),
+		Conflicts:     make([]conflictJSON, len(snapshot.Conflicts)),
+		FailureGroups: make([]failureGroupJSON, len(snapshot.Groups)),
 	}
 
-	for i := range conflicts {
-		out.Conflicts[i] = toConflictJSON(&conflicts[i])
+	for i := range snapshot.Conflicts {
+		out.Conflicts[i] = toConflictJSON(&snapshot.Conflicts[i])
 	}
 
-	for i := range groups {
-		paths := groups[i].Paths
+	for i := range snapshot.Groups {
+		paths := snapshot.Groups[i].Paths
 		if paths == nil {
 			paths = []string{}
 		}
+		descriptor := synctypes.DescribeSummary(snapshot.Groups[i].SummaryKey)
 
 		out.FailureGroups[i] = failureGroupJSON{
-			IssueType: groups[i].IssueType,
-			Title:     groups[i].Message.Title,
-			Reason:    groups[i].Message.Reason,
-			Action:    groups[i].Message.Action,
-			Scope:     groups[i].ScopeKey,
-			Count:     groups[i].Count,
+			IssueType: snapshot.Groups[i].PrimaryIssueType,
+			Title:     descriptor.Title,
+			Reason:    descriptor.Reason,
+			Action:    descriptor.Action,
+			Scope:     snapshot.Groups[i].ScopeLabel,
+			Count:     snapshot.Groups[i].Count,
 			Paths:     paths,
 		}
 	}
 
-	for i := range heldDeletes {
+	for i := range snapshot.HeldDeletes {
 		out.HeldDeletes = append(out.HeldDeletes, heldDeleteJSON{
-			Path:       heldDeletes[i].Path,
-			LastSeenAt: formatNanoTimestamp(heldDeletes[i].LastSeenAt),
+			Path:       snapshot.HeldDeletes[i].Path,
+			LastSeenAt: formatNanoTimestamp(snapshot.HeldDeletes[i].LastSeenAt),
 		})
 	}
 
@@ -399,38 +296,37 @@ func printGroupedIssuesJSON(
 // command using grouped failure display. When verbose is true, all paths are
 // shown; otherwise only the first defaultVisiblePaths per group are shown.
 func printGroupedIssuesText(
-	w io.Writer, conflicts []synctypes.ConflictRecord,
-	groups []failureGroup, heldDeletes []synctypes.SyncFailureRow,
-	pendingRetries []synctypes.PendingRetryGroup, shortcuts []synctypes.Shortcut,
+	w io.Writer,
+	snapshot syncstore.IssuesSnapshot,
 	history, verbose bool,
 ) error {
 	sections := []issueTextSection{
 		{
-			present: len(conflicts) > 0,
+			present: len(snapshot.Conflicts) > 0,
 			print: func() error {
 				if err := writeln(w, "CONFLICTS"); err != nil {
 					return err
 				}
 
-				return printConflictsTable(w, conflicts, history)
+				return printConflictsTable(w, snapshot.Conflicts, history)
 			},
 		},
 		{
-			present: len(groups) > 0,
+			present: len(snapshot.Groups) > 0,
 			print: func() error {
-				return printGroupedFailures(w, groups, verbose)
+				return printGroupedFailures(w, snapshot.Groups, verbose)
 			},
 		},
 		{
-			present: len(pendingRetries) > 0,
+			present: len(snapshot.PendingRetries) > 0,
 			print: func() error {
-				return printPendingRetries(w, pendingRetries, shortcuts)
+				return printPendingRetries(w, snapshot.PendingRetries)
 			},
 		},
 		{
-			present: len(heldDeletes) > 0,
+			present: len(snapshot.HeldDeletes) > 0,
 			print: func() error {
-				return printHeldDeletesGrouped(w, heldDeletes, verbose)
+				return printHeldDeletesGrouped(w, snapshot.HeldDeletes, verbose)
 			},
 		},
 	}

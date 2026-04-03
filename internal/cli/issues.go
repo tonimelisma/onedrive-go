@@ -450,7 +450,7 @@ func printConflictsTable(w io.Writer, conflicts []synctypes.ConflictRecord, hist
 
 // printHeldDeletesTable renders held-delete entries with a simplified table
 // (path only — direction is always "delete" and error is always the same).
-func printHeldDeletesTable(w io.Writer, failures []synctypes.SyncFailureRow) error {
+func printHeldDeletesTable(w io.Writer, failures []syncstore.HeldDeleteSnapshot) error {
 	headers := []string{"PATH", "LAST SEEN"}
 
 	rows := make([][]string, len(failures))

@@ -11,6 +11,15 @@ const (
 	engineDebugEventRetryKicked          engineDebugEventType = "retry_kicked"
 	engineDebugEventTrialDispatched      engineDebugEventType = "trial_dispatched"
 	engineDebugEventStartupScopeRepaired engineDebugEventType = "startup_scope_repaired"
+	engineDebugEventBootstrapQuiesced    engineDebugEventType = "bootstrap_quiesced"
+	engineDebugEventObserverStarted      engineDebugEventType = "observer_started"
+	engineDebugEventObserverExited       engineDebugEventType = "observer_exited"
+	engineDebugEventWatchStopped         engineDebugEventType = "watch_stopped"
+)
+
+const (
+	engineDebugObserverLocal  = "local"
+	engineDebugObserverRemote = "remote"
 )
 
 type engineDebugEvent struct {

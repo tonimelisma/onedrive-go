@@ -433,17 +433,20 @@ func TestPrintGroupedIssuesJSON_MixedOutput(t *testing.T) {
 		},
 	}
 
-	groups := []failureGroup{
-		{
-			IssueType: synctypes.IssueInvalidFilename,
-			Message:   synctypes.MessageForIssueType(synctypes.IssueInvalidFilename),
-			Paths:     []string{"docs/CON"},
-			Count:     1,
+	snapshot := syncstore.IssuesSnapshot{
+		Conflicts: conflicts,
+		Groups: []syncstore.IssueGroupSnapshot{
+			{
+				SummaryKey:       synctypes.SummaryInvalidFilename,
+				PrimaryIssueType: synctypes.IssueInvalidFilename,
+				Paths:            []string{"docs/CON"},
+				Count:            1,
+			},
 		},
 	}
 
 	var buf bytes.Buffer
-	err := printGroupedIssuesJSON(&buf, conflicts, groups, nil)
+	err := printGroupedIssuesJSON(&buf, snapshot)
 	require.NoError(t, err)
 
 	var result issuesOutputJSON
@@ -465,17 +468,20 @@ func TestPrintGroupedIssuesText_BothSections(t *testing.T) {
 		{ID: "abcdefghijklmnop", Path: "/test.txt", ConflictType: "edit_edit", DetectedAt: 1700000000000000000},
 	}
 
-	groups := []failureGroup{
-		{
-			IssueType: synctypes.IssueInvalidFilename,
-			Message:   synctypes.MessageForIssueType(synctypes.IssueInvalidFilename),
-			Paths:     []string{"docs/CON"},
-			Count:     1,
+	snapshot := syncstore.IssuesSnapshot{
+		Conflicts: conflicts,
+		Groups: []syncstore.IssueGroupSnapshot{
+			{
+				SummaryKey:       synctypes.SummaryInvalidFilename,
+				PrimaryIssueType: synctypes.IssueInvalidFilename,
+				Paths:            []string{"docs/CON"},
+				Count:            1,
+			},
 		},
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printGroupedIssuesText(&buf, conflicts, groups, nil, nil, nil, false, false))
+	require.NoError(t, printGroupedIssuesText(&buf, snapshot, false, false))
 
 	output := buf.String()
 	assert.Contains(t, output, "CONFLICTS")
@@ -492,7 +498,7 @@ func TestPrintGroupedIssuesText_OnlyConflicts(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printGroupedIssuesText(&buf, conflicts, nil, nil, nil, nil, false, false))
+	require.NoError(t, printGroupedIssuesText(&buf, syncstore.IssuesSnapshot{Conflicts: conflicts}, false, false))
 
 	output := buf.String()
 	assert.Contains(t, output, "CONFLICTS")
@@ -501,17 +507,19 @@ func TestPrintGroupedIssuesText_OnlyConflicts(t *testing.T) {
 func TestPrintGroupedIssuesText_OnlyFailures(t *testing.T) {
 	t.Parallel()
 
-	groups := []failureGroup{
-		{
-			IssueType: synctypes.IssueInvalidFilename,
-			Message:   synctypes.MessageForIssueType(synctypes.IssueInvalidFilename),
-			Paths:     []string{"docs/CON"},
-			Count:     1,
+	snapshot := syncstore.IssuesSnapshot{
+		Groups: []syncstore.IssueGroupSnapshot{
+			{
+				SummaryKey:       synctypes.SummaryInvalidFilename,
+				PrimaryIssueType: synctypes.IssueInvalidFilename,
+				Paths:            []string{"docs/CON"},
+				Count:            1,
+			},
 		},
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printGroupedIssuesText(&buf, nil, groups, nil, nil, nil, false, false))
+	require.NoError(t, printGroupedIssuesText(&buf, snapshot, false, false))
 
 	output := buf.String()
 	assert.NotContains(t, output, "CONFLICTS")
@@ -521,13 +529,13 @@ func TestPrintGroupedIssuesText_OnlyFailures(t *testing.T) {
 func TestPrintGroupedIssuesText_HeldDeletes(t *testing.T) {
 	t.Parallel()
 
-	heldDeletes := []synctypes.SyncFailureRow{
-		{Path: "file1.txt", Direction: synctypes.DirectionDelete, IssueType: synctypes.IssueBigDeleteHeld, LastSeenAt: 1700000000000000000},
-		{Path: "file2.txt", Direction: synctypes.DirectionDelete, IssueType: synctypes.IssueBigDeleteHeld, LastSeenAt: 1700000000000000000},
+	heldDeletes := []syncstore.HeldDeleteSnapshot{
+		{Path: "file1.txt", LastSeenAt: 1700000000000000000},
+		{Path: "file2.txt", LastSeenAt: 1700000000000000000},
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printGroupedIssuesText(&buf, nil, nil, heldDeletes, nil, nil, false, false))
+	require.NoError(t, printGroupedIssuesText(&buf, syncstore.IssuesSnapshot{HeldDeletes: heldDeletes}, false, false))
 
 	output := buf.String()
 	assert.Contains(t, output, "HELD DELETES")
@@ -539,21 +547,24 @@ func TestPrintGroupedIssuesText_HeldDeletes(t *testing.T) {
 func TestPrintGroupedIssuesText_MixedHeldAndOther(t *testing.T) {
 	t.Parallel()
 
-	groups := []failureGroup{
+	groups := []syncstore.IssueGroupSnapshot{
 		{
-			IssueType: synctypes.IssueInvalidFilename,
-			Message:   synctypes.MessageForIssueType(synctypes.IssueInvalidFilename),
-			Paths:     []string{"docs/CON"},
-			Count:     1,
+			SummaryKey:       synctypes.SummaryInvalidFilename,
+			PrimaryIssueType: synctypes.IssueInvalidFilename,
+			Paths:            []string{"docs/CON"},
+			Count:            1,
 		},
 	}
 
-	heldDeletes := []synctypes.SyncFailureRow{
-		{Path: "file1.txt", Direction: synctypes.DirectionDelete, IssueType: synctypes.IssueBigDeleteHeld, LastSeenAt: 1700000000000000000},
+	heldDeletes := []syncstore.HeldDeleteSnapshot{
+		{Path: "file1.txt", LastSeenAt: 1700000000000000000},
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printGroupedIssuesText(&buf, nil, groups, heldDeletes, nil, nil, false, false))
+	require.NoError(t, printGroupedIssuesText(&buf, syncstore.IssuesSnapshot{
+		Groups:      groups,
+		HeldDeletes: heldDeletes,
+	}, false, false))
 
 	output := buf.String()
 	assert.Contains(t, output, "HELD DELETES")
@@ -826,4 +837,40 @@ func TestIssuesService_RunList_DoesNotClearPersistedAuthScope(t *testing.T) {
 
 	require.NoError(t, svc.runList(t.Context(), false))
 	assert.True(t, hasPersistedAuthScope(t.Context(), cid.Email(), testDriveLogger(t)))
+}
+
+// Validates: R-6.10.5
+func TestIssuesService_RunList_UsesReadOnlyInspector(t *testing.T) {
+	setTestDriveHome(t)
+
+	canonicalID, err := driveid.NewCanonicalID("personal:readonly@example.com")
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(config.DefaultDataDir(), 0o750))
+
+	dbPath := config.DriveStatePath(canonicalID)
+	logger := slog.New(slog.DiscardHandler)
+	store, err := syncstore.NewSyncStore(t.Context(), dbPath, logger)
+	require.NoError(t, err)
+
+	require.NoError(t, store.RecordFailure(t.Context(), &synctypes.SyncFailureParams{
+		Path:      "docs/CON",
+		DriveID:   driveid.New("drive-1"),
+		Direction: synctypes.DirectionUpload,
+		IssueType: synctypes.IssueInvalidFilename,
+		Category:  synctypes.CategoryActionable,
+		ErrMsg:    "reserved name",
+	}, nil))
+	require.NoError(t, store.Close(t.Context()))
+
+	require.NoError(t, os.Chmod(dbPath, 0o400))
+
+	var buf bytes.Buffer
+	svc := newIssuesService(&CLIContext{
+		Logger:       logger,
+		OutputWriter: &buf,
+		Cfg:          &config.ResolvedDrive{CanonicalID: canonicalID},
+	})
+
+	require.NoError(t, svc.runList(t.Context(), false))
+	assert.Contains(t, buf.String(), "INVALID FILENAME")
 }
