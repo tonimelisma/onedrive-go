@@ -320,6 +320,8 @@ func (o *LocalObserver) makeWalkFunc(
 
 		if d.Type()&fs.ModeSymlink != 0 {
 			if o.filterConfig.SkipSymlinks {
+				o.rememberExcludedSymlink(dbRelPath)
+				observed[dbRelPath] = true
 				o.Logger.Debug("skipping symlink", slog.String("path", dbRelPath))
 				return SkipEntry(d)
 			}
@@ -337,6 +339,8 @@ func (o *LocalObserver) makeWalkFunc(
 				dirStack,
 			)
 		}
+
+		o.forgetExcludedSymlink(dbRelPath)
 
 		// Stage 1 observation filter: name validation + path length (cheap, no syscall).
 		if skipItem := shouldObserveWithFilter(name, dbRelPath, dirEntryKind(d), o.filterConfig); skipItem != nil {
@@ -770,6 +774,10 @@ func (o *LocalObserver) detectDeletions(observed map[string]bool) []synctypes.Ch
 			return
 		}
 
+		if o.shouldSuppressDeleteForExcludedPath(path, entry) {
+			return
+		}
+
 		events = append(events, synctypes.ChangeEvent{
 			Source:    synctypes.SourceLocal,
 			Type:      synctypes.ChangeDelete,
@@ -783,6 +791,29 @@ func (o *LocalObserver) detectDeletions(observed map[string]bool) []synctypes.Ch
 	})
 
 	return events
+}
+
+func (o *LocalObserver) shouldSuppressDeleteForExcludedPath(path string, entry *synctypes.BaselineEntry) bool {
+	if o.hasExcludedSymlinkAncestor(path) {
+		return true
+	}
+
+	skip := shouldObserveWithFilter(
+		filepath.Base(path),
+		path,
+		observedKindFromItemType(entry.ItemType),
+		o.filterConfig,
+	)
+
+	return skip != nil && skip.Reason == ""
+}
+
+func observedKindFromItemType(itemType synctypes.ItemType) observedKind {
+	if itemType == synctypes.ItemTypeFolder || itemType == synctypes.ItemTypeRoot {
+		return observedKindDir
+	}
+
+	return observedKindFile
 }
 
 // ---------------------------------------------------------------------------

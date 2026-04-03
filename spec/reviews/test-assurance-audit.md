@@ -613,6 +613,8 @@ Key W1 gap notes:
     - default `skip_symlinks = false` follows file and directory symlinks during full scan and single-path reconstruction
     - `skip_symlinks = true` excludes symlink entries from full scan, watch setup, and single-path reconstruction
     - directory symlink cycles stop at the alias boundary instead of recursing forever
+  - Follow-up W2 delete-semantic audit found another real prod bug: local silent exclusions could still resurface as synthetic deletes when the baseline already contained the path. That affected `skip_dotfiles`, `skip_dirs`, `skip_files`, and skipped symlink aliases, with an extra watch-mode hole where a skipped symlink could later emit `ChangeDelete` on remove.
+  - Production fix: deletion detection now suppresses deletes for baseline paths that current local filters exclude, and watch mode retains skipped symlink alias knowledge so remove events and later safety scans stay silent instead of fabricating deletes.
 - Verified-claim reconciliation snapshot:
 
 | Contract | Basis | Current evidence | Reconciliation | Gap label / note |
@@ -621,6 +623,7 @@ Key W1 gap notes:
 | `skip_dirs` excludes configured directory names from scan and watch setup | `REQ+DESIGN+CODE+BODY` | `internal/syncobserve/filter_test.go` proves `vendor/` is absent from full scans and does not receive watches in `AddWatchesRecursive` | `proven` | Covers both scan and watch-start behavior |
 | `skip_files` excludes matching file globs from scan and watch write handling | `REQ+DESIGN+CODE+BODY` | `internal/syncobserve/filter_test.go` proves `*.log` files are omitted from full scans and suppressed on write events | `proven` | Direct file-glob regression coverage added |
 | `skip_symlinks = false` follows symlink targets by default, while `skip_symlinks = true` excludes them | `REQ+DESIGN+CODE+BODY+REF` | `internal/syncobserve/observer_local_test.go`, `internal/syncobserve/filter_test.go`, `internal/syncobserve/single_path_test.go`, and `internal/syncobserve/observer_local_delete_test.go` now prove default follow, configured skip, watch setup parity, and cycle-stop behavior. External behavior was cross-checked against `abraunegg/onedrive` docs before implementation. | `proven` | Real prod gap fixed; now aligned with researched client behavior |
+| Silent local exclusions must not later reappear as synthetic deletes | `REQ+DESIGN+CODE+BODY` | `internal/syncobserve/filter_test.go` now proves full scans suppress deletes for baseline paths hidden by `skip_dotfiles`, `skip_dirs`, `skip_files`, and `skip_symlinks`, including skipped symlink-directory descendants; `internal/syncobserve/observer_local_delete_test.go` proves skipped symlink remove events stay silent and remain suppressed through the next safety scan | `proven` | Real prod gap fixed in both scanner and watch mode |
 | Retry/trial single-path reconstruction must honor the same local filters as normal observation | `DESIGN+CODE+BODY` | `internal/syncobserve/filter_test.go` proves `ObserveSinglePathWithFilter` resolves configured exclusions silently | `proven` | Important design-only invariant now covered |
 | Resolved config must reach the engine and observer instead of being dropped in CLI setup | `REQ+CODE+BODY` | `internal/cli/sync_helpers_test.go` plus `internal/sync/engine_filter_test.go` prove config propagation and end-to-end upload suppression | `proven` | Fixed production wiring gap |
 
@@ -628,6 +631,7 @@ Key W2 gap notes:
 
 - `CODE+BODY`: the filter-config wiring gap was a real production defect, not a metadata illusion. It is now fixed with regression coverage at observer, engine, and CLI wiring layers.
 - `CODE+BODY`: `skip_symlinks` was also a real runtime gap. The config/default existed, but local observation ignored it and always skipped symlinks. The observer now matches `abraunegg/onedrive`: default `false` follows symlink targets, `true` excludes them, and directory cycles stop at the alias boundary.
+- `CODE+BODY`: silent local exclusions also had a delete-semantic bug. Filtered paths could still come back as fabricated `ChangeDelete` events when they already existed in the baseline, and skipped symlink removes could leak through watch mode. That is now fixed with explicit regression coverage.
 - `META`: W2 still needs deeper reconciliation on actionable-issue lifecycle (`R-2.11.*`) and sparse remote payload hardening.
 
 ### W3. Planner Safety, Conflict Resolution, And Delete Protection
