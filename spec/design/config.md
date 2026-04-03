@@ -17,6 +17,8 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 - Mutable Runtime Owner: `config.Holder` owns the current `*Config` pointer behind `Holder.mu`. The package starts no background goroutines, owns no long-lived channels, and uses no timers.
 - Error Boundary: `config` translates parse/load/validation outcomes into either fatal errors or warnings before callers act, following [error-model.md](error-model.md).
 
+Transfer validation behavior is not user-disableable. The config surface intentionally has no `disable_download_validation` or `disable_upload_validation` escape hatches; transfer correctness policy lives in the transfer and observation layers, not in mutable config toggles.
+
 ## Override Chain
 
 Four-layer resolution: defaults → config file → environment → CLI flags. CLI flags replace (never merge) config values.

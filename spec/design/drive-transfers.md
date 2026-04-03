@@ -29,9 +29,10 @@ Implements: R-6.2.3 [verified]
 
 ### Upload
 
-1. Files ≤ 4 MiB: simple PUT (single request)
-2. Files > 4 MiB: create resumable upload session, upload in chunks (320 KiB aligned)
-3. Verify server-reported hash matches local file after upload
+1. Stat the local file and reject anything above the 250 GB OneDrive limit before hashing or opening network transfer state
+2. Files ≤ 4 MiB: simple PUT (single request)
+3. Files > 4 MiB: create resumable upload session, upload in chunks (320 KiB aligned)
+4. Verify server-reported hash matches local file after upload
 
 ## SessionStore
 

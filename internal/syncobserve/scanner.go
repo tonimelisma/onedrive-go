@@ -48,7 +48,7 @@ const (
 	// MaxOneDrivePathLength is the maximum total path length OneDrive allows.
 	MaxOneDrivePathLength = 400
 	// MaxOneDriveFileSize is the maximum file size OneDrive allows (250 GB).
-	MaxOneDriveFileSize = 250 * 1024 * 1024 * 1024 // 250 GB
+	MaxOneDriveFileSize = driveops.MaxOneDriveFileSize
 )
 
 // defaultCheckWorkers is the default parallel hash goroutine limit when

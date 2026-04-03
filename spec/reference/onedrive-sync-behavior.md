@@ -36,9 +36,10 @@ OneDrive enforces naming rules that differ from POSIX. The following are rejecte
 
 ## File Size Constraints
 
-- Maximum file size: 250 GB (all account types)
-- Simple upload (PUT): files up to 4 MiB
-- Upload session (resumable): files over 4 MiB, up to 250 GB
+- Maximum file size for upload, download, and sync: 250 GB
+- Microsoft Graph simple upload (`PUT /content`) supports files up to 250 MB
+- This client intentionally uses simple upload only up to 4 MiB and routes larger files through upload sessions
+- Upload session (resumable): supported up to 250 GB
 - Zero-byte files must use simple upload (upload sessions require at least one non-empty chunk)
 
 ## Conflict Behavior

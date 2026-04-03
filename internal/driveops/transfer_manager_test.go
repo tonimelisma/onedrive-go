@@ -467,6 +467,42 @@ func TestTransferManager_Upload_ErrorWrapping(t *testing.T) {
 	assert.Contains(t, err.Error(), localPath)
 }
 
+// Validates: R-5.7.1
+func TestTransferManager_Upload_RejectsOversizedFileBeforeHashOrTransfer(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	localPath := filepath.Join(dir, "oversized.bin")
+
+	file, err := localpath.OpenFile(localPath, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o600)
+	require.NoError(t, err)
+	require.NoError(t, file.Truncate(MaxOneDriveFileSize+1))
+	require.NoError(t, file.Close())
+
+	var hashCalled bool
+	var uploadCalled bool
+
+	ul := &tmMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			uploadCalled = true
+			return &graph.Item{ID: "unexpected"}, nil
+		},
+	}
+
+	tm := newTestTM(&tmSimpleDownloader{}, ul, nil)
+	tm.hashFunc = func(string) (string, error) {
+		hashCalled = true
+		return "unexpected", nil
+	}
+
+	_, err = tm.UploadFile(t.Context(), driveid.New("d1"), "parent1", "oversized.bin", localPath, UploadOpts{})
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrFileExceedsOneDriveLimit)
+	assert.Contains(t, err.Error(), "250 GB")
+	assert.False(t, hashCalled, "oversized files should be rejected before hashing")
+	assert.False(t, uploadCalled, "oversized files should be rejected before transfer")
+}
+
 // Validates: R-1.3, R-5.2
 func TestTransferManager_SessionUpload_Success(t *testing.T) {
 	t.Parallel()

@@ -39,6 +39,18 @@ func TestLoad_UnknownKey_NoSuggestion(t *testing.T) {
 	assert.NotContains(t, err.Error(), "did you mean")
 }
 
+func TestLoad_UnknownKey_RemovedValidationToggles(t *testing.T) {
+	path := writeTestConfig(t, `
+disable_download_validation = true
+disable_upload_validation = true
+`)
+	_, err := Load(path, testLogger(t))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown config key")
+	assert.Contains(t, err.Error(), "disable_download_validation")
+	assert.Contains(t, err.Error(), "disable_upload_validation")
+}
+
 func TestLoad_UnknownKeyInDriveSection(t *testing.T) {
 	path := writeTestConfig(t, `
 ["personal:toni@outlook.com"]

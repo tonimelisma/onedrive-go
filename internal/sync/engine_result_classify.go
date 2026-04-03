@@ -141,6 +141,11 @@ func classifyLocalResult(r *synctypes.WorkerResult) ResultDecision {
 			Class:      resultSkip,
 			RecordMode: recordFailureActionable,
 		}
+	case errors.Is(r.Err, driveops.ErrFileExceedsOneDriveLimit):
+		return ResultDecision{
+			Class:      resultSkip,
+			RecordMode: recordFailureActionable,
+		}
 	case errors.Is(r.Err, os.ErrPermission):
 		return ResultDecision{
 			Class:          resultSkip,
@@ -202,6 +207,8 @@ func issueTypeForHTTPStatus(httpStatus int, err error) string {
 		return synctypes.IssueDiskFull
 	case errors.Is(err, driveops.ErrFileTooLargeForSpace):
 		return synctypes.IssueFileTooLargeForSpace
+	case errors.Is(err, driveops.ErrFileExceedsOneDriveLimit):
+		return synctypes.IssueFileTooLarge
 	case errors.Is(err, os.ErrPermission):
 		return synctypes.IssueLocalPermissionDenied
 	default:
