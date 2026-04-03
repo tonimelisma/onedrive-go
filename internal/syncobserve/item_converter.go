@@ -155,6 +155,31 @@ func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[driveid.Item
 		return nil
 	}
 
+	// Malformed delta items without a stable ID cannot be materialized safely.
+	// Emitting them would create buffer/planner entries the rest of the
+	// pipeline cannot reconcile back to durable remote state.
+	if item.ID == "" {
+		c.Logger.Warn("skipping remote item with empty id",
+			slog.String("name", item.Name),
+			slog.String("parent_id", item.ParentID),
+			slog.String("drive_id", itemDriveID.String()),
+		)
+
+		return nil
+	}
+
+	// Non-deleted items need a materializable leaf name. Deleted items may
+	// recover their name from the baseline later in classifyAndConvert.
+	if !item.IsDeleted && item.Name == "" {
+		c.Logger.Warn("skipping remote item with empty name",
+			slog.String("item_id", item.ID),
+			slog.String("parent_id", item.ParentID),
+			slog.String("drive_id", itemDriveID.String()),
+		)
+
+		return nil
+	}
+
 	// Skip scope root for shortcut scopes (the shortcut folder itself).
 	if c.ScopeRootID != "" && item.ID == c.ScopeRootID {
 		c.Logger.Debug("skipping scope root item", slog.String("item_id", item.ID))
@@ -239,6 +264,21 @@ func (c *ItemConverter) classifyAndConvert(
 
 		if existing != nil {
 			ev.Path = existing.Path
+		}
+		if ev.Path == "" {
+			// When the item is absent from the baseline but the delta payload still
+			// carries enough name/parent-chain context, materialize the delete path
+			// from the current item instead of emitting an empty-path event.
+			ev.Path = c.materializePath(item, inflight, itemDriveID)
+		}
+		if ev.Path == "" {
+			c.Logger.Warn("skipping remote delete without recoverable path",
+				slog.String("item_id", item.ID),
+				slog.String("name", item.Name),
+				slog.String("drive_id", itemDriveID.String()),
+			)
+
+			return nil
 		}
 
 	case existing != nil:

@@ -750,11 +750,13 @@ func TestFullDelta_OrphanedItem(t *testing.T) {
 	assert.Equal(t, synctypes.ChangeCreate, events[0].Type)
 }
 
+// Validates: R-6.7.3
 func TestFullDelta_DeletedItem_NotInBaseline(t *testing.T) {
 	t.Parallel()
 
 	// Item created and deleted between syncs — appears as deleted in delta
-	// but has no baseline entry. Observer should produce an event with empty path.
+	// but has no baseline entry. The observer should still materialize a path
+	// from the delta payload instead of emitting an empty-path delete.
 	fetcher := &mockDeltaFetcher{
 		pages: []mockDeltaPage{{
 			page: &graph.DeltaPage{
@@ -771,15 +773,74 @@ func TestFullDelta_DeletedItem_NotInBaseline(t *testing.T) {
 	require.NoError(t, err, "FullDelta")
 
 	require.Len(t, events, 1)
+	assert.Equal(t, synctypes.ChangeDelete, events[0].Type)
+	assert.Equal(t, "ephemeral.txt", events[0].Path)
+	assert.Equal(t, "ephemeral.txt", events[0].Name)
+}
 
-	e := events[0]
-	assert.Equal(t, synctypes.ChangeDelete, e.Type)
+func fullDeltaSingleItemEvents(t *testing.T, item *graph.Item) []synctypes.ChangeEvent {
+	t.Helper()
 
-	// No baseline entry — path is empty.
-	assert.Empty(t, e.Path, "no baseline entry")
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveid.New(synctest.TestDriveID)},
+					*item,
+				},
+				DeltaLink: "delta-link",
+			},
+		}},
+	}
 
-	// Name is still available from the delta item itself.
-	assert.Equal(t, "ephemeral.txt", e.Name)
+	obs := NewRemoteObserver(fetcher, synctest.EmptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	events, _, err := obs.FullDelta(t.Context(), "")
+	require.NoError(t, err, "FullDelta")
+
+	return events
+}
+
+// Validates: R-6.7.28
+func TestFullDelta_SkipsItemWithEmptyItemID(t *testing.T) {
+	t.Parallel()
+
+	events := fullDeltaSingleItemEvents(t, &graph.Item{
+		ID:       "",
+		Name:     "bad.txt",
+		ParentID: "root",
+		DriveID:  driveid.New(synctest.TestDriveID),
+	})
+
+	assert.Empty(t, events, "items without ItemID should be skipped")
+}
+
+// Validates: R-6.7.28
+func TestFullDelta_NonDeletedItem_MissingNameSkipped(t *testing.T) {
+	t.Parallel()
+
+	events := fullDeltaSingleItemEvents(t, &graph.Item{
+		ID:       "f1",
+		Name:     "",
+		ParentID: "root",
+		DriveID:  driveid.New(synctest.TestDriveID),
+	})
+
+	assert.Empty(t, events, "non-deleted items without a name should be skipped")
+}
+
+// Validates: R-6.7.28
+func TestFullDelta_DeletedItem_WithoutRecoverablePathSkipped(t *testing.T) {
+	t.Parallel()
+
+	events := fullDeltaSingleItemEvents(t, &graph.Item{
+		ID:        "gone",
+		Name:      "",
+		ParentID:  "",
+		DriveID:   driveid.New(synctest.TestDriveID),
+		IsDeleted: true,
+	})
+
+	assert.Empty(t, events, "deletes without recoverable path data should be skipped")
 }
 
 // ---------------------------------------------------------------------------

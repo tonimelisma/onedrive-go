@@ -2,7 +2,7 @@
 
 GOVERNS: internal/syncobserve/observer_local.go, internal/syncobserve/observer_local_handlers.go, internal/syncobserve/observer_local_collisions.go, internal/syncobserve/observer_remote.go, internal/syncobserve/item_converter.go, internal/syncobserve/scanner.go, internal/syncobserve/buffer.go, internal/syncobserve/inotify_linux.go, internal/syncobserve/inotify_other.go
 
-Implements: R-2.1.2 [verified], R-2.4 [implemented], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.15 [planned], R-6.7.16 [planned], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [planned], R-6.7.24 [verified], R-2.11 [implemented], R-2.11.5 [implemented], R-2.12 [verified], R-2.13.1 [verified], R-6.3.4 [verified], R-6.10.6 [verified]
+Implements: R-2.1.2 [verified], R-2.4 [implemented], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.15 [planned], R-6.7.16 [planned], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [planned], R-6.7.24 [verified], R-6.7.28 [verified], R-2.11 [implemented], R-2.11.5 [implemented], R-2.12 [verified], R-2.13.1 [verified], R-6.3.4 [verified], R-6.10.6 [verified]
 
 ## Ownership Contract
 
@@ -27,6 +27,8 @@ Key properties:
 
 **Server-trusted observation**: The remote observer does NOT filter items by name validity or always-excluded patterns. If OneDrive sends an item in a delta response, it exists on OneDrive — filtering it would be silent data loss. Name-based filtering is a local-only concern (upload validation). Only root items and vault descendants are excluded from remote observation.
 
+**Malformed remote-item guard**: Remote observation still trusts server-sent names that are odd but valid on OneDrive. What it does not trust is missing identity or unmaterializable deletes. Non-root items with empty `id`, non-deleted items with empty `name`, and delete entries whose path cannot be recovered from the baseline or surviving delta name/parent data are warned and skipped instead of being emitted as empty-ID or empty-path `ChangeEvent`s. That keeps malformed sparse payloads from poisoning buffer/planner state while preserving legitimate deleted-item name recovery from either the baseline or the current delta payload.
+
 ### Item Conversion Pipeline (`item_converter.go`)
 
 The `itemConverter` struct is the single code path for converting `[]graph.Item` into `[]ChangeEvent`. Both the primary drive observer (`RemoteObserver.fetchPage`) and shortcut observation (`convertShortcutItems`) delegate to it with different configuration:
@@ -39,6 +41,7 @@ Key properties:
 - NFC normalization applied to all item names
 - Move detection via baseline comparison (existing item at different path → ChangeMove)
 - Deleted-item name recovery from baseline (Business API items may lack Name on delete)
+- Malformed sparse items with empty identity are skipped before event emission
 - Orphan items (missing parent) produce a warning log and partial path
 - The inflight map is a parameter, not a field — RemoteObserver accumulates it across pages; shortcuts populate it once per batch
 
