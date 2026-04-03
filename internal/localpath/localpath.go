@@ -98,7 +98,7 @@ func Stat(path string) (os.FileInfo, error) {
 		return nil, err
 	}
 
-	//nolint:gosec // localpath is the explicit arbitrary-path boundary after clean+Abs validation.
+	// #nosec G703 -- localpath is the explicit arbitrary-path boundary after clean+Abs validation.
 	info, err := os.Stat(abs)
 	if err != nil {
 		return nil, fmt.Errorf("stating %s: %w", path, err)
