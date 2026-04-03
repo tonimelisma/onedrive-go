@@ -188,13 +188,13 @@ The client treats these as unknown metadata, not as clock values to repair local
 
 ### URL-Encoded Paths
 
-`parentReference.path` (when present in non-delta responses) contains URL-encoded characters (`%20` for spaces). The client decodes it at the Graph boundary and stores the root-relative result on `graph.Item.ParentPath`.
+`parentReference.path` (when present in non-delta responses) contains URL-encoded characters (`%20` for spaces). The client decodes it at the Graph boundary and stores the root-relative result on `graph.Item.ParentPath`. Malformed encodings or missing `/root:` markers are ignored rather than propagated as bogus paths.
 
 ## Case Sensitivity
 
 ### OneDrive Is Case-Insensitive
 
-Two files differing only in case cannot coexist in the same OneDrive folder. The API's path-based queries perform case-insensitive matching but can return items from incorrect paths (observed with git repository files where `v1.0.0` and `v2.0.0` produce false matches). `GetItemByPath` mitigates this by post-validating the returned item against the requested path: full reconstructed path when `parentReference.path` is present, otherwise leaf-name match only.
+Two files differing only in case cannot coexist in the same OneDrive folder. The API's path-based queries perform case-insensitive matching but can return items from incorrect paths (observed with git repository files where `v1.0.0` and `v2.0.0` produce false matches). `GetItemByPath` mitigates this by post-validating the returned item against the requested path: exact reconstructed path when `parentReference.path` is present, otherwise leaf-name match only. The leaf-only path is intentionally treated as a best-effort fallback, not as exact identity.
 
 ## Normalization Pipeline
 
