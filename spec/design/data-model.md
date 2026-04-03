@@ -152,9 +152,10 @@ before side-aware file metadata existed. On open, the store detects the old
 only the local-side fields that can be reconstructed safely from the legacy
 row. Unrecoverable remote-side metadata remains unknown rather than invented.
 
-This is intentionally not a general migration framework: there are no version
-tables, no migration chain, and no compatibility shims beyond the one
-data-repair step needed to keep old baseline rows conservative and safe.
+This is intentionally not stepwise schema-versioning machinery: there are no
+version tables, no numbered schema runners, and no compatibility shims beyond
+the one data-repair step needed to keep old baseline rows conservative and
+safe.
 
 ## Performance
 
