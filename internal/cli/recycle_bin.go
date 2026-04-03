@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/spf13/cobra"
 
@@ -81,10 +80,10 @@ func runRecycleBinList(cmd *cobra.Command, _ []string) error {
 	}
 
 	if cc.Flags.JSON {
-		return formatRecycleBinJSON(os.Stdout, items)
+		return formatRecycleBinJSON(cc.Output(), items)
 	}
 
-	return formatRecycleBinTable(os.Stdout, items)
+	return formatRecycleBinTable(cc.Output(), items)
 }
 
 func runRecycleBinRestore(cmd *cobra.Command, args []string) error {
@@ -107,7 +106,7 @@ func runRecycleBinRestore(cmd *cobra.Command, args []string) error {
 	}
 
 	if cc.Flags.JSON {
-		return printRecycleBinRestoreJSON(os.Stdout, recycleBinJSONItem{
+		return printRecycleBinRestoreJSON(cc.Output(), recycleBinJSONItem{
 			ID:      item.ID,
 			Name:    item.Name,
 			Size:    item.Size,

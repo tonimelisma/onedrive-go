@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 
 	"github.com/spf13/cobra"
 
@@ -34,38 +33,7 @@ Exit code 0 if all files verify; exit code 1 if any mismatches are found.`,
 }
 
 func runVerify(cmd *cobra.Command, _ []string) error {
-	cc := mustCLIContext(cmd.Context())
-
-	syncDir := cc.Cfg.SyncDir
-	if syncDir == "" {
-		return fmt.Errorf("sync_dir not configured — set it in the config file or add a drive with 'onedrive-go drive add'")
-	}
-
-	dbPath := cc.Cfg.StatePath()
-	if dbPath == "" {
-		return fmt.Errorf("cannot determine state DB path for drive %q", cc.Cfg.CanonicalID)
-	}
-
-	report, err := loadAndVerify(cmd.Context(), dbPath, syncDir, cc.Logger)
-	if err != nil {
-		return err
-	}
-
-	if cc.Flags.JSON {
-		if err := printVerifyJSON(os.Stdout, report); err != nil {
-			return err
-		}
-	} else {
-		if err := printVerifyTable(os.Stdout, report); err != nil {
-			return err
-		}
-	}
-
-	if len(report.Mismatches) > 0 {
-		return errVerifyMismatch
-	}
-
-	return nil
+	return newVerifyService(mustCLIContext(cmd.Context())).run(cmd.Context())
 }
 
 // loadAndVerify opens the baseline, loads it, and runs verification.

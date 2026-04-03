@@ -96,36 +96,7 @@ type statusOutput struct {
 }
 
 func runStatus(cmd *cobra.Command, _ []string) error {
-	cc := mustCLIContext(cmd.Context())
-	logger := cc.Logger
-	cfgPath := cc.CfgPath
-
-	cfg, warnings, err := config.LoadOrDefaultLenient(cfgPath, logger)
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
-
-	config.LogWarnings(warnings, logger)
-
-	if len(cfg.Drives) == 0 {
-		// Config-mandatory: no drives means check for tokens to provide smart guidance.
-		tokens := config.DiscoverTokens(logger)
-		if len(tokens) > 0 {
-			fmt.Println("No drives configured. Run 'onedrive-go drive add' to add a drive.")
-		} else {
-			fmt.Println("No accounts configured. Run 'onedrive-go login' to get started.")
-		}
-
-		return nil
-	}
-
-	accounts := buildStatusAccounts(cfg, logger)
-
-	if cc.Flags.JSON {
-		return printStatusJSON(os.Stdout, accounts)
-	}
-
-	return printStatusText(os.Stdout, accounts)
+	return newStatusService(mustCLIContext(cmd.Context())).run()
 }
 
 // accountNameReader abstracts reading display name and org name from account
