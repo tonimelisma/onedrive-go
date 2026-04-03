@@ -109,6 +109,101 @@ func TestWatch_DeleteDirectoryRemovesWatch(t *testing.T) {
 }
 
 // Validates: R-2.4.6
+func TestHandleFsEvent_SkipSymlinksIgnoresTransientSymlinkDelete(t *testing.T) {
+	t.Parallel()
+
+	syncRoot := t.TempDir()
+	writeTestFile(t, syncRoot, "real.txt", "content")
+
+	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs.SetFilterConfig(synctypes.LocalFilterConfig{
+		SkipSymlinks: true,
+	})
+
+	watcher := newRecordingFsWatcher()
+	events := make(chan synctypes.ChangeEvent, 4)
+	tree := mustOpenSyncTree(t, syncRoot)
+	linkPath := filepath.Join(syncRoot, "link.txt")
+
+	require.NoError(t, os.Symlink(filepath.Join(syncRoot, "real.txt"), linkPath))
+
+	obs.HandleFsEvent(
+		t.Context(),
+		fsnotify.Event{Name: linkPath, Op: fsnotify.Create},
+		watcher,
+		tree,
+		events,
+	)
+
+	require.NoError(t, os.Remove(linkPath))
+
+	obs.HandleFsEvent(
+		t.Context(),
+		fsnotify.Event{Name: linkPath, Op: fsnotify.Remove},
+		watcher,
+		tree,
+		events,
+	)
+
+	select {
+	case ev := <-events:
+		require.Failf(t, "unexpected event for skipped transient symlink", "%+v", ev)
+	default:
+	}
+}
+
+// Validates: R-2.4.6
+func TestSkipSymlinkDelete_RemainsIgnoredThroughSafetyScan(t *testing.T) {
+	t.Parallel()
+
+	syncRoot := t.TempDir()
+	writeTestFile(t, syncRoot, "real.txt", "content")
+	linkPath := filepath.Join(syncRoot, "link.txt")
+	require.NoError(t, os.Symlink(filepath.Join(syncRoot, "real.txt"), linkPath))
+
+	baseline := synctest.BaselineWith(
+		&synctypes.BaselineEntry{
+			Path: "real.txt", DriveID: driveid.New("d"), ItemID: "real",
+			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "content"),
+		},
+		&synctypes.BaselineEntry{
+			Path: "link.txt", DriveID: driveid.New("d"), ItemID: "link",
+			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "content"),
+		},
+	)
+
+	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs.SetFilterConfig(synctypes.LocalFilterConfig{
+		SkipSymlinks: true,
+	})
+
+	watcher := newRecordingFsWatcher()
+	tree := mustOpenSyncTree(t, syncRoot)
+	require.NoError(t, obs.AddWatchesRecursive(t.Context(), watcher, tree))
+
+	require.NoError(t, os.Remove(linkPath))
+
+	events := make(chan synctypes.ChangeEvent, 4)
+	obs.HandleFsEvent(
+		t.Context(),
+		fsnotify.Event{Name: linkPath, Op: fsnotify.Remove},
+		watcher,
+		tree,
+		events,
+	)
+
+	select {
+	case ev := <-events:
+		require.Failf(t, "unexpected delete event for skipped symlink", "%+v", ev)
+	default:
+	}
+
+	result, err := obs.FullScan(t.Context(), tree)
+	require.NoError(t, err)
+	assert.Nil(t, findEvent(result.Events, "link.txt"), "safety scan should not resurrect a delete for an excluded symlink")
+}
+
+// Validates: R-2.4.6
 func TestAddWatchesRecursive_FollowsSymlinksByDefault(t *testing.T) {
 	root := t.TempDir()
 
