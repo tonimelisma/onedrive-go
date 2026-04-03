@@ -95,6 +95,7 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.7.25: When re-uploading a modified file to Business/SharePoint, the system shall accept the unavoidable extra version created by the API (unfixed Microsoft bug) without attempting futile workarounds. [planned]
 - R-6.7.26: The system shall handle absent `lastModifiedDateTime` (null) on API-initiated deletions without error. [planned]
 - R-6.7.27: When classifying errors, the engine shall handle empty `TargetDriveID` (local-only operations like `os.ErrPermission`) by skipping remote scope routing. Only remote API errors shall require drive-aware scope routing. [verified]
+- R-6.7.28: The system shall skip malformed remote delta items that lack the identity or materialization data required to produce a safe `ChangeEvent`. Non-root items with empty `id`, non-deleted items with empty `name`, and delete entries whose path cannot be recovered from the baseline or surviving delta name/parent data shall be warned and skipped instead of emitting empty-ID or empty-path events. [verified]
 
 ## R-6.8 Network Resilience [verified]
 
