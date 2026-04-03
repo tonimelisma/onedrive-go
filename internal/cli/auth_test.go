@@ -7,6 +7,8 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -615,4 +617,52 @@ func TestPrintWhoamiAuthRequiredText(t *testing.T) {
 	assert.Contains(t, output, "no state databases")
 	assert.Contains(t, output, "No saved login was found")
 	assert.Contains(t, output, "re-check access")
+}
+
+// Validates: R-2.10.47
+func TestRunWhoamiWithContext_ClearsPersistedAuthScopeAfterSuccessfulAuthenticatedProof(t *testing.T) {
+	setTestDriveHome(t)
+
+	const graphDrivesPath = "/me/drives"
+	const primaryDrivePath = "/me/drive"
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
+	seedAuthScope(t, cid)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case "/me":
+			writeTestResponse(t, w, `{
+				"id": "user-123",
+				"displayName": "Test User",
+				"mail": "user@example.com",
+				"userPrincipalName": "user@example.com"
+			}`)
+		case graphDrivesPath:
+			writeTestResponse(t, w, `{"value":[{"id":"drive-123","name":"OneDrive","driveType":"personal","quota":{"used":1,"total":2}}]}`)
+		case primaryDrivePath:
+			writeTestResponse(t, w, `{"id":"drive-123","name":"OneDrive","driveType":"personal","quota":{"used":1,"total":2}}`)
+		default:
+			assert.Fail(t, "unexpected graph path", "path=%s", r.URL.Path)
+			http.Error(w, "unexpected graph path", http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	cc := &CLIContext{
+		Logger:       testDriveLogger(t),
+		OutputWriter: &out,
+		StatusWriter: &out,
+		CfgPath:      cfgPath,
+		GraphBaseURL: srv.URL,
+	}
+
+	require.NoError(t, runWhoamiWithContext(t.Context(), cc))
+	assert.False(t, hasPersistedAuthScope(t.Context(), cid.Email(), testDriveLogger(t)))
 }

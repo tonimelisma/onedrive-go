@@ -55,6 +55,11 @@ Default for PUT is `replace`. This is a URL parameter, not a request body field.
 
 Upload session URLs include embedded authentication. Fragment uploads do **not** require a Bearer token. Sending a Bearer token with fragment uploads can cause spurious 401 errors when the token expires during a long upload — the pre-authenticated URL would have succeeded without it.
 
+This is the only documented spurious-401 class currently captured in this
+repository. It is a pre-authenticated upload-session quirk, not evidence that
+ordinary authenticated Graph requests should be retried beyond the graph
+client's one refresh-and-retry lifecycle boundary.
+
 ## Permanent Deletion Availability
 
 `DELETE /items/{id}` with permanent deletion is only supported on OneDrive for Business and SharePoint. OneDrive Personal always sends items to the recycle bin. National clouds may not support permanent deletion regardless of account type.

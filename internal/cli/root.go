@@ -93,6 +93,7 @@ type CLIContext struct {
 	StatusWriter io.Writer                 // destination for Statusf output (default: os.Stderr)
 	CfgPath      string                    // resolved config file path (always set)
 	Env          config.EnvOverrides       // env overrides (always set in Phase 1)
+	GraphBaseURL string                    // internal test seam for live Graph command coverage
 	Cfg          *config.ResolvedDrive     // nil for auth/account commands
 	Provider     *driveops.SessionProvider // nil for auth/account commands; created in Phase 2
 	logCloser    io.Closer                 // log file closer; nil when no log file is configured
@@ -132,6 +133,10 @@ func mustCLIContext(ctx context.Context) *CLIContext {
 // Session is a shorthand for cc.Provider.Session(ctx, cc.Cfg).
 // Eliminates 7 identical boilerplate blocks across file operation commands.
 func (cc *CLIContext) Session(ctx context.Context) (*driveops.Session, error) {
+	if cc.Provider != nil && cc.GraphBaseURL != "" {
+		cc.Provider.GraphBaseURL = cc.GraphBaseURL
+	}
+
 	session, err := cc.Provider.Session(ctx, cc.Cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create drive session: %w", err)
@@ -140,7 +145,7 @@ func (cc *CLIContext) Session(ctx context.Context) (*driveops.Session, error) {
 	// Successful authenticated Graph calls prove the saved login still works.
 	// Attach a best-effort hook so live CLI commands clear stale auth:account
 	// scope blocks without treating session construction itself as proof.
-	attachDriveAuthProof(session, newAuthProofRecorder(cc.Logger))
+	attachDriveAuthProof(session, newAuthProofRecorder(cc.Logger), "drive-session")
 
 	return session, nil
 }
@@ -148,7 +153,15 @@ func (cc *CLIContext) Session(ctx context.Context) (*driveops.Session, error) {
 // newGraphClient creates a graph.Client with the standard HTTP client,
 // user-agent, and base URL. Eliminates boilerplate repeated across commands.
 func newGraphClient(ts graph.TokenSource, logger *slog.Logger) (*graph.Client, error) {
-	client, err := graph.NewClient(graph.DefaultBaseURL, defaultHTTPClient(logger), ts, logger, "onedrive-go/"+version)
+	return newGraphClientWithBaseURL("", ts, logger)
+}
+
+func newGraphClientWithBaseURL(baseURL string, ts graph.TokenSource, logger *slog.Logger) (*graph.Client, error) {
+	if baseURL == "" {
+		baseURL = graph.DefaultBaseURL
+	}
+
+	client, err := graph.NewClient(baseURL, defaultHTTPClient(logger), ts, logger, "onedrive-go/"+version)
 	if err != nil {
 		return nil, fmt.Errorf("creating graph client: %w", err)
 	}

@@ -146,21 +146,6 @@ func buildConfiguredDriveEntries(cfg *config.Config, logger *slog.Logger) []driv
 	return entries
 }
 
-func buildConfiguredAccountAuthHealth(
-	ctx context.Context,
-	cfg *config.Config,
-	logger *slog.Logger,
-) map[string]accountAuthHealth {
-	grouped, order := groupDrivesByAccount(cfg)
-	result := make(map[string]accountAuthHealth, len(order))
-
-	for _, email := range order {
-		result[email] = inspectAccountAuth(ctx, email, grouped[email], logger)
-	}
-
-	return result
-}
-
 func buildConfiguredAuthRequirements(
 	cfg *config.Config,
 	authByEmail map[string]accountAuthHealth,
@@ -202,43 +187,6 @@ func annotateConfiguredDriveAuth(entries []driveListEntry, authByEmail map[strin
 	}
 }
 
-func configuredBusinessAuthRequirements(
-	ctx context.Context,
-	cfg *config.Config,
-	accountFilter string,
-	logger *slog.Logger,
-) []accountAuthRequirement {
-	grouped, order := groupDrivesByAccount(cfg)
-	var result []accountAuthRequirement
-
-	for _, email := range order {
-		if accountFilter != "" && email != accountFilter {
-			continue
-		}
-
-		driveIDs := grouped[email]
-		if accountDriveType(driveIDs) != driveid.DriveTypeBusiness {
-			continue
-		}
-
-		health := inspectAccountAuth(ctx, email, driveIDs, logger)
-		if health.State != authStateAuthenticationNeeded {
-			continue
-		}
-
-		displayName, _ := readAccountMeta(email, driveIDs, logger)
-		result = append(result, authRequirement(
-			email,
-			displayName,
-			driveid.DriveTypeBusiness,
-			len(config.DiscoverStateDBsForEmail(email, logger)),
-			health,
-		))
-	}
-
-	return result
-}
-
 // discoverAvailableDrives queries the network for all drives accessible via
 // existing tokens. Filters out drives already in config. spSiteLimit controls
 // how many SharePoint sites are fetched (sharePointSiteLimit for default,
@@ -249,6 +197,7 @@ func discoverAvailableDrives(
 	spSiteLimit int,
 	logger *slog.Logger,
 	recorder *authProofRecorder,
+	baseURL string,
 ) ([]driveListEntry, []accountAuthRequirement) {
 	tokens := config.DiscoverTokens(logger)
 	if len(tokens) == 0 {
@@ -268,7 +217,7 @@ func discoverAvailableDrives(
 		go func() {
 			defer wg.Done()
 
-			tokenEntries, tokenAuthRequired := discoverDrivesForToken(ctx, tokenCID, cfg, spSiteLimit, logger, recorder)
+			tokenEntries, tokenAuthRequired := discoverDrivesForToken(ctx, tokenCID, cfg, spSiteLimit, logger, recorder, baseURL)
 			mu.Lock()
 			entries = append(entries, tokenEntries...)
 			authRequired = append(authRequired, tokenAuthRequired...)
@@ -288,7 +237,11 @@ func discoverAvailableDrives(
 // discoverDrivesForToken discovers all available drives for a single token.
 func discoverDrivesForToken(
 	ctx context.Context, tokenCID driveid.CanonicalID,
-	cfg *config.Config, spSiteLimit int, logger *slog.Logger, recorder *authProofRecorder,
+	cfg *config.Config,
+	spSiteLimit int,
+	logger *slog.Logger,
+	recorder *authProofRecorder,
+	baseURL string,
 ) ([]driveListEntry, []accountAuthRequirement) {
 	tokenPath := config.DriveTokenPath(tokenCID)
 	if tokenPath == "" {
@@ -302,13 +255,13 @@ func discoverDrivesForToken(
 		return nil, []accountAuthRequirement{tokenDiscoveryAuthRequirement(tokenCID, err, logger)}
 	}
 
-	client, clientErr := newGraphClient(ts, logger)
+	client, clientErr := newGraphClientWithBaseURL(baseURL, ts, logger)
 	if clientErr != nil {
 		logger.Debug("skipping token for drive discovery", "token", tokenCID.String(), "error", clientErr)
 
 		return nil, nil
 	}
-	attachAccountAuthProof(client, recorder, tokenCID.Email())
+	attachAccountAuthProof(client, recorder, tokenCID.Email(), "drive-list")
 
 	var entries []driveListEntry
 
@@ -1376,7 +1329,12 @@ func findBusinessTokens(accountFilter string, logger *slog.Logger) []driveid.Can
 
 // searchAccountSharePoint searches SharePoint sites for a single business account.
 func searchAccountSharePoint(
-	ctx context.Context, tokenCID driveid.CanonicalID, query string, logger *slog.Logger, recorder *authProofRecorder,
+	ctx context.Context,
+	tokenCID driveid.CanonicalID,
+	query string,
+	logger *slog.Logger,
+	recorder *authProofRecorder,
+	baseURL string,
 ) ([]driveSearchResult, []accountAuthRequirement) {
 	tokenPath := config.DriveTokenPath(tokenCID)
 	if tokenPath == "" {
@@ -1390,13 +1348,13 @@ func searchAccountSharePoint(
 		return nil, []accountAuthRequirement{tokenDiscoveryAuthRequirement(tokenCID, err, logger)}
 	}
 
-	client, err := newGraphClient(ts, logger)
+	client, err := newGraphClientWithBaseURL(baseURL, ts, logger)
 	if err != nil {
 		logger.Debug("skipping token for search", "token", tokenCID.String(), "error", err)
 
 		return nil, nil
 	}
-	attachAccountAuthProof(client, recorder, tokenCID.Email())
+	attachAccountAuthProof(client, recorder, tokenCID.Email(), "drive-search")
 
 	sites, err := client.SearchSites(ctx, query, sharePointSearchLimit)
 	if err != nil {
