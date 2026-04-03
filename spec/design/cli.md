@@ -8,14 +8,14 @@ Implements: R-1 [implemented], R-3.1 [verified], R-4.7 [verified], R-4.8.4 [veri
 
 The root package is a thin process entrypoint. The Cobra command tree, CLI bootstrap, output formatting, and command handlers live in `internal/cli`.
 
-`internal/cli/root.go` handles global flags (`--config`, `--drive`, `--verbose`, `--quiet`, `--debug`, `--json`), config loading via `PersistentPreRunE`, and single-drive resolution. Cobra `RunE` functions are intentionally thin: they parse command-local flags and delegate to service-layer collaborators (`authService`, `driveService`, `issuesService`, `statusService`, `syncService`, `verifyService`). `internal/cli/sync.go` stays in the same package because multi-drive sync reuses the same Phase 1 CLI context but performs its own multi-drive resolution.
+`internal/cli/root.go` handles global flags (`--config`, `--drive`, `--verbose`, `--quiet`, `--debug`, `--json`), config loading via `PersistentPreRunE`, and single-drive resolution. Cobra `RunE` functions are intentionally thin: they parse command-local flags and delegate to service-layer collaborators (`authService`, `driveService`, `issuesService`, `statusService`, `syncService`, `verifyService`). Sync-specific report rendering and watch bootstrap helpers stay in the same package, but they live outside the Cobra wiring file so `internal/cli/sync.go` remains focused on command construction and flag parsing.
 
 `CLIContext` owns two distinct output boundaries:
 
 - `OutputWriter`: primary command output (default `stdout`)
 - `StatusWriter`: progress/status output (default `stderr`)
 
-This keeps human/JSON command results separate from progress/status messages and avoids direct process-global `os.Stdout` writes inside command families.
+This keeps human/JSON command results separate from progress/status messages and avoids direct process-global stdout/stderr writes inside command families and CLI bootstrap paths.
 
 ## Ownership Contract
 
@@ -61,7 +61,7 @@ Logout proceeds in two stages. A plain `logout` removes the OAuth token and conf
 
 ## Output Formatting (`format.go`)
 
-Two modes: human-readable (default) and JSON (`--json`). Human output to stderr, structured data to stdout.
+Two modes: human-readable (default) and JSON (`--json`). Primary command output goes through `OutputWriter` (default `stdout`), while progress/status/warning text goes through `StatusWriter` (default `stderr`).
 
 All commands with `--json` support use extracted `printXxxJSON(w io.Writer, out T) error` functions that encode via `json.NewEncoder(w)` with 2-space indent. This enables unit testing via `bytes.Buffer` roundtrip without CLI wiring.
 
@@ -113,10 +113,10 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
   - `verifyService`: baseline verification flow
 - `SessionProvider` caches `TokenSource`s by token file path — multiple drives sharing an account share one `TokenSource`, preventing OAuth2 refresh token rotation races.
 - CLI handlers use `cmd.Context()` for signal propagation. Exception: upload session cancel paths use `context.Background()` because the cancel must succeed even when the original context is done.
-- Production command code writes primary output through `CLIContext.OutputWriter`, not raw `os.Stdout`. This keeps command output injectable in tests and prevents hidden process-global output dependencies.
+- Production command code writes primary output through `CLIContext.OutputWriter`, and status/warning/error text through the CLI-owned status writer boundary instead of raw process-global stdout/stderr. This keeps command output injectable in tests and prevents hidden process-global output dependencies from creeping back into services, bootstrap warnings, or sync-daemon cleanup.
 - Browser auth URLs are validated against loopback or Microsoft auth hosts before launching the platform browser command. Validation and launch failures must not echo the full auth URL or any query tokens. The remaining inline `gosec` suppression on the `exec.CommandContext` call is intentional: the command comes from a fixed allowlist, but the linter cannot prove that through the helper boundary.
 - PID file and log file opens use root-based trusted-path helpers once the CLI/config layer has resolved the target path.
-- If the configured log file cannot be opened, CLI bootstrap warns to stderr and falls back to console-only logging instead of failing the command before any user-facing work can run.
+- If the configured log file cannot be opened, CLI bootstrap warns through the CLI status writer and falls back to console-only logging instead of failing the command before any user-facing work can run.
 - The status command uses a testable service layer with narrowed interfaces (`accountMetaReader`, `tokenStateChecker`, `syncStateQuerier`), decoupling status aggregation from Cobra wiring.
 - Informational commands (`drive list`, `status`, `whoami`) use lenient config loading (`LoadOrDefaultLenient`) that collects validation errors as warnings instead of failing. This allows users to inspect their configuration and see drive status even when config has errors. Each of these commands (and `drive search`) must have `skipConfigAnnotation` on the leaf Cobra command — not just the parent — because Cobra checks annotations on the executing command, not parent commands. Safety net: `TestAnnotationTreeWalk` walks the entire command tree and fails if any leaf command with `RunE` is not explicitly classified as either a data command (no annotation) or an annotated command. New commands must be added to the `dataCommands` set or given the annotation. [verified]
 - `loadAndResolve` passes errors from `ResolveDrive` unwrapped. `ResolveDrive` already wraps `LoadOrDefault` errors with `"loading config: "`, and `MatchDrive` errors are user-facing messages that read better without a prefix (e.g., `"no drives configured — ..."` instead of `"loading config: no drives configured — ..."`). [verified]
@@ -131,4 +131,4 @@ Implements: R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-6.6.11
 - **Per-scope sub-grouping**: 507 quota and 403 permissions grouped by scope (own drive vs each shortcut). Different scopes = different owners = different user actions.
 - **Human-readable names**: Shortcut-scoped failures display local path name, not internal drive IDs.
 - **Per-error-type user action text**: Every failure includes plain-language reason + concrete user action. Scope-owner-specific variants: "Your OneDrive storage is full" (own drive) vs "Shared folder '{name}' owner's storage is full" (shortcut).
-- `internal/cli` unit test coverage target: 60%+ (currently ~51%). The service split and output-writer injection are in place, but more direct `RunE`/service black-box coverage is still needed to reach the target. [planned]
+- `internal/cli` unit test coverage target: 60%+ (currently ~53.7%). The service split and output-writer injection are in place, but more direct `RunE`/service black-box coverage is still needed to reach the target. [planned]

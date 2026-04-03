@@ -22,6 +22,25 @@ func newSyncEngine(
 	verifyDrive bool,
 	logger *slog.Logger,
 ) (*sync.Engine, error) {
+	ecfg, err := buildSyncEngineConfig(session, resolved, verifyDrive, logger)
+	if err != nil {
+		return nil, err
+	}
+
+	engine, err := sync.NewEngine(ctx, ecfg)
+	if err != nil {
+		return nil, fmt.Errorf("create sync engine: %w", err)
+	}
+
+	return engine, nil
+}
+
+func buildSyncEngineConfig(
+	session *driveops.Session,
+	resolved *config.ResolvedDrive,
+	verifyDrive bool,
+	logger *slog.Logger,
+) (*synctypes.EngineConfig, error) {
 	syncDir := resolved.SyncDir
 	if syncDir == "" {
 		return nil, fmt.Errorf("sync_dir not configured — set it in the config file or add a drive with 'onedrive-go drive add'")
@@ -64,10 +83,5 @@ func newSyncEngine(
 		ecfg.DriveVerifier = session.Meta
 	}
 
-	engine, err := sync.NewEngine(ctx, ecfg)
-	if err != nil {
-		return nil, fmt.Errorf("create sync engine: %w", err)
-	}
-
-	return engine, nil
+	return ecfg, nil
 }

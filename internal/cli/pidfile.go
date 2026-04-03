@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -21,6 +22,10 @@ const pidDirPermissions = 0o755
 // flock. Returns a cleanup function that removes the file and releases the
 // lock. If the lock cannot be acquired, another daemon is already running.
 func writePIDFile(path string) (cleanup func(), err error) {
+	return writePIDFileWithWarningWriter(path, nil)
+}
+
+func writePIDFileWithWarningWriter(path string, warningWriter io.Writer) (cleanup func(), err error) {
 	if path == "" {
 		return nil, fmt.Errorf("pid file path is empty — cannot determine data directory")
 	}
@@ -80,10 +85,10 @@ func writePIDFile(path string) (cleanup func(), err error) {
 
 	return func() {
 		if cleanupErr := removePathIfExists(path); cleanupErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: %v\n", cleanupErr)
+			writeWarningf(warningWriter, "warning: %v\n", cleanupErr)
 		}
 		if closeErr := closePIDFile(f); closeErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: %v\n", closeErr)
+			writeWarningf(warningWriter, "warning: %v\n", closeErr)
 		}
 	}, nil
 }

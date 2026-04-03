@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"sync"
 
 	"github.com/mattn/go-isatty"
@@ -154,6 +153,13 @@ func newGraphClient(ts graph.TokenSource, logger *slog.Logger) (*graph.Client, e
 // newRootCmd builds and returns the fully-assembled root command with all
 // subcommands registered. Called once from main().
 func newRootCmd() *cobra.Command {
+	return newRootCmdWithWriters(nil, nil)
+}
+
+func newRootCmdWithWriters(outputWriter, statusWriter io.Writer) *cobra.Command {
+	outputWriter = outputWriterOrDefault(outputWriter)
+	statusWriter = statusWriterOrDefault(statusWriter)
+
 	// Local flag variables — NOT globals. Cobra binds to these; Phase 1 of
 	// PersistentPreRunE copies them into CLIFlags on CLIContext.
 	var (
@@ -191,13 +197,13 @@ func newRootCmd() *cobra.Command {
 				Debug:      flagDebug,
 				Quiet:      flagQuiet,
 			}
-			logger := buildLogger(nil, flags)
+			logger := buildLoggerWithStatusWriter(nil, flags, statusWriter)
 			env := config.ReadEnvOverrides(logger)
 			cc := &CLIContext{
-				OutputWriter: os.Stdout,
+				OutputWriter: outputWriter,
 				Flags:        flags,
 				Logger:       logger,
-				StatusWriter: os.Stderr,
+				StatusWriter: statusWriter,
 				CfgPath:      config.ResolveConfigPath(env, config.CLIOverrides{ConfigPath: flags.ConfigPath}, logger),
 				Env:          env,
 			}
@@ -211,7 +217,7 @@ func newRootCmd() *cobra.Command {
 
 				cc.Cfg = resolved
 
-				dualLogger, closer := buildLoggerDual(resolved, flags)
+				dualLogger, closer := buildLoggerDualWithStatusWriter(resolved, flags, statusWriter)
 				cc.Logger = dualLogger
 				cc.logCloser = closer
 
@@ -274,7 +280,11 @@ func addRootSubcommands(cmd *cobra.Command) {
 // process exit code. Keeping exit behavior here leaves the root package as
 // a thin entrypoint while preserving the existing verify-mismatch contract.
 func Main(args []string) int {
-	cmd := newRootCmd()
+	return mainWithWriters(args, nil, nil)
+}
+
+func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) int {
+	cmd := newRootCmdWithWriters(outputWriter, statusWriter)
 	cmd.SetArgs(args)
 
 	if err := cmd.Execute(); err != nil {
@@ -282,7 +292,7 @@ func Main(args []string) int {
 			return 1
 		}
 
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		writeWarningf(statusWriter, "Error: %v\n", err)
 
 		return 1
 	}
@@ -340,14 +350,22 @@ func loadAndResolve(
 // override it because CLI flags always win. The flags are mutually exclusive
 // (enforced by Cobra).
 func buildLogger(cfg *config.ResolvedDrive, flags CLIFlags) *slog.Logger {
-	level := resolveLogLevel(cfg, flags)
+	return buildLoggerWithStatusWriter(cfg, flags, nil)
+}
+
+func buildLoggerWithStatusWriter(cfg *config.ResolvedDrive, flags CLIFlags, statusWriter io.Writer) *slog.Logger {
+	level := resolveLogLevelWithStatusWriter(cfg, flags, statusWriter)
 	opts := &slog.HandlerOptions{Level: level}
 
-	return slog.New(buildHandler(os.Stderr, cfg, opts))
+	return slog.New(buildHandlerWithStatusWriter(statusWriterOrDefault(statusWriter), cfg, opts, statusWriter))
 }
 
 // resolveLogLevel determines the effective slog.Level from config and CLI flags.
 func resolveLogLevel(cfg *config.ResolvedDrive, flags CLIFlags) slog.Level {
+	return resolveLogLevelWithStatusWriter(cfg, flags, nil)
+}
+
+func resolveLogLevelWithStatusWriter(cfg *config.ResolvedDrive, flags CLIFlags, statusWriter io.Writer) slog.Level {
 	level := slog.LevelWarn
 
 	// Config-based log level (lower priority than CLI flags).
@@ -355,7 +373,7 @@ func resolveLogLevel(cfg *config.ResolvedDrive, flags CLIFlags) slog.Level {
 		if mapped, ok := parseLogLevel(cfg.LogLevel); ok {
 			level = mapped
 		} else {
-			fmt.Fprintf(os.Stderr, "warning: unknown log level %q, using warn\n", cfg.LogLevel)
+			writeWarningf(statusWriter, "warning: unknown log level %q, using warn\n", cfg.LogLevel)
 		}
 	}
 
@@ -381,6 +399,15 @@ func resolveLogLevel(cfg *config.ResolvedDrive, flags CLIFlags) slog.Level {
 // For "auto" format, TTY detection checks w itself (not hardcoded stderr),
 // so log_file redirection will correctly select JSON.
 func buildHandler(w io.Writer, cfg *config.ResolvedDrive, opts *slog.HandlerOptions) slog.Handler {
+	return buildHandlerWithStatusWriter(w, cfg, opts, w)
+}
+
+func buildHandlerWithStatusWriter(
+	w io.Writer,
+	cfg *config.ResolvedDrive,
+	opts *slog.HandlerOptions,
+	statusWriter io.Writer,
+) slog.Handler {
 	format := logFormatText
 	if cfg != nil && cfg.LogFormat != "" {
 		format = cfg.LogFormat
@@ -398,9 +425,7 @@ func buildHandler(w io.Writer, cfg *config.ResolvedDrive, opts *slog.HandlerOpti
 	case logFormatText:
 		return slog.NewTextHandler(w, opts)
 	default:
-		if err := writef(w, "warning: unknown log format %q, using text\n", format); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: unknown log format %q, using text\n", format)
-		}
+		writeWarningf(statusWriter, "warning: unknown log format %q, using text\n", format)
 
 		return slog.NewTextHandler(w, opts)
 	}
@@ -481,23 +506,34 @@ func (m *multiHandler) WithGroup(name string) slog.Handler {
 // and the file (JSON format, config-driven level). Returns an io.Closer for
 // the log file (nil when no file is used).
 func buildLoggerDual(cfg *config.ResolvedDrive, flags CLIFlags) (*slog.Logger, io.Closer) {
+	return buildLoggerDualWithStatusWriter(cfg, flags, nil)
+}
+
+func buildLoggerDualWithStatusWriter(
+	cfg *config.ResolvedDrive, flags CLIFlags, statusWriter io.Writer,
+) (*slog.Logger, io.Closer) {
 	if cfg == nil || cfg.LogFile == "" {
-		return buildLogger(cfg, flags), nil
+		return buildLoggerWithStatusWriter(cfg, flags, statusWriter), nil
 	}
 
 	f, err := logfile.Open(cfg.LogFile, cfg.LogRetentionDays)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: cannot open log file %q: %v\n", cfg.LogFile, err)
+		writeWarningf(statusWriter, "warning: cannot open log file %q: %v\n", cfg.LogFile, err)
 
-		return buildLogger(cfg, flags), nil
+		return buildLoggerWithStatusWriter(cfg, flags, statusWriter), nil
 	}
 
 	// Console handler: CLI-flag-driven level, config-driven format.
-	consoleLevel := resolveLogLevel(cfg, flags)
-	consoleHandler := buildHandler(os.Stderr, cfg, &slog.HandlerOptions{Level: consoleLevel})
+	consoleLevel := resolveLogLevelWithStatusWriter(cfg, flags, statusWriter)
+	consoleHandler := buildHandlerWithStatusWriter(
+		statusWriterOrDefault(statusWriter),
+		cfg,
+		&slog.HandlerOptions{Level: consoleLevel},
+		statusWriter,
+	)
 
 	// File handler: config-driven level, always JSON for machine parsing.
-	fileLevel := resolveLogLevel(cfg, CLIFlags{})
+	fileLevel := resolveLogLevelWithStatusWriter(cfg, CLIFlags{}, statusWriter)
 	fileHandler := slog.NewJSONHandler(f, &slog.HandlerOptions{Level: fileLevel})
 
 	return slog.New(&multiHandler{handlers: []slog.Handler{consoleHandler, fileHandler}}), f

@@ -8,6 +8,28 @@ import (
 	"time"
 )
 
+func outputWriterOrDefault(w io.Writer) io.Writer {
+	if w == nil {
+		return os.Stdout
+	}
+
+	return w
+}
+
+func statusWriterOrDefault(w io.Writer) io.Writer {
+	if w == nil {
+		return os.Stderr
+	}
+
+	return w
+}
+
+func writeWarningf(w io.Writer, format string, args ...any) {
+	if err := writef(statusWriterOrDefault(w), format, args...); err != nil {
+		return
+	}
+}
+
 func writef(w io.Writer, format string, args ...any) error {
 	_, err := fmt.Fprintf(w, format, args...)
 	if err != nil {
@@ -60,11 +82,20 @@ func (cc *CLIContext) StatusError() error {
 
 // Output returns the configured primary output writer, defaulting to stdout.
 func (cc *CLIContext) Output() io.Writer {
-	if cc == nil || cc.OutputWriter == nil {
-		return os.Stdout
+	if cc == nil {
+		return outputWriterOrDefault(nil)
 	}
 
-	return cc.OutputWriter
+	return outputWriterOrDefault(cc.OutputWriter)
+}
+
+// Status returns the configured status/progress writer, defaulting to stderr.
+func (cc *CLIContext) Status() io.Writer {
+	if cc == nil {
+		return statusWriterOrDefault(nil)
+	}
+
+	return statusWriterOrDefault(cc.StatusWriter)
 }
 
 // Size unit constants for human-readable formatting.
