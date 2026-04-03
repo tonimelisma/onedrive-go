@@ -161,6 +161,72 @@ func TestGetItem_DecodesParentReferencePath(t *testing.T) {
 	assert.Equal(t, "Team Docs/Specs #1", item.ParentPath)
 }
 
+// Validates: R-6.7.23
+func TestGetItem_IgnoresInvalidParentReferencePathEncoding(t *testing.T) {
+	srv := newSingleItemServer(t, `{
+		"id": "bad-parent-path",
+		"name": "notes.txt",
+		"createdDateTime": "2024-01-01T00:00:00Z",
+		"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+		"parentReference": {
+			"id": "docs-folder",
+			"driveId": "d",
+			"path": "/drives/d/root:/Team%20Docs/%ZZ"
+		}
+	}`)
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.GetItem(t.Context(), driveid.New("d"), "bad-parent-path")
+	require.NoError(t, err)
+
+	assert.Empty(t, item.ParentPath)
+}
+
+// Validates: R-6.7.23
+func TestGetItem_IgnoresParentReferencePathWithoutRootMarker(t *testing.T) {
+	srv := newSingleItemServer(t, `{
+		"id": "bad-root-marker",
+		"name": "notes.txt",
+		"createdDateTime": "2024-01-01T00:00:00Z",
+		"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+		"parentReference": {
+			"id": "docs-folder",
+			"driveId": "d",
+			"path": "/drives/d/items/docs-folder"
+		}
+	}`)
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.GetItem(t.Context(), driveid.New("d"), "bad-root-marker")
+	require.NoError(t, err)
+
+	assert.Empty(t, item.ParentPath)
+}
+
+// Validates: R-6.7.23
+func TestGetItem_RootParentReferencePathNormalizesToEmptyParentPath(t *testing.T) {
+	srv := newSingleItemServer(t, `{
+		"id": "root-child",
+		"name": "notes.txt",
+		"createdDateTime": "2024-01-01T00:00:00Z",
+		"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+		"parentReference": {
+			"id": "root",
+			"driveId": "d",
+			"path": "/drives/d/root:"
+		}
+	}`)
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.GetItem(t.Context(), driveid.New("d"), "root-child")
+	require.NoError(t, err)
+
+	assert.Empty(t, item.ParentPath)
+}
+
 // Validates: R-6.7.16
 func TestGetItem_InvalidTimestamp(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -1008,6 +1074,82 @@ func TestGetItemByPath_UsesDecodedParentReferencePath(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "Team Docs/Shared Reports", item.ParentPath)
+}
+
+func TestItemExactRootRelativePath(t *testing.T) {
+	tests := []struct {
+		name     string
+		item     *Item
+		wantPath string
+		wantOK   bool
+	}{
+		{
+			name: "exact path with parent",
+			item: &Item{
+				Name:       "Quarterly Report #1.txt",
+				ParentPath: "Team Docs/Shared Reports",
+			},
+			wantPath: "Team Docs/Shared Reports/Quarterly Report #1.txt",
+			wantOK:   true,
+		},
+		{
+			name: "missing parent path is not exact",
+			item: &Item{
+				Name: "notes.txt",
+			},
+			wantPath: "",
+			wantOK:   false,
+		},
+		{
+			name:     "nil item is not exact",
+			item:     nil,
+			wantPath: "",
+			wantOK:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotPath, gotOK := itemExactRootRelativePath(tt.item)
+			assert.Equal(t, tt.wantPath, gotPath)
+			assert.Equal(t, tt.wantOK, gotOK)
+		})
+	}
+}
+
+func TestItemBestEffortRootRelativePath(t *testing.T) {
+	tests := []struct {
+		name     string
+		item     *Item
+		wantPath string
+	}{
+		{
+			name: "exact path with parent",
+			item: &Item{
+				Name:       "Quarterly Report #1.txt",
+				ParentPath: "Team Docs/Shared Reports",
+			},
+			wantPath: "Team Docs/Shared Reports/Quarterly Report #1.txt",
+		},
+		{
+			name: "leaf fallback",
+			item: &Item{
+				Name: "notes.txt",
+			},
+			wantPath: "notes.txt",
+		},
+		{
+			name:     "nil item",
+			item:     nil,
+			wantPath: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.wantPath, itemBestEffortRootRelativePath(tt.item))
+		})
+	}
 }
 
 func TestGetItemByPath_EncodesSpecialChars(t *testing.T) {

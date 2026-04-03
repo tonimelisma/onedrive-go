@@ -49,7 +49,7 @@ All API quirks handled at the graph boundary — downstream code never sees them
 - Timestamp validation that preserves unknown timestamps as zero time instead of fabricating a replacement
 - `parentReference.path` is never returned in delta — items tracked by ID
 - `parentReference.path` is URL-decoded and normalized to a root-relative `Item.ParentPath` in non-delta responses
-- `GetItemByPath` post-validates Graph's response against the requested path. When `parentReference.path` is present the client compares the full reconstructed path case-insensitively; otherwise it falls back to leaf-name validation before accepting the result.
+- `GetItemByPath` post-validates Graph's response against the requested path. Internal path helpers distinguish exact root-relative paths (when `parentReference.path` survived normalization) from best-effort leaf-only fallbacks. When the exact parent path is unavailable the client logs the fallback at Debug and validates only the leaf name before accepting the result.
 - Personal drive discovery is normalized through `/me/drive`: when `/me/drives` returns one or more `driveType == "personal"` entries, the client replaces all of them with the single authoritative primary drive from `GET /me/drive` before returning the list to callers.
 - Exact transient 403 retry on `GET /me/drives` when the Graph code chain contains `accessDenied`
 - Exact transient 404 retry on `GET /drives/{driveID}/items/root/children` when the Graph code chain contains `itemNotFound`

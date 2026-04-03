@@ -96,42 +96,24 @@ func (c *Client) GetItemByPath(ctx context.Context, driveID driveid.ID, remotePa
 		return nil, err
 	}
 
-	if !itemMatchesRequestedPath(item, remotePath) {
-		resolvedPath := resolvedItemPath(item)
+	if exactPath, ok := itemExactRootRelativePath(item); ok {
+		if strings.EqualFold(exactPath, remotePath) {
+			return item, nil
+		}
 
-		return nil, fmt.Errorf("graph: requested path %q resolved to %q: %w", remotePath, resolvedPath, ErrNotFound)
+		return nil, fmt.Errorf("graph: requested path %q resolved to %q: %w", remotePath, exactPath, ErrNotFound)
+	}
+
+	c.logger.Debug("path lookup missing exact parent path, using leaf fallback",
+		slog.String("requested_path", remotePath),
+		slog.String("resolved_leaf", item.Name),
+	)
+
+	if !strings.EqualFold(item.Name, pathLeaf(remotePath)) {
+		return nil, fmt.Errorf("graph: requested path %q resolved to %q: %w", remotePath, itemBestEffortRootRelativePath(item), ErrNotFound)
 	}
 
 	return item, nil
-}
-
-// itemMatchesRequestedPath validates a path-based Graph lookup result against
-// the requested remote path. Graph path queries are case-insensitive and can
-// occasionally return items from the wrong parent, so we verify the full path
-// when parentReference.path is available and otherwise fall back to the leaf.
-func itemMatchesRequestedPath(item *Item, requestedPath string) bool {
-	if item.ParentPath != "" {
-		return strings.EqualFold(resolvedItemPath(item), requestedPath)
-	}
-
-	return strings.EqualFold(item.Name, pathLeaf(requestedPath))
-}
-
-func resolvedItemPath(item *Item) string {
-	if item.ParentPath == "" {
-		return item.Name
-	}
-
-	return item.ParentPath + "/" + item.Name
-}
-
-func pathLeaf(remotePath string) string {
-	lastSlash := strings.LastIndex(remotePath, "/")
-	if lastSlash == -1 {
-		return remotePath
-	}
-
-	return remotePath[lastSlash+1:]
 }
 
 // ListChildren returns all children of a folder, handling pagination automatically.
