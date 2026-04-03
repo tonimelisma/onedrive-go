@@ -36,12 +36,25 @@ Planned work: search `spec/` for `[planned]`. Reference docs: `spec/reference/`.
 
 ## Eng Philosophy
 
-- Prefer large, long-term solutions over quick fixes. Do big re-architectures early, not late.
-- Never settle for "good enough for now."
+- Prefer durable solutions for authority boundaries, state ownership, and side-effect boundaries over expedient patches.
 - Never treat current implementation as a reason to avoid change.
 - The architecture should be extremely robust and full of defensive coding practices.
-- Modules and packages can be rethought at a whim if a better design appears. No code is sacred.
+- Change modules and packages deliberately when it reduces duplicated authority, hidden coupling, or unclear ownership. No code is sacred, but churn without architectural payoff is not a virtue.
 - App has zero users and hasn't launched yet. There is zero backwards-compatibility requirement anywhere: config format, token/cache files, state DB/schema, CLI flags, command output, and internal APIs can all change. Prefer the best design now and remove compatibility shims rather than carrying old architecture forward.
+
+### Architecture Priorities
+
+Optimize first for a codebase that is easy to reason about, easy to test, and explicit about ownership.
+
+- **Explicit ownership of truth, mutation, and side effects.** Every persisted fact, derived view, runtime control path, and external effect must have a clear owner. If two modules can both "really" decide or mutate the same thing, the design is wrong.
+- **Functional core, imperative shell.** Planning, classification, validation, resolution, and safety policy should be deterministic and side-effect free. Filesystem, network, database, clock, process, and environment effects stay at the edges behind explicit boundaries.
+- **Single-owner mutable runtime state.** For coordinators such as watch loops, worker pools, retries, and lifecycle control, prefer one owner over shared mutable state. In concurrent code, single-writer discipline beats defensive mutation spread across goroutines.
+- **High cohesion, low coupling.** Packages should own one axis of change and one slice of authority. Avoid pass-through layers, convenience imports, and sideways dependencies that blur responsibility.
+- **Least-privilege capabilities.** Filesystem roots, arbitrary local paths, HTTP dispatch, token files, and state stores should be accessed through narrow capability objects or interfaces, not ambient access to `os`, `http`, or global process state.
+- **DRY applies to knowledge, not syntax.** Do not duplicate facts, policy, invariants, or lifecycle rules. Small code duplication is acceptable when it preserves clearer ownership and avoids the wrong abstraction.
+- **Domain types may own behavior.** Keep invariant-preserving behavior with the data it constrains when that improves clarity. Avoid both god objects and anemic "data only" types that force policy into distant helpers.
+- **Composition and dependency inversion are tools, not rituals.** Compose small collaborators with explicit dependencies. Introduce interfaces at consuming boundaries for I/O, policy, or coordination seams; do not manufacture interfaces around every concrete type.
+- **Prefer immutability in decision logic, ownership in runtime logic.** Pure planning inputs and outputs should be treated as values. For long-lived coordinators, optimize for explicit ownership and controlled mutation rather than blanket copying.
 
 ### Performance and Simplicity
 
@@ -71,9 +84,9 @@ Project-specific consequences:
 
 ### General
 
-- Write lots of comments explaining **why**, not **what**
-- Functions do one thing
-- Accept interfaces / return structs
+- Write comments for **why**, invariants, ownership rules, concurrency contracts, and non-obvious tradeoffs. Do not narrate the code line by line.
+- Functions do one thing, with side effects explicit in their name, signature, or owning type
+- Return concrete types by default. Define small interfaces in the consuming package at I/O, policy, or coordination seams
 - No package-level mutable state
 - No magic numbers — use named constants near their usage
 - Always use named fields in struct literals — positional initialization breaks silently when fields are added
@@ -88,9 +101,10 @@ Project-specific consequences:
 ### Error Handling
 
 - **Wrap with `fmt.Errorf("verb noun: %w", err)`** — the message reads as a chain: `"sync file: upload chunk: HTTP POST: connection refused"`. Verb-noun, not "failed to" or "error while".
+- **Error boundaries are explicit.** Translate Graph, filesystem, SQLite, and library errors into domain semantics at the boundary that understands them. Callers should branch on domain errors or decisions, not transport details leaking upward.
 - **Errors cross exactly one boundary before being wrapped.** Don't double-wrap: if `graph.Client` wraps the HTTP error, `driveops` adds its own context but doesn't re-wrap the inner error. Each layer adds *its* perspective: what it was trying to do.
 - **Sentinel errors are for callers that branch on them.** If no caller checks `errors.Is(err, ErrFoo)`, it doesn't need to be a sentinel — a formatted string is fine.
-- **Never swallow errors.** If you handle an error (retry, fallback, skip), log it. If you can't handle it, return it. The only silent discard allowed is when the doc comment on the function explicitly says so and why.
+- **Never swallow errors.** If you handle an error (retry, fallback, skip), convert it into an explicit domain decision, durable record, or returned error. Log at the boundary that owns the decision, and avoid duplicate logging of the same failure as it crosses layers. The only silent discard allowed is when the doc comment on the function explicitly says so and why.
 - **Panics are bugs, not flow control.** Panic only for programmer errors (invariant violations, impossible states). Never panic on external input — network responses, file system results, user config. Recover only at goroutine boundaries to prevent crashes, and log the panic as Error.
 - **Partial failure is a first-class concept.** Operations that process multiple items return both results and errors. Never stop-on-first-error for bulk operations — collect, report, continue.
 
@@ -159,7 +173,7 @@ Project-specific consequences:
   For bulk sync operations, scope-level events and end-of-pass failure
   summaries replace per-item warnings. Individual items logged at Debug.
 - **Error**: Terminal failures — request failed after all retries, unrecoverable auth
-- Minimum per code path: function entry with key params, state transitions, error paths, external calls. Never log secrets.
+- Minimum per meaningful boundary: lifecycle events, state transitions, retries, external calls, and terminal error paths. Do not log routine function entry by default. Never log secrets.
 
 ### Test Style
 
