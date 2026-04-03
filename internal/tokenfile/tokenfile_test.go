@@ -200,3 +200,25 @@ func TestSave_NoMetaInOutput(t *testing.T) {
 	_, hasMeta := raw["meta"]
 	assert.False(t, hasMeta, "saved token file should not contain a meta key")
 }
+
+func TestDelete_RemovesFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "token.json")
+
+	require.NoError(t, Save(path, testToken()))
+	require.NoError(t, Delete(path))
+
+	_, err := localpath.Stat(path)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestDelete_FileNotFound(t *testing.T) {
+	t.Parallel()
+
+	err := Delete(filepath.Join(t.TempDir(), "missing-token.json"))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNotFound)
+}

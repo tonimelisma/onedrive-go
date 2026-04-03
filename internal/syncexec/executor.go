@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -31,7 +31,7 @@ type ExecutorConfig struct {
 	items     synctypes.ItemClient
 	downloads driveops.Downloader
 	uploads   driveops.Uploader
-	syncRoot  string     // absolute path to local sync directory
+	syncTree  *synctree.Root
 	driveID   driveid.ID // per-drive context (B-068)
 	logger    *slog.Logger
 
@@ -65,13 +65,13 @@ type Executor struct {
 // specific drive and sync root. Use NewExecution to create per-call executors.
 func NewExecutorConfig(
 	items synctypes.ItemClient, downloads driveops.Downloader, uploads driveops.Uploader,
-	syncRoot string, driveID driveid.ID, logger *slog.Logger,
+	syncTree *synctree.Root, driveID driveid.ID, logger *slog.Logger,
 ) *ExecutorConfig {
 	cfg := &ExecutorConfig{
 		items:     items,
 		downloads: downloads,
 		uploads:   uploads,
-		syncRoot:  syncRoot,
+		syncTree:  syncTree,
 		driveID:   driveID,
 		logger:    logger,
 		nowFunc:   time.Now,
@@ -163,19 +163,18 @@ func (e *Executor) ExecuteFolderCreate(ctx context.Context, action *synctypes.Ac
 
 // createLocalFolder creates a directory on the local filesystem.
 func (e *Executor) createLocalFolder(action *synctypes.Action) synctypes.Outcome {
-	absPath, err := ContainedPath(e.syncRoot, action.Path)
-	if err != nil {
-		return e.failedOutcome(action, synctypes.ActionFolderCreate, err)
-	}
-
-	if err := os.MkdirAll(absPath, localDirPerms); err != nil {
-		return e.failedOutcome(action, synctypes.ActionFolderCreate, fmt.Errorf("creating local folder %s: %w", action.Path, err))
+	if err := e.syncTree.MkdirAll(action.Path, localDirPerms); err != nil {
+		return e.failedOutcome(
+			action,
+			synctypes.ActionFolderCreate,
+			fmt.Errorf("creating local folder %s: %w", action.Path, normalizeSyncTreePathError(err)),
+		)
 	}
 
 	// Set mtime from remote if available.
 	if action.View != nil && action.View.Remote != nil && action.View.Remote.Mtime != 0 {
 		mtime := time.Unix(0, action.View.Remote.Mtime)
-		if err := os.Chtimes(absPath, mtime, mtime); err != nil {
+		if err := e.syncTree.Chtimes(action.Path, mtime, mtime); err != nil {
 			e.logger.Warn("failed to set folder mtime", slog.String("path", action.Path), slog.String("error", err.Error()))
 		}
 	}
@@ -231,23 +230,21 @@ func (e *Executor) ExecuteMove(ctx context.Context, action *synctypes.Action) sy
 
 // ExecuteLocalMove renames a local file/folder.
 func (e *Executor) ExecuteLocalMove(action *synctypes.Action) synctypes.Outcome {
-	oldAbs, err := ContainedPath(e.syncRoot, action.OldPath)
-	if err != nil {
-		return e.failedOutcome(action, synctypes.ActionLocalMove, err)
-	}
-
-	newAbs, err := ContainedPath(e.syncRoot, action.Path)
-	if err != nil {
-		return e.failedOutcome(action, synctypes.ActionLocalMove, err)
-	}
-
 	// Ensure parent directory exists.
-	if err := os.MkdirAll(filepath.Dir(newAbs), localDirPerms); err != nil {
-		return e.failedOutcome(action, synctypes.ActionLocalMove, fmt.Errorf("creating parent for move target %s: %w", action.Path, err))
+	if err := e.syncTree.MkdirAll(filepath.Dir(action.Path), localDirPerms); err != nil {
+		return e.failedOutcome(
+			action,
+			synctypes.ActionLocalMove,
+			fmt.Errorf("creating parent for move target %s: %w", action.Path, normalizeSyncTreePathError(err)),
+		)
 	}
 
-	if err := os.Rename(oldAbs, newAbs); err != nil {
-		return e.failedOutcome(action, synctypes.ActionLocalMove, fmt.Errorf("renaming %s -> %s: %w", action.OldPath, action.Path, err))
+	if err := e.syncTree.Rename(action.OldPath, action.Path); err != nil {
+		return e.failedOutcome(
+			action,
+			synctypes.ActionLocalMove,
+			fmt.Errorf("renaming %s -> %s: %w", action.OldPath, action.Path, normalizeSyncTreePathError(err)),
+		)
 	}
 
 	e.logger.Debug("local move complete", slog.String("from", action.OldPath), slog.String("to", action.Path))
@@ -371,6 +368,18 @@ func ContainedPath(syncRoot, relPath string) (string, error) {
 	}
 
 	return absPath, nil
+}
+
+func normalizeSyncTreePathError(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	if strings.Contains(err.Error(), "escapes root") || strings.Contains(err.Error(), "must not be absolute") {
+		return errors.Join(synctypes.ErrPathEscapesSyncRoot, err)
+	}
+
+	return err
 }
 
 func resolveParentForContainment(parentDir string) (string, bool, error) {

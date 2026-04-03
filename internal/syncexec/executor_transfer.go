@@ -22,9 +22,9 @@ const maxHashRetries = 2
 // safety, hash verification with retry, and atomic rename. Exported for use
 // by the engine's conflict resolution path.
 func (e *Executor) ExecuteDownload(ctx context.Context, action *synctypes.Action) synctypes.Outcome {
-	targetPath, err := ContainedPath(e.syncRoot, action.Path)
+	targetPath, err := e.syncTree.Abs(action.Path)
 	if err != nil {
-		return e.failedOutcome(action, synctypes.ActionDownload, err)
+		return e.failedOutcome(action, synctypes.ActionDownload, normalizeSyncTreePathError(err))
 	}
 
 	driveID := e.resolveDriveID(action)
@@ -109,9 +109,9 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *synctypes.Action) 
 		return e.failedOutcome(action, synctypes.ActionUpload, err)
 	}
 
-	localPath, err := ContainedPath(e.syncRoot, action.Path)
+	localPath, err := e.syncTree.Abs(action.Path)
 	if err != nil {
-		return e.failedOutcome(action, synctypes.ActionUpload, err)
+		return e.failedOutcome(action, synctypes.ActionUpload, normalizeSyncTreePathError(err))
 	}
 
 	name := filepath.Base(action.Path)

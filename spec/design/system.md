@@ -1,6 +1,6 @@
 # System Architecture
 
-Implements: R-6.2.1 [verified], R-6.2.2 [verified], R-6.3.1 [verified]
+Implements: R-6.2.1 [verified], R-6.2.2 [verified], R-6.3.1 [verified], R-6.10.5 [verified], R-6.10.7 [verified]
 
 ## Package Structure
 
@@ -63,6 +63,7 @@ Local Observer  ──┘         │                │            │         
 3. **Pure-function planning.** The planner has no I/O. `Plan(changes, baseline, mode, safety) → ActionPlan`. Every decision is deterministic and reproducible.
 4. **Watch-primary.** `sync --watch` is the primary runtime mode. All components serve both one-shot and watch modes.
 5. **Interface-driven testability.** All I/O (filesystem, network, database) is behind interfaces.
+6. **Boundary-owned error translation.** Each boundary normalizes the failures it understands once, and downstream layers consume that shared contract. See [error-model.md](error-model.md).
 
 ### Rationale
 
@@ -86,6 +87,9 @@ For detailed module design, see:
 | Sync control plane | [sync-control-plane.md](sync-control-plane.md) |
 | Sync store | [sync-store.md](sync-store.md) |
 | Data model (schema) | [data-model.md](data-model.md) |
+| Error model | [error-model.md](error-model.md) |
+| Threat model | [threat-model.md](threat-model.md) |
+| Degraded mode | [degraded-mode.md](degraded-mode.md) |
 | CLI commands | [cli.md](cli.md) |
 
 ## Verification Policy
@@ -93,9 +97,11 @@ For detailed module design, see:
 Static verification is a first-class architectural constraint, not a best-effort hygiene step.
 
 - `golangci-lint` runs with `default: none`; every enabled linter is an explicit policy choice.
+- `depguard` enforces architectural import boundaries, and `forbidigo` bans raw filesystem `os.*` calls outside the explicit boundary packages (`fsroot`, `synctree`, `localpath`).
 - `nolintlint` requires both a specific linter name and a short justification. Unused exclusions are surfaced with `linters.exclusions.warn-unused`.
 - Inline suppressions are reserved for the small documented exception set where the code is correct and the linter cannot express that shape cleanly: interface-mandated receiver shapes, validated subprocess/request dispatch that the linter cannot follow across helper boundaries, non-cryptographic jitter, `driver.Valuer` SQL `NULL` semantics, fixed placeholder SQL, and intentional test fixtures/mocks.
 - `cmd/devtool` is the single repo-owned verification and worktree-bootstrap entry point. `go run ./cmd/devtool verify` exposes explicit profiles: `default` (default local run: format, lint, build, race+coverage, coverage gate, repo-consistency checks, fast E2E), `public`, `e2e`, `e2e-full`, and `integration`.
+- Repo-consistency checks in `cmd/devtool verify` enforce the repo-level architecture constraints linters do not express cleanly: governed design docs must carry ownership contracts, required cross-cutting docs must exist and be linked from this document, and `internal/graph/client_preauth.go` remains the only raw production `http.Client.Do` boundary.
 - `go run ./cmd/devtool worktree add --path <path> --branch <branch>` is the canonical way to create new worktrees from `origin/main`. It applies `.worktreeinclude` immediately so the new worktree is ready for fast E2E and local development.
 - Fast E2E is mandatory in the default local `default` profile. The harness loads `.env` and `.testdata` itself; verification does not silently skip fast E2E based on exported shell variables.
 - The nightly/manual full E2E suite is layered on top of the fast suite. Its files use `//go:build e2e && e2e_full`, so the canonical invocation is the verifier's `e2e-full` profile, which sets both tags and preserves the fast-then-full ordering.
@@ -106,13 +112,11 @@ Static verification is a first-class architectural constraint, not a best-effort
 
 ## Planned Improvements
 
-- Threat model document covering all attack surfaces and guards. [planned]
 - Resource consumption guarantees documented per component. [planned]
 - Lock ordering contract: every mutex documented in a hierarchy. `tracker.go` has nested `mu` → `cyclesMu`. [planned]
 - Audit all `_ = ...` patterns in production code for silently ignored errors. [planned]
 - Add value assertions after bare `assert.NoError` test calls (42+ instances could mask incorrect results). [planned]
 - Audit deferred `Close` on write paths — errors universally ignored. [planned]
-- Degraded-mode behavior guarantees documented (what happens when components fail). [planned]
 - Evaluate `sync` → `graph` error coupling — decouple via interface if warranted. [planned]
 - Evaluate deeper `internal/sync/` runtime package splitting after the control-plane split. [planned]
 - Continue expanding direct handler/service coverage over the new `internal/cli/` service split so the package reaches its 60%+ coverage target. [planned]

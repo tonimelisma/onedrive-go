@@ -2,7 +2,7 @@
 
 GOVERNS: internal/syncexec/executor.go, internal/syncexec/executor_conflict.go, internal/syncexec/executor_delete.go, internal/syncexec/executor_transfer.go, internal/syncexec/worker.go, internal/syncdispatch/dep_graph.go, internal/syncdispatch/active_scopes.go, internal/syncdispatch/scope.go, internal/syncdispatch/delete_counter.go, internal/localtrash/trash.go, status.go
 
-Implements: R-2.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.4.4 [verified], R-6.4.5 [verified], R-6.4.6 [verified], R-6.5.3 [verified], R-6.7.25 [planned], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.16 [verified], R-2.10.41 [verified], R-2.10.42 [verified], R-2.10.43 [verified], R-2.10.44 [verified], R-2.14.2 [verified]
+Implements: R-2.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.4.4 [verified], R-6.4.5 [verified], R-6.4.6 [verified], R-6.5.3 [verified], R-6.7.25 [planned], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.16 [verified], R-2.10.41 [verified], R-2.10.42 [verified], R-2.10.43 [verified], R-2.10.44 [verified], R-2.14.2 [verified], R-6.3.4 [verified], R-6.10.6 [verified]
 
 ## Executor (`executor.go`)
 
@@ -12,6 +12,15 @@ Thin action dispatcher. Takes an `ActionPlan` and dispatches actions to workers
 via `DepGraph` plus the engine's active-scope admission logic. Actions are
 dispatched based on dependency satisfaction, not fixed phase ordering. Workers
 produce individual `Outcome` values committed per-action by the SyncStore.
+
+## Ownership Contract
+
+- Owns: Action dispatch, dependency tracking, worker execution, local trash interaction, and per-action success commits.
+- Does Not Own: Planning, retry scheduling, scope activation policy, or durable failure classification.
+- Source of Truth: The `ActionPlan`, engine-owned ready/done channels, and baseline/outcome state supplied by the store boundary.
+- Allowed Side Effects: Filesystem mutation under rooted capabilities, Graph transfer calls, local trash operations, and store success commits.
+- Mutable Runtime Owner: The engine owns dispatch state (`DepGraph`, ready channel, done signal). `WorkerPool` owns worker goroutines and the results channel it closes in `Stop()`.
+- Error Boundary: Execution returns raw `WorkerResult` values and driveops/graph errors upward. The engine owns mapping those results into [error-model.md](error-model.md) classes.
 
 Action methods call the graph client directly and return `Outcome` — no retry loop, no error classification, no sleep. The following were removed as part of the retry-to-transport refactoring: `withRetry()`, `classifyError()`, `classifyStatusCode()`, `calcExecBackoff()`, `errClass` type + constants, `sleepFunc` field. Hash mismatch retry (`downloadWithHashRetry`) is unchanged — it's a data integrity mechanism orthogonal to the retry redesign.
 
@@ -140,6 +149,13 @@ Implements: R-2.10.16 [verified], R-6.8.12 [verified]
 Flat pool of `transfer_workers` goroutines. Decoupled from dispatch infrastructure: accepts `readyCh <-chan *TrackedAction` (actions to execute) and `doneCh <-chan struct{}` (shutdown signal) as constructor parameters instead of holding a reference to the dispatch infrastructure. Workers are pure executors — they execute actions, persist success outcomes, and send `WorkerResult` to the engine. Workers never call `DepGraph.Complete()` — the engine owns all completion decisions.
 
 `WorkerResult` carries target drive identity (`TargetDriveID`, `ShortcutKey`) from the action, `RetryAfter` from `GraphError`, the full `error` for classification, `ActionID` for DepGraph routing, `IsTrial` and `TrialScopeKey ScopeKey` for scope trial routing. The engine classifies and routes each result.
+
+### Mutable Runtime Ownership
+
+- `DepGraph` is engine-owned mutable state. Execution code never mutates it behind the engine's back.
+- `WorkerPool` owns worker goroutine lifecycle and closes `results` exactly once after all workers exit.
+- Workers own only per-action local state plus the cancellation function stored on their current `TrackedAction`.
+- There are no long-lived mutexes in `syncexec`; coordination flows through explicit channel ownership instead of shared mutable maps.
 
 ### Channel And Timer Ownership
 

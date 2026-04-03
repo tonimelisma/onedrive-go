@@ -94,3 +94,20 @@ func Save(path string, tok *oauth2.Token) (err error) {
 
 	return nil
 }
+
+// Delete removes a token file from disk.
+// Returns ErrNotFound if the file does not exist.
+func Delete(path string) error {
+	root, name, err := fsroot.OpenPath(path)
+	if err != nil {
+		return fmt.Errorf("tokenfile: opening token root: %w", err)
+	}
+
+	if err := root.Remove(name); errors.Is(err, fs.ErrNotExist) {
+		return ErrNotFound
+	} else if err != nil {
+		return fmt.Errorf("tokenfile: removing %s: %w", path, err)
+	}
+
+	return nil
+}

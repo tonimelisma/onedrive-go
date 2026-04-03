@@ -19,6 +19,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -67,8 +68,10 @@ func newTestExecutorConfig(t *testing.T, items *executorMockItemClient, dl *exec
 	syncRoot := t.TempDir()
 	driveID := driveid.New(synctest.TestDriveID)
 	logger := synctest.TestLogger(t)
+	syncTree, err := synctree.Open(syncRoot)
+	require.NoError(t, err)
 
-	cfg := NewExecutorConfig(items, dl, ul, syncRoot, driveID, logger)
+	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger)
 	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
 	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) })
 

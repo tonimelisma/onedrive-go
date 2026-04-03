@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net"
 	"net/url"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -20,6 +19,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 // pendingTokenFile is the filename for the temporary token saved during login
@@ -97,7 +97,7 @@ func findTokenFallback(account string, logger *slog.Logger) driveid.CanonicalID 
 
 	personalPath := config.DriveTokenPath(personalID)
 	if personalPath != "" {
-		if _, err := os.Stat(personalPath); err == nil {
+		if managedPathExists(personalPath) {
 			logger.Debug("token fallback: found personal token", "path", personalPath)
 
 			return personalID
@@ -108,7 +108,7 @@ func findTokenFallback(account string, logger *slog.Logger) driveid.CanonicalID 
 
 	businessPath := config.DriveTokenPath(businessID)
 	if businessPath != "" {
-		if _, err := os.Stat(businessPath); err == nil {
+		if managedPathExists(businessPath) {
 			logger.Debug("token fallback: found business token", "path", businessPath)
 
 			return businessID
@@ -307,7 +307,7 @@ func discoverAccount(
 // Creates the destination directory if needed.
 func moveToken(src, dst string) error {
 	dir := filepath.Dir(dst)
-	if err := os.MkdirAll(dir, tokenDirPerms); err != nil {
+	if err := localpath.MkdirAll(dir, tokenDirPerms); err != nil {
 		baseErr := fmt.Errorf("creating token directory: %w", err)
 		if cleanupErr := removePathIfExists(src); cleanupErr != nil {
 			return errors.Join(baseErr, cleanupErr)
@@ -316,7 +316,7 @@ func moveToken(src, dst string) error {
 		return baseErr
 	}
 
-	if err := os.Rename(src, dst); err != nil {
+	if err := localpath.Rename(src, dst); err != nil {
 		baseErr := fmt.Errorf("moving token to final path: %w", err)
 		if cleanupErr := removePathIfExists(src); cleanupErr != nil {
 			return errors.Join(baseErr, cleanupErr)
@@ -444,10 +444,8 @@ func discoverOrphanedEmails(logger *slog.Logger) []string {
 
 		// Check if token still exists — if so, not orphaned.
 		tokenPath := config.DriveTokenPath(cid)
-		if tokenPath != "" {
-			if _, err := os.Stat(tokenPath); err == nil {
-				continue
-			}
+		if tokenPath != "" && managedPathExists(tokenPath) {
+			continue
 		}
 
 		seen[email] = true
@@ -606,13 +604,13 @@ func removeOrphanedPath(
 	infoMsg string,
 	onRemoved func(path string) error,
 ) error {
-	if err := os.Remove(path); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-
+	removed, err := removeManagedPath(path)
+	if err != nil {
 		logger.Warn(warnMsg, "path", path, "error", err)
 		return fmt.Errorf("removing %s: %w", path, err)
+	}
+	if !removed {
+		return nil
 	}
 
 	logger.Info(infoMsg, "path", path)
@@ -694,9 +692,10 @@ func purgeSingleDrive(cfgPath string, canonicalID driveid.CanonicalID, logger *s
 	// don't have their own profile files).
 	profilePath := config.AccountFilePath(canonicalID)
 	if profilePath != "" {
-		if err := os.Remove(profilePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		removed, err := removeManagedPath(profilePath)
+		if err != nil {
 			logger.Warn("failed to remove account profile", "path", profilePath, "error", err)
-		} else if err == nil {
+		} else if removed {
 			logger.Info("removed account profile", "path", profilePath)
 		}
 	}
@@ -914,10 +913,8 @@ func findLoggedOutAccounts(cfg *config.Config, authenticatedEmail string, logger
 
 		// Check if token file exists — if it does, this isn't a logged-out account.
 		tokenPath := config.DriveTokenPath(profileCID)
-		if tokenPath != "" {
-			if _, statErr := os.Stat(tokenPath); statErr == nil {
-				continue
-			}
+		if tokenPath != "" && managedPathExists(tokenPath) {
+			continue
 		}
 
 		// Load profile for display name.

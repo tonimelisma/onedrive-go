@@ -200,7 +200,7 @@ func (tm *TransferManager) DownloadToFile(
 	// Set mtime on the partial file before atomic rename.
 	if opts.RemoteMtime != 0 {
 		mtime := time.Unix(0, opts.RemoteMtime)
-		if err := os.Chtimes(partialPath, mtime, mtime); err != nil {
+		if err := localpath.Chtimes(partialPath, mtime, mtime); err != nil {
 			tm.logger.Warn("failed to set mtime on partial",
 				slog.String("target", targetPath),
 				slog.String("error", err.Error()),

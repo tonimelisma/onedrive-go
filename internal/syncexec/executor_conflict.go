@@ -23,22 +23,26 @@ func (e *Executor) ExecuteConflict(ctx context.Context, action *synctypes.Action
 		return e.ExecuteEditDeleteConflict(ctx, action)
 	}
 
-	absPath, err := ContainedPath(e.syncRoot, action.Path)
+	absPath, err := e.syncTree.Abs(action.Path)
 	if err != nil {
-		return e.failedOutcome(action, synctypes.ActionConflict, err)
+		return e.failedOutcome(action, synctypes.ActionConflict, normalizeSyncTreePathError(err))
 	}
 
 	// Step 1: Rename local to conflict copy (if it exists).
 	conflictPath := ConflictCopyPath(absPath, e.nowFunc())
+	conflictRel, err := e.syncTree.Rel(conflictPath)
+	if err != nil {
+		return e.failedOutcome(action, synctypes.ActionConflict, normalizeSyncTreePathError(err))
+	}
 	localExists := true
 
-	if err := os.Rename(absPath, conflictPath); err != nil {
+	if err := e.syncTree.Rename(action.Path, conflictRel); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// Local file absent — skip rename, proceed to download.
 			localExists = false
 		} else {
 			return e.failedOutcome(action, synctypes.ActionConflict,
-				fmt.Errorf("renaming to conflict copy %s: %w", filepath.Base(conflictPath), err))
+				fmt.Errorf("renaming to conflict copy %s: %w", filepath.Base(conflictPath), normalizeSyncTreePathError(err)))
 		}
 	}
 
@@ -54,7 +58,7 @@ func (e *Executor) ExecuteConflict(ctx context.Context, action *synctypes.Action
 	if !downloadOutcome.Success {
 		// Download failed — restore local from conflict copy if we moved it.
 		if localExists {
-			if restoreErr := os.Rename(conflictPath, absPath); restoreErr != nil {
+			if restoreErr := e.syncTree.Rename(conflictRel, action.Path); restoreErr != nil {
 				e.logger.Error("failed to restore local after download failure",
 					slog.String("path", action.Path),
 					slog.String("error", restoreErr.Error()),

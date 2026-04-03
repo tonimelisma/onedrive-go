@@ -2,7 +2,7 @@
 
 GOVERNS: internal/multisync/*.go, sync.go
 
-Implements: R-2.8.1 [verified], R-3.4.2 [verified]
+Implements: R-2.8.1 [verified], R-3.4.2 [verified], R-6.3.4 [verified], R-6.10.6 [verified]
 
 ## Overview
 
@@ -17,6 +17,15 @@ not answer:
 
 `sync.go` is the CLI entrypoint for this layer. `internal/multisync` is the
 runtime package that implements it.
+
+## Ownership Contract
+
+- Owns: Multi-drive sync lifecycle, drive-set resolution for sync, per-drive engine startup/shutdown, reload diffing, and per-drive panic/error isolation.
+- Does Not Own: Single-drive observation, planning, execution, retry/trial policy, or sync-store persistence semantics.
+- Source of Truth: The current `config.Holder` snapshot plus the `runners` map owned by the watch-mode orchestrator loop.
+- Allowed Side Effects: Session creation, engine construction/closure, SIGHUP consumption, per-drive goroutine startup, and control-plane logging.
+- Mutable Runtime Owner: `RunWatch` owns the live `runners` map. Each `watchRunner` owns one cancel function and one completion channel for exactly one drive.
+- Error Boundary: The control plane converts drive startup, panic, and watch-runner failures into isolated `DriveReport` or log outcomes. Engine-internal errors remain inside the single-drive boundary.
 
 ## Boundary To The Engine
 
@@ -73,6 +82,16 @@ Removed or newly paused drives are stopped and closed. Newly added or newly
 resumed drives are started. Already-running drives remain running. When a
 timed pause has already expired by reload time, the config keys are cleaned up
 but the running drive is not bounced.
+
+## Runtime Ownership
+
+The control plane has one mutable runtime structure in watch mode: the active
+runner set.
+
+- The `RunWatch` select loop is the single writer for the `runners` map.
+- `startWatchRunner` creates one goroutine per running drive. That goroutine owns closing the runner's `done` channel exactly once on exit.
+- `SIGHUPChan` is an external read-only input. The control plane never closes it.
+- The control plane itself owns no timers; reload and shutdown are event-driven through context cancellation and SIGHUP delivery.
 
 ## `DriveRunner`
 

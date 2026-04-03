@@ -2,7 +2,16 @@
 
 GOVERNS: internal/syncobserve/observer_local.go, internal/syncobserve/observer_local_handlers.go, internal/syncobserve/observer_local_collisions.go, internal/syncobserve/observer_remote.go, internal/syncobserve/item_converter.go, internal/syncobserve/scanner.go, internal/syncobserve/buffer.go, internal/syncobserve/inotify_linux.go, internal/syncobserve/inotify_other.go
 
-Implements: R-2.1.2 [verified], R-2.4 [implemented], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.15 [planned], R-6.7.16 [planned], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [planned], R-6.7.24 [verified], R-2.11 [implemented], R-2.11.5 [implemented], R-2.12 [verified], R-2.13.1 [verified]
+Implements: R-2.1.2 [verified], R-2.4 [implemented], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.15 [planned], R-6.7.16 [planned], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [planned], R-6.7.24 [verified], R-2.11 [implemented], R-2.11.5 [implemented], R-2.12 [verified], R-2.13.1 [verified], R-6.3.4 [verified], R-6.10.6 [verified]
+
+## Ownership Contract
+
+- Owns: Local and remote observation, change normalization, skipped-item production, event buffering, and observation-only safety filters.
+- Does Not Own: Planning, sync-store writes, retry scheduling, or permission-scope lifecycle decisions.
+- Source of Truth: Live filesystem events, full scans, Graph delta responses, and the baseline snapshot supplied by the engine for read-only comparison.
+- Allowed Side Effects: Filesystem walking and hashing under `synctree`, Graph observation calls, watch registration, and buffered event emission.
+- Mutable Runtime Owner: `LocalObserver` watch loops own local watcher state, timer maps, and hash-request queues. `RemoteObserver.Watch` owns remote polling state, including the current delta token. `Buffer` owns its pending-path map under `Buffer.mu`.
+- Error Boundary: Observation converts local/remote read quirks into `ChangeEvent`, `SkippedItem`, and observation sentinels such as `ErrGone`. The engine decides persistence, retry, and user-facing consequences via [error-model.md](error-model.md).
 
 ## Remote Observer (`observer_remote.go`)
 
@@ -97,6 +106,15 @@ Extracted filesystem walker for full-scan mode. Produces change events by walkin
 Collects events from both observers, deduplicates, debounces (default 2 seconds), and produces `[]PathChanges` batches grouped by path. Thread-safe (mutex-protected). Move events are dual-keyed: stored at new path AND synthetic delete at old path.
 
 `FlushImmediate` for one-shot mode (no debounce wait).
+
+## Runtime Ownership
+
+Observation has a few explicit mutable-runtime owners:
+
+- `Buffer.mu` guards exactly `pending` and `notify`. The debounce goroutine owns the lifetime of the output channel created by `FlushDebounced`.
+- `LocalObserver` owns `PendingTimers`, `HashRequests`, and the filesystem watcher for one watch run. Timer callbacks feed back into that observer-owned watch loop; they do not mutate engine state directly.
+- `RemoteObserver` owns `deltaToken` for one watch run. The watch loop is the only writer; helper calls may read it concurrently through `CurrentDeltaToken`.
+- The engine owns the outer observer goroutines and cancellation context. Observation code never starts detached background work.
 
 ## Permission Interaction
 

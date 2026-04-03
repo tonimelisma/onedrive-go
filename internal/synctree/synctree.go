@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type rootHandle interface {
@@ -50,12 +51,14 @@ func (h *osRootHandle) Close() error {
 }
 
 type rootOps struct {
-	openRoot func(dir string) (rootHandle, error)
-	mkdirAll func(path string, perm os.FileMode) error
-	remove   func(path string) error
-	rename   func(oldpath, newpath string) error
-	lstat    func(path string) (os.FileInfo, error)
-	glob     func(pattern string) ([]string, error)
+	openRoot  func(dir string) (rootHandle, error)
+	mkdirAll  func(path string, perm os.FileMode) error
+	remove    func(path string) error
+	removeAll func(path string) error
+	rename    func(oldpath, newpath string) error
+	chtimes   func(path string, atime time.Time, mtime time.Time) error
+	lstat     func(path string) (os.FileInfo, error)
+	glob      func(pattern string) ([]string, error)
 }
 
 func defaultRootOps() rootOps {
@@ -69,11 +72,13 @@ func defaultRootOps() rootOps {
 
 			return &osRootHandle{root: root}, nil
 		},
-		mkdirAll: os.MkdirAll,
-		remove:   os.Remove,
-		rename:   os.Rename,
-		lstat:    os.Lstat,
-		glob:     filepath.Glob,
+		mkdirAll:  os.MkdirAll,
+		remove:    os.Remove,
+		removeAll: os.RemoveAll,
+		rename:    os.Rename,
+		chtimes:   os.Chtimes,
+		lstat:     os.Lstat,
+		glob:      filepath.Glob,
 	}
 }
 
@@ -361,6 +366,19 @@ func (r *Root) Remove(rel string) error {
 	return nil
 }
 
+func (r *Root) RemoveAll(rel string) error {
+	path, err := r.Abs(rel)
+	if err != nil {
+		return err
+	}
+
+	if err := r.ops.removeAll(path); err != nil {
+		return fmt.Errorf("removing tree %s: %w", path, err)
+	}
+
+	return nil
+}
+
 func (r *Root) RemoveAbs(abs string) error {
 	rel, err := r.Rel(abs)
 	if err != nil {
@@ -382,6 +400,19 @@ func (r *Root) Rename(srcRel, dstRel string) error {
 
 	if err := r.ops.rename(srcPath, dstPath); err != nil {
 		return fmt.Errorf("renaming %s to %s: %w", srcPath, dstPath, err)
+	}
+
+	return nil
+}
+
+func (r *Root) Chtimes(rel string, atime time.Time, mtime time.Time) error {
+	path, err := r.Abs(rel)
+	if err != nil {
+		return err
+	}
+
+	if err := r.ops.chtimes(path, atime, mtime); err != nil {
+		return fmt.Errorf("setting times on %s: %w", path, err)
 	}
 
 	return nil

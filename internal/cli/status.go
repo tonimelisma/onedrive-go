@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -314,7 +313,7 @@ func driveState(d *config.Drive, tokenState string) string {
 // entry count, and unresolved conflict count. Returns nil if the DB doesn't exist
 // (drive never synced) or if an error occurs opening it.
 func querySyncState(statePath string, logger *slog.Logger) *syncStateInfo {
-	if _, err := os.Stat(statePath); err != nil {
+	if !managedPathExists(statePath) {
 		return nil
 	}
 

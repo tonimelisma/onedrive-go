@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -56,6 +57,28 @@ func TestReadDir(t *testing.T) {
 	require.Len(t, entries, 2)
 }
 
+func TestCreateTempAndChtimes(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+
+	temp, err := CreateTemp(base, "localpath-*.tmp")
+	require.NoError(t, err)
+	tempPath := temp.Name()
+	require.NoError(t, temp.Close())
+
+	infoBefore, err := Stat(tempPath)
+	require.NoError(t, err)
+
+	targetTime := time.Date(2025, 6, 15, 10, 30, 0, 0, time.UTC)
+	require.NoError(t, Chtimes(tempPath, targetTime, targetTime))
+
+	infoAfter, err := Stat(tempPath)
+	require.NoError(t, err)
+	assert.True(t, infoAfter.ModTime().Equal(targetTime), "mtime should be updated")
+	assert.Equal(t, infoBefore.Name(), infoAfter.Name())
+}
+
 func TestOpenSuccess(t *testing.T) {
 	t.Parallel()
 
@@ -83,8 +106,8 @@ func TestSymlinkTargetsBehaveLikeOrdinaryPaths(t *testing.T) {
 
 	dirLink := filepath.Join(base, "dir-link")
 	fileLink := filepath.Join(base, "file-link.txt")
-	require.NoError(t, os.Symlink(targetDir, dirLink))
-	require.NoError(t, os.Symlink(targetFile, fileLink))
+	require.NoError(t, Symlink(targetDir, dirLink))
+	require.NoError(t, Symlink(targetFile, fileLink))
 
 	info, err := Stat(dirLink)
 	require.NoError(t, err)
@@ -101,6 +124,27 @@ func TestSymlinkTargetsBehaveLikeOrdinaryPaths(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, file.Close())
 	assert.Equal(t, "through-link", string(data))
+}
+
+func TestWriteFileAndRemoveAll(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	targetDir := filepath.Join(base, "nested")
+	targetFile := filepath.Join(targetDir, "file.txt")
+
+	require.NoError(t, MkdirAll(targetDir, 0o700))
+	require.NoError(t, WriteFile(targetFile, []byte("written"), 0o600))
+
+	data, err := ReadFile(targetFile)
+	require.NoError(t, err)
+	assert.Equal(t, "written", string(data))
+
+	require.NoError(t, RemoveAll(targetDir))
+
+	_, err = Stat(targetDir)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestOpenAndReadDirMissingPath(t *testing.T) {
