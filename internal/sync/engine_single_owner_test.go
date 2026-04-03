@@ -1142,8 +1142,9 @@ func TestRetrierSweep_BatchLimit(t *testing.T) {
 	// Align store clock with engine clock so next_retry_at is computed
 	// relative to the same fixed time.
 	eng.baseline.SetNowFunc(eng.nowFn)
+	eng.retryBatchLimit = 64
 
-	total := retryBatchSize + 5
+	total := eng.effectiveRetryBatchLimit() + 5
 
 	// Seed remote_state rows so createEventFromDB can build full events.
 	// Each download failure needs a corresponding remote_state row.
@@ -1161,8 +1162,9 @@ func TestRetrierSweep_BatchLimit(t *testing.T) {
 
 	require.NoError(t, eng.baseline.CommitObservation(ctx, obs, "", driveID))
 
-	// Seed retryBatchSize + 5 sync_failures with past next_retry_at.
-	// delayFn returns -1 minute so next_retry_at = now - 1m (in the past).
+	// Seed one full test-sized retry batch plus a few extra sync_failures with
+	// past next_retry_at so the retrier must re-arm for a second sweep. delayFn
+	// returns -1 minute so next_retry_at = now - 1m (in the past).
 	for i := range total {
 		require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 			Path:      fmt.Sprintf("file-%d.txt", i),
@@ -1181,9 +1183,9 @@ func TestRetrierSweep_BatchLimit(t *testing.T) {
 
 	outbox := runTestRetrierSweep(t, eng, ctx)
 
-	// Should dispatch exactly retryBatchSize items.
-	assert.Len(t, outbox, retryBatchSize,
-		"sweep should be batch-limited to retryBatchSize")
+	// Should dispatch exactly one test-sized retry batch.
+	assert.Len(t, outbox, eng.effectiveRetryBatchLimit(),
+		"sweep should be batch-limited to the configured retry batch size")
 
 	// retryTimerCh should have a signal for remaining items.
 	select {

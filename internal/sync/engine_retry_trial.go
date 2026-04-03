@@ -21,9 +21,9 @@ const (
 	engineWorkRetry
 	engineWorkTrial
 
-	// retryBatchSize limits how many sync_failures are processed per retry
+	// defaultRetryBatchSize limits how many sync_failures are processed per retry
 	// sweep so a large durable retry queue cannot monopolize the watch loop.
-	retryBatchSize = 1024
+	defaultRetryBatchSize = 1024
 )
 
 type engineWorkRequest struct {
@@ -258,9 +258,10 @@ func (rt *watchRuntime) runRetrierSweep(
 
 	request := engineWorkRequest{reason: engineWorkRetry}
 	dispatchedRows := 0
+	batchLimit := rt.engine.effectiveRetryBatchLimit()
 
 	for i := range rows {
-		if dispatchedRows >= retryBatchSize {
+		if dispatchedRows >= batchLimit {
 			rt.kickRetrySweepNow()
 			break
 		}
@@ -306,6 +307,14 @@ func (rt *watchRuntime) runRetrierSweep(
 	)
 	rt.armRetryTimer(ctx)
 	return dispatch
+}
+
+func (e *Engine) effectiveRetryBatchLimit() int {
+	if e.retryBatchLimit > 0 {
+		return e.retryBatchLimit
+	}
+
+	return defaultRetryBatchSize
 }
 
 // remoteStateToChangeEvent converts a sync_failures retry row backed by
@@ -673,7 +682,7 @@ func (flow *engineFlow) clearFailureOnSuccess(ctx context.Context, r *synctypes.
 
 func (flow *engineFlow) applyFailurePersistence(
 	ctx context.Context,
-	decision ResultDecision,
+	decision *ResultDecision,
 	r *synctypes.WorkerResult,
 ) {
 	switch decision.Persistence {

@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // Validates: R-6.10.5
@@ -67,8 +69,73 @@ func TestInspector_ReadStatusSnapshot(t *testing.T) {
 	assert.Equal(t, "1500", snapshot.SyncMetadata["last_sync_duration_ms"])
 	assert.Equal(t, "network timeout", snapshot.SyncMetadata["last_sync_error"])
 	assert.Equal(t, 1, snapshot.BaselineEntryCount)
-	assert.Equal(t, 1, snapshot.UnresolvedConflicts)
-	assert.Equal(t, 1, snapshot.ActionableFailures)
 	assert.Equal(t, 1, snapshot.PendingSyncItems)
-	assert.Equal(t, 1, snapshot.RetryingFailures)
+	assert.Equal(t, 1, snapshot.Issues.ConflictCount())
+	assert.Equal(t, 1, snapshot.Issues.ActionableCount())
+	assert.Equal(t, 0, snapshot.Issues.RemoteBlockedCount())
+	assert.Equal(t, 0, snapshot.Issues.AuthRequiredCount())
+	assert.Equal(t, 2, snapshot.Issues.VisibleTotal())
+	assert.Equal(t, 1, snapshot.Issues.RetryingCount())
+	assert.Equal(t, []IssueGroupCount{
+		{Key: synctypes.SummaryConflictUnresolved, Count: 1},
+		{Key: synctypes.SummarySyncFailure, Count: 1},
+	}, snapshot.Issues.Groups)
+}
+
+// Validates: R-2.14.3, R-2.10.47
+func TestInspector_ReadStatusSnapshot_IssueSummary(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	store, err := NewSyncStore(t.Context(), dbPath, newTestLogger(t))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, store.Close(context.Background()))
+	})
+
+	ctx := t.Context()
+
+	_, err = store.DB().ExecContext(ctx, `INSERT INTO conflicts
+		(id, drive_id, item_id, path, conflict_type, detected_at, resolution)
+		VALUES ('c1', ?, 'item-2', '/conflict.txt', 'edit_edit', 1, 'unresolved')`, testDriveID)
+	require.NoError(t, err)
+
+	_, err = store.DB().ExecContext(ctx, `INSERT INTO sync_failures
+		(path, drive_id, direction, action_type, failure_role, category, issue_type, scope_key, failure_count, first_seen_at, last_seen_at)
+		VALUES
+		('/blocked/a.txt', ?, 'upload', 'upload', 'held', 'transient', ?, 'perm:remote:Shared/Docs', 1, 1, 1),
+		('/blocked/b.txt', ?, 'upload', 'upload', 'held', 'transient', ?, 'perm:remote:Shared/Docs', 1, 1, 1),
+		('/invalid:name.txt', ?, 'upload', 'upload', 'item', 'actionable', ?, '', 1, 1, 1),
+		('/retry.txt', ?, 'upload', 'upload', 'item', 'transient', '', '', 4, 1, 1)`,
+		testDriveID, synctypes.IssueSharedFolderBlocked,
+		testDriveID, synctypes.IssueSharedFolderBlocked,
+		testDriveID, synctypes.IssueInvalidFilename,
+		testDriveID,
+	)
+	require.NoError(t, err)
+
+	_, err = store.DB().ExecContext(ctx, `INSERT INTO scope_blocks
+		(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count)
+		VALUES ('auth:account', ?, 'none', 1, 0, 0, 0, 0)`, synctypes.IssueUnauthorized)
+	require.NoError(t, err)
+
+	inspector, err := OpenInspector(dbPath, newTestLogger(t))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, inspector.Close())
+	})
+
+	snapshot := inspector.ReadStatusSnapshot(ctx)
+	assert.Equal(t, 4, snapshot.Issues.VisibleTotal())
+	assert.Equal(t, 1, snapshot.Issues.ConflictCount())
+	assert.Equal(t, 1, snapshot.Issues.ActionableCount())
+	assert.Equal(t, 1, snapshot.Issues.RemoteBlockedCount())
+	assert.Equal(t, 1, snapshot.Issues.AuthRequiredCount())
+	assert.Equal(t, 1, snapshot.Issues.RetryingCount())
+	assert.ElementsMatch(t, []IssueGroupCount{
+		{Key: synctypes.SummaryConflictUnresolved, Count: 1},
+		{Key: synctypes.SummarySharedFolderWritesBlocked, Count: 1},
+		{Key: synctypes.SummaryInvalidFilename, Count: 1},
+		{Key: synctypes.SummaryAuthenticationRequired, Count: 1},
+	}, snapshot.Issues.Groups)
 }

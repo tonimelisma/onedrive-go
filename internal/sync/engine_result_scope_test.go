@@ -1,9 +1,11 @@
 package sync
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -220,6 +222,33 @@ func TestHandleBootstrapWorkerResult_UnauthorizedStopsBootstrap(t *testing.T) {
 	})
 }
 
+// Validates: R-6.8.16, R-6.6.11
+func TestRecordFailure_LogsSummaryKey(t *testing.T) {
+	t.Parallel()
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+
+	result := &synctypes.WorkerResult{
+		Path:       "service.txt",
+		ActionType: synctypes.ActionUpload,
+		HTTPStatus: http.StatusServiceUnavailable,
+		Err:        graph.ErrServerError,
+		ErrMsg:     "service unavailable",
+	}
+	decision := classifyResult(result)
+	require.Equal(t, synctypes.SummaryServiceOutage, decision.SummaryKey)
+
+	eng.flow.recordFailure(t.Context(), &decision, result, func(_ int) time.Duration {
+		return time.Second
+	})
+
+	output := logBuf.String()
+	assert.Contains(t, output, "summary_key=service_outage")
+	assert.Contains(t, output, "issue_type=service_outage")
+}
+
 // Validates: R-2.10.5
 func TestHandleWatchWorkerResult_UnauthorizedStopsWatchLoop(t *testing.T) {
 	t.Parallel()
@@ -410,6 +439,7 @@ type classifyResultCase struct {
 	result            synctypes.WorkerResult
 	wantClass         failures.Class
 	wantScope         synctypes.ScopeKey
+	wantSummaryKey    synctypes.SummaryKey
 	wantPersistence   resultPersistenceMode
 	wantPermission    permissionFlow
 	wantScopeDetect   bool
@@ -427,6 +457,7 @@ func assertClassifyResultCases(t *testing.T, tests []classifyResultCase) {
 			got := classifyResult(&tt.result)
 			assert.Equal(t, tt.wantClass, got.Class, "resultClass mismatch")
 			assert.Equal(t, tt.wantScope, got.ScopeKey, "scope key mismatch")
+			assert.Equal(t, tt.wantSummaryKey, got.SummaryKey, "summary key mismatch")
 			assert.Equal(t, tt.wantPersistence, got.Persistence, "persistence mismatch")
 			assert.Equal(t, tt.wantPermission, got.PermissionFlow, "permission flow mismatch")
 			assert.Equal(t, tt.wantScopeDetect, got.RunScopeDetection, "scope detection mismatch")
@@ -451,12 +482,14 @@ func TestClassifyResult_LifecycleAndAuth(t *testing.T) {
 			name:            "401_unauthorized",
 			result:          synctypes.WorkerResult{HTTPStatus: http.StatusUnauthorized, Err: graph.ErrUnauthorized},
 			wantClass:       resultFatal,
+			wantSummaryKey:  synctypes.SummaryAuthenticationRequired,
 			wantPersistence: persistActionableFailure,
 		},
 		{
 			name:            "403_forbidden",
 			result:          synctypes.WorkerResult{HTTPStatus: http.StatusForbidden, Err: graph.ErrForbidden},
 			wantClass:       resultSkip,
+			wantSummaryKey:  synctypes.SummaryRemotePermissionDenied,
 			wantPersistence: persistActionableFailure,
 			wantPermission:  permissionFlowRemote403,
 		},
@@ -487,21 +520,21 @@ func TestClassifyResult_RemoteRetriesAndSkips(t *testing.T) {
 	}
 
 	assertClassifyResultCases(t, []classifyResultCase{
-		{name: "404_not_found", result: synctypes.WorkerResult{HTTPStatus: http.StatusNotFound, Err: graph.ErrNotFound}, wantClass: resultRequeue, wantPersistence: persistTransientFailure, wantScopeDetect: true},
-		{name: "408_request_timeout", result: synctypes.WorkerResult{HTTPStatus: http.StatusRequestTimeout, Err: errors.New("timeout")}, wantClass: resultRequeue, wantPersistence: persistTransientFailure, wantScopeDetect: true},
-		{name: "412_precondition_failed", result: synctypes.WorkerResult{HTTPStatus: http.StatusPreconditionFailed, Err: errors.New("etag mismatch")}, wantClass: resultRequeue, wantPersistence: persistTransientFailure, wantScopeDetect: true},
-		{name: "423_locked", result: synctypes.WorkerResult{HTTPStatus: http.StatusLocked, Err: graph.ErrLocked}, wantClass: resultRequeue, wantPersistence: persistTransientFailure, wantScopeDetect: true},
-		{name: "429_too_many_requests", result: synctypes.WorkerResult{HTTPStatus: http.StatusTooManyRequests, Err: graph.ErrThrottled}, wantClass: resultScopeBlock, wantScope: synctypes.SKThrottleAccount(), wantPersistence: persistTransientFailure, wantScopeDetect: true},
-		{name: "400_invalid_request_is_skip", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: genericInvalidRequestErr}, wantClass: resultSkip, wantPersistence: persistActionableFailure},
-		{name: "400_object_handle_message_only_is_skip", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: legacyOutageErr}, wantClass: resultSkip, wantPersistence: persistActionableFailure},
-		{name: "400_object_handle_wrong_code_is_skip", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: wrongCodeOutageErr}, wantClass: resultSkip, wantPersistence: persistActionableFailure},
-		{name: "500_internal_server_error", result: synctypes.WorkerResult{HTTPStatus: http.StatusInternalServerError, Err: graph.ErrServerError}, wantClass: resultRequeue, wantPersistence: persistTransientFailure, wantScopeDetect: true},
-		{name: "502_bad_gateway", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadGateway, Err: graph.ErrServerError}, wantClass: resultRequeue, wantPersistence: persistTransientFailure, wantScopeDetect: true},
-		{name: "503_service_unavailable", result: synctypes.WorkerResult{HTTPStatus: http.StatusServiceUnavailable, Err: graph.ErrServerError}, wantClass: resultRequeue, wantPersistence: persistTransientFailure, wantScopeDetect: true},
-		{name: "504_gateway_timeout", result: synctypes.WorkerResult{HTTPStatus: http.StatusGatewayTimeout, Err: graph.ErrServerError}, wantClass: resultRequeue, wantPersistence: persistTransientFailure, wantScopeDetect: true},
-		{name: "509_bandwidth_limit", result: synctypes.WorkerResult{HTTPStatus: 509, Err: graph.ErrServerError}, wantClass: resultRequeue, wantPersistence: persistTransientFailure, wantScopeDetect: true},
-		{name: "409_conflict", result: synctypes.WorkerResult{HTTPStatus: http.StatusConflict, Err: graph.ErrConflict}, wantClass: resultSkip, wantPersistence: persistActionableFailure},
-		{name: "other_4xx_falls_to_skip", result: synctypes.WorkerResult{HTTPStatus: http.StatusMethodNotAllowed, Err: graph.ErrMethodNotAllowed}, wantClass: resultSkip, wantPersistence: persistActionableFailure},
+		{name: "404_not_found", result: synctypes.WorkerResult{HTTPStatus: http.StatusNotFound, Err: graph.ErrNotFound}, wantClass: resultRequeue, wantSummaryKey: synctypes.SummarySyncFailure, wantPersistence: persistTransientFailure, wantScopeDetect: true},
+		{name: "408_request_timeout", result: synctypes.WorkerResult{HTTPStatus: http.StatusRequestTimeout, Err: errors.New("timeout")}, wantClass: resultRequeue, wantSummaryKey: synctypes.SummarySyncFailure, wantPersistence: persistTransientFailure, wantScopeDetect: true},
+		{name: "412_precondition_failed", result: synctypes.WorkerResult{HTTPStatus: http.StatusPreconditionFailed, Err: errors.New("etag mismatch")}, wantClass: resultRequeue, wantSummaryKey: synctypes.SummarySyncFailure, wantPersistence: persistTransientFailure, wantScopeDetect: true},
+		{name: "423_locked", result: synctypes.WorkerResult{HTTPStatus: http.StatusLocked, Err: graph.ErrLocked}, wantClass: resultRequeue, wantSummaryKey: synctypes.SummarySyncFailure, wantPersistence: persistTransientFailure, wantScopeDetect: true},
+		{name: "429_too_many_requests", result: synctypes.WorkerResult{HTTPStatus: http.StatusTooManyRequests, Err: graph.ErrThrottled}, wantClass: resultScopeBlock, wantScope: synctypes.SKThrottleAccount(), wantSummaryKey: synctypes.SummaryRateLimited, wantPersistence: persistTransientFailure, wantScopeDetect: true},
+		{name: "400_invalid_request_is_skip", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: genericInvalidRequestErr}, wantClass: resultSkip, wantSummaryKey: synctypes.SummarySyncFailure, wantPersistence: persistActionableFailure},
+		{name: "400_object_handle_message_only_is_skip", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: legacyOutageErr}, wantClass: resultSkip, wantSummaryKey: synctypes.SummarySyncFailure, wantPersistence: persistActionableFailure},
+		{name: "400_object_handle_wrong_code_is_skip", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: wrongCodeOutageErr}, wantClass: resultSkip, wantSummaryKey: synctypes.SummarySyncFailure, wantPersistence: persistActionableFailure},
+		{name: "500_internal_server_error", result: synctypes.WorkerResult{HTTPStatus: http.StatusInternalServerError, Err: graph.ErrServerError}, wantClass: resultRequeue, wantSummaryKey: synctypes.SummaryServiceOutage, wantPersistence: persistTransientFailure, wantScopeDetect: true},
+		{name: "502_bad_gateway", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadGateway, Err: graph.ErrServerError}, wantClass: resultRequeue, wantSummaryKey: synctypes.SummaryServiceOutage, wantPersistence: persistTransientFailure, wantScopeDetect: true},
+		{name: "503_service_unavailable", result: synctypes.WorkerResult{HTTPStatus: http.StatusServiceUnavailable, Err: graph.ErrServerError}, wantClass: resultRequeue, wantSummaryKey: synctypes.SummaryServiceOutage, wantPersistence: persistTransientFailure, wantScopeDetect: true},
+		{name: "504_gateway_timeout", result: synctypes.WorkerResult{HTTPStatus: http.StatusGatewayTimeout, Err: graph.ErrServerError}, wantClass: resultRequeue, wantSummaryKey: synctypes.SummaryServiceOutage, wantPersistence: persistTransientFailure, wantScopeDetect: true},
+		{name: "509_bandwidth_limit", result: synctypes.WorkerResult{HTTPStatus: 509, Err: graph.ErrServerError}, wantClass: resultRequeue, wantSummaryKey: synctypes.SummaryServiceOutage, wantPersistence: persistTransientFailure, wantScopeDetect: true},
+		{name: "409_conflict", result: synctypes.WorkerResult{HTTPStatus: http.StatusConflict, Err: graph.ErrConflict}, wantClass: resultSkip, wantSummaryKey: synctypes.SummarySyncFailure, wantPersistence: persistActionableFailure},
+		{name: "other_4xx_falls_to_skip", result: synctypes.WorkerResult{HTTPStatus: http.StatusMethodNotAllowed, Err: graph.ErrMethodNotAllowed}, wantClass: resultSkip, wantSummaryKey: synctypes.SummarySyncFailure, wantPersistence: persistActionableFailure},
 	})
 }
 
@@ -518,6 +551,7 @@ func TestClassifyResult_StorageScopes(t *testing.T) {
 			},
 			wantClass:       resultScopeBlock,
 			wantScope:       synctypes.SKQuotaOwn(),
+			wantSummaryKey:  synctypes.SummaryQuotaExceeded,
 			wantPersistence: persistTransientFailure,
 			wantScopeDetect: true,
 		},
@@ -530,6 +564,7 @@ func TestClassifyResult_StorageScopes(t *testing.T) {
 			},
 			wantClass:       resultScopeBlock,
 			wantScope:       synctypes.SKQuotaShortcut("drive1:item1"),
+			wantSummaryKey:  synctypes.SummaryQuotaExceeded,
 			wantPersistence: persistTransientFailure,
 			wantScopeDetect: true,
 		},
@@ -540,11 +575,12 @@ func TestClassifyResult_LocalErrors(t *testing.T) {
 	t.Parallel()
 
 	assertClassifyResultCases(t, []classifyResultCase{
-		{name: "os_err_permission", result: synctypes.WorkerResult{Err: os.ErrPermission}, wantClass: resultSkip, wantPersistence: persistActionableFailure, wantPermission: permissionFlowLocalPermission},
+		{name: "os_err_permission", result: synctypes.WorkerResult{Err: os.ErrPermission}, wantClass: resultSkip, wantSummaryKey: synctypes.SummaryLocalPermissionDenied, wantPersistence: persistActionableFailure, wantPermission: permissionFlowLocalPermission},
 		{
 			name:            "wrapped_os_err_permission",
 			result:          synctypes.WorkerResult{Err: fmt.Errorf("cannot write: %w", os.ErrPermission)},
 			wantClass:       resultSkip,
+			wantSummaryKey:  synctypes.SummaryLocalPermissionDenied,
 			wantPersistence: persistActionableFailure,
 			wantPermission:  permissionFlowLocalPermission,
 		},
@@ -553,18 +589,21 @@ func TestClassifyResult_LocalErrors(t *testing.T) {
 			result:          synctypes.WorkerResult{Err: fmt.Errorf("download failed: %w", driveops.ErrDiskFull)},
 			wantClass:       resultScopeBlock,
 			wantScope:       synctypes.SKDiskLocal(),
+			wantSummaryKey:  synctypes.SummaryDiskFull,
 			wantPersistence: persistTransientFailure,
 		},
 		{
 			name:            "file_too_large_for_space",
 			result:          synctypes.WorkerResult{Err: fmt.Errorf("download failed: %w", driveops.ErrFileTooLargeForSpace)},
 			wantClass:       resultSkip,
+			wantSummaryKey:  synctypes.SummaryFileTooLargeForSpace,
 			wantPersistence: persistActionableFailure,
 		},
 		{
 			name:            "file_exceeds_onedrive_limit",
 			result:          synctypes.WorkerResult{Err: fmt.Errorf("upload failed: %w", driveops.ErrFileExceedsOneDriveLimit)},
 			wantClass:       resultSkip,
+			wantSummaryKey:  synctypes.SummaryFileTooLarge,
 			wantPersistence: persistActionableFailure,
 		},
 	})
@@ -1095,7 +1134,7 @@ func TestEvaluateTrialOutcome_OnlyMatchingScopeEvidenceExtends(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			decision := classifyResult(&tt.result)
-			assert.Equal(t, tt.want, flow.evaluateTrialOutcome(tt.scopeKey, decision))
+			assert.Equal(t, tt.want, flow.evaluateTrialOutcome(tt.scopeKey, &decision))
 		})
 	}
 }

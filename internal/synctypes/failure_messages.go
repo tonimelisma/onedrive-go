@@ -4,12 +4,6 @@
 // single source of truth for all user-facing failure text (R-2.3.8).
 package synctypes
 
-import (
-	"strings"
-
-	"github.com/tonimelisma/onedrive-go/internal/authstate"
-)
-
 // IssueMessage holds the user-facing text for each issue type.
 type IssueMessage struct {
 	Title  string // e.g. "QUOTA EXCEEDED"
@@ -20,97 +14,15 @@ type IssueMessage struct {
 // MessageForIssueType returns the human-readable message for a given issue type.
 // Returns a generic message for unknown types.
 func MessageForIssueType(issueType string) IssueMessage {
-	switch issueType {
-	case IssueQuotaExceeded:
-		return IssueMessage{
-			Title:  "QUOTA EXCEEDED",
-			Reason: "Your OneDrive storage is full.",
-			Action: "Free up space or upgrade your plan.",
-		}
-	case IssueUnauthorized:
-		presentation := authstate.UnauthorizedIssuePresentation()
-		return IssueMessage{
-			Title:  strings.ToUpper(presentation.Title),
-			Reason: presentation.Reason,
-			Action: presentation.Action,
-		}
-	case IssuePermissionDenied:
-		return IssueMessage{
-			Title:  "PERMISSION DENIED",
-			Reason: "You don't have write access to this location.",
-			Action: "Ask the drive owner to grant you edit permissions.",
-		}
-	case IssueSharedFolderBlocked:
-		return IssueMessage{
-			Title:  "SHARED FOLDER WRITES BLOCKED",
-			Reason: "This shared folder is read-only for your current write attempts. Downloads continue normally.",
-			Action: "Remove or ignore local write changes here, or ask the owner for edit permissions if the write was intended.",
-		}
-	case IssueLocalPermissionDenied:
-		return IssueMessage{
-			Title:  "LOCAL PERMISSION DENIED",
-			Reason: "The local directory or file is not accessible.",
-			Action: "Check filesystem permissions (e.g., chmod +r).",
-		}
-	case IssueInvalidFilename:
-		return IssueMessage{
-			Title:  "INVALID FILENAME",
-			Reason: "The filename contains characters not allowed by OneDrive.",
-			Action: "Rename the file to remove invalid characters.",
-		}
-	case IssuePathTooLong:
-		return IssueMessage{
-			Title:  "PATH TOO LONG",
-			Reason: "The full path exceeds OneDrive's 400-character limit.",
-			Action: "Shorten the path by renaming files or folders.",
-		}
-	case IssueFileTooLarge:
-		return IssueMessage{
-			Title:  "FILE TOO LARGE",
-			Reason: "The file exceeds the maximum upload size.",
-			Action: "Reduce the file size or exclude it via skip_files.",
-		}
-	case IssueBigDeleteHeld:
-		return IssueMessage{
-			Title:  "HELD DELETES",
-			Reason: "Big-delete protection triggered — too many deletes in one batch.",
-			Action: "Run `issues clear` to approve, or investigate first.",
-		}
-	case IssueCaseCollision:
-		return IssueMessage{
-			Title:  "CASE COLLISION",
-			Reason: "Two files differ only in letter case, which OneDrive cannot distinguish.",
-			Action: "Rename one of the conflicting files.",
-		}
-	case IssueDiskFull:
-		return IssueMessage{
-			Title:  "DISK FULL",
-			Reason: "Local disk space is insufficient for downloads.",
-			Action: "Free up local disk space.",
-		}
-	case IssueServiceOutage:
-		return IssueMessage{
-			Title:  "SERVICE OUTAGE",
-			Reason: "OneDrive service is temporarily unavailable.",
-			Action: "Wait for the service to recover (automatic retry in progress).",
-		}
-	case IssueHashPanic:
-		return IssueMessage{
-			Title:  "HASH ERROR",
-			Reason: "File hashing failed unexpectedly.",
-			Action: "Check file integrity and retry.",
-		}
-	case IssueFileTooLargeForSpace:
-		return IssueMessage{
-			Title:  "FILE TOO LARGE FOR SPACE",
-			Reason: "The file is larger than available local disk space.",
-			Action: "Free up local disk space to fit this file.",
-		}
-	default:
-		return IssueMessage{
-			Title:  "SYNC FAILURE",
-			Reason: "An unexpected sync error occurred.",
-			Action: "Check logs for details or retry.",
-		}
+	key, ok := summaryKeyForIssueType(issueType)
+	if !ok {
+		key = SummarySyncFailure
+	}
+	descriptor := DescribeSummary(key)
+
+	return IssueMessage{
+		Title:  descriptor.Title,
+		Reason: descriptor.Reason,
+		Action: descriptor.Action,
 	}
 }

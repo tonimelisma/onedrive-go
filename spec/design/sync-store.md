@@ -152,7 +152,15 @@ rebuildable from durable state; it is not a competing authority.
 state without handing them raw SQL ownership.
 
 - `OpenInspector(dbPath, logger)` opens SQLite in read-only mode.
-- `ReadStatusSnapshot(ctx)` returns metadata and aggregate counts only.
+- `ReadStatusSnapshot(ctx)` returns metadata, aggregate counts, and one
+  derived `IssueSummary`.
+- `IssueSummary.Groups` are keyed by the shared
+  [`synctypes.SummaryKey`](/Users/tonimelisma/Development/onedrive-go-shared-failure-summaries/internal/synctypes/summary_keys.go),
+  not by raw SQL categories.
+- `IssueSummary.VisibleTotal()`, `ConflictCount()`, `ActionableCount()`,
+  `RemoteBlockedCount()`, `AuthRequiredCount()`, and `RetryingCount()` are the
+  read-only status contract. CLI `status` consumes those helpers instead of
+  reconstructing visible-issue semantics from raw counters.
 - CLI `status` consumes `StatusSnapshot`; it does not build its own DSN or call
   `sql.Open` directly.
 
@@ -183,9 +191,10 @@ errors because the durable-state transition itself is incomplete.
 
 `issues` reads conflicts, actionable failures, derived shared-folder blocked
 writes, and scope-only auth blocks directly from the store. Grouping and
-display use the persisted `scope_key`, `issue_type`, and shortcut metadata
-instead of re-deriving scope context from runtime state or fabricating
-sentinel path rows.
+display use the persisted `scope_key`, `issue_type`, and shortcut metadata,
+but the user-facing grouping key is the shared `synctypes.SummaryKey`. This
+keeps `issues` presentation aligned with `status` summaries and sync-runtime
+logging without persisting a second summary column in SQLite.
 
 The broader CLI auth-health projection also reads `auth:account` from
 `scope_blocks`, but it combines that store-backed signal with token and

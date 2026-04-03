@@ -163,6 +163,7 @@ raw HTTP/local error facts.
 `ResultDecision` carries:
 
 - `Class`
+- `SummaryKey`
 - `ScopeKey`
 - `ScopeEvidence`
 - `Persistence`
@@ -179,6 +180,11 @@ The engine-level result classes are direct aliases of the shared
 success, shutdown, retryable transient, scope-blocking transient, actionable,
 and fatal.
 
+`SummaryKey` is the shared sync-domain rendering key exported by
+`internal/synctypes`. Classification assigns it once so result routing, store
+inspection, and CLI issue/status rendering can all group the same failure
+family without re-inspecting raw HTTP status or filesystem errors.
+
 Classification uses `ScopeKeyForStatus(httpStatus, shortcutKey)` as the single
 source of truth for HTTP status -> scope key mapping: 401 -> fatal, 403 -> skip
 with permission flow, 429 -> scope block `SKThrottleAccount`, 507 -> scope
@@ -192,7 +198,9 @@ implemented.
 All downstream result flow consumes the `ResultDecision` only. Trial handling,
 failure persistence shape, retry/trial timing, and log ownership are not
 re-derived from raw `HTTPStatus`, wrapped errors, or `RetryAfter` headers after
-classification.
+classification. Structured sync logs emit `summary_key` from the same
+`ResultDecision`, which gives tests and operators one normalized failure family
+across runtime logs, `issues`, and `status`.
 
 ### Scope Detection and Management
 

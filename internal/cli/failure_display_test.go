@@ -136,6 +136,27 @@ func TestGroupFailures_Empty(t *testing.T) {
 	assert.Empty(t, heldDeletes)
 }
 
+// Validates: R-6.6.11, R-6.8.16
+func TestGroupFailures_UsesSharedSummaryFallback(t *testing.T) {
+	t.Parallel()
+
+	failures := []synctypes.SyncFailureRow{
+		{
+			Path:      "/mystery.txt",
+			IssueType: "",
+			Category:  synctypes.CategoryActionable,
+			Role:      synctypes.FailureRoleItem,
+		},
+	}
+
+	groups, heldDeletes := groupFailures(failures, nil)
+	require.Len(t, groups, 1)
+	assert.Empty(t, heldDeletes)
+	assert.Equal(t, synctypes.SummarySyncFailure, groups[0].SummaryKey)
+	assert.Equal(t, "SYNC FAILURE", groups[0].Message.Title)
+	assert.Equal(t, "sync failure", groups[0].LogSummary)
+}
+
 // Validates: R-2.3.7
 func TestPrintGroupedFailures_VerboseShowsAll(t *testing.T) {
 	t.Parallel()

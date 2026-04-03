@@ -270,6 +270,25 @@ func TestRunRepoConsistencyChecksFailsWithoutCrossCuttingEvidenceSection(t *test
 	assert.Contains(t, err.Error(), "error-model.md")
 }
 
+// Validates: R-6.10.7
+func TestRunRepoConsistencyChecksFailsWithoutDegradedModeIDColumn(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoRoot, "spec", "design", "degraded-mode.md"),
+		[]byte("# Degraded Mode\n\n| Failure | Evidence |\n| --- | --- |\n| sample | tests |\n"),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "| ID |")
+	assert.Contains(t, err.Error(), "degraded-mode.md")
+}
+
 // Validates: R-6.10.5
 func TestRunRepoConsistencyChecksFailsOnHTTPClientDoOutsideApprovedBoundary(t *testing.T) {
 	t.Parallel()
@@ -526,11 +545,11 @@ func writeRepoConsistencyFixtures(t *testing.T, repoRoot string) {
 		content := "clean\n"
 		switch name {
 		case "error-model.md":
-			content = "# Error Model\n\n## Verified By\n- tests\n"
+			content = "# Error Model\n\n## Verified By\n\n| Boundary | Evidence |\n| --- | --- |\n| sample | tests |\n"
 		case "threat-model.md":
-			content = "# Threat Model\n\n## Mitigation Evidence\n- tests\n"
+			content = "# Threat Model\n\n## Mitigation Evidence\n\n| Mitigation | Evidence |\n| --- | --- |\n| sample | tests |\n"
 		case "degraded-mode.md":
-			content = "# Degraded Mode\n\n| Failure | Evidence |\n| --- | --- |\n| sample | tests |\n"
+			content = "# Degraded Mode\n\n| ID | Failure | Evidence |\n| --- | --- | --- |\n| DM-1 | sample | tests |\n"
 		}
 		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "spec", "design", name), []byte(content), 0o600))
 	}

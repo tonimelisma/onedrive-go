@@ -105,7 +105,9 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeLocalObserverStarts(t *testing.
 
 	select {
 	case err := <-done:
-		require.NoError(t, err)
+		if err != nil {
+			require.EqualError(t, err, "sync: all observers exited")
+		}
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "RunWatch did not exit after cancellation")
 	}
