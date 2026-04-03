@@ -12,6 +12,7 @@ func TestMessageForIssueType_AllKnownTypes(t *testing.T) {
 
 	knownTypes := []string{
 		IssueQuotaExceeded,
+		IssueUnauthorized,
 		IssuePermissionDenied,
 		IssueLocalPermissionDenied,
 		IssueInvalidFilename,

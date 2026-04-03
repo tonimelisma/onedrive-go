@@ -91,6 +91,8 @@ func (controller *scopeController) repairPersistedScope(
 	block *synctypes.ScopeBlock,
 	facts persistedScopeFacts,
 ) error {
+	now := controller.flow.engine.nowFunc()
+
 	switch scopeStartupPolicyFor(block.Key) {
 	case scopeStartupRequiresBoundary:
 		if facts.boundaryKeys[block.Key] {
@@ -99,6 +101,9 @@ func (controller *scopeController) repairPersistedScope(
 		return controller.releaseStartupScope(ctx, block.Key, "released scope without boundary evidence")
 	case scopeStartupRequiresScopedFailures:
 		if facts.failureCountByScope[block.Key] > 0 {
+			return nil
+		}
+		if hasActivePreserveDeadline(block, now) {
 			return nil
 		}
 		return controller.discardStartupScope(ctx, block.Key, "discarded scope without scoped failures")
@@ -180,6 +185,14 @@ func isPermissionScopeKey(key synctypes.ScopeKey) bool {
 	return key.IsPermDir() || key.IsPermRemote()
 }
 
+func hasActivePreserveDeadline(block *synctypes.ScopeBlock, now time.Time) bool {
+	if block == nil || block.PreserveUntil.IsZero() {
+		return false
+	}
+
+	return block.PreserveUntil.After(now)
+}
+
 func (controller *scopeController) repairDiskScope(ctx context.Context, block *synctypes.ScopeBlock) error {
 	flow := controller.flow
 
@@ -233,6 +246,7 @@ func (controller *scopeController) repairDiskScope(ctx context.Context, block *s
 		BlockedAt:     now,
 		TrialInterval: interval,
 		NextTrialAt:   now.Add(interval),
+		PreserveUntil: time.Time{},
 	}); err != nil {
 		return fmt.Errorf("sync: refreshing disk scope %s: %w", block.Key.String(), err)
 	}
@@ -273,10 +287,14 @@ func (controller *scopeController) scopeBlockKeys(watch *watchRuntime) []synctyp
 	return watch.activeScopeKeys()
 }
 
-func (controller *scopeController) activateScope(ctx context.Context, watch *watchRuntime, block synctypes.ScopeBlock) error {
+func (controller *scopeController) activateScope(ctx context.Context, watch *watchRuntime, block *synctypes.ScopeBlock) error {
 	flow := controller.flow
 
-	if err := flow.engine.baseline.UpsertScopeBlock(ctx, &block); err != nil {
+	if block == nil {
+		return fmt.Errorf("sync: activating scope: missing block")
+	}
+
+	if err := flow.engine.baseline.UpsertScopeBlock(ctx, block); err != nil {
 		return fmt.Errorf("sync: activating scope %s: %w", block.Key.String(), err)
 	}
 
@@ -321,15 +339,49 @@ func (controller *scopeController) extendScopeTrial(
 
 	block.NextTrialAt = nextAt
 	block.TrialInterval = newInterval
+	block.PreserveUntil = time.Time{}
 	block.TrialCount++
 	block.TimingSource = scopeTimingSource(retryAfter)
-	if err := controller.activateScope(ctx, watch, block); err != nil {
+	if err := controller.activateScope(ctx, watch, &block); err != nil {
 		flow.engine.logger.Warn("extendScopeTrial: failed to persist interval extension",
 			slog.String("scope_key", scopeKey.String()),
 			slog.String("error", err.Error()),
 		)
 		return
 	}
+
+	watch.armTrialTimer()
+}
+
+func (controller *scopeController) preserveScopeTrial(ctx context.Context, watch *watchRuntime, scopeKey synctypes.ScopeKey) {
+	flow := controller.flow
+
+	if watch == nil {
+		return
+	}
+
+	block, ok := controller.getScopeBlock(watch, scopeKey)
+	if !ok {
+		return
+	}
+	if block.TrialInterval <= 0 {
+		return
+	}
+
+	block.NextTrialAt = flow.engine.nowFunc().Add(block.TrialInterval)
+	block.PreserveUntil = block.NextTrialAt
+	if err := controller.activateScope(ctx, watch, &block); err != nil {
+		flow.engine.logger.Warn("preserveScopeTrial: failed to persist preserved interval",
+			slog.String("scope_key", scopeKey.String()),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+
+	flow.engine.logger.Debug("preserving trial interval",
+		slog.String("scope_key", scopeKey.String()),
+		slog.Duration("interval", block.TrialInterval),
+	)
 
 	watch.armTrialTimer()
 }
@@ -408,14 +460,16 @@ func (controller *scopeController) applyScopeBlock(ctx context.Context, watch *w
 	now := flow.engine.nowFunc()
 	interval := computeTrialInterval(sr.ScopeKey, sr.RetryAfter, 0)
 
-	if err := controller.activateScope(ctx, watch, synctypes.ScopeBlock{
+	block := &synctypes.ScopeBlock{
 		Key:           sr.ScopeKey,
 		IssueType:     sr.IssueType,
 		TimingSource:  scopeTimingSource(sr.RetryAfter),
 		BlockedAt:     now,
 		TrialInterval: interval,
 		NextTrialAt:   now.Add(interval),
-	}); err != nil {
+		PreserveUntil: time.Time{},
+	}
+	if err := controller.activateScope(ctx, watch, block); err != nil {
 		flow.engine.logger.Warn("applyScopeBlock: failed to persist scope block",
 			slog.String("scope_key", sr.ScopeKey.String()),
 			slog.String("error", err.Error()),
@@ -657,6 +711,32 @@ func (controller *scopeController) recordScopeBlockedFailure(ctx context.Context
 	}, nil); err != nil { // nil delayFn → next_retry_at = NULL
 		flow.engine.logger.Warn("failed to record scope-blocked failure",
 			slog.String("path", action.Path),
+			slog.String("scope_key", scopeKey.String()),
+			slog.String("error", err.Error()),
+		)
+	}
+}
+
+func (flow *engineFlow) rehomeHeldFailure(ctx context.Context, r *synctypes.WorkerResult, scopeKey synctypes.ScopeKey) {
+	direction := directionFromAction(r.ActionType)
+
+	driveID := r.DriveID
+	if driveID.String() == "" {
+		driveID = flow.engine.driveID
+	}
+
+	if err := flow.engine.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:       r.Path,
+		DriveID:    driveID,
+		Direction:  direction,
+		Role:       synctypes.FailureRoleHeld,
+		Category:   synctypes.CategoryTransient,
+		ScopeKey:   scopeKey,
+		ErrMsg:     "scope blocked: " + scopeKey.String(),
+		HTTPStatus: r.HTTPStatus,
+	}, nil); err != nil {
+		flow.engine.logger.Warn("failed to rehome held failure",
+			slog.String("path", r.Path),
 			slog.String("scope_key", scopeKey.String()),
 			slog.String("error", err.Error()),
 		)

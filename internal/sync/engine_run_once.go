@@ -110,7 +110,10 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 	runner.setShortcuts(shortcuts)
 
 	// Execute plan: run workers, drain results (failures, 403s, upload issues).
-	runner.executePlan(ctx, plan, report, bl)
+	if err := runner.executePlan(ctx, plan, report, bl); err != nil {
+		report.Duration = time.Since(start)
+		return report, err
+	}
 
 	report.Duration = time.Since(start)
 
@@ -190,9 +193,9 @@ func (flow *engineFlow) postSyncHousekeeping() {
 func (r *oneShotRunner) executePlan(
 	ctx context.Context, plan *synctypes.ActionPlan, report *synctypes.SyncReport,
 	bl *synctypes.Baseline,
-) {
+) error {
 	if len(plan.Actions) == 0 {
-		return
+		return nil
 	}
 
 	// Invariant: Planner.Plan() always builds Deps with len(Actions).
@@ -207,7 +210,7 @@ func (r *oneShotRunner) executePlan(
 		report.Errors = append(report.Errors,
 			fmt.Errorf("plan invariant violation: %d actions but %d deps", len(plan.Actions), len(plan.Deps)))
 
-		return
+		return nil
 	}
 
 	// Reset engine counters for this pass.
@@ -241,7 +244,9 @@ func (r *oneShotRunner) executePlan(
 	}
 
 	pool := syncexec.NewWorkerPool(r.engine.execCfg, r.readyCh, depGraph.Done(), r.engine.baseline, r.engine.logger, len(plan.Actions))
-	pool.Start(ctx, r.engine.transferWorkers)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	pool.Start(runCtx, r.engine.transferWorkers)
 
 	// Process results concurrently — engine classifies and calls Complete.
 	// The one-shot engine loop reads from the results channel while workers
@@ -249,20 +254,27 @@ func (r *oneShotRunner) executePlan(
 	// including side effects (counter updates, failure recording). Without
 	// this barrier, resultStats() could race with result processing.
 	drainDone := make(chan struct{})
+	var drainErr error
 	go func() {
 		defer close(drainDone)
-		r.runResultsLoop(ctx, bl, pool.Results())
+		drainErr = r.runResultsLoop(runCtx, cancel, bl, pool.Results())
 	}()
 
 	pool.Wait() // blocks until depGraph.Done() (all actions at terminal state)
 	pool.Stop() // cancels workers and closes results once workers exit
 	<-drainDone // wait for the one-shot engine loop to finish all side effects
+	if drainErr != nil {
+		report.Succeeded, report.Failed, report.Errors = r.resultStats()
+		report.Errors = append(report.Errors, drainErr)
+		return drainErr
+	}
 
 	// End-of-pass failure summary — aggregates failures by issue type so
 	// bulk sync produces WARN summaries instead of per-item noise (R-6.6.12).
 	r.logFailureSummary()
 
 	report.Succeeded, report.Failed, report.Errors = r.resultStats()
+	return nil
 }
 
 // buildReportFromCounts populates a synctypes.SyncReport with plan counts.

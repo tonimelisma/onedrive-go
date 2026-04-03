@@ -23,6 +23,7 @@ const (
 	IssueBigDeleteHeld = "big_delete_held"
 
 	// Runtime (execution-time).
+	IssueUnauthorized          = "unauthorized"
 	IssuePermissionDenied      = "permission_denied"
 	IssueQuotaExceeded         = "quota_exceeded"
 	IssueRateLimited           = "rate_limited"

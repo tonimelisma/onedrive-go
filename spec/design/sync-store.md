@@ -2,7 +2,7 @@
 
 GOVERNS: internal/syncstore/store.go, internal/syncstore/schema.go, internal/syncstore/schema.sql, internal/syncstore/store_baseline.go, internal/syncstore/store_observation.go, internal/syncstore/store_conflicts.go, internal/syncstore/store_failures.go, internal/syncstore/store_admin.go, internal/syncstore/store_scope_blocks.go, internal/syncstore/shortcuts.go, internal/syncverify/verify.go, internal/syncrecovery/recovery.go, internal/cli/verify.go, internal/cli/issues.go, internal/cli/failure_display.go
 
-Implements: R-2.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.7 [verified], R-2.15.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.4 [verified], R-2.10.22 [verified], R-2.10.33 [verified], R-2.10.34 [verified], R-2.10.41 [verified], R-6.6.11 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
+Implements: R-2.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.7 [verified], R-2.15.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.14 [verified], R-2.10.22 [verified], R-2.10.33 [verified], R-2.10.34 [verified], R-2.10.41 [verified], R-2.10.45 [verified], R-6.6.11 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
 
 ## SyncStore (`store.go`)
 
@@ -90,6 +90,7 @@ Important columns:
 - `blocked_at`
 - `trial_interval`
 - `next_trial_at`
+- `preserve_until`
 - `trial_count`
 
 `scope_blocks` stores scope-level timing state only. Runtime watch admission
@@ -99,6 +100,12 @@ is ephemeral and rebuildable from this table.
 `timing_source` distinguishes locally computed backoff from explicit server
 deadlines. Startup repair uses this to decide whether a persisted
 `throttle:account` or `service` scope should survive restart.
+
+`preserve_until` is a bounded restart-safe override used only for
+scoped-failure-backed scopes. It allows the engine to keep a preserved scope
+alive across restart even when the candidate row was replaced or re-homed to a
+more specific failure shape. Scope ownership still remains in `scope_blocks`;
+the field is not duplicated into `sync_failures`.
 
 ## Failure And Scope Lifecycle
 

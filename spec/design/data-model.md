@@ -77,12 +77,17 @@ Key columns:
 - `scope_key` — unique scope identity
 - `issue_type` — scope-level user/reporting classification
 - `timing_source` — `none`, `backoff`, or `server_retry_after`
-- `blocked_at`, `trial_interval`, `next_trial_at`, `trial_count`
+- `blocked_at`, `trial_interval`, `next_trial_at`, `preserve_until`, `trial_count`
 
 `scope_blocks` is separate from `sync_failures` because scope-level timing state
 and item-level failure state are different entities with different cardinality.
 The watch loop keeps only a rebuildable in-memory working set; durable truth
 remains in SQLite.
+
+`preserve_until` makes preserve semantics durable without inventing duplicate
+held rows. A preserved scope may therefore survive restart even when no
+same-scope candidate row remains, but only until the next scheduled trial
+deadline.
 
 ### delta_tokens
 

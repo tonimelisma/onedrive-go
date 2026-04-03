@@ -48,17 +48,21 @@ func FindBlockingScope(blocks []synctypes.ScopeBlock, ta *synctypes.TrackedActio
 
 // UpsertScope returns a copy of blocks with the provided scope inserted or
 // replaced by key.
-func UpsertScope(blocks []synctypes.ScopeBlock, block synctypes.ScopeBlock) []synctypes.ScopeBlock {
+func UpsertScope(blocks []synctypes.ScopeBlock, block *synctypes.ScopeBlock) []synctypes.ScopeBlock {
+	if block == nil {
+		return append([]synctypes.ScopeBlock(nil), blocks...)
+	}
+
 	for i := range blocks {
 		if blocks[i].Key == block.Key {
 			next := append([]synctypes.ScopeBlock(nil), blocks...)
-			next[i] = block
+			next[i] = *block
 			return next
 		}
 	}
 
 	next := append([]synctypes.ScopeBlock(nil), blocks...)
-	next = append(next, block)
+	next = append(next, *block)
 	return next
 }
 

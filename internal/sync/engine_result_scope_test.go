@@ -102,12 +102,121 @@ func TestOneShotEngineLoop_ClosedResultsStillProcessBufferedSideEffects(t *testi
 	results <- synctypes.WorkerResult{Path: "c.txt", ActionType: synctypes.ActionDownload, Success: true, ActionID: 3}
 	close(results)
 
-	runner.runResultsLoop(ctx, nil, results)
+	err := runner.runResultsLoop(ctx, nil, nil, results)
+	require.NoError(t, err)
 
 	// Both upload failures should produce sync_failures.
 	issues, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	assert.Len(t, issues, 2, "one-shot engine loop should process all buffered results before exiting")
+}
+
+// Validates: R-2.10.5
+func TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	runner := newOneShotRunner(eng.Engine)
+	runner.depGraph = syncdispatch.NewDepGraph(eng.logger)
+	runner.readyCh = make(chan *synctypes.TrackedAction)
+
+	runner.depGraph.Add(&synctypes.Action{
+		Type: synctypes.ActionUpload,
+		Path: "root.txt",
+	}, 1, nil)
+	runner.depGraph.Add(&synctypes.Action{
+		Type: synctypes.ActionUpload,
+		Path: "child.txt",
+	}, 2, []int64{1})
+	runner.depGraph.Add(&synctypes.Action{
+		Type: synctypes.ActionDownload,
+		Path: "auth.txt",
+	}, 3, nil)
+
+	results := make(chan synctypes.WorkerResult, 2)
+	results <- synctypes.WorkerResult{
+		ActionID:   1,
+		Path:       "root.txt",
+		ActionType: synctypes.ActionUpload,
+		Success:    true,
+	}
+	results <- synctypes.WorkerResult{
+		ActionID:   3,
+		Path:       "auth.txt",
+		ActionType: synctypes.ActionDownload,
+		HTTPStatus: http.StatusUnauthorized,
+		Err:        graph.ErrUnauthorized,
+		ErrMsg:     "unauthorized",
+	}
+	close(results)
+
+	err := runner.runResultsLoop(ctx, nil, nil, results)
+	require.ErrorIs(t, err, graph.ErrUnauthorized)
+	assert.Equal(t, 0, runner.depGraph.InFlightCount(), "fatal termination should drain queued ready actions as shutdown")
+}
+
+func assertUnauthorizedWatchHandlerStopsLoop(
+	t *testing.T,
+	handler func(*watchRuntime, context.Context, *watchPipeline, *synctypes.WorkerResult) ([]*synctypes.TrackedAction, bool, error),
+) {
+	t.Helper()
+
+	eng := newSingleOwnerEngine(t)
+	ctx := t.Context()
+	rt := testWatchRuntime(t, eng)
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	rt.depGraph.Add(&synctypes.Action{
+		Type:    synctypes.ActionDownload,
+		Path:    "auth.txt",
+		DriveID: eng.driveID,
+		ItemID:  "item-1",
+	}, 21, nil)
+
+	_, done, gotErr := handler(rt, ctx, &watchPipeline{bl: bl}, &synctypes.WorkerResult{
+		ActionID:   21,
+		Path:       "auth.txt",
+		DriveID:    eng.driveID,
+		ActionType: synctypes.ActionDownload,
+		HTTPStatus: http.StatusUnauthorized,
+		Err:        graph.ErrUnauthorized,
+		ErrMsg:     "unauthorized",
+	})
+
+	assert.False(t, done)
+	require.ErrorIs(t, gotErr, graph.ErrUnauthorized)
+}
+
+// Validates: R-2.10.5
+func TestHandleBootstrapWorkerResult_UnauthorizedStopsBootstrap(t *testing.T) {
+	t.Parallel()
+
+	assertUnauthorizedWatchHandlerStopsLoop(t, func(
+		rt *watchRuntime,
+		ctx context.Context,
+		p *watchPipeline,
+		workerResult *synctypes.WorkerResult,
+	) ([]*synctypes.TrackedAction, bool, error) {
+		return rt.handleBootstrapWorkerResult(ctx, p, nil, workerResult, true)
+	})
+}
+
+// Validates: R-2.10.5
+func TestHandleWatchWorkerResult_UnauthorizedStopsWatchLoop(t *testing.T) {
+	t.Parallel()
+
+	assertUnauthorizedWatchHandlerStopsLoop(t, func(
+		rt *watchRuntime,
+		ctx context.Context,
+		p *watchPipeline,
+		workerResult *synctypes.WorkerResult,
+	) ([]*synctypes.TrackedAction, bool, error) {
+		return rt.handleWatchWorkerResult(ctx, p, nil, workerResult, true)
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +345,33 @@ func TestProcessWorkerResult_Success_NoRecords(t *testing.T) {
 	issues, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, issues)
+}
+
+// Validates: R-2.10.5
+func TestProcessWorkerResult_UnauthorizedTerminatesRouting(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	ctx := t.Context()
+
+	testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{
+		Type:    synctypes.ActionDownload,
+		Path:    "auth.txt",
+		DriveID: driveid.New("d"),
+		ItemID:  "item-1",
+	}, 17, nil)
+
+	outcome := processWorkerResultDetailedForTest(t, eng, ctx, &synctypes.WorkerResult{
+		ActionID:   17,
+		Path:       "auth.txt",
+		ActionType: synctypes.ActionDownload,
+		HTTPStatus: http.StatusUnauthorized,
+		Err:        graph.ErrUnauthorized,
+		ErrMsg:     "unauthorized",
+	}, nil)
+
+	require.ErrorIs(t, outcome.terminateErr, graph.ErrUnauthorized)
+	assert.True(t, outcome.terminate)
 }
 
 // ---------------------------------------------------------------------------
@@ -418,7 +554,7 @@ func TestProcessTrialResultV2_Success_ClearsScope(t *testing.T) {
 
 	// Set up an active persisted scope block.
 	now := eng.nowFunc()
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:           synctypes.SKThrottleAccount(),
 		IssueType:     synctypes.IssueRateLimited,
 		BlockedAt:     now,
@@ -462,7 +598,7 @@ func TestProcessTrialResultV2_Failure_DoublesInterval(t *testing.T) {
 	ctx := t.Context()
 
 	now := eng.nowFunc()
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:           synctypes.SKService(),
 		IssueType:     synctypes.IssueServiceOutage,
 		BlockedAt:     now,
@@ -514,7 +650,7 @@ func TestProcessTrialResultV2_Failure_CapsAt5m(t *testing.T) {
 			now := eng.nowFunc()
 
 			// Start with an interval that would exceed 5m when doubled.
-			setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+			setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 				Key:           tt.scopeKey,
 				IssueType:     tt.issueType,
 				BlockedAt:     now,
@@ -552,7 +688,7 @@ func TestProcessTrialResultV2_Failure_NoScopeDetection(t *testing.T) {
 	testWatchRuntime(t, eng).scopeState = ss
 
 	now := eng.nowFunc()
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:           synctypes.SKService(),
 		IssueType:     synctypes.IssueServiceOutage,
 		BlockedAt:     now,
@@ -574,6 +710,364 @@ func TestProcessTrialResultV2_Failure_NoScopeDetection(t *testing.T) {
 	got, ok := getTestScopeBlock(eng, synctypes.SKService())
 	require.True(t, ok, "scope block should still exist")
 	assert.Equal(t, 60*time.Second, got.TrialInterval, "interval should be doubled, not reset")
+}
+
+// Validates: R-2.10.5
+func TestProcessTrialResultV2_Preserve_RetryableHTTPStatusesKeepScopeTimingAndHeldCandidate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		status int
+		err    error
+		errMsg string
+	}{
+		{name: "404_not_found", status: http.StatusNotFound, err: graph.ErrNotFound, errMsg: "transient not found"},
+		{name: "408_timeout", status: http.StatusRequestTimeout, err: errors.New("timeout"), errMsg: "timeout"},
+		{name: "412_precondition", status: http.StatusPreconditionFailed, err: errors.New("etag mismatch"), errMsg: "etag mismatch"},
+		{name: "423_locked", status: http.StatusLocked, err: graph.ErrLocked, errMsg: "locked"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			eng := newSingleOwnerEngine(t)
+			ctx := t.Context()
+			now := eng.nowFunc()
+
+			setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
+				Key:           synctypes.SKService(),
+				IssueType:     synctypes.IssueServiceOutage,
+				BlockedAt:     now,
+				TrialInterval: 30 * time.Second,
+				NextTrialAt:   now.Add(30 * time.Second),
+				TrialCount:    2,
+			})
+			require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+				Path:      "trial.txt",
+				DriveID:   eng.driveID,
+				Direction: synctypes.DirectionDownload,
+				Role:      synctypes.FailureRoleHeld,
+				Category:  synctypes.CategoryTransient,
+				ScopeKey:  synctypes.SKService(),
+				ItemID:    "i1",
+			}, nil))
+
+			testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{
+				Type:    synctypes.ActionDownload,
+				Path:    "trial.txt",
+				DriveID: driveid.New("d"),
+				ItemID:  "i1",
+			}, 99, nil)
+
+			processTrialResultForTest(t, eng, ctx, &synctypes.WorkerResult{
+				ActionID:      99,
+				IsTrial:       true,
+				TrialScopeKey: synctypes.SKService(),
+				ActionType:    synctypes.ActionDownload,
+				Path:          "trial.txt",
+				DriveID:       eng.driveID,
+				Success:       false,
+				HTTPStatus:    tt.status,
+				Err:           tt.err,
+				ErrMsg:        tt.errMsg,
+			})
+
+			got, ok := getTestScopeBlock(eng, synctypes.SKService())
+			require.True(t, ok, "scope block should still exist")
+			assert.Equal(t, 30*time.Second, got.TrialInterval, "inconclusive trial must not back off the original scope")
+			assert.Equal(t, now.Add(30*time.Second), got.NextTrialAt, "preserve should re-arm the original interval")
+			assert.Equal(t, 2, got.TrialCount, "preserve should not increment trial backoff history")
+
+			failures, err := eng.baseline.ListSyncFailures(ctx)
+			require.NoError(t, err)
+			require.Len(t, failures, 1)
+			assert.Equal(t, synctypes.FailureRoleHeld, failures[0].Role,
+				"inconclusive trial should leave the candidate held for the original scope")
+			assert.Equal(t, synctypes.SKService(), failures[0].ScopeKey)
+		})
+	}
+}
+
+// Validates: R-2.10.5
+func TestProcessTrialResultV2_Fatal401DoesNotExtendScope(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	ctx := t.Context()
+	now := eng.nowFunc()
+
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
+		Key:           synctypes.SKThrottleAccount(),
+		IssueType:     synctypes.IssueRateLimited,
+		BlockedAt:     now,
+		TrialInterval: 45 * time.Second,
+		NextTrialAt:   now.Add(45 * time.Second),
+		TrialCount:    3,
+	})
+	testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{
+		Type:    synctypes.ActionUpload,
+		Path:    "trial.txt",
+		DriveID: eng.driveID,
+		ItemID:  "i1",
+	}, 77, nil)
+
+	outcome := processWorkerResultDetailedForTest(t, eng, ctx, &synctypes.WorkerResult{
+		ActionID:      77,
+		IsTrial:       true,
+		TrialScopeKey: synctypes.SKThrottleAccount(),
+		ActionType:    synctypes.ActionUpload,
+		Path:          "trial.txt",
+		DriveID:       eng.driveID,
+		Success:       false,
+		HTTPStatus:    http.StatusUnauthorized,
+		Err:           graph.ErrUnauthorized,
+		ErrMsg:        "unauthorized",
+	}, nil)
+
+	require.ErrorIs(t, outcome.terminateErr, graph.ErrUnauthorized)
+	assert.True(t, outcome.terminate, "trial unauthorized should terminate result routing")
+
+	got, ok := getTestScopeBlock(eng, synctypes.SKThrottleAccount())
+	require.True(t, ok, "fatal unauthorized should not clear the original scope")
+	assert.Equal(t, 45*time.Second, got.TrialInterval, "fatal unauthorized must not back off the original scope")
+	assert.Equal(t, now.Add(45*time.Second), got.NextTrialAt, "fatal unauthorized must not reschedule the original scope")
+	assert.Equal(t, 3, got.TrialCount)
+}
+
+// Validates: R-2.10.5, R-2.10.14
+func TestProcessTrialResultV2_Preserve_LocalPermissionRecordsCandidateFailure(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	ctx := t.Context()
+	now := eng.nowFunc()
+
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
+		Key:           synctypes.SKService(),
+		IssueType:     synctypes.IssueServiceOutage,
+		BlockedAt:     now,
+		TrialInterval: 45 * time.Second,
+		NextTrialAt:   now.Add(45 * time.Second),
+		TrialCount:    1,
+	})
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:      "trial.txt",
+		DriveID:   eng.driveID,
+		Direction: synctypes.DirectionUpload,
+		Role:      synctypes.FailureRoleHeld,
+		Category:  synctypes.CategoryTransient,
+		ScopeKey:  synctypes.SKService(),
+		ItemID:    "i1",
+	}, nil))
+
+	testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{
+		Type:    synctypes.ActionUpload,
+		Path:    "trial.txt",
+		DriveID: eng.driveID,
+		ItemID:  "i1",
+	}, 88, nil)
+
+	processTrialResultForTest(t, eng, ctx, &synctypes.WorkerResult{
+		ActionID:      88,
+		IsTrial:       true,
+		TrialScopeKey: synctypes.SKService(),
+		ActionType:    synctypes.ActionUpload,
+		Path:          "trial.txt",
+		DriveID:       eng.driveID,
+		Success:       false,
+		Err:           os.ErrPermission,
+		ErrMsg:        "permission denied",
+	})
+
+	got, ok := getTestScopeBlock(eng, synctypes.SKService())
+	require.True(t, ok)
+	assert.Equal(t, 45*time.Second, got.TrialInterval)
+	assert.Equal(t, now.Add(45*time.Second), got.NextTrialAt)
+	assert.Equal(t, 1, got.TrialCount)
+
+	failures, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, failures, 1)
+	assert.Equal(t, synctypes.FailureRoleItem, failures[0].Role)
+	assert.Equal(t, synctypes.IssueLocalPermissionDenied, failures[0].IssueType)
+	assert.True(t, failures[0].ScopeKey.IsZero(), "file-level local permission preserve should not rewrite the original scope")
+}
+
+// Validates: R-2.10.5, R-2.10.14, R-2.14.1
+func TestProcessTrialResultV2_Preserve_Remote403RehomesCandidateToPermissionScope(t *testing.T) {
+	t.Parallel()
+
+	remoteDriveID := permissionsRemoteDriveID
+	checker := &mockPermChecker{
+		perms: map[string][]graph.Permission{
+			driveid.New(remoteDriveID).String() + ":root-id": {{ID: "p1", Roles: []string{"read"}}},
+		},
+	}
+	shortcuts := []synctypes.Shortcut{{
+		ItemID:       "sc-1",
+		RemoteDrive:  remoteDriveID,
+		RemoteItem:   "root-id",
+		LocalPath:    "Shared/TeamDocs",
+		Observation:  synctypes.ObservationDelta,
+		DiscoveredAt: 1000,
+	}}
+	baselineEntries := []synctypes.Outcome{{
+		Action:   synctypes.ActionDownload,
+		Success:  true,
+		Path:     "Shared/TeamDocs",
+		DriveID:  driveid.New(remoteDriveID),
+		ItemID:   "root-id",
+		ParentID: "root",
+		ItemType: synctypes.ItemTypeFolder,
+	}}
+
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	eng.nowFn = func() time.Time { return time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC) }
+	setupWatchEngine(t, eng)
+	testEngineFlow(t, eng).setShortcuts(shortcuts)
+
+	ctx := t.Context()
+	now := eng.nowFunc()
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
+		Key:           synctypes.SKService(),
+		IssueType:     synctypes.IssueServiceOutage,
+		BlockedAt:     now,
+		TrialInterval: 30 * time.Second,
+		NextTrialAt:   now.Add(30 * time.Second),
+		TrialCount:    4,
+	})
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:      "Shared/TeamDocs/file.txt",
+		DriveID:   eng.driveID,
+		Direction: synctypes.DirectionUpload,
+		Role:      synctypes.FailureRoleHeld,
+		Category:  synctypes.CategoryTransient,
+		ScopeKey:  synctypes.SKService(),
+		ItemID:    "i1",
+	}, nil))
+
+	testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{
+		Type:    synctypes.ActionUpload,
+		Path:    "Shared/TeamDocs/file.txt",
+		DriveID: eng.driveID,
+		ItemID:  "i1",
+	}, 55, nil)
+
+	processWorkerResultDetailedForTest(t, eng, ctx, &synctypes.WorkerResult{
+		ActionID:      55,
+		IsTrial:       true,
+		TrialScopeKey: synctypes.SKService(),
+		ActionType:    synctypes.ActionUpload,
+		Path:          "Shared/TeamDocs/file.txt",
+		DriveID:       eng.driveID,
+		Success:       false,
+		HTTPStatus:    http.StatusForbidden,
+		Err:           graph.ErrForbidden,
+		ErrMsg:        "read-only",
+	}, bl)
+
+	got, ok := getTestScopeBlock(eng, synctypes.SKService())
+	require.True(t, ok)
+	assert.Equal(t, 30*time.Second, got.TrialInterval)
+	assert.Equal(t, now.Add(30*time.Second), got.NextTrialAt)
+	assert.Equal(t, 4, got.TrialCount)
+	assert.True(t, isTestScopeBlocked(eng, synctypes.SKPermRemote("Shared/TeamDocs")),
+		"preserved candidate should activate the more specific permission scope")
+
+	failures, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, failures, 2)
+
+	var boundaryFound, rehomedFound bool
+	for i := range failures {
+		switch failures[i].Path {
+		case "Shared/TeamDocs":
+			boundaryFound = true
+			assert.Equal(t, synctypes.FailureRoleBoundary, failures[i].Role)
+			assert.Equal(t, synctypes.SKPermRemote("Shared/TeamDocs"), failures[i].ScopeKey)
+		case "Shared/TeamDocs/file.txt":
+			rehomedFound = true
+			assert.Equal(t, synctypes.FailureRoleHeld, failures[i].Role)
+			assert.Equal(t, synctypes.SKPermRemote("Shared/TeamDocs"), failures[i].ScopeKey)
+		}
+	}
+
+	assert.True(t, boundaryFound)
+	assert.True(t, rehomedFound)
+}
+
+// Validates: R-2.10.5, R-2.10.6, R-2.10.7, R-2.10.8, R-2.10.43
+func TestEvaluateTrialOutcome_OnlyMatchingScopeEvidenceExtends(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	flow := testEngineFlow(t, eng)
+
+	tests := []struct {
+		name     string
+		scopeKey synctypes.ScopeKey
+		result   synctypes.WorkerResult
+		want     trialOutcome
+	}{
+		{
+			name:     "throttle_429_extends",
+			scopeKey: synctypes.SKThrottleAccount(),
+			result:   synctypes.WorkerResult{HTTPStatus: http.StatusTooManyRequests, Err: graph.ErrThrottled},
+			want:     trialOutcomeExtend,
+		},
+		{
+			name:     "service_503_extends",
+			scopeKey: synctypes.SKService(),
+			result:   synctypes.WorkerResult{HTTPStatus: http.StatusServiceUnavailable, Err: graph.ErrServerError},
+			want:     trialOutcomeExtend,
+		},
+		{
+			name:     "quota_own_507_extends",
+			scopeKey: synctypes.SKQuotaOwn(),
+			result:   synctypes.WorkerResult{HTTPStatus: http.StatusInsufficientStorage},
+			want:     trialOutcomeExtend,
+		},
+		{
+			name:     "quota_shortcut_matching_507_extends",
+			scopeKey: synctypes.SKQuotaShortcut("drive1:item1"),
+			result:   synctypes.WorkerResult{HTTPStatus: http.StatusInsufficientStorage, ShortcutKey: "drive1:item1"},
+			want:     trialOutcomeExtend,
+		},
+		{
+			name:     "disk_full_extends",
+			scopeKey: synctypes.SKDiskLocal(),
+			result:   synctypes.WorkerResult{Err: driveops.ErrDiskFull},
+			want:     trialOutcomeExtend,
+		},
+		{
+			name:     "throttle_does_not_extend_service_error",
+			scopeKey: synctypes.SKThrottleAccount(),
+			result:   synctypes.WorkerResult{HTTPStatus: http.StatusServiceUnavailable, Err: graph.ErrServerError},
+			want:     trialOutcomePreserve,
+		},
+		{
+			name:     "service_does_not_extend_throttle_error",
+			scopeKey: synctypes.SKService(),
+			result:   synctypes.WorkerResult{HTTPStatus: http.StatusTooManyRequests, Err: graph.ErrThrottled},
+			want:     trialOutcomePreserve,
+		},
+		{
+			name:     "quota_shortcut_mismatch_preserves",
+			scopeKey: synctypes.SKQuotaShortcut("drive1:item1"),
+			result:   synctypes.WorkerResult{HTTPStatus: http.StatusInsufficientStorage, ShortcutKey: "drive2:item2"},
+			want:     trialOutcomePreserve,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			decision := classifyResult(&tt.result)
+			assert.Equal(t, tt.want, flow.evaluateTrialOutcome(tt.scopeKey, decision, &tt.result))
+		})
+	}
 }
 
 // Validates: R-2.10.14 — computeTrialInterval is the single source of truth
@@ -621,7 +1115,7 @@ func TestExtendTrialInterval_WithRetryAfter(t *testing.T) {
 	ctx := t.Context()
 
 	now := eng.nowFunc()
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:           synctypes.SKThrottleAccount(),
 		IssueType:     synctypes.IssueRateLimited,
 		BlockedAt:     now,
@@ -668,7 +1162,7 @@ func TestDiskLocalScopeBlock_FullCycle(t *testing.T) {
 	assert.False(t, decision.RunScopeDetection, "disk:local uses direct scope activation, not HTTP scope detection")
 
 	// 2. Establish the active scope block.
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:           synctypes.SKDiskLocal(),
 		IssueType:     synctypes.IssueDiskFull,
 		BlockedAt:     now,
@@ -878,38 +1372,82 @@ func runResultDrainLoopForTest(
 
 	for {
 		if len(outbox) == 0 {
-			select {
-			case workerResult, ok := <-results:
-				if !ok {
-					return
-				}
-				outbox = append(outbox, rt.processWorkerResult(ctx, rt, &workerResult, bl)...)
-			case <-rt.trialTimerChan():
-				outbox = append(outbox, rt.runTrialDispatch(ctx, bl, synctypes.SyncBidirectional, safety)...)
-			case <-rt.retryTimerChan():
-				outbox = append(outbox, rt.runRetrierSweep(ctx, bl, synctypes.SyncBidirectional, safety)...)
-			case <-ctx.Done():
+			nextOutbox, done := runResultDrainLoopIdleForTest(ctx, rt, bl, safety, results)
+			outbox = nextOutbox
+			if done {
 				return
 			}
 			continue
 		}
 
-		select {
-		case rt.readyCh <- outbox[0]:
-			outbox = outbox[1:]
-		case workerResult, ok := <-results:
-			if !ok {
-				return
-			}
-			outbox = append(outbox, rt.processWorkerResult(ctx, rt, &workerResult, bl)...)
-		case <-rt.trialTimerChan():
-			outbox = append(outbox, rt.runTrialDispatch(ctx, bl, synctypes.SyncBidirectional, safety)...)
-		case <-rt.retryTimerChan():
-			outbox = append(outbox, rt.runRetrierSweep(ctx, bl, synctypes.SyncBidirectional, safety)...)
-		case <-ctx.Done():
+		nextOutbox, done := runResultDrainLoopWithOutboxForTest(ctx, rt, bl, safety, results, outbox)
+		outbox = nextOutbox
+		if done {
 			return
 		}
 	}
+}
+
+func runResultDrainLoopIdleForTest(
+	ctx context.Context,
+	rt *watchRuntime,
+	bl *synctypes.Baseline,
+	safety *synctypes.SafetyConfig,
+	results <-chan synctypes.WorkerResult,
+) ([]*synctypes.TrackedAction, bool) {
+	select {
+	case workerResult, ok := <-results:
+		if !ok {
+			return nil, true
+		}
+		return appendDrainOutcome(rt, ctx, bl, nil, &workerResult)
+	case <-rt.trialTimerChan():
+		return rt.runTrialDispatch(ctx, bl, synctypes.SyncBidirectional, safety), false
+	case <-rt.retryTimerChan():
+		return rt.runRetrierSweep(ctx, bl, synctypes.SyncBidirectional, safety), false
+	case <-ctx.Done():
+		return nil, true
+	}
+}
+
+func runResultDrainLoopWithOutboxForTest(
+	ctx context.Context,
+	rt *watchRuntime,
+	bl *synctypes.Baseline,
+	safety *synctypes.SafetyConfig,
+	results <-chan synctypes.WorkerResult,
+	outbox []*synctypes.TrackedAction,
+) ([]*synctypes.TrackedAction, bool) {
+	select {
+	case rt.readyCh <- outbox[0]:
+		return outbox[1:], false
+	case workerResult, ok := <-results:
+		if !ok {
+			return outbox, true
+		}
+		return appendDrainOutcome(rt, ctx, bl, outbox, &workerResult)
+	case <-rt.trialTimerChan():
+		return append(outbox, rt.runTrialDispatch(ctx, bl, synctypes.SyncBidirectional, safety)...), false
+	case <-rt.retryTimerChan():
+		return append(outbox, rt.runRetrierSweep(ctx, bl, synctypes.SyncBidirectional, safety)...), false
+	case <-ctx.Done():
+		return outbox, true
+	}
+}
+
+func appendDrainOutcome(
+	rt *watchRuntime,
+	ctx context.Context,
+	bl *synctypes.Baseline,
+	outbox []*synctypes.TrackedAction,
+	workerResult *synctypes.WorkerResult,
+) ([]*synctypes.TrackedAction, bool) {
+	outcome := rt.processWorkerResult(ctx, rt, workerResult, bl)
+	if outcome.terminate {
+		return outbox, true
+	}
+
+	return append(outbox, outcome.dispatched...), false
 }
 
 // readReadyAction reads one synctypes.TrackedAction from the ready channel
@@ -1071,7 +1609,7 @@ func TestE2E_OneShotLoop_TrialResultSuccess(t *testing.T) {
 	ctx := t.Context()
 
 	// Set up scope block and a scope-blocked failure.
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:           synctypes.SKThrottleAccount(),
 		IssueType:     synctypes.IssueRateLimited,
 		BlockedAt:     eng.nowFunc(),
@@ -1127,7 +1665,7 @@ func TestE2E_OneShotLoop_TrialResultFailure(t *testing.T) {
 	defer cancel()
 	_ = done
 
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:           synctypes.SKService(),
 		IssueType:     synctypes.IssueServiceOutage,
 		BlockedAt:     eng.nowFunc(),
@@ -1472,7 +2010,7 @@ func TestIsObservationSuppressed_Throttled(t *testing.T) {
 	assert.False(t, isObservationSuppressedForTest(t, eng, testWatchRuntime(t, eng)))
 
 	// After throttle block, should be suppressed.
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:           synctypes.SKThrottleAccount(),
 		IssueType:     synctypes.IssueRateLimited,
 		TrialInterval: 30 * time.Second,
@@ -1487,7 +2025,7 @@ func TestIsObservationSuppressed_ServiceOutage(t *testing.T) {
 	eng := newSingleOwnerEngine(t)
 
 	// Service outage should also suppress.
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:           synctypes.SKService(),
 		IssueType:     synctypes.IssueServiceOutage,
 		TrialInterval: 60 * time.Second,
@@ -1514,7 +2052,7 @@ func TestIsObservationSuppressed_QuotaDoesNotSuppress(t *testing.T) {
 	eng := newSingleOwnerEngine(t)
 
 	// Quota scope block should NOT suppress observation (R-2.10.31).
-	setTestScopeBlock(t, eng, synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:           synctypes.SKQuotaOwn(),
 		IssueType:     synctypes.IssueQuotaExceeded,
 		TrialInterval: 5 * time.Minute,
@@ -1582,6 +2120,7 @@ func TestIssueTypeForHTTPStatus(t *testing.T) {
 		want       string
 	}{
 		{"429_rate_limited", http.StatusTooManyRequests, nil, synctypes.IssueRateLimited},
+		{"401_unauthorized", http.StatusUnauthorized, graph.ErrUnauthorized, synctypes.IssueUnauthorized},
 		{"507_quota_exceeded", http.StatusInsufficientStorage, nil, synctypes.IssueQuotaExceeded},
 		{"403_permission_denied", http.StatusForbidden, nil, synctypes.IssuePermissionDenied},
 		{"400_invalid_request", http.StatusBadRequest, genericInvalidRequestErr, ""},
