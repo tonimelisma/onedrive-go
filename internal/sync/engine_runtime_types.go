@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"sync"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
@@ -46,6 +47,11 @@ func newOneShotRunner(engine *Engine) *oneShotRunner {
 }
 
 type watchRuntimeState struct {
+	// activeScopesMu guards activeScopes. The watch loop remains the logical
+	// owner, but tests and repair paths can observe or adjust the working set
+	// while timers are being re-armed.
+	activeScopesMu sync.RWMutex
+
 	// Active scope blocks owned by the watch control flow. The slice is tiny
 	// (usually 0-5 entries), so linear scans keep the logic simple and avoid a
 	// second mirrored subsystem.
@@ -74,6 +80,10 @@ type watchObservationState struct {
 }
 
 type watchTimerState struct {
+	// timerMu guards trialTimer and retryTimer pointers. Timer callbacks only
+	// signal channels; they never mutate loop-owned state directly.
+	timerMu sync.RWMutex
+
 	// Trial and retry timers are armed by the watch loop. The channels stay
 	// persistent so timer callbacks only signal the loop; they never mutate
 	// loop-owned state directly.

@@ -744,12 +744,12 @@ func TestApplyScopeBlock_ArmsTrialTimer(t *testing.T) {
 	})
 
 	// Verify the block has the correct NextTrialAt from the injectable clock.
-	earliest, ok := syncdispatch.EarliestTrialAt(testWatchRuntime(t, eng).activeScopes)
+	earliest, ok := testWatchRuntime(t, eng).earliestTrialAt()
 	require.True(t, ok, "EarliestTrialAt should find the scope block")
 	assert.Equal(t, now.Add(30*time.Second), earliest, "NextTrialAt should be now + trial interval")
 
 	// Trial timer should be armed.
-	timerSet := testWatchRuntime(t, eng).trialTimer != nil
+	timerSet := testWatchRuntime(t, eng).hasTrialTimer()
 	assert.True(t, timerSet, "trial timer should be armed after applyScopeBlock")
 }
 
@@ -1175,7 +1175,7 @@ func TestE2E_OneShotLoopExit_StopsTimer(t *testing.T) {
 
 	// Verify timer is armed.
 	require.Eventually(t, func() bool {
-		return testWatchRuntime(t, eng).trialTimer != nil
+		return testWatchRuntime(t, eng).hasTrialTimer()
 	}, time.Second, time.Millisecond)
 
 	// Close results channel → the one-shot loop returns → defer stopTrialTimer.
@@ -1186,7 +1186,7 @@ func TestE2E_OneShotLoopExit_StopsTimer(t *testing.T) {
 		require.Fail(t, "one-shot engine loop did not exit after results channel close")
 	}
 
-	assert.Nil(t, testWatchRuntime(t, eng).trialTimer, "drain exit should stop and clear the trial timer")
+	assert.False(t, testWatchRuntime(t, eng).hasTrialTimer(), "drain exit should stop and clear the trial timer")
 }
 
 // ---------------------------------------------------------------------------

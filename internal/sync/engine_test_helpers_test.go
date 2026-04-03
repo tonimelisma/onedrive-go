@@ -336,7 +336,7 @@ func setTestScopeBlock(t *testing.T, eng *testEngine, block synctypes.ScopeBlock
 	}
 	require.NoError(t, eng.baseline.UpsertScopeBlock(context.Background(), &block))
 	if eng.runtime != nil {
-		eng.runtime.activeScopes = syncdispatch.UpsertScope(eng.runtime.activeScopes, block)
+		eng.runtime.upsertActiveScope(block)
 	}
 }
 

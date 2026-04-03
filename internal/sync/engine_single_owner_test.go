@@ -208,10 +208,10 @@ func TestEngine_AssertCurrentScopeInvariants_DetectsDuplicateActiveScopes(t *tes
 	ctx := context.Background()
 	scopeKey := synctypes.SKService()
 
-	testWatchRuntime(t, eng).activeScopes = []synctypes.ScopeBlock{
+	testWatchRuntime(t, eng).replaceActiveScopes([]synctypes.ScopeBlock{
 		{Key: scopeKey, IssueType: synctypes.IssueServiceOutage},
 		{Key: scopeKey, IssueType: synctypes.IssueServiceOutage},
-	}
+	})
 
 	err := assertTestCurrentScopeInvariants(t, eng, ctx)
 	require.Error(t, err)
