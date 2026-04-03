@@ -85,6 +85,8 @@ type enospcWatcher struct {
 	addCount    int
 	failAfter   int
 	closeOne    stdsync.Once
+	failOne     stdsync.Once
+	failCh      chan struct{}
 	addedPaths  []string
 	failedPaths []string
 }
@@ -94,6 +96,7 @@ func newEnospcWatcher(failAfter int) *enospcWatcher {
 		events:    make(chan fsnotify.Event, 10),
 		errs:      make(chan error, 10),
 		failAfter: failAfter,
+		failCh:    make(chan struct{}),
 	}
 }
 
@@ -101,6 +104,7 @@ func (w *enospcWatcher) Add(name string) error {
 	w.addCount++
 	if w.addCount > w.failAfter {
 		w.failedPaths = append(w.failedPaths, name)
+		w.failOne.Do(func() { close(w.failCh) })
 		return syscall.ENOSPC
 	}
 
@@ -112,6 +116,7 @@ func (w *enospcWatcher) Add(name string) error {
 func (w *enospcWatcher) Remove(string) error           { return nil }
 func (w *enospcWatcher) Events() <-chan fsnotify.Event { return w.events }
 func (w *enospcWatcher) Errors() <-chan error          { return w.errs }
+func (w *enospcWatcher) Failures() <-chan struct{}     { return w.failCh }
 
 func (w *enospcWatcher) Close() error {
 	w.closeOne.Do(func() { close(w.events); close(w.errs) })

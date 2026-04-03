@@ -169,7 +169,10 @@ state without handing them raw SQL ownership.
   derived `IssueSummary`.
 - `IssueSummary.Groups` are keyed by the shared
   [`synctypes.SummaryKey`](/Users/tonimelisma/Development/onedrive-go-shared-failure-summaries/internal/synctypes/summary_keys.go),
-  not by raw SQL categories.
+  not by raw SQL categories. Each group also carries the normalized scope kind
+  plus an optional humanized scope label so CLI `status` can show file,
+  directory, shortcut/drive, account, or service context without reopening raw
+  tables.
 - `IssueSummary.VisibleTotal()`, `ConflictCount()`, `ActionableCount()`,
   `RemoteBlockedCount()`, `AuthRequiredCount()`, and `RetryingCount()` are the
   read-only status contract. CLI `status` consumes those helpers instead of

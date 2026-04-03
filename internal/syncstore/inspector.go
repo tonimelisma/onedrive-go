@@ -31,8 +31,65 @@ type StatusSnapshot struct {
 // IssueGroupCount is one derived visible issue family with its aggregated
 // count in the read-only status projection.
 type IssueGroupCount struct {
-	Key   synctypes.SummaryKey
-	Count int
+	Key       synctypes.SummaryKey
+	Count     int
+	ScopeKind string
+	Scope     string
+}
+
+const (
+	statusScopeFile      = "file"
+	statusScopeDirectory = "directory"
+	statusScopeDrive     = "drive"
+	statusScopeShortcut  = "shortcut"
+	statusScopeAccount   = "account"
+	statusScopeService   = "service"
+	statusScopeDisk      = "disk"
+)
+
+type issueGroupIdentity struct {
+	Key       synctypes.SummaryKey
+	ScopeKind string
+	Scope     string
+}
+
+type issueGroupAccumulator map[issueGroupIdentity]int
+
+func (a issueGroupAccumulator) Add(key synctypes.SummaryKey, count int, scopeKind, scope string) {
+	if key == "" || count <= 0 || scopeKind == "" {
+		return
+	}
+
+	a[issueGroupIdentity{
+		Key:       key,
+		ScopeKind: scopeKind,
+		Scope:     scope,
+	}] += count
+}
+
+func (a issueGroupAccumulator) Groups() []IssueGroupCount {
+	groups := make([]IssueGroupCount, 0, len(a))
+	for identity, count := range a {
+		groups = append(groups, IssueGroupCount{
+			Key:       identity.Key,
+			Count:     count,
+			ScopeKind: identity.ScopeKind,
+			Scope:     identity.Scope,
+		})
+	}
+
+	sort.Slice(groups, func(i, j int) bool {
+		if groups[i].Key != groups[j].Key {
+			return string(groups[i].Key) < string(groups[j].Key)
+		}
+		if groups[i].ScopeKind != groups[j].ScopeKind {
+			return groups[i].ScopeKind < groups[j].ScopeKind
+		}
+
+		return groups[i].Scope < groups[j].Scope
+	})
+
+	return groups
 }
 
 // IssueSummary is the store-owned aggregate view of visible issues for the
@@ -150,38 +207,75 @@ func (i *Inspector) ReadStatusSnapshot(ctx context.Context) StatusSnapshot {
 }
 
 func (i *Inspector) readIssueSummary(ctx context.Context) IssueSummary {
-	groupCounts := make(map[synctypes.SummaryKey]int)
+	shortcuts := i.readShortcuts(ctx)
+	groupCounts := make(issueGroupAccumulator)
 
-	addCount := func(key synctypes.SummaryKey, count int) {
-		if key == "" || count <= 0 {
-			return
-		}
-		groupCounts[key] += count
-	}
-
-	addCount(
+	groupCounts.Add(
 		synctypes.SummaryConflictUnresolved,
 		i.countOrZero(ctx, "unresolved conflicts", "SELECT COUNT(*) FROM conflicts WHERE resolution = 'unresolved'"),
+		statusScopeFile,
+		"",
 	)
+	i.collectActionableIssueGroups(ctx, groupCounts, shortcuts)
+	i.collectHeldRemoteIssueGroups(ctx, groupCounts, shortcuts)
+	i.collectAuthScopeIssueGroups(ctx, groupCounts, shortcuts)
 
-	i.readGroupedCounts(
+	summary := IssueSummary{
+		Groups: groupCounts.Groups(),
+		Retrying: i.countOrZero(
+			ctx,
+			"retrying sync failures",
+			"SELECT COUNT(*) FROM sync_failures WHERE category = 'transient' AND failure_count >= 3",
+		),
+	}
+
+	return summary
+}
+
+func (i *Inspector) collectActionableIssueGroups(
+	ctx context.Context,
+	groupCounts issueGroupAccumulator,
+	shortcuts []synctypes.Shortcut,
+) {
+	i.iterateGroupedRows(
 		ctx,
 		"actionable sync failure groups",
-		`SELECT COALESCE(issue_type, ''), COUNT(*) FROM sync_failures
+		`SELECT COALESCE(issue_type, ''), COALESCE(scope_key, ''), COALESCE(failure_role, ''), COUNT(*)
+		FROM sync_failures
 		WHERE category = 'actionable'
-		GROUP BY issue_type`,
-		func(issueType string, count int) {
-			addCount(
-				synctypes.SummaryKeyForPersistedFailure(
-					issueType,
-					synctypes.CategoryActionable,
-					synctypes.FailureRoleItem,
-				),
-				count,
+		GROUP BY issue_type, scope_key, failure_role`,
+		func(rows *sql.Rows) error {
+			var issueType string
+			var scopeKeyWire string
+			var failureRoleWire string
+			var count int
+			if err := rows.Scan(&issueType, &scopeKeyWire, &failureRoleWire, &count); err != nil {
+				return fmt.Errorf("scan actionable status group row: %w", err)
+			}
+
+			role := synctypes.FailureRole(failureRoleWire)
+			scopeKind, scope := statusIssueScope(
+				synctypes.ParseScopeKey(scopeKeyWire),
+				role,
+				shortcuts,
 			)
+			groupCounts.Add(
+				synctypes.SummaryKeyForPersistedFailure(issueType, synctypes.CategoryActionable, role),
+				count,
+				scopeKind,
+				scope,
+			)
+
+			return nil
 		},
 	)
+}
 
+func (i *Inspector) collectHeldRemoteIssueGroups(
+	ctx context.Context,
+	groupCounts issueGroupAccumulator,
+	shortcuts []synctypes.Shortcut,
+) {
 	i.readGroupedKeys(
 		ctx,
 		"remote blocked scope groups",
@@ -189,17 +283,30 @@ func (i *Inspector) readIssueSummary(ctx context.Context) IssueSummary {
 		WHERE failure_role = 'held' AND scope_key LIKE 'perm:remote:%'
 		GROUP BY issue_type, scope_key`,
 		func(issueType, scopeKey string) {
-			addCount(
+			scopeKind, scope := statusIssueScope(
+				synctypes.ParseScopeKey(scopeKey),
+				synctypes.FailureRoleHeld,
+				shortcuts,
+			)
+			groupCounts.Add(
 				synctypes.SummaryKeyForPersistedFailure(
 					issueType,
 					synctypes.CategoryTransient,
 					synctypes.FailureRoleHeld,
 				),
 				1,
+				scopeKind,
+				scope,
 			)
 		},
 	)
+}
 
+func (i *Inspector) collectAuthScopeIssueGroups(
+	ctx context.Context,
+	groupCounts issueGroupAccumulator,
+	shortcuts []synctypes.Shortcut,
+) {
 	i.readGroupedKeys(
 		ctx,
 		"auth scope block groups",
@@ -207,29 +314,84 @@ func (i *Inspector) readIssueSummary(ctx context.Context) IssueSummary {
 		WHERE scope_key = 'auth:account'
 		GROUP BY issue_type, scope_key`,
 		func(issueType, scopeKey string) {
-			addCount(
+			scopeKind, scope := statusIssueScope(
+				synctypes.ParseScopeKey(scopeKey),
+				synctypes.FailureRoleBoundary,
+				shortcuts,
+			)
+			groupCounts.Add(
 				synctypes.SummaryKeyForScopeBlock(issueType, synctypes.ParseScopeKey(scopeKey)),
 				1,
+				scopeKind,
+				scope,
 			)
 		},
 	)
+}
 
-	summary := IssueSummary{
-		Groups: make([]IssueGroupCount, 0, len(groupCounts)),
-		Retrying: i.countOrZero(
-			ctx,
-			"retrying sync failures",
-			"SELECT COUNT(*) FROM sync_failures WHERE category = 'transient' AND failure_count >= 3",
-		),
+func (i *Inspector) readShortcuts(ctx context.Context) []synctypes.Shortcut {
+	rows, err := i.db.QueryContext(ctx,
+		`SELECT item_id, remote_drive, remote_item, local_path, drive_type, observation, discovered_at
+		FROM shortcuts ORDER BY item_id`)
+	if err != nil {
+		i.logger.Debug("read sync status shortcuts", slog.String("error", err.Error()))
+		return nil
 	}
-	for key, count := range groupCounts {
-		summary.Groups = append(summary.Groups, IssueGroupCount{Key: key, Count: count})
-	}
-	sort.Slice(summary.Groups, func(i, j int) bool {
-		return string(summary.Groups[i].Key) < string(summary.Groups[j].Key)
-	})
+	defer rows.Close()
 
-	return summary
+	var shortcuts []synctypes.Shortcut
+	for rows.Next() {
+		var sc synctypes.Shortcut
+		if scanErr := rows.Scan(
+			&sc.ItemID,
+			&sc.RemoteDrive,
+			&sc.RemoteItem,
+			&sc.LocalPath,
+			&sc.DriveType,
+			&sc.Observation,
+			&sc.DiscoveredAt,
+		); scanErr != nil {
+			i.logger.Debug("scan sync status shortcut", slog.String("error", scanErr.Error()))
+			return nil
+		}
+
+		shortcuts = append(shortcuts, sc)
+	}
+	if rowErr := rows.Err(); rowErr != nil {
+		i.logger.Debug("iterate sync status shortcuts", slog.String("error", rowErr.Error()))
+		return nil
+	}
+
+	return shortcuts
+}
+
+func statusIssueScope(
+	scopeKey synctypes.ScopeKey,
+	role synctypes.FailureRole,
+	shortcuts []synctypes.Shortcut,
+) (string, string) {
+	if !scopeKey.IsZero() {
+		switch scopeKey.Kind {
+		case synctypes.ScopeAuthAccount, synctypes.ScopeThrottleAccount:
+			return statusScopeAccount, scopeKey.Humanize(shortcuts)
+		case synctypes.ScopeService:
+			return statusScopeService, scopeKey.Humanize(shortcuts)
+		case synctypes.ScopeQuotaOwn:
+			return statusScopeDrive, scopeKey.Humanize(shortcuts)
+		case synctypes.ScopeQuotaShortcut, synctypes.ScopePermRemote:
+			return statusScopeShortcut, scopeKey.Humanize(shortcuts)
+		case synctypes.ScopePermDir:
+			return statusScopeDirectory, scopeKey.Humanize(shortcuts)
+		case synctypes.ScopeDiskLocal:
+			return statusScopeDisk, scopeKey.Humanize(shortcuts)
+		}
+	}
+
+	if role == synctypes.FailureRoleBoundary {
+		return statusScopeDirectory, ""
+	}
+
+	return statusScopeFile, ""
 }
 
 func (i *Inspector) countOrZero(ctx context.Context, label, query string) int {
@@ -240,23 +402,6 @@ func (i *Inspector) countOrZero(ctx context.Context, label, query string) int {
 	}
 
 	return count
-}
-
-func (i *Inspector) readGroupedCounts(
-	ctx context.Context,
-	label string,
-	query string,
-	add func(issueType string, count int),
-) {
-	i.iterateGroupedRows(ctx, label, query, func(rows *sql.Rows) error {
-		var issueType string
-		var count int
-		if err := rows.Scan(&issueType, &count); err != nil {
-			return fmt.Errorf("scan grouped count row: %w", err)
-		}
-		add(issueType, count)
-		return nil
-	})
 }
 
 func (i *Inspector) readGroupedKeys(

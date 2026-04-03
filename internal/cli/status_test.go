@@ -18,6 +18,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
@@ -610,6 +611,70 @@ func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsIssues(t *testing.T) {
 	assert.Equal(t, 4, info.Issues)
 }
 
+// Validates: R-2.10.4
+func TestQuerySyncState_PreservesIssueGroupScopeContext(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.DiscardHandler)
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "state.db")
+
+	createTestStateDB(t, dbPath)
+
+	db, err := sql.Open("sqlite", "file:"+dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+
+	ctx := t.Context()
+
+	_, err = db.ExecContext(ctx, `INSERT INTO shortcuts
+		(item_id, remote_drive, remote_item, local_path, drive_type, observation, discovered_at)
+		VALUES ('shortcut-1', 'remote-drive', 'remote-item', 'Shared/Team Docs', 'business', 'delta', 1)`)
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(ctx, `INSERT INTO sync_failures
+		(path, drive_id, direction, action_type, failure_role, category, issue_type, scope_key, failure_count, first_seen_at, last_seen_at)
+		VALUES
+		('/invalid:name.txt', 'd!1', 'upload', 'upload', 'item', 'actionable', ?, '', 1, 0, 0),
+		('/quota/a.txt', 'd!1', 'upload', 'upload', 'item', 'actionable', ?, ?, 1, 0, 0),
+		('/quota/b.txt', 'd!1', 'upload', 'upload', 'item', 'actionable', ?, ?, 1, 0, 0)`,
+		synctypes.IssueInvalidFilename,
+		synctypes.IssueQuotaExceeded, synctypes.SKQuotaShortcut("remote-drive:remote-item").String(),
+		synctypes.IssueQuotaExceeded, synctypes.SKQuotaShortcut("remote-drive:remote-item").String(),
+	)
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(ctx, `INSERT INTO scope_blocks
+		(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count)
+		VALUES ('auth:account', ?, 'none', 1, 0, 0, 0, 0)`, synctypes.IssueUnauthorized)
+	require.NoError(t, err)
+
+	info := querySyncState(dbPath, logger)
+	require.NotNil(t, info)
+	assert.ElementsMatch(t, []statusIssueGroup{
+		{
+			SummaryKey: string(synctypes.SummaryInvalidFilename),
+			Title:      "INVALID FILENAME",
+			Count:      1,
+			ScopeKind:  "file",
+		},
+		{
+			SummaryKey: string(synctypes.SummaryQuotaExceeded),
+			Title:      "QUOTA EXCEEDED",
+			Count:      2,
+			ScopeKind:  "shortcut",
+			Scope:      "Shared/Team Docs",
+		},
+		{
+			SummaryKey: string(synctypes.SummaryAuthenticationRequired),
+			Title:      "AUTHENTICATION REQUIRED",
+			Count:      1,
+			ScopeKind:  "account",
+			Scope:      "your OneDrive account authorization",
+		},
+	}, info.IssueGroups)
+}
+
 func TestComputeSummary_Mixed(t *testing.T) {
 	t.Parallel()
 
@@ -688,6 +753,57 @@ func TestPrintStatusJSON_WithAccounts(t *testing.T) {
 	require.Len(t, result.Accounts, 1)
 	assert.Equal(t, "alice@example.com", result.Accounts[0].Email)
 	assert.Equal(t, 1, result.Summary.Ready)
+}
+
+// Validates: R-2.10.4
+func TestPrintStatusJSON_WithIssueGroups(t *testing.T) {
+	t.Parallel()
+
+	accounts := []statusAccount{
+		{
+			Email:     "alice@example.com",
+			DriveType: "personal",
+			AuthState: authStateReady,
+			Drives: []statusDrive{
+				{
+					CanonicalID: "personal:alice@example.com",
+					SyncDir:     "~/OneDrive",
+					State:       driveStateReady,
+					SyncState: &syncStateInfo{
+						FileCount: 10,
+						Issues:    3,
+						IssueGroups: []statusIssueGroup{
+							{
+								SummaryKey: string(synctypes.SummaryQuotaExceeded),
+								Title:      "QUOTA EXCEEDED",
+								Count:      1,
+								ScopeKind:  "shortcut",
+								Scope:      "Shared/Team Docs",
+							},
+							{
+								SummaryKey: string(synctypes.SummaryInvalidFilename),
+								Title:      "INVALID FILENAME",
+								Count:      2,
+								ScopeKind:  "file",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, printStatusJSON(&buf, accounts))
+
+	var result statusOutput
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &result))
+	require.Len(t, result.Accounts, 1)
+	require.Len(t, result.Accounts[0].Drives, 1)
+	require.NotNil(t, result.Accounts[0].Drives[0].SyncState)
+	require.Len(t, result.Accounts[0].Drives[0].SyncState.IssueGroups, 2)
+	assert.Equal(t, "shortcut", result.Accounts[0].Drives[0].SyncState.IssueGroups[0].ScopeKind)
+	assert.Equal(t, "Shared/Team Docs", result.Accounts[0].Drives[0].SyncState.IssueGroups[0].Scope)
 }
 
 // --- printStatusText ---
@@ -902,6 +1018,49 @@ func TestPrintSyncStateText_WithPendingAndIssues(t *testing.T) {
 	assert.Contains(t, output, "Retrying:  2 items")
 }
 
+// Validates: R-2.10.4
+func TestPrintSyncStateText_WithIssueGroups(t *testing.T) {
+	t.Parallel()
+
+	ss := &syncStateInfo{
+		Issues:   3,
+		Retrying: 2,
+		IssueGroups: []statusIssueGroup{
+			{
+				SummaryKey: string(synctypes.SummaryQuotaExceeded),
+				Title:      "QUOTA EXCEEDED",
+				Count:      1,
+				ScopeKind:  "shortcut",
+				Scope:      "Shared/Team Docs",
+			},
+			{
+				SummaryKey: string(synctypes.SummaryInvalidFilename),
+				Title:      "INVALID FILENAME",
+				Count:      2,
+				ScopeKind:  "file",
+			},
+			{
+				SummaryKey: string(synctypes.SummaryAuthenticationRequired),
+				Title:      "AUTHENTICATION REQUIRED",
+				Count:      1,
+				ScopeKind:  "account",
+				Scope:      "your OneDrive account authorization",
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, printSyncStateText(&buf, ss))
+
+	output := buf.String()
+	assert.Contains(t, output, "Issues:    3 (run 'onedrive-go issues')")
+	assert.Contains(t, output, "Issue groups:")
+	assert.Contains(t, output, "QUOTA EXCEEDED (shortcut Shared/Team Docs): 1")
+	assert.Contains(t, output, "INVALID FILENAME (file scope): 2")
+	assert.Contains(t, output, "AUTHENTICATION REQUIRED (account your OneDrive account authorization): 1")
+	assert.Contains(t, output, "Retrying:  2 items")
+}
+
 func TestComputeSummary_AggregatesPendingAndRetrying(t *testing.T) {
 	t.Parallel()
 
@@ -1006,6 +1165,16 @@ func createTestStateDB(t *testing.T, dbPath string) {
 			next_trial_at INTEGER NOT NULL,
 			preserve_until INTEGER NOT NULL,
 			trial_count INTEGER NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS shortcuts (
+			item_id TEXT PRIMARY KEY,
+			remote_drive TEXT NOT NULL,
+			remote_item TEXT NOT NULL,
+			local_path TEXT NOT NULL,
+			drive_type TEXT NOT NULL DEFAULT '',
+			observation TEXT NOT NULL DEFAULT 'unknown',
+			read_only INTEGER NOT NULL DEFAULT 0,
+			discovered_at INTEGER NOT NULL
 		);
 	`)
 	require.NoError(t, err)

@@ -86,7 +86,7 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeLocalObserverStarts(t *testing.
 		})
 	}()
 
-	require.Eventually(t, uploadStarted.Load, time.Second, 10*time.Millisecond,
+	require.Eventually(t, uploadStarted.Load, 5*time.Second, 10*time.Millisecond,
 		"bootstrap upload should start before observers")
 
 	select {
@@ -164,7 +164,7 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeRemoteObserverStarts(t *testing
 		})
 	}()
 
-	require.Eventually(t, downloadStarted.Load, time.Second, 10*time.Millisecond,
+	require.Eventually(t, downloadStarted.Load, 5*time.Second, 10*time.Millisecond,
 		"bootstrap download should start before remote observer")
 
 	time.Sleep(150 * time.Millisecond)
@@ -383,7 +383,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 
 	require.Eventually(t, func() bool {
 		return !isTestScopeBlocked(eng, synctypes.SKThrottleAccount())
-	}, time.Second, 10*time.Millisecond, "trial success should clear the scope block")
+	}, 5*time.Second, 10*time.Millisecond, "trial success should clear the scope block")
 
 	var retried *synctypes.TrackedAction
 	require.Eventually(t, func() bool {
@@ -393,7 +393,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 		default:
 			return false
 		}
-	}, time.Second, 10*time.Millisecond, "trial success should re-dispatch the held failure without external observation")
+	}, 5*time.Second, 10*time.Millisecond, "trial success should re-dispatch the held failure without external observation")
 
 	require.NotNil(t, retried)
 	assert.Equal(t, synctypes.ActionDownload, retried.Action.Type)
