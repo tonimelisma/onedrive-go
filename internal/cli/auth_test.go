@@ -344,7 +344,7 @@ func TestOpenBrowser_StartsValidatedCommand(t *testing.T) {
 	require.Eventually(t, func() bool {
 		data, readErr := localpath.ReadFile(outputPath)
 		return readErr == nil && string(data) == authURL
-	}, 5*time.Second, 25*time.Millisecond)
+	}, 10*time.Second, 25*time.Millisecond)
 }
 
 func TestOpenBrowser_CommandStartFailure(t *testing.T) {

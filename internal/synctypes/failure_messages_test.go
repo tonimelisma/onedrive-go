@@ -15,6 +15,7 @@ func TestMessageForIssueType_AllKnownTypes(t *testing.T) {
 	knownTypes := []string{
 		IssueQuotaExceeded,
 		IssueUnauthorized,
+		IssueRateLimited,
 		IssuePermissionDenied,
 		IssueSharedFolderBlocked,
 		IssueLocalPermissionDenied,
@@ -56,4 +57,27 @@ func TestMessageForIssueType_UnauthorizedDelegatesToAuthState(t *testing.T) {
 	assert.Equal(t, "AUTHENTICATION REQUIRED", msg.Title)
 	assert.Equal(t, presentation.Reason, msg.Reason)
 	assert.Equal(t, presentation.Action, msg.Action)
+}
+
+// Validates: R-6.6.11
+func TestMessageForFailure_QuotaShortcutUsesOwnerSpecificCopy(t *testing.T) {
+	t.Parallel()
+
+	msg := MessageForFailure(IssueQuotaExceeded, SKQuotaShortcut("drive:item"), "Team Docs")
+
+	assert.Equal(t, "QUOTA EXCEEDED", msg.Title)
+	assert.Equal(t, `Shared folder "Team Docs" owner's storage is full.`, msg.Reason)
+	assert.Equal(t, "Ask the shared folder owner to free up space or upgrade their plan.", msg.Action)
+}
+
+// Validates: R-6.6.11
+func TestMessageForFailure_QuotaOwnKeepsOwnDriveCopy(t *testing.T) {
+	t.Parallel()
+
+	msg := MessageForFailure(IssueQuotaExceeded, SKQuotaOwn(), "your OneDrive storage")
+	base := MessageForIssueType(IssueQuotaExceeded)
+
+	assert.Equal(t, base.Title, msg.Title)
+	assert.Equal(t, base.Reason, msg.Reason)
+	assert.Equal(t, base.Action, msg.Action)
 }

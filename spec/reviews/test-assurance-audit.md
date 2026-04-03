@@ -305,7 +305,7 @@ This is the operating dashboard for completeness, not a verdict of quality. A pa
 | W1 | done | done | partial | partial | done | partial | partial | partial | periodic reconciliation, aggregated logging, and big-delete traceability still lag |
 | W2 | done | done | done | partial | done | partial | partial | partial | remaining sparse-payload nil/parent-chain hardening and broader symlink/always-excluded reconciliation still need body audit |
 | W3 | done | done | partial | n/a | done | no | partial | no | big-delete and cross-drive proof paths unclear |
-| W4 | done | done | partial | n/a | done | no | partial | no | user-facing JSON/message semantics not yet audited |
+| W4 | done | done | partial | n/a | done | partial | partial | partial | durable row-mutation and crash-recovery contracts still need the same body-level pass we just started on output semantics |
 | W5 | done | done | done | partial | done | partial | partial | done | upload-session traceability tags still lag the body-level coverage |
 | W6 | done | done | partial | partial | done | partial | partial | no | pagination and transport split still need body audit |
 | W7 | done | done | partial | n/a | done | no | no | no | output semantics can still be shallowly tested |
@@ -758,9 +758,23 @@ Key W2 gap notes:
 - Claim mapping snapshot from filenames and `// Validates:` only:
   - Candidate test surface is rich: `internal/syncstore/{baseline,sync_failures,store_scope_blocks,commit_observation,trash,verify}_test.go`, `internal/cli/{issues,failure_display,verify,status}_test.go`, plus sync recovery and CLI e2e suites
   - Explicit comment claims already exist for `R-2.3.2` through `R-2.3.9`, `R-2.5`, `R-2.5.1`, `R-2.5.4`, `R-2.10.1`, `R-2.10.2`, `R-2.10.4`, `R-2.10.22`, `R-2.10.33`, `R-2.10.34`, `R-2.10.41`, `R-2.15.1`, and `R-6.4.5`
-  - No explicit claim surfaced yet for `R-2.3.10`, `R-2.7.1`, `R-6.4.4`, or `R-6.6.11`
+  - This audit increment adds explicit `// Validates:` claims for `R-2.3.10`, `R-2.7.1`, `R-6.4.4`, and `R-6.6.11`
   - This is a good example of why the audit matters: store mechanics appear well tagged, but user-facing JSON/reporting guarantees may be easier to weaken without tripping metadata-covered tests
   - First body-audit target inside W4 should be `issues`/`verify` output semantics and recycle-bin defaults, not just low-level store row mutation
+- Body-audit notes from `internal/cli/{failure_display,issues,rm,verify}_test.go` and the corresponding production paths:
+  - `internal/cli/failure_display.go` had a real production bug: grouped shortcut-scoped quota failures selected copy by `issue_type` alone, so both text and JSON incorrectly said the user's own OneDrive storage was full. The fix now keys user-facing failure text by `(issue_type, scope_key)` and the regression tests prove the shortcut-owner-specific variant end to end.
+  - The audit surfaced spec drift in `R-2.3.10`: the requirements text still said "unified conflicts and failures array", while the long-term design and implementation both use separate `conflicts`, `failure_groups`, and `held_deletes` arrays. The requirement now matches the actual contract, and JSON tests explicitly validate that schema.
+  - `verify` already had good semantic JSON assertions for verified counts and mismatches; the main gap was traceability. The JSON-path tests now carry explicit `R-2.7.1` comments instead of forcing the audit to infer coverage indirectly.
+  - `rm` default delete semantics were implemented correctly, but the contract was weakly defended. Caller-level tests now prove ordinary `rm` resolves the item and issues the recycle-bin `DELETE`, and `--permanent` routes through `permanentDelete` for both Business and Personal drives. This audit originally suspected Personal-drive fallback, but Microsoft’s current `driveItem: permanentDelete` doc and the fast live-E2E suite both disproved that theory.
+- Verified-claim reconciliation snapshot:
+
+| Contract | Basis | Current evidence | Reconciliation | Gap label / note |
+|---|---|---|---|---|
+| `issues --json` emits separate `conflicts`, `failure_groups`, and `held_deletes` arrays | `REQ+DESIGN+BODY` | `internal/cli/failure_display_test.go`, `internal/cli/issues_test.go`, and the updated `R-2.3.10` text in `spec/requirements/sync.md` all align on the split-array schema | `proven` | Prior spec drift fixed; current contract is now explicit |
+| Shortcut-scoped quota failures use owner-specific reason/action text in both text and JSON output | `REQ+DESIGN+CODE+BODY` | `internal/cli/failure_display.go` now calls `synctypes.MessageForFailure`, and `internal/cli/failure_display_test.go` plus `internal/synctypes/failure_messages_test.go` prove the shortcut-specific copy | `proven` | Fixed real production bug |
+| `verify --json` preserves verified-count and mismatch semantics | `REQ+BODY` | `internal/cli/verify_test.go` already asserted decoded `VerifyReport` fields, and the tests now carry explicit `R-2.7.1` traceability | `proven` | Traceability gap closed |
+| Remote `rm` uses recycle-bin delete by default, with `--permanent` taking the permanent-delete path | `REQ+CODE+BODY` | `internal/cli/rm_test.go` now drives `runRm` through a real CLI session/provider seam and asserts `DELETE` versus `POST .../permanentDelete` behavior across both Business and Personal drive types | `proven` | Adjacent help-text drift fixed; permanent delete remains supported on Personal drives per current Graph docs and live E2E |
+| W4 durable row mutation and recovery behavior | `REQ+DESIGN+META` | Store-layer tests and tags exist, but this increment did not yet perform the same body-level reconciliation on crash/recovery and stale-row cleanup paths | `not-yet-audited` | Remaining W4 high-risk area |
 
 ### W5. Transfer Manager, Resume Robustness, And Local Disk Safety
 
@@ -924,8 +938,7 @@ Key W5 gap notes:
   - ideal model drafted
 - Claim mapping snapshot from filenames and `// Validates:` only:
   - Candidate test surface is broad across `internal/cli/*_test.go` plus `e2e/cli_commands_e2e_test.go` and `e2e/output_validation_e2e_test.go`
-  - Explicit comment claims already exist for many command outputs: `R-1.1.1`, `R-1.2.4`, `R-1.3.4`, `R-1.4.3`, `R-1.5.1`, `R-1.6`, `R-1.7.1`, `R-1.8.1`, `R-1.9`, `R-1.9.4`, `R-3.1.4`, `R-3.1.5`, `R-3.1.6`, `R-2.3.7`, `R-2.3.8`, `R-2.3.9`, and `R-6.2.8`
-  - No explicit claim surfaced yet for `R-2.3.10`, `R-2.7.1`, or `R-6.6.11`
+  - Explicit comment claims already exist for many command outputs: `R-1.1.1`, `R-1.2.4`, `R-1.3.4`, `R-1.4.3`, `R-1.5.1`, `R-1.6`, `R-1.7.1`, `R-1.8.1`, `R-1.9`, `R-1.9.4`, `R-3.1.4`, `R-3.1.5`, `R-3.1.6`, `R-2.3.7`, `R-2.3.8`, `R-2.3.9`, `R-2.3.10`, `R-2.7.1`, `R-6.2.8`, and `R-6.6.11`
   - CLI output is likely one of the easier places for a test to look busy while only checking superficial strings, so the body audit here should favor semantic assertions over formatting-only checks
 
 ### W8. Configuration Discovery, Validation Tiers, And Token Resolution
@@ -1016,4 +1029,4 @@ Key W5 gap notes:
    - `R-2.4.6` / `R-2.4.7` symlink and always-excluded behavior
    - remaining sparse remote-payload hardening and nil-guard proof paths
 3. Tighten W5 traceability for upload-session rules that are already strongly tested in body-level graph tests but still under-tagged at the `// Validates:` level.
-4. Start the W4 body audit on `issues` / `verify` output semantics and recycle-bin defaults, because that remains a likely weak-test area.
+4. Continue the W4 body audit past output semantics and into durable-row mutation, stale-row cleanup, and crash/recovery proof paths.
