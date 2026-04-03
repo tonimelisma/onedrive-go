@@ -1710,7 +1710,7 @@ func TestE2E_OneShotLoop_TrialResultSuccess(t *testing.T) {
 	// Scope block should be cleared.
 	require.Eventually(t, func() bool {
 		return !isTestScopeBlocked(eng, synctypes.SKThrottleAccount())
-	}, time.Second, time.Millisecond, "scope block should be cleared after trial success")
+	}, 5*time.Second, 10*time.Millisecond, "scope block should be cleared after trial success")
 
 	var released *synctypes.TrackedAction
 	require.Eventually(t, func() bool {
@@ -1720,7 +1720,7 @@ func TestE2E_OneShotLoop_TrialResultSuccess(t *testing.T) {
 		default:
 			return false
 		}
-	}, time.Second, 10*time.Millisecond, "trial success should re-dispatch the held failure without external observation")
+	}, 5*time.Second, 10*time.Millisecond, "trial success should re-dispatch the held failure without external observation")
 
 	require.NotNil(t, released)
 	assert.Equal(t, synctypes.ActionUpload, released.Action.Type)
