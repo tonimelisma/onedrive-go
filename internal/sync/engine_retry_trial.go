@@ -335,12 +335,20 @@ func (flow *engineFlow) baselineEntryForPath(ctx context.Context, path string, d
 }
 
 func (flow *engineFlow) clearFailureCandidate(ctx context.Context, row *synctypes.SyncFailureRow, caller string) {
-	if err := flow.engine.baseline.ClearSyncFailure(ctx, row.Path, row.DriveID); err != nil {
+	if err := flow.engine.baseline.ClearSyncFailure(ctx, row.Path, flow.failureDriveID(row)); err != nil {
 		flow.engine.logger.Debug(caller+": failed to clear resolved failure",
 			slog.String("path", row.Path),
 			slog.String("error", err.Error()),
 		)
 	}
+}
+
+func (flow *engineFlow) failureDriveID(row *synctypes.SyncFailureRow) driveid.ID {
+	if row == nil || row.DriveID.IsZero() {
+		return flow.engine.driveID
+	}
+
+	return row.DriveID
 }
 
 func (flow *engineFlow) recordRetryTrialSkippedItem(
@@ -356,10 +364,7 @@ func (flow *engineFlow) recordRetryTrialSkippedItem(
 		return
 	}
 
-	driveID := row.DriveID
-	if driveID.IsZero() {
-		driveID = flow.engine.driveID
-	}
+	driveID := flow.failureDriveID(row)
 
 	flow.engine.logger.Warn("retry/trial observation filter: skipped file",
 		slog.String("path", skipped.Path),

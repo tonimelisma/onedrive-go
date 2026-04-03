@@ -2206,6 +2206,7 @@ func TestEngine_ClearFailureCandidate_RemovesSyncFailure(t *testing.T) {
 	assert.Empty(t, failures)
 }
 
+// Validates: R-2.10.2
 func TestEngine_RecordRetryTrialSkippedItem_ReasonlessSkipClearsFailure(t *testing.T) {
 	t.Parallel()
 
@@ -2221,6 +2222,32 @@ func TestEngine_RecordRetryTrialSkippedItem_ReasonlessSkipClearsFailure(t *testi
 		DriveID:   row.DriveID,
 		Direction: synctypes.DirectionUpload,
 		Category:  synctypes.CategoryTransient,
+	}, nil))
+
+	recordRetryTrialSkippedItemForTest(t, eng, ctx, row, &synctypes.SkippedItem{Path: row.Path})
+
+	failures, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, failures)
+}
+
+// Validates: R-2.10.2
+func TestEngine_RecordRetryTrialSkippedItem_ReasonlessSkipWithZeroDriveIDClearsEngineDriveFailure(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	ctx := context.Background()
+	row := &synctypes.SyncFailureRow{
+		Path: "internal.tmp",
+	}
+
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:      row.Path,
+		DriveID:   eng.driveID,
+		Direction: synctypes.DirectionUpload,
+		Category:  synctypes.CategoryActionable,
+		IssueType: synctypes.IssueInvalidFilename,
+		ErrMsg:    "leading space",
 	}, nil))
 
 	recordRetryTrialSkippedItemForTest(t, eng, ctx, row, &synctypes.SkippedItem{Path: row.Path})
@@ -2254,6 +2281,43 @@ func TestEngine_RecordRetryTrialSkippedItem_ZeroDriveIDFallsBackToEngineDrive(t 
 	assert.Equal(t, eng.driveID, failures[0].DriveID)
 	assert.Equal(t, synctypes.CategoryActionable, failures[0].Category)
 	assert.Equal(t, synctypes.IssueFileTooLarge, failures[0].IssueType)
+	assert.Equal(t, synctypes.FailureRoleItem, failures[0].Role)
+}
+
+// Validates: R-2.11.5
+func TestEngine_RecordRetryTrialSkippedItem_ReplacesExistingActionableIssueType(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	ctx := context.Background()
+	row := &synctypes.SyncFailureRow{
+		Path:      "problem.txt",
+		DriveID:   eng.driveID,
+		Direction: synctypes.DirectionUpload,
+	}
+
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:      row.Path,
+		DriveID:   row.DriveID,
+		Direction: row.Direction,
+		Category:  synctypes.CategoryActionable,
+		IssueType: synctypes.IssueInvalidFilename,
+		ErrMsg:    "contains ':'",
+	}, nil))
+
+	recordRetryTrialSkippedItemForTest(t, eng, ctx, row, &synctypes.SkippedItem{
+		Path:   row.Path,
+		Reason: synctypes.IssuePathTooLong,
+		Detail: "path exceeds 400-character limit",
+	})
+
+	failures, err := eng.baseline.ListActionableFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, failures, 1)
+	assert.Equal(t, row.Path, failures[0].Path)
+	assert.Equal(t, row.DriveID, failures[0].DriveID)
+	assert.Equal(t, synctypes.IssuePathTooLong, failures[0].IssueType)
+	assert.Equal(t, "path exceeds 400-character limit", failures[0].LastError)
 	assert.Equal(t, synctypes.FailureRoleItem, failures[0].Role)
 }
 
