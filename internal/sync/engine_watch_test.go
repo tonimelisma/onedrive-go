@@ -149,15 +149,18 @@ func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
 	seedOutcomes := make([]synctypes.Outcome, 20)
 	for i := range 20 {
 		seedOutcomes[i] = synctypes.Outcome{
-			Action:     synctypes.ActionDownload,
-			Success:    true,
-			Path:       fmt.Sprintf("file%02d.txt", i),
-			DriveID:    driveID,
-			ItemID:     fmt.Sprintf("item-%02d", i),
-			ItemType:   synctypes.ItemTypeFile,
-			RemoteHash: fmt.Sprintf("hash%02d", i),
-			LocalHash:  fmt.Sprintf("hash%02d", i),
-			Size:       100,
+			Action:          synctypes.ActionDownload,
+			Success:         true,
+			Path:            fmt.Sprintf("file%02d.txt", i),
+			DriveID:         driveID,
+			ItemID:          fmt.Sprintf("item-%02d", i),
+			ItemType:        synctypes.ItemTypeFile,
+			RemoteHash:      fmt.Sprintf("hash%02d", i),
+			LocalHash:       fmt.Sprintf("hash%02d", i),
+			LocalSize:       100,
+			LocalSizeKnown:  true,
+			RemoteSize:      100,
+			RemoteSizeKnown: true,
 		}
 	}
 
@@ -226,15 +229,18 @@ func TestRunWatch_ProcessBatch_BigDelete_NonDeletesFlow(t *testing.T) {
 	seedOutcomes := make([]synctypes.Outcome, 15)
 	for i := range 15 {
 		seedOutcomes[i] = synctypes.Outcome{
-			Action:     synctypes.ActionDownload,
-			Success:    true,
-			Path:       fmt.Sprintf("file%02d.txt", i),
-			DriveID:    driveID,
-			ItemID:     fmt.Sprintf("item-%02d", i),
-			ItemType:   synctypes.ItemTypeFile,
-			RemoteHash: fmt.Sprintf("hash%02d", i),
-			LocalHash:  fmt.Sprintf("hash%02d", i),
-			Size:       100,
+			Action:          synctypes.ActionDownload,
+			Success:         true,
+			Path:            fmt.Sprintf("file%02d.txt", i),
+			DriveID:         driveID,
+			ItemID:          fmt.Sprintf("item-%02d", i),
+			ItemType:        synctypes.ItemTypeFile,
+			RemoteHash:      fmt.Sprintf("hash%02d", i),
+			LocalHash:       fmt.Sprintf("hash%02d", i),
+			LocalSize:       100,
+			LocalSizeKnown:  true,
+			RemoteSize:      100,
+			RemoteSizeKnown: true,
 		}
 	}
 
@@ -315,15 +321,18 @@ func TestRunWatch_ProcessBatch_BigDelete_BelowThreshold(t *testing.T) {
 	seedOutcomes := make([]synctypes.Outcome, 5)
 	for i := range 5 {
 		seedOutcomes[i] = synctypes.Outcome{
-			Action:     synctypes.ActionDownload,
-			Success:    true,
-			Path:       fmt.Sprintf("file%02d.txt", i),
-			DriveID:    driveID,
-			ItemID:     fmt.Sprintf("item-%02d", i),
-			ItemType:   synctypes.ItemTypeFile,
-			RemoteHash: fmt.Sprintf("hash%02d", i),
-			LocalHash:  fmt.Sprintf("hash%02d", i),
-			Size:       100,
+			Action:          synctypes.ActionDownload,
+			Success:         true,
+			Path:            fmt.Sprintf("file%02d.txt", i),
+			DriveID:         driveID,
+			ItemID:          fmt.Sprintf("item-%02d", i),
+			ItemType:        synctypes.ItemTypeFile,
+			RemoteHash:      fmt.Sprintf("hash%02d", i),
+			LocalHash:       fmt.Sprintf("hash%02d", i),
+			LocalSize:       100,
+			LocalSizeKnown:  true,
+			RemoteSize:      100,
+			RemoteSizeKnown: true,
 		}
 	}
 
@@ -574,15 +583,18 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 
 	// Seed baseline with a synced file.
 	seedOutcomes := []synctypes.Outcome{{
-		Action:     synctypes.ActionDownload,
-		Success:    true,
-		Path:       "already-synced.txt",
-		DriveID:    driveID,
-		ItemID:     "item-as",
-		ItemType:   synctypes.ItemTypeFile,
-		RemoteHash: "samehash",
-		LocalHash:  "samehash",
-		Size:       5,
+		Action:          synctypes.ActionDownload,
+		Success:         true,
+		Path:            "already-synced.txt",
+		DriveID:         driveID,
+		ItemID:          "item-as",
+		ItemType:        synctypes.ItemTypeFile,
+		RemoteHash:      "samehash",
+		LocalHash:       "samehash",
+		LocalSize:       5,
+		LocalSizeKnown:  true,
+		RemoteSize:      5,
+		RemoteSizeKnown: true,
 	}}
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "")
 
@@ -934,7 +946,8 @@ func TestResolveConflict_KeepLocal_CommitsToBaseline(t *testing.T) {
 	assert.Empty(t, entry.RemoteHash, "mock returns no hash")
 
 	// "resolved local" is 14 bytes.
-	assert.Equal(t, int64(14), entry.Size)
+	assert.Equal(t, int64(14), entry.LocalSize)
+	assert.True(t, entry.LocalSizeKnown)
 }
 
 // ---------------------------------------------------------------------------

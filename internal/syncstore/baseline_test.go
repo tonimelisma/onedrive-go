@@ -75,10 +75,10 @@ func TestSyncStore_Close_CheckpointsWAL(t *testing.T) {
 	ctx := t.Context()
 	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO baseline (path, drive_id, item_id, parent_id, item_type,
-		 local_hash, remote_hash, size, mtime, synced_at, etag)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, synced_at, etag)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"/test.txt", "drv1", "item1", "parent1", "file",
-		"hash1", "hash1", 100, 1700000000, 1700000000, "etag1")
+		"hash1", "hash1", 100, 100, 1700000000, 1700000000, 1700000000, "etag1")
 	require.NoError(t, err)
 
 	// Close should checkpoint and remove the WAL file.
@@ -243,18 +243,22 @@ func TestCommit_Download(t *testing.T) {
 	mgr.SetNowFunc(func() time.Time { return fixedTime })
 
 	outcomes := []synctypes.Outcome{{
-		Action:     synctypes.ActionDownload,
-		Success:    true,
-		Path:       "docs/readme.md",
-		DriveID:    driveid.New("drive1"),
-		ItemID:     "item1",
-		ParentID:   "parent1",
-		ItemType:   synctypes.ItemTypeFile,
-		LocalHash:  "abc123",
-		RemoteHash: "abc123",
-		Size:       1024,
-		Mtime:      fixedTime.Add(-time.Hour).UnixNano(),
-		ETag:       "etag1",
+		Action:          synctypes.ActionDownload,
+		Success:         true,
+		Path:            "docs/readme.md",
+		DriveID:         driveid.New("drive1"),
+		ItemID:          "item1",
+		ParentID:        "parent1",
+		ItemType:        synctypes.ItemTypeFile,
+		LocalHash:       "abc123",
+		RemoteHash:      "abc123",
+		LocalSize:       1024,
+		LocalSizeKnown:  true,
+		RemoteSize:      1024,
+		RemoteSizeKnown: true,
+		LocalMtime:      fixedTime.Add(-time.Hour).UnixNano(),
+		RemoteMtime:     fixedTime.Add(-time.Hour).UnixNano(),
+		ETag:            "etag1",
 	}}
 
 	commitAll(t, mgr, ctx, outcomes)
@@ -278,18 +282,22 @@ func TestCommit_Upload(t *testing.T) {
 	mgr.SetNowFunc(func() time.Time { return fixedTime })
 
 	outcomes := []synctypes.Outcome{{
-		Action:     synctypes.ActionUpload,
-		Success:    true,
-		Path:       "photos/cat.jpg",
-		DriveID:    driveid.New("drive2"),
-		ItemID:     "item2",
-		ParentID:   "parent2",
-		ItemType:   synctypes.ItemTypeFile,
-		LocalHash:  "hash-local",
-		RemoteHash: "hash-remote",
-		Size:       2048,
-		Mtime:      fixedTime.UnixNano(),
-		ETag:       "etag2",
+		Action:          synctypes.ActionUpload,
+		Success:         true,
+		Path:            "photos/cat.jpg",
+		DriveID:         driveid.New("drive2"),
+		ItemID:          "item2",
+		ParentID:        "parent2",
+		ItemType:        synctypes.ItemTypeFile,
+		LocalHash:       "hash-local",
+		RemoteHash:      "hash-remote",
+		LocalSize:       2048,
+		LocalSizeKnown:  true,
+		RemoteSize:      2048,
+		RemoteSizeKnown: true,
+		LocalMtime:      fixedTime.UnixNano(),
+		RemoteMtime:     fixedTime.UnixNano(),
+		ETag:            "etag2",
 	}}
 
 	commitAll(t, mgr, ctx, outcomes)
@@ -328,7 +336,10 @@ func TestCommit_FolderCreate(t *testing.T) {
 	assert.Equal(t, synctypes.ItemTypeFolder, entry.ItemType)
 	// Folders have no hash or size.
 	assert.Empty(t, entry.LocalHash)
-	assert.Zero(t, entry.Size)
+	assert.Zero(t, entry.LocalSize)
+	assert.False(t, entry.LocalSizeKnown)
+	assert.Zero(t, entry.RemoteSize)
+	assert.False(t, entry.RemoteSizeKnown)
 }
 
 // Validates: R-2.2
@@ -343,16 +354,20 @@ func TestCommit_UpdateSynced(t *testing.T) {
 	mgr.SetNowFunc(func() time.Time { return t1 })
 
 	outcomes := []synctypes.Outcome{{
-		Action:     synctypes.ActionDownload,
-		Success:    true,
-		Path:       "file.txt",
-		DriveID:    driveid.New("d"),
-		ItemID:     "i",
-		ItemType:   synctypes.ItemTypeFile,
-		LocalHash:  "h1",
-		RemoteHash: "h1",
-		Size:       100,
-		Mtime:      t1.UnixNano(),
+		Action:          synctypes.ActionDownload,
+		Success:         true,
+		Path:            "file.txt",
+		DriveID:         driveid.New("d"),
+		ItemID:          "i",
+		ItemType:        synctypes.ItemTypeFile,
+		LocalHash:       "h1",
+		RemoteHash:      "h1",
+		LocalSize:       100,
+		LocalSizeKnown:  true,
+		RemoteSize:      100,
+		RemoteSizeKnown: true,
+		LocalMtime:      t1.UnixNano(),
+		RemoteMtime:     t1.UnixNano(),
 	}}
 
 	commitAll(t, mgr, ctx, outcomes)
@@ -401,7 +416,9 @@ func TestCommit_DeleteLikeActionsRemoveBaseline(t *testing.T) {
 				Action: synctypes.ActionDownload, Success: true,
 				Path: tc.path, DriveID: driveid.New("d"), ItemID: "i",
 				ItemType: synctypes.ItemTypeFile, LocalHash: "h", RemoteHash: "h",
-				Size: 50, Mtime: 1,
+				LocalSize: 50, LocalSizeKnown: true,
+				RemoteSize: 50, RemoteSizeKnown: true,
+				LocalMtime: 1, RemoteMtime: 1,
 			}}
 			commitAll(t, mgr, ctx, create)
 
@@ -431,7 +448,9 @@ func TestCommit_Move(t *testing.T) {
 		Action: synctypes.ActionDownload, Success: true,
 		Path: "old/path.txt", DriveID: driveid.New("d"), ItemID: "i", ParentID: "p",
 		ItemType: synctypes.ItemTypeFile, LocalHash: "h", RemoteHash: "h",
-		Size: 100, Mtime: 1,
+		LocalSize: 100, LocalSizeKnown: true,
+		RemoteSize: 100, RemoteSizeKnown: true,
+		LocalMtime: 1, RemoteMtime: 1,
 	}}
 
 	commitAll(t, mgr, ctx, create)
@@ -442,7 +461,9 @@ func TestCommit_Move(t *testing.T) {
 		Path: "new/path.txt", OldPath: "old/path.txt",
 		DriveID: driveid.New("d"), ItemID: "i", ParentID: "p2",
 		ItemType: synctypes.ItemTypeFile, LocalHash: "h", RemoteHash: "h",
-		Size: 100, Mtime: 1,
+		LocalSize: 100, LocalSizeKnown: true,
+		RemoteSize: 100, RemoteSizeKnown: true,
+		LocalMtime: 1, RemoteMtime: 1,
 	}}
 
 	commitAll(t, mgr, ctx, move)
@@ -514,7 +535,7 @@ func TestCommit_Conflict_StoresRemoteMtime(t *testing.T) {
 		ItemType:     synctypes.ItemTypeFile,
 		LocalHash:    "local-h",
 		RemoteHash:   "remote-h",
-		Mtime:        1600000000000000000,
+		LocalMtime:   1600000000000000000,
 		RemoteMtime:  remoteMtime,
 		ConflictType: "edit_edit",
 	}}
@@ -548,7 +569,9 @@ func TestCommit_SkipsFailedOutcomes(t *testing.T) {
 		Success: false, // should be skipped
 		Path:    "should-not-exist.txt",
 		DriveID: driveid.New("d"), ItemID: "i", ItemType: synctypes.ItemTypeFile,
-		LocalHash: "h", RemoteHash: "h", Size: 100,
+		LocalHash: "h", RemoteHash: "h",
+		LocalSize: 100, LocalSizeKnown: true,
+		RemoteSize: 100, RemoteSizeKnown: true,
 	}}
 
 	commitAll(t, mgr, ctx, outcomes)
@@ -585,7 +608,10 @@ func TestCommit_DeltaTokenRoundTrip(t *testing.T) {
 			outcomes := []synctypes.Outcome{{
 				Action: synctypes.ActionDownload, Success: true,
 				Path: "f.txt", DriveID: driveid.New(tc.driveID), ItemID: "i", ItemType: synctypes.ItemTypeFile,
-				LocalHash: "h", RemoteHash: "h", Size: 10, Mtime: 1,
+				LocalHash: "h", RemoteHash: "h",
+				LocalSize: 10, LocalSizeKnown: true,
+				RemoteSize: 10, RemoteSizeKnown: true,
+				LocalMtime: 1, RemoteMtime: 1,
 			}}
 
 			for step, token := range tc.tokenSteps {
@@ -616,7 +642,10 @@ func TestCommit_SyncedAtFromNowFunc(t *testing.T) {
 	outcomes := []synctypes.Outcome{{
 		Action: synctypes.ActionDownload, Success: true,
 		Path: "f.txt", DriveID: driveid.New("d"), ItemID: "i", ItemType: synctypes.ItemTypeFile,
-		LocalHash: "h", RemoteHash: "h", Size: 10, Mtime: 999,
+		LocalHash: "h", RemoteHash: "h",
+		LocalSize: 10, LocalSizeKnown: true,
+		RemoteSize: 10, RemoteSizeKnown: true,
+		LocalMtime: 999, RemoteMtime: 999,
 	}}
 
 	commitAll(t, mgr, ctx, outcomes)
@@ -643,7 +672,10 @@ func TestCommit_RefreshesCache(t *testing.T) {
 	outcomes := []synctypes.Outcome{{
 		Action: synctypes.ActionDownload, Success: true,
 		Path: "f.txt", DriveID: driveid.New("d"), ItemID: "i", ItemType: synctypes.ItemTypeFile,
-		LocalHash: "h", RemoteHash: "h", Size: 10, Mtime: 1,
+		LocalHash: "h", RemoteHash: "h",
+		LocalSize: 10, LocalSizeKnown: true,
+		RemoteSize: 10, RemoteSizeKnown: true,
+		LocalMtime: 1, RemoteMtime: 1,
 	}}
 
 	commitAll(t, mgr, ctx, outcomes)
@@ -671,11 +703,11 @@ func TestLoad_NullableFields(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	// Insert a row with NULL parent_id, hashes, size, mtime, etag directly.
+	// Insert a row with NULL parent_id, hashes, size, mtimes, etag directly.
 	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO baseline (path, drive_id, item_id, parent_id, item_type,
-		 local_hash, remote_hash, size, mtime, synced_at, etag)
-		 VALUES (?, ?, ?, NULL, ?, NULL, NULL, NULL, NULL, ?, NULL)`,
+		 local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, synced_at, etag)
+		 VALUES (?, ?, ?, NULL, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, NULL)`,
 		"root", "d", "root-id", "root", time.Now().UnixNano(),
 	)
 	require.NoError(t, err)
@@ -688,8 +720,12 @@ func TestLoad_NullableFields(t *testing.T) {
 	assert.Empty(t, entry.ParentID)
 	assert.Empty(t, entry.LocalHash)
 	assert.Empty(t, entry.RemoteHash)
-	assert.Zero(t, entry.Size)
-	assert.Zero(t, entry.Mtime)
+	assert.Zero(t, entry.LocalSize)
+	assert.False(t, entry.LocalSizeKnown)
+	assert.Zero(t, entry.RemoteSize)
+	assert.False(t, entry.RemoteSizeKnown)
+	assert.Zero(t, entry.LocalMtime)
+	assert.Zero(t, entry.RemoteMtime)
 	assert.Empty(t, entry.ETag)
 }
 
@@ -876,7 +912,10 @@ func TestLoad_ReturnsCachedBaseline(t *testing.T) {
 	outcomes := []synctypes.Outcome{{
 		Action: synctypes.ActionDownload, Success: true,
 		Path: "cached.txt", DriveID: driveid.New("d"), ItemID: "i", ItemType: synctypes.ItemTypeFile,
-		LocalHash: "h", RemoteHash: "h", Size: 10, Mtime: 1,
+		LocalHash: "h", RemoteHash: "h",
+		LocalSize: 10, LocalSizeKnown: true,
+		RemoteSize: 10, RemoteSizeKnown: true,
+		LocalMtime: 1, RemoteMtime: 1,
 	}}
 
 	commitAll(t, mgr, ctx, outcomes)
@@ -904,7 +943,10 @@ func TestLoad_CacheInvalidatedByCommit(t *testing.T) {
 	outcomes := []synctypes.Outcome{{
 		Action: synctypes.ActionDownload, Success: true,
 		Path: "first.txt", DriveID: driveid.New("d"), ItemID: "i1", ItemType: synctypes.ItemTypeFile,
-		LocalHash: "h1", RemoteHash: "h1", Size: 10, Mtime: 1,
+		LocalHash: "h1", RemoteHash: "h1",
+		LocalSize: 10, LocalSizeKnown: true,
+		RemoteSize: 10, RemoteSizeKnown: true,
+		LocalMtime: 1, RemoteMtime: 1,
 	}}
 
 	commitAll(t, mgr, ctx, outcomes)
@@ -917,7 +959,10 @@ func TestLoad_CacheInvalidatedByCommit(t *testing.T) {
 	outcomes2 := []synctypes.Outcome{{
 		Action: synctypes.ActionDownload, Success: true,
 		Path: "second.txt", DriveID: driveid.New("d"), ItemID: "i2", ItemType: synctypes.ItemTypeFile,
-		LocalHash: updatedHash, RemoteHash: updatedHash, Size: 20, Mtime: 2,
+		LocalHash: updatedHash, RemoteHash: updatedHash,
+		LocalSize: 20, LocalSizeKnown: true,
+		RemoteSize: 20, RemoteSizeKnown: true,
+		LocalMtime: 2, RemoteMtime: 2,
 	}}
 
 	commitAll(t, mgr, ctx, outcomes2)
@@ -963,19 +1008,23 @@ func TestCommitConflict_AutoResolved(t *testing.T) {
 	mgr.SetNowFunc(func() time.Time { return fixedTime })
 
 	outcomes := []synctypes.Outcome{{
-		Action:       synctypes.ActionConflict,
-		Success:      true,
-		Path:         "auto-resolved.txt",
-		DriveID:      driveid.New("d"),
-		ItemID:       "new-item",
-		ParentID:     "root",
-		ItemType:     synctypes.ItemTypeFile,
-		LocalHash:    "local-h",
-		RemoteHash:   "remote-h",
-		Size:         512,
-		Mtime:        fixedTime.UnixNano(),
-		ConflictType: "edit_delete",
-		ResolvedBy:   "auto",
+		Action:          synctypes.ActionConflict,
+		Success:         true,
+		Path:            "auto-resolved.txt",
+		DriveID:         driveid.New("d"),
+		ItemID:          "new-item",
+		ParentID:        "root",
+		ItemType:        synctypes.ItemTypeFile,
+		LocalHash:       "local-h",
+		RemoteHash:      "remote-h",
+		LocalSize:       512,
+		LocalSizeKnown:  true,
+		RemoteSize:      512,
+		RemoteSizeKnown: true,
+		LocalMtime:      fixedTime.UnixNano(),
+		RemoteMtime:     fixedTime.UnixNano(),
+		ConflictType:    "edit_delete",
+		ResolvedBy:      "auto",
 	}}
 
 	commitAll(t, mgr, ctx, outcomes)
@@ -1057,18 +1106,22 @@ func TestCommitOutcome_Download(t *testing.T) {
 	mgr.SetNowFunc(func() time.Time { return fixedTime })
 
 	outcome := synctypes.Outcome{
-		Action:     synctypes.ActionDownload,
-		Success:    true,
-		Path:       "co-download.txt",
-		DriveID:    driveid.New("d"),
-		ItemID:     "i1",
-		ParentID:   "p1",
-		ItemType:   synctypes.ItemTypeFile,
-		LocalHash:  "lh",
-		RemoteHash: "rh",
-		Size:       512,
-		Mtime:      fixedTime.UnixNano(),
-		ETag:       "etag1",
+		Action:          synctypes.ActionDownload,
+		Success:         true,
+		Path:            "co-download.txt",
+		DriveID:         driveid.New("d"),
+		ItemID:          "i1",
+		ParentID:        "p1",
+		ItemType:        synctypes.ItemTypeFile,
+		LocalHash:       "lh",
+		RemoteHash:      "rh",
+		LocalSize:       512,
+		LocalSizeKnown:  true,
+		RemoteSize:      512,
+		RemoteSizeKnown: true,
+		LocalMtime:      fixedTime.UnixNano(),
+		RemoteMtime:     fixedTime.UnixNano(),
+		ETag:            "etag1",
 	}
 
 	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
@@ -1090,15 +1143,18 @@ func TestCommitOutcome_Upload(t *testing.T) {
 	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
 	outcome := synctypes.Outcome{
-		Action:     synctypes.ActionUpload,
-		Success:    true,
-		Path:       "co-upload.txt",
-		DriveID:    driveid.New("d"),
-		ItemID:     "i2",
-		ItemType:   synctypes.ItemTypeFile,
-		LocalHash:  "h",
-		RemoteHash: "h",
-		Size:       256,
+		Action:          synctypes.ActionUpload,
+		Success:         true,
+		Path:            "co-upload.txt",
+		DriveID:         driveid.New("d"),
+		ItemID:          "i2",
+		ItemType:        synctypes.ItemTypeFile,
+		LocalHash:       "h",
+		RemoteHash:      "h",
+		LocalSize:       256,
+		LocalSizeKnown:  true,
+		RemoteSize:      256,
+		RemoteSizeKnown: true,
 	}
 
 	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
@@ -1106,6 +1162,143 @@ func TestCommitOutcome_Upload(t *testing.T) {
 	entry, ok := mgr.Baseline().GetByPath("co-upload.txt")
 	require.True(t, ok, "baseline entry not found")
 	assert.Equal(t, "i2", entry.ItemID)
+}
+
+// Validates: R-6.7.17
+func TestCommitOutcome_PersistsSideAwareFileMetadata(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	ctx := t.Context()
+
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC) })
+
+	outcome := synctypes.Outcome{
+		Action:          synctypes.ActionUpload,
+		Success:         true,
+		Path:            "hashless.docx",
+		DriveID:         driveid.New("d"),
+		ItemID:          "i-side-aware",
+		ItemType:        synctypes.ItemTypeFile,
+		LocalHash:       "",
+		RemoteHash:      "",
+		LocalSize:       512,
+		LocalSizeKnown:  true,
+		RemoteSize:      768,
+		RemoteSizeKnown: true,
+		LocalMtime:      111,
+		RemoteMtime:     222,
+		ETag:            "etag-side-aware",
+	}
+
+	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
+
+	entry, ok := mgr.Baseline().GetByPath("hashless.docx")
+	require.True(t, ok, "baseline entry not found")
+	assert.Equal(t, int64(512), entry.LocalSize)
+	assert.True(t, entry.LocalSizeKnown)
+	assert.Equal(t, int64(768), entry.RemoteSize)
+	assert.True(t, entry.RemoteSizeKnown)
+	assert.Equal(t, int64(111), entry.LocalMtime)
+	assert.Equal(t, int64(222), entry.RemoteMtime)
+	assert.Equal(t, "etag-side-aware", entry.ETag)
+}
+
+// Validates: R-6.7.17
+func TestCommitOutcome_PersistsZeroByteSizeAsKnownZero(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	ctx := t.Context()
+
+	outcome := synctypes.Outcome{
+		Action:          synctypes.ActionDownload,
+		Success:         true,
+		Path:            "zero.txt",
+		DriveID:         driveid.New("d"),
+		ItemID:          "i-zero",
+		ItemType:        synctypes.ItemTypeFile,
+		LocalHash:       "",
+		RemoteHash:      "",
+		LocalSize:       0,
+		LocalSizeKnown:  true,
+		RemoteSize:      0,
+		RemoteSizeKnown: true,
+		LocalMtime:      100,
+		RemoteMtime:     100,
+		ETag:            "etag-zero",
+	}
+
+	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
+
+	var (
+		localSize       sql.NullInt64
+		remoteSize      sql.NullInt64
+		storedLocalETag sql.NullString
+	)
+
+	err := mgr.DB().QueryRowContext(ctx,
+		`SELECT local_size, remote_size, etag FROM baseline WHERE path = ?`,
+		"zero.txt",
+	).Scan(&localSize, &remoteSize, &storedLocalETag)
+	require.NoError(t, err)
+	require.True(t, localSize.Valid, "local_size should stay known for zero-byte files")
+	require.True(t, remoteSize.Valid, "remote_size should stay known for zero-byte files")
+	assert.Equal(t, int64(0), localSize.Int64)
+	assert.Equal(t, int64(0), remoteSize.Int64)
+	assert.Equal(t, "etag-zero", storedLocalETag.String)
+}
+
+// Validates: R-6.7.17
+func TestNewSyncStore_MigratesLegacyBaselineToSideAwareMetadata(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "legacy.db")
+	db, err := sql.Open("sqlite", "file:"+dbPath)
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(t.Context(), `
+		CREATE TABLE baseline (
+			drive_id TEXT NOT NULL,
+			item_id TEXT NOT NULL,
+			path TEXT NOT NULL UNIQUE,
+			parent_id TEXT,
+			item_type TEXT NOT NULL,
+			local_hash TEXT,
+			remote_hash TEXT,
+			size INTEGER,
+			mtime INTEGER,
+			synced_at INTEGER NOT NULL,
+			etag TEXT,
+			PRIMARY KEY (drive_id, item_id)
+		);
+		INSERT INTO baseline (
+			drive_id, item_id, path, parent_id, item_type,
+			local_hash, remote_hash, size, mtime, synced_at, etag
+		) VALUES (
+			'drive1', 'item1', 'legacy.txt', 'parent1', 'file',
+			'', '', 123, 456, 789, 'etag-legacy'
+		);
+	`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	mgr, err := NewSyncStore(t.Context(), dbPath, newTestLogger(t))
+	require.NoError(t, err)
+	defer mgr.Close(t.Context())
+
+	bl, err := mgr.Load(t.Context())
+	require.NoError(t, err)
+
+	entry, ok := bl.GetByPath("legacy.txt")
+	require.True(t, ok, "migrated baseline entry not found")
+	assert.Equal(t, int64(123), entry.LocalSize)
+	assert.True(t, entry.LocalSizeKnown)
+	assert.Equal(t, int64(456), entry.LocalMtime)
+	assert.Zero(t, entry.RemoteSize)
+	assert.False(t, entry.RemoteSizeKnown, "remote size should stay unknown when legacy schema had no remote-side column")
+	assert.Zero(t, entry.RemoteMtime)
+	assert.Equal(t, "etag-legacy", entry.ETag)
 }
 
 // Validates: R-2.2
@@ -1121,7 +1314,9 @@ func TestCommitOutcome_Delete(t *testing.T) {
 	seed := synctypes.Outcome{
 		Action: synctypes.ActionDownload, Success: true,
 		Path: "co-delete.txt", DriveID: driveid.New("d"), ItemID: "i",
-		ItemType: synctypes.ItemTypeFile, LocalHash: "h", RemoteHash: "h", Size: 10,
+		ItemType: synctypes.ItemTypeFile, LocalHash: "h", RemoteHash: "h",
+		LocalSize: 10, LocalSizeKnown: true,
+		RemoteSize: 10, RemoteSizeKnown: true,
 	}
 
 	require.NoError(t, mgr.CommitOutcome(ctx, &seed))
@@ -1146,7 +1341,9 @@ func TestCommitOutcome_Move(t *testing.T) {
 	seed := synctypes.Outcome{
 		Action: synctypes.ActionDownload, Success: true,
 		Path: "old/move.txt", DriveID: driveid.New("d"), ItemID: "i", ParentID: "p1",
-		ItemType: synctypes.ItemTypeFile, LocalHash: "h", RemoteHash: "h", Size: 10,
+		ItemType: synctypes.ItemTypeFile, LocalHash: "h", RemoteHash: "h",
+		LocalSize: 10, LocalSizeKnown: true,
+		RemoteSize: 10, RemoteSizeKnown: true,
 	}
 
 	require.NoError(t, mgr.CommitOutcome(ctx, &seed))
@@ -1155,7 +1352,9 @@ func TestCommitOutcome_Move(t *testing.T) {
 		Action: synctypes.ActionLocalMove, Success: true,
 		Path: "new/move.txt", OldPath: "old/move.txt",
 		DriveID: driveid.New("d"), ItemID: "i", ParentID: "p2",
-		ItemType: synctypes.ItemTypeFile, LocalHash: "h", RemoteHash: "h", Size: 10,
+		ItemType: synctypes.ItemTypeFile, LocalHash: "h", RemoteHash: "h",
+		LocalSize: 10, LocalSizeKnown: true,
+		RemoteSize: 10, RemoteSizeKnown: true,
 	}
 	require.NoError(t, mgr.CommitOutcome(ctx, &move))
 
@@ -1348,29 +1547,35 @@ func TestCommitOutcome_Upload_NewItemID_SamePath(t *testing.T) {
 
 	// Seed baseline with item_id "old-id" at path "file.txt".
 	seedOutcome := synctypes.Outcome{
-		Action:     synctypes.ActionDownload,
-		Success:    true,
-		Path:       "file.txt",
-		DriveID:    driveID,
-		ItemID:     "old-id",
-		ItemType:   synctypes.ItemTypeFile,
-		RemoteHash: "hash1",
-		LocalHash:  "hash1",
-		Size:       100,
+		Action:          synctypes.ActionDownload,
+		Success:         true,
+		Path:            "file.txt",
+		DriveID:         driveID,
+		ItemID:          "old-id",
+		ItemType:        synctypes.ItemTypeFile,
+		RemoteHash:      "hash1",
+		LocalHash:       "hash1",
+		LocalSize:       100,
+		LocalSizeKnown:  true,
+		RemoteSize:      100,
+		RemoteSizeKnown: true,
 	}
 	require.NoError(t, mgr.CommitOutcome(ctx, &seedOutcome))
 
 	// Upload outcome with different item_id for the same path.
 	uploadOutcome := synctypes.Outcome{
-		Action:     synctypes.ActionUpload,
-		Success:    true,
-		Path:       "file.txt",
-		DriveID:    driveID,
-		ItemID:     "new-id",
-		ItemType:   synctypes.ItemTypeFile,
-		RemoteHash: "hash2",
-		LocalHash:  "hash2",
-		Size:       200,
+		Action:          synctypes.ActionUpload,
+		Success:         true,
+		Path:            "file.txt",
+		DriveID:         driveID,
+		ItemID:          "new-id",
+		ItemType:        synctypes.ItemTypeFile,
+		RemoteHash:      "hash2",
+		LocalHash:       "hash2",
+		LocalSize:       200,
+		LocalSizeKnown:  true,
+		RemoteSize:      200,
+		RemoteSizeKnown: true,
 	}
 	require.NoError(t, mgr.CommitOutcome(ctx, &uploadOutcome))
 
@@ -1749,7 +1954,7 @@ func TestConflictRecord_NameField(t *testing.T) {
 		ConflictType: synctypes.ConflictEditEdit,
 		LocalHash:    "localH",
 		RemoteHash:   "remoteH",
-		Mtime:        100,
+		LocalMtime:   100,
 		RemoteMtime:  200,
 	}
 
@@ -1784,7 +1989,7 @@ func setupPruneTestConflicts(t *testing.T, mgr *SyncStore, ctx context.Context, 
 		Action: synctypes.ActionConflict, Success: true,
 		Path: "old-resolved.txt", DriveID: driveid.New(testDriveID),
 		ItemID: "item-old", ConflictType: synctypes.ConflictEditEdit,
-		LocalHash: "lh1", RemoteHash: "rh1", Mtime: 100, RemoteMtime: 200,
+		LocalHash: "lh1", RemoteHash: "rh1", LocalMtime: 100, RemoteMtime: 200,
 	}))
 
 	mgr.SetNowFunc(func() time.Time { return now.AddDate(0, 0, -100) })
@@ -1801,7 +2006,7 @@ func setupPruneTestConflicts(t *testing.T, mgr *SyncStore, ctx context.Context, 
 		Action: synctypes.ActionConflict, Success: true,
 		Path: "new-resolved.txt", DriveID: driveid.New(testDriveID),
 		ItemID: "item-new", ConflictType: synctypes.ConflictEditEdit,
-		LocalHash: "lh2", RemoteHash: "rh2", Mtime: 300, RemoteMtime: 400,
+		LocalHash: "lh2", RemoteHash: "rh2", LocalMtime: 300, RemoteMtime: 400,
 	}))
 
 	mgr.SetNowFunc(func() time.Time { return now.AddDate(0, 0, -5) })
@@ -1823,7 +2028,7 @@ func setupPruneTestConflicts(t *testing.T, mgr *SyncStore, ctx context.Context, 
 		Action: synctypes.ActionConflict, Success: true,
 		Path: "unresolved.txt", DriveID: driveid.New(testDriveID),
 		ItemID: "item-unresolved", ConflictType: synctypes.ConflictEditEdit,
-		LocalHash: "lh3", RemoteHash: "rh3", Mtime: 500, RemoteMtime: 600,
+		LocalHash: "lh3", RemoteHash: "rh3", LocalMtime: 500, RemoteMtime: 600,
 	}))
 
 	return oldID, newID
@@ -1883,7 +2088,9 @@ func TestCheckCacheConsistency(t *testing.T) {
 		Path: "consistency-check.txt", DriveID: driveid.New(testDriveID),
 		ItemID: "item-cc", ParentID: "root", ItemType: synctypes.ItemTypeFile,
 		LocalHash: "hash1", RemoteHash: "hash1",
-		Size: 100, Mtime: 1000,
+		LocalSize: 100, LocalSizeKnown: true,
+		RemoteSize: 100, RemoteSizeKnown: true,
+		LocalMtime: 1000, RemoteMtime: 1000,
 	}))
 
 	// Cache and DB should be consistent — no mismatches.
@@ -2109,16 +2316,20 @@ func TestBaselineEntryCount_WithEntries(t *testing.T) {
 
 	// Commit a download outcome to add a baseline entry.
 	outcome := synctypes.Outcome{
-		Action:     synctypes.ActionDownload,
-		Success:    true,
-		Path:       "/test/file.txt",
-		DriveID:    driveid.New("d!123"),
-		ItemID:     "item-1",
-		ParentID:   "parent-1",
-		ItemType:   synctypes.ItemTypeFile,
-		RemoteHash: "hash123",
-		Size:       1024,
-		Mtime:      time.Now().UnixNano(),
+		Action:          synctypes.ActionDownload,
+		Success:         true,
+		Path:            "/test/file.txt",
+		DriveID:         driveid.New("d!123"),
+		ItemID:          "item-1",
+		ParentID:        "parent-1",
+		ItemType:        synctypes.ItemTypeFile,
+		RemoteHash:      "hash123",
+		LocalSize:       1024,
+		LocalSizeKnown:  true,
+		RemoteSize:      1024,
+		RemoteSizeKnown: true,
+		LocalMtime:      time.Now().UnixNano(),
+		RemoteMtime:     time.Now().UnixNano(),
 	}
 	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
 

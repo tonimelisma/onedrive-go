@@ -228,7 +228,7 @@ func (e *Executor) DeleteLocalFile(action *synctypes.Action, absPath string, inf
 				ConflictType: synctypes.ConflictEditDelete,
 				LocalHash:    currentHash,
 				RemoteHash:   baselineRemoteHash,
-				Mtime:        info.ModTime().UnixNano(),
+				LocalMtime:   info.ModTime().UnixNano(),
 				RemoteMtime:  remoteMtime,
 			}
 		}

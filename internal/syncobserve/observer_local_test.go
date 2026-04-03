@@ -169,7 +169,8 @@ func TestFullScan_DeletedFile(t *testing.T) {
 	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
 		Path: "gone.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: "some-hash",
-		Size: 42, Mtime: 1234567890,
+		LocalSize: 42, LocalSizeKnown: true,
+		LocalMtime: 1234567890,
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
@@ -221,7 +222,7 @@ func TestFullScan_MtimeChangeNoContentChange(t *testing.T) {
 	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
 		Path: "stable.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, content),
-		Mtime: 999, // intentionally different from actual file mtime
+		LocalMtime: 999, // intentionally different from actual file mtime
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
@@ -249,7 +250,8 @@ func TestFullScan_MtimeSizeFastPath(t *testing.T) {
 	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
 		Path: "cached.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, content),
-		Size: info.Size(), Mtime: info.ModTime().UnixNano(),
+		LocalSize: info.Size(), LocalSizeKnown: true,
+		LocalMtime: info.ModTime().UnixNano(),
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
@@ -276,7 +278,8 @@ func TestFullScan_SameSecondSubsecondDifferenceSkipsFalseModify(t *testing.T) {
 	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
 		Path: "stable.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, content),
-		Size: info.Size(), Mtime: fileTime.Add(700 * time.Millisecond).UnixNano(),
+		LocalSize: info.Size(), LocalSizeKnown: true,
+		LocalMtime: fileTime.Add(700 * time.Millisecond).UnixNano(),
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
@@ -309,7 +312,8 @@ func TestFullScan_RacilyCleanForcesHash(t *testing.T) {
 	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
 		Path: "racy.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, baselineContent),
-		Size: info.Size(), Mtime: info.ModTime().UnixNano(),
+		LocalSize: info.Size(), LocalSizeKnown: true,
+		LocalMtime: info.ModTime().UnixNano(),
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
@@ -342,7 +346,8 @@ func TestFullScan_SizeChangeForcesHash(t *testing.T) {
 	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
 		Path: "grown.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "short"),
-		Size: 5, Mtime: info.ModTime().UnixNano(),
+		LocalSize: 5, LocalSizeKnown: true,
+		LocalMtime: info.ModTime().UnixNano(),
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)

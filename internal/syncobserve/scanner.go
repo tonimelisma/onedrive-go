@@ -490,7 +490,7 @@ func (o *LocalObserver) classifyFileChange(
 		return nil
 	}
 
-	if currentSize == base.Size && sameOneDriveComparableMtime(currentMtime, base.Mtime) {
+	if base.LocalSizeKnown && currentSize == base.LocalSize && sameOneDriveComparableMtime(currentMtime, base.LocalMtime) {
 		o.Logger.Debug("racily clean file, forcing hash check",
 			slog.String("path", dbRelPath))
 	}
@@ -784,8 +784,8 @@ func (o *LocalObserver) detectDeletions(observed map[string]bool) []synctypes.Ch
 			Path:      path,
 			Name:      filepath.Base(path),
 			ItemType:  entry.ItemType,
-			Size:      entry.Size,
-			Mtime:     entry.Mtime,
+			Size:      entry.LocalSize,
+			Mtime:     entry.LocalMtime,
 			IsDeleted: true,
 		})
 	})

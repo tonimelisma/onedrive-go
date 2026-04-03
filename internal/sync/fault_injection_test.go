@@ -84,7 +84,10 @@ func TestFault_BaselineCommitError(t *testing.T) {
 		Action: synctypes.ActionDownload, Success: true, Path: "file.txt",
 		DriveID: driveid.New(engineTestDriveID), ItemID: "item-1",
 		ParentID: "root", ItemType: synctypes.ItemTypeFile, RemoteHash: "hash1",
-		Size: 100,
+		LocalSize:       100,
+		LocalSizeKnown:  true,
+		RemoteSize:      100,
+		RemoteSizeKnown: true,
 	}))
 
 	// Close the DB to simulate a fault.

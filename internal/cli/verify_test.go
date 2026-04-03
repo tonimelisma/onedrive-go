@@ -190,10 +190,10 @@ func TestRunVerify_ReturnsMismatchSentinel(t *testing.T) {
 
 	_, err = mgr.DB().ExecContext(t.Context(),
 		`INSERT INTO baseline (path, drive_id, item_id, parent_id, item_type,
-		 local_hash, remote_hash, size, mtime, synced_at, etag)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, synced_at, etag)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"docs/readme.txt", "drv1", "item1", "parent1", "file",
-		"wrong-hash", "wrong-hash", 5, 1700000000, 1700000000, "etag1")
+		"wrong-hash", "wrong-hash", 5, 5, 1700000000, 1700000000, 1700000000, "etag1")
 	require.NoError(t, err)
 	require.NoError(t, mgr.Close(t.Context()))
 

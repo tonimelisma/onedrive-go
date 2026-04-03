@@ -443,15 +443,16 @@ func (e *Engine) upsertBaselineFromDisk(ctx context.Context, driveID driveid.ID,
 	}
 
 	outcome := &synctypes.Outcome{
-		Action:    synctypes.ActionUpdateSynced,
-		Success:   true,
-		Path:      relPath,
-		DriveID:   driveID,
-		ItemID:    itemID,
-		ItemType:  synctypes.ItemTypeFile,
-		LocalHash: hash,
-		Size:      info.Size(),
-		Mtime:     info.ModTime().UnixNano(),
+		Action:         synctypes.ActionUpdateSynced,
+		Success:        true,
+		Path:           relPath,
+		DriveID:        driveID,
+		ItemID:         itemID,
+		ItemType:       synctypes.ItemTypeFile,
+		LocalHash:      hash,
+		LocalSize:      info.Size(),
+		LocalSizeKnown: true,
+		LocalMtime:     info.ModTime().UnixNano(),
 	}
 
 	if err := e.baseline.CommitOutcome(ctx, outcome); err != nil {

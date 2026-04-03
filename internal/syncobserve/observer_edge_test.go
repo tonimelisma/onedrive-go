@@ -35,11 +35,12 @@ func TestRacilyClean_SameSecondDetection(t *testing.T) {
 	require.NoError(t, err)
 
 	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
-		Path:      "racily-clean.txt",
-		ItemType:  synctypes.ItemTypeFile,
-		LocalHash: hash,
-		Size:      info.Size(),
-		Mtime:     info.ModTime().UnixNano(),
+		Path:           "racily-clean.txt",
+		ItemType:       synctypes.ItemTypeFile,
+		LocalHash:      hash,
+		LocalSize:      info.Size(),
+		LocalSizeKnown: true,
+		LocalMtime:     info.ModTime().UnixNano(),
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
@@ -75,11 +76,12 @@ func TestMtimeChangeWithoutContentChange(t *testing.T) {
 
 	// Create baseline with a DIFFERENT mtime but same hash.
 	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
-		Path:      "touched.txt",
-		ItemType:  synctypes.ItemTypeFile,
-		LocalHash: hash,
-		Size:      info.Size(),
-		Mtime:     info.ModTime().UnixNano() - 2*int64(time.Second), // 2 seconds earlier
+		Path:           "touched.txt",
+		ItemType:       synctypes.ItemTypeFile,
+		LocalHash:      hash,
+		LocalSize:      info.Size(),
+		LocalSizeKnown: true,
+		LocalMtime:     info.ModTime().UnixNano() - 2*int64(time.Second), // 2 seconds earlier
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
