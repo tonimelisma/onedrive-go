@@ -1,8 +1,8 @@
 # Sync Store
 
-GOVERNS: internal/syncstore/store.go, internal/syncstore/schema.go, internal/syncstore/schema.sql, internal/syncstore/store_baseline.go, internal/syncstore/store_observation.go, internal/syncstore/store_conflicts.go, internal/syncstore/store_failures.go, internal/syncstore/store_admin.go, internal/syncstore/store_scope_blocks.go, internal/syncstore/verify.go, internal/syncstore/trash.go, internal/syncstore/shortcuts.go, issues.go, failure_display.go, verify.go
+GOVERNS: internal/syncstore/store.go, internal/syncstore/schema.go, internal/syncstore/schema.sql, internal/syncstore/store_baseline.go, internal/syncstore/store_observation.go, internal/syncstore/store_conflicts.go, internal/syncstore/store_failures.go, internal/syncstore/store_admin.go, internal/syncstore/store_scope_blocks.go, internal/syncstore/shortcuts.go, internal/syncverify/verify.go, internal/syncrecovery/recovery.go, internal/cli/verify.go, internal/cli/issues.go, internal/cli/failure_display.go
 
-Implements: R-2.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.7 [verified], R-6.4.4 [verified], R-6.4.5 [verified], R-2.15.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.4 [verified], R-2.10.22 [verified], R-2.10.33 [verified], R-2.10.34 [verified], R-2.10.41 [verified], R-6.6.11 [verified]
+Implements: R-2.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.7 [verified], R-2.15.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.4 [verified], R-2.10.22 [verified], R-2.10.33 [verified], R-2.10.34 [verified], R-2.10.41 [verified], R-6.6.11 [verified]
 
 ## SyncStore (`store.go`)
 
@@ -23,6 +23,7 @@ Key operations:
 - `CommitObservation()` atomically writes `remote_state` rows and advances the relevant delta token.
 - `CommitOutcome()` updates `baseline` and finalizes remote-state transitions per action. Success-side `sync_failures` cleanup is engine-owned and happens before or after the store commit depending on the result flow.
 - `RecordFailure(ctx, SyncFailureParams, delayFn)` is the single failure writer. The engine provides classification and retry policy; the store provides transactional persistence and conflict-safe upsert behavior.
+- `ResetDownloadingStates(ctx, delayFn)`, `ListDeletingCandidates(ctx)`, and `FinalizeDeletingStates(ctx, deleted, pending, delayFn)` are the state-only crash-recovery primitives. The store no longer probes the sync-root filesystem itself.
 - `ReleaseScope(ctx, scopeKey, now)` is the single durable “scope resolved” transition. It deletes the `scope_blocks` row, deletes any `boundary` failure row for that scope, and converts all `held` failures for that scope into retryable `item` rows with `next_retry_at = now`.
 - `DiscardScope(ctx, scopeKey)` is the single durable “scope and blocked work are gone” transition. It deletes the `scope_blocks` row and every `sync_failures` row for that scope.
 
@@ -112,13 +113,22 @@ most recently loaded baseline in memory, invalidates it before outcome commits,
 and rebuilds it after writes. That cache is internal to the store and is
 rebuildable from durable state; it is not a competing authority.
 
-## Verification And Trash
+## Verification
 
-[`verify.go`](/Users/tonimelisma/Development/onedrive-go/internal/syncstore/verify.go)
-re-hashes local files against baseline and remote state.
+[`internal/syncverify/verify.go`](/Users/tonimelisma/Development/onedrive-go/internal/syncverify/verify.go)
+re-hashes local files against baseline entries through a
+[`synctree.Root`](/Users/tonimelisma/Development/onedrive-go/internal/synctree/synctree.go)
+capability. The store provides only baseline data; it does not own local file
+hashing or filesystem probing.
 
-[`trash.go`](/Users/tonimelisma/Development/onedrive-go/internal/syncstore/trash.go)
-implements OS trash integration for local deletes triggered by remote changes.
+## Crash Recovery Boundary
+
+[`internal/syncrecovery/recovery.go`](/Users/tonimelisma/Development/onedrive-go/internal/syncrecovery/recovery.go)
+owns the sync-root filesystem half of crash recovery. It classifies deleting
+rows as completed deletes or pending retries via
+[`synctree.Root`](/Users/tonimelisma/Development/onedrive-go/internal/synctree/synctree.go),
+then calls the store’s state-only recovery primitives. `SyncStore` no longer
+joins sync-root paths or calls `os.Stat` itself.
 
 ## Issues CLI
 

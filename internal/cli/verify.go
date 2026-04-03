@@ -12,7 +12,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+	"github.com/tonimelisma/onedrive-go/internal/syncverify"
 )
 
 // errVerifyMismatch is returned when verify finds hash/size mismatches.
@@ -80,7 +82,12 @@ func loadAndVerify(ctx context.Context, dbPath, syncDir string, logger *slog.Log
 		return nil, fmt.Errorf("load baseline: %w", err)
 	}
 
-	report, err := syncstore.VerifyBaseline(ctx, bl, syncDir, logger)
+	tree, err := synctree.Open(syncDir)
+	if err != nil {
+		return nil, fmt.Errorf("open sync tree: %w", err)
+	}
+
+	report, err := syncverify.VerifyBaseline(ctx, bl, tree, logger)
 	if err != nil {
 		return nil, fmt.Errorf("verify baseline: %w", err)
 	}

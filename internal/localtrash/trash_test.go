@@ -1,4 +1,4 @@
-package syncstore
+package localtrash
 
 import (
 	"os"
@@ -11,7 +11,7 @@ import (
 )
 
 // Validates: R-6.4.6
-func TestDefaultTrashFunc_NonDarwin(t *testing.T) {
+func TestDefault_NonDarwin(t *testing.T) {
 	if runtime.GOOS == platformDarwin {
 		t.Skip("test only applicable on non-darwin")
 	}
@@ -23,7 +23,7 @@ func TestDefaultTrashFunc_NonDarwin(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(path, []byte("data"), 0o600))
 
-	err := DefaultTrashFunc(path)
+	err := Default(path)
 	require.Error(t, err, "expected error on non-darwin platform")
 }
 
@@ -35,20 +35,15 @@ func TestMoveToMacOSTrash(t *testing.T) {
 
 	t.Parallel()
 
-	// Create a temp file.
 	dir := t.TempDir()
 	path := filepath.Join(dir, "trash-test-file.txt")
 
 	require.NoError(t, os.WriteFile(path, []byte("trash me"), 0o600))
-
-	// Move to trash.
 	require.NoError(t, moveToMacOSTrash(path))
 
-	// Original should be gone.
 	_, err := os.Stat(path)
 	assert.True(t, os.IsNotExist(err), "file should have been moved to trash")
 
-	// Clean up from trash.
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
 	trashPath := filepath.Join(home, ".Trash", "trash-test-file.txt")
@@ -66,8 +61,6 @@ func TestMoveToMacOSTrash_NameCollision(t *testing.T) {
 	require.NoError(t, err)
 
 	trashDir := filepath.Join(home, ".Trash")
-
-	// Create a file in trash with the same name to force collision handling.
 	collisionPath := filepath.Join(trashDir, "trash-collision-test.txt")
 	require.NoError(t, os.WriteFile(collisionPath, []byte("existing"), 0o600))
 
@@ -75,18 +68,15 @@ func TestMoveToMacOSTrash_NameCollision(t *testing.T) {
 		assert.NoError(t, os.Remove(collisionPath))
 	}()
 
-	// Now try to trash a file with the same name.
 	dir := t.TempDir()
 	path := filepath.Join(dir, "trash-collision-test.txt")
 
 	require.NoError(t, os.WriteFile(path, []byte("new"), 0o600))
 	require.NoError(t, moveToMacOSTrash(path))
 
-	// Original should be gone.
 	_, err = os.Stat(path)
 	assert.True(t, os.IsNotExist(err), "file should have been moved to trash")
 
-	// Clean up: the collision file should be "trash-collision-test 2.txt".
 	suffix2 := filepath.Join(trashDir, "trash-collision-test 2.txt")
 	assert.NoError(t, os.Remove(suffix2))
 }

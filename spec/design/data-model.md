@@ -107,6 +107,7 @@ All database writes flow through typed sub-interfaces, enforcing transition owne
 | `FailureRecorder` | Worker result drain | Record failure metadata in sync_failures |
 | `StateReader` | Reconciler, planner, CLI | Read-only queries across all tables |
 | `StateAdmin` | CLI commands | Admin writes (resolve conflicts, reset failures) |
+| `CrashRecoveryStore` | sync startup recovery | State-only crash-recovery transitions plus retry-bridge failures |
 
 ## Upload Sessions (File-Based)
 

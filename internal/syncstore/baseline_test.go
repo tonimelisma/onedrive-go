@@ -2268,7 +2268,7 @@ func TestResetInProgressStates_DeleteFileAbsent(t *testing.T) {
 	require.NoError(t, err)
 
 	testDelay := func(_ int) time.Duration { return time.Second }
-	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot, testDelay))
+	resetInProgressStates(t, mgr, syncRoot, testDelay)
 
 	var status synctypes.SyncStatus
 	err = mgr.DB().QueryRowContext(ctx,
@@ -2298,7 +2298,7 @@ func TestResetInProgressStates_DeleteFileExists(t *testing.T) {
 	require.NoError(t, err)
 
 	testDelay := func(_ int) time.Duration { return time.Second }
-	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot, testDelay))
+	resetInProgressStates(t, mgr, syncRoot, testDelay)
 
 	var status synctypes.SyncStatus
 	err = mgr.DB().QueryRowContext(ctx,
@@ -2325,7 +2325,7 @@ func TestResetInProgressStates_DownloadStillResetsToPending(t *testing.T) {
 	require.NoError(t, err)
 
 	testDelay := func(_ int) time.Duration { return time.Second }
-	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot, testDelay))
+	resetInProgressStates(t, mgr, syncRoot, testDelay)
 
 	var status synctypes.SyncStatus
 	err = mgr.DB().QueryRowContext(ctx,
@@ -2366,7 +2366,7 @@ func TestResetInProgressStates_MixedStates(t *testing.T) {
 	}
 
 	testDelay := func(_ int) time.Duration { return time.Second }
-	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot, testDelay))
+	resetInProgressStates(t, mgr, syncRoot, testDelay)
 
 	// Verify each row.
 	expected := map[string]synctypes.SyncStatus{
@@ -2402,7 +2402,7 @@ func TestResetInProgressStates_CreatesSyncFailures_Download(t *testing.T) {
 	require.NoError(t, err)
 
 	testDelay := func(_ int) time.Duration { return time.Second }
-	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot, testDelay))
+	resetInProgressStates(t, mgr, syncRoot, testDelay)
 
 	// Verify remote_state was reset.
 	var status synctypes.SyncStatus
@@ -2440,7 +2440,7 @@ func TestResetInProgressStates_CreatesSyncFailures_Delete(t *testing.T) {
 	require.NoError(t, err)
 
 	testDelay := func(_ int) time.Duration { return time.Second }
-	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot, testDelay))
+	resetInProgressStates(t, mgr, syncRoot, testDelay)
 
 	// Verify sync_failures entry was created for delete direction.
 	failures, err := mgr.ListSyncFailures(ctx)
@@ -2467,7 +2467,7 @@ func TestResetInProgressStates_NoSyncFailure_DeleteComplete(t *testing.T) {
 	require.NoError(t, err)
 
 	testDelay := func(_ int) time.Duration { return time.Second }
-	require.NoError(t, mgr.ResetInProgressStates(ctx, syncRoot, testDelay))
+	resetInProgressStates(t, mgr, syncRoot, testDelay)
 
 	// Remote_state should be "deleted".
 	var status synctypes.SyncStatus
