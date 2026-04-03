@@ -160,7 +160,7 @@ func (rt *watchRuntime) dispatchDueTrialScope(
 		}
 
 		if !found {
-			if err := rt.releaseScope(ctx, rt, key); err != nil {
+			if err := rt.scopeController().releaseScope(ctx, rt, key); err != nil {
 				rt.engine.logger.Warn("runTrialDispatch: failed to release empty scope",
 					slog.String("scope_key", key.String()),
 					slog.String("error", err.Error()),

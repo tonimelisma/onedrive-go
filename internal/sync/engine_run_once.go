@@ -146,7 +146,7 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) (*synctypes.Bas
 		eng.logger.Warn("failed to reset in-progress states", slog.String("error", err.Error()))
 	}
 
-	if err := flow.repairPersistedScopes(ctx, nil); err != nil {
+	if err := flow.scopeController().repairPersistedScopes(ctx, nil); err != nil {
 		return nil, nil, fmt.Errorf("sync: repairing persisted scopes: %w", err)
 	}
 
@@ -163,12 +163,12 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) (*synctypes.Bas
 	// Recheck permissions — clear any permission_denied issues
 	// for folders that have become writable since the last pass.
 	if eng.permHandler.HasPermChecker() && scErr == nil {
-		flow.applyPermissionRecheckDecisions(ctx, nil, eng.permHandler.recheckPermissions(ctx, bl, shortcuts))
+		flow.scopeController().applyPermissionRecheckDecisions(ctx, nil, eng.permHandler.recheckPermissions(ctx, bl, shortcuts))
 	}
 
 	// Recheck local permission denials — clear scope blocks for
 	// directories that have become accessible since the last pass (R-2.10.13).
-	flow.applyPermissionRecheckDecisions(ctx, nil, eng.permHandler.recheckLocalPermissions(ctx))
+	flow.scopeController().applyPermissionRecheckDecisions(ctx, nil, eng.permHandler.recheckLocalPermissions(ctx))
 
 	return bl, shortcuts, nil
 }
@@ -373,10 +373,10 @@ func (flow *engineFlow) observeChanges(
 	// observation to avoid wasting API calls (R-2.10.30).
 	var shortcutEvents []synctypes.ChangeEvent
 
-	if flow.isObservationSuppressed(watch) {
+	if flow.scopeController().isObservationSuppressed(watch) {
 		eng.logger.Debug("suppressing shortcut observation — global scope block active")
 	} else {
-		shortcutEvents, err = flow.processShortcuts(ctx, remoteEvents, bl, dryRun)
+		shortcutEvents, err = flow.shortcutCoordinator().processShortcuts(ctx, remoteEvents, bl, dryRun)
 		if err != nil {
 			eng.logger.Warn("shortcut processing failed, continuing without shortcut content",
 				slog.String("error", err.Error()),
@@ -403,7 +403,7 @@ func (flow *engineFlow) observeChanges(
 		// R-2.10.10: If the scanner observed paths that were previously blocked
 		// by local permission denials, clear the failures (scanner success = proof
 		// of accessibility).
-		flow.applyPermissionRecheckDecisions(
+		flow.scopeController().applyPermissionRecheckDecisions(
 			ctx,
 			watch,
 			eng.permHandler.clearScannerResolvedPermissions(ctx, pathSetFromEvents(localResult.Events)),

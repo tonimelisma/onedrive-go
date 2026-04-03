@@ -116,7 +116,7 @@ func TestObserveAndCommitRemote_ZeroEvents_NoTokenAdvance(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
-	e := &testEngine{Engine: rawEngine}
+	e := newFlowBackedTestEngine(rawEngine)
 	defer e.Close(t.Context())
 
 	ctx := t.Context()
@@ -171,7 +171,7 @@ func TestObserveAndCommitRemote_WithEvents_TokenDeferred(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
-	e := &testEngine{Engine: rawEngine}
+	e := newFlowBackedTestEngine(rawEngine)
 	defer e.Close(t.Context())
 
 	ctx := t.Context()
@@ -321,7 +321,7 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
-	e := &testEngine{Engine: rawEngine}
+	e := newFlowBackedTestEngine(rawEngine)
 	defer e.Close(t.Context())
 
 	ctx := t.Context()
@@ -478,7 +478,7 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
-	e := &testEngine{Engine: rawEngine}
+	e := newFlowBackedTestEngine(rawEngine)
 	defer e.Close(t.Context())
 
 	ctx := t.Context()
@@ -574,7 +574,7 @@ func TestRunFullReconciliationAsync_NoChanges(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
-	e := &testEngine{Engine: rawEngine}
+	e := newFlowBackedTestEngine(rawEngine)
 	defer e.Close(t.Context())
 
 	ctx := t.Context()
@@ -732,7 +732,7 @@ func TestRunFullReconciliationAsync_FeedsBuffer(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
-	e := &testEngine{Engine: rawEngine}
+	e := newFlowBackedTestEngine(rawEngine)
 	defer e.Close(t.Context())
 
 	ctx := t.Context()
@@ -784,7 +784,7 @@ func TestRunFullReconciliationAsync_ShutdownAfterCommit(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
-	e := &testEngine{Engine: rawEngine}
+	e := newFlowBackedTestEngine(rawEngine)
 	defer e.Close(t.Context())
 
 	// Context with manual cancel — cancel is triggered by the
@@ -899,7 +899,7 @@ func TestRunFullReconciliationAsync_DurationInCompletionLog(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
-	e := &testEngine{Engine: rawEngine}
+	e := newFlowBackedTestEngine(rawEngine)
 	defer e.Close(t.Context())
 
 	ctx := t.Context()
@@ -958,7 +958,7 @@ func TestRunFullReconciliationAsync_DurationInNoChangesLog(t *testing.T) {
 		Logger:    logger,
 	})
 	require.NoError(t, err)
-	e := &testEngine{Engine: rawEngine}
+	e := newFlowBackedTestEngine(rawEngine)
 	defer e.Close(t.Context())
 
 	ctx := t.Context()
