@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/engine*.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/engine_shortcuts.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_decisions.go, sync_helpers.go
 
-Implements: R-2.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-2.10.45 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified], R-6.3.4 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [planned], R-6.6.10 [verified], R-6.6.12 [verified], R-6.7.27 [verified], R-6.8.15 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
+Implements: R-2.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-2.10.45 [verified], R-2.10.46 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified], R-6.3.4 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [planned], R-6.6.10 [verified], R-6.6.12 [verified], R-6.7.27 [verified], R-6.8.15 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
 
 ## Ownership Contract
 
@@ -197,7 +197,7 @@ Implements: R-2.10.3 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2
   skip duplicate file-level failure recording; other skips use `recordFailure`
   with nil delayFn (no `next_retry_at`) + `Complete`
 - **shutdown** → `Complete` (no failure recorded)
-- **fatal** (401) → `recordFailure` with nil delayFn + `Complete` + terminate one-shot/watch execution with issue type `unauthorized`
+- **fatal** (401) → activate scope block `auth:account` with `timing_source='none'` + `Complete` + terminate one-shot/watch execution without creating a per-path `sync_failures` row
 
 Scope-blocked actions are not held in memory. Instead, `processWorkerResult`
 records the failure in `sync_failures` and calls `depGraph.Complete()`. When
@@ -215,8 +215,8 @@ currently blocked scope. Trial outcomes are:
 - inconclusive candidate failure -> `preserveScopeTrial(scopeKey)` plus
   candidate-specific handling (for example item failure replacement, permission
   scope activation, or disk-scope re-home)
-- fatal unauthorized -> record `IssueUnauthorized` and terminate the current
-  one-shot pass or watch session
+- fatal unauthorized -> activate `auth:account` and terminate the current
+  one-shot pass or watch session without mutating the original trial scope
 
 Scope detection is intentionally NOT called for trial failures — the scope is
 already blocked, and re-detecting would overwrite or duplicate the original
@@ -280,6 +280,7 @@ but without watch-only mutable state.
 - `activateScope()` means "this blocking condition is now active" — persist the scope row, refresh watch-mode active scope state, and arm trial timing if the scope is trial-driven.
 - `extendScopeTrial()` means "the same scope is still blocked" — update `next_trial_at`, `trial_interval`, and `trial_count` for an existing scope.
 - `preserveScopeTrial()` means "the original scope is still plausible, but this candidate did not prove it" — update `next_trial_at`, set `preserve_until`, and keep `trial_count` unchanged.
+- `activateAuthScope()` means "account authorization is invalid" — persist `auth:account` with `timing_source='none'` and zero trial metadata. Auth is a blocking condition, not a trial-driven scope.
 - `releaseScope()` means "the blocking condition resolved" — delete the persisted scope row, delete the actionable boundary row for that scope, and make held descendants retryable immediately.
 - `discardScope()` means "the blocked subtree/work is gone" — delete the persisted scope row and delete all scoped failure rows without retrying them.
 
@@ -294,6 +295,7 @@ Policy matrix:
 - `quota:own` and `quota:shortcut:*` survive only while at least one scoped failure row exists
 - scoped-failure-backed scopes survive restart when they still have scoped failures or when `preserve_until` is still in the future
 - `throttle:account` and `service` survive restart only when `timing_source='server_retry_after'`; expired deadlines trial immediately rather than auto-releasing
+- `auth:account` is revalidated exactly once at startup via `DriveVerifier.Drive(ctx, driveID)`; success releases it, unauthorized keeps it and aborts startup, and other probe failures leave it untouched and abort startup
 - `disk:local` is revalidated from current local free-space truth and refreshed or released accordingly
 
 The repair pass runs before `activeScopes` is loaded, so the watch loop starts

@@ -107,6 +107,11 @@ alive across restart even when the candidate row was replaced or re-homed to a
 more specific failure shape. Scope ownership still remains in `scope_blocks`;
 the field is not duplicated into `sync_failures`.
 
+`auth:account` also lives in `scope_blocks`, but it is intentionally
+non-trial: `timing_source='none'`, `trial_interval=0`, `next_trial_at=0`, and
+`preserve_until=0`. The row records an account-level blocking condition, not a
+retry curve.
+
 ## Failure And Scope Lifecycle
 
 The store models two different entities that stay separate on purpose:
@@ -122,6 +127,7 @@ That split keeps the data model honest:
 - one `perm:remote:Shared/Docs` scope can block many held upload rows
 - one `throttle:account` scope can block work across all drives
 - one `quota:shortcut:*` scope can outlive many individual path failures
+- one `auth:account` scope can represent an account-level authorization stop without fabricating a path-level failure row
 
 ## Store Interfaces (`store_interfaces.go`)
 
@@ -158,6 +164,7 @@ errors because the durable-state transition itself is incomplete.
 
 ## Issues CLI
 
-`issues` reads conflicts and actionable failures directly from the store.
-Grouping and display use the persisted `scope_key`, `issue_type`, and
-shortcut metadata instead of re-deriving scope context from runtime state.
+`issues` reads conflicts, actionable failures, and scope-only auth blocks
+directly from the store. Grouping and display use the persisted `scope_key`,
+`issue_type`, and shortcut metadata instead of re-deriving scope context from
+runtime state or fabricating sentinel path rows.

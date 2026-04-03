@@ -74,6 +74,38 @@ func groupFailures(
 		}
 	}
 
+	sortFailureGroups(groups)
+
+	return groups, heldDeletes
+}
+
+func appendScopeOnlyGroups(
+	groups []failureGroup,
+	blocks []*synctypes.ScopeBlock,
+	shortcuts []synctypes.Shortcut,
+) []failureGroup {
+	for i := range blocks {
+		if blocks[i].Key != synctypes.SKAuthAccount() {
+			continue
+		}
+
+		// auth:account is durable scope state with no path owner, so issues must
+		// surface it from scope_blocks instead of fabricating sentinel paths.
+		groups = append(groups, failureGroup{
+			IssueType: blocks[i].IssueType,
+			ScopeKey:  blocks[i].Key.Humanize(shortcuts),
+			Message:   synctypes.MessageForIssueType(blocks[i].IssueType),
+			Paths:     []string{},
+			Count:     1,
+		})
+	}
+
+	sortFailureGroups(groups)
+
+	return groups
+}
+
+func sortFailureGroups(groups []failureGroup) {
 	// Sort groups: largest first for visibility, then alphabetically by title
 	// for deterministic output.
 	sort.Slice(groups, func(i, j int) bool {
@@ -87,8 +119,6 @@ func groupFailures(
 	for i := range groups {
 		sort.Strings(groups[i].Paths)
 	}
-
-	return groups, heldDeletes
 }
 
 // printGroupedFailures renders grouped failure output to the writer.
@@ -102,43 +132,53 @@ func printGroupedFailures(w io.Writer, groups []failureGroup, verbose bool) erro
 			}
 		}
 
-		// Header: TITLE (N items)
-		if err := writef(w, "%s (%d %s)\n", g.Message.Title, g.Count, itemNoun(g.Count)); err != nil {
+		if err := printFailureGroup(w, g, verbose); err != nil {
 			return err
 		}
+	}
 
-		// Reason + action.
-		if err := writef(w, "  %s %s\n", g.Message.Reason, g.Message.Action); err != nil {
+	return nil
+}
+
+func printFailureGroup(w io.Writer, group failureGroup, verbose bool) error {
+	if err := writef(w, "%s (%d %s)\n", group.Message.Title, group.Count, itemNoun(group.Count)); err != nil {
+		return err
+	}
+	if err := writef(w, "  %s %s\n", group.Message.Reason, group.Message.Action); err != nil {
+		return err
+	}
+	if group.ScopeKey != "" {
+		if err := writef(w, "  Scope: %s\n", group.ScopeKey); err != nil {
 			return err
 		}
+	}
 
-		// Scope line (only when non-empty and not a file-level-only group).
-		if g.ScopeKey != "" {
-			if err := writef(w, "  Scope: %s\n", g.ScopeKey); err != nil {
-				return err
-			}
-		}
+	return printFailurePaths(w, group, verbose)
+}
 
-		// Paths.
-		if err := writeln(w); err != nil {
+func printFailurePaths(w io.Writer, group failureGroup, verbose bool) error {
+	if len(group.Paths) == 0 {
+		return nil
+	}
+	if err := writeln(w); err != nil {
+		return err
+	}
+
+	limit := len(group.Paths)
+	if !verbose && limit > defaultVisiblePaths {
+		limit = defaultVisiblePaths
+	}
+
+	for _, path := range group.Paths[:limit] {
+		if err := writef(w, "  %s\n", path); err != nil {
 			return err
 		}
-		limit := len(g.Paths)
-		if !verbose && limit > defaultVisiblePaths {
-			limit = defaultVisiblePaths
-		}
+	}
 
-		for _, p := range g.Paths[:limit] {
-			if err := writef(w, "  %s\n", p); err != nil {
-				return err
-			}
-		}
-
-		remaining := g.Count - limit
-		if remaining > 0 {
-			if err := writef(w, "  ... and %d more (use --verbose to see all)\n", remaining); err != nil {
-				return err
-			}
+	remaining := group.Count - limit
+	if remaining > 0 {
+		if err := writef(w, "  ... and %d more (use --verbose to see all)\n", remaining); err != nil {
+			return err
 		}
 	}
 
@@ -310,6 +350,11 @@ func printGroupedIssuesJSON(
 	}
 
 	for i, g := range groups {
+		paths := g.Paths
+		if paths == nil {
+			paths = []string{}
+		}
+
 		out.FailureGroups[i] = failureGroupJSON{
 			IssueType: g.IssueType,
 			Title:     g.Message.Title,
@@ -317,7 +362,7 @@ func printGroupedIssuesJSON(
 			Action:    g.Message.Action,
 			Scope:     g.ScopeKey,
 			Count:     g.Count,
-			Paths:     g.Paths,
+			Paths:     paths,
 		}
 	}
 

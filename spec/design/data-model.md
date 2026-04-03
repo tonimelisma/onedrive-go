@@ -89,6 +89,11 @@ held rows. A preserved scope may therefore survive restart even when no
 same-scope candidate row remains, but only until the next scheduled trial
 deadline.
 
+`auth:account` is also stored in `scope_blocks`, but unlike quota/service/disk
+it is not a trial-driven scope. The row uses `timing_source='none'` with zero
+trial metadata and represents a durable account-level authorization stop until
+startup proof clears it.
+
 ### delta_tokens
 
 Delta API cursor per drive scope. `scope_id = ""` for primary scope. Drives with shortcuts to shared folders have additional scopes (one per shortcut). The cursor is committed atomically with `remote_state` observations — it tracks what the API has reported, not what has been synced.

@@ -108,7 +108,9 @@ The persisted `timing_source` on `scope_blocks` records whether a scope was
 timed by local backoff or explicit server `Retry-After`. The persisted
 `preserve_until` timestamp records bounded restart-safe preserve state for
 scoped-failure-backed scopes whose held rows may temporarily disappear or
-change shape during preserve handling.
+change shape during preserve handling. It does not make locally timed global
+`throttle:account` or `service` scopes survive restart, and it does not apply
+to non-trial `auth:account`.
 
 ### Restart semantics
 
@@ -118,6 +120,7 @@ Startup repair applies persisted-scope policy before any admission begins:
 - expired server-timed scopes are trialed immediately, not auto-released
 - non-server-timed throttle/service scopes are cleared on startup
 - scoped-failure-backed scopes may survive restart while `preserve_until` is still in the future even if no same-scope held rows remain
+- `auth:account` is revalidated from one startup proof call instead of trial timing
 - `disk:local` is revalidated against current free space instead of trusting stale persisted timing
 
 ## Deleted Mechanisms

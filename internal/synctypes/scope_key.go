@@ -10,7 +10,8 @@ import (
 type ScopeKeyKind int
 
 const (
-	ScopeThrottleAccount ScopeKeyKind = iota + 1 // no Param
+	ScopeAuthAccount     ScopeKeyKind = iota + 1 // no Param
+	ScopeThrottleAccount                         // no Param
 	ScopeService                                 // no Param
 	ScopeQuotaOwn                                // no Param
 	ScopeQuotaShortcut                           // Param = "remoteDrive:remoteItem"
@@ -34,6 +35,7 @@ func SKThrottleAccount() ScopeKey { return ScopeKey{Kind: ScopeThrottleAccount} 
 func SKService() ScopeKey         { return ScopeKey{Kind: ScopeService} }
 func SKQuotaOwn() ScopeKey        { return ScopeKey{Kind: ScopeQuotaOwn} }
 func SKDiskLocal() ScopeKey       { return ScopeKey{Kind: ScopeDiskLocal} }
+func SKAuthAccount() ScopeKey     { return ScopeKey{Kind: ScopeAuthAccount} }
 
 // SKQuotaShortcut returns the scope key for a shortcut quota block.
 func SKQuotaShortcut(compositeKey string) ScopeKey {
@@ -58,6 +60,7 @@ func (sk ScopeKey) IsZero() bool {
 // Wire-format strings for scope keys stored in SQLite scope_key columns.
 // Used by String() and ParseScopeKey() — the only serialization boundary.
 const (
+	WireAuthAccount     = "auth:account"
 	WireThrottleAccount = "throttle:account"
 	WireService         = "service"
 	WireQuotaOwn        = "quota:own"
@@ -71,6 +74,8 @@ const (
 // ParseScopeKey is the inverse.
 func (sk ScopeKey) String() string {
 	switch sk.Kind {
+	case ScopeAuthAccount:
+		return WireAuthAccount
 	case ScopeThrottleAccount:
 		return WireThrottleAccount
 	case ScopeService:
@@ -94,6 +99,8 @@ func (sk ScopeKey) String() string {
 // Returns the zero-value ScopeKey for unknown formats.
 func ParseScopeKey(s string) ScopeKey {
 	switch {
+	case s == WireAuthAccount:
+		return SKAuthAccount()
 	case s == WireThrottleAccount:
 		return SKThrottleAccount()
 	case s == WireService:
@@ -116,7 +123,7 @@ func ParseScopeKey(s string) ScopeKey {
 // IsGlobal returns true for scope blocks that affect ALL actions (throttle,
 // service). Used by isObservationSuppressed to skip API calls during outages.
 func (sk ScopeKey) IsGlobal() bool {
-	return sk.Kind == ScopeThrottleAccount || sk.Kind == ScopeService
+	return sk.Kind == ScopeAuthAccount || sk.Kind == ScopeThrottleAccount || sk.Kind == ScopeService
 }
 
 // IsPermDir returns true for local directory permission scope blocks.
@@ -151,6 +158,8 @@ func (sk ScopeKey) RemotePath() string {
 // Used to populate sync_failures.issue_type consistently.
 func (sk ScopeKey) IssueType() string {
 	switch sk.Kind {
+	case ScopeAuthAccount:
+		return IssueUnauthorized
 	case ScopeThrottleAccount:
 		return IssueRateLimited
 	case ScopeService:
@@ -174,6 +183,8 @@ func (sk ScopeKey) IssueType() string {
 // a plain English description.
 func (sk ScopeKey) Humanize(shortcuts []Shortcut) string {
 	switch sk.Kind {
+	case ScopeAuthAccount:
+		return "your OneDrive account authorization"
 	case ScopeThrottleAccount:
 		return "your OneDrive account (rate limited)"
 	case ScopeService:
@@ -200,7 +211,7 @@ func (sk ScopeKey) Humanize(shortcuts []Shortcut) string {
 // Replaces the scattered string-matching logic from blockedScope().
 func (sk ScopeKey) BlocksAction(path, shortcutKey string, actionType ActionType, targetsOwnDrive bool) bool {
 	switch sk.Kind {
-	case ScopeThrottleAccount, ScopeService:
+	case ScopeAuthAccount, ScopeThrottleAccount, ScopeService:
 		return true // global blocks
 	case ScopeDiskLocal:
 		return actionType == ActionDownload

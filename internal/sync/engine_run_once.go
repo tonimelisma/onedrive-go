@@ -137,20 +137,30 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) (*synctypes.Bas
 	eng := r.engine
 	flow := &r.engineFlow
 
-	// Step 0: Verify drive identity (B-074).
-	if err := eng.verifyDriveIdentity(ctx); err != nil {
-		return nil, nil, err
+	proof, proofErr := eng.proveDriveIdentity(ctx)
+	if proofErr != nil {
+		hasAuthScope, err := eng.hasPersistedAuthScope(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !hasAuthScope {
+			return nil, nil, proofErr
+		}
 	}
+
+	if err := flow.scopeController().repairPersistedScopes(ctx, nil, proof, proofErr); err != nil {
+		return nil, nil, fmt.Errorf("sync: repairing persisted scopes: %w", err)
+	}
+	if proofErr != nil {
+		return nil, nil, proofErr
+	}
+	eng.logVerifiedDrive(proof)
 
 	// Crash recovery: reset any in-progress states from a previous crash.
 	// Also creates sync_failures entries so the retrier can rediscover items
 	// that were mid-execution when the crash occurred.
 	if err := syncrecovery.ResetInProgressStates(ctx, eng.baseline, eng.syncTree, retry.ReconcilePolicy().Delay, eng.logger); err != nil {
 		eng.logger.Warn("failed to reset in-progress states", slog.String("error", err.Error()))
-	}
-
-	if err := flow.scopeController().repairPersistedScopes(ctx, nil); err != nil {
-		return nil, nil, fmt.Errorf("sync: repairing persisted scopes: %w", err)
 	}
 
 	bl, err := eng.baseline.Load(ctx)

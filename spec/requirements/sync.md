@@ -114,7 +114,7 @@ Failure tracking, scope-based classification, and lifecycle management. Each fai
 - R-2.10.31: During `quota:shortcut:*` scope blocks, observation of that shortcut shall continue (read-only). Other observations shall be unaffected. [verified]
 - R-2.10.32: The `status` command shall show per-scope block status as separate entries per drive/shortcut. [planned — deferred: requires R-2.9 RPC daemon]
 - R-2.10.33: The `sync_failures` table shall store a `scope_key` column for scope-level failures, enabling `issues` display grouping without re-deriving scope. [verified]
-- R-2.10.34: The `scope_key` format shall be: `quota:own`, `quota:shortcut:$remoteDrive:$remoteItem`, `perm:remote:{localPath}`, `perm:dir:{localPath}`, `throttle:account`, `service`, `disk:local`. Persisted scope keys use stable internal identifiers where required for correctness; human-readable naming for `issues` output is derived at display time from shortcut metadata. [verified]
+- R-2.10.34: The `scope_key` format shall be: `auth:account`, `quota:own`, `quota:shortcut:$remoteDrive:$remoteItem`, `perm:remote:{localPath}`, `perm:dir:{localPath}`, `throttle:account`, `service`, `disk:local`. Persisted scope keys use stable internal identifiers where required for correctness; human-readable naming for `issues` output is derived at display time from shortcut metadata. [verified]
 - R-2.10.35: Engines shall not coordinate scope blocks across engine boundaries. Each engine shall discover scope conditions independently. [verified]
 - R-2.10.36: When 429 is discovered independently per engine (same token), no shared state shall be required. [verified]
 - R-2.10.37: Shortcut scope blocks shall be engine-internal. A shortcut in Engine A shall have no effect on Engine B's shortcuts. [verified]
@@ -125,7 +125,8 @@ Failure tracking, scope-based classification, and lifecycle management. Each fai
 - R-2.10.42: The scope detection sliding window shall accept results from concurrent workers. A success from any path in the scope shall reset the unique-path failure counter, preventing false scope blocks from interleaved results. [verified]
 - R-2.10.43: When available disk space falls below `min_free_space`, the system shall set a `disk:local` scope block suppressing all downloads. Trial timing shall start at 5 minutes, double on failure, with a maximum of 1 hour. [verified]
 - R-2.10.44: When available disk space is above `min_free_space` but below file size plus `min_free_space`, the system shall record a per-file failure without scope escalation. Smaller files that fit within available space may still download. [verified]
-- R-2.10.45: When a worker result returns HTTP 401, the system shall record issue type `unauthorized` and terminate the current one-shot pass or watch session. Trial 401 results shall not be treated as proof that the blocked scope persists or recovered. [verified]
+- R-2.10.45: When a worker result returns HTTP 401, the system shall activate scope key `auth:account` in `scope_blocks` with issue type `unauthorized` and terminate the current one-shot pass or watch session. It shall not fabricate a per-path `sync_failures` row for the 401. Trial 401 results shall not be treated as proof that the blocked scope persists or recovered. [verified]
+- R-2.10.46: When a persisted `auth:account` scope exists at startup, the system shall revalidate it exactly once with `DriveVerifier.Drive(ctx, driveID)`. Successful proof shall clear the scope and continue startup. Unauthorized proof shall keep the scope and abort startup. Non-auth probe failures, or a missing `DriveVerifier`, shall leave the scope untouched and abort startup. [verified]
 
 ## R-2.11 Filename Validation [implemented]
 

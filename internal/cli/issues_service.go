@@ -43,12 +43,18 @@ func (s *issuesService) runList(ctx context.Context, history bool) error {
 		return fmt.Errorf("list actionable failures: %w", err)
 	}
 
+	scopeBlocks, err := mgr.ListScopeBlocks(ctx)
+	if err != nil {
+		return fmt.Errorf("list scope blocks: %w", err)
+	}
+
 	shortcuts, err := mgr.ListShortcuts(ctx)
 	if err != nil {
 		return fmt.Errorf("list shortcuts: %w", err)
 	}
 
 	groups, heldDeletes := groupFailures(failures, shortcuts)
+	groups = appendScopeOnlyGroups(groups, scopeBlocks, shortcuts)
 	pendingRetries, err := mgr.PendingRetrySummary(ctx)
 	if err != nil {
 		return fmt.Errorf("summarize pending retries: %w", err)

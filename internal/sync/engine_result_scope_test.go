@@ -156,6 +156,20 @@ func TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady(t *testing
 	err := runner.runResultsLoop(ctx, nil, nil, results)
 	require.ErrorIs(t, err, graph.ErrUnauthorized)
 	assert.Equal(t, 0, runner.depGraph.InFlightCount(), "fatal termination should drain queued ready actions as shutdown")
+
+	blocks, blockErr := eng.baseline.ListScopeBlocks(ctx)
+	require.NoError(t, blockErr)
+	require.Len(t, blocks, 1)
+	assert.Equal(t, synctypes.SKAuthAccount(), blocks[0].Key)
+	assert.Equal(t, synctypes.IssueUnauthorized, blocks[0].IssueType)
+	assert.Equal(t, synctypes.ScopeTimingNone, blocks[0].TimingSource)
+	assert.Zero(t, blocks[0].TrialInterval)
+	assert.True(t, blocks[0].NextTrialAt.IsZero())
+	assert.True(t, blocks[0].PreserveUntil.IsZero())
+
+	failures, failureErr := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, failureErr)
+	assert.Empty(t, failures, "fatal unauthorized should not create per-path sync_failures rows")
 }
 
 func assertUnauthorizedWatchHandlerStopsLoop(
@@ -372,6 +386,18 @@ func TestProcessWorkerResult_UnauthorizedTerminatesRouting(t *testing.T) {
 
 	require.ErrorIs(t, outcome.terminateErr, graph.ErrUnauthorized)
 	assert.True(t, outcome.terminate)
+
+	authBlock, ok := getTestScopeBlock(eng, synctypes.SKAuthAccount())
+	require.True(t, ok, "fatal unauthorized should persist an auth scope block")
+	assert.Equal(t, synctypes.IssueUnauthorized, authBlock.IssueType)
+	assert.Equal(t, synctypes.ScopeTimingNone, authBlock.TimingSource)
+	assert.Zero(t, authBlock.TrialInterval)
+	assert.True(t, authBlock.NextTrialAt.IsZero())
+	assert.True(t, authBlock.PreserveUntil.IsZero())
+
+	failures, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, failures, "fatal unauthorized should not create per-path sync_failures rows")
 }
 
 // ---------------------------------------------------------------------------
@@ -425,7 +451,7 @@ func TestClassifyResult_LifecycleAndAuth(t *testing.T) {
 			name:           "401_unauthorized",
 			result:         synctypes.WorkerResult{HTTPStatus: http.StatusUnauthorized, Err: graph.ErrUnauthorized},
 			wantClass:      resultFatal,
-			wantRecordMode: recordFailureActionable,
+			wantRecordMode: recordFailureNone,
 		},
 		{
 			name:           "403_forbidden",
@@ -840,6 +866,18 @@ func TestProcessTrialResultV2_Fatal401DoesNotExtendScope(t *testing.T) {
 	assert.Equal(t, 45*time.Second, got.TrialInterval, "fatal unauthorized must not back off the original scope")
 	assert.Equal(t, now.Add(45*time.Second), got.NextTrialAt, "fatal unauthorized must not reschedule the original scope")
 	assert.Equal(t, 3, got.TrialCount)
+
+	authBlock, authOK := getTestScopeBlock(eng, synctypes.SKAuthAccount())
+	require.True(t, authOK, "trial unauthorized should activate the auth scope")
+	assert.Equal(t, synctypes.IssueUnauthorized, authBlock.IssueType)
+	assert.Equal(t, synctypes.ScopeTimingNone, authBlock.TimingSource)
+	assert.Zero(t, authBlock.TrialInterval)
+	assert.True(t, authBlock.NextTrialAt.IsZero())
+	assert.True(t, authBlock.PreserveUntil.IsZero())
+
+	failures, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, failures, "trial unauthorized should not create per-path sync_failures rows")
 }
 
 // Validates: R-2.10.5, R-2.10.14
