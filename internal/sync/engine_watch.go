@@ -406,6 +406,7 @@ func (rt *watchRuntime) startObservers(
 	if mode != synctypes.SyncDownloadOnly {
 		localObs := syncobserve.NewLocalObserver(bl, rt.engine.logger, rt.engine.checkWorkers)
 		localObs.SetFilterConfig(rt.engine.localFilter)
+		localObs.SetObservationRules(rt.engine.localRules)
 		localObs.SetSafetyScanInterval(opts.SafetyScanInterval)
 		localObs.SetSkippedChannel(skippedCh)
 

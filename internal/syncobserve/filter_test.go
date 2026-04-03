@@ -165,6 +165,7 @@ func TestObserveSinglePathWithFilter_ConfiguredFiltersResolveSilently(t *testing
 				time.Now().UnixNano(),
 				nil,
 				filter,
+				synctypes.LocalObservationRules{},
 			)
 			require.NoError(t, err)
 			assert.Nil(t, result.Event)
@@ -190,6 +191,7 @@ func TestObserveSinglePathWithFilter_SkipSymlinksResolvesSilently(t *testing.T) 
 		time.Now().UnixNano(),
 		nil,
 		synctypes.LocalFilterConfig{SkipSymlinks: true},
+		synctypes.LocalObservationRules{},
 	)
 	require.NoError(t, err)
 	assert.Nil(t, result.Event)

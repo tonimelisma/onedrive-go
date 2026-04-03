@@ -218,7 +218,7 @@ func TestAlwaysExcluded_PrefixPatterns(t *testing.T) {
 		excluded bool
 	}{
 		{"~backup.txt", true},
-		{"~$document.docx", true},
+		{"~$document.docx", false},
 		{".~lock.file", true},
 		{"normal.txt", false},
 		{"file~renamed", false}, // tilde not at start

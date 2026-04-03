@@ -343,7 +343,7 @@ func (o *LocalObserver) makeWalkFunc(
 		o.forgetExcludedSymlink(dbRelPath)
 
 		// Stage 1 observation filter: name validation + path length (cheap, no syscall).
-		if skipItem := shouldObserveWithFilter(name, dbRelPath, dirEntryKind(d), o.filterConfig); skipItem != nil {
+		if skipItem := shouldObserveWithFilter(name, dbRelPath, dirEntryKind(d), o.filterConfig, o.observationRules); skipItem != nil {
 			if skipItem.Reason != "" {
 				*skipped = append(*skipped, *skipItem)
 				o.Logger.Debug("skipping invalid entry",
@@ -803,6 +803,7 @@ func (o *LocalObserver) shouldSuppressDeleteForExcludedPath(path string, entry *
 		path,
 		observedKindFromItemType(entry.ItemType),
 		o.filterConfig,
+		o.observationRules,
 	)
 
 	return skip != nil && skip.Reason == ""
@@ -911,13 +912,14 @@ func (o *LocalObserver) IsOversizedFile(size int64, path string) bool {
 // observation filter — cheap string checks only (no syscall). Stage 2
 // (file size > 250GB) is checked after stat in processEntry/hashAndEmit.
 func ShouldObserve(name, path string) *synctypes.SkippedItem {
-	return shouldObserveWithFilter(name, path, observedKindUnknown, synctypes.LocalFilterConfig{})
+	return shouldObserveWithFilter(name, path, observedKindUnknown, synctypes.LocalFilterConfig{}, synctypes.LocalObservationRules{})
 }
 
 func shouldObserveWithFilter(
 	name, path string,
 	kind observedKind,
 	filter synctypes.LocalFilterConfig,
+	rules synctypes.LocalObservationRules,
 ) *synctypes.SkippedItem {
 	if IsAlwaysExcluded(name) {
 		return &synctypes.SkippedItem{} // internal exclusion, not reportable
@@ -927,7 +929,7 @@ func shouldObserveWithFilter(
 		return &synctypes.SkippedItem{}
 	}
 
-	if reason, detail := ValidateOneDriveName(name); reason != "" {
+	if reason, detail := validateObservedName(name, path, rules); reason != "" {
 		return &synctypes.SkippedItem{Path: path, Reason: reason, Detail: detail}
 	}
 
@@ -1119,11 +1121,31 @@ func IsAlwaysExcluded(name string) bool {
 	}
 
 	// Prefix-based: editor backup files (~file) and LibreOffice locks (.~lock).
-	if strings.HasPrefix(name, "~") || strings.HasPrefix(name, ".~") {
+	if strings.HasPrefix(name, ".~") {
+		return true
+	}
+
+	if strings.HasPrefix(name, "~") && !strings.HasPrefix(name, "~$") {
 		return true
 	}
 
 	return false
+}
+
+func validateObservedName(name, path string, rules synctypes.LocalObservationRules) (reason, detail string) {
+	if reason, detail := ValidateOneDriveName(name); reason != "" {
+		return reason, detail
+	}
+
+	if rules.RejectSharePointRootForms && isSharePointRootForms(name, path) {
+		return synctypes.IssueInvalidFilename, fmt.Sprintf("name %q is reserved at the root of a SharePoint library", name)
+	}
+
+	return "", ""
+}
+
+func isSharePointRootForms(name, path string) bool {
+	return path == name && strings.EqualFold(name, "forms")
 }
 
 // AsciiLower returns s with ASCII uppercase letters converted to lowercase.
