@@ -164,13 +164,13 @@ The API can return `0001-01-01T00:00:00Z` or far-future dates. `lastModifiedDate
 
 ### URL-Encoded Paths
 
-`parentReference.path` (when present in non-delta responses) contains URL-encoded characters (`%20` for spaces). Must be decoded before use.
+`parentReference.path` (when present in non-delta responses) contains URL-encoded characters (`%20` for spaces). The client decodes it at the Graph boundary and stores the root-relative result on `graph.Item.ParentPath`.
 
 ## Case Sensitivity
 
 ### OneDrive Is Case-Insensitive
 
-Two files differing only in case cannot coexist in the same OneDrive folder. The API's path-based queries perform case-insensitive matching but can return items from incorrect paths (observed with git repository files where `v1.0.0` and `v2.0.0` produce false matches).
+Two files differing only in case cannot coexist in the same OneDrive folder. The API's path-based queries perform case-insensitive matching but can return items from incorrect paths (observed with git repository files where `v1.0.0` and `v2.0.0` produce false matches). `GetItemByPath` mitigates this by post-validating the returned item against the requested path: full reconstructed path when `parentReference.path` is present, otherwise leaf-name match only.
 
 ## Normalization Pipeline
 
