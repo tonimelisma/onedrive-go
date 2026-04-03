@@ -15,6 +15,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // Drive state constants for status and drive list display.
@@ -60,13 +61,22 @@ type statusDrive struct {
 
 // syncStateInfo holds sync state for a single drive, queried from the state DB.
 type syncStateInfo struct {
-	LastSyncTime     string `json:"last_sync_time,omitempty"`
-	LastSyncDuration string `json:"last_sync_duration,omitempty"`
-	FileCount        int    `json:"file_count"`
-	Issues           int    `json:"issues"` // conflicts + actionable failures
-	PendingSync      int    `json:"pending_sync"`
-	Retrying         int    `json:"retrying"` // transient failures with failure_count >= 3
-	LastError        string `json:"last_error,omitempty"`
+	LastSyncTime     string             `json:"last_sync_time,omitempty"`
+	LastSyncDuration string             `json:"last_sync_duration,omitempty"`
+	FileCount        int                `json:"file_count"`
+	Issues           int                `json:"issues"` // conflicts + actionable failures
+	IssueGroups      []statusIssueGroup `json:"issue_groups,omitempty"`
+	PendingSync      int                `json:"pending_sync"`
+	Retrying         int                `json:"retrying"` // transient failures with failure_count >= 3
+	LastError        string             `json:"last_error,omitempty"`
+}
+
+type statusIssueGroup struct {
+	SummaryKey string `json:"summary_key"`
+	Title      string `json:"title"`
+	Count      int    `json:"count"`
+	ScopeKind  string `json:"scope_kind"`
+	Scope      string `json:"scope,omitempty"`
 }
 
 // statusSummary aggregates health info across all drives.
@@ -331,8 +341,29 @@ func querySyncState(statePath string, logger *slog.Logger) *syncStateInfo {
 	info.LastSyncTime = snapshot.SyncMetadata["last_sync_time"]
 	info.LastSyncDuration = snapshot.SyncMetadata["last_sync_duration_ms"]
 	info.LastError = snapshot.SyncMetadata["last_sync_error"]
+	info.IssueGroups = statusIssueGroups(snapshot.Issues.Groups)
 
 	return info
+}
+
+func statusIssueGroups(groups []syncstore.IssueGroupCount) []statusIssueGroup {
+	if len(groups) == 0 {
+		return nil
+	}
+
+	out := make([]statusIssueGroup, 0, len(groups))
+	for _, group := range groups {
+		descriptor := synctypes.DescribeSummary(group.Key)
+		out = append(out, statusIssueGroup{
+			SummaryKey: string(group.Key),
+			Title:      descriptor.Title,
+			Count:      group.Count,
+			ScopeKind:  group.ScopeKind,
+			Scope:      group.Scope,
+		})
+	}
+
+	return out
 }
 
 // computeSummary aggregates health information across all status accounts.
@@ -507,6 +538,9 @@ func printSyncStateText(w io.Writer, ss *syncStateInfo) error {
 		if err := writef(w, "    Issues:    %d (run 'onedrive-go issues')\n", ss.Issues); err != nil {
 			return err
 		}
+		if err := printStatusIssueGroups(w, ss.IssueGroups); err != nil {
+			return err
+		}
 	}
 
 	if ss.Retrying > 0 {
@@ -522,6 +556,43 @@ func printSyncStateText(w io.Writer, ss *syncStateInfo) error {
 	}
 
 	return nil
+}
+
+func printStatusIssueGroups(w io.Writer, groups []statusIssueGroup) error {
+	if len(groups) == 0 {
+		return nil
+	}
+
+	if err := writeln(w, "    Issue groups:"); err != nil {
+		return err
+	}
+
+	for _, group := range groups {
+		scopeText := statusIssueScopeText(group)
+		if scopeText == "" {
+			if err := writef(w, "      - %s: %d\n", group.Title, group.Count); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := writef(w, "      - %s (%s): %d\n", group.Title, scopeText, group.Count); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func statusIssueScopeText(group statusIssueGroup) string {
+	if group.ScopeKind == "" {
+		return ""
+	}
+	if group.Scope == "" {
+		return group.ScopeKind + " scope"
+	}
+
+	return group.ScopeKind + " " + group.Scope
 }
 
 func printSummaryText(w io.Writer, s statusSummary) error {

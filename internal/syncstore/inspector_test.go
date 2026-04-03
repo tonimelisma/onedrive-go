@@ -77,8 +77,8 @@ func TestInspector_ReadStatusSnapshot(t *testing.T) {
 	assert.Equal(t, 2, snapshot.Issues.VisibleTotal())
 	assert.Equal(t, 1, snapshot.Issues.RetryingCount())
 	assert.Equal(t, []IssueGroupCount{
-		{Key: synctypes.SummaryConflictUnresolved, Count: 1},
-		{Key: synctypes.SummarySyncFailure, Count: 1},
+		{Key: synctypes.SummaryConflictUnresolved, Count: 1, ScopeKind: "file"},
+		{Key: synctypes.SummarySyncFailure, Count: 1, ScopeKind: "file"},
 	}, snapshot.Issues.Groups)
 }
 
@@ -133,9 +133,9 @@ func TestInspector_ReadStatusSnapshot_IssueSummary(t *testing.T) {
 	assert.Equal(t, 1, snapshot.Issues.AuthRequiredCount())
 	assert.Equal(t, 1, snapshot.Issues.RetryingCount())
 	assert.ElementsMatch(t, []IssueGroupCount{
-		{Key: synctypes.SummaryConflictUnresolved, Count: 1},
-		{Key: synctypes.SummarySharedFolderWritesBlocked, Count: 1},
-		{Key: synctypes.SummaryInvalidFilename, Count: 1},
-		{Key: synctypes.SummaryAuthenticationRequired, Count: 1},
+		{Key: synctypes.SummaryConflictUnresolved, Count: 1, ScopeKind: "file"},
+		{Key: synctypes.SummarySharedFolderWritesBlocked, Count: 1, ScopeKind: "shortcut", Scope: "Shared/Docs"},
+		{Key: synctypes.SummaryInvalidFilename, Count: 1, ScopeKind: "file"},
+		{Key: synctypes.SummaryAuthenticationRequired, Count: 1, ScopeKind: "account", Scope: "your OneDrive account authorization"},
 	}, snapshot.Issues.Groups)
 }

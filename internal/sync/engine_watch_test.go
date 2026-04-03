@@ -808,8 +808,9 @@ func TestRunWatch_WatchLimitExhausted_FallsBackToPolling(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "subdir"), 0o750))
 
 	// Inject a watcher factory that returns ENOSPC after the first Add (root).
+	watcher := newEnospcWatcher(1)
 	eng.localWatcherFactory = func() (syncobserve.FsWatcher, error) {
-		return newEnospcWatcher(1), nil
+		return watcher, nil
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -822,8 +823,11 @@ func TestRunWatch_WatchLimitExhausted_FallsBackToPolling(t *testing.T) {
 		})
 	}()
 
-	// Wait long enough for the fallback to trigger at least one full scan.
-	time.Sleep(500 * time.Millisecond)
+	select {
+	case <-watcher.Failures():
+	case <-time.After(10 * time.Second):
+		require.Fail(t, "local watcher did not hit ENOSPC before timeout")
+	}
 
 	cancel()
 
