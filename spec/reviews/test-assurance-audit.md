@@ -306,7 +306,7 @@ This is the operating dashboard for completeness, not a verdict of quality. A pa
 | W2 | done | done | partial | partial | done | no | partial | no | filtering and naming rules not yet traceable |
 | W3 | done | done | partial | n/a | done | no | partial | no | big-delete and cross-drive proof paths unclear |
 | W4 | done | done | partial | n/a | done | no | partial | no | user-facing JSON/message semantics not yet audited |
-| W5 | done | done | done | partial | done | partial | partial | done | resume edge-case coverage (corrupt/oversized partials, changed remote content) still lags |
+| W5 | done | done | done | partial | done | partial | partial | done | upload-session traceability tags still lag the body-level coverage |
 | W6 | done | done | partial | partial | done | partial | partial | no | pagination and transport split still need body audit |
 | W7 | done | done | partial | n/a | done | no | no | no | output semantics can still be shallowly tested |
 | W8 | done | done | partial | n/a | done | no | no | no | validation-tier coverage may be over-claimed |
@@ -742,11 +742,10 @@ Key W1 gap notes:
 - Body-audit notes from `internal/driveops/*_test.go` and `internal/graph/upload_test.go`:
   - The earlier metadata gap was partly misleading: nuanced upload-session rules are heavily covered in `internal/graph/upload_test.go`, including explicit tests for `R-5.6.2`, `R-5.6.3`, `R-5.6.4`, `R-5.6.5`, `R-5.6.7`, `R-5.6.8`, and `R-5.6.9`, plus chunk-auth behavior (`R-5.6.6`) and chunk alignment behavior
   - `internal/driveops/transfer_manager_test.go` does a solid job on download atomicity, resume behavior, hash mismatch handling, session-store resume, delete-on-resume-error, rename-failure preservation, and disk-space prechecks
-  - The planned edge cases called out in `drive-transfers.md` still look uncovered from the first body pass: corrupt partial file, changed remote content during resume, and oversized partial handling
+  - The planned edge cases called out in `drive-transfers.md` now have direct body-level proof in `internal/driveops/transfer_manager_test.go`: corrupt partial bytes trigger hash-mismatch retry, changed remote content during resume forces a fresh re-download, and oversized partial state is discarded via the same retry path
   - Investigation outcome: the former `R-5.5.3` validation-disable requirement was not backed by any runtime path. The config keys existed only in parsing/tests, so the correct fix was to remove the dead config/spec surface instead of wiring a fake feature.
   - Investigation outcome: `R-5.7.1` was a real boundary gap. Sync observation already enforced the 250 GB limit, but direct file operations did not. `TransferManager.UploadFile` now rejects oversized files before hashing or any network transfer, and the branch has a regression test for that boundary.
   - Follow-up for W5:
-    - keep chasing the planned resume edge cases called out in the design doc
     - add more traceability tags for subtle upload-session behaviors that are well tested but still under-tagged
 - Verified-claim reconciliation snapshot:
 
@@ -763,7 +762,7 @@ Key W1 gap notes:
 | Zero-byte files must use simple upload, not sessions | `REQ+BODY` | `internal/graph/upload_test.go:1387` proves PUT `/content` path with empty body and no session creation | `proven` | Strong edge-case proof |
 | Post-upload code must not re-query metadata immediately | `REQ+BODY` | `internal/graph/upload_test.go:1429` fails on unexpected GET after upload | `proven` | Strong anti-regression test |
 | Direct upload rejects files over 250 GB before hashing or attempting transfer | `REQ+CODE+BODY` | `internal/driveops/transfer_manager.go` now rejects above `driveops.MaxOneDriveFileSize` before hashing or upload, and `internal/driveops/transfer_manager_test.go` proves hash and upload are both bypassed | `proven` | Fixed production gap and added explicit regression coverage |
-| Resume edge cases: corrupt partial, changed remote content, oversized partial | `DESIGN+BODY` | Design doc explicitly calls these out as planned tests; no proof found in this pass | `not-yet-audited` | `missing-test` for implemented resume robustness edges |
+| Resume edge cases: corrupt partial, changed remote content, oversized partial | `DESIGN+BODY` | `internal/driveops/transfer_manager_test.go` now covers corrupt partial bytes, stale remote content during resume, and oversized partial state via resume-then-fresh retry assertions | `proven` | Direct regression coverage added at the transfer-manager boundary |
 
 Key W5 gap notes:
 
@@ -939,7 +938,4 @@ Key W5 gap notes:
    - `R-6.4.2` and `R-6.4.3` watch-mode big-delete guarantees
    - `R-6.6.7` aggregated warning logging
 2. Start body-level audits for W2 and W4, because filtering/naming semantics and user-facing issues/verify output are the next easiest places for weak tests to hide.
-3. Come back to W5 for the remaining planned resume edge-case tests:
-   - corrupt `.partial` download state
-   - changed remote content during resume
-   - oversized `.partial` handling
+3. Tighten W5 traceability for upload-session rules that are already strongly tested in body-level graph tests but still under-tagged at the `// Validates:` level.

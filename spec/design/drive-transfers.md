@@ -74,7 +74,7 @@ Design properties:
 - Arbitrary local source/target paths use `internal/localpath`, making the three filesystem trust boundaries explicit instead of routing them through one helper package.
 - Guard `.partial` file cleanup with `ctx.Err() == nil`: a 3.9 GB partial of a 4 GB download should survive Ctrl-C for resume. Only intentional deletions (hash mismatch) should remove partials.
 - **Connection-level deadlines** (`transferTransport()`): `transferHTTPClient()` and `syncTransferHTTPClient()` use a shared `transferTransport()` with `ResponseHeaderTimeout: 2m` (detects servers that accept but never respond) and TCP keepalives (30s idle, 10s interval, 3 probes — detects dead connections within ~60s). No `http.Client.Timeout` — transfer duration varies with file size and bandwidth. [implemented]
-- Transfer manager resume edge case tests: corrupt partial file, changed remote content, oversized partial. [planned]
+- Transfer manager resume edge case tests cover corrupt partial file bytes, changed remote content during resume, and oversized partial state. [verified]
 
 ### Rationale: Per-Side Hashes
 
