@@ -2,6 +2,7 @@ package syncobserve
 
 import (
 	"io/fs"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -23,9 +24,22 @@ func CanReuseBaselineHash(info fs.FileInfo, base *synctypes.BaselineEntry, obser
 	}
 
 	currentMtime := info.ModTime().UnixNano()
-	if info.Size() != base.Size || currentMtime != base.Mtime {
+	if info.Size() != base.Size || !sameOneDriveComparableMtime(currentMtime, base.Mtime) {
 		return false
 	}
 
 	return observeStartNano-currentMtime >= nanosPerSecond
+}
+
+// sameOneDriveComparableMtime compares local mtimes using the same precision
+// OneDrive preserves on the wire. Local filesystems can retain sub-second
+// precision that never survives a round-trip through Graph, so comparing raw
+// UnixNano values would spuriously invalidate cached hashes after an otherwise
+// lossless sync.
+func sameOneDriveComparableMtime(leftNano, rightNano int64) bool {
+	return truncateToWholeSecondUTC(leftNano) == truncateToWholeSecondUTC(rightNano)
+}
+
+func truncateToWholeSecondUTC(unixNano int64) int64 {
+	return time.Unix(0, unixNano).UTC().Truncate(time.Second).UnixNano()
 }

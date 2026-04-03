@@ -62,6 +62,33 @@ func TestCanReuseBaselineHash_MetadataMatchOutsideRacilyCleanWindow(t *testing.T
 	}
 }
 
+// Validates: R-6.7.15
+func TestCanReuseBaselineHash_SameSecondSubsecondDifferenceStillMatches(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "same-second.txt")
+	content := []byte("stable content")
+	fileTime := time.Date(2025, 1, 1, 0, 0, 0, int((200 * time.Millisecond).Nanoseconds()), time.UTC)
+
+	require.NoError(t, os.WriteFile(path, content, 0o600))
+	require.NoError(t, os.Chtimes(path, fileTime, fileTime))
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+
+	baselineTime := fileTime.Add(700 * time.Millisecond)
+	assert.True(t, CanReuseBaselineHash(info, &synctypes.BaselineEntry{
+		Path:      "same-second.txt",
+		DriveID:   driveid.New("d"),
+		ItemID:    "i1",
+		ItemType:  synctypes.ItemTypeFile,
+		LocalHash: "cached-hash",
+		Size:      info.Size(),
+		Mtime:     baselineTime.UnixNano(),
+	}, info.ModTime().UnixNano()+nanosPerSecond+1))
+}
+
 func TestCanReuseBaselineHash_MetadataMismatchRequiresHash(t *testing.T) {
 	t.Parallel()
 
