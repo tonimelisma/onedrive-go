@@ -17,6 +17,16 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
+func newSingleItemServer(t *testing.T, body string) *httptest.Server {
+	t.Helper()
+
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeTestResponse(t, w, body)
+	}))
+}
+
 // Validates: R-1.6
 func TestGetItem_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -127,6 +137,28 @@ func TestGetItem_DriveIDNormalization(t *testing.T) {
 
 	assert.Equal(t, driveid.New("b!uppercase-drive-id"), item.DriveID)
 	assert.Equal(t, driveid.New("b!uppercase-drive-id"), item.ParentDriveID)
+}
+
+// Validates: R-6.7.23
+func TestGetItem_DecodesParentReferencePath(t *testing.T) {
+	srv := newSingleItemServer(t, `{
+		"id": "item-with-parent-path",
+		"name": "notes.txt",
+		"createdDateTime": "2024-01-01T00:00:00Z",
+		"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+		"parentReference": {
+			"id": "docs-folder",
+			"driveId": "d",
+			"path": "/drives/d/root:/Team%20Docs/Specs%20%231"
+		}
+	}`)
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.GetItem(t.Context(), driveid.New("d"), "item-with-parent-path")
+	require.NoError(t, err)
+
+	assert.Equal(t, "Team Docs/Specs #1", item.ParentPath)
 }
 
 func TestGetItem_InvalidTimestamp(t *testing.T) {
@@ -933,6 +965,32 @@ func TestGetItemByPath_Success(t *testing.T) {
 	assert.Equal(t, 2024, item.ModifiedAt.Year())
 }
 
+// Validates: R-6.7.22, R-6.7.23
+func TestGetItemByPath_UsesDecodedParentReferencePath(t *testing.T) {
+	srv := newSingleItemServer(t, `{
+		"id": "item-path-decoded",
+		"name": "Quarterly Report #1.txt",
+		"createdDateTime": "2024-01-01T00:00:00Z",
+		"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+		"parentReference": {
+			"id": "reports-folder",
+			"driveId": "d",
+			"path": "/drives/d/root:/Team%20Docs/Shared%20Reports"
+		}
+	}`)
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.GetItemByPath(
+		t.Context(),
+		driveid.New("d"),
+		"Team Docs/Shared Reports/Quarterly Report #1.txt",
+	)
+	require.NoError(t, err)
+
+	assert.Equal(t, "Team Docs/Shared Reports", item.ParentPath)
+}
+
 func TestGetItemByPath_EncodesSpecialChars(t *testing.T) {
 	// Verify that paths with special characters (#, spaces, ?) are URL-encoded
 	// per-segment before being sent to the server.
@@ -989,6 +1047,71 @@ func TestGetItemByPath_NotFound(t *testing.T) {
 		_, err := client.GetItemByPath(t.Context(), driveid.New("d"), "nonexistent/path.txt")
 		return err
 	}, ErrNotFound)
+}
+
+// Validates: R-6.7.22
+func TestGetItemByPath_FuzzyParentMismatchReturnsNotFound(t *testing.T) {
+	srv := newSingleItemServer(t, `{
+		"id": "wrong-parent",
+		"name": "file.txt",
+		"createdDateTime": "2024-01-01T00:00:00Z",
+		"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+		"parentReference": {
+			"id": "folder",
+			"driveId": "d",
+			"path": "/drives/d/root:/Documents/v1.0.0"
+		}
+	}`)
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.GetItemByPath(t.Context(), driveid.New("d"), "Documents/v2.0.0/file.txt")
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrNotFound)
+	assert.Contains(t, err.Error(), "Documents/v2.0.0/file.txt")
+	assert.Contains(t, err.Error(), "Documents/v1.0.0/file.txt")
+}
+
+// Validates: R-6.7.22
+func TestGetItemByPath_FallbackLeafMismatchReturnsNotFound(t *testing.T) {
+	srv := newSingleItemServer(t, `{
+		"id": "wrong-leaf",
+		"name": "other.txt",
+		"createdDateTime": "2024-01-01T00:00:00Z",
+		"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+		"parentReference": {
+			"id": "folder",
+			"driveId": "d"
+		}
+	}`)
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.GetItemByPath(t.Context(), driveid.New("d"), "Documents/file.txt")
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrNotFound)
+	assert.Contains(t, err.Error(), "resolved to \"other.txt\"")
+}
+
+// Validates: R-6.7.22
+func TestGetItemByPath_PathValidationIsCaseInsensitive(t *testing.T) {
+	srv := newSingleItemServer(t, `{
+		"id": "case-insensitive",
+		"name": "FILE.TXT",
+		"createdDateTime": "2024-01-01T00:00:00Z",
+		"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+		"parentReference": {
+			"id": "folder",
+			"driveId": "d",
+			"path": "/drives/d/root:/Documents"
+		}
+	}`)
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.GetItemByPath(t.Context(), driveid.New("d"), "documents/file.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "case-insensitive", item.ID)
 }
 
 // --- ListChildrenByPath tests ---
