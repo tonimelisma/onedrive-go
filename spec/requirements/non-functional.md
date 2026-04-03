@@ -83,7 +83,7 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.7.12: When `GET /drives/{driveID}/items/root/children` returns transient HTTP 404 with Graph code `itemNotFound` for a valid resource (cross-datacenter load balancer timeout), the system shall classify it as transient and retry with backoff. [verified]
 - R-6.7.13: When `GET /me/drives` returns HTTP 403 with Graph code `accessDenied` shortly after token refresh (eventual consistency), the system shall classify it as transient and retry with backoff. [verified]
 - R-6.7.15: The system shall truncate local timestamps to zero fractional seconds before comparing with OneDrive's whole-second precision. [planned]
-- R-6.7.16: The system shall safely handle missing or invalid timestamps (`0001-01-01T00:00:00Z`, absent `lastModifiedDateTime` on deletions) without panicking. [planned]
+- R-6.7.16: The system shall safely handle missing or invalid timestamps (`0001-01-01T00:00:00Z`, absent `lastModifiedDateTime` on deletions) without panicking, preserving them as unknown rather than fabricating replacement values. [verified]
 - R-6.7.17: When a file completely lacks hashes (zero-byte files, certain Business/SharePoint files), the system shall use a fallback comparison of size + mtime + eTag. [implemented]
 - R-6.7.18: When extracting identity data for shared items, the system shall use a four-level fallback chain: `remoteItem.shared.sharedBy` → `.owner` → `remoteItem.createdBy` → top-level `shared.owner`. [verified]
 - R-6.7.19: The system shall not advance the delta token when a delta response contains zero events, to prevent permanently missing ephemeral deletion events. [verified]
@@ -93,9 +93,10 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.7.23: The system shall URL-decode `parentReference.path` in non-delta responses before using it for path reconstruction. [verified]
 - R-6.7.24: When a folder is renamed, the system shall infer and recalculate path changes for all descendants, since only the renamed folder appears in the delta response. [verified]
 - R-6.7.25: When re-uploading a modified file to Business/SharePoint, the system shall accept the unavoidable extra version created by the API (unfixed Microsoft bug) without attempting futile workarounds. [planned]
-- R-6.7.26: The system shall handle absent `lastModifiedDateTime` (null) on API-initiated deletions without error. [planned]
+- R-6.7.26: The system shall handle absent `lastModifiedDateTime` (null) on API-initiated deletions without error, preserving the timestamp as unknown. [verified]
 - R-6.7.27: When classifying errors, the engine shall handle empty `TargetDriveID` (local-only operations like `os.ErrPermission`) by skipping remote scope routing. Only remote API errors shall require drive-aware scope routing. [verified]
 - R-6.7.28: The system shall skip malformed remote delta items that lack the identity or materialization data required to produce a safe `ChangeEvent`. Non-root items with empty `id`, non-deleted items with empty `name`, and delete entries whose path cannot be recovered from the baseline or surviving delta name/parent data shall be warned and skipped instead of emitting empty-ID or empty-path events. [verified]
+- R-6.7.29: The system shall treat sparse non-delete delta items as partial updates. When Graph omits unchanged `name` or `parentReference`, remote observation shall recover the missing path fields from the baseline instead of skipping the item or re-rooting it. [verified]
 
 ## R-6.8 Network Resilience [verified]
 

@@ -192,6 +192,40 @@ func TestFullDelta_DeletedFile(t *testing.T) {
 	assert.Equal(t, "photos/cat.jpg", e.Path)
 }
 
+// Validates: R-6.7.29
+func TestFullDelta_ModifiedFile_SparseFieldsRecoveredFromBaseline(t *testing.T) {
+	t.Parallel()
+
+	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+		Path: "docs/readme.md", DriveID: driveid.New(synctest.TestDriveID), ItemID: "f1",
+		ParentID: "folder1", ItemType: synctypes.ItemTypeFile, RemoteHash: "old-hash",
+	})
+
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{
+						ID: shortcutTestFileItemID, Name: "", ParentID: "", DriveID: driveid.New(synctest.TestDriveID),
+						QuickXorHash: "new-hash", Size: 512,
+					},
+				},
+				DeltaLink: "delta-link",
+			},
+		}},
+	}
+
+	obs := NewRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	events, _, err := obs.FullDelta(t.Context(), "prev-token")
+	require.NoError(t, err, "FullDelta")
+
+	require.Len(t, events, 1)
+	assert.Equal(t, synctypes.ChangeModify, events[0].Type)
+	assert.Equal(t, "docs/readme.md", events[0].Path)
+	assert.Equal(t, "readme.md", events[0].Name)
+	assert.Equal(t, "new-hash", events[0].Hash)
+}
+
 func TestFullDelta_MovedFile(t *testing.T) {
 	t.Parallel()
 
@@ -240,6 +274,47 @@ func TestFullDelta_MovedFile(t *testing.T) {
 	assert.Equal(t, synctypes.ChangeMove, moveEvent.Type)
 	assert.Equal(t, "new-folder/doc.txt", moveEvent.Path)
 	assert.Equal(t, "old-folder/doc.txt", moveEvent.OldPath)
+}
+
+// Validates: R-6.7.29
+func TestFullDelta_MovedFile_SparseNameRecoveredFromBaseline(t *testing.T) {
+	t.Parallel()
+
+	baseline := synctest.BaselineWith(
+		&synctypes.BaselineEntry{
+			Path: "old-folder", DriveID: driveid.New(synctest.TestDriveID), ItemID: "folder-old",
+			ParentID: "root", ItemType: synctypes.ItemTypeFolder,
+		},
+		&synctypes.BaselineEntry{
+			Path: "old-folder/doc.txt", DriveID: driveid.New(synctest.TestDriveID), ItemID: "f1",
+			ParentID: "folder-old", ItemType: synctypes.ItemTypeFile,
+		},
+		&synctypes.BaselineEntry{
+			Path: "new-folder", DriveID: driveid.New(synctest.TestDriveID), ItemID: "folder-new",
+			ParentID: "root", ItemType: synctypes.ItemTypeFolder,
+		},
+	)
+
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: shortcutTestFileItemID, Name: "", ParentID: "folder-new", DriveID: driveid.New(synctest.TestDriveID)},
+				},
+				DeltaLink: "delta-link",
+			},
+		}},
+	}
+
+	obs := NewRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	events, _, err := obs.FullDelta(t.Context(), "token")
+	require.NoError(t, err, "FullDelta")
+
+	require.Len(t, events, 1)
+	assert.Equal(t, synctypes.ChangeMove, events[0].Type)
+	assert.Equal(t, "new-folder/doc.txt", events[0].Path)
+	assert.Equal(t, "old-folder/doc.txt", events[0].OldPath)
+	assert.Equal(t, "doc.txt", events[0].Name)
 }
 
 // Validates: R-2.1.2
@@ -571,6 +646,7 @@ func TestFullDelta_HashSelection(t *testing.T) {
 	assert.Empty(t, events[2].Hash)
 }
 
+// Validates: R-6.7.16, R-6.7.26
 func TestFullDelta_TimestampConversion(t *testing.T) {
 	t.Parallel()
 
@@ -593,6 +669,30 @@ func TestFullDelta_TimestampConversion(t *testing.T) {
 	require.NoError(t, err, "FullDelta")
 
 	assert.Equal(t, ts.UnixNano(), events[0].Mtime)
+}
+
+// Validates: R-6.7.16, R-6.7.26
+func TestFullDelta_ZeroTimestampRemainsUnknown(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveid.New(synctest.TestDriveID)},
+					{ID: "f1", Name: "test.txt", ParentID: "root", DriveID: driveid.New(synctest.TestDriveID), ModifiedAt: time.Time{}},
+				},
+				DeltaLink: "delta-link",
+			},
+		}},
+	}
+
+	obs := NewRemoteObserver(fetcher, synctest.EmptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	events, _, err := obs.FullDelta(t.Context(), "")
+	require.NoError(t, err, "FullDelta")
+
+	require.Len(t, events, 1)
+	assert.Equal(t, int64(0), events[0].Mtime, "unknown remote timestamps should stay zero")
 }
 
 func TestFullDelta_FolderEvent(t *testing.T) {

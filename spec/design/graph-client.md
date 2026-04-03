@@ -2,7 +2,7 @@
 
 GOVERNS: internal/graph/auth.go, internal/graph/auth_browser.go, internal/graph/auth_device.go, internal/graph/auth_token.go, internal/graph/client.go, internal/graph/client_auth.go, internal/graph/client_construction.go, internal/graph/client_preauth.go, internal/graph/delta.go, internal/graph/download.go, internal/graph/drives.go, internal/graph/drives_identity.go, internal/graph/drives_shared.go, internal/graph/drives_sites.go, internal/graph/errors.go, internal/graph/items.go, internal/graph/items_copy.go, internal/graph/items_fetch.go, internal/graph/items_mutation.go, internal/graph/items_permissions.go, internal/graph/normalize.go, internal/graph/quirks.go, internal/graph/redaction.go, internal/graph/types.go, internal/graph/upload.go, internal/graph/upload_session.go, internal/graph/upload_transfer.go, internal/graph/url_validation.go, internal/tokenfile/tokenfile.go
 
-Implements: R-3.1 [verified], R-6.7 [implemented], R-6.8 [verified], R-1.1 [verified], R-1.4 [verified], R-1.5 [verified], R-1.6 [verified], R-1.7 [verified], R-1.8 [verified], R-6.7.4 [verified], R-6.7.8 [verified], R-6.7.9 [verified], R-6.7.10 [verified], R-6.7.11 [planned], R-6.7.12 [verified], R-6.7.13 [verified], R-6.7.17 [implemented], R-6.7.18 [verified], R-6.7.22 [verified], R-6.7.23 [verified], R-6.8.4 [verified], R-6.8.6 [verified], R-6.8.8 [verified], R-6.8.14 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
+Implements: R-3.1 [verified], R-6.7 [implemented], R-6.8 [verified], R-1.1 [verified], R-1.4 [verified], R-1.5 [verified], R-1.6 [verified], R-1.7 [verified], R-1.8 [verified], R-6.7.4 [verified], R-6.7.8 [verified], R-6.7.9 [verified], R-6.7.10 [verified], R-6.7.11 [planned], R-6.7.12 [verified], R-6.7.13 [verified], R-6.7.16 [verified], R-6.7.17 [implemented], R-6.7.18 [verified], R-6.7.22 [verified], R-6.7.23 [verified], R-6.7.26 [verified], R-6.8.4 [verified], R-6.8.6 [verified], R-6.8.8 [verified], R-6.8.14 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
 
 ## Overview
 
@@ -46,7 +46,7 @@ All API quirks handled at the graph boundary — downstream code never sees them
 - DriveId truncation fix (zero-pad Personal IDs to 16 chars)
 - Delta deletion reordering (deletions before creations within each page)
 - Missing field recovery (name, size for deleted items)
-- Timestamp validation
+- Timestamp validation that preserves unknown timestamps as zero time instead of fabricating a replacement
 - `parentReference.path` is never returned in delta — items tracked by ID
 - `parentReference.path` is URL-decoded and normalized to a root-relative `Item.ParentPath` in non-delta responses
 - `GetItemByPath` post-validates Graph's response against the requested path. When `parentReference.path` is present the client compares the full reconstructed path case-insensitively; otherwise it falls back to leaf-name validation before accepting the result.
@@ -70,6 +70,8 @@ These are instance fields on `graph.Client`, not package globals. Tests in packa
 ## Item Operations (`items.go`)
 
 GetItem, ListChildren, CreateFolder, MoveItem, CopyItem, DeleteItem. All operations use `graph.Item` — the clean type after normalization. For non-delta item fetches, `Item.ParentPath` carries the decoded root-relative `parentReference.path` when Graph provides it so callers never need to parse Graph's absolute `"/drives/{id}/root:..."` representation themselves.
+
+Timestamp normalization is intentionally lossy in only one direction: valid Graph timestamps become UTC `time.Time` values, while empty, invalid, or out-of-range timestamps remain the zero value to mean "unknown". The graph boundary never substitutes `time.Now()` for malformed wire data, because downstream sync logic can safely persist and reason about unknown timestamps as `NULL`/unset state.
 
 ## Transfers
 

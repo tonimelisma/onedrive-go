@@ -79,6 +79,41 @@ func TestPrintStatJSON(t *testing.T) {
 	assert.Equal(t, "text/plain", parsed.MimeType)
 }
 
+func TestPrintStatText_ZeroTimestampsRenderUnknown(t *testing.T) {
+	item := &graph.Item{
+		ID:         "id-zero",
+		Name:       "mystery.txt",
+		Size:       42,
+		ModifiedAt: time.Time{},
+		CreatedAt:  time.Time{},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, printStatText(&buf, item))
+	output := buf.String()
+
+	assert.Contains(t, output, "Modified: unknown")
+	assert.Contains(t, output, "Created:  unknown")
+}
+
+func TestPrintStatJSON_ZeroTimestampsUseEmptyString(t *testing.T) {
+	item := &graph.Item{
+		ID:         "id-zero-json",
+		Name:       "mystery.txt",
+		Size:       42,
+		ModifiedAt: time.Time{},
+		CreatedAt:  time.Time{},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, printStatJSON(&buf, item))
+
+	var parsed statJSONOutput
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &parsed))
+	assert.Empty(t, parsed.ModifiedAt)
+	assert.Empty(t, parsed.CreatedAt)
+}
+
 // --- newStatCmd ---
 
 // Validates: R-1.6

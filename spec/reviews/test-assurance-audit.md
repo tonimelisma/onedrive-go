@@ -1,6 +1,6 @@
 # Test Assurance Audit
 
-Last updated: 2026-04-02
+Last updated: 2026-04-03
 
 Purpose: build a spec-first model of the ideal test suite, then compare the real suite against that model to catch missing, weak, or nerfed tests before we start patching coverage.
 
@@ -303,7 +303,7 @@ This is the operating dashboard for completeness, not a verdict of quality. A pa
 | Workstream | Req | Design | Code | Ref | Meta | Body | Kill | Verified reconcile | Highest unresolved risk |
 |---|---|---|---|---|---|---|---|---|---|
 | W1 | done | done | partial | partial | done | partial | partial | partial | periodic reconciliation, aggregated logging, and big-delete traceability still lag |
-| W2 | done | done | done | partial | done | partial | partial | partial | actionable-issue lifecycle and sparse-payload hardening still need body audit |
+| W2 | done | done | done | partial | done | partial | partial | partial | actionable-issue lifecycle and remaining sparse-payload nil/parent-chain hardening still need body audit |
 | W3 | done | done | partial | n/a | done | no | partial | no | big-delete and cross-drive proof paths unclear |
 | W4 | done | done | partial | n/a | done | no | partial | no | user-facing JSON/message semantics not yet audited |
 | W5 | done | done | done | partial | done | partial | partial | done | upload-session traceability tags still lag the body-level coverage |
@@ -591,9 +591,10 @@ Key W1 gap notes:
   - silently skip invalid OneDrive filenames instead of recording an actionable issue
   - fail to re-emit colliding peers after one side is deleted
   - panic on sparse delta payloads
+  - synthesize `time.Now()` for malformed remote timestamps and accidentally suppress a real follow-up hash/download decision
 - Audit status:
   - ideal model drafted
-  - note: planned requirements `R-2.4.4`, `R-2.4.5`, `R-6.7.15`, `R-6.7.16`, `R-6.7.21` stay out of the current strong/weak audit until implemented
+  - note: planned requirements `R-2.4.4`, `R-2.4.5`, `R-6.7.15`, `R-6.7.21` stay out of the current strong/weak audit until implemented
 - Claim mapping snapshot from filenames and `// Validates:` only:
   - Candidate test surface is strong around observation mechanics: `scanner_test.go`, `observer_remote_test.go`, `buffer_test.go`, `observer_local_*_test.go`, `item_converter_test.go`, and `inotify*_test.go`
   - Explicit comment claims already exist for `R-2.1.2`, `R-2.12.1`, `R-2.12.2`, `R-2.13.1`, `R-6.7.1`, `R-6.7.3`, `R-6.7.5`, `R-6.7.20`, and `R-6.7.24`
@@ -626,6 +627,18 @@ Key W1 gap notes:
     - `internal/syncobserve/observer_remote_test.go` skips remote items with empty `ItemID`
     - non-deleted remote items with empty `Name` are skipped instead of emitting empty-path creates/modifies
     - deletes with no recoverable path are skipped instead of emitting unmaterializable empty-path delete events
+  - Sparse-timestamp follow-up found a second remote-normalization gap: the graph boundary treated empty, invalid, or out-of-range timestamps as `time.Now().UTC()`, which avoided panics but fabricated mtimes for sparse delta payloads and CLI output.
+  - Production fix: graph timestamp parsing now preserves those values as unknown zero time, remote observation carries zero `Mtime` for sparse items, and CLI output renders zero timestamps as `unknown` in text and empty string in JSON instead of year-0001 or a fake current timestamp.
+  - Regression coverage now proves:
+    - `internal/graph/items_test.go` keeps empty, invalid, future, and delete-null timestamps at zero/unknown rather than replacing them
+    - `internal/syncobserve/observer_remote_test.go` preserves zero timestamps through full delta conversion
+    - `internal/cli/format_test.go`, `internal/cli/ls_test.go`, and `internal/cli/stat_test.go` render unknown timestamps sanely at the presentation boundary
+  - Another W2 sparse-delta audit pass found a second live observation bug: non-delete delta updates can legally omit unchanged `name` and `parentReference`, but the converter still treated those fields as complete. That caused two bad outcomes: sparse updates with empty `name` were skipped entirely, and sparse renames with empty parent data were re-rooted to the sync root instead of staying in their baseline directory.
+  - Production fix: item conversion now treats those omissions as partial updates when a baseline entry exists. Missing leaf names are recovered from `path.Base(existing.Path)`, missing parent context reuses the baseline directory, and moves with only one changed path component still materialize correctly.
+  - Regression coverage now proves:
+    - `internal/syncobserve/observer_remote_test.go` keeps sparse modify events on their existing path when both `name` and `parentReference` are omitted
+    - sparse move events with only a new parent and no `name` still recover the baseline leaf
+    - `internal/syncobserve/item_converter_test.go` proves shortcut-scoped sparse renames preserve the existing subdirectory instead of collapsing to the scope root
 - Verified-claim reconciliation snapshot:
 
 | Contract | Basis | Current evidence | Reconciliation | Gap label / note |
@@ -638,6 +651,8 @@ Key W1 gap notes:
 | Retry/trial single-path reconstruction must honor the same local filters as normal observation | `DESIGN+CODE+BODY` | `internal/syncobserve/filter_test.go` proves `ObserveSinglePathWithFilter` resolves configured exclusions silently | `proven` | Important design-only invariant now covered |
 | Retry/trial actionable maintenance must normalize missing drive IDs for both upsert and clear paths | `REQ+DESIGN+CODE+BODY` | `internal/sync/engine_single_owner_test.go` now proves zero-drive retry/trial rows clear stale actionable failures against the engine drive and that same-path scanner-issue replacement updates the existing actionable row in place | `proven` | Real prod gap fixed in retry/trial failure maintenance |
 | Remote observation must skip malformed sparse items it cannot identify or materialize safely | `DESIGN+CODE+BODY` | `internal/syncobserve/observer_remote_test.go` now proves remote items with empty `ItemID`, non-deleted items with empty `Name`, and delete entries without any recoverable path are warned and skipped instead of emitting empty-path or empty-ID events | `proven` | Real prod gap fixed in remote item conversion |
+| Invalid or absent remote timestamps must remain unknown instead of being synthesized into current time | `REQ+DESIGN+CODE+BODY+WEB` | Official Graph delta docs describe sparse changed-property payloads, while `internal/graph/items_test.go`, `internal/syncobserve/observer_remote_test.go`, and CLI formatting tests now prove invalid, empty, future, and delete-null timestamps stay zero/unknown through parsing, observation, and presentation | `proven` | Real prod gap fixed at the graph boundary; spec now marks `R-6.7.16` and `R-6.7.26` verified |
+| Sparse non-delete delta items must recover omitted unchanged path fields from the baseline | `REQ+DESIGN+CODE+BODY+WEB` | Microsoft’s delta overview documents that updated instances can be returned with only `id` plus the changed properties. `internal/syncobserve/observer_remote_test.go` and `internal/syncobserve/item_converter_test.go` now prove missing `name` and missing parent context are recovered from the baseline so sparse modifies and moves stay correctly rooted | `proven` | Real prod gap fixed in remote item conversion; spec now tracks `R-6.7.29` |
 | Resolved config must reach the engine and observer instead of being dropped in CLI setup | `REQ+CODE+BODY` | `internal/cli/sync_helpers_test.go` plus `internal/sync/engine_filter_test.go` prove config propagation and end-to-end upload suppression | `proven` | Fixed production wiring gap |
 
 Key W2 gap notes:
@@ -647,7 +662,9 @@ Key W2 gap notes:
 - `CODE+BODY`: silent local exclusions also had a delete-semantic bug. Filtered paths could still come back as fabricated `ChangeDelete` events when they already existed in the baseline, and skipped symlink removes could leak through watch mode. That is now fixed with explicit regression coverage.
 - `CODE+BODY`: retry/trial actionable maintenance also had a real stale-row bug for zero-drive failures. Upsert already fell back to the engine drive, but clear did not, so a silent resolution could miss the stored row. That is now fixed with regression coverage.
 - `CODE+BODY`: sparse remote payload handling also had a real conversion gap. Malformed remote items could still produce empty-ID or empty-path events and reach planner input. That is now fixed for the highest-risk identity/materialization cases with regression coverage, without regressing ordinary deleted-item path recovery from delta data.
-- `META`: W2 still needs deeper reconciliation on the rest of actionable-issue lifecycle (`R-2.11.*`) and the remaining sparse-payload edge cases (timestamps, parent-chain oddities, and other zero-value Graph fields).
+- `CODE+BODY+WEB`: sparse remote timestamps also had a real normalization gap. Empty, invalid, and out-of-range timestamps were being rewritten to `time.Now()`, which hid malformed Graph payloads behind fake metadata. That is now fixed and covered through graph parsing, remote conversion, and CLI presentation tests.
+- `CODE+BODY+WEB`: sparse non-delete delta items also had a real recovery gap. When Graph omitted unchanged path fields, the converter could skip valid updates or accidentally re-root them. That is now fixed with regression coverage for primary and shortcut scopes.
+- `META`: W2 still needs deeper reconciliation on the rest of actionable-issue lifecycle (`R-2.11.*`) and the remaining sparse-payload edge cases (deeper parent-chain oddities and other zero-value Graph fields).
 
 ### W3. Planner Safety, Conflict Resolution, And Delete Protection
 
@@ -989,6 +1006,6 @@ Key W5 gap notes:
 2. Continue W2 body-level reconciliation for:
    - `R-2.11.*` actionable-issue recording and auto-clear semantics
    - `R-2.4.6` / `R-2.4.7` symlink and always-excluded behavior
-   - sparse remote-payload hardening and nil-guard proof paths
+   - remaining sparse remote-payload hardening and nil-guard proof paths
 3. Tighten W5 traceability for upload-session rules that are already strongly tested in body-level graph tests but still under-tagged at the `// Validates:` level.
 4. Start the W4 body audit on `issues` / `verify` output semantics and recycle-bin defaults, because that remains a likely weak-test area.

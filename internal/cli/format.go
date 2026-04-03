@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+const unknownTimeLabel = "unknown"
+
 func outputWriterOrDefault(w io.Writer) io.Writer {
 	if w == nil {
 		return os.Stdout
@@ -124,6 +126,10 @@ func formatSize(bytes int64) string {
 
 // formatTime returns a compact timestamp for display.
 func formatTime(t time.Time) string {
+	if t.IsZero() {
+		return unknownTimeLabel
+	}
+
 	now := time.Now()
 
 	// Same calendar year: show "Jan  2 15:04"
@@ -133,6 +139,25 @@ func formatTime(t time.Time) string {
 
 	// Different year: show "Jan  2  2006"
 	return t.Format("Jan _2  2006")
+}
+
+// formatAPITime returns an RFC3339 timestamp for machine-readable output.
+// Unknown timestamps stay empty rather than serializing as year 0001.
+func formatAPITime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+
+	return t.Format("2006-01-02T15:04:05Z")
+}
+
+// formatExactTime returns the full UTC timestamp for text output.
+func formatExactTime(t time.Time) string {
+	if t.IsZero() {
+		return unknownTimeLabel
+	}
+
+	return t.Format("2006-01-02 15:04:05 UTC")
 }
 
 // printTable writes aligned columns to the given writer.
