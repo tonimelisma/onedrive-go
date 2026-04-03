@@ -78,6 +78,7 @@ type specialFolderFacet struct {
 type parentRef struct {
 	ID      string `json:"id"`
 	DriveID string `json:"driveId"`
+	Path    string `json:"path"`
 }
 
 type fileFacet struct {
@@ -174,6 +175,7 @@ func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 	if d.ParentReference != nil {
 		item.DriveID = driveid.New(d.ParentReference.DriveID)
 		item.ParentID = d.ParentReference.ID
+		item.ParentPath = decodeParentReferencePath(d.ParentReference.Path, logger)
 		item.ParentDriveID = driveid.New(d.ParentReference.DriveID)
 	}
 
@@ -211,6 +213,41 @@ func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 	item.ModifiedAt = parseTimestamp(d.LastModifiedDateTime, "lastModifiedDateTime", d.ID, item.IsDeleted, logger)
 
 	return item
+}
+
+// decodeParentReferencePath converts Graph's parentReference.path into a
+// decoded path relative to the drive root. Graph returns an absolute API path
+// prefix ("/drives/{id}/root:") plus URL-encoded segments in non-delta
+// responses. Callers only need the root-relative filesystem portion.
+func decodeParentReferencePath(rawPath string, logger *slog.Logger) string {
+	if rawPath == "" {
+		return ""
+	}
+
+	decoded, err := url.PathUnescape(rawPath)
+	if err != nil {
+		if logger != nil {
+			logger.Debug("failed to decode parentReference.path, ignoring",
+				slog.String("path", rawPath),
+				slog.String("error", err.Error()),
+			)
+		}
+
+		return ""
+	}
+
+	_, rootRelativePath, found := strings.Cut(decoded, "/root:")
+	if !found {
+		if logger != nil {
+			logger.Debug("parentReference.path missing root marker, ignoring",
+				slog.String("path", decoded),
+			)
+		}
+
+		return ""
+	}
+
+	return strings.TrimPrefix(rootRelativePath, "/")
 }
 
 // resolveSharedOwner extracts sharer identity using a four-level fallback chain:

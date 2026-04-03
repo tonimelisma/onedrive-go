@@ -39,6 +39,7 @@ type Item struct {
 	Name              string
 	DriveID           driveid.ID // normalized: lowercase, zero-padded (Graph API casing is inconsistent)
 	ParentID          string
+	ParentPath        string     // decoded root-relative parent path from parentReference.path; empty for root/unknown
 	ParentDriveID     driveid.ID // drive containing parent (for cross-drive references)
 	Size              int64
 	ETag              string

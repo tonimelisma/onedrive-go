@@ -91,7 +91,47 @@ func (c *Client) GetItemByPath(ctx context.Context, driveID driveid.ID, remotePa
 		slog.String("path", remotePath),
 	)
 
-	return c.fetchItem(ctx, fmt.Sprintf("/drives/%s/root:/%s:", driveID, encodePathSegments(remotePath)))
+	item, err := c.fetchItem(ctx, fmt.Sprintf("/drives/%s/root:/%s:", driveID, encodePathSegments(remotePath)))
+	if err != nil {
+		return nil, err
+	}
+
+	if !itemMatchesRequestedPath(item, remotePath) {
+		resolvedPath := resolvedItemPath(item)
+
+		return nil, fmt.Errorf("graph: requested path %q resolved to %q: %w", remotePath, resolvedPath, ErrNotFound)
+	}
+
+	return item, nil
+}
+
+// itemMatchesRequestedPath validates a path-based Graph lookup result against
+// the requested remote path. Graph path queries are case-insensitive and can
+// occasionally return items from the wrong parent, so we verify the full path
+// when parentReference.path is available and otherwise fall back to the leaf.
+func itemMatchesRequestedPath(item *Item, requestedPath string) bool {
+	if item.ParentPath != "" {
+		return strings.EqualFold(resolvedItemPath(item), requestedPath)
+	}
+
+	return strings.EqualFold(item.Name, pathLeaf(requestedPath))
+}
+
+func resolvedItemPath(item *Item) string {
+	if item.ParentPath == "" {
+		return item.Name
+	}
+
+	return item.ParentPath + "/" + item.Name
+}
+
+func pathLeaf(remotePath string) string {
+	lastSlash := strings.LastIndex(remotePath, "/")
+	if lastSlash == -1 {
+		return remotePath
+	}
+
+	return remotePath[lastSlash+1:]
 }
 
 // ListChildren returns all children of a folder, handling pagination automatically.
