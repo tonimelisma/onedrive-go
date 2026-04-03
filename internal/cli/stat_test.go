@@ -2,13 +2,19 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -122,4 +128,49 @@ func TestNewStatCmd_Structure(t *testing.T) {
 
 	cmd := newStatCmd()
 	assert.Equal(t, "stat <path>", cmd.Use)
+}
+
+// Validates: R-2.10.47
+func TestRunStat_ClearsPersistedAuthScopeAfterSuccessfulAuthenticatedProof(t *testing.T) {
+	setTestDriveHome(t)
+
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
+	seedAuthScope(t, cid)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		assert.Equal(t, "/drives/0000000drive-123/items/root", r.URL.Path)
+		writeTestResponse(t, w, `{
+			"id":"root",
+			"name":"root",
+			"size":0,
+			"createdDateTime":"2026-04-03T00:00:00Z",
+			"lastModifiedDateTime":"2026-04-03T00:00:00Z",
+			"eTag":"etag"
+		}`)
+	}))
+	defer srv.Close()
+
+	provider := driveops.NewSessionProvider(nil, srv.Client(), srv.Client(), "test-agent", testDriveLogger(t))
+	provider.GraphBaseURL = srv.URL
+
+	var out bytes.Buffer
+	cc := &CLIContext{
+		Logger:       testDriveLogger(t),
+		OutputWriter: &out,
+		StatusWriter: &out,
+		Cfg: &config.ResolvedDrive{
+			CanonicalID: cid,
+			DriveID:     driveid.New("drive-123"),
+		},
+		Provider: provider,
+	}
+
+	cmd := newStatCmd()
+	cmd.SetContext(context.WithValue(t.Context(), cliContextKey{}, cc))
+	cmd.SetArgs([]string{"/"})
+
+	require.NoError(t, cmd.Execute())
+	assert.False(t, hasPersistedAuthScope(t.Context(), cid.Email(), testDriveLogger(t)))
 }

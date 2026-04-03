@@ -108,6 +108,20 @@ Implements: R-6.8.14 [implemented]
 
 Transparent token refresh on 401 inside `doOnce()`, independent of retry transport. On 401: refresh token → retry once. If still 401 → return `ErrUnauthorized` (fatal). Auth refresh is lifecycle management, not transient retry — it works regardless of whether the HTTP client has a `RetryTransport`.
 
+Ordinary Graph `401` is intentionally **not** a sync trial or backoff signal.
+The graph boundary gets exactly one lifecycle retry: refresh the saved login
+and retry the request once. If that still fails, callers receive
+`ErrUnauthorized`. Sync treats that as a fatal `auth:account` condition for the
+current pass or watch session, and CLI surfaces present it as
+`Authentication required`.
+
+This policy is evidence-driven. The repository documents one spurious `401`
+class for pre-authenticated upload-session fragment requests when a Bearer
+token is sent unnecessarily. That case is handled at the pre-auth transport
+boundary by omitting Bearer auth. The repository does **not** currently have
+captured evidence for a general post-refresh ordinary-Graph `401` quirk, so no
+generic runtime retry or sync-trial behavior exists for that case.
+
 `Client` also exposes an optional per-instance authenticated-success hook. The
 hook fires only after a normal authenticated Graph request succeeds. CLI code
 uses this as a proof boundary to clear stale `auth:account` scope blocks after

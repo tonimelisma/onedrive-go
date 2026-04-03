@@ -75,7 +75,7 @@ func TestAttachAccountAuthProof_ClearsOnAuthenticatedSuccess(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestGraphClient(t, srv.URL)
-	attachAccountAuthProof(client, newAuthProofRecorder(testDriveLogger(t)), cid.Email())
+	attachAccountAuthProof(client, newAuthProofRecorder(testDriveLogger(t)), cid.Email(), "test")
 
 	_, err := client.Me(t.Context())
 	require.NoError(t, err)
@@ -98,7 +98,7 @@ func TestAttachAccountAuthProof_DoesNotClearOnUnauthorized(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestGraphClient(t, srv.URL)
-	attachAccountAuthProof(client, newAuthProofRecorder(testDriveLogger(t)), cid.Email())
+	attachAccountAuthProof(client, newAuthProofRecorder(testDriveLogger(t)), cid.Email(), "test")
 
 	_, err := client.Me(t.Context())
 	require.ErrorIs(t, err, graph.ErrUnauthorized)
@@ -131,6 +131,28 @@ func TestStatusService_Run_JSONSurfacesSyncAuthRejectedOffline(t *testing.T) {
 	assert.Equal(t, authStateAuthenticationNeeded, decoded.Accounts[0].AuthState)
 	assert.Equal(t, authReasonSyncAuthRejected, decoded.Accounts[0].AuthReason)
 	assert.Equal(t, 1, decoded.Summary.AccountsRequiringAuth)
+}
+
+// Validates: R-2.10.47
+func TestStatusService_Run_DoesNotClearPersistedAuthScope(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
+	seedAuthScope(t, cid)
+
+	var out bytes.Buffer
+	svc := newStatusService(&CLIContext{
+		Logger:       testDriveLogger(t),
+		OutputWriter: &out,
+		StatusWriter: &out,
+		CfgPath:      cfgPath,
+	})
+
+	require.NoError(t, svc.run())
+	assert.True(t, hasPersistedAuthScope(t.Context(), cid.Email(), testDriveLogger(t)))
 }
 
 // Validates: R-2.10.45

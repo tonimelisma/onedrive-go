@@ -1413,3 +1413,41 @@ func TestAnnotateConfiguredDriveAuth_AndPrintSections(t *testing.T) {
 	assert.Contains(t, buf.String(), "Available drives (not configured):")
 	assert.Contains(t, buf.String(), "Authentication required:")
 }
+
+// Validates: R-2.10.47
+func TestDriveService_RunList_ClearsPersistedAuthScopeAfterSuccessfulDiscovery(t *testing.T) {
+	setTestDriveHome(t)
+
+	const graphDrivesPath = "/me/drives"
+
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
+	seedAuthScope(t, cid)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch {
+		case r.URL.Path == graphDrivesPath:
+			writeTestResponse(t, w, `{"value":[{"id":"drive-123","name":"OneDrive","driveType":"personal"}]}`)
+		case strings.HasPrefix(r.URL.Path, "/me/drive/search("):
+			writeTestResponse(t, w, `{"value":[]}`)
+		default:
+			assert.Fail(t, "unexpected graph path", "path=%s", r.URL.Path)
+			http.Error(w, "unexpected graph path", http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	svc := newDriveService(&CLIContext{
+		Logger:       testDriveLogger(t),
+		OutputWriter: &out,
+		StatusWriter: &out,
+		CfgPath:      filepath.Join(t.TempDir(), "config.toml"),
+		GraphBaseURL: srv.URL,
+	})
+
+	require.NoError(t, svc.runList(t.Context(), false))
+	assert.False(t, hasPersistedAuthScope(t.Context(), cid.Email(), testDriveLogger(t)))
+}

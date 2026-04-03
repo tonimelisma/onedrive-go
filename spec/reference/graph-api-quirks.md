@@ -95,6 +95,23 @@ Runtime policy:
 
 After token refresh, `/me/drives` returns HTTP 403 with Graph code `accessDenied` while `/me` (user profile) succeeds with the same token. Caused by eventual consistency in Microsoft's token propagation infrastructure. The `/me` endpoint receives token updates before `/me/drives`.
 
+### No General Ordinary-Request Post-Refresh 401 Quirk (Current Evidence)
+
+The repository does **not** currently have captured evidence for a general
+"ordinary Graph request returns a spurious 401 after the client already
+refreshed the saved login and retried once" quirk. Because that evidence is
+absent, runtime handling remains narrow:
+
+- ordinary authenticated requests refresh and retry once on 401
+- if the retried request still returns 401, the graph boundary returns
+  `ErrUnauthorized`
+- sync treats that as fatal for the current pass/watch and does not trial or
+  back off 401
+
+If recoverable payload evidence or a reproducible ordinary-request post-refresh
+401 incident is captured later, targeted graph-boundary handling can be added
+then.
+
 ### HTTP 308 Without Location Header
 
 Webhook subscription renewal (PATCH to `/v1.0/subscriptions/{id}`) returns HTTP 308 (Permanent Redirect) without a `Location` header, violating RFC 7538. Observed on Personal accounts migrated to the new backend, specifically in the West Europe data center. Filed as [onedrive-api-docs#1895](https://github.com/OneDrive/onedrive-api-docs/issues/1895).

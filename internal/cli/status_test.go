@@ -21,12 +21,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
-const (
-	tokenStateMissing = "missing"
-	tokenStateExpired = "expired"
-	tokenStateValid   = "valid"
-)
-
 // mockNameReader returns fixed display name and org name for testing.
 type mockNameReader struct {
 	displayName string
@@ -37,20 +31,20 @@ func (m *mockNameReader) ReadAccountNames(_ string, _ []driveid.CanonicalID) (st
 	return m.displayName, m.orgName
 }
 
-// mockTokenChecker returns a fixed token state for all accounts.
-type mockTokenChecker struct {
+// mockSavedLoginChecker returns a fixed auth-health state for all accounts.
+type mockSavedLoginChecker struct {
 	state string
 }
 
-func (m *mockTokenChecker) CheckAccountAuth(_ context.Context, _ string, _ []driveid.CanonicalID) accountAuthHealth {
+func (m *mockSavedLoginChecker) CheckAccountAuth(_ context.Context, _ string, _ []driveid.CanonicalID) accountAuthHealth {
 	switch m.state {
-	case tokenStateMissing:
+	case savedLoginStateMissing:
 		return accountAuthHealth{
 			State:  authStateAuthenticationNeeded,
 			Reason: authReasonMissingLogin,
 			Action: authAction(authReasonMissingLogin),
 		}
-	case tokenStateExpired:
+	case savedLoginStateInvalid:
 		return accountAuthHealth{
 			State:  authStateAuthenticationNeeded,
 			Reason: authReasonInvalidSavedLogin,
@@ -148,6 +142,9 @@ func TestNewStatusCmd_Structure(t *testing.T) {
 	assert.Equal(t, "status", cmd.Name())
 	assert.NotEmpty(t, cmd.Short)
 	assert.NotNil(t, cmd.RunE)
+	assert.Contains(t, cmd.Short, "authentication health")
+	assert.Contains(t, cmd.Long, "authentication health")
+	assert.NotContains(t, cmd.Long, "token status")
 }
 
 // --- buildStatusAccountsWith tests (B-036) ---
@@ -161,7 +158,7 @@ func TestBuildStatusAccountsWith_SingleAccount(t *testing.T) {
 
 	accounts := buildStatusAccountsWith(cfg,
 		&mockNameReader{displayName: "Alice", orgName: ""},
-		&mockTokenChecker{state: tokenStateValid},
+		&mockSavedLoginChecker{state: savedLoginStateUsable},
 		&mockSyncStateQuerier{},
 	)
 
@@ -190,7 +187,7 @@ func TestBuildStatusAccountsWith_MultiAccountGrouping(t *testing.T) {
 
 	accounts := buildStatusAccountsWith(cfg,
 		&mockNameReader{displayName: "", orgName: ""},
-		&mockTokenChecker{state: tokenStateValid},
+		&mockSavedLoginChecker{state: savedLoginStateUsable},
 		&mockSyncStateQuerier{},
 	)
 
@@ -211,17 +208,17 @@ func TestBuildStatusAccountsWith_MultiAccountGrouping(t *testing.T) {
 func TestBuildStatusAccountsWith_AuthenticationRequiredStates(t *testing.T) {
 	tests := []struct {
 		name       string
-		tokenState string
+		savedLogin string
 		wantReason string
 	}{
 		{
 			name:       "missing token",
-			tokenState: tokenStateMissing,
+			savedLogin: savedLoginStateMissing,
 			wantReason: authReasonMissingLogin,
 		},
 		{
 			name:       "invalid saved login",
-			tokenState: tokenStateExpired,
+			savedLogin: savedLoginStateInvalid,
 			wantReason: authReasonInvalidSavedLogin,
 		},
 	}
@@ -236,7 +233,7 @@ func TestBuildStatusAccountsWith_AuthenticationRequiredStates(t *testing.T) {
 
 			accounts := buildStatusAccountsWith(cfg,
 				&mockNameReader{},
-				&mockTokenChecker{state: tc.tokenState},
+				&mockSavedLoginChecker{state: tc.savedLogin},
 				&mockSyncStateQuerier{},
 			)
 
@@ -257,7 +254,7 @@ func TestBuildStatusAccountsWith_EmptySyncDir(t *testing.T) {
 
 	accounts := buildStatusAccountsWith(cfg,
 		&mockNameReader{},
-		&mockTokenChecker{state: tokenStateValid},
+		&mockSavedLoginChecker{state: savedLoginStateUsable},
 		&mockSyncStateQuerier{},
 	)
 
@@ -277,7 +274,7 @@ func TestBuildStatusAccountsWith_SharePointGrouping(t *testing.T) {
 
 	accounts := buildStatusAccountsWith(cfg,
 		&mockNameReader{displayName: "Alice", orgName: "Contoso"},
-		&mockTokenChecker{state: tokenStateValid},
+		&mockSavedLoginChecker{state: savedLoginStateUsable},
 		&mockSyncStateQuerier{},
 	)
 
@@ -373,7 +370,7 @@ func TestBuildStatusAccountsWith_DisplayNameFromConfig(t *testing.T) {
 
 	accounts := buildStatusAccountsWith(cfg,
 		&mockNameReader{},
-		&mockTokenChecker{state: tokenStateValid},
+		&mockSavedLoginChecker{state: savedLoginStateUsable},
 		&mockSyncStateQuerier{},
 	)
 
@@ -394,7 +391,7 @@ func TestBuildStatusAccountsWith_PausedOverridesNoToken(t *testing.T) {
 
 	accounts := buildStatusAccountsWith(cfg,
 		&mockNameReader{},
-		&mockTokenChecker{state: tokenStateMissing},
+		&mockSavedLoginChecker{state: savedLoginStateMissing},
 		&mockSyncStateQuerier{},
 	)
 
@@ -410,7 +407,7 @@ func TestBuildStatusAccountsWith_EmptyConfig(t *testing.T) {
 
 	accounts := buildStatusAccountsWith(cfg,
 		&mockNameReader{},
-		&mockTokenChecker{state: tokenStateValid},
+		&mockSavedLoginChecker{state: savedLoginStateUsable},
 		&mockSyncStateQuerier{},
 	)
 
@@ -435,7 +432,7 @@ func TestBuildStatusAccountsWith_SyncStatePopulated(t *testing.T) {
 
 	accounts := buildStatusAccountsWith(cfg,
 		&mockNameReader{},
-		&mockTokenChecker{state: tokenStateValid},
+		&mockSavedLoginChecker{state: savedLoginStateUsable},
 		&mockSyncStateQuerier{state: syncState},
 	)
 
@@ -459,7 +456,7 @@ func TestBuildStatusAccountsWith_NilSyncState(t *testing.T) {
 
 	accounts := buildStatusAccountsWith(cfg,
 		&mockNameReader{},
-		&mockTokenChecker{state: tokenStateValid},
+		&mockSavedLoginChecker{state: savedLoginStateUsable},
 		&mockSyncStateQuerier{state: nil},
 	)
 
