@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net"
 	"net/url"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
