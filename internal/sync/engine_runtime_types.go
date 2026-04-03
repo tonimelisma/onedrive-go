@@ -22,10 +22,16 @@ type engineFlow struct {
 	succeeded  int
 	failed     int
 	syncErrors []error
+
+	scopeCtrl    scopeController
+	shortcutCtrl shortcutCoordinator
 }
 
 func newEngineFlow(engine *Engine) engineFlow {
-	return engineFlow{engine: engine}
+	flow := engineFlow{engine: engine}
+	flow.initPolicyControllers()
+
+	return flow
 }
 
 func (f *engineFlow) setShortcuts(shortcuts []synctypes.Shortcut) {

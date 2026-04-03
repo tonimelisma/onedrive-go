@@ -788,7 +788,13 @@ func (controller *scopeController) recordScopeBlockedFailure(ctx context.Context
 	}
 }
 
-func (flow *engineFlow) rehomeHeldFailure(ctx context.Context, r *synctypes.WorkerResult, scopeKey synctypes.ScopeKey) {
+func (controller *scopeController) rehomeHeldFailure(
+	ctx context.Context,
+	r *synctypes.WorkerResult,
+	scopeKey synctypes.ScopeKey,
+) {
+	flow := controller.flow
+
 	direction := directionFromAction(r.ActionType)
 
 	driveID := r.DriveID

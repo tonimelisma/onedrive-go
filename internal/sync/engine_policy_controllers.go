@@ -13,10 +13,22 @@ type shortcutCoordinator struct {
 	flow *engineFlow
 }
 
+func (flow *engineFlow) initPolicyControllers() {
+	flow.scopeCtrl.flow = flow
+	flow.shortcutCtrl.flow = flow
+}
+
 func (flow *engineFlow) scopeController() *scopeController {
-	return &scopeController{flow: flow}
+	// engineFlow is copied by value into one-shot/watch runtimes and some
+	// same-package tests. Rebinding on access keeps the controller attached to
+	// the live run owner instead of a stale copy.
+	flow.initPolicyControllers()
+
+	return &flow.scopeCtrl
 }
 
 func (flow *engineFlow) shortcutCoordinator() *shortcutCoordinator {
-	return &shortcutCoordinator{flow: flow}
+	flow.initPolicyControllers()
+
+	return &flow.shortcutCtrl
 }

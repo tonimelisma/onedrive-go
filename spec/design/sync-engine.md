@@ -134,6 +134,11 @@ Policy-heavy behavior lives behind dedicated collaborators owned by the flow:
 - `PermissionHandler`: permission evidence interpreter only; it returns
   decisions that the engine applies through `scopeController`
 
+The controllers are constructed once per `engineFlow` / `watchRuntime` and
+reused for the full run. Accessors return the flow-owned collaborator instead
+of synthesizing new wrappers, so policy state stays attached to the live
+runtime owner even when same-package tests copy `engineFlow` values.
+
 Tests use same-package helpers that construct `watchRuntime` / `engineFlow`
 and the flow-backed collaborators directly when they need internal
 characterization. Production code does not publish a runtime-registration hook

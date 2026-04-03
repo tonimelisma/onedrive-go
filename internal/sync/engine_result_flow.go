@@ -140,6 +140,7 @@ func (flow *engineFlow) processNormalDecision(
 	r *synctypes.WorkerResult,
 	bl *synctypes.Baseline,
 ) routeOutcome {
+	scopeCtrl := flow.scopeController()
 	outcome := routeOutcome{
 		dispatched: flow.routeReadyForClass(ctx, watch, decision.Class, ready, r),
 	}
@@ -150,7 +151,7 @@ func (flow *engineFlow) processNormalDecision(
 	case resultShutdown:
 		return outcome
 	case resultFatal:
-		flow.applyFatalAuthEffects(ctx, watch, r)
+		scopeCtrl.applyFatalAuthEffects(ctx, watch, r)
 		flow.recordError(r)
 		outcome.terminate = true
 		outcome.terminateErr = fatalResultError(r)
@@ -170,12 +171,13 @@ func (flow *engineFlow) processTrialDecision(
 	r *synctypes.WorkerResult,
 	bl *synctypes.Baseline,
 ) routeOutcome {
+	scopeCtrl := flow.scopeController()
 	outcome := routeOutcome{}
 
 	switch flow.evaluateTrialOutcome(trialScopeKey, decision, r) {
 	case trialOutcomeRelease:
 		flow.applySuccessEffects(ctx, watch, r)
-		if err := flow.scopeController().releaseScope(ctx, watch, trialScopeKey); err != nil {
+		if err := scopeCtrl.releaseScope(ctx, watch, trialScopeKey); err != nil {
 			flow.engine.logger.Warn("trial result: failed to release scope",
 				slog.String("scope_key", trialScopeKey.String()),
 				slog.String("error", err.Error()),
@@ -186,17 +188,17 @@ func (flow *engineFlow) processTrialDecision(
 		flow.routeReadyForClass(ctx, watch, resultShutdown, ready, r)
 	case trialOutcomeExtend:
 		flow.routeReadyForClass(ctx, watch, resultRequeue, ready, r)
-		flow.rehomeHeldFailure(ctx, r, trialScopeKey)
-		flow.scopeController().extendScopeTrial(ctx, watch, trialScopeKey, r.RetryAfter)
+		scopeCtrl.rehomeHeldFailure(ctx, r, trialScopeKey)
+		scopeCtrl.extendScopeTrial(ctx, watch, trialScopeKey, r.RetryAfter)
 		flow.recordError(r)
 	case trialOutcomePreserve:
 		flow.routeReadyForClass(ctx, watch, resultRequeue, ready, r)
-		flow.scopeController().preserveScopeTrial(ctx, watch, trialScopeKey)
-		flow.applyTrialPreserveEffects(ctx, watch, decision, r, bl)
+		scopeCtrl.preserveScopeTrial(ctx, watch, trialScopeKey)
+		scopeCtrl.applyTrialPreserveEffects(ctx, watch, decision, r, bl)
 		flow.recordError(r)
 	case trialOutcomeFatal:
 		flow.routeReadyForClass(ctx, watch, resultFatal, ready, r)
-		flow.applyFatalAuthEffects(ctx, watch, r)
+		scopeCtrl.applyFatalAuthEffects(ctx, watch, r)
 		flow.recordError(r)
 		outcome.terminate = true
 		outcome.terminateErr = fatalResultError(r)
@@ -244,7 +246,7 @@ func (flow *engineFlow) trialScopePersists(
 	}
 }
 
-func (flow *engineFlow) applyTrialPreserveEffects(
+func (controller *scopeController) applyTrialPreserveEffects(
 	ctx context.Context,
 	watch *watchRuntime,
 	decision ResultDecision,
@@ -252,23 +254,23 @@ func (flow *engineFlow) applyTrialPreserveEffects(
 	bl *synctypes.Baseline,
 ) {
 	if decision.PermissionFlow != permissionFlowNone {
-		if permDecision, handled := flow.scopeController().resolvePermissionDecision(ctx, decision, r, bl); handled {
-			if flow.scopeController().applyPermissionCheckDecision(ctx, watch, decision.PermissionFlow, permDecision) &&
+		if permDecision, handled := controller.resolvePermissionDecision(ctx, decision, r, bl); handled {
+			if controller.applyPermissionCheckDecision(ctx, watch, decision.PermissionFlow, permDecision) &&
 				permDecision.Kind == permissionCheckActivateBoundaryScope &&
 				permDecision.BoundaryPath != r.Path {
-				flow.rehomeHeldFailure(ctx, r, permDecision.ScopeBlock.Key)
+				controller.rehomeHeldFailure(ctx, r, permDecision.ScopeBlock.Key)
 			}
 		}
 		return
 	}
 
 	if decision.Class == resultScopeBlock && decision.ScopeKey == synctypes.SKDiskLocal() {
-		flow.scopeController().applyScopeBlock(ctx, watch, synctypes.ScopeUpdateResult{
+		controller.applyScopeBlock(ctx, watch, synctypes.ScopeUpdateResult{
 			Block:     true,
 			ScopeKey:  decision.ScopeKey,
 			IssueType: decision.ScopeKey.IssueType(),
 		})
-		flow.rehomeHeldFailure(ctx, r, decision.ScopeKey)
+		controller.rehomeHeldFailure(ctx, r, decision.ScopeKey)
 	}
 }
 
@@ -280,8 +282,14 @@ func fatalResultError(r *synctypes.WorkerResult) error {
 	return fmt.Errorf("sync: unauthorized worker result for %s", r.Path)
 }
 
-func (flow *engineFlow) applyFatalAuthEffects(ctx context.Context, watch *watchRuntime, r *synctypes.WorkerResult) {
-	if err := flow.scopeController().activateAuthScope(ctx, watch); err != nil {
+func (controller *scopeController) applyFatalAuthEffects(
+	ctx context.Context,
+	watch *watchRuntime,
+	r *synctypes.WorkerResult,
+) {
+	flow := controller.flow
+
+	if err := controller.activateAuthScope(ctx, watch); err != nil {
 		flow.engine.logger.Warn("fatal unauthorized: failed to persist auth scope",
 			slog.String("path", r.Path),
 			slog.String("error", err.Error()),
