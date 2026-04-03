@@ -72,13 +72,11 @@ type BandwidthScheduleEntry struct {
 // SafetyConfig controls protective defaults and thresholds that prevent
 // accidental data loss during sync operations.
 type SafetyConfig struct {
-	BigDeleteThreshold        int    `toml:"big_delete_threshold"`
-	MinFreeSpace              string `toml:"min_free_space"`
-	UseLocalTrash             bool   `toml:"use_local_trash"`
-	DisableDownloadValidation bool   `toml:"disable_download_validation"`
-	DisableUploadValidation   bool   `toml:"disable_upload_validation"`
-	SyncDirPermissions        string `toml:"sync_dir_permissions"`
-	SyncFilePermissions       string `toml:"sync_file_permissions"`
+	BigDeleteThreshold  int    `toml:"big_delete_threshold"`
+	MinFreeSpace        string `toml:"min_free_space"`
+	UseLocalTrash       bool   `toml:"use_local_trash"`
+	SyncDirPermissions  string `toml:"sync_dir_permissions"`
+	SyncFilePermissions string `toml:"sync_file_permissions"`
 }
 
 // SyncConfig controls sync engine behavior: polling intervals, conflict

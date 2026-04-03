@@ -29,7 +29,6 @@ Download and upload transfer infrastructure shared by file operations and sync.
 
 - R-5.5.1: After download, the system shall verify hash and size against API metadata. [verified]
 - R-5.5.2: After upload, the system shall verify the server-reported hash matches the local file. [verified]
-- R-5.5.3: Validation shall be individually disableable via `disable_download_validation` and `disable_upload_validation`. [verified]
 
 ## R-5.6 Upload Session Robustness [implemented]
 
@@ -45,7 +44,7 @@ Download and upload transfer infrastructure shared by file operations and sync.
 
 ## R-5.7 Upload Size Limits [verified]
 
-- R-5.7.1: The system shall reject uploads exceeding the 250 GB maximum file size before attempting the transfer. [verified]
+- R-5.7.1: The system shall reject uploads exceeding the 250 GB maximum file size before hashing or attempting any network transfer. [verified]
 
 ## R-5.8 iOS Media Handling [planned]
 

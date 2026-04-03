@@ -330,6 +330,7 @@ func (flow *engineFlow) observeLocal(ctx context.Context, bl *synctypes.Baseline
 	eng := flow.engine
 
 	obs := syncobserve.NewLocalObserver(bl, eng.logger, eng.checkWorkers)
+	obs.SetFilterConfig(eng.localFilter)
 
 	result, err := obs.FullScan(ctx, eng.syncTree)
 	if err != nil {

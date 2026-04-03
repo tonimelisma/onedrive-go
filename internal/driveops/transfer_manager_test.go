@@ -129,6 +129,34 @@ func newTestTM(dl Downloader, ul Uploader, store *SessionStore) *TransferManager
 	return NewTransferManager(dl, ul, store, slog.Default())
 }
 
+// newResumeMismatchDownloader models a resume attempt that yields mixed bytes,
+// forcing TransferManager to discard the partial and retry from scratch.
+func newResumeMismatchDownloader(
+	t *testing.T,
+	expectedOffset int,
+	resumeBytes []byte,
+	freshBytes []byte,
+	rangeCalls *int,
+	freshCalls *int,
+) *tmMockDownloader {
+	t.Helper()
+
+	return &tmMockDownloader{
+		downloadRangeFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer, offset int64) (int64, error) {
+			*rangeCalls++
+			assert.Equal(t, int64(expectedOffset), offset)
+
+			written, err := w.Write(resumeBytes[offset:])
+			return int64(written), err
+		},
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			*freshCalls++
+			written, err := w.Write(freshBytes)
+			return int64(written), err
+		},
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Download tests
 // ---------------------------------------------------------------------------
@@ -263,6 +291,126 @@ func TestTransferManager_ResumeDownload_Success(t *testing.T) {
 	require.NoError(t, readErr, "ReadFile")
 
 	assert.Equal(t, fullContent, got)
+}
+
+// Validates: R-5.2.2, R-5.5.1, R-6.8.3
+func TestTransferManager_ResumeDownload_CorruptPartial_RetriesFresh(t *testing.T) {
+	t.Parallel()
+
+	remoteContent := []byte("correct-prefix-and-suffix")
+	corruptPartial := append([]byte(nil), remoteContent...)
+	copy(corruptPartial, "corrupt")
+
+	expectedHash := tmHashBytes(remoteContent)
+	var rangeCalls int
+	var freshCalls int
+
+	dl := newResumeMismatchDownloader(t, len(corruptPartial), remoteContent, remoteContent, &rangeCalls, &freshCalls)
+
+	tm := newTestTM(dl, &tmMockUploader{}, nil)
+	dir := t.TempDir()
+	targetPath := filepath.Join(dir, "file.txt")
+	partialPath := targetPath + ".partial"
+	require.NoError(t, os.WriteFile(partialPath, corruptPartial, 0o600))
+
+	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+		RemoteHash:     expectedHash,
+		MaxHashRetries: 1,
+	})
+	require.NoError(t, err, "DownloadToFile")
+
+	assert.Equal(t, 1, rangeCalls, "expected one resume attempt before retrying fresh")
+	assert.Equal(t, 1, freshCalls, "expected one fresh retry after corrupt partial mismatch")
+	assert.Equal(t, expectedHash, result.LocalHash)
+	assert.Equal(t, int64(len(remoteContent)), result.Size)
+
+	got, readErr := localpath.ReadFile(targetPath)
+	require.NoError(t, readErr, "ReadFile")
+	assert.Equal(t, remoteContent, got)
+}
+
+// Validates: R-5.2.2, R-5.5.1, R-6.8.3
+func TestTransferManager_ResumeDownload_RemoteChangedDuringResume_RetriesFresh(t *testing.T) {
+	t.Parallel()
+
+	oldContent := []byte("old-remote-version-content")
+	newContent := []byte("new-remote-version-content")
+	require.Len(t, newContent, len(oldContent))
+
+	partialData := append([]byte(nil), oldContent[:12]...)
+	expectedHash := tmHashBytes(newContent)
+	var rangeCalls int
+	var freshCalls int
+
+	dl := newResumeMismatchDownloader(t, len(partialData), newContent, newContent, &rangeCalls, &freshCalls)
+
+	tm := newTestTM(dl, &tmMockUploader{}, nil)
+	dir := t.TempDir()
+	targetPath := filepath.Join(dir, "changed.txt")
+	partialPath := targetPath + ".partial"
+	require.NoError(t, os.WriteFile(partialPath, partialData, 0o600))
+
+	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+		RemoteHash:     expectedHash,
+		MaxHashRetries: 1,
+	})
+	require.NoError(t, err, "DownloadToFile")
+
+	assert.Equal(t, 1, rangeCalls, "expected one resume attempt against stale partial data")
+	assert.Equal(t, 1, freshCalls, "expected one fresh download after the remote changed")
+	assert.Equal(t, expectedHash, result.LocalHash)
+	assert.Equal(t, int64(len(newContent)), result.Size)
+
+	got, readErr := localpath.ReadFile(targetPath)
+	require.NoError(t, readErr, "ReadFile")
+	assert.Equal(t, newContent, got)
+}
+
+// Validates: R-5.2.2, R-5.5.1, R-6.8.3
+func TestTransferManager_ResumeDownload_OversizedPartial_RetriesFresh(t *testing.T) {
+	t.Parallel()
+
+	remoteContent := []byte("remote-content")
+	oversizedPartial := append(append([]byte(nil), remoteContent...), []byte("-stale-tail")...)
+	expectedHash := tmHashBytes(remoteContent)
+	var rangeCalls int
+	var freshCalls int
+
+	dl := &tmMockDownloader{
+		downloadRangeFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer, offset int64) (int64, error) {
+			rangeCalls++
+			assert.Greater(t, offset, int64(len(remoteContent)), "expected stale partial to exceed remote size")
+
+			// Simulate a server that returns no bytes when the caller resumes past EOF.
+			return 0, nil
+		},
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			freshCalls++
+			written, err := w.Write(remoteContent)
+			return int64(written), err
+		},
+	}
+
+	tm := newTestTM(dl, &tmMockUploader{}, nil)
+	dir := t.TempDir()
+	targetPath := filepath.Join(dir, "oversized-partial.txt")
+	partialPath := targetPath + ".partial"
+	require.NoError(t, os.WriteFile(partialPath, oversizedPartial, 0o600))
+
+	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+		RemoteHash:     expectedHash,
+		MaxHashRetries: 1,
+	})
+	require.NoError(t, err, "DownloadToFile")
+
+	assert.Equal(t, 1, rangeCalls, "expected one resume attempt against oversized partial state")
+	assert.Equal(t, 1, freshCalls, "expected a fresh retry after oversized partial mismatch")
+	assert.Equal(t, expectedHash, result.LocalHash)
+	assert.Equal(t, int64(len(remoteContent)), result.Size)
+
+	got, readErr := localpath.ReadFile(targetPath)
+	require.NoError(t, readErr, "ReadFile")
+	assert.Equal(t, remoteContent, got)
 }
 
 func TestTransferManager_ResumeDownload_FallsBackToFreshDownload(t *testing.T) {
@@ -465,6 +613,42 @@ func TestTransferManager_Upload_ErrorWrapping(t *testing.T) {
 	// Fix #13: simple upload errors should be wrapped with the local path.
 	assert.Contains(t, err.Error(), "uploading")
 	assert.Contains(t, err.Error(), localPath)
+}
+
+// Validates: R-5.7.1
+func TestTransferManager_Upload_RejectsOversizedFileBeforeHashOrTransfer(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	localPath := filepath.Join(dir, "oversized.bin")
+
+	file, err := localpath.OpenFile(localPath, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o600)
+	require.NoError(t, err)
+	require.NoError(t, file.Truncate(MaxOneDriveFileSize+1))
+	require.NoError(t, file.Close())
+
+	var hashCalled bool
+	var uploadCalled bool
+
+	ul := &tmMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			uploadCalled = true
+			return &graph.Item{ID: "unexpected"}, nil
+		},
+	}
+
+	tm := newTestTM(&tmSimpleDownloader{}, ul, nil)
+	tm.hashFunc = func(string) (string, error) {
+		hashCalled = true
+		return "unexpected", nil
+	}
+
+	_, err = tm.UploadFile(t.Context(), driveid.New("d1"), "parent1", "oversized.bin", localPath, UploadOpts{})
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrFileExceedsOneDriveLimit)
+	assert.Contains(t, err.Error(), "250 GB")
+	assert.False(t, hashCalled, "oversized files should be rejected before hashing")
+	assert.False(t, uploadCalled, "oversized files should be rejected before transfer")
 }
 
 // Validates: R-1.3, R-5.2

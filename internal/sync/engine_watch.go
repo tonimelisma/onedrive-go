@@ -389,6 +389,7 @@ func (rt *watchRuntime) startObservers(
 	// Local observer (skip for download-only mode).
 	if mode != synctypes.SyncDownloadOnly {
 		localObs := syncobserve.NewLocalObserver(bl, rt.engine.logger, rt.engine.checkWorkers)
+		localObs.SetFilterConfig(rt.engine.localFilter)
 		localObs.SetSafetyScanInterval(opts.SafetyScanInterval)
 		localObs.SetSkippedChannel(skippedCh)
 
