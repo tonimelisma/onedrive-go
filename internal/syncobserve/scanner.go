@@ -490,7 +490,7 @@ func (o *LocalObserver) classifyFileChange(
 		return nil
 	}
 
-	if currentSize == base.Size && currentMtime == base.Mtime {
+	if currentSize == base.Size && sameOneDriveComparableMtime(currentMtime, base.Mtime) {
 		o.Logger.Debug("racily clean file, forcing hash check",
 			slog.String("path", dbRelPath))
 	}
