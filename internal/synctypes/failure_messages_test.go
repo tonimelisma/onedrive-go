@@ -75,7 +75,9 @@ func TestMessageForFailure_QuotaOwnKeepsOwnDriveCopy(t *testing.T) {
 	t.Parallel()
 
 	msg := MessageForFailure(IssueQuotaExceeded, SKQuotaOwn(), "your OneDrive storage")
+	base := MessageForIssueType(IssueQuotaExceeded)
 
-	assert.Equal(t, "Your OneDrive storage is full.", msg.Reason)
-	assert.Equal(t, "Free up space or upgrade your plan.", msg.Action)
+	assert.Equal(t, base.Title, msg.Title)
+	assert.Equal(t, base.Reason, msg.Reason)
+	assert.Equal(t, base.Action, msg.Action)
 }
