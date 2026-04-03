@@ -230,12 +230,12 @@ func TestSyncStore_DiscardScope(t *testing.T) {
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
-	scopeKey := synctypes.SKPermRemote("Shared/Docs")
+	scopeKey := synctypes.SKQuotaOwn()
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
 	require.NoError(t, mgr.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
 		Key:          scopeKey,
-		IssueType:    synctypes.IssuePermissionDenied,
+		IssueType:    synctypes.IssueQuotaExceeded,
 		TimingSource: synctypes.ScopeTimingNone,
 		BlockedAt:    now.Add(-time.Minute),
 	}))
@@ -243,7 +243,7 @@ func TestSyncStore_DiscardScope(t *testing.T) {
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "Shared/Docs", DriveID: driveID, Direction: synctypes.DirectionUpload,
 		Role:     synctypes.FailureRoleBoundary,
-		Category: synctypes.CategoryActionable, IssueType: synctypes.IssuePermissionDenied, ScopeKey: scopeKey,
+		Category: synctypes.CategoryActionable, IssueType: synctypes.IssueQuotaExceeded, ScopeKey: scopeKey,
 	}, nil))
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "Shared/Docs/a.txt", DriveID: driveID, Direction: synctypes.DirectionUpload,

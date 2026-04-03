@@ -85,7 +85,7 @@ func TestScopeKey_IssueType(t *testing.T) {
 	assert.Equal(t, IssueQuotaExceeded, SKQuotaOwn().IssueType())
 	assert.Equal(t, IssueQuotaExceeded, SKQuotaShortcut("drive:item").IssueType())
 	assert.Equal(t, IssueLocalPermissionDenied, SKPermDir("/docs").IssueType())
-	assert.Equal(t, IssuePermissionDenied, SKPermRemote("/readonly").IssueType())
+	assert.Equal(t, IssueSharedFolderBlocked, SKPermRemote("/readonly").IssueType())
 	assert.Equal(t, IssueDiskFull, SKDiskLocal().IssueType())
 	assert.Empty(t, ScopeKey{}.IssueType())
 }

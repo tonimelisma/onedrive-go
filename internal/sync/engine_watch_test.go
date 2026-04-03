@@ -494,46 +494,39 @@ func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 
 	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:       clearedScope,
-		IssueType: synctypes.IssuePermissionDenied,
+		IssueType: synctypes.IssueSharedFolderBlocked,
 		BlockedAt: eng.nowFunc(),
 	})
 	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:       retainedScope,
-		IssueType: synctypes.IssuePermissionDenied,
+		IssueType: synctypes.IssueSharedFolderBlocked,
 		BlockedAt: eng.nowFunc(),
 	})
 
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path:      "Shared/TeamDocs",
-		DriveID:   driveID,
-		Direction: synctypes.DirectionUpload,
-		Role:      synctypes.FailureRoleBoundary,
-		Category:  synctypes.CategoryActionable,
-		IssueType: synctypes.IssuePermissionDenied,
-		ErrMsg:    "read-only boundary",
-		ScopeKey:  clearedScope,
+		Path:       "Shared/TeamDocs/file.txt",
+		DriveID:    driveID,
+		Direction:  synctypes.DirectionUpload,
+		ActionType: synctypes.ActionUpload,
+		Role:       synctypes.FailureRoleHeld,
+		Category:   synctypes.CategoryTransient,
+		IssueType:  synctypes.IssueSharedFolderBlocked,
+		ErrMsg:     "blocked by remote permission scope",
+		ScopeKey:   clearedScope,
 	}, nil))
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path:      "Shared/TeamDocs/file.txt",
-		DriveID:   driveID,
-		Direction: synctypes.DirectionUpload,
-		Role:      synctypes.FailureRoleHeld,
-		Category:  synctypes.CategoryTransient,
-		ErrMsg:    "blocked by remote permission scope",
-		ScopeKey:  clearedScope,
-	}, nil))
-	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path:      "Shared/Other",
-		DriveID:   driveID,
-		Direction: synctypes.DirectionUpload,
-		Role:      synctypes.FailureRoleBoundary,
-		Category:  synctypes.CategoryActionable,
-		IssueType: synctypes.IssuePermissionDenied,
-		ErrMsg:    "read-only boundary",
-		ScopeKey:  retainedScope,
+		Path:       "Shared/Other/file.txt",
+		DriveID:    driveID,
+		Direction:  synctypes.DirectionUpload,
+		ActionType: synctypes.ActionUpload,
+		Role:       synctypes.FailureRoleHeld,
+		Category:   synctypes.CategoryTransient,
+		IssueType:  synctypes.IssueSharedFolderBlocked,
+		ErrMsg:     "blocked by remote permission scope",
+		ScopeKey:   retainedScope,
 	}, nil))
 
-	require.NoError(t, eng.baseline.ClearSyncFailure(ctx, "Shared/TeamDocs", driveID))
+	require.NoError(t, eng.baseline.ClearSyncFailure(ctx, "Shared/TeamDocs/file.txt", driveID))
 
 	handleExternalChangesForTest(t, eng, ctx)
 
@@ -544,13 +537,12 @@ func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 
 	retryable, err := eng.baseline.ListSyncFailuresForRetry(ctx, eng.nowFunc())
 	require.NoError(t, err)
-	require.Len(t, retryable, 1, "held descendants under the cleared scope should become retryable immediately")
-	assert.Equal(t, "Shared/TeamDocs/file.txt", retryable[0].Path)
+	assert.Empty(t, retryable, "clearing the last blocked write should forget the remote scope instead of retrying it")
 
-	remainingIssues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
+	remainingIssues, err := eng.baseline.ListRemoteBlockedFailures(ctx)
 	require.NoError(t, err)
-	require.Len(t, remainingIssues, 1, "only the uncleared boundary issue should remain")
-	assert.Equal(t, "Shared/Other", remainingIssues[0].Path)
+	require.Len(t, remainingIssues, 1, "only the uncleared blocked write should remain")
+	assert.Equal(t, "Shared/Other/file.txt", remainingIssues[0].Path)
 
 	select {
 	case <-testWatchRuntime(t, eng).retryTimerCh:

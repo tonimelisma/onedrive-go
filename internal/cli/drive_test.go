@@ -1327,3 +1327,89 @@ func TestPurgeOrphanedDriveState_NoStateDB(t *testing.T) {
 	err := purgeOrphanedDriveState(io.Discard, cid, testDriveLogger(t))
 	assert.NoError(t, err)
 }
+
+func TestSortedDriveSearchResults_ReturnsSortedClone(t *testing.T) {
+	t.Parallel()
+
+	input := []driveSearchResult{
+		{SiteName: "Zulu", LibraryName: "B"},
+		{SiteName: "Alpha", LibraryName: "B"},
+		{SiteName: "Alpha", LibraryName: "A"},
+	}
+
+	sorted := sortedDriveSearchResults(input)
+
+	assert.Equal(t, []driveSearchResult{
+		{SiteName: "Alpha", LibraryName: "A"},
+		{SiteName: "Alpha", LibraryName: "B"},
+		{SiteName: "Zulu", LibraryName: "B"},
+	}, sorted)
+	assert.Equal(t, []driveSearchResult{
+		{SiteName: "Zulu", LibraryName: "B"},
+		{SiteName: "Alpha", LibraryName: "B"},
+		{SiteName: "Alpha", LibraryName: "A"},
+	}, input)
+}
+
+func TestBuildConfiguredAuthRequirements_UsesOnlyAccountsNeedingAuth(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfg := &config.Config{
+		Drives: map[driveid.CanonicalID]config.Drive{
+			driveid.MustCanonicalID("personal:ready@example.com"):   {},
+			driveid.MustCanonicalID("business:blocked@example.com"): {},
+		},
+	}
+
+	requirements := buildConfiguredAuthRequirements(cfg, map[string]accountAuthHealth{
+		"ready@example.com": {
+			State: authStateReady,
+		},
+		"blocked@example.com": {
+			State:  authStateAuthenticationNeeded,
+			Reason: authReasonSyncAuthRejected,
+			Action: authAction(authReasonSyncAuthRejected),
+		},
+	}, testDriveLogger(t))
+
+	require.Len(t, requirements, 1)
+	assert.Equal(t, "blocked@example.com", requirements[0].Email)
+	assert.Equal(t, driveid.DriveTypeBusiness, requirements[0].DriveType)
+	assert.Equal(t, authReasonSyncAuthRejected, requirements[0].Reason)
+}
+
+func TestAnnotateConfiguredDriveAuth_AndPrintSections(t *testing.T) {
+	t.Parallel()
+
+	blockedCID := driveid.MustCanonicalID("business:blocked@example.com")
+	readyCID := driveid.MustCanonicalID("personal:ready@example.com")
+	configured := []driveListEntry{
+		{CanonicalID: blockedCID.String(), parsedCID: blockedCID, State: "ready", Source: "configured"},
+	}
+	available := []driveListEntry{
+		{CanonicalID: readyCID.String(), parsedCID: readyCID, State: "available", Source: "available"},
+	}
+
+	annotateConfiguredDriveAuth(configured, map[string]accountAuthHealth{
+		"blocked@example.com": {
+			State:  authStateAuthenticationNeeded,
+			Reason: authReasonMissingLogin,
+		},
+	})
+
+	assert.Equal(t, authStateAuthenticationNeeded, configured[0].AuthState)
+	assert.Equal(t, authReasonMissingLogin, configured[0].AuthReason)
+	assert.Equal(t, "required", driveAuthLabel(&configured[0]))
+	assert.Equal(t, authStateReady, driveAuthLabel(nil))
+	assert.Nil(t, optionalAuthRequirements(nil))
+
+	var buf bytes.Buffer
+	require.NoError(t, printDriveListSections(&buf, configured, available, []accountAuthRequirement{{
+		Email:  "blocked@example.com",
+		Reason: authReasonMissingLogin,
+		Action: authAction(authReasonMissingLogin),
+	}}))
+	assert.Contains(t, buf.String(), "Configured drives:")
+	assert.Contains(t, buf.String(), "Available drives (not configured):")
+	assert.Contains(t, buf.String(), "Authentication required:")
+}

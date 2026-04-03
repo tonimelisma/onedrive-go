@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/engine*.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/engine_shortcuts.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_decisions.go, sync_helpers.go
 
-Implements: R-2.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-2.10.45 [verified], R-2.10.46 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified], R-6.3.4 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [planned], R-6.6.10 [verified], R-6.6.12 [verified], R-6.7.27 [verified], R-6.8.15 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
+Implements: R-2.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-2.10.45 [verified], R-2.10.46 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified], R-2.14.5 [verified], R-6.3.4 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [planned], R-6.6.10 [verified], R-6.6.12 [verified], R-6.7.27 [verified], R-6.8.15 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
 
 ## Ownership Contract
 
@@ -30,7 +30,7 @@ reconciliation runs every 24 hours to detect missed delta deletions.
 
 `RunWatch` no longer calls `RunOnce` for its initial sync. Instead:
 
-1. **`initWatchInfra`** creates `watchRuntime`, DepGraph, WorkerPool, Buffer, and tickers, repairs persisted scopes according to the startup policy matrix, and loads surviving `scope_blocks` into watch-owned runtime state — but does NOT load baseline or start observers.
+1. **`initWatchInfra`** creates `watchRuntime`, DepGraph, WorkerPool, Buffer, and tickers, repairs persisted scopes according to the startup policy matrix, and loads watch-owned active scope state from surviving `scope_blocks` plus derived `perm:remote` held rows — but does NOT load baseline or start observers.
 2. **`bootstrapSync`** loads baseline, observes initial changes, and dispatches them through the same single-owner watch loop machinery that steady-state mode uses. It runs until the graph is empty and no more bootstrap work is pending.
 3. **`startObservers`** launches remote and local observers AFTER bootstrap — they see the post-bootstrap baseline.
 4. **`runWatchLoop`** runs the steady-state select loop.
@@ -198,18 +198,20 @@ Implements: R-2.10.3 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2
 - **requeue** (transient) → `recordFailure` with `retry.ReconcilePolicy().Delay` + `Complete` + `feedScopeDetection` + arm retry timer
 - **scopeBlock** (429, 507) → `recordFailure` with `retry.ReconcilePolicy().Delay` + `feedScopeDetection` + `Complete` + `armTrialTimer()` (belt-and-suspenders)
 - **skip** (non-retryable) → `handle403` side effect. Confirmed remote read-only
-  403s record one actionable boundary failure (`perm:remote:{localPath}`) and
-  skip duplicate file-level failure recording; other skips use `recordFailure`
-  with nil delayFn (no `next_retry_at`) + `Complete`
+  403s record the triggering blocked write as one held transient row with
+  `scope_key='perm:remote:{boundary}'` and skip duplicate file-level failure
+  recording; other skips use `recordFailure` with nil delayFn (no
+  `next_retry_at`) + `Complete`
 - **shutdown** → `Complete` (no failure recorded)
 - **fatal** (401) → activate scope block `auth:account` with `timing_source='none'` + `Complete` + terminate one-shot/watch execution without creating a per-path `sync_failures` row
 
 Scope-blocked actions are not held in memory. Instead, `processWorkerResult`
 records the failure in `sync_failures` and calls `depGraph.Complete()`. When
-the scope clears, `releaseScope` deletes the persisted scope row, deletes the
-boundary issue row, marks held descendants retryable immediately, and kicks the
-retry sweep so they re-enter via the engine-owned retry work path and the
-normal planner/DepGraph flow.
+the scope clears, `releaseScope` marks held descendants retryable immediately
+and kicks the retry sweep so they re-enter via the engine-owned retry work
+path and the normal planner/DepGraph flow. `perm:remote` is special: it has no
+persisted `scope_blocks` row, so the watch runtime rebuilds that scope from
+held blocked-write rows only.
 
 Trial result routing uses the shared `processResult()` entry with explicit
 trial policy. The `TrialScopeKey ScopeKey` from `WorkerResult` identifies the
@@ -289,8 +291,8 @@ but without watch-only mutable state.
 - `extendScopeTrial()` means "the same scope is still blocked" — update `next_trial_at`, `trial_interval`, and `trial_count` for an existing scope.
 - `preserveScopeTrial()` means "the original scope is still plausible, but this candidate did not prove it" — update `next_trial_at`, set `preserve_until`, and keep `trial_count` unchanged.
 - `activateAuthScope()` means "account authorization is invalid" — persist `auth:account` with `timing_source='none'` and zero trial metadata. Auth is a blocking condition, not a trial-driven scope.
-- `releaseScope()` means "the blocking condition resolved" — delete the persisted scope row, delete the actionable boundary row for that scope, and make held descendants retryable immediately.
-- `discardScope()` means "the blocked subtree/work is gone" — delete the persisted scope row and delete all scoped failure rows without retrying them.
+- `releaseScope()` means "the blocking condition resolved" — delete the persisted scope row when one exists, delete any legacy boundary row for that scope, and make held descendants retryable immediately.
+- `discardScope()` means "the blocked subtree/work is gone" — delete the persisted scope row when one exists and delete all scoped failure rows without retrying them.
 
 ### Startup Repair
 
@@ -299,7 +301,8 @@ engine runs `repairPersistedScopes()` against durable store state.
 
 Policy matrix:
 
-- `perm:dir` and `perm:remote` survive only while a matching `boundary` row exists
+- `perm:dir` survives only while a matching `boundary` row exists
+- `perm:remote` survives only while at least one held blocked-write row still exists; any legacy persisted `perm:remote` scope row or boundary row is normalized away at startup
 - `quota:own` and `quota:shortcut:*` survive only while at least one scoped failure row exists
 - scoped-failure-backed scopes survive restart when they still have scoped failures or when `preserve_until` is still in the future
 - `throttle:account` and `service` survive restart only when `timing_source='server_retry_after'`; expired deadlines trial immediately rather than auto-releasing
@@ -318,7 +321,9 @@ In-memory data structure in `scope.go`: sliding windows (`ScopeKey` →
 structs (see sync-execution.md § ScopeKey Type System). Engine-internal — no
 cross-engine coordination (each engine discovers independently). Active scope
 runtime state is owned by the watch loop, while persisted scope blocks live in
-the `scope_blocks` table for restart/recovery.
+the `scope_blocks` table for restart/recovery. `perm:remote` is the exception:
+its watch-time scope is rebuilt from held blocked-write rows, not from
+`scope_blocks`.
 
 ### `disk:local` Scope Block
 
@@ -377,29 +382,35 @@ Implements: R-2.10.9 [verified], R-2.10.17 [verified], R-2.10.23 [verified], R-2
 shared content. Like the local permission path, it returns a decision for the
 engine to apply through `scopeController`:
 
-- First it checks whether the failing path is already under an active persisted `perm:remote:{localPath}` boundary. If so, it short-circuits without another Graph permission walk.
+- First it checks whether the failing path is already under an active derived `perm:remote:{localPath}` boundary. If so, it short-circuits without another Graph permission walk.
 - Otherwise it resolves the relevant shortcut, calls `ListItemPermissions` on the target folder, and confirms whether the 403 is a real write denial or a transient/inconclusive failure.
 - On confirmed denial it walks upward, still using `ListItemPermissions`, to find the highest denied ancestor but never above the shortcut root.
-- On confirmed denial it returns one `activate_boundary_scope` decision with
-  a `permission_denied` boundary row and matching `perm:remote:{localPath}`
-  scope block.
+- On confirmed denial it records the triggering blocked write as one held
+  transient row with `scope_key='perm:remote:{boundary}'`. That held row is
+  the durable authority for the derived scope.
 
-`perm:remote` is recursive and download-only:
+`perm:remote` is recursive and download-only while blocked write intent exists:
 
 - uploads, folder creates, remote moves, and remote deletes are blocked for the boundary path and every descendant
 - downloads continue so the subtree remains readable and delta/reconciliation can keep it current
+- if the last blocked write disappears, the derived scope is forgotten immediately instead of leaving behind a remembered read-only boundary
 
-`recheckPermissions()` revisits persisted `perm:remote` boundaries at the start
+`recheckPermissions()` revisits visible derived `perm:remote` scopes at the start
 of each sync pass and returns explicit release/keep decisions:
 
 - writable again -> `releaseScope`
 - Graph/API failure or stale shortcut boundary -> fail open via `releaseScope`
 - still denied -> keep the boundary active
 
+`issues retry <blocked-path>` requests a manual trial for that exact held row.
+The retry path is candidate-specific: the engine dispatches that row as a
+trial, success releases the scope, and repeated same-scope 403 keeps it held.
+
 Shortcut removal also returns explicit discard decisions for any
 `perm:remote:*` boundary under the removed shortcut plus the matching
 `quota:shortcut:*` scope. Removed shortcuts discard blocked work instead of
-releasing it back into dispatch.
+releasing it back into dispatch, and watch mode rebuilds active scopes from the
+post-removal durable state immediately.
 
 ### Planned: Observation Suppression
 

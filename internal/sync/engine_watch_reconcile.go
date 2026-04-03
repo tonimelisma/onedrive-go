@@ -88,7 +88,7 @@ func (rt *watchRuntime) clearResolvedPermissionScopes(ctx context.Context) {
 		return
 	}
 
-	remoteIssues, err := rt.engine.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
+	remoteIssues, err := rt.engine.baseline.ListRemoteBlockedFailures(ctx)
 	if err != nil {
 		rt.engine.logger.Warn("failed to check remote permission failures",
 			slog.String("error", err.Error()),
@@ -131,7 +131,27 @@ func (rt *watchRuntime) clearResolvedPermissionScopes(ctx context.Context) {
 // to avoid noisy repeated output.
 func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
 	issues, err := rt.engine.baseline.ListActionableFailures(ctx)
-	if err != nil || len(issues) == 0 {
+	if err != nil {
+		return
+	}
+
+	remoteBlocked, err := rt.engine.baseline.ListRemoteBlockedFailures(ctx)
+	if err != nil {
+		return
+	}
+
+	remoteScopeCount := 0
+	seenRemote := make(map[synctypes.ScopeKey]bool, len(remoteBlocked))
+	for i := range remoteBlocked {
+		if !remoteBlocked[i].ScopeKey.IsPermRemote() || seenRemote[remoteBlocked[i].ScopeKey] {
+			continue
+		}
+		seenRemote[remoteBlocked[i].ScopeKey] = true
+		remoteScopeCount++
+	}
+
+	totalIssues := len(issues) + remoteScopeCount
+	if totalIssues == 0 {
 		if rt.lastSummaryTotal != 0 {
 			rt.lastSummaryTotal = 0
 		}
@@ -139,15 +159,18 @@ func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
 		return
 	}
 
-	if len(issues) == rt.lastSummaryTotal {
+	if totalIssues == rt.lastSummaryTotal {
 		return
 	}
 
-	rt.lastSummaryTotal = len(issues)
+	rt.lastSummaryTotal = totalIssues
 
 	counts := make(map[string]int)
 	for i := range issues {
 		counts[issues[i].IssueType]++
+	}
+	if remoteScopeCount > 0 {
+		counts[synctypes.IssueSharedFolderBlocked] = remoteScopeCount
 	}
 
 	parts := make([]string, 0, len(counts))
@@ -157,8 +180,8 @@ func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
 
 	sort.Strings(parts)
 
-	rt.engine.logger.Warn("actionable issues",
-		slog.Int("total", len(issues)),
+	rt.engine.logger.Warn("visible issues",
+		slog.Int("total", totalIssues),
 		slog.String("breakdown", strings.Join(parts, ", ")),
 	)
 }
@@ -207,12 +230,13 @@ func (flow *engineFlow) recordSkippedItems(ctx context.Context, skipped []syncty
 		failures := make([]synctypes.ActionableFailure, len(items))
 		for i := range items {
 			failures[i] = synctypes.ActionableFailure{
-				Path:      items[i].Path,
-				DriveID:   eng.driveID,
-				Direction: synctypes.DirectionUpload,
-				IssueType: reason,
-				Error:     items[i].Detail,
-				FileSize:  items[i].FileSize,
+				Path:       items[i].Path,
+				DriveID:    eng.driveID,
+				Direction:  synctypes.DirectionUpload,
+				ActionType: synctypes.ActionUpload,
+				IssueType:  reason,
+				Error:      items[i].Detail,
+				FileSize:   items[i].FileSize,
 			}
 		}
 

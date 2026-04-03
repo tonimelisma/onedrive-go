@@ -33,6 +33,12 @@ func MessageForIssueType(issueType string) IssueMessage {
 			Reason: "You don't have write access to this location.",
 			Action: "Ask the drive owner to grant you edit permissions.",
 		}
+	case IssueSharedFolderBlocked:
+		return IssueMessage{
+			Title:  "SHARED FOLDER WRITES BLOCKED",
+			Reason: "This shared folder is read-only for your current write attempts. Downloads continue normally.",
+			Action: "Remove or ignore local write changes here, or ask the owner for edit permissions if the write was intended.",
+		}
 	case IssueLocalPermissionDenied:
 		return IssueMessage{
 			Title:  "LOCAL PERMISSION DENIED",

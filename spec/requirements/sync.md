@@ -27,7 +27,7 @@ When the same file has been modified on both the local filesystem and OneDrive s
 - R-2.3.5: When the user runs `issues clear <path>`, the system shall dismiss a conflict. [verified]
 - R-2.3.6: When the user runs `issues retry <path>`, the system shall retry a failed item. [verified]
 - R-2.3.7: When the `issues` command encounters more than 10 failures of the same issue type, the system shall group them under a single heading with count and show the first 5 paths. When `--verbose` is passed, the system shall show all paths. [verified]
-- R-2.3.8: When displaying scope-level issues where drives have independent scopes (507 quota, 403 permissions), the system shall sub-group by scope (own drive vs each shortcut). [verified]
+- R-2.3.8: When displaying scope-level issues where drives have independent scopes (507 quota, shared-folder write blocks), the system shall sub-group by scope (own drive vs each shortcut). [verified]
 - R-2.3.9: When displaying shortcut-scoped failures, the system shall use the shortcut's local path name (human-readable), not internal drive IDs or scope keys. [verified]
 - R-2.3.10: When `--json` is passed, `issues` shall output structured JSON with unified conflicts and failures array. [verified]
 
@@ -150,10 +150,11 @@ The system shall validate filenames against OneDrive naming restrictions before 
 
 ## R-2.14 Read-Only Shared Items [verified]
 
-- R-2.14.1: When a write to a shared item returns HTTP 403, the system shall query the Graph API to confirm the denial is permanent (not transient), then walk up the folder hierarchy to find the permission boundary and record it as read-only. [verified]
-- R-2.14.2: When a subtree is recorded as read-only, the planner shall switch it to download-only mode — suppressing uploads, remote moves, and remote deletes while still allowing downloads. [verified]
-- R-2.14.3: At the start of each sync pass, the system shall recheck all permission-denied records against the Graph API and clear any where write access has been restored. [verified]
-- R-2.14.4: When the Graph API is unavailable during a permission check, the system shall fail open — not suppressing writes based on inconclusive evidence. [verified]
+- R-2.14.1: When a write to a shared item returns HTTP 403, the system shall call the Graph permissions API to confirm whether the folder is truly read-only, fail open when the evidence is writable or inconclusive, and walk parent folders to the highest denied ancestor without walking above the shortcut root. [verified]
+- R-2.14.2: When confirmed read-only shared-folder state still has blocked remote-mutating work, the planner shall treat that subtree as download-only — suppressing uploads, folder creates, remote moves, and remote deletes while still allowing downloads. [verified]
+- R-2.14.3: The system shall surface read-only shared-folder state in `issues` and `status` only while blocked remote-mutating intent exists, grouping one visible issue per denied boundary and forgetting the state immediately when the last blocked write disappears. [verified]
+- R-2.14.4: At the start of each sync pass, the system shall recheck visible read-only shared-folder scopes against the Graph API and release them when write access is restored or the evidence is inconclusive. [verified]
+- R-2.14.5: When the user runs `issues retry <path>` on a blocked shared-folder write, the system shall request a manual trial of that exact blocked path. Retrying the boundary path instead of a blocked child path shall be rejected. [verified]
 
 ## R-2.15 Delta Checkpoint Integrity [verified]
 

@@ -249,7 +249,7 @@ func TestEngine_AssertCurrentScopeInvariants_DetectsOrphanedPermissionScope(t *t
 
 	err := assertTestCurrentScopeInvariants(t, eng, ctx)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "has no actionable boundary row")
+	assert.Contains(t, err.Error(), "legacy persisted perm:remote scope")
 }
 
 func TestEngine_ReleaseAndDiscardScope_MaintainInvariantsInOneShotMode(t *testing.T) {
@@ -355,9 +355,11 @@ func TestEngine_RepairPersistedScopes_ReleasesOrphanedRemotePermissionScope(t *t
 
 	retryable, err := eng.baseline.ListSyncFailuresForRetry(ctx, now)
 	require.NoError(t, err)
-	require.Len(t, retryable, 1)
-	assert.Equal(t, "Shared/Docs/file.txt", retryable[0].Path)
-	assert.Equal(t, synctypes.FailureRoleItem, retryable[0].Role)
+	assert.Empty(t, retryable, "startup repair should forget remote blocked state when the blocked local work is already gone")
+
+	remaining, err := eng.baseline.ListRemoteBlockedFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, remaining)
 }
 
 type repairPersistedScopesCase struct {
@@ -1648,9 +1650,10 @@ func TestIsFailureResolved_Download_Synced(t *testing.T) {
 	}, nil))
 
 	row := &synctypes.SyncFailureRow{
-		Path:      "resolved.txt",
-		DriveID:   driveID,
-		Direction: synctypes.DirectionDownload,
+		Path:       "resolved.txt",
+		DriveID:    driveID,
+		Direction:  synctypes.DirectionDownload,
+		ActionType: synctypes.ActionDownload,
 	}
 
 	assert.True(t, isFailureResolvedForTest(t, eng, ctx, row),
@@ -1671,9 +1674,10 @@ func TestIsFailureResolved_Download_NoRemoteState(t *testing.T) {
 	driveID := driveid.New("drive1")
 
 	row := &synctypes.SyncFailureRow{
-		Path:      "deleted-remotely.txt",
-		DriveID:   driveID,
-		Direction: synctypes.DirectionDownload,
+		Path:       "deleted-remotely.txt",
+		DriveID:    driveID,
+		Direction:  synctypes.DirectionDownload,
+		ActionType: synctypes.ActionDownload,
 	}
 
 	assert.True(t, isFailureResolvedForTest(t, eng, ctx, row),
@@ -1700,9 +1704,10 @@ func TestIsFailureResolved_Download_StillPending(t *testing.T) {
 	}, "", driveID))
 
 	row := &synctypes.SyncFailureRow{
-		Path:      "still-pending.txt",
-		DriveID:   driveID,
-		Direction: synctypes.DirectionDownload,
+		Path:       "still-pending.txt",
+		DriveID:    driveID,
+		Direction:  synctypes.DirectionDownload,
+		ActionType: synctypes.ActionDownload,
 	}
 
 	assert.False(t, isFailureResolvedForTest(t, eng, ctx, row),
@@ -1718,9 +1723,10 @@ func TestIsFailureResolved_Upload_FileGone(t *testing.T) {
 	driveID := driveid.New("drive1")
 
 	row := &synctypes.SyncFailureRow{
-		Path:      "gone-upload.txt",
-		DriveID:   driveID,
-		Direction: synctypes.DirectionUpload,
+		Path:       "gone-upload.txt",
+		DriveID:    driveID,
+		Direction:  synctypes.DirectionUpload,
+		ActionType: synctypes.ActionUpload,
 	}
 
 	assert.True(t, isFailureResolvedForTest(t, eng, ctx, row),
@@ -1743,9 +1749,10 @@ func TestIsFailureResolved_Upload_FileExists(t *testing.T) {
 	))
 
 	row := &synctypes.SyncFailureRow{
-		Path:      "still-here.txt",
-		DriveID:   driveID,
-		Direction: synctypes.DirectionUpload,
+		Path:       "still-here.txt",
+		DriveID:    driveID,
+		Direction:  synctypes.DirectionUpload,
+		ActionType: synctypes.ActionUpload,
 	}
 
 	assert.False(t, isFailureResolvedForTest(t, eng, ctx, row),
@@ -1761,9 +1768,10 @@ func TestIsFailureResolved_Delete_NoBaseline(t *testing.T) {
 	driveID := driveid.New("drive1")
 
 	row := &synctypes.SyncFailureRow{
-		Path:      "already-deleted.txt",
-		DriveID:   driveID,
-		Direction: synctypes.DirectionDelete,
+		Path:       "already-deleted.txt",
+		DriveID:    driveID,
+		Direction:  synctypes.DirectionDelete,
+		ActionType: synctypes.ActionRemoteDelete,
 	}
 
 	assert.True(t, isFailureResolvedForTest(t, eng, ctx, row),
@@ -1803,9 +1811,10 @@ func TestIsFailureResolved_Delete_BaselineExists(t *testing.T) {
 	}))
 
 	row := &synctypes.SyncFailureRow{
-		Path:      "still-in-baseline.txt",
-		DriveID:   driveID,
-		Direction: synctypes.DirectionDelete,
+		Path:       "still-in-baseline.txt",
+		DriveID:    driveID,
+		Direction:  synctypes.DirectionDelete,
+		ActionType: synctypes.ActionRemoteDelete,
 	}
 
 	assert.False(t, isFailureResolvedForTest(t, eng, ctx, row),

@@ -431,6 +431,7 @@ func (flow *engineFlow) observeChanges(
 			watch,
 			eng.permHandler.clearScannerResolvedPermissions(ctx, pathSetFromEvents(localResult.Events)),
 		)
+		flow.scopeController().clearResolvedRemoteBlockedFailures(ctx, watch, pathSetFromEvents(localResult.Events))
 	}
 
 	buf := syncobserve.NewBuffer(eng.logger)

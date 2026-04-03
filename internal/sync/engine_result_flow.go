@@ -141,6 +141,35 @@ func (flow *engineFlow) processNormalDecision(
 	bl *synctypes.Baseline,
 ) routeOutcome {
 	scopeCtrl := flow.scopeController()
+
+	if decision.PermissionFlow != permissionFlowNone {
+		if permDecision, handled := scopeCtrl.resolvePermissionDecision(ctx, decision, r, bl); handled {
+			if permDecision.Matched {
+				outcome := routeOutcome{}
+				switch permDecision.Kind {
+				case permissionCheckNone,
+					permissionCheckRecordFileFailure,
+					permissionCheckActivateBoundaryScope:
+					outcome.dispatched = flow.routeReadyForClass(ctx, watch, decision.Class, ready, r)
+					scopeCtrl.applyPermissionCheckDecision(ctx, watch, decision.PermissionFlow, permDecision)
+				case permissionCheckActivateDerivedScope:
+					scopeCtrl.applyPermissionCheckDecision(ctx, watch, decision.PermissionFlow, permDecision)
+					for _, ta := range ready {
+						scopeCtrl.cascadeRecordAndComplete(ctx, ta, permDecision.ScopeKey)
+					}
+				default:
+					panic(fmt.Sprintf("unknown permission check decision kind %d", permDecision.Kind))
+				}
+
+				flow.recordError(r)
+
+				return outcome
+			}
+
+			decision.PermissionFlow = permissionFlowNone
+		}
+	}
+
 	outcome := routeOutcome{
 		dispatched: flow.routeReadyForClass(ctx, watch, decision.Class, ready, r),
 	}
@@ -255,11 +284,7 @@ func (controller *scopeController) applyTrialPreserveEffects(
 ) {
 	if decision.PermissionFlow != permissionFlowNone {
 		if permDecision, handled := controller.resolvePermissionDecision(ctx, decision, r, bl); handled {
-			if controller.applyPermissionCheckDecision(ctx, watch, decision.PermissionFlow, permDecision) &&
-				permDecision.Kind == permissionCheckActivateBoundaryScope &&
-				permDecision.BoundaryPath != r.Path {
-				controller.rehomeHeldFailure(ctx, r, permDecision.ScopeBlock.Key)
-			}
+			controller.applyPermissionCheckDecision(ctx, watch, decision.PermissionFlow, permDecision)
 		}
 		return
 	}
@@ -327,7 +352,7 @@ func (controller *scopeController) resolvePermissionDecision(
 		if bl == nil || !flow.engine.permHandler.HasPermChecker() {
 			return nil, false
 		}
-		permDecision := flow.engine.permHandler.handle403(ctx, bl, r.Path, flow.getShortcuts())
+		permDecision := flow.engine.permHandler.handle403(ctx, bl, r.Path, r.ActionType, flow.getShortcuts())
 		return &permDecision, true
 	case permissionFlowLocalPermission:
 		permDecision := flow.engine.permHandler.handleLocalPermission(ctx, r)
@@ -359,6 +384,7 @@ func (flow *engineFlow) recordFailure(ctx context.Context, r *synctypes.WorkerRe
 		Path:       r.Path,
 		DriveID:    driveID,
 		Direction:  direction,
+		ActionType: r.ActionType,
 		Role:       synctypes.FailureRoleItem,
 		Category:   category,
 		IssueType:  issueType,

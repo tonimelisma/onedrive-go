@@ -61,6 +61,7 @@ func (rt *watchRuntime) planAndDispatchBatch(
 			rt,
 			rt.engine.permHandler.clearScannerResolvedPermissions(ctx, pathSetFromBatch(batch)),
 		)
+		rt.scopeController().clearResolvedRemoteBlockedFailures(ctx, rt, pathSetFromBatch(batch))
 	}
 
 	denied := rt.engine.permHandler.DeniedPrefixes(ctx)
@@ -348,11 +349,12 @@ func (rt *watchRuntime) recordHeldDeletes(ctx context.Context, actions []synctyp
 	failures := make([]synctypes.ActionableFailure, len(actions))
 	for i := range actions {
 		failures[i] = synctypes.ActionableFailure{
-			Path:      actions[i].Path,
-			DriveID:   actions[i].DriveID,
-			Direction: synctypes.DirectionDelete,
-			IssueType: synctypes.IssueBigDeleteHeld,
-			Error:     fmt.Sprintf("held by big-delete protection (threshold: %d)", rt.engine.bigDeleteThreshold),
+			Path:       actions[i].Path,
+			DriveID:    actions[i].DriveID,
+			Direction:  synctypes.DirectionDelete,
+			ActionType: synctypes.ActionRemoteDelete,
+			IssueType:  synctypes.IssueBigDeleteHeld,
+			Error:      fmt.Sprintf("held by big-delete protection (threshold: %d)", rt.engine.bigDeleteThreshold),
 		}
 	}
 

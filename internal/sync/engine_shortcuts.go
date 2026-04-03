@@ -340,7 +340,12 @@ func (coordinator *shortcutCoordinator) handleRemovedShortcuts(
 			return fmt.Errorf("sync: deleting shortcut %s: %w", sc.ItemID, err)
 		}
 
-		flow.scopeController().applyShortcutRemovalDecisions(ctx, coordinator.shortcutRemovalDecisions(ctx, sc))
+		flow.scopeController().applyShortcutRemovalDecisionsWithWatch(ctx, flow.watch, coordinator.shortcutRemovalDecisions(ctx, sc))
+		if flow.watch != nil {
+			if err := flow.scopeController().loadActiveScopes(ctx, flow.watch); err != nil {
+				return fmt.Errorf("sync: rebuilding active scopes after shortcut removal %s: %w", sc.ItemID, err)
+			}
+		}
 	}
 
 	return nil
@@ -357,7 +362,7 @@ func (coordinator *shortcutCoordinator) shortcutRemovalDecisions(ctx context.Con
 		ScopeKey: synctypes.SKQuotaShortcut(sc.RemoteDrive + ":" + sc.RemoteItem),
 	}}
 
-	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssuePermissionDenied)
+	issues, err := eng.baseline.ListRemoteBlockedFailures(ctx)
 	if err != nil {
 		eng.logger.Warn("failed to list remote permission scopes for removed shortcut",
 			slog.String("shortcut_path", sc.LocalPath),

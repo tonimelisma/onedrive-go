@@ -133,10 +133,27 @@ func (rt *watchRuntime) runTrialDispatch(
 ) []*synctypes.TrackedAction {
 	now := rt.engine.nowFunc()
 	var dispatch []*synctypes.TrackedAction
+	seen := make(map[synctypes.ScopeKey]bool)
 
 	for _, key := range rt.dueTrials(now) {
-		outbox, _ := rt.dispatchDueTrialScope(ctx, bl, mode, safety, key)
+		seen[key] = true
+		outbox := rt.dispatchDueTrialScope(ctx, bl, mode, safety, key)
 		dispatch = append(dispatch, outbox...)
+	}
+	manualKeys, err := rt.engine.baseline.ListManualTrialScopeKeys(ctx)
+	if err != nil {
+		rt.engine.logger.Warn("runTrialDispatch: failed to list manual trial scopes",
+			slog.String("error", err.Error()),
+		)
+	} else {
+		for _, key := range manualKeys {
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			outbox := rt.dispatchDueTrialScope(ctx, bl, mode, safety, key)
+			dispatch = append(dispatch, outbox...)
+		}
 	}
 
 	rt.armTrialTimer()
@@ -149,7 +166,7 @@ func (rt *watchRuntime) dispatchDueTrialScope(
 	mode synctypes.SyncMode,
 	safety *synctypes.SafetyConfig,
 	key synctypes.ScopeKey,
-) ([]*synctypes.TrackedAction, bool) {
+) []*synctypes.TrackedAction {
 	for {
 		row, found, err := rt.engine.baseline.PickTrialCandidate(ctx, key)
 		if err != nil {
@@ -157,7 +174,7 @@ func (rt *watchRuntime) dispatchDueTrialScope(
 				slog.String("scope_key", key.String()),
 				slog.String("error", err.Error()),
 			)
-			return nil, false
+			return nil
 		}
 
 		if !found {
@@ -165,11 +182,11 @@ func (rt *watchRuntime) dispatchDueTrialScope(
 				slog.String("scope_key", key.String()),
 			)
 			rt.scopeController().preserveScopeTrial(ctx, rt, key)
-			return nil, false
+			return nil
 		}
 
 		if rt.depGraph.HasInFlight(row.Path) {
-			return nil, false
+			return nil
 		}
 
 		if rt.isFailureResolved(ctx, row) {
@@ -184,7 +201,7 @@ func (rt *watchRuntime) dispatchDueTrialScope(
 				slog.String("path", row.Path),
 				slog.String("error", rebuild.err.Error()),
 			)
-			return nil, false
+			return nil
 		case rebuild.skipped != nil:
 			rt.recordRetryTrialSkippedItem(ctx, row, rebuild.skipped)
 			continue
@@ -203,7 +220,15 @@ func (rt *watchRuntime) dispatchDueTrialScope(
 			trialDriveID:  row.DriveID,
 		}, bl, mode, safety)
 		if accepted {
-			return outbox, true
+			if row.ManualTrialRequestedAt > 0 {
+				if err := rt.engine.baseline.ClearManualTrialRequest(ctx, row.Path, row.DriveID); err != nil {
+					rt.engine.logger.Warn("runTrialDispatch: failed to clear manual trial request",
+						slog.String("path", row.Path),
+						slog.String("error", err.Error()),
+					)
+				}
+			}
+			return outbox
 		}
 	}
 }
@@ -373,12 +398,13 @@ func (flow *engineFlow) recordRetryTrialSkippedItem(
 	)
 
 	if err := flow.engine.baseline.UpsertActionableFailures(ctx, []synctypes.ActionableFailure{{
-		Path:      skipped.Path,
-		DriveID:   driveID,
-		Direction: row.Direction,
-		IssueType: skipped.Reason,
-		Error:     skipped.Detail,
-		FileSize:  skipped.FileSize,
+		Path:       skipped.Path,
+		DriveID:    driveID,
+		Direction:  row.Direction,
+		ActionType: row.ActionType,
+		IssueType:  skipped.Reason,
+		Error:      skipped.Detail,
+		FileSize:   skipped.FileSize,
 	}}); err != nil {
 		flow.engine.logger.Error("failed to record retry/trial skipped item",
 			slog.String("path", skipped.Path),
@@ -389,27 +415,40 @@ func (flow *engineFlow) recordRetryTrialSkippedItem(
 }
 
 func (flow *engineFlow) rebuildFailureWork(ctx context.Context, row *synctypes.SyncFailureRow) failureRebuildResult {
-	if row.Direction == synctypes.DirectionUpload {
-		result, err := syncobserve.ObserveSinglePathWithFilter(
-			flow.engine.logger,
-			flow.engine.syncTree,
-			row.Path,
-			flow.baselineEntryForPath(ctx, row.Path, row.DriveID),
-			flow.engine.nowFunc().UnixNano(),
-			nil,
-			flow.engine.localFilter,
-		)
-		if err != nil {
-			return failureRebuildResult{err: err}
-		}
-
-		return failureRebuildResult{
-			event:    result.Event,
-			skipped:  result.Skipped,
-			resolved: result.Resolved,
-		}
+	switch row.ActionType {
+	case synctypes.ActionUpload, synctypes.ActionFolderCreate:
+		return flow.observeLocalFailurePath(ctx, row)
+	case synctypes.ActionRemoteMove:
+		return flow.rebuildRemoteMoveFailure(ctx, row)
+	case synctypes.ActionRemoteDelete:
+		return flow.rebuildRemoteDeleteFailure(ctx, row)
+	case synctypes.ActionDownload,
+		synctypes.ActionLocalDelete,
+		synctypes.ActionLocalMove,
+		synctypes.ActionConflict,
+		synctypes.ActionUpdateSynced,
+		synctypes.ActionCleanup:
+		return flow.rebuildFailureWorkByDirection(ctx, row)
+	default:
+		panic(fmt.Sprintf("unknown action type %d", row.ActionType))
 	}
+}
 
+func (flow *engineFlow) rebuildFailureWorkByDirection(ctx context.Context, row *synctypes.SyncFailureRow) failureRebuildResult {
+	switch row.Direction {
+	case synctypes.DirectionUpload:
+		return flow.observeLocalFailurePath(ctx, row)
+	case synctypes.DirectionDownload, synctypes.DirectionDelete:
+		return flow.rebuildRemoteStateBackedFailure(ctx, row)
+	default:
+		panic(fmt.Sprintf("unknown failure direction %q", row.Direction))
+	}
+}
+
+func (flow *engineFlow) rebuildRemoteStateBackedFailure(
+	ctx context.Context,
+	row *synctypes.SyncFailureRow,
+) failureRebuildResult {
 	rs, found, err := flow.engine.baseline.GetRemoteStateByPath(ctx, row.Path, row.DriveID)
 	if err != nil {
 		return failureRebuildResult{err: fmt.Errorf("remote state lookup failed: %w", err)}
@@ -419,6 +458,84 @@ func (flow *engineFlow) rebuildFailureWork(ctx context.Context, row *synctypes.S
 	}
 
 	return failureRebuildResult{event: remoteStateToChangeEvent(rs, row.Path)}
+}
+
+func (flow *engineFlow) observeLocalFailurePath(ctx context.Context, row *synctypes.SyncFailureRow) failureRebuildResult {
+	result, err := syncobserve.ObserveSinglePathWithFilter(
+		flow.engine.logger,
+		flow.engine.syncTree,
+		row.Path,
+		flow.baselineEntryForPath(ctx, row.Path, row.DriveID),
+		flow.engine.nowFunc().UnixNano(),
+		nil,
+		flow.engine.localFilter,
+	)
+	if err != nil {
+		return failureRebuildResult{err: err}
+	}
+
+	return failureRebuildResult{
+		event:    result.Event,
+		skipped:  result.Skipped,
+		resolved: result.Resolved,
+	}
+}
+
+func (flow *engineFlow) rebuildRemoteMoveFailure(ctx context.Context, row *synctypes.SyncFailureRow) failureRebuildResult {
+	rebuild := flow.observeLocalFailurePath(ctx, row)
+	if rebuild.err != nil || rebuild.skipped != nil || rebuild.resolved || rebuild.event == nil || row.ItemID == "" {
+		return rebuild
+	}
+
+	bl, err := flow.engine.baseline.Load(ctx)
+	if err != nil {
+		return failureRebuildResult{err: err}
+	}
+	oldEntry, ok := bl.GetByID(driveid.NewItemKey(row.DriveID, row.ItemID))
+	if !ok || oldEntry.Path == row.Path {
+		return rebuild
+	}
+
+	moveEvent := *rebuild.event
+	moveEvent.Type = synctypes.ChangeMove
+	moveEvent.OldPath = oldEntry.Path
+
+	return failureRebuildResult{event: &moveEvent}
+}
+
+func (flow *engineFlow) rebuildRemoteDeleteFailure(ctx context.Context, row *synctypes.SyncFailureRow) failureRebuildResult {
+	bl, err := flow.engine.baseline.Load(ctx)
+	if err != nil {
+		return failureRebuildResult{err: err}
+	}
+
+	entry, ok := bl.GetByPath(row.Path)
+	if !ok && row.ItemID != "" {
+		entry, ok = bl.GetByID(driveid.NewItemKey(row.DriveID, row.ItemID))
+	}
+	if !ok {
+		return failureRebuildResult{resolved: true}
+	}
+
+	_, statErr := flow.engine.syncTree.Stat(row.Path)
+	switch {
+	case statErr == nil:
+		return failureRebuildResult{resolved: true}
+	case !errors.Is(statErr, os.ErrNotExist):
+		return failureRebuildResult{err: statErr}
+	}
+
+	return failureRebuildResult{event: &synctypes.ChangeEvent{
+		Source:    synctypes.SourceLocal,
+		Type:      synctypes.ChangeDelete,
+		Path:      row.Path,
+		DriveID:   row.DriveID,
+		ItemType:  entry.ItemType,
+		Name:      filepath.Base(row.Path),
+		Size:      entry.Size,
+		Mtime:     entry.Mtime,
+		IsDeleted: true,
+	}}
 }
 
 // createEventFromDB rebuilds a planner-ready change from current durable
@@ -431,47 +548,109 @@ func (flow *engineFlow) createEventFromDB(ctx context.Context, row *synctypes.Sy
 // isFailureResolved checks whether a retry/trial candidate has already been
 // resolved by normal observation or action processing.
 func (flow *engineFlow) isFailureResolved(ctx context.Context, row *synctypes.SyncFailureRow) bool {
-	var resolved bool
+	switch row.ActionType {
+	case synctypes.ActionUpload, synctypes.ActionFolderCreate, synctypes.ActionRemoteMove:
+		return flow.clearFailureIfResolved(ctx, row, flow.isUploadLikeFailureResolved(row.Path))
+	case synctypes.ActionRemoteDelete:
+		return flow.clearFailureIfResolved(ctx, row, flow.isRemoteDeleteFailureResolved(ctx, row))
+	case synctypes.ActionDownload:
+		return flow.clearFailureIfResolved(ctx, row, flow.isDownloadFailureResolved(ctx, row))
+	case synctypes.ActionLocalDelete,
+		synctypes.ActionLocalMove,
+		synctypes.ActionConflict,
+		synctypes.ActionUpdateSynced,
+		synctypes.ActionCleanup:
+		return flow.clearFailureIfResolved(ctx, row, flow.isFailureResolvedByDirection(ctx, row))
+	default:
+		panic(fmt.Sprintf("unknown action type %d", row.ActionType))
+	}
+}
 
+func (flow *engineFlow) isFailureResolvedByDirection(
+	ctx context.Context,
+	row *synctypes.SyncFailureRow,
+) bool {
 	switch row.Direction {
-	case synctypes.DirectionDownload:
-		rs, found, err := flow.engine.baseline.GetRemoteStateByPath(ctx, row.Path, row.DriveID)
-		if err != nil {
-			return false
-		}
-		if !found {
-			resolved = true
-		} else if isResolvedRemoteSyncStatus(rs.SyncStatus) {
-			resolved = true
-		}
-
 	case synctypes.DirectionUpload:
-		_, err := flow.engine.syncTree.Stat(row.Path)
-		if errors.Is(err, os.ErrNotExist) {
-			resolved = true
-		}
-
+		return flow.isUploadLikeFailureResolved(row.Path)
 	case synctypes.DirectionDelete:
-		bl, err := flow.engine.baseline.Load(ctx)
-		if err != nil {
-			return false
+		return flow.isDeleteDirectionFailureResolved(ctx, row)
+	case synctypes.DirectionDownload:
+		return flow.isDownloadFailureResolved(ctx, row)
+	default:
+		panic(fmt.Sprintf("unknown failure direction %q", row.Direction))
+	}
+}
+
+func (flow *engineFlow) isUploadLikeFailureResolved(path string) bool {
+	_, err := flow.engine.syncTree.Stat(path)
+	return errors.Is(err, os.ErrNotExist)
+}
+
+func (flow *engineFlow) isRemoteDeleteFailureResolved(
+	ctx context.Context,
+	row *synctypes.SyncFailureRow,
+) bool {
+	bl, err := flow.engine.baseline.Load(ctx)
+	if err != nil {
+		return false
+	}
+	if _, exists := bl.GetByPath(row.Path); !exists {
+		if row.ItemID == "" {
+			return true
 		}
-		_, exists := bl.GetByPath(row.Path)
-		if !exists {
-			resolved = true
-		}
+		_, existsByID := bl.GetByID(driveid.NewItemKey(row.DriveID, row.ItemID))
+		return !existsByID
 	}
 
-	if resolved {
-		if err := flow.engine.baseline.ClearSyncFailure(ctx, row.Path, row.DriveID); err != nil {
-			flow.engine.logger.Debug("isFailureResolved: failed to clear resolved failure",
-				slog.String("path", row.Path),
-				slog.String("error", err.Error()),
-			)
-		}
+	_, statErr := flow.engine.syncTree.Stat(row.Path)
+	return statErr == nil
+}
+
+func (flow *engineFlow) isDeleteDirectionFailureResolved(
+	ctx context.Context,
+	row *synctypes.SyncFailureRow,
+) bool {
+	bl, err := flow.engine.baseline.Load(ctx)
+	if err != nil {
+		return false
+	}
+	_, exists := bl.GetByPath(row.Path)
+	return !exists
+}
+
+func (flow *engineFlow) isDownloadFailureResolved(
+	ctx context.Context,
+	row *synctypes.SyncFailureRow,
+) bool {
+	rs, found, err := flow.engine.baseline.GetRemoteStateByPath(ctx, row.Path, row.DriveID)
+	if err != nil {
+		return false
+	}
+	if !found {
+		return true
 	}
 
-	return resolved
+	return isResolvedRemoteSyncStatus(rs.SyncStatus)
+}
+
+func (flow *engineFlow) clearFailureIfResolved(
+	ctx context.Context,
+	row *synctypes.SyncFailureRow,
+	resolved bool,
+) bool {
+	if !resolved {
+		return false
+	}
+
+	if err := flow.engine.baseline.ClearSyncFailure(ctx, row.Path, row.DriveID); err != nil {
+		flow.engine.logger.Debug("isFailureResolved: failed to clear resolved failure",
+			slog.String("path", row.Path),
+			slog.String("error", err.Error()),
+		)
+	}
+
+	return true
 }
 
 // clearFailureOnSuccess removes the sync_failures row for a successfully

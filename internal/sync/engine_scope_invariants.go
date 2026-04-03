@@ -80,7 +80,10 @@ func (flow *engineFlow) assertCurrentScopeInvariants(ctx context.Context, watch 
 
 	for i := range blocks {
 		key := blocks[i].Key
-		if !isPermissionScopeKey(key) {
+		if key.IsPermRemote() {
+			return fmt.Errorf("legacy persisted perm:remote scope %s should have been normalized away", key.String())
+		}
+		if !key.IsPermDir() {
 			continue
 		}
 		if !facts.boundaryKeys[key] {

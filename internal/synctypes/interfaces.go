@@ -51,6 +51,7 @@ type SyncFailureRecorder interface {
 	ListSyncFailures(ctx context.Context) ([]SyncFailureRow, error)
 	ListSyncFailuresByIssueType(ctx context.Context, issueType string) ([]SyncFailureRow, error)
 	ListActionableFailures(ctx context.Context) ([]SyncFailureRow, error)
+	ListRemoteBlockedFailures(ctx context.Context) ([]SyncFailureRow, error)
 	ClearSyncFailure(ctx context.Context, path string, driveID driveid.ID) error
 	ClearActionableSyncFailures(ctx context.Context) error
 	MarkSyncFailureActionable(ctx context.Context, path string, driveID driveid.ID) error
@@ -105,6 +106,7 @@ type SyncFailureParams struct {
 	Category   FailureCategory // CategoryTransient or CategoryActionable — set by the engine, never by the store
 	ErrMsg     string
 	HTTPStatus int
+	ActionType ActionType
 	FileSize   int64    // optional, for upload validation context
 	LocalHash  string   // optional, for upload validation context
 	ItemID     string   // optional; auto-resolved from remote_state when empty
@@ -113,35 +115,38 @@ type SyncFailureParams struct {
 
 // SyncFailureRow represents a row from the sync_failures table.
 type SyncFailureRow struct {
-	Path         string
-	DriveID      driveid.ID
-	Direction    Direction // DirectionDownload, DirectionUpload, DirectionDelete
-	Role         FailureRole
-	Category     FailureCategory // CategoryTransient, CategoryActionable
-	IssueType    string
-	ItemID       string
-	FailureCount int
-	NextRetryAt  int64
-	LastError    string
-	HTTPStatus   int
-	FirstSeenAt  int64
-	LastSeenAt   int64
-	FileSize     int64
-	LocalHash    string
-	ScopeKey     ScopeKey // typed scope key; zero value = unscoped
+	Path                   string
+	DriveID                driveid.ID
+	Direction              Direction // DirectionDownload, DirectionUpload, DirectionDelete
+	Role                   FailureRole
+	Category               FailureCategory // CategoryTransient, CategoryActionable
+	IssueType              string
+	ItemID                 string
+	ActionType             ActionType
+	FailureCount           int
+	NextRetryAt            int64
+	LastError              string
+	HTTPStatus             int
+	FirstSeenAt            int64
+	LastSeenAt             int64
+	FileSize               int64
+	LocalHash              string
+	ScopeKey               ScopeKey // typed scope key; zero value = unscoped
+	ManualTrialRequestedAt int64
 }
 
 // ActionableFailure represents a scanner-detected issue to batch-upsert into
 // sync_failures. Used by UpsertActionableFailures.
 type ActionableFailure struct {
-	Path      string
-	DriveID   driveid.ID
-	Direction Direction
-	Role      FailureRole
-	IssueType string
-	Error     string
-	ScopeKey  ScopeKey // typed scope key; zero value = unscoped
-	FileSize  int64
+	Path       string
+	DriveID    driveid.ID
+	Direction  Direction
+	ActionType ActionType
+	Role       FailureRole
+	IssueType  string
+	Error      string
+	ScopeKey   ScopeKey // typed scope key; zero value = unscoped
+	FileSize   int64
 }
 
 // ObservedItem represents a single item from a delta API response, ready
