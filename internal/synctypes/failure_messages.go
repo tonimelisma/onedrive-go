@@ -23,9 +23,9 @@ func MessageForIssueType(issueType string) IssueMessage {
 		}
 	case IssueUnauthorized:
 		return IssueMessage{
-			Title:  "AUTHORIZATION EXPIRED",
-			Reason: "The current OneDrive session is no longer authorized.",
-			Action: "Sign in again to refresh access before retrying sync.",
+			Title:  "AUTHENTICATION REQUIRED",
+			Reason: "The last sync attempt for this account was rejected by OneDrive.",
+			Action: "Run 'onedrive-go whoami' to re-check access, or 'onedrive-go login' to sign in again.",
 		}
 	case IssuePermissionDenied:
 		return IssueMessage{

@@ -408,7 +408,7 @@ func TestResolveLogoutAccount_NoPurgeShowsOrphans(t *testing.T) {
 }
 
 // Validates: R-3.1.5
-func TestFindLoggedOutAccounts(t *testing.T) {
+func TestFindWhoamiAuthRequiredAccounts(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -426,10 +426,7 @@ func TestFindLoggedOutAccounts(t *testing.T) {
 		filepath.Join(dataDir, "account_business_bob@contoso.com.json"),
 		[]byte(`{"profile":{"user_id":"u2","display_name":"Bob Jones"}}`), 0o600,
 	))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(dataDir, "token_business_bob@contoso.com.json"),
-		[]byte(`{}`), 0o600,
-	))
+	writeTestTokenFile(t, dataDir, "token_business_bob@contoso.com.json")
 
 	// Also create a state DB for alice to verify the count.
 	require.NoError(t, os.WriteFile(
@@ -440,12 +437,13 @@ func TestFindLoggedOutAccounts(t *testing.T) {
 	cfg := config.DefaultConfig()
 	logger := slog.Default()
 
-	loggedOut := findLoggedOutAccounts(cfg, "", logger)
-	require.Len(t, loggedOut, 1)
-	assert.Equal(t, "alice@outlook.com", loggedOut[0].Email)
-	assert.Equal(t, "personal", loggedOut[0].DriveType)
-	assert.Equal(t, "Alice Smith", loggedOut[0].DisplayName)
-	assert.Equal(t, 1, loggedOut[0].StateDBs)
+	authRequired := findWhoamiAuthRequiredAccounts(t.Context(), cfg, "", logger)
+	require.Len(t, authRequired, 1)
+	assert.Equal(t, "alice@outlook.com", authRequired[0].Email)
+	assert.Equal(t, "personal", authRequired[0].DriveType)
+	assert.Equal(t, "Alice Smith", authRequired[0].DisplayName)
+	assert.Equal(t, 1, authRequired[0].StateDBs)
+	assert.Equal(t, authReasonMissingLogin, authRequired[0].Reason)
 }
 
 // Validates: R-3.1.4
@@ -507,17 +505,19 @@ func TestPrintWhoamiJSON(t *testing.T) {
 		},
 	}
 
-	loggedOut := []loggedOutAccount{
+	authRequired := []accountAuthRequirement{
 		{
 			Email:       "bob@example.com",
 			DriveType:   "business",
 			DisplayName: "Bob Jones",
+			Reason:      authReasonSyncAuthRejected,
+			Action:      authAction(authReasonSyncAuthRejected),
 			StateDBs:    1,
 		},
 	}
 
 	var buf bytes.Buffer
-	err := printWhoamiJSON(&buf, user, drives, loggedOut)
+	err := printWhoamiJSON(&buf, user, drives, authRequired)
 	require.NoError(t, err)
 
 	var decoded whoamiOutput
@@ -534,24 +534,27 @@ func TestPrintWhoamiJSON(t *testing.T) {
 	assert.Equal(t, "personal", decoded.Drives[0].DriveType)
 	assert.Equal(t, int64(1073741824), decoded.Drives[0].QuotaUsed)
 
-	require.Len(t, decoded.LoggedOutAccounts, 1)
-	assert.Equal(t, "bob@example.com", decoded.LoggedOutAccounts[0].Email)
+	require.Len(t, decoded.AccountsRequiringAuth, 1)
+	assert.Equal(t, "bob@example.com", decoded.AccountsRequiringAuth[0].Email)
+	assert.Equal(t, authReasonSyncAuthRejected, decoded.AccountsRequiringAuth[0].Reason)
 }
 
 // Validates: R-3.1.6
-func TestPrintWhoamiJSON_LoggedOutOnly(t *testing.T) {
+func TestPrintWhoamiJSON_AuthRequiredOnly(t *testing.T) {
 	t.Parallel()
 
-	loggedOut := []loggedOutAccount{
+	authRequired := []accountAuthRequirement{
 		{
 			Email:     "carol@outlook.com",
 			DriveType: "personal",
+			Reason:    authReasonMissingLogin,
+			Action:    authAction(authReasonMissingLogin),
 			StateDBs:  2,
 		},
 	}
 
 	var buf bytes.Buffer
-	err := printWhoamiJSON(&buf, nil, nil, loggedOut)
+	err := printWhoamiJSON(&buf, nil, nil, authRequired)
 	require.NoError(t, err)
 
 	var decoded whoamiOutput
@@ -559,8 +562,9 @@ func TestPrintWhoamiJSON_LoggedOutOnly(t *testing.T) {
 
 	assert.Nil(t, decoded.User)
 	assert.Empty(t, decoded.Drives)
-	require.Len(t, decoded.LoggedOutAccounts, 1)
-	assert.Equal(t, "carol@outlook.com", decoded.LoggedOutAccounts[0].Email)
+	require.Len(t, decoded.AccountsRequiringAuth, 1)
+	assert.Equal(t, "carol@outlook.com", decoded.AccountsRequiringAuth[0].Email)
+	assert.Equal(t, authReasonMissingLogin, decoded.AccountsRequiringAuth[0].Reason)
 }
 
 // Validates: R-3.1.6
@@ -576,34 +580,39 @@ func TestPrintWhoamiJSON_Empty(t *testing.T) {
 
 	assert.Nil(t, decoded.User)
 	assert.Empty(t, decoded.Drives)
-	assert.Empty(t, decoded.LoggedOutAccounts)
+	assert.Empty(t, decoded.AccountsRequiringAuth)
 }
 
 // Validates: R-3.1.5
-func TestPrintLoggedOutAccountsText(t *testing.T) {
+func TestPrintWhoamiAuthRequiredText(t *testing.T) {
 	var buf bytes.Buffer
 
-	loggedOut := []loggedOutAccount{
+	authRequired := []accountAuthRequirement{
 		{
 			Email:       "alice@outlook.com",
 			DriveType:   "personal",
 			DisplayName: "Alice Smith",
+			Reason:      authReasonMissingLogin,
+			Action:      authAction(authReasonMissingLogin),
 			StateDBs:    2,
 		},
 		{
 			Email:     "bob@contoso.com",
 			DriveType: "business",
+			Reason:    authReasonSyncAuthRejected,
+			Action:    authAction(authReasonSyncAuthRejected),
 			StateDBs:  0,
 		},
 	}
 
-	require.NoError(t, printLoggedOutAccountsText(&buf, loggedOut))
+	require.NoError(t, printWhoamiAuthRequiredText(&buf, authRequired))
 	output := buf.String()
 
-	assert.Contains(t, output, "Logged out accounts:")
+	assert.Contains(t, output, "Accounts requiring authentication:")
 	assert.Contains(t, output, "Alice Smith (alice@outlook.com)")
 	assert.Contains(t, output, "2 state databases")
 	assert.Contains(t, output, "bob@contoso.com")
 	assert.Contains(t, output, "no state databases")
-	assert.Contains(t, output, "logout --purge")
+	assert.Contains(t, output, "No saved login was found")
+	assert.Contains(t, output, "re-check access")
 }

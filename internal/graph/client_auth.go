@@ -48,6 +48,9 @@ func (c *Client) doRequest(
 			slog.Int("status", resp.StatusCode),
 			slog.String("request_id", resp.Header.Get("request-id")),
 		)
+		if c.authSuccessHook != nil {
+			c.authSuccessHook(ctx)
+		}
 
 		return resp, nil
 	}

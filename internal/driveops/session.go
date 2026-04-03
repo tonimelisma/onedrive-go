@@ -24,6 +24,32 @@ type Session struct {
 	Resolved *config.ResolvedDrive
 }
 
+// ResolvedDriveEmail returns the account email for the resolved drive.
+func (s *Session) ResolvedDriveEmail() string {
+	if s == nil || s.Resolved == nil {
+		return ""
+	}
+
+	return s.Resolved.CanonicalID.Email()
+}
+
+// SetAuthenticatedSuccessHooks installs the same best-effort success hook on
+// both authenticated Graph clients owned by the session. Pre-authenticated
+// transfer URLs bypass these hooks inside graph.Client.
+func (s *Session) SetAuthenticatedSuccessHooks(hook func(context.Context)) {
+	if s == nil {
+		return
+	}
+
+	if s.Meta != nil {
+		s.Meta.SetAuthenticatedSuccessHook(hook)
+	}
+
+	if s.Transfer != nil {
+		s.Transfer.SetAuthenticatedSuccessHook(hook)
+	}
+}
+
 // SessionProvider caches TokenSources by token file path and creates Sessions
 // on demand. Multiple drives sharing a token path share one TokenSource,
 // preventing OAuth2 refresh token rotation races (two independent refreshes

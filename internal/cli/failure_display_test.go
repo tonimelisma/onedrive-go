@@ -249,7 +249,7 @@ func TestPrintGroupedFailures_ScopeOnlyIssueOmitsPathSection(t *testing.T) {
 	require.NoError(t, printGroupedFailures(&buf, groups, false))
 
 	output := buf.String()
-	assert.Contains(t, output, "AUTHORIZATION EXPIRED")
+	assert.Contains(t, output, "AUTHENTICATION REQUIRED")
 	assert.Contains(t, output, "Scope: your OneDrive account authorization")
 	assert.NotContains(t, output, "  /")
 }

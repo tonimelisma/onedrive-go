@@ -91,6 +91,10 @@ func (s *authService) runLogin(ctx context.Context, useBrowser bool) error {
 		return fmt.Errorf("configuring drive: %w", err)
 	}
 
+	if clearErr := clearAccountAuthScopes(ctx, email, logger); clearErr != nil {
+		logger.Warn("clearing stale auth scopes after login", "account", email, "error", clearErr)
+	}
+
 	if !added {
 		logger.Info("re-login detected, token and metadata refreshed", "canonical_id", canonicalID.String())
 		return writef(s.cc.Output(), "Token refreshed for %s.\n", email)

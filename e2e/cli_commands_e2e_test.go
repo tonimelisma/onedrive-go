@@ -43,7 +43,7 @@ func TestE2E_Status_AfterSync(t *testing.T) {
 
 	// Check status output.
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "status")
-	assert.Contains(t, stdout, "Token:", "status should show token state")
+	assert.Contains(t, stdout, "Auth:", "status should show auth state")
 	assert.Contains(t, stdout, "ready", "status should show ready state after sync")
 }
 

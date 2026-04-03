@@ -231,11 +231,11 @@ func TestE2E_Status_ConfigTolerance(t *testing.T) {
 	stdout, _, err := runCLICore(t, cfgPath, env, "", "status")
 	require.NoError(t, err, "status should succeed despite unknown config key\nstdout: %s", stdout)
 
-	// Status output should contain account/token information.
+	// Status output should contain account/auth information.
 	assert.Contains(t, stdout, "Account:",
 		"status should show account header despite unknown config key")
-	assert.Contains(t, stdout, "Token:",
-		"status should show token state despite unknown config key")
+	assert.Contains(t, stdout, "Auth:",
+		"status should show auth state despite unknown config key")
 }
 
 // Validates: R-4.8.4

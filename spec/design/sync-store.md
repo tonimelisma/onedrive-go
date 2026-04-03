@@ -168,3 +168,10 @@ errors because the durable-state transition itself is incomplete.
 directly from the store. Grouping and display use the persisted `scope_key`,
 `issue_type`, and shortcut metadata instead of re-deriving scope context from
 runtime state or fabricating sentinel path rows.
+
+The broader CLI auth-health projection also reads `auth:account` from
+`scope_blocks`, but it combines that store-backed signal with token and
+account-profile discovery instead of replacing either source of truth.
+Offline/read-only surfaces only project the stored auth block. Live proof
+surfaces may clear `auth:account` after a successful authenticated Graph
+response for the account.

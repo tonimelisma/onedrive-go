@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,22 +15,13 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/graph"
-)
-
-// Token state constants for status reporting.
-const (
-	tokenStateMissing = "missing"
-	tokenStateExpired = "expired"
-	tokenStateValid   = "valid"
 )
 
 // Drive state constants for status and drive list display.
 const (
-	driveStateReady   = "ready"
-	driveStatePaused  = "paused"
-	driveStateNoToken = "no token"
-	syncDirNotSet     = "(not set)"
+	driveStateReady  = "ready"
+	driveStatePaused = "paused"
+	syncDirNotSet    = "(not set)"
 )
 
 func newStatusCmd() *cobra.Command {
@@ -51,7 +41,9 @@ Reads from config only — does not discover drives from tokens on disk.`,
 type statusAccount struct {
 	Email       string        `json:"email"`
 	DriveType   string        `json:"drive_type"`
-	TokenState  string        `json:"token_state"`
+	AuthState   string        `json:"auth_state"`
+	AuthReason  string        `json:"auth_reason,omitempty"`
+	AuthAction  string        `json:"auth_action,omitempty"`
 	DisplayName string        `json:"display_name,omitempty"`
 	OrgName     string        `json:"org_name,omitempty"`
 	Drives      []statusDrive `json:"drives"`
@@ -79,13 +71,13 @@ type syncStateInfo struct {
 
 // statusSummary aggregates health info across all drives.
 type statusSummary struct {
-	TotalDrives      int `json:"total_drives"`
-	Ready            int `json:"ready"`
-	Paused           int `json:"paused"`
-	NoToken          int `json:"no_token"`
-	TotalIssues      int `json:"total_issues"`
-	TotalPendingSync int `json:"total_pending_sync"`
-	TotalRetrying    int `json:"total_retrying"`
+	TotalDrives           int `json:"total_drives"`
+	Ready                 int `json:"ready"`
+	Paused                int `json:"paused"`
+	AccountsRequiringAuth int `json:"accounts_requiring_auth"`
+	TotalIssues           int `json:"total_issues"`
+	TotalPendingSync      int `json:"total_pending_sync"`
+	TotalRetrying         int `json:"total_retrying"`
 }
 
 // statusOutput wraps the full status response for JSON output.
@@ -104,12 +96,6 @@ type accountNameReader interface {
 	ReadAccountNames(account string, driveIDs []driveid.CanonicalID) (displayName, orgName string)
 }
 
-// tokenStateChecker abstracts token validity checks.
-// Enables testing without real OAuth tokens.
-type tokenStateChecker interface {
-	CheckToken(ctx context.Context, account string, driveIDs []driveid.CanonicalID) string
-}
-
 // syncStateQuerier abstracts querying per-drive sync state from state DBs.
 // Enables testing without real SQLite databases on disk.
 type syncStateQuerier interface {
@@ -123,15 +109,6 @@ type liveAccountNames struct {
 
 func (m *liveAccountNames) ReadAccountNames(account string, driveIDs []driveid.CanonicalID) (string, string) {
 	return readAccountMeta(account, driveIDs, m.logger)
-}
-
-// liveTokenChecker checks token validity via the graph package.
-type liveTokenChecker struct {
-	logger *slog.Logger
-}
-
-func (c *liveTokenChecker) CheckToken(ctx context.Context, account string, driveIDs []driveid.CanonicalID) string {
-	return checkTokenState(ctx, account, driveIDs, c.logger)
 }
 
 // liveSyncStateQuerier queries per-drive sync state from real state DBs.
@@ -149,7 +126,7 @@ func (q *liveSyncStateQuerier) QuerySyncState(cid driveid.CanonicalID) *syncStat
 func buildStatusAccounts(cfg *config.Config, logger *slog.Logger) []statusAccount {
 	return buildStatusAccountsWith(cfg,
 		&liveAccountNames{logger: logger},
-		&liveTokenChecker{logger: logger},
+		&liveAccountAuthChecker{logger: logger},
 		&liveSyncStateQuerier{logger: logger},
 	)
 }
@@ -157,7 +134,7 @@ func buildStatusAccounts(cfg *config.Config, logger *slog.Logger) []statusAccoun
 // buildStatusAccountsWith is the testable core of buildStatusAccounts.
 // Accepts interfaces for metadata reading, token checking, and sync state querying.
 func buildStatusAccountsWith(
-	cfg *config.Config, names accountNameReader, checker tokenStateChecker, syncQ syncStateQuerier,
+	cfg *config.Config, names accountNameReader, checker accountAuthChecker, syncQ syncStateQuerier,
 ) []statusAccount {
 	grouped, order := groupDrivesByAccount(cfg)
 	accounts := make([]statusAccount, 0, len(order))
@@ -199,7 +176,7 @@ func groupDrivesByAccount(cfg *config.Config) (map[string][]driveid.CanonicalID,
 // using injected interfaces for metadata, token checking, and sync state querying.
 func buildSingleAccountStatusWith(
 	cfg *config.Config, email string, driveIDs []driveid.CanonicalID,
-	names accountNameReader, checker tokenStateChecker, syncQ syncStateQuerier,
+	names accountNameReader, checker accountAuthChecker, syncQ syncStateQuerier,
 ) statusAccount {
 	acct := statusAccount{
 		Email:  email,
@@ -223,13 +200,17 @@ func buildSingleAccountStatusWith(
 	// Read display name and org name from account profile.
 	acct.DisplayName, acct.OrgName = names.ReadAccountNames(email, driveIDs)
 
-	// Check token validity for this account.
-	acct.TokenState = checker.CheckToken(context.Background(), email, driveIDs)
+	// Project offline auth health for this account from local token state and
+	// persisted auth:account scope blocks.
+	authHealth := checker.CheckAccountAuth(context.Background(), email, driveIDs)
+	acct.AuthState = authHealth.State
+	acct.AuthReason = authHealth.Reason
+	acct.AuthAction = authHealth.Action
 
 	// Build drive status entries.
 	for _, cid := range driveIDs {
 		d := cfg.Drives[cid]
-		state := driveState(&d, acct.TokenState)
+		state := driveState(&d)
 
 		// Use explicit display_name from config, falling back to auto-derived.
 		driveDisplayName := d.DisplayName
@@ -266,44 +247,12 @@ func readAccountMeta(account string, driveIDs []driveid.CanonicalID, logger *slo
 	return displayName, orgName
 }
 
-// checkTokenState determines whether a valid token exists for the given account.
-// Returns "valid", "expired", or "missing".
-func checkTokenState(ctx context.Context, account string, driveIDs []driveid.CanonicalID, logger *slog.Logger) string {
-	tokenID := canonicalIDForToken(account, driveIDs)
-	if tokenID.IsZero() {
-		// No drives in config — probe the filesystem for an existing token.
-		tokenID = findTokenFallback(account, logger)
-	}
-
-	tokenPath := config.DriveTokenPath(tokenID)
-	if tokenPath == "" {
-		return tokenStateMissing
-	}
-
-	// Try loading a token source to check validity. The TokenSourceFromPath call
-	// will detect expired tokens internally.
-	_, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
-	if err != nil {
-		if errors.Is(err, graph.ErrNotLoggedIn) {
-			return tokenStateMissing
-		}
-
-		return tokenStateExpired
-	}
-
-	return tokenStateValid
-}
-
 // driveState returns the human-readable state for a drive based on its
-// paused flag and token status. Uses IsPaused for expiry-aware pause checks —
-// expired timed pauses correctly report as "ready" rather than "paused."
-func driveState(d *config.Drive, tokenState string) string {
+// paused flag only. Auth health is now shown at the account level so status
+// does not conflate operational drive state with saved-login state.
+func driveState(d *config.Drive) string {
 	if d.IsPaused(time.Now()) {
 		return driveStatePaused
-	}
-
-	if tokenState == tokenStateMissing {
-		return driveStateNoToken
 	}
 
 	return driveStateReady
@@ -329,71 +278,112 @@ func querySyncState(statePath string, logger *slog.Logger) *syncStateInfo {
 	ctx := context.Background()
 	info := &syncStateInfo{}
 
-	// Read sync metadata. Table may not exist in pre-migration DBs.
-	rows, err := db.QueryContext(ctx, "SELECT key, value FROM sync_metadata")
-	if err == nil {
-		defer rows.Close()
-
-		for rows.Next() {
-			var k, v string
-			if scanErr := rows.Scan(&k, &v); scanErr == nil {
-				switch k {
-				case "last_sync_time":
-					info.LastSyncTime = v
-				case "last_sync_duration_ms":
-					info.LastSyncDuration = v
-				case "last_sync_error":
-					info.LastError = v
-				}
-			}
-		}
-
-		if rowErr := rows.Err(); rowErr != nil {
-			logger.Debug("error reading sync metadata", slog.String("error", rowErr.Error()))
-		}
-	}
-
-	// Count baseline entries.
-	if scanErr := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM baseline").Scan(&info.FileCount); scanErr != nil {
-		logger.Debug("could not count baseline entries", slog.String("error", scanErr.Error()))
-	}
-
-	// Count issues = unresolved conflicts + actionable failures.
-	var conflicts, actionable int
-
-	conflictSQL := "SELECT COUNT(*) FROM conflicts WHERE resolution = 'unresolved'"
-	if scanErr := db.QueryRowContext(ctx, conflictSQL).Scan(&conflicts); scanErr != nil {
-		logger.Debug("could not count conflicts", slog.String("error", scanErr.Error()))
-	}
-
-	actionableSQL := "SELECT COUNT(*) FROM sync_failures WHERE category = 'actionable'"
-	if scanErr := db.QueryRowContext(ctx, actionableSQL).Scan(&actionable); scanErr != nil {
-		logger.Debug("could not count actionable failures", slog.String("error", scanErr.Error()))
-	}
-
-	info.Issues = conflicts + actionable
-
-	// Count pending sync items (remote_state not yet synced/deleted/filtered).
-	pendingSQL := "SELECT COUNT(*) FROM remote_state WHERE sync_status NOT IN ('synced','deleted','filtered')"
-	if scanErr := db.QueryRowContext(ctx, pendingSQL).Scan(&info.PendingSync); scanErr != nil {
-		logger.Debug("could not count pending sync items", slog.String("error", scanErr.Error()))
-	}
-
-	// Count retrying = transient failures with failure_count >= 3.
-	retryingSQL := "SELECT COUNT(*) FROM sync_failures WHERE category = 'transient' AND failure_count >= 3"
-	if scanErr := db.QueryRowContext(ctx, retryingSQL).Scan(&info.Retrying); scanErr != nil {
-		logger.Debug("could not count retrying failures", slog.String("error", scanErr.Error()))
-	}
+	readSyncMetadata(ctx, db, info, logger)
+	info.FileCount = queryCount(ctx, db, logger, "could not count baseline entries", "SELECT COUNT(*) FROM baseline")
+	info.Issues = statusIssueCount(ctx, db, logger)
+	info.PendingSync = queryCount(
+		ctx,
+		db,
+		logger,
+		"could not count pending sync items",
+		"SELECT COUNT(*) FROM remote_state WHERE sync_status NOT IN ('synced','deleted','filtered')",
+	)
+	info.Retrying = queryCount(
+		ctx,
+		db,
+		logger,
+		"could not count retrying failures",
+		"SELECT COUNT(*) FROM sync_failures WHERE category = 'transient' AND failure_count >= 3",
+	)
 
 	return info
+}
+
+func readSyncMetadata(
+	ctx context.Context,
+	db *sql.DB,
+	info *syncStateInfo,
+	logger *slog.Logger,
+) {
+	rows, err := db.QueryContext(ctx, "SELECT key, value FROM sync_metadata")
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var key, value string
+		if scanErr := rows.Scan(&key, &value); scanErr == nil {
+			switch key {
+			case "last_sync_time":
+				info.LastSyncTime = value
+			case "last_sync_duration_ms":
+				info.LastSyncDuration = value
+			case "last_sync_error":
+				info.LastError = value
+			}
+		}
+	}
+
+	if rowErr := rows.Err(); rowErr != nil {
+		logger.Debug("error reading sync metadata", slog.String("error", rowErr.Error()))
+	}
+}
+
+func statusIssueCount(ctx context.Context, db *sql.DB, logger *slog.Logger) int {
+	conflicts := queryCount(
+		ctx,
+		db,
+		logger,
+		"could not count conflicts",
+		"SELECT COUNT(*) FROM conflicts WHERE resolution = 'unresolved'",
+	)
+	actionable := queryCount(
+		ctx,
+		db,
+		logger,
+		"could not count actionable failures",
+		"SELECT COUNT(*) FROM sync_failures WHERE category = 'actionable'",
+	)
+	authScopes := queryCount(
+		ctx,
+		db,
+		logger,
+		"could not count auth scope blocks",
+		"SELECT COUNT(*) FROM scope_blocks WHERE scope_key = 'auth:account'",
+	)
+
+	return conflicts + actionable + authScopes
+}
+
+func queryCount(
+	ctx context.Context,
+	db *sql.DB,
+	logger *slog.Logger,
+	logMessage string,
+	query string,
+) int {
+	var count int
+	if err := db.QueryRowContext(ctx, query).Scan(&count); err != nil {
+		logger.Debug(logMessage, slog.String("error", err.Error()))
+		return 0
+	}
+
+	return count
 }
 
 // computeSummary aggregates health information across all status accounts.
 func computeSummary(accounts []statusAccount) statusSummary {
 	var s statusSummary
 
-	for _, acct := range accounts {
-		for _, d := range acct.Drives {
+	for i := range accounts {
+		acct := &accounts[i]
+		if acct.AuthState == authStateAuthenticationNeeded {
+			s.AccountsRequiringAuth++
+		}
+
+		for j := range acct.Drives {
+			d := &acct.Drives[j]
 			s.TotalDrives++
 
 			switch d.State {
@@ -401,8 +391,6 @@ func computeSummary(accounts []statusAccount) statusSummary {
 				s.Ready++
 			case driveStatePaused:
 				s.Paused++
-			case driveStateNoToken:
-				s.NoToken++
 			}
 
 			if d.SyncState != nil {
@@ -433,8 +421,8 @@ func printStatusJSON(w io.Writer, accounts []statusAccount) error {
 }
 
 func printStatusText(w io.Writer, accounts []statusAccount) error {
-	for i, acct := range accounts {
-		if err := printAccountStatus(w, acct, i > 0); err != nil {
+	for i := range accounts {
+		if err := printAccountStatus(w, &accounts[i], i > 0); err != nil {
 			return err
 		}
 	}
@@ -448,7 +436,11 @@ func printStatusText(w io.Writer, accounts []statusAccount) error {
 	return printSummaryText(w, summary)
 }
 
-func printAccountStatus(w io.Writer, acct statusAccount, leadingBlank bool) error {
+func printAccountStatus(w io.Writer, acct *statusAccount, leadingBlank bool) error {
+	if acct == nil {
+		return nil
+	}
+
 	if leadingBlank {
 		if err := writeln(w); err != nil {
 			return err
@@ -465,8 +457,18 @@ func printAccountStatus(w io.Writer, acct statusAccount, leadingBlank bool) erro
 		}
 	}
 
-	if err := writef(w, "  Token: %s\n", acct.TokenState); err != nil {
+	if err := writef(w, "  Auth:  %s\n", acct.AuthState); err != nil {
 		return err
+	}
+	if acct.AuthReason != "" {
+		if err := writef(w, "  Reason: %s\n", authReasonText(acct.AuthReason)); err != nil {
+			return err
+		}
+	}
+	if acct.AuthAction != "" {
+		if err := writef(w, "  Action: %s\n", acct.AuthAction); err != nil {
+			return err
+		}
 	}
 
 	for _, drive := range acct.Drives {
@@ -478,7 +480,11 @@ func printAccountStatus(w io.Writer, acct statusAccount, leadingBlank bool) erro
 	return nil
 }
 
-func statusAccountLabel(acct statusAccount) string {
+func statusAccountLabel(acct *statusAccount) string {
+	if acct == nil {
+		return ""
+	}
+
 	if acct.DisplayName == "" {
 		return acct.Email
 	}
@@ -566,8 +572,8 @@ func printSummaryText(w io.Writer, s statusSummary) error {
 		parts = append(parts, fmt.Sprintf("%d paused", s.Paused))
 	}
 
-	if s.NoToken > 0 {
-		parts = append(parts, fmt.Sprintf("%d no token", s.NoToken))
+	if s.AccountsRequiringAuth > 0 {
+		parts = append(parts, fmt.Sprintf("%d accounts requiring auth", s.AccountsRequiringAuth))
 	}
 
 	stateStr := strings.Join(parts, ", ")
