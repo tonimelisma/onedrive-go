@@ -277,8 +277,9 @@ func (d *driveItemResponse) resolveSharedOwner() (name, email string) {
 }
 
 // parseTimestamp parses an RFC3339 timestamp and validates the year range.
-// Invalid, missing, or out-of-range timestamps remain unknown and are
-// represented as the zero time instead of fabricating a current timestamp.
+// Invalid, missing, JSON-null-decoded, or out-of-range timestamps remain
+// unknown and are represented as the zero time instead of fabricating a
+// current timestamp.
 // For deleted items, anomalies are logged at DEBUG (expected sparse API
 // behavior); for live items, they're logged at WARN (genuinely unexpected).
 func parseTimestamp(raw, field, itemID string, isDeleted bool, logger *slog.Logger) time.Time {
