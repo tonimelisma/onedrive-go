@@ -91,6 +91,32 @@ func TestLoadAndVerify_EmptyBaseline(t *testing.T) {
 }
 
 // Validates: R-2.7
+func TestLoadAndVerify_OpenSyncStoreError(t *testing.T) {
+	parentFile := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(parentFile, []byte("x"), 0o600))
+
+	report, err := loadAndVerify(t.Context(), filepath.Join(parentFile, "state.db"), t.TempDir(), slog.New(slog.DiscardHandler))
+	require.Error(t, err)
+	assert.Nil(t, report)
+	assert.Contains(t, err.Error(), "open sync store")
+}
+
+// Validates: R-2.7
+func TestRunVerify_PropagatesSyncStoreOpenError(t *testing.T) {
+	xdgFile := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(xdgFile, []byte("x"), 0o600))
+	t.Setenv("XDG_DATA_HOME", xdgFile)
+
+	cid := driveid.MustCanonicalID("personal:test@example.com")
+	cmd := newVerifyCmd()
+	cmd.SetContext(newVerifyContext(io.Discard, false, t.TempDir(), cid))
+
+	err := runVerify(cmd, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "open sync store")
+}
+
+// Validates: R-2.7
 func TestRunVerify_RequiresSyncDir(t *testing.T) {
 	cmd := newVerifyCmd()
 	cmd.SetContext(newVerifyContext(io.Discard, false, "", driveid.MustCanonicalID("personal:test@example.com")))

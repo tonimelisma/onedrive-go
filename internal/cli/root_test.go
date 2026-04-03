@@ -1011,6 +1011,22 @@ func TestBuildLoggerDual_NoLogFile(t *testing.T) {
 	assert.Nil(t, closer, "closer should be nil when no log file is set")
 }
 
+func TestBuildLoggerDual_LogFileOpenFailureFallsBack(t *testing.T) {
+	parentFile := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(parentFile, []byte("x"), 0o600))
+
+	cfg := &config.ResolvedDrive{
+		LoggingConfig: config.LoggingConfig{
+			LogFile:  filepath.Join(parentFile, "test.log"),
+			LogLevel: "debug",
+		},
+	}
+
+	logger, closer := buildLoggerDual(cfg, CLIFlags{})
+	assert.NotNil(t, logger)
+	assert.Nil(t, closer, "log open failure should fall back to console-only logging")
+}
+
 // Validates: R-4.7.1, R-6.6.1
 func TestBuildLoggerDual_WithLogFile(t *testing.T) {
 	t.Parallel()
