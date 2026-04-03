@@ -344,8 +344,8 @@ func TestFullScan_EmptyDir(t *testing.T) {
 	assert.Empty(t, result.Events)
 }
 
-// Validates: R-2.4
-func TestFullScan_Symlink(t *testing.T) {
+// Validates: R-2.4.6
+func TestFullScan_SymlinkFollowedByDefault(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -357,9 +357,53 @@ func TestFullScan_Symlink(t *testing.T) {
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
-	// Only the real file should produce an event, not the symlink.
-	require.Len(t, result.Events, 1, "symlink should be skipped")
-	assert.Equal(t, "real.txt", result.Events[0].Path)
+	require.Len(t, result.Events, 2, "default symlink policy should follow symlinks")
+	assert.NotNil(t, findEvent(result.Events, "real.txt"))
+
+	linkEvent := findEvent(result.Events, "link.txt")
+	require.NotNil(t, linkEvent)
+	assert.Equal(t, synctypes.ItemTypeFile, linkEvent.ItemType)
+	assert.Equal(t, hashContent(t, "content"), linkEvent.Hash)
+}
+
+// Validates: R-2.4.6
+func TestFullScan_SymlinkDirectoryFollowedByDefault(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeTestFile(t, dir, "real/nested.txt", "payload")
+
+	require.NoError(t, os.Symlink(filepath.Join(dir, "real"), filepath.Join(dir, "alias")), "Symlink")
+
+	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
+	require.NoError(t, err, "FullScan")
+
+	assert.NotNil(t, findEvent(result.Events, "real"))
+	assert.NotNil(t, findEvent(result.Events, "real/nested.txt"))
+	assert.NotNil(t, findEvent(result.Events, "alias"))
+	assert.NotNil(t, findEvent(result.Events, "alias/nested.txt"))
+}
+
+// Validates: R-2.4.6
+func TestFullScan_SymlinkDirectoryCycleStopsAtAliasBoundary(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeTestFile(t, dir, "real.txt", "content")
+
+	require.NoError(t, os.Symlink(dir, filepath.Join(dir, "loop")), "Symlink")
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+
+	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	result, err := obs.FullScan(ctx, mustOpenSyncTree(t, dir))
+	require.NoError(t, err, "FullScan")
+
+	assert.NotNil(t, findEvent(result.Events, "real.txt"))
+	assert.NotNil(t, findEvent(result.Events, "loop"))
+	assert.Nil(t, findEvent(result.Events, "loop/real.txt"))
 }
 
 func TestFullScan_InvalidName(t *testing.T) {

@@ -17,12 +17,15 @@ package syncobserve
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
@@ -167,12 +170,16 @@ func (o *LocalObserver) handleCreate(
 	fsPath, dbRelPath, name string,
 	watcher FsWatcher, events chan<- synctypes.ChangeEvent,
 ) {
-	info, err := tree.StatAbs(fsPath)
+	info, isSymlink, err := statObservedPath(fsPath)
 	if err != nil {
 		// File may have been removed immediately after creation.
 		o.Logger.Debug("stat failed for created path",
 			slog.String("path", dbRelPath), slog.String("error", err.Error()))
 
+		return
+	}
+
+	if shouldSkipObservedSymlink(isSymlink, o.filterConfig) {
 		return
 	}
 
@@ -263,7 +270,7 @@ func (o *LocalObserver) scanNewDirectory(
 	ctx context.Context, tree *synctree.Root, dirPath, dirRelPath string,
 	watcher FsWatcher, events chan<- synctypes.ChangeEvent,
 ) {
-	entries, err := tree.ReadDirAbs(dirPath)
+	entries, err := localpath.ReadDir(dirPath)
 	if err != nil {
 		o.Logger.Debug("scan new directory failed",
 			slog.String("path", dirRelPath), slog.String("error", err.Error()))
@@ -279,75 +286,99 @@ func (o *LocalObserver) scanNewDirectory(
 		if ctx.Err() != nil {
 			return
 		}
+		o.scanNewDirectoryEntry(ctx, tree, dirPath, dirRelPath, entry, watcher, events)
+	}
+}
 
-		entryName := nfcNormalize(entry.Name())
-		entryRelPath := dirRelPath + "/" + entryName
+func (o *LocalObserver) scanNewDirectoryEntry(
+	ctx context.Context,
+	tree *synctree.Root,
+	dirPath string,
+	dirRelPath string,
+	entry os.DirEntry,
+	watcher FsWatcher,
+	events chan<- synctypes.ChangeEvent,
+) {
+	entryName := nfcNormalize(entry.Name())
+	entryRelPath := dirRelPath + "/" + entryName
+	entryFsPath := filepath.Join(dirPath, entry.Name())
 
-		// Unified observation filter (Stage 1).
-		if shouldObserveWithFilter(entryName, entryRelPath, dirEntryKind(entry), o.filterConfig) != nil {
-			continue
-		}
+	var (
+		info os.FileInfo
+		kind observedKind
+		err  error
+	)
 
-		entryFsPath := filepath.Join(dirPath, entry.Name())
-
-		// Early rejection for case collisions in directory scan (R-2.12.2).
-		// Applies to both files and directories — checked before branching.
-		if collidingName, hasCollision := o.HasCaseCollisionCached(tree, dirPath, entryName, dirRelPath); hasCollision {
-			o.Logger.Debug("case collision detected in directory scan, skipping",
-				slog.String("path", entryRelPath),
-				slog.String("collides_with", collidingName))
-
-			continue
-		}
-
-		// Recurse into subdirectories: add watch and scan contents.
-		if entry.IsDir() {
-			if addErr := watcher.Add(entryFsPath); addErr != nil {
-				o.Logger.Warn("failed to add watch on nested directory",
-					slog.String("path", entryRelPath), slog.String("error", addErr.Error()))
-			}
-
-			dirEv := synctypes.ChangeEvent{
-				Source:   synctypes.SourceLocal,
-				Type:     synctypes.ChangeCreate,
-				Path:     entryRelPath,
-				Name:     entryName,
-				ItemType: synctypes.ItemTypeFolder,
-			}
-
-			o.TrySend(ctx, events, &dirEv)
-
-			o.scanNewDirectory(ctx, tree, entryFsPath, entryRelPath, watcher, events)
-
-			continue
-		}
-
-		info, statErr := entry.Info()
-		if statErr != nil {
+	if entry.Type()&fs.ModeSymlink != 0 {
+		var isSymlink bool
+		info, isSymlink, err = statObservedPath(entryFsPath)
+		if err != nil {
 			o.Logger.Debug("stat failed during directory scan",
-				slog.String("path", entryRelPath), slog.String("error", statErr.Error()))
-
-			continue
+				slog.String("path", entryRelPath), slog.String("error", err.Error()))
+			return
 		}
 
-		// Stage 2 observation filter: file size check (requires stat).
-		if o.IsOversizedFile(info.Size(), entryRelPath) {
-			continue
+		if shouldSkipObservedSymlink(isSymlink, o.filterConfig) {
+			return
 		}
 
-		fileEv := synctypes.ChangeEvent{
+		kind = observedKindFromInfo(info)
+	} else {
+		kind = dirEntryKind(entry)
+		info, err = entry.Info()
+		if err != nil {
+			o.Logger.Debug("stat failed during directory scan",
+				slog.String("path", entryRelPath), slog.String("error", err.Error()))
+			return
+		}
+	}
+
+	if shouldObserveWithFilter(entryName, entryRelPath, kind, o.filterConfig) != nil {
+		return
+	}
+
+	if collidingName, hasCollision := o.HasCaseCollisionCached(tree, dirPath, entryName, dirRelPath); hasCollision {
+		o.Logger.Debug("case collision detected in directory scan, skipping",
+			slog.String("path", entryRelPath),
+			slog.String("collides_with", collidingName))
+		return
+	}
+
+	if kind == observedKindDir {
+		if addErr := watcher.Add(entryFsPath); addErr != nil {
+			o.Logger.Warn("failed to add watch on nested directory",
+				slog.String("path", entryRelPath), slog.String("error", addErr.Error()))
+		}
+
+		dirEv := synctypes.ChangeEvent{
 			Source:   synctypes.SourceLocal,
 			Type:     synctypes.ChangeCreate,
 			Path:     entryRelPath,
 			Name:     entryName,
-			ItemType: synctypes.ItemTypeFile,
-			Size:     info.Size(),
-			Hash:     o.stableHashOrEmpty(entryFsPath, entryRelPath),
-			Mtime:    info.ModTime().UnixNano(),
+			ItemType: synctypes.ItemTypeFolder,
 		}
 
-		o.TrySend(ctx, events, &fileEv)
+		o.TrySend(ctx, events, &dirEv)
+		o.scanNewDirectory(ctx, tree, entryFsPath, entryRelPath, watcher, events)
+		return
 	}
+
+	if o.IsOversizedFile(info.Size(), entryRelPath) {
+		return
+	}
+
+	fileEv := synctypes.ChangeEvent{
+		Source:   synctypes.SourceLocal,
+		Type:     synctypes.ChangeCreate,
+		Path:     entryRelPath,
+		Name:     entryName,
+		ItemType: synctypes.ItemTypeFile,
+		Size:     info.Size(),
+		Hash:     o.stableHashOrEmpty(entryFsPath, entryRelPath),
+		Mtime:    info.ModTime().UnixNano(),
+	}
+
+	o.TrySend(ctx, events, &fileEv)
 }
 
 // handleWrite processes a Write event by scheduling a deferred hash after a
@@ -361,12 +392,16 @@ func (o *LocalObserver) scanNewDirectory(
 // in-flight (dispatched to workers but not yet committed to baseline), the safety scan
 // may re-emit an event for something already being processed. This is safe:
 // processBatch deduplicates via HasInFlight + CancelByPath (B-122).
-func (o *LocalObserver) handleWrite(tree *synctree.Root, fsPath, dbRelPath, name string) {
-	info, err := tree.StatAbs(fsPath)
+func (o *LocalObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath, name string) {
+	info, isSymlink, err := statObservedPath(fsPath)
 	if err != nil {
 		o.Logger.Debug("stat failed for modified path",
 			slog.String("path", dbRelPath), slog.String("error", err.Error()))
 
+		return
+	}
+
+	if shouldSkipObservedSymlink(isSymlink, o.filterConfig) {
 		return
 	}
 
@@ -405,11 +440,15 @@ func (o *LocalObserver) handleWrite(tree *synctree.Root, fsPath, dbRelPath, name
 func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, req HashRequest, events chan<- synctypes.ChangeEvent) {
 	delete(o.PendingTimers, req.DbRelPath)
 
-	info, err := tree.StatAbs(req.FsPath)
+	info, isSymlink, err := statObservedPath(req.FsPath)
 	if err != nil {
 		o.Logger.Debug("stat failed for deferred hash",
 			slog.String("path", req.DbRelPath), slog.String("error", err.Error()))
 
+		return
+	}
+
+	if shouldSkipObservedSymlink(isSymlink, o.filterConfig) {
 		return
 	}
 

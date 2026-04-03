@@ -42,7 +42,7 @@ trust the server and does not silently drop remote-only items.
 - R-2.4.3: When `skip_files` is set, the system shall exclude matching file patterns. [verified]
 - R-2.4.4: When a directory contains a file matching the `ignore_marker` name (default `.odignore`), the system shall exclude that directory from sync. The marker file is a presence-only check — its contents are not read. The marker file itself is not synced. [planned]
 - R-2.4.5: When `sync_paths` is set, the system shall sync only the specified paths. [planned]
-- R-2.4.6: When `skip_symlinks = true`, the system shall exclude symlinks. Symlinked directories are always excluded from watch mode. [verified]
+- R-2.4.6: When `skip_symlinks = true`, the system shall exclude symlinks. When `skip_symlinks = false` (default), the system shall follow symlink targets and observe them as ordinary files and directories at the symlink path. Directory-symlink cycles shall stop at the alias boundary instead of recursing forever. [verified]
 - R-2.4.7: When an item belongs to the Personal Vault, the system shall exclude it. Vault auto-locks after 20 minutes, causing locked items to appear deleted in delta responses — syncing vault items would cause data loss. [verified]
 
 ## R-2.5 Crash Recovery [verified]
