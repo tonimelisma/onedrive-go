@@ -2,10 +2,12 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
@@ -23,6 +25,7 @@ const (
 	scopeStartupRequiresScopedFailures
 	scopeStartupServerTimedOnly
 	scopeStartupRevalidateDisk
+	scopeStartupRevalidateAuth
 )
 
 type persistedScopeFacts struct {
@@ -57,27 +60,48 @@ func (controller *scopeController) loadActiveScopes(ctx context.Context, watch *
 // repairPersistedScopes normalizes persisted scope rows against current store
 // evidence before any admission begins. The store remains authoritative for
 // restart state; watch mode loads activeScopes only after this repair pass.
-func (controller *scopeController) repairPersistedScopes(ctx context.Context, watch *watchRuntime) error {
+func (controller *scopeController) repairPersistedScopes(
+	ctx context.Context,
+	watch *watchRuntime,
+	proof driveIdentityProof,
+	proofErr error,
+) error {
 	flow := controller.flow
 
-	blocks, err := flow.engine.baseline.ListScopeBlocks(ctx)
-	if err != nil {
-		return fmt.Errorf("sync: listing scope blocks: %w", err)
+	blocks, listScopeErr := flow.engine.baseline.ListScopeBlocks(ctx)
+	if listScopeErr != nil {
+		return fmt.Errorf("sync: listing scope blocks: %w", listScopeErr)
 	}
 	if len(blocks) == 0 {
 		return nil
 	}
 
-	failures, err := flow.engine.baseline.ListSyncFailures(ctx)
-	if err != nil {
-		return fmt.Errorf("sync: listing sync failures: %w", err)
+	for i := range blocks {
+		if blocks[i].Key != synctypes.SKAuthAccount() {
+			continue
+		}
+
+		if repairErr := controller.repairPersistedScope(ctx, blocks[i], persistedScopeFacts{}, proof, proofErr); repairErr != nil {
+			return repairErr
+		}
+
+		break
+	}
+
+	failures, listFailureErr := flow.engine.baseline.ListSyncFailures(ctx)
+	if listFailureErr != nil {
+		return fmt.Errorf("sync: listing sync failures: %w", listFailureErr)
 	}
 
 	facts := summarizePersistedScopeFailures(failures)
 
 	for i := range blocks {
-		if err := controller.repairPersistedScope(ctx, blocks[i], facts); err != nil {
-			return err
+		if blocks[i].Key == synctypes.SKAuthAccount() {
+			continue
+		}
+
+		if repairErr := controller.repairPersistedScope(ctx, blocks[i], facts, proof, proofErr); repairErr != nil {
+			return repairErr
 		}
 	}
 
@@ -90,10 +114,14 @@ func (controller *scopeController) repairPersistedScope(
 	ctx context.Context,
 	block *synctypes.ScopeBlock,
 	facts persistedScopeFacts,
+	proof driveIdentityProof,
+	proofErr error,
 ) error {
 	now := controller.flow.engine.nowFunc()
 
 	switch scopeStartupPolicyFor(block.Key) {
+	case scopeStartupRevalidateAuth:
+		return controller.repairAuthScope(ctx, block, proof, proofErr)
 	case scopeStartupRequiresBoundary:
 		if facts.boundaryKeys[block.Key] {
 			return nil
@@ -168,6 +196,8 @@ func summarizePersistedScopeFailures(rows []synctypes.SyncFailureRow) persistedS
 
 func scopeStartupPolicyFor(key synctypes.ScopeKey) scopeStartupPolicy {
 	switch {
+	case key == synctypes.SKAuthAccount():
+		return scopeStartupRevalidateAuth
 	case key.IsPermDir(), key.IsPermRemote():
 		return scopeStartupRequiresBoundary
 	case key == synctypes.SKQuotaOwn() || key.Kind == synctypes.ScopeQuotaShortcut:
@@ -191,6 +221,34 @@ func hasActivePreserveDeadline(block *synctypes.ScopeBlock, now time.Time) bool 
 	}
 
 	return block.PreserveUntil.After(now)
+}
+
+func (controller *scopeController) repairAuthScope(
+	ctx context.Context,
+	block *synctypes.ScopeBlock,
+	proof driveIdentityProof,
+	proofErr error,
+) error {
+	// Auth scope repair is deliberately proof-based. Token-source creation or
+	// session construction does not prove that the current credentials still
+	// authorize the configured drive.
+	if !proof.attempted {
+		return fmt.Errorf("sync: revalidating auth scope %s: drive verifier required", block.Key.String())
+	}
+
+	if proofErr == nil {
+		return controller.releaseStartupScope(ctx, block.Key, "released auth scope after successful proof")
+	}
+
+	if errors.Is(proofErr, graph.ErrUnauthorized) {
+		controller.flow.engine.emitDebugEvent(engineDebugEvent{
+			Type:     engineDebugEventStartupScopeRepaired,
+			ScopeKey: block.Key,
+			Note:     "kept auth scope after unauthorized proof",
+		})
+	}
+
+	return proofErr
 }
 
 func (controller *scopeController) repairDiskScope(ctx context.Context, block *synctypes.ScopeBlock) error {
@@ -311,6 +369,17 @@ func (controller *scopeController) activateScope(ctx context.Context, watch *wat
 	return nil
 }
 
+func (controller *scopeController) activateAuthScope(ctx context.Context, watch *watchRuntime) error {
+	block := &synctypes.ScopeBlock{
+		Key:          synctypes.SKAuthAccount(),
+		IssueType:    synctypes.IssueUnauthorized,
+		TimingSource: synctypes.ScopeTimingNone,
+		BlockedAt:    controller.flow.engine.nowFunc(),
+	}
+
+	return controller.activateScope(ctx, watch, block)
+}
+
 func (controller *scopeController) extendScopeTrial(
 	ctx context.Context,
 	watch *watchRuntime,
@@ -426,7 +495,9 @@ func scopeTimingSource(retryAfter time.Duration) synctypes.ScopeTimingSource {
 // (throttle:account or service) is active, meaning shortcut observation
 // polling should be skipped to avoid wasting API calls (R-2.10.30).
 func (controller *scopeController) isObservationSuppressed(watch *watchRuntime) bool {
-	return controller.isScopeBlocked(watch, synctypes.SKThrottleAccount()) || controller.isScopeBlocked(watch, synctypes.SKService())
+	return controller.isScopeBlocked(watch, synctypes.SKAuthAccount()) ||
+		controller.isScopeBlocked(watch, synctypes.SKThrottleAccount()) ||
+		controller.isScopeBlocked(watch, synctypes.SKService())
 }
 
 // feedScopeDetection feeds a worker result into scope detection sliding

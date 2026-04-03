@@ -11,6 +11,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
@@ -23,6 +24,11 @@ import (
 type reconcileResult struct {
 	events    []synctypes.ChangeEvent
 	shortcuts []synctypes.Shortcut
+}
+
+type driveIdentityProof struct {
+	attempted bool
+	drive     *graph.Drive
 }
 
 // Engine orchestrates a complete sync pass: observe → plan → execute → commit.
@@ -168,28 +174,51 @@ func (e *Engine) Close(ctx context.Context) error {
 	return nil
 }
 
-// verifyDriveIdentity checks that the configured drive ID matches the remote
-// API (B-074). Returns nil if no synctypes.DriveVerifier is configured (optional check).
-func (e *Engine) verifyDriveIdentity(ctx context.Context) error {
+// proveDriveIdentity performs the single startup proof call used by one-shot
+// and watch-mode bootstrap. The proof remains ephemeral; persisted auth state
+// is still owned by scope_blocks.
+func (e *Engine) proveDriveIdentity(ctx context.Context) (driveIdentityProof, error) {
 	if e.driveVerifier == nil {
-		return nil
+		return driveIdentityProof{}, nil
 	}
 
 	drive, err := e.driveVerifier.Drive(ctx, e.driveID)
 	if err != nil {
-		return fmt.Errorf("sync: verifying drive identity: %w", err)
+		return driveIdentityProof{attempted: true}, fmt.Errorf("sync: verifying drive identity: %w", err)
 	}
 
 	if drive.ID != e.driveID {
-		return fmt.Errorf("sync: drive ID mismatch: configured %s, remote returned %s", e.driveID, drive.ID)
+		return driveIdentityProof{attempted: true, drive: drive}, fmt.Errorf(
+			"sync: drive ID mismatch: configured %s, remote returned %s", e.driveID, drive.ID)
+	}
+
+	return driveIdentityProof{attempted: true, drive: drive}, nil
+}
+
+func (e *Engine) logVerifiedDrive(proof driveIdentityProof) {
+	if !proof.attempted || proof.drive == nil {
+		return
 	}
 
 	e.logger.Info("drive identity verified",
-		slog.String("drive_id", drive.ID.String()),
-		slog.String("drive_type", drive.DriveType),
+		slog.String("drive_id", proof.drive.ID.String()),
+		slog.String("drive_type", proof.drive.DriveType),
 	)
+}
 
-	return nil
+func (e *Engine) hasPersistedAuthScope(ctx context.Context) (bool, error) {
+	blocks, err := e.baseline.ListScopeBlocks(ctx)
+	if err != nil {
+		return false, fmt.Errorf("sync: listing scope blocks: %w", err)
+	}
+
+	for i := range blocks {
+		if blocks[i].Key == synctypes.SKAuthAccount() {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 // RunOnce executes a single sync pass:

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -560,6 +561,65 @@ func TestPrintGroupedIssuesText_MixedHeldAndOther(t *testing.T) {
 	assert.Contains(t, output, "file1.txt")
 	assert.Contains(t, output, "INVALID FILENAME")
 	assert.Contains(t, output, "docs/CON")
+}
+
+// Validates: R-2.3.3, R-2.3.10, R-2.10.45
+func TestIssuesService_RunList_SurfacesAuthScopeWithoutFakePaths(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+
+	canonicalID, err := driveid.NewCanonicalID("personal:user@example.com")
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(config.DefaultDataDir(), 0o750))
+
+	dbPath := config.DriveStatePath(canonicalID)
+	logger := slog.New(slog.DiscardHandler)
+	mgr, err := syncstore.NewSyncStore(t.Context(), dbPath, logger)
+	require.NoError(t, err)
+	defer mgr.Close(t.Context())
+
+	require.NoError(t, mgr.UpsertScopeBlock(t.Context(), &synctypes.ScopeBlock{
+		Key:          synctypes.SKAuthAccount(),
+		IssueType:    synctypes.IssueUnauthorized,
+		TimingSource: synctypes.ScopeTimingNone,
+		BlockedAt:    time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC),
+	}))
+
+	t.Run("text", func(t *testing.T) {
+		var buf bytes.Buffer
+		svc := newIssuesService(&CLIContext{
+			Logger:       logger,
+			OutputWriter: &buf,
+			Cfg:          &config.ResolvedDrive{CanonicalID: canonicalID},
+		})
+
+		require.NoError(t, svc.runList(t.Context(), false))
+
+		output := buf.String()
+		assert.Contains(t, output, "AUTHORIZATION EXPIRED")
+		assert.Contains(t, output, "Scope: your OneDrive account authorization")
+		assert.NotContains(t, output, "No issues.")
+		assert.NotContains(t, output, "  /")
+	})
+
+	t.Run("json", func(t *testing.T) {
+		var buf bytes.Buffer
+		svc := newIssuesService(&CLIContext{
+			Logger:       logger,
+			OutputWriter: &buf,
+			Cfg:          &config.ResolvedDrive{CanonicalID: canonicalID},
+			Flags:        CLIFlags{JSON: true},
+		})
+
+		require.NoError(t, svc.runList(t.Context(), false))
+
+		var out issuesOutputJSON
+		require.NoError(t, json.Unmarshal(buf.Bytes(), &out))
+		require.Len(t, out.FailureGroups, 1)
+		assert.Equal(t, synctypes.IssueUnauthorized, out.FailureGroups[0].IssueType)
+		assert.Equal(t, "your OneDrive account authorization", out.FailureGroups[0].Scope)
+		assert.Empty(t, out.FailureGroups[0].Paths)
+	})
 }
 
 // --- issues clear / retry behavioral tests ---

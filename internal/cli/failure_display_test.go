@@ -231,6 +231,29 @@ func TestPrintGroupedFailures_NoScopeLineWhenEmpty(t *testing.T) {
 	assert.NotContains(t, buf.String(), "Scope:")
 }
 
+// Validates: R-2.3.10, R-2.10.45
+func TestPrintGroupedFailures_ScopeOnlyIssueOmitsPathSection(t *testing.T) {
+	t.Parallel()
+
+	groups := []failureGroup{
+		{
+			IssueType: synctypes.IssueUnauthorized,
+			ScopeKey:  "your OneDrive account authorization",
+			Message:   synctypes.MessageForIssueType(synctypes.IssueUnauthorized),
+			Paths:     []string{},
+			Count:     1,
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, printGroupedFailures(&buf, groups, false))
+
+	output := buf.String()
+	assert.Contains(t, output, "AUTHORIZATION EXPIRED")
+	assert.Contains(t, output, "Scope: your OneDrive account authorization")
+	assert.NotContains(t, output, "  /")
+}
+
 // Validates: R-2.3.9
 func TestPrintGroupedIssuesJSON_StructuredOutput(t *testing.T) {
 	t.Parallel()

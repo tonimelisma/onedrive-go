@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -13,12 +14,25 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
 	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 const cachedLocalHash = "cached-local-hash"
+
+type countingDriveVerifier struct {
+	drive *graph.Drive
+	err   error
+	calls int
+}
+
+func (m *countingDriveVerifier) Drive(_ context.Context, _ driveid.ID) (*graph.Drive, error) {
+	m.calls++
+
+	return m.drive, m.err
+}
 
 // newSingleOwnerEngine creates a minimal engine with syncdispatch.DepGraph plus the
 // watch-mode active-scope working set for testing the single-owner engine
@@ -646,6 +660,80 @@ func TestEngine_RepairPersistedScopes_ThrottleAndServicePolicy(t *testing.T) {
 			runRepairPersistedScopesCase(t, tc)
 		})
 	}
+}
+
+// Validates: R-2.10.45, R-2.10.46
+func TestEngine_PrepareRunOnceState_RevalidatesPersistedAuthScope(t *testing.T) {
+	t.Parallel()
+
+	t.Run("successful probe clears persisted auth scope", func(t *testing.T) {
+		t.Parallel()
+
+		eng := newSingleOwnerEngine(t)
+		ctx := t.Context()
+		verifier := &countingDriveVerifier{
+			drive: &graph.Drive{ID: eng.driveID},
+		}
+		eng.driveVerifier = verifier
+
+		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
+			Key:          synctypes.SKAuthAccount(),
+			IssueType:    synctypes.IssueUnauthorized,
+			TimingSource: synctypes.ScopeTimingNone,
+			BlockedAt:    eng.nowFunc(),
+		}))
+
+		runner := newOneShotRunner(eng.Engine)
+		_, _, err := runner.prepareRunOnceState(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 1, verifier.calls, "startup auth repair should use exactly one proof call")
+		assert.False(t, isTestScopeBlocked(eng, synctypes.SKAuthAccount()))
+	})
+
+	t.Run("unauthorized probe keeps auth scope and aborts startup", func(t *testing.T) {
+		t.Parallel()
+
+		eng := newSingleOwnerEngine(t)
+		ctx := t.Context()
+		verifier := &countingDriveVerifier{err: graph.ErrUnauthorized}
+		eng.driveVerifier = verifier
+
+		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
+			Key:          synctypes.SKAuthAccount(),
+			IssueType:    synctypes.IssueUnauthorized,
+			TimingSource: synctypes.ScopeTimingNone,
+			BlockedAt:    eng.nowFunc(),
+		}))
+
+		runner := newOneShotRunner(eng.Engine)
+		_, _, err := runner.prepareRunOnceState(ctx)
+		require.ErrorIs(t, err, graph.ErrUnauthorized)
+		assert.Equal(t, 1, verifier.calls)
+		assert.True(t, isTestScopeBlocked(eng, synctypes.SKAuthAccount()))
+	})
+
+	t.Run("non auth probe error leaves auth scope untouched", func(t *testing.T) {
+		t.Parallel()
+
+		eng := newSingleOwnerEngine(t)
+		ctx := t.Context()
+		probeErr := errors.New("drive probe failed")
+		verifier := &countingDriveVerifier{err: probeErr}
+		eng.driveVerifier = verifier
+
+		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
+			Key:          synctypes.SKAuthAccount(),
+			IssueType:    synctypes.IssueUnauthorized,
+			TimingSource: synctypes.ScopeTimingNone,
+			BlockedAt:    eng.nowFunc(),
+		}))
+
+		runner := newOneShotRunner(eng.Engine)
+		_, _, err := runner.prepareRunOnceState(ctx)
+		require.ErrorIs(t, err, probeErr)
+		assert.Equal(t, 1, verifier.calls)
+		assert.True(t, isTestScopeBlocked(eng, synctypes.SKAuthAccount()))
+	})
 }
 
 func TestEngine_RepairPersistedScopes_DiskPolicy(t *testing.T) {

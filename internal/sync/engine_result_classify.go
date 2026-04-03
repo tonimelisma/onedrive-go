@@ -79,7 +79,7 @@ func classifyHTTPResult(r *synctypes.WorkerResult) (ResultDecision, bool) {
 	case r.HTTPStatus == http.StatusUnauthorized:
 		return ResultDecision{
 			Class:      resultFatal,
-			RecordMode: recordFailureActionable,
+			RecordMode: recordFailureNone,
 		}, true
 	case r.HTTPStatus == http.StatusForbidden:
 		return ResultDecision{
