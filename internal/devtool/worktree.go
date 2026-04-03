@@ -33,7 +33,9 @@ func defaultWorktreeFS() worktreeFS {
 		mkdirAll:  localpath.MkdirAll,
 		removeAll: localpath.RemoveAll,
 		symlink:   localpath.Symlink,
-		writeFile: localpath.WriteFile,
+		writeFile: func(path string, data []byte, perm os.FileMode) error {
+			return localpath.AtomicWrite(path, data, perm, worktreeDirPerm, ".worktree-include-*.tmp")
+		},
 	}
 }
 

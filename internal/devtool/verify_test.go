@@ -251,6 +251,25 @@ func TestRunRepoConsistencyChecksFailsWithoutCrossCuttingDesignDocReference(t *t
 	assert.Contains(t, err.Error(), "system.md")
 }
 
+// Validates: R-6.10.7
+func TestRunRepoConsistencyChecksFailsWithoutCrossCuttingEvidenceSection(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoRoot, "spec", "design", "error-model.md"),
+		[]byte("# Error Model\n"),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Verified By")
+	assert.Contains(t, err.Error(), "error-model.md")
+}
+
 // Validates: R-6.10.5
 func TestRunRepoConsistencyChecksFailsOnHTTPClientDoOutsideApprovedBoundary(t *testing.T) {
 	t.Parallel()
@@ -347,6 +366,83 @@ func TestRunRepoConsistencyChecksFailsOnCLIProcessGlobalOutput(t *testing.T) {
 	assert.Contains(t, err.Error(), "bad_output.go")
 }
 
+// Validates: R-6.10.5
+func TestRunRepoConsistencyChecksFailsOnExecCommandContextOutsideApprovedBoundary(t *testing.T) {
+	t.Parallel()
+
+	assertRepoConsistencyRejectsPrivilegedCall(t, "bad_exec.go", []string{
+		"package bad",
+		"",
+		"import (",
+		"\t\"context\"",
+		"\t\"os/exec\"",
+		")",
+		"",
+		"func run(ctx context.Context) error {",
+		"\treturn exec.CommandContext(ctx, \"echo\", \"nope\").Run()",
+		"}",
+		"",
+	}, "exec.CommandContext")
+}
+
+// Validates: R-6.10.5
+func TestRunRepoConsistencyChecksFailsOnSQLOpenOutsideApprovedBoundary(t *testing.T) {
+	t.Parallel()
+
+	assertRepoConsistencyRejectsPrivilegedCall(t, "bad_sql.go", []string{
+		"package bad",
+		"",
+		"import \"database/sql\"",
+		"",
+		"func open() (*sql.DB, error) {",
+		"\treturn sql.Open(\"sqlite\", \"file:test.db\")",
+		"}",
+		"",
+	}, "sql.Open")
+}
+
+// Validates: R-6.10.5
+func TestRunRepoConsistencyChecksFailsOnSignalNotifyOutsideApprovedBoundary(t *testing.T) {
+	t.Parallel()
+
+	assertRepoConsistencyRejectsPrivilegedCall(t, "bad_signal.go", []string{
+		"package bad",
+		"",
+		"import (",
+		"\t\"os\"",
+		"\t\"os/signal\"",
+		")",
+		"",
+		"func watch(ch chan os.Signal) {",
+		"\tsignal.Notify(ch)",
+		"}",
+		"",
+	}, "signal.Notify")
+}
+
+func assertRepoConsistencyRejectsPrivilegedCall(
+	t *testing.T,
+	filename string,
+	source []string,
+	want string,
+) {
+	t.Helper()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoRoot, "internal", filename),
+		[]byte(strings.Join(source, "\n")),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), want)
+	assert.Contains(t, err.Error(), filename)
+}
+
 // Validates: R-6.2.1
 func TestRunRepoConsistencyChecksFailsOnRawOSFilesystemCallInGuardedPackage(t *testing.T) {
 	t.Parallel()
@@ -427,7 +523,16 @@ func writeRepoConsistencyFixtures(t *testing.T, repoRoot string) {
 		0o600,
 	))
 	for _, name := range []string{"error-model.md", "threat-model.md", "degraded-mode.md"} {
-		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "spec", "design", name), []byte("clean\n"), 0o600))
+		content := "clean\n"
+		switch name {
+		case "error-model.md":
+			content = "# Error Model\n\n## Verified By\n- tests\n"
+		case "threat-model.md":
+			content = "# Threat Model\n\n## Mitigation Evidence\n- tests\n"
+		case "degraded-mode.md":
+			content = "# Degraded Mode\n\n| Failure | Evidence |\n| --- | --- |\n| sample | tests |\n"
+		}
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "spec", "design", name), []byte(content), 0o600))
 	}
 	require.NoError(t, os.WriteFile(
 		filepath.Join(repoRoot, "spec", "design", "cli.md"),

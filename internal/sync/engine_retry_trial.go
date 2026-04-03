@@ -670,19 +670,19 @@ func (flow *engineFlow) clearFailureOnSuccess(ctx context.Context, r *synctypes.
 	}
 }
 
-func (flow *engineFlow) applyFailureRecordMode(
+func (flow *engineFlow) applyFailurePersistence(
 	ctx context.Context,
-	mode failureRecordMode,
+	decision ResultDecision,
 	r *synctypes.WorkerResult,
 ) {
-	switch mode {
-	case recordFailureNone:
+	switch decision.Persistence {
+	case persistNone:
 		return
-	case recordFailureActionable:
-		flow.recordFailure(ctx, r, nil)
-	case recordFailureReconcile:
-		flow.recordFailure(ctx, r, retry.ReconcilePolicy().Delay)
+	case persistActionableFailure:
+		flow.recordFailure(ctx, decision, r, nil)
+	case persistTransientFailure:
+		flow.recordFailure(ctx, decision, r, retry.ReconcilePolicy().Delay)
 	default:
-		panic(fmt.Sprintf("unknown failure record mode %d", mode))
+		panic(fmt.Sprintf("unknown failure persistence mode %d", decision.Persistence))
 	}
 }

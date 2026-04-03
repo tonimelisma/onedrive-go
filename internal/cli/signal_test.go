@@ -1,9 +1,13 @@
 package cli
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 	"testing"
@@ -37,6 +41,50 @@ func TestShutdownContext_FirstSignalCancels(t *testing.T) {
 	cancel()
 }
 
+func TestShutdownContext_SecondSignalForcesExit(t *testing.T) {
+	if os.Getenv("ONEDRIVE_GO_TEST_SHUTDOWN_HELPER") == "1" {
+		runShutdownContextSecondSignalHelper()
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	exe, err := os.Executable()
+	require.NoError(t, err)
+
+	//nolint:gosec // Test launches the current test binary with fixed arguments.
+	cmd := exec.CommandContext(ctx, exe, "-test.run=^TestShutdownContext_SecondSignalForcesExit$")
+	cmd.Env = append(os.Environ(), "ONEDRIVE_GO_TEST_SHUTDOWN_HELPER=1")
+
+	stdout, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	require.NoError(t, cmd.Start())
+
+	scanner := bufio.NewScanner(stdout)
+	require.True(t, scanner.Scan(), "helper should announce readiness")
+	assert.Equal(t, "ready", scanner.Text())
+
+	require.NoError(t, syscall.Kill(cmd.Process.Pid, syscall.SIGINT), "failed to send first SIGINT")
+
+	require.True(t, scanner.Scan(), "helper should acknowledge graceful shutdown")
+	assert.Equal(t, "canceled", scanner.Text())
+
+	require.NoError(t, syscall.Kill(cmd.Process.Pid, syscall.SIGINT), "failed to send second SIGINT")
+
+	err = cmd.Wait()
+	require.Error(t, err, "second signal should force a non-zero exit")
+
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr)
+	assert.Equal(t, 1, exitErr.ExitCode())
+	assert.NoError(t, scanner.Err())
+}
+
 func TestShutdownContext_ParentCancelStopsGoroutine(t *testing.T) {
 	t.Parallel()
 
@@ -52,6 +100,23 @@ func TestShutdownContext_ParentCancelStopsGoroutine(t *testing.T) {
 		// Expected: context canceled when parent is canceled.
 	case <-time.After(2 * time.Second):
 		require.Fail(t, "context not canceled within 2 seconds of parent cancel")
+	}
+}
+
+func runShutdownContextSecondSignalHelper() {
+	logger := slog.New(slog.DiscardHandler)
+	ctx := shutdownContext(context.Background(), logger)
+
+	mustWriteHelperLine("ready")
+	<-ctx.Done()
+	mustWriteHelperLine("canceled")
+
+	select {}
+}
+
+func mustWriteHelperLine(line string) {
+	if _, err := fmt.Fprintln(os.Stdout, line); err != nil {
+		panic(err)
 	}
 }
 

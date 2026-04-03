@@ -2,7 +2,6 @@ package cli
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 
@@ -60,131 +59,23 @@ Requires --confirm flag to proceed.`,
 
 func runRecycleBinList(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
-	cc := mustCLIContext(ctx)
-
-	session, err := cc.Session(ctx)
-	if err != nil {
-		return err
-	}
-
-	items, err := session.ListRecycleBinItems(ctx)
-	if err != nil {
-		// Personal OneDrive accounts don't support the /special/recyclebin
-		// endpoint — the Graph API returns HTTP 400. Provide a clear message
-		// instead of a raw API error (graph-api-quirks.md §Recycle Bin).
-		if errors.Is(err, graph.ErrBadRequest) {
-			return fmt.Errorf("recycle bin listing is not available on Personal OneDrive accounts")
-		}
-
-		return fmt.Errorf("listing recycle bin: %w", err)
-	}
-
-	if cc.Flags.JSON {
-		return formatRecycleBinJSON(cc.Output(), items)
-	}
-
-	return formatRecycleBinTable(cc.Output(), items)
+	return newRecycleBinService(mustCLIContext(ctx)).runList(ctx)
 }
 
 func runRecycleBinRestore(cmd *cobra.Command, args []string) error {
-	itemID := args[0]
 	ctx := cmd.Context()
-	cc := mustCLIContext(ctx)
-
-	session, err := cc.Session(ctx)
-	if err != nil {
-		return err
-	}
-
-	item, err := session.RestoreItem(ctx, itemID)
-	if err != nil {
-		if errors.Is(err, graph.ErrConflict) {
-			return fmt.Errorf("cannot restore %q: a file with the same name already exists at the original location", itemID)
-		}
-
-		return fmt.Errorf("restoring item: %w", err)
-	}
-
-	if cc.Flags.JSON {
-		return printRecycleBinRestoreJSON(cc.Output(), recycleBinJSONItem{
-			ID:      item.ID,
-			Name:    item.Name,
-			Size:    item.Size,
-			Type:    itemType(item),
-			Deleted: item.ModifiedAt.Format("2006-01-02T15:04:05Z"),
-		})
-	}
-
-	cc.Statusf("Restored %q (id: %s)\n", item.Name, item.ID)
-
-	return nil
+	return newRecycleBinService(mustCLIContext(ctx)).runRestore(ctx, args[0])
 }
 
 func runRecycleBinEmpty(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
-	cc := mustCLIContext(ctx)
 
 	confirm, err := cmd.Flags().GetBool("confirm")
 	if err != nil {
 		return fmt.Errorf("read --confirm flag: %w", err)
 	}
 
-	if !confirm {
-		return fmt.Errorf("--confirm flag required to permanently delete all recycle bin items")
-	}
-
-	session, err := cc.Session(ctx)
-	if err != nil {
-		return err
-	}
-
-	items, err := session.ListRecycleBinItems(ctx)
-	if err != nil {
-		if errors.Is(err, graph.ErrBadRequest) {
-			return fmt.Errorf("recycle bin listing is not available on Personal OneDrive accounts")
-		}
-
-		return fmt.Errorf("listing recycle bin: %w", err)
-	}
-
-	if len(items) == 0 {
-		cc.Statusf("Recycle bin is already empty\n")
-
-		return nil
-	}
-
-	cc.Statusf("Permanently deleting %d items...\n", len(items))
-
-	var failed int
-
-	for i := range items {
-		deleteErr := session.PermanentDeleteItem(ctx, items[i].ID)
-		if deleteErr != nil {
-			// Personal accounts return 405 for permanentDelete — fall back
-			// to regular delete (which is effectively a no-op since the item
-			// is already in the recycle bin, but some API versions support it).
-			if errors.Is(deleteErr, graph.ErrMethodNotAllowed) {
-				deleteErr = session.DeleteItem(ctx, items[i].ID)
-			}
-
-			if deleteErr != nil {
-				cc.Statusf("  Failed to delete %q: %v\n", items[i].Name, deleteErr)
-				failed++
-
-				continue
-			}
-		}
-
-		cc.Statusf("  Deleted %q\n", items[i].Name)
-	}
-
-	if failed > 0 {
-		return fmt.Errorf("%d of %d items failed to delete", failed, len(items))
-	}
-
-	cc.Statusf("Recycle bin emptied\n")
-
-	return nil
+	return newRecycleBinService(mustCLIContext(ctx)).runEmpty(ctx, confirm)
 }
 
 // --- formatting ---
