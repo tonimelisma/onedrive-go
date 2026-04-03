@@ -275,6 +275,56 @@ func TestGetItem_FutureTimestamp(t *testing.T) {
 	assert.True(t, item.CreatedAt.IsZero(), "out-of-range created timestamp should stay unknown")
 }
 
+// Validates: R-6.7.16
+func TestGetItem_ZeroYearTimestampsStayUnknown(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeTestResponse(t, w, `{
+			"id": "item-zero-year",
+			"name": "zero-year.txt",
+			"createdDateTime": "0001-01-01T00:00:00Z",
+			"lastModifiedDateTime": "0001-01-01T00:00:00Z",
+			"parentReference": {"id": "p", "driveId": "d"}
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.GetItem(t.Context(), driveid.New("d"), "item-zero-year")
+	require.NoError(t, err)
+
+	assert.True(t, item.CreatedAt.IsZero(), "zero-year created timestamp should stay unknown")
+	assert.True(t, item.ModifiedAt.IsZero(), "zero-year modified timestamp should stay unknown")
+}
+
+// Validates: R-6.7.16, R-6.7.26
+func TestGetItem_DeletedItem_NullModifiedTimestampStaysUnknown(t *testing.T) {
+	item := getTestItem(t, `{
+		"id": "item-deleted-null-modified",
+		"name": "gone.txt",
+		"createdDateTime": "2024-01-01T00:00:00Z",
+		"lastModifiedDateTime": null,
+		"parentReference": {"id": "p", "driveId": "d"},
+		"deleted": {"state": "deleted"}
+	}`)
+
+	assertDeletedItemUnknownModifiedTimestamp(t, item, "null deleted modified timestamp should stay unknown")
+}
+
+// Validates: R-6.7.16
+func TestGetItem_DeletedItem_MissingModifiedTimestampStaysUnknown(t *testing.T) {
+	item := getTestItem(t, `{
+		"id": "item-deleted-missing-modified",
+		"name": "gone-too.txt",
+		"createdDateTime": "2024-01-01T00:00:00Z",
+		"parentReference": {"id": "p", "driveId": "d"},
+		"deleted": {"state": "deleted"}
+	}`)
+
+	assertDeletedItemUnknownModifiedTimestamp(t, item, "missing deleted modified timestamp should stay unknown")
+}
+
 func TestGetItem_PackageAndDeleted(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -297,6 +347,30 @@ func TestGetItem_PackageAndDeleted(t *testing.T) {
 
 	assert.True(t, item.IsDeleted)
 	assert.True(t, item.IsPackage)
+}
+
+func getTestItem(t *testing.T, body string) *Item {
+	t.Helper()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeTestResponse(t, w, body)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.GetItem(t.Context(), driveid.New("d"), "test-item")
+	require.NoError(t, err)
+
+	return item
+}
+
+func assertDeletedItemUnknownModifiedTimestamp(t *testing.T, item *Item, message string) {
+	t.Helper()
+
+	assert.Equal(t, 2024, item.CreatedAt.Year())
+	assert.True(t, item.ModifiedAt.IsZero(), message)
 }
 
 func TestGetItem_NilParentReference(t *testing.T) {

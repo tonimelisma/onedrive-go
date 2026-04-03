@@ -46,7 +46,7 @@ All API quirks handled at the graph boundary — downstream code never sees them
 - DriveId truncation fix (zero-pad Personal IDs to 16 chars)
 - Delta deletion reordering (deletions before creations within each page)
 - Missing field recovery (name, size for deleted items)
-- Timestamp validation that preserves unknown timestamps as zero time instead of fabricating a replacement
+- Timestamp validation that preserves unknown timestamps as zero time instead of fabricating a replacement, including `null`, missing, invalid, and out-of-range wire values
 - `parentReference.path` is never returned in delta — items tracked by ID
 - `parentReference.path` is URL-decoded and normalized to a root-relative `Item.ParentPath` in non-delta responses
 - `GetItemByPath` post-validates Graph's response against the requested path. Internal path helpers distinguish exact root-relative paths (when `parentReference.path` survived normalization) from best-effort leaf-only fallbacks. When the exact parent path is unavailable the client logs the fallback at Debug and validates only the leaf name before accepting the result.
@@ -72,7 +72,7 @@ These are instance fields on `graph.Client`, not package globals. Tests in packa
 
 GetItem, ListChildren, CreateFolder, MoveItem, CopyItem, DeleteItem. All operations use `graph.Item` — the clean type after normalization. For non-delta item fetches, `Item.ParentPath` carries the decoded root-relative `parentReference.path` when Graph provides it so callers never need to parse Graph's absolute `"/drives/{id}/root:..."` representation themselves.
 
-Timestamp normalization is intentionally lossy in only one direction: valid Graph timestamps become UTC `time.Time` values, while empty, invalid, or out-of-range timestamps remain the zero value to mean "unknown". The graph boundary never substitutes `time.Now()` for malformed wire data, because downstream sync logic can safely persist and reason about unknown timestamps as `NULL`/unset state.
+Timestamp normalization is intentionally lossy in only one direction: valid Graph timestamps become UTC `time.Time` values, while empty, `null`, invalid, or out-of-range timestamps remain the zero value to mean "unknown". The graph boundary never substitutes `time.Now()` for malformed wire data, because downstream sync logic can safely persist and reason about unknown timestamps as `NULL`/unset state.
 
 ## Transfers
 
