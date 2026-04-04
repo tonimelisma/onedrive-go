@@ -46,7 +46,7 @@ func (s *authService) runLogin(ctx context.Context, useBrowser bool) error {
 		return fmt.Errorf("authenticate account: %w", err)
 	}
 
-	canonicalID, user, orgName, primaryDriveID, err := discoverAccount(ctx, ts, logger)
+	canonicalID, user, orgName, primaryDriveID, err := discoverAccount(ctx, ts, logger, s.cc.httpProvider())
 	if err != nil {
 		if cleanupErr := removePathIfExists(tempPath); cleanupErr != nil {
 			logger.Warn("failed to remove pending token after discovery failure", "path", tempPath, "error", cleanupErr)

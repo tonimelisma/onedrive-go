@@ -514,6 +514,32 @@ constructs `sync.Engine` instances for engine-facing flows such as conflict
 resolution and verification, while the multi-drive `sync` command itself is
 governed by `sync-control-plane.md`.
 
+## Conflict Resolution
+
+Manual conflict resolution is part of the engine boundary, not a CLI-only
+string operation. `ResolveConflict()` owns the runtime flow for `keep_local`,
+`keep_remote`, and `keep_both`.
+
+`keep_both` is intentionally modeled as an explicit reconciliation path, not
+as a synthetic executor transfer outcome:
+
+- the executor-level file operations still produce the visible filesystem
+  result: keep the renamed local conflict copy and restore/download the remote
+  file at the original path
+- once that local disk state exists, the engine hashes the current file and
+  calls `SyncStore.RefreshLocalBaseline(...)`
+- the store updates only the local-side baseline tuple for the original path,
+  preserves the known remote-side tuple/`etag`, and marks a matching
+  `remote_state` row `synced`
+- conflict-copy placeholders use synthetic local-only item IDs so the
+  baseline can remember the extra file without claiming it has a remote
+  counterpart yet
+
+This separation matters because `ActionUpdateSynced` still means true
+planner/executor convergence: both sides are already equivalent without a
+manual resolution-specific store transition. `keep_both` is different. It is a
+manual reconciliation decision that needs explicit durable-state repair.
+
 ## Watch Mode Behavior
 
 - SIGHUP → reload `config.toml`, apply drive changes immediately

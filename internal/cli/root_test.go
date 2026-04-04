@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,8 +19,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
-	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // --- buildLogger tests ---
@@ -140,7 +139,14 @@ func TestCliContextFrom_WithCLIContext(t *testing.T) {
 
 func TestCLIContextSession_WrapsProviderError(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
-	provider := driveops.NewSessionProvider(nil, defaultHTTPClient(logger), transferHTTPClient(logger), "test-agent", logger)
+	httpProvider := graphhttp.NewProvider(logger)
+	clients := httpProvider.InteractiveForAccount("user@example.com")
+	provider := driveops.NewSessionProvider(
+		nil,
+		driveops.StaticClientResolver(clients.Meta, clients.Transfer),
+		"test-agent",
+		logger,
+	)
 	provider.TokenSourceFn = func(context.Context, string, *slog.Logger) (graph.TokenSource, error) {
 		return nil, graph.ErrNotLoggedIn
 	}
@@ -163,7 +169,14 @@ func TestCLIContextSession_WrapsProviderError(t *testing.T) {
 
 func TestCLIContextSession_Success(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
-	provider := driveops.NewSessionProvider(nil, defaultHTTPClient(logger), transferHTTPClient(logger), "test-agent", logger)
+	httpProvider := graphhttp.NewProvider(logger)
+	clients := httpProvider.InteractiveForAccount("user@example.com")
+	provider := driveops.NewSessionProvider(
+		nil,
+		driveops.StaticClientResolver(clients.Meta, clients.Transfer),
+		"test-agent",
+		logger,
+	)
 	provider.TokenSourceFn = func(context.Context, string, *slog.Logger) (graph.TokenSource, error) {
 		return staticTokenSource{}, nil
 	}
@@ -406,49 +419,6 @@ func TestAnnotationTreeWalk(t *testing.T) {
 		assert.NotNil(t, sub.RunE,
 			"dataCommands entry %q has no RunE — remove it from the set", path)
 	}
-}
-
-// --- defaultHTTPClient tests ---
-
-func TestDefaultHTTPClient_HasTimeout(t *testing.T) {
-	client := defaultHTTPClient(slog.Default())
-	assert.Equal(t, httpClientTimeout, client.Timeout)
-	assert.NotNil(t, client.Transport, "should have RetryTransport")
-}
-
-// Validates: R-6.2.10
-func TestTransferHTTPClient_NoTimeout(t *testing.T) {
-	client := transferHTTPClient(slog.Default())
-	assert.Zero(t, client.Timeout, "client-level timeout must be zero for large transfers")
-	assert.NotNil(t, client.Transport, "should have RetryTransport")
-
-	// Unwrap RetryTransport to verify transport-level protection.
-	rt, ok := client.Transport.(*retry.RetryTransport)
-	require.True(t, ok, "transport should be *retry.RetryTransport")
-
-	inner, ok := rt.Inner.(*http.Transport)
-	require.True(t, ok, "inner transport should be *http.Transport")
-	assert.Equal(t, transferResponseHeaderTimeout, inner.ResponseHeaderTimeout,
-		"transport must have ResponseHeaderTimeout to detect stalled connections")
-}
-
-func TestSyncMetaHTTPClient_NoRetryTransport(t *testing.T) {
-	client := syncMetaHTTPClient()
-	assert.Equal(t, syncMetaClientTimeout, client.Timeout)
-	assert.Nil(t, client.Transport, "sync client should have no RetryTransport")
-}
-
-// Validates: R-6.2.10
-func TestSyncTransferHTTPClient_NoRetryTransport(t *testing.T) {
-	client := syncTransferHTTPClient()
-	assert.Zero(t, client.Timeout, "client-level timeout must be zero for large transfers")
-
-	// syncTransferHTTPClient has no RetryTransport but still needs
-	// transport-level protection via transferTransport().
-	inner, ok := client.Transport.(*http.Transport)
-	require.True(t, ok, "transport should be *http.Transport with ResponseHeaderTimeout")
-	assert.Equal(t, transferResponseHeaderTimeout, inner.ResponseHeaderTimeout,
-		"transport must have ResponseHeaderTimeout to detect stalled connections")
 }
 
 // --- loadAndResolve tests ---

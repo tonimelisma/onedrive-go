@@ -139,15 +139,15 @@ func resolveRawShareAccountEmail(explicit string, logger *slog.Logger) (string, 
 
 func (cc *CLIContext) sharedAccountClients(ctx context.Context, accountEmail string) (*driveops.AccountClients, error) {
 	accountCID := findTokenFallback(accountEmail, cc.Logger)
-
-	provider := cc.Provider
-	if provider == nil {
-		provider = driveops.NewSessionProvider(nil,
-			defaultHTTPClient(cc.Logger), transferHTTPClient(cc.Logger), "onedrive-go/"+version, cc.Logger)
-		if cc.GraphBaseURL != "" {
-			provider.GraphBaseURL = cc.GraphBaseURL
-		}
-		cc.Provider = provider
+	httpClients := cc.httpProvider().InteractiveForAccount(accountEmail)
+	provider := driveops.NewSessionProvider(
+		nil,
+		driveops.StaticClientResolver(httpClients.Meta, httpClients.Transfer),
+		"onedrive-go/"+version,
+		cc.Logger,
+	)
+	if cc.GraphBaseURL != "" {
+		provider.GraphBaseURL = cc.GraphBaseURL
 	}
 
 	clients, err := provider.ClientsForAccount(ctx, accountCID)

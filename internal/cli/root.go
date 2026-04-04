@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"sync"
 
 	"github.com/mattn/go-isatty"
@@ -15,6 +16,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/failures"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 	"github.com/tonimelisma/onedrive-go/internal/logfile"
 )
 
@@ -78,7 +80,7 @@ type rootFlagBindings struct {
 	quiet      bool
 }
 
-func (b *rootFlagBindings) snapshot() CLIFlags {
+func (b rootFlagBindings) cliFlags() CLIFlags {
 	return CLIFlags{
 		ConfigPath: b.configPath,
 		Account:    b.account,
@@ -120,11 +122,38 @@ type CLIContext struct {
 	Env          config.EnvOverrides       // env overrides (always set in Phase 1)
 	GraphBaseURL string                    // internal test seam for live Graph command coverage
 	SharedTarget *sharedTarget             // nil for ordinary drive/path commands
+	HTTPProvider *graphhttp.Provider       // Graph-facing HTTP runtime policy
 	Cfg          *config.ResolvedDrive     // nil for auth/account commands
 	Provider     *driveops.SessionProvider // nil for auth/account commands; created in Phase 2
 	logCloser    io.Closer                 // log file closer; nil when no log file is configured
 	statusMu     sync.Mutex                // guards statusErr for concurrent progress callbacks
 	statusErr    error
+}
+
+func (cc *CLIContext) httpProvider() *graphhttp.Provider {
+	if cc == nil {
+		return graphhttp.NewProvider(slog.Default())
+	}
+
+	if cc.HTTPProvider == nil {
+		cc.HTTPProvider = graphhttp.NewProvider(cc.Logger)
+	}
+
+	return cc.HTTPProvider
+}
+
+func (cc *CLIContext) interactiveHTTPClients(rd *config.ResolvedDrive) driveops.HTTPClients {
+	account := ""
+	if rd != nil {
+		account = rd.CanonicalID.Email()
+	}
+
+	clients := cc.httpProvider().InteractiveForAccount(account)
+
+	return driveops.HTTPClients{
+		Meta:     clients.Meta,
+		Transfer: clients.Transfer,
+	}
 }
 
 // cliContextKey is the context key for CLIContext.
@@ -179,15 +208,20 @@ func (cc *CLIContext) Session(ctx context.Context) (*driveops.Session, error) {
 // newGraphClient creates a graph.Client with the standard HTTP client,
 // user-agent, and base URL. Eliminates boilerplate repeated across commands.
 func newGraphClient(ts graph.TokenSource, logger *slog.Logger) (*graph.Client, error) {
-	return newGraphClientWithBaseURL("", ts, logger)
+	return newGraphClientWithHTTP("", graphhttp.NewProvider(logger).BootstrapMeta(), ts, logger)
 }
 
-func newGraphClientWithBaseURL(baseURL string, ts graph.TokenSource, logger *slog.Logger) (*graph.Client, error) {
+func newGraphClientWithHTTP(
+	baseURL string,
+	httpClient *http.Client,
+	ts graph.TokenSource,
+	logger *slog.Logger,
+) (*graph.Client, error) {
 	if baseURL == "" {
 		baseURL = graph.DefaultBaseURL
 	}
 
-	client, err := graph.NewClient(baseURL, defaultHTTPClient(logger), ts, logger, "onedrive-go/"+version)
+	client, err := graph.NewClient(baseURL, httpClient, ts, logger, "onedrive-go/"+version)
 	if err != nil {
 		return nil, fmt.Errorf("creating graph client: %w", err)
 	}
@@ -201,112 +235,59 @@ func newRootCmd() *cobra.Command {
 	return newRootCmdWithWriters(nil, nil)
 }
 
-func newRootCmdWithWriters(outputWriter, statusWriter io.Writer) *cobra.Command {
-	outputWriter = outputWriterOrDefault(outputWriter)
-	statusWriter = statusWriterOrDefault(statusWriter)
-
-	bindings := &rootFlagBindings{}
-
-	cmd := &cobra.Command{
-		Use:     "onedrive-go",
-		Short:   "OneDrive CLI client",
-		Long:    "A fast, safe OneDrive CLI and sync client for Linux and macOS.",
-		Version: version,
-		// Silence Cobra's default error/usage printing — we handle it ourselves.
-		SilenceErrors:      true,
-		SilenceUsage:       true,
-		PersistentPreRunE:  rootPersistentPreRun(outputWriter, statusWriter, bindings),
-		PersistentPostRunE: rootPersistentPostRun,
-	}
-
-	addRootPersistentFlags(cmd, bindings)
-
-	addRootSubcommands(cmd)
-
-	return cmd
-}
-
-func addRootPersistentFlags(cmd *cobra.Command, bindings *rootFlagBindings) {
-	cmd.PersistentFlags().StringVar(&bindings.configPath, "config", "", "config file path")
-	cmd.PersistentFlags().StringVar(&bindings.account, "account", "", "account for auth commands (e.g., user@example.com)")
-	cmd.PersistentFlags().StringArrayVar(
-		&bindings.drive,
-		"drive",
-		nil,
-		"drive selector (canonical ID, display name, or partial match); repeatable for sync",
-	)
-	cmd.PersistentFlags().BoolVar(&bindings.json, "json", false, "output in JSON format")
-	cmd.PersistentFlags().BoolVarP(&bindings.verbose, "verbose", "v", false, "show detailed output")
-	cmd.PersistentFlags().BoolVar(
-		&bindings.debug,
-		"debug",
-		false,
-		"enable debug logging (HTTP requests, config resolution)",
-	)
-	cmd.PersistentFlags().BoolVarP(&bindings.quiet, "quiet", "q", false, "suppress informational output")
-
-	cmd.MarkFlagsMutuallyExclusive("verbose", "debug", "quiet")
-}
-
-func rootPersistentPreRun(
+func initializeCLIContext(
+	cmd *cobra.Command,
+	args []string,
+	bindings rootFlagBindings,
 	outputWriter io.Writer,
 	statusWriter io.Writer,
-	bindings *rootFlagBindings,
-) func(cmd *cobra.Command, args []string) error {
-	return func(cmd *cobra.Command, args []string) error {
-		if version == "dev" {
-			config.AssertDevSafe() // prevent go run . from touching production data
-		}
-
-		flags := bindings.snapshot()
-		cc := newBootstrapCLIContext(outputWriter, statusWriter, flags)
-
-		ctx := cmd.Context()
-		if ctx == nil {
-			ctx = context.Background()
-		}
-
-		sharedTarget, found, err := resolveSharedTargetBootstrap(ctx, cmd, args, cc)
-		if err != nil {
-			return err
-		}
-		if found {
-			cc.SharedTarget = sharedTarget
-		}
-
-		if err := maybeLoadRootCommandConfig(cmd, cc); err != nil {
-			return err
-		}
-
-		cmd.SetContext(context.WithValue(ctx, cliContextKey{}, cc))
-
-		if cc.Cfg != nil {
-			config.WarnUnimplemented(cc.Cfg, cc.Logger)
-		}
-
-		return nil
+) error {
+	if version == "dev" {
+		config.AssertDevSafe() // prevent go run . from touching production data
 	}
-}
 
-func newBootstrapCLIContext(outputWriter io.Writer, statusWriter io.Writer, flags CLIFlags) *CLIContext {
+	flags := bindings.cliFlags()
 	logger := buildLoggerWithStatusWriter(nil, flags, statusWriter)
 	env := config.ReadEnvOverrides(logger)
-
-	return &CLIContext{
+	cc := &CLIContext{
 		OutputWriter: outputWriter,
 		Flags:        flags,
 		Logger:       logger,
 		StatusWriter: statusWriter,
 		CfgPath:      config.ResolveConfigPath(env, config.CLIOverrides{ConfigPath: flags.ConfigPath}, logger),
 		Env:          env,
+		HTTPProvider: graphhttp.NewProvider(logger),
 	}
+
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	sharedTarget, found, err := resolveSharedTargetBootstrap(ctx, cmd, args, cc)
+	if err != nil {
+		return err
+	}
+	if found {
+		cc.SharedTarget = sharedTarget
+	}
+
+	if cc.SharedTarget == nil && cmd.Annotations[skipConfigAnnotation] != skipConfigValue {
+		if err := initializeResolvedCLIContext(cmd, cc); err != nil {
+			return err
+		}
+	}
+
+	cmd.SetContext(context.WithValue(ctx, cliContextKey{}, cc))
+
+	if cc.Cfg != nil {
+		config.WarnUnimplemented(cc.Cfg, cc.Logger)
+	}
+
+	return nil
 }
 
-func maybeLoadRootCommandConfig(cmd *cobra.Command, cc *CLIContext) error {
-	if cc.SharedTarget != nil || cmd.Annotations[skipConfigAnnotation] == "true" {
-		return nil
-	}
-
+func initializeResolvedCLIContext(cmd *cobra.Command, cc *CLIContext) error {
 	resolved, rawCfg, err := loadAndResolve(cmd, cc.Flags, cc.Env, cc.Logger)
 	if err != nil {
 		return err
@@ -317,12 +298,12 @@ func maybeLoadRootCommandConfig(cmd *cobra.Command, cc *CLIContext) error {
 	dualLogger, closer := buildLoggerDualWithStatusWriter(resolved, cc.Flags, cc.StatusWriter)
 	cc.Logger = dualLogger
 	cc.logCloser = closer
+	cc.HTTPProvider = graphhttp.NewProvider(cc.Logger)
 
 	holder := config.NewHolder(rawCfg, cc.CfgPath)
 	cc.Provider = driveops.NewSessionProvider(
 		holder,
-		defaultHTTPClient(cc.Logger),
-		transferHTTPClient(cc.Logger),
+		cc.interactiveHTTPClients,
 		"onedrive-go/"+version,
 		cc.Logger,
 	)
@@ -330,15 +311,51 @@ func maybeLoadRootCommandConfig(cmd *cobra.Command, cc *CLIContext) error {
 	return nil
 }
 
-func rootPersistentPostRun(cmd *cobra.Command, _ []string) error {
-	cc := cliContextFrom(cmd.Context())
-	if cc != nil && cc.logCloser != nil {
-		if err := cc.logCloser.Close(); err != nil {
-			return fmt.Errorf("close command logger: %w", err)
-		}
+func bindRootFlags(cmd *cobra.Command, bindings *rootFlagBindings) {
+	cmd.PersistentFlags().StringVar(&bindings.configPath, "config", "", "config file path")
+	cmd.PersistentFlags().StringVar(&bindings.account, "account", "", "account for auth commands (e.g., user@example.com)")
+	cmd.PersistentFlags().StringArrayVar(&bindings.drive, "drive", nil,
+		"drive selector (canonical ID, display name, or partial match); repeatable for sync")
+	cmd.PersistentFlags().BoolVar(&bindings.json, "json", false, "output in JSON format")
+	cmd.PersistentFlags().BoolVarP(&bindings.verbose, "verbose", "v", false, "show detailed output")
+	cmd.PersistentFlags().BoolVar(&bindings.debug, "debug", false, "enable debug logging (HTTP requests, config resolution)")
+	cmd.PersistentFlags().BoolVarP(&bindings.quiet, "quiet", "q", false, "suppress informational output")
+	cmd.MarkFlagsMutuallyExclusive("verbose", "debug", "quiet")
+}
+
+func newRootCmdWithWriters(outputWriter, statusWriter io.Writer) *cobra.Command {
+	outputWriter = outputWriterOrDefault(outputWriter)
+	statusWriter = statusWriterOrDefault(statusWriter)
+
+	var bindings rootFlagBindings
+
+	cmd := &cobra.Command{
+		Use:           "onedrive-go",
+		Short:         "OneDrive CLI client",
+		Long:          "A fast, safe OneDrive CLI and sync client for Linux and macOS.",
+		Version:       version,
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			return initializeCLIContext(cmd, args, bindings, outputWriter, statusWriter)
+		},
+		PersistentPostRunE: func(cmd *cobra.Command, _ []string) error {
+			cc := cliContextFrom(cmd.Context())
+			if cc != nil && cc.logCloser != nil {
+				if err := cc.logCloser.Close(); err != nil {
+					return fmt.Errorf("close command logger: %w", err)
+				}
+			}
+
+			return nil
+		},
 	}
 
-	return nil
+	bindRootFlags(cmd, &bindings)
+
+	addRootSubcommands(cmd)
+
+	return cmd
 }
 
 func addRootSubcommands(cmd *cobra.Command) {

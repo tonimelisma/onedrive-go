@@ -76,6 +76,19 @@ const (
 		 updated_at = excluded.updated_at`
 )
 
+// LocalBaselineRefresh is the explicit reconciliation input used by manual
+// convergence paths such as keep-both conflict resolution.
+type LocalBaselineRefresh struct {
+	Path           string
+	DriveID        driveid.ID
+	ItemID         string
+	ItemType       synctypes.ItemType
+	LocalHash      string
+	LocalSize      int64
+	LocalSizeKnown bool
+	LocalMtime     int64
+}
+
 // Load reads the entire baseline table into memory, populating ByPath and
 // ByID maps. The result is cached on the manager — subsequent calls return
 // the cached baseline without querying the database. The cache is kept
@@ -226,6 +239,89 @@ func (m *SyncStore) CommitOutcome(ctx context.Context, outcome *synctypes.Outcom
 
 	// Update in-memory baseline cache incrementally.
 	m.updateBaselineCache(outcome, syncedAt)
+
+	return nil
+}
+
+// RefreshLocalBaseline updates the local-side comparison tuple for one path
+// while preserving any existing remote-side metadata. If a matching
+// remote_state row exists, it is marked synced in the same transaction.
+func (m *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh LocalBaselineRefresh) error {
+	if m.baseline == nil {
+		if _, loadErr := m.Load(ctx); loadErr != nil {
+			return fmt.Errorf("sync: loading baseline before refresh local baseline: %w", loadErr)
+		}
+	}
+
+	var existing *synctypes.BaselineEntry
+	if entry, ok := m.baseline.GetByPath(refresh.Path); ok {
+		existing = entry
+	}
+
+	syncedAt := m.nowFunc().UnixNano()
+	entry := &synctypes.BaselineEntry{
+		Path:           refresh.Path,
+		DriveID:        refresh.DriveID,
+		ItemID:         refresh.ItemID,
+		ItemType:       refresh.ItemType,
+		LocalHash:      refresh.LocalHash,
+		LocalSize:      refresh.LocalSize,
+		LocalSizeKnown: refresh.LocalSizeKnown,
+		LocalMtime:     refresh.LocalMtime,
+		SyncedAt:       syncedAt,
+	}
+
+	if existing != nil {
+		entry.ParentID = existing.ParentID
+		entry.RemoteHash = existing.RemoteHash
+		entry.RemoteSize = existing.RemoteSize
+		entry.RemoteSizeKnown = existing.RemoteSizeKnown
+		entry.RemoteMtime = existing.RemoteMtime
+		entry.ETag = existing.ETag
+	}
+
+	tx, err := m.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sync: beginning refresh local baseline transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	_, err = tx.ExecContext(ctx, sqlUpsertBaseline,
+		entry.DriveID.String(),
+		entry.ItemID,
+		entry.Path,
+		nullString(entry.ParentID),
+		entry.ItemType,
+		nullString(entry.LocalHash),
+		nullString(entry.RemoteHash),
+		nullKnownInt64(entry.LocalSize, entry.LocalSizeKnown),
+		nullKnownInt64(entry.RemoteSize, entry.RemoteSizeKnown),
+		nullOptionalInt64(entry.LocalMtime),
+		nullOptionalInt64(entry.RemoteMtime),
+		entry.SyncedAt,
+		nullString(entry.ETag),
+	)
+	if err != nil {
+		return fmt.Errorf("sync: refreshing baseline for %s: %w", refresh.Path, err)
+	}
+
+	if refresh.ItemID != "" && !refresh.DriveID.IsZero() {
+		_, err = tx.ExecContext(ctx,
+			`UPDATE remote_state SET sync_status = ? WHERE drive_id = ? AND item_id = ?`,
+			synctypes.SyncStatusSynced,
+			refresh.DriveID.String(),
+			refresh.ItemID,
+		)
+		if err != nil {
+			return fmt.Errorf("sync: updating remote_state during local baseline refresh for %s: %w", refresh.Path, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sync: committing refresh local baseline transaction: %w", err)
+	}
+
+	m.baseline.Put(entry)
 
 	return nil
 }

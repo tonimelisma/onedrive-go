@@ -310,9 +310,9 @@ func TestE2E_Sync_BidirectionalMerge(t *testing.T) {
 	assert.Contains(t, stdout, "Verified")
 	assert.Contains(t, stdout, "All files verified successfully.")
 
-	// Step 9: Re-sync is idempotent.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--force")
-	assert.Contains(t, stderr, "No changes detected")
+	// Step 9: Re-sync should leave the test-owned subtree unchanged even if
+	// unrelated live-drive activity produces delta events elsewhere.
+	assertSyncLeavesLocalTreeStable(t, cfgPath, env, filepath.Join(syncDir, testFolder), "sync", "--force")
 }
 
 // TestE2E_Sync_EditEditConflict_ResolveKeepRemote exercises EF5 (edit-edit
@@ -690,9 +690,9 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "keep me", string(keepData))
 
-	// Step 6: Re-sync is idempotent.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--force")
-	assert.Contains(t, stderr, "No changes detected")
+	// Step 6: Re-sync should not mutate the converged test subtree, even if
+	// other full-suite tests changed unrelated paths on the shared drive.
+	assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync", "--force")
 }
 
 // TestE2E_Sync_BigDeleteProtection exercises S5 big-delete protection and
@@ -769,9 +769,8 @@ func TestE2E_Sync_BigDeleteProtection(t *testing.T) {
 		assert.True(t, os.IsNotExist(err), "local file %s should be deleted after --force sync", name)
 	}
 
-	// Step 8: Re-sync is idempotent.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--force")
-	assert.Contains(t, stderr, "No changes detected")
+	// Step 8: Re-sync should leave the empty test folder state intact.
+	assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync", "--force")
 }
 
 // TestE2E_Sync_DownloadOnlyIgnoresLocal exercises download-only mode:
@@ -935,9 +934,9 @@ func TestE2E_Sync_NestedFolderHierarchy(t *testing.T) {
 	assert.Contains(t, verifyOut, "Verified")
 	assert.Contains(t, verifyOut, "All files verified successfully.")
 
-	// Step 7: Re-sync is idempotent.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--force")
-	assert.Contains(t, stderr, "No changes detected")
+	// Step 7: Re-sync should leave the deep hierarchy unchanged even if the
+	// shared live drive saw unrelated activity elsewhere.
+	assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync", "--force")
 }
 
 // TestE2E_Sync_DryRunNonDestructive exercises dry-run: shows plan counts

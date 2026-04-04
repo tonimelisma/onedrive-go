@@ -54,7 +54,12 @@ func testOrchestratorConfigWithPath(t *testing.T, cfgPath string, drives ...*con
 	t.Helper()
 
 	holder := config.NewHolder(config.DefaultConfig(), cfgPath)
-	provider := driveops.NewSessionProvider(holder, &http.Client{}, &http.Client{}, "test/1.0", slog.Default())
+	provider := driveops.NewSessionProvider(
+		holder,
+		driveops.StaticClientResolver(&http.Client{}, &http.Client{}),
+		"test/1.0",
+		slog.Default(),
+	)
 
 	return &OrchestratorConfig{
 		Holder:   holder,
