@@ -142,6 +142,45 @@ func TestSimpleUpload_ContentType(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestSimpleUploadToItem_Success(t *testing.T) {
+	content := "overwrite file content"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method)
+		assert.Equal(t, "/drives/000000000000000d/items/item-123/content", r.URL.Path)
+		assert.Empty(t, r.URL.RawQuery)
+
+		body, err := io.ReadAll(r.Body)
+		if !assert.NoError(t, err) {
+			return
+		}
+		assert.Equal(t, content, string(body))
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeTestResponsef(t, w, `{
+			"id": "item-123",
+			"name": "upload.txt",
+			"size": %d,
+			"createdDateTime": "2024-06-01T12:00:00Z",
+			"lastModifiedDateTime": "2024-06-01T12:00:00Z",
+			"parentReference": {"id": "parent", "driveId": "d"},
+			"file": {"mimeType": "text/plain"}
+		}`, len(content))
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.SimpleUploadToItem(
+		t.Context(), driveid.New("d"), "item-123",
+		strings.NewReader(content), int64(len(content)),
+	)
+	require.NoError(t, err)
+
+	assert.Equal(t, "item-123", item.ID)
+	assert.Equal(t, int64(len(content)), item.Size)
+}
+
 func TestSimpleUpload_Error(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("request-id", "req-upload-err")
@@ -227,6 +266,35 @@ func TestCreateUploadSession_Success(t *testing.T) {
 	assert.Equal(t, 2024, session.ExpirationTime.Year())
 	assert.Equal(t, 12, int(session.ExpirationTime.Month()))
 	assert.Equal(t, 31, session.ExpirationTime.Day())
+}
+
+func TestCreateUploadSessionForItem_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/drives/000000000000000d/items/item-123/createUploadSession", r.URL.Path)
+
+		body, err := io.ReadAll(r.Body)
+		if !assert.NoError(t, err) {
+			return
+		}
+		assert.Contains(t, string(body), `"@microsoft.graph.conflictBehavior":"replace"`)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeTestResponse(t, w, `{
+			"uploadUrl": "https://uploads.contoso.sharepoint.com/session/abc123",
+			"expirationDateTime": "2024-12-31T23:59:59Z"
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	session, err := client.CreateUploadSessionForItem(
+		t.Context(), driveid.New("d"), "item-123", 10485760, time.Time{},
+	)
+	require.NoError(t, err)
+
+	assert.Equal(t, UploadURL("https://uploads.contoso.sharepoint.com/session/abc123"), session.UploadURL)
 }
 
 func TestCreateUploadSession_PersonalUploadHost(t *testing.T) {
@@ -881,6 +949,117 @@ func TestUpload_SimpleSkipsPatchForZeroMtime(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "no-mtime-item", item.ID)
+}
+
+func TestUpload_SimpleNotFoundFallsBackToUploadSessionPermissionError(t *testing.T) {
+	content := []byte("shared-folder-write")
+
+	var simpleCalls, sessionCalls int
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch {
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/content"):
+			simpleCalls++
+			w.Header().Set("request-id", "req-simple-404")
+			w.WriteHeader(http.StatusNotFound)
+			writeTestResponse(t, w, `{"error":{"code":"itemNotFound"}}`)
+
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "createUploadSession"):
+			sessionCalls++
+			w.Header().Set("request-id", "req-session-403")
+			w.WriteHeader(http.StatusForbidden)
+			writeTestResponse(t, w, `{"error":{"code":"accessDenied"}}`)
+
+		default:
+			assert.Failf(t, "unexpected request", "method=%s path=%s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.Upload(
+		t.Context(), driveid.New("d"), "shared-folder", "blocked.txt",
+		bytes.NewReader(content), int64(len(content)), time.Time{}, nil,
+	)
+	require.ErrorIs(t, err, ErrForbidden)
+	assert.Equal(t, 1, simpleCalls)
+	assert.Equal(t, 1, sessionCalls)
+}
+
+func TestUpload_SimpleNotFoundFallsBackToUploadSessionSuccess(t *testing.T) {
+	content := []byte("shared-folder-write")
+
+	var simpleCalls, sessionCalls, chunkCalls int
+
+	chunkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			chunkCalls++
+			body, err := io.ReadAll(r.Body)
+			if !assert.NoError(t, err) {
+				return
+			}
+			assert.Equal(t, content, body)
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			writeTestResponsef(t, w, `{
+				"id": "fallback-item",
+				"name": "shared.txt",
+				"size": %d,
+				"createdDateTime": "2024-06-01T12:00:00Z",
+				"lastModifiedDateTime": "2024-06-01T12:00:00Z",
+				"parentReference": {"id": "shared-folder", "driveId": "d"},
+				"file": {"mimeType": "text/plain"}
+			}`, len(content))
+
+		case http.MethodDelete:
+			assert.Fail(t, "unexpected session cancel on successful fallback upload")
+			w.WriteHeader(http.StatusNoContent)
+
+		default:
+			assert.Failf(t, "unexpected upload-session request", "method=%s path=%s", r.Method, r.URL.Path)
+		}
+	}))
+	defer chunkSrv.Close()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch {
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/content"):
+			simpleCalls++
+			w.Header().Set("request-id", "req-simple-404")
+			w.WriteHeader(http.StatusNotFound)
+			writeTestResponse(t, w, `{"error":{"code":"itemNotFound"}}`)
+
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "createUploadSession"):
+			sessionCalls++
+			w.WriteHeader(http.StatusOK)
+			writeTestResponsef(t, w, `{
+				"uploadUrl": "%s/upload",
+				"expirationDateTime": "2024-12-31T23:59:59Z"
+			}`, chunkSrv.URL)
+
+		default:
+			assert.Failf(t, "unexpected request", "method=%s path=%s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.Upload(
+		t.Context(), driveid.New("d"), "shared-folder", "shared.txt",
+		bytes.NewReader(content), int64(len(content)), time.Time{}, nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, item)
+	assert.Equal(t, "fallback-item", item.ID)
+	assert.Equal(t, 1, simpleCalls)
+	assert.Equal(t, 1, sessionCalls)
+	assert.Equal(t, 1, chunkCalls)
 }
 
 func TestUpload_SimpleMtimePatchFailure(t *testing.T) {

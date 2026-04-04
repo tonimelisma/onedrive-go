@@ -385,6 +385,9 @@ func classifyPathView(view *synctypes.PathView, mode synctypes.SyncMode, deniedP
 // IsWriteDenied checks if a path falls under a permission-denied folder.
 func IsWriteDenied(filePath string, deniedPrefixes []string) bool {
 	for _, prefix := range deniedPrefixes {
+		if prefix == "" {
+			return true
+		}
 		if filePath == prefix || strings.HasPrefix(filePath, prefix+"/") {
 			return true
 		}

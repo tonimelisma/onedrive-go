@@ -83,6 +83,11 @@ The durable projection of the error model is intentionally small:
 This keeps durable state as a record of policy decisions, not a copy of every
 raw error string seen in the process.
 
+Boundary revalidation requests for derived `perm:remote` scopes live beside
+this persistence mapping, not inside it: `scope_recheck_requests` records
+"revalidate this boundary now", while held failure rows record the blocked
+child work itself.
+
 ## Boundary Rules
 
 - Errors cross one classification boundary before being wrapped with local context.

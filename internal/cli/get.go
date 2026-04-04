@@ -48,9 +48,14 @@ type getFolderJSONOutput struct {
 }
 
 func runGet(cmd *cobra.Command, args []string) error {
-	remotePath := args[0]
 	ctx := cmd.Context()
 	cc := mustCLIContext(ctx)
+
+	if cc.SharedTarget != nil {
+		return runSharedGet(cmd, args, cc)
+	}
+
+	remotePath := args[0]
 
 	session, err := cc.Session(ctx)
 	if err != nil {

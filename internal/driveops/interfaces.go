@@ -23,6 +23,14 @@ type Uploader interface {
 	) (*graph.Item, error)
 }
 
+// ItemUploader overwrites an existing item by item ID.
+type ItemUploader interface {
+	UploadToItem(
+		ctx context.Context, driveID driveid.ID, itemID string,
+		content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc,
+	) (*graph.Item, error)
+}
+
 // SessionUploader provides session-based upload methods for resumable transfers.
 // Satisfied by *graph.Client. Type-asserted at runtime to avoid breaking the
 // Uploader interface. When available alongside a SessionStore, the executor
@@ -31,6 +39,23 @@ type Uploader interface {
 type SessionUploader interface {
 	CreateUploadSession(
 		ctx context.Context, driveID driveid.ID, parentID, name string,
+		size int64, mtime time.Time,
+	) (*graph.UploadSession, error)
+	UploadFromSession(
+		ctx context.Context, session *graph.UploadSession,
+		content io.ReaderAt, totalSize int64, progress graph.ProgressFunc,
+	) (*graph.Item, error)
+	ResumeUpload(
+		ctx context.Context, session *graph.UploadSession,
+		content io.ReaderAt, totalSize int64, progress graph.ProgressFunc,
+	) (*graph.Item, error)
+}
+
+// ItemSessionUploader provides session-based overwrite methods for existing
+// items identified by item ID.
+type ItemSessionUploader interface {
+	CreateUploadSessionForItem(
+		ctx context.Context, driveID driveid.ID, itemID string,
 		size int64, mtime time.Time,
 	) (*graph.UploadSession, error)
 	UploadFromSession(

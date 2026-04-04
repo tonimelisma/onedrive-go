@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -67,6 +68,7 @@ func (rt *watchRuntime) handleExternalChanges(ctx context.Context) {
 	}
 
 	rt.clearResolvedPermissionScopes(ctx)
+	rt.handleRequestedPermissionRechecks(ctx)
 	rt.mustAssertScopeInvariants(ctx, rt, "handle external changes")
 }
 
@@ -130,60 +132,88 @@ func (rt *watchRuntime) clearResolvedPermissionScopes(ctx context.Context) {
 // in watch mode. Only logs when the count changes since the last summary
 // to avoid noisy repeated output.
 func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
-	issues, err := rt.engine.baseline.ListActionableFailures(ctx)
+	summary, err := rt.engine.baseline.ReadVisibleIssueSummary(ctx)
 	if err != nil {
 		return
 	}
 
-	remoteBlocked, err := rt.engine.baseline.ListRemoteBlockedFailures(ctx)
+	groups, err := rt.engine.baseline.ListVisibleIssueGroups(ctx)
 	if err != nil {
 		return
 	}
 
-	remoteScopeCount := 0
-	seenRemote := make(map[synctypes.ScopeKey]bool, len(remoteBlocked))
-	for i := range remoteBlocked {
-		if !remoteBlocked[i].ScopeKey.IsPermRemote() || seenRemote[remoteBlocked[i].ScopeKey] {
-			continue
-		}
-		seenRemote[remoteBlocked[i].ScopeKey] = true
-		remoteScopeCount++
-	}
+	rt.logRemoteBlockedChanges(groups)
 
-	totalIssues := len(issues) + remoteScopeCount
+	totalIssues := summary.VisibleTotal()
 	if totalIssues == 0 {
-		if rt.lastSummaryTotal != 0 {
-			rt.lastSummaryTotal = 0
+		if rt.lastSummaryTotal != 0 || rt.lastSummarySignature != "" {
+			rt.engine.logger.Info("visible issues cleared")
 		}
-
+		rt.lastSummaryTotal = 0
+		rt.lastSummarySignature = ""
 		return
 	}
 
-	if totalIssues == rt.lastSummaryTotal {
+	signature, breakdown := summarySignature(summary)
+	if signature == rt.lastSummarySignature {
 		return
 	}
 
 	rt.lastSummaryTotal = totalIssues
-
-	counts := make(map[string]int)
-	for i := range issues {
-		counts[issues[i].IssueType]++
-	}
-	if remoteScopeCount > 0 {
-		counts[synctypes.IssueSharedFolderBlocked] = remoteScopeCount
-	}
-
-	parts := make([]string, 0, len(counts))
-	for typ, n := range counts {
-		parts = append(parts, fmt.Sprintf("%d %s", n, typ))
-	}
-
-	sort.Strings(parts)
+	rt.lastSummarySignature = signature
 
 	rt.engine.logger.Warn("visible issues",
 		slog.Int("total", totalIssues),
-		slog.String("breakdown", strings.Join(parts, ", ")),
+		slog.String("breakdown", breakdown),
 	)
+}
+
+func (rt *watchRuntime) logRemoteBlockedChanges(groups []syncstore.VisibleIssueGroup) {
+	current := make(map[synctypes.ScopeKey]string, len(groups))
+
+	for i := range groups {
+		group := groups[i]
+		if group.RemoteBlocked == nil || !group.ScopeKey.IsPermRemote() {
+			continue
+		}
+
+		signature := strings.Join(group.RemoteBlocked.BlockedPaths, "\x00")
+		current[group.ScopeKey] = signature
+
+		switch previous, ok := rt.lastRemoteBlocked[group.ScopeKey]; {
+		case !ok:
+			rt.engine.logger.Warn("shared-folder writes blocked",
+				slog.String("boundary", group.RemoteBlocked.BoundaryPath),
+				slog.Int("blocked_writes", len(group.RemoteBlocked.BlockedPaths)),
+			)
+		case previous != signature:
+			rt.engine.logger.Warn("shared-folder writes still blocked",
+				slog.String("boundary", group.RemoteBlocked.BoundaryPath),
+				slog.Int("blocked_writes", len(group.RemoteBlocked.BlockedPaths)),
+			)
+		}
+	}
+
+	for scopeKey := range rt.lastRemoteBlocked {
+		if _, ok := current[scopeKey]; ok {
+			continue
+		}
+		rt.engine.logger.Info("shared-folder write block cleared",
+			slog.String("boundary", scopeKey.RemotePath()),
+		)
+	}
+
+	rt.lastRemoteBlocked = current
+}
+
+func summarySignature(summary syncstore.IssueSummary) (string, string) {
+	parts := make([]string, 0, len(summary.Groups))
+	for i := range summary.Groups {
+		parts = append(parts, fmt.Sprintf("%d %s", summary.Groups[i].Count, summary.Groups[i].Key))
+	}
+	sort.Strings(parts)
+	breakdown := strings.Join(parts, ", ")
+	return fmt.Sprintf("%d|%s", summary.VisibleTotal(), breakdown), breakdown
 }
 
 // recordSkippedItems records observation-time rejections (invalid names,
@@ -357,10 +387,7 @@ func (rt *watchRuntime) runFullReconciliationAsync(ctx context.Context, bl *sync
 			return
 		}
 
-		observed := changeEventsToObservedItems(rt.engine.logger, events)
-		if commitErr := rt.engine.baseline.CommitObservation(
-			ctx, observed, deltaToken, rt.engine.driveID,
-		); commitErr != nil {
+		if commitErr := rt.commitObservedRemote(ctx, events, deltaToken); commitErr != nil {
 			rt.engine.logger.Error("failed to commit full reconciliation observations",
 				slog.String("error", commitErr.Error()),
 			)

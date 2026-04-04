@@ -147,6 +147,62 @@ Microsoft Graph API throttling scope behavior (not in official docs, discovered 
 
 ## Shared Folder Issues
 
+### Permissions Endpoint Mixes Caller Grants With Owner Rows
+
+`GET /drives/{driveID}/items/{itemID}/permissions` on shared folders does not
+behave like a pure "current caller effective permissions" endpoint. Live
+Personal-account testing on a read-only shared folder returned:
+
+- an anonymous/view link grant for the recipient's actual access path
+- a separate owner membership row for the sharer with `roles: ["owner"]`
+- a bare `link.webUrl` on that owner row even though it was not itself the
+  caller's effective share grant
+
+If the client treats every returned permission row as caller-applicable, the
+owner row falsely proves the folder is writable and read-only shared folders
+are misclassified as transient 403s.
+
+Runtime policy:
+- evaluate permission applicability per row, not just `roles`
+- treat link grants as caller-applicable only when the link facet actually
+  carries grant semantics (`type` and/or `scope`), not merely a `webUrl`
+- ignore owner or direct-grant rows that explicitly target some other user
+- fail open when the remaining evidence is ambiguous rather than suppressing
+  writes on stale or misattributed permission data
+
+### Share Links Resolve To Underlying Item Identity, Not Original Discovery Links
+
+`/shares/{shareIdOrEncodedSharingUrl}/driveItem` resolves a sharing grant to the
+underlying owner-side item identity (`driveId` + `itemId`). Discovery APIs such
+as shared-item search and `sharedWithMe` do not reliably return the original
+email/text share URL that was sent to the recipient, and `driveItem.webUrl` is
+not a substitute for that original inbound sharing link.
+
+Runtime policy:
+- raw share URLs are accepted as input aliases and normalized immediately to
+  the underlying shared item identity
+- CLI discovery prints generated `shared:<recipientEmail>:<remoteDriveID>:<remoteItemID>`
+  selectors, not original inbound links
+- sharing-link identity is treated as grant/provenance; item identity is the
+  canonical operation target
+
+### Simple Upload Misreports Read-Only Shared Folder Creates
+
+On OneDrive Personal shared folders, creating a new child file with simple
+upload (`PUT /drives/{driveID}/items/{folderID}:/{name}:/content`) can return
+HTTP 404 `itemNotFound` on a real read-only shared folder even though the
+folder itself is readable and listable. The equivalent upload-session creation
+request (`POST ...:/createUploadSession`) against the same folder returns the
+correct HTTP 403 `accessDenied`.
+
+Runtime policy:
+- simple upload remains the fast path for small creates
+- if that create-by-parent simple upload returns `ErrNotFound` for a non-zero
+  file, retry once via `createUploadSession`
+- the session route becomes the authoritative result for permission handling,
+  so read-only shared folders surface `403` and enter the normal `perm:remote`
+  flow instead of being misclassified as missing
+
 ### SharedWithMe Identity Response Shape
 
 `/me/drive/sharedWithMe` returns identity data under `remoteItem.shared` and `remoteItem.createdBy`, NOT top-level `shared`. Four-level fallback chain: `remoteItem.shared.sharedBy` → `.owner` → `remoteItem.createdBy` → top-level `shared.owner`. The `email` field in identity responses is undocumented but works on both personal and business accounts.

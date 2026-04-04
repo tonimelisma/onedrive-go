@@ -51,6 +51,10 @@ func runPut(cmd *cobra.Command, args []string) error {
 
 	cc := mustCLIContext(ctx)
 
+	if cc.SharedTarget != nil {
+		return runSharedPut(cmd, args, cc, fi)
+	}
+
 	session, err := cc.Session(ctx)
 	if err != nil {
 		return err

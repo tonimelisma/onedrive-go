@@ -2,7 +2,7 @@
 
 GOVERNS: internal/driveid/canonical.go, internal/driveid/id.go, internal/driveid/itemkey.go, drive.go, purge.go
 
-Implements: R-3.2 [verified], R-3.5 [verified], R-6.7.2 [verified], R-3.6.4 [planned], R-3.6.5 [planned], R-6.10.6 [verified]
+Implements: R-3.2 [verified], R-3.5 [verified], R-3.3.12 [verified], R-6.7.2 [verified], R-3.6.4 [verified], R-3.6.5 [planned], R-6.10.6 [verified]
 
 ## Core Concepts
 
@@ -39,6 +39,20 @@ Normalized API drive identifier. Lowercase, zero-padded to 16 chars (handles Per
 ## CanonicalID Type (`driveid.CanonicalID`)
 
 Config-level identifier. Parsed from/to string form. Provides `DriveType()`, `Email()`, accessors. Pure identity — no config or business logic imports.
+
+## Shared Item Selectors
+
+The CLI now also uses `shared:<recipientEmail>:<remoteDriveID>:<remoteItemID>`
+as a user-facing selector for shared files and shared folders discovered by the
+`shared` command. That wire format intentionally matches the canonical shared
+drive ID shape, but it is not the same concept:
+
+- `driveid.CanonicalID` still means "configured drive identity"
+- `internal/sharedref.Ref` means "one shared item target for one recipient account"
+
+Shared folders may flow from selector form into `drive add`, which then
+normalizes them into configured shared drives. Shared files never become drives
+and are rejected by `drive add`.
 
 ## ItemKey Type (`driveid.ItemKey`)
 

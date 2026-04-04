@@ -13,6 +13,12 @@ import (
 // Prevents hung connections from blocking CLI commands indefinitely.
 const httpClientTimeout = 30 * time.Second
 
+// syncMetaClientTimeout is the timeout for sync metadata requests. Sync uses
+// this client for delta, item metadata, and permission validation; Graph's
+// /permissions endpoint can be materially slower than ordinary interactive
+// CLI reads, so sync gets the longer default data budget.
+const syncMetaClientTimeout = 60 * time.Second
+
 // Transfer transport constants protect against stalled connections
 // without bounding total transfer time (which varies with file size
 // and bandwidth).
@@ -97,7 +103,7 @@ func transferHTTPClient(logger *slog.Logger) *http.Client {
 // requests return immediately as GraphError for engine-level classification
 // and tracker re-queue.
 func syncMetaHTTPClient() *http.Client {
-	return &http.Client{Timeout: httpClientTimeout}
+	return &http.Client{Timeout: syncMetaClientTimeout}
 }
 
 // syncTransferHTTPClient returns an HTTP client for sync transfers. Same

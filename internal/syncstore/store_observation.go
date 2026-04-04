@@ -59,6 +59,29 @@ const (
 //   - Existing item: call computeNewStatus() and UPDATE only if changed
 //   - Path change: set previous_path for move tracking
 func (m *SyncStore) CommitObservation(ctx context.Context, events []synctypes.ObservedItem, newToken string, driveID driveid.ID) error {
+	return m.commitObservation(ctx, events, newToken, driveID, "")
+}
+
+// CommitObservationForScope is the folder-scoped variant of CommitObservation.
+// Shared-folder configured drives use scopeID=rootItemID so the selected folder
+// owns its own delta token instead of competing with the owner drive root.
+func (m *SyncStore) CommitObservationForScope(
+	ctx context.Context,
+	events []synctypes.ObservedItem,
+	newToken string,
+	driveID driveid.ID,
+	scopeID string,
+) error {
+	return m.commitObservation(ctx, events, newToken, driveID, scopeID)
+}
+
+func (m *SyncStore) commitObservation(
+	ctx context.Context,
+	events []synctypes.ObservedItem,
+	newToken string,
+	driveID driveid.ID,
+	scopeID string,
+) error {
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("sync: beginning observation transaction: %w", err)
@@ -75,7 +98,7 @@ func (m *SyncStore) CommitObservation(ctx context.Context, events []synctypes.Ob
 
 	// Persist delta token in the same transaction.
 	if newToken != "" {
-		if err := m.saveDeltaToken(ctx, tx, driveID.String(), "", driveID.String(), newToken, now); err != nil {
+		if err := m.saveDeltaToken(ctx, tx, driveID.String(), scopeID, driveID.String(), newToken, now); err != nil {
 			return err
 		}
 	}
@@ -87,6 +110,7 @@ func (m *SyncStore) CommitObservation(ctx context.Context, events []synctypes.Ob
 	m.logger.Debug("observations committed",
 		slog.Int("items", len(events)),
 		slog.String("drive_id", driveID.String()),
+		slog.String("scope_id", scopeID),
 	)
 
 	return nil

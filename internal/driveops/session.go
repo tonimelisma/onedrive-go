@@ -21,7 +21,16 @@ type Session struct {
 	Meta     *graph.Client // metadata ops (30s timeout)
 	Transfer *graph.Client // uploads/downloads (no timeout)
 	DriveID  driveid.ID
+	RootItem string
 	Resolved *config.ResolvedDrive
+}
+
+// AccountClients holds authenticated Graph clients for an account-scoped
+// command that does not target a configured drive.
+type AccountClients struct {
+	Meta     *graph.Client
+	Transfer *graph.Client
+	Account  driveid.CanonicalID
 }
 
 // ResolvedDriveEmail returns the account email for the resolved drive.
@@ -95,7 +104,7 @@ func (p *SessionProvider) Session(ctx context.Context, rd *config.ResolvedDrive)
 		return nil, fmt.Errorf("cannot determine token path for drive %q", rd.CanonicalID)
 	}
 
-	ts, err := p.getOrCreateTokenSource(ctx, tokenPath)
+	meta, transfer, err := p.clientsForTokenPath(ctx, tokenPath)
 	if err != nil {
 		if errors.Is(err, graph.ErrNotLoggedIn) {
 			return nil, fmt.Errorf("not logged in — run 'onedrive-go login' first: %w", err)
@@ -111,21 +120,6 @@ func (p *SessionProvider) Session(ctx context.Context, rd *config.ResolvedDrive)
 		)
 	}
 
-	baseURL := graph.DefaultBaseURL
-	if p.GraphBaseURL != "" {
-		baseURL = p.GraphBaseURL
-	}
-
-	meta, err := graph.NewClient(baseURL, p.metaHTTP, ts, p.logger, p.userAgent)
-	if err != nil {
-		return nil, fmt.Errorf("create metadata graph client: %w", err)
-	}
-
-	transfer, err := graph.NewClient(baseURL, p.transferHTTP, ts, p.logger, p.userAgent)
-	if err != nil {
-		return nil, fmt.Errorf("create transfer graph client: %w", err)
-	}
-
 	p.logger.Debug("session created",
 		slog.String("drive_id", rd.DriveID.String()),
 		slog.String("canonical_id", rd.CanonicalID.String()),
@@ -135,7 +129,33 @@ func (p *SessionProvider) Session(ctx context.Context, rd *config.ResolvedDrive)
 		Meta:     meta,
 		Transfer: transfer,
 		DriveID:  rd.DriveID,
+		RootItem: rd.RootItemID,
 		Resolved: rd,
+	}, nil
+}
+
+// ClientsForAccount returns authenticated Graph clients for the token-owning
+// account canonical ID. Shared-file commands use this path because they target
+// account-scoped shared items rather than configured drives.
+func (p *SessionProvider) ClientsForAccount(ctx context.Context, cid driveid.CanonicalID) (*AccountClients, error) {
+	tokenPath := config.DriveTokenPath(cid)
+	if tokenPath == "" {
+		return nil, fmt.Errorf("cannot determine token path for account %q", cid.Email())
+	}
+
+	meta, transfer, err := p.clientsForTokenPath(ctx, tokenPath)
+	if err != nil {
+		if errors.Is(err, graph.ErrNotLoggedIn) {
+			return nil, fmt.Errorf("not logged in — run 'onedrive-go login' first: %w", err)
+		}
+
+		return nil, err
+	}
+
+	return &AccountClients{
+		Meta:     meta,
+		Transfer: transfer,
+		Account:  cid,
 	}, nil
 }
 
@@ -159,6 +179,30 @@ func (p *SessionProvider) getOrCreateTokenSource(ctx context.Context, tokenPath 
 	return ts, nil
 }
 
+func (p *SessionProvider) clientsForTokenPath(ctx context.Context, tokenPath string) (*graph.Client, *graph.Client, error) {
+	ts, err := p.getOrCreateTokenSource(ctx, tokenPath)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	baseURL := graph.DefaultBaseURL
+	if p.GraphBaseURL != "" {
+		baseURL = p.GraphBaseURL
+	}
+
+	meta, err := graph.NewClient(baseURL, p.metaHTTP, ts, p.logger, p.userAgent)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create metadata graph client: %w", err)
+	}
+
+	transfer, err := graph.NewClient(baseURL, p.transferHTTP, ts, p.logger, p.userAgent)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create transfer graph client: %w", err)
+	}
+
+	return meta, transfer, nil
+}
+
 // FlushTokenCache clears the cached TokenSources, forcing the next Session()
 // call to re-read token files from disk. Called during daemon SIGHUP reload
 // to pick up logout/re-login credential changes.
@@ -176,9 +220,23 @@ func (p *SessionProvider) FlushTokenCache() {
 func (s *Session) ResolveItem(ctx context.Context, remotePath string) (*graph.Item, error) {
 	clean := CleanRemotePath(remotePath)
 	if clean == "" {
-		item, err := s.Meta.GetItem(ctx, s.DriveID, "root")
+		rootID := s.rootItemID()
+		item, err := s.Meta.GetItem(ctx, s.DriveID, rootID)
 		if err != nil {
 			return nil, fmt.Errorf("resolve root item: %w", err)
+		}
+
+		if s.hasScopedRoot() {
+			item.IsRoot = true
+		}
+
+		return item, nil
+	}
+
+	if s.hasScopedRoot() {
+		item, err := s.resolveItemFromScopedRoot(ctx, clean)
+		if err != nil {
+			return nil, fmt.Errorf("resolve item path %q: %w", clean, err)
 		}
 
 		return item, nil
@@ -197,9 +255,23 @@ func (s *Session) ResolveItem(ctx context.Context, remotePath string) (*graph.It
 func (s *Session) ListChildren(ctx context.Context, remotePath string) ([]graph.Item, error) {
 	clean := CleanRemotePath(remotePath)
 	if clean == "" {
-		items, err := s.Meta.ListChildren(ctx, s.DriveID, "root")
+		items, err := s.Meta.ListChildren(ctx, s.DriveID, s.rootItemID())
 		if err != nil {
 			return nil, fmt.Errorf("list root children: %w", err)
+		}
+
+		return items, nil
+	}
+
+	if s.hasScopedRoot() {
+		parent, err := s.resolveItemFromScopedRoot(ctx, clean)
+		if err != nil {
+			return nil, fmt.Errorf("list children for %q: %w", clean, err)
+		}
+
+		items, err := s.Meta.ListChildren(ctx, s.DriveID, parent.ID)
+		if err != nil {
+			return nil, fmt.Errorf("list children for %q: %w", clean, err)
 		}
 
 		return items, nil
@@ -279,6 +351,71 @@ func (s *Session) RestoreItem(ctx context.Context, itemID string) (*graph.Item, 
 	}
 
 	return item, nil
+}
+
+const driveRootItemID = "root"
+
+func (s *Session) hasScopedRoot() bool {
+	return s != nil && s.RootItem != "" && s.RootItem != driveRootItemID
+}
+
+func (s *Session) rootItemID() string {
+	if s.hasScopedRoot() {
+		return s.RootItem
+	}
+
+	return driveRootItemID
+}
+
+func (s *Session) resolveItemFromScopedRoot(ctx context.Context, remotePath string) (*graph.Item, error) {
+	currentID := s.rootItemID()
+	segments := strings.Split(remotePath, "/")
+	var current *graph.Item
+
+	for idx, segment := range segments {
+		children, err := s.Meta.ListChildren(ctx, s.DriveID, currentID)
+		if err != nil {
+			return nil, fmt.Errorf("list children for segment %q: %w", segment, err)
+		}
+
+		match, ok := matchChildByName(children, segment)
+		if !ok {
+			return nil, fmt.Errorf("segment %q: %w", segment, graph.ErrNotFound)
+		}
+
+		current = &match
+		currentID = match.ID
+
+		if idx < len(segments)-1 && !match.IsFolder {
+			return nil, fmt.Errorf("segment %q is not a folder: %w", segment, graph.ErrNotFound)
+		}
+	}
+
+	if current == nil {
+		return nil, fmt.Errorf("resolve scoped item %q: %w", remotePath, graph.ErrNotFound)
+	}
+
+	return current, nil
+}
+
+func matchChildByName(children []graph.Item, name string) (graph.Item, bool) {
+	var folded *graph.Item
+
+	for i := range children {
+		if children[i].Name == name {
+			return children[i], true
+		}
+
+		if folded == nil && strings.EqualFold(children[i].Name, name) {
+			folded = &children[i]
+		}
+	}
+
+	if folded != nil {
+		return *folded, true
+	}
+
+	return graph.Item{}, false
 }
 
 // CleanRemotePath strips leading/trailing slashes, returns "" for root.

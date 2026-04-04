@@ -72,6 +72,22 @@ func TestSyncStore_FindRemoteBlockedTarget_PrefersBoundaryMatch(t *testing.T) {
 	assert.False(t, found)
 }
 
+func TestSyncStore_FindRemoteBlockedTarget_RootBoundarySlashAlias(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	ctx := context.Background()
+	driveID := driveid.New("drive1")
+
+	recordRemoteBlockedFailure(t, mgr, ctx, driveID, "draft.txt", "", synctypes.ActionUpload)
+
+	target, found, err := mgr.FindRemoteBlockedTarget(ctx, "/")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, RemoteBlockedTargetBoundary, target.Kind)
+	assert.Equal(t, synctypes.SKPermRemote(""), target.ScopeKey)
+}
+
 // Validates: R-2.14.3
 func TestSyncStore_ClearRemoteBlockedTargets(t *testing.T) {
 	t.Parallel()

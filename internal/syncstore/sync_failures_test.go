@@ -103,6 +103,27 @@ func TestRecordFailure_TransientStatus(t *testing.T) {
 	assert.Equal(t, synctypes.CategoryTransient, issues[0].Category)
 }
 
+func TestRecordFailure_NormalizesDirectionFromActionType(t *testing.T) {
+	mgr, _ := newTestSyncStoreForFailures(t)
+	ctx := context.Background()
+
+	err := mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:       "shared/new-folder",
+		DriveID:    driveid.ID{},
+		Direction:  synctypes.DirectionUpload,
+		ActionType: synctypes.ActionFolderCreate,
+		IssueType:  "folder_create_failed",
+		ErrMsg:     "permission denied",
+	}, nil)
+	require.NoError(t, err)
+
+	issues, err := mgr.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	assert.Equal(t, synctypes.ActionFolderCreate, issues[0].ActionType)
+	assert.Equal(t, synctypes.DirectionDownload, issues[0].Direction)
+}
+
 func TestListLocalIssues_Empty(t *testing.T) {
 	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()

@@ -124,7 +124,17 @@ func (rt *watchRuntime) periodicPermRecheck(ctx context.Context, bl *synctypes.B
 	if rt.engine.permHandler.HasPermChecker() && !rt.scopeController().isObservationSuppressed(rt) {
 		shortcuts, err := rt.engine.baseline.ListShortcuts(ctx)
 		if err == nil {
-			rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckPermissions(ctx, bl, shortcuts))
+			requestedKeys, reqErr := rt.engine.baseline.ListRequestedScopeRechecks(ctx)
+			if reqErr != nil {
+				rt.engine.logger.Warn("failed to list requested permission rechecks",
+					slog.String("error", reqErr.Error()),
+				)
+			}
+			decisions := rt.engine.permHandler.recheckPermissions(ctx, bl, shortcuts)
+			rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, decisions)
+			if len(requestedKeys) > 0 {
+				clearRequestedScopeRechecks(ctx, rt.engine.baseline, rt.engine.logger, requestedKeys)
+			}
 		}
 	}
 

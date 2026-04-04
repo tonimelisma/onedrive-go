@@ -207,7 +207,8 @@ func (m *SyncStore) ResetAllFailures(ctx context.Context) error {
 // matches so a blocked folder-create at the boundary path still treats the
 // scope name as the scope, not as a single held row.
 func (m *SyncStore) FindRemoteBlockedTarget(ctx context.Context, input string) (RemoteBlockedTarget, bool, error) {
-	scopeKey := synctypes.SKPermRemote(input)
+	normalized := normalizeRemoteBlockedBoundaryInput(input)
+	scopeKey := synctypes.SKPermRemote(normalized)
 
 	var boundaryWire string
 	err := m.db.QueryRowContext(ctx,
@@ -220,7 +221,7 @@ func (m *SyncStore) FindRemoteBlockedTarget(ctx context.Context, input string) (
 	case nil:
 		return RemoteBlockedTarget{
 			Kind:     RemoteBlockedTargetBoundary,
-			Path:     input,
+			Path:     normalized,
 			ScopeKey: synctypes.ParseScopeKey(boundaryWire),
 		}, true, nil
 	case sql.ErrNoRows:
@@ -246,6 +247,14 @@ func (m *SyncStore) FindRemoteBlockedTarget(ctx context.Context, input string) (
 	default:
 		return RemoteBlockedTarget{}, false, fmt.Errorf("sync: finding remote blocked failure for %s: %w", input, err)
 	}
+}
+
+func normalizeRemoteBlockedBoundaryInput(input string) string {
+	if input == "/" {
+		return ""
+	}
+
+	return input
 }
 
 // ClearRemoteBlockedTarget removes either one held remote-blocked row or an

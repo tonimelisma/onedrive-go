@@ -176,3 +176,37 @@ func TestBuildSyncEngineConfig_SharePointEnablesRootFormsValidation(t *testing.T
 	require.NoError(t, err)
 	assert.True(t, sharePoint.LocalRules.RejectSharePointRootForms)
 }
+
+func TestBuildSyncEngineConfig_PropagatesSharedRootAndScopedHelpers(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	logger := buildLogger(nil, CLIFlags{})
+	meta, err := newGraphClient(staticTokenSource{}, logger)
+	require.NoError(t, err)
+	transfer, err := newGraphClient(staticTokenSource{}, logger)
+	require.NoError(t, err)
+
+	syncDir := filepath.Join(t.TempDir(), "sync")
+	require.NoError(t, os.MkdirAll(syncDir, 0o700))
+
+	session := &driveops.Session{
+		Meta:     meta,
+		Transfer: transfer,
+		DriveID:  driveid.New("abc123"),
+		RootItem: "shared-root-id",
+	}
+	resolved := &config.ResolvedDrive{
+		SyncDir:     syncDir,
+		CanonicalID: driveid.MustCanonicalID("shared:test@example.com:b!drive:shared-root-id"),
+		RootItemID:  "shared-root-id",
+	}
+
+	ecfg, err := buildSyncEngineConfig(session, resolved, true, logger)
+	require.NoError(t, err)
+	assert.Equal(t, "test@example.com", ecfg.AccountEmail)
+	assert.Equal(t, "shared-root-id", ecfg.RootItemID)
+	assert.NotNil(t, ecfg.DriveVerifier)
+	assert.NotNil(t, ecfg.FolderDelta)
+	assert.NotNil(t, ecfg.RecursiveLister)
+	assert.NotNil(t, ecfg.PermChecker)
+}

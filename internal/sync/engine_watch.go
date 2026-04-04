@@ -350,8 +350,8 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode synctypes.SyncMo
 	}
 
 	if len(changes) == 0 {
-		rt.engine.logger.Info("bootstrap sync complete: no changes detected")
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventBootstrapQuiesced})
+		rt.engine.logger.Info("bootstrap sync complete: no changes detected")
 		return nil
 	}
 
@@ -370,9 +370,9 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode synctypes.SyncMo
 		return fmt.Errorf("sync: bootstrap quiescence failed: %w", err)
 	}
 
+	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventBootstrapQuiesced})
 	rt.postSyncHousekeeping()
 	rt.engine.logger.Info("bootstrap sync complete")
-	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventBootstrapQuiesced})
 	return nil
 }
 
@@ -409,26 +409,34 @@ func (rt *watchRuntime) startObservers(
 
 	// Remote observer (skip for upload-only mode).
 	if mode != synctypes.SyncUploadOnly {
-		remoteObs := syncobserve.NewRemoteObserver(rt.engine.fetcher, bl, rt.engine.driveID, rt.engine.logger)
-		remoteObs.SetObsWriter(rt.engine.baseline)
-		rt.remoteObs = remoteObs
-
-		savedToken, tokenErr := rt.engine.baseline.GetDeltaToken(ctx, rt.engine.driveID.String(), "")
-		if tokenErr != nil {
-			rt.engine.logger.Warn("failed to get delta token for watch",
-				slog.String("error", tokenErr.Error()),
-			)
-		}
-
 		obsWg.Add(1)
 		count++
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverStarted, Note: engineDebugObserverRemote})
 
-		go func() {
-			defer obsWg.Done()
-			defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Note: engineDebugObserverRemote})
-			errs <- remoteObs.Watch(ctx, savedToken, events, rt.engine.resolvePollInterval(opts))
-		}()
+		if rt.engine.hasScopedRoot() {
+			go func() {
+				defer obsWg.Done()
+				defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Note: engineDebugObserverRemote})
+				errs <- rt.watchScopedRootRemote(ctx, bl, events, rt.engine.resolvePollInterval(opts))
+			}()
+		} else {
+			remoteObs := syncobserve.NewRemoteObserver(rt.engine.fetcher, bl, rt.engine.driveID, rt.engine.logger)
+			remoteObs.SetObsWriter(rt.engine.baseline)
+			rt.remoteObs = remoteObs
+
+			savedToken, tokenErr := rt.engine.baseline.GetDeltaToken(ctx, rt.engine.driveID.String(), "")
+			if tokenErr != nil {
+				rt.engine.logger.Warn("failed to get delta token for watch",
+					slog.String("error", tokenErr.Error()),
+				)
+			}
+
+			go func() {
+				defer obsWg.Done()
+				defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Note: engineDebugObserverRemote})
+				errs <- remoteObs.Watch(ctx, savedToken, events, rt.engine.resolvePollInterval(opts))
+			}()
+		}
 	}
 
 	// Channel for forwarding SkippedItems from safety scans to the engine.

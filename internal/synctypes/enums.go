@@ -306,6 +306,24 @@ func (a ActionType) String() string {
 	}
 }
 
+// Direction returns the coarse sync direction that owns this action type for
+// persistence and display. Retry/trial rebuild logic must branch on ActionType
+// directly, but the durable failure ledger still keeps Direction for coarse
+// summaries and legacy query convenience.
+func (a ActionType) Direction() Direction {
+	switch a {
+	case ActionUpload:
+		return DirectionUpload
+	case ActionLocalDelete, ActionRemoteDelete:
+		return DirectionDelete
+	case ActionDownload, ActionFolderCreate, ActionConflict,
+		ActionLocalMove, ActionRemoteMove, ActionUpdateSynced, ActionCleanup:
+		return DirectionDownload
+	default:
+		return DirectionDownload
+	}
+}
+
 // ParseActionType converts the SQLite wire value back into an ActionType.
 func ParseActionType(s string) (ActionType, error) {
 	switch s {

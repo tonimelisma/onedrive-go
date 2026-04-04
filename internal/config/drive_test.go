@@ -209,6 +209,21 @@ func TestBuildResolvedDrive_PerDriveOverrides(t *testing.T) {
 	assert.Equal(t, "10m", resolved.PollInterval)
 }
 
+func TestBuildResolvedDrive_SharedCanonicalSetsRootItem(t *testing.T) {
+	cfg := DefaultConfig()
+	drive := &Drive{SyncDir: "~/OneDrive-Shared"}
+
+	resolved := buildResolvedDrive(
+		cfg,
+		driveid.MustCanonicalID("shared:user@example.com:b!drive123:item456"),
+		drive,
+		testLogger(t),
+	)
+
+	assert.Equal(t, driveid.New("b!drive123"), resolved.DriveID)
+	assert.Equal(t, "item456", resolved.RootItemID)
+}
+
 func TestBuildResolvedDrive_TildeExpanded(t *testing.T) {
 	cfg := DefaultConfig()
 	drive := &Drive{SyncDir: "~/OneDrive"}

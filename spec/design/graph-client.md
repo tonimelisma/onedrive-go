@@ -2,7 +2,7 @@
 
 GOVERNS: internal/graph/auth.go, internal/graph/auth_browser.go, internal/graph/auth_device.go, internal/graph/auth_token.go, internal/graph/client.go, internal/graph/client_auth.go, internal/graph/client_construction.go, internal/graph/client_preauth.go, internal/graph/delta.go, internal/graph/download.go, internal/graph/drives.go, internal/graph/drives_identity.go, internal/graph/drives_shared.go, internal/graph/drives_sites.go, internal/graph/errors.go, internal/graph/items.go, internal/graph/items_copy.go, internal/graph/items_fetch.go, internal/graph/items_mutation.go, internal/graph/items_permissions.go, internal/graph/normalize.go, internal/graph/quirks.go, internal/graph/redaction.go, internal/graph/types.go, internal/graph/upload.go, internal/graph/upload_session.go, internal/graph/upload_transfer.go, internal/graph/url_validation.go, internal/tokenfile/tokenfile.go
 
-Implements: R-3.1 [verified], R-6.7 [implemented], R-6.8 [verified], R-1.1 [verified], R-1.4 [verified], R-1.5 [verified], R-1.6 [verified], R-1.7 [verified], R-1.8 [verified], R-6.7.4 [verified], R-6.7.8 [verified], R-6.7.9 [verified], R-6.7.10 [verified], R-6.7.11 [verified], R-6.7.12 [verified], R-6.7.13 [verified], R-6.7.16 [verified], R-6.7.17 [verified], R-6.7.18 [verified], R-6.7.22 [verified], R-6.7.23 [verified], R-6.7.26 [verified], R-6.8.4 [verified], R-6.8.6 [verified], R-6.8.8 [verified], R-6.8.14 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
+Implements: R-3.1 [verified], R-6.7 [implemented], R-6.8 [verified], R-1.1 [verified], R-1.4 [verified], R-1.5 [verified], R-1.6 [verified], R-1.6.2 [verified], R-1.7 [verified], R-1.8 [verified], R-1.2.5 [verified], R-1.3.5 [verified], R-3.6.4 [verified], R-6.7.4 [verified], R-6.7.8 [verified], R-6.7.9 [verified], R-6.7.10 [verified], R-6.7.11 [verified], R-6.7.12 [verified], R-6.7.13 [verified], R-6.7.16 [verified], R-6.7.17 [verified], R-6.7.18 [verified], R-6.7.22 [verified], R-6.7.23 [verified], R-6.7.26 [verified], R-6.8.4 [verified], R-6.8.6 [verified], R-6.8.8 [verified], R-6.8.14 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
 
 ## Overview
 
@@ -80,10 +80,53 @@ GetItem, ListChildren, CreateFolder, MoveItem, CopyItem, DeleteItem. All operati
 
 Timestamp normalization is intentionally lossy in only one direction: valid Graph timestamps become UTC `time.Time` values, while empty, `null`, invalid, or out-of-range timestamps remain the zero value to mean "unknown". The graph boundary never substitutes `time.Now()` for malformed wire data, because downstream sync logic can safely persist and reason about unknown timestamps as `NULL`/unset state.
 
+## Shared Item Resolution
+
+`shares.go` resolves raw OneDrive share URLs through
+`GET /shares/{shareIdOrEncodedSharingUrl}/driveItem`. This is an input alias
+boundary only:
+
+- the raw sharing URL is treated as a sharing-grant locator
+- the returned `graph.Item` carries the underlying owner-side item identity
+- CLI and transfer layers normalize immediately to `(recipient account, remoteDriveID, remoteItemID)`
+
+Discovery APIs do not reliably expose the original inbound share URL, so the
+repository never treats that URL as the canonical durable identifier for a
+shared item.
+
+## Permission Evaluation
+
+`items_permissions.go` decodes the full Graph permission shape needed for
+shared-folder writeability checks, not just the `roles` array. Live testing
+showed that the permissions endpoint can mix:
+
+- caller-relevant link grants such as anonymous `view` / `edit`
+- owner membership rows for the sharer
+- bare `link.webUrl` fields on non-caller rows
+
+So the graph boundary exposes a caller-aware `EvaluateWriteAccess` classifier
+instead of a raw "any write/owner role means writable" heuristic:
+
+- link rows only count as caller-applicable when the link facet carries grant
+  semantics (`type` and/or `scope`)
+- explicit `grantedTo*` rows are matched against the authenticated account
+- unrelated owner/write rows are ignored
+- ambiguous remaining evidence reports `Inconclusive` so sync can fail open
+
 ## Transfers
 
 - `download.go`: streaming download with content URL
 - `upload.go`: simple PUT (≤4 MiB) and resumable upload sessions (>4 MiB, 320 KiB-aligned chunks)
+- `shares.go`: raw share-link resolution into underlying shared item identity
+- `upload_transfer.go` / `upload_session.go`: existing-item overwrite helpers
+  for shared-file `put` by `(driveID, itemID)`
+
+For create-by-parent uploads, the graph boundary treats a non-zero-size simple
+upload `404 itemNotFound` as potentially ambiguous and retries that narrower
+case through `createUploadSession` once. Live E2E coverage showed read-only
+shared folders returning a bogus 404 on `PUT ...:/content` while
+`POST ...:/createUploadSession` returned the correct 403. The fallback keeps
+simple upload as the fast path while preserving permission accuracy.
 
 ## Error Handling (`errors.go`)
 

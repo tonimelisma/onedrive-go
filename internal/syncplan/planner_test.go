@@ -2718,3 +2718,10 @@ func TestIsWriteDenied(t *testing.T) {
 		})
 	}
 }
+
+func TestIsWriteDenied_EmptyBoundaryBlocksWholeScopedRoot(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, IsWriteDenied("nested/file.txt", []string{""}))
+	assert.True(t, IsWriteDenied("top-level.txt", []string{""}))
+}
