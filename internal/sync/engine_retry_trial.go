@@ -385,6 +385,23 @@ func (flow *engineFlow) failureDriveID(row *synctypes.SyncFailureRow) driveid.ID
 	return row.DriveID
 }
 
+func failureActionType(row *synctypes.SyncFailureRow) synctypes.ActionType {
+	if row == nil {
+		return synctypes.ActionDownload
+	}
+	if row.ActionType == synctypes.ActionDownload && row.Direction != synctypes.DirectionDownload {
+		switch row.Direction {
+		case synctypes.DirectionDownload:
+			return synctypes.ActionDownload
+		case synctypes.DirectionUpload:
+			return synctypes.ActionUpload
+		case synctypes.DirectionDelete:
+			return synctypes.ActionRemoteDelete
+		}
+	}
+	return row.ActionType
+}
+
 func (flow *engineFlow) recordRetryTrialSkippedItem(
 	ctx context.Context,
 	row *synctypes.SyncFailureRow,
@@ -409,8 +426,8 @@ func (flow *engineFlow) recordRetryTrialSkippedItem(
 	if err := flow.engine.baseline.UpsertActionableFailures(ctx, []synctypes.ActionableFailure{{
 		Path:       skipped.Path,
 		DriveID:    driveID,
-		Direction:  row.Direction,
-		ActionType: row.ActionType,
+		Direction:  failureActionType(row).Direction(),
+		ActionType: failureActionType(row),
 		IssueType:  skipped.Reason,
 		Error:      skipped.Detail,
 		FileSize:   skipped.FileSize,
@@ -424,7 +441,7 @@ func (flow *engineFlow) recordRetryTrialSkippedItem(
 }
 
 func (flow *engineFlow) rebuildFailureWork(ctx context.Context, row *synctypes.SyncFailureRow) failureRebuildResult {
-	switch row.ActionType {
+	switch failureActionType(row) {
 	case synctypes.ActionUpload, synctypes.ActionFolderCreate:
 		return flow.observeLocalFailurePath(ctx, row)
 	case synctypes.ActionRemoteMove:
@@ -437,20 +454,9 @@ func (flow *engineFlow) rebuildFailureWork(ctx context.Context, row *synctypes.S
 		synctypes.ActionConflict,
 		synctypes.ActionUpdateSynced,
 		synctypes.ActionCleanup:
-		return flow.rebuildFailureWorkByDirection(ctx, row)
-	default:
-		panic(fmt.Sprintf("unknown action type %d", row.ActionType))
-	}
-}
-
-func (flow *engineFlow) rebuildFailureWorkByDirection(ctx context.Context, row *synctypes.SyncFailureRow) failureRebuildResult {
-	switch row.Direction {
-	case synctypes.DirectionUpload:
-		return flow.observeLocalFailurePath(ctx, row)
-	case synctypes.DirectionDownload, synctypes.DirectionDelete:
 		return flow.rebuildRemoteStateBackedFailure(ctx, row)
 	default:
-		panic(fmt.Sprintf("unknown failure direction %q", row.Direction))
+		panic(fmt.Sprintf("unknown action type %d", row.ActionType))
 	}
 }
 
@@ -558,7 +564,7 @@ func (flow *engineFlow) createEventFromDB(ctx context.Context, row *synctypes.Sy
 // isFailureResolved checks whether a retry/trial candidate has already been
 // resolved by normal observation or action processing.
 func (flow *engineFlow) isFailureResolved(ctx context.Context, row *synctypes.SyncFailureRow) bool {
-	switch row.ActionType {
+	switch failureActionType(row) {
 	case synctypes.ActionUpload, synctypes.ActionFolderCreate, synctypes.ActionRemoteMove:
 		return flow.clearFailureIfResolved(ctx, row, flow.isUploadLikeFailureResolved(row.Path))
 	case synctypes.ActionRemoteDelete:
@@ -570,25 +576,35 @@ func (flow *engineFlow) isFailureResolved(ctx context.Context, row *synctypes.Sy
 		synctypes.ActionConflict,
 		synctypes.ActionUpdateSynced,
 		synctypes.ActionCleanup:
-		return flow.clearFailureIfResolved(ctx, row, flow.isFailureResolvedByDirection(ctx, row))
+		return flow.clearFailureIfResolved(ctx, row, flow.isRemoteStateBackedActionResolved(ctx, row))
 	default:
 		panic(fmt.Sprintf("unknown action type %d", row.ActionType))
 	}
 }
 
-func (flow *engineFlow) isFailureResolvedByDirection(
+func (flow *engineFlow) isRemoteStateBackedActionResolved(
 	ctx context.Context,
 	row *synctypes.SyncFailureRow,
 ) bool {
-	switch row.Direction {
-	case synctypes.DirectionUpload:
-		return flow.isUploadLikeFailureResolved(row.Path)
-	case synctypes.DirectionDelete:
+	switch failureActionType(row) {
+	case synctypes.ActionUpload:
+		panic(fmt.Sprintf("unexpected remote-state-backed action type %d", row.ActionType))
+	case synctypes.ActionRemoteDelete:
+		panic(fmt.Sprintf("unexpected remote-state-backed action type %d", row.ActionType))
+	case synctypes.ActionRemoteMove:
+		panic(fmt.Sprintf("unexpected remote-state-backed action type %d", row.ActionType))
+	case synctypes.ActionFolderCreate:
+		panic(fmt.Sprintf("unexpected remote-state-backed action type %d", row.ActionType))
+	case synctypes.ActionLocalDelete:
 		return flow.isDeleteDirectionFailureResolved(ctx, row)
-	case synctypes.DirectionDownload:
+	case synctypes.ActionDownload,
+		synctypes.ActionLocalMove,
+		synctypes.ActionConflict,
+		synctypes.ActionUpdateSynced,
+		synctypes.ActionCleanup:
 		return flow.isDownloadFailureResolved(ctx, row)
 	default:
-		panic(fmt.Sprintf("unknown failure direction %q", row.Direction))
+		panic(fmt.Sprintf("unexpected remote-state-backed action type %d", row.ActionType))
 	}
 }
 

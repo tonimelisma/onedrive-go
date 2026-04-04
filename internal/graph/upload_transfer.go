@@ -3,6 +3,7 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -30,6 +31,36 @@ func (c *Client) SimpleUpload(
 	// defaults. CreateUploadSession passes this in the JSON body; SimpleUpload
 	// must use a query parameter since the body is the raw file content.
 	path := fmt.Sprintf("/drives/%s/items/%s:/%s:/content?@microsoft.graph.conflictBehavior=replace", driveID, parentID, url.PathEscape(name))
+
+	resp, err := c.doRawUpload(ctx, http.MethodPut, path, "application/octet-stream", r)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var dir driveItemResponse
+	if decErr := json.NewDecoder(resp.Body).Decode(&dir); decErr != nil {
+		return nil, fmt.Errorf("graph: decoding simple upload response: %w", decErr)
+	}
+
+	item := dir.toItem(c.logger)
+
+	return &item, nil
+}
+
+// SimpleUploadToItem overwrites an existing file by item ID using a single PUT
+// request. Files larger than 4 MiB should use UploadToItem or
+// CreateUploadSessionForItem.
+func (c *Client) SimpleUploadToItem(
+	ctx context.Context, driveID driveid.ID, itemID string, r io.Reader, size int64,
+) (*Item, error) {
+	c.logger.Info("simple upload existing item",
+		slog.String("drive_id", driveID.String()),
+		slog.String("item_id", itemID),
+		slog.Int64("size", size),
+	)
+
+	path := fmt.Sprintf("/drives/%s/items/%s/content", driveID, itemID)
 
 	resp, err := c.doRawUpload(ctx, http.MethodPut, path, "application/octet-stream", r)
 	if err != nil {
@@ -226,25 +257,69 @@ func (c *Client) Upload(
 
 		item, err := c.SimpleUpload(ctx, driveID, parentID, name, r, size)
 		if err != nil {
+			// Graph misreports some shared-folder create denials as 404 on the
+			// simple PUT /content route while the equivalent upload-session route
+			// returns the correct permission status. Retry that narrower case
+			// through createUploadSession so higher layers see the real outcome.
+			if size > 0 && errors.Is(err, ErrNotFound) {
+				c.logger.Warn("simple upload returned not found, retrying via upload session",
+					slog.String("drive_id", driveID.String()),
+					slog.String("parent_id", parentID),
+					slog.String("name", name),
+					slog.Int64("size", size),
+				)
+
+				return c.chunkedUploadEncapsulated(ctx, driveID, parentID, name, content, size, mtime, progress)
+			}
+
 			return nil, err
 		}
 
-		// Simple upload (PUT /content) cannot include fileSystemInfo in the
-		// request body. Post-upload PATCH preserves local mtime on the server,
-		// preventing mtime mismatch on the next sync pass.
-		if !mtime.IsZero() {
-			patched, patchErr := c.UpdateFileSystemInfo(ctx, driveID, item.ID, mtime)
-			if patchErr != nil {
-				return nil, fmt.Errorf("graph: setting mtime after simple upload: %w", patchErr)
-			}
-
-			return patched, nil
-		}
-
-		return item, nil
+		return c.finalizeSimpleUpload(ctx, driveID, item, mtime)
 	}
 
 	return c.chunkedUploadEncapsulated(ctx, driveID, parentID, name, content, size, mtime, progress)
+}
+
+// UploadToItem overwrites an existing file by item ID, automatically choosing
+// simple upload or resumable upload by size.
+func (c *Client) UploadToItem(
+	ctx context.Context, driveID driveid.ID, itemID string,
+	content io.ReaderAt, size int64, mtime time.Time, progress ProgressFunc,
+) (*Item, error) {
+	if size <= SimpleUploadMaxSize {
+		r := io.NewSectionReader(content, 0, size)
+
+		item, err := c.SimpleUploadToItem(ctx, driveID, itemID, r, size)
+		if err != nil {
+			return nil, err
+		}
+
+		return c.finalizeSimpleUpload(ctx, driveID, item, mtime)
+	}
+
+	return c.chunkedUploadToExistingItem(ctx, driveID, itemID, content, size, mtime, progress)
+}
+
+func (c *Client) finalizeSimpleUpload(
+	ctx context.Context,
+	driveID driveid.ID,
+	item *Item,
+	mtime time.Time,
+) (*Item, error) {
+	// Simple upload (PUT /content) cannot include fileSystemInfo in the
+	// request body. Post-upload PATCH preserves local mtime on the server,
+	// preventing mtime mismatch on the next sync pass.
+	if !mtime.IsZero() {
+		patched, patchErr := c.UpdateFileSystemInfo(ctx, driveID, item.ID, mtime)
+		if patchErr != nil {
+			return nil, fmt.Errorf("graph: setting mtime after simple upload: %w", patchErr)
+		}
+
+		return patched, nil
+	}
+
+	return item, nil
 }
 
 // chunkedUploadEncapsulated creates an upload session, uploads all chunks,
@@ -262,6 +337,33 @@ func (c *Client) chunkedUploadEncapsulated(
 	if err != nil {
 		// Best-effort cancel — detach from cancellation so the upload session is
 		// cleaned up even when the request context has already been canceled.
+		cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+		defer cancel()
+
+		cancelErr := c.CancelUploadSession(cancelCtx, session)
+		if cancelErr != nil {
+			c.logger.Warn("failed to cancel upload session after error",
+				slog.String("error", cancelErr.Error()),
+			)
+		}
+
+		return nil, err
+	}
+
+	return item, nil
+}
+
+func (c *Client) chunkedUploadToExistingItem(
+	ctx context.Context, driveID driveid.ID, itemID string,
+	content io.ReaderAt, size int64, mtime time.Time, progress ProgressFunc,
+) (*Item, error) {
+	session, err := c.CreateUploadSessionForItem(ctx, driveID, itemID, size, mtime)
+	if err != nil {
+		return nil, err
+	}
+
+	item, err := c.uploadAllChunks(ctx, session, content, size, progress)
+	if err != nil {
 		cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 		defer cancel()
 

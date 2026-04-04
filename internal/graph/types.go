@@ -57,7 +57,7 @@ type Item struct {
 	ChildCount        int         // ChildCountUnknown if not present
 	DownloadURL       DownloadURL // pre-authenticated, ephemeral; redacted via LogValue (B-158)
 	SpecialFolderName string      // "vault", "documents", etc.; empty if not a special folder (B-271)
-	RemoteDriveID     string      // from remoteItem.parentReference.driveId (shared/shortcut items)
+	RemoteDriveID     string      // normalized owner-side driveId for shared/shortcut items
 	RemoteItemID      string      // from remoteItem.id (shared/shortcut items)
 	SharedOwnerName   string      // sharer identity: remoteItem.shared.sharedBy → .owner → .createdBy → shared.owner
 	SharedOwnerEmail  string      // sharer email via same fallback chain as SharedOwnerName

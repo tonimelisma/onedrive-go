@@ -1099,6 +1099,18 @@ func TestExecutor_ResolveParentID_Baseline(t *testing.T) {
 	}
 }
 
+func TestExecutor_ResolveParentID_SharedScopedRoot(t *testing.T) {
+	t.Parallel()
+
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	cfg.SetRootItemID("shared-root-id")
+	e := NewExecution(cfg, synctest.EmptyBaseline())
+
+	id, err := e.ResolveParentID("exec-file.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "shared-root-id", id)
+}
+
 // ---------------------------------------------------------------------------
 // StemExt helper tests
 // ---------------------------------------------------------------------------

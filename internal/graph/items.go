@@ -200,7 +200,7 @@ func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 	if d.RemoteItem != nil {
 		item.RemoteItemID = d.RemoteItem.ID
 		if d.RemoteItem.ParentReference != nil {
-			item.RemoteDriveID = d.RemoteItem.ParentReference.DriveID
+			item.RemoteDriveID = driveid.New(d.RemoteItem.ParentReference.DriveID).String()
 		}
 	}
 

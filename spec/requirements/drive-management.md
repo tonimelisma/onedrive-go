@@ -58,6 +58,7 @@ The system shall support all four drive types:
 - R-3.3.9: When the user runs `drive search <term>`, the system shall search SharePoint sites by name across all business accounts, returning up to 50 matching sites with their document libraries and canonical IDs. When `--account` is passed, the search is restricted to that business account. Business accounts that cannot be searched because authentication is required shall be reported as account-level auth-required results instead of being silently skipped. [verified]
 - R-3.3.10: When `--json` is passed, `drive list` shall output structured JSON with `configured`, `available`, and `accounts_requiring_auth` arrays. Configured drive entries shall include auth status when authentication is required. [verified]
 - R-3.3.11: When `--json` is passed, `drive search` shall output structured JSON with `results` and `accounts_requiring_auth` arrays. [verified]
+- R-3.3.12: When the user runs `drive add shared:<recipientEmail>:<remoteDriveID>:<remoteItemID>` and the selector resolves to a shared file instead of a shared folder, the system shall reject it with guidance to use direct file commands (`stat`, `get`, `put`) instead of configuring it as a drive. [verified]
 
 ## R-3.4 Multi-Account [verified]
 
@@ -76,8 +77,10 @@ The system shall support all four drive types:
 - R-3.6.1: When the user runs `drive list`, the system shall show available shared folders. [verified]
 - R-3.6.2: The system shall use non-deprecated search API for shared item discovery (SharedWithMe deprecated Nov 2026). [verified]
 - R-3.6.3: When adding a shared drive, the system shall derive a display name from the sharer's identity. [verified]
-- R-3.6.4: When discovering shared items via the Search API (which returns less identity data than the deprecated SharedWithMe endpoint), the system shall enrich results by making secondary `GET /drives/{driveId}/items/{itemId}` calls to retrieve full identity data including email. [planned]
+- R-3.6.4: When discovering shared items via the Search API (which returns less identity data than the deprecated SharedWithMe endpoint), the system shall enrich results by making secondary `GET /drives/{driveId}/items/{itemId}` calls to retrieve full identity data including email. [verified]
 - R-3.6.5: When a user attempts to access shared folders from outside their organization (invisible to Graph API), the system shall provide a clear error message explaining the platform limitation. [planned]
+- R-3.6.6: When the user runs `shared`, the system shall list files and folders shared with the authenticated account set, using generated `shared:<recipientEmail>:<remoteDriveID>:<remoteItemID>` selectors as actionable targets because Graph discovery does not reliably expose the original inbound share URL. Accounts that cannot be queried because authentication is required shall be reported instead of being silently omitted. [verified]
+- R-3.6.7: When `--json` is passed to `shared`, the system shall output structured JSON with `items` and `accounts_requiring_auth`. Each item shall include the shared selector plus the discovered shared item metadata needed for follow-on commands. [verified]
 
 ## R-3.7 Email Change Detection [future]
 

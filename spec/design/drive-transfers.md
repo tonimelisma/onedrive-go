@@ -2,7 +2,7 @@
 
 GOVERNS: internal/driveops/cleanup.go, internal/driveops/disk_unix.go, internal/driveops/doc.go, internal/driveops/errors.go, internal/driveops/hash.go, internal/driveops/interfaces.go, internal/driveops/session.go, internal/driveops/session_store.go, internal/driveops/stale_partials.go, internal/driveops/transfer_manager.go, pkg/quickxorhash/quickxorhash.go, get.go, put.go
 
-Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [implemented], R-5.5 [verified], R-1.2 [verified], R-1.3 [verified], R-5.6 [implemented], R-5.7 [verified], R-5.8 [planned], R-6.8.3 [verified], R-6.2.6 [verified], R-6.4.7 [verified], R-6.2.10 [implemented], R-6.10.6 [verified]
+Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [implemented], R-5.5 [verified], R-1.2 [verified], R-1.2.5 [verified], R-1.3 [verified], R-1.3.5 [verified], R-5.6 [implemented], R-5.7 [verified], R-5.8 [planned], R-6.8.3 [verified], R-6.2.6 [verified], R-6.4.7 [verified], R-6.2.10 [implemented], R-6.10.6 [verified]
 
 ## TransferManager
 
@@ -34,6 +34,19 @@ Implements: R-6.2.3 [verified]
 3. Files > 4 MiB: create resumable upload session, upload in chunks (320 KiB aligned)
 4. Verify server-reported hash matches local file after upload
 
+If a non-zero-size create-by-parent simple upload returns `404 itemNotFound`,
+the graph boundary retries that same create once through `createUploadSession`
+before surfacing the error. This preserves the fast path for ordinary small
+uploads while correcting the observed OneDrive quirk where read-only shared
+folders misreport create denial as 404 on the simple-upload route but return
+the correct 403 on the upload-session route.
+
+Shared-file `put` reuses the same transfer machinery, but targets an existing
+item by `(driveID, itemID)` instead of resolving a destination parent path.
+The transfer manager therefore exposes both parent-path upload and existing-item
+overwrite entry points while keeping session persistence, chunk sizing, and
+post-upload verification in one owner.
+
 ## SessionStore
 
 File-based upload session persistence. Each session is a JSON file in the data directory containing the upload URL, byte offset, file hash, and expiry. Managed-state access goes through `internal/fsroot` so directory creation, temp files, chmod, fsync, and rename stay under one root capability. On resume, local file hash is recomputed — if it differs from the stored hash, the session is discarded.
@@ -41,6 +54,13 @@ File-based upload session persistence. Each session is a JSON file in the data d
 ## Transfer Interfaces
 
 Two required interfaces (`Downloader`, `Uploader`) and two optional interfaces (`RangeDownloader`, `SessionUploader`) type-asserted at runtime. This allows the graph client to support resume without requiring all implementations to.
+
+Shared-item CLI flows still use the same downloader/uploader capabilities. The
+only difference is how the target item identity is resolved before the transfer
+starts:
+
+- ordinary CLI commands resolve a configured drive plus a remote path
+- shared CLI commands resolve a recipient account plus `(remoteDriveID, remoteItemID)`
 
 ## Hash Utilities
 

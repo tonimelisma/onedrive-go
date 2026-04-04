@@ -45,6 +45,7 @@ type Engine struct {
 	syncRoot           string
 	syncTree           *synctree.Root
 	driveID            driveid.ID
+	rootItemID         string
 	logger             *slog.Logger
 	sessionStore       *driveops.SessionStore // for CleanStale() housekeeping
 	transferWorkers    int                    // goroutine count for the worker pool
@@ -95,6 +96,7 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 	}
 
 	execCfg := syncexec.NewExecutorConfig(cfg.Items, cfg.Downloads, cfg.Uploads, syncTree, cfg.DriveID, cfg.Logger)
+	execCfg.SetRootItemID(cfg.RootItemID)
 
 	if cfg.UseLocalTrash {
 		execCfg.SetTrashFunc(localtrash.Default)
@@ -131,6 +133,7 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 		syncRoot:           cfg.SyncRoot,
 		syncTree:           syncTree,
 		driveID:            cfg.DriveID,
+		rootItemID:         cfg.RootItemID,
 		logger:             cfg.Logger,
 		transferWorkers:    cfg.TransferWorkers,
 		checkWorkers:       cfg.CheckWorkers,
@@ -143,12 +146,14 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 	}
 
 	e.permHandler = &PermissionHandler{
-		baseline:    e.baseline,
-		permChecker: cfg.PermChecker,
-		syncTree:    syncTree,
-		driveID:     cfg.DriveID,
-		logger:      cfg.Logger,
-		nowFn:       e.nowFunc,
+		baseline:     e.baseline,
+		permChecker:  cfg.PermChecker,
+		syncTree:     syncTree,
+		driveID:      cfg.DriveID,
+		accountEmail: cfg.AccountEmail,
+		rootItemID:   cfg.RootItemID,
+		logger:       cfg.Logger,
+		nowFn:        e.nowFunc,
 	}
 
 	return e, nil

@@ -42,6 +42,7 @@ conflicts or clear failures.`,
 	cmd.AddCommand(newIssuesResolveCmd())
 	cmd.AddCommand(newIssuesClearCmd())
 	cmd.AddCommand(newIssuesRetryCmd())
+	cmd.AddCommand(newIssuesRecheckCmd())
 
 	return cmd
 }
@@ -358,6 +359,25 @@ func runIssuesRetry(cmd *cobra.Command, args []string) error {
 		allMsg:    "Reset all failures for retry.",
 		singleFmt: "Requested retry for %s.",
 	})
+}
+
+// --- issues recheck ---
+
+func newIssuesRecheckCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "recheck <boundary>",
+		Short: "Revalidate a blocked shared-folder boundary",
+		Long: `Queue an immediate permission recheck for a blocked shared-folder boundary.
+
+This revalidates the shared-folder boundary itself. It does not retry a
+specific blocked child action; use 'issues retry <path>' for that.`,
+		Args: cobra.ExactArgs(1),
+		RunE: runIssuesRecheck,
+	}
+}
+
+func runIssuesRecheck(cmd *cobra.Command, args []string) error {
+	return newIssuesService(mustCLIContext(cmd.Context())).runScopeRecheck(cmd.Context(), args[0])
 }
 
 // failureAction defines the all/single operations for a failures subcommand.

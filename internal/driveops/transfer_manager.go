@@ -431,6 +431,18 @@ func validateUploadParams(parentID, name, localPath string) error {
 	return nil
 }
 
+func validateUploadToItemParams(itemID, localPath string) error {
+	if itemID == "" {
+		return fmt.Errorf("upload: item ID must not be empty")
+	}
+
+	if localPath == "" {
+		return fmt.Errorf("upload: local path must not be empty")
+	}
+
+	return nil
+}
+
 // UploadFile uploads a local file to OneDrive. For large files when a
 // SessionStore and SessionUploader are available, the upload session is
 // persisted for cross-crash resume.
@@ -523,6 +535,116 @@ func (tm *TransferManager) UploadFile(
 	return &UploadResult{Item: item, LocalHash: localHash, Size: size, Mtime: mtime}, nil
 }
 
+// UploadFileToItem overwrites an existing remote file identified by item ID.
+// For large files when a SessionStore and ItemSessionUploader are available,
+// the upload session is persisted for cross-crash resume.
+func (tm *TransferManager) UploadFileToItem(
+	ctx context.Context, driveID driveid.ID, itemID, localPath string, opts UploadOpts,
+) (*UploadResult, error) {
+	if err := validateUploadToItemParams(itemID, localPath); err != nil {
+		return nil, err
+	}
+
+	tm.logger.Debug("UploadFileToItem",
+		slog.String("drive_id", driveID.String()),
+		slog.String("path", localPath),
+		slog.String("item_id", itemID),
+	)
+
+	info, err := localpath.Stat(localPath)
+	if err != nil {
+		return nil, fmt.Errorf("stat %s: %w", localPath, err)
+	}
+
+	size := info.Size()
+	if size > MaxOneDriveFileSize {
+		return nil, fmt.Errorf("%w: %s size %d bytes exceeds OneDrive 250 GB limit (%d bytes)",
+			ErrFileExceedsOneDriveLimit, localPath, size, MaxOneDriveFileSize)
+	}
+
+	localHash, err := tm.hashFunc(localPath)
+	if err != nil {
+		return nil, fmt.Errorf("hashing %s: %w", localPath, err)
+	}
+
+	mtime := opts.Mtime
+	if mtime.IsZero() {
+		mtime = info.ModTime()
+	}
+
+	f, err := localpath.Open(localPath)
+	if err != nil {
+		return nil, fmt.Errorf("opening %s for upload: %w", localPath, err)
+	}
+	defer f.Close()
+
+	item, err := tm.uploadExistingItem(ctx, f, driveID, itemID, localPath, localHash, size, mtime, opts.Progress)
+	if err != nil {
+		return nil, err
+	}
+	if item == nil {
+		return nil, fmt.Errorf("upload of %s returned nil item", localPath)
+	}
+
+	remoteHash := SelectHash(item)
+	if remoteHash != "" && localHash != remoteHash {
+		tm.logger.Warn("upload hash mismatch",
+			slog.String("path", localPath),
+			slog.String("local_hash", localHash),
+			slog.String("remote_hash", remoteHash),
+		)
+	}
+
+	tm.logger.Debug("upload complete",
+		slog.String("path", localPath),
+		slog.String("item_id", item.ID),
+		slog.Int64("size", size),
+	)
+
+	return &UploadResult{Item: item, LocalHash: localHash, Size: size, Mtime: mtime}, nil
+}
+
+func (tm *TransferManager) uploadExistingItem(
+	ctx context.Context,
+	content io.ReaderAt,
+	driveID driveid.ID,
+	itemID string,
+	localPath string,
+	localHash string,
+	size int64,
+	mtime time.Time,
+	progress graph.ProgressFunc,
+) (*graph.Item, error) {
+	sessionUploader, hasSessionUploader := tm.uploads.(ItemSessionUploader)
+	itemUploader, hasItemUploader := tm.uploads.(ItemUploader)
+
+	if size > graph.SimpleUploadMaxSize && tm.sessionStore != nil && hasSessionUploader {
+		return tm.sessionUploadToItem(
+			ctx,
+			sessionUploader,
+			content,
+			driveID,
+			itemID,
+			localPath,
+			localHash,
+			size,
+			mtime,
+			progress,
+		)
+	}
+
+	if !hasItemUploader {
+		return nil, fmt.Errorf("uploading %s: uploader does not support item-ID overwrite", localPath)
+	}
+
+	item, err := itemUploader.UploadToItem(ctx, driveID, itemID, content, size, mtime, progress)
+	if err != nil {
+		return nil, fmt.Errorf("uploading %s: %w", localPath, err)
+	}
+
+	return item, nil
+}
+
 // sessionUpload performs a session-based upload with persistence for resume.
 // localPath is the filesystem path of the file being uploaded — used as a
 // session store key and in log messages. (Named "localPath" not "remotePath"
@@ -594,6 +716,85 @@ func (tm *TransferManager) sessionUpload(
 	}
 
 	tm.deleteSession(driveStr, localPath)
+
+	return item, nil
+}
+
+func existingItemSessionKey(localPath, itemID string) string {
+	return "item::" + itemID + "::" + localPath
+}
+
+func (tm *TransferManager) sessionUploadToItem(
+	ctx context.Context, su ItemSessionUploader, content io.ReaderAt,
+	driveID driveid.ID, itemID, localPath, localHash string,
+	size int64, mtime time.Time, progress graph.ProgressFunc,
+) (*graph.Item, error) {
+	tm.logger.Debug("sessionUploadToItem",
+		slog.String("path", localPath),
+		slog.String("item_id", itemID),
+		slog.Int64("size", size),
+	)
+
+	driveStr := driveID.String()
+	sessionKey := existingItemSessionKey(localPath, itemID)
+
+	rec, found, loadErr := tm.sessionStore.Load(driveStr, sessionKey)
+	if loadErr != nil {
+		tm.logger.Warn("failed to load upload session",
+			slog.String("path", localPath),
+			slog.String("item_id", itemID),
+			slog.String("error", loadErr.Error()),
+		)
+	}
+
+	if found && rec.FileHash == localHash {
+		tm.logger.Debug("attempting upload session resume",
+			slog.String("path", localPath),
+			slog.String("item_id", itemID),
+		)
+
+		session := &graph.UploadSession{UploadURL: graph.UploadURL(rec.SessionURL)}
+
+		item, resumeErr := su.ResumeUpload(ctx, session, content, size, progress)
+		if resumeErr == nil {
+			tm.deleteSession(driveStr, sessionKey)
+			return item, nil
+		}
+
+		tm.deleteSession(driveStr, sessionKey)
+		if !errors.Is(resumeErr, graph.ErrUploadSessionExpired) {
+			return nil, fmt.Errorf("resuming upload of %s: %w", localPath, resumeErr)
+		}
+
+		tm.logger.Info("upload session expired, creating fresh session",
+			slog.String("path", localPath),
+			slog.String("item_id", itemID),
+		)
+	}
+
+	session, err := su.CreateUploadSessionForItem(ctx, driveID, itemID, size, mtime)
+	if err != nil {
+		return nil, fmt.Errorf("creating upload session for %s: %w", localPath, err)
+	}
+
+	if saveErr := tm.sessionStore.Save(driveStr, sessionKey, &SessionRecord{
+		SessionURL: string(session.UploadURL),
+		FileHash:   localHash,
+		FileSize:   size,
+	}); saveErr != nil {
+		tm.logger.Warn("failed to save upload session — resume after crash will not work for this file",
+			slog.String("path", localPath),
+			slog.String("item_id", itemID),
+			slog.String("error", saveErr.Error()),
+		)
+	}
+
+	item, err := su.UploadFromSession(ctx, session, content, size, progress)
+	if err != nil {
+		return nil, fmt.Errorf("uploading %s: %w", localPath, err)
+	}
+
+	tm.deleteSession(driveStr, sessionKey)
 
 	return item, nil
 }

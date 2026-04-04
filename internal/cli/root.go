@@ -65,6 +65,28 @@ type CLIFlags struct {
 	Quiet      bool
 }
 
+type rootFlagBindings struct {
+	configPath string
+	account    string
+	drive      []string
+	json       bool
+	verbose    bool
+	debug      bool
+	quiet      bool
+}
+
+func (b *rootFlagBindings) snapshot() CLIFlags {
+	return CLIFlags{
+		ConfigPath: b.configPath,
+		Account:    b.account,
+		Drive:      b.drive,
+		JSON:       b.json,
+		Verbose:    b.verbose,
+		Debug:      b.debug,
+		Quiet:      b.quiet,
+	}
+}
+
 // SingleDrive returns the single --drive selector, or "" if none was provided.
 // Returns an error if multiple --drive values were provided — callers that
 // allow multiple values should use Drive directly.
@@ -94,6 +116,7 @@ type CLIContext struct {
 	CfgPath      string                    // resolved config file path (always set)
 	Env          config.EnvOverrides       // env overrides (always set in Phase 1)
 	GraphBaseURL string                    // internal test seam for live Graph command coverage
+	SharedTarget *sharedTarget             // nil for ordinary drive/path commands
 	Cfg          *config.ResolvedDrive     // nil for auth/account commands
 	Provider     *driveops.SessionProvider // nil for auth/account commands; created in Phase 2
 	logCloser    io.Closer                 // log file closer; nil when no log file is configured
@@ -179,17 +202,7 @@ func newRootCmdWithWriters(outputWriter, statusWriter io.Writer) *cobra.Command 
 	outputWriter = outputWriterOrDefault(outputWriter)
 	statusWriter = statusWriterOrDefault(statusWriter)
 
-	// Local flag variables — NOT globals. Cobra binds to these; Phase 1 of
-	// PersistentPreRunE copies them into CLIFlags on CLIContext.
-	var (
-		flagConfigPath string
-		flagAccount    string
-		flagDrive      []string
-		flagJSON       bool
-		flagVerbose    bool
-		flagDebug      bool
-		flagQuiet      bool
-	)
+	bindings := &rootFlagBindings{}
 
 	cmd := &cobra.Command{
 		Use:     "onedrive-go",
@@ -197,96 +210,138 @@ func newRootCmdWithWriters(outputWriter, statusWriter io.Writer) *cobra.Command 
 		Long:    "A fast, safe OneDrive CLI and sync client for Linux and macOS.",
 		Version: version,
 		// Silence Cobra's default error/usage printing — we handle it ourselves.
-		SilenceErrors: true,
-		SilenceUsage:  true,
-		// PersistentPreRunE runs in two phases for ALL commands:
-		//   Phase 1 (always): read Cobra flags → build CLIFlags → read env → build bootstrap logger
-		//   Phase 2 (data commands only): load config → resolve drive → build final logger
-		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-			if version == "dev" {
-				config.AssertDevSafe() // prevent go run . from touching production data
-			}
-			// Phase 1: always populate flags + bootstrap logger + env + config path.
-			flags := CLIFlags{
-				ConfigPath: flagConfigPath,
-				Account:    flagAccount,
-				Drive:      flagDrive,
-				JSON:       flagJSON,
-				Verbose:    flagVerbose,
-				Debug:      flagDebug,
-				Quiet:      flagQuiet,
-			}
-			logger := buildLoggerWithStatusWriter(nil, flags, statusWriter)
-			env := config.ReadEnvOverrides(logger)
-			cc := &CLIContext{
-				OutputWriter: outputWriter,
-				Flags:        flags,
-				Logger:       logger,
-				StatusWriter: statusWriter,
-				CfgPath:      config.ResolveConfigPath(env, config.CLIOverrides{ConfigPath: flags.ConfigPath}, logger),
-				Env:          env,
-			}
-
-			// Phase 2: load config for data commands.
-			if cmd.Annotations[skipConfigAnnotation] != "true" {
-				resolved, rawCfg, err := loadAndResolve(cmd, flags, env, logger)
-				if err != nil {
-					return err
-				}
-
-				cc.Cfg = resolved
-
-				dualLogger, closer := buildLoggerDualWithStatusWriter(resolved, flags, statusWriter)
-				cc.Logger = dualLogger
-				cc.logCloser = closer
-
-				holder := config.NewHolder(rawCfg, cc.CfgPath)
-				cc.Provider = driveops.NewSessionProvider(holder,
-					defaultHTTPClient(cc.Logger), transferHTTPClient(cc.Logger), "onedrive-go/"+version, cc.Logger)
-			}
-
-			ctx := cmd.Context()
-			if ctx == nil {
-				ctx = context.Background()
-			}
-
-			cmd.SetContext(context.WithValue(ctx, cliContextKey{}, cc))
-
-			if cc.Cfg != nil {
-				config.WarnUnimplemented(cc.Cfg, cc.Logger)
-			}
-
-			return nil
-		},
-		PersistentPostRunE: func(cmd *cobra.Command, _ []string) error {
-			cc := cliContextFrom(cmd.Context())
-			if cc != nil && cc.logCloser != nil {
-				return cc.logCloser.Close()
-			}
-
-			return nil
-		},
+		SilenceErrors:      true,
+		SilenceUsage:       true,
+		PersistentPreRunE:  rootPersistentPreRun(outputWriter, statusWriter, bindings),
+		PersistentPostRunE: rootPersistentPostRun,
 	}
 
-	cmd.PersistentFlags().StringVar(&flagConfigPath, "config", "", "config file path")
-	cmd.PersistentFlags().StringVar(&flagAccount, "account", "", "account for auth commands (e.g., user@example.com)")
-	cmd.PersistentFlags().StringArrayVar(&flagDrive, "drive", nil,
-		"drive selector (canonical ID, display name, or partial match); repeatable for sync")
-	cmd.PersistentFlags().BoolVar(&flagJSON, "json", false, "output in JSON format")
-	cmd.PersistentFlags().BoolVarP(&flagVerbose, "verbose", "v", false, "show detailed output")
-	cmd.PersistentFlags().BoolVar(&flagDebug, "debug", false, "enable debug logging (HTTP requests, config resolution)")
-	cmd.PersistentFlags().BoolVarP(&flagQuiet, "quiet", "q", false, "suppress informational output")
-
-	cmd.MarkFlagsMutuallyExclusive("verbose", "debug", "quiet")
+	addRootPersistentFlags(cmd, bindings)
 
 	addRootSubcommands(cmd)
 
 	return cmd
 }
 
+func addRootPersistentFlags(cmd *cobra.Command, bindings *rootFlagBindings) {
+	cmd.PersistentFlags().StringVar(&bindings.configPath, "config", "", "config file path")
+	cmd.PersistentFlags().StringVar(&bindings.account, "account", "", "account for auth commands (e.g., user@example.com)")
+	cmd.PersistentFlags().StringArrayVar(
+		&bindings.drive,
+		"drive",
+		nil,
+		"drive selector (canonical ID, display name, or partial match); repeatable for sync",
+	)
+	cmd.PersistentFlags().BoolVar(&bindings.json, "json", false, "output in JSON format")
+	cmd.PersistentFlags().BoolVarP(&bindings.verbose, "verbose", "v", false, "show detailed output")
+	cmd.PersistentFlags().BoolVar(
+		&bindings.debug,
+		"debug",
+		false,
+		"enable debug logging (HTTP requests, config resolution)",
+	)
+	cmd.PersistentFlags().BoolVarP(&bindings.quiet, "quiet", "q", false, "suppress informational output")
+
+	cmd.MarkFlagsMutuallyExclusive("verbose", "debug", "quiet")
+}
+
+func rootPersistentPreRun(
+	outputWriter io.Writer,
+	statusWriter io.Writer,
+	bindings *rootFlagBindings,
+) func(cmd *cobra.Command, args []string) error {
+	return func(cmd *cobra.Command, args []string) error {
+		if version == "dev" {
+			config.AssertDevSafe() // prevent go run . from touching production data
+		}
+
+		flags := bindings.snapshot()
+		cc := newBootstrapCLIContext(outputWriter, statusWriter, flags)
+
+		ctx := cmd.Context()
+		if ctx == nil {
+			ctx = context.Background()
+		}
+
+		sharedTarget, found, err := resolveSharedTargetBootstrap(ctx, cmd, args, cc)
+		if err != nil {
+			return err
+		}
+		if found {
+			cc.SharedTarget = sharedTarget
+		}
+
+		if err := maybeLoadRootCommandConfig(cmd, cc); err != nil {
+			return err
+		}
+
+		cmd.SetContext(context.WithValue(ctx, cliContextKey{}, cc))
+
+		if cc.Cfg != nil {
+			config.WarnUnimplemented(cc.Cfg, cc.Logger)
+		}
+
+		return nil
+	}
+}
+
+func newBootstrapCLIContext(outputWriter io.Writer, statusWriter io.Writer, flags CLIFlags) *CLIContext {
+	logger := buildLoggerWithStatusWriter(nil, flags, statusWriter)
+	env := config.ReadEnvOverrides(logger)
+
+	return &CLIContext{
+		OutputWriter: outputWriter,
+		Flags:        flags,
+		Logger:       logger,
+		StatusWriter: statusWriter,
+		CfgPath:      config.ResolveConfigPath(env, config.CLIOverrides{ConfigPath: flags.ConfigPath}, logger),
+		Env:          env,
+	}
+}
+
+func maybeLoadRootCommandConfig(cmd *cobra.Command, cc *CLIContext) error {
+	if cc.SharedTarget != nil || cmd.Annotations[skipConfigAnnotation] == "true" {
+		return nil
+	}
+
+	resolved, rawCfg, err := loadAndResolve(cmd, cc.Flags, cc.Env, cc.Logger)
+	if err != nil {
+		return err
+	}
+
+	cc.Cfg = resolved
+
+	dualLogger, closer := buildLoggerDualWithStatusWriter(resolved, cc.Flags, cc.StatusWriter)
+	cc.Logger = dualLogger
+	cc.logCloser = closer
+
+	holder := config.NewHolder(rawCfg, cc.CfgPath)
+	cc.Provider = driveops.NewSessionProvider(
+		holder,
+		defaultHTTPClient(cc.Logger),
+		transferHTTPClient(cc.Logger),
+		"onedrive-go/"+version,
+		cc.Logger,
+	)
+
+	return nil
+}
+
+func rootPersistentPostRun(cmd *cobra.Command, _ []string) error {
+	cc := cliContextFrom(cmd.Context())
+	if cc != nil && cc.logCloser != nil {
+		if err := cc.logCloser.Close(); err != nil {
+			return fmt.Errorf("close command logger: %w", err)
+		}
+	}
+
+	return nil
+}
+
 func addRootSubcommands(cmd *cobra.Command) {
 	cmd.AddCommand(
 		newLoginCmd(), newLogoutCmd(), newWhoamiCmd(), newStatusCmd(),
+		newSharedCmd(),
 		newDriveCmd(), newLsCmd(), newGetCmd(), newPutCmd(),
 		newRmCmd(), newMkdirCmd(), newStatCmd(), newSyncCmd(),
 		newPauseCmd(), newResumeCmd(), newIssuesCmd(),

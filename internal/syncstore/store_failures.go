@@ -79,6 +79,14 @@ func normalizeFailureActionType(direction synctypes.Direction, actionType syncty
 	}
 }
 
+func normalizeFailureIdentity(
+	direction synctypes.Direction,
+	actionType synctypes.ActionType,
+) (synctypes.Direction, synctypes.ActionType) {
+	normalizedAction := normalizeFailureActionType(direction, actionType)
+	return normalizedAction.Direction(), normalizedAction
+}
+
 func actionTypeForDirection(direction synctypes.Direction) synctypes.ActionType {
 	switch direction {
 	case synctypes.DirectionDownload:
@@ -233,6 +241,7 @@ func (m *SyncStore) RecordFailure(ctx context.Context, p *synctypes.SyncFailureP
 	if err != nil {
 		return err
 	}
+	direction, actionType := normalizeFailureIdentity(p.Direction, p.ActionType)
 
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -241,7 +250,7 @@ func (m *SyncStore) RecordFailure(ctx context.Context, p *synctypes.SyncFailureP
 	defer func() { _ = tx.Rollback() }()
 
 	// Step 1: Transition remote_state status for download/delete failures.
-	if p.Direction == synctypes.DirectionDownload || p.Direction == synctypes.DirectionDelete {
+	if direction == synctypes.DirectionDownload || direction == synctypes.DirectionDelete {
 		if transErr := m.transitionRemoteStateOnFailure(ctx, tx, p.Path); transErr != nil {
 			return transErr
 		}
@@ -255,7 +264,7 @@ func (m *SyncStore) RecordFailure(ctx context.Context, p *synctypes.SyncFailureP
 
 	// Step 3: Auto-resolve item_id from remote_state for download/delete
 	// when caller didn't provide one.
-	itemID, resolveErr := m.resolveItemID(ctx, tx, p)
+	itemID, resolveErr := m.resolveItemID(ctx, tx, p.Path, p.DriveID, p.ItemID, direction)
 	if resolveErr != nil {
 		return resolveErr
 	}
@@ -286,7 +295,7 @@ func (m *SyncStore) RecordFailure(ctx context.Context, p *synctypes.SyncFailureP
 			file_size = COALESCE(excluded.file_size, sync_failures.file_size),
 			local_hash = COALESCE(excluded.local_hash, sync_failures.local_hash),
 			scope_key = excluded.scope_key`,
-		p.Path, p.DriveID.String(), p.Direction, normalizeFailureActionType(p.Direction, p.ActionType), role, category,
+		p.Path, p.DriveID.String(), direction, actionType, role, category,
 		nullString(p.IssueType), nullString(itemID),
 		newCount, nextRetryNano, int64(0), p.ErrMsg, p.HTTPStatus,
 		nowNano, nowNano, nullOptionalInt64(p.FileSize), nullString(p.LocalHash), scopeWire,
@@ -335,24 +344,31 @@ func (m *SyncStore) computeNextRetry(now time.Time, currentFailures int, delayFn
 
 // resolveItemID returns the item_id for this failure. Uses p.ItemID if set;
 // for download/delete failures, falls back to looking up remote_state.
-func (m *SyncStore) resolveItemID(ctx context.Context, tx *sql.Tx, p *synctypes.SyncFailureParams) (string, error) {
-	if p.ItemID != "" {
-		return p.ItemID, nil
+func (m *SyncStore) resolveItemID(
+	ctx context.Context,
+	tx *sql.Tx,
+	path string,
+	driveID driveid.ID,
+	itemID string,
+	direction synctypes.Direction,
+) (string, error) {
+	if itemID != "" {
+		return itemID, nil
 	}
 
-	if p.Direction != synctypes.DirectionDownload && p.Direction != synctypes.DirectionDelete {
+	if direction != synctypes.DirectionDownload && direction != synctypes.DirectionDelete {
 		return "", nil
 	}
 
-	var itemID string
+	var resolvedItemID string
 	if scanErr := tx.QueryRowContext(ctx,
 		`SELECT item_id FROM remote_state WHERE path = ? AND drive_id = ?`,
-		p.Path, p.DriveID.String(),
-	).Scan(&itemID); scanErr != nil && scanErr != sql.ErrNoRows {
-		return "", fmt.Errorf("sync: reading item_id for %s: %w", p.Path, scanErr)
+		path, driveID.String(),
+	).Scan(&resolvedItemID); scanErr != nil && scanErr != sql.ErrNoRows {
+		return "", fmt.Errorf("sync: reading item_id for %s: %w", path, scanErr)
 	}
 
-	return itemID, nil
+	return resolvedItemID, nil
 }
 
 // transitionRemoteStateOnFailure transitions remote_state status for
@@ -532,9 +548,10 @@ func (m *SyncStore) UpsertActionableFailures(ctx context.Context, failures []syn
 		if err != nil {
 			return err
 		}
+		direction, actionType := normalizeFailureIdentity(f.Direction, f.ActionType)
 
 		if _, err := stmt.ExecContext(ctx,
-			f.Path, f.DriveID.String(), f.Direction, normalizeFailureActionType(f.Direction, f.ActionType), role,
+			f.Path, f.DriveID.String(), direction, actionType, role,
 			nullString(f.IssueType), f.Error,
 			nowNano, nowNano, f.FileSize, scopeWire,
 		); err != nil {

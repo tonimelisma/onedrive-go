@@ -951,7 +951,7 @@ func TestSharedWithMe_Success(t *testing.T) {
 	assert.Equal(t, "Shared Folder", items[0].Name)
 	assert.True(t, items[0].IsFolder)
 	assert.Equal(t, "source-item-1", items[0].RemoteItemID)
-	assert.Equal(t, "source-drive-1", items[0].RemoteDriveID)
+	assert.Equal(t, driveid.New("source-drive-1").String(), items[0].RemoteDriveID)
 	assert.Equal(t, "Alice", items[0].SharedOwnerName)
 	assert.Equal(t, "alice@example.com", items[0].SharedOwnerEmail)
 
@@ -960,7 +960,7 @@ func TestSharedWithMe_Success(t *testing.T) {
 	assert.Equal(t, "shared-file.docx", items[1].Name)
 	assert.False(t, items[1].IsFolder)
 	assert.Equal(t, "source-item-2", items[1].RemoteItemID)
-	assert.Equal(t, "source-drive-2", items[1].RemoteDriveID)
+	assert.Equal(t, driveid.New("source-drive-2").String(), items[1].RemoteDriveID)
 	assert.Equal(t, "Bob", items[1].SharedOwnerName)
 	assert.Equal(t, "bob@example.com", items[1].SharedOwnerEmail)
 }
@@ -1080,7 +1080,7 @@ func TestSearchDriveItems_Success(t *testing.T) {
 	assert.Equal(t, "Shared Folder", items[0].Name)
 	assert.True(t, items[0].IsFolder)
 	assert.Equal(t, "remote-item-1", items[0].RemoteItemID)
-	assert.Equal(t, "remote-drive-1", items[0].RemoteDriveID)
+	assert.Equal(t, driveid.New("remote-drive-1").String(), items[0].RemoteDriveID)
 	assert.Equal(t, "Alice", items[0].SharedOwnerName)
 	assert.Empty(t, items[0].SharedOwnerEmail) // search doesn't return email
 

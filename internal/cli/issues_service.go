@@ -56,6 +56,20 @@ func (s *issuesService) runList(ctx context.Context, history bool) error {
 	)
 }
 
+func (s *issuesService) openSyncStore(ctx context.Context) (*syncstore.SyncStore, error) {
+	dbPath := s.cc.Cfg.StatePath()
+	if dbPath == "" {
+		return nil, fmt.Errorf("cannot determine state DB path for drive %q", s.cc.Cfg.CanonicalID)
+	}
+
+	mgr, err := syncstore.NewSyncStore(ctx, dbPath, s.cc.Logger)
+	if err != nil {
+		return nil, fmt.Errorf("open sync store: %w", err)
+	}
+
+	return mgr, nil
+}
+
 func (s *issuesService) writeEmptyIssues(history bool) error {
 	if history {
 		return writeln(s.cc.Output(), "No issues in history.")
@@ -66,6 +80,29 @@ func (s *issuesService) writeEmptyIssues(history bool) error {
 
 func (s *issuesService) runResolve(ctx context.Context, args []string, resolution string, resolveAll, dryRun bool) error {
 	return resolveWithTransfers(ctx, s.cc, args, resolution, resolveAll, dryRun)
+}
+
+func (s *issuesService) runScopeRecheck(ctx context.Context, input string) error {
+	mgr, err := s.openSyncStore(ctx)
+	if err != nil {
+		return err
+	}
+	defer mgr.Close(ctx)
+
+	target, found, err := mgr.FindRemoteBlockedTarget(ctx, input)
+	if err != nil {
+		return fmt.Errorf("find blocked shared-folder boundary for %s: %w", input, err)
+	}
+	if !found {
+		return fmt.Errorf("shared-folder write block not found: %s", input)
+	}
+	humanScope := target.ScopeKey.Humanize(nil)
+
+	if err := mgr.RequestScopeRecheck(ctx, target.ScopeKey); err != nil {
+		return fmt.Errorf("request shared-folder boundary recheck for %s: %w", humanScope, err)
+	}
+
+	return writef(s.cc.Output(), "Queued permission recheck for %s.\n", humanScope)
 }
 
 func (s *issuesService) runFailureAction(ctx context.Context, args []string, doAll bool, action failureAction) error {

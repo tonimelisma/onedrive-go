@@ -30,6 +30,9 @@ func resolveRemoteItemID(bl *synctypes.Baseline, localPath string, driveID drive
 func findShortcutForPath(shortcuts []synctypes.Shortcut, filePath string) *synctypes.Shortcut {
 	for i := range shortcuts {
 		sc := &shortcuts[i]
+		if sc.LocalPath == "" {
+			return sc
+		}
 		if filePath == sc.LocalPath || strings.HasPrefix(filePath, sc.LocalPath+"/") {
 			return sc
 		}

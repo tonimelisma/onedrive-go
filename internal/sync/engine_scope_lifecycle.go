@@ -713,6 +713,10 @@ func (controller *scopeController) discardScope(ctx context.Context, watch *watc
 }
 
 func pathMatchesPrefix(path string, prefix string) bool {
+	if prefix == "" {
+		return true
+	}
+
 	return path == prefix || strings.HasPrefix(path, prefix+"/")
 }
 

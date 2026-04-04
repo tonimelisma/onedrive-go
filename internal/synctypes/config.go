@@ -32,6 +32,8 @@ type EngineConfig struct {
 	SyncRoot           string              // absolute path to the local sync directory
 	DataDir            string              // application data directory for session files (optional)
 	DriveID            driveid.ID          // normalized drive identifier
+	AccountEmail       string              // authenticated account email for caller-aware permission checks
+	RootItemID         string              // folder-scoped virtual root; empty = drive root
 	Fetcher            DeltaFetcher        // satisfied by *graph.Client
 	Items              ItemClient          // satisfied by *graph.Client
 	Downloads          driveops.Downloader // satisfied by *graph.Client

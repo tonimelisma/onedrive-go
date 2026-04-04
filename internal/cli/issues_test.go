@@ -112,7 +112,7 @@ func TestNewIssuesCmd_Structure(t *testing.T) {
 	assert.Equal(t, "issues", cmd.Use)
 	assert.False(t, cmd.Hidden)
 
-	// Has resolve, clear, and retry subcommands.
+	// Has resolve, clear, retry, and recheck subcommands.
 	resolveCmd, _, err := cmd.Find([]string{"resolve"})
 	require.NoError(t, err)
 	assert.Equal(t, "resolve [path-or-id]", resolveCmd.Use)
@@ -124,6 +124,10 @@ func TestNewIssuesCmd_Structure(t *testing.T) {
 	retryCmd, _, err := cmd.Find([]string{"retry"})
 	require.NoError(t, err)
 	assert.Equal(t, "retry [path]", retryCmd.Use)
+
+	recheckCmd, _, err := cmd.Find([]string{"recheck"})
+	require.NoError(t, err)
+	assert.Equal(t, "recheck <boundary>", recheckCmd.Use)
 }
 
 func TestIssuesResolveCmd_Structure(t *testing.T) {
@@ -742,6 +746,57 @@ func newSeededIssuesCmd(t *testing.T) (*cobra.Command, string) {
 	return cmd, expectedPath
 }
 
+func newSeededRemoteBlockedIssuesCmd(t *testing.T) (*cobra.Command, string, *bytes.Buffer) {
+	t.Helper()
+
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test-remote-blocked.db")
+	logger := slog.New(slog.DiscardHandler)
+
+	mgr, err := syncstore.NewSyncStore(t.Context(), dbPath, logger)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:       "Shared/Docs/a.txt",
+		DriveID:    driveid.New("d!1"),
+		Direction:  synctypes.DirectionUpload,
+		ActionType: synctypes.ActionUpload,
+		Role:       synctypes.FailureRoleHeld,
+		Category:   synctypes.CategoryTransient,
+		IssueType:  synctypes.IssueSharedFolderBlocked,
+		ErrMsg:     "shared folder is read-only",
+		ScopeKey:   synctypes.SKPermRemote("Shared/Docs"),
+	}, nil))
+	require.NoError(t, mgr.Close(t.Context()))
+
+	xdgDir := filepath.Join(tmpDir, "xdg-data")
+	require.NoError(t, os.MkdirAll(filepath.Join(xdgDir, "onedrive-go"), 0o700))
+	t.Setenv("XDG_DATA_HOME", xdgDir)
+
+	cid := driveid.MustCanonicalID("personal:test@example.com")
+	expectedPath := config.DriveStatePath(cid)
+	require.NoError(t, os.MkdirAll(filepath.Dir(expectedPath), 0o700))
+	require.NoError(t, os.Symlink(dbPath, expectedPath))
+
+	var buf bytes.Buffer
+	cc := &CLIContext{
+		StatusWriter: &buf,
+		OutputWriter: &buf,
+		Logger:       logger,
+		Cfg: &config.ResolvedDrive{
+			CanonicalID: cid,
+		},
+	}
+
+	cmd := newIssuesCmd()
+	cmd.SetContext(context.WithValue(context.Background(), cliContextKey{}, cc))
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+
+	return cmd, expectedPath, &buf
+}
+
 // Validates: R-2.3.5
 func TestIssuesClear_SinglePath(t *testing.T) {
 	cmd, dbPath := newSeededIssuesCmd(t)
@@ -847,6 +902,83 @@ func TestIssuesRetry_All(t *testing.T) {
 		assert.Equal(t, synctypes.CategoryActionable, f.Category,
 			"only actionable failures should remain after retry --all")
 	}
+}
+
+// Validates: R-2.3.11
+func TestIssuesRecheck_Boundary(t *testing.T) {
+	cmd, dbPath, out := newSeededRemoteBlockedIssuesCmd(t)
+
+	cmd.SetArgs([]string{"recheck", "Shared/Docs"})
+	require.NoError(t, cmd.Execute())
+	assert.Contains(t, out.String(), "Queued permission recheck for Shared/Docs.")
+
+	logger := slog.New(slog.DiscardHandler)
+	mgr, err := syncstore.NewSyncStore(t.Context(), dbPath, logger)
+	require.NoError(t, err)
+	defer mgr.Close(t.Context())
+
+	keys, err := mgr.ListRequestedScopeRechecks(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, []synctypes.ScopeKey{synctypes.SKPermRemote("Shared/Docs")}, keys)
+}
+
+// Validates: R-2.3.11
+func TestIssuesRecheck_MissingBoundary(t *testing.T) {
+	cmd, _, _ := newSeededRemoteBlockedIssuesCmd(t)
+
+	cmd.SetArgs([]string{"recheck", "Shared/Missing"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "shared-folder write block not found")
+}
+
+// Validates: R-2.3.11
+func TestIssuesRecheck_RootBoundarySlashAlias(t *testing.T) {
+	t.Helper()
+
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test-remote-blocked-root.db")
+	logger := slog.New(slog.DiscardHandler)
+
+	mgr, err := syncstore.NewSyncStore(t.Context(), dbPath, logger)
+	require.NoError(t, err)
+	require.NoError(t, mgr.RecordFailure(t.Context(), &synctypes.SyncFailureParams{
+		Path:       "blocked.txt",
+		DriveID:    driveid.New("d!1"),
+		Direction:  synctypes.DirectionUpload,
+		ActionType: synctypes.ActionUpload,
+		Role:       synctypes.FailureRoleHeld,
+		Category:   synctypes.CategoryTransient,
+		IssueType:  synctypes.IssueSharedFolderBlocked,
+		ErrMsg:     "shared folder is read-only",
+		ScopeKey:   synctypes.SKPermRemote(""),
+	}, nil))
+	require.NoError(t, mgr.Close(t.Context()))
+
+	xdgDir := filepath.Join(tmpDir, "xdg-data")
+	require.NoError(t, os.MkdirAll(filepath.Join(xdgDir, "onedrive-go"), 0o700))
+	t.Setenv("XDG_DATA_HOME", xdgDir)
+
+	cid := driveid.MustCanonicalID("personal:test@example.com")
+	expectedPath := config.DriveStatePath(cid)
+	require.NoError(t, os.MkdirAll(filepath.Dir(expectedPath), 0o700))
+	require.NoError(t, os.Symlink(dbPath, expectedPath))
+
+	var out bytes.Buffer
+	cc := &CLIContext{
+		StatusWriter: &out,
+		OutputWriter: &out,
+		Logger:       logger,
+		Cfg:          &config.ResolvedDrive{CanonicalID: cid},
+	}
+
+	cmd := newIssuesCmd()
+	cmd.SetContext(context.WithValue(context.Background(), cliContextKey{}, cc))
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"recheck", "/"})
+	require.NoError(t, cmd.Execute())
+	assert.Contains(t, out.String(), "Queued permission recheck for /.")
 }
 
 // Validates: R-2.10.47

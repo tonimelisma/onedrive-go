@@ -109,12 +109,12 @@ func ParseScopeKey(s string) ScopeKey {
 		return SKQuotaOwn()
 	case s == WireDiskLocal:
 		return SKDiskLocal()
-	case len(s) > len(WireQuotaShortcut) && s[:len(WireQuotaShortcut)] == WireQuotaShortcut:
-		return SKQuotaShortcut(s[len(WireQuotaShortcut):])
-	case len(s) > len(WirePermDir) && s[:len(WirePermDir)] == WirePermDir:
-		return SKPermDir(s[len(WirePermDir):])
-	case len(s) > len(WirePermRemote) && s[:len(WirePermRemote)] == WirePermRemote:
-		return SKPermRemote(s[len(WirePermRemote):])
+	case strings.HasPrefix(s, WireQuotaShortcut):
+		return SKQuotaShortcut(strings.TrimPrefix(s, WireQuotaShortcut))
+	case strings.HasPrefix(s, WirePermDir):
+		return SKPermDir(strings.TrimPrefix(s, WirePermDir))
+	case strings.HasPrefix(s, WirePermRemote):
+		return SKPermRemote(strings.TrimPrefix(s, WirePermRemote))
 	default:
 		return ScopeKey{}
 	}
@@ -199,6 +199,9 @@ func (sk ScopeKey) Humanize(shortcuts []Shortcut) string {
 		}
 		return sk.Param // fallback to composite key
 	case ScopePermDir, ScopePermRemote:
+		if sk.Param == "" {
+			return "/"
+		}
 		return sk.Param
 	case ScopeDiskLocal:
 		return "local disk"
@@ -222,7 +225,7 @@ func (sk ScopeKey) BlocksAction(path, shortcutKey string, actionType ActionType,
 	case ScopePermDir:
 		return path == sk.Param || strings.HasPrefix(path, sk.Param+"/")
 	case ScopePermRemote:
-		if path != sk.Param && !strings.HasPrefix(path, sk.Param+"/") {
+		if !scopePathMatches(path, sk.Param) {
 			return false
 		}
 		switch actionType {
@@ -236,6 +239,14 @@ func (sk ScopeKey) BlocksAction(path, shortcutKey string, actionType ActionType,
 	default:
 		return false
 	}
+}
+
+func scopePathMatches(path, boundary string) bool {
+	if boundary == "" {
+		return true
+	}
+
+	return path == boundary || strings.HasPrefix(path, boundary+"/")
 }
 
 // ScopeKeyForStatus maps an HTTP status code and shortcut context to a

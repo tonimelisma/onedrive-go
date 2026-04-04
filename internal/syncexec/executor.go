@@ -28,12 +28,13 @@ const localDirPerms = 0o755
 // Executor instances. Separated from mutable state to prevent temporal
 // coupling and enable thread safety.
 type ExecutorConfig struct {
-	items     synctypes.ItemClient
-	downloads driveops.Downloader
-	uploads   driveops.Uploader
-	syncTree  *synctree.Root
-	driveID   driveid.ID // per-drive context (B-068)
-	logger    *slog.Logger
+	items      synctypes.ItemClient
+	downloads  driveops.Downloader
+	uploads    driveops.Uploader
+	syncTree   *synctree.Root
+	driveID    driveid.ID // per-drive context (B-068)
+	rootItemID string     // virtual root for folder-scoped shared drives; empty = drive root
+	logger     *slog.Logger
 
 	// transferMgr handles unified download/upload with resume and disk
 	// space pre-checks (R-6.2.6). Disk check is configured via
@@ -105,6 +106,12 @@ func (cfg *ExecutorConfig) SetTrashFunc(fn func(absPath string) error) {
 // created from this config.
 func (cfg *ExecutorConfig) SetTransferMgr(mgr *driveops.TransferManager) {
 	cfg.transferMgr = mgr
+}
+
+// SetRootItemID sets the configured virtual root item for folder-scoped shared
+// drives. Empty keeps the normal owner-drive root semantics.
+func (cfg *ExecutorConfig) SetRootItemID(itemID string) {
+	cfg.rootItemID = itemID
 }
 
 // Items returns the item client for direct API access (e.g., for trial
@@ -430,6 +437,10 @@ func (e *Executor) ResolveParentID(relPath string) (string, error) {
 
 	// Top-level item: parent is root.
 	if parentDir == "." || parentDir == "" {
+		if e.rootItemID != "" {
+			return e.rootItemID, nil
+		}
+
 		return graphRootID, nil
 	}
 

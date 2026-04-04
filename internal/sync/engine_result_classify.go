@@ -317,16 +317,5 @@ func (m resultPersistenceMode) failureCategory() synctypes.FailureCategory {
 
 // directionFromAction maps a synctypes.ActionType to a typed Direction enum.
 func directionFromAction(at synctypes.ActionType) synctypes.Direction {
-	switch at {
-	case synctypes.ActionUpload:
-		return synctypes.DirectionUpload
-	case synctypes.ActionDownload, synctypes.ActionFolderCreate, synctypes.ActionConflict:
-		return synctypes.DirectionDownload
-	case synctypes.ActionLocalDelete, synctypes.ActionRemoteDelete:
-		return synctypes.DirectionDelete
-	case synctypes.ActionLocalMove, synctypes.ActionRemoteMove,
-		synctypes.ActionUpdateSynced, synctypes.ActionCleanup:
-		return synctypes.DirectionDownload
-	}
-	return synctypes.DirectionDownload
+	return at.Direction()
 }

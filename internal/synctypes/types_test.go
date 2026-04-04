@@ -96,6 +96,30 @@ func TestEnumStrings_NonEmpty(t *testing.T) {
 	}
 }
 
+func TestActionTypeDirection(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		action ActionType
+		want   Direction
+	}{
+		{action: ActionDownload, want: DirectionDownload},
+		{action: ActionUpload, want: DirectionUpload},
+		{action: ActionLocalDelete, want: DirectionDelete},
+		{action: ActionRemoteDelete, want: DirectionDelete},
+		{action: ActionLocalMove, want: DirectionDownload},
+		{action: ActionRemoteMove, want: DirectionDownload},
+		{action: ActionFolderCreate, want: DirectionDownload},
+		{action: ActionConflict, want: DirectionDownload},
+		{action: ActionUpdateSynced, want: DirectionDownload},
+		{action: ActionCleanup, want: DirectionDownload},
+	}
+
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, tt.action.Direction())
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Baseline.DescendantsOf tests
 // ---------------------------------------------------------------------------

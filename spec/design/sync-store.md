@@ -240,6 +240,11 @@ The durable row still carries the raw evidence (`issue_type`, `category`,
 `failure_role`, `scope_key`), and `synctypes.SummaryKeyForPersistedFailure`
 remains the read-time normalization rule for testable reprojection.
 
+Derived shared-folder blocked writes and scope-only auth blocks are normalized
+into that same `IssuesSnapshot`, so `issues`, `status`, and watch/runtime
+summaries all consume one store-owned visible-issue taxonomy instead of
+rebuilding different views from raw tables.
+
 The broader CLI auth-health projection also reads `auth:account` from
 `scope_blocks` through `Inspector.HasScopeBlock`, but it combines that
 store-backed signal with token and account-profile discovery instead of

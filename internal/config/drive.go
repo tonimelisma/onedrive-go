@@ -25,6 +25,7 @@ type ResolvedDrive struct {
 	PausedUntil string // RFC3339 timestamp; empty when not timed
 	SyncDir     string // absolute path after tilde expansion
 	DriveID     driveid.ID
+	RootItemID  string // virtual root item for folder-scoped shared drives; empty = drive root
 
 	FilterConfig
 	TransfersConfig
@@ -180,6 +181,7 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 	} else if canonicalID.IsShared() {
 		// Shared drives embed the remote drive ID in the canonical ID.
 		resolved.DriveID = driveid.New(canonicalID.SourceDriveID())
+		resolved.RootItemID = canonicalID.SourceItemID()
 		logger.Debug("resolved drive ID from canonical ID",
 			"drive_id", resolved.DriveID.String(),
 			"canonical_id", canonicalID.String(),

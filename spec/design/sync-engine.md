@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/engine*.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/engine_shortcuts.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_decisions.go, sync_helpers.go
 
-Implements: R-2.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-2.10.45 [verified], R-2.10.46 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified], R-2.14.5 [verified], R-6.3.4 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [planned], R-6.6.10 [verified], R-6.6.12 [verified], R-6.7.27 [verified], R-6.8.15 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
+Implements: R-2.1 [verified], R-2.3.11 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-2.10.45 [verified], R-2.10.46 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified], R-2.14.5 [verified], R-6.3.4 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [planned], R-6.6.10 [verified], R-6.6.12 [verified], R-6.7.27 [verified], R-6.8.15 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
 
 ## Ownership Contract
 
@@ -373,6 +373,11 @@ Implements: R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [planned], R-6.6.10 
 
 When >10 items share the same warning category, log 1 WARN summary with count and sample paths + individual paths at DEBUG. When <=10 items, log each as an individual WARN. This pattern is implemented in `recordSkippedItems()` for scanner-time validation failures. Transient retries at DEBUG, resolved at INFO, exhausted at WARN. Extends to execution-time transient failures: when >10 transient failures of the same `issue_type` exhaust their retry budget in a single sync pass, aggregate into 1 WARN summary with count, individual paths at DEBUG (R-6.6.12).
 
+Watch-mode visible issue logging uses the store-owned visible-issue projection
+instead of ad hoc counters. Shared-folder blocked-write summaries therefore log
+one activation message per boundary, log again only when the blocked-child set
+materially changes, and log one resolution message when the boundary clears.
+
 ### Local Permission Handling
 
 Implements: R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.10 [verified]
@@ -401,11 +406,19 @@ shared content. Like the local permission path, it returns a decision for the
 engine to apply through `scopeController`:
 
 - First it checks whether the failing path is already under an active derived `perm:remote:{localPath}` boundary. If so, it short-circuits without another Graph permission walk.
-- Otherwise it resolves the relevant shortcut, calls `ListItemPermissions` on the target folder, and confirms whether the 403 is a real write denial or a transient/inconclusive failure.
+- Otherwise it resolves the relevant shortcut, calls `ListItemPermissions` on the target folder, and runs the caller-aware graph permission classifier to confirm whether the 403 is a real write denial or a transient/inconclusive failure.
 - On confirmed denial it walks upward, still using `ListItemPermissions`, to find the highest denied ancestor but never above the shortcut root.
 - On confirmed denial it records the triggering blocked write as one held
   transient row with `scope_key='perm:remote:{boundary}'`. That held row is
   the durable authority for the derived scope.
+
+The graph-side classifier is intentionally stricter than raw `roles`
+inspection. Live Personal-account testing showed `permissions` responses on
+read-only shared folders including both the recipient's read-only link grant
+and an unrelated owner row for the sharer. The engine therefore treats
+`ListItemPermissions` as evidence that still needs caller applicability
+evaluation; unrelated owner/write rows do not defeat a confirmed read-only
+boundary.
 
 `perm:remote` is recursive and download-only while blocked write intent exists:
 
@@ -419,6 +432,11 @@ of each sync pass and returns explicit release/keep decisions:
 - writable again -> `releaseScope`
 - Graph/API failure or stale shortcut boundary -> fail open via `releaseScope`
 - still denied -> keep the boundary active
+
+`issues recheck <boundary>` uses a separate durable request path. The CLI writes
+`scope_recheck_requests`, and watch/one-shot runs consume those requests by
+calling the same permission recheck path for the requested boundary only. This
+keeps boundary revalidation distinct from manual child-path trial requests.
 
 `issues retry <blocked-path>` requests a manual trial for that exact held row.
 The retry path is candidate-specific: the engine dispatches that row as a

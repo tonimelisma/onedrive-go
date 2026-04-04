@@ -57,6 +57,21 @@ func printFailureGroup(w io.Writer, group *syncstore.IssueGroupSnapshot, verbose
 			return err
 		}
 	}
+	if group.SummaryKey == synctypes.SummarySharedFolderWritesBlocked {
+		if err := writef(w, "  Recheck: run 'onedrive-go issues recheck %s' to validate permissions now\n", group.ScopeKey); err != nil {
+			return err
+		}
+		if group.RecheckRequestedAt > 0 {
+			if err := writef(w, "  Recheck requested: %s\n", formatNanoTimestamp(group.RecheckRequestedAt)); err != nil {
+				return err
+			}
+		}
+		if group.HasManualTrial {
+			if err := writef(w, "  Retry trial requested for one blocked path.\n"); err != nil {
+				return err
+			}
+		}
+	}
 
 	return printFailurePaths(w, group, verbose)
 }
@@ -221,13 +236,15 @@ func formatDuration(d time.Duration) string {
 
 // failureGroupJSON is the JSON representation of a grouped failure set.
 type failureGroupJSON struct {
-	IssueType string   `json:"issue_type"`
-	Title     string   `json:"title"`
-	Reason    string   `json:"reason"`
-	Action    string   `json:"action"`
-	Scope     string   `json:"scope,omitempty"`
-	Count     int      `json:"count"`
-	Paths     []string `json:"paths"`
+	IssueType            string   `json:"issue_type"`
+	Title                string   `json:"title"`
+	Reason               string   `json:"reason"`
+	Action               string   `json:"action"`
+	Scope                string   `json:"scope,omitempty"`
+	Count                int      `json:"count"`
+	Paths                []string `json:"paths"`
+	ManualTrialRequested bool     `json:"manual_trial_requested,omitempty"`
+	RecheckRequestedAt   string   `json:"recheck_requested_at,omitempty"`
 }
 
 // issuesOutputJSON is the top-level JSON structure for the issues command.
@@ -265,13 +282,15 @@ func printGroupedIssuesJSON(
 		descriptor := synctypes.DescribeSummary(snapshot.Groups[i].SummaryKey)
 
 		out.FailureGroups[i] = failureGroupJSON{
-			IssueType: snapshot.Groups[i].PrimaryIssueType,
-			Title:     descriptor.Title,
-			Reason:    descriptor.Reason,
-			Action:    descriptor.Action,
-			Scope:     snapshot.Groups[i].ScopeLabel,
-			Count:     snapshot.Groups[i].Count,
-			Paths:     paths,
+			IssueType:            snapshot.Groups[i].PrimaryIssueType,
+			Title:                descriptor.Title,
+			Reason:               descriptor.Reason,
+			Action:               descriptor.Action,
+			Scope:                snapshot.Groups[i].ScopeLabel,
+			Count:                snapshot.Groups[i].Count,
+			Paths:                paths,
+			ManualTrialRequested: snapshot.Groups[i].HasManualTrial,
+			RecheckRequestedAt:   formatNanoTimestamp(snapshot.Groups[i].RecheckRequestedAt),
 		}
 	}
 

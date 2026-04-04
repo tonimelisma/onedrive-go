@@ -106,8 +106,11 @@ type watchTimerState struct {
 }
 
 type watchReconcileState struct {
-	// Deduplication: caches last actionable issue count for watch summaries.
-	lastSummaryTotal int
+	// Deduplication: caches the last visible-issue summary signature and
+	// per-scope shared-folder child-set signatures for watch summaries.
+	lastSummaryTotal     int
+	lastSummarySignature string
+	lastRemoteBlocked    map[synctypes.ScopeKey]string
 
 	// Full reconciliation is started by the watch loop and hands its result
 	// back over reconcileResults. The loop owns reconcileActive and applies the
@@ -140,7 +143,8 @@ func newWatchRuntime(engine *Engine) *watchRuntime {
 			retryTimerCh: make(chan struct{}, 1),
 		},
 		watchReconcileState: watchReconcileState{
-			reconcileResults: make(chan reconcileResult, 1),
+			lastRemoteBlocked: make(map[synctypes.ScopeKey]string),
+			reconcileResults:  make(chan reconcileResult, 1),
 		},
 	}
 	rt.watch = rt

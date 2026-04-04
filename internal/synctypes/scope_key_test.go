@@ -18,6 +18,7 @@ func TestScopeKey_StringParseRoundTrip(t *testing.T) {
 		SKQuotaOwn(),
 		SKQuotaShortcut("drive:item"),
 		SKPermDir("/docs"),
+		SKPermRemote(""),
 		SKDiskLocal(),
 	}
 
@@ -106,6 +107,7 @@ func TestScopeKey_Humanize(t *testing.T) {
 	assert.Equal(t, "Team Docs", SKQuotaShortcut("drive:item").Humanize(shortcuts))
 	assert.Equal(t, "missing:item", SKQuotaShortcut("missing:item").Humanize(shortcuts))
 	assert.Equal(t, "/docs", SKPermDir("/docs").Humanize(shortcuts))
+	assert.Equal(t, "/", SKPermRemote("").Humanize(shortcuts))
 	assert.Equal(t, "local disk", SKDiskLocal().Humanize(shortcuts))
 }
 
@@ -128,6 +130,8 @@ func TestScopeKey_BlocksAction(t *testing.T) {
 	assert.True(t, SKPermRemote("/readonly").BlocksAction("/readonly/file.txt", "", ActionUpload, false))
 	assert.True(t, SKPermRemote("/readonly").BlocksAction("/readonly/file.txt", "", ActionRemoteDelete, false))
 	assert.True(t, SKPermRemote("/readonly").BlocksAction("/readonly", "", ActionFolderCreate, false))
+	assert.True(t, SKPermRemote("").BlocksAction("/anywhere/file.txt", "", ActionUpload, false))
+	assert.False(t, SKPermRemote("").BlocksAction("/anywhere/file.txt", "", ActionDownload, false))
 	assert.False(t, SKPermRemote("/readonly").BlocksAction("/readonly/file.txt", "", ActionDownload, false))
 	assert.False(t, SKPermRemote("/readonly").BlocksAction("/readonly/file.txt", "", ActionLocalDelete, false))
 	assert.False(t, SKPermRemote("/readonly").BlocksAction("/other/file.txt", "", ActionUpload, false))

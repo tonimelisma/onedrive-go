@@ -1502,7 +1502,7 @@ func sharedOwnerFallbackCases() []sharedOwnerFallbackCase {
 			wantName:     "Sharer",
 			wantEmail:    "sharer@example.com",
 			wantRemoteID: "source-item-id",
-			wantDriveID:  "source-drive-id",
+			wantDriveID:  driveid.New("source-drive-id").String(),
 			wantChildCnt: 5,
 		},
 		{
@@ -1520,7 +1520,7 @@ func sharedOwnerFallbackCases() []sharedOwnerFallbackCase {
 			wantName:     "Owner",
 			wantEmail:    "owner@example.com",
 			wantRemoteID: "src-id",
-			wantDriveID:  "src-drive",
+			wantDriveID:  driveid.New("src-drive").String(),
 			wantChildCnt: 3,
 		},
 		{
@@ -1535,7 +1535,7 @@ func sharedOwnerFallbackCases() []sharedOwnerFallbackCase {
 			wantName:     "Creator",
 			wantEmail:    "creator@example.com",
 			wantRemoteID: "src-id",
-			wantDriveID:  "src-drive",
+			wantDriveID:  driveid.New("src-drive").String(),
 			wantChildCnt: 0,
 		},
 		{
@@ -1547,7 +1547,7 @@ func sharedOwnerFallbackCases() []sharedOwnerFallbackCase {
 			wantName:     "John Doe",
 			wantEmail:    "john@example.com",
 			wantRemoteID: "source-item-id",
-			wantDriveID:  "source-drive-id",
+			wantDriveID:  driveid.New("source-drive-id").String(),
 			wantChildCnt: 5,
 		},
 		{
@@ -1558,7 +1558,7 @@ func sharedOwnerFallbackCases() []sharedOwnerFallbackCase {
 			),
 			wantName:     "Creator Only",
 			wantRemoteID: "src-id",
-			wantDriveID:  "src-drive",
+			wantDriveID:  driveid.New("src-drive").String(),
 			wantChildCnt: 0,
 		},
 	}
@@ -2024,7 +2024,7 @@ func TestListItemPermissions_ReadOnly(t *testing.T) {
 func TestListItemPermissions_Writable(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		writeTestResponse(t, w, `{"value": [{"id": "perm-1", "roles": ["read", "write"]}]}`)
+		writeTestResponse(t, w, `{"value": [{"id": "perm-1", "roles": ["read", "write"], "link": {"type": "edit"}}]}`)
 	}))
 	defer srv.Close()
 
@@ -2032,6 +2032,7 @@ func TestListItemPermissions_Writable(t *testing.T) {
 	perms, err := client.ListItemPermissions(t.Context(), driveid.New("drive-1"), "item-1")
 	require.NoError(t, err)
 	require.Len(t, perms, 1)
+	assert.Equal(t, PermissionWriteAccessWritable, EvaluateWriteAccess(perms, ""))
 	assert.True(t, HasWriteAccess(perms))
 }
 
@@ -2057,10 +2058,12 @@ func TestHasWriteAccess(t *testing.T) {
 		{"empty", nil, false},
 		{"read only", []Permission{{Roles: []string{"read"}}}, false},
 		{"write", []Permission{{Roles: []string{"write"}}}, true},
-		{"owner", []Permission{{Roles: []string{"owner"}}}, true},
+		{"owner", []Permission{{Roles: []string{"owner"}}}, false},
 		{"mixed read and write", []Permission{{Roles: []string{"read"}}, {Roles: []string{"write"}}}, true},
 		{"member only", []Permission{{Roles: []string{"member"}}}, false},
-		{"owner in mixed", []Permission{{Roles: []string{"read", "owner"}}}, true},
+		{"owner in mixed", []Permission{{Roles: []string{"read", "owner"}}}, false},
+		{"view link", []Permission{{Roles: []string{"read"}, Link: &permissionLink{Type: "view"}}}, false},
+		{"edit link", []Permission{{Roles: []string{"read"}, Link: &permissionLink{Type: "edit"}}}, true},
 	}
 
 	for _, tt := range tests {
@@ -2068,6 +2071,70 @@ func TestHasWriteAccess(t *testing.T) {
 			assert.Equal(t, tt.want, HasWriteAccess(tt.perms))
 		})
 	}
+}
+
+func TestEvaluateWriteAccess_IgnoresOwnerPermissionForDifferentUser(t *testing.T) {
+	var resp listPermissionsResponse
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"value": [
+			{
+				"id": "view-link",
+				"roles": ["read"],
+				"link": {"scope": "anonymous", "type": "view", "webUrl": "https://1drv.ms/f/example"}
+			},
+			{
+				"id": "owner-membership",
+				"roles": ["owner"],
+				"grantedToV2": {
+					"siteUser": {
+						"displayName": "Owner User",
+						"email": "owner@example.com",
+						"id": "4"
+					}
+				},
+				"link": {"webUrl": "https://1drv.ms/f/example-owner"}
+			}
+		]
+	}`), &resp))
+
+	assert.Equal(t, PermissionWriteAccessReadOnly, EvaluateWriteAccess(resp.Value, "recipient@example.com"))
+	assert.False(t, HasWriteAccess(resp.Value))
+}
+
+func TestEvaluateWriteAccess_IgnoresWriteGrantForDifferentUser(t *testing.T) {
+	perms := []Permission{
+		{
+			ID:    "recipient-read",
+			Roles: []string{"read"},
+			GrantedToV2: &permissionIdentitySet{
+				User: &sharedUserFacet{Email: "recipient@example.com"},
+			},
+		},
+		{
+			ID:    "other-user-write",
+			Roles: []string{"write"},
+			GrantedToV2: &permissionIdentitySet{
+				User: &sharedUserFacet{Email: "other@example.com"},
+			},
+		},
+	}
+
+	assert.Equal(t, PermissionWriteAccessReadOnly, EvaluateWriteAccess(perms, "recipient@example.com"))
+	assert.Equal(t, PermissionWriteAccessInconclusive, EvaluateWriteAccess(perms, ""))
+}
+
+func TestEvaluateWriteAccess_MatchingGrantedToWriteIsWritable(t *testing.T) {
+	perms := []Permission{
+		{
+			ID:    "recipient-write",
+			Roles: []string{"write"},
+			GrantedToV2: &permissionIdentitySet{
+				SiteUser: &sharedUserFacet{Email: "recipient@example.com"},
+			},
+		},
+	}
+
+	assert.Equal(t, PermissionWriteAccessWritable, EvaluateWriteAccess(perms, "recipient@example.com"))
 }
 
 // --- ListRecycleBinItems tests ---
