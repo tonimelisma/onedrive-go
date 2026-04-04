@@ -1309,24 +1309,6 @@ func runDriveSearch(cmd *cobra.Command, args []string) error {
 	return newDriveService(mustCLIContext(cmd.Context())).runSearch(cmd.Context(), args[0])
 }
 
-// findBusinessTokens returns all business account tokens, optionally filtered
-// by accountFilter. When non-empty, accountFilter is matched against the
-// token's email exactly (case-sensitive, not a partial match or canonical ID).
-func findBusinessTokens(accountFilter string, logger *slog.Logger) []driveid.CanonicalID {
-	tokens := config.DiscoverTokens(logger)
-
-	var businessTokens []driveid.CanonicalID
-	for _, t := range tokens {
-		if t.DriveType() == driveid.DriveTypeBusiness {
-			if accountFilter == "" || t.Email() == accountFilter {
-				businessTokens = append(businessTokens, t)
-			}
-		}
-	}
-
-	return businessTokens
-}
-
 // searchAccountSharePoint searches SharePoint sites for a single business account.
 func searchAccountSharePoint(
 	ctx context.Context,
@@ -1434,8 +1416,15 @@ func printDriveSearchText(
 ) error {
 	authRequired := optionalAuthRequirements(authRequiredOpt)
 
-	if len(results) == 0 && len(authRequired) == 0 {
-		return writef(w, "No SharePoint sites found matching %q.\n", query)
+	if len(results) == 0 {
+		if len(authRequired) == 0 {
+			return writef(w, "No SharePoint sites found matching %q.\n", query)
+		}
+
+		if err := printDriveSearchAuthSection(w, authRequired, false); err != nil {
+			return err
+		}
+		return writef(w, "No SharePoint sites found matching %q in searchable business accounts.\n", query)
 	}
 
 	if err := printDriveSearchAuthSection(w, authRequired, len(results) > 0); err != nil {
