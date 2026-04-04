@@ -835,7 +835,10 @@ func fetchAuthenticatedAccount(
 	recorder *authProofRecorder,
 	baseURL string,
 ) (authenticatedAccountResult, error) {
-	cid, found := matchAuthenticatedDrive(cfg, driveSelector, logger)
+	cid, found, matchErr := matchAuthenticatedDrive(cfg, driveSelector, logger)
+	if matchErr != nil {
+		return authenticatedAccountResult{}, matchErr
+	}
 	if !found {
 		return authenticatedAccountResult{}, nil
 	}
@@ -845,23 +848,7 @@ func fetchAuthenticatedAccount(
 	if len(accountDriveIDs) == 0 {
 		accountDriveIDs = []driveid.CanonicalID{cid}
 	}
-	catalogEntry, found := catalogEntryByEmail(catalog, accountEmail)
-	if !found {
-		catalogEntry = accountCatalogEntry{
-			DriveType:    accountDriveType(accountDriveIDs),
-			DisplayName:  "",
-			StateDBCount: len(config.DiscoverStateDBsForEmail(accountEmail, logger)),
-			AuthHealth:   inspectAccountAuth(ctx, accountEmail, accountDriveIDs, logger),
-		}
-		catalogEntry.DisplayName, _ = readAccountMeta(accountEmail, accountDriveIDs, logger)
-	}
-	authRequired := authRequirement(
-		accountEmail,
-		catalogEntry.DisplayName,
-		catalogEntry.DriveType,
-		catalogEntry.StateDBCount,
-		accountAuthHealth{},
-	)
+	catalogEntry, authRequired := whoamiCatalogContext(ctx, catalog, accountEmail, accountDriveIDs, logger)
 
 	accountAuth := catalogEntry.AuthHealth
 	if accountAuth.State == authStateAuthenticationNeeded && accountAuth.Reason != authReasonSyncAuthRejected {
@@ -926,6 +913,33 @@ func fetchAuthenticatedAccount(
 	}, nil
 }
 
+func whoamiCatalogContext(
+	ctx context.Context,
+	catalog []accountCatalogEntry,
+	accountEmail string,
+	accountDriveIDs []driveid.CanonicalID,
+	logger *slog.Logger,
+) (accountCatalogEntry, accountAuthRequirement) {
+	catalogEntry, found := catalogEntryByEmail(catalog, accountEmail)
+	if !found {
+		catalogEntry = accountCatalogEntry{
+			DriveType:    accountDriveType(accountDriveIDs),
+			DisplayName:  "",
+			StateDBCount: len(config.DiscoverStateDBsForEmail(accountEmail, logger)),
+			AuthHealth:   inspectAccountAuth(ctx, accountEmail, accountDriveIDs, logger),
+		}
+		catalogEntry.DisplayName, _ = readAccountMeta(accountEmail, accountDriveIDs, logger)
+	}
+
+	return catalogEntry, authRequirement(
+		accountEmail,
+		catalogEntry.DisplayName,
+		catalogEntry.DriveType,
+		catalogEntry.StateDBCount,
+		accountAuthHealth{},
+	)
+}
+
 func accountDriveType(driveIDs []driveid.CanonicalID) string {
 	for _, cid := range driveIDs {
 		if cid.DriveType() != driveid.DriveTypeSharePoint {
@@ -944,18 +958,22 @@ func matchAuthenticatedDrive(
 	cfg *config.Config,
 	driveSelector string,
 	logger *slog.Logger,
-) (driveid.CanonicalID, bool) {
-	cid, _, matchErr := config.MatchDrive(cfg, driveSelector, logger)
-	if matchErr != nil {
+) (driveid.CanonicalID, bool, error) {
+	if len(cfg.Drives) == 0 {
 		logger.Debug("whoami: skipping authenticated account lookup",
 			slog.String("selector", driveSelector),
-			slog.String("reason", matchErr.Error()),
+			slog.String("reason", "no configured drives"),
 		)
 
-		return driveid.CanonicalID{}, false
+		return driveid.CanonicalID{}, false, nil
 	}
 
-	return cid, true
+	cid, _, matchErr := config.MatchDrive(cfg, driveSelector, logger)
+	if matchErr != nil {
+		return driveid.CanonicalID{}, false, fmt.Errorf("%w", matchErr)
+	}
+
+	return cid, true, nil
 }
 
 // findWhoamiAuthRequiredAccounts discovers orphaned account profiles whose

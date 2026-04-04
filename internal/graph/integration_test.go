@@ -24,7 +24,10 @@ import (
 )
 
 const (
-	integrationTimeout = 30 * time.Second
+	// Live Graph calls occasionally sit behind real service latency on GitHub
+	// runners. Give each integration step enough budget to observe the platform
+	// rather than failing on infrastructure jitter.
+	integrationTimeout = 60 * time.Second
 	driveEnvVar        = "ONEDRIVE_TEST_DRIVE"
 )
 

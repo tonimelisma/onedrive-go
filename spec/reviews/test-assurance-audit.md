@@ -308,7 +308,7 @@ This is the operating dashboard for completeness, not a verdict of quality. A pa
 | W4 | done | done | done | n/a | done | done | partial | done | live crash/restart proof is still thinner than the now-reconciled store/CLI durable-row mutation coverage |
 | W5 | done | done | done | partial | done | partial | partial | done | upload-session traceability tags still lag the body-level coverage |
 | W6 | done | done | partial | partial | done | partial | partial | no | pagination and transport split still need body audit |
-| W7 | done | done | partial | n/a | done | partial | partial | partial | broader caller-level logout/whoami/drive-list coverage still needs deeper audit |
+| W7 | done | done | partial | n/a | done | partial | partial | partial | live auth/logout/list proof is still thinner than the now-expanded caller-level coverage |
 | W8 | done | done | partial | n/a | done | no | no | no | validation-tier coverage may be over-claimed |
 | W9 | done | done | partial | partial | done | no | no | no | shared-drive identity fallback details still need confirmation |
 
@@ -951,11 +951,19 @@ Key W5 gap notes:
   - New caller-level tests now prove both sides of that contract. `TestDriveService_RunRemove_PurgePreservesAccountProfile` proves drive purge removes config/state/metadata while preserving token + account profile and keeping the offline account catalog usable. `TestAuthService_RunLogout_PurgeRemovesAccountProfile` proves logout purge still removes token, state DB, metadata, and the account profile while leaving sync directories untouched.
   - The old helper-level `purgeSingleDrive` test was also too shallow to catch this regression. It now asserts the account profile survives drive-scoped purge instead of disappearing silently.
   - Direct file-command independence from sync-store health also had a real user-facing leak: the authenticated-success proof hook already treated auth-scope cleanup as best-effort, but it logged sync-store repair failures at `Warn`, so a successful `ls` or `rm` could still print sync-database warnings. The hook now logs repair failures at `Debug`, and caller-level `ls` / `rm` tests prove successful direct API commands stay quiet even when the discovered state DB is corrupt.
+  - Plain logout caller coverage was thinner than purge coverage. `TestAuthService_RunLogout_PreservesOfflineState` now proves the non-purge boundary directly: token + config are removed, but the state DB, drive metadata, account profile, and sync directory survive, and logout also clears persisted `auth:account` scope blocks from the preserved state DB.
+  - `whoami` had a real caller-boundary bug in drive matching. The authenticated path used `MatchDrive`, but it swallowed those errors and fell through to offline auth-required / not-logged-in behavior. Invalid `--drive` selectors and the multi-drive no-selector ambiguity could therefore report the wrong outcome. The fix only soft-skips matching when there are no configured drives at all; otherwise `whoami` now surfaces the real drive-selection error.
+  - New caller-level `whoami` tests now prove both sides of that boundary: orphaned-profile-only runs still emit `accounts_requiring_auth` JSON after logout-style local state loss, while invalid or ambiguous drive selection returns the expected `MatchDrive` error.
+  - `drive list` now has direct caller-level auth-required coverage rather than only helper and print-shape coverage. New text and JSON service tests prove that an invalid saved login on a configured drive marks the configured row as `required` and emits the corresponding `accounts_requiring_auth` entry with the right reason and retained state-database count.
 
 | Contract / invariant | Evidence | Verdict | Notes |
 |---|---|---|---|
 | `drive remove --purge` preserves account-owned token/profile state while deleting only drive-owned config/state/metadata | `REQ+DESIGN+CODE+BODY` | `proven` | Fixed real production bug in `purgeSingleDrive`; caller-level service test now kills accidental over-deletion |
 | `logout --purge` removes account-owned token/profile state in addition to drive-owned state | `REQ+DESIGN+BODY` | `proven` | Caller-level logout purge test now proves the destructive boundary separately from drive-scoped purge |
+| plain `logout` removes token/config state while preserving state DBs, drive metadata, account profiles, and sync directories | `REQ+DESIGN+BODY` | `proven` | Caller-level logout test now proves the non-purge boundary and the preserved-state auth-scope clear path |
+| `whoami` surfaces invalid or ambiguous drive selection instead of silently degrading to offline fallback output | `REQ+DESIGN+CODE+BODY` | `proven` | Fixed real production bug by soft-skipping authenticated lookup only when there are no configured drives |
+| `whoami` still emits offline `accounts_requiring_auth` output when only orphaned local account state remains | `REQ+DESIGN+BODY` | `proven` | Caller-level JSON test now proves read-model orchestration, not just print helpers |
+| `drive list` surfaces configured-drive auth-required state in both text and JSON output | `REQ+DESIGN+BODY` | `proven` | Caller-level tests now prove service-owned auth projection and emitted schema/section text |
 | direct API file commands remain successful and user-quiet when auth-proof cleanup cannot open a sync DB | `REQ+DESIGN+CODE+BODY` | `proven` | `authProofRecorder` now keeps proof-repair failures at debug level; caller-level `ls` and `rm` tests prove no user-visible sync-store warning leak |
 
 ### W8. Configuration Discovery, Validation Tiers, And Token Resolution
@@ -1047,4 +1055,4 @@ Key W5 gap notes:
    - remaining sparse remote-payload hardening and nil-guard proof paths
 3. Tighten W5 traceability for upload-session rules that are already strongly tested in body-level graph tests but still under-tagged at the `// Validates:` level.
 4. Continue W7 body-level reconciliation for:
-   - broader caller-level logout / whoami / drive-list proof paths beyond the now-fixed purge-profile and file-command-independence boundaries
+   - live logout / whoami / drive-list proof against real config/token state beyond the now-expanded caller-level coverage
