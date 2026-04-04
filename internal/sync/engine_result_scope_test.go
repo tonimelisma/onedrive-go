@@ -22,6 +22,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
 	"github.com/tonimelisma/onedrive-go/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -247,6 +248,225 @@ func TestRecordFailure_LogsSummaryKey(t *testing.T) {
 	output := logBuf.String()
 	assert.Contains(t, output, "summary_key=service_outage")
 	assert.Contains(t, output, "issue_type=service_outage")
+}
+
+func readIssuesSnapshotForTest(t *testing.T, eng *testEngine, ctx context.Context) syncstore.IssuesSnapshot {
+	t.Helper()
+
+	require.NoError(t, eng.baseline.Checkpoint(ctx, 0))
+
+	inspector, err := syncstore.OpenInspector(syncStorePathForTest(t, eng), testLogger(t))
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, inspector.Close())
+	}()
+
+	snapshot, err := inspector.ReadIssuesSnapshot(ctx, false)
+	require.NoError(t, err)
+
+	return snapshot
+}
+
+func requireIssueGroupSummaryKey(
+	t *testing.T,
+	snapshot syncstore.IssuesSnapshot,
+	key synctypes.SummaryKey,
+) syncstore.IssueGroupSnapshot {
+	t.Helper()
+
+	for i := range snapshot.Groups {
+		if snapshot.Groups[i].SummaryKey == key {
+			return snapshot.Groups[i]
+		}
+	}
+
+	require.FailNowf(t, "missing issue group", "summary key %q not found", key)
+	return syncstore.IssueGroupSnapshot{}
+}
+
+// Validates: R-6.8.16, R-6.6.11
+func TestProcessWorkerResult_EndToEndSummaryKey_ServiceOutage(t *testing.T) {
+	t.Parallel()
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	ctx := t.Context()
+	setupEngineDepGraph(t, eng, 1)
+
+	processWorkerResultForTest(t, eng, ctx, &synctypes.WorkerResult{
+		ActionID:   1,
+		Path:       "service.txt",
+		ActionType: synctypes.ActionUpload,
+		Success:    false,
+		HTTPStatus: http.StatusServiceUnavailable,
+		Err:        graph.ErrServerError,
+		ErrMsg:     "service unavailable",
+	}, nil)
+
+	rows, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, synctypes.IssueServiceOutage, rows[0].IssueType)
+	assert.Equal(t, synctypes.CategoryTransient, rows[0].Category)
+	assert.Equal(t, synctypes.FailureRoleItem, rows[0].Role)
+	assert.Equal(t, synctypes.SKService(), rows[0].ScopeKey)
+	assert.Equal(t, synctypes.SummaryServiceOutage,
+		synctypes.SummaryKeyForPersistedFailure(rows[0].IssueType, rows[0].Category, rows[0].Role))
+
+	snapshot := readIssuesSnapshotForTest(t, eng, ctx)
+	require.Len(t, snapshot.PendingRetries, 1)
+	assert.Equal(t, synctypes.SKService(), snapshot.PendingRetries[0].ScopeKey)
+	assert.Equal(t, 1, snapshot.PendingRetries[0].Count)
+
+	output := logBuf.String()
+	assert.Contains(t, output, "summary_key=service_outage")
+	assert.Contains(t, output, "issue_type="+synctypes.IssueServiceOutage)
+}
+
+// Validates: R-6.8.16, R-6.6.11
+func TestProcessWorkerResult_EndToEndSummaryKey_SharedFolderWritesBlocked(t *testing.T) {
+	t.Parallel()
+
+	remoteDriveID := permissionsRemoteDriveID
+	checker := &mockPermChecker{
+		perms: map[string][]graph.Permission{
+			driveid.New(remoteDriveID).String() + ":root-id": {{ID: "p1", Roles: []string{"read"}}},
+		},
+	}
+	shortcuts := []synctypes.Shortcut{{
+		ItemID:       "sc-1",
+		RemoteDrive:  remoteDriveID,
+		RemoteItem:   "root-id",
+		LocalPath:    "Shared/TeamDocs",
+		Observation:  synctypes.ObservationDelta,
+		DiscoveredAt: 1000,
+	}}
+	baselineEntries := []synctypes.Outcome{{
+		Action:   synctypes.ActionDownload,
+		Success:  true,
+		Path:     "Shared/TeamDocs",
+		DriveID:  driveid.New(remoteDriveID),
+		ItemID:   "root-id",
+		ParentID: "root",
+		ItemType: synctypes.ItemTypeFolder,
+	}}
+
+	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	eng.logger = logger
+	eng.permHandler.logger = logger
+
+	ctx := t.Context()
+	flow := setupEngineDepGraph(t, eng, 1)
+	flow.setShortcuts(shortcuts)
+
+	processWorkerResultForTest(t, eng, ctx, &synctypes.WorkerResult{
+		ActionID:   1,
+		Path:       "Shared/TeamDocs/file.txt",
+		ActionType: synctypes.ActionUpload,
+		Success:    false,
+		HTTPStatus: http.StatusForbidden,
+		ErrMsg:     "403 Forbidden",
+	}, bl)
+
+	rows, err := eng.baseline.ListRemoteBlockedFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, synctypes.IssueSharedFolderBlocked, rows[0].IssueType)
+	assert.Equal(t, synctypes.CategoryTransient, rows[0].Category)
+	assert.Equal(t, synctypes.FailureRoleHeld, rows[0].Role)
+	assert.Equal(t, synctypes.SKPermRemote("Shared/TeamDocs"), rows[0].ScopeKey)
+
+	snapshot := readIssuesSnapshotForTest(t, eng, ctx)
+	group := requireIssueGroupSummaryKey(t, snapshot, synctypes.SummarySharedFolderWritesBlocked)
+	assert.Equal(t, 1, group.Count)
+	assert.Equal(t, []string{"Shared/TeamDocs/file.txt"}, group.Paths)
+	assert.Equal(t, synctypes.SKPermRemote("Shared/TeamDocs"), group.ScopeKey)
+
+	output := logBuf.String()
+	assert.Contains(t, output, "summary_key=shared_folder_writes_blocked")
+	assert.Contains(t, output, "issue_type="+synctypes.IssueSharedFolderBlocked)
+}
+
+// Validates: R-6.8.16, R-6.6.11
+func TestProcessWorkerResult_EndToEndSummaryKey_AuthenticationRequired(t *testing.T) {
+	t.Parallel()
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	ctx := t.Context()
+	setupEngineDepGraph(t, eng, 1)
+
+	outcome := processWorkerResultDetailedForTest(t, eng, ctx, &synctypes.WorkerResult{
+		ActionID:   1,
+		Path:       "auth.txt",
+		ActionType: synctypes.ActionDownload,
+		Success:    false,
+		HTTPStatus: http.StatusUnauthorized,
+		Err:        graph.ErrUnauthorized,
+		ErrMsg:     "unauthorized",
+	}, nil)
+	require.True(t, outcome.terminate)
+	require.ErrorIs(t, outcome.terminateErr, graph.ErrUnauthorized)
+
+	blocks, err := eng.baseline.ListScopeBlocks(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+	assert.Equal(t, synctypes.SKAuthAccount(), blocks[0].Key)
+	assert.Equal(t, synctypes.IssueUnauthorized, blocks[0].IssueType)
+
+	failures, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, failures)
+
+	snapshot := readIssuesSnapshotForTest(t, eng, ctx)
+	group := requireIssueGroupSummaryKey(t, snapshot, synctypes.SummaryAuthenticationRequired)
+	assert.Equal(t, 1, group.Count)
+	assert.Equal(t, synctypes.SKAuthAccount(), group.ScopeKey)
+	assert.Empty(t, group.Paths)
+
+	output := logBuf.String()
+	assert.Contains(t, output, "summary_key=authentication_required")
+	assert.Contains(t, output, "scope_key=auth:account")
+}
+
+// Validates: R-6.8.16, R-6.6.11
+func TestProcessWorkerResult_EndToEndSummaryKey_LocalPermissionDenied(t *testing.T) {
+	t.Parallel()
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	ctx := t.Context()
+	setupEngineDepGraph(t, eng, 1)
+
+	processWorkerResultForTest(t, eng, ctx, &synctypes.WorkerResult{
+		ActionID:   1,
+		Path:       "file.txt",
+		ActionType: synctypes.ActionUpload,
+		Success:    false,
+		Err:        os.ErrPermission,
+		ErrMsg:     "permission denied",
+	}, nil)
+
+	rows, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, synctypes.IssueLocalPermissionDenied, rows[0].IssueType)
+	assert.Equal(t, synctypes.CategoryActionable, rows[0].Category)
+	assert.Equal(t, synctypes.FailureRoleItem, rows[0].Role)
+
+	snapshot := readIssuesSnapshotForTest(t, eng, ctx)
+	group := requireIssueGroupSummaryKey(t, snapshot, synctypes.SummaryLocalPermissionDenied)
+	assert.Equal(t, 1, group.Count)
+	assert.Equal(t, []string{"file.txt"}, group.Paths)
+
+	output := logBuf.String()
+	assert.Contains(t, output, "summary_key=local_permission_denied")
+	assert.Contains(t, output, "issue_type="+synctypes.IssueLocalPermissionDenied)
 }
 
 // Validates: R-2.10.5

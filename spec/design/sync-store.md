@@ -165,8 +165,14 @@ rebuildable from durable state; it is not a competing authority.
 state without handing them raw SQL ownership.
 
 - `OpenInspector(dbPath, logger)` opens SQLite in read-only mode.
+- `HasScopeBlock(ctx, key)` provides an exact read-only scope-block probe for
+  CLI auth-health and other administrative readers that need one persisted
+  signal without opening the writable `SyncStore` path.
 - `ReadStatusSnapshot(ctx)` returns metadata, aggregate counts, and one
   derived `IssueSummary`.
+- `ReadIssuesSnapshot(ctx, history)` returns the full read-only `issues`
+  projection: grouped visible issue families, held deletes, pending retries,
+  and conflict history.
 - `IssueSummary.Groups` are keyed by the shared
   [`synctypes.SummaryKey`](/Users/tonimelisma/Development/onedrive-go-shared-failure-summaries/internal/synctypes/summary_keys.go),
   not by raw SQL categories. Each group also carries the normalized scope kind
@@ -177,8 +183,11 @@ state without handing them raw SQL ownership.
   `RemoteBlockedCount()`, `AuthRequiredCount()`, and `RetryingCount()` are the
   read-only status contract. CLI `status` consumes those helpers instead of
   reconstructing visible-issue semantics from raw counters.
-- CLI `status` consumes `StatusSnapshot`; it does not build its own DSN or call
-  `sql.Open` directly.
+- `StatusSnapshot` and `IssuesSnapshot` share one visible-issue projection
+  builder inside `Inspector`, so `status` and `issues` cannot silently drift
+  on what counts as a visible issue family.
+- CLI `status` and `issues list` consume `Inspector`; they do not build their
+  own DSNs or call `sql.Open` directly.
 
 ## Verification
 
@@ -209,16 +218,25 @@ errors because the durable-state transition itself is incomplete.
 
 ## Issues CLI
 
-`issues` reads conflicts, actionable failures, derived shared-folder blocked
-writes, and scope-only auth blocks directly from the store. Grouping and
-display use the persisted `scope_key`, `issue_type`, and shortcut metadata,
-but the user-facing grouping key is the shared `synctypes.SummaryKey`. This
-keeps `issues` presentation aligned with `status` summaries and sync-runtime
-logging without persisting a second summary column in SQLite.
+`issues list` reads one store-owned `IssuesSnapshot` from `Inspector`.
+`syncstore` owns grouping, scope labeling, pending-retry aggregation, and held
+delete separation; CLI only formats that snapshot. Grouping and display use
+the persisted `scope_key`, `issue_type`, `category`, `failure_role`, and
+shortcut metadata, but the user-facing grouping key is still the shared
+`synctypes.SummaryKey`. This keeps `issues` presentation aligned with
+`status` summaries and sync-runtime logging without persisting a second
+summary column in SQLite.
+
+Retryable transient item failures intentionally surface through
+`IssuesSnapshot.PendingRetries` rather than the visible grouped-issue list.
+The durable row still carries the raw evidence (`issue_type`, `category`,
+`failure_role`, `scope_key`), and `synctypes.SummaryKeyForPersistedFailure`
+remains the read-time normalization rule for testable reprojection.
 
 The broader CLI auth-health projection also reads `auth:account` from
-`scope_blocks`, but it combines that store-backed signal with token and
-account-profile discovery instead of replacing either source of truth.
+`scope_blocks` through `Inspector.HasScopeBlock`, but it combines that
+store-backed signal with token and account-profile discovery instead of
+replacing either source of truth.
 Offline/read-only surfaces only project the stored auth block. Live proof
 surfaces may clear `auth:account` after a successful authenticated Graph
 response for the account.

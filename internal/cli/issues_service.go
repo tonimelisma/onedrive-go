@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 type issuesService struct {
@@ -17,143 +16,44 @@ func newIssuesService(cc *CLIContext) *issuesService {
 }
 
 func (s *issuesService) runList(ctx context.Context, history bool) error {
-	mgr, err := s.openSyncStore(ctx)
-	if err != nil {
-		return err
-	}
-	defer mgr.Close(ctx)
-
-	listing, err := s.loadIssuesListing(ctx, mgr, history)
-	if err != nil {
-		return err
+	dbPath := s.cc.Cfg.StatePath()
+	if dbPath == "" {
+		return fmt.Errorf("cannot determine state DB path for drive %q", s.cc.Cfg.CanonicalID)
 	}
 
-	if listing.empty() {
+	if !managedPathExists(dbPath) {
+		return s.writeEmptyIssues(history)
+	}
+
+	inspector, err := syncstore.OpenInspector(dbPath, s.cc.Logger)
+	if err != nil {
+		return fmt.Errorf("open sync store inspector: %w", err)
+	}
+	defer func() {
+		if closeErr := inspector.Close(); closeErr != nil {
+			s.cc.Logger.Debug("close sync store inspector", "error", closeErr.Error())
+		}
+	}()
+
+	snapshot, err := inspector.ReadIssuesSnapshot(ctx, history)
+	if err != nil {
+		return fmt.Errorf("read issues snapshot: %w", err)
+	}
+
+	if snapshot.Empty() {
 		return s.writeEmptyIssues(history)
 	}
 
 	if s.cc.Flags.JSON {
-		return printGroupedIssuesJSON(s.cc.Output(), listing.conflicts, listing.groups, listing.heldDeletes)
+		return printGroupedIssuesJSON(s.cc.Output(), snapshot)
 	}
 
 	return printGroupedIssuesText(
 		s.cc.Output(),
-		listing.conflicts,
-		listing.groups,
-		listing.heldDeletes,
-		listing.pendingRetries,
-		listing.shortcuts,
+		snapshot,
 		history,
 		s.cc.Flags.Verbose,
 	)
-}
-
-type issuesListing struct {
-	conflicts      []synctypes.ConflictRecord
-	groups         []failureGroup
-	heldDeletes    []synctypes.SyncFailureRow
-	pendingRetries []synctypes.PendingRetryGroup
-	shortcuts      []synctypes.Shortcut
-}
-
-func (l issuesListing) empty() bool {
-	return len(l.conflicts) == 0 &&
-		len(l.groups) == 0 &&
-		len(l.heldDeletes) == 0 &&
-		len(l.pendingRetries) == 0
-}
-
-func (s *issuesService) openSyncStore(ctx context.Context) (*syncstore.SyncStore, error) {
-	dbPath := s.cc.Cfg.StatePath()
-	if dbPath == "" {
-		return nil, fmt.Errorf("cannot determine state DB path for drive %q", s.cc.Cfg.CanonicalID)
-	}
-
-	mgr, err := syncstore.NewSyncStore(ctx, dbPath, s.cc.Logger)
-	if err != nil {
-		return nil, fmt.Errorf("open sync store: %w", err)
-	}
-
-	return mgr, nil
-}
-
-func (s *issuesService) loadIssuesListing(
-	ctx context.Context,
-	mgr *syncstore.SyncStore,
-	history bool,
-) (issuesListing, error) {
-	conflicts, err := s.listConflicts(ctx, mgr, history)
-	if err != nil {
-		return issuesListing{}, err
-	}
-
-	failures, err := s.listVisibleFailures(ctx, mgr)
-	if err != nil {
-		return issuesListing{}, err
-	}
-
-	scopeBlocks, err := mgr.ListScopeBlocks(ctx)
-	if err != nil {
-		return issuesListing{}, fmt.Errorf("list scope blocks: %w", err)
-	}
-
-	shortcuts, err := mgr.ListShortcuts(ctx)
-	if err != nil {
-		return issuesListing{}, fmt.Errorf("list shortcuts: %w", err)
-	}
-
-	groups, heldDeletes := groupFailures(failures, shortcuts)
-	groups = appendScopeOnlyGroups(groups, scopeBlocks, shortcuts)
-
-	pendingRetries, err := mgr.PendingRetrySummary(ctx)
-	if err != nil {
-		return issuesListing{}, fmt.Errorf("summarize pending retries: %w", err)
-	}
-
-	return issuesListing{
-		conflicts:      conflicts,
-		groups:         groups,
-		heldDeletes:    heldDeletes,
-		pendingRetries: pendingRetries,
-		shortcuts:      shortcuts,
-	}, nil
-}
-
-func (s *issuesService) listConflicts(
-	ctx context.Context,
-	mgr *syncstore.SyncStore,
-	history bool,
-) ([]synctypes.ConflictRecord, error) {
-	if history {
-		conflicts, err := mgr.ListAllConflicts(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("list conflicts: %w", err)
-		}
-		return conflicts, nil
-	}
-
-	conflicts, err := mgr.ListConflicts(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list conflicts: %w", err)
-	}
-	return conflicts, nil
-}
-
-func (s *issuesService) listVisibleFailures(
-	ctx context.Context,
-	mgr *syncstore.SyncStore,
-) ([]synctypes.SyncFailureRow, error) {
-	failures, err := mgr.ListActionableFailures(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list actionable failures: %w", err)
-	}
-
-	remoteBlocked, err := mgr.ListRemoteBlockedFailures(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list remote blocked failures: %w", err)
-	}
-
-	return append(failures, remoteBlocked...), nil
 }
 
 func (s *issuesService) writeEmptyIssues(history bool) error {

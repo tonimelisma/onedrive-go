@@ -234,7 +234,7 @@ func (rt *watchRuntime) runWatchLoopIdle(
 	case result, ok := <-p.reconcileResults:
 		return rt.handleWatchReconcileResult(p, nil, result, ok)
 	case obsErr, ok := <-p.errs:
-		return rt.handleWatchObserverError(p, nil, obsErr, ok)
+		return rt.handleWatchObserverError(ctx, p, nil, obsErr, ok)
 	case <-rt.trialTimerChan():
 		return rt.runTrialDispatch(ctx, p.bl, p.mode, p.safety), false, nil
 	case <-rt.retryTimerChan():
@@ -267,7 +267,7 @@ func (rt *watchRuntime) runWatchLoopWithOutbox(
 	case result, ok := <-p.reconcileResults:
 		return rt.handleWatchReconcileResult(p, outbox, result, ok)
 	case obsErr, ok := <-p.errs:
-		return rt.handleWatchObserverError(p, outbox, obsErr, ok)
+		return rt.handleWatchObserverError(ctx, p, outbox, obsErr, ok)
 	case <-rt.trialTimerChan():
 		return append(outbox, rt.runTrialDispatch(ctx, p.bl, p.mode, p.safety)...), false, nil
 	case <-rt.retryTimerChan():
@@ -277,20 +277,29 @@ func (rt *watchRuntime) runWatchLoopWithOutbox(
 	}
 }
 
-func (rt *watchRuntime) handleObserverExit(p *watchPipeline, obsErr error) error {
-	if obsErr != nil {
-		rt.engine.logger.Warn("observer error",
-			slog.String("error", obsErr.Error()),
-		)
-	}
-
+func (rt *watchRuntime) handleObserverExit(p *watchPipeline, shuttingDown bool) error {
 	p.activeObs--
 	if p.activeObs > 0 {
 		return nil
 	}
 
+	if shuttingDown {
+		rt.engine.logger.Info("all observers exited during shutdown")
+		return nil
+	}
+
 	rt.engine.logger.Error("all observers have exited, stopping watch mode")
 	return fmt.Errorf("sync: all observers exited")
+}
+
+func (rt *watchRuntime) logObserverError(obsErr error) {
+	if obsErr == nil {
+		return
+	}
+
+	rt.engine.logger.Warn("observer error",
+		slog.String("error", obsErr.Error()),
+	)
 }
 
 func (rt *watchRuntime) runBootstrapLoop(
@@ -448,6 +457,7 @@ func (rt *watchRuntime) handleWatchReconcileResult(
 }
 
 func (rt *watchRuntime) handleWatchObserverError(
+	ctx context.Context,
 	p *watchPipeline,
 	outbox []*synctypes.TrackedAction,
 	obsErr error,
@@ -458,7 +468,9 @@ func (rt *watchRuntime) handleWatchObserverError(
 		return outbox, false, nil
 	}
 
-	if err := rt.handleObserverExit(p, obsErr); err != nil {
+	rt.logObserverError(obsErr)
+
+	if err := rt.handleObserverExit(p, ctx.Err() != nil); err != nil {
 		return outbox, false, err
 	}
 

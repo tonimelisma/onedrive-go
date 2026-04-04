@@ -58,7 +58,7 @@ const sqlSelectSyncFailureCols = `path, drive_id, direction, action_type, failur
 		COALESCE(last_error, ''), COALESCE(http_status, 0),
 		first_seen_at, last_seen_at,
 		COALESCE(file_size, 0), COALESCE(local_hash, ''),
-		scope_key`
+		COALESCE(scope_key, '')`
 
 func normalizeFailureActionType(direction synctypes.Direction, actionType synctypes.ActionType) synctypes.ActionType {
 	switch actionType {

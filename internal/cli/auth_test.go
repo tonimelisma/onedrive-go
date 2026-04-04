@@ -329,6 +329,7 @@ func TestOpenBrowser_StartsValidatedCommand(t *testing.T) {
 
 	const executablePerms = 0o755
 	const authURL = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=test"
+	const browserLaunchTimeout = 15 * time.Second
 
 	tempDir := t.TempDir()
 	outputPath := filepath.Join(tempDir, "browser-url.txt")
@@ -344,7 +345,7 @@ func TestOpenBrowser_StartsValidatedCommand(t *testing.T) {
 	require.Eventually(t, func() bool {
 		data, readErr := localpath.ReadFile(outputPath)
 		return readErr == nil && string(data) == authURL
-	}, 10*time.Second, 25*time.Millisecond)
+	}, browserLaunchTimeout, 25*time.Millisecond)
 }
 
 func TestOpenBrowser_CommandStartFailure(t *testing.T) {

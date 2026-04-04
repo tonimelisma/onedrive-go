@@ -109,16 +109,23 @@ func (controller *scopeController) logPermissionCheckDecision(
 	flowKind permissionFlow,
 	decision *PermissionCheckDecision,
 ) {
+	summaryKey := synctypes.SummaryKeyForPersistedFailure(
+		decision.Failure.IssueType,
+		decision.Failure.Category,
+		decision.Failure.Role,
+	)
+
 	switch flowKind {
 	case permissionFlowNone:
 		return
 	case permissionFlowRemote403:
-		controller.logRemotePermissionDecision(decision)
+		controller.logRemotePermissionDecision(decision, summaryKey)
 	case permissionFlowLocalPermission:
 		if decision.Kind == permissionCheckActivateBoundaryScope {
 			controller.flow.engine.logger.Info("local permission denied: directory blocked",
 				slog.String("boundary", decision.BoundaryPath),
 				slog.String("trigger_path", decision.TriggerPath),
+				slog.String("summary_key", string(summaryKey)),
 			)
 		}
 	default:
@@ -126,7 +133,10 @@ func (controller *scopeController) logPermissionCheckDecision(
 	}
 }
 
-func (controller *scopeController) logRemotePermissionDecision(decision *PermissionCheckDecision) {
+func (controller *scopeController) logRemotePermissionDecision(
+	decision *PermissionCheckDecision,
+	summaryKey synctypes.SummaryKey,
+) {
 	if decision.Kind != permissionCheckActivateBoundaryScope && decision.Kind != permissionCheckActivateDerivedScope {
 		return
 	}
@@ -139,6 +149,7 @@ func (controller *scopeController) logRemotePermissionDecision(decision *Permiss
 		slog.String("boundary", decision.BoundaryPath),
 		slog.String("trigger_path", decision.TriggerPath),
 		slog.String("scope_key", scopeKey.String()),
+		slog.String("summary_key", string(summaryKey)),
 	)
 }
 
@@ -183,13 +194,23 @@ func (controller *scopeController) applyPermissionRecheckDecisions(
 
 func (controller *scopeController) recordExplicitFailure(ctx context.Context, params *synctypes.SyncFailureParams) {
 	flow := controller.flow
+	summaryKey := synctypes.SummaryKeyForPersistedFailure(params.IssueType, params.Category, params.Role)
 
 	if err := flow.engine.baseline.RecordFailure(ctx, params, nil); err != nil {
 		flow.engine.logger.Warn("failed to record permission failure",
 			slog.String("path", params.Path),
+			slog.String("summary_key", string(summaryKey)),
 			slog.String("error", err.Error()),
 		)
+		return
 	}
+
+	flow.engine.logger.Debug("permission failure recorded",
+		slog.String("path", params.Path),
+		slog.String("summary_key", string(summaryKey)),
+		slog.String("issue_type", params.IssueType),
+		slog.String("scope_key", params.ScopeKey.String()),
+	)
 }
 
 func (controller *scopeController) applyShortcutRemovalDecisionsWithWatch(

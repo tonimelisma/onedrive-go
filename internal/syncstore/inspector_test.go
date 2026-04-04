@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -80,6 +81,169 @@ func TestInspector_ReadStatusSnapshot(t *testing.T) {
 		{Key: synctypes.SummaryConflictUnresolved, Count: 1, ScopeKind: "file"},
 		{Key: synctypes.SummarySyncFailure, Count: 1, ScopeKind: "file"},
 	}, snapshot.Issues.Groups)
+}
+
+// Validates: R-2.10.47
+func TestInspector_HasScopeBlock(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	store, err := NewSyncStore(t.Context(), dbPath, newTestLogger(t))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, store.Close(context.Background()))
+	})
+
+	ctx := t.Context()
+	_, err = store.DB().ExecContext(ctx, `INSERT INTO scope_blocks
+		(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count)
+		VALUES ('auth:account', ?, 'none', 1, 0, 0, 0, 0)`, synctypes.IssueUnauthorized)
+	require.NoError(t, err)
+
+	inspector, err := OpenInspector(dbPath, newTestLogger(t))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, inspector.Close())
+	})
+
+	hasAuthScope, err := inspector.HasScopeBlock(ctx, synctypes.SKAuthAccount())
+	require.NoError(t, err)
+	assert.True(t, hasAuthScope)
+
+	hasServiceScope, err := inspector.HasScopeBlock(ctx, synctypes.SKService())
+	require.NoError(t, err)
+	assert.False(t, hasServiceScope)
+}
+
+// Validates: R-2.3.7, R-2.3.10, R-2.10.22
+func TestInspector_ReadIssuesSnapshot(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	store, err := NewSyncStore(t.Context(), dbPath, newTestLogger(t))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, store.Close(context.Background()))
+	})
+
+	ctx := t.Context()
+
+	_, err = store.DB().ExecContext(ctx, `INSERT INTO conflicts
+		(id, drive_id, item_id, path, conflict_type, detected_at, resolution)
+		VALUES
+		('c1', ?, 'item-1', '/conflict.txt', 'edit_edit', 1, 'unresolved'),
+		('c2', ?, 'item-2', '/resolved.txt', 'edit_edit', 2, 'keep_local')`,
+		testDriveID, testDriveID,
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, store.UpsertShortcut(ctx, &synctypes.Shortcut{
+		ItemID:       "shortcut-1",
+		RemoteDrive:  "Shared",
+		RemoteItem:   "Docs",
+		LocalPath:    "Team Docs",
+		Observation:  synctypes.ObservationDelta,
+		DiscoveredAt: 1,
+	}))
+
+	_, err = store.DB().ExecContext(ctx, `INSERT INTO sync_failures
+		(path, drive_id, direction, action_type, failure_role, category, issue_type, scope_key, failure_count, next_retry_at, first_seen_at, last_seen_at)
+		VALUES
+		('/invalid:name.txt', ?, 'upload', 'upload', 'item', 'actionable', ?, '', 1, NULL, 1, 1),
+		('/delete/a.txt', ?, 'delete', 'remote_delete', 'item', 'actionable', ?, '', 1, NULL, 1, 1),
+		('/delete/b.txt', ?, 'delete', 'remote_delete', 'item', 'actionable', ?, '', 1, NULL, 1, 2),
+		('/blocked/a.txt', ?, 'upload', 'upload', 'held', 'transient', ?, 'perm:remote:Shared/Docs', 1, NULL, 1, 1),
+		('/blocked/b.txt', ?, 'upload', 'upload', 'held', 'transient', ?, 'perm:remote:Shared/Docs', 1, NULL, 1, 2),
+		('/retry.txt', ?, 'upload', 'upload', 'item', 'transient', '', '', 4, ?, 1, 1)`,
+		testDriveID, synctypes.IssueInvalidFilename,
+		testDriveID, synctypes.IssueBigDeleteHeld,
+		testDriveID, synctypes.IssueBigDeleteHeld,
+		testDriveID, synctypes.IssueSharedFolderBlocked,
+		testDriveID, synctypes.IssueSharedFolderBlocked,
+		testDriveID, time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC).UnixNano(),
+	)
+	require.NoError(t, err)
+
+	_, err = store.DB().ExecContext(ctx, `INSERT INTO scope_blocks
+		(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count)
+		VALUES ('auth:account', ?, 'none', 1, 0, 0, 0, 0)`, synctypes.IssueUnauthorized)
+	require.NoError(t, err)
+
+	inspector, err := OpenInspector(dbPath, newTestLogger(t))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, inspector.Close())
+	})
+
+	current, err := inspector.ReadIssuesSnapshot(ctx, false)
+	require.NoError(t, err)
+	assert.Len(t, current.Conflicts, 1)
+	assert.Equal(t, "/conflict.txt", current.Conflicts[0].Path)
+	assert.Len(t, current.Groups, 3)
+	assert.Equal(t, synctypes.SummarySharedFolderWritesBlocked, current.Groups[0].SummaryKey)
+	assert.Equal(t, "Shared/Docs", current.Groups[0].ScopeLabel)
+	assert.Equal(t, []string{"/blocked/a.txt", "/blocked/b.txt"}, current.Groups[0].Paths)
+	assert.Len(t, current.HeldDeletes, 2)
+	assert.Len(t, current.PendingRetries, 1)
+	assert.Equal(t, 1, current.PendingRetries[0].Count)
+
+	history, err := inspector.ReadIssuesSnapshot(ctx, true)
+	require.NoError(t, err)
+	assert.Len(t, history.Conflicts, 2)
+}
+
+// Validates: R-2.14.3, R-2.10.47
+func TestInspector_ReadStatusSnapshot_StaysConsistentWithIssuesSnapshot(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	store, err := NewSyncStore(t.Context(), dbPath, newTestLogger(t))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, store.Close(context.Background()))
+	})
+
+	ctx := t.Context()
+
+	_, err = store.DB().ExecContext(ctx, `INSERT INTO conflicts
+		(id, drive_id, item_id, path, conflict_type, detected_at, resolution)
+		VALUES ('c1', ?, 'item-1', '/conflict.txt', 'edit_edit', 1, 'unresolved')`,
+		testDriveID,
+	)
+	require.NoError(t, err)
+
+	_, err = store.DB().ExecContext(ctx, `INSERT INTO sync_failures
+		(path, drive_id, direction, action_type, failure_role, category, issue_type, scope_key, failure_count, next_retry_at, first_seen_at, last_seen_at)
+		VALUES
+		('/blocked/a.txt', ?, 'upload', 'upload', 'held', 'transient', ?, 'perm:remote:Shared/Docs', 1, NULL, 1, 1),
+		('/blocked/b.txt', ?, 'upload', 'upload', 'held', 'transient', ?, 'perm:remote:Shared/Docs', 1, NULL, 1, 2),
+		('/invalid:name.txt', ?, 'upload', 'upload', 'item', 'actionable', ?, '', 1, NULL, 1, 1)`,
+		testDriveID, synctypes.IssueSharedFolderBlocked,
+		testDriveID, synctypes.IssueSharedFolderBlocked,
+		testDriveID, synctypes.IssueInvalidFilename,
+	)
+	require.NoError(t, err)
+
+	_, err = store.DB().ExecContext(ctx, `INSERT INTO scope_blocks
+		(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count)
+		VALUES ('auth:account', ?, 'none', 1, 0, 0, 0, 0)`, synctypes.IssueUnauthorized)
+	require.NoError(t, err)
+
+	inspector, err := OpenInspector(dbPath, newTestLogger(t))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, inspector.Close())
+	})
+
+	issues, err := inspector.ReadIssuesSnapshot(ctx, false)
+	require.NoError(t, err)
+
+	status := inspector.ReadStatusSnapshot(ctx)
+	assert.Equal(t, len(issues.Conflicts)+1+1+1, status.Issues.VisibleTotal())
+	assert.Equal(t, 1, status.Issues.ConflictCount())
+	assert.Equal(t, 1, status.Issues.ActionableCount())
+	assert.Equal(t, 1, status.Issues.RemoteBlockedCount())
+	assert.Equal(t, 1, status.Issues.AuthRequiredCount())
 }
 
 // Validates: R-2.14.3, R-2.10.47

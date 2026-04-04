@@ -201,6 +201,10 @@ re-derived from raw `HTTPStatus`, wrapped errors, or `RetryAfter` headers after
 classification. Structured sync logs emit `summary_key` from the same
 `ResultDecision`, which gives tests and operators one normalized failure family
 across runtime logs, `issues`, and `status`.
+Permission-flow and fatal-auth side effects follow the same rule: their
+durable writes and scope-activation logs emit the normalized `summary_key`
+instead of inventing a second presentation taxonomy for shared-folder blocked,
+local-permission, or auth-required paths.
 
 ### Scope Detection and Management
 

@@ -69,6 +69,55 @@ func TestRunWatch_ContextCancel(t *testing.T) {
 	}
 }
 
+// Validates: R-2.8, R-6.8.9
+func TestRunWatch_CancellationWinsOverFinalObserverExit(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	recorder := attachDebugEventRecorder(eng)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- eng.RunWatch(ctx, synctypes.SyncUploadOnly, synctypes.WatchOpts{
+			PollInterval: time.Hour,
+			Debounce:     5 * time.Millisecond,
+		})
+	}()
+
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventBootstrapQuiesced
+	}, "bootstrap quiesced")
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventObserverStarted && event.Note == engineDebugObserverLocal
+	}, "local observer started")
+
+	cancel()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err, "RunWatch should prefer graceful shutdown over all-observers-exited")
+	case <-time.After(10 * time.Second):
+		require.Fail(t, "RunWatch did not return within timeout after cancellation")
+	}
+
+	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventObserverExited && event.Note == engineDebugObserverLocal
+	}, "local observer exited")
+	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventWatchStopped
+	}, "watch stopped")
+}
+
 // TestRunWatch_UploadOnly_SkipsRemoteObserver verifies that upload-only mode
 // does not start a remote observer (no delta polling).
 func TestRunWatch_UploadOnly_SkipsRemoteObserver(t *testing.T) {
