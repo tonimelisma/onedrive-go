@@ -8,11 +8,19 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
+
+type verifyRoot interface {
+	Stat(rel string) (os.FileInfo, error)
+	Abs(rel string) (string, error)
+}
+
+type hashComputer func(absPath string) (string, error)
 
 // Verify status constants (used in VerifyResult.Status).
 const (
@@ -30,6 +38,16 @@ func VerifyBaseline(
 	ctx context.Context,
 	bl *synctypes.Baseline,
 	tree *synctree.Root,
+	logger *slog.Logger,
+) (*synctypes.VerifyReport, error) {
+	return verifyBaselineWithHasher(ctx, bl, tree, driveops.ComputeQuickXorHash, logger)
+}
+
+func verifyBaselineWithHasher(
+	ctx context.Context,
+	bl *synctypes.Baseline,
+	tree verifyRoot,
+	computeHash hashComputer,
 	logger *slog.Logger,
 ) (*synctypes.VerifyReport, error) {
 	report := &synctypes.VerifyReport{}
@@ -51,7 +69,7 @@ func VerifyBaseline(
 			return
 		}
 
-		result := verifyEntry(tree, relPath, entry, logger)
+		result := verifyEntry(tree, relPath, entry, computeHash, logger)
 		if result.Status == VerifyOK {
 			report.Verified++
 		} else {
@@ -63,14 +81,19 @@ func VerifyBaseline(
 		return nil, ctxErr
 	}
 
+	sort.Slice(report.Mismatches, func(i, j int) bool {
+		return report.Mismatches[i].Path < report.Mismatches[j].Path
+	})
+
 	return report, nil
 }
 
 // verifyEntry checks a single baseline entry against the local filesystem.
 func verifyEntry(
-	tree *synctree.Root,
+	tree verifyRoot,
 	relPath string,
 	entry *synctypes.BaselineEntry,
+	computeHash hashComputer,
 	logger *slog.Logger,
 ) synctypes.VerifyResult {
 	info, err := tree.Stat(relPath)
@@ -121,7 +144,7 @@ func verifyEntry(
 		}
 	}
 
-	hash, err := driveops.ComputeQuickXorHash(absPath)
+	hash, err := computeHash(absPath)
 	if err != nil {
 		logger.Warn("verify: hash failed", slog.String("path", entry.Path), slog.String("error", err.Error()))
 

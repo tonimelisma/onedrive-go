@@ -968,6 +968,7 @@ func TestFailureCount(t *testing.T) {
 	assert.Equal(t, 2, count, "should count transient sync_failures only")
 }
 
+// Validates: R-2.10.1
 func TestResetFailure(t *testing.T) {
 	t.Parallel()
 
@@ -1051,6 +1052,7 @@ func TestResetFailure_DeleteFailedTransitionsToPendingDelete(t *testing.T) {
 	assert.Equal(t, 0, sfCount, "sync_failures row should be removed")
 }
 
+// Validates: R-2.10.1
 func TestResetAllFailures(t *testing.T) {
 	t.Parallel()
 

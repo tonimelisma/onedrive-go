@@ -1,0 +1,6 @@
+Verified: 8 files
+Mismatches: 2
+
+PATH              STATUS         EXPECTED  ACTUAL
+alpha.txt         hash_mismatch  aaa       bbb   
+docs/missing.txt  missing        ccc             

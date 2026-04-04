@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -123,40 +124,35 @@ func TestRunWatch_CancellationWinsOverFinalObserverExit(t *testing.T) {
 func TestRunWatch_UploadOnly_SkipsRemoteObserver(t *testing.T) {
 	t.Parallel()
 
-	deltaCalledAfterInit := 0
-	initDone := make(chan struct{})
+	var deltaCalls atomic.Int32
 
 	mock := &engineMockClient{
 		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			select {
-			case <-initDone:
-				// After initial sync, any delta call means remote observer started.
-				deltaCalledAfterInit++
-			default:
-			}
+			deltaCalls.Add(1)
 			return deltaPageWithItems(nil, "token-1"), nil
 		},
 	}
 
 	eng, _ := newTestEngine(t, mock)
+	recorder := attachDebugEventRecorder(eng)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	done := make(chan error, 1)
 	go func() {
-		// Mark init as done just before RunWatch's observer phase.
-		// RunWatch performs its own bootstrap sync before observers start, so the
-		// initial delta call during startup is expected.
-		close(initDone)
 		done <- eng.RunWatch(ctx, synctypes.SyncUploadOnly, synctypes.WatchOpts{
 			PollInterval: 50 * time.Millisecond,
 			Debounce:     10 * time.Millisecond,
 		})
 	}()
 
-	// Wait for the watch loop to be running.
-	time.Sleep(300 * time.Millisecond)
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventBootstrapQuiesced
+	}, "bootstrap quiesced")
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventObserverStarted && event.Note == engineDebugObserverLocal
+	}, "local observer started")
 
 	cancel()
 
@@ -167,12 +163,10 @@ func TestRunWatch_UploadOnly_SkipsRemoteObserver(t *testing.T) {
 		require.Fail(t, "RunWatch did not return within timeout")
 	}
 
-	// In upload-only mode, no delta calls should happen after initial sync.
-	assert.Equal(t, 0, deltaCalledAfterInit, "delta should not be called after init in upload-only mode")
-
-	// Upload-only mode proves the remote observer is absent by never issuing
-	// delta calls after bootstrap; the runtime itself is no longer exposed
-	// through production test hooks.
+	assert.Zero(t, deltaCalls.Load(), "upload-only watch should not issue any delta calls")
+	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventObserverStarted && event.Note == engineDebugObserverRemote
+	}), "upload-only watch must not start a remote observer")
 }
 
 // TestRunWatch_ProcessBatch_BigDelete verifies that the rolling delete
@@ -753,6 +747,7 @@ func TestRunWatch_DownloadOnly_SkipsLocalObserver(t *testing.T) {
 	}
 
 	eng, syncRoot := newTestEngine(t, mock)
+	recorder := attachDebugEventRecorder(eng)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -765,16 +760,17 @@ func TestRunWatch_DownloadOnly_SkipsLocalObserver(t *testing.T) {
 		})
 	}()
 
-	// Wait for watch loop to start.
-	time.Sleep(300 * time.Millisecond)
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventBootstrapQuiesced
+	}, "bootstrap quiesced")
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventObserverStarted && event.Note == engineDebugObserverRemote
+	}, "remote observer started")
 
 	// Create a local file. If a local observer were running, it would detect
 	// this and eventually produce a sync action. In download-only mode, the
 	// local observer is skipped, so this file should be invisible to sync.
 	writeLocalFile(t, syncRoot, "local-only.txt", "should-be-ignored")
-
-	// Give time for any incorrectly-started local observer to fire.
-	time.Sleep(200 * time.Millisecond)
 
 	cancel()
 
@@ -789,6 +785,9 @@ func TestRunWatch_DownloadOnly_SkipsLocalObserver(t *testing.T) {
 	require.NoError(t, err)
 	_, found := bl.GetByPath("local-only.txt")
 	assert.False(t, found, "download-only watch mode must ignore local-only files created after bootstrap")
+	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventObserverStarted && event.Note == engineDebugObserverLocal
+	}), "download-only watch must not start a local observer")
 }
 
 // TestRunWatch_AllObserversDead_ReturnsError verifies that RunWatch returns an

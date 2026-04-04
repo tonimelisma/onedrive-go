@@ -91,6 +91,7 @@ func TestPrintGroupedFailures_NonVerboseTruncates(t *testing.T) {
 	assert.Contains(t, output, "... and 7 more")
 }
 
+// Validates: R-2.3.8
 func TestPrintGroupedFailures_ShowsScopeLabel(t *testing.T) {
 	t.Parallel()
 
@@ -109,6 +110,7 @@ func TestPrintGroupedFailures_ShowsScopeLabel(t *testing.T) {
 	assert.Contains(t, buf.String(), "Scope: Team Docs")
 }
 
+// Validates: R-2.3.8
 func TestPrintGroupedFailures_NoScopeLineWhenEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -194,6 +196,7 @@ func TestPrintGroupedIssuesJSON_StructuredOutput(t *testing.T) {
 	assert.Equal(t, "/deleted.txt", out.HeldDeletes[0].Path)
 }
 
+// Validates: R-2.3.7, R-2.3.8
 func TestPrintGroupedIssuesText_AllSections(t *testing.T) {
 	t.Parallel()
 
@@ -216,11 +219,7 @@ func TestPrintGroupedIssuesText_AllSections(t *testing.T) {
 
 	var buf bytes.Buffer
 	require.NoError(t, printGroupedIssuesText(&buf, snapshot, false, false))
-	output := buf.String()
-
-	assert.Contains(t, output, "CONFLICTS")
-	assert.Contains(t, output, "HELD DELETES")
-	assert.Contains(t, output, "QUOTA EXCEEDED")
+	requireGoldenText(t, "issues_all_sections.golden", buf.String())
 }
 
 func TestPrintPendingRetries(t *testing.T) {

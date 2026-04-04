@@ -999,6 +999,7 @@ func TestPrintSummaryText_WithPendingAndRetrying(t *testing.T) {
 	assert.Contains(t, output, "3 retrying")
 }
 
+// Validates: R-2.10.4
 func TestPrintSyncStateText_WithPendingAndIssues(t *testing.T) {
 	t.Parallel()
 
@@ -1051,14 +1052,7 @@ func TestPrintSyncStateText_WithIssueGroups(t *testing.T) {
 
 	var buf bytes.Buffer
 	require.NoError(t, printSyncStateText(&buf, ss))
-
-	output := buf.String()
-	assert.Contains(t, output, "Issues:    3 (run 'onedrive-go issues')")
-	assert.Contains(t, output, "Issue groups:")
-	assert.Contains(t, output, "QUOTA EXCEEDED (shortcut Shared/Team Docs): 1")
-	assert.Contains(t, output, "INVALID FILENAME (file scope): 2")
-	assert.Contains(t, output, "AUTHENTICATION REQUIRED (account your OneDrive account authorization): 1")
-	assert.Contains(t, output, "Retrying:  2 items")
+	requireGoldenText(t, "status_sync_state_with_issue_groups.golden", buf.String())
 }
 
 func TestComputeSummary_AggregatesPendingAndRetrying(t *testing.T) {

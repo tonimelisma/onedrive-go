@@ -1164,6 +1164,51 @@ func TestMain_UnknownCommandReturnsFailure(t *testing.T) {
 	assert.Equal(t, 1, Main([]string{"definitely-not-a-real-command"}))
 }
 
+// Validates: R-2.7
+func TestMainWithWriters_VerifySuccessReturnsZero(t *testing.T) {
+	syncDir := t.TempDir()
+	cfgPath, cid, dbPath := setupVerifyFixture(t, syncDir)
+	require.NoError(t, os.MkdirAll(filepath.Join(syncDir, "docs"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(syncDir, "docs", "readme.txt"), []byte("hello"), 0o600))
+	localHash, err := driveops.ComputeQuickXorHash(filepath.Join(syncDir, "docs", "readme.txt"))
+	require.NoError(t, err)
+	insertVerifyBaselineRows(t, dbPath, verifyBaselineRow{
+		path:      "docs/readme.txt",
+		localHash: localHash,
+		localSize: 5,
+	})
+
+	var stdoutBuf bytes.Buffer
+	var stderrBuf bytes.Buffer
+	exitCode := mainWithWriters([]string{"--config", cfgPath, "--drive", cid.String(), "verify"}, &stdoutBuf, &stderrBuf)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdoutBuf.String(), "Verified: 1 files")
+	assert.NotContains(t, stderrBuf.String(), "Error:")
+}
+
+// Validates: R-2.7
+func TestMainWithWriters_VerifyMismatchReturnsOneWithoutGenericErrorPrefix(t *testing.T) {
+	syncDir := t.TempDir()
+	cfgPath, cid, dbPath := setupVerifyFixture(t, syncDir)
+	require.NoError(t, os.MkdirAll(filepath.Join(syncDir, "docs"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(syncDir, "docs", "readme.txt"), []byte("hello"), 0o600))
+	insertVerifyBaselineRows(t, dbPath, verifyBaselineRow{
+		path:      "docs/readme.txt",
+		localHash: "wrong-hash",
+		localSize: 5,
+	})
+
+	var stdoutBuf bytes.Buffer
+	var stderrBuf bytes.Buffer
+	exitCode := mainWithWriters([]string{"--config", cfgPath, "--drive", cid.String(), "verify"}, &stdoutBuf, &stderrBuf)
+
+	assert.Equal(t, 1, exitCode)
+	assert.Contains(t, stdoutBuf.String(), "Mismatches: 1")
+	assert.Contains(t, stdoutBuf.String(), "docs/readme.txt")
+	assert.NotContains(t, stderrBuf.String(), "Error:")
+}
+
 func TestMainWithWriters_UnknownCommandWritesToProvidedStatusWriter(t *testing.T) {
 	var stdoutBuf bytes.Buffer
 	var stderrBuf bytes.Buffer

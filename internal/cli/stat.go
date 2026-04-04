@@ -78,7 +78,7 @@ func printStatJSON(w io.Writer, item *graph.Item) error {
 }
 
 func printStatText(w io.Writer, item *graph.Item) error {
-	itemType := "file"
+	itemType := typeFile
 	if item.IsFolder {
 		itemType = "folder"
 	}
