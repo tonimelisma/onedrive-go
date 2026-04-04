@@ -481,7 +481,7 @@ func TestEngine_HandleExternalChanges_BigDeleteClearance(t *testing.T) {
 	handleExternalChangesForTest(t, eng, ctx)
 	assert.True(t, testWatchRuntime(t, eng).deleteCounter.IsHeld(), "should still be held with entries present")
 
-	// Clear all big_delete_held entries (simulates `issues clear --all`).
+	// Clear all big_delete_held entries (simulates `issues force-deletes`).
 	require.NoError(t, eng.baseline.ClearResolvedActionableFailures(ctx, synctypes.IssueBigDeleteHeld, nil))
 
 	// Now handleExternalChanges should release.

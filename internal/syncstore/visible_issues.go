@@ -13,13 +13,10 @@ import (
 )
 
 // RemoteBlockedGroup is the first-class derived view for one active
-// shared-folder write block. It is built from held perm:remote rows plus any
-// pending boundary recheck request.
+// shared-folder write block. It is built from held perm:remote rows only.
 type RemoteBlockedGroup struct {
-	BoundaryPath       string
-	BlockedPaths       []string
-	HasManualTrial     bool
-	RecheckRequestedAt int64
+	BoundaryPath string
+	BlockedPaths []string
 }
 
 // VisibleIssueGroup is the store-owned grouping used by issues, status, and
@@ -126,17 +123,12 @@ func loadVisibleIssueProjection(
 		return visibleIssueProjection{}, fmt.Errorf("sync: listing visible auth scope blocks: %w", err)
 	}
 
-	recheckRequestedAt, err := queryScopeRecheckRequests(ctx, db)
-	if err != nil {
-		return visibleIssueProjection{}, fmt.Errorf("sync: listing scope recheck requests: %w", err)
-	}
-
 	retrying, err := queryRetryingIssueCount(ctx, db)
 	if err != nil {
 		return visibleIssueProjection{}, fmt.Errorf("sync: counting retrying sync failures: %w", err)
 	}
 
-	groups := buildVisibleIssueGroups(conflictCount, actionable, remoteBlocked, authBlocks, recheckRequestedAt)
+	groups := buildVisibleIssueGroups(conflictCount, actionable, remoteBlocked, authBlocks)
 	if logger != nil {
 		logger.Debug("loaded visible issue projection",
 			slog.Int("groups", len(groups)),
@@ -211,33 +203,6 @@ func queryAuthScopeBlocks(ctx context.Context, db *sql.DB) ([]*synctypes.ScopeBl
 	return blocks, nil
 }
 
-func queryScopeRecheckRequests(ctx context.Context, db *sql.DB) (map[synctypes.ScopeKey]int64, error) {
-	rows, err := db.QueryContext(ctx,
-		`SELECT scope_key, requested_at FROM scope_recheck_requests ORDER BY requested_at ASC`)
-	if err != nil {
-		if isMissingTableErr(err) {
-			return map[synctypes.ScopeKey]int64{}, nil
-		}
-		return nil, fmt.Errorf("query scope recheck requests: %w", err)
-	}
-	defer rows.Close()
-
-	requested := make(map[synctypes.ScopeKey]int64)
-	for rows.Next() {
-		var wire string
-		var requestedAt int64
-		if err := rows.Scan(&wire, &requestedAt); err != nil {
-			return nil, fmt.Errorf("scan scope recheck request: %w", err)
-		}
-		requested[synctypes.ParseScopeKey(wire)] = requestedAt
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate scope recheck requests: %w", err)
-	}
-
-	return requested, nil
-}
-
 func isMissingTableErr(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "no such table")
 }
@@ -257,14 +222,13 @@ func buildVisibleIssueGroups(
 	actionable []synctypes.SyncFailureRow,
 	remoteBlocked []synctypes.SyncFailureRow,
 	authBlocks []*synctypes.ScopeBlock,
-	recheckRequestedAt map[synctypes.ScopeKey]int64,
 ) []VisibleIssueGroup {
 	groupIndex := make(map[visibleIssueGroupKey]int)
 	groups := make([]VisibleIssueGroup, 0, len(actionable)+len(authBlocks)+1)
 
 	appendVisibleConflictGroup(&groups, conflictCount)
 	addVisibleActionableGroups(&groups, groupIndex, actionable)
-	addVisibleRemoteBlockedGroups(&groups, groupIndex, remoteBlocked, recheckRequestedAt)
+	addVisibleRemoteBlockedGroups(&groups, groupIndex, remoteBlocked)
 	addVisibleAuthScopeGroups(&groups, groupIndex, authBlocks)
 	finalizeVisibleIssueGroups(groups)
 
@@ -343,7 +307,6 @@ func addVisibleRemoteBlockedGroups(
 	groups *[]VisibleIssueGroup,
 	groupIndex map[visibleIssueGroupKey]int,
 	remoteBlocked []synctypes.SyncFailureRow,
-	recheckRequestedAt map[synctypes.ScopeKey]int64,
 ) {
 	for i := range remoteBlocked {
 		group := ensureVisibleFailureGroup(groups, groupIndex, &remoteBlocked[i], 1)
@@ -353,14 +316,10 @@ func addVisibleRemoteBlockedGroups(
 		}
 		if group.RemoteBlocked == nil {
 			group.RemoteBlocked = &RemoteBlockedGroup{
-				BoundaryPath:       visibleRemoteBoundaryPath(remoteBlocked[i].ScopeKey.RemotePath()),
-				RecheckRequestedAt: recheckRequestedAt[remoteBlocked[i].ScopeKey],
+				BoundaryPath: visibleRemoteBoundaryPath(remoteBlocked[i].ScopeKey.RemotePath()),
 			}
 		}
 		group.RemoteBlocked.BlockedPaths = append(group.RemoteBlocked.BlockedPaths, remoteBlocked[i].Path)
-		if remoteBlocked[i].ManualTrialRequestedAt > 0 {
-			group.RemoteBlocked.HasManualTrial = true
-		}
 	}
 }
 

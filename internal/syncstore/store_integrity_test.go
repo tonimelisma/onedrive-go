@@ -2,7 +2,6 @@ package syncstore
 
 import (
 	"context"
-	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -48,7 +47,6 @@ func TestInspector_AuditIntegrityReportsPersistedProblems(t *testing.T) {
 		integrityCodeInvalidAuthScopeTiming,
 		integrityCodeLegacyRemoteScope,
 		integrityCodeInvalidFailureTiming,
-		integrityCodeInvalidManualTrial,
 		integrityCodeMissingScopeBlock,
 		integrityCodeLegacyRemoteBoundary,
 		integrityCodeVisibleProjectionOverlap,
@@ -95,7 +93,6 @@ func TestSyncStore_RepairIntegritySafeNormalizesDeterministicViolations(t *testi
 		case "docs/CON":
 			itemRowFound = true
 			assert.Zero(t, row.NextRetryAt)
-			assert.Zero(t, row.ManualTrialRequestedAt)
 		case "Shared/Docs/draft.txt":
 			heldRowFound = true
 			assert.Equal(t, synctypes.FailureRoleHeld, row.Role)
@@ -178,15 +175,6 @@ func seedAuditIntegrityProblems(
 		"docs/CON",
 	)
 	require.NoError(t, err)
-	execIgnoringCheckConstraints(
-		t,
-		ctx,
-		store.DB(),
-		`UPDATE sync_failures SET manual_trial_requested_at = ? WHERE path = ?`,
-		time.Date(2026, 4, 3, 12, 30, 0, 0, time.UTC).UnixNano(),
-		"docs/CON",
-	)
-
 	recordIntegrityFailure(t, store, ctx, &synctypes.SyncFailureParams{
 		Path:       "service/failure.txt",
 		DriveID:    driveID,
@@ -266,15 +254,6 @@ func seedRepairIntegrityProblems(
 		"docs/CON",
 	)
 	require.NoError(t, err)
-	execIgnoringCheckConstraints(
-		t,
-		ctx,
-		store.DB(),
-		`UPDATE sync_failures SET manual_trial_requested_at = ? WHERE path = ?`,
-		time.Date(2026, 4, 3, 12, 30, 0, 0, time.UTC).UnixNano(),
-		"docs/CON",
-	)
-
 	recordIntegrityFailure(t, store, ctx, &synctypes.SyncFailureParams{
 		Path:       "Shared/Docs",
 		DriveID:    driveID,
@@ -307,31 +286,4 @@ func recordIntegrityFailure(
 ) {
 	t.Helper()
 	require.NoError(t, store.RecordFailure(ctx, params, nil))
-}
-
-func execIgnoringCheckConstraints(
-	t *testing.T,
-	ctx context.Context,
-	db *sql.DB,
-	query string,
-	args ...any,
-) {
-	t.Helper()
-
-	conn, err := db.Conn(ctx)
-	require.NoError(t, err)
-	defer func() {
-		assert.NoError(t, conn.Close())
-	}()
-
-	_, err = conn.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`)
-	require.NoError(t, err)
-	cleanupCtx := context.WithoutCancel(ctx)
-	defer func() {
-		_, pragmaErr := conn.ExecContext(cleanupCtx, `PRAGMA ignore_check_constraints = OFF`)
-		assert.NoError(t, pragmaErr)
-	}()
-
-	_, err = conn.ExecContext(ctx, query, args...)
-	require.NoError(t, err)
 }

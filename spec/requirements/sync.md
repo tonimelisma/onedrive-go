@@ -22,16 +22,16 @@ When the same file has been modified on both the local filesystem and OneDrive s
 
 - R-2.3.1: The default resolution shall preserve both versions: remote wins the original path, local version is renamed to `<name>.conflict-<timestamp>.<ext>`. [verified]
 - R-2.3.2: The system shall persistently record conflicts with metadata (path, timestamp, hashes, resolution status). [verified]
-- R-2.3.3: When the user runs `issues`, the system shall list all unresolved conflicts and failures. [verified]
-- R-2.3.4: When the user runs `issues resolve <path>`, the system shall allow resolution (keep-local, keep-remote, keep-both). [verified]
-- R-2.3.5: When the user runs `issues clear <path>`, the system shall dismiss a conflict. [verified]
-- R-2.3.6: When the user runs `issues retry <path>`, the system shall retry a failed item. [verified]
+- R-2.3.3: When the user runs `issues`, the system shall list current drive-level sync issues only, excluding conflicts and retry-queue internals. [verified]
+- R-2.3.4: When the user runs `conflicts`, the system shall list unresolved conflicts, and `conflicts --history` shall include resolved conflicts. [verified]
+- R-2.3.5: When the user runs `conflicts resolve <path>`, the system shall allow resolution (keep-local, keep-remote, keep-both). [verified]
+- R-2.3.6: When the user runs `issues force-deletes`, the system shall approve all currently held big-delete entries for the selected drive without affecting other issue types. [verified]
 - R-2.3.7: When the `issues` command encounters more than 10 failures of the same issue type, the system shall group them under a single heading with count and show the first 5 paths. When `--verbose` is passed, the system shall show all paths. [verified]
 - R-2.3.8: When displaying scope-level issues where drives have independent scopes (507 quota, shared-folder write blocks), the system shall sub-group by scope (own drive vs each shortcut). [verified]
 - R-2.3.9: When displaying shortcut-scoped failures, the system shall use the shortcut's local path name (human-readable), not internal drive IDs or scope keys. [verified]
-- R-2.3.10: When `--json` is passed, `issues` shall output structured JSON with separate `conflicts`, `failure_groups`, and `held_deletes` arrays. [verified]
-- R-2.3.11: When the user runs `issues recheck <boundary>` on a shared-folder write block, the system shall queue a boundary-level permission revalidation without retrying a specific blocked child action. If the boundary is still read-only, the block remains; if the boundary is writable or the Graph evidence is inconclusive, the block shall be released. [verified]
-- R-2.3.12: `issues clear`, `issues retry`, and repeated conflict resolution attempts shall be replay-safe. Repeating the same mutation shall either be a no-op or return a stable already-resolved result, without duplicate durable effects or partial scope release. [verified]
+- R-2.3.10: When `--json` is passed, `issues` shall output structured JSON with `failure_groups` and `held_deletes` only. Conflicts shall be reported through the separate `conflicts` command. [verified]
+- R-2.3.11: Shared-folder write blocks shall have no manual CLI retry or recheck command. The system shall revalidate them automatically during normal sync/watch permission checks while blocked writes still exist. [verified]
+- R-2.3.12: Repeated `issues force-deletes` and repeated conflict-resolution attempts shall be replay-safe. Repeating the same mutation shall either be a no-op or return a stable already-resolved result, without duplicate durable effects or partial scope release. [verified]
 
 ## R-2.4 Filtering [implemented]
 
@@ -157,7 +157,7 @@ The system shall validate filenames against OneDrive naming restrictions before 
 - R-2.14.2: When confirmed read-only shared-folder state still has blocked remote-mutating work, the planner shall treat that subtree as download-only — suppressing uploads, folder creates, remote moves, and remote deletes while still allowing downloads. [verified]
 - R-2.14.3: The system shall surface read-only shared-folder state in `issues` and `status` only while blocked remote-mutating intent exists, grouping one visible issue per denied boundary and forgetting the state immediately when the last blocked write disappears. [verified]
 - R-2.14.4: At the start of each sync pass, the system shall recheck visible read-only shared-folder scopes against the Graph API and release them when write access is restored or the evidence is inconclusive. [verified]
-- R-2.14.5: When the user runs `issues retry <path>` on a blocked shared-folder write, the system shall request a manual trial of that exact blocked path. Retrying the boundary path instead of a blocked child path shall be rejected. [verified]
+- R-2.14.5: Read-only shared-folder state shall not expose manual retry or manual recheck commands. Recovery shall happen only through automatic permission revalidation and normal scope release when blocked writes disappear. [verified]
 
 ## R-2.15 Delta Checkpoint Integrity [verified]
 

@@ -54,7 +54,7 @@ import (
 // the scan order in scanSyncFailureRows. Update both when adding columns.
 const sqlSelectSyncFailureCols = `path, drive_id, direction, action_type, failure_role, category,
 		COALESCE(issue_type, ''), COALESCE(item_id, ''),
-		failure_count, COALESCE(next_retry_at, 0), COALESCE(manual_trial_requested_at, 0),
+		failure_count, COALESCE(next_retry_at, 0),
 		COALESCE(last_error, ''), COALESCE(http_status, 0),
 		first_seen_at, last_seen_at,
 		COALESCE(file_size, 0), COALESCE(local_hash, ''),
@@ -276,9 +276,9 @@ func (m *SyncStore) RecordFailure(ctx context.Context, p *synctypes.SyncFailureP
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO sync_failures
 			(path, drive_id, direction, action_type, failure_role, category, issue_type, item_id,
-			 failure_count, next_retry_at, manual_trial_requested_at, last_error, http_status,
+			 failure_count, next_retry_at, last_error, http_status,
 			 first_seen_at, last_seen_at, file_size, local_hash, scope_key)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(path, drive_id) DO UPDATE SET
 			direction = excluded.direction,
 			action_type = excluded.action_type,
@@ -288,7 +288,6 @@ func (m *SyncStore) RecordFailure(ctx context.Context, p *synctypes.SyncFailureP
 			item_id = COALESCE(excluded.item_id, sync_failures.item_id),
 			failure_count = sync_failures.failure_count + 1,
 			next_retry_at = excluded.next_retry_at,
-			manual_trial_requested_at = excluded.manual_trial_requested_at,
 			last_error = excluded.last_error,
 			http_status = excluded.http_status,
 			last_seen_at = excluded.last_seen_at,
@@ -297,7 +296,7 @@ func (m *SyncStore) RecordFailure(ctx context.Context, p *synctypes.SyncFailureP
 			scope_key = excluded.scope_key`,
 		p.Path, p.DriveID.String(), direction, actionType, role, category,
 		nullString(p.IssueType), nullString(itemID),
-		newCount, nextRetryNano, int64(0), p.ErrMsg, p.HTTPStatus,
+		newCount, nextRetryNano, p.ErrMsg, p.HTTPStatus,
 		nowNano, nowNano, nullOptionalInt64(p.FileSize), nullString(p.LocalHash), scopeWire,
 	)
 	if err != nil {
@@ -522,9 +521,9 @@ func (m *SyncStore) UpsertActionableFailures(ctx context.Context, failures []syn
 	stmt, err := tx.PrepareContext(ctx,
 		`INSERT INTO sync_failures
 			(path, drive_id, direction, action_type, failure_role, category, issue_type, item_id,
-			 failure_count, next_retry_at, manual_trial_requested_at, last_error, http_status,
+			 failure_count, next_retry_at, last_error, http_status,
 			 first_seen_at, last_seen_at, file_size, local_hash, scope_key)
-		VALUES (?, ?, ?, ?, ?, 'actionable', ?, '', 1, NULL, 0, ?, 0, ?, ?, ?, '', ?)
+		VALUES (?, ?, ?, ?, ?, 'actionable', ?, '', 1, NULL, ?, 0, ?, ?, ?, '', ?)
 		ON CONFLICT(path, drive_id) DO UPDATE SET
 			direction = excluded.direction,
 			action_type = excluded.action_type,
@@ -532,7 +531,6 @@ func (m *SyncStore) UpsertActionableFailures(ctx context.Context, failures []syn
 			category = 'actionable',
 			issue_type = excluded.issue_type,
 			next_retry_at = NULL,
-			manual_trial_requested_at = 0,
 			last_error = excluded.last_error,
 			last_seen_at = excluded.last_seen_at,
 			file_size = excluded.file_size,
@@ -786,8 +784,7 @@ func (m *SyncStore) PickTrialCandidate(
 	row := m.db.QueryRowContext(ctx,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
 		WHERE scope_key = ? AND failure_role = ? AND next_retry_at IS NULL
-		ORDER BY CASE WHEN manual_trial_requested_at > 0 THEN 0 ELSE 1 END,
-			manual_trial_requested_at ASC, first_seen_at ASC
+		ORDER BY first_seen_at ASC
 		LIMIT 1`,
 		wire, synctypes.FailureRoleHeld,
 	)
@@ -798,7 +795,7 @@ func (m *SyncStore) PickTrialCandidate(
 	err := row.Scan(
 		&r.Path, &r.DriveID, &r.Direction, &r.ActionType, &r.Role, &r.Category,
 		&r.IssueType, &r.ItemID,
-		&r.FailureCount, &r.NextRetryAt, &r.ManualTrialRequestedAt,
+		&r.FailureCount, &r.NextRetryAt,
 		&r.LastError, &r.HTTPStatus,
 		&r.FirstSeenAt, &r.LastSeenAt,
 		&r.FileSize, &r.LocalHash,
@@ -856,7 +853,7 @@ func scanSyncFailureRows(rows *sql.Rows) ([]synctypes.SyncFailureRow, error) {
 		if scanErr := rows.Scan(
 			&r.Path, &r.DriveID, &r.Direction, &r.ActionType, &r.Role, &r.Category,
 			&r.IssueType, &r.ItemID,
-			&r.FailureCount, &r.NextRetryAt, &r.ManualTrialRequestedAt,
+			&r.FailureCount, &r.NextRetryAt,
 			&r.LastError, &r.HTTPStatus,
 			&r.FirstSeenAt, &r.LastSeenAt,
 			&r.FileSize, &r.LocalHash,

@@ -21,7 +21,7 @@ The sync database uses remote state separation: three core tables decouple API o
 | `baseline` | Confirmed synced state | `(drive_id, item_id)`, `path` UNIQUE |
 | `sync_failures` | Unified item failure tracking with explicit role semantics | `(path, drive_id)` |
 
-Supporting tables: `delta_tokens`, `conflicts`, `sync_metadata`, `shortcuts`, `scope_blocks`, `scope_recheck_requests`.
+Supporting tables: `delta_tokens`, `conflicts`, `sync_metadata`, `shortcuts`, `scope_blocks`.
 
 ### remote_state
 

@@ -69,7 +69,6 @@ Important columns:
 - `failure_role` = `item`, `held`, or `boundary`
 - `issue_type`
 - `next_retry_at`
-- `manual_trial_requested_at`
 - `scope_key`
 
 `failure_role` makes the row meaning explicit:

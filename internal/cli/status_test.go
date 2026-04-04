@@ -1143,7 +1143,6 @@ const statusTestStateSchema = `
 			item_id TEXT,
 			failure_count INTEGER NOT NULL DEFAULT 0,
 			next_retry_at INTEGER,
-			manual_trial_requested_at INTEGER NOT NULL DEFAULT 0,
 			last_error TEXT,
 			http_status INTEGER,
 			first_seen_at INTEGER NOT NULL,
@@ -1162,10 +1161,6 @@ const statusTestStateSchema = `
 			next_trial_at INTEGER NOT NULL,
 			preserve_until INTEGER NOT NULL,
 			trial_count INTEGER NOT NULL
-		);
-		CREATE TABLE IF NOT EXISTS scope_recheck_requests (
-			scope_key TEXT PRIMARY KEY,
-			requested_at INTEGER NOT NULL
 		);
 		CREATE TABLE IF NOT EXISTS shortcuts (
 			item_id TEXT PRIMARY KEY,

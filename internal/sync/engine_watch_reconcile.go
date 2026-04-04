@@ -36,7 +36,7 @@ func (rt *watchRuntime) externalDBChanged(ctx context.Context) bool {
 }
 
 // handleRecheckTick processes a recheck timer tick: detects external DB
-// changes (e.g., `issues clear`) and logs a watch summary.
+// changes (e.g., `issues force-deletes`) and logs a watch summary.
 func (rt *watchRuntime) handleRecheckTick(ctx context.Context) {
 	if rt.externalDBChanged(ctx) {
 		rt.handleExternalChanges(ctx)
@@ -48,7 +48,7 @@ func (rt *watchRuntime) handleRecheckTick(ctx context.Context) {
 // handleExternalChanges reacts to external DB modifications detected via
 // PRAGMA data_version. Currently handles big-delete clearance: if the
 // counter is held but all big_delete_held rows have been cleared (via
-// `issues clear`), releases the counter so deletes resume on the next
+// `issues force-deletes`), releases the counter so deletes resume on the next
 // observation cycle.
 func (rt *watchRuntime) handleExternalChanges(ctx context.Context) {
 	if rt.deleteCounter != nil && rt.deleteCounter.IsHeld() {
@@ -68,7 +68,6 @@ func (rt *watchRuntime) handleExternalChanges(ctx context.Context) {
 	}
 
 	rt.clearResolvedPermissionScopes(ctx)
-	rt.handleRequestedPermissionRechecks(ctx)
 	rt.mustAssertScopeInvariants(ctx, rt, "handle external changes")
 }
 
