@@ -44,7 +44,7 @@ func (s *driveService) runList(ctx context.Context, showAll bool) error {
 		s.cc.GraphBaseURL,
 	)
 	annotateStateDB(available)
-	authRequired := mergeAuthRequirements(readModel.configuredAuthRequirements(snapshot, func(entry accountCatalogEntry) bool {
+	authRequired := mergeAuthRequirements(readModel.authRequirements(snapshot, func(entry accountCatalogEntry) bool {
 		return entry.Configured
 	}), discoveredAuthRequired)
 
@@ -155,16 +155,13 @@ func (s *driveService) runSearch(ctx context.Context, query string) error {
 	}
 
 	businessTokens := searchableBusinessTokenIDs(snapshot.Catalog, s.cc.Flags.Account)
-	configuredAuthRequired := readModel.configuredAuthRequirements(snapshot, func(entry accountCatalogEntry) bool {
-		if !entry.Configured {
-			return false
-		}
+	businessAuthRequired := readModel.authRequirements(snapshot, func(entry accountCatalogEntry) bool {
 		if s.cc.Flags.Account != "" && entry.Email != s.cc.Flags.Account {
 			return false
 		}
 		return entry.DriveType == driveid.DriveTypeBusiness
 	})
-	if len(businessTokens) == 0 && len(configuredAuthRequired) == 0 {
+	if len(businessTokens) == 0 && len(businessAuthRequired) == 0 {
 		if s.cc.Flags.Account != "" {
 			return fmt.Errorf("no business account found for %s — run 'onedrive-go login' first", s.cc.Flags.Account)
 		}
@@ -188,7 +185,7 @@ func (s *driveService) runSearch(ctx context.Context, query string) error {
 		results = append(results, accountResults...)
 		discoveredAuthRequired = append(discoveredAuthRequired, accountAuthRequired...)
 	}
-	authRequired := mergeAuthRequirements(configuredAuthRequired, discoveredAuthRequired)
+	authRequired := mergeAuthRequirements(businessAuthRequired, discoveredAuthRequired)
 
 	if s.cc.Flags.JSON {
 		return printDriveSearchJSON(s.cc.Output(), results, authRequired)
