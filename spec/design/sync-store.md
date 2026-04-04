@@ -201,6 +201,13 @@ hashing or filesystem probing.
 against `local_size` when it is known; remote-side metadata is irrelevant to
 local verification.
 
+Verification remains read-only all the way through the store boundary:
+per-path stat/rooted-path/hash failures are reported as mismatch rows instead
+of aborting the whole pass, while context cancellation is still fatal to the
+overall verify command. `VerifyReport.Mismatches` is sorted by path before it
+reaches CLI formatting so text and JSON output stay deterministic across map
+iteration order.
+
 ## Crash Recovery Boundary
 
 [`internal/syncrecovery/recovery.go`](/Users/tonimelisma/Development/onedrive-go/internal/syncrecovery/recovery.go)

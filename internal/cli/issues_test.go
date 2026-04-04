@@ -673,9 +673,30 @@ func newSeededIssuesCmd(t *testing.T) (*cobra.Command, string) {
 	}, nil)
 	require.NoError(t, err)
 
+	// Prefix-adjacent transient failure should survive single-path retry.
+	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:       "data/report.xlsx.bak",
+		Direction:  synctypes.DirectionUpload,
+		IssueType:  "upload_failed",
+		ErrMsg:     "connection reset",
+		HTTPStatus: 500,
+		FileSize:   2048,
+	}, nil)
+	require.NoError(t, err)
+
 	// Second actionable failure for testing --all.
 	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:      "docs/NUL.txt",
+		Direction: synctypes.DirectionUpload,
+		IssueType: "invalid_filename",
+		Category:  synctypes.CategoryActionable,
+		ErrMsg:    "reserved name",
+	}, nil)
+	require.NoError(t, err)
+
+	// Prefix-adjacent actionable failure should survive single-path clear.
+	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:      "docs/CON-copy",
 		Direction: synctypes.DirectionUpload,
 		IssueType: "invalid_filename",
 		Category:  synctypes.CategoryActionable,
@@ -739,9 +760,11 @@ func TestIssuesClear_SinglePath(t *testing.T) {
 	actionable, err := mgr.ListActionableFailures(ctx)
 	require.NoError(t, err)
 
-	// Only "docs/NUL.txt" should remain as actionable.
-	require.Len(t, actionable, 1)
-	assert.Equal(t, "docs/NUL.txt", actionable[0].Path)
+	require.Len(t, actionable, 2)
+	assert.ElementsMatch(t, []string{"docs/NUL.txt", "docs/CON-copy"}, []string{
+		actionable[0].Path,
+		actionable[1].Path,
+	})
 }
 
 // Validates: R-2.3.5
@@ -765,8 +788,11 @@ func TestIssuesClear_All(t *testing.T) {
 	// Transient failure should still exist.
 	all, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
-	require.Len(t, all, 1)
-	assert.Equal(t, "data/report.xlsx", all[0].Path)
+	require.Len(t, all, 2)
+	assert.ElementsMatch(t, []string{"data/report.xlsx", "data/report.xlsx.bak"}, []string{
+		all[0].Path,
+		all[1].Path,
+	})
 }
 
 // Validates: R-2.3.6
@@ -786,11 +812,17 @@ func TestIssuesRetry_SinglePath(t *testing.T) {
 	all, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 
-	// The transient failure should be gone; actionable ones remain.
-	for _, f := range all {
-		assert.NotEqual(t, "data/report.xlsx", f.Path,
-			"retried failure should be cleared from sync_failures")
-	}
+	assert.ElementsMatch(t, []string{
+		"docs/CON",
+		"docs/NUL.txt",
+		"docs/CON-copy",
+		"data/report.xlsx.bak",
+	}, []string{
+		all[0].Path,
+		all[1].Path,
+		all[2].Path,
+		all[3].Path,
+	})
 }
 
 // Validates: R-2.3.6

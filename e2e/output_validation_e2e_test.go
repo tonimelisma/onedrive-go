@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // ---------------------------------------------------------------------------
@@ -48,24 +51,21 @@ func TestE2E_Verify_JSON(t *testing.T) {
 	// Verify --json should detect mismatch.
 	stdout, _, verifyErr := runCLIWithConfigAllowError(t, cfgPath, env, "verify", "--json")
 	require.Error(t, verifyErr, "verify should fail when files are tampered")
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, verifyErr, &exitErr)
+	assert.Equal(t, 1, exitErr.ExitCode(), "verify mismatch should exit with code 1")
 
-	var output map[string]interface{}
-	require.NoError(t, json.Unmarshal([]byte(stdout), &output),
+	var report synctypes.VerifyReport
+	require.NoError(t, json.Unmarshal([]byte(stdout), &report),
 		"verify --json should produce valid JSON, got: %s", stdout)
 
-	// Check structure.
-	assert.Contains(t, output, "verified", "JSON should have verified count")
-	assert.Contains(t, output, "mismatches", "JSON should have mismatches array")
-
-	mismatches, ok := output["mismatches"].([]interface{})
-	require.True(t, ok, "mismatches should be an array")
-	require.NotEmpty(t, mismatches, "should have at least one mismatch")
-
-	// Verify mismatch entry has expected fields.
-	mismatch, ok := mismatches[0].(map[string]interface{})
-	require.True(t, ok, "mismatch entry should be an object")
-	assert.Contains(t, mismatch, "path", "mismatch should have path")
-	assert.Contains(t, mismatch, "status", "mismatch should have status")
+	assert.Equal(t, 1, report.Verified, "only the untampered file should verify")
+	require.Len(t, report.Mismatches, 1)
+	assert.Equal(t, filepath.ToSlash(filepath.Join(testFolder, "tamper.txt")), report.Mismatches[0].Path)
+	assert.Equal(t, "hash_mismatch", report.Mismatches[0].Status)
+	assert.NotEmpty(t, report.Mismatches[0].Expected)
+	assert.NotEmpty(t, report.Mismatches[0].Actual)
+	assert.NotEqual(t, report.Mismatches[0].Expected, report.Mismatches[0].Actual)
 }
 
 // TestE2E_Status_NoDrives validates that status with no configured drives

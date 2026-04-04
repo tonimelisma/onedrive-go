@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -14,7 +15,9 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 func newServiceContext(output *bytes.Buffer, cfgPath string) *CLIContext {
@@ -129,6 +132,60 @@ func TestVerifyService_Run_WritesConfiguredOutput(t *testing.T) {
 
 	require.NoError(t, newVerifyService(cc).run(t.Context()))
 	assert.Contains(t, out.String(), "All files verified successfully.")
+}
+
+// Validates: R-2.7, R-2.7.1
+func TestVerifyService_Run_MismatchJSONUsesConfiguredOutput(t *testing.T) {
+	setTestDriveHome(t)
+
+	syncDir := t.TempDir()
+	_, cid, dbPath := setupVerifyFixture(t, syncDir)
+	require.NoError(t, os.WriteFile(filepath.Join(syncDir, "keep.txt"), []byte("keep"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(syncDir, "tamper.txt"), []byte("hello"), 0o600))
+	keepHash, err := driveops.ComputeQuickXorHash(filepath.Join(syncDir, "keep.txt"))
+	require.NoError(t, err)
+	insertVerifyBaselineRows(t, dbPath,
+		verifyBaselineRow{
+			path:      "keep.txt",
+			localHash: keepHash,
+			localSize: 4,
+		},
+		verifyBaselineRow{
+			path:      "missing.txt",
+			localHash: "expected-missing",
+			localSize: 7,
+		},
+		verifyBaselineRow{
+			path:      "tamper.txt",
+			localHash: "wrong-hash",
+			localSize: 5,
+		},
+	)
+
+	var out bytes.Buffer
+	cc := &CLIContext{
+		Flags:        CLIFlags{JSON: true},
+		Logger:       slog.New(slog.DiscardHandler),
+		OutputWriter: &out,
+		Cfg: &config.ResolvedDrive{
+			CanonicalID: cid,
+			SyncDir:     syncDir,
+		},
+	}
+
+	err = newVerifyService(cc).run(t.Context())
+	require.ErrorIs(t, err, errVerifyMismatch)
+
+	var report synctypes.VerifyReport
+	require.NoError(t, json.Unmarshal(out.Bytes(), &report))
+	assert.Equal(t, 1, report.Verified)
+	require.Len(t, report.Mismatches, 2)
+	tamperActualHash, err := driveops.ComputeQuickXorHash(filepath.Join(syncDir, "tamper.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, []synctypes.VerifyResult{
+		{Path: "missing.txt", Status: "missing", Expected: "expected-missing", Actual: ""},
+		{Path: "tamper.txt", Status: "hash_mismatch", Expected: "wrong-hash", Actual: tamperActualHash},
+	}, report.Mismatches)
 }
 
 // Validates: R-2.6
