@@ -326,8 +326,9 @@ func execIgnoringCheckConstraints(
 
 	_, err = conn.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`)
 	require.NoError(t, err)
+	cleanupCtx := context.WithoutCancel(ctx)
 	defer func() {
-		_, pragmaErr := conn.ExecContext(context.Background(), `PRAGMA ignore_check_constraints = OFF`)
+		_, pragmaErr := conn.ExecContext(cleanupCtx, `PRAGMA ignore_check_constraints = OFF`)
 		assert.NoError(t, pragmaErr)
 	}()
 
