@@ -10,6 +10,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -54,8 +55,15 @@ func runSyncDaemon(
 	sighup := sighupChannel()
 	defer signal.Stop(sighup)
 
-	provider := driveops.NewSessionProvider(holder,
-		syncMetaHTTPClient(), syncTransferHTTPClient(), "onedrive-go/"+version, logger)
+	httpProvider := graphhttp.NewProvider(logger)
+	provider := driveops.NewSessionProvider(holder, func(_ *config.ResolvedDrive) driveops.HTTPClients {
+		clients := httpProvider.Sync()
+
+		return driveops.HTTPClients{
+			Meta:     clients.Meta,
+			Transfer: clients.Transfer,
+		}
+	}, "onedrive-go/"+version, logger)
 
 	orch := multisync.NewOrchestrator(&multisync.OrchestratorConfig{
 		Holder:     holder,

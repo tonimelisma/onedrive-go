@@ -6,6 +6,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -76,10 +77,17 @@ func (s *syncService) run(ctx context.Context, opts syncCommandOptions) error {
 	}
 
 	holder := config.NewHolder(rawCfg, s.cc.CfgPath)
+	httpProvider := graphhttp.NewProvider(logger)
 	provider := driveops.NewSessionProvider(
 		holder,
-		syncMetaHTTPClient(),
-		syncTransferHTTPClient(),
+		func(_ *config.ResolvedDrive) driveops.HTTPClients {
+			clients := httpProvider.Sync()
+
+			return driveops.HTTPClients{
+				Meta:     clients.Meta,
+				Transfer: clients.Transfer,
+			}
+		},
 		"onedrive-go/"+version,
 		logger,
 	)

@@ -4,7 +4,9 @@ package e2e
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,6 +107,85 @@ func runCLIWithConfigAllowError(t *testing.T, cfgPath string, env map[string]str
 	t.Helper()
 
 	return runCLICore(t, cfgPath, env, drive, args...)
+}
+
+// snapshotLocalTree captures a deterministic view of a test-owned local
+// subtree. Full-suite sync tests share one live drive account, so unrelated
+// remote churn can legitimately produce global delta activity between two sync
+// passes. Comparing the owned subtree before and after a follow-up sync lets
+// tests assert their own convergence without depending on the rest of the
+// shared drive staying perfectly still.
+func snapshotLocalTree(t *testing.T, root string) map[string]string {
+	t.Helper()
+
+	_, err := os.Stat(root)
+	if os.IsNotExist(err) {
+		return map[string]string{
+			".": "missing",
+		}
+	}
+	require.NoError(t, err)
+
+	snapshot := map[string]string{}
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+
+		key := filepath.ToSlash(rel)
+		if d.IsDir() {
+			snapshot[key] = "dir"
+			return nil
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+
+		sum := sha256.Sum256(data)
+		snapshot[key] = fmt.Sprintf(
+			"file:%o:%d:%x",
+			info.Mode().Perm(),
+			len(data),
+			sum,
+		)
+
+		return nil
+	})
+	require.NoError(t, err)
+
+	return snapshot
+}
+
+// assertSyncLeavesLocalTreeStable proves that a follow-up sync did not mutate
+// the caller-owned subtree, even if unrelated live-drive activity caused other
+// delta events elsewhere in the shared test account.
+func assertSyncLeavesLocalTreeStable(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	root string,
+	args ...string,
+) string {
+	t.Helper()
+
+	before := snapshotLocalTree(t, root)
+	_, stderr := runCLIWithConfig(t, cfgPath, env, args...)
+	after := snapshotLocalTree(t, root)
+	assert.Equal(t, before, after, "sync should not mutate the test-owned local tree")
+
+	return stderr
 }
 
 // putRemoteFile uploads string content to a remote path via a temp file.

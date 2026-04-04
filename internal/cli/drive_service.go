@@ -42,6 +42,7 @@ func (s *driveService) runList(ctx context.Context, showAll bool) error {
 		logger,
 		recorder,
 		s.cc.GraphBaseURL,
+		s.cc.httpProvider(),
 	)
 	annotateStateDB(available)
 	authRequired := mergeAuthRequirements(readModel.authRequirements(snapshot, func(entry accountCatalogEntry) bool {
@@ -82,7 +83,7 @@ func (s *driveService) runAdd(ctx context.Context, args []string) error {
 				"Run 'onedrive-go drive list' to see valid canonical IDs", selector, err)
 		}
 
-		return addSharedDriveByName(ctx, selector, s.cc.CfgPath, s.cc.Output(), logger)
+		return addSharedDriveByName(ctx, selector, s.cc.CfgPath, s.cc.Output(), logger, s.cc.httpProvider())
 	}
 
 	if cid.IsShared() {
@@ -99,7 +100,7 @@ func (s *driveService) runAdd(ctx context.Context, args []string) error {
 			return fmt.Errorf("shared files are direct stat/get/put targets, not drives")
 		}
 
-		return addSharedDrive(ctx, s.cc.CfgPath, s.cc.Output(), cid, "", logger)
+		return addSharedDrive(ctx, s.cc.CfgPath, s.cc.Output(), cid, "", logger, s.cc.httpProvider())
 	}
 
 	return addNewDrive(s.cc.Output(), s.cc.CfgPath, cid, logger)
@@ -181,6 +182,7 @@ func (s *driveService) runSearch(ctx context.Context, query string) error {
 			logger,
 			recorder,
 			s.cc.GraphBaseURL,
+			s.cc.httpProvider(),
 		)
 		results = append(results, accountResults...)
 		discoveredAuthRequired = append(discoveredAuthRequired, accountAuthRequired...)

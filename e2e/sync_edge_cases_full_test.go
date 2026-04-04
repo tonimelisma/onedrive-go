@@ -273,6 +273,7 @@ func TestE2E_Sync_IdempotentReSync(t *testing.T) {
 
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
+	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-sync-idemp-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -289,10 +290,19 @@ func TestE2E_Sync_IdempotentReSync(t *testing.T) {
 	// Sync bidirectional.
 	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 
-	// Re-sync — should show no changes.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--force")
-	assert.Contains(t, stderr, "No changes detected",
-		"immediate re-sync should detect no changes")
+	// Re-sync — the owned subtree should stay stable even if unrelated tests
+	// churn elsewhere on the shared live drive.
+	assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync", "--force")
+
+	// The test-owned remote subtree should still contain the same files.
+	stdout, _ := runCLIWithConfig(t, opsCfgPath, nil, "ls", "/"+testFolder)
+	assert.Contains(t, stdout, "a.txt")
+	assert.Contains(t, stdout, "b.txt")
+	assert.Contains(t, stdout, "c.txt")
+	assert.Contains(t, stdout, "sub")
+
+	subOut, _ := runCLIWithConfig(t, opsCfgPath, nil, "ls", "/"+testFolder+"/sub")
+	assert.Contains(t, subOut, "nested.txt")
 }
 
 // TestE2E_Sync_TransferWorkersConfig validates that the transfer_workers

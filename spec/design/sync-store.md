@@ -34,6 +34,7 @@ Key operations:
 
 - `CommitObservation()` atomically writes `remote_state` rows and advances the relevant delta token.
 - `CommitOutcome()` updates `baseline` and finalizes remote-state transitions per action. Success-side `sync_failures` cleanup is engine-owned and happens before or after the store commit depending on the result flow.
+- `RefreshLocalBaseline(ctx, LocalBaselineRefresh)` is the explicit manual-reconciliation path used when local disk now represents the chosen truth without a new executor transfer result. It updates only the local-side baseline tuple, preserves known remote-side metadata/`etag`, and marks a matching `remote_state` row synced.
 - `RecordFailure(ctx, SyncFailureParams, delayFn)` is the single failure writer. The engine provides classification and retry policy; the store provides transactional persistence and conflict-safe upsert behavior.
 - `ResetDownloadingStates(ctx, delayFn)`, `ListDeletingCandidates(ctx)`, and `FinalizeDeletingStates(ctx, deleted, pending, delayFn)` are the state-only crash-recovery primitives. The store no longer probes the sync-root filesystem itself.
 - `ReleaseScope(ctx, scopeKey, now)` is the single durable “scope resolved” transition. It deletes the `scope_blocks` row when one exists, deletes any legacy `boundary` failure row for that scope, and converts all `held` failures for that scope into retryable `item` rows with `next_retry_at = now`.
@@ -52,6 +53,14 @@ needs later:
 The store does not fabricate hashes or synthesize fallback decisions. It
 persists exactly what observation and execution learned, including known zero
 sizes. Comparison policy stays in the planner.
+
+`RefreshLocalBaseline()` is deliberately narrower than `CommitOutcome()`. It
+exists for manual/local reconciliation paths such as `keep_both`, where the
+engine has authoritative current local disk facts but is not committing a new
+executor-produced remote result. The method preserves the remote-side
+comparison tuple for existing rows, creates unknown remote-side fields for
+local-only placeholder rows, and converges `remote_state` in the same
+transaction so the next sync does not rediscover stale remote work.
 
 ## Canonical Schema (`schema.sql`)
 

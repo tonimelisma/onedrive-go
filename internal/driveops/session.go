@@ -15,11 +15,11 @@ import (
 )
 
 // Session holds authenticated clients and the resolved drive identity for a
-// single drive. Wraps a pair of graph.Client instances: Meta (30s timeout)
-// for metadata operations and Transfer (no timeout) for uploads/downloads.
+// single drive. Wraps a pair of graph.Client instances: Meta for Graph
+// metadata operations and Transfer for upload/download traffic.
 type Session struct {
-	Meta     *graph.Client // metadata ops (30s timeout)
-	Transfer *graph.Client // uploads/downloads (no timeout)
+	Meta     *graph.Client // metadata ops (transport-level stall detection)
+	Transfer *graph.Client // uploads/downloads (no client-level timeout)
 	DriveID  driveid.ID
 	RootItem string
 	Resolved *config.ResolvedDrive
@@ -31,6 +31,26 @@ type AccountClients struct {
 	Meta     *graph.Client
 	Transfer *graph.Client
 	Account  driveid.CanonicalID
+}
+
+// HTTPClients is the HTTP client pair used to construct one authenticated
+// graph session.
+type HTTPClients struct {
+	Meta     *http.Client
+	Transfer *http.Client
+}
+
+// ClientResolver resolves the HTTP client pair for a specific drive.
+type ClientResolver func(*config.ResolvedDrive) HTTPClients
+
+// StaticClientResolver returns a resolver that always returns the same pair.
+func StaticClientResolver(metaHTTP, transferHTTP *http.Client) ClientResolver {
+	return func(_ *config.ResolvedDrive) HTTPClients {
+		return HTTPClients{
+			Meta:     metaHTTP,
+			Transfer: transferHTTP,
+		}
+	}
 }
 
 // ResolvedDriveEmail returns the account email for the resolved drive.
@@ -65,8 +85,7 @@ func (s *Session) SetAuthenticatedSuccessHooks(hook func(context.Context)) {
 // can invalidate each other's refresh tokens).
 type SessionProvider struct {
 	holder       *config.Holder
-	metaHTTP     *http.Client
-	transferHTTP *http.Client
+	resolveHTTP  ClientResolver
 	userAgent    string
 	logger       *slog.Logger
 	GraphBaseURL string
@@ -81,13 +100,16 @@ type SessionProvider struct {
 
 // NewSessionProvider creates a SessionProvider with default TokenSourceFn.
 func NewSessionProvider(
-	holder *config.Holder, metaHTTP, transferHTTP *http.Client,
+	holder *config.Holder, resolveHTTP ClientResolver,
 	userAgent string, logger *slog.Logger,
 ) *SessionProvider {
+	if resolveHTTP == nil {
+		resolveHTTP = StaticClientResolver(nil, nil)
+	}
+
 	return &SessionProvider{
 		holder:        holder,
-		metaHTTP:      metaHTTP,
-		transferHTTP:  transferHTTP,
+		resolveHTTP:   resolveHTTP,
 		userAgent:     userAgent,
 		logger:        logger,
 		TokenSourceFn: graph.TokenSourceFromPath,
@@ -104,7 +126,8 @@ func (p *SessionProvider) Session(ctx context.Context, rd *config.ResolvedDrive)
 		return nil, fmt.Errorf("cannot determine token path for drive %q", rd.CanonicalID)
 	}
 
-	meta, transfer, err := p.clientsForTokenPath(ctx, tokenPath)
+	httpClients := p.resolveHTTP(rd)
+	meta, transfer, err := p.clientsForTokenPath(ctx, tokenPath, httpClients)
 	if err != nil {
 		if errors.Is(err, graph.ErrNotLoggedIn) {
 			return nil, fmt.Errorf("not logged in — run 'onedrive-go login' first: %w", err)
@@ -143,7 +166,7 @@ func (p *SessionProvider) ClientsForAccount(ctx context.Context, cid driveid.Can
 		return nil, fmt.Errorf("cannot determine token path for account %q", cid.Email())
 	}
 
-	meta, transfer, err := p.clientsForTokenPath(ctx, tokenPath)
+	meta, transfer, err := p.clientsForTokenPath(ctx, tokenPath, p.resolveHTTP(nil))
 	if err != nil {
 		if errors.Is(err, graph.ErrNotLoggedIn) {
 			return nil, fmt.Errorf("not logged in — run 'onedrive-go login' first: %w", err)
@@ -179,7 +202,11 @@ func (p *SessionProvider) getOrCreateTokenSource(ctx context.Context, tokenPath 
 	return ts, nil
 }
 
-func (p *SessionProvider) clientsForTokenPath(ctx context.Context, tokenPath string) (*graph.Client, *graph.Client, error) {
+func (p *SessionProvider) clientsForTokenPath(
+	ctx context.Context,
+	tokenPath string,
+	httpClients HTTPClients,
+) (*graph.Client, *graph.Client, error) {
 	ts, err := p.getOrCreateTokenSource(ctx, tokenPath)
 	if err != nil {
 		return nil, nil, err
@@ -190,12 +217,12 @@ func (p *SessionProvider) clientsForTokenPath(ctx context.Context, tokenPath str
 		baseURL = p.GraphBaseURL
 	}
 
-	meta, err := graph.NewClient(baseURL, p.metaHTTP, ts, p.logger, p.userAgent)
+	meta, err := graph.NewClient(baseURL, httpClients.Meta, ts, p.logger, p.userAgent)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create metadata graph client: %w", err)
 	}
 
-	transfer, err := graph.NewClient(baseURL, p.transferHTTP, ts, p.logger, p.userAgent)
+	transfer, err := graph.NewClient(baseURL, httpClients.Transfer, ts, p.logger, p.userAgent)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create transfer graph client: %w", err)
 	}

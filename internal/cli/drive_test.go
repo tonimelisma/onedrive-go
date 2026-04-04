@@ -21,6 +21,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
@@ -929,7 +930,7 @@ sync_dir = "~/OneDrive"
 sync_dir = "~/OneDrive-Shared/Test"
 `), 0o600))
 
-	err := addSharedDrive(t.Context(), cfgPath, io.Discard, cid, "", testDriveLogger(t))
+	err := addSharedDrive(t.Context(), cfgPath, io.Discard, cid, "", testDriveLogger(t), graphhttp.NewProvider(testDriveLogger(t)))
 	assert.NoError(t, err)
 }
 
@@ -943,7 +944,7 @@ func TestAddSharedDrive_NoToken(t *testing.T) {
 	// Empty config — no primary drive to resolve token from.
 	require.NoError(t, os.WriteFile(cfgPath, []byte(""), 0o600))
 
-	err := addSharedDrive(t.Context(), cfgPath, io.Discard, cid, "", testDriveLogger(t))
+	err := addSharedDrive(t.Context(), cfgPath, io.Discard, cid, "", testDriveLogger(t), graphhttp.NewProvider(testDriveLogger(t)))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no token file")
 }

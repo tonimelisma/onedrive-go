@@ -274,6 +274,40 @@ func TestRetryTransport_ThrottleCoordination(t *testing.T) {
 }
 
 // Validates: R-6.8.8
+func TestRetryTransport_SharedThrottleGateAcrossTransports(t *testing.T) {
+	t.Parallel()
+
+	sharedGate := &retry.ThrottleGate{}
+	sharedGate.SetDeadline(time.Now().Add(2 * time.Second))
+
+	var sleepCalls []time.Duration
+	newTransport := func() *retry.RetryTransport {
+		return &retry.RetryTransport{
+			Inner:        roundTripFunc(func(_ *http.Request) (*http.Response, error) { return makeResponse(200, nil), nil }),
+			Policy:       testPolicy(),
+			Logger:       slog.Default(),
+			ThrottleGate: sharedGate,
+			Sleep: func(_ context.Context, d time.Duration) error {
+				sleepCalls = append(sleepCalls, d)
+
+				return nil
+			},
+		}
+	}
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.com/test", http.NoBody)
+	require.NoError(t, err)
+
+	resp, err := newTransport().RoundTrip(req)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+
+	require.Len(t, sleepCalls, 1)
+	assert.True(t, sleepCalls[0] > 0 && sleepCalls[0] <= 2*time.Second,
+		"shared throttle gate should delay a second transport, got %v", sleepCalls[0])
+}
+
+// Validates: R-6.8.8
 func TestRetryTransport_MaxAttemptsExhausted(t *testing.T) {
 	t.Parallel()
 
@@ -329,6 +363,33 @@ func TestRetryTransport_ContextCanceled(t *testing.T) {
 	resp, err := rt.RoundTrip(req)
 	closeTestResponse(t, resp)
 	assert.Error(t, err)
+}
+
+// Validates: R-6.8.8
+func TestRetryTransport_DeadlineExceededWithoutCanceledContextRetries(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int32
+	rt := &retry.RetryTransport{
+		Inner: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+			if attempts.Add(1) == 1 {
+				return nil, context.DeadlineExceeded
+			}
+
+			return makeResponse(200, nil), nil
+		}),
+		Policy: testPolicy(),
+		Logger: slog.Default(),
+		Sleep:  noopSleep,
+	}
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.com/test", http.NoBody)
+	require.NoError(t, err)
+
+	resp, err := rt.RoundTrip(req)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	assert.Equal(t, int32(2), attempts.Load(), "deadline exceeded without canceled request context should retry")
 }
 
 // Validates: R-6.8.8

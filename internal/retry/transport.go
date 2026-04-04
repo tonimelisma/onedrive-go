@@ -13,7 +13,7 @@ import (
 
 // RetryTransport is an http.RoundTripper that wraps an inner transport with
 // automatic retry on transient failures (network errors, 429, 5xx). It handles
-// exponential backoff, Retry-After headers, account-wide 429 throttle
+// exponential backoff, Retry-After headers, optional shared 429 throttle
 // coordination, and seekable body rewinding between attempts.
 //
 // CLI callers wrap http.DefaultTransport in a RetryTransport so the graph client
@@ -34,9 +34,12 @@ type RetryTransport struct {
 	// Tests override this to avoid real delays.
 	Sleep SleepFunc
 
-	// throttleMu guards throttledUntil. Account-wide: when any request gets
-	// 429, all subsequent requests through this transport wait until the
-	// deadline passes.
+	// ThrottleGate optionally coordinates Retry-After deadlines across
+	// multiple transports that belong to the same caller scope.
+	ThrottleGate *ThrottleGate
+
+	// throttledUntil stores the local transport-scoped throttle deadline when
+	// no shared gate is injected.
 	throttleMu     sync.Mutex
 	throttledUntil time.Time
 }
@@ -211,6 +214,10 @@ func drainAndCloseBody(body io.ReadCloser) error {
 // Called at the start of every request to enforce 429 Retry-After across
 // all concurrent requests through this transport.
 func (rt *RetryTransport) waitForThrottle(ctx context.Context, sleepFn SleepFunc) error {
+	if rt.ThrottleGate != nil {
+		return rt.ThrottleGate.Wait(ctx, sleepFn)
+	}
+
 	rt.throttleMu.Lock()
 	deadline := rt.throttledUntil
 	rt.throttleMu.Unlock()
@@ -230,11 +237,15 @@ func (rt *RetryTransport) retryBackoff(resp *http.Response, attempt int, _ Sleep
 		// 429: set account-wide throttle deadline so concurrent requests wait.
 		if resp.StatusCode == http.StatusTooManyRequests {
 			deadline := time.Now().Add(ra)
-			rt.throttleMu.Lock()
-			if deadline.After(rt.throttledUntil) {
-				rt.throttledUntil = deadline
+			if rt.ThrottleGate != nil {
+				rt.ThrottleGate.SetDeadline(deadline)
+			} else {
+				rt.throttleMu.Lock()
+				if deadline.After(rt.throttledUntil) {
+					rt.throttledUntil = deadline
+				}
+				rt.throttleMu.Unlock()
 			}
-			rt.throttleMu.Unlock()
 		}
 
 		return ra
@@ -329,6 +340,12 @@ func isRetryable(code int) bool {
 // SetThrottleDeadline sets the account-wide throttle deadline directly.
 // Used by tests to simulate a pre-existing throttle state.
 func (rt *RetryTransport) SetThrottleDeadline(deadline time.Time) {
+	if rt.ThrottleGate != nil {
+		rt.ThrottleGate.SetDeadline(deadline)
+
+		return
+	}
+
 	rt.throttleMu.Lock()
 	rt.throttledUntil = deadline
 	rt.throttleMu.Unlock()
@@ -337,6 +354,10 @@ func (rt *RetryTransport) SetThrottleDeadline(deadline time.Time) {
 // ThrottleDeadline returns the current throttle deadline. Used by tests to
 // verify 429 handling sets the deadline correctly.
 func (rt *RetryTransport) ThrottleDeadline() time.Time {
+	if rt.ThrottleGate != nil {
+		return rt.ThrottleGate.Deadline()
+	}
+
 	rt.throttleMu.Lock()
 	defer rt.throttleMu.Unlock()
 

@@ -415,7 +415,7 @@ func (e *Engine) resolveTransfer(ctx context.Context, c *synctypes.ConflictRecor
 // Conflict copies have no baseline entry at all.
 func (e *Engine) resolveKeepBoth(ctx context.Context, c *synctypes.ConflictRecord) error {
 	// Update baseline for the original file with its current on-disk hash.
-	if err := e.upsertBaselineFromDisk(ctx, c.DriveID, c.ItemID, c.Path); err != nil {
+	if err := e.refreshLocalBaselineFromDisk(ctx, c.DriveID, c.ItemID, c.Path); err != nil {
 		return fmt.Errorf("updating baseline for original: %w", err)
 	}
 
@@ -429,8 +429,8 @@ func (e *Engine) resolveKeepBoth(ctx context.Context, c *synctypes.ConflictRecor
 	}
 
 	for _, m := range matches {
-		syntheticID := "conflict-copy-placeholder"
-		if upsertErr := e.upsertBaselineFromDisk(ctx, c.DriveID, syntheticID, m); upsertErr != nil {
+		syntheticID := conflictCopyPlaceholderItemID(m)
+		if upsertErr := e.refreshLocalBaselineFromDisk(ctx, c.DriveID, syntheticID, m); upsertErr != nil {
 			return fmt.Errorf("updating baseline for conflict copy %s: %w", filepath.Base(m), upsertErr)
 		}
 	}
@@ -438,11 +438,14 @@ func (e *Engine) resolveKeepBoth(ctx context.Context, c *synctypes.ConflictRecor
 	return nil
 }
 
-// upsertBaselineFromDisk computes the QuickXorHash of a file on disk and
-// commits a synthetic UpdateSynced outcome to the baseline. Used during
-// conflict resolution to bring baseline entries up to date without a real
-// transfer.
-func (e *Engine) upsertBaselineFromDisk(ctx context.Context, driveID driveid.ID, itemID, relPath string) error {
+func conflictCopyPlaceholderItemID(relPath string) string {
+	return "conflict-copy:" + relPath
+}
+
+// refreshLocalBaselineFromDisk computes the QuickXorHash of a file on disk and
+// explicitly refreshes the local-side baseline tuple without fabricating a
+// transfer outcome.
+func (e *Engine) refreshLocalBaselineFromDisk(ctx context.Context, driveID driveid.ID, itemID, relPath string) error {
 	absPath, err := e.syncTree.Abs(relPath)
 	if err != nil {
 		return fmt.Errorf("resolving %s under sync tree: %w", relPath, err)
@@ -458,9 +461,7 @@ func (e *Engine) upsertBaselineFromDisk(ctx context.Context, driveID driveid.ID,
 		return fmt.Errorf("hashing %s: %w", relPath, err)
 	}
 
-	outcome := &synctypes.Outcome{
-		Action:         synctypes.ActionUpdateSynced,
-		Success:        true,
+	if err := e.baseline.RefreshLocalBaseline(ctx, syncstore.LocalBaselineRefresh{
 		Path:           relPath,
 		DriveID:        driveID,
 		ItemID:         itemID,
@@ -469,10 +470,8 @@ func (e *Engine) upsertBaselineFromDisk(ctx context.Context, driveID driveid.ID,
 		LocalSize:      info.Size(),
 		LocalSizeKnown: true,
 		LocalMtime:     info.ModTime().UnixNano(),
-	}
-
-	if err := e.baseline.CommitOutcome(ctx, outcome); err != nil {
-		return fmt.Errorf("committing baseline update for %s: %w", relPath, err)
+	}); err != nil {
+		return fmt.Errorf("refreshing local baseline for %s: %w", relPath, err)
 	}
 
 	return nil

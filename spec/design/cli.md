@@ -11,6 +11,12 @@ The root package is a thin process entrypoint. The Cobra command tree, CLI boots
 `internal/cli/root.go` handles global flags (`--config`, `--drive`, `--verbose`, `--quiet`, `--debug`, `--json`), config loading via `PersistentPreRunE`, and single-drive resolution. Cobra `RunE` functions are intentionally thin: they parse command-local flags and delegate to service-layer collaborators (`authService`, `driveService`, `issuesService`, `statusService`, `syncControlService`, `recycleBinService`, `syncService`, `verifyService`). `internal/cli/sync.go` stays in the same package because multi-drive sync reuses the same Phase 1 CLI context but performs its own multi-drive resolution.
 Sync-specific report rendering and watch bootstrap helpers stay in the same package, but they live outside the Cobra wiring file so `internal/cli/sync.go` remains focused on command construction, flag parsing, and multi-drive resolution.
 
+`internal/cli` is also the composition root for Graph-facing HTTP runtime
+policy. Each command/watch runtime owns one `graphhttp.Provider`, which it
+uses to choose bootstrap, account-scoped interactive, or sync HTTP profiles
+without making `internal/cli` the long-term owner of transport constants or
+retry mechanics.
+
 `CLIContext` owns two distinct output boundaries:
 
 - `OutputWriter`: primary command output (default `stdout`)
@@ -20,7 +26,7 @@ This keeps human/JSON command results separate from progress/status messages and
 
 ## Ownership Contract
 
-- Owns: Cobra command wiring, CLI bootstrap, signal and PID-file lifecycle, output formatting, and user-facing reason/action text for failures and issues.
+- Owns: Cobra command wiring, CLI bootstrap, signal and PID-file lifecycle, output formatting, user-facing reason/action text for failures and issues, and dependency composition for Graph-facing HTTP profiles.
 - Does Not Own: Graph wire behavior, config semantics, sync planning/execution policy, or durable sync-state mutation rules.
 - Source of Truth: `CLIContext`, parsed flags/args, and the domain results returned by lower layers.
 - Allowed Side Effects: stdout/stderr output, log-file creation, PID-file lifecycle, signal handling, and calls into service packages.
@@ -212,6 +218,7 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
   - `verifyService`: baseline verification flow
 - `accountReadModelService` is the shared read-model collaborator under `statusService`, `authService`, `driveService`, and `sharedService`. It owns lenient config loading, warning logging, and offline account/auth projection so those command families do not rebuild account semantics independently.
 - `SessionProvider` caches `TokenSource`s by token file path — multiple drives sharing an account share one `TokenSource`, preventing OAuth2 refresh token rotation races.
+- `CLIContext` owns one `graphhttp.Provider` per command/watch runtime. Bootstrap/auth-discovery flows use `BootstrapMeta()`. Once account identity is known, CLI passes account-scoped interactive client resolvers into `driveops.SessionProvider`. Sync paths request `Sync()` profiles instead. HTTP policy constants and client reuse live in `internal/graphhttp`, not `internal/cli`.
 - CLI handlers use `cmd.Context()` for signal propagation. Exception: upload session cancel paths use `context.Background()` because the cancel must succeed even when the original context is done.
 - Production command code writes primary output through `CLIContext.OutputWriter`, and status/warning/error text through the CLI-owned status writer boundary instead of raw process-global stdout/stderr. This keeps command output injectable in tests and prevents hidden process-global output dependencies from creeping back into services, bootstrap warnings, or sync-daemon cleanup.
 - `go run ./cmd/devtool verify` enforces that production `internal/cli` files do not call `fmt.Print*`, `fmt.Fprint*(os.Stdout|os.Stderr, ...)`, or direct `os.Stdout` / `os.Stderr` writer methods. The only allowed process-global output boundary is the tiny process entrypoint outside `internal/cli`.

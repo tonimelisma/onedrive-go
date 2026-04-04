@@ -725,7 +725,7 @@ func TestE2E_IssuesClear_NoIssues(t *testing.T) {
 
 	// Clear all — should succeed with no errors.
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues", "clear", "--all")
-	assert.Contains(t, stdout, "Cleared all", "clear --all should confirm clearing")
+	assert.Contains(t, stdout, "Cleared actionable failures", "clear --all should confirm clearing")
 }
 
 // Validates: R-2.3.5
@@ -1002,7 +1002,7 @@ func TestE2E_IssuesRetry_WithFailure(t *testing.T) {
 
 	// Retry the specific failure (resets it for next sync).
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "issues", "retry", deepRelPath)
-	assert.Contains(t, stdout, "Reset failure for", "retry should confirm the action")
+	assert.Contains(t, stdout, "Requested retry", "retry should confirm the action")
 
 	// Resync — with the file gone, no new failure should appear.
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")

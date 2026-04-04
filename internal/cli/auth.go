@@ -19,6 +19,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
@@ -241,9 +242,9 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 // canonical drive ID and extract the organization name. Returns the canonical
 // ID, user profile, org display name, and the primary drive's Graph API ID.
 func discoverAccount(
-	ctx context.Context, ts graph.TokenSource, logger *slog.Logger,
+	ctx context.Context, ts graph.TokenSource, logger *slog.Logger, httpProvider *graphhttp.Provider,
 ) (driveid.CanonicalID, *graph.User, string, driveid.ID, error) {
-	client, err := newGraphClient(ts, logger)
+	client, err := newGraphClientWithHTTP("", httpProvider.BootstrapMeta(), ts, logger)
 	if err != nil {
 		return driveid.CanonicalID{}, nil, "", driveid.ID{}, err
 	}
@@ -790,6 +791,7 @@ func runWhoamiWithContext(ctx context.Context, cc *CLIContext) error {
 		logger,
 		recorder,
 		cc.GraphBaseURL,
+		cc.httpProvider(),
 	)
 	if authErr != nil {
 		return authErr
@@ -834,6 +836,7 @@ func fetchAuthenticatedAccount(
 	logger *slog.Logger,
 	recorder *authProofRecorder,
 	baseURL string,
+	httpProvider *graphhttp.Provider,
 ) (authenticatedAccountResult, error) {
 	cid, found, matchErr := matchAuthenticatedDrive(cfg, driveSelector, logger)
 	if matchErr != nil {
@@ -877,7 +880,7 @@ func fetchAuthenticatedAccount(
 		return authenticatedAccountResult{authRequired: &authRequired}, nil
 	}
 
-	client, err := newGraphClientWithBaseURL(baseURL, ts, logger)
+	client, err := newGraphClientWithHTTP(baseURL, httpProvider.InteractiveForAccount(accountEmail).Meta, ts, logger)
 	if err != nil {
 		return authenticatedAccountResult{}, err
 	}
