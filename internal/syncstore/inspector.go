@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
-	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -811,14 +810,6 @@ func (i *Inspector) pendingRetrySummary(ctx context.Context) ([]synctypes.Pendin
 	}
 
 	return result, nil
-}
-
-func isMissingTableErr(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	return strings.Contains(err.Error(), "no such table")
 }
 
 func (i *Inspector) countOrZero(ctx context.Context, label, query string) int {

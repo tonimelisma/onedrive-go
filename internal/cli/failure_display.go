@@ -236,13 +236,15 @@ func formatDuration(d time.Duration) string {
 
 // failureGroupJSON is the JSON representation of a grouped failure set.
 type failureGroupJSON struct {
-	IssueType string   `json:"issue_type"`
-	Title     string   `json:"title"`
-	Reason    string   `json:"reason"`
-	Action    string   `json:"action"`
-	Scope     string   `json:"scope,omitempty"`
-	Count     int      `json:"count"`
-	Paths     []string `json:"paths"`
+	IssueType            string   `json:"issue_type"`
+	Title                string   `json:"title"`
+	Reason               string   `json:"reason"`
+	Action               string   `json:"action"`
+	Scope                string   `json:"scope,omitempty"`
+	Count                int      `json:"count"`
+	Paths                []string `json:"paths"`
+	ManualTrialRequested bool     `json:"manual_trial_requested,omitempty"`
+	RecheckRequestedAt   string   `json:"recheck_requested_at,omitempty"`
 }
 
 // issuesOutputJSON is the top-level JSON structure for the issues command.

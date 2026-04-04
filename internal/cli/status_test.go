@@ -1080,8 +1080,11 @@ func createTestStateDB(t *testing.T, dbPath string) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	// Create minimal tables for status queries.
-	_, err = db.ExecContext(t.Context(), `
+	_, err = db.ExecContext(t.Context(), statusTestStateSchema)
+	require.NoError(t, err)
+}
+
+const statusTestStateSchema = `
 		CREATE TABLE IF NOT EXISTS baseline (
 			path TEXT PRIMARY KEY,
 			drive_id TEXT NOT NULL,
@@ -1174,6 +1177,4 @@ func createTestStateDB(t *testing.T, dbPath string) {
 			read_only INTEGER NOT NULL DEFAULT 0,
 			discovered_at INTEGER NOT NULL
 		);
-	`)
-	require.NoError(t, err)
-}
+	`

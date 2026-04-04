@@ -302,6 +302,7 @@ func (rt *watchRuntime) initWatchInfra(
 		pool.Stop() // closes results channel after workers exit
 		rt.remoteObs = nil
 		rt.localObs = nil
+		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventWatchStopped})
 		rt.engine.logger.Info("watch mode stopped")
 	}
 
@@ -349,6 +350,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode synctypes.SyncMo
 	}
 
 	if len(changes) == 0 {
+		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventBootstrapQuiesced})
 		rt.engine.logger.Info("bootstrap sync complete: no changes detected")
 		return nil
 	}
@@ -368,6 +370,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode synctypes.SyncMo
 		return fmt.Errorf("sync: bootstrap quiescence failed: %w", err)
 	}
 
+	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventBootstrapQuiesced})
 	rt.postSyncHousekeeping()
 	rt.engine.logger.Info("bootstrap sync complete")
 	return nil
@@ -456,9 +459,11 @@ func (rt *watchRuntime) startObservers(
 
 		obsWg.Add(1)
 		count++
+		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverStarted, Note: engineDebugObserverLocal})
 
 		go func() {
 			defer obsWg.Done()
+			defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Note: engineDebugObserverLocal})
 
 			watchErr := localObs.Watch(ctx, rt.engine.syncTree, events)
 			if errors.Is(watchErr, synctypes.ErrWatchLimitExhausted) {
