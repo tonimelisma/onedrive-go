@@ -947,6 +947,10 @@ func TestIssuesRetry_SinglePath_ReplaySafe(t *testing.T) {
 	rows, err := mgr.ListSyncFailures(t.Context())
 	require.NoError(t, err)
 	require.Len(t, rows, 4)
+	categoriesByPath := make(map[string]synctypes.FailureCategory, len(rows))
+	for _, row := range rows {
+		categoriesByPath[row.Path] = row.Category
+	}
 	assert.ElementsMatch(t, []string{
 		"docs/CON",
 		"docs/NUL.txt",
@@ -958,6 +962,10 @@ func TestIssuesRetry_SinglePath_ReplaySafe(t *testing.T) {
 		rows[2].Path,
 		rows[3].Path,
 	})
+	assert.Equal(t, synctypes.CategoryActionable, categoriesByPath["docs/CON"])
+	assert.Equal(t, synctypes.CategoryActionable, categoriesByPath["docs/NUL.txt"])
+	assert.Equal(t, synctypes.CategoryActionable, categoriesByPath["docs/CON-copy"])
+	assert.Equal(t, synctypes.CategoryTransient, categoriesByPath["data/report.xlsx.bak"])
 }
 
 // Validates: R-2.3.6

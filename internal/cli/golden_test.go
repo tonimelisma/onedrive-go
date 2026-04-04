@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"flag"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,18 +21,17 @@ func normalizeGoldenText(s string) string {
 }
 
 const (
-	updateGoldenFlagName    = "update"
-	updateGoldenFlagEnabled = "true"
+	updateGoldenFlagName = "update"
 )
 
 func updateGoldenEnabled() bool {
-	updateFlag := flag.Lookup(updateGoldenFlagName)
-	if updateFlag == nil {
-		flag.Bool(updateGoldenFlagName, false, "update golden files")
-		updateFlag = flag.Lookup(updateGoldenFlagName)
+	for _, arg := range os.Args[1:] {
+		if arg == "-"+updateGoldenFlagName {
+			return true
+		}
 	}
 
-	return updateFlag != nil && updateFlag.Value.String() == updateGoldenFlagEnabled
+	return false
 }
 
 func assertGoldenFile(t *testing.T, name string, actual []byte) {
