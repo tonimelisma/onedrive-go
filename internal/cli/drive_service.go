@@ -86,6 +86,19 @@ func (s *driveService) runAdd(ctx context.Context, args []string) error {
 	}
 
 	if cid.IsShared() {
+		clients, err := s.cc.sharedAccountClients(ctx, cid.Email())
+		if err != nil {
+			return err
+		}
+
+		item, err := clients.Meta.GetItem(ctx, driveid.New(cid.SourceDriveID()), cid.SourceItemID())
+		if err != nil {
+			return fmt.Errorf("loading shared item: %w", err)
+		}
+		if !item.IsFolder {
+			return fmt.Errorf("shared files are direct stat/get/put targets, not drives")
+		}
+
 		return addSharedDrive(ctx, s.cc.CfgPath, s.cc.Output(), cid, "", logger)
 	}
 

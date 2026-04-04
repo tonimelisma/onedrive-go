@@ -176,7 +176,15 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) (*synctypes.Bas
 	// Recheck permissions — clear any permission_denied issues
 	// for folders that have become writable since the last pass.
 	if eng.permHandler.HasPermChecker() && scErr == nil {
-		flow.scopeController().applyPermissionRecheckDecisions(ctx, nil, eng.permHandler.recheckPermissions(ctx, bl, shortcuts))
+		requestedKeys, reqErr := eng.baseline.ListRequestedScopeRechecks(ctx)
+		if reqErr != nil {
+			eng.logger.Warn("failed to list requested permission rechecks", slog.String("error", reqErr.Error()))
+		}
+		decisions := eng.permHandler.recheckPermissions(ctx, bl, shortcuts)
+		flow.scopeController().applyPermissionRecheckDecisions(ctx, nil, decisions)
+		if len(requestedKeys) > 0 {
+			clearRequestedScopeRechecks(ctx, eng.baseline, eng.logger, requestedKeys)
+		}
 	}
 
 	// Recheck local permission denials — clear scope blocks for
@@ -308,6 +316,9 @@ func buildReportFromCounts(counts map[synctypes.ActionType]int, mode synctypes.S
 // retries with an empty token if synctypes.ErrDeltaExpired is returned (full resync).
 func (flow *engineFlow) observeRemote(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, string, error) {
 	eng := flow.engine
+	if eng.hasScopedRoot() {
+		return flow.observeScopedRemote(ctx, bl, false)
+	}
 
 	savedToken, err := eng.baseline.GetDeltaToken(ctx, eng.driveID.String(), "")
 	if err != nil {
@@ -479,9 +490,8 @@ func (flow *engineFlow) observeAndCommitRemote(ctx context.Context, bl *synctype
 
 	// Commit observations WITHOUT the delta token. The token is deferred
 	// until after the planner approves the changes.
-	observed := changeEventsToObservedItems(eng.logger, events)
-	if commitErr := eng.baseline.CommitObservation(ctx, observed, "", eng.driveID); commitErr != nil {
-		return nil, "", fmt.Errorf("sync: committing observations: %w", commitErr)
+	if commitErr := flow.commitObservedRemote(ctx, events, ""); commitErr != nil {
+		return nil, "", commitErr
 	}
 
 	return events, deltaToken, nil
@@ -499,8 +509,13 @@ func (flow *engineFlow) commitDeferredDeltaToken(ctx context.Context, token stri
 		return nil
 	}
 
+	scopeID := ""
+	if eng.hasScopedRoot() {
+		scopeID = eng.rootItemID
+	}
+
 	if err := eng.baseline.CommitDeltaToken(
-		ctx, token, eng.driveID.String(), "", eng.driveID.String(),
+		ctx, token, eng.driveID.String(), scopeID, eng.driveID.String(),
 	); err != nil {
 		return fmt.Errorf("sync: committing deferred delta token: %w", err)
 	}
@@ -515,6 +530,9 @@ func (flow *engineFlow) commitDeferredDeltaToken(ctx context.Context, token stri
 // synthesized deletes for orphans) and the new delta token.
 func (flow *engineFlow) observeRemoteFull(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, string, error) {
 	eng := flow.engine
+	if eng.hasScopedRoot() {
+		return flow.observeScopedRemote(ctx, bl, true)
+	}
 
 	obs := syncobserve.NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
 
@@ -558,17 +576,14 @@ func (flow *engineFlow) observeRemoteFull(ctx context.Context, bl *synctypes.Bas
 // and return the pending delta token for deferred commitment (same deferral
 // pattern as observeAndCommitRemote — see its doc comment for rationale).
 func (flow *engineFlow) observeAndCommitRemoteFull(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, string, error) {
-	eng := flow.engine
-
 	events, deltaToken, err := flow.observeRemoteFull(ctx, bl)
 	if err != nil {
 		return nil, "", err
 	}
 
 	// Commit observations without the delta token — token deferred to caller.
-	observed := changeEventsToObservedItems(eng.logger, events)
-	if commitErr := eng.baseline.CommitObservation(ctx, observed, "", eng.driveID); commitErr != nil {
-		return nil, "", fmt.Errorf("sync: committing full reconciliation: %w", commitErr)
+	if commitErr := flow.commitObservedRemote(ctx, events, ""); commitErr != nil {
+		return nil, "", commitErr
 	}
 
 	return events, deltaToken, nil

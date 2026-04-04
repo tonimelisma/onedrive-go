@@ -30,6 +30,7 @@ When the same file has been modified on both the local filesystem and OneDrive s
 - R-2.3.8: When displaying scope-level issues where drives have independent scopes (507 quota, shared-folder write blocks), the system shall sub-group by scope (own drive vs each shortcut). [verified]
 - R-2.3.9: When displaying shortcut-scoped failures, the system shall use the shortcut's local path name (human-readable), not internal drive IDs or scope keys. [verified]
 - R-2.3.10: When `--json` is passed, `issues` shall output structured JSON with separate `conflicts`, `failure_groups`, and `held_deletes` arrays. [verified]
+- R-2.3.11: When the user runs `issues recheck <boundary>` on a shared-folder write block, the system shall queue a boundary-level permission revalidation without retrying a specific blocked child action. If the boundary is still read-only, the block remains; if the boundary is writable or the Graph evidence is inconclusive, the block shall be released. [verified]
 
 ## R-2.4 Filtering [implemented]
 

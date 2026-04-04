@@ -20,12 +20,14 @@ import (
 // Engine. It handles HTTP 403 responses, local permission denials, per-pass
 // permission rechecks, and scanner-resolved permission clearing.
 type PermissionHandler struct {
-	baseline    synctypes.SyncFailureRecorder
-	permChecker synctypes.PermissionChecker
-	syncTree    *synctree.Root
-	driveID     driveid.ID
-	logger      *slog.Logger
-	nowFn       func() time.Time
+	baseline     synctypes.SyncFailureRecorder
+	permChecker  synctypes.PermissionChecker
+	syncTree     *synctree.Root
+	driveID      driveid.ID
+	accountEmail string
+	rootItemID   string
+	logger       *slog.Logger
+	nowFn        func() time.Time
 }
 
 // HasPermChecker reports whether a remote permission checker is configured.
@@ -57,7 +59,7 @@ func (ph *PermissionHandler) DeniedPrefixes(ctx context.Context) []string {
 		}
 
 		boundary := issues[i].ScopeKey.RemotePath()
-		if boundary == "" || seen[boundary] {
+		if seen[boundary] {
 			continue
 		}
 
@@ -98,7 +100,7 @@ func (ph *PermissionHandler) handle403(
 		}
 	}
 
-	sc := findShortcutForPath(shortcuts, failedPath)
+	sc := ph.findPermissionShortcut(shortcuts, failedPath)
 	if sc == nil {
 		return PermissionCheckDecision{}
 	}
@@ -110,8 +112,8 @@ func (ph *PermissionHandler) handle403(
 	// shortcut root. This means the boundary walk won't find intermediate
 	// read-only folders for brand-new content, but will still correctly
 	// suppress at the shortcut root level.
-	parentFolder := filepath.Dir(failedPath)
-	parentItemID := resolveRemoteItemID(bl, parentFolder, remoteDriveID)
+	parentFolder := remoteParentPath(failedPath, sc.LocalPath)
+	parentItemID := resolveBoundaryRemoteItemID(bl, parentFolder, remoteDriveID, sc)
 
 	if parentItemID == "" {
 		parentFolder = sc.LocalPath
@@ -124,12 +126,28 @@ func (ph *PermissionHandler) handle403(
 		return ph.handlePermissionCheckError(ctx, err, failedPath, parentFolder, actionType)
 	}
 
-	if graph.HasWriteAccess(perms) {
+	access := graph.EvaluateWriteAccess(perms, ph.accountEmail)
+	ph.logger.Debug("handle403: evaluated folder permissions",
+		slog.String("path", failedPath),
+		slog.String("account_email", ph.accountEmail),
+		slog.String("access", access.String()),
+		slog.Int("permission_count", len(perms)),
+	)
+
+	switch access {
+	case graph.PermissionWriteAccessWritable:
 		ph.logger.Debug("handle403: transient 403, folder is writable",
 			slog.String("path", failedPath),
 		)
 
 		return PermissionCheckDecision{}
+	case graph.PermissionWriteAccessInconclusive:
+		ph.logger.Warn("handle403: permission evidence inconclusive, not suppressing",
+			slog.String("path", failedPath),
+		)
+
+		return PermissionCheckDecision{}
+	case graph.PermissionWriteAccessReadOnly:
 	}
 
 	// Folder is read-only. Walk up to find the highest read-only ancestor.
@@ -173,7 +191,7 @@ func (ph *PermissionHandler) handlePermissionCheckError(
 
 func (ph *PermissionHandler) activeRemoteBoundary(ctx context.Context, failedPath string) (string, bool) {
 	for _, boundary := range ph.DeniedPrefixes(ctx) {
-		if failedPath == boundary || strings.HasPrefix(failedPath, boundary+"/") {
+		if remoteBoundaryContainsPath(failedPath, boundary) {
 			return boundary, true
 		}
 	}
@@ -218,13 +236,13 @@ func (ph *PermissionHandler) walkPermissionBoundary(
 ) string {
 	boundary := startFolder
 
-	for boundary != sc.LocalPath && boundary != "." && boundary != "" {
-		parent := filepath.Dir(boundary)
-		if parent == boundary {
+	for {
+		parent, ok := remoteBoundaryParent(boundary, sc.LocalPath)
+		if !ok {
 			break
 		}
 
-		parentID := resolveRemoteItemID(bl, parent, remoteDriveID)
+		parentID := resolveBoundaryRemoteItemID(bl, parent, remoteDriveID, sc)
 		if parentID == "" {
 			break
 		}
@@ -234,7 +252,8 @@ func (ph *PermissionHandler) walkPermissionBoundary(
 			break
 		}
 
-		if graph.HasWriteAccess(parentPerms) {
+		if access := graph.EvaluateWriteAccess(parentPerms, ph.accountEmail); access == graph.PermissionWriteAccessWritable ||
+			access == graph.PermissionWriteAccessInconclusive {
 			break
 		}
 
@@ -251,6 +270,15 @@ func (ph *PermissionHandler) recheckPermissions(
 	ctx context.Context,
 	bl *synctypes.Baseline,
 	shortcuts []synctypes.Shortcut,
+) []PermissionRecheckDecision {
+	return ph.recheckPermissionsForScopeKeys(ctx, bl, shortcuts, nil)
+}
+
+func (ph *PermissionHandler) recheckPermissionsForScopeKeys(
+	ctx context.Context,
+	bl *synctypes.Baseline,
+	shortcuts []synctypes.Shortcut,
+	scopeFilter map[synctypes.ScopeKey]bool,
 ) []PermissionRecheckDecision {
 	if ph.permChecker == nil {
 		return nil
@@ -272,11 +300,14 @@ func (ph *PermissionHandler) recheckPermissions(
 		if seen[issue.ScopeKey] {
 			continue
 		}
+		if len(scopeFilter) > 0 && !scopeFilter[issue.ScopeKey] {
+			continue
+		}
 		seen[issue.ScopeKey] = true
 
 		boundaryPath := issue.ScopeKey.RemotePath()
 
-		sc := findShortcutForPath(shortcuts, boundaryPath)
+		sc := ph.findPermissionShortcut(shortcuts, boundaryPath)
 		if sc == nil {
 			decisions = append(decisions, PermissionRecheckDecision{
 				Kind:     permissionRecheckReleaseScope,
@@ -288,7 +319,7 @@ func (ph *PermissionHandler) recheckPermissions(
 		}
 
 		remoteDriveID := driveid.New(sc.RemoteDrive)
-		remoteItemID := resolveRemoteItemID(bl, boundaryPath, remoteDriveID)
+		remoteItemID := resolveBoundaryRemoteItemID(bl, boundaryPath, remoteDriveID, sc)
 
 		if remoteItemID == "" {
 			decisions = append(decisions, PermissionRecheckDecision{
@@ -311,7 +342,8 @@ func (ph *PermissionHandler) recheckPermissions(
 			continue
 		}
 
-		if graph.HasWriteAccess(perms) {
+		switch graph.EvaluateWriteAccess(perms, ph.accountEmail) {
+		case graph.PermissionWriteAccessWritable:
 			decisions = append(decisions, PermissionRecheckDecision{
 				Kind:     permissionRecheckReleaseScope,
 				Path:     boundaryPath,
@@ -319,6 +351,15 @@ func (ph *PermissionHandler) recheckPermissions(
 				Reason:   "permission granted; releasing remote permission boundary",
 			})
 			continue
+		case graph.PermissionWriteAccessInconclusive:
+			decisions = append(decisions, PermissionRecheckDecision{
+				Kind:     permissionRecheckReleaseScope,
+				Path:     boundaryPath,
+				ScopeKey: issue.ScopeKey,
+				Reason:   "permission recheck inconclusive; failing open",
+			})
+			continue
+		case graph.PermissionWriteAccessReadOnly:
 		}
 
 		decisions = append(decisions, PermissionRecheckDecision{
@@ -330,6 +371,79 @@ func (ph *PermissionHandler) recheckPermissions(
 	}
 
 	return decisions
+}
+
+func (ph *PermissionHandler) findPermissionShortcut(shortcuts []synctypes.Shortcut, path string) *synctypes.Shortcut {
+	return findShortcutForPath(ph.permissionShortcuts(shortcuts), path)
+}
+
+func (ph *PermissionHandler) permissionShortcuts(shortcuts []synctypes.Shortcut) []synctypes.Shortcut {
+	if ph.rootItemID == "" {
+		return shortcuts
+	}
+
+	for i := range shortcuts {
+		if shortcuts[i].LocalPath == "" && shortcuts[i].RemoteItem == ph.rootItemID {
+			return shortcuts
+		}
+	}
+
+	augmented := make([]synctypes.Shortcut, 0, len(shortcuts)+1)
+	augmented = append(augmented, shortcuts...)
+	augmented = append(augmented, synctypes.Shortcut{
+		ItemID:      ph.rootItemID,
+		RemoteDrive: ph.driveID.String(),
+		RemoteItem:  ph.rootItemID,
+		LocalPath:   "",
+	})
+
+	return augmented
+}
+
+func resolveBoundaryRemoteItemID(
+	bl *synctypes.Baseline,
+	boundaryPath string,
+	driveID driveid.ID,
+	sc *synctypes.Shortcut,
+) string {
+	if sc != nil && boundaryPath == sc.LocalPath {
+		return sc.RemoteItem
+	}
+
+	return resolveRemoteItemID(bl, boundaryPath, driveID)
+}
+
+func remoteParentPath(path string, rootPath string) string {
+	parent := filepath.Dir(path)
+	if parent == "." || parent == "/" {
+		return rootPath
+	}
+
+	return parent
+}
+
+func remoteBoundaryContainsPath(path string, boundary string) bool {
+	if boundary == "" {
+		return true
+	}
+
+	return path == boundary || strings.HasPrefix(path, boundary+"/")
+}
+
+func remoteBoundaryParent(boundary string, rootPath string) (string, bool) {
+	if boundary == rootPath {
+		return "", false
+	}
+
+	parent := filepath.Dir(boundary)
+	if parent == "." || parent == "/" {
+		return rootPath, true
+	}
+	if rootPath != "" && !remoteBoundaryContainsPath(parent, rootPath) {
+		return "", false
+	}
+
+	return parent, true
 }
 
 // handleLocalPermission processes os.ErrPermission results from workers.

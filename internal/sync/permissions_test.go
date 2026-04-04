@@ -91,6 +91,24 @@ func TestFindShortcutForPath(t *testing.T) {
 	}
 }
 
+func TestFindShortcutForPath_EmptyLocalPathMatchesConfiguredRoot(t *testing.T) {
+	t.Parallel()
+
+	shortcuts := []synctypes.Shortcut{
+		{ItemID: "nested", LocalPath: "Nested"},
+		{ItemID: "root", LocalPath: ""},
+	}
+
+	require.NotNil(t, findShortcutForPath(shortcuts, "Nested/file.txt"))
+	assert.Equal(t, "nested", findShortcutForPath(shortcuts, "Nested/file.txt").ItemID)
+
+	require.NotNil(t, findShortcutForPath(shortcuts, "top-level.txt"))
+	assert.Equal(t, "root", findShortcutForPath(shortcuts, "top-level.txt").ItemID)
+
+	require.NotNil(t, findShortcutForPath(shortcuts, ""))
+	assert.Equal(t, "root", findShortcutForPath(shortcuts, "").ItemID)
+}
+
 // ---------------------------------------------------------------------------
 // handle403 tests
 // ---------------------------------------------------------------------------
@@ -105,6 +123,18 @@ func newTestEngineWithPerms(
 ) (*testEngine, *synctypes.Baseline, string) {
 	t.Helper()
 
+	return newTestEngineWithPermsAndRoot(t, checker, shortcuts, baselineEntries, "")
+}
+
+func newTestEngineWithPermsAndRoot(
+	t *testing.T,
+	checker synctypes.PermissionChecker,
+	shortcuts []synctypes.Shortcut,
+	baselineEntries []synctypes.Outcome,
+	rootItemID string,
+) (*testEngine, *synctypes.Baseline, string) {
+	t.Helper()
+
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 	syncRoot := filepath.Join(tmpDir, "sync")
@@ -116,15 +146,17 @@ func newTestEngineWithPerms(
 	driveID := driveid.New(engineTestDriveID)
 
 	eng, err := NewEngine(t.Context(), &synctypes.EngineConfig{
-		DBPath:      dbPath,
-		SyncRoot:    syncRoot,
-		DriveID:     driveID,
-		Fetcher:     mock,
-		Items:       mock,
-		Downloads:   mock,
-		Uploads:     mock,
-		PermChecker: checker,
-		Logger:      logger,
+		DBPath:       dbPath,
+		SyncRoot:     syncRoot,
+		DriveID:      driveID,
+		AccountEmail: "recipient@example.com",
+		Fetcher:      mock,
+		Items:        mock,
+		Downloads:    mock,
+		Uploads:      mock,
+		RootItemID:   rootItemID,
+		PermChecker:  checker,
+		Logger:       logger,
 	})
 	require.NoError(t, err)
 	testEng := newFlowBackedTestEngine(eng)
@@ -419,6 +451,40 @@ func TestHandle403_NoShortcutMatch_Ignored(t *testing.T) {
 	assert.Empty(t, checker.calls, "should not call API when no shortcut matches")
 }
 
+// Validates: R-2.14.1, R-2.14.2
+func TestHandle403_ConfiguredSharedRoot_RecordsRootBoundary(t *testing.T) {
+	t.Parallel()
+
+	checker := &mockPermChecker{
+		perms: map[string][]graph.Permission{
+			driveid.New(engineTestDriveID).String() + ":nested-id":      {{ID: "p1", Roles: []string{"read"}}},
+			driveid.New(engineTestDriveID).String() + ":shared-root-id": {{ID: "p2", Roles: []string{"read"}}},
+		},
+	}
+
+	baselineEntries := []synctypes.Outcome{
+		{
+			Action: synctypes.ActionDownload, Success: true, Path: "nested",
+			DriveID: driveid.New(engineTestDriveID), ItemID: "nested-id", ParentID: "shared-root-id", ItemType: synctypes.ItemTypeFolder,
+		},
+	}
+
+	eng, bl, _ := newTestEngineWithPermsAndRoot(t, checker, nil, baselineEntries, "shared-root-id")
+	ctx := t.Context()
+	newTestWatchState(t, eng)
+
+	decision := applyRemote403Decision(t, eng, ctx, bl, "nested/file.txt", nil)
+	assert.True(t, decision.Matched)
+	assert.Equal(t, permissionCheckActivateDerivedScope, decision.Kind)
+	assert.Equal(t, synctypes.SKPermRemote(""), decision.ScopeKey)
+
+	issues := listRemoteBlockedFailures(t, eng, ctx)
+	require.Len(t, issues, 1)
+	assert.Equal(t, "nested/file.txt", issues[0].Path)
+	assert.Equal(t, synctypes.SKPermRemote(""), issues[0].ScopeKey)
+	assert.Equal(t, []string{""}, eng.permHandler.DeniedPrefixes(ctx))
+}
+
 // ---------------------------------------------------------------------------
 // recheckPermissions tests
 // ---------------------------------------------------------------------------
@@ -702,6 +768,34 @@ func TestRecheckPermissions_UnresolvedItemID_FailOpenClearsStaleBoundary(t *test
 	assert.Empty(t, remaining, "unresolvable remote boundaries should not stay suppressed on stale evidence")
 	assert.Empty(t, checker.calls)
 	assert.Empty(t, eng.permHandler.DeniedPrefixes(ctx))
+}
+
+// Validates: R-2.14.4
+func TestRecheckPermissions_ConfiguredSharedRootBoundary_UsesRootItemID(t *testing.T) {
+	t.Parallel()
+
+	checker := &mockPermChecker{
+		perms: map[string][]graph.Permission{
+			driveid.New(engineTestDriveID).String() + ":shared-root-id": {{ID: "p1", Roles: []string{"write"}}},
+		},
+	}
+
+	eng, bl, _ := newTestEngineWithPermsAndRoot(t, checker, nil, nil, "shared-root-id")
+	ctx := t.Context()
+	scopeKey := synctypes.SKPermRemote("")
+	newTestWatchState(t, eng)
+
+	recordRemoteBlockedFailure(t, eng, ctx, scopeKey, "nested/file.txt")
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
+		Key:       scopeKey,
+		IssueType: synctypes.IssueSharedFolderBlocked,
+		BlockedAt: eng.nowFn().Add(-time.Minute),
+	})
+
+	decisions := applyRemotePermissionRecheck(t, eng, ctx, bl, nil)
+	requireSinglePermissionDecision(t, decisions, permissionRecheckReleaseScope)
+	assert.Empty(t, listRemoteBlockedFailures(t, eng, ctx))
+	assert.Equal(t, []string{driveid.New(engineTestDriveID).String() + ":shared-root-id"}, checker.calls)
 }
 
 // Validates: R-2.14.2

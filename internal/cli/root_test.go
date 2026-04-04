@@ -195,7 +195,7 @@ func TestNewGraphClient_ReturnsConstructionError(t *testing.T) {
 func TestNewRootCmd_Subcommands(t *testing.T) {
 	cmd := newRootCmd()
 
-	expected := []string{"login", "logout", "whoami", "status", "drive", "ls", "get", "put", "rm", "mkdir", "stat"}
+	expected := []string{"login", "logout", "whoami", "status", "shared", "drive", "ls", "get", "put", "rm", "mkdir", "stat"}
 	for _, name := range expected {
 		found := false
 
@@ -354,6 +354,7 @@ func TestAnnotationTreeWalk(t *testing.T) {
 		"onedrive-go issues resolve":      true,
 		"onedrive-go issues clear":        true,
 		"onedrive-go issues retry":        true,
+		"onedrive-go issues recheck":      true,
 		"onedrive-go verify":              true,
 		"onedrive-go recycle-bin list":    true,
 		"onedrive-go recycle-bin restore": true,
@@ -434,7 +435,7 @@ func TestTransferHTTPClient_NoTimeout(t *testing.T) {
 
 func TestSyncMetaHTTPClient_NoRetryTransport(t *testing.T) {
 	client := syncMetaHTTPClient()
-	assert.Equal(t, httpClientTimeout, client.Timeout)
+	assert.Equal(t, syncMetaClientTimeout, client.Timeout)
 	assert.Nil(t, client.Transport, "sync client should have no RetryTransport")
 }
 

@@ -33,15 +33,23 @@ import (
 
 // Compile-time interface satisfaction checks.
 var (
-	_ synctypes.DeltaFetcher = (*engineMockClient)(nil)
-	_ synctypes.ItemClient   = (*engineMockClient)(nil)
-	_ driveops.Downloader    = (*engineMockClient)(nil)
-	_ driveops.Uploader      = (*engineMockClient)(nil)
+	_ synctypes.DeltaFetcher       = (*engineMockClient)(nil)
+	_ synctypes.ItemClient         = (*engineMockClient)(nil)
+	_ driveops.Downloader          = (*engineMockClient)(nil)
+	_ driveops.Uploader            = (*engineMockClient)(nil)
+	_ synctypes.FolderDeltaFetcher = (*engineMockClient)(nil)
+	_ synctypes.RecursiveLister    = (*engineMockClient)(nil)
+	_ synctypes.PermissionChecker  = (*engineMockClient)(nil)
+	_ synctypes.DriveVerifier      = (*engineMockClient)(nil)
 )
 
 type engineMockClient struct {
 	// synctypes.DeltaFetcher
-	deltaFn func(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error)
+	deltaFn                 func(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error)
+	driveFn                 func(ctx context.Context, driveID driveid.ID) (*graph.Drive, error)
+	folderDeltaFn           func(ctx context.Context, driveID driveid.ID, folderID, token string) ([]graph.Item, string, error)
+	listChildrenRecursiveFn func(ctx context.Context, driveID driveid.ID, folderID string) ([]graph.Item, error)
+	listItemPermissionsFn   func(ctx context.Context, driveID driveid.ID, itemID string) ([]graph.Permission, error)
 
 	// synctypes.ItemClient
 	getItemFn      func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
@@ -63,6 +71,38 @@ func (m *engineMockClient) Delta(ctx context.Context, driveID driveid.ID, token 
 	}
 
 	return &graph.DeltaPage{DeltaLink: "delta-token-1"}, nil
+}
+
+func (m *engineMockClient) Drive(ctx context.Context, driveID driveid.ID) (*graph.Drive, error) {
+	if m.driveFn != nil {
+		return m.driveFn(ctx, driveID)
+	}
+
+	return &graph.Drive{ID: driveID}, nil
+}
+
+func (m *engineMockClient) DeltaFolderAll(ctx context.Context, driveID driveid.ID, folderID, token string) ([]graph.Item, string, error) {
+	if m.folderDeltaFn != nil {
+		return m.folderDeltaFn(ctx, driveID, folderID, token)
+	}
+
+	return nil, "folder-delta-token-1", nil
+}
+
+func (m *engineMockClient) ListChildrenRecursive(ctx context.Context, driveID driveid.ID, folderID string) ([]graph.Item, error) {
+	if m.listChildrenRecursiveFn != nil {
+		return m.listChildrenRecursiveFn(ctx, driveID, folderID)
+	}
+
+	return nil, nil
+}
+
+func (m *engineMockClient) ListItemPermissions(ctx context.Context, driveID driveid.ID, itemID string) ([]graph.Permission, error) {
+	if m.listItemPermissionsFn != nil {
+		return m.listItemPermissionsFn(ctx, driveID, itemID)
+	}
+
+	return nil, nil
 }
 
 func (m *engineMockClient) GetItem(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error) {
@@ -173,14 +213,17 @@ func newTestEngineWithContext(t *testing.T, ctx context.Context, mock *engineMoc
 	driveID := driveid.New(engineTestDriveID)
 
 	eng, err := NewEngine(ctx, &synctypes.EngineConfig{
-		DBPath:    dbPath,
-		SyncRoot:  syncRoot,
-		DriveID:   driveID,
-		Fetcher:   mock,
-		Items:     mock,
-		Downloads: mock,
-		Uploads:   mock,
-		Logger:    logger,
+		DBPath:          dbPath,
+		SyncRoot:        syncRoot,
+		DriveID:         driveID,
+		Fetcher:         mock,
+		Items:           mock,
+		Downloads:       mock,
+		Uploads:         mock,
+		FolderDelta:     mock,
+		RecursiveLister: mock,
+		PermChecker:     mock,
+		Logger:          logger,
 	})
 	require.NoError(t, err, "NewEngine")
 	eng.assertScopeInvariants = true
@@ -219,14 +262,17 @@ func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *eng
 	driveID := driveid.New(engineTestDriveID)
 
 	eng, err := NewEngine(ctx, &synctypes.EngineConfig{
-		DBPath:    dbPath,
-		SyncRoot:  syncRoot,
-		DriveID:   driveID,
-		Fetcher:   mock,
-		Items:     mock,
-		Downloads: mock,
-		Uploads:   mock,
-		Logger:    logger,
+		DBPath:          dbPath,
+		SyncRoot:        syncRoot,
+		DriveID:         driveID,
+		Fetcher:         mock,
+		Items:           mock,
+		Downloads:       mock,
+		Uploads:         mock,
+		FolderDelta:     mock,
+		RecursiveLister: mock,
+		PermChecker:     mock,
+		Logger:          logger,
 	})
 	require.NoError(t, err, "NewEngine")
 	eng.assertScopeInvariants = true

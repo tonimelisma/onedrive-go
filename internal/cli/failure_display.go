@@ -57,6 +57,21 @@ func printFailureGroup(w io.Writer, group *syncstore.IssueGroupSnapshot, verbose
 			return err
 		}
 	}
+	if group.SummaryKey == synctypes.SummarySharedFolderWritesBlocked {
+		if err := writef(w, "  Recheck: run 'onedrive-go issues recheck %s' to validate permissions now\n", group.ScopeKey); err != nil {
+			return err
+		}
+		if group.RecheckRequestedAt > 0 {
+			if err := writef(w, "  Recheck requested: %s\n", formatNanoTimestamp(group.RecheckRequestedAt)); err != nil {
+				return err
+			}
+		}
+		if group.HasManualTrial {
+			if err := writef(w, "  Retry trial requested for one blocked path.\n"); err != nil {
+				return err
+			}
+		}
+	}
 
 	return printFailurePaths(w, group, verbose)
 }
@@ -265,13 +280,15 @@ func printGroupedIssuesJSON(
 		descriptor := synctypes.DescribeSummary(snapshot.Groups[i].SummaryKey)
 
 		out.FailureGroups[i] = failureGroupJSON{
-			IssueType: snapshot.Groups[i].PrimaryIssueType,
-			Title:     descriptor.Title,
-			Reason:    descriptor.Reason,
-			Action:    descriptor.Action,
-			Scope:     snapshot.Groups[i].ScopeLabel,
-			Count:     snapshot.Groups[i].Count,
-			Paths:     paths,
+			IssueType:            snapshot.Groups[i].PrimaryIssueType,
+			Title:                descriptor.Title,
+			Reason:               descriptor.Reason,
+			Action:               descriptor.Action,
+			Scope:                snapshot.Groups[i].ScopeLabel,
+			Count:                snapshot.Groups[i].Count,
+			Paths:                paths,
+			ManualTrialRequested: snapshot.Groups[i].HasManualTrial,
+			RecheckRequestedAt:   formatNanoTimestamp(snapshot.Groups[i].RecheckRequestedAt),
 		}
 	}
 

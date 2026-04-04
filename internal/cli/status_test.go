@@ -1160,6 +1160,10 @@ func createTestStateDB(t *testing.T, dbPath string) {
 			preserve_until INTEGER NOT NULL,
 			trial_count INTEGER NOT NULL
 		);
+		CREATE TABLE IF NOT EXISTS scope_recheck_requests (
+			scope_key TEXT PRIMARY KEY,
+			requested_at INTEGER NOT NULL
+		);
 		CREATE TABLE IF NOT EXISTS shortcuts (
 			item_id TEXT PRIMARY KEY,
 			remote_drive TEXT NOT NULL,

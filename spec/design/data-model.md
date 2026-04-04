@@ -21,7 +21,7 @@ The sync database uses remote state separation: three core tables decouple API o
 | `baseline` | Confirmed synced state | `(drive_id, item_id)`, `path` UNIQUE |
 | `sync_failures` | Unified item failure tracking with explicit role semantics | `(path, drive_id)` |
 
-Supporting tables: `delta_tokens`, `conflicts`, `sync_metadata`, `shortcuts`, `scope_blocks`.
+Supporting tables: `delta_tokens`, `conflicts`, `sync_metadata`, `shortcuts`, `scope_blocks`, `scope_recheck_requests`.
 
 ### remote_state
 
@@ -77,6 +77,10 @@ records one path-level failure state with an explicit `failure_role`:
 Categories remain:
 - `transient` — retried via `next_retry_at`
 - `actionable` — require user intervention or boundary recheck
+
+`action_type` is the authoritative replay/rebuild field. `direction` remains a
+coarse summary/display column and is normalized from `action_type` at write
+time so persisted rows cannot drift into illegal combinations.
 
 The role model makes row meaning explicit instead of inferring it from
 `scope_key` and `next_retry_at`. Keyed by `(path, drive_id)`. Surfaced via the

@@ -43,12 +43,14 @@ type IssuesSnapshot struct {
 // IssueGroupSnapshot is one visible grouped issue family in the read-only
 // issues projection.
 type IssueGroupSnapshot struct {
-	SummaryKey       synctypes.SummaryKey
-	PrimaryIssueType string
-	ScopeKey         synctypes.ScopeKey
-	ScopeLabel       string
-	Paths            []string
-	Count            int
+	SummaryKey         synctypes.SummaryKey
+	PrimaryIssueType   string
+	ScopeKey           synctypes.ScopeKey
+	ScopeLabel         string
+	Paths              []string
+	Count              int
+	HasManualTrial     bool
+	RecheckRequestedAt int64
 }
 
 // HeldDeleteSnapshot is one held-delete entry surfaced in the issues read
@@ -326,6 +328,11 @@ func (i *Inspector) readVisibleIssueProjection(ctx context.Context) (issuesProje
 		return issuesProjection{}, fmt.Errorf("list remote blocked failures: %w", err)
 	}
 
+	recheckRequestedAt, err := queryScopeRecheckRequests(ctx, i.db)
+	if err != nil {
+		return issuesProjection{}, fmt.Errorf("list scope recheck requests: %w", err)
+	}
+
 	scopeBlocks, err := i.listScopeBlocks(ctx)
 	if err != nil {
 		return issuesProjection{}, fmt.Errorf("list scope blocks: %w", err)
@@ -336,7 +343,14 @@ func (i *Inspector) readVisibleIssueProjection(ctx context.Context) (issuesProje
 		return issuesProjection{}, fmt.Errorf("pending retry summary: %w", err)
 	}
 
-	return buildIssuesProjection(actionableFailures, remoteBlocked, scopeBlocks, pendingRetries, shortcuts), nil
+	return buildIssuesProjection(
+		actionableFailures,
+		remoteBlocked,
+		scopeBlocks,
+		pendingRetries,
+		shortcuts,
+		recheckRequestedAt,
+	), nil
 }
 
 func buildIssuesProjection(
@@ -345,10 +359,11 @@ func buildIssuesProjection(
 	scopeBlocks []*synctypes.ScopeBlock,
 	pendingRetries []synctypes.PendingRetryGroup,
 	shortcuts []synctypes.Shortcut,
+	recheckRequestedAt map[synctypes.ScopeKey]int64,
 ) issuesProjection {
 	builder := newIssuesProjectionBuilder(shortcuts, len(pendingRetries))
 	builder.addActionableFailures(actionableFailures)
-	builder.addRemoteBlocked(remoteBlocked)
+	builder.addRemoteBlocked(remoteBlocked, recheckRequestedAt)
 	builder.addAuthScopeBlocks(scopeBlocks)
 	builder.addPendingRetries(pendingRetries)
 	return builder.projection()
@@ -461,12 +476,21 @@ func (b *issuesProjectionBuilder) addActionableFailures(rows []synctypes.SyncFai
 	}
 }
 
-func (b *issuesProjectionBuilder) addRemoteBlocked(rows []synctypes.SyncFailureRow) {
+func (b *issuesProjectionBuilder) addRemoteBlocked(
+	rows []synctypes.SyncFailureRow,
+	recheckRequestedAt map[synctypes.ScopeKey]int64,
+) {
 	for i := range rows {
 		row := rows[i]
 		summaryKey := synctypes.SummaryKeyForPersistedFailure(row.IssueType, row.Category, row.Role)
 		if b.addGroupedPath(summaryKey, row.IssueType, row.ScopeKey, row.Path) {
 			b.addSummary(summaryKey, row.ScopeKey, row.Role)
+		}
+		idx := b.groupIndex[issueGroupKey{summaryKey: summaryKey, scopeKey: row.ScopeKey.String()}]
+		group := &b.snapshot.Groups[idx]
+		group.RecheckRequestedAt = recheckRequestedAt[row.ScopeKey]
+		if row.ManualTrialRequestedAt > 0 {
+			group.HasManualTrial = true
 		}
 	}
 }

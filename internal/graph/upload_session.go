@@ -54,6 +54,42 @@ func (c *Client) CreateUploadSession(
 	return c.parseUploadSessionResponse(resp)
 }
 
+// CreateUploadSessionForItem creates a resumable upload session that overwrites
+// an existing file identified by item ID.
+func (c *Client) CreateUploadSessionForItem(
+	ctx context.Context, driveID driveid.ID, itemID string, size int64, mtime time.Time,
+) (*UploadSession, error) {
+	c.logger.Info("creating upload session for existing item",
+		slog.String("drive_id", driveID.String()),
+		slog.String("item_id", itemID),
+		slog.Int64("size", size),
+	)
+
+	path := fmt.Sprintf("/drives/%s/items/%s/createUploadSession", driveID, itemID)
+
+	item := uploadSessionItem{ConflictBehavior: "replace"}
+	if !mtime.IsZero() {
+		item.FileSystemInfo = &fileSystemInfo{
+			LastModifiedDateTime: mtime.UTC().Format(time.RFC3339),
+		}
+	}
+
+	reqBody := createUploadSessionRequest{Item: item}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("graph: marshaling upload session request: %w", err)
+	}
+
+	resp, err := c.do(ctx, http.MethodPost, path, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	return c.parseUploadSessionResponse(resp)
+}
+
 // CancelUploadSession cancels an in-progress upload session.
 // The session URL is pre-authenticated, so no Authorization header is sent.
 func (c *Client) CancelUploadSession(ctx context.Context, session *UploadSession) error {

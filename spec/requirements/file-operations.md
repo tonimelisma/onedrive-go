@@ -18,6 +18,7 @@ When the user runs `get <remote> [local]`, the system shall download the specifi
 - R-1.2.2: When the download is interrupted, the system shall resume via `.partial` files on retry. [verified]
 - R-1.2.3: When download completes, the system shall verify hash and size against API metadata. [verified]
 - R-1.2.4: When `--json` is passed, the system shall output structured JSON with path, size, and hash_verified; for folders, with files array, folders_created, total_size, and errors. [verified]
+- R-1.2.5: When the user runs `get <shared-target> [local]`, where `<shared-target>` is either a raw OneDrive share URL or a `shared:<recipientEmail>:<remoteDriveID>:<remoteItemID>` selector, the system shall resolve the underlying shared item and download it without requiring `drive add` first. Shared folder targets shall download recursively by item identity. [verified]
 
 ## R-1.3 Upload (`put`) [verified]
 
@@ -27,6 +28,7 @@ When the user runs `put <local> [remote]`, the system shall upload the specified
 - R-1.3.2: When the file exceeds 4 MiB, the system shall use a resumable upload session. [verified]
 - R-1.3.3: When upload completes, the system shall verify the server-reported hash matches the local file. [verified]
 - R-1.3.4: When `--json` is passed, the system shall output structured JSON with path, id, and size; for directories, with files array, folders_created, total_size, and errors. [verified]
+- R-1.3.5: When the user runs `put <local> <shared-target>`, where `<shared-target>` is either a raw OneDrive share URL or a `shared:<recipientEmail>:<remoteDriveID>:<remoteItemID>` selector, the system shall overwrite that exact shared file by item identity. Shared folder targets shall be rejected with guidance to `drive add` the folder first. [verified]
 
 ## R-1.4 Delete (`rm`) [verified]
 
@@ -47,6 +49,7 @@ When the user runs `mkdir <path>`, the system shall create the folder on OneDriv
 When the user runs `stat <path>`, the system shall display item metadata (ID, size, hashes, timestamps, parent, eTag, download URL).
 
 - R-1.6.1: When `--json` is passed, the system shall output structured JSON with item metadata. [verified]
+- R-1.6.2: When the user runs `stat <shared-target>`, where `<shared-target>` is either a raw OneDrive share URL or a `shared:<recipientEmail>:<remoteDriveID>:<remoteItemID>` selector, the system shall resolve the underlying shared item and display metadata for that item without requiring `drive add`. [verified]
 
 ## R-1.7 Move (`mv`) [verified]
 
