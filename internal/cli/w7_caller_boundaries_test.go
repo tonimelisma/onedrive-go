@@ -33,9 +33,22 @@ func setupConfiguredInvalidSavedLogin(t *testing.T) (string, driveid.CanonicalID
 func setupUnconfiguredInvalidSavedLogin(t *testing.T) driveid.CanonicalID {
 	t.Helper()
 
-	cid := driveid.MustCanonicalID("business:blocked@example.com")
+	return setupUnconfiguredInvalidSavedLoginCID(
+		t,
+		driveid.MustCanonicalID("business:blocked@example.com"),
+		"Blocked User",
+	)
+}
+
+func setupUnconfiguredInvalidSavedLoginCID(
+	t *testing.T,
+	cid driveid.CanonicalID,
+	displayName string,
+) driveid.CanonicalID {
+	t.Helper()
+
 	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
-		DisplayName: "Blocked User",
+		DisplayName: displayName,
 	}))
 	writeInvalidSavedLoginFile(t, cid)
 	require.NoError(t, touchStateDBForAccount(t, cid))
@@ -259,6 +272,7 @@ func TestDriveService_RunSearch_TextSurfacesUnconfiguredAuthRequirement(t *testi
 	assert.Contains(t, out.String(), "Authentication required:")
 	assert.Contains(t, out.String(), cid.Email())
 	assert.Contains(t, out.String(), "invalid or unreadable")
+	assert.Contains(t, out.String(), `No SharePoint sites found matching "marketing" in searchable business accounts.`)
 	assert.NotContains(t, out.String(), "no business accounts found")
 }
 
@@ -283,6 +297,55 @@ func TestDriveService_RunSearch_JSONSurfacesUnconfiguredAuthRequirementForAccoun
 	require.Len(t, decoded.AccountsRequiringAuth, 1)
 	assert.Equal(t, cid.Email(), decoded.AccountsRequiringAuth[0].Email)
 	assert.Equal(t, driveid.DriveTypeBusiness, decoded.AccountsRequiringAuth[0].DriveType)
+	assert.Equal(t, authReasonInvalidSavedLogin, decoded.AccountsRequiringAuth[0].Reason)
+	assert.Equal(t, 1, decoded.AccountsRequiringAuth[0].StateDBs)
+}
+
+// Validates: R-3.6.6
+func TestSharedService_RunList_TextSurfacesUnconfiguredAuthRequirement(t *testing.T) {
+	setTestDriveHome(t)
+
+	cid := setupUnconfiguredInvalidSavedLoginCID(
+		t,
+		driveid.MustCanonicalID("personal:blocked@example.com"),
+		"Blocked Personal User",
+	)
+
+	var out bytes.Buffer
+	cc := newServiceContext(&out, filepath.Join(t.TempDir(), "missing-config.toml"))
+
+	require.NoError(t, newSharedService(cc).runList(t.Context()))
+	assert.Contains(t, out.String(), "Authentication required:")
+	assert.Contains(t, out.String(), cid.Email())
+	assert.Contains(t, out.String(), "invalid or unreadable")
+	assert.NotContains(t, out.String(), "No shared items found.")
+}
+
+// Validates: R-3.6.6, R-3.6.7
+func TestSharedService_RunList_JSONSurfacesUnconfiguredAuthRequirementForAccountFilter(t *testing.T) {
+	setTestDriveHome(t)
+
+	cid := setupUnconfiguredInvalidSavedLoginCID(
+		t,
+		driveid.MustCanonicalID("personal:blocked@example.com"),
+		"Blocked Personal User",
+	)
+
+	var out bytes.Buffer
+	cc := newServiceContext(&out, filepath.Join(t.TempDir(), "missing-config.toml"))
+	cc.Flags = CLIFlags{
+		Account: cid.Email(),
+		JSON:    true,
+	}
+
+	require.NoError(t, newSharedService(cc).runList(t.Context()))
+
+	var decoded sharedListJSONOutput
+	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
+	assert.Empty(t, decoded.Items)
+	require.Len(t, decoded.AccountsRequiringAuth, 1)
+	assert.Equal(t, cid.Email(), decoded.AccountsRequiringAuth[0].Email)
+	assert.Equal(t, driveid.DriveTypePersonal, decoded.AccountsRequiringAuth[0].DriveType)
 	assert.Equal(t, authReasonInvalidSavedLogin, decoded.AccountsRequiringAuth[0].Reason)
 	assert.Equal(t, 1, decoded.AccountsRequiringAuth[0].StateDBs)
 }

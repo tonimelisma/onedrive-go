@@ -10,8 +10,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/tonimelisma/onedrive-go/internal/config"
-	"github.com/tonimelisma/onedrive-go/internal/failures"
 	"github.com/tonimelisma/onedrive-go/internal/sharedref"
 )
 
@@ -56,26 +54,20 @@ func newSharedService(cc *CLIContext) *sharedService {
 }
 
 func (s *sharedService) runList(ctx context.Context) error {
-	logger := s.cc.Logger
-
-	cfg, warnings, err := config.LoadOrDefaultLenient(s.cc.CfgPath, logger)
-	outcome := config.ClassifyLoadOutcome(err, warnings)
+	readModel := newAccountReadModelService(s.cc)
+	snapshot, err := readModel.loadLenientCatalog(ctx)
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
-	if outcome.Class == failures.ClassActionable {
-		config.LogWarnings(warnings, logger)
+		return err
 	}
 
-	catalog := buildAccountCatalog(ctx, cfg, logger)
-	authRequired := catalogAuthRequirements(catalog, func(entry accountCatalogEntry) bool {
+	authRequired := readModel.authRequirements(snapshot, func(entry accountCatalogEntry) bool {
 		if s.cc.Flags.Account != "" && entry.Email != s.cc.Flags.Account {
 			return false
 		}
-		return len(entry.TokenDriveIDs) > 0 || len(entry.ConfiguredDriveIDs) > 0 || len(entry.ProfileDriveIDs) > 0
+		return true
 	})
 
-	items := s.discoverSharedItems(ctx, catalog)
+	items := s.discoverSharedItems(ctx, snapshot.Catalog)
 	if s.cc.Flags.JSON {
 		return printSharedJSON(s.cc.Output(), items, authRequired)
 	}

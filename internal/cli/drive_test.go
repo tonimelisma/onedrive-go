@@ -425,6 +425,26 @@ func TestPrintDriveSearchText_Empty(t *testing.T) {
 }
 
 // Validates: R-3.3.9
+func TestPrintDriveSearchText_AuthRequiredWithoutResultsStillExplainsNoMatches(t *testing.T) {
+	authRequired := []accountAuthRequirement{
+		{
+			Email:     "blocked@example.com",
+			DriveType: driveid.DriveTypeBusiness,
+			Reason:    authReasonInvalidSavedLogin,
+			Action:    authAction(authReasonInvalidSavedLogin),
+			StateDBs:  1,
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, printDriveSearchText(&buf, nil, "marketing", authRequired))
+
+	output := buf.String()
+	assert.Contains(t, output, "Authentication required:")
+	assert.Contains(t, output, `No SharePoint sites found matching "marketing" in searchable business accounts.`)
+}
+
+// Validates: R-3.3.9
 func TestPrintDriveSearchText_WithResults(t *testing.T) {
 	results := []driveSearchResult{
 		{CanonicalID: "sharepoint:user@contoso.com:marketing:Docs", SiteName: "Marketing", LibraryName: "Docs", WebURL: "https://contoso.sharepoint.com/sites/marketing"},
@@ -508,15 +528,17 @@ func TestPrintDriveSearchJSON_EmptySlice(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// --- findBusinessTokens ---
+// --- searchableBusinessTokenIDs ---
 
-func TestFindBusinessTokens_NoTokens(t *testing.T) {
+func TestSearchableBusinessTokenIDs_NoTokens(t *testing.T) {
 	setTestDriveHome(t)
-	tokens := findBusinessTokens("", testDriveLogger(t))
+	catalog := buildAccountCatalog(t.Context(), config.DefaultConfig(), testDriveLogger(t))
+	tokens := searchableBusinessTokenIDs(catalog, "")
 	assert.Empty(t, tokens)
 }
 
-func TestFindBusinessTokens_HasBusinessToken(t *testing.T) {
+// Validates: R-3.3.9
+func TestSearchableBusinessTokenIDs_HasBusinessToken(t *testing.T) {
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
 	require.NoError(t, os.MkdirAll(dataDir, 0o700))
@@ -525,12 +547,13 @@ func TestFindBusinessTokens_HasBusinessToken(t *testing.T) {
 	writeTestTokenFile(t, dataDir, "token_business_alice@contoso.com.json")
 	writeTestTokenFile(t, dataDir, "token_personal_user@example.com.json")
 
-	tokens := findBusinessTokens("", testDriveLogger(t))
+	catalog := buildAccountCatalog(t.Context(), config.DefaultConfig(), testDriveLogger(t))
+	tokens := searchableBusinessTokenIDs(catalog, "")
 	require.Len(t, tokens, 1)
 	assert.Equal(t, "business:alice@contoso.com", tokens[0].String())
 }
 
-func TestFindBusinessTokens_FilterSelectsOne(t *testing.T) {
+func TestSearchableBusinessTokenIDs_FilterSelectsOne(t *testing.T) {
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
 	require.NoError(t, os.MkdirAll(dataDir, 0o700))
@@ -539,19 +562,21 @@ func TestFindBusinessTokens_FilterSelectsOne(t *testing.T) {
 	writeTestTokenFile(t, dataDir, "token_business_alice@contoso.com.json")
 	writeTestTokenFile(t, dataDir, "token_business_bob@fabrikam.com.json")
 
-	tokens := findBusinessTokens("alice@contoso.com", testDriveLogger(t))
+	catalog := buildAccountCatalog(t.Context(), config.DefaultConfig(), testDriveLogger(t))
+	tokens := searchableBusinessTokenIDs(catalog, "alice@contoso.com")
 	require.Len(t, tokens, 1)
 	assert.Equal(t, "business:alice@contoso.com", tokens[0].String())
 }
 
-func TestFindBusinessTokens_SkipsPersonal(t *testing.T) {
+func TestSearchableBusinessTokenIDs_SkipsPersonal(t *testing.T) {
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
 	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
 	writeTestTokenFile(t, dataDir, "token_personal_user@example.com.json")
 
-	tokens := findBusinessTokens("", testDriveLogger(t))
+	catalog := buildAccountCatalog(t.Context(), config.DefaultConfig(), testDriveLogger(t))
+	tokens := searchableBusinessTokenIDs(catalog, "")
 	assert.Empty(t, tokens)
 }
 
