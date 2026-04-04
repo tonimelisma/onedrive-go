@@ -54,7 +54,8 @@ The system shall support all four drive types:
   delete the state database. This works both for configured drives (removing
   config section and state database) and for available drives that retain a
   state database from a previous removal (deleting only the state database).
-  The account token and sync directory are always preserved. [verified]
+  The account token, account profile, and sync directory are always preserved.
+  [verified]
 - R-3.3.9: When the user runs `drive search <term>`, the system shall search SharePoint sites by name across all business accounts, returning up to 50 matching sites with their document libraries and canonical IDs. When `--account` is passed, the search is restricted to that business account. Business accounts that cannot be searched because authentication is required shall be reported as account-level auth-required results instead of being silently skipped. [verified]
 - R-3.3.10: When `--json` is passed, `drive list` shall output structured JSON with `configured`, `available`, and `accounts_requiring_auth` arrays. Configured drive entries shall include auth status when authentication is required. [verified]
 - R-3.3.11: When `--json` is passed, `drive search` shall output structured JSON with `results` and `accounts_requiring_auth` arrays. [verified]

@@ -1250,7 +1250,7 @@ func purgeDrive(w io.Writer, cfgPath string, driveID driveid.CanonicalID, logger
 
 // purgeOrphanedDriveState removes state DB and drive metadata files for a
 // drive that is no longer in config. Unlike purgeSingleDrive (which also
-// removes config sections and account profiles), this only deletes data files
+// removes the drive's config section), this only deletes drive-owned data files
 // left behind from a previous `drive remove` without --purge.
 func purgeOrphanedDriveState(w io.Writer, cid driveid.CanonicalID, logger *slog.Logger) error {
 	removed, err := removeDriveDataFiles(cid, logger)

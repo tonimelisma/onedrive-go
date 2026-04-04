@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/authstate"
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
@@ -109,6 +110,95 @@ func TestAuthService_RunLogout_NoAccountsConfigured(t *testing.T) {
 	err := svc.runLogout(false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no accounts configured")
+}
+
+// Validates: R-3.1.4
+func TestAuthService_RunLogout_PurgeRemovesAccountProfile(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("business:alice@contoso.com")
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive - Contoso"))
+	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
+		DisplayName: "Alice Smith",
+		OrgName:     "Contoso",
+	}))
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_business_alice@contoso.com.json")
+	require.NoError(t, os.WriteFile(config.DriveStatePath(cid), []byte("fake-db"), 0o600))
+	require.NoError(t, os.WriteFile(config.DriveMetadataPath(cid), []byte(`{"drive_id":"d1"}`), 0o600))
+
+	syncDir := filepath.Join(t.TempDir(), "sync")
+	require.NoError(t, os.MkdirAll(syncDir, 0o700))
+	require.NoError(t, config.SetDriveKey(cfgPath, cid, "sync_dir", syncDir))
+
+	var out bytes.Buffer
+	cc := newServiceContext(&out, cfgPath)
+	cc.Flags.Account = "alice@contoso.com"
+
+	require.NoError(t, newAuthService(cc).runLogout(true))
+
+	_, tokenErr := os.Stat(config.DriveTokenPath(cid))
+	assert.True(t, os.IsNotExist(tokenErr), "logout --purge should remove token file")
+
+	_, stateErr := os.Stat(config.DriveStatePath(cid))
+	assert.True(t, os.IsNotExist(stateErr), "logout --purge should remove state DB")
+
+	_, metaErr := os.Stat(config.DriveMetadataPath(cid))
+	assert.True(t, os.IsNotExist(metaErr), "logout --purge should remove drive metadata")
+
+	_, profileErr := os.Stat(config.AccountFilePath(cid))
+	assert.True(t, os.IsNotExist(profileErr), "logout --purge should remove account profile")
+
+	_, syncDirErr := os.Stat(syncDir)
+	require.NoError(t, syncDirErr, "logout --purge must leave sync directories untouched")
+	assert.Contains(t, out.String(), "Sync directories untouched")
+}
+
+// Validates: R-3.3.8, R-3.1.5
+func TestDriveService_RunRemove_PurgePreservesAccountProfile(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("business:alice@contoso.com")
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive - Contoso"))
+	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
+		DisplayName: "Alice Smith",
+		OrgName:     "Contoso",
+	}))
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_business_alice@contoso.com.json")
+	require.NoError(t, os.WriteFile(config.DriveStatePath(cid), []byte("fake-db"), 0o600))
+	require.NoError(t, os.WriteFile(config.DriveMetadataPath(cid), []byte(`{"drive_id":"d1"}`), 0o600))
+
+	var out bytes.Buffer
+	cc := newServiceContext(&out, cfgPath)
+	cc.Flags.Drive = []string{cid.String()}
+
+	require.NoError(t, newDriveService(cc).runRemove(true))
+
+	cfg, err := config.LoadOrDefault(cfgPath, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Drives, "drive remove --purge should delete only the drive config section")
+
+	_, stateErr := os.Stat(config.DriveStatePath(cid))
+	assert.True(t, os.IsNotExist(stateErr), "drive remove --purge should remove the drive state DB")
+
+	_, metaErr := os.Stat(config.DriveMetadataPath(cid))
+	assert.True(t, os.IsNotExist(metaErr), "drive remove --purge should remove drive metadata")
+
+	_, tokenErr := os.Stat(config.DriveTokenPath(cid))
+	require.NoError(t, tokenErr, "drive remove --purge must preserve the account token")
+
+	profile, found, profileErr := config.LookupAccountProfile(cid)
+	require.NoError(t, profileErr)
+	require.True(t, found, "drive remove --purge must preserve the account profile")
+	assert.Equal(t, "Alice Smith", profile.DisplayName)
+
+	catalog := buildAccountCatalog(t.Context(), config.DefaultConfig(), testDriveLogger(t))
+	entry := accountCatalogEntryByEmail(t, catalog, "alice@contoso.com")
+	assert.False(t, entry.Configured)
+	assert.Equal(t, "Alice Smith", entry.DisplayName)
+	assert.Equal(t, authstate.StateReady, entry.AuthHealth.State)
+	assert.Contains(t, out.String(), "Sync directory untouched")
 }
 
 // Validates: R-2.7
