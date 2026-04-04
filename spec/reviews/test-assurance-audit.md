@@ -308,7 +308,7 @@ This is the operating dashboard for completeness, not a verdict of quality. A pa
 | W4 | done | done | done | n/a | done | done | partial | done | live crash/restart proof is still thinner than the now-reconciled store/CLI durable-row mutation coverage |
 | W5 | done | done | done | partial | done | partial | partial | done | upload-session traceability tags still lag the body-level coverage |
 | W6 | done | done | partial | partial | done | partial | partial | no | pagination and transport split still need body audit |
-| W7 | done | done | partial | n/a | done | no | no | no | output semantics can still be shallowly tested |
+| W7 | done | done | partial | n/a | done | partial | partial | partial | file-command independence from sync-state and broader caller-level logout/list coverage still need deeper audit |
 | W8 | done | done | partial | n/a | done | no | no | no | validation-tier coverage may be over-claimed |
 | W9 | done | done | partial | partial | done | no | no | no | shared-drive identity fallback details still need confirmation |
 
@@ -941,10 +941,20 @@ Key W5 gap notes:
   - logout or purge deletes more state than the contract allows
 - Audit status:
   - ideal model drafted
+  - body audit started
 - Claim mapping snapshot from filenames and `// Validates:` only:
   - Candidate test surface is broad across `internal/cli/*_test.go` plus `e2e/cli_commands_e2e_test.go` and `e2e/output_validation_e2e_test.go`
   - Explicit comment claims already exist for many command outputs: `R-1.1.1`, `R-1.2.4`, `R-1.3.4`, `R-1.4.3`, `R-1.5.1`, `R-1.6`, `R-1.7.1`, `R-1.8.1`, `R-1.9`, `R-1.9.4`, `R-3.1.4`, `R-3.1.5`, `R-3.1.6`, `R-2.3.7`, `R-2.3.8`, `R-2.3.9`, `R-2.3.10`, `R-2.7.1`, `R-6.2.8`, and `R-6.6.11`
   - CLI output is likely one of the easier places for a test to look busy while only checking superficial strings, so the body audit here should favor semantic assertions over formatting-only checks
+- Body-audit notes from `internal/cli/{auth,drive,services}_test.go`, `internal/cli/auth.go`, `internal/cli/drive.go`, and `internal/cli/account_catalog.go`:
+  - `drive remove --purge` had a real production boundary bug: it reused `purgeSingleDrive`, which also deleted the account profile file even though `R-3.3.8` preserves the logged-in account and the CLI account read model depends on `account_*.json` for offline identity metadata. The fix narrows `purgeSingleDrive` to drive-owned state only; `logout --purge` still removes account profiles through the account-owned `purgeOrphanedFiles()` path.
+  - New caller-level tests now prove both sides of that contract. `TestDriveService_RunRemove_PurgePreservesAccountProfile` proves drive purge removes config/state/metadata while preserving token + account profile and keeping the offline account catalog usable. `TestAuthService_RunLogout_PurgeRemovesAccountProfile` proves logout purge still removes token, state DB, metadata, and the account profile while leaving sync directories untouched.
+  - The old helper-level `purgeSingleDrive` test was also too shallow to catch this regression. It now asserts the account profile survives drive-scoped purge instead of disappearing silently.
+
+| Contract / invariant | Evidence | Verdict | Notes |
+|---|---|---|---|
+| `drive remove --purge` preserves account-owned token/profile state while deleting only drive-owned config/state/metadata | `REQ+DESIGN+CODE+BODY` | `proven` | Fixed real production bug in `purgeSingleDrive`; caller-level service test now kills accidental over-deletion |
+| `logout --purge` removes account-owned token/profile state in addition to drive-owned state | `REQ+DESIGN+BODY` | `proven` | Caller-level logout purge test now proves the destructive boundary separately from drive-scoped purge |
 
 ### W8. Configuration Discovery, Validation Tiers, And Token Resolution
 
@@ -1034,4 +1044,6 @@ Key W5 gap notes:
    - `R-2.4.6` / `R-2.4.7` symlink and always-excluded behavior
    - remaining sparse remote-payload hardening and nil-guard proof paths
 3. Tighten W5 traceability for upload-session rules that are already strongly tested in body-level graph tests but still under-tagged at the `// Validates:` level.
-4. Move to the next high-risk CLI/output workstream (W7) now that W4 durable-row mutation and verify/output contracts are reconciled.
+4. Continue W7 body-level reconciliation for:
+   - direct file-command independence from sync-state and sync-db availability
+   - broader caller-level logout / whoami / drive-list proof paths beyond the now-fixed purge-profile boundary
