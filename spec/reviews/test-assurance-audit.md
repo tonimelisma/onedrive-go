@@ -1050,6 +1050,29 @@ Key W5 gap notes:
   - This currently looks like one of the healthiest traceability areas in the repo from metadata alone
   - Planned items `R-3.6.4` and `R-3.6.5` should stay parked until implemented
 
+## Archived Recovery Reconciliation
+
+- `2026-04-04`: reconciled the externally archived recovery artifacts that had been restored after the accidental cleanup:
+  - `/Users/tonimelisma/Development/onedrive-go-stale-archive/refactor-remote-403-ephemeral-scope.bundle`
+  - `/Users/tonimelisma/Development/onedrive-go-stale-archive/refactor-trial-result-policy-working.patch`
+- `remote-403` conclusion:
+  - the meaningful caller-level coverage from the archived branch is already present on `main` under the current account-catalog and auth-health shapes:
+    - business-account search selection is now covered by `TestSearchableBusinessTokenIDs_*` in `internal/cli/drive_test.go`
+    - drive-list auth-required projection is covered by `TestBuildConfiguredAuthRequirements_UsesOnlyAccountsNeedingAuth` and `TestAnnotateConfiguredDriveAuth_AndPrintSections` in `internal/cli/drive_test.go`
+    - auth-health copy/merge behavior is covered by `TestMergeAuthRequirements_PrefersExistingFieldsAndSorts` and `TestAuthReasonTextAndAction_ReturnExpectedStrings` in `internal/cli/auth_health_test.go`
+    - grouped status issue counting is covered by `TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsIssues` in `internal/cli/status_test.go`
+  - the archived `issues_service` history-empty helper shape was superseded by later command/service refactors and was intentionally not replayed
+- `trial-result-policy` conclusion:
+  - the production refactor hunks in the archived dirty patch were older than the current `main` sync-engine architecture and would have reverted newer runtime ownership/result-routing work if replayed verbatim
+  - the substantive behavioral proof from that patch is already on `main`:
+    - unauthorized termination and trial-preserve routing tests are present in `internal/sync/engine_result_scope_test.go`
+    - no-candidate / missing-state / skipped-candidate preserve semantics are present in `internal/sync/engine_single_owner_test.go`
+    - scanner-resolved actionable cleanup coverage is present in `internal/sync/engine_result_scope_test.go`
+    - governing retry/scope-preserve language is already present in `spec/design/retry.md`, `spec/design/sync-engine.md`, and `spec/requirements/sync.md`
+- Reconciliation verdict:
+  - no remaining production-code delta from the archived artifacts needed to be replayed onto `main`
+  - the remaining useful integration work was traceability only, so the equivalent current tests were tagged directly and this note records the mapping for future audit/recovery work
+
 ## Next Moves
 
 1. Continue W1 verified-claim reconciliation for:

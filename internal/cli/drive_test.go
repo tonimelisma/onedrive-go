@@ -554,6 +554,7 @@ func TestSearchableBusinessTokenIDs_HasBusinessToken(t *testing.T) {
 	assert.Equal(t, "business:alice@contoso.com", tokens[0].String())
 }
 
+// Validates: R-3.3.9
 func TestSearchableBusinessTokenIDs_FilterSelectsOne(t *testing.T) {
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
@@ -569,6 +570,7 @@ func TestSearchableBusinessTokenIDs_FilterSelectsOne(t *testing.T) {
 	assert.Equal(t, "business:alice@contoso.com", tokens[0].String())
 }
 
+// Validates: R-3.3.9
 func TestSearchableBusinessTokenIDs_SkipsPersonal(t *testing.T) {
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
@@ -1386,6 +1388,7 @@ func TestSortedDriveSearchResults_ReturnsSortedClone(t *testing.T) {
 	}, input)
 }
 
+// Validates: R-3.3.10
 func TestBuildConfiguredAuthRequirements_UsesOnlyAccountsNeedingAuth(t *testing.T) {
 	setTestDriveHome(t)
 
@@ -1413,6 +1416,7 @@ func TestBuildConfiguredAuthRequirements_UsesOnlyAccountsNeedingAuth(t *testing.
 	assert.Equal(t, authReasonSyncAuthRejected, requirements[0].Reason)
 }
 
+// Validates: R-3.3.10
 func TestAnnotateConfiguredDriveAuth_AndPrintSections(t *testing.T) {
 	t.Parallel()
 
