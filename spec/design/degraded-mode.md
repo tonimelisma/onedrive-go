@@ -1,6 +1,6 @@
 # Degraded Mode
 
-Implements: R-6.10.7 [verified]
+Implements: R-6.10.7 [verified], R-6.10.9 [verified]
 
 ## Overview
 

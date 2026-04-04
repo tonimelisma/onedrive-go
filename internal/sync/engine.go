@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -75,6 +76,10 @@ type Engine struct {
 	// durable failures per iteration. Production leaves this zero and uses the
 	// compiled default in engine_retry_trial.go.
 	retryBatchLimit int
+
+	afterFunc func(time.Duration, func()) syncTimer
+	newTicker func(time.Duration) syncTicker
+	nextRunID atomic.Int64
 }
 
 // NewEngine creates an Engine, initializing the SyncStore (which opens
@@ -143,6 +148,8 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 		minFreeSpace:       cfg.MinFreeSpace,
 		diskAvailableFn:    driveops.DiskAvailable,
 		nowFn:              time.Now,
+		afterFunc:          realAfterFunc,
+		newTicker:          realNewTicker,
 	}
 
 	e.permHandler = &PermissionHandler{
@@ -157,6 +164,10 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 	}
 
 	return e, nil
+}
+
+func (e *Engine) nextRuntimeRunID() string {
+	return fmt.Sprintf("run-%d", e.nextRunID.Add(1))
 }
 
 // Close releases resources held by the engine. Nil-safe for observer

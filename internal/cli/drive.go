@@ -37,7 +37,7 @@ func newDriveCmd() *cobra.Command {
 		Use:         "drive",
 		Short:       "Manage drives (list, add, remove, search)",
 		Long:        "List, add, remove, or search drives in the configuration.",
-		Annotations: map[string]string{skipConfigAnnotation: "true"},
+		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
 	}
 
 	cmd.AddCommand(newDriveListCmd())
@@ -62,7 +62,7 @@ Use --all to show all discoverable drives, or 'drive search' for
 targeted SharePoint queries.`,
 		// skipConfig: drive list loads config leniently itself (R-4.8.4) —
 		// Phase 2 strict loading must not run.
-		Annotations: map[string]string{skipConfigAnnotation: "true"},
+		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
 		RunE:        runDriveList,
 	}
 
@@ -205,7 +205,7 @@ func discoverAvailableDrives(
 	}
 
 	var (
-		mu           sync.Mutex
+		mu           sync.Mutex // guards entries and authRequired while token workers append results
 		entries      []driveListEntry
 		authRequired []accountAuthRequirement
 	)
@@ -878,7 +878,7 @@ Examples:
   onedrive-go drive add personal:user@example.com
   onedrive-go drive add sharepoint:user@contoso.com:marketing:Documents
   onedrive-go drive add "Shared Folder"`,
-		Annotations: map[string]string{skipConfigAnnotation: "true"},
+		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
 		RunE:        runDriveAdd,
 		Args:        cobra.MaximumNArgs(1),
 	}
@@ -1193,7 +1193,7 @@ are preserved so the drive can be re-added later without data loss.
 
 With --purge, the state database is also deleted.
 The sync directory is never deleted automatically.`,
-		Annotations: map[string]string{skipConfigAnnotation: "true"},
+		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
 		RunE:        runDriveRemove,
 	}
 
@@ -1283,7 +1283,7 @@ Examples:
   onedrive-go drive search "project docs" --account user@contoso.com`,
 		// skipConfig: drive search loads config leniently itself —
 		// Phase 2 strict loading must not run.
-		Annotations: map[string]string{skipConfigAnnotation: "true"},
+		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
 		RunE:        runDriveSearch,
 		Args:        cobra.ExactArgs(1),
 	}

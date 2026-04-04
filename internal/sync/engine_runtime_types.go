@@ -26,10 +26,14 @@ type engineFlow struct {
 
 	scopeCtrl    scopeController
 	shortcutCtrl shortcutCoordinator
+	runID        string
 }
 
 func newEngineFlow(engine *Engine) engineFlow {
-	flow := engineFlow{engine: engine}
+	flow := engineFlow{
+		engine: engine,
+		runID:  engine.nextRuntimeRunID(),
+	}
 	flow.initPolicyControllers()
 
 	return flow
@@ -94,11 +98,11 @@ type watchTimerState struct {
 	// Trial and retry timers are armed by the watch loop. The channels stay
 	// persistent so timer callbacks only signal the loop; they never mutate
 	// loop-owned state directly.
-	trialTimer *time.Timer
+	trialTimer syncTimer
 	trialCh    chan struct{}
 
 	// Retry timer — watch loop retrier sweeps sync_failures on each tick.
-	retryTimer   *time.Timer
+	retryTimer   syncTimer
 	retryTimerCh chan struct{} // persistent, buffered(1)
 
 	// Throttling: tracks last recheckPermissions call time (R-2.10.9).

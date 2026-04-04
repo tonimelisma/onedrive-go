@@ -75,7 +75,7 @@ func (rt *watchRuntime) dueTrials(now time.Time) []synctypes.ScopeKey {
 	return syncdispatch.DueTrials(rt.snapshotActiveScopes(), now)
 }
 
-func (rt *watchRuntime) resetTrialTimer(next *time.Timer) {
+func (rt *watchRuntime) resetTrialTimer(next syncTimer) {
 	rt.timerMu.Lock()
 	defer rt.timerMu.Unlock()
 
@@ -94,7 +94,7 @@ func (rt *watchRuntime) hasTrialTimer() bool {
 	return rt.trialTimer != nil
 }
 
-func (rt *watchRuntime) resetRetryTimer(next *time.Timer) {
+func (rt *watchRuntime) resetRetryTimer(next syncTimer) {
 	rt.timerMu.Lock()
 	defer rt.timerMu.Unlock()
 

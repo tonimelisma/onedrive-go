@@ -2,7 +2,7 @@
 
 GOVERNS: internal/syncstore/store.go, internal/syncstore/inspector.go, internal/syncstore/schema.go, internal/syncstore/schema.sql, internal/syncstore/store_baseline.go, internal/syncstore/store_observation.go, internal/syncstore/store_conflicts.go, internal/syncstore/store_failures.go, internal/syncstore/store_admin.go, internal/syncstore/store_scope_blocks.go, internal/syncstore/shortcuts.go, internal/syncverify/verify.go, internal/syncrecovery/recovery.go, internal/cli/verify.go, internal/cli/issues.go, internal/cli/failure_display.go
 
-Implements: R-2.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.7 [verified], R-2.15.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.14 [verified], R-2.10.22 [verified], R-2.10.33 [verified], R-2.10.34 [verified], R-2.10.41 [verified], R-2.10.45 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified], R-6.7.17 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
+Implements: R-2.5 [verified], R-2.5.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.7 [verified], R-2.15.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.14 [verified], R-2.10.22 [verified], R-2.10.33 [verified], R-2.10.34 [verified], R-2.10.41 [verified], R-2.10.45 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified], R-6.7.17 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
 
 ## SyncStore (`store.go`)
 
@@ -158,6 +158,12 @@ most recently loaded baseline in memory, invalidates it before outcome commits,
 and rebuilds it after writes. That cache is internal to the store and is
 rebuildable from durable state; it is not a competing authority.
 
+Callers are expected to depend on narrow store-owned interfaces rather than a
+raw `*SyncStore` whenever they only need one slice of functionality. CLI
+readers use `Inspector`, runtime mutation paths use the writable store, and
+administrative tooling opens the smallest boundary that can answer its
+question.
+
 ## Read-Only Inspection
 
 `Inspector` is the read-only companion to `SyncStore`. It is opened only from
@@ -174,7 +180,7 @@ state without handing them raw SQL ownership.
   projection: grouped visible issue families, held deletes, pending retries,
   and conflict history.
 - `IssueSummary.Groups` are keyed by the shared
-  [`synctypes.SummaryKey`](/Users/tonimelisma/Development/onedrive-go-shared-failure-summaries/internal/synctypes/summary_keys.go),
+  [`synctypes.SummaryKey`](../../internal/synctypes/summary_keys.go),
   not by raw SQL categories. Each group also carries the normalized scope kind
   plus an optional humanized scope label so CLI `status` can show file,
   directory, shortcut/drive, account, or service context without reopening raw
@@ -188,6 +194,32 @@ state without handing them raw SQL ownership.
   on what counts as a visible issue family.
 - CLI `status` and `issues list` consume `Inspector`; they do not build their
   own DSNs or call `sql.Open` directly.
+- `AuditIntegrity(ctx)` is the read-only integrity surface. It reports stable
+  finding codes for impossible scope shapes, invalid auth timing, impossible
+  retry/trial timing, scope/failure contradictions, visible-projection overlap,
+  and other persisted-state violations without mutating the DB.
+
+## Integrity Audit And Safe Repair
+
+The store owns sync-state integrity inspection and deterministic safe repair.
+
+- `Inspector.AuditIntegrity(ctx)` is the pure read-only path used by tests and
+  administrative readers.
+- `SyncStore.AuditIntegrity(ctx)` adds writable-store-only signals such as
+  baseline-cache consistency after loading the cache.
+- `SyncStore.RepairIntegritySafe(ctx)` applies only repairs that do not guess
+  user intent: it normalizes illegal `auth:account` timing fields, clears
+  impossible retry timestamps on non-retryable rows, clears illegal manual
+  trial timestamps, and removes legacy persisted `perm:remote` scope/boundary
+  authorities that are now derived from held rows.
+- `cmd/devtool state-audit` is the human/JSON administrative entrypoint. It
+  opens the database through `syncstore`, reports the store-owned
+  `IntegrityReport`, optionally runs `RepairIntegritySafe`, then reruns the
+  audit and exits non-zero if findings remain.
+
+The audit/repair split is deliberate: normal runtime code never auto-repairs
+durable state during ordinary sync execution. Inspection is explicit, repair is
+explicit, and both stay inside the store-owned boundary.
 
 ## Verification
 

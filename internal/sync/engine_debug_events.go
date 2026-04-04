@@ -15,6 +15,10 @@ const (
 	engineDebugEventObserverStarted      engineDebugEventType = "observer_started"
 	engineDebugEventObserverExited       engineDebugEventType = "observer_exited"
 	engineDebugEventWatchStopped         engineDebugEventType = "watch_stopped"
+	engineDebugEventRetryTimerArmed      engineDebugEventType = "retry_timer_armed"
+	engineDebugEventRetryTimerFired      engineDebugEventType = "retry_timer_fired"
+	engineDebugEventTrialTimerArmed      engineDebugEventType = "trial_timer_armed"
+	engineDebugEventTrialTimerFired      engineDebugEventType = "trial_timer_fired"
 )
 
 const (

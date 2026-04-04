@@ -332,30 +332,28 @@ func (e *Engine) resolveReconcileInterval(opts synctypes.WatchOpts) time.Duratio
 
 // newReconcileTicker creates a ticker for periodic reconciliation. Returns
 // nil if the interval is 0 (disabled).
-func (e *Engine) newReconcileTicker(interval time.Duration) *time.Ticker {
+func (e *Engine) newReconcileTicker(interval time.Duration) syncTicker {
 	if interval <= 0 {
 		return nil
 	}
 
-	return time.NewTicker(interval)
+	return e.newTicker(interval)
 }
 
-// initReconcileTicker creates the periodic full-reconciliation timer and
-// returns its channel plus a stop function. If reconciliation is disabled,
-// both the channel and stop function are nil.
-func (e *Engine) initReconcileTicker(opts synctypes.WatchOpts) (<-chan time.Time, func()) {
+// initReconcileTicker creates the periodic full-reconciliation timer.
+func (e *Engine) initReconcileTicker(opts synctypes.WatchOpts) syncTicker {
 	interval := e.resolveReconcileInterval(opts)
 	ticker := e.newReconcileTicker(interval)
 
 	if ticker == nil {
-		return nil, nil
+		return nil
 	}
 
 	e.logger.Info("periodic full reconciliation enabled",
 		slog.Duration("interval", interval),
 	)
 
-	return ticker.C, ticker.Stop
+	return ticker
 }
 
 // runFullReconciliationAsync spawns a goroutine for full delta enumeration +

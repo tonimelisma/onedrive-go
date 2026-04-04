@@ -25,7 +25,7 @@ Examples:
   onedrive-go pause --drive personal:user@example.com
   onedrive-go pause --drive personal:user@example.com 2h
   onedrive-go pause --drive personal:user@example.com 1d`,
-		Annotations: map[string]string{skipConfigAnnotation: "true"},
+		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
 		RunE:        runPause,
 		Args:        cobra.MaximumNArgs(1),
 	}

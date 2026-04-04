@@ -50,7 +50,10 @@ func parseLogLevel(s string) (slog.Level, bool) {
 // skipConfigAnnotation marks commands that handle config loading themselves.
 // Commands annotated with this key skip the Phase 2 config resolution in
 // PersistentPreRunE but still get Phase 1 (flags + bootstrap logger).
-const skipConfigAnnotation = "skipConfig"
+const (
+	skipConfigAnnotation = "skipConfig"
+	skipConfigValue      = "true"
+)
 
 // CLIFlags contains parsed CLI flag values. Populated in Phase 1 of
 // PersistentPreRunE from Cobra flag bindings. All commands (including auth)

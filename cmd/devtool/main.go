@@ -17,6 +17,8 @@ type cwdLookup func() (string, error)
 
 type verifyFunc func(context.Context, devtool.VerifyOptions) error
 
+type stateAuditFunc func(context.Context, devtool.StateAuditOptions) error
+
 type worktreeAddFunc func(context.Context, string, string, string) error
 
 type worktreeBootstrapFunc func(string, string) error
@@ -36,6 +38,7 @@ func newRootCmd() *cobra.Command {
 
 	cmd.AddCommand(
 		newVerifyCmd(defaultCWD, defaultVerify),
+		newStateAuditCmd(defaultStateAudit),
 		newWorktreeCmd(defaultCWD, defaultAddWorktree, defaultBootstrapWorktree),
 	)
 
@@ -50,7 +53,7 @@ func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "verify [default|public|e2e|e2e-full|integration]",
+		Use:   "verify [default|public|e2e|e2e-full|integration|stress]",
 		Short: "Run repository verification profiles",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -93,6 +96,34 @@ func newWorktreeCmd(getwd cwdLookup, addWorktree worktreeAddFunc, bootstrapWorkt
 		newWorktreeAddCmd(getwd, addWorktree),
 		newWorktreeBootstrapCmd(getwd, bootstrapWorktree),
 	)
+
+	return cmd
+}
+
+func newStateAuditCmd(runStateAudit stateAuditFunc) *cobra.Command {
+	var (
+		dbPath     string
+		jsonOutput bool
+		repairSafe bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "state-audit",
+		Short: "Inspect and optionally repair sync-state integrity",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runStateAudit(cmd.Context(), devtool.StateAuditOptions{
+				DBPath:     dbPath,
+				JSON:       jsonOutput,
+				RepairSafe: repairSafe,
+				Stdout:     cmd.OutOrStdout(),
+			})
+		},
+	}
+
+	cmd.Flags().StringVar(&dbPath, "db", "", "path to the sync state database")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "emit JSON output")
+	cmd.Flags().BoolVar(&repairSafe, "repair-safe", false, "apply deterministic safe repairs before re-auditing")
+	requireFlag(cmd, "db")
 
 	return cmd
 }
@@ -189,6 +220,14 @@ func defaultVerify(ctx context.Context, opts devtool.VerifyOptions) error {
 func defaultAddWorktree(ctx context.Context, repoRoot, path, branch string) error {
 	if err := devtool.AddWorktree(ctx, devtool.ExecRunner{}, repoRoot, path, branch); err != nil {
 		return fmt.Errorf("add worktree: %w", err)
+	}
+
+	return nil
+}
+
+func defaultStateAudit(ctx context.Context, opts devtool.StateAuditOptions) error {
+	if err := devtool.RunStateAudit(ctx, opts); err != nil {
+		return fmt.Errorf("run state audit: %w", err)
 	}
 
 	return nil

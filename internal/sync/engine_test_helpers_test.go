@@ -685,6 +685,18 @@ func (r *debugEventRecorder) findEvent(match func(engineDebugEvent) bool) bool {
 	return false
 }
 
+func (r *debugEventRecorder) eventTypesSnapshot() []engineDebugEventType {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	types := make([]engineDebugEventType, 0, len(r.history))
+	for i := range r.history {
+		types = append(types, r.history[i].Type)
+	}
+
+	return types
+}
+
 func syncStorePathForTest(t *testing.T, eng *testEngine) string {
 	t.Helper()
 

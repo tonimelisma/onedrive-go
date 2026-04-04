@@ -363,6 +363,7 @@ func TestResolveSingleConflict_ExactMatch(t *testing.T) {
 
 	err := resolveSingleConflict(cc, "/bar.txt", "keep_local", false,
 		func() ([]synctypes.ConflictRecord, error) { return conflicts, nil },
+		func() ([]synctypes.ConflictRecord, error) { return conflicts, nil },
 		resolveFn,
 	)
 	require.NoError(t, err)
@@ -377,10 +378,34 @@ func TestResolveSingleConflict_NotFound(t *testing.T) {
 
 	err := resolveSingleConflict(cc, "nonexistent", "keep_both", false,
 		func() ([]synctypes.ConflictRecord, error) { return nil, nil },
+		func() ([]synctypes.ConflictRecord, error) { return nil, nil },
 		func(_, _ string) error { return nil },
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "conflict not found")
+}
+
+// Validates: R-2.3.4, R-2.3.12
+func TestResolveSingleConflict_AlreadyResolvedIsReplaySafe(t *testing.T) {
+	t.Parallel()
+
+	resolvedConflicts := []synctypes.ConflictRecord{
+		{ID: "id-1", Path: "/foo.txt", Resolution: synctypes.ResolutionKeepBoth},
+	}
+
+	var buf bytes.Buffer
+	cc := newTestCLIContext(&buf)
+
+	err := resolveSingleConflict(cc, "/foo.txt", "keep_local", false,
+		func() ([]synctypes.ConflictRecord, error) { return nil, nil },
+		func() ([]synctypes.ConflictRecord, error) { return resolvedConflicts, nil },
+		func(_, _ string) error {
+			require.Fail(t, "resolveFn should not be called for already resolved conflicts")
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "already resolved as keep_both")
 }
 
 // --- resolveStrategy ---
@@ -822,6 +847,30 @@ func TestIssuesClear_SinglePath(t *testing.T) {
 	})
 }
 
+// Validates: R-2.3.5, R-2.3.12
+func TestIssuesClear_SinglePath_ReplaySafe(t *testing.T) {
+	cmd, dbPath := newSeededIssuesCmd(t)
+
+	cmd.SetArgs([]string{"clear", "docs/CON"})
+	require.NoError(t, cmd.Execute())
+
+	cmd.SetArgs([]string{"clear", "docs/CON"})
+	require.NoError(t, cmd.Execute())
+
+	logger := slog.New(slog.DiscardHandler)
+	mgr, err := syncstore.NewSyncStore(t.Context(), dbPath, logger)
+	require.NoError(t, err)
+	defer mgr.Close(t.Context())
+
+	actionable, err := mgr.ListActionableFailures(t.Context())
+	require.NoError(t, err)
+	require.Len(t, actionable, 2)
+	assert.ElementsMatch(t, []string{"docs/NUL.txt", "docs/CON-copy"}, []string{
+		actionable[0].Path,
+		actionable[1].Path,
+	})
+}
+
 // Validates: R-2.3.5
 func TestIssuesClear_All(t *testing.T) {
 	cmd, dbPath := newSeededIssuesCmd(t)
@@ -877,6 +926,37 @@ func TestIssuesRetry_SinglePath(t *testing.T) {
 		all[1].Path,
 		all[2].Path,
 		all[3].Path,
+	})
+}
+
+// Validates: R-2.3.6, R-2.3.12
+func TestIssuesRetry_SinglePath_ReplaySafe(t *testing.T) {
+	cmd, dbPath := newSeededIssuesCmd(t)
+
+	cmd.SetArgs([]string{"retry", "data/report.xlsx"})
+	require.NoError(t, cmd.Execute())
+
+	cmd.SetArgs([]string{"retry", "data/report.xlsx"})
+	require.NoError(t, cmd.Execute())
+
+	logger := slog.New(slog.DiscardHandler)
+	mgr, err := syncstore.NewSyncStore(t.Context(), dbPath, logger)
+	require.NoError(t, err)
+	defer mgr.Close(t.Context())
+
+	rows, err := mgr.ListSyncFailures(t.Context())
+	require.NoError(t, err)
+	require.Len(t, rows, 4)
+	assert.ElementsMatch(t, []string{
+		"docs/CON",
+		"docs/NUL.txt",
+		"docs/CON-copy",
+		"data/report.xlsx.bak",
+	}, []string{
+		rows[0].Path,
+		rows[1].Path,
+		rows[2].Path,
+		rows[3].Path,
 	})
 }
 
