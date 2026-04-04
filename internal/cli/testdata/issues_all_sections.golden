@@ -1,0 +1,12 @@
+CONFLICTS
+ID      PATH           TYPE     DETECTED            
+abc123  /conflict.txt  content  1970-01-01T00:00:01Z
+
+QUOTA EXCEEDED (1 item)
+  The OneDrive storage quota for this sync scope is full. Free up space in the owning drive, or ask the shared-folder owner to do so.
+
+  /a.txt
+
+HELD DELETES (1 files — big-delete protection triggered, run `issues clear` to approve)
+PATH          LAST SEEN           
+/deleted.txt  1970-01-01T00:00:02Z

@@ -740,6 +740,7 @@ func TestUpsertActionableFailures_EmptySlice(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// Validates: R-2.10.2
 func TestClearResolvedActionableFailures(t *testing.T) {
 	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
@@ -768,6 +769,7 @@ func TestClearResolvedActionableFailures(t *testing.T) {
 	assert.Contains(t, paths, "NUL.txt")
 }
 
+// Validates: R-2.10.2
 func TestClearResolvedActionableFailures_DifferentTypeNotCleared(t *testing.T) {
 	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()

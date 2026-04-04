@@ -124,6 +124,14 @@ All commands with `--json` support use extracted `printXxxJSON(w io.Writer, out 
 
 Timestamp presentation follows one rule across command families: zero `time.Time` means "unknown". Human-readable output renders that as `unknown`; JSON output emits an empty string instead of a fabricated RFC3339 value or Go's year-0001 zero timestamp.
 
+`verify` keeps one stable report shape across both output modes:
+`verified` plus `mismatches[] { path, status, expected, actual }`. The
+underlying mismatch slice is already sorted by path before CLI formatting, so
+human-readable tables and JSON output stay deterministic. When mismatches are
+found, `verifyService` returns the sentinel `errVerifyMismatch`; the root error
+boundary translates that into exit code `1` without printing the generic
+`Error:` prefix that ordinary command failures use.
+
 | Command | JSON function(s) | Schema type(s) |
 |---------|------------------|----------------|
 | `ls` | `printItemsJSON` | `lsJSONItem` |
