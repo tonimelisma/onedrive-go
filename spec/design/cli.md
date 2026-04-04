@@ -96,6 +96,12 @@ intentionally bypass that hook and do not count as proof.
 removing token/config state. `logout --purge` removes the state databases
 entirely.
 
+`drive remove` and `drive remove --purge` are drive-boundary operations, not
+account-boundary operations. They remove the selected drive's config and
+drive-owned state, but they preserve the account token and `account_*.json`
+profile so the remaining logged-in account catalog stays intact for `whoami`,
+`drive list`, and `drive search`.
+
 `whoami` no longer has a special "logged out accounts" concept. It reports
 `accounts_requiring_auth`, which may come from:
 

@@ -683,25 +683,15 @@ func printAffectedDrives(w io.Writer, cfg *config.Config, affected []driveid.Can
 	return nil
 }
 
-// purgeSingleDrive removes the state database, drive metadata, account profile,
-// and config section for one drive. Token deletion is handled separately since
-// tokens may be shared (SharePoint).
+// purgeSingleDrive removes only drive-owned state for one drive: the state
+// database, drive metadata, and config section. Account profiles are
+// account-owned read-model state and must survive `drive remove --purge` so
+// the remaining logged-in account still has offline identity metadata. Token
+// deletion is handled separately since tokens may be shared (SharePoint).
 func purgeSingleDrive(cfgPath string, canonicalID driveid.CanonicalID, logger *slog.Logger) error {
 	// Remove state DB and drive metadata (best-effort, errors logged).
 	if _, err := removeDriveDataFiles(canonicalID, logger); err != nil {
 		logger.Warn("errors removing drive data files", "drive", canonicalID.String(), "error", err)
-	}
-
-	// Remove account profile file (only for personal/business — shared/SP
-	// don't have their own profile files).
-	profilePath := config.AccountFilePath(canonicalID)
-	if profilePath != "" {
-		removed, err := removeManagedPath(profilePath)
-		if err != nil {
-			logger.Warn("failed to remove account profile", "path", profilePath, "error", err)
-		} else if removed {
-			logger.Info("removed account profile", "path", profilePath)
-		}
 	}
 
 	if err := config.DeleteDriveSection(cfgPath, canonicalID); err != nil {

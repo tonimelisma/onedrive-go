@@ -613,7 +613,8 @@ sync_dir = "~/OneDrive"
 
 // --- purgeSingleDrive ---
 
-func TestPurgeSingleDrive_DeletesStateDB(t *testing.T) {
+// Validates: R-3.3.8
+func TestPurgeSingleDrive_DeletesDriveStateButPreservesAccountProfile(t *testing.T) {
 	// Isolate HOME so DriveStatePath uses a temp directory.
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
@@ -625,6 +626,9 @@ func TestPurgeSingleDrive_DeletesStateDB(t *testing.T) {
 	statePath := config.DriveStatePath(cid)
 	require.NotEmpty(t, statePath)
 	require.NoError(t, os.WriteFile(statePath, []byte("fake-db"), 0o600))
+	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
+		DisplayName: "User Example",
+	}))
 
 	// Create a config file with this drive.
 	cfgDir := t.TempDir()
@@ -641,6 +645,11 @@ sync_dir = "~/OneDrive"
 	// State DB file should be gone.
 	_, statErr := os.Stat(statePath)
 	assert.True(t, os.IsNotExist(statErr), "state DB should be deleted")
+
+	profile, found, profileErr := config.LookupAccountProfile(cid)
+	require.NoError(t, profileErr)
+	require.True(t, found, "drive purge must preserve account profile state")
+	assert.Equal(t, "User Example", profile.DisplayName)
 
 	// Config section should be gone.
 	data, readErr := localpath.ReadFile(cfgPath)
