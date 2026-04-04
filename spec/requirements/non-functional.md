@@ -138,3 +138,4 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.10.7: The architecture shall include verified threat-model and degraded-mode design docs, and `system.md` shall link to them as required cross-cutting references. [verified]
 - R-6.10.8: The repository shall provide a non-default stress verification profile for runtime-critical packages, and CI shall expose it as a scheduled and manually triggered lane. [verified]
 - R-6.10.9: The degraded-mode matrix shall map each stable degraded-mode ID to exact named tests, and repo verification shall enforce the required evidence-table structure in the design docs. [verified]
+- R-6.10.10: Watch-mode lifecycle-critical timing shall be owned by engine-injectable timer and sleep boundaries, and shutdown/wakeup races shall be covered by deterministic tests instead of wall-clock polling. [verified]

@@ -392,7 +392,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 	var retried *synctypes.TrackedAction
 	require.Eventually(t, func() bool {
 		select {
-		case retried = <-rt.readyCh:
+		case retried = <-rt.dispatchCh:
 			return retried != nil && retried.Action.Path == blockedPath
 		default:
 			return false
@@ -496,8 +496,8 @@ func TestPhase0_ScopeBlockFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	}, 2, []int64{1})
 	require.Nil(t, child)
 
-	rt.readyCh <- parent
-	readReady(t, rt.readyCh)
+	rt.dispatchCh <- parent
+	readReady(t, rt.dispatchCh)
 
 	results <- synctypes.WorkerResult{
 		ActionID:   1,
@@ -512,7 +512,7 @@ func TestPhase0_ScopeBlockFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	}
 
 	select {
-	case ta := <-rt.readyCh:
+	case ta := <-rt.dispatchCh:
 		require.Failf(t, "dependent dispatched early", "unexpected path %s", ta.Action.Path)
 	case <-time.After(150 * time.Millisecond):
 	}

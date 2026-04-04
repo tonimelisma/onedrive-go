@@ -79,6 +79,8 @@ type Engine struct {
 
 	afterFunc func(time.Duration, func()) syncTimer
 	newTicker func(time.Duration) syncTicker
+	sleepFn   func(context.Context, time.Duration) error
+	jitterFn  func(time.Duration) time.Duration
 	nextRunID atomic.Int64
 }
 
@@ -150,6 +152,8 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 		nowFn:              time.Now,
 		afterFunc:          realAfterFunc,
 		newTicker:          realNewTicker,
+		sleepFn:            realSleep,
+		jitterFn:           realJitter,
 	}
 
 	e.permHandler = &PermissionHandler{

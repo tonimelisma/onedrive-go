@@ -16,9 +16,9 @@ type engineFlow struct {
 	engine *Engine
 	watch  *watchRuntime
 
-	depGraph  *syncdispatch.DepGraph
-	readyCh   chan *synctypes.TrackedAction
-	shortcuts []synctypes.Shortcut
+	depGraph   *syncdispatch.DepGraph
+	dispatchCh chan *synctypes.TrackedAction
+	shortcuts  []synctypes.Shortcut
 
 	succeeded  int
 	failed     int
@@ -58,6 +58,8 @@ func newOneShotRunner(engine *Engine) *oneShotRunner {
 }
 
 type watchRuntimeState struct {
+	phase watchRuntimePhase
+
 	// activeScopesMu guards activeScopes. The watch loop remains the logical
 	// owner, but tests and repair paths can observe or adjust the working set
 	// while timers are being re-armed.
@@ -139,9 +141,19 @@ type watchRuntime struct {
 	watchReconcileState
 }
 
+type watchRuntimePhase string
+
+const (
+	watchRuntimePhaseRunning  watchRuntimePhase = "running"
+	watchRuntimePhaseDraining watchRuntimePhase = "draining"
+)
+
 func newWatchRuntime(engine *Engine) *watchRuntime {
 	rt := &watchRuntime{
 		engineFlow: newEngineFlow(engine),
+		watchRuntimeState: watchRuntimeState{
+			phase: watchRuntimePhaseRunning,
+		},
 		watchTimerState: watchTimerState{
 			trialCh:      make(chan struct{}, 1),
 			retryTimerCh: make(chan struct{}, 1),

@@ -94,38 +94,38 @@ func newWorkerTestSetup(t *testing.T) (
 }
 
 // testDepGraphHelper wraps a syncdispatch.DepGraph for worker tests, providing
-// the readyCh and doneCh channels that WorkerPool expects. Add sends ready
-// actions to readyCh; drainAndComplete calls dg.Complete and sends newly-ready
-// dependents to readyCh.
+// the dispatchCh and doneCh channels that WorkerPool expects. Add sends ready
+// actions to dispatchCh; drainAndComplete calls dg.Complete and sends newly-ready
+// dependents to dispatchCh.
 type testDepGraphHelper struct {
-	dg      *syncdispatch.DepGraph
-	readyCh chan *synctypes.TrackedAction
+	dg         *syncdispatch.DepGraph
+	dispatchCh chan *synctypes.TrackedAction
 }
 
 func newTestDepGraphHelper(t *testing.T) *testDepGraphHelper {
 	t.Helper()
 	return &testDepGraphHelper{
-		dg:      syncdispatch.NewDepGraph(synctest.TestLogger(t)),
-		readyCh: make(chan *synctypes.TrackedAction, 64),
+		dg:         syncdispatch.NewDepGraph(synctest.TestLogger(t)),
+		dispatchCh: make(chan *synctypes.TrackedAction, 64),
 	}
 }
 
-// Add wraps DepGraph.Add and sends ready actions to readyCh.
+// Add wraps DepGraph.Add and sends ready actions to dispatchCh.
 func (h *testDepGraphHelper) Add(action *synctypes.Action, id int64, deps []int64) {
 	ta := h.dg.Add(action, id, deps)
 	if ta != nil {
-		h.readyCh <- ta
+		h.dispatchCh <- ta
 	}
 }
 
-// Ready returns the readyCh for WorkerPool.
-func (h *testDepGraphHelper) Ready() <-chan *synctypes.TrackedAction { return h.readyCh }
+// Ready returns the dispatchCh for WorkerPool.
+func (h *testDepGraphHelper) Ready() <-chan *synctypes.TrackedAction { return h.dispatchCh }
 
 // Done returns the DepGraph's Done channel.
 func (h *testDepGraphHelper) Done() <-chan struct{} { return h.dg.Done() }
 
 // drainAndComplete drains the worker result channel, calling dg.Complete
-// for each result and sending newly-ready dependents to readyCh. Returns
+// for each result and sending newly-ready dependents to dispatchCh. Returns
 // the collected results. This simulates the engine's drain goroutine.
 func (h *testDepGraphHelper) drainAndComplete(results <-chan synctypes.WorkerResult) []synctypes.WorkerResult {
 	var collected []synctypes.WorkerResult
@@ -133,7 +133,7 @@ func (h *testDepGraphHelper) drainAndComplete(results <-chan synctypes.WorkerRes
 		collected = append(collected, r)
 		ready, _ := h.dg.Complete(r.ActionID)
 		for _, ta := range ready {
-			h.readyCh <- ta
+			h.dispatchCh <- ta
 		}
 	}
 	return collected
@@ -169,6 +169,27 @@ func countResults(results []synctypes.WorkerResult) (succeeded, failed int) {
 		}
 	}
 	return succeeded, failed
+}
+
+func TestWorkerPool_ClosedDispatchChannelClosesResults(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, _ := newWorkerTestSetup(t)
+	dispatchCh := make(chan *synctypes.TrackedAction)
+	neverDone := make(chan struct{})
+	pool := NewWorkerPool(cfg, dispatchCh, neverDone, mgr, synctest.TestLogger(t), 1)
+
+	pool.Start(t.Context(), 1)
+	close(dispatchCh)
+
+	select {
+	case _, ok := <-pool.Results():
+		assert.False(t, ok, "results channel should close after workers observe a closed dispatch channel")
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "results channel did not close after dispatch channel close")
+	}
+
+	pool.Stop()
 }
 
 // ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/engine*.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/engine_shortcuts.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_decisions.go, sync_helpers.go
 
-Implements: R-2.1 [verified], R-2.3.11 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-2.10.45 [verified], R-2.10.46 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified], R-2.14.5 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [planned], R-6.6.10 [verified], R-6.6.12 [verified], R-6.6.13 [verified], R-6.7.27 [verified], R-6.8.15 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
+Implements: R-2.1 [verified], R-2.3.11 [verified], R-2.8.3 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-2.10.45 [verified], R-2.10.46 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified], R-2.14.5 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [planned], R-6.6.10 [verified], R-6.6.12 [verified], R-6.6.13 [verified], R-6.7.27 [verified], R-6.8.15 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.10 [verified]
 
 ## Ownership Contract
 
@@ -86,8 +86,14 @@ The engine relies on a few non-negotiable behavioral invariants:
    constraint is already required by the current behavior.
 7. **Reconciliation handoff**: `runFullReconciliationAsync` may observe and
    commit from its own goroutine, but it must hand work back through the
-   engine-owned watch buffer. It must never dispatch directly to `readyCh`
+   engine-owned watch buffer. It must never dispatch directly to `dispatchCh`
    from the reconciliation goroutine.
+8. **Shutdown admission seal**: when watch-mode cancellation is observed, the
+   runtime must transition from `running` to `draining` exactly once, stop
+   retry/trial wakeups, stop recheck/reconcile admission, complete any
+   not-yet-dispatched outbox actions as shutdown, and never admit new work
+   afterward. Already-dispatched actions may still finish if workers produce
+   results before they exit.
 
 ### Runtime Ownership
 
@@ -109,11 +115,11 @@ fault tests without reintroducing package-level test hooks.
 
 Run-scoped state lives in two dedicated owners:
 
-- `oneShotRunner`: one-shot mutable state (`engineFlow`, depGraph, readyCh,
+- `oneShotRunner`: one-shot mutable state (`engineFlow`, depGraph, dispatchCh,
   shortcut snapshot, result counters)
 - `watchRuntime`: watch-mode mutable state (`engineFlow`, active scopes,
   scope detection state, buffer, delete counter, observer references,
-  retry/trial timers, reconciliation state, next action ID)
+  retry/trial timers, reconciliation state, next action ID, runtime phase)
 
 `watchRuntime` keeps its `activeScopes` slice and retry/trial timer pointers
 behind unexported runtime accessors. The watch loop still owns the semantics,
@@ -121,15 +127,15 @@ but those accessors snapshot or replace the tiny working sets under
 per-runtime locks so tests, startup repair, and timer re-arming cannot race on
 raw slice or timer-pointer fields.
 
-Time boundaries are also engine-owned. `Engine.afterFunc` and
-`Engine.newTicker` are the only production timer/ticker constructors used by
-the watch runtime, bootstrap quiescence loop, retry/trial scheduling, and
-periodic full-scan fallback. Production uses wall-clock implementations;
-same-package tests inject deterministic timers without rewriting the runtime
-logic.
+Time boundaries are also engine-owned. `Engine.afterFunc`,
+`Engine.newTicker`, `Engine.sleepFn`, and `Engine.jitterFn` are the only
+production timer, ticker, sleep, and jitter constructors used by the watch
+runtime, bootstrap quiescence loop, retry/trial scheduling, and periodic
+full-scan fallback. Production uses wall-clock implementations; same-package
+tests inject deterministic time without rewriting the runtime logic.
 
 The shared `engineFlow` object carries the mutable execution state common to
-both coordinators: dependency graph, ready channel, shortcut snapshot,
+both coordinators: dependency graph, dispatch channel, shortcut snapshot,
 aggregated success/error counters, shared observation helpers, skipped-item
 failure maintenance, and coordinator-level result routing. `watchRuntime`
 embeds `engineFlow` and adds watch-only state; `oneShotRunner` embeds
@@ -316,12 +322,25 @@ The engine owns all completion decisions — workers are pure executors. In
 watch mode the single watch loop on `watchRuntime` uses an actor-with-outbox
 pattern: results, buffer flushes, trial ticks, retry ticks, and dependent
 admission are processed single-threaded within one select loop, and ready
-actions are collected into an outbox slice before being sent to `readyCh`.
+actions are collected into an outbox slice before being sent to `dispatchCh`.
 This prevents deadlock that would occur if result handling tried to
-synchronously send to a full `readyCh` while workers tried to synchronously
+synchronously send to a full `dispatchCh` while workers tried to synchronously
 send to a full results channel. One-shot mode keeps a separate coordinator,
 `oneShotRunner.runResultsLoop`, with the same shared result-routing semantics
 but without watch-only mutable state.
+
+The watch loop has two explicit phases:
+
+- `running`: normal admission is active. Buffer batches, retry/trial wakes,
+  recheck ticks, reconcile ticks, worker results, and observer exits all feed
+  the shared single-owner loop.
+- `draining`: entered once after `ctx.Done()`. New admission is sealed by
+  stopping retry/trial timers, disabling batch/recheck/reconcile sources, and
+  completing the local outbox as shutdown. The loop keeps consuming worker
+  results, observer exits, and reconcile-result bookkeeping until the runtime
+  settles. Once draining starts, terminal observer exit is no longer fatal and
+  reconcile results are dropped instead of feeding new work back into the
+  observation buffer.
 
 `recordFailure()` writes explicit durable semantics into `sync_failures`:
 
@@ -546,6 +565,22 @@ manual reconciliation decision that needs explicit durable-state repair.
 - PID file with flock for single-instance enforcement
 - Two-signal shutdown (drain, then force)
 - Periodic full reconciliation (default 24h, async — see below)
+
+### Graceful Watch Shutdown
+
+The first shutdown signal cancels the shared watch context. The engine then
+seals new work admission and enters `draining`:
+
+- retry and trial timers are stopped
+- debounced observation batches, skipped-item intake, recheck ticks, and
+  reconcile-launch ticks are disabled
+- not-yet-dispatched outbox actions are completed as shutdown
+- already-dispatched worker results are still accepted if they arrive before
+  worker exit
+- reconcile results that arrive after shutdown starts clear only their own
+  bookkeeping and must not enqueue new work
+
+The second shutdown signal is still the force-exit path owned by the CLI.
 
 ### Async Full Reconciliation
 

@@ -131,6 +131,8 @@ func (rt *watchRuntime) runTrialDispatch(
 	mode synctypes.SyncMode,
 	safety *synctypes.SafetyConfig,
 ) []*synctypes.TrackedAction {
+	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventTrialSweepStarted})
+
 	now := rt.engine.nowFunc()
 	var dispatch []*synctypes.TrackedAction
 	seen := make(map[synctypes.ScopeKey]bool)
@@ -142,6 +144,10 @@ func (rt *watchRuntime) runTrialDispatch(
 	}
 
 	rt.armTrialTimer()
+	rt.engine.emitDebugEvent(engineDebugEvent{
+		Type:  engineDebugEventTrialSweepCompleted,
+		Count: len(dispatch),
+	})
 	return dispatch
 }
 
@@ -220,6 +226,8 @@ func (rt *watchRuntime) runRetrierSweep(
 	mode synctypes.SyncMode,
 	safety *synctypes.SafetyConfig,
 ) []*synctypes.TrackedAction {
+	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetrySweepStarted})
+
 	now := rt.engine.nowFunc()
 
 	rows, err := rt.engine.baseline.ListSyncFailuresForRetry(ctx, now)
@@ -227,9 +235,11 @@ func (rt *watchRuntime) runRetrierSweep(
 		rt.engine.logger.Warn("retrier sweep: failed to list retriable items",
 			slog.String("error", err.Error()),
 		)
+		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetrySweepCompleted})
 		return nil
 	}
 	if len(rows) == 0 {
+		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetrySweepCompleted})
 		return nil
 	}
 
@@ -275,6 +285,7 @@ func (rt *watchRuntime) runRetrierSweep(
 
 	if dispatchedRows == 0 {
 		rt.armRetryTimer(ctx)
+		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetrySweepCompleted})
 		return nil
 	}
 
@@ -283,6 +294,10 @@ func (rt *watchRuntime) runRetrierSweep(
 		slog.Int("dispatched", dispatchedRows),
 	)
 	rt.armRetryTimer(ctx)
+	rt.engine.emitDebugEvent(engineDebugEvent{
+		Type:  engineDebugEventRetrySweepCompleted,
+		Count: len(dispatch),
+	})
 	return dispatch
 }
 

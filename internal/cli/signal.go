@@ -19,9 +19,10 @@ func sighupChannel() chan os.Signal {
 }
 
 // shutdownContext returns a context that cancels on the first SIGINT/SIGTERM
-// and force-exits on the second. This gives the engine time to drain in-flight
-// actions on first signal, while allowing the user to force-quit if something
-// hangs.
+// and force-exits on the second. The first signal is cooperative: the watch
+// engine seals new admission, lets already-admitted work follow the normal
+// shutdown path, and exits cleanly when the runtime settles. The second signal
+// remains the escape hatch for a stuck process.
 func shutdownContext(parent context.Context, logger *slog.Logger) context.Context {
 	ctx, cancel := context.WithCancel(parent)
 

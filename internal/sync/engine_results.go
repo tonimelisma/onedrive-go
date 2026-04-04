@@ -18,7 +18,7 @@ func (rt *watchRuntime) armRetryTimer(ctx context.Context) {
 		return
 	}
 
-	delay := time.Until(earliest)
+	delay := earliest.Sub(rt.engine.nowFunc())
 	if delay <= 0 {
 		rt.kickRetrySweepNow()
 		return
@@ -156,7 +156,7 @@ func (rt *watchRuntime) armTrialTimer() {
 		return
 	}
 
-	delay := time.Until(earliest)
+	delay := earliest.Sub(rt.engine.nowFunc())
 	if delay <= 0 {
 		delay = 1 * time.Millisecond // fire immediately
 	}

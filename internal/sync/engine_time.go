@@ -1,6 +1,11 @@
 package sync
 
-import "time"
+import (
+	"context"
+	"fmt"
+	"math/rand/v2"
+	"time"
+)
 
 // syncTimer is the engine-owned timer boundary. Production uses wall-clock
 // timers; tests can inject deterministic implementations without changing the
@@ -58,6 +63,30 @@ func realNewTicker(interval time.Duration) syncTicker {
 	}
 
 	return &realSyncTicker{ticker: time.NewTicker(interval)}
+}
+
+func realSleep(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("sleep interrupted: %w", ctx.Err())
+	}
+}
+
+func realJitter(maxDelay time.Duration) time.Duration {
+	if maxDelay <= 0 {
+		return 0
+	}
+
+	return rand.N(maxDelay) //nolint:gosec // non-cryptographic jitter for I/O scheduling
 }
 
 func tickerChan(ticker syncTicker) <-chan time.Time {

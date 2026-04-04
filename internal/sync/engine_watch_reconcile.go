@@ -43,6 +43,7 @@ func (rt *watchRuntime) handleRecheckTick(ctx context.Context) {
 	}
 
 	rt.logWatchSummary(ctx)
+	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRecheckTickHandled})
 }
 
 // handleExternalChanges reacts to external DB modifications detected via
@@ -375,6 +376,7 @@ func (rt *watchRuntime) runFullReconciliationAsync(ctx context.Context, bl *sync
 		return
 	}
 	rt.reconcileActive = true
+	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventReconcileStarted})
 
 	go func() {
 		result := reconcileResult{}
@@ -464,4 +466,11 @@ func (rt *watchRuntime) applyReconcileResult(result reconcileResult) {
 	for i := range result.events {
 		rt.buf.Add(&result.events[i])
 	}
+
+	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventReconcileApplied})
+}
+
+func (rt *watchRuntime) dropReconcileResultOnShutdown() {
+	rt.reconcileActive = false
+	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventReconcileDroppedOnShutdown})
 }

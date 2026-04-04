@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go
 
-Implements: R-1 [implemented], R-3.1 [verified], R-4.7 [verified], R-4.8.4 [verified], R-1.9 [verified], R-1.2.4 [verified], R-1.2.5 [verified], R-1.3.4 [verified], R-1.3.5 [verified], R-1.4.3 [verified], R-1.5.1 [verified], R-1.6.1 [verified], R-1.6.2 [verified], R-1.7.1 [verified], R-1.8.1 [verified], R-1.9.4 [verified], R-3.1.6 [verified], R-3.3.10 [verified], R-3.3.11 [verified], R-3.3.12 [verified], R-3.6.6 [verified], R-3.6.7 [verified], R-2.3.10 [verified], R-2.3.11 [verified], R-2.3.12 [verified], R-2.7.1 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.10.4 [verified], R-2.10.47 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
+Implements: R-1 [implemented], R-3.1 [verified], R-4.7 [verified], R-4.8.4 [verified], R-1.9 [verified], R-1.2.4 [verified], R-1.2.5 [verified], R-1.3.4 [verified], R-1.3.5 [verified], R-1.4.3 [verified], R-1.5.1 [verified], R-1.6.1 [verified], R-1.6.2 [verified], R-1.7.1 [verified], R-1.8.1 [verified], R-1.9.4 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.3.10 [verified], R-2.3.11 [verified], R-2.3.12 [verified], R-2.7.1 [verified], R-2.8.3 [verified], R-2.10.4 [verified], R-2.10.47 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-3.1.6 [verified], R-3.3.10 [verified], R-3.3.11 [verified], R-3.3.12 [verified], R-3.6.6 [verified], R-3.6.7 [verified], R-6.6.11 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
 
 ## Overview
 
@@ -184,7 +184,9 @@ boundary translates that into exit code `1` without printing the generic
 
 Two-signal shutdown for watch mode:
 
-- first SIGINT/SIGTERM = cancel the shared shutdown context and let the engine drain
+- first SIGINT/SIGTERM = cancel the shared shutdown context, let the engine
+  seal new admission, and allow already-admitted work to follow the normal
+  shutdown path
 - second SIGINT/SIGTERM = force process exit with status 1
 
 `sighupChannel()` is separate because config reload is a control-plane signal,

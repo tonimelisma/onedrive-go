@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	stdsync "sync"
 	"time"
 
@@ -64,7 +63,7 @@ const quiescenceLogInterval = 30 * time.Second
 // the first recheck tick doesn't fire spuriously.
 func (rt *watchRuntime) initDeleteProtection(ctx context.Context, force bool) {
 	if !force {
-		rt.deleteCounter = syncdispatch.NewDeleteCounter(rt.engine.bigDeleteThreshold, deleteCounterWindow, time.Now)
+		rt.deleteCounter = syncdispatch.NewDeleteCounter(rt.engine.bigDeleteThreshold, deleteCounterWindow, rt.engine.nowFunc)
 	}
 
 	if err := rt.engine.baseline.ClearResolvedActionableFailures(ctx, synctypes.IssueBigDeleteHeld, nil); err != nil {
@@ -190,7 +189,7 @@ type watchPipeline struct {
 	runtime          *watchRuntime
 	bl               *synctypes.Baseline
 	safety           *synctypes.SafetyConfig
-	ready            <-chan []synctypes.PathChanges
+	batchReady       <-chan []synctypes.PathChanges
 	results          <-chan synctypes.WorkerResult
 	errs             <-chan error
 	skippedCh        <-chan []synctypes.SkippedItem
@@ -247,22 +246,22 @@ func (rt *watchRuntime) initWatchInfra(
 	rt.scopeState = syncdispatch.NewScopeState(rt.engine.nowFunc, rt.engine.logger)
 	rt.nextActionID = 0
 
-	// readyCh feeds admitted actions to workers. Buffer is generous to avoid
+	// dispatchCh feeds admitted actions to workers. Buffer is generous to avoid
 	// backpressure when a batch produces many immediately-ready actions.
-	rt.readyCh = make(chan *synctypes.TrackedAction, watchResultBuf)
+	rt.dispatchCh = make(chan *synctypes.TrackedAction, watchResultBuf)
 
 	// Never-closing done channel — DepGraph.Done() would fire prematurely
 	// between batches when completed == total. Workers exit only via ctx.Done().
 	neverDone := make(chan struct{})
 
-	pool := syncexec.NewWorkerPool(rt.engine.execCfg, rt.readyCh, neverDone, rt.engine.baseline, rt.engine.logger, watchResultBuf)
+	pool := syncexec.NewWorkerPool(rt.engine.execCfg, rt.dispatchCh, neverDone, rt.engine.baseline, rt.engine.logger, watchResultBuf)
 	pool.Start(ctx, rt.engine.transferWorkers)
 
 	// Buffer promoted to watchRuntime so observed and reconciliation work share
 	// the same debounce/planning path the watch loop already owns.
 	buf := syncobserve.NewBuffer(rt.engine.logger)
 	rt.buf = buf
-	ready := buf.FlushDebounced(ctx, rt.engine.resolveDebounce(opts))
+	batchReady := buf.FlushDebounced(ctx, rt.engine.resolveDebounce(opts))
 
 	// Tickers.
 	reconcileTicker := rt.engine.initReconcileTicker(opts)
@@ -275,7 +274,7 @@ func (rt *watchRuntime) initWatchInfra(
 	pipe := &watchPipeline{
 		runtime:          rt,
 		safety:           rt.engine.resolveSafetyConfig(opts.Force, true),
-		ready:            ready,
+		batchReady:       batchReady,
 		results:          pool.Results(),
 		reconcileC:       tickerChan(reconcileTicker),
 		reconcileResults: rt.reconcileResults,
@@ -386,22 +385,7 @@ func (rt *watchRuntime) startObservers(
 
 	var obsWg stdsync.WaitGroup
 
-	// Bridge goroutine: reads from shared events channel, adds to buffer.
-	// Exits when events is closed (all observers done) or ctx canceled.
-	go func() {
-		for {
-			select {
-			case ev, ok := <-events:
-				if !ok {
-					return
-				}
-
-				buf.Add(&ev)
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
+	rt.startWatchEventBridge(ctx, buf, events)
 
 	count := 0
 
@@ -465,11 +449,13 @@ func (rt *watchRuntime) startObservers(
 
 			watchErr := localObs.Watch(ctx, rt.engine.syncTree, events)
 			if errors.Is(watchErr, synctypes.ErrWatchLimitExhausted) {
+				rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverFallbackStarted, Note: engineDebugObserverLocal})
 				rt.engine.logger.Warn("inotify watch limit exhausted, falling back to periodic full scan",
 					slog.Duration("poll_interval", rt.engine.resolvePollInterval(opts)),
 				)
 
 				rt.runPeriodicFullScan(ctx, localObs, rt.engine.syncTree, events, rt.engine.resolvePollInterval(opts))
+				rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverFallbackStopped, Note: engineDebugObserverLocal})
 				errs <- nil // clean exit after context cancel
 
 				return
@@ -479,14 +465,40 @@ func (rt *watchRuntime) startObservers(
 		}()
 	}
 
-	// Close events channel when all observers exit so the bridge goroutine
-	// drains remaining events and exits cleanly.
+	rt.closeWatchEventsWhenObserversExit(&obsWg, events)
+
+	return errs, count, skippedCh
+}
+
+func (rt *watchRuntime) startWatchEventBridge(
+	ctx context.Context,
+	buf *syncobserve.Buffer,
+	events <-chan synctypes.ChangeEvent,
+) {
+	go func() {
+		for {
+			select {
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+
+				buf.Add(&ev)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
+func (rt *watchRuntime) closeWatchEventsWhenObserversExit(
+	obsWg *stdsync.WaitGroup,
+	events chan synctypes.ChangeEvent,
+) {
 	go func() {
 		obsWg.Wait()
 		close(events)
 	}()
-
-	return errs, count, skippedCh
 }
 
 // runPeriodicFullScan runs periodic full filesystem scans as a fallback when
@@ -509,7 +521,9 @@ func (rt *watchRuntime) runPeriodicFullScan(
 			// Jitter: sleep 0-10% of interval to prevent thundering-herd
 			// when multiple drives fire periodic scans simultaneously.
 			if jitter := interval / periodicScanJitterDivisor; jitter > 0 {
-				time.Sleep(rand.N(jitter)) //nolint:gosec // non-cryptographic jitter for I/O scheduling
+				if err := rt.engine.sleepFn(ctx, rt.engine.jitterFn(jitter)); err != nil {
+					return
+				}
 			}
 
 			result, err := obs.FullScan(ctx, tree)
