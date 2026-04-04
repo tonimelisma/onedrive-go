@@ -97,7 +97,9 @@ remain independent from sync-store health.
 `login` and plain `logout` are explicit auth-boundary transitions. Successful
 `login` clears stale `auth:account` scope blocks for the account. Plain
 `logout` clears those scope blocks from preserved state databases before
-removing token/config state. `logout --purge` removes the state databases
+removing token/config state, and it preserves account profiles plus drive
+metadata so offline `whoami` / `drive list` surfaces can still explain what
+needs re-authentication. `logout --purge` removes the state databases
 entirely.
 
 `drive remove` and `drive remove --purge` are drive-boundary operations, not
@@ -117,6 +119,11 @@ After a plain logout, the account is no longer in config but its
 `account_*.json` profile file remains on disk. `whoami` still discovers these
 orphaned profiles via `config.DiscoverAccountProfiles()`, but it renders them
 through the shared auth-required model instead of a dedicated logged-out bucket.
+When `whoami` is using the authenticated Graph path, drive selection still
+obeys the normal `MatchDrive` contract: unknown or ambiguous selections are
+surfaced as user-facing errors rather than silently degrading into offline
+auth-required output. The only soft fallback is "no configured drives", which
+lets orphaned-profile discovery work after logout.
 
 With `--purge`, `resolveLogoutAccount()` falls back to
 `discoverOrphanedEmails()` when config has zero accounts. It auto-selects a
