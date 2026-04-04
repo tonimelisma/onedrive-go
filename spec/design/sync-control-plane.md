@@ -2,7 +2,7 @@
 
 GOVERNS: internal/multisync/*.go, sync.go
 
-Implements: R-2.8.1 [verified], R-3.4.2 [verified], R-6.3.4 [verified], R-6.10.6 [verified]
+Implements: R-2.8.1 [verified], R-2.8.3 [verified], R-3.4.2 [verified], R-6.3.4 [verified], R-6.10.6 [verified]
 
 ## Overview
 
@@ -107,7 +107,8 @@ constructs an `Orchestrator`, and chooses between `RunOnce` and `RunWatch`.
 - `--watch` selects daemon mode
 - `--download-only` and `--upload-only` select sync mode
 - `--dry-run` and `--full` apply only to one-shot mode
-- first SIGINT/SIGTERM requests graceful drain
+- first SIGINT/SIGTERM cancels the shared watch contexts and lets each drive's
+  engine seal new admission and follow its normal shutdown path
 - second signal forces exit
 
 The CLI command does not reach into per-drive engine internals. It only speaks

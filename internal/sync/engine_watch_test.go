@@ -25,7 +25,7 @@ import (
 // RunWatch tests
 // ---------------------------------------------------------------------------
 
-// Validates: R-2.8
+// Validates: R-2.8.3, R-6.10.10
 // TestRunWatch_ContextCancel verifies that canceling the context causes
 // RunWatch to return nil (clean shutdown), including during bootstrap.
 func TestRunWatch_ContextCancel(t *testing.T) {
@@ -42,6 +42,7 @@ func TestRunWatch_ContextCancel(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
+	recorder := attachDebugEventRecorder(eng)
 
 	ctx, cancel := context.WithCancel(t.Context())
 
@@ -68,9 +69,13 @@ func TestRunWatch_ContextCancel(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		require.Fail(t, "RunWatch did not return within timeout after context cancel")
 	}
+
+	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventObserverStarted
+	}), "observers must not start after bootstrap cancellation")
 }
 
-// Validates: R-2.8, R-6.8.9
+// Validates: R-2.8.3, R-6.8.9, R-6.10.10
 func TestRunWatch_CancellationWinsOverFinalObserverExit(t *testing.T) {
 	t.Parallel()
 
@@ -672,7 +677,6 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 
 // TestRunWatch_Deduplication verifies that processBatch cancels in-flight
 // actions for paths that appear in a new batch (B-122).
-// Validates: R-2.8
 func TestRunWatch_Deduplication(t *testing.T) {
 	t.Parallel()
 
@@ -891,6 +895,227 @@ func TestRunWatch_WatchLimitExhausted_FallsBackToPolling(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		require.Fail(t, "RunWatch did not return within timeout")
 	}
+}
+
+// Validates: R-2.8.3, R-6.10.10
+func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	setupWatchEngine(t, eng)
+	recorder := attachDebugEventRecorder(eng)
+
+	clock := newManualClock(time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC))
+	installManualClock(eng.Engine, clock)
+
+	ctx := t.Context()
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
+		Key:           synctypes.SKService(),
+		IssueType:     synctypes.IssueServiceOutage,
+		BlockedAt:     eng.nowFunc(),
+		TrialInterval: 5 * time.Second,
+		NextTrialAt:   eng.nowFunc().Add(5 * time.Second),
+	})
+	testWatchRuntime(t, eng).armTrialTimer()
+
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:       "retry.txt",
+		DriveID:    eng.driveID,
+		Direction:  synctypes.DirectionDownload,
+		ActionType: synctypes.ActionDownload,
+		Role:       synctypes.FailureRoleItem,
+		Category:   synctypes.CategoryTransient,
+		ErrMsg:     "retry later",
+	}, func(_ int) time.Duration {
+		return 5 * time.Second
+	}))
+	testWatchRuntime(t, eng).armRetryTimer(ctx)
+
+	results := make(chan synctypes.WorkerResult)
+	watchCtx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- runWatchLoopForTest(eng, watchCtx, &watchPipeline{
+			bl:      bl,
+			safety:  synctypes.DefaultSafetyConfig(),
+			results: results,
+			mode:    synctypes.SyncBidirectional,
+		})
+	}()
+
+	cancel()
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventShutdownStarted
+	}, "shutdown started")
+
+	clock.Advance(10 * time.Second)
+	close(results)
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "watch loop did not exit after timer shutdown test")
+	}
+
+	events := recorder.eventsSnapshot()
+	shutdownIndex := -1
+	for i := range events {
+		if events[i].Type == engineDebugEventShutdownStarted {
+			shutdownIndex = i
+			break
+		}
+	}
+	require.NotEqual(t, -1, shutdownIndex, "shutdown_started event missing")
+	for _, forbidden := range []engineDebugEventType{
+		engineDebugEventRetryTimerFired,
+		engineDebugEventRetrySweepStarted,
+		engineDebugEventTrialTimerFired,
+		engineDebugEventTrialSweepStarted,
+	} {
+		for i := shutdownIndex + 1; i < len(events); i++ {
+			assert.NotEqualf(t, forbidden, events[i].Type, "event %s must not occur after shutdown starts", forbidden)
+		}
+	}
+}
+
+// Validates: R-2.8.3, R-6.10.10
+func TestRunWatch_ShutdownDropsReconcileResult(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	setupWatchEngine(t, eng)
+	recorder := attachDebugEventRecorder(eng)
+
+	bl, err := eng.baseline.Load(t.Context())
+	require.NoError(t, err)
+
+	rt := testWatchRuntime(t, eng)
+	rt.buf = syncobserve.NewBuffer(eng.logger)
+	rt.reconcileActive = true
+
+	results := make(chan synctypes.WorkerResult)
+	reconcileResults := make(chan reconcileResult, 1)
+	watchCtx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- runWatchLoopForTest(eng, watchCtx, &watchPipeline{
+			bl:               bl,
+			safety:           synctypes.DefaultSafetyConfig(),
+			results:          results,
+			reconcileResults: reconcileResults,
+			mode:             synctypes.SyncBidirectional,
+		})
+	}()
+
+	cancel()
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventShutdownStarted
+	}, "shutdown started")
+
+	reconcileResults <- reconcileResult{
+		events: []synctypes.ChangeEvent{{
+			Source: synctypes.SourceRemote,
+			Type:   synctypes.ChangeCreate,
+			Path:   "late.txt",
+			ItemID: "late-item",
+		}},
+	}
+	close(results)
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "watch loop did not exit after dropping reconcile result")
+	}
+
+	assert.Empty(t, rt.buf.FlushImmediate(), "shutdown must not enqueue reconcile events")
+	assert.True(t, recorder.findEvent(func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventReconcileDroppedOnShutdown
+	}), "expected reconcile_dropped_on_shutdown event")
+	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventReconcileApplied
+	}), "reconcile result should not be applied after shutdown starts")
+}
+
+// Validates: R-2.8.3, R-6.10.10
+func TestRunWatch_FallbackSleepHonorsCancellation(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "subdir"), 0o750))
+	recorder := attachDebugEventRecorder(eng)
+
+	clock := newManualClock(time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC))
+	clock.SetJitter(5 * time.Second)
+	installManualClock(eng.Engine, clock)
+
+	sleepStarted := make(chan struct{})
+	var sleepStartedOnce atomic.Bool
+	origSleep := eng.sleepFn
+	eng.sleepFn = func(ctx context.Context, delay time.Duration) error {
+		if sleepStartedOnce.CompareAndSwap(false, true) {
+			close(sleepStarted)
+		}
+		return origSleep(ctx, delay)
+	}
+
+	watcher := newEnospcWatcher(1)
+	eng.localWatcherFactory = func() (syncobserve.FsWatcher, error) {
+		return watcher, nil
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- eng.RunWatch(ctx, synctypes.SyncUploadOnly, synctypes.WatchOpts{
+			PollInterval: 1 * time.Second,
+			Debounce:     5 * time.Millisecond,
+		})
+	}()
+
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventObserverFallbackStarted
+	}, "fallback started")
+
+	require.Eventually(t, func() bool {
+		clock.Advance(250 * time.Millisecond)
+
+		select {
+		case <-sleepStarted:
+			return true
+		default:
+			return false
+		}
+	}, 5*time.Second, 10*time.Millisecond, "fallback jitter sleep did not start")
+
+	cancel()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "RunWatch did not exit promptly after fallback cancellation")
+	}
+
+	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventObserverFallbackStopped
+	}, "fallback stopped")
 }
 
 func TestResolveConflict_KeepLocal_TransferFails(t *testing.T) {

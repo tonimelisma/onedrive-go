@@ -37,9 +37,9 @@ func TestFault_ContextCancel_WorkerPool(t *testing.T) {
 	writeExecTestFile(t, syncRoot, "file.txt", "content")
 
 	dg := syncdispatch.NewDepGraph(testLogger(t))
-	readyCh := make(chan *synctypes.TrackedAction, 4)
+	dispatchCh := make(chan *synctypes.TrackedAction, 4)
 	mgr := newTestManager(t)
-	pool := syncexec.NewWorkerPool(cfg, readyCh, dg.Done(), mgr, testLogger(t), 10)
+	pool := syncexec.NewWorkerPool(cfg, dispatchCh, dg.Done(), mgr, testLogger(t), 10)
 
 	ctx, cancel := context.WithCancel(t.Context())
 
@@ -53,7 +53,7 @@ func TestFault_ContextCancel_WorkerPool(t *testing.T) {
 	}
 	ta := dg.Add(action, 0, nil)
 	if ta != nil {
-		readyCh <- ta
+		dispatchCh <- ta
 	}
 
 	// Cancel immediately — should not panic or hang.

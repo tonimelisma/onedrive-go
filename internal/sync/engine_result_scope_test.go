@@ -164,7 +164,7 @@ func TestOneShotEngineLoop_ClosedResultsStillProcessBufferedSideEffects(t *testi
 
 	runner := newOneShotRunner(eng.Engine)
 	runner.depGraph = syncdispatch.NewDepGraph(eng.logger)
-	runner.readyCh = make(chan *synctypes.TrackedAction, 16)
+	runner.dispatchCh = make(chan *synctypes.TrackedAction, 16)
 	for _, id := range []int64{1, 2, 3} {
 		runner.depGraph.Add(&synctypes.Action{Path: fmt.Sprintf("action-%d", id), Type: synctypes.ActionUpload}, id, nil)
 	}
@@ -194,7 +194,7 @@ func TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady(t *testing
 
 	runner := newOneShotRunner(eng.Engine)
 	runner.depGraph = syncdispatch.NewDepGraph(eng.logger)
-	runner.readyCh = make(chan *synctypes.TrackedAction)
+	runner.dispatchCh = make(chan *synctypes.TrackedAction)
 
 	runner.depGraph.Add(&synctypes.Action{
 		Type: synctypes.ActionUpload,
@@ -582,7 +582,7 @@ func setupEngineDepGraph(t *testing.T, eng *testEngine, actionID int64) *engineF
 
 	flow := newEngineFlow(eng.Engine)
 	flow.depGraph = syncdispatch.NewDepGraph(eng.logger)
-	flow.readyCh = make(chan *synctypes.TrackedAction, 16)
+	flow.dispatchCh = make(chan *synctypes.TrackedAction, 16)
 	dummyAction := &synctypes.Action{Path: "dummy", Type: synctypes.ActionDownload}
 	flow.depGraph.Add(dummyAction, actionID, nil)
 	eng.flow = &flow
@@ -1703,7 +1703,7 @@ func TestRecordFailure_PopulatesScopeKey_507Shortcut(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // startDrainLoop creates a real engine with DepGraph, watch-mode scope state,
-// readyCh, buf, and retryTimerCh — the full one-shot engine-loop pipeline used
+// dispatchCh, buf, and retryTimerCh — the full one-shot engine-loop pipeline used
 // by these tests. Tests access the ready channel and buffer via the returned
 // engine.
 func startDrainLoop(t *testing.T) (chan synctypes.WorkerResult, <-chan struct{}, context.CancelFunc, *testEngine) {
@@ -1793,7 +1793,7 @@ func runResultDrainLoopWithOutboxForTest(
 	outbox []*synctypes.TrackedAction,
 ) ([]*synctypes.TrackedAction, bool) {
 	select {
-	case rt.readyCh <- outbox[0]:
+	case rt.dispatchCh <- outbox[0]:
 		return outbox[1:], false
 	case workerResult, ok := <-results:
 		if !ok {
@@ -1853,11 +1853,11 @@ func TestE2E_OneShotEngineLoop_ProcessesAndRoutes(t *testing.T) {
 
 	ctx := t.Context()
 
-	// Add parent action to syncdispatch.DepGraph, send to readyCh.
+	// Add parent action to syncdispatch.DepGraph, send to dispatchCh.
 	ta := testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{Type: synctypes.ActionUpload, Path: "a.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 0, nil)
 	require.NotNil(t, ta)
-	testWatchRuntime(t, eng).readyCh <- ta
-	readReady(t, testWatchRuntime(t, eng).readyCh)
+	testWatchRuntime(t, eng).dispatchCh <- ta
+	readReady(t, testWatchRuntime(t, eng).dispatchCh)
 
 	// Send 429 result — scope detection creates block + records failure.
 	results <- synctypes.WorkerResult{
@@ -1902,11 +1902,11 @@ func TestWatchLoop_SteadyStateContinuesAfterGraphDrains(t *testing.T) {
 
 	go func() {
 		done <- runWatchLoopForTest(eng, ctx, &watchPipeline{
-			bl:      bl,
-			safety:  synctypes.DefaultSafetyConfig(),
-			ready:   batches,
-			results: results,
-			mode:    synctypes.SyncBidirectional,
+			bl:         bl,
+			safety:     synctypes.DefaultSafetyConfig(),
+			batchReady: batches,
+			results:    results,
+			mode:       synctypes.SyncBidirectional,
 		})
 	}()
 
@@ -1961,6 +1961,7 @@ func TestWatchLoop_SteadyStateContinuesAfterGraphDrains(t *testing.T) {
 	require.Equal(t, "beta.txt", second.Action.Path, "steady-state watch loop should keep processing later batches")
 
 	cancel()
+	close(results)
 
 	select {
 	case err := <-done:
@@ -2020,7 +2021,7 @@ func TestE2E_OneShotLoop_TrialResultSuccess(t *testing.T) {
 	var released *synctypes.TrackedAction
 	require.Eventually(t, func() bool {
 		select {
-		case released = <-testWatchRuntime(t, eng).readyCh:
+		case released = <-testWatchRuntime(t, eng).dispatchCh:
 			return released != nil && released.Action.Path == "blocked.txt"
 		default:
 			return false
@@ -2619,13 +2620,13 @@ func TestRetryPipeline_TransientFailure_IntegratedRetrier(t *testing.T) {
 		},
 	}, "", driveID))
 
-	// Add action to depGraph, send to readyCh, drain it.
+	// Add action to depGraph, send to dispatchCh, drain it.
 	ta := testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{
 		Type: synctypes.ActionDownload, Path: testPath, DriveID: driveID, ItemID: "item-abc",
 	}, 0, nil)
 	require.NotNil(t, ta)
-	testWatchRuntime(t, eng).readyCh <- ta
-	readReady(t, testWatchRuntime(t, eng).readyCh)
+	testWatchRuntime(t, eng).dispatchCh <- ta
+	readReady(t, testWatchRuntime(t, eng).dispatchCh)
 
 	// Use a nowFn that's 1 hour in the future so retrier sees rows as due.
 	futureTime := time.Now().Add(time.Hour)
@@ -2680,13 +2681,13 @@ func TestOneShotEngineLoop_Success_ClearsSyncFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 1, "seeded failure should exist")
 
-	// Add action, send to readyCh, drain it.
+	// Add action, send to dispatchCh, drain it.
 	ta := testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{
 		Type: synctypes.ActionDownload, Path: testPath, DriveID: driveID, ItemID: "item-ok",
 	}, 0, nil)
 	require.NotNil(t, ta)
-	testWatchRuntime(t, eng).readyCh <- ta
-	readReady(t, testWatchRuntime(t, eng).readyCh)
+	testWatchRuntime(t, eng).dispatchCh <- ta
+	readReady(t, testWatchRuntime(t, eng).dispatchCh)
 
 	// Send a success result — defensive clear removes the row.
 	results <- synctypes.WorkerResult{
@@ -2817,7 +2818,7 @@ func TestWaitForQuiescence_ContextCancel(t *testing.T) {
 	cancel() // cancel immediately
 
 	err := waitForQuiescenceForTest(t, eng, ctx)
-	require.ErrorIs(t, err, context.Canceled)
+	require.NoError(t, err)
 }
 
 // ---------------------------------------------------------------------------
@@ -2846,7 +2847,7 @@ func TestBootstrapSync_NoChanges(t *testing.T) {
 	rt.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
 
 	neverDone := make(chan struct{})
-	pool := syncexec.NewWorkerPool(eng.execCfg, rt.readyCh, neverDone, eng.baseline, eng.logger, 1024)
+	pool := syncexec.NewWorkerPool(eng.execCfg, rt.dispatchCh, neverDone, eng.baseline, eng.logger, 1024)
 	pool.Start(ctx, 1)
 	defer pool.Stop()
 
@@ -2892,7 +2893,7 @@ func TestBootstrapSync_WithChanges(t *testing.T) {
 	rt.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
 
 	neverDone := make(chan struct{})
-	pool := syncexec.NewWorkerPool(eng.execCfg, rt.readyCh, neverDone, eng.baseline, eng.logger, 1024)
+	pool := syncexec.NewWorkerPool(eng.execCfg, rt.dispatchCh, neverDone, eng.baseline, eng.logger, 1024)
 	pool.Start(ctx, 2)
 	defer pool.Stop()
 
@@ -2950,7 +2951,7 @@ func TestBootstrapSync_CrashRecovery_MixedDeletingCandidates(t *testing.T) {
 	rt.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
 
 	neverDone := make(chan struct{})
-	pool := syncexec.NewWorkerPool(eng.execCfg, rt.readyCh, neverDone, eng.baseline, eng.logger, 1024)
+	pool := syncexec.NewWorkerPool(eng.execCfg, rt.dispatchCh, neverDone, eng.baseline, eng.logger, 1024)
 	pool.Start(ctx, 1)
 	defer pool.Stop()
 

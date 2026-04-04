@@ -22,33 +22,34 @@ const minWorkers = 4
 // Workers are pure executors — they NEVER call depGraph.Complete(). The engine
 // owns all completion decisions (R-6.8.9).
 //
-// Workers read from readyCh and wait on doneCh, which may be backed by
+// Workers read from dispatchCh and wait on doneCh, which may be backed by
 // DepGraph or any other dispatch source.
 type WorkerPool struct {
-	cfg      *ExecutorConfig
-	readyCh  <-chan *synctypes.TrackedAction
-	doneCh   <-chan struct{}
-	baseline synctypes.OutcomeWriter
-	logger   *slog.Logger
+	cfg        *ExecutorConfig
+	dispatchCh <-chan *synctypes.TrackedAction
+	doneCh     <-chan struct{}
+	baseline   synctypes.OutcomeWriter
+	logger     *slog.Logger
 
 	// results reports per-action outcomes back to the engine. The engine
 	// reads from this channel, classifies results, and calls depGraph.Complete.
 	// Failed items are recorded in sync_failures for retry.
 	results chan synctypes.WorkerResult
 
-	cancel context.CancelFunc
-	wg     stdsync.WaitGroup
+	cancel    context.CancelFunc
+	wg        stdsync.WaitGroup
+	closeOnce stdsync.Once
 }
 
 // NewWorkerPool creates a pool without starting any workers. planSize
 // determines the result channel buffer (use the number of actions in the
 // plan for one-shot mode, or a generous buffer for watch mode).
 //
-// readyCh provides actions ready for execution. doneCh signals when all work
+// dispatchCh provides actions ready for execution. doneCh signals when all work
 // is complete (workers exit when doneCh closes or ctx is canceled).
 func NewWorkerPool(
 	cfg *ExecutorConfig,
-	readyCh <-chan *synctypes.TrackedAction,
+	dispatchCh <-chan *synctypes.TrackedAction,
 	doneCh <-chan struct{},
 	baseline synctypes.OutcomeWriter,
 	logger *slog.Logger,
@@ -59,11 +60,11 @@ func NewWorkerPool(
 	}
 
 	return &WorkerPool{
-		cfg:      cfg,
-		readyCh:  readyCh,
-		doneCh:   doneCh,
-		baseline: baseline,
-		logger:   logger,
+		cfg:        cfg,
+		dispatchCh: dispatchCh,
+		doneCh:     doneCh,
+		baseline:   baseline,
+		logger:     logger,
 		// Buffer sizing contract: one-shot mode uses planSize (equal to
 		// the number of actions, so workers never block). Watch mode uses
 		// watchResultBuf (4096) with a drain goroutine reading results
@@ -88,6 +89,11 @@ func (wp *WorkerPool) Start(ctx context.Context, total int) {
 		go wp.worker(ctx)
 	}
 
+	go func() {
+		wp.wg.Wait()
+		wp.closeResults()
+	}()
+
 	wp.logger.Info("worker pool started",
 		slog.Int("workers", total),
 	)
@@ -106,7 +112,7 @@ func (wp *WorkerPool) Stop() {
 	}
 
 	wp.wg.Wait()
-	close(wp.results)
+	wp.closeResults()
 }
 
 // worker is the main loop for a single goroutine. It reads from the ready
@@ -120,7 +126,10 @@ func (wp *WorkerPool) worker(ctx context.Context) {
 			return
 		case <-wp.doneCh:
 			return
-		case ta := <-wp.readyCh:
+		case ta, ok := <-wp.dispatchCh:
+			if !ok {
+				return
+			}
 			if ta == nil {
 				continue
 			}
@@ -274,6 +283,12 @@ func (wp *WorkerPool) sendResult(ctx context.Context, ta *synctypes.TrackedActio
 	case wp.results <- r:
 	case <-ctx.Done():
 	}
+}
+
+func (wp *WorkerPool) closeResults() {
+	wp.closeOnce.Do(func() {
+		close(wp.results)
+	})
 }
 
 // ExtractHTTPStatus unwraps a graph.GraphError from err and returns its

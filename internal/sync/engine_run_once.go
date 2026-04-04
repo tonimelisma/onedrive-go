@@ -199,7 +199,7 @@ func (flow *engineFlow) postSyncHousekeeping() {
 // each result and calling depGraph.Complete (R-6.8.9).
 //
 // One-shot mode has NO watch-mode active-scope admission loop — all actions
-// with satisfied deps go directly to readyCh. Scope detection (ScopeState) is
+// with satisfied deps go directly to dispatchCh. Scope detection (ScopeState) is
 // absent in one-shot; watch-only lifecycle paths are nil-guarded → no-op.
 func (r *oneShotRunner) executePlan(
 	ctx context.Context, plan *synctypes.ActionPlan, report *synctypes.SyncReport,
@@ -227,12 +227,12 @@ func (r *oneShotRunner) executePlan(
 	// Reset engine counters for this pass.
 	r.resetResultStats()
 
-	// One-shot mode: DepGraph + readyCh, no watch-mode active-scope admission
+	// One-shot mode: DepGraph + dispatchCh, no watch-mode active-scope admission
 	// loop (e.watch == nil). Actions that pass dependency resolution go
 	// straight to workers. Scope blocking is watch-mode only (§2.3).
 	depGraph := syncdispatch.NewDepGraph(r.engine.logger)
 	r.depGraph = depGraph
-	r.readyCh = make(chan *synctypes.TrackedAction, len(plan.Actions))
+	r.dispatchCh = make(chan *synctypes.TrackedAction, len(plan.Actions))
 
 	// Two-phase graph population: Register all actions first, then wire
 	// dependencies. This avoids forward-reference issues where a parent
@@ -250,11 +250,11 @@ func (r *oneShotRunner) executePlan(
 		}
 
 		if ta := depGraph.WireDeps(int64(i), depIDs); ta != nil {
-			r.readyCh <- ta
+			r.dispatchCh <- ta
 		}
 	}
 
-	pool := syncexec.NewWorkerPool(r.engine.execCfg, r.readyCh, depGraph.Done(), r.engine.baseline, r.engine.logger, len(plan.Actions))
+	pool := syncexec.NewWorkerPool(r.engine.execCfg, r.dispatchCh, depGraph.Done(), r.engine.baseline, r.engine.logger, len(plan.Actions))
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	pool.Start(runCtx, r.engine.transferWorkers)

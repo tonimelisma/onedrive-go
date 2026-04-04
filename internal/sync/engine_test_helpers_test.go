@@ -318,20 +318,20 @@ func mustReadFileUnderRoot(t *testing.T, root, relativePath string) []byte {
 	return data
 }
 
-// setupWatchEngine initializes an engine with syncdispatch.DepGraph + readyCh + watchRuntime
-// for processBatch tests. Returns the readyCh for reading dispatched actions.
+// setupWatchEngine initializes an engine with syncdispatch.DepGraph + dispatchCh + watchRuntime
+// for processBatch tests. Returns the dispatchCh for reading dispatched actions.
 // Replaces the old two-call pattern of setupWatchEngine + newTestWatchState.
 func setupWatchEngine(t *testing.T, eng *testEngine) <-chan *synctypes.TrackedAction {
 	t.Helper()
 
 	rt := newWatchRuntime(eng.Engine)
 	rt.depGraph = syncdispatch.NewDepGraph(eng.logger)
-	rt.readyCh = make(chan *synctypes.TrackedAction, 1024)
+	rt.dispatchCh = make(chan *synctypes.TrackedAction, 1024)
 	rt.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
 	eng.runtime = rt
 	eng.flow = &rt.engineFlow
 
-	return rt.readyCh
+	return rt.dispatchCh
 }
 
 // newTestWatchState initializes watch state on an engine for testing.
@@ -686,15 +686,207 @@ func (r *debugEventRecorder) findEvent(match func(engineDebugEvent) bool) bool {
 }
 
 func (r *debugEventRecorder) eventTypesSnapshot() []engineDebugEventType {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	types := make([]engineDebugEventType, 0, len(r.history))
-	for i := range r.history {
-		types = append(types, r.history[i].Type)
+	events := r.eventsSnapshot()
+	types := make([]engineDebugEventType, 0, len(events))
+	for i := range events {
+		types = append(types, events[i].Type)
 	}
 
 	return types
+}
+
+func (r *debugEventRecorder) eventsSnapshot() []engineDebugEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	events := make([]engineDebugEvent, len(r.history))
+	copy(events, r.history)
+
+	return events
+}
+
+type manualClock struct {
+	mu     sync.Mutex
+	now    time.Time
+	jitter time.Duration
+	timers []*manualSyncTimer
+	ticks  []*manualSyncTicker
+}
+
+type manualSyncTimer struct {
+	clock   *manualClock
+	at      time.Time
+	fn      func()
+	stopped bool
+	fired   bool
+}
+
+type manualSyncTicker struct {
+	clock    *manualClock
+	ch       chan time.Time
+	interval time.Duration
+	next     time.Time
+	stopped  bool
+}
+
+func newManualClock(start time.Time) *manualClock {
+	return &manualClock{now: start}
+}
+
+func installManualClock(eng *Engine, clock *manualClock) {
+	eng.nowFn = clock.Now
+	eng.afterFunc = clock.AfterFunc
+	eng.newTicker = clock.NewTicker
+	eng.sleepFn = clock.Sleep
+	eng.jitterFn = clock.Jitter
+}
+
+func (c *manualClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.now
+}
+
+func (c *manualClock) SetJitter(delay time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.jitter = delay
+}
+
+func (c *manualClock) AfterFunc(delay time.Duration, fn func()) syncTimer {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	timer := &manualSyncTimer{
+		clock: c,
+		at:    c.now.Add(delay),
+		fn:    fn,
+	}
+	c.timers = append(c.timers, timer)
+
+	return timer
+}
+
+func (c *manualClock) NewTicker(interval time.Duration) syncTicker {
+	if interval <= 0 {
+		return nil
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	ticker := &manualSyncTicker{
+		clock:    c,
+		ch:       make(chan time.Time, 16),
+		interval: interval,
+		next:     c.now.Add(interval),
+	}
+	c.ticks = append(c.ticks, ticker)
+
+	return ticker
+}
+
+func (c *manualClock) Sleep(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+
+	done := make(chan struct{})
+	timer := c.AfterFunc(delay, func() { close(done) })
+	defer timer.Stop()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("manual sleep: %w", ctx.Err())
+	}
+}
+
+func (c *manualClock) Jitter(maxDelay time.Duration) time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.jitter <= 0 {
+		return 0
+	}
+	if c.jitter > maxDelay {
+		return maxDelay
+	}
+
+	return c.jitter
+}
+
+func (c *manualClock) Advance(delay time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(delay)
+	now := c.now
+
+	var timers []func()
+	for _, timer := range c.timers {
+		if timer == nil || timer.stopped || timer.fired || timer.at.After(now) {
+			continue
+		}
+		timer.fired = true
+		timers = append(timers, timer.fn)
+	}
+
+	for _, ticker := range c.ticks {
+		if ticker == nil || ticker.stopped {
+			continue
+		}
+		for !ticker.next.After(now) {
+			select {
+			case ticker.ch <- ticker.next:
+			default:
+			}
+			ticker.next = ticker.next.Add(ticker.interval)
+		}
+	}
+	c.mu.Unlock()
+
+	for _, fn := range timers {
+		if fn != nil {
+			fn()
+		}
+	}
+}
+
+func (t *manualSyncTimer) Stop() bool {
+	if t == nil || t.clock == nil {
+		return false
+	}
+
+	t.clock.mu.Lock()
+	defer t.clock.mu.Unlock()
+
+	if t.stopped || t.fired {
+		return false
+	}
+	t.stopped = true
+
+	return true
+}
+
+func (t *manualSyncTicker) Chan() <-chan time.Time {
+	if t == nil {
+		return nil
+	}
+
+	return t.ch
+}
+
+func (t *manualSyncTicker) Stop() {
+	if t == nil || t.clock == nil {
+		return
+	}
+
+	t.clock.mu.Lock()
+	defer t.clock.mu.Unlock()
+
+	t.stopped = true
 }
 
 func syncStorePathForTest(t *testing.T, eng *testEngine) string {
