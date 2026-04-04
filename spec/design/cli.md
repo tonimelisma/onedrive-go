@@ -80,7 +80,11 @@ vocabulary and copy:
 discovered account profiles, discovered token files, and persisted
 `auth:account` scope presence. `status`, `whoami`, `drive list`, and
 `drive search` all read from that same catalog so account discovery and auth
-projection stay consistent across surfaces.
+projection stay consistent across surfaces. For `drive search`, that means
+account-level `accounts_requiring_auth` projection comes from every matching
+business account in the catalog, not just configured drives, so orphaned
+profiles and token-discovered business accounts do not disappear from the
+caller boundary when saved login state is missing or invalid.
 
 `whoami`, `drive list`, `drive search`, and ordinary single-drive file commands
 are proof surfaces because they already perform authenticated Graph requests.
