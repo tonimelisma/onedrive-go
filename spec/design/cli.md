@@ -89,6 +89,10 @@ The first successful authenticated Graph response for an account clears stale
 CLI-owned authenticated-success hook installed on live `graph.Client` and
 `driveops.Session` instances. Pre-authenticated upload and download URLs
 intentionally bypass that hook and do not count as proof.
+That repair path is strictly best-effort: successful direct API commands must
+not fail or emit user-visible warnings just because stale auth-scope cleanup
+could not open a state DB. Repair failures stay in debug logs so file commands
+remain independent from sync-store health.
 
 `login` and plain `logout` are explicit auth-boundary transitions. Successful
 `login` clears stale `auth:account` scope blocks for the account. Plain

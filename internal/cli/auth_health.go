@@ -74,7 +74,10 @@ func (r *authProofRecorder) recordSuccess(ctx context.Context, email, proofSourc
 
 	clearedCount, err := clearAccountAuthScopesWithCount(ctx, email, r.logger)
 	if err != nil {
-		r.logger.Warn("clearing stale auth scopes after successful graph proof",
+		// Auth-scope repair is best-effort maintenance. Successful direct API
+		// commands must not surface sync-store repair failures to end users just
+		// because stale auth proof cleanup could not run.
+		r.logger.Debug("clearing stale auth scopes after successful graph proof",
 			"account", email,
 			"proof_source", proofSource,
 			"error", err,
