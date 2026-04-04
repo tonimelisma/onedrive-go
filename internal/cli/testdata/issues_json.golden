@@ -1,13 +1,4 @@
 {
-  "conflicts": [
-    {
-      "id": "conflict-0001",
-      "path": "/docs/report.txt",
-      "conflict_type": "edit_edit",
-      "detected_at": "2026-04-03T10:00:00Z",
-      "resolution": ""
-    }
-  ],
   "failure_groups": [
     {
       "issue_type": "unauthorized",

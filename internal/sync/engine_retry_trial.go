@@ -140,21 +140,6 @@ func (rt *watchRuntime) runTrialDispatch(
 		outbox := rt.dispatchDueTrialScope(ctx, bl, mode, safety, key)
 		dispatch = append(dispatch, outbox...)
 	}
-	manualKeys, err := rt.engine.baseline.ListManualTrialScopeKeys(ctx)
-	if err != nil {
-		rt.engine.logger.Warn("runTrialDispatch: failed to list manual trial scopes",
-			slog.String("error", err.Error()),
-		)
-	} else {
-		for _, key := range manualKeys {
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			outbox := rt.dispatchDueTrialScope(ctx, bl, mode, safety, key)
-			dispatch = append(dispatch, outbox...)
-		}
-	}
 
 	rt.armTrialTimer()
 	return dispatch
@@ -220,14 +205,6 @@ func (rt *watchRuntime) dispatchDueTrialScope(
 			trialDriveID:  row.DriveID,
 		}, bl, mode, safety)
 		if accepted {
-			if row.ManualTrialRequestedAt > 0 {
-				if err := rt.engine.baseline.ClearManualTrialRequest(ctx, row.Path, row.DriveID); err != nil {
-					rt.engine.logger.Warn("runTrialDispatch: failed to clear manual trial request",
-						slog.String("path", row.Path),
-						slog.String("error", err.Error()),
-					)
-				}
-			}
 			return outbox
 		}
 	}

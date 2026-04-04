@@ -461,15 +461,6 @@ of each sync pass and returns explicit release/keep decisions:
 - Graph/API failure or stale shortcut boundary -> fail open via `releaseScope`
 - still denied -> keep the boundary active
 
-`issues recheck <boundary>` uses a separate durable request path. The CLI writes
-`scope_recheck_requests`, and watch/one-shot runs consume those requests by
-calling the same permission recheck path for the requested boundary only. This
-keeps boundary revalidation distinct from manual child-path trial requests.
-
-`issues retry <blocked-path>` requests a manual trial for that exact held row.
-The retry path is candidate-specific: the engine dispatches that row as a
-trial, success releases the scope, and repeated same-scope 403 keeps it held.
-
 Shortcut removal also returns explicit discard decisions for any
 `perm:remote:*` boundary under the removed shortcut plus the matching
 `quota:shortcut:*` scope. Removed shortcuts discard blocked work instead of
@@ -489,7 +480,7 @@ Observation suppression (`scopeController.isObservationSuppressed()`) suppresses
 **Trial path separation**: `processWorkerResult()` checks `IsTrial` and routes through explicit trial policy inside the shared result router. This eliminates the prior fragile pattern where all trial failures collapsed into one branch. Success releases the scope, matching evidence extends it, inconclusive outcomes preserve it, and scope detection is never called for trial results because the original scope is already blocked.
 
 **External perm:dir clearance**: `handleExternalChanges()` checks whether
-`local_permission_denied` failures were cleared via CLI (`issues clear`).
+`local_permission_denied` failures were cleared via CLI-side store mutation.
 Iterates the watch loop's `activeScopes`, filters via `ScopeKey.IsPermDir()`,
 and releases cleared blocks via `releaseScope()`.
 
@@ -565,7 +556,7 @@ In watch mode, the planner-level big-delete check is disabled (`threshold=MaxInt
 2. Non-delete actions continue to DepGraph and execute normally
 3. Held deletes are recorded as `sync_failures` rows with `issue_type=big_delete_held` via `UpsertActionableFailures()`
 
-**CLI notification**: `issues list` shows held deletes in a dedicated "HELD DELETES" section. User approves via `issues clear --all` (or `issues clear <path>` for individual files).
+**CLI notification**: `issues` shows held deletes in a dedicated "HELD DELETES" section. User approves them via `issues force-deletes`.
 
 **External change detection**: A 10-second `recheckTicker` in the `RunWatch()` select loop runs `PRAGMA data_version` to detect CLI writes. When the data version changes, `handleExternalChanges()` queries `ListSyncFailuresByIssueType(IssueBigDeleteHeld)`. If zero rows remain (user cleared them all), calls `counter.Release()`. On the next observation cycle, deletions are re-observed and dispatched normally.
 

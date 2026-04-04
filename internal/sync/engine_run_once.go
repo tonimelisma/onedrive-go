@@ -176,15 +176,8 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) (*synctypes.Bas
 	// Recheck permissions — clear any permission_denied issues
 	// for folders that have become writable since the last pass.
 	if eng.permHandler.HasPermChecker() && scErr == nil {
-		requestedKeys, reqErr := eng.baseline.ListRequestedScopeRechecks(ctx)
-		if reqErr != nil {
-			eng.logger.Warn("failed to list requested permission rechecks", slog.String("error", reqErr.Error()))
-		}
 		decisions := eng.permHandler.recheckPermissions(ctx, bl, shortcuts)
 		flow.scopeController().applyPermissionRecheckDecisions(ctx, nil, decisions)
-		if len(requestedKeys) > 0 {
-			clearRequestedScopeRechecks(ctx, eng.baseline, eng.logger, requestedKeys)
-		}
 	}
 
 	// Recheck local permission denials — clear scope blocks for

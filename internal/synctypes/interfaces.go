@@ -115,24 +115,23 @@ type SyncFailureParams struct {
 
 // SyncFailureRow represents a row from the sync_failures table.
 type SyncFailureRow struct {
-	Path                   string
-	DriveID                driveid.ID
-	Direction              Direction // DirectionDownload, DirectionUpload, DirectionDelete
-	Role                   FailureRole
-	Category               FailureCategory // CategoryTransient, CategoryActionable
-	IssueType              string
-	ItemID                 string
-	ActionType             ActionType
-	FailureCount           int
-	NextRetryAt            int64
-	LastError              string
-	HTTPStatus             int
-	FirstSeenAt            int64
-	LastSeenAt             int64
-	FileSize               int64
-	LocalHash              string
-	ScopeKey               ScopeKey // typed scope key; zero value = unscoped
-	ManualTrialRequestedAt int64
+	Path         string
+	DriveID      driveid.ID
+	Direction    Direction // DirectionDownload, DirectionUpload, DirectionDelete
+	Role         FailureRole
+	Category     FailureCategory // CategoryTransient, CategoryActionable
+	IssueType    string
+	ItemID       string
+	ActionType   ActionType
+	FailureCount int
+	NextRetryAt  int64
+	LastError    string
+	HTTPStatus   int
+	FirstSeenAt  int64
+	LastSeenAt   int64
+	FileSize     int64
+	LocalHash    string
+	ScopeKey     ScopeKey // typed scope key; zero value = unscoped
 }
 
 // ActionableFailure represents a scanner-detected issue to batch-upsert into
