@@ -7,6 +7,24 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
+func (rt *watchRuntime) phase() watchRuntimePhase {
+	return rt.watchRuntimeState.phase
+}
+
+func (rt *watchRuntime) isDraining() bool {
+	return rt.phase() == watchRuntimePhaseDraining
+}
+
+func (rt *watchRuntime) enterDraining() bool {
+	if rt.watchRuntimeState.phase == watchRuntimePhaseDraining {
+		return false
+	}
+
+	rt.watchRuntimeState.phase = watchRuntimePhaseDraining
+
+	return true
+}
+
 func (rt *watchRuntime) replaceActiveScopes(blocks []synctypes.ScopeBlock) {
 	rt.activeScopesMu.Lock()
 	defer rt.activeScopesMu.Unlock()

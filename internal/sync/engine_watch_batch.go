@@ -111,7 +111,7 @@ func (rt *watchRuntime) planAndDispatchBatch(
 func (rt *watchRuntime) periodicPermRecheck(ctx context.Context, bl *synctypes.Baseline) {
 	const permRecheckInterval = 60 * time.Second
 
-	now := time.Now()
+	now := rt.engine.nowFunc()
 	if now.Sub(rt.lastPermRecheck) < permRecheckInterval {
 		return
 	}
