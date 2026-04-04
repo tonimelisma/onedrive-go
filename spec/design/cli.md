@@ -45,7 +45,7 @@ Implements: R-6.2.8 [verified]
 | `sync` | `sync.go` | Multi-drive sync command (see [sync-control-plane.md](sync-control-plane.md)) |
 | `pause`, `resume` | `pause.go`, `resume.go` | Pause/resume sync through `syncControlService`. `resume` also cleans up stale config keys from expired timed pauses (paused=true + past paused_until). |
 | `status` | `status.go` | Display account/drive status via `statusService` and read-only `syncstore.Inspector` snapshots |
-| `issues` | `issues.go` | Conflict and failure management (grouped display, per-scope sub-grouping) |
+| `issues` | `issues.go` | Conflict and failure management. `issues list` renders read-only `syncstore.Inspector` snapshots; mutating subcommands still go through `SyncStore` / engine mutation paths. |
 | `verify` | `verify.go` | Post-sync verification |
 | `drive` | `drive.go` | Drive management (list/add/remove/search) |
 | `recycle-bin` | `recycle_bin.go` | Recycle bin operations (list/restore/empty) via `recycleBinService` |
@@ -64,6 +64,10 @@ purpose:
 `status` and `issues` are intentionally offline read models. They use local
 token/account-profile state plus persisted sync state to show best-known auth
 health, but they never probe Graph and never mutate `auth:account`.
+Offline auth-scope detection now goes through the read-only
+`syncstore.Inspector` boundary as an exact `auth:account` scope-block query;
+CLI auth-health helpers do not open the mutable `SyncStore` path just to read
+persisted auth state.
 
 `internal/authstate` is the leaf package that owns the shared auth-health
 vocabulary and copy:
@@ -183,6 +187,12 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
 - If the configured log file cannot be opened, CLI bootstrap warns through the CLI status writer and falls back to console-only logging instead of failing the command before any user-facing work can run.
 - Direct `runSync` and service-level tests cover caller-visible failure paths such as config-load errors, all-drives-paused/no-drives guidance, and log-file-open fallback warnings through the injected status/output writers rather than process-global stderr assumptions.
 - The status command uses a testable service layer with narrowed interfaces (`accountMetaReader`, `accountAuthChecker`, `syncStateQuerier`), decoupling status aggregation from Cobra wiring. The concrete state reader is `syncstore.Inspector`; CLI code no longer opens SQLite directly.
+- `issuesService.runList` also uses `syncstore.Inspector`. CLI formatting code
+  is no longer the owner of issue grouping, pending-retry aggregation, or
+  scope labeling semantics.
+- Offline auth-health projection also uses `syncstore.Inspector` for persisted
+  `auth:account` checks, so read-only CLI account discovery no longer pays the
+  writable-store checkpoint/close path.
 - Sync-domain issue/status presentation uses the shared
   [`synctypes.SummaryKey`](/Users/tonimelisma/Development/onedrive-go-shared-failure-summaries/internal/synctypes/summary_keys.go)
   contract. `issues` groups persisted failures by normalized summary key plus
@@ -214,5 +224,9 @@ Implements: R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.14.3
 - **Derived shared-folder issues**: `perm:remote` is displayed from held blocked-write rows, not from a standalone boundary issue. The CLI shows one visible issue per denied boundary only while blocked write intent still exists.
 - **Retry semantics**: `issues retry` on shared-folder write blocks is path-specific manual trial. Retrying the boundary name is rejected; the user must retry one blocked child path.
 - **Shared summary descriptors**: Every sync issue renders from the shared `SummaryKey` descriptor table, with the humanized scope shown separately. This keeps sync logs, `status`, and `issues` grouped by the same normalized issue family without duplicating display taxonomies in each layer.
+- **Store-owned read model**: `issues list` renders `IssuesSnapshot` from
+  `syncstore.Inspector`; the CLI does not rebuild groups from raw SQL rows.
+  This keeps the visible `issues` surface aligned with the same store-owned
+  semantics that feed `status`.
 - **Auth scope display**: `auth:account` renders as an account-level `Authentication required` issue with no path list.
 - `internal/cli` unit test coverage target: 60%+ (currently ~53.7%). The service split and output-writer injection are in place, but more direct `RunE`/service black-box coverage is still needed to reach the target. [planned]

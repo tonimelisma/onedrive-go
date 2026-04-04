@@ -319,7 +319,14 @@ func (controller *scopeController) applyFatalAuthEffects(
 			slog.String("summary_key", string(summaryKey)),
 			slog.String("error", err.Error()),
 		)
+		return
 	}
+
+	flow.engine.logger.Error("authentication required: sync stopping",
+		slog.String("path", r.Path),
+		slog.String("summary_key", string(summaryKey)),
+		slog.String("scope_key", synctypes.SKAuthAccount().String()),
+	)
 }
 
 func (controller *scopeController) applyPermissionDecisionFlow(

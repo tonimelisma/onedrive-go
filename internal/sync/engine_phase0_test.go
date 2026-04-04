@@ -48,14 +48,15 @@ func (c *blockingPermChecker) ListItemPermissions(_ context.Context, _ driveid.I
 func TestPhase0_RunWatch_BootstrapCompletesBeforeLocalObserverStarts(t *testing.T) {
 	t.Parallel()
 
-	var uploadStarted atomic.Bool
-	watcherCreated := make(chan struct{})
-	var watcherOnce sync.Once
+	uploadStarted := make(chan struct{})
+	var uploadStartedOnce sync.Once
 	allowUpload := make(chan struct{})
 
 	mock := &engineMockClient{
 		uploadFn: func(_ context.Context, _ driveid.ID, _ string, name string, _ io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			uploadStarted.Store(true)
+			uploadStartedOnce.Do(func() {
+				close(uploadStarted)
+			})
 			<-allowUpload
 			return &graph.Item{
 				ID:           "uploaded-id",
@@ -68,10 +69,8 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeLocalObserverStarts(t *testing.
 
 	eng, syncRoot := newTestEngine(t, mock)
 	writeLocalFile(t, syncRoot, "local.txt", "bootstrap upload")
+	recorder := attachDebugEventRecorder(eng)
 	eng.localWatcherFactory = func() (syncobserve.FsWatcher, error) {
-		watcherOnce.Do(func() {
-			close(watcherCreated)
-		})
 		return newEnospcWatcher(1 << 20), nil
 	}
 
@@ -85,29 +84,26 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeLocalObserverStarts(t *testing.
 			Debounce:     5 * time.Millisecond,
 		})
 	}()
-
-	require.Eventually(t, uploadStarted.Load, 5*time.Second, 10*time.Millisecond,
-		"bootstrap upload should start before observers")
-
 	select {
-	case <-watcherCreated:
-		require.Fail(t, "local observer started before bootstrap quiesced")
-	case <-time.After(150 * time.Millisecond):
+	case <-uploadStarted:
+	case <-time.After(2 * time.Second):
+		require.Fail(t, "bootstrap upload should start before observers")
 	}
 
 	close(allowUpload)
 
-	require.Eventually(t, func() bool {
-		return isSignalClosed(watcherCreated)
-	}, 2*time.Second, 10*time.Millisecond, "local observer should start after bootstrap")
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventBootstrapQuiesced
+	}, "bootstrap quiesced")
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventObserverStarted && event.Note == engineDebugObserverLocal
+	}, "local observer started")
 
 	cancel()
 
 	select {
 	case err := <-done:
-		if err != nil {
-			require.EqualError(t, err, "sync: all observers exited")
-		}
+		require.NoError(t, err)
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "RunWatch did not exit after cancellation")
 	}
@@ -118,7 +114,8 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeRemoteObserverStarts(t *testing
 	t.Parallel()
 
 	var deltaCalls atomic.Int32
-	var downloadStarted atomic.Bool
+	downloadStarted := make(chan struct{})
+	var downloadStartedOnce sync.Once
 	allowDownload := make(chan struct{})
 	driveID := driveid.New(engineTestDriveID)
 
@@ -144,7 +141,9 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeRemoteObserverStarts(t *testing
 			}, "steady-state-token"), nil
 		},
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
-			downloadStarted.Store(true)
+			downloadStartedOnce.Do(func() {
+				close(downloadStarted)
+			})
 			<-allowDownload
 			n, err := w.Write([]byte("remote-data"))
 			return int64(n), err
@@ -152,6 +151,7 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeRemoteObserverStarts(t *testing
 	}
 
 	eng, _ := newTestEngine(t, mock)
+	recorder := attachDebugEventRecorder(eng)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -163,19 +163,23 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeRemoteObserverStarts(t *testing
 			Debounce:     5 * time.Millisecond,
 		})
 	}()
+	select {
+	case <-downloadStarted:
+	case <-time.After(2 * time.Second):
+		require.Fail(t, "bootstrap download should start before remote observer")
+	}
 
-	require.Eventually(t, downloadStarted.Load, 5*time.Second, 10*time.Millisecond,
-		"bootstrap download should start before remote observer")
-
-	time.Sleep(150 * time.Millisecond)
 	assert.Equal(t, int32(1), deltaCalls.Load(),
 		"remote observer must not start polling until bootstrap has drained")
 
 	close(allowDownload)
 
-	require.Eventually(t, func() bool {
-		return deltaCalls.Load() > 1
-	}, 2*time.Second, 10*time.Millisecond, "remote observer should start after bootstrap")
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventBootstrapQuiesced
+	}, "bootstrap quiesced")
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventObserverStarted && event.Note == engineDebugObserverRemote
+	}, "remote observer started")
 
 	cancel()
 
@@ -568,13 +572,4 @@ func TestPhase0_RunFullReconciliationAsync_UsesBufferHandoffInsteadOfDirectDispa
 	batch := rt.buf.FlushImmediate()
 	require.NotEmpty(t, batch)
 	assert.Equal(t, "reconcile.txt", batch[0].Path)
-}
-
-func isSignalClosed(ch <-chan struct{}) bool {
-	select {
-	case <-ch:
-		return true
-	default:
-		return false
-	}
 }
