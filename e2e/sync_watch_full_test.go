@@ -284,19 +284,27 @@ func TestE2E_SyncWatch_FileModification(t *testing.T) {
 
 // TestE2E_SyncWatch_FileDeletion starts an upload-only daemon, creates a file,
 // waits for upload, then deletes it and verifies it disappears remotely.
+//
+// Uses safety_scan_interval=30s as a fallback for missed fsnotify events, and
+// waits for "local observer starting watch" before creating files so the test
+// does not race daemon bootstrap against the first watched delete.
 func TestE2E_SyncWatch_FileDeletion(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
+	cfgPath, env := writeSyncConfigWithOptions(t, syncDir,
+		"poll_interval = \"30s\"\nsafety_scan_interval = \"30s\"\n")
 	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-watch-del-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
-	// Start upload-only daemon.
-	cmd := startDaemon(t, cfgPath, env,
+	// Start upload-only daemon with stderr access to wait for watch setup.
+	h := startDaemonWithStderr(t, cfgPath, env,
 		"--drive", drive, "sync", "--upload-only", "--watch", "--force")
+
+	// Wait for fsnotify watches to be established before creating files.
+	waitForStderrContains(t, h.Stderr, "local observer starting watch", 30*time.Second)
 
 	// Create file.
 	localDir := filepath.Join(syncDir, testFolder)
@@ -315,8 +323,8 @@ func TestE2E_SyncWatch_FileDeletion(t *testing.T) {
 	pollCLIWithConfigNotContains(t, opsCfgPath, nil, "deleteme.txt", daemonPollTimeout, "ls", "/"+testFolder)
 
 	// Graceful shutdown.
-	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
-	_ = cmd.Wait()
+	require.NoError(t, h.Cmd.Process.Signal(syscall.SIGTERM))
+	_ = h.Cmd.Wait()
 }
 
 // TestE2E_SyncWatch_FolderCreation starts an upload-only daemon and creates

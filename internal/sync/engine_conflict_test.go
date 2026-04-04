@@ -54,6 +54,14 @@ func TestResolveConflict_KeepBoth(t *testing.T) {
 
 	seedBaseline(t, eng.baseline, ctx, outcomes, "")
 
+	_, err := eng.baseline.DB().ExecContext(ctx,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		driveID.String(), "item-c", "conflict-file.txt", synctypes.ItemTypeFile,
+		synctypes.SyncStatusPendingDownload, time.Now().UnixNano(),
+	)
+	require.NoError(t, err)
+
 	// Get conflict ID.
 	conflicts, err := eng.ListConflicts(ctx)
 	require.NoError(t, err, "ListConflicts")
@@ -73,6 +81,15 @@ func TestResolveConflict_KeepBoth(t *testing.T) {
 	entry, found := bl.GetByPath("conflict-file.txt")
 	require.True(t, found, "original file should have baseline entry after keep_both")
 	assert.NotEqual(t, "local-h", entry.LocalHash, "baseline hash should be updated to current disk content")
+
+	var status synctypes.SyncStatus
+	err = eng.baseline.DB().QueryRowContext(ctx,
+		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
+		driveID.String(), "item-c",
+	).Scan(&status)
+	require.NoError(t, err)
+	assert.Equal(t, synctypes.SyncStatusSynced, status,
+		"keep_both should converge matching remote_state so the next sync stays clean")
 }
 
 func TestResolveConflict_NotFound(t *testing.T) {

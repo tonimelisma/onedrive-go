@@ -17,11 +17,12 @@ internal/
   driveops/                   Authenticated drive access: sessions, transfers, hashing
   failures/                   Shared runtime/domain failure classes (leaf, stdlib-only)
   fsroot/                     Root-bound managed-state file capabilities
-  graph/                      Graph API client: auth, retry, items CRUD, delta, transfers
+  graph/                      Graph API client: auth, Graph normalization, items CRUD, delta, transfers
+  graphhttp/                  Graph-facing HTTP client profiles and shared throttle coordination
   localpath/                  Explicit arbitrary-local-path boundary helpers
   logfile/                    Log file creation, rotation, retention
   multisync/                  Multi-drive sync control plane and watch reload
-  retry/                      Retry policies, exponential backoff with jitter (leaf, stdlib-only)
+  retry/                      Retry policies, exponential backoff with jitter, retry transport
   sync/                       Single-drive sync engine (see pipeline below)
   syncstore/                  Durable SQLite sync state and read-only inspection
   synctree/                   Root-bound sync runtime filesystem capability
@@ -35,7 +36,8 @@ testutil/                     Shared test helpers (not production code)
 ## Dependency Rules
 
 ```
-root pkg → internal/cli/ → internal/driveops/ → internal/graph/ → pkg/*
+root pkg → internal/cli/ → internal/graphhttp/ → internal/retry/
+                         → internal/driveops/  → internal/graph/ → pkg/*
                          → internal/failures/
                          → internal/multisync/ → internal/sync/ → internal/driveops/
                                                              → internal/syncstore/
@@ -47,6 +49,7 @@ root pkg → internal/cli/ → internal/driveops/ → internal/graph/ → pkg/*
 - `driveid`, `failures`, `tokenfile`, and `retry` are leaf packages (no internal imports).
 - Both `graph` and `config` import `tokenfile` for token file I/O.
 - Callers pass token paths to `graph` — no config coupling.
+- `graphhttp` owns Graph-facing HTTP transport/client policy. `driveops` stays transport-policy agnostic and consumes injected clients through a resolver.
 
 ## Event-Driven Sync Pipeline
 
@@ -79,7 +82,7 @@ For detailed module design, see:
 
 | Module | Design Doc |
 |--------|-----------|
-| Graph API client | [graph-client.md](graph-client.md) |
+| Graph API client and HTTP runtime | [graph-client.md](graph-client.md) |
 | Configuration | [config.md](config.md) |
 | Drive identity | [drive-identity.md](drive-identity.md) |
 | Drive transfers | [drive-transfers.md](drive-transfers.md) |

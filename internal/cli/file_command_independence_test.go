@@ -38,7 +38,12 @@ func newFileCommandTestContext(
 	t.Cleanup(srv.Close)
 
 	logger := buildLoggerWithStatusWriter(nil, CLIFlags{}, stderr)
-	provider := driveops.NewSessionProvider(nil, srv.Client(), srv.Client(), "test-agent", logger)
+	provider := driveops.NewSessionProvider(
+		nil,
+		driveops.StaticClientResolver(srv.Client(), srv.Client()),
+		"test-agent",
+		logger,
+	)
 	provider.GraphBaseURL = srv.URL
 	provider.TokenSourceFn = func(context.Context, string, *slog.Logger) (graph.TokenSource, error) {
 		return staticTokenSource{}, nil

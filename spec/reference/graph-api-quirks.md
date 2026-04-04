@@ -102,6 +102,28 @@ Runtime policy:
 
 After token refresh, `/me/drives` returns HTTP 403 with Graph code `accessDenied` while `/me` (user profile) succeeds with the same token. Caused by eventual consistency in Microsoft's token propagation infrastructure. The `/me` endpoint receives token updates before `/me/drives`.
 
+### Slow/Stalled Metadata Response Headers
+
+Ordinary Graph metadata requests can sometimes connect successfully and then
+stall for tens of seconds before sending response headers. This was observed
+in the scheduled `e2e_full` CI run on April 3, 2026 during setup for the
+big-delete protection test: a normal metadata/path-resolution request hung
+long enough that a client-wide 30-second timeout misclassified it as canceled
+work even though later attempts succeeded.
+
+Runtime policy:
+
+- Graph-facing metadata clients do not use `http.Client.Timeout`
+- metadata transports use connection-level deadlines such as
+  `ResponseHeaderTimeout` so a stalled attempt returns a transport timeout
+  rather than canceling the caller context
+- interactive CLI metadata requests may retry that transport failure
+- sync metadata requests remain single-attempt and return the failure to the
+  engine for normal classification
+
+This is documented as a transport-shape problem, not as evidence for a new
+Graph semantic retry rule.
+
 ### No General Ordinary-Request Post-Refresh 401 Quirk (Current Evidence)
 
 The repository does **not** currently have captured evidence for a general

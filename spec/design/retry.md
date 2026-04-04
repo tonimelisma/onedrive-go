@@ -1,23 +1,25 @@
 # Retry
 
-GOVERNS: internal/retry/backoff.go, internal/retry/doc.go, internal/retry/named.go, internal/retry/policy.go, internal/retry/transport.go
+GOVERNS: internal/retry/backoff.go, internal/retry/doc.go, internal/retry/named.go, internal/retry/policy.go, internal/retry/throttle_gate.go, internal/retry/transport.go
 
 Implements: R-6.8.1 [verified], R-6.8.2 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.10 [verified], R-6.8.11 [verified], R-6.6.8 [verified], R-2.10.3 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.14 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
 
 ## Overview
 
 `internal/retry/` is a small leaf package providing reusable exponential
-backoff policies and the optional HTTP retry transport used by CLI-style
-callers. Sync itself does not rely on transport-level retry loops for action
+backoff policies, the optional HTTP retry transport used by CLI-style
+callers, and the narrow shared throttle-gate primitive that lets callers
+coordinate `Retry-After` deadlines across multiple retry transports.
+Sync itself does not rely on transport-level retry loops for action
 execution.
 
 ## Ownership Contract
 
-- Owns: Backoff policy definitions, retry timing, and the optional CLI-oriented HTTP retry transport.
+- Owns: Backoff policy definitions, retry timing, the optional CLI-oriented HTTP retry transport, and the narrow `ThrottleGate` coordination primitive.
 - Does Not Own: Graph wire normalization, sync failure classification, scope activation, durable retry persistence, or user-facing error messaging.
 - Source of Truth: `retry.Policy` values plus the HTTP/request outcomes presented to `RetryTransport`.
 - Allowed Side Effects: Sleeping/backoff and HTTP request redispatch inside `RetryTransport`.
-- Mutable Runtime Owner: Backoff counters and retry deadlines are request-scoped. The package has no shared mutable state, background goroutines, or long-lived channels.
+- Mutable Runtime Owner: Backoff counters are request-scoped. Shared 429 coordination is optional and explicitly caller-owned via `ThrottleGate`; `RetryTransport` only consults or mutates that gate when one is injected. The package has no package-level mutable state, background goroutines, or long-lived channels.
 - Error Boundary: `retry` consumes already-normalized retryable signals from [error-model.md](error-model.md). It never upgrades actionable or fatal conditions into retryable ones on its own.
 
 ## Named Policies
@@ -43,7 +45,7 @@ automatic transport retry.
 Features:
 - exponential backoff with jitter per `Policy`
 - `Retry-After` parsing for 429/503 responses
-- account-wide 429 deadline coordination inside the transport
+- optional caller-injected shared 429 deadline coordination via `ThrottleGate`
 - seekable request-body rewinding between attempts
 - `X-Retry-Count` header annotation on retried requests
 - request-scoped log target override via `WithLogTarget(ctx, target)` so callers can replace sensitive URLs with redacted descriptors
@@ -52,6 +54,12 @@ Features:
 
 Sync action execution does not use `RetryTransport`. Workers issue one request,
 return the result immediately, and let the engine classify it.
+
+`ThrottleGate` is intentionally tiny. It owns only a shared deadline and
+wait operation. Callers that understand the throttle domain create it and own
+its lifetime. Today `graphhttp.Provider` injects one gate per account-scoped
+interactive metadata profile. The retry package does not infer account,
+tenant, or caller identity on its own.
 
 ## Sync Retry Model
 

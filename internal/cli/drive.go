@@ -18,6 +18,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 )
 
 // sharePointSiteLimit caps the number of SharePoint sites fetched during
@@ -198,6 +199,7 @@ func discoverAvailableDrives(
 	logger *slog.Logger,
 	recorder *authProofRecorder,
 	baseURL string,
+	httpProvider *graphhttp.Provider,
 ) ([]driveListEntry, []accountAuthRequirement) {
 	tokens := config.DiscoverTokens(logger)
 	if len(tokens) == 0 {
@@ -217,7 +219,16 @@ func discoverAvailableDrives(
 		go func() {
 			defer wg.Done()
 
-			tokenEntries, tokenAuthRequired := discoverDrivesForToken(ctx, tokenCID, cfg, spSiteLimit, logger, recorder, baseURL)
+			tokenEntries, tokenAuthRequired := discoverDrivesForToken(
+				ctx,
+				tokenCID,
+				cfg,
+				spSiteLimit,
+				logger,
+				recorder,
+				baseURL,
+				httpProvider,
+			)
 			mu.Lock()
 			entries = append(entries, tokenEntries...)
 			authRequired = append(authRequired, tokenAuthRequired...)
@@ -242,6 +253,7 @@ func discoverDrivesForToken(
 	logger *slog.Logger,
 	recorder *authProofRecorder,
 	baseURL string,
+	httpProvider *graphhttp.Provider,
 ) ([]driveListEntry, []accountAuthRequirement) {
 	tokenPath := config.DriveTokenPath(tokenCID)
 	if tokenPath == "" {
@@ -255,7 +267,12 @@ func discoverDrivesForToken(
 		return nil, []accountAuthRequirement{tokenDiscoveryAuthRequirement(tokenCID, err, logger)}
 	}
 
-	client, clientErr := newGraphClientWithBaseURL(baseURL, ts, logger)
+	client, clientErr := newGraphClientWithHTTP(
+		baseURL,
+		httpProvider.InteractiveForAccount(tokenCID.Email()).Meta,
+		ts,
+		logger,
+	)
 	if clientErr != nil {
 		logger.Debug("skipping token for drive discovery", "token", tokenCID.String(), "error", clientErr)
 
@@ -931,7 +948,7 @@ func listAvailableDrives(w io.Writer) error {
 // If empty, the display name is resolved via the API.
 func addSharedDrive(
 	ctx context.Context, cfgPath string, w io.Writer, cid driveid.CanonicalID,
-	preResolvedName string, logger *slog.Logger,
+	preResolvedName string, logger *slog.Logger, httpProvider *graphhttp.Provider,
 ) error {
 	cfg, err := config.LoadOrDefault(cfgPath, logger)
 	if err != nil {
@@ -968,7 +985,7 @@ func addSharedDrive(
 	if displayName == "" {
 		var resolveErr error
 
-		displayName, resolveErr = resolveSharedDisplayName(ctx, cid, tokenPath, cfg, logger)
+		displayName, resolveErr = resolveSharedDisplayName(ctx, cid, tokenPath, cfg, logger, httpProvider)
 		if resolveErr != nil {
 			displayName = config.DefaultDisplayName(cid)
 			logger.Warn("could not derive shared drive display name, using fallback",
@@ -993,14 +1010,14 @@ func addSharedDrive(
 // collision-free display name. Tries search (non-deprecated) then SharedWithMe.
 func resolveSharedDisplayName(
 	ctx context.Context, cid driveid.CanonicalID,
-	tokenPath string, cfg *config.Config, logger *slog.Logger,
+	tokenPath string, cfg *config.Config, logger *slog.Logger, httpProvider *graphhttp.Provider,
 ) (string, error) {
 	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
 	if err != nil {
 		return "", fmt.Errorf("load token source: %w", err)
 	}
 
-	client, err := newGraphClient(ts, logger)
+	client, err := newGraphClientWithHTTP("", httpProvider.InteractiveForAccount(cid.Email()).Meta, ts, logger)
 	if err != nil {
 		return "", err
 	}
@@ -1059,14 +1076,14 @@ type sharedMatch struct {
 // given search term (case-insensitive substring match against folder name
 // and derived display name). Single match → add. Multiple → show list.
 func addSharedDriveByName(
-	ctx context.Context, selector, cfgPath string, w io.Writer, logger *slog.Logger,
+	ctx context.Context, selector, cfgPath string, w io.Writer, logger *slog.Logger, httpProvider *graphhttp.Provider,
 ) error {
 	cfg, err := config.LoadOrDefault(cfgPath, logger)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	matches := searchSharedDrives(ctx, cfg, selector, logger)
+	matches := searchSharedDrives(ctx, cfg, selector, logger, httpProvider)
 
 	switch len(matches) {
 	case 0:
@@ -1075,7 +1092,7 @@ func addSharedDriveByName(
 			selector)
 
 	case 1:
-		return addSharedDrive(ctx, cfgPath, w, matches[0].cid, matches[0].displayName, logger)
+		return addSharedDrive(ctx, cfgPath, w, matches[0].cid, matches[0].displayName, logger, httpProvider)
 
 	default:
 		if err := writef(w, "Multiple shared folders match %q — be more specific:\n\n", selector); err != nil {
@@ -1113,7 +1130,7 @@ func addSharedDriveByName(
 // searchSharedDrives queries all tokens for shared folders matching selector.
 // Uses search-based discovery (non-deprecated) with SharedWithMe fallback.
 func searchSharedDrives(
-	ctx context.Context, cfg *config.Config, selector string, logger *slog.Logger,
+	ctx context.Context, cfg *config.Config, selector string, logger *slog.Logger, httpProvider *graphhttp.Provider,
 ) []sharedMatch {
 	tokens := config.DiscoverTokens(logger)
 	lowerSelector := strings.ToLower(selector)
@@ -1131,7 +1148,12 @@ func searchSharedDrives(
 			continue
 		}
 
-		client, clientErr := newGraphClient(ts, logger)
+		client, clientErr := newGraphClientWithHTTP(
+			"",
+			httpProvider.InteractiveForAccount(tokenCID.Email()).Meta,
+			ts,
+			logger,
+		)
 		if clientErr != nil {
 			continue
 		}
@@ -1317,6 +1339,7 @@ func searchAccountSharePoint(
 	logger *slog.Logger,
 	recorder *authProofRecorder,
 	baseURL string,
+	httpProvider *graphhttp.Provider,
 ) ([]driveSearchResult, []accountAuthRequirement) {
 	tokenPath := config.DriveTokenPath(tokenCID)
 	if tokenPath == "" {
@@ -1330,7 +1353,12 @@ func searchAccountSharePoint(
 		return nil, []accountAuthRequirement{tokenDiscoveryAuthRequirement(tokenCID, err, logger)}
 	}
 
-	client, err := newGraphClientWithBaseURL(baseURL, ts, logger)
+	client, err := newGraphClientWithHTTP(
+		baseURL,
+		httpProvider.InteractiveForAccount(tokenCID.Email()).Meta,
+		ts,
+		logger,
+	)
 	if err != nil {
 		logger.Debug("skipping token for search", "token", tokenCID.String(), "error", err)
 

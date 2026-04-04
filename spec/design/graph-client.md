@@ -1,14 +1,37 @@
 # Graph Client
 
-GOVERNS: internal/graph/auth.go, internal/graph/auth_browser.go, internal/graph/auth_device.go, internal/graph/auth_token.go, internal/graph/client.go, internal/graph/client_auth.go, internal/graph/client_construction.go, internal/graph/client_preauth.go, internal/graph/delta.go, internal/graph/download.go, internal/graph/drives.go, internal/graph/drives_identity.go, internal/graph/drives_shared.go, internal/graph/drives_sites.go, internal/graph/errors.go, internal/graph/items.go, internal/graph/items_copy.go, internal/graph/items_fetch.go, internal/graph/items_mutation.go, internal/graph/items_permissions.go, internal/graph/normalize.go, internal/graph/quirks.go, internal/graph/redaction.go, internal/graph/types.go, internal/graph/upload.go, internal/graph/upload_session.go, internal/graph/upload_transfer.go, internal/graph/url_validation.go, internal/tokenfile/tokenfile.go
+GOVERNS: internal/graph/auth.go, internal/graph/auth_browser.go, internal/graph/auth_device.go, internal/graph/auth_token.go, internal/graph/client.go, internal/graph/client_auth.go, internal/graph/client_construction.go, internal/graph/client_preauth.go, internal/graph/delta.go, internal/graph/download.go, internal/graph/drives.go, internal/graph/drives_identity.go, internal/graph/drives_shared.go, internal/graph/drives_sites.go, internal/graph/errors.go, internal/graph/items.go, internal/graph/items_copy.go, internal/graph/items_fetch.go, internal/graph/items_mutation.go, internal/graph/items_permissions.go, internal/graph/normalize.go, internal/graph/quirks.go, internal/graph/redaction.go, internal/graph/types.go, internal/graph/upload.go, internal/graph/upload_session.go, internal/graph/upload_transfer.go, internal/graph/url_validation.go, internal/graphhttp/doc.go, internal/graphhttp/provider.go, internal/tokenfile/tokenfile.go
 
 Implements: R-3.1 [verified], R-6.7 [implemented], R-6.8 [verified], R-1.1 [verified], R-1.4 [verified], R-1.5 [verified], R-1.6 [verified], R-1.6.2 [verified], R-1.7 [verified], R-1.8 [verified], R-1.2.5 [verified], R-1.3.5 [verified], R-3.6.4 [verified], R-6.7.4 [verified], R-6.7.8 [verified], R-6.7.9 [verified], R-6.7.10 [verified], R-6.7.11 [verified], R-6.7.12 [verified], R-6.7.13 [verified], R-6.7.16 [verified], R-6.7.17 [verified], R-6.7.18 [verified], R-6.7.22 [verified], R-6.7.23 [verified], R-6.7.26 [verified], R-6.8.4 [verified], R-6.8.6 [verified], R-6.8.8 [verified], R-6.8.14 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
 
 ## Overview
 
-All Microsoft Graph API communication flows through `graph.Client`. The client is a pure API mapper plus a narrow Graph-quirk normalizer: authentication, quirk-specific retries, and error construction. Generic transient retry, throttle state, and backoff coordination stay in the transport layer. Callers receive clean, consistent data via `graph.Item` and never deal with API inconsistencies.
+All Microsoft Graph API communication flows through `graph.Client`, but Graph-facing HTTP runtime policy is composed one layer above it in `internal/graphhttp`. The split is deliberate:
 
-Retry lives in the transport layer via `retry.RetryTransport` (an `http.RoundTripper`). CLI callers wrap their HTTP client with `RetryTransport{Policy: retry.TransportPolicy()}`. Sync callers use a raw HTTP client so failures return immediately for engine-level classification.
+- `graph.Client` is a pure API mapper plus a narrow Graph-quirk normalizer: authentication, quirk-specific retries, and error construction.
+- `graphhttp.Provider` is the single owner of Graph-facing `http.Transport` / `http.Client` profiles, long-lived client reuse, and optional shared throttle coordination for retrying metadata clients.
+- `retry.RetryTransport` stays generic. It owns transport retry mechanics, not Graph semantics or caller profile selection.
+
+Callers receive clean, consistent data via `graph.Item` and never deal with API inconsistencies. Callers also choose the right HTTP profile without teaching `graph` about CLI-vs-sync policy.
+
+## Graph HTTP Runtime Policy (`internal/graphhttp`)
+
+`graphhttp.Provider` constructs the concrete HTTP profiles used for Graph work:
+
+- `BootstrapMeta()`: retrying metadata client for login/bootstrap/account discovery before account identity is known
+- `InteractiveForAccount(account).Meta`: retrying metadata client for ordinary CLI Graph requests, with shared 429 coordination scoped to that account
+- `InteractiveForAccount(account).Transfer`: retrying transfer client for upload/download/copy-monitor flows
+- `Sync().Meta`: non-retrying metadata client for sync classification
+- `Sync().Transfer`: non-retrying transfer client for sync uploads/downloads
+
+The provider owns the runtime rule that all Graph-facing clients use `Timeout = 0`. Stall detection lives in the transport:
+
+- metadata and transfer transports clone `http.DefaultTransport`
+- `ResponseHeaderTimeout` detects servers that accept the connection but stall before sending headers
+- dial and TLS handshake deadlines protect connection setup
+- keepalives detect dead connections without bounding total transfer duration
+
+This boundary exists to prevent one blunt client-wide timeout from becoming a competing owner of caller deadlines. Total operation budgets still belong to caller contexts. Transport stall detection belongs to `graphhttp`.
 
 ## Internal Domain Layout
 
@@ -24,7 +47,9 @@ This keeps domain-specific logic close to its tests without reopening the public
 
 ## Ownership Contract
 
-- Owns: Graph request construction, authentication flows, token persistence callbacks, Graph-specific normalization, and `GraphError`/sentinel creation.
+- Owns:
+  - `graph`: Graph request construction, authentication flows, token persistence callbacks, Graph-specific normalization, and `GraphError`/sentinel creation
+  - `graphhttp`: Graph-facing HTTP profile construction, transport defaults, long-lived client reuse, and caller-scoped throttle-gate wiring
 - Does Not Own: Config discovery, sync retry scheduling, scope activation, store persistence, or CLI presentation.
 - Source of Truth: Graph HTTP responses plus token file contents loaded and written through `tokenfile`.
 - Allowed Side Effects: HTTP requests, loopback callback-server startup during browser auth, and token-file I/O through `tokenfile` and rooted managed-state helpers.
@@ -145,9 +170,15 @@ consume that normalized boundary contract via [error-model.md](error-model.md).
 
 Implements: R-6.8.8 [verified]
 
-Generic retry has been extracted from the graph client into `retry.RetryTransport`, an `http.RoundTripper` wrapper. The graph client no longer has generic retry loops (`doRetry`/`doPreAuthRetry` deleted), throttle state, or transport-layer Retry-After coordination. The only client-local retries are documented Graph API quirk normalizations: transient 403 on `/me/drives` and transient 404 on root-child listing. All other retry, backoff, Retry-After parsing, and 429 throttle coordination live in the transport layer.
+Generic retry has been extracted from the graph client into `retry.RetryTransport`, an `http.RoundTripper` wrapper. The graph client no longer has generic retry loops (`doRetry`/`doPreAuthRetry` deleted), throttle state, or transport-layer Retry-After coordination. The only client-local retries are documented Graph API quirk normalizations: transient 403 on `/me/drives` and transient 404 on root-child listing. All other retry, backoff, Retry-After parsing, and shared 429 coordination live below `graph` in the retry/HTTP-profile layer.
 
-`NewClient` accepts an `*http.Client` and returns `(*Client, error)` after validating the base URL and token source. `MustNewClient` is reserved for static/test setup where panic-on-bad-construction is intentional. CLI callers wrap the HTTP client with `RetryTransport`. Sync callers pass a raw client.
+`NewClient` accepts an `*http.Client` and returns `(*Client, error)` after validating the base URL and token source. `MustNewClient` is reserved for static/test setup where panic-on-bad-construction is intentional. `graphhttp.Provider` is the normal production constructor for those clients:
+
+- interactive bootstrap/CLI metadata clients compose `RetryTransport{Policy: retry.TransportPolicy()}`
+- interactive account-scoped metadata clients inject a shared `retry.ThrottleGate` so later requests in the same account respect server `Retry-After`
+- sync clients pass raw `*http.Client`s so failures return immediately for engine-level classification
+
+This keeps caller profile selection out of `graph` while preserving a single generic retry implementation.
 
 Pre-authenticated requests (upload chunks, downloads) go through `httpClient.Do()` directly. The `doPreAuth` helper sets `req.GetBody` using the `makeReq` factory so `RetryTransport` can rewind request bodies between attempts (e.g., `io.SectionReader` for upload chunks). It also attaches a request-scoped redacted log target such as `preauth:upload chunk`, so transport retry logs never emit the pre-authenticated URL itself.
 
@@ -186,6 +217,7 @@ The graph package intentionally keeps runtime ownership narrow:
 - Browser auth owns one callback server goroutine plus one result channel per login attempt. `doAuthCodeLogin` starts them, waits for the callback, and shuts them down before returning.
 - Token refresh state is delegated to the token source implementation. `graph` consumes it synchronously; it does not run a background refresh coordinator.
 - The sole raw `http.Client.Do` production boundary is `client_preauth.go`, where validated pre-authenticated URLs are dispatched.
+- `graphhttp.Provider` owns the long-lived HTTP clients and any caller-scoped shared throttle gates. It has no background goroutines and no package-level mutable state; the provider instance is the runtime owner.
 
 ## Design Constraints
 
@@ -195,7 +227,9 @@ The graph package intentionally keeps runtime ownership narrow:
 - Token refresh uses a forked `golang.org/x/oauth2` (`github.com/tonimelisma/oauth2`, branch `on-token-change`) with `Config.OnTokenChange` callback for persistence. Tracks upstream proposal `golang/go#77502`.
 - Pre-authenticated URLs (`@microsoft.graph.downloadUrl`, upload session URLs) bypass the Graph API — use `httpClient.Do(req)` directly, no base URL prefix, no auth headers. Never log these URLs.
 - The authenticated-success hook is only a proof signal. It must remain optional, per-client, and side-effect free from the graph package's perspective. Graph owns when the hook fires; callers own any resulting state repair.
-- Two HTTP clients: `defaultHTTPClient()` (30-second timeout for metadata) and `transferHTTPClient()` (no client-level timeout for large file transfers). Transfer clients use `transferTransport()` with `ResponseHeaderTimeout` and TCP keepalives to detect stalled/dead connections without bounding total transfer time.
+- `graphhttp.Provider` is the single owner of Graph-facing HTTP client construction. Metadata and transfer clients use transport-level deadlines with `Timeout = 0`; no Graph-facing client uses `http.Client.Timeout`.
+- Interactive metadata clients may share 429 `Retry-After` coordination through an injected `retry.ThrottleGate`. The coordination scope is currently account email because that is the identity available at CLI composition time. Per-tenant coordination remains planned.
+- `driveops.SessionProvider` receives a resolver that returns injected metadata/transfer clients per resolved drive. `driveops` stays agnostic about whether those clients came from interactive or sync profiles.
 - Upload URLs are sensitive credentials. The `UploadURL` type implements `slog.LogValuer` with redaction, matching the `DownloadURL` pattern.
 - Search API calls URL-escape query parameters to prevent special characters from breaking URL construction.
 - Token metadata validation is enforced on both write and read paths. Required fields must be present in non-nil metadata. `tokenfile.ValidateMeta()` validates before save, `LoadAndValidate()` validates on load.
