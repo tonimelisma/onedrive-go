@@ -78,13 +78,15 @@ vocabulary and copy:
 
 `accountReadModelService` builds one offline account catalog from configured drives,
 discovered account profiles, discovered token files, and persisted
-`auth:account` scope presence. `status`, `whoami`, `drive list`, and
-`drive search` all read from that same catalog so account discovery and auth
+`auth:account` scope presence. `status`, `whoami`, `drive list`, `drive search`,
+and `shared` all read from that same catalog so account discovery and auth
 projection stay consistent across surfaces. For `drive search`, that means
 account-level `accounts_requiring_auth` projection comes from every matching
 business account in the catalog, not just configured drives, so orphaned
 profiles and token-discovered business accounts do not disappear from the
-caller boundary when saved login state is missing or invalid.
+caller boundary when saved login state is missing or invalid. `shared` uses the
+same rule across all account types, so auth-required accounts are reported from
+the shared catalog even when only orphaned profile or token state remains.
 
 `whoami`, `drive list`, `drive search`, and ordinary single-drive file commands
 are proof surfaces because they already perform authenticated Graph requests.
@@ -202,12 +204,13 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
   - `authService`: login/logout/whoami flows
   - `driveService`: drive list/add/remove/search flows
   - `issuesService`: issue listing and failure/conflict mutations
+  - `sharedService`: shared-item discovery and auth-required projection
   - `statusService`: account/drive status aggregation, lenient config warning handling, offline auth-health projection, and read-only sync-state inspection
   - `syncControlService`: pause/resume config mutation flows
   - `recycleBinService`: recycle-bin list/restore/empty flows
   - `syncService`: multi-drive sync command assembly
   - `verifyService`: baseline verification flow
-- `accountReadModelService` is the shared read-model collaborator under `statusService`, `authService`, and `driveService`. It owns lenient config loading, warning logging, and offline account/auth projection so those command families do not rebuild account semantics independently.
+- `accountReadModelService` is the shared read-model collaborator under `statusService`, `authService`, `driveService`, and `sharedService`. It owns lenient config loading, warning logging, and offline account/auth projection so those command families do not rebuild account semantics independently.
 - `SessionProvider` caches `TokenSource`s by token file path — multiple drives sharing an account share one `TokenSource`, preventing OAuth2 refresh token rotation races.
 - CLI handlers use `cmd.Context()` for signal propagation. Exception: upload session cancel paths use `context.Background()` because the cancel must succeed even when the original context is done.
 - Production command code writes primary output through `CLIContext.OutputWriter`, and status/warning/error text through the CLI-owned status writer boundary instead of raw process-global stdout/stderr. This keeps command output injectable in tests and prevents hidden process-global output dependencies from creeping back into services, bootstrap warnings, or sync-daemon cleanup.

@@ -957,6 +957,9 @@ Key W5 gap notes:
   - `drive list` now has direct caller-level auth-required coverage rather than only helper and print-shape coverage. New text and JSON service tests prove that an invalid saved login on a configured drive marks the configured row as `required` and emits the corresponding `accounts_requiring_auth` entry with the right reason and retained state-database count.
   - `drive search` also had a real caller-boundary bug in auth projection. The service pulled auth-required business accounts only from configured catalog entries, so orphaned or token-discovered business accounts with invalid saved login fell through to the misleading "no business account found" error instead of surfacing `accounts_requiring_auth`. The fix makes `drive search` use the shared account catalog for all matching business accounts, regardless of whether the drive is configured.
   - New caller-level `drive search` tests now prove both text and JSON behavior for that boundary, including the `--account` filtered path: a business account with invalid saved login but no config still appears as an auth-required result with the retained state-database count.
+  - `shared` did not show the same production bug, but it had thinner caller-level proof and duplicated the read-model setup inline. The command now uses `accountReadModelService` directly, keeping lenient config loading and auth projection aligned with `whoami`, `drive list`, and `drive search`.
+  - New caller-level `shared` tests now prove auth-required projection in both text and JSON for an unconfigured account with invalid saved login, including the `--account` filtered JSON path.
+  - `drive search` text output was also slightly misleading when every matching business account required auth and no actual sites could be searched: it printed an empty "SharePoint sites matching ..." section. The text path now keeps the auth-required section and follows it with an explicit no-results message for searchable accounts only.
 
 | Contract / invariant | Evidence | Verdict | Notes |
 |---|---|---|---|
@@ -967,6 +970,7 @@ Key W5 gap notes:
 | `whoami` still emits offline `accounts_requiring_auth` output when only orphaned local account state remains | `REQ+DESIGN+BODY` | `proven` | Caller-level JSON test now proves read-model orchestration, not just print helpers |
 | `drive list` surfaces configured-drive auth-required state in both text and JSON output | `REQ+DESIGN+BODY` | `proven` | Caller-level tests now prove service-owned auth projection and emitted schema/section text |
 | `drive search` surfaces auth-required business accounts from the shared catalog even when no matching business drive is configured | `REQ+DESIGN+CODE+BODY` | `proven` | Fixed real production bug in search auth projection; caller-level text and JSON tests now kill the misleading "no business account found" fallback for orphaned/token-discovered business accounts |
+| `shared` surfaces auth-required accounts from the shared catalog in both text and JSON output | `REQ+DESIGN+CODE+BODY` | `proven` | Caller-level tests now prove `shared` reports unconfigured auth-required accounts and the service now reuses `accountReadModelService` instead of rebuilding the catalog inline |
 | direct API file commands remain successful and user-quiet when auth-proof cleanup cannot open a sync DB | `REQ+DESIGN+CODE+BODY` | `proven` | `authProofRecorder` now keeps proof-repair failures at debug level; caller-level `ls` and `rm` tests prove no user-visible sync-store warning leak |
 
 ### W8. Configuration Discovery, Validation Tiers, And Token Resolution
@@ -1058,4 +1062,4 @@ Key W5 gap notes:
    - remaining sparse remote-payload hardening and nil-guard proof paths
 3. Tighten W5 traceability for upload-session rules that are already strongly tested in body-level graph tests but still under-tagged at the `// Validates:` level.
 4. Continue W7 body-level reconciliation for:
-   - live logout / whoami / drive-list / drive-search proof against real config/token state beyond the now-expanded caller-level coverage
+   - live logout / whoami / drive-list / drive-search / shared proof against real config/token state beyond the now-expanded caller-level coverage
