@@ -246,6 +246,15 @@ func (flow *engineFlow) recordSkippedItems(ctx context.Context, skipped []syncty
 				slog.Int("count", len(items)),
 				slog.Any("sample_paths", samples),
 			)
+			// Keep full per-path visibility at Debug while avoiding a warning
+			// storm once a single scanner issue fans out across many files.
+			for i := range items {
+				eng.logger.Debug("observation filter: skipped file",
+					slog.String("path", items[i].Path),
+					slog.String("issue_type", reason),
+					slog.String("detail", items[i].Detail),
+				)
+			}
 		} else {
 			for i := range items {
 				eng.logger.Warn("observation filter: skipped file",
