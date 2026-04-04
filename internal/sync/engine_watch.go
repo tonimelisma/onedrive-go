@@ -265,8 +265,8 @@ func (rt *watchRuntime) initWatchInfra(
 	ready := buf.FlushDebounced(ctx, rt.engine.resolveDebounce(opts))
 
 	// Tickers.
-	reconcileC, stopReconcile := rt.engine.initReconcileTicker(opts)
-	recheckTicker := time.NewTicker(recheckInterval)
+	reconcileTicker := rt.engine.initReconcileTicker(opts)
+	recheckTicker := rt.engine.newTicker(recheckInterval)
 
 	// Arm retrier timer from DB — picks up items from prior crash or prior pass.
 	rt.kickRetrySweepNow()
@@ -277,18 +277,16 @@ func (rt *watchRuntime) initWatchInfra(
 		safety:           rt.engine.resolveSafetyConfig(opts.Force, true),
 		ready:            ready,
 		results:          pool.Results(),
-		reconcileC:       reconcileC,
+		reconcileC:       tickerChan(reconcileTicker),
 		reconcileResults: rt.reconcileResults,
-		recheckC:         recheckTicker.C,
+		recheckC:         tickerChan(recheckTicker),
 		mode:             mode,
 		pool:             pool,
 	}
 
 	pipe.cleanup = func() {
-		recheckTicker.Stop()
-		if stopReconcile != nil {
-			stopReconcile()
-		}
+		stopTicker(recheckTicker)
+		stopTicker(reconcileTicker)
 
 		inFlight := depGraph.InFlightCount()
 		if inFlight > 0 {
@@ -498,8 +496,8 @@ func (rt *watchRuntime) runPeriodicFullScan(
 	ctx context.Context, obs *syncobserve.LocalObserver, tree *synctree.Root,
 	events chan<- synctypes.ChangeEvent, interval time.Duration,
 ) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	ticker := rt.engine.newTicker(interval)
+	defer stopTicker(ticker)
 
 	rt.engine.logger.Info("periodic full scan fallback started",
 		slog.Duration("interval", interval),
@@ -507,7 +505,7 @@ func (rt *watchRuntime) runPeriodicFullScan(
 
 	for {
 		select {
-		case <-ticker.C:
+		case <-tickerChan(ticker):
 			// Jitter: sleep 0-10% of interval to prevent thundering-herd
 			// when multiple drives fire periodic scans simultaneously.
 			if jitter := interval / periodicScanJitterDivisor; jitter > 0 {

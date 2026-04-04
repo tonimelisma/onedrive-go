@@ -1,10 +1,9 @@
 package cli
 
 import (
-	"fmt"
+	"context"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
-	"github.com/tonimelisma/onedrive-go/internal/failures"
 )
 
 type statusService struct {
@@ -17,19 +16,13 @@ func newStatusService(cc *CLIContext) *statusService {
 
 func (s *statusService) run() error {
 	logger := s.cc.Logger
-	cfgPath := s.cc.CfgPath
-
-	cfg, warnings, err := config.LoadOrDefaultLenient(cfgPath, logger)
-	outcome := config.ClassifyLoadOutcome(err, warnings)
+	readModel := newAccountReadModelService(s.cc)
+	snapshot, err := readModel.loadLenientCatalog(context.Background())
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
+		return err
 	}
 
-	if outcome.Class == failures.ClassActionable {
-		config.LogWarnings(warnings, logger)
-	}
-
-	if len(cfg.Drives) == 0 {
+	if len(snapshot.Config.Drives) == 0 {
 		tokens := config.DiscoverTokens(logger)
 		if len(tokens) > 0 {
 			return writeln(s.cc.Output(), "No drives configured. Run 'onedrive-go drive add' to add a drive.")
@@ -38,7 +31,7 @@ func (s *statusService) run() error {
 		return writeln(s.cc.Output(), "No accounts configured. Run 'onedrive-go login' to get started.")
 	}
 
-	accounts := buildStatusAccounts(cfg, logger)
+	accounts := readModel.statusAccounts(snapshot)
 	if s.cc.Flags.JSON {
 		return printStatusJSON(s.cc.Output(), accounts)
 	}

@@ -1,0 +1,25 @@
+Account: Alice Example (alice@example.com) [personal]
+  Org:   Contoso
+  Auth:  ready
+  Alice Personal (personal:alice@example.com)
+    Sync dir:  /Users/alice/OneDrive
+    State:     ready
+    Last sync: 2026-04-03T10:30:00Z (42 files)
+    Pending:   2 items
+    Issues:    3 (run 'onedrive-go issues')
+    Issue groups:
+      - INVALID FILENAME (file scope): 1
+      - AUTHENTICATION REQUIRED (account your OneDrive account authorization): 1
+      - SHARED FOLDER WRITES BLOCKED (shortcut Shared/Docs): 1
+    Retrying:  1 items
+    Last error: sync: network timeout
+
+Account: bob@example.com [business]
+  Auth:  authentication_required
+  Reason: The saved login for this account is invalid or unreadable.
+  Action: Run 'onedrive-go login' to sign in.
+  Bob Work (business:bob@example.com)
+    Sync dir:  /Users/bob/WorkDrive
+    State:     paused
+
+Summary: 2 drives (1 ready, 1 paused, 1 accounts requiring auth), 3 issues, 2 pending, 1 retrying

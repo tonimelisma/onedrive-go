@@ -33,7 +33,7 @@ func newStatusCmd() *cobra.Command {
 
 Shows authentication health, sync directory, and paused/ready status for each drive.
 Reads from config only — does not discover drives from tokens on disk.`,
-		Annotations: map[string]string{skipConfigAnnotation: "true"},
+		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
 		RunE:        runStatus,
 	}
 }
@@ -120,13 +120,6 @@ type liveSyncStateQuerier struct {
 func (q *liveSyncStateQuerier) QuerySyncState(cid driveid.CanonicalID) *syncStateInfo {
 	statePath := config.DriveStatePath(cid)
 	return querySyncState(statePath, q.logger)
-}
-
-// buildStatusAccounts groups configured drives by account email and projects
-// offline authentication health for each account from local state only.
-func buildStatusAccounts(cfg *config.Config, logger *slog.Logger) []statusAccount {
-	catalog := buildAccountCatalog(context.Background(), cfg, logger)
-	return buildStatusAccountsFromCatalog(cfg, catalog, &liveSyncStateQuerier{logger: logger})
 }
 
 // buildStatusAccountsWith is the testable core of buildStatusAccounts.

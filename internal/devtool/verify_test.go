@@ -107,6 +107,26 @@ func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 }
 
 // Validates: R-6.2.1
+func TestRunVerifyStressRunsExpectedSteps(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	runner := &fakeRunner{}
+
+	err := RunVerify(context.Background(), runner, VerifyOptions{
+		RepoRoot: repoRoot,
+		Profile:  VerifyStress,
+		Stdout:   &bytes.Buffer{},
+		Stderr:   &bytes.Buffer{},
+	})
+	require.NoError(t, err)
+
+	require.Len(t, runner.runCommands, 1)
+	assert.Equal(t, "go", runner.runCommands[0].name)
+	assert.Equal(t, []string{"test", "-race", "-count=50", "./internal/sync", "./internal/multisync", "./internal/cli"}, runner.runCommands[0].args)
+}
+
+// Validates: R-6.2.1
 func TestRunVerifyFailsOnForbiddenRepoPattern(t *testing.T) {
 	t.Parallel()
 
@@ -405,6 +425,22 @@ func TestRunRepoConsistencyChecksFailsOnExecCommandContextOutsideApprovedBoundar
 }
 
 // Validates: R-6.10.5
+func TestRunRepoConsistencyChecksFailsOnExecCommandOutsideApprovedBoundary(t *testing.T) {
+	t.Parallel()
+
+	assertRepoConsistencyRejectsPrivilegedCall(t, "bad_exec_command.go", []string{
+		"package bad",
+		"",
+		"import \"os/exec\"",
+		"",
+		"func run() error {",
+		"\treturn exec.Command(\"echo\", \"nope\").Run()",
+		"}",
+		"",
+	}, "exec.Command")
+}
+
+// Validates: R-6.10.5
 func TestRunRepoConsistencyChecksFailsOnSQLOpenOutsideApprovedBoundary(t *testing.T) {
 	t.Parallel()
 
@@ -437,6 +473,69 @@ func TestRunRepoConsistencyChecksFailsOnSignalNotifyOutsideApprovedBoundary(t *t
 		"}",
 		"",
 	}, "signal.Notify")
+}
+
+// Validates: R-6.10.5
+func TestRunRepoConsistencyChecksFailsOnSignalStopOutsideApprovedBoundary(t *testing.T) {
+	t.Parallel()
+
+	assertRepoConsistencyRejectsPrivilegedCall(t, "bad_signal_stop.go", []string{
+		"package bad",
+		"",
+		"import (",
+		"\t\"os\"",
+		"\t\"os/signal\"",
+		")",
+		"",
+		"func watch(ch chan os.Signal) {",
+		"\tsignal.Stop(ch)",
+		"}",
+		"",
+	}, "signal.Stop")
+}
+
+// Validates: R-6.10.5
+func TestRunRepoConsistencyChecksFailsOnOSExitOutsideApprovedBoundary(t *testing.T) {
+	t.Parallel()
+
+	assertRepoConsistencyRejectsPrivilegedCall(t, "bad_exit.go", []string{
+		"package bad",
+		"",
+		"import \"os\"",
+		"",
+		"func exitNow() {",
+		"\tos.Exit(1)",
+		"}",
+		"",
+	}, "os.Exit")
+}
+
+// Validates: R-6.10.5
+func TestRunRepoConsistencyChecksIgnoresTestSupportOSExitOutsideProductionRoots(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	testutilDir := filepath.Join(repoRoot, "testutil")
+	require.NoError(t, os.MkdirAll(testutilDir, 0o750))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(testutilDir, "testenv.go"),
+		[]byte(strings.Join([]string{
+			"package testutil",
+			"",
+			"import \"os\"",
+			"",
+			"func fatal() {",
+			"\tos.Exit(1)",
+			"}",
+			"",
+		}, "\n")),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.NoError(t, err)
 }
 
 func assertRepoConsistencyRejectsPrivilegedCall(

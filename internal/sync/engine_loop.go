@@ -154,15 +154,16 @@ func (rt *watchRuntime) runWatchUntilQuiescent(
 	p *watchPipeline,
 	initialOutbox []*synctypes.TrackedAction,
 ) error {
-	ticker := time.NewTicker(quiescenceLogInterval)
-	defer ticker.Stop()
+	ticker := rt.engine.newTicker(quiescenceLogInterval)
+	defer stopTicker(ticker)
 
 	outbox := append([]*synctypes.TrackedAction(nil), initialOutbox...)
 	emptyCh := rt.depGraph.WaitForEmpty()
+	logC := tickerChan(ticker)
 
 	for {
 		if len(outbox) == 0 {
-			nextOutbox, done, err := rt.runBootstrapLoop(ctx, p, ticker.C, emptyCh, outbox)
+			nextOutbox, done, err := rt.runBootstrapLoop(ctx, p, logC, emptyCh, outbox)
 			if err != nil {
 				return err
 			}
@@ -173,7 +174,7 @@ func (rt *watchRuntime) runWatchUntilQuiescent(
 			continue
 		}
 
-		nextOutbox, done, err := rt.runBootstrapLoop(ctx, p, ticker.C, emptyCh, outbox)
+		nextOutbox, done, err := rt.runBootstrapLoop(ctx, p, logC, emptyCh, outbox)
 		if err != nil {
 			return err
 		}

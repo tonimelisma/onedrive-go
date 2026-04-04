@@ -13,6 +13,11 @@ add context, but they do not invent a second classification scheme.
 classes and log owners. Boundary packages consume that shared vocabulary rather
 than re-declaring local enums.
 
+Structured sync logs are part of that shared contract: the engine logs the
+classified `failures.Class` and `synctypes.SummaryKey` together with stable
+run/action identifiers so runtime evidence, persisted rows, and CLI read models
+can be compared directly.
+
 ## Related Projections
 
 The repository keeps three related but distinct projections of failure state:
@@ -103,6 +108,7 @@ child work itself.
 |----------|----------|
 | Shared failure classes | `internal/failures/failures_test.go`, `internal/config/failure_class_test.go`, `internal/cli/failure_class_test.go` |
 | Shared summary key mapping and descriptors | `internal/synctypes/summary_keys_test.go`, `internal/cli/failure_display_test.go` (`TestGroupFailures_UsesSharedSummaryFallback`), `internal/sync/engine_result_scope_test.go` (`TestRecordFailure_LogsSummaryKey`, `TestProcessWorkerResult_EndToEndSummaryKey_ServiceOutage`, `TestProcessWorkerResult_EndToEndSummaryKey_SharedFolderWritesBlocked`, `TestProcessWorkerResult_EndToEndSummaryKey_AuthenticationRequired`, `TestProcessWorkerResult_EndToEndSummaryKey_LocalPermissionDenied`) |
+| Structured sync log schema from classified results | `internal/sync/engine_result_scope_test.go` (`TestRecordFailure_LogsSummaryKey`, `TestProcessWorkerResult_EndToEndSummaryKey_ServiceOutage`, `TestProcessWorkerResult_EndToEndSummaryKey_SharedFolderWritesBlocked`, `TestProcessWorkerResult_EndToEndSummaryKey_AuthenticationRequired`, `TestProcessWorkerResult_EndToEndSummaryKey_LocalPermissionDenied`) |
 | Sync result classification and persistence mapping | `internal/sync/engine_result_scope_test.go` (`TestClassifyResult_LifecycleAndAuth`, `TestClassifyResult_StorageScopes`, `TestDiskLocalScopeBlock_FullCycle`, `TestRetryPipeline_TransientFailure_IntegratedRetrier`) |
 | Trial routing from classified decisions | `internal/sync/engine_result_scope_test.go` (`TestProcessTrialResultV2_Success_ClearsScope`, `TestProcessTrialResultV2_Preserve_LocalPermissionRecordsCandidateFailure`, `TestEvaluateTrialOutcome_OnlyMatchingScopeEvidenceExtends`) |
 | CLI exit/presentation mapping | `internal/cli/failure_class_test.go`, `internal/cli/root_test.go` (`TestErrVerifyMismatch_IsSentinel`) |

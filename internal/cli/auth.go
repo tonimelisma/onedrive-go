@@ -18,7 +18,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/failures"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
@@ -51,7 +50,7 @@ Creates or updates the config file with the new drive section.
 
 The --browser flag opens your default browser for authentication, which can be
 useful when the device code flow is blocked by organizational policies.`,
-		Annotations: map[string]string{skipConfigAnnotation: "true"},
+		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
 		RunE:        runLogin,
 	}
 
@@ -71,7 +70,7 @@ With --purge, state databases are also deleted.
 
 If only one account is configured, it is selected automatically.
 Otherwise, use --account to specify which account to log out.`,
-		Annotations: map[string]string{skipConfigAnnotation: "true"},
+		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
 		RunE:        runLogout,
 	}
 
@@ -84,7 +83,7 @@ func newWhoamiCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:         "whoami",
 		Short:       "Display the authenticated user and drive info",
-		Annotations: map[string]string{skipConfigAnnotation: "true"},
+		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
 		RunE:        runWhoami,
 	}
 }
@@ -779,17 +778,12 @@ func runWhoami(cmd *cobra.Command, _ []string) error {
 
 func runWhoamiWithContext(ctx context.Context, cc *CLIContext) error {
 	logger := cc.Logger
-	cfg, warnings, err := config.LoadOrDefaultLenient(cc.CfgPath, logger)
-	outcome := config.ClassifyLoadOutcome(err, warnings)
+	readModel := newAccountReadModelService(cc)
+	snapshot, err := readModel.loadLenientCatalog(ctx)
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
+		return err
 	}
 
-	if outcome.Class == failures.ClassActionable {
-		config.LogWarnings(warnings, logger)
-	}
-
-	catalog := buildAccountCatalog(ctx, cfg, logger)
 	driveSelector, driveErr := cc.Flags.SingleDrive()
 	if driveErr != nil {
 		return driveErr
@@ -798,13 +792,21 @@ func runWhoamiWithContext(ctx context.Context, cc *CLIContext) error {
 	recorder := newAuthProofRecorder(logger)
 
 	// Try the authenticated path: match drive → fetch from Graph API.
-	authResult, authErr := fetchAuthenticatedAccount(ctx, cfg, catalog, driveSelector, logger, recorder, cc.GraphBaseURL)
+	authResult, authErr := fetchAuthenticatedAccount(
+		ctx,
+		snapshot.Config,
+		snapshot.Catalog,
+		driveSelector,
+		logger,
+		recorder,
+		cc.GraphBaseURL,
+	)
 	if authErr != nil {
 		return authErr
 	}
 
 	// Discover offline auth-required accounts from orphaned account profiles.
-	authRequired := whoamiAuthRequiredAccounts(catalog, authResult.authenticatedEmail)
+	authRequired := readModel.whoamiAuthRequired(snapshot, authResult.authenticatedEmail)
 	if authResult.authRequired != nil {
 		authRequired = mergeAuthRequirements(authRequired, []accountAuthRequirement{*authResult.authRequired})
 	}

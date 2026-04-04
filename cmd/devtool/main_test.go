@@ -70,6 +70,39 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 }
 
 // Validates: R-6.2.1
+func TestNewStateAuditCmdRequiresDBFlag(t *testing.T) {
+	t.Parallel()
+
+	cmd := newStateAuditCmd(func(context.Context, devtool.StateAuditOptions) error { return nil })
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "required flag")
+}
+
+// Validates: R-6.2.1
+func TestNewStateAuditCmdPassesFlagsThrough(t *testing.T) {
+	t.Parallel()
+
+	var got devtool.StateAuditOptions
+
+	cmd := newStateAuditCmd(func(_ context.Context, opts devtool.StateAuditOptions) error {
+		got = opts
+		return nil
+	})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"--db", "/tmp/state.db", "--json", "--repair-safe"})
+
+	require.NoError(t, cmd.Execute())
+	assert.Equal(t, "/tmp/state.db", got.DBPath)
+	assert.True(t, got.JSON)
+	assert.True(t, got.RepairSafe)
+}
+
+// Validates: R-6.2.1
 func TestNewWorktreeAddCmdRequiresFlags(t *testing.T) {
 	t.Parallel()
 
@@ -190,7 +223,7 @@ func TestNewRootCmd(t *testing.T) {
 	cmd := newRootCmd()
 	require.NotNil(t, cmd)
 	assert.Equal(t, "devtool", cmd.Use)
-	assert.Len(t, cmd.Commands(), 2)
+	assert.Len(t, cmd.Commands(), 3)
 }
 
 // Validates: R-6.2.1
@@ -233,6 +266,18 @@ func TestDefaultAddWorktreeWrapsError(t *testing.T) {
 	err := defaultAddWorktree(context.Background(), repoRoot, filepath.Join(repoRoot, "wt"), "refactor/test")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "add worktree")
+}
+
+// Validates: R-6.2.1
+func TestDefaultStateAuditWrapsError(t *testing.T) {
+	t.Parallel()
+
+	err := defaultStateAudit(context.Background(), devtool.StateAuditOptions{
+		DBPath: filepath.Join(t.TempDir(), "missing.db"),
+		Stdout: io.Discard,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "run state audit")
 }
 
 // Validates: R-6.2.1
@@ -311,7 +356,7 @@ func TestDevtoolBinary_VerifyRejectsUnknownProfile(t *testing.T) {
 
 	_, stderr, err := runBinary(t, t.TempDir(), binPath, "verify", "weird")
 	require.Error(t, err)
-	assert.Contains(t, stderr, "usage: devtool verify [default|public|e2e|e2e-full|integration]")
+	assert.Contains(t, stderr, "usage: devtool verify [default|public|e2e|e2e-full|integration|stress]")
 }
 
 // Validates: R-6.2.1

@@ -1,0 +1,74 @@
+{
+  "accounts": [
+    {
+      "email": "alice@example.com",
+      "drive_type": "personal",
+      "auth_state": "ready",
+      "display_name": "Alice Example",
+      "org_name": "Contoso",
+      "drives": [
+        {
+          "canonical_id": "personal:alice@example.com",
+          "display_name": "Alice Personal",
+          "sync_dir": "/Users/alice/OneDrive",
+          "state": "ready",
+          "sync_state": {
+            "last_sync_time": "2026-04-03T10:30:00Z",
+            "last_sync_duration": "1500",
+            "file_count": 42,
+            "issues": 3,
+            "issue_groups": [
+              {
+                "summary_key": "invalid_filename",
+                "title": "INVALID FILENAME",
+                "count": 1,
+                "scope_kind": "file"
+              },
+              {
+                "summary_key": "authentication_required",
+                "title": "AUTHENTICATION REQUIRED",
+                "count": 1,
+                "scope_kind": "account",
+                "scope": "your OneDrive account authorization"
+              },
+              {
+                "summary_key": "shared_folder_writes_blocked",
+                "title": "SHARED FOLDER WRITES BLOCKED",
+                "count": 1,
+                "scope_kind": "shortcut",
+                "scope": "Shared/Docs"
+              }
+            ],
+            "pending_sync": 2,
+            "retrying": 1,
+            "last_error": "sync: network timeout"
+          }
+        }
+      ]
+    },
+    {
+      "email": "bob@example.com",
+      "drive_type": "business",
+      "auth_state": "authentication_required",
+      "auth_reason": "invalid_saved_login",
+      "auth_action": "Run 'onedrive-go login' to sign in.",
+      "drives": [
+        {
+          "canonical_id": "business:bob@example.com",
+          "display_name": "Bob Work",
+          "sync_dir": "/Users/bob/WorkDrive",
+          "state": "paused"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "total_drives": 2,
+    "ready": 1,
+    "paused": 1,
+    "accounts_requiring_auth": 1,
+    "total_issues": 3,
+    "total_pending_sync": 2,
+    "total_retrying": 1
+  }
+}

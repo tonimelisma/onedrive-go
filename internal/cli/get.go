@@ -157,7 +157,7 @@ func printGetFolderJSON(w io.Writer, out getFolderJSONOutput) error {
 
 // downloadState holds mutable state shared across the recursive download.
 type downloadState struct {
-	mu          sync.Mutex
+	mu          sync.Mutex // guards result, done, total, childCache, and countErrors across recursive workers
 	wg          sync.WaitGroup
 	sem         chan struct{} // shared semaphore bounding total concurrency
 	result      getFolderJSONOutput

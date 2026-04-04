@@ -314,18 +314,23 @@ func (controller *scopeController) applyFatalAuthEffects(
 	flow := controller.flow
 
 	if err := controller.activateAuthScope(ctx, watch); err != nil {
-		flow.engine.logger.Warn("fatal unauthorized: failed to persist auth scope",
-			slog.String("path", r.Path),
-			slog.String("summary_key", string(summaryKey)),
-			slog.String("error", err.Error()),
-		)
+		fields := append(flow.summaryLogFields(
+			failures.ClassFatal,
+			summaryKey,
+			r.Path,
+			synctypes.SKAuthAccount(),
+		), slog.String("error", err.Error()))
+		flow.engine.logger.Warn("fatal unauthorized: failed to persist auth scope", fields...)
 		return
 	}
 
 	flow.engine.logger.Error("authentication required: sync stopping",
-		slog.String("path", r.Path),
-		slog.String("summary_key", string(summaryKey)),
-		slog.String("scope_key", synctypes.SKAuthAccount().String()),
+		flow.summaryLogFields(
+			failures.ClassFatal,
+			summaryKey,
+			r.Path,
+			synctypes.SKAuthAccount(),
+		)...,
 	)
 }
 
@@ -399,22 +404,16 @@ func (flow *engineFlow) recordFailure(
 		HTTPStatus: r.HTTPStatus,
 		ScopeKey:   scopeKey,
 	}, delayFn); recErr != nil {
-		flow.engine.logger.Warn("failed to record failure",
-			slog.String("path", r.Path),
-			slog.String("summary_key", string(decision.SummaryKey)),
-			slog.String("error", recErr.Error()),
-		)
+		fields := append(flow.resultLogFields(decision, r), slog.String("error", recErr.Error()))
+		flow.engine.logger.Warn("failed to record failure", fields...)
 
 		return
 	}
 
-	flow.engine.logger.Debug("sync failure recorded",
-		slog.String("path", r.Path),
-		slog.String("action", r.ActionType.String()),
-		slog.Int("http_status", r.HTTPStatus),
-		slog.String("summary_key", string(decision.SummaryKey)),
+	fields := append(flow.resultLogFields(decision, r),
 		slog.String("issue_type", decision.IssueType),
 		slog.String("error", r.ErrMsg),
-		slog.String("scope_key", scopeKey.String()),
+		slog.String("scope_evidence", scopeKey.String()),
 	)
+	flow.engine.logger.Debug("sync failure recorded", fields...)
 }

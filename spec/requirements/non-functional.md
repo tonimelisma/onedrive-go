@@ -32,6 +32,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.3.2: Status and query commands shall be concurrent-reader safe while sync is running. [verified]
 - R-6.3.3: The system shall enforce single-instance via PID file with advisory lock. [verified]
 - R-6.3.4: Concurrent and runtime components shall document the single owner of mutable state, goroutines, channels, timers, and mutex-guarded fields. [verified]
+- R-6.3.5: Runtime-critical mutexes shall document the fields they guard, and any intentional nested lock ordering shall be called out in code comments or the governing design doc. [verified]
 
 ## R-6.4 Safety [implemented]
 
@@ -64,6 +65,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.6.10: When retries are exhausted, the system shall log a single WARN with final error, attempt count, and next retry time. [verified]
 - R-6.6.11: Every failure shown to the user shall include a plain-language reason and a concrete user action. Per-error-type reason and action text shall cover all failure categories (quota, permissions, disk space, service outage, rate limiting, naming violations, case collisions, network errors, auth failures, unknown errors), with scope-owner-specific variants for shortcut-scoped failures. [verified]
 - R-6.6.12: When more than 10 transient failures of the same issue_type exhaust their retry budget within a single sync pass, the system shall aggregate them into a single summary WARN log line with count, logging individual paths at DEBUG. This extends the scanner-skipped aggregation pattern (R-6.6.7) to execution-time transient failures. [verified]
+- R-6.6.13: Classified sync outcome logs shall emit a stable structured schema. Every classified sync log line shall carry `summary_key`, `failure_class`, `log_owner`, `scope_key`, `path`, and `run_id`. Result-path logs shall also carry `drive_id`, `action_type`, and `action_id`, with `shortcut_key`, `http_status`, and `trial_scope_key` added when applicable. [verified]
 
 ## R-6.7 Technical Requirements [implemented]
 
@@ -134,3 +136,5 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.10.5: Architecture-boundary violations shall fail static verification, with code-shape rules enforced by linting and repo-level invariants enforced by `cmd/devtool verify`. [verified]
 - R-6.10.6: Every governed module design doc shall include an ownership contract that states what the module owns, what it does not own, its source of truth, allowed side effects, mutable runtime owner, and error boundary. [verified]
 - R-6.10.7: The architecture shall include verified threat-model and degraded-mode design docs, and `system.md` shall link to them as required cross-cutting references. [verified]
+- R-6.10.8: The repository shall provide a non-default stress verification profile for runtime-critical packages, and CI shall expose it as a scheduled and manually triggered lane. [verified]
+- R-6.10.9: The degraded-mode matrix shall map each stable degraded-mode ID to exact named tests, and repo verification shall enforce the required evidence-table structure in the design docs. [verified]
