@@ -429,7 +429,7 @@ func (coordinator *shortcutCoordinator) observeShortcutsConcurrently(
 
 	results := make([]scopeResult, len(shortcuts))
 
-	var mu stdsync.Mutex
+	var mu stdsync.Mutex // guards writes to results while shortcut workers finish out of order
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(maxShortcutConcurrency)

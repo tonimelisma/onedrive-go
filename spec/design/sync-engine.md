@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/engine*.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/engine_shortcuts.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_decisions.go, sync_helpers.go
 
-Implements: R-2.1 [verified], R-2.3.11 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-2.10.45 [verified], R-2.10.46 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified], R-2.14.5 [verified], R-6.3.4 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [planned], R-6.6.10 [verified], R-6.6.12 [verified], R-6.7.27 [verified], R-6.8.15 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
+Implements: R-2.1 [verified], R-2.3.11 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-2.10.45 [verified], R-2.10.46 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified], R-2.14.5 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [planned], R-6.6.10 [verified], R-6.6.12 [verified], R-6.6.13 [verified], R-6.7.27 [verified], R-6.8.15 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
 
 ## Ownership Contract
 
@@ -121,6 +121,13 @@ but those accessors snapshot or replace the tiny working sets under
 per-runtime locks so tests, startup repair, and timer re-arming cannot race on
 raw slice or timer-pointer fields.
 
+Time boundaries are also engine-owned. `Engine.afterFunc` and
+`Engine.newTicker` are the only production timer/ticker constructors used by
+the watch runtime, bootstrap quiescence loop, retry/trial scheduling, and
+periodic full-scan fallback. Production uses wall-clock implementations;
+same-package tests inject deterministic timers without rewriting the runtime
+logic.
+
 The shared `engineFlow` object carries the mutable execution state common to
 both coordinators: dependency graph, ready channel, shortcut snapshot,
 aggregated success/error counters, shared observation helpers, skipped-item
@@ -205,6 +212,27 @@ Permission-flow and fatal-auth side effects follow the same rule: their
 durable writes and scope-activation logs emit the normalized `summary_key`
 instead of inventing a second presentation taxonomy for shared-folder blocked,
 local-permission, or auth-required paths.
+
+Result handling is intentionally split into three layers inside the engine:
+
+- `classifyResult()` is the pure classification boundary.
+- Class-based ready routing (`routeReadyForClass`) decides how dependents are
+  admitted or completed from the classified result only.
+- Post-routing effect application (`applySuccessEffects`,
+  `applyOrdinaryFailureEffects`, and explicit trial/fatal handlers) performs
+  persistence, scope actions, timer arming, and logging without re-inspecting
+  raw transport facts.
+
+That split keeps raw worker evidence at the classification boundary and makes
+the remaining flow consume an explicit policy object instead of re-deriving
+behavior ad hoc.
+
+Structured sync outcome logs use one schema across classified paths:
+`summary_key`, `failure_class`, `log_owner`, `scope_key`, `drive_id`,
+`action_type`, `path`, `run_id`, and `action_id`, with `shortcut_key`,
+`http_status`, and `trial_scope_key` included when they exist. `run_id` is
+stable for one engine run, and `action_id` follows the tracked action through
+the runtime flow.
 
 ### Scope Detection and Management
 

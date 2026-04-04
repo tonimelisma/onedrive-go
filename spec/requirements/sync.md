@@ -31,6 +31,7 @@ When the same file has been modified on both the local filesystem and OneDrive s
 - R-2.3.9: When displaying shortcut-scoped failures, the system shall use the shortcut's local path name (human-readable), not internal drive IDs or scope keys. [verified]
 - R-2.3.10: When `--json` is passed, `issues` shall output structured JSON with separate `conflicts`, `failure_groups`, and `held_deletes` arrays. [verified]
 - R-2.3.11: When the user runs `issues recheck <boundary>` on a shared-folder write block, the system shall queue a boundary-level permission revalidation without retrying a specific blocked child action. If the boundary is still read-only, the block remains; if the boundary is writable or the Graph evidence is inconclusive, the block shall be released. [verified]
+- R-2.3.12: `issues clear`, `issues retry`, and repeated conflict resolution attempts shall be replay-safe. Repeating the same mutation shall either be a no-op or return a stable already-resolved result, without duplicate durable effects or partial scope release. [verified]
 
 ## R-2.4 Filtering [implemented]
 
@@ -52,6 +53,7 @@ trust the server and does not silently drop remote-only items.
 - R-2.5.2: The sync state store shall provide durable, transactional writes that survive process kill. [verified]
 - R-2.5.3: On startup, the system shall detect items stuck in `syncing` state and reset them for re-planning (reconciler). [verified]
 - R-2.5.4: When `ResetInProgressStates` resets items to pending state, the system shall create corresponding `sync_failures` entries so the `FailureRetrier` can rediscover and re-process them. Without this bridge, items that crashed mid-execution become zombies — the delta token was already advanced, so no new events arrive. [verified]
+- R-2.5.5: The repository shall provide a store-owned sync-state audit and deterministic safe-repair tool that reports persisted integrity violations, performs only non-guessing normalizations, and reruns inspection after repair without changing the SQLite schema. [verified]
 
 ## R-2.6 Pause / Resume [verified]
 

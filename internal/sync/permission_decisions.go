@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/failures"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -122,11 +123,16 @@ func (controller *scopeController) logPermissionCheckDecision(
 		controller.logRemotePermissionDecision(decision, summaryKey)
 	case permissionFlowLocalPermission:
 		if decision.Kind == permissionCheckActivateBoundaryScope {
-			controller.flow.engine.logger.Info("local permission denied: directory blocked",
+			fields := append(controller.flow.summaryLogFields(
+				failures.ClassActionable,
+				summaryKey,
+				decision.TriggerPath,
+				decision.ScopeBlock.Key,
+			),
 				slog.String("boundary", decision.BoundaryPath),
 				slog.String("trigger_path", decision.TriggerPath),
-				slog.String("summary_key", string(summaryKey)),
 			)
+			controller.flow.engine.logger.Info("local permission denied: directory blocked", fields...)
 		}
 	default:
 		panic(fmt.Sprintf("unknown permission flow %d", flowKind))
@@ -145,12 +151,16 @@ func (controller *scopeController) logRemotePermissionDecision(
 	if scopeKey.IsZero() {
 		scopeKey = decision.ScopeBlock.Key
 	}
-	controller.flow.engine.logger.Info("handle403: read-only remote boundary detected, writes suppressed recursively",
+	fields := append(controller.flow.summaryLogFields(
+		failures.ClassActionable,
+		summaryKey,
+		decision.TriggerPath,
+		scopeKey,
+	),
 		slog.String("boundary", decision.BoundaryPath),
 		slog.String("trigger_path", decision.TriggerPath),
-		slog.String("scope_key", scopeKey.String()),
-		slog.String("summary_key", string(summaryKey)),
 	)
+	controller.flow.engine.logger.Info("handle403: read-only remote boundary detected, writes suppressed recursively", fields...)
 }
 
 func (controller *scopeController) applyPermissionRecheckDecisions(
@@ -197,20 +207,25 @@ func (controller *scopeController) recordExplicitFailure(ctx context.Context, pa
 	summaryKey := synctypes.SummaryKeyForPersistedFailure(params.IssueType, params.Category, params.Role)
 
 	if err := flow.engine.baseline.RecordFailure(ctx, params, nil); err != nil {
-		flow.engine.logger.Warn("failed to record permission failure",
-			slog.String("path", params.Path),
-			slog.String("summary_key", string(summaryKey)),
-			slog.String("error", err.Error()),
-		)
+		fields := append(flow.summaryLogFields(
+			failures.ClassActionable,
+			summaryKey,
+			params.Path,
+			params.ScopeKey,
+		), slog.String("error", err.Error()))
+		flow.engine.logger.Warn("failed to record permission failure", fields...)
 		return
 	}
 
-	flow.engine.logger.Debug("permission failure recorded",
-		slog.String("path", params.Path),
-		slog.String("summary_key", string(summaryKey)),
+	fields := append(flow.summaryLogFields(
+		failures.ClassActionable,
+		summaryKey,
+		params.Path,
+		params.ScopeKey,
+	),
 		slog.String("issue_type", params.IssueType),
-		slog.String("scope_key", params.ScopeKey.String()),
 	)
+	flow.engine.logger.Debug("permission failure recorded", fields...)
 }
 
 func (controller *scopeController) applyShortcutRemovalDecisionsWithWatch(

@@ -28,6 +28,7 @@ const (
 	VerifyE2E         VerifyProfile = "e2e"
 	VerifyE2EFull     VerifyProfile = "e2e-full"
 	VerifyIntegration VerifyProfile = "integration"
+	VerifyStress      VerifyProfile = "stress"
 )
 
 type VerifyOptions struct {
@@ -45,6 +46,7 @@ type verifyPlan struct {
 	runE2E          bool
 	runE2EFull      bool
 	runIntegration  bool
+	runStress       bool
 }
 
 type staleCheck struct {
@@ -118,8 +120,12 @@ func resolveVerifyPlan(profile VerifyProfile) (verifyPlan, error) {
 		return verifyPlan{
 			runIntegration: true,
 		}, nil
+	case VerifyStress:
+		return verifyPlan{
+			runStress: true,
+		}, nil
 	default:
-		return verifyPlan{}, fmt.Errorf("usage: devtool verify [default|public|e2e|e2e-full|integration]")
+		return verifyPlan{}, fmt.Errorf("usage: devtool verify [default|public|e2e|e2e-full|integration|stress]")
 	}
 }
 
@@ -221,6 +227,11 @@ func runOptionalVerification(
 
 	if plan.runIntegration {
 		if err := runIntegration(ctx, runner, opts.RepoRoot, env, stdout, stderr); err != nil {
+			return err
+		}
+	}
+	if plan.runStress {
+		if err := runStress(ctx, runner, opts.RepoRoot, env, stdout, stderr); err != nil {
 			return err
 		}
 	}
@@ -445,6 +456,30 @@ func runIntegration(ctx context.Context, runner commandRunner, repoRoot string, 
 		"./internal/graph/...",
 	); err != nil {
 		return fmt.Errorf("integration tests: %w", err)
+	}
+
+	return nil
+}
+
+func runStress(ctx context.Context, runner commandRunner, repoRoot string, env []string, stdout, stderr io.Writer) error {
+	if err := writeStatus(stdout, "==> go test -race -count=50 runtime stress\n"); err != nil {
+		return fmt.Errorf("write status: %w", err)
+	}
+	if err := runner.Run(
+		ctx,
+		repoRoot,
+		env,
+		stdout,
+		stderr,
+		"go",
+		"test",
+		"-race",
+		"-count=50",
+		"./internal/sync",
+		"./internal/multisync",
+		"./internal/cli",
+	); err != nil {
+		return fmt.Errorf("stress tests: %w", err)
 	}
 
 	return nil
@@ -817,10 +852,19 @@ type packageSelectorBoundaryRule struct {
 	selector    string
 	description string
 	allowed     func(string) bool
+	roots       []string
 }
 
 func ensurePrivilegedPackageCallsStayAtApprovedBoundaries(repoRoot string) error {
 	rules := []packageSelectorBoundaryRule{
+		{
+			importPath:  "os/exec",
+			selector:    "Command",
+			description: "exec.Command is forbidden in production code",
+			allowed: func(string) bool {
+				return false
+			},
+		},
 		{
 			importPath:  "os/exec",
 			selector:    "CommandContext",
@@ -833,10 +877,10 @@ func ensurePrivilegedPackageCallsStayAtApprovedBoundaries(repoRoot string) error
 		{
 			importPath:  "database/sql",
 			selector:    "Open",
-			description: "sql.Open is only allowed in internal/syncstore production files",
+			description: "sql.Open is only allowed in internal/syncstore/store.go and internal/syncstore/inspector.go",
 			allowed: func(path string) bool {
-				allowedDir := filepath.Join(repoRoot, "internal", "syncstore") + string(os.PathSeparator)
-				return strings.HasPrefix(path, allowedDir)
+				return path == filepath.Join(repoRoot, "internal", "syncstore", "store.go") ||
+					path == filepath.Join(repoRoot, "internal", "syncstore", "inspector.go")
 			},
 		},
 		{
@@ -845,6 +889,30 @@ func ensurePrivilegedPackageCallsStayAtApprovedBoundaries(repoRoot string) error
 			description: "signal.Notify is only allowed in internal/cli/signal.go",
 			allowed: func(path string) bool {
 				return path == filepath.Join(repoRoot, "internal", "cli", "signal.go")
+			},
+		},
+		{
+			importPath:  "os/signal",
+			selector:    "Stop",
+			description: "signal.Stop is only allowed in internal/cli/signal.go and internal/cli/sync_runtime.go",
+			allowed: func(path string) bool {
+				return path == filepath.Join(repoRoot, "internal", "cli", "signal.go") ||
+					path == filepath.Join(repoRoot, "internal", "cli", "sync_runtime.go")
+			},
+		},
+		{
+			importPath:  "os",
+			selector:    "Exit",
+			description: "os.Exit is only allowed in production entrypoints",
+			allowed: func(path string) bool {
+				return path == filepath.Join(repoRoot, "main.go") ||
+					path == filepath.Join(repoRoot, "cmd", "devtool", "main.go") ||
+					path == filepath.Join(repoRoot, "internal", "cli", "signal.go")
+			},
+			roots: []string{
+				filepath.Join(repoRoot, "main.go"),
+				filepath.Join(repoRoot, "internal"),
+				filepath.Join(repoRoot, "cmd"),
 			},
 		},
 	}
@@ -859,40 +927,69 @@ func ensurePrivilegedPackageCallsStayAtApprovedBoundaries(repoRoot string) error
 }
 
 func ensurePackageSelectorStaysAtApprovedBoundary(repoRoot string, rule packageSelectorBoundaryRule) error {
-	roots := []string{
-		filepath.Join(repoRoot, "internal"),
-		filepath.Join(repoRoot, "cmd"),
+	roots := rule.roots
+	if len(roots) == 0 {
+		roots = []string{
+			filepath.Join(repoRoot, "internal"),
+			filepath.Join(repoRoot, "cmd"),
+		}
 	}
 
 	for _, root := range roots {
-		walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() || rule.allowed(path) || strings.HasSuffix(path, "_test.go") || !strings.HasSuffix(path, ".go") {
-				return nil
+		if err := scanPackageSelectorBoundaryRoot(root, rule); err != nil {
+			var matchErr matchFoundError
+			if errors.As(err, &matchErr) {
+				return fmt.Errorf("%s: %s", rule.description, matchErr.value)
 			}
 
-			match, findErr := findPackageSelectorCall(path, rule.importPath, rule.selector)
-			if findErr != nil {
-				return findErr
-			}
-			if match != "" {
-				return matchFoundError{value: match}
+			if errors.Is(err, os.ErrNotExist) {
+				continue
 			}
 
+			return err
+		}
+	}
+
+	return nil
+}
+
+func scanPackageSelectorBoundaryRoot(root string, rule packageSelectorBoundaryRule) error {
+	info, statErr := localpath.Stat(root)
+	if statErr != nil {
+		return fmt.Errorf("stat %s: %w", root, statErr)
+	}
+	if !info.IsDir() {
+		return scanPackageSelectorFile(root, rule)
+	}
+
+	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
 			return nil
-		})
-		if walkErr == nil {
-			continue
 		}
 
-		var matchErr matchFoundError
-		if errors.As(walkErr, &matchErr) {
-			return fmt.Errorf("%s: %s", rule.description, matchErr.value)
-		}
-
+		return scanPackageSelectorFile(path, rule)
+	})
+	if walkErr != nil {
 		return fmt.Errorf("walk %s: %w", root, walkErr)
+	}
+
+	return nil
+}
+
+func scanPackageSelectorFile(path string, rule packageSelectorBoundaryRule) error {
+	if rule.allowed(path) || strings.HasSuffix(path, "_test.go") || !strings.HasSuffix(path, ".go") {
+		return nil
+	}
+
+	match, findErr := findPackageSelectorCall(path, rule.importPath, rule.selector)
+	if findErr != nil {
+		return findErr
+	}
+	if match != "" {
+		return matchFoundError{value: match}
 	}
 
 	return nil

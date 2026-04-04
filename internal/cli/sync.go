@@ -17,7 +17,7 @@ func newSyncCmd() *cobra.Command {
 By default, sync is bidirectional. Use --download-only or --upload-only for
 one-way sync. Use --dry-run to preview what would happen without making changes.`,
 		// sync handles its own config resolution via ResolveDrives (multi-drive).
-		Annotations: map[string]string{skipConfigAnnotation: "true"},
+		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
 		RunE:        runSync,
 	}
 

@@ -232,6 +232,7 @@ func TestRecordFailure_LogsSummaryKey(t *testing.T) {
 	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
 
 	result := &synctypes.WorkerResult{
+		ActionID:   123,
 		Path:       "service.txt",
 		ActionType: synctypes.ActionUpload,
 		HTTPStatus: http.StatusServiceUnavailable,
@@ -246,7 +247,11 @@ func TestRecordFailure_LogsSummaryKey(t *testing.T) {
 	})
 
 	output := logBuf.String()
+	assert.Contains(t, output, "run_id=run-")
+	assert.Contains(t, output, "action_id=123")
 	assert.Contains(t, output, "summary_key=service_outage")
+	assert.Contains(t, output, "failure_class=\"retryable transient\"")
+	assert.Contains(t, output, "log_owner=sync")
 	assert.Contains(t, output, "issue_type=service_outage")
 }
 
@@ -320,7 +325,11 @@ func TestProcessWorkerResult_EndToEndSummaryKey_ServiceOutage(t *testing.T) {
 	assert.Equal(t, 1, snapshot.PendingRetries[0].Count)
 
 	output := logBuf.String()
+	assert.Contains(t, output, "run_id=run-")
+	assert.Contains(t, output, "action_id=1")
 	assert.Contains(t, output, "summary_key=service_outage")
+	assert.Contains(t, output, "failure_class=\"retryable transient\"")
+	assert.Contains(t, output, "log_owner=sync")
 	assert.Contains(t, output, "issue_type="+synctypes.IssueServiceOutage)
 }
 
@@ -386,7 +395,10 @@ func TestProcessWorkerResult_EndToEndSummaryKey_SharedFolderWritesBlocked(t *tes
 	assert.Equal(t, synctypes.SKPermRemote("Shared/TeamDocs"), group.ScopeKey)
 
 	output := logBuf.String()
+	assert.Contains(t, output, "run_id=run-")
 	assert.Contains(t, output, "summary_key=shared_folder_writes_blocked")
+	assert.Contains(t, output, "failure_class=actionable")
+	assert.Contains(t, output, "log_owner=sync")
 	assert.Contains(t, output, "issue_type="+synctypes.IssueSharedFolderBlocked)
 }
 
@@ -429,7 +441,10 @@ func TestProcessWorkerResult_EndToEndSummaryKey_AuthenticationRequired(t *testin
 	assert.Empty(t, group.Paths)
 
 	output := logBuf.String()
+	assert.Contains(t, output, "run_id=run-")
 	assert.Contains(t, output, "summary_key=authentication_required")
+	assert.Contains(t, output, "failure_class=fatal")
+	assert.Contains(t, output, "log_owner=sync")
 	assert.Contains(t, output, "scope_key=auth:account")
 }
 
@@ -465,7 +480,10 @@ func TestProcessWorkerResult_EndToEndSummaryKey_LocalPermissionDenied(t *testing
 	assert.Equal(t, []string{"file.txt"}, group.Paths)
 
 	output := logBuf.String()
+	assert.Contains(t, output, "run_id=run-")
 	assert.Contains(t, output, "summary_key=local_permission_denied")
+	assert.Contains(t, output, "failure_class=actionable")
+	assert.Contains(t, output, "log_owner=sync")
 	assert.Contains(t, output, "issue_type="+synctypes.IssueLocalPermissionDenied)
 }
 
@@ -493,16 +511,14 @@ func TestHandleWatchWorkerResult_UnauthorizedStopsWatchLoop(t *testing.T) {
 func setupEngineDepGraph(t *testing.T, eng *testEngine, actionID int64) *engineFlow {
 	t.Helper()
 
-	flow := &engineFlow{
-		engine:   eng.Engine,
-		depGraph: syncdispatch.NewDepGraph(eng.logger),
-		readyCh:  make(chan *synctypes.TrackedAction, 16),
-	}
+	flow := newEngineFlow(eng.Engine)
+	flow.depGraph = syncdispatch.NewDepGraph(eng.logger)
+	flow.readyCh = make(chan *synctypes.TrackedAction, 16)
 	dummyAction := &synctypes.Action{Path: "dummy", Type: synctypes.ActionDownload}
 	flow.depGraph.Add(dummyAction, actionID, nil)
-	eng.flow = flow
+	eng.flow = &flow
 
-	return flow
+	return &flow
 }
 
 func TestProcessWorkerResult_UploadFailure_RecordsLocalIssue(t *testing.T) {

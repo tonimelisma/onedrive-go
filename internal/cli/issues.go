@@ -1,14 +1,12 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/tonimelisma/onedrive-go/internal/sync"
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -162,48 +160,10 @@ func resolveEachConflict(
 	return nil
 }
 
-func resolveWithTransfers(
-	ctx context.Context, cc *CLIContext, args []string, resolution string, all, dryRun bool,
-) error {
-	session, err := cc.Session(ctx)
-	if err != nil {
-		return err
-	}
-
-	engine, err := newSyncEngine(ctx, session, cc.Cfg, false, cc.Logger)
-	if err != nil {
-		return fmt.Errorf("create sync engine: %w", err)
-	}
-	defer engine.Close(ctx)
-
-	if all {
-		return resolveAllWithEngine(ctx, cc, engine, resolution, dryRun)
-	}
-
-	return resolveSingleWithEngine(ctx, cc, engine, args[0], resolution, dryRun)
-}
-
-func resolveAllWithEngine(ctx context.Context, cc *CLIContext, engine *sync.Engine, resolution string, dryRun bool) error {
-	conflicts, err := engine.ListConflicts(ctx)
-	if err != nil {
-		return fmt.Errorf("list conflicts: %w", err)
-	}
-
-	return resolveEachConflict(cc, conflicts, resolution, dryRun, func(id, res string) error {
-		return engine.ResolveConflict(ctx, id, res)
-	})
-}
-
-func resolveSingleWithEngine(ctx context.Context, cc *CLIContext, engine *sync.Engine, idOrPath, resolution string, dryRun bool) error {
-	return resolveSingleConflict(cc, idOrPath, resolution, dryRun,
-		func() ([]synctypes.ConflictRecord, error) { return engine.ListConflicts(ctx) },
-		func(id, res string) error { return engine.ResolveConflict(ctx, id, res) },
-	)
-}
-
 func resolveSingleConflict(
 	cc *CLIContext, idOrPath, resolution string, dryRun bool,
 	listFn func() ([]synctypes.ConflictRecord, error),
+	listAllFn func() ([]synctypes.ConflictRecord, error),
 	resolveFn func(id, resolution string) error,
 ) error {
 	conflicts, err := listFn()
@@ -217,6 +177,20 @@ func resolveSingleConflict(
 	}
 
 	if !found {
+		if listAllFn != nil {
+			allConflicts, err := listAllFn()
+			if err != nil {
+				return err
+			}
+
+			if resolvedConflict, resolved, findErr := findConflict(allConflicts, idOrPath); findErr != nil {
+				return findErr
+			} else if resolved && resolvedConflict.Resolution != synctypes.ResolutionUnresolved {
+				cc.Statusf("Conflict %s already resolved as %s\n", resolvedConflict.Path, resolvedConflict.Resolution)
+				return nil
+			}
+		}
+
 		return fmt.Errorf("conflict not found: %s", idOrPath)
 	}
 
@@ -287,34 +261,12 @@ actionable failures.`,
 }
 
 func runIssuesClear(cmd *cobra.Command, args []string) error {
-	return runFailureAction(cmd, args, failureAction{
-		allFn: func(ctx context.Context, mgr *syncstore.SyncStore) error {
-			if err := mgr.ClearActionableSyncFailures(ctx); err != nil {
-				return fmt.Errorf("clear actionable failures: %w", err)
-			}
-			if err := mgr.ClearAllRemoteBlockedFailures(ctx); err != nil {
-				return fmt.Errorf("clear blocked shared-folder writes: %w", err)
-			}
-			return nil
-		},
-		singleFn: func(ctx context.Context, mgr *syncstore.SyncStore, p string) error {
-			if target, found, err := mgr.FindRemoteBlockedTarget(ctx, p); err != nil {
-				return fmt.Errorf("find blocked shared-folder write for %s: %w", p, err)
-			} else if found {
-				if err := mgr.ClearRemoteBlockedTarget(ctx, target); err != nil {
-					return fmt.Errorf("clear blocked shared-folder write for %s: %w", p, err)
-				}
-				return nil
-			}
-			if err := mgr.ClearSyncFailureByPath(ctx, p); err != nil {
-				return fmt.Errorf("clear actionable failure for %s: %w", p, err)
-			}
-			return nil
-		},
-		noArgMsg:  "provide a path to clear, or use --all to clear all actionable failures",
-		allMsg:    "Cleared actionable failures and blocked shared-folder writes.",
-		singleFmt: "Cleared failure for %s.",
-	})
+	doAll, err := cmd.Flags().GetBool("all")
+	if err != nil {
+		return fmt.Errorf("read --all flag: %w", err)
+	}
+
+	return newIssuesService(mustCLIContext(cmd.Context())).runClear(cmd.Context(), args, doAll)
 }
 
 // --- issues retry ---
@@ -336,29 +288,12 @@ failed items.`,
 }
 
 func runIssuesRetry(cmd *cobra.Command, args []string) error {
-	return runFailureAction(cmd, args, failureAction{
-		allFn: func(ctx context.Context, mgr *syncstore.SyncStore) error { return mgr.ResetAllFailures(ctx) },
-		singleFn: func(ctx context.Context, mgr *syncstore.SyncStore, p string) error {
-			if target, found, err := mgr.FindRemoteBlockedTarget(ctx, p); err != nil {
-				return fmt.Errorf("find blocked shared-folder write for %s: %w", p, err)
-			} else if found {
-				if target.Kind == syncstore.RemoteBlockedTargetBoundary {
-					return fmt.Errorf("shared-folder write blocks must be retried by blocked path, not boundary")
-				}
-				if err := mgr.RequestRemoteBlockedTrial(ctx, target); err != nil {
-					return fmt.Errorf("request blocked shared-folder retry for %s: %w", p, err)
-				}
-				return nil
-			}
-			if err := mgr.ResetFailure(ctx, p); err != nil {
-				return fmt.Errorf("reset failure for %s: %w", p, err)
-			}
-			return nil
-		},
-		noArgMsg:  "provide a path to retry, or use --all to retry all failures",
-		allMsg:    "Reset all failures for retry.",
-		singleFmt: "Requested retry for %s.",
-	})
+	doAll, err := cmd.Flags().GetBool("all")
+	if err != nil {
+		return fmt.Errorf("read --all flag: %w", err)
+	}
+
+	return newIssuesService(mustCLIContext(cmd.Context())).runRetry(cmd.Context(), args, doAll)
 }
 
 // --- issues recheck ---
@@ -378,24 +313,6 @@ specific blocked child action; use 'issues retry <path>' for that.`,
 
 func runIssuesRecheck(cmd *cobra.Command, args []string) error {
 	return newIssuesService(mustCLIContext(cmd.Context())).runScopeRecheck(cmd.Context(), args[0])
-}
-
-// failureAction defines the all/single operations for a failures subcommand.
-type failureAction struct {
-	allFn     func(ctx context.Context, mgr *syncstore.SyncStore) error
-	singleFn  func(ctx context.Context, mgr *syncstore.SyncStore, path string) error
-	noArgMsg  string
-	allMsg    string
-	singleFmt string // format string with %s for path
-}
-
-func runFailureAction(cmd *cobra.Command, args []string, action failureAction) error {
-	doAll, err := cmd.Flags().GetBool("all")
-	if err != nil {
-		return fmt.Errorf("read --all flag: %w", err)
-	}
-
-	return newIssuesService(mustCLIContext(cmd.Context())).runFailureAction(cmd.Context(), args, doAll, action)
 }
 
 // --- helpers ---

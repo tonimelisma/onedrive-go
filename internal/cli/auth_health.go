@@ -42,7 +42,7 @@ type accountAuthChecker interface {
 
 type authProofRecorder struct {
 	logger  *slog.Logger
-	mu      sync.Mutex
+	mu      sync.Mutex // guards cleared so one successful proof clears scopes once per account
 	cleared map[string]bool
 }
 

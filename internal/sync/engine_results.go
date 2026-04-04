@@ -24,7 +24,12 @@ func (rt *watchRuntime) armRetryTimer(ctx context.Context) {
 		return
 	}
 
-	rt.resetRetryTimer(time.AfterFunc(delay, func() {
+	rt.engine.emitDebugEvent(engineDebugEvent{
+		Type: engineDebugEventRetryTimerArmed,
+		Note: delay.String(),
+	})
+	rt.resetRetryTimer(rt.engine.afterFunc(delay, func() {
+		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetryTimerFired})
 		rt.kickRetrySweepNow()
 	}))
 }
@@ -161,7 +166,12 @@ func (rt *watchRuntime) armTrialTimer() {
 	// the watch loop calls DueTrials, so even if a second AfterFunc
 	// fires while a signal is pending, all due scopes are still processed
 	// on the next loop iteration.
-	rt.resetTrialTimer(time.AfterFunc(delay, func() {
+	rt.engine.emitDebugEvent(engineDebugEvent{
+		Type: engineDebugEventTrialTimerArmed,
+		Note: delay.String(),
+	})
+	rt.resetTrialTimer(rt.engine.afterFunc(delay, func() {
+		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventTrialTimerFired})
 		select {
 		case rt.trialCh <- struct{}{}:
 		default:

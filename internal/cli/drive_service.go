@@ -7,7 +7,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/failures"
 )
 
 type driveService struct {
@@ -21,20 +20,14 @@ func newDriveService(cc *CLIContext) *driveService {
 func (s *driveService) runList(ctx context.Context, showAll bool) error {
 	logger := s.cc.Logger
 	recorder := newAuthProofRecorder(logger)
-
-	cfg, warnings, err := config.LoadOrDefaultLenient(s.cc.CfgPath, logger)
-	outcome := config.ClassifyLoadOutcome(err, warnings)
+	readModel := newAccountReadModelService(s.cc)
+	snapshot, err := readModel.loadLenientCatalog(ctx)
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
+		return err
 	}
 
-	if outcome.Class == failures.ClassActionable {
-		config.LogWarnings(warnings, logger)
-	}
-
-	catalog := buildAccountCatalog(ctx, cfg, logger)
-	configured := buildConfiguredDriveEntries(cfg, logger)
-	configuredAuth := catalogAuthByEmail(catalog)
+	configured := buildConfiguredDriveEntries(snapshot.Config, logger)
+	configuredAuth := catalogAuthByEmail(snapshot.Catalog)
 	annotateConfiguredDriveAuth(configured, configuredAuth)
 
 	siteLimit := sharePointSiteLimit
@@ -42,9 +35,16 @@ func (s *driveService) runList(ctx context.Context, showAll bool) error {
 		siteLimit = sharePointSiteUnlimited
 	}
 
-	available, discoveredAuthRequired := discoverAvailableDrives(ctx, cfg, siteLimit, logger, recorder, s.cc.GraphBaseURL)
+	available, discoveredAuthRequired := discoverAvailableDrives(
+		ctx,
+		snapshot.Config,
+		siteLimit,
+		logger,
+		recorder,
+		s.cc.GraphBaseURL,
+	)
 	annotateStateDB(available)
-	authRequired := mergeAuthRequirements(catalogAuthRequirements(catalog, func(entry accountCatalogEntry) bool {
+	authRequired := mergeAuthRequirements(readModel.configuredAuthRequirements(snapshot, func(entry accountCatalogEntry) bool {
 		return entry.Configured
 	}), discoveredAuthRequired)
 
@@ -148,17 +148,14 @@ func (s *driveService) runRemove(purge bool) error {
 func (s *driveService) runSearch(ctx context.Context, query string) error {
 	logger := s.cc.Logger
 	recorder := newAuthProofRecorder(logger)
-
-	cfg, warnings, err := config.LoadOrDefaultLenient(s.cc.CfgPath, logger)
+	readModel := newAccountReadModelService(s.cc)
+	snapshot, err := readModel.loadLenientCatalog(ctx)
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
+		return err
 	}
 
-	config.LogWarnings(warnings, logger)
-
-	catalog := buildAccountCatalog(ctx, cfg, logger)
-	businessTokens := searchableBusinessTokenIDs(catalog, s.cc.Flags.Account)
-	configuredAuthRequired := catalogAuthRequirements(catalog, func(entry accountCatalogEntry) bool {
+	businessTokens := searchableBusinessTokenIDs(snapshot.Catalog, s.cc.Flags.Account)
+	configuredAuthRequired := readModel.configuredAuthRequirements(snapshot, func(entry accountCatalogEntry) bool {
 		if !entry.Configured {
 			return false
 		}

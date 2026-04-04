@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go
 
-Implements: R-1 [implemented], R-3.1 [verified], R-4.7 [verified], R-4.8.4 [verified], R-1.9 [verified], R-1.2.4 [verified], R-1.2.5 [verified], R-1.3.4 [verified], R-1.3.5 [verified], R-1.4.3 [verified], R-1.5.1 [verified], R-1.6.1 [verified], R-1.6.2 [verified], R-1.7.1 [verified], R-1.8.1 [verified], R-1.9.4 [verified], R-3.1.6 [verified], R-3.3.10 [verified], R-3.3.11 [verified], R-3.3.12 [verified], R-3.6.6 [verified], R-3.6.7 [verified], R-2.3.10 [verified], R-2.3.11 [verified], R-2.7.1 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.10.4 [verified], R-2.10.47 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
+Implements: R-1 [implemented], R-3.1 [verified], R-4.7 [verified], R-4.8.4 [verified], R-1.9 [verified], R-1.2.4 [verified], R-1.2.5 [verified], R-1.3.4 [verified], R-1.3.5 [verified], R-1.4.3 [verified], R-1.5.1 [verified], R-1.6.1 [verified], R-1.6.2 [verified], R-1.7.1 [verified], R-1.8.1 [verified], R-1.9.4 [verified], R-3.1.6 [verified], R-3.3.10 [verified], R-3.3.11 [verified], R-3.3.12 [verified], R-3.6.6 [verified], R-3.6.7 [verified], R-2.3.10 [verified], R-2.3.11 [verified], R-2.3.12 [verified], R-2.7.1 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.10.4 [verified], R-2.10.47 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
 
 ## Overview
 
@@ -45,7 +45,7 @@ Implements: R-6.2.8 [verified]
 | `sync` | `sync.go` | Multi-drive sync command (see [sync-control-plane.md](sync-control-plane.md)) |
 | `pause`, `resume` | `pause.go`, `resume.go` | Pause/resume sync through `syncControlService`. `resume` also cleans up stale config keys from expired timed pauses (paused=true + past paused_until). |
 | `status` | `status.go` | Display account/drive status via `statusService` and read-only `syncstore.Inspector` snapshots |
-| `issues` | `issues.go` | Conflict and failure management. `issues list` renders read-only `syncstore.Inspector` snapshots; mutating subcommands still go through `SyncStore` / engine mutation paths. |
+| `issues` | `issues.go` | Conflict and failure management. All subcommands delegate to `issuesService`; `issues list` renders read-only `syncstore.Inspector` snapshots and mutating subcommands call service-owned mutation flows over the writable store/engine path. |
 | `verify` | `verify.go` | Post-sync verification |
 | `drive` | `drive.go` | Drive management (list/add/remove/search) |
 | `recycle-bin` | `recycle_bin.go` | Recycle bin operations (list/restore/empty) via `recycleBinService` |
@@ -76,7 +76,7 @@ vocabulary and copy:
 - reasons: `missing_login`, `invalid_saved_login`, `sync_auth_rejected`
 - shared title/reason/action text for CLI auth surfaces and `IssueUnauthorized`
 
-`internal/cli` builds one offline account catalog from configured drives,
+`accountReadModelService` builds one offline account catalog from configured drives,
 discovered account profiles, discovered token files, and persisted
 `auth:account` scope presence. `status`, `whoami`, `drive list`, and
 `drive search` all read from that same catalog so account discovery and auth
@@ -186,6 +186,7 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
   - `recycleBinService`: recycle-bin list/restore/empty flows
   - `syncService`: multi-drive sync command assembly
   - `verifyService`: baseline verification flow
+- `accountReadModelService` is the shared read-model collaborator under `statusService`, `authService`, and `driveService`. It owns lenient config loading, warning logging, and offline account/auth projection so those command families do not rebuild account semantics independently.
 - `SessionProvider` caches `TokenSource`s by token file path — multiple drives sharing an account share one `TokenSource`, preventing OAuth2 refresh token rotation races.
 - CLI handlers use `cmd.Context()` for signal propagation. Exception: upload session cancel paths use `context.Background()` because the cancel must succeed even when the original context is done.
 - Production command code writes primary output through `CLIContext.OutputWriter`, and status/warning/error text through the CLI-owned status writer boundary instead of raw process-global stdout/stderr. This keeps command output injectable in tests and prevents hidden process-global output dependencies from creeping back into services, bootstrap warnings, or sync-daemon cleanup.
@@ -218,11 +219,12 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
 - The root error boundary maps both `graph.ErrNotLoggedIn` and `graph.ErrUnauthorized` into the same user-facing family, `Authentication required`, with cause-specific detail and a shared remediation path (`onedrive-go login`).
 - Offline auth surfaces (`status`, `issues`) never mutate `auth:account`. Live proof surfaces clear `auth:account` only after an authenticated Graph response succeeds. Pre-authenticated upload/download URL success is not treated as auth proof.
 - The authenticated-success proof recorder logs one attributed scope-repair event per account and proof source (`whoami`, `drive-list`, `drive-search`, `drive-session`) when it clears stale `auth:account` blocks. It does not log every successful request and does not create a persistent audit trail.
+- Checked-in golden tests lock the human and JSON output shapes for `status` and `issues list`. Formatting changes are intentional and use the standard `-update` flow in `internal/cli/golden_test.go`.
 - Extract `multiHandler` from `internal/cli/root.go` to `internal/slogutil/` if logging grows (structured error reporting, log sampling). [planned]
 
 ## Issues Display
 
-Implements: R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified]
+Implements: R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.3.12 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified]
 
 - **Grouped display**: >10 failures of same `issue_type` → single heading with count, first 5 paths shown. `--verbose` shows all paths.
 - **Per-scope sub-grouping**: 507 quota and shared-folder write blocks are grouped by scope (own drive vs each shortcut). Different scopes = different owners = different user actions.
@@ -237,4 +239,8 @@ Implements: R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.14.3
   This keeps the visible `issues` surface aligned with the same store-owned
   semantics that feed `status`.
 - **Auth scope display**: `auth:account` renders as an account-level `Authentication required` issue with no path list.
+- **Replay-safe mutations**: `issues clear`, `issues retry`, and repeated
+  `issues resolve` calls are replay-safe. Repeating a cleared failure or an
+  already-resolved conflict returns a stable no-op/already-resolved result
+  instead of duplicating store mutations or partially releasing a scope.
 - `internal/cli` unit test coverage target: 60%+ (currently ~53.7%). The service split and output-writer injection are in place, but more direct `RunE`/service black-box coverage is still needed to reach the target. [planned]

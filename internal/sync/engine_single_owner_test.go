@@ -181,10 +181,7 @@ func TestEngine_ReleaseScope_SignalsImmediateRetrySweep(t *testing.T) {
 	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 	scopeKey := synctypes.SKQuotaOwn()
-	var events []engineDebugEventType
-	eng.debugEventHook = func(event engineDebugEvent) {
-		events = append(events, event.Type)
-	}
+	recorder := attachDebugEventRecorder(eng)
 
 	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
 		Key:       scopeKey,
@@ -213,7 +210,7 @@ func TestEngine_ReleaseScope_SignalsImmediateRetrySweep(t *testing.T) {
 	assert.Equal(t, []engineDebugEventType{
 		engineDebugEventScopeReleased,
 		engineDebugEventRetryKicked,
-	}, events)
+	}, recorder.eventTypesSnapshot())
 }
 
 func TestEngine_AssertCurrentScopeInvariants_DetectsDuplicateActiveScopes(t *testing.T) {
@@ -1955,12 +1952,11 @@ func TestRetrierSweep_SkipsResolvedFailures_D11(t *testing.T) {
 func TestTrialDispatch_UsesPlannerWorkRequest(t *testing.T) {
 	t.Parallel()
 
+	const trialPath = "trial.txt"
+
 	eng := newSingleOwnerEngine(t)
 	eng.nowFn = func() time.Time { return time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC) }
-	var events []engineDebugEvent
-	eng.debugEventHook = func(event engineDebugEvent) {
-		events = append(events, event)
-	}
+	recorder := attachDebugEventRecorder(eng)
 
 	ctx := context.Background()
 	now := eng.nowFn()
@@ -1976,12 +1972,12 @@ func TestTrialDispatch_UsesPlannerWorkRequest(t *testing.T) {
 		TrialInterval: 10 * time.Second,
 	})
 
-	absPath := filepath.Join(eng.syncRoot, "trial.txt")
+	absPath := filepath.Join(eng.syncRoot, trialPath)
 	require.NoError(t, os.WriteFile(absPath, []byte("trial payload"), 0o600))
 
 	// Seed a scope-blocked failure.
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path:      "trial.txt",
+		Path:      trialPath,
 		DriveID:   eng.driveID,
 		Direction: synctypes.DirectionUpload,
 		Role:      synctypes.FailureRoleHeld,
@@ -1996,15 +1992,15 @@ func TestTrialDispatch_UsesPlannerWorkRequest(t *testing.T) {
 
 	outbox := runTestTrialDispatch(t, eng, ctx)
 	require.Len(t, outbox, 1)
-	assert.Equal(t, "trial.txt", outbox[0].Action.Path)
+	assert.Equal(t, trialPath, outbox[0].Action.Path)
 	assert.Equal(t, synctypes.ActionUpload, outbox[0].Action.Type)
 	assert.True(t, outbox[0].IsTrial)
 	assert.Equal(t, sk, outbox[0].TrialScopeKey)
-	require.Contains(t, events, engineDebugEvent{
-		Type:     engineDebugEventTrialDispatched,
-		ScopeKey: sk,
-		Path:     "trial.txt",
-	})
+	assert.True(t, recorder.findEvent(func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventTrialDispatched &&
+			event.ScopeKey == sk &&
+			event.Path == trialPath
+	}))
 
 	// After successful dispatch, the scope block's TrialInterval should NOT
 	// be extended — interval stays unmutated until the worker result arrives.

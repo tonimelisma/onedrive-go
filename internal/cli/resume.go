@@ -21,7 +21,7 @@ If a sync --watch daemon is running, it receives a SIGHUP to pick up the change.
 Examples:
   onedrive-go resume --drive personal:user@example.com
   onedrive-go resume`,
-		Annotations: map[string]string{skipConfigAnnotation: "true"},
+		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
 		RunE:        runResume,
 	}
 }

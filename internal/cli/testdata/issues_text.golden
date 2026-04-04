@@ -1,0 +1,26 @@
+CONFLICTS
+ID        PATH              TYPE       DETECTED            
+conflict  /docs/report.txt  edit_edit  2026-04-03T10:00:00Z
+
+AUTHENTICATION REQUIRED (1 item)
+  The last sync attempt for this account was rejected by OneDrive. Run 'onedrive-go whoami' to re-check access, or 'onedrive-go login' to sign in again.
+  Scope: your OneDrive account authorization
+
+SHARED FOLDER WRITES BLOCKED (2 items)
+  This shared folder is read-only for your current write attempts. Downloads continue normally. Remove or ignore local write changes here, or ask the owner for edit permissions if the write was intended.
+  Scope: Shared/Docs
+  Recheck: run 'onedrive-go issues recheck perm:remote:Shared/Docs' to validate permissions now
+
+  /Shared/Docs/a.txt
+  /Shared/Docs/b.txt
+
+INVALID FILENAME (2 items)
+  The filename contains characters not allowed by OneDrive. Rename the file to remove invalid characters.
+
+  docs/CON
+  docs/NUL.txt
+
+HELD DELETES (2 files — big-delete protection triggered, run `issues clear` to approve)
+PATH                LAST SEEN           
+/archive/old-a.txt  2026-04-03T09:00:00Z
+/archive/old-b.txt  2026-04-03T09:05:00Z
