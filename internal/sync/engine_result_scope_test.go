@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,6 +80,74 @@ func TestRunOnce_PathTooLong_RecordsIssue(t *testing.T) {
 	}
 
 	assert.True(t, found, "expected synctypes.IssuePathTooLong issue in sync_failures")
+}
+
+// Validates: R-6.6.7
+func TestRecordSkippedItems_AggregatesWarningsAndKeepsPerItemDebugLogs(t *testing.T) {
+	t.Parallel()
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	flow := newEngineFlow(eng.Engine)
+	ctx := t.Context()
+
+	skipped := make([]synctypes.SkippedItem, 11)
+	for i := range skipped {
+		skipped[i] = synctypes.SkippedItem{
+			Path:   fmt.Sprintf("bad-%02d.txt", i),
+			Reason: synctypes.IssueInvalidFilename,
+			Detail: "invalid filename",
+		}
+	}
+
+	flow.recordSkippedItems(ctx, skipped)
+
+	output := logBuf.String()
+	assert.Equal(t, 1, strings.Count(output, "level=WARN msg=\"observation filter: skipped files\""))
+	assert.Equal(t, 11, strings.Count(output, "level=DEBUG msg=\"observation filter: skipped file\""))
+	assert.Contains(t, output, "count=11")
+	assert.Contains(t, output, "bad-00.txt")
+	assert.Contains(t, output, "bad-10.txt")
+
+	rows, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueInvalidFilename)
+	require.NoError(t, err)
+	assert.Len(t, rows, 11)
+}
+
+// Validates: R-6.6.7
+func TestRecordSkippedItems_BelowThresholdLogsPerItemWarningsOnly(t *testing.T) {
+	t.Parallel()
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	flow := newEngineFlow(eng.Engine)
+	ctx := t.Context()
+
+	skipped := []synctypes.SkippedItem{
+		{
+			Path:   "bad-a.txt",
+			Reason: synctypes.IssueInvalidFilename,
+			Detail: "invalid filename",
+		},
+		{
+			Path:   "bad-b.txt",
+			Reason: synctypes.IssueInvalidFilename,
+			Detail: "invalid filename",
+		},
+	}
+
+	flow.recordSkippedItems(ctx, skipped)
+
+	output := logBuf.String()
+	assert.Equal(t, 2, strings.Count(output, "level=WARN msg=\"observation filter: skipped file\""))
+	assert.Equal(t, 0, strings.Count(output, "level=DEBUG msg=\"observation filter: skipped file\""))
+	assert.NotContains(t, output, "level=WARN msg=\"observation filter: skipped files\"")
+
+	rows, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueInvalidFilename)
+	require.NoError(t, err)
+	assert.Len(t, rows, 2)
 }
 
 // ---------------------------------------------------------------------------
