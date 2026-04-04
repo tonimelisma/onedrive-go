@@ -15,7 +15,6 @@ const (
 	integrityCodeLegacyRemoteScope        = "legacy_remote_scope"
 	integrityCodeInvalidFailureRow        = "invalid_failure_row"
 	integrityCodeInvalidFailureTiming     = "invalid_failure_timing"
-	integrityCodeInvalidManualTrial       = "invalid_manual_trial_request"
 	integrityCodeMissingScopeBlock        = "missing_scope_block"
 	integrityCodeLegacyRemoteBoundary     = "legacy_remote_boundary"
 	integrityCodeVisibleProjectionOverlap = "visible_projection_overlap"
@@ -140,7 +139,6 @@ func repairIntegritySafeTx(ctx context.Context, tx *sql.Tx) (int, error) {
 	}{
 		{run: repairAuthScopeTiming},
 		{run: repairNonRetryableFailureTiming},
-		{run: repairManualTrialTiming},
 	}
 
 	for _, step := range repairSteps {
@@ -230,21 +228,6 @@ func repairNonRetryableFailureTiming(ctx context.Context, tx *sql.Tx) (int, erro
 	}
 
 	return rowsAffected(retryResult), nil
-}
-
-func repairManualTrialTiming(ctx context.Context, tx *sql.Tx) (int, error) {
-	manualResult, err := tx.ExecContext(ctx, `
-		UPDATE sync_failures
-		SET manual_trial_requested_at = 0
-		WHERE manual_trial_requested_at <> 0
-		  AND NOT (failure_role = ? AND scope_key LIKE 'perm:remote:%')`,
-		synctypes.FailureRoleHeld,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("sync: normalize manual trial timing: %w", err)
-	}
-
-	return rowsAffected(manualResult), nil
 }
 
 func listLegacyRemoteScopeKeys(ctx context.Context, tx *sql.Tx) ([]string, error) {
@@ -363,14 +346,6 @@ func auditFailureRow(
 		report.add(
 			integrityCodeInvalidFailureTiming,
 			fmt.Sprintf("non-transient row %s must not have retry timing", row.Path),
-		)
-	}
-
-	if row.ManualTrialRequestedAt > 0 &&
-		(row.Role != synctypes.FailureRoleHeld || !row.ScopeKey.IsPermRemote()) {
-		report.add(
-			integrityCodeInvalidManualTrial,
-			fmt.Sprintf("manual trial request on non-remote-held row %s is not allowed", row.Path),
 		)
 	}
 

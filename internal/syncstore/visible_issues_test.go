@@ -59,13 +59,6 @@ func TestSyncStore_ListVisibleIssueGroups(t *testing.T) {
 		TimingSource: synctypes.ScopeTimingNone,
 		BlockedAt:    time.Unix(1, 0),
 	}))
-	mgr.SetNowFunc(func() time.Time { return time.Date(2025, 4, 3, 10, 0, 0, 0, time.UTC) })
-	require.NoError(t, mgr.RequestScopeRecheck(ctx, scopeKey))
-
-	target, found, err := mgr.FindRemoteBlockedTarget(ctx, "Shared/Docs/a.txt")
-	require.NoError(t, err)
-	require.True(t, found)
-	require.NoError(t, mgr.RequestRemoteBlockedTrial(ctx, target))
 
 	groups, err := mgr.ListVisibleIssueGroups(ctx)
 	require.NoError(t, err)
@@ -77,9 +70,8 @@ func TestSyncStore_ListVisibleIssueGroups(t *testing.T) {
 	assert.Equal(t, 2, groups[2].Count)
 	assert.Equal(t, 1, groups[2].VisibleCount)
 	require.NotNil(t, groups[2].RemoteBlocked)
+	assert.Equal(t, "Shared/Docs", groups[2].RemoteBlocked.BoundaryPath)
 	assert.ElementsMatch(t, []string{"Shared/Docs/a.txt", "Shared/Docs/b.txt"}, groups[2].RemoteBlocked.BlockedPaths)
-	assert.True(t, groups[2].RemoteBlocked.HasManualTrial)
-	assert.NotZero(t, groups[2].RemoteBlocked.RecheckRequestedAt)
 
 	summary, err := mgr.ReadVisibleIssueSummary(ctx)
 	require.NoError(t, err)
@@ -88,33 +80,4 @@ func TestSyncStore_ListVisibleIssueGroups(t *testing.T) {
 		{Key: synctypes.SummaryInvalidFilename, Count: 1},
 		{Key: synctypes.SummarySharedFolderWritesBlocked, Count: 1},
 	}, summary.Groups)
-}
-
-// Validates: R-2.14.5
-func TestSyncStore_RequestScopeRecheck(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := context.Background()
-	scopeKey := synctypes.SKPermRemote("Shared/Docs")
-
-	mgr.SetNowFunc(func() time.Time { return time.Date(2025, 4, 3, 10, 0, 0, 0, time.UTC) })
-	require.NoError(t, mgr.RequestScopeRecheck(ctx, scopeKey))
-
-	keys, err := mgr.ListRequestedScopeRechecks(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, []synctypes.ScopeKey{scopeKey}, keys)
-
-	mgr.SetNowFunc(func() time.Time { return time.Date(2025, 4, 3, 11, 0, 0, 0, time.UTC) })
-	require.NoError(t, mgr.RequestScopeRecheck(ctx, scopeKey))
-
-	keys, err = mgr.ListRequestedScopeRechecks(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, []synctypes.ScopeKey{scopeKey}, keys)
-
-	require.NoError(t, mgr.ClearScopeRecheckRequest(ctx, scopeKey))
-
-	keys, err = mgr.ListRequestedScopeRechecks(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, keys)
 }

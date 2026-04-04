@@ -221,8 +221,7 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
 - Direct `runSync` and service-level tests cover caller-visible failure paths such as config-load errors, all-drives-paused/no-drives guidance, and log-file-open fallback warnings through the injected status/output writers rather than process-global stderr assumptions.
 - The status command uses a testable service layer with narrowed interfaces (`accountMetaReader`, `accountAuthChecker`, `syncStateQuerier`), decoupling status aggregation from Cobra wiring. The concrete state reader is `syncstore.Inspector`; CLI code no longer opens SQLite directly.
 - `issuesService.runList` also uses `syncstore.Inspector`. CLI formatting code
-  is no longer the owner of issue grouping, pending-retry aggregation, or
-  scope labeling semantics.
+  is no longer the owner of issue grouping or scope labeling semantics.
 - Offline auth-health projection also uses `syncstore.Inspector` for persisted
   `auth:account` checks, so read-only CLI account discovery no longer pays the
   writable-store checkpoint/close path.
@@ -248,23 +247,26 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
 
 ## Issues Display
 
-Implements: R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.3.12 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified]
+Implements: R-2.3.3 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.3.10 [verified], R-2.3.12 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified]
 
 - **Grouped display**: >10 failures of same `issue_type` → single heading with count, first 5 paths shown. `--verbose` shows all paths.
 - **Per-scope sub-grouping**: 507 quota and shared-folder write blocks are grouped by scope (own drive vs each shortcut). Different scopes = different owners = different user actions.
 - **Human-readable names**: Shortcut-scoped failures display local path name, not internal drive IDs.
 - **Scope-aware reason/action copy**: Failure text is selected from `issue_type` plus the raw scope key, so shortcut-scoped quota failures say the shared-folder owner is out of space instead of implying the user's own drive is full.
-- **JSON shape**: `issues --json` emits separate `conflicts`, `failure_groups`, and `held_deletes` arrays instead of a heterogeneous mixed list. This keeps grouped failure metadata and held-delete history stable for machine readers.
+- **Read-only surface**: `issues` is a read-only problem view. It shows grouped issue families plus held deletes, but not conflicts, pending retries, or manual retry/recheck state.
+- **JSON shape**: `issues --json` emits `failure_groups` and `held_deletes` only. Conflict history has its own `conflicts --json` surface.
 - **Derived shared-folder issues**: `perm:remote` is displayed from held blocked-write rows, not from a standalone boundary issue. The CLI shows one visible issue per denied boundary only while blocked write intent still exists.
-- **Retry semantics**: `issues retry` on shared-folder write blocks is path-specific manual trial. Retrying the boundary name is rejected; the user must retry one blocked child path.
+- **Automatic shared-folder recovery**: shared-folder write blocks have no manual CLI controls. The engine rechecks permission state automatically during normal sync/watch passes while blocked writes still exist.
 - **Shared summary descriptors**: Every sync issue renders from the shared `SummaryKey` descriptor table, with the humanized scope shown separately. This keeps sync logs, `status`, and `issues` grouped by the same normalized issue family without duplicating display taxonomies in each layer.
 - **Store-owned read model**: `issues list` renders `IssuesSnapshot` from
   `syncstore.Inspector`; the CLI does not rebuild groups from raw SQL rows.
   This keeps the visible `issues` surface aligned with the same store-owned
   semantics that feed `status`.
 - **Auth scope display**: `auth:account` renders as an account-level `Authentication required` issue with no path list.
-- **Replay-safe mutations**: `issues clear`, `issues retry`, and repeated
-  `issues resolve` calls are replay-safe. Repeating a cleared failure or an
+- **Held-delete approval**: held deletes remain visible under `issues`, but approval is now one explicit command, `issues force-deletes`, which clears only `big_delete_held` rows for the selected drive.
+- **Conflict split**: `conflicts` is the dedicated conflict noun. `conflicts` lists unresolved conflicts, `conflicts --history` includes resolved conflicts, and `conflicts resolve` owns the keep-local/keep-remote/keep-both workflow.
+- **Replay-safe mutations**: `issues force-deletes` and repeated
+  `conflicts resolve` calls are replay-safe. Repeating an approval or an
   already-resolved conflict returns a stable no-op/already-resolved result
   instead of duplicating store mutations or partially releasing a scope.
 - `internal/cli` unit test coverage target: 60%+ (currently ~53.7%). The service split and output-writer injection are in place, but more direct `RunE`/service black-box coverage is still needed to reach the target. [planned]

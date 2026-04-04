@@ -24,29 +24,12 @@ package syncstore
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
-
-var ErrRemoteBlockedBoundaryRetry = errors.New("remote blocked boundary requires a specific blocked path")
-
-type RemoteBlockedTargetKind int
-
-const (
-	RemoteBlockedTargetPath RemoteBlockedTargetKind = iota + 1
-	RemoteBlockedTargetBoundary
-)
-
-type RemoteBlockedTarget struct {
-	Kind     RemoteBlockedTargetKind
-	Path     string
-	DriveID  driveid.ID
-	ScopeKey synctypes.ScopeKey
-}
 
 // ---------------------------------------------------------------------------
 // StateReader methods
@@ -206,154 +189,16 @@ func (m *SyncStore) ResetAllFailures(ctx context.Context) error {
 // or a whole derived perm:remote boundary. Boundary matches win over exact-row
 // matches so a blocked folder-create at the boundary path still treats the
 // scope name as the scope, not as a single held row.
-func (m *SyncStore) FindRemoteBlockedTarget(ctx context.Context, input string) (RemoteBlockedTarget, bool, error) {
-	normalized := normalizeRemoteBlockedBoundaryInput(input)
-	scopeKey := synctypes.SKPermRemote(normalized)
-
-	var boundaryWire string
-	err := m.db.QueryRowContext(ctx,
-		`SELECT scope_key FROM sync_failures
-		WHERE scope_key = ? AND failure_role = ?
-		LIMIT 1`,
-		scopeKey.String(), synctypes.FailureRoleHeld,
-	).Scan(&boundaryWire)
-	switch err {
-	case nil:
-		return RemoteBlockedTarget{
-			Kind:     RemoteBlockedTargetBoundary,
-			Path:     normalized,
-			ScopeKey: synctypes.ParseScopeKey(boundaryWire),
-		}, true, nil
-	case sql.ErrNoRows:
-	default:
-		return RemoteBlockedTarget{}, false, fmt.Errorf("sync: finding remote blocked boundary for %s: %w", input, err)
-	}
-
-	var target RemoteBlockedTarget
-	var scopeWire string
-	err = m.db.QueryRowContext(ctx,
-		`SELECT path, drive_id, scope_key FROM sync_failures
-		WHERE path = ? AND failure_role = ? AND scope_key LIKE 'perm:remote:%'
-		LIMIT 1`,
-		input, synctypes.FailureRoleHeld,
-	).Scan(&target.Path, &target.DriveID, &scopeWire)
-	switch err {
-	case nil:
-		target.Kind = RemoteBlockedTargetPath
-		target.ScopeKey = synctypes.ParseScopeKey(scopeWire)
-		return target, true, nil
-	case sql.ErrNoRows:
-		return RemoteBlockedTarget{}, false, nil
-	default:
-		return RemoteBlockedTarget{}, false, fmt.Errorf("sync: finding remote blocked failure for %s: %w", input, err)
-	}
-}
-
-func normalizeRemoteBlockedBoundaryInput(input string) string {
-	if input == "/" {
-		return ""
-	}
-
-	return input
-}
-
-// ClearRemoteBlockedTarget removes either one held remote-blocked row or an
-// entire derived perm:remote scope, depending on the resolved target.
-func (m *SyncStore) ClearRemoteBlockedTarget(ctx context.Context, target RemoteBlockedTarget) error {
-	switch target.Kind {
-	case RemoteBlockedTargetBoundary:
-		_, err := m.db.ExecContext(ctx,
-			`DELETE FROM sync_failures WHERE scope_key = ? AND failure_role = ?`,
-			target.ScopeKey.String(), synctypes.FailureRoleHeld,
-		)
-		if err != nil {
-			return fmt.Errorf("sync: clearing remote blocked scope %s: %w", target.ScopeKey.String(), err)
-		}
-		return nil
-	case RemoteBlockedTargetPath:
-		_, err := m.db.ExecContext(ctx,
-			`DELETE FROM sync_failures
-			WHERE path = ? AND drive_id = ? AND failure_role = ? AND scope_key = ?`,
-			target.Path, target.DriveID.String(), synctypes.FailureRoleHeld, target.ScopeKey.String(),
-		)
-		if err != nil {
-			return fmt.Errorf("sync: clearing remote blocked failure for %s: %w", target.Path, err)
-		}
-		return nil
-	default:
-		return fmt.Errorf("sync: clearing remote blocked failure: unknown target kind %d", target.Kind)
-	}
-}
-
-func (m *SyncStore) ClearAllRemoteBlockedFailures(ctx context.Context) error {
+func (m *SyncStore) ApproveHeldDeletes(ctx context.Context) error {
 	_, err := m.db.ExecContext(ctx,
-		`DELETE FROM sync_failures WHERE failure_role = ? AND scope_key LIKE 'perm:remote:%'`,
-		synctypes.FailureRoleHeld,
+		`DELETE FROM sync_failures WHERE issue_type = ? AND category = ?`,
+		synctypes.IssueBigDeleteHeld, synctypes.CategoryActionable,
 	)
 	if err != nil {
-		return fmt.Errorf("sync: clearing remote blocked failures: %w", err)
+		return fmt.Errorf("sync: approving held deletes: %w", err)
 	}
 
 	return nil
-}
-
-func (m *SyncStore) RequestRemoteBlockedTrial(ctx context.Context, target RemoteBlockedTarget) error {
-	if target.Kind != RemoteBlockedTargetPath {
-		return ErrRemoteBlockedBoundaryRetry
-	}
-
-	_, err := m.db.ExecContext(ctx,
-		`UPDATE sync_failures
-		SET manual_trial_requested_at = ?
-		WHERE path = ? AND drive_id = ? AND failure_role = ? AND scope_key = ?`,
-		m.nowFunc().UnixNano(), target.Path, target.DriveID.String(), synctypes.FailureRoleHeld, target.ScopeKey.String(),
-	)
-	if err != nil {
-		return fmt.Errorf("sync: requesting remote blocked trial for %s: %w", target.Path, err)
-	}
-
-	return nil
-}
-
-func (m *SyncStore) ClearManualTrialRequest(ctx context.Context, path string, driveID driveid.ID) error {
-	_, err := m.db.ExecContext(ctx,
-		`UPDATE sync_failures SET manual_trial_requested_at = 0 WHERE path = ? AND drive_id = ?`,
-		path, driveID.String(),
-	)
-	if err != nil {
-		return fmt.Errorf("sync: clearing manual trial request for %s: %w", path, err)
-	}
-
-	return nil
-}
-
-func (m *SyncStore) ListManualTrialScopeKeys(ctx context.Context) ([]synctypes.ScopeKey, error) {
-	rows, err := m.db.QueryContext(ctx,
-		`SELECT scope_key
-		FROM sync_failures
-		WHERE failure_role = ? AND manual_trial_requested_at > 0
-		GROUP BY scope_key
-		ORDER BY MIN(manual_trial_requested_at) ASC`,
-		synctypes.FailureRoleHeld,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("sync: listing manual trial scope keys: %w", err)
-	}
-	defer rows.Close()
-
-	var keys []synctypes.ScopeKey
-	for rows.Next() {
-		var wire string
-		if err := rows.Scan(&wire); err != nil {
-			return nil, fmt.Errorf("sync: scanning manual trial scope key: %w", err)
-		}
-		keys = append(keys, synctypes.ParseScopeKey(wire))
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: iterating manual trial scope keys: %w", err)
-	}
-
-	return keys, nil
 }
 
 // DropLegacyRemoteBlockedScope removes old persisted perm:remote authority

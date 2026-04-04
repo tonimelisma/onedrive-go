@@ -116,7 +116,6 @@ CREATE TABLE IF NOT EXISTS sync_failures (
     item_id        TEXT,
     failure_count  INTEGER NOT NULL DEFAULT 0,
     next_retry_at  INTEGER,
-    manual_trial_requested_at INTEGER NOT NULL DEFAULT 0,
     last_error     TEXT,
     http_status    INTEGER,
     first_seen_at  INTEGER NOT NULL,
@@ -131,10 +130,6 @@ CREATE TABLE IF NOT EXISTS sync_failures (
             'download', 'folder_create', 'local_move', 'remote_move',
             'conflict', 'update_synced', 'cleanup'
         ) AND direction = 'download')
-    ),
-    CHECK (
-        manual_trial_requested_at = 0
-        OR (failure_role = 'held' AND scope_key LIKE 'perm:remote:%')
     ),
     CHECK (
         failure_role = 'item'
@@ -157,23 +152,9 @@ CREATE INDEX IF NOT EXISTS idx_sync_failures_scope_role
 CREATE INDEX IF NOT EXISTS idx_sync_failures_remote_blocked
     ON sync_failures(scope_key, last_seen_at DESC)
     WHERE failure_role = 'held' AND scope_key LIKE 'perm:remote:%';
-CREATE INDEX IF NOT EXISTS idx_sync_failures_manual_trial
-    ON sync_failures(manual_trial_requested_at, scope_key)
-    WHERE manual_trial_requested_at > 0;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_failures_boundary_scope
     ON sync_failures(scope_key)
     WHERE failure_role = 'boundary';
-
--- Explicit user-requested permission rechecks for derived remote read-only
--- scopes. Separate from manual trial requests because "revalidate the
--- boundary" and "retry this blocked child action" are distinct operations.
-CREATE TABLE IF NOT EXISTS scope_recheck_requests (
-    scope_key     TEXT PRIMARY KEY CHECK(scope_key LIKE 'perm:remote:%'),
-    requested_at  INTEGER NOT NULL CHECK(requested_at > 0)
-);
-
-CREATE INDEX IF NOT EXISTS idx_scope_recheck_requested_at
-    ON scope_recheck_requests(requested_at, scope_key);
 
 -- Persisted scope-level blocking conditions.
 --

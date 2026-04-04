@@ -37,7 +37,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 ## R-6.4 Safety [implemented]
 
 - R-6.4.1: When a one-shot sync would delete more items than `big_delete_threshold` (default: 1000), the system shall abort and require `--force`. Single absolute count threshold — no percentage or per-folder checks. [verified]
-- R-6.4.2: In watch mode, when more than `big_delete_threshold` delete actions accumulate within a rolling 5-minute window, the system shall hold all pending delete actions while continuing non-delete operations. Held deletes shall be surfaced via `onedrive-go issues` and released when the user clears all big-delete-held entries via `issues clear`. [verified]
+- R-6.4.2: In watch mode, when more than `big_delete_threshold` delete actions accumulate within a rolling 5-minute window, the system shall hold all pending delete actions while continuing non-delete operations. Held deletes shall be surfaced via `onedrive-go issues` and released when the user approves all big-delete-held entries via `issues force-deletes`. [verified]
 - R-6.4.3: The `big_delete_threshold` config setting shall be threaded from user configuration to the sync engine; the system shall not silently use hardcoded defaults. [verified]
 - R-6.4.4: Remote deletions shall go to the OneDrive recycle bin by default. [verified]
 - R-6.4.5: Local deletions triggered by remote changes shall go to OS trash on macOS (`use_local_trash`). [verified]

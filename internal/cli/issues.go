@@ -1,46 +1,24 @@
 package cli
 
 import (
-	"fmt"
-	"io"
 	"time"
 
 	"github.com/spf13/cobra"
-
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
-)
-
-// conflictIDPrefixLen is the number of characters to show for the conflict ID
-// in table output. 8 hex chars = 32 bits of entropy = 4 billion values,
-// sufficient for uniqueness in any realistic conflict set.
-const conflictIDPrefixLen = 8
-
-// Resolution strategy aliases (re-export from synctypes package for CLI use).
-const (
-	resolutionKeepLocal  = synctypes.ResolutionKeepLocal
-	resolutionKeepRemote = synctypes.ResolutionKeepRemote
-	resolutionKeepBoth   = synctypes.ResolutionKeepBoth
 )
 
 func newIssuesCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "issues",
-		Short: "List and manage sync issues",
-		Long: `Display sync issues — conflicts and actionable file failures.
+		Short: "List current sync issues",
+		Long: `Display current sync issues for the selected drive.
 
-Shows unresolved conflicts and actionable failures (invalid filenames, files
-too large, etc.) that require user attention. Use subcommands to resolve
-conflicts or clear failures.`,
+Shows issue families that still need attention, including held deletes,
+shared-folder write blocks, authentication problems, and actionable file
+failures.`,
 		RunE: runIssuesList,
 	}
 
-	cmd.Flags().Bool("history", false, "include resolved conflicts")
-
-	cmd.AddCommand(newIssuesResolveCmd())
-	cmd.AddCommand(newIssuesClearCmd())
-	cmd.AddCommand(newIssuesRetryCmd())
-	cmd.AddCommand(newIssuesRecheckCmd())
+	cmd.AddCommand(newIssuesForceDeletesCmd())
 
 	return cmd
 }
@@ -48,271 +26,28 @@ conflicts or clear failures.`,
 // --- issues list ---
 
 func runIssuesList(cmd *cobra.Command, _ []string) error {
-	history, err := cmd.Flags().GetBool("history")
-	if err != nil {
-		return fmt.Errorf("read --history flag: %w", err)
-	}
-
-	return newIssuesService(mustCLIContext(cmd.Context())).runList(cmd.Context(), history)
+	return newIssuesService(mustCLIContext(cmd.Context())).runList(cmd.Context())
 }
 
-// --- issues resolve ---
+// --- issues force-deletes ---
 
-func newIssuesResolveCmd() *cobra.Command {
+func newIssuesForceDeletesCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "resolve [path-or-id]",
-		Short: "Resolve sync conflicts",
-		Long: `Resolve sync conflicts with a chosen strategy.
+		Use:   "force-deletes",
+		Short: "Approve all currently held deletes",
+		Long: `Approve all currently held deletes for the selected drive.
 
-Strategies:
-  --keep-local   Upload the local file to overwrite remote
-  --keep-remote  Download the remote file to overwrite local
-  --keep-both    Keep both versions (conflict copies already saved)
-
-Use --all to resolve all unresolved conflicts with the chosen strategy.
-Without --all, a path or conflict ID argument is required.`,
-		Args: cobra.MaximumNArgs(1),
-		RunE: runResolve,
+This releases big-delete protection for the current drive only. It does not
+affect any other issue type.`,
+		Args: cobra.NoArgs,
+		RunE: runIssuesForceDeletes,
 	}
-
-	cmd.Flags().Bool("keep-local", false, "upload local file to overwrite remote")
-	cmd.Flags().Bool("keep-remote", false, "download remote file to overwrite local")
-	cmd.Flags().Bool("keep-both", false, "keep both versions as-is")
-	cmd.Flags().Bool("all", false, "resolve all unresolved conflicts")
-	cmd.Flags().Bool("dry-run", false, "preview resolution without executing")
-
-	cmd.MarkFlagsMutuallyExclusive("keep-local", "keep-remote", "keep-both")
 
 	return cmd
 }
 
-func runResolve(cmd *cobra.Command, args []string) error {
-	resolution, err := resolveStrategy(cmd)
-	if err != nil {
-		return err
-	}
-
-	resolveAll := cmd.Flags().Changed("all")
-
-	dryRun, err := cmd.Flags().GetBool("dry-run")
-	if err != nil {
-		return fmt.Errorf("read --dry-run flag: %w", err)
-	}
-
-	if !resolveAll && len(args) == 0 {
-		return fmt.Errorf("specify a conflict path or ID, or use --all to resolve all conflicts")
-	}
-
-	if resolveAll && len(args) > 0 {
-		return fmt.Errorf("--all and a specific conflict argument are mutually exclusive")
-	}
-
-	// All resolution strategies go through the engine: keep_local and
-	// keep_remote need the graph client for transfers, and keep_both needs
-	// the sync root to update baseline entries for the original file and
-	// its conflict copies.
-	return newIssuesService(mustCLIContext(cmd.Context())).runResolve(cmd.Context(), args, resolution, resolveAll, dryRun)
-}
-
-// resolveStrategy returns the chosen resolution string from flags.
-func resolveStrategy(cmd *cobra.Command) (string, error) {
-	keepLocal := cmd.Flags().Changed("keep-local")
-	keepRemote := cmd.Flags().Changed("keep-remote")
-	keepBoth := cmd.Flags().Changed("keep-both")
-
-	if !keepLocal && !keepRemote && !keepBoth {
-		return "", fmt.Errorf("specify a resolution strategy: --keep-local, --keep-remote, or --keep-both")
-	}
-
-	switch {
-	case keepLocal:
-		return resolutionKeepLocal, nil
-	case keepRemote:
-		return resolutionKeepRemote, nil
-	default:
-		return resolutionKeepBoth, nil
-	}
-}
-
-func resolveEachConflict(
-	cc *CLIContext, conflicts []synctypes.ConflictRecord, resolution string, dryRun bool,
-	resolveFn func(id, resolution string) error,
-) error {
-	if len(conflicts) == 0 {
-		cc.Statusf("No unresolved conflicts.\n")
-		return nil
-	}
-
-	for i := range conflicts {
-		c := &conflicts[i]
-		if dryRun {
-			cc.Statusf("Would resolve %s (%s) as %s\n", c.Path, truncateID(c.ID), resolution)
-			continue
-		}
-
-		if err := resolveFn(c.ID, resolution); err != nil {
-			return fmt.Errorf("resolving %s: %w", c.Path, err)
-		}
-
-		cc.Statusf("Resolved %s as %s\n", c.Path, resolution)
-	}
-
-	return nil
-}
-
-func resolveSingleConflict(
-	cc *CLIContext, idOrPath, resolution string, dryRun bool,
-	listFn func() ([]synctypes.ConflictRecord, error),
-	listAllFn func() ([]synctypes.ConflictRecord, error),
-	resolveFn func(id, resolution string) error,
-) error {
-	conflicts, err := listFn()
-	if err != nil {
-		return err
-	}
-
-	target, found, findErr := findConflict(conflicts, idOrPath)
-	if findErr != nil {
-		return findErr
-	}
-
-	if !found {
-		if listAllFn != nil {
-			allConflicts, err := listAllFn()
-			if err != nil {
-				return err
-			}
-
-			if resolvedConflict, resolved, findErr := findConflict(allConflicts, idOrPath); findErr != nil {
-				return findErr
-			} else if resolved && resolvedConflict.Resolution != synctypes.ResolutionUnresolved {
-				cc.Statusf("Conflict %s already resolved as %s\n", resolvedConflict.Path, resolvedConflict.Resolution)
-				return nil
-			}
-		}
-
-		return fmt.Errorf("conflict not found: %s", idOrPath)
-	}
-
-	if dryRun {
-		cc.Statusf("Would resolve %s (%s) as %s\n", target.Path, truncateID(target.ID), resolution)
-		return nil
-	}
-
-	if err := resolveFn(target.ID, resolution); err != nil {
-		return err
-	}
-
-	cc.Statusf("Resolved %s as %s\n", target.Path, resolution)
-
-	return nil
-}
-
-func errAmbiguousPrefix(prefix string) error {
-	return fmt.Errorf("ambiguous conflict ID prefix %q — provide more characters", prefix)
-}
-
-func findConflict(conflicts []synctypes.ConflictRecord, idOrPath string) (*synctypes.ConflictRecord, bool, error) {
-	if idOrPath == "" {
-		return nil, false, nil
-	}
-
-	// First pass: exact matches (ID or path) take priority.
-	for i := range conflicts {
-		c := &conflicts[i]
-		if c.ID == idOrPath || c.Path == idOrPath {
-			return c, true, nil
-		}
-	}
-
-	// Second pass: prefix match with ambiguity detection.
-	var match *synctypes.ConflictRecord
-
-	for i := range conflicts {
-		c := &conflicts[i]
-		if len(c.ID) >= len(idOrPath) && c.ID[:len(idOrPath)] == idOrPath {
-			if match != nil {
-				return nil, false, errAmbiguousPrefix(idOrPath)
-			}
-
-			match = c
-		}
-	}
-
-	return match, match != nil, nil
-}
-
-// --- issues clear ---
-
-func newIssuesClearCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "clear [path]",
-		Short: "Clear actionable sync failures",
-		Long: `Clear specific or all actionable sync failures.
-
-Provide a path to clear a specific failure. Use --all to clear all
-actionable failures.`,
-		RunE: runIssuesClear,
-	}
-
-	cmd.Flags().Bool("all", false, "clear all actionable failures")
-
-	return cmd
-}
-
-func runIssuesClear(cmd *cobra.Command, args []string) error {
-	doAll, err := cmd.Flags().GetBool("all")
-	if err != nil {
-		return fmt.Errorf("read --all flag: %w", err)
-	}
-
-	return newIssuesService(mustCLIContext(cmd.Context())).runClear(cmd.Context(), args, doAll)
-}
-
-// --- issues retry ---
-
-func newIssuesRetryCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "retry [path]",
-		Short: "Reset failures for immediate retry",
-		Long: `Reset failure state so items are retried on the next sync.
-
-Provide a path to retry a specific failure. Use --all to retry all
-failed items.`,
-		RunE: runIssuesRetry,
-	}
-
-	cmd.Flags().Bool("all", false, "retry all failed items")
-
-	return cmd
-}
-
-func runIssuesRetry(cmd *cobra.Command, args []string) error {
-	doAll, err := cmd.Flags().GetBool("all")
-	if err != nil {
-		return fmt.Errorf("read --all flag: %w", err)
-	}
-
-	return newIssuesService(mustCLIContext(cmd.Context())).runRetry(cmd.Context(), args, doAll)
-}
-
-// --- issues recheck ---
-
-func newIssuesRecheckCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "recheck <boundary>",
-		Short: "Revalidate a blocked shared-folder boundary",
-		Long: `Queue an immediate permission recheck for a blocked shared-folder boundary.
-
-This revalidates the shared-folder boundary itself. It does not retry a
-specific blocked child action; use 'issues retry <path>' for that.`,
-		Args: cobra.ExactArgs(1),
-		RunE: runIssuesRecheck,
-	}
-}
-
-func runIssuesRecheck(cmd *cobra.Command, args []string) error {
-	return newIssuesService(mustCLIContext(cmd.Context())).runScopeRecheck(cmd.Context(), args[0])
+func runIssuesForceDeletes(cmd *cobra.Command, _ []string) error {
+	return newIssuesService(mustCLIContext(cmd.Context())).runForceDeletes(cmd.Context())
 }
 
 // --- helpers ---
@@ -331,76 +66,4 @@ func formatNanoTimestamp(nanos int64) string {
 	}
 
 	return time.Unix(0, nanos).UTC().Format(time.RFC3339)
-}
-
-// --- conflict JSON/table ---
-
-type conflictJSON struct {
-	ID           string `json:"id"`
-	Path         string `json:"path"`
-	ConflictType string `json:"conflict_type"`
-	DetectedAt   string `json:"detected_at"`
-	LocalHash    string `json:"local_hash,omitempty"`
-	RemoteHash   string `json:"remote_hash,omitempty"`
-	Resolution   string `json:"resolution"`
-	ResolvedAt   string `json:"resolved_at,omitempty"`
-	ResolvedBy   string `json:"resolved_by,omitempty"`
-}
-
-func toConflictJSON(c *synctypes.ConflictRecord) conflictJSON {
-	return conflictJSON{
-		ID:           c.ID,
-		Path:         c.Path,
-		ConflictType: c.ConflictType,
-		DetectedAt:   formatNanoTimestamp(c.DetectedAt),
-		LocalHash:    c.LocalHash,
-		RemoteHash:   c.RemoteHash,
-		Resolution:   c.Resolution,
-		ResolvedBy:   c.ResolvedBy,
-		ResolvedAt:   formatNanoTimestamp(c.ResolvedAt),
-	}
-}
-
-func printConflictsTable(w io.Writer, conflicts []synctypes.ConflictRecord, history bool) error {
-	var headers []string
-	if history {
-		headers = []string{"ID", "PATH", "TYPE", "RESOLUTION", "RESOLVED BY", "DETECTED"}
-	} else {
-		headers = []string{"ID", "PATH", "TYPE", "DETECTED"}
-	}
-
-	rows := make([][]string, len(conflicts))
-	for i := range conflicts {
-		c := &conflicts[i]
-		idPrefix := truncateID(c.ID)
-		detected := formatNanoTimestamp(c.DetectedAt)
-
-		if history {
-			rows[i] = []string{idPrefix, c.Path, c.ConflictType, c.Resolution, c.ResolvedBy, detected}
-		} else {
-			rows[i] = []string{idPrefix, c.Path, c.ConflictType, detected}
-		}
-	}
-
-	return printTable(w, headers, rows)
-}
-
-// printHeldDeletesTable renders held-delete entries with a simplified table
-// (path only — direction is always "delete" and error is always the same).
-func printHeldDeletesTable(w io.Writer, failures []syncstore.HeldDeleteSnapshot) error {
-	headers := []string{"PATH", "LAST SEEN"}
-
-	rows := make([][]string, len(failures))
-	for i := range failures {
-		row := &failures[i]
-		lastSeen := ""
-
-		if row.LastSeenAt != 0 {
-			lastSeen = formatNanoTimestamp(row.LastSeenAt)
-		}
-
-		rows[i] = []string{row.Path, lastSeen}
-	}
-
-	return printTable(w, headers, rows)
 }

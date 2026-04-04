@@ -28,7 +28,7 @@ The authoritative record of what has been successfully synced. Each entry record
 The authoritative record of what the server has, populated from delta query observations. Each item has a state machine: `observed` → `syncing` → `synced`. Used by the planner alongside the baseline and local scan.
 
 ### Sync Failure
-A persistent record of a file that failed to sync. Two categories: **transient** (retried automatically with exponential backoff) and **actionable** (requires user intervention via `issues clear`). Stored in the `sync_failures` table.
+A persistent record of a file that failed to sync. Two categories: **transient** (retried automatically with exponential backoff) and **actionable** (requires user intervention or an explicit safety approval such as `issues force-deletes`, depending on the issue type). Stored in the `sync_failures` table.
 
 ### Action
 The planner's output — a decision about what to do with a specific path. Types: `ActionDownload`, `ActionUpload`, `ActionLocalDelete`, `ActionRemoteDelete`, `ActionConflict`, `ActionMkdir`, `ActionRmdir`, `ActionNoop`, `ActionCleanup`.

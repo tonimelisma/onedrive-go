@@ -30,8 +30,8 @@ type StatusSnapshot struct {
 }
 
 // IssuesSnapshot is the read-only projection consumed by the CLI issues
-// command. It centralizes visible issue grouping, held-delete rows, retry
-// summaries, and conflict history under one store-owned read model.
+// command. It centralizes visible grouped issues and held deletes under one
+// store-owned read model.
 type IssuesSnapshot struct {
 	Conflicts      []synctypes.ConflictRecord
 	Groups         []IssueGroupSnapshot
@@ -42,14 +42,12 @@ type IssuesSnapshot struct {
 // IssueGroupSnapshot is one visible grouped issue family in the read-only
 // issues projection.
 type IssueGroupSnapshot struct {
-	SummaryKey         synctypes.SummaryKey
-	PrimaryIssueType   string
-	ScopeKey           synctypes.ScopeKey
-	ScopeLabel         string
-	Paths              []string
-	Count              int
-	HasManualTrial     bool
-	RecheckRequestedAt int64
+	SummaryKey       synctypes.SummaryKey
+	PrimaryIssueType string
+	ScopeKey         synctypes.ScopeKey
+	ScopeLabel       string
+	Paths            []string
+	Count            int
 }
 
 // HeldDeleteSnapshot is one held-delete entry surfaced in the issues read
@@ -60,7 +58,9 @@ type HeldDeleteSnapshot struct {
 }
 
 // PendingRetrySnapshot is one aggregated transient retry group in the
-// store-owned issues projection.
+// store-owned issues projection. The simplified issues CLI no longer renders
+// this section, but the snapshot keeps it available for internal observers and
+// tests that assert retry state.
 type PendingRetrySnapshot struct {
 	ScopeKey     synctypes.ScopeKey
 	ScopeLabel   string
@@ -141,10 +141,7 @@ type IssueSummary struct {
 }
 
 func (s IssuesSnapshot) Empty() bool {
-	return len(s.Conflicts) == 0 &&
-		len(s.Groups) == 0 &&
-		len(s.HeldDeletes) == 0 &&
-		len(s.PendingRetries) == 0
+	return len(s.Groups) == 0 && len(s.HeldDeletes) == 0
 }
 
 func (s IssueSummary) VisibleTotal() int {
@@ -288,8 +285,9 @@ func (i *Inspector) ReadStatusSnapshot(ctx context.Context) StatusSnapshot {
 }
 
 // ReadIssuesSnapshot returns the read-only issues projection used by the CLI
-// issues command. history widens only the conflicts slice; visible failure
-// groups remain current state.
+// issues command. history only widens the auxiliary conflicts slice; the
+// simplified issues CLI ignores it, but tests and internal observers still use
+// this seam.
 func (i *Inspector) ReadIssuesSnapshot(ctx context.Context, history bool) (IssuesSnapshot, error) {
 	projection, err := i.readVisibleIssueProjection(ctx)
 	if err != nil {
@@ -300,7 +298,6 @@ func (i *Inspector) ReadIssuesSnapshot(ctx context.Context, history bool) (Issue
 	if err != nil {
 		return IssuesSnapshot{}, fmt.Errorf("list conflicts: %w", err)
 	}
-
 	projection.snapshot.Conflicts = conflicts
 
 	return projection.snapshot, nil
@@ -327,11 +324,6 @@ func (i *Inspector) readVisibleIssueProjection(ctx context.Context) (issuesProje
 		return issuesProjection{}, fmt.Errorf("list remote blocked failures: %w", err)
 	}
 
-	recheckRequestedAt, err := queryScopeRecheckRequests(ctx, i.db)
-	if err != nil {
-		return issuesProjection{}, fmt.Errorf("list scope recheck requests: %w", err)
-	}
-
 	scopeBlocks, err := i.listScopeBlocks(ctx)
 	if err != nil {
 		return issuesProjection{}, fmt.Errorf("list scope blocks: %w", err)
@@ -348,7 +340,6 @@ func (i *Inspector) readVisibleIssueProjection(ctx context.Context) (issuesProje
 		scopeBlocks,
 		pendingRetries,
 		shortcuts,
-		recheckRequestedAt,
 	), nil
 }
 
@@ -358,11 +349,10 @@ func buildIssuesProjection(
 	scopeBlocks []*synctypes.ScopeBlock,
 	pendingRetries []synctypes.PendingRetryGroup,
 	shortcuts []synctypes.Shortcut,
-	recheckRequestedAt map[synctypes.ScopeKey]int64,
 ) issuesProjection {
 	builder := newIssuesProjectionBuilder(shortcuts, len(pendingRetries))
 	builder.addActionableFailures(actionableFailures)
-	builder.addRemoteBlocked(remoteBlocked, recheckRequestedAt)
+	builder.addRemoteBlocked(remoteBlocked)
 	builder.addAuthScopeBlocks(scopeBlocks)
 	builder.addPendingRetries(pendingRetries)
 	return builder.projection()
@@ -475,21 +465,12 @@ func (b *issuesProjectionBuilder) addActionableFailures(rows []synctypes.SyncFai
 	}
 }
 
-func (b *issuesProjectionBuilder) addRemoteBlocked(
-	rows []synctypes.SyncFailureRow,
-	recheckRequestedAt map[synctypes.ScopeKey]int64,
-) {
+func (b *issuesProjectionBuilder) addRemoteBlocked(rows []synctypes.SyncFailureRow) {
 	for i := range rows {
 		row := rows[i]
 		summaryKey := synctypes.SummaryKeyForPersistedFailure(row.IssueType, row.Category, row.Role)
 		if b.addGroupedPath(summaryKey, row.IssueType, row.ScopeKey, row.Path) {
 			b.addSummary(summaryKey, row.ScopeKey, row.Role)
-		}
-		idx := b.groupIndex[issueGroupKey{summaryKey: summaryKey, scopeKey: row.ScopeKey.String()}]
-		group := &b.snapshot.Groups[idx]
-		group.RecheckRequestedAt = recheckRequestedAt[row.ScopeKey]
-		if row.ManualTrialRequestedAt > 0 {
-			group.HasManualTrial = true
 		}
 	}
 }
@@ -604,6 +585,14 @@ func sortIssueGroups(groups []IssueGroupSnapshot) {
 	for i := range groups {
 		sort.Strings(groups[i].Paths)
 	}
+}
+
+func (i *Inspector) ListConflicts(ctx context.Context) ([]synctypes.ConflictRecord, error) {
+	return i.listConflicts(ctx, false)
+}
+
+func (i *Inspector) ListAllConflicts(ctx context.Context) ([]synctypes.ConflictRecord, error) {
+	return i.listConflicts(ctx, true)
 }
 
 func (i *Inspector) listConflicts(ctx context.Context, history bool) ([]synctypes.ConflictRecord, error) {

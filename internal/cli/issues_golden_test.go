@@ -13,14 +13,6 @@ import (
 
 func goldenIssuesSnapshot() syncstore.IssuesSnapshot {
 	return syncstore.IssuesSnapshot{
-		Conflicts: []synctypes.ConflictRecord{
-			{
-				ID:           "conflict-0001",
-				Path:         "/docs/report.txt",
-				ConflictType: synctypes.ConflictEditEdit,
-				DetectedAt:   time.Date(2026, 4, 3, 10, 0, 0, 0, time.UTC).UnixNano(),
-			},
-		},
 		Groups: []syncstore.IssueGroupSnapshot{
 			{
 				SummaryKey:       synctypes.SummaryAuthenticationRequired,
@@ -56,7 +48,7 @@ func TestIssuesOutputGoldenText(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	require.NoError(t, printGroupedIssuesText(&buf, goldenIssuesSnapshot(), false, false))
+	require.NoError(t, printGroupedIssuesText(&buf, goldenIssuesSnapshot(), false))
 	assertGoldenFile(t, "issues_text.golden", buf.Bytes())
 }
 
