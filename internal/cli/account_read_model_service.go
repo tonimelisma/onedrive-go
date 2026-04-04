@@ -48,7 +48,7 @@ func (s *accountReadModelService) statusAccounts(snapshot accountReadModelSnapsh
 	return buildStatusAccountsFromCatalog(snapshot.Config, snapshot.Catalog, &liveSyncStateQuerier{logger: s.cc.Logger})
 }
 
-func (s *accountReadModelService) configuredAuthRequirements(
+func (s *accountReadModelService) authRequirements(
 	snapshot accountReadModelSnapshot,
 	include func(accountCatalogEntry) bool,
 ) []accountAuthRequirement {

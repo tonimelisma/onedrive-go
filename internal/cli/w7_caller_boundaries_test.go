@@ -30,6 +30,19 @@ func setupConfiguredInvalidSavedLogin(t *testing.T) (string, driveid.CanonicalID
 	return cfgPath, cid
 }
 
+func setupUnconfiguredInvalidSavedLogin(t *testing.T) driveid.CanonicalID {
+	t.Helper()
+
+	cid := driveid.MustCanonicalID("business:blocked@example.com")
+	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
+		DisplayName: "Blocked User",
+	}))
+	writeInvalidSavedLoginFile(t, cid)
+	require.NoError(t, touchStateDBForAccount(t, cid))
+
+	return cid
+}
+
 func writeInvalidSavedLoginFile(t *testing.T, cid driveid.CanonicalID) {
 	t.Helper()
 
@@ -229,6 +242,47 @@ func TestDriveService_RunList_JSONSurfacesConfiguredAuthRequirement(t *testing.T
 	assert.Empty(t, decoded.Available)
 	require.Len(t, decoded.AccountsRequiringAuth, 1)
 	assert.Equal(t, "blocked@example.com", decoded.AccountsRequiringAuth[0].Email)
+	assert.Equal(t, authReasonInvalidSavedLogin, decoded.AccountsRequiringAuth[0].Reason)
+	assert.Equal(t, 1, decoded.AccountsRequiringAuth[0].StateDBs)
+}
+
+// Validates: R-3.3.9
+func TestDriveService_RunSearch_TextSurfacesUnconfiguredAuthRequirement(t *testing.T) {
+	setTestDriveHome(t)
+
+	cid := setupUnconfiguredInvalidSavedLogin(t)
+
+	var out bytes.Buffer
+	cc := newServiceContext(&out, filepath.Join(t.TempDir(), "missing-config.toml"))
+
+	require.NoError(t, newDriveService(cc).runSearch(t.Context(), "marketing"))
+	assert.Contains(t, out.String(), "Authentication required:")
+	assert.Contains(t, out.String(), cid.Email())
+	assert.Contains(t, out.String(), "invalid or unreadable")
+	assert.NotContains(t, out.String(), "no business accounts found")
+}
+
+// Validates: R-3.3.9, R-3.3.11
+func TestDriveService_RunSearch_JSONSurfacesUnconfiguredAuthRequirementForAccountFilter(t *testing.T) {
+	setTestDriveHome(t)
+
+	cid := setupUnconfiguredInvalidSavedLogin(t)
+
+	var out bytes.Buffer
+	cc := newServiceContext(&out, filepath.Join(t.TempDir(), "missing-config.toml"))
+	cc.Flags = CLIFlags{
+		Account: cid.Email(),
+		JSON:    true,
+	}
+
+	require.NoError(t, newDriveService(cc).runSearch(t.Context(), "marketing"))
+
+	var decoded driveSearchJSONOutput
+	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
+	assert.Empty(t, decoded.Results)
+	require.Len(t, decoded.AccountsRequiringAuth, 1)
+	assert.Equal(t, cid.Email(), decoded.AccountsRequiringAuth[0].Email)
+	assert.Equal(t, driveid.DriveTypeBusiness, decoded.AccountsRequiringAuth[0].DriveType)
 	assert.Equal(t, authReasonInvalidSavedLogin, decoded.AccountsRequiringAuth[0].Reason)
 	assert.Equal(t, 1, decoded.AccountsRequiringAuth[0].StateDBs)
 }
