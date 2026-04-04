@@ -308,7 +308,7 @@ This is the operating dashboard for completeness, not a verdict of quality. A pa
 | W4 | done | done | done | n/a | done | done | partial | done | live crash/restart proof is still thinner than the now-reconciled store/CLI durable-row mutation coverage |
 | W5 | done | done | done | partial | done | partial | partial | done | upload-session traceability tags still lag the body-level coverage |
 | W6 | done | done | partial | partial | done | partial | partial | no | pagination and transport split still need body audit |
-| W7 | done | done | partial | n/a | done | partial | partial | partial | file-command independence from sync-state and broader caller-level logout/list coverage still need deeper audit |
+| W7 | done | done | partial | n/a | done | partial | partial | partial | broader caller-level logout/whoami/drive-list coverage still needs deeper audit |
 | W8 | done | done | partial | n/a | done | no | no | no | validation-tier coverage may be over-claimed |
 | W9 | done | done | partial | partial | done | no | no | no | shared-drive identity fallback details still need confirmation |
 
@@ -950,11 +950,13 @@ Key W5 gap notes:
   - `drive remove --purge` had a real production boundary bug: it reused `purgeSingleDrive`, which also deleted the account profile file even though `R-3.3.8` preserves the logged-in account and the CLI account read model depends on `account_*.json` for offline identity metadata. The fix narrows `purgeSingleDrive` to drive-owned state only; `logout --purge` still removes account profiles through the account-owned `purgeOrphanedFiles()` path.
   - New caller-level tests now prove both sides of that contract. `TestDriveService_RunRemove_PurgePreservesAccountProfile` proves drive purge removes config/state/metadata while preserving token + account profile and keeping the offline account catalog usable. `TestAuthService_RunLogout_PurgeRemovesAccountProfile` proves logout purge still removes token, state DB, metadata, and the account profile while leaving sync directories untouched.
   - The old helper-level `purgeSingleDrive` test was also too shallow to catch this regression. It now asserts the account profile survives drive-scoped purge instead of disappearing silently.
+  - Direct file-command independence from sync-store health also had a real user-facing leak: the authenticated-success proof hook already treated auth-scope cleanup as best-effort, but it logged sync-store repair failures at `Warn`, so a successful `ls` or `rm` could still print sync-database warnings. The hook now logs repair failures at `Debug`, and caller-level `ls` / `rm` tests prove successful direct API commands stay quiet even when the discovered state DB is corrupt.
 
 | Contract / invariant | Evidence | Verdict | Notes |
 |---|---|---|---|
 | `drive remove --purge` preserves account-owned token/profile state while deleting only drive-owned config/state/metadata | `REQ+DESIGN+CODE+BODY` | `proven` | Fixed real production bug in `purgeSingleDrive`; caller-level service test now kills accidental over-deletion |
 | `logout --purge` removes account-owned token/profile state in addition to drive-owned state | `REQ+DESIGN+BODY` | `proven` | Caller-level logout purge test now proves the destructive boundary separately from drive-scoped purge |
+| direct API file commands remain successful and user-quiet when auth-proof cleanup cannot open a sync DB | `REQ+DESIGN+CODE+BODY` | `proven` | `authProofRecorder` now keeps proof-repair failures at debug level; caller-level `ls` and `rm` tests prove no user-visible sync-store warning leak |
 
 ### W8. Configuration Discovery, Validation Tiers, And Token Resolution
 
@@ -1045,5 +1047,4 @@ Key W5 gap notes:
    - remaining sparse remote-payload hardening and nil-guard proof paths
 3. Tighten W5 traceability for upload-session rules that are already strongly tested in body-level graph tests but still under-tagged at the `// Validates:` level.
 4. Continue W7 body-level reconciliation for:
-   - direct file-command independence from sync-state and sync-db availability
-   - broader caller-level logout / whoami / drive-list proof paths beyond the now-fixed purge-profile boundary
+   - broader caller-level logout / whoami / drive-list proof paths beyond the now-fixed purge-profile and file-command-independence boundaries
