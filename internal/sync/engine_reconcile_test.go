@@ -752,6 +752,81 @@ func TestRunFullReconciliationAsync_FeedsBuffer(t *testing.T) {
 	assert.NotEmpty(t, batch, "buffer should contain events from reconciliation")
 }
 
+// Validates: R-2.8.4
+func TestWatchLoop_ReconcileTick_RunsPeriodicFullReconciliationThroughResultHandoff(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{ID: "f1", Name: "reconcile.txt", ParentID: "root", DriveID: driveID, Size: 42, QuickXorHash: "qxh"},
+				},
+				DeltaLink: "watch-reconcile-token",
+			}, nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	ready := setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	rt.buf = syncobserve.NewBuffer(eng.logger)
+
+	reconcileC := make(chan time.Time, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- runWatchLoopForTest(eng, ctx, &watchPipeline{
+			bl:         bl,
+			safety:     synctypes.DefaultSafetyConfig(),
+			mode:       synctypes.SyncBidirectional,
+			reconcileC: reconcileC,
+		})
+	}()
+
+	reconcileC <- time.Now()
+
+	var batch []synctypes.PathChanges
+	require.Eventually(t, func() bool {
+		savedToken, tokenErr := eng.baseline.GetDeltaToken(t.Context(), driveID.String(), "")
+		if tokenErr != nil || savedToken != "watch-reconcile-token" {
+			return false
+		}
+		batch = rt.buf.FlushImmediate()
+		return len(batch) > 0
+	}, 10*time.Second, 10*time.Millisecond, "watch loop should apply the periodic reconciliation result back onto the watch-owned buffer")
+
+	require.Len(t, batch, 1)
+	assert.Equal(t, "reconcile.txt", batch[0].Path)
+
+	select {
+	case ta := <-ready:
+		require.Failf(t, "periodic reconciliation dispatched directly", "unexpected action %s", ta.Action.Path)
+	default:
+	}
+
+	savedToken, tokenErr := eng.baseline.GetDeltaToken(t.Context(), driveID.String(), "")
+	require.NoError(t, tokenErr)
+	assert.Equal(t, "watch-reconcile-token", savedToken)
+
+	cancel()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		require.Fail(t, "watch loop did not stop after cancellation")
+	}
+}
+
 func TestRunFullReconciliationAsync_ShutdownAfterCommit(t *testing.T) {
 	t.Parallel()
 

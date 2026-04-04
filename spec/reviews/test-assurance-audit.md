@@ -542,15 +542,14 @@ These are not test results yet. They are likely weak spots inferred from require
 | Trial failure must stay isolated from normal result handling | `DESIGN+BODY` | `internal/sync/engine_phase0_test.go:269` and `internal/sync/engine_result_scope_test.go:531` show interval extension without scope clearing or re-detection | `proven` | Strong regression detector |
 | Trial success must release held failures without new external observation | `REQ+DESIGN+BODY` | `internal/sync/engine_phase0_test.go:323` and `internal/sync/engine_result_scope_test.go:1061` show immediate re-dispatch after scope release | `proven` | Covers the core retry-path invariant |
 | Scope release must kick the retrier immediately | `DESIGN+BODY` | `internal/sync/engine_single_owner_test.go:121` and `internal/sync/engine_watch_test.go:558` assert retry wakeup after release | `proven` | Good watch-loop ownership proof |
-| Watch-mode big-delete hold must block deletes while allowing non-deletes | `REQ+DESIGN+BODY` | `internal/sync/engine_watch_test.go:220` keeps one download flowing while 15 delete actions are held | `proven-but-weak` | Behavior looks correct, but traceability to `R-6.4.2` / `R-6.4.3` is poor |
-| Periodic full reconciliation in watch mode | `REQ+DESIGN+META` | Mentioned in spec/design, but this pass has not yet reconciled a strong body-level proof | `not-yet-audited` | `traceability-gap` for `R-2.8.4` |
-| Aggregated warning logging behavior | `REQ+DESIGN+META` | Design claims `R-6.6.7`, but this pass has not confirmed a convincing proof path yet | `not-yet-audited` | `traceability-gap` |
+| Watch-mode big-delete hold must block deletes while allowing non-deletes | `REQ+DESIGN+BODY` | `internal/sync/engine_watch_test.go` now carries explicit `R-6.4.2` / `R-6.4.3` claims for threshold, mixed non-delete flow, and external-clear release behavior | `proven` | Traceability gap closed |
+| Periodic full reconciliation in watch mode | `REQ+DESIGN+BODY` | `internal/sync/engine_reconcile_test.go` now drives the steady-state watch loop from `reconcileC`, proves async full reconciliation commits the token, and applies events back through the watch-owned buffer/result handoff | `proven` | Stronger body-level watch-loop proof for `R-2.8.4` |
+| Aggregated warning logging behavior | `REQ+DESIGN+BODY+CODE` | `internal/sync/engine_result_scope_test.go` now proves `recordSkippedItems()` emits one WARN summary plus per-item DEBUG logs above threshold; this audit pass found and fixed the missing DEBUG-per-item production path in `engine_watch_reconcile.go` | `proven` | Real production bug fixed while reconciling `R-6.6.7` |
 
 Key W1 gap notes:
 
 - `META+SUSPECT`: the most valuable sequencing guarantees are real and covered, but still hard to discover from `// Validates:` tags alone.
-- `REQ+DESIGN`: `R-2.8.4`, `R-6.4.2`, `R-6.4.3`, and `R-6.6.7` need explicit reconciliation next so the audit can challenge their `[verified]` status cleanly.
-- `BODY`: W1 is now body-audited enough for `test-audit`, but nowhere near `strong-enough`.
+- `BODY`: this pass closes the highest-value W1 traceability gaps around periodic reconciliation, watch-mode big-delete handling, and scanner warning aggregation. The remaining W1 risk is no longer "can we find the proof?" but "which sequencing/recovery invariants still need deeper kill-switch coverage?"
 
 ### W2. Observation Correctness, Filtering, Collisions, And Normalization
 

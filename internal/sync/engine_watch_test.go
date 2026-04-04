@@ -169,6 +169,7 @@ func TestRunWatch_UploadOnly_SkipsRemoteObserver(t *testing.T) {
 	}), "upload-only watch must not start a remote observer")
 }
 
+// Validates: R-6.4.2, R-6.4.3
 // TestRunWatch_ProcessBatch_BigDelete verifies that the rolling delete
 // counter in watch mode holds delete actions when the threshold is exceeded,
 // records them as actionable issues, and prevents dispatch.
@@ -249,6 +250,7 @@ func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
 	assert.Len(t, rows, 20, "should have 20 big_delete_held entries")
 }
 
+// Validates: R-6.4.2
 // TestRunWatch_ProcessBatch_BigDelete_NonDeletesFlow verifies that non-delete
 // actions are dispatched even when the delete counter is held.
 func TestRunWatch_ProcessBatch_BigDelete_NonDeletesFlow(t *testing.T) {
@@ -342,6 +344,7 @@ func TestRunWatch_ProcessBatch_BigDelete_NonDeletesFlow(t *testing.T) {
 	assert.Len(t, rows, 15, "should have 15 big_delete_held entries")
 }
 
+// Validates: R-6.4.3
 // TestRunWatch_ProcessBatch_BigDelete_BelowThreshold verifies that the
 // rolling counter allows deletes through when below the threshold.
 func TestRunWatch_ProcessBatch_BigDelete_BelowThreshold(t *testing.T) {
@@ -445,6 +448,7 @@ func TestEngine_ExternalDBChanged(t *testing.T) {
 	assert.False(t, externalDBChangedForTest(t, eng, ctx), "still no external changes")
 }
 
+// Validates: R-6.4.2
 // TestEngine_HandleExternalChanges_BigDeleteClearance verifies that
 // handleExternalChanges releases the delete counter when all
 // big_delete_held entries have been cleared.
@@ -489,6 +493,7 @@ func TestEngine_HandleExternalChanges_BigDeleteClearance(t *testing.T) {
 	assert.False(t, testWatchRuntime(t, eng).deleteCounter.IsHeld(), "should be released after entries cleared")
 }
 
+// Validates: R-6.4.2
 // TestEngine_HandleExternalChanges_PartialClear verifies that the counter
 // stays held when only some big_delete_held entries are cleared.
 func TestEngine_HandleExternalChanges_PartialClear(t *testing.T) {
