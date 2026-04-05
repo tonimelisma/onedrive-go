@@ -13,7 +13,7 @@ Sync-specific report rendering and watch bootstrap helpers stay in the same pack
 
 `internal/cli` is also the composition root for Graph-facing HTTP runtime
 policy. Each command/watch runtime owns one `graphhttp.Provider`, which it
-uses to choose bootstrap, account-scoped interactive, or sync HTTP profiles
+uses to choose bootstrap, target-scoped interactive, or sync HTTP profiles
 without making `internal/cli` the long-term owner of transport constants or
 retry mechanics.
 
@@ -220,7 +220,7 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
   - `verifyService`: baseline verification flow
 - `accountReadModelService` is the shared read-model collaborator under `statusService`, `authService`, `driveService`, and `sharedService`. It owns lenient config loading, warning logging, and offline account/auth projection so those command families do not rebuild account semantics independently.
 - `SessionProvider` caches `TokenSource`s by token file path — multiple drives sharing an account share one `TokenSource`, preventing OAuth2 refresh token rotation races.
-- `CLIContext` owns one `graphhttp.Provider` per command/watch runtime. Bootstrap/auth-discovery flows use `BootstrapMeta()`. Once account identity is known, CLI passes account-scoped interactive client resolvers into `driveops.SessionProvider`. Sync paths request `Sync()` profiles instead. HTTP policy constants and client reuse live in `internal/graphhttp`, not `internal/cli`.
+- `CLIContext` owns one `graphhttp.Provider` per command/watch runtime. Bootstrap/auth-discovery flows use `BootstrapMeta()`. Once both account and remote target identity are known, CLI passes target-scoped interactive client resolvers into `driveops.SessionProvider`: configured drives key by drive ID, configured shared roots key by remote root item, and direct shared-item commands key by `(remoteDriveID, remoteItemID)`. Sync paths request `Sync()` profiles instead. HTTP policy constants and client reuse live in `internal/graphhttp`, not `internal/cli`.
 - CLI handlers use `cmd.Context()` for signal propagation. Exception: upload session cancel paths use `context.Background()` because the cancel must succeed even when the original context is done.
 - Production command code writes primary output through `CLIContext.OutputWriter`, and status/warning/error text through the CLI-owned status writer boundary instead of raw process-global stdout/stderr. This keeps command output injectable in tests and prevents hidden process-global output dependencies from creeping back into services, bootstrap warnings, or sync-daemon cleanup.
 - `go run ./cmd/devtool verify` enforces that production `internal/cli` files do not call `fmt.Print*`, `fmt.Fprint*(os.Stdout|os.Stderr, ...)`, or direct `os.Stdout` / `os.Stderr` writer methods. The only allowed process-global output boundary is the tiny process entrypoint outside `internal/cli`.

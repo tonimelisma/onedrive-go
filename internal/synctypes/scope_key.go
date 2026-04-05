@@ -3,6 +3,8 @@ package synctypes
 import (
 	"net/http"
 	"strings"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // ScopeKeyKind discriminates the type of scope block. Value-typed (usable
@@ -11,7 +13,8 @@ type ScopeKeyKind int
 
 const (
 	ScopeAuthAccount     ScopeKeyKind = iota + 1 // no Param
-	ScopeThrottleAccount                         // no Param
+	ScopeThrottleAccount                         // legacy only; no Param
+	ScopeThrottleTarget                          // Param = "drive:<targetDriveID>" or "shared:<remoteDrive>:<remoteItem>"
 	ScopeService                                 // no Param
 	ScopeQuotaOwn                                // no Param
 	ScopeQuotaShortcut                           // Param = "remoteDrive:remoteItem"
@@ -36,6 +39,16 @@ func SKService() ScopeKey         { return ScopeKey{Kind: ScopeService} }
 func SKQuotaOwn() ScopeKey        { return ScopeKey{Kind: ScopeQuotaOwn} }
 func SKDiskLocal() ScopeKey       { return ScopeKey{Kind: ScopeDiskLocal} }
 func SKAuthAccount() ScopeKey     { return ScopeKey{Kind: ScopeAuthAccount} }
+
+// SKThrottleDrive returns the target-scoped throttle key for one drive.
+func SKThrottleDrive(targetDriveID driveid.ID) ScopeKey {
+	return ScopeKey{Kind: ScopeThrottleTarget, Param: throttleDriveParam(targetDriveID)}
+}
+
+// SKThrottleShared returns the target-scoped throttle key for one shared root/item.
+func SKThrottleShared(remoteDriveID, remoteItemID string) ScopeKey {
+	return ScopeKey{Kind: ScopeThrottleTarget, Param: throttleSharedParam(remoteDriveID, remoteItemID)}
+}
 
 // SKQuotaShortcut returns the scope key for a shortcut quota block.
 func SKQuotaShortcut(compositeKey string) ScopeKey {
@@ -62,6 +75,7 @@ func (sk ScopeKey) IsZero() bool {
 const (
 	WireAuthAccount     = "auth:account"
 	WireThrottleAccount = "throttle:account"
+	WireThrottleTarget  = "throttle:target:"
 	WireService         = "service"
 	WireQuotaOwn        = "quota:own"
 	WireQuotaShortcut   = "quota:shortcut:" // prefix for parameterized key
@@ -78,6 +92,8 @@ func (sk ScopeKey) String() string {
 		return WireAuthAccount
 	case ScopeThrottleAccount:
 		return WireThrottleAccount
+	case ScopeThrottleTarget:
+		return WireThrottleTarget + sk.Param
 	case ScopeService:
 		return WireService
 	case ScopeQuotaOwn:
@@ -103,6 +119,8 @@ func ParseScopeKey(s string) ScopeKey {
 		return SKAuthAccount()
 	case s == WireThrottleAccount:
 		return SKThrottleAccount()
+	case strings.HasPrefix(s, WireThrottleTarget):
+		return ScopeKey{Kind: ScopeThrottleTarget, Param: strings.TrimPrefix(s, WireThrottleTarget)}
 	case s == WireService:
 		return SKService()
 	case s == WireQuotaOwn:
@@ -120,8 +138,9 @@ func ParseScopeKey(s string) ScopeKey {
 	}
 }
 
-// IsGlobal returns true for scope blocks that affect ALL actions (throttle,
-// service). Used by isObservationSuppressed to skip API calls during outages.
+// IsGlobal returns true for scope blocks that affect ALL actions. Target-scoped
+// throttles are intentionally not global; only the legacy throttle:account key,
+// auth:account, and service remain process-wide.
 func (sk ScopeKey) IsGlobal() bool {
 	return sk.Kind == ScopeAuthAccount || sk.Kind == ScopeThrottleAccount || sk.Kind == ScopeService
 }
@@ -154,13 +173,46 @@ func (sk ScopeKey) RemotePath() string {
 	return sk.Param
 }
 
+// IsThrottleTarget returns true for target-scoped throttle keys.
+func (sk ScopeKey) IsThrottleTarget() bool {
+	return sk.Kind == ScopeThrottleTarget
+}
+
+// IsThrottleDrive returns true when the throttle scope applies to one drive.
+func (sk ScopeKey) IsThrottleDrive() bool {
+	return sk.Kind == ScopeThrottleTarget && strings.HasPrefix(sk.Param, throttleDrivePrefix)
+}
+
+// IsThrottleShared returns true when the throttle scope applies to one shared target.
+func (sk ScopeKey) IsThrottleShared() bool {
+	return sk.Kind == ScopeThrottleTarget && strings.HasPrefix(sk.Param, throttleSharedPrefix)
+}
+
+// ThrottleTargetKey returns the normalized target key for a target-scoped throttle.
+// Panics if called on a non-target throttle key.
+func (sk ScopeKey) ThrottleTargetKey() string {
+	if sk.Kind != ScopeThrottleTarget {
+		panic("ScopeKey.ThrottleTargetKey() called on non-target throttle key")
+	}
+	return sk.Param
+}
+
+// ThrottleShortcutKey returns the "remoteDrive:remoteItem" suffix for a shared
+// target throttle key. Panics if called on a non-shared throttle key.
+func (sk ScopeKey) ThrottleShortcutKey() string {
+	if !sk.IsThrottleShared() {
+		panic("ScopeKey.ThrottleShortcutKey() called on non-shared throttle key")
+	}
+	return strings.TrimPrefix(sk.Param, throttleSharedPrefix)
+}
+
 // IssueType returns the issue_type constant for this scope key's kind.
 // Used to populate sync_failures.issue_type consistently.
 func (sk ScopeKey) IssueType() string {
 	switch sk.Kind {
 	case ScopeAuthAccount:
 		return IssueUnauthorized
-	case ScopeThrottleAccount:
+	case ScopeThrottleAccount, ScopeThrottleTarget:
 		return IssueRateLimited
 	case ScopeService:
 		return IssueServiceOutage
@@ -187,6 +239,17 @@ func (sk ScopeKey) Humanize(shortcuts []Shortcut) string {
 		return "your OneDrive account authorization"
 	case ScopeThrottleAccount:
 		return "your OneDrive account (rate limited)"
+	case ScopeThrottleTarget:
+		if sk.IsThrottleShared() {
+			shortcutKey := sk.ThrottleShortcutKey()
+			for i := range shortcuts {
+				if shortcuts[i].RemoteDrive+":"+shortcuts[i].RemoteItem == shortcutKey {
+					return shortcuts[i].LocalPath + " (rate limited)"
+				}
+			}
+			return shortcutKey
+		}
+		return "this drive (rate limited)"
 	case ScopeService:
 		return "OneDrive service"
 	case ScopeQuotaOwn:
@@ -212,10 +275,18 @@ func (sk ScopeKey) Humanize(shortcuts []Shortcut) string {
 
 // BlocksAction returns true if this scope key blocks the given action.
 // Replaces the scattered string-matching logic from blockedScope().
-func (sk ScopeKey) BlocksAction(path, shortcutKey string, actionType ActionType, targetsOwnDrive bool) bool {
+func (sk ScopeKey) BlocksAction(
+	path string,
+	throttleTargetKey string,
+	shortcutKey string,
+	actionType ActionType,
+	targetsOwnDrive bool,
+) bool {
 	switch sk.Kind {
 	case ScopeAuthAccount, ScopeThrottleAccount, ScopeService:
 		return true // global blocks
+	case ScopeThrottleTarget:
+		return throttleTargetKey != "" && throttleTargetKey == sk.Param
 	case ScopeDiskLocal:
 		return actionType == ActionDownload
 	case ScopeQuotaOwn:
@@ -249,13 +320,23 @@ func scopePathMatches(path, boundary string) bool {
 	return path == boundary || strings.HasPrefix(path, boundary+"/")
 }
 
-// ScopeKeyForStatus maps an HTTP status code and shortcut context to a
-// ScopeKey. Returns the zero-value for non-scope statuses. Single source
-// of truth for HTTP status → scope key classification.
-func ScopeKeyForStatus(httpStatus int, shortcutKey string) ScopeKey {
+// ScopeKeyForResult maps one worker result target and HTTP status code to a
+// ScopeKey. Returns the zero-value for non-scope statuses. This is the single
+// source of truth for HTTP status → scope key classification.
+func ScopeKeyForResult(httpStatus int, targetDriveID driveid.ID, shortcutKey string) ScopeKey {
 	switch {
 	case httpStatus == http.StatusTooManyRequests:
-		return SKThrottleAccount()
+		if shortcutKey != "" {
+			remoteDriveID, remoteItemID, ok := strings.Cut(shortcutKey, ":")
+			if !ok || remoteDriveID == "" || remoteItemID == "" {
+				return ScopeKey{}
+			}
+			return SKThrottleShared(remoteDriveID, remoteItemID)
+		}
+		if targetDriveID.IsZero() {
+			return ScopeKey{}
+		}
+		return SKThrottleDrive(targetDriveID)
 	case httpStatus == http.StatusServiceUnavailable:
 		return SKService()
 	case httpStatus == http.StatusInsufficientStorage:
@@ -268,4 +349,17 @@ func ScopeKeyForStatus(httpStatus int, shortcutKey string) ScopeKey {
 	default:
 		return ScopeKey{}
 	}
+}
+
+const (
+	throttleDrivePrefix  = "drive:"
+	throttleSharedPrefix = "shared:"
+)
+
+func throttleDriveParam(targetDriveID driveid.ID) string {
+	return throttleDrivePrefix + targetDriveID.String()
+}
+
+func throttleSharedParam(remoteDriveID, remoteItemID string) string {
+	return throttleSharedPrefix + remoteDriveID + ":" + remoteItemID
 }

@@ -46,3 +46,23 @@ type WorkerResult struct {
 	// the DepGraph.
 	ActionID int64
 }
+
+// ThrottleTargetKey returns the narrowest remote boundary that can be blocked
+// after a 429 for this worker result.
+func (r *WorkerResult) ThrottleTargetKey() string {
+	if r == nil {
+		return ""
+	}
+
+	if r.ShortcutKey != "" {
+		return throttleSharedPrefix + r.ShortcutKey
+	}
+	targetDriveID := r.TargetDriveID
+	if targetDriveID.IsZero() {
+		targetDriveID = r.DriveID
+	}
+	if targetDriveID.IsZero() {
+		return ""
+	}
+	return throttleDriveParam(targetDriveID)
+}

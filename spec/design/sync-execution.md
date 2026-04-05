@@ -104,19 +104,19 @@ Implements: R-2.10.3 [verified], R-2.10.26 [verified], R-2.10.42 [verified]
 
 ### ScopeKey Type System
 
-All scope keys are typed `ScopeKey{Kind ScopeKeyKind, Param string}` — a comparable value type usable as map key. Seven kinds: `ScopeThrottleAccount`, `ScopeService`, `ScopeQuotaOwn`, `ScopeQuotaShortcut` (Param = "remoteDrive:remoteItem"), `ScopePermDir` (Param = relative dir path), `ScopePermRemote` (Param = relative boundary path), `ScopeDiskLocal`. Pre-built singletons for non-parameterized scopes (`SKThrottleAccount`, `SKService`, `SKQuotaOwn`, `SKDiskLocal`); constructor functions for parameterized scopes (`SKQuotaShortcut(key)`, `SKPermDir(path)`, `SKPermRemote(path)`).
+All scope keys are typed `ScopeKey{Kind ScopeKeyKind, Param string}` — a comparable value type usable as map key. Active runtime kinds are `ScopeAuthAccount`, `ScopeThrottleTarget` (Param = `"drive:<targetDriveID>"` or `"shared:<remoteDrive>:<remoteItem>"`), `ScopeService`, `ScopeQuotaOwn`, `ScopeQuotaShortcut` (Param = `"remoteDrive:remoteItem"`), `ScopePermDir` (Param = relative dir path), `ScopePermRemote` (Param = relative boundary path), and `ScopeDiskLocal`. `ScopeThrottleAccount` remains parseable only as a legacy persisted key so startup repair can release old rows safely. Pre-built singletons remain for non-parameterized scopes (`SKAuthAccount`, `SKService`, `SKQuotaOwn`, `SKDiskLocal`); constructor functions cover parameterized scopes (`SKThrottleDrive`, `SKThrottleShared`, `SKQuotaShortcut(key)`, `SKPermDir(path)`, `SKPermRemote(path)`).
 
 Methods on `ScopeKey` centralize logic that was previously scattered across 9+ files:
-- **`BlocksAction(path, shortcutKey, actionType, targetsOwnDrive)`** — scope-specific action blocking (used by `blockedScope()`)
+- **`BlocksAction(path, throttleTargetKey, shortcutKey, actionType, targetsOwnDrive)`** — scope-specific action blocking (used by `blockedScope()`)
 - ~~`MaxTrialInterval()`~~ — removed; interval computation is centralized in the engine's scope-aware trial timing helper
 - **`Humanize(shortcuts)`** — user-friendly description for display
 - **`IssueType()`** — maps scope kind to `sync_failures.issue_type` constant
-- **`IsGlobal()`** — true for scopes that block ALL actions (throttle, service)
+- **`IsGlobal()`** — true only for scopes that block across all actions without a target parameter (for example `service` and the legacy `throttle:account` cleanup path)
 - **`IsPermDir()` / `DirPath()`** — type-safe access for local directory permission scopes
 - **`IsPermRemote()` / `RemotePath()`** — type-safe access for remote shared-folder permission scopes
 - **`IsZero()`** — detects the zero-value (invalid) key
-- **`String()` / `ParseScopeKey(s)`** — wire format serialization for SQLite `scope_key` columns. The wire format is `"throttle:account"`, `"service"`, `"quota:own"`, `"quota:shortcut:X"`, `"perm:dir:X"`, `"perm:remote:X"`, `"disk:local"`.
-- **`ScopeKeyForStatus(httpStatus, shortcutKey)`** — single source of truth for HTTP status → scope key classification, replacing scattered switch/if chains in `classifyResult` and `deriveScopeKey`.
+- **`String()` / `ParseScopeKey(s)`** — wire format serialization for SQLite `scope_key` columns. The active wire format is `"auth:account"`, `"throttle:target:drive:<id>"`, `"throttle:target:shared:<drive>:<item>"`, `"service"`, `"quota:own"`, `"quota:shortcut:X"`, `"perm:dir:X"`, `"perm:remote:X"`, `"disk:local"`. `"throttle:account"` remains parseable only for legacy startup cleanup.
+- **`ScopeKeyForResult(httpStatus, targetDriveID, shortcutKey)`** — single source of truth for HTTP status → scope key classification, replacing scattered switch/if chains in `classifyResult` and `deriveScopeKey`.
 
 `ScopePermRemote` is the recursive download-only shared-folder scope. `BlocksAction` returns true for uploads, folder creates, remote moves, and remote deletes at the boundary path and every descendant, while allowing downloads to continue.
 
@@ -141,7 +141,7 @@ Those columns are important to execution correctness:
 records successes that reset windows. In watch mode it is owned by the
 single-owner watch loop. Windows are keyed by `ScopeKey` (not string).
 
-- **Immediate blocks** (server signals): 429 → `SKThrottleAccount` (single response triggers). 503 with Retry-After → `SKService` (single response triggers).
+- **Immediate blocks** (server signals): 429 → `SKThrottleDrive(targetDriveID)` or `SKThrottleShared(shortcutKey)` (single response triggers). 503 with Retry-After → `SKService` (single response triggers).
 - **Sliding window detection**: 507 → 3 unique paths in 10s → `SKQuotaOwn` or `SKQuotaShortcut(key)`. 5xx → 5 unique paths in 30s → `SKService`.
 - **Success resets**: `RecordSuccess()` clears sliding windows for the relevant scope — a successful request proves the service is up.
 

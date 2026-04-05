@@ -829,7 +829,7 @@ func TestClassifyResult_RemoteRetriesAndSkips(t *testing.T) {
 		{name: "408_request_timeout", result: synctypes.WorkerResult{HTTPStatus: http.StatusRequestTimeout, Err: errors.New("timeout")}, wantClass: resultRequeue, wantSummaryKey: synctypes.SummarySyncFailure, wantPersistence: persistTransientFailure, wantScopeDetect: true},
 		{name: "412_precondition_failed", result: synctypes.WorkerResult{HTTPStatus: http.StatusPreconditionFailed, Err: errors.New("etag mismatch")}, wantClass: resultRequeue, wantSummaryKey: synctypes.SummarySyncFailure, wantPersistence: persistTransientFailure, wantScopeDetect: true},
 		{name: "423_locked", result: synctypes.WorkerResult{HTTPStatus: http.StatusLocked, Err: graph.ErrLocked}, wantClass: resultRequeue, wantSummaryKey: synctypes.SummarySyncFailure, wantPersistence: persistTransientFailure, wantScopeDetect: true},
-		{name: "429_too_many_requests", result: synctypes.WorkerResult{HTTPStatus: http.StatusTooManyRequests, Err: graph.ErrThrottled}, wantClass: resultScopeBlock, wantScope: synctypes.SKThrottleAccount(), wantSummaryKey: synctypes.SummaryRateLimited, wantPersistence: persistTransientFailure, wantScopeDetect: true},
+		{name: "429_too_many_requests", result: synctypes.WorkerResult{HTTPStatus: http.StatusTooManyRequests, DriveID: testThrottleDriveID(), Err: graph.ErrThrottled}, wantClass: resultScopeBlock, wantScope: testThrottleScope(), wantSummaryKey: synctypes.SummaryRateLimited, wantPersistence: persistTransientFailure, wantScopeDetect: true},
 		{name: "400_invalid_request_is_skip", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: genericInvalidRequestErr}, wantClass: resultSkip, wantSummaryKey: synctypes.SummarySyncFailure, wantPersistence: persistActionableFailure},
 		{name: "400_object_handle_message_only_is_skip", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: legacyOutageErr}, wantClass: resultSkip, wantSummaryKey: synctypes.SummarySyncFailure, wantPersistence: persistActionableFailure},
 		{name: "400_object_handle_wrong_code_is_skip", result: synctypes.WorkerResult{HTTPStatus: http.StatusBadRequest, Err: wrongCodeOutageErr}, wantClass: resultSkip, wantSummaryKey: synctypes.SummarySyncFailure, wantPersistence: persistActionableFailure},
@@ -931,7 +931,7 @@ func TestProcessTrialResultV2_Success_ClearsScope(t *testing.T) {
 	// Set up an active persisted scope block.
 	now := eng.nowFunc()
 	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
-		Key:           synctypes.SKThrottleAccount(),
+		Key:           testThrottleScope(),
 		IssueType:     synctypes.IssueRateLimited,
 		BlockedAt:     now,
 		TrialInterval: 10 * time.Second,
@@ -942,7 +942,7 @@ func TestProcessTrialResultV2_Success_ClearsScope(t *testing.T) {
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "first.txt", DriveID: driveid.New("d"), Direction: synctypes.DirectionUpload,
 		Role:     synctypes.FailureRoleHeld,
-		Category: synctypes.CategoryTransient, ErrMsg: "rate limited", ScopeKey: synctypes.SKThrottleAccount(),
+		Category: synctypes.CategoryTransient, ErrMsg: "rate limited", ScopeKey: testThrottleScope(),
 	}, nil)) // nil delayFn → scope-blocked (next_retry_at = NULL)
 
 	// Add the trial action to the syncdispatch.DepGraph.
@@ -952,12 +952,12 @@ func TestProcessTrialResultV2_Success_ClearsScope(t *testing.T) {
 	processTrialResultForTest(t, eng, ctx, &synctypes.WorkerResult{
 		ActionID:      1,
 		IsTrial:       true,
-		TrialScopeKey: synctypes.SKThrottleAccount(),
+		TrialScopeKey: testThrottleScope(),
 		Success:       true,
 	})
 
 	// Scope block should be cleared.
-	assert.False(t, isTestScopeBlocked(eng, synctypes.SKThrottleAccount()),
+	assert.False(t, isTestScopeBlocked(eng, testThrottleScope()),
 		"scope block should be removed after successful trial")
 
 	// Scope-blocked failures should now be retryable (next_retry_at set to ~now).
@@ -1013,7 +1013,7 @@ func TestProcessTrialResultV2_Failure_CapsAt5m(t *testing.T) {
 	}{
 		{"quota", synctypes.SKQuotaOwn(), synctypes.IssueQuotaExceeded, 507, synctypes.ActionUpload},
 		{"service", synctypes.SKService(), synctypes.IssueServiceOutage, 500, synctypes.ActionDownload},
-		{"throttle", synctypes.SKThrottleAccount(), synctypes.IssueRateLimited, 429, synctypes.ActionUpload},
+		{"throttle", testThrottleScope(), synctypes.IssueRateLimited, 429, synctypes.ActionUpload},
 	}
 
 	for _, tt := range tests {
@@ -1042,6 +1042,7 @@ func TestProcessTrialResultV2_Failure_CapsAt5m(t *testing.T) {
 				TrialScopeKey: tt.scopeKey,
 				Success:       false,
 				HTTPStatus:    tt.httpStatus,
+				DriveID:       testThrottleDriveID(),
 				ErrMsg:        "test failure",
 			})
 
@@ -1175,7 +1176,7 @@ func TestProcessTrialResultV2_Fatal401DoesNotExtendScope(t *testing.T) {
 	now := eng.nowFunc()
 
 	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
-		Key:           synctypes.SKThrottleAccount(),
+		Key:           testThrottleScope(),
 		IssueType:     synctypes.IssueRateLimited,
 		BlockedAt:     now,
 		TrialInterval: 45 * time.Second,
@@ -1192,7 +1193,7 @@ func TestProcessTrialResultV2_Fatal401DoesNotExtendScope(t *testing.T) {
 	outcome := processWorkerResultDetailedForTest(t, eng, ctx, &synctypes.WorkerResult{
 		ActionID:      77,
 		IsTrial:       true,
-		TrialScopeKey: synctypes.SKThrottleAccount(),
+		TrialScopeKey: testThrottleScope(),
 		ActionType:    synctypes.ActionUpload,
 		Path:          "trial.txt",
 		DriveID:       eng.driveID,
@@ -1205,7 +1206,7 @@ func TestProcessTrialResultV2_Fatal401DoesNotExtendScope(t *testing.T) {
 	require.ErrorIs(t, outcome.terminateErr, graph.ErrUnauthorized)
 	assert.True(t, outcome.terminate, "trial unauthorized should terminate result routing")
 
-	got, ok := getTestScopeBlock(eng, synctypes.SKThrottleAccount())
+	got, ok := getTestScopeBlock(eng, testThrottleScope())
 	require.True(t, ok, "fatal unauthorized should not clear the original scope")
 	assert.Equal(t, 45*time.Second, got.TrialInterval, "fatal unauthorized must not back off the original scope")
 	assert.Equal(t, now.Add(45*time.Second), got.NextTrialAt, "fatal unauthorized must not reschedule the original scope")
@@ -1387,8 +1388,8 @@ func TestEvaluateTrialOutcome_OnlyMatchingScopeEvidenceExtends(t *testing.T) {
 	}{
 		{
 			name:     "throttle_429_extends",
-			scopeKey: synctypes.SKThrottleAccount(),
-			result:   synctypes.WorkerResult{HTTPStatus: http.StatusTooManyRequests, Err: graph.ErrThrottled},
+			scopeKey: testThrottleScope(),
+			result:   synctypes.WorkerResult{HTTPStatus: http.StatusTooManyRequests, DriveID: testThrottleDriveID(), Err: graph.ErrThrottled},
 			want:     trialOutcomeExtend,
 		},
 		{
@@ -1417,14 +1418,14 @@ func TestEvaluateTrialOutcome_OnlyMatchingScopeEvidenceExtends(t *testing.T) {
 		},
 		{
 			name:     "throttle_does_not_extend_service_error",
-			scopeKey: synctypes.SKThrottleAccount(),
+			scopeKey: testThrottleScope(),
 			result:   synctypes.WorkerResult{HTTPStatus: http.StatusServiceUnavailable, Err: graph.ErrServerError},
 			want:     trialOutcomePreserve,
 		},
 		{
 			name:     "service_does_not_extend_throttle_error",
 			scopeKey: synctypes.SKService(),
-			result:   synctypes.WorkerResult{HTTPStatus: http.StatusTooManyRequests, Err: graph.ErrThrottled},
+			result:   synctypes.WorkerResult{HTTPStatus: http.StatusTooManyRequests, DriveID: testThrottleDriveID(), Err: graph.ErrThrottled},
 			want:     trialOutcomePreserve,
 		},
 		{
@@ -1490,28 +1491,29 @@ func TestExtendTrialInterval_WithRetryAfter(t *testing.T) {
 
 	now := eng.nowFunc()
 	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
-		Key:           synctypes.SKThrottleAccount(),
+		Key:           testThrottleScope(),
 		IssueType:     synctypes.IssueRateLimited,
 		BlockedAt:     now,
 		TrialInterval: 30 * time.Second,
 		NextTrialAt:   now.Add(30 * time.Second),
 	})
 
-	testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{Type: synctypes.ActionUpload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 99, nil)
+	testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{Type: synctypes.ActionUpload, Path: "trial.txt", DriveID: testThrottleDriveID(), ItemID: "i1"}, 99, nil)
 
 	// Retry-After of 30 minutes exceeds syncdispatch.DefaultMaxTrialInterval (5m) — must be
 	// honored directly with no cap, because the server is ground truth.
 	processTrialResultForTest(t, eng, ctx, &synctypes.WorkerResult{
 		ActionID:      99,
 		IsTrial:       true,
-		TrialScopeKey: synctypes.SKThrottleAccount(),
+		TrialScopeKey: testThrottleScope(),
 		Success:       false,
 		HTTPStatus:    429,
+		DriveID:       testThrottleDriveID(),
 		RetryAfter:    30 * time.Minute,
 		ErrMsg:        "too many requests",
 	})
 
-	got, ok := getTestScopeBlock(eng, synctypes.SKThrottleAccount())
+	got, ok := getTestScopeBlock(eng, testThrottleScope())
 	require.True(t, ok)
 	assert.Equal(t, 30*time.Minute, got.TrialInterval,
 		"Retry-After must be used directly with no cap — server is ground truth")
@@ -1572,7 +1574,7 @@ func TestDeriveScopeKey(t *testing.T) {
 		shortcutKey string
 		want        synctypes.ScopeKey
 	}{
-		{"429_throttle", 429, "", synctypes.SKThrottleAccount()},
+		{"429_throttle", 429, "", testThrottleScope()},
 		{"503_service", 503, "", synctypes.SKService()},
 		{"507_own", 507, "", synctypes.SKQuotaOwn()},
 		{"507_shortcut", 507, "drive1:item1", synctypes.SKQuotaShortcut("drive1:item1")},
@@ -1585,7 +1587,11 @@ func TestDeriveScopeKey(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			r := &synctypes.WorkerResult{HTTPStatus: tt.httpStatus, ShortcutKey: tt.shortcutKey}
+			r := &synctypes.WorkerResult{
+				HTTPStatus:  tt.httpStatus,
+				ShortcutKey: tt.shortcutKey,
+				DriveID:     testThrottleDriveID(),
+			}
 			assert.Equal(t, tt.want, deriveScopeKey(r))
 		})
 	}
@@ -1606,7 +1612,7 @@ func TestApplyScopeBlock_ArmsTrialTimer(t *testing.T) {
 	// applyScopeBlock persists the scope and arms the trial timer.
 	applyScopeBlockForTest(t, eng, ctx, synctypes.ScopeUpdateResult{
 		Block:      true,
-		ScopeKey:   synctypes.SKThrottleAccount(),
+		ScopeKey:   testThrottleScope(),
 		IssueType:  synctypes.IssueRateLimited,
 		RetryAfter: 30 * time.Second,
 	})
@@ -1664,13 +1670,14 @@ func TestRecordFailure_PopulatesScopeKey_429(t *testing.T) {
 		Success:    false,
 		ErrMsg:     "too many requests",
 		HTTPStatus: 429,
+		DriveID:    testThrottleDriveID(),
 		ActionID:   1,
 	}, nil)
 
 	issues, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
-	assert.Equal(t, synctypes.SKThrottleAccount(), issues[0].ScopeKey)
+	assert.Equal(t, testThrottleScope(), issues[0].ScopeKey)
 }
 
 // Validates: R-2.10.11
@@ -1864,7 +1871,7 @@ func TestE2E_OneShotEngineLoop_ProcessesAndRoutes(t *testing.T) {
 		ActionID:   0,
 		Path:       "a.txt",
 		ActionType: synctypes.ActionUpload,
-		DriveID:    driveid.New(engineTestDriveID),
+		DriveID:    testThrottleDriveID(),
 		Success:    false,
 		HTTPStatus: 429,
 		RetryAfter: 5 * time.Millisecond,
@@ -1874,7 +1881,7 @@ func TestE2E_OneShotEngineLoop_ProcessesAndRoutes(t *testing.T) {
 
 	// Verify scope block created and failure recorded.
 	require.Eventually(t, func() bool {
-		return isTestScopeBlocked(eng, synctypes.SKThrottleAccount())
+		return isTestScopeBlocked(eng, testThrottleScope())
 	}, time.Second, time.Millisecond, "scope block should be created")
 
 	issues, err := eng.baseline.ListSyncFailures(ctx)
@@ -1985,7 +1992,7 @@ func TestE2E_OneShotLoop_TrialResultSuccess(t *testing.T) {
 
 	// Set up scope block and a scope-blocked failure.
 	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
-		Key:           synctypes.SKThrottleAccount(),
+		Key:           testThrottleScope(),
 		IssueType:     synctypes.IssueRateLimited,
 		BlockedAt:     eng.nowFunc(),
 		TrialInterval: 10 * time.Millisecond,
@@ -1995,7 +2002,7 @@ func TestE2E_OneShotLoop_TrialResultSuccess(t *testing.T) {
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path: "blocked.txt", DriveID: driveid.New(engineTestDriveID), Direction: synctypes.DirectionUpload,
 		Role:     synctypes.FailureRoleHeld,
-		Category: synctypes.CategoryTransient, ErrMsg: "rate limited", ScopeKey: synctypes.SKThrottleAccount(),
+		Category: synctypes.CategoryTransient, ErrMsg: "rate limited", ScopeKey: testThrottleScope(),
 	}, nil))
 
 	// Add trial action to depGraph.
@@ -2010,12 +2017,12 @@ func TestE2E_OneShotLoop_TrialResultSuccess(t *testing.T) {
 		DriveID:       driveid.New(engineTestDriveID),
 		Success:       true,
 		IsTrial:       true,
-		TrialScopeKey: synctypes.SKThrottleAccount(),
+		TrialScopeKey: testThrottleScope(),
 	}
 
 	// Scope block should be cleared.
 	require.Eventually(t, func() bool {
-		return !isTestScopeBlocked(eng, synctypes.SKThrottleAccount())
+		return !isTestScopeBlocked(eng, testThrottleScope())
 	}, 5*time.Second, 10*time.Millisecond, "scope block should be cleared after trial success")
 
 	var released *synctypes.TrackedAction
@@ -2148,9 +2155,11 @@ func assertImmediateRetryAfterBlock(
 	ss := syncdispatch.NewScopeState(clock, discardLogger())
 
 	sr := ss.UpdateScope(&synctypes.WorkerResult{
-		Path:       "/file.txt",
-		HTTPStatus: httpStatus,
-		RetryAfter: retryAfter,
+		Path:          "/file.txt",
+		HTTPStatus:    httpStatus,
+		RetryAfter:    retryAfter,
+		DriveID:       testThrottleDriveID(),
+		TargetDriveID: testThrottleDriveID(),
 	})
 
 	require.True(t, sr.Block, "Retry-After should trigger an immediate scope block")
@@ -2174,7 +2183,7 @@ func TestTrialTimer_QuotaStartsAt5s(t *testing.T) {
 func TestTrialTimer_RateLimited_StartsAtRetryAfter(t *testing.T) {
 	t.Parallel()
 
-	assertImmediateRetryAfterBlock(t, 429, 90*time.Second, synctypes.SKThrottleAccount(), "rate_limited")
+	assertImmediateRetryAfterBlock(t, 429, 90*time.Second, testThrottleScope(), "rate_limited")
 }
 
 // TestTrialTimer_RateLimited_BlocksAllActionTypes is covered by
@@ -2397,12 +2406,12 @@ func TestFeedScopeDetection_LocalErrorIgnored(t *testing.T) {
 	// No scope block should have been created.
 	assert.False(t, isTestScopeBlocked(eng, synctypes.SKService()),
 		"local errors with HTTPStatus=0 must not trigger service scope")
-	assert.False(t, isTestScopeBlocked(eng, synctypes.SKThrottleAccount()),
+	assert.False(t, isTestScopeBlocked(eng, testThrottleScope()),
 		"local errors with HTTPStatus=0 must not trigger throttle scope")
 }
 
 // Validates: R-2.10.30
-func TestIsObservationSuppressed_Throttled(t *testing.T) {
+func TestIsObservationSuppressed_TargetScopedThrottleDoesNotSuppressAllShortcuts(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -2410,13 +2419,37 @@ func TestIsObservationSuppressed_Throttled(t *testing.T) {
 	// Initially not suppressed.
 	assert.False(t, isObservationSuppressedForTest(t, eng, testWatchRuntime(t, eng)))
 
-	// After throttle block, should be suppressed.
+	// Target-scoped throttle should not suppress all shortcut observation.
 	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
-		Key:           synctypes.SKThrottleAccount(),
+		Key:           testThrottleScope(),
 		IssueType:     synctypes.IssueRateLimited,
 		TrialInterval: 30 * time.Second,
 	})
-	assert.True(t, isObservationSuppressedForTest(t, eng, testWatchRuntime(t, eng)))
+	assert.False(t, isObservationSuppressedForTest(t, eng, testWatchRuntime(t, eng)))
+}
+
+// Validates: R-2.10.30
+func TestSuppressedShortcutTargets_TracksOnlyMatchingSharedTargets(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	watch := testWatchRuntime(t, eng)
+
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
+		Key:           synctypes.SKThrottleShared("drive-a", "item-a"),
+		IssueType:     synctypes.IssueRateLimited,
+		TrialInterval: 30 * time.Second,
+	})
+	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
+		Key:           testThrottleScope(),
+		IssueType:     synctypes.IssueRateLimited,
+		TrialInterval: 30 * time.Second,
+	})
+
+	suppressed := suppressedShortcutTargetsForTest(t, eng, watch)
+	require.Len(t, suppressed, 1)
+	_, ok := suppressed["drive-a:item-a"]
+	assert.True(t, ok)
 }
 
 // Validates: R-2.10.30

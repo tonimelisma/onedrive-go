@@ -753,7 +753,7 @@ func TestObserveShortcutContent_SkipsCollisions(t *testing.T) {
 
 	collisions := map[string]bool{"sc-collide": true}
 	bl := emptyBaseline()
-	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).observeShortcutContentFromList(ctx, shortcuts, bl, collisions)
+	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).observeShortcutContentFromList(ctx, shortcuts, bl, collisions, nil)
 	require.NoError(t, err)
 
 	// Only the non-colliding shortcut should produce events.
@@ -911,7 +911,7 @@ func TestObserveShortcutContent_DeltaStrategy(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).observeShortcutContentFromList(ctx, shortcuts, bl, nil)
+	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).observeShortcutContentFromList(ctx, shortcuts, bl, nil, nil)
 	require.NoError(t, err)
 
 	require.Len(t, events, 1)
@@ -965,7 +965,7 @@ func TestObserveShortcutContent_EnumerateStrategy(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).observeShortcutContentFromList(ctx, shortcuts, bl, nil)
+	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).observeShortcutContentFromList(ctx, shortcuts, bl, nil, nil)
 	require.NoError(t, err)
 
 	require.Len(t, events, 1)
@@ -999,7 +999,7 @@ func TestObserveShortcutContent_SkipsOnError(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).observeShortcutContentFromList(ctx, shortcuts, bl, nil)
+	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).observeShortcutContentFromList(ctx, shortcuts, bl, nil, nil)
 	require.NoError(t, err, "should not propagate per-shortcut errors")
 	assert.Empty(t, events)
 }
@@ -1019,7 +1019,7 @@ func TestObserveShortcutContent_NoShortcuts(t *testing.T) {
 
 	bl := emptyBaseline()
 	var shortcuts []synctypes.Shortcut
-	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).observeShortcutContentFromList(ctx, shortcuts, bl, nil)
+	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).observeShortcutContentFromList(ctx, shortcuts, bl, nil, nil)
 	require.NoError(t, err)
 	assert.Empty(t, events)
 }
@@ -1066,7 +1066,7 @@ func TestProcessShortcuts_RegistersAndObserves(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).processShortcuts(ctx, remoteEvents, bl, false)
+	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).processShortcuts(ctx, remoteEvents, bl, false, nil)
 	require.NoError(t, err)
 
 	// Should have registered the shortcut.
@@ -1105,7 +1105,7 @@ func TestProcessShortcuts_DryRunSkipsObservation(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).processShortcuts(ctx, remoteEvents, bl, true)
+	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).processShortcuts(ctx, remoteEvents, bl, true, nil)
 	require.NoError(t, err)
 	assert.Nil(t, events, "dry-run should skip observation")
 
@@ -1124,7 +1124,7 @@ func TestProcessShortcuts_NilCapabilities(t *testing.T) {
 		logger: testLogger(t),
 	}
 
-	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).processShortcuts(t.Context(), nil, emptyBaseline(), false)
+	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).processShortcuts(t.Context(), nil, emptyBaseline(), false, nil)
 	require.NoError(t, err)
 	assert.Nil(t, events, "should return nil when no shortcut capabilities configured")
 }
@@ -1174,7 +1174,7 @@ func TestProcessShortcuts_ShortcutAndPrimaryEventsCoexist(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	shortcutEvents, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).processShortcuts(ctx, remoteEvents, bl, false)
+	shortcutEvents, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).processShortcuts(ctx, remoteEvents, bl, false, nil)
 	require.NoError(t, err)
 
 	// synctypes.Shortcut events should contain the shared file.
@@ -1236,7 +1236,7 @@ func TestObserveShortcutContent_ConcurrentMultipleShortcuts(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).observeShortcutContentFromList(ctx, shortcuts, bl, nil)
+	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).observeShortcutContentFromList(ctx, shortcuts, bl, nil, nil)
 	require.NoError(t, err)
 
 	// Each shortcut produces 1 event from the mock, so expect 5.
@@ -1286,7 +1286,7 @@ func TestObserveShortcutDelta_RetryOnErrGone(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).observeShortcutContentFromList(ctx, shortcuts, bl, nil)
+	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).observeShortcutContentFromList(ctx, shortcuts, bl, nil, nil)
 	require.NoError(t, err)
 
 	// Should have retried with empty token and succeeded.

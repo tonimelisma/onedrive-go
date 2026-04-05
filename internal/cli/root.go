@@ -148,7 +148,18 @@ func (cc *CLIContext) interactiveHTTPClients(rd *config.ResolvedDrive) driveops.
 		account = rd.CanonicalID.Email()
 	}
 
-	clients := cc.httpProvider().InteractiveForAccount(account)
+	var clients graphhttp.ClientSet
+	switch {
+	case rd == nil:
+		clients = graphhttp.ClientSet{
+			Meta:     cc.httpProvider().BootstrapMeta(),
+			Transfer: cc.httpProvider().Sync().Transfer,
+		}
+	case rd.RootItemID != "":
+		clients = cc.httpProvider().InteractiveForSharedTarget(account, rd.DriveID.String(), rd.RootItemID)
+	default:
+		clients = cc.httpProvider().InteractiveForDrive(account, rd.DriveID)
+	}
 
 	return driveops.HTTPClients{
 		Meta:     clients.Meta,

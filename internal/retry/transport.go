@@ -70,7 +70,7 @@ func (rt *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		sleepFn = TimeSleep
 	}
 
-	// Account-wide throttle gate: wait if a previous 429 set a deadline.
+	// Shared throttle gate: wait if a previous 429 set a caller-owned deadline.
 	if err := rt.waitForThrottle(req.Context(), sleepFn); err != nil {
 		return nil, err
 	}
@@ -210,9 +210,9 @@ func drainAndCloseBody(body io.ReadCloser) error {
 	return nil
 }
 
-// waitForThrottle blocks until the account-wide throttle deadline passes.
-// Called at the start of every request to enforce 429 Retry-After across
-// all concurrent requests through this transport.
+// waitForThrottle blocks until the active throttle deadline passes. Called at
+// the start of every request to enforce 429 Retry-After across this transport
+// or an injected caller-owned gate.
 func (rt *RetryTransport) waitForThrottle(ctx context.Context, sleepFn SleepFunc) error {
 	if rt.ThrottleGate != nil {
 		return rt.ThrottleGate.Wait(ctx, sleepFn)
@@ -234,7 +234,7 @@ func (rt *RetryTransport) waitForThrottle(ctx context.Context, sleepFn SleepFunc
 // backoff — ignoring it risks extended throttling by the Graph API.
 func (rt *RetryTransport) retryBackoff(resp *http.Response, attempt int, _ SleepFunc) time.Duration {
 	if ra := parseRetryAfterHeader(resp); ra > 0 {
-		// 429: set account-wide throttle deadline so concurrent requests wait.
+		// 429: set the throttle deadline so later matching requests wait.
 		if resp.StatusCode == http.StatusTooManyRequests {
 			deadline := time.Now().Add(ra)
 			if rt.ThrottleGate != nil {
@@ -337,8 +337,8 @@ func isRetryable(code int) bool {
 	}
 }
 
-// SetThrottleDeadline sets the account-wide throttle deadline directly.
-// Used by tests to simulate a pre-existing throttle state.
+// SetThrottleDeadline sets the current throttle deadline directly. Used by
+// tests to simulate a pre-existing throttle state.
 func (rt *RetryTransport) SetThrottleDeadline(deadline time.Time) {
 	if rt.ThrottleGate != nil {
 		rt.ThrottleGate.SetDeadline(deadline)

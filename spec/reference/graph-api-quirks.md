@@ -159,13 +159,31 @@ HTTP 507 (Insufficient Storage) wraps `ErrServerError` at the sentinel level. If
 
 ## Throttling Scopes
 
-Microsoft Graph API throttling scope behavior (not in official docs, discovered through testing and community):
+Official Microsoft docs describe throttling as multi-bucket: a request may be
+checked against user, app-per-tenant, tenant, and other service-specific
+limits, and the first limit reached returns HTTP 429. Ordinary OneDrive file
+traffic does not give this repository a stable, files-specific signal that says
+which broad server-side bucket fired for a given request.
 
-- **Per-user limit**: All requests from the same user (same OAuth token) share a throttle bucket, regardless of which drive or folder is targeted.
-- **Per-tenant limit**: All users in an organization share a higher aggregate limit.
-- **Per-app-per-tenant limit**: Each registered app has its own per-tenant quota.
-- **Implication for sync**: HTTP 429 on any drive (including shortcuts) means the entire account is throttled. Shortcut drives that belong to different users still share the caller's rate limit (the caller's token is used, not the sharer's).
-- `Retry-After` on 429/503 provides server-mandated wait time. `RateLimit-Remaining` and `RateLimit-Limit` headers exist but only cover per-app 1-minute resource units — not reliable enough for proactive throttling.
+Runtime policy therefore stays intentionally narrow:
+
+- `Retry-After` on 429/503 is authoritative and must be honored exactly
+- client-side blocking uses the narrowest remote boundary provable from the
+  failed request
+- own-drive file traffic blocks only that drive
+- shared-folder or direct shared-item traffic block only that exact shared
+  root/item boundary
+- broader account-wide or tenant-wide blocking is **not** inferred from an
+  ordinary file 429 without explicit evidence
+
+This is a deliberate client-policy choice, not a claim that Microsoft's server
+limits are drive-local. The service may still enforce broader quotas. The
+client simply avoids proactively suppressing unrelated work when the response
+does not identify a broader bucket with enough confidence.
+
+`RateLimit-Remaining` and `RateLimit-Limit` headers exist but only cover
+per-app 1-minute resource units. They are not reliable enough for proactive
+throttling decisions across file operations.
 
 ## Shared Folder Issues
 

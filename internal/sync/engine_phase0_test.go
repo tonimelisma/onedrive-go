@@ -350,7 +350,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 	}}, "", driveID))
 
 	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
-		Key:           synctypes.SKThrottleAccount(),
+		Key:           testThrottleScope(),
 		IssueType:     synctypes.IssueRateLimited,
 		BlockedAt:     eng.nowFunc(),
 		TrialInterval: 10 * time.Millisecond,
@@ -363,7 +363,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 		Role:      synctypes.FailureRoleHeld,
 		Category:  synctypes.CategoryTransient,
 		ErrMsg:    "rate limited",
-		ScopeKey:  synctypes.SKThrottleAccount(),
+		ScopeKey:  testThrottleScope(),
 		ItemID:    "blocked-item",
 	}, nil))
 
@@ -382,11 +382,11 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 		DriveID:       driveID,
 		Success:       true,
 		IsTrial:       true,
-		TrialScopeKey: synctypes.SKThrottleAccount(),
+		TrialScopeKey: testThrottleScope(),
 	}
 
 	require.Eventually(t, func() bool {
-		return !isTestScopeBlocked(eng, synctypes.SKThrottleAccount())
+		return !isTestScopeBlocked(eng, testThrottleScope())
 	}, 5*time.Second, 10*time.Millisecond, "trial success should clear the scope block")
 
 	var retried *synctypes.TrackedAction
@@ -518,7 +518,7 @@ func TestPhase0_ScopeBlockFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	}
 
 	require.Eventually(t, func() bool {
-		return isTestScopeBlocked(eng, synctypes.SKThrottleAccount())
+		return isTestScopeBlocked(eng, testThrottleScope())
 	}, time.Second, 10*time.Millisecond, "scope block should be activated from the worker result")
 
 	failures, err := eng.baseline.ListSyncFailures(ctx)

@@ -37,6 +37,27 @@ func (a *Action) ShortcutKey() string {
 	return a.TargetShortcutKey
 }
 
+// ThrottleTargetKey returns the narrowest remote boundary that can be blocked
+// after a 429 for this action. Own-drive actions key by target drive; shared
+// actions key by the shared root/item boundary.
+func (a *Action) ThrottleTargetKey() string {
+	if a == nil {
+		return ""
+	}
+
+	if a.TargetShortcutKey != "" {
+		return throttleSharedPrefix + a.TargetShortcutKey
+	}
+	targetDriveID := a.TargetDriveID
+	if targetDriveID.IsZero() {
+		targetDriveID = a.DriveID
+	}
+	if targetDriveID.IsZero() {
+		return ""
+	}
+	return throttleDriveParam(targetDriveID)
+}
+
 // ActionPlan contains a flat list of actions with explicit dependency edges.
 // The Deps adjacency list encodes ordering constraints (parent-before-child,
 // children-before-parent-delete, move-target-parent).

@@ -12,7 +12,7 @@ Improvements identified during the sync-package-split review (2026-03-20). All a
 
 **Scope logic** in `scope_key.go` (212 lines):
 - `BlocksAction()` — scope-blocking decision matrix (6 scope kinds, each with different blocking semantics)
-- `ScopeKeyForStatus()` — HTTP status → scope key classification (429→throttle, 503→service, 507→quota)
+- `ScopeKeyForResult()` — HTTP status → scope key classification (429→target throttle, 503→service, 507→quota)
 - `Humanize()` — user-facing descriptions with shortcut lookup
 - `IssueType()` — scope kind → issue constant mapping
 
@@ -26,7 +26,7 @@ Improvements identified during the sync-package-split review (2026-03-20). All a
 | Method | syncdispatch | sync/engine | syncobserve | syncplan | CLI |
 |--------|-------------|-------------|-------------|----------|-----|
 | `BlocksAction` | 2 | 2 | — | — | — |
-| `ScopeKeyForStatus` | 2 | 2 | — | — | — |
+| `ScopeKeyForResult` | 2 | 2 | — | — | — |
 | `Humanize` | — | — | — | — | 2 |
 | `FindOrphans` | — | 1 | 1 | — | — |
 | `DescendantsOf` | — | — | — | 1 | — |
@@ -35,7 +35,7 @@ Improvements identified during the sync-package-split review (2026-03-20). All a
 
 **A. Update the spec** — Change "zero-logic" to "types + data structure accessors + type-associated behavior." Zero code change, zero risk. Doesn't prevent future logic accumulation.
 
-**B. Move scope logic to syncdispatch** — Move `BlocksAction`, `ScopeKeyForStatus`, `IssueType`, `Humanize` to `syncdispatch/scope_key_logic.go`. Keep `ScopeKey` struct + constructors + serialization in synctypes. All callers already import syncdispatch or would naturally. _Pro:_ scope-blocking logic lives with scope infrastructure. _Con:_ `BlocksAction` becomes a free function instead of a method.
+**B. Move scope logic to syncdispatch** — Move `BlocksAction`, `ScopeKeyForResult`, `IssueType`, `Humanize` to `syncdispatch/scope_key_logic.go`. Keep `ScopeKey` struct + constructors + serialization in synctypes. All callers already import syncdispatch or would naturally. _Pro:_ scope-blocking logic lives with scope infrastructure. _Con:_ `BlocksAction` becomes a free function instead of a method.
 
 **C. Move FindOrphans/DescendantsOf to domain packages** — `FindOrphans` → `syncobserve` (orphan detection is observation), `DescendantsOf` → `syncplan` (cascade expansion is planning). Both use `Baseline.ForEachPath()` which already exists. _Pro:_ Baseline becomes pure thread-safe map. _Con:_ minor indirection.
 

@@ -22,6 +22,7 @@ func FindBlockingScope(blocks []synctypes.ScopeBlock, ta *synctypes.TrackedActio
 	}
 
 	scKey := ta.Action.ShortcutKey()
+	throttleTargetKey := ta.Action.ThrottleTargetKey()
 	targetsOwn := ta.Action.TargetsOwnDrive()
 
 	bestRank := scopePriorityMax
@@ -30,7 +31,7 @@ func FindBlockingScope(blocks []synctypes.ScopeBlock, ta *synctypes.TrackedActio
 
 	for i := range blocks {
 		key := blocks[i].Key
-		if !key.BlocksAction(ta.Action.Path, scKey, ta.Action.Type, targetsOwn) {
+		if !key.BlocksAction(ta.Action.Path, throttleTargetKey, scKey, ta.Action.Type, targetsOwn) {
 			continue
 		}
 
@@ -169,6 +170,7 @@ func ScopeKeys(blocks []synctypes.ScopeBlock) []synctypes.ScopeKey {
 const (
 	scopePriorityAuthAccount = iota
 	scopePriorityThrottleAccount
+	scopePriorityThrottleTarget
 	scopePriorityService
 	scopePriorityDiskLocal
 	scopePriorityQuotaOwn
@@ -185,6 +187,8 @@ func scopePriority(key synctypes.ScopeKey) int {
 		return scopePriorityAuthAccount
 	case synctypes.ScopeThrottleAccount:
 		return scopePriorityThrottleAccount
+	case synctypes.ScopeThrottleTarget:
+		return scopePriorityThrottleTarget
 	case synctypes.ScopeService:
 		return scopePriorityService
 	case synctypes.ScopeDiskLocal:

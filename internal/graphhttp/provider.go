@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
@@ -64,16 +65,26 @@ func (p *Provider) BootstrapMeta() *http.Client {
 	return p.bootstrapMeta
 }
 
-// InteractiveForAccount returns the Graph client set for one interactive
-// account scope. Metadata clients share a throttle gate per account.
-func (p *Provider) InteractiveForAccount(account string) ClientSet {
+// InteractiveForDrive returns the Graph client set for one interactive
+// drive target. Metadata clients share a throttle gate per account+drive.
+func (p *Provider) InteractiveForDrive(account string, driveID driveid.ID) ClientSet {
+	return p.interactiveForKey(interactiveDriveKey(account, driveID))
+}
+
+// InteractiveForSharedTarget returns the Graph client set for one interactive
+// shared target. Metadata clients share a throttle gate per account+shared target.
+func (p *Provider) InteractiveForSharedTarget(account, remoteDriveID, remoteItemID string) ClientSet {
+	return p.interactiveForKey(interactiveSharedKey(account, remoteDriveID, remoteItemID))
+}
+
+func (p *Provider) interactiveForKey(targetKey string) ClientSet {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	meta := p.interactiveMeta[account]
+	meta := p.interactiveMeta[targetKey]
 	if meta == nil {
 		meta = p.retryingMetadataClient(&retry.ThrottleGate{})
-		p.interactiveMeta[account] = meta
+		p.interactiveMeta[targetKey] = meta
 	}
 
 	if p.interactiveTransfer == nil {
@@ -162,4 +173,12 @@ func buildTransport(responseHeaderTimeout time.Duration) *http.Transport {
 	}).DialContext
 
 	return transport
+}
+
+func interactiveDriveKey(account string, driveID driveid.ID) string {
+	return account + "|drive:" + driveID.String()
+}
+
+func interactiveSharedKey(account, remoteDriveID, remoteItemID string) string {
+	return account + "|shared:" + remoteDriveID + ":" + remoteItemID
 }
