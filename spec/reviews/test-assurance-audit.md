@@ -308,7 +308,7 @@ This is the operating dashboard for completeness, not a verdict of quality. A pa
 | W4 | done | done | done | n/a | done | done | partial | done | live crash/restart proof is still thinner than the now-reconciled store/CLI durable-row mutation coverage |
 | W5 | done | done | done | partial | done | done | partial | done | upload-session traceability gap is closed; remaining W5 risk is broader worker-pool and future planned-transfer coverage |
 | W6 | done | done | partial | partial | done | partial | partial | no | pagination and transport split still need body audit |
-| W7 | done | done | partial | n/a | done | partial | partial | partial | live auth/logout/list proof is still thinner than the now-expanded caller-level coverage |
+| W7 | done | done | done | partial | done | done | partial | done | business-account live `drive search` proof is still blocked by missing business test credentials; current personal/logout/list/shared live proof is closed |
 | W8 | done | done | partial | n/a | done | no | no | no | validation-tier coverage may be over-claimed |
 | W9 | done | done | partial | partial | done | no | no | no | shared-drive identity fallback details still need confirmation |
 
@@ -943,9 +943,11 @@ Key W5 gap notes:
   - logout or purge deletes more state than the contract allows
 - Audit status:
   - ideal model drafted
-  - body audit started
+  - body audit done
+  - live proof closed for currently available personal/shared test accounts
+  - business-account live `drive search` proof explicitly blocked pending test credentials
 - Claim mapping snapshot from filenames and `// Validates:` only:
-  - Candidate test surface is broad across `internal/cli/*_test.go` plus `e2e/cli_commands_e2e_test.go` and `e2e/output_validation_e2e_test.go`
+  - Candidate test surface is broad across `internal/cli/*_test.go` plus `e2e/cli_commands_e2e_test.go`, `e2e/output_validation_e2e_test.go`, and `e2e/w7_live_caller_proof_e2e_test.go`
   - Explicit comment claims already exist for many command outputs: `R-1.1.1`, `R-1.2.4`, `R-1.3.4`, `R-1.4.3`, `R-1.5.1`, `R-1.6`, `R-1.7.1`, `R-1.8.1`, `R-1.9`, `R-1.9.4`, `R-3.1.4`, `R-3.1.5`, `R-3.1.6`, `R-2.3.7`, `R-2.3.8`, `R-2.3.9`, `R-2.3.10`, `R-2.7.1`, `R-6.2.8`, and `R-6.6.11`
   - CLI output is likely one of the easier places for a test to look busy while only checking superficial strings, so the body audit here should favor semantic assertions over formatting-only checks
 - Body-audit notes from `internal/cli/{auth,drive,services}_test.go`, `internal/cli/auth.go`, `internal/cli/drive.go`, and `internal/cli/account_catalog.go`:
@@ -959,9 +961,12 @@ Key W5 gap notes:
   - `drive list` now has direct caller-level auth-required coverage rather than only helper and print-shape coverage. New text and JSON service tests prove that an invalid saved login on a configured drive marks the configured row as `required` and emits the corresponding `accounts_requiring_auth` entry with the right reason and retained state-database count.
   - `drive search` also had a real caller-boundary bug in auth projection. The service pulled auth-required business accounts only from configured catalog entries, so orphaned or token-discovered business accounts with invalid saved login fell through to the misleading "no business account found" error instead of surfacing `accounts_requiring_auth`. The fix makes `drive search` use the shared account catalog for all matching business accounts, regardless of whether the drive is configured.
   - New caller-level `drive search` tests now prove both text and JSON behavior for that boundary, including the `--account` filtered path: a business account with invalid saved login but no config still appears as an auth-required result with the retained state-database count.
-  - `shared` did not show the same production bug, but it had thinner caller-level proof and duplicated the read-model setup inline. The command now uses `accountReadModelService` directly, keeping lenient config loading and auth projection aligned with `whoami`, `drive list`, and `drive search`.
+  - `shared` did not show the same earlier auth-projection bug, but the new live E2E pass did expose a different real production gap: on the current personal recipient account, `search(q='*')` succeeded yet returned no usable shared-item identities, so the CLI rendered an empty shared list even though `sharedWithMe` still returned a shared item. The fix broadens the fallback rule so shared discovery now retries `sharedWithMe` when search succeeds but yields no item with both `remoteDriveID` and `remoteItemID`.
   - New caller-level `shared` tests now prove auth-required projection in both text and JSON for an unconfigured account with invalid saved login, including the `--account` filtered JSON path.
+  - The live logout pass also exposed a second real caller-boundary bug: `whoami` correctly surfaced preserved orphaned profiles after plain logout, but `drive list` only projected `accounts_requiring_auth` for configured drives and silently dropped the same account. The fix makes `drive list` project auth-required accounts from the whole shared account catalog, so preserved post-logout profiles stay visible until re-login.
+  - New fast E2E coverage now proves the live path end-to-end: plain logout removes the token/config section while preserving the offline account catalog that still appears in `whoami` and `drive list`, and `shared --json` on the current recipient account now returns live shared items instead of an empty list.
   - `drive search` text output was also slightly misleading when every matching business account required auth and no actual sites could be searched: it printed an empty "SharePoint sites matching ..." section. The text path now keeps the auth-required section and follows it with an explicit no-results message for searchable accounts only.
+  - Remaining blocked lane: live `drive search` proof still needs a real business test account in `.env`/CI (`ONEDRIVE_TEST_DRIVE` or `ONEDRIVE_TEST_DRIVE_2` set to a `business:` canonical ID and included in `ONEDRIVE_ALLOWED_TEST_ACCOUNTS`) with searchable SharePoint content.
 
 | Contract / invariant | Evidence | Verdict | Notes |
 |---|---|---|---|
@@ -971,8 +976,10 @@ Key W5 gap notes:
 | `whoami` surfaces invalid or ambiguous drive selection instead of silently degrading to offline fallback output | `REQ+DESIGN+CODE+BODY` | `proven` | Fixed real production bug by soft-skipping authenticated lookup only when there are no configured drives |
 | `whoami` still emits offline `accounts_requiring_auth` output when only orphaned local account state remains | `REQ+DESIGN+BODY` | `proven` | Caller-level JSON test now proves read-model orchestration, not just print helpers |
 | `drive list` surfaces configured-drive auth-required state in both text and JSON output | `REQ+DESIGN+BODY` | `proven` | Caller-level tests now prove service-owned auth projection and emitted schema/section text |
+| plain `logout` still leaves the preserved account visible in `drive list` `accounts_requiring_auth` output | `REQ+DESIGN+CODE+BODY` | `proven` | Fixed real production bug in `runList`: auth-required projection now uses the whole account catalog, not only configured drives |
 | `drive search` surfaces auth-required business accounts from the shared catalog even when no matching business drive is configured | `REQ+DESIGN+CODE+BODY` | `proven` | Fixed real production bug in search auth projection; caller-level text and JSON tests now kill the misleading "no business account found" fallback for orphaned/token-discovered business accounts |
 | `shared` surfaces auth-required accounts from the shared catalog in both text and JSON output | `REQ+DESIGN+CODE+BODY` | `proven` | Caller-level tests now prove `shared` reports unconfigured auth-required accounts and the service now reuses `accountReadModelService` instead of rebuilding the catalog inline |
+| `shared` live discovery falls back when search succeeds but returns no usable shared-item identities | `REQ+DESIGN+CODE+BODY` | `proven` | Fixed real production bug from live recipient testing: `search(q='*')` returned no usable shared identities while `sharedWithMe` still returned items |
 | direct API file commands remain successful and user-quiet when auth-proof cleanup cannot open a sync DB | `REQ+DESIGN+CODE+BODY` | `proven` | `authProofRecorder` now keeps proof-repair failures at debug level; caller-level `ls` and `rm` tests prove no user-visible sync-store warning leak |
 
 ### W8. Configuration Discovery, Validation Tiers, And Token Resolution
@@ -1078,5 +1085,10 @@ Key W5 gap notes:
 
 ## Next Moves
 
-1. Continue W7 body-level reconciliation for:
-   - live logout / whoami / drive-list / drive-search / shared proof against real config/token state beyond the now-expanded caller-level coverage
+1. Continue W6 and W9 deep reconciliation:
+   - pagination / transport-split body audit
+   - shared-drive identity fallback details
+2. When business-account credentials become available, add the blocked live W7 `drive search` proof:
+   - set `ONEDRIVE_TEST_DRIVE` or `ONEDRIVE_TEST_DRIVE_2` to a `business:` canonical ID
+   - include it in `ONEDRIVE_ALLOWED_TEST_ACCOUNTS`
+   - ensure the account has searchable SharePoint content

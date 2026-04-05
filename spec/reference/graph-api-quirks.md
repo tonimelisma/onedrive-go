@@ -109,7 +109,10 @@ stall for tens of seconds before sending response headers. This was observed
 in the scheduled `e2e_full` CI run on April 3, 2026 during setup for the
 big-delete protection test: a normal metadata/path-resolution request hung
 long enough that a client-wide 30-second timeout misclassified it as canceled
-work even though later attempts succeeded.
+work even though later attempts succeeded. The same family showed up again in
+GitHub Actions integration on April 5, 2026: a plain `GET /me` request stalled
+for roughly 60 seconds before the caller budget expired, while the rest of the
+live Graph suite completed normally.
 
 Runtime policy:
 
@@ -250,6 +253,12 @@ Runtime policy:
 ### SharedWithMe API Deprecation
 
 `/me/drive/sharedWithMe` and `/me/drive/recent` are deprecated (November 2026 EOL). Non-deprecated alternative: `GET /me/drive/search(q='*')` returns shared items with `remoteItem` facet but less identity data (no email). Enrich via `GET /drives/{driveId}/items/{itemId}`. `/me/drives` is NOT deprecated.
+
+Observed runtime quirk on Personal accounts: `search(q='*')` can return
+success with ordinary drive items but no usable shared-item identities even
+when `sharedWithMe` still returns shared folders/files for the same recipient.
+Runtime policy: use search first, but fall back to `sharedWithMe` whenever
+search yields no items with both `remoteDriveID` and `remoteItemID`.
 
 ### Cross-Organization Shared Folders Invisible (Business)
 

@@ -5,6 +5,7 @@ package e2e
 import (
 	"encoding/json"
 	"fmt"
+	"go/build"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +25,16 @@ var testDataDir string
 // realHomeDir holds the original HOME directory before TestMain overrides it.
 // Used by isolation tests to verify env overrides are in effect.
 var realHomeDir string
+
+// realGoPath/realGoModCache/realGoCache capture the host Go toolchain cache
+// locations before HOME is redirected for app-state isolation. E2E builds the
+// CLI binary inside TestMain, so preserving these caches avoids re-downloading
+// modules into a temp home on every isolated run.
+var (
+	realGoPath     string
+	realGoModCache string
+	realGoCache    string
+)
 
 // testCredentialDir holds the path to .testdata/ (repo-root-relative).
 // Token files and config are read from here, never from production dirs.
@@ -76,6 +87,21 @@ func setupIsolation() func() {
 	}
 
 	realHomeDir = home
+	realGoPath = build.Default.GOPATH
+	realGoModCache = os.Getenv("GOMODCACHE")
+	if realGoModCache == "" && realGoPath != "" {
+		realGoModCache = filepath.Join(realGoPath, "pkg", "mod")
+	}
+	realGoCache = os.Getenv("GOCACHE")
+	if realGoCache == "" {
+		userCacheDir, cacheErr := os.UserCacheDir()
+		if cacheErr != nil {
+			fmt.Fprintf(os.Stderr, "FATAL: cannot determine go build cache dir: %v\n", cacheErr)
+			os.Exit(1)
+		}
+
+		realGoCache = filepath.Join(userCacheDir, "go-build")
+	}
 	moduleRoot := findModuleRoot()
 	testCredentialDir = testutil.FindTestCredentialDir(moduleRoot)
 	validateTestData(testCredentialDir, drive)
@@ -106,6 +132,15 @@ func setupIsolation() func() {
 	os.Setenv("XDG_CONFIG_HOME", tempConfig)
 	os.Setenv("XDG_DATA_HOME", tempData)
 	os.Setenv("XDG_CACHE_HOME", tempCache)
+	if realGoPath != "" {
+		os.Setenv("GOPATH", realGoPath)
+	}
+	if realGoModCache != "" {
+		os.Setenv("GOMODCACHE", realGoModCache)
+	}
+	if realGoCache != "" {
+		os.Setenv("GOCACHE", realGoCache)
+	}
 
 	// Copy token file from .testdata/ to isolated data dir.
 	appDataDir := filepath.Join(tempData, "onedrive-go")
@@ -257,6 +292,20 @@ func TestIsolation_TokenInTempDir(t *testing.T) {
 
 	_, err := os.Stat(tokenPath)
 	assert.NoError(t, err, "token file should exist at %s", tokenPath)
+}
+
+func TestIsolation_GoModuleCachePreserved(t *testing.T) {
+	t.Parallel()
+
+	assert.NotEmpty(t, realGoModCache, "realGoModCache should be captured by TestMain")
+	assert.Equal(t, realGoModCache, os.Getenv("GOMODCACHE"))
+}
+
+func TestIsolation_GoBuildCachePreserved(t *testing.T) {
+	t.Parallel()
+
+	assert.NotEmpty(t, realGoCache, "realGoCache should be captured by TestMain")
+	assert.Equal(t, realGoCache, os.Getenv("GOCACHE"))
 }
 
 func TestIsolation_ConfigInTempDir(t *testing.T) {

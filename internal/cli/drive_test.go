@@ -1241,8 +1241,6 @@ func TestSearchSharedItemsWithFallback_BothFail(t *testing.T) {
 }
 
 func TestSearchSharedItemsWithFallback_SearchReturnsEmpty(t *testing.T) {
-	var sharedWithMeCalled bool
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
@@ -1253,7 +1251,9 @@ func TestSearchSharedItemsWithFallback_SearchReturnsEmpty(t *testing.T) {
 		}
 
 		if strings.Contains(r.URL.Path, "sharedWithMe") {
-			sharedWithMeCalled = true
+			writeTestResponsef(t, w, `{"value": [%s]}`, sharedItemJSON("FallbackFromEmptySearch"))
+
+			return
 		}
 
 		w.WriteHeader(http.StatusForbidden)
@@ -1263,8 +1263,44 @@ func TestSearchSharedItemsWithFallback_SearchReturnsEmpty(t *testing.T) {
 	client := newTestGraphClient(t, srv.URL)
 	items := searchSharedItemsWithFallback(t.Context(), client, "test@example.com", slog.Default())
 
-	assert.Empty(t, items)
-	assert.False(t, sharedWithMeCalled, "empty is not an error — no fallback needed")
+	require.Len(t, items, 1)
+	assert.Equal(t, "FallbackFromEmptySearch", items[0].Name)
+}
+
+// Validates: R-3.6.2
+func TestSearchSharedItemsWithFallback_SearchReturnsNoUsableSharedIdentity_FallsBack(t *testing.T) {
+	var sharedWithMeCalled bool
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if strings.Contains(r.URL.Path, "search") {
+			writeTestResponse(t, w, `{"value": [{
+				"id": "local-item-1",
+				"name": "Not Shared",
+				"folder": {}
+			}]}`)
+
+			return
+		}
+
+		if strings.Contains(r.URL.Path, "sharedWithMe") {
+			sharedWithMeCalled = true
+			writeTestResponsef(t, w, `{"value": [%s]}`, sharedItemJSON("FallbackFromUnusableSearch"))
+
+			return
+		}
+
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := newTestGraphClient(t, srv.URL)
+	items := searchSharedItemsWithFallback(t.Context(), client, "test@example.com", slog.Default())
+
+	require.Len(t, items, 1)
+	assert.True(t, sharedWithMeCalled, "SharedWithMe should be called when search yields no usable shared identities")
+	assert.Equal(t, "FallbackFromUnusableSearch", items[0].Name)
 }
 
 // --- annotateStateDB ---
@@ -1473,6 +1509,8 @@ func TestDriveService_RunList_ClearsPersistedAuthScopeAfterSuccessfulDiscovery(t
 		case r.URL.Path == primaryDrivePath:
 			writeTestResponse(t, w, `{"id":"drive-123","name":"OneDrive","driveType":"personal"}`)
 		case strings.HasPrefix(r.URL.Path, "/me/drive/search("):
+			writeTestResponse(t, w, `{"value":[]}`)
+		case r.URL.Path == "/me/drive/sharedWithMe":
 			writeTestResponse(t, w, `{"value":[]}`)
 		default:
 			assert.Fail(t, "unexpected graph path", "path=%s", r.URL.Path)

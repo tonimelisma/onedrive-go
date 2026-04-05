@@ -93,6 +93,10 @@ profiles and token-discovered business accounts do not disappear from the
 caller boundary when saved login state is missing or invalid. `shared` uses the
 same rule across all account types, so auth-required accounts are reported from
 the shared catalog even when only orphaned profile or token state remains.
+`drive list` follows the same rule for its account-level auth warnings, so a
+plain `logout` still surfaces preserved orphaned profiles in
+`accounts_requiring_auth` instead of silently dropping them once the configured
+drive section is removed.
 
 `whoami`, `drive list`, `drive search`, and ordinary single-drive file commands
 are proof surfaces because they already perform authenticated Graph requests.
