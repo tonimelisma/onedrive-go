@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -25,6 +26,11 @@ var (
 	logDir     string
 	liveConfig testutil.LiveTestConfig
 )
+
+var e2eArtifactPrefixes = []string{
+	"e2e-",
+	"onedrive-go-e2e",
+}
 
 func TestMain(m *testing.M) {
 	// Load live-test env files and validate safety guards before anything else.
@@ -89,12 +95,100 @@ func TestMain(m *testing.M) {
 
 	fmt.Fprintf(os.Stderr, "E2E debug logs: %s\n", logDir)
 
+	suiteCfgPath := filepath.Join(tmpDir, "e2e-suite-config.toml")
+	if err := writeSuiteConfig(suiteCfgPath, drive, drive2); err != nil {
+		fmt.Fprintf(os.Stderr, "writing E2E suite config: %v\n", err)
+		cleanupIsolation()
+		os.RemoveAll(tmpDir)
+		os.Exit(1)
+	}
+	if err := scrubRemoteSuiteArtifacts(suiteCfgPath, drive, drive2); err != nil {
+		fmt.Fprintf(os.Stderr, "scrubbing E2E remote artifacts: %v\n", err)
+		cleanupIsolation()
+		os.RemoveAll(tmpDir)
+		os.Exit(1)
+	}
+
 	// Run tests, then clean up explicitly. os.Exit does not run defers,
 	// so we must call cleanup before exiting to preserve rotated tokens.
 	code := m.Run()
 	cleanupIsolation()
 	os.RemoveAll(tmpDir)
 	os.Exit(code)
+}
+
+type remoteListJSONItem struct {
+	Name string `json:"name"`
+}
+
+func writeSuiteConfig(path string, drives ...string) error {
+	var builder strings.Builder
+	for _, driveID := range drives {
+		if driveID == "" {
+			continue
+		}
+
+		builder.WriteString(fmt.Sprintf("[%q]\n", driveID))
+	}
+
+	return os.WriteFile(path, []byte(builder.String()), 0o600)
+}
+
+func scrubRemoteSuiteArtifacts(cfgPath string, drives ...string) error {
+	for _, driveID := range drives {
+		if driveID == "" {
+			continue
+		}
+
+		if err := scrubRemoteDriveArtifacts(cfgPath, driveID); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func scrubRemoteDriveArtifacts(cfgPath string, driveID string) error {
+	stdout, stderr, err := runCLIProcess(cfgPath, nil, driveID, "ls", "--json", "/")
+	if err != nil {
+		return fmt.Errorf("listing root for preflight scrub on %s: %w\nstdout: %s\nstderr: %s", driveID, err, stdout, stderr)
+	}
+
+	var items []remoteListJSONItem
+	if err := json.Unmarshal([]byte(stdout), &items); err != nil {
+		return fmt.Errorf("decoding root listing for preflight scrub on %s: %w\nstdout: %s", driveID, err, stdout)
+	}
+
+	for _, item := range items {
+		if !isE2EArtifactName(item.Name) {
+			continue
+		}
+
+		remotePath := "/" + item.Name
+		fmt.Fprintf(os.Stderr, "E2E preflight scrub: drive=%s deleting %s\n", driveID, remotePath)
+
+		delStdout, delStderr, delErr := runCLIProcess(cfgPath, nil, driveID, "rm", "-r", remotePath)
+		if delErr != nil && !isRemoteNotFoundCleanup(delStderr) {
+			return fmt.Errorf("deleting %s during preflight scrub on %s: %w\nstdout: %s\nstderr: %s", remotePath, driveID, delErr, delStdout, delStderr)
+		}
+	}
+
+	return nil
+}
+
+func isE2EArtifactName(name string) bool {
+	for _, prefix := range e2eArtifactPrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isRemoteNotFoundCleanup(stderr string) bool {
+	lower := strings.ToLower(stderr)
+	return strings.Contains(lower, "not found") || strings.Contains(lower, "could not be found")
 }
 
 // findModuleRoot walks up from the current dir to find go.mod.
@@ -209,6 +303,31 @@ func makeCmd(args []string, envOverrides map[string]string) *exec.Cmd {
 		cmd.Env = env
 	}
 	return cmd
+}
+
+func runCLIProcess(cfgPath string, env map[string]string, driveID string, args ...string) (string, string, error) {
+	var fullArgs []string
+	if cfgPath != "" {
+		fullArgs = append(fullArgs, "--config", cfgPath)
+	}
+
+	if driveID != "" {
+		fullArgs = append(fullArgs, "--drive", driveID)
+	}
+
+	if shouldAddDebug(args) {
+		fullArgs = append(fullArgs, "--debug")
+	}
+
+	fullArgs = append(fullArgs, args...)
+	cmd := makeCmd(fullArgs, env)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	return stdout.String(), stderr.String(), err
 }
 
 // runCLIWithConfigExpectError runs the CLI with a config file and expects failure.
@@ -375,9 +494,7 @@ func TestE2E_RoundTrip(t *testing.T) {
 
 	// Cleanup at the end — delete the test folder.
 	t.Cleanup(func() {
-		fullArgs := []string{"--drive", drive, "rm", "-r", "/" + testFolder}
-		cmd := makeCmd(fullArgs, nil)
-		_ = cmd.Run()
+		cleanupRemoteFolder(t, testFolder)
 	})
 
 	t.Run("whoami", func(t *testing.T) {
@@ -514,9 +631,7 @@ func TestE2E_ErrorCases(t *testing.T) {
 		testFolder := fmt.Sprintf("onedrive-go-e2e-rmfolder-%d", time.Now().UnixNano())
 
 		t.Cleanup(func() {
-			fullArgs := []string{"--drive", drive, "rm", "-r", "/" + testFolder}
-			cmd := makeCmd(fullArgs, nil)
-			_ = cmd.Run()
+			cleanupRemoteFolder(t, testFolder)
 		})
 
 		runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder)
@@ -571,9 +686,7 @@ func TestE2E_QuietFlag(t *testing.T) {
 		remotePath := "/" + testFolder + "/quiet-test.txt"
 
 		t.Cleanup(func() {
-			fullArgs := []string{"--drive", drive, "rm", "-r", "/" + testFolder}
-			cmd := makeCmd(fullArgs, nil)
-			_ = cmd.Run()
+			cleanupRemoteFolder(t, testFolder)
 		})
 
 		runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder)

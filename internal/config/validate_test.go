@@ -30,6 +30,7 @@ func TestValidate_ValidDefaults(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// Validates: R-4.8.2
 func TestValidate_TransferWorkers_BelowMin(t *testing.T) {
 	cfg := validConfig()
 	cfg.TransferWorkers = 3
@@ -102,6 +103,7 @@ func TestValidate_ChunkSize_TooLarge(t *testing.T) {
 	assert.Contains(t, err.Error(), "chunk_size")
 }
 
+// Validates: R-4.8.2
 func TestValidate_ChunkSize_NotAligned(t *testing.T) {
 	cfg := validConfig()
 	// 11 MiB = 11,534,336 bytes. 11,534,336 / 327,680 = 35.2 — not aligned.
@@ -146,7 +148,7 @@ func TestValidate_BigDeleteThreshold_BelowMin(t *testing.T) {
 	assert.Contains(t, err.Error(), "big_delete_threshold")
 }
 
-// Validates: R-6.2.9
+// Validates: R-4.8.2, R-6.2.9
 func TestValidate_Permissions_Invalid(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -170,7 +172,7 @@ func TestValidate_Permissions_Invalid(t *testing.T) {
 	}
 }
 
-// Validates: R-6.2.9
+// Validates: R-4.8.2, R-6.2.9
 func TestValidate_Permissions_Valid(t *testing.T) {
 	for _, perm := range []string{"0600", "0700", "0755", "0644", "777"} {
 		cfg := validConfig()
@@ -189,6 +191,7 @@ func TestValidate_PollInterval_TooShort(t *testing.T) {
 	assert.Contains(t, err.Error(), "poll_interval")
 }
 
+// Validates: R-4.8.2
 func TestValidate_PollInterval_InvalidFormat(t *testing.T) {
 	cfg := validConfig()
 	cfg.PollInterval = "not-a-duration"
@@ -244,6 +247,7 @@ func TestValidate_FullscanFrequency_Zero(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// Validates: R-4.8.2
 func TestValidate_LogLevel_Invalid(t *testing.T) {
 	cfg := validConfig()
 	cfg.LogLevel = "verbose"
@@ -303,6 +307,7 @@ func TestValidate_IgnoreMarker_Empty(t *testing.T) {
 	assert.Contains(t, err.Error(), "ignore_marker")
 }
 
+// Validates: R-4.8.2
 func TestValidate_MinFreeSpace_Invalid(t *testing.T) {
 	cfg := validConfig()
 	cfg.MinFreeSpace = invalidSizeStr

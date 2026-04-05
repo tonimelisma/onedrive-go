@@ -89,6 +89,36 @@ func waitForSocketIOConnected(t *testing.T, eventsPath string, timeout time.Dura
 	return syncengine.DebugEvent{}
 }
 
+func waitForObserverStarted(
+	t *testing.T,
+	eventsPath string,
+	observer string,
+	timeout time.Duration,
+) syncengine.DebugEvent {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		events := readSocketIODebugEvents(t, eventsPath)
+		for _, event := range events {
+			if string(event.Type) == "observer_started" && event.Observer == observer {
+				return event
+			}
+		}
+
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	require.FailNowf(
+		t,
+		"observer did not start within the startup window",
+		"observer=%s events=%+v",
+		observer,
+		readSocketIODebugEvents(t, eventsPath),
+	)
+	return syncengine.DebugEvent{}
+}
+
 func waitForSocketIOEventAfter(
 	t *testing.T,
 	eventsPath string,

@@ -44,6 +44,7 @@ func TestValidateDrives_EmptySyncDir_Valid(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// Validates: R-4.8.2
 func TestValidateDrives_InvalidPollInterval(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{
@@ -67,6 +68,7 @@ func TestValidateDrives_ValidPollInterval(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// Validates: R-4.8.3
 func TestValidateDrives_DuplicateSyncDir(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
@@ -77,6 +79,7 @@ func TestValidateDrives_DuplicateSyncDir(t *testing.T) {
 	assert.Contains(t, err.Error(), "same sync_dir")
 }
 
+// Validates: R-4.8.3
 func TestValidateDrives_DuplicateSyncDirTildeExpanded(t *testing.T) {
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
@@ -102,6 +105,7 @@ func TestValidateDrives_SharePointDrive_Valid(t *testing.T) {
 
 // --- Sync dir overlap tests ---
 
+// Validates: R-4.8.3
 func TestValidateDrives_ChildIsSubdir_Error(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
@@ -112,6 +116,7 @@ func TestValidateDrives_ChildIsSubdir_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "overlap")
 }
 
+// Validates: R-4.8.3
 func TestValidateDrives_ParentIsSubdir_Error(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive/Personal"}
@@ -151,6 +156,7 @@ func TestValidateDrives_EmptySyncDirSkippedForOverlap(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// Validates: R-4.8.3
 func TestValidateDrives_SymlinkedSyncDir_DetectedAsDuplicate(t *testing.T) {
 	// Two drives pointing to the same directory via a symlink should be detected.
 	dir := t.TempDir()

@@ -129,6 +129,11 @@ func TestE2E_SyncWatch_WebsocketStartupSmoke(t *testing.T) {
 	h, _ := startFastDaemon(t, cfgPath, env,
 		"--drive", drive, "sync", "--download-only", "--watch", "--force")
 
+	// The websocket wake source only starts after bootstrap sync drains and the
+	// steady-state remote observer comes online. Wait for that runtime milestone
+	// before treating a missing websocket connection as a websocket-specific
+	// startup failure.
+	waitForObserverStarted(t, eventsPath, "remote", 3*time.Minute)
 	waitForSocketIOConnected(t, eventsPath, 45*time.Second)
 
 	require.NoError(t, h.Process.Signal(syscall.SIGTERM))

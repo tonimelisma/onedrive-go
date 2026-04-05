@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Validates: R-4.8.1
 func TestLoad_UnknownKey_TopLevel(t *testing.T) {
 	path := writeTestConfig(t, `unknown_section = "value"`)
 	_, err := Load(path, testLogger(t))
@@ -15,6 +16,7 @@ func TestLoad_UnknownKey_TopLevel(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown config key")
 }
 
+// Validates: R-4.8.1
 func TestLoad_UnknownKey_TypoInFlatKey(t *testing.T) {
 	//nolint:misspell // intentional typo to test unknown key detection
 	path := writeTestConfig(t, `parralel_downloads = 4`)
@@ -24,6 +26,7 @@ func TestLoad_UnknownKey_TypoInFlatKey(t *testing.T) {
 	assert.Contains(t, err.Error(), "parallel_downloads")
 }
 
+// Validates: R-4.8.1
 func TestLoad_UnknownKey_TypoInFilter(t *testing.T) {
 	path := writeTestConfig(t, `skip_file = ["*.tmp"]`)
 	_, err := Load(path, testLogger(t))
@@ -31,6 +34,7 @@ func TestLoad_UnknownKey_TypoInFilter(t *testing.T) {
 	assert.Contains(t, err.Error(), "skip_files")
 }
 
+// Validates: R-4.8.1
 func TestLoad_UnknownKey_NoSuggestion(t *testing.T) {
 	path := writeTestConfig(t, `completely_unrelated_key = true`)
 	_, err := Load(path, testLogger(t))
@@ -39,6 +43,7 @@ func TestLoad_UnknownKey_NoSuggestion(t *testing.T) {
 	assert.NotContains(t, err.Error(), "did you mean")
 }
 
+// Validates: R-4.8.1
 func TestLoad_UnknownKey_RemovedValidationToggles(t *testing.T) {
 	path := writeTestConfig(t, `
 disable_download_validation = true
@@ -51,6 +56,7 @@ disable_upload_validation = true
 	assert.Contains(t, err.Error(), "disable_upload_validation")
 }
 
+// Validates: R-4.8.1
 func TestLoad_UnknownKeyInDriveSection(t *testing.T) {
 	path := writeTestConfig(t, `
 ["personal:toni@outlook.com"]
@@ -63,6 +69,7 @@ unknown_field = "value"
 	assert.Contains(t, err.Error(), "personal:toni@outlook.com")
 }
 
+// Validates: R-4.8.1
 func TestLoad_TypoInDriveSection_Suggestion(t *testing.T) {
 	path := writeTestConfig(t, `
 ["personal:toni@outlook.com"]
