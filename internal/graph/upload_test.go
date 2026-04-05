@@ -142,6 +142,7 @@ func TestSimpleUpload_ContentType(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// Validates: R-5.6.9
 func TestSimpleUploadToItem_Success(t *testing.T) {
 	content := "overwrite file content"
 
@@ -236,6 +237,7 @@ func TestSimpleUpload_DecodeError(t *testing.T) {
 	assert.Contains(t, err.Error(), "decoding simple upload response")
 }
 
+// Validates: R-5.6.9
 func TestCreateUploadSession_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
@@ -268,6 +270,7 @@ func TestCreateUploadSession_Success(t *testing.T) {
 	assert.Equal(t, 31, session.ExpirationTime.Day())
 }
 
+// Validates: R-5.6.9
 func TestCreateUploadSessionForItem_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
@@ -601,7 +604,7 @@ func TestCancelUploadSession_ContextCanceled(t *testing.T) {
 	require.Error(t, err)
 }
 
-// Validates: R-5.3, R-6.7.6
+// Validates: R-5.3.3, R-6.7.6
 func TestChunkAlignment(t *testing.T) {
 	assert.Equal(t, 327680, ChunkAlignment)
 }
@@ -810,6 +813,7 @@ func TestQueryUploadSession_InvalidExpiration(t *testing.T) {
 	assert.Equal(t, []string{"0-"}, status.NextExpectedRanges)
 }
 
+// Validates: R-5.3.1
 func TestUpload_SimpleForSmallFile(t *testing.T) {
 	// Files <= 4 MiB should use simple upload (single PUT), not create a session.
 	content := []byte("small file content")
@@ -1104,6 +1108,7 @@ func TestUpload_SimpleMtimePatchFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), "setting mtime after simple upload")
 }
 
+// Validates: R-5.2.1
 func TestUpload_ChunkedForLargeFile(t *testing.T) {
 	// Files > 4 MiB should create a session and upload in chunks.
 	fileSize := int64(SimpleUploadMaxSize + 1) // 4 MiB + 1 byte
@@ -1176,6 +1181,7 @@ func TestUpload_ChunkedForLargeFile(t *testing.T) {
 	assert.Equal(t, 1, chunksReceived, "file just over 4 MiB should need 1 chunk")
 }
 
+// Validates: R-5.6.3
 func TestUpload_ChunkedCancelsSessionOnError(t *testing.T) {
 	// When a chunk upload fails, the session should be canceled.
 	fileSize := int64(SimpleUploadMaxSize + 1)

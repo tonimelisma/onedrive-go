@@ -310,8 +310,9 @@ func TestE2E_Whoami_ConfigTolerance(t *testing.T) {
 		"HOME":          perTestHome,
 	}
 
-	stdout, _, err := runCLICore(t, cfgPath, env, "", "whoami")
-	require.NoError(t, err, "whoami should succeed despite unknown config key\nstdout: %s", stdout)
+	stdout, _ := pollCLIWithConfigRetryingTransientGraphFailures(
+		t, cfgPath, env, "", transientGraphRetryTimeout, "whoami",
+	)
 
 	// Whoami output should contain user/account information.
 	assert.NotEmpty(t, stdout,
@@ -330,8 +331,9 @@ func TestE2E_Whoami_PersonalAccountShowsSinglePersonalDrive(t *testing.T) {
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
 
-	stdout, _, err := runCLICore(t, cfgPath, env, "", "whoami", "--json")
-	require.NoError(t, err, "whoami --json should succeed\nstdout: %s", stdout)
+	stdout, _ := pollCLIWithConfigRetryingTransientGraphFailures(
+		t, cfgPath, env, "", transientGraphRetryTimeout, "whoami", "--json",
+	)
 
 	var result struct {
 		Drives []struct {

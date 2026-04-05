@@ -569,6 +569,37 @@ func TestTransferManager_Upload_Success(t *testing.T) {
 	assert.False(t, result.Mtime.IsZero(), "Mtime should not be zero")
 }
 
+// Validates: R-5.5.2
+func TestTransferManager_Upload_WarnsOnHashMismatch(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	ul := &tmMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			return &graph.Item{
+				ID:           "item-1",
+				QuickXorHash: base64.StdEncoding.EncodeToString([]byte("remote-hash")),
+			}, nil
+		},
+	}
+
+	dir := t.TempDir()
+	localPath := filepath.Join(dir, "upload.txt")
+	require.NoError(t, os.WriteFile(localPath, []byte("upload data"), 0o600))
+
+	tm := NewTransferManager(&tmSimpleDownloader{}, ul, nil, logger)
+
+	result, err := tm.UploadFile(t.Context(), driveid.New("d1"), "parent1", "upload.txt", localPath, UploadOpts{})
+	require.NoError(t, err, "UploadFile")
+	require.NotNil(t, result)
+
+	assert.Contains(t, buf.String(), "upload hash mismatch")
+	assert.Contains(t, buf.String(), "local_hash")
+	assert.Contains(t, buf.String(), "remote_hash")
+}
+
 func TestTransferManager_Upload_NilItem(t *testing.T) {
 	t.Parallel()
 
@@ -651,7 +682,7 @@ func TestTransferManager_Upload_RejectsOversizedFileBeforeHashOrTransfer(t *test
 	assert.False(t, uploadCalled, "oversized files should be rejected before transfer")
 }
 
-// Validates: R-1.3, R-5.2
+// Validates: R-1.3, R-5.2.1
 func TestTransferManager_SessionUpload_Success(t *testing.T) {
 	t.Parallel()
 
@@ -681,6 +712,7 @@ func TestTransferManager_SessionUpload_Success(t *testing.T) {
 	assert.Equal(t, "session-item", result.Item.ID)
 }
 
+// Validates: R-5.2.3, R-5.2.4
 func TestTransferManager_SessionUpload_Resume(t *testing.T) {
 	t.Parallel()
 
