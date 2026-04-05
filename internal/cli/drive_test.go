@@ -1177,6 +1177,13 @@ func sharedItemJSON(name string) string {
 	}`, name, name)
 }
 
+func assertSharedWithMeAllowExternalQuery(t *testing.T, r *http.Request) {
+	t.Helper()
+
+	assert.Equal(t, testSharedWithMePath, r.URL.Path)
+	assert.Equal(t, "true", r.URL.Query().Get("allowexternal"))
+}
+
 // Validates: R-3.6.2
 func TestSearchSharedItemsWithFallback_SearchSucceeds(t *testing.T) {
 	var sharedWithMeCalled bool
@@ -1219,6 +1226,7 @@ func TestSearchSharedItemsWithFallback_SearchFails_SharedWithMeSucceeds(t *testi
 		}
 
 		if strings.Contains(r.URL.Path, "sharedWithMe") {
+			assertSharedWithMeAllowExternalQuery(t, r)
 			writeTestResponsef(t, w, `{"value": [%s]}`, sharedItemJSON("FallbackResult"))
 
 			return
@@ -1259,6 +1267,7 @@ func TestSearchSharedItemsWithFallback_SearchReturnsEmpty(t *testing.T) {
 		}
 
 		if strings.Contains(r.URL.Path, "sharedWithMe") {
+			assertSharedWithMeAllowExternalQuery(t, r)
 			writeTestResponsef(t, w, `{"value": [%s]}`, sharedItemJSON("FallbackFromEmptySearch"))
 
 			return
@@ -1294,6 +1303,7 @@ func TestSearchSharedItemsWithFallback_SearchReturnsNoUsableSharedIdentity_Falls
 
 		if strings.Contains(r.URL.Path, "sharedWithMe") {
 			sharedWithMeCalled = true
+			assertSharedWithMeAllowExternalQuery(t, r)
 			writeTestResponsef(t, w, `{"value": [%s]}`, sharedItemJSON("FallbackFromUnusableSearch"))
 
 			return
@@ -1309,6 +1319,17 @@ func TestSearchSharedItemsWithFallback_SearchReturnsNoUsableSharedIdentity_Falls
 	require.Len(t, items, 1)
 	assert.True(t, sharedWithMeCalled, "SharedWithMe should be called when search yields no usable shared identities")
 	assert.Equal(t, "FallbackFromUnusableSearch", items[0].Name)
+}
+
+// Validates: R-3.6.5
+func TestSharedDiscoveryNoMatchesError_IncludesExternalGuidance(t *testing.T) {
+	err := sharedDiscoveryNoMatchesError("marketing")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `no shared folders matching "marketing" found`)
+	assert.Contains(t, err.Error(), "external shares")
+	assert.Contains(t, err.Error(), "cross-org")
+	assert.Contains(t, err.Error(), "onedrive-go shared")
+	assert.Contains(t, err.Error(), "onedrive-go drive list")
 }
 
 // Validates: R-3.6.1, R-3.6.4

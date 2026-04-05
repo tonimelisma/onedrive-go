@@ -289,6 +289,7 @@ func TestE2E_Sync_DownloadOnly(t *testing.T) {
 	require.NoError(t, tmpFile.Close())
 
 	runCLIWithConfig(t, opsCfgPath, nil, "put", tmpFile.Name(), remotePath)
+	pollCLIWithConfigContains(t, opsCfgPath, nil, "download-test.txt", pollTimeout, "stat", remotePath)
 
 	// Cleanup remote after test.
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
