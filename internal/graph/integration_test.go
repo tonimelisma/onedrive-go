@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -36,7 +35,7 @@ const (
 func TestMain(m *testing.M) {
 	// Fallback to "../.." — internal/graph/ is two levels below module root.
 	root := testutil.FindModuleRoot("../..")
-	testutil.LoadDotEnv(filepath.Join(root, ".env"))
+	testutil.LoadTestEnv(root)
 	testutil.ValidateAllowlist(driveEnvVar)
 
 	cleanup := setupIntegrationIsolation()

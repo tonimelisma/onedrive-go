@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Upload test data to Azure Key Vault for CI.
-# Uploads: token files (pure OAuth), account profiles, drive metadata, config.toml
+# Uploads: token files (pure OAuth), account profiles, drive metadata,
+# config.toml, and fixtures.env
 #
 # Usage: ./scripts/migrate-test-data-to-ci.sh
 #
@@ -89,6 +90,18 @@ if [ -f "$TESTDATA/config.toml" ]; then
         --output none
 else
     echo "WARNING: config.toml not found in .testdata/"
+fi
+
+if [ -f "$TESTDATA/fixtures.env" ]; then
+    echo "Uploading: fixtures.env → onedrive-test-fixtures-env"
+    az keyvault secret set \
+        --vault-name "$VAULT_NAME" \
+        --name "onedrive-test-fixtures-env" \
+        --file "$TESTDATA/fixtures.env" \
+        --content-type "text/plain" \
+        --output none
+else
+    echo "WARNING: fixtures.env not found in .testdata/"
 fi
 
 echo ""
