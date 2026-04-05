@@ -1,6 +1,6 @@
 # Test Assurance Audit
 
-Last updated: 2026-04-03
+Last updated: 2026-04-04
 
 Purpose: build a spec-first model of the ideal test suite, then compare the real suite against that model to catch missing, weak, or nerfed tests before we start patching coverage.
 
@@ -1082,6 +1082,11 @@ Key W5 gap notes:
 - Reconciliation verdict:
   - no remaining production-code delta from the archived artifacts needed to be replayed onto `main`
   - the remaining useful integration work was traceability only, so the equivalent current tests were tagged directly and this note records the mapping for future audit/recovery work
+- `2026-04-04` cleanup closeout:
+  - the external safety copies are no longer needed for repo-state recovery
+  - after this note lands on `main`, the out-of-repo files may be deleted:
+    - `/Users/tonimelisma/Development/onedrive-go-stale-archive/refactor-remote-403-ephemeral-scope.bundle`
+    - `/Users/tonimelisma/Development/onedrive-go-stale-archive/refactor-trial-result-policy-working.patch`
 
 ## Next Moves
 
