@@ -194,6 +194,68 @@ func TestShortcutConverter_SparseRenameReusesBaselineDirectory(t *testing.T) {
 	assert.Equal(t, "SharedFolder/Subdir/old-name.txt", events[0].OldPath, "old path")
 }
 
+// Validates: R-6.7.29
+func TestShortcutConverter_DescendantFollowsSparseMovedParentWithOmittedName(t *testing.T) {
+	t.Parallel()
+
+	remoteDriveID := driveid.New("0000000000000099")
+
+	sc := &synctypes.Shortcut{
+		ItemID:      "sc-1",
+		RemoteDrive: "0000000000000099",
+		RemoteItem:  "scope-root",
+		LocalPath:   "SharedFolder",
+	}
+
+	bl := synctest.BaselineWith(
+		&synctypes.BaselineEntry{
+			Path:     "SharedFolder/FolderA",
+			DriveID:  remoteDriveID,
+			ItemID:   "folder-a",
+			ParentID: "scope-root",
+			ItemType: synctypes.ItemTypeFolder,
+		},
+		&synctypes.BaselineEntry{
+			Path:     "SharedFolder/FolderB",
+			DriveID:  remoteDriveID,
+			ItemID:   "folder-b",
+			ParentID: "scope-root",
+			ItemType: synctypes.ItemTypeFolder,
+		},
+		&synctypes.BaselineEntry{
+			Path:     "SharedFolder/FolderA/report.txt",
+			DriveID:  remoteDriveID,
+			ItemID:   shortcutTestFileItemID,
+			ParentID: "folder-a",
+			ItemType: synctypes.ItemTypeFile,
+		},
+	)
+
+	items := []graph.Item{
+		{ID: "folder-b", Name: "FolderB", ParentID: "scope-root", DriveID: remoteDriveID, IsFolder: true},
+		// Parent moved under FolderB, but Graph omits its unchanged leaf name.
+		{ID: "folder-a", Name: "", ParentID: "folder-b", DriveID: remoteDriveID, IsFolder: true},
+		// Descendant still references the sparse moved parent.
+		{ID: shortcutTestFileItemID, Name: "report.txt", ParentID: "folder-a", DriveID: remoteDriveID, Size: 200},
+	}
+
+	events := ConvertShortcutItems(items, sc, remoteDriveID, bl, synctest.TestLogger(t))
+
+	var fileEvent *synctypes.ChangeEvent
+	for i := range events {
+		if events[i].ItemID == shortcutTestFileItemID {
+			fileEvent = &events[i]
+			break
+		}
+	}
+
+	require.NotNil(t, fileEvent, "file event should be emitted")
+	assert.Equal(t, synctypes.ChangeMove, fileEvent.Type)
+	assert.Equal(t, "SharedFolder/FolderB/FolderA/report.txt", fileEvent.Path,
+		"descendant should retain the sparse parent leaf recovered from baseline")
+	assert.Equal(t, "SharedFolder/FolderA/report.txt", fileEvent.OldPath)
+}
+
 // TestShortcutConverter_DeletedItemNameRecovery verifies that deleted items in
 // shortcut scope recover their Name from the baseline when the Graph API
 // returns an empty Name (Business API behavior). The old code path did not

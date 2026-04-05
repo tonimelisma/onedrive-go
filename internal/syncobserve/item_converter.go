@@ -133,10 +133,20 @@ func (c *ItemConverter) ConvertItems(items []graph.Item) []synctypes.ChangeEvent
 func (c *ItemConverter) registerInflight(item *graph.Item, inflight map[driveid.ItemKey]InflightParent) {
 	itemDriveID := c.resolveItemDriveID(item)
 	key := driveid.NewItemKey(itemDriveID, item.ID)
+	existing, _ := c.Baseline.GetByID(key)
+
+	name := effectiveItemName(item, existing)
+	parentID := item.ParentID
+	parentDriveID := resolveParentDriveID(item, itemDriveID)
+	if parentID == "" && existing != nil {
+		parentID = existing.ParentID
+		parentDriveID = itemDriveID
+	}
+
 	inflight[key] = InflightParent{
-		Name:          nfcNormalize(item.Name),
-		ParentID:      item.ParentID,
-		ParentDriveID: resolveParentDriveID(item, itemDriveID),
+		Name:          name,
+		ParentID:      parentID,
+		ParentDriveID: parentDriveID,
 		IsRoot:        item.IsRoot,
 		IsVault:       item.SpecialFolderName == specialFolderVault,
 	}
