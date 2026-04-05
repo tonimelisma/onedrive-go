@@ -8,6 +8,8 @@ import (
 
 type engineDebugEventType string
 
+type DebugEventType = engineDebugEventType
+
 const (
 	engineDebugEventScopeActivated             engineDebugEventType = "scope_activated"
 	engineDebugEventScopeReleased              engineDebugEventType = "scope_released"
@@ -34,6 +36,16 @@ const (
 	engineDebugEventReconcileStarted           engineDebugEventType = "reconcile_started"
 	engineDebugEventReconcileApplied           engineDebugEventType = "reconcile_applied"
 	engineDebugEventReconcileDroppedOnShutdown engineDebugEventType = "reconcile_dropped_on_shutdown"
+	engineDebugEventWebsocketWakeSourceStarted engineDebugEventType = "websocket_wake_source_started"
+	engineDebugEventWebsocketEndpointFetchFail engineDebugEventType = "websocket_endpoint_fetch_failed"
+	engineDebugEventWebsocketConnectFail       engineDebugEventType = "websocket_connect_failed"
+	engineDebugEventWebsocketConnected         engineDebugEventType = "websocket_connected"
+	engineDebugEventWebsocketRefreshRequested  engineDebugEventType = "websocket_refresh_requested"
+	engineDebugEventWebsocketConnectionDropped engineDebugEventType = "websocket_connection_dropped"
+	engineDebugEventWebsocketNotificationWake  engineDebugEventType = "websocket_notification_wake"
+	engineDebugEventWebsocketWakeCoalesced     engineDebugEventType = "websocket_wake_coalesced"
+	engineDebugEventWebsocketWakeSourceStopped engineDebugEventType = "websocket_wake_source_stopped"
+	engineDebugEventWebsocketFallback          engineDebugEventType = "websocket_fallback"
 )
 
 const (
@@ -43,16 +55,29 @@ const (
 
 type engineDebugEvent struct {
 	Type     engineDebugEventType
+	DriveID  string
 	ScopeKey synctypes.ScopeKey
 	Path     string
 	Observer string
 	Delay    time.Duration
 	Note     string
 	Count    int
+	Error    string
 }
 
+type DebugEvent = engineDebugEvent
+
+//nolint:gocritic // Value semantics are intentional so runtime hooks cannot mutate engine-owned events.
 func (e *Engine) emitDebugEvent(event engineDebugEvent) {
+	if event.DriveID == "" && !e.driveID.IsZero() {
+		event.DriveID = e.driveID.String()
+	}
+
 	if e.debugEventHook != nil {
 		e.debugEventHook(event)
 	}
+}
+
+func (e *Engine) SetDebugEventHook(hook func(DebugEvent)) {
+	e.debugEventHook = hook
 }

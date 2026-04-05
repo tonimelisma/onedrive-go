@@ -62,7 +62,7 @@ type Engine struct {
 	// Test/debug-only invariant checks. Production keeps this disabled;
 	// tests enable it to catch lifecycle and scope regressions immediately.
 	assertInvariants bool
-	debugEventHook   func(engineDebugEvent)
+	debugEventHook   func(DebugEvent)
 
 	// nowFn is the engine's clock. Defaults to time.Now. Tests inject a
 	// controllable clock for deterministic trial timer and scope timing.
@@ -81,7 +81,11 @@ type Engine struct {
 
 	// socketIOWakeSourceFactory is a test seam for watch-mode websocket
 	// wakeups. Production uses syncobserve.NewSocketIOWakeSource.
-	socketIOWakeSourceFactory func(synctypes.SocketIOEndpointFetcher, driveid.ID, *slog.Logger) socketIOWakeSourceRunner
+	socketIOWakeSourceFactory func(
+		synctypes.SocketIOEndpointFetcher,
+		driveid.ID,
+		syncobserve.SocketIOWakeSourceOptions,
+	) socketIOWakeSourceRunner
 
 	// watchRuntimeHook is a test-only seam that exposes the newly constructed
 	// watch runtime before initWatchInfra wires timers, observers, and workers.
@@ -170,9 +174,9 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 		socketIOWakeSourceFactory: func(
 			fetcher synctypes.SocketIOEndpointFetcher,
 			driveID driveid.ID,
-			logger *slog.Logger,
+			opts syncobserve.SocketIOWakeSourceOptions,
 		) socketIOWakeSourceRunner {
-			return syncobserve.NewSocketIOWakeSource(fetcher, driveID, logger)
+			return syncobserve.NewSocketIOWakeSourceWithOptions(fetcher, driveID, opts)
 		},
 	}
 

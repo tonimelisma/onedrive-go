@@ -2,6 +2,7 @@ package syncobserve
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -127,8 +128,17 @@ func TestSocketIOWakeSource_NotificationTriggersWake(t *testing.T) {
 		}},
 	}
 
-	source := NewSocketIOWakeSource(fetcher, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
-	source.backoffMax = 10 * time.Millisecond
+	var lifecycleEvents []SocketIOLifecycleEvent
+	var lifecycleMu sync.Mutex
+	source := NewSocketIOWakeSourceWithOptions(fetcher, driveid.New(synctest.TestDriveID), SocketIOWakeSourceOptions{
+		Logger:     synctest.TestLogger(t),
+		BackoffMax: 10 * time.Millisecond,
+		LifecycleHook: func(event SocketIOLifecycleEvent) {
+			lifecycleMu.Lock()
+			defer lifecycleMu.Unlock()
+			lifecycleEvents = append(lifecycleEvents, event)
+		},
+	})
 
 	wakes := make(chan struct{}, 1)
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
@@ -149,6 +159,8 @@ func TestSocketIOWakeSource_NotificationTriggersWake(t *testing.T) {
 	close(holdConn)
 	require.NoError(t, <-done)
 	assert.Equal(t, 1, fetcher.CallCount())
+	assert.True(t, containsLifecycleEvent(lifecycleEvents, SocketIOLifecycleEventConnected))
+	assert.True(t, containsLifecycleEvent(lifecycleEvents, SocketIOLifecycleEventNotificationWake))
 }
 
 // Validates: R-2.8.5
@@ -177,8 +189,10 @@ func TestSocketIOWakeSource_ReconnectsAfterDisconnect(t *testing.T) {
 		},
 	}
 
-	source := NewSocketIOWakeSource(fetcher, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
-	source.backoffMax = 10 * time.Millisecond
+	source := NewSocketIOWakeSourceWithOptions(fetcher, driveid.New(synctest.TestDriveID), SocketIOWakeSourceOptions{
+		Logger:     synctest.TestLogger(t),
+		BackoffMax: 10 * time.Millisecond,
+	})
 
 	wakes := make(chan struct{}, 1)
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
@@ -238,9 +252,11 @@ func TestSocketIOWakeSource_RefreshesEndpointBeforeExpiry(t *testing.T) {
 		},
 	}
 
-	source := NewSocketIOWakeSource(fetcher, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
-	source.refreshLeadTime = 25 * time.Millisecond
-	source.backoffMax = 10 * time.Millisecond
+	source := NewSocketIOWakeSourceWithOptions(fetcher, driveid.New(synctest.TestDriveID), SocketIOWakeSourceOptions{
+		Logger:          synctest.TestLogger(t),
+		RefreshLeadTime: 25 * time.Millisecond,
+		BackoffMax:      10 * time.Millisecond,
+	})
 
 	wakes := make(chan struct{}, 1)
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
@@ -262,4 +278,110 @@ func TestSocketIOWakeSource_RefreshesEndpointBeforeExpiry(t *testing.T) {
 	close(holdSecond)
 	require.NoError(t, <-done)
 	assert.GreaterOrEqual(t, fetcher.CallCount(), 2, "expiry should trigger endpoint refresh")
+}
+
+func TestSocketIOWakeSource_EndpointFetchFailureEmitsLifecycleEvent(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	var events []SocketIOLifecycleEvent
+	source := NewSocketIOWakeSourceWithOptions(&mockSocketIOEndpointFetcher{}, driveid.New(synctest.TestDriveID), SocketIOWakeSourceOptions{
+		Logger: synctest.TestLogger(t),
+		SleepFunc: func(_ context.Context, _ time.Duration) error {
+			cancel()
+			return context.Canceled
+		},
+		LifecycleHook: func(event SocketIOLifecycleEvent) {
+			events = append(events, event)
+		},
+	})
+
+	err := source.Run(ctx, make(chan struct{}, 1))
+	require.NoError(t, err)
+	assert.True(t, containsLifecycleEvent(events, SocketIOLifecycleEventEndpointFetchFail))
+	assert.True(t, containsLifecycleEvent(events, SocketIOLifecycleEventStopped))
+}
+
+func TestSocketIOWakeSource_ConnectFailureEmitsLifecycleEvent(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	fetcher := &mockSocketIOEndpointFetcher{
+		endpoints: []*graph.SocketIOEndpoint{{
+			ID:              "endpoint-1",
+			NotificationURL: graph.SocketIONotificationURL("https://example.test/callback"),
+		}},
+	}
+
+	var events []SocketIOLifecycleEvent
+	source := NewSocketIOWakeSourceWithOptions(fetcher, driveid.New(synctest.TestDriveID), SocketIOWakeSourceOptions{
+		Logger: synctest.TestLogger(t),
+		DialFunc: func(context.Context, string, *websocket.DialOptions) (*websocket.Conn, *http.Response, error) {
+			return nil, nil, errors.New("dial failed")
+		},
+		SleepFunc: func(_ context.Context, _ time.Duration) error {
+			cancel()
+			return context.Canceled
+		},
+		LifecycleHook: func(event SocketIOLifecycleEvent) {
+			events = append(events, event)
+		},
+	})
+
+	err := source.Run(ctx, make(chan struct{}, 1))
+	require.NoError(t, err)
+	assert.True(t, containsLifecycleEvent(events, SocketIOLifecycleEventConnectFail))
+	assert.True(t, containsLifecycleEvent(events, SocketIOLifecycleEventStopped))
+}
+
+func TestSocketIOWakeSource_PingPongHandling(t *testing.T) {
+	t.Parallel()
+
+	holdConn := make(chan struct{})
+	server := newSocketIOTestServer(t, func(conn *websocket.Conn, r *http.Request) {
+		writeSocketIOText(r.Context(), t, conn, `0{"sid":"sid-1","pingInterval":25000,"pingTimeout":60000}`)
+		assert.Equal(t, "40", readSocketIOText(r.Context(), t, conn))
+		assert.Equal(t, "40/notifications", readSocketIOText(r.Context(), t, conn))
+		writeSocketIOText(r.Context(), t, conn, "2")
+		assert.Equal(t, "3", readSocketIOText(r.Context(), t, conn))
+		<-holdConn
+	})
+
+	fetcher := &mockSocketIOEndpointFetcher{
+		endpoints: []*graph.SocketIOEndpoint{{
+			ID:              "endpoint-1",
+			NotificationURL: graph.SocketIONotificationURL(server.URL + "/callback"),
+		}},
+	}
+
+	source := NewSocketIOWakeSourceWithOptions(fetcher, driveid.New(synctest.TestDriveID), SocketIOWakeSourceOptions{
+		Logger: synctest.TestLogger(t),
+	})
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- source.Run(ctx, make(chan struct{}, 1))
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	close(holdConn)
+	require.NoError(t, <-done)
+}
+
+func containsLifecycleEvent(events []SocketIOLifecycleEvent, target SocketIOLifecycleEventType) bool {
+	for _, event := range events {
+		if event.Type == target {
+			return true
+		}
+	}
+
+	return false
 }

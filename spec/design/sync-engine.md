@@ -1,6 +1,6 @@
 # Sync Engine
 
-GOVERNS: internal/sync/engine*.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/engine_shortcuts.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_decisions.go, sync_helpers.go
+GOVERNS: internal/sync/engine*.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/engine_shortcuts.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_decisions.go, sync_helpers.go
 
 Implements: R-2.1 [verified], R-2.3.11 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-2.10.45 [verified], R-2.10.46 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified], R-2.14.5 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [planned], R-6.6.10 [verified], R-6.6.12 [verified], R-6.6.13 [verified], R-6.7.27 [verified], R-6.8.15 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.10 [verified], R-6.10.13 [verified]
 
@@ -27,6 +27,13 @@ arrive through remote delta observation that is wake-driven by OneDrive
 Socket.IO when `websocket = true` on eligible full-drive sessions, with
 `poll_interval` retained as the fallback polling cadence and periodic full
 reconciliation every 24 hours to detect missed delta deletions.
+
+`BuildEngineConfig(session, resolved, verifyDrive, logger)` is the single
+authority for translating a resolved drive plus authenticated session into
+`synctypes.EngineConfig`. CLI single-drive setup and multisync orchestration
+both call that one builder so watch-only dependencies such as
+`SocketIOFetcher`, local observation filters/rules, and drive verification
+cannot silently diverge between entrypoints.
 
 Scoped-root watch sessions do not use Socket.IO in v1. They continue on the
 existing polling path because the repository only has verified Microsoft
@@ -154,6 +161,13 @@ aggregated success/error counters, shared observation helpers, skipped-item
 failure maintenance, and coordinator-level result routing. `watchRuntime`
 embeds `engineFlow` and adds watch-only state; `oneShotRunner` embeds
 `engineFlow` without watch-specific fields.
+
+Watch-mode websocket diagnostics remain internal-only. `watchRuntime`
+translates `syncobserve.SocketIOLifecycleEvent` values into engine debug
+events with drive identity attached, and the CLI may opt into a hidden
+newline-delimited JSON debug-event sink (`ONEDRIVE_TEST_DEBUG_EVENTS_PATH`)
+for E2E/runtime proof. This sink is test infrastructure, not a user-facing
+status surface or durable state authority.
 
 Policy-heavy behavior lives behind dedicated collaborators owned by the flow:
 

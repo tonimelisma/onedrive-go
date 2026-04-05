@@ -28,7 +28,7 @@ func runSyncDaemon(
 	opts synctypes.WatchOpts,
 	logger *slog.Logger,
 	statusWriter io.Writer,
-) error {
+) (err error) {
 	// Include paused drives — Orchestrator handles pause/resume internally.
 	drives, err := config.ResolveDrives(holder.Config(), selectors, true, logger)
 	if err != nil {
@@ -65,12 +65,32 @@ func runSyncDaemon(
 		}
 	}, "onedrive-go/"+version, logger)
 
+	debugEventHook, closeDebugEvents, err := openSyncDebugEventHookFromEnv(logger)
+	if err != nil {
+		return fmt.Errorf("open sync debug event sink: %w", err)
+	}
+	if closeDebugEvents != nil {
+		defer func() {
+			if closeErr := closeDebugEvents(); closeErr != nil {
+				if err == nil {
+					err = closeErr
+					return
+				}
+
+				logger.Warn("debug event sink close failed",
+					slog.String("error", closeErr.Error()),
+				)
+			}
+		}()
+	}
+
 	orch := multisync.NewOrchestrator(&multisync.OrchestratorConfig{
-		Holder:     holder,
-		Drives:     drives,
-		Provider:   provider,
-		Logger:     logger,
-		SIGHUPChan: sighup,
+		Holder:         holder,
+		Drives:         drives,
+		Provider:       provider,
+		Logger:         logger,
+		SIGHUPChan:     sighup,
+		DebugEventHook: debugEventHook,
 	})
 
 	if err := orch.RunWatch(ctx, mode, opts); err != nil {

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -28,9 +27,14 @@ import (
 
 type stubSocketIOWakeSource struct {
 	started chan struct{}
+	runFn   func(context.Context, chan<- struct{}) error
 }
 
-func (s *stubSocketIOWakeSource) Run(ctx context.Context, _ chan<- struct{}) error {
+func (s *stubSocketIOWakeSource) Run(ctx context.Context, wakes chan<- struct{}) error {
+	if s.runFn != nil {
+		return s.runFn(ctx, wakes)
+	}
+
 	select {
 	case s.started <- struct{}{}:
 	default:
@@ -105,9 +109,34 @@ func TestRunWatch_WebsocketEnabledStartsWakeSource(t *testing.T) {
 
 	eng, _ := newTestEngine(t, mock)
 	eng.enableWebsocket = true
+	recorder := attachDebugEventRecorder(eng)
 	started := make(chan struct{}, 1)
-	eng.socketIOWakeSourceFactory = func(_ synctypes.SocketIOEndpointFetcher, _ driveid.ID, _ *slog.Logger) socketIOWakeSourceRunner {
-		return &stubSocketIOWakeSource{started: started}
+	eng.socketIOWakeSourceFactory = func(_ synctypes.SocketIOEndpointFetcher, _ driveid.ID, opts syncobserve.SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
+		return &stubSocketIOWakeSource{
+			started: started,
+			runFn: func(ctx context.Context, _ chan<- struct{}) error {
+				require.NotNil(t, opts.LifecycleHook)
+				opts.LifecycleHook(syncobserve.SocketIOLifecycleEvent{
+					Type:    syncobserve.SocketIOLifecycleEventStarted,
+					DriveID: driveID.String(),
+				})
+				opts.LifecycleHook(syncobserve.SocketIOLifecycleEvent{
+					Type:    syncobserve.SocketIOLifecycleEventConnected,
+					DriveID: driveID.String(),
+					SID:     "sid-1",
+				})
+				select {
+				case started <- struct{}{}:
+				default:
+				}
+				<-ctx.Done()
+				opts.LifecycleHook(syncobserve.SocketIOLifecycleEvent{
+					Type:    syncobserve.SocketIOLifecycleEventStopped,
+					DriveID: driveID.String(),
+				})
+				return nil
+			},
+		}
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -125,8 +154,20 @@ func TestRunWatch_WebsocketEnabledStartsWakeSource(t *testing.T) {
 		require.FailNow(t, "expected websocket wake source to start")
 	}
 
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventWebsocketWakeSourceStarted && event.DriveID == driveID.String()
+	}, "websocket wake source started")
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventWebsocketConnected &&
+			event.DriveID == driveID.String() &&
+			event.Note == "sid=sid-1"
+	}, "websocket connected")
+
 	cancel()
 	require.NoError(t, <-done)
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventWebsocketWakeSourceStopped && event.DriveID == driveID.String()
+	}, "websocket wake source stopped")
 }
 
 // Validates: R-2.8.5
@@ -145,7 +186,7 @@ func TestRunWatch_WebsocketDisabledKeepsPollingOnly(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	recorder := attachDebugEventRecorder(eng)
 	started := make(chan struct{}, 1)
-	eng.socketIOWakeSourceFactory = func(_ synctypes.SocketIOEndpointFetcher, _ driveid.ID, _ *slog.Logger) socketIOWakeSourceRunner {
+	eng.socketIOWakeSourceFactory = func(_ synctypes.SocketIOEndpointFetcher, _ driveid.ID, _ syncobserve.SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
 		return &stubSocketIOWakeSource{started: started}
 	}
 
@@ -170,6 +211,10 @@ func TestRunWatch_WebsocketDisabledKeepsPollingOnly(t *testing.T) {
 
 	cancel()
 	require.NoError(t, <-done)
+	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventWebsocketWakeSourceStarted ||
+			event.Type == engineDebugEventWebsocketConnected
+	}), "disabled websocket mode must not emit websocket lifecycle events")
 }
 
 // Validates: R-2.8.5
@@ -190,7 +235,7 @@ func TestRunWatch_ScopedRootKeepsPollingOnly(t *testing.T) {
 	eng.rootItemID = "scoped-root"
 	recorder := attachDebugEventRecorder(eng)
 	started := make(chan struct{}, 1)
-	eng.socketIOWakeSourceFactory = func(_ synctypes.SocketIOEndpointFetcher, _ driveid.ID, _ *slog.Logger) socketIOWakeSourceRunner {
+	eng.socketIOWakeSourceFactory = func(_ synctypes.SocketIOEndpointFetcher, _ driveid.ID, _ syncobserve.SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
 		return &stubSocketIOWakeSource{started: started}
 	}
 
@@ -215,6 +260,9 @@ func TestRunWatch_ScopedRootKeepsPollingOnly(t *testing.T) {
 
 	cancel()
 	require.NoError(t, <-done)
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventWebsocketFallback && event.Note == "scoped_root"
+	}, "websocket scoped-root fallback")
 }
 
 // Validates: R-2.8.3, R-6.8.9, R-6.10.10

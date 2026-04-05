@@ -11,6 +11,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 func TestNewSyncEngine_EmptySyncDir(t *testing.T) {
@@ -135,7 +136,7 @@ func TestBuildSyncEngineConfig_PropagatesLocalFilters(t *testing.T) {
 		},
 	}
 
-	ecfg, err := buildSyncEngineConfig(session, resolved, false, logger)
+	ecfg, err := syncengine.BuildEngineConfig(session, resolved, false, logger)
 	require.NoError(t, err)
 	require.NotNil(t, ecfg)
 	assert.True(t, ecfg.LocalFilter.SkipDotfiles)
@@ -162,14 +163,14 @@ func TestBuildSyncEngineConfig_SharePointEnablesRootFormsValidation(t *testing.T
 		DriveID:  driveid.New("abc123"),
 	}
 
-	personal, err := buildSyncEngineConfig(session, &config.ResolvedDrive{
+	personal, err := syncengine.BuildEngineConfig(session, &config.ResolvedDrive{
 		SyncDir:     syncDir,
 		CanonicalID: driveid.MustCanonicalID("personal:test@example.com"),
 	}, false, logger)
 	require.NoError(t, err)
 	assert.False(t, personal.LocalRules.RejectSharePointRootForms)
 
-	sharePoint, err := buildSyncEngineConfig(session, &config.ResolvedDrive{
+	sharePoint, err := syncengine.BuildEngineConfig(session, &config.ResolvedDrive{
 		SyncDir:     syncDir,
 		CanonicalID: driveid.MustCanonicalID("sharepoint:test@example.com:site:Documents"),
 	}, false, logger)
@@ -201,7 +202,7 @@ func TestBuildSyncEngineConfig_PropagatesSharedRootAndScopedHelpers(t *testing.T
 		RootItemID:  "shared-root-id",
 	}
 
-	ecfg, err := buildSyncEngineConfig(session, resolved, true, logger)
+	ecfg, err := syncengine.BuildEngineConfig(session, resolved, true, logger)
 	require.NoError(t, err)
 	assert.Equal(t, "test@example.com", ecfg.AccountEmail)
 	assert.Equal(t, "shared-root-id", ecfg.RootItemID)
@@ -236,7 +237,7 @@ func TestBuildSyncEngineConfig_ThreadsWebsocketConfig(t *testing.T) {
 		},
 	}
 
-	ecfg, err := buildSyncEngineConfig(session, resolved, false, logger)
+	ecfg, err := syncengine.BuildEngineConfig(session, resolved, false, logger)
 	require.NoError(t, err)
 	assert.True(t, ecfg.EnableWebsocket)
 	assert.NotNil(t, ecfg.SocketIOFetcher)

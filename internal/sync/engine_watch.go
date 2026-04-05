@@ -504,12 +504,20 @@ func (rt *watchRuntime) startRemoteObserver(
 
 func (rt *watchRuntime) warnWebsocketFallbackIfNeeded() {
 	if rt.engine.enableWebsocket && rt.engine.hasScopedRoot() {
+		rt.engine.emitDebugEvent(engineDebugEvent{
+			Type: engineDebugEventWebsocketFallback,
+			Note: "scoped_root",
+		})
 		rt.engine.logger.Warn("websocket watch is not supported for scoped-root sessions; falling back to polling",
 			slog.String("drive_id", rt.engine.driveID.String()),
 			slog.String("root_item_id", rt.engine.rootItemID),
 		)
 	}
 	if rt.engine.enableWebsocket && rt.engine.socketIOFetcher == nil {
+		rt.engine.emitDebugEvent(engineDebugEvent{
+			Type: engineDebugEventWebsocketFallback,
+			Note: "missing_fetcher",
+		})
 		rt.engine.logger.Warn("websocket watch requested but no Socket.IO fetcher is available; falling back to polling",
 			slog.String("drive_id", rt.engine.driveID.String()),
 		)
@@ -531,7 +539,14 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context, remoteObs *
 	stopCh := make(chan struct{})
 	rt.socketIOWakeStop = stopCh
 	rt.socketIOWakeDone = make(chan struct{})
-	wakeSource := rt.engine.socketIOWakeSourceFactory(rt.engine.socketIOFetcher, rt.engine.driveID, rt.engine.logger)
+	wakeSource := rt.engine.socketIOWakeSourceFactory(
+		rt.engine.socketIOFetcher,
+		rt.engine.driveID,
+		syncobserve.SocketIOWakeSourceOptions{
+			Logger:        rt.engine.logger,
+			LifecycleHook: rt.emitSocketIOLifecycleEvent,
+		},
+	)
 
 	go func() {
 		wakeCtx, wakeCancel := context.WithCancel(ctx)
@@ -553,6 +568,43 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context, remoteObs *
 			)
 		}
 	}()
+}
+
+func (rt *watchRuntime) emitSocketIOLifecycleEvent(event syncobserve.SocketIOLifecycleEvent) {
+	debugEvent := engineDebugEvent{
+		DriveID: event.DriveID,
+		Note:    event.Note,
+		Delay:   event.Delay,
+		Error:   event.Error,
+	}
+
+	switch event.Type {
+	case syncobserve.SocketIOLifecycleEventStarted:
+		debugEvent.Type = engineDebugEventWebsocketWakeSourceStarted
+	case syncobserve.SocketIOLifecycleEventEndpointFetchFail:
+		debugEvent.Type = engineDebugEventWebsocketEndpointFetchFail
+	case syncobserve.SocketIOLifecycleEventConnectFail:
+		debugEvent.Type = engineDebugEventWebsocketConnectFail
+	case syncobserve.SocketIOLifecycleEventConnected:
+		debugEvent.Type = engineDebugEventWebsocketConnected
+		if event.SID != "" {
+			debugEvent.Note = "sid=" + event.SID
+		}
+	case syncobserve.SocketIOLifecycleEventRefreshRequested:
+		debugEvent.Type = engineDebugEventWebsocketRefreshRequested
+	case syncobserve.SocketIOLifecycleEventConnectionDropped:
+		debugEvent.Type = engineDebugEventWebsocketConnectionDropped
+	case syncobserve.SocketIOLifecycleEventNotificationWake:
+		debugEvent.Type = engineDebugEventWebsocketNotificationWake
+	case syncobserve.SocketIOLifecycleEventWakeCoalesced:
+		debugEvent.Type = engineDebugEventWebsocketWakeCoalesced
+	case syncobserve.SocketIOLifecycleEventStopped:
+		debugEvent.Type = engineDebugEventWebsocketWakeSourceStopped
+	default:
+		return
+	}
+
+	rt.engine.emitDebugEvent(debugEvent)
 }
 
 func (rt *watchRuntime) startWatchEventBridge(

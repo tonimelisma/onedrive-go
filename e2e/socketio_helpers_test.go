@@ -3,34 +3,136 @@
 package e2e
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-type stderrStringer interface {
-	String() string
+func withSocketIODebugEvents(t *testing.T, env map[string]string) (map[string]string, string) {
+	t.Helper()
+
+	cloned := make(map[string]string, len(env)+1)
+	for key, value := range env {
+		cloned[key] = value
+	}
+
+	path := filepath.Join(t.TempDir(), "socketio-events.ndjson")
+	cloned["ONEDRIVE_TEST_DEBUG_EVENTS_PATH"] = path
+
+	return cloned, path
 }
 
-func waitForSocketIOConnected(t *testing.T, stderr stderrStringer, timeout time.Duration) {
+func readSocketIODebugEvents(t *testing.T, path string) []syncengine.DebugEvent {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		require.NoError(t, err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) == 1 && lines[0] == "" {
+		return nil
+	}
+
+	events := make([]syncengine.DebugEvent, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		var event syncengine.DebugEvent
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			continue
+		}
+
+		events = append(events, event)
+	}
+
+	return events
+}
+
+func waitForSocketIOConnected(t *testing.T, eventsPath string, timeout time.Duration) syncengine.DebugEvent {
 	t.Helper()
 
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		output := stderr.String()
-		switch {
-		case strings.Contains(output, "socket.io connected"):
-			return
-		case strings.Contains(output, "socket.io endpoint fetch failed"):
-			require.FailNow(t, "socket.io endpoint fetch failed", output)
-		case strings.Contains(output, "socket.io connect failed"):
-			require.FailNow(t, "socket.io connection failed", output)
+		events := readSocketIODebugEvents(t, eventsPath)
+		for _, event := range events {
+			switch string(event.Type) {
+			case "websocket_connected":
+				return event
+			case "websocket_endpoint_fetch_failed":
+				require.FailNowf(t, "socket.io endpoint fetch failed", "%+v", event)
+			case "websocket_connect_failed":
+				require.FailNowf(t, "socket.io connection failed", "%+v", event)
+			case "websocket_fallback":
+				require.FailNowf(t, "socket.io fell back to polling", "%+v", event)
+			}
 		}
 
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	require.FailNow(t, "socket.io did not connect within the startup window", stderr.String())
+	require.FailNowf(t, "socket.io did not connect within the startup window", "events: %+v", readSocketIODebugEvents(t, eventsPath))
+	return syncengine.DebugEvent{}
+}
+
+func waitForSocketIOEventAfter(
+	t *testing.T,
+	eventsPath string,
+	afterCount int,
+	timeout time.Duration,
+	target string,
+) syncengine.DebugEvent {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		events := readSocketIODebugEvents(t, eventsPath)
+		for idx := afterCount; idx < len(events); idx++ {
+			event := events[idx]
+			switch string(event.Type) {
+			case target:
+				return event
+			case "websocket_endpoint_fetch_failed":
+				require.FailNowf(t, "socket.io endpoint fetch failed", "%+v", event)
+			case "websocket_connect_failed":
+				require.FailNowf(t, "socket.io connection failed", "%+v", event)
+			}
+		}
+
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	require.FailNowf(t, "socket.io event did not arrive", "target=%s events=%+v", target, readSocketIODebugEvents(t, eventsPath))
+	return syncengine.DebugEvent{}
+}
+
+func assertNoSocketIOConnected(t *testing.T, eventsPath string) {
+	t.Helper()
+
+	events := readSocketIODebugEvents(t, eventsPath)
+	assert.False(t, containsSocketIOEvent(events, "websocket_connected"))
+}
+
+func containsSocketIOEvent(events []syncengine.DebugEvent, target string) bool {
+	for _, event := range events {
+		if string(event.Type) == target {
+			return true
+		}
+	}
+
+	return false
 }
