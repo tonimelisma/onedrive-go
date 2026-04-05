@@ -260,10 +260,14 @@ func isResolvedRemoteSyncStatus(status synctypes.SyncStatus) bool {
 }
 
 // deriveScopeKey maps a worker result to its typed scope key. Delegates to
-// synctypes.ScopeKeyForStatus — single source of truth for HTTP status → scope key
-// mapping. Returns the zero-value synctypes.ScopeKey for non-scope statuses.
+// synctypes.ScopeKeyForResult — single source of truth for HTTP status → scope
+// key mapping. Returns the zero-value synctypes.ScopeKey for non-scope statuses.
 func deriveScopeKey(r *synctypes.WorkerResult) synctypes.ScopeKey {
-	return synctypes.ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
+	targetDriveID := r.TargetDriveID
+	if targetDriveID.IsZero() {
+		targetDriveID = r.DriveID
+	}
+	return synctypes.ScopeKeyForResult(r.HTTPStatus, targetDriveID, r.ShortcutKey)
 }
 
 // issueTypeForHTTPStatus maps an HTTP status code and error to a sync

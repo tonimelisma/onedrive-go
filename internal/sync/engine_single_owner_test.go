@@ -576,7 +576,7 @@ func throttleAndServiceRepairPersistedScopesCases() []*repairPersistedScopesCase
 		{
 			name: "keeps server timed throttle and schedules immediate trial when overdue",
 			scopeBlock: synctypes.ScopeBlock{
-				Key:           synctypes.SKThrottleAccount(),
+				Key:           testThrottleScope(),
 				IssueType:     synctypes.IssueRateLimited,
 				TimingSource:  synctypes.ScopeTimingServerRetryAfter,
 				TrialInterval: 20 * time.Second,

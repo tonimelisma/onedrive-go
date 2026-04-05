@@ -102,6 +102,61 @@ func TestSyncStore_RepairIntegritySafeNormalizesDeterministicViolations(t *testi
 	assert.True(t, heldRowFound)
 }
 
+// Validates: R-2.10.47
+func TestSyncStore_RepairIntegritySafe_ReleasesLegacyThrottleAccountScope(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(testDriveID)
+	now := time.Now().UTC()
+
+	require.NoError(t, store.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
+		Key:           synctypes.SKThrottleAccount(),
+		IssueType:     synctypes.IssueRateLimited,
+		TimingSource:  synctypes.ScopeTimingBackoff,
+		BlockedAt:     now,
+		TrialInterval: 30 * time.Second,
+		NextTrialAt:   now.Add(30 * time.Second),
+	}))
+	recordIntegrityFailure(t, store, ctx, &synctypes.SyncFailureParams{
+		Path:       "shared/rate-limited.txt",
+		DriveID:    driveID,
+		Direction:  synctypes.DirectionUpload,
+		ActionType: synctypes.ActionUpload,
+		Role:       synctypes.FailureRoleHeld,
+		Category:   synctypes.CategoryTransient,
+		IssueType:  synctypes.IssueRateLimited,
+		ErrMsg:     "rate limited",
+		ScopeKey:   synctypes.SKThrottleAccount(),
+	})
+	recordIntegrityFailure(t, store, ctx, &synctypes.SyncFailureParams{
+		Path:       "scope-boundary",
+		DriveID:    driveID,
+		Direction:  synctypes.DirectionUpload,
+		ActionType: synctypes.ActionUpload,
+		Role:       synctypes.FailureRoleBoundary,
+		Category:   synctypes.CategoryActionable,
+		IssueType:  synctypes.IssueRateLimited,
+		ErrMsg:     "boundary",
+		ScopeKey:   synctypes.SKThrottleAccount(),
+	})
+
+	repairs, err := store.RepairIntegritySafe(ctx)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, repairs, 3)
+
+	blocks, err := store.ListScopeBlocks(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, blocks, "legacy throttle:account scope should be removed during safe repair")
+
+	rows, err := store.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, synctypes.FailureRoleItem, rows[0].Role)
+	assert.Positive(t, rows[0].NextRetryAt, "held legacy throttle failures should become retryable immediately")
+}
+
 // Validates: R-6.7.17
 func TestSyncStore_AuditIntegrityIncludesBaselineCacheMismatch(t *testing.T) {
 	t.Parallel()

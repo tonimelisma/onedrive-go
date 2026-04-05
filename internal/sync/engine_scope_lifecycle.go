@@ -95,8 +95,18 @@ func (controller *scopeController) repairPersistedScopes(
 	if err := controller.dropLegacyRemoteScopes(ctx, blocks); err != nil {
 		return err
 	}
-	if err := controller.repairPersistedAuthScope(ctx, blocks, proof, proofErr); err != nil {
+	releasedLegacyThrottle, err := controller.releaseLegacyThrottleAccountScopes(ctx, blocks)
+	if err != nil {
 		return err
+	}
+	if releasedLegacyThrottle {
+		blocks, listScopeErr = flow.engine.baseline.ListScopeBlocks(ctx)
+		if listScopeErr != nil {
+			return fmt.Errorf("sync: relisting scope blocks after throttle repair: %w", listScopeErr)
+		}
+	}
+	if repairErr := controller.repairPersistedAuthScope(ctx, blocks, proof, proofErr); repairErr != nil {
+		return repairErr
 	}
 
 	failures, err := controller.loadRepairedPersistedFailures(ctx)
@@ -128,6 +138,25 @@ func (controller *scopeController) dropLegacyRemoteScopes(
 	}
 
 	return nil
+}
+
+func (controller *scopeController) releaseLegacyThrottleAccountScopes(
+	ctx context.Context,
+	blocks []*synctypes.ScopeBlock,
+) (bool, error) {
+	released := false
+
+	for i := range blocks {
+		if blocks[i].Key != synctypes.SKThrottleAccount() {
+			continue
+		}
+		if err := controller.releaseStartupScope(ctx, blocks[i].Key, "released legacy account-wide throttle scope"); err != nil {
+			return false, err
+		}
+		released = true
+	}
+
+	return released, nil
 }
 
 func (controller *scopeController) repairPersistedAuthScope(
@@ -301,7 +330,7 @@ func scopeStartupPolicyFor(key synctypes.ScopeKey) scopeStartupPolicy {
 		return scopeStartupRequiresBoundary
 	case key == synctypes.SKQuotaOwn() || key.Kind == synctypes.ScopeQuotaShortcut:
 		return scopeStartupRequiresScopedFailures
-	case key == synctypes.SKThrottleAccount() || key == synctypes.SKService():
+	case key.IsThrottleTarget(), key == synctypes.SKThrottleAccount(), key == synctypes.SKService():
 		return scopeStartupServerTimedOnly
 	case key == synctypes.SKDiskLocal():
 		return scopeStartupRevalidateDisk
@@ -586,13 +615,36 @@ func scopeTimingSource(retryAfter time.Duration) synctypes.ScopeTimingSource {
 	return synctypes.ScopeTimingBackoff
 }
 
-// isObservationSuppressed returns true if a global scope block
-// (throttle:account or service) is active, meaning shortcut observation
-// polling should be skipped to avoid wasting API calls (R-2.10.30).
+// isObservationSuppressed returns true if a global scope block is active,
+// meaning all shortcut observation polling should be skipped to avoid wasting
+// API calls. Target-scoped 429 blocks are handled separately.
 func (controller *scopeController) isObservationSuppressed(watch *watchRuntime) bool {
 	return controller.isScopeBlocked(watch, synctypes.SKAuthAccount()) ||
 		controller.isScopeBlocked(watch, synctypes.SKThrottleAccount()) ||
 		controller.isScopeBlocked(watch, synctypes.SKService())
+}
+
+// suppressedShortcutTargets returns the exact shared shortcut targets whose
+// observation should be skipped while target-scoped 429 blocks are active.
+// Own-drive throttles do not suppress shortcut observation.
+func (controller *scopeController) suppressedShortcutTargets(watch *watchRuntime) map[string]struct{} {
+	keys := controller.scopeBlockKeys(watch)
+	if len(keys) == 0 {
+		return nil
+	}
+
+	var suppressed map[string]struct{}
+	for i := range keys {
+		if !keys[i].IsThrottleShared() {
+			continue
+		}
+		if suppressed == nil {
+			suppressed = make(map[string]struct{})
+		}
+		suppressed[keys[i].ThrottleShortcutKey()] = struct{}{}
+	}
+
+	return suppressed
 }
 
 // feedScopeDetection feeds a worker result into scope detection sliding
@@ -833,7 +885,7 @@ func (controller *scopeController) admitReady(
 	for _, ta := range ready {
 		if ta.IsTrial {
 			if ta.TrialScopeKey.BlocksAction(ta.Action.Path,
-				ta.Action.ShortcutKey(), ta.Action.Type,
+				ta.Action.ThrottleTargetKey(), ta.Action.ShortcutKey(), ta.Action.Type,
 				ta.Action.TargetsOwnDrive()) {
 				dispatch = append(dispatch, ta)
 			} else {

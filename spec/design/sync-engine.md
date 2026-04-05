@@ -198,10 +198,11 @@ and fatal.
 inspection, and CLI issue/status rendering can all group the same failure
 family without re-inspecting raw HTTP status or filesystem errors.
 
-Classification uses `ScopeKeyForStatus(httpStatus, shortcutKey)` as the single
-source of truth for HTTP status -> scope key mapping: 401 -> fatal, 403 -> skip
-with permission flow, 429 -> scope block `SKThrottleAccount`, 507 -> scope
-block `SKQuotaOwn` or `SKQuotaShortcut(key)`, 5xx -> requeue,
+Classification uses `ScopeKeyForResult(httpStatus, targetDriveID, shortcutKey)`
+as the single source of truth for HTTP status -> scope key mapping: 401 ->
+fatal, 403 -> skip with permission flow, 429 -> scope block
+`SKThrottleDrive(targetDriveID)` or `SKThrottleShared(shortcutKey)`, 507 ->
+scope block `SKQuotaOwn` or `SKQuotaShortcut(key)`, 5xx -> requeue,
 408/412/404/423 -> requeue, context cancellation -> shutdown,
 `os.ErrPermission` -> skip with local-permission flow, `ErrDiskFull` ->
 direct `disk:local` scope activation. HTTP 400 stays on the ordinary
@@ -370,7 +371,8 @@ Policy matrix:
 - `perm:remote` survives only while at least one held blocked-write row still exists; any legacy persisted `perm:remote` scope row or boundary row is normalized away at startup
 - `quota:own` and `quota:shortcut:*` survive only while at least one scoped failure row exists
 - scoped-failure-backed scopes survive restart when they still have scoped failures or when `preserve_until` is still in the future
-- `throttle:account` and `service` survive restart only when `timing_source='server_retry_after'`; expired deadlines trial immediately rather than auto-releasing
+- `throttle:target:*` and `service` survive restart only when `timing_source='server_retry_after'`; expired deadlines trial immediately rather than auto-releasing
+- legacy persisted `throttle:account` rows are released during startup repair because they do not encode the throttled remote boundary
 - `auth:account` is revalidated exactly once at startup via `DriveVerifier.Drive(ctx, driveID)`; success releases it, unauthorized keeps it and aborts startup, and other probe failures leave it untouched and abort startup
 - `disk:local` is revalidated from current local free-space truth and refreshed or released accordingly
 
@@ -396,8 +398,7 @@ Implements: R-2.10.43 [verified]
 
 Scope key `SKDiskLocal` is created by `classifyResult()` when a download fails
 with `ErrDiskFull` (deterministic signal — immediate, no sliding window).
-Unlike `SKThrottleAccount` and `SKService` which block ALL actions (via
-`ScopeKey.IsGlobal()`), `SKDiskLocal` blocks downloads only —
+Unlike target-scoped throttles and `SKService`, `SKDiskLocal` blocks downloads only —
 `ScopeKey.BlocksAction()` returns true only for `ActionDownload`. Uploads,
 deletes, and moves continue because they either free space or don't consume it.
 Admission priority still places `SKDiskLocal` between `SKService` and
@@ -491,13 +492,26 @@ Shortcut removal also returns explicit discard decisions for any
 releasing it back into dispatch, and watch mode rebuilds active scopes from the
 post-removal durable state immediately.
 
-### Planned: Observation Suppression
+### Observation Suppression
 
 Implements: R-2.10.30 [verified], R-2.10.31 [verified]
 
-During `SKThrottleAccount` or `SKService` scope block (detected via `ScopeKey.IsGlobal()`), suppress shortcut observation polling (wastes API calls). During `quota:shortcut:*` block, observation continues (read-only).
+During `SKService`, suppress shortcut observation polling globally because the
+Graph backend itself is degraded. During `SKThrottleShared(...)`, suppress
+observation only for that exact shared target because continuing to poll that
+same target just re-spends the known throttled budget. `SKThrottleDrive(...)`
+does not suppress unrelated shortcut observation, and `quota:shortcut:*`
+observation continues (read-only).
 
-Observation suppression (`scopeController.isObservationSuppressed()`) suppresses the entire `shortcutCoordinator.processShortcuts()` call, which includes both shortcut discovery and delta polling. Also suppresses `recheckPermissions()` API calls since those are equally wasteful during an outage. Suppressing discovery is acceptable — new shortcuts during an outage would fail immediately anyway. Discovery resumes when the scope clears. Local permission rechecks (`recheckLocalPermissions`) proceed regardless since they are filesystem-only.
+Observation suppression is intentionally split:
+
+- `scopeController.isObservationSuppressed()` handles only global cases such as
+  `service`, `auth:account`, and legacy startup-cleanup `throttle:account`
+- `scopeController.suppressedShortcutTargets()` provides the exact set of
+  shared targets whose observation should be skipped for target-scoped 429s
+
+That split prevents one drive-scoped or shared-target-scoped throttle from
+silencing unrelated shortcuts.
 
 **Trial dispatch correctness**: `runTrialDispatch()` uses due-scope snapshot iteration — each due scope is visited exactly once per tick, making infinite iteration structurally impossible. On successful dispatch, the trial interval is NOT mutated (awaiting worker result). When no usable candidate exists, the engine preserves the scope at the same interval instead of auto-releasing it. The timer re-arms after each trial decision.
 

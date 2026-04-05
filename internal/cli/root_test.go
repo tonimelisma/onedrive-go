@@ -21,6 +21,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/sharedref"
 )
 
 // --- buildLogger tests ---
@@ -140,7 +141,7 @@ func TestCliContextFrom_WithCLIContext(t *testing.T) {
 func TestCLIContextSession_WrapsProviderError(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	httpProvider := graphhttp.NewProvider(logger)
-	clients := httpProvider.InteractiveForAccount("user@example.com")
+	clients := httpProvider.InteractiveForDrive("user@example.com", driveid.New("0000000000000001"))
 	provider := driveops.NewSessionProvider(
 		nil,
 		driveops.StaticClientResolver(clients.Meta, clients.Transfer),
@@ -170,7 +171,7 @@ func TestCLIContextSession_WrapsProviderError(t *testing.T) {
 func TestCLIContextSession_Success(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	httpProvider := graphhttp.NewProvider(logger)
-	clients := httpProvider.InteractiveForAccount("user@example.com")
+	clients := httpProvider.InteractiveForDrive("user@example.com", driveid.New("0000000000000001"))
 	provider := driveops.NewSessionProvider(
 		nil,
 		driveops.StaticClientResolver(clients.Meta, clients.Transfer),
@@ -194,6 +195,93 @@ func TestCLIContextSession_Success(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, cc.Cfg.DriveID, session.DriveID)
+}
+
+func TestCLIContextInteractiveHTTPClients_ReusesOwnDriveTarget(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	cc := &CLIContext{
+		Logger:       logger,
+		HTTPProvider: graphhttp.NewProvider(logger),
+	}
+
+	rd := &config.ResolvedDrive{
+		CanonicalID: driveid.MustCanonicalID("personal:user@example.com"),
+		DriveID:     driveid.New("0000000000000001"),
+	}
+
+	first := cc.interactiveHTTPClients(rd)
+	second := cc.interactiveHTTPClients(rd)
+
+	assert.Same(t, first.Meta, second.Meta, "same configured drive should reuse the target-scoped metadata client")
+}
+
+func TestCLIContextInteractiveHTTPClients_SharedRootScopesByRootItem(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	cc := &CLIContext{
+		Logger:       logger,
+		HTTPProvider: graphhttp.NewProvider(logger),
+	}
+
+	sharedA := &config.ResolvedDrive{
+		CanonicalID: driveid.MustCanonicalID("personal:user@example.com"),
+		DriveID:     driveid.New("0000000000000001"),
+		RootItemID:  "root-a",
+	}
+	sharedB := &config.ResolvedDrive{
+		CanonicalID: driveid.MustCanonicalID("personal:user@example.com"),
+		DriveID:     driveid.New("0000000000000001"),
+		RootItemID:  "root-b",
+	}
+
+	clientsA := cc.interactiveHTTPClients(sharedA)
+	clientsB := cc.interactiveHTTPClients(sharedB)
+
+	assert.NotSame(t, clientsA.Meta, clientsB.Meta,
+		"different shared roots on the same remote drive must not share a metadata throttle gate")
+}
+
+func TestCLIContextSharedTargetHTTPClients_ReusesSameDirectSharedTarget(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	cc := &CLIContext{
+		Logger:       logger,
+		HTTPProvider: graphhttp.NewProvider(logger),
+	}
+
+	ref := sharedref.Ref{
+		AccountEmail:  "user@example.com",
+		RemoteDriveID: "remote-drive",
+		RemoteItemID:  "remote-item",
+	}
+
+	first := cc.sharedTargetHTTPClients(ref)
+	second := cc.sharedTargetHTTPClients(ref)
+
+	assert.Same(t, first.Meta, second.Meta, "same direct shared target should reuse the target-scoped metadata client")
+}
+
+func TestCLIContextSharedTargetHTTPClients_DifferentSharedItemsDoNotShare(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	cc := &CLIContext{
+		Logger:       logger,
+		HTTPProvider: graphhttp.NewProvider(logger),
+	}
+
+	refA := sharedref.Ref{
+		AccountEmail:  "user@example.com",
+		RemoteDriveID: "remote-drive",
+		RemoteItemID:  "item-a",
+	}
+	refB := sharedref.Ref{
+		AccountEmail:  "user@example.com",
+		RemoteDriveID: "remote-drive",
+		RemoteItemID:  "item-b",
+	}
+
+	clientsA := cc.sharedTargetHTTPClients(refA)
+	clientsB := cc.sharedTargetHTTPClients(refB)
+
+	assert.NotSame(t, clientsA.Meta, clientsB.Meta,
+		"different direct shared items on the same remote drive must not share a metadata throttle gate")
 }
 
 func TestNewGraphClient_ReturnsConstructionError(t *testing.T) {
