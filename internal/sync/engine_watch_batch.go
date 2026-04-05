@@ -236,7 +236,13 @@ func (rt *watchRuntime) findTrialActionIndex(plan *synctypes.ActionPlan, opts di
 		if action.Path != opts.trialPath {
 			continue
 		}
-		if !opts.trialScopeKey.BlocksAction(action.Path, action.ShortcutKey(), action.Type, action.TargetsOwnDrive()) {
+		if !opts.trialScopeKey.BlocksAction(
+			action.Path,
+			action.ThrottleTargetKey(),
+			action.ShortcutKey(),
+			action.Type,
+			action.TargetsOwnDrive(),
+		) {
 			continue
 		}
 		return i
@@ -244,7 +250,13 @@ func (rt *watchRuntime) findTrialActionIndex(plan *synctypes.ActionPlan, opts di
 
 	for i := range plan.Actions {
 		action := &plan.Actions[i]
-		if opts.trialScopeKey.BlocksAction(action.Path, action.ShortcutKey(), action.Type, action.TargetsOwnDrive()) {
+		if opts.trialScopeKey.BlocksAction(
+			action.Path,
+			action.ThrottleTargetKey(),
+			action.ShortcutKey(),
+			action.Type,
+			action.TargetsOwnDrive(),
+		) {
 			return i
 		}
 	}

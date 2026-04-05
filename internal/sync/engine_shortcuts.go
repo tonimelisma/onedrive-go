@@ -41,7 +41,11 @@ func filterOutShortcuts(events []synctypes.ChangeEvent) []synctypes.ChangeEvent 
 // Returns additional ChangeEvents for shortcut content that should be fed
 // into the planner alongside primary drive events.
 func (coordinator *shortcutCoordinator) processShortcuts(
-	ctx context.Context, remoteEvents []synctypes.ChangeEvent, bl *synctypes.Baseline, dryRun bool,
+	ctx context.Context,
+	remoteEvents []synctypes.ChangeEvent,
+	bl *synctypes.Baseline,
+	dryRun bool,
+	suppressedShortcutTargets map[string]struct{},
 ) ([]synctypes.ChangeEvent, error) {
 	flow := coordinator.flow
 	eng := flow.engine
@@ -109,8 +113,9 @@ func (coordinator *shortcutCoordinator) processShortcuts(
 		return nil, nil
 	}
 
-	// Step 5: Observe content for all active shortcuts (excluding collisions).
-	return coordinator.observeShortcutContentFromList(ctx, shortcuts, bl, collisions)
+	// Step 5: Observe content for all active shortcuts (excluding collisions and
+	// any shared targets currently rate limited).
+	return coordinator.observeShortcutContentFromList(ctx, shortcuts, bl, collisions, suppressedShortcutTargets)
 }
 
 // registerShortcuts upserts shortcuts from synctypes.ChangeShortcut events.
@@ -506,9 +511,30 @@ func (coordinator *shortcutCoordinator) observeShortcutsConcurrently(
 // (B-333). Delta tokens are deferred until all scopes complete, ensuring
 // atomicity.
 func (coordinator *shortcutCoordinator) observeShortcutContentFromList(
-	ctx context.Context, shortcuts []synctypes.Shortcut, bl *synctypes.Baseline, collisions map[string]bool,
+	ctx context.Context,
+	shortcuts []synctypes.Shortcut,
+	bl *synctypes.Baseline,
+	collisions map[string]bool,
+	suppressedShortcutTargets map[string]struct{},
 ) ([]synctypes.ChangeEvent, error) {
-	return coordinator.observeShortcutsConcurrently(ctx, shortcuts, collisions,
+	filtered := shortcuts
+	if len(suppressedShortcutTargets) > 0 {
+		filtered = make([]synctypes.Shortcut, 0, len(shortcuts))
+		for i := range shortcuts {
+			shortcutKey := shortcuts[i].RemoteDrive + ":" + shortcuts[i].RemoteItem
+			if _, suppressed := suppressedShortcutTargets[shortcutKey]; suppressed {
+				coordinator.flow.engine.logger.Debug(
+					"suppressing shortcut observation — target rate limited",
+					slog.String("shortcut_key", shortcutKey),
+					slog.String("local_path", shortcuts[i].LocalPath),
+				)
+				continue
+			}
+			filtered = append(filtered, shortcuts[i])
+		}
+	}
+
+	return coordinator.observeShortcutsConcurrently(ctx, filtered, collisions,
 		func(gCtx context.Context, sc *synctypes.Shortcut) (scopeResult, error) {
 			return coordinator.observeSingleShortcut(gCtx, sc, bl)
 		},

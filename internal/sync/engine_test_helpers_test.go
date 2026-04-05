@@ -175,6 +175,14 @@ func (m *engineMockClient) Upload(ctx context.Context, driveID driveid.ID, paren
 
 const engineTestDriveID = "0000000000000001"
 
+func testThrottleDriveID() driveid.ID {
+	return driveid.New(engineTestDriveID)
+}
+
+func testThrottleScope() synctypes.ScopeKey {
+	return synctypes.SKThrottleDrive(testThrottleDriveID())
+}
+
 type testEngine struct {
 	*Engine
 	runtime *watchRuntime
@@ -491,6 +499,11 @@ func recordRetryTrialSkippedItemForTest(
 func isObservationSuppressedForTest(t *testing.T, eng *testEngine, watch *watchRuntime) bool {
 	t.Helper()
 	return testScopeController(t, eng).isObservationSuppressed(watch)
+}
+
+func suppressedShortcutTargetsForTest(t *testing.T, eng *testEngine, watch *watchRuntime) map[string]struct{} {
+	t.Helper()
+	return testScopeController(t, eng).suppressedShortcutTargets(watch)
 }
 
 func releaseTestScope(t *testing.T, eng *testEngine, ctx context.Context, key synctypes.ScopeKey) error {

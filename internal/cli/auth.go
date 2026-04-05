@@ -880,7 +880,7 @@ func fetchAuthenticatedAccount(
 		return authenticatedAccountResult{authRequired: &authRequired}, nil
 	}
 
-	client, err := newGraphClientWithHTTP(baseURL, httpProvider.InteractiveForAccount(accountEmail).Meta, ts, logger)
+	client, err := newGraphClientWithHTTP(baseURL, httpProvider.BootstrapMeta(), ts, logger)
 	if err != nil {
 		return authenticatedAccountResult{}, err
 	}

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -12,6 +13,7 @@ import (
 const (
 	integrityCodeInvalidScopeBlock        = "invalid_scope_block"
 	integrityCodeInvalidAuthScopeTiming   = "invalid_auth_scope_timing"
+	integrityCodeLegacyThrottleScope      = "legacy_throttle_scope"
 	integrityCodeLegacyRemoteScope        = "legacy_remote_scope"
 	integrityCodeInvalidFailureRow        = "invalid_failure_row"
 	integrityCodeInvalidFailureTiming     = "invalid_failure_timing"
@@ -137,6 +139,7 @@ func repairIntegritySafeTx(ctx context.Context, tx *sql.Tx) (int, error) {
 	repairSteps := []struct {
 		run func(context.Context, *sql.Tx) (int, error)
 	}{
+		{run: repairLegacyThrottleAccountScope},
 		{run: repairAuthScopeTiming},
 		{run: repairNonRetryableFailureTiming},
 	}
@@ -211,6 +214,48 @@ func repairAuthScopeTiming(ctx context.Context, tx *sql.Tx) (int, error) {
 	}
 
 	return rowsAffected(authResult), nil
+}
+
+func repairLegacyThrottleAccountScope(ctx context.Context, tx *sql.Tx) (int, error) {
+	nowNano := time.Now().UnixNano()
+	repairsApplied := 0
+
+	scopeResult, err := tx.ExecContext(ctx,
+		`DELETE FROM scope_blocks WHERE scope_key = ?`,
+		synctypes.SKThrottleAccount().String(),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("sync: delete legacy throttle scope: %w", err)
+	}
+	repairsApplied += rowsAffected(scopeResult)
+
+	boundaryResult, err := tx.ExecContext(ctx,
+		`DELETE FROM sync_failures
+		WHERE scope_key = ? AND failure_role = ?`,
+		synctypes.SKThrottleAccount().String(),
+		synctypes.FailureRoleBoundary,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("sync: delete legacy throttle boundary rows: %w", err)
+	}
+	repairsApplied += rowsAffected(boundaryResult)
+
+	heldResult, err := tx.ExecContext(ctx,
+		`UPDATE sync_failures
+		SET failure_role = ?, next_retry_at = ?
+		WHERE scope_key = ? AND failure_role = ? AND next_retry_at IS NULL AND category = ?`,
+		synctypes.FailureRoleItem,
+		nowNano,
+		synctypes.SKThrottleAccount().String(),
+		synctypes.FailureRoleHeld,
+		synctypes.CategoryTransient,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("sync: release legacy throttle held rows: %w", err)
+	}
+	repairsApplied += rowsAffected(heldResult)
+
+	return repairsApplied, nil
 }
 
 func repairNonRetryableFailureTiming(ctx context.Context, tx *sql.Tx) (int, error) {
@@ -300,6 +345,12 @@ func auditScopeBlocks(
 			report.add(
 				integrityCodeLegacyRemoteScope,
 				fmt.Sprintf("legacy persisted perm:remote scope %s must be derived from held rows only", block.Key.String()),
+			)
+		}
+		if block.Key == synctypes.SKThrottleAccount() {
+			report.add(
+				integrityCodeLegacyThrottleScope,
+				"legacy persisted throttle:account scope must be released and rewritten as target-scoped throttles on new failures",
 			)
 		}
 

@@ -105,7 +105,7 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.8.1: The system shall respect 429 (Too Many Requests) with Retry-After headers. [verified]
 - R-6.8.2: The system shall use exponential backoff with jitter for transient failures. [verified]
 - R-6.8.3: All transfers shall be resumable after network interruption. [verified]
-- R-6.8.4: The system shall treat HTTP 429 as account-scoped: all drives under the same account share the throttle. [verified]
+- R-6.8.4: The system shall treat HTTP 429 as target-scoped by default: it shall block only the narrowest remote boundary provable from the failed request. Owned-drive traffic blocks that drive, and shared-folder or direct shared-item traffic block that exact shared root/item boundary. Broader account-wide or tenant-wide throttling shall not be inferred without explicit evidence. [verified]
 - R-6.8.5: ~~The system shall parse `RateLimit-Remaining` headers and proactively slow when less than 20% remains.~~ [cancelled — headers only cover per-app 1-minute resource units; not reliable for proactive throttling. Reactive 429 scope handling is sufficient.]
 - R-6.8.6: The system shall honor `Retry-After` from both 429 and 503 responses, populating `GraphError.RetryAfter`. [implemented]
 - R-6.8.7: During sync, workers shall never block on retry backoff. Failed actions are completed and recorded in `sync_failures` with `next_retry_at`. Workers block only for HTTP round-trip time. [verified]

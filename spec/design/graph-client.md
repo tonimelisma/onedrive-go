@@ -19,10 +19,18 @@ Callers receive clean, consistent data via `graph.Item` and never deal with API 
 `graphhttp.Provider` constructs the concrete HTTP profiles used for Graph work:
 
 - `BootstrapMeta()`: retrying metadata client for login/bootstrap/account discovery before account identity is known
-- `InteractiveForAccount(account).Meta`: retrying metadata client for ordinary CLI Graph requests, with shared 429 coordination scoped to that account
-- `InteractiveForAccount(account).Transfer`: retrying transfer client for upload/download/copy-monitor flows
+- `InteractiveForDrive(account, driveID).Meta`: retrying metadata client for ordinary CLI requests against one configured drive, with shared 429 coordination scoped to that exact `(account, driveID)` target
+- `InteractiveForDrive(account, driveID).Transfer`: retrying transfer client for upload/download/copy-monitor flows against that drive
+- `InteractiveForSharedTarget(account, remoteDriveID, remoteItemID).Meta`: retrying metadata client for one shared-folder or direct shared-item target, with shared 429 coordination scoped to that exact `(account, remoteDriveID, remoteItemID)` boundary
+- `InteractiveForSharedTarget(account, remoteDriveID, remoteItemID).Transfer`: retrying transfer client for that shared target
 - `Sync().Meta`: non-retrying metadata client for sync classification
 - `Sync().Transfer`: non-retrying transfer client for sync uploads/downloads
+
+Bootstrap remains intentionally unscoped. Before the CLI has both caller
+identity and remote target identity, it cannot safely infer a narrower shared
+throttle domain, so login/account discovery/share-URL resolution use
+`BootstrapMeta()` and only switch to target-scoped interactive profiles once
+the target is known.
 
 The provider owns the runtime rule that all Graph-facing clients use `Timeout = 0`. Stall detection lives in the transport:
 
@@ -175,7 +183,7 @@ Generic retry has been extracted from the graph client into `retry.RetryTranspor
 `NewClient` accepts an `*http.Client` and returns `(*Client, error)` after validating the base URL and token source. `MustNewClient` is reserved for static/test setup where panic-on-bad-construction is intentional. `graphhttp.Provider` is the normal production constructor for those clients:
 
 - interactive bootstrap/CLI metadata clients compose `RetryTransport{Policy: retry.TransportPolicy()}`
-- interactive account-scoped metadata clients inject a shared `retry.ThrottleGate` so later requests in the same account respect server `Retry-After`
+- interactive target-scoped metadata clients inject a shared `retry.ThrottleGate` so later requests against the same drive or shared target respect server `Retry-After`
 - sync clients pass raw `*http.Client`s so failures return immediately for engine-level classification
 
 This keeps caller profile selection out of `graph` while preserving a single generic retry implementation.
@@ -228,7 +236,7 @@ The graph package intentionally keeps runtime ownership narrow:
 - Pre-authenticated URLs (`@microsoft.graph.downloadUrl`, upload session URLs) bypass the Graph API — use `httpClient.Do(req)` directly, no base URL prefix, no auth headers. Never log these URLs.
 - The authenticated-success hook is only a proof signal. It must remain optional, per-client, and side-effect free from the graph package's perspective. Graph owns when the hook fires; callers own any resulting state repair.
 - `graphhttp.Provider` is the single owner of Graph-facing HTTP client construction. Metadata and transfer clients use transport-level deadlines with `Timeout = 0`; no Graph-facing client uses `http.Client.Timeout`.
-- Interactive metadata clients may share 429 `Retry-After` coordination through an injected `retry.ThrottleGate`. The coordination scope is currently account email because that is the identity available at CLI composition time. Per-tenant coordination remains planned.
+- Interactive metadata clients may share 429 `Retry-After` coordination through an injected `retry.ThrottleGate`. The coordination scope is the narrowest CLI-known remote boundary: configured drives use `(account email, driveID)`, configured shared roots use `(account email, driveID, rootItemID)`, and direct shared-item commands use `(account email, remoteDriveID, remoteItemID)`. Broader account-wide or tenant-wide coordination is intentionally not inferred from ordinary file traffic.
 - `driveops.SessionProvider` receives a resolver that returns injected metadata/transfer clients per resolved drive. `driveops` stays agnostic about whether those clients came from interactive or sync profiles.
 - Upload URLs are sensitive credentials. The `UploadURL` type implements `slog.LogValuer` with redaction, matching the `DownloadURL` pattern.
 - Search API calls URL-escape query parameters to prevent special characters from breaking URL construction.
@@ -236,7 +244,7 @@ The graph package intentionally keeps runtime ownership narrow:
 - Token file reads and writes use `internal/fsroot` after config-driven token resolution, so open/read/temp-file creation/chmod/fsync/rename all stay inside one managed-state root capability.
 - `client_preauth.go` is the sole raw `http.Client.Do` production boundary. Graph base URLs and pre-auth URLs are validated before a request reaches that call; the remaining inline `gosec` suppression there is intentional because the linter cannot prove the validation flow.
 - Graph/API quirk handling requires either captured payload evidence in CI/tests/logs or a reproducible documented observation with enough detail to classify safely. One-off incidents without recoverable payload evidence stay documented as reference notes only and do not become permanent runtime normalization rules.
-- Per-tenant rate limit coordination: multiple drives under the same tenant share Graph API rate limits. A shared rate limiter per-tenant prevents aggregate throttling. [planned]
+- Broader throttle coordination beyond the proved remote target is deferred until ordinary file traffic provides reliable bucket identity or equally strong evidence for widening. Today the client intentionally blocks only the narrowest known drive/shared boundary. [planned]
 - Upload and async-copy pre-auth URL validation: verify HTTPS scheme and trusted Microsoft hosts on upload session and copy monitor URLs before use. Both copy monitor and upload-session validation explicitly allow Personal-account URLs on `microsoftpersonalcontent.com` after live `e2e_full` coverage captured upload-session URLs on that host family. [verified]
 - Audit all `slog.*` calls for potential secret leakage (tokens, pre-auth URLs). [verified]
 - Audit all error message strings for embedded secrets — `GraphError.Message` and `RawBody` are redacted before exposure. [verified]

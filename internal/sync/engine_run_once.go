@@ -400,14 +400,21 @@ func (flow *engineFlow) observeChanges(
 	}
 
 	// Process shortcuts: register new ones, remove deleted ones, observe content.
-	// During throttle:account or service scope blocks, suppress shortcut
-	// observation to avoid wasting API calls (R-2.10.30).
+	// Global outages suppress all shortcut observation. Target-scoped 429 blocks
+	// suppress only the affected shared targets.
 	var shortcutEvents []synctypes.ChangeEvent
 
 	if flow.scopeController().isObservationSuppressed(watch) {
 		eng.logger.Debug("suppressing shortcut observation — global scope block active")
 	} else {
-		shortcutEvents, err = flow.shortcutCoordinator().processShortcuts(ctx, remoteEvents, bl, dryRun)
+		suppressedShortcutTargets := flow.scopeController().suppressedShortcutTargets(watch)
+		shortcutEvents, err = flow.shortcutCoordinator().processShortcuts(
+			ctx,
+			remoteEvents,
+			bl,
+			dryRun,
+			suppressedShortcutTargets,
+		)
 		if err != nil {
 			eng.logger.Warn("shortcut processing failed, continuing without shortcut content",
 				slog.String("error", err.Error()),

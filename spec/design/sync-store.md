@@ -126,7 +126,9 @@ rows.
 
 `timing_source` distinguishes locally computed backoff from explicit server
 deadlines. Startup repair uses this to decide whether a persisted
-`throttle:account` or `service` scope should survive restart.
+`throttle:target:*` or `service` scope should survive restart. Legacy
+`throttle:account` rows are treated as stale data and released during repair
+rather than preserved or migrated.
 
 `preserve_until` is a bounded restart-safe override used only for
 scoped-failure-backed scopes. It allows the engine to keep a preserved scope
@@ -152,7 +154,7 @@ scope. The store is responsible for persisting those transitions atomically.
 That split keeps the data model honest:
 
 - one derived `perm:remote:Shared/Docs` scope can block many held upload rows without any persisted `scope_blocks` row
-- one `throttle:account` scope can block work across all drives
+- one `throttle:target:drive:*` scope can block only that drive, while one `throttle:target:shared:*` scope can block only that shared boundary
 - one `quota:shortcut:*` scope can outlive many individual path failures
 - one `auth:account` scope can represent an account-level authorization stop without fabricating a path-level failure row
 

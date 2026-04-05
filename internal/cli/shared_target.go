@@ -57,12 +57,12 @@ func resolveSharedTargetBootstrap(
 		return nil, false, err
 	}
 
-	clients, err := cc.sharedAccountClients(ctx, accountEmail)
+	metaClient, err := cc.sharedBootstrapMetaClient(ctx, accountEmail)
 	if err != nil {
 		return nil, false, err
 	}
 
-	item, err := clients.Meta.ResolveShareURL(ctx, input)
+	item, err := metaClient.ResolveShareURL(ctx, input)
 	if err != nil {
 		return nil, false, fmt.Errorf("resolving share URL: %w", err)
 	}
@@ -137,9 +137,44 @@ func resolveRawShareAccountEmail(explicit string, logger *slog.Logger) (string, 
 	}
 }
 
-func (cc *CLIContext) sharedAccountClients(ctx context.Context, accountEmail string) (*driveops.AccountClients, error) {
+func (cc *CLIContext) sharedBootstrapMetaClient(
+	ctx context.Context,
+	accountEmail string,
+) (*graph.Client, error) {
 	accountCID := findTokenFallback(accountEmail, cc.Logger)
-	httpClients := cc.httpProvider().InteractiveForAccount(accountEmail)
+	tokenPath := config.DriveTokenPath(accountCID)
+	if tokenPath == "" {
+		return nil, fmt.Errorf("cannot determine token path for account %q", accountEmail)
+	}
+
+	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, cc.Logger)
+	if err != nil {
+		return nil, fmt.Errorf("load token source: %w", err)
+	}
+
+	client, err := newGraphClientWithHTTP(cc.GraphBaseURL, cc.httpProvider().BootstrapMeta(), ts, cc.Logger)
+	if err != nil {
+		return nil, fmt.Errorf("create bootstrap graph client: %w", err)
+	}
+
+	recorder := newAuthProofRecorder(cc.Logger)
+	attachAccountAuthProof(client, recorder, accountEmail, "shared-bootstrap")
+
+	return client, nil
+}
+
+func (cc *CLIContext) sharedTargetHTTPClients(ref sharedref.Ref) driveops.HTTPClients {
+	clients := cc.httpProvider().InteractiveForSharedTarget(ref.AccountEmail, ref.RemoteDriveID, ref.RemoteItemID)
+
+	return driveops.HTTPClients{
+		Meta:     clients.Meta,
+		Transfer: clients.Transfer,
+	}
+}
+
+func (cc *CLIContext) sharedTargetClients(ctx context.Context, ref sharedref.Ref) (*driveops.AccountClients, error) {
+	accountCID := findTokenFallback(ref.AccountEmail, cc.Logger)
+	httpClients := cc.sharedTargetHTTPClients(ref)
 	provider := driveops.NewSessionProvider(
 		nil,
 		driveops.StaticClientResolver(httpClients.Meta, httpClients.Transfer),
@@ -156,8 +191,8 @@ func (cc *CLIContext) sharedAccountClients(ctx context.Context, accountEmail str
 	}
 
 	recorder := newAuthProofRecorder(cc.Logger)
-	attachAccountAuthProof(clients.Meta, recorder, accountEmail, "shared-meta")
-	attachAccountAuthProof(clients.Transfer, recorder, accountEmail, "shared-transfer")
+	attachAccountAuthProof(clients.Meta, recorder, ref.AccountEmail, "shared-meta")
+	attachAccountAuthProof(clients.Transfer, recorder, ref.AccountEmail, "shared-transfer")
 
 	return clients, nil
 }
@@ -167,7 +202,7 @@ func (cc *CLIContext) resolveSharedItem(ctx context.Context) (*graph.Item, *driv
 		return nil, nil, fmt.Errorf("BUG: shared target not resolved")
 	}
 
-	clients, err := cc.sharedAccountClients(ctx, cc.SharedTarget.Ref.AccountEmail)
+	clients, err := cc.sharedTargetClients(ctx, cc.SharedTarget.Ref)
 	if err != nil {
 		return nil, nil, err
 	}

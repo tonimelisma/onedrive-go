@@ -57,9 +57,11 @@ return the result immediately, and let the engine classify it.
 
 `ThrottleGate` is intentionally tiny. It owns only a shared deadline and
 wait operation. Callers that understand the throttle domain create it and own
-its lifetime. Today `graphhttp.Provider` injects one gate per account-scoped
-interactive metadata profile. The retry package does not infer account,
-tenant, or caller identity on its own.
+its lifetime. Today `graphhttp.Provider` injects one gate per interactive
+metadata target profile: own-drive traffic keys by `(account email, driveID)`,
+and shared-target traffic keys by `(account email, remoteDriveID, remoteItemID)`.
+The retry package does not infer account, tenant, drive, or caller identity on
+its own.
 
 ## Sync Retry Model
 
@@ -108,7 +110,7 @@ actions:
 
 Trial timing is scope-aware:
 
-- `throttle:account` and `service` honor server `Retry-After` exactly when present
+- `throttle:target:*` and `service` honor server `Retry-After` exactly when present
 - quota and service scopes without server timing use 5s initial, 2x backoff, 5m max
 - `disk:local` uses 5m initial, 2x backoff, 1h max
 
@@ -116,17 +118,18 @@ The persisted `timing_source` on `scope_blocks` records whether a scope was
 timed by local backoff or explicit server `Retry-After`. The persisted
 `preserve_until` timestamp records bounded restart-safe preserve state for
 scoped-failure-backed scopes whose held rows may temporarily disappear or
-change shape during preserve handling. It does not make locally timed global
-`throttle:account` or `service` scopes survive restart, and it does not apply
+change shape during preserve handling. It does not make locally timed
+`throttle:target:*` or `service` scopes survive restart, and it does not apply
 to non-trial `auth:account`.
 
 ### Restart semantics
 
 Startup repair applies persisted-scope policy before any admission begins:
 
-- `throttle:account` and `service` survive restart only when `timing_source='server_retry_after'`
+- `throttle:target:*` and `service` survive restart only when `timing_source='server_retry_after'`
 - expired server-timed scopes are trialed immediately, not auto-released
 - non-server-timed throttle/service scopes are cleared on startup
+- legacy persisted `throttle:account` scopes are released on startup instead of being migrated, because they do not encode the throttled remote boundary
 - scoped-failure-backed scopes may survive restart while `preserve_until` is still in the future even if no same-scope held rows remain
 - `auth:account` is revalidated from one startup proof call instead of trial timing
 - `disk:local` is revalidated against current free space instead of trusting stale persisted timing

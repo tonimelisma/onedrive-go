@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 func TestScopeKey_StringParseRoundTrip(t *testing.T) {
@@ -14,6 +16,8 @@ func TestScopeKey_StringParseRoundTrip(t *testing.T) {
 	keys := []ScopeKey{
 		SKAuthAccount(),
 		SKThrottleAccount(),
+		SKThrottleDrive(driveid.New("0000000000000001")),
+		SKThrottleShared("drive-2", "item-2"),
 		SKService(),
 		SKQuotaOwn(),
 		SKQuotaShortcut("drive:item"),
@@ -41,6 +45,7 @@ func TestScopeKey_IsGlobal(t *testing.T) {
 
 	assert.True(t, SKAuthAccount().IsGlobal())
 	assert.True(t, SKThrottleAccount().IsGlobal())
+	assert.False(t, SKThrottleDrive(driveid.New("0000000000000001")).IsGlobal())
 	assert.True(t, SKService().IsGlobal())
 	assert.False(t, SKQuotaOwn().IsGlobal())
 }
@@ -82,6 +87,7 @@ func TestScopeKey_IssueType(t *testing.T) {
 
 	assert.Equal(t, IssueUnauthorized, SKAuthAccount().IssueType())
 	assert.Equal(t, IssueRateLimited, SKThrottleAccount().IssueType())
+	assert.Equal(t, IssueRateLimited, SKThrottleDrive(driveid.New("0000000000000001")).IssueType())
 	assert.Equal(t, IssueServiceOutage, SKService().IssueType())
 	assert.Equal(t, IssueQuotaExceeded, SKQuotaOwn().IssueType())
 	assert.Equal(t, IssueQuotaExceeded, SKQuotaShortcut("drive:item").IssueType())
@@ -102,6 +108,9 @@ func TestScopeKey_Humanize(t *testing.T) {
 
 	assert.Equal(t, "your OneDrive account authorization", SKAuthAccount().Humanize(shortcuts))
 	assert.Equal(t, "your OneDrive account (rate limited)", SKThrottleAccount().Humanize(shortcuts))
+	assert.Equal(t, "this drive (rate limited)", SKThrottleDrive(driveid.New("0000000000000001")).Humanize(shortcuts))
+	assert.Equal(t, "Team Docs (rate limited)", SKThrottleShared("drive", "item").Humanize(shortcuts))
+	assert.Equal(t, "missing:item", SKThrottleShared("missing", "item").Humanize(shortcuts))
 	assert.Equal(t, "OneDrive service", SKService().Humanize(shortcuts))
 	assert.Equal(t, "your OneDrive storage", SKQuotaOwn().Humanize(shortcuts))
 	assert.Equal(t, "Team Docs", SKQuotaShortcut("drive:item").Humanize(shortcuts))
@@ -114,36 +123,41 @@ func TestScopeKey_Humanize(t *testing.T) {
 func TestScopeKey_BlocksAction(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, SKAuthAccount().BlocksAction("/docs/file.txt", "", ActionDownload, false))
-	assert.True(t, SKAuthAccount().BlocksAction("/docs/file.txt", "", ActionUpload, true))
-	assert.True(t, SKThrottleAccount().BlocksAction("/docs/file.txt", "", ActionDownload, false))
-	assert.True(t, SKService().BlocksAction("/docs/file.txt", "", ActionUpload, true))
-	assert.True(t, SKDiskLocal().BlocksAction("/docs/file.txt", "", ActionDownload, false))
-	assert.False(t, SKDiskLocal().BlocksAction("/docs/file.txt", "", ActionUpload, false))
-	assert.True(t, SKQuotaOwn().BlocksAction("/docs/file.txt", "", ActionUpload, true))
-	assert.False(t, SKQuotaOwn().BlocksAction("/docs/file.txt", "", ActionUpload, false))
-	assert.True(t, SKQuotaShortcut("drive:item").BlocksAction("/docs/file.txt", "drive:item", ActionUpload, false))
-	assert.False(t, SKQuotaShortcut("drive:item").BlocksAction("/docs/file.txt", "other:item", ActionUpload, false))
-	assert.True(t, SKPermDir("/docs").BlocksAction("/docs/file.txt", "", ActionUpload, false))
-	assert.True(t, SKPermDir("/docs").BlocksAction("/docs", "", ActionUpload, false))
-	assert.False(t, SKPermDir("/docs").BlocksAction("/other/file.txt", "", ActionUpload, false))
-	assert.True(t, SKPermRemote("/readonly").BlocksAction("/readonly/file.txt", "", ActionUpload, false))
-	assert.True(t, SKPermRemote("/readonly").BlocksAction("/readonly/file.txt", "", ActionRemoteDelete, false))
-	assert.True(t, SKPermRemote("/readonly").BlocksAction("/readonly", "", ActionFolderCreate, false))
-	assert.True(t, SKPermRemote("").BlocksAction("/anywhere/file.txt", "", ActionUpload, false))
-	assert.False(t, SKPermRemote("").BlocksAction("/anywhere/file.txt", "", ActionDownload, false))
-	assert.False(t, SKPermRemote("/readonly").BlocksAction("/readonly/file.txt", "", ActionDownload, false))
-	assert.False(t, SKPermRemote("/readonly").BlocksAction("/readonly/file.txt", "", ActionLocalDelete, false))
-	assert.False(t, SKPermRemote("/readonly").BlocksAction("/other/file.txt", "", ActionUpload, false))
+	assert.True(t, SKAuthAccount().BlocksAction("/docs/file.txt", "", "", ActionDownload, false))
+	assert.True(t, SKAuthAccount().BlocksAction("/docs/file.txt", "", "", ActionUpload, true))
+	assert.True(t, SKThrottleAccount().BlocksAction("/docs/file.txt", "", "", ActionDownload, false))
+	assert.True(t, SKThrottleDrive(driveid.New("0000000000000001")).BlocksAction("/docs/file.txt", "drive:0000000000000001", "", ActionDownload, true))
+	assert.False(t, SKThrottleDrive(driveid.New("0000000000000001")).BlocksAction("/docs/file.txt", "drive:0000000000000002", "", ActionDownload, true))
+	assert.True(t, SKThrottleShared("drive", "item").BlocksAction("/docs/file.txt", "shared:drive:item", "drive:item", ActionDownload, false))
+	assert.False(t, SKThrottleShared("drive", "item").BlocksAction("/docs/file.txt", "shared:other:item", "other:item", ActionDownload, false))
+	assert.True(t, SKService().BlocksAction("/docs/file.txt", "", "", ActionUpload, true))
+	assert.True(t, SKDiskLocal().BlocksAction("/docs/file.txt", "", "", ActionDownload, false))
+	assert.False(t, SKDiskLocal().BlocksAction("/docs/file.txt", "", "", ActionUpload, false))
+	assert.True(t, SKQuotaOwn().BlocksAction("/docs/file.txt", "", "", ActionUpload, true))
+	assert.False(t, SKQuotaOwn().BlocksAction("/docs/file.txt", "", "", ActionUpload, false))
+	assert.True(t, SKQuotaShortcut("drive:item").BlocksAction("/docs/file.txt", "", "drive:item", ActionUpload, false))
+	assert.False(t, SKQuotaShortcut("drive:item").BlocksAction("/docs/file.txt", "", "other:item", ActionUpload, false))
+	assert.True(t, SKPermDir("/docs").BlocksAction("/docs/file.txt", "", "", ActionUpload, false))
+	assert.True(t, SKPermDir("/docs").BlocksAction("/docs", "", "", ActionUpload, false))
+	assert.False(t, SKPermDir("/docs").BlocksAction("/other/file.txt", "", "", ActionUpload, false))
+	assert.True(t, SKPermRemote("/readonly").BlocksAction("/readonly/file.txt", "", "", ActionUpload, false))
+	assert.True(t, SKPermRemote("/readonly").BlocksAction("/readonly/file.txt", "", "", ActionRemoteDelete, false))
+	assert.True(t, SKPermRemote("/readonly").BlocksAction("/readonly", "", "", ActionFolderCreate, false))
+	assert.True(t, SKPermRemote("").BlocksAction("/anywhere/file.txt", "", "", ActionUpload, false))
+	assert.False(t, SKPermRemote("").BlocksAction("/anywhere/file.txt", "", "", ActionDownload, false))
+	assert.False(t, SKPermRemote("/readonly").BlocksAction("/readonly/file.txt", "", "", ActionDownload, false))
+	assert.False(t, SKPermRemote("/readonly").BlocksAction("/readonly/file.txt", "", "", ActionLocalDelete, false))
+	assert.False(t, SKPermRemote("/readonly").BlocksAction("/other/file.txt", "", "", ActionUpload, false))
 }
 
-func TestScopeKeyForStatus(t *testing.T) {
+func TestScopeKeyForResult(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, SKThrottleAccount(), ScopeKeyForStatus(http.StatusTooManyRequests, ""))
-	assert.Equal(t, SKService(), ScopeKeyForStatus(http.StatusServiceUnavailable, ""))
-	assert.Equal(t, SKQuotaOwn(), ScopeKeyForStatus(http.StatusInsufficientStorage, ""))
-	assert.Equal(t, SKQuotaShortcut("drive:item"), ScopeKeyForStatus(http.StatusInsufficientStorage, "drive:item"))
-	assert.Equal(t, SKService(), ScopeKeyForStatus(http.StatusBadGateway, ""))
-	assert.True(t, ScopeKeyForStatus(http.StatusOK, "").IsZero())
+	assert.Equal(t, SKThrottleDrive(driveid.New("0000000000000001")), ScopeKeyForResult(http.StatusTooManyRequests, driveid.New("0000000000000001"), ""))
+	assert.Equal(t, SKThrottleShared("drive", "item"), ScopeKeyForResult(http.StatusTooManyRequests, driveid.ID{}, "drive:item"))
+	assert.Equal(t, SKService(), ScopeKeyForResult(http.StatusServiceUnavailable, driveid.ID{}, ""))
+	assert.Equal(t, SKQuotaOwn(), ScopeKeyForResult(http.StatusInsufficientStorage, driveid.ID{}, ""))
+	assert.Equal(t, SKQuotaShortcut("drive:item"), ScopeKeyForResult(http.StatusInsufficientStorage, driveid.ID{}, "drive:item"))
+	assert.Equal(t, SKService(), ScopeKeyForResult(http.StatusBadGateway, driveid.ID{}, ""))
+	assert.True(t, ScopeKeyForResult(http.StatusOK, driveid.ID{}, "").IsZero())
 }

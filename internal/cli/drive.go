@@ -269,7 +269,7 @@ func discoverDrivesForToken(
 
 	client, clientErr := newGraphClientWithHTTP(
 		baseURL,
-		httpProvider.InteractiveForAccount(tokenCID.Email()).Meta,
+		httpProvider.BootstrapMeta(),
 		ts,
 		logger,
 	)
@@ -1017,7 +1017,7 @@ func resolveSharedDisplayName(
 		return "", fmt.Errorf("load token source: %w", err)
 	}
 
-	client, err := newGraphClientWithHTTP("", httpProvider.InteractiveForAccount(cid.Email()).Meta, ts, logger)
+	client, err := newGraphClientWithHTTP("", httpProvider.BootstrapMeta(), ts, logger)
 	if err != nil {
 		return "", err
 	}
@@ -1150,7 +1150,7 @@ func searchSharedDrives(
 
 		client, clientErr := newGraphClientWithHTTP(
 			"",
-			httpProvider.InteractiveForAccount(tokenCID.Email()).Meta,
+			httpProvider.BootstrapMeta(),
 			ts,
 			logger,
 		)
@@ -1355,7 +1355,7 @@ func searchAccountSharePoint(
 
 	client, err := newGraphClientWithHTTP(
 		baseURL,
-		httpProvider.InteractiveForAccount(tokenCID.Email()).Meta,
+		httpProvider.BootstrapMeta(),
 		ts,
 		logger,
 	)

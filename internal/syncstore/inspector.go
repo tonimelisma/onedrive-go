@@ -547,6 +547,11 @@ func statusIssueScope(
 		switch scopeKey.Kind {
 		case synctypes.ScopeAuthAccount, synctypes.ScopeThrottleAccount:
 			return statusScopeAccount, scopeKey.Humanize(shortcuts)
+		case synctypes.ScopeThrottleTarget:
+			if scopeKey.IsThrottleShared() {
+				return statusScopeShortcut, scopeKey.Humanize(shortcuts)
+			}
+			return statusScopeDrive, scopeKey.Humanize(shortcuts)
 		case synctypes.ScopeService:
 			return statusScopeService, scopeKey.Humanize(shortcuts)
 		case synctypes.ScopeQuotaOwn:

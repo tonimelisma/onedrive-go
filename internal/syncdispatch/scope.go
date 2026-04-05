@@ -5,7 +5,7 @@
 // it returns a ScopeUpdateResult and the engine creates a ScopeBlock.
 //
 // Detection thresholds (failure-redesign.md §7.3.1):
-//   - throttle:account (429) — immediate, single response
+//   - throttle:target:* (429) — immediate, single response
 //   - service (5xx, 503+Retry-After) — 5 unique paths in 30s
 //   - quota:own (507, own-drive) — 3 unique paths in 10s
 //   - quota:shortcut:$key (507, shortcut) — 3 unique paths in 10s
@@ -70,18 +70,27 @@ func NewScopeState(nowFunc func() time.Time, logger *slog.Logger) *ScopeState {
 // ScopeUpdateResult indicating whether a new scope block should be created.
 //
 // Per R-2.10.3 and failure-redesign.md §7.3.1:
-//   - 429 → immediate throttle:account block (server signal)
+//   - 429 → immediate target-scoped throttle block (server signal)
 //   - 503 with Retry-After → immediate service block (server signal)
 //   - 507 own-drive → sliding window quota:own (3 unique paths / 10s)
 //   - 507 shortcut → sliding window quota:shortcut:$key (3 unique paths / 10s)
 //   - 5xx (no Retry-After) → sliding window service (5 unique paths / 30s)
 func (ss *ScopeState) UpdateScope(r *synctypes.WorkerResult) synctypes.ScopeUpdateResult {
+	targetDriveID := r.TargetDriveID
+	if targetDriveID.IsZero() {
+		targetDriveID = r.DriveID
+	}
+
 	switch {
 	case r.HTTPStatus == http.StatusTooManyRequests:
 		// Immediate block — server signal, single response triggers (R-2.10.26).
+		scopeKey := synctypes.ScopeKeyForResult(r.HTTPStatus, targetDriveID, r.ShortcutKey)
+		if scopeKey.IsZero() {
+			return synctypes.ScopeUpdateResult{}
+		}
 		return synctypes.ScopeUpdateResult{
 			Block:      true,
-			ScopeKey:   synctypes.SKThrottleAccount(),
+			ScopeKey:   scopeKey,
 			IssueType:  synctypes.IssueRateLimited,
 			RetryAfter: r.RetryAfter,
 		}
@@ -97,12 +106,12 @@ func (ss *ScopeState) UpdateScope(r *synctypes.WorkerResult) synctypes.ScopeUpda
 
 	case r.HTTPStatus == http.StatusInsufficientStorage:
 		// Quota failure — scope depends on target drive (R-2.10.1, R-2.10.17).
-		sk := synctypes.ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
+		sk := synctypes.ScopeKeyForResult(r.HTTPStatus, targetDriveID, r.ShortcutKey)
 		return ss.checkWindow(sk, r.Path, quotaWindowThreshold, quotaWindowDuration, synctypes.IssueQuotaExceeded)
 
 	case r.HTTPStatus >= http.StatusInternalServerError:
 		// Service error — feed into service sliding window (R-2.10.28, R-2.10.29).
-		sk := synctypes.ScopeKeyForStatus(r.HTTPStatus, r.ShortcutKey)
+		sk := synctypes.ScopeKeyForResult(r.HTTPStatus, targetDriveID, r.ShortcutKey)
 		return ss.checkWindow(sk, r.Path,
 			serviceWindowThreshold, serviceWindowDuration,
 			synctypes.IssueServiceOutage)

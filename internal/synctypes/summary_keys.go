@@ -151,7 +151,7 @@ func describeCoreSummary(key SummaryKey) (SummaryDescriptor, bool) {
 		return SummaryDescriptor{
 			Key:        SummaryRateLimited,
 			Title:      "RATE LIMITED",
-			Reason:     "OneDrive asked this account to slow down.",
+			Reason:     "OneDrive asked this remote location to slow down.",
 			Action:     "Wait for the retry window to expire (automatic retry in progress).",
 			LogSummary: "rate limited",
 		}, true

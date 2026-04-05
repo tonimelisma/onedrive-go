@@ -92,7 +92,7 @@ func (s *sharedService) discoverSharedItems(ctx context.Context, catalog []accou
 			continue
 		}
 
-		clients, err := s.cc.sharedAccountClients(ctx, entry.Email)
+		client, err := s.cc.sharedBootstrapMetaClient(ctx, entry.Email)
 		if err != nil {
 			logger.Debug("shared discovery skipped account",
 				"email", entry.Email,
@@ -101,14 +101,14 @@ func (s *sharedService) discoverSharedItems(ctx context.Context, catalog []accou
 			continue
 		}
 
-		discovered := searchSharedItemsWithFallback(ctx, clients.Meta, entry.Email, logger)
+		discovered := searchSharedItemsWithFallback(ctx, client, entry.Email, logger)
 		for j := range discovered {
 			item := discovered[j]
 			if item.RemoteDriveID == "" || item.RemoteItemID == "" {
 				continue
 			}
 
-			enrichSharedItem(ctx, clients.Meta, &item, logger)
+			enrichSharedItem(ctx, client, &item, logger)
 
 			key := entry.Email + "\x00" + item.RemoteDriveID + "\x00" + item.RemoteItemID
 			if _, ok := seen[key]; ok {

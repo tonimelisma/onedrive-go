@@ -7,6 +7,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sharedref"
 )
 
 type driveService struct {
@@ -87,7 +88,13 @@ func (s *driveService) runAdd(ctx context.Context, args []string) error {
 	}
 
 	if cid.IsShared() {
-		clients, err := s.cc.sharedAccountClients(ctx, cid.Email())
+		clients, err := s.cc.sharedTargetClients(ctx, sharedTarget{
+			Ref: sharedref.Ref{
+				AccountEmail:  cid.Email(),
+				RemoteDriveID: cid.SourceDriveID(),
+				RemoteItemID:  cid.SourceItemID(),
+			},
+		}.Ref)
 		if err != nil {
 			return err
 		}
