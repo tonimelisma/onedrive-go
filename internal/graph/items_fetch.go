@@ -26,6 +26,7 @@ func (c *Client) fetchItem(ctx context.Context, apiPath string) (*Item, error) {
 	}
 
 	item := dir.toItem(c.logger)
+	normalizeSingleItem(&item, c.logger)
 
 	return &item, nil
 }
@@ -228,6 +229,7 @@ func (c *Client) listChildrenPage(ctx context.Context, path string, page int) ([
 		for i := range lcr.Value {
 			items = append(items, lcr.Value[i].toItem(c.logger))
 		}
+		items = normalizeListedItems(items, c.logger)
 
 		c.logger.Debug("fetched children page",
 			slog.Int("page", page),

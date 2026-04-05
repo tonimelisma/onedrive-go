@@ -303,6 +303,7 @@ func (c *Client) RestoreItem(
 	}
 
 	item := dir.toItem(c.logger)
+	normalizeSingleItem(&item, c.logger)
 
 	return &item, nil
 }

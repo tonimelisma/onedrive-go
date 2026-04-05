@@ -77,6 +77,11 @@ Token refresh is automatic. Tokens stored as JSON files via `tokenfile` package 
 All API quirks handled at the graph boundary — downstream code never sees them:
 - DriveId casing normalization (lowercase)
 - DriveId truncation fix (zero-pad Personal IDs to 16 chars)
+- Single-item item names are URL-decoded across fetch, mutation, share-resolution,
+  restore, and upload-completion responses
+- Paginated non-delta item surfaces (`ListChildren`, `sharedWithMe`, drive
+  search) URL-decode names and filter package-only OneNote items before
+  callers see them
 - Delta deletion reordering (deletions before creations within each page)
 - Missing field recovery (name, size for deleted items)
 - Timestamp validation that preserves unknown timestamps as zero time instead of fabricating a replacement, including `null`, missing, invalid, and out-of-range wire values

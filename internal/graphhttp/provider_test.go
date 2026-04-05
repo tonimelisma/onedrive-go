@@ -37,7 +37,7 @@ func TestProvider_BootstrapMeta(t *testing.T) {
 	assert.Nil(t, rt.ThrottleGate, "bootstrap metadata should not share throttle state")
 }
 
-// Validates: R-6.2.10, R-6.8.8
+// Validates: R-6.2.10, R-6.8.4, R-6.8.8
 func TestProvider_InteractiveForDrive_ReusesThrottleGatePerTarget(t *testing.T) {
 	t.Parallel()
 

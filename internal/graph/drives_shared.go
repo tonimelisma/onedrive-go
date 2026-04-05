@@ -80,6 +80,7 @@ func (c *Client) fetchItemPage(ctx context.Context, path, label string) ([]Item,
 	for i := range page.Value {
 		items = append(items, page.Value[i].toItem(c.logger))
 	}
+	items = normalizeListedItems(items, c.logger)
 
 	var nextPath string
 	if page.NextLink != "" {

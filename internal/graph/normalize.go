@@ -6,17 +6,33 @@ import (
 	"slices"
 )
 
-// normalizeDeltaItems applies delta-specific quirk handling to a batch of items.
-// This handles quirks that only manifest in delta responses, not in single-item
-// or list-children responses. The pipeline runs in a fixed order:
-// 0. URL-decode item names (Graph API sometimes returns %20-encoded names)
-// 1. Filter out OneNote packages (not syncable)
-// 2. Clear bogus hashes on deleted items
-// 3. Deduplicate items that appear multiple times (keep last occurrence)
-// 4. Reorder so deletions at a parent are processed before creations
-func normalizeDeltaItems(items []Item, logger *slog.Logger) []Item {
+// normalizeSingleItem applies the basic non-delta graph normalization contract
+// to one item response. Single-item APIs should expose decoded names, but they
+// intentionally do not filter package-only items here because explicit package
+// fetch semantics are a higher-layer policy question.
+func normalizeSingleItem(item *Item, logger *slog.Logger) {
+	item.Name = decodeURLEncodedName(item.ID, item.Name, logger)
+}
+
+// normalizeListedItems applies the shared graph boundary normalization used by
+// paginated non-delta list/search/shared responses. These surfaces should
+// expose decoded names and should not leak package-only OneNote items that do
+// not behave like normal files or folders.
+func normalizeListedItems(items []Item, logger *slog.Logger) []Item {
 	items = decodeURLEncodedNames(items, logger)
 	items = filterPackages(items, logger)
+
+	return items
+}
+
+// normalizeDeltaItems applies delta-specific quirk handling to a batch of
+// items. The pipeline runs in a fixed order:
+// 0. Apply the shared non-delta normalization (decode names, filter packages)
+// 1. Clear bogus hashes on deleted items
+// 2. Deduplicate items that appear multiple times (keep last occurrence)
+// 3. Reorder so deletions at a parent are processed before creations
+func normalizeDeltaItems(items []Item, logger *slog.Logger) []Item {
+	items = normalizeListedItems(items, logger)
 	items = clearDeletedHashes(items, logger)
 	items = deduplicateItems(items, logger)
 	items = reorderDeletions(items, logger)
@@ -159,34 +175,40 @@ func reorderDeletions(items []Item, logger *slog.Logger) []Item {
 	return items
 }
 
-// decodeURLEncodedNames applies url.PathUnescape to item names.
-// The Graph API sometimes returns URL-encoded names (e.g., "my%20file.txt")
-// in delta responses, particularly for items in shared folders on Personal
-// accounts. This step normalizes names before further processing.
+func decodeURLEncodedName(itemID, name string, logger *slog.Logger) string {
+	unescaped, err := url.PathUnescape(name)
+	if err != nil {
+		// If unescaping fails, keep the original name — malformed percent
+		// sequences should not block callers from seeing the item at all.
+		logger.Debug("failed to URL-decode item name, keeping original",
+			slog.String("item_id", itemID),
+			slog.String("name", name),
+			slog.String("error", err.Error()),
+		)
+
+		return name
+	}
+
+	if unescaped != name {
+		logger.Debug("URL-decoded item name",
+			slog.String("item_id", itemID),
+			slog.String("encoded", name),
+			slog.String("decoded", unescaped),
+		)
+	}
+
+	return unescaped
+}
+
+// decodeURLEncodedNames applies url.PathUnescape to item names. The Graph API
+// can return percent-encoded names across both delta and non-delta item
+// surfaces, especially on shared-folder paths.
 func decodeURLEncodedNames(items []Item, logger *slog.Logger) []Item {
 	decoded := 0
 
 	for i := range items {
-		unescaped, err := url.PathUnescape(items[i].Name)
-		if err != nil {
-			// If unescaping fails, keep the original name — this should be
-			// extremely rare (malformed percent-encoding from the API).
-			logger.Debug("failed to URL-decode item name, keeping original",
-				slog.String("item_id", items[i].ID),
-				slog.String("name", items[i].Name),
-				slog.String("error", err.Error()),
-			)
-
-			continue
-		}
-
+		unescaped := decodeURLEncodedName(items[i].ID, items[i].Name, logger)
 		if unescaped != items[i].Name {
-			logger.Debug("URL-decoded item name",
-				slog.String("item_id", items[i].ID),
-				slog.String("encoded", items[i].Name),
-				slog.String("decoded", unescaped),
-			)
-
 			items[i].Name = unescaped
 			decoded++
 		}

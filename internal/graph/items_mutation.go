@@ -48,6 +48,7 @@ func (c *Client) CreateFolder(ctx context.Context, driveID driveid.ID, parentID,
 	}
 
 	item := dir.toItem(c.logger)
+	normalizeSingleItem(&item, c.logger)
 
 	return &item, nil
 }
@@ -97,6 +98,7 @@ func (c *Client) MoveItem(ctx context.Context, driveID driveid.ID, itemID, newPa
 	}
 
 	item := dir.toItem(c.logger)
+	normalizeSingleItem(&item, c.logger)
 
 	return &item, nil
 }
@@ -144,6 +146,7 @@ func (c *Client) UpdateFileSystemInfo(
 	}
 
 	item := dir.toItem(c.logger)
+	normalizeSingleItem(&item, c.logger)
 
 	return &item, nil
 }
