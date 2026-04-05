@@ -456,8 +456,13 @@ engine to apply through `scopeController`:
 - Otherwise it resolves the relevant shortcut, calls `ListItemPermissions` on the target folder, and runs the caller-aware graph permission classifier to confirm whether the 403 is a real write denial or a transient/inconclusive failure.
 - On confirmed denial it walks upward, still using `ListItemPermissions`, to find the highest denied ancestor but never above the shortcut root.
 - On confirmed denial it records the triggering blocked write as one held
-  transient row with `scope_key='perm:remote:{boundary}'`. That held row is
-  the durable authority for the derived scope.
+  transient row with `scope_key='perm:remote:{boundary}'` and the shortcut's
+  remote drive ID. That held row is the durable authority for the derived
+  scope.
+- If a broader-scope trial (for example `service`) discovers a more specific
+  confirmed remote permission boundary, the engine rehomes the candidate into
+  the new `perm:remote` held row and removes the older broader-scope held
+  candidate instead of duplicating blocked work across scopes.
 
 The graph-side classifier is intentionally stricter than raw `roles`
 inspection. Live Personal-account testing showed `permissions` responses on
