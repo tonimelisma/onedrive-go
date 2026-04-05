@@ -44,15 +44,6 @@ type driveListE2EOutput struct {
 	} `json:"configured"`
 }
 
-func recipientEmailFromDriveID(t *testing.T, driveID string) string {
-	t.Helper()
-
-	parts := strings.SplitN(driveID, ":", 2)
-	require.Len(t, parts, 2)
-
-	return parts[1]
-}
-
 func requireSharedFileLink(t *testing.T) string {
 	t.Helper()
 

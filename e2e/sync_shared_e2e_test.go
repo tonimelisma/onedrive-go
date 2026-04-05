@@ -4,8 +4,6 @@ package e2e
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -24,42 +22,6 @@ import (
 //
 // See ci_issues.md §22 for setup details.
 // ---------------------------------------------------------------------------
-
-// requireDrive2 skips the test if drive2 is not configured.
-func requireDrive2Shared(t *testing.T) {
-	t.Helper()
-
-	if drive2 == "" {
-		t.Skip("ONEDRIVE_TEST_DRIVE_2 not set — skipping shared folder test")
-	}
-}
-
-// writeSyncConfigForDrive2 creates a sync config pointing to drive2
-// (kikkelimies123, the shared folder recipient) with per-test isolation.
-func writeSyncConfigForDrive2(t *testing.T, syncDir string) (string, map[string]string) {
-	t.Helper()
-
-	perTestData := t.TempDir()
-	perTestHome := t.TempDir()
-
-	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
-	require.NoError(t, os.MkdirAll(perTestDataDir, 0o700))
-	copyTokenFileForDrive(t, testDataDir, perTestDataDir, drive2)
-
-	content := fmt.Sprintf(`["%s"]
-sync_dir = %q
-`, drive2, syncDir)
-
-	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o600))
-
-	env := map[string]string{
-		"XDG_DATA_HOME": perTestData,
-		"HOME":          perTestHome,
-	}
-
-	return cfgPath, env
-}
 
 // TestE2E_SharedFolder_OwnerUpload_RecipientDownload verifies that a file
 // uploaded by the owner (drive) to a shared folder is downloaded by the

@@ -259,6 +259,33 @@ func TestDriveService_RunList_JSONSurfacesConfiguredAuthRequirement(t *testing.T
 	assert.Equal(t, 1, decoded.AccountsRequiringAuth[0].StateDBs)
 }
 
+// Validates: R-3.3.2, R-3.3.10
+func TestDriveService_RunList_JSONSurfacesOrphanedMissingLogin(t *testing.T) {
+	setTestDriveHome(t)
+
+	cid := driveid.MustCanonicalID("personal:orphan@example.com")
+	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
+		DisplayName: "Orphan User",
+	}))
+	require.NoError(t, touchStateDBForAccount(t, cid))
+
+	var out bytes.Buffer
+	cc := newServiceContext(&out, filepath.Join(t.TempDir(), "missing-config.toml"))
+	cc.Flags = CLIFlags{JSON: true}
+
+	require.NoError(t, newDriveService(cc).runList(t.Context(), false))
+
+	var decoded driveListJSONOutput
+	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
+	assert.Empty(t, decoded.Configured)
+	assert.Empty(t, decoded.Available)
+	require.Len(t, decoded.AccountsRequiringAuth, 1)
+	assert.Equal(t, cid.Email(), decoded.AccountsRequiringAuth[0].Email)
+	assert.Equal(t, driveid.DriveTypePersonal, decoded.AccountsRequiringAuth[0].DriveType)
+	assert.Equal(t, authReasonMissingLogin, decoded.AccountsRequiringAuth[0].Reason)
+	assert.Equal(t, 1, decoded.AccountsRequiringAuth[0].StateDBs)
+}
+
 // Validates: R-3.3.9
 func TestDriveService_RunSearch_TextSurfacesUnconfiguredAuthRequirement(t *testing.T) {
 	setTestDriveHome(t)

@@ -1186,12 +1186,19 @@ func searchSharedItemsWithFallback(
 	ctx context.Context, client *graph.Client, email string, logger *slog.Logger,
 ) []graph.Item {
 	items, err := client.SearchDriveItems(ctx, "*")
-	if err == nil {
+	if err == nil && hasUsableSharedItemIdentity(items) {
 		return items
 	}
 
-	logger.Debug("search-based discovery failed, trying SharedWithMe",
-		"email", email, "error", err)
+	if err != nil {
+		logger.Debug("search-based discovery failed, trying SharedWithMe",
+			"email", email, "error", err)
+	} else {
+		logger.Debug("search-based discovery returned no usable shared items, trying SharedWithMe",
+			"email", email,
+			"search_count", len(items),
+		)
+	}
 
 	items, err = client.SharedWithMe(ctx)
 	if err != nil {
@@ -1202,6 +1209,16 @@ func searchSharedItemsWithFallback(
 	}
 
 	return items
+}
+
+func hasUsableSharedItemIdentity(items []graph.Item) bool {
+	for i := range items {
+		if items[i].RemoteDriveID != "" && items[i].RemoteItemID != "" {
+			return true
+		}
+	}
+
+	return false
 }
 
 // --- drive remove ---

@@ -25,9 +25,11 @@ import (
 
 const (
 	// Live Graph calls occasionally sit behind real service latency on GitHub
-	// runners. Give each integration step enough budget to observe the platform
-	// rather than failing on infrastructure jitter.
-	integrationTimeout = 60 * time.Second
+	// runners. April 5, 2026 CI evidence showed a normal GET /me call stall for
+	// roughly 60 seconds before the platform eventually recovered, so keep the
+	// per-test budget above that observed tail latency instead of misclassifying
+	// the runner/network jitter as a product regression.
+	integrationTimeout = 90 * time.Second
 	driveEnvVar        = "ONEDRIVE_TEST_DRIVE"
 )
 

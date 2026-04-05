@@ -77,6 +77,12 @@ Implements: R-3.3.2 [verified], R-3.3.3 [verified], R-3.3.4 [verified], R-3.3.5 
 
 `drive list`, `drive add`, `drive remove`, `drive search`. Drive add creates a config section with auto-generated display_name and sync_dir. Drive list annotates available drives with state DB presence (R-3.3.3), supports `--all` to remove the SharePoint site cap (R-3.3.4). Drive remove `--purge` works on unconfigured drives with orphaned state (R-3.3.8) and only purges drive-owned state; account-owned token/profile files remain until logout.
 
+Shared-folder discovery remains search-first to satisfy `R-3.6.2`, but the
+runtime does not trust a successful `search(q='*')` response by itself. If
+search returns no usable shared-item identities (`remoteDriveID` +
+`remoteItemID`), the CLI falls back to `sharedWithMe` instead of silently
+rendering an empty shared list on recipient personal accounts.
+
 ## Design Constraints
 
 - DriveID is cached in token metadata at login — NEVER stored in config. `discoverAccount()` returns the primary drive ID, saved via `tokenfile.LoadAndMergeMeta()`. Both the multi-drive control plane and the single-drive Engine reject zero DriveID.

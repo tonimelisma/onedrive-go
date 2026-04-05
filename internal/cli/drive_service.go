@@ -47,7 +47,7 @@ func (s *driveService) runList(ctx context.Context, showAll bool) error {
 	)
 	annotateStateDB(available)
 	authRequired := mergeAuthRequirements(readModel.authRequirements(snapshot, func(entry accountCatalogEntry) bool {
-		return entry.Configured
+		return true
 	}), discoveredAuthRequired)
 
 	if s.cc.Flags.JSON {
