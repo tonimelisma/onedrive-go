@@ -253,9 +253,19 @@ func (wp *WorkerPool) Results() <-chan synctypes.WorkerResult {
 // the WorkerResult is silently dropped. The engine handles shutdown via
 // context cancellation on the result-processing loop (resultShutdown classification).
 func (wp *WorkerPool) sendResult(ctx context.Context, ta *synctypes.TrackedAction, outcome *synctypes.Outcome, actionErr error) {
+	driveID := ta.Action.DriveID
+	if outcome != nil && !outcome.DriveID.IsZero() {
+		driveID = outcome.DriveID
+	} else if driveID.IsZero() && !ta.Action.TargetDriveID.IsZero() {
+		// Shortcut-targeted actions may defer drive resolution to execution time.
+		// When no concrete action drive was planned, retain the intended target
+		// drive so failure persistence and success cleanup address the same row.
+		driveID = ta.Action.TargetDriveID
+	}
+
 	r := synctypes.WorkerResult{
 		Path:          ta.Action.Path,
-		DriveID:       ta.Action.DriveID,
+		DriveID:       driveID,
 		ActionType:    ta.Action.Type,
 		Err:           actionErr,
 		HTTPStatus:    ExtractHTTPStatus(actionErr),

@@ -282,6 +282,7 @@ func (controller *scopeController) applyTrialPreserveEffects(
 ) {
 	if decision.PermissionFlow != permissionFlowNone {
 		if permDecision, handled := controller.resolvePermissionDecision(ctx, decision, r, bl); handled {
+			controller.clearHeldFailureForScope(ctx, r.Path, r.TrialScopeKey)
 			controller.applyPermissionCheckDecision(ctx, watch, decision.PermissionFlow, permDecision)
 		}
 		return
@@ -294,6 +295,43 @@ func (controller *scopeController) applyTrialPreserveEffects(
 			IssueType: decision.ScopeKey.IssueType(),
 		})
 		controller.rehomeHeldFailure(ctx, r, decision.ScopeKey)
+	}
+}
+
+func (controller *scopeController) clearHeldFailureForScope(
+	ctx context.Context,
+	path string,
+	scopeKey synctypes.ScopeKey,
+) {
+	if scopeKey.IsZero() {
+		return
+	}
+
+	flow := controller.flow
+	rows, err := flow.engine.baseline.ListSyncFailures(ctx)
+	if err != nil {
+		flow.engine.logger.Warn("failed to list sync failures while clearing preserved trial candidate",
+			slog.String("path", path),
+			slog.String("scope_key", scopeKey.String()),
+			slog.String("error", err.Error()),
+		)
+
+		return
+	}
+
+	for i := range rows {
+		row := rows[i]
+		if row.Path != path || row.Role != synctypes.FailureRoleHeld || row.ScopeKey != scopeKey {
+			continue
+		}
+
+		if err := flow.engine.baseline.ClearSyncFailure(ctx, row.Path, flow.failureDriveID(&row)); err != nil {
+			flow.engine.logger.Warn("failed to clear preserved trial candidate",
+				slog.String("path", row.Path),
+				slog.String("scope_key", scopeKey.String()),
+				slog.String("error", err.Error()),
+			)
+		}
 	}
 }
 

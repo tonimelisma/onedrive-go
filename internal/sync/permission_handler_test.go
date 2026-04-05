@@ -142,10 +142,18 @@ func TestPermHandler_HandlePermissionCheckError_NotFound(t *testing.T) {
 	ph, _ := newTestPermHandler(t, recorder, nil)
 
 	// ErrNotFound → records failure and returns true.
-	result := ph.handlePermissionCheckError(t.Context(), graph.ErrNotFound, "failed/file.txt", "failed", synctypes.ActionUpload)
+	result := ph.handlePermissionCheckError(
+		t.Context(),
+		graph.ErrNotFound,
+		"failed/file.txt",
+		"failed",
+		synctypes.ActionUpload,
+		driveid.New("remote-drive-1"),
+	)
 	assert.True(t, result.Matched)
 	assert.Equal(t, permissionCheckActivateDerivedScope, result.Kind)
 	assert.Equal(t, "failed/file.txt", result.Failure.Path)
+	assert.Equal(t, driveid.New("remote-drive-1"), result.Failure.DriveID)
 	assert.Equal(t, synctypes.IssueSharedFolderBlocked, result.Failure.IssueType)
 	assert.Equal(t, synctypes.SKPermRemote("failed"), result.ScopeKey)
 }
@@ -157,7 +165,14 @@ func TestPermHandler_HandlePermissionCheckError_OtherError(t *testing.T) {
 	ph, _ := newTestPermHandler(t, recorder, nil)
 
 	// Other errors → returns false, no failure recorded.
-	result := ph.handlePermissionCheckError(t.Context(), errors.New("timeout"), "failed/file.txt", "failed", synctypes.ActionUpload)
+	result := ph.handlePermissionCheckError(
+		t.Context(),
+		errors.New("timeout"),
+		"failed/file.txt",
+		"failed",
+		synctypes.ActionUpload,
+		driveid.New("remote-drive-1"),
+	)
 	assert.False(t, result.Matched)
 	assert.Empty(t, recorder.failures)
 }
