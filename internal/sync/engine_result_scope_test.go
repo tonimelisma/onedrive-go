@@ -2558,34 +2558,88 @@ func TestIssueTypeForHTTPStatus(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // Validates: R-6.6.12
-func TestLogFailureSummary_AggregatesAboveThreshold(t *testing.T) {
+func TestLogFailureSummary_AggregatesByIssueTypeAboveThreshold(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
 	flow := newEngineFlow(eng.Engine)
 
-	// Add 15 errors with the same message prefix — should aggregate.
-	for i := range 15 {
-		flow.syncErrors = append(flow.syncErrors, fmt.Errorf("quota_exceeded: upload failed for file %d", i))
+	for i := range 11 {
+		result := &synctypes.WorkerResult{
+			ActionID:   int64(i + 1),
+			Path:       fmt.Sprintf("bulk-%02d.txt", i),
+			ActionType: synctypes.ActionUpload,
+			HTTPStatus: http.StatusServiceUnavailable,
+			Err:        fmt.Errorf("service unavailable %02d", i),
+			ErrMsg:     fmt.Sprintf("service unavailable %02d", i),
+		}
+		decision := classifyResult(result)
+		require.Equal(t, synctypes.IssueServiceOutage, decision.IssueType)
+
+		flow.recordError(&decision, result)
 	}
 
-	// Should not panic; clears syncErrors after logging.
 	flow.logFailureSummary()
 
-	assert.Empty(t, flow.syncErrors, "syncErrors should be cleared after summary")
+	output := logBuf.String()
+	assert.Equal(t, 1, strings.Count(output, "level=WARN msg=\"sync failures (aggregated)\""))
+	assert.Equal(t, 11, strings.Count(output, "level=DEBUG msg=\"sync failure\""))
+	assert.Contains(t, output, "issue_type=service_outage")
+	assert.Contains(t, output, "count=11")
+	assert.Contains(t, output, "bulk-00.txt")
+	assert.Contains(t, output, "bulk-10.txt")
+
+	assert.Len(t, flow.syncErrors, 11, "raw report errors should remain available after summary logging")
+	assert.Empty(t, flow.summaries, "summary entries should be cleared after logging")
 }
 
 // Validates: R-6.6.12
-func TestLogFailureSummary_NoErrors(t *testing.T) {
+func TestLogFailureSummary_BelowThresholdWarnsPerItem(t *testing.T) {
+	t.Parallel()
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	flow := newEngineFlow(eng.Engine)
+
+	for i := range 2 {
+		result := &synctypes.WorkerResult{
+			ActionID:   int64(i + 1),
+			Path:       fmt.Sprintf("small-%02d.txt", i),
+			ActionType: synctypes.ActionDownload,
+			HTTPStatus: http.StatusGatewayTimeout,
+			Err:        fmt.Errorf("gateway timeout %02d", i),
+			ErrMsg:     fmt.Sprintf("gateway timeout %02d", i),
+		}
+		decision := classifyResult(result)
+		require.Equal(t, synctypes.IssueServiceOutage, decision.IssueType)
+
+		flow.recordError(&decision, result)
+	}
+
+	flow.logFailureSummary()
+
+	output := logBuf.String()
+	assert.Equal(t, 0, strings.Count(output, "level=WARN msg=\"sync failures (aggregated)\""))
+	assert.Equal(t, 2, strings.Count(output, "level=WARN msg=\"sync failure\""))
+	assert.Contains(t, output, "path=small-00.txt")
+	assert.Contains(t, output, "path=small-01.txt")
+	assert.Contains(t, output, "issue_type=service_outage")
+}
+
+// Validates: R-6.6.12
+func TestLogFailureSummary_NoTransientSummariesNoops(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	flow := newEngineFlow(eng.Engine)
 
-	// Should be a no-op with no errors.
 	flow.logFailureSummary()
 
 	assert.Empty(t, flow.syncErrors)
+	assert.Empty(t, flow.summaries)
 }
 
 // ---------------------------------------------------------------------------

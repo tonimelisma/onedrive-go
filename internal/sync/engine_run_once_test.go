@@ -652,6 +652,40 @@ func TestRunOnce_EmptyPlan_NoPanic(t *testing.T) {
 func TestRunOnce_DeltaTokenCommittedWithObservations(t *testing.T) {
 	t.Parallel()
 
+	eng, ctx := newRunOnceFailingDownloadEngine(t)
+
+	// Seed a known delta token.
+	seedBaseline(t, eng.baseline, ctx, nil, "old-token")
+
+	report, err := eng.RunOnce(ctx, synctypes.SyncBidirectional, synctypes.RunOpts{})
+	require.NoError(t, err, "RunOnce")
+	require.GreaterOrEqual(t, report.Failed, 1, "should have failures")
+
+	// Delta token IS advanced — committed atomically with observations.
+	// Failed items are tracked in remote_state, not by rolling back the token.
+	token, tokenErr := eng.baseline.GetDeltaToken(ctx, engineTestDriveID, "")
+	require.NoError(t, tokenErr, "GetDeltaToken")
+	assert.Equal(t, "new-token-after-observation", token,
+		"delta token should advance with observations even when actions fail")
+}
+
+func TestRunOnce_FailedActionsRemainInReportErrorsAfterSummaryLogging(t *testing.T) {
+	t.Parallel()
+
+	eng, ctx := newRunOnceFailingDownloadEngine(t)
+
+	seedBaseline(t, eng.baseline, ctx, nil, "old-token")
+
+	report, err := eng.RunOnce(ctx, synctypes.SyncBidirectional, synctypes.RunOpts{})
+	require.NoError(t, err, "RunOnce")
+	require.GreaterOrEqual(t, report.Failed, 1, "should have failures")
+	require.NotEmpty(t, report.Errors, "report should keep raw errors after summary logging")
+	assert.Contains(t, report.Errors[0].Error(), "simulated network error")
+}
+
+func newRunOnceFailingDownloadEngine(t *testing.T) (*testEngine, context.Context) {
+	t.Helper()
+
 	driveID := driveid.New(engineTestDriveID)
 
 	mock := &engineMockClient{
@@ -670,21 +704,7 @@ func TestRunOnce_DeltaTokenCommittedWithObservations(t *testing.T) {
 	}
 
 	eng, _ := newTestEngine(t, mock)
-	ctx := t.Context()
-
-	// Seed a known delta token.
-	seedBaseline(t, eng.baseline, ctx, nil, "old-token")
-
-	report, err := eng.RunOnce(ctx, synctypes.SyncBidirectional, synctypes.RunOpts{})
-	require.NoError(t, err, "RunOnce")
-	require.GreaterOrEqual(t, report.Failed, 1, "should have failures")
-
-	// Delta token IS advanced — committed atomically with observations.
-	// Failed items are tracked in remote_state, not by rolling back the token.
-	token, tokenErr := eng.baseline.GetDeltaToken(ctx, engineTestDriveID, "")
-	require.NoError(t, tokenErr, "GetDeltaToken")
-	assert.Equal(t, "new-token-after-observation", token,
-		"delta token should advance with observations even when actions fail")
+	return eng, t.Context()
 }
 
 // Validates: R-6.5.3, R-2.5.3

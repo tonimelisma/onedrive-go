@@ -109,7 +109,7 @@ func (flow *engineFlow) applyOrdinaryFailureEffects(
 	bl *synctypes.Baseline,
 ) {
 	if flow.scopeController().applyPermissionDecisionFlow(ctx, watch, decision, r, bl) {
-		flow.recordError(r)
+		flow.recordError(decision, r)
 		return
 	}
 
@@ -132,7 +132,7 @@ func (flow *engineFlow) applyOrdinaryFailureEffects(
 		watch.armRetryTimer(ctx)
 	}
 
-	flow.recordError(r)
+	flow.recordError(decision, r)
 }
 
 func (flow *engineFlow) processNormalDecision(
@@ -164,7 +164,7 @@ func (flow *engineFlow) processNormalDecision(
 					panic(fmt.Sprintf("unknown permission check decision kind %d", permDecision.Kind))
 				}
 
-				flow.recordError(r)
+				flow.recordError(decision, r)
 
 				return outcome
 			}
@@ -188,7 +188,7 @@ func (flow *engineFlow) processNormalDecision(
 		return outcome
 	case failures.ClassFatal:
 		scopeCtrl.applyFatalAuthEffects(ctx, watch, r, decision.SummaryKey)
-		flow.recordError(r)
+		flow.recordError(decision, r)
 		outcome.terminate = true
 		outcome.terminateErr = fatalResultError(r)
 	case failures.ClassRetryableTransient, failures.ClassScopeBlockingTransient, failures.ClassActionable:
@@ -226,16 +226,16 @@ func (flow *engineFlow) processTrialDecision(
 		flow.routeReadyForClass(ctx, watch, decision.Class, ready, r)
 		scopeCtrl.rehomeHeldFailure(ctx, r, trialScopeKey)
 		scopeCtrl.extendScopeTrial(ctx, watch, trialScopeKey, r.RetryAfter)
-		flow.recordError(r)
+		flow.recordError(decision, r)
 	case trialOutcomePreserve:
 		flow.routeReadyForClass(ctx, watch, decision.Class, ready, r)
 		scopeCtrl.preserveScopeTrial(ctx, watch, trialScopeKey)
 		scopeCtrl.applyTrialPreserveEffects(ctx, watch, decision, r, bl)
-		flow.recordError(r)
+		flow.recordError(decision, r)
 	case trialOutcomeFatal:
 		flow.routeReadyForClass(ctx, watch, failures.ClassFatal, ready, r)
 		scopeCtrl.applyFatalAuthEffects(ctx, watch, r, decision.SummaryKey)
-		flow.recordError(r)
+		flow.recordError(decision, r)
 		outcome.terminate = true
 		outcome.terminateErr = fatalResultError(r)
 	}

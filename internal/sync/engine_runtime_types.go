@@ -23,6 +23,7 @@ type engineFlow struct {
 	succeeded  int
 	failed     int
 	syncErrors []error
+	summaries  []failureSummaryEntry
 
 	scopeCtrl    scopeController
 	shortcutCtrl shortcutCoordinator
