@@ -307,7 +307,7 @@ This is the operating dashboard for completeness, not a verdict of quality. A pa
 | W3 | done | done | partial | n/a | done | no | partial | no | big-delete and cross-drive proof paths unclear |
 | W4 | done | done | done | n/a | done | done | partial | done | live crash/restart proof is still thinner than the now-reconciled store/CLI durable-row mutation coverage |
 | W5 | done | done | done | partial | done | done | partial | done | upload-session traceability gap is closed; remaining W5 risk is broader worker-pool and future planned-transfer coverage |
-| W6 | done | done | partial | partial | done | partial | partial | no | pagination and transport split still need body audit |
+| W6 | done | done | partial | partial | done | done | partial | done | current actionable W6 top-ups are closed; only broader planned graph-quirk capture and future auth/runtime evidence remain |
 | W7 | done | done | done | partial | done | done | partial | done | business-account live `drive search` proof is still blocked by missing business test credentials; current personal/logout/list/shared live proof is closed |
 | W8 | done | done | partial | n/a | done | no | no | no | validation-tier coverage may be over-claimed |
 | W9 | done | done | partial | partial | done | no | no | no | shared-drive identity fallback details still need confirmation |
@@ -904,19 +904,20 @@ Key W5 gap notes:
   - keep the first duplicate delta item instead of the last
 - Audit status:
   - ideal model drafted
-  - body audit in progress
-  - note: planned requirements `R-6.7.11`, `R-6.7.18`, `R-6.7.22`, `R-6.7.23` stay as future placeholders for now
+  - body audit done for the current actionable pagination, auth-refresh, transport-split, and tokenfile traceability lanes
 - Claim mapping snapshot from filenames and `// Validates:` only:
   - Candidate test surface is broad: `internal/graph/{client,items,drives,delta,download,upload,normalize,quirks,types,url_validation}_test.go`, `internal/tokenfile/tokenfile_test.go`, `internal/cli/{ls,stat,mv,cp,auth}_test.go`, and drive-list plus CLI e2e suites
   - Explicit comment claims already exist for `R-1.1`, `R-1.1.1`, `R-1.1.2`, `R-1.1.3`, `R-1.4`, `R-1.5`, `R-1.6`, `R-1.7`, `R-1.8`, `R-3.1`, `R-6.7.8`, `R-6.7.9`, `R-6.7.10`, `R-6.7.12`, `R-6.7.13`, `R-6.8.1`, `R-6.8.2`, `R-6.8.4`, `R-6.8.6`, `R-6.8.8`, and `R-6.8.14`
-  - No explicit claim surfaced yet for `R-6.7.4`
-  - `internal/tokenfile/tokenfile_test.go` exists, but no `// Validates:` hit surfaced in this pass, so auth/token durability traceability likely needs cleanup even if the tests are solid
-  - First body-audit target inside W6 should be pagination and retry/auth boundary tests, because those can be partially covered while still missing the exact transport split or refresh failure semantics
+  - `R-6.7.4` is not a W6-owned graph-boundary proof gap. The runtime invariant is enforced in planner/baseline handling (`internal/syncplan/planner_enrichment_test.go`), so the stale graph-client ownership claim should be corrected rather than backfilled with a fake graph-only test.
+  - `internal/tokenfile/tokenfile_test.go` and the token persistence/auth boundary tests in `internal/graph/auth_test.go` now carry direct `R-3.1` traceability, closing the earlier auth/token durability comment gap
+  - The earlier W6 body-audit target on pagination and retry/auth boundaries is now closed for the currently implemented/runtime-owned lanes
 - Body-audit notes from `internal/graph/{items,drives_shared,shares,upload_transfer,items_mutation,items_permissions}_go` and related tests:
   - Non-delta item normalization had a real production gap. Delta batches already ran the URL-decode/package-filter pipeline, but single-item fetch/mutation/share/upload responses and paginated non-delta list surfaces did not. Encoded names and package-only OneNote items could therefore leak through `GetItem`, `ListChildren`, `SharedWithMe`, and drive search even though the graph design doc marked `R-6.7.8` / `R-6.7.9` verified.
   - The fix split the normalization boundary cleanly: `normalizeSingleItem` now applies URL decoding to single-item responses, while `normalizeListedItems` applies URL decoding plus package filtering to non-delta list/search/shared pages. Delta keeps the stronger batch pipeline on top of that narrower shared layer.
   - New regression coverage proves the gap is closed where it mattered in practice: `internal/graph/items_test.go` now proves encoded names are decoded for explicit item fetch and package-only children are filtered from list output, while `internal/graph/drives_test.go` proves the same filtering/decoding contract for `sharedWithMe` and drive search.
   - The target-scoped throttle-gate provider proof was already strong; this pass closes the remaining traceability gap by tagging `internal/graphhttp/provider_test.go` for `R-6.8.4` directly.
+  - 401 refresh proof is now explicit for both request shapes the audit called out: `internal/graph/client_test.go` proves a body-bearing `PATCH` keeps its path query string, JSON body, and auth/header semantics across the refresh retry, and it separately proves that a real token refresh followed by a second 401 still returns fatal `ErrUnauthorized` instead of degrading softly.
+  - Pagination proof now covers the previously unproven search path directly: `internal/graph/drives_test.go` now includes a multi-page `SearchDriveItems` test, so both `sharedWithMe` and search must follow `@odata.nextLink` rather than silently stopping after page one.
 
 ### W7. CLI Contracts, Formatting, And Command Independence From Sync State
 
@@ -1098,10 +1099,13 @@ Key W5 gap notes:
 
 ## Next Moves
 
-1. Continue W6 and W9 deep reconciliation:
-   - pagination / transport-split body audit
+1. Continue W9 deep reconciliation:
    - shared-drive identity fallback details
-2. When business-account credentials become available, add the blocked live W7 `drive search` proof:
+   - ambiguous selector and enrichment-fallback proof
+2. Revisit W8 validation-tier coverage once W9 is reconciled:
+   - confirm the design doc is not over-claiming token/config validation tiers
+   - close any remaining traceability-only gaps in config/token resolution
+3. When business-account credentials become available, add the blocked live W7 `drive search` proof:
    - set `ONEDRIVE_TEST_DRIVE` or `ONEDRIVE_TEST_DRIVE_2` to a `business:` canonical ID
    - include it in `ONEDRIVE_ALLOWED_TEST_ACCOUNTS`
    - ensure the account has searchable SharePoint content

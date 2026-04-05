@@ -88,6 +88,7 @@ func testOAuthConfig(t *testing.T, tokenPath string, endpoint *oauth2.Endpoint) 
 // noopDisplay discards the device auth display callback.
 func noopDisplay(_ DeviceAuth) {}
 
+// Validates: R-3.1.1
 func TestDoLogin_Success(t *testing.T) {
 	endpoint := newMockOAuthServer(t, nil)
 	tmpDir := t.TempDir()
@@ -213,6 +214,7 @@ func TestDoLogin_PendingThenSuccess(t *testing.T) {
 	assert.GreaterOrEqual(t, polls.Load(), int32(3))
 }
 
+// Validates: R-3.1
 func TestSaveLoadToken_RoundTrip(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "tokens", "roundtrip.json")
@@ -240,6 +242,7 @@ func TestSaveLoadToken_RoundTrip(t *testing.T) {
 		"expiry mismatch: want %v, got %v", original.Expiry, loaded.Expiry)
 }
 
+// Validates: R-3.1
 func TestLoadToken_BareTokenRejected(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "old-format.json")
@@ -337,6 +340,7 @@ func TestTokenSourceFromPath_NoFile(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotLoggedIn)
 }
 
+// Validates: R-3.1
 func TestTokenSourceFromPath_ValidToken(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "tokens", "valid.json")

@@ -1134,6 +1134,52 @@ func TestSearchDriveItems_Empty(t *testing.T) {
 	})
 }
 
+func TestSearchDriveItems_Pagination(t *testing.T) {
+	var page int
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		page++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+
+		if page == 1 {
+			writeTestResponsef(t, w, `{
+				"value": [{
+					"id": "search-page-1",
+					"name": "First Result.txt",
+					"size": 1,
+					"createdDateTime": "2024-03-01T00:00:00Z",
+					"lastModifiedDateTime": "2024-07-01T00:00:00Z",
+					"file": {"mimeType": "text/plain"}
+				}],
+				"@odata.nextLink": "%s/me/drive/search(q='*')?$skiptoken=page2"
+			}`, srv.URL)
+
+			return
+		}
+
+		writeTestResponse(t, w, `{
+			"value": [{
+				"id": "search-page-2",
+				"name": "Second Result.txt",
+				"size": 1,
+				"createdDateTime": "2024-03-01T00:00:00Z",
+				"lastModifiedDateTime": "2024-07-01T00:00:00Z",
+				"file": {"mimeType": "text/plain"}
+			}]
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	items, err := client.SearchDriveItems(t.Context(), "*")
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	assert.Equal(t, "First Result.txt", items[0].Name)
+	assert.Equal(t, "Second Result.txt", items[1].Name)
+	assert.Equal(t, 2, page)
+}
+
 // Validates: R-6.7.8, R-6.7.9
 func TestSearchDriveItems_FiltersPackagesAndDecodesNames(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

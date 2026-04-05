@@ -25,12 +25,14 @@ func testToken() *oauth2.Token {
 
 // --- Load tests ---
 
+// Validates: R-3.1
 func TestLoad_FileNotFound(t *testing.T) {
 	tok, err := Load("/nonexistent/path/token.json")
 	assert.Nil(t, tok)
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
+// Validates: R-3.1
 func TestLoad_ValidFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "token.json")
@@ -53,6 +55,7 @@ func TestLoad_ValidFile(t *testing.T) {
 	assert.True(t, tok.Expiry.Equal(expiry))
 }
 
+// Validates: R-3.1
 func TestLoad_BareTokenRejected(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "token.json")
@@ -67,6 +70,7 @@ func TestLoad_BareTokenRejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "decoding")
 }
 
+// Validates: R-3.1
 func TestLoad_InvalidJSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "token.json")
@@ -79,6 +83,7 @@ func TestLoad_InvalidJSON(t *testing.T) {
 	assert.Contains(t, err.Error(), "decoding")
 }
 
+// Validates: R-3.1
 func TestLoad_EmptyCredentials(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "token.json")
@@ -92,6 +97,7 @@ func TestLoad_EmptyCredentials(t *testing.T) {
 	assert.Contains(t, err.Error(), "empty credentials")
 }
 
+// Validates: R-3.1
 func TestLoad_RejectsUnknownKeys(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "token.json")
@@ -118,6 +124,7 @@ func TestLoad_RejectsUnknownKeys(t *testing.T) {
 
 // --- Save tests ---
 
+// Validates: R-3.1
 func TestSave_CreatesDirectory(t *testing.T) {
 	dir := t.TempDir()
 	nested := filepath.Join(dir, "sub", "dir", "token.json")
@@ -141,6 +148,7 @@ func TestSave_FilePermissions(t *testing.T) {
 	assert.Equal(t, os.FileMode(FilePerms), info.Mode().Perm())
 }
 
+// Validates: R-3.1
 func TestSave_InvalidParentDirectory(t *testing.T) {
 	t.Parallel()
 
@@ -153,6 +161,7 @@ func TestSave_InvalidParentDirectory(t *testing.T) {
 	assert.Contains(t, err.Error(), "tokenfile: creating directory")
 }
 
+// Validates: R-3.1
 func TestSave_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "token.json")
@@ -174,6 +183,7 @@ func TestSave_RoundTrip(t *testing.T) {
 	assert.True(t, tok.Expiry.Equal(expiry))
 }
 
+// Validates: R-3.1
 func TestSave_NilToken(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "token.json")
@@ -183,6 +193,7 @@ func TestSave_NilToken(t *testing.T) {
 	assert.Contains(t, err.Error(), "refusing to save nil token")
 }
 
+// Validates: R-3.1
 func TestSave_NoMetaInOutput(t *testing.T) {
 	t.Parallel()
 
@@ -201,6 +212,7 @@ func TestSave_NoMetaInOutput(t *testing.T) {
 	assert.False(t, hasMeta, "saved token file should not contain a meta key")
 }
 
+// Validates: R-3.1.3, R-3.1.4
 func TestDelete_RemovesFile(t *testing.T) {
 	t.Parallel()
 
@@ -215,6 +227,7 @@ func TestDelete_RemovesFile(t *testing.T) {
 	assert.ErrorIs(t, err, os.ErrNotExist)
 }
 
+// Validates: R-3.1.3, R-3.1.4
 func TestDelete_FileNotFound(t *testing.T) {
 	t.Parallel()
 
