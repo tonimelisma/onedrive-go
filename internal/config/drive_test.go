@@ -195,6 +195,8 @@ func TestBuildResolvedDrive_PausedExplicitFalse(t *testing.T) {
 func TestBuildResolvedDrive_PerDriveOverrides(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.SkipDotfiles = false
+	cfg.SyncPaths = []string{"/Documents"}
+	cfg.IgnoreMarker = ".odignore"
 	cfg.PollInterval = "5m"
 
 	skipDot := true
@@ -203,6 +205,8 @@ func TestBuildResolvedDrive_PerDriveOverrides(t *testing.T) {
 		SkipDotfiles: &skipDot,
 		SkipDirs:     []string{"vendor"},
 		SkipFiles:    []string{"*.log"},
+		SyncPaths:    []string{"/Projects"},
+		IgnoreMarker: ".syncignore",
 		PollInterval: "10m",
 	}
 
@@ -211,6 +215,8 @@ func TestBuildResolvedDrive_PerDriveOverrides(t *testing.T) {
 	assert.True(t, resolved.SkipDotfiles)
 	assert.Equal(t, []string{"vendor"}, resolved.SkipDirs)
 	assert.Equal(t, []string{"*.log"}, resolved.SkipFiles)
+	assert.Equal(t, []string{"/Projects"}, resolved.SyncPaths)
+	assert.Equal(t, ".syncignore", resolved.IgnoreMarker)
 	assert.Equal(t, "10m", resolved.PollInterval)
 }
 

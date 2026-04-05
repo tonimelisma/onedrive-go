@@ -318,6 +318,18 @@ func (o *LocalObserver) makeWalkFunc(
 		dbRelPath := nfcNormalize(filepath.ToSlash(relPath))
 		name := nfcNormalize(d.Name())
 
+		if o.scopeSnapshot.IsMarkerFile(dbRelPath) {
+			return SkipEntry(d)
+		}
+
+		if d.IsDir() && o.scopeSnapshot.HasMarkerDir(dbRelPath) {
+			return filepath.SkipDir
+		}
+
+		if !o.scopeAllowsUnknown(dbRelPath) {
+			return SkipEntry(d)
+		}
+
 		if d.Type()&fs.ModeSymlink != 0 {
 			if o.filterConfig.SkipSymlinks {
 				o.rememberExcludedSymlink(dbRelPath)
@@ -794,6 +806,10 @@ func (o *LocalObserver) detectDeletions(observed map[string]bool) []synctypes.Ch
 }
 
 func (o *LocalObserver) shouldSuppressDeleteForExcludedPath(path string, entry *synctypes.BaselineEntry) bool {
+	if !o.scopeSnapshot.AllowsPath(path) {
+		return true
+	}
+
 	if o.hasExcludedSymlinkAncestor(path) {
 		return true
 	}

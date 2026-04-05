@@ -91,6 +91,8 @@ paused = false
 skip_dotfiles = true
 skip_dirs = ["vendor"]
 skip_files = ["*.log"]
+sync_paths = ["/Projects"]
+ignore_marker = ".syncignore"
 poll_interval = "10m"
 `)
 	cfg, err := Load(path, testLogger(t))

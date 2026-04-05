@@ -18,6 +18,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
 	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -263,6 +264,62 @@ func TestRunWatch_ScopedRootKeepsPollingOnly(t *testing.T) {
 	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventWebsocketFallback && event.Note == "scoped_root"
 	}, "websocket scoped-root fallback")
+}
+
+// Validates: R-2.4.5, R-2.8.5
+func TestRunWatch_SyncPathsScopedPollingDisablesWebsocket(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{
+		getItemByPathFn: func(_ context.Context, _ driveid.ID, remotePath string) (*graph.Item, error) {
+			if remotePath == "Docs" {
+				return &graph.Item{ID: "docs-id", Name: "Docs", IsFolder: true}, nil
+			}
+
+			return nil, graph.ErrNotFound
+		},
+		folderDeltaFn: func(_ context.Context, _ driveid.ID, folderID, token string) ([]graph.Item, string, error) {
+			return nil, "docs-token", nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	eng.driveType = driveid.DriveTypePersonal
+	eng.enableWebsocket = true
+	eng.syncScopeConfig = syncscope.Config{
+		SyncPaths: []string{"/Docs"},
+	}
+
+	recorder := attachDebugEventRecorder(eng)
+	started := make(chan struct{}, 1)
+	eng.socketIOWakeSourceFactory = func(_ synctypes.SocketIOEndpointFetcher, _ driveid.ID, _ syncobserve.SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
+		return &stubSocketIOWakeSource{started: started}
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- eng.RunWatch(ctx, synctypes.SyncDownloadOnly, synctypes.WatchOpts{
+			PollInterval: time.Hour,
+			Debounce:     5 * time.Millisecond,
+		})
+	}()
+
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverRemote
+	}, "remote observer started")
+
+	select {
+	case <-started:
+		require.FailNow(t, "wake source should not start for sync_paths-scoped watch")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	cancel()
+	require.NoError(t, <-done)
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventWebsocketFallback && event.Note == "sync_paths"
+	}, "websocket sync_paths fallback")
 }
 
 // Validates: R-2.8.3, R-6.8.9, R-6.10.10

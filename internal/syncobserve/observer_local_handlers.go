@@ -135,6 +135,15 @@ func (o *LocalObserver) HandleFsEvent(
 	dbRelPath := nfcNormalize(filepath.ToSlash(relPath))
 	name := nfcNormalize(filepath.Base(fsEvent.Name))
 
+	if o.scopeSnapshot.IsMarkerFile(dbRelPath) {
+		o.handleMarkerEvent(ctx, watcher, tree)
+		return
+	}
+
+	if !o.scopeAllowsUnknown(dbRelPath) {
+		return
+	}
+
 	// Unified observation filter (Stage 1: name + path length).
 	// Watch handlers don't collect SkippedItems — the safety scan (FullScan
 	// every 5 min) catches them for recording to sync_failures.
@@ -186,6 +195,14 @@ func (o *LocalObserver) handleCreate(
 
 	o.forgetExcludedSymlink(dbRelPath)
 
+	if info.IsDir() {
+		if !o.scopeAllowsDir(dbRelPath) {
+			return
+		}
+	} else if !o.scopeAllowsFile(dbRelPath) {
+		return
+	}
+
 	if skip := shouldObserveWithFilter(name, dbRelPath, infoKind(info), o.filterConfig, o.observationRules); skip != nil {
 		return
 	}
@@ -222,6 +239,15 @@ func (o *LocalObserver) handleCreate(
 		if addErr := watcher.Add(fsPath); addErr != nil {
 			o.Logger.Warn("failed to add watch on new directory",
 				slog.String("path", dbRelPath), slog.String("error", addErr.Error()))
+		} else {
+			if o.watchedDirs == nil {
+				o.watchedDirs = make(map[string]struct{})
+			}
+			o.watchedDirs[filepath.Clean(fsPath)] = struct{}{}
+		}
+
+		if !o.scopeSnapshot.AllowsPath(dbRelPath) {
+			return
 		}
 
 		// Scan directory contents for files created before the watch was
@@ -306,37 +332,17 @@ func (o *LocalObserver) scanNewDirectoryEntry(
 	entryRelPath := dirRelPath + "/" + entryName
 	entryFsPath := filepath.Join(dirPath, entry.Name())
 
-	var (
-		info os.FileInfo
-		kind observedKind
-		err  error
-	)
+	info, kind, ok := o.scanNewDirectoryEntryInfo(entry, entryFsPath, entryRelPath)
+	if !ok {
+		return
+	}
 
-	if entry.Type()&fs.ModeSymlink != 0 {
-		var isSymlink bool
-		info, isSymlink, err = statObservedPath(entryFsPath)
-		if err != nil {
-			o.Logger.Debug("stat failed during directory scan",
-				slog.String("path", entryRelPath), slog.String("error", err.Error()))
+	if kind == observedKindDir {
+		if !o.scopeAllowsDir(entryRelPath) {
 			return
 		}
-
-		if shouldSkipObservedSymlink(isSymlink, o.filterConfig) {
-			o.rememberExcludedSymlink(entryRelPath)
-			return
-		}
-
-		o.forgetExcludedSymlink(entryRelPath)
-		kind = observedKindFromInfo(info)
-	} else {
-		o.forgetExcludedSymlink(entryRelPath)
-		kind = dirEntryKind(entry)
-		info, err = entry.Info()
-		if err != nil {
-			o.Logger.Debug("stat failed during directory scan",
-				slog.String("path", entryRelPath), slog.String("error", err.Error()))
-			return
-		}
+	} else if !o.scopeAllowsFile(entryRelPath) {
+		return
 	}
 
 	if shouldObserveWithFilter(entryName, entryRelPath, kind, o.filterConfig, o.observationRules) != nil {
@@ -351,21 +357,7 @@ func (o *LocalObserver) scanNewDirectoryEntry(
 	}
 
 	if kind == observedKindDir {
-		if addErr := watcher.Add(entryFsPath); addErr != nil {
-			o.Logger.Warn("failed to add watch on nested directory",
-				slog.String("path", entryRelPath), slog.String("error", addErr.Error()))
-		}
-
-		dirEv := synctypes.ChangeEvent{
-			Source:   synctypes.SourceLocal,
-			Type:     synctypes.ChangeCreate,
-			Path:     entryRelPath,
-			Name:     entryName,
-			ItemType: synctypes.ItemTypeFolder,
-		}
-
-		o.TrySend(ctx, events, &dirEv)
-		o.scanNewDirectory(ctx, tree, entryFsPath, entryRelPath, watcher, events)
+		o.scanNewDirectoryChildDir(ctx, tree, entryFsPath, entryRelPath, entryName, watcher, events)
 		return
 	}
 
@@ -385,6 +377,75 @@ func (o *LocalObserver) scanNewDirectoryEntry(
 	}
 
 	o.TrySend(ctx, events, &fileEv)
+}
+
+func (o *LocalObserver) scanNewDirectoryEntryInfo(
+	entry os.DirEntry,
+	entryFsPath string,
+	entryRelPath string,
+) (os.FileInfo, observedKind, bool) {
+	if entry.Type()&fs.ModeSymlink != 0 {
+		info, isSymlink, err := statObservedPath(entryFsPath)
+		if err != nil {
+			o.Logger.Debug("stat failed during directory scan",
+				slog.String("path", entryRelPath), slog.String("error", err.Error()))
+			return nil, observedKindUnknown, false
+		}
+
+		if shouldSkipObservedSymlink(isSymlink, o.filterConfig) {
+			o.rememberExcludedSymlink(entryRelPath)
+			return nil, observedKindUnknown, false
+		}
+
+		o.forgetExcludedSymlink(entryRelPath)
+		return info, observedKindFromInfo(info), true
+	}
+
+	o.forgetExcludedSymlink(entryRelPath)
+
+	info, err := entry.Info()
+	if err != nil {
+		o.Logger.Debug("stat failed during directory scan",
+			slog.String("path", entryRelPath), slog.String("error", err.Error()))
+		return nil, observedKindUnknown, false
+	}
+
+	return info, dirEntryKind(entry), true
+}
+
+func (o *LocalObserver) scanNewDirectoryChildDir(
+	ctx context.Context,
+	tree *synctree.Root,
+	entryFsPath string,
+	entryRelPath string,
+	entryName string,
+	watcher FsWatcher,
+	events chan<- synctypes.ChangeEvent,
+) {
+	if addErr := watcher.Add(entryFsPath); addErr != nil {
+		o.Logger.Warn("failed to add watch on nested directory",
+			slog.String("path", entryRelPath), slog.String("error", addErr.Error()))
+	} else {
+		if o.watchedDirs == nil {
+			o.watchedDirs = make(map[string]struct{})
+		}
+		o.watchedDirs[filepath.Clean(entryFsPath)] = struct{}{}
+	}
+
+	if !o.scopeSnapshot.AllowsPath(entryRelPath) {
+		return
+	}
+
+	dirEv := synctypes.ChangeEvent{
+		Source:   synctypes.SourceLocal,
+		Type:     synctypes.ChangeCreate,
+		Path:     entryRelPath,
+		Name:     entryName,
+		ItemType: synctypes.ItemTypeFolder,
+	}
+
+	o.TrySend(ctx, events, &dirEv)
+	o.scanNewDirectory(ctx, tree, entryFsPath, entryRelPath, watcher, events)
 }
 
 // handleWrite processes a Write event by scheduling a deferred hash after a
@@ -416,6 +477,10 @@ func (o *LocalObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath, name st
 
 	// Ignore directory write events — folder mtime changes are noise.
 	if info.IsDir() {
+		return
+	}
+
+	if !o.scopeAllowsFile(dbRelPath) {
 		return
 	}
 
@@ -465,6 +530,10 @@ func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 	o.forgetExcludedSymlink(req.DbRelPath)
 
 	if info.IsDir() {
+		return
+	}
+
+	if !o.scopeAllowsFile(req.DbRelPath) {
 		return
 	}
 
@@ -615,6 +684,8 @@ func (o *LocalObserver) HandleDelete(
 				slog.String("error", rmErr.Error()),
 			)
 		}
+
+		delete(o.watchedDirs, filepath.Clean(fsPath))
 	}
 
 	ev := synctypes.ChangeEvent{

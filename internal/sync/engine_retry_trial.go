@@ -470,7 +470,12 @@ func (flow *engineFlow) rebuildRemoteStateBackedFailure(
 }
 
 func (flow *engineFlow) observeLocalFailurePath(ctx context.Context, row *synctypes.SyncFailureRow) failureRebuildResult {
-	result, err := syncobserve.ObserveSinglePathWithFilter(
+	scopeSnapshot, err := flow.engine.buildScopeSnapshot(ctx)
+	if err != nil {
+		return failureRebuildResult{err: fmt.Errorf("build scope snapshot: %w", err)}
+	}
+
+	result, err := syncobserve.ObserveSinglePathWithScope(
 		flow.engine.logger,
 		flow.engine.syncTree,
 		row.Path,
@@ -479,6 +484,7 @@ func (flow *engineFlow) observeLocalFailurePath(ctx context.Context, row *syncty
 		nil,
 		flow.engine.localFilter,
 		flow.engine.localRules,
+		scopeSnapshot,
 	)
 	if err != nil {
 		return failureRebuildResult{err: err}

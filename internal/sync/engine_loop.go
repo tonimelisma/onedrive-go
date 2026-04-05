@@ -239,6 +239,8 @@ func (rt *watchRuntime) runWatchStep(
 		return rt.handleWatchWorkerResult(ctx, p, outbox, &workerResult, ok)
 	case skipped, ok := <-p.skippedCh:
 		return rt.handleWatchSkipped(ctx, p, outbox, skipped, ok)
+	case scopeChange, ok := <-p.scopeChanges:
+		return rt.handleWatchScopeChange(ctx, p, outbox, &scopeChange, ok)
 	case <-p.recheckC:
 		rt.handleRecheckTick(ctx)
 		return outbox, false, nil
@@ -246,7 +248,7 @@ func (rt *watchRuntime) runWatchStep(
 		rt.runFullReconciliationAsync(ctx, p.bl)
 		return outbox, false, nil
 	case result, ok := <-p.reconcileResults:
-		return rt.handleWatchReconcileResult(p, outbox, result, ok)
+		return rt.handleWatchReconcileResult(ctx, p, outbox, result, ok)
 	case obsErr, ok := <-p.errs:
 		return rt.handleWatchObserverError(ctx, p, outbox, obsErr, ok)
 	case <-rt.trialTimerChan():
@@ -311,6 +313,7 @@ func (rt *watchRuntime) completeDrainOutbox(outbox []*synctypes.TrackedAction) {
 func (rt *watchRuntime) disableDrainInputs(p *watchPipeline) {
 	p.batchReady = nil
 	p.skippedCh = nil
+	p.scopeChanges = nil
 	p.recheckC = nil
 	p.reconcileC = nil
 }
@@ -511,6 +514,7 @@ func (rt *watchRuntime) handleWatchSkipped(
 }
 
 func (rt *watchRuntime) handleWatchReconcileResult(
+	ctx context.Context,
 	p *watchPipeline,
 	outbox []*synctypes.TrackedAction,
 	result reconcileResult,
@@ -521,7 +525,7 @@ func (rt *watchRuntime) handleWatchReconcileResult(
 		return outbox, false, nil
 	}
 
-	rt.applyReconcileResult(result)
+	rt.applyReconcileResult(ctx, result)
 	return outbox, false, nil
 }
 

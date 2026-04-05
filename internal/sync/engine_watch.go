@@ -13,6 +13,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/syncrecovery"
+	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -169,10 +170,11 @@ func (e *Engine) RunWatch(ctx context.Context, mode synctypes.SyncMode, opts syn
 	}
 
 	// Step 3: Start observers AFTER bootstrap — they see the post-bootstrap baseline.
-	errs, activeObs, skippedCh := rt.startObservers(ctx, pipe.bl, mode, rt.buf, opts)
+	errs, activeObs, skippedCh, scopeChanges := rt.startObservers(ctx, pipe.bl, mode, rt.buf, opts)
 	pipe.errs = errs
 	pipe.activeObs = activeObs
 	pipe.skippedCh = skippedCh
+	pipe.scopeChanges = scopeChanges
 
 	// Step 4: Run the watch loop.
 	return rt.runWatchLoop(ctx, pipe)
@@ -196,6 +198,7 @@ type watchPipeline struct {
 	results          <-chan synctypes.WorkerResult
 	errs             <-chan error
 	skippedCh        <-chan []synctypes.SkippedItem
+	scopeChanges     <-chan syncscope.Change
 	reconcileC       <-chan time.Time
 	reconcileResults <-chan reconcileResult
 	recheckC         <-chan time.Time
@@ -357,7 +360,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode synctypes.SyncMo
 	rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckLocalPermissions(ctx))
 
 	// Observe changes.
-	changes, pendingToken, err := rt.observeChanges(ctx, rt, bl, mode, false, false)
+	changes, pendingTokens, err := rt.observeChanges(ctx, rt, bl, mode, false, false)
 	if err != nil {
 		return fmt.Errorf("sync: bootstrap observation failed: %w", err)
 	}
@@ -371,7 +374,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode synctypes.SyncMo
 	// Commit the deferred delta token before dispatching bootstrap actions.
 	// Bootstrap uses watch-mode big-delete (rolling counter), not planner-level
 	// threshold, so the token is always safe to commit here.
-	if err := rt.commitDeferredDeltaToken(ctx, pendingToken); err != nil {
+	if err := rt.commitDeferredDeltaTokens(ctx, pendingTokens); err != nil {
 		return err
 	}
 
@@ -395,7 +398,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode synctypes.SyncMo
 // when all observers exit, allowing the bridge goroutine to drain cleanly.
 func (rt *watchRuntime) startObservers(
 	ctx context.Context, bl *synctypes.Baseline, mode synctypes.SyncMode, buf *syncobserve.Buffer, opts synctypes.WatchOpts,
-) (<-chan error, int, <-chan []synctypes.SkippedItem) {
+) (<-chan error, int, <-chan []synctypes.SkippedItem, <-chan syncscope.Change) {
 	events := make(chan synctypes.ChangeEvent, watchEventBuf)
 	errs := make(chan error, 2)
 
@@ -424,6 +427,8 @@ func (rt *watchRuntime) startObservers(
 		localObs.SetObservationRules(rt.engine.localRules)
 		localObs.SetSafetyScanInterval(opts.SafetyScanInterval)
 		localObs.SetSkippedChannel(skippedCh)
+		localObs.SetScopeSnapshot(rt.currentScopeSnapshot())
+		localObs.SetScopeChangeChannel(rt.scopeChanges)
 
 		if rt.engine.localWatcherFactory != nil {
 			localObs.SetWatcherFactory(rt.engine.localWatcherFactory)
@@ -459,7 +464,7 @@ func (rt *watchRuntime) startObservers(
 
 	rt.closeWatchEventsWhenObserversExit(&obsWg, events)
 
-	return errs, count, skippedCh
+	return errs, count, skippedCh, rt.scopeChanges
 }
 
 func (rt *watchRuntime) startRemoteObserver(
@@ -470,9 +475,41 @@ func (rt *watchRuntime) startRemoteObserver(
 	errs chan<- error,
 	opts synctypes.WatchOpts,
 ) {
-	rt.warnWebsocketFallbackIfNeeded()
-
 	pollInterval := rt.engine.resolvePollInterval(opts)
+	if rt.engine.usesPrimaryPathScopes() {
+		scopes, rootFallback, err := rt.engine.resolvePrimaryObservationScopes(ctx)
+		if err != nil {
+			go func() {
+				defer obsWg.Done()
+				defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
+				errs <- err
+			}()
+
+			return
+		}
+
+		if !rootFallback && len(scopes) > 0 {
+			if rt.engine.enableWebsocket {
+				rt.engine.emitDebugEvent(engineDebugEvent{
+					Type: engineDebugEventWebsocketFallback,
+					Note: "sync_paths",
+				})
+				rt.engine.logger.Warn("websocket watch is not supported for sync_paths-scoped sessions; falling back to polling",
+					slog.String("drive_id", rt.engine.driveID.String()),
+				)
+			}
+
+			go func() {
+				defer obsWg.Done()
+				defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
+				errs <- rt.watchPrimaryScopedRemote(ctx, bl, events, pollInterval, scopes)
+			}()
+
+			return
+		}
+	}
+
+	rt.warnWebsocketFallbackIfNeeded()
 	if rt.engine.hasScopedRoot() {
 		go func() {
 			defer obsWg.Done()
@@ -485,6 +522,13 @@ func (rt *watchRuntime) startRemoteObserver(
 
 	remoteObs := syncobserve.NewRemoteObserver(rt.engine.fetcher, bl, rt.engine.driveID, rt.engine.logger)
 	remoteObs.SetObsWriter(rt.engine.baseline)
+	remoteObs.SetWatchObservationPreparer(func(
+		_ context.Context,
+		events []synctypes.ChangeEvent,
+	) ([]synctypes.ObservedItem, []synctypes.ChangeEvent, error) {
+		scoped := applyRemoteScope(rt.engine.logger, rt.currentScopeSnapshot(), events)
+		return scoped.observed, scoped.emitted, nil
+	})
 	rt.remoteObs = remoteObs
 	rt.startSocketIOWakeSource(ctx, remoteObs)
 

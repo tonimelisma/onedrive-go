@@ -33,17 +33,20 @@ When the same file has been modified on both the local filesystem and OneDrive s
 - R-2.3.11: Shared-folder write blocks shall have no manual CLI retry or recheck command. The system shall revalidate them automatically during normal sync/watch permission checks while blocked writes still exist. [verified]
 - R-2.3.12: Repeated `issues force-deletes` and repeated conflict-resolution attempts shall be replay-safe. Repeating the same mutation shall either be a no-op or return a stable already-resolved result, without duplicate durable effects or partial scope release. [verified]
 
-## R-2.4 Filtering [implemented]
+## R-2.4 Filtering [verified]
 
-Filter settings support global defaults with per-drive overrides. These
-filters apply to local observation only; remote observation continues to
-trust the server and does not silently drop remote-only items.
+Filter settings support global defaults with per-drive overrides. The
+`skip_*` filters remain local-observation-only, while `ignore_marker` and
+`sync_paths` define bidirectional sync scope. Remote observation still trusts
+the server at the raw delta boundary; sync scope is applied after observation
+so out-of-scope items become filtered state instead of being silently erased
+from durable truth.
 
 - R-2.4.1: When `skip_dotfiles = true`, the system shall exclude files and folders starting with `.`. [verified]
 - R-2.4.2: When `skip_dirs` is set, the system shall exclude matching directory names. [verified]
 - R-2.4.3: When `skip_files` is set, the system shall exclude matching file patterns. [verified]
-- R-2.4.4: When a directory contains a file matching the `ignore_marker` name (default `.odignore`), the system shall exclude that directory from sync. The marker file is a presence-only check — its contents are not read. The marker file itself is not synced. [planned]
-- R-2.4.5: When `sync_paths` is set, the system shall sync only the specified paths. [planned]
+- R-2.4.4: When a directory contains a file matching the `ignore_marker` name (default `.odignore`), the system shall exclude that directory from sync. The marker file is a presence-only check — its contents are not read. The marker file itself is not synced. Marker create/delete/rename shall update the effective sync scope without fabricating deletes for items that merely became out-of-scope. [verified]
+- R-2.4.5: When `sync_paths` is set, the system shall sync only the specified paths. Scope shrink shall stop managing excluded paths without synthesizing deletes. Scope expansion shall trigger targeted remote re-entry reconciliation so previously filtered remote items can become active again. [verified]
 - R-2.4.6: When `skip_symlinks = true`, the system shall exclude symlinks. When `skip_symlinks = false` (default), the system shall follow symlink targets and observe them as ordinary files and directories at the symlink path. Directory-symlink cycles shall stop at the alias boundary instead of recursing forever. [verified]
 - R-2.4.7: When an item belongs to the Personal Vault, the system shall exclude it. Vault auto-locks after 20 minutes, causing locked items to appear deleted in delta responses — syncing vault items would cause data loss. [verified]
 

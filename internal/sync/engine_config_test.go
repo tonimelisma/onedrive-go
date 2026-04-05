@@ -37,6 +37,8 @@ func TestBuildEngineConfig_PropagatesWatchCapabilities(t *testing.T) {
 			SkipSymlinks: true,
 			SkipDirs:     []string{"vendor"},
 			SkipFiles:    []string{"*.tmp"},
+			SyncPaths:    []string{"/Projects/report.txt"},
+			IgnoreMarker: ".syncignore",
 		},
 		TransfersConfig: config.TransfersConfig{
 			TransferWorkers: 3,
@@ -58,6 +60,7 @@ func TestBuildEngineConfig_PropagatesWatchCapabilities(t *testing.T) {
 	assert.Equal(t, syncDir, ecfg.SyncRoot)
 	assert.Equal(t, resolved.StatePath(), ecfg.DBPath)
 	assert.Equal(t, session.DriveID, ecfg.DriveID)
+	assert.Equal(t, resolved.CanonicalID.DriveType(), ecfg.DriveType)
 	assert.Equal(t, resolved.CanonicalID.Email(), ecfg.AccountEmail)
 	assert.Equal(t, "shared-root-id", ecfg.RootItemID)
 	assert.True(t, ecfg.EnableWebsocket)
@@ -70,6 +73,8 @@ func TestBuildEngineConfig_PropagatesWatchCapabilities(t *testing.T) {
 	assert.True(t, ecfg.LocalFilter.SkipSymlinks)
 	assert.Equal(t, []string{"vendor"}, ecfg.LocalFilter.SkipDirs)
 	assert.Equal(t, []string{"*.tmp"}, ecfg.LocalFilter.SkipFiles)
+	assert.Equal(t, []string{"/Projects/report.txt"}, ecfg.SyncScope.SyncPaths)
+	assert.Equal(t, ".syncignore", ecfg.SyncScope.IgnoreMarker)
 	assert.True(t, ecfg.LocalRules.RejectSharePointRootForms)
 	assert.True(t, ecfg.UseLocalTrash)
 	assert.Equal(t, 3, ecfg.TransferWorkers)

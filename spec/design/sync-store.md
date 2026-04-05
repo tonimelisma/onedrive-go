@@ -2,7 +2,7 @@
 
 GOVERNS: internal/syncstore/store.go, internal/syncstore/inspector.go, internal/syncstore/schema.go, internal/syncstore/schema.sql, internal/syncstore/store_baseline.go, internal/syncstore/store_observation.go, internal/syncstore/store_conflicts.go, internal/syncstore/store_failures.go, internal/syncstore/store_admin.go, internal/syncstore/store_scope_blocks.go, internal/syncstore/shortcuts.go, internal/syncverify/verify.go, internal/syncrecovery/recovery.go, internal/cli/verify.go, internal/cli/issues.go, internal/cli/failure_display.go
 
-Implements: R-2.5 [verified], R-2.5.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.7 [verified], R-2.15.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.14 [verified], R-2.10.22 [verified], R-2.10.33 [verified], R-2.10.34 [verified], R-2.10.41 [verified], R-2.10.45 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified], R-6.7.17 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
+Implements: R-2.4.4 [verified], R-2.4.5 [verified], R-2.5 [verified], R-2.5.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.7 [verified], R-2.15.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.14 [verified], R-2.10.22 [verified], R-2.10.33 [verified], R-2.10.34 [verified], R-2.10.41 [verified], R-2.10.45 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified], R-6.7.17 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
 ## SyncStore (`store.go`)
 
@@ -42,6 +42,12 @@ Key operations:
 
 - `CommitObservation()` atomically writes `remote_state` rows and advances the relevant delta token.
 - `CommitOutcome()` updates `baseline` and finalizes remote-state transitions per action. Success-side `sync_failures` cleanup is engine-owned and happens before or after the store commit depending on the result flow.
+- `ApplyRemoteScope(ctx, snapshot)` is the durable sync-scope projection step.
+  It marks already-known out-of-scope `remote_state` rows as `filtered`
+  without fabricating deletes. In-scope re-entry is resolved later by the next
+  remote observation for that item.
+- `UpsertSyncMetadataEntries(ctx, entries)` is the generic sync-metadata
+  writer used by the engine to persist the last effective sync-scope snapshot.
 - `RefreshLocalBaseline(ctx, LocalBaselineRefresh)` is the explicit manual-reconciliation path used when local disk now represents the chosen truth without a new executor transfer result. It updates only the local-side baseline tuple, preserves known remote-side metadata/`etag`, and marks a matching `remote_state` row synced.
 - `RecordFailure(ctx, SyncFailureParams, delayFn)` is the single failure writer. The engine provides classification and retry policy; the store provides transactional persistence and conflict-safe upsert behavior.
 - `ResetDownloadingStates(ctx, delayFn)`, `ListDeletingCandidates(ctx)`, and `FinalizeDeletingStates(ctx, deleted, pending, delayFn)` are the state-only crash-recovery primitives. The store no longer probes the sync-root filesystem itself.
@@ -61,6 +67,15 @@ needs later:
 The store does not fabricate hashes or synthesize fallback decisions. It
 persists exactly what observation and execution learned, including known zero
 sizes. Comparison policy stays in the planner.
+
+For sync-scope filtering, `remote_state.sync_status = filtered` is the durable
+"currently outside effective sync scope" marker. It is intentionally distinct
+from `deleted` and from retryable download states:
+
+- filtered rows stay visible to the engine for later re-entry reconciliation
+- filtered rows are excluded from unreconciled/retry projections
+- an in-scope observation moves a filtered row back to `synced` or
+  `pending_download` based on hash equality
 
 `RefreshLocalBaseline()` is deliberately narrower than `CommitOutcome()`. It
 exists for manual/local reconciliation paths such as `keep_both`, where the

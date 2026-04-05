@@ -23,6 +23,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -155,6 +156,20 @@ type LocalObserver struct {
 	// Paths stay recorded until the same alias is observed as a real file/dir
 	// again or the observer is recreated. Single-goroutine access only.
 	excludedSymlinkPaths map[string]struct{}
+
+	// scopeSnapshot is the effective sync scope currently applied to local
+	// observation. It is rebuilt by the engine before scans/watch startup and
+	// updated in watch mode when ignore markers appear or disappear.
+	scopeSnapshot syncscope.Snapshot
+
+	// scopeChanges forwards watch-mode scope transitions (marker create/delete/
+	// rename) back to the engine so remote filtering and reconciliation can
+	// react to the new effective scope.
+	scopeChanges chan<- syncscope.Change
+
+	// watchedDirs tracks fsnotify registrations owned by this observer. The
+	// watch loop is the single writer, so no mutex is needed.
+	watchedDirs map[string]struct{}
 }
 
 // NewLocalObserver creates a LocalObserver. checkWorkers controls the number
@@ -174,6 +189,7 @@ func NewLocalObserver(baseline *synctypes.Baseline, logger *slog.Logger, checkWo
 		RecentLocalDeletes:   make(map[string]struct{}),
 		CollisionPeers:       make(map[string]map[string]struct{}),
 		excludedSymlinkPaths: make(map[string]struct{}),
+		watchedDirs:          make(map[string]struct{}),
 		SafetyTickFunc: func(d time.Duration) (<-chan time.Time, func()) {
 			t := time.NewTicker(d)
 			return t.C, t.Stop
@@ -211,6 +227,25 @@ func (o *LocalObserver) SetFilterConfig(cfg synctypes.LocalFilterConfig) {
 // get conflated with local exclusions.
 func (o *LocalObserver) SetObservationRules(rules synctypes.LocalObservationRules) {
 	o.observationRules = rules
+}
+
+// SetScopeSnapshot installs the effective sync scope for local observation.
+// The snapshot is a value type, so later engine mutations cannot silently
+// change an already-running observer.
+func (o *LocalObserver) SetScopeSnapshot(snapshot syncscope.Snapshot) {
+	o.scopeSnapshot = snapshot
+}
+
+// SetScopeChangeChannel sets the optional channel used by watch mode to report
+// marker-driven scope changes back to the engine.
+func (o *LocalObserver) SetScopeChangeChannel(ch chan<- syncscope.Change) {
+	o.scopeChanges = ch
+}
+
+// BuildScopeSnapshot discovers the effective local marker state under the
+// current sync root and combines it with the configured sync scope.
+func (o *LocalObserver) BuildScopeSnapshot(ctx context.Context, tree *synctree.Root, cfg syncscope.Config) (syncscope.Snapshot, error) {
+	return BuildScopeSnapshot(ctx, tree, cfg, o.Logger)
 }
 
 // SetSafetyScanInterval overrides the default 5-minute safety scan interval.

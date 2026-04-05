@@ -36,13 +36,14 @@ type FilterConfig struct {
 	SkipDotfiles bool     `toml:"skip_dotfiles"`
 	SkipSymlinks bool     `toml:"skip_symlinks"`
 
-	// Placeholder for planned functionality (R-2.4.5). Config parsing and
-	// validation are ready; scanner logic is not yet implemented.
+	// SyncPaths narrows sync to selected absolute drive-root paths. Scope is
+	// enforced bidirectionally by local observation, remote observation, and
+	// persisted sync-state filtering.
 	SyncPaths []string `toml:"sync_paths"`
 
-	// Placeholder for planned functionality (R-2.4.4). When implemented,
-	// the scanner will exclude any directory containing a file with this
-	// name (presence-only check — file contents are not read).
+	// IgnoreMarker excludes any directory containing this filename from sync.
+	// The marker is a presence-only check; contents are ignored and the marker
+	// file itself is never synced.
 	IgnoreMarker string `toml:"ignore_marker"`
 }
 
@@ -124,6 +125,8 @@ type Drive struct {
 	SkipDotfiles *bool    `toml:"skip_dotfiles,omitempty"`
 	SkipDirs     []string `toml:"skip_dirs,omitempty"`
 	SkipFiles    []string `toml:"skip_files,omitempty"`
+	SyncPaths    []string `toml:"sync_paths,omitempty"`
+	IgnoreMarker string   `toml:"ignore_marker,omitempty"`
 	PollInterval string   `toml:"poll_interval,omitempty"`
 }
 
