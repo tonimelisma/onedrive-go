@@ -47,6 +47,7 @@ Key properties:
 - Malformed sparse items with empty identity are skipped before event emission
 - Sparse remote timestamps are normalized at the graph boundary; item conversion preserves zero/unknown timestamps instead of synthesizing current time
 - Sparse non-delete items recover omitted `name` / `parentReference` from the baseline when possible, instead of treating partial delta payloads as malformed
+- The inflight parent map also recovers sparse parent metadata from the baseline, so descendants in the same delta batch keep the correct parent leaf and ancestor chain even when the parent item omits unchanged `name` or `parentReference`
 - Orphan items (missing parent) produce a warning log and partial path
 - The inflight map is a parameter, not a field — RemoteObserver accumulates it across pages; shortcuts populate it once per batch
 

@@ -317,6 +317,59 @@ func TestFullDelta_MovedFile_SparseNameRecoveredFromBaseline(t *testing.T) {
 	assert.Equal(t, "doc.txt", events[0].Name)
 }
 
+// Validates: R-6.7.29
+func TestFullDelta_DescendantFollowsSparseRenamedParentWithOmittedParentReference(t *testing.T) {
+	t.Parallel()
+
+	baseline := synctest.BaselineWith(
+		&synctypes.BaselineEntry{
+			Path: "Team", DriveID: driveid.New(synctest.TestDriveID), ItemID: "team",
+			ParentID: "root", ItemType: synctypes.ItemTypeFolder,
+		},
+		&synctypes.BaselineEntry{
+			Path: "Team/Reports", DriveID: driveid.New(synctest.TestDriveID), ItemID: "reports",
+			ParentID: "team", ItemType: synctypes.ItemTypeFolder,
+		},
+		&synctypes.BaselineEntry{
+			Path: "Team/Reports/q1.txt", DriveID: driveid.New(synctest.TestDriveID), ItemID: "f1",
+			ParentID: "reports", ItemType: synctypes.ItemTypeFile,
+		},
+	)
+
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveid.New(synctest.TestDriveID)},
+					// Descendant arrives in the same sparse batch as its renamed parent.
+					{ID: shortcutTestFileItemID, Name: "q1.txt", ParentID: "reports", DriveID: driveid.New(synctest.TestDriveID), QuickXorHash: "new-hash"},
+					// Parent name changed, but Graph omits unchanged parentReference.
+					{ID: "reports", Name: "Statements", ParentID: "", DriveID: driveid.New(synctest.TestDriveID), IsFolder: true},
+				},
+				DeltaLink: "delta-link",
+			},
+		}},
+	}
+
+	obs := NewRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	events, _, err := obs.FullDelta(t.Context(), "token")
+	require.NoError(t, err, "FullDelta")
+
+	var fileEvent *synctypes.ChangeEvent
+	for i := range events {
+		if events[i].ItemID == shortcutTestFileItemID {
+			fileEvent = &events[i]
+			break
+		}
+	}
+
+	require.NotNil(t, fileEvent, "descendant event not found")
+	assert.Equal(t, synctypes.ChangeMove, fileEvent.Type)
+	assert.Equal(t, "Team/Statements/q1.txt", fileEvent.Path,
+		"descendant should keep the renamed parent's baseline ancestry when parentReference is omitted")
+	assert.Equal(t, "Team/Reports/q1.txt", fileEvent.OldPath)
+}
+
 // Validates: R-2.1.2
 func TestFullDelta_MultiPage(t *testing.T) {
 	t.Parallel()
@@ -1416,7 +1469,7 @@ func TestFullDelta_CrossDriveItems(t *testing.T) {
 	assert.Equal(t, synctypes.ChangeCreate, ev.Type)
 }
 
-// Validates: R-2.4
+// Validates: R-2.4.7
 // TestFullDelta_PersonalVaultExcluded verifies that items with
 // specialFolder.name == "vault" are excluded from delta processing by default,
 // preventing data-loss from vault lock/unlock transitions (B-271).
@@ -1468,7 +1521,7 @@ func TestFullDelta_PersonalVaultExcluded(t *testing.T) {
 // child's parent is not yet in the inflight map when isDescendantOfVault
 // runs, causing it to be emitted as a normal file — data loss when the
 // vault re-locks (B-281).
-// Validates: R-6.7.1
+// Validates: R-2.4.7, R-6.7.1
 func TestFullDelta_VaultChildBeforeParent(t *testing.T) {
 	t.Parallel()
 

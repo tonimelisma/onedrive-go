@@ -303,7 +303,7 @@ This is the operating dashboard for completeness, not a verdict of quality. A pa
 | Workstream | Req | Design | Code | Ref | Meta | Body | Kill | Verified reconcile | Highest unresolved risk |
 |---|---|---|---|---|---|---|---|---|---|
 | W1 | done | done | partial | partial | done | done | partial | done | current actionable W1 top-ups are closed; only planned/deferred logging policy work remains |
-| W2 | done | done | done | partial | done | partial | partial | partial | remaining sparse-payload nil/parent-chain hardening and broader symlink/always-excluded reconciliation still need body audit |
+| W2 | done | done | done | partial | done | done | partial | done | current actionable W2 top-ups are closed; only planned nil-guard / watch-cleanup hardening remains |
 | W3 | done | done | partial | n/a | done | no | partial | no | big-delete and cross-drive proof paths unclear |
 | W4 | done | done | done | n/a | done | done | partial | done | live crash/restart proof is still thinner than the now-reconciled store/CLI durable-row mutation coverage |
 | W5 | done | done | done | partial | done | partial | partial | done | upload-session traceability tags still lag the body-level coverage |
@@ -660,6 +660,7 @@ Key W1 gap notes:
 | Remote observation must skip malformed sparse items it cannot identify or materialize safely | `DESIGN+CODE+BODY` | `internal/syncobserve/observer_remote_test.go` now proves remote items with empty `ItemID`, non-deleted items with empty `Name`, and delete entries without any recoverable path are warned and skipped instead of emitting empty-path or empty-ID events | `proven` | Real prod gap fixed in remote item conversion |
 | Invalid or absent remote timestamps must remain unknown instead of being synthesized into current time | `REQ+DESIGN+CODE+BODY+WEB` | Official Graph delta docs describe sparse changed-property payloads, while `internal/graph/items_test.go`, `internal/syncobserve/observer_remote_test.go`, and CLI formatting tests now prove invalid, empty, future, and delete-null timestamps stay zero/unknown through parsing, observation, and presentation | `proven` | Real prod gap fixed at the graph boundary; spec now marks `R-6.7.16` and `R-6.7.26` verified |
 | Sparse non-delete delta items must recover omitted unchanged path fields from the baseline | `REQ+DESIGN+CODE+BODY+WEB` | Microsoft’s delta overview documents that updated instances can be returned with only `id` plus the changed properties. `internal/syncobserve/observer_remote_test.go` and `internal/syncobserve/item_converter_test.go` now prove missing `name` and missing parent context are recovered from the baseline so sparse modifies and moves stay correctly rooted | `proven` | Real prod gap fixed in remote item conversion; spec now tracks `R-6.7.29` |
+| Descendants must stay correctly rooted when a sparse parent in the same batch omits unchanged metadata | `DESIGN+CODE+BODY+WEB` | `internal/syncobserve/observer_remote_test.go` now proves a child follows a renamed parent whose `parentReference` was omitted, and `internal/syncobserve/item_converter_test.go` proves shortcut-scoped descendants keep a moved parent's recovered leaf name when the parent item omits `name` | `proven` | Real prod gap fixed in inflight parent recovery for sparse batches |
 | Resolved config must reach the engine and observer instead of being dropped in CLI setup | `REQ+CODE+BODY` | `internal/cli/sync_helpers_test.go` plus `internal/sync/engine_filter_test.go` prove config propagation and end-to-end upload suppression | `proven` | Fixed production wiring gap |
 
 Key W2 gap notes:
@@ -671,9 +672,10 @@ Key W2 gap notes:
 - `CODE+BODY`: sparse remote payload handling also had a real conversion gap. Malformed remote items could still produce empty-ID or empty-path events and reach planner input. That is now fixed for the highest-risk identity/materialization cases with regression coverage, without regressing ordinary deleted-item path recovery from delta data.
 - `CODE+BODY+WEB`: sparse remote timestamps also had a real normalization gap. Empty, invalid, and out-of-range timestamps were being rewritten to `time.Now()`, which hid malformed Graph payloads behind fake metadata. That is now fixed and covered through graph parsing, remote conversion, and CLI presentation tests.
 - `CODE+BODY+WEB`: sparse non-delete delta items also had a real recovery gap. When Graph omitted unchanged path fields, the converter could skip valid updates or accidentally re-root them. That is now fixed with regression coverage for primary and shortcut scopes.
+- `CODE+BODY+WEB`: deeper sparse parent-chain handling also had a real inflight-map gap. Parent items recovered omitted `name` / `parentReference` only at final classification time, so descendants in the same batch could still collapse out of their parent leaf or lose their grandparent chain. That is now fixed with primary and shortcut regression coverage.
 - `CODE+BODY`: scanner-time `hash_panic` rows also had a real lifecycle gap. They were recorded as actionable skipped items, but healthy later scans did not include `hash_panic` in the stale-row auto-clear sweep, so one-off hash panics could linger forever. That is now fixed with regression coverage.
 - `CODE+BODY+WEB`: filename validation/actionability also had two real gaps. OneDrive-reserved `~$...` names were being swallowed by the generic internal `~...` exclusion, and SharePoint root-level `forms` was specified but unenforced because observation lacked drive-type rule context. Both are now fixed with regression coverage and Microsoft-source alignment.
-- `META`: W2 still needs deeper reconciliation on the remaining sparse-payload edge cases (deeper parent-chain oddities and other zero-value Graph fields) plus the rest of the symlink/always-excluded behavior surface.
+- `META`: the current W2 top-up tranche is closed. Remaining observation work is now the explicitly planned hardening list in `sync-observation.md` (`R-6.7.21` nil-guard sweep, partial-watch cleanup verification, overflow/drop instrumentation), not an unresolved body-audit suspicion.
 
 ### W3. Planner Safety, Conflict Resolution, And Delete Protection
 
@@ -1076,9 +1078,6 @@ Key W5 gap notes:
 
 ## Next Moves
 
-1. Continue W2 body-level reconciliation for:
-   - `R-2.4.6` / `R-2.4.7` symlink and always-excluded behavior
-   - remaining sparse remote-payload hardening and nil-guard proof paths
-2. Tighten W5 traceability for upload-session rules that are already strongly tested in body-level graph tests but still under-tagged at the `// Validates:` level.
-3. Continue W7 body-level reconciliation for:
+1. Tighten W5 traceability for upload-session rules that are already strongly tested in body-level graph tests but still under-tagged at the `// Validates:` level.
+2. Continue W7 body-level reconciliation for:
    - live logout / whoami / drive-list / drive-search / shared proof against real config/token state beyond the now-expanded caller-level coverage
