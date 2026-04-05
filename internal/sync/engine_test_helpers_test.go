@@ -234,7 +234,7 @@ func newTestEngineWithContext(t *testing.T, ctx context.Context, mock *engineMoc
 		Logger:          logger,
 	})
 	require.NoError(t, err, "NewEngine")
-	eng.assertScopeInvariants = true
+	eng.assertInvariants = true
 	flow := newEngineFlow(eng)
 	testEng := &testEngine{
 		Engine: eng,
@@ -283,7 +283,7 @@ func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *eng
 		Logger:          logger,
 	})
 	require.NoError(t, err, "NewEngine")
-	eng.assertScopeInvariants = true
+	eng.assertInvariants = true
 	flow := newEngineFlow(eng)
 	testEng := &testEngine{
 		Engine: eng,
@@ -521,7 +521,7 @@ func discardTestScope(t *testing.T, eng *testEngine, ctx context.Context, key sy
 func assertTestCurrentScopeInvariants(t *testing.T, eng *testEngine, ctx context.Context) error {
 	t.Helper()
 	rt, _ := lookupTestWatchRuntime(eng)
-	return testEngineFlow(t, eng).assertCurrentScopeInvariants(ctx, rt)
+	return testEngineFlow(t, eng).assertCurrentInvariants(ctx, rt)
 }
 
 func assertReleasedScopeForTest(t *testing.T, eng *testEngine, ctx context.Context, key synctypes.ScopeKey) error {
@@ -686,16 +686,20 @@ func (r *debugEventRecorder) waitUntilSeen(
 }
 
 func (r *debugEventRecorder) findEvent(match func(engineDebugEvent) bool) bool {
+	return r.findEventIndex(match) >= 0
+}
+
+func (r *debugEventRecorder) findEventIndex(match func(engineDebugEvent) bool) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	for i := range r.history {
 		if match(r.history[i]) {
-			return true
+			return i
 		}
 	}
 
-	return false
+	return -1
 }
 
 func (r *debugEventRecorder) eventTypesSnapshot() []engineDebugEventType {
@@ -716,6 +720,73 @@ func (r *debugEventRecorder) eventsSnapshot() []engineDebugEvent {
 	copy(events, r.history)
 
 	return events
+}
+
+func (r *debugEventRecorder) requireOrderedSubsequence(
+	t *testing.T,
+	matches []func(engineDebugEvent) bool,
+	description string,
+) {
+	t.Helper()
+
+	events := r.eventsSnapshot()
+	searchFrom := 0
+	for i := range matches {
+		found := false
+		for j := searchFrom; j < len(events); j++ {
+			if matches[i](events[j]) {
+				searchFrom = j + 1
+				found = true
+				break
+			}
+		}
+		if !found {
+			require.FailNow(t, "expected ordered debug-event subsequence", description)
+		}
+	}
+}
+
+func (r *debugEventRecorder) requireNoEventAfter(
+	t *testing.T,
+	anchor func(engineDebugEvent) bool,
+	forbidden func(engineDebugEvent) bool,
+	description string,
+) {
+	t.Helper()
+
+	events := r.eventsSnapshot()
+	anchorIndex := -1
+	for i := range events {
+		if anchor(events[i]) {
+			anchorIndex = i
+			break
+		}
+	}
+	require.NotEqual(t, -1, anchorIndex, "anchor event missing: %s", description)
+
+	for i := anchorIndex + 1; i < len(events); i++ {
+		if forbidden(events[i]) {
+			require.FailNow(t, "unexpected debug event after anchor", description)
+		}
+	}
+}
+
+func (r *debugEventRecorder) requireEventCount(
+	t *testing.T,
+	match func(engineDebugEvent) bool,
+	expected int,
+	description string,
+) {
+	t.Helper()
+
+	events := r.eventsSnapshot()
+	count := 0
+	for i := range events {
+		if match(events[i]) {
+			count++
+		}
+	}
+	require.Equal(t, expected, count, description)
 }
 
 type manualClock struct {
@@ -933,18 +1004,6 @@ func handleExternalChangesForTest(t *testing.T, eng *testEngine, ctx context.Con
 func runFullReconciliationAsyncForTest(t *testing.T, eng *testEngine, ctx context.Context, bl *synctypes.Baseline) {
 	t.Helper()
 	testWatchRuntime(t, eng).runFullReconciliationAsync(ctx, bl)
-}
-
-func runWatchLoopForTest(eng *testEngine, ctx context.Context, p *watchPipeline) error {
-	rt, ok := lookupTestWatchRuntime(eng)
-	if !ok {
-		return fmt.Errorf("watch runtime must be initialized for this test")
-	}
-	p.runtime = rt
-	if p.reconcileResults == nil {
-		p.reconcileResults = rt.reconcileResults
-	}
-	return rt.runWatchLoop(ctx, p)
 }
 
 func waitForQuiescenceForTest(t *testing.T, eng *testEngine, ctx context.Context) error {

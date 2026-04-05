@@ -102,6 +102,28 @@ func TestNewStateAuditCmdPassesFlagsThrough(t *testing.T) {
 	assert.True(t, got.RepairSafe)
 }
 
+// Validates: R-6.10.11
+func TestNewCleanupAuditCmdPassesFlagsThrough(t *testing.T) {
+	t.Parallel()
+
+	var got devtool.CleanupAuditOptions
+
+	cmd := newCleanupAuditCmd(
+		func() (string, error) { return testRepoRoot, nil },
+		func(_ context.Context, opts devtool.CleanupAuditOptions) error {
+			got = opts
+			return nil
+		},
+	)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"--json"})
+
+	require.NoError(t, cmd.Execute())
+	assert.Equal(t, testRepoRoot, got.RepoRoot)
+	assert.True(t, got.JSON)
+}
+
 // Validates: R-6.2.1
 func TestNewWorktreeAddCmdRequiresFlags(t *testing.T) {
 	t.Parallel()
@@ -223,7 +245,7 @@ func TestNewRootCmd(t *testing.T) {
 	cmd := newRootCmd()
 	require.NotNil(t, cmd)
 	assert.Equal(t, "devtool", cmd.Use)
-	assert.Len(t, cmd.Commands(), 3)
+	assert.Len(t, cmd.Commands(), 4)
 }
 
 // Validates: R-6.2.1
@@ -278,6 +300,19 @@ func TestDefaultStateAuditWrapsError(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "run state audit")
+}
+
+// Validates: R-6.10.11
+func TestDefaultCleanupAuditWrapsError(t *testing.T) {
+	t.Parallel()
+
+	err := defaultCleanupAudit(context.Background(), devtool.CleanupAuditOptions{
+		RepoRoot: filepath.Join(t.TempDir(), "missing"),
+		Stdout:   io.Discard,
+		Stderr:   io.Discard,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "run cleanup audit")
 }
 
 // Validates: R-6.2.1
@@ -461,4 +496,57 @@ func TestDevtoolBinary_WorktreeAddCreatesBootstrappedWorktree(t *testing.T) {
 	linkTarget, linkErr := os.Readlink(filepath.Join(worktreePath, ".testdata"))
 	require.NoError(t, linkErr)
 	assert.Equal(t, filepath.Join(repoRoot, ".testdata"), linkTarget)
+}
+
+// Validates: R-6.10.11
+func TestDevtoolBinary_CleanupAuditClassifiesRepoState(t *testing.T) {
+	binPath := buildDevtoolBinary(t)
+
+	remoteRoot := filepath.Join(t.TempDir(), "origin.git")
+	runGit(t, "", "init", "--bare", remoteRoot)
+
+	repoRoot := filepath.Join(t.TempDir(), "repo")
+	runGit(t, "", "clone", remoteRoot, repoRoot)
+	runGit(t, repoRoot, "checkout", "-b", "main")
+	runGit(t, repoRoot, "config", "user.name", "Test User")
+	runGit(t, repoRoot, "config", "user.email", "test@example.com")
+	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "README.md"), []byte("main\n"), 0o600))
+	runGit(t, repoRoot, "add", "README.md")
+	runGit(t, repoRoot, "commit", "-m", "initial")
+	runGit(t, repoRoot, "push", "-u", "origin", "main")
+
+	runGit(t, repoRoot, "checkout", "-b", "refactor/merged")
+	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "merged.txt"), []byte("merged\n"), 0o600))
+	runGit(t, repoRoot, "add", "merged.txt")
+	runGit(t, repoRoot, "commit", "-m", "merged branch")
+	runGit(t, repoRoot, "checkout", "main")
+	runGit(t, repoRoot, "merge", "--ff-only", "refactor/merged")
+	runGit(t, repoRoot, "push", "origin", "main")
+	runGit(t, repoRoot, "push", "-u", "origin", "refactor/merged")
+
+	runGit(t, repoRoot, "checkout", "-b", "refactor/topic")
+	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "topic.txt"), []byte("topic\n"), 0o600))
+	runGit(t, repoRoot, "add", "topic.txt")
+	runGit(t, repoRoot, "commit", "-m", "topic branch")
+	runGit(t, repoRoot, "push", "-u", "origin", "refactor/topic")
+	runGit(t, repoRoot, "checkout", "main")
+
+	worktreePath := filepath.Join(t.TempDir(), "wt")
+	runGit(t, repoRoot, "worktree", "add", "-b", "refactor/attached", worktreePath, "main")
+	require.NoError(t, os.WriteFile(filepath.Join(worktreePath, "dirty.txt"), []byte("dirty\n"), 0o600))
+	canonicalRepoRoot, err := filepath.EvalSymlinks(repoRoot)
+	require.NoError(t, err)
+	canonicalWorktreePath, err := filepath.EvalSymlinks(worktreePath)
+	require.NoError(t, err)
+
+	stdout, stderr, err := runBinary(t, repoRoot, binPath, "cleanup-audit")
+	require.NoError(t, err, stdout+stderr)
+	assert.Contains(t, stdout, "cleanup audit: worktrees")
+	assert.Contains(t, stdout, "keep_main: "+canonicalRepoRoot+" (branch: main; root main worktree)")
+	assert.Contains(t, stdout, "keep_dirty: "+canonicalWorktreePath+" (branch: refactor/attached; attached worktree has local modifications)")
+	assert.Contains(t, stdout, "keep_dirty: refactor/attached (attached worktree has local modifications)")
+	assert.Contains(t, stdout, "safe_remove: refactor/merged (branch tip is reachable from main)")
+	assert.Contains(t, stdout, "keep_unmerged: refactor/topic (branch has commits not reachable from main)")
+	assert.Contains(t, stdout, "safe_remove: origin/refactor/merged (remote branch tip is reachable from main)")
+	assert.Contains(t, stdout, "keep_unmerged: origin/refactor/topic (remote branch has commits not reachable from main)")
 }

@@ -17,6 +17,8 @@ type cwdLookup func() (string, error)
 
 type verifyFunc func(context.Context, devtool.VerifyOptions) error
 
+type cleanupAuditFunc func(context.Context, devtool.CleanupAuditOptions) error
+
 type stateAuditFunc func(context.Context, devtool.StateAuditOptions) error
 
 type worktreeAddFunc func(context.Context, string, string, string) error
@@ -38,6 +40,7 @@ func newRootCmd() *cobra.Command {
 
 	cmd.AddCommand(
 		newVerifyCmd(defaultCWD, defaultVerify),
+		newCleanupAuditCmd(defaultCWD, defaultCleanupAudit),
 		newStateAuditCmd(defaultStateAudit),
 		newWorktreeCmd(defaultCWD, defaultAddWorktree, defaultBootstrapWorktree),
 	)
@@ -96,6 +99,32 @@ func newWorktreeCmd(getwd cwdLookup, addWorktree worktreeAddFunc, bootstrapWorkt
 		newWorktreeAddCmd(getwd, addWorktree),
 		newWorktreeBootstrapCmd(getwd, bootstrapWorktree),
 	)
+
+	return cmd
+}
+
+func newCleanupAuditCmd(getwd cwdLookup, runCleanupAudit cleanupAuditFunc) *cobra.Command {
+	var jsonOutput bool
+
+	cmd := &cobra.Command{
+		Use:   "cleanup-audit",
+		Short: "Classify local git cleanup candidates without deleting anything",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			repoRoot, err := getwd()
+			if err != nil {
+				return fmt.Errorf("get working directory: %w", err)
+			}
+
+			return runCleanupAudit(cmd.Context(), devtool.CleanupAuditOptions{
+				RepoRoot: repoRoot,
+				JSON:     jsonOutput,
+				Stdout:   cmd.OutOrStdout(),
+				Stderr:   cmd.ErrOrStderr(),
+			})
+		},
+	}
+
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "emit JSON output")
 
 	return cmd
 }
@@ -212,6 +241,14 @@ func defaultCWD() (string, error) {
 func defaultVerify(ctx context.Context, opts devtool.VerifyOptions) error {
 	if err := devtool.RunVerify(ctx, devtool.ExecRunner{}, opts); err != nil {
 		return fmt.Errorf("run verify: %w", err)
+	}
+
+	return nil
+}
+
+func defaultCleanupAudit(ctx context.Context, opts devtool.CleanupAuditOptions) error {
+	if err := devtool.RunCleanupAudit(ctx, devtool.ExecRunner{}, opts); err != nil {
+		return fmt.Errorf("run cleanup audit: %w", err)
 	}
 
 	return nil

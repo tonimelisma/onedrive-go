@@ -117,7 +117,7 @@ func (controller *scopeController) repairPersistedScopes(
 		return err
 	}
 
-	flow.mustAssertScopeInvariants(ctx, watch, "repair persisted scopes")
+	flow.mustAssertInvariants(ctx, watch, "repair persisted scopes")
 
 	return nil
 }
@@ -488,7 +488,7 @@ func (controller *scopeController) activateScope(ctx context.Context, watch *wat
 		ScopeKey: block.Key,
 	})
 
-	flow.mustAssertScopeInvariants(ctx, watch, "activate scope")
+	flow.mustAssertInvariants(ctx, watch, "activate scope")
 
 	return nil
 }
@@ -735,7 +735,7 @@ func (controller *scopeController) releaseScope(ctx context.Context, watch *watc
 	)
 
 	flow.mustAssertReleasedScope(ctx, watch, key, "release scope")
-	flow.mustAssertScopeInvariants(ctx, watch, "release scope")
+	flow.mustAssertInvariants(ctx, watch, "release scope")
 
 	return nil
 }
@@ -759,7 +759,7 @@ func (controller *scopeController) discardScope(ctx context.Context, watch *watc
 	})
 
 	flow.mustAssertDiscardedScope(ctx, watch, key, "discard scope")
-	flow.mustAssertScopeInvariants(ctx, watch, "discard scope")
+	flow.mustAssertInvariants(ctx, watch, "discard scope")
 
 	return nil
 }

@@ -96,7 +96,7 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeLocalObserverStarts(t *testing.
 		return event.Type == engineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
 	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverStarted && event.Note == engineDebugObserverLocal
+		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
 	}, "local observer started")
 
 	cancel()
@@ -178,7 +178,7 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeRemoteObserverStarts(t *testing
 		return event.Type == engineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
 	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverStarted && event.Note == engineDebugObserverRemote
+		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverRemote
 	}, "remote observer started")
 
 	cancel()

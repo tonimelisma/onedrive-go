@@ -22,12 +22,12 @@ const minWorkers = 4
 // Workers are pure executors — they NEVER call depGraph.Complete(). The engine
 // owns all completion decisions (R-6.8.9).
 //
-// Workers read from dispatchCh and wait on doneCh, which may be backed by
+// Workers read from dispatchCh and wait on completeCh, which may be backed by
 // DepGraph or any other dispatch source.
 type WorkerPool struct {
 	cfg        *ExecutorConfig
 	dispatchCh <-chan *synctypes.TrackedAction
-	doneCh     <-chan struct{}
+	completeCh <-chan struct{}
 	baseline   synctypes.OutcomeWriter
 	logger     *slog.Logger
 
@@ -45,12 +45,12 @@ type WorkerPool struct {
 // determines the result channel buffer (use the number of actions in the
 // plan for one-shot mode, or a generous buffer for watch mode).
 //
-// dispatchCh provides actions ready for execution. doneCh signals when all work
-// is complete (workers exit when doneCh closes or ctx is canceled).
+// dispatchCh provides actions ready for execution. completeCh signals when all
+// work is complete (workers exit when completeCh closes or ctx is canceled).
 func NewWorkerPool(
 	cfg *ExecutorConfig,
 	dispatchCh <-chan *synctypes.TrackedAction,
-	doneCh <-chan struct{},
+	completeCh <-chan struct{},
 	baseline synctypes.OutcomeWriter,
 	logger *slog.Logger,
 	planSize int,
@@ -62,7 +62,7 @@ func NewWorkerPool(
 	return &WorkerPool{
 		cfg:        cfg,
 		dispatchCh: dispatchCh,
-		doneCh:     doneCh,
+		completeCh: completeCh,
 		baseline:   baseline,
 		logger:     logger,
 		// Buffer sizing contract: one-shot mode uses planSize (equal to
@@ -99,9 +99,9 @@ func (wp *WorkerPool) Start(ctx context.Context, total int) {
 	)
 }
 
-// Wait blocks until the done signal fires (all actions complete).
+// Wait blocks until the completion signal fires (all actions complete).
 func (wp *WorkerPool) Wait() {
-	<-wp.doneCh
+	<-wp.completeCh
 }
 
 // Stop cancels all in-flight work, waits for goroutines to exit, and closes
@@ -124,7 +124,7 @@ func (wp *WorkerPool) worker(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-wp.doneCh:
+		case <-wp.completeCh:
 			return
 		case ta, ok := <-wp.dispatchCh:
 			if !ok {

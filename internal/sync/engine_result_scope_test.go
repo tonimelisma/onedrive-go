@@ -1000,7 +1000,8 @@ func TestProcessTrialResultV2_Failure_DoublesInterval(t *testing.T) {
 	assert.Equal(t, 60*time.Second, got.TrialInterval, "interval should be doubled")
 }
 
-// Validates: R-2.10.6, R-2.10.8, R-2.10.14 — unified cap for all scope types.
+// Validates: R-2.10.6, R-2.10.8, R-2.10.14
+// Unified cap for all scope types.
 func TestProcessTrialResultV2_Failure_CapsAt5m(t *testing.T) {
 	t.Parallel()
 
@@ -1054,7 +1055,8 @@ func TestProcessTrialResultV2_Failure_CapsAt5m(t *testing.T) {
 	}
 }
 
-// Validates: Group A — trial failure must NOT trigger scope detection.
+// Validates: R-2.10.5
+// Trial failure must not trigger scope detection.
 func TestProcessTrialResultV2_Failure_NoScopeDetection(t *testing.T) {
 	t.Parallel()
 
@@ -1445,8 +1447,9 @@ func TestEvaluateTrialOutcome_OnlyMatchingScopeEvidenceExtends(t *testing.T) {
 	}
 }
 
-// Validates: R-2.10.14 — computeTrialInterval is the single source of truth
-// for initial intervals and backoff extensions.
+// Validates: R-2.10.14
+// computeTrialInterval is the single source of truth for initial intervals and
+// backoff extensions.
 func TestComputeTrialInterval(t *testing.T) {
 	t.Parallel()
 
@@ -1482,7 +1485,8 @@ func TestComputeTrialInterval(t *testing.T) {
 	}
 }
 
-// Validates: R-2.10.7 — Retry-After is used directly with no cap.
+// Validates: R-2.10.7
+// Retry-After is used directly with no cap.
 func TestExtendTrialInterval_WithRetryAfter(t *testing.T) {
 	t.Parallel()
 
@@ -1519,8 +1523,9 @@ func TestExtendTrialInterval_WithRetryAfter(t *testing.T) {
 		"Retry-After must be used directly with no cap — server is ground truth")
 }
 
-// Validates: R-2.10.43 — full disk:local scope-block lifecycle:
-// ErrDiskFull → classifyResult → active scope blocks downloads → trial → release.
+// Validates: R-2.10.43
+// Full disk:local scope-block lifecycle:
+// ErrDiskFull -> classifyResult -> active scope blocks downloads -> trial -> release.
 func TestDiskLocalScopeBlock_FullCycle(t *testing.T) {
 	t.Parallel()
 
@@ -1851,7 +1856,8 @@ func readReady(t *testing.T, ready <-chan *synctypes.TrackedAction) {
 	_ = readReadyAction(t, ready)
 }
 
-// Validates: R-2.10.5 — the one-shot engine loop processes results and routes dependents.
+// Validates: R-2.10.5
+// The one-shot engine loop processes results and routes dependents.
 func TestE2E_OneShotEngineLoop_ProcessesAndRoutes(t *testing.T) {
 	t.Parallel()
 
@@ -1903,12 +1909,14 @@ func TestWatchLoop_SteadyStateContinuesAfterGraphDrains(t *testing.T) {
 	require.NoError(t, err)
 
 	ready := setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
 	batches := make(chan []synctypes.PathChanges, 2)
 	results := make(chan synctypes.WorkerResult, 2)
 	done := make(chan error, 1)
 
 	go func() {
-		done <- runWatchLoopForTest(eng, ctx, &watchPipeline{
+		done <- rt.runWatchLoop(ctx, &watchPipeline{
+			runtime:    rt,
 			bl:         bl,
 			safety:     synctypes.DefaultSafetyConfig(),
 			batchReady: batches,
@@ -2795,7 +2803,7 @@ func TestOneShotEngineLoop_Success_ClearsSyncFailure(t *testing.T) {
 // clearFailureOnSuccess unit tests (D-6)
 // ---------------------------------------------------------------------------
 
-// Validates: D-6
+// Validates: R-2.10.41
 func TestClearFailureOnSuccess_RemovesFailureRow(t *testing.T) {
 	// Verify that clearFailureOnSuccess removes a previously recorded
 	// sync_failures row, confirming the engine-owns-failure-lifecycle
@@ -2833,7 +2841,7 @@ func TestClearFailureOnSuccess_RemovesFailureRow(t *testing.T) {
 	assert.Empty(t, rows, "failure should be cleared after success")
 }
 
-// Validates: D-6
+// Validates: R-2.10.41
 func TestClearFailureOnSuccess_FallbackDriveID(t *testing.T) {
 	// When synctypes.WorkerResult.DriveID is zero, clearFailureOnSuccess falls back
 	// to the engine's own driveID. This covers own-drive actions where the

@@ -5,16 +5,21 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 func TestShutdownContext_FirstSignalCancels(t *testing.T) {
@@ -85,6 +90,44 @@ func TestShutdownContext_SecondSignalForcesExit(t *testing.T) {
 	assert.NoError(t, scanner.Err())
 }
 
+// Validates: R-2.8.3
+func TestRunSyncWatch_FirstSignalCancelsWatchRunner(t *testing.T) {
+	if os.Getenv("ONEDRIVE_GO_TEST_SYNC_WATCH_HELPER") == "1" {
+		runSyncWatchFirstSignalHelper()
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	exe, err := os.Executable()
+	require.NoError(t, err)
+
+	//nolint:gosec // Test launches the current test binary with fixed arguments.
+	cmd := exec.CommandContext(ctx, exe, "-test.run=^TestRunSyncWatch_FirstSignalCancelsWatchRunner$")
+	cmd.Env = append(os.Environ(), "ONEDRIVE_GO_TEST_SYNC_WATCH_HELPER=1")
+
+	stdout, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	require.NoError(t, cmd.Start())
+
+	scanner := bufio.NewScanner(stdout)
+	require.True(t, scanner.Scan(), "helper should announce watch startup")
+	assert.Equal(t, "watch-ready", scanner.Text())
+
+	require.NoError(t, syscall.Kill(cmd.Process.Pid, syscall.SIGINT), "failed to send SIGINT")
+
+	require.True(t, scanner.Scan(), "helper should announce watch cancellation")
+	assert.Equal(t, "watch-canceled", scanner.Text())
+
+	require.NoError(t, cmd.Wait(), "first signal should cancel watch runner and exit cleanly")
+	assert.NoError(t, scanner.Err())
+}
+
 func TestShutdownContext_ParentCancelStopsGoroutine(t *testing.T) {
 	t.Parallel()
 
@@ -112,6 +155,38 @@ func runShutdownContextSecondSignalHelper() {
 	mustWriteHelperLine("canceled")
 
 	select {}
+}
+
+func runSyncWatchFirstSignalHelper() {
+	cc := &CLIContext{
+		Logger:       slog.New(slog.DiscardHandler),
+		OutputWriter: io.Discard,
+		StatusWriter: io.Discard,
+		CfgPath:      filepath.Join(os.TempDir(), "onedrive-go-sync-watch-helper.toml"),
+		syncWatchRunner: func(
+			ctx context.Context,
+			_ *config.Holder,
+			_ []string,
+			_ synctypes.SyncMode,
+			_ synctypes.WatchOpts,
+			_ *slog.Logger,
+			_ io.Writer,
+		) error {
+			mustWriteHelperLine("watch-ready")
+			<-ctx.Done()
+			mustWriteHelperLine("watch-canceled")
+			return nil
+		},
+	}
+
+	cmd := newSyncCmd()
+	cmd.SetContext(context.WithValue(context.Background(), cliContextKey{}, cc))
+	if err := cmd.Flags().Set("watch", "true"); err != nil {
+		panic(err)
+	}
+	if err := runSync(cmd, nil); err != nil {
+		panic(err)
+	}
 }
 
 func mustWriteHelperLine(line string) {

@@ -58,9 +58,9 @@ type Engine struct {
 	diskAvailableFn    func(string) (uint64, error)
 
 	// Test/debug-only invariant checks. Production keeps this disabled;
-	// tests enable it to catch scope lifecycle regressions immediately.
-	assertScopeInvariants bool
-	debugEventHook        func(engineDebugEvent)
+	// tests enable it to catch lifecycle and scope regressions immediately.
+	assertInvariants bool
+	debugEventHook   func(engineDebugEvent)
 
 	// nowFn is the engine's clock. Defaults to time.Now. Tests inject a
 	// controllable clock for deterministic trial timer and scope timing.
@@ -76,6 +76,11 @@ type Engine struct {
 	// durable failures per iteration. Production leaves this zero and uses the
 	// compiled default in engine_retry_trial.go.
 	retryBatchLimit int
+
+	// watchRuntimeHook is a test-only seam that exposes the newly constructed
+	// watch runtime before initWatchInfra wires timers, observers, and workers.
+	// Production keeps this nil.
+	watchRuntimeHook func(*watchRuntime)
 
 	afterFunc func(time.Duration, func()) syncTimer
 	newTicker func(time.Duration) syncTicker
