@@ -54,6 +54,17 @@ func TestNewIssuesCmd_Structure(t *testing.T) {
 	assert.Equal(t, "force-deletes", subcommands[0].Name())
 }
 
+func TestIssuesCmd_RejectsUnexpectedPositionalArgs(t *testing.T) {
+	t.Parallel()
+
+	cmd := newIssuesCmd()
+	cmd.SetArgs([]string{"unexpected"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown command")
+}
+
 func TestPrintGroupedIssuesText_ReadOnlySectionsOnly(t *testing.T) {
 	t.Parallel()
 

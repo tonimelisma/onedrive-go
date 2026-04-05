@@ -114,21 +114,23 @@ func (f CLIFlags) SingleDrive() (string, error) {
 //
 // Auth commands get CLIContext with Flags + Logger + CfgPath + Env but nil Cfg/Provider.
 type CLIContext struct {
-	Flags           CLIFlags
-	Logger          *slog.Logger
-	OutputWriter    io.Writer                 // destination for primary command output (default: os.Stdout)
-	StatusWriter    io.Writer                 // destination for Statusf output (default: os.Stderr)
-	CfgPath         string                    // resolved config file path (always set)
-	Env             config.EnvOverrides       // env overrides (always set in Phase 1)
-	GraphBaseURL    string                    // internal test seam for live Graph command coverage
-	SharedTarget    *sharedTarget             // nil for ordinary drive/path commands
-	HTTPProvider    *graphhttp.Provider       // Graph-facing HTTP runtime policy
-	Cfg             *config.ResolvedDrive     // nil for auth/account commands
-	Provider        *driveops.SessionProvider // nil for auth/account commands; created in Phase 2
-	syncWatchRunner syncWatchRunner           // test-only seam for sync --watch command coverage
-	logCloser       io.Closer                 // log file closer; nil when no log file is configured
-	statusMu        sync.Mutex                // guards statusErr for concurrent progress callbacks
-	statusErr       error
+	Flags            CLIFlags
+	Logger           *slog.Logger
+	OutputWriter     io.Writer                 // destination for primary command output (default: os.Stdout)
+	StatusWriter     io.Writer                 // destination for Statusf output (default: os.Stderr)
+	CfgPath          string                    // resolved config file path (always set)
+	Env              config.EnvOverrides       // env overrides (always set in Phase 1)
+	GraphBaseURL     string                    // internal test seam for live Graph command coverage
+	SharedTarget     *sharedTarget             // nil for ordinary drive/path commands
+	HTTPProvider     *graphhttp.Provider       // Graph-facing HTTP runtime policy
+	Cfg              *config.ResolvedDrive     // nil for auth/account commands
+	Provider         *driveops.SessionProvider // nil for auth/account commands; created in Phase 2
+	syncWatchRunner  syncWatchRunner           // test-only seam for sync --watch command coverage
+	logCloser        io.Closer                 // log file closer; nil when no log file is configured
+	statusMu         sync.Mutex                // guards statusErr for concurrent progress callbacks
+	statusErr        error
+	reconcileMu      sync.Mutex // guards reconcileNotices and selector mutation
+	reconcileNotices map[string]struct{}
 }
 
 func (cc *CLIContext) httpProvider() *graphhttp.Provider {
@@ -144,22 +146,22 @@ func (cc *CLIContext) httpProvider() *graphhttp.Provider {
 }
 
 func (cc *CLIContext) interactiveHTTPClients(rd *config.ResolvedDrive) driveops.HTTPClients {
-	account := ""
-	if rd != nil {
-		account = rd.CanonicalID.Email()
+	provider := cc.httpProvider()
+	if rd == nil {
+		syncClients := provider.Sync()
+
+		return driveops.HTTPClients{
+			Meta:     provider.BootstrapMeta(),
+			Transfer: syncClients.Transfer,
+		}
 	}
 
+	account := rd.CanonicalID.Email()
 	var clients graphhttp.ClientSet
-	switch {
-	case rd == nil:
-		clients = graphhttp.ClientSet{
-			Meta:     cc.httpProvider().BootstrapMeta(),
-			Transfer: cc.httpProvider().Sync().Transfer,
-		}
-	case rd.RootItemID != "":
-		clients = cc.httpProvider().InteractiveForSharedTarget(account, rd.DriveID.String(), rd.RootItemID)
-	default:
-		clients = cc.httpProvider().InteractiveForDrive(account, rd.DriveID)
+	if rd.RootItemID != "" {
+		clients = provider.InteractiveForSharedTarget(account, rd.DriveID.String(), rd.RootItemID)
+	} else {
+		clients = provider.InteractiveForDrive(account, rd.DriveID)
 	}
 
 	return driveops.HTTPClients{
@@ -202,6 +204,23 @@ func mustCLIContext(ctx context.Context) *CLIContext {
 func (cc *CLIContext) Session(ctx context.Context) (*driveops.Session, error) {
 	if cc.Provider != nil && cc.GraphBaseURL != "" {
 		cc.Provider.GraphBaseURL = cc.GraphBaseURL
+	}
+
+	accountCID, err := config.TokenAccountCanonicalID(cc.Cfg.CanonicalID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve token owner for drive %s: %w", cc.Cfg.CanonicalID, err)
+	}
+	if !accountCID.IsZero() {
+		result, probeErr := cc.probeAccountIdentity(ctx, accountCID, "drive-session")
+		if probeErr != nil {
+			return nil, fmt.Errorf("probe account identity: %w", probeErr)
+		}
+		if result.Changed() {
+			cc.Provider.FlushTokenCache()
+			if reloadErr := cc.reloadResolvedDriveFromFlags(); reloadErr != nil {
+				return nil, reloadErr
+			}
+		}
 	}
 
 	session, err := cc.Provider.Session(ctx, cc.Cfg)

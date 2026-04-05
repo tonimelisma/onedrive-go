@@ -31,6 +31,7 @@ func newConflictsCmd() *cobra.Command {
 Shows unresolved conflicts by default. Use --history to include resolved
 conflicts, or the resolve subcommand to choose how unresolved conflicts are
 handled.`,
+		Args: cobra.NoArgs,
 		RunE: runConflictsList,
 	}
 

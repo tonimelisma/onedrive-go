@@ -171,6 +171,10 @@ func renderKeyValueLine(key, formattedValue, inlineComment string) string {
 	return line
 }
 
+func renderSectionHeaderLine(name string) string {
+	return fmt.Sprintf("[%q]", name)
+}
+
 // findSectionByName locates a section by its parsed name. Returns the
 // header line index and whether the section was found.
 func findSectionByName(lines []parsedLine, name string) (headerIdx int, found bool) {

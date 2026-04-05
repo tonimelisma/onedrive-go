@@ -115,6 +115,19 @@ func TestTokenAccountCID_Shared(t *testing.T) {
 	assert.Equal(t, "personal:me@outlook.com", got.String())
 }
 
+func TestTokenAccountCanonicalID_Shared(t *testing.T) {
+	setTestDataDir(t)
+	cid := driveid.MustCanonicalID("shared:me@outlook.com:b!TG9yZW0:01ABCDEF")
+
+	require.NoError(t, SaveDriveMetadata(cid, &DriveMetadata{
+		AccountCanonicalID: "personal:me@outlook.com",
+	}))
+
+	got, err := TokenAccountCanonicalID(cid)
+	require.NoError(t, err)
+	assert.Equal(t, "personal:me@outlook.com", got.String())
+}
+
 func TestTokenAccountCID_Shared_NoMetadata(t *testing.T) {
 	setTestDataDir(t)
 	cid := driveid.MustCanonicalID("shared:nobody@example.com:b!TG9yZW0:01ABCDEF")
@@ -133,7 +146,8 @@ func TestResolveSharedTokenCID_ValidMetadata(t *testing.T) {
 		OwnerEmail:         "bob@contoso.com",
 	}))
 
-	got := resolveSharedTokenCID(cid)
+	got, err := resolveSharedTokenCID(cid)
+	require.NoError(t, err)
 	assert.Equal(t, "personal:alice@outlook.com", got.String())
 }
 
@@ -141,7 +155,8 @@ func TestResolveSharedTokenCID_MissingMetadata(t *testing.T) {
 	setTestDataDir(t)
 	cid := driveid.MustCanonicalID("shared:alice@outlook.com:b!abc123:01DEFGH")
 
-	got := resolveSharedTokenCID(cid)
+	got, err := resolveSharedTokenCID(cid)
+	require.NoError(t, err)
 	assert.True(t, got.IsZero())
 }
 
@@ -155,7 +170,8 @@ func TestResolveSharedTokenCID_EmptyAccountCID(t *testing.T) {
 		OwnerEmail: "bob@contoso.com",
 	}))
 
-	got := resolveSharedTokenCID(cid)
+	got, err := resolveSharedTokenCID(cid)
+	require.NoError(t, err)
 	assert.True(t, got.IsZero())
 }
 

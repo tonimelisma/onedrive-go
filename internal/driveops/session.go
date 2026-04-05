@@ -241,6 +241,18 @@ func (p *SessionProvider) FlushTokenCache() {
 	p.logger.Info("token cache flushed")
 }
 
+// UpdateConfig replaces the shared raw config snapshot backing the provider's
+// token-resolution holder. Used when a command rewrites canonical IDs in the
+// config and needs subsequent Session() calls to resolve shared-drive tokens
+// through the updated metadata.
+func (p *SessionProvider) UpdateConfig(cfg *config.Config) {
+	if p == nil || p.holder == nil || cfg == nil {
+		return
+	}
+
+	p.holder.Update(cfg)
+}
+
 // ResolveItem resolves a remote path to an Item. For root (""), uses GetItem
 // with "root". Otherwise uses GetItemByPath. "/" normalizes to "" via
 // CleanRemotePath, so callers can pass either "/" or "" to mean root.

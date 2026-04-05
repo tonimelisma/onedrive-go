@@ -1,8 +1,8 @@
 # Configuration
 
-GOVERNS: internal/config/account.go, internal/config/config.go, internal/config/decoder.go, internal/config/defaults.go, internal/config/discovery.go, internal/config/display_name.go, internal/config/drive.go, internal/config/drivemeta.go, internal/config/env.go, internal/config/failure_class.go, internal/config/holder.go, internal/config/load.go, internal/config/managed_io.go, internal/config/paths.go, internal/config/resolved_validator.go, internal/config/resolver.go, internal/config/size.go, internal/config/token_resolution.go, internal/config/toml_lines.go, internal/config/unknown.go, internal/config/validate.go, internal/config/validate_drive.go, internal/config/validator.go, internal/config/write.go
+GOVERNS: internal/config/account.go, internal/config/config.go, internal/config/decoder.go, internal/config/defaults.go, internal/config/discovery.go, internal/config/display_name.go, internal/config/drive.go, internal/config/drivemeta.go, internal/config/email_reconcile.go, internal/config/env.go, internal/config/failure_class.go, internal/config/holder.go, internal/config/load.go, internal/config/managed_io.go, internal/config/paths.go, internal/config/resolved_validator.go, internal/config/resolver.go, internal/config/size.go, internal/config/token_resolution.go, internal/config/toml_lines.go, internal/config/unknown.go, internal/config/validate.go, internal/config/validate_drive.go, internal/config/validator.go, internal/config/write.go
 
-Implements: R-4.1 [verified], R-4.2 [verified], R-4.3 [verified], R-4.4 [verified], R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-4.8.4 [verified], R-4.8.5 [verified], R-4.8.6 [verified], R-4.9.2 [verified], R-4.9.3 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
+Implements: R-3.7 [verified], R-4.1 [verified], R-4.2 [verified], R-4.3 [verified], R-4.4 [verified], R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-4.8.4 [verified], R-4.8.5 [verified], R-4.8.6 [verified], R-4.9.2 [verified], R-4.9.3 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
 
 ## Overview
 
@@ -58,6 +58,10 @@ All authoritative config/account/drive-metadata writes go through
 `fsroot.Root.AtomicWrite`. The config package does not leave temp-file and
 rename choreography to callers.
 
+Section-header rewrites are also config-owned. `RenameDriveSections()` edits
+only the quoted section name, leaving comments, key order, and section body
+text intact. Email reconciliation uses this instead of re-encoding TOML.
+
 ## Drive Sections
 
 Implements: R-3.4.1 [verified], R-3.4.3 [verified], R-6.2.9 [verified]
@@ -78,7 +82,40 @@ Default sync directories are computed deterministically from the canonical ID + 
 
 ## Token Resolution
 
-`TokenCanonicalID()` determines which OAuth token file a drive uses. Shared and SharePoint drives share their account's primary token. Resolution scans configured drives to determine account type — this is business logic in `config`, not identity logic in `driveid`.
+`DriveTokenPath()` determines which OAuth token file a drive uses. Shared and SharePoint drives share their account's primary token. Resolution scans configured drives to determine account type — this is business logic in `config`, not identity logic in `driveid`.
+
+`TokenAccountCanonicalID()` is the authoritative token-owner lookup for
+runtime callers that need the owning account identity itself instead of only
+the token file path. SharePoint resolves to the business account with the same
+email. Shared drives resolve through `drive_*.json` metadata.
+
+## Email Reconciliation
+
+Implements: R-3.7.1 [verified], R-3.7.2 [verified]
+
+`config.ReconcileAccountEmail()` owns durable email-change mutation. Given the
+current authenticated account type, stable Graph user GUID, and current Graph
+email, it:
+
+- finds stored personal/business account profiles with the same `UserID`
+- computes exact old → new canonical-ID rewrites
+- renames owned managed files (`token_*`, `account_*`, `state_*`, `drive_*`)
+- rewrites shared-drive `DriveMetadata.AccountCanonicalID`
+- rewrites config section headers in place through `RenameDriveSections()`
+
+Ownership stays in `config` because the package already owns canonical-ID to
+path mapping, token-owner resolution, and text-level config mutation.
+
+The reconciliation planner is conservative about authority:
+
+- personal/business ownership comes from the canonical-ID type
+- SharePoint ownership comes from token-owner resolution to the business account
+- shared-drive ownership comes from `drive_*.json` metadata, not by guessing
+
+Before any file mutation, the planner validates that every target path is free.
+Existing target paths are treated as collisions rather than being overwritten,
+so a partial or conflicting rename fails loudly instead of silently merging two
+authorities.
 
 ## Optional Metadata Lookups
 

@@ -321,6 +321,25 @@ func (c CanonicalID) SourceItemID() string {
 	return c.sourceItemID
 }
 
+// WithEmail returns a copy of the canonical ID with the account email replaced.
+// Type-specific fields (site/library or shared source IDs) are preserved.
+func (c CanonicalID) WithEmail(email string) (CanonicalID, error) {
+	if c.IsZero() {
+		return CanonicalID{}, fmt.Errorf("driveid: cannot rewrite email on zero canonical ID")
+	}
+
+	switch {
+	case c.IsPersonal(), c.IsBusiness():
+		return Construct(c.driveType, email)
+	case c.IsSharePoint():
+		return ConstructSharePoint(email, c.site, c.library)
+	case c.IsShared():
+		return ConstructShared(email, c.sourceDriveID, c.sourceItemID)
+	default:
+		return CanonicalID{}, fmt.Errorf("driveid: unknown canonical ID type %q", c.driveType)
+	}
+}
+
 // MarshalText implements encoding.TextMarshaler.
 func (c CanonicalID) MarshalText() ([]byte, error) {
 	return []byte(c.String()), nil

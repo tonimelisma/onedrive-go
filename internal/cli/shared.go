@@ -92,7 +92,7 @@ func (s *sharedService) discoverSharedItems(ctx context.Context, catalog []accou
 			continue
 		}
 
-		client, err := s.cc.sharedBootstrapMetaClient(ctx, entry.Email)
+		client, _, err := s.cc.sharedBootstrapMetaClient(ctx, entry.Email)
 		if err != nil {
 			logger.Debug("shared discovery skipped account",
 				"email", entry.Email,

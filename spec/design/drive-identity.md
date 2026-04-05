@@ -2,7 +2,7 @@
 
 GOVERNS: internal/driveid/canonical.go, internal/driveid/id.go, internal/driveid/itemkey.go, drive.go, purge.go
 
-Implements: R-3.2 [verified], R-3.5 [verified], R-3.3.12 [verified], R-6.7.2 [verified], R-3.6.4 [verified], R-3.6.5 [planned], R-6.10.6 [verified]
+Implements: R-3.2 [verified], R-3.5 [verified], R-3.7 [verified], R-3.3.12 [verified], R-6.7.2 [verified], R-3.6.4 [verified], R-3.6.5 [planned], R-6.10.6 [verified]
 
 ## Core Concepts
 
@@ -38,7 +38,20 @@ Normalized API drive identifier. Lowercase, zero-padded to 16 chars (handles Per
 
 ## CanonicalID Type (`driveid.CanonicalID`)
 
-Config-level identifier. Parsed from/to string form. Provides `DriveType()`, `Email()`, accessors. Pure identity — no config or business logic imports.
+Config-level identifier. Parsed from/to string form. Provides `DriveType()`, `Email()`, accessors, and `WithEmail()` for exact email substitution while preserving the type-specific identity payload (SharePoint site/library or shared source IDs). Pure identity — no config or business logic imports.
+
+## Email Rewrite Contract
+
+Email change detection is a config/CLI workflow, but `driveid.CanonicalID`
+owns the canonical rewrite rule itself: replacing the account email must keep
+the rest of the identity stable.
+
+- `personal` / `business`: rewrite only `type:email`
+- `sharepoint`: rewrite only the account email; keep `site` and `library`
+- `shared`: rewrite only the account email; keep `sourceDriveID` and `sourceItemID`
+
+That keeps email migration deterministic and prevents CLI/config code from
+hand-assembling canonical-ID strings in multiple places.
 
 ## Shared Item Selectors
 

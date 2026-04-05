@@ -10,6 +10,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -78,6 +79,53 @@ func TestNewConflictsCmd_Structure(t *testing.T) {
 	resolveCmd, _, err := cmd.Find([]string{"resolve"})
 	require.NoError(t, err)
 	assert.Equal(t, "resolve [path-or-id]", resolveCmd.Use)
+}
+
+func newEmptyConflictsCmd(t *testing.T) (*cobra.Command, *bytes.Buffer) {
+	t.Helper()
+
+	setTestDriveHome(t)
+
+	var buf bytes.Buffer
+	cc := &CLIContext{
+		StatusWriter: &buf,
+		OutputWriter: &buf,
+		Logger:       slog.New(slog.DiscardHandler),
+		Cfg:          &config.ResolvedDrive{CanonicalID: driveid.MustCanonicalID("personal:test@example.com")},
+	}
+
+	cmd := newConflictsCmd()
+	cmd.SetContext(context.WithValue(context.Background(), cliContextKey{}, cc))
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+
+	return cmd, &buf
+}
+
+func TestConflictsCmd_RejectsUnexpectedPositionalArgs(t *testing.T) {
+	cmd, _ := newEmptyConflictsCmd(t)
+	cmd.SetArgs([]string{"unexpected"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown command")
+}
+
+func TestConflictsCmd_HistoryFlagStillWorksFromRoot(t *testing.T) {
+	cmd, out := newEmptyConflictsCmd(t)
+	cmd.SetArgs([]string{"--history"})
+
+	require.NoError(t, cmd.Execute())
+	assert.Contains(t, out.String(), "No conflicts in history.")
+}
+
+func TestConflictsCmd_ResolveSubcommandStillExecutesFromRoot(t *testing.T) {
+	cmd, _ := newEmptyConflictsCmd(t)
+	cmd.SetArgs([]string{"resolve", "--keep-both"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "specify a conflict path or ID, or use --all to resolve all conflicts")
 }
 
 // Validates: R-2.3.4

@@ -741,10 +741,11 @@ Key W2 gap notes:
   - reset of in-progress actions creates `sync_failures` bridge rows so crashed work is rediscoverable
   - success paths clear stale failure rows for download, delete, and move
   - scope release deletes `scope_blocks`, updates `sync_failures`, and keeps per-item failure counts
-  - `issues clear` and `issues retry` mutate only the targeted durable rows
+  - `issues force-deletes` clears only held-delete rows for the selected drive
+  - `conflicts resolve` mutates only the targeted conflict rows while preserving history
   - local trash and remote recycle-bin flows preserve user-recoverable deletion semantics
 - Ideal e2e coverage:
-  - `issues`, `issues clear`, `issues retry`, and `verify` reflect durable store state after real sync activity
+  - `issues`, `conflicts`, `conflicts resolve`, `issues force-deletes`, and `verify` reflect durable store state after real sync activity
   - crash/restart leaves the next run able to continue from store truth
 - Mandatory failure injection:
   - simulated crash between observation and execution bookkeeping
@@ -754,7 +755,8 @@ Key W2 gap notes:
   - advance delta checkpoint without persisting individual item failure state
   - leave stale `sync_failures` rows after successful delete or move
   - group shortcut-scoped issues under opaque scope keys instead of human names
-  - clear one issue command and accidentally clear siblings in the same scope
+  - let root `issues` or `conflicts` accept stray positional args and silently fall through to the list surface
+  - make `issues force-deletes` clear non-held-delete rows
 - Audit status:
   - ideal model drafted
 - Claim mapping snapshot from filenames and `// Validates:` only:
@@ -769,7 +771,7 @@ Key W2 gap notes:
   - `verify` had a deeper gap than traceability alone: mismatch ordering still depended on baseline map iteration, so the human-readable table could reshuffle rows nondeterministically. `internal/syncverify/verify.go` now sorts mismatches by path before formatting. Direct unit tests cover cancellation plus stat/rooted-path/hash error classification, caller-level service/root tests prove the `errVerifyMismatch` exit-1 contract without the generic `Error:` prefix, golden tests lock the human-readable table output, and the full-tag verify E2E now asserts exit code `1` plus decoded mismatch semantics for a tampered file.
   - `status` had a real production gap against `R-2.10.4`: the store already computed grouped visible issues with scope meaning, but `internal/cli/status.go` discarded that projection and rendered only totals. The fix now preserves grouped issue families through `querySyncState`, emits them structurally in `status --json`, and renders them textually with scope kind plus humanized scope label under each drive's sync state.
   - `rm` default delete semantics were implemented correctly, but the contract was weakly defended. Caller-level tests now prove ordinary `rm` resolves the item and issues the recycle-bin `DELETE`, and `--permanent` routes through `permanentDelete` for both Business and Personal drives. This audit originally suspected Personal-drive fallback, but Microsoft’s current `driveItem: permanentDelete` doc and the fast live-E2E suite both disproved that theory.
-  - `issues clear` and `issues retry` did not reveal a production bug, but the previous single-path tests were too weak to kill an accidental prefix-wide mutation. The seeded CLI tests now include exact-path targets plus same-prefix siblings (`docs/CON` vs `docs/CON-copy`, `data/report.xlsx` vs `data/report.xlsx.bak`) and prove the single-path commands only mutate the targeted durable rows.
+  - The CLI surface is intentionally split by noun: `issues` is read-only, `conflicts resolve` owns conflict mutation, and `issues force-deletes` owns held-delete approval. The refreshed command-level tests now prove root `issues`/`conflicts` reject stray positional args instead of silently listing, while the dedicated mutation tests continue to prove `force-deletes` and conflict resolution touch only their owned durable state.
   - The remaining store-heavy W4 contracts turned out to be stronger than the earlier ledger suggested. `ResetFailure` and `ResetAllFailures` already reset failed `remote_state` rows back to the correct pending states while deleting the corresponding `sync_failures` rows, `ClearResolvedActionableFailures*` already proves stale actionable rows auto-clear by issue type plus the scanner's current path set, and `ResetInProgressStates_CreatesSyncFailures_*` already proves the crash-recovery bridge-row contract. The missing piece was body-level reconciliation and explicit traceability, not another production bug.
 - Verified-claim reconciliation snapshot:
 
@@ -780,7 +782,7 @@ Key W2 gap notes:
 | `status` preserves visible issue groups with scope context in both text and JSON output | `REQ+DESIGN+CODE+BODY` | `internal/syncstore/inspector.go` now keeps scope kind + humanized scope in `IssueSummary.Groups`, `internal/cli/status.go` preserves those groups in `sync_state.issue_groups`, and `internal/cli/status_test.go` plus `internal/syncstore/inspector_test.go` prove shortcut/account/file scope rendering | `proven` | Fixed real production gap that previously flattened grouped issue context into totals |
 | `verify` text/JSON output and exit behavior preserve one deterministic mismatch set | `REQ+CODE+BODY+E2E` | `internal/syncverify/verify.go` now sorts mismatches by path; `internal/syncverify/verify_test.go`, `internal/cli/{verify,services,root}_test.go`, and `e2e/output_validation_e2e_test.go` prove deterministic ordering, classification, JSON decoding, and the exit-1/no-generic-Error contract | `proven` | Map-order gap closed and caller contract now explicit |
 | Remote `rm` uses recycle-bin delete by default, with `--permanent` taking the permanent-delete path | `REQ+CODE+BODY` | `internal/cli/rm_test.go` now drives `runRm` through a real CLI session/provider seam and asserts `DELETE` versus `POST .../permanentDelete` behavior across both Business and Personal drive types | `proven` | Adjacent help-text drift fixed; permanent delete remains supported on Personal drives per current Graph docs and live E2E |
-| `issues clear` and `issues retry` mutate only the targeted durable rows | `REQ+CODE+BODY` | `internal/cli/issues_test.go` now seeds exact-path targets plus same-prefix siblings and proves single-path clear/retry preserve adjacent durable rows instead of acting like prefix deletes | `proven` | Exact-path durable mutation now body-audited |
+| `issues` stays read-only while `issues force-deletes` and `conflicts resolve` own the CLI mutation surface | `REQ+CODE+BODY` | `internal/cli/issues_test.go` proves root `issues` rejects unexpected args and `force-deletes` clears only held-delete rows, while `internal/cli/conflicts_test.go` proves root `conflicts` rejects stray args, `--history` still lists history, and `resolve` still routes through the dedicated mutation subcommand | `proven` | Command grammar now matches the split-noun design and PR-time tests defend it |
 | Crash recovery and stale actionable cleanup reuse durable store truth | `REQ+BODY` | `internal/syncstore/baseline_test.go` proves `ResetInProgressStates` creates bridge `sync_failures` rows, `internal/syncstore/commit_observation_test.go` proves `ResetFailure` / `ResetAllFailures` transition failed rows back to pending and delete the matching failure row, and `internal/syncstore/sync_failures_test.go` proves `ClearResolvedActionableFailures*` removes only resolved rows of the targeted issue type | `proven` | Store behavior already matched the intended design; the audit gap was reconciliation, not production logic |
 
 ### W5. Transfer Manager, Resume Robustness, And Local Disk Safety

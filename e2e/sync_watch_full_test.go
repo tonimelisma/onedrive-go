@@ -205,7 +205,7 @@ func TestE2E_SyncWatch_ConflictDuringWatch(t *testing.T) {
 	// Wait for the daemon to detect the conflict. Poll conflicts command.
 	deadline := time.Now().Add(daemonPollTimeout)
 	for attempt := 0; ; attempt++ {
-		stdout, _, err := runCLIWithConfigAllowError(t, cfgPath, env, "issues")
+		stdout, _, err := runCLIWithConfigAllowError(t, cfgPath, env, "conflicts")
 		if err == nil && strings.Contains(stdout, "edit_edit") {
 			break
 		}

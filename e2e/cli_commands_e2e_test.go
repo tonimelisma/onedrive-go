@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -175,6 +176,29 @@ func TestE2E_Resume_AllDrives(t *testing.T) {
 	assert.Contains(t, stderr, "resumed", "resume all should confirm drives resumed")
 }
 
+// Validates: R-2.3.3
+func TestE2E_Issues_Empty(t *testing.T) {
+	t.Parallel()
+	registerLogDump(t)
+
+	syncDir := t.TempDir()
+	cfgPath, env := writeSyncConfig(t, syncDir)
+
+	testFolder := fmt.Sprintf("e2e-cli-noissues-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+
+	// Create a file and sync to establish state DB.
+	localDir := filepath.Join(syncDir, testFolder)
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "clean.txt"), []byte("clean file"), 0o600))
+
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues")
+	assert.Contains(t, stdout, "No issues.")
+}
+
+// Validates: R-2.3.4
 // TestE2E_Conflicts_EmptyHistory validates that conflicts and conflicts
 // --history show appropriate messages when no conflicts exist.
 func TestE2E_Conflicts_EmptyHistory(t *testing.T) {
@@ -195,14 +219,15 @@ func TestE2E_Conflicts_EmptyHistory(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Check conflicts — should show no unresolved.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues")
-	assert.Contains(t, stdout, "No issues")
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
+	assert.Contains(t, stdout, "No conflicts.")
 
 	// Check conflicts --history — should show no history.
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "issues", "--history")
-	assert.Contains(t, stdout, "No issues in history")
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts", "--history")
+	assert.Contains(t, stdout, "No conflicts in history.")
 }
 
+// Validates: R-2.3.4, R-2.3.10
 // TestE2E_Conflicts_JSON validates that conflicts --json produces a valid
 // JSON array with the expected fields.
 func TestE2E_Conflicts_JSON(t *testing.T) {
@@ -230,13 +255,13 @@ func TestE2E_Conflicts_JSON(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 
 	// Check conflicts --json.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues", "--json")
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts", "--json")
 
-	var issuesJSON map[string]interface{}
-	require.NoError(t, json.Unmarshal([]byte(stdout), &issuesJSON),
-		"issues --json should produce valid JSON object, got: %s", stdout)
+	var conflictsJSON map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &conflictsJSON),
+		"conflicts --json should produce valid JSON object, got: %s", stdout)
 
-	conflictsRaw, ok := issuesJSON["conflicts"].([]interface{})
+	conflictsRaw, ok := conflictsJSON["conflicts"].([]interface{})
 	require.True(t, ok, "JSON should have conflicts array")
 	require.NotEmpty(t, conflictsRaw, "should have at least one conflict")
 
@@ -249,12 +274,14 @@ func TestE2E_Conflicts_JSON(t *testing.T) {
 	assert.Equal(t, "edit_edit", conflict["conflict_type"], "conflict type should be edit_edit")
 
 	// Resolve to clean up.
-	runCLIWithConfig(t, cfgPath, env, "issues", "resolve", "--all", "--keep-remote")
+	runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", "--all", "--keep-remote")
 }
 
-// TestE2E_Resolve_KeepBoth validates that resolve --keep-both marks the
-// conflict as resolved while preserving both the original and conflict copy.
-func TestE2E_Resolve_KeepBoth(t *testing.T) {
+// Validates: R-2.3.3, R-2.3.4, R-2.3.5
+// TestE2E_Conflicts_ResolveKeepBoth validates that conflicts resolve
+// --keep-both marks the conflict as resolved while preserving both the
+// original and conflict copy.
+func TestE2E_Conflicts_ResolveKeepBoth(t *testing.T) {
 	// No t.Parallel() — bidirectional sync sees drive-level delta feed,
 	// so parallel tests inject cross-test events causing spurious failures.
 	registerLogDump(t)
@@ -279,13 +306,20 @@ func TestE2E_Resolve_KeepBoth(t *testing.T) {
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
+	assert.Contains(t, stdout, "both.txt", "conflicts should list unresolved conflict")
+	assert.Contains(t, stdout, "edit_edit", "conflicts should show conflict type")
+
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "issues")
+	assert.Contains(t, stdout, "No issues.", "issues should stay read-only and exclude conflicts")
+
 	// Verify conflict copy exists.
 	matches, err := filepath.Glob(filepath.Join(localDir, "both.conflict-*"))
 	require.NoError(t, err)
 	require.NotEmpty(t, matches, "conflict copy should exist before resolve")
 
 	// Resolve --keep-both.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "issues", "resolve", testFolder+"/both.txt", "--keep-both")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/both.txt", "--keep-both")
 	assert.Contains(t, stderr, "Resolved", "resolve should confirm resolution")
 
 	// Verify both files still exist.
@@ -296,15 +330,19 @@ func TestE2E_Resolve_KeepBoth(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, matchesAfter, "conflict copy should still exist after keep-both")
 
-	// Sync should show no changes (keep-both is fully resolved).
-	_, stderr = runCLIWithConfig(t, cfgPath, env, "sync", "--force")
-	assert.Contains(t, stderr, "No changes detected",
-		"sync after keep-both should show no changes")
+	// Follow-up sync should leave the owned subtree stable even if unrelated
+	// full-suite activity produces delta traffic elsewhere on the shared drive.
+	assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync", "--force")
+
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
+	assert.Contains(t, stdout, "No conflicts.", "keep-both should clear unresolved conflicts")
 }
 
-// TestE2E_Resolve_MultipleStrategies creates 3 conflicts and resolves each
-// with a different strategy, then verifies conflict history shows all 3.
-func TestE2E_Resolve_MultipleStrategies(t *testing.T) {
+// Validates: R-2.3.4, R-2.3.5, R-2.3.12
+// TestE2E_Conflicts_ResolveMultipleStrategies creates 3 conflicts and
+// resolves each with a different strategy, then verifies conflict history
+// shows all 3.
+func TestE2E_Conflicts_ResolveMultipleStrategies(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
@@ -336,12 +374,12 @@ func TestE2E_Resolve_MultipleStrategies(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 
 	// Resolve each with a different strategy.
-	runCLIWithConfig(t, cfgPath, env, "issues", "resolve", testFolder+"/a.txt", "--keep-local")
-	runCLIWithConfig(t, cfgPath, env, "issues", "resolve", testFolder+"/b.txt", "--keep-remote")
-	runCLIWithConfig(t, cfgPath, env, "issues", "resolve", testFolder+"/c.txt", "--keep-both")
+	runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/a.txt", "--keep-local")
+	runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/b.txt", "--keep-remote")
+	runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/c.txt", "--keep-both")
 
 	// Verify conflict history shows all 3.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues", "--history")
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts", "--history")
 	assert.Contains(t, stdout, "a.txt", "history should include a.txt")
 	assert.Contains(t, stdout, "b.txt", "history should include b.txt")
 	assert.Contains(t, stdout, "c.txt", "history should include c.txt")
@@ -350,9 +388,10 @@ func TestE2E_Resolve_MultipleStrategies(t *testing.T) {
 	assert.Contains(t, stdout, "keep_both", "history should show keep_both strategy")
 }
 
-// TestE2E_Resolve_ConflictNotFound validates that resolving a non-existent
-// conflict produces an appropriate error.
-func TestE2E_Resolve_ConflictNotFound(t *testing.T) {
+// Validates: R-2.3.5
+// TestE2E_Conflicts_ResolveConflictNotFound validates that resolving a
+// non-existent conflict produces an appropriate error.
+func TestE2E_Conflicts_ResolveConflictNotFound(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
@@ -370,7 +409,7 @@ func TestE2E_Resolve_ConflictNotFound(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 
 	// Try to resolve a non-existent conflict.
-	output := runCLIWithConfigExpectError(t, cfgPath, env, "issues", "resolve", "nonexistent-id", "--keep-local")
+	output := runCLIWithConfigExpectError(t, cfgPath, env, "conflicts", "resolve", "nonexistent-id", "--keep-local")
 	assert.Contains(t, output, "not found", "should report conflict not found")
 }
 
@@ -701,103 +740,6 @@ func TestE2E_Cp_NotFound(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// issues clear / issues retry E2E tests
-// ---------------------------------------------------------------------------
-
-// Validates: R-2.3.5
-// TestE2E_IssuesClear_NoIssues validates that issues clear --all succeeds
-// (no-op) when there are no actionable failures.
-func TestE2E_IssuesClear_NoIssues(t *testing.T) {
-	t.Parallel()
-	registerLogDump(t)
-
-	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfig(t, syncDir)
-
-	testFolder := fmt.Sprintf("e2e-clear-none-%d", time.Now().UnixNano())
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
-
-	// Create a file and sync to establish state DB.
-	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "ok.txt"), []byte("ok"), 0o600))
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
-
-	// Clear all — should succeed with no errors.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues", "clear", "--all")
-	assert.Contains(t, stdout, "Cleared actionable failures", "clear --all should confirm clearing")
-}
-
-// Validates: R-2.3.5
-// TestE2E_IssuesClear_NoArg validates that issues clear without arguments
-// produces an appropriate error.
-func TestE2E_IssuesClear_NoArg(t *testing.T) {
-	t.Parallel()
-	registerLogDump(t)
-
-	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfig(t, syncDir)
-
-	testFolder := fmt.Sprintf("e2e-clear-noarg-%d", time.Now().UnixNano())
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
-
-	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "ok.txt"), []byte("ok"), 0o600))
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
-
-	// No argument and no --all should fail.
-	output := runCLIWithConfigExpectError(t, cfgPath, env, "issues", "clear")
-	assert.Contains(t, output, "provide a path", "should guide user to provide argument")
-}
-
-// Validates: R-2.3.6
-// TestE2E_IssuesRetry_NoIssues validates that issues retry --all succeeds
-// (no-op) when there are no failures.
-func TestE2E_IssuesRetry_NoIssues(t *testing.T) {
-	t.Parallel()
-	registerLogDump(t)
-
-	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfig(t, syncDir)
-
-	testFolder := fmt.Sprintf("e2e-retry-none-%d", time.Now().UnixNano())
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
-
-	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "ok.txt"), []byte("ok"), 0o600))
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
-
-	// Retry all — should succeed with no errors.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues", "retry", "--all")
-	assert.Contains(t, stdout, "Reset all", "retry --all should confirm resetting")
-}
-
-// Validates: R-2.3.6
-// TestE2E_IssuesRetry_NoArg validates that issues retry without arguments
-// produces an appropriate error.
-func TestE2E_IssuesRetry_NoArg(t *testing.T) {
-	t.Parallel()
-	registerLogDump(t)
-
-	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfig(t, syncDir)
-
-	testFolder := fmt.Sprintf("e2e-retry-noarg-%d", time.Now().UnixNano())
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
-
-	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "ok.txt"), []byte("ok"), 0o600))
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
-
-	// No argument and no --all should fail.
-	output := runCLIWithConfigExpectError(t, cfgPath, env, "issues", "retry")
-	assert.Contains(t, output, "provide a path", "should guide user to provide argument")
-}
-
-// ---------------------------------------------------------------------------
 // mv --force / cp --force E2E tests
 // ---------------------------------------------------------------------------
 
@@ -911,7 +853,7 @@ func TestE2E_Mv_Folder(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// issues clear / issues retry with actual failures
+// issues read-only lifecycle / held delete approval
 // ---------------------------------------------------------------------------
 
 // buildDeepPath creates a directory structure under localDir whose relative
@@ -940,21 +882,22 @@ func buildDeepPath(t *testing.T, syncDir, testFolder string) (string, string) {
 	return filepath.Join(deepDir, longFileName), deepRelPath
 }
 
-// Validates: R-2.3.5
-// TestE2E_IssuesClear_WithFailure triggers a real sync failure (path too long)
-// and validates that issues clear <path> removes the specific failure.
-func TestE2E_IssuesClear_WithFailure(t *testing.T) {
+// Validates: R-2.3.3, R-2.3.11
+// TestE2E_Issues_ReadOnlyLifecycle triggers a real sync failure (path too
+// long), fixes the underlying local state, and validates that issues follows
+// durable store truth without any manual clear/retry command.
+func TestE2E_Issues_ReadOnlyLifecycle(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
 
-	testFolder := fmt.Sprintf("e2e-clear-fail-%d", time.Now().UnixNano())
+	testFolder := fmt.Sprintf("e2e-issues-readonly-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Create a file whose total relative path exceeds 400 chars.
-	_, deepRelPath := buildDeepPath(t, syncDir, testFolder)
+	_, _ = buildDeepPath(t, syncDir, testFolder)
 
 	// Sync to trigger pre-upload validation failure.
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
@@ -964,50 +907,89 @@ func TestE2E_IssuesClear_WithFailure(t *testing.T) {
 	assert.Contains(t, stdout, "PATH TOO LONG", "issues should show path_too_long section")
 	assert.Contains(t, stdout, "path exceeds", "issues should describe the path_too_long error")
 
-	// Clear the specific failure by path.
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "issues", "clear", deepRelPath)
-	assert.Contains(t, stdout, "Cleared failure for", "clear should confirm the action")
+	// Fix the underlying problem by removing the long path and creating
+	// a valid replacement that can sync normally.
+	longDirName := strings.Repeat("d", 200)
+	require.NoError(t, os.RemoveAll(filepath.Join(syncDir, testFolder, longDirName)))
+	require.NoError(t, os.WriteFile(filepath.Join(syncDir, testFolder, "fixed.txt"), []byte("fixed"), 0o600))
 
-	// Verify the failure is gone.
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+
+	// Verify the stale issue clears once the underlying state is repaired.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "issues")
-	assert.Contains(t, stdout, "No issues", "issues should be clean after clear")
+	assert.Contains(t, stdout, "No issues.", "issues should be clean after the next sync")
+
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "ls", "/"+testFolder)
+	assert.Contains(t, stdout, "fixed.txt", "replacement file should sync after the issue clears")
 }
 
-// Validates: R-2.3.6
-// TestE2E_IssuesRetry_WithFailure validates the full failure retry lifecycle:
-// trigger failure → verify → fix the problem → retry → resync → verify clean.
-func TestE2E_IssuesRetry_WithFailure(t *testing.T) {
-	t.Parallel()
+// Validates: R-2.3.3, R-2.3.6, R-2.3.12
+// TestE2E_Issues_ForceDeletes validates the watch-mode held-delete lifecycle:
+// hold deletes, surface them via issues, approve with issues force-deletes,
+// and let watch mode resume delete propagation.
+func TestE2E_Issues_ForceDeletes(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "big_delete_threshold = 10\n")
+	opsCfgPath := writeMinimalConfig(t)
 
-	testFolder := fmt.Sprintf("e2e-retry-fail-%d", time.Now().UnixNano())
+	testFolder := fmt.Sprintf("e2e-issues-forcedeletes-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
-	// Create a file whose total relative path exceeds 400 chars.
-	_, deepRelPath := buildDeepPath(t, syncDir, testFolder)
+	localDir := filepath.Join(syncDir, testFolder)
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
 
-	// Sync to trigger pre-upload validation failure.
+	const fileCount = 12
+
+	for i := 1; i <= fileCount; i++ {
+		name := fmt.Sprintf("file-%02d.txt", i)
+		require.NoError(t, os.WriteFile(filepath.Join(localDir, name), []byte(fmt.Sprintf("content %d", i)), 0o600))
+	}
+
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	pollCLIWithConfigContains(t, opsCfgPath, nil, "file-12.txt", pollTimeout, "ls", "/"+testFolder)
 
-	// Verify the failure was recorded.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues")
-	assert.Contains(t, stdout, "PATH TOO LONG", "issues should show path_too_long section")
+	daemonArgs := []string{
+		"--config", cfgPath,
+		"--drive", drive,
+		"--debug",
+		"sync", "--watch", "--upload-only",
+	}
+	cmd := makeCmd(daemonArgs, env)
 
-	// Fix the problem: remove the deeply nested directory tree.
-	longDirName := strings.Repeat("d", 200)
-	require.NoError(t, os.RemoveAll(filepath.Join(syncDir, testFolder, longDirName)))
+	var stdout, stderr syncBuffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 
-	// Retry the specific failure (resets it for next sync).
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "issues", "retry", deepRelPath)
-	assert.Contains(t, stdout, "Requested retry", "retry should confirm the action")
+	require.NoError(t, cmd.Start(), "failed to start watch daemon")
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+			_ = cmd.Wait()
+		}
 
-	// Resync — with the file gone, no new failure should appear.
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+		logCLIExecution(t, daemonArgs, stdout.String(), stderr.String())
+	})
 
-	// Verify clean state.
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "issues")
-	assert.Contains(t, stdout, "No issues", "issues should be clean after retry and resync")
+	waitForDaemonReady(t, &stderr, 30*time.Second)
+
+	for i := 1; i <= fileCount; i++ {
+		name := fmt.Sprintf("file-%02d.txt", i)
+		require.NoError(t, os.Remove(filepath.Join(localDir, name)))
+	}
+
+	pollCLIWithConfigContains(t, cfgPath, env, "HELD DELETES", 90*time.Second, "issues")
+
+	issuesBeforeApproval, _ := runCLIWithConfig(t, cfgPath, env, "issues")
+	assert.Contains(t, issuesBeforeApproval, "HELD DELETES", "issues should show held deletes while watch protection is active")
+
+	remoteBeforeApproval, _ := runCLIWithConfig(t, opsCfgPath, nil, "ls", "/"+testFolder)
+	assert.Contains(t, remoteBeforeApproval, "file-01.txt", "remote deletes should stay held before approval")
+
+	approvalOutput, _ := runCLIWithConfig(t, cfgPath, env, "issues", "force-deletes")
+	assert.Contains(t, approvalOutput, "Approved all held deletes for this drive.")
+
+	issuesAfterApproval, _ := pollCLIWithConfigContains(t, cfgPath, env, "No issues.", 90*time.Second, "issues")
+	assert.Contains(t, issuesAfterApproval, "No issues.", "issues should clear once held deletes are approved and processed")
 }

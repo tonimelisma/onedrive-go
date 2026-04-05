@@ -158,7 +158,7 @@ func TestE2E_Sync_ResolveKeepLocalThenSync(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 
 	// Resolve --keep-local.
-	runCLIWithConfig(t, cfgPath, env, "issues", "resolve", testFolder+"/keeplocal.txt", "--keep-local")
+	runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/keeplocal.txt", "--keep-local")
 
 	// Sync to push local version to remote.
 	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
@@ -199,7 +199,7 @@ func TestE2E_Sync_ResolveKeepRemoteThenSync(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
 
 	// Resolve --keep-remote.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "issues", "resolve", testFolder+"/keepremote.txt", "--keep-remote")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/keepremote.txt", "--keep-remote")
 	assert.Contains(t, stderr, "Resolved")
 
 	// Sync to finalize.
