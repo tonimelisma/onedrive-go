@@ -152,25 +152,33 @@ func TestE2E_Logout_PreservesOfflineAccountCatalog(t *testing.T) {
 func TestE2E_Shared_JSON_RecipientListingUsesLiveAccountCatalog(t *testing.T) {
 	t.Parallel()
 	requireDrive2Shared(t)
+	rawLink := requireSharedFileLink(t)
 	registerLogDump(t)
 
-	recipientEmail := recipientEmailFromDriveID(t, drive2)
-	cfgPath, env := writeSyncConfigForDrive2(t, t.TempDir())
+	fixture := resolveSharedFileFixture(t, rawLink)
 
 	stdout, _ := pollCLIWithConfigRetryingTransientGraphFailures(
-		t, cfgPath, env, "", transientGraphRetryTimeout, "--account", recipientEmail, "shared", "--json",
+		t,
+		fixture.ConfigPath,
+		fixture.Env,
+		"",
+		transientGraphRetryTimeout,
+		"--account",
+		fixture.RecipientEmail,
+		"shared",
+		"--json",
 	)
 
 	var listing w7LiveSharedOutput
 	require.NoError(t, json.Unmarshal([]byte(stdout), &listing))
 	assert.Empty(t, listing.AccountsRequiringAuth)
-	require.NotEmpty(t, listing.Items, "drive2 shared test setup should expose at least one shared item")
+	require.NotEmpty(t, listing.Items, "shared recipient fixture should expose at least one shared item")
 
 	for i := range listing.Items {
 		assert.NotEmpty(t, listing.Items[i].Selector)
 		assert.NotEmpty(t, listing.Items[i].RemoteDriveID)
 		assert.NotEmpty(t, listing.Items[i].RemoteItemID)
-		assert.Equal(t, recipientEmail, listing.Items[i].AccountEmail)
+		assert.Equal(t, fixture.RecipientEmail, listing.Items[i].AccountEmail)
 		assert.Contains(t, []string{"file", "folder"}, listing.Items[i].Type)
 	}
 }

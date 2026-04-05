@@ -31,9 +31,10 @@ func recipientEmailFromDriveID(t *testing.T, driveID string) string {
 	return parts[1]
 }
 
-// writeSyncConfigForDrive2 creates a per-test config pointing to drive2.
-// The recipient account is used by shared-item caller-proof tests.
-func writeSyncConfigForDrive2(t *testing.T, syncDir string) (string, map[string]string) {
+// writeSyncConfigForDriveID creates a per-test config pointing to the given
+// drive. Shared-item tests use this to execute commands as the actual
+// recipient account instead of assuming a fixed drive slot.
+func writeSyncConfigForDriveID(t *testing.T, driveID string, syncDir string) (string, map[string]string) {
 	t.Helper()
 
 	perTestData := t.TempDir()
@@ -41,11 +42,11 @@ func writeSyncConfigForDrive2(t *testing.T, syncDir string) (string, map[string]
 
 	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
 	require.NoError(t, os.MkdirAll(perTestDataDir, 0o700))
-	copyTokenFileForDrive(t, testDataDir, perTestDataDir, drive2)
+	copyTokenFileForDrive(t, testDataDir, perTestDataDir, driveID)
 
 	content := fmt.Sprintf(`["%s"]
 sync_dir = %q
-`, drive2, syncDir)
+`, driveID, syncDir)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o600))
@@ -56,4 +57,12 @@ sync_dir = %q
 	}
 
 	return cfgPath, env
+}
+
+// writeSyncConfigForDrive2 creates a per-test config pointing to drive2.
+// Shared-folder tests still use the historical second-drive recipient fixture.
+func writeSyncConfigForDrive2(t *testing.T, syncDir string) (string, map[string]string) {
+	t.Helper()
+
+	return writeSyncConfigForDriveID(t, drive2, syncDir)
 }
