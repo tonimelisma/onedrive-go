@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -97,6 +98,43 @@ func TestRunSyncWatch_FirstSignalCancelsWatchRunner(t *testing.T) {
 		return
 	}
 
+	runFirstSignalSyncWatchSubprocess(
+		t,
+		"ONEDRIVE_GO_TEST_SYNC_WATCH_HELPER",
+		"^TestRunSyncWatch_FirstSignalCancelsWatchRunner$",
+		"watch-ready",
+		"watch-canceled",
+		"first signal should cancel watch runner and exit cleanly",
+	)
+}
+
+// Validates: R-2.8.3
+func TestRunSyncWatch_FirstSignalCancelsDaemonOrchestrator(t *testing.T) {
+	if os.Getenv("ONEDRIVE_GO_TEST_SYNC_DAEMON_HELPER") == "1" {
+		runSyncWatchDaemonFirstSignalHelper()
+		return
+	}
+
+	runFirstSignalSyncWatchSubprocess(
+		t,
+		"ONEDRIVE_GO_TEST_SYNC_DAEMON_HELPER",
+		"^TestRunSyncWatch_FirstSignalCancelsDaemonOrchestrator$",
+		"watch-daemon-ready",
+		"watch-daemon-canceled",
+		"first signal should cancel the watch daemon and exit cleanly",
+	)
+}
+
+func runFirstSignalSyncWatchSubprocess(
+	t *testing.T,
+	helperEnv string,
+	testPattern string,
+	readyLine string,
+	canceledLine string,
+	waitMessage string,
+) {
+	t.Helper()
+
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
@@ -104,8 +142,8 @@ func TestRunSyncWatch_FirstSignalCancelsWatchRunner(t *testing.T) {
 	require.NoError(t, err)
 
 	//nolint:gosec // Test launches the current test binary with fixed arguments.
-	cmd := exec.CommandContext(ctx, exe, "-test.run=^TestRunSyncWatch_FirstSignalCancelsWatchRunner$")
-	cmd.Env = append(os.Environ(), "ONEDRIVE_GO_TEST_SYNC_WATCH_HELPER=1")
+	cmd := exec.CommandContext(ctx, exe, "-test.run="+testPattern)
+	cmd.Env = append(os.Environ(), helperEnv+"=1")
 
 	stdout, err := cmd.StdoutPipe()
 	require.NoError(t, err)
@@ -117,14 +155,14 @@ func TestRunSyncWatch_FirstSignalCancelsWatchRunner(t *testing.T) {
 
 	scanner := bufio.NewScanner(stdout)
 	require.True(t, scanner.Scan(), "helper should announce watch startup")
-	assert.Equal(t, "watch-ready", scanner.Text())
+	assert.Equal(t, readyLine, scanner.Text())
 
 	require.NoError(t, syscall.Kill(cmd.Process.Pid, syscall.SIGINT), "failed to send SIGINT")
 
 	require.True(t, scanner.Scan(), "helper should announce watch cancellation")
-	assert.Equal(t, "watch-canceled", scanner.Text())
+	assert.Equal(t, canceledLine, scanner.Text())
 
-	require.NoError(t, cmd.Wait(), "first signal should cancel watch runner and exit cleanly")
+	require.NoError(t, cmd.Wait(), waitMessage)
 	assert.NoError(t, scanner.Err())
 }
 
@@ -176,6 +214,77 @@ func runSyncWatchFirstSignalHelper() {
 			<-ctx.Done()
 			mustWriteHelperLine("watch-canceled")
 			return nil
+		},
+	}
+
+	cmd := newSyncCmd()
+	cmd.SetContext(context.WithValue(context.Background(), cliContextKey{}, cc))
+	if err := cmd.Flags().Set("watch", "true"); err != nil {
+		panic(err)
+	}
+	if err := runSync(cmd, nil); err != nil {
+		panic(err)
+	}
+}
+
+type fakeSyncDaemonOrchestrator struct{}
+
+func (o *fakeSyncDaemonOrchestrator) RunWatch(
+	ctx context.Context,
+	_ synctypes.SyncMode,
+	_ synctypes.WatchOpts,
+) error {
+	mustWriteHelperLine("watch-daemon-ready")
+	<-ctx.Done()
+	mustWriteHelperLine("watch-daemon-canceled")
+	return nil
+}
+
+func runSyncWatchDaemonFirstSignalHelper() {
+	tmpRoot, err := os.MkdirTemp("", "onedrive-go-sync-daemon-helper")
+	if err != nil {
+		panic(err)
+	}
+
+	paths := []struct {
+		env  string
+		path string
+	}{
+		{env: "HOME", path: filepath.Join(tmpRoot, "home")},
+		{env: "XDG_CONFIG_HOME", path: filepath.Join(tmpRoot, "xdg-config")},
+		{env: "XDG_DATA_HOME", path: filepath.Join(tmpRoot, "xdg-data")},
+		{env: "XDG_CACHE_HOME", path: filepath.Join(tmpRoot, "xdg-cache")},
+	}
+	for i := range paths {
+		if err := os.MkdirAll(paths[i].path, 0o750); err != nil {
+			panic(err)
+		}
+		if err := os.Setenv(paths[i].env, paths[i].path); err != nil {
+			panic(err)
+		}
+	}
+
+	syncDir := filepath.Join(tmpRoot, "sync-root")
+	if err := os.MkdirAll(syncDir, 0o750); err != nil {
+		panic(err)
+	}
+
+	cfgPath := filepath.Join(tmpRoot, "config.toml")
+	configBody := fmt.Sprintf(`
+["personal:test@example.com"]
+sync_dir = %q
+`, syncDir)
+	if err := os.WriteFile(cfgPath, []byte(configBody), 0o600); err != nil {
+		panic(err)
+	}
+
+	cc := &CLIContext{
+		Logger:       slog.New(slog.DiscardHandler),
+		OutputWriter: io.Discard,
+		StatusWriter: io.Discard,
+		CfgPath:      cfgPath,
+		syncDaemonOrchestratorFactory: func(_ *multisync.OrchestratorConfig) syncDaemonOrchestrator {
+			return &fakeSyncDaemonOrchestrator{}
 		},
 	}
 

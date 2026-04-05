@@ -771,6 +771,7 @@ func TestWatchLoop_ReconcileTick_RunsPeriodicFullReconciliationThroughResultHand
 	}
 
 	eng, _ := newTestEngine(t, mock)
+	recorder := attachDebugEventRecorder(eng)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -796,15 +797,11 @@ func TestWatchLoop_ReconcileTick_RunsPeriodicFullReconciliationThroughResultHand
 
 	reconcileC <- time.Now()
 
-	var batch []synctypes.PathChanges
-	require.Eventually(t, func() bool {
-		savedToken, tokenErr := eng.baseline.GetDeltaToken(t.Context(), driveID.String(), "")
-		if tokenErr != nil || savedToken != "watch-reconcile-token" {
-			return false
-		}
-		batch = rt.buf.FlushImmediate()
-		return len(batch) > 0
-	}, 10*time.Second, 10*time.Millisecond, "watch loop should apply the periodic reconciliation result back onto the watch-owned buffer")
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventReconcileApplied
+	}, "watch loop applied periodic reconciliation result")
+
+	batch := rt.buf.FlushImmediate()
 
 	require.Len(t, batch, 1)
 	assert.Equal(t, "reconcile.txt", batch[0].Path)

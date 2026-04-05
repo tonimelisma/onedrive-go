@@ -94,9 +94,9 @@ func newWorkerTestSetup(t *testing.T) (
 }
 
 // testDepGraphHelper wraps a syncdispatch.DepGraph for worker tests, providing
-// the dispatchCh and completion channel that WorkerPool expects. Add sends ready
-// actions to dispatchCh; drainAndComplete calls dg.Complete and sends newly-ready
-// dependents to dispatchCh.
+// the dispatch and completion channels that WorkerPool expects. Add sends
+// dispatchable actions to dispatchCh; drainAndComplete calls dg.Complete and
+// sends newly-dispatchable dependents to dispatchCh.
 type testDepGraphHelper struct {
 	dg         *syncdispatch.DepGraph
 	dispatchCh chan *synctypes.TrackedAction
@@ -118,11 +118,11 @@ func (h *testDepGraphHelper) Add(action *synctypes.Action, id int64, deps []int6
 	}
 }
 
-// Ready returns the dispatchCh for WorkerPool.
-func (h *testDepGraphHelper) Ready() <-chan *synctypes.TrackedAction { return h.dispatchCh }
+// Dispatch returns the dispatch channel for WorkerPool.
+func (h *testDepGraphHelper) Dispatch() <-chan *synctypes.TrackedAction { return h.dispatchCh }
 
-// Done returns the DepGraph's Done channel.
-func (h *testDepGraphHelper) Done() <-chan struct{} { return h.dg.Done() }
+// CompleteCh returns the DepGraph completion channel.
+func (h *testDepGraphHelper) CompleteCh() <-chan struct{} { return h.dg.Done() }
 
 // drainAndComplete drains the worker result channel, calling dg.Complete
 // for each result and sending newly-ready dependents to dispatchCh. Returns
@@ -250,6 +250,35 @@ func TestWorkerPool_StopIsIdempotentAfterResultsClose(t *testing.T) {
 	pool.Stop()
 }
 
+func TestWorkerPool_SendResultDropsWhenContextCancellationWins(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, _ := newWorkerTestSetup(t)
+	dispatchCh := make(chan *synctypes.TrackedAction)
+	completeCh := make(chan struct{})
+	pool := NewWorkerPool(cfg, dispatchCh, completeCh, mgr, synctest.TestLogger(t), 1)
+
+	// Saturate the results buffer so sendResult cannot complete before shutdown.
+	pool.results <- synctypes.WorkerResult{Path: "buffered.txt", ActionID: 1}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	pool.sendResult(ctx, &synctypes.TrackedAction{
+		ID: 2,
+		Action: synctypes.Action{
+			Type: synctypes.ActionUpload,
+			Path: "dropped.txt",
+		},
+	}, nil, fmt.Errorf("shutdown won"))
+
+	require.Len(t, pool.results, 1, "canceled sendResult should not enqueue another item")
+
+	result := <-pool.results
+	assert.Equal(t, "buffered.txt", result.Path)
+	assert.EqualValues(t, 1, result.ActionID)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -281,7 +310,7 @@ func TestWorkerPool_FolderCreate(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Ready(), dgh.Done(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
 	results := runPoolWithDrain(ctx, pool, dgh)
 
 	succeeded, failed := countResults(results)
@@ -345,7 +374,7 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 	dgh.Add(&actions[0], 0, nil)
 	dgh.Add(&actions[1], 1, []int64{0})
 
-	pool := NewWorkerPool(cfg, dgh.Ready(), dgh.Done(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
 	results := runPoolWithDrain(ctx, pool, dgh)
 
 	succeeded, failed := countResults(results)
@@ -383,7 +412,7 @@ func TestWorkerPool_StopCancelsWork(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Ready(), dgh.Done(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
 	pool.Start(ctx, 4)
 
 	// Give workers a moment to pick up the action.
@@ -424,7 +453,7 @@ func TestWorkerPool_ResultChannel(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 42, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Ready(), dgh.Done(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
 	results := runPoolWithDrain(ctx, pool, dgh)
 
 	// Verify result for the action.
@@ -475,7 +504,7 @@ func TestWorkerPool_FailedOutcome(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Ready(), dgh.Done(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
 	results := runPoolWithDrain(ctx, pool, dgh)
 
 	succeeded, failed := countResults(results)
@@ -553,7 +582,7 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 	dgh.Add(&actions[0], 0, nil)
 	dgh.Add(&actions[1], 1, []int64{0})
 
-	pool := NewWorkerPool(cfg, dgh.Ready(), dgh.Done(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
 	results := runPoolWithDrain(ctx, pool, dgh)
 
 	succeeded, failed := countResults(results)
@@ -603,7 +632,7 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Ready(), dgh.Done(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
 	results := runPoolWithDrain(ctx, pool, dgh)
 
 	// If we got here, the panic was recovered — the process didn't crash.
@@ -646,7 +675,7 @@ func TestWorker_NeverCallsComplete(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Ready(), dgh.Done(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
 	pool.Start(ctx, 4)
 
 	// Read one result from the channel — worker must send a result.
@@ -661,7 +690,7 @@ func TestWorker_NeverCallsComplete(t *testing.T) {
 	// Worker sent the result but did NOT call Complete — dgh.Done should
 	// NOT have fired (the action is still in-flight from DepGraph's perspective).
 	select {
-	case <-dgh.Done():
+	case <-dgh.CompleteCh():
 		require.Fail(t, "dgh.Done fired — worker must not call Complete")
 	default:
 		// Expected: Done not fired because Complete was not called.
@@ -675,7 +704,7 @@ func TestWorker_NeverCallsComplete(t *testing.T) {
 	_, _ = dgh.dg.Complete(result.ActionID)
 
 	select {
-	case <-dgh.Done():
+	case <-dgh.CompleteCh():
 		// Expected: Done fires after engine calls Complete.
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "dgh.Done did not fire after Complete")
@@ -710,7 +739,7 @@ func TestWorkerResult_PopulatesFromAction(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 77, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Ready(), dgh.Done(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
 	pool.Start(ctx, 4)
 
 	var result synctypes.WorkerResult
@@ -774,7 +803,7 @@ func TestWorkerResult_HTTPStatusAndRetryAfter(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Ready(), dgh.Done(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
 	pool.Start(ctx, 4)
 
 	var result synctypes.WorkerResult
@@ -920,7 +949,7 @@ func TestEngineOwnsCounters(t *testing.T) {
 	dgh.Add(&actions[0], 0, nil)
 	dgh.Add(&actions[1], 1, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Ready(), dgh.Done(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
 
 	// Simulate engine-owned counters.
 	var succeeded, failed atomic.Int32

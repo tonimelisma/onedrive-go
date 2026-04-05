@@ -1177,6 +1177,32 @@ func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 	}
 }
 
+func installTickerCreatedSignal(eng *testEngine, interval time.Duration) <-chan struct{} {
+	tickerCreated := make(chan struct{})
+	var tickerCreatedOnce atomic.Bool
+	origNewTicker := eng.newTicker
+	eng.newTicker = func(nextInterval time.Duration) syncTicker {
+		ticker := origNewTicker(nextInterval)
+		if nextInterval == interval && tickerCreatedOnce.CompareAndSwap(false, true) {
+			close(tickerCreated)
+		}
+
+		return ticker
+	}
+
+	return tickerCreated
+}
+
+func waitForSignal(t *testing.T, ch <-chan struct{}, description string) {
+	t.Helper()
+
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, description)
+	}
+}
+
 // Validates: R-2.8.3, R-6.10.10
 func TestRunWatch_ShutdownDropsReconcileResult(t *testing.T) {
 	t.Parallel()
@@ -1200,6 +1226,11 @@ func TestRunWatch_ShutdownDropsReconcileResult(t *testing.T) {
 	recorder := attachDebugEventRecorder(eng)
 	clock := newManualClock(time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC))
 	installManualClock(eng.Engine, clock)
+	watcher := newSignalingWatcher()
+	eng.localWatcherFactory = func() (syncobserve.FsWatcher, error) {
+		return watcher, nil
+	}
+	reconcileTickerCreated := installTickerCreatedSignal(eng, 15*time.Minute)
 
 	watchCtx, cancel := context.WithCancel(t.Context())
 	eng.watchRuntimeHook = func(rt *watchRuntime) {
@@ -1220,17 +1251,14 @@ func TestRunWatch_ShutdownDropsReconcileResult(t *testing.T) {
 	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
 	}, "local observer started")
+	waitForSignal(t, watcher.Added(), "local watch setup did not add any watcher")
+	waitForSignal(t, reconcileTickerCreated, "reconcile ticker was not created")
 
 	clock.Advance(15 * time.Minute)
 	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventReconcileStarted
 	}, "reconcile started")
-
-	select {
-	case <-reconcileStarted:
-	case <-time.After(5 * time.Second):
-		require.FailNow(t, "reconcile delta fetch did not start")
-	}
+	waitForSignal(t, reconcileStarted, "reconcile delta fetch did not start")
 
 	close(reconcileReleased)
 
@@ -1302,6 +1330,7 @@ func TestRunWatch_FallbackSleepHonorsCancellation(t *testing.T) {
 	eng.localWatcherFactory = func() (syncobserve.FsWatcher, error) {
 		return watcher, nil
 	}
+	tickerCreated := installTickerCreatedSignal(eng, 1*time.Second)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
@@ -1315,17 +1344,9 @@ func TestRunWatch_FallbackSleepHonorsCancellation(t *testing.T) {
 	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventObserverFallbackStarted
 	}, "fallback started")
-
-	require.Eventually(t, func() bool {
-		clock.Advance(250 * time.Millisecond)
-
-		select {
-		case <-sleepStarted:
-			return true
-		default:
-			return false
-		}
-	}, 5*time.Second, 10*time.Millisecond, "fallback jitter sleep did not start")
+	waitForSignal(t, tickerCreated, "fallback ticker was not created")
+	clock.Advance(1 * time.Second)
+	waitForSignal(t, sleepStarted, "fallback jitter sleep did not start")
 
 	cancel()
 

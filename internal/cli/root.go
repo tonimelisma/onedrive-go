@@ -114,23 +114,24 @@ func (f CLIFlags) SingleDrive() (string, error) {
 //
 // Auth commands get CLIContext with Flags + Logger + CfgPath + Env but nil Cfg/Provider.
 type CLIContext struct {
-	Flags            CLIFlags
-	Logger           *slog.Logger
-	OutputWriter     io.Writer                 // destination for primary command output (default: os.Stdout)
-	StatusWriter     io.Writer                 // destination for Statusf output (default: os.Stderr)
-	CfgPath          string                    // resolved config file path (always set)
-	Env              config.EnvOverrides       // env overrides (always set in Phase 1)
-	GraphBaseURL     string                    // internal test seam for live Graph command coverage
-	SharedTarget     *sharedTarget             // nil for ordinary drive/path commands
-	HTTPProvider     *graphhttp.Provider       // Graph-facing HTTP runtime policy
-	Cfg              *config.ResolvedDrive     // nil for auth/account commands
-	Provider         *driveops.SessionProvider // nil for auth/account commands; created in Phase 2
-	syncWatchRunner  syncWatchRunner           // test-only seam for sync --watch command coverage
-	logCloser        io.Closer                 // log file closer; nil when no log file is configured
-	statusMu         sync.Mutex                // guards statusErr for concurrent progress callbacks
-	statusErr        error
-	reconcileMu      sync.Mutex // guards reconcileNotices and selector mutation
-	reconcileNotices map[string]struct{}
+	Flags                         CLIFlags
+	Logger                        *slog.Logger
+	OutputWriter                  io.Writer                     // destination for primary command output (default: os.Stdout)
+	StatusWriter                  io.Writer                     // destination for Statusf output (default: os.Stderr)
+	CfgPath                       string                        // resolved config file path (always set)
+	Env                           config.EnvOverrides           // env overrides (always set in Phase 1)
+	GraphBaseURL                  string                        // internal test seam for live Graph command coverage
+	SharedTarget                  *sharedTarget                 // nil for ordinary drive/path commands
+	HTTPProvider                  *graphhttp.Provider           // Graph-facing HTTP runtime policy
+	Cfg                           *config.ResolvedDrive         // nil for auth/account commands
+	Provider                      *driveops.SessionProvider     // nil for auth/account commands; created in Phase 2
+	syncWatchRunner               syncWatchRunner               // test-only seam for sync --watch command coverage
+	syncDaemonOrchestratorFactory syncDaemonOrchestratorFactory // test-only seam below syncWatchRunner for real daemon-path coverage
+	logCloser                     io.Closer                     // log file closer; nil when no log file is configured
+	statusMu                      sync.Mutex                    // guards statusErr for concurrent progress callbacks
+	statusErr                     error
+	reconcileMu                   sync.Mutex // guards reconcileNotices and selector mutation
+	reconcileNotices              map[string]struct{}
 }
 
 func (cc *CLIContext) httpProvider() *graphhttp.Provider {
