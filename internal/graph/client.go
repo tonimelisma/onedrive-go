@@ -58,6 +58,7 @@ type Client struct {
 	rootChildrenPolicy   retry.Policy
 	uploadURLValidator   func(*url.URL) error
 	copyMonitorValidator func(*url.URL) error
+	socketIOValidator    func(*url.URL) error
 }
 
 // SetAuthenticatedSuccessHook installs a best-effort callback that runs after

@@ -150,28 +150,7 @@ func (o *Orchestrator) buildEngineWork(
 		}
 	}
 
-	engine, engineErr := o.engineFactory(ctx, &synctypes.EngineConfig{
-		DBPath:             rd.StatePath(),
-		SyncRoot:           rd.SyncDir,
-		DataDir:            config.DefaultDataDir(),
-		DriveID:            session.DriveID,
-		AccountEmail:       rd.CanonicalID.Email(),
-		RootItemID:         rd.RootItemID,
-		Fetcher:            session.Meta,
-		Items:              session.Meta,
-		Downloads:          session.Transfer,
-		Uploads:            session.Transfer,
-		DriveVerifier:      session.Meta,
-		FolderDelta:        session.Meta,
-		RecursiveLister:    session.Meta,
-		PermChecker:        session.Meta,
-		Logger:             o.logger,
-		UseLocalTrash:      rd.UseLocalTrash,
-		TransferWorkers:    rd.TransferWorkers,
-		CheckWorkers:       rd.CheckWorkers,
-		BigDeleteThreshold: rd.BigDeleteThreshold,
-		MinFreeSpace:       minFree,
-	})
+	engine, engineErr := o.engineFactory(ctx, o.buildEngineConfig(rd, session, minFree))
 	if engineErr != nil {
 		capturedErr := engineErr
 
@@ -196,6 +175,35 @@ func (o *Orchestrator) buildEngineWork(
 
 			return engine.RunOnce(c, mode, opts)
 		},
+	}
+}
+
+func (o *Orchestrator) buildEngineConfig(
+	rd *config.ResolvedDrive, session *driveops.Session, minFreeSpace int64,
+) *synctypes.EngineConfig {
+	return &synctypes.EngineConfig{
+		DBPath:             rd.StatePath(),
+		SyncRoot:           rd.SyncDir,
+		DataDir:            config.DefaultDataDir(),
+		DriveID:            session.DriveID,
+		AccountEmail:       rd.CanonicalID.Email(),
+		RootItemID:         rd.RootItemID,
+		Fetcher:            session.Meta,
+		SocketIOFetcher:    session.Meta,
+		Items:              session.Meta,
+		Downloads:          session.Transfer,
+		Uploads:            session.Transfer,
+		DriveVerifier:      session.Meta,
+		FolderDelta:        session.Meta,
+		RecursiveLister:    session.Meta,
+		PermChecker:        session.Meta,
+		Logger:             o.logger,
+		EnableWebsocket:    rd.Websocket,
+		UseLocalTrash:      rd.UseLocalTrash,
+		TransferWorkers:    rd.TransferWorkers,
+		CheckWorkers:       rd.CheckWorkers,
+		BigDeleteThreshold: rd.BigDeleteThreshold,
+		MinFreeSpace:       minFreeSpace,
 	}
 }
 
@@ -302,23 +310,7 @@ func (o *Orchestrator) startWatchRunner(
 		return nil, fmt.Errorf("invalid min_free_space %q for %s: %w", rd.MinFreeSpace, rd.CanonicalID, parseErr)
 	}
 
-	engine, engineErr := o.engineFactory(ctx, &synctypes.EngineConfig{
-		DBPath:             rd.StatePath(),
-		SyncRoot:           rd.SyncDir,
-		DataDir:            config.DefaultDataDir(),
-		DriveID:            session.DriveID,
-		Fetcher:            session.Meta,
-		Items:              session.Meta,
-		Downloads:          session.Transfer,
-		Uploads:            session.Transfer,
-		DriveVerifier:      session.Meta,
-		Logger:             o.logger,
-		UseLocalTrash:      rd.UseLocalTrash,
-		TransferWorkers:    rd.TransferWorkers,
-		CheckWorkers:       rd.CheckWorkers,
-		BigDeleteThreshold: rd.BigDeleteThreshold,
-		MinFreeSpace:       minFreeW,
-	})
+	engine, engineErr := o.engineFactory(ctx, o.buildEngineConfig(rd, session, minFreeW))
 	if engineErr != nil {
 		return nil, fmt.Errorf("engine creation failed for %s: %w", rd.CanonicalID, engineErr)
 	}

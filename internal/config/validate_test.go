@@ -576,7 +576,7 @@ func TestWarnUnimplemented_NonDefaults_WarnsAll(t *testing.T) {
 
 	expected := []string{
 		"sync_paths",
-		"bandwidth_limit", "bandwidth_schedule", "websocket", "user_agent",
+		"bandwidth_limit", "bandwidth_schedule", "user_agent",
 	}
 	for _, f := range expected {
 		assert.Contains(t, warned, f, "expected warning for %q", f)

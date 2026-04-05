@@ -39,7 +39,7 @@ func TestDefaultConfig_AllFieldsPopulated(t *testing.T) {
 	// Sync defaults
 	assert.Equal(t, "5m", cfg.PollInterval)
 	assert.Equal(t, 12, cfg.FullscanFrequency)
-	assert.False(t, cfg.Websocket) // unimplemented — defaults to false
+	assert.False(t, cfg.Websocket)
 	assert.Equal(t, "keep_both", cfg.ConflictStrategy)
 	assert.Equal(t, "1h", cfg.ConflictReminderInterval)
 	assert.False(t, cfg.DryRun)

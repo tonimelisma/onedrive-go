@@ -205,6 +205,10 @@ type watchPipeline struct {
 	cleanup          func()
 }
 
+type socketIOWakeSourceRunner interface {
+	Run(ctx context.Context, wakes chan<- struct{}) error
+}
+
 // initWatchInfra sets up watch-mode infrastructure: watchRuntime, DepGraph,
 // worker pool, buffer, persisted scope state, and tickers. Does NOT load
 // baseline or start observers — those happen in bootstrapSync and RunWatch.
@@ -287,6 +291,15 @@ func (rt *watchRuntime) initWatchInfra(
 	}
 
 	pipe.cleanup = func() {
+		if rt.socketIOWakeCancel != nil {
+			rt.socketIOWakeCancel()
+			if rt.socketIOWakeDone != nil {
+				<-rt.socketIOWakeDone
+			}
+			rt.socketIOWakeCancel = nil
+			rt.socketIOWakeDone = nil
+		}
+
 		stopTicker(recheckTicker)
 		stopTicker(reconcileTicker)
 
@@ -397,31 +410,7 @@ func (rt *watchRuntime) startObservers(
 		obsWg.Add(1)
 		count++
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverStarted, Observer: engineDebugObserverRemote})
-
-		if rt.engine.hasScopedRoot() {
-			go func() {
-				defer obsWg.Done()
-				defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
-				errs <- rt.watchScopedRootRemote(ctx, bl, events, rt.engine.resolvePollInterval(opts))
-			}()
-		} else {
-			remoteObs := syncobserve.NewRemoteObserver(rt.engine.fetcher, bl, rt.engine.driveID, rt.engine.logger)
-			remoteObs.SetObsWriter(rt.engine.baseline)
-			rt.remoteObs = remoteObs
-
-			savedToken, tokenErr := rt.engine.baseline.GetDeltaToken(ctx, rt.engine.driveID.String(), "")
-			if tokenErr != nil {
-				rt.engine.logger.Warn("failed to get delta token for watch",
-					slog.String("error", tokenErr.Error()),
-				)
-			}
-
-			go func() {
-				defer obsWg.Done()
-				defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
-				errs <- remoteObs.Watch(ctx, savedToken, events, rt.engine.resolvePollInterval(opts))
-			}()
-		}
+		rt.startRemoteObserver(ctx, &obsWg, bl, events, errs, opts)
 	}
 
 	// Channel for forwarding SkippedItems from safety scans to the engine.
@@ -471,6 +460,89 @@ func (rt *watchRuntime) startObservers(
 	rt.closeWatchEventsWhenObserversExit(&obsWg, events)
 
 	return errs, count, skippedCh
+}
+
+func (rt *watchRuntime) startRemoteObserver(
+	ctx context.Context,
+	obsWg *stdsync.WaitGroup,
+	bl *synctypes.Baseline,
+	events chan<- synctypes.ChangeEvent,
+	errs chan<- error,
+	opts synctypes.WatchOpts,
+) {
+	rt.warnWebsocketFallbackIfNeeded()
+
+	pollInterval := rt.engine.resolvePollInterval(opts)
+	if rt.engine.hasScopedRoot() {
+		go func() {
+			defer obsWg.Done()
+			defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
+			errs <- rt.watchScopedRootRemote(ctx, bl, events, pollInterval)
+		}()
+
+		return
+	}
+
+	remoteObs := syncobserve.NewRemoteObserver(rt.engine.fetcher, bl, rt.engine.driveID, rt.engine.logger)
+	remoteObs.SetObsWriter(rt.engine.baseline)
+	rt.remoteObs = remoteObs
+	rt.startSocketIOWakeSource(ctx, remoteObs)
+
+	savedToken, tokenErr := rt.engine.baseline.GetDeltaToken(ctx, rt.engine.driveID.String(), "")
+	if tokenErr != nil {
+		rt.engine.logger.Warn("failed to get delta token for watch",
+			slog.String("error", tokenErr.Error()),
+		)
+	}
+
+	go func() {
+		defer obsWg.Done()
+		defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
+		errs <- remoteObs.Watch(ctx, savedToken, events, pollInterval)
+	}()
+}
+
+func (rt *watchRuntime) warnWebsocketFallbackIfNeeded() {
+	if rt.engine.enableWebsocket && rt.engine.hasScopedRoot() {
+		rt.engine.logger.Warn("websocket watch is not supported for scoped-root sessions; falling back to polling",
+			slog.String("drive_id", rt.engine.driveID.String()),
+			slog.String("root_item_id", rt.engine.rootItemID),
+		)
+	}
+	if rt.engine.enableWebsocket && rt.engine.socketIOFetcher == nil {
+		rt.engine.logger.Warn("websocket watch requested but no Socket.IO fetcher is available; falling back to polling",
+			slog.String("drive_id", rt.engine.driveID.String()),
+		)
+	}
+}
+
+func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context, remoteObs *syncobserve.RemoteObserver) {
+	if !rt.engine.enableWebsocket || rt.engine.socketIOFetcher == nil || remoteObs == nil {
+		return
+	}
+
+	rt.engine.logger.Info("starting socket.io wake source",
+		slog.String("drive_id", rt.engine.driveID.String()),
+	)
+
+	wakeCh := make(chan struct{}, 1)
+	remoteObs.SetWakeChannel(wakeCh)
+
+	wakeCtx, wakeCancel := context.WithCancel(ctx)
+	rt.socketIOWakeCancel = wakeCancel
+	rt.socketIOWakeDone = make(chan struct{})
+	wakeSource := rt.engine.socketIOWakeSourceFactory(rt.engine.socketIOFetcher, rt.engine.driveID, rt.engine.logger)
+
+	go func() {
+		defer close(rt.socketIOWakeDone)
+
+		if err := wakeSource.Run(wakeCtx, wakeCh); err != nil {
+			rt.engine.logger.Warn("socket.io wake source exited",
+				slog.String("drive_id", rt.engine.driveID.String()),
+				slog.String("error", err.Error()),
+			)
+		}
+	}()
 }
 
 func (rt *watchRuntime) startWatchEventBridge(
