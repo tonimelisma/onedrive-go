@@ -370,10 +370,6 @@ func WarnUnimplemented(rd *ResolvedDrive, logger *slog.Logger) {
 		warn("bandwidth_schedule")
 	}
 
-	if rd.Websocket {
-		warn("websocket")
-	}
-
 	if rd.UserAgent != "" {
 		warn("user_agent")
 	}

@@ -70,6 +70,8 @@ Each drive section contains per-drive settings (sync_dir, filter overrides, paus
 
 `skip_dotfiles`, `skip_dirs`, `skip_files`, and `skip_symlinks` are live local-observation controls. The sync engine threads their resolved values into the local observer so full scans, watch mode, and retry/trial single-path reconstruction all apply the same exclusions. `skip_symlinks` defaults to `false`, matching `abraunegg/onedrive`: symlink targets are followed unless the user explicitly opts out. `sync_paths` and `ignore_marker` remain planned and still warn when configured.
 
+`websocket` is a live watch-mode control. When `websocket = true`, eligible full-drive watch sessions fetch a OneDrive Socket.IO endpoint and establish an outbound websocket wake source. The wake source does not replace delta: it only interrupts the normal wait so the remote observer runs delta sooner. `poll_interval` remains the fallback poll cadence even when websocket is enabled. Scoped-root watch sessions fall back to polling with a warning because only drive-root Socket.IO behavior is currently verified.
+
 ### Pause State
 
 `Drive.IsPaused(now time.Time) bool` is the single source of truth for whether a drive is currently paused. All callers (CLI commands, the multi-drive control plane, drive resolution) use this method instead of checking `Paused`/`PausedUntil` fields directly. Logic: nil/false → not paused; true without expiry → indefinite; true with future expiry → active; true with past expiry → expired (not paused); true with unparseable expiry → indefinite (safe default).

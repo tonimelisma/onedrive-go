@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -24,6 +25,20 @@ import (
 // ---------------------------------------------------------------------------
 // RunWatch tests
 // ---------------------------------------------------------------------------
+
+type stubSocketIOWakeSource struct {
+	started chan struct{}
+}
+
+func (s *stubSocketIOWakeSource) Run(ctx context.Context, _ chan<- struct{}) error {
+	select {
+	case s.started <- struct{}{}:
+	default:
+	}
+
+	<-ctx.Done()
+	return nil
+}
 
 // Validates: R-2.8.3, R-6.10.10
 // TestRunWatch_ContextCancel verifies that canceling the context causes
@@ -73,6 +88,133 @@ func TestRunWatch_ContextCancel(t *testing.T) {
 	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventObserverStarted
 	}), "observers must not start after bootstrap cancellation")
+}
+
+// Validates: R-2.8.5
+func TestRunWatch_WebsocketEnabledStartsWakeSource(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	eng.enableWebsocket = true
+	started := make(chan struct{}, 1)
+	eng.socketIOWakeSourceFactory = func(_ synctypes.SocketIOEndpointFetcher, _ driveid.ID, _ *slog.Logger) socketIOWakeSourceRunner {
+		return &stubSocketIOWakeSource{started: started}
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- eng.RunWatch(ctx, synctypes.SyncDownloadOnly, synctypes.WatchOpts{
+			PollInterval: time.Hour,
+			Debounce:     5 * time.Millisecond,
+		})
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "expected websocket wake source to start")
+	}
+
+	cancel()
+	require.NoError(t, <-done)
+}
+
+// Validates: R-2.8.5
+func TestRunWatch_WebsocketDisabledKeepsPollingOnly(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	recorder := attachDebugEventRecorder(eng)
+	started := make(chan struct{}, 1)
+	eng.socketIOWakeSourceFactory = func(_ synctypes.SocketIOEndpointFetcher, _ driveid.ID, _ *slog.Logger) socketIOWakeSourceRunner {
+		return &stubSocketIOWakeSource{started: started}
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- eng.RunWatch(ctx, synctypes.SyncDownloadOnly, synctypes.WatchOpts{
+			PollInterval: time.Hour,
+			Debounce:     5 * time.Millisecond,
+		})
+	}()
+
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverRemote
+	}, "remote observer started")
+
+	select {
+	case <-started:
+		require.FailNow(t, "wake source should not start when websocket is disabled")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	cancel()
+	require.NoError(t, <-done)
+}
+
+// Validates: R-2.8.5
+func TestRunWatch_ScopedRootKeepsPollingOnly(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	eng.enableWebsocket = true
+	eng.rootItemID = "scoped-root"
+	recorder := attachDebugEventRecorder(eng)
+	started := make(chan struct{}, 1)
+	eng.socketIOWakeSourceFactory = func(_ synctypes.SocketIOEndpointFetcher, _ driveid.ID, _ *slog.Logger) socketIOWakeSourceRunner {
+		return &stubSocketIOWakeSource{started: started}
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- eng.RunWatch(ctx, synctypes.SyncDownloadOnly, synctypes.WatchOpts{
+			PollInterval: time.Hour,
+			Debounce:     5 * time.Millisecond,
+		})
+	}()
+
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverRemote
+	}, "remote observer started")
+
+	select {
+	case <-started:
+		require.FailNow(t, "wake source should not start for scoped-root watch")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	cancel()
+	require.NoError(t, <-done)
 }
 
 // Validates: R-2.8.3, R-6.8.9, R-6.10.10

@@ -86,6 +86,14 @@ func validateCopyMonitorURL(parsed *url.URL) error {
 	)
 }
 
+func validateSocketIONotificationURL(parsed *url.URL) error {
+	return validateTrustedPreAuthURL(
+		parsed,
+		"socket.io notification",
+		"svc.ms",
+	)
+}
+
 func validateTrustedPreAuthURL(parsed *url.URL, kind string, allowedHosts ...string) error {
 	if parsed == nil {
 		return fmt.Errorf("graph: %s URL is nil", kind)

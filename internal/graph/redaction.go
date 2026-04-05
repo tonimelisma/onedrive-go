@@ -73,7 +73,7 @@ func sanitizeJSONValue(value any) any {
 
 func isSensitiveJSONKey(key string) bool {
 	switch strings.ToLower(key) {
-	case "access_token", "authorization", "client_secret", "downloadurl", "refresh_token", "uploadurl":
+	case "access_token", "authorization", "client_secret", "downloadurl", "notificationurl", "refresh_token", "uploadurl":
 		return true
 	default:
 		return false
@@ -128,8 +128,13 @@ func isSensitiveURL(raw string) bool {
 		"sharepoint-df.com",
 		"sharepoint.us",
 		"sharepoint-df.us",
+		"svc.ms",
 		"storage.live.com",
 	) {
+		if matchesAllowedHost(hostname, "svc.ms") && !strings.Contains(strings.ToLower(parsed.Path), "/callback") {
+			return false
+		}
+
 		return true
 	}
 

@@ -88,7 +88,7 @@ func defaultSyncConfig() SyncConfig {
 	return SyncConfig{
 		PollInterval:             defaultPollInterval,
 		FullscanFrequency:        defaultFullscanFrequency,
-		Websocket:                false, // websocket notification mode is unimplemented
+		Websocket:                false,
 		ConflictStrategy:         defaultConflictStrategy,
 		ConflictReminderInterval: defaultConflictReminder,
 		VerifyInterval:           defaultVerifyInterval,

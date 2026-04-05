@@ -210,3 +210,34 @@ func TestBuildSyncEngineConfig_PropagatesSharedRootAndScopedHelpers(t *testing.T
 	assert.NotNil(t, ecfg.RecursiveLister)
 	assert.NotNil(t, ecfg.PermChecker)
 }
+
+func TestBuildSyncEngineConfig_ThreadsWebsocketConfig(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	logger := buildLogger(nil, CLIFlags{})
+	meta, err := newGraphClient(staticTokenSource{}, logger)
+	require.NoError(t, err)
+	transfer, err := newGraphClient(staticTokenSource{}, logger)
+	require.NoError(t, err)
+
+	syncDir := filepath.Join(t.TempDir(), "sync")
+	require.NoError(t, os.MkdirAll(syncDir, 0o700))
+
+	session := &driveops.Session{
+		Meta:     meta,
+		Transfer: transfer,
+		DriveID:  driveid.New("abc123"),
+	}
+	resolved := &config.ResolvedDrive{
+		SyncDir:     syncDir,
+		CanonicalID: driveid.MustCanonicalID("personal:test@example.com"),
+		SyncConfig: config.SyncConfig{
+			Websocket: true,
+		},
+	}
+
+	ecfg, err := buildSyncEngineConfig(session, resolved, false, logger)
+	require.NoError(t, err)
+	assert.True(t, ecfg.EnableWebsocket)
+	assert.NotNil(t, ecfg.SocketIOFetcher)
+}

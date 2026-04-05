@@ -39,6 +39,7 @@ type Engine struct {
 	planner            *syncplan.Planner
 	execCfg            *syncexec.ExecutorConfig
 	fetcher            synctypes.DeltaFetcher
+	socketIOFetcher    synctypes.SocketIOEndpointFetcher
 	driveVerifier      synctypes.DriveVerifier      // optional (B-074)
 	folderDelta        synctypes.FolderDeltaFetcher // optional: for shortcut observation (6.4b)
 	recursiveLister    synctypes.RecursiveLister    // optional: for shortcut observation (6.4b)
@@ -53,6 +54,7 @@ type Engine struct {
 	checkWorkers       int                    // goroutine limit for parallel file hashing
 	localFilter        synctypes.LocalFilterConfig
 	localRules         synctypes.LocalObservationRules
+	enableWebsocket    bool
 	bigDeleteThreshold int   // from config; 0 means use default
 	minFreeSpace       int64 // startup disk-scope revalidation threshold
 	diskAvailableFn    func(string) (uint64, error)
@@ -76,6 +78,10 @@ type Engine struct {
 	// durable failures per iteration. Production leaves this zero and uses the
 	// compiled default in engine_retry_trial.go.
 	retryBatchLimit int
+
+	// socketIOWakeSourceFactory is a test seam for watch-mode websocket
+	// wakeups. Production uses syncobserve.NewSocketIOWakeSource.
+	socketIOWakeSourceFactory func(synctypes.SocketIOEndpointFetcher, driveid.ID, *slog.Logger) socketIOWakeSourceRunner
 
 	// watchRuntimeHook is a test-only seam that exposes the newly constructed
 	// watch runtime before initWatchInfra wires timers, observers, and workers.
@@ -138,6 +144,7 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 		planner:            syncplan.NewPlanner(cfg.Logger),
 		execCfg:            execCfg,
 		fetcher:            cfg.Fetcher,
+		socketIOFetcher:    cfg.SocketIOFetcher,
 		driveVerifier:      cfg.DriveVerifier,
 		folderDelta:        cfg.FolderDelta,
 		recursiveLister:    cfg.RecursiveLister,
@@ -151,6 +158,7 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 		checkWorkers:       cfg.CheckWorkers,
 		localFilter:        cfg.LocalFilter,
 		localRules:         cfg.LocalRules,
+		enableWebsocket:    cfg.EnableWebsocket,
 		bigDeleteThreshold: bdThreshold,
 		minFreeSpace:       cfg.MinFreeSpace,
 		diskAvailableFn:    driveops.DiskAvailable,
@@ -159,6 +167,13 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 		newTicker:          realNewTicker,
 		sleepFn:            realSleep,
 		jitterFn:           realJitter,
+		socketIOWakeSourceFactory: func(
+			fetcher synctypes.SocketIOEndpointFetcher,
+			driveID driveid.ID,
+			logger *slog.Logger,
+		) socketIOWakeSourceRunner {
+			return syncobserve.NewSocketIOWakeSource(fetcher, driveID, logger)
+		},
 	}
 
 	e.permHandler = &PermissionHandler{

@@ -64,6 +64,7 @@ func buildSyncEngineConfig(
 		AccountEmail:    resolved.CanonicalID.Email(),
 		RootItemID:      resolved.RootItemID,
 		Fetcher:         session.Meta,
+		SocketIOFetcher: session.Meta,
 		Items:           session.Meta,
 		Downloads:       session.Transfer,
 		Uploads:         session.Transfer,
@@ -71,6 +72,7 @@ func buildSyncEngineConfig(
 		RecursiveLister: session.Meta,
 		PermChecker:     session.Meta,
 		Logger:          logger,
+		EnableWebsocket: resolved.Websocket,
 		LocalFilter: synctypes.LocalFilterConfig{
 			SkipDotfiles: resolved.SkipDotfiles,
 			SkipSymlinks: resolved.SkipSymlinks,

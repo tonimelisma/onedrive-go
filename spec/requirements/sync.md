@@ -72,7 +72,7 @@ When the user runs `verify`, the system shall re-hash local files and compare ag
 - R-2.8.2: The system shall use a PID file with flock for single-instance enforcement. [verified]
 - R-2.8.3: The system shall support two-signal shutdown. First SIGINT/SIGTERM cancels watch mode, seals new work admission, and lets already-admitted work follow the normal shutdown path; second signal forces immediate exit. [verified]
 - R-2.8.4: The system shall run periodic full reconciliation (default every 24 hours) to detect missed delta deletions. [verified]
-- R-2.8.5: The system shall support WebSocket subscription for near-instant remote change notification. [future]
+- R-2.8.5: The system shall support WebSocket subscription for near-instant remote change notification. [verified]
 
 ## R-2.9 RPC / Control Socket [planned]
 

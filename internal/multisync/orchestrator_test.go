@@ -230,6 +230,76 @@ func TestRunOnce_PanicRecovery(t *testing.T) {
 	assert.Equal(t, 1, stableDriveReport.Report.Downloads)
 }
 
+// Validates: R-2.8.5
+func TestPrepareDriveWork_ThreadsWebsocketConfig(t *testing.T) {
+	rd := testResolvedDrive(t, "personal:websocket@example.com", "Websocket")
+	rd.Websocket = true
+	cfg := testOrchestratorConfig(t, rd)
+	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+
+	orch := NewOrchestrator(cfg)
+	var captured *synctypes.EngineConfig
+	orch.engineFactory = func(_ context.Context, ecfg *synctypes.EngineConfig) (engineRunner, error) {
+		captured = ecfg
+		return &mockEngine{report: &synctypes.SyncReport{}}, nil
+	}
+
+	work := orch.prepareDriveWork(t.Context(), synctypes.SyncBidirectional, synctypes.RunOpts{})
+	require.Len(t, work, 1)
+
+	_, err := work[0].fn(t.Context())
+	require.NoError(t, err)
+	require.NotNil(t, captured)
+	assert.True(t, captured.EnableWebsocket)
+	assert.NotNil(t, captured.SocketIOFetcher)
+}
+
+// Validates: R-2.8.5
+func TestStartWatchRunner_ThreadsWebsocketConfig(t *testing.T) {
+	rd := testResolvedDrive(t, "personal:watch-websocket@example.com", "WatchWebsocket")
+	rd.Websocket = true
+	cfgPath := writeTestConfig(t, rd.CanonicalID)
+	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
+	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+
+	orch := NewOrchestrator(cfg)
+	var captured *synctypes.EngineConfig
+	started := make(chan struct{}, 1)
+	orch.engineFactory = func(_ context.Context, ecfg *synctypes.EngineConfig) (engineRunner, error) {
+		captured = ecfg
+		return &mockEngine{
+			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
+				select {
+				case started <- struct{}{}:
+				default:
+				}
+				<-ctx.Done()
+				return ctx.Err()
+			},
+		}, nil
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	wr, err := orch.startWatchRunner(ctx, rd, synctypes.SyncDownloadOnly, synctypes.WatchOpts{})
+	require.NoError(t, err)
+	require.NotNil(t, captured)
+	assert.True(t, captured.EnableWebsocket)
+	assert.NotNil(t, captured.SocketIOFetcher)
+	assert.Equal(t, rd.RootItemID, captured.RootItemID)
+	assert.Equal(t, rd.CanonicalID.Email(), captured.AccountEmail)
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "watch runner did not start")
+	}
+
+	wr.cancel()
+	<-wr.done
+	require.NoError(t, wr.engine.Close(t.Context()))
+	cancel()
+}
+
 // Validates: R-2.4
 func TestRunOnce_ContextCanceled(t *testing.T) {
 	rd := testResolvedDrive(t, "personal:cancel@example.com", "Cancel")

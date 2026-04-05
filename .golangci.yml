@@ -93,6 +93,7 @@ linters:
             - github.com/pressly/goose/v3
             - github.com/google/uuid
             - github.com/fsnotify/fsnotify
+            - github.com/coder/websocket
             - golang.org/x/sync
             - github.com/mattn/go-isatty
         graph-no-config:

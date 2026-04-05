@@ -91,6 +91,10 @@ type watchObservationState struct {
 	// Observer references — set in startObservers, nil'd on shutdown.
 	remoteObs *syncobserve.RemoteObserver
 	localObs  *syncobserve.LocalObserver
+
+	// Socket.IO wake source lifecycle, when enabled for full-drive watch.
+	socketIOWakeStop chan struct{}
+	socketIOWakeDone chan struct{}
 }
 
 type watchTimerState struct {
