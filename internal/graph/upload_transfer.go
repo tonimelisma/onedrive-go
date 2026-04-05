@@ -44,6 +44,7 @@ func (c *Client) SimpleUpload(
 	}
 
 	item := dir.toItem(c.logger)
+	normalizeSingleItem(&item, c.logger)
 
 	return &item, nil
 }
@@ -74,6 +75,7 @@ func (c *Client) SimpleUploadToItem(
 	}
 
 	item := dir.toItem(c.logger)
+	normalizeSingleItem(&item, c.logger)
 
 	return &item, nil
 }
@@ -151,6 +153,7 @@ func (c *Client) handleChunkResponse(resp *http.Response) (*Item, bool, error) {
 		}
 
 		item := dir.toItem(c.logger)
+		normalizeSingleItem(&item, c.logger)
 
 		c.logger.Debug("upload complete",
 			slog.String("item_id", item.ID),

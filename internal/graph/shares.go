@@ -33,6 +33,7 @@ func (c *Client) ResolveShareURL(ctx context.Context, rawURL string) (*Item, err
 	}
 
 	item := dir.toItem(c.logger)
+	normalizeSingleItem(&item, c.logger)
 
 	// `/shares/.../driveItem` resolves to the owner-side item. Make that raw
 	// owner identity available through the same Remote* fields used by shared
