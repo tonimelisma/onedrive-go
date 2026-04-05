@@ -899,6 +899,7 @@ func TestSharedWithMe_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
 		assert.Equal(t, "/me/drive/sharedWithMe", r.URL.Path)
+		assert.Equal(t, "true", r.URL.Query().Get("allowexternal"))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -984,8 +985,16 @@ func TestSharedWithMe_Pagination(t *testing.T) {
 	// Use a pointer to hold the server, assigned after creation.
 	var page int
 	var srv *httptest.Server
-	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		page++
+		assert.Equal(t, "/me/drive/sharedWithMe", r.URL.Path)
+		if page == 1 {
+			assert.Equal(t, "true", r.URL.Query().Get("allowexternal"))
+		} else {
+			assert.Equal(t, "true", r.URL.Query().Get("allowexternal"))
+			assert.Equal(t, "page2", r.URL.Query().Get("$skiptoken"))
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 
@@ -999,7 +1008,7 @@ func TestSharedWithMe_Pagination(t *testing.T) {
 					"lastModifiedDateTime": "2024-01-01T00:00:00Z",
 					"folder": {"childCount": 0}
 				}],
-				"@odata.nextLink": "%s/me/drive/sharedWithMe?$skiptoken=page2"
+				"@odata.nextLink": "%s/me/drive/sharedWithMe?allowexternal=true&$skiptoken=page2"
 			}`, srv.URL)
 			return
 		}

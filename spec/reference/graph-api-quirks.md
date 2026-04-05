@@ -221,6 +221,23 @@ throttling decisions across file operations.
 
 ## Shared Folder Issues
 
+### External Shared Discovery Is Best-Effort, Not Guaranteed
+
+Microsoft Graph's deprecated `sharedWithMe` endpoint accepts
+`allowexternal=true`, and the client now uses that flag whenever it falls back
+from search-based shared discovery. This improves cross-organization discovery,
+but it is still not a guarantee that every external shared folder appears.
+
+Runtime policy:
+- shared discovery remains search-first
+- fallback uses `GET /me/drive/sharedWithMe?allowexternal=true`
+- if search plus external-aware fallback still produce no matching shared
+  folder, the CLI explains that Graph omitted the item and points the user at
+  `shared` / `drive list` to confirm what the API exposed
+
+This is a documented platform-limit explanation, not evidence that all
+cross-org shares are categorically invisible.
+
 ### Permissions Endpoint Mixes Caller Grants With Owner Rows
 
 `GET /drives/{driveID}/items/{itemID}/permissions` on shared folders does not
