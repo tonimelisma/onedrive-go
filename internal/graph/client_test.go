@@ -1091,6 +1091,91 @@ func TestDoOnce_401_RefreshSucceeds(t *testing.T) {
 }
 
 // Validates: R-6.8.14
+func TestDoOnce_401_RefreshSucceedsWithBodyAndQueryPreserved(t *testing.T) {
+	t.Parallel()
+
+	const (
+		expectedQuery   = "conflictBehavior=replace"
+		expectedBody    = `{"name":"renamed.txt"}`
+		refreshedBearer = "Bearer refreshed-token"
+	)
+
+	var attempts atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+
+		body, err := io.ReadAll(r.Body)
+		if !assert.NoError(t, err) {
+			return
+		}
+
+		assert.Equal(t, http.MethodPatch, r.Method)
+		assert.Equal(t, "/items/item-1", r.URL.Path)
+		assert.Equal(t, expectedQuery, r.URL.RawQuery)
+		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		assert.JSONEq(t, expectedBody, string(body))
+
+		if r.Header.Get("Authorization") == refreshedBearer {
+			w.WriteHeader(http.StatusOK)
+			writeClientTestBody(t, w, `{"id":"item-1"}`)
+
+			return
+		}
+
+		w.WriteHeader(http.StatusUnauthorized)
+		writeClientTestBody(t, w, `{"error":"expired"}`)
+	}))
+	defer srv.Close()
+
+	ts := &switchingToken{oldTok: "expired-token", newTok: "refreshed-token"}
+	client := MustNewClient(srv.URL, http.DefaultClient, ts, slog.Default(), "test-agent")
+
+	resp, err := client.do(
+		t.Context(),
+		http.MethodPatch,
+		"/items/item-1?"+expectedQuery,
+		bytes.NewReader([]byte(expectedBody)),
+	)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, int32(2), attempts.Load())
+}
+
+// Validates: R-6.8.14
+func TestDoOnce_401_RefreshStillUnauthorizedReturnsFatal(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		if attempts.Load() == 2 {
+			assert.Equal(t, "Bearer refreshed-token", r.Header.Get("Authorization"))
+		}
+
+		w.WriteHeader(http.StatusUnauthorized)
+		writeClientTestBody(t, w, `{"error":{"code":"InvalidAuthenticationToken"}}`)
+	}))
+	defer srv.Close()
+
+	ts := &switchingToken{oldTok: "expired-token", newTok: "refreshed-token"}
+	client := MustNewClient(srv.URL, http.DefaultClient, ts, slog.Default(), "test-agent")
+
+	resp, err := client.do(t.Context(), http.MethodGet, "/me", nil)
+	closeClientTestResponse(t, resp)
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrUnauthorized)
+
+	var graphErr *GraphError
+	require.ErrorAs(t, err, &graphErr)
+	assert.Equal(t, http.StatusUnauthorized, graphErr.StatusCode)
+	assert.Equal(t, int32(2), attempts.Load())
+}
+
+// Validates: R-6.8.14
 func TestDoOnce_401_SameToken_Returns401(t *testing.T) {
 	t.Parallel()
 
@@ -1106,6 +1191,7 @@ func TestDoOnce_401_SameToken_Returns401(t *testing.T) {
 	resp, err := client.do(t.Context(), http.MethodGet, "/me", nil)
 	closeClientTestResponse(t, resp)
 	require.Error(t, err)
+	require.ErrorIs(t, err, ErrUnauthorized)
 
 	var graphErr *GraphError
 	require.ErrorAs(t, err, &graphErr)
