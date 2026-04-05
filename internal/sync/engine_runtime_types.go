@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"sync"
 	"time"
 
@@ -94,8 +93,8 @@ type watchObservationState struct {
 	localObs  *syncobserve.LocalObserver
 
 	// Socket.IO wake source lifecycle, when enabled for full-drive watch.
-	socketIOWakeCancel context.CancelFunc
-	socketIOWakeDone   chan struct{}
+	socketIOWakeStop chan struct{}
+	socketIOWakeDone chan struct{}
 }
 
 type watchTimerState struct {

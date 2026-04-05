@@ -291,12 +291,12 @@ func (rt *watchRuntime) initWatchInfra(
 	}
 
 	pipe.cleanup = func() {
-		if rt.socketIOWakeCancel != nil {
-			rt.socketIOWakeCancel()
+		if rt.socketIOWakeStop != nil {
+			close(rt.socketIOWakeStop)
 			if rt.socketIOWakeDone != nil {
 				<-rt.socketIOWakeDone
 			}
-			rt.socketIOWakeCancel = nil
+			rt.socketIOWakeStop = nil
 			rt.socketIOWakeDone = nil
 		}
 
@@ -528,13 +528,23 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context, remoteObs *
 	wakeCh := make(chan struct{}, 1)
 	remoteObs.SetWakeChannel(wakeCh)
 
-	wakeCtx, wakeCancel := context.WithCancel(ctx)
-	rt.socketIOWakeCancel = wakeCancel
+	stopCh := make(chan struct{})
+	rt.socketIOWakeStop = stopCh
 	rt.socketIOWakeDone = make(chan struct{})
 	wakeSource := rt.engine.socketIOWakeSourceFactory(rt.engine.socketIOFetcher, rt.engine.driveID, rt.engine.logger)
 
 	go func() {
+		wakeCtx, wakeCancel := context.WithCancel(ctx)
+		defer wakeCancel()
 		defer close(rt.socketIOWakeDone)
+
+		go func() {
+			select {
+			case <-stopCh:
+				wakeCancel()
+			case <-wakeCtx.Done():
+			}
+		}()
 
 		if err := wakeSource.Run(wakeCtx, wakeCh); err != nil {
 			rt.engine.logger.Warn("socket.io wake source exited",
