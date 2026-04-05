@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
-	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
@@ -34,7 +33,7 @@ const forceSafetyMax = math.MaxInt32
 //  8. Build DepGraph, start worker pool
 //  9. Wait for completion, commit delta token
 func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts synctypes.RunOpts) (*synctypes.SyncReport, error) {
-	start := time.Now()
+	start := e.nowFunc()
 	runner := newOneShotRunner(e)
 
 	e.logger.Info("sync pass starting",
@@ -59,13 +58,13 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 	// Step 5: Early return if no changes.
 	if len(changes) == 0 {
 		e.logger.Info("sync pass complete: no changes detected",
-			slog.Duration("duration", time.Since(start)),
+			slog.Duration("duration", e.since(start)),
 		)
 
 		report := &synctypes.SyncReport{
 			Mode:     mode,
 			DryRun:   opts.DryRun,
-			Duration: time.Since(start),
+			Duration: e.since(start),
 		}
 		// Persist sync metadata even when no changes detected.
 		if metaErr := e.baseline.WriteSyncMetadata(ctx, report); metaErr != nil {
@@ -96,7 +95,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 	report := buildReportFromCounts(counts, mode, opts)
 
 	if opts.DryRun {
-		report.Duration = time.Since(start)
+		report.Duration = e.since(start)
 
 		e.logger.Info("dry-run complete: no changes applied",
 			slog.Duration("duration", report.Duration),
@@ -111,11 +110,11 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 
 	// Execute plan: run workers, drain results (failures, 403s, upload issues).
 	if err := runner.executePlan(ctx, plan, report, bl); err != nil {
-		report.Duration = time.Since(start)
+		report.Duration = e.since(start)
 		return report, err
 	}
 
-	report.Duration = time.Since(start)
+	report.Duration = e.since(start)
 
 	e.logger.Info("sync pass complete",
 		slog.Duration("duration", report.Duration),

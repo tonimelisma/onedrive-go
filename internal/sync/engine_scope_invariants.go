@@ -7,23 +7,23 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
-// scopeInvariantChecksEnabled gates expensive invariant assertions used by
-// tests and debug sessions. Production keeps this disabled by default.
-func (flow *engineFlow) scopeInvariantChecksEnabled() bool {
-	return flow.engine.assertScopeInvariants
+// invariantChecksEnabled gates expensive invariant assertions used by tests
+// and debug sessions. Production keeps this disabled by default.
+func (flow *engineFlow) invariantChecksEnabled() bool {
+	return flow.engine.assertInvariants
 }
 
-func (flow *engineFlow) mustAssertScopeInvariants(ctx context.Context, watch *watchRuntime, stage string) {
-	if !flow.scopeInvariantChecksEnabled() {
+func (flow *engineFlow) mustAssertInvariants(ctx context.Context, watch *watchRuntime, stage string) {
+	if !flow.invariantChecksEnabled() {
 		return
 	}
-	if err := flow.assertCurrentScopeInvariants(context.WithoutCancel(ctx), watch); err != nil {
+	if err := flow.assertCurrentInvariants(ctx, watch); err != nil {
 		panic(fmt.Sprintf("%s: %v", stage, err))
 	}
 }
 
 func (flow *engineFlow) mustAssertReleasedScope(ctx context.Context, watch *watchRuntime, key synctypes.ScopeKey, stage string) {
-	if !flow.scopeInvariantChecksEnabled() {
+	if !flow.invariantChecksEnabled() {
 		return
 	}
 	if err := flow.assertReleasedScope(context.WithoutCancel(ctx), watch, key); err != nil {
@@ -32,7 +32,7 @@ func (flow *engineFlow) mustAssertReleasedScope(ctx context.Context, watch *watc
 }
 
 func (flow *engineFlow) mustAssertDiscardedScope(ctx context.Context, watch *watchRuntime, key synctypes.ScopeKey, stage string) {
-	if !flow.scopeInvariantChecksEnabled() {
+	if !flow.invariantChecksEnabled() {
 		return
 	}
 	if err := flow.assertDiscardedScope(context.WithoutCancel(ctx), watch, key); err != nil {
@@ -40,7 +40,25 @@ func (flow *engineFlow) mustAssertDiscardedScope(ctx context.Context, watch *wat
 	}
 }
 
-func (flow *engineFlow) assertCurrentScopeInvariants(ctx context.Context, watch *watchRuntime) error {
+func (flow *engineFlow) assertCurrentInvariants(ctx context.Context, watch *watchRuntime) error {
+	if err := flow.assertWatchRuntimeInvariants(watch); err != nil {
+		return err
+	}
+
+	if ctx == nil {
+		return nil
+	}
+
+	select {
+	case <-ctx.Done():
+		return nil
+	default:
+	}
+
+	return flow.assertPersistedInvariants(context.WithoutCancel(ctx))
+}
+
+func (flow *engineFlow) assertWatchRuntimeInvariants(watch *watchRuntime) error {
 	if watch != nil {
 		activeScopes := watch.snapshotActiveScopes()
 		seen := make(map[synctypes.ScopeKey]struct{}, len(activeScopes))
@@ -53,6 +71,19 @@ func (flow *engineFlow) assertCurrentScopeInvariants(ctx context.Context, watch 
 		}
 	}
 
+	if watch != nil && watch.phase() == watchRuntimePhaseDraining {
+		if watch.hasRetryTimer() {
+			return fmt.Errorf("draining runtime still has retry timer armed")
+		}
+		if watch.hasTrialTimer() {
+			return fmt.Errorf("draining runtime still has trial timer armed")
+		}
+	}
+
+	return nil
+}
+
+func (flow *engineFlow) assertPersistedInvariants(ctx context.Context) error {
 	blocks, err := flow.engine.baseline.ListScopeBlocks(ctx)
 	if err != nil {
 		return fmt.Errorf("listing scope blocks: %w", err)

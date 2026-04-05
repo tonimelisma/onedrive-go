@@ -1,6 +1,10 @@
 package sync
 
-import "github.com/tonimelisma/onedrive-go/internal/synctypes"
+import (
+	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+)
 
 type engineDebugEventType string
 
@@ -41,6 +45,8 @@ type engineDebugEvent struct {
 	Type     engineDebugEventType
 	ScopeKey synctypes.ScopeKey
 	Path     string
+	Observer string
+	Delay    time.Duration
 	Note     string
 	Count    int
 }

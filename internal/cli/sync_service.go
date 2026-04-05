@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
@@ -19,12 +21,31 @@ type syncCommandOptions struct {
 	FullReconcile bool
 }
 
+type syncWatchRunner func(
+	ctx context.Context,
+	holder *config.Holder,
+	selectors []string,
+	mode synctypes.SyncMode,
+	opts synctypes.WatchOpts,
+	logger *slog.Logger,
+	statusWriter io.Writer,
+) error
+
 type syncService struct {
-	cc *CLIContext
+	cc          *CLIContext
+	watchRunner syncWatchRunner
 }
 
 func newSyncService(cc *CLIContext) *syncService {
-	return &syncService{cc: cc}
+	service := &syncService{
+		cc:          cc,
+		watchRunner: runSyncDaemon,
+	}
+	if cc != nil && cc.syncWatchRunner != nil {
+		service.watchRunner = cc.syncWatchRunner
+	}
+
+	return service
 }
 
 func (s *syncService) run(ctx context.Context, opts syncCommandOptions) error {
@@ -49,7 +70,7 @@ func (s *syncService) run(ctx context.Context, opts syncCommandOptions) error {
 	if opts.Watch {
 		holder := config.NewHolder(rawCfg, s.cc.CfgPath)
 
-		return runSyncDaemon(ctx, holder, selectors, opts.Mode, synctypes.WatchOpts{
+		return s.watchRunner(ctx, holder, selectors, opts.Mode, synctypes.WatchOpts{
 			Force:              opts.Force,
 			PollInterval:       parsePollInterval(rawCfg.PollInterval),
 			SafetyScanInterval: parseDurationOrZero(rawCfg.SafetyScanInterval),

@@ -492,6 +492,9 @@ func runRepoConsistencyChecks(repoRoot string) error {
 		ensureGovernedDesignDocsHaveOwnershipContracts,
 		ensureCrossCuttingDesignDocs,
 		ensureCrossCuttingDesignDocEvidence,
+		ensureGovernedLifecycleDocsHaveEvidence,
+		ensureRequirementReferencesResolve,
+		ensureEvidenceDocsReferenceRealTests,
 		ensureCLIOutputBoundary,
 		ensureGuardedPackagesAvoidRawOS,
 		ensureFilterSemanticsWording,
@@ -770,10 +773,7 @@ func requiredCrossCuttingDesignDocs() []string {
 }
 
 func ensureCrossCuttingDesignDocEvidence(repoRoot string) error {
-	checks := []struct {
-		path     string
-		snippets []string
-	}{
+	return ensureDocsContainSnippets("cross-cutting design doc", []docSnippetCheck{
 		{
 			path: filepath.Join(repoRoot, "spec", "design", "error-model.md"),
 			snippets: []string{
@@ -795,8 +795,41 @@ func ensureCrossCuttingDesignDocEvidence(repoRoot string) error {
 				"| Mitigation | Evidence |",
 			},
 		},
-	}
+	})
+}
 
+func ensureGovernedLifecycleDocsHaveEvidence(repoRoot string) error {
+	return ensureDocsContainSnippets("governed lifecycle design doc", []docSnippetCheck{
+		{
+			path: filepath.Join(repoRoot, "spec", "design", "sync-engine.md"),
+			snippets: []string{
+				"## Verified By",
+				"| Behavior | Evidence |",
+			},
+		},
+		{
+			path: filepath.Join(repoRoot, "spec", "design", "sync-execution.md"),
+			snippets: []string{
+				"## Verified By",
+				"| Behavior | Evidence |",
+			},
+		},
+		{
+			path: filepath.Join(repoRoot, "spec", "design", "cli.md"),
+			snippets: []string{
+				"## Verified By",
+				"| Behavior | Evidence |",
+			},
+		},
+	})
+}
+
+type docSnippetCheck struct {
+	path     string
+	snippets []string
+}
+
+func ensureDocsContainSnippets(docKind string, checks []docSnippetCheck) error {
 	for _, check := range checks {
 		data, err := localpath.ReadFile(check.path)
 		if err != nil {
@@ -805,12 +838,343 @@ func ensureCrossCuttingDesignDocEvidence(repoRoot string) error {
 		content := string(data)
 		for _, snippet := range check.snippets {
 			if !strings.Contains(content, snippet) {
-				return fmt.Errorf("cross-cutting design doc missing required evidence snippet %q: %s", snippet, check.path)
+				return fmt.Errorf("%s missing required evidence snippet %q: %s", docKind, snippet, check.path)
 			}
 		}
 	}
 
 	return nil
+}
+
+var (
+	requirementDeclarationPattern = regexp.MustCompile(`^(?:#+|- )\s*(R-\d+(?:\.\d+)*)\b`)
+	requirementIDPattern          = regexp.MustCompile(`^R-\d+(?:\.\d+)*$`)
+	implementsEntryPattern        = regexp.MustCompile(`^(R-\d+(?:\.\d+)*) \[[^][]+\]$`)
+	testFunctionPattern           = regexp.MustCompile(`\bTest[A-Z0-9_][A-Za-z0-9_]*\b`)
+)
+
+func ensureRequirementReferencesResolve(repoRoot string) error {
+	registry, err := loadRequirementRegistry(repoRoot)
+	if err != nil {
+		return err
+	}
+
+	var problems []string
+
+	walkErr := filepath.WalkDir(repoRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+
+		switch {
+		case strings.HasSuffix(path, "_test.go"):
+			fileProblems, validateErr := validateRequirementReferencesInTestFile(path, registry)
+			if validateErr != nil {
+				return validateErr
+			}
+			problems = append(problems, fileProblems...)
+		case strings.HasPrefix(path, filepath.Join(repoRoot, "spec", "design")+string(filepath.Separator)) &&
+			strings.HasSuffix(path, ".md"):
+			fileProblems, validateErr := validateRequirementReferencesInDesignDoc(path, registry)
+			if validateErr != nil {
+				return validateErr
+			}
+			problems = append(problems, fileProblems...)
+		}
+
+		return nil
+	})
+	if walkErr != nil {
+		return fmt.Errorf("walk requirement references: %w", walkErr)
+	}
+
+	if len(problems) > 0 {
+		return fmt.Errorf("requirement reference validation failed:\n%s", strings.Join(problems, "\n"))
+	}
+
+	return nil
+}
+
+func loadRequirementRegistry(repoRoot string) (map[string]struct{}, error) {
+	requirementFiles, err := filepath.Glob(filepath.Join(repoRoot, "spec", "requirements", "*.md"))
+	if err != nil {
+		return nil, fmt.Errorf("glob requirement files: %w", err)
+	}
+
+	registry := make(map[string]struct{})
+	for _, path := range requirementFiles {
+		data, readErr := localpath.ReadFile(path)
+		if readErr != nil {
+			return nil, fmt.Errorf("read %s: %w", path, readErr)
+		}
+
+		for _, line := range strings.Split(string(data), "\n") {
+			matches := requirementDeclarationPattern.FindStringSubmatch(strings.TrimSpace(line))
+			if len(matches) == 2 {
+				registry[matches[1]] = struct{}{}
+			}
+		}
+	}
+
+	if len(registry) == 0 {
+		return nil, fmt.Errorf("load requirement registry: no declared requirement IDs found")
+	}
+
+	return registry, nil
+}
+
+func validateRequirementReferencesInTestFile(path string, registry map[string]struct{}) ([]string, error) {
+	data, err := localpath.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, data, parser.ParseComments)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+
+	var problems []string
+	for _, group := range file.Comments {
+		for _, comment := range group.List {
+			trimmed := strings.TrimSpace(comment.Text)
+			if !strings.HasPrefix(trimmed, "// Validates:") {
+				continue
+			}
+
+			ids, parseErr := parseValidatesLine(strings.TrimSpace(strings.TrimPrefix(trimmed, "// Validates:")))
+			lineNumber := fset.Position(comment.Slash).Line
+			if parseErr != nil {
+				problems = append(problems, fmt.Sprintf("%s:%d: %v", path, lineNumber, parseErr))
+				continue
+			}
+
+			for _, id := range ids {
+				if _, ok := registry[id]; !ok {
+					problems = append(problems, fmt.Sprintf("%s:%d: unknown requirement ID %s", path, lineNumber, id))
+				}
+			}
+		}
+	}
+
+	return problems, nil
+}
+
+func parseValidatesLine(raw string) ([]string, error) {
+	if raw == "" {
+		return nil, fmt.Errorf("empty Validates reference list")
+	}
+
+	parts := strings.Split(raw, ",")
+	ids := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return nil, fmt.Errorf("empty Validates reference entry")
+		}
+		if !requirementIDPattern.MatchString(part) {
+			return nil, fmt.Errorf("malformed Validates reference %q", part)
+		}
+		ids = append(ids, part)
+	}
+
+	return ids, nil
+}
+
+func validateRequirementReferencesInDesignDoc(path string, registry map[string]struct{}) ([]string, error) {
+	return validateRequirementReferencesInFile(path, "Implements:", registry, parseImplementsLine)
+}
+
+func validateRequirementReferencesInFile(
+	path string,
+	marker string,
+	registry map[string]struct{},
+	parse func(string) ([]string, error),
+) ([]string, error) {
+	data, err := localpath.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+
+	var problems []string
+	for lineNumber, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, marker) {
+			continue
+		}
+
+		ids, parseErr := parse(strings.TrimSpace(strings.TrimPrefix(trimmed, marker)))
+		if parseErr != nil {
+			problems = append(problems, fmt.Sprintf("%s:%d: %v", path, lineNumber+1, parseErr))
+			continue
+		}
+
+		for _, id := range ids {
+			if _, ok := registry[id]; !ok {
+				problems = append(problems, fmt.Sprintf("%s:%d: unknown requirement ID %s", path, lineNumber+1, id))
+			}
+		}
+	}
+
+	return problems, nil
+}
+
+func parseImplementsLine(raw string) ([]string, error) {
+	if raw == "" {
+		return nil, fmt.Errorf("empty Implements reference list")
+	}
+
+	parts := strings.Split(raw, ",")
+	ids := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return nil, fmt.Errorf("empty Implements reference entry")
+		}
+
+		matches := implementsEntryPattern.FindStringSubmatch(part)
+		if len(matches) != 2 {
+			return nil, fmt.Errorf("malformed Implements reference %q", part)
+		}
+		ids = append(ids, matches[1])
+	}
+
+	return ids, nil
+}
+
+type evidenceDocCheck struct {
+	path    string
+	heading string
+}
+
+func ensureEvidenceDocsReferenceRealTests(repoRoot string) error {
+	testRegistry, err := loadTestRegistry(repoRoot)
+	if err != nil {
+		return err
+	}
+
+	checks := []evidenceDocCheck{
+		{path: filepath.Join(repoRoot, "spec", "design", "error-model.md"), heading: "## Verified By"},
+		{path: filepath.Join(repoRoot, "spec", "design", "threat-model.md"), heading: "## Mitigation Evidence"},
+		{path: filepath.Join(repoRoot, "spec", "design", "degraded-mode.md")},
+		{path: filepath.Join(repoRoot, "spec", "design", "sync-engine.md"), heading: "## Verified By"},
+		{path: filepath.Join(repoRoot, "spec", "design", "sync-execution.md"), heading: "## Verified By"},
+		{path: filepath.Join(repoRoot, "spec", "design", "cli.md"), heading: "## Verified By"},
+	}
+
+	var problems []string
+	for _, check := range checks {
+		docProblems, docErr := validateEvidenceDocReferences(check, testRegistry)
+		if docErr != nil {
+			return docErr
+		}
+		problems = append(problems, docProblems...)
+	}
+
+	if len(problems) > 0 {
+		return fmt.Errorf("evidence doc validation failed:\n%s", strings.Join(problems, "\n"))
+	}
+
+	return nil
+}
+
+func loadTestRegistry(repoRoot string) (map[string]struct{}, error) {
+	registry := make(map[string]struct{})
+
+	walkErr := filepath.WalkDir(repoRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+
+		data, readErr := localpath.ReadFile(path)
+		if readErr != nil {
+			return fmt.Errorf("read %s: %w", path, readErr)
+		}
+
+		fset := token.NewFileSet()
+		file, parseErr := parser.ParseFile(fset, path, data, 0)
+		if parseErr != nil {
+			return fmt.Errorf("parse %s: %w", path, parseErr)
+		}
+
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv != nil || fn.Name == nil {
+				continue
+			}
+			if strings.HasPrefix(fn.Name.Name, "Test") {
+				registry[fn.Name.Name] = struct{}{}
+			}
+		}
+
+		return nil
+	})
+	if walkErr != nil {
+		return nil, fmt.Errorf("walk test registry: %w", walkErr)
+	}
+
+	if len(registry) == 0 {
+		return nil, fmt.Errorf("load test registry: no test functions found")
+	}
+
+	return registry, nil
+}
+
+func validateEvidenceDocReferences(check evidenceDocCheck, testRegistry map[string]struct{}) ([]string, error) {
+	data, err := localpath.ReadFile(check.path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", check.path, err)
+	}
+
+	content := string(data)
+	section := content
+	if check.heading != "" {
+		section, err = markdownSection(content, check.heading)
+		if err != nil {
+			return []string{fmt.Sprintf("%s: %v", check.path, err)}, nil
+		}
+	}
+
+	matches := testFunctionPattern.FindAllString(section, -1)
+	if len(matches) == 0 {
+		return []string{fmt.Sprintf("%s: no exact test names found in evidence section", check.path)}, nil
+	}
+
+	var problems []string
+	seen := make(map[string]struct{})
+	for _, name := range matches {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		if _, ok := testRegistry[name]; !ok {
+			problems = append(problems, fmt.Sprintf("%s: unknown test function %s", check.path, name))
+		}
+	}
+
+	return problems, nil
+}
+
+func markdownSection(content, heading string) (string, error) {
+	start := strings.Index(content, heading)
+	if start == -1 {
+		return "", fmt.Errorf("missing section %q", heading)
+	}
+
+	remaining := content[start:]
+	nextOffset := strings.Index(remaining[len(heading):], "\n## ")
+	if nextOffset == -1 {
+		return remaining, nil
+	}
+
+	return remaining[:len(heading)+nextOffset], nil
 }
 
 func ensureHTTPClientDoStaysAtApprovedBoundary(repoRoot string) error {

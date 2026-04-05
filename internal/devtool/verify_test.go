@@ -24,6 +24,7 @@ type fakeRunner struct {
 	runCommands    []recordedCommand
 	outputCommands []recordedCommand
 	outputs        map[string][]byte
+	outputsByCWD   map[string]map[string][]byte
 	runErr         error
 	outputErr      error
 }
@@ -64,6 +65,12 @@ func (f *fakeRunner) Output(
 	}
 
 	key := name + " " + strings.Join(args, " ")
+	if byCWD, ok := f.outputsByCWD[cwd]; ok {
+		if out, ok := byCWD[key]; ok {
+			return out, nil
+		}
+	}
+
 	return f.outputs[key], nil
 }
 
@@ -288,6 +295,128 @@ func TestRunRepoConsistencyChecksFailsWithoutCrossCuttingEvidenceSection(t *test
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Verified By")
 	assert.Contains(t, err.Error(), "error-model.md")
+}
+
+// Validates: R-6.10.12
+func TestRunRepoConsistencyChecksFailsOnMalformedValidatesReference(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoRoot, "internal", "bad_trace_test.go"),
+		[]byte(strings.Join([]string{
+			"package internal",
+			"",
+			"import \"testing\"",
+			"",
+			"// Validates: D-6",
+			"func TestBadTrace(t *testing.T) {}",
+			"",
+		}, "\n")),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "malformed Validates reference")
+	assert.Contains(t, err.Error(), "bad_trace_test.go")
+}
+
+// Validates: R-6.10.12
+func TestRunRepoConsistencyChecksFailsOnUnknownRequirementReference(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoRoot, "internal", "unknown_trace_test.go"),
+		[]byte(strings.Join([]string{
+			"package internal",
+			"",
+			"import \"testing\"",
+			"",
+			"// Validates: R-9.9.9",
+			"func TestUnknownTrace(t *testing.T) {}",
+			"",
+		}, "\n")),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown requirement ID R-9.9.9")
+	assert.Contains(t, err.Error(), "unknown_trace_test.go")
+}
+
+// Validates: R-6.10.12
+func TestRunRepoConsistencyChecksFailsOnMalformedImplementsReference(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoRoot, "spec", "design", "sync-engine.md"),
+		[]byte(strings.Join([]string{
+			"# Sync Engine",
+			"",
+			"Implements: R-6.10.13 [verified], D-6 [verified]",
+			"",
+			"## Verified By",
+			"",
+			"| Behavior | Evidence |",
+			"| --- | --- |",
+			"| sample | TestFixtureEvidence |",
+			"",
+		}, "\n")),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "malformed Implements reference")
+	assert.Contains(t, err.Error(), "sync-engine.md")
+}
+
+// Validates: R-6.10.13
+func TestRunRepoConsistencyChecksFailsWhenEvidenceDocReferencesUnknownTest(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoRoot, "spec", "design", "cli.md"),
+		[]byte(strings.Join([]string{
+			"# CLI",
+			"",
+			"GOVERNS: internal/cli/*.go",
+			"",
+			"## Ownership Contract",
+			"- Owns: CLI entrypoints",
+			"- Does Not Own: sync runtime",
+			"- Source of Truth: Cobra command definitions",
+			"- Allowed Side Effects: config I/O and stdout",
+			"- Mutable Runtime Owner: process-local command execution",
+			"- Error Boundary: CLI error rendering",
+			"",
+			"## Verified By",
+			"",
+			"| Behavior | Evidence |",
+			"| --- | --- |",
+			"| sample | TestMissingEvidence |",
+			"",
+		}, "\n")),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown test function TestMissingEvidence")
+	assert.Contains(t, err.Error(), "cli.md")
 }
 
 // Validates: R-6.10.7
@@ -616,6 +745,15 @@ func TestRunRepoConsistencyChecksFailsOnStaleFilterSemanticsWording(t *testing.T
 func writeRepoConsistencyFixtures(t *testing.T, repoRoot string) {
 	t.Helper()
 
+	writeRepoConsistencyDirectories(t, repoRoot)
+	writeRepoConsistencyRequirements(t, repoRoot)
+	writeRepoConsistencyDesignDocs(t, repoRoot)
+	writeRepoConsistencyCodeFixtures(t, repoRoot)
+}
+
+func writeRepoConsistencyDirectories(t *testing.T, repoRoot string) {
+	t.Helper()
+
 	for _, dir := range []string{
 		filepath.Join(repoRoot, "spec", "design"),
 		filepath.Join(repoRoot, "spec", "requirements"),
@@ -627,6 +765,50 @@ func writeRepoConsistencyFixtures(t *testing.T, repoRoot string) {
 	}
 
 	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "CLAUDE.md"), []byte("clean\n"), 0o600))
+}
+
+func writeRepoConsistencyRequirements(t *testing.T, repoRoot string) {
+	t.Helper()
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoRoot, "spec", "requirements", "non-functional.md"),
+		[]byte(strings.Join([]string{
+			"# R-6 Non-Functional",
+			"",
+			"## R-6.2 Data Integrity [verified]",
+			"- R-6.2.1: sample [verified]",
+			"- R-6.2.2: sample [verified]",
+			"",
+			"## R-6.10 Verification [verified]",
+			"- R-6.10.5: sample [verified]",
+			"- R-6.10.6: sample [verified]",
+			"- R-6.10.7: sample [verified]",
+			"- R-6.10.11: sample [verified]",
+			"- R-6.10.12: sample [verified]",
+			"- R-6.10.13: sample [verified]",
+			"",
+		}, "\n")),
+		0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoRoot, "spec", "requirements", "sync.md"),
+		[]byte(strings.Join([]string{
+			"# R-2 Sync",
+			"",
+			"## R-2.8 Watch Mode Behavior [verified]",
+			"- R-2.8.3: sample [verified]",
+			"",
+			"## R-2.10 Failure Management [verified]",
+			"- R-2.10.41: sample [verified]",
+			"",
+		}, "\n")),
+		0o600,
+	))
+}
+
+func writeRepoConsistencyDesignDocs(t *testing.T, repoRoot string) {
+	t.Helper()
+
 	require.NoError(t, os.WriteFile(
 		filepath.Join(repoRoot, "spec", "design", "system.md"),
 		[]byte(strings.Join([]string{
@@ -640,37 +822,93 @@ func writeRepoConsistencyFixtures(t *testing.T, repoRoot string) {
 		}, "\n")),
 		0o600,
 	))
-	for _, name := range []string{"error-model.md", "threat-model.md", "degraded-mode.md"} {
-		content := "clean\n"
-		switch name {
-		case "error-model.md":
-			content = "# Error Model\n\n## Verified By\n\n| Boundary | Evidence |\n| --- | --- |\n| sample | tests |\n"
-		case "threat-model.md":
-			content = "# Threat Model\n\n## Mitigation Evidence\n\n| Mitigation | Evidence |\n| --- | --- |\n| sample | tests |\n"
-		case "degraded-mode.md":
-			content = "# Degraded Mode\n\n| ID | Failure | Evidence |\n| --- | --- | --- |\n| DM-1 | sample | tests |\n"
-		}
-		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "spec", "design", name), []byte(content), 0o600))
+	for _, doc := range []struct {
+		name    string
+		content string
+	}{
+		{
+			name:    "error-model.md",
+			content: "# Error Model\n\n## Verified By\n\n| Boundary | Evidence |\n| --- | --- |\n| sample | TestFixtureEvidence |\n",
+		},
+		{
+			name:    "threat-model.md",
+			content: "# Threat Model\n\n## Mitigation Evidence\n\n| Mitigation | Evidence |\n| --- | --- |\n| sample | TestFixtureEvidence |\n",
+		},
+		{
+			name:    "degraded-mode.md",
+			content: "# Degraded Mode\n\n| ID | Failure | Evidence |\n| --- | --- | --- |\n| DM-1 | sample | TestFixtureEvidence |\n",
+		},
+		{
+			name: "cli.md",
+			content: strings.Join([]string{
+				"# CLI",
+				"",
+				"GOVERNS: internal/cli/*.go",
+				"",
+				"## Ownership Contract",
+				"- Owns: CLI entrypoints",
+				"- Does Not Own: sync runtime",
+				"- Source of Truth: Cobra command definitions",
+				"- Allowed Side Effects: config I/O and stdout",
+				"- Mutable Runtime Owner: process-local command execution",
+				"- Error Boundary: CLI error rendering",
+				"",
+				"## Verified By",
+				"",
+				"| Behavior | Evidence |",
+				"| --- | --- |",
+				"| sample | TestFixtureEvidence |",
+				"",
+			}, "\n"),
+		},
+		{
+			name: "sync-engine.md",
+			content: strings.Join([]string{
+				"# Sync Engine",
+				"",
+				"## Verified By",
+				"",
+				"| Behavior | Evidence |",
+				"| --- | --- |",
+				"| sample | TestFixtureEvidence |",
+				"",
+			}, "\n"),
+		},
+		{
+			name: "sync-execution.md",
+			content: strings.Join([]string{
+				"# Sync Execution",
+				"",
+				"## Verified By",
+				"",
+				"| Behavior | Evidence |",
+				"| --- | --- |",
+				"| sample | TestFixtureEvidence |",
+				"",
+			}, "\n"),
+		},
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "spec", "design", doc.name), []byte(doc.content), 0o600))
 	}
+}
+
+func writeRepoConsistencyCodeFixtures(t *testing.T, repoRoot string) {
+	t.Helper()
+
+	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "internal", "clean.go"), []byte("package clean\n"), 0o600))
 	require.NoError(t, os.WriteFile(
-		filepath.Join(repoRoot, "spec", "design", "cli.md"),
+		filepath.Join(repoRoot, "internal", "fixture_test.go"),
 		[]byte(strings.Join([]string{
-			"# CLI",
+			"package internal",
 			"",
-			"GOVERNS: internal/cli/*.go",
+			"import \"testing\"",
 			"",
-			"## Ownership Contract",
-			"- Owns: CLI entrypoints",
-			"- Does Not Own: sync runtime",
-			"- Source of Truth: Cobra command definitions",
-			"- Allowed Side Effects: config I/O and stdout",
-			"- Mutable Runtime Owner: process-local command execution",
-			"- Error Boundary: CLI error rendering",
+			"// Validates: R-6.2.1",
+			"func TestFixtureEvidence(t *testing.T) {}",
 			"",
 		}, "\n")),
 		0o600,
 	))
-	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "internal", "clean.go"), []byte("package clean\n"), 0o600))
 }
 
 // Ensure the fake runner still satisfies the commandRunner contract if the
