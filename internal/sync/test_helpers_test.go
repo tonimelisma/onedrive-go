@@ -113,6 +113,37 @@ func (w *enospcWatcher) Add(name string) error {
 	return nil
 }
 
+type signalingWatcher struct {
+	events   chan fsnotify.Event
+	errs     chan error
+	addOne   stdsync.Once
+	addCh    chan struct{}
+	closeOne stdsync.Once
+}
+
+func newSignalingWatcher() *signalingWatcher {
+	return &signalingWatcher{
+		events: make(chan fsnotify.Event, 10),
+		errs:   make(chan error, 10),
+		addCh:  make(chan struct{}),
+	}
+}
+
+func (w *signalingWatcher) Add(string) error {
+	w.addOne.Do(func() { close(w.addCh) })
+	return nil
+}
+
+func (w *signalingWatcher) Remove(string) error           { return nil }
+func (w *signalingWatcher) Events() <-chan fsnotify.Event { return w.events }
+func (w *signalingWatcher) Errors() <-chan error          { return w.errs }
+func (w *signalingWatcher) Added() <-chan struct{}        { return w.addCh }
+
+func (w *signalingWatcher) Close() error {
+	w.closeOne.Do(func() { close(w.events); close(w.errs) })
+	return nil
+}
+
 func (w *enospcWatcher) Remove(string) error           { return nil }
 func (w *enospcWatcher) Events() <-chan fsnotify.Event { return w.events }
 func (w *enospcWatcher) Errors() <-chan error          { return w.errs }

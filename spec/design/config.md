@@ -2,7 +2,7 @@
 
 GOVERNS: internal/config/account.go, internal/config/config.go, internal/config/decoder.go, internal/config/defaults.go, internal/config/discovery.go, internal/config/display_name.go, internal/config/drive.go, internal/config/drivemeta.go, internal/config/email_reconcile.go, internal/config/env.go, internal/config/failure_class.go, internal/config/holder.go, internal/config/load.go, internal/config/managed_io.go, internal/config/paths.go, internal/config/resolved_validator.go, internal/config/resolver.go, internal/config/size.go, internal/config/token_resolution.go, internal/config/toml_lines.go, internal/config/unknown.go, internal/config/validate.go, internal/config/validate_drive.go, internal/config/validator.go, internal/config/write.go
 
-Implements: R-3.7 [verified], R-4.1 [verified], R-4.2 [verified], R-4.3 [verified], R-4.4 [verified], R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-4.8.4 [verified], R-4.8.5 [verified], R-4.8.6 [verified], R-4.9.2 [verified], R-4.9.3 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
+Implements: R-3.7 [verified], R-4.1 [verified], R-4.2 [verified], R-4.3 [verified], R-4.4 [verified], R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-4.8.4 [verified], R-4.8.5 [verified], R-4.8.6 [verified], R-4.9.2 [verified], R-4.9.3 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
 ## Overview
 
@@ -16,6 +16,14 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 - Allowed Side Effects: Reading and writing config and managed metadata files through `fsroot`, plus statting arbitrary user-selected local paths through `localpath`.
 - Mutable Runtime Owner: `config.Holder` owns the current `*Config` pointer behind `Holder.mu`. The package starts no background goroutines, owns no long-lived channels, and uses no timers.
 - Error Boundary: `config` translates parse/load/validation outcomes into either fatal errors or warnings before callers act, following [error-model.md](error-model.md).
+
+## Verified By
+
+| Behavior | Evidence |
+| --- | --- |
+| Drive resolution applies pause semantics consistently, including expired timed pauses. | `TestResolveDrives_ExcludesPausedByDefault`, `TestResolveDrives_IncludePausedWhenRequested`, `TestClearExpiredPauses_ClearsExpired` |
+| `buildResolvedDrive` owns defaulting and per-drive override materialization for sync callers. | `TestBuildResolvedDrive_GlobalDefaults`, `TestBuildResolvedDrive_PerDriveOverrides`, `TestBuildResolvedDrive_TimedPauseExpired` |
+| Token-owner resolution stays config-owned for shared and business-derived drives. | `TestDriveTokenPath_Shared_WithDriveMetadata`, `TestTokenAccountCID_Shared`, `TestTokenAccountCID_SharePoint` |
 
 Transfer validation behavior is not user-disableable. The config surface intentionally has no `disable_download_validation` or `disable_upload_validation` escape hatches; transfer correctness policy lives in the transfer and observation layers, not in mutable config toggles.
 

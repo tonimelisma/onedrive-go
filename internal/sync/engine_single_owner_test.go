@@ -249,6 +249,90 @@ func TestEngine_AssertCurrentScopeInvariants_DetectsOrphanedPermissionScope(t *t
 	assert.Contains(t, err.Error(), "legacy persisted perm:remote scope")
 }
 
+func TestEngine_DrainingDispatchAdmissionPanicsWithQueuedOutbox(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	rt.enterDraining()
+
+	outbox := []*synctypes.TrackedAction{{
+		ID: 1,
+		Action: synctypes.Action{
+			Type:    synctypes.ActionUpload,
+			Path:    "queued.txt",
+			DriveID: eng.driveID,
+		},
+	}}
+
+	require.PanicsWithValue(t,
+		"dispatch channel for outbox: draining runtime must not attempt to admit 1 queued actions",
+		func() {
+			rt.dispatchChannelForOutbox(outbox)
+		})
+}
+
+func TestEngine_RunRetrierSweepPanicsAfterDrainBegins(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	rt.enterDraining()
+
+	bl, safety := testWorkDispatchState(t, eng, t.Context())
+
+	require.PanicsWithValue(t,
+		"run retrier sweep: runRetrierSweep must not start after drain begins",
+		func() {
+			rt.runRetrierSweep(t.Context(), bl, synctypes.SyncBidirectional, safety)
+		})
+}
+
+func TestEngine_RunTrialDispatchPanicsAfterDrainBegins(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	rt.enterDraining()
+
+	bl, safety := testWorkDispatchState(t, eng, t.Context())
+
+	require.PanicsWithValue(t,
+		"run trial dispatch: runTrialDispatch must not start after drain begins",
+		func() {
+			rt.runTrialDispatch(t.Context(), bl, synctypes.SyncBidirectional, safety)
+		})
+}
+
+func TestEngine_ReconcileBookkeepingPanicWhenStillActiveAfterShutdownDrop(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	rt.reconcileActive = true
+
+	require.PanicsWithValue(t,
+		"test reconcile bookkeeping: draining reconcile bookkeeping must be cleared before continuing",
+		func() {
+			testEngineFlow(t, eng).mustAssertReconcileBookkeepingCleared(rt, "test reconcile bookkeeping")
+		})
+}
+
+func TestEngine_DrainingObserverExitCannotBeTreatedAsFatal(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	rt.enterDraining()
+
+	require.PanicsWithValue(t,
+		"handle observer exit: draining runtime must not treat observer exit as fatal outside shutdown",
+		func() {
+			err := rt.handleObserverExit(&watchPipeline{activeObs: 1}, false)
+			require.NoError(t, err)
+		})
+}
+
 func TestEngine_ReleaseAndDiscardScope_MaintainInvariantsInOneShotMode(t *testing.T) {
 	t.Parallel()
 

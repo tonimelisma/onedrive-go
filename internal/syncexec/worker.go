@@ -17,8 +17,9 @@ var errUnknownActionType = errors.New("sync: unknown action type in worker dispa
 // minWorkers is the floor for total worker count.
 const minWorkers = 4
 
-// WorkerPool spawns goroutines that pull TrackedActions from a ready channel,
-// execute them, persist success outcomes, and send results back to the engine.
+// WorkerPool spawns goroutines that pull TrackedActions from the dispatch
+// channel, execute them, persist success outcomes, and send results back to
+// the engine.
 // Workers are pure executors — they NEVER call depGraph.Complete(). The engine
 // owns all completion decisions (R-6.8.9).
 //
@@ -73,7 +74,7 @@ func NewWorkerPool(
 	}
 }
 
-// Start spawns a flat pool of goroutines, all reading from the single ready
+// Start spawns a flat pool of goroutines, all reading from the single dispatch
 // channel. total is the desired concurrency (typically cfg.TransferWorkers).
 // Minimum 4 workers.
 func (wp *WorkerPool) Start(ctx context.Context, total int) {
@@ -115,8 +116,8 @@ func (wp *WorkerPool) Stop() {
 	wp.closeResults()
 }
 
-// worker is the main loop for a single goroutine. It reads from the ready
-// channel until the context is canceled or all actions are done.
+// worker is the main loop for a single goroutine. It reads from dispatchCh
+// until the context is canceled or all actions are complete.
 func (wp *WorkerPool) worker(ctx context.Context) {
 	defer wp.wg.Done()
 

@@ -447,41 +447,103 @@ func TestRunRepoConsistencyChecksFailsOnMalformedImplementsReference(t *testing.
 }
 
 // Validates: R-6.10.13
+func TestRunRepoConsistencyChecksFailsWhenExpandedGovernedDocMissingEvidence(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		title string
+	}{
+		{name: "sync-control-plane.md", title: "Sync Control Plane"},
+		{name: "sync-store.md", title: "Sync Store"},
+		{name: "sync-observation.md", title: "Sync Observation"},
+		{name: "config.md", title: "Configuration"},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			repoRoot := t.TempDir()
+			writeRepoConsistencyFixtures(t, repoRoot)
+
+			require.NoError(t, os.WriteFile(
+				filepath.Join(repoRoot, "spec", "design", tt.name),
+				[]byte(strings.Join([]string{
+					"# " + tt.title,
+					"",
+					"GOVERNS: internal/example/*.go",
+					"",
+					"## Ownership Contract",
+					"- Owns: sample",
+					"- Does Not Own: sample",
+					"- Source of Truth: sample",
+					"- Allowed Side Effects: sample",
+					"- Mutable Runtime Owner: sample",
+					"- Error Boundary: sample",
+					"",
+				}, "\n")),
+				0o600,
+			))
+
+			err := runRepoConsistencyChecks(repoRoot)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.name)
+			assert.Contains(t, err.Error(), "## Verified By")
+		})
+	}
+}
+
+// Validates: R-6.10.13
 func TestRunRepoConsistencyChecksFailsWhenEvidenceDocReferencesUnknownTest(t *testing.T) {
 	t.Parallel()
 
-	repoRoot := t.TempDir()
-	writeRepoConsistencyFixtures(t, repoRoot)
+	assertRepoConsistencyRejectsUnknownEvidenceTest(t, "cli.md", []string{
+		"# CLI",
+		"",
+		"GOVERNS: internal/cli/*.go",
+		"",
+		"## Ownership Contract",
+		"- Owns: CLI entrypoints",
+		"- Does Not Own: sync runtime",
+		"- Source of Truth: Cobra command definitions",
+		"- Allowed Side Effects: config I/O and stdout",
+		"- Mutable Runtime Owner: process-local command execution",
+		"- Error Boundary: CLI error rendering",
+		"",
+		"## Verified By",
+		"",
+		"| Behavior | Evidence |",
+		"| --- | --- |",
+		"| sample | TestMissingEvidence |",
+		"",
+	}, "TestMissingEvidence")
+}
 
-	require.NoError(t, os.WriteFile(
-		filepath.Join(repoRoot, "spec", "design", "cli.md"),
-		[]byte(strings.Join([]string{
-			"# CLI",
-			"",
-			"GOVERNS: internal/cli/*.go",
-			"",
-			"## Ownership Contract",
-			"- Owns: CLI entrypoints",
-			"- Does Not Own: sync runtime",
-			"- Source of Truth: Cobra command definitions",
-			"- Allowed Side Effects: config I/O and stdout",
-			"- Mutable Runtime Owner: process-local command execution",
-			"- Error Boundary: CLI error rendering",
-			"",
-			"## Verified By",
-			"",
-			"| Behavior | Evidence |",
-			"| --- | --- |",
-			"| sample | TestMissingEvidence |",
-			"",
-		}, "\n")),
-		0o600,
-	))
+// Validates: R-6.10.13
+func TestRunRepoConsistencyChecksFailsWhenExpandedGovernedDocReferencesUnknownTest(t *testing.T) {
+	t.Parallel()
 
-	err := runRepoConsistencyChecks(repoRoot)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown test function TestMissingEvidence")
-	assert.Contains(t, err.Error(), "cli.md")
+	assertRepoConsistencyRejectsUnknownEvidenceTest(t, "sync-store.md", []string{
+		"# Sync Store",
+		"",
+		"GOVERNS: internal/syncstore/*.go",
+		"",
+		"## Ownership Contract",
+		"- Owns: sample",
+		"- Does Not Own: sample",
+		"- Source of Truth: sample",
+		"- Allowed Side Effects: sample",
+		"- Mutable Runtime Owner: sample",
+		"- Error Boundary: sample",
+		"",
+		"## Verified By",
+		"",
+		"| Behavior | Evidence |",
+		"| --- | --- |",
+		"| sample | TestMissingStoreEvidence |",
+		"",
+	}, "TestMissingStoreEvidence")
 }
 
 // Validates: R-6.10.7
@@ -755,6 +817,29 @@ func assertRepoConsistencyRejectsPrivilegedCall(
 	assert.Contains(t, err.Error(), filename)
 }
 
+func assertRepoConsistencyRejectsUnknownEvidenceTest(
+	t *testing.T,
+	docName string,
+	docLines []string,
+	missingTest string,
+) {
+	t.Helper()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoRoot, "spec", "design", docName),
+		[]byte(strings.Join(docLines, "\n")),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown test function "+missingTest)
+	assert.Contains(t, err.Error(), docName)
+}
+
 // Validates: R-6.2.1
 func TestRunRepoConsistencyChecksFailsOnRawOSFilesystemCallInGuardedPackage(t *testing.T) {
 	t.Parallel()
@@ -887,7 +972,16 @@ func writeRepoConsistencyDesignDocs(t *testing.T, repoRoot string) {
 		}, "\n")),
 		0o600,
 	))
-	for _, doc := range []struct {
+	for _, doc := range repoConsistencyDesignDocFixtures() {
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "spec", "design", doc.name), []byte(doc.content), 0o600))
+	}
+}
+
+func repoConsistencyDesignDocFixtures() []struct {
+	name    string
+	content string
+} {
+	return []struct {
 		name    string
 		content string
 	}{
@@ -903,29 +997,14 @@ func writeRepoConsistencyDesignDocs(t *testing.T, repoRoot string) {
 			name:    "degraded-mode.md",
 			content: "# Degraded Mode\n\n| ID | Failure | Evidence |\n| --- | --- | --- |\n| DM-1 | sample | TestFixtureEvidence |\n",
 		},
-		{
-			name: "cli.md",
-			content: strings.Join([]string{
-				"# CLI",
-				"",
-				"GOVERNS: internal/cli/*.go",
-				"",
-				"## Ownership Contract",
-				"- Owns: CLI entrypoints",
-				"- Does Not Own: sync runtime",
-				"- Source of Truth: Cobra command definitions",
-				"- Allowed Side Effects: config I/O and stdout",
-				"- Mutable Runtime Owner: process-local command execution",
-				"- Error Boundary: CLI error rendering",
-				"",
-				"## Verified By",
-				"",
-				"| Behavior | Evidence |",
-				"| --- | --- |",
-				"| sample | TestFixtureEvidence |",
-				"",
-			}, "\n"),
-		},
+		repoConsistencyBehaviorDocFixture("cli.md", "CLI", "internal/cli/*.go", []string{
+			"- Owns: CLI entrypoints",
+			"- Does Not Own: sync runtime",
+			"- Source of Truth: Cobra command definitions",
+			"- Allowed Side Effects: config I/O and stdout",
+			"- Mutable Runtime Owner: process-local command execution",
+			"- Error Boundary: CLI error rendering",
+		}),
 		{
 			name: "sync-engine.md",
 			content: strings.Join([]string{
@@ -939,21 +1018,82 @@ func writeRepoConsistencyDesignDocs(t *testing.T, repoRoot string) {
 				"",
 			}, "\n"),
 		},
-		{
-			name: "sync-execution.md",
-			content: strings.Join([]string{
-				"# Sync Execution",
-				"",
-				"## Verified By",
-				"",
-				"| Behavior | Evidence |",
-				"| --- | --- |",
-				"| sample | TestFixtureEvidence |",
-				"",
-			}, "\n"),
-		},
-	} {
-		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "spec", "design", doc.name), []byte(doc.content), 0o600))
+		repoConsistencyBehaviorDocFixture("sync-execution.md", "Sync Execution", "internal/syncexec/*.go", []string{
+			"- Owns: action execution",
+			"- Does Not Own: planning",
+			"- Source of Truth: executor config",
+			"- Allowed Side Effects: transfer execution",
+			"- Mutable Runtime Owner: worker pool",
+			"- Error Boundary: worker results",
+		}),
+		repoConsistencyBehaviorDocFixture("sync-control-plane.md", "Sync Control Plane", "internal/multisync/*.go", []string{
+			"- Owns: multi-drive lifecycle",
+			"- Does Not Own: single-drive execution",
+			"- Source of Truth: config holder",
+			"- Allowed Side Effects: orchestrator startup",
+			"- Mutable Runtime Owner: watch orchestrator",
+			"- Error Boundary: drive reports",
+		}),
+		repoConsistencyBehaviorDocFixture("sync-store.md", "Sync Store", "internal/syncstore/*.go", []string{
+			"- Owns: sqlite sync state",
+			"- Does Not Own: graph calls",
+			"- Source of Truth: sqlite rows",
+			"- Allowed Side Effects: sqlite reads and writes",
+			"- Mutable Runtime Owner: sync store handles",
+			"- Error Boundary: persisted failure facts",
+		}),
+		repoConsistencyBehaviorDocFixture("sync-observation.md", "Sync Observation", "internal/syncobserve/*.go", []string{
+			"- Owns: change observation",
+			"- Does Not Own: planning",
+			"- Source of Truth: local and remote observation inputs",
+			"- Allowed Side Effects: filesystem and graph observation",
+			"- Mutable Runtime Owner: observers and buffer",
+			"- Error Boundary: change events and skipped items",
+		}),
+		repoConsistencyBehaviorDocFixture("config.md", "Configuration", "internal/config/*.go", []string{
+			"- Owns: config loading",
+			"- Does Not Own: graph calls",
+			"- Source of Truth: resolved config snapshot",
+			"- Allowed Side Effects: config and metadata IO",
+			"- Mutable Runtime Owner: config holder",
+			"- Error Boundary: load and validation outcomes",
+		}),
+	}
+}
+
+func repoConsistencyBehaviorDocFixture(
+	name string,
+	title string,
+	governs string,
+	ownership []string,
+) struct {
+	name    string
+	content string
+} {
+	lines := []string{
+		"# " + title,
+		"",
+		"GOVERNS: " + governs,
+		"",
+		"## Ownership Contract",
+	}
+	lines = append(lines, ownership...)
+	lines = append(lines,
+		"",
+		"## Verified By",
+		"",
+		"| Behavior | Evidence |",
+		"| --- | --- |",
+		"| sample | TestFixtureEvidence |",
+		"",
+	)
+
+	return struct {
+		name    string
+		content string
+	}{
+		name:    name,
+		content: strings.Join(lines, "\n"),
 	}
 }
 

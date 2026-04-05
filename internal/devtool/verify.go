@@ -562,7 +562,7 @@ func runRepoConsistencyChecks(repoRoot string) error {
 		ensureGovernedDesignDocsHaveOwnershipContracts,
 		ensureCrossCuttingDesignDocs,
 		ensureCrossCuttingDesignDocEvidence,
-		ensureGovernedLifecycleDocsHaveEvidence,
+		ensureGovernedBehaviorDocsHaveEvidence,
 		ensureRequirementReferencesResolve,
 		ensureEvidenceDocsReferenceRealTests,
 		ensureCLIOutputBoundary,
@@ -868,30 +868,20 @@ func ensureCrossCuttingDesignDocEvidence(repoRoot string) error {
 	})
 }
 
-func ensureGovernedLifecycleDocsHaveEvidence(repoRoot string) error {
-	return ensureDocsContainSnippets("governed lifecycle design doc", []docSnippetCheck{
-		{
-			path: filepath.Join(repoRoot, "spec", "design", "sync-engine.md"),
+func ensureGovernedBehaviorDocsHaveEvidence(repoRoot string) error {
+	checks := governedBehaviorEvidenceDocs(repoRoot)
+	snippetChecks := make([]docSnippetCheck, 0, len(checks))
+	for _, check := range checks {
+		snippetChecks = append(snippetChecks, docSnippetCheck{
+			path: check.path,
 			snippets: []string{
-				"## Verified By",
+				check.heading,
 				"| Behavior | Evidence |",
 			},
-		},
-		{
-			path: filepath.Join(repoRoot, "spec", "design", "sync-execution.md"),
-			snippets: []string{
-				"## Verified By",
-				"| Behavior | Evidence |",
-			},
-		},
-		{
-			path: filepath.Join(repoRoot, "spec", "design", "cli.md"),
-			snippets: []string{
-				"## Verified By",
-				"| Behavior | Evidence |",
-			},
-		},
-	})
+		})
+	}
+
+	return ensureDocsContainSnippets("governed design doc", snippetChecks)
 }
 
 type docSnippetCheck struct {
@@ -1121,6 +1111,18 @@ type evidenceDocCheck struct {
 	heading string
 }
 
+func governedBehaviorEvidenceDocs(repoRoot string) []evidenceDocCheck {
+	return []evidenceDocCheck{
+		{path: filepath.Join(repoRoot, "spec", "design", "sync-engine.md"), heading: "## Verified By"},
+		{path: filepath.Join(repoRoot, "spec", "design", "sync-execution.md"), heading: "## Verified By"},
+		{path: filepath.Join(repoRoot, "spec", "design", "cli.md"), heading: "## Verified By"},
+		{path: filepath.Join(repoRoot, "spec", "design", "sync-control-plane.md"), heading: "## Verified By"},
+		{path: filepath.Join(repoRoot, "spec", "design", "sync-store.md"), heading: "## Verified By"},
+		{path: filepath.Join(repoRoot, "spec", "design", "sync-observation.md"), heading: "## Verified By"},
+		{path: filepath.Join(repoRoot, "spec", "design", "config.md"), heading: "## Verified By"},
+	}
+}
+
 func ensureEvidenceDocsReferenceRealTests(repoRoot string) error {
 	testRegistry, err := loadTestRegistry(repoRoot)
 	if err != nil {
@@ -1131,10 +1133,8 @@ func ensureEvidenceDocsReferenceRealTests(repoRoot string) error {
 		{path: filepath.Join(repoRoot, "spec", "design", "error-model.md"), heading: "## Verified By"},
 		{path: filepath.Join(repoRoot, "spec", "design", "threat-model.md"), heading: "## Mitigation Evidence"},
 		{path: filepath.Join(repoRoot, "spec", "design", "degraded-mode.md")},
-		{path: filepath.Join(repoRoot, "spec", "design", "sync-engine.md"), heading: "## Verified By"},
-		{path: filepath.Join(repoRoot, "spec", "design", "sync-execution.md"), heading: "## Verified By"},
-		{path: filepath.Join(repoRoot, "spec", "design", "cli.md"), heading: "## Verified By"},
 	}
+	checks = append(checks, governedBehaviorEvidenceDocs(repoRoot)...)
 
 	var problems []string
 	for _, check := range checks {

@@ -2,7 +2,7 @@
 
 GOVERNS: internal/multisync/*.go, sync.go
 
-Implements: R-2.8.1 [verified], R-2.8.3 [verified], R-3.4.2 [verified], R-6.3.4 [verified], R-6.10.6 [verified]
+Implements: R-2.8.1 [verified], R-2.8.3 [verified], R-3.4.2 [verified], R-6.3.4 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
 ## Overview
 
@@ -26,6 +26,13 @@ runtime package that implements it.
 - Allowed Side Effects: Session creation, engine construction/closure, SIGHUP consumption, per-drive goroutine startup, and control-plane logging.
 - Mutable Runtime Owner: `RunWatch` owns the live `runners` map. Each `watchRunner` owns one cancel function and one completion channel for exactly one drive.
 - Error Boundary: The control plane converts drive startup, panic, and watch-runner failures into isolated `DriveReport` or log outcomes. Engine-internal errors remain inside the single-drive boundary.
+
+## Verified By
+
+| Behavior | Evidence |
+| --- | --- |
+| `RunWatch` starts the configured drive set and keeps zero-drive watch mode valid without inventing a second startup path. | `TestOrchestrator_RunWatch_SingleDrive`, `TestOrchestrator_RunWatch_MultiDrive`, `TestOrchestrator_RunWatch_ZeroDrives` |
+| SIGHUP reload applies add/remove/pause/expired-pause diffs to the live runner set without bouncing unaffected drives. | `TestOrchestrator_Reload_AddDrive`, `TestOrchestrator_Reload_RemoveDrive`, `TestOrchestrator_Reload_PausedDrive`, `TestOrchestrator_Reload_TimedPauseExpiry` |
 
 ## Boundary To The Engine
 

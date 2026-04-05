@@ -113,6 +113,7 @@ The engine relies on a few non-negotiable behavioral invariants:
 | Behavior | Evidence |
 | --- | --- |
 | Watch bootstrap reaches quiescence before local or remote observers start. | `TestPhase0_RunWatch_BootstrapCompletesBeforeLocalObserverStarts`, `TestPhase0_RunWatch_BootstrapCompletesBeforeRemoteObserverStarts` |
+| Bootstrap subroutines stay directly testable for quiescence, no-change startup, change-driven startup, and crash-recovery cleanup without helper-loop shims. | `TestWaitForQuiescence_EmptyGraph`, `TestWaitForQuiescence_ContextCancel`, `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestBootstrapSync_CrashRecovery_MixedDeletingCandidates` |
 | Watch shutdown seals admission, stops retry/trial wake handling, and drops reconcile handoff after drain begins. | `TestRunWatch_ShutdownStopsRetryAndTrialTimers`, `TestRunWatch_ShutdownDropsReconcileResult`, `TestRunFullReconciliationAsync_ShutdownAfterCommit` |
 | Cancellation wins over fatal observer-exit shutdown races, and fallback waits honor cancellation without wall-clock sleeps. | `TestRunWatch_ContextCancel`, `TestRunWatch_CancellationWinsOverFinalObserverExit`, `TestRunWatch_FallbackSleepHonorsCancellation` |
 

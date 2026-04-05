@@ -226,6 +226,8 @@ func (rt *watchRuntime) runWatchStep(
 	p *watchPipeline,
 	outbox []*synctypes.TrackedAction,
 ) ([]*synctypes.TrackedAction, bool, error) {
+	// Steady-state watch phase: dispatch, observer batches, skipped items,
+	// retry/trial wakeups, and reconcile handoff are all allowed to be live.
 	dispatchCh, nextAction := rt.dispatchChannelForOutbox(outbox)
 
 	select {
@@ -258,6 +260,8 @@ func (rt *watchRuntime) runWatchStep(
 }
 
 func (rt *watchRuntime) handleObserverExit(p *watchPipeline, shuttingDown bool) error {
+	rt.mustAssertObserverExitPhase(rt, shuttingDown, "handle observer exit")
+
 	p.activeObs--
 	if p.activeObs > 0 {
 		return nil
@@ -324,6 +328,8 @@ func (rt *watchRuntime) runDrainStep(
 	ctx context.Context,
 	p *watchPipeline,
 ) (bool, error) {
+	// Draining phase: no new work admission remains live. Only worker results,
+	// reconcile result cleanup, and terminal observer exit/error handling may run.
 	if rt.drainLoopDone(p) {
 		return true, nil
 	}
@@ -359,6 +365,8 @@ func (rt *watchRuntime) runBootstrapStep(
 	logC <-chan time.Time,
 	emptyCh <-chan struct{},
 ) ([]*synctypes.TrackedAction, bool, error) {
+	// Bootstrap phase: dispatch, buffered bootstrap batches, worker results,
+	// retry/trial wakeups, and quiescence logging are live until the graph empties.
 	dispatchCh, nextAction := rt.dispatchChannelForOutbox(outbox)
 
 	select {
@@ -387,7 +395,12 @@ func (rt *watchRuntime) dispatchChannelForOutbox(
 	outbox []*synctypes.TrackedAction,
 ) (chan<- *synctypes.TrackedAction, *synctypes.TrackedAction) {
 	nextAction := firstOutbox(outbox)
-	if nextAction == nil || rt.isDraining() {
+	if nextAction == nil {
+		return nil, nil
+	}
+
+	if rt.isDraining() {
+		rt.mustAssertDispatchAdmissionSealed(rt, outbox, "dispatch channel for outbox")
 		return nil, nil
 	}
 
@@ -565,6 +578,7 @@ func (rt *watchRuntime) handleDrainingReconcileResult(
 	}
 
 	rt.dropReconcileResultOnShutdown()
+	rt.mustAssertReconcileBookkeepingCleared(rt, "handle draining reconcile result")
 	p.reconcileResults = nil
 	rt.mustAssertInvariants(ctx, rt, "handle draining reconcile result")
 

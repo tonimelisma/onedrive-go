@@ -15,6 +15,16 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
+type syncDaemonOrchestrator interface {
+	RunWatch(context.Context, synctypes.SyncMode, synctypes.WatchOpts) error
+}
+
+type syncDaemonOrchestratorFactory func(*multisync.OrchestratorConfig) syncDaemonOrchestrator
+
+func defaultSyncDaemonOrchestratorFactory(cfg *multisync.OrchestratorConfig) syncDaemonOrchestrator {
+	return multisync.NewOrchestrator(cfg)
+}
+
 // runSyncDaemon starts multi-drive watch mode via the Orchestrator. PID file
 // prevents duplicate daemons. SIGHUP triggers config reload (add/remove/pause
 // drives without restart). The status writer is threaded through the watch
@@ -28,7 +38,23 @@ func runSyncDaemon(
 	opts synctypes.WatchOpts,
 	logger *slog.Logger,
 	statusWriter io.Writer,
+) error {
+	return runSyncDaemonWithFactory(ctx, holder, selectors, mode, opts, logger, statusWriter, defaultSyncDaemonOrchestratorFactory)
+}
+
+func runSyncDaemonWithFactory(
+	ctx context.Context,
+	holder *config.Holder,
+	selectors []string,
+	mode synctypes.SyncMode,
+	opts synctypes.WatchOpts,
+	logger *slog.Logger,
+	statusWriter io.Writer,
+	orchestratorFactory syncDaemonOrchestratorFactory,
 ) (err error) {
+	if orchestratorFactory == nil {
+		orchestratorFactory = defaultSyncDaemonOrchestratorFactory
+	}
 	// Include paused drives — Orchestrator handles pause/resume internally.
 	drives, err := config.ResolveDrives(holder.Config(), selectors, true, logger)
 	if err != nil {
@@ -84,7 +110,7 @@ func runSyncDaemon(
 		}()
 	}
 
-	orch := multisync.NewOrchestrator(&multisync.OrchestratorConfig{
+	orch := orchestratorFactory(&multisync.OrchestratorConfig{
 		Holder:         holder,
 		Drives:         drives,
 		Provider:       provider,

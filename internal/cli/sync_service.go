@@ -39,8 +39,22 @@ type syncService struct {
 
 func newSyncService(cc *CLIContext) *syncService {
 	service := &syncService{
-		cc:          cc,
-		watchRunner: runSyncDaemon,
+		cc: cc,
+		watchRunner: func(
+			ctx context.Context,
+			holder *config.Holder,
+			selectors []string,
+			mode synctypes.SyncMode,
+			opts synctypes.WatchOpts,
+			logger *slog.Logger,
+			statusWriter io.Writer,
+		) error {
+			if cc != nil && cc.syncDaemonOrchestratorFactory != nil {
+				return runSyncDaemonWithFactory(ctx, holder, selectors, mode, opts, logger, statusWriter, cc.syncDaemonOrchestratorFactory)
+			}
+
+			return runSyncDaemon(ctx, holder, selectors, mode, opts, logger, statusWriter)
+		},
 	}
 	if cc != nil && cc.syncWatchRunner != nil {
 		service.watchRunner = cc.syncWatchRunner

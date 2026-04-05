@@ -131,6 +131,7 @@ func (rt *watchRuntime) runTrialDispatch(
 	mode synctypes.SyncMode,
 	safety *synctypes.SafetyConfig,
 ) []*synctypes.TrackedAction {
+	rt.mustAssertPlannerSweepAllowed(rt, "runTrialDispatch", "run trial dispatch")
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventTrialSweepStarted})
 
 	now := rt.engine.nowFunc()
@@ -226,6 +227,7 @@ func (rt *watchRuntime) runRetrierSweep(
 	mode synctypes.SyncMode,
 	safety *synctypes.SafetyConfig,
 ) []*synctypes.TrackedAction {
+	rt.mustAssertPlannerSweepAllowed(rt, "runRetrierSweep", "run retrier sweep")
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetrySweepStarted})
 
 	now := rt.engine.nowFunc()
