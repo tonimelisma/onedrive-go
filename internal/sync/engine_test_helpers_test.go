@@ -33,19 +33,21 @@ import (
 
 // Compile-time interface satisfaction checks.
 var (
-	_ synctypes.DeltaFetcher       = (*engineMockClient)(nil)
-	_ synctypes.ItemClient         = (*engineMockClient)(nil)
-	_ driveops.Downloader          = (*engineMockClient)(nil)
-	_ driveops.Uploader            = (*engineMockClient)(nil)
-	_ synctypes.FolderDeltaFetcher = (*engineMockClient)(nil)
-	_ synctypes.RecursiveLister    = (*engineMockClient)(nil)
-	_ synctypes.PermissionChecker  = (*engineMockClient)(nil)
-	_ synctypes.DriveVerifier      = (*engineMockClient)(nil)
+	_ synctypes.DeltaFetcher            = (*engineMockClient)(nil)
+	_ synctypes.SocketIOEndpointFetcher = (*engineMockClient)(nil)
+	_ synctypes.ItemClient              = (*engineMockClient)(nil)
+	_ driveops.Downloader               = (*engineMockClient)(nil)
+	_ driveops.Uploader                 = (*engineMockClient)(nil)
+	_ synctypes.FolderDeltaFetcher      = (*engineMockClient)(nil)
+	_ synctypes.RecursiveLister         = (*engineMockClient)(nil)
+	_ synctypes.PermissionChecker       = (*engineMockClient)(nil)
+	_ synctypes.DriveVerifier           = (*engineMockClient)(nil)
 )
 
 type engineMockClient struct {
 	// synctypes.DeltaFetcher
 	deltaFn                 func(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error)
+	socketIOEndpointFn      func(ctx context.Context, driveID driveid.ID) (*graph.SocketIOEndpoint, error)
 	driveFn                 func(ctx context.Context, driveID driveid.ID) (*graph.Drive, error)
 	folderDeltaFn           func(ctx context.Context, driveID driveid.ID, folderID, token string) ([]graph.Item, string, error)
 	listChildrenRecursiveFn func(ctx context.Context, driveID driveid.ID, folderID string) ([]graph.Item, error)
@@ -79,6 +81,14 @@ func (m *engineMockClient) Drive(ctx context.Context, driveID driveid.ID) (*grap
 	}
 
 	return &graph.Drive{ID: driveID}, nil
+}
+
+func (m *engineMockClient) SocketIOEndpoint(ctx context.Context, driveID driveid.ID) (*graph.SocketIOEndpoint, error) {
+	if m.socketIOEndpointFn != nil {
+		return m.socketIOEndpointFn(ctx, driveID)
+	}
+
+	return &graph.SocketIOEndpoint{}, nil
 }
 
 func (m *engineMockClient) DeltaFolderAll(ctx context.Context, driveID driveid.ID, folderID, token string) ([]graph.Item, string, error) {
@@ -225,6 +235,7 @@ func newTestEngineWithContext(t *testing.T, ctx context.Context, mock *engineMoc
 		SyncRoot:        syncRoot,
 		DriveID:         driveID,
 		Fetcher:         mock,
+		SocketIOFetcher: mock,
 		Items:           mock,
 		Downloads:       mock,
 		Uploads:         mock,
@@ -274,6 +285,7 @@ func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *eng
 		SyncRoot:        syncRoot,
 		DriveID:         driveID,
 		Fetcher:         mock,
+		SocketIOFetcher: mock,
 		Items:           mock,
 		Downloads:       mock,
 		Uploads:         mock,

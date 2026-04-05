@@ -16,6 +16,12 @@ type DeltaFetcher interface {
 	Delta(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error)
 }
 
+// SocketIOEndpointFetcher fetches the outbound Socket.IO websocket endpoint
+// used for near-real-time remote wakeups in watch mode.
+type SocketIOEndpointFetcher interface {
+	SocketIOEndpoint(ctx context.Context, driveID driveid.ID) (*graph.SocketIOEndpoint, error)
+}
+
 // ItemClient provides CRUD operations on drive items.
 type ItemClient interface {
 	GetItem(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)

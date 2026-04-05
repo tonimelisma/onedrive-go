@@ -28,13 +28,14 @@ type LocalObservationRules struct {
 // EngineConfig holds the options for NewEngine. Uses a struct because
 // seven fields is too many for positional parameters.
 type EngineConfig struct {
-	DBPath             string              // path to the SQLite state database
-	SyncRoot           string              // absolute path to the local sync directory
-	DataDir            string              // application data directory for session files (optional)
-	DriveID            driveid.ID          // normalized drive identifier
-	AccountEmail       string              // authenticated account email for caller-aware permission checks
-	RootItemID         string              // folder-scoped virtual root; empty = drive root
-	Fetcher            DeltaFetcher        // satisfied by *graph.Client
+	DBPath             string       // path to the SQLite state database
+	SyncRoot           string       // absolute path to the local sync directory
+	DataDir            string       // application data directory for session files (optional)
+	DriveID            driveid.ID   // normalized drive identifier
+	AccountEmail       string       // authenticated account email for caller-aware permission checks
+	RootItemID         string       // folder-scoped virtual root; empty = drive root
+	Fetcher            DeltaFetcher // satisfied by *graph.Client
+	SocketIOFetcher    SocketIOEndpointFetcher
 	Items              ItemClient          // satisfied by *graph.Client
 	Downloads          driveops.Downloader // satisfied by *graph.Client
 	Uploads            driveops.Uploader   // satisfied by *graph.Client
@@ -45,6 +46,7 @@ type EngineConfig struct {
 	Logger             *slog.Logger
 	LocalFilter        LocalFilterConfig
 	LocalRules         LocalObservationRules
+	EnableWebsocket    bool  // when true, full-drive watch mode enables outbound Socket.IO wakeups
 	UseLocalTrash      bool  // move deleted local files to OS trash instead of permanent delete
 	TransferWorkers    int   // goroutine count for the worker pool (0 → minWorkers)
 	CheckWorkers       int   // goroutine limit for parallel file hashing (0 → 4)

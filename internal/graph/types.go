@@ -29,6 +29,16 @@ func (UploadURL) LogValue() slog.Value {
 	return slog.StringValue("[REDACTED]")
 }
 
+// SocketIONotificationURL is the Graph-returned Socket.IO callback URL used
+// to establish outbound websocket monitoring. It carries embedded auth state
+// and must never be logged verbatim.
+type SocketIONotificationURL string
+
+// LogValue redacts the URL content when passed to slog.
+func (SocketIONotificationURL) LogValue() slog.Value {
+	return slog.StringValue("[REDACTED]")
+}
+
 // ChildCountUnknown indicates the child count was not present in the API response.
 const ChildCountUnknown = -1
 
@@ -118,4 +128,12 @@ type UploadSessionStatus struct {
 	UploadURL          UploadURL // pre-authenticated, ephemeral; redacted via LogValue (B-315)
 	ExpirationTime     time.Time
 	NextExpectedRanges []string // e.g., ["0-", "327680-"]
+}
+
+// SocketIOEndpoint is the Graph subscription/socketIo response used to start
+// outbound near-real-time change monitoring for a drive root.
+type SocketIOEndpoint struct {
+	ID              string
+	NotificationURL SocketIONotificationURL
+	ExpirationTime  time.Time
 }

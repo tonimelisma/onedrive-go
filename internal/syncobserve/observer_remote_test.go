@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -1023,6 +1024,58 @@ func (f *sequentialFetcher) Delta(_ context.Context, _ driveid.ID, _ string) (*g
 	return p.page, p.err
 }
 
+type signalingFetcher struct {
+	mu     sync.Mutex
+	pages  []mockDeltaPage
+	calls  int
+	called chan int
+}
+
+func newSignalingFetcher(pages []mockDeltaPage) *signalingFetcher {
+	return &signalingFetcher{
+		pages:  pages,
+		called: make(chan int, len(pages)+1),
+	}
+}
+
+func (f *signalingFetcher) Delta(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.calls >= len(f.pages) {
+		f.calls++
+		select {
+		case f.called <- f.calls:
+		default:
+		}
+
+		return nil, errors.New("mock: no more pages configured")
+	}
+
+	p := f.pages[f.calls]
+	f.calls++
+	select {
+	case f.called <- f.calls:
+	default:
+	}
+
+	return p.page, p.err
+}
+
+func (f *signalingFetcher) CallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.calls
+}
+
+func tryWake(ch chan struct{}) {
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+
 func TestWatch_PollsAtInterval(t *testing.T) {
 	t.Parallel()
 
@@ -1053,6 +1106,105 @@ func TestWatch_PollsAtInterval(t *testing.T) {
 
 	assert.GreaterOrEqual(t, fetcher.calls, 2)
 	assert.NotEmpty(t, obs.CurrentDeltaToken(), "delta token should be non-empty after successful polls")
+}
+
+// Validates: R-2.8.5
+func TestWatch_WakeSignalTriggersImmediatePoll(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	fetcher := newSignalingFetcher([]mockDeltaPage{
+		{page: &graph.DeltaPage{
+			Items: []graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+				{ID: "f1", Name: "first.txt", ParentID: "root", DriveID: driveID, Size: 10},
+			},
+			DeltaLink: "token-1",
+		}},
+		{page: &graph.DeltaPage{
+			Items: []graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+				{ID: "f2", Name: "second.txt", ParentID: "root", DriveID: driveID, Size: 20},
+			},
+			DeltaLink: "token-2",
+		}},
+	})
+
+	obs := NewRemoteObserver(fetcher, synctest.EmptyBaseline(), driveID, synctest.TestLogger(t))
+	wakeCh := make(chan struct{}, 1)
+	obs.SetWakeChannel(wakeCh)
+
+	events := make(chan synctypes.ChangeEvent, 10)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+
+	go func() {
+		received := 0
+		for range events {
+			received++
+			if received == 1 {
+				tryWake(wakeCh)
+			}
+			if received >= 2 {
+				cancel()
+				return
+			}
+		}
+	}()
+
+	err := obs.Watch(ctx, "", events, time.Hour)
+	require.NoError(t, err)
+	assert.Equal(t, 2, fetcher.CallCount(), "wake should trigger a second delta cycle before fallback polling")
+}
+
+// Validates: R-2.8.5
+func TestWatch_WakeSignalsCoalesce(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	fetcher := newSignalingFetcher([]mockDeltaPage{
+		{page: &graph.DeltaPage{
+			Items: []graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+				{ID: "f1", Name: "first.txt", ParentID: "root", DriveID: driveID, Size: 10},
+			},
+			DeltaLink: "token-1",
+		}},
+		{page: &graph.DeltaPage{
+			Items: []graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+				{ID: "f2", Name: "second.txt", ParentID: "root", DriveID: driveID, Size: 20},
+			},
+			DeltaLink: "token-2",
+		}},
+	})
+
+	obs := NewRemoteObserver(fetcher, synctest.EmptyBaseline(), driveID, synctest.TestLogger(t))
+	wakeCh := make(chan struct{}, 1)
+	obs.SetWakeChannel(wakeCh)
+
+	events := make(chan synctypes.ChangeEvent, 10)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+
+	go func() {
+		received := 0
+		for range events {
+			received++
+			if received == 1 {
+				tryWake(wakeCh)
+				tryWake(wakeCh)
+			}
+			if received == 2 {
+				time.AfterFunc(50*time.Millisecond, cancel)
+				return
+			}
+		}
+	}()
+
+	err := obs.Watch(ctx, "", events, time.Hour)
+	require.NoError(t, err)
+	assert.Equal(t, 2, fetcher.CallCount(), "burst wakes should collapse into one pending delta cycle")
 }
 
 func TestWatch_BackoffOnError(t *testing.T) {
@@ -1095,6 +1247,51 @@ func TestWatch_BackoffOnError(t *testing.T) {
 	require.GreaterOrEqual(t, len(sleepDurations), 2, "sleep should be called for backoff")
 	assert.Equal(t, retry.WatchRemotePolicy().Base, sleepDurations[0])
 	assert.Equal(t, time.Duration(float64(retry.WatchRemotePolicy().Base)*retry.WatchRemotePolicy().Multiplier), sleepDurations[1])
+}
+
+// Validates: R-2.1.2, R-2.8.5
+func TestWatch_ZeroEvents_NoTokenAdvanceAfterWake(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	fetcher := newSignalingFetcher([]mockDeltaPage{
+		{page: &graph.DeltaPage{
+			Items:     []graph.Item{{ID: "root", IsRoot: true, DriveID: driveID}},
+			DeltaLink: "new-token-1",
+		}},
+		{page: &graph.DeltaPage{
+			Items:     []graph.Item{{ID: "root", IsRoot: true, DriveID: driveID}},
+			DeltaLink: "new-token-2",
+		}},
+	})
+
+	writer := &mockObservationWriter{}
+	obs := NewRemoteObserver(fetcher, synctest.EmptyBaseline(), driveID, synctest.TestLogger(t))
+	obs.ObsWriter = writer
+	wakeCh := make(chan struct{}, 1)
+	obs.SetWakeChannel(wakeCh)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, "old-token", make(chan synctypes.ChangeEvent, 1), time.Hour)
+	}()
+
+	require.Eventually(t, func() bool {
+		return fetcher.CallCount() >= 1
+	}, time.Second, 10*time.Millisecond)
+	tryWake(wakeCh)
+	require.Eventually(t, func() bool {
+		return fetcher.CallCount() >= 2
+	}, time.Second, 10*time.Millisecond)
+	cancel()
+
+	err := <-done
+	require.NoError(t, err)
+	assert.Empty(t, writer.calls, "zero-event wake polls must not commit observations")
+	assert.Equal(t, "old-token", obs.CurrentDeltaToken(), "zero-event wake polls must not advance the token")
 }
 
 func TestWatch_DeltaExpiredResets(t *testing.T) {

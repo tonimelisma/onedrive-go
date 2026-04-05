@@ -28,6 +28,7 @@ const (
 type watchStepResult struct {
 	stop bool
 	err  error
+	woke bool
 }
 
 // RemoteObserver transforms Graph API delta responses into []synctypes.ChangeEvent.
@@ -41,6 +42,7 @@ type RemoteObserver struct {
 	driveID   driveid.ID
 	SleepFunc func(ctx context.Context, d time.Duration) error
 	ObsWriter synctypes.ObservationWriter // nil-safe: when set, observations are committed atomically with delta token
+	wakeCh    <-chan struct{}
 
 	// mu protects deltaToken for concurrent reads via CurrentDeltaToken().
 	// The watch loop is the only writer; helper calls may read concurrently.
@@ -93,6 +95,13 @@ func NewRemoteObserver(
 // cycle commits observations before returning events to the engine.
 func (o *RemoteObserver) SetObsWriter(w synctypes.ObservationWriter) {
 	o.ObsWriter = w
+}
+
+// SetWakeChannel installs an optional remote wake signal source. When set,
+// watch-mode sleeps become interruptible: a wake signal triggers an immediate
+// delta cycle while delta tokens and observations remain owned by Watch().
+func (o *RemoteObserver) SetWakeChannel(wakeCh <-chan struct{}) {
+	o.wakeCh = wakeCh
 }
 
 // FullDelta fetches all delta pages and returns the accumulated change events
@@ -177,6 +186,8 @@ func (o *RemoteObserver) Watch(ctx context.Context, savedToken string, events ch
 	bo.SetMaxOverride(interval)
 
 	for {
+		o.drainWakeSignals()
+
 		token := o.CurrentDeltaToken()
 
 		polledEvents, newToken, err := o.FullDelta(ctx, token)
@@ -249,6 +260,9 @@ func (o *RemoteObserver) handleWatchPollError(ctx context.Context, bo *retry.Bac
 	if result.stop || result.err != nil {
 		return result
 	}
+	if result.woke {
+		bo.Reset()
+	}
 
 	return watchStepResult{}
 }
@@ -310,6 +324,28 @@ func (o *RemoteObserver) emitWatchEvents(
 }
 
 func (o *RemoteObserver) sleepWatch(ctx context.Context, delay time.Duration, phase string) watchStepResult {
+	if o.wakeCh == nil {
+		return o.sleepForWatch(ctx, delay, phase)
+	}
+
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return watchStepResult{stop: true}
+	case <-timer.C:
+		return watchStepResult{}
+	case <-o.wakeCh:
+		o.logger.Debug("remote watch awakened",
+			slog.String("phase", phase),
+			slog.String("drive_id", o.driveID.String()),
+		)
+		return watchStepResult{woke: true}
+	}
+}
+
+func (o *RemoteObserver) sleepForWatch(ctx context.Context, delay time.Duration, phase string) watchStepResult {
 	if sleepErr := o.SleepFunc(ctx, delay); sleepErr != nil {
 		if watchShouldStop(ctx, sleepErr) {
 			return watchStepResult{stop: true}
@@ -319,6 +355,20 @@ func (o *RemoteObserver) sleepWatch(ctx context.Context, delay time.Duration, ph
 	}
 
 	return watchStepResult{}
+}
+
+func (o *RemoteObserver) drainWakeSignals() {
+	if o.wakeCh == nil {
+		return
+	}
+
+	for {
+		select {
+		case <-o.wakeCh:
+		default:
+			return
+		}
+	}
 }
 
 func watchShouldStop(ctx context.Context, err error) bool {

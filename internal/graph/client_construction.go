@@ -50,6 +50,7 @@ func NewClient(
 		rootChildrenPolicy:   retry.RootChildrenPolicy(),
 		uploadURLValidator:   validateUploadURL,
 		copyMonitorValidator: validateCopyMonitorURL,
+		socketIOValidator:    validateSocketIONotificationURL,
 	}, nil
 }
 
