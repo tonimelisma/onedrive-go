@@ -22,6 +22,8 @@ type VerifyProfile string
 const (
 	defaultCoverageThreshold = 76.0
 	defaultCoveragePattern   = "onedrive-go-cover.*"
+	fastE2EPreflightPattern  = "^TestE2E_FixturePreflight_Fast$"
+	fullE2EPreflightPattern  = "^TestE2E_FixturePreflight_Full$"
 
 	VerifyDefault     VerifyProfile = "default"
 	VerifyPublic      VerifyProfile = "public"
@@ -372,6 +374,10 @@ func parseCoverageTotal(report string) (float64, error) {
 }
 
 func runE2E(ctx context.Context, runner commandRunner, repoRoot string, env []string, stdout, stderr io.Writer) error {
+	if err := runE2EPreflightFast(ctx, runner, repoRoot, env, stdout, stderr); err != nil {
+		return err
+	}
+
 	if err := writeStatus(stdout, "==> go test -tags=e2e\n"); err != nil {
 		return fmt.Errorf("write status: %w", err)
 	}
@@ -397,6 +403,36 @@ func runE2E(ctx context.Context, runner commandRunner, repoRoot string, env []st
 	return nil
 }
 
+func runE2EPreflightFast(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	env []string,
+	stdout, stderr io.Writer,
+) error {
+	if err := writeStatus(stdout, "==> go test -tags=e2e fixture preflight\n"); err != nil {
+		return fmt.Errorf("write status: %w", err)
+	}
+	if err := runner.Run(
+		ctx,
+		repoRoot,
+		env,
+		stdout,
+		stderr,
+		"go",
+		"test",
+		"-tags=e2e",
+		"-run="+fastE2EPreflightPattern,
+		"-count=1",
+		"-v",
+		"./e2e/...",
+	); err != nil {
+		return fmt.Errorf("fast e2e fixture preflight: %w", err)
+	}
+
+	return nil
+}
+
 func runE2EFull(
 	ctx context.Context,
 	runner commandRunner,
@@ -411,6 +447,10 @@ func runE2EFull(
 
 	fullEnv := append([]string{}, env...)
 	fullEnv = append(fullEnv, "E2E_LOG_DIR="+logDir)
+
+	if err := runE2EPreflightFull(ctx, runner, repoRoot, fullEnv, stdout, stderr); err != nil {
+		return err
+	}
 
 	if err := writeStatus(stdout, "==> go test -tags='e2e e2e_full'\n"); err != nil {
 		return fmt.Errorf("write status: %w", err)
@@ -432,6 +472,36 @@ func runE2EFull(
 		"./e2e/...",
 	); err != nil {
 		return fmt.Errorf("full e2e: %w", err)
+	}
+
+	return nil
+}
+
+func runE2EPreflightFull(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	env []string,
+	stdout, stderr io.Writer,
+) error {
+	if err := writeStatus(stdout, "==> go test -tags='e2e e2e_full' fixture preflight\n"); err != nil {
+		return fmt.Errorf("write status: %w", err)
+	}
+	if err := runner.Run(
+		ctx,
+		repoRoot,
+		env,
+		stdout,
+		stderr,
+		"go",
+		"test",
+		"-tags=e2e e2e_full",
+		"-run="+fullE2EPreflightPattern,
+		"-count=1",
+		"-v",
+		"./e2e/...",
+	); err != nil {
+		return fmt.Errorf("full e2e fixture preflight: %w", err)
 	}
 
 	return nil
