@@ -77,6 +77,13 @@ from `deleted` and from retryable download states:
 - an in-scope observation moves a filtered row back to `synced` or
   `pending_download` based on hash equality
 
+`CommitOutcome()` classifies baseline mutations through one shared
+ActionType-to-mutation mapping before any transaction writes happen. Unknown
+actions are explicit store errors, not silent no-ops. The in-memory baseline
+cache uses that same classifier after commit; if that path ever encounters an
+impossible unclassified action anyway, the store invalidates and reloads the
+cache from SQLite so durable state remains the only authority.
+
 `RefreshLocalBaseline()` is deliberately narrower than `CommitOutcome()`. It
 exists for manual/local reconciliation paths such as `keep_both`, where the
 engine has authoritative current local disk facts but is not committing a new

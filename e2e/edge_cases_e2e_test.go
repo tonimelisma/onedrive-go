@@ -191,7 +191,7 @@ func TestE2E_ConflictDetectionAndResolution(t *testing.T) {
 		"sync should report conflict")
 
 	// Step 5: Check conflicts list.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
+	stdout, _ := pollCLIWithConfigContains(t, cfgPath, env, "shared.txt", pollTimeout, "conflicts")
 	assert.Contains(t, stdout, "shared.txt",
 		"conflicts list should include the conflicting file")
 
@@ -199,7 +199,7 @@ func TestE2E_ConflictDetectionAndResolution(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/shared.txt", "--keep-local")
 
 	// Step 7: Verify conflict is resolved.
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
+	stdout, _ = pollCLIWithConfigContains(t, cfgPath, env, "No conflicts.", pollTimeout, "conflicts")
 	assert.Contains(t, stdout, "No conflicts.",
 		"conflicts list should be empty after resolution")
 }

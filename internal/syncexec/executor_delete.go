@@ -195,7 +195,10 @@ func (e *Executor) DeleteLocalFile(action *synctypes.Action, absPath string, inf
 
 		if currentHash != baselineHash {
 			// File was modified — save as conflict copy instead of deleting.
-			conflictPath := ConflictCopyPath(absPath, e.nowFunc())
+			conflictPath, pathErr := e.uniqueConflictCopyPath(absPath)
+			if pathErr != nil {
+				return e.failedOutcome(action, synctypes.ActionLocalDelete, pathErr)
+			}
 			conflictRel, relErr := e.syncTree.Rel(conflictPath)
 			if relErr != nil {
 				return e.failedOutcome(action, synctypes.ActionLocalDelete, normalizeSyncTreePathError(relErr))
