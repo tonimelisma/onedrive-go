@@ -262,6 +262,7 @@ func TestHandle403_ReadOnlyFolder_RecordsIssueAtBoundary(t *testing.T) {
 	// The blocked write itself is the only durable authority for the derived scope.
 	issues := listRemoteBlockedFailures(t, eng, ctx)
 	require.Len(t, issues, 1)
+	assert.Equal(t, driveid.New(remoteDriveID), issues[0].DriveID)
 	assert.Equal(t, "Shared/TeamDocs/sub/file.txt", issues[0].Path)
 	scopeKey := synctypes.SKPermRemote("Shared/TeamDocs/sub")
 	assert.Equal(t, scopeKey, issues[0].ScopeKey, "boundary issue should be scoped to the recursive remote permission boundary")

@@ -151,7 +151,7 @@ Implements: R-2.10.16 [verified], R-6.8.12 [verified]
 
 Flat pool of `transfer_workers` goroutines. Decoupled from dispatch infrastructure: accepts `dispatchCh <-chan *TrackedAction` (actions to execute) and `doneCh <-chan struct{}` (shutdown signal) as constructor parameters instead of holding a reference to the dispatch infrastructure. Workers are pure executors — they execute actions, persist success outcomes, and send `WorkerResult` to the engine. Workers never call `DepGraph.Complete()` — the engine owns all completion decisions.
 
-`WorkerResult` carries target drive identity (`TargetDriveID`, `ShortcutKey`) from the action, `RetryAfter` from `GraphError`, the full `error` for classification, `ActionID` for DepGraph routing, `IsTrial` and `TrialScopeKey ScopeKey` for scope trial routing. The engine classifies and routes each result.
+`WorkerResult` carries target drive identity (`TargetDriveID`, `ShortcutKey`) from the action, `RetryAfter` from `GraphError`, the full `error` for classification, `ActionID` for DepGraph routing, `IsTrial` and `TrialScopeKey ScopeKey` for scope trial routing. `WorkerResult.DriveID` is the concrete drive the action actually executed against: workers prefer the executor outcome drive, fall back to the planned action drive, and finally use `TargetDriveID` for shortcut-targeted actions whose concrete drive was only resolved at execution time. The engine classifies and routes each result.
 
 ### Mutable Runtime Ownership
 

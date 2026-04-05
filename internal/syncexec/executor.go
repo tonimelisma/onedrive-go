@@ -455,11 +455,22 @@ func (e *Executor) ResolveParentID(relPath string) (string, error) {
 	return "", fmt.Errorf("sync: cannot resolve parent ID for %s (parent %s not in baseline)", relPath, parentDir)
 }
 
-// resolveDriveID returns the action's DriveID if set, otherwise the
-// executor's default driveID (B-068: new local items have zero DriveID).
+// resolveDriveID returns the action's DriveID when present. Brand-new local
+// items under shortcut subtrees still arrive with a zero action DriveID, so
+// inherit the parent folder's baseline drive before falling back to the
+// executor's configured default drive.
 func (e *Executor) resolveDriveID(action *synctypes.Action) driveid.ID {
 	if !action.DriveID.IsZero() {
 		return action.DriveID
+	}
+
+	if action != nil {
+		parentDir := filepath.ToSlash(filepath.Dir(action.Path))
+		if parentDir != "." && parentDir != "" {
+			if entry, ok := e.baseline.GetByPath(parentDir); ok && !entry.DriveID.IsZero() {
+				return entry.DriveID
+			}
+		}
 	}
 
 	return e.driveID

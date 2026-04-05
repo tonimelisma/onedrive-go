@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -386,6 +387,169 @@ func TestRunOnce_BigDelete_WithForce(t *testing.T) {
 	report, err := eng.RunOnce(ctx, synctypes.SyncUploadOnly, synctypes.RunOpts{Force: true})
 	require.NoError(t, err, "RunOnce with force")
 	assert.GreaterOrEqual(t, report.RemoteDeletes, 1, "force should bypass big-delete")
+}
+
+type sharedFolderRecoveryRunOnceFixture struct {
+	eng            *testEngine
+	baseline       *synctypes.Baseline
+	syncRoot       string
+	checker        *mockPermChecker
+	shortcuts      []synctypes.Shortcut
+	remoteDriveID  string
+	blockedPath    string
+	sharedFolderID string
+}
+
+func newSharedFolderRecoveryRunOnceFixture(t *testing.T) *sharedFolderRecoveryRunOnceFixture {
+	t.Helper()
+
+	const (
+		blockedPath    = "Shared/TeamDocs/sub/file.txt"
+		boundaryPath   = "Shared/TeamDocs/sub"
+		sharedFolderID = "folder-id"
+	)
+
+	remoteDriveID := permissionsRemoteDriveID
+	checker := &mockPermChecker{
+		perms: map[string][]graph.Permission{
+			driveid.New(remoteDriveID).String() + ":" + sharedFolderID: {{
+				ID:    "perm-1",
+				Roles: []string{"read"},
+			}},
+			driveid.New(remoteDriveID).String() + ":root-id": {{
+				ID:    "perm-2",
+				Roles: []string{"write"},
+			}},
+		},
+	}
+
+	shortcuts := []synctypes.Shortcut{{
+		ItemID:       "shortcut-1",
+		RemoteDrive:  remoteDriveID,
+		RemoteItem:   "root-id",
+		LocalPath:    "Shared/TeamDocs",
+		Observation:  synctypes.ObservationDelta,
+		DiscoveredAt: 1000,
+	}}
+	baselineEntries := []synctypes.Outcome{
+		{
+			Action:   synctypes.ActionDownload,
+			Success:  true,
+			Path:     "Shared",
+			DriveID:  driveid.New(engineTestDriveID),
+			ItemID:   "shared-parent-id",
+			ParentID: "root",
+			ItemType: synctypes.ItemTypeFolder,
+		},
+		{
+			Action:   synctypes.ActionDownload,
+			Success:  true,
+			Path:     "Shared/TeamDocs",
+			DriveID:  driveid.New(remoteDriveID),
+			ItemID:   "root-id",
+			ParentID: "root",
+			ItemType: synctypes.ItemTypeFolder,
+		},
+		{
+			Action:   synctypes.ActionDownload,
+			Success:  true,
+			Path:     boundaryPath,
+			DriveID:  driveid.New(remoteDriveID),
+			ItemID:   sharedFolderID,
+			ParentID: "root-id",
+			ItemType: synctypes.ItemTypeFolder,
+		},
+	}
+
+	eng, bl, syncRoot := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
+
+	return &sharedFolderRecoveryRunOnceFixture{
+		eng:            eng,
+		baseline:       bl,
+		syncRoot:       syncRoot,
+		checker:        checker,
+		shortcuts:      shortcuts,
+		remoteDriveID:  remoteDriveID,
+		blockedPath:    blockedPath,
+		sharedFolderID: sharedFolderID,
+	}
+}
+
+// Validates: R-2.10.9, R-2.10.11, R-2.14.4
+func TestRunOnce_SharedFolderPermissionRecovery_AutoUploadsPreviouslyBlockedFile(t *testing.T) {
+	t.Parallel()
+
+	fixture := newSharedFolderRecoveryRunOnceFixture(t)
+	ctx := t.Context()
+
+	var (
+		uploadCalls    int
+		uploadDriveID  driveid.ID
+		uploadParentID string
+		uploadName     string
+	)
+	uploadMock := &engineMockClient{
+		uploadFn: func(
+			_ context.Context,
+			driveID driveid.ID,
+			parentID,
+			name string,
+			_ io.ReaderAt,
+			size int64,
+			_ time.Time,
+			_ graph.ProgressFunc,
+		) (*graph.Item, error) {
+			uploadCalls++
+			uploadDriveID = driveID
+			uploadParentID = parentID
+			uploadName = name
+
+			return &graph.Item{
+				ID:           "uploaded-id",
+				Name:         name,
+				Size:         size,
+				QuickXorHash: "uploaded-hash",
+			}, nil
+		},
+	}
+	fixture.eng.execCfg.SetUploads(uploadMock)
+	fixture.eng.execCfg.SetTransferMgr(driveops.NewTransferManager(
+		fixture.eng.execCfg.Downloads(), fixture.eng.execCfg.Uploads(), nil, fixture.eng.logger,
+	))
+
+	writeLocalFile(t, fixture.syncRoot, fixture.blockedPath, "updated shared content")
+
+	newTestWatchState(t, fixture.eng)
+	decision := applyRemote403Decision(t, fixture.eng, ctx, fixture.baseline, fixture.blockedPath, fixture.shortcuts)
+	require.True(t, decision.Matched)
+	require.Equal(t, permissionCheckActivateDerivedScope, decision.Kind)
+	require.Len(t, listRemoteBlockedFailures(t, fixture.eng, ctx), 1)
+	clearTestWatchRuntime(fixture.eng)
+
+	fixture.checker.perms[driveid.New(fixture.remoteDriveID).String()+":"+fixture.sharedFolderID] = []graph.Permission{{
+		ID:    "perm-1",
+		Roles: []string{"write"},
+	}}
+
+	report, err := fixture.eng.RunOnce(ctx, synctypes.SyncUploadOnly, synctypes.RunOpts{})
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, uploadCalls, "a recovered shared-folder upload should execute exactly once during the sync pass")
+	assert.Equal(t, driveid.New(fixture.remoteDriveID), uploadDriveID, "the recovered upload must target the shortcut's remote drive")
+	assert.Equal(t, fixture.sharedFolderID, uploadParentID, "the recovered upload must resolve the shared folder parent from baseline")
+	assert.Equal(t, "file.txt", uploadName)
+	assert.Equal(t, 1, report.Uploads)
+	assert.GreaterOrEqual(t, report.Succeeded, 1)
+	assert.Zero(t, report.Failed)
+	assert.Empty(t, report.Errors)
+
+	remainingRemoteBlocked := listRemoteBlockedFailures(t, fixture.eng, ctx)
+	assert.Empty(t, remainingRemoteBlocked, "successful automatic recovery should clear the shared-folder blocked issue")
+	assert.Empty(t, fixture.eng.permHandler.DeniedPrefixes(ctx), "released shared-folder boundaries should no longer suppress writes")
+
+	failures, listErr := fixture.eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, listErr)
+	assert.Empty(t, failures, "successful recovery upload should leave no sync_failures rows behind")
 }
 
 func TestRunOnce_ExecutorPartialFailure(t *testing.T) {

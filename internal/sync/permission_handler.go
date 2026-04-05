@@ -123,7 +123,7 @@ func (ph *PermissionHandler) handle403(
 	// Query permissions on the parent folder.
 	perms, err := ph.permChecker.ListItemPermissions(ctx, remoteDriveID, parentItemID)
 	if err != nil {
-		return ph.handlePermissionCheckError(ctx, err, failedPath, parentFolder, actionType)
+		return ph.handlePermissionCheckError(ctx, err, failedPath, parentFolder, actionType, remoteDriveID)
 	}
 
 	access := graph.EvaluateWriteAccess(perms, ph.accountEmail)
@@ -153,7 +153,14 @@ func (ph *PermissionHandler) handle403(
 	// Folder is read-only. Walk up to find the highest read-only ancestor.
 	boundary := ph.walkPermissionBoundary(ctx, bl, parentFolder, sc, remoteDriveID)
 
-	return ph.remoteBoundaryDecision(boundary, "folder is read-only (no write access)", http.StatusForbidden, failedPath, actionType)
+	return ph.remoteBoundaryDecision(
+		boundary,
+		"folder is read-only (no write access)",
+		http.StatusForbidden,
+		failedPath,
+		actionType,
+		remoteDriveID,
+	)
 }
 
 // handlePermissionCheckError handles errors from ListItemPermissions during
@@ -166,6 +173,7 @@ func (ph *PermissionHandler) handlePermissionCheckError(
 	failedPath,
 	parentFolder string,
 	actionType synctypes.ActionType,
+	remoteDriveID driveid.ID,
 ) PermissionCheckDecision {
 	if errors.Is(err, graph.ErrNotFound) {
 		ph.logger.Warn("handle403: folder not found, recording as permission denied",
@@ -178,6 +186,7 @@ func (ph *PermissionHandler) handlePermissionCheckError(
 			http.StatusNotFound,
 			failedPath,
 			actionType,
+			remoteDriveID,
 		)
 	}
 
@@ -205,6 +214,7 @@ func (ph *PermissionHandler) remoteBoundaryDecision(
 	httpStatus int,
 	failedPath string,
 	actionType synctypes.ActionType,
+	failureDriveID driveid.ID,
 ) PermissionCheckDecision {
 	scopeKey := synctypes.SKPermRemote(boundary)
 
@@ -213,7 +223,7 @@ func (ph *PermissionHandler) remoteBoundaryDecision(
 		Kind:    permissionCheckActivateDerivedScope,
 		Failure: synctypes.SyncFailureParams{
 			Path:       failedPath,
-			DriveID:    ph.driveID,
+			DriveID:    failureDriveID,
 			Direction:  directionFromAction(actionType),
 			ActionType: actionType,
 			Role:       synctypes.FailureRoleHeld,
