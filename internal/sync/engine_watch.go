@@ -115,6 +115,9 @@ func (e *Engine) RunWatch(ctx context.Context, mode synctypes.SyncMode, opts syn
 	)
 
 	rt := newWatchRuntime(e)
+	if e.watchRuntimeHook != nil {
+		e.watchRuntimeHook(rt)
+	}
 	proof, proofErr := e.proveDriveIdentity(ctx)
 	if proofErr != nil {
 		if isWatchShutdownError(ctx, proofErr) {
@@ -393,12 +396,12 @@ func (rt *watchRuntime) startObservers(
 	if mode != synctypes.SyncUploadOnly {
 		obsWg.Add(1)
 		count++
-		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverStarted, Note: engineDebugObserverRemote})
+		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverStarted, Observer: engineDebugObserverRemote})
 
 		if rt.engine.hasScopedRoot() {
 			go func() {
 				defer obsWg.Done()
-				defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Note: engineDebugObserverRemote})
+				defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
 				errs <- rt.watchScopedRootRemote(ctx, bl, events, rt.engine.resolvePollInterval(opts))
 			}()
 		} else {
@@ -415,7 +418,7 @@ func (rt *watchRuntime) startObservers(
 
 			go func() {
 				defer obsWg.Done()
-				defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Note: engineDebugObserverRemote})
+				defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
 				errs <- remoteObs.Watch(ctx, savedToken, events, rt.engine.resolvePollInterval(opts))
 			}()
 		}
@@ -441,21 +444,21 @@ func (rt *watchRuntime) startObservers(
 
 		obsWg.Add(1)
 		count++
-		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverStarted, Note: engineDebugObserverLocal})
+		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverStarted, Observer: engineDebugObserverLocal})
 
 		go func() {
 			defer obsWg.Done()
-			defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Note: engineDebugObserverLocal})
+			defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverLocal})
 
 			watchErr := localObs.Watch(ctx, rt.engine.syncTree, events)
 			if errors.Is(watchErr, synctypes.ErrWatchLimitExhausted) {
-				rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverFallbackStarted, Note: engineDebugObserverLocal})
+				rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverFallbackStarted, Observer: engineDebugObserverLocal})
 				rt.engine.logger.Warn("inotify watch limit exhausted, falling back to periodic full scan",
 					slog.Duration("poll_interval", rt.engine.resolvePollInterval(opts)),
 				)
 
 				rt.runPeriodicFullScan(ctx, localObs, rt.engine.syncTree, events, rt.engine.resolvePollInterval(opts))
-				rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverFallbackStopped, Note: engineDebugObserverLocal})
+				rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverFallbackStopped, Observer: engineDebugObserverLocal})
 				errs <- nil // clean exit after context cancel
 
 				return

@@ -210,7 +210,8 @@ func TestFullScan_CaseCollision_NoFalseDeletion(t *testing.T) {
 // Platform-aware case collision tests (R-2.12.1)
 // ---------------------------------------------------------------------------
 
-// Validates: R-2.12.1 — on case-insensitive FS (macOS), creating File.txt
+// Validates: R-2.12.1
+// On case-insensitive FS (macOS), creating File.txt
 // and file.txt results in a single file. No collision can occur at the FS
 // level because the OS prevents it. FullScan should not report any collision.
 func TestDetectCaseCollisions_CaseInsensitiveFS(t *testing.T) {
@@ -403,7 +404,8 @@ func TestDetectCaseCollisions_DirectoryNoCollision_ChildrenPass(t *testing.T) {
 // Platform-aware case collision tests (R-2.12.1)
 // ---------------------------------------------------------------------------
 
-// Validates: R-2.12.1 — on case-sensitive FS (Linux), both File.txt and
+// Validates: R-2.12.1
+// On case-sensitive FS (Linux), both File.txt and
 // file.txt can coexist. DetectCaseCollisions removes both from the event
 // set and places them in Skipped.
 func TestDetectCaseCollisions_CaseSensitiveFS(t *testing.T) {
@@ -450,7 +452,8 @@ func TestDetectCaseCollisions_CaseSensitiveFS(t *testing.T) {
 	}
 }
 
-// Validates: R-2.12.1 — defensive test: a child of a colliding directory
+// Validates: R-2.12.1
+// Defensive test: a child of a colliding directory
 // that also participates in a multi-event collision group should appear
 // exactly once in SkippedItems (no duplicate from both the child pass
 // and the group pass).

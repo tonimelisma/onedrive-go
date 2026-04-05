@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/engine*.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/engine_shortcuts.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_decisions.go, sync_helpers.go
 
-Implements: R-2.1 [verified], R-2.3.11 [verified], R-2.8.3 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-2.10.45 [verified], R-2.10.46 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified], R-2.14.5 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [planned], R-6.6.10 [verified], R-6.6.12 [verified], R-6.6.13 [verified], R-6.7.27 [verified], R-6.8.15 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.10 [verified]
+Implements: R-2.1 [verified], R-2.3.11 [verified], R-2.8.3 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-2.10.45 [verified], R-2.10.46 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified], R-2.14.5 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [planned], R-6.6.10 [verified], R-6.6.12 [verified], R-6.6.13 [verified], R-6.7.27 [verified], R-6.8.15 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.10 [verified], R-6.10.13 [verified]
 
 ## Ownership Contract
 
@@ -94,6 +94,14 @@ The engine relies on a few non-negotiable behavioral invariants:
    not-yet-dispatched outbox actions as shutdown, and never admit new work
    afterward. Already-dispatched actions may still finish if workers produce
    results before they exit.
+
+## Verified By
+
+| Behavior | Evidence |
+| --- | --- |
+| Watch bootstrap reaches quiescence before local or remote observers start. | `TestPhase0_RunWatch_BootstrapCompletesBeforeLocalObserverStarts`, `TestPhase0_RunWatch_BootstrapCompletesBeforeRemoteObserverStarts` |
+| Watch shutdown seals admission, stops retry/trial wake handling, and drops reconcile handoff after drain begins. | `TestRunWatch_ShutdownStopsRetryAndTrialTimers`, `TestRunWatch_ShutdownDropsReconcileResult`, `TestRunFullReconciliationAsync_ShutdownAfterCommit` |
+| Cancellation wins over fatal observer-exit shutdown races, and fallback waits honor cancellation without wall-clock sleeps. | `TestRunWatch_ContextCancel`, `TestRunWatch_CancellationWinsOverFinalObserverExit`, `TestRunWatch_FallbackSleepHonorsCancellation` |
 
 ### Runtime Ownership
 

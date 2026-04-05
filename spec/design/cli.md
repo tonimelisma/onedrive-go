@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go
 
-Implements: R-1 [implemented], R-3.1 [verified], R-4.7 [verified], R-4.8.4 [verified], R-1.9 [verified], R-1.2.4 [verified], R-1.2.5 [verified], R-1.3.4 [verified], R-1.3.5 [verified], R-1.4.3 [verified], R-1.5.1 [verified], R-1.6.1 [verified], R-1.6.2 [verified], R-1.7.1 [verified], R-1.8.1 [verified], R-1.9.4 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.3.10 [verified], R-2.3.11 [verified], R-2.3.12 [verified], R-2.7.1 [verified], R-2.8.3 [verified], R-2.10.4 [verified], R-2.10.47 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-3.1.6 [verified], R-3.3.10 [verified], R-3.3.11 [verified], R-3.3.12 [verified], R-3.6.6 [verified], R-3.6.7 [verified], R-6.6.11 [verified], R-6.8.16 [verified], R-6.10.6 [verified]
+Implements: R-1 [implemented], R-3.1 [verified], R-4.7 [verified], R-4.8.4 [verified], R-1.9 [verified], R-1.2.4 [verified], R-1.2.5 [verified], R-1.3.4 [verified], R-1.3.5 [verified], R-1.4.3 [verified], R-1.5.1 [verified], R-1.6.1 [verified], R-1.6.2 [verified], R-1.7.1 [verified], R-1.8.1 [verified], R-1.9.4 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.3.10 [verified], R-2.3.11 [verified], R-2.3.12 [verified], R-2.7.1 [verified], R-2.8.3 [verified], R-2.10.4 [verified], R-2.10.47 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-3.1.6 [verified], R-3.3.10 [verified], R-3.3.11 [verified], R-3.3.12 [verified], R-3.6.6 [verified], R-3.6.7 [verified], R-6.6.11 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
 ## Overview
 
@@ -257,6 +257,14 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
 - The authenticated-success proof recorder logs one attributed scope-repair event per account and proof source (`whoami`, `drive-list`, `drive-search`, `drive-session`) when it clears stale `auth:account` blocks. It does not log every successful request and does not create a persistent audit trail.
 - Checked-in golden tests lock the human and JSON output shapes for `status` and `issues list`. Formatting changes are intentional and use the standard `-update` flow in `internal/cli/golden_test.go`.
 - Extract `multiHandler` from `internal/cli/root.go` to `internal/slogutil/` if logging grows (structured error reporting, log sampling). [planned]
+
+## Verified By
+
+| Behavior | Evidence |
+| --- | --- |
+| First signal cancels watch-mode sync cleanly, while second signal still forces immediate process exit. | `TestRunSyncWatch_FirstSignalCancelsWatchRunner`, `TestShutdownContext_FirstSignalCancels`, `TestShutdownContext_SecondSignalForcesExit` |
+| `status` output stays stable across human and JSON formats. | `TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON` |
+| `issues list` output stays stable across human and JSON formats. | `TestIssuesOutputGoldenText`, `TestIssuesOutputGoldenJSON` |
 
 ## Issues Display
 

@@ -2,7 +2,7 @@
 
 GOVERNS: internal/syncexec/executor.go, internal/syncexec/executor_conflict.go, internal/syncexec/executor_delete.go, internal/syncexec/executor_transfer.go, internal/syncexec/worker.go, internal/syncdispatch/dep_graph.go, internal/syncdispatch/active_scopes.go, internal/syncdispatch/scope.go, internal/syncdispatch/delete_counter.go, internal/localtrash/trash.go, status.go
 
-Implements: R-2.3 [verified], R-2.8.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.4.4 [verified], R-6.4.5 [verified], R-6.4.6 [verified], R-6.5.3 [verified], R-6.7.25 [planned], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.16 [verified], R-2.10.41 [verified], R-2.10.42 [verified], R-2.10.43 [verified], R-2.10.44 [verified], R-2.14.2 [verified], R-6.3.4 [verified], R-6.10.6 [verified]
+Implements: R-2.3 [verified], R-2.8.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.4.4 [verified], R-6.4.5 [verified], R-6.4.6 [verified], R-6.5.3 [verified], R-6.7.25 [planned], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.16 [verified], R-2.10.41 [verified], R-2.10.42 [verified], R-2.10.43 [verified], R-2.10.44 [verified], R-2.14.2 [verified], R-6.3.4 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
 ## Executor (`executor.go`)
 
@@ -149,7 +149,7 @@ single-owner watch loop. Windows are keyed by `ScopeKey` (not string).
 
 Implements: R-2.10.16 [verified], R-6.8.12 [verified]
 
-Flat pool of `transfer_workers` goroutines. Decoupled from dispatch infrastructure: accepts `dispatchCh <-chan *TrackedAction` (actions to execute) and `doneCh <-chan struct{}` (shutdown signal) as constructor parameters instead of holding a reference to the dispatch infrastructure. Workers are pure executors — they execute actions, persist success outcomes, and send `WorkerResult` to the engine. Workers never call `DepGraph.Complete()` — the engine owns all completion decisions.
+Flat pool of `transfer_workers` goroutines. Decoupled from dispatch infrastructure: accepts `dispatchCh <-chan *TrackedAction` (actions to execute) and `completeCh <-chan struct{}` (engine-owned completion signal) as constructor parameters instead of holding a reference to the dispatch infrastructure. Workers are pure executors — they execute actions, persist success outcomes, and send `WorkerResult` to the engine. Workers never call `DepGraph.Complete()` — the engine owns all completion decisions.
 
 `WorkerResult` carries target drive identity (`TargetDriveID`, `ShortcutKey`) from the action, `RetryAfter` from `GraphError`, the full `error` for classification, `ActionID` for DepGraph routing, `IsTrial` and `TrialScopeKey ScopeKey` for scope trial routing. `WorkerResult.DriveID` is the concrete drive the action actually executed against: workers prefer the executor outcome drive, fall back to the planned action drive, and finally use `TargetDriveID` for shortcut-targeted actions whose concrete drive was only resolved at execution time. The engine classifies and routes each result.
 
@@ -169,7 +169,7 @@ ownership rules:
   mode and by `initWatchInfra` in watch mode. Written by one-shot admission
   code or by the single watch loop's outbox flush. Read by worker goroutines
   only. Production code intentionally does not close it; workers exit via
-  `doneCh`/context cancellation. Workers also treat channel close as terminal
+  `completeCh`/context cancellation. Workers also treat channel close as terminal
   so tests and defensive cleanup cannot leak goroutines.
 - **Worker `results` channel**: owned by `WorkerPool`. Created in
   `NewWorkerPool`, written only by workers through `sendResult`, read by
@@ -208,6 +208,14 @@ ownership rules:
   read by the watch loop for issue recording and resolution cleanup. It is not
   closed; shutdown relies on context cancellation and watch-loop exit rather
   than channel completion.
+
+## Verified By
+
+| Behavior | Evidence |
+| --- | --- |
+| Worker results channel closes when dispatch ends or the engine completion signal fires. | `TestWorkerPool_ClosedDispatchChannelClosesResults`, `TestWorkerPool_ClosedCompletionChannelClosesResults`, `TestWorkerPool_ContextCancellationClosesResults` |
+| Worker shutdown is idempotent and result ownership stays with `WorkerPool`. | `TestWorkerPool_StopIsIdempotentAfterResultsClose`, `TestWorkerPool_ResultChannel` |
+| Workers never mutate dependency completion directly; the engine owns `DepGraph.Complete()`. | `TestWorker_NeverCallsComplete`, `TestWorkerPool_DependencyChain` |
 
 ## Action Execution
 

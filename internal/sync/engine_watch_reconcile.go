@@ -69,7 +69,7 @@ func (rt *watchRuntime) handleExternalChanges(ctx context.Context) {
 	}
 
 	rt.clearResolvedPermissionScopes(ctx)
-	rt.mustAssertScopeInvariants(ctx, rt, "handle external changes")
+	rt.mustAssertInvariants(ctx, rt, "handle external changes")
 }
 
 // clearResolvedPermissionScopes checks if any permission scope blocks have had
@@ -381,7 +381,7 @@ func (rt *watchRuntime) runFullReconciliationAsync(ctx context.Context, bl *sync
 	go func() {
 		result := reconcileResult{}
 
-		start := time.Now()
+		start := rt.engine.nowFunc()
 		rt.engine.logger.Info("periodic full reconciliation starting")
 
 		events, deltaToken, err := rt.observeRemoteFull(ctx, bl)
@@ -426,7 +426,7 @@ func (rt *watchRuntime) runFullReconciliationAsync(ctx context.Context, bl *sync
 
 		if len(events) == 0 {
 			rt.engine.logger.Info("periodic full reconciliation complete: no changes",
-				slog.Duration("duration", time.Since(start)),
+				slog.Duration("duration", rt.engine.since(start)),
 			)
 			rt.finishFullReconciliation(ctx, result)
 			return
@@ -438,7 +438,7 @@ func (rt *watchRuntime) runFullReconciliationAsync(ctx context.Context, bl *sync
 
 		rt.engine.logger.Info("periodic full reconciliation complete",
 			slog.Int("events", len(events)),
-			slog.Duration("duration", time.Since(start)),
+			slog.Duration("duration", rt.engine.since(start)),
 		)
 
 		rt.finishFullReconciliation(ctx, result)

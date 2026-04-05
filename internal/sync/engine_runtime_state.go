@@ -123,3 +123,10 @@ func (rt *watchRuntime) resetRetryTimer(next syncTimer) {
 
 	rt.retryTimer = next
 }
+
+func (rt *watchRuntime) hasRetryTimer() bool {
+	rt.timerMu.RLock()
+	defer rt.timerMu.RUnlock()
+
+	return rt.retryTimer != nil
+}

@@ -784,11 +784,13 @@ func TestWatchLoop_ReconcileTick_RunsPeriodicFullReconciliationThroughResultHand
 	reconcileC := make(chan time.Time, 1)
 	done := make(chan error, 1)
 	go func() {
-		done <- runWatchLoopForTest(eng, ctx, &watchPipeline{
-			bl:         bl,
-			safety:     synctypes.DefaultSafetyConfig(),
-			mode:       synctypes.SyncBidirectional,
-			reconcileC: reconcileC,
+		done <- rt.runWatchLoop(ctx, &watchPipeline{
+			runtime:          rt,
+			bl:               bl,
+			safety:           synctypes.DefaultSafetyConfig(),
+			mode:             synctypes.SyncBidirectional,
+			reconcileC:       reconcileC,
+			reconcileResults: rt.reconcileResults,
 		})
 	}()
 

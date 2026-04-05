@@ -140,7 +140,8 @@ func TestHasCaseCollisionCached_EmptyDir(t *testing.T) {
 // Baseline cross-check in hasCaseCollisionCached (R-2.12.2)
 // ---------------------------------------------------------------------------
 
-// Validates: R-2.12.2 — baseline entry with different casing triggers collision.
+// Validates: R-2.12.2
+// Baseline entry with different casing triggers collision.
 func TestHasCaseCollisionCached_BaselineCollision(t *testing.T) {
 	t.Parallel()
 
@@ -157,7 +158,8 @@ func TestHasCaseCollisionCached_BaselineCollision(t *testing.T) {
 	assert.Equal(t, "File.txt", collidingName)
 }
 
-// Validates: R-2.12.2 — baseline entry with same casing is not a collision.
+// Validates: R-2.12.2
+// Baseline entry with same casing is not a collision.
 func TestHasCaseCollisionCached_BaselineExactMatch(t *testing.T) {
 	t.Parallel()
 
@@ -172,7 +174,8 @@ func TestHasCaseCollisionCached_BaselineExactMatch(t *testing.T) {
 	assert.False(t, found, "same casing in baseline should not be a collision")
 }
 
-// Validates: R-2.12.2 — baseline collision is suppressed for recently deleted paths.
+// Validates: R-2.12.2
+// Baseline collision is suppressed for recently deleted paths.
 func TestHasCaseCollisionCached_BaselineSkipsRecentDelete(t *testing.T) {
 	t.Parallel()
 
@@ -192,8 +195,9 @@ func TestHasCaseCollisionCached_BaselineSkipsRecentDelete(t *testing.T) {
 // Watch-mode collision integration tests (R-2.12.2)
 // ---------------------------------------------------------------------------
 
-// Validates: R-2.12.2 — integration test exercising the full watch pipeline:
-// fsnotify Create → handleCreate → hasCaseCollisionCached → event suppressed.
+// Validates: R-2.12.2
+// Integration test exercising the full watch pipeline:
+// fsnotify Create -> handleCreate -> hasCaseCollisionCached -> event suppressed.
 func TestWatch_CaseCollision_EventSuppressed(t *testing.T) {
 	t.Parallel()
 
@@ -234,7 +238,8 @@ func TestWatch_CaseCollision_EventSuppressed(t *testing.T) {
 	<-done
 }
 
-// Validates: R-2.12.2 — case collision check in scanNewDirectory.
+// Validates: R-2.12.2
+// Case collision check in scanNewDirectory.
 func TestScanNewDirectory_CaseCollision_Skipped(t *testing.T) {
 	t.Parallel()
 
@@ -306,7 +311,8 @@ func TestScanNewDirectory_CaseCollision_Skipped(t *testing.T) {
 // Directory collision tests (R-2.12.2)
 // ---------------------------------------------------------------------------
 
-// Validates: R-2.12.2 — directories must also be checked for case collisions.
+// Validates: R-2.12.2
+// Directories must also be checked for case collisions.
 // A directory whose name differs only in case from an existing sibling file
 // should be suppressed in watch mode.
 func TestWatch_DirectoryCollision_Suppressed(t *testing.T) {
@@ -357,7 +363,8 @@ func TestWatch_DirectoryCollision_Suppressed(t *testing.T) {
 	<-done
 }
 
-// Validates: R-2.12.2 — two directories differing only in case should collide.
+// Validates: R-2.12.2
+// Two directories differing only in case should collide.
 func TestWatch_TwoDirectoryCollision_Suppressed(t *testing.T) {
 	t.Parallel()
 
@@ -409,7 +416,8 @@ func TestWatch_TwoDirectoryCollision_Suppressed(t *testing.T) {
 	<-done
 }
 
-// Validates: R-2.12.2 — scanNewDirectory should check subdirectories for collisions.
+// Validates: R-2.12.2
+// scanNewDirectory should check subdirectories for collisions.
 func TestScanNewDirectory_SubdirCollision_Suppressed(t *testing.T) {
 	t.Parallel()
 
@@ -483,7 +491,8 @@ func TestScanNewDirectory_SubdirCollision_Suppressed(t *testing.T) {
 // Delete-resolution tests (R-2.12.2 — collision peer re-emission)
 // ---------------------------------------------------------------------------
 
-// Validates: R-2.12.2 — deleting a collision suppressor re-emits the survivor.
+// Validates: R-2.12.2
+// Deleting a collision suppressor re-emits the survivor.
 func TestWatch_DeleteCollider_ReEmitsSurvivor(t *testing.T) {
 	t.Parallel()
 
@@ -567,7 +576,8 @@ func TestWatch_DeleteCollider_ReEmitsSurvivor(t *testing.T) {
 	<-done
 }
 
-// Validates: R-2.12.2 — with 3 colliders, deleting one re-emits the others
+// Validates: R-2.12.2
+// With 3 colliders, deleting one re-emits the others.
 // but they remain blocked (they still collide with each other).
 func TestWatch_DeleteCollider_ThreeWay_StillBlocked(t *testing.T) {
 	t.Parallel()
@@ -660,7 +670,8 @@ func TestWatch_DeleteCollider_ThreeWay_StillBlocked(t *testing.T) {
 	<-done
 }
 
-// Validates: R-2.12.2 — safety scan clears collision peer tracking.
+// Validates: R-2.12.2
+// Safety scan clears collision peer tracking.
 func TestWatch_SafetyScan_ClearsPeers(t *testing.T) {
 	t.Parallel()
 

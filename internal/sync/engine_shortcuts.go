@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strings"
 	stdsync "sync"
-	"time"
 
 	"golang.org/x/sync/errgroup"
 
@@ -139,7 +138,7 @@ func (coordinator *shortcutCoordinator) registerShortcuts(ctx context.Context, e
 			RemoteItem:   ev.RemoteItemID,
 			LocalPath:    ev.Path,
 			Observation:  synctypes.ObservationUnknown,
-			DiscoveredAt: time.Now().Unix(),
+			DiscoveredAt: eng.nowFunc().Unix(),
 		}
 
 		// Preserve existing values on update.

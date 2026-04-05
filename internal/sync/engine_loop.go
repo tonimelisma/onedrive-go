@@ -163,11 +163,11 @@ func (rt *watchRuntime) runWatchUntilQuiescent(
 
 	for {
 		if ctx.Err() != nil && !rt.isDraining() {
-			rt.beginWatchDrain(p, outbox)
+			rt.beginWatchDrain(ctx, p, outbox)
 			outbox = nil
 		}
 		if rt.isDraining() {
-			done, err := rt.runDrainLoopStep(ctx, p)
+			done, err := rt.runDrainStep(ctx, p)
 			if err != nil {
 				return err
 			}
@@ -177,19 +177,7 @@ func (rt *watchRuntime) runWatchUntilQuiescent(
 			continue
 		}
 
-		if len(outbox) == 0 {
-			nextOutbox, done, err := rt.runBootstrapLoop(ctx, p, logC, emptyCh, outbox)
-			if err != nil {
-				return err
-			}
-			if done {
-				return nil
-			}
-			outbox = nextOutbox
-			continue
-		}
-
-		nextOutbox, done, err := rt.runBootstrapLoop(ctx, p, logC, emptyCh, outbox)
+		nextOutbox, done, err := rt.runBootstrapStep(ctx, p, outbox, logC, emptyCh)
 		if err != nil {
 			return err
 		}
@@ -208,11 +196,11 @@ func (rt *watchRuntime) runWatchLoop(ctx context.Context, p *watchPipeline) erro
 
 	for {
 		if ctx.Err() != nil && !rt.isDraining() {
-			rt.beginWatchDrain(p, outbox)
+			rt.beginWatchDrain(ctx, p, outbox)
 			outbox = nil
 		}
 		if rt.isDraining() {
-			done, err := rt.runDrainLoopStep(ctx, p)
+			done, err := rt.runDrainStep(ctx, p)
 			if err != nil {
 				return err
 			}
@@ -222,19 +210,7 @@ func (rt *watchRuntime) runWatchLoop(ctx context.Context, p *watchPipeline) erro
 			continue
 		}
 
-		if len(outbox) == 0 {
-			nextOutbox, done, err := rt.runWatchLoopIdle(ctx, p)
-			if err != nil {
-				return err
-			}
-			if done {
-				return nil
-			}
-			outbox = nextOutbox
-			continue
-		}
-
-		nextOutbox, done, err := rt.runWatchLoopWithOutbox(ctx, p, outbox)
+		nextOutbox, done, err := rt.runWatchStep(ctx, p, outbox)
 		if err != nil {
 			return err
 		}
@@ -245,44 +221,15 @@ func (rt *watchRuntime) runWatchLoop(ctx context.Context, p *watchPipeline) erro
 	}
 }
 
-func (rt *watchRuntime) runWatchLoopIdle(
-	ctx context.Context,
-	p *watchPipeline,
-) ([]*synctypes.TrackedAction, bool, error) {
-	select {
-	case batch, ok := <-p.batchReady:
-		return rt.handleWatchBatch(ctx, p, nil, batch, ok)
-	case workerResult, ok := <-p.results:
-		return rt.handleWatchWorkerResult(ctx, p, nil, &workerResult, ok)
-	case skipped, ok := <-p.skippedCh:
-		return rt.handleWatchSkipped(ctx, p, nil, skipped, ok)
-	case <-p.recheckC:
-		rt.handleRecheckTick(ctx)
-		return nil, false, nil
-	case <-p.reconcileC:
-		rt.runFullReconciliationAsync(ctx, p.bl)
-		return nil, false, nil
-	case result, ok := <-p.reconcileResults:
-		return rt.handleWatchReconcileResult(p, nil, result, ok)
-	case obsErr, ok := <-p.errs:
-		return rt.handleWatchObserverError(ctx, p, nil, obsErr, ok)
-	case <-rt.trialTimerChan():
-		return rt.runTrialDispatch(ctx, p.bl, p.mode, p.safety), false, nil
-	case <-rt.retryTimerChan():
-		return rt.runRetrierSweep(ctx, p.bl, p.mode, p.safety), false, nil
-	case <-ctx.Done():
-		rt.beginWatchDrain(p, nil)
-		return nil, false, nil
-	}
-}
-
-func (rt *watchRuntime) runWatchLoopWithOutbox(
+func (rt *watchRuntime) runWatchStep(
 	ctx context.Context,
 	p *watchPipeline,
 	outbox []*synctypes.TrackedAction,
 ) ([]*synctypes.TrackedAction, bool, error) {
+	dispatchCh, nextAction := rt.dispatchChannelForOutbox(outbox)
+
 	select {
-	case rt.dispatchCh <- outbox[0]:
+	case dispatchCh <- nextAction:
 		return outbox[1:], false, nil
 	case batch, ok := <-p.batchReady:
 		return rt.handleWatchBatch(ctx, p, outbox, batch, ok)
@@ -305,7 +252,7 @@ func (rt *watchRuntime) runWatchLoopWithOutbox(
 	case <-rt.retryTimerChan():
 		return append(outbox, rt.runRetrierSweep(ctx, p.bl, p.mode, p.safety)...), false, nil
 	case <-ctx.Done():
-		rt.beginWatchDrain(p, outbox)
+		rt.beginWatchDrain(ctx, p, outbox)
 		return nil, false, nil
 	}
 }
@@ -326,26 +273,45 @@ func (rt *watchRuntime) handleObserverExit(p *watchPipeline, shuttingDown bool) 
 }
 
 func (rt *watchRuntime) beginWatchDrain(
+	ctx context.Context,
 	p *watchPipeline,
 	outbox []*synctypes.TrackedAction,
 ) {
 	if rt.enterDraining() {
-		rt.stopRetryTimer()
-		rt.stopTrialTimer()
+		rt.stopDrainTimers()
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventShutdownStarted})
 		rt.engine.logger.Info("graceful shutdown: sealing new work admission",
 			slog.Int("in_flight", rt.depGraph.InFlightCount()),
 		)
 	}
 
-	if len(outbox) > 0 {
-		rt.completeOutboxAsShutdown(outbox)
+	rt.completeDrainOutbox(outbox)
+	rt.disableDrainInputs(p)
+	rt.refreshDrainCompletionSources(p)
+	rt.mustAssertInvariants(ctx, rt, "begin watch drain")
+}
+
+func (rt *watchRuntime) stopDrainTimers() {
+	rt.stopRetryTimer()
+	rt.stopTrialTimer()
+}
+
+func (rt *watchRuntime) completeDrainOutbox(outbox []*synctypes.TrackedAction) {
+	if len(outbox) == 0 {
+		return
 	}
 
+	rt.completeOutboxAsShutdown(outbox)
+}
+
+func (rt *watchRuntime) disableDrainInputs(p *watchPipeline) {
 	p.batchReady = nil
 	p.skippedCh = nil
 	p.recheckC = nil
 	p.reconcileC = nil
+}
+
+func (rt *watchRuntime) refreshDrainCompletionSources(p *watchPipeline) {
 	if !rt.reconcileActive {
 		p.reconcileResults = nil
 	}
@@ -354,11 +320,11 @@ func (rt *watchRuntime) beginWatchDrain(
 	}
 }
 
-func (rt *watchRuntime) runDrainLoopStep(
+func (rt *watchRuntime) runDrainStep(
 	ctx context.Context,
 	p *watchPipeline,
 ) (bool, error) {
-	if p.results == nil && p.reconcileResults == nil && p.activeObs == 0 {
+	if rt.drainLoopDone(p) {
 		return true, nil
 	}
 
@@ -366,10 +332,14 @@ func (rt *watchRuntime) runDrainLoopStep(
 	case workerResult, ok := <-p.results:
 		return rt.handleDrainingWorkerResult(ctx, p, &workerResult, ok)
 	case _, ok := <-p.reconcileResults:
-		return rt.handleDrainingReconcileResult(p, ok)
+		return rt.handleDrainingReconcileResult(ctx, p, ok)
 	case obsErr, ok := <-p.errs:
 		return rt.handleDrainingObserverError(p, obsErr, ok)
 	}
+}
+
+func (rt *watchRuntime) drainLoopDone(p *watchPipeline) bool {
+	return p.results == nil && p.reconcileResults == nil && p.activeObs == 0
 }
 
 func (rt *watchRuntime) logObserverError(obsErr error) {
@@ -382,18 +352,14 @@ func (rt *watchRuntime) logObserverError(obsErr error) {
 	)
 }
 
-func (rt *watchRuntime) runBootstrapLoop(
+func (rt *watchRuntime) runBootstrapStep(
 	ctx context.Context,
 	p *watchPipeline,
+	outbox []*synctypes.TrackedAction,
 	logC <-chan time.Time,
 	emptyCh <-chan struct{},
-	outbox []*synctypes.TrackedAction,
 ) ([]*synctypes.TrackedAction, bool, error) {
-	dispatchCh := rt.dispatchCh
-	nextAction := firstOutbox(outbox)
-	if nextAction == nil {
-		dispatchCh = nil
-	}
+	dispatchCh, nextAction := rt.dispatchChannelForOutbox(outbox)
 
 	select {
 	case dispatchCh <- nextAction:
@@ -412,9 +378,20 @@ func (rt *watchRuntime) runBootstrapLoop(
 	case <-emptyCh:
 		return outbox, true, nil
 	case <-ctx.Done():
-		rt.beginWatchDrain(p, outbox)
+		rt.beginWatchDrain(ctx, p, outbox)
 		return nil, false, nil
 	}
+}
+
+func (rt *watchRuntime) dispatchChannelForOutbox(
+	outbox []*synctypes.TrackedAction,
+) (chan<- *synctypes.TrackedAction, *synctypes.TrackedAction) {
+	nextAction := firstOutbox(outbox)
+	if nextAction == nil || rt.isDraining() {
+		return nil, nil
+	}
+
+	return rt.dispatchCh, nextAction
 }
 
 func (rt *watchRuntime) handleBootstrapBatch(
@@ -491,7 +468,7 @@ func (rt *watchRuntime) handleWatchWorkerResult(
 	if !ok {
 		if rt.isDraining() {
 			p.results = nil
-			return outbox, p.reconcileResults == nil && p.activeObs == 0, nil
+			return outbox, rt.drainLoopDone(p), nil
 		}
 		return outbox, false, fmt.Errorf("sync: worker results channel closed unexpectedly")
 	}
@@ -567,28 +544,31 @@ func (rt *watchRuntime) handleDrainingWorkerResult(
 ) (bool, error) {
 	if !ok {
 		p.results = nil
-		return p.results == nil && p.reconcileResults == nil && p.activeObs == 0, nil
+		return rt.drainLoopDone(p), nil
 	}
 
 	outcome := rt.processWorkerResult(ctx, rt, workerResult, p.bl)
 	rt.completeOutboxAsShutdown(outcome.dispatched)
+	rt.mustAssertInvariants(ctx, rt, "handle draining worker result")
 
 	return false, nil
 }
 
 func (rt *watchRuntime) handleDrainingReconcileResult(
+	ctx context.Context,
 	p *watchPipeline,
 	ok bool,
 ) (bool, error) {
 	if !ok {
 		p.reconcileResults = nil
-		return p.results == nil && p.reconcileResults == nil && p.activeObs == 0, nil
+		return rt.drainLoopDone(p), nil
 	}
 
 	rt.dropReconcileResultOnShutdown()
 	p.reconcileResults = nil
+	rt.mustAssertInvariants(ctx, rt, "handle draining reconcile result")
 
-	return p.results == nil && p.reconcileResults == nil && p.activeObs == 0, nil
+	return rt.drainLoopDone(p), nil
 }
 
 func (rt *watchRuntime) handleDrainingObserverError(
@@ -598,7 +578,7 @@ func (rt *watchRuntime) handleDrainingObserverError(
 ) (bool, error) {
 	if !ok {
 		p.errs = nil
-		return p.results == nil && p.reconcileResults == nil && p.activeObs == 0, nil
+		return rt.drainLoopDone(p), nil
 	}
 
 	rt.logObserverError(obsErr)
@@ -609,7 +589,7 @@ func (rt *watchRuntime) handleDrainingObserverError(
 		p.errs = nil
 	}
 
-	return p.results == nil && p.reconcileResults == nil && p.activeObs == 0, nil
+	return rt.drainLoopDone(p), nil
 }
 
 func firstOutbox(outbox []*synctypes.TrackedAction) *synctypes.TrackedAction {

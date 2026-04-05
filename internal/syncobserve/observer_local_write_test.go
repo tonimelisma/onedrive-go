@@ -552,7 +552,8 @@ func TestHashAndEmit_CaseCollision_Suppressed(t *testing.T) {
 	<-done
 }
 
-// Validates: R-2.12.2 — platform-independent hashAndEmit collision test.
+// Validates: R-2.12.2
+// Platform-independent hashAndEmit collision test.
 // Uses pre-populated dirNameCache instead of relying on filesystem case sensitivity.
 func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 	t.Parallel()

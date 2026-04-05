@@ -214,7 +214,7 @@ func TestClearResolvedLocalIssues(t *testing.T) {
 	assert.Contains(t, paths, "c.txt")
 }
 
-// Validates: D-6 (engine owns failure lifecycle)
+// Store-level characterization: the engine owns failure lifecycle clearing.
 func TestCommitOutcome_UploadSuccess_DoesNotClearSyncFailures(t *testing.T) {
 	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
@@ -269,7 +269,7 @@ func TestCommitOutcome_UploadSuccess_NoIssue_NoError(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// Validates: R-2.10.41, R-2.10.10, D-6
+// Validates: R-2.10.41, R-2.10.10
 func TestCommitOutcome_DownloadSuccess_DoesNotClearSyncFailures(t *testing.T) {
 	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
@@ -312,7 +312,7 @@ func TestCommitOutcome_DownloadSuccess_DoesNotClearSyncFailures(t *testing.T) {
 	assert.Len(t, issues, 1, "sync_failures should survive CommitOutcome")
 }
 
-// Validates: R-2.10.41, D-6
+// Validates: R-2.10.41
 func TestCommitOutcome_Success_DoesNotClearSyncFailures(t *testing.T) {
 	tests := []struct {
 		name         string

@@ -34,8 +34,8 @@ func (rt *watchRuntime) armRetryTimer(ctx context.Context) {
 	}
 
 	rt.engine.emitDebugEvent(engineDebugEvent{
-		Type: engineDebugEventRetryTimerArmed,
-		Note: delay.String(),
+		Type:  engineDebugEventRetryTimerArmed,
+		Delay: delay,
 	})
 	rt.resetRetryTimer(rt.engine.afterFunc(delay, func() {
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetryTimerFired})
@@ -177,7 +177,15 @@ func (f *engineFlow) logFailureSummary() {
 // nowFunc returns the current time from the engine's injectable clock.
 // Always set by NewEngine; tests overwrite with a controllable clock.
 func (e *Engine) nowFunc() time.Time {
+	if e == nil || e.nowFn == nil {
+		return time.Now()
+	}
+
 	return e.nowFn()
+}
+
+func (e *Engine) since(start time.Time) time.Duration {
+	return e.nowFunc().Sub(start)
 }
 
 // resultStats returns the engine-owned counters and error list.
@@ -218,8 +226,8 @@ func (rt *watchRuntime) armTrialTimer() {
 	// fires while a signal is pending, all due scopes are still processed
 	// on the next loop iteration.
 	rt.engine.emitDebugEvent(engineDebugEvent{
-		Type: engineDebugEventTrialTimerArmed,
-		Note: delay.String(),
+		Type:  engineDebugEventTrialTimerArmed,
+		Delay: delay,
 	})
 	rt.resetTrialTimer(rt.engine.afterFunc(delay, func() {
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventTrialTimerFired})

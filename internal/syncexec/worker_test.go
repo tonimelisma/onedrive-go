@@ -94,7 +94,7 @@ func newWorkerTestSetup(t *testing.T) (
 }
 
 // testDepGraphHelper wraps a syncdispatch.DepGraph for worker tests, providing
-// the dispatchCh and doneCh channels that WorkerPool expects. Add sends ready
+// the dispatchCh and completion channel that WorkerPool expects. Add sends ready
 // actions to dispatchCh; drainAndComplete calls dg.Complete and sends newly-ready
 // dependents to dispatchCh.
 type testDepGraphHelper struct {
@@ -171,6 +171,17 @@ func countResults(results []synctypes.WorkerResult) (succeeded, failed int) {
 	return succeeded, failed
 }
 
+func requireResultsChannelClosed(t *testing.T, pool *WorkerPool, reason string) {
+	t.Helper()
+
+	select {
+	case _, ok := <-pool.Results():
+		assert.False(t, ok, reason)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, reason)
+	}
+}
+
 func TestWorkerPool_ClosedDispatchChannelClosesResults(t *testing.T) {
 	t.Parallel()
 
@@ -181,14 +192,61 @@ func TestWorkerPool_ClosedDispatchChannelClosesResults(t *testing.T) {
 
 	pool.Start(t.Context(), 1)
 	close(dispatchCh)
+	requireResultsChannelClosed(t, pool, "results channel should close after workers observe a closed dispatch channel")
+
+	pool.Stop()
+}
+
+func TestWorkerPool_ClosedCompletionChannelClosesResults(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, _ := newWorkerTestSetup(t)
+	dispatchCh := make(chan *synctypes.TrackedAction)
+	completeCh := make(chan struct{})
+	pool := NewWorkerPool(cfg, dispatchCh, completeCh, mgr, synctest.TestLogger(t), 1)
+
+	pool.Start(t.Context(), 1)
+	close(completeCh)
+	requireResultsChannelClosed(t, pool, "results channel should close after workers observe a closed completion channel")
+
+	pool.Stop()
+}
+
+func TestWorkerPool_ContextCancellationClosesResults(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, _ := newWorkerTestSetup(t)
+	dispatchCh := make(chan *synctypes.TrackedAction)
+	completeCh := make(chan struct{})
+	ctx, cancel := context.WithCancel(t.Context())
+	pool := NewWorkerPool(cfg, dispatchCh, completeCh, mgr, synctest.TestLogger(t), 1)
+
+	pool.Start(ctx, 1)
+	cancel()
+	requireResultsChannelClosed(t, pool, "results channel should close after context cancellation")
+
+	pool.Stop()
+}
+
+func TestWorkerPool_StopIsIdempotentAfterResultsClose(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, _ := newWorkerTestSetup(t)
+	dispatchCh := make(chan *synctypes.TrackedAction)
+	completeCh := make(chan struct{})
+	pool := NewWorkerPool(cfg, dispatchCh, completeCh, mgr, synctest.TestLogger(t), 1)
+
+	pool.Start(t.Context(), 1)
+	close(dispatchCh)
 
 	select {
 	case _, ok := <-pool.Results():
-		assert.False(t, ok, "results channel should close after workers observe a closed dispatch channel")
+		assert.False(t, ok, "results channel should close after dispatch channel close")
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "results channel did not close after dispatch channel close")
 	}
 
+	pool.Stop()
 	pool.Stop()
 }
 
