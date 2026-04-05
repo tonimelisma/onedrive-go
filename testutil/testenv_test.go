@@ -46,6 +46,45 @@ func TestLoadDotEnv_MissingFile(t *testing.T) {
 	LoadDotEnv(filepath.Join(t.TempDir(), ".missing"))
 }
 
+func TestLoadTestEnv(t *testing.T) {
+	moduleRoot := t.TempDir()
+	fixturesDir := filepath.Join(moduleRoot, ".testdata")
+	require.NoError(t, os.MkdirAll(fixturesDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, ".env"), []byte("FROM_ENV=env\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(fixturesDir, "fixtures.env"), []byte("FROM_FIXTURE=fixture\n"), 0o600))
+
+	LoadTestEnv(moduleRoot)
+
+	assert.Equal(t, "env", os.Getenv("FROM_ENV"))
+	assert.Equal(t, "fixture", os.Getenv("FROM_FIXTURE"))
+}
+
+func TestLoadTestEnv_Precedence(t *testing.T) {
+	moduleRoot := t.TempDir()
+	fixturesDir := filepath.Join(moduleRoot, ".testdata")
+	require.NoError(t, os.MkdirAll(fixturesDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, ".env"), []byte("PRIORITY=env\nENV_ONLY=env-only\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(fixturesDir, "fixtures.env"), []byte("PRIORITY=fixture\nFIXTURE_ONLY=fixture-only\n"), 0o600))
+	t.Setenv("PRIORITY", "exported")
+	t.Setenv("EXPORTED_ONLY", "exported-only")
+
+	LoadTestEnv(moduleRoot)
+
+	assert.Equal(t, "exported", os.Getenv("PRIORITY"))
+	assert.Equal(t, "env-only", os.Getenv("ENV_ONLY"))
+	assert.Equal(t, "fixture-only", os.Getenv("FIXTURE_ONLY"))
+	assert.Equal(t, "exported-only", os.Getenv("EXPORTED_ONLY"))
+}
+
+func TestLoadTestEnv_MissingFixturesFile(t *testing.T) {
+	moduleRoot := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, ".env"), []byte("FROM_ENV=env\n"), 0o600))
+
+	LoadTestEnv(moduleRoot)
+
+	assert.Equal(t, "env", os.Getenv("FROM_ENV"))
+}
+
 func TestFindModuleRoot(t *testing.T) {
 	moduleRoot := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, "go.mod"), []byte("module example.com/test\n"), 0o600))

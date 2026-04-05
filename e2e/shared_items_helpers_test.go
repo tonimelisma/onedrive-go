@@ -46,9 +46,8 @@ func requireSharedFileLink(t *testing.T) string {
 	t.Helper()
 
 	rawLink := os.Getenv("ONEDRIVE_TEST_SHARED_LINK")
-	if rawLink == "" {
-		t.Skip("set ONEDRIVE_TEST_SHARED_LINK in .env to run shared-file E2E")
-	}
+	require.NotEmpty(t, rawLink,
+		"shared-file fixture missing: set ONEDRIVE_TEST_SHARED_LINK in exported env, root .env, or .testdata/fixtures.env")
 
 	return rawLink
 }
