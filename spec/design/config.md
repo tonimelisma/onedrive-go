@@ -74,7 +74,7 @@ text intact. Email reconciliation uses this instead of re-encoding TOML.
 
 Implements: R-3.4.1 [verified], R-3.4.3 [verified], R-6.2.9 [verified]
 
-Each drive section contains per-drive settings (sync_dir, filter overrides, paused state). `buildResolvedDrive` starts from global defaults and then applies per-drive overrides for filter and sync behavior fields, so drives can share sane defaults without forcing identical filter policy. Drive resolution (`ResolveDrive`) matches by exact canonical ID → exact display_name (case-insensitive) → substring. Ambiguous matches produce an error with suggestions. `ResolveDrive()` returns both `*ResolvedDrive` and `*Config` — the raw config is needed by shared drive token resolution.
+Each drive section contains per-drive settings (`sync_dir`, filter overrides, paused state). `buildResolvedDrive` starts from global defaults and then applies per-drive overrides for filter and sync behavior fields, so drives can share sane defaults without forcing identical filter policy. When a drive section omits `sync_dir`, `buildResolvedDrive` computes the deterministic default local path for that canonical ID before command-specific validation runs. Drive resolution (`ResolveDrive`) matches by exact canonical ID → exact display_name (case-insensitive) → substring. Ambiguous matches produce an error with suggestions. `ResolveDrive()` returns both `*ResolvedDrive` and `*Config` — the raw config is needed by shared drive token resolution.
 
 `skip_dotfiles`, `skip_dirs`, `skip_files`, and `skip_symlinks` are live local-observation controls. The sync engine threads their resolved values into the local observer so full scans, watch mode, and retry/trial single-path reconstruction all apply the same exclusions. `skip_symlinks` defaults to `false`, matching `abraunegg/onedrive`: symlink targets are followed unless the user explicitly opts out. `sync_paths` and `ignore_marker` remain planned and still warn when configured.
 
@@ -164,7 +164,7 @@ step into the shared failure model: fatal read/parse errors map to `fatal`,
 successful loads with warnings map to `actionable`, and clean loads map to
 `success`.
 
-**Sync-specific validation** (`ValidateResolvedForSync`): enforces sync_dir is set, absolute, and not a regular file. Non-existent paths are allowed because sync creates them on first run; other stat failures are fatal. Called only by the `sync` command — file operations don't require sync_dir.
+**Sync-specific validation** (`ValidateResolvedForSync`): enforces that the resolved `sync_dir` is set, absolute, and not a regular file. That validation happens after `buildResolvedDrive` has already applied either the explicit per-drive `sync_dir` or the deterministic runtime default for drives that omit it. Non-existent paths are allowed because sync creates them on first run; other stat failures are fatal. Called only by the `sync` command — file operations do not require an explicit `sync_dir` in config.
 
 ## Config Holder
 

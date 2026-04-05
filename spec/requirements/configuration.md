@@ -64,16 +64,18 @@ The system shall resolve settings with a four-layer override chain: defaults →
   (filters, safety thresholds, timing) shall be fully validated before sync
   starts. [verified]
 
-## R-4.9 Config Schema [planned]
+## R-4.9 Config Schema [implemented]
 
 - R-4.9.1: All global settings shall be optional with documented defaults. No
   global settings are required for any command to function. [verified]
 - R-4.9.2: For file operation commands, a drive section header
   (`["type:email"]`) must exist in config. No fields inside the section are
   required. [verified]
-- R-4.9.3: For the `sync` command, each drive section must contain `sync_dir`
-  set to a valid local path. This is the only required per-drive config field.
-  All other per-drive fields (filters, poll_interval, paused) are optional with
+- R-4.9.3: For the `sync` command, each resolved drive must have an effective
+  `sync_dir` before sync starts. An explicit per-drive `sync_dir` is optional:
+  when omitted, configuration resolution shall derive the deterministic default
+  local path for that drive before sync-specific validation runs. All other
+  per-drive fields (filters, poll_interval, paused) are optional with
   documented defaults. [verified]
 - R-4.9.4: The config design doc shall contain a complete field reference:
   every global and per-drive field, its type, default value, valid range, and

@@ -309,7 +309,7 @@ This is the operating dashboard for completeness, not a verdict of quality. A pa
 | W5 | done | done | done | partial | done | done | partial | done | upload-session traceability gap is closed; remaining W5 risk is broader worker-pool and future planned-transfer coverage |
 | W6 | done | done | partial | partial | done | done | partial | done | current actionable W6 top-ups are closed; only broader planned graph-quirk capture and future auth/runtime evidence remain |
 | W7 | done | done | done | partial | done | done | partial | done | business-account live `drive search` proof is still blocked by missing business test credentials; current personal/logout/list/shared live proof is closed |
-| W8 | done | done | partial | n/a | done | no | no | no | validation-tier coverage may be over-claimed |
+| W8 | done | done | done | n/a | done | done | partial | done | current actionable W8 validation-tier top-ups are closed; only planned `R-4.9.4` field-reference work remains |
 | W9 | done | done | done | partial | done | done | partial | done | current actionable W9 top-ups are closed; only planned external-org shared-drive limitations remain |
 
 Legend:
@@ -974,6 +974,7 @@ Key W5 gap notes:
   - New caller-level `shared` tests now prove auth-required projection in both text and JSON for an unconfigured account with invalid saved login, including the `--account` filtered JSON path.
   - The live logout pass also exposed a second real caller-boundary bug: `whoami` correctly surfaced preserved orphaned profiles after plain logout, but `drive list` only projected `accounts_requiring_auth` for configured drives and silently dropped the same account. The fix makes `drive list` project auth-required accounts from the whole shared account catalog, so preserved post-logout profiles stay visible until re-login.
   - New fast E2E coverage now proves the live path end-to-end: plain logout removes the token/config section while preserving the offline account catalog that still appears in `whoami` and `drive list`, and `shared --json` on the current recipient account now returns live shared items instead of an empty list.
+  - Live E2E hygiene needed hardening too: suite startup now scrubs root items whose names match the known ephemeral E2E prefixes (`e2e-`, `onedrive-go-e2e`) on the configured personal test drives before the battery runs. Old cleanup was best-effort `t.Cleanup` that silently ignored delete failures, so aborted or interrupted runs could leave remote cruft behind and inflate later watch/bootstrap timing. Per-test remote cleanup now reports delete failures instead of swallowing them.
   - `drive search` text output was also slightly misleading when every matching business account required auth and no actual sites could be searched: it printed an empty "SharePoint sites matching ..." section. The text path now keeps the auth-required section and follows it with an explicit no-results message for searchable accounts only.
   - Remaining blocked lane: live `drive search` proof still needs a real business test account in `.env`/CI (`ONEDRIVE_TEST_DRIVE` or `ONEDRIVE_TEST_DRIVE_2` set to a `business:` canonical ID and included in `ONEDRIVE_ALLOWED_TEST_ACCOUNTS`) with searchable SharePoint content.
 
@@ -1026,12 +1027,15 @@ Key W5 gap notes:
   - sync validation accepts an invalid `sync_dir`
   - token resolution ignores an explicit override and falls back to stale state
 - Audit status:
-  - ideal model drafted
+  - body audit complete
+  - `R-4.8.1`, `R-4.8.2`, and `R-4.8.3` were under-tagged rather than under-tested; the strict unknown-key, value-validation, and sync-dir overlap coverage was already strong in `internal/config/{unknown,validate,validate_drive}_test.go`
+  - `R-4.8.5` and `R-4.9.2` now have direct proof through `ResolveDrive`: a bare drive-section header resolves cleanly for data-command callers without requiring an explicit `sync_dir`
+  - the body audit found spec drift in `R-4.9.3`, not a production bug: raw per-drive `sync_dir` is optional because `buildResolvedDrive` computes a deterministic runtime default before `ValidateResolvedForSync` runs. The requirements/design docs now describe that resolved-drive contract explicitly.
 - Claim mapping snapshot from filenames and `// Validates:` only:
   - Candidate test surface is rich across `internal/config/{load,write,validate,paths,env,holder,drive,token_resolution}_test.go` and related package tests
-  - Explicit comment claims already exist for `R-4.1.1`, `R-4.1.2`, `R-4.1.3`, `R-4.2.1`, `R-4.2.2`, `R-4.3`, `R-4.4.1`, `R-4.4.2`, `R-4.8.4`, `R-4.8.6`, `R-3.4.1`, `R-3.4.3`, and `R-6.2.9`
-  - No explicit claim surfaced yet for `R-4.8.1`, `R-4.8.2`, `R-4.8.3`, `R-4.9.2`, or `R-4.9.3`
-  - This may partly be a traceability gap rather than a test gap, but the body audit should confirm whether validation-tier coverage is as complete as the design doc claims
+  - Explicit comment claims now exist for `R-4.1.1`, `R-4.1.2`, `R-4.1.3`, `R-4.2.1`, `R-4.2.2`, `R-4.3`, `R-4.4.1`, `R-4.4.2`, `R-4.8.1`, `R-4.8.2`, `R-4.8.3`, `R-4.8.4`, `R-4.8.5`, `R-4.8.6`, `R-4.9.2`, `R-4.9.3`, `R-3.4.1`, `R-3.4.3`, and `R-6.2.9`
+  - `internal/config/load_test.go` now directly proves the command-tier split the design doc claims: the public `ResolveDrive` path accepts a bare drive section, derives the effective default sync directory, and still passes sync-specific validation once that resolved value exists
+  - Remaining W8 debt is documentation only: `R-4.9.4` field-reference completeness is still planned, but the earlier “validation-tier coverage may be over-claimed” note is now closed
 
 ### W9. Drive Identity And Shared-Drive Discovery Semantics
 
@@ -1101,9 +1105,9 @@ Key W5 gap notes:
 
 ## Next Moves
 
-1. Revisit W8 validation-tier coverage once W9 is reconciled:
-   - confirm the design doc is not over-claiming token/config validation tiers
-   - close any remaining traceability-only gaps in config/token resolution
+1. W3 is now the next highest-value audit pass:
+   - body-audit the still-underexplained big-delete and cross-drive proof paths
+   - turn the current W3 dashboard row from suspicion into either direct proof or concrete bugs
 2. When business-account credentials become available, add the blocked live W7 `drive search` proof:
    - set `ONEDRIVE_TEST_DRIVE` or `ONEDRIVE_TEST_DRIVE_2` to a `business:` canonical ID
    - include it in `ONEDRIVE_ALLOWED_TEST_ACCOUNTS`
