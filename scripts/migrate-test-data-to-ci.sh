@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Upload test data to Azure Key Vault for CI.
 # Uploads: token files (pure OAuth), account profiles, drive metadata,
-# config.toml, and fixtures.env
+# config.toml, and fixtures.env. fixtures.env is the durable carrier for live
+# shared-item fixtures such as ONEDRIVE_TEST_SHARED_LINK,
+# ONEDRIVE_TEST_WRITABLE_SHARED_FOLDER, and
+# ONEDRIVE_TEST_READONLY_SHARED_FOLDER.
 #
 # Usage: ./scripts/migrate-test-data-to-ci.sh
 #

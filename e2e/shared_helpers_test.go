@@ -9,26 +9,39 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// requireDrive2Shared skips shared-account tests when the second drive is not
-// configured in the live E2E environment.
-func requireDrive2Shared(t *testing.T) {
-	t.Helper()
-
-	if drive2 == "" {
-		t.Skip("ONEDRIVE_TEST_DRIVE_2 not set — skipping shared-account test")
-	}
-}
 
 func recipientEmailFromDriveID(t *testing.T, driveID string) string {
 	t.Helper()
 
-	parts := strings.SplitN(driveID, ":", 2)
-	require.Len(t, parts, 2)
+	email, err := recipientEmailFromCanonicalDriveID(driveID)
+	require.NoError(t, err)
 
-	return parts[1]
+	return email
+}
+
+func recipientEmailFromCanonicalDriveID(driveID string) (string, error) {
+	parts := strings.SplitN(driveID, ":", 2)
+	if len(parts) != 2 || parts[1] == "" {
+		return "", fmt.Errorf("parse recipient email from drive ID %q", driveID)
+	}
+
+	return parts[1], nil
+}
+
+func configuredDriveIDForRecipient(t *testing.T, recipientEmail string) string {
+	t.Helper()
+
+	driveID, ok := liveConfig.DriveIDForEmail(recipientEmail)
+	require.Truef(t, ok,
+		"shared fixture recipient %q does not match any configured drive (%v)",
+		recipientEmail,
+		liveConfig.CandidateDriveIDs(),
+	)
+
+	return driveID
 }
 
 // writeSyncConfigForDriveID creates a per-test config pointing to the given
@@ -59,10 +72,20 @@ sync_dir = %q
 	return cfgPath, env
 }
 
-// writeSyncConfigForDrive2 creates a per-test config pointing to drive2.
-// Shared-folder tests still use the historical second-drive recipient fixture.
-func writeSyncConfigForDrive2(t *testing.T, syncDir string) (string, map[string]string) {
+func assertSyncLeavesLocalTreeStableForDrive(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	driveID string,
+	root string,
+	args ...string,
+) string {
 	t.Helper()
 
-	return writeSyncConfigForDriveID(t, drive2, syncDir)
+	before := snapshotLocalTree(t, root)
+	_, stderr := runCLIWithConfigForDrive(t, cfgPath, env, driveID, args...)
+	after := snapshotLocalTree(t, root)
+	assert.Equal(t, before, after, "sync should not mutate the test-owned local tree")
+
+	return stderr
 }

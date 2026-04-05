@@ -35,7 +35,10 @@ const (
 func TestMain(m *testing.M) {
 	// Fallback to "../.." — internal/graph/ is two levels below module root.
 	root := testutil.FindModuleRoot("../..")
-	testutil.LoadTestEnv(root)
+	if _, err := testutil.LoadLiveTestConfig(root); err != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: %v\n", err)
+		os.Exit(1)
+	}
 	testutil.ValidateAllowlist(driveEnvVar)
 
 	cleanup := setupIntegrationIsolation()

@@ -23,24 +23,25 @@ var (
 	drive      string
 	drive2     string // optional second drive for multi-drive E2E tests
 	logDir     string
+	liveConfig testutil.LiveTestConfig
 )
 
 func TestMain(m *testing.M) {
 	// Load live-test env files and validate safety guards before anything else.
 	root := findModuleRoot()
-	testutil.LoadTestEnv(root)
-
-	drive = os.Getenv("ONEDRIVE_TEST_DRIVE")
-	if drive == "" {
-		fmt.Fprintln(os.Stderr, "FATAL: ONEDRIVE_TEST_DRIVE not set (check .env or env vars)")
+	cfg, err := testutil.LoadLiveTestConfig(root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: %v\n", err)
 		os.Exit(1)
 	}
+	liveConfig = cfg
+	drive = cfg.PrimaryDrive
+	drive2 = cfg.SecondaryDrive
 
 	testutil.ValidateAllowlist("ONEDRIVE_TEST_DRIVE")
 
 	// Optional second drive for multi-drive E2E tests. Validated against
 	// allowlist when set; multi-drive tests skip gracefully when empty.
-	drive2 = os.Getenv("ONEDRIVE_TEST_DRIVE_2")
 	if drive2 != "" {
 		testutil.ValidateAllowlist("ONEDRIVE_TEST_DRIVE_2")
 		fmt.Fprintf(os.Stderr, "E2E multi-drive: drive2=%s\n", drive2)

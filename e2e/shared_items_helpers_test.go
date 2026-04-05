@@ -3,14 +3,20 @@
 package e2e
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/sharedref"
+	"github.com/tonimelisma/onedrive-go/testutil"
 )
 
 type sharedItemE2E struct {
@@ -40,21 +46,45 @@ type driveListE2EOutput struct {
 		CanonicalID string `json:"canonical_id"`
 		SyncDir     string `json:"sync_dir"`
 	} `json:"configured"`
+	Available []struct {
+		CanonicalID string `json:"canonical_id"`
+	} `json:"available"`
 }
 
 type resolvedSharedFileFixture struct {
 	RecipientDriveID string
 	RecipientEmail   string
-	ConfigPath       string
-	Env              map[string]string
 	RawStat          sharedStatE2EOutput
 	FileItem         sharedItemE2E
 }
 
+type resolvedSharedFolderFixture struct {
+	RecipientDriveID string
+	RecipientEmail   string
+	FolderItem       sharedItemE2E
+}
+
+type sharedFileFixtureCacheEntry struct {
+	once    sync.Once
+	fixture resolvedSharedFileFixture
+	err     error
+}
+
+type sharedFolderFixtureCacheEntry struct {
+	once    sync.Once
+	fixture resolvedSharedFolderFixture
+	err     error
+}
+
+var (
+	sharedFileFixtureCache   sync.Map
+	sharedFolderFixtureCache sync.Map
+)
+
 func requireSharedFileLink(t *testing.T) string {
 	t.Helper()
 
-	rawLink := os.Getenv("ONEDRIVE_TEST_SHARED_LINK")
+	rawLink := liveConfig.Fixtures.SharedFileLink
 	require.NotEmpty(t, rawLink,
 		"shared-file fixture missing: set ONEDRIVE_TEST_SHARED_LINK in exported env, root .env, or .testdata/fixtures.env")
 
@@ -64,17 +94,37 @@ func requireSharedFileLink(t *testing.T) string {
 func resolveSharedFileFixture(t *testing.T, rawLink string) resolvedSharedFileFixture {
 	t.Helper()
 
+	entryValue, _ := sharedFileFixtureCache.LoadOrStore(rawLink, &sharedFileFixtureCacheEntry{})
+	entry := entryValue.(*sharedFileFixtureCacheEntry)
+	entry.once.Do(func() {
+		entry.fixture, entry.err = discoverSharedFileFixture(t, rawLink)
+	})
+
+	require.NoError(t, entry.err)
+
+	return entry.fixture
+}
+
+func discoverSharedFileFixture(_ *testing.T, rawLink string) (resolvedSharedFileFixture, error) {
 	candidateDriveIDs := sharedFixtureCandidateDriveIDs()
-	require.NotEmpty(t, candidateDriveIDs,
-		"shared-file fixture requires at least one configured drive candidate")
+	if len(candidateDriveIDs) == 0 {
+		return resolvedSharedFileFixture{}, fmt.Errorf("shared-file fixture requires at least one configured drive candidate")
+	}
 
 	var matches []resolvedSharedFileFixture
 	for _, candidateDriveID := range candidateDriveIDs {
-		cfgPath, env := writeSyncConfigForDriveID(t, candidateDriveID, t.TempDir())
-		recipientEmail := recipientEmailFromDriveID(t, candidateDriveID)
+		cfgPath, env, cleanup, err := writeFixtureConfigForDriveID(candidateDriveID)
+		if err != nil {
+			return resolvedSharedFileFixture{}, err
+		}
+		defer cleanup()
 
-		stdout, stderr, err := runCLICore(
-			t,
+		recipientEmail, err := recipientEmailFromCanonicalDriveID(candidateDriveID)
+		if err != nil {
+			return resolvedSharedFileFixture{}, err
+		}
+
+		stdout, stderr, err := runCLICoreRaw(
 			cfgPath,
 			env,
 			"",
@@ -85,15 +135,23 @@ func resolveSharedFileFixture(t *testing.T, rawLink string) resolvedSharedFileFi
 			rawLink,
 		)
 		if err != nil {
-			t.Logf("shared-file fixture candidate %s rejected raw link: %s", candidateDriveID, strings.TrimSpace(stderr))
+			_ = stderr
 			continue
 		}
 
 		var rawStat sharedStatE2EOutput
-		require.NoErrorf(t, json.Unmarshal([]byte(stdout), &rawStat),
-			"parsing raw shared-link stat output for candidate %s", candidateDriveID)
+		if err := json.Unmarshal([]byte(stdout), &rawStat); err != nil {
+			return resolvedSharedFileFixture{}, fmt.Errorf(
+				"parse raw shared-link stat output for candidate %s: %w",
+				candidateDriveID,
+				err,
+			)
+		}
 
-		listing := sharedListForRecipient(t, cfgPath, env, recipientEmail)
+		listing, err := sharedListForRecipientRaw(cfgPath, env, recipientEmail)
+		if err != nil {
+			return resolvedSharedFileFixture{}, err
+		}
 		for i := range listing.Items {
 			if listing.Items[i].RemoteDriveID != rawStat.RemoteDriveID ||
 				listing.Items[i].RemoteItemID != rawStat.RemoteItemID ||
@@ -104,8 +162,6 @@ func resolveSharedFileFixture(t *testing.T, rawLink string) resolvedSharedFileFi
 			matches = append(matches, resolvedSharedFileFixture{
 				RecipientDriveID: candidateDriveID,
 				RecipientEmail:   recipientEmail,
-				ConfigPath:       cfgPath,
-				Env:              env,
 				RawStat:          rawStat,
 				FileItem:         listing.Items[i],
 			})
@@ -113,29 +169,222 @@ func resolveSharedFileFixture(t *testing.T, rawLink string) resolvedSharedFileFi
 		}
 	}
 
-	require.Lenf(t, matches, 1,
-		"shared-file fixture should resolve to exactly one configured recipient account")
+	if len(matches) != 1 {
+		return resolvedSharedFileFixture{}, fmt.Errorf(
+			"shared-file fixture should resolve to exactly one configured recipient account, got %d matches",
+			len(matches),
+		)
+	}
 
-	return matches[0]
+	return matches[0], nil
+}
+
+func resolveSharedFolderFixture(t *testing.T, selector string) resolvedSharedFolderFixture {
+	t.Helper()
+
+	require.NotEmpty(t, selector,
+		"shared-folder fixture missing: store the selector in exported env, root .env, or .testdata/fixtures.env")
+
+	entryValue, _ := sharedFolderFixtureCache.LoadOrStore(selector, &sharedFolderFixtureCacheEntry{})
+	entry := entryValue.(*sharedFolderFixtureCacheEntry)
+	entry.once.Do(func() {
+		entry.fixture, entry.err = discoverSharedFolderFixture(t, selector)
+	})
+
+	require.NoError(t, entry.err)
+
+	return entry.fixture
+}
+
+func discoverSharedFolderFixture(_ *testing.T, selector string) (resolvedSharedFolderFixture, error) {
+	ref, err := sharedref.Parse(selector)
+	if err != nil {
+		return resolvedSharedFolderFixture{}, fmt.Errorf("parse shared-folder selector: %w", err)
+	}
+
+	recipientDriveID, ok := liveConfig.DriveIDForEmail(ref.AccountEmail)
+	if !ok {
+		return resolvedSharedFolderFixture{}, fmt.Errorf(
+			"shared fixture recipient %q does not match any configured drive (%v)",
+			ref.AccountEmail,
+			liveConfig.CandidateDriveIDs(),
+		)
+	}
+
+	cfgPath, env, cleanup, err := writeFixtureConfigForDriveID(recipientDriveID)
+	if err != nil {
+		return resolvedSharedFolderFixture{}, err
+	}
+	defer cleanup()
+
+	listing, err := sharedListForRecipientRaw(cfgPath, env, ref.AccountEmail)
+	if err != nil {
+		return resolvedSharedFolderFixture{}, err
+	}
+
+	var item sharedItemE2E
+	for i := range listing.Items {
+		if listing.Items[i].RemoteDriveID == ref.RemoteDriveID &&
+			listing.Items[i].RemoteItemID == ref.RemoteItemID &&
+			listing.Items[i].Type == "folder" {
+			item = listing.Items[i]
+			break
+		}
+	}
+	if item.Selector == "" {
+		return resolvedSharedFolderFixture{}, fmt.Errorf(
+			"shared-folder fixture %q not found in shared listing for %s",
+			selector,
+			ref.AccountEmail,
+		)
+	}
+
+	return resolvedSharedFolderFixture{
+		RecipientDriveID: recipientDriveID,
+		RecipientEmail:   ref.AccountEmail,
+		FolderItem:       item,
+	}, nil
 }
 
 func sharedFixtureCandidateDriveIDs() []string {
-	candidates := make([]string, 0, 2)
-	seen := map[string]struct{}{}
+	return liveConfig.CandidateDriveIDs()
+}
 
-	for _, candidate := range []string{drive, drive2} {
-		if candidate == "" {
-			continue
-		}
-		if _, exists := seen[candidate]; exists {
-			continue
-		}
-
-		seen[candidate] = struct{}{}
-		candidates = append(candidates, candidate)
+func writeFixtureConfigForDriveID(driveID string) (string, map[string]string, func(), error) {
+	perTestData, err := os.MkdirTemp("", "onedrive-shared-fixture-data-*")
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("create fixture XDG data dir: %w", err)
 	}
 
-	return candidates
+	perTestHome, err := os.MkdirTemp("", "onedrive-shared-fixture-home-*")
+	if err != nil {
+		_ = os.RemoveAll(perTestData)
+		return "", nil, nil, fmt.Errorf("create fixture HOME dir: %w", err)
+	}
+
+	cfgDir, err := os.MkdirTemp("", "onedrive-shared-fixture-config-*")
+	if err != nil {
+		_ = os.RemoveAll(perTestData)
+		_ = os.RemoveAll(perTestHome)
+		return "", nil, nil, fmt.Errorf("create fixture config dir: %w", err)
+	}
+
+	cleanup := func() {
+		_ = os.RemoveAll(perTestData)
+		_ = os.RemoveAll(perTestHome)
+		_ = os.RemoveAll(cfgDir)
+	}
+
+	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
+	if err := os.MkdirAll(perTestDataDir, 0o700); err != nil {
+		cleanup()
+		return "", nil, nil, fmt.Errorf("create fixture app data dir: %w", err)
+	}
+
+	if err := copyFixtureFile(
+		filepath.Join(testDataDir, testutil.TokenFileName(driveID)),
+		filepath.Join(perTestDataDir, testutil.TokenFileName(driveID)),
+		0o600,
+	); err != nil {
+		cleanup()
+		return "", nil, nil, err
+	}
+
+	if err := copyFixtureMetadataFiles(testDataDir, perTestDataDir); err != nil {
+		cleanup()
+		return "", nil, nil, err
+	}
+
+	content := fmt.Sprintf(`["%s"]
+sync_dir = %q
+`, driveID, filepath.Join(perTestHome, "sync"))
+
+	cfgPath := filepath.Join(cfgDir, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte(content), 0o600); err != nil {
+		cleanup()
+		return "", nil, nil, fmt.Errorf("write fixture config: %w", err)
+	}
+
+	env := map[string]string{
+		"XDG_DATA_HOME": perTestData,
+		"HOME":          perTestHome,
+	}
+
+	return cfgPath, env, cleanup, nil
+}
+
+func copyFixtureMetadataFiles(srcDir, dstDir string) error {
+	for _, prefix := range []string{"account_", "drive_"} {
+		matches, err := filepath.Glob(filepath.Join(srcDir, prefix+"*.json"))
+		if err != nil {
+			return fmt.Errorf("glob fixture metadata for %s: %w", prefix, err)
+		}
+
+		for _, match := range matches {
+			if err := copyFixtureFile(match, filepath.Join(dstDir, filepath.Base(match)), 0o600); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func copyFixtureFile(src, dst string, perm os.FileMode) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("read fixture file %s: %w", src, err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return fmt.Errorf("mkdir fixture destination for %s: %w", dst, err)
+	}
+
+	if err := os.WriteFile(dst, data, perm); err != nil {
+		return fmt.Errorf("write fixture file %s: %w", dst, err)
+	}
+
+	return nil
+}
+
+func runCLICoreRaw(cfgPath string, env map[string]string, driveID string, args ...string) (string, string, error) {
+	var fullArgs []string
+	if cfgPath != "" {
+		fullArgs = append(fullArgs, "--config", cfgPath)
+	}
+
+	if driveID != "" {
+		fullArgs = append(fullArgs, "--drive", driveID)
+	}
+
+	if shouldAddDebug(args) {
+		fullArgs = append(fullArgs, "--debug")
+	}
+
+	fullArgs = append(fullArgs, args...)
+	cmd := makeCmd(fullArgs, env)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+
+	return stdout.String(), stderr.String(), err
+}
+
+func sharedListForRecipientRaw(cfgPath string, env map[string]string, recipientEmail string) (sharedListE2EOutput, error) {
+	stdout, stderr, err := runCLICoreRaw(cfgPath, env, "", "--account", recipientEmail, "shared", "--json")
+	if err != nil {
+		return sharedListE2EOutput{}, fmt.Errorf("shared --json for %s: %w (%s)", recipientEmail, err, strings.TrimSpace(stderr))
+	}
+
+	var parsed sharedListE2EOutput
+	if err := json.Unmarshal([]byte(stdout), &parsed); err != nil {
+		return sharedListE2EOutput{}, fmt.Errorf("parse shared --json for %s: %w", recipientEmail, err)
+	}
+
+	return parsed, nil
 }
 
 func expandHomePath(path string, env map[string]string) string {
@@ -247,18 +496,5 @@ func findSharedItemByRemoteIDs(t *testing.T, items []sharedItemE2E, driveID, ite
 	}
 
 	require.Failf(t, "shared item not found", "drive=%s item=%s type=%s", driveID, itemID, itemType)
-	return sharedItemE2E{}
-}
-
-func findSharedItemByNameAndType(t *testing.T, items []sharedItemE2E, name, itemType string) sharedItemE2E {
-	t.Helper()
-
-	for i := range items {
-		if items[i].Name == name && items[i].Type == itemType {
-			return items[i]
-		}
-	}
-
-	require.Failf(t, "shared item not found", "name=%s type=%s", name, itemType)
 	return sharedItemE2E{}
 }

@@ -85,6 +85,116 @@ func TestLoadTestEnv_MissingFixturesFile(t *testing.T) {
 	assert.Equal(t, "env", os.Getenv("FROM_ENV"))
 }
 
+func TestLoadLiveTestConfig(t *testing.T) {
+	for _, key := range []string{
+		"ONEDRIVE_TEST_DRIVE",
+		"ONEDRIVE_TEST_DRIVE_2",
+		"ONEDRIVE_TEST_SHARED_LINK",
+		"ONEDRIVE_TEST_WRITABLE_SHARED_FOLDER",
+		"ONEDRIVE_TEST_READONLY_SHARED_FOLDER",
+	} {
+		t.Setenv(key, "")
+	}
+
+	moduleRoot := t.TempDir()
+	fixturesDir := filepath.Join(moduleRoot, ".testdata")
+	require.NoError(t, os.MkdirAll(fixturesDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, ".env"), []byte(
+		"ONEDRIVE_TEST_DRIVE=personal:primary@example.com\n"+
+			"ONEDRIVE_TEST_DRIVE_2=personal:secondary@example.com\n",
+	), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(fixturesDir, "fixtures.env"), []byte(strings.Join([]string{
+		"ONEDRIVE_TEST_SHARED_LINK=https://1drv.ms/example",
+		"ONEDRIVE_TEST_WRITABLE_SHARED_FOLDER=shared:secondary@example.com:drive123:item123",
+		"ONEDRIVE_TEST_READONLY_SHARED_FOLDER=shared:primary@example.com:drive456:item456",
+	}, "\n")+"\n"), 0o600))
+
+	cfg, err := LoadLiveTestConfig(moduleRoot)
+	require.NoError(t, err)
+
+	assert.Equal(t, "personal:primary@example.com", cfg.PrimaryDrive)
+	assert.Equal(t, "personal:secondary@example.com", cfg.SecondaryDrive)
+	assert.Equal(t, "https://1drv.ms/example", cfg.Fixtures.SharedFileLink)
+	assert.Equal(t, "shared:secondary@example.com:drive123:item123", cfg.Fixtures.WritableSharedFolderSelector)
+	assert.Equal(t, "shared:primary@example.com:drive456:item456", cfg.Fixtures.ReadOnlySharedFolderSelector)
+}
+
+func TestLoadLiveTestConfig_Precedence(t *testing.T) {
+	for _, key := range []string{
+		"ONEDRIVE_TEST_DRIVE",
+		"ONEDRIVE_TEST_DRIVE_2",
+		"ONEDRIVE_TEST_SHARED_LINK",
+		"ONEDRIVE_TEST_WRITABLE_SHARED_FOLDER",
+		"ONEDRIVE_TEST_READONLY_SHARED_FOLDER",
+	} {
+		t.Setenv(key, "")
+	}
+
+	moduleRoot := t.TempDir()
+	fixturesDir := filepath.Join(moduleRoot, ".testdata")
+	require.NoError(t, os.MkdirAll(fixturesDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, ".env"), []byte(
+		"ONEDRIVE_TEST_DRIVE=personal:env@example.com\n"+
+			"ONEDRIVE_TEST_SHARED_LINK=https://1drv.ms/env\n",
+	), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(fixturesDir, "fixtures.env"), []byte(
+		"ONEDRIVE_TEST_DRIVE=personal:fixture@example.com\n"+
+			"ONEDRIVE_TEST_SHARED_LINK=https://1drv.ms/fixture\n",
+	), 0o600))
+	t.Setenv("ONEDRIVE_TEST_DRIVE", "personal:exported@example.com")
+
+	cfg, err := LoadLiveTestConfig(moduleRoot)
+	require.NoError(t, err)
+
+	assert.Equal(t, "personal:exported@example.com", cfg.PrimaryDrive)
+	assert.Equal(t, "https://1drv.ms/env", cfg.Fixtures.SharedFileLink)
+}
+
+func TestLoadLiveTestConfig_InvalidSharedSelector(t *testing.T) {
+	for _, key := range []string{
+		"ONEDRIVE_TEST_DRIVE",
+		"ONEDRIVE_TEST_DRIVE_2",
+		"ONEDRIVE_TEST_SHARED_LINK",
+		"ONEDRIVE_TEST_WRITABLE_SHARED_FOLDER",
+		"ONEDRIVE_TEST_READONLY_SHARED_FOLDER",
+	} {
+		t.Setenv(key, "")
+	}
+
+	moduleRoot := t.TempDir()
+	fixturesDir := filepath.Join(moduleRoot, ".testdata")
+	require.NoError(t, os.MkdirAll(fixturesDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, ".env"), []byte(
+		"ONEDRIVE_TEST_DRIVE=personal:primary@example.com\n",
+	), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(fixturesDir, "fixtures.env"), []byte(
+		"ONEDRIVE_TEST_READONLY_SHARED_FOLDER=not-a-selector\n",
+	), 0o600))
+
+	_, err := LoadLiveTestConfig(moduleRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ONEDRIVE_TEST_READONLY_SHARED_FOLDER")
+}
+
+func TestLiveTestConfig_DriveIDForEmail(t *testing.T) {
+	cfg := LiveTestConfig{
+		PrimaryDrive:   "personal:primary@example.com",
+		SecondaryDrive: "personal:secondary@example.com",
+	}
+
+	assert.Equal(t, []string{
+		"personal:primary@example.com",
+		"personal:secondary@example.com",
+	}, cfg.CandidateDriveIDs())
+
+	driveID, ok := cfg.DriveIDForEmail("secondary@example.com")
+	require.True(t, ok)
+	assert.Equal(t, "personal:secondary@example.com", driveID)
+
+	_, ok = cfg.DriveIDForEmail("missing@example.com")
+	assert.False(t, ok)
+}
+
 func TestFindModuleRoot(t *testing.T) {
 	moduleRoot := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, "go.mod"), []byte("module example.com/test\n"), 0o600))

@@ -151,16 +151,16 @@ func TestE2E_Logout_PreservesOfflineAccountCatalog(t *testing.T) {
 // Validates: R-3.6.6, R-3.6.7
 func TestE2E_Shared_JSON_RecipientListingUsesLiveAccountCatalog(t *testing.T) {
 	t.Parallel()
-	requireDrive2Shared(t)
 	rawLink := requireSharedFileLink(t)
 	registerLogDump(t)
 
 	fixture := resolveSharedFileFixture(t, rawLink)
+	cfgPath, env := writeSyncConfigForDriveID(t, fixture.RecipientDriveID, t.TempDir())
 
 	stdout, _ := pollCLIWithConfigRetryingTransientGraphFailures(
 		t,
-		fixture.ConfigPath,
-		fixture.Env,
+		cfgPath,
+		env,
 		"",
 		transientGraphRetryTimeout,
 		"--account",
