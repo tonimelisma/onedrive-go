@@ -71,6 +71,7 @@ func TestMatchDrive_NoDrives_NonCanonicalSelector_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "login")
 }
 
+// Validates: R-3.5.1
 func TestMatchDrive_ExactCanonicalID(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
@@ -81,6 +82,7 @@ func TestMatchDrive_ExactCanonicalID(t *testing.T) {
 	assert.Equal(t, driveid.MustCanonicalID("personal:toni@outlook.com"), id)
 }
 
+// Validates: R-3.5.1
 func TestMatchDrive_DisplayNameMatch(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive", DisplayName: "home"}
@@ -91,6 +93,7 @@ func TestMatchDrive_DisplayNameMatch(t *testing.T) {
 	assert.Equal(t, driveid.MustCanonicalID("business:alice@contoso.com"), id)
 }
 
+// Validates: R-3.5.1
 func TestMatchDrive_DisplayNameMatch_CaseInsensitive(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive", DisplayName: "My Drive"}
@@ -105,6 +108,7 @@ func TestMatchDrive_DisplayNameMatch_CaseInsensitive(t *testing.T) {
 	assert.Equal(t, driveid.MustCanonicalID("personal:toni@outlook.com"), id2)
 }
 
+// Validates: R-3.5.1
 func TestMatchDrive_PartialMatch(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}
@@ -115,6 +119,7 @@ func TestMatchDrive_PartialMatch(t *testing.T) {
 	assert.Equal(t, driveid.MustCanonicalID("personal:toni@outlook.com"), id)
 }
 
+// Validates: R-3.5.1
 func TestMatchDrive_AmbiguousPartialMatch_Error(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Drives[driveid.MustCanonicalID("personal:user@example.com")] = Drive{SyncDir: "~/OneDrive"}

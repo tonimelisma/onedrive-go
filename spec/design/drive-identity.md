@@ -82,7 +82,7 @@ User-editable. Used in CLI output, `--drive` matching, error messages, and logs.
 
 ## Drive Matching (`--drive`)
 
-Resolution order: exact canonical ID → exact display_name (case-insensitive) → substring on canonical ID, display_name, or owner. Ambiguous match → error with suggestions.
+Resolution order: exact canonical ID → exact display_name (case-insensitive) → substring on canonical ID. Ambiguous match → error with suggestions.
 
 ## CLI Drive Command (`drive.go`)
 
@@ -94,11 +94,19 @@ Shared-folder discovery remains search-first to satisfy `R-3.6.2`, but the
 runtime does not trust a successful `search(q='*')` response by itself. If
 search returns no usable shared-item identities (`remoteDriveID` +
 `remoteItemID`), the CLI falls back to `sharedWithMe` instead of silently
-rendering an empty shared list on recipient personal accounts.
+rendering an empty shared list on recipient personal accounts. Even when
+search returns usable remote references, the CLI still treats owner identity as
+repairable state: it first tries `GET /drives/{driveId}/items/{itemId}` for
+full owner metadata, and if owner email is still missing it does one
+`sharedWithMe` backfill pass before dropping a shared folder from `drive list`
+or emitting incomplete owner fields from `shared`.
 
 ## Design Constraints
 
-- DriveID is cached in token metadata at login — NEVER stored in config. `discoverAccount()` returns the primary drive ID, saved via `tokenfile.LoadAndMergeMeta()`. Both the multi-drive control plane and the single-drive Engine reject zero DriveID.
+- `driveid` stays pure value logic. Runtime drive-ID resolution is config-owned:
+  shared drives recover the source drive ID from the canonical shared selector,
+  while personal/business/SharePoint drives use drive metadata managed by the
+  config layer rather than token-file side metadata.
 - SharePoint document libraries have their OWN drive_id, different from the business account's primary drive. Drive metadata files (`drive_*.json`) store the correct per-drive ID.
 
 ### Rationale

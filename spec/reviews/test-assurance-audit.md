@@ -310,7 +310,7 @@ This is the operating dashboard for completeness, not a verdict of quality. A pa
 | W6 | done | done | partial | partial | done | done | partial | done | current actionable W6 top-ups are closed; only broader planned graph-quirk capture and future auth/runtime evidence remain |
 | W7 | done | done | done | partial | done | done | partial | done | business-account live `drive search` proof is still blocked by missing business test credentials; current personal/logout/list/shared live proof is closed |
 | W8 | done | done | partial | n/a | done | no | no | no | validation-tier coverage may be over-claimed |
-| W9 | done | done | partial | partial | done | no | no | no | shared-drive identity fallback details still need confirmation |
+| W9 | done | done | done | partial | done | done | partial | done | current actionable W9 top-ups are closed; only planned external-org shared-drive limitations remain |
 
 Legend:
 
@@ -1039,9 +1039,9 @@ Key W5 gap notes:
   - `R-3.2`
   - `R-3.3`
   - `R-3.5`
-  - `R-3.6.1`, `R-3.6.2`, `R-3.6.3`
+  - `R-3.6.1`, `R-3.6.2`, `R-3.6.3`, `R-3.6.4`
   - `R-6.7.2`
-  - planned placeholders: `R-3.6.4`, `R-3.6.5`
+  - planned placeholder: `R-3.6.5`
 - Ideal unit coverage:
   - drive ID canonicalization and equality across casing/truncation variants
   - item-key construction and shared-drive identity extraction
@@ -1062,12 +1062,15 @@ Key W5 gap notes:
   - drive selection accepts an ambiguous match
   - shared item display falls back to unstable or opaque identifiers when better identity exists
 - Audit status:
-  - ideal model drafted
+  - body audit complete
+  - `R-3.5.1` ambiguity handling was already directly proven in `internal/config/drive_test.go`, `internal/cli/root_test.go`, and `internal/cli/w7_caller_boundaries_test.go`; the open W9 note was stale traceability debt, not a live selector bug
+  - `R-3.6.4` was partially under-credited and partially under-hardened: search-first discovery and direct `GetItem` enrichment were implemented, but a real gap remained when search returned usable remote IDs while `GetItem` still failed to recover owner identity. In that case `drive list` could drop usable shared folders and `shared` could emit incomplete owner metadata even though `sharedWithMe` still had recoverable identity data. The fix now does one `sharedWithMe` backfill pass only for those missing-identity cases, preserving the search-first contract while closing the owner-identity hole.
 - Claim mapping snapshot from filenames and `// Validates:` only:
   - Candidate test surface includes `internal/driveid/{canonical,id,itemkey,shared,edge}_test.go`, `internal/cli/drive_test.go`, and `e2e/drive_list*_test.go` plus shared-sync e2e coverage
-  - Explicit comment claims already exist for `R-3.2.1` through `R-3.2.4`, `R-3.3.2` through `R-3.3.11`, `R-3.5.1`, `R-3.6.1`, `R-3.6.2`, `R-3.6.3`, and `R-6.7.2`
-  - This currently looks like one of the healthiest traceability areas in the repo from metadata alone
-  - Planned items `R-3.6.4` and `R-3.6.5` should stay parked until implemented
+  - Explicit comment claims now exist for `R-3.2.1` through `R-3.2.4`, `R-3.3.2` through `R-3.3.11`, `R-3.5.1`, `R-3.6.1`, `R-3.6.2`, `R-3.6.3`, `R-3.6.4`, `R-3.6.6`, `R-3.6.7`, and `R-6.7.2`
+  - `internal/config/drive_test.go` now carries direct `R-3.5.1` tags for exact-ID, display-name, partial-substring, and ambiguous-match behavior instead of leaving selector proof implied by package locality
+  - `internal/cli/drive_test.go` and `internal/cli/shared_test.go` now carry direct caller-level proof that shared owner identity is backfilled from `sharedWithMe` when search-first discovery plus `GetItem` cannot recover it
+  - `R-3.6.5` remains the only parked W9 placeholder because the external-organization Graph limitation is still planned
 
 ## Archived Recovery Reconciliation
 
@@ -1099,13 +1102,11 @@ Key W5 gap notes:
 
 ## Next Moves
 
-1. Continue W9 deep reconciliation:
-   - shared-drive identity fallback details
-   - ambiguous selector and enrichment-fallback proof
-2. Revisit W8 validation-tier coverage once W9 is reconciled:
+1. Revisit W8 validation-tier coverage once W9 is reconciled:
    - confirm the design doc is not over-claiming token/config validation tiers
    - close any remaining traceability-only gaps in config/token resolution
-3. When business-account credentials become available, add the blocked live W7 `drive search` proof:
+2. When business-account credentials become available, add the blocked live W7 `drive search` proof:
    - set `ONEDRIVE_TEST_DRIVE` or `ONEDRIVE_TEST_DRIVE_2` to a `business:` canonical ID
    - include it in `ONEDRIVE_ALLOWED_TEST_ACCOUNTS`
    - ensure the account has searchable SharePoint content
+3. If external-organization shared folders become testable, implement and verify `R-3.6.5` with an explicit platform-limitation UX path instead of leaving it as a planned placeholder
