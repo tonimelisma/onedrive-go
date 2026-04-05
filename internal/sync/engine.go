@@ -17,6 +17,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/syncplan"
+	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
@@ -40,6 +41,7 @@ type Engine struct {
 	execCfg            *syncexec.ExecutorConfig
 	fetcher            synctypes.DeltaFetcher
 	socketIOFetcher    synctypes.SocketIOEndpointFetcher
+	itemsClient        synctypes.ItemClient
 	driveVerifier      synctypes.DriveVerifier      // optional (B-074)
 	folderDelta        synctypes.FolderDeltaFetcher // optional: for shortcut observation (6.4b)
 	recursiveLister    synctypes.RecursiveLister    // optional: for shortcut observation (6.4b)
@@ -47,6 +49,7 @@ type Engine struct {
 	syncRoot           string
 	syncTree           *synctree.Root
 	driveID            driveid.ID
+	driveType          string
 	rootItemID         string
 	logger             *slog.Logger
 	sessionStore       *driveops.SessionStore // for CleanStale() housekeeping
@@ -54,6 +57,7 @@ type Engine struct {
 	checkWorkers       int                    // goroutine limit for parallel file hashing
 	localFilter        synctypes.LocalFilterConfig
 	localRules         synctypes.LocalObservationRules
+	syncScopeConfig    syncscope.Config
 	enableWebsocket    bool
 	bigDeleteThreshold int   // from config; 0 means use default
 	minFreeSpace       int64 // startup disk-scope revalidation threshold
@@ -149,6 +153,7 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 		execCfg:            execCfg,
 		fetcher:            cfg.Fetcher,
 		socketIOFetcher:    cfg.SocketIOFetcher,
+		itemsClient:        cfg.Items,
 		driveVerifier:      cfg.DriveVerifier,
 		folderDelta:        cfg.FolderDelta,
 		recursiveLister:    cfg.RecursiveLister,
@@ -156,12 +161,14 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 		syncRoot:           cfg.SyncRoot,
 		syncTree:           syncTree,
 		driveID:            cfg.DriveID,
+		driveType:          cfg.DriveType,
 		rootItemID:         cfg.RootItemID,
 		logger:             cfg.Logger,
 		transferWorkers:    cfg.TransferWorkers,
 		checkWorkers:       cfg.CheckWorkers,
 		localFilter:        cfg.LocalFilter,
 		localRules:         cfg.LocalRules,
+		syncScopeConfig:    cfg.SyncScope,
 		enableWebsocket:    cfg.EnableWebsocket,
 		bigDeleteThreshold: bdThreshold,
 		minFreeSpace:       cfg.MinFreeSpace,

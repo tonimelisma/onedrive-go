@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log/slog"
@@ -21,6 +22,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
 
 // ---------------------------------------------------------------------------
@@ -54,11 +56,12 @@ type engineMockClient struct {
 	listItemPermissionsFn   func(ctx context.Context, driveID driveid.ID, itemID string) ([]graph.Permission, error)
 
 	// synctypes.ItemClient
-	getItemFn      func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
-	listChildrenFn func(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
-	createFolderFn func(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
-	moveItemFn     func(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error)
-	deleteItemFn   func(ctx context.Context, driveID driveid.ID, itemID string) error
+	getItemFn       func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
+	getItemByPathFn func(ctx context.Context, driveID driveid.ID, remotePath string) (*graph.Item, error)
+	listChildrenFn  func(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
+	createFolderFn  func(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
+	moveItemFn      func(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error)
+	deleteItemFn    func(ctx context.Context, driveID driveid.ID, itemID string) error
 
 	// Downloader
 	downloadFn func(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error)
@@ -121,6 +124,14 @@ func (m *engineMockClient) GetItem(ctx context.Context, driveID driveid.ID, item
 	}
 
 	return nil, fmt.Errorf("GetItem not mocked")
+}
+
+func (m *engineMockClient) GetItemByPath(ctx context.Context, driveID driveid.ID, remotePath string) (*graph.Item, error) {
+	if m.getItemByPathFn != nil {
+		return m.getItemByPathFn(ctx, driveID, remotePath)
+	}
+
+	return nil, graph.ErrNotFound
 }
 
 func (m *engineMockClient) ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error) {
@@ -1089,6 +1100,16 @@ func writeLocalFile(t *testing.T, syncRoot, relPath, content string) {
 	absPath := filepath.Join(syncRoot, relPath)
 	require.NoError(t, os.MkdirAll(filepath.Dir(absPath), 0o750), "MkdirAll")
 	require.NoError(t, os.WriteFile(absPath, []byte(content), 0o600), "WriteFile")
+}
+
+func hashContentQuickXor(t *testing.T, content string) string {
+	t.Helper()
+
+	h := quickxorhash.New()
+	_, err := h.Write([]byte(content))
+	require.NoError(t, err, "quickxorhash.Write")
+
+	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
 
 // seedBaseline commits outcomes and an optional delta token to the baseline,

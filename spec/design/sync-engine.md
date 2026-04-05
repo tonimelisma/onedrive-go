@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/engine*.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/engine_shortcuts.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_decisions.go, sync_helpers.go
 
-Implements: R-2.1 [verified], R-2.3.11 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-2.10.45 [verified], R-2.10.46 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified], R-2.14.5 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [planned], R-6.6.10 [verified], R-6.6.12 [verified], R-6.6.13 [verified], R-6.7.27 [verified], R-6.8.15 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.10 [verified], R-6.10.13 [verified]
+Implements: R-2.1 [verified], R-2.3.11 [verified], R-2.4.4 [verified], R-2.4.5 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-2.10.45 [verified], R-2.10.46 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified], R-2.14.5 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [planned], R-6.6.10 [verified], R-6.6.12 [verified], R-6.6.13 [verified], R-6.7.27 [verified], R-6.8.15 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.10 [verified], R-6.10.13 [verified]
 
 ## Ownership Contract
 
@@ -35,9 +35,47 @@ both call that one builder so watch-only dependencies such as
 `SocketIOFetcher`, local observation filters/rules, and drive verification
 cannot silently diverge between entrypoints.
 
-Scoped-root watch sessions do not use Socket.IO in v1. They continue on the
-existing polling path because the repository only has verified Microsoft
-support for drive-root `subscriptions/socketIo`.
+Scoped-root watch sessions and `sync_paths`-scoped primary-drive watch
+sessions do not use Socket.IO in v1. They continue on the existing polling
+path because the repository only has verified Microsoft support for drive-root
+`subscriptions/socketIo`.
+
+### Bidirectional Sync Scope
+
+`sync_paths` and `ignore_marker` are engine-owned sync-scope policy, not
+planner policy and not raw remote-observation filtering. At the start of each
+run or watch bootstrap, the engine asks local observation to build one
+effective scope snapshot from normalized configured paths plus locally
+discovered marker directories. The engine then:
+
+- applies that snapshot to remote observations before they reach the planner
+- persists the snapshot in `sync_metadata`
+- asks the store to mark already-known out-of-scope `remote_state` rows as
+  `filtered`
+- forces full reconciliation when the effective scope has entered new paths in
+  any mode that can observe remote state (`download-only` or bidirectional)
+
+When `sync_paths` is non-empty, primary remote observation no longer starts
+from the whole drive by default. The engine resolves the minimal current set
+of observable remote folder scopes that can cover the selected paths, then:
+
+- uses folder-scoped delta on personal drives
+- falls back to recursive subtree enumeration on business/sharepoint scopes
+- keeps exact-file selection as an engine-side policy by observing the nearest
+  covering folder scope and then reapplying the effective scope snapshot
+- runs targeted re-entry reconciliation for newly-entered paths before normal
+  planning, instead of forcing an unrelated whole-drive resync
+
+Boundary-crossing remote moves are reclassified at the engine boundary: move
+into scope becomes create-on-entry, move out of scope becomes delete-on-exit,
+and move entirely outside scope is dropped from planning while the
+corresponding `remote_state` row stays `filtered`.
+
+Upload-only runs and upload-only watch sessions still rebuild and persist local
+scope truth, but they intentionally defer remote re-entry reconciliation on
+scope expansion until a later mode that is allowed to observe/download remote
+state. This preserves the “do not invent remote truth in upload-only mode”
+authority boundary.
 
 ### Watch Bootstrap
 

@@ -15,6 +15,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/syncplan"
 	"github.com/tonimelisma/onedrive-go/internal/syncrecovery"
+	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -50,7 +51,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 	// Steps 2-4: Observe remote + local, buffer, and flush.
 	// The pending delta token is returned but NOT committed yet — it is
 	// deferred until after the planner approves the changes (step 6).
-	changes, pendingDeltaToken, err := runner.observeChanges(ctx, nil, bl, mode, opts.DryRun, opts.FullReconcile)
+	changes, pendingDeltaTokens, err := runner.observeChanges(ctx, nil, bl, mode, opts.DryRun, opts.FullReconcile)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +87,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 	}
 
 	// Planner approved — commit the deferred delta token now.
-	if err := runner.commitDeferredDeltaToken(ctx, pendingDeltaToken); err != nil {
+	if err := runner.commitDeferredDeltaTokens(ctx, pendingDeltaTokens); err != nil {
 		return nil, err
 	}
 
@@ -342,12 +343,17 @@ func (flow *engineFlow) observeRemote(ctx context.Context, bl *synctypes.Baselin
 // The observer also receives platform-derived naming rules from the engine so
 // SharePoint-specific validation stays aligned across one-shot, watch, and
 // retry/trial observation paths.
-func (flow *engineFlow) observeLocal(ctx context.Context, bl *synctypes.Baseline) (synctypes.ScanResult, error) {
+func (flow *engineFlow) observeLocal(
+	ctx context.Context,
+	bl *synctypes.Baseline,
+	scopeSnapshot syncscope.Snapshot,
+) (synctypes.ScanResult, error) {
 	eng := flow.engine
 
 	obs := syncobserve.NewLocalObserver(bl, eng.logger, eng.checkWorkers)
 	obs.SetFilterConfig(eng.localFilter)
 	obs.SetObservationRules(eng.localRules)
+	obs.SetScopeSnapshot(scopeSnapshot)
 
 	result, err := obs.FullScan(ctx, eng.syncTree)
 	if err != nil {
@@ -374,40 +380,181 @@ func (flow *engineFlow) observeChanges(
 	bl *synctypes.Baseline,
 	mode synctypes.SyncMode,
 	dryRun, fullReconcile bool,
-) ([]synctypes.PathChanges, string, error) {
-	eng := flow.engine
-	var remoteEvents []synctypes.ChangeEvent
-	var pendingDeltaToken string
+) ([]synctypes.PathChanges, []deferredDeltaToken, error) {
+	scopeSnapshot, scopeDiff, fullReconcile, err := flow.prepareObservationScope(ctx, watch, mode, fullReconcile)
+	if err != nil {
+		return nil, nil, err
+	}
 
-	var err error
+	remoteEvents, pendingDeltaTokens, err := flow.observeRemoteChanges(
+		ctx, bl, mode, dryRun, fullReconcile, scopeSnapshot, scopeDiff,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
 
-	if mode != synctypes.SyncUploadOnly {
-		if fullReconcile {
-			eng.logger.Info("full reconciliation: enumerating all remote items")
-			remoteEvents, pendingDeltaToken, err = flow.observeAndCommitRemoteFull(ctx, bl)
-		} else if dryRun {
-			// Dry-run: observe without committing delta token or observations.
-			// A subsequent real sync must see the same remote changes.
-			remoteEvents, _, err = flow.observeRemote(ctx, bl)
-		} else {
-			remoteEvents, pendingDeltaToken, err = flow.observeAndCommitRemote(ctx, bl)
+	remoteEvents, shortcutEvents := flow.observeShortcutChanges(
+		ctx, watch, bl, remoteEvents, scopeSnapshot, dryRun,
+	)
+
+	localResult, err := flow.observeLocalChanges(ctx, watch, bl, mode, scopeSnapshot)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if err := flow.persistObservedScope(ctx, dryRun, scopeSnapshot, scopeDiff, mode); err != nil {
+		return nil, nil, err
+	}
+
+	buf := syncobserve.NewBuffer(flow.engine.logger)
+	buf.AddAll(remoteEvents)
+	buf.AddAll(shortcutEvents)
+	buf.AddAll(localResult.Events)
+
+	return buf.FlushImmediate(), pendingDeltaTokens, nil
+}
+
+func (flow *engineFlow) prepareObservationScope(
+	ctx context.Context,
+	watch *watchRuntime,
+	mode synctypes.SyncMode,
+	fullReconcile bool,
+) (syncscope.Snapshot, syncscope.Diff, bool, error) {
+	scopeSnapshot, err := flow.engine.buildScopeSnapshot(ctx)
+	if err != nil {
+		return syncscope.Snapshot{}, syncscope.Diff{}, false, fmt.Errorf("sync: building scope snapshot: %w", err)
+	}
+	if watch != nil {
+		watch.setScopeSnapshot(scopeSnapshot)
+	}
+
+	previousScope, err := flow.persistedScopeSnapshot(ctx)
+	if err != nil {
+		return syncscope.Snapshot{}, syncscope.Diff{}, false, err
+	}
+
+	scopeDiff := syncscope.DiffSnapshots(previousScope, scopeSnapshot)
+	if scopeDiff.HasEntered() && mode != synctypes.SyncUploadOnly && !fullReconcile && !flow.engine.usesPrimaryPathScopes() {
+		fullReconcile = true
+		flow.engine.logger.Info("scope expansion detected, forcing full reconciliation",
+			slog.Int("entered_paths", len(scopeDiff.EnteredPaths)),
+		)
+	}
+
+	return scopeSnapshot, scopeDiff, fullReconcile, nil
+}
+
+func (flow *engineFlow) observeRemoteChanges(
+	ctx context.Context,
+	bl *synctypes.Baseline,
+	mode synctypes.SyncMode,
+	dryRun bool,
+	fullReconcile bool,
+	scopeSnapshot syncscope.Snapshot,
+	scopeDiff syncscope.Diff,
+) ([]synctypes.ChangeEvent, []deferredDeltaToken, error) {
+	if mode == synctypes.SyncUploadOnly {
+		return nil, nil, nil
+	}
+
+	fetchResult, err := flow.fetchRemoteChanges(ctx, bl, dryRun, fullReconcile)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if scopeDiff.HasEntered() && mode != synctypes.SyncUploadOnly && flow.engine.usesPrimaryPathScopes() {
+		reentryResult, err := flow.reconcilePrimaryScopeEntries(ctx, bl, scopeDiff.EnteredPaths, fetchResult.fullPrefixes)
+		if err != nil {
+			return nil, nil, err
 		}
 
+		fetchResult.events = append(fetchResult.events, reentryResult.events...)
+		fetchResult.deferred = append(fetchResult.deferred, reentryResult.deferred...)
+	}
+
+	scopedRemote := applyRemoteScope(flow.engine.logger, scopeSnapshot, fetchResult.events)
+	if err := flow.commitObservedRemoteChanges(
+		ctx,
+		dryRun,
+		scopedRemote.observed,
+	); err != nil {
+		return nil, nil, err
+	}
+
+	return scopedRemote.emitted, fetchResult.deferred, nil
+}
+
+func (flow *engineFlow) fetchRemoteChanges(
+	ctx context.Context,
+	bl *synctypes.Baseline,
+	dryRun bool,
+	fullReconcile bool,
+) (remoteFetchResult, error) {
+	if flow.engine.usesPrimaryPathScopes() {
+		result, rootFallback, err := flow.observePrimaryScopedRemote(ctx, bl, fullReconcile)
 		if err != nil {
-			return nil, "", err
+			return remoteFetchResult{}, err
+		}
+		if !rootFallback {
+			return result, nil
 		}
 	}
 
-	// Process shortcuts: register new ones, remove deleted ones, observe content.
-	// Global outages suppress all shortcut observation. Target-scoped 429 blocks
-	// suppress only the affected shared targets.
-	var shortcutEvents []synctypes.ChangeEvent
+	if fullReconcile {
+		flow.engine.logger.Info("full reconciliation: enumerating all remote items")
+		events, token, err := flow.observeRemoteFull(ctx, bl)
+		return remoteFetchResult{
+			events:   events,
+			deferred: deferredTokensForPrimary(token, flow.engine, fullReconcile, len(events)),
+		}, err
+	}
 
+	if dryRun {
+		events, _, err := flow.observeRemote(ctx, bl)
+		return remoteFetchResult{events: events}, err
+	}
+
+	events, token, err := flow.observeRemote(ctx, bl)
+	return remoteFetchResult{
+		events:   events,
+		deferred: deferredTokensForPrimary(token, flow.engine, fullReconcile, len(events)),
+	}, err
+}
+
+func (flow *engineFlow) commitObservedRemoteChanges(
+	ctx context.Context,
+	dryRun bool,
+	observed []synctypes.ObservedItem,
+) error {
+	if dryRun {
+		return nil
+	}
+
+	if len(observed) == 0 {
+		return nil
+	}
+
+	if err := flow.commitObservedItems(ctx, observed, ""); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (flow *engineFlow) observeShortcutChanges(
+	ctx context.Context,
+	watch *watchRuntime,
+	bl *synctypes.Baseline,
+	remoteEvents []synctypes.ChangeEvent,
+	scopeSnapshot syncscope.Snapshot,
+	dryRun bool,
+) ([]synctypes.ChangeEvent, []synctypes.ChangeEvent) {
+	shortcutEvents := make([]synctypes.ChangeEvent, 0)
 	if flow.scopeController().isObservationSuppressed(watch) {
-		eng.logger.Debug("suppressing shortcut observation — global scope block active")
+		flow.engine.logger.Debug("suppressing shortcut observation — global scope block active")
 	} else {
 		suppressedShortcutTargets := flow.scopeController().suppressedShortcutTargets(watch)
-		shortcutEvents, err = flow.shortcutCoordinator().processShortcuts(
+		observedShortcutEvents, err := flow.shortcutCoordinator().processShortcuts(
 			ctx,
 			remoteEvents,
 			bl,
@@ -415,45 +562,72 @@ func (flow *engineFlow) observeChanges(
 			suppressedShortcutTargets,
 		)
 		if err != nil {
-			eng.logger.Warn("shortcut processing failed, continuing without shortcut content",
+			flow.engine.logger.Warn("shortcut processing failed, continuing without shortcut content",
 				slog.String("error", err.Error()),
 			)
+		} else {
+			shortcutEvents = observedShortcutEvents
 		}
 	}
 
-	// Filter out synctypes.ChangeShortcut events from primary events — they were consumed
-	// by processShortcuts and should not enter the planner as regular events.
-	remoteEvents = filterOutShortcuts(remoteEvents)
+	filteredRemoteEvents := filterOutShortcuts(remoteEvents)
+	filteredShortcutEvents := applyRemoteScope(flow.engine.logger, scopeSnapshot, shortcutEvents).emitted
 
-	var localResult synctypes.ScanResult
+	return filteredRemoteEvents, filteredShortcutEvents
+}
 
-	if mode != synctypes.SyncDownloadOnly {
-		localResult, err = flow.observeLocal(ctx, bl)
-		if err != nil {
-			return nil, "", err
-		}
-
-		// Record observation-time issues (invalid names, path too long, file too large).
-		flow.recordSkippedItems(ctx, localResult.Skipped)
-		flow.clearResolvedSkippedItems(ctx, localResult.Skipped)
-
-		// R-2.10.10: If the scanner observed paths that were previously blocked
-		// by local permission denials, clear the failures (scanner success = proof
-		// of accessibility).
-		flow.scopeController().applyPermissionRecheckDecisions(
-			ctx,
-			watch,
-			eng.permHandler.clearScannerResolvedPermissions(ctx, pathSetFromEvents(localResult.Events)),
-		)
-		flow.scopeController().clearResolvedRemoteBlockedFailures(ctx, watch, pathSetFromEvents(localResult.Events))
+func (flow *engineFlow) observeLocalChanges(
+	ctx context.Context,
+	watch *watchRuntime,
+	bl *synctypes.Baseline,
+	mode synctypes.SyncMode,
+	scopeSnapshot syncscope.Snapshot,
+) (synctypes.ScanResult, error) {
+	if mode == synctypes.SyncDownloadOnly {
+		return synctypes.ScanResult{}, nil
 	}
 
-	buf := syncobserve.NewBuffer(eng.logger)
-	buf.AddAll(remoteEvents)
-	buf.AddAll(shortcutEvents)
-	buf.AddAll(localResult.Events)
+	localResult, err := flow.observeLocal(ctx, bl, scopeSnapshot)
+	if err != nil {
+		return synctypes.ScanResult{}, err
+	}
 
-	return buf.FlushImmediate(), pendingDeltaToken, nil
+	flow.recordSkippedItems(ctx, localResult.Skipped)
+	flow.clearResolvedSkippedItems(ctx, localResult.Skipped)
+
+	pathSet := pathSetFromEvents(localResult.Events)
+	flow.scopeController().applyPermissionRecheckDecisions(
+		ctx,
+		watch,
+		flow.engine.permHandler.clearScannerResolvedPermissions(ctx, pathSet),
+	)
+	flow.scopeController().clearResolvedRemoteBlockedFailures(ctx, watch, pathSet)
+
+	return localResult, nil
+}
+
+func (flow *engineFlow) persistObservedScope(
+	ctx context.Context,
+	dryRun bool,
+	scopeSnapshot syncscope.Snapshot,
+	scopeDiff syncscope.Diff,
+	mode synctypes.SyncMode,
+) error {
+	if dryRun {
+		return nil
+	}
+
+	if err := flow.engine.baseline.ApplyRemoteScope(ctx, scopeSnapshot); err != nil {
+		return fmt.Errorf("sync: applying remote scope: %w", err)
+	}
+
+	if !scopeDiff.HasEntered() || mode != synctypes.SyncUploadOnly {
+		if err := flow.persistScopeSnapshot(ctx, scopeSnapshot); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // observeAndCommitRemote wraps observeRemote to persist observations
@@ -496,27 +670,19 @@ func (flow *engineFlow) observeAndCommitRemote(ctx context.Context, bl *synctype
 	return events, deltaToken, nil
 }
 
-// commitDeferredDeltaToken advances the delta token after the planner approves
-// the changes. No-op when token is empty (upload-only mode, 0-event delta).
-// If the process crashes between this call and execution, the next sync
-// replays the same delta window — the state machine handles re-observation
-// idempotently (same hash → no-op, same delete → no-op).
-func (flow *engineFlow) commitDeferredDeltaToken(ctx context.Context, token string) error {
-	eng := flow.engine
+// commitDeferredDeltaTokens advances one or more delta tokens after the
+// planner approves the changes. No-op when the slice is empty.
+func (flow *engineFlow) commitDeferredDeltaTokens(ctx context.Context, tokens []deferredDeltaToken) error {
+	for i := range tokens {
+		if tokens[i].token == "" {
+			continue
+		}
 
-	if token == "" {
-		return nil
-	}
-
-	scopeID := ""
-	if eng.hasScopedRoot() {
-		scopeID = eng.rootItemID
-	}
-
-	if err := eng.baseline.CommitDeltaToken(
-		ctx, token, eng.driveID.String(), scopeID, eng.driveID.String(),
-	); err != nil {
-		return fmt.Errorf("sync: committing deferred delta token: %w", err)
+		if err := flow.engine.baseline.CommitDeltaToken(
+			ctx, tokens[i].token, tokens[i].driveID, tokens[i].scopeID, tokens[i].scopeDrive,
+		); err != nil {
+			return fmt.Errorf("sync: committing deferred delta token for scope %q: %w", tokens[i].scopeID, err)
+		}
 	}
 
 	return nil

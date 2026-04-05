@@ -298,6 +298,16 @@ func applyDriveOverrides(resolved *ResolvedDrive, drive *Drive, logger *slog.Log
 		logger.Debug("per-drive override applied", "field", "skip_files", "count", len(drive.SkipFiles))
 	}
 
+	if drive.SyncPaths != nil {
+		resolved.SyncPaths = drive.SyncPaths
+		logger.Debug("per-drive override applied", "field", "sync_paths", "count", len(drive.SyncPaths))
+	}
+
+	if drive.IgnoreMarker != "" {
+		resolved.IgnoreMarker = drive.IgnoreMarker
+		logger.Debug("per-drive override applied", "field", "ignore_marker", "value", drive.IgnoreMarker)
+	}
+
 	if drive.PollInterval != "" {
 		resolved.PollInterval = drive.PollInterval
 		logger.Debug("per-drive override applied", "field", "poll_interval", "value", drive.PollInterval)

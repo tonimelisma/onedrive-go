@@ -6,6 +6,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
 	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -80,6 +81,10 @@ type watchRuntimeState struct {
 }
 
 type watchObservationState struct {
+	// scopeMu guards scopeSnapshot so observer goroutines can read the current
+	// effective scope while the watch loop remains the single writer.
+	scopeMu sync.RWMutex
+
 	// Event buffer — watch-loop retry/trial work injects events via buf.Add().
 	buf *syncobserve.Buffer
 
@@ -89,8 +94,10 @@ type watchObservationState struct {
 	lastDataVersion int64
 
 	// Observer references — set in startObservers, nil'd on shutdown.
-	remoteObs *syncobserve.RemoteObserver
-	localObs  *syncobserve.LocalObserver
+	remoteObs     *syncobserve.RemoteObserver
+	localObs      *syncobserve.LocalObserver
+	scopeSnapshot syncscope.Snapshot
+	scopeChanges  chan syncscope.Change
 
 	// Socket.IO wake source lifecycle, when enabled for full-drive watch.
 	socketIOWakeStop chan struct{}
@@ -151,6 +158,7 @@ type watchRuntimePhase string
 const (
 	watchRuntimePhaseRunning  watchRuntimePhase = "running"
 	watchRuntimePhaseDraining watchRuntimePhase = "draining"
+	scopeChangeChannelBuf                       = 8
 )
 
 func newWatchRuntime(engine *Engine) *watchRuntime {
@@ -168,6 +176,7 @@ func newWatchRuntime(engine *Engine) *watchRuntime {
 			reconcileResults:  make(chan reconcileResult, 1),
 		},
 	}
+	rt.scopeChanges = make(chan syncscope.Change, scopeChangeChannelBuf)
 	rt.watch = rt
 
 	return rt

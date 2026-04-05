@@ -408,6 +408,10 @@ func (o *LocalObserver) addObservedDirWatches(
 
 	if dbRelPath != "." {
 		name := nfcNormalize(filepath.Base(fsPath))
+		if !o.scopeSnapshot.ShouldTraverseDir(dbRelPath) {
+			return nil
+		}
+
 		if shouldObserveWithFilter(name, dbRelPath, observedKindDir, o.filterConfig, o.observationRules) != nil {
 			return nil
 		}
@@ -415,6 +419,10 @@ func (o *LocalObserver) addObservedDirWatches(
 
 	if addErr := o.addObservedWatch(watcher, fsPath, counts); addErr != nil {
 		return addErr
+	}
+
+	if dbRelPath != "." && !o.scopeSnapshot.AllowsPath(dbRelPath) {
+		return nil
 	}
 
 	nextStack, skipChildren, err := o.nextObservedDirStack(
@@ -445,6 +453,10 @@ func (o *LocalObserver) addObservedWatch(
 	addErr := watcher.Add(fsPath)
 	if addErr == nil {
 		counts.watched++
+		if o.watchedDirs == nil {
+			o.watchedDirs = make(map[string]struct{})
+		}
+		o.watchedDirs[filepath.Clean(fsPath)] = struct{}{}
 		return nil
 	}
 
@@ -518,6 +530,10 @@ func (o *LocalObserver) addObservedChildWatch(
 	o.forgetExcludedSymlink(childRelPath)
 
 	if !entry.IsDir() {
+		return nil
+	}
+
+	if !o.scopeSnapshot.ShouldTraverseDir(childRelPath) {
 		return nil
 	}
 

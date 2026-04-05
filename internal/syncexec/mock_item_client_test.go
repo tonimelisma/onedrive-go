@@ -9,11 +9,12 @@ import (
 )
 
 type testMockItemClient struct {
-	createFolderFn func(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
-	moveItemFn     func(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error)
-	deleteItemFn   func(ctx context.Context, driveID driveid.ID, itemID string) error
-	getItemFn      func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
-	listChildrenFn func(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
+	createFolderFn  func(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
+	moveItemFn      func(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error)
+	deleteItemFn    func(ctx context.Context, driveID driveid.ID, itemID string) error
+	getItemFn       func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
+	getItemByPathFn func(ctx context.Context, driveID driveid.ID, remotePath string) (*graph.Item, error)
+	listChildrenFn  func(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
 }
 
 func (m *testMockItemClient) GetItem(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error) {
@@ -22,6 +23,14 @@ func (m *testMockItemClient) GetItem(ctx context.Context, driveID driveid.ID, it
 	}
 
 	return nil, fmt.Errorf("GetItem not mocked")
+}
+
+func (m *testMockItemClient) GetItemByPath(ctx context.Context, driveID driveid.ID, remotePath string) (*graph.Item, error) {
+	if m.getItemByPathFn != nil {
+		return m.getItemByPathFn(ctx, driveID, remotePath)
+	}
+
+	return nil, graph.ErrNotFound
 }
 
 func (m *testMockItemClient) ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error) {

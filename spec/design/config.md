@@ -76,9 +76,23 @@ Implements: R-3.4.1 [verified], R-3.4.3 [verified], R-6.2.9 [verified]
 
 Each drive section contains per-drive settings (`sync_dir`, filter overrides, paused state). `buildResolvedDrive` starts from global defaults and then applies per-drive overrides for filter and sync behavior fields, so drives can share sane defaults without forcing identical filter policy. When a drive section omits `sync_dir`, `buildResolvedDrive` computes the deterministic default local path for that canonical ID before command-specific validation runs. Drive resolution (`ResolveDrive`) matches by exact canonical ID → exact display_name (case-insensitive) → substring. Ambiguous matches produce an error with suggestions. `ResolveDrive()` returns both `*ResolvedDrive` and `*Config` — the raw config is needed by shared drive token resolution.
 
-`skip_dotfiles`, `skip_dirs`, `skip_files`, and `skip_symlinks` are live local-observation controls. The sync engine threads their resolved values into the local observer so full scans, watch mode, and retry/trial single-path reconstruction all apply the same exclusions. `skip_symlinks` defaults to `false`, matching `abraunegg/onedrive`: symlink targets are followed unless the user explicitly opts out. `sync_paths` and `ignore_marker` remain planned and still warn when configured.
+`skip_dotfiles`, `skip_dirs`, `skip_files`, and `skip_symlinks` are live
+local-observation controls. The sync engine threads their resolved values into
+the local observer so full scans, watch mode, and retry/trial single-path
+reconstruction all apply the same exclusions. `skip_symlinks` defaults to
+`false`, matching `abraunegg/onedrive`: symlink targets are followed unless the
+user explicitly opts out.
 
-`websocket` is a live watch-mode control. When `websocket = true`, eligible full-drive watch sessions fetch a OneDrive Socket.IO endpoint and establish an outbound websocket wake source. The wake source does not replace delta: it only interrupts the normal wait so the remote observer runs delta sooner. `poll_interval` remains the fallback poll cadence even when websocket is enabled. Scoped-root watch sessions fall back to polling with a warning because only drive-root Socket.IO behavior is currently verified.
+`sync_paths` and `ignore_marker` are live bidirectional sync-scope controls,
+not local-only scanner filters. `buildResolvedDrive` merges them through the
+same global-default plus per-drive override chain as the other filter fields,
+and `BuildEngineConfig` passes the resolved scope into the engine. Validation
+requires every configured `sync_paths` entry to start with `/`, and
+`ignore_marker` to be non-empty when present. The config layer owns only the
+normalized user intent; runtime marker discovery and persisted effective-scope
+state live in the observation/engine/store layers.
+
+`websocket` is a live watch-mode control. When `websocket = true`, eligible full-drive watch sessions fetch a OneDrive Socket.IO endpoint and establish an outbound websocket wake source. The wake source does not replace delta: it only interrupts the normal wait so the remote observer runs delta sooner. `poll_interval` remains the fallback poll cadence even when websocket is enabled. Scoped-root sessions and `sync_paths`-scoped remote watch sessions fall back to polling with a warning because only drive-root Socket.IO behavior is currently verified.
 
 ### Pause State
 

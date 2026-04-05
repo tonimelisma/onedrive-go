@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -199,6 +200,63 @@ func TestObserveSinglePathWithFilter_SkipSymlinksResolvesSilently(t *testing.T) 
 	assert.True(t, result.Resolved)
 }
 
+// Validates: R-2.4.5
+func TestFullScan_SyncPathsRestrictObservedEntries(t *testing.T) {
+	t.Parallel()
+
+	syncRoot := t.TempDir()
+	writeTestFile(t, syncRoot, "docs/keep.txt", "keep")
+	writeTestFile(t, syncRoot, "docs/drop.txt", "drop")
+	writeTestFile(t, syncRoot, "photos/img.jpg", "img")
+	writeTestFile(t, syncRoot, "root.txt", "root")
+
+	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	snapshot, err := obs.BuildScopeSnapshot(t.Context(), mustOpenSyncTree(t, syncRoot), syncscope.Config{
+		SyncPaths: []string{"/docs/keep.txt", "/photos"},
+	})
+	require.NoError(t, err)
+	obs.SetScopeSnapshot(snapshot)
+
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
+	require.NoError(t, err)
+
+	assert.NotNil(t, findEvent(result.Events, "docs"))
+	assert.NotNil(t, findEvent(result.Events, "docs/keep.txt"))
+	assert.NotNil(t, findEvent(result.Events, "photos"))
+	assert.NotNil(t, findEvent(result.Events, "photos/img.jpg"))
+	assert.Nil(t, findEvent(result.Events, "docs/drop.txt"))
+	assert.Nil(t, findEvent(result.Events, "root.txt"))
+	assert.Empty(t, result.Skipped)
+}
+
+// Validates: R-2.4.4
+func TestFullScan_IgnoreMarkerExcludesMarkedDirectory(t *testing.T) {
+	t.Parallel()
+
+	syncRoot := t.TempDir()
+	writeTestFile(t, syncRoot, "keep.txt", "keep")
+	writeTestFile(t, syncRoot, "blocked/.odignore", "present only")
+	writeTestFile(t, syncRoot, "blocked/secret.txt", "secret")
+	writeTestFile(t, syncRoot, "blocked/nested/deep.txt", "deep")
+
+	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	snapshot, err := obs.BuildScopeSnapshot(t.Context(), mustOpenSyncTree(t, syncRoot), syncscope.Config{
+		IgnoreMarker: ".odignore",
+	})
+	require.NoError(t, err)
+	obs.SetScopeSnapshot(snapshot)
+
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
+	require.NoError(t, err)
+
+	assert.NotNil(t, findEvent(result.Events, "keep.txt"))
+	assert.Nil(t, findEvent(result.Events, "blocked"))
+	assert.Nil(t, findEvent(result.Events, "blocked/.odignore"))
+	assert.Nil(t, findEvent(result.Events, "blocked/secret.txt"))
+	assert.Nil(t, findEvent(result.Events, "blocked/nested/deep.txt"))
+	assert.Empty(t, result.Skipped)
+}
+
 // Validates: R-2.4.1, R-2.4.2
 func TestAddWatchesRecursive_ConfiguredDirectoryFiltersSkipWatchedSubtrees(t *testing.T) {
 	t.Parallel()
@@ -265,6 +323,35 @@ func TestAddWatchesRecursive_SkipSymlinksControlsSymlinkedDirectories(t *testing
 			assert.Equal(t, tc.expectWatched, tracker.addedPaths[filepath.Join(syncRoot, "alias")])
 		})
 	}
+}
+
+// Validates: R-2.4.4
+func TestAddWatchesRecursive_IgnoreMarkerKeepsMarkerDirectoryWatchOnly(t *testing.T) {
+	t.Parallel()
+
+	syncRoot := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "blocked", "nested"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "blocked", ".odignore"), []byte("marker"), 0o600))
+
+	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	snapshot, err := obs.BuildScopeSnapshot(t.Context(), mustOpenSyncTree(t, syncRoot), syncscope.Config{
+		IgnoreMarker: ".odignore",
+	})
+	require.NoError(t, err)
+	obs.SetScopeSnapshot(snapshot)
+
+	tracker := &addTrackingWatcher{
+		events:     make(chan fsnotify.Event, 10),
+		errs:       make(chan error, 10),
+		addedPaths: make(map[string]bool),
+	}
+
+	err = obs.AddWatchesRecursive(context.Background(), tracker, mustOpenSyncTree(t, syncRoot))
+	require.NoError(t, err)
+
+	assert.True(t, tracker.addedPaths[syncRoot], "sync root should still be watched")
+	assert.True(t, tracker.addedPaths[filepath.Join(syncRoot, "blocked")], "marker-bearing directory should stay watched")
+	assert.False(t, tracker.addedPaths[filepath.Join(syncRoot, "blocked", "nested")], "marker descendants must not be watched")
 }
 
 // Validates: R-2.4.3

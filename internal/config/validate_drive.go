@@ -45,6 +45,12 @@ func validateSingleDrive(id driveid.CanonicalID, drive *Drive, syncDirs map[stri
 		}
 	}
 
+	for _, p := range drive.SyncPaths {
+		if !strings.HasPrefix(p, "/") {
+			errs = append(errs, fmt.Errorf("drive %q: sync_paths: path %q must start with /", idStr, p))
+		}
+	}
+
 	errs = append(errs, checkDriveSyncDirUniqueness(idStr, drive, syncDirs)...)
 
 	return errs

@@ -533,7 +533,7 @@ func waitForReconcileDone(t *testing.T, eng *testEngine) {
 
 	select {
 	case result := <-rt.reconcileResults:
-		rt.applyReconcileResult(result)
+		rt.applyReconcileResult(context.Background(), result)
 	case <-time.After(10 * time.Second):
 		require.Fail(t, "reconcile result was not delivered within 10s")
 	}

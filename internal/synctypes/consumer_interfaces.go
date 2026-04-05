@@ -25,6 +25,7 @@ type SocketIOEndpointFetcher interface {
 // ItemClient provides CRUD operations on drive items.
 type ItemClient interface {
 	GetItem(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
+	GetItemByPath(ctx context.Context, driveID driveid.ID, remotePath string) (*graph.Item, error)
 	ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
 	CreateFolder(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
 	MoveItem(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error)

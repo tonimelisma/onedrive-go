@@ -19,6 +19,7 @@ type computeNewStatusCase struct {
 	currentHash   string
 	observedHash  string
 	isDeleted     bool
+	filtered      bool
 	wantStatus    synctypes.SyncStatus
 	wantChanged   bool
 }
@@ -30,7 +31,13 @@ func assertComputeNewStatusCases(t *testing.T, tests []computeNewStatusCase) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			gotStatus, gotChanged := computeNewStatus(tt.currentStatus, tt.currentHash, tt.observedHash, tt.isDeleted)
+			gotStatus, gotChanged := computeNewStatus(
+				tt.currentStatus,
+				tt.currentHash,
+				tt.observedHash,
+				tt.isDeleted,
+				tt.filtered,
+			)
 			assert.Equal(t, tt.wantStatus, gotStatus, "status")
 			assert.Equal(t, tt.wantChanged, gotChanged, "changed")
 		})
@@ -266,6 +273,7 @@ func TestComputeNewStatus_FilteredLifecycle(t *testing.T) {
 			currentStatus: synctypes.SyncStatusFiltered,
 			currentHash:   computeStatusHashA,
 			observedHash:  computeStatusHashA,
+			filtered:      true,
 			wantStatus:    synctypes.SyncStatusFiltered,
 		},
 		{
@@ -273,6 +281,7 @@ func TestComputeNewStatus_FilteredLifecycle(t *testing.T) {
 			currentStatus: synctypes.SyncStatusFiltered,
 			currentHash:   computeStatusHashA,
 			observedHash:  computeStatusHashB,
+			filtered:      true,
 			wantStatus:    synctypes.SyncStatusFiltered,
 			wantChanged:   true,
 		},
@@ -283,6 +292,22 @@ func TestComputeNewStatus_FilteredLifecycle(t *testing.T) {
 			observedHash:  computeStatusHashA,
 			isDeleted:     true,
 			wantStatus:    synctypes.SyncStatusDeleted,
+			wantChanged:   true,
+		},
+		{
+			name:          "filtered row re-entering with same hash -> synced",
+			currentStatus: synctypes.SyncStatusFiltered,
+			currentHash:   computeStatusHashA,
+			observedHash:  computeStatusHashA,
+			wantStatus:    synctypes.SyncStatusSynced,
+			wantChanged:   true,
+		},
+		{
+			name:          "filtered row re-entering with different hash -> pending_download",
+			currentStatus: synctypes.SyncStatusFiltered,
+			currentHash:   computeStatusHashA,
+			observedHash:  computeStatusHashB,
+			wantStatus:    synctypes.SyncStatusPendingDownload,
 			wantChanged:   true,
 		},
 	})

@@ -594,7 +594,7 @@ Key W1 gap notes:
   - synthesize `time.Now()` for malformed remote timestamps and accidentally suppress a real follow-up hash/download decision
 - Audit status:
   - ideal model drafted
-  - note: planned requirements `R-2.4.4`, `R-2.4.5`, `R-6.7.15`, `R-6.7.21` stay out of the current strong/weak audit until implemented
+  - note: remaining planned observation requirements `R-6.7.15` and `R-6.7.21` stay out of the current strong/weak audit until implemented
 - Claim mapping snapshot from filenames and `// Validates:` only:
   - Candidate test surface is strong around observation mechanics: `scanner_test.go`, `observer_remote_test.go`, `buffer_test.go`, `observer_local_*_test.go`, `item_converter_test.go`, and `inotify*_test.go`
   - Explicit comment claims already exist for `R-2.1.2`, `R-2.11.1` through `R-2.11.5`, `R-2.12.1`, `R-2.12.2`, `R-2.13.1`, `R-6.7.1`, `R-6.7.3`, `R-6.7.5`, `R-6.7.20`, and `R-6.7.24`

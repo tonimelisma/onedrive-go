@@ -62,7 +62,8 @@ func newKnownGlobalKeysList() []string {
 func newKnownDriveKeys() map[string]bool {
 	return map[string]bool{
 		"sync_dir": true, "paused": true, "paused_until": true, "display_name": true, "owner": true,
-		"skip_dotfiles": true, "skip_dirs": true, "skip_files": true, "poll_interval": true,
+		"skip_dotfiles": true, "skip_dirs": true, "skip_files": true,
+		"sync_paths": true, "ignore_marker": true, "poll_interval": true,
 	}
 }
 

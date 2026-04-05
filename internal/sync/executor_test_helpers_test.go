@@ -27,11 +27,12 @@ import (
 
 // executorMockItemClient is a test double for synctypes.ItemClient.
 type executorMockItemClient struct {
-	createFolderFn func(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
-	moveItemFn     func(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error)
-	deleteItemFn   func(ctx context.Context, driveID driveid.ID, itemID string) error
-	getItemFn      func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
-	listChildrenFn func(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
+	createFolderFn  func(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
+	moveItemFn      func(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error)
+	deleteItemFn    func(ctx context.Context, driveID driveid.ID, itemID string) error
+	getItemFn       func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
+	getItemByPathFn func(ctx context.Context, driveID driveid.ID, remotePath string) (*graph.Item, error)
+	listChildrenFn  func(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
 }
 
 func (m *executorMockItemClient) GetItem(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error) {
@@ -40,6 +41,14 @@ func (m *executorMockItemClient) GetItem(ctx context.Context, driveID driveid.ID
 	}
 
 	return nil, fmt.Errorf("GetItem not mocked")
+}
+
+func (m *executorMockItemClient) GetItemByPath(ctx context.Context, driveID driveid.ID, remotePath string) (*graph.Item, error) {
+	if m.getItemByPathFn != nil {
+		return m.getItemByPathFn(ctx, driveID, remotePath)
+	}
+
+	return nil, graph.ErrNotFound
 }
 
 func (m *executorMockItemClient) ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error) {

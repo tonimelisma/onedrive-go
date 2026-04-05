@@ -130,7 +130,7 @@ func (m *SyncStore) processObservedItem(ctx context.Context, tx *sql.Tx, item *s
 	}
 
 	// Existing row — compute new status via the state machine.
-	newStatus, changed := computeNewStatus(existing.SyncStatus, existing.Hash, item.Hash, item.IsDeleted)
+	newStatus, changed := computeNewStatus(existing.SyncStatus, existing.Hash, item.Hash, item.IsDeleted, item.Filtered)
 
 	// Track path changes for move detection.
 	pathChanged := item.Path != "" && item.Path != existing.Path
@@ -244,12 +244,17 @@ func (m *SyncStore) GetRemoteStateByPath(
 
 // insertRemoteState inserts a new remote_state row for a newly observed item.
 func (m *SyncStore) insertRemoteState(ctx context.Context, tx *sql.Tx, item *synctypes.ObservedItem, now int64) error {
+	initialStatus := synctypes.SyncStatusPendingDownload
+	if item.Filtered {
+		initialStatus = synctypes.SyncStatusFiltered
+	}
+
 	_, err := tx.ExecContext(ctx, sqlInsertRemoteState,
 		item.DriveID.String(), item.ItemID, item.Path,
 		nullString(item.ParentID), item.ItemType,
 		nullString(item.Hash), nullKnownInt64(item.Size, true), nullOptionalInt64(item.Mtime),
 		nullString(item.ETag),
-		synctypes.SyncStatusPendingDownload, now,
+		initialStatus, now,
 	)
 	if err != nil {
 		return fmt.Errorf("sync: inserting remote_state for %s: %w", item.Path, err)
@@ -290,7 +295,17 @@ func (m *SyncStore) updateRemoteStateFromObs(
 //
 // Implements the 30-cell decision matrix from
 // spec/design/data-model.md (remote_state sync_status state machine).
-func computeNewStatus(currentStatus synctypes.SyncStatus, currentHash, observedHash string, isDeleted bool) (synctypes.SyncStatus, bool) {
+func computeNewStatus(
+	currentStatus synctypes.SyncStatus,
+	currentHash,
+	observedHash string,
+	isDeleted,
+	filtered bool,
+) (synctypes.SyncStatus, bool) {
+	if filtered && !isDeleted {
+		return computeFilteredObservation(currentStatus, currentHash, observedHash)
+	}
+
 	sameHash := currentHash == observedHash
 
 	if isDeleted {
@@ -302,6 +317,18 @@ func computeNewStatus(currentStatus synctypes.SyncStatus, currentHash, observedH
 	}
 
 	return computeDifferentHash(currentStatus)
+}
+
+func computeFilteredObservation(
+	currentStatus synctypes.SyncStatus,
+	currentHash,
+	observedHash string,
+) (synctypes.SyncStatus, bool) {
+	if currentStatus == synctypes.SyncStatusFiltered {
+		return synctypes.SyncStatusFiltered, currentHash != observedHash
+	}
+
+	return synctypes.SyncStatusFiltered, true
 }
 
 // computeDeleted handles the "deleted" column of the decision matrix.
@@ -337,7 +364,7 @@ func computeSameHash(currentStatus synctypes.SyncStatus) (synctypes.SyncStatus, 
 	case synctypes.SyncStatusPendingDelete, synctypes.SyncStatusDeleting, synctypes.SyncStatusDeleteFailed, synctypes.SyncStatusDeleted:
 		return synctypes.SyncStatusPendingDownload, true // restored/recreated
 	case synctypes.SyncStatusFiltered:
-		return synctypes.SyncStatusFiltered, false
+		return synctypes.SyncStatusSynced, true
 	default:
 		return currentStatus, false
 	}
@@ -357,7 +384,7 @@ func computeDifferentHash(currentStatus synctypes.SyncStatus) (synctypes.SyncSta
 	case synctypes.SyncStatusPendingDelete, synctypes.SyncStatusDeleting, synctypes.SyncStatusDeleteFailed, synctypes.SyncStatusDeleted:
 		return synctypes.SyncStatusPendingDownload, true // restored+changed / recreated
 	case synctypes.SyncStatusFiltered:
-		return synctypes.SyncStatusFiltered, true // update hash, stay filtered
+		return synctypes.SyncStatusPendingDownload, true // re-entered scope
 	default:
 		return currentStatus, false
 	}

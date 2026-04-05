@@ -1,0 +1,329 @@
+package sync
+
+import (
+	"context"
+	"io"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/syncscope"
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+)
+
+// Validates: R-2.4.5
+func TestApplyRemoteScope_ClassifiesBoundaryMoves(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	logger := testLogger(t)
+
+	tests := []struct {
+		name             string
+		config           syncscope.Config
+		event            synctypes.ChangeEvent
+		wantObserved     int
+		wantFiltered     bool
+		wantEmittedTypes []synctypes.ChangeType
+		wantEmittedPaths []string
+	}{
+		{
+			name: "move from in-scope to out-of-scope becomes delete on exit",
+			config: syncscope.Config{
+				SyncPaths: []string{"docs"},
+			},
+			event: synctypes.ChangeEvent{
+				Source:   synctypes.SourceRemote,
+				Type:     synctypes.ChangeMove,
+				DriveID:  driveID,
+				ItemID:   "move-1",
+				OldPath:  "docs/keep.txt",
+				Path:     "archive/keep.txt",
+				ItemType: synctypes.ItemTypeFile,
+			},
+			wantObserved:     1,
+			wantFiltered:     true,
+			wantEmittedTypes: []synctypes.ChangeType{synctypes.ChangeDelete},
+			wantEmittedPaths: []string{"docs/keep.txt"},
+		},
+		{
+			name: "move from out-of-scope to in-scope becomes create on entry",
+			config: syncscope.Config{
+				SyncPaths: []string{"docs"},
+			},
+			event: synctypes.ChangeEvent{
+				Source:   synctypes.SourceRemote,
+				Type:     synctypes.ChangeMove,
+				DriveID:  driveID,
+				ItemID:   "move-2",
+				OldPath:  "archive/keep.txt",
+				Path:     "docs/keep.txt",
+				ItemType: synctypes.ItemTypeFile,
+			},
+			wantObserved:     1,
+			wantFiltered:     false,
+			wantEmittedTypes: []synctypes.ChangeType{synctypes.ChangeCreate},
+			wantEmittedPaths: []string{"docs/keep.txt"},
+		},
+		{
+			name: "move entirely outside scope is dropped from planning",
+			config: syncscope.Config{
+				SyncPaths: []string{"docs"},
+			},
+			event: synctypes.ChangeEvent{
+				Source:   synctypes.SourceRemote,
+				Type:     synctypes.ChangeMove,
+				DriveID:  driveID,
+				ItemID:   "move-3",
+				OldPath:  "archive/old.txt",
+				Path:     "archive/new.txt",
+				ItemType: synctypes.ItemTypeFile,
+			},
+			wantObserved:     1,
+			wantFiltered:     true,
+			wantEmittedTypes: []synctypes.ChangeType{},
+			wantEmittedPaths: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			snapshot, err := syncscope.NewSnapshot(tt.config, nil)
+			require.NoError(t, err)
+
+			result := applyRemoteScope(logger, snapshot, []synctypes.ChangeEvent{tt.event})
+			require.Len(t, result.observed, tt.wantObserved)
+			assert.Equal(t, tt.wantFiltered, result.observed[0].Filtered)
+
+			gotTypes := make([]synctypes.ChangeType, 0, len(result.emitted))
+			gotPaths := make([]string, 0, len(result.emitted))
+			for i := range result.emitted {
+				gotTypes = append(gotTypes, result.emitted[i].Type)
+				gotPaths = append(gotPaths, result.emitted[i].Path)
+			}
+
+			assert.Equal(t, tt.wantEmittedTypes, gotTypes)
+			assert.Equal(t, tt.wantEmittedPaths, gotPaths)
+		})
+	}
+}
+
+// Validates: R-2.4.4
+func TestRunOnce_PersistsEffectiveScopeSnapshot(t *testing.T) {
+	t.Parallel()
+
+	eng, syncRoot := newTestEngine(t, &engineMockClient{})
+	eng.syncScopeConfig = syncscope.Config{
+		IgnoreMarker: ".odignore",
+	}
+
+	writeLocalFile(t, syncRoot, "visible.txt", "visible")
+	writeLocalFile(t, syncRoot, "blocked/.odignore", "")
+	writeLocalFile(t, syncRoot, "blocked/secret.txt", "blocked")
+
+	_, err := eng.RunOnce(t.Context(), synctypes.SyncUploadOnly, synctypes.RunOpts{})
+	require.NoError(t, err)
+
+	meta, err := eng.baseline.ReadSyncMetadata(t.Context())
+	require.NoError(t, err)
+
+	raw, ok := meta[syncMetadataScopeSnapshotKey]
+	require.True(t, ok, "scope snapshot should be persisted in sync_metadata")
+
+	persisted, err := syncscope.UnmarshalSnapshot(raw)
+	require.NoError(t, err)
+	assert.True(t, persisted.AllowsPath("visible.txt"))
+	assert.False(t, persisted.AllowsPath("blocked/secret.txt"))
+	assert.True(t, persisted.HasMarkerDir("blocked"))
+}
+
+// Validates: R-2.4.5
+func TestRunOnce_ScopeExpansionReconcilesPreviouslyFilteredRemoteItems(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	var deltaTokens []string
+	var downloaded []string
+	contents := map[string]string{
+		"keep-item": "keep-data",
+		"drop-item": "drop-data",
+	}
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, token string) (*graph.DeltaPage, error) {
+			deltaTokens = append(deltaTokens, token)
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+				{
+					ID:           "keep-item",
+					Name:         "keep.txt",
+					ParentID:     "root",
+					DriveID:      driveID,
+					QuickXorHash: hashContentQuickXor(t, contents["keep-item"]),
+					Size:         int64(len(contents["keep-item"])),
+				},
+				{
+					ID:           "drop-item",
+					Name:         "drop.txt",
+					ParentID:     "root",
+					DriveID:      driveID,
+					QuickXorHash: hashContentQuickXor(t, contents["drop-item"]),
+					Size:         int64(len(contents["drop-item"])),
+				},
+			}, "delta-token-1"), nil
+		},
+		downloadFn: func(_ context.Context, _ driveid.ID, itemID string, w io.Writer) (int64, error) {
+			downloaded = append(downloaded, itemID)
+			n, err := w.Write([]byte(contents[itemID]))
+			return int64(n), err
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	eng.syncScopeConfig = syncscope.Config{
+		SyncPaths: []string{"/keep.txt"},
+	}
+
+	firstReport, err := eng.RunOnce(t.Context(), synctypes.SyncDownloadOnly, synctypes.RunOpts{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, firstReport.Downloads)
+	assert.Equal(t, []string{"keep-item"}, downloaded)
+
+	filteredRow, found, err := eng.baseline.GetRemoteStateByPath(t.Context(), "drop.txt", driveID)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, synctypes.SyncStatusFiltered, filteredRow.SyncStatus)
+
+	downloaded = nil
+	eng.syncScopeConfig = syncscope.Config{}
+
+	secondReport, err := eng.RunOnce(t.Context(), synctypes.SyncDownloadOnly, synctypes.RunOpts{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, secondReport.Downloads)
+	assert.Equal(t, []string{"drop-item"}, downloaded)
+	assert.Equal(t, []string{"", ""}, deltaTokens, "scope expansion should force a full reconciliation instead of replaying the saved delta token")
+
+	reenteredRow, reenteredFound, reenteredErr := eng.baseline.GetRemoteStateByPath(t.Context(), "drop.txt", driveID)
+	require.NoError(t, reenteredErr)
+	require.True(t, reenteredFound)
+	assert.Equal(t, synctypes.SyncStatusSynced, reenteredRow.SyncStatus)
+
+	meta, err := eng.baseline.ReadSyncMetadata(t.Context())
+	require.NoError(t, err)
+
+	persisted, err := syncscope.UnmarshalSnapshot(meta[syncMetadataScopeSnapshotKey])
+	require.NoError(t, err)
+	assert.True(t, persisted.AllowsPath("drop.txt"))
+}
+
+// Validates: R-2.4.5
+func TestFetchRemoteChanges_SyncPathsPersonalUsesFolderScopedDelta(t *testing.T) {
+	t.Parallel()
+
+	const (
+		docsPath      = "Docs"
+		docsToken     = "docs-token"
+		reportRelPath = "Docs/report.txt"
+	)
+
+	var rootDeltaCalls int
+	var scopedDeltaCalls []string
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			rootDeltaCalls++
+			return deltaPageWithItems(nil, "root-token"), nil
+		},
+		getItemByPathFn: func(_ context.Context, _ driveid.ID, remotePath string) (*graph.Item, error) {
+			switch remotePath {
+			case reportRelPath:
+				return &graph.Item{ID: "report-id", Name: "report.txt", ParentID: "docs-id"}, nil
+			case docsPath:
+				return &graph.Item{ID: "docs-id", Name: docsPath, IsFolder: true}, nil
+			default:
+				return nil, graph.ErrNotFound
+			}
+		},
+		folderDeltaFn: func(_ context.Context, _ driveid.ID, folderID, token string) ([]graph.Item, string, error) {
+			scopedDeltaCalls = append(scopedDeltaCalls, folderID+":"+token)
+			return []graph.Item{{
+				ID:       "report-id",
+				Name:     "report.txt",
+				ParentID: "docs-id",
+			}}, docsToken, nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	eng.driveType = driveid.DriveTypePersonal
+	eng.syncScopeConfig = syncscope.Config{
+		SyncPaths: []string{"/Docs/report.txt"},
+	}
+
+	bl, err := eng.baseline.Load(t.Context())
+	require.NoError(t, err)
+
+	result, err := testEngineFlow(t, eng).fetchRemoteChanges(t.Context(), bl, false, false)
+	require.NoError(t, err)
+	require.Len(t, result.events, 1)
+	assert.Equal(t, reportRelPath, result.events[0].Path)
+	assert.Zero(t, rootDeltaCalls)
+	assert.Equal(t, []string{"docs-id:"}, scopedDeltaCalls)
+	require.Len(t, result.deferred, 1)
+	assert.Equal(t, "docs-id", result.deferred[0].scopeID)
+	assert.Equal(t, docsToken, result.deferred[0].token)
+}
+
+// Validates: R-2.4.5
+func TestFetchRemoteChanges_SyncPathsBusinessUsesRecursiveEnumeration(t *testing.T) {
+	t.Parallel()
+
+	const docsPath = "Docs"
+
+	var scopedDeltaCalls int
+	var recursiveCalls []string
+
+	mock := &engineMockClient{
+		getItemByPathFn: func(_ context.Context, _ driveid.ID, remotePath string) (*graph.Item, error) {
+			if remotePath == docsPath {
+				return &graph.Item{ID: "docs-id", Name: docsPath, IsFolder: true}, nil
+			}
+
+			return nil, graph.ErrNotFound
+		},
+		folderDeltaFn: func(_ context.Context, _ driveid.ID, _, _ string) ([]graph.Item, string, error) {
+			scopedDeltaCalls++
+			return nil, "", nil
+		},
+		listChildrenRecursiveFn: func(_ context.Context, _ driveid.ID, folderID string) ([]graph.Item, error) {
+			recursiveCalls = append(recursiveCalls, folderID)
+			return []graph.Item{{
+				ID:       "report-id",
+				Name:     "report.txt",
+				ParentID: "docs-id",
+			}}, nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	eng.driveType = driveid.DriveTypeBusiness
+	eng.syncScopeConfig = syncscope.Config{
+		SyncPaths: []string{"/Docs"},
+	}
+
+	bl, err := eng.baseline.Load(t.Context())
+	require.NoError(t, err)
+
+	result, err := testEngineFlow(t, eng).fetchRemoteChanges(t.Context(), bl, false, false)
+	require.NoError(t, err)
+	require.Len(t, result.events, 1)
+	assert.Equal(t, "Docs/report.txt", result.events[0].Path)
+	assert.Zero(t, scopedDeltaCalls)
+	assert.Equal(t, []string{"docs-id"}, recursiveCalls)
+	assert.Empty(t, result.deferred)
+}

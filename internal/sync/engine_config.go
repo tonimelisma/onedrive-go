@@ -6,6 +6,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -37,6 +38,7 @@ func BuildEngineConfig(
 		SyncRoot:        syncDir,
 		DataDir:         config.DefaultDataDir(),
 		DriveID:         session.DriveID,
+		DriveType:       resolved.CanonicalID.DriveType(),
 		AccountEmail:    resolved.CanonicalID.Email(),
 		RootItemID:      resolved.RootItemID,
 		Fetcher:         session.Meta,
@@ -57,6 +59,10 @@ func BuildEngineConfig(
 		},
 		LocalRules: synctypes.LocalObservationRules{
 			RejectSharePointRootForms: resolved.CanonicalID.IsSharePoint(),
+		},
+		SyncScope: syncscope.Config{
+			SyncPaths:    append([]string(nil), resolved.SyncPaths...),
+			IgnoreMarker: resolved.IgnoreMarker,
 		},
 		UseLocalTrash:      resolved.UseLocalTrash,
 		TransferWorkers:    resolved.TransferWorkers,

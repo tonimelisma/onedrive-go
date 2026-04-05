@@ -2,7 +2,7 @@
 
 GOVERNS: internal/syncobserve/observer_local.go, internal/syncobserve/observer_local_handlers.go, internal/syncobserve/observer_local_collisions.go, internal/syncobserve/observer_remote.go, internal/syncobserve/socketio.go, internal/syncobserve/socketio_conn.go, internal/syncobserve/socketio_protocol.go, internal/syncobserve/item_converter.go, internal/syncobserve/scanner.go, internal/syncobserve/buffer.go, internal/syncobserve/inotify_linux.go, internal/syncobserve/inotify_other.go
 
-Implements: R-2.1.2 [verified], R-2.4 [implemented], R-2.8.5 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.15 [verified], R-6.7.16 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [planned], R-6.7.24 [verified], R-6.7.26 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-2.11 [verified], R-2.11.5 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.3.4 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
+Implements: R-2.1.2 [verified], R-2.4 [verified], R-2.8.5 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.15 [verified], R-6.7.16 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [planned], R-6.7.24 [verified], R-6.7.26 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-2.11 [verified], R-2.11.5 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.3.4 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
 ## Ownership Contract
 
@@ -37,7 +37,14 @@ Key properties:
 - `SocketIOWakeSource` also owns its websocket-lifecycle callback stream (`started`, endpoint fetch/connect failures, connected, refresh requested, connection dropped, notification wake, wake coalesced, stopped). Observation emits these as internal runtime diagnostics only; they are not durable sync state and not user-facing watch truth.
 - **Progress logging**: `FullDelta` emits periodic Info-level progress logs every 30 seconds during enumeration, reporting pages fetched and events accumulated so far. For 100K+ item drives where enumeration can take minutes, this gives operators visibility between the start and completion logs. Time-based rather than page-based to produce evenly-spaced logs regardless of page size or API latency.
 
-**Server-trusted observation**: The remote observer does NOT filter items by name validity or always-excluded patterns. If OneDrive sends an item in a delta response, it exists on OneDrive — filtering it would be silent data loss. Name-based filtering is a local-only concern (upload validation). Only root items and vault descendants are excluded from remote observation.
+**Server-trusted observation**: The remote observer does NOT filter items by
+name validity or always-excluded patterns. If OneDrive sends an item in a
+delta response, it exists on OneDrive — filtering it would be silent data
+loss. Name-based filtering is a local-only concern (upload validation). Only
+root items and vault descendants are excluded at the raw remote-observation
+boundary. Bidirectional sync scope (`sync_paths`, `ignore_marker`) is applied
+after observation as an engine-owned scope policy, not by pretending the
+server never reported the item.
 
 **Malformed remote-item guard**: Remote observation still trusts server-sent names that are odd but valid on OneDrive. What it does not trust is missing identity or unmaterializable deletes. Non-root items with empty `id`, non-deleted items with empty `name`, and delete entries whose path cannot be recovered from the baseline or surviving delta name/parent data are warned and skipped instead of being emitted as empty-ID or empty-path `ChangeEvent`s. That keeps malformed sparse payloads from poisoning buffer/planner state while preserving legitimate deleted-item name recovery from either the baseline or the current delta payload.
 
@@ -84,6 +91,16 @@ Key properties:
 - Dual-path threading: `fsRelPath` (filesystem I/O) and `dbRelPath` (NFC-normalized for baseline lookup). `handleDelete` receives `fsPath` (the original `fsEvent.Name`) directly and passes it to `watcher.Remove()` — never reconstructs the filesystem path from NFC-normalized `dbRelPath` (B-312). On macOS HFS+ where fsnotify delivers NFD-encoded paths, reconstructing with NFC causes `watcher.Remove()` to silently fail and leak watch resources.
 - `skip_symlinks = false` follows symlink targets at the alias path for full scans, watch-mode create/write handling, retry/trial single-path reconstruction, and watch setup. `skip_symlinks = true` excludes them entirely. Followed directory symlinks use a real-path ancestry guard so cycles stop at the alias boundary instead of recursing forever. Excluded symlink aliases stay silent: watch mode remembers skipped alias paths so later remove events and safety scans do not resurrect them as synthetic deletes.
 - inotify watch limit detection on Linux (`inotify_linux.go`)
+- The local observer also owns one effective sync-scope snapshot separate from
+  `LocalFilterConfig`. The snapshot is built from normalized `sync_paths` plus
+  locally discovered marker directories, and it gates full scans, watch setup,
+  watch event admission, and retry/trial single-path reconstruction.
+- Marker files are presence-only and never actionable. The observer watches
+  the marker-bearing directory itself so marker deletion is visible, but it
+  suppresses descendant observation while the marker is present. Marker
+  create/delete/rename rebuilds the snapshot, cancels pending timers under
+  exited roots, adjusts descendant watches, and publishes one scope-change
+  transition back to the engine.
 
 ### Scanner (`scanner.go`)
 
@@ -158,6 +175,11 @@ permission cache in the observation layer.
 Implements: R-6.2.7 [verified]
 
 - Filtering is asymmetric by design: the local observer filters by always-excluded patterns, user-configured `skip_dotfiles` / `skip_dirs` / `skip_files` / `skip_symlinks`, and OneDrive naming rules (upload validation), while the remote observer trusts the server. If OneDrive sends an item in a delta response, it exists remotely — filtering it would cause silent data loss. Remote-only temp files (e.g., uploaded via web UI) are intentionally allowed through to the planner.
+- `ignore_marker` and `sync_paths` are not part of that asymmetric local-only
+  filter set. They define bidirectional sync scope: local observation uses
+  them to decide what stays observable, while the engine/store use the same
+  effective snapshot to filter remote work and to reactivate previously
+  filtered remote rows when scope re-enters.
 - Symlink following is a local-observation semantic choice, not a remote storage primitive. When `skip_symlinks = false`, the observer dereferences the local symlink and emits events at the alias path. Execution still uses contained local write paths for downloads and durable state paths; only upload-side local reads intentionally follow the user’s symlink target.
 - The always-excluded suffix checks in `isAlwaysExcluded()` do NOT include `.db`/`.db-wal`/`.db-shm` — those caused false positives on legitimate data files. The sync engine's state DB lives outside the sync root by design.
 - Delta processing uses two-pass page handling to ensure vault parent folders are classified before their children, preventing path materialization failures.
