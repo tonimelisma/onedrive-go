@@ -231,6 +231,12 @@ jobs:
             --file ".testdata/config.toml" \
             --encoding utf-8
 
+          az keyvault secret download \
+            --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
+            --name "onedrive-test-fixtures-env" \
+            --file ".testdata/fixtures.env" \
+            --encoding utf-8
+
           # Download token, account profile, and drive metadata for each test drive.
           for DRIVE_VAR in ONEDRIVE_TEST_DRIVE ONEDRIVE_TEST_DRIVE_2; do
             DRIVE_VAL="${!DRIVE_VAR:-}"

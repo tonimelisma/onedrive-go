@@ -26,9 +26,9 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	// Load .env and validate safety guards before anything else.
+	// Load live-test env files and validate safety guards before anything else.
 	root := findModuleRoot()
-	testutil.LoadDotEnv(filepath.Join(root, ".env"))
+	testutil.LoadTestEnv(root)
 
 	drive = os.Getenv("ONEDRIVE_TEST_DRIVE")
 	if drive == "" {

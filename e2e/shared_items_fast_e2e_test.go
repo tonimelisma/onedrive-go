@@ -15,24 +15,19 @@ func TestE2E_Shared_FileDiscoveryAndSelectorReadCommands(t *testing.T) {
 	rawLink := requireSharedFileLink(t)
 	registerLogDump(t)
 
-	recipientEmail := recipientEmailFromDriveID(t, drive2)
-	cfgPath, env := writeSyncConfigForDrive2(t, t.TempDir())
+	fixture := resolveSharedFileFixture(t, rawLink)
 
-	rawStat := statSharedTargetJSON(t, cfgPath, env, "--account", recipientEmail, rawLink)
-	listing := sharedListForRecipient(t, cfgPath, env, recipientEmail)
-	fileItem := findSharedItemByRemoteIDs(t, listing.Items, rawStat.RemoteDriveID, rawStat.RemoteItemID, "file")
+	assert.Equal(t, fixture.RecipientEmail, fixture.FileItem.AccountEmail)
+	assert.Equal(t, fixture.FileItem.Selector, fixture.RawStat.SharedSelector)
 
-	assert.Equal(t, recipientEmail, fileItem.AccountEmail)
-	assert.Equal(t, fileItem.Selector, rawStat.SharedSelector)
+	selectorStat := statSharedTargetJSON(t, fixture.ConfigPath, fixture.Env, fixture.FileItem.Selector)
+	assert.Equal(t, fixture.RawStat.RemoteDriveID, selectorStat.RemoteDriveID)
+	assert.Equal(t, fixture.RawStat.RemoteItemID, selectorStat.RemoteItemID)
+	assert.Equal(t, fixture.RawStat.Name, selectorStat.Name)
+	assert.Equal(t, fixture.FileItem.Selector, selectorStat.SharedSelector)
 
-	selectorStat := statSharedTargetJSON(t, cfgPath, env, fileItem.Selector)
-	assert.Equal(t, rawStat.RemoteDriveID, selectorStat.RemoteDriveID)
-	assert.Equal(t, rawStat.RemoteItemID, selectorStat.RemoteItemID)
-	assert.Equal(t, rawStat.Name, selectorStat.Name)
-	assert.Equal(t, fileItem.Selector, selectorStat.SharedSelector)
-
-	rawContent := getSharedTargetContent(t, cfgPath, env, "--account", recipientEmail, rawLink)
-	selectorContent := getSharedTargetContent(t, cfgPath, env, fileItem.Selector)
+	rawContent := getSharedTargetContent(t, fixture.ConfigPath, fixture.Env, "--account", fixture.RecipientEmail, rawLink)
+	selectorContent := getSharedTargetContent(t, fixture.ConfigPath, fixture.Env, fixture.FileItem.Selector)
 	assert.Equal(t, rawContent, selectorContent)
 }
 
@@ -42,14 +37,9 @@ func TestE2E_Shared_FileDiscoveryRejectsDriveAdd(t *testing.T) {
 	rawLink := requireSharedFileLink(t)
 	registerLogDump(t)
 
-	recipientEmail := recipientEmailFromDriveID(t, drive2)
-	cfgPath, env := writeSyncConfigForDrive2(t, t.TempDir())
+	fixture := resolveSharedFileFixture(t, rawLink)
 
-	rawStat := statSharedTargetJSON(t, cfgPath, env, "--account", recipientEmail, rawLink)
-	listing := sharedListForRecipient(t, cfgPath, env, recipientEmail)
-	fileItem := findSharedItemByRemoteIDs(t, listing.Items, rawStat.RemoteDriveID, rawStat.RemoteItemID, "file")
-
-	stdout, stderr, err := runCLICore(t, cfgPath, env, "", "drive", "add", fileItem.Selector)
+	stdout, stderr, err := runCLICore(t, fixture.ConfigPath, fixture.Env, "", "drive", "add", fixture.FileItem.Selector)
 	require.Error(t, err)
 	assert.Contains(t, stdout+stderr, "shared files are direct stat/get/put targets")
 }

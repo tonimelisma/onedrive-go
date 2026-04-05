@@ -16,6 +16,8 @@ import (
 
 const metadataDirPerms = 0o755
 
+const sharedFixtureEnvPath = ".testdata/fixtures.env"
+
 // LoadDotEnv reads KEY=VALUE pairs from a .env file at the given path.
 // Missing file is not an error (CI sets env vars directly).
 // Existing env vars take precedence over .env values.
@@ -36,6 +38,14 @@ func LoadDotEnv(envPath string) {
 	if err := f.Close(); err != nil {
 		fatalTestEnv()
 	}
+}
+
+// LoadTestEnv loads live-test environment files in repo precedence order.
+// Exported process env wins over both files. Root .env overrides durable
+// fixture defaults from .testdata/fixtures.env.
+func LoadTestEnv(moduleRoot string) {
+	LoadDotEnv(filepath.Join(moduleRoot, ".env"))
+	LoadDotEnv(filepath.Join(moduleRoot, sharedFixtureEnvPath))
 }
 
 func applyDotEnv(r io.Reader) error {
