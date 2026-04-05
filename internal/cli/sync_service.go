@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
@@ -50,10 +51,9 @@ func newSyncService(cc *CLIContext) *syncService {
 
 func (s *syncService) run(ctx context.Context, opts syncCommandOptions) error {
 	logger := s.cc.Logger
-
-	rawCfg, err := config.LoadOrDefault(s.cc.CfgPath, logger)
+	rawCfg, err := s.loadConfigWithEmailReconcile(ctx, logger)
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
+		return err
 	}
 
 	cfgForLog := &config.ResolvedDrive{LoggingConfig: rawCfg.LoggingConfig}
@@ -129,4 +129,57 @@ func (s *syncService) run(ctx context.Context, opts syncCommandOptions) error {
 	printDriveReports(reports, s.cc)
 
 	return driveReportsError(reports)
+}
+
+func (s *syncService) loadConfigWithEmailReconcile(
+	ctx context.Context,
+	logger *slog.Logger,
+) (*config.Config, error) {
+	rawCfg, err := config.LoadOrDefault(s.cc.CfgPath, logger)
+	if err != nil {
+		return nil, fmt.Errorf("loading config: %w", err)
+	}
+
+	selectedDrives, resolveErr := config.ResolveDrives(rawCfg, s.cc.Flags.Drive, true, logger)
+	if resolveErr == nil {
+		accountCIDs, accountErr := accountIDsFromResolvedDrives(selectedDrives)
+		if accountErr != nil {
+			return nil, accountErr
+		}
+
+		if !s.reconcileSyncAccounts(ctx, accountCIDs, logger) {
+			return rawCfg, nil
+		}
+
+		rawCfg, err = config.LoadOrDefault(s.cc.CfgPath, logger)
+		if err != nil {
+			return nil, fmt.Errorf("reload config after email reconciliation: %w", err)
+		}
+	}
+
+	return rawCfg, nil
+}
+
+func (s *syncService) reconcileSyncAccounts(
+	ctx context.Context,
+	accountCIDs []driveid.CanonicalID,
+	logger *slog.Logger,
+) bool {
+	reconciled := false
+
+	for _, accountCID := range accountCIDs {
+		reconcileResult, probeErr := s.cc.probeAccountIdentity(ctx, accountCID, "sync-bootstrap")
+		if probeErr != nil {
+			logger.Debug("skip email reconciliation during sync bootstrap",
+				"account", accountCID.String(),
+				"error", probeErr,
+			)
+			continue
+		}
+		if reconcileResult.Changed() {
+			reconciled = true
+		}
+	}
+
+	return reconciled
 }

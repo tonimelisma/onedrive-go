@@ -15,6 +15,7 @@ func newIssuesCmd() *cobra.Command {
 Shows issue families that still need attention, including held deletes,
 shared-folder write blocks, authentication problems, and actionable file
 failures.`,
+		Args: cobra.NoArgs,
 		RunE: runIssuesList,
 	}
 

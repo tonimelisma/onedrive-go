@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,7 +23,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
-	"github.com/tonimelisma/onedrive-go/internal/sharedref"
 )
 
 // --- buildLogger tests ---
@@ -197,91 +198,83 @@ func TestCLIContextSession_Success(t *testing.T) {
 	assert.Equal(t, cc.Cfg.DriveID, session.DriveID)
 }
 
-func TestCLIContextInteractiveHTTPClients_ReusesOwnDriveTarget(t *testing.T) {
-	logger := slog.New(slog.DiscardHandler)
+func TestCLIContextSession_ReconcilesEmailChangeAndReloadsDrive(t *testing.T) {
+	setTestDriveHome(t)
+
+	oldCID := driveid.MustCanonicalID("business:user@example.com")
+	newCID := driveid.MustCanonicalID("business:renamed@example.com")
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, config.AppendDriveSection(configPath, oldCID, "~/Business"))
+	require.NoError(t, config.SaveAccountProfile(oldCID, &config.AccountProfile{
+		UserID:         "user-123",
+		DisplayName:    "Business User",
+		PrimaryDriveID: "drive-123",
+	}))
+	require.NoError(t, config.SaveDriveMetadata(oldCID, &config.DriveMetadata{
+		DriveID: "drive-123",
+	}))
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_business_user@example.com.json")
+
+	rawCfg, err := config.LoadOrDefault(configPath, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/me", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		writeTestResponse(t, w, `{
+			"id":"user-123",
+			"displayName":"Business User",
+			"mail":"renamed@example.com",
+			"userPrincipalName":"user@example.com"
+		}`)
+	}))
+	defer srv.Close()
+
+	provider := driveops.NewSessionProvider(
+		config.NewHolder(rawCfg, configPath),
+		driveops.StaticClientResolver(srv.Client(), srv.Client()),
+		"test-agent",
+		slog.New(slog.DiscardHandler),
+	)
+	provider.GraphBaseURL = srv.URL
+
+	var tokenPaths []string
+	provider.TokenSourceFn = func(_ context.Context, path string, _ *slog.Logger) (graph.TokenSource, error) {
+		tokenPaths = append(tokenPaths, path)
+		return staticTokenSource{}, nil
+	}
+
+	var status bytes.Buffer
 	cc := &CLIContext{
-		Logger:       logger,
-		HTTPProvider: graphhttp.NewProvider(logger),
+		Flags: CLIFlags{
+			ConfigPath: configPath,
+			Drive:      []string{oldCID.String()},
+		},
+		Logger:       slog.New(slog.DiscardHandler),
+		StatusWriter: &status,
+		CfgPath:      configPath,
+		Env:          config.EnvOverrides{},
+		GraphBaseURL: srv.URL,
+		Cfg: &config.ResolvedDrive{
+			CanonicalID: oldCID,
+			DriveID:     driveid.New("drive-123"),
+			SyncDir:     "~/Business",
+		},
+		Provider: provider,
 	}
 
-	rd := &config.ResolvedDrive{
-		CanonicalID: driveid.MustCanonicalID("personal:user@example.com"),
-		DriveID:     driveid.New("0000000000000001"),
-	}
+	session, err := cc.Session(t.Context())
+	require.NoError(t, err)
+	require.NotNil(t, session)
 
-	first := cc.interactiveHTTPClients(rd)
-	second := cc.interactiveHTTPClients(rd)
-
-	assert.Same(t, first.Meta, second.Meta, "same configured drive should reuse the target-scoped metadata client")
-}
-
-func TestCLIContextInteractiveHTTPClients_SharedRootScopesByRootItem(t *testing.T) {
-	logger := slog.New(slog.DiscardHandler)
-	cc := &CLIContext{
-		Logger:       logger,
-		HTTPProvider: graphhttp.NewProvider(logger),
-	}
-
-	sharedA := &config.ResolvedDrive{
-		CanonicalID: driveid.MustCanonicalID("personal:user@example.com"),
-		DriveID:     driveid.New("0000000000000001"),
-		RootItemID:  "root-a",
-	}
-	sharedB := &config.ResolvedDrive{
-		CanonicalID: driveid.MustCanonicalID("personal:user@example.com"),
-		DriveID:     driveid.New("0000000000000001"),
-		RootItemID:  "root-b",
-	}
-
-	clientsA := cc.interactiveHTTPClients(sharedA)
-	clientsB := cc.interactiveHTTPClients(sharedB)
-
-	assert.NotSame(t, clientsA.Meta, clientsB.Meta,
-		"different shared roots on the same remote drive must not share a metadata throttle gate")
-}
-
-func TestCLIContextSharedTargetHTTPClients_ReusesSameDirectSharedTarget(t *testing.T) {
-	logger := slog.New(slog.DiscardHandler)
-	cc := &CLIContext{
-		Logger:       logger,
-		HTTPProvider: graphhttp.NewProvider(logger),
-	}
-
-	ref := sharedref.Ref{
-		AccountEmail:  "user@example.com",
-		RemoteDriveID: "remote-drive",
-		RemoteItemID:  "remote-item",
-	}
-
-	first := cc.sharedTargetHTTPClients(ref)
-	second := cc.sharedTargetHTTPClients(ref)
-
-	assert.Same(t, first.Meta, second.Meta, "same direct shared target should reuse the target-scoped metadata client")
-}
-
-func TestCLIContextSharedTargetHTTPClients_DifferentSharedItemsDoNotShare(t *testing.T) {
-	logger := slog.New(slog.DiscardHandler)
-	cc := &CLIContext{
-		Logger:       logger,
-		HTTPProvider: graphhttp.NewProvider(logger),
-	}
-
-	refA := sharedref.Ref{
-		AccountEmail:  "user@example.com",
-		RemoteDriveID: "remote-drive",
-		RemoteItemID:  "item-a",
-	}
-	refB := sharedref.Ref{
-		AccountEmail:  "user@example.com",
-		RemoteDriveID: "remote-drive",
-		RemoteItemID:  "item-b",
-	}
-
-	clientsA := cc.sharedTargetHTTPClients(refA)
-	clientsB := cc.sharedTargetHTTPClients(refB)
-
-	assert.NotSame(t, clientsA.Meta, clientsB.Meta,
-		"different direct shared items on the same remote drive must not share a metadata throttle gate")
+	assert.Equal(t, newCID, cc.Cfg.CanonicalID)
+	assert.Equal(t, []string{newCID.String()}, cc.Flags.Drive)
+	require.Len(t, tokenPaths, 1)
+	assert.Equal(t, config.DriveTokenPath(newCID), tokenPaths[0])
+	assert.Contains(t, status.String(), "Account email changed from user@example.com to renamed@example.com")
+	_, oldTokenErr := os.Stat(config.DriveTokenPath(oldCID))
+	require.ErrorIs(t, oldTokenErr, os.ErrNotExist)
+	assert.FileExists(t, config.DriveTokenPath(newCID))
 }
 
 func TestNewGraphClient_ReturnsConstructionError(t *testing.T) {

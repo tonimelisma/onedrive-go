@@ -785,6 +785,7 @@ func runWhoamiWithContext(ctx context.Context, cc *CLIContext) error {
 	// Try the authenticated path: match drive → fetch from Graph API.
 	authResult, authErr := fetchAuthenticatedAccount(
 		ctx,
+		cc,
 		snapshot.Config,
 		snapshot.Catalog,
 		driveSelector,
@@ -795,6 +796,13 @@ func runWhoamiWithContext(ctx context.Context, cc *CLIContext) error {
 	)
 	if authErr != nil {
 		return authErr
+	}
+
+	if authResult.reconciled {
+		snapshot, err = readModel.loadLenientCatalog(ctx)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Discover offline auth-required accounts from orphaned account profiles.
@@ -822,6 +830,7 @@ type authenticatedAccountResult struct {
 	authenticatedEmail      string
 	authRequired            *accountAuthRequirement
 	hasAuthenticatedAccount bool
+	reconciled              bool
 }
 
 // fetchAuthenticatedAccount attempts to resolve a drive from config, load its
@@ -830,6 +839,7 @@ type authenticatedAccountResult struct {
 // for hard failures after a token is located.
 func fetchAuthenticatedAccount(
 	ctx context.Context,
+	cc *CLIContext,
 	cfg *config.Config,
 	catalog []accountCatalogEntry,
 	driveSelector string,
@@ -867,45 +877,35 @@ func fetchAuthenticatedAccount(
 
 	logger.Debug("whoami", "drive", cid.String(), "token_path", tokenPath)
 
-	ts, tsErr := graph.TokenSourceFromPath(ctx, tokenPath, logger)
-	if tsErr != nil {
-		if errors.Is(tsErr, graph.ErrNotLoggedIn) {
-			authRequired.Reason = authReasonMissingLogin
-			authRequired.Action = authAction(authReasonMissingLogin)
-			return authenticatedAccountResult{authRequired: &authRequired}, nil
-		}
-
-		authRequired.Reason = authReasonInvalidSavedLogin
-		authRequired.Action = authAction(authReasonInvalidSavedLogin)
-		return authenticatedAccountResult{authRequired: &authRequired}, nil
+	ts, authResult := whoamiTokenSource(ctx, tokenPath, logger, authRequired)
+	if authResult != nil {
+		return *authResult, nil
 	}
-
 	client, err := newGraphClientWithHTTP(baseURL, httpProvider.BootstrapMeta(), ts, logger)
 	if err != nil {
 		return authenticatedAccountResult{}, err
 	}
 	attachAccountAuthProof(client, recorder, accountEmail, "whoami")
 
-	user, err := client.Me(ctx)
+	user, authResult, err := fetchWhoamiUser(ctx, client, authRequired)
+	if authResult != nil {
+		return *authResult, nil
+	}
 	if err != nil {
-		if errors.Is(err, graph.ErrUnauthorized) {
-			authRequired.Reason = authReasonSyncAuthRejected
-			authRequired.Action = authAction(authReasonSyncAuthRejected)
-			return authenticatedAccountResult{authRequired: &authRequired}, nil
-		}
-
-		return authenticatedAccountResult{}, fmt.Errorf("fetching user profile: %w", err)
+		return authenticatedAccountResult{}, err
 	}
 
-	drives, err := client.Drives(ctx)
+	reconcileResult, err := cc.reconcileGraphUser(cid, user)
 	if err != nil {
-		if errors.Is(err, graph.ErrUnauthorized) {
-			authRequired.Reason = authReasonSyncAuthRejected
-			authRequired.Action = authAction(authReasonSyncAuthRejected)
-			return authenticatedAccountResult{authRequired: &authRequired}, nil
-		}
+		return authenticatedAccountResult{}, err
+	}
 
-		return authenticatedAccountResult{}, fmt.Errorf("listing drives: %w", err)
+	drives, authResult, err := whoamiDrives(ctx, client, authRequired)
+	if authResult != nil {
+		return *authResult, nil
+	}
+	if err != nil {
+		return authenticatedAccountResult{}, err
 	}
 
 	return authenticatedAccountResult{
@@ -913,7 +913,71 @@ func fetchAuthenticatedAccount(
 		drives:                  drives,
 		authenticatedEmail:      user.Email,
 		hasAuthenticatedAccount: true,
+		reconciled:              reconcileResult.Changed(),
 	}, nil
+}
+
+func whoamiTokenSource(
+	ctx context.Context,
+	tokenPath string,
+	logger *slog.Logger,
+	authRequired accountAuthRequirement,
+) (graph.TokenSource, *authenticatedAccountResult) {
+	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
+	if err == nil {
+		return ts, nil
+	}
+
+	switch {
+	case errors.Is(err, graph.ErrNotLoggedIn):
+		return nil, authRequiredResult(authRequired, authReasonMissingLogin)
+	default:
+		return nil, authRequiredResult(authRequired, authReasonInvalidSavedLogin)
+	}
+}
+
+func fetchWhoamiUser(
+	ctx context.Context,
+	client *graph.Client,
+	authRequired accountAuthRequirement,
+) (*graph.User, *authenticatedAccountResult, error) {
+	user, err := client.Me(ctx)
+	if err == nil {
+		return user, nil, nil
+	}
+
+	if errors.Is(err, graph.ErrUnauthorized) {
+		return nil, authRequiredResult(authRequired, authReasonSyncAuthRejected), nil
+	}
+
+	return nil, nil, fmt.Errorf("fetching user profile: %w", err)
+}
+
+func whoamiDrives(
+	ctx context.Context,
+	client *graph.Client,
+	authRequired accountAuthRequirement,
+) ([]graph.Drive, *authenticatedAccountResult, error) {
+	drives, err := client.Drives(ctx)
+	if err == nil {
+		return drives, nil, nil
+	}
+
+	if errors.Is(err, graph.ErrUnauthorized) {
+		return nil, authRequiredResult(authRequired, authReasonSyncAuthRejected), nil
+	}
+
+	return nil, nil, fmt.Errorf("listing drives: %w", err)
+}
+
+func authRequiredResult(
+	authRequired accountAuthRequirement,
+	reason string,
+) *authenticatedAccountResult {
+	authRequired.Reason = reason
+	authRequired.Action = authAction(reason)
+
+	return &authenticatedAccountResult{authRequired: &authRequired}
 }
 
 func whoamiCatalogContext(

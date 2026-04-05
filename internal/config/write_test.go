@@ -1167,3 +1167,48 @@ func TestEnsureDriveInConfig_NoFallback(t *testing.T) {
 	// Without account profile, falls back to BaseSyncDir ("~/OneDrive - Business").
 	assert.Equal(t, "~/OneDrive - Business", syncDir)
 }
+
+func TestRenameDriveSections_PreservesCommentsAndKeyOrder(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	writeConfigFixture(t, path, []byte(`# preamble
+["business:user@example.com"]
+# keep me
+sync_dir = "~/Business"
+display_name = "Work"
+`))
+
+	err := RenameDriveSections(path, map[driveid.CanonicalID]driveid.CanonicalID{
+		driveid.MustCanonicalID("business:user@example.com"): driveid.MustCanonicalID("business:renamed@example.com"),
+	})
+	require.NoError(t, err)
+
+	data, err := localpath.ReadFile(path)
+	require.NoError(t, err)
+
+	assert.Equal(t, `# preamble
+["business:renamed@example.com"]
+# keep me
+sync_dir = "~/Business"
+display_name = "Work"
+`, string(data))
+}
+
+func TestRenameDriveSections_Collision(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	writeConfigFixture(t, path, []byte(`["business:user@example.com"]
+sync_dir = "~/Business"
+
+["business:renamed@example.com"]
+sync_dir = "~/Renamed"
+`))
+
+	err := RenameDriveSections(path, map[driveid.CanonicalID]driveid.CanonicalID{
+		driveid.MustCanonicalID("business:user@example.com"): driveid.MustCanonicalID("business:renamed@example.com"),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already exists")
+}

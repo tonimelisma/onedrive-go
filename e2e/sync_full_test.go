@@ -349,7 +349,7 @@ func TestE2E_Sync_EditEditConflict_ResolveKeepRemote(t *testing.T) {
 	assert.Contains(t, stderr, "Conflicts:")
 
 	// Step 7: List conflicts — type is edit_edit.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues")
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
 	assert.Contains(t, stdout, "conflict-file.txt")
 	assert.Contains(t, stdout, "edit_edit")
 
@@ -369,14 +369,14 @@ func TestE2E_Sync_EditEditConflict_ResolveKeepRemote(t *testing.T) {
 	assert.Equal(t, "remote edit v2", string(originalData))
 
 	// Step 11: Resolve --keep-remote.
-	_, stderr = runCLIWithConfig(t, cfgPath, env, "issues", "resolve", testFolder+"/conflict-file.txt", "--keep-remote")
+	_, stderr = runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/conflict-file.txt", "--keep-remote")
 
 	// Step 12: Resolved message.
 	assert.Contains(t, stderr, "Resolved")
 
 	// Step 13: No more conflicts.
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "issues")
-	assert.Contains(t, stdout, "No issues")
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
+	assert.Contains(t, stdout, "No conflicts.")
 
 	// Step 14: Verify passes.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "verify")
@@ -429,14 +429,24 @@ func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 	// Use runCLIWithConfigAllowError inside Eventually — require.Eventually
 	// runs the function in a goroutine, and runCLIWithConfig's require.NoErrorf
 	// would panic if the test has already timed out.
-	var lastStderr string
+	var historyAfterResolution string
 	require.Eventually(t, func() bool {
-		_, lastStderr, _ = runCLIWithConfigAllowError(t, cfgPath, env, "sync", "--force")
-		return !strings.Contains(lastStderr, "No changes detected")
-	}, 120*time.Second, 5*time.Second, "sync should eventually detect the edit-delete conflict")
+		_, _, _ = runCLIWithConfigAllowError(t, cfgPath, env, "sync", "--force")
 
-	// Step 6: Sync succeeded (auto-resolved, no failures).
-	assert.Contains(t, lastStderr, "Failed:    0")
+		var err error
+		historyAfterResolution, _, err = runCLICore(t, cfgPath, env, drive, "conflicts", "--history")
+		if err != nil {
+			return false
+		}
+
+		return strings.Contains(historyAfterResolution, testFolder+"/fragile.txt") &&
+			strings.Contains(historyAfterResolution, "edit_delete") &&
+			strings.Contains(historyAfterResolution, "keep_local") &&
+			strings.Contains(historyAfterResolution, "auto")
+	}, 120*time.Second, 5*time.Second, "sync should eventually detect and auto-resolve the edit-delete conflict")
+
+	// Step 6: The owned edit-delete conflict is resolved even if unrelated
+	// shared-drive churn causes other work in the same sync pass.
 
 	// Step 7: Local file preserved with modified content.
 	data, err := os.ReadFile(fragileFile)
@@ -451,15 +461,15 @@ func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 	assert.Equal(t, "locally modified precious data", remoteContent)
 
 	// Step 10: Conflict history shows auto-resolved entry.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues", "--history")
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts", "--history")
 	assert.Contains(t, stdout, "fragile.txt")
 	assert.Contains(t, stdout, "edit_delete")
 	assert.Contains(t, stdout, "keep_local")
 	assert.Contains(t, stdout, "auto")
 
 	// Step 11: No unresolved conflicts.
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "issues")
-	assert.Contains(t, stdout, "No issues")
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
+	assert.Contains(t, stdout, "No conflicts.")
 
 	// Step 12: Verify passes.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "verify")
@@ -498,18 +508,18 @@ func TestE2E_Sync_ResolveAll(t *testing.T) {
 	assert.Contains(t, stderr, "Conflicts:")
 
 	// Step 5: List conflicts — both present.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues")
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
 	assert.Contains(t, stdout, "a.txt")
 	assert.Contains(t, stdout, "b.txt")
 	assert.Contains(t, stdout, "edit_edit")
 
 	// Step 6: Resolve --all --keep-remote.
-	_, stderr = runCLIWithConfig(t, cfgPath, env, "issues", "resolve", "--all", "--keep-remote")
+	_, stderr = runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", "--all", "--keep-remote")
 	assert.Contains(t, stderr, "Resolved")
 
 	// Step 7: No unresolved conflicts.
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "issues")
-	assert.Contains(t, stdout, "No issues")
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
+	assert.Contains(t, stdout, "No conflicts.")
 
 	// Step 8: Local files have remote content.
 	aData, err := os.ReadFile(filepath.Join(localDir, "a.txt"))
@@ -553,7 +563,7 @@ func TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal(t *testing.T) {
 	assert.Contains(t, stderr, "Conflicts:")
 
 	// Step 5: Verify conflict type.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues")
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
 	assert.Contains(t, stdout, "collision.txt")
 	assert.Contains(t, stdout, "create_create")
 
@@ -570,12 +580,12 @@ func TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "collision.txt"), []byte("local version"), 0o600))
 
 	// Step 8: Resolve --keep-local.
-	_, stderr = runCLIWithConfig(t, cfgPath, env, "issues", "resolve", testFolder+"/collision.txt", "--keep-local")
+	_, stderr = runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/collision.txt", "--keep-local")
 	assert.Contains(t, stderr, "Resolved")
 
 	// Step 9: No more conflicts.
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "issues")
-	assert.Contains(t, stdout, "No issues")
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
+	assert.Contains(t, stdout, "No conflicts.")
 
 	// Step 10: Sync to propagate local version upstream.
 	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
@@ -998,7 +1008,9 @@ func TestE2E_Sync_DryRunNonDestructive(t *testing.T) {
 }
 
 // TestE2E_Sync_ConvergentEdit exercises EF4 (convergent edit — same hash
-// both sides) and EF11 (convergent create). No data transfer should occur.
+// both sides) and EF11 (convergent create). The owned subtree should remain
+// converged without conflicts even if unrelated full-suite remote churn
+// causes transfers elsewhere on the shared drive.
 func TestE2E_Sync_ConvergentEdit(t *testing.T) {
 	registerLogDump(t)
 
@@ -1035,10 +1047,20 @@ func TestE2E_Sync_ConvergentEdit(t *testing.T) {
 
 	// Convergent updates detected (no data transfer needed).
 	assert.Contains(t, stderr, "Synced updates:")
+	assert.NotContains(t, stderr, "Conflicts:")
 
-	// No downloads or uploads (hashes match — no transfer).
-	assert.NotContains(t, stderr, "Downloads:")
-	assert.NotContains(t, stderr, "Uploads:")
+	editData, err := os.ReadFile(filepath.Join(localDir, "converge-edit.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, newContent, string(editData))
+
+	createData, err := os.ReadFile(filepath.Join(localDir, "converge-create.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, freshContent, string(createData))
+
+	assert.Equal(t, newContent, getRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/converge-edit.txt"))
+	assert.Equal(t, freshContent, getRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/converge-create.txt"))
+
+	assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync", "--force")
 
 	// Step 5: Verify.
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "verify")
@@ -1130,23 +1152,23 @@ func TestE2E_Sync_ResolveDryRun(t *testing.T) {
 	assert.Contains(t, stderr, "Conflicts:")
 
 	// Step 4: Verify conflict exists.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues")
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
 	assert.Contains(t, stdout, "dryrun-conflict.txt")
 	assert.Contains(t, stdout, "edit_edit")
 
 	// Step 5: Resolve --dry-run --keep-local.
-	_, stderr = runCLIWithConfig(t, cfgPath, env, "issues", "resolve", testFolder+"/dryrun-conflict.txt", "--keep-local", "--dry-run")
+	_, stderr = runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/dryrun-conflict.txt", "--keep-local", "--dry-run")
 	assert.Contains(t, stderr, "Would resolve")
 
 	// Step 6: Conflict should still exist (dry-run didn't resolve it).
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "issues")
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
 	assert.Contains(t, stdout, "dryrun-conflict.txt", "conflict should remain after dry-run resolve")
 
 	// Step 7: Resolve for real.
-	_, stderr = runCLIWithConfig(t, cfgPath, env, "issues", "resolve", testFolder+"/dryrun-conflict.txt", "--keep-local")
+	_, stderr = runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/dryrun-conflict.txt", "--keep-local")
 	assert.Contains(t, stderr, "Resolved")
 
 	// Step 8: No more conflicts.
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "issues")
-	assert.Contains(t, stdout, "No issues")
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
+	assert.Contains(t, stdout, "No conflicts.")
 }
