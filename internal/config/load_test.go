@@ -381,6 +381,26 @@ sync_dir = "~/OneDrive"
 	assert.Len(t, rawCfg.Drives, 1)
 }
 
+// Validates: R-4.8.5, R-4.9.2, R-4.9.3
+func TestResolveDrive_EmptyDriveSection_UsesResolvedSyncDirDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	path := writeTestConfig(t, `
+["personal:toni@outlook.com"]
+`)
+	resolved, rawCfg, err := ResolveDrive(
+		EnvOverrides{ConfigPath: path},
+		CLIOverrides{},
+		testLogger(t),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, rawCfg)
+	assert.Equal(t, driveid.MustCanonicalID("personal:toni@outlook.com"), resolved.CanonicalID)
+	assert.Equal(t, filepath.Join(home, "OneDrive"), resolved.SyncDir)
+	assert.NoError(t, ValidateResolvedForSync(resolved))
+}
+
 func TestResolveDrive_NoDrives_Error(t *testing.T) {
 	// Override HOME so token discovery finds nothing on disk.
 	t.Setenv("HOME", t.TempDir())

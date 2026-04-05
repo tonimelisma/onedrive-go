@@ -225,10 +225,7 @@ func getRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePa
 // cleanupRemoteFolder is a best-effort remote cleanup for use in t.Cleanup.
 func cleanupRemoteFolder(t *testing.T, folder string) {
 	t.Helper()
-
-	fullArgs := []string{"--drive", drive, "rm", "-r", "/" + folder}
-	cmd := makeCmd(fullArgs, nil)
-	_ = cmd.Run()
+	cleanupRemoteFolderForDrive(t, drive, folder)
 }
 
 // ---------------------------------------------------------------------------
@@ -668,7 +665,17 @@ func runCLIWithConfigForDrive(t *testing.T, cfgPath string, env map[string]strin
 func cleanupRemoteFolderForDrive(t *testing.T, driveID, folder string) {
 	t.Helper()
 
-	fullArgs := []string{"--drive", driveID, "rm", "-r", "/" + folder}
-	cmd := makeCmd(fullArgs, nil)
-	_ = cmd.Run()
+	stdout, stderr, err := runCLICore(t, "", nil, driveID, "rm", "-r", "/"+folder)
+	if err == nil || isRemoteNotFoundCleanup(stderr) {
+		return
+	}
+
+	t.Errorf(
+		"cleanup remote folder failed for drive=%s folder=%s\nstdout: %s\nstderr: %s\nerr: %v",
+		driveID,
+		folder,
+		stdout,
+		stderr,
+		err,
+	)
 }
