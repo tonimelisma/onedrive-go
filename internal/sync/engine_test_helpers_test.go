@@ -1018,19 +1018,6 @@ func runFullReconciliationAsyncForTest(t *testing.T, eng *testEngine, ctx contex
 	testWatchRuntime(t, eng).runFullReconciliationAsync(ctx, bl)
 }
 
-func waitForQuiescenceForTest(t *testing.T, eng *testEngine, ctx context.Context) error {
-	t.Helper()
-	rt := testWatchRuntime(t, eng)
-	return rt.runWatchUntilQuiescent(ctx, &watchPipeline{runtime: rt}, nil)
-}
-
-func bootstrapSyncForTest(t *testing.T, eng *testEngine, ctx context.Context, mode synctypes.SyncMode, pipe *watchPipeline) error {
-	t.Helper()
-	rt := testWatchRuntime(t, eng)
-	pipe.runtime = rt
-	return rt.bootstrapSync(ctx, mode, pipe)
-}
-
 func activeBlockingScopeForTest(t *testing.T, eng *testEngine, ta *synctypes.TrackedAction) synctypes.ScopeKey {
 	t.Helper()
 	rt, _ := lookupTestWatchRuntime(eng)

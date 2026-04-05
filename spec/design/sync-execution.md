@@ -175,7 +175,9 @@ ownership rules:
   `NewWorkerPool`, written only by workers through `sendResult`, read by
   the engine-owned result loop in both one-shot and watch mode. Closed exactly
   once after all worker goroutines exit; `Stop()` participates in that cleanup
-  but is no longer the only closer.
+  but is no longer the only closer. If shutdown cancellation wins before a
+  blocked send can complete, the unsent result is intentionally dropped
+  instead of inventing a second shutdown channel or a shadow completion path.
 - **Trial timer delivery (`trialCh`)**: owned by the engine and created once
   in `NewEngine`. Written only by `time.AfterFunc` callbacks scheduled by
   `armTrialTimer`. Read by the watch loop in watch mode. The channel is never
@@ -215,6 +217,7 @@ ownership rules:
 | --- | --- |
 | Worker results channel closes when dispatch ends or the engine completion signal fires. | `TestWorkerPool_ClosedDispatchChannelClosesResults`, `TestWorkerPool_ClosedCompletionChannelClosesResults`, `TestWorkerPool_ContextCancellationClosesResults` |
 | Worker shutdown is idempotent and result ownership stays with `WorkerPool`. | `TestWorkerPool_StopIsIdempotentAfterResultsClose`, `TestWorkerPool_ResultChannel` |
+| Result delivery semantics stay explicit: successful sends are delivered normally, but blocked sends are dropped when shutdown cancellation wins. | `TestWorkerPool_SendResultDropsWhenContextCancellationWins` |
 | Workers never mutate dependency completion directly; the engine owns `DepGraph.Complete()`. | `TestWorker_NeverCallsComplete`, `TestWorkerPool_DependencyChain` |
 
 ## Action Execution

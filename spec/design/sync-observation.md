@@ -2,7 +2,7 @@
 
 GOVERNS: internal/syncobserve/observer_local.go, internal/syncobserve/observer_local_handlers.go, internal/syncobserve/observer_local_collisions.go, internal/syncobserve/observer_remote.go, internal/syncobserve/socketio.go, internal/syncobserve/socketio_conn.go, internal/syncobserve/socketio_protocol.go, internal/syncobserve/item_converter.go, internal/syncobserve/scanner.go, internal/syncobserve/buffer.go, internal/syncobserve/inotify_linux.go, internal/syncobserve/inotify_other.go
 
-Implements: R-2.1.2 [verified], R-2.4 [implemented], R-2.8.5 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.15 [verified], R-6.7.16 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [planned], R-6.7.24 [verified], R-6.7.26 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-2.11 [verified], R-2.11.5 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.3.4 [verified], R-6.10.6 [verified]
+Implements: R-2.1.2 [verified], R-2.4 [implemented], R-2.8.5 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.15 [verified], R-6.7.16 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [planned], R-6.7.24 [verified], R-6.7.26 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-2.11 [verified], R-2.11.5 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.3.4 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
 ## Ownership Contract
 
@@ -12,6 +12,13 @@ Implements: R-2.1.2 [verified], R-2.4 [implemented], R-2.8.5 [verified], R-6.7.1
 - Allowed Side Effects: Filesystem walking and hashing under `synctree`, Graph observation calls, watch registration, and buffered event emission.
 - Mutable Runtime Owner: `LocalObserver` watch loops own local watcher state, timer maps, and hash-request queues. `RemoteObserver.Watch` owns remote polling state, including the current delta token. `Buffer` owns its pending-path map under `Buffer.mu`.
 - Error Boundary: Observation converts local/remote read quirks into `ChangeEvent`, `SkippedItem`, and observation sentinels such as `ErrGone`. The engine decides persistence, retry, and user-facing consequences via [error-model.md](error-model.md).
+
+## Verified By
+
+| Behavior | Evidence |
+| --- | --- |
+| Remote watch observation owns retry/backoff and delta-expiry recovery instead of pushing that policy into the engine. | `TestWatch_BackoffOnError`, `TestWatch_DeltaExpiredResets` |
+| The debounced buffer drains cleanly on shutdown/final flush without deadlocking watch ownership. | `TestBuffer_FlushDebounced_FinalDrainNoDeadlock` |
 
 ## Remote Observer (`observer_remote.go`)
 

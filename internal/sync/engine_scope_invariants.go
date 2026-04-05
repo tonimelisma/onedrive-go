@@ -40,6 +40,54 @@ func (flow *engineFlow) mustAssertDiscardedScope(ctx context.Context, watch *wat
 	}
 }
 
+func (flow *engineFlow) mustAssertDispatchAdmissionSealed(
+	watch *watchRuntime,
+	outbox []*synctypes.TrackedAction,
+	stage string,
+) {
+	if !flow.invariantChecksEnabled() {
+		return
+	}
+	if err := flow.assertDispatchAdmissionSealed(watch, outbox); err != nil {
+		panic(fmt.Sprintf("%s: %v", stage, err))
+	}
+}
+
+func (flow *engineFlow) mustAssertPlannerSweepAllowed(
+	watch *watchRuntime,
+	sweep string,
+	stage string,
+) {
+	if !flow.invariantChecksEnabled() {
+		return
+	}
+	if err := flow.assertPlannerSweepAllowed(watch, sweep); err != nil {
+		panic(fmt.Sprintf("%s: %v", stage, err))
+	}
+}
+
+func (flow *engineFlow) mustAssertReconcileBookkeepingCleared(watch *watchRuntime, stage string) {
+	if !flow.invariantChecksEnabled() {
+		return
+	}
+	if err := flow.assertReconcileBookkeepingCleared(watch); err != nil {
+		panic(fmt.Sprintf("%s: %v", stage, err))
+	}
+}
+
+func (flow *engineFlow) mustAssertObserverExitPhase(
+	watch *watchRuntime,
+	shuttingDown bool,
+	stage string,
+) {
+	if !flow.invariantChecksEnabled() {
+		return
+	}
+	if err := flow.assertObserverExitPhase(watch, shuttingDown); err != nil {
+		panic(fmt.Sprintf("%s: %v", stage, err))
+	}
+}
+
 func (flow *engineFlow) assertCurrentInvariants(ctx context.Context, watch *watchRuntime) error {
 	if err := flow.assertWatchRuntimeInvariants(watch); err != nil {
 		return err
@@ -81,6 +129,44 @@ func (flow *engineFlow) assertWatchRuntimeInvariants(watch *watchRuntime) error 
 	}
 
 	return nil
+}
+
+func (flow *engineFlow) assertDispatchAdmissionSealed(
+	watch *watchRuntime,
+	outbox []*synctypes.TrackedAction,
+) error {
+	if watch == nil || !watch.isDraining() || len(outbox) == 0 {
+		return nil
+	}
+
+	return fmt.Errorf("draining runtime must not attempt to admit %d queued actions", len(outbox))
+}
+
+func (flow *engineFlow) assertPlannerSweepAllowed(watch *watchRuntime, sweep string) error {
+	if watch == nil || !watch.isDraining() {
+		return nil
+	}
+
+	return fmt.Errorf("%s must not start after drain begins", sweep)
+}
+
+func (flow *engineFlow) assertReconcileBookkeepingCleared(watch *watchRuntime) error {
+	if watch == nil || !watch.reconcileActive {
+		return nil
+	}
+
+	return fmt.Errorf("draining reconcile bookkeeping must be cleared before continuing")
+}
+
+func (flow *engineFlow) assertObserverExitPhase(
+	watch *watchRuntime,
+	shuttingDown bool,
+) error {
+	if watch == nil || shuttingDown || !watch.isDraining() {
+		return nil
+	}
+
+	return fmt.Errorf("draining runtime must not treat observer exit as fatal outside shutdown")
 }
 
 func (flow *engineFlow) assertPersistedInvariants(ctx context.Context) error {

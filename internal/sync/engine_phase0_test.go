@@ -17,6 +17,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
+	"github.com/tonimelisma/onedrive-go/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -42,6 +44,33 @@ func (c *blockingPermChecker) ListItemPermissions(_ context.Context, _ driveid.I
 	})
 	<-c.releaseCh
 	return c.perms, nil
+}
+
+func newBootstrapWatchPipelineForTest(
+	t *testing.T,
+	eng *testEngine,
+	ctx context.Context,
+	mode synctypes.SyncMode,
+	workers int,
+) *watchPipeline {
+	t.Helper()
+
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	rt.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
+
+	completeCh := make(chan struct{})
+	pool := syncexec.NewWorkerPool(eng.execCfg, rt.dispatchCh, completeCh, eng.baseline, eng.logger, 1024)
+	pool.Start(ctx, workers)
+	t.Cleanup(pool.Stop)
+
+	return &watchPipeline{
+		runtime: rt,
+		safety:  synctypes.DefaultSafetyConfig(),
+		pool:    pool,
+		results: pool.Results(),
+		mode:    mode,
+	}
 }
 
 // Validates: R-2.1.2
@@ -191,6 +220,151 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeRemoteObserverStarts(t *testing
 	}
 }
 
+// ---------------------------------------------------------------------------
+// bootstrap/quiescence subroutines
+// ---------------------------------------------------------------------------
+
+func TestWaitForQuiescence_EmptyGraph(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+
+	err := rt.runWatchUntilQuiescent(t.Context(), &watchPipeline{runtime: rt}, nil)
+	require.NoError(t, err)
+}
+
+func TestWaitForQuiescence_ContextCancel(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+
+	rt.depGraph.Add(&synctypes.Action{
+		Type:    synctypes.ActionDownload,
+		Path:    "stuck.txt",
+		DriveID: driveid.New(engineTestDriveID),
+		ItemID:  "stuck-item",
+	}, 1, nil)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	err := rt.runWatchUntilQuiescent(ctx, &watchPipeline{runtime: rt}, nil)
+	require.NoError(t, err)
+}
+
+func TestBootstrapSync_NoChanges(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+	pipe := newBootstrapWatchPipelineForTest(t, eng, ctx, synctypes.SyncBidirectional, 1)
+
+	err := testWatchRuntime(t, eng).bootstrapSync(ctx, synctypes.SyncBidirectional, pipe)
+	require.NoError(t, err)
+}
+
+func TestBootstrapSync_WithChanges(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+				{
+					ID:           "item-1",
+					Name:         "newfile.txt",
+					DriveID:      driveID,
+					ParentID:     "root",
+					Size:         10,
+					QuickXorHash: "hash1",
+				},
+			}, "token-2"), nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+	pipe := newBootstrapWatchPipelineForTest(t, eng, ctx, synctypes.SyncDownloadOnly, 2)
+
+	err := testWatchRuntime(t, eng).bootstrapSync(ctx, synctypes.SyncDownloadOnly, pipe)
+	require.NoError(t, err)
+
+	_, statErr := os.Stat(filepath.Join(syncRoot, "newfile.txt"))
+	require.NoError(t, statErr, "newfile.txt should have been downloaded")
+
+	assert.Equal(t, 0, testWatchRuntime(t, eng).depGraph.InFlightCount())
+}
+
+// Validates: R-2.10.41
+func TestBootstrapSync_CrashRecovery_MixedDeletingCandidates(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	writeLocalFile(t, syncRoot, "exists.txt", "still here")
+
+	now := time.Now().Unix()
+	_, err := eng.baseline.DB().ExecContext(ctx, `
+		INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
+		VALUES (?, 'gone', '/gone.txt', 'file', 'deleting', ?),
+		       (?, 'exists', '/exists.txt', 'file', 'deleting', ?),
+		       (?, 'bad', '/../bad.txt', 'file', 'deleting', ?)`,
+		engineTestDriveID, now,
+		engineTestDriveID, now,
+		engineTestDriveID, now,
+	)
+	require.NoError(t, err, "seed crash-recovery rows")
+
+	pipe := newBootstrapWatchPipelineForTest(t, eng, ctx, synctypes.SyncBidirectional, 1)
+
+	err = testWatchRuntime(t, eng).bootstrapSync(ctx, synctypes.SyncBidirectional, pipe)
+	require.NoError(t, err)
+
+	var goneStatus synctypes.SyncStatus
+	err = eng.baseline.DB().QueryRowContext(ctx,
+		`SELECT sync_status FROM remote_state WHERE item_id = 'gone'`).Scan(&goneStatus)
+	require.NoError(t, err)
+	assert.Equal(t, synctypes.SyncStatusDeleted, goneStatus)
+
+	var existsStatus synctypes.SyncStatus
+	err = eng.baseline.DB().QueryRowContext(ctx,
+		`SELECT sync_status FROM remote_state WHERE item_id = 'exists'`).Scan(&existsStatus)
+	require.NoError(t, err)
+	assert.Equal(t, synctypes.SyncStatusPendingDelete, existsStatus)
+
+	var badStatus synctypes.SyncStatus
+	err = eng.baseline.DB().QueryRowContext(ctx,
+		`SELECT sync_status FROM remote_state WHERE item_id = 'bad'`).Scan(&badStatus)
+	require.NoError(t, err)
+	assert.Equal(t, synctypes.SyncStatusPendingDelete, badStatus)
+}
+
 // Validates: R-6.8.9
 func TestPhase0_ExecutePlan_WaitsForDrainSideEffects(t *testing.T) {
 	t.Parallel()
@@ -286,6 +460,7 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 	results, done, cancel, eng := startDrainLoop(t)
 	defer cancel()
 	_ = done
+	recorder := attachDebugEventRecorder(eng)
 	rt := testWatchRuntime(t, eng)
 
 	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
@@ -317,10 +492,14 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 		TrialScopeKey: synctypes.SKService(),
 	}
 
-	require.Eventually(t, func() bool {
-		block, ok := getTestScopeBlock(eng, synctypes.SKService())
-		return ok && block.TrialInterval == 60*time.Millisecond
-	}, time.Second, 10*time.Millisecond, "trial failure should only extend the active scope interval")
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventTrialTimerArmed
+	}, "trial timer re-armed after trial failure")
+
+	block, ok := getTestScopeBlock(eng, synctypes.SKService())
+	require.True(t, ok, "service scope should remain blocked after trial failure")
+	assert.Equal(t, 60*time.Millisecond, block.TrialInterval,
+		"trial failure should only extend the active scope interval")
 
 	assert.True(t, isTestScopeBlocked(eng, synctypes.SKService()),
 		"trial failure must not clear the blocked scope via the normal result path")
@@ -335,6 +514,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 	results, done, cancel, eng := startDrainLoop(t)
 	defer cancel()
 	_ = done
+	recorder := attachDebugEventRecorder(eng)
 	rt := testWatchRuntime(t, eng)
 
 	ctx := t.Context()
@@ -385,21 +565,15 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 		TrialScopeKey: testThrottleScope(),
 	}
 
-	require.Eventually(t, func() bool {
-		return !isTestScopeBlocked(eng, testThrottleScope())
-	}, 5*time.Second, 10*time.Millisecond, "trial success should clear the scope block")
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventScopeReleased && event.ScopeKey == testThrottleScope()
+	}, "trial success released blocked scope")
+	assert.False(t, isTestScopeBlocked(eng, testThrottleScope()),
+		"trial success should clear the scope block")
 
-	var retried *synctypes.TrackedAction
-	require.Eventually(t, func() bool {
-		select {
-		case retried = <-rt.dispatchCh:
-			return retried != nil && retried.Action.Path == blockedPath
-		default:
-			return false
-		}
-	}, 5*time.Second, 10*time.Millisecond, "trial success should re-dispatch the held failure without external observation")
-
-	require.NotNil(t, retried)
+	retried := readReadyAction(t, rt.dispatchCh)
+	require.Equal(t, blockedPath, retried.Action.Path,
+		"trial success should re-dispatch the held failure without external observation")
 	assert.Equal(t, synctypes.ActionDownload, retried.Action.Type)
 }
 
@@ -475,6 +649,7 @@ func TestPhase0_ScopeBlockFailureDoesNotReadmitDependentEarly(t *testing.T) {
 
 	results, _, cancel, eng := startDrainLoop(t)
 	defer cancel()
+	recorder := attachDebugEventRecorder(eng)
 	rt := testWatchRuntime(t, eng)
 
 	ctx := t.Context()
@@ -511,15 +686,17 @@ func TestPhase0_ScopeBlockFailureDoesNotReadmitDependentEarly(t *testing.T) {
 		ErrMsg:     "rate limited",
 	}
 
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventScopeActivated && event.ScopeKey == testThrottleScope()
+	}, "scope block activated from worker result")
+
 	select {
 	case ta := <-rt.dispatchCh:
 		require.Failf(t, "dependent dispatched early", "unexpected path %s", ta.Action.Path)
-	case <-time.After(150 * time.Millisecond):
+	default:
 	}
-
-	require.Eventually(t, func() bool {
-		return isTestScopeBlocked(eng, testThrottleScope())
-	}, time.Second, 10*time.Millisecond, "scope block should be activated from the worker result")
+	assert.True(t, isTestScopeBlocked(eng, testThrottleScope()),
+		"scope block should be activated from the worker result")
 
 	failures, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
