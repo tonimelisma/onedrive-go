@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go
 
-Implements: R-1 [implemented], R-3.1 [verified], R-4.7 [verified], R-4.8.4 [verified], R-1.9 [verified], R-1.2.4 [verified], R-1.2.5 [verified], R-1.3.4 [verified], R-1.3.5 [verified], R-1.4.3 [verified], R-1.5.1 [verified], R-1.6.1 [verified], R-1.6.2 [verified], R-1.7.1 [verified], R-1.8.1 [verified], R-1.9.4 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.3.10 [verified], R-2.3.11 [verified], R-2.3.12 [verified], R-2.7.1 [verified], R-2.8.3 [verified], R-2.10.4 [verified], R-2.10.47 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-3.1.6 [verified], R-3.3.10 [verified], R-3.3.11 [verified], R-3.3.12 [verified], R-3.6.6 [verified], R-3.6.7 [verified], R-6.6.11 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
+Implements: R-1 [implemented], R-3.1 [verified], R-3.7 [verified], R-4.7 [verified], R-4.8.4 [verified], R-1.9 [verified], R-1.2.4 [verified], R-1.2.5 [verified], R-1.3.4 [verified], R-1.3.5 [verified], R-1.4.3 [verified], R-1.5.1 [verified], R-1.6.1 [verified], R-1.6.2 [verified], R-1.7.1 [verified], R-1.8.1 [verified], R-1.9.4 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.3.10 [verified], R-2.3.11 [verified], R-2.3.12 [verified], R-2.7.1 [verified], R-2.8.3 [verified], R-2.10.4 [verified], R-2.10.47 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-3.1.6 [verified], R-3.3.10 [verified], R-3.3.11 [verified], R-3.3.12 [verified], R-3.6.6 [verified], R-3.6.7 [verified], R-6.6.11 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
 ## Overview
 
@@ -33,6 +33,14 @@ This keeps human/JSON command results separate from progress/status messages and
 - Mutable Runtime Owner: Each command invocation owns its own runtime state. `internal/cli` keeps no package-level mutable state and relies on lower layers for long-lived watch ownership.
 - Error Boundary: The CLI turns lower-layer results into exit behavior plus human-readable reason/action text. It consumes the domain model from [error-model.md](error-model.md) instead of inventing a second classification scheme.
 
+## Verified By
+
+| Behavior | Evidence |
+| --- | --- |
+| Root `issues` and `conflicts` stay strict list commands while dedicated mutation lives under `issues force-deletes` and `conflicts resolve`. | `internal/cli/issues_test.go` (`TestIssuesCmd_RejectsUnexpectedPositionalArgs`), `internal/cli/conflicts_test.go` (`TestConflictsCmd_RejectsUnexpectedPositionalArgs`, `TestConflictsCmd_HistoryFlagStillWorksFromRoot`, `TestConflictsCmd_ResolveSubcommandStillExecutesFromRoot`), `e2e/cli_commands_e2e_test.go` (`TestE2E_Issues_Empty`, `TestE2E_Conflicts_EmptyHistory`, `TestE2E_Conflicts_JSON`, `TestE2E_Conflicts_ResolveKeepBoth`, `TestE2E_Issues_ForceDeletes`) |
+| CLI account-email reconciliation updates selector state and reloads the resolved drive before interactive session work continues. | `internal/cli/root_test.go` (`TestCLIContextSession_ReconcilesEmailChangeAndReloadsDrive`), `internal/config/token_resolution_test.go`, `internal/driveid/canonical_test.go` |
+| Watch-mode CLI wiring remains injectable and target-scoped interactive/shared flows still work under live E2E coverage. | `internal/cli/signal_test.go` (`TestRunSyncWatch_FirstSignalCancelsWatchRunner`, `TestShutdownContext_FirstSignalCancels`, `TestShutdownContext_SecondSignalForcesExit`), `e2e/sync_watch_full_test.go` (`TestE2E_SyncWatch_ConflictDuringWatch`), `e2e/sync_full_test.go` (`TestE2E_Sync_EditDeleteConflict`, `TestE2E_Sync_EditEditConflict_ResolveKeepRemote`) |
+
 ## Command Structure
 
 Implements: R-6.2.8 [verified]
@@ -51,7 +59,8 @@ Implements: R-6.2.8 [verified]
 | `sync` | `sync.go` | Multi-drive sync command (see [sync-control-plane.md](sync-control-plane.md)) |
 | `pause`, `resume` | `pause.go`, `resume.go` | Pause/resume sync through `syncControlService`. `resume` also cleans up stale config keys from expired timed pauses (paused=true + past paused_until). |
 | `status` | `status.go` | Display account/drive status via `statusService` and read-only `syncstore.Inspector` snapshots |
-| `issues` | `issues.go` | Conflict and failure management. All subcommands delegate to `issuesService`; `issues list` renders read-only `syncstore.Inspector` snapshots and mutating subcommands call service-owned mutation flows over the writable store/engine path. |
+| `issues` | `issues.go` | Read-only issue listing plus held-delete approval via `issues force-deletes` |
+| `conflicts` | `conflicts.go` | Conflict listing/history plus resolution via `conflicts resolve` |
 | `verify` | `verify.go` | Post-sync verification |
 | `drive` | `drive.go` | Drive management (list/add/remove/search) |
 | `recycle-bin` | `recycle_bin.go` | Recycle bin operations (list/restore/empty) via `recycleBinService` |
@@ -93,10 +102,6 @@ profiles and token-discovered business accounts do not disappear from the
 caller boundary when saved login state is missing or invalid. `shared` uses the
 same rule across all account types, so auth-required accounts are reported from
 the shared catalog even when only orphaned profile or token state remains.
-`drive list` follows the same rule for its account-level auth warnings, so a
-plain `logout` still surfaces preserved orphaned profiles in
-`accounts_requiring_auth` instead of silently dropping them once the configured
-drive section is removed.
 
 `whoami`, `drive list`, `drive search`, and ordinary single-drive file commands
 are proof surfaces because they already perform authenticated Graph requests.
@@ -109,6 +114,32 @@ That repair path is strictly best-effort: successful direct API commands must
 not fail or emit user-visible warnings just because stale auth-scope cleanup
 could not open a state DB. Repair failures stay in debug logs so file commands
 remain independent from sync-store health.
+
+Those same authenticated boundaries are also where CLI-owned email-change
+reconciliation runs (R-3.7). After a command learns the current `/me`
+identity, it compares the stable Graph user GUID to stored account profiles of
+the same account type and asks `config.ReconcileAccountEmail()` to mutate
+durable state when the email changed. Trigger points are:
+
+- `login` after account discovery
+- `whoami` authenticated account lookup
+- `drive list` and `drive search` token-backed discovery bootstrap
+- shared-target account bootstrap before resolving share URLs/items
+- ordinary file-command `CLIContext.Session()` bootstrap
+- sync bootstrap before multi-drive session creation
+
+Offline read models (`status`, `issues`) do not probe Graph and therefore do
+not trigger reconciliation.
+
+When reconciliation fires during the current invocation, CLI owns the runtime
+repair around the config mutation:
+
+- exact old `--account` and exact old canonical `--drive` selectors are remapped in memory
+- one concise status message is emitted for the renamed account
+- single-drive file/session bootstrap flushes the `SessionProvider` token cache,
+  reloads config, re-resolves the selected drive, and then creates the session
+- shared-target bootstrap rewrites the transient recipient account email before
+  the share URL or shared selector is resolved further
 
 `login` and plain `logout` are explicit auth-boundary transitions. Successful
 `login` clears stale `auth:account` scope blocks for the account. Plain
@@ -215,7 +246,8 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
 - Command handlers are wiring only. Command-family services own the runtime behavior:
   - `authService`: login/logout/whoami flows
   - `driveService`: drive list/add/remove/search flows
-  - `issuesService`: issue listing and failure/conflict mutations
+  - `issuesService`: issue listing and held-delete approval
+  - `conflictsService`: conflict listing/history and resolution
   - `sharedService`: shared-item discovery and auth-required projection
   - `statusService`: account/drive status aggregation, lenient config warning handling, offline auth-health projection, and read-only sync-state inspection
   - `syncControlService`: pause/resume config mutation flows
@@ -258,23 +290,16 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
 - Checked-in golden tests lock the human and JSON output shapes for `status` and `issues list`. Formatting changes are intentional and use the standard `-update` flow in `internal/cli/golden_test.go`.
 - Extract `multiHandler` from `internal/cli/root.go` to `internal/slogutil/` if logging grows (structured error reporting, log sampling). [planned]
 
-## Verified By
-
-| Behavior | Evidence |
-| --- | --- |
-| First signal cancels watch-mode sync cleanly, while second signal still forces immediate process exit. | `TestRunSyncWatch_FirstSignalCancelsWatchRunner`, `TestShutdownContext_FirstSignalCancels`, `TestShutdownContext_SecondSignalForcesExit` |
-| `status` output stays stable across human and JSON formats. | `TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON` |
-| `issues list` output stays stable across human and JSON formats. | `TestIssuesOutputGoldenText`, `TestIssuesOutputGoldenJSON` |
-
 ## Issues Display
 
-Implements: R-2.3.3 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.3.10 [verified], R-2.3.12 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified]
+Implements: R-2.3.3 [verified], R-2.3.4 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.3.10 [verified], R-2.3.12 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified]
 
 - **Grouped display**: >10 failures of same `issue_type` → single heading with count, first 5 paths shown. `--verbose` shows all paths.
 - **Per-scope sub-grouping**: 507 quota and shared-folder write blocks are grouped by scope (own drive vs each shortcut). Different scopes = different owners = different user actions.
 - **Human-readable names**: Shortcut-scoped failures display local path name, not internal drive IDs.
 - **Scope-aware reason/action copy**: Failure text is selected from `issue_type` plus the raw scope key, so shortcut-scoped quota failures say the shared-folder owner is out of space instead of implying the user's own drive is full.
 - **Read-only surface**: `issues` is a read-only problem view. It shows grouped issue families plus held deletes, but not conflicts, pending retries, or manual retry/recheck state.
+- **Strict command grammar**: `issues` and `conflicts` are list commands and accept no positional args. CLI mutation lives only under explicit subcommands: `issues force-deletes` for held big-delete approval and `conflicts resolve [path-or-id]` for conflict resolution.
 - **JSON shape**: `issues --json` emits `failure_groups` and `held_deletes` only. Conflict history has its own `conflicts --json` surface.
 - **Derived shared-folder issues**: `perm:remote` is displayed from held blocked-write rows, not from a standalone boundary issue. The CLI shows one visible issue per denied boundary only while blocked write intent still exists.
 - **Automatic shared-folder recovery**: shared-folder write blocks have no manual CLI controls. The engine rechecks permission state automatically during normal sync/watch passes while blocked writes still exist.

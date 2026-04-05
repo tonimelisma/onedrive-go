@@ -21,6 +21,16 @@ func newDriveService(cc *CLIContext) *driveService {
 func (s *driveService) runList(ctx context.Context, showAll bool) error {
 	logger := s.cc.Logger
 	recorder := newAuthProofRecorder(logger)
+
+	for _, tokenCID := range config.DiscoverTokens(logger) {
+		if _, err := s.cc.probeAccountIdentity(ctx, tokenCID, "drive-list-bootstrap"); err != nil {
+			logger.Debug("skip email reconciliation during drive list bootstrap",
+				"account", tokenCID.String(),
+				"error", err,
+			)
+		}
+	}
+
 	readModel := newAccountReadModelService(s.cc)
 	snapshot, err := readModel.loadLenientCatalog(ctx)
 	if err != nil {
@@ -88,13 +98,11 @@ func (s *driveService) runAdd(ctx context.Context, args []string) error {
 	}
 
 	if cid.IsShared() {
-		clients, err := s.cc.sharedTargetClients(ctx, sharedTarget{
-			Ref: sharedref.Ref{
-				AccountEmail:  cid.Email(),
-				RemoteDriveID: cid.SourceDriveID(),
-				RemoteItemID:  cid.SourceItemID(),
-			},
-		}.Ref)
+		clients, err := s.cc.sharedTargetClients(ctx, sharedref.Ref{
+			AccountEmail:  cid.Email(),
+			RemoteDriveID: cid.SourceDriveID(),
+			RemoteItemID:  cid.SourceItemID(),
+		})
 		if err != nil {
 			return err
 		}
@@ -156,6 +164,16 @@ func (s *driveService) runRemove(purge bool) error {
 func (s *driveService) runSearch(ctx context.Context, query string) error {
 	logger := s.cc.Logger
 	recorder := newAuthProofRecorder(logger)
+
+	for _, tokenCID := range config.DiscoverTokens(logger) {
+		if _, err := s.cc.probeAccountIdentity(ctx, tokenCID, "drive-search-bootstrap"); err != nil {
+			logger.Debug("skip email reconciliation during drive search bootstrap",
+				"account", tokenCID.String(),
+				"error", err,
+			)
+		}
+	}
+
 	readModel := newAccountReadModelService(s.cc)
 	snapshot, err := readModel.loadLenientCatalog(ctx)
 	if err != nil {

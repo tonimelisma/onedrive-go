@@ -83,10 +83,10 @@ The system shall support all four drive types:
 - R-3.6.6: When the user runs `shared`, the system shall list files and folders shared with the authenticated account set, using generated `shared:<recipientEmail>:<remoteDriveID>:<remoteItemID>` selectors as actionable targets because Graph discovery does not reliably expose the original inbound share URL. Accounts that cannot be queried because authentication is required shall be reported instead of being silently omitted. [verified]
 - R-3.6.7: When `--json` is passed to `shared`, the system shall output structured JSON with `items` and `accounts_requiring_auth`. Each item shall include the shared selector plus the discovered shared item metadata needed for follow-on commands. [verified]
 
-## R-3.7 Email Change Detection [future]
+## R-3.7 Email Change Detection [verified]
 
-- R-3.7.1: The system shall store a stable user GUID from the Graph API alongside the email. [future]
-- R-3.7.2: When a user's email changes, the system shall auto-rename token files, state DBs, and config sections. [future]
+- R-3.7.1: The system shall store a stable user GUID from the Graph API alongside the email. [verified]
+- R-3.7.2: When a user's email changes, the system shall auto-rename token files, state DBs, and config sections. [verified]
 
 ## R-3.8 Migration [future]
 

@@ -231,6 +231,60 @@ func DeleteDriveSection(path string, canonicalID driveid.CanonicalID) error {
 	return atomicWriteFile(path, []byte(renderLines(lines)))
 }
 
+// RenameDriveSections renames one or more drive section headers in place while
+// preserving their contents, comments, and relative order. A target section
+// that already exists is treated as a collision when the source section also
+// exists, because the config would otherwise end up with two owners for the
+// same canonical ID.
+func RenameDriveSections(path string, renames map[driveid.CanonicalID]driveid.CanonicalID) error {
+	if len(renames) == 0 {
+		return nil
+	}
+
+	data, err := readManagedFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+
+		return fmt.Errorf("reading config file: %w", err)
+	}
+
+	lines := parseLines(string(data))
+	headerIndex := make(map[string]int)
+	for i := range lines {
+		if lines[i].kind == lineSection {
+			headerIndex[lines[i].sectionName] = i
+		}
+	}
+
+	for from, to := range renames {
+		if from.Equal(to) {
+			continue
+		}
+
+		fromName := from.String()
+		toName := to.String()
+
+		fromIdx, fromFound := headerIndex[fromName]
+		_, toFound := headerIndex[toName]
+
+		switch {
+		case !fromFound:
+			continue
+		case toFound:
+			return fmt.Errorf("config section rename collision: %q already exists", toName)
+		default:
+			lines[fromIdx].sectionName = toName
+			lines[fromIdx].raw = renderSectionHeaderLine(toName)
+			delete(headerIndex, fromName)
+			headerIndex[toName] = fromIdx
+		}
+	}
+
+	return atomicWriteFile(path, []byte(renderLines(lines)))
+}
+
 // DefaultSyncDir computes a default sync directory for a drive. Uses a two-level
 // scheme: base name first, disambiguated with display name then email on collision.
 // All callers must pass existingDirs (tilde-expanded or unexpanded) for accurate

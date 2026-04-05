@@ -23,44 +23,26 @@ func (s *authService) runLogin(ctx context.Context, useBrowser bool) error {
 	logger.Info("login started", slog.Bool("browser", useBrowser))
 
 	tempPath := pendingTokenPath()
-
-	var (
-		ts  graph.TokenSource
-		err error
-	)
-
-	if useBrowser {
-		ts, err = graph.LoginWithBrowser(ctx, tempPath, openBrowser, logger)
-	} else {
-		ts, err = graph.Login(ctx, tempPath, func(da graph.DeviceAuth) {
-			writeWarningf(s.cc.Status(), "To sign in, visit: %s\n", da.VerificationURI)
-			writeWarningf(s.cc.Status(), "Enter code: %s\n", da.UserCode)
-		}, logger)
-	}
-
+	ts, err := s.authenticateLogin(ctx, useBrowser, tempPath)
 	if err != nil {
-		if cleanupErr := removePathIfExists(tempPath); cleanupErr != nil {
-			logger.Warn("failed to remove pending token after login failure", "path", tempPath, "error", cleanupErr)
-		}
-
+		s.cleanupPendingToken(tempPath, "login failure")
 		return fmt.Errorf("authenticate account: %w", err)
 	}
 
 	canonicalID, user, orgName, primaryDriveID, err := discoverAccount(ctx, ts, logger, s.cc.httpProvider())
 	if err != nil {
-		if cleanupErr := removePathIfExists(tempPath); cleanupErr != nil {
-			logger.Warn("failed to remove pending token after discovery failure", "path", tempPath, "error", cleanupErr)
-		}
-
+		s.cleanupPendingToken(tempPath, "discovery failure")
 		return fmt.Errorf("discovering account: %w", err)
+	}
+
+	if _, reconcileErr := s.cc.reconcileGraphUser(canonicalID, user); reconcileErr != nil {
+		s.cleanupPendingToken(tempPath, "reconciliation failure")
+		return reconcileErr
 	}
 
 	finalTokenPath := config.DriveTokenPath(canonicalID)
 	if finalTokenPath == "" {
-		if cleanupErr := removePathIfExists(tempPath); cleanupErr != nil {
-			logger.Warn("failed to remove pending token after path resolution failure", "path", tempPath, "error", cleanupErr)
-		}
-
+		s.cleanupPendingToken(tempPath, "path resolution failure")
 		return fmt.Errorf("cannot determine token path for drive %q", canonicalID.String())
 	}
 
@@ -101,6 +83,37 @@ func (s *authService) runLogin(ctx context.Context, useBrowser bool) error {
 	}
 
 	return printLoginSuccess(s.cc.Output(), canonicalID.DriveType(), email, orgName, canonicalID.String(), syncDir)
+}
+
+func (s *authService) authenticateLogin(
+	ctx context.Context,
+	useBrowser bool,
+	tempPath string,
+) (graph.TokenSource, error) {
+	if useBrowser {
+		ts, err := graph.LoginWithBrowser(ctx, tempPath, openBrowser, s.cc.Logger)
+		if err != nil {
+			return nil, fmt.Errorf("browser login: %w", err)
+		}
+
+		return ts, nil
+	}
+
+	ts, err := graph.Login(ctx, tempPath, func(da graph.DeviceAuth) {
+		writeWarningf(s.cc.Status(), "To sign in, visit: %s\n", da.VerificationURI)
+		writeWarningf(s.cc.Status(), "Enter code: %s\n", da.UserCode)
+	}, s.cc.Logger)
+	if err != nil {
+		return nil, fmt.Errorf("device-code login: %w", err)
+	}
+
+	return ts, nil
+}
+
+func (s *authService) cleanupPendingToken(path string, reason string) {
+	if cleanupErr := removePathIfExists(path); cleanupErr != nil {
+		s.cc.Logger.Warn("failed to remove pending token", "reason", reason, "path", path, "error", cleanupErr)
+	}
 }
 
 func (s *authService) runLogout(purge bool) error {

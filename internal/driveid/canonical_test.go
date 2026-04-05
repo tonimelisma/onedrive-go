@@ -239,6 +239,53 @@ func TestCanonicalID_UnmarshalText_Invalid(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestCanonicalID_WithEmail(t *testing.T) {
+	tests := []struct {
+		name  string
+		raw   string
+		email string
+		want  string
+	}{
+		{
+			name:  "personal",
+			raw:   "personal:user@example.com",
+			email: "renamed@example.com",
+			want:  "personal:renamed@example.com",
+		},
+		{
+			name:  "business",
+			raw:   "business:user@example.com",
+			email: "renamed@example.com",
+			want:  "business:renamed@example.com",
+		},
+		{
+			name:  "sharepoint",
+			raw:   "sharepoint:user@example.com:marketing:Docs",
+			email: "renamed@example.com",
+			want:  "sharepoint:renamed@example.com:marketing:Docs",
+		},
+		{
+			name:  "shared",
+			raw:   "shared:user@example.com:drive123:item456",
+			email: "renamed@example.com",
+			want:  "shared:renamed@example.com:drive123:item456",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := MustCanonicalID(tt.raw).WithEmail(tt.email)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got.String())
+		})
+	}
+}
+
+func TestCanonicalID_WithEmail_ZeroValue(t *testing.T) {
+	_, err := (CanonicalID{}).WithEmail("renamed@example.com")
+	require.Error(t, err)
+}
+
 func TestCanonicalID_Site(t *testing.T) {
 	tests := []struct {
 		name string
