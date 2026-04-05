@@ -117,7 +117,7 @@ These are instance fields on `graph.Client`, not package globals. Tests in packa
 
 The graph boundary validates the returned notification URL before exposing it to callers. Accepted production endpoints must be HTTPS on Microsoft `*.svc.ms` hosts. The client also redacts `notificationUrl` values from structured Graph errors and plain-text URL scrubbing, so websocket callback URLs never appear in logs or surfaced error text.
 
-The Graph client does not own websocket runtime state. It performs one synchronous endpoint fetch and returns validated data; connection lifecycle, ping/pong, reconnect, and renewal are observation-layer responsibilities.
+The Graph client does not own websocket runtime state. It performs one synchronous endpoint fetch and returns validated data; connection lifecycle, Engine.IO / Socket.IO framing, ping/pong, reconnect, and renewal are observation-layer responsibilities. The returned `notificationUrl` is the raw Graph callback URL, not the final RFC6455 websocket URL — observation is responsible for the `/socket.io/?EIO=4&transport=websocket` transform described in the reference layer.
 
 ## Item Operations (`items.go`)
 
