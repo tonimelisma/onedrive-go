@@ -24,7 +24,7 @@ func TestSharedService_RunList_JSON(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/me/drive/search(q='*')":
+		case testDriveSearchAllPath:
 			w.Header().Set("Content-Type", "application/json")
 			writeTestResponse(t, w, `{
 				"value": [
@@ -54,7 +54,7 @@ func TestSharedService_RunList_JSON(t *testing.T) {
 					}
 				]
 			}`)
-		case "/drives/b!drive1234567890/items/source-item-folder":
+		case testSharedFolderGetItemPath:
 			w.Header().Set("Content-Type", "application/json")
 			writeTestResponse(t, w, `{
 				"id": "source-item-folder",
@@ -109,6 +109,80 @@ func TestSharedService_RunList_JSON(t *testing.T) {
 	assert.Equal(t, "shared:user@example.com:b!drive1234567890:source-item-folder", parsed.Items[1].Selector)
 	assert.Equal(t, "folder", parsed.Items[1].Type)
 	assert.Equal(t, "alice@example.com", parsed.Items[1].SharedByEmail)
+}
+
+// Validates: R-3.6.4, R-3.6.6, R-3.6.7
+func TestSharedService_RunList_JSONBackfillsIdentityFromSharedWithMe(t *testing.T) {
+	setTestDriveHome(t)
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case testDriveSearchAllPath:
+			w.Header().Set("Content-Type", "application/json")
+			writeTestResponse(t, w, `{
+				"value": [
+					{
+						"id": "local-shortcut-1",
+						"name": "Shared Folder",
+						"folder": {"childCount": 3},
+						"remoteItem": {
+							"id": "source-item-folder",
+							"parentReference": {"driveId": "b!drive1234567890"}
+						}
+					}
+				]
+			}`)
+		case testSharedFolderGetItemPath:
+			w.WriteHeader(http.StatusNotFound)
+			writeTestResponse(t, w, `{"error":{"code":"itemNotFound","message":"not found"}}`)
+		case testSharedWithMePath:
+			w.Header().Set("Content-Type", "application/json")
+			writeTestResponse(t, w, `{
+				"value": [
+					{
+						"id": "local-shortcut-1",
+						"name": "Shared Folder",
+						"folder": {"childCount": 3},
+						"remoteItem": {
+							"id": "source-item-folder",
+							"parentReference": {"driveId": "b!drive1234567890"}
+						},
+						"shared": {
+							"owner": {
+								"user": {
+									"email": "alice@example.com",
+									"displayName": "Alice Example"
+								}
+							}
+						}
+					}
+				]
+			}`)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	cc := &CLIContext{
+		Flags:        CLIFlags{JSON: true},
+		Logger:       testDriveLogger(t),
+		OutputWriter: &out,
+		StatusWriter: &out,
+		CfgPath:      config.DefaultConfigPath(),
+		GraphBaseURL: srv.URL,
+	}
+
+	err := newSharedService(cc).runList(context.Background())
+	require.NoError(t, err)
+
+	var parsed sharedListJSONOutput
+	require.NoError(t, json.Unmarshal(out.Bytes(), &parsed))
+	require.Len(t, parsed.Items, 1)
+	assert.Equal(t, "alice@example.com", parsed.Items[0].SharedByEmail)
+	assert.Equal(t, "Alice Example", parsed.Items[0].SharedByName)
 }
 
 // Validates: R-3.3.12
@@ -200,7 +274,7 @@ func TestRunPut_SharedFolderTargetRejected(t *testing.T) {
 	localFile := createTempFile(t, "upload.txt", "hello")
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/drives/b!drive1234567890/items/source-item-folder", r.URL.Path)
+		assert.Equal(t, testSharedFolderGetItemPath, r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		writeTestResponse(t, w, `{
 			"id": "source-item-folder",

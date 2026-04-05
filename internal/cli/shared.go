@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"slices"
 	"strings"
 
@@ -81,63 +82,8 @@ func (s *sharedService) discoverSharedItems(ctx context.Context, catalog []accou
 	var items []sharedListItem
 
 	for i := range catalog {
-		entry := catalog[i]
-		if s.cc.Flags.Account != "" && entry.Email != s.cc.Flags.Account {
-			continue
-		}
-		if entry.AuthHealth.State == authStateAuthenticationNeeded {
-			continue
-		}
-		if entry.RepresentativeTokenID.IsZero() {
-			continue
-		}
-
-		client, _, err := s.cc.sharedBootstrapMetaClient(ctx, entry.Email)
-		if err != nil {
-			logger.Debug("shared discovery skipped account",
-				"email", entry.Email,
-				"error", err,
-			)
-			continue
-		}
-
-		discovered := searchSharedItemsWithFallback(ctx, client, entry.Email, logger)
-		for j := range discovered {
-			item := discovered[j]
-			if item.RemoteDriveID == "" || item.RemoteItemID == "" {
-				continue
-			}
-
-			enrichSharedItem(ctx, client, &item, logger)
-
-			key := entry.Email + "\x00" + item.RemoteDriveID + "\x00" + item.RemoteItemID
-			if _, ok := seen[key]; ok {
-				continue
-			}
-			seen[key] = struct{}{}
-
-			itemType := typeFile
-			if item.IsFolder {
-				itemType = typeFolder
-			}
-
-			items = append(items, sharedListItem{
-				Selector: sharedref.Ref{
-					AccountEmail:  entry.Email,
-					RemoteDriveID: item.RemoteDriveID,
-					RemoteItemID:  item.RemoteItemID,
-				}.String(),
-				Type:          itemType,
-				Name:          item.Name,
-				AccountEmail:  entry.Email,
-				SharedByName:  item.SharedOwnerName,
-				SharedByEmail: item.SharedOwnerEmail,
-				ModifiedAt:    formatAPITime(item.ModifiedAt),
-				Size:          item.Size,
-				RemoteDriveID: item.RemoteDriveID,
-				RemoteItemID:  item.RemoteItemID,
-			})
-		}
+		entry := &catalog[i]
+		items = append(items, s.discoverSharedItemsForAccount(ctx, entry, seen, logger)...)
 	}
 
 	slices.SortFunc(items, func(a, b sharedListItem) int {
@@ -154,6 +100,83 @@ func (s *sharedService) discoverSharedItems(ctx context.Context, catalog []accou
 	})
 
 	return items
+}
+
+func (s *sharedService) discoverSharedItemsForAccount(
+	ctx context.Context,
+	entry *accountCatalogEntry,
+	seen map[string]struct{},
+	logger *slog.Logger,
+) []sharedListItem {
+	if s.cc.Flags.Account != "" && entry.Email != s.cc.Flags.Account {
+		return nil
+	}
+	if entry.AuthHealth.State == authStateAuthenticationNeeded {
+		return nil
+	}
+	if entry.RepresentativeTokenID.IsZero() {
+		return nil
+	}
+
+	client, _, err := s.cc.sharedBootstrapMetaClient(ctx, entry.Email)
+	if err != nil {
+		logger.Debug("shared discovery skipped account",
+			"email", entry.Email,
+			"error", err,
+		)
+
+		return nil
+	}
+
+	discovered := searchSharedItemsWithFallback(ctx, client, entry.Email, logger)
+
+	for i := range discovered {
+		enrichSharedItem(ctx, client, &discovered[i], logger)
+	}
+
+	backfillSharedIdentityFromSharedWithMe(ctx, client, discovered, entry.Email, logger)
+
+	var items []sharedListItem
+
+	for i := range discovered {
+		item := discovered[i]
+		if item.RemoteDriveID == "" || item.RemoteItemID == "" {
+			continue
+		}
+
+		key := entry.Email + "\x00" + item.RemoteDriveID + "\x00" + item.RemoteItemID
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		items = append(items, sharedListItem{
+			Selector: sharedref.Ref{
+				AccountEmail:  entry.Email,
+				RemoteDriveID: item.RemoteDriveID,
+				RemoteItemID:  item.RemoteItemID,
+			}.String(),
+			Type:          sharedItemType(item.IsFolder),
+			Name:          item.Name,
+			AccountEmail:  entry.Email,
+			SharedByName:  item.SharedOwnerName,
+			SharedByEmail: item.SharedOwnerEmail,
+			ModifiedAt:    formatAPITime(item.ModifiedAt),
+			Size:          item.Size,
+			RemoteDriveID: item.RemoteDriveID,
+			RemoteItemID:  item.RemoteItemID,
+		})
+	}
+
+	return items
+}
+
+func sharedItemType(isFolder bool) string {
+	if isFolder {
+		return typeFolder
+	}
+
+	return typeFile
 }
 
 func printSharedJSON(w io.Writer, items []sharedListItem, authRequired []accountAuthRequirement) error {
