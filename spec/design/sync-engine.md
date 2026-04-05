@@ -515,7 +515,7 @@ Sync failure logging follows a tiered approach matching CLAUDE.md policy — ind
 - **Scope block WARN**: `applyScopeBlock()` logs when a scope block activates with scope_key, issue_type, and trial_interval. This is a degraded-but-recoverable event (matching CLAUDE.md Warn).
 - **Scope release INFO**: `releaseScope()` logs when a scope block clears. This is a lifecycle state transition (matching CLAUDE.md Info).
 - **Trial preserve/extend DEBUG**: trial routing logs whether a trial extended or preserved a scope, including scope_key and interval. This is retry detail.
-- **End-of-pass summary**: `logFailureSummary()` aggregates syncErrors by error message prefix. Groups with >10 items get one WARN with count + 3 samples. Groups with ≤10 items get per-item WARN. Mirrors the scanner aggregation in `recordSkippedItems()` (R-6.6.7). Called at end of `executePlan()`.
+- **End-of-pass summary**: `logFailureSummary()` aggregates exhausted transient failures by `issue_type`, not by raw error text. Groups with >10 items get one WARN summary with count and sample paths, while per-item detail remains available at DEBUG; groups with ≤10 items get per-item WARN lines. The summary state is tracked separately from `SyncReport.Errors`, so one-shot report errors remain intact after logging. Called at end of `executePlan()`.
 - **IssueType population**: `recordFailure()` derives issue_type from HTTP status via `issueTypeForHTTPStatus()` and stores it in sync_failures for display grouping.
 
 ### Shortcut Integration (`engine_shortcuts.go`)

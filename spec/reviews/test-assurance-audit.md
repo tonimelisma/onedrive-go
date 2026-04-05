@@ -302,7 +302,7 @@ This is the operating dashboard for completeness, not a verdict of quality. A pa
 
 | Workstream | Req | Design | Code | Ref | Meta | Body | Kill | Verified reconcile | Highest unresolved risk |
 |---|---|---|---|---|---|---|---|---|---|
-| W1 | done | done | partial | partial | done | partial | partial | partial | periodic reconciliation, aggregated logging, and big-delete traceability still lag |
+| W1 | done | done | partial | partial | done | done | partial | done | current actionable W1 top-ups are closed; only planned/deferred logging policy work remains |
 | W2 | done | done | done | partial | done | partial | partial | partial | remaining sparse-payload nil/parent-chain hardening and broader symlink/always-excluded reconciliation still need body audit |
 | W3 | done | done | partial | n/a | done | no | partial | no | big-delete and cross-drive proof paths unclear |
 | W4 | done | done | done | n/a | done | done | partial | done | live crash/restart proof is still thinner than the now-reconciled store/CLI durable-row mutation coverage |
@@ -545,11 +545,12 @@ These are not test results yet. They are likely weak spots inferred from require
 | Watch-mode big-delete hold must block deletes while allowing non-deletes | `REQ+DESIGN+BODY` | `internal/sync/engine_watch_test.go` now carries explicit `R-6.4.2` / `R-6.4.3` claims for threshold, mixed non-delete flow, and external-clear release behavior | `proven` | Traceability gap closed |
 | Periodic full reconciliation in watch mode | `REQ+DESIGN+BODY` | `internal/sync/engine_reconcile_test.go` now drives the steady-state watch loop from `reconcileC`, proves async full reconciliation commits the token, and applies events back through the watch-owned buffer/result handoff | `proven` | Stronger body-level watch-loop proof for `R-2.8.4` |
 | Aggregated warning logging behavior | `REQ+DESIGN+BODY+CODE` | `internal/sync/engine_result_scope_test.go` now proves `recordSkippedItems()` emits one WARN summary plus per-item DEBUG logs above threshold; this audit pass found and fixed the missing DEBUG-per-item production path in `engine_watch_reconcile.go` | `proven` | Real production bug fixed while reconciling `R-6.6.7` |
+| Execution-time transient aggregation must group by `issue_type` without dropping report errors | `REQ+DESIGN+BODY+CODE` | `internal/sync/engine_result_scope_test.go` now proves `logFailureSummary()` aggregates by `issue_type`, keeps per-item DEBUG visibility above threshold, and `internal/sync/engine_run_once_test.go` proves `SyncReport.Errors` survives summary logging | `proven` | Real production bug fixed while reconciling `R-6.6.12` |
 
 Key W1 gap notes:
 
-- `META+SUSPECT`: the most valuable sequencing guarantees are real and covered, but still hard to discover from `// Validates:` tags alone.
-- `BODY`: this pass closes the highest-value W1 traceability gaps around periodic reconciliation, watch-mode big-delete handling, and scanner warning aggregation. The remaining W1 risk is no longer "can we find the proof?" but "which sequencing/recovery invariants still need deeper kill-switch coverage?"
+- `META`: the most valuable sequencing guarantees are now directly discoverable enough for the audit ledger to treat the current W1 top-up tranche as closed.
+- `BODY`: this pass closes the execution-time aggregation gap too: `R-6.6.12` now groups by `issue_type`, preserves per-item DEBUG detail, and no longer clears `SyncReport.Errors` as a side effect of logging.
 
 ### W2. Observation Correctness, Filtering, Collisions, And Normalization
 
@@ -1075,13 +1076,9 @@ Key W5 gap notes:
 
 ## Next Moves
 
-1. Continue W1 verified-claim reconciliation for:
-   - `R-2.8.4` periodic full reconciliation
-   - `R-6.4.2` and `R-6.4.3` watch-mode big-delete guarantees
-   - `R-6.6.7` aggregated warning logging
-2. Continue W2 body-level reconciliation for:
+1. Continue W2 body-level reconciliation for:
    - `R-2.4.6` / `R-2.4.7` symlink and always-excluded behavior
    - remaining sparse remote-payload hardening and nil-guard proof paths
-3. Tighten W5 traceability for upload-session rules that are already strongly tested in body-level graph tests but still under-tagged at the `// Validates:` level.
-4. Continue W7 body-level reconciliation for:
+2. Tighten W5 traceability for upload-session rules that are already strongly tested in body-level graph tests but still under-tagged at the `// Validates:` level.
+3. Continue W7 body-level reconciliation for:
    - live logout / whoami / drive-list / drive-search / shared proof against real config/token state beyond the now-expanded caller-level coverage
