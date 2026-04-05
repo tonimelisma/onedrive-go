@@ -27,6 +27,12 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
+const (
+	testDriveSearchAllPath      = "/me/drive/search(q='*')"
+	testSharedWithMePath        = "/me/drive/sharedWithMe"
+	testSharedFolderGetItemPath = "/drives/b!drive1234567890/items/source-item-folder"
+)
+
 // --- command structure ---
 
 // Validates: R-3.3.2, R-3.3.5, R-3.3.7, R-3.3.9
@@ -1041,6 +1047,7 @@ func TestEnrichSharedItem_AlreadyHasEmail(t *testing.T) {
 	assert.Equal(t, "Owner", item.SharedOwnerName)
 }
 
+// Validates: R-3.6.4
 func TestEnrichSharedItem_MissingEmail_GetItemSucceeds(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Contains(t, r.URL.Path, "/drives/")
@@ -1116,6 +1123,7 @@ func TestEnrichSharedItem_NoRemoteDriveID(t *testing.T) {
 	assert.Empty(t, item.SharedOwnerEmail)
 }
 
+// Validates: R-3.6.4
 func TestEnrichSharedItem_GetItemReturnsNameOnly(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1301,6 +1309,80 @@ func TestSearchSharedItemsWithFallback_SearchReturnsNoUsableSharedIdentity_Falls
 	require.Len(t, items, 1)
 	assert.True(t, sharedWithMeCalled, "SharedWithMe should be called when search yields no usable shared identities")
 	assert.Equal(t, "FallbackFromUnusableSearch", items[0].Name)
+}
+
+// Validates: R-3.6.1, R-3.6.4
+func TestDriveService_RunList_JSONBackfillsSharedIdentityFromSharedWithMe(t *testing.T) {
+	setTestDriveHome(t)
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case "/me/drives":
+			writeTestResponse(t, w, `{"value":[{"id":"drive-personal","name":"OneDrive","driveType":"personal"}]}`)
+		case "/me/drive":
+			writeTestResponse(t, w, `{"id":"drive-personal","name":"OneDrive","driveType":"personal"}`)
+		case testDriveSearchAllPath:
+			writeTestResponse(t, w, `{"value":[{
+				"id":"local-shortcut-1",
+				"name":"Shared Folder",
+				"folder":{"childCount":1},
+				"remoteItem":{
+					"id":"shared-folder-1",
+					"parentReference":{"driveId":"b!drive1234567890"}
+				}
+			}]}`)
+		case "/drives/b!drive1234567890/items/shared-folder-1":
+			w.WriteHeader(http.StatusNotFound)
+			writeTestResponse(t, w, `{"error":{"code":"itemNotFound","message":"missing"}}`)
+		case testSharedWithMePath:
+			writeTestResponse(t, w, `{"value":[{
+				"id":"shortcut-fallback-1",
+				"name":"Shared Folder",
+				"folder":{"childCount":1},
+				"remoteItem":{
+					"id":"shared-folder-1",
+					"parentReference":{"driveId":"b!drive1234567890"}
+				},
+				"shared":{"owner":{"user":{"displayName":"Alice Example","email":"alice@example.com"}}}
+			}]}`)
+		default:
+			assert.Fail(t, "unexpected graph path", "path=%s", r.URL.Path)
+			http.Error(w, "unexpected graph path", http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	cc := &CLIContext{
+		Flags:        CLIFlags{JSON: true},
+		Logger:       testDriveLogger(t),
+		OutputWriter: &out,
+		StatusWriter: &out,
+		CfgPath:      filepath.Join(t.TempDir(), "missing-config.toml"),
+		GraphBaseURL: srv.URL,
+	}
+
+	require.NoError(t, newDriveService(cc).runList(t.Context(), false))
+
+	var decoded driveListJSONOutput
+	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
+
+	var sharedEntry *driveListEntry
+	for i := range decoded.Available {
+		if strings.HasPrefix(decoded.Available[i].CanonicalID, "shared:") {
+			sharedEntry = &decoded.Available[i]
+
+			break
+		}
+	}
+
+	require.NotNil(t, sharedEntry)
+	assert.Equal(t, "alice@example.com", sharedEntry.OwnerEmail)
+	assert.Equal(t, "Alice Example", sharedEntry.OwnerName)
+	assert.Equal(t, "Alice's Shared Folder", sharedEntry.DisplayName)
 }
 
 // --- annotateStateDB ---
@@ -1503,14 +1585,14 @@ func TestDriveService_RunList_ClearsPersistedAuthScopeAfterSuccessfulDiscovery(t
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		switch {
-		case r.URL.Path == graphDrivesPath:
+		switch r.URL.Path {
+		case graphDrivesPath:
 			writeTestResponse(t, w, `{"value":[{"id":"drive-123","name":"OneDrive","driveType":"personal"}]}`)
-		case r.URL.Path == primaryDrivePath:
+		case primaryDrivePath:
 			writeTestResponse(t, w, `{"id":"drive-123","name":"OneDrive","driveType":"personal"}`)
-		case strings.HasPrefix(r.URL.Path, "/me/drive/search("):
+		case testDriveSearchAllPath:
 			writeTestResponse(t, w, `{"value":[]}`)
-		case r.URL.Path == "/me/drive/sharedWithMe":
+		case testSharedWithMePath:
 			writeTestResponse(t, w, `{"value":[]}`)
 		default:
 			assert.Fail(t, "unexpected graph path", "path=%s", r.URL.Path)

@@ -513,6 +513,12 @@ launchEnrichment:
 
 	wg.Wait()
 
+	// Search is still the primary discovery surface, but some valid search hits
+	// only become nameable after a single SharedWithMe identity backfill.
+	// Use the deprecated endpoint narrowly as a repair source for missing owner
+	// identity instead of dropping usable shared folders from drive list/add.
+	backfillSharedIdentityFromSharedWithMe(ctx, client, items, email, logger)
+
 	// Phase 3: Name — sequential display name derivation with collision tracking.
 	var folders []sharedFolderInfo
 
@@ -570,6 +576,82 @@ func enrichSharedItem(
 	if enriched.SharedOwnerEmail != "" {
 		item.SharedOwnerEmail = enriched.SharedOwnerEmail
 	}
+}
+
+// backfillSharedIdentityFromSharedWithMe repairs missing shared-owner identity
+// only when the search-first path plus direct item enrichment still left some
+// usable remote references without owner email. This preserves the search-first
+// contract while avoiding silent shared-folder loss when Search/GetItem omit
+// the identity details needed for display naming or JSON output.
+func backfillSharedIdentityFromSharedWithMe(
+	ctx context.Context, client *graph.Client, items []graph.Item, email string, logger *slog.Logger,
+) {
+	if !needsSharedIdentityBackfill(items) {
+		return
+	}
+
+	fallbackItems, err := client.SharedWithMe(ctx)
+	if err != nil {
+		logger.Debug("SharedWithMe identity backfill failed",
+			"email", email,
+			"error", err,
+		)
+
+		return
+	}
+
+	identityByRemoteKey := make(map[string]graph.Item, len(fallbackItems))
+
+	for i := range fallbackItems {
+		key, ok := sharedIdentityKey(&fallbackItems[i])
+		if !ok {
+			continue
+		}
+
+		identityByRemoteKey[key] = fallbackItems[i]
+	}
+
+	for i := range items {
+		key, ok := sharedIdentityKey(&items[i])
+		if !ok || items[i].SharedOwnerEmail != "" {
+			continue
+		}
+
+		fallbackItem, ok := identityByRemoteKey[key]
+		if !ok {
+			continue
+		}
+
+		if items[i].SharedOwnerName == "" && fallbackItem.SharedOwnerName != "" {
+			items[i].SharedOwnerName = fallbackItem.SharedOwnerName
+		}
+
+		if items[i].SharedOwnerEmail == "" && fallbackItem.SharedOwnerEmail != "" {
+			items[i].SharedOwnerEmail = fallbackItem.SharedOwnerEmail
+		}
+	}
+}
+
+func needsSharedIdentityBackfill(items []graph.Item) bool {
+	for i := range items {
+		if items[i].SharedOwnerEmail != "" {
+			continue
+		}
+
+		if _, ok := sharedIdentityKey(&items[i]); ok {
+			return true
+		}
+	}
+
+	return false
+}
+
+func sharedIdentityKey(item *graph.Item) (string, bool) {
+	if item.RemoteDriveID == "" || item.RemoteItemID == "" {
+		return "", false
+	}
+
+	return item.RemoteDriveID + "\x00" + item.RemoteItemID, true
 }
 
 // deriveSharedDisplayName builds a human-friendly name for a shared folder.
@@ -1039,6 +1121,9 @@ func resolveSharedDisplayName(
 
 		if itemCID == cid {
 			enrichSharedItem(ctx, client, item, logger)
+			if item.SharedOwnerEmail == "" {
+				backfillSharedIdentityFromSharedWithMe(ctx, client, items, cid.Email(), logger)
+			}
 
 			return deriveSharedDisplayName(item, existingNames)
 		}
