@@ -1039,9 +1039,8 @@ Key W5 gap notes:
   - `R-3.2`
   - `R-3.3`
   - `R-3.5`
-  - `R-3.6.1`, `R-3.6.2`, `R-3.6.3`, `R-3.6.4`
+  - `R-3.6.1`, `R-3.6.2`, `R-3.6.3`, `R-3.6.4`, `R-3.6.5`
   - `R-6.7.2`
-  - planned placeholder: `R-3.6.5`
 - Ideal unit coverage:
   - drive ID canonicalization and equality across casing/truncation variants
   - item-key construction and shared-drive identity extraction
@@ -1067,10 +1066,10 @@ Key W5 gap notes:
   - `R-3.6.4` was partially under-credited and partially under-hardened: search-first discovery and direct `GetItem` enrichment were implemented, but a real gap remained when search returned usable remote IDs while `GetItem` still failed to recover owner identity. In that case `drive list` could drop usable shared folders and `shared` could emit incomplete owner metadata even though `sharedWithMe` still had recoverable identity data. The fix now does one `sharedWithMe` backfill pass only for those missing-identity cases, preserving the search-first contract while closing the owner-identity hole.
 - Claim mapping snapshot from filenames and `// Validates:` only:
   - Candidate test surface includes `internal/driveid/{canonical,id,itemkey,shared,edge}_test.go`, `internal/cli/drive_test.go`, and `e2e/drive_list*_test.go` plus shared-sync e2e coverage
-  - Explicit comment claims now exist for `R-3.2.1` through `R-3.2.4`, `R-3.3.2` through `R-3.3.11`, `R-3.5.1`, `R-3.6.1`, `R-3.6.2`, `R-3.6.3`, `R-3.6.4`, `R-3.6.6`, `R-3.6.7`, and `R-6.7.2`
+  - Explicit comment claims now exist for `R-3.2.1` through `R-3.2.4`, `R-3.3.2` through `R-3.3.11`, `R-3.5.1`, `R-3.6.1`, `R-3.6.2`, `R-3.6.3`, `R-3.6.4`, `R-3.6.5`, `R-3.6.6`, `R-3.6.7`, and `R-6.7.2`
   - `internal/config/drive_test.go` now carries direct `R-3.5.1` tags for exact-ID, display-name, partial-substring, and ambiguous-match behavior instead of leaving selector proof implied by package locality
   - `internal/cli/drive_test.go` and `internal/cli/shared_test.go` now carry direct caller-level proof that shared owner identity is backfilled from `sharedWithMe` when search-first discovery plus `GetItem` cannot recover it
-  - `R-3.6.5` remains the only parked W9 placeholder because the external-organization Graph limitation is still planned
+  - `R-3.6.5` is now covered by the external-aware `sharedWithMe?allowexternal=true` fallback plus caller-level UX assertions that explain the remaining platform limitation when Graph still omits an external shared folder. Business/external live fixtures are still absent, so the behavior is verified through unit/spec characterization rather than live cross-org E2E.
 
 ## Archived Recovery Reconciliation
 
@@ -1109,4 +1108,4 @@ Key W5 gap notes:
    - set `ONEDRIVE_TEST_DRIVE` or `ONEDRIVE_TEST_DRIVE_2` to a `business:` canonical ID
    - include it in `ONEDRIVE_ALLOWED_TEST_ACCOUNTS`
    - ensure the account has searchable SharePoint content
-3. If external-organization shared folders become testable, implement and verify `R-3.6.5` with an explicit platform-limitation UX path instead of leaving it as a planned placeholder
+3. If external-organization shared folders become testable, add live cross-org E2E proof for the already-implemented `R-3.6.5` behavior

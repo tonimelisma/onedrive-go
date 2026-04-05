@@ -2,7 +2,7 @@
 
 GOVERNS: internal/driveid/canonical.go, internal/driveid/id.go, internal/driveid/itemkey.go, drive.go, purge.go
 
-Implements: R-3.2 [verified], R-3.5 [verified], R-3.7 [verified], R-3.3.12 [verified], R-6.7.2 [verified], R-3.6.4 [verified], R-3.6.5 [planned], R-6.10.6 [verified]
+Implements: R-3.2 [verified], R-3.5 [verified], R-3.7 [verified], R-3.3.12 [verified], R-6.7.2 [verified], R-3.6.4 [verified], R-3.6.5 [verified], R-6.10.6 [verified]
 
 ## Core Concepts
 
@@ -93,13 +93,15 @@ Implements: R-3.3.2 [verified], R-3.3.3 [verified], R-3.3.4 [verified], R-3.3.5 
 Shared-folder discovery remains search-first to satisfy `R-3.6.2`, but the
 runtime does not trust a successful `search(q='*')` response by itself. If
 search returns no usable shared-item identities (`remoteDriveID` +
-`remoteItemID`), the CLI falls back to `sharedWithMe` instead of silently
-rendering an empty shared list on recipient personal accounts. Even when
-search returns usable remote references, the CLI still treats owner identity as
-repairable state: it first tries `GET /drives/{driveId}/items/{itemId}` for
-full owner metadata, and if owner email is still missing it does one
+`remoteItemID`), the CLI falls back to `sharedWithMe?allowexternal=true`
+instead of silently rendering an empty shared list. Even when search returns
+usable remote references, the CLI still treats owner identity as repairable
+state: it first tries `GET /drives/{driveId}/items/{itemId}` for full owner
+metadata, and if owner email is still missing it does one external-aware
 `sharedWithMe` backfill pass before dropping a shared folder from `drive list`
-or emitting incomplete owner fields from `shared`.
+or emitting incomplete owner fields from `shared`. If Graph still omits an
+external shared folder after that fallback, the CLI reports the omission as a
+platform limitation instead of claiming the folder is undiscoverable by design.
 
 ## Design Constraints
 

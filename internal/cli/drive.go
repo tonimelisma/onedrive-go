@@ -1089,7 +1089,8 @@ func addSharedDrive(
 }
 
 // resolveSharedDisplayName finds the matching shared item and derives a
-// collision-free display name. Tries search (non-deprecated) then SharedWithMe.
+// collision-free display name. Tries search first, then falls back to the
+// external-aware SharedWithMe path only when search is not sufficient.
 func resolveSharedDisplayName(
 	ctx context.Context, cid driveid.CanonicalID,
 	tokenPath string, cfg *config.Config, logger *slog.Logger, httpProvider *graphhttp.Provider,
@@ -1157,9 +1158,18 @@ type sharedMatch struct {
 	tokenEmail  string // account that discovered this match
 }
 
-// addSharedDriveByName searches SharedWithMe for a folder matching the
-// given search term (case-insensitive substring match against folder name
-// and derived display name). Single match → add. Multiple → show list.
+func sharedDiscoveryNoMatchesError(selector string) error {
+	return fmt.Errorf(
+		"no shared folders matching %q found — Graph shared discovery also checks external shares, "+
+			"but Microsoft can still omit some cross-org items; run 'onedrive-go shared' or "+
+			"'onedrive-go drive list' to confirm what the API exposed",
+		selector,
+	)
+}
+
+// addSharedDriveByName searches discovered shared folders for a match against
+// the given search term (case-insensitive substring match against folder name
+// and derived display name). Single match -> add. Multiple -> show list.
 func addSharedDriveByName(
 	ctx context.Context, selector, cfgPath string, w io.Writer, logger *slog.Logger, httpProvider *graphhttp.Provider,
 ) error {
@@ -1172,9 +1182,7 @@ func addSharedDriveByName(
 
 	switch len(matches) {
 	case 0:
-		return fmt.Errorf(
-			"no shared folders matching %q found — run 'onedrive-go drive list' to see available drives",
-			selector)
+		return sharedDiscoveryNoMatchesError(selector)
 
 	case 1:
 		return addSharedDrive(ctx, cfgPath, w, matches[0].cid, matches[0].displayName, logger, httpProvider)
@@ -1213,7 +1221,8 @@ func addSharedDriveByName(
 }
 
 // searchSharedDrives queries all tokens for shared folders matching selector.
-// Uses search-based discovery (non-deprecated) with SharedWithMe fallback.
+// Uses search-based discovery first, falling back to SharedWithMe for identity
+// gaps or search failures. The fallback requests external shares too.
 func searchSharedDrives(
 	ctx context.Context, cfg *config.Config, selector string, logger *slog.Logger, httpProvider *graphhttp.Provider,
 ) []sharedMatch {
@@ -1266,7 +1275,9 @@ func searchSharedDrives(
 }
 
 // searchSharedItemsWithFallback returns shared items from the search endpoint
-// (non-deprecated), falling back to SharedWithMe on error.
+// (non-deprecated), falling back to SharedWithMe on error or when search
+// returns no usable shared remote identities. The fallback includes external
+// shares via allowexternal=true.
 func searchSharedItemsWithFallback(
 	ctx context.Context, client *graph.Client, email string, logger *slog.Logger,
 ) []graph.Item {

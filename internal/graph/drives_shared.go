@@ -15,7 +15,10 @@ func (c *Client) SharedWithMe(ctx context.Context) ([]Item, error) {
 	c.logger.Info("listing shared items")
 
 	var items []Item
-	path := "/me/drive/sharedWithMe"
+	// Request external-tenant shares up front. Graph may still omit some
+	// cross-org items, but callers should not have to opt into the broader
+	// discovery pass manually.
+	path := "/me/drive/sharedWithMe?allowexternal=true"
 
 	for path != "" {
 		page, nextPath, err := c.fetchItemPage(ctx, path, "sharedWithMe")

@@ -267,7 +267,11 @@ The graph package intentionally keeps runtime ownership narrow:
 - Audit all error message strings for embedded secrets — `GraphError.Message` and `RawBody` are redacted before exposure. [verified]
 - Test that captures log output and verifies no tokens or pre-auth URLs appear. [verified]
 - Authenticated request helpers are package-internal (`do` / `doWithHeaders`). External callers use higher-level graph operations instead of raw request dispatch. [verified]
-- Monitor `search(q='*')` reliability on business accounts for shared item discovery. [planned]
+- Shared-item discovery remains search-first. When search fails or returns no
+  usable `remoteDriveID` + `remoteItemID` identities, the caller falls back to
+  `GET /me/drive/sharedWithMe?allowexternal=true`. This fallback is a recovery
+  path, not the primary discovery API. [verified]
+- Monitor `search(q='*')` reliability on business accounts for shared item discovery. Current coverage is characterization and unit/spec validation only; no business live fixture exists yet. [planned]
 - `PermanentDeleteItem` 405→`DeleteItem` fallback for Personal accounts is a workaround. Remove when MS adds Personal support.
 
 ## Struct Tag Policy
