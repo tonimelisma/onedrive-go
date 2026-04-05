@@ -94,6 +94,7 @@ func TestE2E_SyncWatch_WebsocketDisabledLongPollRegression(t *testing.T) {
 
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "poll_interval = \"5m\"\nwebsocket = false\n")
+	env, eventsPath := withSocketIODebugEvents(t, env)
 	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-watch-nowebsocket-%d", time.Now().UnixNano())
@@ -114,6 +115,7 @@ func TestE2E_SyncWatch_WebsocketDisabledLongPollRegression(t *testing.T) {
 
 	require.NoError(t, daemon.Process.Signal(syscall.SIGTERM))
 	_ = daemon.Wait()
+	assertNoSocketIOConnected(t, eventsPath)
 }
 
 // Validates: R-2.8.5
@@ -122,11 +124,12 @@ func TestE2E_SyncWatch_WebsocketStartupSmoke(t *testing.T) {
 
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "poll_interval = \"5m\"\nwebsocket = true\n")
+	env, eventsPath := withSocketIODebugEvents(t, env)
 
-	h, stderr := startFastDaemon(t, cfgPath, env,
+	h, _ := startFastDaemon(t, cfgPath, env,
 		"--drive", drive, "sync", "--download-only", "--watch", "--force")
 
-	waitForSocketIOConnected(t, stderr, 45*time.Second)
+	waitForSocketIOConnected(t, eventsPath, 45*time.Second)
 
 	require.NoError(t, h.Process.Signal(syscall.SIGTERM))
 	_ = h.Wait()

@@ -32,11 +32,12 @@ type engineFactoryFunc func(ctx context.Context, cfg *synctypes.EngineConfig) (e
 // Config and config path are accessed via Holder — a single source of truth
 // shared with SessionProvider. SIGHUP reload updates config in one place.
 type OrchestratorConfig struct {
-	Holder     *config.Holder
-	Drives     []*config.ResolvedDrive
-	Provider   *driveops.SessionProvider // token caching + Session creation
-	Logger     *slog.Logger
-	SIGHUPChan <-chan os.Signal // injectable for tests; nil uses no-op channel
+	Holder         *config.Holder
+	Drives         []*config.ResolvedDrive
+	Provider       *driveops.SessionProvider // token caching + Session creation
+	Logger         *slog.Logger
+	SIGHUPChan     <-chan os.Signal // injectable for tests; nil uses no-op channel
+	DebugEventHook func(syncengine.DebugEvent)
 }
 
 // Orchestrator manages per-drive sync runners. It is always used, even for a
@@ -54,7 +55,14 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 	return &Orchestrator{
 		cfg: cfg,
 		engineFactory: func(ctx context.Context, ecfg *synctypes.EngineConfig) (engineRunner, error) {
-			return syncengine.NewEngine(ctx, ecfg)
+			engine, err := syncengine.NewEngine(ctx, ecfg)
+			if err != nil {
+				return nil, fmt.Errorf("new engine: %w", err)
+			}
+			if cfg.DebugEventHook != nil {
+				engine.SetDebugEventHook(cfg.DebugEventHook)
+			}
+			return engine, nil
 		},
 		logger: cfg.Logger,
 	}
@@ -138,9 +146,9 @@ func (o *Orchestrator) prepareDriveWork(ctx context.Context, mode synctypes.Sync
 func (o *Orchestrator) buildEngineWork(
 	ctx context.Context, rd *config.ResolvedDrive, session *driveops.Session, mode synctypes.SyncMode, opts synctypes.RunOpts,
 ) driveWork {
-	minFree, parseErr := config.ParseSize(rd.MinFreeSpace)
-	if parseErr != nil {
-		capturedErr := fmt.Errorf("invalid min_free_space %q: %w", rd.MinFreeSpace, parseErr)
+	ecfg, buildErr := syncengine.BuildEngineConfig(session, rd, true, o.logger)
+	if buildErr != nil {
+		capturedErr := buildErr
 
 		return driveWork{
 			runner: &DriveRunner{canonID: rd.CanonicalID, displayName: rd.DisplayName},
@@ -150,7 +158,7 @@ func (o *Orchestrator) buildEngineWork(
 		}
 	}
 
-	engine, engineErr := o.engineFactory(ctx, o.buildEngineConfig(rd, session, minFree))
+	engine, engineErr := o.engineFactory(ctx, ecfg)
 	if engineErr != nil {
 		capturedErr := engineErr
 
@@ -175,35 +183,6 @@ func (o *Orchestrator) buildEngineWork(
 
 			return engine.RunOnce(c, mode, opts)
 		},
-	}
-}
-
-func (o *Orchestrator) buildEngineConfig(
-	rd *config.ResolvedDrive, session *driveops.Session, minFreeSpace int64,
-) *synctypes.EngineConfig {
-	return &synctypes.EngineConfig{
-		DBPath:             rd.StatePath(),
-		SyncRoot:           rd.SyncDir,
-		DataDir:            config.DefaultDataDir(),
-		DriveID:            session.DriveID,
-		AccountEmail:       rd.CanonicalID.Email(),
-		RootItemID:         rd.RootItemID,
-		Fetcher:            session.Meta,
-		SocketIOFetcher:    session.Meta,
-		Items:              session.Meta,
-		Downloads:          session.Transfer,
-		Uploads:            session.Transfer,
-		DriveVerifier:      session.Meta,
-		FolderDelta:        session.Meta,
-		RecursiveLister:    session.Meta,
-		PermChecker:        session.Meta,
-		Logger:             o.logger,
-		EnableWebsocket:    rd.Websocket,
-		UseLocalTrash:      rd.UseLocalTrash,
-		TransferWorkers:    rd.TransferWorkers,
-		CheckWorkers:       rd.CheckWorkers,
-		BigDeleteThreshold: rd.BigDeleteThreshold,
-		MinFreeSpace:       minFreeSpace,
 	}
 }
 
@@ -305,12 +284,12 @@ func (o *Orchestrator) startWatchRunner(
 		return nil, fmt.Errorf("session error for drive %s: %w", rd.CanonicalID, err)
 	}
 
-	minFreeW, parseErr := config.ParseSize(rd.MinFreeSpace)
-	if parseErr != nil {
-		return nil, fmt.Errorf("invalid min_free_space %q for %s: %w", rd.MinFreeSpace, rd.CanonicalID, parseErr)
+	ecfg, buildErr := syncengine.BuildEngineConfig(session, rd, true, o.logger)
+	if buildErr != nil {
+		return nil, fmt.Errorf("engine config failed for %s: %w", rd.CanonicalID, buildErr)
 	}
 
-	engine, engineErr := o.engineFactory(ctx, o.buildEngineConfig(rd, session, minFreeW))
+	engine, engineErr := o.engineFactory(ctx, ecfg)
 	if engineErr != nil {
 		return nil, fmt.Errorf("engine creation failed for %s: %w", rd.CanonicalID, engineErr)
 	}

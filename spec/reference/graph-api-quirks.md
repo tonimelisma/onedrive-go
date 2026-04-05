@@ -53,6 +53,37 @@ Simple upload (PUT `/content`) sends raw binary — there's no way to include `f
 
 ## Delta Response Quirks
 
+## Socket.IO Watch Endpoint Shape
+
+### Graph Returns A Pre-Auth Notification URL, Not A Ready-To-Dial WebSocket URL
+
+`GET /drives/{driveID}/root/subscriptions/socketIo` returns a sensitive
+pre-authenticated `notificationUrl`. The client cannot dial that value as-is.
+Runtime policy:
+
+- treat `notificationUrl` as sensitive credential material and redact it from logs/errors
+- transform it to `/socket.io/?EIO=4&transport=websocket` on the same host/query before dialing
+- preserve Graph-supplied query parameters during that transform
+
+### Engine.IO Open Precedes Namespace Join
+
+After the websocket connect succeeds, the server first sends an Engine.IO open
+packet (`0{...}` with a Socket.IO session ID). Only after receiving that open
+packet should the client send Socket.IO namespace connect frames (`40` and
+`40/notifications`).
+
+### Ping/Pong Is Transport Liveness Only
+
+Engine.IO ping (`2`) and pong (`3`) frames are transport keepalive, not change
+data. Missing or malformed ping/pong handling drops the session but must not
+mutate delta-token state.
+
+### `notification` Events Are Wake Signals Only
+
+Socket.IO `notification` events do not carry authoritative remote item state.
+They are only a low-latency wakeup telling the client to run the ordinary
+delta pipeline. The delta feed remains the sole source of remote truth.
+
 ### Deletion/Creation Ordering
 
 When a file is renamed and a new file is created with the old name, the delta response may list the creation before the deletion. Processing in order causes 409 Conflict errors. The normalization pipeline reorders deletions before creations within each parent ID group.

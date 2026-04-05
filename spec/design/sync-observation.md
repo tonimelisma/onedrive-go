@@ -1,6 +1,6 @@
 # Sync Observation
 
-GOVERNS: internal/syncobserve/observer_local.go, internal/syncobserve/observer_local_handlers.go, internal/syncobserve/observer_local_collisions.go, internal/syncobserve/observer_remote.go, internal/syncobserve/socketio.go, internal/syncobserve/item_converter.go, internal/syncobserve/scanner.go, internal/syncobserve/buffer.go, internal/syncobserve/inotify_linux.go, internal/syncobserve/inotify_other.go
+GOVERNS: internal/syncobserve/observer_local.go, internal/syncobserve/observer_local_handlers.go, internal/syncobserve/observer_local_collisions.go, internal/syncobserve/observer_remote.go, internal/syncobserve/socketio.go, internal/syncobserve/socketio_conn.go, internal/syncobserve/socketio_protocol.go, internal/syncobserve/item_converter.go, internal/syncobserve/scanner.go, internal/syncobserve/buffer.go, internal/syncobserve/inotify_linux.go, internal/syncobserve/inotify_other.go
 
 Implements: R-2.1.2 [verified], R-2.4 [implemented], R-2.8.5 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.15 [verified], R-6.7.16 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [planned], R-6.7.24 [verified], R-6.7.26 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-2.11 [verified], R-2.11.5 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.3.4 [verified], R-6.10.6 [verified]
 
@@ -27,6 +27,7 @@ Key properties:
 - Sparse non-delete updates reuse baseline path context. When delta omits unchanged `name` or `parentReference`, conversion recovers the missing leaf or parent directory from the existing baseline entry so modifies and moves stay correctly rooted.
 - Watch-mode websocket frames are wake signals only. `RemoteObserver` still owns the current delta token, zero-event token guard, observation commit ordering, and event emission. Websocket notifications never carry authoritative remote state and never advance durable sync state by themselves.
 - `SocketIOWakeSource` owns endpoint fetch, RFC6455 connection lifecycle, minimal Engine.IO / Socket.IO framing, ping/pong replies, reconnect, and endpoint renewal. It reduces all remote notifications to a buffered wake signal consumed by `RemoteObserver.Watch`.
+- `SocketIOWakeSource` also owns its websocket-lifecycle callback stream (`started`, endpoint fetch/connect failures, connected, refresh requested, connection dropped, notification wake, wake coalesced, stopped). Observation emits these as internal runtime diagnostics only; they are not durable sync state and not user-facing watch truth.
 - **Progress logging**: `FullDelta` emits periodic Info-level progress logs every 30 seconds during enumeration, reporting pages fetched and events accumulated so far. For 100K+ item drives where enumeration can take minutes, this gives operators visibility between the start and completion logs. Time-based rather than page-based to produce evenly-spaced logs regardless of page size or API latency.
 
 **Server-trusted observation**: The remote observer does NOT filter items by name validity or always-excluded patterns. If OneDrive sends an item in a delta response, it exists on OneDrive — filtering it would be silent data loss. Name-based filtering is a local-only concern (upload validation). Only root items and vault descendants are excluded from remote observation.
@@ -126,6 +127,7 @@ Observation has a few explicit mutable-runtime owners:
 - `LocalObserver` owns `PendingTimers`, `HashRequests`, and the filesystem watcher for one watch run. Timer callbacks feed back into that observer-owned watch loop; they do not mutate engine state directly.
 - `RemoteObserver` owns `deltaToken` for one watch run. The watch loop is the only writer; helper calls may read it concurrently through `CurrentDeltaToken`.
 - `SocketIOWakeSource` owns exactly one outbound websocket session plus its reconnect/refresh timers for one watch run. It does not own any delta token or durable sync state.
+- `SocketIOWakeSource` constructor options own the test seams for dial/sleep/clock/lifecycle hook injection. Tests do not mutate the wake source after construction.
 - The engine owns the outer observer goroutines and cancellation context. Observation code never starts detached background work.
 
 ## Permission Interaction
