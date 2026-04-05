@@ -226,6 +226,10 @@ func runCLIWithConfigExpectError(t *testing.T, cfgPath string, env map[string]st
 // eventual consistency. 30 seconds covers observed propagation delays.
 const pollTimeout = 30 * time.Second
 
+// transientGraphRetryTimeout covers the rare case where a live Graph read-only
+// command hits repeated 502/503/504 gateway failures before succeeding.
+const transientGraphRetryTimeout = 4 * time.Minute
+
 // pollBackoff returns exponential backoff: 500ms, 1s, 2s, 4s cap.
 func pollBackoff(attempt int) time.Duration {
 	base := 500 * time.Millisecond
@@ -289,6 +293,43 @@ func pollCLIWithConfigSuccess(t *testing.T, cfgPath string, env map[string]strin
 	}
 }
 
+func isRetryableGraphGatewayFailure(stderr string) bool {
+	return strings.Contains(stderr, "graph: HTTP 502") ||
+		strings.Contains(stderr, "graph: HTTP 503") ||
+		strings.Contains(stderr, "graph: HTTP 504")
+}
+
+// pollCLIWithConfigRetryingTransientGraphFailures retries only when a live CLI
+// read fails due to an upstream Graph gateway error. Real command regressions
+// still fail immediately instead of being retried until timeout.
+func pollCLIWithConfigRetryingTransientGraphFailures(
+	t *testing.T, cfgPath string, env map[string]string, driveID string, timeout time.Duration, args ...string,
+) (string, string) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+
+	for attempt := 0; ; attempt++ {
+		stdout, stderr, err := runCLICore(t, cfgPath, env, driveID, args...)
+		if err == nil {
+			return stdout, stderr
+		}
+
+		if !isRetryableGraphGatewayFailure(stderr) {
+			require.NoErrorf(t, err, "CLI command %v failed\nstdout: %s\nstderr: %s",
+				args, stdout, stderr)
+		}
+
+		if time.Now().After(deadline) {
+			require.Failf(t, "pollCLIWithConfigRetryingTransientGraphFailures: timed out",
+				"after %v waiting for success of %v through transient Graph failures\nlast stdout: %s\nlast stderr: %s",
+				timeout, args, stdout, stderr)
+		}
+
+		time.Sleep(pollBackoff(attempt))
+	}
+}
+
 // pollCLIWithConfigNotContains retries a CLI command until stdout does NOT
 // contain the unexpected string (or the command errors). Used to wait for
 // Graph API eventual consistency after deletions.
@@ -339,7 +380,9 @@ func TestE2E_RoundTrip(t *testing.T) {
 	})
 
 	t.Run("whoami", func(t *testing.T) {
-		stdout, _ := runCLIWithConfig(t, cfgPath, nil, "whoami", "--json")
+		stdout, _ := pollCLIWithConfigRetryingTransientGraphFailures(
+			t, cfgPath, nil, drive, transientGraphRetryTimeout, "whoami", "--json",
+		)
 
 		var out map[string]interface{}
 		require.NoError(t, json.Unmarshal([]byte(stdout), &out))
@@ -429,7 +472,9 @@ func TestE2E_RoundTrip(t *testing.T) {
 	})
 
 	t.Run("whoami_text", func(t *testing.T) {
-		stdout, _ := runCLIWithConfig(t, cfgPath, nil, "whoami")
+		stdout, _ := pollCLIWithConfigRetryingTransientGraphFailures(
+			t, cfgPath, nil, drive, transientGraphRetryTimeout, "whoami",
+		)
 
 		email := strings.SplitN(drive, ":", 2)[1]
 		assert.Contains(t, stdout, email, "whoami text output should contain the account email")

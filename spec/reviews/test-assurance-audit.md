@@ -306,7 +306,7 @@ This is the operating dashboard for completeness, not a verdict of quality. A pa
 | W2 | done | done | done | partial | done | done | partial | done | current actionable W2 top-ups are closed; only planned nil-guard / watch-cleanup hardening remains |
 | W3 | done | done | partial | n/a | done | no | partial | no | big-delete and cross-drive proof paths unclear |
 | W4 | done | done | done | n/a | done | done | partial | done | live crash/restart proof is still thinner than the now-reconciled store/CLI durable-row mutation coverage |
-| W5 | done | done | done | partial | done | partial | partial | done | upload-session traceability tags still lag the body-level coverage |
+| W5 | done | done | done | partial | done | done | partial | done | upload-session traceability gap is closed; remaining W5 risk is broader worker-pool and future planned-transfer coverage |
 | W6 | done | done | partial | partial | done | partial | partial | no | pagination and transport split still need body audit |
 | W7 | done | done | partial | n/a | done | partial | partial | partial | live auth/logout/list proof is still thinner than the now-expanded caller-level coverage |
 | W8 | done | done | partial | n/a | done | no | no | no | validation-tier coverage may be over-claimed |
@@ -831,10 +831,9 @@ Key W2 gap notes:
   - note: planned requirements `R-5.3.2`, `R-5.6.1`, `R-5.8.1` stay as future placeholders for now
 - Claim mapping snapshot from filenames and `// Validates:` only:
   - Candidate test surface includes `internal/driveops/{transfer_manager,session_store,session,stale_partials,disk_unix,cleanup,hash}_test.go`, `pkg/quickxorhash/quickxorhash_test.go`, `internal/cli/{get,put,root}_test.go`, plus transfer-related e2e suites
-  - Explicit comment claims already exist for `R-1.2`, `R-1.2.4`, `R-1.3`, `R-1.3.4`, `R-5.2`, `R-5.5`, `R-5.7.1`, `R-6.2.3`, `R-6.2.6`, `R-6.2.10`, and `R-6.8.3`
-  - No explicit claim surfaced yet for `R-5.1.1`, `R-5.1.2`, `R-5.3.1`, `R-5.3.3`, `R-5.6.2` through `R-5.6.9`, or `R-6.4.7`
-  - This is currently the loudest metadata gap in the audit: several of the most subtle and regression-prone upload rules appear either untagged or uncovered from the outside
-  - First body-audit target inside W5 should be resumable upload invariants and cleanup behavior, because that is exactly where a test can exist but still be too shallow to catch a nerf
+  - Explicit comment claims now exist for `R-1.2`, `R-1.2.4`, `R-1.3`, `R-1.3.4`, `R-5.2.1`, `R-5.2.2`, `R-5.2.3`, `R-5.2.4`, `R-5.3.1`, `R-5.3.3`, `R-5.5.1`, `R-5.5.2`, `R-5.6.2` through `R-5.6.9`, `R-5.7.1`, `R-6.2.3`, `R-6.2.6`, `R-6.2.10`, `R-6.4.7`, and `R-6.8.3`
+  - The remaining explicit-tag gap inside W5 is now mostly `R-5.1.1` and `R-5.1.2`, which belong more naturally to sync/control-plane worker orchestration than upload-session robustness itself
+  - The earlier loud metadata gap is closed for the subtle upload-session rules; the remaining W5 body work is no longer “are these rules tagged at all?” but “are the non-upload transfer and worker-pool contracts strong enough?”
 - Body-audit notes from `internal/driveops/*_test.go` and `internal/graph/upload_test.go`:
   - The earlier metadata gap was partly misleading: nuanced upload-session rules are heavily covered in `internal/graph/upload_test.go`, including explicit tests for `R-5.6.2`, `R-5.6.3`, `R-5.6.4`, `R-5.6.5`, `R-5.6.7`, `R-5.6.8`, and `R-5.6.9`, plus chunk-auth behavior (`R-5.6.6`) and chunk alignment behavior
   - `internal/driveops/transfer_manager_test.go` does a solid job on download atomicity, resume behavior, hash mismatch handling, session-store resume, delete-on-resume-error, rename-failure preservation, and disk-space prechecks
@@ -842,7 +841,7 @@ Key W2 gap notes:
   - Investigation outcome: the former `R-5.5.3` validation-disable requirement was not backed by any runtime path. The config keys existed only in parsing/tests, so the correct fix was to remove the dead config/spec surface instead of wiring a fake feature.
   - Investigation outcome: `R-5.7.1` was a real boundary gap. Sync observation already enforced the 250 GB limit, but direct file operations did not. `TransferManager.UploadFile` now rejects oversized files before hashing or any network transfer, and the branch has a regression test for that boundary.
   - Follow-up for W5:
-    - add more traceability tags for subtle upload-session behaviors that are well tested but still under-tagged
+    - upload-session traceability top-ups are closed; any future W5 work should focus on substantive uncovered worker-pool or live-transfer behavior, not missing `// Validates:` tags
 - Verified-claim reconciliation snapshot:
 
 | Contract | Basis | Current evidence | Reconciliation | Gap label / note |
@@ -865,6 +864,7 @@ Key W5 gap notes:
 - `CODE+DOC`: dead validation-disable toggles were removed rather than implemented, because they had no runtime contract and would only create a misleading escape hatch.
 - `CODE+BODY`: direct `put` / transfer-layer 250 GB rejection is now explicitly implemented and regression-tested at the shared transfer boundary.
 - `BODY`: W5 is stronger than the metadata first suggested because much of the subtle behavior lives in graph-layer tests, not just transfer-manager tests.
+- `META`: the upload-session traceability gap is now closed. Remaining W5 work is either future-planned (`R-5.3.2`, `R-5.6.1`, `R-5.8.1`) or outside this specific upload-session tagging tranche (`R-5.1.*` worker-pool proof).
 
 ### W6. Graph Client Quirks, Pagination, Auth Refresh, And Retry Transport
 
@@ -1078,6 +1078,5 @@ Key W5 gap notes:
 
 ## Next Moves
 
-1. Tighten W5 traceability for upload-session rules that are already strongly tested in body-level graph tests but still under-tagged at the `// Validates:` level.
-2. Continue W7 body-level reconciliation for:
+1. Continue W7 body-level reconciliation for:
    - live logout / whoami / drive-list / drive-search / shared proof against real config/token state beyond the now-expanded caller-level coverage
