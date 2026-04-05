@@ -358,10 +358,6 @@ func WarnUnimplemented(rd *ResolvedDrive, logger *slog.Logger) {
 			slog.String("field", field))
 	}
 
-	if len(rd.SyncPaths) > 0 {
-		warn("sync_paths")
-	}
-
 	if rd.BandwidthLimit != "0" && rd.BandwidthLimit != defaultBandwidthLimit {
 		warn("bandwidth_limit")
 	}

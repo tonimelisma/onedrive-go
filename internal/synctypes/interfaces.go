@@ -161,6 +161,7 @@ type ObservedItem struct {
 	Mtime     int64
 	ETag      string
 	IsDeleted bool
+	Filtered  bool
 }
 
 // RemoteStateRow represents a row from the remote_state table, used by

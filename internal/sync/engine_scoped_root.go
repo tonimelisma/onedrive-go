@@ -102,8 +102,15 @@ func (flow *engineFlow) commitObservedRemote(
 	events []synctypes.ChangeEvent,
 	token string,
 ) error {
+	return flow.commitObservedItems(ctx, changeEventsToObservedItems(flow.engine.logger, events), token)
+}
+
+func (flow *engineFlow) commitObservedItems(
+	ctx context.Context,
+	observed []synctypes.ObservedItem,
+	token string,
+) error {
 	eng := flow.engine
-	observed := changeEventsToObservedItems(eng.logger, events)
 
 	if eng.hasScopedRoot() {
 		if err := eng.baseline.CommitObservationForScope(ctx, observed, token, eng.driveID, eng.rootItemID); err != nil {
@@ -152,11 +159,13 @@ func (rt *watchRuntime) watchScopedRootRemote(
 			continue
 		}
 
-		if !rt.commitScopedRootWatchEvents(ctx, polledEvents, newToken) {
+		scoped := applyRemoteScope(rt.engine.logger, rt.currentScopeSnapshot(), polledEvents)
+
+		if !rt.commitScopedRootWatchEvents(ctx, scoped.observed, newToken) {
 			continue
 		}
 
-		if stop := rt.dispatchScopedRootEvents(ctx, events, polledEvents); stop {
+		if stop := rt.dispatchScopedRootEvents(ctx, events, scoped.emitted); stop {
 			return nil
 		}
 		bo.Reset()
@@ -188,13 +197,13 @@ func (rt *watchRuntime) handleScopedRootPollError(
 
 func (rt *watchRuntime) commitScopedRootWatchEvents(
 	ctx context.Context,
-	polledEvents []synctypes.ChangeEvent,
+	observed []synctypes.ObservedItem,
 	newToken string,
 ) bool {
-	if err := rt.commitObservedRemote(ctx, polledEvents, newToken); err != nil {
+	if err := rt.commitObservedItems(ctx, observed, newToken); err != nil {
 		rt.engine.logger.Error("failed to commit scoped observations in watch",
 			slog.String("error", err.Error()),
-			slog.Int("events", len(polledEvents)),
+			slog.Int("events", len(observed)),
 		)
 		return false
 	}

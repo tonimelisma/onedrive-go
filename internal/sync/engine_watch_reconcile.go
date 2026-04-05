@@ -395,7 +395,10 @@ func (rt *watchRuntime) runFullReconciliationAsync(ctx context.Context, bl *sync
 			return
 		}
 
-		if commitErr := rt.commitObservedRemote(ctx, events, deltaToken); commitErr != nil {
+		scopeSnapshot := rt.currentScopeSnapshot()
+		scopedPrimary := applyRemoteScope(rt.engine.logger, scopeSnapshot, events)
+
+		if commitErr := rt.commitObservedItems(ctx, scopedPrimary.observed, deltaToken); commitErr != nil {
 			rt.engine.logger.Error("failed to commit full reconciliation observations",
 				slog.String("error", commitErr.Error()),
 			)
@@ -413,7 +416,7 @@ func (rt *watchRuntime) runFullReconciliationAsync(ctx context.Context, bl *sync
 			return
 		}
 
-		events = filterOutShortcuts(events)
+		events = filterOutShortcuts(scopedPrimary.emitted)
 
 		shortcutEvents, scErr := rt.shortcutCoordinator().reconcileShortcutScopes(ctx, bl)
 		if scErr != nil {
@@ -422,7 +425,7 @@ func (rt *watchRuntime) runFullReconciliationAsync(ctx context.Context, bl *sync
 			)
 		}
 
-		events = append(events, shortcutEvents...)
+		events = append(events, applyRemoteScope(rt.engine.logger, scopeSnapshot, shortcutEvents).emitted...)
 
 		if len(events) == 0 {
 			rt.engine.logger.Info("periodic full reconciliation complete: no changes",
@@ -445,6 +448,54 @@ func (rt *watchRuntime) runFullReconciliationAsync(ctx context.Context, bl *sync
 	}()
 }
 
+func (rt *watchRuntime) runEnteredScopeReconciliationAsync(
+	ctx context.Context,
+	bl *synctypes.Baseline,
+	enteredPaths []string,
+) {
+	if rt.reconcileActive {
+		rt.engine.logger.Info("scope re-entry reconciliation skipped — previous still running")
+		return
+	}
+	rt.reconcileActive = true
+	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventReconcileStarted})
+
+	go func() {
+		result := reconcileResult{}
+
+		fetchResult, err := rt.reconcilePrimaryScopeEntries(ctx, bl, enteredPaths, nil)
+		if err != nil {
+			if ctx.Err() == nil {
+				rt.engine.logger.Error("scope re-entry reconciliation failed",
+					slog.String("error", err.Error()),
+				)
+			}
+			rt.finishFullReconciliation(ctx, result)
+			return
+		}
+
+		scopeSnapshot := rt.currentScopeSnapshot()
+		scoped := applyRemoteScope(rt.engine.logger, scopeSnapshot, fetchResult.events)
+		if commitErr := rt.commitObservedItems(ctx, scoped.observed, ""); commitErr != nil {
+			rt.engine.logger.Error("failed to commit scope re-entry observations",
+				slog.String("error", commitErr.Error()),
+			)
+			rt.finishFullReconciliation(ctx, result)
+			return
+		}
+		if tokenErr := rt.commitDeferredDeltaTokens(ctx, fetchResult.deferred); tokenErr != nil {
+			rt.engine.logger.Error("failed to commit scope re-entry delta tokens",
+				slog.String("error", tokenErr.Error()),
+			)
+			rt.finishFullReconciliation(ctx, result)
+			return
+		}
+
+		result.events = scoped.emitted
+		rt.finishFullReconciliation(ctx, result)
+	}()
+}
+
 func (rt *watchRuntime) finishFullReconciliation(ctx context.Context, result reconcileResult) {
 	select {
 	case rt.reconcileResults <- result:
@@ -456,7 +507,7 @@ func (rt *watchRuntime) finishFullReconciliation(ctx context.Context, result rec
 	}
 }
 
-func (rt *watchRuntime) applyReconcileResult(result reconcileResult) {
+func (rt *watchRuntime) applyReconcileResult(ctx context.Context, result reconcileResult) {
 	rt.reconcileActive = false
 
 	if len(result.shortcuts) > 0 {
@@ -465,6 +516,12 @@ func (rt *watchRuntime) applyReconcileResult(result reconcileResult) {
 
 	for i := range result.events {
 		rt.buf.Add(&result.events[i])
+	}
+
+	if err := rt.persistScopeSnapshot(ctx, rt.currentScopeSnapshot()); err != nil {
+		rt.engine.logger.Warn("failed to persist scope snapshot after reconciliation",
+			slog.String("error", err.Error()),
+		)
 	}
 
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventReconcileApplied})

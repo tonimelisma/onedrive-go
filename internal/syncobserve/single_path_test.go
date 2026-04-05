@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -232,4 +233,39 @@ func TestObserveSinglePath_InternalExclusionResolves(t *testing.T) {
 	assert.Nil(t, result.Event)
 	assert.Nil(t, result.Skipped)
 	assert.True(t, result.Resolved)
+}
+
+// Validates: R-2.4.4, R-2.4.5
+func TestObserveSinglePathWithScope_ResolvesOutOfScopePathsSilently(t *testing.T) {
+	t.Parallel()
+
+	syncRoot := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "docs"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "docs", "keep.txt"), []byte("keep"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "docs", "drop.txt"), []byte("drop"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "docs", ".odignore"), []byte("marker"), 0o600))
+
+	scopeSnapshot, err := syncscope.NewSnapshot(syncscope.Config{
+		SyncPaths:    []string{"/docs/keep.txt"},
+		IgnoreMarker: ".odignore",
+	}, []string{"docs"})
+	require.NoError(t, err)
+
+	for _, relPath := range []string{"docs/.odignore", "docs/drop.txt"} {
+		result, err := ObserveSinglePathWithScope(
+			nil,
+			mustOpenSyncTree(t, syncRoot),
+			relPath,
+			nil,
+			time.Now().UnixNano(),
+			nil,
+			synctypes.LocalFilterConfig{},
+			synctypes.LocalObservationRules{},
+			scopeSnapshot,
+		)
+		require.NoError(t, err)
+		assert.Nil(t, result.Event)
+		assert.Nil(t, result.Skipped)
+		assert.True(t, result.Resolved)
+	}
 }

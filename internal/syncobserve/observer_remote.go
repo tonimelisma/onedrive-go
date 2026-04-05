@@ -31,6 +31,11 @@ type watchStepResult struct {
 	woke bool
 }
 
+type WatchObservationPreparer func(
+	ctx context.Context,
+	events []synctypes.ChangeEvent,
+) ([]synctypes.ObservedItem, []synctypes.ChangeEvent, error)
+
 // RemoteObserver transforms Graph API delta responses into []synctypes.ChangeEvent.
 // It handles pagination, path materialization, change classification, and
 // normalization (NFC, driveID zero-padding). Delegates item conversion to
@@ -43,6 +48,7 @@ type RemoteObserver struct {
 	SleepFunc func(ctx context.Context, d time.Duration) error
 	ObsWriter synctypes.ObservationWriter // nil-safe: when set, observations are committed atomically with delta token
 	wakeCh    <-chan struct{}
+	prepWatch WatchObservationPreparer
 
 	// mu protects deltaToken for concurrent reads via CurrentDeltaToken().
 	// The watch loop is the only writer; helper calls may read concurrently.
@@ -102,6 +108,14 @@ func (o *RemoteObserver) SetObsWriter(w synctypes.ObservationWriter) {
 // delta cycle while delta tokens and observations remain owned by Watch().
 func (o *RemoteObserver) SetWakeChannel(wakeCh <-chan struct{}) {
 	o.wakeCh = wakeCh
+}
+
+// SetWatchObservationPreparer installs an optional adapter that can rewrite
+// polled remote events into a commit projection plus a separate emitted event
+// stream. Scope filtering uses this to persist filtered remote_state rows
+// without handing out-of-scope changes to the planner.
+func (o *RemoteObserver) SetWatchObservationPreparer(preparer WatchObservationPreparer) {
+	o.prepWatch = preparer
 }
 
 // FullDelta fetches all delta pages and returns the accumulated change events
@@ -215,11 +229,16 @@ func (o *RemoteObserver) Watch(ctx context.Context, savedToken string, events ch
 			continue
 		}
 
-		if !o.commitWatchObservation(ctx, polledEvents, newToken) {
+		observed, emitted, prepErr := o.prepareWatchObservation(ctx, polledEvents)
+		if prepErr != nil {
+			return prepErr
+		}
+
+		if !o.commitWatchObservation(ctx, observed, newToken) {
 			continue
 		}
 
-		if err := o.emitWatchEvents(ctx, events, polledEvents); err != nil {
+		if err := o.emitWatchEvents(ctx, events, emitted); err != nil {
 			return err
 		}
 
@@ -280,7 +299,7 @@ func (o *RemoteObserver) handleZeroEventPoll(ctx context.Context, interval time.
 
 func (o *RemoteObserver) commitWatchObservation(
 	ctx context.Context,
-	polledEvents []synctypes.ChangeEvent,
+	observed []synctypes.ObservedItem,
 	newToken string,
 ) bool {
 	// Commit observations atomically with delta token before sending events
@@ -290,17 +309,27 @@ func (o *RemoteObserver) commitWatchObservation(
 		return true
 	}
 
-	observed := changeEventsToObservedItems(o.logger, polledEvents)
 	if commitErr := o.ObsWriter.CommitObservation(ctx, observed, newToken, o.driveID); commitErr != nil {
 		o.logger.Error("failed to commit observations in watch",
 			slog.String("error", commitErr.Error()),
-			slog.Int("events", len(polledEvents)),
+			slog.Int("events", len(observed)),
 		)
 		// Retry on next poll — token replay is idempotent.
 		return false
 	}
 
 	return true
+}
+
+func (o *RemoteObserver) prepareWatchObservation(
+	ctx context.Context,
+	polledEvents []synctypes.ChangeEvent,
+) ([]synctypes.ObservedItem, []synctypes.ChangeEvent, error) {
+	if o.prepWatch == nil {
+		return changeEventsToObservedItems(o.logger, polledEvents), polledEvents, nil
+	}
+
+	return o.prepWatch(ctx, polledEvents)
 }
 
 func (o *RemoteObserver) emitWatchEvents(

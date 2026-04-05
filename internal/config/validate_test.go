@@ -579,14 +579,12 @@ func TestWarnUnimplemented_NonDefaults_WarnsAll(t *testing.T) {
 
 	warned := loggedAttrValues(t, &logBuf, "field")
 
-	expected := []string{
-		"sync_paths",
-		"bandwidth_limit", "bandwidth_schedule", "user_agent",
-	}
+	expected := []string{"bandwidth_limit", "bandwidth_schedule", "user_agent"}
 	for _, f := range expected {
 		assert.Contains(t, warned, f, "expected warning for %q", f)
 	}
 
+	assert.NotContains(t, warned, "sync_paths", "implemented sync scope paths should not warn")
 	assert.NotContains(t, warned, "skip_files", "implemented file filters should not warn")
 	assert.NotContains(t, warned, "skip_dirs", "implemented directory filters should not warn")
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 )
 
 // LocalFilterConfig controls local-only observation exclusions. These filters
@@ -32,6 +33,7 @@ type EngineConfig struct {
 	SyncRoot           string       // absolute path to the local sync directory
 	DataDir            string       // application data directory for session files (optional)
 	DriveID            driveid.ID   // normalized drive identifier
+	DriveType          string       // canonical drive type ("personal", "business", "sharepoint", "shared")
 	AccountEmail       string       // authenticated account email for caller-aware permission checks
 	RootItemID         string       // folder-scoped virtual root; empty = drive root
 	Fetcher            DeltaFetcher // satisfied by *graph.Client
@@ -46,6 +48,7 @@ type EngineConfig struct {
 	Logger             *slog.Logger
 	LocalFilter        LocalFilterConfig
 	LocalRules         LocalObservationRules
+	SyncScope          syncscope.Config
 	EnableWebsocket    bool  // when true, full-drive watch mode enables outbound Socket.IO wakeups
 	UseLocalTrash      bool  // move deleted local files to OS trash instead of permanent delete
 	TransferWorkers    int   // goroutine count for the worker pool (0 → minWorkers)
