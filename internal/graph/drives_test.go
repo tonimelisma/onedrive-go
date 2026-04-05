@@ -1026,6 +1026,43 @@ func TestSharedWithMe_Pagination(t *testing.T) {
 	assert.Equal(t, 2, page)
 }
 
+// Validates: R-6.7.8, R-6.7.9
+func TestSharedWithMe_FiltersPackagesAndDecodesNames(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeTestResponse(t, w, `{
+			"value": [
+				{
+					"id": "shared-file-1",
+					"name": "Quarterly%20Plan.docx",
+					"size": 2048,
+					"createdDateTime": "2024-02-01T00:00:00Z",
+					"lastModifiedDateTime": "2024-05-01T00:00:00Z",
+					"file": {"mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
+				},
+				{
+					"id": "shared-pkg-1",
+					"name": "Notebook%20One",
+					"size": 0,
+					"createdDateTime": "2024-02-01T00:00:00Z",
+					"lastModifiedDateTime": "2024-05-01T00:00:00Z",
+					"package": {"type": "oneNote"}
+				}
+			]
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	items, err := client.SharedWithMe(t.Context())
+	require.NoError(t, err)
+
+	require.Len(t, items, 1)
+	assert.Equal(t, "Quarterly Plan.docx", items[0].Name)
+	assert.False(t, items[0].IsPackage)
+}
+
 func TestSharedWithMe_Error(t *testing.T) {
 	assertGraphCallError(t, http.StatusUnauthorized, "req-shared-401", "InvalidAuthenticationToken", func(client *Client) error {
 		_, err := client.SharedWithMe(t.Context())
@@ -1095,6 +1132,43 @@ func TestSearchDriveItems_Empty(t *testing.T) {
 	assertEmptyGraphSliceCall(t, func(client *Client) ([]Item, error) {
 		return client.SearchDriveItems(t.Context(), "*")
 	})
+}
+
+// Validates: R-6.7.8, R-6.7.9
+func TestSearchDriveItems_FiltersPackagesAndDecodesNames(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeTestResponse(t, w, `{
+			"value": [
+				{
+					"id": "search-file-1",
+					"name": "Shared%20Notes.txt",
+					"size": 512,
+					"createdDateTime": "2024-03-01T00:00:00Z",
+					"lastModifiedDateTime": "2024-07-01T00:00:00Z",
+					"file": {"mimeType": "text/plain"}
+				},
+				{
+					"id": "search-pkg-1",
+					"name": "Notebook%20Two",
+					"size": 0,
+					"createdDateTime": "2024-03-01T00:00:00Z",
+					"lastModifiedDateTime": "2024-07-01T00:00:00Z",
+					"package": {"type": "oneNote"}
+				}
+			]
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	items, err := client.SearchDriveItems(t.Context(), "*")
+	require.NoError(t, err)
+
+	require.Len(t, items, 1)
+	assert.Equal(t, "Shared Notes.txt", items[0].Name)
+	assert.False(t, items[0].IsPackage)
 }
 
 func TestSearchDriveItems_Error(t *testing.T) {

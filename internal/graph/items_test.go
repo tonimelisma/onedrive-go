@@ -139,6 +139,29 @@ func TestGetItem_DriveIDNormalization(t *testing.T) {
 	assert.Equal(t, driveid.New("b!uppercase-drive-id"), item.ParentDriveID)
 }
 
+// Validates: R-6.7.8
+func TestGetItem_DecodesURLencodedName(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeTestResponse(t, w, `{
+			"id": "item-encoded",
+			"name": "Quarterly%20Report%20%231.pdf",
+			"createdDateTime": "2024-01-01T00:00:00Z",
+			"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+			"parentReference": {"id": "parent-1", "driveId": "drive-1"},
+			"file": {"mimeType": "application/pdf"}
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.GetItem(t.Context(), driveid.New("drive-1"), "item-encoded")
+	require.NoError(t, err)
+
+	assert.Equal(t, "Quarterly Report #1.pdf", item.Name)
+}
+
 // Validates: R-6.7.23
 func TestGetItem_DecodesParentReferencePath(t *testing.T) {
 	srv := newSingleItemServer(t, `{
@@ -499,15 +522,16 @@ func TestListChildren_Empty(t *testing.T) {
 	})
 }
 
-func TestListChildren_MixedTypes(t *testing.T) {
+// Validates: R-6.7.8, R-6.7.9
+func TestListChildren_FiltersPackagesAndDecodesNames(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		writeTestResponse(t, w, `{
 			"value": [
-				{"id":"file-1","name":"doc.pdf","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"p","driveId":"d"},"file":{"mimeType":"application/pdf"}},
-				{"id":"folder-1","name":"Photos","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"p","driveId":"d"},"folder":{"childCount":100}},
-				{"id":"pkg-1","name":"Notebook","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"p","driveId":"d"},"package":{"type":"oneNote"}}
+				{"id":"file-1","name":"doc%20one.pdf","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"p","driveId":"d"},"file":{"mimeType":"application/pdf"}},
+				{"id":"folder-1","name":"Photos%20%26%20Videos","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"p","driveId":"d"},"folder":{"childCount":100}},
+				{"id":"pkg-1","name":"Notebook%20One","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"p","driveId":"d"},"package":{"type":"oneNote"}}
 			]
 		}`)
 	}))
@@ -517,12 +541,13 @@ func TestListChildren_MixedTypes(t *testing.T) {
 	items, err := client.ListChildren(t.Context(), driveid.New("d"), "p")
 	require.NoError(t, err)
 
-	assert.Len(t, items, 3)
+	assert.Len(t, items, 2)
 	assert.False(t, items[0].IsFolder)
+	assert.Equal(t, "doc one.pdf", items[0].Name)
 	assert.Equal(t, "application/pdf", items[0].MimeType)
 	assert.True(t, items[1].IsFolder)
+	assert.Equal(t, "Photos & Videos", items[1].Name)
 	assert.Equal(t, 100, items[1].ChildCount)
-	assert.True(t, items[2].IsPackage)
 }
 
 func TestListChildren_InvalidNextLink(t *testing.T) {

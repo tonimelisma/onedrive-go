@@ -904,13 +904,19 @@ Key W5 gap notes:
   - keep the first duplicate delta item instead of the last
 - Audit status:
   - ideal model drafted
+  - body audit in progress
   - note: planned requirements `R-6.7.11`, `R-6.7.18`, `R-6.7.22`, `R-6.7.23` stay as future placeholders for now
 - Claim mapping snapshot from filenames and `// Validates:` only:
   - Candidate test surface is broad: `internal/graph/{client,items,drives,delta,download,upload,normalize,quirks,types,url_validation}_test.go`, `internal/tokenfile/tokenfile_test.go`, `internal/cli/{ls,stat,mv,cp,auth}_test.go`, and drive-list plus CLI e2e suites
-  - Explicit comment claims already exist for `R-1.1`, `R-1.1.1`, `R-1.1.2`, `R-1.1.3`, `R-1.4`, `R-1.5`, `R-1.6`, `R-1.7`, `R-1.8`, `R-3.1`, `R-6.7.8`, `R-6.7.9`, `R-6.7.10`, `R-6.7.12`, `R-6.7.13`, `R-6.8.1`, `R-6.8.2`, `R-6.8.6`, `R-6.8.8`, and `R-6.8.14`
-  - No explicit claim surfaced yet for `R-6.7.4` or `R-6.8.4`
+  - Explicit comment claims already exist for `R-1.1`, `R-1.1.1`, `R-1.1.2`, `R-1.1.3`, `R-1.4`, `R-1.5`, `R-1.6`, `R-1.7`, `R-1.8`, `R-3.1`, `R-6.7.8`, `R-6.7.9`, `R-6.7.10`, `R-6.7.12`, `R-6.7.13`, `R-6.8.1`, `R-6.8.2`, `R-6.8.4`, `R-6.8.6`, `R-6.8.8`, and `R-6.8.14`
+  - No explicit claim surfaced yet for `R-6.7.4`
   - `internal/tokenfile/tokenfile_test.go` exists, but no `// Validates:` hit surfaced in this pass, so auth/token durability traceability likely needs cleanup even if the tests are solid
   - First body-audit target inside W6 should be pagination and retry/auth boundary tests, because those can be partially covered while still missing the exact transport split or refresh failure semantics
+- Body-audit notes from `internal/graph/{items,drives_shared,shares,upload_transfer,items_mutation,items_permissions}_go` and related tests:
+  - Non-delta item normalization had a real production gap. Delta batches already ran the URL-decode/package-filter pipeline, but single-item fetch/mutation/share/upload responses and paginated non-delta list surfaces did not. Encoded names and package-only OneNote items could therefore leak through `GetItem`, `ListChildren`, `SharedWithMe`, and drive search even though the graph design doc marked `R-6.7.8` / `R-6.7.9` verified.
+  - The fix split the normalization boundary cleanly: `normalizeSingleItem` now applies URL decoding to single-item responses, while `normalizeListedItems` applies URL decoding plus package filtering to non-delta list/search/shared pages. Delta keeps the stronger batch pipeline on top of that narrower shared layer.
+  - New regression coverage proves the gap is closed where it mattered in practice: `internal/graph/items_test.go` now proves encoded names are decoded for explicit item fetch and package-only children are filtered from list output, while `internal/graph/drives_test.go` proves the same filtering/decoding contract for `sharedWithMe` and drive search.
+  - The target-scoped throttle-gate provider proof was already strong; this pass closes the remaining traceability gap by tagging `internal/graphhttp/provider_test.go` for `R-6.8.4` directly.
 
 ### W7. CLI Contracts, Formatting, And Command Independence From Sync State
 
