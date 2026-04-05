@@ -3,10 +3,19 @@ package sync
 import (
 	"context"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
+
+type failureSummaryEntry struct {
+	issueType string
+	path      string
+	errMsg    string
+}
+
+const fallbackFailureSummaryIssueType = "transient_failure"
 
 // armRetryTimer arms the retry timer for the next retrier sweep. Queries
 // the earliest next_retry_at from sync_failures and sets the timer. If the
@@ -56,42 +65,65 @@ func (rt *watchRuntime) retryTimerChan() <-chan struct{} {
 	return rt.retryTimerCh
 }
 
-// recordError increments the failed counter and appends the error to the
-// diagnostic error list.
-func (f *engineFlow) recordError(r *synctypes.WorkerResult) {
+// recordError increments the failed counter, preserves the raw error for the
+// final SyncReport, and records the classified transient-failure shape needed
+// for end-of-pass WARN aggregation.
+func (f *engineFlow) recordError(decision *ResultDecision, r *synctypes.WorkerResult) {
 	f.failed++
-	if r.Err != nil {
-		f.syncErrors = append(f.syncErrors, r.Err)
-	}
-}
-
-// logFailureSummary logs an aggregated summary of sync errors from the
-// current pass. Groups errors by message prefix (first 80 chars) and logs
-// one WARN per group with count + sample paths when count > 10, or per-item
-// WARN otherwise. Mirrors the scanner aggregation pattern in
-// recordSkippedItems (R-6.6.12). Resets syncErrors after logging.
-func (f *engineFlow) logFailureSummary() {
-	errs := f.syncErrors
-	f.syncErrors = nil
-
-	if len(errs) == 0 {
+	if r == nil {
 		return
 	}
 
-	// Group by error message for aggregation. Use the first errorGroupKeyLen
-	// chars of the error message as the group key — detailed enough to
-	// distinguish issue types without creating too many groups.
-	const errorGroupKeyLen = 80
-	type group struct {
-		msgs  []string
-		count int
+	if r.Err != nil {
+		f.syncErrors = append(f.syncErrors, r.Err)
 	}
-	groups := make(map[string]*group)
-	for _, err := range errs {
-		msg := err.Error()
-		key := msg
-		if len(key) > errorGroupKeyLen {
-			key = key[:errorGroupKeyLen]
+
+	if decision == nil || decision.Persistence != persistTransientFailure {
+		return
+	}
+
+	errMsg := r.ErrMsg
+	if errMsg == "" && r.Err != nil {
+		errMsg = r.Err.Error()
+	}
+	if errMsg == "" {
+		return
+	}
+
+	issueType := decision.IssueType
+	if issueType == "" {
+		issueType = fallbackFailureSummaryIssueType
+	}
+
+	f.summaries = append(f.summaries, failureSummaryEntry{
+		issueType: issueType,
+		path:      r.Path,
+		errMsg:    errMsg,
+	})
+}
+
+// logFailureSummary logs an aggregated summary of transient execution failures
+// from the current pass. Groups failures by issue_type and mirrors the
+// scanner-time aggregation rule: >10 items produce one WARN summary plus
+// per-item DEBUG detail, otherwise each item gets its own WARN.
+func (f *engineFlow) logFailureSummary() {
+	summaries := f.summaries
+	f.summaries = nil
+
+	if len(summaries) == 0 {
+		return
+	}
+
+	type group struct {
+		items []failureSummaryEntry
+		count int
+		paths []string
+	}
+	groups := make(map[string]*group, len(summaries))
+	for _, summary := range summaries {
+		key := summary.issueType
+		if key == "" {
+			key = fallbackFailureSummaryIssueType
 		}
 		g, ok := groups[key]
 		if !ok {
@@ -99,25 +131,43 @@ func (f *engineFlow) logFailureSummary() {
 			groups[key] = g
 		}
 		g.count++
-		// Keep first 3 unique messages as samples.
-		const sampleCount = 3
-		if len(g.msgs) < sampleCount {
-			g.msgs = append(g.msgs, msg)
+		g.items = append(g.items, summary)
+		if summary.path != "" {
+			const sampleCount = 3
+			if len(g.paths) < sampleCount {
+				g.paths = append(g.paths, summary.path)
+			}
 		}
 	}
 
+	keys := make([]string, 0, len(groups))
+	for key := range groups {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
 	const aggregateThreshold = 10
-	for key, g := range groups {
+	for _, key := range keys {
+		g := groups[key]
 		if g.count > aggregateThreshold {
 			f.engine.logger.Warn("sync failures (aggregated)",
-				slog.String("error_prefix", key),
+				slog.String("issue_type", key),
 				slog.Int("count", g.count),
-				slog.Any("samples", g.msgs),
+				slog.Any("sample_paths", g.paths),
 			)
+			for _, item := range g.items {
+				f.engine.logger.Debug("sync failure",
+					slog.String("issue_type", key),
+					slog.String("path", item.path),
+					slog.String("error", item.errMsg),
+				)
+			}
 		} else {
-			for _, msg := range g.msgs {
+			for _, item := range g.items {
 				f.engine.logger.Warn("sync failure",
-					slog.String("error", msg),
+					slog.String("issue_type", key),
+					slog.String("path", item.path),
+					slog.String("error", item.errMsg),
 				)
 			}
 		}
@@ -142,6 +192,7 @@ func (f *engineFlow) resetResultStats() {
 	f.succeeded = 0
 	f.failed = 0
 	f.syncErrors = nil
+	f.summaries = nil
 }
 
 // armTrialTimer sets (or resets) the trial timer to fire at the earliest
