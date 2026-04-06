@@ -249,7 +249,18 @@ func (flow *engineFlow) observeSinglePrimaryScopeDelta(
 		fullScope = true
 	}
 	if err != nil {
-		return remoteFetchResult{}, fmt.Errorf("observe scoped delta %q: %w", scope.localPath, err)
+		if eng.recursiveLister == nil {
+			return remoteFetchResult{}, fmt.Errorf("observe scoped delta %q: %w", scope.localPath, err)
+		}
+
+		eng.logger.Warn("scoped folder delta unavailable for primary scope, falling back to recursive listing",
+			slog.String("drive_id", eng.driveID.String()),
+			slog.String("scope_path", scope.localPath),
+			slog.String("folder_id", scope.folderID),
+			slog.String("error", err.Error()),
+		)
+
+		return flow.observeSinglePrimaryScopeEnumerate(ctx, bl, scope)
 	}
 
 	events := convertPrimaryScopeItems(bl, eng.driveID, eng.logger, scope, items)

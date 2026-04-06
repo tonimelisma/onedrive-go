@@ -50,6 +50,11 @@ const (
 		FROM remote_state
 		WHERE path = ? AND drive_id = ?
 		AND sync_status NOT IN ('deleted', 'pending_delete')`
+
+	sqlGetRemoteStateByID = `SELECT drive_id, item_id, path, parent_id, item_type,
+		hash, size, mtime, etag, previous_path, sync_status, observed_at
+		FROM remote_state
+		WHERE drive_id = ? AND item_id = ?`
 )
 
 // CommitObservation atomically persists observed remote state and advances the
@@ -236,6 +241,54 @@ func (m *SyncStore) GetRemoteStateByPath(
 	row.ETag = etag.String
 	row.PreviousPath = prevPath.String
 	row.FilterReason = synctypes.RemoteFilterReason(filterReason.String)
+
+	if size.Valid {
+		row.Size = size.Int64
+	}
+
+	if mtime.Valid {
+		row.Mtime = mtime.Int64
+	}
+
+	return &row, true, nil
+}
+
+// GetRemoteStateByID looks up the exact remote_state row for a drive+item ID,
+// including pending_delete and deleted statuses. Retry/crash-recovery rebuilds
+// use this when they need the authoritative row even after it has left the
+// active-path index.
+func (m *SyncStore) GetRemoteStateByID(
+	ctx context.Context,
+	driveID driveid.ID,
+	itemID string,
+) (*synctypes.RemoteStateRow, bool, error) {
+	var (
+		row      synctypes.RemoteStateRow
+		parentID sql.NullString
+		hash     sql.NullString
+		size     sql.NullInt64
+		mtime    sql.NullInt64
+		etag     sql.NullString
+		prevPath sql.NullString
+	)
+
+	err := m.db.QueryRowContext(ctx, sqlGetRemoteStateByID, driveID.String(), itemID).Scan(
+		&row.DriveID, &row.ItemID, &row.Path, &parentID, &row.ItemType,
+		&hash, &size, &mtime, &etag,
+		&prevPath, &row.SyncStatus, &row.ObservedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, false, nil
+		}
+
+		return nil, false, fmt.Errorf("sync: GetRemoteStateByID %s: %w", itemID, err)
+	}
+
+	row.ParentID = parentID.String
+	row.Hash = hash.String
+	row.ETag = etag.String
+	row.PreviousPath = prevPath.String
 
 	if size.Valid {
 		row.Size = size.Int64

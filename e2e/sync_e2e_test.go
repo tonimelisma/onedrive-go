@@ -330,13 +330,40 @@ func TestE2E_Sync_DownloadOnly(t *testing.T) {
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Run sync --download-only.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--download-only", "--force")
-	assert.Contains(t, stderr, "Mode: download-only")
-
-	// Verify file appeared locally.
 	localPath := filepath.Join(syncDir, testFolder, "download-test.txt")
-	downloaded, err := os.ReadFile(localPath)
-	require.NoError(t, err)
+	var (
+		lastStdout string
+		lastStderr string
+		lastErr    error
+		downloaded []byte
+	)
+	require.Eventually(t, func() bool {
+		lastStdout, lastStderr, lastErr = runCLIWithConfigAllowError(
+			t,
+			cfgPath,
+			env,
+			"sync",
+			"--download-only",
+			"--force",
+		)
+		if lastErr != nil {
+			return false
+		}
+
+		data, readErr := os.ReadFile(localPath)
+		if readErr != nil {
+			return false
+		}
+
+		downloaded = data
+		return bytes.Equal(downloaded, content)
+	}, 90*time.Second, 5*time.Second,
+		"download-only sync should eventually materialize the remote file after delta catches up\nlastErr: %v\nlastStdout: %s\nlastStderr: %s",
+		lastErr,
+		lastStdout,
+		lastStderr,
+	)
+	assert.Contains(t, lastStderr, "Mode: download-only")
 	assert.Equal(t, content, downloaded)
 }
 

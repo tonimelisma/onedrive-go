@@ -248,7 +248,13 @@ func (m *SyncStore) ResetDownloadingStates(ctx context.Context, delayFn func(int
 		return fmt.Errorf("sync: resetting downloading states: %w", err)
 	}
 
-	if err := m.createCrashRecoveryFailures(ctx, downloadingRows, synctypes.DirectionDownload, delayFn); err != nil {
+	if err := m.createCrashRecoveryFailures(
+		ctx,
+		downloadingRows,
+		synctypes.DirectionDownload,
+		synctypes.ActionDownload,
+		delayFn,
+	); err != nil {
 		return err
 	}
 
@@ -293,7 +299,13 @@ func (m *SyncStore) FinalizeDeletingStates(
 		}
 	}
 
-	if err := m.createCrashRecoveryFailures(ctx, pending, synctypes.DirectionDelete, delayFn); err != nil {
+	if err := m.createCrashRecoveryFailures(
+		ctx,
+		pending,
+		synctypes.DirectionDelete,
+		synctypes.ActionLocalDelete,
+		delayFn,
+	); err != nil {
 		return err
 	}
 
@@ -342,16 +354,21 @@ func (m *SyncStore) queryResetCandidates(ctx context.Context, status synctypes.S
 // were reset during crash recovery. This ensures the retrier can rediscover
 // them on the next bootstrap sweep.
 func (m *SyncStore) createCrashRecoveryFailures(
-	ctx context.Context, candidates []synctypes.RecoveryCandidate, direction synctypes.Direction, delayFn func(int) time.Duration,
+	ctx context.Context,
+	candidates []synctypes.RecoveryCandidate,
+	direction synctypes.Direction,
+	actionType synctypes.ActionType,
+	delayFn func(int) time.Duration,
 ) error {
 	for _, candidate := range candidates {
 		if err := m.RecordFailure(ctx, &synctypes.SyncFailureParams{
-			Path:      candidate.Path,
-			DriveID:   driveid.New(candidate.DriveID),
-			Direction: direction,
-			Category:  synctypes.CategoryTransient,
-			ItemID:    candidate.ItemID,
-			ErrMsg:    "crash recovery: reset from in-progress state",
+			Path:       candidate.Path,
+			DriveID:    driveid.New(candidate.DriveID),
+			Direction:  direction,
+			ActionType: actionType,
+			Category:   synctypes.CategoryTransient,
+			ItemID:     candidate.ItemID,
+			ErrMsg:     "crash recovery: reset from in-progress state",
 		}, delayFn); err != nil {
 			return fmt.Errorf("sync: creating crash recovery failure for %s: %w", candidate.Path, err)
 		}

@@ -287,6 +287,62 @@ func TestFetchRemoteChanges_SyncPathsPersonalUsesFolderScopedDelta(t *testing.T)
 }
 
 // Validates: R-2.4.5
+func TestFetchRemoteChanges_SyncPathsPersonalFallsBackToRecursiveEnumerationWhenScopedDeltaUnavailable(t *testing.T) {
+	t.Parallel()
+
+	const docsPath = "Docs"
+
+	var scopedDeltaCalls []string
+	var recursiveCalls []string
+
+	mock := &engineMockClient{
+		getItemByPathFn: func(_ context.Context, _ driveid.ID, remotePath string) (*graph.Item, error) {
+			if remotePath == docsPath {
+				return &graph.Item{ID: "docs-id", Name: docsPath, IsFolder: true}, nil
+			}
+
+			return nil, graph.ErrNotFound
+		},
+		folderDeltaFn: func(_ context.Context, _ driveid.ID, folderID, token string) ([]graph.Item, string, error) {
+			scopedDeltaCalls = append(scopedDeltaCalls, folderID+":"+token)
+			return nil, "", graph.ErrNotFound
+		},
+		listChildrenRecursiveFn: func(_ context.Context, _ driveid.ID, folderID string) ([]graph.Item, error) {
+			recursiveCalls = append(recursiveCalls, folderID)
+			return []graph.Item{{
+				ID:       "report-id",
+				Name:     "report.txt",
+				ParentID: "docs-id",
+			}}, nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	eng.driveType = driveid.DriveTypePersonal
+	eng.syncScopeConfig = syncscope.Config{
+		SyncPaths: []string{"/Docs"},
+	}
+
+	bl, err := eng.baseline.Load(t.Context())
+	require.NoError(t, err)
+
+	flow := testEngineFlow(t, eng)
+	session, err := flow.BuildScopeSession(t.Context(), nil)
+	require.NoError(t, err)
+	plan, err := flow.BuildObservationPlan(t.Context(), &session, synctypes.SyncDownloadOnly, false)
+	require.NoError(t, err)
+
+	result, err := flow.fetchRemoteChanges(t.Context(), bl, false, plan)
+	require.NoError(t, err)
+	require.Len(t, result.events, 1)
+	assert.Equal(t, "Docs/report.txt", result.events[0].Path)
+	assert.Equal(t, []string{"docs-id:"}, scopedDeltaCalls)
+	assert.Equal(t, []string{"docs-id"}, recursiveCalls)
+	assert.Empty(t, result.deferred)
+	assert.Equal(t, []string{"Docs"}, result.fullPrefixes)
+}
+
+// Validates: R-2.4.5
 func TestFetchRemoteChanges_SyncPathsBusinessUsesRecursiveEnumeration(t *testing.T) {
 	t.Parallel()
 

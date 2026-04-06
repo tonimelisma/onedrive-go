@@ -27,6 +27,7 @@ peer authority; it is rebuilt from store state when the engine starts.
 | `Inspector` exposes a stable read-only issue/status projection so CLI status and issues read the same visible facts. | `TestInspector_ReadIssuesSnapshot`, `TestInspector_ReadStatusSnapshot_StaysConsistentWithIssuesSnapshot` |
 | Integrity inspection and safe repair stay store-owned and deterministic. | `TestInspector_AuditIntegrityReportsPersistedProblems`, `TestSyncStore_RepairIntegritySafeNormalizesDeterministicViolations` |
 | Visible issue grouping comes from one store-owned projection instead of CLI-local reconstruction. | `TestSyncStore_ListVisibleIssueGroups` |
+| Crash-shaped `downloading` / `deleting` residue in the state DB is replayed from durable store truth on the next live sync run, and the immediate rerun is idle. | `TestE2E_Sync_CrashRecovery_ReplaysDurableInProgressRows` |
 
 `NewSyncStore()` opens SQLite in WAL mode and applies the canonical schema from
 [`schema.sql`](/Users/tonimelisma/Development/onedrive-go/internal/syncstore/schema.sql)
@@ -51,7 +52,7 @@ Key operations:
   piggybacks on generic metadata keys.
 - `RefreshLocalBaseline(ctx, LocalBaselineRefresh)` is the explicit manual-reconciliation path used when local disk now represents the chosen truth without a new executor transfer result. It updates only the local-side baseline tuple, preserves known remote-side metadata/`etag`, and marks a matching `remote_state` row synced.
 - `RecordFailure(ctx, SyncFailureParams, delayFn)` is the single failure writer. The engine provides classification and retry policy; the store provides transactional persistence and conflict-safe upsert behavior.
-- `ResetDownloadingStates(ctx, delayFn)`, `ListDeletingCandidates(ctx)`, and `FinalizeDeletingStates(ctx, deleted, pending, delayFn)` are the state-only crash-recovery primitives. The store no longer probes the sync-root filesystem itself.
+- `ResetDownloadingStates(ctx, delayFn)`, `ListDeletingCandidates(ctx)`, and `FinalizeDeletingStates(ctx, deleted, pending, delayFn)` are the state-only crash-recovery primitives. The store no longer probes the sync-root filesystem itself. Their bridge rows preserve the exact replay action (`ActionDownload` for reset downloads, `ActionLocalDelete` for reset deletes) so the engine can re-enter the correct execution lane on the next pass.
 - `ReleaseScope(ctx, scopeKey, now)` is the single durable “scope resolved” transition. It deletes the `scope_blocks` row when one exists, deletes any legacy `boundary` failure row for that scope, and converts all `held` failures for that scope into retryable `item` rows with `next_retry_at = now`.
 - `DiscardScope(ctx, scopeKey)` is the single durable “scope and blocked work are gone” transition. It deletes the `scope_blocks` row when one exists and every `sync_failures` row for that scope.
 

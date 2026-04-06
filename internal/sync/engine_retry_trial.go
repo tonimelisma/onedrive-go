@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
@@ -303,6 +304,96 @@ func (rt *watchRuntime) runRetrierSweep(
 	return dispatch
 }
 
+func (flow *engineFlow) collectDueRetryChanges(
+	ctx context.Context,
+	observedPaths map[string]bool,
+) []synctypes.PathChanges {
+	rows, err := flow.engine.baseline.ListSyncFailuresForRetry(ctx, flow.engine.nowFunc())
+	if err != nil {
+		flow.engine.logger.Warn("one-shot retry replay: failed to list retriable items",
+			slog.String("error", err.Error()),
+		)
+		return nil
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+
+	var changes []synctypes.PathChanges
+
+	for i := range rows {
+		row := &rows[i]
+		if observedPaths[row.Path] {
+			continue
+		}
+		if flow.isFailureResolved(ctx, row) {
+			continue
+		}
+
+		rebuild := flow.rebuildFailureWork(ctx, row)
+		switch {
+		case rebuild.err != nil:
+			flow.engine.logger.Warn("one-shot retry replay: failed to rebuild retry candidate",
+				slog.String("path", row.Path),
+				slog.String("error", rebuild.err.Error()),
+			)
+		case rebuild.skipped != nil:
+			flow.recordRetryTrialSkippedItem(ctx, row, rebuild.skipped)
+		case rebuild.resolved:
+			flow.clearFailureCandidate(ctx, row, "collectDueRetryChanges")
+		case rebuild.event != nil:
+			changes = append(changes, pathChangesFromEvent(rebuild.event)...)
+		}
+	}
+
+	if len(changes) > 0 {
+		flow.engine.logger.Info("one-shot retry replay",
+			slog.Int("paths", len(changes)),
+		)
+	}
+
+	return changes
+}
+
+func mergePathChangeBatches(batches ...[]synctypes.PathChanges) []synctypes.PathChanges {
+	merged := make(map[string]*synctypes.PathChanges)
+
+	for _, batch := range batches {
+		for i := range batch {
+			path := batch[i].Path
+			if path == "" {
+				continue
+			}
+
+			entry, ok := merged[path]
+			if !ok {
+				entry = &synctypes.PathChanges{Path: path}
+				merged[path] = entry
+			}
+
+			entry.RemoteEvents = append(entry.RemoteEvents, batch[i].RemoteEvents...)
+			entry.LocalEvents = append(entry.LocalEvents, batch[i].LocalEvents...)
+		}
+	}
+
+	if len(merged) == 0 {
+		return nil
+	}
+
+	paths := make([]string, 0, len(merged))
+	for path := range merged {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	result := make([]synctypes.PathChanges, 0, len(paths))
+	for _, path := range paths {
+		result = append(result, *merged[path])
+	}
+
+	return result
+}
+
 func (e *Engine) effectiveRetryBatchLimit() int {
 	if e.retryBatchLimit > 0 {
 		return e.retryBatchLimit
@@ -442,9 +533,11 @@ func (flow *engineFlow) rebuildFailureWork(ctx context.Context, row *synctypes.S
 		return flow.rebuildRemoteMoveFailure(ctx, row)
 	case synctypes.ActionRemoteDelete:
 		return flow.rebuildRemoteDeleteFailure(ctx, row)
-	case synctypes.ActionDownload,
-		synctypes.ActionLocalDelete,
-		synctypes.ActionLocalMove,
+	case synctypes.ActionDownload:
+		return flow.rebuildDownloadFailure(ctx, row)
+	case synctypes.ActionLocalDelete:
+		return flow.rebuildLocalDeleteFailure(ctx, row)
+	case synctypes.ActionLocalMove,
 		synctypes.ActionConflict,
 		synctypes.ActionUpdateSynced,
 		synctypes.ActionCleanup:
@@ -467,6 +560,42 @@ func (flow *engineFlow) rebuildRemoteStateBackedFailure(
 	}
 
 	return failureRebuildResult{event: remoteStateToChangeEvent(rs, row.Path)}
+}
+
+func (flow *engineFlow) rebuildDownloadFailure(
+	ctx context.Context,
+	row *synctypes.SyncFailureRow,
+) failureRebuildResult {
+	rs, found, err := flow.engine.baseline.GetRemoteStateByPath(ctx, row.Path, row.DriveID)
+	if err != nil {
+		return failureRebuildResult{err: fmt.Errorf("remote state lookup failed: %w", err)}
+	}
+	if !found {
+		return failureRebuildResult{resolved: true}
+	}
+
+	event := remoteStateToChangeEvent(rs, row.Path)
+	event.ForcedAction = synctypes.ActionDownload
+	event.HasForcedAction = true
+
+	return failureRebuildResult{event: event}
+}
+
+func (flow *engineFlow) rebuildLocalDeleteFailure(
+	ctx context.Context,
+	row *synctypes.SyncFailureRow,
+) failureRebuildResult {
+	if row.ItemID != "" {
+		rs, found, err := flow.engine.baseline.GetRemoteStateByID(ctx, row.DriveID, row.ItemID)
+		if err != nil {
+			return failureRebuildResult{err: fmt.Errorf("remote state lookup failed: %w", err)}
+		}
+		if found {
+			return failureRebuildResult{event: remoteStateToChangeEvent(rs, row.Path)}
+		}
+	}
+
+	return flow.rebuildRemoteStateBackedFailure(ctx, row)
 }
 
 func (flow *engineFlow) observeLocalFailurePath(ctx context.Context, row *synctypes.SyncFailureRow) failureRebuildResult {

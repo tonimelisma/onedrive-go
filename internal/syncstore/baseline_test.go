@@ -2724,6 +2724,7 @@ func TestResetInProgressStates_CreatesSyncFailures_Delete(t *testing.T) {
 	require.Len(t, failures, 1)
 	assert.Equal(t, "del.txt", failures[0].Path)
 	assert.Equal(t, synctypes.DirectionDelete, failures[0].Direction)
+	assert.Equal(t, synctypes.ActionLocalDelete, failures[0].ActionType)
 	assert.Equal(t, synctypes.CategoryTransient, failures[0].Category)
 }
 
