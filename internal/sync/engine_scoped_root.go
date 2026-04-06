@@ -159,7 +159,7 @@ func (rt *watchRuntime) watchScopedRootRemote(
 			continue
 		}
 
-		scoped := applyRemoteScope(rt.engine.logger, rt.currentScopeSnapshot(), polledEvents)
+		scoped := applyRemoteScope(rt.engine.logger, rt.currentScopeSnapshot(), rt.currentScopeGeneration(), polledEvents)
 
 		if !rt.commitScopedRootWatchEvents(ctx, scoped.observed, newToken) {
 			continue

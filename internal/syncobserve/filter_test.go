@@ -354,6 +354,51 @@ func TestAddWatchesRecursive_IgnoreMarkerKeepsMarkerDirectoryWatchOnly(t *testin
 	assert.False(t, tracker.addedPaths[filepath.Join(syncRoot, "blocked", "nested")], "marker descendants must not be watched")
 }
 
+// Validates: R-2.4.4
+func TestHandleFsEvent_MarkerParentRenamePublishesScopeChange(t *testing.T) {
+	t.Parallel()
+
+	syncRoot := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "parent", "blocked"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "parent", "blocked", ".odignore"), []byte("marker"), 0o600))
+
+	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	tree := mustOpenSyncTree(t, syncRoot)
+	snapshot, err := obs.BuildScopeSnapshot(t.Context(), tree, syncscope.Config{
+		IgnoreMarker: ".odignore",
+	})
+	require.NoError(t, err)
+	obs.SetScopeSnapshot(snapshot)
+
+	scopeChanges := make(chan syncscope.Change, 1)
+	obs.SetScopeChangeChannel(scopeChanges)
+
+	require.NoError(t, os.Rename(
+		filepath.Join(syncRoot, "parent"),
+		filepath.Join(syncRoot, "renamed"),
+	))
+
+	obs.HandleFsEvent(
+		t.Context(),
+		fsnotify.Event{
+			Name: filepath.Join(syncRoot, "parent"),
+			Op:   fsnotify.Rename,
+		},
+		newMockFsWatcher(),
+		tree,
+		make(chan synctypes.ChangeEvent, 2),
+	)
+
+	select {
+	case change := <-scopeChanges:
+		assert.Equal(t, []string{"parent/blocked"}, change.Old.MarkerDirs())
+		assert.Equal(t, []string{"renamed/blocked"}, change.New.MarkerDirs())
+		assert.Equal(t, int64(2), obs.currentScopeGeneration())
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "timeout waiting for scope change")
+	}
+}
+
 // Validates: R-2.4.3
 func TestHandleFsEvent_ConfiguredFileFilterSkipsWrite(t *testing.T) {
 	t.Parallel()

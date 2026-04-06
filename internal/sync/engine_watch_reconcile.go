@@ -396,7 +396,7 @@ func (rt *watchRuntime) runFullReconciliationAsync(ctx context.Context, bl *sync
 		}
 
 		scopeSnapshot := rt.currentScopeSnapshot()
-		scopedPrimary := applyRemoteScope(rt.engine.logger, scopeSnapshot, events)
+		scopedPrimary := applyRemoteScope(rt.engine.logger, scopeSnapshot, rt.currentScopeGeneration(), events)
 
 		if commitErr := rt.commitObservedItems(ctx, scopedPrimary.observed, deltaToken); commitErr != nil {
 			rt.engine.logger.Error("failed to commit full reconciliation observations",
@@ -425,7 +425,7 @@ func (rt *watchRuntime) runFullReconciliationAsync(ctx context.Context, bl *sync
 			)
 		}
 
-		events = append(events, applyRemoteScope(rt.engine.logger, scopeSnapshot, shortcutEvents).emitted...)
+		events = append(events, applyRemoteScope(rt.engine.logger, scopeSnapshot, 0, shortcutEvents).emitted...)
 
 		if len(events) == 0 {
 			rt.engine.logger.Info("periodic full reconciliation complete: no changes",
@@ -475,7 +475,7 @@ func (rt *watchRuntime) runEnteredScopeReconciliationAsync(
 		}
 
 		scopeSnapshot := rt.currentScopeSnapshot()
-		scoped := applyRemoteScope(rt.engine.logger, scopeSnapshot, fetchResult.events)
+		scoped := applyRemoteScope(rt.engine.logger, scopeSnapshot, rt.currentScopeGeneration(), fetchResult.events)
 		if commitErr := rt.commitObservedItems(ctx, scoped.observed, ""); commitErr != nil {
 			rt.engine.logger.Error("failed to commit scope re-entry observations",
 				slog.String("error", commitErr.Error()),
@@ -518,8 +518,22 @@ func (rt *watchRuntime) applyReconcileResult(ctx context.Context, result reconci
 		rt.buf.Add(&result.events[i])
 	}
 
-	if err := rt.persistScopeSnapshot(ctx, rt.currentScopeSnapshot()); err != nil {
-		rt.engine.logger.Warn("failed to persist scope snapshot after reconciliation",
+	session := ScopeSession{
+		Current:    rt.currentScopeSnapshot(),
+		Generation: rt.currentScopeGeneration(),
+	}
+	plan, err := rt.BuildObservationPlan(ctx, &session, synctypes.SyncBidirectional, false)
+	if err != nil {
+		rt.engine.logger.Warn("failed to rebuild scope plan after reconciliation",
+			slog.String("error", err.Error()),
+		)
+		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventReconcileApplied})
+		return
+	}
+	plan.Reentry.Pending = false
+
+	if err := rt.applyScopeState(ctx, false, &session, plan); err != nil {
+		rt.engine.logger.Warn("failed to persist scope state after reconciliation",
 			slog.String("error", err.Error()),
 		)
 	}

@@ -96,7 +96,7 @@ func TestApplyRemoteScope_ClassifiesBoundaryMoves(t *testing.T) {
 			snapshot, err := syncscope.NewSnapshot(tt.config, nil)
 			require.NoError(t, err)
 
-			result := applyRemoteScope(logger, snapshot, []synctypes.ChangeEvent{tt.event})
+			result := applyRemoteScope(logger, snapshot, 7, []synctypes.ChangeEvent{tt.event})
 			require.Len(t, result.observed, tt.wantObserved)
 			assert.Equal(t, tt.wantFiltered, result.observed[0].Filtered)
 
@@ -129,17 +129,16 @@ func TestRunOnce_PersistsEffectiveScopeSnapshot(t *testing.T) {
 	_, err := eng.RunOnce(t.Context(), synctypes.SyncUploadOnly, synctypes.RunOpts{})
 	require.NoError(t, err)
 
-	meta, err := eng.baseline.ReadSyncMetadata(t.Context())
+	scopeState, found, err := eng.baseline.ReadScopeState(t.Context())
 	require.NoError(t, err)
+	require.True(t, found, "scope state should be persisted")
 
-	raw, ok := meta[syncMetadataScopeSnapshotKey]
-	require.True(t, ok, "scope snapshot should be persisted in sync_metadata")
-
-	persisted, err := syncscope.UnmarshalSnapshot(raw)
+	persisted, err := syncscope.UnmarshalSnapshot(scopeState.EffectiveSnapshotJSON)
 	require.NoError(t, err)
 	assert.True(t, persisted.AllowsPath("visible.txt"))
 	assert.False(t, persisted.AllowsPath("blocked/secret.txt"))
 	assert.True(t, persisted.HasMarkerDir("blocked"))
+	assert.Equal(t, synctypes.ScopeObservationRootDelta, scopeState.ObservationMode)
 }
 
 // Validates: R-2.4.5
@@ -213,12 +212,14 @@ func TestRunOnce_ScopeExpansionReconcilesPreviouslyFilteredRemoteItems(t *testin
 	require.True(t, reenteredFound)
 	assert.Equal(t, synctypes.SyncStatusSynced, reenteredRow.SyncStatus)
 
-	meta, err := eng.baseline.ReadSyncMetadata(t.Context())
+	scopeState, found, err := eng.baseline.ReadScopeState(t.Context())
 	require.NoError(t, err)
+	require.True(t, found)
 
-	persisted, err := syncscope.UnmarshalSnapshot(meta[syncMetadataScopeSnapshotKey])
+	persisted, err := syncscope.UnmarshalSnapshot(scopeState.EffectiveSnapshotJSON)
 	require.NoError(t, err)
 	assert.True(t, persisted.AllowsPath("drop.txt"))
+	assert.False(t, scopeState.PendingReentry)
 }
 
 // Validates: R-2.4.5
@@ -268,7 +269,13 @@ func TestFetchRemoteChanges_SyncPathsPersonalUsesFolderScopedDelta(t *testing.T)
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 
-	result, err := testEngineFlow(t, eng).fetchRemoteChanges(t.Context(), bl, false, false)
+	flow := testEngineFlow(t, eng)
+	session, err := flow.BuildScopeSession(t.Context(), nil)
+	require.NoError(t, err)
+	plan, err := flow.BuildObservationPlan(t.Context(), &session, synctypes.SyncDownloadOnly, false)
+	require.NoError(t, err)
+
+	result, err := flow.fetchRemoteChanges(t.Context(), bl, false, plan)
 	require.NoError(t, err)
 	require.Len(t, result.events, 1)
 	assert.Equal(t, reportRelPath, result.events[0].Path)
@@ -319,7 +326,13 @@ func TestFetchRemoteChanges_SyncPathsBusinessUsesRecursiveEnumeration(t *testing
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 
-	result, err := testEngineFlow(t, eng).fetchRemoteChanges(t.Context(), bl, false, false)
+	flow := testEngineFlow(t, eng)
+	session, err := flow.BuildScopeSession(t.Context(), nil)
+	require.NoError(t, err)
+	plan, err := flow.BuildObservationPlan(t.Context(), &session, synctypes.SyncDownloadOnly, false)
+	require.NoError(t, err)
+
+	result, err := flow.fetchRemoteChanges(t.Context(), bl, false, plan)
 	require.NoError(t, err)
 	require.Len(t, result.events, 1)
 	assert.Equal(t, "Docs/report.txt", result.events[0].Path)

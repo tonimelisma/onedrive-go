@@ -47,6 +47,14 @@ const (
 	strDeleteFailed    = "delete_failed"
 	strDeleted         = "deleted"
 	strFiltered        = "filtered"
+	strPathScope       = "path_scope"
+	strMarkerScope     = "marker_scope"
+	strObsRootDelta    = "root_delta"
+	strObsScopedDelta  = "scoped_delta"
+	strObsScopedEnum   = "scoped_enumerate"
+	strReconcileNone   = "none"
+	strReconcilePaths  = "entered_paths"
+	strReconcileFull   = "full"
 )
 
 // Direction represents the direction of a sync action (upload, download, delete).
@@ -107,6 +115,36 @@ const (
 	SyncStatusDeleteFailed    SyncStatus = strDeleteFailed
 	SyncStatusDeleted         SyncStatus = strDeleted
 	SyncStatusFiltered        SyncStatus = strFiltered
+)
+
+// RemoteFilterReason records why a remote_state row is currently filtered.
+// The empty value means "not filtered by sync scope".
+type RemoteFilterReason string
+
+const (
+	RemoteFilterNone        RemoteFilterReason = ""
+	RemoteFilterPathScope   RemoteFilterReason = strPathScope
+	RemoteFilterMarkerScope RemoteFilterReason = strMarkerScope
+)
+
+// ScopeObservationMode records how the engine is currently observing the
+// primary remote scope. This is persisted for read-only inspection.
+type ScopeObservationMode string
+
+const (
+	ScopeObservationRootDelta       ScopeObservationMode = strObsRootDelta
+	ScopeObservationScopedDelta     ScopeObservationMode = strObsScopedDelta
+	ScopeObservationScopedEnumerate ScopeObservationMode = strObsScopedEnum
+)
+
+// ScopeReconcileKind records the last scope-driven reconcile strategy the
+// engine scheduled or completed.
+type ScopeReconcileKind string
+
+const (
+	ScopeReconcileNone        ScopeReconcileKind = strReconcileNone
+	ScopeReconcileEnteredPath ScopeReconcileKind = strReconcilePaths
+	ScopeReconcileFull        ScopeReconcileKind = strReconcileFull
 )
 
 // Resolution strategy constants for conflict resolution.

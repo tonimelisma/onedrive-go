@@ -31,6 +31,7 @@ one-way sync. Use --dry-run to preview what would happen without making changes.
 	cmd.MarkFlagsMutuallyExclusive("download-only", "upload-only")
 	cmd.MarkFlagsMutuallyExclusive("dry-run", "watch")
 	cmd.MarkFlagsMutuallyExclusive("full", "watch")
+	cmd.AddCommand(newSyncScopeCmd())
 
 	return cmd
 }

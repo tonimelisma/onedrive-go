@@ -135,9 +135,11 @@ func (o *LocalObserver) HandleFsEvent(
 	dbRelPath := nfcNormalize(filepath.ToSlash(relPath))
 	name := nfcNormalize(filepath.Base(fsEvent.Name))
 
-	if o.scopeSnapshot.IsMarkerFile(dbRelPath) {
+	if o.shouldRebuildScopeForEvent(fsEvent, fsEvent.Name, dbRelPath) {
 		o.handleMarkerEvent(ctx, watcher, tree)
-		return
+		if o.scopeSnapshot.IsMarkerFile(dbRelPath) {
+			return
+		}
 	}
 
 	if !o.scopeAllowsUnknown(dbRelPath) {
@@ -490,14 +492,17 @@ func (o *LocalObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath, name st
 	}
 
 	// Cancel existing timer for this path (B-107 coalescing).
-	if timer, ok := o.PendingTimers[dbRelPath]; ok {
-		timer.Stop()
-	}
+	o.cancelPendingTimer(dbRelPath)
 
 	// Schedule deferred hash after cooldown. Timer callback sends to
 	// hashRequests channel (non-blocking); watchLoop picks it up via select.
-	req := HashRequest{FsPath: fsPath, DbRelPath: dbRelPath, Name: name}
-	o.PendingTimers[dbRelPath] = time.AfterFunc(cooldown, func() {
+	req := HashRequest{
+		FsPath:     fsPath,
+		DbRelPath:  dbRelPath,
+		Name:       name,
+		Generation: o.currentScopeGeneration(),
+	}
+	timer := time.AfterFunc(cooldown, func() {
 		select {
 		case o.HashRequests <- req:
 		default:
@@ -506,13 +511,17 @@ func (o *LocalObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath, name st
 				slog.String("path", dbRelPath))
 		}
 	})
+	o.recordPendingTimer(dbRelPath, req.Generation, timer)
 }
 
 // HashAndEmit is called from the watchLoop when a write coalesce timer fires.
 // It hashes the file and emits a ChangeModify event if the content differs
 // from the baseline. Runs in the watchLoop goroutine (same thread as handleWrite).
 func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, req HashRequest, events chan<- synctypes.ChangeEvent) {
-	delete(o.PendingTimers, req.DbRelPath)
+	req = o.prepareDeferredHashRequest(req)
+	if o.isStaleDeferredHash(req) {
+		return
+	}
 
 	info, isSymlink, err := statObservedPath(req.FsPath)
 	if err != nil {
@@ -557,31 +566,7 @@ func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 
 	hash, err := ComputeStableHash(req.FsPath)
 	if err != nil {
-		if errors.Is(err, synctypes.ErrFileChangedDuringHash) && req.Retries < MaxCoalesceRetries {
-			// File still changing — re-schedule with incremented retry count.
-			// If another Write event arrives, handleWrite resets the timer anyway.
-			o.Logger.Debug("file changed during deferred hash, re-scheduling",
-				slog.String("path", req.DbRelPath),
-				slog.Int("retry", req.Retries+1))
-
-			cooldown := o.WriteCoalesceCooldown
-			if cooldown == 0 {
-				cooldown = defaultWriteCoalesceCooldown
-			}
-
-			req2 := req // copy for closure
-			req2.Retries++
-			o.PendingTimers[req.DbRelPath] = time.AfterFunc(cooldown, func() {
-				select {
-				case o.HashRequests <- req2:
-				default:
-					o.droppedRetries.Add(1)
-					o.Logger.Debug("hash retry dropped, channel full (safety scan will catch up)",
-						slog.String("path", req.DbRelPath),
-						slog.Int("retry", req2.Retries))
-				}
-			})
-
+		if o.retryDeferredHashOnChange(req, err) {
 			return
 		}
 
@@ -618,6 +603,62 @@ func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 	o.TrySend(ctx, events, &ev)
 }
 
+func (o *LocalObserver) prepareDeferredHashRequest(req HashRequest) HashRequest {
+	if req.Generation == 0 {
+		req.Generation = o.currentScopeGeneration()
+	}
+
+	o.clearPendingTimerIfGeneration(req.DbRelPath, req.Generation)
+
+	return req
+}
+
+func (o *LocalObserver) isStaleDeferredHash(req HashRequest) bool {
+	currentGeneration := o.currentScopeGeneration()
+	if req.Generation == currentGeneration {
+		return false
+	}
+
+	o.Logger.Debug("dropping stale deferred hash after scope change",
+		slog.String("path", req.DbRelPath),
+		slog.Int64("request_generation", req.Generation),
+		slog.Int64("current_generation", currentGeneration),
+	)
+
+	return true
+}
+
+func (o *LocalObserver) retryDeferredHashOnChange(req HashRequest, err error) bool {
+	if !errors.Is(err, synctypes.ErrFileChangedDuringHash) || req.Retries >= MaxCoalesceRetries {
+		return false
+	}
+
+	o.Logger.Debug("file changed during deferred hash, re-scheduling",
+		slog.String("path", req.DbRelPath),
+		slog.Int("retry", req.Retries+1))
+
+	cooldown := o.WriteCoalesceCooldown
+	if cooldown == 0 {
+		cooldown = defaultWriteCoalesceCooldown
+	}
+
+	retryReq := req
+	retryReq.Retries++
+	timer := time.AfterFunc(cooldown, func() {
+		select {
+		case o.HashRequests <- retryReq:
+		default:
+			o.droppedRetries.Add(1)
+			o.Logger.Debug("hash retry dropped, channel full (safety scan will catch up)",
+				slog.String("path", req.DbRelPath),
+				slog.Int("retry", retryReq.Retries))
+		}
+	})
+	o.recordPendingTimer(req.DbRelPath, req.Generation, timer)
+
+	return true
+}
+
 // HandleDelete processes a Remove/Rename event. For directories, also removes
 // the fsnotify watch to prevent resource leaks (macOS/kqueue doesn't auto-clean).
 //
@@ -630,10 +671,7 @@ func (o *LocalObserver) HandleDelete(
 	events chan<- synctypes.ChangeEvent,
 ) {
 	// Clean up write coalesce timer for deleted path (B-107).
-	if timer, ok := o.PendingTimers[dbRelPath]; ok {
-		timer.Stop()
-		delete(o.PendingTimers, dbRelPath)
-	}
+	o.cancelPendingTimer(dbRelPath)
 
 	// Invalidate directory name cache so collision checks see the deletion.
 	o.removeDirNameCache(filepath.Dir(fsPath), name)

@@ -33,6 +33,17 @@ func applySchema(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("sync: repair legacy baseline: %w", err)
 	}
 
+	if err := repairLegacyRemoteStateTable(ctx, tx); err != nil {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			return errors.Join(
+				fmt.Errorf("sync: repair legacy remote_state: %w", err),
+				fmt.Errorf("sync: rollback schema bootstrap: %w", rollbackErr),
+			)
+		}
+
+		return fmt.Errorf("sync: repair legacy remote_state: %w", err)
+	}
+
 	if _, err := tx.ExecContext(ctx, schemaSQL); err != nil {
 		if rollbackErr := tx.Rollback(); rollbackErr != nil {
 			return errors.Join(
@@ -41,6 +52,17 @@ func applySchema(ctx context.Context, db *sql.DB) error {
 			)
 		}
 		return fmt.Errorf("sync: apply schema bootstrap: %w", err)
+	}
+
+	if err := dropLegacyScopeMetadata(ctx, tx); err != nil {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			return errors.Join(
+				fmt.Errorf("sync: drop legacy scope metadata: %w", err),
+				fmt.Errorf("sync: rollback schema bootstrap: %w", rollbackErr),
+			)
+		}
+
+		return fmt.Errorf("sync: drop legacy scope metadata: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -110,6 +132,97 @@ func repairLegacyBaselineTable(ctx context.Context, tx *sql.Tx) error {
 
 	if _, err := tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_baseline_parent ON baseline(parent_id)`); err != nil {
 		return fmt.Errorf("recreate baseline parent index: %w", err)
+	}
+
+	return nil
+}
+
+func repairLegacyRemoteStateTable(ctx context.Context, tx *sql.Tx) error {
+	cols, err := tableColumns(ctx, tx, "remote_state")
+	if err != nil {
+		return err
+	}
+
+	if len(cols) == 0 || (cols["filter_generation"] && cols["filter_reason"]) {
+		return nil
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE remote_state_new (
+			drive_id          TEXT    NOT NULL,
+			item_id           TEXT    NOT NULL,
+			path              TEXT    NOT NULL,
+			parent_id         TEXT,
+			item_type         TEXT    NOT NULL CHECK(item_type IN ('file', 'folder', 'root')),
+			hash              TEXT,
+			size              INTEGER,
+			mtime             INTEGER,
+			etag              TEXT,
+			previous_path     TEXT,
+			sync_status       TEXT    NOT NULL DEFAULT 'pending_download'
+			                  CHECK(sync_status IN (
+			                      'pending_download', 'downloading', 'download_failed',
+			                      'synced',
+			                      'pending_delete', 'deleting', 'delete_failed', 'deleted',
+			                      'filtered')),
+			filter_generation INTEGER NOT NULL DEFAULT 0,
+			filter_reason     TEXT    NOT NULL DEFAULT ''
+			                  CHECK(filter_reason IN ('', 'path_scope', 'marker_scope')),
+			observed_at       INTEGER NOT NULL CHECK(observed_at > 0),
+			PRIMARY KEY (drive_id, item_id)
+		)
+	`); err != nil {
+		return fmt.Errorf("create migrated remote_state table: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO remote_state_new (
+			drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
+			previous_path, sync_status, filter_generation, filter_reason, observed_at
+		)
+		SELECT
+			drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
+			previous_path, sync_status, 0, '', observed_at
+		FROM remote_state
+	`); err != nil {
+		return fmt.Errorf("copy remote_state rows into migrated table: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `DROP TABLE remote_state`); err != nil {
+		return fmt.Errorf("drop legacy remote_state table: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE remote_state_new RENAME TO remote_state`); err != nil {
+		return fmt.Errorf("rename migrated remote_state table: %w", err)
+	}
+
+	indexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_remote_state_status ON remote_state(sync_status)`,
+		`CREATE INDEX IF NOT EXISTS idx_remote_state_parent ON remote_state(parent_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_state_active_path
+			ON remote_state(path)
+			WHERE sync_status NOT IN ('deleted', 'pending_delete')`,
+	}
+	for _, stmt := range indexes {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("recreate remote_state index: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func dropLegacyScopeMetadata(ctx context.Context, tx *sql.Tx) error {
+	cols, err := tableColumns(ctx, tx, "sync_metadata")
+	if err != nil {
+		return err
+	}
+	if len(cols) == 0 {
+		return nil
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key = 'effective_scope_snapshot'`); err != nil {
+		return fmt.Errorf("delete legacy scope metadata: %w", err)
 	}
 
 	return nil

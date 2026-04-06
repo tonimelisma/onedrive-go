@@ -42,12 +42,13 @@ Key operations:
 
 - `CommitObservation()` atomically writes `remote_state` rows and advances the relevant delta token.
 - `CommitOutcome()` updates `baseline` and finalizes remote-state transitions per action. Success-side `sync_failures` cleanup is engine-owned and happens before or after the store commit depending on the result flow.
-- `ApplyRemoteScope(ctx, snapshot)` is the durable sync-scope projection step.
-  It marks already-known out-of-scope `remote_state` rows as `filtered`
-  without fabricating deletes. In-scope re-entry is resolved later by the next
-  remote observation for that item.
-- `UpsertSyncMetadataEntries(ctx, entries)` is the generic sync-metadata
-  writer used by the engine to persist the last effective sync-scope snapshot.
+- `ApplyScopeState(ctx, req)` is the durable sync-scope transition boundary.
+  It upserts the singleton `scope_state` row and atomically re-evaluates
+  existing `remote_state` rows against the effective snapshot, marking
+  out-of-scope rows `filtered` and reactivating in-scope filtered rows.
+- `UpsertSyncMetadataEntries(ctx, entries)` remains the generic sync-metadata
+  writer for status/report metadata only; sync-scope durability no longer
+  piggybacks on generic metadata keys.
 - `RefreshLocalBaseline(ctx, LocalBaselineRefresh)` is the explicit manual-reconciliation path used when local disk now represents the chosen truth without a new executor transfer result. It updates only the local-side baseline tuple, preserves known remote-side metadata/`etag`, and marks a matching `remote_state` row synced.
 - `RecordFailure(ctx, SyncFailureParams, delayFn)` is the single failure writer. The engine provides classification and retry policy; the store provides transactional persistence and conflict-safe upsert behavior.
 - `ResetDownloadingStates(ctx, delayFn)`, `ListDeletingCandidates(ctx)`, and `FinalizeDeletingStates(ctx, deleted, pending, delayFn)` are the state-only crash-recovery primitives. The store no longer probes the sync-root filesystem itself.
@@ -76,6 +77,29 @@ from `deleted` and from retryable download states:
 - filtered rows are excluded from unreconciled/retry projections
 - an in-scope observation moves a filtered row back to `synced` or
   `pending_download` based on hash equality
+- `filter_generation` records which effective scope generation last filtered
+  the row
+- `filter_reason` records whether the row is filtered by `path_scope` or
+  `marker_scope`
+
+### `scope_state`
+
+One row represents the durable sync-scope projection for the current sync root.
+
+Important columns:
+
+- `generation`
+- `effective_snapshot_json`
+- `observation_plan_hash`
+- `observation_mode`
+- `websocket_enabled`
+- `pending_reentry`
+- `last_reconcile_kind`
+- `updated_at`
+
+`scope_state` is the durable authority for restart-safe scope recovery and for
+operator-facing scope inspection. It replaces the earlier convention where the
+engine serialized the effective snapshot into generic `sync_metadata`.
 
 `CommitOutcome()` classifies baseline mutations through one shared
 ActionType-to-mutation mapping before any transaction writes happen. Unknown
@@ -214,6 +238,8 @@ state without handing them raw SQL ownership.
 - `HasScopeBlock(ctx, key)` provides an exact read-only scope-block probe for
   CLI auth-health and other administrative readers that need one persisted
   signal without opening the writable `SyncStore` path.
+- `ReadScopeStateSnapshot(ctx)` returns the durable read-only scope-state
+  projection used by `sync scope` inspection surfaces.
 - `ReadStatusSnapshot(ctx)` returns metadata, aggregate counts, and one
   derived `IssueSummary`.
 - `ReadIssuesSnapshot(ctx, history)` returns the full read-only `issues`

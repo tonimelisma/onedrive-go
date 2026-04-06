@@ -29,6 +29,20 @@ type StatusSnapshot struct {
 	PendingSyncItems   int
 }
 
+// ScopeStateSnapshot is the read-only projection of durable sync-scope state
+// consumed by operator-facing inspection surfaces.
+type ScopeStateSnapshot struct {
+	Found                 bool
+	Generation            int64
+	EffectiveSnapshotJSON string
+	ObservationPlanHash   string
+	ObservationMode       synctypes.ScopeObservationMode
+	WebsocketEnabled      bool
+	PendingReentry        bool
+	LastReconcileKind     synctypes.ScopeReconcileKind
+	UpdatedAt             int64
+}
+
 // IssuesSnapshot is the read-only projection consumed by the CLI issues
 // command. It centralizes visible grouped issues and held deletes under one
 // store-owned read model.
@@ -234,6 +248,47 @@ func (i *Inspector) HasScopeBlock(ctx context.Context, key synctypes.ScopeKey) (
 	}
 
 	return false, fmt.Errorf("query scope block %s: %w", key, err)
+}
+
+// ReadScopeStateSnapshot returns the durable scope-state projection used for
+// scope inspection and restart recovery introspection. Missing tables are
+// treated as empty so callers can inspect never-synced or older state DBs.
+func (i *Inspector) ReadScopeStateSnapshot(ctx context.Context) (ScopeStateSnapshot, error) {
+	row := i.db.QueryRowContext(ctx, `
+		SELECT generation, effective_snapshot_json, observation_plan_hash,
+		       observation_mode, websocket_enabled, pending_reentry,
+		       last_reconcile_kind, updated_at
+		FROM scope_state
+		WHERE singleton = 1`,
+	)
+
+	var (
+		snapshot         ScopeStateSnapshot
+		websocketEnabled int
+		pendingReentry   int
+	)
+	if err := row.Scan(
+		&snapshot.Generation,
+		&snapshot.EffectiveSnapshotJSON,
+		&snapshot.ObservationPlanHash,
+		&snapshot.ObservationMode,
+		&websocketEnabled,
+		&pendingReentry,
+		&snapshot.LastReconcileKind,
+		&snapshot.UpdatedAt,
+	); err != nil {
+		if err == sql.ErrNoRows || isMissingTableErr(err) {
+			return ScopeStateSnapshot{}, nil
+		}
+
+		return ScopeStateSnapshot{}, fmt.Errorf("read scope state snapshot: %w", err)
+	}
+
+	snapshot.Found = true
+	snapshot.WebsocketEnabled = websocketEnabled != 0
+	snapshot.PendingReentry = pendingReentry != 0
+
+	return snapshot, nil
 }
 
 // ReadStatusSnapshot returns the CLI status projection for a sync state DB.

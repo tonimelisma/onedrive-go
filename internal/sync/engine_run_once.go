@@ -381,28 +381,31 @@ func (flow *engineFlow) observeChanges(
 	mode synctypes.SyncMode,
 	dryRun, fullReconcile bool,
 ) ([]synctypes.PathChanges, []deferredDeltaToken, error) {
-	scopeSnapshot, scopeDiff, fullReconcile, err := flow.prepareObservationScope(ctx, watch, mode, fullReconcile)
+	scopeSession, observationPlan, err := flow.prepareObservationScope(ctx, watch, mode, fullReconcile)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	remoteEvents, pendingDeltaTokens, err := flow.observeRemoteChanges(
-		ctx, bl, mode, dryRun, fullReconcile, scopeSnapshot, scopeDiff,
+		ctx, bl, mode, dryRun, &scopeSession, observationPlan,
 	)
 	if err != nil {
 		return nil, nil, err
+	}
+	if mode != synctypes.SyncUploadOnly {
+		observationPlan.Reentry.Pending = false
 	}
 
 	remoteEvents, shortcutEvents := flow.observeShortcutChanges(
-		ctx, watch, bl, remoteEvents, scopeSnapshot, dryRun,
+		ctx, watch, bl, remoteEvents, scopeSession.Current, dryRun,
 	)
 
-	localResult, err := flow.observeLocalChanges(ctx, watch, bl, mode, scopeSnapshot)
+	localResult, err := flow.observeLocalChanges(ctx, watch, bl, mode, scopeSession.Current)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	if err := flow.persistObservedScope(ctx, dryRun, scopeSnapshot, scopeDiff, mode); err != nil {
+	if err := flow.applyScopeState(ctx, dryRun, &scopeSession, observationPlan); err != nil {
 		return nil, nil, err
 	}
 
@@ -419,29 +422,22 @@ func (flow *engineFlow) prepareObservationScope(
 	watch *watchRuntime,
 	mode synctypes.SyncMode,
 	fullReconcile bool,
-) (syncscope.Snapshot, syncscope.Diff, bool, error) {
-	scopeSnapshot, err := flow.engine.buildScopeSnapshot(ctx)
+) (ScopeSession, ObservationPlan, error) {
+	scopeSession, err := flow.BuildScopeSession(ctx, watch)
 	if err != nil {
-		return syncscope.Snapshot{}, syncscope.Diff{}, false, fmt.Errorf("sync: building scope snapshot: %w", err)
+		return ScopeSession{}, ObservationPlan{}, err
 	}
+
 	if watch != nil {
-		watch.setScopeSnapshot(scopeSnapshot)
+		watch.setScopeSnapshot(scopeSession.Current, scopeSession.Generation)
 	}
 
-	previousScope, err := flow.persistedScopeSnapshot(ctx)
+	observationPlan, err := flow.BuildObservationPlan(ctx, &scopeSession, mode, fullReconcile)
 	if err != nil {
-		return syncscope.Snapshot{}, syncscope.Diff{}, false, err
+		return ScopeSession{}, ObservationPlan{}, err
 	}
 
-	scopeDiff := syncscope.DiffSnapshots(previousScope, scopeSnapshot)
-	if scopeDiff.HasEntered() && mode != synctypes.SyncUploadOnly && !fullReconcile && !flow.engine.usesPrimaryPathScopes() {
-		fullReconcile = true
-		flow.engine.logger.Info("scope expansion detected, forcing full reconciliation",
-			slog.Int("entered_paths", len(scopeDiff.EnteredPaths)),
-		)
-	}
-
-	return scopeSnapshot, scopeDiff, fullReconcile, nil
+	return scopeSession, observationPlan, nil
 }
 
 func (flow *engineFlow) observeRemoteChanges(
@@ -449,21 +445,20 @@ func (flow *engineFlow) observeRemoteChanges(
 	bl *synctypes.Baseline,
 	mode synctypes.SyncMode,
 	dryRun bool,
-	fullReconcile bool,
-	scopeSnapshot syncscope.Snapshot,
-	scopeDiff syncscope.Diff,
+	scopeSession *ScopeSession,
+	observationPlan ObservationPlan,
 ) ([]synctypes.ChangeEvent, []deferredDeltaToken, error) {
 	if mode == synctypes.SyncUploadOnly {
 		return nil, nil, nil
 	}
 
-	fetchResult, err := flow.fetchRemoteChanges(ctx, bl, dryRun, fullReconcile)
+	fetchResult, err := flow.fetchRemoteChanges(ctx, bl, dryRun, observationPlan)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	if scopeDiff.HasEntered() && mode != synctypes.SyncUploadOnly && flow.engine.usesPrimaryPathScopes() {
-		reentryResult, err := flow.reconcilePrimaryScopeEntries(ctx, bl, scopeDiff.EnteredPaths, fetchResult.fullPrefixes)
+	if observationPlan.Reentry.Pending {
+		reentryResult, err := flow.reconcilePrimaryScopeEntries(ctx, bl, observationPlan.Reentry.Paths, fetchResult.fullPrefixes)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -472,7 +467,7 @@ func (flow *engineFlow) observeRemoteChanges(
 		fetchResult.deferred = append(fetchResult.deferred, reentryResult.deferred...)
 	}
 
-	scopedRemote := applyRemoteScope(flow.engine.logger, scopeSnapshot, fetchResult.events)
+	scopedRemote := applyRemoteScope(flow.engine.logger, scopeSession.Current, scopeSession.Generation, fetchResult.events)
 	if err := flow.commitObservedRemoteChanges(
 		ctx,
 		dryRun,
@@ -488,24 +483,18 @@ func (flow *engineFlow) fetchRemoteChanges(
 	ctx context.Context,
 	bl *synctypes.Baseline,
 	dryRun bool,
-	fullReconcile bool,
+	observationPlan ObservationPlan,
 ) (remoteFetchResult, error) {
-	if flow.engine.usesPrimaryPathScopes() {
-		result, rootFallback, err := flow.observePrimaryScopedRemote(ctx, bl, fullReconcile)
-		if err != nil {
-			return remoteFetchResult{}, err
-		}
-		if !rootFallback {
-			return result, nil
-		}
+	if len(observationPlan.PrimaryScopes) > 0 && !observationPlan.RootFallback {
+		return flow.observePlannedPrimaryScopes(ctx, bl, observationPlan.PrimaryScopes, observationPlan.FullReconcile)
 	}
 
-	if fullReconcile {
+	if observationPlan.FullReconcile {
 		flow.engine.logger.Info("full reconciliation: enumerating all remote items")
 		events, token, err := flow.observeRemoteFull(ctx, bl)
 		return remoteFetchResult{
 			events:   events,
-			deferred: deferredTokensForPrimary(token, flow.engine, fullReconcile, len(events)),
+			deferred: deferredTokensForPrimary(token, flow.engine, observationPlan.FullReconcile, len(events)),
 		}, err
 	}
 
@@ -517,7 +506,7 @@ func (flow *engineFlow) fetchRemoteChanges(
 	events, token, err := flow.observeRemote(ctx, bl)
 	return remoteFetchResult{
 		events:   events,
-		deferred: deferredTokensForPrimary(token, flow.engine, fullReconcile, len(events)),
+		deferred: deferredTokensForPrimary(token, flow.engine, observationPlan.FullReconcile, len(events)),
 	}, err
 }
 
@@ -571,7 +560,7 @@ func (flow *engineFlow) observeShortcutChanges(
 	}
 
 	filteredRemoteEvents := filterOutShortcuts(remoteEvents)
-	filteredShortcutEvents := applyRemoteScope(flow.engine.logger, scopeSnapshot, shortcutEvents).emitted
+	filteredShortcutEvents := applyRemoteScope(flow.engine.logger, scopeSnapshot, 0, shortcutEvents).emitted
 
 	return filteredRemoteEvents, filteredShortcutEvents
 }
@@ -604,30 +593,6 @@ func (flow *engineFlow) observeLocalChanges(
 	flow.scopeController().clearResolvedRemoteBlockedFailures(ctx, watch, pathSet)
 
 	return localResult, nil
-}
-
-func (flow *engineFlow) persistObservedScope(
-	ctx context.Context,
-	dryRun bool,
-	scopeSnapshot syncscope.Snapshot,
-	scopeDiff syncscope.Diff,
-	mode synctypes.SyncMode,
-) error {
-	if dryRun {
-		return nil
-	}
-
-	if err := flow.engine.baseline.ApplyRemoteScope(ctx, scopeSnapshot); err != nil {
-		return fmt.Errorf("sync: applying remote scope: %w", err)
-	}
-
-	if !scopeDiff.HasEntered() || mode != synctypes.SyncUploadOnly {
-		if err := flow.persistScopeSnapshot(ctx, scopeSnapshot); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 // observeAndCommitRemote wraps observeRemote to persist observations

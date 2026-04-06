@@ -94,10 +94,11 @@ type watchObservationState struct {
 	lastDataVersion int64
 
 	// Observer references — set in startObservers, nil'd on shutdown.
-	remoteObs     *syncobserve.RemoteObserver
-	localObs      *syncobserve.LocalObserver
-	scopeSnapshot syncscope.Snapshot
-	scopeChanges  chan syncscope.Change
+	remoteObs       *syncobserve.RemoteObserver
+	localObs        *syncobserve.LocalObserver
+	scopeSnapshot   syncscope.Snapshot
+	scopeGeneration int64
+	scopeChanges    chan syncscope.Change
 
 	// Socket.IO wake source lifecycle, when enabled for full-drive watch.
 	socketIOWakeStop chan struct{}

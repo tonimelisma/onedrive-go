@@ -151,34 +151,38 @@ type ActionableFailure struct {
 // ObservedItem represents a single item from a delta API response, ready
 // for CommitObservation to process against existing remote_state.
 type ObservedItem struct {
-	DriveID   driveid.ID
-	ItemID    string
-	ParentID  string
-	Path      string
-	ItemType  ItemType
-	Hash      string
-	Size      int64
-	Mtime     int64
-	ETag      string
-	IsDeleted bool
-	Filtered  bool
+	DriveID          driveid.ID
+	ItemID           string
+	ParentID         string
+	Path             string
+	ItemType         ItemType
+	Hash             string
+	Size             int64
+	Mtime            int64
+	ETag             string
+	IsDeleted        bool
+	Filtered         bool
+	FilterGeneration int64
+	FilterReason     RemoteFilterReason
 }
 
 // RemoteStateRow represents a row from the remote_state table, used by
 // the failure retrier and status queries.
 type RemoteStateRow struct {
-	DriveID      driveid.ID
-	ItemID       string
-	Path         string
-	ParentID     string
-	ItemType     ItemType
-	Hash         string
-	Size         int64
-	Mtime        int64
-	ETag         string
-	PreviousPath string
-	SyncStatus   SyncStatus
-	ObservedAt   int64
+	DriveID          driveid.ID
+	ItemID           string
+	Path             string
+	ParentID         string
+	ItemType         ItemType
+	Hash             string
+	Size             int64
+	Mtime            int64
+	ETag             string
+	PreviousPath     string
+	SyncStatus       SyncStatus
+	ObservedAt       int64
+	FilterGeneration int64
+	FilterReason     RemoteFilterReason
 }
 
 // RecoveryCandidate identifies one remote_state row that crash recovery must

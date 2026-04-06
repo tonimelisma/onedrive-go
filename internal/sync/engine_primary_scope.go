@@ -182,19 +182,12 @@ func (e *Engine) resolveScopedRootObservationScope(ctx context.Context, configur
 	}, nil
 }
 
-func (flow *engineFlow) observePrimaryScopedRemote(
+func (flow *engineFlow) observePlannedPrimaryScopes(
 	ctx context.Context,
 	bl *synctypes.Baseline,
+	scopes []primaryObservationScope,
 	fullReconcile bool,
-) (remoteFetchResult, bool, error) {
-	scopes, rootFallback, err := flow.engine.resolvePrimaryObservationScopes(ctx)
-	if err != nil {
-		return remoteFetchResult{}, false, err
-	}
-	if len(scopes) == 0 {
-		return remoteFetchResult{}, rootFallback, nil
-	}
-
+) (remoteFetchResult, error) {
 	result := remoteFetchResult{
 		events:       make([]synctypes.ChangeEvent, 0),
 		deferred:     make([]deferredDeltaToken, 0),
@@ -204,7 +197,7 @@ func (flow *engineFlow) observePrimaryScopedRemote(
 	for i := range scopes {
 		scopeResult, err := flow.observeSinglePrimaryScope(ctx, bl, scopes[i], fullReconcile)
 		if err != nil {
-			return remoteFetchResult{}, false, err
+			return remoteFetchResult{}, err
 		}
 
 		result.events = append(result.events, scopeResult.events...)
@@ -212,7 +205,7 @@ func (flow *engineFlow) observePrimaryScopedRemote(
 		result.fullPrefixes = append(result.fullPrefixes, scopeResult.fullPrefixes...)
 	}
 
-	return result, false, nil
+	return result, nil
 }
 
 func (flow *engineFlow) observeSinglePrimaryScope(

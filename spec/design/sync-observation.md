@@ -98,9 +98,10 @@ Key properties:
 - Marker files are presence-only and never actionable. The observer watches
   the marker-bearing directory itself so marker deletion is visible, but it
   suppresses descendant observation while the marker is present. Marker
-  create/delete/rename rebuilds the snapshot, cancels pending timers under
-  exited roots, adjusts descendant watches, and publishes one scope-change
-  transition back to the engine.
+  create/delete/rename and parent-directory move candidates rebuild the
+  snapshot, advance a watch-owned local scope generation, invalidate deferred
+  hash work from older generations, adjust descendant watches, and publish
+  one scope-change transition back to the engine.
 
 ### Scanner (`scanner.go`)
 
@@ -149,6 +150,10 @@ Observation has a few explicit mutable-runtime owners:
 
 - `Buffer.mu` guards exactly `pending` and `notify`. The debounce goroutine owns the lifetime of the output channel created by `FlushDebounced`.
 - `LocalObserver` owns `PendingTimers`, `HashRequests`, and the filesystem watcher for one watch run. Timer callbacks feed back into that observer-owned watch loop; they do not mutate engine state directly.
+- Deferred hash work is generation-tagged. A marker-driven scope change does
+  not need to race every queued timer callback individually; stale callbacks
+  self-drop when their captured generation no longer matches the current
+  watch-owned scope generation.
 - `RemoteObserver` owns `deltaToken` for one watch run. The watch loop is the only writer; helper calls may read it concurrently through `CurrentDeltaToken`.
 - `SocketIOWakeSource` owns exactly one outbound websocket session plus its reconnect/refresh timers for one watch run. It does not own any delta token or durable sync state.
 - `SocketIOWakeSource` constructor options own the test seams for dial/sleep/clock/lifecycle hook injection. Tests do not mutate the wake source after construction.
