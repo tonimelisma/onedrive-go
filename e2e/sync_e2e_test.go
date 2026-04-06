@@ -241,7 +241,7 @@ func pollRemoteParentVisible(t *testing.T, cfgPath string, env map[string]string
 		return
 	}
 
-	pollCLIWithConfigContains(t, cfgPath, env, parentName, pollTimeout, "stat", parent)
+	waitForRemoteWriteVisible(t, cfgPath, env, drive, parentName, "stat", parent)
 }
 
 func pollRemotePathVisible(t *testing.T, cfgPath string, env map[string]string, remotePath string) {
@@ -257,7 +257,7 @@ func pollRemotePathVisible(t *testing.T, cfgPath string, env map[string]string, 
 		return
 	}
 
-	pollCLIWithConfigContains(t, cfgPath, env, base, pollTimeout, "stat", cleanPath)
+	waitForRemoteWriteVisible(t, cfgPath, env, drive, base, "stat", cleanPath)
 }
 
 // cleanupRemoteFolder is a best-effort remote cleanup for use in t.Cleanup.

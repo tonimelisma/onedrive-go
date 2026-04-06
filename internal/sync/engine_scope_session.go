@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
@@ -22,7 +23,7 @@ type ScopeSession struct {
 
 type ObservationPlan struct {
 	Mode             synctypes.ScopeObservationMode
-	PrimaryScopes    []primaryObservationScope
+	PrimaryScopes    []plannedObservationTarget
 	RootFallback     bool
 	FullReconcile    bool
 	WebsocketEnabled bool
@@ -34,6 +35,10 @@ type ReentryPlan struct {
 	Paths   []string
 	Pending bool
 	Kind    synctypes.ScopeReconcileKind
+}
+
+type ShortcutObservationPlan struct {
+	Targets []plannedObservationTarget
 }
 
 type CursorCommitSet struct {
@@ -142,6 +147,41 @@ func hasObservedRoot(paths []string) bool {
 	return false
 }
 
+func (flow *engineFlow) BuildShortcutObservationPlan(
+	shortcuts []synctypes.Shortcut,
+	bl *synctypes.Baseline,
+	suppressedShortcutTargets map[string]struct{},
+	collisions map[string]bool,
+) ShortcutObservationPlan {
+	if collisions == nil {
+		collisions = detectShortcutCollisionsFromList(shortcuts, bl, flow.engine.logger)
+	}
+
+	targets := make([]plannedObservationTarget, 0, len(shortcuts))
+	for i := range shortcuts {
+		sc := &shortcuts[i]
+		if collisions[sc.ItemID] {
+			continue
+		}
+
+		if len(suppressedShortcutTargets) > 0 {
+			shortcutKey := sc.RemoteDrive + ":" + sc.RemoteItem
+			if _, suppressed := suppressedShortcutTargets[shortcutKey]; suppressed {
+				flow.engine.logger.Debug(
+					"suppressing shortcut observation target — target rate limited",
+					slog.String("shortcut_key", shortcutKey),
+					slog.String("local_path", sc.LocalPath),
+				)
+				continue
+			}
+		}
+
+		targets = append(targets, shortcutObservationTarget(sc))
+	}
+
+	return ShortcutObservationPlan{Targets: targets}
+}
+
 func (flow *engineFlow) scopeStateRecord(session *ScopeSession, plan ObservationPlan) (synctypes.ScopeStateRecord, error) {
 	snapshotJSON, err := syncscope.MarshalSnapshot(session.Current)
 	if err != nil {
@@ -196,7 +236,7 @@ func planHash(plan ObservationPlan, snapshot syncscope.Snapshot) (string, error)
 	}
 	for _, scope := range plan.PrimaryScopes {
 		input.PrimaryPaths = append(input.PrimaryPaths, scope.localPath)
-		input.PrimaryFolderIDs = append(input.PrimaryFolderIDs, scope.folderID)
+		input.PrimaryFolderIDs = append(input.PrimaryFolderIDs, scope.scopeID)
 	}
 
 	raw, err := json.Marshal(input)

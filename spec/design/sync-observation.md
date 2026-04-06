@@ -149,7 +149,11 @@ Collects events from both observers, deduplicates, debounces (default 2 seconds)
 Observation has a few explicit mutable-runtime owners:
 
 - `Buffer.mu` guards exactly `pending` and `notify`. The debounce goroutine owns the lifetime of the output channel created by `FlushDebounced`.
-- `LocalObserver` owns `PendingTimers`, `HashRequests`, and the filesystem watcher for one watch run. Timer callbacks feed back into that observer-owned watch loop; they do not mutate engine state directly.
+- `LocalObserver.localWatchState` is the single mutable owner for one local
+  watch run: pending timers, generation-tagged deferred hash work, watch
+  registrations, collision caches, and the effective scope snapshot all live
+  together there. Timer callbacks feed back into that observer-owned watch
+  loop; they do not mutate engine state directly.
 - Deferred hash work is generation-tagged. A marker-driven scope change does
   not need to race every queued timer callback individually; stale callbacks
   self-drop when their captured generation no longer matches the current
