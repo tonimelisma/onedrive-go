@@ -256,6 +256,7 @@ func newTestEngineWithContext(t *testing.T, ctx context.Context, mock *engineMoc
 		Logger:          logger,
 	})
 	require.NoError(t, err, "NewEngine")
+	eng.execCfg.SetVisibilityWaitSchedule([]time.Duration{0, 0})
 	eng.assertInvariants = true
 	flow := newEngineFlow(eng)
 	testEng := &testEngine{
@@ -306,6 +307,7 @@ func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *eng
 		Logger:          logger,
 	})
 	require.NoError(t, err, "NewEngine")
+	eng.execCfg.SetVisibilityWaitSchedule([]time.Duration{0, 0})
 	eng.assertInvariants = true
 	flow := newEngineFlow(eng)
 	testEng := &testEngine{

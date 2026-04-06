@@ -22,6 +22,7 @@ type VerifyProfile string
 const (
 	defaultCoverageThreshold = 76.0
 	defaultCoveragePattern   = "onedrive-go-cover.*"
+	authE2EPreflightPattern  = "^TestE2E_AuthPreflight_Fast$"
 	fastE2EPreflightPattern  = "^TestE2E_FixturePreflight_Fast$"
 	fullE2EPreflightPattern  = "^TestE2E_FixturePreflight_Full$"
 
@@ -374,6 +375,10 @@ func parseCoverageTotal(report string) (float64, error) {
 }
 
 func runE2E(ctx context.Context, runner commandRunner, repoRoot string, env []string, stdout, stderr io.Writer) error {
+	if err := runE2EPreflightAuth(ctx, runner, repoRoot, env, stdout, stderr); err != nil {
+		return err
+	}
+
 	if err := runE2EPreflightFast(ctx, runner, repoRoot, env, stdout, stderr); err != nil {
 		return err
 	}
@@ -398,6 +403,36 @@ func runE2E(ctx context.Context, runner commandRunner, repoRoot string, env []st
 		"./e2e/...",
 	); err != nil {
 		return fmt.Errorf("fast e2e: %w", err)
+	}
+
+	return nil
+}
+
+func runE2EPreflightAuth(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	env []string,
+	stdout, stderr io.Writer,
+) error {
+	if err := writeStatus(stdout, "==> go test -tags=e2e auth preflight\n"); err != nil {
+		return fmt.Errorf("write status: %w", err)
+	}
+	if err := runner.Run(
+		ctx,
+		repoRoot,
+		env,
+		stdout,
+		stderr,
+		"go",
+		"test",
+		"-tags=e2e",
+		"-run="+authE2EPreflightPattern,
+		"-count=1",
+		"-v",
+		"./e2e/...",
+	); err != nil {
+		return fmt.Errorf("fast e2e auth preflight: %w", err)
 	}
 
 	return nil
@@ -447,6 +482,10 @@ func runE2EFull(
 
 	fullEnv := append([]string{}, env...)
 	fullEnv = append(fullEnv, "E2E_LOG_DIR="+logDir)
+
+	if err := runE2EPreflightAuth(ctx, runner, repoRoot, fullEnv, stdout, stderr); err != nil {
+		return err
+	}
 
 	if err := runE2EPreflightFull(ctx, runner, repoRoot, fullEnv, stdout, stderr); err != nil {
 		return err

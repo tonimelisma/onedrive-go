@@ -270,6 +270,41 @@ func TestCreateUploadSession_Success(t *testing.T) {
 	assert.Equal(t, 31, session.ExpirationTime.Day())
 }
 
+func TestCreateUploadSession_RetriesTransientNotFound(t *testing.T) {
+	var calls atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Contains(t, r.URL.Path, "createUploadSession")
+
+		if calls.Add(1) <= 2 {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("request-id", "req-upload-session-404")
+			w.WriteHeader(http.StatusNotFound)
+			writeTestResponse(t, w, `{"error":{"code":"itemNotFound"}}`)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeTestResponse(t, w, `{
+			"uploadUrl": "https://uploads.contoso.sharepoint.com/session/retry123",
+			"expirationDateTime": "2024-12-31T23:59:59Z"
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	client.uploadSessionCreatePolicy = testRetryPolicy()
+
+	session, err := client.CreateUploadSession(
+		t.Context(), driveid.New("d"), "parent", "retry-file.bin", 10485760, time.Time{},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, UploadURL("https://uploads.contoso.sharepoint.com/session/retry123"), session.UploadURL)
+	assert.Equal(t, int32(3), calls.Load())
+}
+
 // Validates: R-5.6.9
 func TestCreateUploadSessionForItem_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

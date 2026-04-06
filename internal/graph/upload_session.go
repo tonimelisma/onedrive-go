@@ -45,7 +45,13 @@ func (c *Client) CreateUploadSession(
 		return nil, fmt.Errorf("graph: marshaling upload session request: %w", err)
 	}
 
-	resp, err := c.do(ctx, http.MethodPost, path, bytes.NewReader(bodyBytes))
+	resp, err := doQuirkRetry(ctx, c, quirkRetrySpec{
+		name:   "upload-session-create-transient-404",
+		policy: c.uploadSessionCreatePolicy,
+		match:  isTransientUploadSessionCreateError,
+	}, func() (*http.Response, error) {
+		return c.do(ctx, http.MethodPost, path, bytes.NewReader(bodyBytes))
+	})
 	if err != nil {
 		return nil, err
 	}

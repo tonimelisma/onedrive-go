@@ -46,9 +46,10 @@ func (s *driveService) runList(ctx context.Context, showAll bool) error {
 		siteLimit = sharePointSiteUnlimited
 	}
 
-	available, discoveredAuthRequired := discoverAvailableDrives(
+	available, discoveredAuthRequired, discoveredDegraded := discoverAvailableDrives(
 		ctx,
 		snapshot.Config,
+		snapshot.Catalog,
 		siteLimit,
 		logger,
 		recorder,
@@ -59,12 +60,13 @@ func (s *driveService) runList(ctx context.Context, showAll bool) error {
 	authRequired := mergeAuthRequirements(readModel.authRequirements(snapshot, func(entry accountCatalogEntry) bool {
 		return true
 	}), discoveredAuthRequired)
+	degraded := mergeDegradedNotices(discoveredDegraded)
 
 	if s.cc.Flags.JSON {
-		return printDriveListJSON(s.cc.Output(), configured, available, authRequired)
+		return printDriveListJSON(s.cc.Output(), configured, available, authRequired, degraded)
 	}
 
-	return printDriveListText(s.cc.Output(), configured, available, authRequired)
+	return printDriveListText(s.cc.Output(), configured, available, authRequired, degraded)
 }
 
 func (s *driveService) runAdd(ctx context.Context, args []string) error {

@@ -84,6 +84,23 @@ Socket.IO `notification` events do not carry authoritative remote item state.
 They are only a low-latency wakeup telling the client to run the ordinary
 delta pipeline. The delta feed remains the sole source of remote truth.
 
+### Socket.IO Notification Latency Is Variable
+
+Live `e2e_full` coverage on April 5, 2026 showed that a websocket watch
+session can connect immediately and still receive the first
+`42/notifications,["notification", ...]` packet tens of seconds after the
+remote mutation. In the same account and drive, captured successful runs
+delivered the first notification roughly 19s, 32s, and 36s after the socket
+handshake. Another run kept the session connected but produced no notification
+within a 45s test window before the test aborted.
+
+Runtime policy:
+- treat Socket.IO as a low-latency wake path, not a hard real-time guarantee
+- keep ordinary delta polling as the authoritative fallback
+- full E2E websocket tests should allow a wider notification window and assert
+  the end-to-end file arrival stays well below the 5-minute polling fallback,
+  rather than assuming every notification arrives inside 45s
+
 ### Deletion/Creation Ordering
 
 When a file is renamed and a new file is created with the old name, the delta response may list the creation before the deletion. Processing in order causes 409 Conflict errors. The normalization pipeline reorders deletions before creations within each parent ID group.
@@ -146,9 +163,140 @@ Runtime policy:
 
 `GET /drives/{driveID}/items/root/children` returns HTTP 404 with Graph code `itemNotFound` on drives that have existed for months. The token is valid, the drive ID is correct, and subsequent requests succeed. Caused by cross-datacenter lookup timeouts on the load balancer. This is a server-side failure misreported as a client error. Frequency: ~1% of requests.
 
+### Transient 404 on Fresh Download Metadata by Item ID
+
+After a file is newly created, `GET /drives/{driveID}/items/{itemID}` can
+return HTTP 404 with Graph code `itemNotFound` even though the same file is
+already visible through delta and path-based lookup. This shows up most
+clearly in download flows: sync sees the new item in delta, then the immediate
+item-by-ID metadata fetch used to obtain `@microsoft.graph.downloadUrl` still
+fails briefly.
+
+Observed local evidence on April 5, 2026 during `go run ./cmd/devtool verify default`:
+
+- `mkdir` succeeded for `/e2e-sync-dl-1775446530960515000`
+- `put` succeeded for `/e2e-sync-dl-1775446530960515000/download-test.txt`
+- `stat /e2e-sync-dl-1775446530960515000/download-test.txt` succeeded
+- the following `sync --download-only --force` pass observed the file in delta
+- the worker then got `GET /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!sccc09df70b5f4290916bf66a63006a39 = 404 itemNotFound`
+  with request ID `67e72d16-ea0c-4c25-aa82-3ece389a8c8e`
+
+Runtime policy:
+
+- `graph.Client.Download()` and `DownloadRange()` own the exact quirk retry
+- retry remains narrow: only item-by-ID metadata fetches used to obtain the
+  pre-authenticated download URL, only HTTP 404, only Graph code
+  `itemNotFound`
+- the current production retry budget is 4 total attempts with 250ms base, 2x
+  multiplier, no jitter, and 2s max
+- transfer-manager callers and sync workers do not add their own second retry
+  loop for this quirk; the graph boundary is the single owner
+
+### Post-Mutation Path Reads Can Lag Successful `mkdir`, `put`, And `mv`
+
+Graph can acknowledge a metadata-changing mutation and still return
+`404 itemNotFound` on an immediate follow-on path lookup for the destination.
+This is a different consistency gap from the item-by-ID download metadata
+misfire above: the mutation itself succeeded, but the path-based read model has
+not converged yet.
+
+Observed evidence on April 5, 2026 during `go run ./cmd/devtool verify
+e2e-full`:
+
+- `put /e2e-sync-ee-1775448127403708000/conflict-file.txt` completed after the
+  remote edit step of `TestE2E_Sync_EditEditConflict_ResolveKeepRemote`
+- the immediate follow-on `stat /e2e-sync-ee-1775448127403708000/conflict-file.txt`
+  kept returning HTTP 404 `itemNotFound` with request ID
+  `0d76a7d9-c2b4-4eec-acd2-de29e5aec5c7` until the test's 30s poll window
+  expired
+
+Runtime policy:
+
+- CLI mutation commands own a bounded post-success visibility wait
+- `mkdir`, single-file `put`, and `mv` retry destination-path reads on exact
+  `itemNotFound` using a short deterministic schedule: `250ms`, `500ms`, `1s`,
+  `2s`, `4s`, `8s`, `16s`
+- if the destination path still is not readable after that budget, the command
+  returns `ErrPathNotVisible` instead of claiming success prematurely
+
+Observed extension trigger on April 5, 2026:
+
+- `put /e2e-sync-bidi-1775450238168612000/data/info.txt` in
+  `TestE2E_Sync_BidirectionalMerge` succeeded at the upload/PATCH layer, but
+  the immediate post-success path check still got 7 consecutive `GET by path =
+  404 itemNotFound` responses under the older `250ms, 500ms, 1s, 2s, 4s, 8s`
+  schedule
+- request IDs from that failed old-budget run:
+  `7664d8e9-3236-43bb-bd7f-10a1cb0bb877`,
+  `3f7b9699-68b1-4401-805f-c1cc26ba9c2a`,
+  `ee928458-b335-4fe7-be53-425f4c9b6ab6`,
+  `5200b5b8-7236-46fc-87d8-9f2a4cd2b60d`,
+  `346757be-67cf-4363-bfa1-aedf0f51f634`,
+  `c4e63564-7be3-4e33-b62d-0633d13ee42f`,
+  `0d54bce7-4842-4831-b246-617223a0fe71`
+- the production schedule was therefore extended to include the final `16s`
+  step before surfacing `ErrPathNotVisible`
+
+### Delete-By-ID Can Lag A Successful Path Lookup
+
+Graph can also disagree with itself in the opposite direction: a path lookup
+can succeed, then the immediate delete by that item ID can still return
+`404 itemNotFound`. The user-facing intent for `rm` / forced overwrite is the
+path, not the first resolved ID, so the CLI cannot fail immediately on that
+delete-route inconsistency.
+
+Observed evidence on April 5, 2026 during `go test -tags='e2e e2e_full' ./e2e
+-run '^TestE2E_EdgeCases$|^TestE2E_Sync_BidirectionalMerge$'`:
+
+- cleanup for `TestE2E_EdgeCases/concurrent_uploads` resolved
+  `/onedrive-go-e2e-edge-1775450932112095000/concurrent-1.txt` successfully by
+  path
+- the immediate `DELETE /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s5fd8d410d21d4234a567f45e01fc46e2`
+  still returned HTTP 404 `itemNotFound`
+- Graph request ID for the failed delete: `335ea56d-e3a9-4d2f-8b4c-742da9088eec`
+
+Runtime policy:
+
+- CLI path-oriented deletes use path-authoritative recovery, not one-shot
+  item-ID authority
+- `rm`, `mv --force`, and `cp --force` delete through
+  `driveops.Session.DeleteResolvedPath()` / `PermanentDeleteResolvedPath()`
+- when the initial delete returns exact `404 itemNotFound`, the session:
+  - re-resolves the target path
+  - accepts a now-missing path as success
+  - retries delete against the current resolved item when the path still exists
+  - uses the same bounded deterministic convergence schedule as
+    post-success path visibility
+- `rm` additionally waits for the non-root parent path to become readable again
+  before printing success
+
 ### Transient 403 on `/me/drives` (Token Propagation)
 
 After token refresh, `/me/drives` returns HTTP 403 with Graph code `accessDenied` while `/me` (user profile) succeeds with the same token. Caused by eventual consistency in Microsoft's token propagation infrastructure. The `/me` endpoint receives token updates before `/me/drives`.
+
+Observed CI evidence:
+
+- scheduled `e2e_full` run on April 5, 2026 (`23999446320`) got `GET /me = 200`
+- the same test then got 3 consecutive `/me/drives` failures over about 3.1
+  seconds under the old production retry budget
+- a later `whoami` command in the same run succeeded again roughly 10-12
+  seconds later, so the failure window was transient rather than a durable
+  auth rejection
+
+Runtime policy:
+
+- `graph.Client.Drives()` owns the exact quirk retry
+- retry remains narrow: only `/me/drives`, only HTTP 403, only Graph code
+  `accessDenied`
+- the current production retry budget is 5 total attempts with 1s base, 2x
+  multiplier, ±25% jitter, and 60s cap
+- after that budget is exhausted, CLI discovery surfaces degrade explicitly
+  instead of misclassifying the account as auth-required:
+  - `whoami` keeps the authenticated user and falls back to `/me/drive` when
+    possible
+  - `drive list` keeps configured/offline state, uses `/me/drive` fallback for
+    the primary drive, and continues independent shared-folder and SharePoint
+    discovery
 
 ### Slow/Stalled Metadata Response Headers
 
@@ -311,6 +459,25 @@ Runtime policy:
   so read-only shared folders surface `403` and enter the normal `perm:remote`
   flow instead of being misclassified as missing
 
+### Fresh Parent Folder Can Still Reject `createUploadSession`
+
+Live `e2e_full` coverage on April 5, 2026 captured a second create-path
+consistency gap after folder creation. The parent folder
+`/e2e-watch-websocket-1775447250013596000` was already readable by path lookup
+(`request-id: c19f75f0-9a85-43e0-8144-0b4be7387226`), but the immediate follow-on
+upload-session creation for `first.txt`
+(`POST ...:/createUploadSession`, `request-id: d02b9317-d3d5-44ad-a30c-327df8c859d3`)
+still returned HTTP 404 `itemNotFound`.
+
+Runtime policy:
+- `CreateUploadSession()` retries that exact fresh-parent `404 itemNotFound`
+  case with a short bounded policy (`6` total attempts, `250ms` base, `4s` max,
+  no jitter)
+- the retry stays at the graph quirk boundary instead of teaching callers or
+  generic transport retry about parent-creation ordering
+- if the request still fails after the quirk budget, the upload returns the
+  final error without pretending the parent exists
+
 ### SharedWithMe Identity Response Shape
 
 `/me/drive/sharedWithMe` returns identity data under `remoteItem.shared` and `remoteItem.createdBy`, NOT top-level `shared`. Four-level fallback chain: `remoteItem.shared.sharedBy` → `.owner` → `remoteItem.createdBy` → top-level `shared.owner`. The `email` field in identity responses is undocumented but works on both personal and business accounts.
@@ -325,9 +492,20 @@ when `sharedWithMe` still returns shared folders/files for the same recipient.
 Runtime policy: use search first, but fall back to `sharedWithMe` whenever
 search yields no items with both `remoteDriveID` and `remoteItemID`.
 
-### Cross-Organization Shared Folders Invisible (Business)
+### Cross-Organization Shared Discovery Remains Partial (Business)
 
-Shared folders from users outside your organization are not visible via the Graph API, even though they appear in the OneDrive web interface. This is a fundamental Graph API limitation, not a client bug.
+The stale blanket claim that business cross-organization shares are
+categorically invisible is too strong. The client now uses
+`GET /me/drive/sharedWithMe?allowexternal=true` on fallback, which improves
+external discovery, but there is still no proof that Graph reliably exposes
+every external shared folder in every tenant configuration.
+
+Runtime policy:
+- treat external shared discovery as best-effort, not guaranteed
+- keep search as the primary discovery path
+- use `sharedWithMe?allowexternal=true` as fallback
+- if both surfaces still omit the share, explain the platform limitation rather
+  than claiming the folder is absent or misconfiguring the account
 
 ### Folder-Scoped Delta Limitation
 

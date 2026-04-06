@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"path"
 
 	"github.com/spf13/cobra"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 )
 
 func newRmCmd() *cobra.Command {
@@ -80,6 +83,12 @@ func runRm(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	if parentPath := removableParentPath(remotePath); parentPath != "" {
+		if _, err := session.WaitPathVisible(ctx, parentPath); err != nil {
+			return fmt.Errorf("confirming parent %q visibility after delete: %w", "/"+parentPath, err)
+		}
+	}
+
 	if cc.Flags.JSON {
 		return printRmJSON(cc.Output(), rmJSONOutput{Deleted: remotePath})
 	}
@@ -107,8 +116,8 @@ func resolveRmDeleteMode(
 func executeRmDelete(
 	ctx context.Context,
 	session interface {
-		DeleteItem(context.Context, string) error
-		PermanentDeleteItem(context.Context, string) error
+		DeleteResolvedPath(context.Context, string, string) error
+		PermanentDeleteResolvedPath(context.Context, string, string) error
 	},
 	itemID, remotePath string,
 	deleteMode rmDeleteMode,
@@ -116,13 +125,13 @@ func executeRmDelete(
 ) error {
 	switch deleteMode {
 	case rmDeletePermanent:
-		if err := session.PermanentDeleteItem(ctx, itemID); err != nil {
+		if err := session.PermanentDeleteResolvedPath(ctx, remotePath, itemID); err != nil {
 			return fmt.Errorf("permanently deleting %q: %w", remotePath, err)
 		}
 
 		logger.Debug("permanent delete complete", "path", remotePath, "item_id", itemID)
 	case rmDeleteRecycleBin:
-		if err := session.DeleteItem(ctx, itemID); err != nil {
+		if err := session.DeleteResolvedPath(ctx, remotePath, itemID); err != nil {
 			return fmt.Errorf("deleting %q: %w", remotePath, err)
 		}
 
@@ -139,6 +148,20 @@ func writeRmStatus(cc *CLIContext, remotePath string, deleteMode rmDeleteMode) {
 	case rmDeleteRecycleBin:
 		cc.Statusf("Deleted %s (moved to recycle bin)\n", remotePath)
 	}
+}
+
+func removableParentPath(remotePath string) string {
+	clean := driveops.CleanRemotePath(remotePath)
+	if clean == "" {
+		return ""
+	}
+
+	parent := path.Dir(clean)
+	if parent == "." || parent == "/" || parent == "" {
+		return ""
+	}
+
+	return parent
 }
 
 // printRmJSON writes the rm command's JSON output to w.

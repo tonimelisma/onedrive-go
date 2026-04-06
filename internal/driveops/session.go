@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"strings"
 	gosync "sync"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // Session holds authenticated clients and the resolved drive identity for a
@@ -23,6 +25,9 @@ type Session struct {
 	DriveID  driveid.ID
 	RootItem string
 	Resolved *config.ResolvedDrive
+
+	visibilityWaitSchedule []time.Duration
+	sleepFunc              func(context.Context, time.Duration) error
 }
 
 // AccountClients holds authenticated Graph clients for an account-scoped
@@ -289,6 +294,36 @@ func (s *Session) ResolveItem(ctx context.Context, remotePath string) (*graph.It
 	return item, nil
 }
 
+// WaitPathVisible blocks until the remote path is readable through ordinary
+// path resolution after a successful mutation. Graph can acknowledge mkdir,
+// put, or move before follow-on path reads stop returning itemNotFound, so the
+// command boundary treats visibility convergence as part of mutation success.
+func (s *Session) WaitPathVisible(ctx context.Context, remotePath string) (*graph.Item, error) {
+	item, err := s.ResolveItem(ctx, remotePath)
+	if err == nil {
+		return item, nil
+	}
+	if !errors.Is(err, graph.ErrNotFound) {
+		return nil, err
+	}
+
+	for _, delay := range s.visibilitySchedule() {
+		if sleepErr := s.sleep(ctx, delay); sleepErr != nil {
+			return nil, fmt.Errorf("wait for path %q visibility: %w", remotePath, sleepErr)
+		}
+
+		item, err = s.ResolveItem(ctx, remotePath)
+		if err == nil {
+			return item, nil
+		}
+		if !errors.Is(err, graph.ErrNotFound) {
+			return nil, err
+		}
+	}
+
+	return nil, fmt.Errorf("%w: %q", ErrPathNotVisible, remotePath)
+}
+
 // ListChildren lists children of a remote path. For root (""), uses
 // ListChildren with "root". Otherwise uses ListChildrenByPath.
 func (s *Session) ListChildren(ctx context.Context, remotePath string) ([]graph.Item, error) {
@@ -324,6 +359,89 @@ func (s *Session) ListChildren(ctx context.Context, remotePath string) ([]graph.
 	return items, nil
 }
 
+func (s *Session) visibilitySchedule() []time.Duration {
+	if len(s.visibilityWaitSchedule) == 0 {
+		policy := retry.PathVisibilityPolicy()
+		delayCount := 0
+		if policy.MaxAttempts > 0 {
+			delayCount = policy.MaxAttempts - 1
+		}
+		schedule := make([]time.Duration, 0, delayCount)
+		for attempt := range policy.MaxAttempts - 1 {
+			schedule = append(schedule, policy.Delay(attempt))
+		}
+
+		return schedule
+	}
+
+	return s.visibilityWaitSchedule
+}
+
+func (s *Session) sleep(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		if ctx.Err() != nil {
+			return fmt.Errorf("wait for path visibility: %w", ctx.Err())
+		}
+
+		return nil
+	}
+	if s.sleepFunc != nil {
+		return s.sleepFunc(ctx, delay)
+	}
+
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("wait for path visibility: %w", ctx.Err())
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (s *Session) deleteResolvedPath(
+	ctx context.Context,
+	remotePath string,
+	itemID string,
+	deleteByID func(context.Context, string) error,
+) error {
+	currentID := itemID
+	err := deleteByID(ctx, currentID)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, graph.ErrNotFound) {
+		return err
+	}
+
+	for _, delay := range s.visibilitySchedule() {
+		if sleepErr := s.sleep(ctx, delay); sleepErr != nil {
+			return fmt.Errorf("wait for delete path %q convergence: %w", remotePath, sleepErr)
+		}
+
+		item, resolveErr := s.ResolveItem(ctx, remotePath)
+		switch {
+		case resolveErr == nil:
+			currentID = item.ID
+		case errors.Is(resolveErr, graph.ErrNotFound):
+			return nil
+		default:
+			return fmt.Errorf("confirm delete path %q state: %w", remotePath, resolveErr)
+		}
+
+		err = deleteByID(ctx, currentID)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, graph.ErrNotFound) {
+			return err
+		}
+	}
+
+	return err
+}
+
 // DeleteItem moves an item to the recycle bin.
 func (s *Session) DeleteItem(ctx context.Context, itemID string) error {
 	if err := s.Meta.DeleteItem(ctx, s.DriveID, itemID); err != nil {
@@ -333,6 +451,15 @@ func (s *Session) DeleteItem(ctx context.Context, itemID string) error {
 	return nil
 }
 
+// DeleteResolvedPath keeps the delete operation authoritative on the remote
+// path, not only the initially resolved item ID. Graph can briefly return
+// itemNotFound on the delete route even though the same path resolved moments
+// earlier, so this method re-resolves and retries until the path disappears or
+// the bounded visibility schedule is exhausted.
+func (s *Session) DeleteResolvedPath(ctx context.Context, remotePath, itemID string) error {
+	return s.deleteResolvedPath(ctx, remotePath, itemID, s.DeleteItem)
+}
+
 // PermanentDeleteItem permanently deletes an item (Business/SharePoint only).
 func (s *Session) PermanentDeleteItem(ctx context.Context, itemID string) error {
 	if err := s.Meta.PermanentDeleteItem(ctx, s.DriveID, itemID); err != nil {
@@ -340,6 +467,12 @@ func (s *Session) PermanentDeleteItem(ctx context.Context, itemID string) error 
 	}
 
 	return nil
+}
+
+// PermanentDeleteResolvedPath mirrors DeleteResolvedPath for the permanent
+// delete route.
+func (s *Session) PermanentDeleteResolvedPath(ctx context.Context, remotePath, itemID string) error {
+	return s.deleteResolvedPath(ctx, remotePath, itemID, s.PermanentDeleteItem)
 }
 
 // CreateFolder creates a folder under the given parent.

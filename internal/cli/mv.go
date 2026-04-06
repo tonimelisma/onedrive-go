@@ -167,7 +167,7 @@ func runMv(cmd *cobra.Command, args []string, force bool) error {
 	// NOTE: This is a TOCTOU race — another client could recreate the file
 	// between delete and move. The Graph API has no atomic overwrite for moves.
 	if dest.existingID != "" && !isSelfReference(sourceItem.ID, dest) {
-		if delErr := session.DeleteItem(ctx, dest.existingID); delErr != nil {
+		if delErr := session.DeleteResolvedPath(ctx, destPath, dest.existingID); delErr != nil {
 			return fmt.Errorf("deleting existing %q: %w", destPath, delErr)
 		}
 	}
@@ -198,6 +198,10 @@ func runMv(cmd *cobra.Command, args []string, force bool) error {
 		if clean != "" {
 			displayDest = clean + "/" + moved.Name
 		}
+	}
+
+	if _, err := session.WaitPathVisible(ctx, displayDest); err != nil {
+		return fmt.Errorf("confirming move to %q visibility: %w", displayDest, err)
 	}
 
 	return emitMoveResult(cc, sourcePath, displayDest, moved.ID)
