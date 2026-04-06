@@ -19,3 +19,9 @@ var ErrFileExceedsOneDriveLimit = errors.New("file exceeds OneDrive 250 GB limit
 // min_free_space but below file size + min_free_space. Per-file failure,
 // no scope escalation — smaller files may still fit (R-2.10.44).
 var ErrFileTooLargeForSpace = errors.New("insufficient disk space for file")
+
+// ErrPathNotVisible is returned when Graph acknowledged a metadata-changing
+// mutation, but the destination path still is not readable after the bounded
+// post-success visibility wait. Callers surface this as a concrete degraded
+// mutation result instead of pretending the path settled immediately.
+var ErrPathNotVisible = errors.New("remote path not yet visible")

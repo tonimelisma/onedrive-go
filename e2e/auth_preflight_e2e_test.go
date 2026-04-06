@@ -1,0 +1,164 @@
+//go:build e2e
+
+package e2e
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
+	"github.com/tonimelisma/onedrive-go/testutil"
+)
+
+const authPreflightTimeout = 30 * time.Second
+
+type authPreflightAttempt struct {
+	StatusCode int
+	Code       string
+	RequestID  string
+	Err        string
+}
+
+func TestE2E_AuthPreflight_Fast(t *testing.T) {
+	registerLogDump(t)
+
+	for _, driveID := range liveConfig.CandidateDriveIDs() {
+		driveID := driveID
+		t.Run(sanitizeTestName(driveID), func(t *testing.T) {
+			assertLiveAuthPreflight(t, driveID)
+		})
+	}
+}
+
+func assertLiveAuthPreflight(t *testing.T, driveID string) {
+	t.Helper()
+
+	tokenPath := filepath.Join(testDataDir, testutil.TokenFileName(driveID))
+	ts, err := graph.TokenSourceFromPath(t.Context(), tokenPath, slog.New(slog.DiscardHandler))
+	require.NoError(t, err, "load token source for %s", driveID)
+
+	httpClient := &http.Client{}
+	ctx, cancel := context.WithTimeout(t.Context(), authPreflightTimeout)
+	defer cancel()
+
+	meAttempt := runAuthPreflightAttempt(ctx, httpClient, ts, "/me")
+	require.Truef(t, meAttempt.StatusCode == http.StatusOK && meAttempt.Err == "",
+		"/me preflight failed for %s: %s", driveID, formatAuthPreflightFailure(driveID, "/me", time.Duration(0), []authPreflightAttempt{meAttempt}))
+
+	started := time.Now()
+	attempts, err := waitForDrivesPreflight(ctx, httpClient, ts)
+	require.NoErrorf(t, err, "%s", formatAuthPreflightFailure(driveID, "/me/drives", time.Since(started), attempts))
+}
+
+func waitForDrivesPreflight(
+	ctx context.Context,
+	httpClient *http.Client,
+	ts graph.TokenSource,
+) ([]authPreflightAttempt, error) {
+	var attempts []authPreflightAttempt
+
+	for attempt := 0; ; attempt++ {
+		result := runAuthPreflightAttempt(ctx, httpClient, ts, "/me/drives")
+		attempts = append(attempts, result)
+		if result.StatusCode == http.StatusOK && result.Err == "" {
+			return attempts, nil
+		}
+
+		if err := retry.TimeSleep(ctx, pollBackoff(attempt)); err != nil {
+			return attempts, err
+		}
+	}
+}
+
+func runAuthPreflightAttempt(
+	ctx context.Context,
+	httpClient *http.Client,
+	ts graph.TokenSource,
+	path string,
+) authPreflightAttempt {
+	token, err := ts.Token()
+	if err != nil {
+		return authPreflightAttempt{Err: fmt.Sprintf("load token: %v", err)}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, graph.DefaultBaseURL+path, nil)
+	if err != nil {
+		return authPreflightAttempt{Err: fmt.Sprintf("build request: %v", err)}
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("User-Agent", "onedrive-go/e2e-preflight")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return authPreflightAttempt{Err: fmt.Sprintf("dispatch request: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if readErr != nil {
+		return authPreflightAttempt{
+			StatusCode: resp.StatusCode,
+			RequestID:  resp.Header.Get("request-id"),
+			Err:        fmt.Sprintf("read response body: %v", readErr),
+		}
+	}
+
+	result := authPreflightAttempt{
+		StatusCode: resp.StatusCode,
+		Code:       authPreflightGraphCode(body),
+		RequestID:  resp.Header.Get("request-id"),
+	}
+	if resp.StatusCode != http.StatusOK {
+		result.Err = strings.TrimSpace(string(body))
+	}
+
+	return result
+}
+
+func authPreflightGraphCode(body []byte) string {
+	var payload struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return ""
+	}
+
+	return payload.Error.Code
+}
+
+func formatAuthPreflightFailure(
+	driveID string,
+	endpoint string,
+	elapsed time.Duration,
+	attempts []authPreflightAttempt,
+) string {
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf("auth preflight failed for %s endpoint=%s failed_calls=%d elapsed=%s",
+		driveID, endpoint, len(attempts), elapsed.Round(time.Millisecond)))
+
+	for i, attempt := range attempts {
+		builder.WriteString(fmt.Sprintf("\n  attempt=%d status=%d code=%q request_id=%q detail=%q",
+			i+1,
+			attempt.StatusCode,
+			attempt.Code,
+			attempt.RequestID,
+			attempt.Err,
+		))
+	}
+
+	return builder.String()
+}

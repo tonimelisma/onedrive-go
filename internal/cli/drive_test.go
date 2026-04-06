@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -184,7 +185,7 @@ func TestListAvailableDrives_Empty(t *testing.T) {
 
 func TestPrintDriveListText_EmptyBothSections(t *testing.T) {
 	var buf bytes.Buffer
-	require.NoError(t, printDriveListText(&buf, nil, nil))
+	require.NoError(t, printDriveListText(&buf, nil, nil, nil, nil))
 	assert.Contains(t, buf.String(), "No drives configured")
 }
 
@@ -194,7 +195,7 @@ func TestPrintDriveListText_ConfiguredOnly(t *testing.T) {
 		{CanonicalID: "personal:user@example.com", SyncDir: "~/OneDrive", State: driveStateReady, Source: "configured"},
 	}
 	var buf bytes.Buffer
-	require.NoError(t, printDriveListText(&buf, configured, nil))
+	require.NoError(t, printDriveListText(&buf, configured, nil, nil, nil))
 	output := buf.String()
 	assert.Contains(t, output, "Configured drives:")
 	assert.Contains(t, output, "personal:user@example.com")
@@ -206,7 +207,7 @@ func TestPrintDriveListText_AvailableOnly(t *testing.T) {
 		{CanonicalID: "business:user@contoso.com", State: "", Source: "available", SiteName: "Marketing"},
 	}
 	var buf bytes.Buffer
-	require.NoError(t, printDriveListText(&buf, nil, available))
+	require.NoError(t, printDriveListText(&buf, nil, available, nil, nil))
 	output := buf.String()
 	assert.Contains(t, output, "Available drives")
 	assert.Contains(t, output, "business:user@contoso.com")
@@ -221,7 +222,7 @@ func TestPrintDriveListText_BothSections(t *testing.T) {
 		{CanonicalID: "business:user@contoso.com", Source: "available"},
 	}
 	var buf bytes.Buffer
-	require.NoError(t, printDriveListText(&buf, configured, available))
+	require.NoError(t, printDriveListText(&buf, configured, available, nil, nil))
 	output := buf.String()
 	assert.Contains(t, output, "Configured drives:")
 	assert.Contains(t, output, "Available drives")
@@ -240,6 +241,75 @@ func TestBuildConfiguredDriveEntries_ExplicitDisplayName(t *testing.T) {
 	assert.Equal(t, "My Personal Drive", entries[0].DisplayName)
 }
 
+func TestPrintDriveListText_IncludesDegradedSection(t *testing.T) {
+	var buf bytes.Buffer
+	require.NoError(t, printDriveListText(&buf, nil, nil, nil, []accountDegradedNotice{
+		driveCatalogDegradedNotice("user@example.com", "Test User", driveid.DriveTypePersonal),
+	}))
+
+	output := buf.String()
+	assert.Contains(t, output, "Accounts with degraded live discovery:")
+	assert.Contains(t, output, "Test User (user@example.com)")
+	assert.Contains(t, output, degradedReasonText(driveCatalogUnavailableReason))
+}
+
+type fakeAccessibleDriveClient struct {
+	drives     []graph.Drive
+	drivesErr  error
+	primary    *graph.Drive
+	primaryErr error
+}
+
+func (f fakeAccessibleDriveClient) Drives(context.Context) ([]graph.Drive, error) {
+	return f.drives, f.drivesErr
+}
+
+func (f fakeAccessibleDriveClient) PrimaryDrive(context.Context) (*graph.Drive, error) {
+	return f.primary, f.primaryErr
+}
+
+func TestDiscoverAccessibleDrives_DegradesToPrimaryDrive(t *testing.T) {
+	cfg := config.DefaultConfig()
+	entries, authRequired, degraded := discoverAccessibleDrives(
+		t.Context(),
+		fakeAccessibleDriveClient{
+			drivesErr: graph.ErrForbidden,
+			primary: &graph.Drive{
+				ID:        driveid.New("drive-primary"),
+				Name:      "OneDrive",
+				DriveType: driveid.DriveTypePersonal,
+			},
+		},
+		cfg,
+		nil,
+		driveid.MustCanonicalID("personal:user@example.com"),
+		testDriveLogger(t),
+	)
+	require.Empty(t, authRequired)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "personal:user@example.com", entries[0].CanonicalID)
+	require.Len(t, degraded, 1)
+	assert.Equal(t, driveCatalogUnavailableReason, degraded[0].Reason)
+}
+
+func TestDiscoverAccessibleDrives_UnauthorizedReturnsAuthRequired(t *testing.T) {
+	entries, authRequired, degraded := discoverAccessibleDrives(
+		t.Context(),
+		fakeAccessibleDriveClient{
+			drivesErr: graph.ErrUnauthorized,
+		},
+		config.DefaultConfig(),
+		nil,
+		driveid.MustCanonicalID("business:user@contoso.com"),
+		testDriveLogger(t),
+	)
+	assert.Empty(t, entries)
+	assert.Empty(t, degraded)
+	require.Len(t, authRequired, 1)
+	assert.Equal(t, "user@contoso.com", authRequired[0].Email)
+	assert.Equal(t, authReasonSyncAuthRejected, authRequired[0].Reason)
+}
+
 // Validates: R-3.5.1
 func TestPrintDriveListText_ShowsDisplayName(t *testing.T) {
 	configured := []driveListEntry{
@@ -252,7 +322,7 @@ func TestPrintDriveListText_ShowsDisplayName(t *testing.T) {
 		},
 	}
 	var buf bytes.Buffer
-	require.NoError(t, printDriveListText(&buf, configured, nil))
+	require.NoError(t, printDriveListText(&buf, configured, nil, nil, nil))
 	output := buf.String()
 	assert.Contains(t, output, "user@example.com")
 	assert.Contains(t, output, "personal:user@example.com")
@@ -284,7 +354,7 @@ func TestPrintDriveListText_EmptySyncDir_ShowsNotSet(t *testing.T) {
 		{CanonicalID: "personal:user@example.com", SyncDir: "", State: driveStateReady, Source: "configured"},
 	}
 	var buf bytes.Buffer
-	require.NoError(t, printDriveListText(&buf, configured, nil))
+	require.NoError(t, printDriveListText(&buf, configured, nil, nil, nil))
 	output := buf.String()
 	assert.Contains(t, output, "(not set)")
 }
@@ -293,7 +363,7 @@ func TestPrintDriveListText_EmptySyncDir_ShowsNotSet(t *testing.T) {
 
 func TestPrintDriveListJSON_Empty(t *testing.T) {
 	var buf bytes.Buffer
-	err := printDriveListJSON(&buf, nil, nil)
+	err := printDriveListJSON(&buf, nil, nil, nil, nil)
 	assert.NoError(t, err)
 }
 
@@ -315,7 +385,7 @@ func TestPrintDriveListJSON_VerifyOutput(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printDriveListJSON(&buf, configured, available, authRequired))
+	require.NoError(t, printDriveListJSON(&buf, configured, available, authRequired, nil))
 
 	var output driveListJSONOutput
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &output))
@@ -331,7 +401,7 @@ func TestPrintDriveListJSON_VerifyOutput(t *testing.T) {
 
 func TestPrintDriveListJSON_NilSlicesRenderAsEmptyArrays(t *testing.T) {
 	var buf bytes.Buffer
-	require.NoError(t, printDriveListJSON(&buf, nil, nil))
+	require.NoError(t, printDriveListJSON(&buf, nil, nil, nil, nil))
 
 	var output map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &output))
@@ -381,7 +451,7 @@ func TestPrintDriveListText_HasStateDB_ShowsMarker(t *testing.T) {
 		{CanonicalID: "personal:user@example.com", State: "available", Source: "available", HasStateDB: true},
 	}
 	var buf bytes.Buffer
-	require.NoError(t, printDriveListText(&buf, nil, available))
+	require.NoError(t, printDriveListText(&buf, nil, available, nil, nil))
 	output := buf.String()
 	assert.Contains(t, output, "[has sync data]")
 }
@@ -392,7 +462,7 @@ func TestPrintDriveListText_NoStateDB_NoMarker(t *testing.T) {
 		{CanonicalID: "personal:user@example.com", State: "available", Source: "available", HasStateDB: false},
 	}
 	var buf bytes.Buffer
-	require.NoError(t, printDriveListText(&buf, nil, available))
+	require.NoError(t, printDriveListText(&buf, nil, available, nil, nil))
 	output := buf.String()
 	assert.NotContains(t, output, "[has sync data]")
 }
@@ -874,7 +944,7 @@ func TestPrintDriveListText_SharedDrive(t *testing.T) {
 		},
 	}
 	var buf bytes.Buffer
-	require.NoError(t, printDriveListText(&buf, nil, available))
+	require.NoError(t, printDriveListText(&buf, nil, available, nil, nil))
 	output := buf.String()
 	assert.Contains(t, output, "shared by alice@example.com")
 }
@@ -885,7 +955,7 @@ func TestPrintDriveListText_SharedAndSharePoint(t *testing.T) {
 		{CanonicalID: "shared:u@c.com:d:i", State: "available", Source: "available", OwnerEmail: "bob@example.com"},
 	}
 	var buf bytes.Buffer
-	require.NoError(t, printDriveListText(&buf, nil, available))
+	require.NoError(t, printDriveListText(&buf, nil, available, nil, nil))
 	output := buf.String()
 	assert.Contains(t, output, "(Marketing)")
 	assert.Contains(t, output, "(shared by bob@example.com)")
@@ -1586,7 +1656,7 @@ func TestAnnotateConfiguredDriveAuth_AndPrintSections(t *testing.T) {
 		Email:  "blocked@example.com",
 		Reason: authReasonMissingLogin,
 		Action: authAction(authReasonMissingLogin),
-	}}))
+	}}, nil))
 	assert.Contains(t, buf.String(), "Configured drives:")
 	assert.Contains(t, buf.String(), "Available drives (not configured):")
 	assert.Contains(t, buf.String(), "Authentication required:")

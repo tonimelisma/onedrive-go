@@ -60,10 +60,15 @@ func runMkdir(cmd *cobra.Command, args []string) error {
 		parentID = item.ID
 	}
 
+	item, err := session.WaitPathVisible(ctx, remotePath)
+	if err != nil {
+		return fmt.Errorf("confirming folder %q visibility: %w", remotePath, err)
+	}
+
 	logger.Debug("mkdir complete", "path", remotePath, "folder_id", parentID)
 
 	if cc.Flags.JSON {
-		return printMkdirJSON(cc.Output(), mkdirJSONOutput{Created: remotePath, ID: parentID})
+		return printMkdirJSON(cc.Output(), mkdirJSONOutput{Created: remotePath, ID: item.ID})
 	}
 
 	cc.Statusf("Created %s\n", remotePath)

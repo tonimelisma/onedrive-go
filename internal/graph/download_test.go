@@ -36,6 +36,7 @@ func assertDownloadError(t *testing.T, srv *httptest.Server, itemID string, want
 	t.Cleanup(srv.Close)
 
 	client := newTestClient(t, srv.URL)
+	client.downloadMetadataPolicy = testRetryPolicy()
 	var buf bytes.Buffer
 	_, err := client.Download(t.Context(), driveid.New("d"), itemID, &buf)
 	require.Error(t, err)
@@ -97,6 +98,51 @@ func TestDownload_EmptyDownloadURL(t *testing.T) {
 
 func TestDownload_ItemNotFound(t *testing.T) {
 	assertDownloadError(t, newGraphErrorServer(t, http.StatusNotFound, "req-dl-404", "itemNotFound", nil), "nonexistent", ErrNotFound)
+}
+
+func TestDownload_RetriesTransientMetadataNotFound(t *testing.T) {
+	var itemCalls atomic.Int32
+
+	dlSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		writeDownloadTestBody(t, w, "retry after metadata")
+	}))
+	defer dlSrv.Close()
+
+	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/drives/000000000000000d/items/item-retry-metadata", r.URL.Path)
+
+		call := itemCalls.Add(1)
+		if call <= 2 {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("request-id", "req-md-404")
+			w.WriteHeader(http.StatusNotFound)
+			writeTestResponse(t, w, `{"error":{"code":"itemNotFound"}}`)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeTestResponsef(t, w, `{
+			"id": "item-retry-metadata", "name": "retry.txt",
+			"createdDateTime": "2024-01-01T00:00:00Z",
+			"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+			"parentReference": {"id": "p", "driveId": "d"},
+			"file": {"mimeType": "text/plain"},
+			"@microsoft.graph.downloadUrl": %q
+		}`, dlSrv.URL+"/dl")
+	}))
+	defer graphSrv.Close()
+
+	client := newTestClient(t, graphSrv.URL)
+	client.downloadMetadataPolicy = testRetryPolicy()
+
+	var buf bytes.Buffer
+	n, err := client.Download(t.Context(), driveid.New("d"), "item-retry-metadata", &buf)
+	require.NoError(t, err)
+	assert.Equal(t, "retry after metadata", buf.String())
+	assert.Equal(t, int64(len("retry after metadata")), n)
+	assert.Equal(t, int32(3), itemCalls.Load())
 }
 
 func TestDownload_VerifyBytesWritten(t *testing.T) {

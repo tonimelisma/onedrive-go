@@ -45,20 +45,22 @@ type TokenSource interface {
 // transport, single attempt, engine records failure for the engine retry
 // sweep).
 type Client struct {
-	baseURL              string
-	httpClient           *http.Client
-	token                TokenSource
-	logger               *slog.Logger
-	userAgent            string
-	authSuccessHook      func(context.Context)
-	deltaPreferHeader    http.Header
-	maxDeltaPages        int
-	maxRecursionDepth    int
-	driveDiscoveryPolicy retry.Policy
-	rootChildrenPolicy   retry.Policy
-	uploadURLValidator   func(*url.URL) error
-	copyMonitorValidator func(*url.URL) error
-	socketIOValidator    func(*url.URL) error
+	baseURL                   string
+	httpClient                *http.Client
+	token                     TokenSource
+	logger                    *slog.Logger
+	userAgent                 string
+	authSuccessHook           func(context.Context)
+	deltaPreferHeader         http.Header
+	maxDeltaPages             int
+	maxRecursionDepth         int
+	driveDiscoveryPolicy      retry.Policy
+	rootChildrenPolicy        retry.Policy
+	downloadMetadataPolicy    retry.Policy
+	uploadSessionCreatePolicy retry.Policy
+	uploadURLValidator        func(*url.URL) error
+	copyMonitorValidator      func(*url.URL) error
+	socketIOValidator         func(*url.URL) error
 }
 
 // SetAuthenticatedSuccessHook installs a best-effort callback that runs after

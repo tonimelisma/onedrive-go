@@ -27,8 +27,11 @@ execution.
 | Policy | Use Case | MaxAttempts | Initial | Max |
 |--------|----------|-------------|---------|-----|
 | `TransportPolicy()` | HTTP retry via `RetryTransport` for CLI callers | 5 | 1s | 60s |
-| `DriveDiscoveryPolicy()` | Drive enumeration retry | 3 | 1s | 60s |
+| `DriveDiscoveryPolicy()` | Drive enumeration retry | 5 | 1s | 60s |
 | `RootChildrenPolicy()` | Exact `root/children` quirk retry | 3 | 250ms | 1s |
+| `DownloadMetadataPolicy()` | Exact item-by-ID download metadata quirk retry | 4 | 250ms | 2s |
+| `UploadSessionCreatePolicy()` | Exact create-upload-session fresh-parent quirk retry | 6 | 250ms | 4s |
+| `PathVisibilityPolicy()` | Post-success path-read/delete convergence at the CLI/session boundary | 8 | 250ms | 32s |
 | `WatchLocalPolicy()` | Local observer error recovery | 0 (infinite) | 1s | 30s |
 | `ReconcilePolicy()` | Per-item transient retry in `sync_failures` | 0 (infinite) | 1s | 1h |
 | `WatchRemotePolicy()` | Remote observer error recovery | 0 (infinite) | 5s | 5m |
@@ -36,6 +39,33 @@ execution.
 `ReconcilePolicy()` is the single retry curve for transient item failures in
 the sync engine. The store never imports the retry package directly; the engine
 passes `retry.ReconcilePolicy().Delay` into `RecordFailure`.
+
+`DriveDiscoveryPolicy()` is intentionally longer than the earlier
+three-attempt budget because `/me/drives` is a discovery/catalog surface, not a
+hot-path file transfer. The retry still belongs to the graph boundary; caller
+degraded-mode behavior after exhaustion belongs to `internal/cli`, not
+`internal/retry`.
+
+`DownloadMetadataPolicy()` stays short and deterministic because it covers one
+exact Graph quirk: a just-created file can appear in delta or path-based lookup
+before `GET /drives/{driveID}/items/{itemID}` is readable enough to return the
+download URL. The retry belongs to `graph.Download()` / `DownloadRange()`,
+not to transfer-manager callers or generic transport retry.
+
+`UploadSessionCreatePolicy()` is similarly narrow. It covers the observed case
+where a freshly created parent folder is already path-resolvable, but
+`POST /drives/{driveID}/items/{parentID}:/{name}:/createUploadSession` still
+misfires with `404 itemNotFound` for longer than the original 2s budget on
+live full E2E. The
+retry belongs to `graph.CreateUploadSession()`, not to CLI callers or generic
+upload retry logic.
+
+`PathVisibilityPolicy()` is deterministic on purpose. `driveops.Session`
+reuses it for two command-boundary convergence checks:
+
+- destination-path readability after successful `mkdir`, `put`, and `mv`
+- path-authoritative delete convergence after a successful path lookup followed
+  by transient `DELETE .../items/{id} = 404 itemNotFound`
 
 ## RetryTransport (`transport.go`)
 

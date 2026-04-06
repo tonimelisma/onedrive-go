@@ -747,6 +747,7 @@ type whoamiOutput struct {
 	User                  *whoamiUser              `json:"user,omitempty"`
 	Drives                []whoamiDrive            `json:"drives,omitempty"`
 	AccountsRequiringAuth []accountAuthRequirement `json:"accounts_requiring_auth,omitempty"`
+	AccountsDegraded      []accountDegradedNotice  `json:"accounts_degraded,omitempty"`
 }
 
 type whoamiUser struct {
@@ -810,18 +811,19 @@ func runWhoamiWithContext(ctx context.Context, cc *CLIContext) error {
 	if authResult.authRequired != nil {
 		authRequired = mergeAuthRequirements(authRequired, []accountAuthRequirement{*authResult.authRequired})
 	}
+	degraded := mergeDegradedNotices(authResult.degraded)
 
 	// If no authenticated account and no offline auth-required accounts, give a
 	// clean auth-required error instead of a whoami-specific special case.
-	if !authResult.hasAuthenticatedAccount && len(authRequired) == 0 {
+	if !authResult.hasAuthenticatedAccount && len(authRequired) == 0 && len(degraded) == 0 {
 		return graph.ErrNotLoggedIn
 	}
 
 	if cc.Flags.JSON {
-		return printWhoamiJSON(cc.Output(), authResult.user, authResult.drives, authRequired)
+		return printWhoamiJSON(cc.Output(), authResult.user, authResult.drives, authRequired, degraded)
 	}
 
-	return printWhoamiText(cc.Output(), authResult.user, authResult.drives, authRequired)
+	return printWhoamiText(cc.Output(), authResult.user, authResult.drives, authRequired, degraded)
 }
 
 type authenticatedAccountResult struct {
@@ -829,6 +831,7 @@ type authenticatedAccountResult struct {
 	drives                  []graph.Drive
 	authenticatedEmail      string
 	authRequired            *accountAuthRequirement
+	degraded                []accountDegradedNotice
 	hasAuthenticatedAccount bool
 	reconciled              bool
 }
@@ -900,18 +903,16 @@ func fetchAuthenticatedAccount(
 		return authenticatedAccountResult{}, err
 	}
 
-	drives, authResult, err := whoamiDrives(ctx, client, authRequired)
-	if authResult != nil {
-		return *authResult, nil
-	}
-	if err != nil {
-		return authenticatedAccountResult{}, err
+	driveResult := whoamiDrives(ctx, client, authRequired, user, logger)
+	if driveResult.authResult != nil {
+		return *driveResult.authResult, nil
 	}
 
 	return authenticatedAccountResult{
 		user:                    user,
-		drives:                  drives,
+		drives:                  driveResult.drives,
 		authenticatedEmail:      user.Email,
+		degraded:                driveResult.degraded,
 		hasAuthenticatedAccount: true,
 		reconciled:              reconcileResult.Changed(),
 	}, nil
@@ -953,21 +954,58 @@ func fetchWhoamiUser(
 	return nil, nil, fmt.Errorf("fetching user profile: %w", err)
 }
 
+type whoamiDriveCatalogResult struct {
+	drives     []graph.Drive
+	degraded   []accountDegradedNotice
+	authResult *authenticatedAccountResult
+}
+
+type whoamiDriveCatalogClient interface {
+	Drives(context.Context) ([]graph.Drive, error)
+	PrimaryDrive(context.Context) (*graph.Drive, error)
+}
+
 func whoamiDrives(
 	ctx context.Context,
-	client *graph.Client,
+	client whoamiDriveCatalogClient,
 	authRequired accountAuthRequirement,
-) ([]graph.Drive, *authenticatedAccountResult, error) {
+	user *graph.User,
+	logger *slog.Logger,
+) whoamiDriveCatalogResult {
 	drives, err := client.Drives(ctx)
 	if err == nil {
-		return drives, nil, nil
+		return whoamiDriveCatalogResult{drives: drives}
 	}
 
 	if errors.Is(err, graph.ErrUnauthorized) {
-		return nil, authRequiredResult(authRequired, authReasonSyncAuthRejected), nil
+		return whoamiDriveCatalogResult{authResult: authRequiredResult(authRequired, authReasonSyncAuthRejected)}
 	}
 
-	return nil, nil, fmt.Errorf("listing drives: %w", err)
+	notice := driveCatalogDegradedNotice(user.Email, user.DisplayName, authRequired.DriveType)
+	logger.Warn("degrading whoami drive discovery after /me/drives failure",
+		"account", user.Email,
+		"error", err,
+	)
+
+	primary, primaryErr := client.PrimaryDrive(ctx)
+	if primaryErr == nil {
+		notice.DriveType = primary.DriveType
+		return whoamiDriveCatalogResult{
+			drives:     []graph.Drive{*primary},
+			degraded:   []accountDegradedNotice{notice},
+			authResult: nil,
+		}
+	}
+
+	logger.Warn("primary drive fallback unavailable after /me/drives failure",
+		"account", user.Email,
+		"error", primaryErr,
+	)
+
+	return whoamiDriveCatalogResult{
+		drives:   nil,
+		degraded: []accountDegradedNotice{notice},
+	}
 }
 
 func authRequiredResult(
@@ -1065,9 +1103,16 @@ func whoamiAuthRequiredAccounts(catalog []accountCatalogEntry, authenticatedEmai
 	})
 }
 
-func printWhoamiJSON(w io.Writer, user *graph.User, drives []graph.Drive, authRequired []accountAuthRequirement) error {
+func printWhoamiJSON(
+	w io.Writer,
+	user *graph.User,
+	drives []graph.Drive,
+	authRequired []accountAuthRequirement,
+	degraded []accountDegradedNotice,
+) error {
 	out := whoamiOutput{
 		AccountsRequiringAuth: authRequired,
+		AccountsDegraded:      degraded,
 	}
 
 	if user != nil {
@@ -1099,33 +1144,71 @@ func printWhoamiJSON(w io.Writer, user *graph.User, drives []graph.Drive, authRe
 	return nil
 }
 
-func printWhoamiText(w io.Writer, user *graph.User, drives []graph.Drive, authRequired []accountAuthRequirement) error {
-	if user != nil {
-		if err := writef(w, "User:  %s (%s)\n", user.DisplayName, user.Email); err != nil {
-			return err
-		}
-		if err := writef(w, "ID:    %s\n", user.ID); err != nil {
-			return err
-		}
+func printWhoamiText(
+	w io.Writer,
+	user *graph.User,
+	drives []graph.Drive,
+	authRequired []accountAuthRequirement,
+	degraded []accountDegradedNotice,
+) error {
+	hasPriorSection := false
 
-		for i := range drives {
-			if err := writef(w, "\nDrive: %s (%s)\n", drives[i].Name, drives[i].DriveType); err != nil {
+	if user != nil {
+		if err := printWhoamiIdentityText(w, user, drives); err != nil {
+			return err
+		}
+		hasPriorSection = true
+	}
+
+	if len(authRequired) > 0 {
+		if hasPriorSection {
+			if err := writeln(w); err != nil {
 				return err
 			}
-			if err := writef(w, "  ID:    %s\n", drives[i].ID); err != nil {
+		}
+		if err := printAccountAuthRequirementsText(w, "Accounts requiring authentication:", authRequired); err != nil {
+			return err
+		}
+		hasPriorSection = true
+	}
+
+	if len(degraded) > 0 {
+		if hasPriorSection {
+			if err := writeln(w); err != nil {
 				return err
 			}
-			if err := writef(w, "  Quota: %s / %s\n", formatSize(drives[i].QuotaUsed), formatSize(drives[i].QuotaTotal)); err != nil {
-				return err
-			}
+		}
+		if err := printAccountDegradedText(w, "Accounts with degraded live discovery:", degraded); err != nil {
+			return err
 		}
 	}
 
-	return printWhoamiAuthRequiredText(w, authRequired)
+	return nil
 }
 
-// printWhoamiAuthRequiredText prints accounts that need user re-authentication
-// in a consistent, account-scoped format.
+func printWhoamiIdentityText(w io.Writer, user *graph.User, drives []graph.Drive) error {
+	if err := writef(w, "User:  %s (%s)\n", user.DisplayName, user.Email); err != nil {
+		return err
+	}
+	if err := writef(w, "ID:    %s\n", user.ID); err != nil {
+		return err
+	}
+
+	for i := range drives {
+		if err := writef(w, "\nDrive: %s (%s)\n", drives[i].Name, drives[i].DriveType); err != nil {
+			return err
+		}
+		if err := writef(w, "  ID:    %s\n", drives[i].ID); err != nil {
+			return err
+		}
+		if err := writef(w, "  Quota: %s / %s\n", formatSize(drives[i].QuotaUsed), formatSize(drives[i].QuotaTotal)); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func printWhoamiAuthRequiredText(w io.Writer, authRequired []accountAuthRequirement) error {
-	return printAccountAuthRequirementsText(w, "\nAccounts requiring authentication:", authRequired)
+	return printAccountAuthRequirementsText(w, "Accounts requiring authentication:", authRequired)
 }

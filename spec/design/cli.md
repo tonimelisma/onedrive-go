@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go
 
-Implements: R-1 [implemented], R-3.1 [verified], R-3.7 [verified], R-4.7 [verified], R-4.8.4 [verified], R-1.9 [verified], R-1.2.4 [verified], R-1.2.5 [verified], R-1.3.4 [verified], R-1.3.5 [verified], R-1.4.3 [verified], R-1.5.1 [verified], R-1.6.1 [verified], R-1.6.2 [verified], R-1.7.1 [verified], R-1.8.1 [verified], R-1.9.4 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.3.10 [verified], R-2.3.11 [verified], R-2.3.12 [verified], R-2.7.1 [verified], R-2.8.3 [verified], R-2.10.4 [verified], R-2.10.47 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-3.1.6 [verified], R-3.3.10 [verified], R-3.3.11 [verified], R-3.3.12 [verified], R-3.6.6 [verified], R-3.6.7 [verified], R-6.6.11 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
+Implements: R-1 [implemented], R-3.1 [verified], R-3.7 [verified], R-4.7 [verified], R-4.8.4 [verified], R-1.9 [verified], R-1.2.4 [verified], R-1.2.5 [verified], R-1.3.4 [verified], R-1.3.5 [verified], R-1.4.3 [verified], R-1.4.4 [verified], R-1.5.1 [verified], R-1.6.1 [verified], R-1.6.2 [verified], R-1.7.1 [verified], R-1.8.1 [verified], R-1.9.4 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.3.10 [verified], R-2.3.11 [verified], R-2.3.12 [verified], R-2.7.1 [verified], R-2.8.3 [verified], R-2.10.4 [verified], R-2.10.47 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-3.1.6 [verified], R-3.3.10 [verified], R-3.3.11 [verified], R-3.3.12 [verified], R-3.6.6 [verified], R-3.6.7 [verified], R-6.6.11 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
 ## Overview
 
@@ -43,7 +43,7 @@ This keeps human/JSON command results separate from progress/status messages and
 
 ## Command Structure
 
-Implements: R-6.2.8 [verified]
+Implements: R-6.2.8 [verified], R-1.3.6 [verified], R-1.5.2 [verified], R-1.7.2 [verified]
 
 | Command | File | Description |
 |---------|------|-------------|
@@ -64,6 +64,19 @@ Implements: R-6.2.8 [verified]
 | `verify` | `verify.go` | Post-sync verification |
 | `drive` | `drive.go` | Drive management (list/add/remove/search) |
 | `recycle-bin` | `recycle_bin.go` | Recycle bin operations (list/restore/empty) via `recycleBinService` |
+
+For metadata-changing file commands that return a single destination path,
+success means more than "Graph accepted the mutation." `mkdir`, single-file
+`put`, and `mv` all call `driveops.Session.WaitPathVisible()` before emitting
+their final success output. That keeps immediate follow-on CLI reads from
+seeing a transient `itemNotFound` even though the mutation already completed.
+
+For path-oriented deletes, success also means more than "one DELETE request
+returned 204." `rm`, `mv --force`, and `cp --force` delete the destination
+through `driveops.Session.DeleteResolvedPath()` so a transient delete-route
+`itemNotFound` is reconciled against the remote path instead of surfacing a
+spurious failure. `rm` additionally waits for the parent path to be readable
+again before printing success for non-root parents.
 
 ## Auth Lifecycle, Auth Health, And Proof Boundaries
 
@@ -162,6 +175,24 @@ profile so the remaining logged-in account catalog stays intact for `whoami`,
 - invalid saved login on disk
 - persisted sync-time `auth:account` rejection
 
+`accounts_requiring_auth` is intentionally distinct from
+`accounts_degraded`. The degraded bucket means the CLI proved the account is
+authenticated (`/me` succeeded) but live drive-catalog discovery could not be
+completed after the bounded `/me/drives` quirk retry. In that state:
+
+- `whoami` still returns the authenticated user
+- `whoami` falls back to `/me/drive` and returns the primary drive when
+  available
+- `drive list` keeps configured drives plus any independent live discovery that
+  does not depend on `/me/drives`
+- both commands surface `accounts_degraded` with reason
+  `drive_catalog_unavailable`
+
+This is a CLI-owned degraded mode, not an auth failure. It exists because
+`internal/graph` owns the narrow `/me/drives` retry, but only the caller knows
+how to turn retry exhaustion into useful user-facing output instead of dropping
+usable local state or mislabeling the account as logged out.
+
 After a plain logout, the account is no longer in config but its
 `account_*.json` profile file remains on disk. `whoami` still discovers these
 orphaned profiles via `config.DiscoverAccountProfiles()`, but it renders them
@@ -187,6 +218,18 @@ Two modes: human-readable (default) and JSON (`--json`). Primary command output 
 All commands with `--json` support use extracted `printXxxJSON(w io.Writer, out T) error` functions that encode via `json.NewEncoder(w)` with 2-space indent. This enables unit testing via `bytes.Buffer` roundtrip without CLI wiring.
 
 Timestamp presentation follows one rule across command families: zero `time.Time` means "unknown". Human-readable output renders that as `unknown`; JSON output emits an empty string instead of a fabricated RFC3339 value or Go's year-0001 zero timestamp.
+
+`whoami` and `drive list` each expose two separate account-warning arrays in
+JSON output:
+
+- `accounts_requiring_auth`: missing or invalid saved login, or persisted
+  sync-time `auth:account` rejection
+- `accounts_degraded`: authenticated account whose live drive catalog could not
+  be fully discovered after `/me/drives` retry exhaustion
+
+Human-readable output mirrors that split with separate
+`Accounts requiring authentication:` and `Accounts with degraded live discovery:`
+sections so degraded discovery never reads like a login failure.
 
 `verify` keeps one stable report shape across both output modes:
 `verified` plus `mismatches[] { path, status, expected, actual }`. The

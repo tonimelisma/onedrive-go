@@ -105,7 +105,7 @@ func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Len(t, runner.runCommands, 7)
+	require.Len(t, runner.runCommands, 8)
 	assert.Equal(t, "gofumpt", runner.runCommands[0].name)
 	assert.Equal(t, []string{"-w", "."}, runner.runCommands[0].args)
 	assert.Equal(t, "goimports", runner.runCommands[1].name)
@@ -113,8 +113,9 @@ func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 	assert.Equal(t, "go", runner.runCommands[3].name)
 	assert.Equal(t, []string{"build", "./..."}, runner.runCommands[3].args)
 	assert.Equal(t, []string{"test", "-race", "-coverprofile=" + filepath.Join(repoRoot, "cover.out"), "./..."}, runner.runCommands[4].args)
-	assert.Equal(t, []string{"test", "-tags=e2e", "-run=" + fastE2EPreflightPattern, "-count=1", "-v", "./e2e/..."}, runner.runCommands[5].args)
-	assert.Equal(t, []string{"test", "-tags=e2e", "-race", "-v", "-parallel", "5", "-timeout=10m", "./e2e/..."}, runner.runCommands[6].args)
+	assert.Equal(t, []string{"test", "-tags=e2e", "-run=" + authE2EPreflightPattern, "-count=1", "-v", "./e2e/..."}, runner.runCommands[5].args)
+	assert.Equal(t, []string{"test", "-tags=e2e", "-run=" + fastE2EPreflightPattern, "-count=1", "-v", "./e2e/..."}, runner.runCommands[6].args)
+	assert.Equal(t, []string{"test", "-tags=e2e", "-race", "-v", "-parallel", "5", "-timeout=10m", "./e2e/..."}, runner.runCommands[7].args)
 	require.Len(t, runner.outputCommands, 1)
 	assert.Contains(t, stdout.String(), "==> coverage")
 }
@@ -133,23 +134,31 @@ func TestRunVerifyE2EFullRunsPreflightsBeforeSuites(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Len(t, runner.runCommands, 4)
-	assert.Equal(t, []string{"test", "-tags=e2e", "-run=" + fastE2EPreflightPattern, "-count=1", "-v", "./e2e/..."}, runner.runCommands[0].args)
-	assert.Equal(t, []string{"test", "-tags=e2e", "-race", "-v", "-parallel", "5", "-timeout=10m", "./e2e/..."}, runner.runCommands[1].args)
-	assert.Equal(t, []string{"test", "-tags=e2e e2e_full", "-run=" + fullE2EPreflightPattern, "-count=1", "-v", "./e2e/..."}, runner.runCommands[2].args)
-	assert.Equal(t, []string{"test", "-tags=e2e e2e_full", "-race", "-v", "-parallel", "5", "-timeout=30m", "./e2e/..."}, runner.runCommands[3].args)
+	require.Len(t, runner.runCommands, 6)
+	assert.Equal(t, []string{"test", "-tags=e2e", "-run=" + authE2EPreflightPattern, "-count=1", "-v", "./e2e/..."}, runner.runCommands[0].args)
+	assert.Equal(t, []string{"test", "-tags=e2e", "-run=" + fastE2EPreflightPattern, "-count=1", "-v", "./e2e/..."}, runner.runCommands[1].args)
+	assert.Equal(t, []string{"test", "-tags=e2e", "-race", "-v", "-parallel", "5", "-timeout=10m", "./e2e/..."}, runner.runCommands[2].args)
+	assert.Equal(t, []string{"test", "-tags=e2e", "-run=" + authE2EPreflightPattern, "-count=1", "-v", "./e2e/..."}, runner.runCommands[3].args)
+	assert.Equal(t, []string{"test", "-tags=e2e e2e_full", "-run=" + fullE2EPreflightPattern, "-count=1", "-v", "./e2e/..."}, runner.runCommands[4].args)
+	assert.Equal(t, []string{"test", "-tags=e2e e2e_full", "-race", "-v", "-parallel", "5", "-timeout=30m", "./e2e/..."}, runner.runCommands[5].args)
 }
 
 func TestRunVerifyE2EStopsAfterFastPreflightFailure(t *testing.T) {
 	t.Parallel()
 
-	assertVerifyStopsAfterPreflightFailure(t, VerifyE2E, "go test -tags=e2e -run="+fastE2EPreflightPattern+" -count=1 -v ./e2e/...", 1)
+	assertVerifyStopsAfterPreflightFailure(t, VerifyE2E, "go test -tags=e2e -run="+fastE2EPreflightPattern+" -count=1 -v ./e2e/...", 2, "preflight")
+}
+
+func TestRunVerifyE2EStopsAfterAuthPreflightFailure(t *testing.T) {
+	t.Parallel()
+
+	assertVerifyStopsAfterPreflightFailure(t, VerifyE2E, "go test -tags=e2e -run="+authE2EPreflightPattern+" -count=1 -v ./e2e/...", 1, "auth preflight")
 }
 
 func TestRunVerifyE2EFullStopsAfterFullPreflightFailure(t *testing.T) {
 	t.Parallel()
 
-	assertVerifyStopsAfterPreflightFailure(t, VerifyE2EFull, "go test -tags=e2e e2e_full -run="+fullE2EPreflightPattern+" -count=1 -v ./e2e/...", 3)
+	assertVerifyStopsAfterPreflightFailure(t, VerifyE2EFull, "go test -tags=e2e e2e_full -run="+fullE2EPreflightPattern+" -count=1 -v ./e2e/...", 5, "preflight")
 }
 
 func assertVerifyStopsAfterPreflightFailure(
@@ -157,6 +166,7 @@ func assertVerifyStopsAfterPreflightFailure(
 	profile VerifyProfile,
 	commandKey string,
 	expectedCommands int,
+	errorText string,
 ) {
 	t.Helper()
 
@@ -174,7 +184,7 @@ func assertVerifyStopsAfterPreflightFailure(
 		Stderr:   &bytes.Buffer{},
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "fixture preflight")
+	assert.Contains(t, err.Error(), errorText)
 	require.Len(t, runner.runCommands, expectedCommands)
 }
 

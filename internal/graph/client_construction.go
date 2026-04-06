@@ -38,19 +38,21 @@ func NewClient(
 	}
 
 	return &Client{
-		baseURL:              baseURL,
-		httpClient:           httpClient,
-		token:                token,
-		logger:               logger,
-		userAgent:            userAgent,
-		deltaPreferHeader:    newDeltaPreferHeader(),
-		maxDeltaPages:        defaultMaxDeltaPages,
-		maxRecursionDepth:    defaultMaxRecursionDepth,
-		driveDiscoveryPolicy: retry.DriveDiscoveryPolicy(),
-		rootChildrenPolicy:   retry.RootChildrenPolicy(),
-		uploadURLValidator:   validateUploadURL,
-		copyMonitorValidator: validateCopyMonitorURL,
-		socketIOValidator:    validateSocketIONotificationURL,
+		baseURL:                   baseURL,
+		httpClient:                httpClient,
+		token:                     token,
+		logger:                    logger,
+		userAgent:                 userAgent,
+		deltaPreferHeader:         newDeltaPreferHeader(),
+		maxDeltaPages:             defaultMaxDeltaPages,
+		maxRecursionDepth:         defaultMaxRecursionDepth,
+		driveDiscoveryPolicy:      retry.DriveDiscoveryPolicy(),
+		rootChildrenPolicy:        retry.RootChildrenPolicy(),
+		downloadMetadataPolicy:    retry.DownloadMetadataPolicy(),
+		uploadSessionCreatePolicy: retry.UploadSessionCreatePolicy(),
+		uploadURLValidator:        validateUploadURL,
+		copyMonitorValidator:      validateCopyMonitorURL,
+		socketIOValidator:         validateSocketIONotificationURL,
 	}, nil
 }
 

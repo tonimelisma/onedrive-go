@@ -85,7 +85,7 @@ func runCp(cmd *cobra.Command, args []string, force bool) error {
 	// NOTE: This is a TOCTOU race — another client could recreate the file
 	// between delete and copy. Server-side copy has no atomic overwrite.
 	if dest.existingID != "" {
-		if delErr := session.DeleteItem(ctx, dest.existingID); delErr != nil {
+		if delErr := session.DeleteResolvedPath(ctx, destPath, dest.existingID); delErr != nil {
 			return fmt.Errorf("deleting existing %q: %w", destPath, delErr)
 		}
 	}

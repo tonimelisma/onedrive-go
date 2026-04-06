@@ -78,6 +78,18 @@ func isExactRootChildrenCollectionPath(path string) bool {
 }
 
 func isTransientRootChildrenError(err error) (*GraphError, bool) {
+	return isTransientItemNotFoundError(err)
+}
+
+func isTransientDownloadMetadataError(err error) (*GraphError, bool) {
+	return isTransientItemNotFoundError(err)
+}
+
+func isTransientUploadSessionCreateError(err error) (*GraphError, bool) {
+	return isTransientItemNotFoundError(err)
+}
+
+func isTransientItemNotFoundError(err error) (*GraphError, bool) {
 	if !errors.Is(err, ErrNotFound) {
 		return nil, false
 	}

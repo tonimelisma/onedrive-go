@@ -2,7 +2,7 @@
 
 GOVERNS: internal/driveops/cleanup.go, internal/driveops/disk_unix.go, internal/driveops/doc.go, internal/driveops/errors.go, internal/driveops/hash.go, internal/driveops/interfaces.go, internal/driveops/session.go, internal/driveops/session_store.go, internal/driveops/stale_partials.go, internal/driveops/transfer_manager.go, pkg/quickxorhash/quickxorhash.go, get.go, put.go
 
-Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [implemented], R-5.5 [verified], R-1.2 [verified], R-1.2.5 [verified], R-1.3 [verified], R-1.3.5 [verified], R-5.6 [implemented], R-5.7 [verified], R-5.8 [planned], R-6.8.3 [verified], R-6.2.6 [verified], R-6.4.7 [verified], R-6.2.10 [implemented], R-6.10.6 [verified]
+Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [implemented], R-5.5 [verified], R-1.2 [verified], R-1.2.5 [verified], R-1.3 [verified], R-1.3.5 [verified], R-1.3.6 [verified], R-1.4.4 [verified], R-5.6 [implemented], R-5.7 [verified], R-5.8 [planned], R-6.7.14 [verified], R-6.8.3 [verified], R-6.2.6 [verified], R-6.4.7 [verified], R-6.2.10 [implemented], R-6.10.6 [verified]
 
 ## TransferManager
 
@@ -46,6 +46,19 @@ item by `(driveID, itemID)` instead of resolving a destination parent path.
 The transfer manager therefore exposes both parent-path upload and existing-item
 overwrite entry points while keeping session persistence, chunk sizing, and
 post-upload verification in one owner.
+
+`driveops.Session` also owns the bounded post-success convergence checks used
+by CLI mutation commands. Graph can acknowledge folder creation, upload, or
+move before an immediate follow-on path lookup stops returning
+`itemNotFound`, and it can briefly return `DELETE .../items/{id} = 404
+itemNotFound` even though the same remote path just resolved successfully.
+The session boundary therefore exposes:
+
+- `WaitPathVisible()` so command handlers can require destination-path
+  readability before they print a successful `mkdir`, `put`, or `mv`
+- `DeleteResolvedPath()` / `PermanentDeleteResolvedPath()` so path-oriented
+  deletes keep authority on the remote path instead of trusting one stale
+  item ID forever
 
 ## SessionStore
 

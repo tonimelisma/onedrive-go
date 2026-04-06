@@ -195,21 +195,23 @@ func annotateConfiguredDriveAuth(entries []driveListEntry, authByEmail map[strin
 func discoverAvailableDrives(
 	ctx context.Context,
 	cfg *config.Config,
+	catalog []accountCatalogEntry,
 	spSiteLimit int,
 	logger *slog.Logger,
 	recorder *authProofRecorder,
 	baseURL string,
 	httpProvider *graphhttp.Provider,
-) ([]driveListEntry, []accountAuthRequirement) {
+) ([]driveListEntry, []accountAuthRequirement, []accountDegradedNotice) {
 	tokens := config.DiscoverTokens(logger)
 	if len(tokens) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	var (
-		mu           sync.Mutex // guards entries and authRequired while token workers append results
+		mu           sync.Mutex // guards entries/authRequired/degraded while token workers append results
 		entries      []driveListEntry
 		authRequired []accountAuthRequirement
+		degraded     []accountDegradedNotice
 	)
 
 	var wg sync.WaitGroup
@@ -219,10 +221,11 @@ func discoverAvailableDrives(
 		go func() {
 			defer wg.Done()
 
-			tokenEntries, tokenAuthRequired := discoverDrivesForToken(
+			tokenEntries, tokenAuthRequired, tokenDegraded := discoverDrivesForToken(
 				ctx,
 				tokenCID,
 				cfg,
+				catalog,
 				spSiteLimit,
 				logger,
 				recorder,
@@ -232,6 +235,7 @@ func discoverAvailableDrives(
 			mu.Lock()
 			entries = append(entries, tokenEntries...)
 			authRequired = append(authRequired, tokenAuthRequired...)
+			degraded = append(degraded, tokenDegraded...)
 			mu.Unlock()
 		}()
 	}
@@ -242,29 +246,30 @@ func discoverAvailableDrives(
 		return cmp.Compare(a.CanonicalID, b.CanonicalID)
 	})
 
-	return entries, mergeAuthRequirements(authRequired)
+	return entries, mergeAuthRequirements(authRequired), mergeDegradedNotices(degraded)
 }
 
 // discoverDrivesForToken discovers all available drives for a single token.
 func discoverDrivesForToken(
 	ctx context.Context, tokenCID driveid.CanonicalID,
 	cfg *config.Config,
+	catalog []accountCatalogEntry,
 	spSiteLimit int,
 	logger *slog.Logger,
 	recorder *authProofRecorder,
 	baseURL string,
 	httpProvider *graphhttp.Provider,
-) ([]driveListEntry, []accountAuthRequirement) {
+) ([]driveListEntry, []accountAuthRequirement, []accountDegradedNotice) {
 	tokenPath := config.DriveTokenPath(tokenCID)
 	if tokenPath == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
 	if err != nil {
 		logger.Debug("skipping token for drive discovery", "token", tokenCID.String(), "error", err)
 
-		return nil, []accountAuthRequirement{tokenDiscoveryAuthRequirement(tokenCID, err, logger)}
+		return nil, []accountAuthRequirement{tokenDiscoveryAuthRequirement(tokenCID, err, logger)}, nil
 	}
 
 	client, clientErr := newGraphClientWithHTTP(
@@ -276,42 +281,23 @@ func discoverDrivesForToken(
 	if clientErr != nil {
 		logger.Debug("skipping token for drive discovery", "token", tokenCID.String(), "error", clientErr)
 
-		return nil, nil
+		return nil, nil, nil
 	}
 	attachAccountAuthProof(client, recorder, tokenCID.Email(), "drive-list")
 
 	var entries []driveListEntry
-
-	// Discover personal/business drives.
-	drives, err := client.Drives(ctx)
-	if err != nil {
-		logger.Debug("failed to list drives for token", "token", tokenCID.String(), "error", err)
-
-		if errors.Is(err, graph.ErrUnauthorized) {
-			return nil, []accountAuthRequirement{tokenAuthRequirement(tokenCID, authReasonSyncAuthRejected, logger)}
-		}
-
-		return nil, nil
-	}
-
 	email := tokenCID.Email()
 
-	for _, d := range drives {
-		cid, cidErr := driveid.Construct(d.DriveType, email)
-		if cidErr != nil {
-			continue
-		}
-
-		if _, exists := cfg.Drives[cid]; exists {
-			continue // already configured
-		}
-
-		entries = append(entries, driveListEntry{
-			CanonicalID: cid.String(),
-			State:       "available",
-			Source:      "available",
-			parsedCID:   cid,
-		})
+	entries, authRequired, degraded := discoverAccessibleDrives(
+		ctx,
+		client,
+		cfg,
+		catalog,
+		tokenCID,
+		logger,
+	)
+	if len(authRequired) > 0 {
+		return nil, authRequired, nil
 	}
 
 	// For business accounts, discover SharePoint sites.
@@ -324,7 +310,103 @@ func discoverDrivesForToken(
 	sharedEntries := discoverSharedDrives(ctx, client, cfg, email, logger)
 	entries = append(entries, sharedEntries...)
 
-	return entries, nil
+	return entries, nil, degraded
+}
+
+type accessibleDriveCatalogClient interface {
+	Drives(context.Context) ([]graph.Drive, error)
+	PrimaryDrive(context.Context) (*graph.Drive, error)
+}
+
+func discoverAccessibleDrives(
+	ctx context.Context,
+	client accessibleDriveCatalogClient,
+	cfg *config.Config,
+	catalog []accountCatalogEntry,
+	tokenCID driveid.CanonicalID,
+	logger *slog.Logger,
+) ([]driveListEntry, []accountAuthRequirement, []accountDegradedNotice) {
+	email := tokenCID.Email()
+	drives, err := client.Drives(ctx)
+	if err != nil {
+		logger.Debug("failed to list drives for token", "token", tokenCID.String(), "error", err)
+
+		if errors.Is(err, graph.ErrUnauthorized) {
+			return nil, []accountAuthRequirement{tokenAuthRequirement(tokenCID, authReasonSyncAuthRejected, logger)}, nil
+		}
+		logger.Warn("degrading drive-list live discovery after /me/drives failure",
+			"account", tokenCID.String(),
+			"error", err,
+		)
+
+		notice := tokenDriveCatalogDegradedNotice(catalog, tokenCID, logger)
+		entries := appendPrimaryDriveFallbackEntry(ctx, nil, client, cfg, email, logger)
+		return entries, nil, []accountDegradedNotice{notice}
+	}
+
+	var entries []driveListEntry
+	for _, d := range drives {
+		entries = appendAvailableCatalogDrive(entries, cfg, email, d)
+	}
+
+	return entries, nil, nil
+}
+
+func tokenDriveCatalogDegradedNotice(
+	catalog []accountCatalogEntry,
+	tokenCID driveid.CanonicalID,
+	logger *slog.Logger,
+) accountDegradedNotice {
+	entry, found := catalogEntryByEmail(catalog, tokenCID.Email())
+	if found {
+		return driveCatalogDegradedNotice(entry.Email, entry.DisplayName, entry.DriveType)
+	}
+
+	displayName, _ := readAccountMeta(tokenCID.Email(), []driveid.CanonicalID{tokenCID}, logger)
+	return driveCatalogDegradedNotice(tokenCID.Email(), displayName, tokenCID.DriveType())
+}
+
+func appendAvailableCatalogDrive(
+	entries []driveListEntry,
+	cfg *config.Config,
+	email string,
+	drive graph.Drive,
+) []driveListEntry {
+	cid, cidErr := driveid.Construct(drive.DriveType, email)
+	if cidErr != nil {
+		return entries
+	}
+
+	if _, exists := cfg.Drives[cid]; exists {
+		return entries
+	}
+
+	return append(entries, driveListEntry{
+		CanonicalID: cid.String(),
+		State:       "available",
+		Source:      "available",
+		parsedCID:   cid,
+	})
+}
+
+func appendPrimaryDriveFallbackEntry(
+	ctx context.Context,
+	entries []driveListEntry,
+	client accessibleDriveCatalogClient,
+	cfg *config.Config,
+	email string,
+	logger *slog.Logger,
+) []driveListEntry {
+	primary, err := client.PrimaryDrive(ctx)
+	if err != nil {
+		logger.Warn("primary drive fallback unavailable during drive-list degradation",
+			"account", email,
+			"error", err,
+		)
+		return entries
+	}
+
+	return appendAvailableCatalogDrive(entries, cfg, email, *primary)
 }
 
 func tokenDiscoveryAuthRequirement(
@@ -711,18 +793,15 @@ type driveListJSONOutput struct {
 	Configured            []driveListEntry         `json:"configured"`
 	Available             []driveListEntry         `json:"available"`
 	AccountsRequiringAuth []accountAuthRequirement `json:"accounts_requiring_auth,omitempty"`
+	AccountsDegraded      []accountDegradedNotice  `json:"accounts_degraded,omitempty"`
 }
 
 func printDriveListJSON(
 	w io.Writer,
 	configured, available []driveListEntry,
-	authRequiredOpt ...[]accountAuthRequirement,
+	authRequired []accountAuthRequirement,
+	degraded []accountDegradedNotice,
 ) error {
-	var authRequired []accountAuthRequirement
-	if len(authRequiredOpt) > 0 {
-		authRequired = authRequiredOpt[0]
-	}
-
 	// Initialize nil slices to empty so JSON renders [] not null.
 	if configured == nil {
 		configured = []driveListEntry{}
@@ -736,6 +815,7 @@ func printDriveListJSON(
 		Configured:            configured,
 		Available:             available,
 		AccountsRequiringAuth: authRequired,
+		AccountsDegraded:      degraded,
 	}
 
 	enc := json.NewEncoder(w)
@@ -762,15 +842,14 @@ func driveLabel(e *driveListEntry) string {
 func printDriveListText(
 	w io.Writer,
 	configured, available []driveListEntry,
-	authRequiredOpt ...[]accountAuthRequirement,
+	authRequired []accountAuthRequirement,
+	degraded []accountDegradedNotice,
 ) error {
-	authRequired := optionalAuthRequirements(authRequiredOpt)
-
-	if len(configured) == 0 && len(available) == 0 && len(authRequired) == 0 {
+	if len(configured) == 0 && len(available) == 0 && len(authRequired) == 0 && len(degraded) == 0 {
 		return writeln(w, "No drives configured. Run 'onedrive-go login' to get started.")
 	}
 
-	return printDriveListSections(w, configured, available, authRequired)
+	return printDriveListSections(w, configured, available, authRequired, degraded)
 }
 
 func printConfiguredDrives(w io.Writer, entries []driveListEntry) error {
@@ -847,6 +926,7 @@ func printDriveListSections(
 	w io.Writer,
 	configured, available []driveListEntry,
 	authRequired []accountAuthRequirement,
+	degraded []accountDegradedNotice,
 ) error {
 	if err := printConfiguredSection(w, configured); err != nil {
 		return err
@@ -856,7 +936,15 @@ func printDriveListSections(
 		return err
 	}
 
-	return printAuthRequiredSection(w, len(configured) > 0 || len(available) > 0, authRequired)
+	hasPriorSection := len(configured) > 0 || len(available) > 0
+	if err := printAuthRequiredSection(w, hasPriorSection, authRequired); err != nil {
+		return err
+	}
+	if len(authRequired) > 0 {
+		hasPriorSection = true
+	}
+
+	return printDegradedSection(w, hasPriorSection, degraded)
 }
 
 func printConfiguredSection(w io.Writer, configured []driveListEntry) error {
@@ -900,6 +988,24 @@ func printAuthRequiredSection(
 	}
 
 	return printAccountAuthRequirementsText(w, "Authentication required:", authRequired)
+}
+
+func printDegradedSection(
+	w io.Writer,
+	hasPriorSection bool,
+	degraded []accountDegradedNotice,
+) error {
+	if len(degraded) == 0 {
+		return nil
+	}
+
+	if hasPriorSection {
+		if err := writeln(w); err != nil {
+			return err
+		}
+	}
+
+	return printAccountDegradedText(w, "Accounts with degraded live discovery:", degraded)
 }
 
 // annotateStateDB sets HasStateDB on available drive entries that have a state
