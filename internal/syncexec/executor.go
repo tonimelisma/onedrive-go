@@ -12,8 +12,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/retry"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -51,11 +49,10 @@ type ExecutorConfig struct {
 	watchMode bool
 
 	// Injectable for testing.
-	nowFunc                func() time.Time
-	hashFunc               func(filePath string) (string, error)
-	trashFunc              func(absPath string) error // nil = permanent delete (os.Remove)
-	visibilityWaitSchedule []time.Duration
-	sleepFunc              func(context.Context, time.Duration) error
+	nowFunc         func() time.Time
+	hashFunc        func(filePath string) (string, error)
+	trashFunc       func(absPath string) error // nil = permanent delete (os.Remove)
+	pathConvergence driveops.PathConvergence
 }
 
 // Executor executes individual actions against the Graph API and local
@@ -70,17 +67,18 @@ type Executor struct {
 // specific drive and sync root. Use NewExecution to create per-call executors.
 func NewExecutorConfig(
 	items synctypes.ItemClient, downloads driveops.Downloader, uploads driveops.Uploader,
-	syncTree *synctree.Root, driveID driveid.ID, logger *slog.Logger,
+	syncTree *synctree.Root, driveID driveid.ID, logger *slog.Logger, pathConvergence driveops.PathConvergence,
 ) *ExecutorConfig {
 	cfg := &ExecutorConfig{
-		items:     items,
-		downloads: downloads,
-		uploads:   uploads,
-		syncTree:  syncTree,
-		driveID:   driveID,
-		logger:    logger,
-		nowFunc:   time.Now,
-		hashFunc:  driveops.ComputeQuickXorHash,
+		items:           items,
+		downloads:       downloads,
+		uploads:         uploads,
+		syncTree:        syncTree,
+		driveID:         driveID,
+		logger:          logger,
+		nowFunc:         time.Now,
+		hashFunc:        driveops.ComputeQuickXorHash,
+		pathConvergence: pathConvergence,
 	}
 
 	return cfg
@@ -118,103 +116,30 @@ func (cfg *ExecutorConfig) SetRootItemID(itemID string) {
 	cfg.rootItemID = itemID
 }
 
-// SetVisibilityWaitSchedule overrides the post-mutation remote visibility wait
-// schedule. Intended for deterministic tests; nil uses retry.PathVisibilityPolicy.
-func (cfg *ExecutorConfig) SetVisibilityWaitSchedule(schedule []time.Duration) {
-	cfg.visibilityWaitSchedule = append([]time.Duration(nil), schedule...)
-}
-
-// SetSleepFunc overrides the remote visibility wait sleep function. Intended
-// for tests so the executor does not block on real time.
-func (cfg *ExecutorConfig) SetSleepFunc(fn func(context.Context, time.Duration) error) {
-	cfg.sleepFunc = fn
-}
-
 // Items returns the item client for direct API access (e.g., for trial
 // observation in the engine's reobserve path).
 func (cfg *ExecutorConfig) Items() synctypes.ItemClient {
 	return cfg.items
 }
 
-func (cfg *ExecutorConfig) visibilitySchedule() []time.Duration {
-	if len(cfg.visibilityWaitSchedule) > 0 {
-		return cfg.visibilityWaitSchedule
-	}
-
-	policy := retry.PathVisibilityPolicy()
-	delayCount := 0
-	if policy.MaxAttempts > 0 {
-		delayCount = policy.MaxAttempts - 1
-	}
-
-	schedule := make([]time.Duration, 0, delayCount)
-	for attempt := range policy.MaxAttempts - 1 {
-		schedule = append(schedule, policy.Delay(attempt))
-	}
-
-	return schedule
-}
-
-func (cfg *ExecutorConfig) sleep(ctx context.Context, delay time.Duration) error {
-	if delay <= 0 {
-		if ctx.Err() != nil {
-			return fmt.Errorf("wait for remote path visibility: %w", ctx.Err())
-		}
-
-		return nil
-	}
-	if cfg.sleepFunc != nil {
-		return cfg.sleepFunc(ctx, delay)
-	}
-
-	if err := retry.TimeSleep(ctx, delay); err != nil {
-		return fmt.Errorf("wait for remote path visibility: %w", err)
-	}
-
-	return nil
-}
-
 func (e *Executor) confirmRemotePathVisible(ctx context.Context, driveID driveid.ID, remotePath string) {
-	_, err := e.items.GetItemByPath(ctx, driveID, remotePath)
+	if e.pathConvergence == nil || driveID != e.driveID {
+		return
+	}
+
+	_, err := e.pathConvergence.WaitPathVisible(ctx, remotePath)
 	if err == nil {
 		return
 	}
 
-	if !errors.Is(err, graph.ErrNotFound) {
-		e.logger.Warn("post-mutation remote visibility probe failed",
-			slog.String("path", remotePath),
-			slog.String("error", err.Error()),
-		)
-
-		return
+	message := "post-mutation remote visibility probe failed"
+	if errors.Is(err, driveops.ErrPathNotVisible) {
+		message = "remote path still not visible after mutation"
 	}
 
-	for _, delay := range e.visibilitySchedule() {
-		if sleepErr := e.sleep(ctx, delay); sleepErr != nil {
-			e.logger.Warn("post-mutation remote visibility wait canceled",
-				slog.String("path", remotePath),
-				slog.String("error", sleepErr.Error()),
-			)
-
-			return
-		}
-
-		_, err = e.items.GetItemByPath(ctx, driveID, remotePath)
-		if err == nil {
-			return
-		}
-		if !errors.Is(err, graph.ErrNotFound) {
-			e.logger.Warn("post-mutation remote visibility probe failed",
-				slog.String("path", remotePath),
-				slog.String("error", err.Error()),
-			)
-
-			return
-		}
-	}
-
-	e.logger.Warn("remote path still not visible after mutation",
+	e.logger.Warn(message,
 		slog.String("path", remotePath),
+		slog.String("error", err.Error()),
 	)
 }
 

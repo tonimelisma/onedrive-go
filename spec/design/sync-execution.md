@@ -22,7 +22,22 @@ produce individual `Outcome` values committed per-action by the SyncStore.
 - Mutable Runtime Owner: The engine owns dispatch state (`DepGraph`, dispatch channel, done signal). `WorkerPool` owns worker goroutines and the results channel it closes once after worker exit.
 - Error Boundary: Execution returns raw `WorkerResult` values and driveops/graph errors upward. The engine owns mapping those results into [error-model.md](error-model.md) classes.
 
-Action methods call the graph client directly and return `Outcome` — no retry loop, no error classification, no sleep. The following were removed as part of the retry-to-transport refactoring: `withRetry()`, `classifyError()`, `classifyStatusCode()`, `calcExecBackoff()`, `errClass` type + constants, `sleepFunc` field. Hash mismatch retry (`downloadWithHashRetry`) is unchanged — it's a data integrity mechanism orthogonal to the retry redesign.
+Action methods call the graph client directly and return `Outcome` — no retry
+loop, no error classification, and no executor-owned sleep budget. The
+following were removed as part of the retry-to-transport refactoring:
+`withRetry()`, `classifyError()`, `classifyStatusCode()`, `calcExecBackoff()`,
+`errClass` type + constants, `sleepFunc` field. Hash mismatch retry
+(`downloadWithHashRetry`) is unchanged — it's a data integrity mechanism
+orthogonal to the retry redesign.
+
+Post-success remote path confirmation is delegated to an injected
+`driveops.PathConvergence` capability. The executor uses that collaborator
+after successful remote folder create, upload, and move so sync and CLI share
+one owner for path visibility timing. The confirmation remains best-effort:
+`ErrPathNotVisible` and other convergence probe failures are logged at Warn
+and do not turn a successful mutation into a failed outcome. The collaborator
+is session-drive-scoped, so cross-drive shortcut actions skip this
+confirmation instead of probing visibility on the wrong drive.
 
 ## DepGraph (`dep_graph.go`)
 
@@ -230,10 +245,21 @@ Simple PUT (≤4 MiB) or resumable session (>4 MiB). Post-upload validation dete
 
 **Watch-Mode Upload Freshness Check**: In watch mode, `ExecuteUpload` performs a pre-flight eTag comparison before uploading. The debounce-based event batching can split simultaneous local+remote changes across passes: a local fsnotify event may trigger an upload before the remote observer has polled the collaborator's edit. The freshness check fetches the item's current remote eTag via `GetItem` and compares it against the baseline eTag. If they differ, the upload is aborted with a descriptive error (recorded in `sync_failures`). On the next pass, the remote observer will have polled, the planner will see both changes, and a proper conflict will be detected. Cost: one additional `GetItem` API call per upload in watch mode only — controlled by `ExecutorConfig.watchMode` (set by `initWatchInfra`).
 
+After a successful remote upload, the executor asks the injected
+`driveops.PathConvergence` capability to confirm that the destination path is
+readable. This is intentionally warn-only; the sync engine does not retry or
+sleep on its own.
+
 ### Deletes (`executor_delete.go`)
 Implements: R-6.2.4 [verified]
 
 Hash-before-delete guard for local deletions (verifies the file hasn't changed since planning). Remote deletes use `If-Match` with eTag. Local deletes go to OS trash if configured via [`internal/localtrash/trash.go`](/Users/tonimelisma/Development/onedrive-go/internal/localtrash/trash.go). When a local folder delete would fail due to non-empty directory containing only disposable files (OS junk like `.DS_Store`, editor temps like `.swp`, invalid OneDrive names), `deleteLocalFolder` auto-removes them before retrying the folder delete.
+
+Remote delete semantics remain intentionally item-ID authoritative inside sync.
+The executor does **not** call `DeleteResolvedPath()` /
+`PermanentDeleteResolvedPath()` for planned remote deletes, because sync intent
+is bound to one observed remote item identity rather than "whatever currently
+occupies this path."
 
 ### Conflicts (`executor_conflict.go`)
 Default: keep both versions. Remote version at original path, local version renamed to `<name>.conflict-<timestamp>.<ext>`. Conflict recorded in `conflicts` table.

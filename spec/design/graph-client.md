@@ -8,7 +8,7 @@ Implements: R-3.1 [verified], R-6.7 [implemented], R-6.8 [verified], R-1.1 [veri
 
 All Microsoft Graph API communication flows through `graph.Client`, but Graph-facing HTTP runtime policy is composed one layer above it in `internal/graphhttp`. The split is deliberate:
 
-- `graph.Client` is a pure API mapper plus a narrow Graph-quirk normalizer: authentication, quirk-specific retries, and error construction.
+- `graph.Client` is a pure API mapper plus a narrow Graph-quirk normalizer: authentication, endpoint-local quirk retries, and error construction.
 - `graphhttp.Provider` is the single owner of Graph-facing `http.Transport` / `http.Client` profiles, long-lived client reuse, and optional shared throttle coordination for retrying metadata clients.
 - `retry.RetryTransport` stays generic. It owns transport retry mechanics, not Graph semantics or caller profile selection.
 
@@ -56,7 +56,7 @@ This keeps domain-specific logic close to its tests without reopening the public
 ## Ownership Contract
 
 - Owns:
-  - `graph`: Graph request construction, authentication flows, token persistence callbacks, Graph-specific normalization, and `GraphError`/sentinel creation
+  - `graph`: Graph request construction, authentication flows, token persistence callbacks, Graph-specific normalization, endpoint-local quirk retries, and `GraphError`/sentinel creation
   - `graphhttp`: Graph-facing HTTP profile construction, transport defaults, long-lived client reuse, and caller-scoped throttle-gate wiring
 - Does Not Own: Config discovery, sync retry scheduling, scope activation, store persistence, or CLI presentation.
 - Source of Truth: Graph HTTP responses plus token file contents loaded and written through `tokenfile`.
@@ -93,6 +93,12 @@ All API quirks handled at the graph boundary — downstream code never sees them
 - Exact transient 404 retry on `GET /drives/{driveID}/items/root/children` when the Graph code chain contains `itemNotFound`
 - Exact transient 404 retry on `GET /drives/{driveID}/items/{itemID}` when `Download()` or `DownloadRange()` are fetching pre-authenticated download metadata and the Graph code chain contains `itemNotFound`
 - Exact transient 404 retry on `POST /drives/{driveID}/items/{parentID}:/{name}:/createUploadSession` when a freshly created parent is already visible by path but upload-session creation still reports `itemNotFound`
+
+The graph boundary intentionally stops at those exact request/response quirks.
+It does not own post-success path convergence such as "mutation succeeded, but
+path lookup is still briefly not readable" or "delete-by-ID briefly reports
+404 even though the path just resolved." Those behaviors belong to
+`driveops.PathConvergence`.
 
 Hashless-file handling is split intentionally across boundaries: `graph` keeps
 size, mtime, and eTag truthful when Graph omits hashes, but it does not decide

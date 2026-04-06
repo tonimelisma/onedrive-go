@@ -30,6 +30,8 @@ type Session struct {
 	sleepFunc              func(context.Context, time.Duration) error
 }
 
+var _ PathConvergence = (*Session)(nil)
+
 // AccountClients holds authenticated Graph clients for an account-scoped
 // command that does not target a configured drive.
 type AccountClients struct {

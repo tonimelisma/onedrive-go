@@ -47,18 +47,26 @@ The transfer manager therefore exposes both parent-path upload and existing-item
 overwrite entry points while keeping session persistence, chunk sizing, and
 post-upload verification in one owner.
 
-`driveops.Session` also owns the bounded post-success convergence checks used
-by CLI mutation commands. Graph can acknowledge folder creation, upload, or
-move before an immediate follow-on path lookup stops returning
-`itemNotFound`, and it can briefly return `DELETE .../items/{id} = 404
-itemNotFound` even though the same remote path just resolved successfully.
-The session boundary therefore exposes:
+`driveops` is the single owner of post-success path convergence and
+path-authoritative delete reconciliation for one resolved drive session.
+Graph can acknowledge folder creation, upload, or move before an immediate
+follow-on path lookup stops returning `itemNotFound`, and it can briefly
+return `DELETE .../items/{id} = 404 itemNotFound` even though the same
+remote path just resolved successfully. The package boundary therefore
+exposes the `PathConvergence` capability, satisfied by `driveops.Session`:
 
 - `WaitPathVisible()` so command handlers can require destination-path
   readability before they print a successful `mkdir`, `put`, or `mv`
 - `DeleteResolvedPath()` / `PermanentDeleteResolvedPath()` so path-oriented
   deletes keep authority on the remote path instead of trusting one stale
   item ID forever
+
+Sync execution consumes the same capability for post-success visibility
+confirmation after remote folder create, upload, and move. Those sync probes
+stay best-effort and warn-only, but they no longer own a second retry budget
+or sleep loop. Because the capability is bound to one resolved drive session,
+cross-drive shortcut actions skip this confirmation instead of probing the
+wrong drive path.
 
 ## SessionStore
 
