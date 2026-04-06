@@ -122,8 +122,8 @@ func (cfg *ExecutorConfig) Items() synctypes.ItemClient {
 	return cfg.items
 }
 
-func (e *Executor) confirmRemotePathVisible(ctx context.Context, remotePath string) {
-	if e.pathConvergence == nil {
+func (e *Executor) confirmRemotePathVisible(ctx context.Context, driveID driveid.ID, remotePath string) {
+	if e.pathConvergence == nil || driveID != e.driveID {
 		return
 	}
 
@@ -236,7 +236,7 @@ func (e *Executor) createRemoteFolder(ctx context.Context, action *synctypes.Act
 		slog.String("item_id", item.ID),
 	)
 
-	e.confirmRemotePathVisible(ctx, action.Path)
+	e.confirmRemotePathVisible(ctx, driveID, action.Path)
 
 	return synctypes.Outcome{
 		Action:     synctypes.ActionFolderCreate,
@@ -306,7 +306,7 @@ func (e *Executor) ExecuteRemoteMove(ctx context.Context, action *synctypes.Acti
 		slog.String("item_id", item.ID),
 	)
 
-	e.confirmRemotePathVisible(ctx, action.Path)
+	e.confirmRemotePathVisible(ctx, driveID, action.Path)
 
 	o := e.moveOutcome(action)
 	o.ItemID = item.ID

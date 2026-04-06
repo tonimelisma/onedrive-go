@@ -64,7 +64,9 @@ exposes the `PathConvergence` capability, satisfied by `driveops.Session`:
 Sync execution consumes the same capability for post-success visibility
 confirmation after remote folder create, upload, and move. Those sync probes
 stay best-effort and warn-only, but they no longer own a second retry budget
-or sleep loop.
+or sleep loop. Because the capability is bound to one resolved drive session,
+cross-drive shortcut actions skip this confirmation instead of probing the
+wrong drive path.
 
 ## SessionStore
 

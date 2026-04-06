@@ -385,6 +385,33 @@ func TestExecutor_RemoteMove_UsesPathConvergence(t *testing.T) {
 	require.Equal(t, []string{"renamed.txt"}, pathConvergence.waitCalls)
 }
 
+func TestExecutor_RemoteMove_CrossDriveSkipsPathConvergence(t *testing.T) {
+	t.Parallel()
+
+	items := &executorMockItemClient{
+		moveItemFn: func(_ context.Context, _ driveid.ID, _, _, _ string) (*graph.Item, error) {
+			return &graph.Item{ID: "item1", ETag: "etag2"}, nil
+		},
+	}
+	pathConvergence := &executorPathConvergenceStub{}
+
+	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
+	e := NewExecution(cfg, synctest.EmptyBaseline())
+
+	action := &synctypes.Action{
+		Type:    synctypes.ActionRemoteMove,
+		Path:    "renamed.txt",
+		OldPath: "original.txt",
+		ItemID:  "item1",
+		DriveID: driveid.New("00000000000000ff"),
+		View:    &synctypes.PathView{Path: "renamed.txt"},
+	}
+
+	o := e.ExecuteMove(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+	assert.Empty(t, pathConvergence.waitCalls)
+}
+
 // ---------------------------------------------------------------------------
 // Download tests
 // ---------------------------------------------------------------------------
