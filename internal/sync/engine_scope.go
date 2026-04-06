@@ -11,8 +11,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
-const syncMetadataScopeSnapshotKey = "effective_scope_snapshot"
-
 type remoteScopeResult struct {
 	observed []synctypes.ObservedItem
 	emitted  []synctypes.ChangeEvent
@@ -27,30 +25,25 @@ func (e *Engine) buildScopeSnapshot(ctx context.Context) (syncscope.Snapshot, er
 	return snapshot, nil
 }
 
-func (flow *engineFlow) persistedScopeSnapshot(ctx context.Context) (syncscope.Snapshot, error) {
-	meta, err := flow.engine.baseline.ReadSyncMetadata(ctx)
-	if err != nil {
-		return syncscope.Snapshot{}, fmt.Errorf("read persisted scope snapshot: %w", err)
+func (flow *engineFlow) applyScopeState(
+	ctx context.Context,
+	dryRun bool,
+	session *ScopeSession,
+	plan ObservationPlan,
+) error {
+	if dryRun {
+		return nil
 	}
 
-	snapshot, err := syncscope.UnmarshalSnapshot(meta[syncMetadataScopeSnapshotKey])
+	state, err := flow.scopeStateRecord(session, plan)
 	if err != nil {
-		return syncscope.Snapshot{}, fmt.Errorf("decode persisted scope snapshot: %w", err)
+		return err
 	}
 
-	return snapshot, nil
-}
-
-func (flow *engineFlow) persistScopeSnapshot(ctx context.Context, snapshot syncscope.Snapshot) error {
-	raw, err := syncscope.MarshalSnapshot(snapshot)
-	if err != nil {
-		return fmt.Errorf("marshal scope snapshot: %w", err)
-	}
-
-	if err := flow.engine.baseline.UpsertSyncMetadataEntries(ctx, map[string]string{
-		syncMetadataScopeSnapshotKey: raw,
+	if err := flow.engine.baseline.ApplyScopeState(ctx, synctypes.ScopeStateApplyRequest{
+		State: state,
 	}); err != nil {
-		return fmt.Errorf("persist scope snapshot: %w", err)
+		return fmt.Errorf("apply scope state: %w", err)
 	}
 
 	return nil
@@ -59,6 +52,7 @@ func (flow *engineFlow) persistScopeSnapshot(ctx context.Context, snapshot syncs
 func applyRemoteScope(
 	logger *slog.Logger,
 	snapshot syncscope.Snapshot,
+	generation int64,
 	events []synctypes.ChangeEvent,
 ) remoteScopeResult {
 	result := remoteScopeResult{
@@ -76,9 +70,10 @@ func applyRemoteScope(
 		switch ev.Type {
 		case synctypes.ChangeMove:
 			oldInScope := snapshot.AllowsPath(ev.OldPath)
-			newInScope := snapshot.AllowsPath(ev.Path)
+			newReason := snapshot.ExclusionReason(ev.Path)
+			newInScope := newReason == syncscope.ExclusionNone
 
-			result.observed = appendObservedEvent(logger, result.observed, &ev, !newInScope)
+			result.observed = appendObservedEvent(logger, result.observed, &ev, generation, newReason)
 
 			switch {
 			case oldInScope && newInScope:
@@ -100,9 +95,9 @@ func applyRemoteScope(
 				result.emitted = append(result.emitted, createEv)
 			}
 		case synctypes.ChangeCreate, synctypes.ChangeModify, synctypes.ChangeDelete, synctypes.ChangeShortcut:
-			inScope := snapshot.AllowsPath(ev.Path)
-			result.observed = appendObservedEvent(logger, result.observed, &ev, !inScope)
-			if inScope {
+			reason := snapshot.ExclusionReason(ev.Path)
+			result.observed = appendObservedEvent(logger, result.observed, &ev, generation, reason)
+			if reason == syncscope.ExclusionNone {
 				result.emitted = append(result.emitted, ev)
 			}
 		}
@@ -115,7 +110,8 @@ func appendObservedEvent(
 	logger *slog.Logger,
 	items []synctypes.ObservedItem,
 	ev *synctypes.ChangeEvent,
-	filtered bool,
+	generation int64,
+	reason syncscope.ExclusionReason,
 ) []synctypes.ObservedItem {
 	if ev.ItemID == "" {
 		if logger != nil {
@@ -127,19 +123,36 @@ func appendObservedEvent(
 		return items
 	}
 
+	filtered := reason != syncscope.ExclusionNone
+
 	return append(items, synctypes.ObservedItem{
-		DriveID:   ev.DriveID,
-		ItemID:    ev.ItemID,
-		ParentID:  ev.ParentID,
-		Path:      ev.Path,
-		ItemType:  ev.ItemType,
-		Hash:      ev.Hash,
-		Size:      ev.Size,
-		Mtime:     ev.Mtime,
-		ETag:      ev.ETag,
-		IsDeleted: ev.IsDeleted,
-		Filtered:  filtered,
+		DriveID:          ev.DriveID,
+		ItemID:           ev.ItemID,
+		ParentID:         ev.ParentID,
+		Path:             ev.Path,
+		ItemType:         ev.ItemType,
+		Hash:             ev.Hash,
+		Size:             ev.Size,
+		Mtime:            ev.Mtime,
+		ETag:             ev.ETag,
+		IsDeleted:        ev.IsDeleted,
+		Filtered:         filtered,
+		FilterGeneration: generation,
+		FilterReason:     mapFilterReason(reason),
 	})
+}
+
+func mapFilterReason(reason syncscope.ExclusionReason) synctypes.RemoteFilterReason {
+	switch reason {
+	case syncscope.ExclusionNone:
+		return synctypes.RemoteFilterNone
+	case syncscope.ExclusionMarkerScope:
+		return synctypes.RemoteFilterMarkerScope
+	case syncscope.ExclusionPathScope:
+		return synctypes.RemoteFilterPathScope
+	default:
+		panic(fmt.Sprintf("unknown exclusion reason %q", reason))
+	}
 }
 
 func (rt *watchRuntime) currentScopeSnapshot() syncscope.Snapshot {
@@ -149,11 +162,19 @@ func (rt *watchRuntime) currentScopeSnapshot() syncscope.Snapshot {
 	return rt.scopeSnapshot
 }
 
-func (rt *watchRuntime) setScopeSnapshot(snapshot syncscope.Snapshot) {
+func (rt *watchRuntime) currentScopeGeneration() int64 {
+	rt.scopeMu.RLock()
+	defer rt.scopeMu.RUnlock()
+
+	return rt.scopeGeneration
+}
+
+func (rt *watchRuntime) setScopeSnapshot(snapshot syncscope.Snapshot, generation int64) {
 	rt.scopeMu.Lock()
 	defer rt.scopeMu.Unlock()
 
 	rt.scopeSnapshot = snapshot
+	rt.scopeGeneration = generation
 }
 
 func (rt *watchRuntime) handleWatchScopeChange(
@@ -168,26 +189,29 @@ func (rt *watchRuntime) handleWatchScopeChange(
 		return outbox, false, nil
 	}
 
-	rt.setScopeSnapshot(change.New)
+	session := ScopeSession{
+		Current:    change.New,
+		Previous:   change.Old,
+		Diff:       change.Diff,
+		Generation: rt.currentScopeGeneration() + 1,
+	}
+	plan, err := rt.BuildObservationPlan(ctx, &session, p.mode, false)
+	if err != nil {
+		return outbox, false, err
+	}
 
-	if err := rt.engine.baseline.ApplyRemoteScope(ctx, change.New); err != nil {
+	rt.setScopeSnapshot(change.New, session.Generation)
+
+	if p.mode == synctypes.SyncUploadOnly {
+		plan.Reentry.Pending = false
+		plan.Reentry.Kind = synctypes.ScopeReconcileNone
+	}
+	if err := rt.applyScopeState(ctx, false, &session, plan); err != nil {
 		return outbox, false, fmt.Errorf("sync: applying watch scope change: %w", err)
 	}
 
-	if change.Diff.HasEntered() {
-		if p.mode == synctypes.SyncUploadOnly {
-			rt.engine.logger.Info("scope expansion detected during upload-only watch; deferring remote reconciliation",
-				slog.Int("entered_paths", len(change.Diff.EnteredPaths)),
-			)
-			return outbox, false, nil
-		}
-
-		rt.runEnteredScopeReconciliationAsync(ctx, p.bl, change.Diff.EnteredPaths)
-		return outbox, false, nil
-	}
-
-	if err := rt.persistScopeSnapshot(ctx, change.New); err != nil {
-		return outbox, false, err
+	if plan.Reentry.Pending {
+		rt.runEnteredScopeReconciliationAsync(ctx, p.bl, plan.Reentry.Paths)
 	}
 
 	return outbox, false, nil

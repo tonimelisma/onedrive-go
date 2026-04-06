@@ -346,6 +346,11 @@ func runCLIWithConfigExpectError(t *testing.T, cfgPath string, env map[string]st
 // eventual consistency. 30 seconds covers observed propagation delays.
 const pollTimeout = 30 * time.Second
 
+// remoteWritePropagationTimeout covers slower live-account propagation after
+// successful writes. GitHub-hosted CI has observed newly created folders/files
+// take longer than pollTimeout to become readable via list/stat.
+const remoteWritePropagationTimeout = 2 * time.Minute
+
 // transientGraphRetryTimeout covers the rare case where a live Graph read-only
 // command hits repeated 502/503/504 gateway failures before succeeding.
 const transientGraphRetryTimeout = 4 * time.Minute
@@ -533,17 +538,22 @@ func TestE2E_RoundTrip(t *testing.T) {
 
 		_, stderr := runCLIWithConfig(t, cfgPath, nil, "put", tmpFile.Name(), "/"+testFile)
 		assert.Contains(t, stderr, "Uploaded")
+
+		// Wait for the uploaded file to become readable before subsequent read
+		// commands. Live Graph propagation on CI can lag well past the default
+		// poll timeout even after PUT returns success.
+		pollCLIWithConfigContains(t, cfgPath, nil, "test.txt", remoteWritePropagationTimeout, "stat", "/"+testFile)
 	})
 
 	t.Run("ls_folder", func(t *testing.T) {
 		// Poll for eventual consistency after put.
-		stdout, _ := pollCLIWithConfigContains(t, cfgPath, nil, "test.txt", pollTimeout, "ls", "/"+testFolder)
+		stdout, _ := pollCLIWithConfigContains(t, cfgPath, nil, "test.txt", remoteWritePropagationTimeout, "ls", "/"+testFolder)
 		assert.Contains(t, stdout, "subfolder")
 	})
 
 	t.Run("stat", func(t *testing.T) {
 		// Poll for eventual consistency after put.
-		stdout, _ := pollCLIWithConfigContains(t, cfgPath, nil, "test.txt", pollTimeout, "stat", "/"+testFile)
+		stdout, _ := pollCLIWithConfigContains(t, cfgPath, nil, "test.txt", remoteWritePropagationTimeout, "stat", "/"+testFile)
 		assert.Contains(t, stdout, fmt.Sprintf("%d bytes", len(testContent)))
 	})
 
@@ -583,7 +593,7 @@ func TestE2E_RoundTrip(t *testing.T) {
 		assert.Contains(t, stderr, "Uploaded")
 
 		// Poll until the file is visible before attempting permanent delete.
-		pollCLIWithConfigContains(t, cfgPath, nil, "perm-test.txt", pollTimeout, "stat", "/"+permFile)
+		pollCLIWithConfigContains(t, cfgPath, nil, "perm-test.txt", remoteWritePropagationTimeout, "stat", "/"+permFile)
 
 		_, stderr = runCLIWithConfig(t, cfgPath, nil, "rm", "--permanent", "/"+permFile)
 		assert.Contains(t, stderr, "Permanently deleted")

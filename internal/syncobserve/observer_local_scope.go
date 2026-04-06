@@ -6,8 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/fsnotify/fsnotify"
+
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 func (o *LocalObserver) scopeAllowsUnknown(path string) bool {
@@ -48,7 +51,7 @@ func (o *LocalObserver) handleMarkerEvent(
 		return
 	}
 
-	o.scopeSnapshot = newSnapshot
+	o.installScopeSnapshot(newSnapshot)
 	o.cancelPendingTimersUnderRoots(diff.ExitedPaths)
 	o.syncWatchedDirsForScopeChange(ctx, watcher, tree, diff)
 	o.publishScopeChange(&syncscope.Change{
@@ -70,6 +73,59 @@ func (o *LocalObserver) publishScopeChange(change *syncscope.Change) {
 	}
 }
 
+func (o *LocalObserver) shouldRebuildScopeForEvent(
+	fsEvent fsnotify.Event,
+	fsPath string,
+	dbRelPath string,
+) bool {
+	if o.scopeSnapshot.IgnoreMarker() == "" {
+		return false
+	}
+
+	if o.scopeSnapshot.IsMarkerFile(dbRelPath) {
+		return true
+	}
+
+	if !fsEvent.Has(fsnotify.Create) && !fsEvent.Has(fsnotify.Remove) && !fsEvent.Has(fsnotify.Rename) {
+		return false
+	}
+
+	if o.pathTouchesMarkerDir(dbRelPath) {
+		return true
+	}
+
+	if fsEvent.Has(fsnotify.Create) {
+		info, _, err := statObservedPath(fsPath)
+		return err == nil && info.IsDir()
+	}
+
+	if o.wasWatchedDir(fsPath) {
+		return true
+	}
+
+	existing, ok := o.Baseline.GetByPath(dbRelPath)
+	return ok && existing.ItemType == synctypes.ItemTypeFolder
+}
+
+func (o *LocalObserver) pathTouchesMarkerDir(path string) bool {
+	for _, markerDir := range o.scopeSnapshot.MarkerDirs() {
+		if markerDir == path || syncscope.CoversPath(path, markerDir) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (o *LocalObserver) wasWatchedDir(fsPath string) bool {
+	if len(o.watchedDirs) == 0 {
+		return false
+	}
+
+	_, ok := o.watchedDirs[filepath.Clean(fsPath)]
+	return ok
+}
+
 func (o *LocalObserver) cancelPendingTimersUnderRoots(roots []string) {
 	if len(roots) == 0 {
 		return
@@ -82,6 +138,9 @@ func (o *LocalObserver) cancelPendingTimersUnderRoots(roots []string) {
 
 		timer.Stop()
 		delete(o.PendingTimers, path)
+		if o.pendingTimerGenerations != nil {
+			delete(o.pendingTimerGenerations, path)
+		}
 	}
 }
 

@@ -50,10 +50,11 @@ const MaxCoalesceRetries = 3
 // HashRequest is sent from timer callbacks to the watchLoop goroutine when a
 // write coalesce timer fires and the file should be hashed (B-107).
 type HashRequest struct {
-	FsPath    string
-	DbRelPath string
-	Name      string
-	Retries   int // number of re-schedules already attempted
+	FsPath     string
+	DbRelPath  string
+	Name       string
+	Generation int64
+	Retries    int // number of re-schedules already attempted
 }
 
 // FsWatcher abstracts filesystem event monitoring. Satisfied by
@@ -122,9 +123,10 @@ type LocalObserver struct {
 
 	// Write coalescing fields (B-107). Maps initialized in constructor;
 	// channel initialized in constructor so methods are safe before Watch().
-	WriteCoalesceCooldown time.Duration          // 0 → defaultWriteCoalesceCooldown; injectable for tests
-	PendingTimers         map[string]*time.Timer // per-path timers; watchLoop-only (no mutex needed)
-	HashRequests          chan HashRequest       // timer callback → watchLoop
+	WriteCoalesceCooldown   time.Duration          // 0 → defaultWriteCoalesceCooldown; injectable for tests
+	PendingTimers           map[string]*time.Timer // per-path timers; watchLoop-only (no mutex needed)
+	pendingTimerGenerations map[string]int64       // path -> scope generation for PendingTimers entries; watchLoop-only
+	HashRequests            chan HashRequest       // timer callback → watchLoop
 
 	// skippedCh forwards SkippedItems from safety scans to the engine for
 	// recording in sync_failures. Nil disables forwarding (pre-existing behavior).
@@ -170,6 +172,10 @@ type LocalObserver struct {
 	// watchedDirs tracks fsnotify registrations owned by this observer. The
 	// watch loop is the single writer, so no mutex is needed.
 	watchedDirs map[string]struct{}
+
+	// scopeGeneration invalidates deferred local work when marker-driven scope
+	// changes occur. The watch loop is the single writer after startup.
+	scopeGeneration int64
 }
 
 // NewLocalObserver creates a LocalObserver. checkWorkers controls the number
@@ -178,18 +184,19 @@ type LocalObserver struct {
 // during observation.
 func NewLocalObserver(baseline *synctypes.Baseline, logger *slog.Logger, checkWorkers int) *LocalObserver {
 	return &LocalObserver{
-		Baseline:             baseline,
-		Logger:               logger,
-		checkWorkers:         checkWorkers,
-		HashFunc:             driveops.ComputeQuickXorHash,
-		SleepFunc:            TimeSleep,
-		PendingTimers:        make(map[string]*time.Timer),
-		HashRequests:         make(chan HashRequest, HashRequestBufSize),
-		DirNameCache:         make(map[string]map[string][]string),
-		RecentLocalDeletes:   make(map[string]struct{}),
-		CollisionPeers:       make(map[string]map[string]struct{}),
-		excludedSymlinkPaths: make(map[string]struct{}),
-		watchedDirs:          make(map[string]struct{}),
+		Baseline:                baseline,
+		Logger:                  logger,
+		checkWorkers:            checkWorkers,
+		HashFunc:                driveops.ComputeQuickXorHash,
+		SleepFunc:               TimeSleep,
+		PendingTimers:           make(map[string]*time.Timer),
+		pendingTimerGenerations: make(map[string]int64),
+		HashRequests:            make(chan HashRequest, HashRequestBufSize),
+		DirNameCache:            make(map[string]map[string][]string),
+		RecentLocalDeletes:      make(map[string]struct{}),
+		CollisionPeers:          make(map[string]map[string]struct{}),
+		excludedSymlinkPaths:    make(map[string]struct{}),
+		watchedDirs:             make(map[string]struct{}),
 		SafetyTickFunc: func(d time.Duration) (<-chan time.Time, func()) {
 			t := time.NewTicker(d)
 			return t.C, t.Stop
@@ -233,13 +240,70 @@ func (o *LocalObserver) SetObservationRules(rules synctypes.LocalObservationRule
 // The snapshot is a value type, so later engine mutations cannot silently
 // change an already-running observer.
 func (o *LocalObserver) SetScopeSnapshot(snapshot syncscope.Snapshot) {
-	o.scopeSnapshot = snapshot
+	o.installScopeSnapshot(snapshot)
 }
 
 // SetScopeChangeChannel sets the optional channel used by watch mode to report
 // marker-driven scope changes back to the engine.
 func (o *LocalObserver) SetScopeChangeChannel(ch chan<- syncscope.Change) {
 	o.scopeChanges = ch
+}
+
+func (o *LocalObserver) currentScopeGeneration() int64 {
+	if o.scopeGeneration <= 0 {
+		return 1
+	}
+
+	return o.scopeGeneration
+}
+
+func (o *LocalObserver) installScopeSnapshot(snapshot syncscope.Snapshot) {
+	if o.scopeGeneration <= 0 {
+		o.scopeGeneration = 1
+		o.scopeSnapshot = snapshot
+		return
+	}
+
+	if syncscope.DiffSnapshots(o.scopeSnapshot, snapshot).HasChanges() {
+		o.scopeGeneration++
+	}
+
+	o.scopeSnapshot = snapshot
+}
+
+func (o *LocalObserver) recordPendingTimer(path string, generation int64, timer *time.Timer) {
+	if o.PendingTimers == nil {
+		o.PendingTimers = make(map[string]*time.Timer)
+	}
+	if o.pendingTimerGenerations == nil {
+		o.pendingTimerGenerations = make(map[string]int64)
+	}
+
+	o.PendingTimers[path] = timer
+	o.pendingTimerGenerations[path] = generation
+}
+
+func (o *LocalObserver) clearPendingTimerIfGeneration(path string, generation int64) {
+	if o.pendingTimerGenerations != nil {
+		if currentGeneration, ok := o.pendingTimerGenerations[path]; ok && currentGeneration != generation {
+			return
+		}
+	}
+
+	delete(o.PendingTimers, path)
+	if o.pendingTimerGenerations != nil {
+		delete(o.pendingTimerGenerations, path)
+	}
+}
+
+func (o *LocalObserver) cancelPendingTimer(path string) {
+	if timer, ok := o.PendingTimers[path]; ok {
+		timer.Stop()
+		delete(o.PendingTimers, path)
+	}
+	if o.pendingTimerGenerations != nil {
+		delete(o.pendingTimerGenerations, path)
+	}
 }
 
 // BuildScopeSnapshot discovers the effective local marker state under the
@@ -387,6 +451,9 @@ func (o *LocalObserver) cancelPendingTimers() {
 	for path, timer := range o.PendingTimers {
 		timer.Stop()
 		delete(o.PendingTimers, path)
+		if o.pendingTimerGenerations != nil {
+			delete(o.pendingTimerGenerations, path)
+		}
 	}
 }
 

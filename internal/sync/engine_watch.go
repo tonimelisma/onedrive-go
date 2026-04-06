@@ -476,37 +476,39 @@ func (rt *watchRuntime) startRemoteObserver(
 	opts synctypes.WatchOpts,
 ) {
 	pollInterval := rt.engine.resolvePollInterval(opts)
-	if rt.engine.usesPrimaryPathScopes() {
-		scopes, rootFallback, err := rt.engine.resolvePrimaryObservationScopes(ctx)
-		if err != nil {
-			go func() {
-				defer obsWg.Done()
-				defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
-				errs <- err
-			}()
+	session := ScopeSession{
+		Current:    rt.currentScopeSnapshot(),
+		Generation: rt.currentScopeGeneration(),
+	}
+	plan, err := rt.BuildObservationPlan(ctx, &session, synctypes.SyncBidirectional, false)
+	if err != nil {
+		go func() {
+			defer obsWg.Done()
+			defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
+			errs <- err
+		}()
 
-			return
+		return
+	}
+
+	if len(plan.PrimaryScopes) > 0 && !plan.RootFallback {
+		if rt.engine.enableWebsocket {
+			rt.engine.emitDebugEvent(engineDebugEvent{
+				Type: engineDebugEventWebsocketFallback,
+				Note: "sync_paths",
+			})
+			rt.engine.logger.Warn("websocket watch is not supported for sync_paths-scoped sessions; falling back to polling",
+				slog.String("drive_id", rt.engine.driveID.String()),
+			)
 		}
 
-		if !rootFallback && len(scopes) > 0 {
-			if rt.engine.enableWebsocket {
-				rt.engine.emitDebugEvent(engineDebugEvent{
-					Type: engineDebugEventWebsocketFallback,
-					Note: "sync_paths",
-				})
-				rt.engine.logger.Warn("websocket watch is not supported for sync_paths-scoped sessions; falling back to polling",
-					slog.String("drive_id", rt.engine.driveID.String()),
-				)
-			}
+		go func() {
+			defer obsWg.Done()
+			defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
+			errs <- rt.watchPrimaryScopedRemote(ctx, bl, events, pollInterval, plan.PrimaryScopes)
+		}()
 
-			go func() {
-				defer obsWg.Done()
-				defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
-				errs <- rt.watchPrimaryScopedRemote(ctx, bl, events, pollInterval, scopes)
-			}()
-
-			return
-		}
+		return
 	}
 
 	rt.warnWebsocketFallbackIfNeeded()
@@ -526,7 +528,7 @@ func (rt *watchRuntime) startRemoteObserver(
 		_ context.Context,
 		events []synctypes.ChangeEvent,
 	) ([]synctypes.ObservedItem, []synctypes.ChangeEvent, error) {
-		scoped := applyRemoteScope(rt.engine.logger, rt.currentScopeSnapshot(), events)
+		scoped := applyRemoteScope(rt.engine.logger, rt.currentScopeSnapshot(), rt.currentScopeGeneration(), events)
 		return scoped.observed, scoped.emitted, nil
 	})
 	rt.remoteObs = remoteObs

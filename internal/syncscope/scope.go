@@ -14,6 +14,16 @@ import (
 
 const persistedVersion = 1
 
+// ExclusionReason records why a path falls outside the effective sync scope.
+// The zero value means the path is currently inside scope.
+type ExclusionReason string
+
+const (
+	ExclusionNone        ExclusionReason = ""
+	ExclusionPathScope   ExclusionReason = "path_scope"
+	ExclusionMarkerScope ExclusionReason = "marker_scope"
+)
+
 // Config is the normalized user-configured sync scope. SyncPaths are stored
 // as NFC-normalized relative paths from the drive root with ancestor overlaps
 // collapsed. The empty string means the drive root.
@@ -179,17 +189,27 @@ func (s Snapshot) HasMarkerDir(relPath string) bool {
 // AllowsPath reports whether the given relative path is inside the effective
 // sync scope. Marker files themselves are never synced.
 func (s Snapshot) AllowsPath(relPath string) bool {
+	return s.ExclusionReason(relPath) == ExclusionNone
+}
+
+// ExclusionReason reports why relPath is currently outside the effective
+// sync scope. The zero value means the path is in scope.
+func (s Snapshot) ExclusionReason(relPath string) ExclusionReason {
 	path := normalizeRelativePath(relPath)
 
 	if s.IsMarkerFile(path) {
-		return false
+		return ExclusionMarkerScope
 	}
 
 	if s.isUnderMarker(path) {
-		return false
+		return ExclusionMarkerScope
 	}
 
-	return s.allowedBySyncPaths(path)
+	if !s.allowedBySyncPaths(path) {
+		return ExclusionPathScope
+	}
+
+	return ExclusionNone
 }
 
 // ShouldTraverseDir reports whether a directory should stay observable for

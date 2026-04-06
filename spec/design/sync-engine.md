@@ -49,11 +49,16 @@ effective scope snapshot from normalized configured paths plus locally
 discovered marker directories. The engine then:
 
 - applies that snapshot to remote observations before they reach the planner
-- persists the snapshot in `sync_metadata`
-- asks the store to mark already-known out-of-scope `remote_state` rows as
-  `filtered`
-- forces full reconciliation when the effective scope has entered new paths in
-  any mode that can observe remote state (`download-only` or bidirectional)
+- builds one pure `ScopeSession` / `ObservationPlan` pair that both one-shot
+  and watch execution paths consume
+- persists the snapshot plus observation metadata in the dedicated
+  `scope_state` row, then asks the store to apply row-level
+  `remote_state.sync_status = filtered` transitions atomically
+- predicts the next effective scope generation from the diff between
+  persisted and live scope truth instead of letting each runtime path derive
+  that independently
+- forces full reconciliation only when scope expansion enters the drive root;
+  narrower expansions use targeted re-entry reconciliation
 
 When `sync_paths` is non-empty, primary remote observation no longer starts
 from the whole drive by default. The engine resolves the minimal current set
@@ -70,6 +75,17 @@ Boundary-crossing remote moves are reclassified at the engine boundary: move
 into scope becomes create-on-entry, move out of scope becomes delete-on-exit,
 and move entirely outside scope is dropped from planning while the
 corresponding `remote_state` row stays `filtered`.
+
+`ScopeSession` is the engine's pure scope-planning boundary. It owns the
+current effective snapshot, the persisted snapshot from `scope_state`, the
+entered/exited diff between them, and the predicted current generation.
+
+`ObservationPlan` is the pure observation-side result of that session. It
+owns the current observation mode (`root_delta`, `scoped_delta`,
+`scoped_enumerate`), resolved primary scopes, websocket eligibility, whether
+root fallback is required, and the pending re-entry plan. One-shot startup,
+watch startup, and watch-time scope changes all go through this same plan
+shape so observation policy is no longer split across multiple entrypoints.
 
 Upload-only runs and upload-only watch sessions still rebuild and persist local
 scope truth, but they intentionally defer remote re-entry reconciliation on
