@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/retry"
 	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
 	"github.com/tonimelisma/onedrive-go/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
@@ -55,6 +55,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 	if err != nil {
 		return nil, err
 	}
+	changes = mergePathChangeBatches(changes, runner.collectDueRetryChanges(ctx, pathSetFromBatch(changes)))
 
 	// Step 5: Early return if no changes.
 	if len(changes) == 0 {
@@ -157,9 +158,16 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) (*synctypes.Bas
 	eng.logVerifiedDrive(proof)
 
 	// Crash recovery: reset any in-progress states from a previous crash.
-	// Also creates sync_failures entries so the retrier can rediscover items
-	// that were mid-execution when the crash occurred.
-	if err := syncrecovery.ResetInProgressStates(ctx, eng.baseline, eng.syncTree, retry.ReconcilePolicy().Delay, eng.logger); err != nil {
+	// One-shot mode has no long-lived retry loop, so bridge rows created here
+	// must be immediately retryable on this invocation instead of waiting for a
+	// later timer tick that will never happen.
+	if err := syncrecovery.ResetInProgressStates(
+		ctx,
+		eng.baseline,
+		eng.syncTree,
+		func(int) time.Duration { return 0 },
+		eng.logger,
+	); err != nil {
 		eng.logger.Warn("failed to reset in-progress states", slog.String("error", err.Error()))
 	}
 

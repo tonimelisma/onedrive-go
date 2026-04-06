@@ -119,12 +119,18 @@ func buildPathViews(changes []synctypes.PathChanges, baseline *synctypes.Baselin
 		if len(pc.RemoteEvents) > 0 {
 			last := &pc.RemoteEvents[len(pc.RemoteEvents)-1]
 			view.Remote = remoteStateFromEvent(last)
+			view.ForcedAction = last.ForcedAction
+			view.HasForcedAction = last.HasForcedAction
 		}
 
 		// Local state from the latest local event. ChangeDelete means absent.
 		if len(pc.LocalEvents) > 0 {
 			last := &pc.LocalEvents[len(pc.LocalEvents)-1]
 			view.Local = localStateFromEvent(last)
+			if last.HasForcedAction {
+				view.ForcedAction = last.ForcedAction
+				view.HasForcedAction = true
+			}
 		}
 
 		// Baseline lookup.
@@ -373,6 +379,10 @@ func classifyPathView(view *synctypes.PathView, mode synctypes.SyncMode, deniedP
 		effectiveMode = synctypes.SyncDownloadOnly
 	}
 
+	if forced := classifyForcedAction(view, effectiveMode); forced != nil {
+		return forced
+	}
+
 	itemType := resolveItemType(view)
 
 	if itemType == synctypes.ItemTypeFolder {
@@ -380,6 +390,32 @@ func classifyPathView(view *synctypes.PathView, mode synctypes.SyncMode, deniedP
 	}
 
 	return classifyFile(view, effectiveMode)
+}
+
+func classifyForcedAction(view *synctypes.PathView, mode synctypes.SyncMode) []synctypes.Action {
+	if !view.HasForcedAction {
+		return nil
+	}
+
+	switch view.ForcedAction {
+	case synctypes.ActionDownload:
+		if mode == synctypes.SyncUploadOnly {
+			return nil
+		}
+		return []synctypes.Action{MakeAction(synctypes.ActionDownload, view)}
+	case synctypes.ActionUpload,
+		synctypes.ActionLocalDelete,
+		synctypes.ActionRemoteDelete,
+		synctypes.ActionLocalMove,
+		synctypes.ActionRemoteMove,
+		synctypes.ActionFolderCreate,
+		synctypes.ActionConflict,
+		synctypes.ActionUpdateSynced,
+		synctypes.ActionCleanup:
+		return nil
+	default:
+		return nil
+	}
 }
 
 // IsWriteDenied checks if a path falls under a permission-denied folder.

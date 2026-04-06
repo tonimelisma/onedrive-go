@@ -246,9 +246,9 @@ Issue type constants for failure classification (e.g., `IssueInvalidFilename`, `
 
 ## Crash Recovery
 
-Implements: R-2.10.41 [verified]
+Implements: R-2.5.1 [verified], R-2.5.4 [verified], R-2.10.41 [verified]
 
-[`internal/syncrecovery/recovery.go`](/Users/tonimelisma/Development/onedrive-go/internal/syncrecovery/recovery.go) handles crash recovery: on startup, it resets items stuck in `downloading`/`deleting` state to `pending_download`, `pending_delete`, or `deleted`. The sync tree decides whether a local delete completed before the crash; the store applies only the durable state transitions. One-shot mode does this in `prepareRunOnceState`; watch mode does it during watch bootstrap before observation starts. Both modes therefore rediscover crash-recovery items without relying on `RunWatch` calling `RunOnce`.
+[`internal/syncrecovery/recovery.go`](/Users/tonimelisma/Development/onedrive-go/internal/syncrecovery/recovery.go) handles crash recovery: on startup, it resets items stuck in `downloading`/`deleting` state to `pending_download`, `pending_delete`, or `deleted`. The sync tree decides whether a local delete completed before the crash; the store applies only the durable state transitions. One-shot mode does this in `prepareRunOnceState`; watch mode does it during watch bootstrap before observation starts.
 
 Engine-level startup characterization covers both one-shot startup and watch bootstrap with mixed deleting candidate sets: missing local paths finalize as `deleted`, existing local paths return to `pending_delete`, and malformed or unreadable local paths fail open to `pending_delete` instead of being treated as successful deletes.
 
@@ -263,19 +263,30 @@ become zombies: the delta token was already advanced (no new events), and the
 retry sweep only queries `sync_failures`. `RecordFailure` uses UPSERT — if a
 `sync_failures` entry already exists from a prior failure before the crash, the
 existing `failure_count` is preserved and incremented, so backoff continues
-from where it left off.
+from where it left off. The bridge rows keep coarse `direction`, but they also
+preserve the exact replay action: reset downloads persist as
+`ActionDownload`, and reset deletes persist as `ActionLocalDelete`, because the
+`deleting` remote-state lane represents “delete the local item to match a
+remote delete,” not “re-issue a remote delete.”
 
 The retry sweep is the sole retry mechanism for sync actions. In watch mode it
 is integrated directly into the single-owner watch loop; in one-shot mode there
 is no long-lived retry loop. `runRetrierSweep()` periodically sweeps
 `sync_failures` for items whose `next_retry_at` has expired and re-injects them
-into the pipeline via buffer → planner → DepGraph. The engine calls
-`DepGraph.Complete` on every worker result and records failures in
-`sync_failures` with exponential backoff via `retry.ReconcilePolicy().Delay`.
-`CommitOutcome` updates baseline and `remote_state`, but it does not clear
-`sync_failures`; the engine owns success-side failure cleanup explicitly via
-`clearFailureOnSuccess`. `runTrialDispatch()` handles scope trial
-candidate selection via `PickTrialCandidate` and re-observation.
+into the pipeline via buffer → planner → DepGraph. In one-shot mode,
+`prepareRunOnceState` seeds crash-recovery bridge rows with immediate retry
+times, and `RunOnce` merges those due retry rows back into the current planner
+batch on that same invocation instead of leaving them stranded for a later
+timer that does not exist. Download-side retry replay carries an explicit
+forced-download hint through the planner so a resumed download still replans
+even when baseline metadata says the path was previously synced and no fresh
+delta item arrived. The engine calls `DepGraph.Complete` on every worker
+result and records failures in `sync_failures` with exponential backoff via
+`retry.ReconcilePolicy().Delay`. `CommitOutcome` updates baseline and
+`remote_state`, but it does not clear `sync_failures`; the engine owns
+success-side failure cleanup explicitly via `clearFailureOnSuccess`.
+`runTrialDispatch()` handles scope trial candidate selection via
+`PickTrialCandidate` and re-observation.
 
 ## Status Computation (`compute_status.go`)
 

@@ -1,6 +1,6 @@
 # Test Assurance Audit
 
-Last updated: 2026-04-04
+Last updated: 2026-04-05
 
 Purpose: build a spec-first model of the ideal test suite, then compare the real suite against that model to catch missing, weak, or nerfed tests before we start patching coverage.
 
@@ -305,7 +305,7 @@ This is the operating dashboard for completeness, not a verdict of quality. A pa
 | W1 | done | done | partial | partial | done | done | partial | done | current actionable W1 top-ups are closed; only planned/deferred logging policy work remains |
 | W2 | done | done | done | partial | done | done | partial | done | current actionable W2 top-ups are closed; only planned nil-guard / watch-cleanup hardening remains |
 | W3 | done | done | done | n/a | done | done | done | done | current actionable W3 top-ups are closed; incomplete-enumeration safety remains system-owned rather than planner-local |
-| W4 | done | done | done | n/a | done | done | partial | done | live crash/restart proof is still thinner than the now-reconciled store/CLI durable-row mutation coverage |
+| W4 | done | done | done | n/a | done | done | partial | done | current actionable W4 top-ups are closed; broader forced-kill live timing proof is still optional future hardening |
 | W5 | done | done | done | partial | done | done | partial | done | upload-session traceability gap is closed; remaining W5 risk is broader worker-pool and future planned-transfer coverage |
 | W6 | done | done | partial | partial | done | done | partial | done | current actionable W6 top-ups are closed; only broader planned graph-quirk capture and future auth/runtime evidence remain |
 | W7 | done | done | done | partial | done | done | partial | done | business-account live `drive search` proof is still blocked by missing business test credentials; current personal/logout/list/shared live proof is closed |
@@ -593,7 +593,8 @@ Key W1 gap notes:
   - panic on sparse delta payloads
   - synthesize `time.Now()` for malformed remote timestamps and accidentally suppress a real follow-up hash/download decision
 - Audit status:
-  - ideal model drafted
+  - body audit done
+  - the earlier live crash/restart gap is now narrowed with a true durable-state replay proof in `e2e_full`
   - note: remaining planned observation hardening stays out of the current strong/weak audit until implemented
 - Claim mapping snapshot from filenames and `// Validates:` only:
   - Candidate test surface is strong around observation mechanics: `scanner_test.go`, `observer_remote_test.go`, `buffer_test.go`, `observer_local_*_test.go`, `item_converter_test.go`, and `inotify*_test.go`
@@ -776,7 +777,10 @@ Key W2 gap notes:
   - `status` had a real production gap against `R-2.10.4`: the store already computed grouped visible issues with scope meaning, but `internal/cli/status.go` discarded that projection and rendered only totals. The fix now preserves grouped issue families through `querySyncState`, emits them structurally in `status --json`, and renders them textually with scope kind plus humanized scope label under each drive's sync state.
   - `rm` default delete semantics were implemented correctly, but the contract was weakly defended. Caller-level tests now prove ordinary `rm` resolves the item and issues the recycle-bin `DELETE`, and `--permanent` routes through `permanentDelete` for both Business and Personal drives. This audit originally suspected Personal-drive fallback, but Microsoft’s current `driveItem: permanentDelete` doc and the fast live-E2E suite both disproved that theory.
   - The CLI surface is intentionally split by noun: `issues` is read-only, `conflicts resolve` owns conflict mutation, and `issues force-deletes` owns held-delete approval. The refreshed command-level tests now prove root `issues`/`conflicts` reject stray positional args instead of silently listing, while the dedicated mutation tests continue to prove `force-deletes` and conflict resolution touch only their owned durable state.
-  - The remaining store-heavy W4 contracts turned out to be stronger than the earlier ledger suggested. `ResetFailure` and `ResetAllFailures` already reset failed `remote_state` rows back to the correct pending states while deleting the corresponding `sync_failures` rows, `ClearResolvedActionableFailures*` already proves stale actionable rows auto-clear by issue type plus the scanner's current path set, and `ResetInProgressStates_CreatesSyncFailures_*` already proves the crash-recovery bridge-row contract. The missing piece was body-level reconciliation and explicit traceability, not another production bug.
+  - The remaining store-heavy W4 contracts turned out to be stronger than the earlier ledger suggested. `ResetFailure` and `ResetAllFailures` already reset failed `remote_state` rows back to the correct pending states while deleting the corresponding `sync_failures` rows, `ClearResolvedActionableFailures*` already proves stale actionable rows auto-clear by issue type plus the scanner's current path set, and `ResetInProgressStates_CreatesSyncFailures_*` already proves the crash-recovery bridge-row contract.
+  - The thin spot turned into a real production gap, not just missing live proof. The first live crash-recovery pass showed that one-shot startup created durable retry bridge rows but did not actually consume them on that same invocation. Fixing that exposed a second delete-side bug: reset `deleting` rows were being persisted as `ActionRemoteDelete` instead of `ActionLocalDelete`, so replay treated the still-present local file as “already resolved.” Fixing that exposed a third download-side bug: rebuilding an interrupted download as an ordinary remote modify could still no-op when baseline metadata said the file was already synced. The final long-term fix now immediately replays due crash-recovery rows in one-shot mode, preserves the exact delete replay action in the store bridge row, and carries an explicit forced-download hint through the planner so a missing local file is redownloaded even without a fresh delta item.
+  - `e2e/sync_recovery_e2e_test.go` now seeds real crash-shaped `downloading` and `deleting` rows in the isolated state DB against a live OneDrive drive, proves the next `sync --download-only` replays from durable store truth, and proves the immediate rerun goes idle instead of carrying stuck in-progress state forward.
+  - Rebasing and rerunning the fast live lane exposed a fourth real production gap outside the original crash-recovery slice: personal `sync_paths` bootstrap could resolve a newly created folder by path but still fail the entire sync pass when the immediate first folder-scoped delta call returned transient 404 `itemNotFound`. `internal/sync/engine_primary_scope.go` now mirrors the existing scoped-root behavior by falling back to recursive enumeration for that scope when folder-scoped delta is temporarily unavailable, `internal/sync/engine_scope_test.go` adds the kill-switch for that fallback, and the Graph readiness quirk is now recorded in `spec/reference/graph-api-quirks.md`.
 - Verified-claim reconciliation snapshot:
 
 | Contract | Basis | Current evidence | Reconciliation | Gap label / note |
@@ -787,7 +791,7 @@ Key W2 gap notes:
 | `verify` text/JSON output and exit behavior preserve one deterministic mismatch set | `REQ+CODE+BODY+E2E` | `internal/syncverify/verify.go` now sorts mismatches by path; `internal/syncverify/verify_test.go`, `internal/cli/{verify,services,root}_test.go`, and `e2e/output_validation_e2e_test.go` prove deterministic ordering, classification, JSON decoding, and the exit-1/no-generic-Error contract | `proven` | Map-order gap closed and caller contract now explicit |
 | Remote `rm` uses recycle-bin delete by default, with `--permanent` taking the permanent-delete path | `REQ+CODE+BODY` | `internal/cli/rm_test.go` now drives `runRm` through a real CLI session/provider seam and asserts `DELETE` versus `POST .../permanentDelete` behavior across both Business and Personal drive types | `proven` | Adjacent help-text drift fixed; permanent delete remains supported on Personal drives per current Graph docs and live E2E |
 | `issues` stays read-only while `issues force-deletes` and `conflicts resolve` own the CLI mutation surface | `REQ+CODE+BODY` | `internal/cli/issues_test.go` proves root `issues` rejects unexpected args and `force-deletes` clears only held-delete rows, while `internal/cli/conflicts_test.go` proves root `conflicts` rejects stray args, `--history` still lists history, and `resolve` still routes through the dedicated mutation subcommand | `proven` | Command grammar now matches the split-noun design and PR-time tests defend it |
-| Crash recovery and stale actionable cleanup reuse durable store truth | `REQ+BODY` | `internal/syncstore/baseline_test.go` proves `ResetInProgressStates` creates bridge `sync_failures` rows, `internal/syncstore/commit_observation_test.go` proves `ResetFailure` / `ResetAllFailures` transition failed rows back to pending and delete the matching failure row, and `internal/syncstore/sync_failures_test.go` proves `ClearResolvedActionableFailures*` removes only resolved rows of the targeted issue type | `proven` | Store behavior already matched the intended design; the audit gap was reconciliation, not production logic |
+| Crash recovery and stale actionable cleanup reuse durable store truth | `REQ+BODY+E2E` | `internal/syncstore/baseline_test.go` proves `ResetInProgressStates` creates bridge `sync_failures` rows, `internal/sync/engine_run_once_test.go` now proves one-shot replay consumes those bridge rows for both download and delete recovery even without a fresh delta, `internal/syncstore/commit_observation_test.go` proves `ResetFailure` / `ResetAllFailures` transition failed rows back to pending and delete the matching failure row, `internal/syncstore/sync_failures_test.go` proves `ClearResolvedActionableFailures*` removes only resolved rows of the targeted issue type, and `e2e/sync_recovery_e2e_test.go` now proves a live restart replays seeded `downloading` / `deleting` residue to convergence | `proven` | This increment fixed three real gaps in the durable replay lane: one-shot due-retry consumption, delete-side action typing, and forced download replay when baseline still says synced |
 
 ### W5. Transfer Manager, Resume Robustness, And Local Disk Safety
 
@@ -1109,9 +1113,8 @@ Key W5 gap notes:
 
 ## Next Moves
 
-1. W6 is now the next highest-value audit pass:
-   - finish the remaining auth-refresh, pagination, and transport-split body audit
-   - close the remaining direct traceability debt around graph/token runtime boundaries
+1. No remaining currently actionable W1-W9 audit top-ups are open on current `main`:
+   - remaining items are either blocked by missing live credentials/fixtures or are explicitly planned/deferred requirements rather than hidden audit debt
 2. When business-account credentials become available, add the blocked live W7 `drive search` proof:
    - set `ONEDRIVE_TEST_DRIVE` or `ONEDRIVE_TEST_DRIVE_2` to a `business:` canonical ID
    - include it in `ONEDRIVE_ALLOWED_TEST_ACCOUNTS`

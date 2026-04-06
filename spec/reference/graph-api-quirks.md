@@ -106,6 +106,23 @@ The delta endpoint (`/drives/{driveID}/root/delta`) aggregates changes from a di
 
 Microsoft acknowledges this: "Due to replication delays, changes to the object do not show up immediately [...] You should retry [...] after some time to retrieve the latest changes."
 
+### Folder-Scoped Delta Readiness Lag
+
+On Personal drives, a newly created folder can become path-resolvable before
+its folder-scoped delta feed is ready. A direct `GET /drives/{driveID}/root:/path:`
+can return `200` for the folder while the immediate first
+`GET /drives/{driveID}/items/{folderID}/delta` still returns HTTP 404
+`itemNotFound`. This showed up in the fast E2E lane on April 6, 2026 for a
+fresh `sync_paths` bootstrap: the selected folder existed and contained files,
+but initial scoped delta still lagged the folder lookup path.
+
+Runtime policy:
+- treat this as a Graph readiness quirk, not as proof the configured path is invalid
+- when a personal `sync_paths` scoped bootstrap already resolved the folder by
+  path but folder-scoped delta still fails, fall back to recursive subtree
+  enumeration for that scope instead of failing the whole sync pass
+- keep retrying scoped delta on later passes once the folder feed becomes ready
+
 ### Ephemeral Deletion Events
 
 Delta deletion events are delivered **exactly once**. If the client's token window advances past a deletion (including via a zero-event response that returns a new token), the deletion is permanently missed. A subsequent incremental delta call will never report that deletion again. Fresh delta (no token) enumerates only existing items — it never reports deletions. This means incremental delta is the **only** way to learn about deletions, and it has exactly one chance to deliver each one.
