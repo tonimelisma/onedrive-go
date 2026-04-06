@@ -40,9 +40,8 @@ Filter settings support global defaults with per-drive overrides. The
 `sync_paths` define bidirectional sync scope. Remote observation still trusts
 the server at the raw delta boundary; sync scope is applied after observation
 so out-of-scope items become filtered state instead of being silently erased
-from durable truth. Generation tracking, pending re-entry, and operator
-inspection are based on the persisted scope projection rather than unrelated
-metadata.
+from durable truth. Generation tracking and pending re-entry are based on the
+persisted scope projection rather than unrelated metadata.
 
 - R-2.4.1: When `skip_dotfiles = true`, the system shall exclude files and folders starting with `.`. [verified]
 - R-2.4.2: When `skip_dirs` is set, the system shall exclude matching directory names. [verified]

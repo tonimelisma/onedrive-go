@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -21,6 +22,7 @@ const (
 	integrityCodeLegacyRemoteBoundary     = "legacy_remote_boundary"
 	integrityCodeVisibleProjectionOverlap = "visible_projection_overlap"
 	integrityCodeBaselineCacheMismatch    = "baseline_cache_mismatch"
+	integrityCodeScopeStateDrift          = "scope_state_drift"
 )
 
 // IntegrityFinding is one stable integrity problem detected in persisted sync
@@ -71,6 +73,9 @@ func (i *Inspector) AuditIntegrity(ctx context.Context) (IntegrityReport, error)
 	}
 
 	report := auditPersistedIntegrity(blocks, failures)
+	if err := auditScopeStateConsistency(ctx, i.db, &report); err != nil {
+		return IntegrityReport{}, err
+	}
 	report.sort()
 
 	return report, nil
@@ -90,6 +95,9 @@ func (m *SyncStore) AuditIntegrity(ctx context.Context) (IntegrityReport, error)
 	}
 
 	report := auditPersistedIntegrity(blocks, failures)
+	if auditErr := auditScopeStateConsistency(ctx, m.db, &report); auditErr != nil {
+		return IntegrityReport{}, auditErr
+	}
 
 	if _, loadErr := m.Load(ctx); loadErr != nil {
 		return IntegrityReport{}, fmt.Errorf("load baseline for integrity audit: %w", loadErr)
@@ -142,6 +150,7 @@ func repairIntegritySafeTx(ctx context.Context, tx *sql.Tx) (int, error) {
 		{run: repairLegacyThrottleAccountScope},
 		{run: repairAuthScopeTiming},
 		{run: repairNonRetryableFailureTiming},
+		{run: repairScopeStateConsistencyTx},
 	}
 
 	for _, step := range repairSteps {
@@ -325,6 +334,117 @@ func deleteLegacyRemoteScopeAuthorities(ctx context.Context, tx *sql.Tx, scopeKe
 	repairsApplied += rowsAffected(deleteBoundaryResult)
 
 	return repairsApplied, nil
+}
+
+func auditScopeStateConsistency(ctx context.Context, db *sql.DB, report *IntegrityReport) error {
+	state, found, err := readScopeStateForAudit(ctx, db)
+	if err != nil {
+		return fmt.Errorf("read scope state for integrity audit: %w", err)
+	}
+
+	rows, err := listRemoteScopeRowsForAudit(ctx, db)
+	if err != nil {
+		return fmt.Errorf("list remote scope rows for integrity audit: %w", err)
+	}
+
+	if !found {
+		for i := range rows {
+			if rows[i].Status == synctypes.SyncStatusFiltered {
+				report.add(
+					integrityCodeScopeStateDrift,
+					fmt.Sprintf("filtered remote row %s exists without scope_state authority", rows[i].Path),
+				)
+			}
+		}
+
+		return nil
+	}
+
+	snapshot, err := syncscope.UnmarshalSnapshot(state.EffectiveSnapshotJSON)
+	if err != nil {
+		report.add(integrityCodeScopeStateDrift, fmt.Sprintf("scope_state snapshot is invalid JSON: %v", err))
+		return nil
+	}
+
+	for i := range rows {
+		expectedReason := snapshot.ExclusionReason(rows[i].Path)
+		switch {
+		case expectedReason == syncscope.ExclusionNone && rows[i].Status == synctypes.SyncStatusFiltered:
+			report.add(
+				integrityCodeScopeStateDrift,
+				fmt.Sprintf("remote row %s is filtered but no longer excluded by scope_state", rows[i].Path),
+			)
+		case expectedReason != syncscope.ExclusionNone:
+			if rows[i].Status != synctypes.SyncStatusFiltered ||
+				rows[i].FilterGeneration != state.Generation ||
+				rows[i].FilterReason != string(expectedReason) {
+				report.add(
+					integrityCodeScopeStateDrift,
+					fmt.Sprintf(
+						"remote row %s disagrees with scope_state (status=%s generation=%d reason=%s expected_generation=%d expected_reason=%s)",
+						rows[i].Path,
+						rows[i].Status,
+						rows[i].FilterGeneration,
+						rows[i].FilterReason,
+						state.Generation,
+						expectedReason,
+					),
+				)
+			}
+		}
+	}
+
+	return nil
+}
+
+func readScopeStateForAudit(ctx context.Context, db *sql.DB) (synctypes.ScopeStateRecord, bool, error) {
+	return readScopeStateRecord(ctx, db, "scan scope state for audit")
+}
+
+func listRemoteScopeRowsForAudit(ctx context.Context, db *sql.DB) ([]remoteScopeRow, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT drive_id, item_id, path, hash, sync_status, filter_generation, filter_reason, NULL, NULL
+		FROM remote_state
+		WHERE sync_status NOT IN (?, ?, ?, ?)`,
+		synctypes.SyncStatusDeleted,
+		synctypes.SyncStatusPendingDelete,
+		synctypes.SyncStatusDownloading,
+		synctypes.SyncStatusDeleting,
+	)
+	if err != nil {
+		if isMissingTableErr(err) {
+			return nil, nil
+		}
+
+		return nil, fmt.Errorf("query remote scope rows for audit: %w", err)
+	}
+	defer rows.Close()
+
+	var result []remoteScopeRow
+	for rows.Next() {
+		var row remoteScopeRow
+		if err := rows.Scan(
+			&row.DriveID,
+			&row.ItemID,
+			&row.Path,
+			&row.Hash,
+			&row.Status,
+			&row.FilterGeneration,
+			&row.FilterReason,
+			&row.BaselinePath,
+			&row.BaselineHash,
+		); err != nil {
+			return nil, fmt.Errorf("scan remote scope row for audit: %w", err)
+		}
+
+		result = append(result, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate remote scope rows for audit: %w", err)
+	}
+
+	return result, nil
 }
 
 func auditScopeBlocks(

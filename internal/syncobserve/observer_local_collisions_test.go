@@ -183,8 +183,10 @@ func TestHasCaseCollisionCached_BaselineSkipsRecentDelete(t *testing.T) {
 
 	bl := synctest.BaselineWith(&synctypes.BaselineEntry{Path: "File.txt"})
 	obs := &LocalObserver{
-		Baseline:           bl,
-		RecentLocalDeletes: map[string]struct{}{"File.txt": {}},
+		Baseline: bl,
+		localWatchState: localWatchState{
+			RecentLocalDeletes: map[string]struct{}{"File.txt": {}},
+		},
 	}
 
 	_, found := obs.HasCaseCollisionCached(mustOpenSyncTree(t, dir), dir, "file.txt", ".")
@@ -681,10 +683,14 @@ func TestWatch_SafetyScan_ClearsPeers(t *testing.T) {
 	safetyTickCh := make(chan time.Time, 1)
 	mockWatcher := newMockFsWatcher()
 	obs := &LocalObserver{
-		Baseline:       synctest.EmptyBaseline(),
-		Logger:         synctest.TestLogger(t),
-		CollisionPeers: make(map[string]map[string]struct{}),
-		DirNameCache:   make(map[string]map[string][]string),
+		Baseline: synctest.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+		localWatchState: localWatchState{
+			CollisionPeers: make(map[string]map[string]struct{}),
+			DirNameCache:   make(map[string]map[string][]string),
+			PendingTimers:  make(map[string]*time.Timer),
+			HashRequests:   make(chan HashRequest, HashRequestBufSize),
+		},
 		SleepFunc: func(_ context.Context, _ time.Duration) error {
 			return nil
 		},
@@ -694,8 +700,6 @@ func TestWatch_SafetyScan_ClearsPeers(t *testing.T) {
 		WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
-		PendingTimers: make(map[string]*time.Timer),
-		HashRequests:  make(chan HashRequest, HashRequestBufSize),
 	}
 
 	// Pre-populate collision peers and dir name cache.

@@ -250,8 +250,12 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 	tickCh := make(chan time.Time, 1)
 
 	obs := &LocalObserver{
-		Baseline:  synctest.EmptyBaseline(),
-		Logger:    synctest.TestLogger(t),
+		Baseline: synctest.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+		localWatchState: localWatchState{
+			PendingTimers: make(map[string]*time.Timer),
+			HashRequests:  make(chan HashRequest, HashRequestBufSize),
+		},
 		SleepFunc: recorder.sleep,
 		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return tickCh, func() {}
@@ -259,8 +263,6 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 		WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
-		PendingTimers: make(map[string]*time.Timer),
-		HashRequests:  make(chan HashRequest, HashRequestBufSize),
 	}
 
 	events := make(chan synctypes.ChangeEvent, 50)
@@ -314,8 +316,12 @@ func TestWatchLoop_BackoffEscalatesWithoutReset(t *testing.T) {
 	mockWatcher := newMockFsWatcher()
 
 	obs := &LocalObserver{
-		Baseline:  synctest.EmptyBaseline(),
-		Logger:    synctest.TestLogger(t),
+		Baseline: synctest.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+		localWatchState: localWatchState{
+			PendingTimers: make(map[string]*time.Timer),
+			HashRequests:  make(chan HashRequest, HashRequestBufSize),
+		},
 		SleepFunc: recorder.sleep,
 		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			// Never-firing ticker: no safety scan means backoff keeps escalating.
@@ -324,8 +330,6 @@ func TestWatchLoop_BackoffEscalatesWithoutReset(t *testing.T) {
 		WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
-		PendingTimers: make(map[string]*time.Timer),
-		HashRequests:  make(chan HashRequest, HashRequestBufSize),
 	}
 
 	events := make(chan synctypes.ChangeEvent, 50)
@@ -468,8 +472,12 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 
 	mockWatcher := newMockFsWatcher()
 	obs := &LocalObserver{
-		Baseline:  baseline,
-		Logger:    synctest.TestLogger(t),
+		Baseline: baseline,
+		Logger:   synctest.TestLogger(t),
+		localWatchState: localWatchState{
+			PendingTimers: make(map[string]*time.Timer),
+			HashRequests:  make(chan HashRequest, HashRequestBufSize),
+		},
 		SleepFunc: func(_ context.Context, _ time.Duration) error { return nil },
 		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return make(chan time.Time), func() {}
@@ -477,8 +485,6 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 		WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
-		PendingTimers: make(map[string]*time.Timer),
-		HashRequests:  make(chan HashRequest, HashRequestBufSize),
 	}
 
 	events := make(chan synctypes.ChangeEvent, 10)

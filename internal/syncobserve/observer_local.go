@@ -57,6 +57,75 @@ type HashRequest struct {
 	Retries    int // number of re-schedules already attempted
 }
 
+// localWatchState is the single mutable owner for one LocalObserver watch
+// session. The surrounding LocalObserver keeps immutable dependencies and
+// long-lived configuration; timer queues, scope generations, watch
+// registrations, and collision caches stay grouped here so watch-mode state
+// does not sprawl across unrelated fields.
+type localWatchState struct {
+	// Write coalescing fields (B-107). Single watch-loop owner.
+	PendingTimers           map[string]*time.Timer // per-path timers; watchLoop-only (no mutex needed)
+	pendingTimerGenerations map[string]int64       // path -> scope generation for PendingTimers entries; watchLoop-only
+	HashRequests            chan HashRequest       // timer callback → watchLoop
+
+	// dirNameCache caches lowercase→original name mappings per directory for
+	// O(1) case collision lookups. Built lazily on first check; invalidated
+	// by Create/Delete events. Single-goroutine access (watchLoop) — no mutex.
+	DirNameCache map[string]map[string][]string // dirPath → lowName → []originalNames
+
+	// recentLocalDeletes tracks dbRelPaths of files deleted locally in the
+	// current watch session. Used to suppress false-positive baseline
+	// collisions during case-only renames: the Delete event removes the
+	// old name but baseline isn't updated until the action executes (async).
+	// Cleared on safety scan. Single-goroutine access (watchLoop).
+	RecentLocalDeletes map[string]struct{}
+
+	// collisionPeers tracks N-way collision relationships detected in watch
+	// mode. When a collider is deleted, all surviving peers are re-emitted
+	// via handleCreate (which re-checks and re-records any remaining collisions).
+	// Cleared on safety scan (authoritative DetectCaseCollisions replaces this).
+	// Single-goroutine access (watchLoop) — no mutex.
+	CollisionPeers map[string]map[string]struct{} // dbRelPath → set of peer dbRelPaths
+
+	// excludedSymlinkPaths tracks alias paths that local observation excluded
+	// because skip_symlinks=true. Delete detection consults this set so a
+	// silently excluded symlink does not later reappear as a synthetic delete.
+	// Paths stay recorded until the same alias is observed as a real file/dir
+	// again or the observer is recreated. Single-goroutine access only.
+	excludedSymlinkPaths map[string]struct{}
+
+	// scopeSnapshot is the effective sync scope currently applied to local
+	// observation. It is rebuilt by the engine before scans/watch startup and
+	// updated in watch mode when ignore markers appear or disappear.
+	scopeSnapshot syncscope.Snapshot
+
+	// scopeChanges forwards watch-mode scope transitions (marker create/delete/
+	// rename) back to the engine so remote filtering and reconciliation can
+	// react to the new effective scope.
+	scopeChanges chan<- syncscope.Change
+
+	// watchedDirs tracks fsnotify registrations owned by this observer. The
+	// watch loop is the single writer, so no mutex is needed.
+	watchedDirs map[string]struct{}
+
+	// scopeGeneration invalidates deferred local work when marker-driven scope
+	// changes occur. The watch loop is the single writer after startup.
+	scopeGeneration int64
+}
+
+func newLocalWatchState() localWatchState {
+	return localWatchState{
+		PendingTimers:           make(map[string]*time.Timer),
+		pendingTimerGenerations: make(map[string]int64),
+		HashRequests:            make(chan HashRequest, HashRequestBufSize),
+		DirNameCache:            make(map[string]map[string][]string),
+		RecentLocalDeletes:      make(map[string]struct{}),
+		CollisionPeers:          make(map[string]map[string]struct{}),
+		excludedSymlinkPaths:    make(map[string]struct{}),
+		watchedDirs:             make(map[string]struct{}),
+	}
+}
+
 // FsWatcher abstracts filesystem event monitoring. Satisfied by
 // *fsnotify.Watcher; tests inject a mock implementation.
 type FsWatcher interface {
@@ -121,61 +190,17 @@ type LocalObserver struct {
 	// (e.g., to simulate panics in the hash phase).
 	HashFunc func(path string) (string, error)
 
-	// Write coalescing fields (B-107). Maps initialized in constructor;
-	// channel initialized in constructor so methods are safe before Watch().
-	WriteCoalesceCooldown   time.Duration          // 0 → defaultWriteCoalesceCooldown; injectable for tests
-	PendingTimers           map[string]*time.Timer // per-path timers; watchLoop-only (no mutex needed)
-	pendingTimerGenerations map[string]int64       // path -> scope generation for PendingTimers entries; watchLoop-only
-	HashRequests            chan HashRequest       // timer callback → watchLoop
+	WriteCoalesceCooldown time.Duration // 0 → defaultWriteCoalesceCooldown; injectable for tests
 
 	// skippedCh forwards SkippedItems from safety scans to the engine for
 	// recording in sync_failures. Nil disables forwarding (pre-existing behavior).
 	// Set via SetSkippedChannel before Watch.
 	skippedCh chan<- []synctypes.SkippedItem
 
-	// dirNameCache caches lowercase→original name mappings per directory for
-	// O(1) case collision lookups. Built lazily on first check; invalidated
-	// by Create/Delete events. Single-goroutine access (watchLoop) — no mutex.
-	DirNameCache map[string]map[string][]string // dirPath → lowName → []originalNames
-
-	// recentLocalDeletes tracks dbRelPaths of files deleted locally in the
-	// current watch session. Used to suppress false-positive baseline
-	// collisions during case-only renames: the Delete event removes the
-	// old name but baseline isn't updated until the action executes (async).
-	// Cleared on safety scan. Single-goroutine access (watchLoop).
-	RecentLocalDeletes map[string]struct{}
-
-	// collisionPeers tracks N-way collision relationships detected in watch
-	// mode. When a collider is deleted, all surviving peers are re-emitted
-	// via handleCreate (which re-checks and re-records any remaining collisions).
-	// Cleared on safety scan (authoritative DetectCaseCollisions replaces this).
-	// Single-goroutine access (watchLoop) — no mutex.
-	CollisionPeers map[string]map[string]struct{} // dbRelPath → set of peer dbRelPaths
-
-	// excludedSymlinkPaths tracks alias paths that local observation excluded
-	// because skip_symlinks=true. Delete detection consults this set so a
-	// silently excluded symlink does not later reappear as a synthetic delete.
-	// Paths stay recorded until the same alias is observed as a real file/dir
-	// again or the observer is recreated. Single-goroutine access only.
-	excludedSymlinkPaths map[string]struct{}
-
-	// scopeSnapshot is the effective sync scope currently applied to local
-	// observation. It is rebuilt by the engine before scans/watch startup and
-	// updated in watch mode when ignore markers appear or disappear.
-	scopeSnapshot syncscope.Snapshot
-
-	// scopeChanges forwards watch-mode scope transitions (marker create/delete/
-	// rename) back to the engine so remote filtering and reconciliation can
-	// react to the new effective scope.
-	scopeChanges chan<- syncscope.Change
-
-	// watchedDirs tracks fsnotify registrations owned by this observer. The
-	// watch loop is the single writer, so no mutex is needed.
-	watchedDirs map[string]struct{}
-
-	// scopeGeneration invalidates deferred local work when marker-driven scope
-	// changes occur. The watch loop is the single writer after startup.
-	scopeGeneration int64
+	// localWatchState owns all watch-loop mutable state. It is embedded so
+	// same-package tests can still reach the existing fields directly while the
+	// runtime contract stays grouped under one owner.
+	localWatchState
 }
 
 // NewLocalObserver creates a LocalObserver. checkWorkers controls the number
@@ -184,19 +209,12 @@ type LocalObserver struct {
 // during observation.
 func NewLocalObserver(baseline *synctypes.Baseline, logger *slog.Logger, checkWorkers int) *LocalObserver {
 	return &LocalObserver{
-		Baseline:                baseline,
-		Logger:                  logger,
-		checkWorkers:            checkWorkers,
-		HashFunc:                driveops.ComputeQuickXorHash,
-		SleepFunc:               TimeSleep,
-		PendingTimers:           make(map[string]*time.Timer),
-		pendingTimerGenerations: make(map[string]int64),
-		HashRequests:            make(chan HashRequest, HashRequestBufSize),
-		DirNameCache:            make(map[string]map[string][]string),
-		RecentLocalDeletes:      make(map[string]struct{}),
-		CollisionPeers:          make(map[string]map[string]struct{}),
-		excludedSymlinkPaths:    make(map[string]struct{}),
-		watchedDirs:             make(map[string]struct{}),
+		Baseline:        baseline,
+		Logger:          logger,
+		checkWorkers:    checkWorkers,
+		HashFunc:        driveops.ComputeQuickXorHash,
+		SleepFunc:       TimeSleep,
+		localWatchState: newLocalWatchState(),
 		SafetyTickFunc: func(d time.Duration) (<-chan time.Time, func()) {
 			t := time.NewTicker(d)
 			return t.C, t.Stop

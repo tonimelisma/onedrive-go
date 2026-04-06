@@ -122,7 +122,7 @@ func (m *SyncStore) ApplyScopeState(ctx context.Context, req synctypes.ScopeStat
 	if err != nil {
 		return err
 	}
-	if err := applyRemoteScopeRows(ctx, tx, snapshot, req.State.Generation, allRows); err != nil {
+	if _, err := applyRemoteScopeRows(ctx, tx, snapshot, req.State.Generation, allRows); err != nil {
 		return err
 	}
 
@@ -192,14 +192,19 @@ func applyRemoteScopeRows(
 	snapshot syncscope.Snapshot,
 	generation int64,
 	allRows []remoteScopeRow,
-) error {
+) (int, error) {
+	changed := 0
 	for i := range allRows {
-		if err := applyRemoteScopeRow(ctx, tx, snapshot, generation, &allRows[i]); err != nil {
-			return err
+		rowChanged, err := applyRemoteScopeRow(ctx, tx, snapshot, generation, &allRows[i])
+		if err != nil {
+			return 0, err
+		}
+		if rowChanged {
+			changed++
 		}
 	}
 
-	return nil
+	return changed, nil
 }
 
 func applyRemoteScopeRow(
@@ -208,13 +213,13 @@ func applyRemoteScopeRow(
 	snapshot syncscope.Snapshot,
 	generation int64,
 	row *remoteScopeRow,
-) error {
+) (bool, error) {
 	reason := snapshot.ExclusionReason(row.Path)
 	if reason != syncscope.ExclusionNone {
 		if row.Status == synctypes.SyncStatusFiltered &&
 			row.FilterGeneration == generation &&
 			row.FilterReason == string(reason) {
-			return nil
+			return false, nil
 		}
 
 		if _, err := tx.ExecContext(
@@ -228,14 +233,14 @@ func applyRemoteScopeRow(
 			row.DriveID,
 			row.ItemID,
 		); err != nil {
-			return fmt.Errorf("scope state filter %s: %w", row.Path, err)
+			return false, fmt.Errorf("scope state filter %s: %w", row.Path, err)
 		}
 
-		return nil
+		return true, nil
 	}
 
 	if row.Status != synctypes.SyncStatusFiltered {
-		return nil
+		return false, nil
 	}
 
 	nextStatus := reactivatedRemoteStatus(
@@ -254,10 +259,10 @@ func applyRemoteScopeRow(
 		row.DriveID,
 		row.ItemID,
 	); err != nil {
-		return fmt.Errorf("scope state reactivate %s: %w", row.Path, err)
+		return false, fmt.Errorf("scope state reactivate %s: %w", row.Path, err)
 	}
 
-	return nil
+	return true, nil
 }
 
 func upsertScopeStateRow(ctx context.Context, tx *sql.Tx, state synctypes.ScopeStateRecord) error {
@@ -304,6 +309,116 @@ func upsertScopeStateRow(ctx context.Context, tx *sql.Tx, state synctypes.ScopeS
 	}
 
 	return nil
+}
+
+type scopeStateRowQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func readScopeStateTx(ctx context.Context, tx *sql.Tx) (synctypes.ScopeStateRecord, bool, error) {
+	return readScopeStateRecord(ctx, tx, "read scope state")
+}
+
+func readScopeStateRecord(
+	ctx context.Context,
+	querier scopeStateRowQuerier,
+	errAction string,
+) (synctypes.ScopeStateRecord, bool, error) {
+	row := querier.QueryRowContext(ctx, `
+		SELECT generation, effective_snapshot_json, observation_plan_hash,
+		       observation_mode, websocket_enabled, pending_reentry,
+		       last_reconcile_kind, updated_at
+		FROM scope_state
+		WHERE singleton = 1`,
+	)
+
+	var (
+		record           synctypes.ScopeStateRecord
+		websocketEnabled int
+		pendingReentry   int
+	)
+	if err := row.Scan(
+		&record.Generation,
+		&record.EffectiveSnapshotJSON,
+		&record.ObservationPlanHash,
+		&record.ObservationMode,
+		&websocketEnabled,
+		&pendingReentry,
+		&record.LastReconcileKind,
+		&record.UpdatedAt,
+	); err != nil {
+		if err == sql.ErrNoRows || isMissingTableErr(err) {
+			return synctypes.ScopeStateRecord{}, false, nil
+		}
+
+		return synctypes.ScopeStateRecord{}, false, fmt.Errorf("%s: %w", errAction, err)
+	}
+
+	record.WebsocketEnabled = websocketEnabled != 0
+	record.PendingReentry = pendingReentry != 0
+
+	return record, true, nil
+}
+
+func repairScopeStateConsistencyTx(ctx context.Context, tx *sql.Tx) (int, error) {
+	state, found, err := readScopeStateTx(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+
+	allRows, err := loadRemoteScopeRows(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+
+	if !found {
+		return applyRemoteScopeRows(ctx, tx, syncscope.Snapshot{}, 0, allRows)
+	}
+
+	snapshot, err := syncscope.UnmarshalSnapshot(state.EffectiveSnapshotJSON)
+	if err != nil {
+		droppedState, clearErr := clearScopeStateTx(ctx, tx)
+		if clearErr != nil {
+			return 0, clearErr
+		}
+
+		reactivatedRows, reactivateErr := applyRemoteScopeRows(ctx, tx, syncscope.Snapshot{}, 0, allRows)
+		if reactivateErr != nil {
+			return 0, reactivateErr
+		}
+
+		return droppedState + reactivatedRows, nil
+	}
+
+	return applyRemoteScopeRows(ctx, tx, snapshot, state.Generation, allRows)
+}
+
+func (m *SyncStore) repairScopeStateConsistencyOnOpen(ctx context.Context) (int, error) {
+	tx, err := m.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("sync: begin scope-state repair tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	repairsApplied, err := repairScopeStateConsistencyTx(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("sync: commit scope-state repair: %w", err)
+	}
+
+	return repairsApplied, nil
+}
+
+func clearScopeStateTx(ctx context.Context, tx *sql.Tx) (int, error) {
+	result, err := tx.ExecContext(ctx, `DELETE FROM scope_state WHERE singleton = 1`)
+	if err != nil {
+		return 0, fmt.Errorf("delete invalid scope state: %w", err)
+	}
+
+	return rowsAffected(result), nil
 }
 
 func reactivatedRemoteStatus(path, hash string, baselineFound bool, baselinePath, baselineHash string) synctypes.SyncStatus {

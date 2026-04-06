@@ -351,6 +351,15 @@ const pollTimeout = 30 * time.Second
 // take longer than pollTimeout to become readable via list/stat.
 const remoteWritePropagationTimeout = 2 * time.Minute
 
+// remoteDeletePropagationTimeout covers eventual disappearance after remote
+// deletes. Live accounts can continue listing deleted entries briefly after
+// the delete command itself has succeeded.
+const remoteDeletePropagationTimeout = 2 * time.Minute
+
+// remoteScopeTransitionTimeout covers sync-scope transitions that require a
+// follow-up reconcile pass before remote reads settle on the new state.
+const remoteScopeTransitionTimeout = 3 * time.Minute
+
 // transientGraphRetryTimeout covers the rare case where a live Graph read-only
 // command hits repeated 502/503/504 gateway failures before succeeding.
 const transientGraphRetryTimeout = 4 * time.Minute
@@ -481,6 +490,121 @@ func pollCLIWithConfigNotContains(
 	}
 }
 
+func pollRemoteEventually(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	driveID string,
+	timeout time.Duration,
+	description string,
+	ready func(stdout, stderr string, err error) bool,
+	args ...string,
+) (string, string) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+
+	for attempt := 0; ; attempt++ {
+		stdout, stderr, err := runCLICore(t, cfgPath, env, driveID, args...)
+		if ready(stdout, stderr, err) {
+			return stdout, stderr
+		}
+
+		if time.Now().After(deadline) {
+			require.Failf(t, "pollRemoteEventually: timed out",
+				"after %v waiting for %s via %v\nlast stdout: %s\nlast stderr: %s",
+				timeout, description, args, stdout, stderr)
+		}
+
+		time.Sleep(pollBackoff(attempt))
+	}
+}
+
+func waitForRemoteReadSuccess(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	driveID string,
+	timeout time.Duration,
+	args ...string,
+) (string, string) {
+	t.Helper()
+
+	return pollCLIWithConfigRetryingTransientGraphFailures(t, cfgPath, env, driveID, timeout, args...)
+}
+
+func waitForRemoteWriteVisible(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	driveID string,
+	expected string,
+	args ...string,
+) (string, string) {
+	t.Helper()
+
+	return pollRemoteEventually(
+		t,
+		cfgPath,
+		env,
+		driveID,
+		remoteWritePropagationTimeout,
+		fmt.Sprintf("remote write visibility for %q", expected),
+		func(stdout, _ string, err error) bool {
+			return err == nil && strings.Contains(stdout, expected)
+		},
+		args...,
+	)
+}
+
+func waitForRemoteDeleteDisappearance(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	driveID string,
+	unexpected string,
+	args ...string,
+) (string, string) {
+	t.Helper()
+
+	return pollRemoteEventually(
+		t,
+		cfgPath,
+		env,
+		driveID,
+		remoteDeletePropagationTimeout,
+		fmt.Sprintf("remote delete disappearance for %q", unexpected),
+		func(stdout, _ string, err error) bool {
+			return err == nil && !strings.Contains(stdout, unexpected)
+		},
+		args...,
+	)
+}
+
+func waitForRemoteScopeTransition(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	driveID string,
+	expected string,
+	args ...string,
+) (string, string) {
+	t.Helper()
+
+	return pollRemoteEventually(
+		t,
+		cfgPath,
+		env,
+		driveID,
+		remoteScopeTransitionTimeout,
+		fmt.Sprintf("remote scope transition for %q", expected),
+		func(stdout, _ string, err error) bool {
+			return err == nil && strings.Contains(stdout, expected)
+		},
+		args...,
+	)
+}
+
 // --- File operation tests ---
 //
 // These top-level tests mutate the shared remote drive, so they stay
@@ -539,21 +663,16 @@ func TestE2E_RoundTrip(t *testing.T) {
 		_, stderr := runCLIWithConfig(t, cfgPath, nil, "put", tmpFile.Name(), "/"+testFile)
 		assert.Contains(t, stderr, "Uploaded")
 
-		// Wait for the uploaded file to become readable before subsequent read
-		// commands. Live Graph propagation on CI can lag well past the default
-		// poll timeout even after PUT returns success.
-		pollCLIWithConfigContains(t, cfgPath, nil, "test.txt", remoteWritePropagationTimeout, "stat", "/"+testFile)
+		waitForRemoteWriteVisible(t, cfgPath, nil, drive, "test.txt", "stat", "/"+testFile)
 	})
 
 	t.Run("ls_folder", func(t *testing.T) {
-		// Poll for eventual consistency after put.
-		stdout, _ := pollCLIWithConfigContains(t, cfgPath, nil, "test.txt", remoteWritePropagationTimeout, "ls", "/"+testFolder)
+		stdout, _ := waitForRemoteWriteVisible(t, cfgPath, nil, drive, "test.txt", "ls", "/"+testFolder)
 		assert.Contains(t, stdout, "subfolder")
 	})
 
 	t.Run("stat", func(t *testing.T) {
-		// Poll for eventual consistency after put.
-		stdout, _ := pollCLIWithConfigContains(t, cfgPath, nil, "test.txt", remoteWritePropagationTimeout, "stat", "/"+testFile)
+		stdout, _ := waitForRemoteWriteVisible(t, cfgPath, nil, drive, "test.txt", "stat", "/"+testFile)
 		assert.Contains(t, stdout, fmt.Sprintf("%d bytes", len(testContent)))
 	})
 
@@ -572,11 +691,13 @@ func TestE2E_RoundTrip(t *testing.T) {
 	t.Run("rm_file", func(t *testing.T) {
 		_, stderr := runCLIWithConfig(t, cfgPath, nil, "rm", "/"+testFile)
 		assert.Contains(t, stderr, "Deleted")
+		waitForRemoteDeleteDisappearance(t, cfgPath, nil, drive, "test.txt", "ls", "/"+testFolder)
 	})
 
 	t.Run("rm_subfolder", func(t *testing.T) {
 		_, stderr := runCLIWithConfig(t, cfgPath, nil, "rm", "-r", "/"+testSubfolder)
 		assert.Contains(t, stderr, "Deleted")
+		waitForRemoteDeleteDisappearance(t, cfgPath, nil, drive, "subfolder", "ls", "/"+testFolder)
 	})
 
 	t.Run("rm_permanent", func(t *testing.T) {
@@ -592,11 +713,11 @@ func TestE2E_RoundTrip(t *testing.T) {
 		_, stderr := runCLIWithConfig(t, cfgPath, nil, "put", tmpFile.Name(), "/"+permFile)
 		assert.Contains(t, stderr, "Uploaded")
 
-		// Poll until the file is visible before attempting permanent delete.
-		pollCLIWithConfigContains(t, cfgPath, nil, "perm-test.txt", remoteWritePropagationTimeout, "stat", "/"+permFile)
+		waitForRemoteWriteVisible(t, cfgPath, nil, drive, "perm-test.txt", "stat", "/"+permFile)
 
 		_, stderr = runCLIWithConfig(t, cfgPath, nil, "rm", "--permanent", "/"+permFile)
 		assert.Contains(t, stderr, "Permanently deleted")
+		waitForRemoteDeleteDisappearance(t, cfgPath, nil, drive, "perm-test.txt", "ls", "/"+testFolder)
 	})
 
 	t.Run("whoami_text", func(t *testing.T) {

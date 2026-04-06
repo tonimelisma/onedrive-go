@@ -448,8 +448,6 @@ func TestAnnotationTreeWalk(t *testing.T) {
 		"onedrive-go issues force-deletes": true,
 		"onedrive-go conflicts":            true,
 		"onedrive-go conflicts resolve":    true,
-		"onedrive-go sync scope":           true,
-		"onedrive-go sync scope explain":   true,
 		"onedrive-go verify":               true,
 		"onedrive-go recycle-bin list":     true,
 		"onedrive-go recycle-bin restore":  true,

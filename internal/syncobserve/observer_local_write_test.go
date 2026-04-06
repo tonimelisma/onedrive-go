@@ -462,8 +462,10 @@ func TestHashAndEmit_RetriesExhausted_EmitsEvent(t *testing.T) {
 		Baseline:              baseline,
 		Logger:                synctest.TestLogger(t),
 		WriteCoalesceCooldown: 100 * time.Millisecond,
-		PendingTimers:         make(map[string]*time.Timer),
-		HashRequests:          make(chan HashRequest, 10),
+		localWatchState: localWatchState{
+			PendingTimers: make(map[string]*time.Timer),
+			HashRequests:  make(chan HashRequest, 10),
+		},
 	}
 
 	events := make(chan synctypes.ChangeEvent, 5)
@@ -510,8 +512,10 @@ func TestHashAndEmit_BaselineMatch_NoEvent(t *testing.T) {
 		Baseline:              baseline,
 		Logger:                synctest.TestLogger(t),
 		WriteCoalesceCooldown: 100 * time.Millisecond,
-		PendingTimers:         make(map[string]*time.Timer),
-		HashRequests:          make(chan HashRequest, 10),
+		localWatchState: localWatchState{
+			PendingTimers: make(map[string]*time.Timer),
+			HashRequests:  make(chan HashRequest, 10),
+		},
 	}
 
 	events := make(chan synctypes.ChangeEvent, 5)
@@ -604,16 +608,20 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 
 	mockWatcher := newMockFsWatcher()
 	obs := &LocalObserver{
-		Baseline:       synctest.EmptyBaseline(),
-		Logger:         synctest.TestLogger(t),
-		CollisionPeers: make(map[string]map[string]struct{}),
+		Baseline: synctest.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+		localWatchState: localWatchState{
+			CollisionPeers: make(map[string]map[string]struct{}),
+			DirNameCache: map[string]map[string][]string{
+				dir: {
+					"existing.txt": {"existing.txt", "Existing.txt"},
+				},
+			},
+			PendingTimers: make(map[string]*time.Timer),
+			HashRequests:  make(chan HashRequest, HashRequestBufSize),
+		},
 		// Pre-populate dirNameCache with a different-cased entry.
 		// This simulates a collision without requiring a case-sensitive FS.
-		DirNameCache: map[string]map[string][]string{
-			dir: {
-				"existing.txt": {"existing.txt", "Existing.txt"},
-			},
-		},
 		WriteCoalesceCooldown: 50 * time.Millisecond,
 		SleepFunc: func(_ context.Context, _ time.Duration) error {
 			return nil
@@ -624,8 +632,6 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 		WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
-		PendingTimers: make(map[string]*time.Timer),
-		HashRequests:  make(chan HashRequest, HashRequestBufSize),
 	}
 
 	events := make(chan synctypes.ChangeEvent, 10)
