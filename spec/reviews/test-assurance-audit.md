@@ -304,7 +304,7 @@ This is the operating dashboard for completeness, not a verdict of quality. A pa
 |---|---|---|---|---|---|---|---|---|---|
 | W1 | done | done | partial | partial | done | done | partial | done | current actionable W1 top-ups are closed; only planned/deferred logging policy work remains |
 | W2 | done | done | done | partial | done | done | partial | done | current actionable W2 top-ups are closed; only planned nil-guard / watch-cleanup hardening remains |
-| W3 | done | done | partial | n/a | done | no | partial | no | big-delete and cross-drive proof paths unclear |
+| W3 | done | done | done | n/a | done | done | done | done | current actionable W3 top-ups are closed; incomplete-enumeration safety remains system-owned rather than planner-local |
 | W4 | done | done | done | n/a | done | done | partial | done | live crash/restart proof is still thinner than the now-reconciled store/CLI durable-row mutation coverage |
 | W5 | done | done | done | partial | done | done | partial | done | upload-session traceability gap is closed; remaining W5 risk is broader worker-pool and future planned-transfer coverage |
 | W6 | done | done | partial | partial | done | done | partial | done | current actionable W6 top-ups are closed; only broader planned graph-quirk capture and future auth/runtime evidence remain |
@@ -594,7 +594,7 @@ Key W1 gap notes:
   - synthesize `time.Now()` for malformed remote timestamps and accidentally suppress a real follow-up hash/download decision
 - Audit status:
   - ideal model drafted
-  - note: remaining planned observation requirements `R-6.7.15` and `R-6.7.21` stay out of the current strong/weak audit until implemented
+  - note: remaining planned observation hardening stays out of the current strong/weak audit until implemented
 - Claim mapping snapshot from filenames and `// Validates:` only:
   - Candidate test surface is strong around observation mechanics: `scanner_test.go`, `observer_remote_test.go`, `buffer_test.go`, `observer_local_*_test.go`, `item_converter_test.go`, and `inotify*_test.go`
   - Explicit comment claims already exist for `R-2.1.2`, `R-2.11.1` through `R-2.11.5`, `R-2.12.1`, `R-2.12.2`, `R-2.13.1`, `R-6.7.1`, `R-6.7.3`, `R-6.7.5`, `R-6.7.20`, and `R-6.7.24`
@@ -675,7 +675,7 @@ Key W2 gap notes:
 - `CODE+BODY+WEB`: deeper sparse parent-chain handling also had a real inflight-map gap. Parent items recovered omitted `name` / `parentReference` only at final classification time, so descendants in the same batch could still collapse out of their parent leaf or lose their grandparent chain. That is now fixed with primary and shortcut regression coverage.
 - `CODE+BODY`: scanner-time `hash_panic` rows also had a real lifecycle gap. They were recorded as actionable skipped items, but healthy later scans did not include `hash_panic` in the stale-row auto-clear sweep, so one-off hash panics could linger forever. That is now fixed with regression coverage.
 - `CODE+BODY+WEB`: filename validation/actionability also had two real gaps. OneDrive-reserved `~$...` names were being swallowed by the generic internal `~...` exclusion, and SharePoint root-level `forms` was specified but unenforced because observation lacked drive-type rule context. Both are now fixed with regression coverage and Microsoft-source alignment.
-- `META`: the current W2 top-up tranche is closed. Remaining observation work is now the explicitly planned hardening list in `sync-observation.md` (`R-6.7.21` nil-guard sweep, partial-watch cleanup verification, overflow/drop instrumentation), not an unresolved body-audit suspicion.
+- `META`: the current W2 top-up tranche is closed. Remaining observation work is now the explicitly planned hardening list in `sync-observation.md` (nil-guard sweep, partial-watch cleanup verification, overflow/drop instrumentation), not an unresolved body-audit suspicion.
 
 ### W3. Planner Safety, Conflict Resolution, And Delete Protection
 
@@ -714,13 +714,17 @@ Key W2 gap notes:
   - allow uploads inside a download-only permission subtree
   - attempt a server-side move across drives
 - Audit status:
-  - ideal model drafted
+  - body audit complete
+  - no production bug surfaced in the current W3 slice; the missing confidence was mostly stale/misleading traceability
+  - one-shot big-delete protection is now directly proven across planner threshold tests, folder-delete cascade expansion, run-once engine wiring, and live fast/full E2E
+  - watch-mode big-delete hold/release behavior is now directly proven for threshold threading, non-delete pass-through, and `issues force-deletes` recovery
+  - cross-drive move decomposition was already behaviorally covered, but the helper and integration tests in `planner_crossdrive_test.go` were tagged to `R-2.10.16` instead of `R-6.7.21`; that traceability bug is now corrected
+  - denied-prefix/read-only subtree planning is now explicitly proven to suppress uploads, remote deletes, remote moves, and remote folder creates while still permitting downloads
+  - `R-6.2.2` remains system-owned rather than planner-local: the planner assumes observation/token integrity has already prevented incomplete enumerations from reaching `Plan`
 - Claim mapping snapshot from filenames and `// Validates:` only:
   - Candidate test surface includes `internal/syncplan/{planner,planner_edge,planner_crossdrive,planner_cascade,planner_enrichment}_test.go`, `internal/syncexec/executor_test.go`, and several sync e2e suites
-  - Explicit comment claims already exist for `R-2.2`, `R-2.3.1`, `R-6.2.1`, `R-6.4.1`, `R-6.7.7`, and `R-2.14.2`
-  - No explicit claim surfaced yet for `R-6.2.2`, `R-6.2.5`, `R-6.4.2`, or `R-6.4.3`
-  - The presence of `planner_crossdrive_test.go` is encouraging, but no matching `// Validates:` hit surfaced for the cross-drive move guard, so the body audit should confirm both the behavior and the missing traceability tag
-  - Conflict handling appears split between planner and executor tests, which is another place where shallow “happy path only” testing can hide
+  - Explicit comment claims now exist for `R-2.2`, `R-2.3.1`, `R-6.2.1`, `R-6.2.5`, `R-6.4.1`, `R-6.4.2`, `R-6.4.3`, `R-6.7.7`, `R-6.7.21`, and `R-2.14.2`
+  - Conflict handling remains intentionally split between planner and executor tests, but the current W3 top-up confirms both halves are directly represented rather than only inferred from filenames
 
 ### W4. Sync Store Durability, Issues Lifecycle, And Verification/Trash Behavior
 
@@ -1105,9 +1109,9 @@ Key W5 gap notes:
 
 ## Next Moves
 
-1. W3 is now the next highest-value audit pass:
-   - body-audit the still-underexplained big-delete and cross-drive proof paths
-   - turn the current W3 dashboard row from suspicion into either direct proof or concrete bugs
+1. W6 is now the next highest-value audit pass:
+   - finish the remaining auth-refresh, pagination, and transport-split body audit
+   - close the remaining direct traceability debt around graph/token runtime boundaries
 2. When business-account credentials become available, add the blocked live W7 `drive search` proof:
    - set `ONEDRIVE_TEST_DRIVE` or `ONEDRIVE_TEST_DRIVE_2` to a `business:` canonical ID
    - include it in `ONEDRIVE_ALLOWED_TEST_ACCOUNTS`
