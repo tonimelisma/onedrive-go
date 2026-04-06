@@ -29,7 +29,10 @@ func (e *Executor) ExecuteConflict(ctx context.Context, action *synctypes.Action
 	}
 
 	// Step 1: Rename local to conflict copy (if it exists).
-	conflictPath := ConflictCopyPath(absPath, e.nowFunc())
+	conflictPath, err := e.uniqueConflictCopyPath(absPath)
+	if err != nil {
+		return e.failedOutcome(action, synctypes.ActionConflict, err)
+	}
 	conflictRel, err := e.syncTree.Rel(conflictPath)
 	if err != nil {
 		return e.failedOutcome(action, synctypes.ActionConflict, normalizeSyncTreePathError(err))
@@ -79,6 +82,53 @@ func (e *Executor) ExecuteConflict(ctx context.Context, action *synctypes.Action
 	}
 
 	return o
+}
+
+// uniqueConflictCopyPath returns the first available conflict-copy path for an
+// on-disk file. Executor-owned uniqueness is intentional: readability comes
+// from the timestamped base name, but actual collision prevention depends on
+// the current sync-root filesystem state.
+func (e *Executor) uniqueConflictCopyPath(absPath string) (string, error) {
+	basePath := ConflictCopyPath(absPath, e.nowFunc())
+	available, err := e.conflictCopyPathAvailable(basePath)
+	if err != nil {
+		return "", err
+	}
+	if available {
+		return basePath, nil
+	}
+
+	dir := filepath.Dir(basePath)
+	name := filepath.Base(basePath)
+	stem, ext := ConflictStemExt(name)
+
+	for ordinal := 2; ; ordinal++ {
+		candidate := filepath.Join(dir, fmt.Sprintf("%s-%d%s", stem, ordinal, ext))
+		available, candidateErr := e.conflictCopyPathAvailable(candidate)
+		if candidateErr != nil {
+			return "", candidateErr
+		}
+		if available {
+			return candidate, nil
+		}
+	}
+}
+
+func (e *Executor) conflictCopyPathAvailable(absPath string) (bool, error) {
+	relPath, err := e.syncTree.Rel(absPath)
+	if err != nil {
+		return false, fmt.Errorf("relativizing conflict copy path %s: %w", filepath.Base(absPath), normalizeSyncTreePathError(err))
+	}
+
+	_, err = e.syncTree.Stat(relPath)
+	if err == nil {
+		return false, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	}
+
+	return false, fmt.Errorf("stating conflict copy path %s: %w", filepath.Base(absPath), normalizeSyncTreePathError(err))
 }
 
 // ExecuteEditDeleteConflict auto-resolves edit-delete conflicts by uploading
