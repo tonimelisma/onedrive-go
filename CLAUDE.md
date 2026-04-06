@@ -211,8 +211,9 @@ Work is done in increments. Do not ask permission, do not skip any step.
 ### Step 1: Claim work
 
 1. Search `spec/` for `[planned]` items.
-2. Read the governing design doc and requirements file (see Routing Table above).
-3. Evaluate the codebase to determine if any foundational improvements are needed before starting.
+2. If the work involves a live CI / E2E / integration failure, search `spec/reference/live-incidents.md` first for an existing matching incident before starting a new investigation trail.
+3. Read the governing design doc and requirements file (see Routing Table above).
+4. Evaluate the codebase to determine if any foundational improvements are needed before starting.
 
 ### Step 2: Set up worktree
 
@@ -234,6 +235,7 @@ Mandatory, not optional:
 - **Design doc**: update the module doc(s) you touched. New behavior → new spec section. Changed behavior → updated spec. New constraint discovered → constraints section.
 - **Requirements**: if you completed a feature, update status (`implemented` → `verified` once tests pass). Mirror status in the design doc `Implements:` line.
 - **Reference**: if you discovered a new API quirk, update the relevant reference doc upstream.
+- **Live incidents ledger**: if the increment investigates or fixes a live CI / E2E / integration failure, add or update the matching entry in `spec/reference/live-incidents.md` in the same increment. Reuse the existing entry when the incident is clearly recurring instead of creating duplicates.
 
 ### Step 5: Self-verify
 
@@ -268,5 +270,6 @@ After each increment, run through this entire checklist. If something fails, fix
 11. [ ] **Increment report**: Present to the human:
     - **What you changed**: What files did you change, why and how
     - **Plan deviations**: For every deviation from the approved plan — what changed, why it changed, what was done instead, and whether the new approach is the long-term solution or a temporary measure that needs follow-up
+    - **Live incidents**: Which `spec/reference/live-incidents.md` entries were added or updated in this increment, or explicitly say `none`
     - **Top-up recommendations**: Any remaining codebase improvements you'd make. Don't be coy. Engineering effort is free, and this is mission-critical software. Ensure even small issues are brought up, and don't be coy to suggest more ambitious refactoring.
     - **Unfixed items**: Anything you were unable to address in this increment
