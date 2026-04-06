@@ -175,7 +175,7 @@ func TestPrintWhoamiText(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printWhoamiText(&buf, user, drives, nil))
+	require.NoError(t, printWhoamiText(&buf, user, drives, nil, nil))
 	output := buf.String()
 
 	assert.Contains(t, output, "Test User")
@@ -184,6 +184,85 @@ func TestPrintWhoamiText(t *testing.T) {
 	assert.Contains(t, output, "OneDrive")
 	assert.Contains(t, output, "personal")
 	assert.Contains(t, output, "drive-abc")
+}
+
+func TestPrintWhoamiText_IncludesDegradedSection(t *testing.T) {
+	var buf bytes.Buffer
+	require.NoError(t, printWhoamiText(&buf, nil, nil, nil, []accountDegradedNotice{
+		driveCatalogDegradedNotice("user@example.com", "Test User", driveid.DriveTypePersonal),
+	}))
+
+	output := buf.String()
+	assert.Contains(t, output, "Accounts with degraded live discovery:")
+	assert.Contains(t, output, "Test User (user@example.com)")
+	assert.Contains(t, output, degradedReasonText(driveCatalogUnavailableReason))
+}
+
+type fakeWhoamiDriveClient struct {
+	drives     []graph.Drive
+	drivesErr  error
+	primary    *graph.Drive
+	primaryErr error
+}
+
+func (f fakeWhoamiDriveClient) Drives(context.Context) ([]graph.Drive, error) {
+	return f.drives, f.drivesErr
+}
+
+func (f fakeWhoamiDriveClient) PrimaryDrive(context.Context) (*graph.Drive, error) {
+	return f.primary, f.primaryErr
+}
+
+func TestWhoamiDrives_DegradesToPrimaryDrive(t *testing.T) {
+	result := whoamiDrives(
+		t.Context(),
+		fakeWhoamiDriveClient{
+			drivesErr: graph.ErrForbidden,
+			primary: &graph.Drive{
+				ID:        driveid.New("drive-primary"),
+				Name:      "OneDrive",
+				DriveType: driveid.DriveTypePersonal,
+			},
+		},
+		accountAuthRequirement{
+			Email:     "user@example.com",
+			DriveType: driveid.DriveTypePersonal,
+		},
+		&graph.User{
+			Email:       "user@example.com",
+			DisplayName: "Test User",
+		},
+		slog.Default(),
+	)
+	require.Nil(t, result.authResult)
+	require.Len(t, result.drives, 1)
+	assert.Equal(t, "OneDrive", result.drives[0].Name)
+	require.Len(t, result.degraded, 1)
+	assert.Equal(t, "user@example.com", result.degraded[0].Email)
+	assert.Equal(t, driveCatalogUnavailableReason, result.degraded[0].Reason)
+}
+
+func TestWhoamiDrives_DegradesWithoutPrimaryDrive(t *testing.T) {
+	result := whoamiDrives(
+		t.Context(),
+		fakeWhoamiDriveClient{
+			drivesErr:  graph.ErrForbidden,
+			primaryErr: graph.ErrForbidden,
+		},
+		accountAuthRequirement{
+			Email:     "user@example.com",
+			DriveType: driveid.DriveTypeBusiness,
+		},
+		&graph.User{
+			Email:       "user@example.com",
+			DisplayName: "Test User",
+		},
+		slog.Default(),
+	)
+	require.Nil(t, result.authResult)
+	assert.Empty(t, result.drives)
+	require.Len(t, result.degraded, 1)
+	assert.Equal(t, driveid.DriveTypeBusiness, result.degraded[0].DriveType)
 }
 
 func TestPrintLoginSuccess_DoesNotPanic(t *testing.T) {
@@ -520,7 +599,7 @@ func TestPrintWhoamiJSON(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := printWhoamiJSON(&buf, user, drives, authRequired)
+	err := printWhoamiJSON(&buf, user, drives, authRequired, nil)
 	require.NoError(t, err)
 
 	var decoded whoamiOutput
@@ -557,7 +636,7 @@ func TestPrintWhoamiJSON_AuthRequiredOnly(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := printWhoamiJSON(&buf, nil, nil, authRequired)
+	err := printWhoamiJSON(&buf, nil, nil, authRequired, nil)
 	require.NoError(t, err)
 
 	var decoded whoamiOutput
@@ -575,7 +654,7 @@ func TestPrintWhoamiJSON_Empty(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	err := printWhoamiJSON(&buf, nil, nil, nil)
+	err := printWhoamiJSON(&buf, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	var decoded whoamiOutput

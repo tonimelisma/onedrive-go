@@ -89,8 +89,10 @@ All API quirks handled at the graph boundary — downstream code never sees them
 - `parentReference.path` is URL-decoded and normalized to a root-relative `Item.ParentPath` in non-delta responses
 - `GetItemByPath` post-validates Graph's response against the requested path. Internal path helpers distinguish exact root-relative paths (when `parentReference.path` survived normalization) from best-effort leaf-only fallbacks. When the exact parent path is unavailable the client logs the fallback at Debug and validates only the leaf name before accepting the result.
 - Personal drive discovery is normalized through `/me/drive`: when `/me/drives` returns one or more `driveType == "personal"` entries, the client replaces all of them with the single authoritative primary drive from `GET /me/drive` before returning the list to callers.
-- Exact transient 403 retry on `GET /me/drives` when the Graph code chain contains `accessDenied`
+- Exact transient 403 retry on `GET /me/drives` when the Graph code chain contains `accessDenied`, using the named drive-discovery policy (5 total attempts, 1s base, 2x multiplier, ±25% jitter)
 - Exact transient 404 retry on `GET /drives/{driveID}/items/root/children` when the Graph code chain contains `itemNotFound`
+- Exact transient 404 retry on `GET /drives/{driveID}/items/{itemID}` when `Download()` or `DownloadRange()` are fetching pre-authenticated download metadata and the Graph code chain contains `itemNotFound`
+- Exact transient 404 retry on `POST /drives/{driveID}/items/{parentID}:/{name}:/createUploadSession` when a freshly created parent is already visible by path but upload-session creation still reports `itemNotFound`
 
 Hashless-file handling is split intentionally across boundaries: `graph` keeps
 size, mtime, and eTag truthful when Graph omits hashes, but it does not decide
@@ -108,9 +110,21 @@ The client owns its safety guards and Graph-specific request metadata:
 - `maxRecursionDepth`: upper bound for recursive child listing
 - `driveDiscoveryPolicy`: transient 403 retry policy for `/me/drives`
 - `rootChildrenPolicy`: transient 404 retry policy for `root/children`
+- `downloadMetadataPolicy`: transient 404 retry policy for item-by-ID download metadata lookup
+- `uploadSessionCreatePolicy`: transient 404 retry policy for create-upload-session requests against freshly created parents
 - `deltaPreferHeader`: prebuilt alias-ID delta header
 
 These are instance fields on `graph.Client`, not package globals. Tests in package `graph` override them per client instance instead of mutating shared process state.
+
+`graph` intentionally stops at the Graph-boundary retry. After the
+five-attempt `/me/drives` budget is exhausted, the client returns the final
+error without inventing auth-required or degraded-user semantics. CLI callers
+own the next step:
+
+- `whoami` degrades to authenticated profile plus `/me/drive` fallback when possible
+- `drive list` degrades to best-known live discovery plus `/me/drive` fallback
+- sync and ordinary file operations are unaffected because they do not depend
+  on `/me/drives`
 
 ## Socket.IO Endpoint Queries (`socketio.go`)
 
@@ -178,6 +192,12 @@ shared folders returning a bogus 404 on `PUT ...:/content` while
 `POST ...:/createUploadSession` returned the correct 403. The fallback keeps
 simple upload as the fast path while preserving permission accuracy.
 
+Live E2E coverage also captured the inverse creation-order quirk: a freshly
+created parent folder can already be readable via path lookup while the first
+`POST ...:/createUploadSession` against that parent still returns `404
+itemNotFound`. The graph boundary applies a short exact retry only to that
+create-upload-session path so ordinary missing-parent errors still fail fast.
+
 ## Error Handling (`errors.go`)
 
 Sentinel errors: `ErrGone` (410), `ErrNotFound` (404), `ErrThrottled` (429), `ErrConflict` (409). Error response bodies are read with a 64 KiB cap (`io.LimitReader`) to prevent unbounded memory allocation from malformed responses. HTTP 423 (Locked) from SharePoint co-authoring is classified as skip, not retryable — locks persist for hours; watch mode retries on the next safety scan.
@@ -195,7 +215,7 @@ consume that normalized boundary contract via [error-model.md](error-model.md).
 
 Implements: R-6.8.8 [verified]
 
-Generic retry has been extracted from the graph client into `retry.RetryTransport`, an `http.RoundTripper` wrapper. The graph client no longer has generic retry loops (`doRetry`/`doPreAuthRetry` deleted), throttle state, or transport-layer Retry-After coordination. The only client-local retries are documented Graph API quirk normalizations: transient 403 on `/me/drives` and transient 404 on root-child listing. All other retry, backoff, Retry-After parsing, and shared 429 coordination live below `graph` in the retry/HTTP-profile layer.
+Generic retry has been extracted from the graph client into `retry.RetryTransport`, an `http.RoundTripper` wrapper. The graph client no longer has generic retry loops (`doRetry`/`doPreAuthRetry` deleted), throttle state, or transport-layer Retry-After coordination. The only client-local retries are documented Graph API quirk normalizations: transient 403 on `/me/drives`, transient 404 on root-child listing, transient 404 on item-by-ID download metadata fetch before a pre-authenticated download begins, and transient 404 on create-upload-session requests against freshly created parents. All other retry, backoff, Retry-After parsing, and shared 429 coordination live below `graph` in the retry/HTTP-profile layer.
 
 `NewClient` accepts an `*http.Client` and returns `(*Client, error)` after validating the base URL and token source. `MustNewClient` is reserved for static/test setup where panic-on-bad-construction is intentional. `graphhttp.Provider` is the normal production constructor for those clients:
 

@@ -5,20 +5,29 @@ import "time"
 // Canonical retry constants. Kept local to this package so callers consume the
 // fully shaped Policy values rather than piecing them together themselves.
 const (
-	transportAttempts      = 5
-	driveDiscoveryAttempts = 3
-	rootChildrenAttempts   = 3
-	infiniteAttempts       = 0
-	standardMultiplier     = 2.0
-	standardJitter         = 0.25
-	noJitter               = 0.0
-	defaultBaseDelay       = 1 * time.Second
-	rootChildrenBaseDelay  = 250 * time.Millisecond
-	rootChildrenMaxDelay   = 1 * time.Second
-	transportMaxDelay      = 60 * time.Second
-	watchLocalMaxDelay     = 30 * time.Second
-	watchRemoteBaseDelay   = 5 * time.Second
-	watchRemoteMaxDelay    = 5 * time.Minute
+	transportAttempts            = 5
+	driveDiscoveryAttempts       = 5
+	rootChildrenAttempts         = 3
+	downloadMetadataAttempts     = 4
+	uploadSessionCreateAttempts  = 6
+	pathVisibilityAttempts       = 8
+	infiniteAttempts             = 0
+	standardMultiplier           = 2.0
+	standardJitter               = 0.25
+	noJitter                     = 0.0
+	defaultBaseDelay             = 1 * time.Second
+	rootChildrenBaseDelay        = 250 * time.Millisecond
+	rootChildrenMaxDelay         = 1 * time.Second
+	downloadMetadataBaseDelay    = 250 * time.Millisecond
+	downloadMetadataMaxDelay     = 2 * time.Second
+	uploadSessionCreateBaseDelay = 250 * time.Millisecond
+	uploadSessionCreateMaxDelay  = 4 * time.Second
+	pathVisibilityBaseDelay      = 250 * time.Millisecond
+	pathVisibilityMaxDelay       = 32 * time.Second
+	transportMaxDelay            = 60 * time.Second
+	watchLocalMaxDelay           = 30 * time.Second
+	watchRemoteBaseDelay         = 5 * time.Second
+	watchRemoteMaxDelay          = 5 * time.Minute
 )
 
 // TransportPolicy is the HTTP transport retry policy (graph/client.go).
@@ -34,7 +43,7 @@ func TransportPolicy() Policy {
 }
 
 // DriveDiscoveryPolicy is the transient-403 retry policy for drive
-// enumeration (graph/drives.go). 3 attempts, same backoff curve as Transport.
+// enumeration (graph/drives.go). 5 attempts, same backoff curve as Transport.
 func DriveDiscoveryPolicy() Policy {
 	return Policy{
 		MaxAttempts: driveDiscoveryAttempts,
@@ -54,6 +63,50 @@ func RootChildrenPolicy() Policy {
 		MaxAttempts: rootChildrenAttempts,
 		Base:        rootChildrenBaseDelay,
 		Max:         rootChildrenMaxDelay,
+		Multiplier:  standardMultiplier,
+		Jitter:      noJitter,
+	}
+}
+
+// DownloadMetadataPolicy is the quick-retry policy for transient item-not-found
+// misfires when download flows fetch item metadata by ID to obtain the
+// pre-authenticated download URL. It stays short because ordinary file downloads
+// should not block for long, but it is slightly longer than root-children
+// because the object often becomes readable within the next second or two.
+func DownloadMetadataPolicy() Policy {
+	return Policy{
+		MaxAttempts: downloadMetadataAttempts,
+		Base:        downloadMetadataBaseDelay,
+		Max:         downloadMetadataMaxDelay,
+		Multiplier:  standardMultiplier,
+		Jitter:      noJitter,
+	}
+}
+
+// UploadSessionCreatePolicy is the quick-retry policy for transient
+// item-not-found misfires when createUploadSession targets a freshly created
+// parent folder. The budget is long enough to bridge the live consistency
+// window we have observed after freshly created folders become path-visible,
+// while still staying bounded for real missing parents or permission problems.
+func UploadSessionCreatePolicy() Policy {
+	return Policy{
+		MaxAttempts: uploadSessionCreateAttempts,
+		Base:        uploadSessionCreateBaseDelay,
+		Max:         uploadSessionCreateMaxDelay,
+		Multiplier:  standardMultiplier,
+		Jitter:      noJitter,
+	}
+}
+
+// PathVisibilityPolicy is the bounded post-mutation visibility wait for
+// ordinary path reads after Graph has already acknowledged a create, upload, or
+// move. The schedule is intentionally deterministic because callers use it as a
+// user-facing readiness gate rather than a best-effort background retry.
+func PathVisibilityPolicy() Policy {
+	return Policy{
+		MaxAttempts: pathVisibilityAttempts,
+		Base:        pathVisibilityBaseDelay,
+		Max:         pathVisibilityMaxDelay,
 		Multiplier:  standardMultiplier,
 		Jitter:      noJitter,
 	}

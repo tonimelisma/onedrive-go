@@ -102,12 +102,17 @@ func runPut(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("uploading %q: %w", remotePath, err)
 	}
 
+	visibleItem, err := session.WaitPathVisible(ctx, remotePath)
+	if err != nil {
+		return fmt.Errorf("confirming upload %q visibility: %w", remotePath, err)
+	}
+
 	logger.Debug("upload complete", "remote_path", remotePath, "item_id", result.Item.ID, "size", fi.Size())
 
 	if cc.Flags.JSON {
 		return printPutJSON(cc.Output(), putJSONOutput{
 			Path: remotePath,
-			ID:   result.Item.ID,
+			ID:   visibleItem.ID,
 			Size: fi.Size(),
 		})
 	}

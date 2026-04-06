@@ -139,6 +139,7 @@ func TestDrives_Success(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
+	client.driveDiscoveryPolicy = testRetryPolicy()
 	drives, err := client.Drives(t.Context())
 	require.NoError(t, err)
 
@@ -757,10 +758,11 @@ func TestDrives_Permanent403_ExhaustsRetries(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
+	client.driveDiscoveryPolicy = testRetryPolicy()
 	_, err := client.Drives(t.Context())
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrForbidden)
-	assert.Equal(t, 3, attempts, "should have exhausted all 3 attempts")
+	assert.Equal(t, 5, attempts, "should have exhausted all 5 attempts")
 }
 
 // Validates: R-6.7.13
@@ -800,6 +802,7 @@ func TestDrives_NonRetryableErrorsDoNotRetry(t *testing.T) {
 			defer srv.Close()
 
 			client := newTestClient(t, srv.URL)
+			client.driveDiscoveryPolicy = testRetryPolicy()
 			_, err := client.Drives(t.Context())
 			require.Error(t, err)
 			require.ErrorIs(t, err, tt.wantErr)

@@ -25,7 +25,7 @@ func (c *Client) Download(ctx context.Context, driveID driveid.ID, itemID string
 		slog.String("item_id", itemID),
 	)
 
-	item, err := c.GetItem(ctx, driveID, itemID)
+	item, err := c.downloadItemMetadata(ctx, driveID, itemID)
 	if err != nil {
 		return 0, fmt.Errorf("graph: getting item for download: %w", err)
 	}
@@ -71,7 +71,7 @@ func (c *Client) DownloadRange(
 		slog.Int64("offset", offset),
 	)
 
-	item, err := c.GetItem(ctx, driveID, itemID)
+	item, err := c.downloadItemMetadata(ctx, driveID, itemID)
 	if err != nil {
 		return 0, fmt.Errorf("graph: getting item for range download: %w", err)
 	}
@@ -100,6 +100,16 @@ func (c *Client) DownloadRange(
 	)
 
 	return n, nil
+}
+
+func (c *Client) downloadItemMetadata(ctx context.Context, driveID driveid.ID, itemID string) (*Item, error) {
+	return doQuirkRetry(ctx, c, quirkRetrySpec{
+		name:   "download-metadata-transient-404",
+		policy: c.downloadMetadataPolicy,
+		match:  isTransientDownloadMetadataError,
+	}, func() (*Item, error) {
+		return c.GetItem(ctx, driveID, itemID)
+	})
 }
 
 // downloadFromURLWithRange streams content from a pre-authenticated URL with

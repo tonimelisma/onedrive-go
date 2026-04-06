@@ -100,7 +100,7 @@ func TestNamedPolicies_MatchOriginal(t *testing.T) {
 
 	// DriveDiscovery: graph/drives.go — transient /me/drives retry budget.
 	driveDiscovery := DriveDiscoveryPolicy()
-	assert.Equal(t, 3, driveDiscovery.MaxAttempts)
+	assert.Equal(t, 5, driveDiscovery.MaxAttempts)
 	assert.Equal(t, 1*time.Second, driveDiscovery.Base)
 
 	// RootChildren: graph/items.go — exact root/children transient 404 retry budget.
@@ -110,6 +110,27 @@ func TestNamedPolicies_MatchOriginal(t *testing.T) {
 	assert.Equal(t, 1*time.Second, rootChildren.Max)
 	assert.InDelta(t, 2.0, rootChildren.Multiplier, 0.0)
 	assert.InDelta(t, 0.0, rootChildren.Jitter, 0.0)
+
+	downloadMetadata := DownloadMetadataPolicy()
+	assert.Equal(t, 4, downloadMetadata.MaxAttempts)
+	assert.Equal(t, 250*time.Millisecond, downloadMetadata.Base)
+	assert.Equal(t, 2*time.Second, downloadMetadata.Max)
+	assert.InDelta(t, 2.0, downloadMetadata.Multiplier, 0.0)
+	assert.InDelta(t, 0.0, downloadMetadata.Jitter, 0.0)
+
+	uploadSessionCreate := UploadSessionCreatePolicy()
+	assert.Equal(t, 6, uploadSessionCreate.MaxAttempts)
+	assert.Equal(t, 250*time.Millisecond, uploadSessionCreate.Base)
+	assert.Equal(t, 4*time.Second, uploadSessionCreate.Max)
+	assert.InDelta(t, 2.0, uploadSessionCreate.Multiplier, 0.0)
+	assert.InDelta(t, 0.0, uploadSessionCreate.Jitter, 0.0)
+
+	pathVisibility := PathVisibilityPolicy()
+	assert.Equal(t, 8, pathVisibility.MaxAttempts)
+	assert.Equal(t, 250*time.Millisecond, pathVisibility.Base)
+	assert.Equal(t, 32*time.Second, pathVisibility.Max)
+	assert.InDelta(t, 2.0, pathVisibility.Multiplier, 0.0)
+	assert.InDelta(t, 0.0, pathVisibility.Jitter, 0.0)
 
 	// WatchLocal: observer_local.go — watchErrInitBackoff=1s, watchErrMaxBackoff=30s, watchErrBackoffMult=2
 	watchLocal := WatchLocalPolicy()

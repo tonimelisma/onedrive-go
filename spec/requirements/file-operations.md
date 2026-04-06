@@ -29,6 +29,7 @@ When the user runs `put <local> [remote]`, the system shall upload the specified
 - R-1.3.3: When upload completes, the system shall verify the server-reported hash matches the local file. [verified]
 - R-1.3.4: When `--json` is passed, the system shall output structured JSON with path, id, and size; for directories, with files array, folders_created, total_size, and errors. [verified]
 - R-1.3.5: When the user runs `put <local> <shared-target>`, where `<shared-target>` is either a raw OneDrive share URL or a `shared:<recipientEmail>:<remoteDriveID>:<remoteItemID>` selector, the system shall overwrite that exact shared file by item identity. Shared folder targets shall be rejected with guidance to `drive add` the folder first. [verified]
+- R-1.3.6: When a single-file `put` command reports success, the destination path shall already be readable by an immediate follow-on CLI path lookup. [verified]
 
 ## R-1.4 Delete (`rm`) [verified]
 
@@ -37,12 +38,14 @@ When the user runs `rm <path>`, the system shall delete the item (to recycle bin
 - R-1.4.1: When the path is a folder, the system shall delete recursively. [verified]
 - R-1.4.2: Deletions shall go to the OneDrive recycle bin by default. [verified]
 - R-1.4.3: When `--json` is passed, the system shall output structured JSON with the deleted path. [verified]
+- R-1.4.4: When `rm` reports success, the system shall reconcile transient delete-route `itemNotFound` errors against the target path and shall not claim success until the target path is absent and any non-root parent path is readable again. [verified]
 
 ## R-1.5 Create Folder (`mkdir`) [verified]
 
 When the user runs `mkdir <path>`, the system shall create the folder on OneDrive.
 
 - R-1.5.1: When `--json` is passed, the system shall output structured JSON with created path and folder ID. [verified]
+- R-1.5.2: When `mkdir` reports success, the created path shall already be readable by an immediate follow-on CLI path lookup. [verified]
 
 ## R-1.6 Metadata (`stat`) [verified]
 
@@ -56,6 +59,7 @@ When the user runs `stat <path>`, the system shall display item metadata (ID, si
 When the user runs `mv <src> <dst>`, the system shall perform a server-side move/rename.
 
 - R-1.7.1: When `--json` is passed, the system shall output structured JSON with source, destination, and item ID. [verified]
+- R-1.7.2: When `mv` reports success, the destination path shall already be readable by an immediate follow-on CLI path lookup. [verified]
 
 ## R-1.8 Copy (`cp`) [verified]
 
