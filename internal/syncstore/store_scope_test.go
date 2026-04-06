@@ -2,6 +2,7 @@ package syncstore
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -12,7 +13,7 @@ import (
 )
 
 // Validates: R-2.4.5
-func TestApplyRemoteScope_MarksOutOfScopeRowsFiltered(t *testing.T) {
+func TestApplyScopeState_MarksOutOfScopeRowsFiltered(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
@@ -43,7 +44,18 @@ func TestApplyRemoteScope_MarksOutOfScopeRowsFiltered(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 
-	require.NoError(t, mgr.ApplyRemoteScope(ctx, snapshot))
+	snapshotJSON, err := syncscope.MarshalSnapshot(snapshot)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.ApplyScopeState(ctx, synctypes.ScopeStateApplyRequest{
+		State: synctypes.ScopeStateRecord{
+			Generation:            1,
+			EffectiveSnapshotJSON: snapshotJSON,
+			ObservationMode:       synctypes.ScopeObservationScopedDelta,
+			LastReconcileKind:     synctypes.ScopeReconcileNone,
+			UpdatedAt:             time.Now().UnixNano(),
+		},
+	}))
 
 	keepRow := readRemoteStateRow(t, mgr.DB(), "keep-item")
 	require.NotNil(t, keepRow)
@@ -52,4 +64,6 @@ func TestApplyRemoteScope_MarksOutOfScopeRowsFiltered(t *testing.T) {
 	dropRow := readRemoteStateRow(t, mgr.DB(), "drop-item")
 	require.NotNil(t, dropRow)
 	assert.Equal(t, synctypes.SyncStatusFiltered, dropRow.SyncStatus)
+	assert.Equal(t, int64(1), dropRow.FilterGeneration)
+	assert.Equal(t, synctypes.RemoteFilterPathScope, dropRow.FilterReason)
 }

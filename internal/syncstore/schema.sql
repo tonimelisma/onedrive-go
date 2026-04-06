@@ -65,6 +65,25 @@ CREATE TABLE IF NOT EXISTS sync_metadata (
     value TEXT NOT NULL
 );
 
+-- Durable sync-scope projection for the selected drive. The singleton row
+-- tracks the last effective scope snapshot together with the observation
+-- strategy currently in force.
+CREATE TABLE IF NOT EXISTS scope_state (
+    singleton               INTEGER PRIMARY KEY CHECK(singleton = 1),
+    generation              INTEGER NOT NULL CHECK(generation >= 0),
+    effective_snapshot_json TEXT    NOT NULL,
+    observation_plan_hash   TEXT    NOT NULL,
+    observation_mode        TEXT    NOT NULL CHECK(observation_mode IN (
+                                'root_delta', 'scoped_delta', 'scoped_enumerate'
+                            )),
+    websocket_enabled       INTEGER NOT NULL DEFAULT 0 CHECK(websocket_enabled IN (0, 1)),
+    pending_reentry         INTEGER NOT NULL DEFAULT 0 CHECK(pending_reentry IN (0, 1)),
+    last_reconcile_kind     TEXT    NOT NULL CHECK(last_reconcile_kind IN (
+                                'none', 'entered_paths', 'full'
+                            )),
+    updated_at              INTEGER NOT NULL CHECK(updated_at > 0)
+);
+
 -- Full remote mirror: every item the delta API has told us about.
 CREATE TABLE IF NOT EXISTS remote_state (
     drive_id      TEXT    NOT NULL,
@@ -83,6 +102,9 @@ CREATE TABLE IF NOT EXISTS remote_state (
                       'synced',
                       'pending_delete', 'deleting', 'delete_failed', 'deleted',
                       'filtered')),
+    filter_generation INTEGER NOT NULL DEFAULT 0,
+    filter_reason  TEXT    NOT NULL DEFAULT ''
+                   CHECK(filter_reason IN ('', 'path_scope', 'marker_scope')),
     observed_at   INTEGER NOT NULL CHECK(observed_at > 0),
     PRIMARY KEY (drive_id, item_id)
 );

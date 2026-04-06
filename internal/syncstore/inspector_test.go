@@ -115,6 +115,44 @@ func TestInspector_HasScopeBlock(t *testing.T) {
 	assert.False(t, hasServiceScope)
 }
 
+// Validates: R-2.4.4, R-2.4.5
+func TestInspector_ReadScopeStateSnapshot(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	store, err := NewSyncStore(t.Context(), dbPath, newTestLogger(t))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, store.Close(context.Background()))
+	})
+
+	ctx := t.Context()
+	_, err = store.DB().ExecContext(ctx, `INSERT INTO scope_state
+		(singleton, generation, effective_snapshot_json, observation_plan_hash,
+		 observation_mode, websocket_enabled, pending_reentry,
+		 last_reconcile_kind, updated_at)
+		VALUES (1, 3, '{"version":1,"sync_paths":["Docs"],"ignore_marker":".odignore","marker_dirs":["Docs/Private"]}',
+		        'abc123', 'scoped_delta', 0, 1, 'entered_paths', 42)`)
+	require.NoError(t, err)
+
+	inspector, err := OpenInspector(dbPath, newTestLogger(t))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, inspector.Close())
+	})
+
+	snapshot, err := inspector.ReadScopeStateSnapshot(ctx)
+	require.NoError(t, err)
+	assert.True(t, snapshot.Found)
+	assert.Equal(t, int64(3), snapshot.Generation)
+	assert.Equal(t, "abc123", snapshot.ObservationPlanHash)
+	assert.Equal(t, synctypes.ScopeObservationScopedDelta, snapshot.ObservationMode)
+	assert.False(t, snapshot.WebsocketEnabled)
+	assert.True(t, snapshot.PendingReentry)
+	assert.Equal(t, synctypes.ScopeReconcileEnteredPath, snapshot.LastReconcileKind)
+	assert.Equal(t, int64(42), snapshot.UpdatedAt)
+}
+
 // Validates: R-2.3.7, R-2.3.10, R-2.10.22
 func TestInspector_ReadIssuesSnapshot(t *testing.T) {
 	t.Parallel()

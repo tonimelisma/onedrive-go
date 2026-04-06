@@ -36,7 +36,7 @@ func (rt *watchRuntime) watchPrimaryScopedRemote(
 			continue
 		}
 
-		scoped := applyRemoteScope(rt.engine.logger, rt.currentScopeSnapshot(), result.events)
+		scoped := applyRemoteScope(rt.engine.logger, rt.currentScopeSnapshot(), rt.currentScopeGeneration(), result.events)
 		if !rt.commitPrimaryScopedWatchBatch(ctx, scoped.observed, result.deferred) {
 			continue
 		}

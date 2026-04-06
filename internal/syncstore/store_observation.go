@@ -26,17 +26,18 @@ import (
 // SQL statements for remote_state operations.
 const (
 	sqlGetRemoteStateRow = `SELECT drive_id, item_id, path, parent_id, item_type,
-		hash, size, mtime, etag, previous_path, sync_status, observed_at
+		hash, size, mtime, etag, previous_path, sync_status, observed_at,
+		filter_generation, filter_reason
 		FROM remote_state WHERE drive_id = ? AND item_id = ?`
 
 	sqlInsertRemoteState = `INSERT INTO remote_state
 		(drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
-		 sync_status, observed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		 sync_status, observed_at, filter_generation, filter_reason)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	sqlUpdateRemoteState = `UPDATE remote_state SET
 		path = ?, parent_id = ?, item_type = ?, hash = ?, size = ?, mtime = ?, etag = ?,
-		previous_path = ?, sync_status = ?, observed_at = ?
+		previous_path = ?, sync_status = ?, observed_at = ?, filter_generation = ?, filter_reason = ?
 		WHERE drive_id = ? AND item_id = ?`
 
 	// sqlGetRemoteStateByPath uses the idx_remote_state_active_path unique
@@ -44,7 +45,8 @@ const (
 	// isFailureResolved use this to look up the current remote state for a
 	// path without knowing the item_id.
 	sqlGetRemoteStateByPath = `SELECT drive_id, item_id, path, parent_id, item_type,
-		hash, size, mtime, etag, previous_path, sync_status, observed_at
+		hash, size, mtime, etag, previous_path, sync_status, observed_at,
+		filter_generation, filter_reason
 		FROM remote_state
 		WHERE path = ? AND drive_id = ?
 		AND sync_status NOT IN ('deleted', 'pending_delete')`
@@ -156,19 +158,20 @@ func (m *SyncStore) processObservedItem(ctx context.Context, tx *sql.Tx, item *s
 // Returns nil if no row exists.
 func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx *sql.Tx, driveID, itemID string) *synctypes.RemoteStateRow {
 	var (
-		row      synctypes.RemoteStateRow
-		parentID sql.NullString
-		hash     sql.NullString
-		size     sql.NullInt64
-		mtime    sql.NullInt64
-		etag     sql.NullString
-		prevPath sql.NullString
+		row          synctypes.RemoteStateRow
+		parentID     sql.NullString
+		hash         sql.NullString
+		size         sql.NullInt64
+		mtime        sql.NullInt64
+		etag         sql.NullString
+		prevPath     sql.NullString
+		filterReason sql.NullString
 	)
 
 	err := tx.QueryRowContext(ctx, sqlGetRemoteStateRow, driveID, itemID).Scan(
 		&row.DriveID, &row.ItemID, &row.Path, &parentID, &row.ItemType,
 		&hash, &size, &mtime, &etag,
-		&prevPath, &row.SyncStatus, &row.ObservedAt,
+		&prevPath, &row.SyncStatus, &row.ObservedAt, &row.FilterGeneration, &filterReason,
 	)
 	if err != nil {
 		return nil
@@ -178,6 +181,7 @@ func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx *sql.Tx, driveID,
 	row.Hash = hash.String
 	row.ETag = etag.String
 	row.PreviousPath = prevPath.String
+	row.FilterReason = synctypes.RemoteFilterReason(filterReason.String)
 
 	if size.Valid {
 		row.Size = size.Int64
@@ -204,19 +208,20 @@ func (m *SyncStore) GetRemoteStateByPath(
 	driveID driveid.ID,
 ) (*synctypes.RemoteStateRow, bool, error) {
 	var (
-		row      synctypes.RemoteStateRow
-		parentID sql.NullString
-		hash     sql.NullString
-		size     sql.NullInt64
-		mtime    sql.NullInt64
-		etag     sql.NullString
-		prevPath sql.NullString
+		row          synctypes.RemoteStateRow
+		parentID     sql.NullString
+		hash         sql.NullString
+		size         sql.NullInt64
+		mtime        sql.NullInt64
+		etag         sql.NullString
+		prevPath     sql.NullString
+		filterReason sql.NullString
 	)
 
 	err := m.db.QueryRowContext(ctx, sqlGetRemoteStateByPath, path, driveID.String()).Scan(
 		&row.DriveID, &row.ItemID, &row.Path, &parentID, &row.ItemType,
 		&hash, &size, &mtime, &etag,
-		&prevPath, &row.SyncStatus, &row.ObservedAt,
+		&prevPath, &row.SyncStatus, &row.ObservedAt, &row.FilterGeneration, &filterReason,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -230,6 +235,7 @@ func (m *SyncStore) GetRemoteStateByPath(
 	row.Hash = hash.String
 	row.ETag = etag.String
 	row.PreviousPath = prevPath.String
+	row.FilterReason = synctypes.RemoteFilterReason(filterReason.String)
 
 	if size.Valid {
 		row.Size = size.Int64
@@ -254,7 +260,7 @@ func (m *SyncStore) insertRemoteState(ctx context.Context, tx *sql.Tx, item *syn
 		nullString(item.ParentID), item.ItemType,
 		nullString(item.Hash), nullKnownInt64(item.Size, true), nullOptionalInt64(item.Mtime),
 		nullString(item.ETag),
-		initialStatus, now,
+		initialStatus, now, initialFilterGeneration(item), string(item.FilterReason),
 	)
 	if err != nil {
 		return fmt.Errorf("sync: inserting remote_state for %s: %w", item.Path, err)
@@ -268,11 +274,18 @@ func (m *SyncStore) updateRemoteStateFromObs(
 	ctx context.Context, tx *sql.Tx, item *synctypes.ObservedItem,
 	newStatus synctypes.SyncStatus, previousPath string, now int64,
 ) error {
+	filterGeneration := int64(0)
+	filterReason := ""
+	if newStatus == synctypes.SyncStatusFiltered {
+		filterGeneration = initialFilterGeneration(item)
+		filterReason = string(item.FilterReason)
+	}
+
 	_, err := tx.ExecContext(ctx, sqlUpdateRemoteState,
 		item.Path, nullString(item.ParentID), item.ItemType,
 		nullString(item.Hash), nullKnownInt64(item.Size, true), nullOptionalInt64(item.Mtime),
 		nullString(item.ETag),
-		nullString(previousPath), newStatus, now,
+		nullString(previousPath), newStatus, now, filterGeneration, filterReason,
 		item.DriveID.String(), item.ItemID,
 	)
 	if err != nil {
@@ -329,6 +342,18 @@ func computeFilteredObservation(
 	}
 
 	return synctypes.SyncStatusFiltered, true
+}
+
+func initialFilterGeneration(item *synctypes.ObservedItem) int64 {
+	if item == nil || !item.Filtered {
+		return 0
+	}
+
+	if item.FilterGeneration > 0 {
+		return item.FilterGeneration
+	}
+
+	return 1
 }
 
 // computeDeleted handles the "deleted" column of the decision matrix.

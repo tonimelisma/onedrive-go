@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -195,6 +196,44 @@ func TestHandleWrite_EmitsAfterCooldownExpires(t *testing.T) {
 
 	cancel()
 	<-done
+}
+
+// Validates: R-2.4.4, R-2.4.5
+func TestHashAndEmit_DropsStaleGenerationAfterScopeChange(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	filePath := writeTestFile(t, dir, "docs/file.txt", "modified")
+	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+		Path: "docs/file.txt", DriveID: driveid.New("d"), ItemID: "i1",
+		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "original"),
+	})
+
+	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	initialSnapshot, err := syncscope.NewSnapshot(syncscope.Config{IgnoreMarker: ".odignore"}, nil)
+	require.NoError(t, err)
+	obs.SetScopeSnapshot(initialSnapshot)
+
+	reqGeneration := obs.currentScopeGeneration()
+
+	updatedSnapshot, err := syncscope.NewSnapshot(syncscope.Config{IgnoreMarker: ".odignore"}, []string{"blocked"})
+	require.NoError(t, err)
+	obs.SetScopeSnapshot(updatedSnapshot)
+	require.Greater(t, obs.currentScopeGeneration(), reqGeneration)
+
+	events := make(chan synctypes.ChangeEvent, 1)
+	obs.HashAndEmit(t.Context(), mustOpenSyncTree(t, dir), HashRequest{
+		FsPath:     filePath,
+		DbRelPath:  "docs/file.txt",
+		Name:       "file.txt",
+		Generation: reqGeneration,
+	}, events)
+
+	select {
+	case ev := <-events:
+		require.Failf(t, "unexpected stale modify event", "%+v", ev)
+	default:
+	}
 }
 
 // TestHandleWrite_DifferentPathsNotCoalesced verifies that Write events for

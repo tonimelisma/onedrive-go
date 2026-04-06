@@ -20,24 +20,25 @@ func readRemoteStateRow(t *testing.T, db *sql.DB, itemID string) *synctypes.Remo
 	t.Helper()
 
 	var (
-		row      synctypes.RemoteStateRow
-		parentID sql.NullString
-		hash     sql.NullString
-		size     sql.NullInt64
-		mtime    sql.NullInt64
-		etag     sql.NullString
-		prevPath sql.NullString
+		row          synctypes.RemoteStateRow
+		parentID     sql.NullString
+		hash         sql.NullString
+		size         sql.NullInt64
+		mtime        sql.NullInt64
+		etag         sql.NullString
+		prevPath     sql.NullString
+		filterReason sql.NullString
 	)
 
 	err := db.QueryRowContext(t.Context(),
 		`SELECT drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
-			previous_path, sync_status, observed_at
+			previous_path, sync_status, observed_at, filter_generation, filter_reason
 		FROM remote_state WHERE item_id = ?`,
 		itemID,
 	).Scan(
 		&row.DriveID, &row.ItemID, &row.Path, &parentID, &row.ItemType,
 		&hash, &size, &mtime, &etag,
-		&prevPath, &row.SyncStatus, &row.ObservedAt,
+		&prevPath, &row.SyncStatus, &row.ObservedAt, &row.FilterGeneration, &filterReason,
 	)
 	if err == sql.ErrNoRows {
 		return nil
@@ -49,6 +50,7 @@ func readRemoteStateRow(t *testing.T, db *sql.DB, itemID string) *synctypes.Remo
 	row.Hash = hash.String
 	row.ETag = etag.String
 	row.PreviousPath = prevPath.String
+	row.FilterReason = synctypes.RemoteFilterReason(filterReason.String)
 
 	if size.Valid {
 		row.Size = size.Int64

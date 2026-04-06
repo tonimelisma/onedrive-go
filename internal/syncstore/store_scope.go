@@ -2,6 +2,7 @@ package syncstore
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"sort"
 
@@ -9,9 +10,21 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
+type remoteScopeRow struct {
+	DriveID          string
+	ItemID           string
+	Path             string
+	Hash             sql.NullString
+	Status           synctypes.SyncStatus
+	FilterGeneration int64
+	FilterReason     string
+	BaselinePath     sql.NullString
+	BaselineHash     sql.NullString
+}
+
 // UpsertSyncMetadataEntries writes arbitrary sync_metadata keys in one
-// transaction. Engine-owned scope snapshot persistence uses this helper so the
-// durable key/value store remains the single authority for watch/run metadata.
+// transaction. Scope persistence no longer uses this helper; it remains for
+// generic sync report/status metadata.
 func (m *SyncStore) UpsertSyncMetadataEntries(ctx context.Context, entries map[string]string) error {
 	if len(entries) == 0 {
 		return nil
@@ -45,68 +58,266 @@ func (m *SyncStore) UpsertSyncMetadataEntries(ctx context.Context, entries map[s
 	return nil
 }
 
-// ApplyRemoteScope marks already-known remote_state rows as filtered when they
-// fall outside the current effective sync scope. Re-entry is handled by the
-// next in-scope remote observation, which moves filtered rows back into the
-// normal pending/synced state machine.
-func (m *SyncStore) ApplyRemoteScope(ctx context.Context, snapshot syncscope.Snapshot) error {
+// ReadScopeState returns the durable sync-scope projection. Missing scope
+// state is not an error; callers use found=false to bootstrap the first
+// generation from current truth.
+func (m *SyncStore) ReadScopeState(ctx context.Context) (synctypes.ScopeStateRecord, bool, error) {
+	row := m.db.QueryRowContext(ctx, `
+		SELECT generation, effective_snapshot_json, observation_plan_hash,
+		       observation_mode, websocket_enabled, pending_reentry,
+		       last_reconcile_kind, updated_at
+		FROM scope_state
+		WHERE singleton = 1`,
+	)
+
+	var (
+		record           synctypes.ScopeStateRecord
+		websocketEnabled int
+		pendingReentry   int
+	)
+	if err := row.Scan(
+		&record.Generation,
+		&record.EffectiveSnapshotJSON,
+		&record.ObservationPlanHash,
+		&record.ObservationMode,
+		&websocketEnabled,
+		&pendingReentry,
+		&record.LastReconcileKind,
+		&record.UpdatedAt,
+	); err != nil {
+		if err == sql.ErrNoRows || isMissingTableErr(err) {
+			return synctypes.ScopeStateRecord{}, false, nil
+		}
+
+		return synctypes.ScopeStateRecord{}, false, fmt.Errorf("read scope state: %w", err)
+	}
+
+	record.WebsocketEnabled = websocketEnabled != 0
+	record.PendingReentry = pendingReentry != 0
+
+	return record, true, nil
+}
+
+// ApplyScopeState persists one new durable sync-scope record and re-evaluates
+// already-known remote_state rows against the effective snapshot in the same
+// transaction. This is the sole durable authority for filtered-row activation
+// and deactivation.
+func (m *SyncStore) ApplyScopeState(ctx context.Context, req synctypes.ScopeStateApplyRequest) error {
+	snapshot, err := syncscope.UnmarshalSnapshot(req.State.EffectiveSnapshotJSON)
+	if err != nil {
+		return fmt.Errorf("decode scope snapshot: %w", err)
+	}
+
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("sync: begin remote scope tx: %w", err)
+		return fmt.Errorf("scope state begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if upsertErr := upsertScopeStateRow(ctx, tx, req.State); upsertErr != nil {
+		return upsertErr
+	}
+
+	allRows, err := loadRemoteScopeRows(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if err := applyRemoteScopeRows(ctx, tx, snapshot, req.State.Generation, allRows); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("scope state commit tx: %w", err)
+	}
+
+	return nil
+}
+
+func loadRemoteScopeRows(ctx context.Context, tx *sql.Tx) ([]remoteScopeRow, error) {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT drive_id, item_id, path, sync_status
-		FROM remote_state
-		WHERE sync_status NOT IN (?, ?, ?, ?)`,
+		SELECT
+			rs.drive_id,
+			rs.item_id,
+			rs.path,
+			rs.hash,
+			rs.sync_status,
+			rs.filter_generation,
+			rs.filter_reason,
+			b.path,
+			b.remote_hash
+		FROM remote_state rs
+		LEFT JOIN baseline b
+		  ON b.drive_id = rs.drive_id
+		 AND b.item_id = rs.item_id
+		WHERE rs.sync_status NOT IN (?, ?, ?, ?)`,
 		synctypes.SyncStatusDeleted,
 		synctypes.SyncStatusPendingDelete,
 		synctypes.SyncStatusDownloading,
 		synctypes.SyncStatusDeleting,
 	)
 	if err != nil {
-		return fmt.Errorf("sync: query remote scope rows: %w", err)
+		return nil, fmt.Errorf("scope state query remote rows: %w", err)
 	}
 	defer rows.Close()
 
-	type scopeRow struct {
-		driveID string
-		itemID  string
-		path    string
-		status  synctypes.SyncStatus
-	}
-
-	var updates []scopeRow
+	var allRows []remoteScopeRow
 	for rows.Next() {
-		var row scopeRow
-		if err := rows.Scan(&row.driveID, &row.itemID, &row.path, &row.status); err != nil {
-			return fmt.Errorf("sync: scan remote scope row: %w", err)
-		}
-
-		if snapshot.AllowsPath(row.path) || row.status == synctypes.SyncStatusFiltered {
-			continue
-		}
-
-		updates = append(updates, row)
-	}
-
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("sync: iterate remote scope rows: %w", err)
-	}
-
-	for _, row := range updates {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE remote_state SET sync_status = ? WHERE drive_id = ? AND item_id = ?`,
-			synctypes.SyncStatusFiltered, row.driveID, row.itemID,
+		var row remoteScopeRow
+		if err := rows.Scan(
+			&row.DriveID,
+			&row.ItemID,
+			&row.Path,
+			&row.Hash,
+			&row.Status,
+			&row.FilterGeneration,
+			&row.FilterReason,
+			&row.BaselinePath,
+			&row.BaselineHash,
 		); err != nil {
-			return fmt.Errorf("sync: apply remote scope %s: %w", row.path, err)
+			return nil, fmt.Errorf("scope state scan remote row: %w", err)
 		}
+
+		allRows = append(allRows, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("scope state iterate remote rows: %w", err)
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("sync: commit remote scope tx: %w", err)
+	return allRows, nil
+}
+
+func applyRemoteScopeRows(
+	ctx context.Context,
+	tx *sql.Tx,
+	snapshot syncscope.Snapshot,
+	generation int64,
+	allRows []remoteScopeRow,
+) error {
+	for i := range allRows {
+		if err := applyRemoteScopeRow(ctx, tx, snapshot, generation, &allRows[i]); err != nil {
+			return err
+		}
 	}
 
 	return nil
+}
+
+func applyRemoteScopeRow(
+	ctx context.Context,
+	tx *sql.Tx,
+	snapshot syncscope.Snapshot,
+	generation int64,
+	row *remoteScopeRow,
+) error {
+	reason := snapshot.ExclusionReason(row.Path)
+	if reason != syncscope.ExclusionNone {
+		if row.Status == synctypes.SyncStatusFiltered &&
+			row.FilterGeneration == generation &&
+			row.FilterReason == string(reason) {
+			return nil
+		}
+
+		if _, err := tx.ExecContext(
+			ctx,
+			`UPDATE remote_state
+			 SET sync_status = ?, filter_generation = ?, filter_reason = ?
+			 WHERE drive_id = ? AND item_id = ?`,
+			synctypes.SyncStatusFiltered,
+			generation,
+			string(reason),
+			row.DriveID,
+			row.ItemID,
+		); err != nil {
+			return fmt.Errorf("scope state filter %s: %w", row.Path, err)
+		}
+
+		return nil
+	}
+
+	if row.Status != synctypes.SyncStatusFiltered {
+		return nil
+	}
+
+	nextStatus := reactivatedRemoteStatus(
+		row.Path,
+		row.Hash.String,
+		row.BaselinePath.Valid,
+		row.BaselinePath.String,
+		row.BaselineHash.String,
+	)
+	if _, err := tx.ExecContext(
+		ctx,
+		`UPDATE remote_state
+		 SET sync_status = ?, filter_generation = 0, filter_reason = ''
+		 WHERE drive_id = ? AND item_id = ?`,
+		nextStatus,
+		row.DriveID,
+		row.ItemID,
+	); err != nil {
+		return fmt.Errorf("scope state reactivate %s: %w", row.Path, err)
+	}
+
+	return nil
+}
+
+func upsertScopeStateRow(ctx context.Context, tx *sql.Tx, state synctypes.ScopeStateRecord) error {
+	if state.EffectiveSnapshotJSON == "" {
+		state.EffectiveSnapshotJSON = `{"version":1}`
+	}
+	if state.ObservationMode == "" {
+		state.ObservationMode = synctypes.ScopeObservationRootDelta
+	}
+	if state.LastReconcileKind == "" {
+		state.LastReconcileKind = synctypes.ScopeReconcileNone
+	}
+	if state.UpdatedAt <= 0 {
+		return fmt.Errorf("scope state updated_at must be > 0")
+	}
+
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO scope_state (
+			singleton, generation, effective_snapshot_json, observation_plan_hash,
+			observation_mode, websocket_enabled, pending_reentry,
+			last_reconcile_kind, updated_at
+		) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(singleton) DO UPDATE SET
+			generation = excluded.generation,
+			effective_snapshot_json = excluded.effective_snapshot_json,
+			observation_plan_hash = excluded.observation_plan_hash,
+			observation_mode = excluded.observation_mode,
+			websocket_enabled = excluded.websocket_enabled,
+			pending_reentry = excluded.pending_reentry,
+			last_reconcile_kind = excluded.last_reconcile_kind,
+			updated_at = excluded.updated_at
+	`,
+		state.Generation,
+		state.EffectiveSnapshotJSON,
+		state.ObservationPlanHash,
+		state.ObservationMode,
+		boolToInt(state.WebsocketEnabled),
+		boolToInt(state.PendingReentry),
+		state.LastReconcileKind,
+		state.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("scope state upsert: %w", err)
+	}
+
+	return nil
+}
+
+func reactivatedRemoteStatus(path, hash string, baselineFound bool, baselinePath, baselineHash string) synctypes.SyncStatus {
+	if baselineFound && baselinePath == path && baselineHash == hash {
+		return synctypes.SyncStatusSynced
+	}
+
+	return synctypes.SyncStatusPendingDownload
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+
+	return 0
 }
