@@ -66,6 +66,9 @@ of observable remote folder scopes that can cover the selected paths, then:
 
 - uses folder-scoped delta on personal drives
 - falls back to recursive subtree enumeration on business/sharepoint scopes
+- falls back to recursive subtree enumeration for a personal scoped path too
+  when folder-scoped delta is temporarily unavailable for that folder, instead
+  of failing the whole sync pass during initial path bootstrap
 - keeps exact-file selection as an engine-side policy by observing the nearest
   covering folder scope and then reapplying the effective scope snapshot
 - runs targeted re-entry reconciliation for newly-entered paths before normal
