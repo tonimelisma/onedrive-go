@@ -55,7 +55,7 @@ func TestS1_NoRemoteDeleteWithoutBaseline(t *testing.T) {
 	assert.Len(t, downloads, 1)
 }
 
-// Validates: R-6.4.1
+// Validates: R-6.2.5, R-6.4.1
 // TestS5_BigDeleteThresholdBoundary validates that big-delete protection
 // uses a simple absolute count threshold with no percentage or per-folder checks.
 func TestS5_BigDeleteThresholdBoundary(t *testing.T) {
@@ -628,7 +628,7 @@ func TestBuildDependencies_ChildDeleteBeforeParent(t *testing.T) {
 // §3: Planner-level safety check integration
 // ---------------------------------------------------------------------------
 
-// Validates: R-6.4.1
+// Validates: R-6.2.5, R-6.4.1
 // TestPlan_BigDeleteBlocked validates that the planner returns
 // ErrBigDeleteTriggered when planned deletions exceed the threshold.
 func TestPlan_BigDeleteBlocked(t *testing.T) {

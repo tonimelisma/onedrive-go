@@ -280,6 +280,7 @@ func TestCascade_EmptyFolder(t *testing.T) {
 	assert.Equal(t, "empty", localDeletes[0].Path)
 }
 
+// Validates: R-6.2.5, R-6.4.1
 // TestCascade_BigDeleteProtection verifies that cascaded actions increase
 // the delete count and trigger big-delete protection if threshold is exceeded.
 func TestCascade_BigDeleteProtection(t *testing.T) {
