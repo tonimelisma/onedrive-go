@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -100,6 +101,40 @@ func TestNewStateAuditCmdPassesFlagsThrough(t *testing.T) {
 	assert.Equal(t, "/tmp/state.db", got.DBPath)
 	assert.True(t, got.JSON)
 	assert.True(t, got.RepairSafe)
+}
+
+// Validates: R-6.2.1
+func TestNewWatchCaptureCmdRequiresScenarioFlag(t *testing.T) {
+	t.Parallel()
+
+	cmd := newWatchCaptureCmd(func(context.Context, devtool.WatchCaptureOptions) error { return nil })
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "required flag")
+}
+
+// Validates: R-6.2.1
+func TestNewWatchCaptureCmdPassesFlagsThrough(t *testing.T) {
+	t.Parallel()
+
+	var got devtool.WatchCaptureOptions
+
+	cmd := newWatchCaptureCmd(func(_ context.Context, opts devtool.WatchCaptureOptions) error {
+		got = opts
+		return nil
+	})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"--scenario", "marker_create", "--json", "--repeat", "3", "--settle", "750ms"})
+
+	require.NoError(t, cmd.Execute())
+	assert.Equal(t, "marker_create", got.Scenario)
+	assert.True(t, got.JSON)
+	assert.Equal(t, 3, got.Repeat)
+	assert.Equal(t, 750*time.Millisecond, got.Settle)
 }
 
 // Validates: R-6.10.11
@@ -245,7 +280,7 @@ func TestNewRootCmd(t *testing.T) {
 	cmd := newRootCmd()
 	require.NotNil(t, cmd)
 	assert.Equal(t, "devtool", cmd.Use)
-	assert.Len(t, cmd.Commands(), 4)
+	assert.Len(t, cmd.Commands(), 5)
 }
 
 // Validates: R-6.2.1

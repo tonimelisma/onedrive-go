@@ -21,24 +21,77 @@ type ScopeSession struct {
 	Generation     int64
 }
 
-type ObservationPlan struct {
-	Mode             synctypes.ScopeObservationMode
-	PrimaryScopes    []plannedObservationTarget
-	RootFallback     bool
-	FullReconcile    bool
-	WebsocketEnabled bool
-	Reentry          ReentryPlan
-	Hash             string
-}
-
 type ReentryPlan struct {
 	Paths   []string
 	Pending bool
 	Kind    synctypes.ScopeReconcileKind
 }
 
-type ShortcutObservationPlan struct {
-	Targets []plannedObservationTarget
+type ObservationPlanPurpose string
+
+const (
+	observationPlanPurposeOneShot ObservationPlanPurpose = "one_shot"
+	observationPlanPurposeWatch   ObservationPlanPurpose = "watch"
+)
+
+type WatchStrategy string
+
+const (
+	watchStrategyRootDelta    WatchStrategy = "root_delta"
+	watchStrategyScopedRoot   WatchStrategy = "scoped_root"
+	watchStrategyScopedTarget WatchStrategy = "scoped_targets"
+)
+
+type ObservationPhaseErrorPolicy string
+
+const (
+	observationPhaseErrorPolicyFailBatch     ObservationPhaseErrorPolicy = "fail_batch"
+	observationPhaseErrorPolicyIsolateTarget ObservationPhaseErrorPolicy = "isolate_target"
+)
+
+type ObservationPhaseFallbackPolicy string
+
+const (
+	observationPhaseFallbackPolicyNone             ObservationPhaseFallbackPolicy = "no_fallback"
+	observationPhaseFallbackPolicyDeltaToEnumerate ObservationPhaseFallbackPolicy = "delta_to_enumerate"
+)
+
+type ObservationPhaseTokenCommitPolicy string
+
+const (
+	observationPhaseTokenCommitPolicyAfterPhaseSuccess   ObservationPhaseTokenCommitPolicy = "commit_after_phase_success"
+	observationPhaseTokenCommitPolicyAfterPlannerAccepts ObservationPhaseTokenCommitPolicy = "commit_after_planner_accepts"
+)
+
+type ObservationPhasePlan struct {
+	Targets           []plannedObservationTarget
+	ErrorPolicy       ObservationPhaseErrorPolicy
+	FallbackPolicy    ObservationPhaseFallbackPolicy
+	TokenCommitPolicy ObservationPhaseTokenCommitPolicy
+}
+
+func (plan ObservationPhasePlan) HasTargets() bool {
+	return len(plan.Targets) > 0
+}
+
+type ObservationPlanRequest struct {
+	Session                   *ScopeSession
+	Baseline                  *synctypes.Baseline
+	SyncMode                  synctypes.SyncMode
+	FullReconcile             bool
+	Purpose                   ObservationPlanPurpose
+	Shortcuts                 []synctypes.Shortcut
+	ShortcutCollisions        map[string]bool
+	SuppressedShortcutTargets map[string]struct{}
+}
+
+type ObservationSessionPlan struct {
+	PrimaryPhase     ObservationPhasePlan
+	ShortcutPhase    ObservationPhasePlan
+	WatchStrategy    WatchStrategy
+	WebsocketEnabled bool
+	Reentry          ReentryPlan
+	Hash             string
 }
 
 type CursorCommitSet struct {
@@ -85,56 +138,156 @@ func (flow *engineFlow) BuildScopeSession(ctx context.Context, watch *watchRunti
 	}, nil
 }
 
-func (flow *engineFlow) BuildObservationPlan(
+func (flow *engineFlow) BuildObservationSessionPlan(
 	ctx context.Context,
-	session *ScopeSession,
-	mode synctypes.SyncMode,
-	fullReconcile bool,
-) (ObservationPlan, error) {
-	plan := ObservationPlan{
-		Mode:             synctypes.ScopeObservationRootDelta,
-		FullReconcile:    fullReconcile,
+	req ObservationPlanRequest,
+) (ObservationSessionPlan, error) {
+	if req.Session == nil {
+		return ObservationSessionPlan{}, fmt.Errorf("build observation session plan: missing scope session")
+	}
+
+	plan := flow.newObservationSessionPlan()
+	plan.Reentry = buildReentryPlan(req)
+
+	if err := flow.buildPrimaryObservationPhase(ctx, &plan); err != nil {
+		return ObservationSessionPlan{}, err
+	}
+	if err := flow.buildShortcutObservationPhase(&req, &plan); err != nil {
+		return ObservationSessionPlan{}, err
+	}
+
+	if req.Purpose == observationPlanPurposeWatch && plan.WatchStrategy != watchStrategyRootDelta {
+		plan.WebsocketEnabled = false
+	}
+
+	planHashValue, err := flow.planHash(&plan, req.Session.Current, effectivePrimaryFullReconcile(req.FullReconcile, &plan))
+	if err != nil {
+		return ObservationSessionPlan{}, fmt.Errorf("build observation session plan hash: %w", err)
+	}
+
+	plan.Hash = planHashValue
+	return plan, nil
+}
+
+func (flow *engineFlow) newObservationSessionPlan() ObservationSessionPlan {
+	return ObservationSessionPlan{
+		PrimaryPhase: ObservationPhasePlan{
+			ErrorPolicy:       observationPhaseErrorPolicyFailBatch,
+			FallbackPolicy:    observationPhaseFallbackPolicyNone,
+			TokenCommitPolicy: observationPhaseTokenCommitPolicyAfterPlannerAccepts,
+		},
+		ShortcutPhase: ObservationPhasePlan{
+			ErrorPolicy:       observationPhaseErrorPolicyIsolateTarget,
+			FallbackPolicy:    observationPhaseFallbackPolicyNone,
+			TokenCommitPolicy: observationPhaseTokenCommitPolicyAfterPhaseSuccess,
+		},
+		WatchStrategy:    watchStrategyRootDelta,
 		WebsocketEnabled: flow.engine.enableWebsocket && flow.engine.socketIOFetcher != nil,
 		Reentry: ReentryPlan{
 			Kind: synctypes.ScopeReconcileNone,
 		},
 	}
+}
 
-	if mode != synctypes.SyncUploadOnly && session.Diff.HasEntered() {
-		if hasObservedRoot(session.Diff.EnteredPaths) {
-			plan.FullReconcile = true
-			plan.Reentry.Kind = synctypes.ScopeReconcileFull
-		} else {
-			plan.Reentry.Paths = append([]string(nil), session.Diff.EnteredPaths...)
-			plan.Reentry.Pending = true
-			plan.Reentry.Kind = synctypes.ScopeReconcileEnteredPath
-		}
+func buildReentryPlan(req ObservationPlanRequest) ReentryPlan {
+	plan := ReentryPlan{
+		Kind: synctypes.ScopeReconcileNone,
+	}
+	if req.SyncMode == synctypes.SyncUploadOnly || !req.Session.Diff.HasEntered() {
+		return plan
+	}
+	if hasObservedRoot(req.Session.Diff.EnteredPaths) {
+		plan.Kind = synctypes.ScopeReconcileFull
+		return plan
 	}
 
+	plan.Paths = append([]string(nil), req.Session.Diff.EnteredPaths...)
+	plan.Pending = true
+	plan.Kind = synctypes.ScopeReconcileEnteredPath
+	return plan
+}
+
+func (flow *engineFlow) buildPrimaryObservationPhase(
+	ctx context.Context,
+	plan *ObservationSessionPlan,
+) error {
 	if flow.engine.usesPrimaryPathScopes() {
 		scopes, rootFallback, err := flow.engine.resolvePrimaryObservationScopes(ctx)
 		if err != nil {
-			return ObservationPlan{}, err
+			return err
 		}
 
-		plan.PrimaryScopes = scopes
-		plan.RootFallback = rootFallback
-		if !rootFallback && len(scopes) > 0 {
-			plan.Mode = scopeObservationModeForPrimary(scopes[0].mode)
+		plan.PrimaryPhase.Targets = scopes
+		switch {
+		case !rootFallback && plan.PrimaryPhase.HasTargets():
+			plan.WatchStrategy = watchStrategyScopedTarget
+			plan.WebsocketEnabled = false
+			if flow.engine.recursiveLister != nil && plan.primaryPhaseUsesDelta() {
+				plan.PrimaryPhase.FallbackPolicy = observationPhaseFallbackPolicyDeltaToEnumerate
+			}
+		case flow.engine.hasScopedRoot():
+			plan.WatchStrategy = watchStrategyScopedRoot
 			plan.WebsocketEnabled = false
 		}
-	} else if flow.engine.hasScopedRoot() {
-		plan.Mode = scopeObservationModeForPrimary(flow.engine.primaryObservationMode())
+		return nil
+	}
+
+	if flow.engine.hasScopedRoot() {
+		plan.WatchStrategy = watchStrategyScopedRoot
 		plan.WebsocketEnabled = false
 	}
 
-	planHashValue, err := planHash(plan, session.Current)
-	if err != nil {
-		return ObservationPlan{}, fmt.Errorf("build observation plan hash: %w", err)
+	return nil
+}
+
+func (flow *engineFlow) buildShortcutObservationPhase(
+	req *ObservationPlanRequest,
+	plan *ObservationSessionPlan,
+) error {
+	if len(req.Shortcuts) == 0 {
+		return nil
+	}
+	if req.Baseline == nil {
+		return fmt.Errorf("build observation session plan: missing baseline for shortcut planning")
 	}
 
-	plan.Hash = planHashValue
-	return plan, nil
+	collisions := req.ShortcutCollisions
+	if collisions == nil {
+		collisions = detectShortcutCollisionsFromList(req.Shortcuts, req.Baseline, flow.engine.logger)
+	}
+
+	targets := make([]plannedObservationTarget, 0, len(req.Shortcuts))
+	for i := range req.Shortcuts {
+		sc := &req.Shortcuts[i]
+		if collisions[sc.ItemID] {
+			continue
+		}
+		if len(req.SuppressedShortcutTargets) > 0 {
+			shortcutKey := sc.RemoteDrive + ":" + sc.RemoteItem
+			if _, suppressed := req.SuppressedShortcutTargets[shortcutKey]; suppressed {
+				flow.engine.logger.Debug(
+					"suppressing shortcut observation target — target rate limited",
+					slog.String("shortcut_key", shortcutKey),
+					slog.String("local_path", sc.LocalPath),
+				)
+				continue
+			}
+		}
+
+		targets = append(targets, shortcutObservationTarget(sc))
+	}
+	plan.ShortcutPhase.Targets = targets
+	return nil
+}
+
+func (plan *ObservationSessionPlan) primaryPhaseUsesDelta() bool {
+	for _, target := range plan.PrimaryPhase.Targets {
+		if target.mode == primaryObservationDelta {
+			return true
+		}
+	}
+
+	return false
 }
 
 func hasObservedRoot(paths []string) bool {
@@ -147,42 +300,7 @@ func hasObservedRoot(paths []string) bool {
 	return false
 }
 
-func (flow *engineFlow) BuildShortcutObservationPlan(
-	shortcuts []synctypes.Shortcut,
-	bl *synctypes.Baseline,
-	suppressedShortcutTargets map[string]struct{},
-	collisions map[string]bool,
-) ShortcutObservationPlan {
-	if collisions == nil {
-		collisions = detectShortcutCollisionsFromList(shortcuts, bl, flow.engine.logger)
-	}
-
-	targets := make([]plannedObservationTarget, 0, len(shortcuts))
-	for i := range shortcuts {
-		sc := &shortcuts[i]
-		if collisions[sc.ItemID] {
-			continue
-		}
-
-		if len(suppressedShortcutTargets) > 0 {
-			shortcutKey := sc.RemoteDrive + ":" + sc.RemoteItem
-			if _, suppressed := suppressedShortcutTargets[shortcutKey]; suppressed {
-				flow.engine.logger.Debug(
-					"suppressing shortcut observation target — target rate limited",
-					slog.String("shortcut_key", shortcutKey),
-					slog.String("local_path", sc.LocalPath),
-				)
-				continue
-			}
-		}
-
-		targets = append(targets, shortcutObservationTarget(sc))
-	}
-
-	return ShortcutObservationPlan{Targets: targets}
-}
-
-func (flow *engineFlow) scopeStateRecord(session *ScopeSession, plan ObservationPlan) (synctypes.ScopeStateRecord, error) {
+func (flow *engineFlow) scopeStateRecord(session *ScopeSession, plan *ObservationSessionPlan) (synctypes.ScopeStateRecord, error) {
 	snapshotJSON, err := syncscope.MarshalSnapshot(session.Current)
 	if err != nil {
 		return synctypes.ScopeStateRecord{}, fmt.Errorf("marshal scope snapshot: %w", err)
@@ -197,7 +315,7 @@ func (flow *engineFlow) scopeStateRecord(session *ScopeSession, plan Observation
 		Generation:            session.Generation,
 		EffectiveSnapshotJSON: snapshotJSON,
 		ObservationPlanHash:   plan.Hash,
-		ObservationMode:       plan.Mode,
+		ObservationMode:       flow.scopeObservationMode(plan),
 		WebsocketEnabled:      plan.WebsocketEnabled,
 		PendingReentry:        plan.Reentry.Pending,
 		LastReconcileKind:     lastKind,
@@ -216,25 +334,48 @@ func scopeObservationModeForPrimary(mode primaryObservationMode) synctypes.Scope
 	}
 }
 
-func planHash(plan ObservationPlan, snapshot syncscope.Snapshot) (string, error) {
+func (flow *engineFlow) scopeObservationMode(plan *ObservationSessionPlan) synctypes.ScopeObservationMode {
+	switch {
+	case plan.PrimaryPhase.HasTargets():
+		return scopeObservationModeForPrimary(plan.PrimaryPhase.Targets[0].mode)
+	case plan.WatchStrategy == watchStrategyScopedRoot:
+		return scopeObservationModeForPrimary(flow.engine.primaryObservationMode())
+	default:
+		return synctypes.ScopeObservationRootDelta
+	}
+}
+
+func effectivePrimaryFullReconcile(fullReconcile bool, plan *ObservationSessionPlan) bool {
+	return fullReconcile || plan.Reentry.Kind == synctypes.ScopeReconcileFull
+}
+
+func (flow *engineFlow) planHash(
+	plan *ObservationSessionPlan,
+	snapshot syncscope.Snapshot,
+	fullReconcile bool,
+) (string, error) {
 	type planHashInput struct {
 		Mode             synctypes.ScopeObservationMode `json:"mode"`
 		PrimaryPaths     []string                       `json:"primary_paths,omitempty"`
 		PrimaryFolderIDs []string                       `json:"primary_folder_ids,omitempty"`
-		RootFallback     bool                           `json:"root_fallback"`
 		FullReconcile    bool                           `json:"full_reconcile"`
+		ReentryKind      synctypes.ScopeReconcileKind   `json:"reentry_kind"`
+		ReentryPaths     []string                       `json:"reentry_paths,omitempty"`
+		PendingReentry   bool                           `json:"pending_reentry"`
 		WebsocketEnabled bool                           `json:"websocket_enabled"`
 		Snapshot         syncscope.PersistedSnapshot    `json:"snapshot"`
 	}
 
 	input := planHashInput{
-		Mode:             plan.Mode,
-		RootFallback:     plan.RootFallback,
-		FullReconcile:    plan.FullReconcile,
+		Mode:             flow.scopeObservationMode(plan),
+		FullReconcile:    fullReconcile,
+		ReentryKind:      plan.Reentry.Kind,
+		ReentryPaths:     append([]string(nil), plan.Reentry.Paths...),
+		PendingReentry:   plan.Reentry.Pending,
 		WebsocketEnabled: plan.WebsocketEnabled,
 		Snapshot:         snapshot.Persisted(),
 	}
-	for _, scope := range plan.PrimaryScopes {
+	for _, scope := range plan.PrimaryPhase.Targets {
 		input.PrimaryPaths = append(input.PrimaryPaths, scope.localPath)
 		input.PrimaryFolderIDs = append(input.PrimaryFolderIDs, scope.scopeID)
 	}

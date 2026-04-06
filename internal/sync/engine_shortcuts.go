@@ -418,25 +418,29 @@ type shortcutDispatchFunc func(ctx context.Context, target plannedObservationTar
 // completion logging. The dispatch func contains the per-scope observation
 // strategy — callers only need to supply a closure and a log label.
 func (coordinator *shortcutCoordinator) observeShortcutTargetsConcurrently(
-	ctx context.Context, targets []plannedObservationTarget,
+	ctx context.Context,
+	phase ObservationPhasePlan,
 	dispatch shortcutDispatchFunc, logContext string,
 ) ([]synctypes.ChangeEvent, error) {
 	flow := coordinator.flow
 	eng := flow.engine
 
-	if len(targets) == 0 {
+	if !phase.HasTargets() {
 		return nil, nil
 	}
+	if phase.FallbackPolicy != observationPhaseFallbackPolicyNone {
+		return nil, fmt.Errorf("sync: shortcut %s: unsupported fallback policy %q", logContext, phase.FallbackPolicy)
+	}
 
-	results := make([]scopeResult, len(targets))
+	results := make([]scopeResult, len(phase.Targets))
 
 	var mu stdsync.Mutex // guards writes to results while shortcut workers finish out of order
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(maxShortcutConcurrency)
 
-	for i := range targets {
-		target := targets[i]
+	for i := range phase.Targets {
+		target := phase.Targets[i]
 
 		g.Go(func() error {
 			// Always set shortcut pointer so post-loop code can safely
@@ -447,13 +451,17 @@ func (coordinator *shortcutCoordinator) observeShortcutTargetsConcurrently(
 
 			result, scErr := dispatch(gCtx, target)
 			if scErr != nil {
-				eng.logger.Warn("shortcut "+logContext+" failed, skipping",
-					slog.String("item_id", target.shortcut.ItemID),
-					slog.String("remote_drive", target.shortcut.RemoteDrive),
-					slog.String("error", scErr.Error()),
-				)
+				if phase.ErrorPolicy == observationPhaseErrorPolicyIsolateTarget {
+					eng.logger.Warn("shortcut "+logContext+" failed, skipping",
+						slog.String("item_id", target.shortcut.ItemID),
+						slog.String("remote_drive", target.shortcut.RemoteDrive),
+						slog.String("error", scErr.Error()),
+					)
 
-				return nil // don't fail the group
+					return nil
+				}
+
+				return fmt.Errorf("observe shortcut target %s: %w", target.shortcut.ItemID, scErr)
 			}
 
 			mu.Lock()
@@ -477,7 +485,7 @@ func (coordinator *shortcutCoordinator) observeShortcutTargetsConcurrently(
 	for i := range results {
 		allEvents = append(allEvents, results[i].events...)
 
-		if results[i].deltaToken != "" {
+		if results[i].deltaToken != "" && phase.TokenCommitPolicy == observationPhaseTokenCommitPolicyAfterPhaseSuccess {
 			if err := eng.baseline.CommitDeltaToken(
 				ctx,
 				results[i].deltaToken,
@@ -492,10 +500,17 @@ func (coordinator *shortcutCoordinator) observeShortcutTargetsConcurrently(
 			}
 		}
 	}
+	if phase.TokenCommitPolicy != observationPhaseTokenCommitPolicyAfterPhaseSuccess {
+		for i := range results {
+			if results[i].deltaToken != "" {
+				return nil, fmt.Errorf("sync: shortcut %s: unsupported token commit policy %q", logContext, phase.TokenCommitPolicy)
+			}
+		}
+	}
 
 	if len(allEvents) > 0 {
 		eng.logger.Info("shortcut "+logContext+" complete",
-			slog.Int("shortcuts", len(targets)),
+			slog.Int("shortcuts", len(phase.Targets)),
 			slog.Int("events", len(allEvents)),
 		)
 	}
@@ -514,9 +529,20 @@ func (coordinator *shortcutCoordinator) observeShortcutContentFromList(
 	collisions map[string]bool,
 	suppressedShortcutTargets map[string]struct{},
 ) ([]synctypes.ChangeEvent, error) {
-	plan := coordinator.flow.BuildShortcutObservationPlan(shortcuts, bl, suppressedShortcutTargets, collisions)
+	plan, err := coordinator.flow.BuildObservationSessionPlan(ctx, ObservationPlanRequest{
+		Session:                   &ScopeSession{},
+		Baseline:                  bl,
+		SyncMode:                  synctypes.SyncBidirectional,
+		Purpose:                   observationPlanPurposeOneShot,
+		Shortcuts:                 shortcuts,
+		ShortcutCollisions:        collisions,
+		SuppressedShortcutTargets: suppressedShortcutTargets,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("sync: build shortcut observation plan: %w", err)
+	}
 
-	return coordinator.observeShortcutTargetsConcurrently(ctx, plan.Targets,
+	return coordinator.observeShortcutTargetsConcurrently(ctx, plan.ShortcutPhase,
 		func(gCtx context.Context, target plannedObservationTarget) (scopeResult, error) {
 			return coordinator.observeShortcutTarget(gCtx, target, bl, false)
 		},
@@ -548,10 +574,18 @@ func (coordinator *shortcutCoordinator) reconcileShortcutScopes(
 		return nil, nil
 	}
 
-	collisions := detectShortcutCollisionsFromList(shortcuts, bl, eng.logger)
-	plan := flow.BuildShortcutObservationPlan(shortcuts, bl, nil, collisions)
+	plan, err := flow.BuildObservationSessionPlan(ctx, ObservationPlanRequest{
+		Session:   &ScopeSession{},
+		Baseline:  bl,
+		SyncMode:  synctypes.SyncBidirectional,
+		Purpose:   observationPlanPurposeOneShot,
+		Shortcuts: shortcuts,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("sync: build shortcut reconciliation plan: %w", err)
+	}
 
-	return coordinator.observeShortcutTargetsConcurrently(ctx, plan.Targets,
+	return coordinator.observeShortcutTargetsConcurrently(ctx, plan.ShortcutPhase,
 		func(gCtx context.Context, target plannedObservationTarget) (scopeResult, error) {
 			return coordinator.observeShortcutTarget(gCtx, target, bl, true)
 		},

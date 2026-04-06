@@ -29,7 +29,7 @@ func (flow *engineFlow) applyScopeState(
 	ctx context.Context,
 	dryRun bool,
 	session *ScopeSession,
-	plan ObservationPlan,
+	plan *ObservationSessionPlan,
 ) error {
 	if dryRun {
 		return nil
@@ -195,7 +195,11 @@ func (rt *watchRuntime) handleWatchScopeChange(
 		Diff:       change.Diff,
 		Generation: rt.currentScopeGeneration() + 1,
 	}
-	plan, err := rt.BuildObservationPlan(ctx, &session, p.mode, false)
+	plan, err := rt.BuildObservationSessionPlan(ctx, ObservationPlanRequest{
+		Session:  &session,
+		SyncMode: p.mode,
+		Purpose:  observationPlanPurposeWatch,
+	})
 	if err != nil {
 		return outbox, false, err
 	}
@@ -206,7 +210,7 @@ func (rt *watchRuntime) handleWatchScopeChange(
 		plan.Reentry.Pending = false
 		plan.Reentry.Kind = synctypes.ScopeReconcileNone
 	}
-	if err := rt.applyScopeState(ctx, false, &session, plan); err != nil {
+	if err := rt.applyScopeState(ctx, false, &session, &plan); err != nil {
 		return outbox, false, fmt.Errorf("sync: applying watch scope change: %w", err)
 	}
 
