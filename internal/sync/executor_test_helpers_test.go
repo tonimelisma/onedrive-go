@@ -124,10 +124,9 @@ func newTestExecutorConfig(t *testing.T, items *executorMockItemClient, dl *exec
 	syncTree, err := synctree.Open(syncRoot)
 	require.NoError(t, err)
 
-	cfg := syncexec.NewExecutorConfig(items, dl, ul, syncTree, driveID, logger)
+	cfg := syncexec.NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, nil)
 	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
 	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) })
-	cfg.SetVisibilityWaitSchedule([]time.Duration{0, 0})
 
 	return cfg, syncRoot
 }

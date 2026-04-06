@@ -58,11 +58,53 @@ func (m *executorMockUploader) Upload(ctx context.Context, driveID driveid.ID, p
 	return nil, fmt.Errorf("Upload not mocked")
 }
 
+type executorPathConvergenceStub struct {
+	waitItem                 *graph.Item
+	waitErr                  error
+	waitCalls                []string
+	deleteResolvedCalls      []string
+	permanentDeletePathCalls []string
+}
+
+func (s *executorPathConvergenceStub) WaitPathVisible(_ context.Context, remotePath string) (*graph.Item, error) {
+	s.waitCalls = append(s.waitCalls, remotePath)
+	if s.waitErr != nil {
+		return nil, s.waitErr
+	}
+	if s.waitItem != nil {
+		return s.waitItem, nil
+	}
+
+	return &graph.Item{ID: "visible-item-id"}, nil
+}
+
+func (s *executorPathConvergenceStub) DeleteResolvedPath(_ context.Context, remotePath, _ string) error {
+	s.deleteResolvedCalls = append(s.deleteResolvedCalls, remotePath)
+	return nil
+}
+
+func (s *executorPathConvergenceStub) PermanentDeleteResolvedPath(_ context.Context, remotePath, _ string) error {
+	s.permanentDeletePathCalls = append(s.permanentDeletePathCalls, remotePath)
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
 
 func newTestExecutorConfig(t *testing.T, items *executorMockItemClient, dl *executorMockDownloader, ul *executorMockUploader) (*ExecutorConfig, string) {
+	t.Helper()
+
+	return newTestExecutorConfigWithPathConvergence(t, items, dl, ul, nil)
+}
+
+func newTestExecutorConfigWithPathConvergence(
+	t *testing.T,
+	items *executorMockItemClient,
+	dl *executorMockDownloader,
+	ul *executorMockUploader,
+	pathConvergence driveops.PathConvergence,
+) (*ExecutorConfig, string) {
 	t.Helper()
 
 	syncRoot := t.TempDir()
@@ -71,10 +113,9 @@ func newTestExecutorConfig(t *testing.T, items *executorMockItemClient, dl *exec
 	syncTree, err := synctree.Open(syncRoot)
 	require.NoError(t, err)
 
-	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger)
+	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, pathConvergence)
 	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
 	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) })
-	cfg.SetVisibilityWaitSchedule([]time.Duration{0, 0})
 
 	return cfg, syncRoot
 }
@@ -99,6 +140,14 @@ func requireOutcomeFailure(t *testing.T, o *synctypes.Outcome) {
 	t.Helper()
 
 	require.False(t, o.Success, "expected failure but got success")
+}
+
+func TestNewExecutorConfig_AllowsNilPathConvergence(t *testing.T) {
+	t.Parallel()
+
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+
+	require.Nil(t, cfg.pathConvergence)
 }
 
 // ---------------------------------------------------------------------------
@@ -158,6 +207,57 @@ func TestExecutor_CreateRemoteFolder(t *testing.T) {
 	requireOutcomeSuccess(t, &o)
 
 	assert.Equal(t, "new-folder-id", o.ItemID)
+}
+
+func TestExecutor_CreateRemoteFolder_UsesPathConvergence(t *testing.T) {
+	t.Parallel()
+
+	items := &executorMockItemClient{
+		createFolderFn: func(_ context.Context, _ driveid.ID, _, _ string) (*graph.Item, error) {
+			return &graph.Item{ID: "new-folder-id", ETag: "etag1"}, nil
+		},
+	}
+	pathConvergence := &executorPathConvergenceStub{}
+
+	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
+	e := NewExecution(cfg, synctest.EmptyBaseline())
+
+	action := &synctypes.Action{
+		Type:       synctypes.ActionFolderCreate,
+		Path:       "photos",
+		CreateSide: synctypes.CreateRemote,
+		View:       &synctypes.PathView{Path: "photos"},
+	}
+
+	o := e.ExecuteFolderCreate(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+
+	require.Equal(t, []string{"photos"}, pathConvergence.waitCalls)
+}
+
+func TestExecutor_CreateRemoteFolder_PathConvergenceWarningIsNonFatal(t *testing.T) {
+	t.Parallel()
+
+	items := &executorMockItemClient{
+		createFolderFn: func(_ context.Context, _ driveid.ID, _, _ string) (*graph.Item, error) {
+			return &graph.Item{ID: "new-folder-id", ETag: "etag1"}, nil
+		},
+	}
+	pathConvergence := &executorPathConvergenceStub{waitErr: driveops.ErrPathNotVisible}
+
+	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
+	e := NewExecution(cfg, synctest.EmptyBaseline())
+
+	action := &synctypes.Action{
+		Type:       synctypes.ActionFolderCreate,
+		Path:       "photos",
+		CreateSide: synctypes.CreateRemote,
+		View:       &synctypes.PathView{Path: "photos"},
+	}
+
+	o := e.ExecuteFolderCreate(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+	require.Equal(t, []string{"photos"}, pathConvergence.waitCalls)
 }
 
 func TestExecutor_CreateRemoteFolder_Error(t *testing.T) {
@@ -256,6 +356,33 @@ func TestExecutor_RemoteMove(t *testing.T) {
 
 	assert.Equal(t, "renamed.txt", o.Path)
 	assert.Equal(t, "original.txt", o.OldPath)
+}
+
+func TestExecutor_RemoteMove_UsesPathConvergence(t *testing.T) {
+	t.Parallel()
+
+	items := &executorMockItemClient{
+		moveItemFn: func(_ context.Context, _ driveid.ID, _, _, _ string) (*graph.Item, error) {
+			return &graph.Item{ID: "item1", ETag: "etag2"}, nil
+		},
+	}
+	pathConvergence := &executorPathConvergenceStub{}
+
+	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
+	e := NewExecution(cfg, synctest.EmptyBaseline())
+
+	action := &synctypes.Action{
+		Type:    synctypes.ActionRemoteMove,
+		Path:    "renamed.txt",
+		OldPath: "original.txt",
+		ItemID:  "item1",
+		DriveID: driveid.New(synctest.TestDriveID),
+		View:    &synctypes.PathView{Path: "renamed.txt"},
+	}
+
+	o := e.ExecuteMove(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+	require.Equal(t, []string{"renamed.txt"}, pathConvergence.waitCalls)
 }
 
 // ---------------------------------------------------------------------------
@@ -536,6 +663,60 @@ func TestExecutor_Upload_SimpleSuccess(t *testing.T) {
 
 	assert.Equal(t, "uploaded1", o.ItemID)
 	assert.Equal(t, "root", o.ParentID)
+}
+
+func TestExecutor_Upload_UsesPathConvergence(t *testing.T) {
+	t.Parallel()
+
+	ul := &executorMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			return &graph.Item{ID: "uploaded1", ETag: "etag1", QuickXorHash: "abc"}, nil
+		},
+	}
+	pathConvergence := &executorPathConvergenceStub{}
+
+	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, &executorMockItemClient{}, &executorMockDownloader{}, ul, pathConvergence)
+	e := NewExecution(cfg, synctest.EmptyBaseline())
+
+	writeExecTestFile(t, syncRoot, "exec-small.txt", "hello")
+
+	action := &synctypes.Action{
+		Type:    synctypes.ActionUpload,
+		Path:    "exec-small.txt",
+		DriveID: driveid.New(synctest.TestDriveID),
+		View:    &synctypes.PathView{Path: "exec-small.txt"},
+	}
+
+	o := e.ExecuteUpload(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+	require.Equal(t, []string{"exec-small.txt"}, pathConvergence.waitCalls)
+}
+
+func TestExecutor_Upload_PathConvergenceProbeFailureIsNonFatal(t *testing.T) {
+	t.Parallel()
+
+	ul := &executorMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			return &graph.Item{ID: "uploaded1", ETag: "etag1", QuickXorHash: "abc"}, nil
+		},
+	}
+	pathConvergence := &executorPathConvergenceStub{waitErr: fmt.Errorf("metadata probe failed")}
+
+	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, &executorMockItemClient{}, &executorMockDownloader{}, ul, pathConvergence)
+	e := NewExecution(cfg, synctest.EmptyBaseline())
+
+	writeExecTestFile(t, syncRoot, "exec-small.txt", "hello")
+
+	action := &synctypes.Action{
+		Type:    synctypes.ActionUpload,
+		Path:    "exec-small.txt",
+		DriveID: driveid.New(synctest.TestDriveID),
+		View:    &synctypes.PathView{Path: "exec-small.txt"},
+	}
+
+	o := e.ExecuteUpload(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+	require.Equal(t, []string{"exec-small.txt"}, pathConvergence.waitCalls)
 }
 
 func TestExecutor_Upload_ParentFromBaseline(t *testing.T) {

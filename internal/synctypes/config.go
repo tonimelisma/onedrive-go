@@ -41,10 +41,11 @@ type EngineConfig struct {
 	Items              ItemClient          // satisfied by *graph.Client
 	Downloads          driveops.Downloader // satisfied by *graph.Client
 	Uploads            driveops.Uploader   // satisfied by *graph.Client
-	DriveVerifier      DriveVerifier       // optional: verified at startup (B-074); nil skips check
-	FolderDelta        FolderDeltaFetcher  // optional: folder-scoped delta for shortcut observation (6.4b)
-	RecursiveLister    RecursiveLister     // optional: recursive listing for shortcut observation (6.4b)
-	PermChecker        PermissionChecker   // optional: permission checking for shared folders (6.4c)
+	PathConvergence    driveops.PathConvergence
+	DriveVerifier      DriveVerifier      // optional: verified at startup (B-074); nil skips check
+	FolderDelta        FolderDeltaFetcher // optional: folder-scoped delta for shortcut observation (6.4b)
+	RecursiveLister    RecursiveLister    // optional: recursive listing for shortcut observation (6.4b)
+	PermChecker        PermissionChecker  // optional: permission checking for shared folders (6.4c)
 	Logger             *slog.Logger
 	LocalFilter        LocalFilterConfig
 	LocalRules         LocalObservationRules
