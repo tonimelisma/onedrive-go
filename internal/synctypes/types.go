@@ -41,23 +41,25 @@ type ScanResult struct {
 //	Buffer synthetic deletes: Source, Type, Path, ItemID, ParentID, DriveID,
 //	  ItemType, Name, IsDeleted. No Size/Hash/Mtime (move context only).
 type ChangeEvent struct {
-	Source        ChangeSource
-	Type          ChangeType
-	Path          string     // NFC-normalized, relative to sync root
-	OldPath       string     // for moves only
-	ItemID        string     // server-assigned (remote only; empty for local)
-	ParentID      string     // server parent ID (remote only)
-	DriveID       driveid.ID // normalized (lowercase, zero-padded to 16 chars)
-	ItemType      ItemType
-	Name          string // URL-decoded, NFC-normalized
-	Size          int64
-	Hash          string // QuickXorHash (base64); empty for folders
-	Mtime         int64  // Unix nanoseconds
-	ETag          string // remote only
-	CTag          string // remote only
-	IsDeleted     bool
-	RemoteDriveID string // for shortcuts: source drive containing shared content
-	RemoteItemID  string // for shortcuts: source folder ID on the remote drive
+	Source          ChangeSource
+	Type            ChangeType
+	ForcedAction    ActionType // retry/crash-recovery hint; valid only when HasForcedAction is true
+	HasForcedAction bool
+	Path            string     // NFC-normalized, relative to sync root
+	OldPath         string     // for moves only
+	ItemID          string     // server-assigned (remote only; empty for local)
+	ParentID        string     // server parent ID (remote only)
+	DriveID         driveid.ID // normalized (lowercase, zero-padded to 16 chars)
+	ItemType        ItemType
+	Name            string // URL-decoded, NFC-normalized
+	Size            int64
+	Hash            string // QuickXorHash (base64); empty for folders
+	Mtime           int64  // Unix nanoseconds
+	ETag            string // remote only
+	CTag            string // remote only
+	IsDeleted       bool
+	RemoteDriveID   string // for shortcuts: source drive containing shared content
+	RemoteItemID    string // for shortcuts: source folder ID on the remote drive
 }
 
 // BaselineEntry represents the confirmed synced state of a single path.
@@ -364,10 +366,12 @@ type LocalState struct {
 // the planner from change events + baseline. Input to the reconciliation
 // decision matrix.
 type PathView struct {
-	Path     string
-	Remote   *RemoteState   // nil = no remote change observed
-	Local    *LocalState    // nil = no local change observed / locally absent
-	Baseline *BaselineEntry // nil = never synced
+	Path            string
+	Remote          *RemoteState   // nil = no remote change observed
+	Local           *LocalState    // nil = no local change observed / locally absent
+	Baseline        *BaselineEntry // nil = never synced
+	ForcedAction    ActionType     // retry/crash-recovery hint; valid only when HasForcedAction is true
+	HasForcedAction bool
 }
 
 // ConflictRecord holds metadata about a detected conflict.

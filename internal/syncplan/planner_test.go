@@ -113,6 +113,48 @@ func TestClassifyFile_EF1_Unchanged(t *testing.T) {
 	assert.Equal(t, 0, countActions(plan), "EF1")
 }
 
+// Validates: R-2.5.1, R-6.8.15
+func TestClassifyFile_ForcedDownloadReplayOverridesBaselineEquality(t *testing.T) {
+	planner := NewPlanner(synctest.TestLogger(t))
+
+	changes := []synctypes.PathChanges{
+		{
+			Path: "planner-replay.txt",
+			RemoteEvents: []synctypes.ChangeEvent{
+				{
+					Source:          synctypes.SourceRemote,
+					Type:            synctypes.ChangeModify,
+					Path:            "planner-replay.txt",
+					ItemType:        synctypes.ItemTypeFile,
+					Hash:            "hashA",
+					ItemID:          "item1",
+					DriveID:         driveid.New(synctest.TestDriveID),
+					ETag:            "etagA",
+					ForcedAction:    synctypes.ActionDownload,
+					HasForcedAction: true,
+				},
+			},
+		},
+	}
+
+	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+		Path:       "planner-replay.txt",
+		DriveID:    driveid.New(synctest.TestDriveID),
+		ItemID:     "item1",
+		ItemType:   synctypes.ItemTypeFile,
+		LocalHash:  "hashA",
+		RemoteHash: "hashA",
+		ETag:       "etagA",
+	})
+
+	plan, err := planner.Plan(changes, baseline, synctypes.SyncDownloadOnly, synctypes.DefaultSafetyConfig(), nil)
+	require.NoError(t, err, "Plan()")
+
+	downloads := synctest.ActionsOfType(plan.Actions, synctypes.ActionDownload)
+	require.Len(t, downloads, 1)
+	assert.Equal(t, "planner-replay.txt", downloads[0].Path)
+}
+
 func TestClassifyFile_EF2_RemoteModified(t *testing.T) {
 	// EF2: baseline exists, remote hash changed, no local events (local derived from baseline).
 	planner := NewPlanner(synctest.TestLogger(t))
