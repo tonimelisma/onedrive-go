@@ -210,6 +210,20 @@ type testEngine struct {
 	flow    *engineFlow
 }
 
+type enginePathConvergenceStub struct{}
+
+func (s *enginePathConvergenceStub) WaitPathVisible(_ context.Context, _ string) (*graph.Item, error) {
+	return &graph.Item{ID: "visible-item-id"}, nil
+}
+
+func (s *enginePathConvergenceStub) DeleteResolvedPath(_ context.Context, _, _ string) error {
+	return nil
+}
+
+func (s *enginePathConvergenceStub) PermanentDeleteResolvedPath(_ context.Context, _, _ string) error {
+	return nil
+}
+
 func newFlowBackedTestEngine(engine *Engine) *testEngine {
 	flow := newEngineFlow(engine)
 
@@ -250,13 +264,13 @@ func newTestEngineWithContext(t *testing.T, ctx context.Context, mock *engineMoc
 		Items:           mock,
 		Downloads:       mock,
 		Uploads:         mock,
+		PathConvergence: &enginePathConvergenceStub{},
 		FolderDelta:     mock,
 		RecursiveLister: mock,
 		PermChecker:     mock,
 		Logger:          logger,
 	})
 	require.NoError(t, err, "NewEngine")
-	eng.execCfg.SetVisibilityWaitSchedule([]time.Duration{0, 0})
 	eng.assertInvariants = true
 	flow := newEngineFlow(eng)
 	testEng := &testEngine{
@@ -301,13 +315,13 @@ func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *eng
 		Items:           mock,
 		Downloads:       mock,
 		Uploads:         mock,
+		PathConvergence: &enginePathConvergenceStub{},
 		FolderDelta:     mock,
 		RecursiveLister: mock,
 		PermChecker:     mock,
 		Logger:          logger,
 	})
 	require.NoError(t, err, "NewEngine")
-	eng.execCfg.SetVisibilityWaitSchedule([]time.Duration{0, 0})
 	eng.assertInvariants = true
 	flow := newEngineFlow(eng)
 	testEng := &testEngine{

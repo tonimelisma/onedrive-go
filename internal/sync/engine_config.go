@@ -46,6 +46,7 @@ func BuildEngineConfig(
 		Items:           session.Meta,
 		Downloads:       session.Transfer,
 		Uploads:         session.Transfer,
+		PathConvergence: session,
 		FolderDelta:     session.Meta,
 		RecursiveLister: session.Meta,
 		PermChecker:     session.Meta,

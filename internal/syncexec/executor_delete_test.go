@@ -1,6 +1,7 @@
 package syncexec
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -87,7 +88,7 @@ func newDeleteTestExecutor(t *testing.T) (*Executor, string) {
 	dl := &executorMockDownloader{}
 	ul := &executorMockUploader{}
 
-	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger)
+	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, nil)
 	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
 	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) })
 	e := NewExecution(cfg, synctest.EmptyBaseline())
@@ -114,6 +115,42 @@ func TestDeleteLocalFolder_DSStoreOnly_Succeeds(t *testing.T) {
 	// Directory should be gone.
 	_, err := os.Stat(dir)
 	assert.True(t, os.IsNotExist(err))
+}
+
+func TestExecuteRemoteDelete_DoesNotUsePathConvergenceDelete(t *testing.T) {
+	t.Parallel()
+
+	syncRoot := t.TempDir()
+	driveID := driveid.New(synctest.TestDriveID)
+	logger := synctest.TestLogger(t)
+	syncTree, err := synctree.Open(syncRoot)
+	require.NoError(t, err)
+
+	items := &executorMockItemClient{
+		deleteItemFn: func(_ context.Context, _ driveid.ID, itemID string) error {
+			assert.Equal(t, "remote-item-id", itemID)
+			return nil
+		},
+	}
+	pathConvergence := &executorPathConvergenceStub{}
+
+	cfg := NewExecutorConfig(items, &executorMockDownloader{}, &executorMockUploader{}, syncTree, driveID, logger, pathConvergence)
+	cfg.SetTransferMgr(driveops.NewTransferManager(&executorMockDownloader{}, &executorMockUploader{}, nil, logger))
+	e := NewExecution(cfg, synctest.EmptyBaseline())
+
+	action := &synctypes.Action{
+		Type:   synctypes.ActionRemoteDelete,
+		Path:   "docs/report.txt",
+		ItemID: "remote-item-id",
+		View: &synctypes.PathView{
+			Remote: &synctypes.RemoteState{ETag: "etag-1"},
+		},
+	}
+
+	outcome := e.ExecuteRemoteDelete(t.Context(), action)
+	requireOutcomeSuccess(t, &outcome)
+	assert.Empty(t, pathConvergence.deleteResolvedCalls)
+	assert.Empty(t, pathConvergence.permanentDeletePathCalls)
 }
 
 func TestDeleteLocalFolder_TmpFilesOnly_Succeeds(t *testing.T) {

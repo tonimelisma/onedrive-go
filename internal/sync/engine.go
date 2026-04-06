@@ -121,7 +121,15 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 		return nil, fmt.Errorf("sync: opening sync tree: %w", err)
 	}
 
-	execCfg := syncexec.NewExecutorConfig(cfg.Items, cfg.Downloads, cfg.Uploads, syncTree, cfg.DriveID, cfg.Logger)
+	execCfg := syncexec.NewExecutorConfig(
+		cfg.Items,
+		cfg.Downloads,
+		cfg.Uploads,
+		syncTree,
+		cfg.DriveID,
+		cfg.Logger,
+		cfg.PathConvergence,
+	)
 	execCfg.SetRootItemID(cfg.RootItemID)
 
 	if cfg.UseLocalTrash {

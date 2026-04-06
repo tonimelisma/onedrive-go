@@ -77,3 +77,12 @@ type RangeDownloader interface {
 		w io.Writer, offset int64,
 	) (int64, error)
 }
+
+// PathConvergence owns post-success path settling for one resolved drive
+// session. Callers use it after successful mutations when Graph can lag on
+// follow-on path reads or path-authoritative delete routes.
+type PathConvergence interface {
+	WaitPathVisible(ctx context.Context, remotePath string) (*graph.Item, error)
+	DeleteResolvedPath(ctx context.Context, remotePath, itemID string) error
+	PermanentDeleteResolvedPath(ctx context.Context, remotePath, itemID string) error
+}

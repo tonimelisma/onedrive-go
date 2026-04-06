@@ -60,12 +60,18 @@ live full E2E. The
 retry belongs to `graph.CreateUploadSession()`, not to CLI callers or generic
 upload retry logic.
 
-`PathVisibilityPolicy()` is deterministic on purpose. `driveops.Session`
-reuses it for two command-boundary convergence checks:
+`PathVisibilityPolicy()` is deterministic on purpose. `driveops` is the only
+runtime owner that consumes it. `driveops.Session` reuses the policy for two
+command-boundary convergence checks:
 
 - destination-path readability after successful `mkdir`, `put`, and `mv`
 - path-authoritative delete convergence after a successful path lookup followed
   by transient `DELETE .../items/{id} = 404 itemNotFound`
+
+`syncexec` does not carry an independent visibility schedule or sleep loop.
+When sync wants best-effort confirmation after a successful remote create,
+upload, or move, it delegates to the injected `driveops.PathConvergence`
+capability and logs warn-only on failure.
 
 ## RetryTransport (`transport.go`)
 
