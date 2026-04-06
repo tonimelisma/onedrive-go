@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -194,6 +195,8 @@ func assertSyncLeavesLocalTreeStable(
 func putRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePath, content string) {
 	t.Helper()
 
+	pollRemoteParentVisible(t, cfgPath, env, remotePath)
+
 	tmpFile, err := os.CreateTemp("", "e2e-put-*")
 	require.NoError(t, err)
 	defer os.Remove(tmpFile.Name())
@@ -203,6 +206,7 @@ func putRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePa
 	require.NoError(t, tmpFile.Close())
 
 	runCLIWithConfig(t, cfgPath, env, "put", tmpFile.Name(), remotePath)
+	pollRemotePathVisible(t, cfgPath, env, remotePath)
 }
 
 // getRemoteFile downloads a remote file and returns its content as a string.
@@ -210,6 +214,8 @@ func putRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePa
 // (if non-nil) are forwarded to the CLI child process.
 func getRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePath string) string {
 	t.Helper()
+
+	pollRemotePathVisible(t, cfgPath, env, remotePath)
 
 	tmpDir := t.TempDir()
 	localPath := filepath.Join(tmpDir, "downloaded")
@@ -220,6 +226,38 @@ func getRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePa
 	require.NoError(t, err)
 
 	return string(data)
+}
+
+func pollRemoteParentVisible(t *testing.T, cfgPath string, env map[string]string, remotePath string) {
+	t.Helper()
+
+	parent := path.Dir(remotePath)
+	if parent == "." || parent == "/" || parent == "" {
+		return
+	}
+
+	parentName := path.Base(parent)
+	if parentName == "." || parentName == "/" || parentName == "" {
+		return
+	}
+
+	pollCLIWithConfigContains(t, cfgPath, env, parentName, pollTimeout, "stat", parent)
+}
+
+func pollRemotePathVisible(t *testing.T, cfgPath string, env map[string]string, remotePath string) {
+	t.Helper()
+
+	cleanPath := path.Clean(remotePath)
+	if cleanPath == "." || cleanPath == "/" || cleanPath == "" {
+		return
+	}
+
+	base := path.Base(cleanPath)
+	if base == "." || base == "/" || base == "" {
+		return
+	}
+
+	pollCLIWithConfigContains(t, cfgPath, env, base, pollTimeout, "stat", cleanPath)
 }
 
 // cleanupRemoteFolder is a best-effort remote cleanup for use in t.Cleanup.

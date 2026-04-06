@@ -710,6 +710,44 @@ func TestExecutor_LocalDelete_HashMismatch_ConflictCopy(t *testing.T) {
 	assert.True(t, found, "expected conflict copy to be created")
 }
 
+// Validates: R-6.2.4
+func TestExecutor_LocalDelete_HashMismatch_ConflictCopyCollisionGetsSuffix(t *testing.T) {
+	t.Parallel()
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	e := NewExecution(cfg, synctest.EmptyBaseline())
+
+	writeExecTestFile(t, syncRoot, "exec-modified.txt", "new content")
+	writeExecTestFile(t, syncRoot, "exec-modified.conflict-20260115-120000.txt", "existing conflict")
+
+	action := &synctypes.Action{
+		Type:   synctypes.ActionLocalDelete,
+		Path:   "exec-modified.txt",
+		ItemID: "item1",
+		View: &synctypes.PathView{
+			Baseline: &synctypes.BaselineEntry{
+				LocalHash:  "old-hash-that-wont-match",
+				RemoteHash: "baseline-remote-hash",
+			},
+		},
+	}
+
+	o := e.ExecuteLocalDelete(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+	assert.Equal(t, synctypes.ActionConflict, o.Action)
+
+	_, statErr := os.Stat(filepath.Join(syncRoot, "exec-modified.txt"))
+	assert.True(t, os.IsNotExist(statErr), "original file should have been renamed")
+
+	existingData, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-modified.conflict-20260115-120000.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "existing conflict", string(existingData))
+
+	suffixedData, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-modified.conflict-20260115-120000-2.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "new content", string(suffixedData))
+}
+
 func TestExecutor_LocalDelete_AlreadyGone(t *testing.T) {
 	t.Parallel()
 
@@ -905,6 +943,54 @@ func TestExecutor_Conflict_EditEdit_KeepBoth(t *testing.T) {
 	}
 
 	assert.True(t, conflictFound, "expected conflict copy with local content")
+}
+
+// Validates: R-2.3.1
+func TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix(t *testing.T) {
+	t.Parallel()
+
+	dl := &executorMockDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, err := w.Write([]byte("remote version"))
+			return int64(n), err
+		},
+	}
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
+	e := NewExecution(cfg, synctest.EmptyBaseline())
+
+	writeExecTestFile(t, syncRoot, "exec-conflict.txt", "local version")
+	writeExecTestFile(t, syncRoot, "exec-conflict.conflict-20260115-120000.txt", "existing conflict")
+
+	action := &synctypes.Action{
+		Type:    synctypes.ActionConflict,
+		Path:    "exec-conflict.txt",
+		ItemID:  "item1",
+		DriveID: driveid.New(synctest.TestDriveID),
+		View: &synctypes.PathView{
+			Remote: &synctypes.RemoteState{
+				ItemID:   "item1",
+				ParentID: "root",
+				ETag:     "etag1",
+			},
+		},
+		ConflictInfo: &synctypes.ConflictRecord{ConflictType: "edit_edit"},
+	}
+
+	o := e.ExecuteConflict(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+
+	originalData, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-conflict.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "remote version", string(originalData))
+
+	existingData, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-conflict.conflict-20260115-120000.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "existing conflict", string(existingData))
+
+	suffixedData, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-conflict.conflict-20260115-120000-2.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "local version", string(suffixedData))
 }
 
 func TestExecutor_Conflict_EditDelete_AutoResolve(t *testing.T) {

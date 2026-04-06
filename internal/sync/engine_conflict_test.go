@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -16,6 +17,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
+
+const engineResolvedRemoteVersion = "remote-version"
 
 // ---------------------------------------------------------------------------
 // Conflict resolution tests
@@ -216,6 +219,63 @@ func TestResolveConflict_KeepLocal(t *testing.T) {
 }
 
 // Validates: R-2.3.4
+func TestResolveConflict_KeepLocal_RestoresSuffixedConflictCopy(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	var uploadedContent string
+
+	mock := &engineMockClient{
+		uploadFn: func(_ context.Context, _ driveid.ID, parentID, name string, content io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			buf := make([]byte, size)
+			_, readErr := content.ReadAt(buf, 0)
+			if readErr != nil && readErr != io.EOF {
+				return nil, fmt.Errorf("reading restored local content: %w", readErr)
+			}
+			uploadedContent = string(buf)
+
+			return &graph.Item{
+				ID:           "uploaded-suffixed",
+				Name:         name,
+				ETag:         "etag-suffixed",
+				QuickXorHash: "resolve-hash",
+				Size:         size,
+			}, nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	outcomes := []synctypes.Outcome{{
+		Action:       synctypes.ActionConflict,
+		Success:      true,
+		Path:         "keep-local.txt",
+		DriveID:      driveID,
+		ItemID:       "item-kl",
+		ItemType:     synctypes.ItemTypeFile,
+		LocalHash:    "local-h",
+		RemoteHash:   "remote-h",
+		ConflictType: "edit_edit",
+	}}
+	seedBaseline(t, eng.baseline, ctx, outcomes, "")
+
+	writeLocalFile(t, syncRoot, "keep-local.txt", "remote content")
+	writeLocalFile(t, syncRoot, "keep-local.conflict-20260115-120000-2.txt", "local preferred")
+
+	conflicts, err := eng.ListConflicts(ctx)
+	require.NoError(t, err)
+	require.Len(t, conflicts, 1)
+
+	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepLocal))
+	assert.Equal(t, "local preferred", uploadedContent, "keep-local should restore the suffixed conflict copy before upload")
+	assert.Equal(t, "local preferred", string(mustReadFileUnderRoot(t, syncRoot, "keep-local.txt")))
+
+	_, statErr := os.Stat(filepath.Join(syncRoot, "keep-local.conflict-20260115-120000-2.txt"))
+	assert.True(t, os.IsNotExist(statErr), "resolved keep-local should remove suffixed conflict copies")
+}
+
+// Validates: R-2.3.4
 func TestResolveConflict_KeepRemote(t *testing.T) {
 	t.Parallel()
 
@@ -261,6 +321,49 @@ func TestResolveConflict_KeepRemote(t *testing.T) {
 	// Verify the local file has remote content.
 	data := mustReadFileUnderRoot(t, syncRoot, "keep-remote.txt")
 	assert.Equal(t, downloadContent, string(data))
+}
+
+// Validates: R-2.3.4
+func TestResolveConflict_KeepRemote_CleansUpSuffixedConflictCopy(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	downloadContent := engineResolvedRemoteVersion
+
+	mock := &engineMockClient{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, writeErr := w.Write([]byte(downloadContent))
+			return int64(n), writeErr
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	outcomes := []synctypes.Outcome{{
+		Action:       synctypes.ActionConflict,
+		Success:      true,
+		Path:         "keep-remote.txt",
+		DriveID:      driveID,
+		ItemID:       "item-kr",
+		ItemType:     synctypes.ItemTypeFile,
+		LocalHash:    "local-h",
+		RemoteHash:   "remote-h",
+		ConflictType: "edit_edit",
+	}}
+	seedBaseline(t, eng.baseline, ctx, outcomes, "")
+
+	writeLocalFile(t, syncRoot, "keep-remote.conflict-20260115-120000-2.txt", "local copy")
+
+	conflicts, err := eng.ListConflicts(ctx)
+	require.NoError(t, err)
+	require.Len(t, conflicts, 1)
+
+	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepRemote))
+
+	_, statErr := os.Stat(filepath.Join(syncRoot, "keep-remote.conflict-20260115-120000-2.txt"))
+	assert.True(t, os.IsNotExist(statErr), "keep-remote cleanup should remove suffixed conflict copies")
+	assert.Equal(t, downloadContent, string(mustReadFileUnderRoot(t, syncRoot, "keep-remote.txt")))
 }
 
 func TestResolveConflict_KeepLocal_RestoreFailure(t *testing.T) {
@@ -328,6 +431,46 @@ func TestResolveConflict_KeepBoth_MissingOriginalReturnsError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "updating baseline for original")
 	assert.Contains(t, err.Error(), "stat missing-original.txt")
+}
+
+// Validates: R-2.3.4
+func TestResolveConflict_KeepBoth_TracksSuffixedConflictCopy(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "conflict-file.txt"), []byte("local content"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "conflict-file.conflict-20260115-120000-2.txt"), []byte("other local content"), 0o600))
+
+	outcomes := []synctypes.Outcome{{
+		Action:       synctypes.ActionConflict,
+		Success:      true,
+		Path:         "conflict-file.txt",
+		DriveID:      driveID,
+		ItemID:       "item-c",
+		ItemType:     synctypes.ItemTypeFile,
+		LocalHash:    "local-h",
+		RemoteHash:   "remote-h",
+		ConflictType: "edit_edit",
+	}}
+	seedBaseline(t, eng.baseline, ctx, outcomes, "")
+
+	conflicts, err := eng.ListConflicts(ctx)
+	require.NoError(t, err)
+	require.Len(t, conflicts, 1)
+
+	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepBoth))
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+	entry, ok := bl.GetByPath("conflict-file.conflict-20260115-120000-2.txt")
+	require.True(t, ok, "keep-both should create baseline state for suffixed conflict copies")
+	assert.Equal(t, conflictCopyPlaceholderItemID("conflict-file.conflict-20260115-120000-2.txt"), entry.ItemID)
+	assert.NotEmpty(t, entry.LocalHash)
 }
 
 // ---------------------------------------------------------------------------

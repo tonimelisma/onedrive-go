@@ -8,8 +8,10 @@
 //   - DeleteDeltaToken:        remove delta token for drive/scope
 //   - saveDeltaToken:          persist delta token within existing transaction
 //   - CommitOutcome:           atomically apply outcome to baseline + remote_state
+//   - classifyBaselineMutation: map ActionType to one explicit baseline mutation kind
 //   - applySingleOutcome:      dispatch outcome to appropriate DB helper
 //   - updateBaselineCache:     patch in-memory baseline after DB commit
+//   - reloadBaselineCache:     rebuild the cache from SQLite after impossible cache state
 //   - outcomeToEntry:          convert Outcome to BaselineEntry
 //   - commitUpsert:            INSERT/UPDATE baseline for download/upload/create
 //   - commitDelete:            DELETE baseline for delete/cleanup
@@ -88,6 +90,15 @@ type LocalBaselineRefresh struct {
 	LocalSizeKnown bool
 	LocalMtime     int64
 }
+
+type baselineMutationKind int
+
+const (
+	baselineMutationUpsert baselineMutationKind = iota
+	baselineMutationDelete
+	baselineMutationMove
+	baselineMutationConflict
+)
 
 // Load reads the entire baseline table into memory, populating ByPath and
 // ByID maps. The result is cached on the manager — subsequent calls return
@@ -238,7 +249,9 @@ func (m *SyncStore) CommitOutcome(ctx context.Context, outcome *synctypes.Outcom
 	}
 
 	// Update in-memory baseline cache incrementally.
-	m.updateBaselineCache(outcome, syncedAt)
+	if cacheErr := m.updateBaselineCache(ctx, outcome, syncedAt); cacheErr != nil {
+		return cacheErr
+	}
 
 	return nil
 }
@@ -326,18 +339,36 @@ func (m *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh LocalBasel
 	return nil
 }
 
+func classifyBaselineMutation(action synctypes.ActionType) (baselineMutationKind, error) {
+	switch action {
+	case synctypes.ActionDownload, synctypes.ActionUpload, synctypes.ActionFolderCreate, synctypes.ActionUpdateSynced:
+		return baselineMutationUpsert, nil
+	case synctypes.ActionLocalDelete, synctypes.ActionRemoteDelete, synctypes.ActionCleanup:
+		return baselineMutationDelete, nil
+	case synctypes.ActionLocalMove, synctypes.ActionRemoteMove:
+		return baselineMutationMove, nil
+	case synctypes.ActionConflict:
+		return baselineMutationConflict, nil
+	default:
+		return 0, fmt.Errorf("sync: classifying baseline mutation for %s: unknown action type", action.String())
+	}
+}
+
 // applySingleOutcome dispatches a single outcome to the appropriate DB helper.
 func applySingleOutcome(ctx context.Context, tx *sql.Tx, o *synctypes.Outcome, syncedAt int64) error {
-	var err error
+	mutation, err := classifyBaselineMutation(o.Action)
+	if err != nil {
+		return err
+	}
 
-	switch o.Action {
-	case synctypes.ActionDownload, synctypes.ActionUpload, synctypes.ActionFolderCreate, synctypes.ActionUpdateSynced:
+	switch mutation {
+	case baselineMutationUpsert:
 		err = commitUpsert(ctx, tx, o, syncedAt)
-	case synctypes.ActionLocalDelete, synctypes.ActionRemoteDelete, synctypes.ActionCleanup:
+	case baselineMutationDelete:
 		err = commitDelete(ctx, tx, o.Path)
-	case synctypes.ActionLocalMove, synctypes.ActionRemoteMove:
+	case baselineMutationMove:
 		err = commitMove(ctx, tx, o, syncedAt)
-	case synctypes.ActionConflict:
+	case baselineMutationConflict:
 		err = commitConflict(ctx, tx, o, syncedAt)
 	}
 
@@ -351,16 +382,31 @@ func applySingleOutcome(ctx context.Context, tx *sql.Tx, o *synctypes.Outcome, s
 
 // updateBaselineCache applies a single outcome to the in-memory baseline,
 // keeping the cache consistent without a full DB reload.
-func (m *SyncStore) updateBaselineCache(o *synctypes.Outcome, syncedAt int64) {
-	switch o.Action {
-	case synctypes.ActionDownload, synctypes.ActionUpload, synctypes.ActionFolderCreate, synctypes.ActionUpdateSynced:
+func (m *SyncStore) updateBaselineCache(ctx context.Context, o *synctypes.Outcome, syncedAt int64) error {
+	mutation, err := classifyBaselineMutation(o.Action)
+	if err != nil {
+		m.logger.Warn("baseline cache classification failed, reloading cache from database",
+			slog.String("path", o.Path),
+			slog.String("action", o.Action.String()),
+			slog.String("error", err.Error()),
+		)
+
+		if reloadErr := m.reloadBaselineCache(ctx); reloadErr != nil {
+			return fmt.Errorf("sync: reloading baseline cache after impossible mutation state: %w", reloadErr)
+		}
+
+		return nil
+	}
+
+	switch mutation {
+	case baselineMutationUpsert:
 		m.baseline.Put(outcomeToEntry(o, syncedAt))
-	case synctypes.ActionLocalDelete, synctypes.ActionRemoteDelete, synctypes.ActionCleanup:
+	case baselineMutationDelete:
 		m.baseline.Delete(o.Path)
-	case synctypes.ActionLocalMove, synctypes.ActionRemoteMove:
+	case baselineMutationMove:
 		m.baseline.Delete(o.OldPath)
 		m.baseline.Put(outcomeToEntry(o, syncedAt))
-	case synctypes.ActionConflict:
+	case baselineMutationConflict:
 		if o.ResolvedBy == synctypes.ResolvedByAuto {
 			m.baseline.Put(outcomeToEntry(o, syncedAt))
 		} else if o.ConflictType == synctypes.ConflictEditDelete {
@@ -369,6 +415,20 @@ func (m *SyncStore) updateBaselineCache(o *synctypes.Outcome, syncedAt int64) {
 			m.baseline.Delete(o.Path)
 		}
 	}
+
+	return nil
+}
+
+func (m *SyncStore) reloadBaselineCache(ctx context.Context) error {
+	m.baselineMu.Lock()
+	m.baseline = nil
+	m.baselineMu.Unlock()
+
+	if _, err := m.Load(ctx); err != nil {
+		return fmt.Errorf("sync: loading baseline after cache invalidation: %w", err)
+	}
+
+	return nil
 }
 
 // outcomeToEntry converts an Outcome into a BaselineEntry for cache update.

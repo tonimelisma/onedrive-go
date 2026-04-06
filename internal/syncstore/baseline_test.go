@@ -1506,6 +1506,71 @@ func TestCommitOutcome_SkipsFailedOutcome(t *testing.T) {
 }
 
 // Validates: R-2.2
+func TestCommitOutcome_UnknownAction_ReturnsErrorAndSkipsDBWrite(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	ctx := t.Context()
+
+	err := mgr.CommitOutcome(ctx, &synctypes.Outcome{
+		Action:   synctypes.ActionType(999),
+		Success:  true,
+		Path:     "unknown.txt",
+		DriveID:  driveid.New("d"),
+		ItemID:   "unknown-item",
+		ItemType: synctypes.ItemTypeFile,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown action type")
+
+	var count int
+	queryErr := mgr.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM baseline WHERE path = ?`, "unknown.txt").Scan(&count)
+	require.NoError(t, queryErr)
+	assert.Zero(t, count, "unknown actions must not write baseline rows")
+
+	_, ok := mgr.Baseline().GetByPath("unknown.txt")
+	assert.False(t, ok, "unknown actions must not mutate the in-memory cache")
+}
+
+// Validates: R-2.2
+func TestUpdateBaselineCache_UnknownActionReloadsFromDB(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	ctx := t.Context()
+
+	seed := synctypes.Outcome{
+		Action:          synctypes.ActionDownload,
+		Success:         true,
+		Path:            "cached.txt",
+		DriveID:         driveid.New("d"),
+		ItemID:          "item-cached",
+		ItemType:        synctypes.ItemTypeFile,
+		LocalHash:       "hash1",
+		RemoteHash:      "hash1",
+		LocalSize:       42,
+		LocalSizeKnown:  true,
+		RemoteSize:      42,
+		RemoteSizeKnown: true,
+	}
+	require.NoError(t, mgr.CommitOutcome(ctx, &seed))
+
+	mgr.Baseline().Delete("cached.txt")
+	_, ok := mgr.Baseline().GetByPath("cached.txt")
+	require.False(t, ok, "test setup should corrupt the cache before reload")
+
+	err := mgr.updateBaselineCache(ctx, &synctypes.Outcome{
+		Action: synctypes.ActionType(999),
+		Path:   "ignored.txt",
+	}, time.Now().UnixNano())
+	require.NoError(t, err)
+
+	entry, ok := mgr.Baseline().GetByPath("cached.txt")
+	require.True(t, ok, "unknown cache mutations should trigger a DB reload")
+	assert.Equal(t, "item-cached", entry.ItemID)
+}
+
+// Validates: R-2.2
 func TestCommitOutcome_FolderCreate(t *testing.T) {
 	t.Parallel()
 
