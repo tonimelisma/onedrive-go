@@ -705,6 +705,7 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 	assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync", "--force")
 }
 
+// Validates: R-6.2.5, R-6.4.1
 // TestE2E_Sync_BigDeleteProtection exercises S5 big-delete protection and
 // the --force override. Creates 12 files, configures a low threshold (10)
 // so that 12 deletions exceed it, and verifies protection triggers.

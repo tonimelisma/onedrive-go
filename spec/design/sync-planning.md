@@ -2,7 +2,7 @@
 
 GOVERNS: internal/syncplan/planner.go, internal/synctypes/*.go, internal/sync/types.go
 
-Implements: R-2.2 [verified], R-2.3.1 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.7.7 [verified], R-6.7.17 [verified], R-2.14.2 [verified], R-6.10.6 [verified]
+Implements: R-2.2 [verified], R-2.3.1 [verified], R-6.2.1 [verified], R-6.2.5 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.7.7 [verified], R-6.7.17 [verified], R-2.14.2 [verified], R-6.10.6 [verified]
 
 ## Overview
 
@@ -12,6 +12,7 @@ The planner is the intellectual core of the sync engine. It is a pure function â
 
 - Owns: Deterministic path classification, move detection, action ordering, and delete-safety checks.
 - Does Not Own: Observation, execution, retry scheduling, Graph access, or store persistence.
+- Enumeration completeness is upstream-owned: the planner assumes observation and token/checkpoint handling have already satisfied the system-level incomplete-enumeration guard (`R-6.2.2`) before any `PathChanges` reach `Plan`.
 - Source of Truth: `PathChanges`, baseline snapshots, sync mode, and safety inputs supplied by the engine.
 - Allowed Side Effects: None. The planner is intentionally pure and performs no I/O.
 - Mutable Runtime Owner: None. Planning state is stack-local to each call.

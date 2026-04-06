@@ -923,7 +923,7 @@ func TestE2E_Issues_ReadOnlyLifecycle(t *testing.T) {
 	assert.Contains(t, stdout, "fixed.txt", "replacement file should sync after the issue clears")
 }
 
-// Validates: R-2.3.3, R-2.3.6, R-2.3.12
+// Validates: R-2.3.3, R-2.3.6, R-2.3.12, R-6.2.5, R-6.4.2
 // TestE2E_Issues_ForceDeletes validates the watch-mode held-delete lifecycle:
 // hold deletes, surface them via issues, approve with issues force-deletes,
 // and let watch mode resume delete propagation.

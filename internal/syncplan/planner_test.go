@@ -1225,8 +1225,7 @@ func TestDetectMoves_MovedPathsExcluded(t *testing.T) {
 // Safety Tests (Big Delete)
 // ---------------------------------------------------------------------------
 
-// Validates: R-6.4.1
-// Validates: R-6.4.1
+// Validates: R-6.2.5, R-6.4.1
 func TestBigDelete_BelowThreshold(t *testing.T) {
 	// Delete count at or below threshold → no trigger.
 	planner := NewPlanner(synctest.TestLogger(t))
@@ -1274,7 +1273,7 @@ func TestBigDelete_BelowThreshold(t *testing.T) {
 	require.NotNil(t, plan)
 }
 
-// Validates: R-6.4.1
+// Validates: R-6.2.5, R-6.4.1
 func TestBigDelete_ExceedsThreshold(t *testing.T) {
 	// Delete count exceeds threshold → ErrBigDeleteTriggered.
 	planner := NewPlanner(synctest.TestLogger(t))
@@ -1289,7 +1288,7 @@ func TestBigDelete_ExceedsThreshold(t *testing.T) {
 	require.ErrorIs(t, err, synctypes.ErrBigDeleteTriggered)
 }
 
-// Validates: R-6.4.1
+// Validates: R-6.2.5, R-6.4.1
 func TestBigDelete_NoTrigger(t *testing.T) {
 	// Few deletes well within threshold → no error.
 	planner := NewPlanner(synctest.TestLogger(t))
@@ -1346,7 +1345,7 @@ func TestBigDelete_NoTrigger(t *testing.T) {
 	require.NotNil(t, plan)
 }
 
-// Validates: R-6.4.1
+// Validates: R-6.2.5, R-6.4.1
 func TestBigDelete_ThresholdZero_Disabled(t *testing.T) {
 	// Threshold of 0 disables big-delete protection.
 	planner := NewPlanner(synctest.TestLogger(t))
@@ -2478,6 +2477,7 @@ func TestPlan_DeterministicOrder(t *testing.T) {
 // Denied Prefix Tests (planner-integrated permission suppression)
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.14.2
 func TestPlan_DeniedPrefix_SuppressesUploads(t *testing.T) {
 	t.Parallel()
 
@@ -2504,6 +2504,7 @@ func TestPlan_DeniedPrefix_SuppressesUploads(t *testing.T) {
 	assert.Empty(t, uploads, "uploads should be suppressed under denied prefix")
 }
 
+// Validates: R-2.14.2
 func TestPlan_DeniedPrefix_AllowsDownloads(t *testing.T) {
 	t.Parallel()
 
@@ -2532,6 +2533,7 @@ func TestPlan_DeniedPrefix_AllowsDownloads(t *testing.T) {
 	assert.Len(t, downloads, 1, "downloads should proceed under denied prefix")
 }
 
+// Validates: R-2.14.2
 func TestPlan_DeniedPrefix_OutsideDenied_Normal(t *testing.T) {
 	t.Parallel()
 
@@ -2557,6 +2559,7 @@ func TestPlan_DeniedPrefix_OutsideDenied_Normal(t *testing.T) {
 	assert.Len(t, uploads, 1, "uploads outside denied prefix should proceed normally")
 }
 
+// Validates: R-2.14.2
 func TestPlan_DeniedPrefix_RemoteDelete_LocalDelete(t *testing.T) {
 	t.Parallel()
 
@@ -2589,6 +2592,7 @@ func TestPlan_DeniedPrefix_RemoteDelete_LocalDelete(t *testing.T) {
 	assert.Empty(t, remoteDeletes, "should not produce remote deletes under denied prefix")
 }
 
+// Validates: R-2.14.2
 func TestPlan_DeniedPrefix_LocalMove_Suppressed(t *testing.T) {
 	t.Parallel()
 
@@ -2625,6 +2629,51 @@ func TestPlan_DeniedPrefix_LocalMove_Suppressed(t *testing.T) {
 	// Should NOT produce a remote move — can't write to remote under denied prefix.
 	remoteMoves := synctest.ActionsOfType(plan.Actions, synctypes.ActionRemoteMove)
 	assert.Empty(t, remoteMoves, "local move under denied prefix should not produce remote move")
+	assert.Empty(t, plan.Actions, "download-only permission subtrees should suppress local-only rename intent entirely")
+}
+
+// Validates: R-2.14.2
+func TestPlan_DeniedPrefix_LocalDelete_Suppressed(t *testing.T) {
+	t.Parallel()
+
+	planner := NewPlanner(synctest.TestLogger(t))
+
+	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+		Path: "Shared/ReadOnly/file.txt", ItemType: synctypes.ItemTypeFile,
+		LocalHash: "aaa", RemoteHash: "aaa",
+	})
+
+	changes := []synctypes.PathChanges{{
+		Path: "Shared/ReadOnly/file.txt",
+	}}
+
+	denied := []string{"Shared/ReadOnly"}
+	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), denied)
+	require.NoError(t, err)
+
+	assert.Empty(t, plan.Actions, "local absence under denied prefix must not propagate a remote delete")
+}
+
+// Validates: R-2.14.2
+func TestPlan_DeniedPrefix_SuppressesRemoteFolderCreate(t *testing.T) {
+	t.Parallel()
+
+	planner := NewPlanner(synctest.TestLogger(t))
+
+	changes := []synctypes.PathChanges{{
+		Path: "Shared/ReadOnly/new-folder",
+		LocalEvents: []synctypes.ChangeEvent{{
+			Type:     synctypes.ChangeCreate,
+			Path:     "Shared/ReadOnly/new-folder",
+			ItemType: synctypes.ItemTypeFolder,
+		}},
+	}}
+
+	denied := []string{"Shared/ReadOnly"}
+	plan, err := planner.Plan(changes, synctest.EmptyBaseline(), synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), denied)
+	require.NoError(t, err)
+
+	assert.Empty(t, plan.Actions, "download-only permission subtrees must not create remote folders")
 }
 
 // Validates: R-6.8.12, R-6.8.13
