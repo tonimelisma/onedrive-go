@@ -57,7 +57,6 @@ Implements: R-6.2.8 [verified]
 | `cp` | `cp.go` | Server-side async copy with polling |
 | `stat` | `stat.go` | Display item metadata |
 | `sync` | `sync.go` | Multi-drive sync command (see [sync-control-plane.md](sync-control-plane.md)) |
-| `sync scope`, `sync scope explain` | `sync_scope.go` | Read-only sync-scope inspection for one resolved drive |
 | `pause`, `resume` | `pause.go`, `resume.go` | Pause/resume sync through `syncControlService`. `resume` also cleans up stale config keys from expired timed pauses (paused=true + past paused_until). |
 | `status` | `status.go` | Display account/drive status via `statusService` and read-only `syncstore.Inspector` snapshots |
 | `issues` | `issues.go` | Read-only issue listing plus held-delete approval via `issues force-deletes` |
@@ -254,16 +253,10 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
   - `syncControlService`: pause/resume config mutation flows
   - `recycleBinService`: recycle-bin list/restore/empty flows
   - `syncService`: multi-drive sync command assembly
-  - `syncScopeService`: read-only sync-scope inspection that combines the live
-    local scope snapshot with the store-owned `scope_state` projection
   - `verifyService`: baseline verification flow
 - `accountReadModelService` is the shared read-model collaborator under `statusService`, `authService`, `driveService`, and `sharedService`. It owns lenient config loading, warning logging, and offline account/auth projection so those command families do not rebuild account semantics independently.
 - `SessionProvider` caches `TokenSource`s by token file path — multiple drives sharing an account share one `TokenSource`, preventing OAuth2 refresh token rotation races.
 - `CLIContext` owns one `graphhttp.Provider` per command/watch runtime. Bootstrap/auth-discovery flows use `BootstrapMeta()`. Once both account and remote target identity are known, CLI passes target-scoped interactive client resolvers into `driveops.SessionProvider`: configured drives key by drive ID, configured shared roots key by remote root item, and direct shared-item commands key by `(remoteDriveID, remoteItemID)`. Sync paths request `Sync()` profiles instead. HTTP policy constants and client reuse live in `internal/graphhttp`, not `internal/cli`.
-- `sync scope` is a read-only command even though it loads config like other
-  data commands. It does not open the writable `SyncStore`; it builds the
-  live effective snapshot from the sync root through `syncobserve` and reads
-  persisted generation/re-entry state only through `syncstore.Inspector`.
 - CLI handlers use `cmd.Context()` for signal propagation. Exception: upload session cancel paths use `context.Background()` because the cancel must succeed even when the original context is done.
 - Production command code writes primary output through `CLIContext.OutputWriter`, and status/warning/error text through the CLI-owned status writer boundary instead of raw process-global stdout/stderr. This keeps command output injectable in tests and prevents hidden process-global output dependencies from creeping back into services, bootstrap warnings, or sync-daemon cleanup.
 - `go run ./cmd/devtool verify` enforces that production `internal/cli` files do not call `fmt.Print*`, `fmt.Fprint*(os.Stdout|os.Stderr, ...)`, or direct `os.Stdout` / `os.Stderr` writer methods. The only allowed process-global output boundary is the tiny process entrypoint outside `internal/cli`.

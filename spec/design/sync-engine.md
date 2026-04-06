@@ -59,6 +59,9 @@ discovered marker directories. The engine then:
   that independently
 - forces full reconciliation only when scope expansion enters the drive root;
   narrower expansions use targeted re-entry reconciliation
+- routes both primary path scopes and shortcut scopes through the same
+  target-level delta/enumerate execution helpers so scoped observation logic
+  no longer forks by scope type
 
 When `sync_paths` is non-empty, primary remote observation no longer starts
 from the whole drive by default. The engine resolves the minimal current set
@@ -233,7 +236,7 @@ Policy-heavy behavior lives behind dedicated collaborators owned by the flow:
   scope-detection application, cascade blocked-failure recording, and
   permission decision application
 - `shortcutCoordinator`: shortcut discovery, registration, removal handling,
-  delta/full observation, and shortcut-scope reconciliation
+  shortcut-target planning, removal handling, and shortcut-scope reconciliation
 - `PermissionHandler`: permission evidence interpreter only; it returns
   decisions that the engine applies through `scopeController`
 
@@ -626,9 +629,11 @@ Sync failure logging follows a tiered approach matching CLAUDE.md policy — ind
 ### Shortcut Integration (`engine_shortcuts.go`)
 
 `shortcutCoordinator` detects shortcuts to shared folders in the delta stream,
-creates additional delta scopes for shared-folder observation, and owns
-shortcut removal side effects. Shortcut removal clears any persisted
-`perm:remote` scope under the removed shortcut and discards its held failures,
+registers them, and plans shortcut-scoped observation targets. The actual
+delta/enumerate execution path is shared with primary scoped observation, so
+shortcut scopes and `sync_paths` scopes use the same target-level observation
+rules. Shortcut removal still owns the side effects that clear any persisted
+`perm:remote` scope under the removed shortcut and discard its held failures,
 preventing stale recursive write suppression after the share disappears.
 
 ## CLI / Engine Boundary (`sync_helpers.go`)

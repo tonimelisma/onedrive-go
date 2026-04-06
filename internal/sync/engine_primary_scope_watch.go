@@ -17,7 +17,7 @@ func (rt *watchRuntime) watchPrimaryScopedRemote(
 	bl *synctypes.Baseline,
 	events chan<- synctypes.ChangeEvent,
 	interval time.Duration,
-	scopes []primaryObservationScope,
+	scopes []plannedObservationTarget,
 ) error {
 	if interval < syncobserve.MinPollInterval {
 		interval = syncobserve.MinPollInterval
@@ -65,7 +65,7 @@ func (rt *watchRuntime) watchPrimaryScopedRemote(
 func (rt *watchRuntime) observePrimaryScopedWatchPoll(
 	ctx context.Context,
 	bl *synctypes.Baseline,
-	scopes []primaryObservationScope,
+	scopes []plannedObservationTarget,
 ) (remoteFetchResult, error) {
 	result := remoteFetchResult{
 		events:       make([]synctypes.ChangeEvent, 0),
@@ -74,7 +74,7 @@ func (rt *watchRuntime) observePrimaryScopedWatchPoll(
 	}
 
 	for i := range scopes {
-		scopeResult, err := rt.observeSinglePrimaryScope(ctx, bl, scopes[i], false)
+		scopeResult, err := rt.observePlannedTarget(ctx, bl, scopes[i], false)
 		if err != nil {
 			return remoteFetchResult{}, err
 		}

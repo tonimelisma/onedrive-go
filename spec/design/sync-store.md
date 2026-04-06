@@ -99,8 +99,15 @@ Important columns:
 - `updated_at`
 
 `scope_state` is the durable authority for restart-safe scope recovery and for
-operator-facing scope inspection. It replaces the earlier convention where the
+restart-safe filtered-row repair. It replaces the earlier convention where the
 engine serialized the effective snapshot into generic `sync_metadata`.
+
+`NewSyncStore()` runs only the deterministic scope-state repair needed for
+runtime correctness after schema application. Scope-state drift is
+store-owned: on open, the store normalizes filtered `remote_state` rows
+against the current `scope_state` row, and if the stored snapshot is
+unreadable it drops that broken authority and reactivates filtered rows so the
+next engine run can rebuild scope truth cleanly.
 
 `CommitOutcome()` classifies baseline mutations through one shared
 ActionType-to-mutation mapping before any transaction writes happen. Unknown
@@ -239,8 +246,6 @@ state without handing them raw SQL ownership.
 - `HasScopeBlock(ctx, key)` provides an exact read-only scope-block probe for
   CLI auth-health and other administrative readers that need one persisted
   signal without opening the writable `SyncStore` path.
-- `ReadScopeStateSnapshot(ctx)` returns the durable read-only scope-state
-  projection used by `sync scope` inspection surfaces.
 - `ReadStatusSnapshot(ctx)` returns metadata, aggregate counts, and one
   derived `IssueSummary`.
 - `ReadIssuesSnapshot(ctx, history)` returns the full read-only `issues`
@@ -285,8 +290,10 @@ The store owns sync-state integrity inspection and deterministic safe repair.
   audit and exits non-zero if findings remain.
 
 The audit/repair split is deliberate: normal runtime code never auto-repairs
-durable state during ordinary sync execution. Inspection is explicit, repair is
-explicit, and both stay inside the store-owned boundary.
+durable state during ordinary sync execution beyond the narrow scope-state
+normalization required to make persisted scope ownership self-consistent on
+open. All broader safe repair stays explicit, and both inspection and repair
+stay inside the store-owned boundary.
 
 ## Verification
 

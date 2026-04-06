@@ -41,6 +41,23 @@ type primaryObservationScope struct {
 	mode      primaryObservationMode
 }
 
+type plannedObservationTargetKind string
+
+const (
+	plannedObservationPrimary  plannedObservationTargetKind = "primary"
+	plannedObservationShortcut plannedObservationTargetKind = "shortcut"
+)
+
+type plannedObservationTarget struct {
+	kind       plannedObservationTargetKind
+	driveID    driveid.ID
+	scopeID    string
+	scopeDrive string
+	localPath  string
+	mode       primaryObservationMode
+	shortcut   *synctypes.Shortcut
+}
+
 func (e *Engine) usesPrimaryPathScopes() bool {
 	cfg, err := syncscope.NormalizeConfig(e.syncScopeConfig)
 	if err != nil {
@@ -58,7 +75,7 @@ func (e *Engine) primaryObservationMode() primaryObservationMode {
 	return primaryObservationEnumerate
 }
 
-func (e *Engine) resolvePrimaryObservationScopes(ctx context.Context) ([]primaryObservationScope, bool, error) {
+func (e *Engine) resolvePrimaryObservationScopes(ctx context.Context) ([]plannedObservationTarget, bool, error) {
 	cfg, err := syncscope.NormalizeConfig(e.syncScopeConfig)
 	if err != nil {
 		return nil, false, fmt.Errorf("normalize sync scope config: %w", err)
@@ -82,12 +99,43 @@ func (e *Engine) resolvePrimaryObservationScopes(ctx context.Context) ([]primary
 	}
 
 	collapsedPaths := syncscope.CollapseRelativePaths(mapKeys(byPath))
-	scopes := make([]primaryObservationScope, 0, len(collapsedPaths))
+	scopes := make([]plannedObservationTarget, 0, len(collapsedPaths))
 	for _, localPath := range collapsedPaths {
-		scopes = append(scopes, byPath[localPath])
+		scopes = append(scopes, e.primaryObservationTarget(byPath[localPath]))
 	}
 
 	return scopes, false, nil
+}
+
+func (e *Engine) primaryObservationTarget(scope primaryObservationScope) plannedObservationTarget {
+	return plannedObservationTarget{
+		kind:       plannedObservationPrimary,
+		driveID:    e.driveID,
+		scopeID:    scope.folderID,
+		scopeDrive: e.driveID.String(),
+		localPath:  scope.localPath,
+		mode:       scope.mode,
+	}
+}
+
+func shortcutObservationTarget(sc *synctypes.Shortcut) plannedObservationTarget {
+	target := plannedObservationTarget{
+		kind:       plannedObservationShortcut,
+		driveID:    driveid.New(sc.RemoteDrive),
+		scopeID:    sc.RemoteItem,
+		scopeDrive: sc.RemoteDrive,
+		localPath:  sc.LocalPath,
+		shortcut:   sc,
+	}
+
+	switch sc.Observation {
+	case synctypes.ObservationDelta:
+		target.mode = primaryObservationDelta
+	default:
+		target.mode = primaryObservationEnumerate
+	}
+
+	return target
 }
 
 func (e *Engine) resolvePrimaryObservationScope(ctx context.Context, configuredPath string) (primaryObservationScope, error) {
@@ -185,7 +233,7 @@ func (e *Engine) resolveScopedRootObservationScope(ctx context.Context, configur
 func (flow *engineFlow) observePlannedPrimaryScopes(
 	ctx context.Context,
 	bl *synctypes.Baseline,
-	scopes []primaryObservationScope,
+	scopes []plannedObservationTarget,
 	fullReconcile bool,
 ) (remoteFetchResult, error) {
 	result := remoteFetchResult{
@@ -195,7 +243,7 @@ func (flow *engineFlow) observePlannedPrimaryScopes(
 	}
 
 	for i := range scopes {
-		scopeResult, err := flow.observeSinglePrimaryScope(ctx, bl, scopes[i], fullReconcile)
+		scopeResult, err := flow.observePlannedTarget(ctx, bl, scopes[i], fullReconcile)
 		if err != nil {
 			return remoteFetchResult{}, err
 		}
@@ -214,58 +262,67 @@ func (flow *engineFlow) observeSinglePrimaryScope(
 	scope primaryObservationScope,
 	fullReconcile bool,
 ) (remoteFetchResult, error) {
-	switch scope.mode {
+	return flow.observePlannedTarget(ctx, bl, flow.engine.primaryObservationTarget(scope), fullReconcile)
+}
+
+func (flow *engineFlow) observePlannedTarget(
+	ctx context.Context,
+	bl *synctypes.Baseline,
+	target plannedObservationTarget,
+	fullReconcile bool,
+) (remoteFetchResult, error) {
+	switch target.mode {
 	case primaryObservationDelta:
-		return flow.observeSinglePrimaryScopeDelta(ctx, bl, scope, fullReconcile)
+		return flow.observePlannedTargetDelta(ctx, bl, target, fullReconcile)
 	case primaryObservationEnumerate:
-		return flow.observeSinglePrimaryScopeEnumerate(ctx, bl, scope)
+		return flow.observePlannedTargetEnumerate(ctx, bl, target)
 	default:
-		return remoteFetchResult{}, fmt.Errorf("unknown primary observation mode %q", scope.mode)
+		return remoteFetchResult{}, fmt.Errorf("unknown observation mode %q", target.mode)
 	}
 }
 
-func (flow *engineFlow) observeSinglePrimaryScopeDelta(
+func (flow *engineFlow) observePlannedTargetDelta(
 	ctx context.Context,
 	bl *synctypes.Baseline,
-	scope primaryObservationScope,
+	target plannedObservationTarget,
 	fullReconcile bool,
 ) (remoteFetchResult, error) {
 	eng := flow.engine
 
 	savedToken := ""
 	if !fullReconcile {
-		token, err := eng.baseline.GetDeltaToken(ctx, eng.driveID.String(), scope.folderID)
+		token, err := eng.baseline.GetDeltaToken(ctx, target.scopeDrive, target.scopeID)
 		if err != nil {
-			return remoteFetchResult{}, fmt.Errorf("get scoped delta token for %q: %w", scope.localPath, err)
+			return remoteFetchResult{}, fmt.Errorf("get scoped delta token for %q: %w", target.localPath, err)
 		}
 
 		savedToken = token
 	}
 
-	items, newToken, err := eng.folderDelta.DeltaFolderAll(ctx, eng.driveID, scope.folderID, savedToken)
+	items, newToken, err := eng.folderDelta.DeltaFolderAll(ctx, target.driveID, target.scopeID, savedToken)
 	fullScope := fullReconcile || savedToken == ""
 	if err != nil && errors.Is(err, graph.ErrGone) && !fullScope {
-		items, newToken, err = eng.folderDelta.DeltaFolderAll(ctx, eng.driveID, scope.folderID, "")
+		items, newToken, err = eng.folderDelta.DeltaFolderAll(ctx, target.driveID, target.scopeID, "")
 		fullScope = true
 	}
 	if err != nil {
-		if eng.recursiveLister == nil {
-			return remoteFetchResult{}, fmt.Errorf("observe scoped delta %q: %w", scope.localPath, err)
+		if target.kind != plannedObservationPrimary || eng.recursiveLister == nil {
+			return remoteFetchResult{}, fmt.Errorf("observe scoped delta %q: %w", target.localPath, err)
 		}
 
-		eng.logger.Warn("scoped folder delta unavailable for primary scope, falling back to recursive listing",
-			slog.String("drive_id", eng.driveID.String()),
-			slog.String("scope_path", scope.localPath),
-			slog.String("folder_id", scope.folderID),
+		eng.logger.Warn("scoped folder delta unavailable, falling back to recursive listing",
+			slog.String("drive_id", target.driveID.String()),
+			slog.String("scope_path", target.localPath),
+			slog.String("folder_id", target.scopeID),
 			slog.String("error", err.Error()),
 		)
 
-		return flow.observeSinglePrimaryScopeEnumerate(ctx, bl, scope)
+		return flow.observePlannedTargetEnumerate(ctx, bl, target)
 	}
 
-	events := convertPrimaryScopeItems(bl, eng.driveID, eng.logger, scope, items)
+	events := convertObservedTargetItems(bl, eng.logger, target, items)
 	if fullScope {
-		events = append(events, observePrimaryScopeOrphans(events, bl, eng.driveID, scope.localPath)...)
+		events = append(events, observeTargetOrphansFromItems(bl, target, items)...)
 	}
 
 	result := remoteFetchResult{
@@ -273,13 +330,13 @@ func (flow *engineFlow) observeSinglePrimaryScopeDelta(
 		fullPrefixes: nil,
 	}
 	if fullScope {
-		result.fullPrefixes = append(result.fullPrefixes, scope.localPath)
+		result.fullPrefixes = append(result.fullPrefixes, target.localPath)
 	}
 	if newToken != "" && (fullScope || len(events) > 0) {
 		result.deferred = append(result.deferred, deferredDeltaToken{
-			driveID:    eng.driveID.String(),
-			scopeID:    scope.folderID,
-			scopeDrive: eng.driveID.String(),
+			driveID:    target.driveID.String(),
+			scopeID:    target.scopeID,
+			scopeDrive: target.scopeDrive,
 			token:      newToken,
 		})
 	}
@@ -287,60 +344,66 @@ func (flow *engineFlow) observeSinglePrimaryScopeDelta(
 	return result, nil
 }
 
-func (flow *engineFlow) observeSinglePrimaryScopeEnumerate(
+func (flow *engineFlow) observePlannedTargetEnumerate(
 	ctx context.Context,
 	bl *synctypes.Baseline,
-	scope primaryObservationScope,
+	target plannedObservationTarget,
 ) (remoteFetchResult, error) {
 	eng := flow.engine
 	if eng.recursiveLister == nil {
-		return remoteFetchResult{}, fmt.Errorf("recursive lister not available for %q", scope.localPath)
+		return remoteFetchResult{}, fmt.Errorf("recursive lister not available for %q", target.localPath)
 	}
 
-	items, err := eng.recursiveLister.ListChildrenRecursive(ctx, eng.driveID, scope.folderID)
+	items, err := eng.recursiveLister.ListChildrenRecursive(ctx, target.driveID, target.scopeID)
 	if err != nil {
-		return remoteFetchResult{}, fmt.Errorf("observe scoped enumeration %q: %w", scope.localPath, err)
+		return remoteFetchResult{}, fmt.Errorf("observe scoped enumeration %q: %w", target.localPath, err)
 	}
 
-	events := convertPrimaryScopeItems(bl, eng.driveID, eng.logger, scope, items)
-	events = append(events, observePrimaryScopeOrphans(events, bl, eng.driveID, scope.localPath)...)
+	events := convertObservedTargetItems(bl, eng.logger, target, items)
+	events = append(events, observeTargetOrphansFromItems(bl, target, items)...)
 
 	return remoteFetchResult{
 		events:       events,
-		fullPrefixes: []string{scope.localPath},
+		fullPrefixes: []string{target.localPath},
 	}, nil
 }
 
-func convertPrimaryScopeItems(
+func convertObservedTargetItems(
 	bl *synctypes.Baseline,
-	driveID driveid.ID,
 	logger *slog.Logger,
-	scope primaryObservationScope,
+	target plannedObservationTarget,
 	items []graph.Item,
 ) []synctypes.ChangeEvent {
-	converter := syncobserve.NewPrimaryConverter(bl, driveID, logger, nil)
-	converter.PathPrefix = scope.localPath
-	converter.ScopeRootID = scope.folderID
+	if target.shortcut != nil {
+		return syncobserve.ConvertShortcutItems(items, target.shortcut, target.driveID, bl, logger)
+	}
+
+	converter := syncobserve.NewPrimaryConverter(bl, target.driveID, logger, nil)
+	converter.PathPrefix = target.localPath
+	converter.ScopeRootID = target.scopeID
 
 	return converter.ConvertItems(items)
 }
 
-func observePrimaryScopeOrphans(
-	events []synctypes.ChangeEvent,
+func observeTargetOrphansFromItems(
 	bl *synctypes.Baseline,
-	driveID driveid.ID,
-	localPath string,
+	target plannedObservationTarget,
+	items []graph.Item,
 ) []synctypes.ChangeEvent {
-	seen := make(map[driveid.ItemKey]struct{}, len(events))
-	for i := range events {
-		if events[i].IsDeleted {
-			continue
-		}
-
-		seen[driveid.NewItemKey(events[i].DriveID, events[i].ItemID)] = struct{}{}
+	if target.shortcut != nil {
+		return syncobserve.DetectShortcutOrphans(target.shortcut, target.driveID, items, bl)
 	}
 
-	return bl.FindOrphans(seen, driveID, localPath)
+	seen := make(map[driveid.ItemKey]struct{}, len(items))
+	for i := range items {
+		itemDriveID := target.driveID
+		if items[i].DriveID != (driveid.ID{}) {
+			itemDriveID = items[i].DriveID
+		}
+		seen[driveid.NewItemKey(itemDriveID, items[i].ID)] = struct{}{}
+	}
+
+	return bl.FindOrphans(seen, target.driveID, target.localPath)
 }
 
 func (flow *engineFlow) reconcilePrimaryScopeEntries(

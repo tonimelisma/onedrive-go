@@ -96,11 +96,29 @@ func NewSyncStore(ctx context.Context, dbPath string, logger *slog.Logger) (*Syn
 
 	logger.Info("baseline manager initialized", slog.String("db_path", dbPath))
 
-	return &SyncStore{
+	store := &SyncStore{
 		db:      db,
 		logger:  logger,
 		nowFunc: time.Now,
-	}, nil
+	}
+
+	repairsApplied, repairErr := store.repairScopeStateConsistencyOnOpen(ctx)
+	if repairErr != nil {
+		baseErr := fmt.Errorf("repair sync store scope state: %w", repairErr)
+		if closeErr := db.Close(); closeErr != nil {
+			return nil, errors.Join(baseErr, fmt.Errorf("close sync store database: %w", closeErr))
+		}
+
+		return nil, baseErr
+	}
+	if repairsApplied > 0 {
+		logger.Info("sync store scope state repaired",
+			slog.Int("repairs", repairsApplied),
+			slog.String("db_path", dbPath),
+		)
+	}
+
+	return store, nil
 }
 
 // Close checkpoints the WAL and closes the underlying database connection.

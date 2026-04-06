@@ -868,6 +868,49 @@ func TestDeleteDeltaToken_NonExistent(t *testing.T) {
 // observeShortcutContent + observeSingleShortcut
 // ---------------------------------------------------------------------------
 
+func TestBuildShortcutObservationPlan_FiltersSuppressedAndCollidingTargets(t *testing.T) {
+	t.Parallel()
+
+	e := &Engine{
+		logger: testLogger(t),
+	}
+
+	shortcuts := []synctypes.Shortcut{
+		{
+			ItemID:      "sc-keep",
+			RemoteDrive: "drv-a",
+			RemoteItem:  "item-a",
+			LocalPath:   "Shared",
+		},
+		{
+			ItemID:      "sc-collide",
+			RemoteDrive: "drv-b",
+			RemoteItem:  "item-b",
+			LocalPath:   "Shared/Sub",
+		},
+		{
+			ItemID:      "sc-suppressed",
+			RemoteDrive: "drv-c",
+			RemoteItem:  "item-c",
+			LocalPath:   "Other",
+		},
+	}
+
+	plan := testEngineFlow(t, newFlowBackedTestEngine(e)).BuildShortcutObservationPlan(
+		shortcuts,
+		emptyBaseline(),
+		map[string]struct{}{
+			"drv-c:item-c": {},
+		},
+		nil,
+	)
+
+	require.Len(t, plan.Targets, 1)
+	assert.Equal(t, "Shared", plan.Targets[0].localPath)
+	require.NotNil(t, plan.Targets[0].shortcut)
+	assert.Equal(t, "sc-keep", plan.Targets[0].shortcut.ItemID)
+}
+
 // Validates: R-3.4.2
 func TestObserveShortcutContent_DeltaStrategy(t *testing.T) {
 	t.Parallel()

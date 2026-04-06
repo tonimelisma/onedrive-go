@@ -1,6 +1,8 @@
 package syncstore
 
 import (
+	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -68,6 +70,7 @@ func TestApplyScopeState_MarksOutOfScopeRowsFiltered(t *testing.T) {
 	assert.Equal(t, synctypes.RemoteFilterPathScope, dropRow.FilterReason)
 }
 
+// Validates: R-2.4.4, R-2.4.5
 func TestUpsertSyncMetadataEntries_WritesSortedAndUpdates(t *testing.T) {
 	t.Parallel()
 
@@ -210,4 +213,128 @@ func TestReactivatedRemoteStatus(t *testing.T) {
 			))
 		})
 	}
+}
+
+// Validates: R-2.4.4, R-2.4.5
+func TestNewSyncStore_RepairsScopeStateDriftOnOpen(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	ctx := t.Context()
+	driveID := driveid.New(testDriveID)
+
+	store, err := NewSyncStore(ctx, dbPath, newTestLogger(t))
+	require.NoError(t, err)
+
+	require.NoError(t, store.CommitObservation(ctx, []synctypes.ObservedItem{
+		{
+			DriveID:  driveID,
+			ItemID:   "filtered-item",
+			ParentID: "root",
+			Path:     "drop.txt",
+			ItemType: synctypes.ItemTypeFile,
+			Hash:     "drop-hash",
+			Filtered: true,
+		},
+	}, "", driveID))
+
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO scope_state (
+			singleton, generation, effective_snapshot_json, observation_plan_hash,
+			observation_mode, websocket_enabled, pending_reentry,
+			last_reconcile_kind, updated_at
+		) VALUES (1, 7, '{broken-json', 'broken', 'scoped_delta', 0, 0, 'none', ?)`,
+		time.Now().UnixNano(),
+	)
+	require.NoError(t, err)
+	require.NoError(t, store.Close(context.Background()))
+
+	reopened, err := NewSyncStore(ctx, dbPath, newTestLogger(t))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, reopened.Close(context.Background()))
+	})
+
+	row := readRemoteStateRow(t, reopened.DB(), "filtered-item")
+	require.NotNil(t, row)
+	assert.Equal(t, synctypes.SyncStatusPendingDownload, row.SyncStatus)
+	assert.Equal(t, int64(0), row.FilterGeneration)
+	assert.Equal(t, synctypes.RemoteFilterNone, row.FilterReason)
+
+	scopeState, found, err := reopened.ReadScopeState(ctx)
+	require.NoError(t, err)
+	assert.False(t, found)
+	assert.Equal(t, synctypes.ScopeStateRecord{}, scopeState)
+}
+
+// Validates: R-2.4.4, R-2.4.5
+func TestRepairIntegritySafe_ReconcilesFilteredRowsToPersistedScopeState(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(testDriveID)
+
+	require.NoError(t, mgr.CommitObservation(ctx, []synctypes.ObservedItem{
+		{
+			DriveID:  driveID,
+			ItemID:   "keep-item",
+			ParentID: "root",
+			Path:     "keep.txt",
+			ItemType: synctypes.ItemTypeFile,
+			Hash:     "keep-hash",
+		},
+		{
+			DriveID:  driveID,
+			ItemID:   "drop-item",
+			ParentID: "root",
+			Path:     "drop.txt",
+			ItemType: synctypes.ItemTypeFile,
+			Hash:     "drop-hash",
+			Filtered: true,
+		},
+	}, "", driveID))
+
+	snapshot, err := syncscope.NewSnapshot(syncscope.Config{
+		SyncPaths: []string{"keep.txt"},
+	}, nil)
+	require.NoError(t, err)
+
+	snapshotJSON, err := syncscope.MarshalSnapshot(snapshot)
+	require.NoError(t, err)
+
+	_, err = mgr.DB().ExecContext(ctx, `
+		INSERT INTO scope_state (
+			singleton, generation, effective_snapshot_json, observation_plan_hash,
+			observation_mode, websocket_enabled, pending_reentry,
+			last_reconcile_kind, updated_at
+		) VALUES (1, 9, ?, 'hash', 'scoped_delta', 0, 0, 'none', ?)`,
+		snapshotJSON,
+		time.Now().UnixNano(),
+	)
+	require.NoError(t, err)
+
+	_, err = mgr.DB().ExecContext(ctx, `
+		UPDATE remote_state
+		SET sync_status = ?, filter_generation = 1, filter_reason = ?
+		WHERE item_id = ?`,
+		synctypes.SyncStatusFiltered,
+		synctypes.RemoteFilterMarkerScope,
+		"drop-item",
+	)
+	require.NoError(t, err)
+
+	repairs, err := mgr.RepairIntegritySafe(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, repairs)
+
+	dropRow := readRemoteStateRow(t, mgr.DB(), "drop-item")
+	require.NotNil(t, dropRow)
+	assert.Equal(t, synctypes.SyncStatusFiltered, dropRow.SyncStatus)
+	assert.Equal(t, int64(9), dropRow.FilterGeneration)
+	assert.Equal(t, synctypes.RemoteFilterPathScope, dropRow.FilterReason)
+
+	keepRow := readRemoteStateRow(t, mgr.DB(), "keep-item")
+	require.NotNil(t, keepRow)
+	assert.Equal(t, synctypes.SyncStatusPendingDownload, keepRow.SyncStatus)
 }
