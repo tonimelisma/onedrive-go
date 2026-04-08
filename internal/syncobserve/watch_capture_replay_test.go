@@ -2,7 +2,8 @@ package syncobserve
 
 import (
 	"encoding/json"
-	"os"
+	"errors"
+	"io/fs"
 	"path/filepath"
 	"runtime"
 	stdsync "sync"
@@ -146,7 +147,7 @@ func loadWatchCaptureFixture(t *testing.T, scenarioName string) []devtool.WatchC
 	)
 	raw, err := localpath.ReadFile(fixturePath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			t.Skipf("watch-capture fixture missing for %s on %s", scenarioName, runtime.GOOS)
 		}
 		require.NoError(t, err)
