@@ -1,0 +1,32 @@
+[
+  {
+    "scenario": "dir_move_into_scope",
+    "step": "move_into_scope",
+    "path": "parking/album",
+    "op_bits": 8,
+    "op_names": [
+      "rename"
+    ],
+    "time_offset_micros": 78
+  },
+  {
+    "scenario": "dir_move_into_scope",
+    "step": "move_into_scope",
+    "path": "docs/album",
+    "op_bits": 1,
+    "op_names": [
+      "create"
+    ],
+    "time_offset_micros": 79
+  },
+  {
+    "scenario": "dir_move_into_scope",
+    "step": "move_into_scope",
+    "path": "parking/album",
+    "op_bits": 8,
+    "op_names": [
+      "rename"
+    ],
+    "time_offset_micros": 99
+  }
+]

@@ -1286,6 +1286,44 @@ func TestObserveShortcutContent_NoShortcuts(t *testing.T) {
 // processCommittedPrimaryBatch (integration)
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.10.16
+func TestApplyShortcutBatchMutations_DoesNotPublishRuntimeShortcuts(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	e := &Engine{
+		baseline: mgr,
+		logger:   testLogger(t),
+	}
+
+	flow := testEngineFlow(t, newFlowBackedTestEngine(e))
+	flow.setShortcuts([]synctypes.Shortcut{{
+		ItemID:      "stale-shortcut",
+		LocalPath:   "Stale",
+		RemoteDrive: "stale-drive",
+		RemoteItem:  "stale-item",
+	}})
+
+	_, err := flow.shortcutCoordinator().applyShortcutBatchMutations(ctx, []synctypes.ChangeEvent{{
+		Type:          synctypes.ChangeShortcut,
+		ItemID:        "sc-1",
+		Path:          "SharedDocs",
+		RemoteDriveID: "0000000000000099",
+		RemoteItemID:  "remote-item-1",
+	}})
+	require.NoError(t, err)
+
+	shortcuts, err := mgr.ListShortcuts(ctx)
+	require.NoError(t, err)
+	require.Len(t, shortcuts, 1)
+	assert.Equal(t, "sc-1", shortcuts[0].ItemID)
+
+	require.Len(t, flow.getShortcuts(), 1)
+	assert.Equal(t, "stale-shortcut", flow.getShortcuts()[0].ItemID)
+}
+
 // Validates: R-3.4.2
 func TestProcessCommittedPrimaryBatch_RegistersAndObserves(t *testing.T) {
 	t.Parallel()
@@ -1345,6 +1383,48 @@ func TestProcessCommittedPrimaryBatch_RegistersAndObserves(t *testing.T) {
 	// Should have observed content.
 	require.Len(t, events, 1)
 	assert.Equal(t, "SharedDocs/file.txt", events[0].Path)
+}
+
+// Validates: R-2.10.16
+func TestProcessCommittedPrimaryBatch_PublishesRefreshedShortcutsAfterMutation(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	e := &Engine{
+		baseline: mgr,
+		logger:   testLogger(t),
+	}
+
+	flow := testEngineFlow(t, newFlowBackedTestEngine(e))
+	flow.setShortcuts([]synctypes.Shortcut{{
+		ItemID:      "stale-shortcut",
+		LocalPath:   "Stale",
+		RemoteDrive: "stale-drive",
+		RemoteItem:  "stale-item",
+	}})
+
+	_, err := flow.processCommittedPrimaryBatch(
+		ctx,
+		emptyBaseline(),
+		[]synctypes.ChangeEvent{{
+			Type:          synctypes.ChangeShortcut,
+			ItemID:        "sc-1",
+			Path:          "SharedDocs",
+			RemoteDriveID: "0000000000000099",
+			RemoteItemID:  "remote-item-1",
+		}},
+		syncscope.Snapshot{},
+		1,
+		false,
+		false,
+	)
+	require.NoError(t, err)
+
+	shortcuts := flow.getShortcuts()
+	require.Len(t, shortcuts, 1)
+	assert.Equal(t, "sc-1", shortcuts[0].ItemID)
 }
 
 // Validates: R-2.10.16
@@ -1408,6 +1488,109 @@ func TestProcessCommittedPrimaryBatch_NilCapabilities(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Nil(t, events, "should return nil when no shortcut capabilities configured")
+}
+
+// Validates: R-2.10.16
+func TestProcessCommittedPrimaryBatch_NoChangeSkipsShortcutReloadAndFollowUp(t *testing.T) {
+	t.Parallel()
+
+	e := &Engine{
+		recursiveLister: &mockRecursiveLister{
+			items: []graph.Item{{
+				ID:       "f1",
+				Name:     "shared.txt",
+				ParentID: "remote-item-1",
+				DriveID:  driveid.New("0000000000000099"),
+			}},
+		},
+		logger: testLogger(t),
+	}
+
+	flow := testEngineFlow(t, newFlowBackedTestEngine(e))
+	flow.setShortcuts([]synctypes.Shortcut{{
+		ItemID:      "stale-shortcut",
+		LocalPath:   "Stale",
+		RemoteDrive: "stale-drive",
+		RemoteItem:  "stale-item",
+	}})
+
+	events, err := flow.processCommittedPrimaryBatch(
+		t.Context(),
+		emptyBaseline(),
+		[]synctypes.ChangeEvent{{
+			Type:   synctypes.ChangeCreate,
+			Path:   "primary/newfile.txt",
+			ItemID: "p1",
+			Source: synctypes.SourceRemote,
+		}},
+		syncscope.Snapshot{},
+		1,
+		false,
+		false,
+	)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, "primary/newfile.txt", events[0].Path)
+
+	shortcuts := flow.getShortcuts()
+	require.Len(t, shortcuts, 1)
+	assert.Equal(t, "stale-shortcut", shortcuts[0].ItemID)
+}
+
+// Validates: R-2.10.16
+func TestProcessCommittedPrimaryBatch_FullReconcileReloadsCurrentShortcuts(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	remoteDriveID := driveid.New("0000000000000099")
+	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
+		ItemID:       "sc-1",
+		RemoteDrive:  "0000000000000099",
+		RemoteItem:   "remote-item-1",
+		LocalPath:    "SharedDocs",
+		Observation:  synctypes.ObservationEnumerate,
+		DiscoveredAt: 1000,
+	}))
+
+	e := &Engine{
+		baseline: mgr,
+		recursiveLister: &mockRecursiveLister{
+			items: []graph.Item{{
+				ID:       "f1",
+				Name:     "file.txt",
+				ParentID: "remote-item-1",
+				DriveID:  remoteDriveID,
+			}},
+		},
+		logger: testLogger(t),
+	}
+
+	flow := testEngineFlow(t, newFlowBackedTestEngine(e))
+	flow.setShortcuts([]synctypes.Shortcut{{
+		ItemID:      "stale-shortcut",
+		LocalPath:   "Stale",
+		RemoteDrive: "stale-drive",
+		RemoteItem:  "stale-item",
+	}})
+
+	events, err := flow.processCommittedPrimaryBatch(
+		ctx,
+		emptyBaseline(),
+		nil,
+		syncscope.Snapshot{},
+		1,
+		false,
+		true,
+	)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, "SharedDocs/file.txt", events[0].Path)
+
+	shortcuts := flow.getShortcuts()
+	require.Len(t, shortcuts, 1)
+	assert.Equal(t, "sc-1", shortcuts[0].ItemID)
 }
 
 // ---------------------------------------------------------------------------

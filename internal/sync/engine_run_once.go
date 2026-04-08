@@ -172,7 +172,7 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) (*synctypes.Bas
 		return nil, fmt.Errorf("sync: loading baseline: %w", err)
 	}
 
-	shortcuts, scErr := eng.baseline.ListShortcuts(ctx)
+	shortcuts, scErr := flow.shortcutCoordinator().loadShortcutSnapshot(ctx)
 	if scErr != nil {
 		eng.logger.Warn("failed to load shortcuts", slog.String("error", scErr.Error()))
 	}

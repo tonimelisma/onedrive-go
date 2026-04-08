@@ -443,7 +443,7 @@ func (rt *watchRuntime) performFullReconciliation(
 	}
 
 	result.events = events
-	if refreshed, refreshErr := rt.engine.baseline.ListShortcuts(ctx); refreshErr == nil {
+	if refreshed, refreshErr := rt.shortcutCoordinator().loadShortcutSnapshot(ctx); refreshErr == nil {
 		result.shortcuts = refreshed
 	}
 

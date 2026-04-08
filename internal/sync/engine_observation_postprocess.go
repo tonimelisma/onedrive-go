@@ -23,11 +23,20 @@ func (flow *engineFlow) processCommittedPrimaryBatch(
 		return visiblePrimary, nil
 	}
 
-	mutations, err := flow.shortcutCoordinator().applyShortcutBatchMutations(ctx, primaryEvents, fullReconcile)
+	mutations, err := flow.shortcutCoordinator().applyShortcutBatchMutations(ctx, primaryEvents)
 	if err != nil {
 		return nil, err
 	}
 	visiblePrimary = mutations.VisiblePrimary
+	if !mutations.SnapshotDirty && !fullReconcile {
+		return visiblePrimary, nil
+	}
+
+	shortcuts, err := flow.shortcutCoordinator().loadShortcutSnapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	flow.setShortcuts(shortcuts)
 
 	if flow.scopeController().isObservationSuppressed(flow.watch) {
 		flow.engine.logger.Debug("suppressing shortcut observation — global scope block active")
@@ -37,7 +46,7 @@ func (flow *engineFlow) processCommittedPrimaryBatch(
 	suppressedShortcutTargets := flow.scopeController().suppressedShortcutTargets(flow.watch)
 	shortcutEvents, err := flow.shortcutCoordinator().observeShortcutFollowUp(
 		ctx,
-		mutations.Shortcuts,
+		shortcuts,
 		bl,
 		fullReconcile,
 		nil,

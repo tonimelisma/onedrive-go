@@ -1,0 +1,32 @@
+[
+  {
+    "scenario": "marker_parent_rename",
+    "step": "rename_parent",
+    "path": "parent",
+    "op_bits": 8,
+    "op_names": [
+      "rename"
+    ],
+    "time_offset_micros": 39
+  },
+  {
+    "scenario": "marker_parent_rename",
+    "step": "rename_parent",
+    "path": "renamed",
+    "op_bits": 1,
+    "op_names": [
+      "create"
+    ],
+    "time_offset_micros": 40
+  },
+  {
+    "scenario": "marker_parent_rename",
+    "step": "rename_parent",
+    "path": "parent",
+    "op_bits": 8,
+    "op_names": [
+      "rename"
+    ],
+    "time_offset_micros": 56
+  }
+]
