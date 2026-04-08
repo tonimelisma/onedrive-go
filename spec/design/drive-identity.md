@@ -2,7 +2,7 @@
 
 GOVERNS: internal/driveid/canonical.go, internal/driveid/id.go, internal/driveid/itemkey.go, drive.go, purge.go
 
-Implements: R-3.2 [verified], R-3.5 [verified], R-3.7 [verified], R-3.3.12 [verified], R-6.7.2 [verified], R-3.6.4 [verified], R-3.6.5 [verified], R-6.10.6 [verified]
+Implements: R-3.2 [verified], R-3.5 [verified], R-3.7 [verified], R-3.3.12 [verified], R-3.3.13 [verified], R-6.7.2 [verified], R-3.6.4 [verified], R-3.6.5 [verified], R-6.10.6 [verified]
 
 ## Core Concepts
 
@@ -63,9 +63,11 @@ drive ID shape, but it is not the same concept:
 - `driveid.CanonicalID` still means "configured drive identity"
 - `internal/sharedref.Ref` means "one shared item target for one recipient account"
 
-Shared folders may flow from selector form into `drive add`, which then
-normalizes them into configured shared drives. Shared files never become drives
-and are rejected by `drive add`.
+Shared folders may flow into `drive add` from either selector form or the
+original raw share URL. Both inputs are normalized immediately to the canonical
+`shared:<recipientEmail>:<remoteDriveID>:<remoteItemID>` drive ID before any
+config mutation happens. Shared files never become drives and are rejected by
+`drive add`.
 
 ## ItemKey Type (`driveid.ItemKey`)
 
@@ -86,9 +88,9 @@ Resolution order: exact canonical ID â†’ exact display_name (case-insensitive) â
 
 ## CLI Drive Command (`drive.go`)
 
-Implements: R-3.3.2 [verified], R-3.3.3 [verified], R-3.3.4 [verified], R-3.3.5 [verified], R-3.3.6 [verified], R-3.3.7 [verified], R-3.3.8 [verified], R-3.3.9 [verified], R-3.6.1 [verified], R-3.6.2 [verified], R-3.6.3 [verified]
+Implements: R-3.3.2 [verified], R-3.3.3 [verified], R-3.3.4 [verified], R-3.3.5 [verified], R-3.3.6 [verified], R-3.3.7 [verified], R-3.3.8 [verified], R-3.3.9 [verified], R-3.3.12 [verified], R-3.3.13 [verified], R-3.6.1 [verified], R-3.6.2 [verified], R-3.6.3 [verified]
 
-`drive list`, `drive add`, `drive remove`, `drive search`. Drive add creates a config section with auto-generated display_name and sync_dir. Drive list annotates available drives with state DB presence (R-3.3.3), supports `--all` to remove the SharePoint site cap (R-3.3.4). Drive remove `--purge` works on unconfigured drives with orphaned state (R-3.3.8) and only purges drive-owned state; account-owned token/profile files remain until logout.
+`drive list`, `drive add`, `drive remove`, `drive search`. Drive add creates a config section with auto-generated display_name and sync_dir. It accepts canonical drive IDs, shared selectors, raw shared-folder URLs, and shared-folder name search terms; raw URLs and selectors are normalized to canonical shared drive IDs before config writes. Drive list annotates available drives with state DB presence (R-3.3.3), supports `--all` to remove the SharePoint site cap (R-3.3.4). Drive remove `--purge` works on unconfigured drives with orphaned state (R-3.3.8) and only purges drive-owned state; account-owned token/profile files remain until logout.
 
 Shared-folder discovery is best-effort live search via
 `GET /me/drive/root/search(q='*')` to satisfy `R-3.6.2`. Search hits are only

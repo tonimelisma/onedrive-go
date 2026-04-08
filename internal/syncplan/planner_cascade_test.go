@@ -206,6 +206,92 @@ func TestCascade_UploadOnlyMode(t *testing.T) {
 	assert.Empty(t, localDeletes, "upload-only mode: no local deletes")
 }
 
+// TestCascade_RemoteDeletedFolderWithModifiedDescendant_ReclassifiesDescendant
+// verifies that a parent-folder delete merged in via cascade can still
+// reclassify an already-planned descendant local change as a remote delete,
+// while keeping the parent folder alive remotely when the descendant must be
+// preserved.
+func TestCascade_RemoteDeletedFolderWithModifiedDescendant_ReclassifiesDescendant(t *testing.T) {
+	t.Parallel()
+
+	planner := NewPlanner(synctest.TestLogger(t))
+	driveID := driveid.New(synctest.TestDriveID)
+
+	baseline := synctest.BaselineWith(
+		&synctypes.BaselineEntry{
+			Path:     "folder",
+			ItemType: synctypes.ItemTypeFolder,
+			ItemID:   "folder-id",
+			DriveID:  driveID,
+		},
+		&synctypes.BaselineEntry{
+			Path:       "folder/child.txt",
+			ItemType:   synctypes.ItemTypeFile,
+			ItemID:     "child-id",
+			DriveID:    driveID,
+			LocalHash:  "old-local",
+			RemoteHash: "old-remote",
+		},
+	)
+
+	changes := []synctypes.PathChanges{
+		{
+			Path: "folder",
+			RemoteEvents: []synctypes.ChangeEvent{
+				{
+					Source:    synctypes.SourceRemote,
+					Type:      synctypes.ChangeDelete,
+					Path:      "folder",
+					ItemType:  synctypes.ItemTypeFolder,
+					ItemID:    "folder-id",
+					DriveID:   driveID,
+					IsDeleted: true,
+				},
+			},
+		},
+		{
+			Path: "folder/child.txt",
+			LocalEvents: []synctypes.ChangeEvent{
+				{
+					Source:   synctypes.SourceLocal,
+					Type:     synctypes.ChangeModify,
+					Path:     "folder/child.txt",
+					ItemType: synctypes.ItemTypeFile,
+					Hash:     "new-local",
+				},
+			},
+		},
+	}
+
+	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	require.NoError(t, err)
+
+	folderCreates := synctest.ActionsOfType(plan.Actions, synctypes.ActionFolderCreate)
+	require.Len(t, folderCreates, 1)
+	assert.Equal(t, "folder", folderCreates[0].Path)
+	assert.Equal(t, synctypes.CreateRemote, folderCreates[0].CreateSide)
+
+	conflicts := synctest.ActionsOfType(plan.Actions, synctypes.ActionConflict)
+	require.Len(t, conflicts, 1)
+	assert.Equal(t, "folder/child.txt", conflicts[0].Path)
+	require.NotNil(t, conflicts[0].ConflictInfo)
+	assert.Equal(t, synctypes.ConflictEditDelete, conflicts[0].ConflictInfo.ConflictType)
+
+	localDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionLocalDelete)
+	assert.Empty(t, localDeletes, "remote recreation should replace parent local delete when a descendant is preserved")
+
+	var folderCreateIdx, conflictIdx int
+	for i := range plan.Actions {
+		switch {
+		case plan.Actions[i].Type == synctypes.ActionFolderCreate && plan.Actions[i].Path == "folder":
+			folderCreateIdx = i
+		case plan.Actions[i].Type == synctypes.ActionConflict && plan.Actions[i].Path == "folder/child.txt":
+			conflictIdx = i
+		}
+	}
+	assert.Contains(t, plan.Deps[conflictIdx], folderCreateIdx, "child conflict should wait for remote folder recreation")
+}
+
 // TestCascade_BothSidesDeleted verifies cleanup actions for descendants when
 // both sides are deleted. The planner derives local state from baseline when
 // no local events exist (assumes item still exists on disk), so the parent

@@ -11,6 +11,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 func TestPutJSONOutput_Serialization(t *testing.T) {
@@ -167,4 +170,46 @@ func TestIsFatalUploadWalkError(t *testing.T) {
 	assert.True(t, isFatalUploadWalkError(context.Canceled))
 	assert.True(t, isFatalUploadWalkError(context.DeadlineExceeded))
 	assert.False(t, isFatalUploadWalkError(errors.New("boom")))
+}
+
+type fakeUploadParentResolver struct {
+	path string
+	item *graph.Item
+	err  error
+}
+
+func (f *fakeUploadParentResolver) WaitPathVisible(_ context.Context, remotePath string) (*graph.Item, error) {
+	f.path = remotePath
+	return f.item, f.err
+}
+
+func TestResolveUploadParent_UsesVisibilityWait(t *testing.T) {
+	t.Parallel()
+
+	resolver := &fakeUploadParentResolver{
+		item: &graph.Item{
+			ID:       "parent-123",
+			IsFolder: true,
+		},
+	}
+
+	parentItem, err := resolveUploadParent(t.Context(), resolver, "/Documents/projects")
+	require.NoError(t, err)
+	require.NotNil(t, parentItem)
+	assert.Equal(t, "/Documents/projects", resolver.path)
+	assert.Equal(t, "parent-123", parentItem.ID)
+}
+
+func TestResolveUploadParent_WrapsVisibilityError(t *testing.T) {
+	t.Parallel()
+
+	resolver := &fakeUploadParentResolver{
+		err: driveops.ErrPathNotVisible,
+	}
+
+	_, err := resolveUploadParent(t.Context(), resolver, "/Documents/projects")
+	require.Error(t, err)
+	assert.Equal(t, "/Documents/projects", resolver.path)
+	require.ErrorIs(t, err, driveops.ErrPathNotVisible)
+	assert.Contains(t, err.Error(), `resolving parent "/Documents/projects"`)
 }

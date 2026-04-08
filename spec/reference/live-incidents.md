@@ -12,12 +12,128 @@ of truth for what was seen, when it was seen, and how it was handled.
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20260405-06 | `/me/drives` stayed `403 accessDenied` past the strict auth-preflight window | mitigated | graph quirk | 2026-04-08 | yes |
+| LI-20260407-03 | Exact delete-target path lookup lagged parent listing during repeated sibling deletes | fixed | graph quirk | 2026-04-07 | no |
+| LI-20260407-02 | Keep-local conflict resolution used parent-route upload despite known item identity | fixed | product bug | 2026-04-07 | no |
+| LI-20260407-01 | Follow-on `put` lost a freshly visible parent path | fixed | graph quirk | 2026-04-07 | no |
 | LI-20260406-01 | Personal scoped delta not ready after path resolution | fixed | graph quirk | 2026-04-06 | no |
 | LI-20260405-05 | One-shot crash recovery left durable work unreplayed | fixed | product bug | 2026-04-05 | no |
 | LI-20260405-04 | Fast E2E download-only assumed delta visibility too early | closed as test | graph quirk | 2026-04-07 | yes |
 | LI-20260405-03 | Websocket smoke timed startup before remote observer readiness | closed as test | test bug | 2026-04-05 | no |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
+
+## LI-20260405-06: `/me/drives` stayed `403 accessDenied` past the strict auth-preflight window
+
+First seen: 2026-04-05  
+Last seen: 2026-04-08  
+Area: scheduled/full live verification, auth preflight, drive catalog  
+Suite / test: scheduled `e2e_full` `whoami`, local `verify default` `TestE2E_AuthPreflight_Fast`  
+Classification: graph quirk  
+Status: mitigated  
+Recurring: yes  
+Summary: Microsoft Graph can accept the token for `/me` while still returning
+`403 accessDenied` for `/me/drives`. The production CLI already degrades
+gracefully after its bounded retry budget, but the repo-owned strict auth
+preflight can still fail a live suite when that inconsistency lasts longer than
+the preflight poll window.  
+Evidence:
+- Scheduled `e2e_full` run `23999446320` on April 5, 2026 got `GET /me = 200`,
+  then 3 consecutive `/me/drives = 403 accessDenied` failures over about 3.1
+  seconds under the old production retry budget, before a later `whoami`
+  command in the same run succeeded again.
+- Local `go run ./cmd/devtool verify default` on April 8, 2026 failed
+  `TestE2E_AuthPreflight_Fast/personal_kikkelimies123@outlook.com` after 10
+  consecutive `/me/drives = 403 accessDenied` responses over 29.942 seconds.
+- Request IDs from that April 8 strict-preflight failure:
+  `312b53d7-f478-48c4-9f36-363067a2c1b6`,
+  `b58ff5b7-6764-4223-9c83-ceb6f1ca3222`,
+  `b0cec41d-7b15-4c81-8391-312edf2239d0`,
+  `1cf97115-e2ab-4330-9706-c39df8294dcb`,
+  `03c81db2-eb2f-4d77-b142-1a1b481f0cd9`,
+  `0db09ec7-3a42-4ae7-aba0-fbf45beeb6fc`,
+  `9c3ff205-3eaf-4dc8-83fa-8b80afdd9d02`,
+  `69c9fbf9-ffa8-49e8-94f0-558cea646da9`,
+  `24529051-0dd1-49a9-a908-f0c1b53930e4`,
+  `a7fe6793-d731-4c0d-b6f5-a424e9de2d45`
+- An immediate isolated rerun of the same preflight later passed for that
+  account in about 1.4 seconds, confirming the failure window was transient.
+Resolution / mitigation: `graph.Client.Drives()` now owns a narrow 5-attempt
+retry for `/me/drives` `403 accessDenied`, and caller behavior above it treats
+retry exhaustion as authenticated degraded discovery rather than auth failure.
+The repo-owned auth preflight remains intentionally strict so CI fails early
+with exact account, request ID, failed-call count, and elapsed-time evidence
+when this consistency gap lasts longer than the test budget.  
+Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../design/graph-client.md), [degraded-mode.md](../design/degraded-mode.md), [cli.md](../design/cli.md)
+
+## LI-20260407-03: Exact delete-target path lookup lagged parent listing during repeated sibling deletes
+
+First seen: 2026-04-07  
+Last seen: 2026-04-07  
+Area: `e2e_full`, CLI `rm`, big-delete setup  
+Suite / test: local isolated repro of `TestE2E_Sync_BigDeleteProtection`  
+Classification: graph quirk  
+Status: fixed  
+Recurring: no  
+Summary: During repeated sibling deletes, Graph could return `404 itemNotFound`
+for the exact path lookup of a still-existing child before the delete route was
+even attempted. The product already treated delete-by-ID `404`s as a
+path-convergence problem, but the same test proved the path lookup itself could
+lie too. For a path-authoritative delete intent, one-shot `GET by path` was not
+trustworthy enough to decide the file was already gone.  
+Evidence:
+- The local isolated repro on April 7, 2026 first created
+  `/e2e-sync-bigdel-1775633571947871000/file-10.txt`, then later failed while
+  running `rm /e2e-sync-bigdel-1775633571947871000/file-10.txt` during the
+  remote setup loop.
+- The failing command died in the initial resolve step with
+  `resolving "/e2e-sync-bigdel-1775633571947871000/file-10.txt": graph: HTTP 404`
+  after earlier sibling deletes had already succeeded for `file-01.txt`
+  through `file-09.txt`.
+- [graph-api-quirks.md](graph-api-quirks.md) already documented the adjacent
+  delete-by-ID `404 itemNotFound` family; this incident extended the same live
+  consistency gap to the exact path route used before deletion starts.
+Resolution / mitigation: `driveops.Session` now owns a delete-specific
+`ResolveDeleteTarget()` helper. It falls back from exact path `itemNotFound` to
+the parent collection before declaring the target missing, and
+`DeleteResolvedPath()` / `PermanentDeleteResolvedPath()` reuse that helper
+during delete retry reconciliation. CLI `rm` now resolves its initial delete
+target through that same driveops helper instead of a one-shot `ResolveItem()`.  
+Promoted docs: [drive-transfers.md](../design/drive-transfers.md), [graph-api-quirks.md](graph-api-quirks.md)
+
+## LI-20260407-02: Keep-local conflict resolution used parent-route upload despite known item identity
+
+First seen: 2026-04-07  
+Last seen: 2026-04-07  
+Area: `e2e_full`, conflict resolution, upload execution  
+Suite / test: `verify e2e-full`, `TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal`  
+Classification: product bug  
+Status: fixed  
+Recurring: no  
+Summary: A full-suite keep-local resolution proved that sync upload execution still recreated files through the parent-path upload route even when the conflict record already carried the authoritative remote `itemID`. During the live run, the small-file overwrite first hit the simple-upload `404` fallback and then exhausted the parent-based `createUploadSession` retry budget on the same folder. The Graph inconsistency was already known, but the executor widened its exposure by ignoring the narrower item-ID overwrite route it already had available.  
+Evidence:
+- Local `go run ./cmd/devtool verify e2e-full` on April 7, 2026 failed in `TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal` while resolving `e2e-sync-cc-1775631264479623000/collision.txt` with `--keep-local`.
+- The child CLI log showed `conflicts resolve` restoring the conflict copy, then attempting a parent-path simple upload followed by repeated `POST /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s8842f8751f7c491fbfd30ddaa2fc0031:/collision.txt:/createUploadSession` failures ending with request ID `9dce082f-97ae-4f6c-9cc2-69b650dcf4c1`.
+- [graph-api-quirks.md](graph-api-quirks.md) already documented the broader fresh-parent `createUploadSession` `404 itemNotFound` family; this incident showed the executor still depended on that family in an overwrite flow that already had stable remote item identity.
+Resolution / mitigation: `ExecuteUpload` now overwrites by item ID whenever the action carries a non-empty `ItemID`, using parent-path upload only for true create flows with no remote identity yet. `conflicts resolve --keep-local` therefore restores the local conflict copy and then overwrites the known remote item directly instead of recreating it through the parent route.  
+Promoted docs: [drive-transfers.md](../design/drive-transfers.md), [sync-execution.md](../design/sync-execution.md), [graph-api-quirks.md](graph-api-quirks.md)
+
+## LI-20260407-01: Follow-on `put` lost a freshly visible parent path
+
+First seen: 2026-04-07  
+Last seen: 2026-04-07  
+Area: `e2e_full`, CLI `put`, conflict setup  
+Suite / test: `verify e2e-full`, `TestE2E_Conflicts_ResolveKeepBoth`  
+Classification: graph quirk  
+Status: fixed  
+Recurring: no  
+Summary: A full-suite conflict setup proved that a parent folder could be visible to one command and still fail the immediate next command's parent-path resolution. The test helper confirmed the folder path before starting the remote edit step, but the subsequent CLI `put` still died resolving the same parent path with `404 itemNotFound` instead of treating it as a bounded visibility-convergence gap.  
+Evidence:
+- Local `go run ./cmd/devtool verify e2e-full` on April 7, 2026 failed in `TestE2E_Conflicts_ResolveKeepBoth` while uploading `/e2e-cli-keepboth-1775630146992732000/both.txt`.
+- The child CLI log showed `GET /me` first stalling to a transient `504`, then succeeding on retry, followed by `GET /drives/bd50cf43646e28e6/root:/e2e-cli-keepboth-1775630146992732000:` returning `404 itemNotFound` with request ID `55b3980f-1c7c-4465-b09f-6683a0771f08`.
+- [graph-api-quirks.md](graph-api-quirks.md) already records the broader path-visibility lag family for adjacent `mkdir` / `put` / `mv` flows; this incident showed the same family could hit pre-upload parent resolution too.
+Resolution / mitigation: CLI `put` and folder upload bootstrap now resolve the parent path through `driveops.Session.WaitPathVisible()` instead of one-shot `ResolveItem()`. That keeps parent-path convergence under the same bounded driveops authority already used for destination visibility after successful mutations.  
+Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [drive-transfers.md](../design/drive-transfers.md)
 
 ## LI-20260406-01: Personal scoped delta not ready after path resolution
 

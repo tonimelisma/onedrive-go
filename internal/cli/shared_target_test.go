@@ -115,6 +115,10 @@ func TestResolveSharedTargetBootstrap_RawURLResolvesToSelector(t *testing.T) {
 }
 
 func TestSharedTargetInput(t *testing.T) {
+	driveCmd := newDriveCmd()
+	driveAddCmd := newDriveAddCmd()
+	driveCmd.AddCommand(driveAddCmd)
+
 	tests := []struct {
 		name string
 		cmd  *cobra.Command
@@ -148,6 +152,20 @@ func TestSharedTargetInput(t *testing.T) {
 			cmd:  newPutCmd(),
 			args: []string{"./local.txt"},
 			ok:   false,
+		},
+		{
+			name: "drive add raw url",
+			cmd:  driveAddCmd,
+			args: []string{"https://1drv.ms/f/c/example"},
+			want: "https://1drv.ms/f/c/example",
+			ok:   true,
+		},
+		{
+			name: "drive add shared selector",
+			cmd:  driveAddCmd,
+			args: []string{"shared:alice@example.com:drv:item"},
+			want: "shared:alice@example.com:drv:item",
+			ok:   true,
 		},
 	}
 

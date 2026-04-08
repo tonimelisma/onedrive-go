@@ -7,6 +7,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -108,21 +109,33 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *synctypes.Action) 
 		// handle it.
 	}
 
-	parentID, err := e.ResolveParentID(action.Path)
-	if err != nil {
-		return e.failedOutcome(action, synctypes.ActionUpload, err)
-	}
-
 	localPath, err := e.syncTree.Abs(action.Path)
 	if err != nil {
 		return e.failedOutcome(action, synctypes.ActionUpload, normalizeSyncTreePathError(err))
 	}
 
-	name := filepath.Base(action.Path)
+	var (
+		parentID string
+		result   *driveops.UploadResult
+	)
 
-	result, err := e.transferMgr.UploadFile(ctx, driveID, parentID, name, localPath, driveops.UploadOpts{})
-	if err != nil {
-		return e.failedOutcome(action, synctypes.ActionUpload, err)
+	if shouldOverwriteKnownRemoteItem(action) {
+		result, err = e.transferMgr.UploadFileToItem(ctx, driveID, action.ItemID, localPath, driveops.UploadOpts{})
+		if err != nil {
+			return e.failedOutcome(action, synctypes.ActionUpload, err)
+		}
+		parentID = resolvedUploadParentID(action, result.Item)
+	} else {
+		parentID, err = e.ResolveParentID(action.Path)
+		if err != nil {
+			return e.failedOutcome(action, synctypes.ActionUpload, err)
+		}
+
+		name := filepath.Base(action.Path)
+		result, err = e.transferMgr.UploadFile(ctx, driveID, parentID, name, localPath, driveops.UploadOpts{})
+		if err != nil {
+			return e.failedOutcome(action, synctypes.ActionUpload, err)
+		}
 	}
 
 	// driveops.SelectHash picks the best available hash from the item metadata (B-222).
@@ -152,4 +165,37 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *synctypes.Action) 
 		RemoteMtime:     remoteMtime,
 		ETag:            result.Item.ETag,
 	}
+}
+
+func shouldOverwriteKnownRemoteItem(action *synctypes.Action) bool {
+	if action == nil || action.ItemID == "" {
+		return false
+	}
+
+	if action.ConflictInfo != nil && action.ConflictInfo.ConflictType == synctypes.ConflictEditDelete {
+		return false
+	}
+
+	if action.View != nil && action.View.Remote != nil && action.View.Remote.IsDeleted {
+		return false
+	}
+
+	return true
+}
+
+func resolvedUploadParentID(action *synctypes.Action, item *graph.Item) string {
+	if item != nil && item.ParentID != "" {
+		return item.ParentID
+	}
+	if action == nil || action.View == nil {
+		return ""
+	}
+	if action.View.Remote != nil && action.View.Remote.ParentID != "" {
+		return action.View.Remote.ParentID
+	}
+	if action.View.Baseline != nil {
+		return action.View.Baseline.ParentID
+	}
+
+	return ""
 }

@@ -23,6 +23,7 @@ const (
 	rmTestDeletePath  = "/drives/0000000drive-123/items/item-123"
 	rmNestedResolve   = "/drives/0000000drive-123/root:/docs/old-report.pdf:"
 	rmNestedParent    = "/drives/0000000drive-123/root:/docs:"
+	rmRootChildren    = "/drives/0000000drive-123/items/root/children"
 )
 
 type rmRequestCounts struct {
@@ -241,6 +242,44 @@ func TestRunRm_ReconcilesTransientDeleteNotFoundAgainstPath(t *testing.T) {
 
 	require.NoError(t, runRm(cmd, []string{"/old-report.pdf"}))
 	assert.Equal(t, 2, counts.deleteCalls)
+}
+
+// Validates: R-1.4.3
+func TestRunRm_ResolveDeleteTargetFallsBackToParentListing(t *testing.T) {
+	counts := &rmRequestCounts{}
+	var resolveCalls int
+
+	cmd, _ := newRmTestCommand(t, driveid.MustCanonicalID("business:user@example.com"), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == rmTestResolvePath:
+			resolveCalls++
+			w.WriteHeader(http.StatusNotFound)
+			writeTestResponse(t, w, `{"error":{"code":"itemNotFound"}}`)
+		case r.Method == http.MethodGet && r.URL.Path == rmRootChildren:
+			w.Header().Set("Content-Type", "application/json")
+			writeTestResponse(t, w, `{
+				"value": [
+					{
+						"id":"item-123",
+						"name":"old-report.pdf",
+						"size":1,
+						"createdDateTime":"2026-04-03T00:00:00Z",
+						"lastModifiedDateTime":"2026-04-03T00:00:00Z",
+						"eTag":"etag"
+					}
+				]
+			}`)
+		case r.Method == http.MethodDelete && r.URL.Path == rmTestDeletePath:
+			counts.deleteCalls++
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(w, "unexpected request", http.StatusInternalServerError)
+		}
+	}))
+
+	require.NoError(t, runRm(cmd, []string{"/old-report.pdf"}))
+	assert.Equal(t, 1, resolveCalls)
+	assert.Equal(t, 1, counts.deleteCalls)
 }
 
 func TestRemovableParentPath(t *testing.T) {

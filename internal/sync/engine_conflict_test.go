@@ -171,12 +171,13 @@ func TestResolveConflict_KeepLocal(t *testing.T) {
 	uploadCalled := false
 
 	mock := &engineMockClient{
-		uploadFn: func(_ context.Context, _ driveid.ID, parentID, name string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+		uploadToItemFn: func(_ context.Context, _ driveid.ID, itemID string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			uploadCalled = true
+			assert.Equal(t, "item-kl", itemID)
 
 			return &graph.Item{
 				ID:           "uploaded-resolve",
-				Name:         name,
+				Name:         "keep-local.txt",
 				ETag:         "etag-resolved",
 				QuickXorHash: "resolve-hash",
 				Size:         5,
@@ -226,7 +227,9 @@ func TestResolveConflict_KeepLocal_RestoresSuffixedConflictCopy(t *testing.T) {
 	var uploadedContent string
 
 	mock := &engineMockClient{
-		uploadFn: func(_ context.Context, _ driveid.ID, parentID, name string, content io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+		uploadToItemFn: func(_ context.Context, _ driveid.ID, itemID string, content io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			assert.Equal(t, "item-kl", itemID)
+
 			buf := make([]byte, size)
 			_, readErr := content.ReadAt(buf, 0)
 			if readErr != nil && readErr != io.EOF {
@@ -236,7 +239,7 @@ func TestResolveConflict_KeepLocal_RestoresSuffixedConflictCopy(t *testing.T) {
 
 			return &graph.Item{
 				ID:           "uploaded-suffixed",
-				Name:         name,
+				Name:         "keep-local.txt",
 				ETag:         "etag-suffixed",
 				QuickXorHash: "resolve-hash",
 				Size:         size,

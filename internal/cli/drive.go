@@ -1026,19 +1026,22 @@ func newDriveAddCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "add [canonical-id]",
 		Short: "Add a new drive to the configuration",
-		Long: `Add a drive to the configuration by canonical ID or shared folder name.
+		Long: `Add a drive to the configuration by canonical ID, raw shared-folder URL, or shared folder name.
 
 If the drive already exists in config, reports it as already configured.
 If the drive is new, it is added with a default sync directory.
 
-For shared drives, you can use a search term instead of a canonical ID.
-The term is matched against shared folder names (case-insensitive substring).
+For shared drives, you can use:
+- a shared selector (shared:<recipient>:<drive>:<item>)
+- the original raw share URL for a shared folder
+- a search term matched against shared folder names (case-insensitive substring)
 
 Without arguments, lists available drives that can be added.
 
 Examples:
   onedrive-go drive add personal:user@example.com
   onedrive-go drive add sharepoint:user@contoso.com:marketing:Documents
+  onedrive-go drive add https://1drv.ms/f/c/example
   onedrive-go drive add "Shared Folder"`,
 		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
 		RunE:        runDriveAdd,
@@ -1206,9 +1209,10 @@ type sharedMatch struct {
 
 func sharedDiscoveryNoMatchesError(selector string) error {
 	return fmt.Errorf(
-		"no shared folders matching %q found — shared discovery is best-effort live Graph search and may omit "+
-			"external or cross-org shares; run 'onedrive-go shared' or "+
-			"'onedrive-go drive list' to confirm what the API exposed",
+		"no shared folders matching %q found — Graph shared discovery also checks external shares, "+
+			"but Microsoft can still omit some cross-org items; if you have the original share URL, "+
+			"run 'onedrive-go drive add <share-url>' to bypass discovery, or use 'onedrive-go shared' "+
+			"or 'onedrive-go drive list' to confirm what the API exposed",
 		selector,
 	)
 }

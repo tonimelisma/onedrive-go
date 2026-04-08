@@ -77,6 +77,39 @@ func TestE2E_Shared_FolderDiscoveryContinuesToDriveAdd(t *testing.T) {
 	assert.True(t, found, "drive add should configure the writable shared-folder fixture by exact selector identity")
 }
 
+// Validates: R-3.3.13
+func TestE2E_Shared_RawFolderLinkDriveAdd_NormalizesToCanonicalSharedDrive(t *testing.T) {
+	registerLogDump(t)
+
+	rawLink := liveConfig.Fixtures.SharedFolderLink
+	if rawLink == "" {
+		t.Skip("shared-folder raw-link fixture missing: set ONEDRIVE_TEST_SHARED_FOLDER_LINK in exported env, root .env, or .testdata/fixtures.env")
+	}
+
+	folderFixture := resolveSharedFolderFixture(t, liveConfig.Fixtures.WritableSharedFolderSelector)
+	cfgPath, env := writeSyncConfigForDriveID(t, folderFixture.RecipientDriveID, t.TempDir())
+
+	rawStat := statSharedTargetJSON(t, cfgPath, env, "--account", folderFixture.RecipientEmail, rawLink)
+	assert.Equal(t, folderFixture.FolderItem.RemoteDriveID, rawStat.RemoteDriveID)
+	assert.Equal(t, folderFixture.FolderItem.RemoteItemID, rawStat.RemoteItemID)
+	assert.Equal(t, folderFixture.FolderItem.Selector, rawStat.SharedSelector)
+
+	runCLIWithoutDrive(t, cfgPath, env, "--account", folderFixture.RecipientEmail, "drive", "add", rawLink)
+
+	stdout, _ := runCLIWithoutDrive(t, cfgPath, env, "drive", "list", "--json")
+	var parsed driveListE2EOutput
+	require.NoError(t, json.Unmarshal([]byte(stdout), &parsed))
+
+	var found bool
+	for i := range parsed.Configured {
+		if parsed.Configured[i].CanonicalID == folderFixture.FolderItem.Selector {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "drive add <raw-share-url> should normalize to the canonical writable shared-folder selector")
+}
+
 // Validates: R-3.6.6, R-3.3.5, R-2.14.2, R-2.14.3, R-2.14.4
 func TestE2E_Shared_ReadOnlyFolder_DiscoveryDriveAddAndBlockedWriteUX(t *testing.T) {
 	registerLogDump(t)

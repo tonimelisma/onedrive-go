@@ -90,6 +90,7 @@ func TestLoadLiveTestConfig(t *testing.T) {
 		"ONEDRIVE_TEST_DRIVE",
 		"ONEDRIVE_TEST_DRIVE_2",
 		"ONEDRIVE_TEST_SHARED_LINK",
+		"ONEDRIVE_TEST_SHARED_FOLDER_LINK",
 		"ONEDRIVE_TEST_WRITABLE_SHARED_FOLDER",
 		"ONEDRIVE_TEST_READONLY_SHARED_FOLDER",
 	} {
@@ -105,6 +106,7 @@ func TestLoadLiveTestConfig(t *testing.T) {
 	), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(fixturesDir, "fixtures.env"), []byte(strings.Join([]string{
 		"ONEDRIVE_TEST_SHARED_LINK=https://1drv.ms/example",
+		"ONEDRIVE_TEST_SHARED_FOLDER_LINK=https://1drv.ms/shared-folder",
 		"ONEDRIVE_TEST_WRITABLE_SHARED_FOLDER=shared:secondary@example.com:drive123:item123",
 		"ONEDRIVE_TEST_READONLY_SHARED_FOLDER=shared:primary@example.com:drive456:item456",
 	}, "\n")+"\n"), 0o600))
@@ -115,6 +117,7 @@ func TestLoadLiveTestConfig(t *testing.T) {
 	assert.Equal(t, "personal:primary@example.com", cfg.PrimaryDrive)
 	assert.Equal(t, "personal:secondary@example.com", cfg.SecondaryDrive)
 	assert.Equal(t, "https://1drv.ms/example", cfg.Fixtures.SharedFileLink)
+	assert.Equal(t, "https://1drv.ms/shared-folder", cfg.Fixtures.SharedFolderLink)
 	assert.Equal(t, "shared:secondary@example.com:drive123:item123", cfg.Fixtures.WritableSharedFolderSelector)
 	assert.Equal(t, "shared:primary@example.com:drive456:item456", cfg.Fixtures.ReadOnlySharedFolderSelector)
 }
@@ -124,6 +127,7 @@ func TestLoadLiveTestConfig_Precedence(t *testing.T) {
 		"ONEDRIVE_TEST_DRIVE",
 		"ONEDRIVE_TEST_DRIVE_2",
 		"ONEDRIVE_TEST_SHARED_LINK",
+		"ONEDRIVE_TEST_SHARED_FOLDER_LINK",
 		"ONEDRIVE_TEST_WRITABLE_SHARED_FOLDER",
 		"ONEDRIVE_TEST_READONLY_SHARED_FOLDER",
 	} {
@@ -135,11 +139,13 @@ func TestLoadLiveTestConfig_Precedence(t *testing.T) {
 	require.NoError(t, os.MkdirAll(fixturesDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, ".env"), []byte(
 		"ONEDRIVE_TEST_DRIVE=personal:env@example.com\n"+
-			"ONEDRIVE_TEST_SHARED_LINK=https://1drv.ms/env\n",
+			"ONEDRIVE_TEST_SHARED_LINK=https://1drv.ms/env\n"+
+			"ONEDRIVE_TEST_SHARED_FOLDER_LINK=https://1drv.ms/f/env\n",
 	), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(fixturesDir, "fixtures.env"), []byte(
 		"ONEDRIVE_TEST_DRIVE=personal:fixture@example.com\n"+
-			"ONEDRIVE_TEST_SHARED_LINK=https://1drv.ms/fixture\n",
+			"ONEDRIVE_TEST_SHARED_LINK=https://1drv.ms/fixture\n"+
+			"ONEDRIVE_TEST_SHARED_FOLDER_LINK=https://1drv.ms/f/fixture\n",
 	), 0o600))
 	t.Setenv("ONEDRIVE_TEST_DRIVE", "personal:exported@example.com")
 
@@ -148,6 +154,7 @@ func TestLoadLiveTestConfig_Precedence(t *testing.T) {
 
 	assert.Equal(t, "personal:exported@example.com", cfg.PrimaryDrive)
 	assert.Equal(t, "https://1drv.ms/env", cfg.Fixtures.SharedFileLink)
+	assert.Equal(t, "https://1drv.ms/f/env", cfg.Fixtures.SharedFolderLink)
 }
 
 func TestLoadLiveTestConfig_InvalidSharedSelector(t *testing.T) {

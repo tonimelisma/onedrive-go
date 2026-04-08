@@ -13,6 +13,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
@@ -38,6 +39,19 @@ type putFolderJSONOutput struct {
 	FoldersCreated int             `json:"folders_created"`
 	TotalSize      int64           `json:"total_size"`
 	Errors         []string        `json:"errors"`
+}
+
+type uploadParentResolver interface {
+	WaitPathVisible(ctx context.Context, remotePath string) (*graph.Item, error)
+}
+
+func resolveUploadParent(ctx context.Context, session uploadParentResolver, parentPath string) (*graph.Item, error) {
+	parentItem, err := session.WaitPathVisible(ctx, parentPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolving parent %q: %w", parentPath, err)
+	}
+
+	return parentItem, nil
 }
 
 func runPut(cmd *cobra.Command, args []string) error {
@@ -81,10 +95,9 @@ func runPut(cmd *cobra.Command, args []string) error {
 
 	parentPath, name := driveops.SplitParentAndName(remotePath)
 
-	// Resolve parent folder ID.
-	parentItem, err := session.ResolveItem(ctx, parentPath)
+	parentItem, err := resolveUploadParent(ctx, session, parentPath)
 	if err != nil {
-		return fmt.Errorf("resolving parent %q: %w", parentPath, err)
+		return err
 	}
 
 	progress := func(uploaded, total int64) {
@@ -168,9 +181,9 @@ func uploadFolder(
 	// Resolve or create the root remote folder.
 	parentPath, name := driveops.SplitParentAndName(remotePath)
 
-	parentItem, err := session.ResolveItem(ctx, parentPath)
+	parentItem, err := resolveUploadParent(ctx, session, parentPath)
 	if err != nil {
-		return fmt.Errorf("resolving parent %q: %w", parentPath, err)
+		return err
 	}
 
 	rootFolder, err := session.EnsureFolder(ctx, parentItem.ID, name)
