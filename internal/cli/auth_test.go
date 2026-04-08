@@ -716,7 +716,7 @@ func TestRunWhoamiWithContext_ClearsPersistedAuthScopeAfterSuccessfulAuthenticat
 		w.Header().Set("Content-Type", "application/json")
 
 		switch r.URL.Path {
-		case "/me":
+		case testGraphMePath:
 			writeTestResponse(t, w, `{
 				"id": "user-123",
 				"displayName": "Test User",

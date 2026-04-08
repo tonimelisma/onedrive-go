@@ -40,6 +40,7 @@ var (
 	_ synctypes.ItemClient              = (*engineMockClient)(nil)
 	_ driveops.Downloader               = (*engineMockClient)(nil)
 	_ driveops.Uploader                 = (*engineMockClient)(nil)
+	_ driveops.ItemUploader             = (*engineMockClient)(nil)
 	_ synctypes.FolderDeltaFetcher      = (*engineMockClient)(nil)
 	_ synctypes.RecursiveLister         = (*engineMockClient)(nil)
 	_ synctypes.PermissionChecker       = (*engineMockClient)(nil)
@@ -67,7 +68,8 @@ type engineMockClient struct {
 	downloadFn func(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error)
 
 	// Uploader
-	uploadFn func(ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error)
+	uploadFn       func(ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error)
+	uploadToItemFn func(ctx context.Context, driveID driveid.ID, itemID string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error)
 }
 
 func (m *engineMockClient) Delta(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error) {
@@ -189,6 +191,21 @@ func (m *engineMockClient) Upload(ctx context.Context, driveID driveid.ID, paren
 	return &graph.Item{
 		ID:           "uploaded-item-id",
 		Name:         name,
+		Size:         size,
+		QuickXorHash: "abc123hash",
+	}, nil
+}
+
+func (m *engineMockClient) UploadToItem(ctx context.Context, driveID driveid.ID, itemID string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error) {
+	if m.uploadToItemFn != nil {
+		return m.uploadToItemFn(ctx, driveID, itemID, content, size, mtime, progress)
+	}
+	if m.uploadFn != nil {
+		return m.uploadFn(ctx, driveID, "", "", content, size, mtime, progress)
+	}
+
+	return &graph.Item{
+		ID:           itemID,
 		Size:         size,
 		QuickXorHash: "abc123hash",
 	}, nil

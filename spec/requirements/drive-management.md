@@ -60,6 +60,7 @@ The system shall support all four drive types:
 - R-3.3.10: When `--json` is passed, `drive list` shall output structured JSON with `configured`, `available`, `accounts_requiring_auth`, and `accounts_degraded` arrays. Configured drive entries shall include auth status when authentication is required. [verified]
 - R-3.3.11: When `--json` is passed, `drive search` shall output structured JSON with `results` and `accounts_requiring_auth` arrays. [verified]
 - R-3.3.12: When the user runs `drive add shared:<recipientEmail>:<remoteDriveID>:<remoteItemID>` and the selector resolves to a shared file instead of a shared folder, the system shall reject it with guidance to use direct file commands (`stat`, `get`, `put`) instead of configuring it as a drive. [verified]
+- R-3.3.13: When the user runs `drive add <raw-share-url>` and the URL resolves to a shared folder, the system shall normalize that link to the canonical shared drive ID and configure the shared folder as a drive without depending on search or `sharedWithMe` discovery. Shared-file links shall continue to be rejected with the direct file-command guidance. [verified]
 
 ## R-3.4 Multi-Account [verified]
 

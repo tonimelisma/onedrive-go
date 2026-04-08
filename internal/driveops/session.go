@@ -296,6 +296,27 @@ func (s *Session) ResolveItem(ctx context.Context, remotePath string) (*graph.It
 	return item, nil
 }
 
+// ResolveDeleteTarget resolves a delete-intended remote path to an item.
+// Delete intent is authoritative on the path, so when the exact path route
+// lies with itemNotFound we fall back to the parent collection before
+// declaring the target missing.
+func (s *Session) ResolveDeleteTarget(ctx context.Context, remotePath string) (*graph.Item, error) {
+	item, err := s.ResolveItem(ctx, remotePath)
+	if err == nil {
+		return item, nil
+	}
+	if !errors.Is(err, graph.ErrNotFound) {
+		return nil, err
+	}
+
+	item, err = s.resolveItemFromParentListing(ctx, remotePath)
+	if err != nil {
+		return nil, err
+	}
+
+	return item, nil
+}
+
 // WaitPathVisible blocks until the remote path is readable through ordinary
 // path resolution after a successful mutation. Graph can acknowledge mkdir,
 // put, or move before follow-on path reads stop returning itemNotFound, so the
@@ -422,7 +443,7 @@ func (s *Session) deleteResolvedPath(
 			return fmt.Errorf("wait for delete path %q convergence: %w", remotePath, sleepErr)
 		}
 
-		item, resolveErr := s.ResolveItem(ctx, remotePath)
+		item, resolveErr := s.ResolveDeleteTarget(ctx, remotePath)
 		switch {
 		case resolveErr == nil:
 			currentID = item.ID
@@ -590,6 +611,26 @@ func matchChildByName(children []graph.Item, name string) (graph.Item, bool) {
 	}
 
 	return graph.Item{}, false
+}
+
+func (s *Session) resolveItemFromParentListing(ctx context.Context, remotePath string) (*graph.Item, error) {
+	clean := CleanRemotePath(remotePath)
+	if clean == "" {
+		return nil, fmt.Errorf("resolve delete target %q: %w", remotePath, graph.ErrNotFound)
+	}
+
+	parentPath, name := SplitParentAndName(clean)
+	children, err := s.ListChildren(ctx, parentPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve delete parent %q: %w", parentPath, err)
+	}
+
+	match, ok := matchChildByName(children, name)
+	if !ok {
+		return nil, fmt.Errorf("resolve delete target %q from parent %q: %w", clean, parentPath, graph.ErrNotFound)
+	}
+
+	return &match, nil
 }
 
 // CleanRemotePath strips leading/trailing slashes, returns "" for root.

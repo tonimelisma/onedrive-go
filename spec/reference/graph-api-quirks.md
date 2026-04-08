@@ -213,6 +213,9 @@ e2e-full`:
 Runtime policy:
 
 - CLI mutation commands own a bounded post-success visibility wait
+- `put` also resolves an already-expected parent path through the same bounded
+  visibility gate before uploading a child, so a transient parent-path 404
+  after a prior successful command is treated as the same convergence family
 - `mkdir`, single-file `put`, and `mv` retry destination-path reads on exact
   `itemNotFound` using a short deterministic schedule: `250ms`, `500ms`, `1s`,
   `2s`, `4s`, `8s`, `16s`
@@ -255,14 +258,33 @@ Observed evidence on April 5, 2026 during `go test -tags='e2e e2e_full' ./e2e
   still returned HTTP 404 `itemNotFound`
 - Graph request ID for the failed delete: `335ea56d-e3a9-4d2f-8b4c-742da9088eec`
 
+Observed extension on April 7, 2026 during the isolated repro for
+`TestE2E_Sync_BigDeleteProtection`:
+
+- repeated sibling deletes in `/e2e-sync-bigdel-1775633571947871000` reached a
+  state where `rm /e2e-sync-bigdel-1775633571947871000/file-10.txt` failed
+  before the delete route, because the initial exact path lookup returned
+  `GET .../root:/e2e-sync-bigdel-1775633571947871000/file-10.txt: = 404
+  itemNotFound`
+- the same setup had created `file-10.txt` successfully earlier in the run,
+  so one-shot exact-path resolution was not trustworthy enough to declare the
+  delete target gone
+- runtime now treats that as the same delete-convergence family: delete intent
+  stays authoritative on the path, and the session may need to consult the
+  parent collection before deciding whether the file still exists
+
 Runtime policy:
 
 - CLI path-oriented deletes use path-authoritative recovery, not one-shot
   item-ID authority
+- `rm` first resolves its target through `driveops.Session.ResolveDeleteTarget()`
+  instead of a one-shot exact path lookup
 - `rm`, `mv --force`, and `cp --force` delete through
   `driveops.Session.DeleteResolvedPath()` / `PermanentDeleteResolvedPath()`
-- when the initial delete returns exact `404 itemNotFound`, the session:
-  - re-resolves the target path
+- when the initial exact path lookup or later delete returns exact
+  `404 itemNotFound`, the session:
+  - first retries target resolution through the parent collection when the
+    exact path route says `itemNotFound`
   - accepts a now-missing path as success
   - retries delete against the current resolved item when the path still exists
   - uses the same bounded deterministic convergence schedule as
@@ -282,6 +304,24 @@ Observed CI evidence:
 - a later `whoami` command in the same run succeeded again roughly 10-12
   seconds later, so the failure window was transient rather than a durable
   auth rejection
+- local `verify default` on April 8, 2026 hit the same family in
+  `TestE2E_AuthPreflight_Fast/personal_kikkelimies123@outlook.com`: `/me`
+  succeeded, then 10 consecutive `/me/drives = 403 accessDenied` responses
+  exhausted the strict 30-second preflight window
+- request IDs from that failed strict-preflight window:
+  `312b53d7-f478-48c4-9f36-363067a2c1b6`,
+  `b58ff5b7-6764-4223-9c83-ceb6f1ca3222`,
+  `b0cec41d-7b15-4c81-8391-312edf2239d0`,
+  `1cf97115-e2ab-4330-9706-c39df8294dcb`,
+  `03c81db2-eb2f-4d77-b142-1a1b481f0cd9`,
+  `0db09ec7-3a42-4ae7-aba0-fbf45beeb6fc`,
+  `9c3ff205-3eaf-4dc8-83fa-8b80afdd9d02`,
+  `69c9fbf9-ffa8-49e8-94f0-558cea646da9`,
+  `24529051-0dd1-49a9-a908-f0c1b53930e4`,
+  `a7fe6793-d731-4c0d-b6f5-a424e9de2d45`
+- an immediate isolated rerun of the same preflight later passed for that
+  account in about 1.4 seconds, confirming the strict preflight can still
+  lose a transient consistency race even when the account recovers quickly
 
 Runtime policy:
 
@@ -438,6 +478,9 @@ sharing link.
 Runtime policy:
 - raw share URLs are accepted as input aliases and normalized immediately to
   the underlying shared item identity
+- when shared-folder discovery omits a folder, `drive add <raw-share-url>` is
+  the preferred bypass because it resolves the share directly instead of
+  depending on search or `sharedWithMe`
 - CLI discovery prints generated `shared:<recipientEmail>:<remoteDriveID>:<remoteItemID>`
   selectors, not original inbound links
 - sharing-link identity is treated as grant/provenance; item identity is the
@@ -476,6 +519,9 @@ Runtime policy:
   no jitter)
 - the retry stays at the graph quirk boundary instead of teaching callers or
   generic transport retry about parent-creation ordering
+- flows that already know the authoritative remote `itemID` avoid this parent
+  create route entirely and overwrite by item ID instead of re-creating by
+  parent path
 - if the request still fails after the quirk budget, the upload returns the
   final error without pretending the parent exists
 

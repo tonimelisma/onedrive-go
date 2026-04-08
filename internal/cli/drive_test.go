@@ -24,13 +24,17 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/sharedref"
 
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
 const (
 	testDriveSearchAllPath      = "/me/drive/root/search(q='*')"
+	testGraphMePath             = "/me"
+	testSharedWithMePath        = "/me/drive/sharedWithMe"
 	testSharedFolderGetItemPath = "/drives/b!drive1234567890/items/source-item-folder"
+	testSharedFileGetItemPath   = "/drives/b!drive1234567891/items/source-item-file"
 	graphDrivesPath             = "/me/drives"
 	primaryDrivePath            = "/me/drive"
 )
@@ -1318,10 +1322,115 @@ func TestSharedDiscoveryNoMatchesError_IncludesExternalGuidance(t *testing.T) {
 	err := sharedDiscoveryNoMatchesError("marketing")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `no shared folders matching "marketing" found`)
-	assert.Contains(t, err.Error(), "best-effort live Graph search")
+	assert.Contains(t, err.Error(), "Graph shared discovery also checks external shares")
 	assert.Contains(t, err.Error(), "cross-org")
 	assert.Contains(t, err.Error(), "onedrive-go shared")
 	assert.Contains(t, err.Error(), "onedrive-go drive list")
+	assert.Contains(t, err.Error(), "drive add <share-url>")
+}
+
+// Validates: R-3.3.13
+func TestDriveService_RunAdd_SharedTargetFolderAddsCanonicalSharedDrive(t *testing.T) {
+	setTestDriveHome(t)
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	var out bytes.Buffer
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case testGraphMePath:
+			writeTestResponse(t, w, `{
+				"id":"user-123",
+				"displayName":"User Example",
+				"mail":"user@example.com"
+			}`)
+		case testSharedFolderGetItemPath:
+			writeTestResponse(t, w, `{
+				"id": "source-item-folder",
+				"name": "Shared Folder",
+				"size": 0,
+				"createdDateTime": "2024-02-01T00:00:00Z",
+				"lastModifiedDateTime": "2024-05-01T00:00:00Z",
+				"parentReference": {"id": "parent", "driveId": "b!drive1234567890"},
+				"folder": {"childCount": 1}
+			}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	cc := &CLIContext{
+		Logger:       testDriveLogger(t),
+		OutputWriter: &out,
+		StatusWriter: &out,
+		CfgPath:      cfgPath,
+		GraphBaseURL: srv.URL,
+		SharedTarget: &sharedTarget{
+			Ref:           sharedref.MustParse("shared:user@example.com:b!drive1234567890:source-item-folder"),
+			OriginalInput: "https://1drv.ms/f/c/example",
+		},
+	}
+
+	err := newDriveService(cc).runAdd(context.Background(), []string{"https://1drv.ms/f/c/example"})
+	require.NoError(t, err)
+
+	cfg, err := config.LoadOrDefault(cfgPath, testDriveLogger(t))
+	require.NoError(t, err)
+	_, exists := cfg.Drives[driveid.MustCanonicalID("shared:user@example.com:b!drive1234567890:source-item-folder")]
+	assert.True(t, exists)
+	assert.Contains(t, out.String(), "Added drive")
+}
+
+// Validates: R-3.3.12
+func TestDriveService_RunAdd_SharedTargetFileRejectsDirectFileGuidance(t *testing.T) {
+	setTestDriveHome(t)
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case testGraphMePath:
+			writeTestResponse(t, w, `{
+				"id":"user-123",
+				"displayName":"User Example",
+				"mail":"user@example.com"
+			}`)
+		case testSharedFileGetItemPath:
+			writeTestResponse(t, w, `{
+				"id": "source-item-file",
+				"name": "shared-file.docx",
+				"size": 2048,
+				"createdDateTime": "2024-02-01T00:00:00Z",
+				"lastModifiedDateTime": "2024-05-01T00:00:00Z",
+				"parentReference": {"id": "parent", "driveId": "b!drive1234567891"},
+				"file": {"mimeType": "application/pdf"}
+			}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	cc := &CLIContext{
+		Logger:       testDriveLogger(t),
+		OutputWriter: &bytes.Buffer{},
+		StatusWriter: &bytes.Buffer{},
+		CfgPath:      filepath.Join(t.TempDir(), "config.toml"),
+		GraphBaseURL: srv.URL,
+		SharedTarget: &sharedTarget{
+			Ref:           sharedref.MustParse("shared:user@example.com:b!drive1234567891:source-item-file"),
+			OriginalInput: "https://1drv.ms/t/c/example",
+		},
+	}
+
+	err := newDriveService(cc).runAdd(context.Background(), []string{"https://1drv.ms/t/c/example"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "shared files are direct stat/get/put targets")
 }
 
 // Validates: R-3.6.1, R-3.6.4

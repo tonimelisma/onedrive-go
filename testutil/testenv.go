@@ -24,6 +24,7 @@ const sharedFixtureEnvPath = ".testdata/fixtures.env"
 // leak internal package types.
 type LiveFixtures struct {
 	SharedFileLink               string
+	SharedFolderLink             string
 	WritableSharedFolderSelector string
 	ReadOnlySharedFolderSelector string
 }
@@ -77,6 +78,7 @@ func LoadLiveTestConfig(moduleRoot string) (LiveTestConfig, error) {
 		SecondaryDrive: os.Getenv("ONEDRIVE_TEST_DRIVE_2"),
 		Fixtures: LiveFixtures{
 			SharedFileLink:               os.Getenv("ONEDRIVE_TEST_SHARED_LINK"),
+			SharedFolderLink:             os.Getenv("ONEDRIVE_TEST_SHARED_FOLDER_LINK"),
 			WritableSharedFolderSelector: os.Getenv("ONEDRIVE_TEST_WRITABLE_SHARED_FOLDER"),
 			ReadOnlySharedFolderSelector: os.Getenv("ONEDRIVE_TEST_READONLY_SHARED_FOLDER"),
 		},
