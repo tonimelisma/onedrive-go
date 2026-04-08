@@ -1606,7 +1606,7 @@ func TestToItem_SharedOwner_FallbackChain(t *testing.T) {
 	}
 }
 
-func TestToItem_SharedWithMe_NilRemoteItem(t *testing.T) {
+func TestToItem_NilRemoteItem(t *testing.T) {
 	// Regular items have no remoteItem — fields should be empty.
 	raw := `{
 		"id": "regular-item",
@@ -1629,7 +1629,7 @@ func TestToItem_SharedWithMe_NilRemoteItem(t *testing.T) {
 	assert.Empty(t, item.SharedOwnerEmail)
 }
 
-func TestToItem_SharedWithMe_NilSharedOwner(t *testing.T) {
+func TestToItem_NilSharedOwner(t *testing.T) {
 	// shared facet present but owner is nil (edge case).
 	raw := `{
 		"id": "item-partial-shared",

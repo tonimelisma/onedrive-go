@@ -29,9 +29,10 @@ import (
 )
 
 const (
-	testDriveSearchAllPath      = "/me/drive/search(q='*')"
-	testSharedWithMePath        = "/me/drive/sharedWithMe"
+	testDriveSearchAllPath      = "/me/drive/root/search(q='*')"
 	testSharedFolderGetItemPath = "/drives/b!drive1234567890/items/source-item-folder"
+	graphDrivesPath             = "/me/drives"
+	primaryDrivePath            = "/me/drive"
 )
 
 // --- command structure ---
@@ -864,8 +865,7 @@ func TestDeriveSharedDisplayName_Basic(t *testing.T) {
 		SharedOwnerName:  "John Doe",
 		SharedOwnerEmail: "john@example.com",
 	}
-	name, err := deriveSharedDisplayName(item, nil)
-	require.NoError(t, err)
+	name := deriveSharedDisplayName(item, nil)
 	assert.Equal(t, "John's Documents", name)
 }
 
@@ -877,8 +877,7 @@ func TestDeriveSharedDisplayName_FirstNameCollision(t *testing.T) {
 		SharedOwnerEmail: "john@example.com",
 	}
 	existing := map[string]bool{"John's Documents": true}
-	name, err := deriveSharedDisplayName(item, existing)
-	require.NoError(t, err)
+	name := deriveSharedDisplayName(item, existing)
 	assert.Equal(t, "John Doe's Documents", name)
 }
 
@@ -893,8 +892,7 @@ func TestDeriveSharedDisplayName_FullNameCollision(t *testing.T) {
 		"John's Documents":     true,
 		"John Doe's Documents": true,
 	}
-	name, err := deriveSharedDisplayName(item, existing)
-	require.NoError(t, err)
+	name := deriveSharedDisplayName(item, existing)
 	assert.Equal(t, "John Doe's Documents (john@example.com)", name)
 }
 
@@ -904,8 +902,7 @@ func TestDeriveSharedDisplayName_SingleName(t *testing.T) {
 		SharedOwnerName:  "Alice",
 		SharedOwnerEmail: "alice@example.com",
 	}
-	name, err := deriveSharedDisplayName(item, nil)
-	require.NoError(t, err)
+	name := deriveSharedDisplayName(item, nil)
 	assert.Equal(t, "Alice's Shared Stuff", name)
 }
 
@@ -915,20 +912,20 @@ func TestDeriveSharedDisplayName_EmptyOwnerNameWithEmail(t *testing.T) {
 		SharedOwnerName:  "",
 		SharedOwnerEmail: "unknown@example.com",
 	}
-	name, err := deriveSharedDisplayName(item, nil)
-	require.NoError(t, err)
+	name := deriveSharedDisplayName(item, nil)
 	assert.Equal(t, "Folder (shared by unknown@example.com)", name)
 }
 
-func TestDeriveSharedDisplayName_NoIdentity(t *testing.T) {
+// Validates: R-3.6.3, R-3.6.4
+func TestDeriveSharedDisplayName_NoIdentityFallsBackToRemoteIdentity(t *testing.T) {
 	item := &graph.Item{
 		Name:             "Folder",
 		SharedOwnerName:  "",
 		SharedOwnerEmail: "",
+		RemoteDriveID:    "b!drive123",
+		RemoteItemID:     "item456",
 	}
-	_, err := deriveSharedDisplayName(item, nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no owner identity")
+	assert.Equal(t, "Folder (shared b!drive123:item456)", deriveSharedDisplayName(item, nil))
 }
 
 // --- printDriveListText shared drives ---
@@ -1229,7 +1226,7 @@ func TestEnrichSharedItem_GetItemReturnsNameOnly(t *testing.T) {
 	assert.Empty(t, item.SharedOwnerEmail) // only name, no email
 }
 
-// --- searchSharedItemsWithFallback tests ---
+// --- searchSharedItems tests ---
 
 // sharedItemJSON returns a minimal JSON representation of a shared folder.
 func sharedItemJSON(name string) string {
@@ -1247,148 +1244,73 @@ func sharedItemJSON(name string) string {
 	}`, name, name)
 }
 
-func assertSharedWithMeAllowExternalQuery(t *testing.T, r *http.Request) {
-	t.Helper()
-
-	assert.Equal(t, testSharedWithMePath, r.URL.Path)
-	assert.Equal(t, "true", r.URL.Query().Get("allowexternal"))
-}
-
 // Validates: R-3.6.2
-func TestSearchSharedItemsWithFallback_SearchSucceeds(t *testing.T) {
-	var sharedWithMeCalled bool
-
+func TestSearchSharedItems_SearchSucceeds(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-
-		if strings.Contains(r.URL.Path, "search") {
-			writeTestResponsef(t, w, `{"value": [%s]}`, sharedItemJSON("SearchResult"))
-
-			return
-		}
-
-		if strings.Contains(r.URL.Path, "sharedWithMe") {
-			sharedWithMeCalled = true
-		}
-
-		w.WriteHeader(http.StatusForbidden)
+		assert.Equal(t, testDriveSearchAllPath, r.URL.Path)
+		writeTestResponsef(t, w, `{"value": [%s]}`, sharedItemJSON("SearchResult"))
 	}))
 	defer srv.Close()
 
 	client := newTestGraphClient(t, srv.URL)
-	items := searchSharedItemsWithFallback(t.Context(), client, "test@example.com", slog.Default())
+	items, err := searchSharedItems(t.Context(), client, "test@example.com", slog.Default())
 
+	require.NoError(t, err)
 	require.Len(t, items, 1)
 	assert.Equal(t, "SearchResult", items[0].Name)
-	assert.False(t, sharedWithMeCalled, "SharedWithMe should not be called when search succeeds")
 }
 
 // Validates: R-3.6.2
-func TestSearchSharedItemsWithFallback_SearchFails_SharedWithMeSucceeds(t *testing.T) {
+func TestSearchSharedItems_SearchFails(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-
-		if strings.Contains(r.URL.Path, "search") {
-			w.WriteHeader(http.StatusForbidden)
-			writeTestResponse(t, w, `{"error":{"code":"generalException","message":"search failed"}}`)
-
-			return
-		}
-
-		if strings.Contains(r.URL.Path, "sharedWithMe") {
-			assertSharedWithMeAllowExternalQuery(t, r)
-			writeTestResponsef(t, w, `{"value": [%s]}`, sharedItemJSON("FallbackResult"))
-
-			return
-		}
-
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer srv.Close()
-
-	client := newTestGraphClient(t, srv.URL)
-	items := searchSharedItemsWithFallback(t.Context(), client, "test@example.com", slog.Default())
-
-	require.Len(t, items, 1)
-	assert.Equal(t, "FallbackResult", items[0].Name)
-}
-
-func TestSearchSharedItemsWithFallback_BothFail(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		assert.Equal(t, testDriveSearchAllPath, r.URL.Path)
 		w.WriteHeader(http.StatusForbidden)
-		writeTestResponse(t, w, `{"error":{"code":"generalException","message":"failed"}}`)
+		writeTestResponse(t, w, `{"error":{"code":"generalException","message":"search failed"}}`)
 	}))
 	defer srv.Close()
 
 	client := newTestGraphClient(t, srv.URL)
-	items := searchSharedItemsWithFallback(t.Context(), client, "test@example.com", slog.Default())
-
+	items, err := searchSharedItems(t.Context(), client, "test@example.com", slog.Default())
+	require.Error(t, err)
 	assert.Nil(t, items)
 }
 
-func TestSearchSharedItemsWithFallback_SearchReturnsEmpty(t *testing.T) {
+func TestSearchSharedItems_SearchReturnsEmpty(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-
-		if strings.Contains(r.URL.Path, "search") {
-			writeTestResponse(t, w, `{"value": []}`)
-
-			return
-		}
-
-		if strings.Contains(r.URL.Path, "sharedWithMe") {
-			assertSharedWithMeAllowExternalQuery(t, r)
-			writeTestResponsef(t, w, `{"value": [%s]}`, sharedItemJSON("FallbackFromEmptySearch"))
-
-			return
-		}
-
-		w.WriteHeader(http.StatusForbidden)
+		assert.Equal(t, testDriveSearchAllPath, r.URL.Path)
+		writeTestResponse(t, w, `{"value": []}`)
 	}))
 	defer srv.Close()
 
 	client := newTestGraphClient(t, srv.URL)
-	items := searchSharedItemsWithFallback(t.Context(), client, "test@example.com", slog.Default())
+	items, err := searchSharedItems(t.Context(), client, "test@example.com", slog.Default())
 
-	require.Len(t, items, 1)
-	assert.Equal(t, "FallbackFromEmptySearch", items[0].Name)
+	require.NoError(t, err)
+	assert.Empty(t, items)
 }
 
 // Validates: R-3.6.2
-func TestSearchSharedItemsWithFallback_SearchReturnsNoUsableSharedIdentity_FallsBack(t *testing.T) {
-	var sharedWithMeCalled bool
-
+func TestSearchSharedItems_SearchReturnsNoUsableSharedIdentity_DoesNotFail(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-
-		if strings.Contains(r.URL.Path, "search") {
-			writeTestResponse(t, w, `{"value": [{
-				"id": "local-item-1",
-				"name": "Not Shared",
-				"folder": {}
-			}]}`)
-
-			return
-		}
-
-		if strings.Contains(r.URL.Path, "sharedWithMe") {
-			sharedWithMeCalled = true
-			assertSharedWithMeAllowExternalQuery(t, r)
-			writeTestResponsef(t, w, `{"value": [%s]}`, sharedItemJSON("FallbackFromUnusableSearch"))
-
-			return
-		}
-
-		w.WriteHeader(http.StatusNotFound)
+		assert.Equal(t, testDriveSearchAllPath, r.URL.Path)
+		writeTestResponse(t, w, `{"value": [{
+			"id": "local-item-1",
+			"name": "Not Shared",
+			"folder": {}
+		}]}`)
 	}))
 	defer srv.Close()
 
 	client := newTestGraphClient(t, srv.URL)
-	items := searchSharedItemsWithFallback(t.Context(), client, "test@example.com", slog.Default())
+	items, err := searchSharedItems(t.Context(), client, "test@example.com", slog.Default())
 
 	require.Len(t, items, 1)
-	assert.True(t, sharedWithMeCalled, "SharedWithMe should be called when search yields no usable shared identities")
-	assert.Equal(t, "FallbackFromUnusableSearch", items[0].Name)
+	require.NoError(t, err)
+	assert.Equal(t, "Not Shared", items[0].Name)
 }
 
 // Validates: R-3.6.5
@@ -1396,14 +1318,14 @@ func TestSharedDiscoveryNoMatchesError_IncludesExternalGuidance(t *testing.T) {
 	err := sharedDiscoveryNoMatchesError("marketing")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `no shared folders matching "marketing" found`)
-	assert.Contains(t, err.Error(), "external shares")
+	assert.Contains(t, err.Error(), "best-effort live Graph search")
 	assert.Contains(t, err.Error(), "cross-org")
 	assert.Contains(t, err.Error(), "onedrive-go shared")
 	assert.Contains(t, err.Error(), "onedrive-go drive list")
 }
 
 // Validates: R-3.6.1, R-3.6.4
-func TestDriveService_RunList_JSONBackfillsSharedIdentityFromSharedWithMe(t *testing.T) {
+func TestDriveService_RunList_JSONKeepsSharedEntryWithoutOwnerIdentity(t *testing.T) {
 	setTestDriveHome(t)
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
 
@@ -1411,9 +1333,9 @@ func TestDriveService_RunList_JSONBackfillsSharedIdentityFromSharedWithMe(t *tes
 		w.Header().Set("Content-Type", "application/json")
 
 		switch r.URL.Path {
-		case "/me/drives":
+		case graphDrivesPath:
 			writeTestResponse(t, w, `{"value":[{"id":"drive-personal","name":"OneDrive","driveType":"personal"}]}`)
-		case "/me/drive":
+		case primaryDrivePath:
 			writeTestResponse(t, w, `{"id":"drive-personal","name":"OneDrive","driveType":"personal"}`)
 		case testDriveSearchAllPath:
 			writeTestResponse(t, w, `{"value":[{
@@ -1428,17 +1350,6 @@ func TestDriveService_RunList_JSONBackfillsSharedIdentityFromSharedWithMe(t *tes
 		case "/drives/b!drive1234567890/items/shared-folder-1":
 			w.WriteHeader(http.StatusNotFound)
 			writeTestResponse(t, w, `{"error":{"code":"itemNotFound","message":"missing"}}`)
-		case testSharedWithMePath:
-			writeTestResponse(t, w, `{"value":[{
-				"id":"shortcut-fallback-1",
-				"name":"Shared Folder",
-				"folder":{"childCount":1},
-				"remoteItem":{
-					"id":"shared-folder-1",
-					"parentReference":{"driveId":"b!drive1234567890"}
-				},
-				"shared":{"owner":{"user":{"displayName":"Alice Example","email":"alice@example.com"}}}
-			}]}`)
 		default:
 			assert.Fail(t, "unexpected graph path", "path=%s", r.URL.Path)
 			http.Error(w, "unexpected graph path", http.StatusInternalServerError)
@@ -1471,9 +1382,53 @@ func TestDriveService_RunList_JSONBackfillsSharedIdentityFromSharedWithMe(t *tes
 	}
 
 	require.NotNil(t, sharedEntry)
-	assert.Equal(t, "alice@example.com", sharedEntry.OwnerEmail)
-	assert.Equal(t, "Alice Example", sharedEntry.OwnerName)
-	assert.Equal(t, "Alice's Shared Folder", sharedEntry.DisplayName)
+	assert.Empty(t, sharedEntry.OwnerEmail)
+	assert.Empty(t, sharedEntry.OwnerName)
+	assert.Equal(t, "Shared Folder (shared b!drive1234567890:shared-folder-1)", sharedEntry.DisplayName)
+	assert.Empty(t, decoded.AccountsDegraded)
+}
+
+// Validates: R-3.6.5, R-3.6.7
+func TestDriveService_RunList_JSONIncludesSharedDiscoveryDegradedAccount(t *testing.T) {
+	setTestDriveHome(t)
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case "/me/drives":
+			writeTestResponse(t, w, `{"value":[{"id":"drive-personal","name":"OneDrive","driveType":"personal"}]}`)
+		case "/me/drive":
+			writeTestResponse(t, w, `{"id":"drive-personal","name":"OneDrive","driveType":"personal"}`)
+		case testDriveSearchAllPath:
+			w.WriteHeader(http.StatusForbidden)
+			writeTestResponse(t, w, `{"error":{"code":"accessDenied","message":"search unavailable"}}`)
+		default:
+			assert.Fail(t, "unexpected graph path", "path=%s", r.URL.Path)
+			http.Error(w, "unexpected graph path", http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	cc := &CLIContext{
+		Flags:        CLIFlags{JSON: true},
+		Logger:       testDriveLogger(t),
+		OutputWriter: &out,
+		StatusWriter: &out,
+		CfgPath:      filepath.Join(t.TempDir(), "missing-config.toml"),
+		GraphBaseURL: srv.URL,
+	}
+
+	require.NoError(t, newDriveService(cc).runList(t.Context(), false))
+
+	var decoded driveListJSONOutput
+	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
+	require.Len(t, decoded.AccountsDegraded, 1)
+	assert.Equal(t, "user@example.com", decoded.AccountsDegraded[0].Email)
+	assert.Equal(t, sharedDiscoveryUnavailableReason, decoded.AccountsDegraded[0].Reason)
+	assert.Empty(t, decoded.AccountsRequiringAuth)
 }
 
 // --- annotateStateDB ---
@@ -1666,9 +1621,6 @@ func TestAnnotateConfiguredDriveAuth_AndPrintSections(t *testing.T) {
 func TestDriveService_RunList_ClearsPersistedAuthScopeAfterSuccessfulDiscovery(t *testing.T) {
 	setTestDriveHome(t)
 
-	const graphDrivesPath = "/me/drives"
-	const primaryDrivePath = "/me/drive"
-
 	cid := driveid.MustCanonicalID("personal:user@example.com")
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
 	seedAuthScope(t, cid)
@@ -1682,8 +1634,6 @@ func TestDriveService_RunList_ClearsPersistedAuthScopeAfterSuccessfulDiscovery(t
 		case primaryDrivePath:
 			writeTestResponse(t, w, `{"id":"drive-123","name":"OneDrive","driveType":"personal"}`)
 		case testDriveSearchAllPath:
-			writeTestResponse(t, w, `{"value":[]}`)
-		case testSharedWithMePath:
 			writeTestResponse(t, w, `{"value":[]}`)
 		default:
 			assert.Fail(t, "unexpected graph path", "path=%s", r.URL.Path)

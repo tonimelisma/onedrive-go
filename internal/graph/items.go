@@ -196,7 +196,7 @@ func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 		}
 	}
 
-	// Remote item (shared/shortcut items from SharedWithMe endpoint).
+	// Remote item (shared/shortcut items surfaced by Graph item queries).
 	if d.RemoteItem != nil {
 		item.RemoteItemID = d.RemoteItem.ID
 		if d.RemoteItem.ParentReference != nil {
@@ -255,10 +255,11 @@ func decodeParentReferencePath(rawPath string, logger *slog.Logger) string {
 //  1. remoteItem.shared.sharedBy (correct semantics: who shared it)
 //  2. remoteItem.shared.owner
 //  3. remoteItem.createdBy
-//  4. top-level shared.owner (for non-SharedWithMe items)
+//  4. top-level shared.owner
 //
-// SharedWithMe returns identity under remoteItem.shared (NOT top-level shared),
-// confirmed via live API testing on personal accounts (2026-03-06).
+// Graph shared-item responses return the most reliable identity under
+// remoteItem.shared rather than the top-level shared facet, confirmed via
+// live API testing on personal accounts (2026-03-06).
 func (d *driveItemResponse) resolveSharedOwner() (name, email string) {
 	switch {
 	case d.RemoteItem != nil && d.RemoteItem.Shared != nil && d.RemoteItem.Shared.SharedBy != nil &&

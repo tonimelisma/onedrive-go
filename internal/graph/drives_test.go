@@ -894,200 +894,10 @@ func TestToDrive_NilQuota(t *testing.T) {
 	assert.Equal(t, int64(0), drive.QuotaTotal)
 }
 
-// --- SharedWithMe tests ---
-
-func TestSharedWithMe_Success(t *testing.T) {
-	// SharedWithMe returns identity under remoteItem.shared (NOT top-level shared)
-	// on personal accounts (confirmed via live API testing 2026-03-06).
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodGet, r.Method)
-		assert.Equal(t, "/me/drive/sharedWithMe", r.URL.Path)
-		assert.Equal(t, "true", r.URL.Query().Get("allowexternal"))
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		writeTestResponse(t, w, `{
-			"value": [
-				{
-					"id": "local-shortcut-1",
-					"name": "Shared Folder",
-					"size": 0,
-					"createdDateTime": "2024-01-01T00:00:00Z",
-					"lastModifiedDateTime": "2024-06-01T00:00:00Z",
-					"folder": {"childCount": 3},
-					"remoteItem": {
-						"id": "source-item-1",
-						"parentReference": {"driveId": "source-drive-1"},
-						"createdBy": {"user": {"email": "alice@example.com", "displayName": "Alice"}},
-						"shared": {
-							"owner": {"user": {"email": "alice@example.com", "displayName": "Alice"}},
-							"sharedBy": {"user": {"email": "alice@example.com", "displayName": "Alice"}}
-						}
-					}
-				},
-				{
-					"id": "local-shortcut-2",
-					"name": "shared-file.docx",
-					"size": 2048,
-					"createdDateTime": "2024-02-01T00:00:00Z",
-					"lastModifiedDateTime": "2024-05-01T00:00:00Z",
-					"file": {"mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
-					"remoteItem": {
-						"id": "source-item-2",
-						"parentReference": {"driveId": "source-drive-2"},
-						"shared": {
-							"owner": {"user": {"email": "bob@example.com", "displayName": "Bob"}}
-						}
-					}
-				}
-			]
-		}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	items, err := client.SharedWithMe(t.Context())
-	require.NoError(t, err)
-	require.Len(t, items, 2)
-
-	// First item: shared folder (sharedBy wins in fallback chain)
-	assert.Equal(t, "local-shortcut-1", items[0].ID)
-	assert.Equal(t, "Shared Folder", items[0].Name)
-	assert.True(t, items[0].IsFolder)
-	assert.Equal(t, "source-item-1", items[0].RemoteItemID)
-	assert.Equal(t, driveid.New("source-drive-1").String(), items[0].RemoteDriveID)
-	assert.Equal(t, "Alice", items[0].SharedOwnerName)
-	assert.Equal(t, "alice@example.com", items[0].SharedOwnerEmail)
-
-	// Second item: shared file (owner used when no sharedBy)
-	assert.Equal(t, "local-shortcut-2", items[1].ID)
-	assert.Equal(t, "shared-file.docx", items[1].Name)
-	assert.False(t, items[1].IsFolder)
-	assert.Equal(t, "source-item-2", items[1].RemoteItemID)
-	assert.Equal(t, driveid.New("source-drive-2").String(), items[1].RemoteDriveID)
-	assert.Equal(t, "Bob", items[1].SharedOwnerName)
-	assert.Equal(t, "bob@example.com", items[1].SharedOwnerEmail)
-}
-
-func TestSharedWithMe_Empty(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		writeTestResponse(t, w, `{"value": []}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	items, err := client.SharedWithMe(t.Context())
-	require.NoError(t, err)
-	assert.Empty(t, items)
-}
-
-func TestSharedWithMe_Pagination(t *testing.T) {
-	// Self-referencing nextLink: the handler needs its own server URL.
-	// Use a pointer to hold the server, assigned after creation.
-	var page int
-	var srv *httptest.Server
-	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		page++
-		assert.Equal(t, "/me/drive/sharedWithMe", r.URL.Path)
-		if page == 1 {
-			assert.Equal(t, "true", r.URL.Query().Get("allowexternal"))
-		} else {
-			assert.Equal(t, "true", r.URL.Query().Get("allowexternal"))
-			assert.Equal(t, "page2", r.URL.Query().Get("$skiptoken"))
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-
-		if page == 1 {
-			writeTestResponsef(t, w, `{
-				"value": [{
-					"id": "item-page1",
-					"name": "Page 1 Folder",
-					"size": 0,
-					"createdDateTime": "2024-01-01T00:00:00Z",
-					"lastModifiedDateTime": "2024-01-01T00:00:00Z",
-					"folder": {"childCount": 0}
-				}],
-				"@odata.nextLink": "%s/me/drive/sharedWithMe?allowexternal=true&$skiptoken=page2"
-			}`, srv.URL)
-			return
-		}
-
-		writeTestResponse(t, w, `{
-			"value": [{
-				"id": "item-page2",
-				"name": "Page 2 Folder",
-				"size": 0,
-				"createdDateTime": "2024-01-01T00:00:00Z",
-				"lastModifiedDateTime": "2024-01-01T00:00:00Z",
-				"folder": {"childCount": 0}
-			}]
-		}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	items, err := client.SharedWithMe(t.Context())
-	require.NoError(t, err)
-	require.Len(t, items, 2)
-	assert.Equal(t, "item-page1", items[0].ID)
-	assert.Equal(t, "item-page2", items[1].ID)
-	assert.Equal(t, 2, page)
-}
-
-// Validates: R-6.7.8, R-6.7.9
-func TestSharedWithMe_FiltersPackagesAndDecodesNames(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		writeTestResponse(t, w, `{
-			"value": [
-				{
-					"id": "shared-file-1",
-					"name": "Quarterly%20Plan.docx",
-					"size": 2048,
-					"createdDateTime": "2024-02-01T00:00:00Z",
-					"lastModifiedDateTime": "2024-05-01T00:00:00Z",
-					"file": {"mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
-				},
-				{
-					"id": "shared-pkg-1",
-					"name": "Notebook%20One",
-					"size": 0,
-					"createdDateTime": "2024-02-01T00:00:00Z",
-					"lastModifiedDateTime": "2024-05-01T00:00:00Z",
-					"package": {"type": "oneNote"}
-				}
-			]
-		}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	items, err := client.SharedWithMe(t.Context())
-	require.NoError(t, err)
-
-	require.Len(t, items, 1)
-	assert.Equal(t, "Quarterly Plan.docx", items[0].Name)
-	assert.False(t, items[0].IsPackage)
-}
-
-func TestSharedWithMe_Error(t *testing.T) {
-	assertGraphCallError(t, http.StatusUnauthorized, "req-shared-401", "InvalidAuthenticationToken", func(client *Client) error {
-		_, err := client.SharedWithMe(t.Context())
-		return err
-	}, ErrUnauthorized)
-}
-
-// --- SearchDriveItems ---
-
 func TestSearchDriveItems_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
-		assert.Contains(t, r.URL.Path, "/me/drive/search")
+		assert.Equal(t, "/me/drive/root/search(q='*')", r.URL.Path)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -1103,7 +913,11 @@ func TestSearchDriveItems_Success(t *testing.T) {
 					"remoteItem": {
 						"id": "remote-item-1",
 						"parentReference": {"driveId": "remote-drive-1"},
-						"createdBy": {"user": {"displayName": "Alice"}}
+						"createdBy": {"user": {"displayName": "Alice"}},
+						"shared": {
+							"owner": {"user": {"email": "alice-owner@example.com", "displayName": "Alice Owner"}},
+							"sharedBy": {"user": {"email": "alice@example.com", "displayName": "Alice"}}
+						}
 					}
 				},
 				{
@@ -1131,7 +945,7 @@ func TestSearchDriveItems_Success(t *testing.T) {
 	assert.Equal(t, "remote-item-1", items[0].RemoteItemID)
 	assert.Equal(t, driveid.New("remote-drive-1").String(), items[0].RemoteDriveID)
 	assert.Equal(t, "Alice", items[0].SharedOwnerName)
-	assert.Empty(t, items[0].SharedOwnerEmail) // search doesn't return email
+	assert.Equal(t, "alice@example.com", items[0].SharedOwnerEmail)
 
 	// Own file — no remoteItem
 	assert.Equal(t, "search-item-2", items[1].ID)
@@ -1164,7 +978,7 @@ func TestSearchDriveItems_Pagination(t *testing.T) {
 					"lastModifiedDateTime": "2024-07-01T00:00:00Z",
 					"file": {"mimeType": "text/plain"}
 				}],
-				"@odata.nextLink": "%s/me/drive/search(q='*')?$skiptoken=page2"
+				"@odata.nextLink": "%s/me/drive/root/search(q='*')?$skiptoken=page2"
 			}`, srv.URL)
 
 			return

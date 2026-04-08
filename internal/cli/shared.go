@@ -30,6 +30,7 @@ type sharedListItem struct {
 type sharedListJSONOutput struct {
 	Items                 []sharedListItem         `json:"items"`
 	AccountsRequiringAuth []accountAuthRequirement `json:"accounts_requiring_auth"`
+	AccountsDegraded      []accountDegradedNotice  `json:"accounts_degraded,omitempty"`
 }
 
 func newSharedCmd() *cobra.Command {
@@ -68,22 +69,28 @@ func (s *sharedService) runList(ctx context.Context) error {
 		return true
 	})
 
-	items := s.discoverSharedItems(ctx, snapshot.Catalog)
+	items, degraded := s.discoverSharedItems(ctx, snapshot.Catalog)
 	if s.cc.Flags.JSON {
-		return printSharedJSON(s.cc.Output(), items, authRequired)
+		return printSharedJSON(s.cc.Output(), items, authRequired, degraded)
 	}
 
-	return printSharedText(s.cc.Output(), items, authRequired)
+	return printSharedText(s.cc.Output(), items, authRequired, degraded)
 }
 
-func (s *sharedService) discoverSharedItems(ctx context.Context, catalog []accountCatalogEntry) []sharedListItem {
+func (s *sharedService) discoverSharedItems(
+	ctx context.Context,
+	catalog []accountCatalogEntry,
+) ([]sharedListItem, []accountDegradedNotice) {
 	logger := s.cc.Logger
 	seen := make(map[string]struct{})
 	var items []sharedListItem
+	var degraded []accountDegradedNotice
 
 	for i := range catalog {
 		entry := &catalog[i]
-		items = append(items, s.discoverSharedItemsForAccount(ctx, entry, seen, logger)...)
+		accountItems, accountDegraded := s.discoverSharedItemsForAccount(ctx, entry, seen, logger)
+		items = append(items, accountItems...)
+		degraded = append(degraded, accountDegraded...)
 	}
 
 	slices.SortFunc(items, func(a, b sharedListItem) int {
@@ -99,7 +106,7 @@ func (s *sharedService) discoverSharedItems(ctx context.Context, catalog []accou
 		return strings.Compare(a.Selector, b.Selector)
 	})
 
-	return items
+	return items, mergeDegradedNotices(degraded)
 }
 
 func (s *sharedService) discoverSharedItemsForAccount(
@@ -107,15 +114,15 @@ func (s *sharedService) discoverSharedItemsForAccount(
 	entry *accountCatalogEntry,
 	seen map[string]struct{},
 	logger *slog.Logger,
-) []sharedListItem {
+) ([]sharedListItem, []accountDegradedNotice) {
 	if s.cc.Flags.Account != "" && entry.Email != s.cc.Flags.Account {
-		return nil
+		return nil, nil
 	}
 	if entry.AuthHealth.State == authStateAuthenticationNeeded {
-		return nil
+		return nil, nil
 	}
 	if entry.RepresentativeTokenID.IsZero() {
-		return nil
+		return nil, nil
 	}
 
 	client, _, err := s.cc.sharedBootstrapMetaClient(ctx, entry.Email)
@@ -125,16 +132,23 @@ func (s *sharedService) discoverSharedItemsForAccount(
 			"error", err,
 		)
 
-		return nil
+		return nil, nil
 	}
 
-	discovered := searchSharedItemsWithFallback(ctx, client, entry.Email, logger)
+	discovered, err := searchSharedItems(ctx, client, entry.Email, logger)
+	if err != nil {
+		logger.Warn("degrading shared listing after search failure",
+			"account", entry.Email,
+			"error", err,
+		)
+		return nil, []accountDegradedNotice{
+			sharedDiscoveryDegradedNotice(entry.Email, entry.DisplayName, entry.DriveType),
+		}
+	}
 
 	for i := range discovered {
 		enrichSharedItem(ctx, client, &discovered[i], logger)
 	}
-
-	backfillSharedIdentityFromSharedWithMe(ctx, client, discovered, entry.Email, logger)
 
 	var items []sharedListItem
 
@@ -168,7 +182,7 @@ func (s *sharedService) discoverSharedItemsForAccount(
 		})
 	}
 
-	return items
+	return items, nil
 }
 
 func sharedItemType(isFolder bool) string {
@@ -179,10 +193,20 @@ func sharedItemType(isFolder bool) string {
 	return typeFile
 }
 
-func printSharedJSON(w io.Writer, items []sharedListItem, authRequired []accountAuthRequirement) error {
+func printSharedJSON(
+	w io.Writer,
+	items []sharedListItem,
+	authRequired []accountAuthRequirement,
+	degraded []accountDegradedNotice,
+) error {
+	if items == nil {
+		items = []sharedListItem{}
+	}
+
 	out := sharedListJSONOutput{
 		Items:                 items,
 		AccountsRequiringAuth: authRequired,
+		AccountsDegraded:      degraded,
 	}
 
 	enc := json.NewEncoder(w)
@@ -194,54 +218,105 @@ func printSharedJSON(w io.Writer, items []sharedListItem, authRequired []account
 	return nil
 }
 
-func printSharedText(w io.Writer, items []sharedListItem, authRequired []accountAuthRequirement) error {
-	if len(items) == 0 && len(authRequired) == 0 {
+func printSharedText(
+	w io.Writer,
+	items []sharedListItem,
+	authRequired []accountAuthRequirement,
+	degraded []accountDegradedNotice,
+) error {
+	if len(items) == 0 && len(authRequired) == 0 && len(degraded) == 0 {
 		return writeln(w, "No shared items found.")
 	}
 
-	if len(items) > 0 {
-		if err := writeln(w, "Shared items:"); err != nil {
-			return err
-		}
-
-		maxType, maxName, maxOwner := len("TYPE"), len("NAME"), len("SHARED BY")
-		for i := range items {
-			maxType = max(maxType, len(items[i].Type))
-			maxName = max(maxName, len(items[i].Name))
-			owner := items[i].SharedByEmail
-			if owner == "" {
-				owner = items[i].AccountEmail
-			}
-			maxOwner = max(maxOwner, len(owner))
-		}
-
-		format := fmt.Sprintf("  %%-%ds  %%-%ds  %%-%ds  %%s\n", maxType, maxName, maxOwner)
-		if err := writef(w, format, "TYPE", "NAME", "SHARED BY", "MODIFIED"); err != nil {
-			return err
-		}
-
-		for i := range items {
-			owner := items[i].SharedByEmail
-			if owner == "" {
-				owner = items[i].AccountEmail
-			}
-			if err := writef(w, format, items[i].Type, items[i].Name, owner, items[i].ModifiedAt); err != nil {
-				return err
-			}
-			if err := writef(w, "    target: %s\n", items[i].Selector); err != nil {
-				return err
-			}
-		}
+	if err := printSharedItemsSection(w, items); err != nil {
+		return err
 	}
 
-	if len(authRequired) > 0 {
-		if len(items) > 0 {
-			if err := writeln(w); err != nil {
-				return err
-			}
-		}
-		return printAccountAuthRequirementsText(w, "Authentication required:", authRequired)
+	if err := printSharedDegradedSection(w, len(items) > 0, degraded); err != nil {
+		return err
+	}
+
+	if err := printSharedAuthSection(w, len(items) > 0 || len(degraded) > 0, authRequired); err != nil {
+		return err
 	}
 
 	return nil
+}
+
+func printSharedItemsSection(w io.Writer, items []sharedListItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+
+	if err := writeln(w, "Shared items:"); err != nil {
+		return err
+	}
+
+	maxType, maxName, maxOwner := len("TYPE"), len("NAME"), len("SHARED BY")
+	for i := range items {
+		maxType = max(maxType, len(items[i].Type))
+		maxName = max(maxName, len(items[i].Name))
+		owner := sharedOwnerLabel(&items[i])
+		maxOwner = max(maxOwner, len(owner))
+	}
+
+	format := fmt.Sprintf("  %%-%ds  %%-%ds  %%-%ds  %%s\n", maxType, maxName, maxOwner)
+	if err := writef(w, format, "TYPE", "NAME", "SHARED BY", "MODIFIED"); err != nil {
+		return err
+	}
+
+	for i := range items {
+		owner := sharedOwnerLabel(&items[i])
+		if err := writef(w, format, items[i].Type, items[i].Name, owner, items[i].ModifiedAt); err != nil {
+			return err
+		}
+		if err := writef(w, "    target: %s\n", items[i].Selector); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func printSharedDegradedSection(w io.Writer, needsSpacing bool, degraded []accountDegradedNotice) error {
+	if len(degraded) == 0 {
+		return nil
+	}
+
+	if err := maybeWriteBlankLine(w, needsSpacing); err != nil {
+		return err
+	}
+
+	return printAccountDegradedText(w, "Accounts with degraded shared discovery:", degraded)
+}
+
+func printSharedAuthSection(w io.Writer, needsSpacing bool, authRequired []accountAuthRequirement) error {
+	if len(authRequired) == 0 {
+		return nil
+	}
+
+	if err := maybeWriteBlankLine(w, needsSpacing); err != nil {
+		return err
+	}
+
+	return printAccountAuthRequirementsText(w, "Authentication required:", authRequired)
+}
+
+func maybeWriteBlankLine(w io.Writer, needsSpacing bool) error {
+	if !needsSpacing {
+		return nil
+	}
+
+	return writeln(w)
+}
+
+func sharedOwnerLabel(item *sharedListItem) string {
+	if item.SharedByEmail != "" {
+		return item.SharedByEmail
+	}
+	if item.SharedByName != "" {
+		return item.SharedByName
+	}
+
+	return "unknown"
 }

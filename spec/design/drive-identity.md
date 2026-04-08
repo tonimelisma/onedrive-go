@@ -90,18 +90,27 @@ Implements: R-3.3.2 [verified], R-3.3.3 [verified], R-3.3.4 [verified], R-3.3.5 
 
 `drive list`, `drive add`, `drive remove`, `drive search`. Drive add creates a config section with auto-generated display_name and sync_dir. Drive list annotates available drives with state DB presence (R-3.3.3), supports `--all` to remove the SharePoint site cap (R-3.3.4). Drive remove `--purge` works on unconfigured drives with orphaned state (R-3.3.8) and only purges drive-owned state; account-owned token/profile files remain until logout.
 
-Shared-folder discovery remains search-first to satisfy `R-3.6.2`, but the
-runtime does not trust a successful `search(q='*')` response by itself. If
-search returns no usable shared-item identities (`remoteDriveID` +
-`remoteItemID`), the CLI falls back to `sharedWithMe?allowexternal=true`
-instead of silently rendering an empty shared list. Even when search returns
-usable remote references, the CLI still treats owner identity as repairable
-state: it first tries `GET /drives/{driveId}/items/{itemId}` for full owner
-metadata, and if owner email is still missing it does one external-aware
-`sharedWithMe` backfill pass before dropping a shared folder from `drive list`
-or emitting incomplete owner fields from `shared`. If Graph still omits an
-external shared folder after that fallback, the CLI reports the omission as a
-platform limitation instead of claiming the folder is undiscoverable by design.
+Shared-folder discovery is best-effort live search via
+`GET /me/drive/root/search(q='*')` to satisfy `R-3.6.2`. Search hits are only
+actionable when they expose both `remoteDriveID` and `remoteItemID`; hits
+without those remote identities are logged and skipped rather than converted
+into unstable selectors. For actionable hits, the CLI enriches owner metadata
+through `GET /drives/{driveId}/items/{itemId}`. If owner identity still
+remains unavailable after enrichment, `drive list` keeps the folder visible
+with a deterministic display name
+`"{folderName-or-'shared item'} (shared {remoteDriveID}:{remoteItemID})"` and
+`shared` emits the item with empty owner fields instead of dropping it.
+
+Search failure for an authenticated account becomes caller-level degraded
+discovery (`shared_discovery_unavailable`) rather than a fallback to the
+deprecated API. If live search succeeds but Graph still omits an external or
+cross-organization share, the CLI reports that as a platform limitation
+instead of claiming the share is categorically undiscoverable.
+
+Exact shared selectors do not rediscover themselves through search. `drive add
+shared:<recipient>:<driveId>:<itemId>` resolves display naming from the
+authoritative `GET /drives/{driveId}/items/{itemId}` response so shared-target
+bootstrap stays independent of live discovery quality.
 
 ## Design Constraints
 
