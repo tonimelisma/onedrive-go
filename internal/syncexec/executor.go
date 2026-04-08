@@ -49,10 +49,10 @@ type ExecutorConfig struct {
 	watchMode bool
 
 	// Injectable for testing.
-	nowFunc         func() time.Time
-	hashFunc        func(filePath string) (string, error)
-	trashFunc       func(absPath string) error // nil = permanent delete (os.Remove)
-	pathConvergence driveops.PathConvergence
+	nowFunc                func() time.Time
+	hashFunc               func(filePath string) (string, error)
+	trashFunc              func(absPath string) error // nil = permanent delete (os.Remove)
+	pathConvergenceFactory driveops.PathConvergenceFactory
 }
 
 // Executor executes individual actions against the Graph API and local
@@ -67,18 +67,18 @@ type Executor struct {
 // specific drive and sync root. Use NewExecution to create per-call executors.
 func NewExecutorConfig(
 	items synctypes.ItemClient, downloads driveops.Downloader, uploads driveops.Uploader,
-	syncTree *synctree.Root, driveID driveid.ID, logger *slog.Logger, pathConvergence driveops.PathConvergence,
+	syncTree *synctree.Root, driveID driveid.ID, logger *slog.Logger, pathConvergenceFactory driveops.PathConvergenceFactory,
 ) *ExecutorConfig {
 	cfg := &ExecutorConfig{
-		items:           items,
-		downloads:       downloads,
-		uploads:         uploads,
-		syncTree:        syncTree,
-		driveID:         driveID,
-		logger:          logger,
-		nowFunc:         time.Now,
-		hashFunc:        driveops.ComputeQuickXorHash,
-		pathConvergence: pathConvergence,
+		items:                  items,
+		downloads:              downloads,
+		uploads:                uploads,
+		syncTree:               syncTree,
+		driveID:                driveID,
+		logger:                 logger,
+		nowFunc:                time.Now,
+		hashFunc:               driveops.ComputeQuickXorHash,
+		pathConvergenceFactory: pathConvergenceFactory,
 	}
 
 	return cfg
@@ -122,12 +122,13 @@ func (cfg *ExecutorConfig) Items() synctypes.ItemClient {
 	return cfg.items
 }
 
-func (e *Executor) confirmRemotePathVisible(ctx context.Context, driveID driveid.ID, remotePath string) {
-	if e.pathConvergence == nil || driveID != e.driveID {
+func (e *Executor) confirmRemotePathVisible(ctx context.Context, action *synctypes.Action) {
+	pathConvergence, remotePath, ok := e.pathConvergenceForAction(action)
+	if !ok {
 		return
 	}
 
-	_, err := e.pathConvergence.WaitPathVisible(ctx, remotePath)
+	_, err := pathConvergence.WaitPathVisible(ctx, remotePath)
 	if err == nil {
 		return
 	}
@@ -138,9 +139,64 @@ func (e *Executor) confirmRemotePathVisible(ctx context.Context, driveID driveid
 	}
 
 	e.logger.Warn(message,
-		slog.String("path", remotePath),
+		slog.String("path", action.Path),
+		slog.String("target_path", remotePath),
 		slog.String("error", err.Error()),
 	)
+}
+
+func (e *Executor) pathConvergenceForAction(action *synctypes.Action) (driveops.PathConvergence, string, bool) {
+	if e.pathConvergenceFactory == nil || action == nil {
+		return nil, "", false
+	}
+
+	targetDriveID := e.resolveDriveID(action)
+	if targetDriveID.IsZero() {
+		return nil, "", false
+	}
+
+	if targetDriveID.Equal(e.driveID) {
+		return e.pathConvergenceFactory.ForTarget(targetDriveID, e.rootItemID), action.Path, true
+	}
+
+	if action.TargetRootItemID == "" || action.TargetRootLocalPath == "" {
+		e.logger.Debug("skip cross-drive path convergence without target root metadata",
+			slog.String("path", action.Path),
+			slog.String("target_drive_id", targetDriveID.String()),
+			slog.String("target_root_item_id", action.TargetRootItemID),
+			slog.String("target_root_local_path", action.TargetRootLocalPath),
+		)
+
+		return nil, "", false
+	}
+
+	targetPath, ok := targetRelativePath(action.Path, action.TargetRootLocalPath)
+	if !ok {
+		e.logger.Debug("skip cross-drive path convergence with mismatched target root prefix",
+			slog.String("path", action.Path),
+			slog.String("target_drive_id", targetDriveID.String()),
+			slog.String("target_root_local_path", action.TargetRootLocalPath),
+		)
+
+		return nil, "", false
+	}
+
+	return e.pathConvergenceFactory.ForTarget(targetDriveID, action.TargetRootItemID), targetPath, true
+}
+
+func targetRelativePath(actionPath, targetRootLocalPath string) (string, bool) {
+	cleanPath := filepath.ToSlash(actionPath)
+	cleanRoot := filepath.ToSlash(targetRootLocalPath)
+	if cleanPath == cleanRoot {
+		return "", true
+	}
+
+	prefix := cleanRoot + "/"
+	if !strings.HasPrefix(cleanPath, prefix) {
+		return "", false
+	}
+
+	return strings.TrimPrefix(cleanPath, prefix), true
 }
 
 // SetNowFunc overrides the time source. Used in tests to produce deterministic
@@ -236,7 +292,7 @@ func (e *Executor) createRemoteFolder(ctx context.Context, action *synctypes.Act
 		slog.String("item_id", item.ID),
 	)
 
-	e.confirmRemotePathVisible(ctx, driveID, action.Path)
+	e.confirmRemotePathVisible(ctx, action)
 
 	return synctypes.Outcome{
 		Action:     synctypes.ActionFolderCreate,
@@ -306,7 +362,7 @@ func (e *Executor) ExecuteRemoteMove(ctx context.Context, action *synctypes.Acti
 		slog.String("item_id", item.ID),
 	)
 
-	e.confirmRemotePathVisible(ctx, driveID, action.Path)
+	e.confirmRemotePathVisible(ctx, action)
 
 	o := e.moveOutcome(action)
 	o.ItemID = item.ID

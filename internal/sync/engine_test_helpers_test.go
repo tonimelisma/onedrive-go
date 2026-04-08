@@ -229,6 +229,10 @@ type testEngine struct {
 
 type enginePathConvergenceStub struct{}
 
+func (s *enginePathConvergenceStub) ForTarget(_ driveid.ID, _ string) driveops.PathConvergence {
+	return s
+}
+
 func (s *enginePathConvergenceStub) WaitPathVisible(_ context.Context, _ string) (*graph.Item, error) {
 	return &graph.Item{ID: "visible-item-id"}, nil
 }
@@ -273,19 +277,19 @@ func newTestEngineWithContext(t *testing.T, ctx context.Context, mock *engineMoc
 	driveID := driveid.New(engineTestDriveID)
 
 	eng, err := NewEngine(ctx, &synctypes.EngineConfig{
-		DBPath:          dbPath,
-		SyncRoot:        syncRoot,
-		DriveID:         driveID,
-		Fetcher:         mock,
-		SocketIOFetcher: mock,
-		Items:           mock,
-		Downloads:       mock,
-		Uploads:         mock,
-		PathConvergence: &enginePathConvergenceStub{},
-		FolderDelta:     mock,
-		RecursiveLister: mock,
-		PermChecker:     mock,
-		Logger:          logger,
+		DBPath:                 dbPath,
+		SyncRoot:               syncRoot,
+		DriveID:                driveID,
+		Fetcher:                mock,
+		SocketIOFetcher:        mock,
+		Items:                  mock,
+		Downloads:              mock,
+		Uploads:                mock,
+		PathConvergenceFactory: &enginePathConvergenceStub{},
+		FolderDelta:            mock,
+		RecursiveLister:        mock,
+		PermChecker:            mock,
+		Logger:                 logger,
 	})
 	require.NoError(t, err, "NewEngine")
 	eng.assertInvariants = true
@@ -324,19 +328,19 @@ func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *eng
 	driveID := driveid.New(engineTestDriveID)
 
 	eng, err := NewEngine(ctx, &synctypes.EngineConfig{
-		DBPath:          dbPath,
-		SyncRoot:        syncRoot,
-		DriveID:         driveID,
-		Fetcher:         mock,
-		SocketIOFetcher: mock,
-		Items:           mock,
-		Downloads:       mock,
-		Uploads:         mock,
-		PathConvergence: &enginePathConvergenceStub{},
-		FolderDelta:     mock,
-		RecursiveLister: mock,
-		PermChecker:     mock,
-		Logger:          logger,
+		DBPath:                 dbPath,
+		SyncRoot:               syncRoot,
+		DriveID:                driveID,
+		Fetcher:                mock,
+		SocketIOFetcher:        mock,
+		Items:                  mock,
+		Downloads:              mock,
+		Uploads:                mock,
+		PathConvergenceFactory: &enginePathConvergenceStub{},
+		FolderDelta:            mock,
+		RecursiveLister:        mock,
+		PermChecker:            mock,
+		Logger:                 logger,
 	})
 	require.NoError(t, err, "NewEngine")
 	eng.assertInvariants = true

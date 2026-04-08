@@ -22,6 +22,15 @@ type Action struct {
 	// actions, equals DriveID. For shortcut actions, equals the remote drive.
 	// Flows through the pipeline without lookup (R-6.8.12).
 	TargetDriveID driveid.ID
+
+	// TargetRootItemID identifies the shortcut root item that owns this action's
+	// remote path when the action targets a foreign drive subtree.
+	TargetRootItemID string
+
+	// TargetRootLocalPath is the local sync path corresponding to TargetRootItemID.
+	// Cross-drive convergence strips this prefix to compute the target-drive-
+	// relative path after a successful mutation.
+	TargetRootLocalPath string
 }
 
 // TargetsOwnDrive returns true if this action targets the user's own drive.

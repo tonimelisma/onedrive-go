@@ -29,33 +29,33 @@ type LocalObservationRules struct {
 // EngineConfig holds the options for NewEngine. Uses a struct because
 // seven fields is too many for positional parameters.
 type EngineConfig struct {
-	DBPath             string       // path to the SQLite state database
-	SyncRoot           string       // absolute path to the local sync directory
-	DataDir            string       // application data directory for session files (optional)
-	DriveID            driveid.ID   // normalized drive identifier
-	DriveType          string       // canonical drive type ("personal", "business", "sharepoint", "shared")
-	AccountEmail       string       // authenticated account email for caller-aware permission checks
-	RootItemID         string       // folder-scoped virtual root; empty = drive root
-	Fetcher            DeltaFetcher // satisfied by *graph.Client
-	SocketIOFetcher    SocketIOEndpointFetcher
-	Items              ItemClient          // satisfied by *graph.Client
-	Downloads          driveops.Downloader // satisfied by *graph.Client
-	Uploads            driveops.Uploader   // satisfied by *graph.Client
-	PathConvergence    driveops.PathConvergence
-	DriveVerifier      DriveVerifier      // optional: verified at startup (B-074); nil skips check
-	FolderDelta        FolderDeltaFetcher // optional: folder-scoped delta for shortcut observation (6.4b)
-	RecursiveLister    RecursiveLister    // optional: recursive listing for shortcut observation (6.4b)
-	PermChecker        PermissionChecker  // optional: permission checking for shared folders (6.4c)
-	Logger             *slog.Logger
-	LocalFilter        LocalFilterConfig
-	LocalRules         LocalObservationRules
-	SyncScope          syncscope.Config
-	EnableWebsocket    bool  // when true, full-drive watch mode enables outbound Socket.IO wakeups
-	UseLocalTrash      bool  // move deleted local files to OS trash instead of permanent delete
-	TransferWorkers    int   // goroutine count for the worker pool (0 → minWorkers)
-	CheckWorkers       int   // goroutine limit for parallel file hashing (0 → 4)
-	BigDeleteThreshold int   // max delete actions before big-delete protection triggers (0 → defaultBigDeleteThreshold)
-	MinFreeSpace       int64 // minimum free disk space (bytes) before downloads; 0 disables (R-6.4.7)
+	DBPath                 string       // path to the SQLite state database
+	SyncRoot               string       // absolute path to the local sync directory
+	DataDir                string       // application data directory for session files (optional)
+	DriveID                driveid.ID   // normalized drive identifier
+	DriveType              string       // canonical drive type ("personal", "business", "sharepoint", "shared")
+	AccountEmail           string       // authenticated account email for caller-aware permission checks
+	RootItemID             string       // folder-scoped virtual root; empty = drive root
+	Fetcher                DeltaFetcher // satisfied by *graph.Client
+	SocketIOFetcher        SocketIOEndpointFetcher
+	Items                  ItemClient          // satisfied by *graph.Client
+	Downloads              driveops.Downloader // satisfied by *graph.Client
+	Uploads                driveops.Uploader   // satisfied by *graph.Client
+	PathConvergenceFactory driveops.PathConvergenceFactory
+	DriveVerifier          DriveVerifier      // optional: verified at startup (B-074); nil skips check
+	FolderDelta            FolderDeltaFetcher // optional: folder-scoped delta for shortcut observation (6.4b)
+	RecursiveLister        RecursiveLister    // optional: recursive listing for shortcut observation (6.4b)
+	PermChecker            PermissionChecker  // optional: permission checking for shared folders (6.4c)
+	Logger                 *slog.Logger
+	LocalFilter            LocalFilterConfig
+	LocalRules             LocalObservationRules
+	SyncScope              syncscope.Config
+	EnableWebsocket        bool  // when true, full-drive watch mode enables outbound Socket.IO wakeups
+	UseLocalTrash          bool  // move deleted local files to OS trash instead of permanent delete
+	TransferWorkers        int   // goroutine count for the worker pool (0 → minWorkers)
+	CheckWorkers           int   // goroutine limit for parallel file hashing (0 → 4)
+	BigDeleteThreshold     int   // max delete actions before big-delete protection triggers (0 → defaultBigDeleteThreshold)
+	MinFreeSpace           int64 // minimum free disk space (bytes) before downloads; 0 disables (R-6.4.7)
 }
 
 // RunOpts holds per-pass options for RunOnce.
