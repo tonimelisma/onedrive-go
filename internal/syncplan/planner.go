@@ -64,6 +64,11 @@ func (p *Planner) Plan(
 	// executor can remove children before the parent directory.
 	allActions = expandFolderDeleteCascades(allActions, baseline, views, mode, p.logger)
 
+	// Step 2.6: Fill target-drive and shortcut-root metadata once after all
+	// actions exist so executor-time cross-drive convergence does not need to
+	// rediscover target ownership ad hoc.
+	enrichActionTargets(allActions, baseline)
+
 	// Step 3: build dependency edges and verify acyclicity.
 	deps := buildDependencies(allActions)
 
@@ -890,6 +895,119 @@ func MakeAction(actionType synctypes.ActionType, view *synctypes.PathView) synct
 	}
 
 	return a
+}
+
+func enrichActionTargets(actions []synctypes.Action, baseline *synctypes.Baseline) {
+	for i := range actions {
+		enrichActionTarget(&actions[i], baseline)
+	}
+}
+
+func enrichActionTarget(action *synctypes.Action, baseline *synctypes.Baseline) {
+	if action == nil || baseline == nil {
+		return
+	}
+
+	action.TargetDriveID = resolveActionTargetDriveID(action, baseline)
+	if action.TargetDriveID.IsZero() {
+		return
+	}
+
+	populateActionTargetRootFromRemote(action, baseline)
+	populateActionTargetRootFromBaseline(action, baseline)
+}
+
+func resolveActionTargetDriveID(action *synctypes.Action, baseline *synctypes.Baseline) driveid.ID {
+	if action == nil {
+		return driveid.ID{}
+	}
+	if !action.TargetDriveID.IsZero() {
+		return action.TargetDriveID
+	}
+	if !action.DriveID.IsZero() {
+		return action.DriveID
+	}
+
+	return resolvePathDriveID(action.Path, baseline)
+}
+
+func populateActionTargetRootFromRemote(action *synctypes.Action, baseline *synctypes.Baseline) {
+	if action.TargetRootItemID == "" && action.View != nil && action.View.Remote != nil {
+		action.TargetRootItemID = action.View.Remote.RemoteItemID
+	}
+	if action.TargetRootItemID == "" || action.TargetRootLocalPath != "" {
+		return
+	}
+
+	rootPath := findTargetRootPath(action.Path, action.TargetDriveID, action.TargetRootItemID, baseline)
+	if rootPath != "" {
+		action.TargetRootLocalPath = rootPath
+		return
+	}
+	if action.ItemID == action.TargetRootItemID {
+		action.TargetRootLocalPath = action.Path
+	}
+}
+
+func populateActionTargetRootFromBaseline(action *synctypes.Action, baseline *synctypes.Baseline) {
+	if action.TargetRootItemID != "" && action.TargetRootLocalPath != "" {
+		return
+	}
+
+	root := findTargetRootEntry(action.Path, action.TargetDriveID, baseline)
+	if root == nil {
+		return
+	}
+	if action.TargetRootItemID == "" {
+		action.TargetRootItemID = root.ItemID
+	}
+	if action.TargetRootLocalPath == "" {
+		action.TargetRootLocalPath = root.Path
+	}
+}
+
+func findTargetRootPath(
+	path string,
+	targetDriveID driveid.ID,
+	targetRootItemID string,
+	baseline *synctypes.Baseline,
+) string {
+	if baseline == nil || targetDriveID.IsZero() || targetRootItemID == "" {
+		return ""
+	}
+
+	for current := filepath.ToSlash(path); current != "." && current != "" && current != "/"; current = filepath.ToSlash(
+		filepath.Dir(current),
+	) {
+		entry, ok := baseline.GetByPath(current)
+		if !ok || !entry.DriveID.Equal(targetDriveID) {
+			continue
+		}
+		if entry.ItemID == targetRootItemID {
+			return current
+		}
+	}
+
+	return ""
+}
+
+func findTargetRootEntry(path string, targetDriveID driveid.ID, baseline *synctypes.Baseline) *synctypes.BaselineEntry {
+	if baseline == nil || targetDriveID.IsZero() {
+		return nil
+	}
+
+	var root *synctypes.BaselineEntry
+	for current := filepath.ToSlash(path); current != "." && current != "" && current != "/"; current = filepath.ToSlash(
+		filepath.Dir(current),
+	) {
+		entry, ok := baseline.GetByPath(current)
+		if !ok || !entry.DriveID.Equal(targetDriveID) {
+			continue
+		}
+		root = entry
+	}
+
+	return root
 }
 
 // makeConflictAction constructs an ActionConflict with ConflictInfo populated.

@@ -70,8 +70,10 @@ command-boundary convergence checks:
 
 `syncexec` does not carry an independent visibility schedule or sleep loop.
 When sync wants best-effort confirmation after a successful remote create,
-upload, or move, it delegates to the injected `driveops.PathConvergence`
-capability and logs warn-only on failure.
+upload, or move, it delegates to the injected
+`driveops.PathConvergenceFactory`, which returns the correct drive/root-scoped
+capability for the action target. The retry schedule still lives entirely in
+`driveops`; execution only decides which target session should consume it.
 
 ## RetryTransport (`transport.go`)
 

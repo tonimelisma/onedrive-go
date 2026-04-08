@@ -86,3 +86,9 @@ type PathConvergence interface {
 	DeleteResolvedPath(ctx context.Context, remotePath, itemID string) error
 	PermanentDeleteResolvedPath(ctx context.Context, remotePath, itemID string) error
 }
+
+// PathConvergenceFactory resolves a path-convergence capability for the
+// concrete remote drive/root that an action targets.
+type PathConvergenceFactory interface {
+	ForTarget(driveID driveid.ID, rootItemID string) PathConvergence
+}

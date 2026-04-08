@@ -187,6 +187,53 @@ func TestSessionProvider_UsesClientResolver(t *testing.T) {
 	assert.Same(t, rd, resolvedArg)
 }
 
+func TestSession_ForTarget_ReturnsSelfForSameDriveAndRoot(t *testing.T) {
+	t.Parallel()
+
+	session := &Session{
+		Meta:     &graph.Client{},
+		Transfer: &graph.Client{},
+		DriveID:  driveid.New("drive-1"),
+		RootItem: "root-1",
+	}
+
+	got := session.ForTarget(driveid.New("drive-1"), "root-1")
+	assert.Same(t, session, got)
+}
+
+func TestSession_ForTarget_ClonesDriveAndRootWithoutRecreatingClients(t *testing.T) {
+	t.Parallel()
+
+	sleepFn := func(context.Context, time.Duration) error { return nil }
+	meta := &graph.Client{}
+	transfer := &graph.Client{}
+	session := &Session{
+		Meta:                   meta,
+		Transfer:               transfer,
+		DriveID:                driveid.New("drive-1"),
+		RootItem:               "root-1",
+		visibilityWaitSchedule: []time.Duration{time.Second, 2 * time.Second},
+		sleepFunc:              sleepFn,
+		Resolved: &config.ResolvedDrive{
+			DriveID: driveid.New("drive-1"),
+		},
+	}
+
+	got := session.ForTarget(driveid.New("drive-2"), "root-2")
+	require.NotNil(t, got)
+
+	targetSession, ok := got.(*Session)
+	require.True(t, ok)
+	assert.NotSame(t, session, targetSession)
+	assert.Same(t, meta, targetSession.Meta)
+	assert.Same(t, transfer, targetSession.Transfer)
+	assert.Equal(t, driveid.New("drive-2"), targetSession.DriveID)
+	assert.Equal(t, "root-2", targetSession.RootItem)
+	assert.Equal(t, []time.Duration{time.Second, 2 * time.Second}, targetSession.visibilityWaitSchedule)
+	assert.NotNil(t, targetSession.sleepFunc)
+	assert.Same(t, session.Resolved, targetSession.Resolved)
+}
+
 // --- FlushTokenCache ---
 
 func TestSessionProvider_FlushTokenCache(t *testing.T) {

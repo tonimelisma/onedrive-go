@@ -235,6 +235,40 @@ func TestPlan_CrossDriveLocalMove_DecomposesToDeleteAndUpload(t *testing.T) {
 }
 
 // Validates: R-6.7.21
+func TestPlan_LocalUploadUnderShortcutAncestor_HasTargetRootMetadata(t *testing.T) {
+	t.Parallel()
+
+	shortcutDriveID := driveid.New("driveB")
+	planner := NewPlanner(synctest.TestLogger(t))
+
+	bl := synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{
+		{Path: "shortcut", DriveID: shortcutDriveID, ItemID: "shortcut-root-id", ItemType: synctypes.ItemTypeFolder},
+	})
+
+	changes := []synctypes.PathChanges{{
+		Path: "shortcut/new-file.txt",
+		LocalEvents: []synctypes.ChangeEvent{{
+			Source:   synctypes.SourceLocal,
+			Type:     synctypes.ChangeCreate,
+			Path:     "shortcut/new-file.txt",
+			ItemType: synctypes.ItemTypeFile,
+			Name:     "new-file.txt",
+			Hash:     "hash1",
+		}},
+	}}
+
+	plan, err := planner.Plan(changes, bl, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	require.NoError(t, err)
+	require.Len(t, plan.Actions, 1)
+
+	action := plan.Actions[0]
+	assert.Equal(t, synctypes.ActionUpload, action.Type)
+	assert.Equal(t, shortcutDriveID, action.TargetDriveID)
+	assert.Equal(t, "shortcut-root-id", action.TargetRootItemID)
+	assert.Equal(t, "shortcut", action.TargetRootLocalPath)
+}
+
+// Validates: R-6.7.21
 func TestPlan_SameDriveMove_StillWorks(t *testing.T) {
 	// Regression: same-drive moves should still be detected and produce
 	// ActionRemoteMove actions.
