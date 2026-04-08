@@ -21,13 +21,18 @@ type recordedCommand struct {
 }
 
 type fakeRunner struct {
-	runCommands    []recordedCommand
-	outputCommands []recordedCommand
-	outputs        map[string][]byte
-	outputsByCWD   map[string]map[string][]byte
-	runErr         error
-	runErrByKey    map[string]error
-	outputErr      error
+	runCommands         []recordedCommand
+	outputCommands      []recordedCommand
+	combinedCommands    []recordedCommand
+	outputs             map[string][]byte
+	outputsByCWD        map[string]map[string][]byte
+	runErr              error
+	runErrByKey         map[string]error
+	runErrSequenceByKey map[string][]error
+	outputErr           error
+	combinedOutputs     map[string][]byte
+	combinedErr         error
+	combinedErrByKey    map[string]error
 }
 
 func (f *fakeRunner) Run(
@@ -47,6 +52,11 @@ func (f *fakeRunner) Run(
 
 	if err, ok := f.runErrByKey[name+" "+strings.Join(args, " ")]; ok {
 		return err
+	}
+	if seq := f.runErrSequenceByKey[name+" "+strings.Join(args, " ")]; len(seq) > 0 {
+		next := seq[0]
+		f.runErrSequenceByKey[name+" "+strings.Join(args, " ")] = seq[1:]
+		return next
 	}
 
 	return f.runErr
@@ -77,6 +87,31 @@ func (f *fakeRunner) Output(
 	}
 
 	return f.outputs[key], nil
+}
+
+func (f *fakeRunner) CombinedOutput(
+	_ context.Context,
+	cwd string,
+	env []string,
+	name string,
+	args ...string,
+) ([]byte, error) {
+	f.combinedCommands = append(f.combinedCommands, recordedCommand{
+		cwd:  cwd,
+		env:  append([]string{}, env...),
+		name: name,
+		args: append([]string{}, args...),
+	})
+
+	key := name + " " + strings.Join(args, " ")
+	if err, ok := f.combinedErrByKey[key]; ok {
+		return f.combinedOutputs[key], err
+	}
+	if f.combinedErr != nil {
+		return f.combinedOutputs[key], f.combinedErr
+	}
+
+	return f.combinedOutputs[key], nil
 }
 
 // Validates: R-6.2.1, R-6.2.2
@@ -140,7 +175,99 @@ func TestRunVerifyE2EFullRunsPreflightsBeforeSuites(t *testing.T) {
 	assert.Equal(t, []string{"test", "-tags=e2e", "-race", "-v", "-parallel", "5", "-timeout=10m", "./e2e/..."}, runner.runCommands[2].args)
 	assert.Equal(t, []string{"test", "-tags=e2e", "-run=" + authE2EPreflightPattern, "-count=1", "-v", "./e2e/..."}, runner.runCommands[3].args)
 	assert.Equal(t, []string{"test", "-tags=e2e e2e_full", "-run=" + fullE2EPreflightPattern, "-count=1", "-v", "./e2e/..."}, runner.runCommands[4].args)
-	assert.Equal(t, []string{"test", "-tags=e2e e2e_full", "-race", "-v", "-parallel", "5", "-timeout=30m", "./e2e/..."}, runner.runCommands[5].args)
+	assert.Equal(t, []string{"test", "-tags=e2e e2e_full", "-race", "-v", "-parallel", "1", "-timeout=60m", "./e2e/..."}, runner.runCommands[5].args)
+}
+
+func TestRunVerifyE2EFullClassifiesKnownAuthPreflightQuirkAfterSuccessfulRerun(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	runner := &fakeRunner{
+		runErrSequenceByKey: map[string][]error{
+			"go test -tags=e2e -run=" + authE2EPreflightPattern + " -count=1 -v ./e2e/...": {
+				assert.AnError,
+			},
+		},
+	}
+
+	stdout := &bytes.Buffer{}
+	err := RunVerify(context.Background(), runner, VerifyOptions{
+		RepoRoot:           repoRoot,
+		Profile:            VerifyE2EFull,
+		ClassifyLiveQuirks: true,
+		Stdout:             stdout,
+		Stderr:             &bytes.Buffer{},
+	})
+	require.NoError(t, err)
+
+	require.Len(t, runner.runCommands, 6)
+	require.Len(t, runner.combinedCommands, 1)
+	assert.Equal(t, runner.runCommands[0].args, runner.runCommands[1].args)
+	assert.Contains(t, stdout.String(), "LI-20260405-06")
+}
+
+func TestRunVerifyE2EFullClassifiesKnownFastSuiteQuirkAfterSuccessfulRerun(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	runner := &fakeRunner{
+		combinedOutputs: map[string][]byte{
+			"go test -json -tags=e2e -race -v -parallel 5 -timeout=10m ./e2e/...": []byte(strings.Join([]string{
+				`{"Time":"2026-04-08T00:00:00Z","Action":"run","Package":"github.com/tonimelisma/onedrive-go/e2e","Test":"TestE2E_Sync_DownloadOnly"}`,
+				`{"Time":"2026-04-08T00:00:01Z","Action":"fail","Package":"github.com/tonimelisma/onedrive-go/e2e","Test":"TestE2E_Sync_DownloadOnly"}`,
+				`{"Time":"2026-04-08T00:00:01Z","Action":"fail","Package":"github.com/tonimelisma/onedrive-go/e2e"}`,
+			}, "\n")),
+		},
+		combinedErrByKey: map[string]error{
+			"go test -json -tags=e2e -race -v -parallel 5 -timeout=10m ./e2e/...": assert.AnError,
+		},
+	}
+
+	stdout := &bytes.Buffer{}
+	err := RunVerify(context.Background(), runner, VerifyOptions{
+		RepoRoot:           repoRoot,
+		Profile:            VerifyE2EFull,
+		ClassifyLiveQuirks: true,
+		Stdout:             stdout,
+		Stderr:             &bytes.Buffer{},
+	})
+	require.NoError(t, err)
+
+	require.Len(t, runner.combinedCommands, 1)
+	assert.Equal(t, []string{"test", "-json", "-tags=e2e", "-race", "-v", "-parallel", "5", "-timeout=10m", "./e2e/..."}, runner.combinedCommands[0].args)
+	require.Len(t, runner.runCommands, 6)
+	assert.Equal(t, []string{"test", "-tags=e2e", "-race", "-run=^TestE2E_Sync_DownloadOnly$", "-count=1", "-v", "./e2e/..."}, runner.runCommands[2].args)
+	assert.Contains(t, stdout.String(), "LI-20260405-04")
+}
+
+func TestRunVerifyE2EFullDoesNotMaskUnknownFastSuiteFailure(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	runner := &fakeRunner{
+		combinedOutputs: map[string][]byte{
+			"go test -json -tags=e2e -race -v -parallel 5 -timeout=10m ./e2e/...": []byte(strings.Join([]string{
+				`{"Time":"2026-04-08T00:00:00Z","Action":"run","Package":"github.com/tonimelisma/onedrive-go/e2e","Test":"TestE2E_Sync_DeletePropagation"}`,
+				`{"Time":"2026-04-08T00:00:01Z","Action":"fail","Package":"github.com/tonimelisma/onedrive-go/e2e","Test":"TestE2E_Sync_DeletePropagation"}`,
+				`{"Time":"2026-04-08T00:00:01Z","Action":"fail","Package":"github.com/tonimelisma/onedrive-go/e2e"}`,
+			}, "\n")),
+		},
+		combinedErrByKey: map[string]error{
+			"go test -json -tags=e2e -race -v -parallel 5 -timeout=10m ./e2e/...": assert.AnError,
+		},
+	}
+
+	err := RunVerify(context.Background(), runner, VerifyOptions{
+		RepoRoot:           repoRoot,
+		Profile:            VerifyE2EFull,
+		ClassifyLiveQuirks: true,
+		Stdout:             &bytes.Buffer{},
+		Stderr:             &bytes.Buffer{},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "fast e2e")
+	require.Len(t, runner.combinedCommands, 1)
+	require.Len(t, runner.runCommands, 2)
 }
 
 func TestRunVerifyE2EStopsAfterFastPreflightFailure(t *testing.T) {

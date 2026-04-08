@@ -11,6 +11,7 @@ import (
 type commandRunner interface {
 	Run(ctx context.Context, cwd string, env []string, stdout, stderr io.Writer, name string, args ...string) error
 	Output(ctx context.Context, cwd string, env []string, name string, args ...string) ([]byte, error)
+	CombinedOutput(ctx context.Context, cwd string, env []string, name string, args ...string) ([]byte, error)
 }
 
 type ExecRunner struct{}
@@ -60,6 +61,26 @@ func (ExecRunner) Output(
 		}
 
 		return nil, fmt.Errorf("%s %v: %w", name, args, err)
+	}
+
+	return out, nil
+}
+
+func (ExecRunner) CombinedOutput(
+	ctx context.Context,
+	cwd string,
+	env []string,
+	name string,
+	args ...string,
+) ([]byte, error) {
+	//nolint:gosec // command names and args come from fixed devtool subcommands, not shell input.
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = cwd
+	cmd.Env = env
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return out, fmt.Errorf("%s %v: %w", name, args, err)
 	}
 
 	return out, nil

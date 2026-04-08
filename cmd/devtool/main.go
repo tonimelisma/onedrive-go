@@ -54,9 +54,10 @@ func newRootCmd() *cobra.Command {
 
 func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
 	var (
-		coverageThreshold float64
-		coverageFile      string
-		e2eLogDir         string
+		coverageThreshold  float64
+		coverageFile       string
+		e2eLogDir          string
+		classifyLiveQuirks bool
 	)
 
 	cmd := &cobra.Command{
@@ -75,13 +76,14 @@ func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
 			}
 
 			return runVerify(cmd.Context(), devtool.VerifyOptions{
-				RepoRoot:          repoRoot,
-				Profile:           profile,
-				CoverageThreshold: coverageThreshold,
-				CoverageFile:      coverageFile,
-				E2ELogDir:         e2eLogDir,
-				Stdout:            cmd.OutOrStdout(),
-				Stderr:            cmd.ErrOrStderr(),
+				RepoRoot:           repoRoot,
+				Profile:            profile,
+				CoverageThreshold:  coverageThreshold,
+				CoverageFile:       coverageFile,
+				E2ELogDir:          e2eLogDir,
+				ClassifyLiveQuirks: classifyLiveQuirks,
+				Stdout:             cmd.OutOrStdout(),
+				Stderr:             cmd.ErrOrStderr(),
 			})
 		},
 	}
@@ -89,6 +91,12 @@ func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
 	cmd.Flags().Float64Var(&coverageThreshold, "coverage-threshold", defaultCoverageThreshold, "minimum total coverage percentage")
 	cmd.Flags().StringVar(&coverageFile, "coverage-file", "", "coverage profile path")
 	cmd.Flags().StringVar(&e2eLogDir, "e2e-log-dir", "", "directory for full E2E debug logs")
+	cmd.Flags().BoolVar(
+		&classifyLiveQuirks,
+		"classify-live-quirks",
+		false,
+		"rerun narrow known live-provider quirk failures once during verification",
+	)
 
 	return cmd
 }

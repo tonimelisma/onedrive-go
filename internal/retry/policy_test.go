@@ -85,65 +85,45 @@ func TestPolicy_Delay_MaxCap(t *testing.T) {
 	assert.Equal(t, 30*time.Second, p.Delay(10))
 }
 
+func assertPolicyShape(t *testing.T, got Policy, maxAttempts int, base, maxDelay time.Duration, jitter float64) {
+	t.Helper()
+
+	assert.Equal(t, maxAttempts, got.MaxAttempts)
+	assert.Equal(t, base, got.Base)
+	assert.Equal(t, maxDelay, got.Max)
+	assert.InDelta(t, 2.0, got.Multiplier, 0.0)
+	assert.InDelta(t, jitter, got.Jitter, 0.0)
+}
+
 // Validates: R-6.8.2
-// TestNamedPolicies_MatchOriginal verifies named policies match the original constants.
-func TestNamedPolicies_MatchOriginal(t *testing.T) {
+func TestNamedPolicies_RequestPathPolicies(t *testing.T) {
 	t.Parallel()
 
-	// Transport: graph/client.go — maxRetries=5, baseBackoff=1s, maxBackoff=60s, factor=2.0, jitter=0.25
-	transport := TransportPolicy()
-	assert.Equal(t, 5, transport.MaxAttempts)
-	assert.Equal(t, 1*time.Second, transport.Base)
-	assert.Equal(t, 60*time.Second, transport.Max)
-	assert.InDelta(t, 2.0, transport.Multiplier, 0.0)
-	assert.InDelta(t, 0.25, transport.Jitter, 0.0)
+	assertPolicyShape(t, TransportPolicy(), 5, 1*time.Second, 60*time.Second, 0.25)
+	assert.Equal(t, 5, DriveDiscoveryPolicy().MaxAttempts)
+	assert.Equal(t, 1*time.Second, DriveDiscoveryPolicy().Base)
+	assertPolicyShape(t, RootChildrenPolicy(), 3, 250*time.Millisecond, 1*time.Second, 0.0)
+	assertPolicyShape(t, DownloadMetadataPolicy(), 4, 250*time.Millisecond, 2*time.Second, 0.0)
+}
 
-	// DriveDiscovery: graph/drives.go — transient /me/drives retry budget.
-	driveDiscovery := DriveDiscoveryPolicy()
-	assert.Equal(t, 5, driveDiscovery.MaxAttempts)
-	assert.Equal(t, 1*time.Second, driveDiscovery.Base)
+// Validates: R-6.8.2
+func TestNamedPolicies_UploadAndVisibilityPolicies(t *testing.T) {
+	t.Parallel()
 
-	// RootChildren: graph/items.go — exact root/children transient 404 retry budget.
-	rootChildren := RootChildrenPolicy()
-	assert.Equal(t, 3, rootChildren.MaxAttempts)
-	assert.Equal(t, 250*time.Millisecond, rootChildren.Base)
-	assert.Equal(t, 1*time.Second, rootChildren.Max)
-	assert.InDelta(t, 2.0, rootChildren.Multiplier, 0.0)
-	assert.InDelta(t, 0.0, rootChildren.Jitter, 0.0)
+	assertPolicyShape(t, SimpleUploadMtimePatchPolicy(), 4, 250*time.Millisecond, 2*time.Second, 0.0)
+	assertPolicyShape(t, UploadSessionCreatePolicy(), 6, 250*time.Millisecond, 4*time.Second, 0.0)
+	assertPolicyShape(t, SimpleUploadCreatePolicy(), 7, 250*time.Millisecond, 8*time.Second, 0.0)
+	assertPolicyShape(t, PathVisibilityPolicy(), 8, 250*time.Millisecond, 32*time.Second, 0.0)
+}
 
-	downloadMetadata := DownloadMetadataPolicy()
-	assert.Equal(t, 4, downloadMetadata.MaxAttempts)
-	assert.Equal(t, 250*time.Millisecond, downloadMetadata.Base)
-	assert.Equal(t, 2*time.Second, downloadMetadata.Max)
-	assert.InDelta(t, 2.0, downloadMetadata.Multiplier, 0.0)
-	assert.InDelta(t, 0.0, downloadMetadata.Jitter, 0.0)
+// Validates: R-6.8.2
+func TestNamedPolicies_LongRunningPolicies(t *testing.T) {
+	t.Parallel()
 
-	uploadSessionCreate := UploadSessionCreatePolicy()
-	assert.Equal(t, 6, uploadSessionCreate.MaxAttempts)
-	assert.Equal(t, 250*time.Millisecond, uploadSessionCreate.Base)
-	assert.Equal(t, 4*time.Second, uploadSessionCreate.Max)
-	assert.InDelta(t, 2.0, uploadSessionCreate.Multiplier, 0.0)
-	assert.InDelta(t, 0.0, uploadSessionCreate.Jitter, 0.0)
-
-	pathVisibility := PathVisibilityPolicy()
-	assert.Equal(t, 8, pathVisibility.MaxAttempts)
-	assert.Equal(t, 250*time.Millisecond, pathVisibility.Base)
-	assert.Equal(t, 32*time.Second, pathVisibility.Max)
-	assert.InDelta(t, 2.0, pathVisibility.Multiplier, 0.0)
-	assert.InDelta(t, 0.0, pathVisibility.Jitter, 0.0)
-
-	// WatchLocal: observer_local.go — watchErrInitBackoff=1s, watchErrMaxBackoff=30s, watchErrBackoffMult=2
-	watchLocal := WatchLocalPolicy()
-	assert.Equal(t, 0, watchLocal.MaxAttempts)
-	assert.Equal(t, 1*time.Second, watchLocal.Base)
-	assert.Equal(t, 30*time.Second, watchLocal.Max)
-	assert.InDelta(t, 0.0, watchLocal.Jitter, 0.0)
-
-	// WatchRemote: observer_remote.go — initialWatchBackoff=5s, backoffMultiplier=2
-	watchRemote := WatchRemotePolicy()
-	assert.Equal(t, 0, watchRemote.MaxAttempts)
-	assert.Equal(t, 5*time.Second, watchRemote.Base)
-	assert.InDelta(t, 0.0, watchRemote.Jitter, 0.0)
+	assertPolicyShape(t, WatchLocalPolicy(), 0, 1*time.Second, 30*time.Second, 0.0)
+	assert.Equal(t, 0, WatchRemotePolicy().MaxAttempts)
+	assert.Equal(t, 5*time.Second, WatchRemotePolicy().Base)
+	assert.InDelta(t, 0.0, WatchRemotePolicy().Jitter, 0.0)
 }
 
 // Validates: R-6.8.1, R-6.8.2

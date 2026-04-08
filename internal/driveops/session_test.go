@@ -451,6 +451,23 @@ func TestSession_WaitPathVisible_ExhaustsNotFoundBudget(t *testing.T) {
 	assert.Equal(t, 3, attempts)
 }
 
+func TestSession_WaitPathVisible_ExhaustsNotFoundBudgetReturnsTypedError(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		writeTestResponsef(t, w, `{"error":{"code":"itemNotFound","message":"still settling"}}`)
+	}))
+	s.visibilityWaitSchedule = []time.Duration{0}
+
+	_, err := s.WaitPathVisible(t.Context(), "Documents/file.txt")
+	require.Error(t, err)
+
+	var visibilityErr *PathNotVisibleError
+	require.ErrorAs(t, err, &visibilityErr)
+	assert.Equal(t, "Documents/file.txt", visibilityErr.Path)
+}
+
 func TestSession_ResolveItem_SlashRoot(t *testing.T) {
 	t.Parallel()
 

@@ -121,6 +121,12 @@ type remoteListJSONItem struct {
 	Name string `json:"name"`
 }
 
+type syncAttemptResult struct {
+	Stdout string
+	Stderr string
+	Err    error
+}
+
 func writeSuiteConfig(path string, drives ...string) error {
 	var builder strings.Builder
 	for _, driveID := range drives {
@@ -603,6 +609,34 @@ func waitForRemoteScopeTransition(
 		},
 		args...,
 	)
+}
+
+func requireSyncEventuallyConverges(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	timeout time.Duration,
+	description string,
+	ready func(syncAttemptResult) bool,
+	args ...string,
+) syncAttemptResult {
+	t.Helper()
+
+	var last syncAttemptResult
+	syncArgs := append([]string{"sync"}, args...)
+
+	require.Eventually(t, func() bool {
+		last.Stdout, last.Stderr, last.Err = runCLIWithConfigAllowError(t, cfgPath, env, syncArgs...)
+		return ready(last)
+	}, timeout, 5*time.Second,
+		"%s\nlastErr: %v\nlastStdout: %s\nlastStderr: %s",
+		description,
+		last.Err,
+		last.Stdout,
+		last.Stderr,
+	)
+
+	return last
 }
 
 // --- File operation tests ---

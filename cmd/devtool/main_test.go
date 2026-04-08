@@ -61,13 +61,20 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
-	cmd.SetArgs([]string{"integration", "--coverage-threshold", "80.5", "--coverage-file", "/tmp/c.out", "--e2e-log-dir", "/tmp/e2e"})
+	cmd.SetArgs([]string{
+		"integration",
+		"--coverage-threshold", "80.5",
+		"--coverage-file", "/tmp/c.out",
+		"--e2e-log-dir", "/tmp/e2e",
+		"--classify-live-quirks",
+	})
 
 	require.NoError(t, cmd.Execute())
 	assert.Equal(t, devtool.VerifyIntegration, got.Profile)
 	assert.InDelta(t, 80.5, got.CoverageThreshold, 0.001)
 	assert.Equal(t, "/tmp/c.out", got.CoverageFile)
 	assert.Equal(t, "/tmp/e2e", got.E2ELogDir)
+	assert.True(t, got.ClassifyLiveQuirks)
 }
 
 // Validates: R-6.2.1

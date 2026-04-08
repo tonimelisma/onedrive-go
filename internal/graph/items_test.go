@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -735,6 +736,92 @@ func TestCreateFolder_Conflict(t *testing.T) {
 		_, err := client.CreateFolder(t.Context(), driveid.New("d"), "parent", "Existing")
 		return err
 	}, ErrConflict)
+}
+
+// Validates: R-1.5.2
+func TestCreateFolder_EmptySuccessBodyReadsBackCreatedFolder(t *testing.T) {
+	var listCalls atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.Method {
+		case http.MethodPost:
+			assert.Equal(t, "/drives/000000000000000d/items/parent/children", r.URL.Path)
+			w.WriteHeader(http.StatusOK)
+
+		case http.MethodGet:
+			assert.Equal(t, "/drives/000000000000000d/items/parent/children", r.URL.Path)
+			assert.Equal(t, "$top=200", r.URL.RawQuery)
+
+			call := listCalls.Add(1)
+			w.WriteHeader(http.StatusOK)
+			if call == 1 {
+				writeTestResponse(t, w, `{"value":[]}`)
+
+				return
+			}
+
+			writeTestResponse(t, w, `{
+				"value": [
+					{
+						"id": "new-folder-id",
+						"name": "New Folder",
+						"createdDateTime": "2024-06-01T12:00:00Z",
+						"lastModifiedDateTime": "2024-06-01T12:00:00Z",
+						"parentReference": {"id": "parent", "driveId": "d"},
+						"folder": {"childCount": 0}
+					}
+				]
+			}`)
+
+		default:
+			assert.Failf(t, "unexpected request", "method=%s path=%s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	client.createFolderReadbackPolicy = testRetryPolicy()
+
+	item, err := client.CreateFolder(t.Context(), driveid.New("d"), "parent", "New Folder")
+	require.NoError(t, err)
+	require.NotNil(t, item)
+	assert.Equal(t, int32(2), listCalls.Load())
+	assert.Equal(t, "new-folder-id", item.ID)
+	assert.Equal(t, "New Folder", item.Name)
+	assert.True(t, item.IsFolder)
+}
+
+func TestCreateFolder_EmptySuccessBodyReadbackFailure(t *testing.T) {
+	var listCalls atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.Method {
+		case http.MethodPost:
+			w.WriteHeader(http.StatusOK)
+
+		case http.MethodGet:
+			listCalls.Add(1)
+			w.WriteHeader(http.StatusOK)
+			writeTestResponse(t, w, `{"value":[]}`)
+
+		default:
+			assert.Failf(t, "unexpected request", "method=%s path=%s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	client.createFolderReadbackPolicy = testRetryPolicy()
+
+	item, err := client.CreateFolder(t.Context(), driveid.New("d"), "parent", "Missing Folder")
+	require.Error(t, err)
+	assert.Nil(t, item)
+	assert.Equal(t, int32(testRetryPolicy().MaxAttempts), listCalls.Load())
+	assert.ErrorContains(t, err, "create folder empty success response")
 }
 
 // --- MoveItem tests ---

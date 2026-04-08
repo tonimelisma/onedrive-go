@@ -54,17 +54,23 @@ func TestE2E_Sync_EmptyDirectory(t *testing.T) {
 	// Don't use --force: a fresh delta only lists existing items, so the
 	// deletion would be invisible. Incremental delta (with saved token) is
 	// required. Big-delete protection won't trigger (< 10 baseline items).
-	// Use runCLIWithConfigAllowError inside Eventually to prevent panic
-	// when the test times out (require.Eventually runs in a goroutine).
 	// Delta endpoint may lag 60-120s behind REST; use 180s to avoid flakes.
-	require.Eventually(t, func() bool {
-		_, _, syncErr := runCLIWithConfigAllowError(t, cfgPath, env, "sync", "--download-only")
-		if syncErr != nil {
-			return false
-		}
-		_, statErr := os.Stat(localDir)
-		return os.IsNotExist(statErr)
-	}, 180*time.Second, 5*time.Second, "empty folder should be deleted locally after remote delete")
+	requireSyncEventuallyConverges(
+		t,
+		cfgPath,
+		env,
+		180*time.Second,
+		"empty folder should be deleted locally after remote delete",
+		func(result syncAttemptResult) bool {
+			if result.Err != nil {
+				return false
+			}
+
+			_, statErr := os.Stat(localDir)
+			return os.IsNotExist(statErr)
+		},
+		"--download-only",
+	)
 }
 
 // TestE2E_Sync_NestedDeletion validates that deleting a deeply nested remote
@@ -103,19 +109,25 @@ func TestE2E_Sync_NestedDeletion(t *testing.T) {
 
 	// Delta endpoint may lag behind REST (ci_issues.md §17). Re-sync until
 	// delta catches up and the tree deletion propagates locally.
-	// Use runCLIWithConfigAllowError inside Eventually to prevent panic
-	// when the test times out (require.Eventually runs in a goroutine).
 	// With cascade expansion (sync-planning.md §Folder Delete Cascade),
 	// once delta reports the parent folder deletion, all children are
 	// deleted in a single pass — no need for multiple delta cycles.
-	require.Eventually(t, func() bool {
-		_, _, syncErr := runCLIWithConfigAllowError(t, cfgPath, env, "sync", "--download-only")
-		if syncErr != nil {
-			return false
-		}
-		_, statErr := os.Stat(filepath.Join(localDir, "a"))
-		return os.IsNotExist(statErr)
-	}, 120*time.Second, 5*time.Second, "a/ directory should be deleted locally after remote delete")
+	requireSyncEventuallyConverges(
+		t,
+		cfgPath,
+		env,
+		120*time.Second,
+		"a/ directory should be deleted locally after remote delete",
+		func(result syncAttemptResult) bool {
+			if result.Err != nil {
+				return false
+			}
+
+			_, statErr := os.Stat(filepath.Join(localDir, "a"))
+			return os.IsNotExist(statErr)
+		},
+		"--download-only",
+	)
 
 	// Verify entire local tree is gone.
 	_, err := os.Stat(filepath.Join(localDir, "a", "b", "c", "deep.txt"))

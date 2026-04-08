@@ -256,25 +256,8 @@ func (c *Client) Upload(
 	content io.ReaderAt, size int64, mtime time.Time, progress ProgressFunc,
 ) (*Item, error) {
 	if size <= SimpleUploadMaxSize {
-		r := io.NewSectionReader(content, 0, size)
-
-		item, err := c.SimpleUpload(ctx, driveID, parentID, name, r, size)
+		item, err := c.simpleUploadCreateByParent(ctx, driveID, parentID, name, content, size, mtime, progress)
 		if err != nil {
-			// Graph misreports some shared-folder create denials as 404 on the
-			// simple PUT /content route while the equivalent upload-session route
-			// returns the correct permission status. Retry that narrower case
-			// through createUploadSession so higher layers see the real outcome.
-			if size > 0 && errors.Is(err, ErrNotFound) {
-				c.logger.Warn("simple upload returned not found, retrying via upload session",
-					slog.String("drive_id", driveID.String()),
-					slog.String("parent_id", parentID),
-					slog.String("name", name),
-					slog.Int64("size", size),
-				)
-
-				return c.chunkedUploadEncapsulated(ctx, driveID, parentID, name, content, size, mtime, progress)
-			}
-
 			return nil, err
 		}
 
@@ -314,7 +297,13 @@ func (c *Client) finalizeSimpleUpload(
 	// request body. Post-upload PATCH preserves local mtime on the server,
 	// preventing mtime mismatch on the next sync pass.
 	if !mtime.IsZero() {
-		patched, patchErr := c.UpdateFileSystemInfo(ctx, driveID, item.ID, mtime)
+		patched, patchErr := doQuirkRetry(ctx, c, quirkRetrySpec{
+			name:   "simple-upload-mtime-transient-404",
+			policy: c.simpleUploadMtimePolicy,
+			match:  isTransientSimpleUploadMtimeError,
+		}, func() (*Item, error) {
+			return c.UpdateFileSystemInfo(ctx, driveID, item.ID, mtime)
+		})
 		if patchErr != nil {
 			return nil, fmt.Errorf("graph: setting mtime after simple upload: %w", patchErr)
 		}
@@ -323,6 +312,64 @@ func (c *Client) finalizeSimpleUpload(
 	}
 
 	return item, nil
+}
+
+func (c *Client) simpleUploadCreateByParent(
+	ctx context.Context,
+	driveID driveid.ID,
+	parentID string,
+	name string,
+	content io.ReaderAt,
+	size int64,
+	mtime time.Time,
+	progress ProgressFunc,
+) (*Item, error) {
+	item, err := c.SimpleUpload(ctx, driveID, parentID, name, io.NewSectionReader(content, 0, size), size)
+	if err == nil {
+		return item, nil
+	}
+
+	if size == 0 || !errors.Is(err, ErrNotFound) {
+		return nil, err
+	}
+
+	// Graph misreports some shared-folder create denials as 404 on the simple
+	// PUT /content route while the equivalent upload-session route returns the
+	// correct permission status. Retry that narrower case through
+	// createUploadSession so higher layers see the real outcome.
+	c.logger.Warn("simple upload returned not found, retrying via upload session",
+		slog.String("drive_id", driveID.String()),
+		slog.String("parent_id", parentID),
+		slog.String("name", name),
+		slog.Int64("size", size),
+	)
+
+	item, sessionErr := c.chunkedUploadEncapsulated(ctx, driveID, parentID, name, content, size, mtime, progress)
+	if sessionErr == nil || !errors.Is(sessionErr, ErrNotFound) {
+		return item, sessionErr
+	}
+
+	// Live full-suite coverage also shows the inverse ordering quirk: after the
+	// parent path is already readable, both the first simple upload and the
+	// follow-on createUploadSession can still report itemNotFound for a while.
+	// Once the session route has ruled out the shared-folder 403 case, replay
+	// the original simple upload under a slightly longer bounded create
+	// convergence budget tuned for the final create path, not the permission
+	// oracle.
+	c.logger.Warn("upload session create still returned not found, retrying simple upload",
+		slog.String("drive_id", driveID.String()),
+		slog.String("parent_id", parentID),
+		slog.String("name", name),
+		slog.Int64("size", size),
+	)
+
+	return doQuirkRetry(ctx, c, quirkRetrySpec{
+		name:   "simple-upload-create-transient-404",
+		policy: c.simpleUploadCreatePolicy,
+		match:  isTransientSimpleUploadCreateError,
+	}, func() (*Item, error) {
+		return c.SimpleUpload(ctx, driveID, parentID, name, io.NewSectionReader(content, 0, size), size)
+	})
 }
 
 // chunkedUploadEncapsulated creates an upload session, uploads all chunks,
