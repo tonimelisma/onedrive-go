@@ -1016,7 +1016,7 @@ func addSharedDriveByName(
 	}
 
 	readModel := newAccountReadModelService(cc)
-	snapshot, err := readModel.loadLenientCatalog(ctx)
+	snapshot, err := readModel.loadLenientCatalogWithBestEffortIdentityRefresh(ctx)
 	if err != nil {
 		return err
 	}

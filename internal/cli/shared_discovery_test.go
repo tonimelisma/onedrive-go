@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -88,16 +89,28 @@ func TestSharedDiscoveryService_DiscoverTargets_IgnoresNonActionableHits(t *test
 	assert.Empty(t, result.AccountsDegraded)
 }
 
-// Validates: R-3.6.5, R-3.6.6, R-3.6.7
-func TestSharedDiscoveryService_DiscoverTargets_ProbeFailureDoesNotBlockSearch(t *testing.T) {
+// Validates: R-3.6.6, R-3.6.7, R-3.7
+func TestSharedService_RunList_RefreshesIdentityOnceBeforeSharedDiscovery(t *testing.T) {
 	setTestDriveHome(t)
+	cid := driveid.MustCanonicalID("personal:user@example.com")
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
+	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
+		UserID:      "user-123",
+		DisplayName: "User Example",
+	}))
+
+	var meCalls atomic.Int32
+	var out bytes.Buffer
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case testGraphMePath:
-			w.WriteHeader(http.StatusInternalServerError)
-			writeTestResponse(t, w, `{"error":{"code":"generalException","message":"probe failed"}}`)
+			meCalls.Add(1)
+			writeTestResponse(t, w, `{
+				"id":"user-123",
+				"displayName":"User Example",
+				"mail":"user@example.com"
+			}`)
 		case testDriveSearchAllPath:
 			writeTestResponse(t, w, `{
 				"value": [{
@@ -125,26 +138,23 @@ func TestSharedDiscoveryService_DiscoverTargets_ProbeFailureDoesNotBlockSearch(t
 	defer srv.Close()
 
 	cc := &CLIContext{
+		Flags:        CLIFlags{JSON: true},
 		Logger:       testDriveLogger(t),
-		OutputWriter: &bytes.Buffer{},
-		StatusWriter: &bytes.Buffer{},
+		OutputWriter: &out,
+		StatusWriter: &out,
 		CfgPath:      filepath.Join(t.TempDir(), "config.toml"),
 		GraphBaseURL: srv.URL,
 	}
 
-	service := newSharedDiscoveryService(cc)
-	result := service.discoverTargets(t.Context(), []accountCatalogEntry{{
-		Email:                 "user@example.com",
-		DisplayName:           "User Example",
-		DriveType:             driveid.DriveTypePersonal,
-		RepresentativeTokenID: driveid.MustCanonicalID("personal:user@example.com"),
-		AuthHealth:            accountAuthHealth{State: authStateReady},
-	}})
+	require.NoError(t, newSharedService(cc).runList(context.Background()))
 
-	require.Len(t, result.Targets, 1)
-	assert.Equal(t, "Search Result", result.Targets[0].Name)
-	assert.Empty(t, result.AccountsRequiringAuth)
-	assert.Empty(t, result.AccountsDegraded)
+	var parsed sharedListJSONOutput
+	require.NoError(t, json.Unmarshal(out.Bytes(), &parsed))
+	require.Len(t, parsed.Items, 1)
+	assert.Equal(t, "Search Result", parsed.Items[0].Name)
+	assert.Equal(t, int32(1), meCalls.Load())
+	assert.Empty(t, parsed.AccountsRequiringAuth)
+	assert.Empty(t, parsed.AccountsDegraded)
 }
 
 // Validates: R-3.6.5, R-3.6.6, R-3.6.7
