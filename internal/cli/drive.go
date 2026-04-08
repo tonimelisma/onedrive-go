@@ -308,18 +308,6 @@ func discoverDrivesForToken(
 		entries = append(entries, spEntries...)
 	}
 
-	// Discover shared folders (all account types).
-	sharedEntries, sharedErr := discoverSharedDrives(ctx, client, cfg, email, logger)
-	if sharedErr != nil {
-		logger.Warn("degrading shared-item discovery after search failure",
-			"account", tokenCID.String(),
-			"error", sharedErr,
-		)
-		degraded = append(degraded, tokenSharedDiscoveryDegradedNotice(catalog, tokenCID, logger))
-	} else {
-		entries = append(entries, sharedEntries...)
-	}
-
 	return entries, nil, degraded
 }
 
@@ -374,20 +362,6 @@ func tokenDriveCatalogDegradedNotice(
 
 	displayName, _ := readAccountMeta(tokenCID.Email(), []driveid.CanonicalID{tokenCID}, logger)
 	return driveCatalogDegradedNotice(tokenCID.Email(), displayName, tokenCID.DriveType())
-}
-
-func tokenSharedDiscoveryDegradedNotice(
-	catalog []accountCatalogEntry,
-	tokenCID driveid.CanonicalID,
-	logger *slog.Logger,
-) accountDegradedNotice {
-	entry, found := catalogEntryByEmail(catalog, tokenCID.Email())
-	if found {
-		return sharedDiscoveryDegradedNotice(entry.Email, entry.DisplayName, entry.DriveType)
-	}
-
-	displayName, _ := readAccountMeta(tokenCID.Email(), []driveid.CanonicalID{tokenCID}, logger)
-	return sharedDiscoveryDegradedNotice(tokenCID.Email(), displayName, tokenCID.DriveType())
 }
 
 func appendAvailableCatalogDrive(
@@ -514,233 +488,24 @@ func discoverSharePointDrives(
 	return entries
 }
 
-// discoverSharedDrives discovers shared folders using best-effort live search.
-func discoverSharedDrives(
-	ctx context.Context, client *graph.Client, cfg *config.Config, email string, logger *slog.Logger,
-) ([]driveListEntry, error) {
-	items, err := searchSharedItems(ctx, client, email, logger)
-	if err != nil {
-		return nil, err
-	}
-
-	folders := filterSharedFolders(ctx, client, items, cfg, email, logger)
-
-	return sharedFoldersToEntries(folders), nil
-}
-
-// sharedFolderInfo holds a validated shared folder ready for use.
-type sharedFolderInfo struct {
-	cid         driveid.CanonicalID
-	item        *graph.Item // may be enriched with identity
-	displayName string
-}
-
 // sharedFoldersToEntries converts validated shared folders to drive list entries.
 func sharedFoldersToEntries(folders []sharedFolderInfo) []driveListEntry {
 	entries := make([]driveListEntry, 0, len(folders))
 
-	for _, f := range folders {
+	for i := range folders {
+		f := &folders[i]
 		entries = append(entries, driveListEntry{
 			CanonicalID: f.cid.String(),
 			DisplayName: f.displayName,
 			State:       "available",
 			Source:      "available",
-			OwnerName:   f.item.SharedOwnerName,
-			OwnerEmail:  f.item.SharedOwnerEmail,
+			OwnerName:   f.target.SharedByName,
+			OwnerEmail:  f.target.SharedByEmail,
 			parsedCID:   f.cid,
 		})
 	}
 
 	return entries
-}
-
-// candidateSharedFolder holds a filtered shared item pending enrichment.
-type candidateSharedFolder struct {
-	cid  driveid.CanonicalID
-	item *graph.Item
-}
-
-// filterSharedFolders applies common filtering to shared items: folders only,
-// valid remote references, not already configured, identity enrichment
-// (parallelized), and display name derivation with collision tracking.
-func filterSharedFolders(
-	ctx context.Context, client *graph.Client, items []graph.Item,
-	cfg *config.Config, email string, logger *slog.Logger,
-) []sharedFolderInfo {
-	// Phase 1: Filter — identify valid shared folders.
-	var candidates []candidateSharedFolder
-
-	for i := range items {
-		item := &items[i]
-
-		if !item.IsFolder || item.RemoteDriveID == "" || item.RemoteItemID == "" {
-			continue
-		}
-
-		cid, cidErr := driveid.ConstructShared(email, item.RemoteDriveID, item.RemoteItemID)
-		if cidErr != nil {
-			continue
-		}
-
-		if _, exists := cfg.Drives[cid]; exists {
-			continue
-		}
-
-		candidates = append(candidates, candidateSharedFolder{cid: cid, item: item})
-	}
-
-	// Phase 2: Enrich — parallel identity resolution (up to 5 concurrent).
-	const enrichConcurrency = 5
-
-	var wg sync.WaitGroup
-	sema := make(chan struct{}, enrichConcurrency)
-
-launchEnrichment:
-	for i := range candidates {
-		item := candidates[i].item
-
-		select {
-		case sema <- struct{}{}:
-		case <-ctx.Done():
-			break launchEnrichment
-		}
-
-		wg.Add(1)
-		go func(item *graph.Item) {
-			defer wg.Done()
-			defer func() {
-				<-sema
-			}()
-
-			enrichSharedItem(ctx, client, item, logger)
-		}(item)
-	}
-
-	wg.Wait()
-
-	// Phase 3: Name — sequential display name derivation with collision tracking.
-	var folders []sharedFolderInfo
-
-	existingNames := make(map[string]bool)
-
-	for _, c := range candidates {
-		displayName := deriveSharedDisplayName(c.item, existingNames)
-
-		existingNames[displayName] = true
-
-		folders = append(folders, sharedFolderInfo{
-			cid:         c.cid,
-			item:        c.item,
-			displayName: displayName,
-		})
-	}
-
-	return folders
-}
-
-// enrichSharedItem fills in missing identity fields by fetching the item
-// directly via GET /drives/{driveId}/items/{itemId}. Search results lack
-// owner email; direct access provides it. Falls back to the original item
-// if the enrichment call fails.
-func enrichSharedItem(
-	ctx context.Context, client *graph.Client, item *graph.Item, logger *slog.Logger,
-) {
-	if item.SharedOwnerEmail != "" {
-		return // already has full identity
-	}
-
-	if item.RemoteDriveID == "" || item.RemoteItemID == "" {
-		return
-	}
-
-	enriched, err := client.GetItem(ctx, driveid.New(item.RemoteDriveID), item.RemoteItemID)
-	if err != nil {
-		logger.Debug("could not enrich shared item identity",
-			"name", item.Name, "error", err)
-
-		return
-	}
-
-	// Merge enriched identity into original item (keep original metadata).
-	if enriched.SharedOwnerName != "" {
-		item.SharedOwnerName = enriched.SharedOwnerName
-	}
-
-	if enriched.SharedOwnerEmail != "" {
-		item.SharedOwnerEmail = enriched.SharedOwnerEmail
-	}
-}
-
-// deriveSharedDisplayName builds a human-friendly name for a shared folder.
-// Use escalating owner identity detail so shared-folder names stay readable
-// without sacrificing uniqueness:
-//  1. "{FirstName}'s {FolderName}" — if unique
-//  2. "{FullName}'s {FolderName}" — if step 1 collides
-//  3. "{FullName}'s {FolderName} ({email})" — if step 2 collides
-//
-// When owner identity is still unavailable after direct item enrichment, fall
-// back to a deterministic remote-ID label instead of dropping a usable share.
-// Pass nil for existingNames when listing.
-func deriveSharedDisplayName(item *graph.Item, existingNames map[string]bool) string {
-	folderName := strings.TrimSpace(item.Name)
-	if folderName == "" {
-		folderName = fallbackSharedItemName
-	}
-
-	if item.SharedOwnerName == "" && item.SharedOwnerEmail == "" {
-		return firstAvailableSharedDisplayName(existingNames,
-			sharedRemoteIdentityDisplayName(item, folderName),
-		)
-	}
-
-	if item.SharedOwnerName == "" {
-		return firstAvailableSharedDisplayName(existingNames,
-			fmt.Sprintf("%s (shared by %s)", folderName, item.SharedOwnerEmail),
-			sharedRemoteIdentityDisplayName(item, folderName),
-		)
-	}
-
-	firstName := extractFirstName(item.SharedOwnerName)
-	candidates := []string{
-		fmt.Sprintf("%s's %s", firstName, folderName),
-		fmt.Sprintf("%s's %s", item.SharedOwnerName, folderName),
-	}
-	if item.SharedOwnerEmail != "" {
-		candidates = append(candidates, fmt.Sprintf("%s's %s (%s)", item.SharedOwnerName, folderName, item.SharedOwnerEmail))
-	}
-	candidates = append(candidates, sharedRemoteIdentityDisplayName(item, folderName))
-
-	return firstAvailableSharedDisplayName(existingNames, candidates...)
-}
-
-// extractFirstName returns the first space-separated token from a full name.
-func extractFirstName(fullName string) string {
-	if i := strings.Index(fullName, " "); i > 0 {
-		return fullName[:i]
-	}
-
-	return fullName
-}
-
-func firstAvailableSharedDisplayName(existingNames map[string]bool, candidates ...string) string {
-	for _, candidate := range candidates {
-		if candidate == "" {
-			continue
-		}
-		if existingNames == nil || !existingNames[candidate] {
-			return candidate
-		}
-	}
-
-	return fallbackSharedItemName
-}
-
-func sharedRemoteIdentityDisplayName(item *graph.Item, fallbackName string) string {
-	if item.RemoteDriveID == "" || item.RemoteItemID == "" {
-		return fallbackName
-	}
-
-	return fmt.Sprintf("%s (shared %s:%s)", fallbackName, item.RemoteDriveID, item.RemoteItemID)
 }
 
 // driveListJSONOutput is the structured JSON schema for drive list output.
@@ -1179,7 +944,13 @@ func resolveSharedDisplayName(
 	item.RemoteDriveID = cid.SourceDriveID()
 	item.RemoteItemID = cid.SourceItemID()
 
-	return deriveSharedDisplayName(item, existingNames), nil
+	return deriveSharedDisplayName(sharedDisplayInput{
+		Name:          item.Name,
+		SharedByName:  item.SharedOwnerName,
+		SharedByEmail: item.SharedOwnerEmail,
+		RemoteDriveID: item.RemoteDriveID,
+		RemoteItemID:  item.RemoteItemID,
+	}, existingNames), nil
 }
 
 // collectExistingDisplayNames gathers all configured drive display names
@@ -1199,62 +970,85 @@ func collectExistingDisplayNames(cfg *config.Config) map[string]bool {
 	return names
 }
 
-// sharedMatch holds a shared folder that matched a search term.
-type sharedMatch struct {
-	cid         driveid.CanonicalID
-	displayName string
-	ownerEmail  string
-	tokenEmail  string // account that discovered this match
-}
+func sharedDiscoveryNoMatchesError(
+	selector string,
+	authRequired []accountAuthRequirement,
+	degraded []accountDegradedNotice,
+) error {
+	var buf strings.Builder
 
-func sharedDiscoveryNoMatchesError(selector string) error {
-	return fmt.Errorf(
+	if len(authRequired) > 0 {
+		if err := printAccountAuthRequirementsText(&buf, "Authentication required:", authRequired); err != nil {
+			return fmt.Errorf("render auth-required shared discovery error: %w", err)
+		}
+		_, _ = buf.WriteString("\n")
+	}
+
+	if len(degraded) > 0 {
+		if err := printAccountDegradedText(&buf, "Accounts with degraded shared discovery:", degraded); err != nil {
+			return fmt.Errorf("render degraded shared discovery error: %w", err)
+		}
+		_, _ = buf.WriteString("\n")
+	}
+
+	_, _ = fmt.Fprintf(
+		&buf,
 		"no shared folders matching %q found — Graph shared discovery also checks external shares, "+
 			"but Microsoft can still omit some cross-org items; if you have the original share URL, "+
 			"run 'onedrive-go drive add <share-url>' to bypass discovery, or use 'onedrive-go shared' "+
 			"or 'onedrive-go drive list' to confirm what the API exposed",
 		selector,
 	)
+
+	return fmt.Errorf("%s", strings.TrimSpace(buf.String()))
 }
 
 // addSharedDriveByName searches discovered shared folders for a match against
 // the given search term (case-insensitive substring match against folder name
 // and derived display name). Single match -> add. Multiple -> show list.
 func addSharedDriveByName(
-	ctx context.Context, selector, cfgPath string, w io.Writer, logger *slog.Logger, httpProvider *graphhttp.Provider,
+	ctx context.Context, cc *CLIContext, selector string,
 ) error {
-	cfg, err := config.LoadOrDefault(cfgPath, logger)
+	logger := cc.Logger
+	cfg, err := config.LoadOrDefault(cc.CfgPath, logger)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	matches := searchSharedDrives(ctx, cfg, selector, logger, httpProvider)
+	readModel := newAccountReadModelService(cc)
+	snapshot, err := readModel.loadLenientCatalog(ctx)
+	if err != nil {
+		return err
+	}
+
+	discovery := newSharedDiscoveryService(cc).discoverTargets(ctx, snapshot.Catalog)
+	matches := searchSharedDrives(selector, projectSharedFolders(cfg, discovery.Targets))
 
 	switch len(matches) {
 	case 0:
-		return sharedDiscoveryNoMatchesError(selector)
+		return sharedDiscoveryNoMatchesError(selector, discovery.AccountsRequiringAuth, discovery.AccountsDegraded)
 
 	case 1:
-		return addSharedDrive(ctx, cfgPath, w, matches[0].cid, matches[0].displayName, logger, httpProvider)
+		return addSharedDrive(ctx, cc.CfgPath, cc.Output(), matches[0].cid, matches[0].displayName, logger, cc.httpProvider())
 
 	default:
-		if err := writef(w, "Multiple shared folders match %q — be more specific:\n\n", selector); err != nil {
+		if err := writef(cc.Output(), "Multiple shared folders match %q — be more specific:\n\n", selector); err != nil {
 			return err
 		}
 
 		for i := range matches {
 			ownerInfo := ""
-			if matches[i].ownerEmail != "" {
-				ownerInfo = fmt.Sprintf(" (shared by %s)", matches[i].ownerEmail)
+			if matches[i].target.SharedByEmail != "" {
+				ownerInfo = fmt.Sprintf(" (shared by %s)", matches[i].target.SharedByEmail)
 			}
 
 			viaInfo := ""
-			if matches[i].tokenEmail != "" {
-				viaInfo = fmt.Sprintf(" [via %s]", matches[i].tokenEmail)
+			if matches[i].target.AccountEmail != "" {
+				viaInfo = fmt.Sprintf(" [via %s]", matches[i].target.AccountEmail)
 			}
 
 			if err := writef(
-				w,
+				cc.Output(),
 				"  %d. %s%s%s\n     %s\n",
 				i+1,
 				matches[i].displayName,
@@ -1266,103 +1060,25 @@ func addSharedDriveByName(
 			}
 		}
 
-		return writeln(w, "\nRun 'onedrive-go drive add <canonical-id>' to add a specific drive.")
+		return writeln(cc.Output(), "\nRun 'onedrive-go drive add <canonical-id>' to add a specific drive.")
 	}
 }
 
-// searchSharedDrives queries all tokens for shared folders matching selector
-// using best-effort live search plus direct item enrichment.
-func searchSharedDrives(
-	ctx context.Context, cfg *config.Config, selector string, logger *slog.Logger, httpProvider *graphhttp.Provider,
-) []sharedMatch {
-	tokens := config.DiscoverTokens(logger)
+// searchSharedDrives filters discovered shared folders against the user query.
+func searchSharedDrives(selector string, folders []sharedFolderInfo) []sharedFolderInfo {
 	lowerSelector := strings.ToLower(selector)
+	var matches []sharedFolderInfo
 
-	var matches []sharedMatch
-
-	for _, tokenCID := range tokens {
-		tokenPath := config.DriveTokenPath(tokenCID)
-		if tokenPath == "" {
+	for i := range folders {
+		if !strings.Contains(strings.ToLower(folders[i].target.Name), lowerSelector) &&
+			!strings.Contains(strings.ToLower(folders[i].displayName), lowerSelector) {
 			continue
 		}
 
-		ts, tsErr := graph.TokenSourceFromPath(ctx, tokenPath, logger)
-		if tsErr != nil {
-			continue
-		}
-
-		client, clientErr := newGraphClientWithHTTP(
-			"",
-			httpProvider.BootstrapMeta(),
-			ts,
-			logger,
-		)
-		if clientErr != nil {
-			continue
-		}
-		email := tokenCID.Email()
-
-		items, searchErr := searchSharedItems(ctx, client, email, logger)
-		if searchErr != nil {
-			logger.Debug("shared search failed for token",
-				"email", email,
-				"error", searchErr,
-			)
-			continue
-		}
-
-		folders := filterSharedFolders(ctx, client, items, cfg, email, logger)
-
-		for _, f := range folders {
-			if !strings.Contains(strings.ToLower(f.item.Name), lowerSelector) &&
-				!strings.Contains(strings.ToLower(f.displayName), lowerSelector) {
-				continue
-			}
-
-			matches = append(matches, sharedMatch{
-				cid:         f.cid,
-				displayName: f.displayName,
-				ownerEmail:  f.item.SharedOwnerEmail,
-				tokenEmail:  email,
-			})
-		}
+		matches = append(matches, folders[i])
 	}
 
 	return matches
-}
-
-// searchSharedItems returns best-effort shared discovery results from the
-// non-deprecated drive search endpoint. Results without actionable remote
-// identity are never promoted into selectors or drive entries.
-func searchSharedItems(
-	ctx context.Context, client *graph.Client, email string, logger *slog.Logger,
-) ([]graph.Item, error) {
-	items, err := client.SearchDriveItems(ctx, "*")
-	if err != nil {
-		return nil, fmt.Errorf("search shared items: %w", err)
-	}
-
-	ignoredCount := 0
-	actionableCount := 0
-	for i := range items {
-		if items[i].RemoteDriveID == "" || items[i].RemoteItemID == "" {
-			ignoredCount++
-			continue
-		}
-
-		actionableCount++
-	}
-
-	if ignoredCount > 0 {
-		logger.Debug("shared discovery ignored search results without actionable remote identity",
-			"email", email,
-			"ignored_count", ignoredCount,
-			"actionable_count", actionableCount,
-			"search_count", len(items),
-		)
-	}
-
-	return items, nil
 }
 
 // --- drive remove ---

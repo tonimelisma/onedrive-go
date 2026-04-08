@@ -110,6 +110,67 @@ func TestE2E_Shared_RawFolderLinkDriveAdd_NormalizesToCanonicalSharedDrive(t *te
 	assert.True(t, found, "drive add <raw-share-url> should normalize to the canonical writable shared-folder selector")
 }
 
+// Validates: R-3.3.6
+func TestE2E_Shared_FolderNameDriveAdd_HonorsAccountFilter(t *testing.T) {
+	registerLogDump(t)
+
+	folderFixture := resolveSharedFolderFixture(t, liveConfig.Fixtures.WritableSharedFolderSelector)
+	if folderFixture.FolderItem.Name == "" {
+		t.Skip("writable shared-folder fixture is not currently discoverable by name from live shared listing")
+	}
+
+	cfgPath, env := writeSyncConfigForDriveID(t, folderFixture.RecipientDriveID, t.TempDir())
+
+	stdout, _ := pollCLIWithConfigRetryingTransientGraphFailures(
+		t,
+		cfgPath,
+		env,
+		"",
+		transientGraphRetryTimeout,
+		"--account",
+		folderFixture.RecipientEmail,
+		"shared",
+		"--json",
+	)
+
+	var listing sharedListE2EOutput
+	require.NoError(t, json.Unmarshal([]byte(stdout), &listing))
+
+	var discoverable bool
+	for i := range listing.Items {
+		if listing.Items[i].Type != "folder" {
+			continue
+		}
+		if listing.Items[i].RemoteDriveID != folderFixture.FolderItem.RemoteDriveID {
+			continue
+		}
+		if listing.Items[i].RemoteItemID != folderFixture.FolderItem.RemoteItemID {
+			continue
+		}
+
+		discoverable = true
+		break
+	}
+	if !discoverable {
+		t.Skip("live shared discovery did not expose the writable shared-folder fixture by name on this run")
+	}
+
+	runCLIWithoutDrive(t, cfgPath, env, "--account", folderFixture.RecipientEmail, "drive", "add", folderFixture.FolderItem.Name)
+
+	stdout, _ = runCLIWithoutDrive(t, cfgPath, env, "drive", "list", "--json")
+	var parsed driveListE2EOutput
+	require.NoError(t, json.Unmarshal([]byte(stdout), &parsed))
+
+	var found bool
+	for i := range parsed.Configured {
+		if parsed.Configured[i].CanonicalID == folderFixture.FolderItem.Selector {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "drive add <shared-folder-name> with --account should configure the fixture by canonical selector identity")
+}
+
 // Validates: R-3.6.6, R-3.3.5, R-2.14.2, R-2.14.3, R-2.14.4
 func TestE2E_Shared_ReadOnlyFolder_DiscoveryDriveAddAndBlockedWriteUX(t *testing.T) {
 	registerLogDump(t)

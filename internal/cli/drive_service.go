@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
@@ -56,11 +58,16 @@ func (s *driveService) runList(ctx context.Context, showAll bool) error {
 		s.cc.GraphBaseURL,
 		s.cc.httpProvider(),
 	)
+	sharedDiscovery := newSharedDiscoveryService(s.cc).discoverTargets(ctx, snapshot.Catalog)
+	available = append(available, sharedFoldersToEntries(projectSharedFolders(snapshot.Config, sharedDiscovery.Targets))...)
+	slices.SortFunc(available, func(a, b driveListEntry) int {
+		return cmp.Compare(a.CanonicalID, b.CanonicalID)
+	})
 	annotateStateDB(available)
 	authRequired := mergeAuthRequirements(readModel.authRequirements(snapshot, func(entry accountCatalogEntry) bool {
 		return true
-	}), discoveredAuthRequired)
-	degraded := mergeDegradedNotices(discoveredDegraded)
+	}), discoveredAuthRequired, sharedDiscovery.AccountsRequiringAuth)
+	degraded := mergeDegradedNotices(discoveredDegraded, sharedDiscovery.AccountsDegraded)
 
 	if s.cc.Flags.JSON {
 		return printDriveListJSON(s.cc.Output(), configured, available, authRequired, degraded)
@@ -113,7 +120,7 @@ func (s *driveService) runAdd(ctx context.Context, args []string) error {
 				"Run 'onedrive-go drive list' to see valid canonical IDs", selector, err)
 		}
 
-		return addSharedDriveByName(ctx, selector, s.cc.CfgPath, s.cc.Output(), logger, s.cc.httpProvider())
+		return addSharedDriveByName(ctx, s.cc, selector)
 	}
 
 	if cid.IsShared() {
