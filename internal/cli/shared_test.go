@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sharedref"
 )
 
@@ -79,7 +80,7 @@ func TestSharedService_RunList_JSON(t *testing.T) {
 				"shared": {"owner": {"user": {"email": "bob@example.com", "displayName": "Bob"}}}
 			}`)
 		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
+			assert.Failf(t, "unexpected path", "path=%s", r.URL.Path)
 		}
 	}))
 	defer srv.Close()
@@ -101,6 +102,7 @@ func TestSharedService_RunList_JSON(t *testing.T) {
 	require.NoError(t, json.Unmarshal(out.Bytes(), &parsed))
 	require.Len(t, parsed.Items, 2)
 	assert.Empty(t, parsed.AccountsRequiringAuth)
+	assert.Empty(t, parsed.AccountsDegraded)
 
 	assert.Equal(t, "shared:user@example.com:b!drive1234567891:source-item-file", parsed.Items[0].Selector)
 	assert.Equal(t, "file", parsed.Items[0].Type)
@@ -112,7 +114,7 @@ func TestSharedService_RunList_JSON(t *testing.T) {
 }
 
 // Validates: R-3.6.4, R-3.6.6, R-3.6.7
-func TestSharedService_RunList_JSONBackfillsIdentityFromSharedWithMe(t *testing.T) {
+func TestSharedService_RunList_JSONKeepsOwnerIdentityEmptyWhenEnrichmentFails(t *testing.T) {
 	setTestDriveHome(t)
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
 
@@ -136,31 +138,8 @@ func TestSharedService_RunList_JSONBackfillsIdentityFromSharedWithMe(t *testing.
 		case testSharedFolderGetItemPath:
 			w.WriteHeader(http.StatusNotFound)
 			writeTestResponse(t, w, `{"error":{"code":"itemNotFound","message":"not found"}}`)
-		case testSharedWithMePath:
-			w.Header().Set("Content-Type", "application/json")
-			writeTestResponse(t, w, `{
-				"value": [
-					{
-						"id": "local-shortcut-1",
-						"name": "Shared Folder",
-						"folder": {"childCount": 3},
-						"remoteItem": {
-							"id": "source-item-folder",
-							"parentReference": {"driveId": "b!drive1234567890"}
-						},
-						"shared": {
-							"owner": {
-								"user": {
-									"email": "alice@example.com",
-									"displayName": "Alice Example"
-								}
-							}
-						}
-					}
-				]
-			}`)
 		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
+			assert.Failf(t, "unexpected path", "path=%s", r.URL.Path)
 		}
 	}))
 	defer srv.Close()
@@ -181,8 +160,67 @@ func TestSharedService_RunList_JSONBackfillsIdentityFromSharedWithMe(t *testing.
 	var parsed sharedListJSONOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &parsed))
 	require.Len(t, parsed.Items, 1)
-	assert.Equal(t, "alice@example.com", parsed.Items[0].SharedByEmail)
-	assert.Equal(t, "Alice Example", parsed.Items[0].SharedByName)
+	assert.Empty(t, parsed.Items[0].SharedByEmail)
+	assert.Empty(t, parsed.Items[0].SharedByName)
+	assert.Empty(t, parsed.AccountsDegraded)
+}
+
+// Validates: R-3.6.5, R-3.6.7
+func TestSharedService_RunList_JSONIncludesDegradedAccountWhenSearchFails(t *testing.T) {
+	setTestDriveHome(t)
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case testDriveSearchAllPath:
+			w.WriteHeader(http.StatusForbidden)
+			writeTestResponse(t, w, `{"error":{"code":"accessDenied","message":"search unavailable"}}`)
+		default:
+			assert.Failf(t, "unexpected path", "path=%s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	cc := &CLIContext{
+		Flags:        CLIFlags{JSON: true},
+		Logger:       testDriveLogger(t),
+		OutputWriter: &out,
+		StatusWriter: &out,
+		CfgPath:      config.DefaultConfigPath(),
+		GraphBaseURL: srv.URL,
+	}
+
+	err := newSharedService(cc).runList(context.Background())
+	require.NoError(t, err)
+
+	var parsed sharedListJSONOutput
+	require.NoError(t, json.Unmarshal(out.Bytes(), &parsed))
+	assert.Empty(t, parsed.Items)
+	assert.Empty(t, parsed.AccountsRequiringAuth)
+	require.Len(t, parsed.AccountsDegraded, 1)
+	assert.Equal(t, "user@example.com", parsed.AccountsDegraded[0].Email)
+	assert.Equal(t, sharedDiscoveryUnavailableReason, parsed.AccountsDegraded[0].Reason)
+}
+
+func TestPrintSharedText_UsesUnknownOwnerAndShowsDegradedSection(t *testing.T) {
+	var out bytes.Buffer
+
+	err := printSharedText(&out, []sharedListItem{{
+		Selector:     "shared:user@example.com:drive:item",
+		Type:         "folder",
+		Name:         "Shared Folder",
+		AccountEmail: "user@example.com",
+		ModifiedAt:   "2024-01-01T00:00:00Z",
+	}}, nil, []accountDegradedNotice{
+		sharedDiscoveryDegradedNotice("user@example.com", "User", driveid.DriveTypePersonal),
+	})
+	require.NoError(t, err)
+
+	text := out.String()
+	assert.Contains(t, text, "unknown")
+	assert.Contains(t, text, "Accounts with degraded shared discovery:")
+	assert.Contains(t, text, degradedReasonText(sharedDiscoveryUnavailableReason))
 }
 
 // Validates: R-3.3.12

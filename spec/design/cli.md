@@ -219,13 +219,18 @@ All commands with `--json` support use extracted `printXxxJSON(w io.Writer, out 
 
 Timestamp presentation follows one rule across command families: zero `time.Time` means "unknown". Human-readable output renders that as `unknown`; JSON output emits an empty string instead of a fabricated RFC3339 value or Go's year-0001 zero timestamp.
 
-`whoami` and `drive list` each expose two separate account-warning arrays in
+`whoami`, `drive list`, and `shared` expose account-warning arrays in
 JSON output:
 
 - `accounts_requiring_auth`: missing or invalid saved login, or persisted
   sync-time `auth:account` rejection
-- `accounts_degraded`: authenticated account whose live drive catalog could not
-  be fully discovered after `/me/drives` retry exhaustion
+- `accounts_degraded`: authenticated account whose live discovery could not be
+  fully completed after the owning command exhausted its bounded recovery path
+
+For `whoami` and `drive list`, `accounts_degraded` currently means
+`drive_catalog_unavailable` after `/me/drives` retry exhaustion. For `shared`,
+it means `shared_discovery_unavailable` after live shared-item search fails for
+an authenticated account.
 
 Human-readable output mirrors that split with separate
 `Accounts requiring authentication:` and `Accounts with degraded live discovery:`

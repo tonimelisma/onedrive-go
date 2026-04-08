@@ -388,17 +388,18 @@ throttling decisions across file operations.
 
 ### External Shared Discovery Is Best-Effort, Not Guaranteed
 
-Microsoft Graph's deprecated `sharedWithMe` endpoint accepts
-`allowexternal=true`, and the client now uses that flag whenever it falls back
-from search-based shared discovery. This improves cross-organization discovery,
-but it is still not a guarantee that every external shared folder appears.
+Microsoft Graph shared discovery remains incomplete for some external and
+cross-organization shares even on the supported search surface. A successful
+live search is not proof that every share is currently visible.
 
 Runtime policy:
-- shared discovery remains search-first
-- fallback uses `GET /me/drive/sharedWithMe?allowexternal=true`
-- if search plus external-aware fallback still produce no matching shared
-  folder, the CLI explains that Graph omitted the item and points the user at
-  `shared` / `drive list` to confirm what the API exposed
+- shared discovery uses `GET /me/drive/root/search(q='*')` only
+- actionable results must expose both `remoteDriveID` and `remoteItemID`
+- if live search succeeds but still omits a shared folder, the CLI explains
+  that Graph omitted the item and points the user at `shared` / `drive list`
+  to confirm what the API exposed
+- if live search itself fails for an authenticated account, callers surface a
+  degraded discovery notice instead of silently omitting the account
 
 This is a documented platform-limit explanation, not evidence that all
 cross-org shares are categorically invisible.
@@ -429,10 +430,10 @@ Runtime policy:
 ### Share Links Resolve To Underlying Item Identity, Not Original Discovery Links
 
 `/shares/{shareIdOrEncodedSharingUrl}/driveItem` resolves a sharing grant to the
-underlying owner-side item identity (`driveId` + `itemId`). Discovery APIs such
-as shared-item search and `sharedWithMe` do not reliably return the original
-email/text share URL that was sent to the recipient, and `driveItem.webUrl` is
-not a substitute for that original inbound sharing link.
+underlying owner-side item identity (`driveId` + `itemId`). Shared-item search
+does not reliably return the original email/text share URL that was sent to the
+recipient, and `driveItem.webUrl` is not a substitute for that original inbound
+sharing link.
 
 Runtime policy:
 - raw share URLs are accepted as input aliases and normalized immediately to
@@ -478,34 +479,39 @@ Runtime policy:
 - if the request still fails after the quirk budget, the upload returns the
   final error without pretending the parent exists
 
-### SharedWithMe Identity Response Shape
+### Shared-Item Identity Response Shape
 
-`/me/drive/sharedWithMe` returns identity data under `remoteItem.shared` and `remoteItem.createdBy`, NOT top-level `shared`. Four-level fallback chain: `remoteItem.shared.sharedBy` → `.owner` → `remoteItem.createdBy` → top-level `shared.owner`. The `email` field in identity responses is undocumented but works on both personal and business accounts.
+Graph shared-item identity is most reliably present under `remoteItem.shared`
+and `remoteItem.createdBy`, not top-level `shared`. Four-level fallback chain:
+`remoteItem.shared.sharedBy` → `.owner` → `remoteItem.createdBy` →
+top-level `shared.owner`. The `email` field in identity responses is
+undocumented but works on both personal and business accounts.
 
 ### SharedWithMe API Deprecation
 
-`/me/drive/sharedWithMe` and `/me/drive/recent` are deprecated (November 2026 EOL). Non-deprecated alternative: `GET /me/drive/search(q='*')` returns shared items with `remoteItem` facet but less identity data (no email). Enrich via `GET /drives/{driveId}/items/{itemId}`. `/me/drives` is NOT deprecated.
+`/me/drive/sharedWithMe` and `/me/drive/recent` are deprecated (November 2026
+EOL). The client no longer uses `sharedWithMe`. Supported discovery uses
+`GET /me/drive/root/search(q='*')`, which can return shared items with a
+`remoteItem` facet but less identity data. Enrich actionable results via
+`GET /drives/{driveId}/items/{itemId}`. `/me/drives` is NOT deprecated.
 
 Observed runtime quirk on Personal accounts: `search(q='*')` can return
-success with ordinary drive items but no usable shared-item identities even
-when `sharedWithMe` still returns shared folders/files for the same recipient.
-Runtime policy: use search first, but fall back to `sharedWithMe` whenever
-search yields no items with both `remoteDriveID` and `remoteItemID`.
+success with ordinary drive items but no usable shared-item identities. Runtime
+policy: keep search as a best-effort surface, never fabricate selectors for
+hits without `remoteDriveID` + `remoteItemID`, and degrade the account only
+when the live search request itself fails.
 
 ### Cross-Organization Shared Discovery Remains Partial (Business)
 
 The stale blanket claim that business cross-organization shares are
-categorically invisible is too strong. The client now uses
-`GET /me/drive/sharedWithMe?allowexternal=true` on fallback, which improves
-external discovery, but there is still no proof that Graph reliably exposes
-every external shared folder in every tenant configuration.
+categorically invisible is too strong, but there is still no proof that Graph
+reliably exposes every external shared folder in every tenant configuration.
 
 Runtime policy:
 - treat external shared discovery as best-effort, not guaranteed
-- keep search as the primary discovery path
-- use `sharedWithMe?allowexternal=true` as fallback
-- if both surfaces still omit the share, explain the platform limitation rather
-  than claiming the folder is absent or misconfiguring the account
+- use `GET /me/drive/root/search(q='*')` as the only runtime discovery surface
+- if search still omits the share, explain the platform limitation rather than
+  claiming the folder is absent or misconfiguring the account
 
 ### Folder-Scoped Delta Limitation
 

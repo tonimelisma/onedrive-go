@@ -30,7 +30,12 @@ type sharedItemE2E struct {
 }
 
 type sharedListE2EOutput struct {
-	Items []sharedItemE2E `json:"items"`
+	Items            []sharedItemE2E `json:"items"`
+	AccountsDegraded []struct {
+		Email     string `json:"email"`
+		Reason    string `json:"reason"`
+		DriveType string `json:"drive_type"`
+	} `json:"accounts_degraded"`
 }
 
 type sharedStatE2EOutput struct {
@@ -106,12 +111,17 @@ func resolveSharedFileFixture(t *testing.T, rawLink string) resolvedSharedFileFi
 }
 
 func discoverSharedFileFixture(_ *testing.T, rawLink string) (resolvedSharedFileFixture, error) {
+	type sharedFileCandidate struct {
+		fixture        resolvedSharedFileFixture
+		listingMatched bool
+	}
+
 	candidateDriveIDs := sharedFixtureCandidateDriveIDs()
 	if len(candidateDriveIDs) == 0 {
 		return resolvedSharedFileFixture{}, fmt.Errorf("shared-file fixture requires at least one configured drive candidate")
 	}
 
-	var matches []resolvedSharedFileFixture
+	var candidates []sharedFileCandidate
 	for _, candidateDriveID := range candidateDriveIDs {
 		cfgPath, env, cleanup, err := writeFixtureConfigForDriveID(candidateDriveID)
 		if err != nil {
@@ -147,36 +157,69 @@ func discoverSharedFileFixture(_ *testing.T, rawLink string) (resolvedSharedFile
 				err,
 			)
 		}
+		if rawStat.AccountEmail != "" && rawStat.AccountEmail != recipientEmail {
+			continue
+		}
+
+		fileItem := sharedItemE2E{
+			Selector:      rawStat.SharedSelector,
+			Type:          "file",
+			Name:          rawStat.Name,
+			AccountEmail:  recipientEmail,
+			RemoteDriveID: rawStat.RemoteDriveID,
+			RemoteItemID:  rawStat.RemoteItemID,
+		}
+		listingMatched := false
 
 		listing, err := sharedListForRecipientRaw(cfgPath, env, recipientEmail)
-		if err != nil {
-			return resolvedSharedFileFixture{}, err
-		}
-		for i := range listing.Items {
-			if listing.Items[i].RemoteDriveID != rawStat.RemoteDriveID ||
-				listing.Items[i].RemoteItemID != rawStat.RemoteItemID ||
-				listing.Items[i].Type != "file" {
-				continue
-			}
+		if err == nil {
+			for i := range listing.Items {
+				if listing.Items[i].RemoteDriveID != rawStat.RemoteDriveID ||
+					listing.Items[i].RemoteItemID != rawStat.RemoteItemID ||
+					listing.Items[i].Type != "file" {
+					continue
+				}
 
-			matches = append(matches, resolvedSharedFileFixture{
+				fileItem = listing.Items[i]
+				listingMatched = true
+				break
+			}
+		}
+
+		candidates = append(candidates, sharedFileCandidate{
+			fixture: resolvedSharedFileFixture{
 				RecipientDriveID: candidateDriveID,
 				RecipientEmail:   recipientEmail,
 				RawStat:          rawStat,
-				FileItem:         listing.Items[i],
-			})
-			break
+				FileItem:         fileItem,
+			},
+			listingMatched: listingMatched,
+		})
+	}
+
+	if len(candidates) == 1 {
+		return candidates[0].fixture, nil
+	}
+
+	var listingMatched []sharedFileCandidate
+	for i := range candidates {
+		if candidates[i].listingMatched {
+			listingMatched = append(listingMatched, candidates[i])
 		}
 	}
 
-	if len(matches) != 1 {
+	if len(listingMatched) == 1 {
+		return listingMatched[0].fixture, nil
+	}
+
+	if len(candidates) != 1 {
 		return resolvedSharedFileFixture{}, fmt.Errorf(
 			"shared-file fixture should resolve to exactly one configured recipient account, got %d matches",
-			len(matches),
+			len(candidates),
 		)
 	}
 
-	return matches[0], nil
+	return candidates[0].fixture, nil
 }
 
 func resolveSharedFolderFixture(t *testing.T, selector string) resolvedSharedFolderFixture {
@@ -217,26 +260,24 @@ func discoverSharedFolderFixture(_ *testing.T, selector string) (resolvedSharedF
 	}
 	defer cleanup()
 
-	listing, err := sharedListForRecipientRaw(cfgPath, env, ref.AccountEmail)
-	if err != nil {
-		return resolvedSharedFolderFixture{}, err
+	item := sharedItemE2E{
+		Selector:      selector,
+		Type:          "folder",
+		AccountEmail:  ref.AccountEmail,
+		RemoteDriveID: ref.RemoteDriveID,
+		RemoteItemID:  ref.RemoteItemID,
 	}
 
-	var item sharedItemE2E
-	for i := range listing.Items {
-		if listing.Items[i].RemoteDriveID == ref.RemoteDriveID &&
-			listing.Items[i].RemoteItemID == ref.RemoteItemID &&
-			listing.Items[i].Type == "folder" {
-			item = listing.Items[i]
-			break
+	listing, err := sharedListForRecipientRaw(cfgPath, env, ref.AccountEmail)
+	if err == nil {
+		for i := range listing.Items {
+			if listing.Items[i].RemoteDriveID == ref.RemoteDriveID &&
+				listing.Items[i].RemoteItemID == ref.RemoteItemID &&
+				listing.Items[i].Type == "folder" {
+				item = listing.Items[i]
+				break
+			}
 		}
-	}
-	if item.Selector == "" {
-		return resolvedSharedFolderFixture{}, fmt.Errorf(
-			"shared-folder fixture %q not found in shared listing for %s",
-			selector,
-			ref.AccountEmail,
-		)
 	}
 
 	return resolvedSharedFolderFixture{
