@@ -1,6 +1,6 @@
 # Test Assurance Audit
 
-Last updated: 2026-04-05
+Last updated: 2026-04-07
 
 Purpose: build a spec-first model of the ideal test suite, then compare the real suite against that model to catch missing, weak, or nerfed tests before we start patching coverage.
 
@@ -924,6 +924,7 @@ Key W5 gap notes:
   - The fix split the normalization boundary cleanly: `normalizeSingleItem` now applies URL decoding to single-item responses, while `normalizeListedItems` applies URL decoding plus package filtering to non-delta list/search/shared pages. Delta keeps the stronger batch pipeline on top of that narrower shared layer.
   - New regression coverage proves the gap is closed where it mattered in practice: `internal/graph/items_test.go` now proves encoded names are decoded for explicit item fetch and package-only children are filtered from list output, while `internal/graph/drives_test.go` proves the same filtering/decoding contract for `sharedWithMe` and drive search.
   - The target-scoped throttle-gate provider proof was already strong; this pass closes the remaining traceability gap by tagging `internal/graphhttp/provider_test.go` for `R-6.8.4` directly.
+  - The remaining low-signal helper gap around target-scoped throttle routing is now closed directly at the value-object boundary: `internal/synctypes/actions_test.go`, `internal/synctypes/worker_result_test.go`, and `internal/synctypes/scope_key_test.go` prove `ThrottleTargetKey()`, `IsThrottleDrive()`, `IsThrottleShared()`, and `ThrottleShortcutKey()` without relying only on downstream engine/provider behavior.
   - 401 refresh proof is now explicit for both request shapes the audit called out: `internal/graph/client_test.go` proves a body-bearing `PATCH` keeps its path query string, JSON body, and auth/header semantics across the refresh retry, and it separately proves that a real token refresh followed by a second 401 still returns fatal `ErrUnauthorized` instead of degrading softly.
   - Pagination proof now covers the previously unproven search path directly: `internal/graph/drives_test.go` now includes a multi-page `SearchDriveItems` test, so both `sharedWithMe` and search must follow `@odata.nextLink` rather than silently stopping after page one.
 

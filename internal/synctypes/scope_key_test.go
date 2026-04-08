@@ -50,6 +50,48 @@ func TestScopeKey_IsGlobal(t *testing.T) {
 	assert.False(t, SKQuotaOwn().IsGlobal())
 }
 
+// Validates: R-6.8.4
+func TestScopeKey_ThrottleTargetAccessors(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New("0000000000000001")
+	driveKey := SKThrottleDrive(driveID)
+	sharedKey := SKThrottleShared("remote-drive", "remote-item")
+
+	assert.True(t, driveKey.IsThrottleTarget())
+	assert.True(t, driveKey.IsThrottleDrive())
+	assert.False(t, driveKey.IsThrottleShared())
+	assert.Equal(t, throttleDriveParam(driveID), driveKey.ThrottleTargetKey())
+
+	assert.True(t, sharedKey.IsThrottleTarget())
+	assert.False(t, sharedKey.IsThrottleDrive())
+	assert.True(t, sharedKey.IsThrottleShared())
+	assert.Equal(t, throttleSharedParam("remote-drive", "remote-item"), sharedKey.ThrottleTargetKey())
+	assert.Equal(t, "remote-drive:remote-item", sharedKey.ThrottleShortcutKey())
+
+	assert.False(t, SKQuotaOwn().IsThrottleTarget())
+	assert.False(t, SKQuotaOwn().IsThrottleDrive())
+	assert.False(t, SKQuotaOwn().IsThrottleShared())
+}
+
+// Validates: R-6.8.4
+func TestScopeKey_ThrottleTargetKeyPanicsForNonTarget(t *testing.T) {
+	t.Parallel()
+
+	require.Panics(t, func() {
+		_ = SKQuotaOwn().ThrottleTargetKey()
+	})
+}
+
+// Validates: R-6.8.4
+func TestScopeKey_ThrottleShortcutKeyPanicsForNonShared(t *testing.T) {
+	t.Parallel()
+
+	require.Panics(t, func() {
+		_ = SKThrottleDrive(driveid.New("0000000000000001")).ThrottleShortcutKey()
+	})
+}
+
 func TestScopeKey_IsPermDirAndDirPath(t *testing.T) {
 	t.Parallel()
 

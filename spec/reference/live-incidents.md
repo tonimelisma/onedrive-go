@@ -13,6 +13,10 @@ of truth for what was seen, when it was seen, and how it was handled.
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
 | LI-20260405-06 | `/me/drives` stayed `403 accessDenied` past the strict auth-preflight window | mitigated | graph quirk | 2026-04-08 | yes |
+| LI-20260405-09 | Fresh parent folder rejected immediate `createUploadSession` | mitigated | graph quirk | 2026-04-07 | yes |
+| LI-20260405-08 | Delete-by-ID returned `404 itemNotFound` after successful path lookup | mitigated | graph quirk | 2026-04-07 | yes |
+| LI-20260405-07 | Destination path stayed unreadable after successful mutation | mitigated | graph quirk | 2026-04-07 | yes |
+| LI-20260407-04 | Shared-file preflight assumed only one configured recipient could open the raw link | fixed | test bug | 2026-04-07 | no |
 | LI-20260407-03 | Exact delete-target path lookup lagged parent listing during repeated sibling deletes | fixed | graph quirk | 2026-04-07 | no |
 | LI-20260407-02 | Keep-local conflict resolution used parent-route upload despite known item identity | fixed | product bug | 2026-04-07 | no |
 | LI-20260407-01 | Follow-on `put` lost a freshly visible parent path | fixed | graph quirk | 2026-04-07 | no |
@@ -65,6 +69,138 @@ The repo-owned auth preflight remains intentionally strict so CI fails early
 with exact account, request ID, failed-call count, and elapsed-time evidence
 when this consistency gap lasts longer than the test budget.  
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../design/graph-client.md), [degraded-mode.md](../design/degraded-mode.md), [cli.md](../design/cli.md)
+
+## LI-20260405-09: Fresh parent folder rejected immediate `createUploadSession`
+
+First seen: 2026-04-05  
+Last seen: 2026-04-07  
+Area: `e2e_full`, upload-session creation after fresh parent visibility  
+Suite / test: `verify e2e-full`, `TestE2E_SyncWatch_WebsocketStartupSmoke`; later `TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal`  
+Classification: graph quirk  
+Status: mitigated  
+Recurring: yes  
+Summary: A folder can become readable by path lookup before Graph accepts the
+immediate follow-on `createUploadSession` against that same fresh parent. The
+API surface is internally inconsistent: the parent exists for reads, but upload
+session creation still returns `404 itemNotFound`.  
+Evidence:
+- Local `go run ./cmd/devtool verify e2e-full` on April 5, 2026 created
+  `/e2e-watch-websocket-1775447250013596000`, then confirmed the folder was
+  already readable by path lookup with request ID
+  `c19f75f0-9a85-43e0-8144-0b4be7387226`.
+- The immediate follow-on `POST ...:/createUploadSession` for `first.txt`
+  still returned HTTP 404 `itemNotFound` with request ID
+  `d02b9317-d3d5-44ad-a30c-327df8c859d3`.
+- The same Graph family recurred on April 7, 2026 in
+  `TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal`, where repeated
+  parent-route `createUploadSession` failures for `collision.txt` ended with
+  request ID `9dce082f-97ae-4f6c-9cc2-69b650dcf4c1` before the product fix
+  stopped using that route when authoritative item identity was already known.
+Resolution / mitigation: `graph.Client.CreateUploadSession()` now owns a
+bounded retry for the exact fresh-parent `404 itemNotFound` case, and flows
+that already know the authoritative remote `itemID` avoid parent-route create
+paths entirely by overwriting via item ID instead.  
+Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../design/graph-client.md), [drive-transfers.md](../design/drive-transfers.md)
+
+## LI-20260405-08: Delete-by-ID returned `404 itemNotFound` after successful path lookup
+
+First seen: 2026-04-05  
+Last seen: 2026-04-07  
+Area: `e2e_full`, CLI `rm`, forced-overwrite cleanup  
+Suite / test: `go test -tags='e2e e2e_full' ./e2e -run '^TestE2E_EdgeCases$|^TestE2E_Sync_BidirectionalMerge$'`; later isolated `TestE2E_Sync_BigDeleteProtection`  
+Classification: graph quirk  
+Status: mitigated  
+Recurring: yes  
+Summary: Graph can agree that a path exists and then immediately reject the
+delete for the resolved item ID with `404 itemNotFound`. Later live coverage
+showed the same delete-convergence family can also hit the initial exact path
+lookup during repeated sibling deletes, so a one-shot resolve-plus-delete flow
+was not trustworthy enough for path-authoritative CLI delete intent.  
+Evidence:
+- Local `go test -tags='e2e e2e_full' ./e2e -run '^TestE2E_EdgeCases$|^TestE2E_Sync_BidirectionalMerge$'`
+  on April 5, 2026 resolved
+  `/onedrive-go-e2e-edge-1775450932112095000/concurrent-1.txt` successfully by
+  path during cleanup.
+- The immediate `DELETE /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s5fd8d410d21d4234a567f45e01fc46e2`
+  still returned HTTP 404 `itemNotFound` with request ID
+  `335ea56d-e3a9-4d2f-8b4c-742da9088eec`.
+- On April 7, 2026, the isolated repro for `TestE2E_Sync_BigDeleteProtection`
+  extended the same family: after repeated sibling deletes, the initial exact
+  path lookup for `file-10.txt` returned `404 itemNotFound` even though the
+  file had been created successfully earlier in the same run.
+Resolution / mitigation: `driveops.Session` now owns delete-specific recovery.
+`ResolveDeleteTarget()` falls back from exact path lookup to the parent
+collection before declaring a path missing, and
+`DeleteResolvedPath()` / `PermanentDeleteResolvedPath()` retry delete intent
+against the currently resolved target while treating a now-missing path as
+success.  
+Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [drive-transfers.md](../design/drive-transfers.md)
+
+## LI-20260405-07: Destination path stayed unreadable after successful mutation
+
+First seen: 2026-04-05  
+Last seen: 2026-04-07  
+Area: `e2e_full`, CLI mutation follow-on path reads  
+Suite / test: `verify e2e-full`, `TestE2E_Sync_EditEditConflict_ResolveKeepRemote`; later `TestE2E_Sync_BidirectionalMerge` and `TestE2E_Conflicts_ResolveKeepBoth`  
+Classification: graph quirk  
+Status: mitigated  
+Recurring: yes  
+Summary: Graph can acknowledge a successful metadata-changing mutation and
+still return `404 itemNotFound` on the immediate follow-on path read for the
+destination. The same convergence family later also affected parent-path reads
+that `put` depended on before uploading a child.  
+Evidence:
+- Local `go run ./cmd/devtool verify e2e-full` on April 5, 2026 completed
+  `put /e2e-sync-ee-1775448127403708000/conflict-file.txt` during
+  `TestE2E_Sync_EditEditConflict_ResolveKeepRemote`.
+- The immediate follow-on
+  `stat /e2e-sync-ee-1775448127403708000/conflict-file.txt` kept returning HTTP
+  404 `itemNotFound` with request ID
+  `0d76a7d9-c2b4-4eec-acd2-de29e5aec5c7` until the test's 30-second poll window
+  expired.
+- The same day, `TestE2E_Sync_BidirectionalMerge` exhausted the older
+  six-step visibility schedule with 7 consecutive `GET by path = 404
+  itemNotFound` responses after a successful `put
+  /e2e-sync-bidi-1775450238168612000/data/info.txt`, which led to the added
+  final `16s` visibility step.
+- On April 7, 2026, `TestE2E_Conflicts_ResolveKeepBoth` hit the same broader
+  family earlier in the flow when a freshly visible parent path still returned
+  `404 itemNotFound` to the next `put`, which is tracked separately in
+  `LI-20260407-01`.
+Resolution / mitigation: CLI mutation flows now treat destination visibility as
+a bounded driveops-owned convergence concern. `mkdir`, single-file `put`, and
+`mv` wait for the destination path to become readable before reporting success,
+and `put` also routes already-expected parent-path reads through the same
+bounded visibility gate.  
+Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [drive-transfers.md](../design/drive-transfers.md), [cli.md](../design/cli.md)
+
+## LI-20260407-04: Shared-file preflight assumed only one configured recipient could open the raw link
+
+First seen: 2026-04-07  
+Last seen: 2026-04-07  
+Area: fast E2E, shared-file fixture preflight  
+Suite / test: local `go run ./cmd/devtool verify default`, `TestE2E_FixturePreflight_Fast`  
+Classification: test bug  
+Status: fixed  
+Recurring: no  
+Summary: The shared-file fixture resolver still assumed the raw shared link had
+exactly one configured recipient account. On April 7, 2026, the live fixture
+could be opened by two configured accounts, both resolving to the same remote
+file identity. The product behavior was fine; the fast preflight failed only
+because the harness encoded stale one-recipient lore.  
+Evidence:
+- Local `go run ./cmd/devtool verify default` on April 7, 2026 failed
+  `TestE2E_FixturePreflight_Fast` with
+  `shared-file fixture should resolve to exactly one configured recipient account, got 2 matches`.
+- The failure came from `discoverSharedFileFixture()` after both configured
+  recipient candidates succeeded against the same raw link; no product command
+  under test had failed yet.
+Resolution / mitigation: Shared-file fixture resolution is now identity-based.
+The harness accepts multiple configured recipients when they all resolve to the
+same remote drive/item identity, prefers a unique listing-backed match when one
+exists, and otherwise chooses a stable candidate deterministically instead of
+failing the suite on recipient-slot assumptions.  
+Promoted docs: [system.md](../design/system.md)
 
 ## LI-20260407-03: Exact delete-target path lookup lagged parent listing during repeated sibling deletes
 
