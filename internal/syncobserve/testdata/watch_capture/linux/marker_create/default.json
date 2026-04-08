@@ -1,0 +1,22 @@
+[
+  {
+    "scenario": "marker_create",
+    "step": "create_marker",
+    "path": "blocked/.odignore",
+    "op_bits": 1,
+    "op_names": [
+      "create"
+    ],
+    "time_offset_micros": 63
+  },
+  {
+    "scenario": "marker_create",
+    "step": "create_marker",
+    "path": "blocked/.odignore",
+    "op_bits": 2,
+    "op_names": [
+      "write"
+    ],
+    "time_offset_micros": 65
+  }
+]

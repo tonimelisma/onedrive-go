@@ -16,7 +16,7 @@ const maxShortcutConcurrency = 4
 
 type shortcutBatchMutationResult struct {
 	VisiblePrimary []synctypes.ChangeEvent
-	Shortcuts      []synctypes.Shortcut
+	SnapshotDirty  bool
 }
 
 // filterOutShortcuts removes synctypes.ChangeShortcut events from a slice —
@@ -319,29 +319,31 @@ func (coordinator *shortcutCoordinator) shortcutRemovalDecisions(ctx context.Con
 	return decisions
 }
 
+func (coordinator *shortcutCoordinator) loadShortcutSnapshot(ctx context.Context) ([]synctypes.Shortcut, error) {
+	eng := coordinator.flow.engine
+	if eng.baseline == nil {
+		return nil, fmt.Errorf("sync: shortcut store unavailable")
+	}
+
+	shortcuts, err := eng.baseline.ListShortcuts(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing shortcuts: %w", err)
+	}
+
+	return shortcuts, nil
+}
+
 func (coordinator *shortcutCoordinator) applyShortcutBatchMutations(
 	ctx context.Context,
 	primaryEvents []synctypes.ChangeEvent,
-	loadCurrentSnapshot bool,
 ) (shortcutBatchMutationResult, error) {
-	flow := coordinator.flow
-	eng := flow.engine
+	eng := coordinator.flow.engine
 	shortcutEvents, removedShortcutIDs := splitShortcutBatchEvents(primaryEvents)
 	result := shortcutBatchMutationResult{
 		VisiblePrimary: filterOutShortcuts(primaryEvents),
 	}
 
 	if len(shortcutEvents) == 0 && len(removedShortcutIDs) == 0 {
-		if !loadCurrentSnapshot {
-			return result, nil
-		}
-
-		shortcuts, err := eng.baseline.ListShortcuts(ctx)
-		if err != nil {
-			return shortcutBatchMutationResult{}, fmt.Errorf("sync: listing shortcuts: %w", err)
-		}
-		flow.setShortcuts(shortcuts)
-		result.Shortcuts = shortcuts
 		return result, nil
 	}
 
@@ -355,13 +357,7 @@ func (coordinator *shortcutCoordinator) applyShortcutBatchMutations(
 		return shortcutBatchMutationResult{}, err
 	}
 
-	shortcuts, err := eng.baseline.ListShortcuts(ctx)
-	if err != nil {
-		return shortcutBatchMutationResult{}, fmt.Errorf("sync: listing shortcuts: %w", err)
-	}
-
-	flow.setShortcuts(shortcuts)
-	result.Shortcuts = shortcuts
+	result.SnapshotDirty = true
 	return result, nil
 }
 
@@ -432,7 +428,7 @@ func (coordinator *shortcutCoordinator) reconcileShortcutScopes(
 		return nil, nil
 	}
 
-	shortcuts, err := eng.baseline.ListShortcuts(ctx)
+	shortcuts, err := coordinator.loadShortcutSnapshot(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing shortcuts for reconciliation: %w", err)
 	}

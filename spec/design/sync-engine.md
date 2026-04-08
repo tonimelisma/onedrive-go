@@ -131,16 +131,19 @@ That post-primary coordinator is intentionally split into two ownership
 boundaries inside `engine_shortcuts.go`:
 
 - `applyShortcutBatchMutations(...)` owns only durable shortcut truth changes
-  (register/remove shortcuts, delete per-shortcut delta tokens, reload the
-  durable snapshot, and publish the refreshed runtime list)
+  (register/remove shortcuts and delete per-shortcut delta tokens)
+- `loadShortcutSnapshot(...)` owns only loading the current durable shortcut
+  snapshot from the store
 - `observeShortcutFollowUp(...)` owns only shortcut-content observation
   (collision detection, suppressed-target filtering, shortcut-only
   `ObservationSessionPlan` construction, and shortcut-phase execution)
 
 No engine path is allowed to both mutate shortcut truth and observe shortcut
 content in the same helper anymore. `processCommittedPrimaryBatch(...)` is the
-single engine-owned composition point that runs those two steps in order after
-primary observations are durably committed.
+single engine-owned composition point that filters visible primary events,
+applies durable shortcut mutations, reloads and publishes the runtime shortcut
+snapshot when needed, then runs shortcut follow-up observation after primary
+observations are durably committed.
 
 Dry-run one-shot passes never persist deferred delta tokens. `observeRemoteChanges`
 clears pending tokens before returning to `RunOnce`, so planner-only previews
