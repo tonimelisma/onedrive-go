@@ -202,6 +202,18 @@ Evidence:
   `TestE2E_RoundTrip` passed in 30.35s, again pointing to transient Graph
   visibility lag rather than a deterministic regression in the branch under
   test.
+- Another April 8, 2026 `go run ./cmd/devtool verify default` reproduced the
+  same family one increment later in `TestE2E_RoundTrip`: after `rm
+  /onedrive-go-e2e-1775674751903651000/test.txt` returned success, every
+  follow-on by-path read of the still-existing parent
+  `/onedrive-go-e2e-1775674751903651000` returned `404 itemNotFound` for more
+  than 30 seconds, which then cascaded into `rm_subfolder` and `rm_permanent`
+  failures because the root folder never reconverged for subsequent commands.
+  Representative request IDs from that run included
+  `71dd8282-dc1f-4270-b87b-4da16e664cdc`,
+  `cff44bae-7863-4a8b-b345-6d85ace95cd8`,
+  `73104aa2-ef31-4543-945d-d05506521ed2`, and
+  `9eee346a-951e-48b9-8484-da811a59c4dd`.
 - On April 7, 2026, `TestE2E_Conflicts_ResolveKeepBoth` hit the same broader
   family earlier in the flow when a freshly visible parent path still returned
   `404 itemNotFound` to the next `put`, which is tracked separately in
