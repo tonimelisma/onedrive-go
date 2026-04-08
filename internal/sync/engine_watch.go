@@ -480,7 +480,11 @@ func (rt *watchRuntime) startRemoteObserver(
 		Current:    rt.currentScopeSnapshot(),
 		Generation: rt.currentScopeGeneration(),
 	}
-	plan, err := rt.BuildObservationPlan(ctx, &session, synctypes.SyncBidirectional, false)
+	plan, err := rt.BuildObservationSessionPlan(ctx, ObservationPlanRequest{
+		Session:  &session,
+		SyncMode: synctypes.SyncBidirectional,
+		Purpose:  observationPlanPurposeWatch,
+	})
 	if err != nil {
 		go func() {
 			defer obsWg.Done()
@@ -491,7 +495,7 @@ func (rt *watchRuntime) startRemoteObserver(
 		return
 	}
 
-	if len(plan.PrimaryScopes) > 0 && !plan.RootFallback {
+	if plan.WatchStrategy == watchStrategyScopedTarget {
 		if rt.engine.enableWebsocket {
 			rt.engine.emitDebugEvent(engineDebugEvent{
 				Type: engineDebugEventWebsocketFallback,
@@ -505,14 +509,14 @@ func (rt *watchRuntime) startRemoteObserver(
 		go func() {
 			defer obsWg.Done()
 			defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
-			errs <- rt.watchPrimaryScopedRemote(ctx, bl, events, pollInterval, plan.PrimaryScopes)
+			errs <- rt.watchPrimaryScopedRemote(ctx, bl, events, pollInterval, plan.PrimaryPhase.Targets)
 		}()
 
 		return
 	}
 
 	rt.warnWebsocketFallbackIfNeeded()
-	if rt.engine.hasScopedRoot() {
+	if plan.WatchStrategy == watchStrategyScopedRoot {
 		go func() {
 			defer obsWg.Done()
 			defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})

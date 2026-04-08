@@ -395,7 +395,7 @@ func (flow *engineFlow) observeChanges(
 	}
 
 	remoteEvents, pendingDeltaTokens, err := flow.observeRemoteChanges(
-		ctx, bl, mode, dryRun, &scopeSession, observationPlan,
+		ctx, bl, mode, dryRun, &scopeSession, &observationPlan, fullReconcile,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -413,7 +413,7 @@ func (flow *engineFlow) observeChanges(
 		return nil, nil, err
 	}
 
-	if err := flow.applyScopeState(ctx, dryRun, &scopeSession, observationPlan); err != nil {
+	if err := flow.applyScopeState(ctx, dryRun, &scopeSession, &observationPlan); err != nil {
 		return nil, nil, err
 	}
 
@@ -430,19 +430,24 @@ func (flow *engineFlow) prepareObservationScope(
 	watch *watchRuntime,
 	mode synctypes.SyncMode,
 	fullReconcile bool,
-) (ScopeSession, ObservationPlan, error) {
+) (ScopeSession, ObservationSessionPlan, error) {
 	scopeSession, err := flow.BuildScopeSession(ctx, watch)
 	if err != nil {
-		return ScopeSession{}, ObservationPlan{}, err
+		return ScopeSession{}, ObservationSessionPlan{}, err
 	}
 
 	if watch != nil {
 		watch.setScopeSnapshot(scopeSession.Current, scopeSession.Generation)
 	}
 
-	observationPlan, err := flow.BuildObservationPlan(ctx, &scopeSession, mode, fullReconcile)
+	observationPlan, err := flow.BuildObservationSessionPlan(ctx, ObservationPlanRequest{
+		Session:       &scopeSession,
+		SyncMode:      mode,
+		FullReconcile: fullReconcile,
+		Purpose:       observationPlanPurposeOneShot,
+	})
 	if err != nil {
-		return ScopeSession{}, ObservationPlan{}, err
+		return ScopeSession{}, ObservationSessionPlan{}, err
 	}
 
 	return scopeSession, observationPlan, nil
@@ -454,13 +459,15 @@ func (flow *engineFlow) observeRemoteChanges(
 	mode synctypes.SyncMode,
 	dryRun bool,
 	scopeSession *ScopeSession,
-	observationPlan ObservationPlan,
+	observationPlan *ObservationSessionPlan,
+	fullReconcile bool,
 ) ([]synctypes.ChangeEvent, []deferredDeltaToken, error) {
 	if mode == synctypes.SyncUploadOnly {
 		return nil, nil, nil
 	}
 
-	fetchResult, err := flow.fetchRemoteChanges(ctx, bl, dryRun, observationPlan)
+	effectiveFullReconcile := effectivePrimaryFullReconcile(fullReconcile, observationPlan)
+	fetchResult, err := flow.fetchRemoteChanges(ctx, bl, dryRun, observationPlan, effectiveFullReconcile)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -473,6 +480,13 @@ func (flow *engineFlow) observeRemoteChanges(
 
 		fetchResult.events = append(fetchResult.events, reentryResult.events...)
 		fetchResult.deferred = append(fetchResult.deferred, reentryResult.deferred...)
+	}
+
+	// Dry-run previews must never advance remote observation cursors, regardless
+	// of whether the events came from root delta, scoped-root delta, scoped
+	// targets, or targeted re-entry reconciliation.
+	if dryRun {
+		fetchResult.deferred = nil
 	}
 
 	scopedRemote := applyRemoteScope(flow.engine.logger, scopeSession.Current, scopeSession.Generation, fetchResult.events)
@@ -491,18 +505,27 @@ func (flow *engineFlow) fetchRemoteChanges(
 	ctx context.Context,
 	bl *synctypes.Baseline,
 	dryRun bool,
-	observationPlan ObservationPlan,
+	observationPlan *ObservationSessionPlan,
+	fullReconcile bool,
 ) (remoteFetchResult, error) {
-	if len(observationPlan.PrimaryScopes) > 0 && !observationPlan.RootFallback {
-		return flow.observePlannedPrimaryScopes(ctx, bl, observationPlan.PrimaryScopes, observationPlan.FullReconcile)
+	switch observationPlan.WatchStrategy {
+	case watchStrategyScopedTarget:
+		return flow.observePlannedPrimaryScopes(ctx, bl, observationPlan.PrimaryPhase.Targets, fullReconcile)
+	case watchStrategyScopedRoot:
+		events, token, err := flow.observeScopedRemote(ctx, bl, fullReconcile)
+		return remoteFetchResult{
+			events:   events,
+			deferred: deferredTokensForPrimary(token, flow.engine, fullReconcile, len(events)),
+		}, err
+	case watchStrategyRootDelta:
 	}
 
-	if observationPlan.FullReconcile {
+	if fullReconcile {
 		flow.engine.logger.Info("full reconciliation: enumerating all remote items")
 		events, token, err := flow.observeRemoteFull(ctx, bl)
 		return remoteFetchResult{
 			events:   events,
-			deferred: deferredTokensForPrimary(token, flow.engine, observationPlan.FullReconcile, len(events)),
+			deferred: deferredTokensForPrimary(token, flow.engine, fullReconcile, len(events)),
 		}, err
 	}
 
@@ -514,7 +537,7 @@ func (flow *engineFlow) fetchRemoteChanges(
 	events, token, err := flow.observeRemote(ctx, bl)
 	return remoteFetchResult{
 		events:   events,
-		deferred: deferredTokensForPrimary(token, flow.engine, observationPlan.FullReconcile, len(events)),
+		deferred: deferredTokensForPrimary(token, flow.engine, fullReconcile, len(events)),
 	}, err
 }
 

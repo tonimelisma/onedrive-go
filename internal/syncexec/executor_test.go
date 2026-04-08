@@ -260,6 +260,43 @@ func TestExecutor_CreateRemoteFolder_PathConvergenceWarningIsNonFatal(t *testing
 	require.Equal(t, []string{"photos"}, pathConvergence.waitCalls)
 }
 
+func TestExecutor_CreateRemoteFolder_CrossDriveParentSkipsPathConvergence(t *testing.T) {
+	t.Parallel()
+
+	const shortcutParent = "shortcut-parent-id"
+
+	var capturedDriveID driveid.ID
+
+	items := &executorMockItemClient{
+		createFolderFn: func(_ context.Context, driveID driveid.ID, parentID, _ string) (*graph.Item, error) {
+			capturedDriveID = driveID
+			assert.Equal(t, shortcutParent, parentID)
+			return &graph.Item{ID: "new-folder-id", ETag: "etag1"}, nil
+		},
+	}
+	pathConvergence := &executorPathConvergenceStub{}
+
+	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
+	e := NewExecution(cfg, synctest.BaselineWith(&synctypes.BaselineEntry{
+		Path:     "shortcut",
+		ItemID:   shortcutParent,
+		DriveID:  driveid.New("00000000000000ff"),
+		ItemType: synctypes.ItemTypeFolder,
+	}))
+
+	action := &synctypes.Action{
+		Type:       synctypes.ActionFolderCreate,
+		Path:       "shortcut/photos",
+		CreateSide: synctypes.CreateRemote,
+		View:       &synctypes.PathView{Path: "shortcut/photos"},
+	}
+
+	o := e.ExecuteFolderCreate(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+	assert.Equal(t, driveid.New("00000000000000ff"), capturedDriveID)
+	assert.Empty(t, pathConvergence.waitCalls)
+}
+
 func TestExecutor_CreateRemoteFolder_Error(t *testing.T) {
 	t.Parallel()
 
@@ -744,6 +781,44 @@ func TestExecutor_Upload_PathConvergenceProbeFailureIsNonFatal(t *testing.T) {
 	o := e.ExecuteUpload(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
 	require.Equal(t, []string{"exec-small.txt"}, pathConvergence.waitCalls)
+}
+
+func TestExecutor_Upload_CrossDriveParentSkipsPathConvergence(t *testing.T) {
+	t.Parallel()
+
+	const shortcutParent = "shortcut-parent-id"
+
+	var capturedDriveID driveid.ID
+
+	ul := &executorMockUploader{
+		uploadFn: func(_ context.Context, driveID driveid.ID, parentID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			capturedDriveID = driveID
+			assert.Equal(t, shortcutParent, parentID)
+			return &graph.Item{ID: "uploaded1", ETag: "etag1", QuickXorHash: "abc"}, nil
+		},
+	}
+	pathConvergence := &executorPathConvergenceStub{}
+
+	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, &executorMockItemClient{}, &executorMockDownloader{}, ul, pathConvergence)
+	e := NewExecution(cfg, synctest.BaselineWith(&synctypes.BaselineEntry{
+		Path:     "shortcut",
+		ItemID:   shortcutParent,
+		DriveID:  driveid.New("00000000000000ff"),
+		ItemType: synctypes.ItemTypeFolder,
+	}))
+
+	writeExecTestFile(t, syncRoot, "shortcut/exec-small.txt", "hello")
+
+	action := &synctypes.Action{
+		Type: synctypes.ActionUpload,
+		Path: "shortcut/exec-small.txt",
+		View: &synctypes.PathView{Path: "shortcut/exec-small.txt"},
+	}
+
+	o := e.ExecuteUpload(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+	assert.Equal(t, driveid.New("00000000000000ff"), capturedDriveID)
+	assert.Empty(t, pathConvergence.waitCalls)
 }
 
 func TestExecutor_Upload_ParentFromBaseline(t *testing.T) {

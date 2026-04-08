@@ -102,6 +102,13 @@ Key properties:
   snapshot, advance a watch-owned local scope generation, invalidate deferred
   hash work from older generations, adjust descendant watches, and publish
   one scope-change transition back to the engine.
+- Raw fsnotify behavior for those marker and path-boundary cases is captured
+  with the repo-owned diagnostic `go run ./cmd/devtool watch-capture`.
+  Captured per-OS traces live under
+  `internal/syncobserve/testdata/watch_capture/<goos>/` and are replayed
+  through `LocalObserver.HandleFsEvent` in same-package tests so the watcher
+  contract is grounded in real event order rather than mock assumptions. See
+  [../reference/fsnotify-watch-capture.md](../reference/fsnotify-watch-capture.md).
 
 ### Scanner (`scanner.go`)
 
