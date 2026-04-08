@@ -148,6 +148,13 @@ The Graph client does not own websocket runtime state. It performs one synchrono
 
 GetItem, ListChildren, CreateFolder, MoveItem, CopyItem, DeleteItem. All operations use `graph.Item` — the clean type after normalization. For non-delta item fetches, `Item.ParentPath` carries the decoded root-relative `parentReference.path` when Graph provides it so callers never need to parse Graph's absolute `"/drives/{id}/root:..."` representation themselves.
 
+`CreateFolder` also owns one narrow ambiguous-success recovery path. If Graph
+returns a success status for `POST .../children` but the body is empty, the
+client does not retry the non-idempotent create. Instead it confirms the new
+folder by re-listing the parent collection under the same bounded
+post-mutation visibility budget, because a replayed create could turn a
+committed success into a false `nameAlreadyExists` conflict.
+
 Timestamp normalization is intentionally lossy in only one direction: valid Graph timestamps become UTC `time.Time` values, while empty, `null`, invalid, or out-of-range timestamps remain the zero value to mean "unknown". The graph boundary never substitutes `time.Now()` for malformed wire data, because downstream sync logic can safely persist and reason about unknown timestamps as `NULL`/unset state.
 
 ## Shared Item Resolution
@@ -201,8 +208,21 @@ simple upload as the fast path while preserving permission accuracy.
 Live E2E coverage also captured the inverse creation-order quirk: a freshly
 created parent folder can already be readable via path lookup while the first
 `POST ...:/createUploadSession` against that parent still returns `404
-itemNotFound`. The graph boundary applies a short exact retry only to that
-create-upload-session path so ordinary missing-parent errors still fail fast.
+itemNotFound`. The graph boundary applies a short exact retry to that
+create-upload-session path, and when the same small-file create already saw an
+initial simple-upload `404`, it can replay the original simple upload under
+a second deterministic create budget before surfacing final not-found. That
+keeps read-only shared-folder permission handling intact while leaving the
+session route as the short permission oracle and giving the final create path a
+slightly longer convergence window on own-drive parents.
+
+For simple uploads with non-zero mtime, the follow-on `PATCH /items/{itemID}`
+used to restore `fileSystemInfo.lastModifiedDateTime` can also race item-ID
+visibility and return transient `404 itemNotFound` even though the upload
+response already returned the new item identity. The graph boundary retries
+that exact post-simple-upload patch with a short bounded policy. Direct
+`UpdateFileSystemInfo` calls outside the immediate simple-upload finalization
+path remain strict.
 
 ## Error Handling (`errors.go`)
 
@@ -221,7 +241,7 @@ consume that normalized boundary contract via [error-model.md](error-model.md).
 
 Implements: R-6.8.8 [verified]
 
-Generic retry has been extracted from the graph client into `retry.RetryTransport`, an `http.RoundTripper` wrapper. The graph client no longer has generic retry loops (`doRetry`/`doPreAuthRetry` deleted), throttle state, or transport-layer Retry-After coordination. The only client-local retries are documented Graph API quirk normalizations: transient 403 on `/me/drives`, transient 404 on root-child listing, transient 404 on item-by-ID download metadata fetch before a pre-authenticated download begins, and transient 404 on create-upload-session requests against freshly created parents. All other retry, backoff, Retry-After parsing, and shared 429 coordination live below `graph` in the retry/HTTP-profile layer.
+Generic retry has been extracted from the graph client into `retry.RetryTransport`, an `http.RoundTripper` wrapper. The graph client no longer has generic retry loops (`doRetry`/`doPreAuthRetry` deleted), throttle state, or transport-layer Retry-After coordination. The only client-local retries are documented Graph API quirk normalizations: transient 403 on `/me/drives`, transient 404 on root-child listing, transient 404 on item-by-ID download metadata fetch before a pre-authenticated download begins, transient 404 on the immediate post-simple-upload `UpdateFileSystemInfo` PATCH, and transient 404 on create-upload-session requests against freshly created parents. All other retry, backoff, Retry-After parsing, and shared 429 coordination live below `graph` in the retry/HTTP-profile layer.
 
 `NewClient` accepts an `*http.Client` and returns `(*Client, error)` after validating the base URL and token source. `MustNewClient` is reserved for static/test setup where panic-on-bad-construction is intentional. `graphhttp.Provider` is the normal production constructor for those clients:
 

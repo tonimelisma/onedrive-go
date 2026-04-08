@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -148,6 +149,60 @@ func waitForSocketIOEventAfter(
 
 	require.FailNowf(t, "socket.io event did not arrive", "target=%s events=%+v", target, readSocketIODebugEvents(t, eventsPath))
 	return syncengine.DebugEvent{}
+}
+
+func waitForSocketIOWakeAndLocalFileAfter(
+	t *testing.T,
+	eventsPath string,
+	afterCount int,
+	localPath string,
+	expected string,
+	timeout time.Duration,
+) syncengine.DebugEvent {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for attempt := 0; ; attempt++ {
+		events := readSocketIODebugEvents(t, eventsPath)
+		var wake syncengine.DebugEvent
+		wakeSeen := false
+		for idx := afterCount; idx < len(events); idx++ {
+			event := events[idx]
+			switch string(event.Type) {
+			case "websocket_notification_wake":
+				wake = event
+				wakeSeen = true
+			case "websocket_endpoint_fetch_failed":
+				require.FailNowf(t, "socket.io endpoint fetch failed", "%+v", event)
+			case "websocket_connect_failed":
+				require.FailNowf(t, "socket.io connection failed", "%+v", event)
+			}
+		}
+
+		data, err := os.ReadFile(localPath)
+		if wakeSeen && err == nil && string(data) == expected {
+			return wake
+		}
+
+		if time.Now().After(deadline) {
+			fileState := fmt.Sprintf("missing: %v", err)
+			if err == nil {
+				fileState = fmt.Sprintf("content=%q", string(data))
+			}
+
+			require.FailNowf(
+				t,
+				"socket.io wake and local convergence did not arrive",
+				"path=%s expected=%q file=%s events=%+v",
+				localPath,
+				expected,
+				fileState,
+				events,
+			)
+		}
+
+		time.Sleep(pollBackoff(attempt))
+	}
 }
 
 func assertNoSocketIOConnected(t *testing.T, eventsPath string) {

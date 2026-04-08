@@ -167,6 +167,8 @@ The system shall validate filenames against OneDrive naming restrictions before 
 
 - R-2.15.1: The system shall track individual item failures independently of the delta token, since the delta checkpoint only appears on the final page and cannot be partially committed. [verified]
 
-## R-2.16 Eventual Consistency [planned]
+## R-2.16 Eventual Consistency [verified]
 
-- R-2.16.1: The system shall not re-query file metadata immediately after upload, as OneDrive properties may be temporarily in flux during server-side processing (thumbnails, indexing). [planned]
+- R-2.16.1: The system shall not re-query file metadata immediately after upload, as OneDrive properties may be temporarily in flux during server-side processing (thumbnails, indexing). [verified]
+- R-2.16.2: Incremental one-shot sync shall treat remote delta visibility as eventually consistent. A direct REST item read succeeding elsewhere is not proof that the current incremental delta pass will already observe the same mutation. [verified]
+- R-2.16.3: Default one-shot `sync` shall not add hidden settle loops to chase delta lag. The documented one-shot strong-freshness mode remains `sync --full`, which enumerates remote truth instead of relying on a single incremental delta pass. [verified]

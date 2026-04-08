@@ -17,7 +17,7 @@ import (
 // §10: E2E Edge Case Tests (require live OneDrive account)
 //
 // These tests validate real API behaviors that cannot be unit-tested.
-// Tagged e2e,e2e_full — runs in nightly/manual CI only (30-min timeout).
+// Tagged e2e,e2e_full — runs in nightly/manual CI only (60-min package timeout).
 // ---------------------------------------------------------------------------
 
 // TestE2E_ZeroByteFileSync validates that zero-byte files can be uploaded

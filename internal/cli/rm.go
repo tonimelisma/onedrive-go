@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 func newRmCmd() *cobra.Command {
@@ -83,10 +85,8 @@ func runRm(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if parentPath := removableParentPath(remotePath); parentPath != "" {
-		if _, err := session.WaitPathVisible(ctx, parentPath); err != nil {
-			return fmt.Errorf("confirming parent %q visibility after delete: %w", "/"+parentPath, err)
-		}
+	if err := confirmRmParentVisibility(ctx, session, remotePath, cc.Status()); err != nil {
+		return err
 	}
 
 	if cc.Flags.JSON {
@@ -94,6 +94,40 @@ func runRm(cmd *cobra.Command, args []string) error {
 	}
 
 	writeRmStatus(cc, remotePath, deleteMode)
+
+	return nil
+}
+
+type rmParentVisibilitySession interface {
+	WaitPathVisible(context.Context, string) (*graph.Item, error)
+}
+
+func confirmRmParentVisibility(
+	ctx context.Context,
+	session rmParentVisibilitySession,
+	remotePath string,
+	statusWriter io.Writer,
+) error {
+	parentPath := removableParentPath(remotePath)
+	if parentPath == "" {
+		return nil
+	}
+
+	if _, err := session.WaitPathVisible(ctx, parentPath); err != nil {
+		var visibilityErr *driveops.PathNotVisibleError
+		if errors.As(err, &visibilityErr) {
+			writeWarningf(
+				statusWriter,
+				"warning: deleted %s, but parent /%s is still settling in Graph; follow-up reads may lag\n",
+				remotePath,
+				parentPath,
+			)
+
+			return nil
+		}
+
+		return fmt.Errorf("confirming parent %q visibility after delete: %w", "/"+parentPath, err)
+	}
 
 	return nil
 }

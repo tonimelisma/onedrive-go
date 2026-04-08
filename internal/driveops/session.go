@@ -366,7 +366,7 @@ func (s *Session) WaitPathVisible(ctx context.Context, remotePath string) (*grap
 		}
 	}
 
-	return nil, fmt.Errorf("%w: %q", ErrPathNotVisible, remotePath)
+	return nil, &PathNotVisibleError{Path: remotePath}
 }
 
 // ListChildren lists children of a remote path. For root (""), uses

@@ -9,7 +9,9 @@ const (
 	driveDiscoveryAttempts       = 5
 	rootChildrenAttempts         = 3
 	downloadMetadataAttempts     = 4
+	simpleUploadMtimeAttempts    = 4
 	uploadSessionCreateAttempts  = 6
+	simpleUploadCreateAttempts   = 7
 	pathVisibilityAttempts       = 8
 	infiniteAttempts             = 0
 	standardMultiplier           = 2.0
@@ -20,8 +22,12 @@ const (
 	rootChildrenMaxDelay         = 1 * time.Second
 	downloadMetadataBaseDelay    = 250 * time.Millisecond
 	downloadMetadataMaxDelay     = 2 * time.Second
+	simpleUploadMtimeBaseDelay   = 250 * time.Millisecond
+	simpleUploadMtimeMaxDelay    = 2 * time.Second
 	uploadSessionCreateBaseDelay = 250 * time.Millisecond
 	uploadSessionCreateMaxDelay  = 4 * time.Second
+	simpleUploadCreateBaseDelay  = 250 * time.Millisecond
+	simpleUploadCreateMaxDelay   = 8 * time.Second
 	pathVisibilityBaseDelay      = 250 * time.Millisecond
 	pathVisibilityMaxDelay       = 32 * time.Second
 	transportMaxDelay            = 60 * time.Second
@@ -83,6 +89,19 @@ func DownloadMetadataPolicy() Policy {
 	}
 }
 
+// SimpleUploadMtimePatchPolicy is the quick-retry policy for transient
+// item-not-found misfires when the immediate post-simple-upload
+// UpdateFileSystemInfo PATCH races Graph's item-by-ID visibility.
+func SimpleUploadMtimePatchPolicy() Policy {
+	return Policy{
+		MaxAttempts: simpleUploadMtimeAttempts,
+		Base:        simpleUploadMtimeBaseDelay,
+		Max:         simpleUploadMtimeMaxDelay,
+		Multiplier:  standardMultiplier,
+		Jitter:      noJitter,
+	}
+}
+
 // UploadSessionCreatePolicy is the quick-retry policy for transient
 // item-not-found misfires when createUploadSession targets a freshly created
 // parent folder. The budget is long enough to bridge the live consistency
@@ -93,6 +112,19 @@ func UploadSessionCreatePolicy() Policy {
 		MaxAttempts: uploadSessionCreateAttempts,
 		Base:        uploadSessionCreateBaseDelay,
 		Max:         uploadSessionCreateMaxDelay,
+		Multiplier:  standardMultiplier,
+		Jitter:      noJitter,
+	}
+}
+
+// SimpleUploadCreatePolicy is the longer post-disambiguation retry policy for
+// create-by-parent simple uploads that still return item-not-found after the
+// session-route permission oracle has already exhausted on the same parent.
+func SimpleUploadCreatePolicy() Policy {
+	return Policy{
+		MaxAttempts: simpleUploadCreateAttempts,
+		Base:        simpleUploadCreateBaseDelay,
+		Max:         simpleUploadCreateMaxDelay,
 		Multiplier:  standardMultiplier,
 		Jitter:      noJitter,
 	}

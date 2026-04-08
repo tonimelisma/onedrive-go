@@ -76,7 +76,10 @@ returned 204." `rm`, `mv --force`, and `cp --force` delete the destination
 through `driveops.Session.DeleteResolvedPath()` so a transient delete-route
 `itemNotFound` is reconciled against the remote path instead of surfacing a
 spurious failure. `rm` additionally waits for the parent path to be readable
-again before printing success for non-root parents.
+again before printing success for non-root parents, but once delete intent has
+already proved the target path is gone it downgrades a pure bounded
+`PathNotVisibleError` on that follow-on parent read to a warning. Other
+parent-read failures still fail the command.
 
 ## Auth Lifecycle, Auth Health, And Proof Boundaries
 

@@ -293,10 +293,12 @@ jobs:
         run: |
           set -euo pipefail
           profile=e2e
+          extra_args=()
           if [[ "${{ github.event_name }}" == "schedule" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             profile=e2e-full
+            extra_args+=(--classify-live-quirks)
           fi
-          go run ./cmd/devtool verify "$profile" --e2e-log-dir /tmp/e2e-debug-logs
+          go run ./cmd/devtool verify "$profile" --e2e-log-dir /tmp/e2e-debug-logs "${extra_args[@]}"
 
       - name: Upload E2E debug logs
         if: failure()

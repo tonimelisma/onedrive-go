@@ -31,6 +31,7 @@ execution.
 | `RootChildrenPolicy()` | Exact `root/children` quirk retry | 3 | 250ms | 1s |
 | `DownloadMetadataPolicy()` | Exact item-by-ID download metadata quirk retry | 4 | 250ms | 2s |
 | `UploadSessionCreatePolicy()` | Exact create-upload-session fresh-parent quirk retry | 6 | 250ms | 4s |
+| `SimpleUploadCreatePolicy()` | Final simple-upload create retry after session-path disambiguation | 7 | 250ms | 8s |
 | `PathVisibilityPolicy()` | Post-success path-read/delete convergence at the CLI/session boundary | 8 | 250ms | 32s |
 | `WatchLocalPolicy()` | Local observer error recovery | 0 (infinite) | 1s | 30s |
 | `ReconcilePolicy()` | Per-item transient retry in `sync_failures` | 0 (infinite) | 1s | 1h |
@@ -59,6 +60,12 @@ misfires with `404 itemNotFound` for longer than the original 2s budget on
 live full E2E. The
 retry belongs to `graph.CreateUploadSession()`, not to CLI callers or generic
 upload retry logic.
+
+`SimpleUploadCreatePolicy()` is the longer post-disambiguation create budget.
+It only applies after the session-route permission oracle has already exhausted
+on exact `itemNotFound`, so the graph boundary can spend a little longer
+replaying the original simple upload without slowing the shared-folder
+permission check itself.
 
 `PathVisibilityPolicy()` is deterministic on purpose. `driveops` is the only
 runtime owner that consumes it. `driveops.Session` reuses the policy for two
