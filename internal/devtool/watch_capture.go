@@ -86,6 +86,7 @@ func WatchCaptureScenarioNames() []string {
 		"dir_move_out_of_scope",
 		"marker_create",
 		"marker_delete",
+		"marker_move_between_dirs",
 		"marker_parent_rename",
 		"marker_rename",
 	}
@@ -103,6 +104,8 @@ func LookupWatchCaptureScenario(name string) (WatchCaptureScenario, error) {
 		return markerRenameScenario(), nil
 	case "marker_parent_rename":
 		return markerParentRenameScenario(), nil
+	case "marker_move_between_dirs":
+		return markerMoveBetweenDirsScenario(), nil
 	case "dir_move_into_scope":
 		return moveDirScenario("dir_move_into_scope", "parking/album", "docs/album", "move_into_scope", "move into scope"), nil
 	case "dir_move_out_of_scope":
@@ -473,6 +476,35 @@ func markerParentRenameScenario() WatchCaptureScenario {
 					filepath.Join(root, "renamed"),
 				); err != nil {
 					return fmt.Errorf("rename parent: %w", err)
+				}
+				return nil
+			}),
+		},
+	}
+}
+
+func markerMoveBetweenDirsScenario() WatchCaptureScenario {
+	return WatchCaptureScenario{
+		Name: "marker_move_between_dirs",
+		setup: func(root string) error {
+			if err := ensureScenarioDir(root, "left/blocked/nested"); err != nil {
+				return err
+			}
+			if err := ensureScenarioDir(root, "right"); err != nil {
+				return err
+			}
+			if err := writeScenarioFile(root, "left/blocked/.odignore", "marker"); err != nil {
+				return err
+			}
+			return writeScenarioFile(root, "left/blocked/nested/keep.txt", "keep")
+		},
+		steps: []watchCaptureStep{
+			watchCaptureScenarioStep("move_marker_dir", func(root string) error {
+				if err := localpath.Rename(
+					filepath.Join(root, "left", "blocked"),
+					filepath.Join(root, "right", "blocked"),
+				); err != nil {
+					return fmt.Errorf("move marker directory: %w", err)
 				}
 				return nil
 			}),

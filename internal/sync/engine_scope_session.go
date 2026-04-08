@@ -174,6 +174,14 @@ func (flow *engineFlow) BuildObservationSessionPlan(
 
 		plan.Hash = planHashValue
 	}
+	if err := validateObservationSessionPlan(&plan, req.Session != nil); err != nil {
+		return ObservationSessionPlan{}, fmt.Errorf("build observation session plan: %w", err)
+	}
+	if req.Session != nil {
+		if err := flow.validatePrimaryScopePersistence(&plan); err != nil {
+			return ObservationSessionPlan{}, fmt.Errorf("build observation session plan: %w", err)
+		}
+	}
 	return plan, nil
 }
 
@@ -322,6 +330,10 @@ func hasObservedRoot(paths []string) bool {
 }
 
 func (flow *engineFlow) scopeStateRecord(session *ScopeSession, plan *ObservationSessionPlan) (synctypes.ScopeStateRecord, error) {
+	if err := flow.validatePrimaryScopePersistence(plan); err != nil {
+		return synctypes.ScopeStateRecord{}, fmt.Errorf("validate primary scope persistence: %w", err)
+	}
+
 	snapshotJSON, err := syncscope.MarshalSnapshot(session.Current)
 	if err != nil {
 		return synctypes.ScopeStateRecord{}, fmt.Errorf("marshal scope snapshot: %w", err)

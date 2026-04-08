@@ -15,7 +15,7 @@ of truth for what was seen, when it was seen, and how it was handled.
 | LI-20260405-06 | `/me/drives` stayed `403 accessDenied` past the strict auth-preflight window | mitigated | graph quirk | 2026-04-08 | yes |
 | LI-20260405-09 | Fresh parent folder rejected immediate `createUploadSession` | mitigated | graph quirk | 2026-04-07 | yes |
 | LI-20260405-08 | Delete-by-ID returned `404 itemNotFound` after successful path lookup | mitigated | graph quirk | 2026-04-07 | yes |
-| LI-20260405-07 | Destination path stayed unreadable after successful mutation | mitigated | graph quirk | 2026-04-07 | yes |
+| LI-20260405-07 | Destination path stayed unreadable after successful mutation | mitigated | graph quirk | 2026-04-08 | yes |
 | LI-20260407-04 | Shared-file preflight assumed only one configured recipient could open the raw link | fixed | test bug | 2026-04-07 | no |
 | LI-20260407-03 | Exact delete-target path lookup lagged parent listing during repeated sibling deletes | fixed | graph quirk | 2026-04-07 | no |
 | LI-20260407-02 | Keep-local conflict resolution used parent-route upload despite known item identity | fixed | product bug | 2026-04-07 | no |
@@ -73,7 +73,7 @@ Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../
 ## LI-20260405-09: Fresh parent folder rejected immediate `createUploadSession`
 
 First seen: 2026-04-05  
-Last seen: 2026-04-07  
+Last seen: 2026-04-08  
 Area: `e2e_full`, upload-session creation after fresh parent visibility  
 Suite / test: `verify e2e-full`, `TestE2E_SyncWatch_WebsocketStartupSmoke`; later `TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal`  
 Classification: graph quirk  
@@ -163,6 +163,16 @@ Evidence:
   itemNotFound` responses after a successful `put
   /e2e-sync-bidi-1775450238168612000/data/info.txt`, which led to the added
   final `16s` visibility step.
+- Local `go run ./cmd/devtool verify default` on April 8, 2026 failed
+  `TestE2E_Sync_DriveRemoveAndReAdd` after `sync --upload-only --force`
+  completed successfully and its own executor visibility probe read
+  `file1.txt` via path, but follow-on CLI `stat
+  /e2e-sync-readd-1775668702253491000/file1.txt` still returned repeated
+  `404 itemNotFound` for more than 30 seconds. Request IDs from that run
+  included `f8bcdbf0-4d3a-4308-8641-2eae31d32728`,
+  `001ccaad-0943-41d4-bc46-c2f33cea05c7`,
+  `393649c4-9a53-45e9-9dcd-bd9d4689adbe`, and
+  `f91e7f3b-24ea-4f62-b985-3a513002e2e8`.
 - On April 7, 2026, `TestE2E_Conflicts_ResolveKeepBoth` hit the same broader
   family earlier in the flow when a freshly visible parent path still returned
   `404 itemNotFound` to the next `put`, which is tracked separately in
@@ -171,7 +181,10 @@ Resolution / mitigation: CLI mutation flows now treat destination visibility as
 a bounded driveops-owned convergence concern. `mkdir`, single-file `put`, and
 `mv` wait for the destination path to become readable before reporting success,
 and `put` also routes already-expected parent-path reads through the same
-bounded visibility gate.  
+bounded visibility gate. Repo-owned E2E sync-upload visibility checks now use
+the shared `waitForRemoteWriteVisible()` helper with
+`remoteWritePropagationTimeout` instead of the older generic 30-second poll
+when they are asserting follow-on remote readability after a successful write.  
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [drive-transfers.md](../design/drive-transfers.md), [cli.md](../design/cli.md)
 
 ## LI-20260407-04: Shared-file preflight assumed only one configured recipient could open the raw link

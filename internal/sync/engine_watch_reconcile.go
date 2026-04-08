@@ -420,7 +420,21 @@ func (rt *watchRuntime) performFullReconciliation(
 		return result
 	}
 
-	events := rt.reconcileShortcutBatch(ctx, bl, scopedPrimary.emitted, scopeSnapshot, scopeGeneration)
+	events, shortcutErr := rt.processCommittedPrimaryBatch(
+		ctx,
+		bl,
+		scopedPrimary.emitted,
+		scopeSnapshot,
+		scopeGeneration,
+		false,
+		true,
+	)
+	if shortcutErr != nil {
+		rt.engine.logger.Warn("shortcut reconciliation failed during full reconciliation",
+			slog.String("error", shortcutErr.Error()),
+		)
+		events = filterOutShortcuts(scopedPrimary.emitted)
+	}
 	if len(events) == 0 {
 		rt.engine.logger.Info("periodic full reconciliation complete: no changes",
 			slog.Duration("duration", rt.engine.since(start)),
@@ -486,33 +500,6 @@ func (rt *watchRuntime) observeCommittedFullReconciliationBatch(
 	return scopedPrimary, nil
 }
 
-func (rt *watchRuntime) reconcileShortcutBatch(
-	ctx context.Context,
-	bl *synctypes.Baseline,
-	primaryEvents []synctypes.ChangeEvent,
-	scopeSnapshot syncscope.Snapshot,
-	scopeGeneration int64,
-) []synctypes.ChangeEvent {
-	events, shortcutErr := rt.observeShortcutBatch(
-		ctx,
-		rt,
-		bl,
-		primaryEvents,
-		scopeSnapshot,
-		scopeGeneration,
-		false,
-		true,
-	)
-	if shortcutErr != nil {
-		rt.engine.logger.Warn("shortcut reconciliation failed during full reconciliation",
-			slog.String("error", shortcutErr.Error()),
-		)
-		return filterOutShortcuts(primaryEvents)
-	}
-
-	return events
-}
-
 func (rt *watchRuntime) runEnteredScopeReconciliationAsync(
 	ctx context.Context,
 	bl *synctypes.Baseline,
@@ -556,7 +543,23 @@ func (rt *watchRuntime) runEnteredScopeReconciliationAsync(
 			return
 		}
 
-		result.events = scoped.emitted
+		finalEvents, shortcutErr := rt.processCommittedPrimaryBatch(
+			ctx,
+			bl,
+			scoped.emitted,
+			scopeSnapshot,
+			rt.currentScopeGeneration(),
+			false,
+			false,
+		)
+		if shortcutErr != nil {
+			rt.engine.logger.Warn("shortcut processing failed during scope re-entry reconciliation",
+				slog.String("error", shortcutErr.Error()),
+			)
+			finalEvents = filterOutShortcuts(scoped.emitted)
+		}
+
+		result.events = finalEvents
 		rt.finishFullReconciliation(ctx, result)
 	}()
 }

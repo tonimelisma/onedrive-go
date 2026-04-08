@@ -3,7 +3,9 @@ package sync
 import (
 	"context"
 	"io"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -11,8 +13,79 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
+
+func seedInterruptedScopeTransitionState(t *testing.T, syncRoot string) string {
+	t.Helper()
+
+	snapshot, err := syncscope.NewSnapshot(syncscope.Config{}, nil)
+	require.NoError(t, err)
+	snapshotJSON, err := syncscope.MarshalSnapshot(snapshot)
+	require.NoError(t, err)
+
+	dbPath := filepath.Join(filepath.Dir(syncRoot), "test.db")
+	store, err := syncstore.NewSyncStore(t.Context(), dbPath, testLogger(t))
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(t.Context(), `
+		UPDATE remote_state
+		SET sync_status = ?, filter_generation = 1, filter_reason = ?
+		WHERE item_id = ?`,
+		synctypes.SyncStatusFiltered,
+		synctypes.RemoteFilterPathScope,
+		"drop-item",
+	)
+	require.NoError(t, err)
+	require.NoError(t, store.ApplyScopeState(t.Context(), synctypes.ScopeStateApplyRequest{
+		State: synctypes.ScopeStateRecord{
+			Generation:            2,
+			EffectiveSnapshotJSON: snapshotJSON,
+			ObservationPlanHash:   "interrupted",
+			ObservationMode:       synctypes.ScopeObservationRootDelta,
+			WebsocketEnabled:      true,
+			PendingReentry:        true,
+			LastReconcileKind:     synctypes.ScopeReconcileEnteredPath,
+			UpdatedAt:             time.Now().UnixNano(),
+		},
+	}))
+	require.NoError(t, store.Close(context.Background()))
+
+	return dbPath
+}
+
+func reopenEngineForInterruptedScopeRepair(
+	t *testing.T,
+	dbPath string,
+	syncRoot string,
+	driveID driveid.ID,
+	mock *engineMockClient,
+) *Engine {
+	t.Helper()
+
+	reopened, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+		DBPath:                 dbPath,
+		SyncRoot:               syncRoot,
+		DriveID:                driveID,
+		Fetcher:                mock,
+		SocketIOFetcher:        mock,
+		Items:                  mock,
+		Downloads:              mock,
+		Uploads:                mock,
+		PathConvergenceFactory: &enginePathConvergenceStub{},
+		FolderDelta:            mock,
+		RecursiveLister:        mock,
+		PermChecker:            mock,
+		Logger:                 testLogger(t),
+	})
+	require.NoError(t, err)
+	reopened.assertInvariants = true
+	t.Cleanup(func() {
+		assert.NoError(t, reopened.Close(context.Background()))
+	})
+
+	return reopened
+}
 
 // Validates: R-2.4.5
 func TestApplyRemoteScope_ClassifiesBoundaryMoves(t *testing.T) {
@@ -220,6 +293,49 @@ func TestRunOnce_ScopeExpansionReconcilesPreviouslyFilteredRemoteItems(t *testin
 	require.NoError(t, err)
 	assert.True(t, persisted.AllowsPath("drop.txt"))
 	assert.False(t, scopeState.PendingReentry)
+}
+
+// Validates: R-2.4.4, R-2.4.5
+func TestRunOnce_StartupRepair_InterruptedScopeTransitionClearsPendingReentryOnSuccess(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	var downloaded []string
+	contents := map[string]string{
+		"keep-item": "keep-data",
+		"drop-item": "drop-data",
+	}
+	mock := newTwoFileDownloadDeltaMock(t, driveID, contents, &downloaded, "delta-token")
+
+	eng, syncRoot := newTestEngine(t, mock)
+	eng.syncScopeConfig = syncscope.Config{
+		SyncPaths: []string{"/keep.txt"},
+	}
+
+	_, err := eng.RunOnce(t.Context(), synctypes.SyncDownloadOnly, synctypes.RunOpts{})
+	require.NoError(t, err)
+	require.NoError(t, eng.Close(context.Background()))
+
+	dbPath := seedInterruptedScopeTransitionState(t, syncRoot)
+	reopened := reopenEngineForInterruptedScopeRepair(t, dbPath, syncRoot, driveID, mock)
+	reopened.syncScopeConfig = syncscope.Config{}
+
+	downloaded = nil
+	report, err := reopened.RunOnce(t.Context(), synctypes.SyncDownloadOnly, synctypes.RunOpts{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Downloads)
+	assert.Equal(t, []string{"drop-item"}, downloaded)
+
+	scopeState, found, err := reopened.baseline.ReadScopeState(t.Context())
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.False(t, scopeState.PendingReentry)
+	assert.Equal(t, synctypes.ScopeReconcileNone, scopeState.LastReconcileKind)
+
+	reenteredRow, rowFound, rowErr := reopened.baseline.GetRemoteStateByPath(t.Context(), "drop.txt", driveID)
+	require.NoError(t, rowErr)
+	require.True(t, rowFound)
+	assert.Equal(t, synctypes.SyncStatusSynced, reenteredRow.SyncStatus)
 }
 
 // Validates: R-2.4.5
