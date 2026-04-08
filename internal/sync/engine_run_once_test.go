@@ -315,6 +315,75 @@ func TestRunOnce_SharedConfiguredRootUsesScopedDeltaAndToken(t *testing.T) {
 	assert.Equal(t, "scoped-token-1", token)
 }
 
+// Validates: R-2.1.5
+func TestRunOnce_DryRun_SharedConfiguredRootDoesNotSaveScopedDeltaToken(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	executorCalled := false
+	folderDeltaCalls := 0
+
+	mock := &engineMockClient{
+		folderDeltaFn: func(_ context.Context, gotDriveID driveid.ID, folderID, token string) ([]graph.Item, string, error) {
+			folderDeltaCalls++
+			assert.Equal(t, driveID, gotDriveID)
+			assert.Equal(t, "shared-root", folderID)
+			assert.Empty(t, token)
+
+			return []graph.Item{{
+				ID:           "remote-file-1",
+				Name:         "inside.txt",
+				ParentID:     "shared-root",
+				DriveID:      driveID,
+				Size:         4,
+				QuickXorHash: "hash1",
+			}}, "scoped-token-dry-run", nil
+		},
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+			executorCalled = true
+			return 0, nil
+		},
+	}
+
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	syncRoot := filepath.Join(tmpDir, "sync")
+	require.NoError(t, os.MkdirAll(syncRoot, 0o750))
+
+	eng, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+		DBPath:          dbPath,
+		SyncRoot:        syncRoot,
+		DriveID:         driveID,
+		RootItemID:      "shared-root",
+		Fetcher:         mock,
+		Items:           mock,
+		Downloads:       mock,
+		Uploads:         mock,
+		FolderDelta:     mock,
+		RecursiveLister: mock,
+		PermChecker:     mock,
+		Logger:          testLogger(t),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, eng.Close(t.Context()))
+	})
+
+	report, err := eng.RunOnce(t.Context(), synctypes.SyncDownloadOnly, synctypes.RunOpts{DryRun: true})
+	require.NoError(t, err)
+	assert.True(t, report.DryRun)
+	assert.Equal(t, 1, folderDeltaCalls)
+	assert.False(t, executorCalled)
+
+	bl, err := eng.baseline.Load(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 0, bl.Len())
+
+	token, err := eng.baseline.GetDeltaToken(t.Context(), driveID.String(), "shared-root")
+	require.NoError(t, err)
+	assert.Empty(t, token)
+}
+
 func TestRunOnce_BigDelete_WithoutForce(t *testing.T) {
 	t.Parallel()
 

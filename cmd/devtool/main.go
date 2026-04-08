@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -20,6 +21,8 @@ type verifyFunc func(context.Context, devtool.VerifyOptions) error
 type cleanupAuditFunc func(context.Context, devtool.CleanupAuditOptions) error
 
 type stateAuditFunc func(context.Context, devtool.StateAuditOptions) error
+
+type watchCaptureFunc func(context.Context, devtool.WatchCaptureOptions) error
 
 type worktreeAddFunc func(context.Context, string, string, string) error
 
@@ -42,6 +45,7 @@ func newRootCmd() *cobra.Command {
 		newVerifyCmd(defaultCWD, defaultVerify),
 		newCleanupAuditCmd(defaultCWD, defaultCleanupAudit),
 		newStateAuditCmd(defaultStateAudit),
+		newWatchCaptureCmd(defaultWatchCapture),
 		newWorktreeCmd(defaultCWD, defaultAddWorktree, defaultBootstrapWorktree),
 	)
 
@@ -157,6 +161,42 @@ func newStateAuditCmd(runStateAudit stateAuditFunc) *cobra.Command {
 	return cmd
 }
 
+func newWatchCaptureCmd(runWatchCapture watchCaptureFunc) *cobra.Command {
+	var (
+		scenario   string
+		jsonOutput bool
+		repeat     int
+		settle     time.Duration
+	)
+
+	cmd := &cobra.Command{
+		Use:   "watch-capture",
+		Short: "Capture raw fsnotify event sequences for sync watch scenarios",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runWatchCapture(cmd.Context(), devtool.WatchCaptureOptions{
+				Scenario: scenario,
+				JSON:     jsonOutput,
+				Repeat:   repeat,
+				Settle:   settle,
+				Stdout:   cmd.OutOrStdout(),
+			})
+		},
+	}
+
+	cmd.Flags().StringVar(&scenario, "scenario", "", "watch-capture scenario name")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "emit JSON output")
+	cmd.Flags().IntVar(&repeat, "repeat", 1, "number of times to rerun the scenario")
+	cmd.Flags().DurationVar(
+		&settle,
+		"settle",
+		devtool.DefaultWatchCaptureSettle,
+		"idle window used to drain raw fsnotify events after each step",
+	)
+	requireFlag(cmd, "scenario")
+
+	return cmd
+}
+
 func newWorktreeAddCmd(getwd cwdLookup, addWorktree worktreeAddFunc) *cobra.Command {
 	var (
 		path   string
@@ -249,6 +289,14 @@ func defaultVerify(ctx context.Context, opts devtool.VerifyOptions) error {
 func defaultCleanupAudit(ctx context.Context, opts devtool.CleanupAuditOptions) error {
 	if err := devtool.RunCleanupAudit(ctx, devtool.ExecRunner{}, opts); err != nil {
 		return fmt.Errorf("run cleanup audit: %w", err)
+	}
+
+	return nil
+}
+
+func defaultWatchCapture(ctx context.Context, opts devtool.WatchCaptureOptions) error {
+	if err := devtool.RunWatchCapture(ctx, opts); err != nil {
+		return fmt.Errorf("run watch capture: %w", err)
 	}
 
 	return nil

@@ -522,7 +522,11 @@ func (rt *watchRuntime) applyReconcileResult(ctx context.Context, result reconci
 		Current:    rt.currentScopeSnapshot(),
 		Generation: rt.currentScopeGeneration(),
 	}
-	plan, err := rt.BuildObservationPlan(ctx, &session, synctypes.SyncBidirectional, false)
+	plan, err := rt.BuildObservationSessionPlan(ctx, ObservationPlanRequest{
+		Session:  &session,
+		SyncMode: synctypes.SyncBidirectional,
+		Purpose:  observationPlanPurposeWatch,
+	})
 	if err != nil {
 		rt.engine.logger.Warn("failed to rebuild scope plan after reconciliation",
 			slog.String("error", err.Error()),
@@ -532,7 +536,7 @@ func (rt *watchRuntime) applyReconcileResult(ctx context.Context, result reconci
 	}
 	plan.Reentry.Pending = false
 
-	if err := rt.applyScopeState(ctx, false, &session, plan); err != nil {
+	if err := rt.applyScopeState(ctx, false, &session, &plan); err != nil {
 		rt.engine.logger.Warn("failed to persist scope state after reconciliation",
 			slog.String("error", err.Error()),
 		)

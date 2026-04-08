@@ -272,10 +272,14 @@ func TestFetchRemoteChanges_SyncPathsPersonalUsesFolderScopedDelta(t *testing.T)
 	flow := testEngineFlow(t, eng)
 	session, err := flow.BuildScopeSession(t.Context(), nil)
 	require.NoError(t, err)
-	plan, err := flow.BuildObservationPlan(t.Context(), &session, synctypes.SyncDownloadOnly, false)
+	plan, err := flow.BuildObservationSessionPlan(t.Context(), ObservationPlanRequest{
+		Session:  &session,
+		SyncMode: synctypes.SyncDownloadOnly,
+		Purpose:  observationPlanPurposeOneShot,
+	})
 	require.NoError(t, err)
 
-	result, err := flow.fetchRemoteChanges(t.Context(), bl, false, plan)
+	result, err := flow.fetchRemoteChanges(t.Context(), bl, false, &plan, false)
 	require.NoError(t, err)
 	require.Len(t, result.events, 1)
 	assert.Equal(t, reportRelPath, result.events[0].Path)
@@ -329,10 +333,14 @@ func TestFetchRemoteChanges_SyncPathsPersonalFallsBackToRecursiveEnumerationWhen
 	flow := testEngineFlow(t, eng)
 	session, err := flow.BuildScopeSession(t.Context(), nil)
 	require.NoError(t, err)
-	plan, err := flow.BuildObservationPlan(t.Context(), &session, synctypes.SyncDownloadOnly, false)
+	plan, err := flow.BuildObservationSessionPlan(t.Context(), ObservationPlanRequest{
+		Session:  &session,
+		SyncMode: synctypes.SyncDownloadOnly,
+		Purpose:  observationPlanPurposeOneShot,
+	})
 	require.NoError(t, err)
 
-	result, err := flow.fetchRemoteChanges(t.Context(), bl, false, plan)
+	result, err := flow.fetchRemoteChanges(t.Context(), bl, false, &plan, false)
 	require.NoError(t, err)
 	require.Len(t, result.events, 1)
 	assert.Equal(t, "Docs/report.txt", result.events[0].Path)
@@ -385,14 +393,83 @@ func TestFetchRemoteChanges_SyncPathsBusinessUsesRecursiveEnumeration(t *testing
 	flow := testEngineFlow(t, eng)
 	session, err := flow.BuildScopeSession(t.Context(), nil)
 	require.NoError(t, err)
-	plan, err := flow.BuildObservationPlan(t.Context(), &session, synctypes.SyncDownloadOnly, false)
+	plan, err := flow.BuildObservationSessionPlan(t.Context(), ObservationPlanRequest{
+		Session:  &session,
+		SyncMode: synctypes.SyncDownloadOnly,
+		Purpose:  observationPlanPurposeOneShot,
+	})
 	require.NoError(t, err)
 
-	result, err := flow.fetchRemoteChanges(t.Context(), bl, false, plan)
+	result, err := flow.fetchRemoteChanges(t.Context(), bl, false, &plan, false)
 	require.NoError(t, err)
 	require.Len(t, result.events, 1)
 	assert.Equal(t, "Docs/report.txt", result.events[0].Path)
 	assert.Zero(t, scopedDeltaCalls)
 	assert.Equal(t, []string{"docs-id"}, recursiveCalls)
 	assert.Empty(t, result.deferred)
+}
+
+// Validates: R-2.4.5
+func TestBuildObservationSessionPlan_PrimaryScopeUsesScopedTargetStrategy(t *testing.T) {
+	t.Parallel()
+
+	const docsPath = "Docs"
+
+	mock := &engineMockClient{
+		getItemByPathFn: func(_ context.Context, _ driveid.ID, remotePath string) (*graph.Item, error) {
+			if remotePath == docsPath {
+				return &graph.Item{ID: "docs-id", Name: docsPath, IsFolder: true}, nil
+			}
+
+			return nil, graph.ErrNotFound
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	eng.driveType = driveid.DriveTypePersonal
+	eng.syncScopeConfig = syncscope.Config{
+		SyncPaths: []string{"/" + docsPath},
+	}
+
+	flow := testEngineFlow(t, eng)
+	session, err := flow.BuildScopeSession(t.Context(), nil)
+	require.NoError(t, err)
+
+	plan, err := flow.BuildObservationSessionPlan(t.Context(), ObservationPlanRequest{
+		Session:  &session,
+		SyncMode: synctypes.SyncBidirectional,
+		Purpose:  observationPlanPurposeWatch,
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, watchStrategyScopedTarget, plan.WatchStrategy)
+	assert.False(t, plan.WebsocketEnabled)
+	require.Len(t, plan.PrimaryPhase.Targets, 1)
+	assert.Equal(t, observationPhaseErrorPolicyFailBatch, plan.PrimaryPhase.ErrorPolicy)
+	assert.Equal(t, observationPhaseFallbackPolicyDeltaToEnumerate, plan.PrimaryPhase.FallbackPolicy)
+	assert.Equal(t, observationPhaseTokenCommitPolicyAfterPlannerAccepts, plan.PrimaryPhase.TokenCommitPolicy)
+	assert.Empty(t, plan.ShortcutPhase.Targets)
+}
+
+// Validates: R-2.4.5
+func TestBuildObservationSessionPlan_ScopedRootUsesScopedRootStrategy(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng.rootItemID = "root-scope"
+
+	flow := testEngineFlow(t, eng)
+	session, err := flow.BuildScopeSession(t.Context(), nil)
+	require.NoError(t, err)
+
+	plan, err := flow.BuildObservationSessionPlan(t.Context(), ObservationPlanRequest{
+		Session:  &session,
+		SyncMode: synctypes.SyncBidirectional,
+		Purpose:  observationPlanPurposeWatch,
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, watchStrategyScopedRoot, plan.WatchStrategy)
+	assert.False(t, plan.WebsocketEnabled)
+	assert.Equal(t, synctypes.ScopeObservationScopedDelta, flow.scopeObservationMode(&plan))
 }

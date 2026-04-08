@@ -49,7 +49,7 @@ effective scope snapshot from normalized configured paths plus locally
 discovered marker directories. The engine then:
 
 - applies that snapshot to remote observations before they reach the planner
-- builds one pure `ScopeSession` / `ObservationPlan` pair that both one-shot
+- builds one pure `ScopeSession` / `ObservationSessionPlan` pair that both one-shot
   and watch execution paths consume
 - persists the snapshot plus observation metadata in the dedicated
   `scope_state` row, then asks the store to apply row-level
@@ -86,12 +86,37 @@ corresponding `remote_state` row stays `filtered`.
 current effective snapshot, the persisted snapshot from `scope_state`, the
 entered/exited diff between them, and the predicted current generation.
 
-`ObservationPlan` is the pure observation-side result of that session. It
-owns the current observation mode (`root_delta`, `scoped_delta`,
-`scoped_enumerate`), resolved primary scopes, websocket eligibility, whether
-root fallback is required, and the pending re-entry plan. One-shot startup,
-watch startup, and watch-time scope changes all go through this same plan
-shape so observation policy is no longer split across multiple entrypoints.
+`ObservationSessionPlan` is the pure observation-side result of that session.
+It owns:
+
+- `PrimaryPhase`: resolved primary `sync_paths` targets plus explicit batch
+  error, delta fallback, and token-commit policy
+- `ShortcutPhase`: resolved shortcut targets plus their isolated per-target
+  error and token-commit policy
+- `WatchStrategy`: one of `root_delta`, `scoped_root`, or `scoped_targets`
+- `WebsocketEnabled`: only true for eligible full-drive sessions
+- `Reentry`: the pending primary-scope re-entry decision
+- `Hash`: the persisted primary-scope-only plan fingerprint written to
+  `scope_state`
+
+The primary and shortcut phases share one coordinator shape, but they do not
+share the same failure policy. Primary observation still fails as a batch and
+may fall back from delta to recursive enumeration when a recursive lister is
+available. Shortcut observation still isolates per-target failures, never
+silently switches from delta to enumerate, and commits successful shortcut
+delta tokens only after the shortcut phase finishes. Shortcut-only callers
+invoke the same planner without a `ScopeSession`, which means primary scope
+resolution and primary re-entry planning are skipped entirely; shortcut
+observation must not depend on current `sync_paths` lookup success.
+
+Dry-run one-shot passes never persist deferred delta tokens. `observeRemoteChanges`
+clears pending tokens before returning to `RunOnce`, so planner-only previews
+cannot advance drive-root, scoped-root, scoped-target, or targeted re-entry
+observation cursors.
+
+One-shot startup, watch startup, watch-time scope changes, shortcut content
+observation, and shortcut reconciliation all consume this same plan shape so
+scope policy is no longer split across separate primary-vs-shortcut builders.
 
 Upload-only runs and upload-only watch sessions still rebuild and persist local
 scope truth, but they intentionally defer remote re-entry reconciliation on
