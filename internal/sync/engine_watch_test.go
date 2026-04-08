@@ -270,10 +270,12 @@ func TestRunWatch_ScopedRootKeepsPollingOnly(t *testing.T) {
 func TestRunWatch_SyncPathsScopedPollingDisablesWebsocket(t *testing.T) {
 	t.Parallel()
 
+	const docsPath = "Docs"
+
 	mock := &engineMockClient{
 		getItemByPathFn: func(_ context.Context, _ driveid.ID, remotePath string) (*graph.Item, error) {
-			if remotePath == "Docs" {
-				return &graph.Item{ID: "docs-id", Name: "Docs", IsFolder: true}, nil
+			if remotePath == docsPath {
+				return &graph.Item{ID: "docs-id", Name: docsPath, IsFolder: true}, nil
 			}
 
 			return nil, graph.ErrNotFound
@@ -287,7 +289,7 @@ func TestRunWatch_SyncPathsScopedPollingDisablesWebsocket(t *testing.T) {
 	eng.driveType = driveid.DriveTypePersonal
 	eng.enableWebsocket = true
 	eng.syncScopeConfig = syncscope.Config{
-		SyncPaths: []string{"/Docs"},
+		SyncPaths: []string{"/" + docsPath},
 	}
 
 	recorder := attachDebugEventRecorder(eng)
@@ -402,6 +404,138 @@ func TestRunWatch_RootDeltaSteadyStateProcessesShortcutFollowUp(t *testing.T) {
 	require.NotNil(t, shortcut)
 	assert.Equal(t, "SharedDocs", shortcut.LocalPath)
 	assert.GreaterOrEqual(t, deltaCalls.Load(), int32(2))
+}
+
+// Validates: R-2.4.5, R-3.4.2
+func TestProcessCommittedScopedWatchBatch_ProcessesShortcutFollowUp(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	remoteDriveID := driveid.New("0000000000000098")
+
+	mock := &engineMockClient{
+		listChildrenRecursiveFn: func(_ context.Context, gotDriveID driveid.ID, folderID string) ([]graph.Item, error) {
+			assert.Equal(t, remoteDriveID, gotDriveID)
+			assert.Equal(t, "remote-item-1", folderID)
+			return []graph.Item{{
+				ID:       "shortcut-file",
+				Name:     "report.txt",
+				ParentID: "remote-item-1",
+				DriveID:  remoteDriveID,
+			}}, nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	rt := newWatchRuntime(eng.Engine)
+	rt.setScopeSnapshot(syncscope.Snapshot{}, 1)
+
+	events, committed := rt.processCommittedScopedWatchBatch(t.Context(), emptyBaseline(), remoteFetchResult{
+		events: []synctypes.ChangeEvent{{
+			Source:        synctypes.SourceRemote,
+			Type:          synctypes.ChangeShortcut,
+			DriveID:       driveID,
+			ItemID:        "sc-1",
+			Path:          "SharedDocs",
+			ItemType:      synctypes.ItemTypeFolder,
+			RemoteDriveID: remoteDriveID.String(),
+			RemoteItemID:  "remote-item-1",
+		}},
+	}, false)
+	require.True(t, committed)
+	require.Len(t, events, 1)
+	assert.Equal(t, "SharedDocs/report.txt", events[0].Path)
+}
+
+// Validates: R-2.4.5, R-3.4.2
+func TestRunWatch_SyncPathsSteadyStateProcessesShortcutFollowUp(t *testing.T) {
+	t.Parallel()
+
+	const (
+		docsPath        = "Docs"
+		shortcutContent = "sync paths shortcut report"
+		tokenWatch      = "token-watch"
+	)
+
+	driveID := driveid.New(engineTestDriveID)
+	remoteDriveID := driveid.New("0000000000000097")
+	var folderDeltaCalls atomic.Int32
+
+	mock := &engineMockClient{
+		getItemByPathFn: func(_ context.Context, _ driveid.ID, remotePath string) (*graph.Item, error) {
+			switch remotePath {
+			case docsPath:
+				return &graph.Item{ID: "docs-id", Name: docsPath, IsFolder: true}, nil
+			default:
+				return nil, graph.ErrNotFound
+			}
+		},
+		folderDeltaFn: func(_ context.Context, gotDriveID driveid.ID, folderID, _ string) ([]graph.Item, string, error) {
+			assert.Equal(t, driveID, gotDriveID)
+			assert.Equal(t, "docs-id", folderID)
+
+			switch folderDeltaCalls.Add(1) {
+			case 1:
+				return nil, "token-bootstrap", nil
+			case 2:
+				return []graph.Item{
+					{
+						ID:            "sc-1",
+						Name:          "SharedDocs",
+						ParentID:      "docs-id",
+						DriveID:       driveID,
+						IsFolder:      true,
+						RemoteDriveID: remoteDriveID.String(),
+						RemoteItemID:  "remote-item-1",
+					},
+				}, tokenWatch, nil
+			default:
+				return nil, tokenWatch, nil
+			}
+		},
+		listChildrenRecursiveFn: func(_ context.Context, gotDriveID driveid.ID, folderID string) ([]graph.Item, error) {
+			assert.Equal(t, remoteDriveID, gotDriveID)
+			assert.Equal(t, "remote-item-1", folderID)
+			return []graph.Item{{
+				ID:           "shortcut-file",
+				Name:         "report.txt",
+				ParentID:     "remote-item-1",
+				DriveID:      remoteDriveID,
+				QuickXorHash: hashContentQuickXor(t, shortcutContent),
+				Size:         int64(len(shortcutContent)),
+			}}, nil
+		},
+		downloadFn: func(_ context.Context, gotDriveID driveid.ID, itemID string, w io.Writer) (int64, error) {
+			assert.Equal(t, remoteDriveID, gotDriveID)
+			assert.Equal(t, "shortcut-file", itemID)
+			n, err := w.Write([]byte(shortcutContent))
+			return int64(n), err
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	eng.driveType = driveid.DriveTypePersonal
+	eng.syncScopeConfig = syncscope.Config{
+		SyncPaths: []string{"/" + docsPath},
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- eng.RunWatch(ctx, synctypes.SyncDownloadOnly, synctypes.WatchOpts{
+			PollInterval: time.Hour,
+			Debounce:     5 * time.Millisecond,
+		})
+	}()
+
+	require.Eventually(t, func() bool {
+		data, ok := readFileUnderRootIfExists(t, syncRoot, filepath.Join("Docs", "SharedDocs", "report.txt"))
+		return ok && string(data) == shortcutContent
+	}, 10*time.Second, 25*time.Millisecond)
+
+	cancel()
+	require.NoError(t, <-done)
+	assert.GreaterOrEqual(t, folderDeltaCalls.Load(), int32(2))
 }
 
 // Validates: R-2.8.3, R-6.8.9, R-6.10.10

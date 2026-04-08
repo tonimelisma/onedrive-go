@@ -20,6 +20,15 @@ func (rt *watchRuntime) startPrimaryWatchPhase(
 	pollInterval time.Duration,
 	phase ObservationPhasePlan,
 ) {
+	if err := validatePrimaryObservationPhase(phase); err != nil {
+		go func() {
+			defer obsWg.Done()
+			defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
+			errs <- fmt.Errorf("start primary watch phase: %w", err)
+		}()
+		return
+	}
+
 	rt.warnPhaseWebsocketFallbackIfNeeded(phase)
 
 	switch phase.Driver {
@@ -46,9 +55,8 @@ func (rt *watchRuntime) startPrimaryWatchPhase(
 			return scoped.observed, scoped.emitted, nil
 		})
 		remoteObs.SetWatchBatchPostProcessor(func(ctx context.Context, primaryEvents []synctypes.ChangeEvent) []synctypes.ChangeEvent {
-			finalEvents, err := rt.observeShortcutBatch(
+			finalEvents, err := rt.processCommittedPrimaryBatch(
 				ctx,
-				rt,
 				bl,
 				primaryEvents,
 				rt.currentScopeSnapshot(),

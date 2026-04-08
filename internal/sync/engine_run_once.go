@@ -397,9 +397,8 @@ func (flow *engineFlow) observeChanges(
 		observationPlan.Reentry.Pending = false
 	}
 
-	finalRemoteEvents, shortcutErr := flow.observeShortcutBatch(
+	finalRemoteEvents, shortcutErr := flow.processCommittedPrimaryBatch(
 		ctx,
-		watch,
 		bl,
 		remoteEvents,
 		scopeSession.Current,

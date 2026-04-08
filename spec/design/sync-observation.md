@@ -112,10 +112,16 @@ Key properties:
 - Raw fsnotify behavior for those marker and path-boundary cases is captured
   with the repo-owned diagnostic `go run ./cmd/devtool watch-capture`.
   Captured per-OS traces live under
-  `internal/syncobserve/testdata/watch_capture/<goos>/` and are replayed
-  through `LocalObserver.HandleFsEvent` in same-package tests so the watcher
-  contract is grounded in real event order rather than mock assumptions. See
+  `internal/syncobserve/testdata/watch_capture/<goos>/<scenario>/<variant>.json`.
+  Replay tests load every fixture variant for the current OS and feed those
+  raw records through `LocalObserver.HandleFsEvent`, so the watcher contract
+  is grounded in real event order rather than mock assumptions. Missing
+  fixtures for the current OS skip those replay tests instead of fabricating a
+  synthetic sequence. See
   [../reference/fsnotify-watch-capture.md](../reference/fsnotify-watch-capture.md).
+  The current replay matrix covers `marker_create`, `marker_delete`,
+  `marker_rename`, `marker_parent_rename`, `marker_move_between_dirs`,
+  `dir_move_into_scope`, and `dir_move_out_of_scope`.
 
 ### Scanner (`scanner.go`)
 
