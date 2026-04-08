@@ -606,6 +606,7 @@ func classifyFastE2EQuirk(failedTests map[string]struct{}) ([]string, string, bo
 	return []string{
 		"test",
 		"-tags=e2e",
+		"-race",
 		"-run=^" + fastDownloadTestName + "$",
 		"-count=1",
 		"-v",
