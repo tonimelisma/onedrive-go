@@ -142,15 +142,17 @@ func (flow *engineFlow) BuildObservationSessionPlan(
 	ctx context.Context,
 	req ObservationPlanRequest,
 ) (ObservationSessionPlan, error) {
-	if req.Session == nil {
+	if req.Session == nil && len(req.Shortcuts) == 0 {
 		return ObservationSessionPlan{}, fmt.Errorf("build observation session plan: missing scope session")
 	}
 
 	plan := flow.newObservationSessionPlan()
 	plan.Reentry = buildReentryPlan(req)
 
-	if err := flow.buildPrimaryObservationPhase(ctx, &plan); err != nil {
-		return ObservationSessionPlan{}, err
+	if req.Session != nil {
+		if err := flow.buildPrimaryObservationPhase(ctx, &plan); err != nil {
+			return ObservationSessionPlan{}, err
+		}
 	}
 	if err := flow.buildShortcutObservationPhase(&req, &plan); err != nil {
 		return ObservationSessionPlan{}, err
@@ -160,7 +162,12 @@ func (flow *engineFlow) BuildObservationSessionPlan(
 		plan.WebsocketEnabled = false
 	}
 
-	planHashValue, err := flow.planHash(&plan, req.Session.Current, effectivePrimaryFullReconcile(req.FullReconcile, &plan))
+	currentSnapshot := syncscope.Snapshot{}
+	if req.Session != nil {
+		currentSnapshot = req.Session.Current
+	}
+
+	planHashValue, err := flow.planHash(&plan, currentSnapshot, effectivePrimaryFullReconcile(req.FullReconcile, &plan))
 	if err != nil {
 		return ObservationSessionPlan{}, fmt.Errorf("build observation session plan hash: %w", err)
 	}
@@ -192,6 +199,9 @@ func (flow *engineFlow) newObservationSessionPlan() ObservationSessionPlan {
 func buildReentryPlan(req ObservationPlanRequest) ReentryPlan {
 	plan := ReentryPlan{
 		Kind: synctypes.ScopeReconcileNone,
+	}
+	if req.Session == nil {
+		return plan
 	}
 	if req.SyncMode == synctypes.SyncUploadOnly || !req.Session.Diff.HasEntered() {
 		return plan

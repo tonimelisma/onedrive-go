@@ -899,7 +899,6 @@ func TestBuildShortcutObservationPlan_FiltersSuppressedAndCollidingTargets(t *te
 
 	flow := testEngineFlow(t, newFlowBackedTestEngine(e))
 	plan, err := flow.BuildObservationSessionPlan(t.Context(), ObservationPlanRequest{
-		Session:   &ScopeSession{},
 		Baseline:  emptyBaseline(),
 		SyncMode:  synctypes.SyncBidirectional,
 		Purpose:   observationPlanPurposeOneShot,
@@ -917,6 +916,42 @@ func TestBuildShortcutObservationPlan_FiltersSuppressedAndCollidingTargets(t *te
 	assert.Equal(t, "Shared", plan.ShortcutPhase.Targets[0].localPath)
 	require.NotNil(t, plan.ShortcutPhase.Targets[0].shortcut)
 	assert.Equal(t, "sc-keep", plan.ShortcutPhase.Targets[0].shortcut.ItemID)
+}
+
+// Validates: R-3.4.2
+func TestBuildObservationSessionPlan_ShortcutOnlySkipsPrimaryScopeResolution(t *testing.T) {
+	t.Parallel()
+
+	primaryLookups := 0
+	mock := &engineMockClient{
+		getItemByPathFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+			primaryLookups++
+			return nil, assert.AnError
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	eng.driveType = driveid.DriveTypePersonal
+	eng.syncScopeConfig = syncscope.Config{
+		SyncPaths: []string{"/Docs"},
+	}
+
+	flow := testEngineFlow(t, eng)
+	plan, err := flow.BuildObservationSessionPlan(t.Context(), ObservationPlanRequest{
+		Baseline: emptyBaseline(),
+		SyncMode: synctypes.SyncBidirectional,
+		Purpose:  observationPlanPurposeOneShot,
+		Shortcuts: []synctypes.Shortcut{{
+			ItemID:      "sc-keep",
+			RemoteDrive: "drv-a",
+			RemoteItem:  "item-a",
+			LocalPath:   "Shared",
+		}},
+	})
+	require.NoError(t, err)
+	assert.Zero(t, primaryLookups)
+	assert.Empty(t, plan.PrimaryPhase.Targets)
+	require.Len(t, plan.ShortcutPhase.Targets, 1)
 }
 
 // Validates: R-2.4.5, R-3.4.2
@@ -1113,6 +1148,62 @@ func TestObserveShortcutContent_SkipsOnError(t *testing.T) {
 	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).observeShortcutContentFromList(ctx, shortcuts, bl, nil, nil)
 	require.NoError(t, err, "should not propagate per-shortcut errors")
 	assert.Empty(t, events)
+}
+
+// Validates: R-3.4.2
+func TestObserveShortcutContent_SyncPathsResolutionFailureDoesNotBlockShortcutObservation(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	remoteDriveID := driveid.New("0000000000000099")
+	primaryLookups := 0
+
+	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
+		ItemID:       "sc-1",
+		RemoteDrive:  "0000000000000099",
+		RemoteItem:   "source-folder-1",
+		LocalPath:    "SharedFolder",
+		Observation:  synctypes.ObservationDelta,
+		DiscoveredAt: 1000,
+	}))
+
+	shortcuts, err := mgr.ListShortcuts(ctx)
+	require.NoError(t, err)
+
+	e := &Engine{
+		baseline: mgr,
+		folderDelta: &mockFolderDeltaFetcher{
+			items: []graph.Item{{
+				ID:           "f1",
+				Name:         "report.xlsx",
+				ParentID:     "source-folder-1",
+				DriveID:      remoteDriveID,
+				QuickXorHash: "hash1",
+				Size:         500,
+			}},
+			token: "new-delta-token",
+		},
+		logger:    testLogger(t),
+		driveType: driveid.DriveTypePersonal,
+		syncScopeConfig: syncscope.Config{
+			SyncPaths: []string{"/Docs"},
+		},
+	}
+	e.fetcher = &engineMockClient{
+		getItemByPathFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+			primaryLookups++
+			return nil, assert.AnError
+		},
+	}
+
+	bl := emptyBaseline()
+	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).observeShortcutContentFromList(ctx, shortcuts, bl, nil, nil)
+	require.NoError(t, err)
+	assert.Zero(t, primaryLookups)
+	require.Len(t, events, 1)
+	assert.Equal(t, "SharedFolder/report.xlsx", events[0].Path)
 }
 
 // Validates: R-2.10.16
@@ -1519,6 +1610,53 @@ func TestReconcileShortcutScopes_EnumerateReconciliation(t *testing.T) {
 
 	require.Len(t, events, 1)
 	assert.Equal(t, synctypes.ChangeCreate, events[0].Type)
+	assert.Equal(t, "Shared/Enum/doc.txt", events[0].Path)
+}
+
+// Validates: R-3.4.2
+func TestReconcileShortcutScopes_SyncPathsResolutionFailureDoesNotBlockShortcutReconciliation(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	ctx := t.Context()
+
+	remoteDriveID := driveid.New("0000000000000099")
+	primaryLookups := 0
+
+	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
+		ItemID: "sc-1", RemoteDrive: "0000000000000099", RemoteItem: "root-1",
+		LocalPath: "Shared/Enum", Observation: synctypes.ObservationEnumerate, DiscoveredAt: 1000,
+	}))
+
+	e := &Engine{
+		baseline: mgr,
+		recursiveLister: &mockRecursiveLister{
+			items: []graph.Item{{
+				ID:           "f1",
+				Name:         "doc.txt",
+				ParentID:     "root-1",
+				DriveID:      remoteDriveID,
+				QuickXorHash: "h1",
+			}},
+		},
+		logger:    testLogger(t),
+		driveType: driveid.DriveTypePersonal,
+		syncScopeConfig: syncscope.Config{
+			SyncPaths: []string{"/Docs"},
+		},
+	}
+	e.fetcher = &engineMockClient{
+		getItemByPathFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+			primaryLookups++
+			return nil, assert.AnError
+		},
+	}
+
+	bl := emptyBaseline()
+	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).reconcileShortcutScopes(ctx, bl)
+	require.NoError(t, err)
+	assert.Zero(t, primaryLookups)
+	require.Len(t, events, 1)
 	assert.Equal(t, "Shared/Enum/doc.txt", events[0].Path)
 }
 

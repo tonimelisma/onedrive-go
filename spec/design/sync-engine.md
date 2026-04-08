@@ -104,7 +104,10 @@ share the same failure policy. Primary observation still fails as a batch and
 may fall back from delta to recursive enumeration when a recursive lister is
 available. Shortcut observation still isolates per-target failures, never
 silently switches from delta to enumerate, and commits successful shortcut
-delta tokens only after the shortcut phase finishes.
+delta tokens only after the shortcut phase finishes. Shortcut-only callers
+invoke the same planner without a `ScopeSession`, which means primary scope
+resolution and primary re-entry planning are skipped entirely; shortcut
+observation must not depend on current `sync_paths` lookup success.
 
 Dry-run one-shot passes never persist deferred delta tokens. `observeRemoteChanges`
 clears pending tokens before returning to `RunOnce`, so planner-only previews

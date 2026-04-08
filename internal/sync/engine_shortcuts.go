@@ -529,8 +529,11 @@ func (coordinator *shortcutCoordinator) observeShortcutContentFromList(
 	collisions map[string]bool,
 	suppressedShortcutTargets map[string]struct{},
 ) ([]synctypes.ChangeEvent, error) {
+	if len(shortcuts) == 0 {
+		return nil, nil
+	}
+
 	plan, err := coordinator.flow.BuildObservationSessionPlan(ctx, ObservationPlanRequest{
-		Session:                   &ScopeSession{},
 		Baseline:                  bl,
 		SyncMode:                  synctypes.SyncBidirectional,
 		Purpose:                   observationPlanPurposeOneShot,
@@ -575,7 +578,6 @@ func (coordinator *shortcutCoordinator) reconcileShortcutScopes(
 	}
 
 	plan, err := flow.BuildObservationSessionPlan(ctx, ObservationPlanRequest{
-		Session:   &ScopeSession{},
 		Baseline:  bl,
 		SyncMode:  synctypes.SyncBidirectional,
 		Purpose:   observationPlanPurposeOneShot,
