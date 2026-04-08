@@ -81,6 +81,11 @@ type sharedFolderFixtureCacheEntry struct {
 	err     error
 }
 
+type sharedFileCandidate struct {
+	fixture        resolvedSharedFileFixture
+	listingMatched bool
+}
+
 var (
 	sharedFileFixtureCache   sync.Map
 	sharedFolderFixtureCache sync.Map
@@ -111,11 +116,6 @@ func resolveSharedFileFixture(t *testing.T, rawLink string) resolvedSharedFileFi
 }
 
 func discoverSharedFileFixture(_ *testing.T, rawLink string) (resolvedSharedFileFixture, error) {
-	type sharedFileCandidate struct {
-		fixture        resolvedSharedFileFixture
-		listingMatched bool
-	}
-
 	candidateDriveIDs := sharedFixtureCandidateDriveIDs()
 	if len(candidateDriveIDs) == 0 {
 		return resolvedSharedFileFixture{}, fmt.Errorf("shared-file fixture requires at least one configured drive candidate")
@@ -197,6 +197,16 @@ func discoverSharedFileFixture(_ *testing.T, rawLink string) (resolvedSharedFile
 		})
 	}
 
+	return selectSharedFileFixture(candidates)
+}
+
+func selectSharedFileFixture(candidates []sharedFileCandidate) (resolvedSharedFileFixture, error) {
+	if len(candidates) == 0 {
+		return resolvedSharedFileFixture{}, fmt.Errorf(
+			"shared-file fixture did not resolve for any configured recipient account",
+		)
+	}
+
 	if len(candidates) == 1 {
 		return candidates[0].fixture, nil
 	}
@@ -212,14 +222,39 @@ func discoverSharedFileFixture(_ *testing.T, rawLink string) (resolvedSharedFile
 		return listingMatched[0].fixture, nil
 	}
 
-	if len(candidates) != 1 {
+	if !sharedFileCandidatesShareRemoteIdentity(candidates) {
 		return resolvedSharedFileFixture{}, fmt.Errorf(
-			"shared-file fixture should resolve to exactly one configured recipient account, got %d matches",
+			"shared-file fixture resolved to multiple distinct configured recipient accounts (%d matches)",
 			len(candidates),
 		)
 	}
 
+	if len(listingMatched) > 0 {
+		return listingMatched[0].fixture, nil
+	}
+
 	return candidates[0].fixture, nil
+}
+
+func sharedFileCandidatesShareRemoteIdentity(candidates []sharedFileCandidate) bool {
+	if len(candidates) == 0 {
+		return false
+	}
+
+	expectedDriveID := candidates[0].fixture.RawStat.RemoteDriveID
+	expectedItemID := candidates[0].fixture.RawStat.RemoteItemID
+	if expectedDriveID == "" || expectedItemID == "" {
+		return false
+	}
+
+	for i := 1; i < len(candidates); i++ {
+		if candidates[i].fixture.RawStat.RemoteDriveID != expectedDriveID ||
+			candidates[i].fixture.RawStat.RemoteItemID != expectedItemID {
+			return false
+		}
+	}
+
+	return true
 }
 
 func resolveSharedFolderFixture(t *testing.T, selector string) resolvedSharedFolderFixture {
