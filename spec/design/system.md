@@ -125,7 +125,9 @@ Static verification is a first-class architectural constraint, not a best-effort
   scenarios into a stable JSON shape. The command is diagnostic tooling only;
   product CLI stays unchanged. Checked-in captures under
   `internal/syncobserve/testdata/watch_capture/<goos>/<scenario>/<variant>.json`
-  back the replay tests in `internal/syncobserve`.
+  back the replay tests in `internal/syncobserve`. Those fixtures now cover
+  both `darwin` and `linux`, with Linux replay exercised in the default
+  Ubuntu CI lane.
 - Observation coordination is intentionally split into a pure planner and
   effectful executors. `internal/sync/engine_scope_session.go` is the pure
   scoped-observation planner, while `internal/sync/engine_observation_phase.go`

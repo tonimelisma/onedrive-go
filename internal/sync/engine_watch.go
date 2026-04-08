@@ -87,7 +87,7 @@ func (rt *watchRuntime) loadWatchState(ctx context.Context) (*synctypes.Baseline
 		return nil, fmt.Errorf("sync: loading baseline for watch: %w", err)
 	}
 
-	shortcuts, scErr := rt.engine.baseline.ListShortcuts(ctx)
+	shortcuts, scErr := rt.shortcutCoordinator().loadShortcutSnapshot(ctx)
 	if scErr != nil {
 		rt.engine.logger.Warn("failed to load shortcuts for watch mode",
 			slog.String("error", scErr.Error()),
