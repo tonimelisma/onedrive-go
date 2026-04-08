@@ -138,6 +138,11 @@ Static verification is a first-class architectural constraint, not a best-effort
 - `cmd/devtool` is exercised both through package-level command assembly tests and black-box process tests for `verify` profile parsing plus `worktree bootstrap/add` semantics, including explicit `--source-root` selection. The documented developer entrypoint and the shipped binary must stay aligned.
 - Fast E2E is mandatory in the default local `default` profile. The harness loads typed live-test config from exported env plus root `.env` and durable `.testdata/fixtures.env` defaults; verification does not silently skip fast E2E based on exported shell variables.
 - `verify e2e` runs a repo-owned fast fixture preflight before the main fast suite so shared-link drift fails immediately with a targeted message instead of surfacing later as an expensive suite failure.
+- Shared-file fixture resolution is identity-based, not recipient-slot-based. If
+  more than one configured test account can open the same raw share link, the
+  harness accepts that fixture as long as every matching configured recipient
+  resolves to the same remote drive/item identity and then picks a stable
+  recipient candidate deterministically.
 - The nightly/manual full E2E suite is layered on top of the fast suite. Its files use `//go:build e2e && e2e_full`, so the canonical invocation is the verifier's `e2e-full` profile, which sets both tags, preserves the fast-then-full ordering, and runs the full shared-folder fixture preflight before the `e2e_full` suite.
 - CI keeps the expensive runtime stress lane out of the required per-PR path, but exposes it explicitly on a scheduled cadence and via manual dispatch so race-heavy watch/runtime regressions remain visible.
 - Managed repo-state files use `internal/fsroot` root capabilities.
