@@ -145,7 +145,7 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *synctypes.Action) 
 		remoteMtime = result.Item.ModifiedAt.UnixNano()
 	}
 
-	e.confirmRemotePathVisible(ctx, driveID, action.Path)
+	e.confirmRemotePathVisible(ctx, action)
 
 	return synctypes.Outcome{
 		Action:          synctypes.ActionUpload,

@@ -40,14 +40,21 @@ overwrites the known remote item instead of depending on a fresh parent create
 route during Graph consistency lag.
 
 Post-success remote path confirmation is delegated to an injected
-`driveops.PathConvergence` capability. The executor uses that collaborator
-after successful remote folder create, upload, and move so sync and CLI share
-one owner for path visibility timing. The confirmation remains best-effort:
-`ErrPathNotVisible` and other convergence probe failures are logged at Warn
-and do not turn a successful mutation into a failed outcome. The collaborator
-is session-drive-scoped, so the executor first resolves the action's effective
-drive via `resolveDriveID`; cross-drive shortcut actions skip this
-confirmation instead of probing visibility on the wrong drive.
+`driveops.PathConvergenceFactory`. The executor resolves the action's
+effective target drive, then asks the factory for the matching convergence
+capability:
+
+- same-drive actions reuse the engine's current drive/root session and probe
+  `action.Path` directly
+- cross-drive shortcut actions use planner-supplied `TargetRootItemID` and
+  `TargetRootLocalPath` metadata to derive the target-drive-relative path and
+  then probe through a target-scoped session
+
+The confirmation remains best-effort: `ErrPathNotVisible` and other
+convergence probe failures are logged at Warn and do not turn a successful
+mutation into a failed outcome. If shortcut-root metadata is missing or does
+not match the action path, the executor logs at Debug and skips the probe
+instead of guessing a target path.
 
 ## DepGraph (`dep_graph.go`)
 
@@ -177,6 +184,16 @@ Implements: R-2.10.16 [verified], R-6.8.12 [verified]
 Flat pool of `transfer_workers` goroutines. Decoupled from dispatch infrastructure: accepts `dispatchCh <-chan *TrackedAction` (actions to execute) and `completeCh <-chan struct{}` (engine-owned completion signal) as constructor parameters instead of holding a reference to the dispatch infrastructure. Workers are pure executors — they execute actions, persist success outcomes, and send `WorkerResult` to the engine. Workers never call `DepGraph.Complete()` — the engine owns all completion decisions.
 
 `WorkerResult` carries target drive identity (`TargetDriveID`, `ShortcutKey`) from the action, `RetryAfter` from `GraphError`, the full `error` for classification, `ActionID` for DepGraph routing, `IsTrial` and `TrialScopeKey ScopeKey` for scope trial routing. `WorkerResult.DriveID` is the concrete drive the action actually executed against: workers prefer the executor outcome drive, fall back to the planned action drive, and finally use `TargetDriveID` for shortcut-targeted actions whose concrete drive was only resolved at execution time. The engine classifies and routes each result.
+
+Planner-produced `Action` values also carry target-root metadata for
+cross-drive convergence:
+
+- `TargetDriveID`: concrete remote drive for execution
+- `TargetRootItemID`: remote root item for the shortcut subtree
+- `TargetRootLocalPath`: local sync path that maps to that remote root
+
+The planner fills these once from remote shortcut identity and baseline
+ancestry so execution does not rediscover target ownership ad hoc.
 
 ### Mutable Runtime Ownership
 

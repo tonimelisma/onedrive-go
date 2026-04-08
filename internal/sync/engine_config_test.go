@@ -20,6 +20,17 @@ import (
 
 type configTestPathConvergenceStub struct {
 	waitCalls []string
+	targets   []configTestPathConvergenceTarget
+}
+
+type configTestPathConvergenceTarget struct {
+	driveID    driveid.ID
+	rootItemID string
+}
+
+func (s *configTestPathConvergenceStub) ForTarget(driveID driveid.ID, rootItemID string) driveops.PathConvergence {
+	s.targets = append(s.targets, configTestPathConvergenceTarget{driveID: driveID, rootItemID: rootItemID})
+	return s
 }
 
 func (s *configTestPathConvergenceStub) WaitPathVisible(_ context.Context, remotePath string) (*graph.Item, error) {
@@ -81,7 +92,7 @@ func TestBuildEngineConfig_PropagatesWatchCapabilities(t *testing.T) {
 	assert.Equal(t, syncDir, ecfg.SyncRoot)
 	assert.Equal(t, resolved.StatePath(), ecfg.DBPath)
 	assert.Equal(t, session.DriveID, ecfg.DriveID)
-	assert.Same(t, session, ecfg.PathConvergence)
+	assert.Same(t, session, ecfg.PathConvergenceFactory)
 	assert.Equal(t, resolved.CanonicalID.DriveType(), ecfg.DriveType)
 	assert.Equal(t, resolved.CanonicalID.Email(), ecfg.AccountEmail)
 	assert.Equal(t, "shared-root-id", ecfg.RootItemID)
@@ -128,7 +139,7 @@ func TestBuildEngineConfig_InvalidMinFreeSpace(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid min_free_space")
 }
 
-func TestNewEngine_PropagatesPathConvergence(t *testing.T) {
+func TestNewEngine_PropagatesPathConvergenceFactory(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	logger := testLogger(t)
@@ -143,16 +154,16 @@ func TestNewEngine_PropagatesPathConvergence(t *testing.T) {
 	}
 
 	eng, err := NewEngine(t.Context(), &synctypes.EngineConfig{
-		DBPath:          filepath.Join(t.TempDir(), "test.db"),
-		SyncRoot:        syncDir,
-		DriveID:         driveid.New("abc123"),
-		Fetcher:         mock,
-		SocketIOFetcher: mock,
-		Items:           mock,
-		Downloads:       mock,
-		Uploads:         mock,
-		PathConvergence: pathConvergence,
-		Logger:          logger,
+		DBPath:                 filepath.Join(t.TempDir(), "test.db"),
+		SyncRoot:               syncDir,
+		DriveID:                driveid.New("abc123"),
+		Fetcher:                mock,
+		SocketIOFetcher:        mock,
+		Items:                  mock,
+		Downloads:              mock,
+		Uploads:                mock,
+		PathConvergenceFactory: pathConvergence,
+		Logger:                 logger,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -167,5 +178,9 @@ func TestNewEngine_PropagatesPathConvergence(t *testing.T) {
 		View:       &synctypes.PathView{Path: "photos"},
 	})
 	require.True(t, outcome.Success, "expected remote folder create to succeed: %v", outcome.Error)
+	assert.Equal(t, []configTestPathConvergenceTarget{{
+		driveID:    driveid.New("abc123"),
+		rootItemID: "",
+	}}, pathConvergence.targets)
 	assert.Equal(t, []string{"photos"}, pathConvergence.waitCalls)
 }

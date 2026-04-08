@@ -2739,6 +2739,13 @@ func TestPlan_ShortcutAction_HasTargetShortcutKey(t *testing.T) {
 	// Baseline entry for the file under the shortcut path — represents
 	// a previously synced shortcut item living on the sharer's drive.
 	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+		Path:       "Shortcuts/shared",
+		DriveID:    driveid.New(remoteDriveID),
+		ItemID:     remoteItemID,
+		ItemType:   synctypes.ItemTypeFolder,
+		LocalHash:  "",
+		RemoteHash: "",
+	}, &synctypes.BaselineEntry{
 		Path:       shortcutPath,
 		DriveID:    driveid.New(remoteDriveID),
 		ItemID:     fileItemID,
@@ -2781,6 +2788,8 @@ func TestPlan_ShortcutAction_HasTargetShortcutKey(t *testing.T) {
 		"ShortcutKey should be remoteDrive:remoteItem")
 	assert.Equal(t, driveid.New(remoteDriveID), action.TargetDriveID,
 		"TargetDriveID should be the sharer's drive")
+	assert.Equal(t, remoteItemID, action.TargetRootItemID, "TargetRootItemID should identify the shortcut root")
+	assert.Equal(t, "Shortcuts/shared", action.TargetRootLocalPath, "TargetRootLocalPath should identify the local shortcut root")
 }
 
 func TestIsWriteDenied(t *testing.T) {

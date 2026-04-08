@@ -76,6 +76,20 @@ type executorPathConvergenceStub struct {
 	waitCalls                []string
 	deleteResolvedCalls      []string
 	permanentDeletePathCalls []string
+	targets                  []executorPathConvergenceTarget
+}
+
+type executorPathConvergenceTarget struct {
+	driveID    driveid.ID
+	rootItemID string
+}
+
+func (s *executorPathConvergenceStub) ForTarget(driveID driveid.ID, rootItemID string) driveops.PathConvergence {
+	s.targets = append(s.targets, executorPathConvergenceTarget{
+		driveID:    driveID,
+		rootItemID: rootItemID,
+	})
+	return s
 }
 
 func (s *executorPathConvergenceStub) WaitPathVisible(_ context.Context, remotePath string) (*graph.Item, error) {
@@ -115,7 +129,7 @@ func newTestExecutorConfigWithPathConvergence(
 	items *executorMockItemClient,
 	dl *executorMockDownloader,
 	ul *executorMockUploader,
-	pathConvergence driveops.PathConvergence,
+	pathConvergenceFactory driveops.PathConvergenceFactory,
 ) (*ExecutorConfig, string) {
 	t.Helper()
 
@@ -125,7 +139,7 @@ func newTestExecutorConfigWithPathConvergence(
 	syncTree, err := synctree.Open(syncRoot)
 	require.NoError(t, err)
 
-	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, pathConvergence)
+	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, pathConvergenceFactory)
 	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
 	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) })
 
@@ -154,12 +168,12 @@ func requireOutcomeFailure(t *testing.T, o *synctypes.Outcome) {
 	require.False(t, o.Success, "expected failure but got success")
 }
 
-func TestNewExecutorConfig_AllowsNilPathConvergence(t *testing.T) {
+func TestNewExecutorConfig_AllowsNilPathConvergenceFactory(t *testing.T) {
 	t.Parallel()
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 
-	require.Nil(t, cfg.pathConvergence)
+	require.Nil(t, cfg.pathConvergenceFactory)
 }
 
 // ---------------------------------------------------------------------------
@@ -232,7 +246,12 @@ func TestExecutor_CreateRemoteFolder_UsesPathConvergence(t *testing.T) {
 	pathConvergence := &executorPathConvergenceStub{}
 
 	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, synctest.BaselineWith(&synctypes.BaselineEntry{
+		Path:     "shortcut",
+		ItemID:   "shortcut-parent-id",
+		DriveID:  driveid.New("00000000000000ff"),
+		ItemType: synctypes.ItemTypeFolder,
+	}))
 
 	action := &synctypes.Action{
 		Type:       synctypes.ActionFolderCreate,
@@ -272,7 +291,7 @@ func TestExecutor_CreateRemoteFolder_PathConvergenceWarningIsNonFatal(t *testing
 	require.Equal(t, []string{"photos"}, pathConvergence.waitCalls)
 }
 
-func TestExecutor_CreateRemoteFolder_CrossDriveParentSkipsPathConvergence(t *testing.T) {
+func TestExecutor_CreateRemoteFolder_CrossDriveParentUsesTargetScopedPathConvergence(t *testing.T) {
 	t.Parallel()
 
 	const shortcutParent = "shortcut-parent-id"
@@ -297,16 +316,22 @@ func TestExecutor_CreateRemoteFolder_CrossDriveParentSkipsPathConvergence(t *tes
 	}))
 
 	action := &synctypes.Action{
-		Type:       synctypes.ActionFolderCreate,
-		Path:       "shortcut/photos",
-		CreateSide: synctypes.CreateRemote,
-		View:       &synctypes.PathView{Path: "shortcut/photos"},
+		Type:                synctypes.ActionFolderCreate,
+		Path:                "shortcut/photos",
+		CreateSide:          synctypes.CreateRemote,
+		TargetRootItemID:    shortcutParent,
+		TargetRootLocalPath: "shortcut",
+		View:                &synctypes.PathView{Path: "shortcut/photos"},
 	}
 
 	o := e.ExecuteFolderCreate(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
 	assert.Equal(t, driveid.New("00000000000000ff"), capturedDriveID)
-	assert.Empty(t, pathConvergence.waitCalls)
+	assert.Equal(t, []executorPathConvergenceTarget{{
+		driveID:    driveid.New("00000000000000ff"),
+		rootItemID: shortcutParent,
+	}}, pathConvergence.targets)
+	assert.Equal(t, []string{"photos"}, pathConvergence.waitCalls)
 }
 
 func TestExecutor_CreateRemoteFolder_Error(t *testing.T) {
@@ -418,7 +443,12 @@ func TestExecutor_RemoteMove_UsesPathConvergence(t *testing.T) {
 	pathConvergence := &executorPathConvergenceStub{}
 
 	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, synctest.BaselineWith(&synctypes.BaselineEntry{
+		Path:     "shortcut",
+		ItemID:   "shortcut-parent-id",
+		DriveID:  driveid.New("00000000000000ff"),
+		ItemType: synctypes.ItemTypeFolder,
+	}))
 
 	action := &synctypes.Action{
 		Type:    synctypes.ActionRemoteMove,
@@ -434,7 +464,7 @@ func TestExecutor_RemoteMove_UsesPathConvergence(t *testing.T) {
 	require.Equal(t, []string{"renamed.txt"}, pathConvergence.waitCalls)
 }
 
-func TestExecutor_RemoteMove_CrossDriveSkipsPathConvergence(t *testing.T) {
+func TestExecutor_RemoteMove_CrossDriveUsesTargetScopedPathConvergence(t *testing.T) {
 	t.Parallel()
 
 	items := &executorMockItemClient{
@@ -445,20 +475,31 @@ func TestExecutor_RemoteMove_CrossDriveSkipsPathConvergence(t *testing.T) {
 	pathConvergence := &executorPathConvergenceStub{}
 
 	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, synctest.BaselineWith(&synctypes.BaselineEntry{
+		Path:     "shortcut",
+		ItemID:   "shortcut-parent-id",
+		DriveID:  driveid.New("00000000000000ff"),
+		ItemType: synctypes.ItemTypeFolder,
+	}))
 
 	action := &synctypes.Action{
-		Type:    synctypes.ActionRemoteMove,
-		Path:    "renamed.txt",
-		OldPath: "original.txt",
-		ItemID:  "item1",
-		DriveID: driveid.New("00000000000000ff"),
-		View:    &synctypes.PathView{Path: "renamed.txt"},
+		Type:                synctypes.ActionRemoteMove,
+		Path:                "shortcut/renamed.txt",
+		OldPath:             "shortcut/original.txt",
+		ItemID:              "item1",
+		DriveID:             driveid.New("00000000000000ff"),
+		TargetRootItemID:    "shortcut-root-id",
+		TargetRootLocalPath: "shortcut",
+		View:                &synctypes.PathView{Path: "shortcut/renamed.txt"},
 	}
 
 	o := e.ExecuteMove(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
-	assert.Empty(t, pathConvergence.waitCalls)
+	assert.Equal(t, []executorPathConvergenceTarget{{
+		driveID:    driveid.New("00000000000000ff"),
+		rootItemID: "shortcut-root-id",
+	}}, pathConvergence.targets)
+	assert.Equal(t, []string{"renamed.txt"}, pathConvergence.waitCalls)
 }
 
 // ---------------------------------------------------------------------------
@@ -795,7 +836,7 @@ func TestExecutor_Upload_PathConvergenceProbeFailureIsNonFatal(t *testing.T) {
 	require.Equal(t, []string{"exec-small.txt"}, pathConvergence.waitCalls)
 }
 
-func TestExecutor_Upload_CrossDriveParentSkipsPathConvergence(t *testing.T) {
+func TestExecutor_Upload_CrossDriveParentUsesTargetScopedPathConvergence(t *testing.T) {
 	t.Parallel()
 
 	const shortcutParent = "shortcut-parent-id"
@@ -822,6 +863,47 @@ func TestExecutor_Upload_CrossDriveParentSkipsPathConvergence(t *testing.T) {
 	writeExecTestFile(t, syncRoot, "shortcut/exec-small.txt", "hello")
 
 	action := &synctypes.Action{
+		Type:                synctypes.ActionUpload,
+		Path:                "shortcut/exec-small.txt",
+		TargetRootItemID:    shortcutParent,
+		TargetRootLocalPath: "shortcut",
+		View:                &synctypes.PathView{Path: "shortcut/exec-small.txt"},
+	}
+
+	o := e.ExecuteUpload(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+	assert.Equal(t, driveid.New("00000000000000ff"), capturedDriveID)
+	assert.Equal(t, []executorPathConvergenceTarget{{
+		driveID:    driveid.New("00000000000000ff"),
+		rootItemID: shortcutParent,
+	}}, pathConvergence.targets)
+	assert.Equal(t, []string{"exec-small.txt"}, pathConvergence.waitCalls)
+}
+
+func TestExecutor_Upload_CrossDriveWithoutTargetRootMetadataSkipsPathConvergence(t *testing.T) {
+	t.Parallel()
+
+	const shortcutParent = "shortcut-parent-id"
+
+	ul := &executorMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, parentID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			assert.Equal(t, shortcutParent, parentID)
+			return &graph.Item{ID: "uploaded1", ETag: "etag1", QuickXorHash: "abc"}, nil
+		},
+	}
+	pathConvergence := &executorPathConvergenceStub{}
+
+	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, &executorMockItemClient{}, &executorMockDownloader{}, ul, pathConvergence)
+	e := NewExecution(cfg, synctest.BaselineWith(&synctypes.BaselineEntry{
+		Path:     "shortcut",
+		ItemID:   shortcutParent,
+		DriveID:  driveid.New("00000000000000ff"),
+		ItemType: synctypes.ItemTypeFolder,
+	}))
+
+	writeExecTestFile(t, syncRoot, "shortcut/exec-small.txt", "hello")
+
+	action := &synctypes.Action{
 		Type: synctypes.ActionUpload,
 		Path: "shortcut/exec-small.txt",
 		View: &synctypes.PathView{Path: "shortcut/exec-small.txt"},
@@ -829,7 +911,7 @@ func TestExecutor_Upload_CrossDriveParentSkipsPathConvergence(t *testing.T) {
 
 	o := e.ExecuteUpload(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
-	assert.Equal(t, driveid.New("00000000000000ff"), capturedDriveID)
+	assert.Empty(t, pathConvergence.targets)
 	assert.Empty(t, pathConvergence.waitCalls)
 }
 

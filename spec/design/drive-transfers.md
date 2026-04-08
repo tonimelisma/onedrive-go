@@ -63,9 +63,9 @@ return `DELETE .../items/{id} = 404 itemNotFound` even though the same
 remote path just resolved successfully. During repeated sibling deletes, the
 exact path route itself can also lie with `GET ...root:/path: = 404
 itemNotFound` even though the parent collection still lists the leaf. The
-package boundary therefore exposes the `PathConvergence` capability,
-satisfied by `driveops.Session`, and keeps delete-target path recovery in the
-same owner:
+package boundary therefore exposes the `PathConvergence` capability plus the
+`PathConvergenceFactory`, both satisfied by `driveops.Session`, and keeps
+delete-target path recovery in the same owner:
 
 - `WaitPathVisible()` so command handlers can require destination-path
   readability before they print a successful `mkdir`, `put`, or `mv`, and so
@@ -83,9 +83,11 @@ same owner:
 Sync execution consumes the same capability for post-success visibility
 confirmation after remote folder create, upload, and move. Those sync probes
 stay best-effort and warn-only, but they no longer own a second retry budget
-or sleep loop. Because the capability is bound to one resolved drive session,
-cross-drive shortcut actions skip this confirmation instead of probing the
-wrong drive path.
+or sleep loop. For same-drive actions the executor reuses its current session.
+For cross-drive shortcut actions it asks the factory for a target-scoped
+session and probes the target-drive-relative path rooted at the shortcut's
+remote root item. If that root metadata is missing, sync skips the probe
+instead of guessing and touching the wrong remote boundary.
 
 ## SessionStore
 
