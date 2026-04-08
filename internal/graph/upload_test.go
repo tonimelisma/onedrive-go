@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // errorReadCloser is an io.ReadCloser that always returns an error from Read.
@@ -1101,6 +1102,134 @@ func TestUpload_SimpleNotFoundFallsBackToUploadSessionSuccess(t *testing.T) {
 	assert.Equal(t, 1, chunkCalls)
 }
 
+func TestUpload_SimpleNotFoundThenSessionNotFoundRetriesSimpleUpload(t *testing.T) {
+	content := []byte("fresh-parent")
+
+	var simpleCalls atomic.Int32
+	var sessionCalls atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch {
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/content"):
+			call := simpleCalls.Add(1)
+			if call == 1 {
+				w.Header().Set("request-id", "req-simple-404")
+				w.WriteHeader(http.StatusNotFound)
+				writeTestResponse(t, w, `{"error":{"code":"itemNotFound"}}`)
+
+				return
+			}
+
+			w.WriteHeader(http.StatusCreated)
+			writeTestResponsef(t, w, `{
+				"id": "fresh-parent-item",
+				"name": "fresh.txt",
+				"size": %d,
+				"createdDateTime": "2024-06-01T12:00:00Z",
+				"lastModifiedDateTime": "2024-06-01T12:00:00Z",
+				"parentReference": {"id": "parent", "driveId": "d"},
+				"file": {"mimeType": "text/plain"}
+			}`, len(content))
+
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "createUploadSession"):
+			sessionCalls.Add(1)
+			w.Header().Set("request-id", "req-session-404")
+			w.WriteHeader(http.StatusNotFound)
+			writeTestResponse(t, w, `{"error":{"code":"itemNotFound"}}`)
+
+		default:
+			assert.Failf(t, "unexpected request", "method=%s path=%s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	client.uploadSessionCreatePolicy = testRetryPolicy()
+
+	item, err := client.Upload(
+		t.Context(), driveid.New("d"), "fresh-parent", "fresh.txt",
+		bytes.NewReader(content), int64(len(content)), time.Time{}, nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, item)
+	assert.Equal(t, "fresh-parent-item", item.ID)
+	assert.Equal(t, int32(2), simpleCalls.Load())
+	assert.Equal(t, int32(testRetryPolicy().MaxAttempts), sessionCalls.Load())
+}
+
+// Validates: R-5.6.10
+func TestUpload_SimpleRetryUsesLongerPostSessionBudget(t *testing.T) {
+	content := []byte("longer-budget")
+
+	var simpleCalls atomic.Int32
+	var sessionCalls atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch {
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/content"):
+			call := simpleCalls.Add(1)
+			if call < 4 {
+				w.Header().Set("request-id", fmt.Sprintf("req-simple-404-%d", call))
+				w.WriteHeader(http.StatusNotFound)
+				writeTestResponse(t, w, `{"error":{"code":"itemNotFound"}}`)
+
+				return
+			}
+
+			w.WriteHeader(http.StatusCreated)
+			writeTestResponsef(t, w, `{
+				"id": "longer-budget-item",
+				"name": "later.txt",
+				"size": %d,
+				"createdDateTime": "2024-06-01T12:00:00Z",
+				"lastModifiedDateTime": "2024-06-01T12:00:00Z",
+				"parentReference": {"id": "parent", "driveId": "d"},
+				"file": {"mimeType": "text/plain"}
+			}`, len(content))
+
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "createUploadSession"):
+			sessionCalls.Add(1)
+			w.Header().Set("request-id", fmt.Sprintf("req-session-404-%d", sessionCalls.Load()))
+			w.WriteHeader(http.StatusNotFound)
+			writeTestResponse(t, w, `{"error":{"code":"itemNotFound"}}`)
+
+		default:
+			assert.Failf(t, "unexpected request", "method=%s path=%s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	client.uploadSessionCreatePolicy = retry.Policy{
+		MaxAttempts: 2,
+		Base:        1 * time.Millisecond,
+		Max:         1 * time.Millisecond,
+		Multiplier:  2.0,
+		Jitter:      0.0,
+	}
+	client.simpleUploadCreatePolicy = retry.Policy{
+		MaxAttempts: 3,
+		Base:        1 * time.Millisecond,
+		Max:         1 * time.Millisecond,
+		Multiplier:  2.0,
+		Jitter:      0.0,
+	}
+
+	item, err := client.Upload(
+		t.Context(), driveid.New("d"), "fresh-parent", "later.txt",
+		bytes.NewReader(content), int64(len(content)), time.Time{}, nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, item)
+	assert.Equal(t, "longer-budget-item", item.ID)
+	assert.Equal(t, int32(2), sessionCalls.Load(), "session path should keep its shorter permission-oracle budget")
+	assert.Equal(t, int32(4), simpleCalls.Load(), "simple retry should use the longer post-session create budget")
+}
+
 func TestUpload_SimpleMtimePatchFailure(t *testing.T) {
 	// When the PATCH fails after simple upload, Upload() should return an error.
 	content := []byte("patch-fail")
@@ -1141,6 +1270,74 @@ func TestUpload_SimpleMtimePatchFailure(t *testing.T) {
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "setting mtime after simple upload")
+}
+
+// Validates: R-5.6.5
+func TestUpload_SimpleMtimePatchTransientNotFoundRetries(t *testing.T) {
+	content := []byte("patch-retry")
+	mtime := time.Date(2024, 7, 10, 9, 0, 0, 0, time.UTC)
+
+	var patchCalls atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.Method == http.MethodPut {
+			w.WriteHeader(http.StatusCreated)
+			writeTestResponsef(t, w, `{
+				"id": "patch-retry-item",
+				"name": "retry.txt",
+				"size": %d,
+				"createdDateTime": "2024-06-01T12:00:00Z",
+				"lastModifiedDateTime": "2024-06-01T12:00:00Z",
+				"parentReference": {"id": "parent", "driveId": "d"},
+				"file": {"mimeType": "text/plain"}
+			}`, len(content))
+
+			return
+		}
+
+		if r.Method == http.MethodPatch {
+			call := patchCalls.Add(1)
+			if call == 1 {
+				w.Header().Set("request-id", "req-patch-404")
+				w.WriteHeader(http.StatusNotFound)
+				writeTestResponse(t, w, `{"error":{"code":"itemNotFound","message":"not ready"}}`)
+
+				return
+			}
+
+			w.WriteHeader(http.StatusOK)
+			writeTestResponsef(t, w, `{
+				"id": "patch-retry-item",
+				"name": "retry.txt",
+				"size": %d,
+				"createdDateTime": "2024-06-01T12:00:00Z",
+				"lastModifiedDateTime": "2024-07-10T09:00:00Z",
+				"parentReference": {"id": "parent", "driveId": "d"},
+				"file": {"mimeType": "text/plain"}
+			}`, len(content))
+
+			return
+		}
+
+		assert.Failf(t, "unexpected request", "method=%s path=%s", r.Method, r.URL.Path)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	client.simpleUploadMtimePolicy = testRetryPolicy()
+
+	item, err := client.Upload(
+		t.Context(), driveid.New("d"), "parent", "retry.txt",
+		bytes.NewReader(content), int64(len(content)), mtime, nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, item)
+	assert.Equal(t, int32(2), patchCalls.Load())
+	assert.Equal(t, "patch-retry-item", item.ID)
+	assert.Equal(t, 2024, item.ModifiedAt.Year())
+	assert.Equal(t, time.July, item.ModifiedAt.Month())
 }
 
 // Validates: R-5.2.1

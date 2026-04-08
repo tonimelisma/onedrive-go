@@ -18,7 +18,7 @@ import (
 // ---------------------------------------------------------------------------
 // Multi-drive orchestrator E2E tests.
 //
-// Build tags: e2e AND e2e_full (nightly/manual, 30-min timeout).
+// Build tags: e2e AND e2e_full (nightly/manual, 60-min package timeout).
 // Every test skips if drive2 is empty (single-account CI, fork PRs).
 // ---------------------------------------------------------------------------
 

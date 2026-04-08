@@ -2,6 +2,7 @@ package devtool
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -25,6 +26,10 @@ const (
 	authE2EPreflightPattern  = "^TestE2E_AuthPreflight_Fast$"
 	fastE2EPreflightPattern  = "^TestE2E_FixturePreflight_Fast$"
 	fullE2EPreflightPattern  = "^TestE2E_FixturePreflight_Full$"
+	fullE2EPackageTimeout    = "60m"
+	authPreflightIncidentID  = "LI-20260405-06"
+	fastDownloadIncidentID   = "LI-20260405-04"
+	fastDownloadTestName     = "TestE2E_Sync_DownloadOnly"
 
 	VerifyDefault     VerifyProfile = "default"
 	VerifyPublic      VerifyProfile = "public"
@@ -35,13 +40,14 @@ const (
 )
 
 type VerifyOptions struct {
-	RepoRoot          string
-	Profile           VerifyProfile
-	CoverageThreshold float64
-	CoverageFile      string
-	E2ELogDir         string
-	Stdout            io.Writer
-	Stderr            io.Writer
+	RepoRoot           string
+	Profile            VerifyProfile
+	CoverageThreshold  float64
+	CoverageFile       string
+	E2ELogDir          string
+	ClassifyLiveQuirks bool
+	Stdout             io.Writer
+	Stderr             io.Writer
 }
 
 type verifyPlan struct {
@@ -217,13 +223,13 @@ func runOptionalVerification(
 	plan verifyPlan,
 ) error {
 	if plan.runE2E {
-		if err := runE2E(ctx, runner, opts.RepoRoot, env, stdout, stderr); err != nil {
+		if err := runE2E(ctx, runner, opts.RepoRoot, env, stdout, stderr, opts.ClassifyLiveQuirks); err != nil {
 			return err
 		}
 	}
 
 	if plan.runE2EFull {
-		if err := runE2EFull(ctx, runner, opts.RepoRoot, env, opts.E2ELogDir, stdout, stderr); err != nil {
+		if err := runE2EFull(ctx, runner, opts.RepoRoot, env, opts.E2ELogDir, stdout, stderr, opts.ClassifyLiveQuirks); err != nil {
 			return err
 		}
 	}
@@ -374,8 +380,15 @@ func parseCoverageTotal(report string) (float64, error) {
 	return 0, fmt.Errorf("parse coverage total: total line not found")
 }
 
-func runE2E(ctx context.Context, runner commandRunner, repoRoot string, env []string, stdout, stderr io.Writer) error {
-	if err := runE2EPreflightAuth(ctx, runner, repoRoot, env, stdout, stderr); err != nil {
+func runE2E(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	env []string,
+	stdout, stderr io.Writer,
+	classifyLiveQuirks bool,
+) error {
+	if err := runE2EPreflightAuth(ctx, runner, repoRoot, env, stdout, stderr, classifyLiveQuirks); err != nil {
 		return err
 	}
 
@@ -386,14 +399,40 @@ func runE2E(ctx context.Context, runner commandRunner, repoRoot string, env []st
 	if err := writeStatus(stdout, "==> go test -tags=e2e\n"); err != nil {
 		return fmt.Errorf("write status: %w", err)
 	}
-	if err := runner.Run(
+	if !classifyLiveQuirks {
+		if err := runner.Run(
+			ctx,
+			repoRoot,
+			env,
+			stdout,
+			stderr,
+			"go",
+			"test",
+			"-tags=e2e",
+			"-race",
+			"-v",
+			"-parallel",
+			"5",
+			"-timeout=10m",
+			"./e2e/...",
+		); err != nil {
+			return fmt.Errorf("fast e2e: %w", err)
+		}
+
+		return nil
+	}
+
+	if err := writeStatus(stdout, "==> go test -json -tags=e2e\n"); err != nil {
+		return fmt.Errorf("write status: %w", err)
+	}
+
+	output, err := runner.CombinedOutput(
 		ctx,
 		repoRoot,
 		env,
-		stdout,
-		stderr,
 		"go",
 		"test",
+		"-json",
 		"-tags=e2e",
 		"-race",
 		"-v",
@@ -401,11 +440,33 @@ func runE2E(ctx context.Context, runner commandRunner, repoRoot string, env []st
 		"5",
 		"-timeout=10m",
 		"./e2e/...",
-	); err != nil {
-		return fmt.Errorf("fast e2e: %w", err)
+	)
+	if writeErr := writeCommandOutput(stdout, output); writeErr != nil {
+		return fmt.Errorf("write fast e2e output: %w", writeErr)
+	}
+	if err == nil {
+		return nil
 	}
 
-	return nil
+	failedTests := failedGoTestsFromJSON(output)
+	if rerunArgs, incidentID, ok := classifyFastE2EQuirk(failedTests); ok {
+		if writeErr := writeStatus(stdout, fmt.Sprintf("==> rerun known live quirk %s\n", incidentID)); writeErr != nil {
+			return fmt.Errorf("write status: %w", writeErr)
+		}
+		if rerunErr := runner.Run(ctx, repoRoot, env, stdout, stderr, "go", rerunArgs...); rerunErr == nil {
+			warning := fmt.Sprintf(
+				"warning: classified known live quirk %s after successful rerun\n",
+				incidentID,
+			)
+			if writeErr := writeStatus(stdout, warning); writeErr != nil {
+				return fmt.Errorf("write status: %w", writeErr)
+			}
+
+			return nil
+		}
+	}
+
+	return fmt.Errorf("fast e2e: %w", err)
 }
 
 func runE2EPreflightAuth(
@@ -414,24 +475,40 @@ func runE2EPreflightAuth(
 	repoRoot string,
 	env []string,
 	stdout, stderr io.Writer,
+	classifyLiveQuirks bool,
 ) error {
 	if err := writeStatus(stdout, "==> go test -tags=e2e auth preflight\n"); err != nil {
 		return fmt.Errorf("write status: %w", err)
 	}
-	if err := runner.Run(
-		ctx,
-		repoRoot,
-		env,
-		stdout,
-		stderr,
-		"go",
+
+	authArgs := []string{
 		"test",
 		"-tags=e2e",
-		"-run="+authE2EPreflightPattern,
+		"-run=" + authE2EPreflightPattern,
 		"-count=1",
 		"-v",
 		"./e2e/...",
-	); err != nil {
+	}
+	if err := runner.Run(ctx, repoRoot, env, stdout, stderr, "go", authArgs...); err != nil {
+		if !classifyLiveQuirks {
+			return fmt.Errorf("fast e2e auth preflight: %w", err)
+		}
+
+		if writeErr := writeStatus(stdout, fmt.Sprintf("==> rerun known live quirk %s\n", authPreflightIncidentID)); writeErr != nil {
+			return fmt.Errorf("write status: %w", writeErr)
+		}
+		if rerunErr := runner.Run(ctx, repoRoot, env, stdout, stderr, "go", authArgs...); rerunErr == nil {
+			warning := fmt.Sprintf(
+				"warning: classified known live quirk %s after successful rerun\n",
+				authPreflightIncidentID,
+			)
+			if writeErr := writeStatus(stdout, warning); writeErr != nil {
+				return fmt.Errorf("write status: %w", writeErr)
+			}
+
+			return nil
+		}
+
 		return fmt.Errorf("fast e2e auth preflight: %w", err)
 	}
 
@@ -475,6 +552,7 @@ func runE2EFull(
 	env []string,
 	logDir string,
 	stdout, stderr io.Writer,
+	classifyLiveQuirks bool,
 ) error {
 	if logDir == "" {
 		logDir = filepath.Join(os.TempDir(), "e2e-debug-logs")
@@ -483,7 +561,7 @@ func runE2EFull(
 	fullEnv := append([]string{}, env...)
 	fullEnv = append(fullEnv, "E2E_LOG_DIR="+logDir)
 
-	if err := runE2EPreflightAuth(ctx, runner, repoRoot, fullEnv, stdout, stderr); err != nil {
+	if err := runE2EPreflightAuth(ctx, runner, repoRoot, fullEnv, stdout, stderr, classifyLiveQuirks); err != nil {
 		return err
 	}
 
@@ -506,11 +584,76 @@ func runE2EFull(
 		"-race",
 		"-v",
 		"-parallel",
-		"5",
-		"-timeout=30m",
+		"1",
+		"-timeout="+fullE2EPackageTimeout,
 		"./e2e/...",
 	); err != nil {
 		return fmt.Errorf("full e2e: %w", err)
+	}
+
+	return nil
+}
+
+func classifyFastE2EQuirk(failedTests map[string]struct{}) ([]string, string, bool) {
+	if len(failedTests) != 1 {
+		return nil, "", false
+	}
+
+	if _, ok := failedTests[fastDownloadTestName]; !ok {
+		return nil, "", false
+	}
+
+	return []string{
+		"test",
+		"-tags=e2e",
+		"-race",
+		"-run=^" + fastDownloadTestName + "$",
+		"-count=1",
+		"-v",
+		"./e2e/...",
+	}, fastDownloadIncidentID, true
+}
+
+func failedGoTestsFromJSON(output []byte) map[string]struct{} {
+	failed := make(map[string]struct{})
+
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		var event struct {
+			Action string
+			Test   string
+		}
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			continue
+		}
+		if event.Action != "fail" || event.Test == "" {
+			continue
+		}
+
+		failed[event.Test] = struct{}{}
+	}
+
+	return failed
+}
+
+func writeCommandOutput(w io.Writer, output []byte) error {
+	if len(output) == 0 {
+		return nil
+	}
+
+	_, err := w.Write(output)
+	if err != nil {
+		return fmt.Errorf("write command output: %w", err)
+	}
+
+	if output[len(output)-1] != '\n' {
+		if _, err := w.Write([]byte("\n")); err != nil {
+			return fmt.Errorf("write command output newline: %w", err)
+		}
 	}
 
 	return nil

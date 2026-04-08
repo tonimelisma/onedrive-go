@@ -9,9 +9,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // CreateFolder creates a new folder under the given parent.
@@ -42,8 +44,17 @@ func (c *Client) CreateFolder(ctx context.Context, driveID driveid.ID, parentID,
 	}
 	defer resp.Body.Close()
 
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("graph: reading create folder response: %w", err)
+	}
+
+	if len(bytes.TrimSpace(body)) == 0 {
+		return c.readCreatedFolderAfterEmptySuccessBody(ctx, driveID, parentID, name)
+	}
+
 	var dir driveItemResponse
-	if err := json.NewDecoder(resp.Body).Decode(&dir); err != nil {
+	if err := json.Unmarshal(body, &dir); err != nil {
 		return nil, fmt.Errorf("graph: decoding create folder response: %w", err)
 	}
 
@@ -51,6 +62,85 @@ func (c *Client) CreateFolder(ctx context.Context, driveID driveid.ID, parentID,
 	normalizeSingleItem(&item, c.logger)
 
 	return &item, nil
+}
+
+func (c *Client) readCreatedFolderAfterEmptySuccessBody(
+	ctx context.Context,
+	driveID driveid.ID,
+	parentID string,
+	name string,
+) (*Item, error) {
+	c.logger.Warn("create folder returned empty success body, confirming by parent listing",
+		slog.String("drive_id", driveID.String()),
+		slog.String("parent_id", parentID),
+		slog.String("name", name),
+	)
+
+	var lastErr error
+
+	for attempt := range c.createFolderReadbackPolicy.MaxAttempts {
+		children, err := c.ListChildren(ctx, driveID, parentID)
+		if err == nil {
+			if item, ok := findCreatedFolder(children, name); ok {
+				return &item, nil
+			}
+
+			lastErr = ErrNotFound
+		} else {
+			lastErr = err
+		}
+
+		if attempt >= c.createFolderReadbackPolicy.MaxAttempts-1 {
+			break
+		}
+
+		backoff := c.createFolderReadbackPolicy.Delay(attempt)
+		c.logger.Debug("waiting to confirm created folder after empty success body",
+			slog.String("drive_id", driveID.String()),
+			slog.String("parent_id", parentID),
+			slog.String("name", name),
+			slog.Int("attempt", attempt+1),
+			slog.Int("max_attempts", c.createFolderReadbackPolicy.MaxAttempts),
+			slog.Duration("backoff", backoff),
+		)
+
+		if sleepErr := retry.TimeSleep(ctx, backoff); sleepErr != nil {
+			return nil, fmt.Errorf("graph: create folder read-back canceled: %w", sleepErr)
+		}
+	}
+
+	if lastErr == nil {
+		lastErr = ErrNotFound
+	}
+
+	return nil, fmt.Errorf("graph: create folder empty success response: %w", lastErr)
+}
+
+func findCreatedFolder(children []Item, name string) (Item, bool) {
+	var foldedMatch Item
+	hasFoldedMatch := false
+
+	for i := range children {
+		child := children[i]
+		if !child.IsFolder {
+			continue
+		}
+
+		if child.Name == name {
+			return child, true
+		}
+
+		if strings.EqualFold(child.Name, name) {
+			if hasFoldedMatch {
+				return Item{}, false
+			}
+
+			foldedMatch = child
+			hasFoldedMatch = true
+		}
+	}
+
+	return foldedMatch, hasFoldedMatch
 }
 
 // ErrMoveNoChanges is returned when MoveItem is called with both newParentID

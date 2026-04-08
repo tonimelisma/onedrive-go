@@ -12,8 +12,11 @@ of truth for what was seen, when it was seen, and how it was handled.
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20260408-03 | Serialized `e2e_full` package exceeded the old 30-minute harness timeout | fixed | test harness | 2026-04-08 | no |
+| LI-20260408-02 | `CreateFolder` returned success status with an empty body | mitigated | graph quirk | 2026-04-08 | no |
+| LI-20260408-01 | Immediate post-simple-upload mtime PATCH returned `404 itemNotFound` | mitigated | graph quirk | 2026-04-08 | no |
 | LI-20260405-06 | `/me/drives` stayed `403 accessDenied` past the strict auth-preflight window | mitigated | graph quirk | 2026-04-08 | yes |
-| LI-20260405-09 | Fresh parent folder rejected immediate `createUploadSession` | mitigated | graph quirk | 2026-04-07 | yes |
+| LI-20260405-09 | Recently created parent folder lagged child create routes | mitigated | graph quirk | 2026-04-08 | yes |
 | LI-20260405-08 | Delete-by-ID returned `404 itemNotFound` after successful path lookup | mitigated | graph quirk | 2026-04-07 | yes |
 | LI-20260405-07 | Destination path stayed unreadable after successful mutation | mitigated | graph quirk | 2026-04-08 | yes |
 | LI-20260407-04 | Shared-file preflight assumed only one configured recipient could open the raw link | fixed | test bug | 2026-04-07 | no |
@@ -22,10 +25,101 @@ of truth for what was seen, when it was seen, and how it was handled.
 | LI-20260407-01 | Follow-on `put` lost a freshly visible parent path | fixed | graph quirk | 2026-04-07 | no |
 | LI-20260406-01 | Personal scoped delta not ready after path resolution | fixed | graph quirk | 2026-04-06 | no |
 | LI-20260405-05 | One-shot crash recovery left durable work unreplayed | fixed | product bug | 2026-04-05 | no |
-| LI-20260405-04 | Fast E2E download-only assumed delta visibility too early | closed as test | graph quirk | 2026-04-07 | yes |
-| LI-20260405-03 | Websocket smoke timed startup before remote observer readiness | closed as test | test bug | 2026-04-05 | no |
+| LI-20260405-04 | Fast E2E download-only assumed delta visibility too early | closed as test | graph quirk | 2026-04-08 | yes |
+| LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | fixed | test bug | 2026-04-08 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
+
+## LI-20260408-03: Serialized `e2e_full` package exceeded the old 30-minute harness timeout
+
+First seen: 2026-04-08  
+Last seen: 2026-04-08  
+Area: nightly/manual full E2E verifier  
+Suite / test: local `go run ./cmd/devtool verify e2e-full --classify-live-quirks`  
+Classification: test harness  
+Status: fixed  
+Recurring: no  
+Summary: After the verifier intentionally serialized the `e2e_full` package
+with `go test -parallel 1`, the old package-level `-timeout=30m` budget was
+no longer large enough for the now-non-overlapping live suite. The resulting
+panic was a harness/runtime-budget bug, not a product regression in the test
+that happened to be running when the package timer expired.  
+Evidence:
+- Local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` on
+  April 8, 2026 reached `panic: test timed out after 30m0s`.
+- The panic caught `TestE2E_Cp_IntoFolder` only 7 seconds into its own body,
+  which showed the package-level timer, not that individual scenario, had
+  become the limiting factor after serializing the suite.
+- The same run had already cleared the earlier full-suite regressions
+  (`TestE2E_SyncWatch_WebsocketRemoteWakeAndRestart` and
+  `TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal`) before hitting the
+  harness cap.
+Resolution / mitigation: `devtool verify e2e-full` now keeps the same serial
+execution model but raises the package timeout to `60m`, and the design/process
+docs now describe that longer budget explicitly so nightly/manual CI matches the
+real runtime of the serialized suite.  
+Promoted docs: [system.md](../design/system.md)
+
+## LI-20260408-02: `CreateFolder` returned success status with an empty body
+
+First seen: 2026-04-08  
+Last seen: 2026-04-08  
+Area: `e2e_full`, CLI `mkdir`, Graph item mutation boundary  
+Suite / test: local `go run ./cmd/devtool verify e2e-full --classify-live-quirks`, `TestE2E_Cp_File`  
+Classification: graph quirk  
+Status: mitigated  
+Recurring: no  
+Summary: Graph returned success for `POST .../children` during `mkdir`, but the
+body was empty enough that `CreateFolder()` failed on `EOF` before it could
+normalize the created item. Retrying the non-idempotent create would risk
+turning a committed success into a false `nameAlreadyExists` conflict, so the
+client needed a read-back confirmation path instead of a replay.  
+Evidence:
+- Local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` on April
+  8, 2026 failed in `TestE2E_Cp_File` while creating
+  `/e2e-cp-file-1775671921484525000`.
+- `POST /drives/bd50cf43646e28e6/items/root/children` returned HTTP 200 with
+  request ID `4b1bc4e6-0a58-4d5c-bda6-95c14326203f`.
+- The body was empty enough that `CreateFolder()` surfaced
+  `graph: decoding create folder response: EOF`.
+Resolution / mitigation: `graph.Client.CreateFolder()` now treats an empty
+success body as ambiguous success, then confirms the created folder by
+re-listing the parent collection under the bounded post-mutation visibility
+budget instead of replaying the create request.  
+Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../design/graph-client.md)
+
+## LI-20260408-01: Immediate post-simple-upload mtime PATCH returned `404 itemNotFound`
+
+First seen: 2026-04-08  
+Last seen: 2026-04-08  
+Area: fast E2E, CLI `put`, simple-upload finalization  
+Suite / test: local `go run ./cmd/devtool verify default`, `TestE2E_RoundTrip/rm_permanent` setup `put`  
+Classification: graph quirk  
+Status: mitigated  
+Recurring: no  
+Summary: Graph can return a concrete item ID from a successful small-file
+simple upload and then immediately reject the follow-on
+`UpdateFileSystemInfo` PATCH for that same item with `404 itemNotFound`. The
+file creation itself succeeded; the failure is a false negative in the mtime
+preservation step.  
+Evidence:
+- Local `go run ./cmd/devtool verify default` on April 8, 2026 uploaded
+  `/onedrive-go-e2e-1775667044557991000/perm-test.txt` successfully via
+  simple upload during `TestE2E_RoundTrip/rm_permanent` setup.
+- The upload response returned item ID
+  `BD50CF43646E28E6!s0db1ece8e28d4085845e623128c01e29`.
+- The immediate follow-on
+  `PATCH /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s0db1ece8e28d4085845e623128c01e29`
+  still returned HTTP 404 `itemNotFound` with request ID
+  `c597aa4d-e4c5-4c89-8888-fa9a07ab36db`.
+- The later `rm_permanent` failure in that same fast-suite run was secondary:
+  the fixture path had never been created cleanly because the preceding `put`
+  had already surfaced this false negative.
+Resolution / mitigation: simple-upload finalization now owns a narrow bounded
+retry for the exact follow-on `UpdateFileSystemInfo` `404 itemNotFound` case.
+Direct `UpdateFileSystemInfo()` calls remain strict; only the immediate
+post-simple-upload patch gets this normalization.  
+Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../design/graph-client.md), [drive-transfers.md](../design/drive-transfers.md), [transfers.md](../requirements/transfers.md)
 
 ## LI-20260405-06: `/me/drives` stayed `403 accessDenied` past the strict auth-preflight window
 
@@ -67,22 +161,26 @@ retry for `/me/drives` `403 accessDenied`, and caller behavior above it treats
 retry exhaustion as authenticated degraded discovery rather than auth failure.
 The repo-owned auth preflight remains intentionally strict so CI fails early
 with exact account, request ID, failed-call count, and elapsed-time evidence
-when this consistency gap lasts longer than the test budget.  
+when this consistency gap lasts longer than the test budget. Scheduled/manual
+`devtool verify e2e-full --classify-live-quirks` now reruns that exact strict
+preflight once and only downgrades it when the rerun passes; required lanes
+stay strict.  
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../design/graph-client.md), [degraded-mode.md](../design/degraded-mode.md), [cli.md](../design/cli.md)
 
-## LI-20260405-09: Fresh parent folder rejected immediate `createUploadSession`
+## LI-20260405-09: Recently created parent folder lagged child create routes
 
 First seen: 2026-04-05  
 Last seen: 2026-04-08  
-Area: `e2e_full`, upload-session creation after fresh parent visibility  
-Suite / test: `verify e2e-full`, `TestE2E_SyncWatch_WebsocketStartupSmoke`; later `TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal`  
+Area: `e2e_full`, child create after recently created parent visibility  
+Suite / test: `verify e2e-full`, `TestE2E_SyncWatch_WebsocketStartupSmoke`; later `TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal`; later `TestE2E_Sync_DriveRemoveAndReAdd`  
 Classification: graph quirk  
 Status: mitigated  
 Recurring: yes  
-Summary: A folder can become readable by path lookup before Graph accepts the
-immediate follow-on `createUploadSession` against that same fresh parent. The
-API surface is internally inconsistent: the parent exists for reads, but upload
-session creation still returns `404 itemNotFound`.  
+Summary: A recently created folder can become readable by path lookup before
+Graph accepts follow-on child creates against that same parent. The live
+failures first showed up on the upload-session route and later recurred even
+after the session-route permission oracle had exhausted and the final simple
+create still returned `404 itemNotFound`.  
 Evidence:
 - Local `go run ./cmd/devtool verify e2e-full` on April 5, 2026 created
   `/e2e-watch-websocket-1775447250013596000`, then confirmed the folder was
@@ -96,16 +194,32 @@ Evidence:
   parent-route `createUploadSession` failures for `collision.txt` ended with
   request ID `9dce082f-97ae-4f6c-9cc2-69b650dcf4c1` before the product fix
   stopped using that route when authoritative item identity was already known.
+- The same family recurred again on April 8, 2026 during
+  `go run ./cmd/devtool verify e2e-full --classify-live-quirks`, where
+  `put /e2e-sync-cc-1775669439198173000/collision.txt` first got simple-upload
+  `404 itemNotFound`, then exhausted the bounded `createUploadSession` retry
+  budget with final request ID `29f1df3d-8ec4-422a-8065-27336de29f00`.
+- The same family recurred again on April 8, 2026 in
+  `TestE2E_Sync_DriveRemoveAndReAdd`: after the first `sync --upload-only
+  --force` created `/e2e-sync-readd-1775676089553365000/file1.txt`, the second
+  sync still exhausted `createUploadSession` on `file2.txt` for parent
+  `BD50CF43646E28E6!sa7cb589636134fe4b1bf296e555fb410`, then exhausted the old
+  final simple-upload replay budget with request ID
+  `a9ad7aa8-ba79-424d-9ead-9b718939ddca`.
 Resolution / mitigation: `graph.Client.CreateUploadSession()` now owns a
 bounded retry for the exact fresh-parent `404 itemNotFound` case, and flows
 that already know the authoritative remote `itemID` avoid parent-route create
-paths entirely by overwriting via item ID instead.  
+paths entirely by overwriting via item ID instead. When a small-file create has
+already seen the initial simple-upload `404`, the graph boundary now replays
+that original simple upload under a second, slightly longer bounded
+create-convergence policy after the session path still exhausts on exact
+`itemNotFound`.  
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../design/graph-client.md), [drive-transfers.md](../design/drive-transfers.md)
 
 ## LI-20260405-08: Delete-by-ID returned `404 itemNotFound` after successful path lookup
 
 First seen: 2026-04-05  
-Last seen: 2026-04-07  
+Last seen: 2026-04-08  
 Area: `e2e_full`, CLI `rm`, forced-overwrite cleanup  
 Suite / test: `go test -tags='e2e e2e_full' ./e2e -run '^TestE2E_EdgeCases$|^TestE2E_Sync_BidirectionalMerge$'`; later isolated `TestE2E_Sync_BigDeleteProtection`  
 Classification: graph quirk  
@@ -218,6 +332,15 @@ Evidence:
   family earlier in the flow when a freshly visible parent path still returned
   `404 itemNotFound` to the next `put`, which is tracked separately in
   `LI-20260407-01`.
+- On April 8, 2026 local `go run ./cmd/devtool verify e2e-full --classify-live-quirks`
+  failed `TestE2E_Sync_DriveRemoveAndReAdd` after a successful
+  `sync --upload-only --force` because the test still used the generic
+  30-second stat poll for `/e2e-sync-readd-1775675752503071000/file1.txt`.
+  Repeated `stat` reads kept returning HTTP 404 `itemNotFound` with request IDs
+  `0b005d4f-c866-45b4-be1e-acb6d28b6cb2`,
+  `6b60ec38-202b-4108-8487-e877fa6794d3`, and
+  `d7c1d501-09df-4629-ae2c-03c12d1276a0` before the short harness timeout
+  expired.
 Resolution / mitigation: CLI mutation flows now treat destination visibility as
 a bounded driveops-owned convergence concern. `mkdir`, single-file `put`, and
 `mv` wait for the destination path to become readable before reporting success,
@@ -225,7 +348,11 @@ and `put` also routes already-expected parent-path reads through the same
 bounded visibility gate. Repo-owned E2E sync-upload visibility checks now use
 the shared `waitForRemoteWriteVisible()` helper with
 `remoteWritePropagationTimeout` instead of the older generic 30-second poll
-when they are asserting follow-on remote readability after a successful write.  
+when they are asserting follow-on remote readability after a successful write.
+`rm` now keeps the same bounded parent-read check for
+non-root deletes, but once delete intent has already proved the target path is
+gone it downgrades a pure `PathNotVisibleError` on that follow-on parent read
+to a warning instead of reporting a false delete failure.  
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [drive-transfers.md](../design/drive-transfers.md), [cli.md](../design/cli.md)
 
 ## LI-20260407-04: Shared-file preflight assumed only one configured recipient could open the raw link
@@ -373,25 +500,28 @@ Evidence:
 - [graph-api-quirks.md](graph-api-quirks.md) already documents delta endpoint consistency lag as a live behavior.
 - Merged fix chain is included in `74da628` after the earlier test hardening commit on the same PR line.
 - April 7, 2026 local `go run ./cmd/devtool verify default` reproduced the same symptom once in the fast E2E lane, while an immediate targeted rerun of `go test -tags=e2e ./e2e -run '^TestE2E_Sync_DownloadOnly$' -count=1` passed, consistent with intermittent delta visibility lag rather than a deterministic product regression.
-Resolution / mitigation: The fast E2E test now waits for the real product outcome, the downloaded local file with the expected content, instead of assuming first-pass delta visibility after a direct REST read succeeds.  
+- April 8, 2026 local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` hit the same family in the classified fast-E2E pre-pass, and the targeted rerun passed immediately, confirming the scheduled/manual rerun path is now correctly scoped to this exact recurrence.
+Resolution / mitigation: The fast E2E test now waits for the real product outcome, the downloaded local file with the expected content, instead of assuming first-pass delta visibility after a direct REST read succeeds. Delta-sensitive live sync tests now reuse the same eventual-convergence helper pattern, and scheduled/manual `devtool verify e2e-full --classify-live-quirks` may rerun this exact test once when the known delta-lag family recurs.  
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md)
 
-## LI-20260405-03: Websocket smoke timed startup before remote observer readiness
+## LI-20260405-03: Websocket watch tests timed websocket assertions before the steady-state subtree was ready
 
 First seen: 2026-04-05  
-Last seen: 2026-04-05  
-Area: fast-e2e, websocket watch smoke  
-Suite / test: `e2e`, `TestE2E_SyncWatch_WebsocketStartupSmoke`  
+Last seen: 2026-04-08  
+Area: websocket watch E2E harness  
+Suite / test: `e2e`, `TestE2E_SyncWatch_WebsocketStartupSmoke`; later `e2e_full`, `TestE2E_SyncWatch_WebsocketRemoteWakeAndRestart`  
 Classification: test bug  
-Status: closed as test  
-Recurring: no  
-Summary: The websocket smoke test originally measured websocket startup from daemon launch, even though the product intentionally performs bootstrap sync first and only starts the websocket wake source after the steady-state remote observer comes online. The failure looked like a slow websocket connection, but the real issue was the test’s readiness boundary.  
+Status: fixed  
+Recurring: yes  
+Summary: The websocket harness originally treated an open socket connection as the readiness boundary, even though the product only starts honoring websocket-specific timing after bootstrap sync drains and the steady-state remote observer comes online. The original smoke failure and the later restart failure were both harness timing bugs, not websocket transport regressions.  
 Evidence:
 - [socketio_e2e_test.go](/Users/tonimelisma/Development/onedrive-go-live-incident-ledger/e2e/socketio_e2e_test.go#L132) now documents the correct remote-observer-first boundary.
 - [socketio_helpers_test.go](/Users/tonimelisma/Development/onedrive-go-live-incident-ledger/e2e/socketio_helpers_test.go#L87) contains the helper that waits for `observer_started(remote)` before websocket-specific timing.
 - Merged fix: `52cef0f` (`fix: close W8 validation audit gaps (#415)`).
-Resolution / mitigation: The smoke now waits for `observer_started(remote)` before starting its websocket-specific timeout and failure classification.  
-Promoted docs: none
+- On April 8, 2026 local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` reproduced the same harness gap in `TestE2E_SyncWatch_WebsocketRemoteWakeAndRestart`: after daemon restart, the test waited only for `websocket_connected`, so the first post-restart wake could still be consumed by bootstrap catch-up before the steady-state remote observer was ready.
+- On April 8, 2026 a later local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` run still failed the same test even after the remote-observer fix, because the timed assertion also depended on creating the parent folder after daemon startup. The first post-mutation wake could legitimately reflect unrelated live-drive traffic or an incremental delta read that still had not observed the fresh parent subtree.
+Resolution / mitigation: Websocket watch tests now wait for `observer_started(remote)` before starting websocket-specific timing on both initial startup and daemon restart paths, and the long full-suite wake/restart test seeds its remote subtree before daemon startup so the timed websocket assertion only covers steady-state remote file creation inside an already materialized subtree.  
+Promoted docs: [system.md](../design/system.md)
 
 ## LI-20260405-02: Stale root-level E2E artifacts inflated bootstrap and polluted live drives
 

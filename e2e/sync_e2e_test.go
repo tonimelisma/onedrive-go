@@ -331,39 +331,30 @@ func TestE2E_Sync_DownloadOnly(t *testing.T) {
 
 	// Run sync --download-only.
 	localPath := filepath.Join(syncDir, testFolder, "download-test.txt")
-	var (
-		lastStdout string
-		lastStderr string
-		lastErr    error
-		downloaded []byte
-	)
-	require.Eventually(t, func() bool {
-		lastStdout, lastStderr, lastErr = runCLIWithConfigAllowError(
-			t,
-			cfgPath,
-			env,
-			"sync",
-			"--download-only",
-			"--force",
-		)
-		if lastErr != nil {
-			return false
-		}
+	var downloaded []byte
+	attempt := requireSyncEventuallyConverges(
+		t,
+		cfgPath,
+		env,
+		90*time.Second,
+		"download-only sync should eventually materialize the remote file after delta catches up",
+		func(result syncAttemptResult) bool {
+			if result.Err != nil {
+				return false
+			}
 
-		data, readErr := os.ReadFile(localPath)
-		if readErr != nil {
-			return false
-		}
+			data, readErr := os.ReadFile(localPath)
+			if readErr != nil {
+				return false
+			}
 
-		downloaded = data
-		return bytes.Equal(downloaded, content)
-	}, 90*time.Second, 5*time.Second,
-		"download-only sync should eventually materialize the remote file after delta catches up\nlastErr: %v\nlastStdout: %s\nlastStderr: %s",
-		lastErr,
-		lastStdout,
-		lastStderr,
+			downloaded = data
+			return bytes.Equal(downloaded, content)
+		},
+		"--download-only",
+		"--force",
 	)
-	assert.Contains(t, lastStderr, "Mode: download-only")
+	assert.Contains(t, attempt.Stderr, "Mode: download-only")
 	assert.Equal(t, content, downloaded)
 }
 
@@ -480,7 +471,8 @@ sync_dir = %q
 	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
 	assert.Contains(t, stderr, "Mode: upload-only")
 
-	// Poll to verify file1 exists remotely.
+	// Sync returning success does not guarantee the remote path is immediately
+	// readable; live Graph can lag path visibility after successful writes.
 	remotePath1 := "/" + testFolder + "/file1.txt"
 	waitForRemoteWriteVisible(t, cfgPath, env, drive, "file1.txt", "stat", remotePath1)
 

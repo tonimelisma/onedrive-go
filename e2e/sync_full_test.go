@@ -426,24 +426,27 @@ func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 	// up items on the shared drive, inflating the delete count. --force only
 	// affects big-delete protection, NOT delta tokens — incremental delta
 	// (saved token) is still used.
-	// Use runCLIWithConfigAllowError inside Eventually — require.Eventually
-	// runs the function in a goroutine, and runCLIWithConfig's require.NoErrorf
-	// would panic if the test has already timed out.
 	var historyAfterResolution string
-	require.Eventually(t, func() bool {
-		_, _, _ = runCLIWithConfigAllowError(t, cfgPath, env, "sync", "--force")
+	requireSyncEventuallyConverges(
+		t,
+		cfgPath,
+		env,
+		120*time.Second,
+		"sync should eventually detect and auto-resolve the edit-delete conflict",
+		func(_ syncAttemptResult) bool {
+			var err error
+			historyAfterResolution, _, err = runCLICore(t, cfgPath, env, drive, "conflicts", "--history")
+			if err != nil {
+				return false
+			}
 
-		var err error
-		historyAfterResolution, _, err = runCLICore(t, cfgPath, env, drive, "conflicts", "--history")
-		if err != nil {
-			return false
-		}
-
-		return strings.Contains(historyAfterResolution, testFolder+"/fragile.txt") &&
-			strings.Contains(historyAfterResolution, "edit_delete") &&
-			strings.Contains(historyAfterResolution, "keep_local") &&
-			strings.Contains(historyAfterResolution, "auto")
-	}, 120*time.Second, 5*time.Second, "sync should eventually detect and auto-resolve the edit-delete conflict")
+			return strings.Contains(historyAfterResolution, testFolder+"/fragile.txt") &&
+				strings.Contains(historyAfterResolution, "edit_delete") &&
+				strings.Contains(historyAfterResolution, "keep_local") &&
+				strings.Contains(historyAfterResolution, "auto")
+		},
+		"--force",
+	)
 
 	// Step 6: The owned edit-delete conflict is resolved even if unrelated
 	// shared-drive churn causes other work in the same sync pass.
@@ -665,22 +668,26 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 	// threshold. --force only affects big-delete protection, NOT delta tokens.
 	// Check both del-remote.txt (EF8) and sub/ (ED6) since folder deletions
 	// may propagate later than file deletions.
-	// Use runCLIWithConfigAllowError inside Eventually — require.Eventually
-	// runs the function in a goroutine, and runCLIWithConfig's require.NoErrorf
-	// would panic if the test has already timed out.
 	// With cascade expansion (sync-planning.md §Folder Delete Cascade),
 	// once delta reports the folder deletion, all children are deleted in
 	// a single pass.
-	require.Eventually(t, func() bool {
-		_, _, syncErr := runCLIWithConfigAllowError(t, cfgPath, env, "sync", "--force")
-		if syncErr != nil {
-			return false // sync failed (e.g., transient 404); retry
-		}
-		_, errRemote := os.Stat(filepath.Join(localDir, "del-remote.txt"))
-		_, errSub := os.Stat(filepath.Join(localDir, "sub"))
-		return os.IsNotExist(errRemote) && os.IsNotExist(errSub)
-	}, 120*time.Second, 5*time.Second,
-		"remote-only deletions should propagate locally after sync")
+	requireSyncEventuallyConverges(
+		t,
+		cfgPath,
+		env,
+		120*time.Second,
+		"remote-only deletions should propagate locally after sync",
+		func(result syncAttemptResult) bool {
+			if result.Err != nil {
+				return false
+			}
+
+			_, errRemote := os.Stat(filepath.Join(localDir, "del-remote.txt"))
+			_, errSub := os.Stat(filepath.Join(localDir, "sub"))
+			return os.IsNotExist(errRemote) && os.IsNotExist(errSub)
+		},
+		"--force",
+	)
 
 	// Step 5: Assert remaining results.
 	// EF6: del-local.txt gone remotely (poll for eventual consistency).
@@ -754,14 +761,18 @@ func TestE2E_Sync_BigDeleteProtection(t *testing.T) {
 	// Step 4: Sync without --force — big-delete protection should trigger.
 	// Retry until delta catches up with all remote deletions (OneDrive
 	// eventual consistency — delta may lag behind REST).
-	var lastStderr string
-	var lastErr error
-
-	require.Eventually(t, func() bool {
-		_, lastStderr, lastErr = runCLIWithConfigAllowError(t, cfgPath, env, "sync")
-		return lastErr != nil && strings.Contains(lastStderr, "big-delete")
-	}, 120*time.Second, 5*time.Second,
-		"big-delete protection should trigger: lastErr=%v lastStderr=%s", lastErr, lastStderr)
+	attempt := requireSyncEventuallyConverges(
+		t,
+		cfgPath,
+		env,
+		120*time.Second,
+		"big-delete protection should trigger",
+		func(result syncAttemptResult) bool {
+			return result.Err != nil && strings.Contains(result.Stderr, "big-delete")
+		},
+	)
+	assert.Error(t, attempt.Err)
+	assert.Contains(t, attempt.Stderr, "big-delete")
 
 	// Step 5: Local files should still exist (no changes applied).
 	for i := 1; i <= fileCount; i++ {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 const (
@@ -29,6 +31,20 @@ const (
 type rmRequestCounts struct {
 	deleteCalls          int
 	permanentDeleteCalls int
+}
+
+type fakeRmParentWaiter struct {
+	calls []string
+	err   error
+}
+
+func (f *fakeRmParentWaiter) WaitPathVisible(_ context.Context, remotePath string) (*graph.Item, error) {
+	f.calls = append(f.calls, remotePath)
+	if f.err != nil {
+		return nil, f.err
+	}
+
+	return &graph.Item{ID: "parent-id", Name: filepath.Base(remotePath)}, nil
 }
 
 // Validates: R-1.4.3
@@ -280,6 +296,37 @@ func TestRunRm_ResolveDeleteTargetFallsBackToParentListing(t *testing.T) {
 	require.NoError(t, runRm(cmd, []string{"/old-report.pdf"}))
 	assert.Equal(t, 1, resolveCalls)
 	assert.Equal(t, 1, counts.deleteCalls)
+}
+
+func TestConfirmRmParentVisibility_WarnsButSucceedsOnSettlingParent(t *testing.T) {
+	t.Parallel()
+
+	waiter := &fakeRmParentWaiter{
+		err: &driveops.PathNotVisibleError{Path: "docs"},
+	}
+
+	var status bytes.Buffer
+	err := confirmRmParentVisibility(context.Background(), waiter, "/docs/old-report.pdf", &status)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"docs"}, waiter.calls)
+	assert.Contains(t, status.String(), "warning:")
+	assert.Contains(t, status.String(), "/docs")
+	assert.Contains(t, status.String(), "/docs/old-report.pdf")
+}
+
+func TestConfirmRmParentVisibility_FailsOnNonVisibilityError(t *testing.T) {
+	t.Parallel()
+
+	waiter := &fakeRmParentWaiter{
+		err: errors.New("transport exploded"),
+	}
+
+	var status bytes.Buffer
+	err := confirmRmParentVisibility(context.Background(), waiter, "/docs/old-report.pdf", &status)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "confirming parent \"/docs\" visibility after delete")
+	require.ErrorContains(t, err, "transport exploded")
+	assert.Empty(t, status.String())
 }
 
 func TestRemovableParentPath(t *testing.T) {

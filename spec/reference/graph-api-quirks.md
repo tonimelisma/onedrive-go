@@ -51,6 +51,12 @@ On Business/SharePoint, uploading a file and then PATCHing its `fileSystemInfo` 
 
 Simple upload (PUT `/content`) sends raw binary — there's no way to include `fileSystemInfo` in the same request. Files ≤4 MiB uploaded via simple upload get server receipt timestamps. A post-upload PATCH to `UpdateFileSystemInfo` is required when mtime preservation matters.
 
+That immediate follow-on PATCH can itself briefly race the new item's
+item-by-ID visibility and return `404 itemNotFound` even though the upload
+response already returned a concrete item ID. Runtime policy: the graph
+boundary owns a short exact retry for the post-simple-upload mtime PATCH only;
+the rest of the system still treats simple-upload finalization as one outcome.
+
 ## Delta Response Quirks
 
 ## Socket.IO Watch Endpoint Shape
@@ -100,6 +106,10 @@ Runtime policy:
 - full E2E websocket tests should allow a wider notification window and assert
   the end-to-end file arrival stays well below the 5-minute polling fallback,
   rather than assuming every notification arrives inside 45s
+- full E2E websocket tests should seed the watched subtree before daemon
+  startup, then time websocket-specific mutations only against that already
+  materialized subtree instead of coupling the assertion to fresh parent
+  creation plus immediate delta visibility
 
 ### Deletion/Creation Ordering
 
@@ -122,6 +132,18 @@ Items with a `package` facet (`type: "oneNote"`) have no `file` or `folder` face
 The delta endpoint (`/drives/{driveID}/root/delta`) aggregates changes from a different consistency domain than REST item endpoints. After a mutation (e.g., `DELETE /items/{id}`), a direct `GET` on the item returns 404 within seconds, but the delta endpoint may not include the change for 5-60+ seconds. This causes the delta response to lag behind the observable state of individual items.
 
 Microsoft acknowledges this: "Due to replication delays, changes to the object do not show up immediately [...] You should retry [...] after some time to retrieve the latest changes."
+
+Runtime and test policy:
+
+- incremental one-shot sync treats this as normal eventual consistency rather
+  than spinning hidden settle loops after every observed mutation
+- a direct REST item read succeeding elsewhere is not proof that the current
+  incremental delta pass is stale or incorrect
+- the explicit one-shot strong-freshness path is `sync --full`, which
+  enumerates remote truth instead of trusting one incremental delta pass
+- delta-sensitive live tests assert eventual user-visible convergence
+  (downloaded file appears locally, local delete propagates, conflict resolves)
+  rather than first-pass delta visibility after a direct REST read
 
 ### Folder-Scoped Delta Readiness Lag
 
@@ -192,7 +214,65 @@ Runtime policy:
 - transfer-manager callers and sync workers do not add their own second retry
   loop for this quirk; the graph boundary is the single owner
 
-### Post-Mutation Path Reads Can Lag Successful `mkdir`, `put`, And `mv`
+### Transient 404 on Immediate Post-Simple-Upload Mtime Patch
+
+After a small-file simple upload succeeds, the immediate
+`PATCH /drives/{driveID}/items/{itemID}` used to restore
+`fileSystemInfo.lastModifiedDateTime` can return HTTP 404 with Graph code
+`itemNotFound` even though the upload response already returned that item ID.
+
+Observed local evidence on April 8, 2026 during `go run ./cmd/devtool verify default`:
+
+- `put /onedrive-go-e2e-1775667044557991000/perm-test.txt` used simple upload
+  and received item ID `BD50CF43646E28E6!s0db1ece8e28d4085845e623128c01e29`
+- the immediate follow-on `PATCH /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s0db1ece8e28d4085845e623128c01e29`
+  returned HTTP 404 `itemNotFound` with request ID
+  `c597aa4d-e4c5-4c89-8888-fa9a07ab36db`
+- the cascading fast-suite failure later surfaced in
+  `TestE2E_RoundTrip/rm_permanent` only because the preceding `put` had already
+  failed on that false negative
+
+Runtime policy:
+
+- only the immediate post-simple-upload mtime PATCH gets the retry
+- retry remains narrow: only HTTP 404, only Graph code `itemNotFound`, only
+  the simple-upload finalization path
+- the current production retry budget is 4 total attempts with 250ms base, 2x
+  multiplier, no jitter, and 2s max
+- direct `UpdateFileSystemInfo()` calls outside simple-upload finalization stay
+  strict; callers should not assume all metadata PATCH paths are retried
+
+### Folder Create Can Return Success Status With An Empty Body
+
+Graph can return HTTP success for `POST /drives/{driveID}/items/{parentID}/children`
+and still provide an empty response body. That leaves the client in an
+ambiguous state: replaying the create is not safe because the first request may
+already have committed, but blindly trusting success would lose the created
+item ID and can surface a false `mkdir` failure even when the folder appears
+seconds later.
+
+Observed evidence on April 8, 2026 during `go run ./cmd/devtool verify
+e2e-full --classify-live-quirks`:
+
+- `mkdir /e2e-cp-file-1775671921484525000` in `TestE2E_Cp_File` got HTTP 200
+  from `POST /drives/bd50cf43646e28e6/items/root/children`
+- the response body was empty enough that `CreateFolder()` failed on
+  `decoding create folder response: EOF`
+- the request ID on that ambiguous success response was
+  `4b1bc4e6-0a58-4d5c-bda6-95c14326203f`
+
+Runtime policy:
+
+- `CreateFolder()` treats only an empty or whitespace-only success body as
+  ambiguous success
+- it never retries the `POST`; instead it re-lists the parent collection under
+  the bounded post-mutation visibility budget and returns the matching folder
+  once it becomes readable
+- if the folder still is not discoverable after that budget, the operation
+  fails loudly so callers do not report success without authoritative item
+  identity
+
+### Post-Mutation Path Reads Can Lag Successful `mkdir`, `put`, `mv`, And Sync-Created Writes`
 
 Graph can acknowledge a metadata-changing mutation and still return
 `404 itemNotFound` on an immediate follow-on path lookup for the destination.
@@ -290,7 +370,12 @@ Runtime policy:
   - uses the same bounded deterministic convergence schedule as
     post-success path visibility
 - `rm` additionally waits for the non-root parent path to become readable again
-  before printing success
+  before printing success, but once delete intent has already proved the
+  target path is gone it downgrades a pure bounded parent `PathNotVisibleError`
+  to a warning instead of surfacing a false failure
+- live tests that assert remote existence after a successful write-producing
+  sync pass must use the longer remote-write visibility budget rather than the
+  generic 30-second poll helper
 
 ### Transient 403 on `/me/drives` (Token Propagation)
 
@@ -337,6 +422,9 @@ Runtime policy:
   - `drive list` keeps configured/offline state, uses `/me/drive` fallback for
     the primary drive, and continues independent shared-folder and SharePoint
     discovery
+- scheduled/manual `devtool verify e2e-full --classify-live-quirks` may rerun
+  the strict auth preflight once for this exact known quirk and only downgrade
+  it when the rerun passes; required per-PR lanes stay strict
 
 ### Slow/Stalled Metadata Response Headers
 
@@ -503,7 +591,7 @@ Runtime policy:
   so read-only shared folders surface `403` and enter the normal `perm:remote`
   flow instead of being misclassified as missing
 
-### Fresh Parent Folder Can Still Reject `createUploadSession`
+### Recently Created Parent Folders Can Lag Child Create Routes
 
 Live `e2e_full` coverage on April 5, 2026 captured a second create-path
 consistency gap after folder creation. The parent folder
@@ -519,6 +607,11 @@ Runtime policy:
   no jitter)
 - the retry stays at the graph quirk boundary instead of teaching callers or
   generic transport retry about parent-creation ordering
+- when the same small-file create already saw an initial simple-upload
+  `404 itemNotFound`, the graph boundary may replay the original simple upload
+  under a second bounded create-convergence policy (`7` total attempts, `250ms`
+  base, `8s` max, no jitter) after the session path still exhausts on exact
+  `itemNotFound`
 - flows that already know the authoritative remote `itemID` avoid this parent
   create route entirely and overwrite by item ID instead of re-creating by
   parent path

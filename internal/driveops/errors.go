@@ -1,6 +1,9 @@
 package driveops
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // MaxOneDriveFileSize is the maximum file size supported by OneDrive uploads
 // and sync. Direct uploads reject larger files before hashing or transfer.
@@ -25,3 +28,19 @@ var ErrFileTooLargeForSpace = errors.New("insufficient disk space for file")
 // post-success visibility wait. Callers surface this as a concrete degraded
 // mutation result instead of pretending the path settled immediately.
 var ErrPathNotVisible = errors.New("remote path not yet visible")
+
+// PathNotVisibleError records which remote path exhausted the bounded
+// visibility budget while Graph still returned exact itemNotFound responses.
+// Callers can branch on this typed error for user-facing degraded-success
+// handling without weakening other visibility failures.
+type PathNotVisibleError struct {
+	Path string
+}
+
+func (e *PathNotVisibleError) Error() string {
+	return fmt.Sprintf("%s: %q", ErrPathNotVisible, e.Path)
+}
+
+func (e *PathNotVisibleError) Unwrap() error {
+	return ErrPathNotVisible
+}

@@ -38,7 +38,7 @@ When the user runs `rm <path>`, the system shall delete the item (to recycle bin
 - R-1.4.1: When the path is a folder, the system shall delete recursively. [verified]
 - R-1.4.2: Deletions shall go to the OneDrive recycle bin by default. [verified]
 - R-1.4.3: When `--json` is passed, the system shall output structured JSON with the deleted path. [verified]
-- R-1.4.4: When `rm` reports success, the system shall reconcile transient delete-route `itemNotFound` errors against the target path and shall not claim success until the target path is absent and any non-root parent path is readable again. [verified]
+- R-1.4.4: When `rm` reports success, the system shall reconcile transient delete-route `itemNotFound` errors against the target path. Once the target path is proved absent, a bounded non-root parent readability lag may surface as a warning rather than a hard failure. [verified]
 
 ## R-1.5 Create Folder (`mkdir`) [verified]
 

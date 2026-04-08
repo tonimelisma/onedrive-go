@@ -85,6 +85,14 @@ func isTransientDownloadMetadataError(err error) (*GraphError, bool) {
 	return isTransientItemNotFoundError(err)
 }
 
+func isTransientSimpleUploadMtimeError(err error) (*GraphError, bool) {
+	return isTransientItemNotFoundError(err)
+}
+
+func isTransientSimpleUploadCreateError(err error) (*GraphError, bool) {
+	return isTransientItemNotFoundError(err)
+}
+
 func isTransientUploadSessionCreateError(err error) (*GraphError, bool) {
 	return isTransientItemNotFoundError(err)
 }

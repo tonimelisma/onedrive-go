@@ -41,6 +41,20 @@ uploads while correcting the observed OneDrive quirk where read-only shared
 folders misreport create denial as 404 on the simple-upload route but return
 the correct 403 on the upload-session route.
 
+If that same fresh-parent create family still exhausts the bounded
+`createUploadSession` retry budget on exact `itemNotFound`, the graph boundary
+replays the original simple upload under a second, slightly longer bounded
+create-convergence policy before giving up. That keeps the session route fast
+as the permission-oracle fallback while extending robustness for ordinary
+own-drive creates whose parent path is readable slightly before the child
+create routes converge.
+
+When simple upload succeeds and mtime preservation is required, the immediate
+follow-on `UpdateFileSystemInfo` PATCH can also briefly return `404
+itemNotFound` for the returned item ID. That retry stays in the graph boundary
+and only applies to the post-simple-upload finalization path; transfer-manager
+and CLI callers still see one success or one failure outcome.
+
 Shared-file `put` reuses the same transfer machinery, but targets an existing
 item by `(driveID, itemID)` instead of resolving a destination parent path.
 The transfer manager therefore exposes both parent-path upload and existing-item
@@ -79,6 +93,14 @@ delete-target path recovery in the same owner:
   item ID forever; their retry loop re-resolves through the same
   delete-target helper instead of assuming a second exact-path `404` means the
   delete already happened
+
+`WaitPathVisible()` returns a typed `PathNotVisibleError` when the bounded
+schedule exhausts on exact `itemNotFound` visibility lag alone. `mkdir`,
+single-file `put`, and `mv` still treat that as a hard degraded-success
+failure because their contract is "destination path is readable now." `rm`
+uses the same typed error only for its post-delete parent confirmation and
+downgrades it to a warning once `DeleteResolvedPath()` has already proved the
+target path is gone.
 
 Sync execution consumes the same capability for post-success visibility
 confirmation after remote folder create, upload, and move. Those sync probes
