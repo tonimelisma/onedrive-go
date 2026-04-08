@@ -173,6 +173,47 @@ Evidence:
   `001ccaad-0943-41d4-bc46-c2f33cea05c7`,
   `393649c4-9a53-45e9-9dcd-bd9d4689adbe`, and
   `f91e7f3b-24ea-4f62-b985-3a513002e2e8`.
+- Later the same day, another local `go run ./cmd/devtool verify default`
+  failed the same test one step later in the scenario: after drive remove and
+  re-add, `sync --upload-only --force` completed but follow-on CLI `stat
+  /e2e-sync-readd-1775673996862622000/file2.txt` still returned repeated
+  `404 itemNotFound` for more than 2 minutes, and the cleanup `rm -r
+  /e2e-sync-readd-1775673996862622000` also observed the parent path as
+  missing. Request IDs from that run included
+  `718c9dc3-5bd6-41c3-a6ac-f8ef4dee49f5`,
+  `71f924c5-2675-4d03-b207-70426adcb3c2`,
+  `9b7a6bc5-213d-4c26-bb49-951571a0b809`, and
+  `b2f572f0-161d-4363-a45a-4550ba093a28`. An immediate isolated rerun of
+  `TestE2E_Sync_DriveRemoveAndReAdd` passed in 13.49s, which points to the
+  same transient Graph propagation family rather than a deterministic product
+  regression in the refactor under test.
+- A later April 8, 2026 `go run ./cmd/devtool verify default` hit the same
+  broader visibility family in `TestE2E_RoundTrip/rm_subfolder`: `rm -r
+  /onedrive-go-e2e-1775674310493677000/subfolder` deleted the child folder, but
+  the follow-on parent visibility confirmation kept reading the parent path
+  `/onedrive-go-e2e-1775674310493677000` as `404 itemNotFound` for more than
+  30 seconds and eventually failed with `remote path not yet visible`. The run
+  also saw the initial child DELETE return `404` before the by-path read proved
+  the child was gone. Representative request IDs from that run included
+  `b7fd7590-1fa2-440c-93ff-6e437e84f1ef`,
+  `6006d2b2-c23e-451f-867a-0548d72e93d1`,
+  `d3f4aee6-6ccc-4b87-8c44-2cddcefccdca`, and
+  `333e6384-ec68-4812-b48d-44da956a029d`. An immediate isolated rerun of
+  `TestE2E_RoundTrip` passed in 30.35s, again pointing to transient Graph
+  visibility lag rather than a deterministic regression in the branch under
+  test.
+- Another April 8, 2026 `go run ./cmd/devtool verify default` reproduced the
+  same family one increment later in `TestE2E_RoundTrip`: after `rm
+  /onedrive-go-e2e-1775674751903651000/test.txt` returned success, every
+  follow-on by-path read of the still-existing parent
+  `/onedrive-go-e2e-1775674751903651000` returned `404 itemNotFound` for more
+  than 30 seconds, which then cascaded into `rm_subfolder` and `rm_permanent`
+  failures because the root folder never reconverged for subsequent commands.
+  Representative request IDs from that run included
+  `71dd8282-dc1f-4270-b87b-4da16e664cdc`,
+  `cff44bae-7863-4a8b-b345-6d85ace95cd8`,
+  `73104aa2-ef31-4543-945d-d05506521ed2`, and
+  `9eee346a-951e-48b9-8484-da811a59c4dd`.
 - On April 7, 2026, `TestE2E_Conflicts_ResolveKeepBoth` hit the same broader
   family earlier in the flow when a freshly visible parent path still returned
   `404 itemNotFound` to the next `put`, which is tracked separately in
