@@ -482,6 +482,13 @@ func (flow *engineFlow) observeRemoteChanges(
 		fetchResult.deferred = append(fetchResult.deferred, reentryResult.deferred...)
 	}
 
+	// Dry-run previews must never advance remote observation cursors, regardless
+	// of whether the events came from root delta, scoped-root delta, scoped
+	// targets, or targeted re-entry reconciliation.
+	if dryRun {
+		fetchResult.deferred = nil
+	}
+
 	scopedRemote := applyRemoteScope(flow.engine.logger, scopeSession.Current, scopeSession.Generation, fetchResult.events)
 	if err := flow.commitObservedRemoteChanges(
 		ctx,

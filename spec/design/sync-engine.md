@@ -106,6 +106,11 @@ available. Shortcut observation still isolates per-target failures, never
 silently switches from delta to enumerate, and commits successful shortcut
 delta tokens only after the shortcut phase finishes.
 
+Dry-run one-shot passes never persist deferred delta tokens. `observeRemoteChanges`
+clears pending tokens before returning to `RunOnce`, so planner-only previews
+cannot advance drive-root, scoped-root, scoped-target, or targeted re-entry
+observation cursors.
+
 One-shot startup, watch startup, watch-time scope changes, shortcut content
 observation, and shortcut reconciliation all consume this same plan shape so
 scope policy is no longer split across separate primary-vs-shortcut builders.

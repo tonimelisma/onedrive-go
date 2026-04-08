@@ -36,7 +36,8 @@ after successful remote folder create, upload, and move so sync and CLI share
 one owner for path visibility timing. The confirmation remains best-effort:
 `ErrPathNotVisible` and other convergence probe failures are logged at Warn
 and do not turn a successful mutation into a failed outcome. The collaborator
-is session-drive-scoped, so cross-drive shortcut actions skip this
+is session-drive-scoped, so the executor first resolves the action's effective
+drive via `resolveDriveID`; cross-drive shortcut actions skip this
 confirmation instead of probing visibility on the wrong drive.
 
 ## DepGraph (`dep_graph.go`)
