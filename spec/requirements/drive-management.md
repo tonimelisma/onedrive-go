@@ -41,9 +41,12 @@ The system shall support all four drive types:
   it as such without creating a duplicate. [verified]
 - R-3.3.6: When a search term without `:` is passed to `drive add`, the system
   shall match against shared folder names using case-insensitive substring
-  search across all authenticated accounts. A single match auto-adds the drive.
-  Multiple matches display a numbered list with canonical IDs. Zero matches
-  return an error suggesting `drive list`. [verified]
+  search across the authenticated shared-discovery account set, honoring
+  `--account` when present. A single match auto-adds the drive. Multiple
+  matches display a numbered list with canonical IDs. Zero matches return an
+  error that still suggests `drive list`, while also surfacing any
+  auth-required or degraded accounts that prevented shared discovery from being
+  complete. [verified]
 - R-3.3.7: When the user runs `drive remove --drive <id>`, the system shall
   remove only the drive's config section. The account token is preserved (the
   account remains logged in), the state database is preserved (so a future
@@ -80,8 +83,8 @@ The system shall support all four drive types:
 - R-3.6.2: The system shall use non-deprecated search API for shared item discovery (SharedWithMe deprecated Nov 2026). [verified]
 - R-3.6.3: When adding or listing a shared drive, the system shall derive a display name from the sharer's identity when available, and shall fall back to a deterministic remote-identity name when owner identity remains unavailable after enrichment. [verified]
 - R-3.6.4: When discovering shared items via the Search API, the system shall enrich actionable results by making secondary `GET /drives/{driveId}/items/{itemId}` calls to retrieve fuller identity data. Actionable shared items shall remain visible even when enrichment still cannot recover owner identity. [verified]
-- R-3.6.5: Shared-drive discovery shall use best-effort live search only. If live search fails for an authenticated account, the CLI shall surface that account under degraded discovery instead of silently omitting it. If live search succeeds but Microsoft Graph still omits an external or cross-organization shared folder, the CLI shall explain the platform limitation clearly and point the user at discovery commands that show what the API actually exposed. [verified]
-- R-3.6.6: When the user runs `shared`, the system shall list files and folders shared with the authenticated account set, using generated `shared:<recipientEmail>:<remoteDriveID>:<remoteItemID>` selectors as actionable targets because Graph discovery does not reliably expose the original inbound share URL. Accounts that cannot be queried because authentication is required shall be reported instead of being silently omitted. [verified]
+- R-3.6.5: Shared-drive discovery shall use best-effort live search only. If live search fails for an otherwise authenticated account, the CLI shall surface that account under degraded discovery instead of silently omitting it. If live search returns `unauthorized`, the CLI shall surface that account under `accounts_requiring_auth` with the sync-auth-rejected reason rather than degrading it. If live search succeeds but Microsoft Graph still omits an external or cross-organization shared folder, the CLI shall explain the platform limitation clearly and point the user at discovery commands that show what the API actually exposed. [verified]
+- R-3.6.6: When the user runs `shared`, the system shall list files and folders shared with the authenticated account set, using generated `shared:<recipientEmail>:<remoteDriveID>:<remoteItemID>` selectors as actionable targets because Graph discovery does not reliably expose the original inbound share URL. Accounts that cannot be queried because authentication is required, including live search returning `unauthorized`, shall be reported instead of being silently omitted. [verified]
 - R-3.6.7: When `--json` is passed to `shared`, the system shall output structured JSON with `items`, `accounts_requiring_auth`, and `accounts_degraded`. Each item shall include the shared selector plus the discovered shared item metadata needed for follow-on commands. [verified]
 
 ## R-3.7 Email Change Detection [verified]

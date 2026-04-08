@@ -229,8 +229,11 @@ JSON output:
 
 For `whoami` and `drive list`, `accounts_degraded` currently means
 `drive_catalog_unavailable` after `/me/drives` retry exhaustion. For `shared`,
-it means `shared_discovery_unavailable` after live shared-item search fails for
-an authenticated account.
+and for the shared-folder portion of `drive list` / name-based `drive add`, it
+means `shared_discovery_unavailable` after live shared-item search fails for an
+otherwise authenticated account. Live shared search `unauthorized` is not
+degraded; it moves the account into `accounts_requiring_auth` with the
+sync-auth-rejected reason.
 
 Human-readable output mirrors that split with separate
 `Accounts requiring authentication:` and `Accounts with degraded live discovery:`
@@ -303,6 +306,7 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
   - `syncService`: multi-drive sync command assembly
   - `verifyService`: baseline verification flow
 - `accountReadModelService` is the shared read-model collaborator under `statusService`, `authService`, `driveService`, and `sharedService`. It owns lenient config loading, warning logging, and offline account/auth projection so those command families do not rebuild account semantics independently.
+- `sharedDiscoveryService` is the CLI-owned live-discovery collaborator for shared items. It owns best-effort account reconciliation, live search, target normalization, enrichment, deduplication, and auth-vs-degraded classification for `shared`, the shared-folder portion of `drive list`, and name-based `drive add`.
 - `SessionProvider` caches `TokenSource`s by token file path — multiple drives sharing an account share one `TokenSource`, preventing OAuth2 refresh token rotation races.
 - `CLIContext` owns one `graphhttp.Provider` per command/watch runtime. Bootstrap/auth-discovery flows use `BootstrapMeta()`. Once both account and remote target identity are known, CLI passes target-scoped interactive client resolvers into `driveops.SessionProvider`: configured drives key by drive ID, configured shared roots key by remote root item, and direct shared-item commands key by `(remoteDriveID, remoteItemID)`. Sync paths request `Sync()` profiles instead. HTTP policy constants and client reuse live in `internal/graphhttp`, not `internal/cli`.
 - CLI handlers use `cmd.Context()` for signal propagation. Exception: upload session cancel paths use `context.Background()` because the cancel must succeed even when the original context is done.

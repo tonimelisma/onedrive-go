@@ -5,13 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
-	"slices"
-	"strings"
 
 	"github.com/spf13/cobra"
-
-	"github.com/tonimelisma/onedrive-go/internal/sharedref"
 )
 
 type sharedListItem struct {
@@ -62,127 +57,34 @@ func (s *sharedService) runList(ctx context.Context) error {
 		return err
 	}
 
-	authRequired := readModel.authRequirements(snapshot, func(entry accountCatalogEntry) bool {
-		if s.cc.Flags.Account != "" && entry.Email != s.cc.Flags.Account {
-			return false
-		}
-		return true
-	})
-
-	items, degraded := s.discoverSharedItems(ctx, snapshot.Catalog)
+	discovery := newSharedDiscoveryService(s.cc).discoverTargets(ctx, snapshot.Catalog)
+	items := sharedListItemsFromTargets(discovery.Targets)
 	if s.cc.Flags.JSON {
-		return printSharedJSON(s.cc.Output(), items, authRequired, degraded)
+		return printSharedJSON(s.cc.Output(), items, discovery.AccountsRequiringAuth, discovery.AccountsDegraded)
 	}
 
-	return printSharedText(s.cc.Output(), items, authRequired, degraded)
+	return printSharedText(s.cc.Output(), items, discovery.AccountsRequiringAuth, discovery.AccountsDegraded)
 }
 
-func (s *sharedService) discoverSharedItems(
-	ctx context.Context,
-	catalog []accountCatalogEntry,
-) ([]sharedListItem, []accountDegradedNotice) {
-	logger := s.cc.Logger
-	seen := make(map[string]struct{})
-	var items []sharedListItem
-	var degraded []accountDegradedNotice
+func sharedListItemsFromTargets(targets []sharedDiscoveryTarget) []sharedListItem {
+	items := make([]sharedListItem, 0, len(targets))
 
-	for i := range catalog {
-		entry := &catalog[i]
-		accountItems, accountDegraded := s.discoverSharedItemsForAccount(ctx, entry, seen, logger)
-		items = append(items, accountItems...)
-		degraded = append(degraded, accountDegraded...)
-	}
-
-	slices.SortFunc(items, func(a, b sharedListItem) int {
-		if a.Type != b.Type {
-			return strings.Compare(a.Type, b.Type)
-		}
-		if a.SharedByEmail != b.SharedByEmail {
-			return strings.Compare(a.SharedByEmail, b.SharedByEmail)
-		}
-		if a.Name != b.Name {
-			return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
-		}
-		return strings.Compare(a.Selector, b.Selector)
-	})
-
-	return items, mergeDegradedNotices(degraded)
-}
-
-func (s *sharedService) discoverSharedItemsForAccount(
-	ctx context.Context,
-	entry *accountCatalogEntry,
-	seen map[string]struct{},
-	logger *slog.Logger,
-) ([]sharedListItem, []accountDegradedNotice) {
-	if s.cc.Flags.Account != "" && entry.Email != s.cc.Flags.Account {
-		return nil, nil
-	}
-	if entry.AuthHealth.State == authStateAuthenticationNeeded {
-		return nil, nil
-	}
-	if entry.RepresentativeTokenID.IsZero() {
-		return nil, nil
-	}
-
-	client, _, err := s.cc.sharedBootstrapMetaClient(ctx, entry.Email)
-	if err != nil {
-		logger.Debug("shared discovery skipped account",
-			"email", entry.Email,
-			"error", err,
-		)
-
-		return nil, nil
-	}
-
-	discovered, err := searchSharedItems(ctx, client, entry.Email, logger)
-	if err != nil {
-		logger.Warn("degrading shared listing after search failure",
-			"account", entry.Email,
-			"error", err,
-		)
-		return nil, []accountDegradedNotice{
-			sharedDiscoveryDegradedNotice(entry.Email, entry.DisplayName, entry.DriveType),
-		}
-	}
-
-	for i := range discovered {
-		enrichSharedItem(ctx, client, &discovered[i], logger)
-	}
-
-	var items []sharedListItem
-
-	for i := range discovered {
-		item := discovered[i]
-		if item.RemoteDriveID == "" || item.RemoteItemID == "" {
-			continue
-		}
-
-		key := entry.Email + "\x00" + item.RemoteDriveID + "\x00" + item.RemoteItemID
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-
+	for i := range targets {
 		items = append(items, sharedListItem{
-			Selector: sharedref.Ref{
-				AccountEmail:  entry.Email,
-				RemoteDriveID: item.RemoteDriveID,
-				RemoteItemID:  item.RemoteItemID,
-			}.String(),
-			Type:          sharedItemType(item.IsFolder),
-			Name:          item.Name,
-			AccountEmail:  entry.Email,
-			SharedByName:  item.SharedOwnerName,
-			SharedByEmail: item.SharedOwnerEmail,
-			ModifiedAt:    formatAPITime(item.ModifiedAt),
-			Size:          item.Size,
-			RemoteDriveID: item.RemoteDriveID,
-			RemoteItemID:  item.RemoteItemID,
+			Selector:      targets[i].Selector,
+			Type:          sharedItemType(targets[i].IsFolder),
+			Name:          targets[i].Name,
+			AccountEmail:  targets[i].AccountEmail,
+			SharedByName:  targets[i].SharedByName,
+			SharedByEmail: targets[i].SharedByEmail,
+			ModifiedAt:    targets[i].ModifiedAt,
+			Size:          targets[i].Size,
+			RemoteDriveID: targets[i].RemoteDriveID,
+			RemoteItemID:  targets[i].RemoteItemID,
 		})
 	}
 
-	return items, nil
+	return items
 }
 
 func sharedItemType(isFolder bool) string {
