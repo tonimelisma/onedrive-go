@@ -47,7 +47,8 @@ func (m *executorMockDownloader) Download(ctx context.Context, driveID driveid.I
 }
 
 type executorMockUploader struct {
-	uploadFn func(ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error)
+	uploadFn       func(ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error)
+	uploadToItemFn func(ctx context.Context, driveID driveid.ID, itemID string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error)
 }
 
 func (m *executorMockUploader) Upload(ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error) {
@@ -56,6 +57,17 @@ func (m *executorMockUploader) Upload(ctx context.Context, driveID driveid.ID, p
 	}
 
 	return nil, fmt.Errorf("Upload not mocked")
+}
+
+func (m *executorMockUploader) UploadToItem(ctx context.Context, driveID driveid.ID, itemID string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error) {
+	if m.uploadToItemFn != nil {
+		return m.uploadToItemFn(ctx, driveID, itemID, content, size, mtime, progress)
+	}
+	if m.uploadFn != nil {
+		return m.uploadFn(ctx, driveID, "", "", content, size, mtime, progress)
+	}
+
+	return nil, fmt.Errorf("UploadToItem not mocked")
 }
 
 type executorPathConvergenceStub struct {
@@ -855,6 +867,56 @@ func TestExecutor_Upload_ParentFromBaseline(t *testing.T) {
 	assert.Equal(t, "baseline-folder-id", capturedParentID)
 }
 
+func TestExecutor_Upload_KnownItemUsesItemOverwrite(t *testing.T) {
+	t.Parallel()
+
+	ul := &executorMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			require.FailNow(t, "parent-path upload should not be used when item ID is known")
+			return nil, fmt.Errorf("unexpected Upload call")
+		},
+		uploadToItemFn: func(_ context.Context, _ driveid.ID, itemID string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			assert.Equal(t, "known-item-id", itemID)
+
+			return &graph.Item{
+				ID:           "known-item-id",
+				ParentID:     "parent-from-item",
+				ETag:         "etag-overwrite",
+				QuickXorHash: "overwrite-hash",
+			}, nil
+		},
+	}
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
+	e := NewExecution(cfg, synctest.BaselineWith(&synctypes.BaselineEntry{
+		Path:     "known.txt",
+		ItemID:   "known-item-id",
+		ParentID: "baseline-parent",
+		DriveID:  driveid.New(synctest.TestDriveID),
+		ItemType: synctypes.ItemTypeFile,
+	}))
+
+	writeExecTestFile(t, syncRoot, "known.txt", "known content")
+
+	action := &synctypes.Action{
+		Type:    synctypes.ActionUpload,
+		Path:    "known.txt",
+		ItemID:  "known-item-id",
+		DriveID: driveid.New(synctest.TestDriveID),
+		View: &synctypes.PathView{
+			Path: "known.txt",
+			Baseline: &synctypes.BaselineEntry{
+				ParentID: "baseline-parent",
+			},
+		},
+	}
+
+	o := e.ExecuteUpload(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+	assert.Equal(t, "known-item-id", o.ItemID)
+	assert.Equal(t, "parent-from-item", o.ParentID)
+}
+
 func TestExecutor_Upload_B068_ZeroDriveIDFilled(t *testing.T) {
 	t.Parallel()
 
@@ -1281,6 +1343,7 @@ func TestExecutor_Conflict_EditDelete_AutoResolve(t *testing.T) {
 	t.Parallel()
 
 	var uploadCalled bool
+	var uploadToItemCalled bool
 
 	ul := &executorMockUploader{
 		uploadFn: func(_ context.Context, _ driveid.ID, _ string, name string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
@@ -1292,20 +1355,47 @@ func TestExecutor_Conflict_EditDelete_AutoResolve(t *testing.T) {
 				ETag: "etag-new",
 			}, nil
 		},
+		uploadToItemFn: func(_ context.Context, _ driveid.ID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			uploadToItemCalled = true
+			return nil, fmt.Errorf("unexpected UploadToItem call")
+		},
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+		Path:     "folder",
+		DriveID:  driveid.New(synctest.TestDriveID),
+		ItemID:   "parent-folder",
+		ItemType: synctypes.ItemTypeFolder,
+	})
+	e := NewExecution(cfg, baseline)
 
 	// Local file exists with modified content (edit-delete: local modified,
 	// remote deleted).
-	writeExecTestFile(t, syncRoot, "exec-ed-file.txt", "locally modified data")
+	writeExecTestFile(t, syncRoot, "folder/exec-ed-file.txt", "locally modified data")
 
 	action := &synctypes.Action{
 		Type:    synctypes.ActionConflict,
-		Path:    "exec-ed-file.txt",
+		Path:    "folder/exec-ed-file.txt",
+		ItemID:  "deleted-item",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &synctypes.PathView{Path: "exec-ed-file.txt"},
+		View: &synctypes.PathView{
+			Path: "folder/exec-ed-file.txt",
+			Remote: &synctypes.RemoteState{
+				ItemID:    "deleted-item",
+				DriveID:   driveid.New(synctest.TestDriveID),
+				ParentID:  "parent-folder",
+				ItemType:  synctypes.ItemTypeFile,
+				IsDeleted: true,
+			},
+			Baseline: &synctypes.BaselineEntry{
+				Path:     "folder/exec-ed-file.txt",
+				DriveID:  driveid.New(synctest.TestDriveID),
+				ItemID:   "deleted-item",
+				ParentID: "parent-folder",
+				ItemType: synctypes.ItemTypeFile,
+			},
+		},
 		ConflictInfo: &synctypes.ConflictRecord{
 			ConflictType: "edit_delete",
 			DriveID:      driveid.New(synctest.TestDriveID),
@@ -1316,13 +1406,14 @@ func TestExecutor_Conflict_EditDelete_AutoResolve(t *testing.T) {
 	requireOutcomeSuccess(t, &o)
 
 	assert.True(t, uploadCalled, "expected upload to be called for edit-delete auto-resolve")
+	assert.False(t, uploadToItemCalled, "edit-delete auto-resolve should not overwrite a deleted item ID")
 	assert.Equal(t, synctypes.ActionConflict, o.Action)
 	assert.Equal(t, "edit_delete", o.ConflictType)
 	assert.Equal(t, "auto", o.ResolvedBy)
 	assert.Equal(t, "new-item", o.ItemID)
 
 	// Local file should still exist with original content (not modified by upload).
-	data, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-ed-file.txt"))
+	data, err := localpath.ReadFile(filepath.Join(syncRoot, "folder", "exec-ed-file.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, "locally modified data", string(data))
 }

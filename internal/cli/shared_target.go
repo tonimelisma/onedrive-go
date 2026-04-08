@@ -91,6 +91,11 @@ func sharedTargetInput(cmd *cobra.Command, args []string) (string, bool) {
 		if len(args) >= 2 && isSharedTargetInput(args[1]) {
 			return args[1], true
 		}
+	case "add":
+		if parent := cmd.Parent(); parent != nil && parent.Name() == "drive" &&
+			len(args) == 1 && isSharedTargetInput(args[0]) {
+			return args[0], true
+		}
 	}
 
 	return "", false

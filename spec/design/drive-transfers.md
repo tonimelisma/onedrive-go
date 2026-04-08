@@ -47,19 +47,38 @@ The transfer manager therefore exposes both parent-path upload and existing-item
 overwrite entry points while keeping session persistence, chunk sizing, and
 post-upload verification in one owner.
 
+Sync execution uses the same split deliberately: when planning already knows
+the authoritative remote `itemID`, uploads overwrite that item by ID instead of
+recreating the file through the parent-path route. Parent-based uploads remain
+for true creates where no remote item identity exists yet. This keeps ordinary
+edits and `conflicts resolve --keep-local` on the narrower overwrite boundary
+and avoids teaching parent-creation consistency gaps to flows that already have
+stable remote identity.
+
 `driveops` is the single owner of post-success path convergence and
 path-authoritative delete reconciliation for one resolved drive session.
 Graph can acknowledge folder creation, upload, or move before an immediate
 follow-on path lookup stops returning `itemNotFound`, and it can briefly
 return `DELETE .../items/{id} = 404 itemNotFound` even though the same
-remote path just resolved successfully. The package boundary therefore
-exposes the `PathConvergence` capability, satisfied by `driveops.Session`:
+remote path just resolved successfully. During repeated sibling deletes, the
+exact path route itself can also lie with `GET ...root:/path: = 404
+itemNotFound` even though the parent collection still lists the leaf. The
+package boundary therefore exposes the `PathConvergence` capability,
+satisfied by `driveops.Session`, and keeps delete-target path recovery in the
+same owner:
 
 - `WaitPathVisible()` so command handlers can require destination-path
-  readability before they print a successful `mkdir`, `put`, or `mv`
+  readability before they print a successful `mkdir`, `put`, or `mv`, and so
+  `put` can re-resolve an already-created parent path through the same bounded
+  visibility gate instead of trusting a one-shot path lookup
+- `ResolveDeleteTarget()` so path-oriented deletes can fall back from an exact
+  path `itemNotFound` to the parent collection before they decide the target
+  is already gone
 - `DeleteResolvedPath()` / `PermanentDeleteResolvedPath()` so path-oriented
   deletes keep authority on the remote path instead of trusting one stale
-  item ID forever
+  item ID forever; their retry loop re-resolves through the same
+  delete-target helper instead of assuming a second exact-path `404` means the
+  delete already happened
 
 Sync execution consumes the same capability for post-success visibility
 confirmation after remote folder create, upload, and move. Those sync probes

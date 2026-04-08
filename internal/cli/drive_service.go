@@ -72,6 +72,23 @@ func (s *driveService) runList(ctx context.Context, showAll bool) error {
 func (s *driveService) runAdd(ctx context.Context, args []string) error {
 	logger := s.cc.Logger
 
+	if s.cc.SharedTarget != nil {
+		item, _, err := s.cc.resolveSharedItem(ctx)
+		if err != nil {
+			return err
+		}
+		if !item.IsFolder {
+			return fmt.Errorf("shared files are direct stat/get/put targets, not drives")
+		}
+
+		cid, err := driveid.NewCanonicalID(s.cc.SharedTarget.Selector())
+		if err != nil {
+			return fmt.Errorf("parse shared drive identity: %w", err)
+		}
+
+		return addSharedDrive(ctx, s.cc.CfgPath, s.cc.Output(), cid, "", logger, s.cc.httpProvider())
+	}
+
 	selector := ""
 	if len(args) > 0 {
 		selector = args[0]

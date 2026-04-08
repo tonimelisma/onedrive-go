@@ -30,6 +30,15 @@ following were removed as part of the retry-to-transport refactoring:
 (`downloadWithHashRetry`) is unchanged — it's a data integrity mechanism
 orthogonal to the retry redesign.
 
+`ExecuteUpload` uses the narrowest proven remote identity available. When the
+action already carries a non-empty `ItemID`, execution overwrites that remote
+item by ID through `driveops.UploadFileToItem` instead of recreating it through
+the parent-path upload route. Parent-path upload remains the create path for
+new local files whose remote identity does not exist yet. This matters for
+conflict resolution too: `keep-local` restores the local conflict copy, then
+overwrites the known remote item instead of depending on a fresh parent create
+route during Graph consistency lag.
+
 Post-success remote path confirmation is delegated to an injected
 `driveops.PathConvergence` capability. The executor uses that collaborator
 after successful remote folder create, upload, and move so sync and CLI share

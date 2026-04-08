@@ -59,7 +59,7 @@ func runRm(cmd *cobra.Command, args []string) error {
 	logger := cc.Logger
 	logger.Debug("rm", "path", remotePath)
 
-	item, err := session.ResolveItem(ctx, remotePath)
+	item, err := session.ResolveDeleteTarget(ctx, remotePath)
 	if err != nil {
 		return fmt.Errorf("resolving %q: %w", remotePath, err)
 	}

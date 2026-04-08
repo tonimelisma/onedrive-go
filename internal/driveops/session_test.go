@@ -31,6 +31,7 @@ const (
 	testDeleteItemPath      = "/drives/abcdef0123456789/items/item-to-delete"
 	testDeleteRetryItemPath = "/drives/abcdef0123456789/items/retry-id"
 	testDeleteTargetPath    = "/drives/abcdef0123456789/root:/Documents/file.txt:"
+	testDeleteParentPath    = "/drives/abcdef0123456789/root:/Documents:/children"
 )
 
 // --- CleanRemotePath ---
@@ -448,6 +449,31 @@ func TestSession_ResolveItem_SharedRootRelativePath(t *testing.T) {
 	}, gotPaths)
 }
 
+// Validates: R-6.7.14
+func TestSession_ResolveDeleteTarget_FallsBackToParentListingAfterPathNotFound(t *testing.T) {
+	t.Parallel()
+
+	var gotPaths []string
+
+	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.URL.Path)
+		switch r.URL.Path {
+		case testDeleteTargetPath:
+			w.WriteHeader(http.StatusNotFound)
+			writeTestResponsef(t, w, `{"error":{"code":"itemNotFound","message":"lagging path route"}}`)
+		case testDeleteParentPath:
+			writeTestResponsef(t, w, `{"value":[{"id":"retry-id","name":"file.txt"}]}`)
+		default:
+			http.Error(w, "unexpected request", http.StatusInternalServerError)
+		}
+	}))
+
+	item, err := s.ResolveDeleteTarget(t.Context(), "Documents/file.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "retry-id", item.ID)
+	assert.Equal(t, []string{testDeleteTargetPath, testDeleteParentPath}, gotPaths)
+}
+
 func TestSession_ListChildren_SharedRootUsesScopedRootItem(t *testing.T) {
 	t.Parallel()
 
@@ -550,7 +576,10 @@ func TestSession_DeleteResolvedPath_RetriesAfterTransientDeleteNotFound(t *testi
 			w.WriteHeader(http.StatusNotFound)
 			writeTestResponsef(t, w, `{"error":{"code":"itemNotFound","message":"not ready"}}`)
 		case r.Method == http.MethodGet && r.URL.Path == testDeleteTargetPath:
-			writeTestResponsef(t, w, `{"id":"retry-id","name":"file.txt"}`)
+			w.WriteHeader(http.StatusNotFound)
+			writeTestResponsef(t, w, `{"error":{"code":"itemNotFound","message":"lagging exact path"}}`)
+		case r.Method == http.MethodGet && r.URL.Path == testDeleteParentPath:
+			writeTestResponsef(t, w, `{"value":[{"id":"retry-id","name":"file.txt"}]}`)
 		case r.Method == http.MethodDelete && r.URL.Path == testDeleteRetryItemPath:
 			deleteCalls++
 			gotDeleteIDs = append(gotDeleteIDs, "retry-id")
@@ -582,6 +611,8 @@ func TestSession_DeleteResolvedPath_TreatsMissingPathAsSuccess(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == testDeleteTargetPath:
 			w.WriteHeader(http.StatusNotFound)
 			writeTestResponsef(t, w, `{"error":{"code":"itemNotFound","message":"gone"}}`)
+		case r.Method == http.MethodGet && r.URL.Path == testDeleteParentPath:
+			writeTestResponsef(t, w, `{"value":[]}`)
 		default:
 			http.Error(w, "unexpected request", http.StatusInternalServerError)
 		}
@@ -606,7 +637,10 @@ func TestSession_PermanentDeleteResolvedPath_UsesPermanentDeleteRoute(t *testing
 			w.WriteHeader(http.StatusNotFound)
 			writeTestResponsef(t, w, `{"error":{"code":"itemNotFound","message":"not ready"}}`)
 		case r.Method == http.MethodGet && r.URL.Path == testDeleteTargetPath:
-			writeTestResponsef(t, w, `{"id":"retry-id","name":"file.txt"}`)
+			w.WriteHeader(http.StatusNotFound)
+			writeTestResponsef(t, w, `{"error":{"code":"itemNotFound","message":"lagging exact path"}}`)
+		case r.Method == http.MethodGet && r.URL.Path == testDeleteParentPath:
+			writeTestResponsef(t, w, `{"value":[{"id":"retry-id","name":"file.txt"}]}`)
 		case r.Method == http.MethodPost && r.URL.Path == testDeleteRetryItemPath+"/permanentDelete":
 			w.WriteHeader(http.StatusNoContent)
 		default:
@@ -620,6 +654,7 @@ func TestSession_PermanentDeleteResolvedPath_UsesPermanentDeleteRoute(t *testing
 	assert.Equal(t, []string{
 		"POST " + testDeleteItemPath + "/permanentDelete",
 		"GET " + testDeleteTargetPath,
+		"GET " + testDeleteParentPath,
 		"POST " + testDeleteRetryItemPath + "/permanentDelete",
 	}, gotMethods)
 }
