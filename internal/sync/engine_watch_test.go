@@ -322,6 +322,88 @@ func TestRunWatch_SyncPathsScopedPollingDisablesWebsocket(t *testing.T) {
 	}, "websocket sync_paths fallback")
 }
 
+// Validates: R-3.4.2
+func TestRunWatch_RootDeltaSteadyStateProcessesShortcutFollowUp(t *testing.T) {
+	t.Parallel()
+
+	const shortcutContent = "shortcut report"
+
+	driveID := driveid.New(engineTestDriveID)
+	remoteDriveID := driveid.New("0000000000000099")
+	var deltaCalls atomic.Int32
+
+	mock := &engineMockClient{
+		deltaFn: func(ctx context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			switch deltaCalls.Add(1) {
+			case 1:
+				return deltaPageWithItems([]graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+				}, "token-bootstrap"), nil
+			case 2:
+				return deltaPageWithItems([]graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{
+						ID:            "sc-1",
+						Name:          "SharedDocs",
+						ParentID:      "root",
+						DriveID:       driveID,
+						IsFolder:      true,
+						RemoteDriveID: remoteDriveID.String(),
+						RemoteItemID:  "remote-item-1",
+					},
+				}, "token-watch"), nil
+			default:
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+		},
+		listChildrenRecursiveFn: func(_ context.Context, gotDriveID driveid.ID, folderID string) ([]graph.Item, error) {
+			assert.Equal(t, remoteDriveID, gotDriveID)
+			assert.Equal(t, "remote-item-1", folderID)
+			return []graph.Item{{
+				ID:           "shortcut-file",
+				Name:         "report.txt",
+				ParentID:     "remote-item-1",
+				DriveID:      remoteDriveID,
+				QuickXorHash: hashContentQuickXor(t, shortcutContent),
+				Size:         int64(len(shortcutContent)),
+			}}, nil
+		},
+		downloadFn: func(_ context.Context, gotDriveID driveid.ID, itemID string, w io.Writer) (int64, error) {
+			assert.Equal(t, remoteDriveID, gotDriveID)
+			assert.Equal(t, "shortcut-file", itemID)
+			n, err := w.Write([]byte(shortcutContent))
+			return int64(n), err
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- eng.RunWatch(ctx, synctypes.SyncDownloadOnly, synctypes.WatchOpts{
+			PollInterval: time.Hour,
+			Debounce:     5 * time.Millisecond,
+		})
+	}()
+
+	require.Eventually(t, func() bool {
+		data, ok := readFileUnderRootIfExists(t, syncRoot, filepath.Join("SharedDocs", "report.txt"))
+		return ok && string(data) == shortcutContent
+	}, 10*time.Second, 25*time.Millisecond)
+
+	cancel()
+	require.NoError(t, <-done)
+
+	shortcut, found, err := eng.baseline.GetShortcut(context.Background(), "sc-1")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotNil(t, shortcut)
+	assert.Equal(t, "SharedDocs", shortcut.LocalPath)
+	assert.GreaterOrEqual(t, deltaCalls.Load(), int32(2))
+}
+
 // Validates: R-2.8.3, R-6.8.9, R-6.10.10
 func TestRunWatch_CancellationWinsOverFinalObserverExit(t *testing.T) {
 	t.Parallel()

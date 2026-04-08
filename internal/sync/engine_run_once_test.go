@@ -971,7 +971,7 @@ func TestRunOnce_CrashRecovery_ResetsInProgressStates(t *testing.T) {
 
 	// prepareRunOnceState should reset these before one-shot planning begins.
 	runner := newOneShotRunner(eng.Engine)
-	_, _, runErr := runner.prepareRunOnceState(ctx)
+	_, runErr := runner.prepareRunOnceState(ctx)
 	require.NoError(t, runErr, "prepareRunOnceState")
 
 	// Verify the states were reset.
@@ -1021,7 +1021,7 @@ func TestRunOnce_CrashRecovery_MixedDeletingCandidates(t *testing.T) {
 	require.NoError(t, err, "seed crash-recovery rows")
 
 	runner := newOneShotRunner(eng.Engine)
-	_, _, runErr := runner.prepareRunOnceState(ctx)
+	_, runErr := runner.prepareRunOnceState(ctx)
 	require.NoError(t, runErr, "prepareRunOnceState")
 
 	var goneStatus synctypes.SyncStatus

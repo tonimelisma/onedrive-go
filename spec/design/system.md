@@ -126,6 +126,12 @@ Static verification is a first-class architectural constraint, not a best-effort
   unchanged. Checked-in captures under
   `internal/syncobserve/testdata/watch_capture/<goos>/` back the replay tests
   in `internal/syncobserve`.
+- Observation coordination is intentionally split into a pure planner and
+  effectful executors. `internal/sync/engine_scope_session.go` is the pure
+  scoped-observation planner, while `internal/sync/engine_observation_phase.go`
+  and `internal/sync/engine_observation_watch.go` own effectful execution for
+  one-shot/reconcile and watch mode respectively. That keeps driver/fallback/
+  token policy out of orchestration code.
 - Repo-consistency checks in `cmd/devtool verify` enforce the repo-level architecture constraints linters do not express cleanly: governed design docs must carry ownership contracts, required cross-cutting docs must exist and be linked from this document, production `internal/cli` code must not bypass its output-writer boundary with direct process-global stdout/stderr writes, guarded runtime packages must not reintroduce raw `os.*` filesystem calls, known stale wording classes for filter ownership are rejected in live docs, `internal/graph/client_preauth.go` remains the only raw production `http.Client.Do` boundary, `exec.CommandContext` is limited to validated browser launch and devtool runner entrypoints, `sql.Open` is limited to `internal/syncstore`, and `signal.Notify` is limited to `internal/cli/signal.go`.
 - The same repo-consistency pass also forbids raw `exec.Command` in production, narrows `signal.Stop` and `os.Exit` to the documented process-lifecycle entrypoints, validates that `Validates:` and `Implements:` references resolve to declared requirement IDs, enforces that governed lifecycle docs cite exact named tests in their evidence sections, and enforces the degraded-mode evidence-table structure that links each `DM-*` row to named tests.
 - `go run ./cmd/devtool worktree add --path <path> --branch <branch>` is the canonical way to create new worktrees from `origin/main`. It applies `.worktreeinclude` immediately so the new worktree is ready for fast E2E and local development.
