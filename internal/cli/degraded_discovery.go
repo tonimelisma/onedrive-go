@@ -6,7 +6,10 @@ import (
 	"sort"
 )
 
-const driveCatalogUnavailableReason = "drive_catalog_unavailable"
+const (
+	driveCatalogUnavailableReason    = "drive_catalog_unavailable"
+	sharedDiscoveryUnavailableReason = "shared_discovery_unavailable"
+)
 
 type accountDegradedNotice struct {
 	Email       string `json:"email"`
@@ -20,6 +23,8 @@ func degradedReasonText(reason string) string {
 	switch reason {
 	case driveCatalogUnavailableReason:
 		return "Live drive discovery is temporarily unavailable even though the saved login still works."
+	case sharedDiscoveryUnavailableReason:
+		return "Live shared-item discovery is temporarily unavailable even though the saved login still works."
 	default:
 		return ""
 	}
@@ -30,6 +35,9 @@ func degradedAction(reason string) string {
 	case driveCatalogUnavailableReason:
 		return "Retry 'onedrive-go whoami' or 'onedrive-go drive list' in a few seconds. " +
 			"Direct commands against configured drives may still work."
+	case sharedDiscoveryUnavailableReason:
+		return "Retry 'onedrive-go shared' or 'onedrive-go drive list' in a few seconds. " +
+			"Configured drives and direct commands against known shared targets may still work."
 	default:
 		return ""
 	}
@@ -45,8 +53,23 @@ func driveCatalogDegradedNotice(email, displayName, driveType string) accountDeg
 	}
 }
 
+func sharedDiscoveryDegradedNotice(email, displayName, driveType string) accountDegradedNotice {
+	return accountDegradedNotice{
+		Email:       email,
+		DisplayName: displayName,
+		DriveType:   driveType,
+		Reason:      sharedDiscoveryUnavailableReason,
+		Action:      degradedAction(sharedDiscoveryUnavailableReason),
+	}
+}
+
 func mergeDegradedNotices(groups ...[]accountDegradedNotice) []accountDegradedNotice {
-	merged := make(map[string]accountDegradedNotice)
+	type degradedKey struct {
+		email  string
+		reason string
+	}
+
+	merged := make(map[degradedKey]accountDegradedNotice)
 
 	for _, group := range groups {
 		for i := range group {
@@ -54,7 +77,9 @@ func mergeDegradedNotices(groups ...[]accountDegradedNotice) []accountDegradedNo
 				continue
 			}
 
-			if existing, ok := merged[group[i].Email]; ok {
+			key := degradedKey{email: group[i].Email, reason: group[i].Reason}
+
+			if existing, ok := merged[key]; ok {
 				if existing.DisplayName == "" {
 					existing.DisplayName = group[i].DisplayName
 				}
@@ -67,11 +92,11 @@ func mergeDegradedNotices(groups ...[]accountDegradedNotice) []accountDegradedNo
 				if existing.Action == "" {
 					existing.Action = group[i].Action
 				}
-				merged[group[i].Email] = existing
+				merged[key] = existing
 				continue
 			}
 
-			merged[group[i].Email] = group[i]
+			merged[key] = group[i]
 		}
 	}
 
@@ -81,7 +106,11 @@ func mergeDegradedNotices(groups ...[]accountDegradedNotice) []accountDegradedNo
 	}
 
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].Email < result[j].Email
+		if result[i].Email != result[j].Email {
+			return result[i].Email < result[j].Email
+		}
+
+		return result[i].Reason < result[j].Reason
 	})
 
 	return result

@@ -243,15 +243,15 @@ func TestIntegration_Drives_PersonalAccountFiltersPhantomDrives(t *testing.T) {
 	assert.Equal(t, 1, personalCount, "personal drive discovery should return exactly one authoritative personal drive")
 }
 
-// TestIntegration_SharedWithMe verifies SharedWithMe() returns without error.
-// The result may be empty if no items have been shared with the test account.
-func TestIntegration_SharedWithMe(t *testing.T) {
+// TestIntegration_SearchDriveItems verifies shared discovery search returns without error.
+// The result may be empty if Graph does not currently surface shared items for the test account.
+func TestIntegration_SearchDriveItems(t *testing.T) {
 	client := newIntegrationClient(t)
 
 	ctx, cancel := context.WithTimeout(t.Context(), integrationTimeout)
 	defer cancel()
 
-	items, err := client.SharedWithMe(ctx)
+	items, err := client.SearchDriveItems(ctx, "*")
 	require.NoError(t, err)
 
 	for _, item := range items {
@@ -261,7 +261,7 @@ func TestIntegration_SharedWithMe(t *testing.T) {
 		}
 	}
 
-	t.Logf("SharedWithMe returned %d items", len(items))
+	t.Logf("SearchDriveItems returned %d items", len(items))
 }
 
 // TestIntegration_CreateAndDeleteFolder creates a test folder, verifies it,
