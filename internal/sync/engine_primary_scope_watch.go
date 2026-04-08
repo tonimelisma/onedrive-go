@@ -17,7 +17,7 @@ func (rt *watchRuntime) watchPrimaryScopedRemote(
 	bl *synctypes.Baseline,
 	events chan<- synctypes.ChangeEvent,
 	interval time.Duration,
-	scopes []plannedObservationTarget,
+	phase ObservationPhasePlan,
 ) error {
 	if interval < syncobserve.MinPollInterval {
 		interval = syncobserve.MinPollInterval
@@ -27,7 +27,7 @@ func (rt *watchRuntime) watchPrimaryScopedRemote(
 	bo.SetMaxOverride(interval)
 
 	for {
-		result, err := rt.observePrimaryScopedWatchPoll(ctx, bl, scopes)
+		result, err := rt.observePrimaryScopedWatchPoll(ctx, bl, phase)
 		if err != nil {
 			stop, handleErr := rt.handlePrimaryScopedPollError(ctx, bo, err)
 			if stop || handleErr != nil {
@@ -41,7 +41,24 @@ func (rt *watchRuntime) watchPrimaryScopedRemote(
 			continue
 		}
 
-		if len(scoped.emitted) == 0 {
+		finalEvents, shortcutErr := rt.observeShortcutBatch(
+			ctx,
+			rt,
+			bl,
+			scoped.emitted,
+			rt.currentScopeSnapshot(),
+			rt.currentScopeGeneration(),
+			false,
+			false,
+		)
+		if shortcutErr != nil {
+			rt.engine.logger.Warn("shortcut processing failed during scoped sync_paths watch batch",
+				slog.String("error", shortcutErr.Error()),
+			)
+			finalEvents = filterOutShortcuts(scoped.emitted)
+		}
+
+		if len(finalEvents) == 0 {
 			bo.Reset()
 			stop, sleepErr := rt.sleepPrimaryScopedWatch(ctx, interval, "interval")
 			if stop || sleepErr != nil {
@@ -50,7 +67,7 @@ func (rt *watchRuntime) watchPrimaryScopedRemote(
 			continue
 		}
 
-		if stop := rt.dispatchPrimaryScopedWatchEvents(ctx, events, scoped.emitted); stop {
+		if stop := rt.dispatchPrimaryScopedWatchEvents(ctx, events, finalEvents); stop {
 			return nil
 		}
 
@@ -65,26 +82,9 @@ func (rt *watchRuntime) watchPrimaryScopedRemote(
 func (rt *watchRuntime) observePrimaryScopedWatchPoll(
 	ctx context.Context,
 	bl *synctypes.Baseline,
-	scopes []plannedObservationTarget,
+	phase ObservationPhasePlan,
 ) (remoteFetchResult, error) {
-	result := remoteFetchResult{
-		events:       make([]synctypes.ChangeEvent, 0),
-		deferred:     make([]deferredDeltaToken, 0),
-		fullPrefixes: make([]string, 0),
-	}
-
-	for i := range scopes {
-		scopeResult, err := rt.observePlannedTarget(ctx, bl, scopes[i], false)
-		if err != nil {
-			return remoteFetchResult{}, err
-		}
-
-		result.events = append(result.events, scopeResult.events...)
-		result.deferred = append(result.deferred, scopeResult.deferred...)
-		result.fullPrefixes = append(result.fullPrefixes, scopeResult.fullPrefixes...)
-	}
-
-	return result, nil
+	return rt.observeObservationPhase(ctx, bl, phase, false)
 }
 
 func (rt *watchRuntime) handlePrimaryScopedPollError(

@@ -22,6 +22,17 @@ const (
 	primaryObservationEnumerate primaryObservationMode = "enumerate"
 )
 
+func fallbackPolicyForPrimaryMode(
+	mode primaryObservationMode,
+	hasRecursiveLister bool,
+) ObservationPhaseFallbackPolicy {
+	if mode == primaryObservationDelta && hasRecursiveLister {
+		return observationPhaseFallbackPolicyDeltaToEnumerate
+	}
+
+	return observationPhaseFallbackPolicyNone
+}
+
 type deferredDeltaToken struct {
 	driveID    string
 	scopeID    string
@@ -233,7 +244,7 @@ func (e *Engine) resolveScopedRootObservationScope(ctx context.Context, configur
 func (flow *engineFlow) observePlannedPrimaryScopes(
 	ctx context.Context,
 	bl *synctypes.Baseline,
-	scopes []plannedObservationTarget,
+	phase ObservationPhasePlan,
 	fullReconcile bool,
 ) (remoteFetchResult, error) {
 	result := remoteFetchResult{
@@ -242,8 +253,8 @@ func (flow *engineFlow) observePlannedPrimaryScopes(
 		fullPrefixes: make([]string, 0),
 	}
 
-	for i := range scopes {
-		scopeResult, err := flow.observePlannedTarget(ctx, bl, scopes[i], fullReconcile)
+	for i := range phase.Targets {
+		scopeResult, err := flow.observePlannedTarget(ctx, bl, phase, phase.Targets[i], fullReconcile)
 		if err != nil {
 			return remoteFetchResult{}, err
 		}
@@ -260,20 +271,22 @@ func (flow *engineFlow) observeSinglePrimaryScope(
 	ctx context.Context,
 	bl *synctypes.Baseline,
 	scope primaryObservationScope,
+	phase ObservationPhasePlan,
 	fullReconcile bool,
 ) (remoteFetchResult, error) {
-	return flow.observePlannedTarget(ctx, bl, flow.engine.primaryObservationTarget(scope), fullReconcile)
+	return flow.observePlannedTarget(ctx, bl, phase, flow.engine.primaryObservationTarget(scope), fullReconcile)
 }
 
 func (flow *engineFlow) observePlannedTarget(
 	ctx context.Context,
 	bl *synctypes.Baseline,
+	phase ObservationPhasePlan,
 	target plannedObservationTarget,
 	fullReconcile bool,
 ) (remoteFetchResult, error) {
 	switch target.mode {
 	case primaryObservationDelta:
-		return flow.observePlannedTargetDelta(ctx, bl, target, fullReconcile)
+		return flow.observePlannedTargetDelta(ctx, bl, target, fullReconcile, phase.FallbackPolicy)
 	case primaryObservationEnumerate:
 		return flow.observePlannedTargetEnumerate(ctx, bl, target)
 	default:
@@ -286,6 +299,7 @@ func (flow *engineFlow) observePlannedTargetDelta(
 	bl *synctypes.Baseline,
 	target plannedObservationTarget,
 	fullReconcile bool,
+	fallbackPolicy ObservationPhaseFallbackPolicy,
 ) (remoteFetchResult, error) {
 	eng := flow.engine
 
@@ -306,7 +320,7 @@ func (flow *engineFlow) observePlannedTargetDelta(
 		fullScope = true
 	}
 	if err != nil {
-		if target.kind != plannedObservationPrimary || eng.recursiveLister == nil {
+		if fallbackPolicy != observationPhaseFallbackPolicyDeltaToEnumerate || eng.recursiveLister == nil {
 			return remoteFetchResult{}, fmt.Errorf("observe scoped delta %q: %w", target.localPath, err)
 		}
 
@@ -447,29 +461,7 @@ func (flow *engineFlow) reconcileEnteredPrimaryPath(
 	eng := flow.engine
 
 	if enteredPath == "" {
-		if eng.hasScopedRoot() {
-			events, token, err := flow.observeScopedRemote(ctx, bl, true)
-			if err != nil {
-				return remoteFetchResult{}, fmt.Errorf("full scoped re-entry reconciliation: %w", err)
-			}
-
-			return remoteFetchResult{
-				events:       events,
-				deferred:     deferredTokensForPrimary(token, eng, true, len(events)),
-				fullPrefixes: []string{""},
-			}, nil
-		}
-
-		events, token, err := flow.observeRemoteFull(ctx, bl)
-		if err != nil {
-			return remoteFetchResult{}, fmt.Errorf("full re-entry reconciliation: %w", err)
-		}
-
-		return remoteFetchResult{
-			events:       events,
-			deferred:     deferredTokensForPrimary(token, eng, true, len(events)),
-			fullPrefixes: []string{""},
-		}, nil
+		return flow.reconcileEnteredRoot(ctx, bl)
 	}
 
 	scope, err := eng.resolvePrimaryObservationScope(ctx, enteredPath)
@@ -477,15 +469,10 @@ func (flow *engineFlow) reconcileEnteredPrimaryPath(
 		return remoteFetchResult{}, fmt.Errorf("resolve entered path %q: %w", enteredPath, err)
 	}
 	if scope.localPath == "" {
-		return flow.reconcileEnteredPrimaryPath(ctx, bl, "")
+		return flow.reconcileEnteredRoot(ctx, bl)
 	}
 	if scope.localPath == enteredPath {
-		scopeResult, scopeErr := flow.observeSinglePrimaryScope(ctx, bl, scope, true)
-		if scopeErr != nil {
-			return remoteFetchResult{}, scopeErr
-		}
-
-		return scopeResult, nil
+		return flow.reconcileExactEnteredPrimaryScope(ctx, bl, scope)
 	}
 
 	item, err := flow.resolveEnteredPrimaryItem(ctx, enteredPath)
@@ -506,7 +493,13 @@ func (flow *engineFlow) reconcileEnteredPrimaryPath(
 			mode:      eng.primaryObservationMode(),
 		}
 
-		scopeResult, scopeErr := flow.observeSinglePrimaryScope(ctx, bl, scope, true)
+		phase := ObservationPhasePlan{
+			Driver:            observationPhaseDriverScopedTarget,
+			DispatchPolicy:    observationPhaseDispatchPolicySequentialTargets,
+			FallbackPolicy:    fallbackPolicyForPrimaryMode(scope.mode, eng.recursiveLister != nil),
+			TokenCommitPolicy: observationPhaseTokenCommitPolicyAfterPlannerAccepts,
+		}
+		scopeResult, scopeErr := flow.observeSinglePrimaryScope(ctx, bl, scope, phase, true)
 		if scopeErr != nil {
 			return remoteFetchResult{}, scopeErr
 		}
@@ -523,6 +516,59 @@ func (flow *engineFlow) reconcileEnteredPrimaryPath(
 	events = append(events, bl.FindOrphans(seenKeysFromEvents(events), eng.driveID, enteredPath)...)
 
 	return remoteFetchResult{events: events}, nil
+}
+
+func (flow *engineFlow) reconcileEnteredRoot(
+	ctx context.Context,
+	bl *synctypes.Baseline,
+) (remoteFetchResult, error) {
+	eng := flow.engine
+
+	if eng.hasScopedRoot() {
+		fallbackPolicy := observationPhaseFallbackPolicyDeltaToEnumerate
+		events, token, err := flow.observeScopedRemote(ctx, bl, true, fallbackPolicy)
+		if err != nil {
+			return remoteFetchResult{}, fmt.Errorf("full scoped re-entry reconciliation: %w", err)
+		}
+
+		return remoteFetchResult{
+			events:       events,
+			deferred:     deferredTokensForPrimary(token, eng, true, len(events)),
+			fullPrefixes: []string{""},
+		}, nil
+	}
+
+	events, token, err := flow.observeRemoteFull(ctx, bl)
+	if err != nil {
+		return remoteFetchResult{}, fmt.Errorf("full re-entry reconciliation: %w", err)
+	}
+
+	return remoteFetchResult{
+		events:       events,
+		deferred:     deferredTokensForPrimary(token, eng, true, len(events)),
+		fullPrefixes: []string{""},
+	}, nil
+}
+
+func (flow *engineFlow) reconcileExactEnteredPrimaryScope(
+	ctx context.Context,
+	bl *synctypes.Baseline,
+	scope primaryObservationScope,
+) (remoteFetchResult, error) {
+	eng := flow.engine
+
+	phase := ObservationPhasePlan{
+		Driver:            observationPhaseDriverScopedTarget,
+		DispatchPolicy:    observationPhaseDispatchPolicySequentialTargets,
+		FallbackPolicy:    fallbackPolicyForPrimaryMode(eng.primaryObservationMode(), eng.recursiveLister != nil),
+		TokenCommitPolicy: observationPhaseTokenCommitPolicyAfterPlannerAccepts,
+	}
+	scopeResult, err := flow.observeSinglePrimaryScope(ctx, bl, scope, phase, true)
+	if err != nil {
+		return remoteFetchResult{}, err
+	}
+
+	return scopeResult, nil
 }
 
 func (flow *engineFlow) resolveEnteredPrimaryItem(ctx context.Context, enteredPath string) (*graph.Item, error) {

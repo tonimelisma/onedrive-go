@@ -279,7 +279,7 @@ func TestFetchRemoteChanges_SyncPathsPersonalUsesFolderScopedDelta(t *testing.T)
 	})
 	require.NoError(t, err)
 
-	result, err := flow.fetchRemoteChanges(t.Context(), bl, false, &plan, false)
+	result, err := flow.fetchRemoteChanges(t.Context(), bl, &plan, false)
 	require.NoError(t, err)
 	require.Len(t, result.events, 1)
 	assert.Equal(t, reportRelPath, result.events[0].Path)
@@ -340,7 +340,7 @@ func TestFetchRemoteChanges_SyncPathsPersonalFallsBackToRecursiveEnumerationWhen
 	})
 	require.NoError(t, err)
 
-	result, err := flow.fetchRemoteChanges(t.Context(), bl, false, &plan, false)
+	result, err := flow.fetchRemoteChanges(t.Context(), bl, &plan, false)
 	require.NoError(t, err)
 	require.Len(t, result.events, 1)
 	assert.Equal(t, "Docs/report.txt", result.events[0].Path)
@@ -400,7 +400,7 @@ func TestFetchRemoteChanges_SyncPathsBusinessUsesRecursiveEnumeration(t *testing
 	})
 	require.NoError(t, err)
 
-	result, err := flow.fetchRemoteChanges(t.Context(), bl, false, &plan, false)
+	result, err := flow.fetchRemoteChanges(t.Context(), bl, &plan, false)
 	require.NoError(t, err)
 	require.Len(t, result.events, 1)
 	assert.Equal(t, "Docs/report.txt", result.events[0].Path)
@@ -410,7 +410,7 @@ func TestFetchRemoteChanges_SyncPathsBusinessUsesRecursiveEnumeration(t *testing
 }
 
 // Validates: R-2.4.5
-func TestBuildObservationSessionPlan_PrimaryScopeUsesScopedTargetStrategy(t *testing.T) {
+func TestBuildObservationSessionPlan_PrimaryScopeUsesScopedTargetPhase(t *testing.T) {
 	t.Parallel()
 
 	const docsPath = "Docs"
@@ -442,8 +442,9 @@ func TestBuildObservationSessionPlan_PrimaryScopeUsesScopedTargetStrategy(t *tes
 	})
 	require.NoError(t, err)
 
-	assert.Equal(t, watchStrategyScopedTarget, plan.WatchStrategy)
-	assert.False(t, plan.WebsocketEnabled)
+	assert.Equal(t, observationPhaseDriverScopedTarget, plan.PrimaryPhase.Driver)
+	assert.Equal(t, observationPhaseDispatchPolicySequentialTargets, plan.PrimaryPhase.DispatchPolicy)
+	assert.False(t, flow.websocketEnabledForPrimaryPhase(plan.PrimaryPhase))
 	require.Len(t, plan.PrimaryPhase.Targets, 1)
 	assert.Equal(t, observationPhaseErrorPolicyFailBatch, plan.PrimaryPhase.ErrorPolicy)
 	assert.Equal(t, observationPhaseFallbackPolicyDeltaToEnumerate, plan.PrimaryPhase.FallbackPolicy)
@@ -452,7 +453,7 @@ func TestBuildObservationSessionPlan_PrimaryScopeUsesScopedTargetStrategy(t *tes
 }
 
 // Validates: R-2.4.5
-func TestBuildObservationSessionPlan_ScopedRootUsesScopedRootStrategy(t *testing.T) {
+func TestBuildObservationSessionPlan_ScopedRootUsesScopedRootPhase(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
@@ -469,7 +470,35 @@ func TestBuildObservationSessionPlan_ScopedRootUsesScopedRootStrategy(t *testing
 	})
 	require.NoError(t, err)
 
-	assert.Equal(t, watchStrategyScopedRoot, plan.WatchStrategy)
-	assert.False(t, plan.WebsocketEnabled)
+	assert.Equal(t, observationPhaseDriverScopedRoot, plan.PrimaryPhase.Driver)
+	assert.Equal(t, observationPhaseDispatchPolicySingleBatch, plan.PrimaryPhase.DispatchPolicy)
+	assert.False(t, flow.websocketEnabledForPrimaryPhase(plan.PrimaryPhase))
 	assert.Equal(t, synctypes.ScopeObservationScopedDelta, flow.scopeObservationMode(&plan))
+}
+
+// Validates: R-2.4.5
+func TestBuildObservationSessionPlan_FullDriveUsesExplicitRootDeltaPhase(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng.enableWebsocket = true
+	eng.socketIOFetcher = &engineMockClient{}
+
+	flow := testEngineFlow(t, eng)
+	session, err := flow.BuildScopeSession(t.Context(), nil)
+	require.NoError(t, err)
+
+	plan, err := flow.BuildObservationSessionPlan(t.Context(), ObservationPlanRequest{
+		Session:  &session,
+		SyncMode: synctypes.SyncBidirectional,
+		Purpose:  observationPlanPurposeWatch,
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, observationPhaseDriverRootDelta, plan.PrimaryPhase.Driver)
+	assert.Equal(t, observationPhaseDispatchPolicySingleBatch, plan.PrimaryPhase.DispatchPolicy)
+	assert.Equal(t, observationPhaseErrorPolicyFailBatch, plan.PrimaryPhase.ErrorPolicy)
+	assert.Equal(t, observationPhaseFallbackPolicyNone, plan.PrimaryPhase.FallbackPolicy)
+	assert.Equal(t, observationPhaseTokenCommitPolicyAfterPlannerAccepts, plan.PrimaryPhase.TokenCommitPolicy)
+	assert.True(t, flow.websocketEnabledForPrimaryPhase(plan.PrimaryPhase))
 }

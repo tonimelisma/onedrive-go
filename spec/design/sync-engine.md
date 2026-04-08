@@ -89,12 +89,13 @@ entered/exited diff between them, and the predicted current generation.
 `ObservationSessionPlan` is the pure observation-side result of that session.
 It owns:
 
-- `PrimaryPhase`: resolved primary `sync_paths` targets plus explicit batch
-  error, delta fallback, and token-commit policy
-- `ShortcutPhase`: resolved shortcut targets plus their isolated per-target
-  error and token-commit policy
-- `WatchStrategy`: one of `root_delta`, `scoped_root`, or `scoped_targets`
-- `WebsocketEnabled`: only true for eligible full-drive sessions
+- `PrimaryPhase`: always populated for session-backed plans, including
+  full-drive root-delta sessions. The phase owns explicit driver
+  (`root_delta`, `scoped_root`, `scoped_targets`), dispatch
+  (`single_batch`, `sequential_targets`), batch error policy, delta fallback,
+  and token-commit policy.
+- `ShortcutPhase`: resolved shortcut targets plus explicit dispatch, isolated
+  per-target error policy, and shortcut token-commit policy
 - `Reentry`: the pending primary-scope re-entry decision
 - `Hash`: the persisted primary-scope-only plan fingerprint written to
   `scope_state`
@@ -108,6 +109,23 @@ delta tokens only after the shortcut phase finishes. Shortcut-only callers
 invoke the same planner without a `ScopeSession`, which means primary scope
 resolution and primary re-entry planning are skipped entirely; shortcut
 observation must not depend on current `sync_paths` lookup success.
+
+`engine_scope_session.go` owns only pure planning. Execution policy lives in
+phase executors: one-shot/reconcile paths call the generic observation-phase
+executor, while watch startup consumes `PrimaryPhase.Driver` through one
+watch-side executor instead of branching on ad hoc top-level watch strategy
+fields in orchestration code.
+
+Root-delta watch is also part of the same coordinator flow now. The engine
+still commits primary-drive observations atomically inside
+`RemoteObserver.Watch`, but once that commit succeeds it runs one engine-owned
+post-primary batch handler that consumes `ChangeShortcut`, updates durable
+shortcut truth, builds a shortcut follow-up phase, observes shortcut content,
+reapplies remote scope to that content, and only then emits the final batch to
+the watch buffer. Scoped-root watch, scoped-target watch, one-shot sync, and
+periodic reconciliation use that same shortcut-batch helper; steady-state
+watch no longer waits for periodic reconciliation to discover shortcut
+content.
 
 Dry-run one-shot passes never persist deferred delta tokens. `observeRemoteChanges`
 clears pending tokens before returning to `RunOnce`, so planner-only previews
