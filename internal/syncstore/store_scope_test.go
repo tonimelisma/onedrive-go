@@ -338,3 +338,90 @@ func TestRepairIntegritySafe_ReconcilesFilteredRowsToPersistedScopeState(t *test
 	require.NotNil(t, keepRow)
 	assert.Equal(t, synctypes.SyncStatusPendingDownload, keepRow.SyncStatus)
 }
+
+// Validates: R-2.4.4, R-2.4.5
+func TestRepairIntegritySafe_ReactivatesFilteredRowsWhenPersistedScopeIncludesPath(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(testDriveID)
+
+	require.NoError(t, mgr.CommitObservation(ctx, []synctypes.ObservedItem{
+		{
+			DriveID:  driveID,
+			ItemID:   "reenter-item",
+			ParentID: "root",
+			Path:     "drop.txt",
+			ItemType: synctypes.ItemTypeFile,
+			Hash:     "drop-hash",
+			Filtered: true,
+		},
+	}, "", driveID))
+
+	snapshot, err := syncscope.NewSnapshot(syncscope.Config{}, nil)
+	require.NoError(t, err)
+
+	snapshotJSON, err := syncscope.MarshalSnapshot(snapshot)
+	require.NoError(t, err)
+
+	_, err = mgr.DB().ExecContext(ctx, `
+		INSERT INTO scope_state (
+			singleton, generation, effective_snapshot_json, observation_plan_hash,
+			observation_mode, websocket_enabled, pending_reentry,
+			last_reconcile_kind, updated_at
+		) VALUES (1, 5, ?, 'hash', 'root_delta', 1, 1, ?, ?)`,
+		snapshotJSON,
+		synctypes.ScopeReconcileEnteredPath,
+		time.Now().UnixNano(),
+	)
+	require.NoError(t, err)
+
+	repairs, err := mgr.RepairIntegritySafe(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, repairs)
+
+	row := readRemoteStateRow(t, mgr.DB(), "reenter-item")
+	require.NotNil(t, row)
+	assert.Equal(t, synctypes.SyncStatusPendingDownload, row.SyncStatus)
+	assert.Equal(t, int64(0), row.FilterGeneration)
+	assert.Equal(t, synctypes.RemoteFilterNone, row.FilterReason)
+}
+
+// Validates: R-2.4.4, R-2.4.5
+func TestNewSyncStore_PendingReentrySurvivesValidRestart(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	ctx := t.Context()
+
+	store, err := NewSyncStore(ctx, dbPath, newTestLogger(t))
+	require.NoError(t, err)
+
+	require.NoError(t, store.ApplyScopeState(ctx, synctypes.ScopeStateApplyRequest{
+		State: synctypes.ScopeStateRecord{
+			Generation:            11,
+			EffectiveSnapshotJSON: `{"version":1}`,
+			ObservationPlanHash:   "hash",
+			ObservationMode:       synctypes.ScopeObservationRootDelta,
+			WebsocketEnabled:      true,
+			PendingReentry:        true,
+			LastReconcileKind:     synctypes.ScopeReconcileEnteredPath,
+			UpdatedAt:             time.Now().UnixNano(),
+		},
+	}))
+	require.NoError(t, store.Close(context.Background()))
+
+	reopened, err := NewSyncStore(ctx, dbPath, newTestLogger(t))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, reopened.Close(context.Background()))
+	})
+
+	record, found, err := reopened.ReadScopeState(ctx)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, int64(11), record.Generation)
+	assert.True(t, record.PendingReentry)
+	assert.Equal(t, synctypes.ScopeReconcileEnteredPath, record.LastReconcileKind)
+}

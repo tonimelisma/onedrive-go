@@ -1283,11 +1283,11 @@ func TestObserveShortcutContent_NoShortcuts(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// processShortcuts (integration)
+// processCommittedPrimaryBatch (integration)
 // ---------------------------------------------------------------------------
 
 // Validates: R-3.4.2
-func TestProcessShortcuts_RegistersAndObserves(t *testing.T) {
+func TestProcessCommittedPrimaryBatch_RegistersAndObserves(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
@@ -1324,7 +1324,15 @@ func TestProcessShortcuts_RegistersAndObserves(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).processShortcuts(ctx, remoteEvents, bl, false)
+	events, err := testEngineFlow(t, newFlowBackedTestEngine(e)).processCommittedPrimaryBatch(
+		ctx,
+		bl,
+		remoteEvents,
+		syncscope.Snapshot{},
+		1,
+		false,
+		false,
+	)
 	require.NoError(t, err)
 
 	// Should have registered the shortcut.
@@ -1340,7 +1348,7 @@ func TestProcessShortcuts_RegistersAndObserves(t *testing.T) {
 }
 
 // Validates: R-2.10.16
-func TestProcessShortcuts_DryRunSkipsObservation(t *testing.T) {
+func TestProcessCommittedPrimaryBatch_DryRunSkipsShortcutMutationAndObservation(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
@@ -1363,26 +1371,41 @@ func TestProcessShortcuts_DryRunSkipsObservation(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).processShortcuts(ctx, remoteEvents, bl, true)
+	events, err := testEngineFlow(t, newFlowBackedTestEngine(e)).processCommittedPrimaryBatch(
+		ctx,
+		bl,
+		remoteEvents,
+		syncscope.Snapshot{},
+		1,
+		true,
+		false,
+	)
 	require.NoError(t, err)
-	assert.Nil(t, events, "dry-run should skip observation")
+	assert.Empty(t, events, "dry-run should skip shortcut observation")
 
-	// synctypes.Shortcut should still be registered.
 	sc, found, err := mgr.GetShortcut(ctx, "sc-1")
 	require.NoError(t, err)
-	require.True(t, found)
-	require.NotNil(t, sc)
+	assert.False(t, found)
+	assert.Nil(t, sc)
 }
 
 // Validates: R-2.10.16
-func TestProcessShortcuts_NilCapabilities(t *testing.T) {
+func TestProcessCommittedPrimaryBatch_NilCapabilities(t *testing.T) {
 	t.Parallel()
 
 	e := &Engine{
 		logger: testLogger(t),
 	}
 
-	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).processShortcuts(t.Context(), nil, emptyBaseline(), false)
+	events, err := testEngineFlow(t, newFlowBackedTestEngine(e)).processCommittedPrimaryBatch(
+		t.Context(),
+		emptyBaseline(),
+		nil,
+		syncscope.Snapshot{},
+		1,
+		false,
+		false,
+	)
 	require.NoError(t, err)
 	assert.Nil(t, events, "should return nil when no shortcut capabilities configured")
 }
@@ -1392,7 +1415,7 @@ func TestProcessShortcuts_NilCapabilities(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.10.16
-func TestProcessShortcuts_ShortcutAndPrimaryEventsCoexist(t *testing.T) {
+func TestProcessCommittedPrimaryBatch_ShortcutAndPrimaryEventsCoexist(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
@@ -1432,24 +1455,20 @@ func TestProcessShortcuts_ShortcutAndPrimaryEventsCoexist(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	shortcutEvents, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).processShortcuts(ctx, remoteEvents, bl, false)
+	combinedEvents, err := testEngineFlow(t, newFlowBackedTestEngine(e)).processCommittedPrimaryBatch(
+		ctx,
+		bl,
+		remoteEvents,
+		syncscope.Snapshot{},
+		1,
+		false,
+		false,
+	)
 	require.NoError(t, err)
 
-	// synctypes.Shortcut events should contain the shared file.
-	require.Len(t, shortcutEvents, 1)
-	assert.Equal(t, "SharedDocs/shared.txt", shortcutEvents[0].Path)
-
-	// Filter out shortcuts from primary events.
-	filtered := filterOutShortcuts(remoteEvents)
-	require.Len(t, filtered, 1)
-	assert.Equal(t, "primary/newfile.txt", filtered[0].Path)
-
-	// Both sets of events should coexist in a buffer.
-	buf := syncobserve.NewBuffer(testLogger(t))
-	buf.AddAll(filtered)
-	buf.AddAll(shortcutEvents)
-	batch := buf.FlushImmediate()
-	assert.Len(t, batch, 2, "buffer should contain both primary and shortcut events")
+	require.Len(t, combinedEvents, 2)
+	assert.Equal(t, "primary/newfile.txt", combinedEvents[0].Path)
+	assert.Equal(t, "SharedDocs/shared.txt", combinedEvents[1].Path)
 }
 
 // ---------------------------------------------------------------------------

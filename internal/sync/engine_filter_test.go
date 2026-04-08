@@ -120,35 +120,7 @@ func TestRunOnce_DownloadScopeSuppressesOutOfScopeRemoteItems(t *testing.T) {
 		"keep-item": "keep-data",
 		"drop-item": "drop-data",
 	}
-
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
-				{ID: "root", IsRoot: true, DriveID: driveID},
-				{
-					ID:           "keep-item",
-					Name:         "keep.txt",
-					ParentID:     "root",
-					DriveID:      driveID,
-					QuickXorHash: hashContentQuickXor(t, contents["keep-item"]),
-					Size:         int64(len(contents["keep-item"])),
-				},
-				{
-					ID:           "drop-item",
-					Name:         "drop.txt",
-					ParentID:     "root",
-					DriveID:      driveID,
-					QuickXorHash: hashContentQuickXor(t, contents["drop-item"]),
-					Size:         int64(len(contents["drop-item"])),
-				},
-			}, "delta-token-1"), nil
-		},
-		downloadFn: func(_ context.Context, _ driveid.ID, itemID string, w io.Writer) (int64, error) {
-			downloaded = append(downloaded, itemID)
-			n, err := w.Write([]byte(contents[itemID]))
-			return int64(n), err
-		},
-	}
+	mock := newTwoFileDownloadDeltaMock(t, driveID, contents, &downloaded, "delta-token-1")
 
 	eng, _ := newTestEngine(t, mock)
 	eng.syncScopeConfig = syncscope.Config{

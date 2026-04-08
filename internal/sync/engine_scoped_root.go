@@ -161,27 +161,9 @@ func (rt *watchRuntime) watchScopedRootRemote(
 			continue
 		}
 
-		scoped := applyRemoteScope(rt.engine.logger, rt.currentScopeSnapshot(), rt.currentScopeGeneration(), result.events)
-
-		if !rt.commitScopedRootWatchEvents(ctx, scoped.observed, result.deferred) {
+		finalEvents, committed := rt.processCommittedScopedWatchBatch(ctx, bl, result, false)
+		if !committed {
 			continue
-		}
-
-		finalEvents, shortcutErr := rt.observeShortcutBatch(
-			ctx,
-			rt,
-			bl,
-			scoped.emitted,
-			rt.currentScopeSnapshot(),
-			rt.currentScopeGeneration(),
-			false,
-			false,
-		)
-		if shortcutErr != nil {
-			rt.engine.logger.Warn("shortcut processing failed during scoped-root watch batch",
-				slog.String("error", shortcutErr.Error()),
-			)
-			finalEvents = filterOutShortcuts(scoped.emitted)
 		}
 
 		if stop := rt.dispatchScopedRootEvents(ctx, events, finalEvents); stop {
@@ -212,28 +194,6 @@ func (rt *watchRuntime) handleScopedRootPollError(
 	)
 
 	return rt.sleepScopedRootWatch(ctx, delay, "backoff")
-}
-
-func (rt *watchRuntime) commitScopedRootWatchEvents(
-	ctx context.Context,
-	observed []synctypes.ObservedItem,
-	tokens []deferredDeltaToken,
-) bool {
-	if err := rt.commitObservedItems(ctx, observed, ""); err != nil {
-		rt.engine.logger.Error("failed to commit scoped observations in watch",
-			slog.String("error", err.Error()),
-			slog.Int("events", len(observed)),
-		)
-		return false
-	}
-	if err := rt.commitDeferredDeltaTokens(ctx, tokens); err != nil {
-		rt.engine.logger.Error("failed to commit scoped delta tokens in watch",
-			slog.String("error", err.Error()),
-		)
-		return false
-	}
-
-	return true
 }
 
 func (rt *watchRuntime) dispatchScopedRootEvents(

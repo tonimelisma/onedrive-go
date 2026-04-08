@@ -2,10 +2,9 @@ package syncobserve
 
 import (
 	"encoding/json"
-	"errors"
-	"io/fs"
 	"path/filepath"
 	"runtime"
+	"strings"
 	stdsync "sync"
 	"testing"
 
@@ -69,6 +68,7 @@ func (w *replayTrackingWatcher) removedContains(path string) bool {
 }
 
 type replayOutcome struct {
+	variant      string
 	root         string
 	observer     *LocalObserver
 	watcher      *replayTrackingWatcher
@@ -76,87 +76,110 @@ type replayOutcome struct {
 	events       []synctypes.ChangeEvent
 }
 
-func replayWatchCaptureScenario(
+type watchCaptureFixtureVariant struct {
+	name    string
+	records []devtool.WatchCaptureRecord
+}
+
+func replayWatchCaptureScenarioVariants(
 	t *testing.T,
 	scenarioName string,
 	scopeConfig syncscope.Config,
-) replayOutcome {
+) []replayOutcome {
 	t.Helper()
 
 	scenario, err := devtool.LookupWatchCaptureScenario(scenarioName)
 	require.NoError(t, err)
 
-	records := loadWatchCaptureFixture(t, scenarioName)
-	root := t.TempDir()
-	require.NoError(t, scenario.SetUp(root))
+	variants := loadWatchCaptureFixtures(t, scenarioName)
+	outcomes := make([]replayOutcome, 0, len(variants))
+	for _, variant := range variants {
+		root := t.TempDir()
+		require.NoError(t, scenario.SetUp(root))
 
-	watcher := newReplayTrackingWatcher()
-	observer := newWatchTestObserver(t, watcher, watchObserverTestOptions{})
-	tree := mustOpenSyncTree(t, root)
+		watcher := newReplayTrackingWatcher()
+		observer := newWatchTestObserver(t, watcher, watchObserverTestOptions{})
+		tree := mustOpenSyncTree(t, root)
 
-	snapshot, err := observer.BuildScopeSnapshot(t.Context(), tree, scopeConfig)
-	require.NoError(t, err)
-	observer.SetScopeSnapshot(snapshot)
+		snapshot, err := observer.BuildScopeSnapshot(t.Context(), tree, scopeConfig)
+		require.NoError(t, err)
+		observer.SetScopeSnapshot(snapshot)
 
-	scopeChangesCh := make(chan syncscope.Change, 16)
-	observer.SetScopeChangeChannel(scopeChangesCh)
+		scopeChangesCh := make(chan syncscope.Change, 16)
+		observer.SetScopeChangeChannel(scopeChangesCh)
 
-	require.NoError(t, observer.AddWatchesRecursive(t.Context(), watcher, tree))
-	initialGeneration := observer.currentScopeGeneration()
+		require.NoError(t, observer.AddWatchesRecursive(t.Context(), watcher, tree))
+		initialGeneration := observer.currentScopeGeneration()
 
-	eventsCh := make(chan synctypes.ChangeEvent, 64)
-	for _, stepName := range scenario.StepNames() {
-		require.NoError(t, scenario.RunStep(root, stepName))
+		eventsCh := make(chan synctypes.ChangeEvent, 64)
+		for _, stepName := range scenario.StepNames() {
+			require.NoError(t, scenario.RunStep(root, stepName))
 
-		for _, record := range records {
-			if record.Step != stepName {
-				continue
+			for _, record := range variant.records {
+				if record.Step != stepName {
+					continue
+				}
+				observer.HandleFsEvent(
+					t.Context(),
+					fsnotify.Event{
+						Name: replayRecordPath(root, record.Path),
+						Op:   fsnotify.Op(record.OpBits),
+					},
+					watcher,
+					tree,
+					eventsCh,
+				)
 			}
-			observer.HandleFsEvent(
-				t.Context(),
-				fsnotify.Event{
-					Name: replayRecordPath(root, record.Path),
-					Op:   fsnotify.Op(record.OpBits),
-				},
-				watcher,
-				tree,
-				eventsCh,
-			)
 		}
+
+		outcome := replayOutcome{
+			variant:      variant.name,
+			root:         root,
+			observer:     observer,
+			watcher:      watcher,
+			scopeChanges: drainScopeChanges(scopeChangesCh),
+			events:       drainReplayEvents(eventsCh),
+		}
+		assert.GreaterOrEqual(t, observer.currentScopeGeneration(), initialGeneration)
+		outcomes = append(outcomes, outcome)
 	}
 
-	outcome := replayOutcome{
-		root:         root,
-		observer:     observer,
-		watcher:      watcher,
-		scopeChanges: drainScopeChanges(scopeChangesCh),
-		events:       drainReplayEvents(eventsCh),
-	}
-	assert.GreaterOrEqual(t, observer.currentScopeGeneration(), initialGeneration)
-	return outcome
+	return outcomes
 }
 
-func loadWatchCaptureFixture(t *testing.T, scenarioName string) []devtool.WatchCaptureRecord {
+func loadWatchCaptureFixtures(t *testing.T, scenarioName string) []watchCaptureFixtureVariant {
 	t.Helper()
 
-	fixturePath := filepath.Join(
+	pattern := filepath.Join(
 		"testdata",
 		"watch_capture",
 		runtime.GOOS,
-		scenarioName+".json",
+		scenarioName,
+		"*.json",
 	)
-	raw, err := localpath.ReadFile(fixturePath)
+	fixturePaths, err := filepath.Glob(pattern)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			t.Skipf("watch-capture fixture missing for %s on %s", scenarioName, runtime.GOOS)
-		}
 		require.NoError(t, err)
 	}
+	if len(fixturePaths) == 0 {
+		t.Skipf("watch-capture fixture missing for %s on %s", scenarioName, runtime.GOOS)
+	}
 
-	var records []devtool.WatchCaptureRecord
-	require.NoError(t, json.Unmarshal(raw, &records))
-	require.NotEmpty(t, records)
-	return records
+	variants := make([]watchCaptureFixtureVariant, 0, len(fixturePaths))
+	for _, fixturePath := range fixturePaths {
+		raw, err := localpath.ReadFile(fixturePath)
+		require.NoError(t, err)
+
+		var records []devtool.WatchCaptureRecord
+		require.NoError(t, json.Unmarshal(raw, &records))
+		require.NotEmpty(t, records)
+		variants = append(variants, watchCaptureFixtureVariant{
+			name:    strings.TrimSuffix(filepath.Base(fixturePath), filepath.Ext(fixturePath)),
+			records: records,
+		})
+	}
+
+	return variants
 }
 
 func replayRecordPath(root, recordPath string) string {
@@ -191,63 +214,120 @@ func drainReplayEvents(ch <-chan synctypes.ChangeEvent) []synctypes.ChangeEvent 
 	}
 }
 
+func assertSingleMarkerScopeTransition(
+	t *testing.T,
+	outcomes []replayOutcome,
+	wantOld []string,
+	wantNew []string,
+) {
+	t.Helper()
+
+	for _, outcome := range outcomes {
+		t.Run(outcome.variant, func(t *testing.T) {
+			require.Len(t, outcome.scopeChanges, 1)
+			assert.Equal(t, wantOld, outcome.scopeChanges[0].Old.MarkerDirs())
+			assert.Equal(t, wantNew, outcome.scopeChanges[0].New.MarkerDirs())
+			assert.Equal(t, int64(2), outcome.observer.currentScopeGeneration())
+		})
+	}
+}
+
 // Validates: R-2.4.4
 func TestReplayWatchCapture_MarkerRenamePublishesSingleScopeChange(t *testing.T) {
 	t.Parallel()
 
-	outcome := replayWatchCaptureScenario(t, "marker_rename", syncscope.Config{
+	outcomes := replayWatchCaptureScenarioVariants(t, "marker_rename", syncscope.Config{
 		IgnoreMarker: ".odignore",
 	})
 
-	require.Len(t, outcome.scopeChanges, 1)
-	assert.Equal(t, []string{"blocked"}, outcome.scopeChanges[0].New.MarkerDirs())
-	assert.Equal(t, int64(2), outcome.observer.currentScopeGeneration())
-	assert.Contains(t, outcome.observer.watchedDirs, filepath.Join(outcome.root, "blocked"))
-	assert.NotContains(t, outcome.observer.watchedDirs, filepath.Join(outcome.root, "blocked", "nested"))
-	assert.True(t, outcome.watcher.removedContains(filepath.Join(outcome.root, "blocked", "nested")))
+	for _, outcome := range outcomes {
+		t.Run(outcome.variant, func(t *testing.T) {
+			require.Len(t, outcome.scopeChanges, 1)
+			assert.Equal(t, []string{"blocked"}, outcome.scopeChanges[0].New.MarkerDirs())
+			assert.Equal(t, int64(2), outcome.observer.currentScopeGeneration())
+			assert.Contains(t, outcome.observer.watchedDirs, filepath.Join(outcome.root, "blocked"))
+			assert.NotContains(t, outcome.observer.watchedDirs, filepath.Join(outcome.root, "blocked", "nested"))
+			assert.True(t, outcome.watcher.removedContains(filepath.Join(outcome.root, "blocked", "nested")))
+		})
+	}
+}
+
+// Validates: R-2.4.4
+func TestReplayWatchCapture_MarkerCreatePublishesSingleScopeChange(t *testing.T) {
+	t.Parallel()
+
+	outcomes := replayWatchCaptureScenarioVariants(t, "marker_create", syncscope.Config{
+		IgnoreMarker: ".odignore",
+	})
+
+	for _, outcome := range outcomes {
+		t.Run(outcome.variant, func(t *testing.T) {
+			require.Len(t, outcome.scopeChanges, 1)
+			assert.Empty(t, outcome.scopeChanges[0].Old.MarkerDirs())
+			assert.Equal(t, []string{"blocked"}, outcome.scopeChanges[0].New.MarkerDirs())
+			assert.Equal(t, int64(2), outcome.observer.currentScopeGeneration())
+			assert.Contains(t, outcome.observer.watchedDirs, filepath.Join(outcome.root, "blocked"))
+			assert.NotContains(t, outcome.observer.watchedDirs, filepath.Join(outcome.root, "blocked", "nested"))
+			assert.True(t, outcome.watcher.removedContains(filepath.Join(outcome.root, "blocked", "nested")))
+		})
+	}
 }
 
 // Validates: R-2.4.4
 func TestReplayWatchCapture_MarkerDeleteRestoresDescendantWatches(t *testing.T) {
 	t.Parallel()
 
-	outcome := replayWatchCaptureScenario(t, "marker_delete", syncscope.Config{
+	outcomes := replayWatchCaptureScenarioVariants(t, "marker_delete", syncscope.Config{
 		IgnoreMarker: ".odignore",
 	})
 
-	require.Len(t, outcome.scopeChanges, 1)
-	assert.Empty(t, outcome.scopeChanges[0].New.MarkerDirs())
-	assert.Equal(t, int64(2), outcome.observer.currentScopeGeneration())
-	assert.Contains(t, outcome.observer.watchedDirs, filepath.Join(outcome.root, "blocked", "nested"))
+	for _, outcome := range outcomes {
+		t.Run(outcome.variant, func(t *testing.T) {
+			require.Len(t, outcome.scopeChanges, 1)
+			assert.Empty(t, outcome.scopeChanges[0].New.MarkerDirs())
+			assert.Equal(t, int64(2), outcome.observer.currentScopeGeneration())
+			assert.Contains(t, outcome.observer.watchedDirs, filepath.Join(outcome.root, "blocked", "nested"))
+		})
+	}
 }
 
 // Validates: R-2.4.4
 func TestReplayWatchCapture_MarkerParentRenamePublishesSingleScopeChange(t *testing.T) {
 	t.Parallel()
 
-	outcome := replayWatchCaptureScenario(t, "marker_parent_rename", syncscope.Config{
+	outcomes := replayWatchCaptureScenarioVariants(t, "marker_parent_rename", syncscope.Config{
 		IgnoreMarker: ".odignore",
 	})
+	assertSingleMarkerScopeTransition(t, outcomes, []string{"parent/blocked"}, []string{"renamed/blocked"})
+}
 
-	require.Len(t, outcome.scopeChanges, 1)
-	assert.Equal(t, []string{"parent/blocked"}, outcome.scopeChanges[0].Old.MarkerDirs())
-	assert.Equal(t, []string{"renamed/blocked"}, outcome.scopeChanges[0].New.MarkerDirs())
-	assert.Equal(t, int64(2), outcome.observer.currentScopeGeneration())
+// Validates: R-2.4.4
+func TestReplayWatchCapture_MarkerMoveBetweenDirsPublishesSingleScopeChange(t *testing.T) {
+	t.Parallel()
+
+	outcomes := replayWatchCaptureScenarioVariants(t, "marker_move_between_dirs", syncscope.Config{
+		IgnoreMarker: ".odignore",
+	})
+	assertSingleMarkerScopeTransition(t, outcomes, []string{"left/blocked"}, []string{"right/blocked"})
 }
 
 // Validates: R-2.4.5
 func TestReplayWatchCapture_DirMoveIntoScopeRemainsDataOnly(t *testing.T) {
 	t.Parallel()
 
-	outcome := replayWatchCaptureScenario(t, "dir_move_into_scope", syncscope.Config{
+	outcomes := replayWatchCaptureScenarioVariants(t, "dir_move_into_scope", syncscope.Config{
 		SyncPaths: []string{"/docs"},
 	})
 
-	assert.Empty(t, outcome.scopeChanges)
-	assert.Equal(t, int64(1), outcome.observer.currentScopeGeneration())
-	require.NotEmpty(t, outcome.events)
-	for _, event := range outcome.events {
-		assert.NotContains(t, event.Path, "parking/album")
+	for _, outcome := range outcomes {
+		t.Run(outcome.variant, func(t *testing.T) {
+			assert.Empty(t, outcome.scopeChanges)
+			assert.Equal(t, int64(1), outcome.observer.currentScopeGeneration())
+			require.NotEmpty(t, outcome.events)
+			for _, event := range outcome.events {
+				assert.NotContains(t, event.Path, "parking/album")
+			}
+		})
 	}
 }
 
@@ -255,13 +335,17 @@ func TestReplayWatchCapture_DirMoveIntoScopeRemainsDataOnly(t *testing.T) {
 func TestReplayWatchCapture_DirMoveOutOfScopeRemainsDataOnly(t *testing.T) {
 	t.Parallel()
 
-	outcome := replayWatchCaptureScenario(t, "dir_move_out_of_scope", syncscope.Config{
+	outcomes := replayWatchCaptureScenarioVariants(t, "dir_move_out_of_scope", syncscope.Config{
 		SyncPaths: []string{"/docs"},
 	})
 
-	assert.Empty(t, outcome.scopeChanges)
-	assert.Equal(t, int64(1), outcome.observer.currentScopeGeneration())
-	for _, event := range outcome.events {
-		assert.NotContains(t, event.Path, "parking/album")
+	for _, outcome := range outcomes {
+		t.Run(outcome.variant, func(t *testing.T) {
+			assert.Empty(t, outcome.scopeChanges)
+			assert.Equal(t, int64(1), outcome.observer.currentScopeGeneration())
+			for _, event := range outcome.events {
+				assert.NotContains(t, event.Path, "parking/album")
+			}
+		})
 	}
 }

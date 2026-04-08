@@ -7,7 +7,7 @@
     "op_names": [
       "create"
     ],
-    "time_offset_micros": 209
+    "time_offset_micros": 475
   },
   {
     "scenario": "marker_parent_rename",
@@ -17,6 +17,6 @@
     "op_names": [
       "rename"
     ],
-    "time_offset_micros": 232
+    "time_offset_micros": 510
   }
 ]

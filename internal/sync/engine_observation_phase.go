@@ -17,6 +17,9 @@ func (flow *engineFlow) executeObservationPhase(
 	phase ObservationPhasePlan,
 	fullReconcile bool,
 ) (remoteFetchResult, error) {
+	if err := validateObservationPhasePlan(phase); err != nil {
+		return remoteFetchResult{}, fmt.Errorf("execute observation phase: %w", err)
+	}
 	if phase.Driver == "" {
 		return remoteFetchResult{}, nil
 	}

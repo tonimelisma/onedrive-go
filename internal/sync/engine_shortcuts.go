@@ -8,15 +8,20 @@ import (
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // maxShortcutConcurrency limits how many shortcut scopes are observed in parallel.
 const maxShortcutConcurrency = 4
 
-// filterOutShortcuts removes synctypes.ChangeShortcut events from a slice — they are
-// consumed by processShortcuts and should not enter the planner as regular events.
+type shortcutBatchMutationResult struct {
+	VisiblePrimary []synctypes.ChangeEvent
+	Shortcuts      []synctypes.Shortcut
+}
+
+// filterOutShortcuts removes synctypes.ChangeShortcut events from a slice —
+// shortcut discovery is consumed by the post-primary coordinator and should
+// not enter the planner as regular path events.
 func filterOutShortcuts(events []synctypes.ChangeEvent) []synctypes.ChangeEvent {
 	n := 0
 
@@ -28,19 +33,6 @@ func filterOutShortcuts(events []synctypes.ChangeEvent) []synctypes.ChangeEvent 
 	}
 
 	return events[:n]
-}
-
-// processShortcuts extracts shortcut events from the primary delta, updates
-// the shortcuts table, and observes content on each shortcut's source drive.
-// Returns additional ChangeEvents for shortcut content that should be fed
-// into the planner alongside primary drive events.
-func (coordinator *shortcutCoordinator) processShortcuts(
-	ctx context.Context,
-	remoteEvents []synctypes.ChangeEvent,
-	bl *synctypes.Baseline,
-	dryRun bool,
-) ([]synctypes.ChangeEvent, error) {
-	return coordinator.followShortcutBatch(ctx, remoteEvents, bl, dryRun, false, nil)
 }
 
 // registerShortcuts upserts shortcuts from synctypes.ChangeShortcut events.
@@ -327,70 +319,84 @@ func (coordinator *shortcutCoordinator) shortcutRemovalDecisions(ctx context.Con
 	return decisions
 }
 
-func (flow *engineFlow) observeShortcutBatch(
-	ctx context.Context,
-	watch *watchRuntime,
-	bl *synctypes.Baseline,
-	primaryEvents []synctypes.ChangeEvent,
-	snapshot syncscope.Snapshot,
-	generation int64,
-	dryRun bool,
-	fullReconcile bool,
-) ([]synctypes.ChangeEvent, error) {
-	finalPrimary := filterOutShortcuts(primaryEvents)
-	if flow.scopeController().isObservationSuppressed(watch) {
-		flow.engine.logger.Debug("suppressing shortcut observation — global scope block active")
-		return finalPrimary, nil
-	}
-
-	suppressedShortcutTargets := flow.scopeController().suppressedShortcutTargets(watch)
-	shortcutEvents, err := flow.shortcutCoordinator().followShortcutBatch(
-		ctx,
-		primaryEvents,
-		bl,
-		dryRun,
-		fullReconcile,
-		suppressedShortcutTargets,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	filteredShortcuts := applyRemoteScope(flow.engine.logger, snapshot, generation, shortcutEvents).emitted
-	return append(finalPrimary, filteredShortcuts...), nil
-}
-
-func (coordinator *shortcutCoordinator) followShortcutBatch(
+func (coordinator *shortcutCoordinator) applyShortcutBatchMutations(
 	ctx context.Context,
 	primaryEvents []synctypes.ChangeEvent,
-	bl *synctypes.Baseline,
-	dryRun bool,
-	fullReconcile bool,
-	suppressedShortcutTargets map[string]struct{},
-) ([]synctypes.ChangeEvent, error) {
+	loadCurrentSnapshot bool,
+) (shortcutBatchMutationResult, error) {
 	flow := coordinator.flow
 	eng := flow.engine
-
 	shortcutEvents, removedShortcutIDs := splitShortcutBatchEvents(primaryEvents)
+	result := shortcutBatchMutationResult{
+		VisiblePrimary: filterOutShortcuts(primaryEvents),
+	}
+
 	if len(shortcutEvents) == 0 && len(removedShortcutIDs) == 0 {
+		if !loadCurrentSnapshot {
+			return result, nil
+		}
+
+		shortcuts, err := eng.baseline.ListShortcuts(ctx)
+		if err != nil {
+			return shortcutBatchMutationResult{}, fmt.Errorf("sync: listing shortcuts: %w", err)
+		}
+		flow.setShortcuts(shortcuts)
+		result.Shortcuts = shortcuts
+		return result, nil
+	}
+
+	if eng.baseline == nil {
+		return shortcutBatchMutationResult{}, fmt.Errorf("sync: shortcut store unavailable")
+	}
+	if err := coordinator.removeShortcutsFromBatch(ctx, removedShortcutIDs); err != nil {
+		return shortcutBatchMutationResult{}, err
+	}
+	if err := coordinator.registerShortcuts(ctx, shortcutEvents); err != nil {
+		return shortcutBatchMutationResult{}, err
+	}
+
+	shortcuts, err := eng.baseline.ListShortcuts(ctx)
+	if err != nil {
+		return shortcutBatchMutationResult{}, fmt.Errorf("sync: listing shortcuts: %w", err)
+	}
+
+	flow.setShortcuts(shortcuts)
+	result.Shortcuts = shortcuts
+	return result, nil
+}
+
+func (coordinator *shortcutCoordinator) observeShortcutFollowUp(
+	ctx context.Context,
+	shortcuts []synctypes.Shortcut,
+	bl *synctypes.Baseline,
+	fullReconcile bool,
+	collisions map[string]bool,
+	suppressedShortcutTargets map[string]struct{},
+) ([]synctypes.ChangeEvent, error) {
+	eng := coordinator.flow.engine
+
+	if len(shortcuts) == 0 || (eng.folderDelta == nil && eng.recursiveLister == nil) {
 		return nil, nil
 	}
-	shortcuts, err := coordinator.refreshShortcutsAfterBatch(ctx, shortcutEvents, removedShortcutIDs)
+
+	plan, err := coordinator.flow.BuildObservationSessionPlan(ctx, ObservationPlanRequest{
+		Baseline:                  bl,
+		SyncMode:                  synctypes.SyncBidirectional,
+		Purpose:                   observationPlanPurposeOneShot,
+		Shortcuts:                 shortcuts,
+		ShortcutCollisions:        collisions,
+		SuppressedShortcutTargets: suppressedShortcutTargets,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("sync: build shortcut observation plan: %w", err)
+	}
+
+	result, err := coordinator.flow.executeObservationPhase(ctx, bl, plan.ShortcutPhase, fullReconcile)
 	if err != nil {
 		return nil, err
 	}
-	if dryRun || len(shortcuts) == 0 || (eng.folderDelta == nil && eng.recursiveLister == nil) {
-		return nil, nil
-	}
 
-	return coordinator.observeShortcutPhaseFromList(
-		ctx,
-		shortcuts,
-		bl,
-		fullReconcile,
-		nil,
-		suppressedShortcutTargets,
-	)
+	return result.events, nil
 }
 
 // observeShortcutContentFromList observes content for all active shortcuts.
@@ -401,7 +407,7 @@ func (coordinator *shortcutCoordinator) observeShortcutContentFromList(
 	bl *synctypes.Baseline,
 	collisions map[string]bool,
 ) ([]synctypes.ChangeEvent, error) {
-	return coordinator.observeShortcutPhaseFromList(
+	return coordinator.observeShortcutFollowUp(
 		ctx,
 		shortcuts,
 		bl,
@@ -435,7 +441,7 @@ func (coordinator *shortcutCoordinator) reconcileShortcutScopes(
 		return nil, nil
 	}
 
-	return coordinator.observeShortcutPhaseFromList(ctx, shortcuts, bl, true, nil, nil)
+	return coordinator.observeShortcutFollowUp(ctx, shortcuts, bl, true, nil, nil)
 }
 
 func splitShortcutBatchEvents(primaryEvents []synctypes.ChangeEvent) ([]synctypes.ChangeEvent, map[string]bool) {
@@ -454,33 +460,6 @@ func splitShortcutBatchEvents(primaryEvents []synctypes.ChangeEvent) ([]synctype
 	}
 
 	return shortcutEvents, removedShortcutIDs
-}
-
-func (coordinator *shortcutCoordinator) refreshShortcutsAfterBatch(
-	ctx context.Context,
-	shortcutEvents []synctypes.ChangeEvent,
-	removedShortcutIDs map[string]bool,
-) ([]synctypes.Shortcut, error) {
-	flow := coordinator.flow
-	eng := flow.engine
-
-	if eng.baseline == nil {
-		return nil, fmt.Errorf("sync: shortcut store unavailable")
-	}
-
-	if err := coordinator.removeShortcutsFromBatch(ctx, removedShortcutIDs); err != nil {
-		return nil, err
-	}
-	if err := coordinator.registerShortcuts(ctx, shortcutEvents); err != nil {
-		return nil, err
-	}
-
-	shortcuts, err := eng.baseline.ListShortcuts(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("sync: listing shortcuts: %w", err)
-	}
-	flow.setShortcuts(shortcuts)
-	return shortcuts, nil
 }
 
 func (coordinator *shortcutCoordinator) removeShortcutsFromBatch(
@@ -512,36 +491,4 @@ func (coordinator *shortcutCoordinator) removeShortcutsFromBatch(
 	}
 
 	return nil
-}
-
-func (coordinator *shortcutCoordinator) observeShortcutPhaseFromList(
-	ctx context.Context,
-	shortcuts []synctypes.Shortcut,
-	bl *synctypes.Baseline,
-	fullReconcile bool,
-	collisions map[string]bool,
-	suppressedShortcutTargets map[string]struct{},
-) ([]synctypes.ChangeEvent, error) {
-	if len(shortcuts) == 0 {
-		return nil, nil
-	}
-
-	plan, err := coordinator.flow.BuildObservationSessionPlan(ctx, ObservationPlanRequest{
-		Baseline:                  bl,
-		SyncMode:                  synctypes.SyncBidirectional,
-		Purpose:                   observationPlanPurposeOneShot,
-		Shortcuts:                 shortcuts,
-		ShortcutCollisions:        collisions,
-		SuppressedShortcutTargets: suppressedShortcutTargets,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("sync: build shortcut observation plan: %w", err)
-	}
-
-	result, err := coordinator.flow.executeObservationPhase(ctx, bl, plan.ShortcutPhase, fullReconcile)
-	if err != nil {
-		return nil, err
-	}
-
-	return result.events, nil
 }

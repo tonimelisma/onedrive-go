@@ -7,7 +7,7 @@
     "op_names": [
       "create"
     ],
-    "time_offset_micros": 275
+    "time_offset_micros": 540
   },
   {
     "scenario": "dir_move_into_scope",
@@ -17,6 +17,6 @@
     "op_names": [
       "rename"
     ],
-    "time_offset_micros": 278
+    "time_offset_micros": 595
   }
 ]

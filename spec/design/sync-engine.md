@@ -127,6 +127,21 @@ periodic reconciliation use that same shortcut-batch helper; steady-state
 watch no longer waits for periodic reconciliation to discover shortcut
 content.
 
+That post-primary coordinator is intentionally split into two ownership
+boundaries inside `engine_shortcuts.go`:
+
+- `applyShortcutBatchMutations(...)` owns only durable shortcut truth changes
+  (register/remove shortcuts, delete per-shortcut delta tokens, reload the
+  durable snapshot, and publish the refreshed runtime list)
+- `observeShortcutFollowUp(...)` owns only shortcut-content observation
+  (collision detection, suppressed-target filtering, shortcut-only
+  `ObservationSessionPlan` construction, and shortcut-phase execution)
+
+No engine path is allowed to both mutate shortcut truth and observe shortcut
+content in the same helper anymore. `processCommittedPrimaryBatch(...)` is the
+single engine-owned composition point that runs those two steps in order after
+primary observations are durably committed.
+
 Dry-run one-shot passes never persist deferred delta tokens. `observeRemoteChanges`
 clears pending tokens before returning to `RunOnce`, so planner-only previews
 cannot advance drive-root, scoped-root, scoped-target, or targeted re-entry
@@ -135,6 +150,14 @@ observation cursors.
 One-shot startup, watch startup, watch-time scope changes, shortcut content
 observation, and shortcut reconciliation all consume this same plan shape so
 scope policy is no longer split across separate primary-vs-shortcut builders.
+
+Observation planning and execution now fail fast on structural misuse in all
+builds, not only under debug/test invariants. `BuildObservationSessionPlan`,
+`executeObservationPhase`, `startPrimaryWatchPhase`, and `scopeStateRecord`
+validate that session-backed plans always carry an explicit primary phase,
+driver/dispatch combinations stay legal, shortcut phases cannot enable
+delta-to-enumerate fallback, and persisted observation metadata is derived
+only from the primary phase.
 
 Upload-only runs and upload-only watch sessions still rebuild and persist local
 scope truth, but they intentionally defer remote re-entry reconciliation on
@@ -279,7 +302,8 @@ Policy-heavy behavior lives behind dedicated collaborators owned by the flow:
   scope-detection application, cascade blocked-failure recording, and
   permission decision application
 - `shortcutCoordinator`: shortcut discovery, registration, removal handling,
-  shortcut-target planning, removal handling, and shortcut-scope reconciliation
+  shortcut-target planning, durable shortcut mutation, shortcut follow-up
+  observation, and shortcut-scope reconciliation
 - `PermissionHandler`: permission evidence interpreter only; it returns
   decisions that the engine applies through `scopeController`
 

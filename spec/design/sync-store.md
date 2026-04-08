@@ -109,6 +109,14 @@ against the current `scope_state` row, and if the stored snapshot is
 unreadable it drops that broken authority and reactivates filtered rows so the
 next engine run can rebuild scope truth cleanly.
 
+Interrupted scope transitions are repaired at the same store boundary. If a
+crash advances `scope_state.generation` before row-level filtered/reactivated
+state is fully reconciled, store-owned repair re-evaluates `remote_state`
+against the persisted snapshot and fixes rows that should no longer be
+`filtered`. Valid `pending_reentry` state is preserved across restart; the
+engine remains the only owner that can consume that persisted signal and clear
+it after a successful re-entry reconciliation.
+
 `CommitOutcome()` classifies baseline mutations through one shared
 ActionType-to-mutation mapping before any transaction writes happen. Unknown
 actions are explicit store errors, not silent no-ops. The in-memory baseline

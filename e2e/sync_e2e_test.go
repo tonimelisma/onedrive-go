@@ -296,7 +296,7 @@ func TestE2E_Sync_UploadOnly(t *testing.T) {
 	// Poll for eventual consistency — file may not be immediately visible
 	// via path-based queries after upload.
 	remotePath := "/" + testFolder + "/upload-test.txt"
-	stdout, _ := pollCLIWithConfigContains(t, cfgPath, env, "upload-test.txt", pollTimeout, "stat", remotePath)
+	stdout, _ := waitForRemoteWriteVisible(t, cfgPath, env, drive, "upload-test.txt", "stat", remotePath)
 	assert.Contains(t, stdout, "upload-test.txt")
 }
 
@@ -324,7 +324,7 @@ func TestE2E_Sync_DownloadOnly(t *testing.T) {
 	require.NoError(t, tmpFile.Close())
 
 	runCLIWithConfig(t, opsCfgPath, nil, "put", tmpFile.Name(), remotePath)
-	pollCLIWithConfigContains(t, opsCfgPath, nil, "download-test.txt", pollTimeout, "stat", remotePath)
+	waitForRemoteWriteVisible(t, opsCfgPath, nil, drive, "download-test.txt", "stat", remotePath)
 
 	// Cleanup remote after test.
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
@@ -482,7 +482,7 @@ sync_dir = %q
 
 	// Poll to verify file1 exists remotely.
 	remotePath1 := "/" + testFolder + "/file1.txt"
-	pollCLIWithConfigContains(t, cfgPath, env, "file1.txt", pollTimeout, "stat", remotePath1)
+	waitForRemoteWriteVisible(t, cfgPath, env, drive, "file1.txt", "stat", remotePath1)
 
 	// Step 2: Delete the drive section from config (simulate "drive remove").
 	// Write an empty config — the drive section is gone.
@@ -502,8 +502,8 @@ sync_dir = %q
 	// Step 5: Verify both files exist remotely (proves delta resume from
 	// preserved state DB — file1 wasn't re-uploaded, file2 was uploaded).
 	remotePath2 := "/" + testFolder + "/file2.txt"
-	pollCLIWithConfigContains(t, cfgPath2, env, "file2.txt", pollTimeout, "stat", remotePath2)
-	pollCLIWithConfigContains(t, cfgPath2, env, "file1.txt", pollTimeout, "stat", remotePath1)
+	waitForRemoteWriteVisible(t, cfgPath2, env, drive, "file2.txt", "stat", remotePath2)
+	waitForRemoteWriteVisible(t, cfgPath2, env, drive, "file1.txt", "stat", remotePath1)
 }
 
 // copyTokenFile copies the token file for the test drive from srcDir to dstDir.

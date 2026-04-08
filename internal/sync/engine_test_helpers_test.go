@@ -372,6 +372,45 @@ func newDownloadDeltaMock(driveID driveid.ID, item *graph.Item, token string, co
 	}
 }
 
+func newTwoFileDownloadDeltaMock(
+	t *testing.T,
+	driveID driveid.ID,
+	contents map[string]string,
+	downloaded *[]string,
+	token string,
+) *engineMockClient {
+	t.Helper()
+
+	return &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+				{
+					ID:           "keep-item",
+					Name:         "keep.txt",
+					ParentID:     "root",
+					DriveID:      driveID,
+					QuickXorHash: hashContentQuickXor(t, contents["keep-item"]),
+					Size:         int64(len(contents["keep-item"])),
+				},
+				{
+					ID:           "drop-item",
+					Name:         "drop.txt",
+					ParentID:     "root",
+					DriveID:      driveID,
+					QuickXorHash: hashContentQuickXor(t, contents["drop-item"]),
+					Size:         int64(len(contents["drop-item"])),
+				},
+			}, token), nil
+		},
+		downloadFn: func(_ context.Context, _ driveid.ID, itemID string, w io.Writer) (int64, error) {
+			*downloaded = append(*downloaded, itemID)
+			n, err := w.Write([]byte(contents[itemID]))
+			return int64(n), err
+		},
+	}
+}
+
 func mustReadFileUnderRoot(t *testing.T, root, relativePath string) []byte {
 	t.Helper()
 
