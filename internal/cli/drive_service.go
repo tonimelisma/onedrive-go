@@ -24,17 +24,8 @@ func (s *driveService) runList(ctx context.Context, showAll bool) error {
 	logger := s.cc.Logger
 	recorder := newAuthProofRecorder(logger)
 
-	for _, tokenCID := range config.DiscoverTokens(logger) {
-		if _, err := s.cc.probeAccountIdentity(ctx, tokenCID, "drive-list-bootstrap"); err != nil {
-			logger.Debug("skip email reconciliation during drive list bootstrap",
-				"account", tokenCID.String(),
-				"error", err,
-			)
-		}
-	}
-
 	readModel := newAccountReadModelService(s.cc)
-	snapshot, err := readModel.loadLenientCatalog(ctx)
+	snapshot, err := readModel.loadLenientCatalogWithBestEffortIdentityRefresh(ctx)
 	if err != nil {
 		return err
 	}
@@ -191,17 +182,8 @@ func (s *driveService) runSearch(ctx context.Context, query string) error {
 	logger := s.cc.Logger
 	recorder := newAuthProofRecorder(logger)
 
-	for _, tokenCID := range config.DiscoverTokens(logger) {
-		if _, err := s.cc.probeAccountIdentity(ctx, tokenCID, "drive-search-bootstrap"); err != nil {
-			logger.Debug("skip email reconciliation during drive search bootstrap",
-				"account", tokenCID.String(),
-				"error", err,
-			)
-		}
-	}
-
 	readModel := newAccountReadModelService(s.cc)
-	snapshot, err := readModel.loadLenientCatalog(ctx)
+	snapshot, err := readModel.loadLenientCatalogWithBestEffortIdentityRefresh(ctx)
 	if err != nil {
 		return err
 	}

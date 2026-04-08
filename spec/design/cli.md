@@ -136,7 +136,8 @@ durable state when the email changed. Trigger points are:
 
 - `login` after account discovery
 - `whoami` authenticated account lookup
-- `drive list` and `drive search` token-backed discovery bootstrap
+- `accountReadModelService` best-effort account-catalog refresh for `drive list`,
+  `drive search`, `shared`, and name-based `drive add`
 - shared-target account bootstrap before resolving share URLs/items
 - ordinary file-command `CLIContext.Session()` bootstrap
 - sync bootstrap before multi-drive session creation
@@ -305,8 +306,8 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
   - `recycleBinService`: recycle-bin list/restore/empty flows
   - `syncService`: multi-drive sync command assembly
   - `verifyService`: baseline verification flow
-- `accountReadModelService` is the shared read-model collaborator under `statusService`, `authService`, `driveService`, and `sharedService`. It owns lenient config loading, warning logging, and offline account/auth projection so those command families do not rebuild account semantics independently.
-- `sharedDiscoveryService` is the CLI-owned live-discovery collaborator for shared items. It owns best-effort account reconciliation, live search, target normalization, enrichment, deduplication, and auth-vs-degraded classification for `shared`, the shared-folder portion of `drive list`, and name-based `drive add`.
+- `accountReadModelService` is the shared read-model collaborator under `statusService`, `authService`, `driveService`, and `sharedService`. It owns lenient config loading, warning logging, offline account/auth projection, and the best-effort account-identity refresh used before read-model-backed live discovery commands build their catalogs.
+- `sharedDiscoveryService` is the CLI-owned live-discovery collaborator for shared items. It owns live search, target normalization, enrichment, deduplication, and auth-vs-degraded classification for `shared`, the shared-folder portion of `drive list`, and name-based `drive add`. It consumes the refreshed account catalog; it does not perform its own `/me` reconciliation pass.
 - `SessionProvider` caches `TokenSource`s by token file path — multiple drives sharing an account share one `TokenSource`, preventing OAuth2 refresh token rotation races.
 - `CLIContext` owns one `graphhttp.Provider` per command/watch runtime. Bootstrap/auth-discovery flows use `BootstrapMeta()`. Once both account and remote target identity are known, CLI passes target-scoped interactive client resolvers into `driveops.SessionProvider`: configured drives key by drive ID, configured shared roots key by remote root item, and direct shared-item commands key by `(remoteDriveID, remoteItemID)`. Sync paths request `Sync()` profiles instead. HTTP policy constants and client reuse live in `internal/graphhttp`, not `internal/cli`.
 - CLI handlers use `cmd.Context()` for signal propagation. Exception: upload session cancel paths use `context.Background()` because the cancel must succeed even when the original context is done.

@@ -5,8 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -97,6 +100,48 @@ func TestDriveService_RunSearch_NoBusinessAccounts(t *testing.T) {
 	err := svc.runSearch(t.Context(), "marketing")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no business accounts found")
+}
+
+// Validates: R-3.3.9, R-3.7
+func TestDriveService_RunSearch_RefreshesIdentityOnceBeforeSharePointSearch(t *testing.T) {
+	setTestDriveHome(t)
+
+	cid := driveid.MustCanonicalID("business:alice@contoso.com")
+	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
+		UserID:      "user-123",
+		DisplayName: "Alice Smith",
+	}))
+	writeAccessTokenFile(t, cid, "token-business-search")
+
+	var meCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case testGraphMePath:
+			meCalls.Add(1)
+			writeTestResponse(t, w, `{
+				"id":"user-123",
+				"displayName":"Alice Smith",
+				"mail":"alice@contoso.com"
+			}`)
+		case "/sites":
+			assert.Contains(t, r.URL.RawQuery, "search=marketing")
+			writeTestResponse(t, w, `{"value":[]}`)
+		default:
+			assert.Failf(t, "unexpected graph path", "path=%s", r.URL.Path)
+			http.Error(w, "unexpected graph path", http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	cc := newServiceContext(&out, filepath.Join(t.TempDir(), "missing-config.toml"))
+	cc.GraphBaseURL = srv.URL
+
+	require.NoError(t, newDriveService(cc).runSearch(t.Context(), "marketing"))
+	assert.Equal(t, int32(1), meCalls.Load())
+	assert.Contains(t, out.String(), `No SharePoint sites found matching "marketing".`)
 }
 
 // Validates: R-3.1.4

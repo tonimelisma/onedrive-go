@@ -118,7 +118,7 @@ func (s *sharedDiscoveryService) discoverTargetsForAccount(
 		}
 	}
 
-	tokenCID := s.bestEffortSharedDiscoveryAccount(ctx, entry.RepresentativeTokenID)
+	tokenCID := entry.RepresentativeTokenID
 
 	tokenPath := config.DriveTokenPath(tokenCID)
 	if tokenPath == "" {
@@ -176,23 +176,6 @@ func (s *sharedDiscoveryService) discoverTargetsForAccount(
 	}
 
 	return targets, nil, nil
-}
-
-func (s *sharedDiscoveryService) bestEffortSharedDiscoveryAccount(
-	ctx context.Context,
-	accountCID driveid.CanonicalID,
-) driveid.CanonicalID {
-	result, err := s.cc.probeAccountIdentity(ctx, accountCID, "shared-discovery")
-	if err != nil {
-		s.cc.Logger.Debug("skip email reconciliation during shared discovery",
-			"account", accountCID.String(),
-			"error", err,
-		)
-
-		return accountCID
-	}
-
-	return remapCanonicalIDWithResult(accountCID, &result)
 }
 
 func searchSharedTargets(

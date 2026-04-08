@@ -107,10 +107,11 @@ with a deterministic display name
 the shared-folder portion of `drive list`, and name-based `drive add` all
 consume the same normalized actionable-target set plus the same
 account-warning projection. Saved-login/auth-required accounts are reported
-from the offline account catalog before any live search is attempted. A failed
-best-effort `/me` reconciliation probe does not block shared discovery; the CLI
-keeps the offline account identity and continues live search. Search failure
-for an otherwise authenticated account becomes caller-level degraded discovery
+from the offline account catalog before any live search is attempted. The
+owning read-model load is also where best-effort `/me` reconciliation runs for
+this slice, so shared discovery itself only consumes the refreshed catalog and
+does not issue a second account-identity probe. Search failure for an
+otherwise authenticated account becomes caller-level degraded discovery
 (`shared_discovery_unavailable`) rather than a fallback to the deprecated API.
 If live search returns `unauthorized`, the account moves to
 `accounts_requiring_auth` with the sync-auth-rejected reason instead of being

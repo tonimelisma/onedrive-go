@@ -52,7 +52,7 @@ func newSharedService(cc *CLIContext) *sharedService {
 
 func (s *sharedService) runList(ctx context.Context) error {
 	readModel := newAccountReadModelService(s.cc)
-	snapshot, err := readModel.loadLenientCatalog(ctx)
+	snapshot, err := readModel.loadLenientCatalogWithBestEffortIdentityRefresh(ctx)
 	if err != nil {
 		return err
 	}
