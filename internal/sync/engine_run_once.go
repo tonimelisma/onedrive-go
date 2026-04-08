@@ -43,7 +43,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 		slog.Bool("force", opts.Force),
 	)
 
-	bl, shortcuts, err := runner.prepareRunOnceState(ctx)
+	bl, err := runner.prepareRunOnceState(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -106,10 +106,6 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 		return report, nil
 	}
 
-	// Store shortcuts so result handling and permission rechecks can access
-	// them during plan execution.
-	runner.setShortcuts(shortcuts)
-
 	// Execute plan: run workers, drain results (failures, 403s, upload issues).
 	if err := runner.executePlan(ctx, plan, report, bl); err != nil {
 		report.Duration = e.since(start)
@@ -134,7 +130,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 	return report, nil
 }
 
-func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) (*synctypes.Baseline, []synctypes.Shortcut, error) {
+func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) (*synctypes.Baseline, error) {
 	eng := r.engine
 	flow := &r.engineFlow
 
@@ -142,18 +138,18 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) (*synctypes.Bas
 	if proofErr != nil {
 		hasAuthScope, err := eng.hasPersistedAuthScope(ctx)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		if !hasAuthScope {
-			return nil, nil, proofErr
+			return nil, proofErr
 		}
 	}
 
 	if err := flow.scopeController().repairPersistedScopes(ctx, nil, proof, proofErr); err != nil {
-		return nil, nil, fmt.Errorf("sync: repairing persisted scopes: %w", err)
+		return nil, fmt.Errorf("sync: repairing persisted scopes: %w", err)
 	}
 	if proofErr != nil {
-		return nil, nil, proofErr
+		return nil, proofErr
 	}
 	eng.logVerifiedDrive(proof)
 
@@ -173,13 +169,14 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) (*synctypes.Bas
 
 	bl, err := eng.baseline.Load(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("sync: loading baseline: %w", err)
+		return nil, fmt.Errorf("sync: loading baseline: %w", err)
 	}
 
 	shortcuts, scErr := eng.baseline.ListShortcuts(ctx)
 	if scErr != nil {
 		eng.logger.Warn("failed to load shortcuts", slog.String("error", scErr.Error()))
 	}
+	flow.setShortcuts(shortcuts)
 
 	// Recheck permissions — clear any permission_denied issues
 	// for folders that have become writable since the last pass.
@@ -192,7 +189,7 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) (*synctypes.Bas
 	// directories that have become accessible since the last pass (R-2.10.13).
 	flow.scopeController().applyPermissionRecheckDecisions(ctx, nil, eng.permHandler.recheckLocalPermissions(ctx))
 
-	return bl, shortcuts, nil
+	return bl, nil
 }
 
 // postSyncHousekeeping runs non-critical cleanup after a sync pass:
@@ -317,10 +314,6 @@ func buildReportFromCounts(counts map[synctypes.ActionType]int, mode synctypes.S
 // retries with an empty token if synctypes.ErrDeltaExpired is returned (full resync).
 func (flow *engineFlow) observeRemote(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, string, error) {
 	eng := flow.engine
-	if eng.hasScopedRoot() {
-		return flow.observeScopedRemote(ctx, bl, false)
-	}
-
 	savedToken, err := eng.baseline.GetDeltaToken(ctx, eng.driveID.String(), "")
 	if err != nil {
 		return nil, "", fmt.Errorf("sync: getting delta token: %w", err)
@@ -404,9 +397,22 @@ func (flow *engineFlow) observeChanges(
 		observationPlan.Reentry.Pending = false
 	}
 
-	remoteEvents, shortcutEvents := flow.observeShortcutChanges(
-		ctx, watch, bl, remoteEvents, scopeSession.Current, dryRun,
+	finalRemoteEvents, shortcutErr := flow.observeShortcutBatch(
+		ctx,
+		watch,
+		bl,
+		remoteEvents,
+		scopeSession.Current,
+		scopeSession.Generation,
+		dryRun,
+		fullReconcile,
 	)
+	if shortcutErr != nil {
+		flow.engine.logger.Warn("shortcut processing failed, continuing without shortcut content",
+			slog.String("error", shortcutErr.Error()),
+		)
+		finalRemoteEvents = filterOutShortcuts(remoteEvents)
+	}
 
 	localResult, err := flow.observeLocalChanges(ctx, watch, bl, mode, scopeSession.Current)
 	if err != nil {
@@ -418,8 +424,7 @@ func (flow *engineFlow) observeChanges(
 	}
 
 	buf := syncobserve.NewBuffer(flow.engine.logger)
-	buf.AddAll(remoteEvents)
-	buf.AddAll(shortcutEvents)
+	buf.AddAll(finalRemoteEvents)
 	buf.AddAll(localResult.Events)
 
 	return buf.FlushImmediate(), pendingDeltaTokens, nil
@@ -467,7 +472,7 @@ func (flow *engineFlow) observeRemoteChanges(
 	}
 
 	effectiveFullReconcile := effectivePrimaryFullReconcile(fullReconcile, observationPlan)
-	fetchResult, err := flow.fetchRemoteChanges(ctx, bl, dryRun, observationPlan, effectiveFullReconcile)
+	fetchResult, err := flow.fetchRemoteChanges(ctx, bl, observationPlan, effectiveFullReconcile)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -504,41 +509,10 @@ func (flow *engineFlow) observeRemoteChanges(
 func (flow *engineFlow) fetchRemoteChanges(
 	ctx context.Context,
 	bl *synctypes.Baseline,
-	dryRun bool,
 	observationPlan *ObservationSessionPlan,
 	fullReconcile bool,
 ) (remoteFetchResult, error) {
-	switch observationPlan.WatchStrategy {
-	case watchStrategyScopedTarget:
-		return flow.observePlannedPrimaryScopes(ctx, bl, observationPlan.PrimaryPhase.Targets, fullReconcile)
-	case watchStrategyScopedRoot:
-		events, token, err := flow.observeScopedRemote(ctx, bl, fullReconcile)
-		return remoteFetchResult{
-			events:   events,
-			deferred: deferredTokensForPrimary(token, flow.engine, fullReconcile, len(events)),
-		}, err
-	case watchStrategyRootDelta:
-	}
-
-	if fullReconcile {
-		flow.engine.logger.Info("full reconciliation: enumerating all remote items")
-		events, token, err := flow.observeRemoteFull(ctx, bl)
-		return remoteFetchResult{
-			events:   events,
-			deferred: deferredTokensForPrimary(token, flow.engine, fullReconcile, len(events)),
-		}, err
-	}
-
-	if dryRun {
-		events, _, err := flow.observeRemote(ctx, bl)
-		return remoteFetchResult{events: events}, err
-	}
-
-	events, token, err := flow.observeRemote(ctx, bl)
-	return remoteFetchResult{
-		events:   events,
-		deferred: deferredTokensForPrimary(token, flow.engine, fullReconcile, len(events)),
-	}, err
+	return flow.executeObservationPhase(ctx, bl, observationPlan.PrimaryPhase, fullReconcile)
 }
 
 func (flow *engineFlow) commitObservedRemoteChanges(
@@ -559,41 +533,6 @@ func (flow *engineFlow) commitObservedRemoteChanges(
 	}
 
 	return nil
-}
-
-func (flow *engineFlow) observeShortcutChanges(
-	ctx context.Context,
-	watch *watchRuntime,
-	bl *synctypes.Baseline,
-	remoteEvents []synctypes.ChangeEvent,
-	scopeSnapshot syncscope.Snapshot,
-	dryRun bool,
-) ([]synctypes.ChangeEvent, []synctypes.ChangeEvent) {
-	shortcutEvents := make([]synctypes.ChangeEvent, 0)
-	if flow.scopeController().isObservationSuppressed(watch) {
-		flow.engine.logger.Debug("suppressing shortcut observation — global scope block active")
-	} else {
-		suppressedShortcutTargets := flow.scopeController().suppressedShortcutTargets(watch)
-		observedShortcutEvents, err := flow.shortcutCoordinator().processShortcuts(
-			ctx,
-			remoteEvents,
-			bl,
-			dryRun,
-			suppressedShortcutTargets,
-		)
-		if err != nil {
-			flow.engine.logger.Warn("shortcut processing failed, continuing without shortcut content",
-				slog.String("error", err.Error()),
-			)
-		} else {
-			shortcutEvents = observedShortcutEvents
-		}
-	}
-
-	filteredRemoteEvents := filterOutShortcuts(remoteEvents)
-	filteredShortcutEvents := applyRemoteScope(flow.engine.logger, scopeSnapshot, 0, shortcutEvents).emitted
-
-	return filteredRemoteEvents, filteredShortcutEvents
 }
 
 func (flow *engineFlow) observeLocalChanges(
@@ -691,10 +630,6 @@ func (flow *engineFlow) commitDeferredDeltaTokens(ctx context.Context, tokens []
 // synthesized deletes for orphans) and the new delta token.
 func (flow *engineFlow) observeRemoteFull(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, string, error) {
 	eng := flow.engine
-	if eng.hasScopedRoot() {
-		return flow.observeScopedRemote(ctx, bl, true)
-	}
-
 	obs := syncobserve.NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
 
 	// Full enumeration: empty token returns ALL items as create/modify events.

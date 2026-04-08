@@ -33,6 +33,13 @@ Key properties:
 - Unknown remote timestamps stay unknown. If Graph omits `lastModifiedDateTime` or sends an invalid/out-of-range value, observation carries zero `Mtime` instead of fabricating a local clock value.
 - Sparse non-delete updates reuse baseline path context. When delta omits unchanged `name` or `parentReference`, conversion recovers the missing leaf or parent directory from the existing baseline entry so modifies and moves stay correctly rooted.
 - Watch-mode websocket frames are wake signals only. `RemoteObserver` still owns the current delta token, zero-event token guard, observation commit ordering, and event emission. Websocket notifications never carry authoritative remote state and never advance durable sync state by themselves.
+- Watch mode exposes two engine-owned adaptation seams. `WatchObservationPreparer`
+  can rewrite a polled batch into the observation commit projection plus the
+  initially emitted event batch before `commitWatchObservation`, and
+  `WatchBatchPostProcessor` can rewrite the emitted batch after commit
+  succeeds but before events reach the engine. The sync engine uses the first
+  seam for remote scope filtering and the second seam for shortcut follow-up
+  that depends on committed primary-drive truth.
 - `SocketIOWakeSource` owns endpoint fetch, RFC6455 connection lifecycle, minimal Engine.IO / Socket.IO framing, ping/pong replies, reconnect, and endpoint renewal. It reduces all remote notifications to a buffered wake signal consumed by `RemoteObserver.Watch`.
 - `SocketIOWakeSource` also owns its websocket-lifecycle callback stream (`started`, endpoint fetch/connect failures, connected, refresh requested, connection dropped, notification wake, wake coalesced, stopped). Observation emits these as internal runtime diagnostics only; they are not durable sync state and not user-facing watch truth.
 - **Progress logging**: `FullDelta` emits periodic Info-level progress logs every 30 seconds during enumeration, reporting pages fetched and events accumulated so far. For 100K+ item drives where enumeration can take minutes, this gives operators visibility between the start and completion logs. Time-based rather than page-based to produce evenly-spaced logs regardless of page size or API latency.

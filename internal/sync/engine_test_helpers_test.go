@@ -365,6 +365,25 @@ func mustReadFileUnderRoot(t *testing.T, root, relativePath string) []byte {
 	return data
 }
 
+func readFileUnderRootIfExists(t *testing.T, root, relativePath string) ([]byte, bool) {
+	t.Helper()
+
+	cleanRoot := filepath.Clean(root)
+	fullPath := filepath.Clean(filepath.Join(cleanRoot, relativePath))
+	rootPrefix := cleanRoot + string(os.PathSeparator)
+	require.True(t, strings.HasPrefix(fullPath, rootPrefix), "path must stay within sync root")
+
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false
+		}
+		require.NoError(t, err, "reading resolved file if present")
+	}
+
+	return data, true
+}
+
 // setupWatchEngine initializes an engine with syncdispatch.DepGraph + dispatchCh + watchRuntime
 // for processBatch tests. Returns the dispatchCh for reading dispatched actions.
 // Replaces the old two-call pattern of setupWatchEngine + newTestWatchState.

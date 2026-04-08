@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -379,73 +380,137 @@ func (rt *watchRuntime) runFullReconciliationAsync(ctx context.Context, bl *sync
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventReconcileStarted})
 
 	go func() {
-		result := reconcileResult{}
+		rt.finishFullReconciliation(ctx, rt.performFullReconciliation(ctx, bl))
+	}()
+}
 
-		start := rt.engine.nowFunc()
-		rt.engine.logger.Info("periodic full reconciliation starting")
+func (rt *watchRuntime) performFullReconciliation(
+	ctx context.Context,
+	bl *synctypes.Baseline,
+) reconcileResult {
+	result := reconcileResult{}
+	start := rt.engine.nowFunc()
 
-		events, deltaToken, err := rt.observeRemoteFull(ctx, bl)
-		if err != nil {
-			if ctx.Err() == nil {
-				rt.engine.logger.Error("full reconciliation failed",
-					slog.String("error", err.Error()),
-				)
-			}
-			rt.finishFullReconciliation(ctx, result)
-			return
-		}
+	rt.engine.logger.Info("periodic full reconciliation starting")
 
-		scopeSnapshot := rt.currentScopeSnapshot()
-		scopedPrimary := applyRemoteScope(rt.engine.logger, scopeSnapshot, rt.currentScopeGeneration(), events)
-
-		if commitErr := rt.commitObservedItems(ctx, scopedPrimary.observed, deltaToken); commitErr != nil {
-			rt.engine.logger.Error("failed to commit full reconciliation observations",
-				slog.String("error", commitErr.Error()),
-			)
-			rt.finishFullReconciliation(ctx, result)
-			return
-		}
-
-		if rt.afterReconcileCommit != nil {
-			rt.afterReconcileCommit()
-		}
-
-		if ctx.Err() != nil {
-			rt.engine.logger.Info("full reconciliation: observations committed, stopping for shutdown")
-			rt.finishFullReconciliation(ctx, result)
-			return
-		}
-
-		events = filterOutShortcuts(scopedPrimary.emitted)
-
-		shortcutEvents, scErr := rt.shortcutCoordinator().reconcileShortcutScopes(ctx, bl)
-		if scErr != nil {
-			rt.engine.logger.Warn("shortcut reconciliation failed during full reconciliation",
-				slog.String("error", scErr.Error()),
+	scopeSnapshot := rt.currentScopeSnapshot()
+	scopeGeneration := rt.currentScopeGeneration()
+	plan, err := rt.buildFullReconciliationPlan(ctx, scopeSnapshot, scopeGeneration)
+	if err != nil {
+		if ctx.Err() == nil {
+			rt.engine.logger.Error("full reconciliation planning failed",
+				slog.String("error", err.Error()),
 			)
 		}
+		return result
+	}
 
-		events = append(events, applyRemoteScope(rt.engine.logger, scopeSnapshot, 0, shortcutEvents).emitted...)
-
-		if len(events) == 0 {
-			rt.engine.logger.Info("periodic full reconciliation complete: no changes",
-				slog.Duration("duration", rt.engine.since(start)),
+	scopedPrimary, err := rt.observeCommittedFullReconciliationBatch(ctx, bl, &plan, scopeSnapshot, scopeGeneration)
+	if err != nil {
+		if ctx.Err() == nil {
+			rt.engine.logger.Error("full reconciliation failed",
+				slog.String("error", err.Error()),
 			)
-			rt.finishFullReconciliation(ctx, result)
-			return
 		}
-		result.events = events
-		if refreshed, refreshErr := rt.engine.baseline.ListShortcuts(ctx); refreshErr == nil {
-			result.shortcuts = refreshed
-		}
+		return result
+	}
 
-		rt.engine.logger.Info("periodic full reconciliation complete",
-			slog.Int("events", len(events)),
+	if ctx.Err() != nil {
+		rt.engine.logger.Info("full reconciliation: observations committed, stopping for shutdown")
+		return result
+	}
+
+	events := rt.reconcileShortcutBatch(ctx, bl, scopedPrimary.emitted, scopeSnapshot, scopeGeneration)
+	if len(events) == 0 {
+		rt.engine.logger.Info("periodic full reconciliation complete: no changes",
 			slog.Duration("duration", rt.engine.since(start)),
 		)
+		return result
+	}
 
-		rt.finishFullReconciliation(ctx, result)
-	}()
+	result.events = events
+	if refreshed, refreshErr := rt.engine.baseline.ListShortcuts(ctx); refreshErr == nil {
+		result.shortcuts = refreshed
+	}
+
+	rt.engine.logger.Info("periodic full reconciliation complete",
+		slog.Int("events", len(events)),
+		slog.Duration("duration", rt.engine.since(start)),
+	)
+
+	return result
+}
+
+func (rt *watchRuntime) buildFullReconciliationPlan(
+	ctx context.Context,
+	scopeSnapshot syncscope.Snapshot,
+	scopeGeneration int64,
+) (ObservationSessionPlan, error) {
+	session := ScopeSession{
+		Current:    scopeSnapshot,
+		Generation: scopeGeneration,
+	}
+
+	return rt.BuildObservationSessionPlan(ctx, ObservationPlanRequest{
+		Session:       &session,
+		SyncMode:      synctypes.SyncBidirectional,
+		FullReconcile: true,
+		Purpose:       observationPlanPurposeWatch,
+	})
+}
+
+func (rt *watchRuntime) observeCommittedFullReconciliationBatch(
+	ctx context.Context,
+	bl *synctypes.Baseline,
+	plan *ObservationSessionPlan,
+	scopeSnapshot syncscope.Snapshot,
+	scopeGeneration int64,
+) (remoteScopeResult, error) {
+	fetchResult, err := rt.observeObservationPhase(ctx, bl, plan.PrimaryPhase, true)
+	if err != nil {
+		return remoteScopeResult{}, err
+	}
+
+	scopedPrimary := applyRemoteScope(rt.engine.logger, scopeSnapshot, scopeGeneration, fetchResult.events)
+	if commitErr := rt.commitObservedItems(ctx, scopedPrimary.observed, ""); commitErr != nil {
+		return remoteScopeResult{}, fmt.Errorf("commit full reconciliation observations: %w", commitErr)
+	}
+	if tokenErr := rt.commitDeferredDeltaTokens(ctx, fetchResult.deferred); tokenErr != nil {
+		return remoteScopeResult{}, fmt.Errorf("commit full reconciliation delta tokens: %w", tokenErr)
+	}
+
+	if rt.afterReconcileCommit != nil {
+		rt.afterReconcileCommit()
+	}
+
+	return scopedPrimary, nil
+}
+
+func (rt *watchRuntime) reconcileShortcutBatch(
+	ctx context.Context,
+	bl *synctypes.Baseline,
+	primaryEvents []synctypes.ChangeEvent,
+	scopeSnapshot syncscope.Snapshot,
+	scopeGeneration int64,
+) []synctypes.ChangeEvent {
+	events, shortcutErr := rt.observeShortcutBatch(
+		ctx,
+		rt,
+		bl,
+		primaryEvents,
+		scopeSnapshot,
+		scopeGeneration,
+		false,
+		true,
+	)
+	if shortcutErr != nil {
+		rt.engine.logger.Warn("shortcut reconciliation failed during full reconciliation",
+			slog.String("error", shortcutErr.Error()),
+		)
+		return filterOutShortcuts(primaryEvents)
+	}
+
+	return events
 }
 
 func (rt *watchRuntime) runEnteredScopeReconciliationAsync(

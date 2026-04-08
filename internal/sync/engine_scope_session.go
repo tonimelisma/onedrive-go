@@ -34,12 +34,20 @@ const (
 	observationPlanPurposeWatch   ObservationPlanPurpose = "watch"
 )
 
-type WatchStrategy string
+type ObservationPhaseDriver string
 
 const (
-	watchStrategyRootDelta    WatchStrategy = "root_delta"
-	watchStrategyScopedRoot   WatchStrategy = "scoped_root"
-	watchStrategyScopedTarget WatchStrategy = "scoped_targets"
+	observationPhaseDriverRootDelta    ObservationPhaseDriver = "root_delta"
+	observationPhaseDriverScopedRoot   ObservationPhaseDriver = "scoped_root"
+	observationPhaseDriverScopedTarget ObservationPhaseDriver = "scoped_targets"
+)
+
+type ObservationPhaseDispatchPolicy string
+
+const (
+	observationPhaseDispatchPolicySingleBatch       ObservationPhaseDispatchPolicy = "single_batch"
+	observationPhaseDispatchPolicySequentialTargets ObservationPhaseDispatchPolicy = "sequential_targets"
+	observationPhaseDispatchPolicyParallelTargets   ObservationPhaseDispatchPolicy = "parallel_targets"
 )
 
 type ObservationPhaseErrorPolicy string
@@ -64,6 +72,8 @@ const (
 )
 
 type ObservationPhasePlan struct {
+	Driver            ObservationPhaseDriver
+	DispatchPolicy    ObservationPhaseDispatchPolicy
 	Targets           []plannedObservationTarget
 	ErrorPolicy       ObservationPhaseErrorPolicy
 	FallbackPolicy    ObservationPhaseFallbackPolicy
@@ -86,12 +96,10 @@ type ObservationPlanRequest struct {
 }
 
 type ObservationSessionPlan struct {
-	PrimaryPhase     ObservationPhasePlan
-	ShortcutPhase    ObservationPhasePlan
-	WatchStrategy    WatchStrategy
-	WebsocketEnabled bool
-	Reentry          ReentryPlan
-	Hash             string
+	PrimaryPhase  ObservationPhasePlan
+	ShortcutPhase ObservationPhasePlan
+	Reentry       ReentryPlan
+	Hash          string
 }
 
 type CursorCommitSet struct {
@@ -158,38 +166,19 @@ func (flow *engineFlow) BuildObservationSessionPlan(
 		return ObservationSessionPlan{}, err
 	}
 
-	if req.Purpose == observationPlanPurposeWatch && plan.WatchStrategy != watchStrategyRootDelta {
-		plan.WebsocketEnabled = false
-	}
-
-	currentSnapshot := syncscope.Snapshot{}
 	if req.Session != nil {
-		currentSnapshot = req.Session.Current
-	}
+		planHashValue, err := flow.planHash(&plan, req.Session.Current, effectivePrimaryFullReconcile(req.FullReconcile, &plan))
+		if err != nil {
+			return ObservationSessionPlan{}, fmt.Errorf("build observation session plan hash: %w", err)
+		}
 
-	planHashValue, err := flow.planHash(&plan, currentSnapshot, effectivePrimaryFullReconcile(req.FullReconcile, &plan))
-	if err != nil {
-		return ObservationSessionPlan{}, fmt.Errorf("build observation session plan hash: %w", err)
+		plan.Hash = planHashValue
 	}
-
-	plan.Hash = planHashValue
 	return plan, nil
 }
 
 func (flow *engineFlow) newObservationSessionPlan() ObservationSessionPlan {
 	return ObservationSessionPlan{
-		PrimaryPhase: ObservationPhasePlan{
-			ErrorPolicy:       observationPhaseErrorPolicyFailBatch,
-			FallbackPolicy:    observationPhaseFallbackPolicyNone,
-			TokenCommitPolicy: observationPhaseTokenCommitPolicyAfterPlannerAccepts,
-		},
-		ShortcutPhase: ObservationPhasePlan{
-			ErrorPolicy:       observationPhaseErrorPolicyIsolateTarget,
-			FallbackPolicy:    observationPhaseFallbackPolicyNone,
-			TokenCommitPolicy: observationPhaseTokenCommitPolicyAfterPhaseSuccess,
-		},
-		WatchStrategy:    watchStrategyRootDelta,
-		WebsocketEnabled: flow.engine.enableWebsocket && flow.engine.socketIOFetcher != nil,
 		Reentry: ReentryPlan{
 			Kind: synctypes.ScopeReconcileNone,
 		},
@@ -221,6 +210,14 @@ func (flow *engineFlow) buildPrimaryObservationPhase(
 	ctx context.Context,
 	plan *ObservationSessionPlan,
 ) error {
+	plan.PrimaryPhase = ObservationPhasePlan{
+		Driver:            observationPhaseDriverRootDelta,
+		DispatchPolicy:    observationPhaseDispatchPolicySingleBatch,
+		ErrorPolicy:       observationPhaseErrorPolicyFailBatch,
+		FallbackPolicy:    observationPhaseFallbackPolicyNone,
+		TokenCommitPolicy: observationPhaseTokenCommitPolicyAfterPlannerAccepts,
+	}
+
 	if flow.engine.usesPrimaryPathScopes() {
 		scopes, rootFallback, err := flow.engine.resolvePrimaryObservationScopes(ctx)
 		if err != nil {
@@ -230,21 +227,21 @@ func (flow *engineFlow) buildPrimaryObservationPhase(
 		plan.PrimaryPhase.Targets = scopes
 		switch {
 		case !rootFallback && plan.PrimaryPhase.HasTargets():
-			plan.WatchStrategy = watchStrategyScopedTarget
-			plan.WebsocketEnabled = false
-			if flow.engine.recursiveLister != nil && plan.primaryPhaseUsesDelta() {
-				plan.PrimaryPhase.FallbackPolicy = observationPhaseFallbackPolicyDeltaToEnumerate
+			plan.PrimaryPhase.Driver = observationPhaseDriverScopedTarget
+			plan.PrimaryPhase.DispatchPolicy = observationPhaseDispatchPolicySequentialTargets
+			if plan.primaryPhaseUsesDelta() {
+				plan.PrimaryPhase.FallbackPolicy = fallbackPolicyForPrimaryMode(primaryObservationDelta, flow.engine.recursiveLister != nil)
 			}
 		case flow.engine.hasScopedRoot():
-			plan.WatchStrategy = watchStrategyScopedRoot
-			plan.WebsocketEnabled = false
+			plan.PrimaryPhase.Driver = observationPhaseDriverScopedRoot
+			plan.PrimaryPhase.FallbackPolicy = fallbackPolicyForPrimaryMode(flow.engine.primaryObservationMode(), flow.engine.recursiveLister != nil)
 		}
 		return nil
 	}
 
 	if flow.engine.hasScopedRoot() {
-		plan.WatchStrategy = watchStrategyScopedRoot
-		plan.WebsocketEnabled = false
+		plan.PrimaryPhase.Driver = observationPhaseDriverScopedRoot
+		plan.PrimaryPhase.FallbackPolicy = fallbackPolicyForPrimaryMode(flow.engine.primaryObservationMode(), flow.engine.recursiveLister != nil)
 	}
 
 	return nil
@@ -259,6 +256,14 @@ func (flow *engineFlow) buildShortcutObservationPhase(
 	}
 	if req.Baseline == nil {
 		return fmt.Errorf("build observation session plan: missing baseline for shortcut planning")
+	}
+
+	plan.ShortcutPhase = ObservationPhasePlan{
+		Driver:            observationPhaseDriverScopedTarget,
+		DispatchPolicy:    observationPhaseDispatchPolicyParallelTargets,
+		ErrorPolicy:       observationPhaseErrorPolicyIsolateTarget,
+		FallbackPolicy:    observationPhaseFallbackPolicyNone,
+		TokenCommitPolicy: observationPhaseTokenCommitPolicyAfterPhaseSuccess,
 	}
 
 	collisions := req.ShortcutCollisions
@@ -300,6 +305,12 @@ func (plan *ObservationSessionPlan) primaryPhaseUsesDelta() bool {
 	return false
 }
 
+func (flow *engineFlow) websocketEnabledForPrimaryPhase(phase ObservationPhasePlan) bool {
+	return phase.Driver == observationPhaseDriverRootDelta &&
+		flow.engine.enableWebsocket &&
+		flow.engine.socketIOFetcher != nil
+}
+
 func hasObservedRoot(paths []string) bool {
 	for _, path := range paths {
 		if path == "" {
@@ -326,7 +337,7 @@ func (flow *engineFlow) scopeStateRecord(session *ScopeSession, plan *Observatio
 		EffectiveSnapshotJSON: snapshotJSON,
 		ObservationPlanHash:   plan.Hash,
 		ObservationMode:       flow.scopeObservationMode(plan),
-		WebsocketEnabled:      plan.WebsocketEnabled,
+		WebsocketEnabled:      flow.websocketEnabledForPrimaryPhase(plan.PrimaryPhase),
 		PendingReentry:        plan.Reentry.Pending,
 		LastReconcileKind:     lastKind,
 		UpdatedAt:             flow.engine.nowFunc().UnixNano(),
@@ -346,9 +357,9 @@ func scopeObservationModeForPrimary(mode primaryObservationMode) synctypes.Scope
 
 func (flow *engineFlow) scopeObservationMode(plan *ObservationSessionPlan) synctypes.ScopeObservationMode {
 	switch {
-	case plan.PrimaryPhase.HasTargets():
+	case plan.PrimaryPhase.Driver == observationPhaseDriverScopedTarget && plan.PrimaryPhase.HasTargets():
 		return scopeObservationModeForPrimary(plan.PrimaryPhase.Targets[0].mode)
-	case plan.WatchStrategy == watchStrategyScopedRoot:
+	case plan.PrimaryPhase.Driver == observationPhaseDriverScopedRoot:
 		return scopeObservationModeForPrimary(flow.engine.primaryObservationMode())
 	default:
 		return synctypes.ScopeObservationRootDelta
@@ -382,7 +393,7 @@ func (flow *engineFlow) planHash(
 		ReentryKind:      plan.Reentry.Kind,
 		ReentryPaths:     append([]string(nil), plan.Reentry.Paths...),
 		PendingReentry:   plan.Reentry.Pending,
-		WebsocketEnabled: plan.WebsocketEnabled,
+		WebsocketEnabled: flow.websocketEnabledForPrimaryPhase(plan.PrimaryPhase),
 		Snapshot:         snapshot.Persisted(),
 	}
 	for _, scope := range plan.PrimaryPhase.Targets {

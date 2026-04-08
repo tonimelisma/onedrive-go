@@ -36,6 +36,11 @@ type WatchObservationPreparer func(
 	events []synctypes.ChangeEvent,
 ) ([]synctypes.ObservedItem, []synctypes.ChangeEvent, error)
 
+type WatchBatchPostProcessor func(
+	ctx context.Context,
+	events []synctypes.ChangeEvent,
+) []synctypes.ChangeEvent
+
 // RemoteObserver transforms Graph API delta responses into []synctypes.ChangeEvent.
 // It handles pagination, path materialization, change classification, and
 // normalization (NFC, driveID zero-padding). Delegates item conversion to
@@ -49,6 +54,7 @@ type RemoteObserver struct {
 	ObsWriter synctypes.ObservationWriter // nil-safe: when set, observations are committed atomically with delta token
 	wakeCh    <-chan struct{}
 	prepWatch WatchObservationPreparer
+	postWatch WatchBatchPostProcessor
 
 	// mu protects deltaToken for concurrent reads via CurrentDeltaToken().
 	// The watch loop is the only writer; helper calls may read concurrently.
@@ -116,6 +122,13 @@ func (o *RemoteObserver) SetWakeChannel(wakeCh <-chan struct{}) {
 // without handing out-of-scope changes to the planner.
 func (o *RemoteObserver) SetWatchObservationPreparer(preparer WatchObservationPreparer) {
 	o.prepWatch = preparer
+}
+
+// SetWatchBatchPostProcessor installs an optional adapter that can transform a
+// successfully committed watch batch before individual events are emitted to
+// the engine. The callback runs only after commitWatchObservation succeeds.
+func (o *RemoteObserver) SetWatchBatchPostProcessor(processor WatchBatchPostProcessor) {
+	o.postWatch = processor
 }
 
 // FullDelta fetches all delta pages and returns the accumulated change events
@@ -236,6 +249,10 @@ func (o *RemoteObserver) Watch(ctx context.Context, savedToken string, events ch
 
 		if !o.commitWatchObservation(ctx, observed, newToken) {
 			continue
+		}
+
+		if o.postWatch != nil {
+			emitted = o.postWatch(ctx, emitted)
 		}
 
 		if err := o.emitWatchEvents(ctx, events, emitted); err != nil {
