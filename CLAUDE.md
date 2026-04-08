@@ -243,7 +243,7 @@ Re-read the governing design doc. Produce a compliance report listing each spec 
 
 ### Step 6: Code review checklist
 
-Self-review every change against coding standards proceeding to the Definition of Done.
+Self-review every change against coding standards proceeding to the Definition of Done. After opening a PR, review all human and automation feedback. This repo currently runs Codex PR reviews; Codex does not provide a required approval, but unresolved Codex review threads still block merge because `main` requires conversation resolution.
 
 ### Step 7: Definition of Done
 
@@ -255,9 +255,9 @@ After each increment, run through this entire checklist. If something fails, fix
 4. [ ] **Unit tests**: reported by `go run ./cmd/devtool verify default`
 5. [ ] **Coverage**: reported by `go run ./cmd/devtool verify default`
 6. [ ] **Fast E2E**: reported by `go run ./cmd/devtool verify default`
-7. [ ] **Docs updated**: CLAUDE.md, spec/design/, spec/requirements/ as needed
+7. [ ] **Docs updated**: AGENTS.md, CLAUDE.md, spec/design/, spec/requirements/ as needed
 8. [ ] **Rebase onto latest main**: Immediately before any `gh pr create`, run `git fetch origin` and `git rebase origin/main` in the worktree branch, then verify with `git merge-base --is-ancestor origin/main HEAD`. Never create a PR from a stale merge base. If that verification fails, do not open the PR. If the rebase changes the branch or you resolve conflicts, restart this checklist at item 1 and only continue once the rebased branch is green.
-9. [ ] **Push and CI green**: After item 8 passes, push branch, using `git push --force-with-lease` if the rebase rewrote history, open PR with `gh pr create`, then enable auto-merge with `gh pr merge --auto --squash --delete-branch`. Branch protection requires CI to pass before merge. Monitor with `gh pr checks <pr_number> --watch`
+9. [ ] **Push, review, and CI green**: After item 8 passes, push branch, using `git push --force-with-lease` if the rebase rewrote history, open PR with `gh pr create`, then enable auto-merge with `gh pr merge --auto --squash --delete-branch`. Branch protection requires the required CI checks to pass and all PR conversations to be resolved before merge. Monitor with `gh pr checks <pr_number> --watch`, wait for Codex PR review to finish, and address or explicitly resolve every actionable review thread before considering the increment complete.
 10. [ ] **Cleanup**: Clean `git status`. From the root repo (not worktree), remove the current worktree after merge. Then force-delete the local branch with `git branch -D` (squash merges create a new commit on main, so Git cannot detect the branch as merged — `git branch -d` will wrongly warn "not fully merged"). Prune stale remote-tracking branches and pull main forward:
     cd /Users/tonimelisma/Development/onedrive-go
     rm -f <worktree-path>/.testdata   # remove stale symlink before worktree removal

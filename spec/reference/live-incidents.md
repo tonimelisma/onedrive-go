@@ -14,7 +14,7 @@ of truth for what was seen, when it was seen, and how it was handled.
 | --- | --- | --- | --- | --- | --- |
 | LI-20260406-01 | Personal scoped delta not ready after path resolution | fixed | graph quirk | 2026-04-06 | no |
 | LI-20260405-05 | One-shot crash recovery left durable work unreplayed | fixed | product bug | 2026-04-05 | no |
-| LI-20260405-04 | Fast E2E download-only assumed delta visibility too early | closed as test | graph quirk | 2026-04-05 | no |
+| LI-20260405-04 | Fast E2E download-only assumed delta visibility too early | closed as test | graph quirk | 2026-04-07 | yes |
 | LI-20260405-03 | Websocket smoke timed startup before remote observer readiness | closed as test | test bug | 2026-04-05 | no |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
@@ -55,17 +55,18 @@ Promoted docs: [test-assurance-audit.md](/Users/tonimelisma/Development/onedrive
 ## LI-20260405-04: Fast E2E download-only assumed delta visibility too early
 
 First seen: 2026-04-05  
-Last seen: 2026-04-05  
+Last seen: 2026-04-07  
 Area: fast-e2e, download-only sync  
 Suite / test: `e2e`, `TestE2E_Sync_DownloadOnly`  
 Classification: graph quirk  
 Status: closed as test  
-Recurring: no  
+Recurring: yes  
 Summary: The test treated successful direct REST visibility of a newly uploaded remote file as proof that the next root-delta sync pass would also see it immediately. In live CI that assumption was false: direct path/stat visibility arrived first, while root delta still lagged.  
 Evidence:
 - [sync_e2e_test.go](/Users/tonimelisma/Development/onedrive-go-live-incident-ledger/e2e/sync_e2e_test.go#L340) now explicitly waits for the local synced file after delta catches up.
 - [graph-api-quirks.md](graph-api-quirks.md) already documents delta endpoint consistency lag as a live behavior.
 - Merged fix chain is included in `74da628` after the earlier test hardening commit on the same PR line.
+- April 7, 2026 local `go run ./cmd/devtool verify default` reproduced the same symptom once in the fast E2E lane, while an immediate targeted rerun of `go test -tags=e2e ./e2e -run '^TestE2E_Sync_DownloadOnly$' -count=1` passed, consistent with intermittent delta visibility lag rather than a deterministic product regression.
 Resolution / mitigation: The fast E2E test now waits for the real product outcome, the downloaded local file with the expected content, instead of assuming first-pass delta visibility after a direct REST read succeeds.  
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md)
 
