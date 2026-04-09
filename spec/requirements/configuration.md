@@ -49,7 +49,7 @@ The system shall resolve settings with a four-layer override chain: defaults →
 - R-4.8.2: The system shall validate value types, ranges, and formats at config
   load time: numeric ranges (e.g. transfer_workers 4–64), duration minimums
   (e.g. poll_interval >= 5m), enum fields (e.g. log_level, conflict_strategy),
-  and size formats (e.g. chunk_size, min_free_space). [verified]
+  and size formats (e.g. min_free_space). [verified]
 - R-4.8.3: The system shall prevent overlapping or duplicate sync directories
   across drives. [verified]
 - R-4.8.4: Informational commands (`drive list`, `status`, `whoami`) shall
@@ -64,7 +64,7 @@ The system shall resolve settings with a four-layer override chain: defaults →
   (filters, safety thresholds, timing) shall be fully validated before sync
   starts. [verified]
 
-## R-4.9 Config Schema [implemented]
+## R-4.9 Config Schema [verified]
 
 - R-4.9.1: All global settings shall be optional with documented defaults. No
   global settings are required for any command to function. [verified]
@@ -79,4 +79,4 @@ The system shall resolve settings with a four-layer override chain: defaults →
   documented defaults. [verified]
 - R-4.9.4: The config design doc shall contain a complete field reference:
   every global and per-drive field, its type, default value, valid range, and
-  which command class uses it. [planned]
+  which command class uses it. [verified]

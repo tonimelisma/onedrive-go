@@ -312,10 +312,6 @@ func initializeCLIContext(
 
 	cmd.SetContext(context.WithValue(ctx, cliContextKey{}, cc))
 
-	if cc.Cfg != nil {
-		config.WarnUnimplemented(cc.Cfg, cc.Logger)
-	}
-
 	return nil
 }
 

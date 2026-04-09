@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -32,6 +33,8 @@ const (
 	downloadTempFilePerms = 0o600
 )
 
+const heicMetadataMismatchWarning = "known OneDrive/iOS metadata mismatch, accepting download"
+
 // resolveMaxRetries returns the effective max hash retries, applying the
 // default and overflow-safe upper bound.
 func resolveMaxRetries(configured int) int {
@@ -44,6 +47,17 @@ func resolveMaxRetries(configured int) int {
 	}
 
 	return configured
+}
+
+func isHEICMetadataMismatch(targetPath, remoteHash string, hashVerified bool, remoteSize, localSize int64) bool {
+	if !strings.EqualFold(filepath.Ext(targetPath), ".heic") {
+		return false
+	}
+
+	hashMismatchAccepted := remoteHash != "" && !hashVerified
+	sizeMismatch := remoteSize > 0 && remoteSize != localSize
+
+	return hashMismatchAccepted || sizeMismatch
 }
 
 // DownloadOpts configures a single download operation.
@@ -94,6 +108,29 @@ type TransferManager struct {
 	// diskAvailableFunc queries available disk space. nil = skip disk check.
 	// Injected via WithDiskCheck to allow testing without real statfs calls.
 	diskAvailableFunc func(string) (uint64, error)
+}
+
+func (tm *TransferManager) logHEICMetadataMismatch(
+	targetPath, localHash, remoteHash string, localSize, remoteSize int64, hashVerified bool,
+) {
+	attrs := []any{
+		slog.String("target", targetPath),
+		slog.Bool("hash_verified", hashVerified),
+		slog.String("local_hash", localHash),
+	}
+
+	if remoteHash != "" {
+		attrs = append(attrs, slog.String("remote_hash", remoteHash))
+	}
+
+	if remoteSize > 0 {
+		attrs = append(attrs,
+			slog.Int64("local_size", localSize),
+			slog.Int64("remote_size", remoteSize),
+		)
+	}
+
+	tm.logger.Warn(heicMetadataMismatchWarning, attrs...)
 }
 
 // Option configures a TransferManager. Pass to NewTransferManager.
@@ -189,7 +226,9 @@ func (tm *TransferManager) DownloadToFile(
 	}
 
 	// Warn if downloaded size doesn't match expected remote size.
-	if opts.RemoteSize > 0 && size != opts.RemoteSize {
+	if isHEICMetadataMismatch(targetPath, opts.RemoteHash, hashVerified, opts.RemoteSize, size) {
+		tm.logHEICMetadataMismatch(targetPath, localHash, opts.RemoteHash, size, opts.RemoteSize, hashVerified)
+	} else if opts.RemoteSize > 0 && size != opts.RemoteSize {
 		tm.logger.Warn("download size mismatch",
 			slog.String("target", targetPath),
 			slog.Int64("local_size", size),

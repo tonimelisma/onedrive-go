@@ -57,6 +57,45 @@ disable_upload_validation = true
 }
 
 // Validates: R-4.8.1
+func TestLoad_UnknownKey_RemovedChunkSize(t *testing.T) {
+	path := writeTestConfig(t, `chunk_size = "20MiB"`)
+	_, err := Load(path, testLogger(t))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown config key")
+	assert.Contains(t, err.Error(), "chunk_size")
+}
+
+// Validates: R-4.8.1
+func TestLoad_UnknownKey_RemovedDeferredConfigFields(t *testing.T) {
+	t.Parallel()
+
+	for _, key := range []string{
+		"bandwidth_limit",
+		"bandwidth_schedule",
+		"transfer_order",
+		"fullscan_frequency",
+		"conflict_reminder_interval",
+		"verify_interval",
+		"connect_timeout",
+		"data_timeout",
+		"user_agent",
+		"force_http_11",
+	} {
+		t.Run(key, func(t *testing.T) {
+			path := writeTestConfig(t, key+" = true")
+			if key == "user_agent" {
+				path = writeTestConfig(t, `user_agent = "custom"`)
+			}
+
+			_, err := Load(path, testLogger(t))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "unknown config key")
+			assert.Contains(t, err.Error(), key)
+		})
+	}
+}
+
+// Validates: R-4.8.1
 func TestLoad_UnknownKeyInDriveSection(t *testing.T) {
 	path := writeTestConfig(t, `
 ["personal:toni@outlook.com"]
@@ -131,15 +170,6 @@ func TestClosestMatch_Found(t *testing.T) {
 func TestClosestMatch_NotFound(t *testing.T) {
 	known := []string{"skip_files", "skip_dirs"}
 	assert.Empty(t, closestMatch("completely_unrelated", known))
-}
-
-// --- Edge case: known parent with sub-field is not flagged ---
-
-func TestBuildGlobalKeyError_KnownParent_SubField(t *testing.T) {
-	// A nested key like "bandwidth_schedule.time" has a known parent,
-	// so buildGlobalKeyError should return nil.
-	err := buildGlobalKeyError("bandwidth_schedule.time")
-	assert.NoError(t, err)
 }
 
 func TestBuildGlobalKeyError_UnknownParent_SubField(t *testing.T) {
