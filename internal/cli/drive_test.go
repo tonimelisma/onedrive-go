@@ -182,8 +182,12 @@ func TestBuildConfiguredDriveEntries_NoSyncDir_WithAccountProfile(t *testing.T) 
 // --- listAvailableDrives ---
 
 func TestListAvailableDrives_Empty(t *testing.T) {
-	err := listAvailableDrives(io.Discard)
-	assert.NoError(t, err)
+	var buf bytes.Buffer
+	require.NoError(t, listAvailableDrives(&buf))
+	assert.Equal(t,
+		"Run 'onedrive-go drive add <canonical-id>' to add a drive.\nRun 'onedrive-go drive list' to see available drives.\n",
+		buf.String(),
+	)
 }
 
 // --- printDriveListText ---
@@ -368,8 +372,14 @@ func TestPrintDriveListText_EmptySyncDir_ShowsNotSet(t *testing.T) {
 
 func TestPrintDriveListJSON_Empty(t *testing.T) {
 	var buf bytes.Buffer
-	err := printDriveListJSON(&buf, nil, nil, nil, nil)
-	assert.NoError(t, err)
+	require.NoError(t, printDriveListJSON(&buf, nil, nil, nil, nil))
+
+	var output driveListJSONOutput
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &output))
+	assert.Empty(t, output.Configured)
+	assert.Empty(t, output.Available)
+	assert.Nil(t, output.AccountsRequiringAuth)
+	assert.Nil(t, output.AccountsDegraded)
 }
 
 // Validates: R-3.3.10
@@ -576,8 +586,13 @@ func TestPrintDriveSearchJSON_NoError(t *testing.T) {
 		{CanonicalID: "sharepoint:user@contoso.com:marketing:Docs", SiteName: "Marketing", LibraryName: "Docs"},
 	}
 	var buf bytes.Buffer
-	err := printDriveSearchJSON(&buf, results)
-	assert.NoError(t, err)
+	require.NoError(t, printDriveSearchJSON(&buf, results))
+
+	var output driveSearchJSONOutput
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &output))
+	require.Len(t, output.Results, 1)
+	assert.Equal(t, results, output.Results)
+	assert.Nil(t, output.AccountsRequiringAuth)
 }
 
 // Validates: R-3.3.11
@@ -606,8 +621,12 @@ func TestPrintDriveSearchJSON_IncludesAuthRequiredAccounts(t *testing.T) {
 
 func TestPrintDriveSearchJSON_EmptySlice(t *testing.T) {
 	var buf bytes.Buffer
-	err := printDriveSearchJSON(&buf, []driveSearchResult{})
-	assert.NoError(t, err)
+	require.NoError(t, printDriveSearchJSON(&buf, []driveSearchResult{}))
+
+	var output driveSearchJSONOutput
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &output))
+	assert.Empty(t, output.Results)
+	assert.Nil(t, output.AccountsRequiringAuth)
 }
 
 // --- searchableBusinessTokenIDs ---
@@ -1008,9 +1027,15 @@ sync_dir = "~/OneDrive"
 ["shared:user@example.com:driveX:itemY"]
 sync_dir = "~/OneDrive-Shared/Test"
 `), 0o600))
+	originalData, err := localpath.ReadFile(cfgPath)
+	require.NoError(t, err)
 
-	err := addSharedDrive(t.Context(), cfgPath, io.Discard, cid, "", testDriveLogger(t), graphhttp.NewProvider(testDriveLogger(t)))
-	assert.NoError(t, err)
+	require.NoError(t, addSharedDrive(t.Context(), cfgPath, io.Discard, cid, "", testDriveLogger(t), graphhttp.NewProvider(testDriveLogger(t))))
+
+	updatedData, err := localpath.ReadFile(cfgPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(originalData), string(updatedData))
+	assert.Equal(t, 1, strings.Count(string(updatedData), `["shared:user@example.com:driveX:itemY"]`))
 }
 
 func TestAddSharedDrive_NoToken(t *testing.T) {
@@ -1779,10 +1804,18 @@ func TestPurgeOrphanedDriveState_NoStateDB(t *testing.T) {
 	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
 	cid := driveid.MustCanonicalID("personal:user@example.com")
+	statePath := config.DriveStatePath(cid)
+	metaPath := config.DriveMetadataPath(cid)
+	var out bytes.Buffer
 
 	// No state DB on disk — should succeed with "no orphaned state" message.
-	err := purgeOrphanedDriveState(io.Discard, cid, testDriveLogger(t))
-	assert.NoError(t, err)
+	require.NoError(t, purgeOrphanedDriveState(&out, cid, testDriveLogger(t)))
+	assert.Equal(t, "No orphaned state found for personal:user@example.com.\n", out.String())
+
+	_, stateErr := os.Stat(statePath)
+	assert.True(t, os.IsNotExist(stateErr), "state DB should remain absent")
+	_, metaErr := os.Stat(metaPath)
+	assert.True(t, os.IsNotExist(metaErr), "drive metadata should remain absent")
 }
 
 func TestSortedDriveSearchResults_ReturnsSortedClone(t *testing.T) {

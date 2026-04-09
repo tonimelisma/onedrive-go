@@ -244,8 +244,7 @@ func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]syncty
 
 			// For modifies: check if hash matches baseline (no real change).
 			if !job.isNew && hash != "" {
-				existing, _ := o.Baseline.GetByPath(job.dbRelPath)
-				if existing != nil && hash == existing.LocalHash {
+				if existing, found := o.Baseline.GetByPath(job.dbRelPath); found && hash == existing.LocalHash {
 					return nil
 				}
 			}
@@ -442,7 +441,10 @@ func (o *LocalObserver) classifyObservedInfo(
 	jobs *[]hashJob,
 	scanStartNano int64,
 ) error {
-	existing, _ := o.Baseline.GetByPath(dbRelPath)
+	var existing *synctypes.BaselineEntry
+	if baselineEntry, found := o.Baseline.GetByPath(dbRelPath); found {
+		existing = baselineEntry
+	}
 
 	// No baseline entry — this is a new item.
 	if existing == nil {

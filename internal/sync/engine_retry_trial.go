@@ -297,7 +297,12 @@ func (rt *watchRuntime) runRetrierSweep(
 		return nil
 	}
 
-	dispatch, _ := rt.dispatchWorkRequest(ctx, request, bl, mode, safety)
+	dispatch, dispatched := rt.dispatchWorkRequest(ctx, request, bl, mode, safety)
+	if !dispatched {
+		rt.engine.logger.Debug("retrier sweep produced no dispatchable work",
+			slog.Int("candidate_rows", dispatchedRows),
+		)
+	}
 	rt.engine.logger.Info("retrier sweep",
 		slog.Int("dispatched", dispatchedRows),
 	)

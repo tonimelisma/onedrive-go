@@ -31,6 +31,19 @@ type routeOutcome struct {
 	terminateErr error
 }
 
+func (flow *engineFlow) completeDepGraphAction(actionID int64, reason string) []*synctypes.TrackedAction {
+	if flow.depGraph == nil {
+		panic(fmt.Sprintf("dep_graph: complete action %d during %s with nil graph", actionID, reason))
+	}
+
+	ready, ok := flow.depGraph.Complete(actionID)
+	if !ok {
+		panic(fmt.Sprintf("dep_graph: complete unknown action ID %d during %s", actionID, reason))
+	}
+
+	return ready
+}
+
 // processWorkerResult replaces processWorkerResult + routeReadyActions with
 // failure-aware dependent dispatch.
 func (flow *engineFlow) processWorkerResult(
@@ -57,7 +70,7 @@ func (flow *engineFlow) processResult(
 	bl *synctypes.Baseline,
 ) routeOutcome {
 	decision := classifyResult(r)
-	ready, _ := flow.depGraph.Complete(r.ActionID)
+	ready := flow.completeDepGraphAction(r.ActionID, "processResult")
 
 	if resultCtx.isTrial {
 		return flow.processTrialDecision(ctx, watch, resultCtx.trialScopeKey, &decision, ready, r, bl)

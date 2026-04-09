@@ -1033,7 +1033,7 @@ func whoamiCatalogContext(
 			StateDBCount: len(config.DiscoverStateDBsForEmail(accountEmail, logger)),
 			AuthHealth:   inspectAccountAuth(ctx, accountEmail, accountDriveIDs, logger),
 		}
-		catalogEntry.DisplayName, _ = readAccountMeta(accountEmail, accountDriveIDs, logger)
+		catalogEntry.DisplayName = readAccountDisplayName(accountEmail, accountDriveIDs, logger)
 	}
 
 	return catalogEntry, authRequirement(

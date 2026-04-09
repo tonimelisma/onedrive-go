@@ -142,7 +142,7 @@ func (f *engineFlow) completeTrackedActionAsShutdown(ta *synctypes.TrackedAction
 		return
 	}
 
-	ready, _ := f.depGraph.Complete(ta.ID)
+	ready := f.completeDepGraphAction(ta.ID, "completeTrackedActionAsShutdown")
 	f.scopeController().completeSubtree(ready)
 }
 

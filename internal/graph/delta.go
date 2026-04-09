@@ -136,7 +136,7 @@ func (c *Client) buildFolderDeltaPath(driveID driveid.ID, folderID, token string
 // and the new delta token for the next sync run.
 // On success, the returned token is always a non-empty DeltaLink.
 func (c *Client) DeltaAll(ctx context.Context, driveID driveid.ID, token string) ([]Item, string, error) {
-	return c.deltaAllPages(ctx, token, func(t string) (*DeltaPage, error) {
+	return c.deltaAllPages(token, func(t string) (*DeltaPage, error) {
 		return c.Delta(ctx, driveID, t)
 	}, slog.String("drive_id", driveID.String()))
 }
@@ -145,7 +145,7 @@ func (c *Client) DeltaAll(ctx context.Context, driveID driveid.ID, token string)
 // the combined items and the new delta token.
 // Only works on OneDrive Personal — Business/SharePoint only support root-scoped delta.
 func (c *Client) DeltaFolderAll(ctx context.Context, driveID driveid.ID, folderID, token string) ([]Item, string, error) {
-	return c.deltaAllPages(ctx, token, func(t string) (*DeltaPage, error) {
+	return c.deltaAllPages(token, func(t string) (*DeltaPage, error) {
 		return c.DeltaFolder(ctx, driveID, folderID, t)
 	}, slog.String("drive_id", driveID.String()), slog.String("folder_id", folderID))
 }
@@ -154,13 +154,10 @@ func (c *Client) DeltaFolderAll(ctx context.Context, driveID driveid.ID, folderI
 // It calls fetchPage repeatedly until a DeltaLink is received or maxDeltaPages
 // is exceeded.
 func (c *Client) deltaAllPages(
-	ctx context.Context,
 	token string,
 	fetchPage func(string) (*DeltaPage, error),
 	logAttrs ...slog.Attr,
 ) ([]Item, string, error) {
-	_ = ctx // used by callers' closures; kept in signature for consistency
-
 	args := attrsToArgs(logAttrs)
 	args = append(args, slog.Bool("initial_sync", token == ""))
 	c.logger.Info("starting full delta enumeration", args...)

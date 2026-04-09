@@ -955,7 +955,7 @@ func (controller *scopeController) cascadeRecordAndComplete(
 		controller.recordScopeBlockedFailure(ctx, &current.Action, scopeKey)
 		// No resetDispatchStatus — setDispatch was never called for blocked
 		// actions (active-scope admission runs BEFORE setDispatch, per section 2.2).
-		ready, _ := flow.depGraph.Complete(current.ID)
+		ready := flow.completeDepGraphAction(current.ID, "cascadeRecordAndComplete")
 		queue = append(queue, ready...)
 	}
 }
@@ -983,7 +983,7 @@ func (controller *scopeController) cascadeFailAndComplete(
 		seen[current.ID] = true
 
 		controller.recordCascadeFailure(ctx, &current.Action, r)
-		next, _ := flow.depGraph.Complete(current.ID)
+		next := flow.completeDepGraphAction(current.ID, "cascadeFailAndComplete")
 		queue = append(queue, next...)
 	}
 }
@@ -1005,7 +1005,7 @@ func (controller *scopeController) completeSubtree(ready []*synctypes.TrackedAct
 		}
 		seen[current.ID] = true
 
-		next, _ := flow.depGraph.Complete(current.ID)
+		next := flow.completeDepGraphAction(current.ID, "completeSubtree")
 		queue = append(queue, next...)
 	}
 }
