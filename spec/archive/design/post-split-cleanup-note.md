@@ -1,5 +1,10 @@
 # TODO — Post-Split Architecture Improvements
 
+Archived from the former repo-root `TODO.md` during repository cleanup on
+2026-04-09. This file preserves the historical post-split cleanup note so
+archived design reviews and implementation briefs can still cite it without
+keeping a root-level TODO file.
+
 Improvements identified during the sync-package-split review (2026-03-20). All are refinements — the split is structurally complete and all prior review findings are resolved.
 
 ---

@@ -152,13 +152,13 @@ case r, ok := <-c.results:
 
 ---
 
-## 6. TODO.md Interaction & Sequencing
+## 6. Post-Split Cleanup Interaction & Sequencing
 
-**The Issue:** `engine-event-loop.md` describes replacing admission logic utilizing `entry.scopeKey.BlocksAction(...)`. Simultaneously, `TODO.md` dictates moving `BlocksAction` to the `syncdispatch` package as a free function.
+**The Issue:** `engine-event-loop.md` describes replacing admission logic utilizing `entry.scopeKey.BlocksAction(...)`. Simultaneously, the then-current post-split cleanup note proposed moving `BlocksAction` to the `syncdispatch` package as a free function.
 
 **The Solution:**
 Strictly sequence the work:
-1. **First**, implement `TODO.md` items 1, 4, 5, and 6. This stabilizes the `synctypes` boundaries and gets `BlocksAction` into its final form `syncdispatch.BlocksAction(...)`.
+1. **First**, implement the outstanding post-split cleanup items around `synctypes` boundaries, config placement, test-only helpers, and worker-test dependency cleanup. This stabilizes the `synctypes` boundaries and gets `BlocksAction` into its final form `syncdispatch.BlocksAction(...)`.
 2. **Second**, execute the `engine-event-loop.md` refactor taking advantage of the cleaned-up dependencies, preventing cross-branch merge conflicts.
 
 ---
