@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -19,6 +20,24 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
+
+type stubVerifyStore struct {
+	baseline *synctypes.Baseline
+	loadErr  error
+	closeErr error
+}
+
+func (s stubVerifyStore) Load(context.Context) (*synctypes.Baseline, error) {
+	if s.loadErr != nil {
+		return nil, s.loadErr
+	}
+
+	return s.baseline, nil
+}
+
+func (s stubVerifyStore) Close(context.Context) error {
+	return s.closeErr
+}
 
 type verifyBaselineRow struct {
 	path      string
@@ -168,6 +187,26 @@ func TestLoadAndVerify_OpenSyncStoreError(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, report)
 	assert.Contains(t, err.Error(), "open sync store")
+}
+
+// Validates: R-2.7
+func TestLoadAndVerifyWithStore_CloseFailureSuppressesReport(t *testing.T) {
+	syncDir := t.TempDir()
+	closeErr := errors.New("db close failed")
+
+	report, err := loadAndVerifyWithStore(
+		t.Context(),
+		stubVerifyStore{
+			baseline: &synctypes.Baseline{},
+			closeErr: closeErr,
+		},
+		syncDir,
+		slog.New(slog.DiscardHandler),
+	)
+	require.Error(t, err)
+	assert.Nil(t, report)
+	require.ErrorIs(t, err, closeErr)
+	assert.Contains(t, err.Error(), "close sync store")
 }
 
 // Validates: R-2.7

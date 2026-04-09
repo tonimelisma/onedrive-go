@@ -133,7 +133,10 @@ func (c *ItemConverter) ConvertItems(items []graph.Item) []synctypes.ChangeEvent
 func (c *ItemConverter) registerInflight(item *graph.Item, inflight map[driveid.ItemKey]InflightParent) {
 	itemDriveID := c.resolveItemDriveID(item)
 	key := driveid.NewItemKey(itemDriveID, item.ID)
-	existing, _ := c.Baseline.GetByID(key)
+	var existing *synctypes.BaselineEntry
+	if baselineEntry, found := c.Baseline.GetByID(key); found {
+		existing = baselineEntry
+	}
 
 	name := effectiveItemName(item, existing)
 	parentID := item.ParentID
@@ -179,7 +182,10 @@ func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[driveid.Item
 	}
 
 	baselineKey := driveid.NewItemKey(itemDriveID, item.ID)
-	existing, _ := c.Baseline.GetByID(baselineKey)
+	var existing *synctypes.BaselineEntry
+	if baselineEntry, found := c.Baseline.GetByID(baselineKey); found {
+		existing = baselineEntry
+	}
 
 	// Non-deleted items need a materializable leaf name. Deleted items may
 	// recover their name from the baseline later in classifyAndConvert.

@@ -139,7 +139,9 @@ func buildPathViews(changes []synctypes.PathChanges, baseline *synctypes.Baselin
 		}
 
 		// Baseline lookup.
-		view.Baseline, _ = baseline.GetByPath(pc.Path)
+		if baselineEntry, found := baseline.GetByPath(pc.Path); found {
+			view.Baseline = baselineEntry
+		}
 
 		// If there are no local events but a baseline exists, derive local
 		// state from baseline — the item is unchanged on disk.

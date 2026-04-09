@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
@@ -69,10 +70,35 @@ func (s *issuesService) runForceDeletes(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer store.Close(ctx)
+
+	return s.runForceDeletesWithStore(ctx, store)
+}
+
+func (s *issuesService) runForceDeletesWithStore(ctx context.Context, store issuesMutationStore) (err error) {
+	storeClosed := false
+	defer func() {
+		if storeClosed {
+			return
+		}
+
+		if closeErr := store.Close(ctx); closeErr != nil {
+			closeErr = fmt.Errorf("close sync store: %w", closeErr)
+			if err == nil {
+				err = closeErr
+				return
+			}
+
+			err = errors.Join(err, closeErr)
+		}
+	}()
 
 	if err := store.ApproveHeldDeletes(ctx); err != nil {
 		return fmt.Errorf("approve held deletes: %w", err)
+	}
+
+	storeClosed = true
+	if err := store.Close(ctx); err != nil {
+		return fmt.Errorf("close sync store: %w", err)
 	}
 
 	return writeln(s.cc.Output(), "Approved all held deletes for this drive.")

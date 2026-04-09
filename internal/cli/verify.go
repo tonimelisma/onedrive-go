@@ -20,6 +20,11 @@ import (
 // main() handles this by exiting with code 1 without printing "Error:".
 var errVerifyMismatch = errors.New("verification found mismatches")
 
+type verifyStore interface {
+	Load(context.Context) (*synctypes.Baseline, error)
+	Close(context.Context) error
+}
+
 func newVerifyCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "verify",
@@ -37,15 +42,35 @@ func runVerify(cmd *cobra.Command, _ []string) error {
 }
 
 // loadAndVerify opens the baseline, loads it, and runs verification.
-// Separated so the defer Close() runs before the caller returns.
 func loadAndVerify(ctx context.Context, dbPath, syncDir string, logger *slog.Logger) (*synctypes.VerifyReport, error) {
 	mgr, err := syncstore.NewSyncStore(ctx, dbPath, logger)
 	if err != nil {
 		return nil, fmt.Errorf("open sync store: %w", err)
 	}
-	defer mgr.Close(ctx)
 
-	bl, err := mgr.Load(ctx)
+	return loadAndVerifyWithStore(ctx, mgr, syncDir, logger)
+}
+
+func loadAndVerifyWithStore(
+	ctx context.Context,
+	store verifyStore,
+	syncDir string,
+	logger *slog.Logger,
+) (report *synctypes.VerifyReport, err error) {
+	defer func() {
+		if closeErr := store.Close(ctx); closeErr != nil {
+			closeErr = fmt.Errorf("close sync store: %w", closeErr)
+			if err == nil {
+				report = nil
+				err = closeErr
+				return
+			}
+
+			err = errors.Join(err, closeErr)
+		}
+	}()
+
+	bl, err := store.Load(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("load baseline: %w", err)
 	}
@@ -55,7 +80,7 @@ func loadAndVerify(ctx context.Context, dbPath, syncDir string, logger *slog.Log
 		return nil, fmt.Errorf("open sync tree: %w", err)
 	}
 
-	report, err := syncverify.VerifyBaseline(ctx, bl, tree, logger)
+	report, err = syncverify.VerifyBaseline(ctx, bl, tree, logger)
 	if err != nil {
 		return nil, fmt.Errorf("verify baseline: %w", err)
 	}

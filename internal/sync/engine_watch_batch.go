@@ -102,7 +102,11 @@ func (rt *watchRuntime) planAndDispatchBatch(
 		rt.deduplicateInFlight(plan)
 	}
 
-	dispatch, _ := rt.dispatchBatchActions(ctx, plan, opts)
+	dispatch, dispatched := rt.dispatchBatchActions(ctx, plan, opts)
+	if !dispatched {
+		return nil
+	}
+
 	return dispatch
 }
 
