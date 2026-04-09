@@ -12,7 +12,7 @@ The most important facts to start from are these:
 - At the time this brief was researched, the branch tip already matched `origin/main` at `0b6b873`, so there was **no branch-base delta to rebase away**.
 - The working tree also contained substantial uncommitted edits, including unrelated changes outside sync architecture work.
 - There was no pre-existing `REFACTOR.md`.
-- There is an existing [`TODO.md`](/Users/tonimelisma/Development/onedrive-go/TODO.md), so this file uses descriptive section names instead of numeric headings that would conflict with `TODO.md`.
+- There is an existing historical [`post-split-cleanup-note.md`](/Users/tonimelisma/Development/onedrive-go/spec/archive/design/post-split-cleanup-note.md), so this file uses descriptive section names instead of numeric headings that would conflict with that note.
 
 This document does **not** argue for rolling back the architecture that landed in `#334` through `#336`.
 The core architectural direction was right.
@@ -945,7 +945,7 @@ Those doc edits should land only if the code decision lands.
 
 These are not tied to one section, but another agent should see them immediately.
 
-- [`TODO.md`](/Users/tonimelisma/Development/onedrive-go/TODO.md) already exists and uses different numbering, so `REFACTOR.md` must keep named sections
+- the historical [`post-split-cleanup-note.md`](/Users/tonimelisma/Development/onedrive-go/spec/archive/design/post-split-cleanup-note.md) already exists and uses different numbering, so `REFACTOR.md` must keep named sections
 - the dirty branch included unrelated edits outside sync architecture work; do not bundle them accidentally
 - `sync-engine.md` was already being edited in ways that assume runtime-state extraction is accepted
 - verify/CI WIP is separate work unless deliberately coupled
@@ -975,7 +975,7 @@ If runtime-state extraction lands:
 
 ## Assumptions And Defaults
 
-- This brief assumes the numbered items refer to the post-`#336` architecture cleanup list, not [`TODO.md`](/Users/tonimelisma/Development/onedrive-go/TODO.md).
+- This brief assumes the numbered items refer to the post-`#336` architecture cleanup list, not the historical [`post-split-cleanup-note.md`](/Users/tonimelisma/Development/onedrive-go/spec/archive/design/post-split-cleanup-note.md).
 - There was no rebase delta at research time because the dirty branch base already matched `origin/main`.
 - No public API change is required for the recommended options in this brief.
 - The recommended overall path is:

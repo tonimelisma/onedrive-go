@@ -187,9 +187,9 @@ But `watchState` has 17+ fields including `scopeGate`, `scopeState`, `buf`, `del
 
 Moving 17 fields to different homes requires explicit enumeration. "Fields that survive" is too vague for a plan of this caliber.
 
-### 🕳️ Gap 6: Relationship with TODO.md item #1 (synctypes scope logic moves)
+### 🕳️ Gap 6: Relationship with the post-split cleanup note's scope-logic move
 
-TODO.md item #1 proposes moving `BlocksAction`, `ScopeKeyForStatus`, `IssueType`, `Humanize` from `synctypes` to `syncdispatch`. The event loop plan's `admit()` function calls `entry.scopeKey.BlocksAction(...)` (a method on `ScopeKey`). If item #1 moves this to a free function in `syncdispatch`, the `admit()` code would change to `syncdispatch.BlocksAction(entry.scopeKey, ...)`.
+The then-current post-split cleanup note proposed moving `BlocksAction`, `ScopeKeyForStatus`, `IssueType`, `Humanize` from `synctypes` to `syncdispatch`. The event loop plan's `admit()` function calls `entry.scopeKey.BlocksAction(...)` (a method on `ScopeKey`). If that cleanup moves this to a free function in `syncdispatch`, the `admit()` code would change to `syncdispatch.BlocksAction(entry.scopeKey, ...)`.
 
 These two plans need to be sequenced. If item #1 goes first, the event loop plan's `admit()` pseudocode is stale. If the event loop goes first, item #1 needs to update the new code. The plan doesn't acknowledge this interaction.
 
@@ -339,9 +339,9 @@ Actually, the CAS prevents a second reconciliation from starting AT ALL until `r
 
 ## Downstream Impacts
 
-### 📊 Impact on TODO.md items
+### 📊 Impact on adjacent cleanup items
 
-| TODO Item | Impact | Action Needed |
+| Cleanup Item | Impact | Action Needed |
 |-----------|--------|---------------|
 | #1 synctypes scope logic | `admit()` calls `BlocksAction()` as a method. If scope logic moves to `syncdispatch`, `admit()` needs updating. | Sequence this AFTER event loop, or update `admit()` pseudocode. |
 | #4 synctypes imports | `EngineConfig` move to `internal/sync/` doesn't conflict. | No interaction. |
