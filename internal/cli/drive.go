@@ -164,10 +164,9 @@ func buildConfiguredAuthRequirements(
 		}
 
 		driveIDs := grouped[email]
-		displayName, _ := readAccountMeta(email, driveIDs, logger)
 		result = append(result, authRequirement(
 			email,
-			displayName,
+			readAccountDisplayName(email, driveIDs, logger),
 			accountDriveType(driveIDs),
 			len(config.DiscoverStateDBsForEmail(email, logger)),
 			health,
@@ -360,8 +359,11 @@ func tokenDriveCatalogDegradedNotice(
 		return driveCatalogDegradedNotice(entry.Email, entry.DisplayName, entry.DriveType)
 	}
 
-	displayName, _ := readAccountMeta(tokenCID.Email(), []driveid.CanonicalID{tokenCID}, logger)
-	return driveCatalogDegradedNotice(tokenCID.Email(), displayName, tokenCID.DriveType())
+	return driveCatalogDegradedNotice(
+		tokenCID.Email(),
+		readAccountDisplayName(tokenCID.Email(), []driveid.CanonicalID{tokenCID}, logger),
+		tokenCID.DriveType(),
+	)
 }
 
 func appendAvailableCatalogDrive(
@@ -425,10 +427,9 @@ func tokenAuthRequirement(
 	reason string,
 	logger *slog.Logger,
 ) accountAuthRequirement {
-	displayName, _ := readAccountMeta(tokenCID.Email(), []driveid.CanonicalID{tokenCID}, logger)
 	return authRequirement(
 		tokenCID.Email(),
-		displayName,
+		readAccountDisplayName(tokenCID.Email(), []driveid.CanonicalID{tokenCID}, logger),
 		tokenCID.DriveType(),
 		len(config.DiscoverStateDBsForEmail(tokenCID.Email(), logger)),
 		accountAuthHealth{

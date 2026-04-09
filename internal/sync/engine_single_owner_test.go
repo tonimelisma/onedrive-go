@@ -74,7 +74,7 @@ func TestEngine_CascadeRecordAndComplete_SingleAction(t *testing.T) {
 		Path:    "test.txt",
 		DriveID: driveid.New("drive1"),
 	}
-	ta := &synctypes.TrackedAction{ID: 1, Action: action}
+	ta := testWatchRuntime(t, eng).depGraph.Add(&action, 1, nil)
 	require.NotNil(t, ta, "action should be immediately ready")
 
 	// Cascade-record it as scope-blocked.
@@ -1205,6 +1205,21 @@ func TestDepGraph_DoneClosesWhenAllComplete(t *testing.T) {
 	case <-time.After(time.Second):
 		require.Fail(t, "Done should be closed when all actions are complete")
 	}
+}
+
+func TestEngineFlow_CompleteDepGraphActionPanicsOnUnknownID(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	flow := newEngineFlow(eng.Engine)
+	flow.depGraph = syncdispatch.NewDepGraph(eng.logger)
+
+	require.PanicsWithValue(t,
+		"dep_graph: complete unknown action ID 99 during unit test",
+		func() {
+			flow.completeDepGraphAction(99, "unit test")
+		},
+	)
 }
 
 // ---------------------------------------------------------------------------

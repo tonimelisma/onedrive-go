@@ -157,7 +157,10 @@ func buildStatusAccountsFromCatalog(
 			return driveIDs[i].String() < driveIDs[j].String()
 		})
 
-		entry, _ := catalogEntryByEmail(catalog, email)
+		entry := accountCatalogEntry{}
+		if foundEntry, found := catalogEntryByEmail(catalog, email); found {
+			entry = foundEntry
+		}
 		acct := statusAccount{
 			Email:       email,
 			DriveType:   entry.DriveType,
@@ -291,6 +294,11 @@ func readAccountMeta(account string, driveIDs []driveid.CanonicalID, logger *slo
 
 	orgName, displayName = config.ResolveAccountNames(tokenID, logger)
 	return displayName, orgName
+}
+
+func readAccountDisplayName(account string, driveIDs []driveid.CanonicalID, logger *slog.Logger) string {
+	displayName, _ := readAccountMeta(account, driveIDs, logger)
+	return displayName
 }
 
 // driveState returns the human-readable state for a drive based on its

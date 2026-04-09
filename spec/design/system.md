@@ -170,9 +170,9 @@ Static verification is a first-class architectural constraint, not a best-effort
 
 - Resource consumption guarantees documented per component. [planned]
 - Lock ordering contract: every mutex documented in a hierarchy. `tracker.go` has nested `mu` → `cyclesMu`. [planned]
-- Audit all `_ = ...` patterns in production code for silently ignored errors. [planned]
-- Add value assertions after bare `assert.NoError` test calls (42+ instances could mask incorrect results). [planned]
-- Audit deferred `Close` on write paths — errors universally ignored. [planned]
+- Production ignored-return audit complete: invariant-bearing results such as `DepGraph.Complete` and dispatch admission booleans are handled explicitly, baseline/account metadata lookups now use explicit helpers or `found` checks, and the remaining ignored returns are limited to explicit value-only helper drops plus documented impossible-error builder writes. [verified]
+- Bare `assert.NoError` audit complete: remaining sites are intentional cleanup, test-plumbing, or pure error-contract assertions, while weak CLI happy-path tests now assert rendered text, JSON shape, and preserved config/state. [verified]
+- Write-path `Close` audit complete: sync-store close failures now propagate on `verify` and `issues force-deletes`, while read-only inspector close paths remain best-effort debug logged by design. [verified]
 - Evaluate `sync` → `graph` error coupling — decouple via interface if warranted. [planned]
 - Evaluate deeper `internal/sync/` runtime package splitting after the control-plane split. [planned]
 - Continue expanding direct handler/service coverage over the new `internal/cli/` service split so the package reaches its 60%+ coverage target. [planned]
