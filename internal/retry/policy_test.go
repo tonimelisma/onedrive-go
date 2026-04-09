@@ -113,7 +113,7 @@ func TestNamedPolicies_UploadAndVisibilityPolicies(t *testing.T) {
 	assertPolicyShape(t, SimpleUploadMtimePatchPolicy(), 4, 250*time.Millisecond, 2*time.Second, 0.0)
 	assertPolicyShape(t, UploadSessionCreatePolicy(), 6, 250*time.Millisecond, 4*time.Second, 0.0)
 	assertPolicyShape(t, SimpleUploadCreatePolicy(), 7, 250*time.Millisecond, 8*time.Second, 0.0)
-	assertPolicyShape(t, PathVisibilityPolicy(), 11, 250*time.Millisecond, 32*time.Second, 0.0)
+	assertPolicyShape(t, PathVisibilityPolicy(), 10, 250*time.Millisecond, 32*time.Second, 0.0)
 }
 
 // Validates: R-6.8.2

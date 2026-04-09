@@ -426,8 +426,9 @@ now applies to `TestE2E_Sync_UploadOnly`: immediate success is proven through
 the durable baseline row written by the sync outcome boundary, not by a
 separate follow-on remote `stat`. After the April 9 recurring `rm_permanent`
 repro proved the product boundary itself could still exhaust too early,
-`PathVisibilityPolicy()` was widened to keep its deterministic `32s` cap long
-enough to spend just under two minutes total before surfacing
+`PathVisibilityPolicy()` was widened to keep its deterministic `32s` cap for
+three capped sleeps, which yields about `95.75s` of deterministic wait before
+request overhead and roughly a two-minute wall-clock budget before surfacing
 `ErrPathNotVisible`.
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [drive-transfers.md](../design/drive-transfers.md), [cli.md](../design/cli.md)
 

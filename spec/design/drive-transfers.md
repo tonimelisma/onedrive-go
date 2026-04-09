@@ -107,10 +107,11 @@ delete-target path recovery in the same owner:
   visibility gate instead of trusting a one-shot path lookup; when the exact
   path route still lies with `itemNotFound`, the visibility gate confirms the
   path by exact-name parent/ancestor listing before it spends more retry
-  budget. The deterministic wait now keeps the `32s` cap long enough to spend
-  just under two minutes total, because live Graph evidence has shown a path
-  can become readable, regress to `404 itemNotFound`, and only recover again
-  well after the older ~32-second budget
+  budget. The deterministic wait now keeps the `32s` cap for three capped
+  sleeps, which yields about `95.75s` of scheduled wait before request
+  overhead and roughly a two-minute wall-clock budget, because live Graph
+  evidence has shown a path can become readable, regress to `404 itemNotFound`,
+  and only recover again well after the older ~32-second budget
 - `ResolveDeleteTarget()` so path-oriented deletes can fall back from an exact
   path `itemNotFound` to the parent collection before they decide the target
   is already gone; when the parent-path listing itself is in a transient

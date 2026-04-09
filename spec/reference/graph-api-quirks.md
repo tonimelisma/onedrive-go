@@ -317,7 +317,8 @@ Runtime policy:
 - `mkdir`, single-file `put`, and `mv` retry destination-path reads on exact
   `itemNotFound` using a deterministic schedule that ramps
   `250ms`, `500ms`, `1s`, `2s`, `4s`, `8s`, `16s`, then holds the `32s` cap
-  long enough to spend just under two minutes total
+  for three capped sleeps, which yields about `95.75s` of scheduled wait
+  before request overhead and roughly a two-minute wall-clock budget
 - if the destination path still is not readable after that budget, the command
   returns `ErrPathNotVisible` instead of claiming success prematurely
 
@@ -352,7 +353,9 @@ default`:
   included `54cd8b32-1efd-4927-8583-faa972d45e7a` and
   `38ebde5b-9ff5-487a-89db-45b85f704e4b`
 - the production schedule was therefore widened again to keep the `32s` cap for
-  roughly two minutes total before surfacing `ErrPathNotVisible`
+  three capped sleeps, which yields about `95.75s` of scheduled wait before
+  request overhead and roughly a two-minute wall-clock budget before surfacing
+  `ErrPathNotVisible`
 
 ### Delete-By-ID Can Lag A Successful Path Lookup
 

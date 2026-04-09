@@ -32,7 +32,7 @@ execution.
 | `DownloadMetadataPolicy()` | Exact item-by-ID download metadata quirk retry | 4 | 250ms | 2s |
 | `UploadSessionCreatePolicy()` | Exact create-upload-session fresh-parent quirk retry | 6 | 250ms | 4s |
 | `SimpleUploadCreatePolicy()` | Final simple-upload create retry after session-path disambiguation | 7 | 250ms | 8s |
-| `PathVisibilityPolicy()` | Post-success path-read/delete convergence at the CLI/session boundary | 11 | 250ms | 32s |
+| `PathVisibilityPolicy()` | Post-success path-read/delete convergence at the CLI/session boundary | 10 | 250ms | 32s |
 | `WatchLocalPolicy()` | Local observer error recovery | 0 (infinite) | 1s | 30s |
 | `ReconcilePolicy()` | Per-item transient retry in `sync_failures` | 0 (infinite) | 1s | 1h |
 | `WatchRemotePolicy()` | Remote observer error recovery | 0 (infinite) | 5s | 5m |
@@ -76,11 +76,12 @@ command-boundary convergence checks:
   by transient `DELETE .../items/{id} = 404 itemNotFound`
 
 The current schedule keeps the same `250ms` exponential ramp but now holds the
-`32s` ceiling long enough to spend just under two minutes total before
-surfacing `ErrPathNotVisible`. Live Graph evidence has shown minute-scale
-path-read model lag after successful writes and deletes, so the shorter old
-budget was no longer enough to distinguish a real missing path from delayed
-visibility.
+`32s` ceiling for three capped sleeps, which yields about `95.75s` of
+deterministic wait before request overhead and roughly a two-minute wall-clock
+budget once the repeated Graph reads are included. Live Graph evidence has
+shown minute-scale path-read model lag after successful writes and deletes, so
+the shorter old budget was no longer enough to distinguish a real missing path
+from delayed visibility.
 
 `syncexec` does not carry an independent visibility schedule or sleep loop.
 When sync wants best-effort confirmation after a successful remote create,
