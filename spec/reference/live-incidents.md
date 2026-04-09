@@ -54,10 +54,14 @@ Evidence:
   (`TestE2E_SyncWatch_WebsocketRemoteWakeAndRestart` and
   `TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal`) before hitting the
   harness cap.
-Resolution / mitigation: `devtool verify e2e-full` now keeps the same serial
-execution model but raises the package timeout to `60m`, and the design/process
-docs now describe that longer budget explicitly so nightly/manual CI matches the
-real runtime of the serialized suite.  
+Resolution / mitigation: `devtool verify e2e-full` no longer runs the whole
+`e2e_full` package as one serial block. It now keeps the same `60m` timeout
+budget but splits the suite into three verifier-owned buckets so only the
+already-vetted misc lane regains `-parallel 5`, while sync/watch/shared lanes
+stay serial. The full preflight still owns the one-time remote scrub, bucketed
+runs skip repeat scrubs with `ONEDRIVE_E2E_SKIP_SUITE_SCRUB=1`, and scheduled
+/ manual CI now uploads verifier and timing-summary artifacts so long-lane
+runtime and classified reruns are visible instead of opaque.
 Promoted docs: [system.md](../design/system.md)
 
 ## LI-20260408-02: `CreateFolder` returned success status with an empty body
@@ -163,8 +167,10 @@ The repo-owned auth preflight remains intentionally strict so CI fails early
 with exact account, request ID, failed-call count, and elapsed-time evidence
 when this consistency gap lasts longer than the test budget. Scheduled/manual
 `devtool verify e2e-full --classify-live-quirks` now reruns that exact strict
-preflight once and only downgrades it when the rerun passes; required lanes
-stay strict.  
+preflight once and only downgrades it when the rerun passes; the verifier
+summary now records that classified rerun explicitly so nightly/manual CI can
+distinguish a clean pass from a green-after-rerun pass. Required lanes stay
+strict.
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../design/graph-client.md), [degraded-mode.md](../design/degraded-mode.md), [cli.md](../design/cli.md)
 
 ## LI-20260405-09: Recently created parent folder lagged child create routes
@@ -252,12 +258,12 @@ Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [drive-transfers.md](
 
 ## LI-20260405-07: Destination path stayed unreadable after successful mutation
 
-First seen: 2026-04-05  
-Last seen: 2026-04-07  
-Area: `e2e_full`, CLI mutation follow-on path reads  
-Suite / test: `verify e2e-full`, `TestE2E_Sync_EditEditConflict_ResolveKeepRemote`; later `TestE2E_Sync_BidirectionalMerge` and `TestE2E_Conflicts_ResolveKeepBoth`  
-Classification: graph quirk  
-Status: mitigated  
+First seen: 2026-04-05
+Last seen: 2026-04-08
+Area: `e2e_full`, CLI mutation follow-on path reads
+Suite / test: `verify e2e-full`, `TestE2E_Sync_EditEditConflict_ResolveKeepRemote`; later `TestE2E_Sync_BidirectionalMerge` and `TestE2E_Conflicts_ResolveKeepBoth`
+Classification: graph quirk
+Status: mitigated
 Recurring: yes  
 Summary: Graph can acknowledge a successful metadata-changing mutation and
 still return `404 itemNotFound` on the immediate follow-on path read for the
@@ -501,7 +507,7 @@ Evidence:
 - Merged fix chain is included in `74da628` after the earlier test hardening commit on the same PR line.
 - April 7, 2026 local `go run ./cmd/devtool verify default` reproduced the same symptom once in the fast E2E lane, while an immediate targeted rerun of `go test -tags=e2e ./e2e -run '^TestE2E_Sync_DownloadOnly$' -count=1` passed, consistent with intermittent delta visibility lag rather than a deterministic product regression.
 - April 8, 2026 local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` hit the same family in the classified fast-E2E pre-pass, and the targeted rerun passed immediately, confirming the scheduled/manual rerun path is now correctly scoped to this exact recurrence.
-Resolution / mitigation: The fast E2E test now waits for the real product outcome, the downloaded local file with the expected content, instead of assuming first-pass delta visibility after a direct REST read succeeds. Delta-sensitive live sync tests now reuse the same eventual-convergence helper pattern, and scheduled/manual `devtool verify e2e-full --classify-live-quirks` may rerun this exact test once when the known delta-lag family recurs.  
+Resolution / mitigation: The fast E2E test now waits for the real product outcome, the downloaded local file with the expected content, instead of assuming first-pass delta visibility after a direct REST read succeeds. Delta-sensitive live sync tests now reuse the same eventual-convergence helper pattern, and scheduled/manual `devtool verify e2e-full --classify-live-quirks` may rerun this exact test once when the known delta-lag family recurs. Those same live waits now emit `timing-summary.json`, so recurring delta lag shows up as measured convergence windows rather than only as pass/fail noise.
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md)
 
 ## LI-20260405-03: Websocket watch tests timed websocket assertions before the steady-state subtree was ready
