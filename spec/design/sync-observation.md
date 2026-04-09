@@ -98,6 +98,7 @@ Key properties:
 - Dual-path threading: `fsRelPath` (filesystem I/O) and `dbRelPath` (NFC-normalized for baseline lookup). `handleDelete` receives `fsPath` (the original `fsEvent.Name`) directly and passes it to `watcher.Remove()` — never reconstructs the filesystem path from NFC-normalized `dbRelPath` (B-312). On macOS HFS+ where fsnotify delivers NFD-encoded paths, reconstructing with NFC causes `watcher.Remove()` to silently fail and leak watch resources.
 - `skip_symlinks = false` follows symlink targets at the alias path for full scans, watch-mode create/write handling, retry/trial single-path reconstruction, and watch setup. `skip_symlinks = true` excludes them entirely. Followed directory symlinks use a real-path ancestry guard so cycles stop at the alias boundary instead of recursing forever. Excluded symlink aliases stay silent: watch mode remembers skipped alias paths so later remove events and safety scans do not resurrect them as synthetic deletes.
 - inotify watch limit detection on Linux (`inotify_linux.go`)
+- Recursive watch-add operations roll back newly added descendant watches on fatal setup failures (`ErrWatchLimitExhausted`, watch-setup context cancellation). Startup watch setup and scope-change descendant add use the same rollback behavior, so a partial subtree add does not stay registered on the live watcher after a fatal mid-walk failure.
 - The local observer also owns one effective sync-scope snapshot separate from
   `LocalFilterConfig`. The snapshot is built from normalized `sync_paths` plus
   locally discovered marker directories, and it gates full scans, watch setup,
@@ -164,6 +165,8 @@ Extracted filesystem walker for full-scan mode. Produces change events by walkin
 
 Collects events from both observers, deduplicates, debounces (default 2 seconds), and produces `[]PathChanges` batches grouped by path. Thread-safe (mutex-protected). Move events are dual-keyed: stored at new path AND synthetic delete at old path.
 
+Per-path retained history is intentionally bounded. Local observation keeps only the latest local event for a path. Remote observation keeps only the latest remote event, plus one retained `ChangeMove` marker when a later remote event on the same path still needs planner-visible move context. This keeps hot paths from accumulating unbounded event slices while preserving remote move detection.
+
 `FlushImmediate` for one-shot mode (no debounce wait).
 
 ## Runtime Ownership
@@ -225,7 +228,3 @@ Implements: R-6.2.7 [verified]
 
 - Debounce semantics under load: write coalescing implemented, load-testing and tuning remaining. [planned]
 - Streaming delta processing: process pages as they arrive rather than buffering all pages. Modest win (~1ms per page vs ~100-300ms API call). [planned]
-- Per-path event cap in Buffer: `defaultBufferMaxPaths` caps path count but not events-per-path. [planned]
-- Nil guards on all Item field accesses in `observer_remote.go`: delta items may have missing `Name`, `ParentReference`, etc. [planned]
-- Buffer overflow test with drop metric verification. [planned]
-- inotify partial-watch cleanup verification: ensure already-added watches are cleaned up on setup failure. [planned]

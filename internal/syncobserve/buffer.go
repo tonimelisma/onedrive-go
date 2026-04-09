@@ -35,9 +35,10 @@ func NewBuffer(logger *slog.Logger) *Buffer {
 	}
 }
 
-// Add appends a single event to the buffer, routing it to the correct
-// path group and source slice. Thread-safe. Takes a pointer to avoid
-// copying the 192-byte ChangeEvent struct on each call.
+// Add records a single event in the buffer, routing it to the correct
+// path group and retaining only the planner-relevant per-path history.
+// Thread-safe. Takes a pointer to avoid copying the 192-byte ChangeEvent
+// struct on each call.
 func (b *Buffer) Add(ev *synctypes.ChangeEvent) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -251,14 +252,27 @@ func (b *Buffer) getOrCreate(p string) *synctypes.PathChanges {
 	return pc
 }
 
-// routeEvent appends the event to the correct source slice within
-// the PathChanges (remote or local). Dereferences the pointer because
-// PathChanges stores ChangeEvent values (not pointers).
+// routeEvent records the event in the correct source slice within PathChanges.
+// Local history keeps only the latest event. Remote history keeps the latest
+// event plus one move marker when needed so the planner can still detect
+// remote moves after a follow-up remote modify in the same debounce window.
 func (b *Buffer) routeEvent(pc *synctypes.PathChanges, ev *synctypes.ChangeEvent) {
 	switch ev.Source {
 	case synctypes.SourceRemote:
-		pc.RemoteEvents = append(pc.RemoteEvents, *ev)
+		pc.RemoteEvents = retainRemoteEvents(pc.RemoteEvents, ev)
 	case synctypes.SourceLocal:
-		pc.LocalEvents = append(pc.LocalEvents, *ev)
+		pc.LocalEvents = []synctypes.ChangeEvent{*ev}
 	}
+}
+
+func retainRemoteEvents(existing []synctypes.ChangeEvent, ev *synctypes.ChangeEvent) []synctypes.ChangeEvent {
+	if ev.Type == synctypes.ChangeMove {
+		return []synctypes.ChangeEvent{*ev}
+	}
+
+	if len(existing) > 0 && existing[0].Type == synctypes.ChangeMove {
+		return []synctypes.ChangeEvent{existing[0], *ev}
+	}
+
+	return []synctypes.ChangeEvent{*ev}
 }

@@ -475,11 +475,38 @@ func (o *LocalObserver) cancelPendingTimers() {
 	}
 }
 
+func isFatalWatchSetupError(err error) bool {
+	return errors.Is(err, synctypes.ErrWatchLimitExhausted) ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded)
+}
+
+func (o *LocalObserver) rollbackAddedWatches(watcher FsWatcher, session *watchAddSession) {
+	if session == nil || len(session.added) == 0 {
+		return
+	}
+
+	for i := len(session.added) - 1; i >= 0; i-- {
+		path := session.added[i]
+		if err := watcher.Remove(path); err != nil {
+			o.Logger.Warn("watch setup rollback: failed to remove watch",
+				slog.String("path", path),
+				slog.String("error", err.Error()))
+		}
+
+		delete(o.watchedDirs, path)
+	}
+}
+
 // AddWatchesRecursive walks the sync root and adds a watch on every directory.
 func (o *LocalObserver) AddWatchesRecursive(ctx context.Context, watcher FsWatcher, tree *synctree.Root) error {
 	syncRoot := tree.Path()
 	counts := &watchSetupCounts{}
-	err := o.addObservedDirWatches(ctx, watcher, syncRoot, ".", counts, make(map[string]struct{}))
+	session := newWatchAddSession()
+	err := o.addObservedDirWatches(ctx, watcher, syncRoot, ".", counts, make(map[string]struct{}), session)
+	if err != nil && isFatalWatchSetupError(err) {
+		o.rollbackAddedWatches(watcher, session)
+	}
 
 	// Use Info when failures occurred (operator needs to know), Debug otherwise.
 	logLevel := slog.LevelDebug
