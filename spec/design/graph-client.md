@@ -235,7 +235,7 @@ raw HTTP and Graph payloads become `GraphError` values plus sentinels such as
 `ErrGone` and `ErrUnauthorized`. Retry, persistence, and user-facing decisions
 consume that normalized boundary contract via [error-model.md](error-model.md).
 
-**RetryAfter Header** — `RetryAfter time.Duration` field on `GraphError`. Parsed from `Retry-After` header for 429 and 503 responses. Implements: R-6.8.6 [implemented]
+**RetryAfter Header** — `RetryAfter time.Duration` field on `GraphError`. Parsed from `Retry-After` header for 429 and 503 responses. Implements: R-6.8.6 [verified]
 
 ## Transport-Layer Retry
 

@@ -456,6 +456,27 @@ Runtime policy:
   the strict auth preflight once for this exact known quirk and only downgrade
   it when the rerun passes; required per-PR lanes stay strict
 
+### Transient 504 `ProfileException` on `/me` During Strict Auth Preflight
+
+Strict auth preflight used to treat `GET /me` as a one-shot proof while only
+polling `/me/drives`. Local verifier evidence on April 9, 2026 broadened the
+auth-preflight quirk family: `GET /me` returned HTTP 504 `GatewayTimeout` with
+message `ProfileException` for
+`TestE2E_AuthPreflight_Fast/personal_testitesti18@outlook.com`, request ID
+`446dc036-f752-4805-9c33-d637eb70975d`, and an immediate rerun later passed.
+
+Repo policy:
+
+- product runtime is unchanged; this did not become a new graph-client
+  semantic retry rule
+- the repo-owned strict auth preflight now gives `/me` its own bounded retry
+  window for transient 502/503/504 or transport-read failures
+- durable auth failures such as 401/403 on `/me` still fail the strict
+  preflight immediately
+- `/me/drives` keeps its broader bounded poll because the documented discovery
+  projection lag can manifest as repeated `403 accessDenied` rather than a
+  single transient transport/service failure
+
 ### Slow/Stalled Metadata Response Headers
 
 Ordinary Graph metadata requests can sometimes connect successfully and then

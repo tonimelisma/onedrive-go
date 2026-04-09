@@ -23,7 +23,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.2.6: (S6) Before each download, the system shall verify available disk space. When below `min_free_space`: set a `disk:local` scope block on all downloads. When above `min_free_space` but below file size plus `min_free_space`: record a per-file failure. [verified]
 - R-6.2.7: (S7) The system shall never upload partial or temporary files (filter cascade excludes temp patterns). [verified]
 - R-6.2.8: File operations (ls, get, put, rm, mkdir, stat, mv, cp) shall work independently of sync state — no sync database involved. [verified]
-- R-6.2.10: When a transfer connection stalls without context cancellation, the system shall enforce a per-transfer timeout or connection-level deadline to prevent indefinite hangs. [implemented]
+- R-6.2.10: When a transfer connection stalls without context cancellation, the system shall enforce a per-transfer timeout or connection-level deadline to prevent indefinite hangs. [verified]
 
 ## R-6.3 Process Model [verified]
 
@@ -60,7 +60,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.6.6: The system shall support a TUI (terminal UI) for real-time status. [future]
 - R-6.6.7: When more than 10 items share the same warning category in a sync pass, the system shall log one WARN summary with count and individual items at DEBUG. [verified]
 - R-6.6.8: Individual retry attempts for transient errors shall be logged at DEBUG, not WARN. Only the final outcome shall be logged at WARN or higher. [verified]
-- R-6.6.9: When transient errors resolve within the retry budget, the system shall log at INFO with attempt count (not WARN). [planned — deferred: per-path resolution logging adds per-success DB query; scope block/release INFO provides equivalent visibility]
+- R-6.6.9: When transient errors resolve within the retry budget, the system shall log at INFO with attempt count (not WARN). [verified]
 - R-6.6.10: When retries are exhausted, the system shall log a single WARN with final error, attempt count, and next retry time. [verified]
 - R-6.6.11: Every failure shown to the user shall include a plain-language reason and a concrete user action. Per-error-type reason and action text shall cover all failure categories (quota, permissions, disk space, service outage, rate limiting, naming violations, case collisions, network errors, auth failures, unknown errors), with scope-owner-specific variants for shortcut-scoped failures. [verified]
 - R-6.6.12: When more than 10 transient failures of the same issue_type exhaust their retry budget within a single sync pass, the system shall aggregate them into a single summary WARN log line with count, logging individual paths at DEBUG. This extends the scanner-skipped aggregation pattern (R-6.6.7) to execution-time transient failures. [verified]
@@ -107,7 +107,7 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.8.3: All transfers shall be resumable after network interruption. [verified]
 - R-6.8.4: The system shall treat HTTP 429 as target-scoped by default: it shall block only the narrowest remote boundary provable from the failed request. Owned-drive traffic blocks that drive, and shared-folder or direct shared-item traffic block that exact shared root/item boundary. Broader account-wide or tenant-wide throttling shall not be inferred without explicit evidence. [verified]
 - R-6.8.5: ~~The system shall parse `RateLimit-Remaining` headers and proactively slow when less than 20% remains.~~ [cancelled — headers only cover per-app 1-minute resource units; not reliable for proactive throttling. Reactive 429 scope handling is sufficient.]
-- R-6.8.6: The system shall honor `Retry-After` from both 429 and 503 responses, populating `GraphError.RetryAfter`. [implemented]
+- R-6.8.6: The system shall honor `Retry-After` from both 429 and 503 responses, populating `GraphError.RetryAfter`. [verified]
 - R-6.8.7: During sync, workers shall never block on retry backoff. Failed actions are completed and recorded in `sync_failures` with `next_retry_at`. Workers block only for HTTP round-trip time. [verified]
 - R-6.8.8: For sync operations, the graph client shall use raw `http.DefaultTransport` (no retry transport). Each dispatch equals one HTTP request. CLI commands shall retain `Transport` policy (`MaxAttempts: 5`). [verified]
 - R-6.8.9: The executor shall not contain a retry loop. It shall dispatch actions and return results; the engine shall classify and schedule retries. [verified]

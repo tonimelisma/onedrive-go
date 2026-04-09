@@ -34,14 +34,37 @@ func TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile(t *testing.T
 	putRemoteFile(t, opsCfgPath, nil, selectedRemotePath, "selected\n")
 	putRemoteFile(t, opsCfgPath, nil, ignoredRemotePath, "ignored\n")
 
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--download-only", "--force")
-	assert.Contains(t, stderr, "Mode: download-only")
-
 	selectedLocalPath := filepath.Join(syncDir, testFolder, "docs", "report.txt")
 	ignoredLocalPath := filepath.Join(syncDir, testFolder, "docs", "other.txt")
 
-	selectedContent, err := os.ReadFile(selectedLocalPath)
-	require.NoError(t, err)
+	var selectedContent []byte
+	attempt := requireSyncEventuallyConverges(
+		t,
+		cfgPath,
+		env,
+		90*time.Second,
+		"sync_paths exact-file download should eventually materialize only the selected file after delta catches up",
+		func(result syncAttemptResult) bool {
+			if result.Err != nil {
+				return false
+			}
+
+			data, err := os.ReadFile(selectedLocalPath)
+			if err != nil {
+				return false
+			}
+
+			if _, err := os.Stat(ignoredLocalPath); !os.IsNotExist(err) {
+				return false
+			}
+
+			selectedContent = data
+			return string(selectedContent) == "selected\n"
+		},
+		"--download-only",
+		"--force",
+	)
+	assert.Contains(t, attempt.Stderr, "Mode: download-only")
 	assert.Equal(t, "selected\n", string(selectedContent))
 
 	_, statErr := os.Stat(ignoredLocalPath)
@@ -82,10 +105,29 @@ func TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload(t *testing.
 
 	require.NoError(t, os.Remove(markerPath))
 
-	_, stderr = runCLIWithConfig(t, cfgPath, env, "sync", "--download-only", "--force")
-	assert.Contains(t, stderr, "Mode: download-only")
+	var blockedContent []byte
+	attempt := requireSyncEventuallyConverges(
+		t,
+		cfgPath,
+		env,
+		90*time.Second,
+		"ignore marker removal should eventually materialize the newly unblocked remote file",
+		func(result syncAttemptResult) bool {
+			if result.Err != nil {
+				return false
+			}
 
-	blockedContent, err := os.ReadFile(blockedLocalPath)
-	require.NoError(t, err)
+			data, err := os.ReadFile(blockedLocalPath)
+			if err != nil {
+				return false
+			}
+
+			blockedContent = data
+			return string(blockedContent) == "blocked\n"
+		},
+		"--download-only",
+		"--force",
+	)
+	assert.Contains(t, attempt.Stderr, "Mode: download-only")
 	assert.Equal(t, "blocked\n", string(blockedContent))
 }

@@ -159,6 +159,63 @@ func TestListLocalIssues_Multiple(t *testing.T) {
 	assert.Equal(t, "a.txt", issues[2].Path)
 }
 
+func TestTakeSyncFailure_ReturnsAndDeletesRow(t *testing.T) {
+	mgr, _ := newTestSyncStoreForFailures(t)
+	ctx := context.Background()
+	driveID := driveid.New("drive-1")
+
+	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:       "docs/report.txt",
+		DriveID:    driveID,
+		Direction:  synctypes.DirectionUpload,
+		ActionType: synctypes.ActionUpload,
+		Category:   synctypes.CategoryTransient,
+		IssueType:  synctypes.IssueServiceOutage,
+		ErrMsg:     "server error",
+		HTTPStatus: 503,
+	}, func(_ int) time.Duration {
+		return time.Minute
+	}))
+	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:       "docs/report.txt",
+		DriveID:    driveID,
+		Direction:  synctypes.DirectionUpload,
+		ActionType: synctypes.ActionUpload,
+		Category:   synctypes.CategoryTransient,
+		IssueType:  synctypes.IssueServiceOutage,
+		ErrMsg:     "server error again",
+		HTTPStatus: 503,
+	}, func(_ int) time.Duration {
+		return time.Minute
+	}))
+
+	row, found, err := mgr.TakeSyncFailure(ctx, "docs/report.txt", driveID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotNil(t, row)
+	assert.Equal(t, "docs/report.txt", row.Path)
+	assert.Equal(t, driveID, row.DriveID)
+	assert.Equal(t, synctypes.CategoryTransient, row.Category)
+	assert.Equal(t, synctypes.FailureRoleItem, row.Role)
+	assert.Equal(t, synctypes.IssueServiceOutage, row.IssueType)
+	assert.Equal(t, synctypes.ActionUpload, row.ActionType)
+	assert.Equal(t, 2, row.FailureCount)
+
+	rows, err := mgr.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, rows, "taken row should be deleted")
+}
+
+func TestTakeSyncFailure_MissingRow(t *testing.T) {
+	mgr, _ := newTestSyncStoreForFailures(t)
+	ctx := context.Background()
+
+	row, found, err := mgr.TakeSyncFailure(ctx, "missing.txt", driveid.New("drive-1"))
+	require.NoError(t, err)
+	assert.False(t, found)
+	assert.Nil(t, row)
+}
+
 func TestClearLocalIssue(t *testing.T) {
 	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()

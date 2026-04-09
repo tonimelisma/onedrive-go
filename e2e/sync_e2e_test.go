@@ -233,6 +233,18 @@ func getRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePa
 	return string(data)
 }
 
+func pollRemoteParentVisible(t *testing.T, cfgPath string, env map[string]string, remotePath string) {
+	t.Helper()
+
+	cleanPath := path.Clean(remotePath)
+	parent := path.Dir(cleanPath)
+	if parent == "." || parent == "/" || parent == "" {
+		return
+	}
+
+	pollRemotePathVisible(t, cfgPath, env, parent)
+}
+
 func pollRemotePathVisible(t *testing.T, cfgPath string, env map[string]string, remotePath string) {
 	t.Helper()
 
@@ -246,7 +258,89 @@ func pollRemotePathVisible(t *testing.T, cfgPath string, env map[string]string, 
 		return
 	}
 
-	waitForRemoteWriteVisible(t, cfgPath, env, drive, base, "stat", cleanPath)
+	parent := path.Dir(cleanPath)
+	if parent == "." || parent == "" {
+		parent = "/"
+	}
+
+	waitForRemotePathVisible(t, cfgPath, env, cleanPath, parent, base)
+}
+
+func waitForRemotePathVisible(t *testing.T, cfgPath string, env map[string]string, cleanPath string, parent string, base string) {
+	t.Helper()
+
+	deadline := time.Now().Add(remoteWritePropagationTimeout)
+	startedAt := time.Now()
+
+	var lastStdout string
+	var lastStderr string
+
+	for attempt := 0; ; attempt++ {
+		stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, env, "stat", cleanPath)
+		if err == nil && strings.Contains(stdout, base) {
+			recordTimingEvent(
+				t,
+				timingKindRemoteWriteVisibility,
+				fmt.Sprintf("remote path visibility for %q", cleanPath),
+				drive,
+				[]string{"stat", cleanPath},
+				remoteWritePropagationTimeout,
+				time.Since(startedAt),
+				attempt+1,
+				timingOutcomeSuccess,
+			)
+			return
+		}
+
+		lastStdout = stdout
+		lastStderr = stderr
+
+		stdout, stderr, err = runCLIWithConfigAllowError(t, cfgPath, env, "ls", parent)
+		if err == nil && strings.Contains(stdout, base) {
+			recordTimingEvent(
+				t,
+				timingKindRemoteWriteVisibility,
+				fmt.Sprintf("remote path visibility for %q", cleanPath),
+				drive,
+				[]string{"ls", parent},
+				remoteWritePropagationTimeout,
+				time.Since(startedAt),
+				attempt+1,
+				timingOutcomeSuccess,
+			)
+			return
+		}
+
+		lastStdout = stdout
+		lastStderr = stderr
+
+		if time.Now().After(deadline) {
+			recordTimingEvent(
+				t,
+				timingKindRemoteWriteVisibility,
+				fmt.Sprintf("remote path visibility for %q", cleanPath),
+				drive,
+				[]string{"stat", cleanPath, "ls", parent},
+				remoteWritePropagationTimeout,
+				time.Since(startedAt),
+				attempt+1,
+				timingOutcomeTimeout,
+			)
+			require.Failf(
+				t,
+				"waitForRemotePathVisible: timed out",
+				"after %v waiting for %q via stat %q or ls %q\nlast stdout: %s\nlast stderr: %s",
+				remoteWritePropagationTimeout,
+				cleanPath,
+				cleanPath,
+				parent,
+				lastStdout,
+				lastStderr,
+			)
+		}
+
+		time.Sleep(pollBackoff(attempt))
+	}
 }
 
 // cleanupRemoteFolder is a best-effort remote cleanup for use in t.Cleanup.

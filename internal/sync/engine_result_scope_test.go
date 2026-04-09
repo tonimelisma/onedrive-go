@@ -2876,3 +2876,167 @@ func TestClearFailureOnSuccess_FallbackDriveID(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, rows, "failure should be cleared via fallback drive ID")
 }
+
+// Validates: R-6.6.9
+func TestClearFailureOnSuccess_LogsResolvedTransientFailure(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	driveID := driveid.New(engineTestDriveID)
+
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:       "resolved-worker/file.txt",
+		DriveID:    driveID,
+		Direction:  synctypes.DirectionUpload,
+		ActionType: synctypes.ActionUpload,
+		Category:   synctypes.CategoryTransient,
+		IssueType:  synctypes.IssueServiceOutage,
+		ErrMsg:     "server error",
+		HTTPStatus: http.StatusServiceUnavailable,
+	}, nil))
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:       "resolved-worker/file.txt",
+		DriveID:    driveID,
+		Direction:  synctypes.DirectionUpload,
+		ActionType: synctypes.ActionUpload,
+		Category:   synctypes.CategoryTransient,
+		IssueType:  synctypes.IssueServiceOutage,
+		ErrMsg:     "server error again",
+		HTTPStatus: http.StatusServiceUnavailable,
+	}, nil))
+
+	flow := newEngineFlow(eng.Engine)
+	flow.clearFailureOnSuccess(ctx, &synctypes.WorkerResult{
+		Path:       "resolved-worker/file.txt",
+		DriveID:    driveID,
+		ActionType: synctypes.ActionUpload,
+		Success:    true,
+	})
+
+	output := logBuf.String()
+	assert.Contains(t, output, "level=INFO msg=\"transient failure resolved\"")
+	assert.Contains(t, output, "path=resolved-worker/file.txt")
+	assert.Contains(t, output, "drive_id="+driveID.String())
+	assert.Contains(t, output, "issue_type=service_outage")
+	assert.Contains(t, output, "action_type=upload")
+	assert.Contains(t, output, "attempt_count=2")
+	assert.Contains(t, output, "resolution_source=worker_success")
+}
+
+// Validates: R-6.6.9
+func TestIsFailureResolved_LogsRetryResolutionForTransientItemFailure(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	driveID := driveid.New(engineTestDriveID)
+
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:       "resolved-retry/file.txt",
+		DriveID:    driveID,
+		Direction:  synctypes.DirectionUpload,
+		ActionType: synctypes.ActionUpload,
+		Category:   synctypes.CategoryTransient,
+		IssueType:  synctypes.IssueServiceOutage,
+		ErrMsg:     "server error",
+		HTTPStatus: http.StatusServiceUnavailable,
+	}, nil))
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:       "resolved-retry/file.txt",
+		DriveID:    driveID,
+		Direction:  synctypes.DirectionUpload,
+		ActionType: synctypes.ActionUpload,
+		Category:   synctypes.CategoryTransient,
+		IssueType:  synctypes.IssueServiceOutage,
+		ErrMsg:     "server error again",
+		HTTPStatus: http.StatusServiceUnavailable,
+	}, nil))
+
+	flow := newEngineFlow(eng.Engine)
+	assert.True(t, flow.isFailureResolved(ctx, &synctypes.SyncFailureRow{
+		Path:       "resolved-retry/file.txt",
+		DriveID:    driveID,
+		Direction:  synctypes.DirectionUpload,
+		ActionType: synctypes.ActionUpload,
+	}))
+
+	output := logBuf.String()
+	assert.Contains(t, output, "level=INFO msg=\"transient failure resolved\"")
+	assert.Contains(t, output, "path=resolved-retry/file.txt")
+	assert.Contains(t, output, "drive_id="+driveID.String())
+	assert.Contains(t, output, "issue_type=service_outage")
+	assert.Contains(t, output, "action_type=upload")
+	assert.Contains(t, output, "attempt_count=2")
+	assert.Contains(t, output, "resolution_source=retry_resolution")
+}
+
+// Validates: R-6.6.9
+func TestClearFailureOnSuccess_DoesNotLogActionableResolution(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	driveID := driveid.New(engineTestDriveID)
+
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:       "actionable/file.txt",
+		DriveID:    driveID,
+		Direction:  synctypes.DirectionUpload,
+		ActionType: synctypes.ActionUpload,
+		Category:   synctypes.CategoryActionable,
+		IssueType:  synctypes.IssueInvalidFilename,
+		ErrMsg:     "reserved name",
+	}, nil))
+
+	flow := newEngineFlow(eng.Engine)
+	flow.clearFailureOnSuccess(ctx, &synctypes.WorkerResult{
+		Path:       "actionable/file.txt",
+		DriveID:    driveID,
+		ActionType: synctypes.ActionUpload,
+		Success:    true,
+	})
+
+	assert.NotContains(t, logBuf.String(), "msg=\"transient failure resolved\"")
+}
+
+// Validates: R-6.6.9
+func TestClearFailureCandidate_DoesNotLogHeldScopeResolution(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	driveID := driveid.New(engineTestDriveID)
+
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		Path:       "held/file.txt",
+		DriveID:    driveID,
+		Direction:  synctypes.DirectionUpload,
+		ActionType: synctypes.ActionUpload,
+		Category:   synctypes.CategoryTransient,
+		IssueType:  synctypes.IssueServiceOutage,
+		ErrMsg:     "service unavailable",
+		HTTPStatus: http.StatusServiceUnavailable,
+		ScopeKey:   synctypes.SKService(),
+		Role:       synctypes.FailureRoleHeld,
+	}, nil))
+
+	flow := newEngineFlow(eng.Engine)
+	flow.clearFailureCandidate(ctx, &synctypes.SyncFailureRow{
+		Path:       "held/file.txt",
+		DriveID:    driveID,
+		Direction:  synctypes.DirectionUpload,
+		ActionType: synctypes.ActionUpload,
+		Role:       synctypes.FailureRoleHeld,
+	}, "TestClearFailureCandidate_DoesNotLogHeldScopeResolution")
+
+	assert.NotContains(t, logBuf.String(), "msg=\"transient failure resolved\"")
+}

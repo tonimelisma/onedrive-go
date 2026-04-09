@@ -27,6 +27,11 @@ const (
 	defaultRetryBatchSize = 1024
 )
 
+const (
+	failureResolutionSourceWorkerSuccess = "worker_success"
+	failureResolutionSourceRetryResolved = "retry_resolution"
+)
+
 type engineWorkRequest struct {
 	reason        engineWorkReason
 	changes       []synctypes.PathChanges
@@ -454,7 +459,12 @@ func (flow *engineFlow) baselineEntryForPath(ctx context.Context, path string, d
 }
 
 func (flow *engineFlow) clearFailureCandidate(ctx context.Context, row *synctypes.SyncFailureRow, caller string) {
-	if err := flow.engine.baseline.ClearSyncFailure(ctx, row.Path, flow.failureDriveID(row)); err != nil {
+	if err := flow.takeSyncFailureAndLogResolution(
+		ctx,
+		row.Path,
+		flow.failureDriveID(row),
+		failureResolutionSourceRetryResolved,
+	); err != nil {
 		flow.engine.logger.Debug(caller+": failed to clear resolved failure",
 			slog.String("path", row.Path),
 			slog.String("error", err.Error()),
@@ -798,7 +808,12 @@ func (flow *engineFlow) clearFailureIfResolved(
 		return false
 	}
 
-	if err := flow.engine.baseline.ClearSyncFailure(ctx, row.Path, row.DriveID); err != nil {
+	if err := flow.takeSyncFailureAndLogResolution(
+		ctx,
+		row.Path,
+		flow.failureDriveID(row),
+		failureResolutionSourceRetryResolved,
+	); err != nil {
 		flow.engine.logger.Debug("isFailureResolved: failed to clear resolved failure",
 			slog.String("path", row.Path),
 			slog.String("error", err.Error()),
@@ -817,12 +832,46 @@ func (flow *engineFlow) clearFailureOnSuccess(ctx context.Context, r *synctypes.
 		driveID = flow.engine.driveID
 	}
 
-	if clearErr := flow.engine.baseline.ClearSyncFailure(ctx, r.Path, driveID); clearErr != nil {
+	if clearErr := flow.takeSyncFailureAndLogResolution(
+		ctx,
+		r.Path,
+		driveID,
+		failureResolutionSourceWorkerSuccess,
+	); clearErr != nil {
 		flow.engine.logger.Warn("failed to clear sync failure on success",
 			slog.String("path", r.Path),
 			slog.String("error", clearErr.Error()),
 		)
 	}
+}
+
+func (flow *engineFlow) takeSyncFailureAndLogResolution(
+	ctx context.Context,
+	path string,
+	driveID driveid.ID,
+	resolutionSource string,
+) error {
+	row, found, err := flow.engine.baseline.TakeSyncFailure(ctx, path, driveID)
+	if err != nil {
+		return fmt.Errorf("take sync failure %s: %w", path, err)
+	}
+	if !found || row == nil {
+		return nil
+	}
+	if row.Category != synctypes.CategoryTransient || row.Role != synctypes.FailureRoleItem {
+		return nil
+	}
+
+	flow.engine.logger.Info("transient failure resolved",
+		slog.String("path", row.Path),
+		slog.String("drive_id", row.DriveID.String()),
+		slog.String("issue_type", row.IssueType),
+		slog.String("action_type", row.ActionType.String()),
+		slog.Int("attempt_count", row.FailureCount),
+		slog.String("resolution_source", resolutionSource),
+	)
+
+	return nil
 }
 
 func (flow *engineFlow) applyFailurePersistence(
