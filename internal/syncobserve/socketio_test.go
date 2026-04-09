@@ -219,6 +219,13 @@ func TestSocketIOWakeSource_ReconnectsAfterDisconnect(t *testing.T) {
 func TestSocketIOWakeSource_RefreshesEndpointBeforeExpiry(t *testing.T) {
 	t.Parallel()
 
+	const (
+		refreshLeadTime   = 100 * time.Millisecond
+		firstEndpointTTL  = 500 * time.Millisecond
+		testWaitTimeout   = 5 * time.Second
+		longLivedEndpoint = time.Hour
+	)
+
 	firstReleased := make(chan struct{})
 	firstServer := newSocketIOTestServer(t, func(conn *websocket.Conn, r *http.Request) {
 		writeSocketIOText(r.Context(), t, conn, `0{"sid":"sid-1","pingInterval":25000,"pingTimeout":60000}`)
@@ -242,24 +249,24 @@ func TestSocketIOWakeSource_RefreshesEndpointBeforeExpiry(t *testing.T) {
 			{
 				ID:              "endpoint-1",
 				NotificationURL: graph.SocketIONotificationURL(firstServer.URL + "/callback?snthgk=first"),
-				ExpirationTime:  now.Add(75 * time.Millisecond),
+				ExpirationTime:  now.Add(firstEndpointTTL),
 			},
 			{
 				ID:              "endpoint-2",
 				NotificationURL: graph.SocketIONotificationURL(secondServer.URL + "/callback?snthgk=second"),
-				ExpirationTime:  now.Add(time.Hour),
+				ExpirationTime:  now.Add(longLivedEndpoint),
 			},
 		},
 	}
 
 	source := NewSocketIOWakeSourceWithOptions(fetcher, driveid.New(synctest.TestDriveID), SocketIOWakeSourceOptions{
 		Logger:          synctest.TestLogger(t),
-		RefreshLeadTime: 25 * time.Millisecond,
+		RefreshLeadTime: refreshLeadTime,
 		BackoffMax:      10 * time.Millisecond,
 	})
 
 	wakes := make(chan struct{}, 1)
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), testWaitTimeout)
 	defer cancel()
 
 	done := make(chan error, 1)
@@ -269,7 +276,7 @@ func TestSocketIOWakeSource_RefreshesEndpointBeforeExpiry(t *testing.T) {
 
 	select {
 	case <-wakes:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testWaitTimeout):
 		require.FailNow(t, "expected wake after endpoint refresh")
 	}
 

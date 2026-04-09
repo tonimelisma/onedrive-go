@@ -22,7 +22,7 @@ I based this review on the following repository material:
 - `spec/design/sync-planning.md`
 - `spec/design/sync-store.md`
 - `spec/design/system.md`
-- `TODO.md`
+- the then-current post-split cleanup note (formerly `TODO.md`)
 - `spec/design/engine-event-loop.md`
 - `spec/design/engine-event-loop-review.md`
 - `spec/design/engine-event-loop-research.md`
@@ -669,9 +669,9 @@ We need a precise answer to:
 
 The current implementation answers those questions; the new design must do so just as concretely.
 
-## 5. Sequencing With `TODO.md`
+## 5. Sequencing With the Post-Split Cleanup Note
 
-`TODO.md` already proposes moving scope logic out of `synctypes`.
+The then-current post-split cleanup note already proposed moving scope logic out of `synctypes`.
 
 That directly affects:
 
