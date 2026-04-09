@@ -66,6 +66,11 @@ func TestPerSideHash_PreventsReUploadLoop(t *testing.T) {
 	assertPerSideHashNoLoop(t, "enriched.docx", "localHashAAA", "remoteHashBBB")
 }
 
+// Validates: R-6.7.25
+func TestSharePointExtraVersionAcceptance_PreventsSyncLoop(t *testing.T) {
+	assertPerSideHashNoLoop(t, "sharepoint-versioned.docx", "localHashAAA", "remoteHashBBB")
+}
+
 // TestPerSideHash_PreventsReDownloadLoop validates the reverse: after
 // download, if the local file's hash differs from remote (because server
 // enriched it), the next run does NOT produce a download action.

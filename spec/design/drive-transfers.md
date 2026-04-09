@@ -2,7 +2,7 @@
 
 GOVERNS: internal/driveops/cleanup.go, internal/driveops/disk_unix.go, internal/driveops/doc.go, internal/driveops/errors.go, internal/driveops/hash.go, internal/driveops/interfaces.go, internal/driveops/session.go, internal/driveops/session_store.go, internal/driveops/stale_partials.go, internal/driveops/transfer_manager.go, pkg/quickxorhash/quickxorhash.go, get.go, put.go
 
-Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [implemented], R-5.5 [verified], R-1.2 [verified], R-1.2.5 [verified], R-1.3 [verified], R-1.3.5 [verified], R-1.3.6 [verified], R-1.4.4 [verified], R-5.6 [implemented], R-5.7 [verified], R-5.8 [planned], R-6.7.14 [verified], R-6.8.3 [verified], R-6.2.6 [verified], R-6.4.7 [verified], R-6.2.10 [implemented], R-6.10.6 [verified]
+Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [verified], R-5.5 [verified], R-1.2 [verified], R-1.2.5 [verified], R-1.3 [verified], R-1.3.5 [verified], R-1.3.6 [verified], R-1.4.4 [verified], R-5.6 [verified], R-5.7 [verified], R-5.8 [verified], R-6.7.14 [verified], R-6.8.3 [verified], R-6.2.6 [verified], R-6.4.7 [verified], R-6.2.10 [implemented], R-6.10.6 [verified]
 
 ## TransferManager
 
@@ -33,6 +33,18 @@ Implements: R-6.2.3 [verified]
 2. Files ≤ 4 MiB: simple PUT (single request)
 3. Files > 4 MiB: create resumable upload session, upload in chunks (320 KiB aligned)
 4. Verify server-reported hash matches local file after upload
+
+Resumable uploads use a fixed 10 MiB fragment size in the graph boundary.
+The config surface intentionally does not expose a user-tunable chunk-size
+knob: 10 MiB is the documented Microsoft-recommended stable high-speed size,
+and keeping fragment sizing graph-owned avoids a dead or misleading config
+surface.
+
+If a fragment PUT returns HTTP 416, the graph boundary immediately queries the
+session status endpoint, adopts the returned upload URL when Graph rotates it,
+parses the authoritative `nextExpectedRanges` start offset, and resumes from
+that offset. Empty, malformed, or non-forward session replies are treated as
+hard errors instead of guessing.
 
 If a non-zero-size create-by-parent simple upload returns `404 itemNotFound`,
 the graph boundary retries that same create once through `createUploadSession`
@@ -140,6 +152,13 @@ starts:
 ## Hash Utilities
 
 QuickXorHash computation for local files (`hash.go`). The `pkg/quickxorhash/` package implements the algorithm (vendored from rclone, BSD-0 license). When a remote file lacks a hash (common on Business/SharePoint), a fallback chain is attempted: QuickXorHash → SHA256 → SHA1. `HashVerified` is set to false when the remote hash is empty.
+
+For iOS `.heic` downloads, the transfer manager keeps the normal integrity
+mechanism: retry hash mismatch, warn, then accept after exhaustion so the sync
+engine does not loop forever on a server metadata bug. When the accepted
+download is a `.heic` whose API metadata still disagrees with the downloaded
+bytes, the warning explicitly names the known OneDrive/iOS metadata mismatch
+instead of looking like an unexplained integrity bypass.
 
 ## Cleanup
 

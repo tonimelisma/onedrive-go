@@ -25,6 +25,29 @@ func validConfig() *Config {
 	return DefaultConfig()
 }
 
+func loggedAttrValues(t *testing.T, logBuf *bytes.Buffer, key string) []string {
+	t.Helper()
+
+	text := strings.TrimSpace(logBuf.String())
+	if text == "" {
+		return nil
+	}
+
+	lines := strings.Split(text, "\n")
+	values := make([]string, 0, len(lines))
+	for _, line := range lines {
+		var record map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &record))
+
+		value, ok := record[key].(string)
+		if ok {
+			values = append(values, value)
+		}
+	}
+
+	return values
+}
+
 func TestValidate_ValidDefaults(t *testing.T) {
 	err := Validate(validConfig())
 	assert.NoError(t, err)
@@ -85,59 +108,6 @@ func TestValidate_CheckWorkers_Boundaries(t *testing.T) {
 	cfg = validConfig()
 	cfg.CheckWorkers = 16
 	assert.NoError(t, Validate(cfg))
-}
-
-func TestValidate_ChunkSize_TooSmall(t *testing.T) {
-	cfg := validConfig()
-	cfg.ChunkSize = "1MB"
-	err := Validate(cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "chunk_size")
-}
-
-func TestValidate_ChunkSize_TooLarge(t *testing.T) {
-	cfg := validConfig()
-	cfg.ChunkSize = "100MB"
-	err := Validate(cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "chunk_size")
-}
-
-// Validates: R-4.8.2
-func TestValidate_ChunkSize_NotAligned(t *testing.T) {
-	cfg := validConfig()
-	// 11 MiB = 11,534,336 bytes. 11,534,336 / 327,680 = 35.2 — not aligned.
-	cfg.ChunkSize = "11MiB"
-	err := Validate(cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "multiple of 320 KiB")
-}
-
-func TestValidate_ChunkSize_Valid(t *testing.T) {
-	// Valid chunk sizes must be multiples of 320 KiB and between 10-60 MiB.
-	for _, size := range []string{"10MiB", "20MiB", "40MiB", "60MiB"} {
-		cfg := validConfig()
-		cfg.ChunkSize = size
-		err := Validate(cfg)
-		assert.NoError(t, err, "expected %s to be valid", size)
-	}
-}
-
-func TestValidate_TransferOrder_Invalid(t *testing.T) {
-	cfg := validConfig()
-	cfg.TransferOrder = "random"
-	err := Validate(cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "transfer_order")
-}
-
-func TestValidate_TransferOrder_AllValid(t *testing.T) {
-	for _, order := range []string{"default", "size_asc", "size_desc", "name_asc", "name_desc"} {
-		cfg := validConfig()
-		cfg.TransferOrder = order
-		err := Validate(cfg)
-		assert.NoError(t, err, "expected %s to be valid", order)
-	}
 }
 
 func TestValidate_BigDeleteThreshold_BelowMin(t *testing.T) {
@@ -208,43 +178,12 @@ func TestValidate_ShutdownTimeout_TooShort(t *testing.T) {
 	assert.Contains(t, err.Error(), "shutdown_timeout")
 }
 
-func TestValidate_ConnectTimeout_TooShort(t *testing.T) {
-	cfg := validConfig()
-	cfg.ConnectTimeout = "500ms"
-	err := Validate(cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "connect_timeout")
-}
-
-func TestValidate_DataTimeout_TooShort(t *testing.T) {
-	cfg := validConfig()
-	cfg.DataTimeout = "2s"
-	err := Validate(cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "data_timeout")
-}
-
 func TestValidate_ConflictStrategy_Invalid(t *testing.T) {
 	cfg := validConfig()
 	cfg.ConflictStrategy = "keep_remote"
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "conflict_strategy")
-}
-
-func TestValidate_FullscanFrequency_InvalidNonZero(t *testing.T) {
-	cfg := validConfig()
-	cfg.FullscanFrequency = 1
-	err := Validate(cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "fullscan_frequency")
-}
-
-func TestValidate_FullscanFrequency_Zero(t *testing.T) {
-	cfg := validConfig()
-	cfg.FullscanFrequency = 0
-	err := Validate(cfg)
-	assert.NoError(t, err)
 }
 
 // Validates: R-4.8.2
@@ -331,85 +270,6 @@ func TestValidate_MultipleErrors(t *testing.T) {
 	assert.Contains(t, errStr, "check_workers")
 	assert.Contains(t, errStr, "conflict_strategy")
 	assert.Contains(t, errStr, "log_level")
-}
-
-func TestValidate_BandwidthSchedule_InvalidTime(t *testing.T) {
-	cfg := validConfig()
-	cfg.BandwidthSchedule = []BandwidthScheduleEntry{
-		{Time: "25:00", Limit: "5MB/s"},
-	}
-	err := Validate(cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "bandwidth_schedule")
-}
-
-func TestValidate_BandwidthSchedule_NotSorted(t *testing.T) {
-	cfg := validConfig()
-	cfg.BandwidthSchedule = []BandwidthScheduleEntry{
-		{Time: "18:00", Limit: "50MB/s"},
-		{Time: "08:00", Limit: "5MB/s"},
-	}
-	err := Validate(cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "sorted")
-}
-
-func TestValidate_BandwidthSchedule_Valid(t *testing.T) {
-	cfg := validConfig()
-	cfg.BandwidthSchedule = []BandwidthScheduleEntry{
-		{Time: "08:00", Limit: "5MB/s"},
-		{Time: "18:00", Limit: "50MB/s"},
-		{Time: "23:00", Limit: "0"},
-	}
-	err := Validate(cfg)
-	assert.NoError(t, err)
-}
-
-func TestValidate_VerifyInterval_Valid(t *testing.T) {
-	cfg := validConfig()
-	cfg.VerifyInterval = "168h"
-	err := Validate(cfg)
-	assert.NoError(t, err)
-}
-
-func TestValidate_ConflictReminderInterval_Zero(t *testing.T) {
-	cfg := validConfig()
-	cfg.ConflictReminderInterval = "0s"
-	err := Validate(cfg)
-	assert.NoError(t, err)
-}
-
-func TestParseScheduleTime_Valid(t *testing.T) {
-	minutes, err := parseScheduleTime("08:30")
-	require.NoError(t, err)
-	assert.Equal(t, 8*60+30, minutes)
-
-	minutes, err = parseScheduleTime("23:59")
-	require.NoError(t, err)
-	assert.Equal(t, 23*60+59, minutes)
-
-	minutes, err = parseScheduleTime("00:00")
-	require.NoError(t, err)
-	assert.Equal(t, 0, minutes)
-}
-
-func TestParseScheduleTime_Invalid(t *testing.T) {
-	for _, input := range []string{"25:00", "08:60", "abc", "8:30:00", ""} {
-		t.Run(input, func(t *testing.T) {
-			_, err := parseScheduleTime(input)
-			assert.Error(t, err)
-		})
-	}
-}
-
-func TestValidate_BandwidthSchedule_BadTimeFormat(t *testing.T) {
-	cfg := validConfig()
-	cfg.BandwidthSchedule = []BandwidthScheduleEntry{
-		{Time: "noon", Limit: "5MB/s"},
-	}
-	err := Validate(cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "time")
 }
 
 // --- WarnDeprecatedKeys tests ---
@@ -504,89 +364,6 @@ func TestValidateResolved_SyncDirStatError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sync_dir")
 	assert.Contains(t, err.Error(), "boom")
-}
-
-// ---------------------------------------------------------------------------
-// WarnUnimplemented tests (B-141)
-// ---------------------------------------------------------------------------
-
-func loggedAttrValues(t *testing.T, logBuf *bytes.Buffer, key string) []string {
-	t.Helper()
-
-	text := strings.TrimSpace(logBuf.String())
-	if text == "" {
-		return nil
-	}
-
-	lines := strings.Split(text, "\n")
-	values := make([]string, 0, len(lines))
-	for _, line := range lines {
-		var record map[string]any
-		require.NoError(t, json.Unmarshal([]byte(line), &record))
-
-		value, ok := record[key].(string)
-		if ok {
-			values = append(values, value)
-		}
-	}
-
-	return values
-}
-
-func TestWarnUnimplemented_Defaults_NoWarnings(t *testing.T) {
-	t.Parallel()
-
-	var logBuf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
-
-	cfg := DefaultConfig()
-	rd := &ResolvedDrive{
-		FilterConfig:    cfg.FilterConfig,
-		TransfersConfig: cfg.TransfersConfig,
-		SyncConfig:      cfg.SyncConfig,
-		NetworkConfig:   cfg.NetworkConfig,
-	}
-
-	WarnUnimplemented(rd, logger)
-
-	assert.Empty(t, loggedAttrValues(t, &logBuf, "field"), "default config should not produce warnings")
-}
-
-func TestWarnUnimplemented_NonDefaults_WarnsAll(t *testing.T) {
-	t.Parallel()
-
-	var logBuf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
-
-	cfg := DefaultConfig()
-	rd := &ResolvedDrive{
-		FilterConfig:    cfg.FilterConfig,
-		TransfersConfig: cfg.TransfersConfig,
-		SyncConfig:      cfg.SyncConfig,
-		NetworkConfig:   cfg.NetworkConfig,
-	}
-
-	// Set non-default values for all unimplemented fields.
-	rd.SyncPaths = []string{"/docs"}
-	rd.SkipFiles = []string{"*.tmp"}
-	rd.SkipDirs = []string{".git"}
-	rd.BandwidthLimit = "10MB"
-	rd.BandwidthSchedule = []BandwidthScheduleEntry{{Time: "08:00", Limit: "5MB"}}
-	rd.Websocket = true
-	rd.UserAgent = "custom"
-
-	WarnUnimplemented(rd, logger)
-
-	warned := loggedAttrValues(t, &logBuf, "field")
-
-	expected := []string{"bandwidth_limit", "bandwidth_schedule", "user_agent"}
-	for _, f := range expected {
-		assert.Contains(t, warned, f, "expected warning for %q", f)
-	}
-
-	assert.NotContains(t, warned, "sync_paths", "implemented sync scope paths should not warn")
-	assert.NotContains(t, warned, "skip_files", "implemented file filters should not warn")
-	assert.NotContains(t, warned, "skip_dirs", "implemented directory filters should not warn")
 }
 
 // --- ValidateResolvedForSync tests ---

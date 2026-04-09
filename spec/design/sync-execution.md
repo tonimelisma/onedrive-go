@@ -2,7 +2,7 @@
 
 GOVERNS: internal/syncexec/executor.go, internal/syncexec/executor_conflict.go, internal/syncexec/executor_delete.go, internal/syncexec/executor_transfer.go, internal/syncexec/worker.go, internal/syncdispatch/dep_graph.go, internal/syncdispatch/active_scopes.go, internal/syncdispatch/scope.go, internal/syncdispatch/delete_counter.go, internal/localtrash/trash.go, status.go
 
-Implements: R-2.3 [verified], R-2.8.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.4.4 [verified], R-6.4.5 [verified], R-6.4.6 [verified], R-6.5.3 [verified], R-6.7.25 [planned], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.16 [verified], R-2.10.41 [verified], R-2.10.42 [verified], R-2.10.43 [verified], R-2.10.44 [verified], R-2.14.2 [verified], R-6.3.4 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
+Implements: R-2.3 [verified], R-2.8.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.4.4 [verified], R-6.4.5 [verified], R-6.4.6 [verified], R-6.5.3 [verified], R-6.7.25 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.16 [verified], R-2.10.41 [verified], R-2.10.42 [verified], R-2.10.43 [verified], R-2.10.44 [verified], R-2.14.2 [verified], R-6.3.4 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
 ## Executor (`executor.go`)
 
@@ -269,6 +269,13 @@ ownership rules:
 
 ### Uploads (`executor_transfer.go`)
 Simple PUT (≤4 MiB) or resumable session (>4 MiB). Post-upload validation detects SharePoint enrichment.
+
+Business/SharePoint may still create one extra version on modified re-upload
+even when upload-session creation includes `fileSystemInfo`. The product does
+not attempt version-history cleanup or other futile workarounds for that
+server bug. Instead it accepts the extra version and relies on per-side
+baseline hashes so the next planner run sees stable truth instead of
+re-uploading or re-downloading the same file forever.
 
 **Watch-Mode Upload Freshness Check**: In watch mode, `ExecuteUpload` performs a pre-flight eTag comparison before uploading. The debounce-based event batching can split simultaneous local+remote changes across passes: a local fsnotify event may trigger an upload before the remote observer has polled the collaborator's edit. The freshness check fetches the item's current remote eTag via `GetItem` and compares it against the baseline eTag. If they differ, the upload is aborted with a descriptive error (recorded in `sync_failures`). On the next pass, the remote observer will have polled, the planner will see both changes, and a proper conflict will be detected. Cost: one additional `GetItem` API call per upload in watch mode only — controlled by `ExecutorConfig.watchMode` (set by `initWatchInfra`).
 

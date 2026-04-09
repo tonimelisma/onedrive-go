@@ -14,25 +14,24 @@ Download and upload transfer infrastructure shared by file operations and sync.
 - R-5.2.3: Upload session state shall be persisted to disk and survive process restart. [verified]
 - R-5.2.4: Interrupted transfers shall resume automatically on next sync. [verified]
 
-## R-5.3 Upload Chunking [implemented]
+## R-5.3 Upload Chunking [verified]
 
 - R-5.3.1: Files <= 4 MiB shall use simple PUT upload (single request). [verified]
-- R-5.3.2: Files > 4 MiB shall use resumable upload sessions with configurable chunk size. [planned]
-- R-5.3.3: Chunk size shall be a multiple of 320 KiB (API requirement). [verified]
+- R-5.3.3: Resumable upload fragment size shall be a multiple of 320 KiB (API requirement). [verified]
 
 ## R-5.4 Bandwidth Limiting [future]
 
-- R-5.4.1: The system shall support a global bandwidth limit (`bandwidth_limit`). [future]
-- R-5.4.2: The system shall support time-of-day bandwidth scheduling (`bandwidth_schedule`). [future]
+- R-5.4.1: The system shall support a global transfer bandwidth limit. [future]
+- R-5.4.2: The system shall support time-of-day transfer bandwidth scheduling. [future]
 
 ## R-5.5 Transfer Validation [verified]
 
 - R-5.5.1: After download, the system shall verify hash and size against API metadata. [verified]
 - R-5.5.2: After upload, the system shall verify the server-reported hash matches the local file. [verified]
 
-## R-5.6 Upload Session Robustness [implemented]
+## R-5.6 Upload Session Robustness [verified]
 
-- R-5.6.1: When an upload fragment returns HTTP 416 (Range Not Satisfiable), the system shall query the session status endpoint for `nextExpectedRanges` before retrying. A network timeout during fragment upload can cause the server to receive partial data without the client ever getting an ACK. Naively retrying the same byte range fails with 416 because the server already has those bytes. The only recovery is to ask the session status endpoint where it actually stopped and resume from there. [planned]
+- R-5.6.1: When an upload fragment returns HTTP 416 (Range Not Satisfiable), the system shall query the session status endpoint for `nextExpectedRanges` before retrying. A network timeout during fragment upload can cause the server to receive partial data without the client ever getting an ACK. Naively retrying the same byte range fails with 416 because the server already has those bytes. The only recovery is to ask the session status endpoint where it actually stopped and resume from there. [verified]
 - R-5.6.2: The system shall not use `If-Match` (eTag) on upload session creation. The eTag can change during session creation itself (server-side race), causing an immediate 412 Precondition Failed. Subsequent fragment uploads then cascade into 416 errors because the session is in a broken state. Omitting `If-Match` avoids the cascade entirely — conflict detection is handled at a higher level by the sync engine. [verified]
 - R-5.6.3: When an upload session fails, the system shall cancel the session using `context.Background()` to prevent server-side quota leaks. A successful `CreateUploadSession` allocates server-side resources that persist for ~15 minutes and count against storage quotas. If the upload fails, the original context is likely already canceled (that's what caused the failure), so the cancel request must use a fresh `context.Background()` to ensure the cleanup HTTP call actually fires. [verified]
 - R-5.6.4: On Business/SharePoint, the system shall include `fileSystemInfo` in the upload session creation request to set timestamps atomically and prevent double version creation. Without this, uploading a file and then PATCHing its timestamps in a separate request creates two version history entries per upload, doubling storage consumption. Including `fileSystemInfo` in the session creation sets timestamps atomically with the content in a single version. This is a documented API bug (onedrive-api-docs#877) with no server-side fix. [verified]
@@ -47,6 +46,6 @@ Download and upload transfer infrastructure shared by file operations and sync.
 
 - R-5.7.1: The system shall reject uploads exceeding the 250 GB maximum file size before hashing or attempting any network transfer. [verified]
 
-## R-5.8 iOS Media Handling [planned]
+## R-5.8 iOS Media Handling [verified]
 
-- R-5.8.1: When downloading iOS `.heic` files whose API-reported size/hash does not match the actual downloaded bytes (known API bug), the system shall log a warning and accept the download rather than failing validation. [planned]
+- R-5.8.1: When downloading iOS `.heic` files whose API-reported size/hash does not match the actual downloaded bytes (known API bug), the system shall log a warning and accept the download rather than failing validation. [verified]

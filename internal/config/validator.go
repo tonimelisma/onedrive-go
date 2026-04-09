@@ -37,7 +37,6 @@ func (configValidator) collect(cfg *Config) []error {
 	errs = append(errs, validateSafety(&cfg.SafetyConfig)...)
 	errs = append(errs, validateSync(&cfg.SyncConfig)...)
 	errs = append(errs, validateLogging(&cfg.LoggingConfig)...)
-	errs = append(errs, validateNetwork(&cfg.NetworkConfig)...)
 
 	return errs
 }

@@ -23,7 +23,6 @@ func newKnownGlobalKeys() map[string]bool {
 		"skip_symlinks": true, "sync_paths": true, "ignore_marker": true,
 		// Transfer settings
 		"transfer_workers": true, "check_workers": true,
-		"chunk_size": true, "bandwidth_limit": true, "bandwidth_schedule": true, "transfer_order": true,
 		// Deprecated transfer settings (kept to produce deprecation warning instead of unknown-key error)
 		"parallel_downloads": true, "parallel_uploads": true, "parallel_checkers": true,
 		// Safety settings
@@ -31,13 +30,11 @@ func newKnownGlobalKeys() map[string]bool {
 		"min_free_space":       true, "use_local_trash": true,
 		"sync_dir_permissions": true, "sync_file_permissions": true,
 		// Sync settings
-		"poll_interval": true, "fullscan_frequency": true, "websocket": true,
-		"conflict_strategy": true, "conflict_reminder_interval": true, "dry_run": true,
-		"verify_interval": true, "shutdown_timeout": true,
+		"poll_interval": true, "websocket": true,
+		"conflict_strategy": true, "dry_run": true, "shutdown_timeout": true,
+		"safety_scan_interval": true,
 		// Logging settings
 		"log_level": true, "log_file": true, "log_format": true, "log_retention_days": true,
-		// Network settings
-		"connect_timeout": true, "data_timeout": true, "user_agent": true, "force_http_11": true,
 	}
 }
 
@@ -122,9 +119,9 @@ func checkUnknownKeys(md *toml.MetaData) error {
 // buildGlobalKeyError creates a descriptive error for an unknown top-level key,
 // optionally suggesting the closest known key. Returns nil if the key is a
 // known key (including deprecated keys that have no struct field but are still
-// accepted) or a valid sub-field of a known key (e.g., bandwidth_schedule entries).
+// accepted).
 func buildGlobalKeyError(keyStr string) error {
-	// For nested keys like "bandwidth_schedule.time", extract the leaf.
+	// For nested keys like "parent.child", extract the top-level field name.
 	parts := strings.SplitN(keyStr, ".", 2)
 	fieldName := parts[0]
 
@@ -135,8 +132,6 @@ func buildGlobalKeyError(keyStr string) error {
 		return nil
 	}
 
-	// Nested unknown keys (sub-fields of bandwidth_schedule, etc.) fall
-	// through to the suggestion path — parent was already checked above.
 	suggestion := closestMatch(fieldName, newKnownGlobalKeysList())
 	if suggestion != "" {
 		return fmt.Errorf("unknown config key %q — did you mean %q?", fieldName, suggestion)

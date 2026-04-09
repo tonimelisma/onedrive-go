@@ -469,6 +469,20 @@ func (c *Client) uploadChunksFrom(
 
 		item, complete, err := c.UploadChunk(ctx, session, chunk, offset, chunkSize, totalSize)
 		if err != nil {
+			if errors.Is(err, ErrRangeNotSatisfiable) {
+				recoveredOffset, recoverErr := c.recoverUploadChunkOffset(ctx, session, offset)
+				if recoverErr != nil {
+					return nil, recoverErr
+				}
+
+				offset = recoveredOffset
+				if progress != nil {
+					progress(offset, totalSize)
+				}
+
+				continue
+			}
+
 			return nil, fmt.Errorf("graph: uploading chunk at offset %d: %w", offset, err)
 		}
 
@@ -488,6 +502,42 @@ func (c *Client) uploadChunksFrom(
 	}
 
 	return lastItem, nil
+}
+
+func (c *Client) recoverUploadChunkOffset(
+	ctx context.Context, session *UploadSession, currentOffset int64,
+) (int64, error) {
+	c.logger.Warn("upload chunk range mismatch, querying session status",
+		slog.Int64("offset", currentOffset),
+	)
+
+	status, err := c.QueryUploadSession(ctx, session)
+	if err != nil {
+		return 0, fmt.Errorf("graph: querying session status after 416 at offset %d: %w", currentOffset, err)
+	}
+
+	recoveredOffset, err := parseNextExpectedRangeStart(status.NextExpectedRanges)
+	if err != nil {
+		return 0, fmt.Errorf("graph: parsing nextExpectedRanges after 416 at offset %d: %w", currentOffset, err)
+	}
+
+	if recoveredOffset <= currentOffset {
+		return 0, fmt.Errorf(
+			"graph: upload session nextExpectedRanges did not advance after 416: current=%d next=%d",
+			currentOffset,
+			recoveredOffset,
+		)
+	}
+
+	session.UploadURL = status.UploadURL
+	session.ExpirationTime = status.ExpirationTime
+
+	c.logger.Info("upload session recovered authoritative offset after 416",
+		slog.Int64("current_offset", currentOffset),
+		slog.Int64("recovered_offset", recoveredOffset),
+	)
+
+	return recoveredOffset, nil
 }
 
 // UploadFromSession uploads all chunks for an existing upload session.

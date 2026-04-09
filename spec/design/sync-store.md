@@ -2,7 +2,7 @@
 
 GOVERNS: internal/syncstore/store.go, internal/syncstore/inspector.go, internal/syncstore/schema.go, internal/syncstore/schema.sql, internal/syncstore/store_baseline.go, internal/syncstore/store_observation.go, internal/syncstore/store_conflicts.go, internal/syncstore/store_failures.go, internal/syncstore/store_admin.go, internal/syncstore/store_scope_blocks.go, internal/syncstore/shortcuts.go, internal/syncverify/verify.go, internal/syncrecovery/recovery.go, internal/cli/verify.go, internal/cli/issues.go, internal/cli/failure_display.go
 
-Implements: R-2.4.4 [verified], R-2.4.5 [verified], R-2.5 [verified], R-2.5.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.7 [verified], R-2.15.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.14 [verified], R-2.10.22 [verified], R-2.10.33 [verified], R-2.10.34 [verified], R-2.10.41 [verified], R-2.10.45 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified], R-6.7.17 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
+Implements: R-2.4.4 [verified], R-2.4.5 [verified], R-2.5 [verified], R-2.5.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.7 [verified], R-2.15.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.14 [verified], R-2.10.22 [verified], R-2.10.32 [verified], R-2.10.33 [verified], R-2.10.34 [verified], R-2.10.41 [verified], R-2.10.45 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified], R-6.7.17 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
 ## SyncStore (`store.go`)
 
@@ -25,6 +25,7 @@ peer authority; it is rebuilt from store state when the engine starts.
 | Behavior | Evidence |
 | --- | --- |
 | `Inspector` exposes a stable read-only issue/status projection so CLI status and issues read the same visible facts. | `TestInspector_ReadIssuesSnapshot`, `TestInspector_ReadStatusSnapshot_StaysConsistentWithIssuesSnapshot` |
+| Status issue-group projection preserves separate entries when the same summary key appears in multiple scopes. | `TestQuerySyncState_PreservesIssueGroupScopeContext`, `TestPrintStatusJSON_KeepsSameSummaryGroupsSeparatedByScope`, `TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope` |
 | Integrity inspection and safe repair stay store-owned and deterministic. | `TestInspector_AuditIntegrityReportsPersistedProblems`, `TestSyncStore_RepairIntegritySafeNormalizesDeterministicViolations` |
 | Visible issue grouping comes from one store-owned projection instead of CLI-local reconstruction. | `TestSyncStore_ListVisibleIssueGroups` |
 | Crash-shaped `downloading` / `deleting` residue in the state DB is replayed from durable store truth on the next live sync run, and the immediate rerun is idle. | `TestE2E_Sync_CrashRecovery_ReplaysDurableInProgressRows` |

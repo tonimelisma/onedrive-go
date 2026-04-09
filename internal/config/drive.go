@@ -32,7 +32,6 @@ type ResolvedDrive struct {
 	SafetyConfig
 	SyncConfig
 	LoggingConfig
-	NetworkConfig
 }
 
 // StatePath returns the state DB file path for this drive.
@@ -161,7 +160,6 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 		SafetyConfig:    cfg.SafetyConfig,
 		SyncConfig:      cfg.SyncConfig,
 		LoggingConfig:   cfg.LoggingConfig,
-		NetworkConfig:   cfg.NetworkConfig,
 	}
 
 	// Two-source drive ID resolution: prefer drive metadata file (per-drive,

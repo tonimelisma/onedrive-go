@@ -611,7 +611,7 @@ func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsIssues(t *testing.T) {
 	assert.Equal(t, 4, info.Issues)
 }
 
-// Validates: R-2.10.4
+// Validates: R-2.10.4, R-2.10.32
 func TestQuerySyncState_PreservesIssueGroupScopeContext(t *testing.T) {
 	t.Parallel()
 
@@ -673,6 +673,88 @@ func TestQuerySyncState_PreservesIssueGroupScopeContext(t *testing.T) {
 			Scope:      "your OneDrive account authorization",
 		},
 	}, info.IssueGroups)
+}
+
+// Validates: R-2.10.32
+func TestPrintStatusJSON_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T) {
+	t.Parallel()
+
+	accounts := []statusAccount{
+		{
+			Email:     "alice@example.com",
+			DriveType: "business",
+			AuthState: authStateReady,
+			Drives: []statusDrive{
+				{
+					CanonicalID: "business:alice@example.com",
+					SyncDir:     "~/Work",
+					State:       driveStateReady,
+					SyncState: &syncStateInfo{
+						FileCount: 10,
+						Issues:    2,
+						IssueGroups: []statusIssueGroup{
+							{
+								SummaryKey: string(synctypes.SummaryQuotaExceeded),
+								Title:      "QUOTA EXCEEDED",
+								Count:      1,
+								ScopeKind:  "shortcut",
+								Scope:      "Shared/Docs",
+							},
+							{
+								SummaryKey: string(synctypes.SummaryQuotaExceeded),
+								Title:      "QUOTA EXCEEDED",
+								Count:      1,
+								ScopeKind:  "shortcut",
+								Scope:      "Shared/Design",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, printStatusJSON(&buf, accounts))
+
+	var result statusOutput
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &result))
+	require.Len(t, result.Accounts, 1)
+	require.Len(t, result.Accounts[0].Drives, 1)
+	require.Len(t, result.Accounts[0].Drives[0].SyncState.IssueGroups, 2)
+	assert.Equal(t, "Shared/Docs", result.Accounts[0].Drives[0].SyncState.IssueGroups[0].Scope)
+	assert.Equal(t, "Shared/Design", result.Accounts[0].Drives[0].SyncState.IssueGroups[1].Scope)
+}
+
+// Validates: R-2.10.32
+func TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T) {
+	t.Parallel()
+
+	ss := &syncStateInfo{
+		Issues: 2,
+		IssueGroups: []statusIssueGroup{
+			{
+				SummaryKey: string(synctypes.SummaryQuotaExceeded),
+				Title:      "QUOTA EXCEEDED",
+				Count:      1,
+				ScopeKind:  "shortcut",
+				Scope:      "Shared/Docs",
+			},
+			{
+				SummaryKey: string(synctypes.SummaryQuotaExceeded),
+				Title:      "QUOTA EXCEEDED",
+				Count:      1,
+				ScopeKind:  "shortcut",
+				Scope:      "Shared/Design",
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, printSyncStateText(&buf, ss))
+	output := buf.String()
+	assert.Contains(t, output, "QUOTA EXCEEDED (shortcut Shared/Docs): 1")
+	assert.Contains(t, output, "QUOTA EXCEEDED (shortcut Shared/Design): 1")
 }
 
 func TestComputeSummary_Mixed(t *testing.T) {

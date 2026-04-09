@@ -13,25 +13,17 @@ const (
 	defaultIgnoreMarker        = ".odignore"
 	defaultTransferWorkers     = 8
 	defaultCheckWorkers        = 4
-	defaultChunkSize           = "10MiB"
-	defaultBandwidthLimit      = "0"
-	defaultTransferOrder       = "default"
 	defaultBigDeleteThreshold  = 1000
 	defaultMinFreeSpace        = "1GB"
 	defaultSyncDirPermissions  = "0700"
 	defaultSyncFilePermissions = "0600"
 	defaultPollInterval        = "5m"
-	defaultFullscanFrequency   = 12
 	defaultConflictStrategy    = "keep_both"
-	defaultConflictReminder    = "1h"
-	defaultVerifyInterval      = "0"
 	defaultShutdownTimeout     = "30s"
 	defaultSafetyScanInterval  = "5m"
 	defaultLogLevel            = "info"
 	defaultLogFormat           = "auto"
 	defaultLogRetentionDays    = 30
-	defaultConnectTimeout      = "10s"
-	defaultDataTimeout         = "60s"
 )
 
 // DefaultConfig returns a Config populated with all default values.
@@ -44,7 +36,6 @@ func DefaultConfig() *Config {
 		SafetyConfig:    defaultSafetyConfig(),
 		SyncConfig:      defaultSyncConfig(),
 		LoggingConfig:   defaultLoggingConfig(),
-		NetworkConfig:   defaultNetworkConfig(),
 		Drives:          make(map[driveid.CanonicalID]Drive),
 	}
 }
@@ -61,9 +52,6 @@ func defaultTransfersConfig() TransfersConfig {
 	return TransfersConfig{
 		TransferWorkers: defaultTransferWorkers,
 		CheckWorkers:    defaultCheckWorkers,
-		ChunkSize:       defaultChunkSize,
-		BandwidthLimit:  defaultBandwidthLimit,
-		TransferOrder:   defaultTransferOrder,
 	}
 }
 
@@ -86,14 +74,11 @@ func defaultUseLocalTrash() bool {
 
 func defaultSyncConfig() SyncConfig {
 	return SyncConfig{
-		PollInterval:             defaultPollInterval,
-		FullscanFrequency:        defaultFullscanFrequency,
-		Websocket:                false,
-		ConflictStrategy:         defaultConflictStrategy,
-		ConflictReminderInterval: defaultConflictReminder,
-		VerifyInterval:           defaultVerifyInterval,
-		ShutdownTimeout:          defaultShutdownTimeout,
-		SafetyScanInterval:       defaultSafetyScanInterval,
+		PollInterval:       defaultPollInterval,
+		Websocket:          false,
+		ConflictStrategy:   defaultConflictStrategy,
+		ShutdownTimeout:    defaultShutdownTimeout,
+		SafetyScanInterval: defaultSafetyScanInterval,
 	}
 }
 
@@ -102,12 +87,5 @@ func defaultLoggingConfig() LoggingConfig {
 		LogLevel:         defaultLogLevel,
 		LogFormat:        defaultLogFormat,
 		LogRetentionDays: defaultLogRetentionDays,
-	}
-}
-
-func defaultNetworkConfig() NetworkConfig {
-	return NetworkConfig{
-		ConnectTimeout: defaultConnectTimeout,
-		DataTimeout:    defaultDataTimeout,
 	}
 }

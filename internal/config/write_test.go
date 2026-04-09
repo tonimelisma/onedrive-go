@@ -119,6 +119,21 @@ func TestAppendDriveSection_CreatesFileWhenMissing(t *testing.T) {
 	assert.Equal(t, "~/OneDrive", cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")].SyncDir)
 }
 
+// Validates: R-4.2.1
+func TestDefaultConfigTemplate_ListsAllGlobalKeys(t *testing.T) {
+	t.Parallel()
+
+	template := defaultConfigTemplate()
+	keys := newKnownGlobalKeys()
+	delete(keys, "parallel_downloads")
+	delete(keys, "parallel_uploads")
+	delete(keys, "parallel_checkers")
+
+	for key := range keys {
+		assert.Contains(t, template, "# "+key+" =", "template should document %q", key)
+	}
+}
+
 func TestAppendDriveSection_CreatesParentDirectoryWhenMissing(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sub", "deep", "config.toml")

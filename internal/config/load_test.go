@@ -47,9 +47,6 @@ ignore_marker = ".syncignore"
 
 transfer_workers = 16
 check_workers = 8
-chunk_size = "20MiB"
-bandwidth_limit = "5MB/s"
-transfer_order = "size_asc"
 
 big_delete_threshold = 500
 min_free_space = "2GB"
@@ -58,23 +55,15 @@ sync_dir_permissions = "0755"
 sync_file_permissions = "0644"
 
 poll_interval = "10m"
-fullscan_frequency = 6
 websocket = false
 conflict_strategy = "keep_both"
-conflict_reminder_interval = "2h"
 dry_run = true
-verify_interval = "168h"
 shutdown_timeout = "60s"
 
 log_level = "debug"
 log_file = "/tmp/onedrive-go.log"
 log_format = "json"
 log_retention_days = 7
-
-connect_timeout = "30s"
-data_timeout = "120s"
-user_agent = "ISV|test|test/v0.1.0"
-force_http_11 = true
 `
 
 	path := writeTestConfig(t, tomlContent)
@@ -90,9 +79,6 @@ force_http_11 = true
 
 	assert.Equal(t, 16, cfg.TransferWorkers)
 	assert.Equal(t, 8, cfg.CheckWorkers)
-	assert.Equal(t, "20MiB", cfg.ChunkSize)
-	assert.Equal(t, "5MB/s", cfg.BandwidthLimit)
-	assert.Equal(t, "size_asc", cfg.TransferOrder)
 
 	assert.Equal(t, 500, cfg.BigDeleteThreshold)
 	assert.Equal(t, "2GB", cfg.MinFreeSpace)
@@ -101,23 +87,15 @@ force_http_11 = true
 	assert.Equal(t, "0644", cfg.SyncFilePermissions)
 
 	assert.Equal(t, "10m", cfg.PollInterval)
-	assert.Equal(t, 6, cfg.FullscanFrequency)
 	assert.False(t, cfg.Websocket)
 	assert.Equal(t, "keep_both", cfg.ConflictStrategy)
-	assert.Equal(t, "2h", cfg.ConflictReminderInterval)
 	assert.True(t, cfg.DryRun)
-	assert.Equal(t, "168h", cfg.VerifyInterval)
 	assert.Equal(t, "60s", cfg.ShutdownTimeout)
 
 	assert.Equal(t, "debug", cfg.LogLevel)
 	assert.Equal(t, "/tmp/onedrive-go.log", cfg.LogFile)
 	assert.Equal(t, "json", cfg.LogFormat)
 	assert.Equal(t, 7, cfg.LogRetentionDays)
-
-	assert.Equal(t, "30s", cfg.ConnectTimeout)
-	assert.Equal(t, "120s", cfg.DataTimeout)
-	assert.Equal(t, "ISV|test|test/v0.1.0", cfg.UserAgent)
-	assert.True(t, cfg.ForceHTTP11)
 }
 
 // Validates: R-4.2.1
@@ -128,7 +106,6 @@ func TestLoad_MinimalConfig_UsesDefaults(t *testing.T) {
 
 	assert.Equal(t, 8, cfg.TransferWorkers)
 	assert.Equal(t, 4, cfg.CheckWorkers)
-	assert.Equal(t, "10MiB", cfg.ChunkSize)
 	assert.Equal(t, "info", cfg.LogLevel)
 	assert.Equal(t, "5m", cfg.PollInterval)
 }
@@ -252,23 +229,6 @@ func TestLoad_PartialConfig_UsesDefaults(t *testing.T) {
 	assert.Equal(t, 8, cfg.TransferWorkers)
 	assert.Equal(t, "5m", cfg.PollInterval)
 	assert.Equal(t, ".odignore", cfg.IgnoreMarker)
-}
-
-func TestLoad_BandwidthSchedule(t *testing.T) {
-	path := writeTestConfig(t, `
-bandwidth_schedule = [
-    { time = "08:00", limit = "5MB/s" },
-    { time = "18:00", limit = "50MB/s" },
-    { time = "23:00", limit = "0" },
-]
-`)
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
-	require.Len(t, cfg.BandwidthSchedule, 3)
-	assert.Equal(t, "08:00", cfg.BandwidthSchedule[0].Time)
-	assert.Equal(t, "5MB/s", cfg.BandwidthSchedule[0].Limit)
-	assert.Equal(t, "18:00", cfg.BandwidthSchedule[1].Time)
-	assert.Equal(t, "23:00", cfg.BandwidthSchedule[2].Time)
 }
 
 // --- Two-pass decode: drive section tests ---
@@ -599,8 +559,6 @@ func TestLoad_DriveSectionNotTable(t *testing.T) {
 	assert.Contains(t, err.Error(), "must be a table")
 }
 
-// --- Edge case: unknown key with known parent in bandwidth_schedule ---
-
 func TestLoad_DriveSection_TypeMismatch(t *testing.T) {
 	// A drive section where "paused" is a string instead of a boolean should
 	// trigger a type-coercion error in mapToDrive during the re-encode/decode cycle.
@@ -612,19 +570,6 @@ paused = "not-a-bool"
 	_, err := Load(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "personal:toni@outlook.com")
-}
-
-func TestLoad_BandwidthScheduleSubField_NotFlagged(t *testing.T) {
-	// bandwidth_schedule entries have "time" and "limit" sub-fields.
-	// These appear as undecoded keys but the parent is known, so they should be skipped.
-	path := writeTestConfig(t, `
-bandwidth_schedule = [
-    { time = "08:00", limit = "5MB/s" },
-]
-`)
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
-	require.Len(t, cfg.BandwidthSchedule, 1)
 }
 
 // --- ResolveDrives ---
