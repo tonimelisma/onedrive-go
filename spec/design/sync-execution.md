@@ -373,7 +373,7 @@ Scope block classification remains in the sync engine: `classifyResult` maps `dr
 - All executor write operations use `containedPath()` with `filepath.IsLocal()` to confine local filesystem writes to the sync root directory. This is defense-in-depth against path reconstruction bugs, not input validation (the OneDrive API is the source of truth, not an attacker). Symlink escape is prevented by resolving symlinks on the parent directory via `filepath.EvalSymlinks`.
 - Conflict-copy naming keeps the readable second-precision timestamp base, but uniqueness is enforced against the filesystem by the executor: if `<name>.conflict-YYYYMMDD-HHMMSS.ext` already exists, later copies append ordinal suffixes before the extension (`-2`, `-3`, ...). `*.conflict-*` globbing still discovers both the base and suffixed copies for keep-local, keep-both, and cleanup flows.
 - Concurrent folder creates via Graph API `$batch` for sibling folders at same depth. Diminishing returns after first sync. [planned]
-- Targeted `-race` stress tests for DepGraph, active-scope admission helpers, Buffer, WorkerPool. [planned]
+- Targeted `-race` stress tests for DepGraph, active-scope admission helpers, Buffer, and WorkerPool run through `go run ./cmd/devtool verify stress`, which repeats `./internal/syncdispatch`, `./internal/syncexec`, and `./internal/syncobserve` alongside the higher-level sync packages under `-race -count=50`. [verified]
 - Watch shutdown and active worker-pool cancellation are covered by direct lifecycle tests, including real watch-loop shutdown races and worker-pool close behavior. [verified]
 
 ## CLI Status (`status.go`)

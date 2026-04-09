@@ -1359,6 +1359,9 @@ func runStress(
 			"-count=50",
 			"./internal/sync",
 			"./internal/multisync",
+			"./internal/syncdispatch",
+			"./internal/syncexec",
+			"./internal/syncobserve",
 			"./internal/cli",
 		); err != nil {
 			return fmt.Errorf("stress tests: %w", err)

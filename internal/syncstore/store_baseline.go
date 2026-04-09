@@ -220,7 +220,7 @@ func (m *SyncStore) GetDeltaToken(ctx context.Context, driveID, scopeID string) 
 // CommitOutcome atomically applies a single outcome to the baseline in a
 // SQLite transaction. After the DB write, the in-memory baseline cache is
 // updated incrementally (Put or Delete).
-func (m *SyncStore) CommitOutcome(ctx context.Context, outcome *synctypes.Outcome) error {
+func (m *SyncStore) CommitOutcome(ctx context.Context, outcome *synctypes.Outcome) (err error) {
 	if !outcome.Success {
 		return nil
 	}
@@ -236,7 +236,9 @@ func (m *SyncStore) CommitOutcome(ctx context.Context, outcome *synctypes.Outcom
 	if err != nil {
 		return fmt.Errorf("sync: beginning commit outcome transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback outcome transaction for %s", outcome.Path))
+	}()
 
 	syncedAt := m.nowFunc().UnixNano()
 
@@ -244,8 +246,8 @@ func (m *SyncStore) CommitOutcome(ctx context.Context, outcome *synctypes.Outcom
 		return applyErr
 	}
 
-	if commitErr := tx.Commit(); commitErr != nil {
-		return fmt.Errorf("sync: committing outcome transaction: %w", commitErr)
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("sync: committing outcome transaction: %w", err)
 	}
 
 	// Update in-memory baseline cache incrementally.
@@ -259,7 +261,7 @@ func (m *SyncStore) CommitOutcome(ctx context.Context, outcome *synctypes.Outcom
 // RefreshLocalBaseline updates the local-side comparison tuple for one path
 // while preserving any existing remote-side metadata. If a matching
 // remote_state row exists, it is marked synced in the same transaction.
-func (m *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh LocalBaselineRefresh) error {
+func (m *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh LocalBaselineRefresh) (err error) {
 	if m.baseline == nil {
 		if _, loadErr := m.Load(ctx); loadErr != nil {
 			return fmt.Errorf("sync: loading baseline before refresh local baseline: %w", loadErr)
@@ -297,7 +299,9 @@ func (m *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh LocalBasel
 	if err != nil {
 		return fmt.Errorf("sync: beginning refresh local baseline transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback refresh local baseline transaction for %s", refresh.Path))
+	}()
 
 	_, err = tx.ExecContext(ctx, sqlUpsertBaseline,
 		entry.DriveID.String(),
@@ -330,7 +334,7 @@ func (m *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh LocalBasel
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("sync: committing refresh local baseline transaction: %w", err)
 	}
 
@@ -456,7 +460,7 @@ func outcomeToEntry(o *synctypes.Outcome, syncedAt int64) *synctypes.BaselineEnt
 // from baseline updates. Used after all actions in a pass complete.
 // Use scopeID="" and scopeDrive=driveID for the primary drive-level delta.
 // For shortcut-scoped deltas, scopeID=remoteItem.id and scopeDrive=remoteItem.driveId.
-func (m *SyncStore) CommitDeltaToken(ctx context.Context, token, driveID, scopeID, scopeDrive string) error {
+func (m *SyncStore) CommitDeltaToken(ctx context.Context, token, driveID, scopeID, scopeDrive string) (err error) {
 	if token == "" {
 		return nil
 	}
@@ -465,15 +469,17 @@ func (m *SyncStore) CommitDeltaToken(ctx context.Context, token, driveID, scopeI
 	if err != nil {
 		return fmt.Errorf("sync: beginning delta token transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback delta token transaction for drive %s scope %q", driveID, scopeID))
+	}()
 
 	updatedAt := m.nowFunc().UnixNano()
 	if saveErr := m.saveDeltaToken(ctx, tx, driveID, scopeID, scopeDrive, token, updatedAt); saveErr != nil {
 		return saveErr
 	}
 
-	if commitErr := tx.Commit(); commitErr != nil {
-		return fmt.Errorf("sync: committing delta token transaction: %w", commitErr)
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("sync: committing delta token transaction: %w", err)
 	}
 
 	m.logger.Debug("delta token committed",

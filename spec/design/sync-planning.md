@@ -97,7 +97,7 @@ In watch mode, the planner-level check is disabled (`threshold=MaxInt32`) — th
 - `RemoteState` carries `DriveID` for cross-drive correctness. Shared folder items from Drive A in Drive B's delta carry Drive A's DriveID. Planner DriveID propagation: Remote.DriveID wins → Baseline.DriveID fallback → empty for new local items.
 - `RemoteState` carries `RemoteDriveID` and `RemoteItemID` for shortcut scope identity (D-5). These are transient fields populated by `remoteStateFromEvent()` from `ChangeEvent` — not persisted in `remote_state` table. `makeAction()` uses them to populate `Action.targetShortcutKey` and `Action.targetDriveID` so active-scope admission can distinguish own-drive vs shortcut-scoped failures (R-6.8.12, R-6.8.13).
 - The planner detects action dependency cycles using DFS with white/gray/black node coloring after `buildDependencies()`. Cycle detection prevents deadlock in the DepGraph.
-- Property-based tests for planner with random inputs — verify DAG invariant holds under all generated scenarios. [planned]
+- Property-based fuzz tests for planner with bounded random inputs verify that `Plan()` is panic-free, deterministic, and emits only in-range acyclic dependency graphs. [verified]
 
 ## Folder Delete Cascade Expansion
 

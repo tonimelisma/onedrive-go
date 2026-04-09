@@ -237,7 +237,11 @@ func IsActionableIssue(issueType string) bool {
 //
 // UPSERT ON CONFLICT uses COALESCE for issue_type, item_id, file_size,
 // local_hash to preserve existing values when new values are empty/zero.
-func (m *SyncStore) RecordFailure(ctx context.Context, p *synctypes.SyncFailureParams, delayFn func(int) time.Duration) error {
+func (m *SyncStore) RecordFailure(
+	ctx context.Context,
+	p *synctypes.SyncFailureParams,
+	delayFn func(int) time.Duration,
+) (err error) {
 	now := m.nowFunc()
 	category, role, scopeWire, err := normalizeFailureParams(p, delayFn)
 	if err != nil {
@@ -249,12 +253,14 @@ func (m *SyncStore) RecordFailure(ctx context.Context, p *synctypes.SyncFailureP
 	if err != nil {
 		return fmt.Errorf("sync: beginning failure transaction for %s: %w", p.Path, err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback failure transaction for %s", p.Path))
+	}()
 
 	// Step 1: Transition remote_state status for download/delete failures.
 	if direction == synctypes.DirectionDownload || direction == synctypes.DirectionDelete {
-		if transErr := m.transitionRemoteStateOnFailure(ctx, tx, p.Path); transErr != nil {
-			return transErr
+		if transitionErr := m.transitionRemoteStateOnFailure(ctx, tx, p.Path); transitionErr != nil {
+			return transitionErr
 		}
 	}
 
@@ -305,7 +311,7 @@ func (m *SyncStore) RecordFailure(ctx context.Context, p *synctypes.SyncFailureP
 		return fmt.Errorf("sync: recording sync failure for %s: %w", p.Path, err)
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("sync: committing failure for %s: %w", p.Path, err)
 	}
 
@@ -467,14 +473,16 @@ func (m *SyncStore) TakeSyncFailure(
 	ctx context.Context,
 	path string,
 	driveID driveid.ID,
-) (*synctypes.SyncFailureRow, bool, error) {
+) (row *synctypes.SyncFailureRow, found bool, err error) {
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, false, fmt.Errorf("sync: beginning take sync failure for %s: %w", path, err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback take sync failure transaction for %s", path))
+	}()
 
-	row := &synctypes.SyncFailureRow{}
+	row = &synctypes.SyncFailureRow{}
 	if scanErr := scanSyncFailureRow(tx.QueryRowContext(ctx,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
 		WHERE path = ? AND drive_id = ?`,
@@ -500,7 +508,7 @@ func (m *SyncStore) TakeSyncFailure(
 		return nil, false, fmt.Errorf("sync: deleting taken sync failure for %s: expected 1 row, got %d", path, affected)
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err = tx.Commit(); err != nil {
 		return nil, false, fmt.Errorf("sync: committing take sync failure for %s: %w", path, err)
 	}
 
@@ -549,7 +557,10 @@ func (m *SyncStore) MarkSyncFailureActionable(ctx context.Context, path string, 
 // sync_failures as actionable entries. Each failure is inserted with
 // failure_count=1 and no next_retry_at. On conflict, the existing row is
 // updated with the latest error info.
-func (m *SyncStore) UpsertActionableFailures(ctx context.Context, failures []synctypes.ActionableFailure) error {
+func (m *SyncStore) UpsertActionableFailures(
+	ctx context.Context,
+	failures []synctypes.ActionableFailure,
+) (err error) {
 	if len(failures) == 0 {
 		return nil
 	}
@@ -561,7 +572,9 @@ func (m *SyncStore) UpsertActionableFailures(ctx context.Context, failures []syn
 	if err != nil {
 		return fmt.Errorf("sync: begin upsert actionable failures: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		err = finalizeTxRollback(err, tx, "sync: rollback actionable failure upsert")
+	}()
 
 	// NOTE: RecordFailure has a parallel INSERT with different ON CONFLICT
 	// semantics (COALESCE, failure_count increment) — update both when
@@ -590,22 +603,22 @@ func (m *SyncStore) UpsertActionableFailures(ctx context.Context, failures []syn
 
 	for i := range failures {
 		f := &failures[i]
-		role, scopeWire, err := normalizeActionableFailure(f)
-		if err != nil {
-			return err
+		role, scopeWire, normalizeErr := normalizeActionableFailure(f)
+		if normalizeErr != nil {
+			return normalizeErr
 		}
 		direction, actionType := normalizeFailureIdentity(f.Direction, f.ActionType)
 
-		if _, err := stmt.ExecContext(ctx,
+		if _, execErr := stmt.ExecContext(ctx,
 			f.Path, f.DriveID.String(), direction, actionType, role,
 			nullString(f.IssueType), f.Error,
 			nowNano, nowNano, f.FileSize, scopeWire,
-		); err != nil {
-			return fmt.Errorf("sync: upsert actionable failure for %s: %w", f.Path, err)
+		); execErr != nil {
+			return fmt.Errorf("sync: upsert actionable failure for %s: %w", f.Path, execErr)
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("commit actionable failure upsert: %w", err)
 	}
 

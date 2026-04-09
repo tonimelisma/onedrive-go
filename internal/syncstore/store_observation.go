@@ -88,29 +88,31 @@ func (m *SyncStore) commitObservation(
 	newToken string,
 	driveID driveid.ID,
 	scopeID string,
-) error {
+) (err error) {
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("sync: beginning observation transaction: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		err = finalizeTxRollback(err, tx, "sync: rollback observation transaction")
+	}()
 
 	now := m.nowFunc().UnixNano()
 
 	for i := range events {
-		if err := m.processObservedItem(ctx, tx, &events[i], now); err != nil {
-			return err
+		if processErr := m.processObservedItem(ctx, tx, &events[i], now); processErr != nil {
+			return processErr
 		}
 	}
 
 	// Persist delta token in the same transaction.
 	if newToken != "" {
-		if err := m.saveDeltaToken(ctx, tx, driveID.String(), scopeID, driveID.String(), newToken, now); err != nil {
-			return err
+		if saveErr := m.saveDeltaToken(ctx, tx, driveID.String(), scopeID, driveID.String(), newToken, now); saveErr != nil {
+			return saveErr
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("sync: committing observation transaction: %w", err)
 	}
 

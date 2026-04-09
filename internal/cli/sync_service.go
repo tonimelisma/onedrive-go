@@ -114,13 +114,10 @@ func (s *syncService) run(ctx context.Context, opts syncCommandOptions) error {
 
 	cfgForLog := &config.ResolvedDrive{LoggingConfig: rawCfg.LoggingConfig}
 	dualLogger, logCloser := buildLoggerDualWithStatusWriter(cfgForLog, s.cc.Flags, s.cc.Status())
-	logger = dualLogger
-	s.cc.Logger = logger
-	s.cc.logCloser = logCloser
-
-	if logCloser != nil {
-		defer func() { _ = logCloser.Close() }()
+	if replaceErr := s.cc.replaceCommandLogger(dualLogger, logCloser); replaceErr != nil {
+		return replaceErr
 	}
+	logger = s.cc.Logger
 
 	selectors := s.cc.Flags.Drive
 	effectiveDryRun, err := resolveSyncDryRun(rawCfg.DryRun, opts.DryRun, opts.Watch)

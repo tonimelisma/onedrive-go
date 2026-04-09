@@ -122,19 +122,21 @@ func (m *SyncStore) AuditIntegrity(ctx context.Context) (IntegrityReport, error)
 // RepairIntegritySafe applies only deterministic integrity repairs that do not
 // guess user intent, then returns the number of rows or scope authorities
 // normalized.
-func (m *SyncStore) RepairIntegritySafe(ctx context.Context) (int, error) {
+func (m *SyncStore) RepairIntegritySafe(ctx context.Context) (repairsApplied int, err error) {
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("sync: begin integrity repair tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		err = finalizeTxRollback(err, tx, "sync: rollback integrity repair tx")
+	}()
 
-	repairsApplied, err := repairIntegritySafeTx(ctx, tx)
+	repairsApplied, err = repairIntegritySafeTx(ctx, tx)
 	if err != nil {
 		return 0, err
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err = tx.Commit(); err != nil {
 		return 0, fmt.Errorf("sync: commit integrity repair: %w", err)
 	}
 
