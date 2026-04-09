@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -225,32 +227,9 @@ func (c *Client) ResumeUpload(
 		return nil, fmt.Errorf("graph: querying session for resume: %w", err)
 	}
 
-	// Parse NextExpectedRanges to find the resume offset.
-	// Format: ["0-", "327680-"] — we take the first range's start offset.
-	resumeOffset := int64(0)
-
-	if len(status.NextExpectedRanges) > 0 {
-		rangeStr := status.NextExpectedRanges[0]
-		// Parse "N-" or "N-M" format.
-		dashIdx := 0
-		for i, ch := range rangeStr {
-			if ch == '-' {
-				dashIdx = i
-				break
-			}
-		}
-
-		if dashIdx > 0 {
-			var offset int64
-			if _, scanErr := fmt.Sscanf(rangeStr[:dashIdx], "%d", &offset); scanErr == nil {
-				resumeOffset = offset
-			} else {
-				c.logger.Debug("failed to parse NextExpectedRanges offset",
-					slog.String("range", rangeStr),
-					slog.String("error", scanErr.Error()),
-				)
-			}
-		}
+	resumeOffset, err := parseNextExpectedRangeStart(status.NextExpectedRanges)
+	if err != nil {
+		return nil, fmt.Errorf("graph: parsing resume offset from session status: %w", err)
 	}
 
 	c.logger.Info("resuming upload from offset",
@@ -265,6 +244,29 @@ func (c *Client) ResumeUpload(
 	}
 
 	return c.uploadChunksFrom(ctx, resumeSession, content, totalSize, resumeOffset, progress)
+}
+
+func parseNextExpectedRangeStart(ranges []string) (int64, error) {
+	if len(ranges) == 0 {
+		return 0, errors.New("nextExpectedRanges empty")
+	}
+
+	rangeStr := strings.TrimSpace(ranges[0])
+	start, _, found := strings.Cut(rangeStr, "-")
+	if !found || start == "" {
+		return 0, fmt.Errorf("invalid nextExpectedRanges entry %q", rangeStr)
+	}
+
+	offset, err := strconv.ParseInt(start, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid nextExpectedRanges entry %q: %w", rangeStr, err)
+	}
+
+	if offset < 0 {
+		return 0, fmt.Errorf("invalid nextExpectedRanges entry %q: negative offset", rangeStr)
+	}
+
+	return offset, nil
 }
 
 // parseUploadSessionResponse parses the HTTP response from CreateUploadSession.

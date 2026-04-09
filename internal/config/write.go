@@ -26,31 +26,73 @@ const (
 	driveTypeShared     = driveid.DriveTypeShared
 )
 
-// configTemplate is the default config file content written on first login.
-// All global settings are present as commented-out defaults so users can
-// discover every option without reading docs. This template is written once
-// and never regenerated — user modifications are preserved by subsequent
-// text-level edits.
-const configTemplate = `# onedrive-go configuration
+// defaultConfigTemplate returns the first-login config content. All global
+// settings are present as commented-out defaults so users can discover every
+// option without reading docs. The template uses the live default constants so
+// docs and config creation do not drift when defaults change.
+func defaultConfigTemplate() string {
+	return fmt.Sprintf(`# onedrive-go configuration
 # Docs: https://github.com/tonimelisma/onedrive-go
 
 # ── Global settings ──
 # Uncomment and modify to override defaults.
 
-# Log file verbosity: debug, info, warn, error
-# log_level = "info"
+# Sync filters
+# skip_files = []
+# skip_dirs = []
+# skip_dotfiles = false
+# skip_symlinks = false
+# sync_paths = []
+# ignore_marker = %q
 
-# Log file path (default: platform standard location)
-# log_file = ""
+# Transfers
+# transfer_workers = %d
+# check_workers = %d
 
-# Check interval for sync --watch
-# poll_interval = "5m"
+# Safety
+# big_delete_threshold = %d
+# min_free_space = %q
+# use_local_trash = %t      # platform default
+# sync_dir_permissions = %q
+# sync_file_permissions = %q
+
+# Sync runtime
+# poll_interval = %q
+# websocket = false
+# conflict_strategy = %q
+# dry_run = false
+# shutdown_timeout = %q
+# safety_scan_interval = %q
+
+# Logging
+# log_level = %q
+# log_file = %q
+# log_format = %q
+# log_retention_days = %d
 
 # ── Drives ──
 # Added automatically by 'login' and 'drive add'.
 # Each section name is the canonical drive identifier.
 # Filter settings may be set globally and overridden per drive below.
-`
+`,
+		defaultIgnoreMarker,
+		defaultTransferWorkers,
+		defaultCheckWorkers,
+		defaultBigDeleteThreshold,
+		defaultMinFreeSpace,
+		defaultUseLocalTrash(),
+		defaultSyncDirPermissions,
+		defaultSyncFilePermissions,
+		defaultPollInterval,
+		defaultConflictStrategy,
+		defaultShutdownTimeout,
+		defaultSafetyScanInterval,
+		defaultLogLevel,
+		"",
+		defaultLogFormat,
+		defaultLogRetentionDays,
+	)
+}
 
 // driveSection generates the TOML text for a new drive section. The blank
 // line before the header is intentional — it visually separates drive
@@ -76,7 +118,7 @@ func AppendDriveSection(path string, canonicalID driveid.CanonicalID, syncDir st
 		}
 
 		// File doesn't exist — create from template.
-		content := configTemplate + driveSection(canonicalID.String(), syncDir)
+		content := defaultConfigTemplate() + driveSection(canonicalID.String(), syncDir)
 
 		return atomicWriteFile(path, []byte(content))
 	}

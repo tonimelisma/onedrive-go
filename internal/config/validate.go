@@ -17,22 +17,13 @@ const (
 	maxCheckWorkers       = 16
 	minBigDelete          = 1
 	minLogRetention       = 1
-	minFullscanNonZero    = 2
-	chunkAlignBytes       = 327680     // 320 KiB alignment for upload chunks
-	minChunkBytes         = 10_485_760 // 10 MiB
-	maxChunkBytes         = 62_914_560 // 60 MiB
 	minPollInterval       = 30 * time.Second
 	minShutdownTimeout    = 5 * time.Second
 	minSafetyScanInterval = 10 * time.Second
-	minConnectTimeout     = 1 * time.Second
-	minDataTimeout        = 5 * time.Second
 	octalBase             = 8
 	minOctalDigits        = 3
 	maxOctalDigits        = 4
 	maxOctalValue         = 0o777
-	schedulePartCount     = 2
-	maxScheduleHour       = 23
-	maxScheduleMinute     = 59
 )
 
 func validateFilter(f *FilterConfig) []error {
@@ -64,84 +55,7 @@ func validateTransfers(t *TransfersConfig) []error {
 			minCheckWorkers, maxCheckWorkers, t.CheckWorkers))
 	}
 
-	errs = append(errs, validateChunkSize(t.ChunkSize)...)
-	errs = append(errs, validateTransferOrder(t.TransferOrder)...)
-	errs = append(errs, validateBandwidthSchedule(t.BandwidthSchedule)...)
-
 	return errs
-}
-
-func validateChunkSize(s string) []error {
-	bytes, err := ParseSize(s)
-	if err != nil {
-		return []error{fmt.Errorf("chunk_size: %w", err)}
-	}
-
-	if bytes < minChunkBytes || bytes > maxChunkBytes {
-		return []error{fmt.Errorf("chunk_size: must be between 10MiB and 60MiB, got %s", s)}
-	}
-
-	if bytes%chunkAlignBytes != 0 {
-		return []error{fmt.Errorf(
-			"chunk_size: must be a multiple of 320 KiB (%d bytes), got %s (%d bytes)",
-			chunkAlignBytes, s, bytes)}
-	}
-
-	return nil
-}
-
-func validateTransferOrder(order string) []error {
-	switch order {
-	case "default", "size_asc", "size_desc", "name_asc", "name_desc":
-		return nil
-	default:
-		return []error{fmt.Errorf(
-			"transfer_order: must be one of default, size_asc, size_desc, name_asc, name_desc; got %q", order)}
-	}
-}
-
-func validateBandwidthSchedule(entries []BandwidthScheduleEntry) []error {
-	var errs []error
-
-	prevMinutes := -1
-
-	for i := range entries {
-		minutes, err := parseScheduleTime(entries[i].Time)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("bandwidth_schedule[%d].time: %w", i, err))
-
-			continue
-		}
-
-		if prevMinutes >= 0 && minutes <= prevMinutes {
-			errs = append(errs, fmt.Errorf("bandwidth_schedule: entries must be sorted by time; %q is not after %q",
-				entries[i].Time, entries[max(0, i-1)].Time))
-		}
-
-		prevMinutes = minutes
-	}
-
-	return errs
-}
-
-// parseScheduleTime parses "HH:MM" and returns total minutes since midnight.
-func parseScheduleTime(s string) (int, error) {
-	parts := strings.SplitN(s, ":", schedulePartCount)
-	if len(parts) != schedulePartCount {
-		return 0, fmt.Errorf("invalid time format %q: expected HH:MM", s)
-	}
-
-	hour, err := strconv.Atoi(parts[0])
-	if err != nil || hour < 0 || hour > maxScheduleHour {
-		return 0, fmt.Errorf("invalid hour in %q: must be 00-23", s)
-	}
-
-	minute, err := strconv.Atoi(parts[1])
-	if err != nil || minute < 0 || minute > maxScheduleMinute {
-		return 0, fmt.Errorf("invalid minute in %q: must be 00-59", s)
-	}
-
-	return hour*int(time.Hour/time.Minute) + minute, nil
 }
 
 func validateSafety(s *SafetyConfig) []error {
@@ -197,23 +111,11 @@ func validateSync(s *SyncConfig) []error {
 	var errs []error
 
 	errs = append(errs, validateDurationMin("poll_interval", s.PollInterval, minPollInterval)...)
-	errs = append(errs, validateFullscanFrequency(s.FullscanFrequency)...)
 	errs = append(errs, validateConflictStrategy(s.ConflictStrategy)...)
-	errs = append(errs, validateDurationNonNeg("conflict_reminder_interval", s.ConflictReminderInterval)...)
-	errs = append(errs, validateDurationNonNeg("verify_interval", s.VerifyInterval)...)
 	errs = append(errs, validateDurationMin("shutdown_timeout", s.ShutdownTimeout, minShutdownTimeout)...)
 	errs = append(errs, validateDurationMin("safety_scan_interval", s.SafetyScanInterval, minSafetyScanInterval)...)
 
 	return errs
-}
-
-func validateFullscanFrequency(n int) []error {
-	if n != 0 && n < minFullscanNonZero {
-		return []error{fmt.Errorf("fullscan_frequency: must be 0 (disabled) or >= %d, got %d",
-			minFullscanNonZero, n)}
-	}
-
-	return nil
 }
 
 func validateConflictStrategy(s string) []error {
@@ -242,19 +144,6 @@ func validateDuration(field, value string, minimum time.Duration) error {
 func validateDurationMin(field, value string, minimum time.Duration) []error {
 	if err := validateDuration(field, value, minimum); err != nil {
 		return []error{err}
-	}
-
-	return nil
-}
-
-func validateDurationNonNeg(field, value string) []error {
-	d, err := time.ParseDuration(value)
-	if err != nil {
-		return []error{fmt.Errorf("%s: invalid duration %q: %w", field, value, err)}
-	}
-
-	if d < 0 {
-		return []error{fmt.Errorf("%s: must be >= 0, got %s", field, d)}
 	}
 
 	return nil
@@ -300,15 +189,6 @@ func validateLogFormat(format string) []error {
 	return nil
 }
 
-func validateNetwork(n *NetworkConfig) []error {
-	var errs []error
-
-	errs = append(errs, validateDurationMin("connect_timeout", n.ConnectTimeout, minConnectTimeout)...)
-	errs = append(errs, validateDurationMin("data_timeout", n.DataTimeout, minDataTimeout)...)
-
-	return errs
-}
-
 // WarnDeprecatedKeys checks raw TOML metadata for deprecated config keys and
 // logs a warning for each one found. The deprecated keys still parse without
 // error (they're in knownGlobalKeys) but their values are silently ignored.
@@ -346,27 +226,5 @@ func deprecatedTransferKeys() map[string]string {
 		"parallel_downloads": "transfer_workers",
 		"parallel_uploads":   "transfer_workers",
 		"parallel_checkers":  "check_workers",
-	}
-}
-
-// WarnUnimplemented logs a warning for each config field that is set to a
-// non-default value but is not yet implemented. This prevents users from
-// thinking their settings take effect when they silently don't (B-141).
-func WarnUnimplemented(rd *ResolvedDrive, logger *slog.Logger) {
-	warn := func(field string) {
-		logger.Warn("config field not yet implemented; value will be ignored",
-			slog.String("field", field))
-	}
-
-	if rd.BandwidthLimit != "0" && rd.BandwidthLimit != defaultBandwidthLimit {
-		warn("bandwidth_limit")
-	}
-
-	if len(rd.BandwidthSchedule) > 0 {
-		warn("bandwidth_schedule")
-	}
-
-	if rd.UserAgent != "" {
-		warn("user_agent")
 	}
 }

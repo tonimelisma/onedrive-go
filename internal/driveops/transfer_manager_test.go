@@ -537,6 +537,36 @@ func TestTransferManager_HashExhaustion_Accepts(t *testing.T) {
 	assert.False(t, result.HashVerified, "HashVerified should be false after exhaustion")
 }
 
+// Validates: R-5.8.1
+func TestTransferManager_HEICMetadataMismatch_AcceptsWithQuirkWarning(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	content := []byte("heic-bytes-after-download")
+
+	dl := &tmSimpleDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, err := w.Write(content)
+			return int64(n), err
+		},
+	}
+
+	tm := NewTransferManager(dl, &tmMockUploader{}, nil, logger)
+	targetPath := filepath.Join(t.TempDir(), "IMG_0001.HEIC")
+
+	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+		RemoteHash:     "definitely-wrong-hash",
+		RemoteSize:     int64(len(content) + 1234),
+		MaxHashRetries: 1,
+	})
+	require.NoError(t, err)
+	assert.False(t, result.HashVerified)
+	assert.Equal(t, result.LocalHash, result.EffectiveRemoteHash)
+	assert.Contains(t, buf.String(), "known OneDrive/iOS metadata mismatch")
+	assert.Contains(t, buf.String(), "accepting download")
+}
+
 // ---------------------------------------------------------------------------
 // Upload tests
 // ---------------------------------------------------------------------------

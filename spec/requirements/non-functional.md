@@ -67,7 +67,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.6.12: When more than 10 transient failures of the same issue_type exhaust their retry budget within a single sync pass, the system shall aggregate them into a single summary WARN log line with count, logging individual paths at DEBUG. This extends the scanner-skipped aggregation pattern (R-6.6.7) to execution-time transient failures. [verified]
 - R-6.6.13: Classified sync outcome logs shall emit a stable structured schema. Every classified sync log line shall carry `summary_key`, `failure_class`, `log_owner`, `scope_key`, `path`, and `run_id`. Result-path logs shall also carry `drive_id`, `action_type`, and `action_id`, with `shortcut_key`, `http_status`, and `trial_scope_key` added when applicable. [verified]
 
-## R-6.7 Technical Requirements [implemented]
+## R-6.7 Technical Requirements [verified]
 
 Constraints derived from the OneDrive API that the system must satisfy for correctness. See [graph-api-quirks.md](../reference/graph-api-quirks.md) for the underlying API behaviors.
 
@@ -95,7 +95,7 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.7.22: When the API's path-based query returns an item from an incorrect path (fuzzy matching bug), the system shall post-validate that the returned item's name matches the requested path. [verified]
 - R-6.7.23: The system shall URL-decode `parentReference.path` in non-delta responses before using it for path reconstruction. [verified]
 - R-6.7.24: When a folder is renamed, the system shall infer and recalculate path changes for all descendants, since only the renamed folder appears in the delta response. [verified]
-- R-6.7.25: When re-uploading a modified file to Business/SharePoint, the system shall accept the unavoidable extra version created by the API (unfixed Microsoft bug) without attempting futile workarounds. [planned]
+- R-6.7.25: When re-uploading a modified file to Business/SharePoint, the system shall accept the unavoidable extra version created by the API (unfixed Microsoft bug) without attempting futile workarounds. [verified]
 - R-6.7.26: The system shall handle absent `lastModifiedDateTime` (null) on API-initiated deletions without error, preserving the timestamp as unknown. [verified]
 - R-6.7.27: When classifying errors, the engine shall handle empty `TargetDriveID` (local-only operations like `os.ErrPermission`) by skipping remote scope routing. Only remote API errors shall require drive-aware scope routing. [verified]
 - R-6.7.28: The system shall skip malformed remote delta items that lack the identity or materialization data required to produce a safe `ChangeEvent`. Non-root items with empty `id`, non-deleted items with empty `name`, and delete entries whose path cannot be recovered from the baseline or surviving delta name/parent data shall be warned and skipped instead of emitting empty-ID or empty-path events. [verified]

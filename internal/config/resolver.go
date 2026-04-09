@@ -138,7 +138,7 @@ func (r driveResolver) resolveDrives(cfg *Config, selectors []string, includePau
 
 func (r driveResolver) resolveConfigPath(env EnvOverrides, cli CLIOverrides) string {
 	cfgPath := DefaultConfigPath()
-	source := defaultTransferOrder
+	source := "default"
 
 	if env.ConfigPath != "" {
 		cfgPath = env.ConfigPath

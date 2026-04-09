@@ -2,7 +2,7 @@
 
 GOVERNS: internal/config/account.go, internal/config/config.go, internal/config/decoder.go, internal/config/defaults.go, internal/config/discovery.go, internal/config/display_name.go, internal/config/drive.go, internal/config/drivemeta.go, internal/config/email_reconcile.go, internal/config/env.go, internal/config/failure_class.go, internal/config/holder.go, internal/config/load.go, internal/config/managed_io.go, internal/config/paths.go, internal/config/resolved_validator.go, internal/config/resolver.go, internal/config/size.go, internal/config/token_resolution.go, internal/config/toml_lines.go, internal/config/unknown.go, internal/config/validate.go, internal/config/validate_drive.go, internal/config/validator.go, internal/config/write.go
 
-Implements: R-3.7 [verified], R-4.1 [verified], R-4.2 [verified], R-4.3 [verified], R-4.4 [verified], R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-4.8.4 [verified], R-4.8.5 [verified], R-4.8.6 [verified], R-4.9.2 [verified], R-4.9.3 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
+Implements: R-3.7 [verified], R-4.1 [verified], R-4.2 [verified], R-4.3 [verified], R-4.4 [verified], R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-4.8.4 [verified], R-4.8.5 [verified], R-4.8.6 [verified], R-4.9.1 [verified], R-4.9.2 [verified], R-4.9.3 [verified], R-4.9.4 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
 ## Overview
 
@@ -58,9 +58,63 @@ Config entrypoints still accept full path strings, so `managed_io.go` establishe
 
 The public API stays stable (`Load*`, `Resolve*`, `Validate*`), but those entrypoints delegate into these internal collaborators instead of re-mixing decode, resolution, and validation logic in one file.
 
+## Field Reference
+
+This table is the authoritative config-package view of the current schema.
+`Command class` names the current consumer boundary at a coarse level:
+`sync`, `sync --watch`, `transfer commands`, `all CLI`, or `display`.
+
+### Global Fields
+
+| Key | Type | Default / effective default | Valid range / shape | Command class | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `skip_files` | `[]string` | `[]` | glob patterns | `sync` | Local-observation skip filter. |
+| `skip_dirs` | `[]string` | `[]` | directory names | `sync` | Local-observation skip filter. |
+| `skip_dotfiles` | `bool` | `false` | boolean | `sync` | Local-observation skip filter. |
+| `skip_symlinks` | `bool` | `false` | boolean | `sync` | `false` follows symlink targets; `true` suppresses them. |
+| `sync_paths` | `[]string` | full-drive scope | absolute drive-root paths starting with `/` | `sync` | Bidirectional sync-scope narrowing. |
+| `ignore_marker` | `string` | `.odignore` | non-empty filename | `sync` | Presence-only directory exclusion marker. |
+| `transfer_workers` | `int` | `8` | `4..64` | `sync`, `transfer commands` | Shared transfer worker-pool size. |
+| `check_workers` | `int` | `4` | `1..16` | `sync` | Parallel local hashing worker count. |
+| `big_delete_threshold` | `int` | `1000` | `>= 1` | `sync` | Big-delete protection threshold. |
+| `min_free_space` | `string` | `1GB` | parseable size string; `0` disables | `sync`, `get`, shared download commands | Disk reservation floor for downloads. |
+| `use_local_trash` | `bool` | macOS: `true`; Linux: `false` | boolean | `sync` | Local delete handling. |
+| `sync_dir_permissions` | `string` | `0700` | 3 or 4 octal digits, `000..777` | `sync` | Directory permissions for synced content. |
+| `sync_file_permissions` | `string` | `0600` | 3 or 4 octal digits, `000..777` | `sync` | File permissions for synced content. |
+| `poll_interval` | `string` | `5m` | duration `>= 30s` | `sync --watch` | Remote observation fallback poll cadence. |
+| `websocket` | `bool` | `false` | boolean | `sync --watch` | Enables Socket.IO remote wakeups where supported. |
+| `conflict_strategy` | `string` | `keep_both` | `keep_both` | `sync` | Conflict-resolution policy surface. |
+| `dry_run` | `bool` | `false` | boolean | `sync` | Config-owned default for dry-run sync. CLI flag may override. |
+| `shutdown_timeout` | `string` | `30s` | duration `>= 5s` | `sync --watch` | Graceful shutdown budget. |
+| `safety_scan_interval` | `string` | `5m` | duration `>= 10s` | `sync --watch` | Local safety-scan cadence. |
+| `log_level` | `string` | `info` | `debug`, `info`, `warn`, `error` | `all CLI` | File-log verbosity. |
+| `log_file` | `string` | `""` (platform default location) | path string | `all CLI` | Empty means standard managed log path. |
+| `log_format` | `string` | `auto` | `auto`, `json`, `text` | `all CLI` | File-log format. |
+| `log_retention_days` | `int` | `30` | `>= 1` | `all CLI` | Log rotation retention window. |
+
+### Per-Drive Fields
+
+| Key | Type | Default / effective default | Valid range / shape | Command class | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `sync_dir` | `string` | computed by `DefaultSyncDir()` when omitted | absolute or `~/...`; must be existing directory or creatable for `sync` | `sync` | File-operation commands require only the section, not this field. |
+| `paused` | `bool?` | unset / inherited as not paused | boolean when present | `sync`, `pause`, `resume`, `status`, `drive list` | `Drive.IsPaused()` is the single source of truth. |
+| `paused_until` | `string?` | empty | RFC3339 timestamp when present | `sync`, `pause`, `resume`, `status`, `drive list` | Timed pause expiry owned by config resolution. |
+| `display_name` | `string` | derived by `DefaultDisplayName()` when omitted | string | `display`, selector matching | Human-facing label for status and drive selection. |
+| `owner` | `string` | empty | string | `display` | Shared-drive owner label. |
+| `skip_dotfiles` | `bool?` | inherit global `skip_dotfiles` | boolean when present | `sync` | Per-drive filter override. |
+| `skip_dirs` | `[]string` | inherit global `skip_dirs` | directory names | `sync` | Per-drive filter override. |
+| `skip_files` | `[]string` | inherit global `skip_files` | glob patterns | `sync` | Per-drive filter override. |
+| `sync_paths` | `[]string` | inherit global `sync_paths` | absolute drive-root paths starting with `/` | `sync` | Per-drive sync-scope override. |
+| `ignore_marker` | `string` | inherit global `ignore_marker` | non-empty filename when present | `sync` | Per-drive marker override. |
+| `poll_interval` | `string` | inherit global `poll_interval` | duration `>= 30s` | `sync --watch` | Per-drive poll cadence override. |
+
 ## Config File Manipulation
 
 The config file is read with a TOML parser (`BurntSushi/toml`) but written with line-based text edits (`toml_lines.go`). This preserves all comments — both the initial defaults template and user additions. No TOML round-trip serialization.
+
+The first-login template is generated from the same default constants the
+runtime uses, so commented-out defaults stay aligned with the real schema even
+when platform-specific defaults such as `use_local_trash` differ.
 
 All authoritative config/account/drive-metadata writes go through
 `fsroot.Root.AtomicWrite`. The config package does not leave temp-file and

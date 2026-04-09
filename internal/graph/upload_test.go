@@ -42,6 +42,28 @@ func writeUploadTestBody(t *testing.T, w http.ResponseWriter, body string) {
 	require.NoError(t, err)
 }
 
+func newUpload416RecoveryServer(t *testing.T, nextExpectedRange string) *httptest.Server {
+	t.Helper()
+
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+			writeTestResponse(t, w, `{"error":{"code":"invalidRange"}}`)
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			writeTestResponsef(t, w, `{
+				"uploadUrl": "https://uploads.contoso.sharepoint.com/session/recover",
+				"expirationDateTime": "2025-12-31T23:59:59Z",
+				"nextExpectedRanges": ["%s"]
+			}`, nextExpectedRange)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+}
+
 // Validates: R-1.3, R-5.3
 func TestSimpleUpload_Success(t *testing.T) {
 	content := "simple upload file content"
@@ -1790,6 +1812,106 @@ func TestResumeUpload_SessionExpired(t *testing.T) {
 	_, err := client.ResumeUpload(t.Context(), session, bytes.NewReader(nil), 1024, nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrUploadSessionExpired)
+}
+
+// Validates: R-5.6.1
+func TestUploadFromSession_RecoversFrom416UsingSessionStatus(t *testing.T) {
+	totalSize := int64(ChunkedUploadChunkSize + 1024)
+	resumeOffset := int64(ChunkedUploadChunkSize)
+	content := bytes.Repeat([]byte("A"), int(totalSize))
+
+	var initialPutCount atomic.Int32
+	var resumedPutCount atomic.Int32
+
+	resumedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method)
+		assert.Equal(t,
+			fmt.Sprintf("bytes %d-%d/%d", resumeOffset, totalSize-1, totalSize),
+			r.Header.Get("Content-Range"))
+		resumedPutCount.Add(1)
+
+		body, err := io.ReadAll(r.Body)
+		if !assert.NoError(t, err) {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		assert.Len(t, body, int(totalSize-resumeOffset))
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		writeTestResponsef(t, w, `{
+			"id": "recovered-item",
+			"name": "big.bin",
+			"size": %d,
+			"createdDateTime": "2024-01-01T00:00:00Z",
+			"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+			"parentReference": {"id": "parent", "driveId": "d"},
+			"file": {"mimeType": "application/octet-stream"}
+		}`, totalSize)
+	}))
+	defer resumedSrv.Close()
+
+	initialSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			initialPutCount.Add(1)
+			assert.Equal(t,
+				fmt.Sprintf("bytes 0-%d/%d", ChunkedUploadChunkSize-1, totalSize),
+				r.Header.Get("Content-Range"))
+			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+			writeTestResponse(t, w, `{"error":{"code":"invalidRange"}}`)
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			assert.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+				"uploadUrl":          resumedSrv.URL + "/upload",
+				"expirationDateTime": "2025-12-31T23:59:59Z",
+				"nextExpectedRanges": []string{fmt.Sprintf("%d-", resumeOffset)},
+			}))
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	defer initialSrv.Close()
+
+	client := newTestClient(t, "http://unused")
+	session := &UploadSession{UploadURL: UploadURL(initialSrv.URL + "/upload")}
+
+	item, err := client.UploadFromSession(t.Context(), session, bytes.NewReader(content), totalSize, nil)
+	require.NoError(t, err)
+	require.NotNil(t, item)
+	assert.Equal(t, "recovered-item", item.ID)
+	assert.Equal(t, int32(1), initialPutCount.Load())
+	assert.Equal(t, int32(1), resumedPutCount.Load())
+	assert.Equal(t, UploadURL(resumedSrv.URL+"/upload"), session.UploadURL)
+}
+
+// Validates: R-5.6.1
+func TestUploadFromSession_416RecoveryRejectsMalformedRanges(t *testing.T) {
+	content := bytes.Repeat([]byte("B"), int(ChunkedUploadChunkSize+1024))
+	sessionSrv := newUpload416RecoveryServer(t, "not-a-range")
+	defer sessionSrv.Close()
+
+	client := newTestClient(t, "http://unused")
+	session := &UploadSession{UploadURL: UploadURL(sessionSrv.URL + "/upload")}
+
+	_, err := client.UploadFromSession(t.Context(), session, bytes.NewReader(content), int64(len(content)), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nextExpectedRanges")
+}
+
+// Validates: R-5.6.1
+func TestUploadFromSession_416RecoveryRejectsNonForwardProgress(t *testing.T) {
+	content := bytes.Repeat([]byte("C"), int(ChunkedUploadChunkSize+1024))
+	sessionSrv := newUpload416RecoveryServer(t, "0-")
+	defer sessionSrv.Close()
+
+	client := newTestClient(t, "http://unused")
+	session := &UploadSession{UploadURL: UploadURL(sessionSrv.URL + "/upload")}
+
+	_, err := client.UploadFromSession(t.Context(), session, bytes.NewReader(content), int64(len(content)), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "did not advance")
 }
 
 // Validates: R-5.6.2

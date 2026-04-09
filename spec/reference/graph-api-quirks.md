@@ -39,6 +39,11 @@ Runtime policy:
 
 `.heic` files uploaded from iOS via the OneDrive app have metadata (size, hash) that doesn't match the actual download content. The API reports the original file size but serves a post-processed (smaller) version. Example: API reports 3,039,814 bytes, actual download is 682,474 bytes. Filed as [onedrive-api-docs#1723](https://github.com/OneDrive/onedrive-api-docs/issues/1723), unresolved.
 
+Runtime policy: keep the normal download integrity path (retry hash mismatch,
+warn, then accept after exhaustion so the sync loop does not thrash), and make
+the acceptance warning explicit for `.heic` so the degraded behavior is owned
+as a known OneDrive/iOS metadata bug rather than an unexplained bypass.
+
 ### SharePoint File Enrichment
 
 SharePoint injects metadata into uploaded files, changing the hash and size post-upload. This can cause infinite upload/download loops if upload validation compares against the original local file. Filed as [onedrive-api-docs#935](https://github.com/OneDrive/onedrive-api-docs/issues/935).
@@ -46,6 +51,12 @@ SharePoint injects metadata into uploaded files, changing the hash and size post
 ### Upload Creates Double Versions (Business/SharePoint)
 
 On Business/SharePoint, uploading a file and then PATCHing its `fileSystemInfo` (to preserve local timestamps) creates two versions, doubling storage consumption. The fix is to include `fileSystemInfo` in the upload session creation request, setting timestamps atomically with the content. Modified file re-uploads still create an extra version (unfixed API bug, [onedrive-api-docs#877](https://github.com/OneDrive/onedrive-api-docs/issues/877)).
+
+Runtime policy: avoid the avoidable double-version case by putting
+`fileSystemInfo` into upload-session creation, accept the remaining modified
+re-upload extra version as a server bug, and rely on per-side baseline hashes
+to prevent re-upload/download loops instead of attempting version-history
+cleanup workarounds.
 
 ### Simple Upload Cannot Set Metadata
 
@@ -698,6 +709,11 @@ Shared folder items in delta responses reference parent IDs on a different drive
 ### Upload Resume Returns 416
 
 When a fragment is partially received but the client doesn't get confirmation (network timeout), retrying the same fragment returns HTTP 416 ("Range Not Satisfiable"). The client must query the session status endpoint to discover `nextExpectedRanges` before retrying.
+
+Runtime policy: the graph boundary owns this recovery. It queries session
+status immediately, adopts the returned upload URL if Graph rotated it, parses
+the authoritative resume offset from `nextExpectedRanges`, and treats empty,
+malformed, or non-forward replies as hard errors instead of guessing.
 
 ### eTag Changes During Upload Session
 
