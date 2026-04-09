@@ -34,4 +34,5 @@ Product vision: a fast, safe, well-tested CLI OneDrive client for Linux and macO
 - `designed` — a design doc section specifies how it works
 - `implemented` — code exists that implements the design
 - `verified` — tests exist and pass that verify this requirement
+- `cancelled` — requirement ID is retained for traceability, but the capability is no longer planned
 - `target` — quantitative goal to be measured (performance benchmarks)

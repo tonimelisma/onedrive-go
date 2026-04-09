@@ -15,17 +15,17 @@ of truth for what was seen, when it was seen, and how it was handled.
 | LI-20260408-03 | Serialized `e2e_full` package exceeded the old 30-minute harness timeout | fixed | test harness | 2026-04-08 | no |
 | LI-20260408-02 | `CreateFolder` returned success status with an empty body | mitigated | graph quirk | 2026-04-08 | no |
 | LI-20260408-01 | Immediate post-simple-upload mtime PATCH returned `404 itemNotFound` | mitigated | graph quirk | 2026-04-08 | no |
-| LI-20260405-06 | `/me/drives` stayed `403 accessDenied` past the strict auth-preflight window | mitigated | graph quirk | 2026-04-08 | yes |
+| LI-20260405-06 | Strict auth preflight treated transient `/me` or `/me/drives` glitches as durable failure | mitigated | graph quirk | 2026-04-09 | yes |
 | LI-20260405-09 | Recently created parent folder lagged child create routes | mitigated | graph quirk | 2026-04-08 | yes |
 | LI-20260405-08 | Delete-by-ID returned `404 itemNotFound` after successful path lookup | mitigated | graph quirk | 2026-04-07 | yes |
-| LI-20260405-07 | Destination path stayed unreadable after successful mutation | mitigated | graph quirk | 2026-04-08 | yes |
+| LI-20260405-07 | Destination path stayed unreadable after successful mutation | mitigated | graph quirk | 2026-04-09 | yes |
 | LI-20260407-04 | Shared-file preflight assumed only one configured recipient could open the raw link | fixed | test bug | 2026-04-07 | no |
 | LI-20260407-03 | Exact delete-target path lookup lagged parent listing during repeated sibling deletes | fixed | graph quirk | 2026-04-07 | no |
 | LI-20260407-02 | Keep-local conflict resolution used parent-route upload despite known item identity | fixed | product bug | 2026-04-07 | no |
 | LI-20260407-01 | Follow-on `put` lost a freshly visible parent path | fixed | graph quirk | 2026-04-07 | no |
 | LI-20260406-01 | Personal scoped delta not ready after path resolution | fixed | graph quirk | 2026-04-06 | no |
 | LI-20260405-05 | One-shot crash recovery left durable work unreplayed | fixed | product bug | 2026-04-05 | no |
-| LI-20260405-04 | Fast E2E download-only assumed delta visibility too early | closed as test | graph quirk | 2026-04-08 | yes |
+| LI-20260405-04 | Fast E2E download-only assumed delta visibility too early | closed as test | graph quirk | 2026-04-09 | yes |
 | LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | fixed | test bug | 2026-04-08 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
@@ -125,20 +125,24 @@ Direct `UpdateFileSystemInfo()` calls remain strict; only the immediate
 post-simple-upload patch gets this normalization.  
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../design/graph-client.md), [drive-transfers.md](../design/drive-transfers.md), [transfers.md](../requirements/transfers.md)
 
-## LI-20260405-06: `/me/drives` stayed `403 accessDenied` past the strict auth-preflight window
+## LI-20260405-06: Strict auth preflight treated transient `/me` or `/me/drives` glitches as durable failure
 
 First seen: 2026-04-05  
-Last seen: 2026-04-08  
+Last seen: 2026-04-09  
 Area: scheduled/full live verification, auth preflight, drive catalog  
 Suite / test: scheduled `e2e_full` `whoami`, local `verify default` `TestE2E_AuthPreflight_Fast`  
 Classification: graph quirk  
 Status: mitigated  
 Recurring: yes  
-Summary: Microsoft Graph can accept the token for `/me` while still returning
-`403 accessDenied` for `/me/drives`. The production CLI already degrades
-gracefully after its bounded retry budget, but the repo-owned strict auth
-preflight can still fail a live suite when that inconsistency lasts longer than
-the preflight poll window.  
+Summary: Microsoft Graph can expose short-lived auth-preflight inconsistencies
+on either endpoint the repo uses as an early live-account check. Earlier
+failures showed `/me` succeeding while `/me/drives` stayed on transient
+`403 accessDenied`; later verifier evidence broadened the family when `/me`
+itself returned a one-off `504 GatewayTimeout` / `ProfileException` before
+recovering. The production CLI already degrades or retries at the correct
+runtime boundaries, but the repo-owned strict auth preflight still needed its
+own endpoint-specific transient handling so live suites do not fail on a
+single recoverable `/me` glitch.  
 Evidence:
 - Scheduled `e2e_full` run `23999446320` on April 5, 2026 got `GET /me = 200`,
   then 3 consecutive `/me/drives = 403 accessDenied` failures over about 3.1
@@ -158,19 +162,24 @@ Evidence:
   `69c9fbf9-ffa8-49e8-94f0-558cea646da9`,
   `24529051-0dd1-49a9-a908-f0c1b53930e4`,
   `a7fe6793-d731-4c0d-b6f5-a424e9de2d45`
+- Local `go run ./cmd/devtool verify default` on April 9, 2026 failed
+  `TestE2E_AuthPreflight_Fast/personal_testitesti18@outlook.com` when
+  `GET /me` returned HTTP 504 `GatewayTimeout` with message
+  `ProfileException` and request ID `446dc036-f752-4805-9c33-d637eb70975d`.
 - An immediate isolated rerun of the same preflight later passed for that
-  account in about 1.4 seconds, confirming the failure window was transient.
+  account, confirming both the `/me/drives` and `/me` failures were transient.
 Resolution / mitigation: `graph.Client.Drives()` now owns a narrow 5-attempt
 retry for `/me/drives` `403 accessDenied`, and caller behavior above it treats
 retry exhaustion as authenticated degraded discovery rather than auth failure.
-The repo-owned auth preflight remains intentionally strict so CI fails early
-with exact account, request ID, failed-call count, and elapsed-time evidence
-when this consistency gap lasts longer than the test budget. Scheduled/manual
-`devtool verify e2e-full --classify-live-quirks` now reruns that exact strict
+The repo-owned auth preflight now keeps separate bounded endpoint windows:
+`/me` retries only transient gateway/service or transport-read failures,
+while `/me/drives` keeps polling through the already documented projection lag.
+That keeps required lanes strict for durable auth failures while no longer
+failing on a single recoverable `/me` glitch. Scheduled/manual
+`devtool verify e2e-full --classify-live-quirks` still reruns that exact strict
 preflight once and only downgrades it when the rerun passes; the verifier
-summary now records that classified rerun explicitly so nightly/manual CI can
-distinguish a clean pass from a green-after-rerun pass. Required lanes stay
-strict.
+summary records that classified rerun explicitly so nightly/manual CI can
+distinguish a clean pass from a green-after-rerun pass.
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../design/graph-client.md), [degraded-mode.md](../design/degraded-mode.md), [cli.md](../design/cli.md)
 
 ## LI-20260405-09: Recently created parent folder lagged child create routes
@@ -273,7 +282,7 @@ Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [drive-transfers.md](
 First seen: 2026-04-05
 Last seen: 2026-04-09
 Area: `e2e_full`, CLI mutation follow-on path reads
-Suite / test: `verify e2e-full`, `TestE2E_Sync_EditEditConflict_ResolveKeepRemote`; later `TestE2E_Sync_BidirectionalMerge` and `TestE2E_Conflicts_ResolveKeepBoth`
+Suite / test: `verify e2e-full`, `TestE2E_Sync_EditEditConflict_ResolveKeepRemote`; later `TestE2E_Sync_BidirectionalMerge`, `TestE2E_Conflicts_ResolveKeepBoth`, and local `verify default` scoped-sync fixture setup
 Classification: graph quirk
 Status: mitigated
 Recurring: yes  
@@ -374,6 +383,17 @@ Evidence:
   and timed out waiting for a follow-on by-path read that the product does not
   promise. The final request ID on the last failing `stat` was
   `fe8a7c70-ab69-44ed-9be3-c2ff83b05684`.
+- On April 9, 2026 local `go run ./cmd/devtool verify default` reproduced the
+  same family twice in sync-scope fixture setup. First,
+  `TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile` uploaded
+  `/e2e-sync-scope-file-1775720244168811000/docs/other.txt`, but the
+  follow-on exact-path `stat` still timed out under the 2-minute
+  remote-write visibility window. Then
+  `TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload` hit the
+  inverse read-model lag: exact-path lookup for
+  `/e2e-sync-marker-1775721144409607000` had already succeeded after `mkdir`,
+  but repeated `ls /e2e-sync-marker-1775721144409607000` still returned 404
+  while the child-folder setup was trying to prove `blocked` visibility.
 Resolution / mitigation: CLI mutation flows now treat destination visibility as
 a bounded driveops-owned convergence concern. `mkdir`, single-file `put`, and
 `mv` wait for the destination path to become readable before reporting success,
@@ -382,6 +402,9 @@ bounded visibility gate. Repo-owned E2E sync-upload visibility checks now use
 the shared `waitForRemoteWriteVisible()` helper with
 `remoteWritePropagationTimeout` instead of the older generic 30-second poll
 when they are asserting follow-on remote readability after a successful write.
+E2E fixture setup now accepts either exact-path `stat` or parent `ls`
+visibility, so setup helpers stop depending on one specific Graph read model
+being the first one to converge after a mutation.
 `rm` now keeps the same bounded parent-read check for
 non-root deletes, but once delete intent has already proved the target path is
 gone it downgrades a pure `PathNotVisibleError` on that follow-on parent read
@@ -534,23 +557,26 @@ Evidence:
 Resolution / mitigation: One-shot startup now consumes due retry rows immediately, preserves delete replay as `ActionLocalDelete`, and carries an explicit forced-download hint through planning so missing local files are redownloaded even without a fresh delta event.  
 Promoted docs: [test-assurance-audit.md](/Users/tonimelisma/Development/onedrive-go-live-incident-ledger/spec/reviews/test-assurance-audit.md)
 
-## LI-20260405-04: Fast E2E download-only assumed delta visibility too early
+## LI-20260405-04: Fast E2E download-only tests assumed delta visibility too early
 
 First seen: 2026-04-05  
-Last seen: 2026-04-07  
+Last seen: 2026-04-09  
 Area: fast-e2e, download-only sync  
-Suite / test: `e2e`, `TestE2E_Sync_DownloadOnly`  
+Suite / test: `e2e`, `TestE2E_Sync_DownloadOnly`; later `TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile`  
 Classification: graph quirk  
 Status: closed as test  
 Recurring: yes  
-Summary: The test treated successful direct REST visibility of a newly uploaded remote file as proof that the next root-delta sync pass would also see it immediately. In live CI that assumption was false: direct path/stat visibility arrived first, while root delta still lagged.  
+Summary: The tests treated direct remote visibility or newly-unblocked remote state as proof that the next incremental download-only sync pass would converge immediately. In live CI that assumption was false: first-pass sync could still lag delta visibility or hit a documented transient download-metadata `404`, even though a later pass converged correctly.  
 Evidence:
 - [sync_e2e_test.go](/Users/tonimelisma/Development/onedrive-go-live-incident-ledger/e2e/sync_e2e_test.go#L340) now explicitly waits for the local synced file after delta catches up.
+- [sync_scope_e2e_test.go](/Users/tonimelisma/Development/onedrive-go/e2e/sync_scope_e2e_test.go#L35) now uses the same eventual-convergence helper for exact-file `sync_paths` download coverage.
 - [graph-api-quirks.md](graph-api-quirks.md) already documents delta endpoint consistency lag as a live behavior.
 - Merged fix chain is included in `74da628` after the earlier test hardening commit on the same PR line.
 - April 7, 2026 local `go run ./cmd/devtool verify default` reproduced the same symptom once in the fast E2E lane, while an immediate targeted rerun of `go test -tags=e2e ./e2e -run '^TestE2E_Sync_DownloadOnly$' -count=1` passed, consistent with intermittent delta visibility lag rather than a deterministic product regression.
 - April 8, 2026 local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` hit the same family in the classified fast-E2E pre-pass, and the targeted rerun passed immediately, confirming the scheduled/manual rerun path is now correctly scoped to this exact recurrence.
-Resolution / mitigation: The fast E2E test now waits for the real product outcome, the downloaded local file with the expected content, instead of assuming first-pass delta visibility after a direct REST read succeeds. Delta-sensitive live sync tests now reuse the same eventual-convergence helper pattern, and scheduled/manual `devtool verify e2e-full --classify-live-quirks` may rerun this exact test once when the known delta-lag family recurs. Those same live waits now emit `timing-summary.json`, so recurring delta lag shows up as measured convergence windows rather than only as pass/fail noise.
+- April 9, 2026 local `go run ./cmd/devtool verify default` reproduced the same family in `TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile`: direct `stat` calls showed `/e2e-sync-scope-file-.../docs/report.txt` and `/other.txt` as visible, but the immediate `sync --download-only --force` pass still saw `No changes detected` because the incremental scoped observation had not caught up yet.
+- April 9, 2026 the same local `go run ./cmd/devtool verify default` later hit `TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload`: after removing `.odignore`, the immediate `sync --download-only --force` pass planned the download but the worker hit the documented transient item-by-ID download-metadata `404` family for `secret.txt`. A later sync pass was sufficient to converge, so the test's first-pass assumption was too strict.
+Resolution / mitigation: The fast E2E tests now wait for the real product outcome, the expected local sync result, instead of assuming the first pass after direct REST visibility or scope unblocking must succeed. Delta-sensitive live sync tests now reuse the same eventual-convergence helper pattern, and scheduled/manual `devtool verify e2e-full --classify-live-quirks` may rerun this exact test family once when the known delta-lag family recurs. Those same live waits now emit `timing-summary.json`, so recurring convergence gaps show up as measured windows rather than only as pass/fail noise.
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md)
 
 ## LI-20260405-03: Websocket watch tests timed websocket assertions before the steady-state subtree was ready

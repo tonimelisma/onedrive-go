@@ -23,13 +23,6 @@ import (
 
 const authPreflightTimeout = 30 * time.Second
 
-type authPreflightAttempt struct {
-	StatusCode int
-	Code       string
-	RequestID  string
-	Err        string
-}
-
 func TestE2E_AuthPreflight_Fast(t *testing.T) {
 	registerLogDump(t)
 
@@ -49,30 +42,36 @@ func assertLiveAuthPreflight(t *testing.T, driveID string) {
 	require.NoError(t, err, "load token source for %s", driveID)
 
 	httpClient := &http.Client{}
-	ctx, cancel := context.WithTimeout(t.Context(), authPreflightTimeout)
-	defer cancel()
-
-	meAttempt := runAuthPreflightAttempt(ctx, httpClient, ts, "/me")
-	require.Truef(t, meAttempt.StatusCode == http.StatusOK && meAttempt.Err == "",
-		"/me preflight failed for %s: %s", driveID, formatAuthPreflightFailure(driveID, "/me", time.Duration(0), []authPreflightAttempt{meAttempt}))
 
 	started := time.Now()
-	attempts, err := waitForDrivesPreflight(ctx, httpClient, ts)
-	require.NoErrorf(t, err, "%s", formatAuthPreflightFailure(driveID, "/me/drives", time.Since(started), attempts))
+	meAttempts, err := waitForAuthPreflightEndpoint(t.Context(), httpClient, ts, "/me")
+	require.NoErrorf(t, err, "%s", formatAuthPreflightFailure(driveID, "/me", time.Since(started), meAttempts))
+
+	started = time.Now()
+	drivesAttempts, err := waitForAuthPreflightEndpoint(t.Context(), httpClient, ts, "/me/drives")
+	require.NoErrorf(t, err, "%s", formatAuthPreflightFailure(driveID, "/me/drives", time.Since(started), drivesAttempts))
 }
 
-func waitForDrivesPreflight(
-	ctx context.Context,
+func waitForAuthPreflightEndpoint(
+	parent context.Context,
 	httpClient *http.Client,
 	ts graph.TokenSource,
+	path string,
 ) ([]authPreflightAttempt, error) {
+	ctx, cancel := context.WithTimeout(parent, authPreflightTimeout)
+	defer cancel()
+
 	var attempts []authPreflightAttempt
 
 	for attempt := 0; ; attempt++ {
-		result := runAuthPreflightAttempt(ctx, httpClient, ts, "/me/drives")
+		result := runAuthPreflightAttempt(ctx, httpClient, ts, path)
 		attempts = append(attempts, result)
-		if result.StatusCode == http.StatusOK && result.Err == "" {
+		if result.succeeded() {
 			return attempts, nil
+		}
+
+		if !shouldRetryAuthPreflight(path, result) {
+			return attempts, fmt.Errorf("auth preflight endpoint %s returned a non-retryable failure", path)
 		}
 
 		if err := retry.TimeSleep(ctx, pollBackoff(attempt)); err != nil {

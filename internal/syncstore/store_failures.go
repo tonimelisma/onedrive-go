@@ -22,6 +22,7 @@
 //   - EarliestSyncFailureRetryAt:       minimum future retry time
 //   - SyncFailureCount:                 count of transient failures
 //   - ClearSyncFailure:                 remove by path + drive
+//   - TakeSyncFailure:                  atomically load + remove by path + drive
 //   - ClearSyncFailureByPath:           remove by path (any drive)
 //   - ClearActionableSyncFailures:      remove all actionable failures
 //   - ClearSyncFailuresByPrefix:        remove by path prefix + issue type
@@ -41,6 +42,7 @@ package syncstore
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -459,6 +461,52 @@ func (m *SyncStore) ClearSyncFailure(ctx context.Context, path string, driveID d
 	return nil
 }
 
+// TakeSyncFailure atomically loads and removes a specific sync_failures row by
+// path and drive. Returns found=false when no matching row exists.
+func (m *SyncStore) TakeSyncFailure(
+	ctx context.Context,
+	path string,
+	driveID driveid.ID,
+) (*synctypes.SyncFailureRow, bool, error) {
+	tx, err := m.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, false, fmt.Errorf("sync: beginning take sync failure for %s: %w", path, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	row := &synctypes.SyncFailureRow{}
+	if scanErr := scanSyncFailureRow(tx.QueryRowContext(ctx,
+		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
+		WHERE path = ? AND drive_id = ?`,
+		path, driveID.String(),
+	), row); scanErr != nil {
+		if errors.Is(scanErr, sql.ErrNoRows) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("sync: taking sync failure for %s: %w", path, scanErr)
+	}
+
+	result, err := tx.ExecContext(ctx,
+		`DELETE FROM sync_failures WHERE path = ? AND drive_id = ?`,
+		path, driveID.String())
+	if err != nil {
+		return nil, false, fmt.Errorf("sync: deleting taken sync failure for %s: %w", path, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return nil, false, fmt.Errorf("sync: checking taken sync failure delete count for %s: %w", path, err)
+	}
+	if affected != 1 {
+		return nil, false, fmt.Errorf("sync: deleting taken sync failure for %s: expected 1 row, got %d", path, affected)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, false, fmt.Errorf("sync: committing take sync failure for %s: %w", path, err)
+	}
+
+	return row, true, nil
+}
+
 // ClearSyncFailureByPath removes all sync_failures rows for a path regardless
 // of drive. Used by CLI commands where the drive context isn't known.
 func (m *SyncStore) ClearSyncFailureByPath(ctx context.Context, path string) error {
@@ -790,26 +838,14 @@ func (m *SyncStore) PickTrialCandidate(
 	)
 
 	var r synctypes.SyncFailureRow
-	var wireScopeKey string
-
-	err := row.Scan(
-		&r.Path, &r.DriveID, &r.Direction, &r.ActionType, &r.Role, &r.Category,
-		&r.IssueType, &r.ItemID,
-		&r.FailureCount, &r.NextRetryAt,
-		&r.LastError, &r.HTTPStatus,
-		&r.FirstSeenAt, &r.LastSeenAt,
-		&r.FileSize, &r.LocalHash,
-		&wireScopeKey,
-	)
+	err := scanSyncFailureRow(row, &r)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, false, nil
 		}
 
 		return nil, false, fmt.Errorf("sync: picking trial candidate for scope %s: %w", wire, err)
 	}
-
-	r.ScopeKey = synctypes.ParseScopeKey(wireScopeKey)
 
 	return &r, true, nil
 }
@@ -843,26 +879,41 @@ func (m *SyncStore) SetScopeRetryAtNow(ctx context.Context, scopeKey synctypes.S
 	return affected, nil
 }
 
+type syncFailureScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanSyncFailureRow(scanner syncFailureScanner, row *synctypes.SyncFailureRow) error {
+	if row == nil {
+		return fmt.Errorf("sync: scanning sync failure row: nil destination")
+	}
+
+	var wireScopeKey string
+	if err := scanner.Scan(
+		&row.Path, &row.DriveID, &row.Direction, &row.ActionType, &row.Role, &row.Category,
+		&row.IssueType, &row.ItemID,
+		&row.FailureCount, &row.NextRetryAt,
+		&row.LastError, &row.HTTPStatus,
+		&row.FirstSeenAt, &row.LastSeenAt,
+		&row.FileSize, &row.LocalHash,
+		&wireScopeKey,
+	); err != nil {
+		return fmt.Errorf("sync: scanning sync failure row: %w", err)
+	}
+
+	row.ScopeKey = synctypes.ParseScopeKey(wireScopeKey)
+	return nil
+}
+
 // scanSyncFailureRows scans multiple sync_failures rows from a query result.
 func scanSyncFailureRows(rows *sql.Rows) ([]synctypes.SyncFailureRow, error) {
 	var result []synctypes.SyncFailureRow
 
 	for rows.Next() {
 		var r synctypes.SyncFailureRow
-		var wireScopeKey string
-		if scanErr := rows.Scan(
-			&r.Path, &r.DriveID, &r.Direction, &r.ActionType, &r.Role, &r.Category,
-			&r.IssueType, &r.ItemID,
-			&r.FailureCount, &r.NextRetryAt,
-			&r.LastError, &r.HTTPStatus,
-			&r.FirstSeenAt, &r.LastSeenAt,
-			&r.FileSize, &r.LocalHash,
-			&wireScopeKey,
-		); scanErr != nil {
+		if scanErr := scanSyncFailureRow(rows, &r); scanErr != nil {
 			return nil, fmt.Errorf("sync: scanning sync failure row: %w", scanErr)
 		}
-
-		r.ScopeKey = synctypes.ParseScopeKey(wireScopeKey)
 		result = append(result, r)
 	}
 
