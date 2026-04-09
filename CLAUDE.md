@@ -192,7 +192,7 @@ Project-specific consequences:
 
 ### E2E & Integration Tests
 
-Run against live OneDrive accounts. Test account names are never committed — use `.env` (gitignored) or environment variables. Both suites require `ONEDRIVE_ALLOWED_TEST_ACCOUNTS` and `ONEDRIVE_TEST_DRIVE` to be set (crashes without them). Copy `.env.example` to `.env` and fill in your test accounts. E2E tests are tiered: `e2e` tag (fast, every CI push) vs `e2e_full` tag (slow, nightly/manual, 60-min package timeout). The full suite builds on top of the fast suite, so the canonical invocation is `go run ./cmd/devtool verify e2e-full` rather than `go test -tags=e2e_full` alone.
+Run against live OneDrive accounts. Test account names are never committed — use `.env` (gitignored) or environment variables. Both suites require `ONEDRIVE_ALLOWED_TEST_ACCOUNTS` and `ONEDRIVE_TEST_DRIVE` to be set (crashes without them). Copy `.env.example` to `.env` and fill in your test accounts. E2E tests are tiered: `e2e` tag (fast, every CI push) vs `e2e_full` tag (slow, nightly/manual, 60-min bucket timeout). The full suite builds on top of the fast suite, so the canonical invocation is `go run ./cmd/devtool verify e2e-full` rather than `go test -tags=e2e_full` alone. In that profile, the verifier runs the full-suite preflight once, then executes three explicit buckets (`full-parallel-misc`, `full-serial-sync`, `full-serial-watch-shared`) so only the already-vetted misc tests regain `t.Parallel()` concurrency. Scheduled/manual full runs can also pass `--summary-json <path>`; the verifier then writes a machine-readable per-phase summary while the shared E2E harness writes `timing-summary.json` under the E2E log dir.
 
 **Test credential pipeline** (one-time setup, then CI is self-sustaining):
 
