@@ -110,7 +110,12 @@ account-warning projection. Saved-login/auth-required accounts are reported
 from the offline account catalog before any live search is attempted. The
 owning read-model load is also where best-effort `/me` reconciliation runs for
 this slice, so shared discovery itself only consumes the refreshed catalog and
-does not issue a second account-identity probe. Search failure for an
+does not issue a second account-identity probe. Caller-owned account filtering
+stays outside the shared-discovery core: `shared` and name-based `drive add`
+pass a filtered catalog when `--account` is part of the command contract,
+while `drive list` passes the full catalog for a consistent inventory. Within
+one account, shared discovery tries the representative token first and then any
+remaining token IDs before it gives up on the account. Search failure for an
 otherwise authenticated account becomes caller-level degraded discovery
 (`shared_discovery_unavailable`) rather than a fallback to the deprecated API.
 If live search returns `unauthorized`, the account moves to

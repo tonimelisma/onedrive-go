@@ -105,7 +105,11 @@ When the Graph API delta endpoint reports a parent folder as deleted, it does NO
 
 **Solution**: Step 2.5 in `Plan()` — `expandFolderDeleteCascades()` runs after per-path classification but before dependency building. For each folder `ActionLocalDelete` or `ActionCleanup`, it walks `baseline.DescendantsOf(path)` to find all baseline entries under the folder and synthesizes additional delete/cleanup actions.
 
-**Deduplication**: Maintains an `existingPaths` set to prevent double-generation when delta reports both parent and child.
+**Deduplication**: Maintains a per-path action-location map so cascade can
+replace an already-planned descendant in place whether that action lives in the
+original classified slice or in an earlier cascaded append. Nested folder
+deletes therefore do not double-generate descendants and do not panic when a
+later cascade revisits a path that an earlier cascade appended.
 
 **Safety preservation**:
 - Hash-before-delete (S4): cascaded file deletes go through `DeleteLocalFile` which verifies hash against baseline before deletion — if locally modified, creates conflict copy.

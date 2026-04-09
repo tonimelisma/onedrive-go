@@ -49,6 +49,13 @@ as the permission-oracle fallback while extending robustness for ordinary
 own-drive creates whose parent path is readable slightly before the child
 create routes converge.
 
+If the create-by-parent simple upload falls back to the upload-session route
+and that session succeeds, the session result is already final. The graph
+boundary must not run the simple-upload-only mtime finalization PATCH on that
+session-created item, because upload-session writes already own timestamp
+authority for that path and an extra simple-finalization PATCH only adds a
+second false-negative point.
+
 When simple upload succeeds and mtime preservation is required, the immediate
 follow-on `UpdateFileSystemInfo` PATCH can also briefly return `404
 itemNotFound` for the returned item ID. That retry stays in the graph boundary
@@ -90,9 +97,9 @@ delete-target path recovery in the same owner:
   is already gone
 - `DeleteResolvedPath()` / `PermanentDeleteResolvedPath()` so path-oriented
   deletes keep authority on the remote path instead of trusting one stale
-  item ID forever; their retry loop re-resolves through the same
-  delete-target helper instead of assuming a second exact-path `404` means the
-  delete already happened
+  item ID forever; they use parent-collection fallback only for the initial
+  delete-intent resolution, then treat a post-delete exact-path `404` as
+  success before consulting any stale parent listing
 
 `WaitPathVisible()` returns a typed `PathNotVisibleError` when the bounded
 schedule exhausts on exact `itemNotFound` visibility lag alone. `mkdir`,
