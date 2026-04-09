@@ -18,6 +18,10 @@ func TestShouldRetryAuthPreflight_MeRetriesTransientGatewayFailures(t *testing.T
 	assert.True(t, shouldRetryAuthPreflight("/me", authPreflightAttempt{
 		Err: "dispatch request: Get \"https://graph.microsoft.com/v1.0/me\": context deadline exceeded",
 	}))
+	assert.True(t, shouldRetryAuthPreflight("/me", authPreflightAttempt{
+		StatusCode: http.StatusGatewayTimeout,
+		Err:        "read response body: unexpected EOF",
+	}))
 }
 
 func TestShouldRetryAuthPreflight_MeRejectsDurableFailures(t *testing.T) {

@@ -36,6 +36,11 @@ func shouldRetryAuthPreflight(path string, attempt authPreflightAttempt) bool {
 }
 
 func isTransientAuthPreflightFailure(attempt authPreflightAttempt) bool {
+	if strings.HasPrefix(attempt.Err, "dispatch request:") ||
+		strings.HasPrefix(attempt.Err, "read response body:") {
+		return true
+	}
+
 	switch attempt.StatusCode {
 	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
 		return true
@@ -45,6 +50,5 @@ func isTransientAuthPreflightFailure(attempt authPreflightAttempt) bool {
 		return false
 	}
 
-	return strings.HasPrefix(attempt.Err, "dispatch request:") ||
-		strings.HasPrefix(attempt.Err, "read response body:")
+	return false
 }
