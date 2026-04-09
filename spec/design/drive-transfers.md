@@ -83,7 +83,8 @@ follow-on path lookup stops returning `itemNotFound`, and it can briefly
 return `DELETE .../items/{id} = 404 itemNotFound` even though the same
 remote path just resolved successfully. During repeated sibling deletes, the
 exact path route itself can also lie with `GET ...root:/path: = 404
-itemNotFound` even though the parent collection still lists the leaf. The
+itemNotFound` even though the parent collection still lists the leaf, while
+that same parent collection can lag positively after a successful delete. The
 package boundary therefore exposes the `PathConvergence` capability plus the
 `PathConvergenceFactory`, both satisfied by `driveops.Session`, and keeps
 delete-target path recovery in the same owner:
@@ -97,9 +98,12 @@ delete-target path recovery in the same owner:
   is already gone
 - `DeleteResolvedPath()` / `PermanentDeleteResolvedPath()` so path-oriented
   deletes keep authority on the remote path instead of trusting one stale
-  item ID forever; they use parent-collection fallback only for the initial
-  delete-intent resolution, then treat a post-delete exact-path `404` as
-  success before consulting any stale parent listing
+  item ID forever; after any delete-by-ID `itemNotFound`, they re-resolve the
+  path through the same exact-path plus parent-collection fallback used by
+  `ResolveDeleteTarget()`, treat the target as gone only when both routes miss,
+  and downgrade a final parent-list-only stale hit that still deletes as
+  `itemNotFound` to success only after the bounded convergence schedule
+  exhausts
 
 `WaitPathVisible()` returns a typed `PathNotVisibleError` when the bounded
 schedule exhausts on exact `itemNotFound` visibility lag alone. `mkdir`,
