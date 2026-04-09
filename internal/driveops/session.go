@@ -460,24 +460,22 @@ func (s *Session) deleteResolvedPath(
 		return err
 	}
 
+	lastResolution := deleteConvergenceResolutionUnknown
+
 	for _, delay := range s.visibilitySchedule() {
 		if sleepErr := s.sleep(ctx, delay); sleepErr != nil {
 			return fmt.Errorf("wait for delete path %q convergence: %w", remotePath, sleepErr)
 		}
 
-		// After a delete already reported itemNotFound, the exact path disappearing
-		// is sufficient evidence of success even if the parent listing is still
-		// stale. Parent-list fallback remains appropriate for initial delete
-		// resolution, but not for post-delete convergence checks.
-		item, resolveErr := s.ResolveItem(ctx, remotePath)
+		resolution, item, resolveErr := s.resolveDeleteConvergenceTarget(ctx, remotePath)
 		switch {
-		case resolveErr == nil:
-			currentID = item.ID
-		case errors.Is(resolveErr, graph.ErrNotFound):
-			return nil
-		default:
+		case resolveErr != nil:
 			return fmt.Errorf("confirm delete path %q state: %w", remotePath, resolveErr)
+		case resolution == deleteConvergenceMissing:
+			return nil
 		}
+		currentID = item.ID
+		lastResolution = resolution
 
 		err = deleteByID(ctx, currentID)
 		if err == nil {
@@ -486,6 +484,12 @@ func (s *Session) deleteResolvedPath(
 		if !errors.Is(err, graph.ErrNotFound) {
 			return err
 		}
+	}
+
+	// A final exact-path miss plus parent-list-only hit that also deletes as
+	// itemNotFound is stale positive evidence, not authoritative existence.
+	if errors.Is(err, graph.ErrNotFound) && lastResolution == deleteConvergenceParentListing {
+		return nil
 	}
 
 	return err
@@ -637,6 +641,38 @@ func matchChildByName(children []graph.Item, name string) (graph.Item, bool) {
 	}
 
 	return graph.Item{}, false
+}
+
+type deleteConvergenceResolution int
+
+const (
+	deleteConvergenceResolutionUnknown deleteConvergenceResolution = iota
+	deleteConvergenceExactPath
+	deleteConvergenceParentListing
+	deleteConvergenceMissing
+)
+
+func (s *Session) resolveDeleteConvergenceTarget(
+	ctx context.Context,
+	remotePath string,
+) (deleteConvergenceResolution, *graph.Item, error) {
+	item, err := s.ResolveItem(ctx, remotePath)
+	if err == nil {
+		return deleteConvergenceExactPath, item, nil
+	}
+	if !errors.Is(err, graph.ErrNotFound) {
+		return deleteConvergenceResolutionUnknown, nil, err
+	}
+
+	item, err = s.resolveItemFromParentListing(ctx, remotePath)
+	if err == nil {
+		return deleteConvergenceParentListing, item, nil
+	}
+	if errors.Is(err, graph.ErrNotFound) {
+		return deleteConvergenceMissing, nil, nil
+	}
+
+	return deleteConvergenceResolutionUnknown, nil, err
 }
 
 func (s *Session) resolveItemFromParentListing(ctx context.Context, remotePath string) (*graph.Item, error) {

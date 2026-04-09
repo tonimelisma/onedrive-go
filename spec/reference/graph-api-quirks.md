@@ -369,8 +369,12 @@ Runtime policy:
   `404 itemNotFound`, the session:
   - first retries target resolution through the parent collection when the
     exact path route says `itemNotFound`
-  - accepts a now-missing path as success
+  - accepts a now-missing path as success only when both the exact-path route
+    and parent collection miss
   - retries delete against the current resolved item when the path still exists
+  - treats a final parent-list-only hit that still deletes as `itemNotFound`
+    as stale positive evidence and returns success only after the bounded
+    convergence schedule exhausts
   - uses the same bounded deterministic convergence schedule as
     post-success path visibility
 - `rm` additionally waits for the non-root parent path to become readable again
