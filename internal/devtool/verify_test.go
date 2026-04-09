@@ -532,7 +532,17 @@ func TestRunVerifyStressRunsExpectedSteps(t *testing.T) {
 
 	require.Len(t, runner.runCommands, 1)
 	assert.Equal(t, "go", runner.runCommands[0].name)
-	assert.Equal(t, []string{"test", "-race", "-count=50", "./internal/sync", "./internal/multisync", "./internal/cli"}, runner.runCommands[0].args)
+	assert.Equal(t, []string{
+		"test",
+		"-race",
+		"-count=50",
+		"./internal/sync",
+		"./internal/multisync",
+		"./internal/syncdispatch",
+		"./internal/syncexec",
+		"./internal/syncobserve",
+		"./internal/cli",
+	}, runner.runCommands[0].args)
 }
 
 // Validates: R-6.2.1

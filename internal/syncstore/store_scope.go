@@ -25,7 +25,7 @@ type remoteScopeRow struct {
 // UpsertSyncMetadataEntries writes arbitrary sync_metadata keys in one
 // transaction. Scope persistence no longer uses this helper; it remains for
 // generic sync report/status metadata.
-func (m *SyncStore) UpsertSyncMetadataEntries(ctx context.Context, entries map[string]string) error {
+func (m *SyncStore) UpsertSyncMetadataEntries(ctx context.Context, entries map[string]string) (err error) {
 	if len(entries) == 0 {
 		return nil
 	}
@@ -34,7 +34,9 @@ func (m *SyncStore) UpsertSyncMetadataEntries(ctx context.Context, entries map[s
 	if err != nil {
 		return fmt.Errorf("sync metadata begin tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		err = finalizeTxRollback(err, tx, "sync metadata rollback")
+	}()
 
 	const upsertSQL = `INSERT INTO sync_metadata (key, value) VALUES (?, ?)
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value`
@@ -46,12 +48,12 @@ func (m *SyncStore) UpsertSyncMetadataEntries(ctx context.Context, entries map[s
 	sort.Strings(keys)
 
 	for _, key := range keys {
-		if _, err := tx.ExecContext(ctx, upsertSQL, key, entries[key]); err != nil {
-			return fmt.Errorf("sync metadata upsert %s: %w", key, err)
+		if _, execErr := tx.ExecContext(ctx, upsertSQL, key, entries[key]); execErr != nil {
+			return fmt.Errorf("sync metadata upsert %s: %w", key, execErr)
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("commit sync metadata upsert: %w", err)
 	}
 
@@ -102,7 +104,10 @@ func (m *SyncStore) ReadScopeState(ctx context.Context) (synctypes.ScopeStateRec
 // already-known remote_state rows against the effective snapshot in the same
 // transaction. This is the sole durable authority for filtered-row activation
 // and deactivation.
-func (m *SyncStore) ApplyScopeState(ctx context.Context, req synctypes.ScopeStateApplyRequest) error {
+func (m *SyncStore) ApplyScopeState(
+	ctx context.Context,
+	req synctypes.ScopeStateApplyRequest,
+) (err error) {
 	snapshot, err := syncscope.UnmarshalSnapshot(req.State.EffectiveSnapshotJSON)
 	if err != nil {
 		return fmt.Errorf("decode scope snapshot: %w", err)
@@ -112,7 +117,9 @@ func (m *SyncStore) ApplyScopeState(ctx context.Context, req synctypes.ScopeStat
 	if err != nil {
 		return fmt.Errorf("scope state begin tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		err = finalizeTxRollback(err, tx, "scope state rollback")
+	}()
 
 	if upsertErr := upsertScopeStateRow(ctx, tx, req.State); upsertErr != nil {
 		return upsertErr
@@ -122,11 +129,11 @@ func (m *SyncStore) ApplyScopeState(ctx context.Context, req synctypes.ScopeStat
 	if err != nil {
 		return err
 	}
-	if _, err := applyRemoteScopeRows(ctx, tx, snapshot, req.State.Generation, allRows); err != nil {
-		return err
+	if _, applyErr := applyRemoteScopeRows(ctx, tx, snapshot, req.State.Generation, allRows); applyErr != nil {
+		return applyErr
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("scope state commit tx: %w", err)
 	}
 
@@ -393,19 +400,21 @@ func repairScopeStateConsistencyTx(ctx context.Context, tx *sql.Tx) (int, error)
 	return applyRemoteScopeRows(ctx, tx, snapshot, state.Generation, allRows)
 }
 
-func (m *SyncStore) repairScopeStateConsistencyOnOpen(ctx context.Context) (int, error) {
+func (m *SyncStore) repairScopeStateConsistencyOnOpen(ctx context.Context) (repairsApplied int, err error) {
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("sync: begin scope-state repair tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		err = finalizeTxRollback(err, tx, "sync: rollback scope-state repair tx")
+	}()
 
-	repairsApplied, err := repairScopeStateConsistencyTx(ctx, tx)
+	repairsApplied, err = repairScopeStateConsistencyTx(ctx, tx)
 	if err != nil {
 		return 0, err
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err = tx.Commit(); err != nil {
 		return 0, fmt.Errorf("sync: commit scope-state repair: %w", err)
 	}
 

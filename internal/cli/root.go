@@ -134,6 +134,49 @@ type CLIContext struct {
 	reconcileNotices              map[string]struct{}
 }
 
+func (cc *CLIContext) replaceCommandLogger(logger *slog.Logger, closer io.Closer) error {
+	if cc == nil {
+		if closer != nil {
+			if err := closer.Close(); err != nil {
+				return fmt.Errorf("close replacement command logger: %w", err)
+			}
+		}
+
+		return nil
+	}
+
+	if err := cc.closeCommandLogger(); err != nil {
+		if closer != nil {
+			if closeErr := closer.Close(); closeErr != nil {
+				return errors.Join(err, fmt.Errorf("close replacement command logger: %w", closeErr))
+			}
+		}
+
+		return err
+	}
+
+	if logger != nil {
+		cc.Logger = logger
+	}
+	cc.logCloser = closer
+
+	return nil
+}
+
+func (cc *CLIContext) closeCommandLogger() error {
+	if cc == nil || cc.logCloser == nil {
+		return nil
+	}
+
+	closer := cc.logCloser
+	cc.logCloser = nil
+	if err := closer.Close(); err != nil {
+		return fmt.Errorf("close command logger: %w", err)
+	}
+
+	return nil
+}
+
 func (cc *CLIContext) httpProvider() *graphhttp.Provider {
 	if cc == nil {
 		return graphhttp.NewProvider(slog.Default())
@@ -324,8 +367,9 @@ func initializeResolvedCLIContext(cmd *cobra.Command, cc *CLIContext) error {
 	cc.Cfg = resolved
 
 	dualLogger, closer := buildLoggerDualWithStatusWriter(resolved, cc.Flags, cc.StatusWriter)
-	cc.Logger = dualLogger
-	cc.logCloser = closer
+	if err := cc.replaceCommandLogger(dualLogger, closer); err != nil {
+		return err
+	}
 	cc.HTTPProvider = graphhttp.NewProvider(cc.Logger)
 
 	holder := config.NewHolder(rawCfg, cc.CfgPath)
@@ -369,9 +413,9 @@ func newRootCmdWithWriters(outputWriter, statusWriter io.Writer) *cobra.Command 
 		},
 		PersistentPostRunE: func(cmd *cobra.Command, _ []string) error {
 			cc := cliContextFrom(cmd.Context())
-			if cc != nil && cc.logCloser != nil {
-				if err := cc.logCloser.Close(); err != nil {
-					return fmt.Errorf("close command logger: %w", err)
+			if cc != nil {
+				if err := cc.closeCommandLogger(); err != nil {
+					return err
 				}
 			}
 
