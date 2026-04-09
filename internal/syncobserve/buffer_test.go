@@ -100,9 +100,8 @@ func TestBuffer_AddSamePathRemote(t *testing.T) {
 	require.Len(t, result, 1)
 
 	pc := result[0]
-	assert.Len(t, pc.RemoteEvents, 2)
-	assert.Equal(t, synctypes.ChangeCreate, pc.RemoteEvents[0].Type)
-	assert.Equal(t, synctypes.ChangeModify, pc.RemoteEvents[1].Type)
+	require.Len(t, pc.RemoteEvents, 1)
+	assert.Equal(t, synctypes.ChangeModify, pc.RemoteEvents[0].Type)
 }
 
 func TestBuffer_AddSamePathLocal(t *testing.T) {
@@ -122,7 +121,8 @@ func TestBuffer_AddSamePathLocal(t *testing.T) {
 
 	result := buf.FlushImmediate()
 	require.Len(t, result, 1)
-	assert.Len(t, result[0].LocalEvents, 2)
+	require.Len(t, result[0].LocalEvents, 1)
+	assert.Equal(t, synctypes.ChangeModify, result[0].LocalEvents[0].Type)
 }
 
 func TestBuffer_AddMixedSources(t *testing.T) {
@@ -239,7 +239,8 @@ func TestBuffer_AddAll(t *testing.T) {
 
 	a := findPathChanges(result, "buffer-batch-a.txt")
 	require.NotNil(t, a, "buffer-batch-a.txt not found")
-	assert.Len(t, a.RemoteEvents, 2)
+	require.Len(t, a.RemoteEvents, 1)
+	assert.Equal(t, synctypes.ChangeModify, a.RemoteEvents[0].Type)
 
 	b := findPathChanges(result, "buffer-batch-b.txt")
 	require.NotNil(t, b, "buffer-batch-b.txt not found")
@@ -454,9 +455,11 @@ func TestBuffer_ThreadSafety(t *testing.T) {
 	require.Len(t, result, 1)
 
 	totalEvents := len(result[0].RemoteEvents) + len(result[0].LocalEvents)
-	wantTotal := goroutines * eventsPerGoroutine
-
-	assert.Equal(t, wantTotal, totalEvents)
+	assert.Equal(t, 2, totalEvents)
+	require.Len(t, result[0].RemoteEvents, 1)
+	require.Len(t, result[0].LocalEvents, 1)
+	assert.Equal(t, synctypes.ChangeModify, result[0].RemoteEvents[0].Type)
+	assert.Equal(t, synctypes.ChangeModify, result[0].LocalEvents[0].Type)
 }
 
 // ---------------------------------------------------------------------------
@@ -744,7 +747,8 @@ func TestBuffer_WatchAndSafetyScanConflictingTypes(t *testing.T) {
 	// Buffer should group both under a single PathChanges entry.
 	result := buf.FlushImmediate()
 	require.Len(t, result, 1, "same path")
-	require.Len(t, result[0].LocalEvents, 2)
+	require.Len(t, result[0].LocalEvents, 1)
+	assert.Equal(t, synctypes.ChangeModify, result[0].LocalEvents[0].Type)
 
 	// Planner should produce a single action (upload) for a new local file
 	// with no baseline and no remote state. The planner takes the last local
@@ -755,6 +759,65 @@ func TestBuffer_WatchAndSafetyScanConflictingTypes(t *testing.T) {
 	require.NoError(t, err, "Plan()")
 	require.Len(t, plan.Actions, 1, "single upload for local-only file")
 	assert.Equal(t, synctypes.ActionUpload, plan.Actions[0].Type)
+}
+
+func TestBuffer_RetainsRemoteMoveMarkerWithLatestRemoteState(t *testing.T) {
+	t.Parallel()
+
+	buf := NewBuffer(synctest.TestLogger(t))
+	buf.Add(&synctypes.ChangeEvent{
+		Source:   synctypes.SourceRemote,
+		Type:     synctypes.ChangeMove,
+		Path:     "docs/new-name.txt",
+		OldPath:  "docs/old-name.txt",
+		Name:     "new-name.txt",
+		ItemID:   "buf-rm1",
+		ParentID: "parent-1",
+		DriveID:  driveid.New(synctest.TestDriveID),
+		ItemType: synctypes.ItemTypeFile,
+	})
+	buf.Add(&synctypes.ChangeEvent{
+		Source:   synctypes.SourceRemote,
+		Type:     synctypes.ChangeModify,
+		Path:     "docs/new-name.txt",
+		Name:     "new-name.txt",
+		ItemID:   "buf-rm1",
+		ParentID: "parent-1",
+		DriveID:  driveid.New(synctest.TestDriveID),
+		ItemType: synctypes.ItemTypeFile,
+		Hash:     "hash-2",
+	})
+
+	result := buf.FlushImmediate()
+	require.Len(t, result, 2)
+
+	newPC := findPathChanges(result, "docs/new-name.txt")
+	require.NotNil(t, newPC, "new path not found")
+	require.Len(t, newPC.RemoteEvents, 2)
+	assert.Equal(t, synctypes.ChangeMove, newPC.RemoteEvents[0].Type)
+	assert.Equal(t, synctypes.ChangeModify, newPC.RemoteEvents[1].Type)
+
+	oldPC := findPathChanges(result, "docs/old-name.txt")
+	require.NotNil(t, oldPC, "old path not found")
+	require.Len(t, oldPC.RemoteEvents, 1)
+	assert.Equal(t, synctypes.ChangeDelete, oldPC.RemoteEvents[0].Type)
+
+	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+		Path:      "docs/old-name.txt",
+		DriveID:   driveid.New(synctest.TestDriveID),
+		ItemID:    "buf-rm1",
+		ParentID:  "parent-0",
+		ItemType:  synctypes.ItemTypeFile,
+		LocalHash: "hash-1",
+	})
+
+	planner := syncplan.NewPlanner(synctest.TestLogger(t))
+	plan, err := planner.Plan(result, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	require.NoError(t, err)
+	require.Len(t, plan.Actions, 1)
+	assert.Equal(t, synctypes.ActionLocalMove, plan.Actions[0].Type)
+	assert.Equal(t, "docs/old-name.txt", plan.Actions[0].OldPath)
+	assert.Equal(t, "docs/new-name.txt", plan.Actions[0].Path)
 }
 
 // ---------------------------------------------------------------------------

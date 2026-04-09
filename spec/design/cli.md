@@ -349,7 +349,7 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
 - Offline auth surfaces (`status`, `issues`) never mutate `auth:account`. Live proof surfaces clear `auth:account` only after an authenticated Graph response succeeds. Pre-authenticated upload/download URL success is not treated as auth proof.
 - The authenticated-success proof recorder logs one attributed scope-repair event per account and proof source (`whoami`, `drive-list`, `drive-search`, `drive-session`) when it clears stale `auth:account` blocks. It does not log every successful request and does not create a persistent audit trail.
 - Checked-in golden tests lock the human and JSON output shapes for `status` and `issues list`. Formatting changes are intentional and use the standard `-update` flow in `internal/cli/golden_test.go`.
-- Extract `multiHandler` from `internal/cli/root.go` to `internal/slogutil/` if logging grows (structured error reporting, log sampling). [planned]
+- `internal/cli` unit test coverage is above the current target: `go test ./internal/cli/... -cover` reports 67.8%. [verified]
 
 ## Issues Display
 
@@ -376,4 +376,3 @@ Implements: R-2.3.3 [verified], R-2.3.4 [verified], R-2.3.5 [verified], R-2.3.6 
   `conflicts resolve` calls are replay-safe. Repeating an approval or an
   already-resolved conflict returns a stable no-op/already-resolved result
   instead of duplicating store mutations or partially releasing a scope.
-- `internal/cli` unit test coverage target: 60%+ (currently ~53.7%). The service split and output-writer injection are in place, but more direct `RunE`/service black-box coverage is still needed to reach the target. [planned]

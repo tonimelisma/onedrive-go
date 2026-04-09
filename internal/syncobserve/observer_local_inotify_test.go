@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -47,13 +48,14 @@ func TestEstimateDirCount_WithFolders(t *testing.T) {
 
 // enospcWatcher returns ENOSPC after N successful Add calls.
 type enospcWatcher struct {
-	events      chan fsnotify.Event
-	errs        chan error
-	addCount    int
-	failAfter   int
-	closeOne    stdsync.Once
-	addedPaths  []string
-	failedPaths []string
+	events       chan fsnotify.Event
+	errs         chan error
+	addCount     int
+	failAfter    int
+	closeOne     stdsync.Once
+	addedPaths   []string
+	failedPaths  []string
+	removedPaths []string
 }
 
 func newEnospcWatcher(failAfter int) *enospcWatcher {
@@ -76,7 +78,11 @@ func (w *enospcWatcher) Add(name string) error {
 	return nil
 }
 
-func (w *enospcWatcher) Remove(string) error           { return nil }
+func (w *enospcWatcher) Remove(name string) error {
+	w.removedPaths = append(w.removedPaths, name)
+	return nil
+}
+
 func (w *enospcWatcher) Events() <-chan fsnotify.Event { return w.events }
 func (w *enospcWatcher) Errors() <-chan error          { return w.errs }
 
@@ -103,6 +109,26 @@ func TestAddWatchesRecursive_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 		"expected ErrWatchLimitExhausted, got: %v", err)
 }
 
+func TestAddWatchesRecursive_ENOSPCRollsBackAddedWatches(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "a", "b"), 0o700))
+
+	watcher := newEnospcWatcher(2) // root + a succeed, a/b fails
+
+	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	err := obs.AddWatchesRecursive(t.Context(), watcher, mustOpenSyncTree(t, root))
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, synctypes.ErrWatchLimitExhausted)
+	assert.Equal(t, []string{
+		filepath.Join(root, "a"),
+		root,
+	}, watcher.removedPaths)
+	assert.Empty(t, obs.watchedDirs, "rollback should remove newly added watches from observer state")
+}
+
 func TestAddWatchesRecursive_NonENOSPC_ContinuesNormally(t *testing.T) {
 	t.Parallel()
 
@@ -120,7 +146,9 @@ func TestAddWatchesRecursive_NonENOSPC_ContinuesNormally(t *testing.T) {
 	err := obs.AddWatchesRecursive(t.Context(), watcher, mustOpenSyncTree(t, root))
 
 	// Non-ENOSPC errors should NOT return ErrWatchLimitExhausted.
-	assert.NoError(t, err) // walks continue, failures are just logged
+	require.NoError(t, err) // walks continue, failures are just logged
+	assert.Empty(t, watcher.removed, "ordinary add failures should not trigger rollback")
+	assert.Contains(t, obs.watchedDirs, filepath.Clean(root), "successful watches should remain installed")
 }
 
 // permErrWatcher returns EPERM after N successful Add calls.
@@ -130,6 +158,7 @@ type permErrWatcher struct {
 	addCount  int
 	failAfter int
 	closeOne  stdsync.Once
+	removed   []string
 }
 
 func (w *permErrWatcher) Add(string) error {
@@ -141,7 +170,11 @@ func (w *permErrWatcher) Add(string) error {
 	return nil
 }
 
-func (w *permErrWatcher) Remove(string) error           { return nil }
+func (w *permErrWatcher) Remove(name string) error {
+	w.removed = append(w.removed, name)
+	return nil
+}
+
 func (w *permErrWatcher) Events() <-chan fsnotify.Event { return w.events }
 func (w *permErrWatcher) Errors() <-chan error          { return w.errs }
 
@@ -174,6 +207,33 @@ func TestWatch_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, synctypes.ErrWatchLimitExhausted,
 		"Watch should return ErrWatchLimitExhausted, got: %v", err)
+}
+
+func TestAddWatchedDescendants_ENOSPCRollsBackNewSubtreeOnly(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "entered", "child", "grand"), 0o700))
+
+	watcher := newEnospcWatcher(1) // child succeeds, grand fails
+
+	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	snapshot, err := syncscope.NewSnapshot(syncscope.Config{SyncPaths: []string{"entered"}}, nil)
+	require.NoError(t, err)
+	obs.SetScopeSnapshot(snapshot)
+	obs.watchedDirs = map[string]struct{}{
+		filepath.Clean(root):                           {},
+		filepath.Clean(filepath.Join(root, "entered")): {},
+	}
+
+	tree := mustOpenSyncTree(t, root)
+	obs.addWatchedDescendants(t.Context(), watcher, tree, "entered")
+
+	assert.Equal(t, []string{filepath.Join(root, "entered", "child")}, watcher.removedPaths)
+	assert.Contains(t, obs.watchedDirs, filepath.Clean(root))
+	assert.Contains(t, obs.watchedDirs, filepath.Clean(filepath.Join(root, "entered")))
+	assert.NotContains(t, obs.watchedDirs, filepath.Clean(filepath.Join(root, "entered", "child")))
+	assert.NotContains(t, obs.watchedDirs, filepath.Clean(filepath.Join(root, "entered", "child", "grand")))
 }
 
 // ---------------------------------------------------------------------------

@@ -373,6 +373,18 @@ type watchSetupCounts struct {
 	failed  int
 }
 
+type watchAddSession struct {
+	added []string
+}
+
+func newWatchAddSession() *watchAddSession {
+	return &watchAddSession{}
+}
+
+func (s *watchAddSession) record(path string) {
+	s.added = append(s.added, path)
+}
+
 func (o *LocalObserver) addObservedDirWatches(
 	ctx context.Context,
 	watcher FsWatcher,
@@ -380,6 +392,7 @@ func (o *LocalObserver) addObservedDirWatches(
 	dbRelPath string,
 	counts *watchSetupCounts,
 	dirStack map[string]struct{},
+	session *watchAddSession,
 ) error {
 	if ctx.Err() != nil {
 		return fmt.Errorf("watch setup context: %w", ctx.Err())
@@ -417,7 +430,7 @@ func (o *LocalObserver) addObservedDirWatches(
 		}
 	}
 
-	if addErr := o.addObservedWatch(watcher, fsPath, counts); addErr != nil {
+	if addErr := o.addObservedWatch(watcher, fsPath, counts, session); addErr != nil {
 		return addErr
 	}
 
@@ -442,21 +455,28 @@ func (o *LocalObserver) addObservedDirWatches(
 		return nil
 	}
 
-	return o.addObservedDirChildrenWatches(ctx, watcher, fsPath, dbRelPath, counts, nextStack)
+	return o.addObservedDirChildrenWatches(ctx, watcher, fsPath, dbRelPath, counts, nextStack, session)
 }
 
 func (o *LocalObserver) addObservedWatch(
 	watcher FsWatcher,
 	fsPath string,
 	counts *watchSetupCounts,
+	session *watchAddSession,
 ) error {
+	cleanPath := filepath.Clean(fsPath)
+	_, alreadyWatched := o.watchedDirs[cleanPath]
+
 	addErr := watcher.Add(fsPath)
 	if addErr == nil {
 		counts.watched++
 		if o.watchedDirs == nil {
 			o.watchedDirs = make(map[string]struct{})
 		}
-		o.watchedDirs[filepath.Clean(fsPath)] = struct{}{}
+		o.watchedDirs[cleanPath] = struct{}{}
+		if session != nil && !alreadyWatched {
+			session.record(cleanPath)
+		}
 		return nil
 	}
 
@@ -483,6 +503,7 @@ func (o *LocalObserver) addObservedDirChildrenWatches(
 	dbRelPath string,
 	counts *watchSetupCounts,
 	dirStack map[string]struct{},
+	session *watchAddSession,
 ) error {
 	entries, err := localpath.ReadDir(fsPath)
 	if err != nil {
@@ -497,7 +518,7 @@ func (o *LocalObserver) addObservedDirChildrenWatches(
 			return fmt.Errorf("watch setup context: %w", ctx.Err())
 		}
 
-		if err := o.addObservedChildWatch(ctx, watcher, fsPath, dbRelPath, entry, counts, dirStack); err != nil {
+		if err := o.addObservedChildWatch(ctx, watcher, fsPath, dbRelPath, entry, counts, dirStack, session); err != nil {
 			return err
 		}
 	}
@@ -513,6 +534,7 @@ func (o *LocalObserver) addObservedChildWatch(
 	entry os.DirEntry,
 	counts *watchSetupCounts,
 	dirStack map[string]struct{},
+	session *watchAddSession,
 ) error {
 	childFsPath := filepath.Join(parentFsPath, entry.Name())
 	childName := nfcNormalize(entry.Name())
@@ -524,7 +546,7 @@ func (o *LocalObserver) addObservedChildWatch(
 			return nil
 		}
 
-		return o.addObservedDirWatches(ctx, watcher, childFsPath, childRelPath, counts, dirStack)
+		return o.addObservedDirWatches(ctx, watcher, childFsPath, childRelPath, counts, dirStack, session)
 	}
 
 	o.forgetExcludedSymlink(childRelPath)
@@ -541,7 +563,7 @@ func (o *LocalObserver) addObservedChildWatch(
 		return nil
 	}
 
-	return o.addObservedDirWatches(ctx, watcher, childFsPath, childRelPath, counts, dirStack)
+	return o.addObservedDirWatches(ctx, watcher, childFsPath, childRelPath, counts, dirStack, session)
 }
 
 func (o *LocalObserver) processSymlinkPath(

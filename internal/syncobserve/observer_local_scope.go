@@ -220,6 +220,7 @@ func (o *LocalObserver) addWatchedDescendants(
 	}
 
 	counts := &watchSetupCounts{}
+	session := newWatchAddSession()
 	if err := o.addObservedDirChildrenWatches(
 		ctx,
 		watcher,
@@ -227,7 +228,12 @@ func (o *LocalObserver) addWatchedDescendants(
 		rootRelPath,
 		counts,
 		rootObservedDirStack(tree.Path(), o.Logger),
+		session,
 	); err != nil {
+		if isFatalWatchSetupError(err) {
+			o.rollbackAddedWatches(watcher, session)
+		}
+
 		o.Logger.Warn("scope watch sync: failed to add descendant watches",
 			slog.String("root", rootRelPath),
 			slog.String("error", err.Error()))
