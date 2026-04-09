@@ -29,7 +29,6 @@ one-way sync. Use --dry-run to preview what would happen without making changes.
 	cmd.Flags().Bool("full", false, "run full reconciliation (enumerate all remote items, detect orphans)")
 
 	cmd.MarkFlagsMutuallyExclusive("download-only", "upload-only")
-	cmd.MarkFlagsMutuallyExclusive("dry-run", "watch")
 	cmd.MarkFlagsMutuallyExclusive("full", "watch")
 
 	return cmd
@@ -55,9 +54,13 @@ func runSync(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("read --force flag: %w", err)
 	}
 
-	dryRun, err := cmd.Flags().GetBool("dry-run")
+	dryRunValue, dryRunSet, err := syncDryRunOverride(cmd)
 	if err != nil {
-		return fmt.Errorf("read --dry-run flag: %w", err)
+		return err
+	}
+	var dryRun *bool
+	if dryRunSet {
+		dryRun = &dryRunValue
 	}
 
 	fullReconcile, err := cmd.Flags().GetBool("full")
@@ -72,6 +75,32 @@ func runSync(cmd *cobra.Command, _ []string) error {
 		DryRun:        dryRun,
 		FullReconcile: fullReconcile,
 	})
+}
+
+func syncDryRunOverride(cmd *cobra.Command) (bool, bool, error) {
+	if !cmd.Flags().Changed("dry-run") {
+		return false, false, nil
+	}
+
+	dryRun, err := cmd.Flags().GetBool("dry-run")
+	if err != nil {
+		return false, false, fmt.Errorf("read --dry-run flag: %w", err)
+	}
+
+	return dryRun, true, nil
+}
+
+func resolveSyncDryRun(cfgDryRun bool, override *bool, watch bool) (bool, error) {
+	effectiveDryRun := cfgDryRun
+	if override != nil {
+		effectiveDryRun = *override
+	}
+
+	if watch && effectiveDryRun {
+		return false, fmt.Errorf("watch mode does not support dry-run; disable config dry_run or pass --dry-run=false")
+	}
+
+	return effectiveDryRun, nil
 }
 
 // syncModeFromFlags determines the SyncMode from CLI flags.

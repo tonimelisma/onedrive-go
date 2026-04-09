@@ -44,30 +44,6 @@ func TestValidateDrives_EmptySyncDir_Valid(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// Validates: R-4.8.2
-func TestValidateDrives_InvalidPollInterval(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{
-		SyncDir:      "~/OneDrive",
-		PollInterval: "10s", // too short (min 30s)
-	}
-
-	err := Validate(cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "poll_interval")
-}
-
-func TestValidateDrives_ValidPollInterval(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{
-		SyncDir:      "~/OneDrive",
-		PollInterval: "10m",
-	}
-
-	err := Validate(cfg)
-	assert.NoError(t, err)
-}
-
 // Validates: R-4.8.3
 func TestValidateDrives_DuplicateSyncDir(t *testing.T) {
 	cfg := DefaultConfig()

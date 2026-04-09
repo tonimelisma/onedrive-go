@@ -1,13 +1,9 @@
 package config
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
-	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,36 +12,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-const (
-	invalidSizeStr = "not-a-size"
-	invalidEnumStr = "invalid-value"
-)
+const invalidSizeStr = "abc"
 
 func validConfig() *Config {
 	return DefaultConfig()
-}
-
-func loggedAttrValues(t *testing.T, logBuf *bytes.Buffer, key string) []string {
-	t.Helper()
-
-	text := strings.TrimSpace(logBuf.String())
-	if text == "" {
-		return nil
-	}
-
-	lines := strings.Split(text, "\n")
-	values := make([]string, 0, len(lines))
-	for _, line := range lines {
-		var record map[string]any
-		require.NoError(t, json.Unmarshal([]byte(line), &record))
-
-		value, ok := record[key].(string)
-		if ok {
-			values = append(values, value)
-		}
-	}
-
-	return values
 }
 
 func TestValidate_ValidDefaults(t *testing.T) {
@@ -118,41 +88,6 @@ func TestValidate_BigDeleteThreshold_BelowMin(t *testing.T) {
 	assert.Contains(t, err.Error(), "big_delete_threshold")
 }
 
-// Validates: R-4.8.2, R-6.2.9
-func TestValidate_Permissions_Invalid(t *testing.T) {
-	tests := []struct {
-		name  string
-		value string
-	}{
-		{"empty", ""},
-		{"too short", "07"},
-		{"too long", "07000"},
-		{"not octal", "abc"},
-		{"above max", "1000"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := validConfig()
-			cfg.SyncDirPermissions = tt.value
-			err := Validate(cfg)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "sync_dir_permissions")
-		})
-	}
-}
-
-// Validates: R-4.8.2, R-6.2.9
-func TestValidate_Permissions_Valid(t *testing.T) {
-	for _, perm := range []string{"0600", "0700", "0755", "0644", "777"} {
-		cfg := validConfig()
-		cfg.SyncDirPermissions = perm
-		cfg.SyncFilePermissions = perm
-		err := Validate(cfg)
-		assert.NoError(t, err, "expected %s to be valid", perm)
-	}
-}
-
 func TestValidate_PollInterval_TooShort(t *testing.T) {
 	cfg := validConfig()
 	cfg.PollInterval = "10s"
@@ -170,20 +105,12 @@ func TestValidate_PollInterval_InvalidFormat(t *testing.T) {
 	assert.Contains(t, err.Error(), "poll_interval")
 }
 
-func TestValidate_ShutdownTimeout_TooShort(t *testing.T) {
+func TestValidate_SafetyScanInterval_TooShort(t *testing.T) {
 	cfg := validConfig()
-	cfg.ShutdownTimeout = "1s"
+	cfg.SafetyScanInterval = "5s"
 	err := Validate(cfg)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "shutdown_timeout")
-}
-
-func TestValidate_ConflictStrategy_Invalid(t *testing.T) {
-	cfg := validConfig()
-	cfg.ConflictStrategy = "keep_remote"
-	err := Validate(cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "conflict_strategy")
+	assert.Contains(t, err.Error(), "safety_scan_interval")
 }
 
 // Validates: R-4.8.2
@@ -259,8 +186,8 @@ func TestValidate_MultipleErrors(t *testing.T) {
 	cfg := validConfig()
 	cfg.TransferWorkers = 0
 	cfg.CheckWorkers = 0
-	cfg.ConflictStrategy = invalidEnumStr
-	cfg.LogLevel = invalidEnumStr
+	cfg.PollInterval = invalidSizeStr
+	cfg.LogLevel = "invalid-value"
 
 	err := Validate(cfg)
 	require.Error(t, err)
@@ -268,48 +195,8 @@ func TestValidate_MultipleErrors(t *testing.T) {
 	errStr := err.Error()
 	assert.Contains(t, errStr, "transfer_workers")
 	assert.Contains(t, errStr, "check_workers")
-	assert.Contains(t, errStr, "conflict_strategy")
+	assert.Contains(t, errStr, "poll_interval")
 	assert.Contains(t, errStr, "log_level")
-}
-
-// --- WarnDeprecatedKeys tests ---
-
-func TestWarnDeprecatedKeys_OldKeysPresent(t *testing.T) {
-	t.Parallel()
-
-	var logBuf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
-
-	rawMap := map[string]any{
-		"parallel_downloads": 4,
-		"parallel_uploads":   4,
-		"parallel_checkers":  8,
-	}
-
-	WarnDeprecatedKeys(rawMap, logger)
-
-	warnedKeys := loggedAttrValues(t, &logBuf, "key")
-
-	assert.Contains(t, warnedKeys, "parallel_downloads")
-	assert.Contains(t, warnedKeys, "parallel_uploads")
-	assert.Contains(t, warnedKeys, "parallel_checkers")
-	assert.Len(t, warnedKeys, 3)
-}
-
-func TestWarnDeprecatedKeys_NoOldKeys(t *testing.T) {
-	t.Parallel()
-
-	var logBuf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
-
-	rawMap := map[string]any{
-		"transfer_workers": 8,
-		"check_workers":    4,
-	}
-
-	WarnDeprecatedKeys(rawMap, logger)
-
-	assert.Empty(t, strings.TrimSpace(logBuf.String()), "no warnings should be logged for new keys")
 }
 
 // --- ValidateResolved tests ---

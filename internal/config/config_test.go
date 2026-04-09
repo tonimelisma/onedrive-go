@@ -29,15 +29,12 @@ func TestDefaultConfig_AllFieldsPopulated(t *testing.T) {
 	assert.Equal(t, 1000, cfg.BigDeleteThreshold)
 	assert.Equal(t, "1GB", cfg.MinFreeSpace)
 	assert.Equal(t, runtime.GOOS == "darwin", cfg.UseLocalTrash) // platform-specific default
-	assert.Equal(t, "0700", cfg.SyncDirPermissions)
-	assert.Equal(t, "0600", cfg.SyncFilePermissions)
 
 	// Sync defaults
 	assert.Equal(t, "5m", cfg.PollInterval)
 	assert.False(t, cfg.Websocket)
-	assert.Equal(t, "keep_both", cfg.ConflictStrategy)
 	assert.False(t, cfg.DryRun)
-	assert.Equal(t, "30s", cfg.ShutdownTimeout)
+	assert.Equal(t, "5m", cfg.SafetyScanInterval)
 
 	// Logging defaults
 	assert.Equal(t, "info", cfg.LogLevel)

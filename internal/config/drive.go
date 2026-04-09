@@ -305,11 +305,6 @@ func applyDriveOverrides(resolved *ResolvedDrive, drive *Drive, logger *slog.Log
 		resolved.IgnoreMarker = drive.IgnoreMarker
 		logger.Debug("per-drive override applied", "field", "ignore_marker", "value", drive.IgnoreMarker)
 	}
-
-	if drive.PollInterval != "" {
-		resolved.PollInterval = drive.PollInterval
-		logger.Debug("per-drive override applied", "field", "poll_interval", "value", drive.PollInterval)
-	}
 }
 
 // expandTilde replaces a leading "~/" with the user's home directory.

@@ -118,6 +118,9 @@ constructs an `Orchestrator`, and chooses between `RunOnce` and `RunWatch`.
   engine seal new admission and follow its normal shutdown path
 - second signal forces exit
 
+No timer escalates the first signal; forced exit is owned only by the second
+signal.
+
 The CLI command does not reach into per-drive engine internals. It only speaks
 to the control-plane boundary.
 

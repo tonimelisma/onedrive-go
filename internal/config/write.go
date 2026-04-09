@@ -53,15 +53,11 @@ func defaultConfigTemplate() string {
 # big_delete_threshold = %d
 # min_free_space = %q
 # use_local_trash = %t      # platform default
-# sync_dir_permissions = %q
-# sync_file_permissions = %q
 
 # Sync runtime
 # poll_interval = %q
 # websocket = false
-# conflict_strategy = %q
 # dry_run = false
-# shutdown_timeout = %q
 # safety_scan_interval = %q
 
 # Logging
@@ -81,11 +77,7 @@ func defaultConfigTemplate() string {
 		defaultBigDeleteThreshold,
 		defaultMinFreeSpace,
 		defaultUseLocalTrash(),
-		defaultSyncDirPermissions,
-		defaultSyncFilePermissions,
 		defaultPollInterval,
-		defaultConflictStrategy,
-		defaultShutdownTimeout,
 		defaultSafetyScanInterval,
 		defaultLogLevel,
 		"",

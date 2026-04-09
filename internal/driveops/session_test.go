@@ -32,7 +32,60 @@ const (
 	testDeleteRetryItemPath = "/drives/abcdef0123456789/items/retry-id"
 	testDeleteTargetPath    = "/drives/abcdef0123456789/root:/Documents/file.txt:"
 	testDeleteParentPath    = "/drives/abcdef0123456789/root:/Documents:/children"
+	testNestedTargetPath    = "/drives/abcdef0123456789/root:/Projects/Docs/file.txt:"
+	testNestedParentPath    = "/drives/abcdef0123456789/root:/Projects/Docs:/children"
+	testNestedExactParent   = "/drives/abcdef0123456789/root:/Projects/Docs:"
+	testNestedAncestorPath  = "/drives/abcdef0123456789/root:/Projects:/children"
+	testNestedParentByID    = "/drives/abcdef0123456789/items/docs-id/children"
 )
+
+func newSimpleLaggedPathSession(t *testing.T) (*Session, *[]string) {
+	t.Helper()
+
+	gotPaths := make([]string, 0, 2)
+	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.URL.Path)
+		switch r.URL.Path {
+		case testDeleteTargetPath:
+			w.WriteHeader(http.StatusNotFound)
+			writeTestResponsef(t, w, `{"error":{"code":"itemNotFound","message":"lagging path route"}}`)
+		case testDeleteParentPath:
+			writeTestResponsef(t, w, `{"value":[{"id":"retry-id","name":"file.txt"}]}`)
+		default:
+			http.Error(w, "unexpected request", http.StatusInternalServerError)
+		}
+	}))
+
+	return s, &gotPaths
+}
+
+func newRecursiveLaggedPathSession(t *testing.T) (*Session, *[]string) {
+	t.Helper()
+
+	gotPaths := make([]string, 0, 5)
+	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.URL.Path)
+		switch r.URL.Path {
+		case testNestedTargetPath:
+			w.WriteHeader(http.StatusNotFound)
+			writeTestResponsef(t, w, `{"error":{"code":"itemNotFound","message":"lagging file path"}}`)
+		case testNestedParentPath:
+			w.WriteHeader(http.StatusNotFound)
+			writeTestResponsef(t, w, `{"error":{"code":"itemNotFound","message":"lagging parent path"}}`)
+		case testNestedExactParent:
+			w.WriteHeader(http.StatusNotFound)
+			writeTestResponsef(t, w, `{"error":{"code":"itemNotFound","message":"lagging parent exact path"}}`)
+		case testNestedAncestorPath:
+			writeTestResponsef(t, w, `{"value":[{"id":"docs-id","name":"Docs","folder":{"childCount":1}}]}`)
+		case testNestedParentByID:
+			writeTestResponsef(t, w, `{"value":[{"id":"file-id","name":"file.txt"}]}`)
+		default:
+			http.Error(w, "unexpected request", http.StatusInternalServerError)
+		}
+	}))
+
+	return s, &gotPaths
+}
 
 // --- CleanRemotePath ---
 
@@ -412,7 +465,35 @@ func TestSession_WaitPathVisible_TransientNotFoundThenSuccess(t *testing.T) {
 	item, err := s.WaitPathVisible(t.Context(), "Documents/file.txt")
 	require.NoError(t, err)
 	assert.Equal(t, "doc-id", item.ID)
-	assert.Equal(t, 3, attempts)
+	assert.GreaterOrEqual(t, attempts, 3)
+}
+
+func TestSession_WaitPathVisible_FallsBackToParentListingWhenExactPathLags(t *testing.T) {
+	t.Parallel()
+
+	s, gotPaths := newSimpleLaggedPathSession(t)
+
+	item, err := s.WaitPathVisible(t.Context(), "Documents/file.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "retry-id", item.ID)
+	assert.Equal(t, []string{testDeleteTargetPath, testDeleteParentPath}, *gotPaths)
+}
+
+func TestSession_WaitPathVisible_RecoversWhenParentPathListingLags(t *testing.T) {
+	t.Parallel()
+
+	s, gotPaths := newRecursiveLaggedPathSession(t)
+
+	item, err := s.WaitPathVisible(t.Context(), "Projects/Docs/file.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "file-id", item.ID)
+	assert.Equal(t, []string{
+		testNestedTargetPath,
+		testNestedParentPath,
+		testNestedExactParent,
+		testNestedAncestorPath,
+		testNestedParentByID,
+	}, *gotPaths)
 }
 
 func TestSession_WaitPathVisible_FailsImmediatelyOnNonNotFound(t *testing.T) {
@@ -448,7 +529,7 @@ func TestSession_WaitPathVisible_ExhaustsNotFoundBudget(t *testing.T) {
 	_, err := s.WaitPathVisible(t.Context(), "Documents/file.txt")
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrPathNotVisible)
-	assert.Equal(t, 3, attempts)
+	assert.GreaterOrEqual(t, attempts, 3)
 }
 
 func TestSession_WaitPathVisible_ExhaustsNotFoundBudgetReturnsTypedError(t *testing.T) {
@@ -517,25 +598,29 @@ func TestSession_ResolveItem_SharedRootRelativePath(t *testing.T) {
 func TestSession_ResolveDeleteTarget_FallsBackToParentListingAfterPathNotFound(t *testing.T) {
 	t.Parallel()
 
-	var gotPaths []string
-
-	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPaths = append(gotPaths, r.URL.Path)
-		switch r.URL.Path {
-		case testDeleteTargetPath:
-			w.WriteHeader(http.StatusNotFound)
-			writeTestResponsef(t, w, `{"error":{"code":"itemNotFound","message":"lagging path route"}}`)
-		case testDeleteParentPath:
-			writeTestResponsef(t, w, `{"value":[{"id":"retry-id","name":"file.txt"}]}`)
-		default:
-			http.Error(w, "unexpected request", http.StatusInternalServerError)
-		}
-	}))
+	s, gotPaths := newSimpleLaggedPathSession(t)
 
 	item, err := s.ResolveDeleteTarget(t.Context(), "Documents/file.txt")
 	require.NoError(t, err)
 	assert.Equal(t, "retry-id", item.ID)
-	assert.Equal(t, []string{testDeleteTargetPath, testDeleteParentPath}, gotPaths)
+	assert.Equal(t, []string{testDeleteTargetPath, testDeleteParentPath}, *gotPaths)
+}
+
+func TestSession_ResolveDeleteTarget_RecoversWhenParentPathListingLags(t *testing.T) {
+	t.Parallel()
+
+	s, gotPaths := newRecursiveLaggedPathSession(t)
+
+	item, err := s.ResolveDeleteTarget(t.Context(), "Projects/Docs/file.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "file-id", item.ID)
+	assert.Equal(t, []string{
+		testNestedTargetPath,
+		testNestedParentPath,
+		testNestedExactParent,
+		testNestedAncestorPath,
+		testNestedParentByID,
+	}, *gotPaths)
 }
 
 func TestSession_ListChildren_SharedRootUsesScopedRootItem(t *testing.T) {

@@ -75,7 +75,9 @@ For path-oriented deletes, success also means more than "one DELETE request
 returned 204." `rm`, `mv --force`, and `cp --force` delete the destination
 through `driveops.Session.DeleteResolvedPath()` so a transient delete-route
 `itemNotFound` is reconciled against the remote path instead of surfacing a
-spurious failure. `rm` additionally waits for the parent path to be readable
+spurious failure. That same delete-intent resolver can recurse through an
+ancestor collection when the immediate parent path route is also in a transient
+`itemNotFound` gap. `rm` additionally waits for the parent path to be readable
 again before printing success for non-root parents, but once delete intent has
 already proved the target path is gone it downgrades a pure bounded
 `PathNotVisibleError` on that follow-on parent read to a warning. Other
@@ -278,6 +280,8 @@ Two-signal shutdown for watch mode:
   seal new admission, and allow already-admitted work to follow the normal
   shutdown path
 - second SIGINT/SIGTERM = force process exit with status 1
+
+There is no timer-based escalation between the first and second signal.
 
 `sighupChannel()` is separate because config reload is a control-plane signal,
 not a shutdown request.

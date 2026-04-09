@@ -270,7 +270,7 @@ func (tm *TransferManager) DownloadToFile(
 // downloadWithHashRetry downloads a file and retries on hash mismatch. On
 // mismatch we discard and re-download the entire file. If the first attempt
 // was a resume, the resume bytes are wasted — acceptable because mismatches
-// are rare and correctness trumps bandwidth savings.
+// are rare and correctness trumps transfer savings.
 func (tm *TransferManager) downloadWithHashRetry(
 	ctx context.Context, driveID driveid.ID, itemID, partialPath, targetPath, remoteHash string,
 	maxHashRetries int,

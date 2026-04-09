@@ -23,15 +23,11 @@ func newKnownGlobalKeys() map[string]bool {
 		"skip_symlinks": true, "sync_paths": true, "ignore_marker": true,
 		// Transfer settings
 		"transfer_workers": true, "check_workers": true,
-		// Deprecated transfer settings (kept to produce deprecation warning instead of unknown-key error)
-		"parallel_downloads": true, "parallel_uploads": true, "parallel_checkers": true,
 		// Safety settings
 		"big_delete_threshold": true,
 		"min_free_space":       true, "use_local_trash": true,
-		"sync_dir_permissions": true, "sync_file_permissions": true,
 		// Sync settings
-		"poll_interval": true, "websocket": true,
-		"conflict_strategy": true, "dry_run": true, "shutdown_timeout": true,
+		"poll_interval": true, "websocket": true, "dry_run": true,
 		"safety_scan_interval": true,
 		// Logging settings
 		"log_level": true, "log_file": true, "log_format": true, "log_retention_days": true,
@@ -60,7 +56,7 @@ func newKnownDriveKeys() map[string]bool {
 	return map[string]bool{
 		"sync_dir": true, "paused": true, "paused_until": true, "display_name": true, "owner": true,
 		"skip_dotfiles": true, "skip_dirs": true, "skip_files": true,
-		"sync_paths": true, "ignore_marker": true, "poll_interval": true,
+		"sync_paths": true, "ignore_marker": true,
 	}
 }
 
@@ -117,17 +113,12 @@ func checkUnknownKeys(md *toml.MetaData) error {
 }
 
 // buildGlobalKeyError creates a descriptive error for an unknown top-level key,
-// optionally suggesting the closest known key. Returns nil if the key is a
-// known key (including deprecated keys that have no struct field but are still
-// accepted).
+// optionally suggesting the closest known key. Returns nil if the key is known.
 func buildGlobalKeyError(keyStr string) error {
 	// For nested keys like "parent.child", extract the top-level field name.
 	parts := strings.SplitN(keyStr, ".", 2)
 	fieldName := parts[0]
 
-	// Known key (possibly deprecated — accepted but value ignored).
-	// This handles deprecated keys like parallel_downloads that are in
-	// the known set but no longer have struct fields.
 	if newKnownGlobalKeys()[fieldName] {
 		return nil
 	}

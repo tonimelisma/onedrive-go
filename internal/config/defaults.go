@@ -10,20 +10,16 @@ import (
 // of the four-layer override chain and are chosen to be safe, reasonable
 // starting points that work for most users without any config file.
 const (
-	defaultIgnoreMarker        = ".odignore"
-	defaultTransferWorkers     = 8
-	defaultCheckWorkers        = 4
-	defaultBigDeleteThreshold  = 1000
-	defaultMinFreeSpace        = "1GB"
-	defaultSyncDirPermissions  = "0700"
-	defaultSyncFilePermissions = "0600"
-	defaultPollInterval        = "5m"
-	defaultConflictStrategy    = "keep_both"
-	defaultShutdownTimeout     = "30s"
-	defaultSafetyScanInterval  = "5m"
-	defaultLogLevel            = "info"
-	defaultLogFormat           = "auto"
-	defaultLogRetentionDays    = 30
+	defaultIgnoreMarker       = ".odignore"
+	defaultTransferWorkers    = 8
+	defaultCheckWorkers       = 4
+	defaultBigDeleteThreshold = 1000
+	defaultMinFreeSpace       = "1GB"
+	defaultPollInterval       = "5m"
+	defaultSafetyScanInterval = "5m"
+	defaultLogLevel           = "info"
+	defaultLogFormat          = "auto"
+	defaultLogRetentionDays   = 30
 )
 
 // DefaultConfig returns a Config populated with all default values.
@@ -57,11 +53,9 @@ func defaultTransfersConfig() TransfersConfig {
 
 func defaultSafetyConfig() SafetyConfig {
 	return SafetyConfig{
-		BigDeleteThreshold:  defaultBigDeleteThreshold,
-		MinFreeSpace:        defaultMinFreeSpace,
-		UseLocalTrash:       defaultUseLocalTrash(),
-		SyncDirPermissions:  defaultSyncDirPermissions,
-		SyncFilePermissions: defaultSyncFilePermissions,
+		BigDeleteThreshold: defaultBigDeleteThreshold,
+		MinFreeSpace:       defaultMinFreeSpace,
+		UseLocalTrash:      defaultUseLocalTrash(),
 	}
 }
 
@@ -76,8 +70,6 @@ func defaultSyncConfig() SyncConfig {
 	return SyncConfig{
 		PollInterval:       defaultPollInterval,
 		Websocket:          false,
-		ConflictStrategy:   defaultConflictStrategy,
-		ShutdownTimeout:    defaultShutdownTimeout,
 		SafetyScanInterval: defaultSafetyScanInterval,
 	}
 }

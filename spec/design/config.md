@@ -79,13 +79,9 @@ This table is the authoritative config-package view of the current schema.
 | `big_delete_threshold` | `int` | `1000` | `>= 1` | `sync` | Big-delete protection threshold. |
 | `min_free_space` | `string` | `1GB` | parseable size string; `0` disables | `sync`, `get`, shared download commands | Disk reservation floor for downloads. |
 | `use_local_trash` | `bool` | macOS: `true`; Linux: `false` | boolean | `sync` | Local delete handling. |
-| `sync_dir_permissions` | `string` | `0700` | 3 or 4 octal digits, `000..777` | `sync` | Directory permissions for synced content. |
-| `sync_file_permissions` | `string` | `0600` | 3 or 4 octal digits, `000..777` | `sync` | File permissions for synced content. |
 | `poll_interval` | `string` | `5m` | duration `>= 30s` | `sync --watch` | Remote observation fallback poll cadence. |
 | `websocket` | `bool` | `false` | boolean | `sync --watch` | Enables Socket.IO remote wakeups where supported. |
-| `conflict_strategy` | `string` | `keep_both` | `keep_both` | `sync` | Conflict-resolution policy surface. |
 | `dry_run` | `bool` | `false` | boolean | `sync` | Config-owned default for dry-run sync. CLI flag may override. |
-| `shutdown_timeout` | `string` | `30s` | duration `>= 5s` | `sync --watch` | Graceful shutdown budget. |
 | `safety_scan_interval` | `string` | `5m` | duration `>= 10s` | `sync --watch` | Local safety-scan cadence. |
 | `log_level` | `string` | `info` | `debug`, `info`, `warn`, `error` | `all CLI` | File-log verbosity. |
 | `log_file` | `string` | `""` (platform default location) | path string | `all CLI` | Empty means standard managed log path. |
@@ -106,7 +102,6 @@ This table is the authoritative config-package view of the current schema.
 | `skip_files` | `[]string` | inherit global `skip_files` | glob patterns | `sync` | Per-drive filter override. |
 | `sync_paths` | `[]string` | inherit global `sync_paths` | absolute drive-root paths starting with `/` | `sync` | Per-drive sync-scope override. |
 | `ignore_marker` | `string` | inherit global `ignore_marker` | non-empty filename when present | `sync` | Per-drive marker override. |
-| `poll_interval` | `string` | inherit global `poll_interval` | duration `>= 30s` | `sync --watch` | Per-drive poll cadence override. |
 
 ## Config File Manipulation
 
@@ -126,7 +121,7 @@ text intact. Email reconciliation uses this instead of re-encoding TOML.
 
 ## Drive Sections
 
-Implements: R-3.4.1 [verified], R-3.4.3 [verified], R-6.2.9 [verified]
+Implements: R-3.4.1 [verified], R-3.4.3 [verified]
 
 Each drive section contains per-drive settings (`sync_dir`, filter overrides, paused state). `buildResolvedDrive` starts from global defaults and then applies per-drive overrides for filter and sync behavior fields, so drives can share sane defaults without forcing identical filter policy. When a drive section omits `sync_dir`, `buildResolvedDrive` computes the deterministic default local path for that canonical ID before command-specific validation runs. Drive resolution (`ResolveDrive`) matches by exact canonical ID → exact display_name (case-insensitive) → substring. Ambiguous matches produce an error with suggestions. `ResolveDrive()` returns both `*ResolvedDrive` and `*Config` — the raw config is needed by shared drive token resolution.
 

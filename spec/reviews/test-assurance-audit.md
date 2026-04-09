@@ -1012,7 +1012,6 @@ Key W5 gap notes:
   - `R-4.9.2`, `R-4.9.3`
   - `R-3.4.1`
   - `R-3.4.3`
-  - `R-6.2.9`
 - Ideal unit coverage:
   - path resolution, env overrides, display-name selection, token resolution, and size parsing
   - validation helpers prove exact rejection reasons for missing, invalid, or out-of-range config
@@ -1042,7 +1041,7 @@ Key W5 gap notes:
   - the body audit found spec drift in `R-4.9.3`, not a production bug: raw per-drive `sync_dir` is optional because `buildResolvedDrive` computes a deterministic runtime default before `ValidateResolvedForSync` runs. The requirements/design docs now describe that resolved-drive contract explicitly.
 - Claim mapping snapshot from filenames and `// Validates:` only:
   - Candidate test surface is rich across `internal/config/{load,write,validate,paths,env,holder,drive,token_resolution}_test.go` and related package tests
-  - Explicit comment claims now exist for `R-4.1.1`, `R-4.1.2`, `R-4.1.3`, `R-4.2.1`, `R-4.2.2`, `R-4.3`, `R-4.4.1`, `R-4.4.2`, `R-4.8.1`, `R-4.8.2`, `R-4.8.3`, `R-4.8.4`, `R-4.8.5`, `R-4.8.6`, `R-4.9.2`, `R-4.9.3`, `R-3.4.1`, `R-3.4.3`, and `R-6.2.9`
+  - Explicit comment claims now exist for `R-4.1.1`, `R-4.1.2`, `R-4.1.3`, `R-4.2.1`, `R-4.2.2`, `R-4.3`, `R-4.4.1`, `R-4.4.2`, `R-4.8.1`, `R-4.8.2`, `R-4.8.3`, `R-4.8.4`, `R-4.8.5`, `R-4.8.6`, `R-4.9.2`, `R-4.9.3`, `R-3.4.1`, and `R-3.4.3`
   - `internal/config/load_test.go` now directly proves the command-tier split the design doc claims: the public `ResolveDrive` path accepts a bare drive section, derives the effective default sync directory, and still passes sync-specific validation once that resolved value exists
   - Remaining W8 debt is documentation only: `R-4.9.4` field-reference completeness is still planned, but the earlier “validation-tier coverage may be over-claimed” note is now closed
 

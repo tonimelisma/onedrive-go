@@ -125,9 +125,6 @@ func TestDefaultConfigTemplate_ListsAllGlobalKeys(t *testing.T) {
 
 	template := defaultConfigTemplate()
 	keys := newKnownGlobalKeys()
-	delete(keys, "parallel_downloads")
-	delete(keys, "parallel_uploads")
-	delete(keys, "parallel_checkers")
 
 	for key := range keys {
 		assert.Contains(t, template, "# "+key+" =", "template should document %q", key)

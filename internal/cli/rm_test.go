@@ -170,7 +170,8 @@ func TestRunRm_PermanentUsesPermanentDelete(t *testing.T) {
 // Validates: R-1.4.4
 func TestRunRm_WaitsForParentVisibilityAfterDelete(t *testing.T) {
 	counts := &rmRequestCounts{}
-	var parentLookups int
+	var exactParentLookups int
+	var parentListingLookups int
 
 	cmd, _ := newRmTestCommand(t, driveid.MustCanonicalID("business:user@example.com"), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -188,22 +189,29 @@ func TestRunRm_WaitsForParentVisibilityAfterDelete(t *testing.T) {
 			counts.deleteCalls++
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodGet && r.URL.Path == rmNestedParent:
-			parentLookups++
-			if parentLookups < 3 {
-				w.WriteHeader(http.StatusNotFound)
-				writeTestResponse(t, w, `{"error":{"code":"itemNotFound"}}`)
+			exactParentLookups++
+			w.WriteHeader(http.StatusNotFound)
+			writeTestResponse(t, w, `{"error":{"code":"itemNotFound"}}`)
+		case r.Method == http.MethodGet && r.URL.Path == rmRootChildren:
+			parentListingLookups++
+			w.Header().Set("Content-Type", "application/json")
+			if parentListingLookups < 3 {
+				writeTestResponse(t, w, `{"value":[]}`)
 				return
 			}
 
-			w.Header().Set("Content-Type", "application/json")
 			writeTestResponse(t, w, `{
-				"id":"docs-id",
-				"name":"docs",
-				"size":0,
-				"createdDateTime":"2026-04-03T00:00:00Z",
-				"lastModifiedDateTime":"2026-04-03T00:00:00Z",
-				"folder":{"childCount":1},
-				"eTag":"etag-parent"
+				"value":[
+					{
+						"id":"docs-id",
+						"name":"docs",
+						"size":0,
+						"createdDateTime":"2026-04-03T00:00:00Z",
+						"lastModifiedDateTime":"2026-04-03T00:00:00Z",
+						"folder":{"childCount":1},
+						"eTag":"etag-parent"
+					}
+				]
 			}`)
 		default:
 			http.Error(w, "unexpected request", http.StatusInternalServerError)
@@ -212,7 +220,8 @@ func TestRunRm_WaitsForParentVisibilityAfterDelete(t *testing.T) {
 
 	require.NoError(t, runRm(cmd, []string{"/docs/old-report.pdf"}))
 	assert.Equal(t, 1, counts.deleteCalls)
-	assert.Equal(t, 3, parentLookups)
+	assert.Equal(t, 3, exactParentLookups)
+	assert.Equal(t, 3, parentListingLookups)
 }
 
 // Validates: R-1.4.4
