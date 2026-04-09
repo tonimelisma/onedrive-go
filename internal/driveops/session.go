@@ -465,7 +465,11 @@ func (s *Session) deleteResolvedPath(
 			return fmt.Errorf("wait for delete path %q convergence: %w", remotePath, sleepErr)
 		}
 
-		item, resolveErr := s.ResolveDeleteTarget(ctx, remotePath)
+		// After a delete already reported itemNotFound, the exact path disappearing
+		// is sufficient evidence of success even if the parent listing is still
+		// stale. Parent-list fallback remains appropriate for initial delete
+		// resolution, but not for post-delete convergence checks.
+		item, resolveErr := s.ResolveItem(ctx, remotePath)
 		switch {
 		case resolveErr == nil:
 			currentID = item.ID

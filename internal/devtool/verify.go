@@ -736,10 +736,11 @@ func runOptionalVerification(
 	plan verifyPlan,
 ) error {
 	e2eEnv := env
-	if opts.E2ELogDir != "" {
+	effectiveE2ELogDir := resolvedE2ELogDir(opts.E2ELogDir, plan)
+	if effectiveE2ELogDir != "" {
 		e2eEnv = append([]string{}, env...)
-		e2eEnv = append(e2eEnv, "E2E_LOG_DIR="+opts.E2ELogDir)
-		if err := resetE2ETimingArtifacts(opts.E2ELogDir); err != nil {
+		e2eEnv = append(e2eEnv, "E2E_LOG_DIR="+effectiveE2ELogDir)
+		if err := resetE2ETimingArtifacts(effectiveE2ELogDir); err != nil {
 			return err
 		}
 	}
@@ -751,7 +752,7 @@ func runOptionalVerification(
 	}
 
 	if plan.runE2EFull {
-		if err := runE2EFull(ctx, runner, opts.RepoRoot, e2eEnv, opts.E2ELogDir, collector, stdout, stderr); err != nil {
+		if err := runE2EFull(ctx, runner, opts.RepoRoot, e2eEnv, effectiveE2ELogDir, collector, stdout, stderr); err != nil {
 			return err
 		}
 	}
@@ -768,6 +769,17 @@ func runOptionalVerification(
 	}
 
 	return nil
+}
+
+func resolvedE2ELogDir(explicit string, plan verifyPlan) string {
+	if explicit != "" {
+		return explicit
+	}
+	if plan.runE2EFull {
+		return filepath.Join(os.TempDir(), "e2e-debug-logs")
+	}
+
+	return ""
 }
 
 func runFormat(ctx context.Context, runner commandRunner, repoRoot string, env []string, stdout, stderr io.Writer) error {

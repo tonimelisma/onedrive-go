@@ -57,7 +57,7 @@ func (s *sharedService) runList(ctx context.Context) error {
 		return err
 	}
 
-	discovery := newSharedDiscoveryService(s.cc).discoverTargets(ctx, snapshot.Catalog)
+	discovery := newSharedDiscoveryService(s.cc).discoverTargets(ctx, filterAccountCatalog(snapshot.Catalog, s.cc.Flags.Account))
 	items := sharedListItemsFromTargets(discovery.Targets)
 	if s.cc.Flags.JSON {
 		return printSharedJSON(s.cc.Output(), items, discovery.AccountsRequiringAuth, discovery.AccountsDegraded)
@@ -143,6 +143,22 @@ func printSharedText(
 	}
 
 	return nil
+}
+
+func filterAccountCatalog(catalog []accountCatalogEntry, account string) []accountCatalogEntry {
+	if account == "" {
+		return catalog
+	}
+
+	filtered := make([]accountCatalogEntry, 0, len(catalog))
+	for i := range catalog {
+		if catalog[i].Email != account {
+			continue
+		}
+		filtered = append(filtered, catalog[i])
+	}
+
+	return filtered
 }
 
 func printSharedItemsSection(w io.Writer, items []sharedListItem) error {

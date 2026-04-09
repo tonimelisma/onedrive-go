@@ -256,9 +256,12 @@ func (c *Client) Upload(
 	content io.ReaderAt, size int64, mtime time.Time, progress ProgressFunc,
 ) (*Item, error) {
 	if size <= SimpleUploadMaxSize {
-		item, err := c.simpleUploadCreateByParent(ctx, driveID, parentID, name, content, size, mtime, progress)
+		item, needsFinalize, err := c.simpleUploadCreateByParent(ctx, driveID, parentID, name, content, size, mtime, progress)
 		if err != nil {
 			return nil, err
+		}
+		if !needsFinalize {
+			return item, nil
 		}
 
 		return c.finalizeSimpleUpload(ctx, driveID, item, mtime)
@@ -323,14 +326,14 @@ func (c *Client) simpleUploadCreateByParent(
 	size int64,
 	mtime time.Time,
 	progress ProgressFunc,
-) (*Item, error) {
+) (*Item, bool, error) {
 	item, err := c.SimpleUpload(ctx, driveID, parentID, name, io.NewSectionReader(content, 0, size), size)
 	if err == nil {
-		return item, nil
+		return item, true, nil
 	}
 
 	if size == 0 || !errors.Is(err, ErrNotFound) {
-		return nil, err
+		return nil, false, err
 	}
 
 	// Graph misreports some shared-folder create denials as 404 on the simple
@@ -346,7 +349,7 @@ func (c *Client) simpleUploadCreateByParent(
 
 	item, sessionErr := c.chunkedUploadEncapsulated(ctx, driveID, parentID, name, content, size, mtime, progress)
 	if sessionErr == nil || !errors.Is(sessionErr, ErrNotFound) {
-		return item, sessionErr
+		return item, false, sessionErr
 	}
 
 	// Live full-suite coverage also shows the inverse ordering quirk: after the
@@ -363,13 +366,18 @@ func (c *Client) simpleUploadCreateByParent(
 		slog.Int64("size", size),
 	)
 
-	return doQuirkRetry(ctx, c, quirkRetrySpec{
+	item, retryErr := doQuirkRetry(ctx, c, quirkRetrySpec{
 		name:   "simple-upload-create-transient-404",
 		policy: c.simpleUploadCreatePolicy,
 		match:  isTransientSimpleUploadCreateError,
 	}, func() (*Item, error) {
 		return c.SimpleUpload(ctx, driveID, parentID, name, io.NewSectionReader(content, 0, size), size)
 	})
+	if retryErr != nil {
+		return nil, false, retryErr
+	}
+
+	return item, true, nil
 }
 
 // chunkedUploadEncapsulated creates an upload session, uploads all chunks,

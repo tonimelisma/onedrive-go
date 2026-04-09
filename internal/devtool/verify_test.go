@@ -184,7 +184,7 @@ func TestRunVerifyE2EFullRunsPreflightsBeforeSuites(t *testing.T) {
 	assert.Equal(t, fullE2EBucketCommandArgs(fullE2ESerialSyncBucket()), runner.runCommands[5].args)
 	assert.Equal(t, fullE2EBucketCommandArgs(fullE2ESerialWatchSharedBucket()), runner.runCommands[6].args)
 	assertCommandHasEnvVar(t, runner.runCommands[3], "E2E_LOG_DIR="+logDir)
-	assertCommandLacksEnvVar(t, runner.runCommands[3], e2eSkipSuiteScrubEnvVar+"=1")
+	assertCommandLacksSkipSuiteScrubEnvVar(t, runner.runCommands[3])
 	assertCommandHasEnvVar(t, runner.runCommands[4], "E2E_LOG_DIR="+logDir)
 	assertCommandHasEnvVar(t, runner.runCommands[4], e2eSkipSuiteScrubEnvVar+"=1")
 	assertCommandHasEnvVar(t, runner.runCommands[5], e2eSkipSuiteScrubEnvVar+"=1")
@@ -192,6 +192,42 @@ func TestRunVerifyE2EFullRunsPreflightsBeforeSuites(t *testing.T) {
 	assert.Contains(t, stdout.String(), "verify summary")
 	assert.Contains(t, stdout.String(), "full-parallel-misc")
 	assert.Contains(t, stdout.String(), "classified reruns: none")
+}
+
+func TestRunVerifyE2EFullWithoutExplicitLogDirNormalizesDefaultLogDir(t *testing.T) {
+	repoRoot := t.TempDir()
+	tmpRoot := t.TempDir()
+	t.Setenv("TMPDIR", tmpRoot)
+
+	logDir := filepath.Join(os.TempDir(), "e2e-debug-logs")
+	require.NoError(t, os.MkdirAll(logDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(logDir, e2eTimingEventsFileName), []byte("events"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(logDir, e2eTimingSummaryFileName), []byte("summary"), 0o600))
+
+	runner := &fakeRunner{}
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot: repoRoot,
+		Profile:  VerifyE2EFull,
+		Stdout:   &bytes.Buffer{},
+		Stderr:   &bytes.Buffer{},
+	})
+	require.NoError(t, err)
+
+	require.Len(t, runner.runCommands, 7)
+	for i := range runner.runCommands {
+		assertCommandHasEnvVar(t, runner.runCommands[i], "E2E_LOG_DIR="+logDir)
+	}
+	assertCommandLacksSkipSuiteScrubEnvVar(t, runner.runCommands[0])
+	assertCommandLacksSkipSuiteScrubEnvVar(t, runner.runCommands[1])
+	assertCommandLacksSkipSuiteScrubEnvVar(t, runner.runCommands[2])
+	assertCommandHasEnvVar(t, runner.runCommands[4], e2eSkipSuiteScrubEnvVar+"=1")
+	assertCommandHasEnvVar(t, runner.runCommands[5], e2eSkipSuiteScrubEnvVar+"=1")
+	assertCommandHasEnvVar(t, runner.runCommands[6], e2eSkipSuiteScrubEnvVar+"=1")
+
+	_, eventsErr := os.Stat(filepath.Join(logDir, e2eTimingEventsFileName))
+	assert.True(t, os.IsNotExist(eventsErr))
+	_, summaryErr := os.Stat(filepath.Join(logDir, e2eTimingSummaryFileName))
+	assert.True(t, os.IsNotExist(summaryErr))
 }
 
 func TestRunVerifyE2EFullClassifiesKnownAuthPreflightQuirkAfterSuccessfulRerun(t *testing.T) {
@@ -474,9 +510,9 @@ func assertCommandHasEnvVar(t *testing.T, cmd recordedCommand, want string) {
 	assert.Contains(t, cmd.env, want)
 }
 
-func assertCommandLacksEnvVar(t *testing.T, cmd recordedCommand, unwanted string) {
+func assertCommandLacksSkipSuiteScrubEnvVar(t *testing.T, cmd recordedCommand) {
 	t.Helper()
-	assert.NotContains(t, cmd.env, unwanted)
+	assert.NotContains(t, cmd.env, e2eSkipSuiteScrubEnvVar+"=1")
 }
 
 // Validates: R-6.2.1

@@ -165,6 +165,63 @@ func TestSharedService_RunList_JSONKeepsOwnerIdentityEmptyWhenEnrichmentFails(t 
 	assert.Empty(t, parsed.AccountsDegraded)
 }
 
+// Validates: R-3.6.6, R-3.6.7
+func TestSharedService_RunList_JSONHonorsAccountFilter(t *testing.T) {
+	setTestDriveHome(t)
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_other@example.com.json")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case testDriveSearchAllPath:
+			w.Header().Set("Content-Type", "application/json")
+			writeTestResponse(t, w, `{
+				"value": [{
+					"id": "local-shortcut-1",
+					"name": "Shared Folder",
+					"folder": {"childCount": 3},
+					"remoteItem": {
+						"id": "source-item-folder",
+						"parentReference": {"driveId": "b!drive1234567890"}
+					}
+				}]
+			}`)
+		case testSharedFolderGetItemPath:
+			w.Header().Set("Content-Type", "application/json")
+			writeTestResponse(t, w, `{
+				"id": "source-item-folder",
+				"name": "Shared Folder",
+				"folder": {"childCount": 3},
+				"parentReference": {"id": "parent", "driveId": "b!drive1234567890"},
+				"shared": {"owner": {"user": {"email": "alice@example.com", "displayName": "Alice"}}}
+			}`)
+		default:
+			assert.Failf(t, "unexpected path", "path=%s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	cc := &CLIContext{
+		Flags:        CLIFlags{Account: "user@example.com", JSON: true},
+		Logger:       testDriveLogger(t),
+		OutputWriter: &out,
+		StatusWriter: &out,
+		CfgPath:      config.DefaultConfigPath(),
+		GraphBaseURL: srv.URL,
+	}
+
+	err := newSharedService(cc).runList(context.Background())
+	require.NoError(t, err)
+
+	var parsed sharedListJSONOutput
+	require.NoError(t, json.Unmarshal(out.Bytes(), &parsed))
+	require.Len(t, parsed.Items, 1)
+	assert.Equal(t, "shared:user@example.com:b!drive1234567890:source-item-folder", parsed.Items[0].Selector)
+	assert.Empty(t, parsed.AccountsRequiringAuth)
+	assert.Empty(t, parsed.AccountsDegraded)
+}
+
 // Validates: R-3.6.5, R-3.6.7
 func TestSharedService_RunList_JSONIncludesDegradedAccountWhenSearchFails(t *testing.T) {
 	setTestDriveHome(t)

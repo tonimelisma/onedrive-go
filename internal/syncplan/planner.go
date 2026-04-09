@@ -1076,9 +1076,9 @@ func expandFolderDeleteCascades(
 	// Track the current action index for each path. Initial classification
 	// emits at most one action per path; cascade may replace that action when
 	// the omitted remote delete changes the descendant semantics.
-	existingActionIndex := make(map[string]int, len(actions))
+	existingActionIndex := make(map[string]actionLocation, len(actions))
 	for i := range actions {
-		existingActionIndex[actions[i].Path] = i
+		existingActionIndex[actions[i].Path] = actionLocation{Index: i}
 	}
 
 	var cascaded []synctypes.Action
@@ -1132,9 +1132,14 @@ func shouldCascadeFolderDelete(action *synctypes.Action) bool {
 	return isDelete && resolveItemType(action.View) == synctypes.ItemTypeFolder
 }
 
+type actionLocation struct {
+	InCascaded bool
+	Index      int
+}
+
 func applyFolderDeleteCascade(
 	actions []synctypes.Action,
-	existingActionIndex map[string]int,
+	existingActionIndex map[string]actionLocation,
 	descendants []*synctypes.BaselineEntry,
 	views map[string]*synctypes.PathView,
 	mode synctypes.SyncMode,
@@ -1153,13 +1158,20 @@ func applyFolderDeleteCascade(
 			preserveRemoteDescendant = true
 		}
 
-		if existingIdx, exists := existingActionIndex[desc.Path]; exists {
-			actions[existingIdx] = descAction
+		if existingLocation, exists := existingActionIndex[desc.Path]; exists {
+			if existingLocation.InCascaded {
+				(*cascaded)[existingLocation.Index] = descAction
+			} else {
+				actions[existingLocation.Index] = descAction
+			}
 			continue
 		}
 
 		*cascaded = append(*cascaded, descAction)
-		existingActionIndex[desc.Path] = len(actions) + len(*cascaded) - 1
+		existingActionIndex[desc.Path] = actionLocation{
+			InCascaded: true,
+			Index:      len(*cascaded) - 1,
+		}
 	}
 
 	return preserveRemoteDescendant

@@ -227,6 +227,113 @@ func TestSharedDiscoveryService_DiscoverTargets_NoRepresentativeTokenReturnsDegr
 	assert.Equal(t, sharedDiscoveryUnavailableReason, result.AccountsDegraded[0].Reason)
 }
 
+// Validates: R-3.6.2, R-3.6.6, R-3.6.7
+func TestSharedDiscoveryService_DiscoverTargets_IgnoresCallerAccountFilter(t *testing.T) {
+	setTestDriveHome(t)
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_other@example.com.json")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case testDriveSearchAllPath:
+			writeTestResponse(t, w, `{
+				"value": [{
+					"id":"local-kept",
+					"name":"Kept Folder",
+					"folder":{"childCount":1},
+					"remoteItem":{"id":"remote-folder-1","parentReference":{"driveId":"b!remote123"}}
+				}]
+			}`)
+		case testSharedDiscoveryRemoteFolderPath:
+			writeTestResponse(t, w, `{
+				"id":"remote-folder-1",
+				"name":"Kept Folder",
+				"folder":{"childCount":1},
+				"parentReference":{"driveId":"00000b!remote123"},
+				"shared":{"owner":{"user":{"email":"alice@example.com","displayName":"Alice"}}}
+			}`)
+		default:
+			assert.Failf(t, "unexpected path", "path=%s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cc := &CLIContext{
+		Flags:        CLIFlags{Account: "user@example.com"},
+		Logger:       testDriveLogger(t),
+		OutputWriter: &bytes.Buffer{},
+		StatusWriter: &bytes.Buffer{},
+		CfgPath:      filepath.Join(t.TempDir(), "config.toml"),
+		GraphBaseURL: srv.URL,
+	}
+
+	result := newSharedDiscoveryService(cc).discoverTargets(t.Context(), []accountCatalogEntry{{
+		Email:                 "other@example.com",
+		DisplayName:           "Other Example",
+		DriveType:             driveid.DriveTypePersonal,
+		TokenDriveIDs:         []driveid.CanonicalID{driveid.MustCanonicalID("personal:other@example.com")},
+		RepresentativeTokenID: driveid.MustCanonicalID("personal:other@example.com"),
+		AuthHealth:            accountAuthHealth{State: authStateReady},
+	}})
+
+	require.Len(t, result.Targets, 1)
+	assert.Equal(t, "other@example.com", result.Targets[0].AccountEmail)
+	assert.Empty(t, result.AccountsRequiringAuth)
+	assert.Empty(t, result.AccountsDegraded)
+}
+
+// Validates: R-3.6.5, R-3.6.6, R-3.6.7
+func TestSharedDiscoveryService_DiscoverTargets_FallsBackAcrossAccountTokens(t *testing.T) {
+	setTestDriveHome(t)
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case testDriveSearchAllPath:
+			writeTestResponse(t, w, `{
+				"value": [{
+					"id":"local-kept",
+					"name":"Kept Folder",
+					"folder":{"childCount":1},
+					"remoteItem":{"id":"remote-folder-1","parentReference":{"driveId":"b!remote123"}}
+				}]
+			}`)
+		case testSharedDiscoveryRemoteFolderPath:
+			writeTestResponse(t, w, `{
+				"id":"remote-folder-1",
+				"name":"Kept Folder",
+				"folder":{"childCount":1},
+				"parentReference":{"driveId":"00000b!remote123"},
+				"shared":{"owner":{"user":{"email":"alice@example.com","displayName":"Alice"}}}
+			}`)
+		default:
+			assert.Failf(t, "unexpected path", "path=%s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cc := &CLIContext{
+		Logger:       testDriveLogger(t),
+		OutputWriter: &bytes.Buffer{},
+		StatusWriter: &bytes.Buffer{},
+		CfgPath:      filepath.Join(t.TempDir(), "config.toml"),
+		GraphBaseURL: srv.URL,
+	}
+
+	result := newSharedDiscoveryService(cc).discoverTargets(t.Context(), []accountCatalogEntry{{
+		Email:                 "user@example.com",
+		DisplayName:           "User Example",
+		DriveType:             driveid.DriveTypeBusiness,
+		TokenDriveIDs:         []driveid.CanonicalID{driveid.MustCanonicalID("business:user@example.com"), driveid.MustCanonicalID("personal:user@example.com")},
+		RepresentativeTokenID: driveid.MustCanonicalID("business:user@example.com"),
+		AuthHealth:            accountAuthHealth{State: authStateReady},
+	}})
+
+	require.Len(t, result.Targets, 1)
+	assert.Equal(t, "shared:user@example.com:00000b!remote123:remote-folder-1", result.Targets[0].Selector)
+	assert.Empty(t, result.AccountsRequiringAuth)
+	assert.Empty(t, result.AccountsDegraded)
+}
+
 // Validates: R-3.6.7
 func TestSharedService_RunList_JSONIncludesAuthRequiredWhenSearchUnauthorized(t *testing.T) {
 	setTestDriveHome(t)

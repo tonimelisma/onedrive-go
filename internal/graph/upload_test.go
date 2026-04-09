@@ -1102,6 +1102,72 @@ func TestUpload_SimpleNotFoundFallsBackToUploadSessionSuccess(t *testing.T) {
 	assert.Equal(t, 1, chunkCalls)
 }
 
+func TestUpload_SimpleNotFoundFallbackSessionSuccessSkipsSimpleFinalizePatch(t *testing.T) {
+	content := []byte("shared-folder-write")
+	mtime := time.Date(2024, 7, 10, 9, 0, 0, 0, time.UTC)
+
+	chunkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			body, err := io.ReadAll(r.Body)
+			if !assert.NoError(t, err) {
+				return
+			}
+			assert.Equal(t, content, body)
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			writeTestResponsef(t, w, `{
+				"id": "fallback-item",
+				"name": "shared.txt",
+				"size": %d,
+				"createdDateTime": "2024-06-01T12:00:00Z",
+				"lastModifiedDateTime": "2024-07-10T09:00:00Z",
+				"parentReference": {"id": "shared-folder", "driveId": "d"},
+				"file": {"mimeType": "text/plain"}
+			}`, len(content))
+		case http.MethodDelete:
+			assert.Fail(t, "unexpected session cancel on successful fallback upload")
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			assert.Failf(t, "unexpected upload-session request", "method=%s path=%s", r.Method, r.URL.Path)
+		}
+	}))
+	defer chunkSrv.Close()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch {
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/content"):
+			w.Header().Set("request-id", "req-simple-404")
+			w.WriteHeader(http.StatusNotFound)
+			writeTestResponse(t, w, `{"error":{"code":"itemNotFound"}}`)
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "createUploadSession"):
+			w.WriteHeader(http.StatusOK)
+			writeTestResponsef(t, w, `{
+				"uploadUrl": "%s/upload",
+				"expirationDateTime": "2024-12-31T23:59:59Z"
+			}`, chunkSrv.URL)
+		case r.Method == http.MethodPatch:
+			assert.Fail(t, "fallback session upload should not run simple-upload finalization patch")
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			assert.Failf(t, "unexpected request", "method=%s path=%s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.Upload(
+		t.Context(), driveid.New("d"), "shared-folder", "shared.txt",
+		bytes.NewReader(content), int64(len(content)), mtime, nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, item)
+	assert.Equal(t, "fallback-item", item.ID)
+}
+
 func TestUpload_SimpleNotFoundThenSessionNotFoundRetriesSimpleUpload(t *testing.T) {
 	content := []byte("fresh-parent")
 
