@@ -118,38 +118,40 @@ func (m *SyncStore) queryRemoteStateRows(ctx context.Context, query string, args
 // ResetFailure resets a single failed path: transitions remote_state back to
 // pending and removes the sync_failures row. Uses a transaction to ensure
 // atomicity — crash between statements cannot leave inconsistent state.
-func (m *SyncStore) ResetFailure(ctx context.Context, path string) error {
+func (m *SyncStore) ResetFailure(ctx context.Context, path string) (err error) {
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("sync: begin reset-failure tx for %s: %w", path, err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback reset-failure tx for %s", path))
+	}()
 
 	// download_failed → pending_download
-	if _, err := tx.ExecContext(ctx,
+	if _, execErr := tx.ExecContext(ctx,
 		`UPDATE remote_state SET sync_status = ? WHERE path = ? AND sync_status = ?`,
 		synctypes.SyncStatusPendingDownload, path, synctypes.SyncStatusDownloadFailed,
-	); err != nil {
-		return fmt.Errorf("sync: resetting download failure for %s: %w", path, err)
+	); execErr != nil {
+		return fmt.Errorf("sync: resetting download failure for %s: %w", path, execErr)
 	}
 
 	// delete_failed → pending_delete (not pending_download — the item
 	// should be re-attempted as a delete, not a download).
-	if _, err := tx.ExecContext(ctx,
+	if _, execErr := tx.ExecContext(ctx,
 		`UPDATE remote_state SET sync_status = ? WHERE path = ? AND sync_status = ?`,
 		synctypes.SyncStatusPendingDelete, path, synctypes.SyncStatusDeleteFailed,
-	); err != nil {
-		return fmt.Errorf("sync: resetting delete failure for %s: %w", path, err)
+	); execErr != nil {
+		return fmt.Errorf("sync: resetting delete failure for %s: %w", path, execErr)
 	}
 
 	// Remove from sync_failures.
-	if _, err := tx.ExecContext(ctx,
+	if _, execErr := tx.ExecContext(ctx,
 		`DELETE FROM sync_failures WHERE path = ? AND failure_role != ?`, path, synctypes.FailureRoleHeld,
-	); err != nil {
-		return fmt.Errorf("sync: clearing sync failure for %s: %w", path, err)
+	); execErr != nil {
+		return fmt.Errorf("sync: clearing sync failure for %s: %w", path, execErr)
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("sync: committing reset-failure for %s: %w", path, err)
 	}
 
@@ -204,27 +206,32 @@ func (m *SyncStore) ApproveHeldDeletes(ctx context.Context) error {
 // DropLegacyRemoteBlockedScope removes old persisted perm:remote authority
 // rows while leaving held failures intact. New code derives the runtime scope
 // entirely from the held rows.
-func (m *SyncStore) DropLegacyRemoteBlockedScope(ctx context.Context, scopeKey synctypes.ScopeKey) error {
+func (m *SyncStore) DropLegacyRemoteBlockedScope(
+	ctx context.Context,
+	scopeKey synctypes.ScopeKey,
+) (err error) {
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("sync: begin remote legacy cleanup tx for %s: %w", scopeKey.String(), err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback remote legacy cleanup tx for %s", scopeKey.String()))
+	}()
 
-	if _, err := tx.ExecContext(ctx,
+	if _, execErr := tx.ExecContext(ctx,
 		`DELETE FROM scope_blocks WHERE scope_key = ?`, scopeKey.String(),
-	); err != nil {
-		return fmt.Errorf("sync: deleting legacy remote scope block %s: %w", scopeKey.String(), err)
+	); execErr != nil {
+		return fmt.Errorf("sync: deleting legacy remote scope block %s: %w", scopeKey.String(), execErr)
 	}
 
-	if _, err := tx.ExecContext(ctx,
+	if _, execErr := tx.ExecContext(ctx,
 		`DELETE FROM sync_failures WHERE scope_key = ? AND failure_role = ?`,
 		scopeKey.String(), synctypes.FailureRoleBoundary,
-	); err != nil {
-		return fmt.Errorf("sync: deleting legacy remote scope boundary %s: %w", scopeKey.String(), err)
+	); execErr != nil {
+		return fmt.Errorf("sync: deleting legacy remote scope boundary %s: %w", scopeKey.String(), execErr)
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("sync: committing remote legacy cleanup for %s: %w", scopeKey.String(), err)
 	}
 
@@ -403,7 +410,7 @@ func (m *SyncStore) SetDispatchStatus(ctx context.Context, driveID, itemID strin
 // WriteSyncMetadata persists sync metadata after a completed RunOnce pass.
 // Keys: last_sync_time, last_sync_duration_ms, last_sync_error,
 // last_sync_succeeded, last_sync_failed.
-func (m *SyncStore) WriteSyncMetadata(ctx context.Context, report *synctypes.SyncReport) error {
+func (m *SyncStore) WriteSyncMetadata(ctx context.Context, report *synctypes.SyncReport) (err error) {
 	now := m.nowFunc().UTC().Format(time.RFC3339)
 	durationMS := fmt.Sprintf("%d", report.Duration.Milliseconds())
 	succeeded := fmt.Sprintf("%d", report.Succeeded)
@@ -426,18 +433,20 @@ func (m *SyncStore) WriteSyncMetadata(ctx context.Context, report *synctypes.Syn
 	if err != nil {
 		return fmt.Errorf("sync metadata begin tx: %w", err)
 	}
-	defer tx.Rollback() // rollback after commit is benign
+	defer func() {
+		err = finalizeTxRollback(err, tx, "sync metadata rollback")
+	}()
 
 	const upsertSQL = `INSERT INTO sync_metadata (key, value) VALUES (?, ?)
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value`
 
 	for _, kv := range pairs {
-		if _, err := tx.ExecContext(ctx, upsertSQL, kv[0], kv[1]); err != nil {
-			return fmt.Errorf("sync metadata upsert %s: %w", kv[0], err)
+		if _, execErr := tx.ExecContext(ctx, upsertSQL, kv[0], kv[1]); execErr != nil {
+			return fmt.Errorf("sync metadata upsert %s: %w", kv[0], execErr)
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("commit sync metadata reset: %w", err)
 	}
 
@@ -521,7 +530,11 @@ func (m *SyncStore) syncMetadataTableExists(ctx context.Context) (bool, error) {
 // The actionable boundary row and the scope block are one semantic unit.
 // Releasing them together prevents the split-brain state where one survives
 // after the other has already been cleared.
-func (m *SyncStore) ReleaseScope(ctx context.Context, scopeKey synctypes.ScopeKey, now time.Time) error {
+func (m *SyncStore) ReleaseScope(
+	ctx context.Context,
+	scopeKey synctypes.ScopeKey,
+	now time.Time,
+) (err error) {
 	wire := scopeKey.String()
 	nowNano := now.UnixNano()
 
@@ -529,32 +542,34 @@ func (m *SyncStore) ReleaseScope(ctx context.Context, scopeKey synctypes.ScopeKe
 	if err != nil {
 		return fmt.Errorf("sync: begin release-scope tx for %s: %w", wire, err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback release-scope tx for %s", wire))
+	}()
 
-	if _, err := tx.ExecContext(ctx,
+	if _, execErr := tx.ExecContext(ctx,
 		`DELETE FROM scope_blocks WHERE scope_key = ?`, wire,
-	); err != nil {
-		return fmt.Errorf("sync: deleting scope block %s: %w", wire, err)
+	); execErr != nil {
+		return fmt.Errorf("sync: deleting scope block %s: %w", wire, execErr)
 	}
 
-	if _, err := tx.ExecContext(ctx,
+	if _, execErr := tx.ExecContext(ctx,
 		`DELETE FROM sync_failures
 		WHERE scope_key = ? AND failure_role = ?`,
 		wire, synctypes.FailureRoleBoundary,
-	); err != nil {
-		return fmt.Errorf("sync: deleting scope issue rows %s: %w", wire, err)
+	); execErr != nil {
+		return fmt.Errorf("sync: deleting scope issue rows %s: %w", wire, execErr)
 	}
 
-	if _, err := tx.ExecContext(ctx,
+	if _, execErr := tx.ExecContext(ctx,
 		`UPDATE sync_failures
 		SET failure_role = ?, next_retry_at = ?
 		WHERE scope_key = ? AND failure_role = ? AND next_retry_at IS NULL AND category = ?`,
 		synctypes.FailureRoleItem, nowNano, wire, synctypes.FailureRoleHeld, synctypes.CategoryTransient,
-	); err != nil {
-		return fmt.Errorf("sync: unblocking failures for scope %s: %w", wire, err)
+	); execErr != nil {
+		return fmt.Errorf("sync: unblocking failures for scope %s: %w", wire, execErr)
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("sync: committing release-scope for %s: %w", wire, err)
 	}
 
@@ -567,28 +582,30 @@ func (m *SyncStore) ReleaseScope(ctx context.Context, scopeKey synctypes.ScopeKe
 // This is used when the blocked subtree itself disappears, for example when a
 // shortcut is removed. Discarding differs from release: held descendants are
 // deleted instead of made retryable.
-func (m *SyncStore) DiscardScope(ctx context.Context, scopeKey synctypes.ScopeKey) error {
+func (m *SyncStore) DiscardScope(ctx context.Context, scopeKey synctypes.ScopeKey) (err error) {
 	wire := scopeKey.String()
 
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("sync: begin discard-scope tx for %s: %w", wire, err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback discard-scope tx for %s", wire))
+	}()
 
-	if _, err := tx.ExecContext(ctx,
+	if _, execErr := tx.ExecContext(ctx,
 		`DELETE FROM scope_blocks WHERE scope_key = ?`, wire,
-	); err != nil {
-		return fmt.Errorf("sync: deleting scope block %s: %w", wire, err)
+	); execErr != nil {
+		return fmt.Errorf("sync: deleting scope block %s: %w", wire, execErr)
 	}
 
-	if _, err := tx.ExecContext(ctx,
+	if _, execErr := tx.ExecContext(ctx,
 		`DELETE FROM sync_failures WHERE scope_key = ?`, wire,
-	); err != nil {
-		return fmt.Errorf("sync: deleting scoped failures %s: %w", wire, err)
+	); execErr != nil {
+		return fmt.Errorf("sync: deleting scoped failures %s: %w", wire, execErr)
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("sync: committing discard-scope for %s: %w", wire, err)
 	}
 

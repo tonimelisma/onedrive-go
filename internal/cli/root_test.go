@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -24,6 +25,16 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
+
+type countingCloser struct {
+	err       error
+	callCount int
+}
+
+func (c *countingCloser) Close() error {
+	c.callCount++
+	return c.err
+}
 
 // --- buildLogger tests ---
 
@@ -275,6 +286,54 @@ func TestCLIContextSession_ReconcilesEmailChangeAndReloadsDrive(t *testing.T) {
 	_, oldTokenErr := os.Stat(config.DriveTokenPath(oldCID))
 	require.ErrorIs(t, oldTokenErr, os.ErrNotExist)
 	assert.FileExists(t, config.DriveTokenPath(newCID))
+}
+
+func TestCLIContextReplaceCommandLogger_ClosesReplacedCloserAndPostRunClosesActiveCloser(t *testing.T) {
+	t.Parallel()
+
+	oldCloser := &countingCloser{}
+	newCloser := &countingCloser{}
+	oldLogger := slog.New(slog.DiscardHandler)
+	newLogger := slog.New(slog.DiscardHandler)
+
+	cc := &CLIContext{
+		Logger:    oldLogger,
+		logCloser: oldCloser,
+	}
+
+	require.NoError(t, cc.replaceCommandLogger(newLogger, newCloser))
+	assert.Same(t, newLogger, cc.Logger)
+	assert.Equal(t, 1, oldCloser.callCount)
+	assert.Equal(t, 0, newCloser.callCount)
+
+	require.NoError(t, cc.closeCommandLogger())
+	assert.Equal(t, 1, newCloser.callCount)
+
+	require.NoError(t, cc.closeCommandLogger())
+	assert.Equal(t, 1, newCloser.callCount, "post-run close should not double-close the active logger")
+}
+
+func TestCLIContextReplaceCommandLogger_SurfacesSwapCloseError(t *testing.T) {
+	t.Parallel()
+
+	oldCloseErr := errors.New("close old logger")
+	oldCloser := &countingCloser{err: oldCloseErr}
+	newCloser := &countingCloser{}
+	oldLogger := slog.New(slog.DiscardHandler)
+	newLogger := slog.New(slog.DiscardHandler)
+
+	cc := &CLIContext{
+		Logger:    oldLogger,
+		logCloser: oldCloser,
+	}
+
+	err := cc.replaceCommandLogger(newLogger, newCloser)
+	require.Error(t, err)
+	require.ErrorIs(t, err, oldCloseErr)
+	assert.Same(t, oldLogger, cc.Logger)
+	assert.Nil(t, cc.logCloser, "failed swap should not leave a replacement closer installed")
+	assert.Equal(t, 1, oldCloser.callCount)
+	assert.Equal(t, 1, newCloser.callCount, "replacement closer should be closed on swap failure")
 }
 
 func TestNewGraphClient_ReturnsConstructionError(t *testing.T) {
