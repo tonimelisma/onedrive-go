@@ -315,8 +315,9 @@ Runtime policy:
   confirms the path by exact-name parent/ancestor listing before spending more
   retry budget on the same stale path lookup
 - `mkdir`, single-file `put`, and `mv` retry destination-path reads on exact
-  `itemNotFound` using a short deterministic schedule: `250ms`, `500ms`, `1s`,
-  `2s`, `4s`, `8s`, `16s`
+  `itemNotFound` using a deterministic schedule that ramps
+  `250ms`, `500ms`, `1s`, `2s`, `4s`, `8s`, `16s`, then holds the `32s` cap
+  long enough to spend just under two minutes total
 - if the destination path still is not readable after that budget, the command
   returns `ErrPathNotVisible` instead of claiming success prematurely
 
@@ -335,8 +336,23 @@ Observed extension trigger on April 5, 2026:
   `346757be-67cf-4363-bfa1-aedf0f51f634`,
   `c4e63564-7be3-4e33-b62d-0633d13ee42f`,
   `0d54bce7-4842-4831-b246-617223a0fe71`
-- the production schedule was therefore extended to include the final `16s`
-  step before surfacing `ErrPathNotVisible`
+- the production schedule was therefore first extended to include the final
+  `16s` step before surfacing `ErrPathNotVisible`
+
+Observed extension trigger on April 9, 2026 during `go run ./cmd/devtool verify
+default`:
+
+- fast E2E `TestE2E_RoundTrip/rm_permanent` proved the same family could
+  outlive the old ~32-second total budget after earlier substeps had already
+  created, listed, and partially cleaned up `/onedrive-go-e2e-1775753944282690000`
+- the follow-on `put /onedrive-go-e2e-1775753944282690000/perm-test.txt` kept
+  failing parent resolution for `/onedrive-go-e2e-1775753944282690000` through
+  repeated exact-path `404 itemNotFound` plus root-children listings that still
+  omitted the folder; representative late request IDs from that failing run
+  included `54cd8b32-1efd-4927-8583-faa972d45e7a` and
+  `38ebde5b-9ff5-487a-89db-45b85f704e4b`
+- the production schedule was therefore widened again to keep the `32s` cap for
+  roughly two minutes total before surfacing `ErrPathNotVisible`
 
 ### Delete-By-ID Can Lag A Successful Path Lookup
 

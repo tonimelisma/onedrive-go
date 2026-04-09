@@ -114,8 +114,8 @@ func (s *syncService) run(ctx context.Context, opts syncCommandOptions) error {
 
 	cfgForLog := &config.ResolvedDrive{LoggingConfig: rawCfg.LoggingConfig}
 	dualLogger, logCloser := buildLoggerDualWithStatusWriter(cfgForLog, s.cc.Flags, s.cc.Status())
-	if replaceErr := s.cc.replaceCommandLogger(dualLogger, logCloser); replaceErr != nil {
-		return replaceErr
+	if swapErr := s.cc.replaceCommandLogger(dualLogger, logCloser); swapErr != nil {
+		return swapErr
 	}
 	logger = s.cc.Logger
 

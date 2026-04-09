@@ -12,7 +12,7 @@ const (
 	simpleUploadMtimeAttempts    = 4
 	uploadSessionCreateAttempts  = 6
 	simpleUploadCreateAttempts   = 7
-	pathVisibilityAttempts       = 8
+	pathVisibilityAttempts       = 11
 	infiniteAttempts             = 0
 	standardMultiplier           = 2.0
 	standardJitter               = 0.25

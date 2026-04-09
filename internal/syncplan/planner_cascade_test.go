@@ -12,6 +12,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
+const plannerCascadeFolderPath = "folder"
+
 // ---------------------------------------------------------------------------
 // Folder Delete Cascade Expansion Tests
 // ---------------------------------------------------------------------------
@@ -324,7 +326,7 @@ func TestCascade_RemoteDeletedFolderWithModifiedDescendant_ReclassifiesDescendan
 
 	folderCreates := synctest.ActionsOfType(plan.Actions, synctypes.ActionFolderCreate)
 	require.Len(t, folderCreates, 1)
-	assert.Equal(t, "folder", folderCreates[0].Path)
+	assert.Equal(t, plannerCascadeFolderPath, folderCreates[0].Path)
 	assert.Equal(t, synctypes.CreateRemote, folderCreates[0].CreateSide)
 
 	conflicts := synctest.ActionsOfType(plan.Actions, synctypes.ActionConflict)
@@ -339,7 +341,7 @@ func TestCascade_RemoteDeletedFolderWithModifiedDescendant_ReclassifiesDescendan
 	var folderCreateIdx, conflictIdx int
 	for i := range plan.Actions {
 		switch {
-		case plan.Actions[i].Type == synctypes.ActionFolderCreate && plan.Actions[i].Path == "folder":
+		case plan.Actions[i].Type == synctypes.ActionFolderCreate && plan.Actions[i].Path == plannerCascadeFolderPath:
 			folderCreateIdx = i
 		case plan.Actions[i].Type == synctypes.ActionConflict && plan.Actions[i].Path == "folder/child.txt":
 			conflictIdx = i

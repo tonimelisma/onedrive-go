@@ -394,6 +394,15 @@ Evidence:
   `/e2e-sync-marker-1775721144409607000` had already succeeded after `mkdir`,
   but repeated `ls /e2e-sync-marker-1775721144409607000` still returned 404
   while the child-folder setup was trying to prove `blocked` visibility.
+- The same April 9, 2026 `go run ./cmd/devtool verify default` run also hit
+  the product boundary directly in fast E2E `TestE2E_RoundTrip/rm_permanent`.
+  Earlier substeps in that same round-trip had already created, listed, and
+  partially cleaned up `/onedrive-go-e2e-1775753944282690000`, but the later
+  `put /onedrive-go-e2e-1775753944282690000/perm-test.txt` still exhausted the
+  older `WaitPathVisible()` budget resolving parent
+  `/onedrive-go-e2e-1775753944282690000`. Representative late request IDs from
+  that failing run were exact-path `54cd8b32-1efd-4927-8583-faa972d45e7a` and
+  root-children `38ebde5b-9ff5-487a-89db-45b85f704e4b`.
 Resolution / mitigation: CLI mutation flows now treat destination visibility as
 a bounded driveops-owned convergence concern. `mkdir`, single-file `put`, and
 `mv` wait for the destination path to become readable before reporting success,
@@ -415,7 +424,11 @@ reused after drive re-add. It no longer treats follow-on remote path
 readability as the proof for that state-preservation contract. The same rule
 now applies to `TestE2E_Sync_UploadOnly`: immediate success is proven through
 the durable baseline row written by the sync outcome boundary, not by a
-separate follow-on remote `stat`.
+separate follow-on remote `stat`. After the April 9 recurring `rm_permanent`
+repro proved the product boundary itself could still exhaust too early,
+`PathVisibilityPolicy()` was widened to keep its deterministic `32s` cap long
+enough to spend just under two minutes total before surfacing
+`ErrPathNotVisible`.
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [drive-transfers.md](../design/drive-transfers.md), [cli.md](../design/cli.md)
 
 ## LI-20260407-04: Shared-file preflight assumed only one configured recipient could open the raw link
