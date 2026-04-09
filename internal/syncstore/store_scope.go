@@ -104,10 +104,7 @@ func (m *SyncStore) ReadScopeState(ctx context.Context) (synctypes.ScopeStateRec
 // already-known remote_state rows against the effective snapshot in the same
 // transaction. This is the sole durable authority for filtered-row activation
 // and deactivation.
-func (m *SyncStore) ApplyScopeState(
-	ctx context.Context,
-	req synctypes.ScopeStateApplyRequest,
-) (err error) {
+func (m *SyncStore) ApplyScopeState(ctx context.Context, req synctypes.ScopeStateApplyRequest) (err error) {
 	snapshot, err := syncscope.UnmarshalSnapshot(req.State.EffectiveSnapshotJSON)
 	if err != nil {
 		return fmt.Errorf("decode scope snapshot: %w", err)

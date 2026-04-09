@@ -177,7 +177,7 @@ func TestCLIContextSession_WrapsProviderError(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, session)
 	assert.Contains(t, err.Error(), "create drive session")
-	assert.ErrorIs(t, err, graph.ErrNotLoggedIn)
+	require.ErrorIs(t, err, graph.ErrNotLoggedIn)
 }
 
 func TestCLIContextSession_Success(t *testing.T) {

@@ -554,7 +554,7 @@ func (m *SyncStore) ReleaseScope(
 
 	if _, execErr := tx.ExecContext(ctx,
 		`DELETE FROM sync_failures
-		WHERE scope_key = ? AND failure_role = ?`,
+			WHERE scope_key = ? AND failure_role = ?`,
 		wire, synctypes.FailureRoleBoundary,
 	); execErr != nil {
 		return fmt.Errorf("sync: deleting scope issue rows %s: %w", wire, execErr)
@@ -562,8 +562,8 @@ func (m *SyncStore) ReleaseScope(
 
 	if _, execErr := tx.ExecContext(ctx,
 		`UPDATE sync_failures
-		SET failure_role = ?, next_retry_at = ?
-		WHERE scope_key = ? AND failure_role = ? AND next_retry_at IS NULL AND category = ?`,
+			SET failure_role = ?, next_retry_at = ?
+			WHERE scope_key = ? AND failure_role = ? AND next_retry_at IS NULL AND category = ?`,
 		synctypes.FailureRoleItem, nowNano, wire, synctypes.FailureRoleHeld, synctypes.CategoryTransient,
 	); execErr != nil {
 		return fmt.Errorf("sync: unblocking failures for scope %s: %w", wire, execErr)
