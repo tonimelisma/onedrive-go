@@ -16,15 +16,16 @@ import (
 )
 
 const (
-	maxPlannerFuzzPaths          = 6
-	maxPlannerFuzzEvents         = 3
-	maxPlannerFuzzPayload        = 8192
-	plannerFuzzFolderToken       = "folder"
-	plannerFuzzDownloadToken     = "download"
-	plannerFuzzUploadToken       = "upload"
-	plannerFuzzParentDirToken    = ".."
-	plannerFuzzDownloadOnlyToken = "download-only"
-	plannerFuzzUploadOnlyToken   = "upload-only"
+	maxPlannerFuzzPaths   = 6
+	maxPlannerFuzzEvents  = 3
+	maxPlannerFuzzPayload = 8192
+
+	plannerDownloadWord  = "download"
+	plannerUploadWord    = "upload"
+	plannerFolderWord    = "folder"
+	plannerRootWord      = "root"
+	plannerDirWord       = "dir"
+	plannerParentSegment = ".."
 )
 
 type plannerFuzzCase struct {
@@ -113,13 +114,7 @@ func runPlannerFuzzCase(data []byte, logger *slog.Logger) (string, bool) {
 	}
 
 	planner := NewPlanner(logger)
-	plan, err := planner.Plan(
-		decoded.changes,
-		decoded.baseline,
-		decoded.mode,
-		decoded.config,
-		decoded.deniedPrefixes,
-	)
+	plan, err := planner.Plan(decoded.changes, decoded.baseline, decoded.mode, decoded.config, decoded.deniedPrefixes)
 
 	return plannerOutcomeFingerprint(plan, err), true
 }
@@ -134,14 +129,11 @@ func decodePlannerFuzzCase(data []byte) (decodedPlannerFuzzCase, bool) {
 		return decodedPlannerFuzzCase{}, false
 	}
 
-	baselineEntries := make([]*synctypes.BaselineEntry, 0, min(len(raw.Baseline), maxPlannerFuzzPaths))
+	baselineEntries := make([]*synctypes.BaselineEntry, 0, minInt(len(raw.Baseline), maxPlannerFuzzPaths))
 	seenBaselinePaths := make(map[string]struct{}, maxPlannerFuzzPaths)
-	for i := range raw.Baseline {
-		if len(baselineEntries) == maxPlannerFuzzPaths {
-			break
-		}
-
+	for i := 0; i < len(raw.Baseline) && len(baselineEntries) < maxPlannerFuzzPaths; i++ {
 		entry := &raw.Baseline[i]
+
 		fallbackPath := fmt.Sprintf("baseline-%d.txt", i)
 		safePath := sanitizePlannerPath(entry.Path, fallbackPath)
 		if _, exists := seenBaselinePaths[safePath]; exists {
@@ -179,14 +171,11 @@ func decodePlannerFuzzCase(data []byte) (decodedPlannerFuzzCase, bool) {
 	}
 
 	baseline := synctypes.NewBaselineForTest(baselineEntries)
-	changes := make([]synctypes.PathChanges, 0, min(len(raw.Changes), maxPlannerFuzzPaths))
+	changes := make([]synctypes.PathChanges, 0, minInt(len(raw.Changes), maxPlannerFuzzPaths))
 	seenChangePaths := make(map[string]struct{}, maxPlannerFuzzPaths)
-	for i := range raw.Changes {
-		if len(changes) == maxPlannerFuzzPaths {
-			break
-		}
-
+	for i := 0; i < len(raw.Changes) && len(changes) < maxPlannerFuzzPaths; i++ {
 		change := &raw.Changes[i]
+
 		fallbackPath := fmt.Sprintf("change-%d.txt", i)
 		safePath := sanitizePlannerPath(change.Path, fallbackPath)
 		if _, exists := seenChangePaths[safePath]; exists {
@@ -222,13 +211,10 @@ func decodePlannerEvents(
 		return nil
 	}
 
-	events := make([]synctypes.ChangeEvent, 0, min(len(rawEvents), maxPlannerFuzzEvents))
-	for i := range rawEvents {
-		if len(events) == maxPlannerFuzzEvents {
-			break
-		}
-
+	events := make([]synctypes.ChangeEvent, 0, minInt(len(rawEvents), maxPlannerFuzzEvents))
+	for i := 0; i < len(rawEvents) && len(events) < maxPlannerFuzzEvents; i++ {
 		raw := &rawEvents[i]
+
 		itemType := parsePlannerItemType(raw.ItemType)
 		if isFolderLikePath(fallbackPath) {
 			itemType = synctypes.ItemTypeFolder
@@ -271,9 +257,9 @@ func decodePlannerEvents(
 
 func parsePlannerMode(raw string) synctypes.SyncMode {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case plannerFuzzDownloadOnlyToken, plannerFuzzDownloadToken:
+	case plannerDownloadWord + "-only", plannerDownloadWord:
 		return synctypes.SyncDownloadOnly
-	case plannerFuzzUploadOnlyToken, plannerFuzzUploadToken:
+	case plannerUploadWord + "-only", plannerUploadWord:
 		return synctypes.SyncUploadOnly
 	default:
 		return synctypes.SyncBidirectional
@@ -282,9 +268,9 @@ func parsePlannerMode(raw string) synctypes.SyncMode {
 
 func parsePlannerItemType(raw string) synctypes.ItemType {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case plannerFuzzFolderToken:
+	case plannerFolderWord:
 		return synctypes.ItemTypeFolder
-	case "root":
+	case plannerRootWord:
 		return synctypes.ItemTypeRoot
 	default:
 		return synctypes.ItemTypeFile
@@ -306,9 +292,9 @@ func parsePlannerChangeType(raw string) synctypes.ChangeType {
 
 func parsePlannerActionType(raw string) (synctypes.ActionType, bool) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case plannerFuzzDownloadToken:
+	case plannerDownloadWord:
 		return synctypes.ActionDownload, true
-	case plannerFuzzUploadToken:
+	case plannerUploadWord:
 		return synctypes.ActionUpload, true
 	case "local_delete":
 		return synctypes.ActionLocalDelete, true
@@ -348,7 +334,7 @@ func sanitizePlannerPrefixes(prefixes []string) []string {
 		return nil
 	}
 
-	result := make([]string, 0, min(len(prefixes), maxPlannerFuzzPaths))
+	result := make([]string, 0, minInt(len(prefixes), maxPlannerFuzzPaths))
 	seen := make(map[string]struct{}, maxPlannerFuzzPaths)
 	for i, prefix := range prefixes {
 		if len(result) == maxPlannerFuzzPaths {
@@ -391,13 +377,14 @@ func sanitizePlannerOptionalPath(raw string) string {
 	}
 
 	cleaned := path.Clean(strings.TrimPrefix(raw, "/"))
-	if cleaned == "." || cleaned == "" || cleaned == plannerFuzzParentDirToken || strings.HasPrefix(cleaned, "../") {
+	if cleaned == "." || cleaned == "" || cleaned == plannerParentSegment || strings.HasPrefix(cleaned, plannerParentSegment+"/") {
 		return ""
 	}
 
 	parts := strings.Split(cleaned, "/")
-	for _, part := range parts {
-		if part == "" || part == "." || part == plannerFuzzParentDirToken {
+	for i := range parts {
+		part := parts[i]
+		if part == "" || part == "." || part == plannerParentSegment {
 			return ""
 		}
 	}
@@ -405,9 +392,9 @@ func sanitizePlannerOptionalPath(raw string) string {
 	return cleaned
 }
 
-func isFolderLikePath(path string) bool {
-	base := strings.ToLower(pathpkgBase(path))
-	return strings.Contains(base, plannerFuzzFolderToken) || strings.Contains(base, "dir")
+func isFolderLikePath(p string) bool {
+	base := strings.ToLower(path.Base(p))
+	return strings.Contains(base, plannerFolderWord) || strings.Contains(base, plannerDirWord)
 }
 
 func defaultPlannerString(value, fallback string) string {
@@ -613,10 +600,10 @@ func plannerFuzzSeeds() [][]byte {
 	}
 }
 
-func pathpkgBase(p string) string {
-	if p == "" {
-		return ""
+func minInt(a, b int) int {
+	if a < b {
+		return a
 	}
 
-	return path.Base(p)
+	return b
 }

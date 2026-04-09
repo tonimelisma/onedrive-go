@@ -137,8 +137,8 @@ type CLIContext struct {
 func (cc *CLIContext) replaceCommandLogger(logger *slog.Logger, closer io.Closer) error {
 	if cc == nil {
 		if closer != nil {
-			if err := closer.Close(); err != nil {
-				return fmt.Errorf("close replacement command logger: %w", err)
+			if closeErr := closer.Close(); closeErr != nil {
+				return fmt.Errorf("close replacement command logger: %w", closeErr)
 			}
 		}
 
