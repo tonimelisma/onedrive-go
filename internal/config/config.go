@@ -52,8 +52,6 @@ type FilterConfig struct {
 //
 // transfer_workers controls the number of concurrent upload/download goroutines.
 // check_workers controls the number of concurrent file hashing goroutines.
-// The old parallel_downloads/uploads/checkers keys are deprecated but still
-// accepted — a warning is logged if they appear in the config file.
 type TransfersConfig struct {
 	TransferWorkers int `toml:"transfer_workers"`
 	CheckWorkers    int `toml:"check_workers"`
@@ -62,21 +60,17 @@ type TransfersConfig struct {
 // SafetyConfig controls protective defaults and thresholds that prevent
 // accidental data loss during sync operations.
 type SafetyConfig struct {
-	BigDeleteThreshold  int    `toml:"big_delete_threshold"`
-	MinFreeSpace        string `toml:"min_free_space"`
-	UseLocalTrash       bool   `toml:"use_local_trash"`
-	SyncDirPermissions  string `toml:"sync_dir_permissions"`
-	SyncFilePermissions string `toml:"sync_file_permissions"`
+	BigDeleteThreshold int    `toml:"big_delete_threshold"`
+	MinFreeSpace       string `toml:"min_free_space"`
+	UseLocalTrash      bool   `toml:"use_local_trash"`
 }
 
-// SyncConfig controls live sync behavior: polling, conflict policy, and watch
-// lifecycle timing.
+// SyncConfig controls live sync behavior: remote observation, periodic safety
+// scans, and one-shot dry-run execution.
 type SyncConfig struct {
 	PollInterval       string `toml:"poll_interval"`
 	Websocket          bool   `toml:"websocket"`
-	ConflictStrategy   string `toml:"conflict_strategy"`
 	DryRun             bool   `toml:"dry_run"`
-	ShutdownTimeout    string `toml:"shutdown_timeout"`
 	SafetyScanInterval string `toml:"safety_scan_interval"`
 }
 
@@ -103,7 +97,6 @@ type Drive struct {
 	SkipFiles    []string `toml:"skip_files,omitempty"`
 	SyncPaths    []string `toml:"sync_paths,omitempty"`
 	IgnoreMarker string   `toml:"ignore_marker,omitempty"`
-	PollInterval string   `toml:"poll_interval,omitempty"`
 }
 
 // IsPaused returns whether this drive is currently paused. This is the single

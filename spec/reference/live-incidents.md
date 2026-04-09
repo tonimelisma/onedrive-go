@@ -225,7 +225,7 @@ Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../
 ## LI-20260405-08: Delete-by-ID returned `404 itemNotFound` after successful path lookup
 
 First seen: 2026-04-05  
-Last seen: 2026-04-08  
+Last seen: 2026-04-09
 Area: `e2e_full`, CLI `rm`, forced-overwrite cleanup  
 Suite / test: `go test -tags='e2e e2e_full' ./e2e -run '^TestE2E_EdgeCases$|^TestE2E_Sync_BidirectionalMerge$'`; later isolated `TestE2E_Sync_BigDeleteProtection`  
 Classification: graph quirk  
@@ -248,18 +248,30 @@ Evidence:
   extended the same family: after repeated sibling deletes, the initial exact
   path lookup for `file-10.txt` returned `404 itemNotFound` even though the
   file had been created successfully earlier in the same run.
+- On April 9, 2026 local `go run ./cmd/devtool verify default` hit the same
+  delete-intent family in `TestE2E_RoundTrip/rm_subfolder`: the exact target
+  path `/onedrive-go-e2e-1775721721283528000/subfolder` returned `404
+  itemNotFound`, and the first fallback `GET
+  /root:/onedrive-go-e2e-1775721721283528000:/children` also returned `404`
+  even though the parent subtree had already been used successfully earlier in
+  the same round-trip. The failing request IDs were
+  `b98e08f8-d6ee-43ee-9fc5-29229235a489` for the exact target path and
+  `88168b5c-0f40-482e-8512-de77dc1c24e7` for the parent-children route.
 Resolution / mitigation: `driveops.Session` now owns delete-specific recovery.
 `ResolveDeleteTarget()` falls back from exact path lookup to the parent
-collection before declaring a path missing, and
-`DeleteResolvedPath()` / `PermanentDeleteResolvedPath()` retry delete intent
-against the currently resolved target while treating a now-missing path as
-success.  
+collection before declaring a path missing. When that parent-path collection
+route is itself in a transient `itemNotFound` gap, delete intent now resolves
+the parent folder recursively through ancestor collections and then lists the
+parent's children by item ID instead of failing on the first path-shaped
+false negative. `DeleteResolvedPath()` / `PermanentDeleteResolvedPath()` still
+retry delete intent against the currently resolved target while treating a
+now-missing path as success.
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [drive-transfers.md](../design/drive-transfers.md)
 
 ## LI-20260405-07: Destination path stayed unreadable after successful mutation
 
 First seen: 2026-04-05
-Last seen: 2026-04-08
+Last seen: 2026-04-09
 Area: `e2e_full`, CLI mutation follow-on path reads
 Suite / test: `verify e2e-full`, `TestE2E_Sync_EditEditConflict_ResolveKeepRemote`; later `TestE2E_Sync_BidirectionalMerge` and `TestE2E_Conflicts_ResolveKeepBoth`
 Classification: graph quirk
@@ -347,6 +359,21 @@ Evidence:
   `6b60ec38-202b-4108-8487-e877fa6794d3`, and
   `d7c1d501-09df-4629-ae2c-03c12d1276a0` before the short harness timeout
   expired.
+- On April 9, 2026 local `go run ./cmd/devtool verify default` hit the same
+  family again in `TestE2E_Sync_DriveRemoveAndReAdd`, this time after the
+  harness had already been widened to the shared 2-minute write-visibility
+  helper. The underlying product claim for that test was durable state reuse
+  across drive removal and re-add, but the harness was still asserting a
+  stronger cross-command remote path readability guarantee by polling `stat
+  /e2e-sync-readd-1775720725721617000/file1.txt` until timeout. The final
+  request ID on the last failing `stat` was `c61afc1d-20ce-488c-8d3e-8b4bc037cb6f`.
+- The same April 9, 2026 `go run ./cmd/devtool verify default` run then hit
+  the same family one test earlier in `TestE2E_Sync_UploadOnly`: the sync pass
+  itself succeeded, but the harness still treated `stat
+  /e2e-sync-up-1775721401287802000/upload-test.txt` as the proof of success
+  and timed out waiting for a follow-on by-path read that the product does not
+  promise. The final request ID on the last failing `stat` was
+  `fe8a7c70-ab69-44ed-9be3-c2ff83b05684`.
 Resolution / mitigation: CLI mutation flows now treat destination visibility as
 a bounded driveops-owned convergence concern. `mkdir`, single-file `put`, and
 `mv` wait for the destination path to become readable before reporting success,
@@ -358,7 +385,14 @@ when they are asserting follow-on remote readability after a successful write.
 `rm` now keeps the same bounded parent-read check for
 non-root deletes, but once delete intent has already proved the target path is
 gone it downgrades a pure `PathNotVisibleError` on that follow-on parent read
-to a warning instead of reporting a false delete failure.  
+to a warning instead of reporting a false delete failure. For
+`TestE2E_Sync_DriveRemoveAndReAdd`, the harness now asserts the thing the test
+actually claims: the durable `baseline` rows survive config removal and are
+reused after drive re-add. It no longer treats follow-on remote path
+readability as the proof for that state-preservation contract. The same rule
+now applies to `TestE2E_Sync_UploadOnly`: immediate success is proven through
+the durable baseline row written by the sync outcome boundary, not by a
+separate follow-on remote `stat`.
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [drive-transfers.md](../design/drive-transfers.md), [cli.md](../design/cli.md)
 
 ## LI-20260407-04: Shared-file preflight assumed only one configured recipient could open the raw link
@@ -444,18 +478,27 @@ Promoted docs: [drive-transfers.md](../design/drive-transfers.md), [sync-executi
 ## LI-20260407-01: Follow-on `put` lost a freshly visible parent path
 
 First seen: 2026-04-07  
-Last seen: 2026-04-07  
+Last seen: 2026-04-09
 Area: `e2e_full`, CLI `put`, conflict setup  
 Suite / test: `verify e2e-full`, `TestE2E_Conflicts_ResolveKeepBoth`  
 Classification: graph quirk  
 Status: fixed  
-Recurring: no  
+Recurring: yes
 Summary: A full-suite conflict setup proved that a parent folder could be visible to one command and still fail the immediate next command's parent-path resolution. The test helper confirmed the folder path before starting the remote edit step, but the subsequent CLI `put` still died resolving the same parent path with `404 itemNotFound` instead of treating it as a bounded visibility-convergence gap.  
 Evidence:
 - Local `go run ./cmd/devtool verify e2e-full` on April 7, 2026 failed in `TestE2E_Conflicts_ResolveKeepBoth` while uploading `/e2e-cli-keepboth-1775630146992732000/both.txt`.
 - The child CLI log showed `GET /me` first stalling to a transient `504`, then succeeding on retry, followed by `GET /drives/bd50cf43646e28e6/root:/e2e-cli-keepboth-1775630146992732000:` returning `404 itemNotFound` with request ID `55b3980f-1c7c-4465-b09f-6683a0771f08`.
 - [graph-api-quirks.md](graph-api-quirks.md) already records the broader path-visibility lag family for adjacent `mkdir` / `put` / `mv` flows; this incident showed the same family could hit pre-upload parent resolution too.
-Resolution / mitigation: CLI `put` and folder upload bootstrap now resolve the parent path through `driveops.Session.WaitPathVisible()` instead of one-shot `ResolveItem()`. That keeps parent-path convergence under the same bounded driveops authority already used for destination visibility after successful mutations.  
+- Local `go run ./cmd/devtool verify default` on April 8, 2026 hit the same family in fast E2E `TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile`: after `mkdir /.../docs` succeeded, the harness still timed out polling `stat /.../docs` before the follow-on helper-driven `put`, even though the product `put` command already owns parent convergence through `WaitPathVisible()`.
+- Local `go run ./cmd/devtool verify default` on April 9, 2026 hit the same
+  family one step later in that same fast E2E `sync_paths` setup: the second
+  `put /e2e-sync-scope-file-1775722231752954000/docs/other.txt` still failed
+  resolving parent `/.../docs` even after `WaitPathVisible()`, because the
+  exact parent path kept returning `404 itemNotFound` and the old visibility
+  gate did not yet confirm the parent by exact-name ancestor listing. The
+  final request ID on the last failing parent lookup was
+  `264a05bf-5833-4592-9f73-3e4d5c2293df`.
+Resolution / mitigation: CLI `put` and folder upload bootstrap now resolve the parent path through `driveops.Session.WaitPathVisible()` instead of one-shot `ResolveItem()`. That visibility boundary now confirms settling paths through exact-name parent/ancestor listing when the direct path route still lies with `itemNotFound`, instead of trusting only repeated exact-path retries. The E2E upload helper no longer tries to prove fresh-parent stability in a separate preflight command before invoking `put`; it now relies on the product command's owned convergence boundary and waits only for the uploaded child path afterward.
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [drive-transfers.md](../design/drive-transfers.md)
 
 ## LI-20260406-01: Personal scoped delta not ready after path resolution

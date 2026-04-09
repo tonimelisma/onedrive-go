@@ -197,7 +197,6 @@ func TestBuildResolvedDrive_PerDriveOverrides(t *testing.T) {
 	cfg.SkipDotfiles = false
 	cfg.SyncPaths = []string{"/Documents"}
 	cfg.IgnoreMarker = ".odignore"
-	cfg.PollInterval = "5m"
 
 	skipDot := true
 	drive := &Drive{
@@ -207,7 +206,6 @@ func TestBuildResolvedDrive_PerDriveOverrides(t *testing.T) {
 		SkipFiles:    []string{"*.log"},
 		SyncPaths:    []string{"/Projects"},
 		IgnoreMarker: ".syncignore",
-		PollInterval: "10m",
 	}
 
 	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
@@ -217,7 +215,6 @@ func TestBuildResolvedDrive_PerDriveOverrides(t *testing.T) {
 	assert.Equal(t, []string{"*.log"}, resolved.SkipFiles)
 	assert.Equal(t, []string{"/Projects"}, resolved.SyncPaths)
 	assert.Equal(t, ".syncignore", resolved.IgnoreMarker)
-	assert.Equal(t, "10m", resolved.PollInterval)
 }
 
 func TestBuildResolvedDrive_SharedCanonicalSetsRootItem(t *testing.T) {

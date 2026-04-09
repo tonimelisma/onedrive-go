@@ -105,8 +105,6 @@ func (l configLoader) load(path string, logger *slog.Logger) (*Config, error) {
 		return nil, err
 	}
 
-	l.warnDeprecatedKeys(data, logger)
-
 	if err := Validate(cfg); err != nil {
 		return nil, fmt.Errorf("config validation failed: %w", err)
 	}
@@ -147,8 +145,6 @@ func (l configLoader) loadLenient(path string, logger *slog.Logger) (*Config, []
 	warnings := l.decoder.decodeLenient(data, cfg)
 	warnings = appendWarnings(warnings, collectUnknownGlobalKeyErrors(&md))
 
-	l.warnDeprecatedKeys(data, logger)
-
 	warnings = appendWarnings(warnings, collectValidationErrors(cfg))
 
 	logger.Debug("config file parsed (lenient)",
@@ -181,15 +177,6 @@ func (l configLoader) decodeBaseConfig(path string, data []byte) (*Config, toml.
 	}
 
 	return cfg, md, nil
-}
-
-func (l configLoader) warnDeprecatedKeys(data []byte, logger *slog.Logger) {
-	rawMap, err := decodeRawMap(data)
-	if err != nil {
-		return
-	}
-
-	WarnDeprecatedKeys(rawMap, logger)
 }
 
 func appendWarnings(warnings []ConfigWarning, errs []error) []ConfigWarning {

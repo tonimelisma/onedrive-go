@@ -155,7 +155,7 @@ Project-specific consequences:
 
 ### Shutdown and Lifecycle
 
-- **Graceful shutdown has a deadline.** On SIGINT/SIGTERM: stop accepting new work, drain in-flight operations (with a timeout), flush state, exit. Second signal = immediate exit.
+- **Graceful shutdown is cooperative.** On SIGINT/SIGTERM: stop accepting new work, drain in-flight operations, flush state, and exit when the runtime settles. Second signal = immediate exit.
 - **In-flight operations are interruptible.** Every long operation checks context cancellation. An upload that ignores cancellation holds the process hostage.
 - **Cleanup runs even on error paths.** Temp files, partial uploads, lock files — all cleaned up on any exit path. `defer` is the mechanism; never rely on "we'll clean up next run."
 

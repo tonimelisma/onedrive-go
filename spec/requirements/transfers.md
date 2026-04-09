@@ -19,11 +19,6 @@ Download and upload transfer infrastructure shared by file operations and sync.
 - R-5.3.1: Files <= 4 MiB shall use simple PUT upload (single request). [verified]
 - R-5.3.3: Resumable upload fragment size shall be a multiple of 320 KiB (API requirement). [verified]
 
-## R-5.4 Bandwidth Limiting [future]
-
-- R-5.4.1: The system shall support a global transfer bandwidth limit. [future]
-- R-5.4.2: The system shall support time-of-day transfer bandwidth scheduling. [future]
-
 ## R-5.5 Transfer Validation [verified]
 
 - R-5.5.1: After download, the system shall verify hash and size against API metadata. [verified]

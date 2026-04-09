@@ -18,7 +18,7 @@ type syncCommandOptions struct {
 	Mode          synctypes.SyncMode
 	Watch         bool
 	Force         bool
-	DryRun        bool
+	DryRun        *bool
 	FullReconcile bool
 }
 
@@ -32,9 +32,19 @@ type syncWatchRunner func(
 	statusWriter io.Writer,
 ) error
 
+type syncRunOnceRunner func(
+	ctx context.Context,
+	holder *config.Holder,
+	drives []*config.ResolvedDrive,
+	mode synctypes.SyncMode,
+	opts synctypes.RunOpts,
+	logger *slog.Logger,
+) []*synctypes.DriveReport
+
 type syncService struct {
-	cc          *CLIContext
-	watchRunner syncWatchRunner
+	cc            *CLIContext
+	watchRunner   syncWatchRunner
+	runOnceRunner syncRunOnceRunner
 }
 
 func newSyncService(cc *CLIContext) *syncService {
@@ -54,6 +64,38 @@ func newSyncService(cc *CLIContext) *syncService {
 			}
 
 			return runSyncDaemon(ctx, holder, selectors, mode, opts, logger, statusWriter)
+		},
+		runOnceRunner: func(
+			ctx context.Context,
+			holder *config.Holder,
+			drives []*config.ResolvedDrive,
+			mode synctypes.SyncMode,
+			opts synctypes.RunOpts,
+			logger *slog.Logger,
+		) []*synctypes.DriveReport {
+			httpProvider := graphhttp.NewProvider(logger)
+			provider := driveops.NewSessionProvider(
+				holder,
+				func(_ *config.ResolvedDrive) driveops.HTTPClients {
+					clients := httpProvider.Sync()
+
+					return driveops.HTTPClients{
+						Meta:     clients.Meta,
+						Transfer: clients.Transfer,
+					}
+				},
+				"onedrive-go/"+version,
+				logger,
+			)
+
+			orch := multisync.NewOrchestrator(&multisync.OrchestratorConfig{
+				Holder:   holder,
+				Drives:   drives,
+				Provider: provider,
+				Logger:   logger,
+			})
+
+			return orch.RunOnce(ctx, mode, opts)
 		},
 	}
 	if cc != nil && cc.syncWatchRunner != nil {
@@ -81,9 +123,13 @@ func (s *syncService) run(ctx context.Context, opts syncCommandOptions) error {
 	}
 
 	selectors := s.cc.Flags.Drive
-	if opts.Watch {
-		holder := config.NewHolder(rawCfg, s.cc.CfgPath)
+	effectiveDryRun, err := resolveSyncDryRun(rawCfg.DryRun, opts.DryRun, opts.Watch)
+	if err != nil {
+		return err
+	}
 
+	holder := config.NewHolder(rawCfg, s.cc.CfgPath)
+	if opts.Watch {
 		return s.watchRunner(ctx, holder, selectors, opts.Mode, synctypes.WatchOpts{
 			Force:              opts.Force,
 			PollInterval:       parsePollInterval(rawCfg.PollInterval),
@@ -111,34 +157,11 @@ func (s *syncService) run(ctx context.Context, opts syncCommandOptions) error {
 		return fmt.Errorf("no drives configured — run 'onedrive-go drive add' to add a drive")
 	}
 
-	holder := config.NewHolder(rawCfg, s.cc.CfgPath)
-	httpProvider := graphhttp.NewProvider(logger)
-	provider := driveops.NewSessionProvider(
-		holder,
-		func(_ *config.ResolvedDrive) driveops.HTTPClients {
-			clients := httpProvider.Sync()
-
-			return driveops.HTTPClients{
-				Meta:     clients.Meta,
-				Transfer: clients.Transfer,
-			}
-		},
-		"onedrive-go/"+version,
-		logger,
-	)
-
-	orch := multisync.NewOrchestrator(&multisync.OrchestratorConfig{
-		Holder:   holder,
-		Drives:   drives,
-		Provider: provider,
-		Logger:   logger,
-	})
-
-	reports := orch.RunOnce(ctx, opts.Mode, synctypes.RunOpts{
-		DryRun:        opts.DryRun,
+	reports := s.runOnceRunner(ctx, holder, drives, opts.Mode, synctypes.RunOpts{
+		DryRun:        effectiveDryRun,
 		Force:         opts.Force,
 		FullReconcile: opts.FullReconcile,
-	})
+	}, logger)
 
 	printDriveReports(reports, s.cc)
 

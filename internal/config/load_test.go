@@ -51,14 +51,11 @@ check_workers = 8
 big_delete_threshold = 500
 min_free_space = "2GB"
 use_local_trash = false
-sync_dir_permissions = "0755"
-sync_file_permissions = "0644"
 
 poll_interval = "10m"
 websocket = false
-conflict_strategy = "keep_both"
 dry_run = true
-shutdown_timeout = "60s"
+safety_scan_interval = "15m"
 
 log_level = "debug"
 log_file = "/tmp/onedrive-go.log"
@@ -83,14 +80,11 @@ log_retention_days = 7
 	assert.Equal(t, 500, cfg.BigDeleteThreshold)
 	assert.Equal(t, "2GB", cfg.MinFreeSpace)
 	assert.False(t, cfg.UseLocalTrash)
-	assert.Equal(t, "0755", cfg.SyncDirPermissions)
-	assert.Equal(t, "0644", cfg.SyncFilePermissions)
 
 	assert.Equal(t, "10m", cfg.PollInterval)
 	assert.False(t, cfg.Websocket)
-	assert.Equal(t, "keep_both", cfg.ConflictStrategy)
 	assert.True(t, cfg.DryRun)
-	assert.Equal(t, "60s", cfg.ShutdownTimeout)
+	assert.Equal(t, "15m", cfg.SafetyScanInterval)
 
 	assert.Equal(t, "debug", cfg.LogLevel)
 	assert.Equal(t, "/tmp/onedrive-go.log", cfg.LogFile)
@@ -122,20 +116,6 @@ func TestLoad_CheckWorkers_Default(t *testing.T) {
 	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, 4, cfg.CheckWorkers)
-}
-
-func TestLoad_DeprecatedKeys_Warning(t *testing.T) {
-	// Using old parallel_downloads key should load successfully (key is
-	// "known" to avoid unknown-key error) but the value is ignored —
-	// transfer_workers uses its default value. The deprecation warning
-	// is produced by WarnDeprecatedKeys, tested separately.
-	path := writeTestConfig(t, `parallel_downloads = 4`)
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
-
-	// The old key's value is NOT mapped to any struct field (field removed).
-	// transfer_workers retains its default value.
-	assert.Equal(t, 8, cfg.TransferWorkers)
 }
 
 func TestLoad_MalformedTOML(t *testing.T) {
@@ -289,7 +269,6 @@ paused = true
 skip_dotfiles = true
 skip_dirs = ["vendor"]
 skip_files = ["*.log"]
-poll_interval = "10m"
 `)
 	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
@@ -303,7 +282,6 @@ poll_interval = "10m"
 	assert.True(t, *d.SkipDotfiles)
 	assert.Equal(t, []string{"vendor"}, d.SkipDirs)
 	assert.Equal(t, []string{"*.log"}, d.SkipFiles)
-	assert.Equal(t, "10m", d.PollInterval)
 }
 
 func TestLoad_SharePointDrive(t *testing.T) {
@@ -507,14 +485,12 @@ func TestResolveDrive_NoConfigFile(t *testing.T) {
 func TestResolveDrive_PerDriveOverridesApplied(t *testing.T) {
 	path := writeTestConfig(t, `
 skip_dotfiles = false
-poll_interval = "5m"
 
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
 skip_dotfiles = true
 skip_dirs = ["vendor"]
 skip_files = ["*.log"]
-poll_interval = "10m"
 `)
 	resolved, _, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path},
@@ -526,7 +502,6 @@ poll_interval = "10m"
 	assert.True(t, resolved.SkipDotfiles)
 	assert.Equal(t, []string{"vendor"}, resolved.SkipDirs)
 	assert.Equal(t, []string{"*.log"}, resolved.SkipFiles)
-	assert.Equal(t, "10m", resolved.PollInterval)
 }
 
 // Validates: R-4.3
@@ -810,7 +785,8 @@ func TestLogWarnings_EmitsWarnPerWarning(t *testing.T) {
 
 	LogWarnings(warnings, logger)
 
-	assert.Len(t, loggedAttrValues(t, &logBuf, "msg"), 2)
+	lines := strings.Split(strings.TrimSpace(logBuf.String()), "\n")
+	assert.Len(t, lines, 2)
 }
 
 func TestLogWarnings_EmptySlice_NoLogs(t *testing.T) {

@@ -344,7 +344,7 @@ func (s *Session) ResolveDeleteTarget(ctx context.Context, remotePath string) (*
 // put, or move before follow-on path reads stop returning itemNotFound, so the
 // command boundary treats visibility convergence as part of mutation success.
 func (s *Session) WaitPathVisible(ctx context.Context, remotePath string) (*graph.Item, error) {
-	item, err := s.ResolveItem(ctx, remotePath)
+	item, err := s.resolveConvergingPath(ctx, remotePath)
 	if err == nil {
 		return item, nil
 	}
@@ -357,7 +357,7 @@ func (s *Session) WaitPathVisible(ctx context.Context, remotePath string) (*grap
 			return nil, fmt.Errorf("wait for path %q visibility: %w", remotePath, sleepErr)
 		}
 
-		item, err = s.ResolveItem(ctx, remotePath)
+		item, err = s.resolveConvergingPath(ctx, remotePath)
 		if err == nil {
 			return item, nil
 		}
@@ -367,6 +367,26 @@ func (s *Session) WaitPathVisible(ctx context.Context, remotePath string) (*grap
 	}
 
 	return nil, &PathNotVisibleError{Path: remotePath}
+}
+
+func (s *Session) resolveConvergingPath(ctx context.Context, remotePath string) (*graph.Item, error) {
+	item, err := s.ResolveItem(ctx, remotePath)
+	if err == nil {
+		return item, nil
+	}
+	if !errors.Is(err, graph.ErrNotFound) {
+		return nil, err
+	}
+
+	item, err = s.resolveItemFromParentListing(ctx, remotePath)
+	if err == nil {
+		return item, nil
+	}
+	if errors.Is(err, graph.ErrNotFound) {
+		return nil, err
+	}
+
+	return nil, err
 }
 
 // ListChildren lists children of a remote path. For root (""), uses
@@ -682,7 +702,7 @@ func (s *Session) resolveItemFromParentListing(ctx context.Context, remotePath s
 	}
 
 	parentPath, name := SplitParentAndName(clean)
-	children, err := s.ListChildren(ctx, parentPath)
+	children, err := s.listDeleteParentChildren(ctx, parentPath)
 	if err != nil {
 		return nil, fmt.Errorf("resolve delete parent %q: %w", parentPath, err)
 	}
@@ -693,6 +713,28 @@ func (s *Session) resolveItemFromParentListing(ctx context.Context, remotePath s
 	}
 
 	return &match, nil
+}
+
+func (s *Session) listDeleteParentChildren(ctx context.Context, parentPath string) ([]graph.Item, error) {
+	children, err := s.ListChildren(ctx, parentPath)
+	if err == nil {
+		return children, nil
+	}
+	if !errors.Is(err, graph.ErrNotFound) || parentPath == "" {
+		return nil, err
+	}
+
+	parentItem, err := s.ResolveDeleteTarget(ctx, parentPath)
+	if err != nil {
+		return nil, err
+	}
+
+	children, err = s.Meta.ListChildren(ctx, s.DriveID, parentItem.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list children for delete parent %q by id: %w", parentPath, err)
+	}
+
+	return children, nil
 }
 
 // CleanRemotePath strips leading/trailing slashes, returns "" for root.
