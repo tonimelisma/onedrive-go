@@ -173,6 +173,62 @@ func TestCascade_Deduplication(t *testing.T) {
 	assert.Len(t, localDeletes, 2, "no duplicates: folder + child")
 }
 
+func TestCascade_NestedDeletedFolders_DoesNotPanicOnOverlappingCascade(t *testing.T) {
+	t.Parallel()
+
+	planner := NewPlanner(synctest.TestLogger(t))
+	driveID := driveid.New(synctest.TestDriveID)
+
+	baseline := synctest.BaselineWith(
+		&synctypes.BaselineEntry{Path: "folder", ItemType: synctypes.ItemTypeFolder, ItemID: "folder-id", DriveID: driveID},
+		&synctypes.BaselineEntry{Path: "folder/child", ItemType: synctypes.ItemTypeFolder, ItemID: "child-id", DriveID: driveID},
+		&synctypes.BaselineEntry{Path: "folder/child/deep.txt", ItemType: synctypes.ItemTypeFile, ItemID: "deep-id", DriveID: driveID, LocalHash: "h", RemoteHash: "h"},
+	)
+
+	changes := []synctypes.PathChanges{
+		{
+			Path: "folder",
+			RemoteEvents: []synctypes.ChangeEvent{{
+				Source:    synctypes.SourceRemote,
+				Type:      synctypes.ChangeDelete,
+				Path:      "folder",
+				ItemType:  synctypes.ItemTypeFolder,
+				ItemID:    "folder-id",
+				DriveID:   driveID,
+				IsDeleted: true,
+			}},
+		},
+		{
+			Path: "folder/child",
+			RemoteEvents: []synctypes.ChangeEvent{{
+				Source:    synctypes.SourceRemote,
+				Type:      synctypes.ChangeDelete,
+				Path:      "folder/child",
+				ItemType:  synctypes.ItemTypeFolder,
+				ItemID:    "child-id",
+				DriveID:   driveID,
+				IsDeleted: true,
+			}},
+		},
+	}
+
+	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	require.NoError(t, err)
+	require.NotNil(t, plan)
+
+	localDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionLocalDelete)
+	assert.Len(t, localDeletes, 3)
+
+	deletePaths := make(map[string]bool, len(localDeletes))
+	for _, action := range localDeletes {
+		deletePaths[action.Path] = true
+	}
+
+	assert.True(t, deletePaths["folder"])
+	assert.True(t, deletePaths["folder/child"])
+	assert.True(t, deletePaths["folder/child/deep.txt"])
+}
+
 // TestCascade_UploadOnlyMode verifies no cascade in upload-only mode.
 func TestCascade_UploadOnlyMode(t *testing.T) {
 	t.Parallel()

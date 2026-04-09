@@ -381,9 +381,14 @@ Runtime policy:
   sync pass must use the longer remote-write visibility budget rather than the
   generic 30-second poll helper
 
-### Transient 403 on `/me/drives` (Token Propagation)
+### Transient 403 on `/me/drives` (Discovery/Auth Projection Lag)
 
-After token refresh, `/me/drives` returns HTTP 403 with Graph code `accessDenied` while `/me` (user profile) succeeds with the same token. Caused by eventual consistency in Microsoft's token propagation infrastructure. The `/me` endpoint receives token updates before `/me/drives`.
+`GET /me/drives` can return HTTP 403 with Graph code `accessDenied` while
+`GET /me` succeeds with the same saved login. Earlier evidence pointed at token
+propagation after refresh, but later CI and local verifier evidence broadened
+the observed shape: Graph's drive-discovery/auth projection can lag behind
+other authenticated surfaces such as `/me` even when the caller did not just
+refresh the token.
 
 Observed CI evidence:
 
@@ -644,11 +649,31 @@ policy: keep search as a best-effort surface, never fabricate selectors for
 hits without `remoteDriveID` + `remoteItemID`, and degrade the account only
 when the live search request itself fails.
 
-### Cross-Organization Shared Discovery Remains Partial (Business)
+### Search + GetItem Can Still Miss Shared Owner Identity
+
+Even when `search(q='*')` returns actionable shared identity
+(`remoteDriveID` + `remoteItemID`), the follow-on
+`GET /drives/{driveId}/items/{itemId}` enrichment pass can still omit enough
+owner identity that the caller cannot recover the sharer's email/display name.
+This is not a reason to drop the item: the selector is still valid even when
+owner identity is incomplete.
+
+Runtime policy:
+- search remains the primary shared-discovery surface
+- actionable results are still enriched with `GetItem`
+- if owner identity is still missing after enrichment, `drive list` keeps the
+  item visible with a deterministic display name and `shared` emits empty
+  owner fields instead of dropping the target
+- deprecated `sharedWithMe` evidence may still be useful for forensics, but it
+  is not a runtime discovery fallback
+
+### Cross-Organization Shared Discovery Can Still Be Omitted (Business)
 
 The stale blanket claim that business cross-organization shares are
-categorically invisible is too strong, but there is still no proof that Graph
-reliably exposes every external shared folder in every tenant configuration.
+categorically invisible is too strong. Current evidence is narrower: Graph can
+still omit some external or cross-organization shared folders that are visible
+in the web UI, even though the supported runtime discovery surfaces do recover
+others.
 
 Runtime policy:
 - treat external shared discovery as best-effort, not guaranteed

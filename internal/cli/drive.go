@@ -1021,7 +1021,7 @@ func addSharedDriveByName(
 		return err
 	}
 
-	discovery := newSharedDiscoveryService(cc).discoverTargets(ctx, snapshot.Catalog)
+	discovery := newSharedDiscoveryService(cc).discoverTargets(ctx, filterAccountCatalog(snapshot.Catalog, cc.Flags.Account))
 	matches := searchSharedDrives(selector, projectSharedFolders(cfg, discovery.Targets))
 
 	switch len(matches) {

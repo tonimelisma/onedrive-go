@@ -51,9 +51,6 @@ func (s *sharedDiscoveryService) discoverTargets(
 
 	for i := range catalog {
 		entry := &catalog[i]
-		if s.cc.Flags.Account != "" && entry.Email != s.cc.Flags.Account {
-			continue
-		}
 
 		if entry.AuthHealth.State == authStateAuthenticationNeeded {
 			result.AccountsRequiringAuth = append(result.AccountsRequiringAuth, authRequirement(
@@ -108,8 +105,9 @@ func (s *sharedDiscoveryService) discoverTargetsForAccount(
 	entry *accountCatalogEntry,
 ) ([]sharedDiscoveryTarget, []accountAuthRequirement, []accountDegradedNotice) {
 	logger := s.cc.Logger
-	if entry.RepresentativeTokenID.IsZero() {
-		logger.Debug("shared discovery missing representative token",
+	tokenCandidates := sharedDiscoveryTokenCandidates(entry)
+	if len(tokenCandidates) == 0 {
+		logger.Debug("shared discovery missing account tokens",
 			"email", entry.Email,
 		)
 
@@ -118,64 +116,102 @@ func (s *sharedDiscoveryService) discoverTargetsForAccount(
 		}
 	}
 
-	tokenCID := entry.RepresentativeTokenID
+	var authRequired []accountAuthRequirement
+	degraded := false
 
-	tokenPath := config.DriveTokenPath(tokenCID)
-	if tokenPath == "" {
-		logger.Debug("shared discovery missing token path",
-			"account", tokenCID.String(),
+	for i := range tokenCandidates {
+		tokenCID := tokenCandidates[i]
+		tokenPath := config.DriveTokenPath(tokenCID)
+		if tokenPath == "" {
+			logger.Debug("shared discovery missing token path",
+				"account", tokenCID.String(),
+			)
+			degraded = true
+			continue
+		}
+
+		ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
+		if err != nil {
+			logger.Debug("shared discovery token load failed",
+				"account", tokenCID.String(),
+				"error", err,
+			)
+			authRequired = append(authRequired, tokenDiscoveryAuthRequirement(tokenCID, err, logger))
+			continue
+		}
+
+		client, err := newGraphClientWithHTTP(
+			s.cc.graphBaseURL(),
+			s.cc.httpProvider().BootstrapMeta(),
+			ts,
+			logger,
 		)
+		if err != nil {
+			logger.Warn("degrading shared discovery after client bootstrap failure",
+				"account", tokenCID.String(),
+				"error", err,
+			)
+			degraded = true
+			continue
+		}
+		attachAccountAuthProof(client, newAuthProofRecorder(logger), tokenCID.Email(), "shared-discovery")
 
+		targets, err := searchSharedTargets(ctx, client, tokenCID.Email(), logger)
+		if err != nil {
+			if errors.Is(err, graph.ErrUnauthorized) {
+				authRequired = append(authRequired, tokenAuthRequirement(tokenCID, authReasonSyncAuthRejected, logger))
+				continue
+			}
+
+			logger.Warn("degrading shared discovery after search failure",
+				"account", tokenCID.String(),
+				"error", err,
+			)
+			degraded = true
+			continue
+		}
+
+		return targets, nil, nil
+	}
+
+	if len(authRequired) > 0 {
+		return nil, mergeAuthRequirements(authRequired), nil
+	}
+	if degraded {
 		return nil, nil, []accountDegradedNotice{
-			sharedDiscoveryDegradedNotice(tokenCID.Email(), entry.DisplayName, tokenCID.DriveType()),
+			sharedDiscoveryDegradedNotice(entry.Email, entry.DisplayName, entry.DriveType),
 		}
 	}
 
-	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
-	if err != nil {
-		logger.Debug("shared discovery token load failed",
-			"account", tokenCID.String(),
-			"error", err,
-		)
+	return nil, nil, []accountDegradedNotice{
+		sharedDiscoveryDegradedNotice(entry.Email, entry.DisplayName, entry.DriveType),
+	}
+}
 
-		return nil, []accountAuthRequirement{tokenDiscoveryAuthRequirement(tokenCID, err, logger)}, nil
+func sharedDiscoveryTokenCandidates(entry *accountCatalogEntry) []driveid.CanonicalID {
+	if entry == nil {
+		return nil
 	}
 
-	client, err := newGraphClientWithHTTP(
-		s.cc.graphBaseURL(),
-		s.cc.httpProvider().BootstrapMeta(),
-		ts,
-		logger,
-	)
-	if err != nil {
-		logger.Warn("degrading shared discovery after client bootstrap failure",
-			"account", tokenCID.String(),
-			"error", err,
-		)
-
-		return nil, nil, []accountDegradedNotice{
-			sharedDiscoveryDegradedNotice(tokenCID.Email(), entry.DisplayName, tokenCID.DriveType()),
+	candidates := make([]driveid.CanonicalID, 0, len(entry.TokenDriveIDs)+1)
+	appendCandidate := func(cid driveid.CanonicalID) {
+		if cid.IsZero() {
+			return
 		}
-	}
-	attachAccountAuthProof(client, newAuthProofRecorder(logger), tokenCID.Email(), "shared-discovery")
-
-	targets, err := searchSharedTargets(ctx, client, tokenCID.Email(), logger)
-	if err != nil {
-		if errors.Is(err, graph.ErrUnauthorized) {
-			return nil, []accountAuthRequirement{tokenAuthRequirement(tokenCID, authReasonSyncAuthRejected, logger)}, nil
+		for i := range candidates {
+			if candidates[i] == cid {
+				return
+			}
 		}
-
-		logger.Warn("degrading shared discovery after search failure",
-			"account", tokenCID.String(),
-			"error", err,
-		)
-
-		return nil, nil, []accountDegradedNotice{
-			sharedDiscoveryDegradedNotice(tokenCID.Email(), entry.DisplayName, tokenCID.DriveType()),
-		}
+		candidates = append(candidates, cid)
 	}
 
-	return targets, nil, nil
+	appendCandidate(entry.RepresentativeTokenID)
+	for i := range entry.TokenDriveIDs {
+		appendCandidate(entry.TokenDriveIDs[i])
+	}
+
+	return candidates
 }
 
 func searchSharedTargets(
