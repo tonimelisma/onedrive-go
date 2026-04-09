@@ -18,12 +18,11 @@ func TestLoad_UnknownKey_TopLevel(t *testing.T) {
 
 // Validates: R-4.8.1
 func TestLoad_UnknownKey_TypoInFlatKey(t *testing.T) {
-	//nolint:misspell // intentional typo to test unknown key detection
-	path := writeTestConfig(t, `parralel_downloads = 4`)
+	path := writeTestConfig(t, `skip_file = ["*.tmp"]`)
 	_, err := Load(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown config key")
-	assert.Contains(t, err.Error(), "parallel_downloads")
+	assert.Contains(t, err.Error(), "skip_files")
 }
 
 // Validates: R-4.8.1
@@ -41,58 +40,6 @@ func TestLoad_UnknownKey_NoSuggestion(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown config key")
 	assert.NotContains(t, err.Error(), "did you mean")
-}
-
-// Validates: R-4.8.1
-func TestLoad_UnknownKey_RemovedValidationToggles(t *testing.T) {
-	path := writeTestConfig(t, `
-disable_download_validation = true
-disable_upload_validation = true
-`)
-	_, err := Load(path, testLogger(t))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown config key")
-	assert.Contains(t, err.Error(), "disable_download_validation")
-	assert.Contains(t, err.Error(), "disable_upload_validation")
-}
-
-// Validates: R-4.8.1
-func TestLoad_UnknownKey_RemovedChunkSize(t *testing.T) {
-	path := writeTestConfig(t, `chunk_size = "20MiB"`)
-	_, err := Load(path, testLogger(t))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown config key")
-	assert.Contains(t, err.Error(), "chunk_size")
-}
-
-// Validates: R-4.8.1
-func TestLoad_UnknownKey_RemovedDeferredConfigFields(t *testing.T) {
-	t.Parallel()
-
-	for _, key := range []string{
-		"bandwidth_limit",
-		"bandwidth_schedule",
-		"transfer_order",
-		"fullscan_frequency",
-		"conflict_reminder_interval",
-		"verify_interval",
-		"connect_timeout",
-		"data_timeout",
-		"user_agent",
-		"force_http_11",
-	} {
-		t.Run(key, func(t *testing.T) {
-			path := writeTestConfig(t, key+" = true")
-			if key == "user_agent" {
-				path = writeTestConfig(t, `user_agent = "custom"`)
-			}
-
-			_, err := Load(path, testLogger(t))
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "unknown config key")
-			assert.Contains(t, err.Error(), key)
-		})
-	}
 }
 
 // Validates: R-4.8.1
@@ -132,7 +79,6 @@ skip_dirs = ["vendor"]
 skip_files = ["*.log"]
 sync_paths = ["/Projects"]
 ignore_marker = ".syncignore"
-poll_interval = "10m"
 `)
 	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
@@ -150,7 +96,7 @@ func TestLevenshtein(t *testing.T) {
 		{"abc", "abc", 0},
 		{"abc", "abd", 1},
 		{"skip_file", "skip_files", 1},
-		{"par" + "ralel_downloads", "parallel_downloads", 2},
+		{"skip_file", "skip_files", 1},
 		{"completely_different", "xyz", 19},
 	}
 

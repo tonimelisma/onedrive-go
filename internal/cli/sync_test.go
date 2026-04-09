@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -239,6 +240,104 @@ func TestParsePollInterval(t *testing.T) {
 	assert.Zero(t, parsePollInterval("bogus"))
 }
 
+func TestSyncDryRunOverride_DefaultUnset(t *testing.T) {
+	t.Parallel()
+
+	cmd := newSyncCmd()
+
+	override, set, err := syncDryRunOverride(cmd)
+	require.NoError(t, err)
+	assert.False(t, set)
+	assert.False(t, override)
+}
+
+func TestSyncDryRunOverride_ExplicitTrue(t *testing.T) {
+	t.Parallel()
+
+	cmd := newSyncCmd()
+	require.NoError(t, cmd.Flags().Set("dry-run", "true"))
+
+	override, set, err := syncDryRunOverride(cmd)
+	require.NoError(t, err)
+	require.True(t, set)
+	assert.True(t, override)
+}
+
+func TestSyncDryRunOverride_ExplicitFalse(t *testing.T) {
+	t.Parallel()
+
+	cmd := newSyncCmd()
+	require.NoError(t, cmd.Flags().Set("dry-run", "false"))
+
+	override, set, err := syncDryRunOverride(cmd)
+	require.NoError(t, err)
+	require.True(t, set)
+	assert.False(t, override)
+}
+
+func TestResolveSyncDryRun(t *testing.T) {
+	t.Parallel()
+
+	cliTrue := true
+	cliFalse := false
+
+	tests := []struct {
+		name       string
+		cfgDryRun  bool
+		override   *bool
+		watch      bool
+		wantDryRun bool
+		wantErr    string
+	}{
+		{
+			name:       "config default used when CLI flag absent",
+			cfgDryRun:  true,
+			wantDryRun: true,
+		},
+		{
+			name:       "CLI true overrides config false",
+			cfgDryRun:  false,
+			override:   &cliTrue,
+			wantDryRun: true,
+		},
+		{
+			name:       "CLI false overrides config true",
+			cfgDryRun:  true,
+			override:   &cliFalse,
+			wantDryRun: false,
+		},
+		{
+			name:      "watch rejects effective dry run",
+			cfgDryRun: true,
+			watch:     true,
+			wantErr:   "watch mode does not support dry-run",
+		},
+		{
+			name:       "watch allows explicit CLI false override",
+			cfgDryRun:  true,
+			override:   &cliFalse,
+			watch:      true,
+			wantDryRun: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dryRun, err := resolveSyncDryRun(tt.cfgDryRun, tt.override, tt.watch)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantDryRun, dryRun)
+		})
+	}
+}
+
 func TestRunSync_LoadConfigError(t *testing.T) {
 	setTestDriveHome(t)
 
@@ -318,4 +417,136 @@ func TestRunSync_LogFileOpenFailureWarnsToStatusWriter(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no drives configured")
 	assert.Contains(t, statusBuf.String(), "cannot open log file")
+}
+
+func TestSyncService_Run_UsesConfigDryRunWhenFlagUnset(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	syncDir := t.TempDir()
+	configBody := fmt.Sprintf(`
+dry_run = true
+
+["personal:test@example.com"]
+sync_dir = %q
+`, syncDir)
+	require.NoError(t, os.WriteFile(cfgPath, []byte(configBody), 0o600))
+
+	service := newSyncService(&CLIContext{
+		Logger:       slog.New(slog.DiscardHandler),
+		OutputWriter: io.Discard,
+		StatusWriter: io.Discard,
+		CfgPath:      cfgPath,
+	})
+
+	called := false
+	service.runOnceRunner = func(
+		_ context.Context,
+		_ *config.Holder,
+		drives []*config.ResolvedDrive,
+		mode synctypes.SyncMode,
+		opts synctypes.RunOpts,
+		_ *slog.Logger,
+	) []*synctypes.DriveReport {
+		called = true
+		assert.Len(t, drives, 1)
+		assert.Equal(t, synctypes.SyncBidirectional, mode)
+		assert.True(t, opts.DryRun)
+
+		return []*synctypes.DriveReport{
+			{
+				CanonicalID: drives[0].CanonicalID,
+				DisplayName: drives[0].DisplayName,
+				Report: &synctypes.SyncReport{
+					Mode:   mode,
+					DryRun: opts.DryRun,
+				},
+			},
+		}
+	}
+
+	err := service.run(t.Context(), syncCommandOptions{Mode: synctypes.SyncBidirectional})
+	require.NoError(t, err)
+	assert.True(t, called)
+}
+
+func TestSyncService_Run_CLIFalseOverridesConfigDryRun(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	syncDir := t.TempDir()
+	configBody := fmt.Sprintf(`
+dry_run = true
+
+["personal:test@example.com"]
+sync_dir = %q
+`, syncDir)
+	require.NoError(t, os.WriteFile(cfgPath, []byte(configBody), 0o600))
+
+	service := newSyncService(&CLIContext{
+		Logger:       slog.New(slog.DiscardHandler),
+		OutputWriter: io.Discard,
+		StatusWriter: io.Discard,
+		CfgPath:      cfgPath,
+	})
+
+	override := false
+	service.runOnceRunner = func(
+		_ context.Context,
+		_ *config.Holder,
+		_ []*config.ResolvedDrive,
+		_ synctypes.SyncMode,
+		opts synctypes.RunOpts,
+		_ *slog.Logger,
+	) []*synctypes.DriveReport {
+		assert.False(t, opts.DryRun)
+
+		return []*synctypes.DriveReport{{Report: &synctypes.SyncReport{Mode: synctypes.SyncBidirectional}}}
+	}
+
+	err := service.run(t.Context(), syncCommandOptions{
+		Mode:   synctypes.SyncBidirectional,
+		DryRun: &override,
+	})
+	require.NoError(t, err)
+}
+
+func TestSyncService_Run_WatchRejectsEffectiveDryRun(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	syncDir := t.TempDir()
+	configBody := fmt.Sprintf(`
+dry_run = true
+
+["personal:test@example.com"]
+sync_dir = %q
+`, syncDir)
+	require.NoError(t, os.WriteFile(cfgPath, []byte(configBody), 0o600))
+
+	service := newSyncService(&CLIContext{
+		Logger:       slog.New(slog.DiscardHandler),
+		OutputWriter: io.Discard,
+		StatusWriter: io.Discard,
+		CfgPath:      cfgPath,
+		syncWatchRunner: func(
+			context.Context,
+			*config.Holder,
+			[]string,
+			synctypes.SyncMode,
+			synctypes.WatchOpts,
+			*slog.Logger,
+			io.Writer,
+		) error {
+			require.FailNow(t, "watch runner should not be called when effective dry run is true")
+			return nil
+		},
+	})
+
+	err := service.run(t.Context(), syncCommandOptions{
+		Mode:  synctypes.SyncBidirectional,
+		Watch: true,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "watch mode does not support dry-run")
 }

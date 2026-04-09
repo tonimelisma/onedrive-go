@@ -104,10 +104,14 @@ delete-target path recovery in the same owner:
 - `WaitPathVisible()` so command handlers can require destination-path
   readability before they print a successful `mkdir`, `put`, or `mv`, and so
   `put` can re-resolve an already-created parent path through the same bounded
-  visibility gate instead of trusting a one-shot path lookup
+  visibility gate instead of trusting a one-shot path lookup; when the exact
+  path route still lies with `itemNotFound`, the visibility gate confirms the
+  path by exact-name parent/ancestor listing before it spends more retry budget
 - `ResolveDeleteTarget()` so path-oriented deletes can fall back from an exact
   path `itemNotFound` to the parent collection before they decide the target
-  is already gone
+  is already gone; when the parent-path listing itself is in a transient
+  `itemNotFound` gap, delete intent recurses up one level, resolves the parent
+  folder through ancestor collections, and then lists that parent by item ID
 - `DeleteResolvedPath()` / `PermanentDeleteResolvedPath()` so path-oriented
   deletes keep authority on the remote path instead of trusting one stale
   item ID forever; after any delete-by-ID `itemNotFound`, they re-resolve the
@@ -189,7 +193,7 @@ Design properties:
 - `driveops.SessionProvider` consumes an injected client resolver instead of owning transport policy. CLI and sync compose different metadata/transfer HTTP profiles through `internal/graphhttp`; `driveops` stays responsible only for authenticated drive sessions and transfer behavior.
 - `driveops.Session` may install a proof hook onto its authenticated Graph clients so successful live file operations can clear stale `auth:account` scope blocks. Pre-authenticated upload and download URLs bypass that hook and do not count as auth proof.
 - Guard `.partial` file cleanup with `ctx.Err() == nil`: a 3.9 GB partial of a 4 GB download should survive Ctrl-C for resume. Only intentional deletions (hash mismatch) should remove partials.
-- **Connection-level deadlines** (`graphhttp.Provider` transfer profile): both interactive and sync transfer clients use the provider's transfer transport with `ResponseHeaderTimeout: 2m` (detects servers that accept but never respond) and TCP keepalives (30s idle, 10s interval, 3 probes — detects dead connections within ~60s). No `http.Client.Timeout` — transfer duration varies with file size and bandwidth. [implemented]
+- **Connection-level deadlines** (`graphhttp.Provider` transfer profile): both interactive and sync transfer clients use the provider's transfer transport with `ResponseHeaderTimeout: 2m` (detects servers that accept but never respond) and TCP keepalives (30s idle, 10s interval, 3 probes — detects dead connections within ~60s). No `http.Client.Timeout` — transfer duration varies with file size and link throughput. [implemented]
 - Transfer manager resume edge case tests cover corrupt partial file bytes, changed remote content during resume, and oversized partial state. [verified]
 
 ### Rationale: Per-Side Hashes

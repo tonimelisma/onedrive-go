@@ -311,6 +311,9 @@ Runtime policy:
 - `put` also resolves an already-expected parent path through the same bounded
   visibility gate before uploading a child, so a transient parent-path 404
   after a prior successful command is treated as the same convergence family
+- when the exact path route still lies during that visibility wait, the client
+  confirms the path by exact-name parent/ancestor listing before spending more
+  retry budget on the same stale path lookup
 - `mkdir`, single-file `put`, and `mv` retry destination-path reads on exact
   `itemNotFound` using a short deterministic schedule: `250ms`, `500ms`, `1s`,
   `2s`, `4s`, `8s`, `16s`
@@ -380,6 +383,9 @@ Runtime policy:
   `404 itemNotFound`, the session:
   - first retries target resolution through the parent collection when the
     exact path route says `itemNotFound`
+  - if that parent-path collection route also lies with `itemNotFound`, it
+    resolves the parent folder through ancestor collections and then lists the
+    parent's children by item ID instead of trusting the first parent path miss
   - accepts a now-missing path as success only when both the exact-path route
     and parent collection miss
   - retries delete against the current resolved item when the path still exists
