@@ -20,11 +20,12 @@ import (
 )
 
 var (
-	binaryPath string
-	drive      string
-	drive2     string // optional second drive for multi-drive E2E tests
-	logDir     string
-	liveConfig testutil.LiveTestConfig
+	binaryPath          string
+	drive               string
+	drive2              string // optional second drive for multi-drive E2E tests
+	logDir              string
+	liveConfig          testutil.LiveTestConfig
+	suiteTimingRecorder *e2eTimingRecorder
 )
 
 var e2eArtifactPrefixes = []string{
@@ -94,6 +95,13 @@ func TestMain(m *testing.M) {
 	}
 
 	fmt.Fprintf(os.Stderr, "E2E debug logs: %s\n", logDir)
+	suiteTimingRecorder, err = newE2ETimingRecorder(logDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "creating E2E timing recorder: %v\n", err)
+		cleanupIsolation()
+		os.RemoveAll(tmpDir)
+		os.Exit(1)
+	}
 
 	suiteCfgPath := filepath.Join(tmpDir, "e2e-suite-config.toml")
 	if err := writeSuiteConfig(suiteCfgPath, drive, drive2); err != nil {
@@ -102,11 +110,15 @@ func TestMain(m *testing.M) {
 		os.RemoveAll(tmpDir)
 		os.Exit(1)
 	}
-	if err := scrubRemoteSuiteArtifacts(suiteCfgPath, drive, drive2); err != nil {
-		fmt.Fprintf(os.Stderr, "scrubbing E2E remote artifacts: %v\n", err)
-		cleanupIsolation()
-		os.RemoveAll(tmpDir)
-		os.Exit(1)
+	if os.Getenv(e2eSkipSuiteScrubEnvVar) == "1" {
+		fmt.Fprintf(os.Stderr, "E2E preflight scrub skipped via %s\n", e2eSkipSuiteScrubEnvVar)
+	} else {
+		if err := scrubRemoteSuiteArtifacts(suiteCfgPath, drive, drive2); err != nil {
+			fmt.Fprintf(os.Stderr, "scrubbing E2E remote artifacts: %v\n", err)
+			cleanupIsolation()
+			os.RemoveAll(tmpDir)
+			os.Exit(1)
+		}
 	}
 
 	// Run tests, then clean up explicitly. os.Exit does not run defers,
@@ -225,26 +237,23 @@ func shouldAddDebug(args []string) bool {
 func logCLIExecution(t *testing.T, args []string, stdout, stderr string) {
 	t.Helper()
 
-	logPath := filepath.Join(logDir, sanitizeTestName(t.Name())+".log")
-
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
+	entry := fmt.Sprintf(
+		"=== %s ===\nCMD: %s\n--- STDOUT ---\n%s\n--- STDERR ---\n%s\n\n",
+		time.Now().Format(time.RFC3339),
+		strings.Join(args, " "),
+		stdout,
+		stderr,
+	)
+	if err := appendDebugLogChunk(debugLogPath(t.Name()), entry); err != nil {
 		t.Logf("warning: cannot write debug log: %v", err)
-		return
 	}
-	defer f.Close()
-
-	fmt.Fprintf(f, "=== %s ===\n", time.Now().Format(time.RFC3339))
-	fmt.Fprintf(f, "CMD: %s\n", strings.Join(args, " "))
-	fmt.Fprintf(f, "--- STDOUT ---\n%s\n", stdout)
-	fmt.Fprintf(f, "--- STDERR ---\n%s\n\n", stderr)
 }
 
 // registerLogDump registers a cleanup that dumps the debug log on test failure.
 func registerLogDump(t *testing.T) {
 	t.Helper()
 
-	logPath := filepath.Join(logDir, sanitizeTestName(t.Name())+".log")
+	logPath := debugLogPath(t.Name())
 
 	t.Cleanup(func() {
 		if t.Failed() {
@@ -258,6 +267,26 @@ func registerLogDump(t *testing.T) {
 			t.Logf("debug log: %s", logPath)
 		}
 	})
+}
+
+func debugLogPath(testName string) string {
+	return filepath.Join(logDir, sanitizeTestName(testName)+".log")
+}
+
+func appendDebugLogChunk(path string, content string) (err error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		closeErr := f.Close()
+		if err == nil {
+			err = closeErr
+		}
+	}()
+
+	_, err = f.WriteString(content)
+	return err
 }
 
 // writeMinimalConfig writes a config file with drive but no sync_dir (uses defaults).
@@ -502,21 +531,45 @@ func pollRemoteEventually(
 	env map[string]string,
 	driveID string,
 	timeout time.Duration,
+	eventKind string,
 	description string,
 	ready func(stdout, stderr string, err error) bool,
 	args ...string,
 ) (string, string) {
 	t.Helper()
 
+	startedAt := time.Now()
 	deadline := time.Now().Add(timeout)
 
 	for attempt := 0; ; attempt++ {
 		stdout, stderr, err := runCLICore(t, cfgPath, env, driveID, args...)
 		if ready(stdout, stderr, err) {
+			recordTimingEvent(
+				t,
+				eventKind,
+				description,
+				driveID,
+				args,
+				timeout,
+				time.Since(startedAt),
+				attempt+1,
+				timingOutcomeSuccess,
+			)
 			return stdout, stderr
 		}
 
 		if time.Now().After(deadline) {
+			recordTimingEvent(
+				t,
+				eventKind,
+				description,
+				driveID,
+				args,
+				timeout,
+				time.Since(startedAt),
+				attempt+1,
+				timingOutcomeTimeout,
+			)
 			require.Failf(t, "pollRemoteEventually: timed out",
 				"after %v waiting for %s via %v\nlast stdout: %s\nlast stderr: %s",
 				timeout, description, args, stdout, stderr)
@@ -555,6 +608,7 @@ func waitForRemoteWriteVisible(
 		env,
 		driveID,
 		remoteWritePropagationTimeout,
+		timingKindRemoteWriteVisibility,
 		fmt.Sprintf("remote write visibility for %q", expected),
 		func(stdout, _ string, err error) bool {
 			return err == nil && strings.Contains(stdout, expected)
@@ -579,6 +633,7 @@ func waitForRemoteDeleteDisappearance(
 		env,
 		driveID,
 		remoteDeletePropagationTimeout,
+		timingKindRemoteDeleteDisappearance,
 		fmt.Sprintf("remote delete disappearance for %q", unexpected),
 		func(stdout, _ string, err error) bool {
 			return err == nil && !strings.Contains(stdout, unexpected)
@@ -603,6 +658,7 @@ func waitForRemoteScopeTransition(
 		env,
 		driveID,
 		remoteScopeTransitionTimeout,
+		timingKindRemoteScopeTransition,
 		fmt.Sprintf("remote scope transition for %q", expected),
 		func(stdout, _ string, err error) bool {
 			return err == nil && strings.Contains(stdout, expected)
@@ -624,17 +680,52 @@ func requireSyncEventuallyConverges(
 
 	var last syncAttemptResult
 	syncArgs := append([]string{"sync"}, args...)
+	startedAt := time.Now()
+	deadline := time.Now().Add(timeout)
 
-	require.Eventually(t, func() bool {
+	for attempt := 0; ; attempt++ {
 		last.Stdout, last.Stderr, last.Err = runCLIWithConfigAllowError(t, cfgPath, env, syncArgs...)
-		return ready(last)
-	}, timeout, 5*time.Second,
-		"%s\nlastErr: %v\nlastStdout: %s\nlastStderr: %s",
-		description,
-		last.Err,
-		last.Stdout,
-		last.Stderr,
-	)
+		if ready(last) {
+			recordTimingEvent(
+				t,
+				timingKindSyncConvergence,
+				description,
+				"",
+				syncArgs,
+				timeout,
+				time.Since(startedAt),
+				attempt+1,
+				timingOutcomeSuccess,
+			)
+			return last
+		}
+
+		if time.Now().After(deadline) {
+			recordTimingEvent(
+				t,
+				timingKindSyncConvergence,
+				description,
+				"",
+				syncArgs,
+				timeout,
+				time.Since(startedAt),
+				attempt+1,
+				timingOutcomeTimeout,
+			)
+			require.Failf(
+				t,
+				"requireSyncEventuallyConverges: timed out",
+				"%s\ntimeout: %v\nlastErr: %v\nlastStdout: %s\nlastStderr: %s",
+				description,
+				timeout,
+				last.Err,
+				last.Stdout,
+				last.Stderr,
+			)
+		}
+
+		time.Sleep(5 * time.Second)
+	}
 
 	return last
 }

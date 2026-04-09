@@ -16,7 +16,7 @@ const defaultCoverageThreshold = 76.0
 
 type cwdLookup func() (string, error)
 
-type verifyFunc func(context.Context, devtool.VerifyOptions) error
+type verifyFunc func(context.Context, *devtool.VerifyOptions) error
 
 type cleanupAuditFunc func(context.Context, devtool.CleanupAuditOptions) error
 
@@ -57,6 +57,7 @@ func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
 		coverageThreshold  float64
 		coverageFile       string
 		e2eLogDir          string
+		summaryJSONPath    string
 		classifyLiveQuirks bool
 	)
 
@@ -75,12 +76,13 @@ func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
 				return fmt.Errorf("get working directory: %w", err)
 			}
 
-			return runVerify(cmd.Context(), devtool.VerifyOptions{
+			return runVerify(cmd.Context(), &devtool.VerifyOptions{
 				RepoRoot:           repoRoot,
 				Profile:            profile,
 				CoverageThreshold:  coverageThreshold,
 				CoverageFile:       coverageFile,
 				E2ELogDir:          e2eLogDir,
+				SummaryJSONPath:    summaryJSONPath,
 				ClassifyLiveQuirks: classifyLiveQuirks,
 				Stdout:             cmd.OutOrStdout(),
 				Stderr:             cmd.ErrOrStderr(),
@@ -91,6 +93,7 @@ func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
 	cmd.Flags().Float64Var(&coverageThreshold, "coverage-threshold", defaultCoverageThreshold, "minimum total coverage percentage")
 	cmd.Flags().StringVar(&coverageFile, "coverage-file", "", "coverage profile path")
 	cmd.Flags().StringVar(&e2eLogDir, "e2e-log-dir", "", "directory for full E2E debug logs")
+	cmd.Flags().StringVar(&summaryJSONPath, "summary-json", "", "write verify summary JSON to this path")
 	cmd.Flags().BoolVar(
 		&classifyLiveQuirks,
 		"classify-live-quirks",
@@ -286,7 +289,7 @@ func defaultCWD() (string, error) {
 	return cwd, nil
 }
 
-func defaultVerify(ctx context.Context, opts devtool.VerifyOptions) error {
+func defaultVerify(ctx context.Context, opts *devtool.VerifyOptions) error {
 	if err := devtool.RunVerify(ctx, devtool.ExecRunner{}, opts); err != nil {
 		return fmt.Errorf("run verify: %w", err)
 	}

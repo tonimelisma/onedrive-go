@@ -29,8 +29,8 @@ func TestNewVerifyCmdDefaultsToDefaultProfile(t *testing.T) {
 
 	cmd := newVerifyCmd(
 		func() (string, error) { return testRepoRoot, nil },
-		func(_ context.Context, opts devtool.VerifyOptions) error {
-			got = opts
+		func(_ context.Context, opts *devtool.VerifyOptions) error {
+			got = *opts
 			return nil
 		},
 	)
@@ -53,8 +53,8 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 
 	cmd := newVerifyCmd(
 		func() (string, error) { return testRepoRoot, nil },
-		func(_ context.Context, opts devtool.VerifyOptions) error {
-			got = opts
+		func(_ context.Context, opts *devtool.VerifyOptions) error {
+			got = *opts
 			return nil
 		},
 	)
@@ -66,6 +66,7 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 		"--coverage-threshold", "80.5",
 		"--coverage-file", "/tmp/c.out",
 		"--e2e-log-dir", "/tmp/e2e",
+		"--summary-json", "/tmp/verify-summary.json",
 		"--classify-live-quirks",
 	})
 
@@ -74,6 +75,7 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 	assert.InDelta(t, 80.5, got.CoverageThreshold, 0.001)
 	assert.Equal(t, "/tmp/c.out", got.CoverageFile)
 	assert.Equal(t, "/tmp/e2e", got.E2ELogDir)
+	assert.Equal(t, "/tmp/verify-summary.json", got.SummaryJSONPath)
 	assert.True(t, got.ClassifyLiveQuirks)
 }
 
@@ -270,7 +272,7 @@ func TestNewVerifyCmdWrapsWorkingDirectoryError(t *testing.T) {
 
 	cmd := newVerifyCmd(
 		func() (string, error) { return "", errors.New("boom") },
-		func(context.Context, devtool.VerifyOptions) error { return nil },
+		func(context.Context, *devtool.VerifyOptions) error { return nil },
 	)
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
@@ -303,7 +305,7 @@ func TestDefaultCWD(t *testing.T) {
 func TestDefaultVerifyWrapsRunVerifyError(t *testing.T) {
 	t.Parallel()
 
-	err := defaultVerify(context.Background(), devtool.VerifyOptions{
+	err := defaultVerify(context.Background(), &devtool.VerifyOptions{
 		RepoRoot: testRepoRoot,
 		Profile:  devtool.VerifyProfile("weird"),
 		Stdout:   io.Discard,

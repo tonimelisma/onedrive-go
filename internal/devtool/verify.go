@@ -12,8 +12,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
@@ -26,10 +28,25 @@ const (
 	authE2EPreflightPattern  = "^TestE2E_AuthPreflight_Fast$"
 	fastE2EPreflightPattern  = "^TestE2E_FixturePreflight_Fast$"
 	fullE2EPreflightPattern  = "^TestE2E_FixturePreflight_Full$"
+	fullE2EFixturePreflight  = "TestE2E_FixturePreflight_Full"
 	fullE2EPackageTimeout    = "60m"
+	fastE2EPackageTimeout    = "10m"
 	authPreflightIncidentID  = "LI-20260405-06"
 	fastDownloadIncidentID   = "LI-20260405-04"
 	fastDownloadTestName     = "TestE2E_Sync_DownloadOnly"
+	e2eSkipSuiteScrubEnvVar  = "ONEDRIVE_E2E_SKIP_SUITE_SCRUB"
+	e2eTimingEventsFileName  = "timing-events.jsonl"
+	e2eTimingSummaryFileName = "timing-summary.json"
+
+	fullE2EParallelMiscParallel = 5
+	fullE2ESerialParallel       = 1
+	fastE2EParallel             = 5
+
+	verifySummaryFilePerm = 0o600
+	verifySummaryDirPerm  = 0o700
+
+	verifySummaryStatusPass = "pass"
+	verifySummaryStatusFail = "fail"
 
 	VerifyDefault     VerifyProfile = "default"
 	VerifyPublic      VerifyProfile = "public"
@@ -45,9 +62,69 @@ type VerifyOptions struct {
 	CoverageThreshold  float64
 	CoverageFile       string
 	E2ELogDir          string
+	SummaryJSONPath    string
 	ClassifyLiveQuirks bool
 	Stdout             io.Writer
 	Stderr             io.Writer
+}
+
+type VerifySummary struct {
+	Profile          string                   `json:"profile"`
+	Status           string                   `json:"status"`
+	TotalDurationMS  int64                    `json:"total_duration_ms"`
+	Steps            []VerifyStepSummary      `json:"steps"`
+	ClassifiedReruns []ClassifiedRerunSummary `json:"classified_reruns,omitempty"`
+	E2EFullBuckets   []E2EBucketSummary       `json:"e2e_full_buckets,omitempty"`
+}
+
+type VerifyStepSummary struct {
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	DurationMS int64  `json:"duration_ms"`
+	Error      string `json:"error,omitempty"`
+}
+
+type ClassifiedRerunSummary struct {
+	IncidentID   string `json:"incident_id"`
+	Phase        string `json:"phase"`
+	Trigger      string `json:"trigger"`
+	RerunCommand string `json:"rerun_command"`
+	DurationMS   int64  `json:"duration_ms"`
+	Status       string `json:"status"`
+}
+
+type E2EBucketSummary struct {
+	Name       string `json:"name"`
+	Kind       string `json:"kind"`
+	RunPattern string `json:"run_pattern"`
+	Parallel   int    `json:"parallel"`
+	Timeout    string `json:"timeout"`
+	Status     string `json:"status"`
+	DurationMS int64  `json:"duration_ms"`
+	Error      string `json:"error,omitempty"`
+}
+
+type verifySummaryCollector struct {
+	summary         VerifySummary
+	stdout          io.Writer
+	summaryJSONPath string
+	startedAt       time.Time
+}
+
+type fullE2EBucketKind string
+
+const (
+	fullE2EBucketKindParallelMisc      fullE2EBucketKind = "parallel_misc"
+	fullE2EBucketKindSerialSync        fullE2EBucketKind = "serial_sync"
+	fullE2EBucketKindSerialWatchShared fullE2EBucketKind = "serial_watch_shared"
+)
+
+type fullE2EBucketSpec struct {
+	Name      string
+	Kind      fullE2EBucketKind
+	TestNames []string
+	Parallel  int
+	Timeout   string
 }
 
 type verifyPlan struct {
@@ -63,13 +140,437 @@ type staleCheck struct {
 	pattern *regexp.Regexp
 }
 
-func RunVerify(ctx context.Context, runner commandRunner, opts VerifyOptions) (runErr error) {
+func newVerifySummaryCollector(profile VerifyProfile, stdout io.Writer, summaryJSONPath string) *verifySummaryCollector {
+	return &verifySummaryCollector{
+		summary: VerifySummary{
+			Profile: string(profile),
+		},
+		stdout:          stdout,
+		summaryJSONPath: summaryJSONPath,
+		startedAt:       time.Now(),
+	}
+}
+
+func (c *verifySummaryCollector) runStep(name string, fn func() error) error {
+	startedAt := time.Now()
+	err := fn()
+
+	step := VerifyStepSummary{
+		Name:       name,
+		Status:     verifySummaryStatusPass,
+		DurationMS: durationMS(time.Since(startedAt)),
+	}
+	if err != nil {
+		step.Status = verifySummaryStatusFail
+		step.Error = err.Error()
+	}
+
+	c.summary.Steps = append(c.summary.Steps, step)
+	return err
+}
+
+func (c *verifySummaryCollector) runBucket(bucket fullE2EBucketSpec, fn func() error) error {
+	startedAt := time.Now()
+	err := fn()
+
+	summary := E2EBucketSummary{
+		Name:       bucket.Name,
+		Kind:       string(bucket.Kind),
+		RunPattern: fullE2EBucketRunPattern(bucket.TestNames),
+		Parallel:   bucket.Parallel,
+		Timeout:    bucket.Timeout,
+		Status:     verifySummaryStatusPass,
+		DurationMS: durationMS(time.Since(startedAt)),
+	}
+	if err != nil {
+		summary.Status = verifySummaryStatusFail
+		summary.Error = err.Error()
+	}
+
+	c.summary.E2EFullBuckets = append(c.summary.E2EFullBuckets, summary)
+	return err
+}
+
+func (c *verifySummaryCollector) recordClassifiedRerun(
+	incidentID string,
+	phase string,
+	trigger string,
+	rerunArgs []string,
+	duration time.Duration,
+	status string,
+) {
+	commandParts := append([]string{"go"}, rerunArgs...)
+	c.summary.ClassifiedReruns = append(c.summary.ClassifiedReruns, ClassifiedRerunSummary{
+		IncidentID:   incidentID,
+		Phase:        phase,
+		Trigger:      trigger,
+		RerunCommand: strings.Join(commandParts, " "),
+		DurationMS:   durationMS(duration),
+		Status:       status,
+	})
+}
+
+func (c *verifySummaryCollector) finalize(runErr error) error {
+	c.summary.TotalDurationMS = durationMS(time.Since(c.startedAt))
+	c.summary.Status = verifySummaryStatusPass
+	if runErr != nil {
+		c.summary.Status = verifySummaryStatusFail
+	}
+
+	if err := writeStatus(c.stdout, c.renderText()); err != nil {
+		return fmt.Errorf("write verify summary: %w", err)
+	}
+
+	if c.summaryJSONPath == "" {
+		return nil
+	}
+
+	data, err := json.MarshalIndent(c.summary, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal verify summary: %w", err)
+	}
+	data = append(data, '\n')
+	if err := localpath.AtomicWrite(
+		c.summaryJSONPath,
+		data,
+		verifySummaryFilePerm,
+		verifySummaryDirPerm,
+		".verify-summary-*.tmp",
+	); err != nil {
+		return fmt.Errorf("write verify summary json: %w", err)
+	}
+
+	return nil
+}
+
+func (c *verifySummaryCollector) renderText() string {
+	var builder strings.Builder
+	builder.WriteString("==> verify summary\n")
+	fmt.Fprintf(&builder, "status: %s\n", c.summary.Status)
+	fmt.Fprintf(&builder, "total: %s\n", formatDurationMS(c.summary.TotalDurationMS))
+
+	for _, step := range c.summary.Steps {
+		builder.WriteString(renderSummaryLine(step.Name, step.Status, step.DurationMS, step.Error))
+	}
+	for _, bucket := range c.summary.E2EFullBuckets {
+		errorText := bucket.Error
+		if bucket.Parallel > 0 {
+			if errorText == "" {
+				errorText = fmt.Sprintf("parallel=%d", bucket.Parallel)
+			} else {
+				errorText = fmt.Sprintf("%s; parallel=%d", errorText, bucket.Parallel)
+			}
+		}
+		builder.WriteString(renderSummaryLine(bucket.Name, bucket.Status, bucket.DurationMS, errorText))
+	}
+
+	if len(c.summary.ClassifiedReruns) == 0 {
+		builder.WriteString("classified reruns: none\n")
+		return builder.String()
+	}
+
+	builder.WriteString("classified reruns:\n")
+	for _, rerun := range c.summary.ClassifiedReruns {
+		fmt.Fprintf(
+			&builder,
+			"- %s %s %s (%s)\n",
+			rerun.IncidentID,
+			rerun.Phase,
+			rerun.Status,
+			formatDurationMS(rerun.DurationMS),
+		)
+	}
+
+	return builder.String()
+}
+
+func renderSummaryLine(name string, status string, durationMS int64, errorText string) string {
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "%s: %s (%s)", name, status, formatDurationMS(durationMS))
+	if errorText != "" {
+		fmt.Fprintf(&builder, " [%s]", errorText)
+	}
+	builder.WriteByte('\n')
+	return builder.String()
+}
+
+func durationMS(d time.Duration) int64 {
+	return d.Milliseconds()
+}
+
+func formatDurationMS(durationMS int64) string {
+	return (time.Duration(durationMS) * time.Millisecond).String()
+}
+
+func fullE2EParallelMiscBucket() fullE2EBucketSpec {
+	return fullE2EBucketSpec{
+		Name:      "full-parallel-misc",
+		Kind:      fullE2EBucketKindParallelMisc,
+		TestNames: fullE2EParallelMiscTestNames(),
+		Parallel:  fullE2EParallelMiscParallel,
+		Timeout:   fullE2EPackageTimeout,
+	}
+}
+
+func fullE2ESerialSyncBucket() fullE2EBucketSpec {
+	return fullE2EBucketSpec{
+		Name:      "full-serial-sync",
+		Kind:      fullE2EBucketKindSerialSync,
+		TestNames: fullE2ESerialSyncTestNames(),
+		Parallel:  fullE2ESerialParallel,
+		Timeout:   fullE2EPackageTimeout,
+	}
+}
+
+func fullE2ESerialWatchSharedBucket() fullE2EBucketSpec {
+	return fullE2EBucketSpec{
+		Name:      "full-serial-watch-shared",
+		Kind:      fullE2EBucketKindSerialWatchShared,
+		TestNames: fullE2ESerialWatchSharedTestNames(),
+		Parallel:  fullE2ESerialParallel,
+		Timeout:   fullE2EPackageTimeout,
+	}
+}
+
+func fullE2EBuckets() []fullE2EBucketSpec {
+	return []fullE2EBucketSpec{
+		fullE2EParallelMiscBucket(),
+		fullE2ESerialSyncBucket(),
+		fullE2ESerialWatchSharedBucket(),
+	}
+}
+
+func fullE2EStandaloneTests() []string {
+	return []string{fullE2EFixturePreflight}
+}
+
+func fullE2EParallelMiscTestNames() []string {
+	return []string{
+		"TestE2E_DriveList_AllFlag",
+		"TestE2E_DriveList_StaleStateDB",
+		"TestE2E_ZeroByteFileSync",
+		"TestE2E_UnicodeFilenameRoundtrip",
+		"TestE2E_InvalidFilenameRejection",
+		"TestE2E_RapidFileChurn",
+		"TestE2E_ConflictDetectionAndResolution",
+		"TestE2E_Status_AfterSync",
+		"TestE2E_Status_JSON",
+		"TestE2E_Status_PausedDrive",
+		"TestE2E_Pause_WithDuration",
+		"TestE2E_Pause_IndefiniteAndResume",
+		"TestE2E_Resume_NotPaused",
+		"TestE2E_Resume_AllDrives",
+		"TestE2E_Issues_Empty",
+		"TestE2E_Conflicts_EmptyHistory",
+		"TestE2E_Conflicts_JSON",
+		"TestE2E_Conflicts_ResolveMultipleStrategies",
+		"TestE2E_Conflicts_ResolveConflictNotFound",
+		"TestE2E_Verify_AfterSync",
+		"TestE2E_RecycleBinRoundtrip",
+		"TestE2E_RecycleBinEmpty",
+		"TestE2E_Mv_Rename",
+		"TestE2E_Mv_MoveToFolder",
+		"TestE2E_Mv_JSON",
+		"TestE2E_Mv_NotFound",
+		"TestE2E_Cp_File",
+		"TestE2E_Cp_IntoFolder",
+		"TestE2E_Cp_JSON",
+		"TestE2E_Cp_NotFound",
+		"TestE2E_Mv_ForceOverwrite",
+		"TestE2E_Cp_ForceOverwrite",
+		"TestE2E_Mv_Folder",
+		"TestE2E_Issues_ReadOnlyLifecycle",
+		"TestE2E_Verify_JSON",
+		"TestE2E_Status_NoDrives",
+		"TestE2E_Sync_QuietMode",
+		"TestE2E_Sync_NosyncGuard",
+		"TestE2E_Sync_MtimeOnlyChange",
+		"TestE2E_Sync_TransferWorkersConfig",
+		"TestE2E_Sync_IncrementalDeltaToken",
+		"TestE2E_Sync_DriveRemovePurgeResetsState",
+	}
+}
+
+func fullE2ESerialSyncTestNames() []string {
+	return []string{
+		"TestE2E_EdgeCases",
+		"TestE2E_Sync_BidirectionalMerge",
+		"TestE2E_Sync_EditEditConflict_ResolveKeepRemote",
+		"TestE2E_Sync_EditDeleteConflict",
+		"TestE2E_Sync_ResolveAll",
+		"TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal",
+		"TestE2E_Sync_DeletePropagation",
+		"TestE2E_Sync_BigDeleteProtection",
+		"TestE2E_Sync_DownloadOnlyIgnoresLocal",
+		"TestE2E_Sync_UploadOnlyIgnoresRemote",
+		"TestE2E_Sync_NestedFolderHierarchy",
+		"TestE2E_Sync_DryRunNonDestructive",
+		"TestE2E_Sync_ConvergentEdit",
+		"TestE2E_Sync_VerifyDetectsTampering",
+		"TestE2E_Sync_ResolveDryRun",
+		"TestE2E_Sync_EmptyDirectory",
+		"TestE2E_Sync_NestedDeletion",
+		"TestE2E_Sync_ResolveKeepLocalThenSync",
+		"TestE2E_Sync_ResolveKeepRemoteThenSync",
+		"TestE2E_Sync_IdempotentReSync",
+		"TestE2E_Sync_CrashRecoveryIdempotent",
+		"TestE2E_Sync_CrashRecovery_ReplaysDurableInProgressRows",
+		"TestE2E_Conflicts_ResolveKeepBoth",
+	}
+}
+
+func fullE2ESerialWatchSharedTestNames() []string {
+	return []string{
+		"TestE2E_Issues_ForceDeletes",
+		"TestE2E_Sync_MultiDriveReport",
+		"TestE2E_SyncWatch_RemoteToLocal",
+		"TestE2E_SyncWatch_Bidirectional",
+		"TestE2E_SyncWatch_ConflictDuringWatch",
+		"TestE2E_SyncWatch_FileModification",
+		"TestE2E_SyncWatch_FileDeletion",
+		"TestE2E_SyncWatch_FolderCreation",
+		"TestE2E_SyncWatch_MultipleFiles",
+		"TestE2E_SyncWatch_LargeFile",
+		"TestE2E_SyncWatch_RapidChurn",
+		"TestE2E_SyncWatch_GracefulShutdown",
+		"TestE2E_SyncWatch_TimedPauseExpiry",
+		"TestE2E_SyncWatch_BasicRoundTrip",
+		"TestE2E_SyncWatch_PauseResume",
+		"TestE2E_SyncWatch_SIGHUPReload",
+		"TestE2E_SyncWatch_WebsocketRemoteWakeAndRestart",
+		"TestE2E_Shared_FileDiscoveryAndSelectorRoundTrip",
+		"TestE2E_Shared_FolderDiscoveryContinuesToDriveAdd",
+		"TestE2E_Shared_RawFolderLinkDriveAdd_NormalizesToCanonicalSharedDrive",
+		"TestE2E_Shared_FolderNameDriveAdd_HonorsAccountFilter",
+		"TestE2E_Shared_ReadOnlyFolder_DiscoveryDriveAddAndBlockedWriteUX",
+		"TestE2E_SharedFolder_DriveList_ShowsExplicitSharedFixtures",
+		"TestE2E_SharedFolder_RemoteMutationSyncsToRecipient",
+		"TestE2E_SharedFolder_RecipientSyncTwice_Idempotent",
+		"TestE2E_Orchestrator_SimultaneousSync",
+		"TestE2E_Orchestrator_Status",
+		"TestE2E_Orchestrator_DriveIsolation",
+		"TestE2E_Orchestrator_OneDriveFails",
+		"TestE2E_Orchestrator_SelectiveDrive",
+		"TestE2E_Orchestrator_WatchSimultaneous",
+		"TestE2E_Orchestrator_WatchDriveIsolation",
+		"TestE2E_Orchestrator_WatchPausedDrive",
+	}
+}
+
+func fullE2EBucketCommandArgs(bucket fullE2EBucketSpec) []string {
+	return []string{
+		"test",
+		"-tags=e2e e2e_full",
+		"-race",
+		"-v",
+		"-run=" + fullE2EBucketRunPattern(bucket.TestNames),
+		"-parallel",
+		strconv.Itoa(bucket.Parallel),
+		"-timeout=" + bucket.Timeout,
+		"./e2e/...",
+	}
+}
+
+func fullE2EBucketRunPattern(testNames []string) string {
+	return "^(" + strings.Join(testNames, "|") + ")$"
+}
+
+func resetE2ETimingArtifacts(logDir string) error {
+	if logDir == "" {
+		return nil
+	}
+
+	for _, name := range []string{e2eTimingEventsFileName, e2eTimingSummaryFileName} {
+		path := filepath.Join(logDir, name)
+		if err := localpath.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove %s: %w", path, err)
+		}
+	}
+
+	return nil
+}
+
+func discoverTaggedE2ETests(e2eDir string, buildExpression string) ([]string, error) {
+	entries, err := localpath.ReadDir(e2eDir)
+	if err != nil {
+		return nil, fmt.Errorf("read e2e dir: %w", err)
+	}
+
+	tests := make([]string, 0)
+	fset := token.NewFileSet()
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+
+		path := filepath.Join(e2eDir, entry.Name())
+		data, err := localpath.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", path, err)
+		}
+		if !hasBuildExpression(string(data), buildExpression) {
+			continue
+		}
+
+		file, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", path, err)
+		}
+
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv != nil || fn.Name == nil || !strings.HasPrefix(fn.Name.Name, "Test") {
+				continue
+			}
+
+			tests = append(tests, fn.Name.Name)
+		}
+	}
+
+	sort.Strings(tests)
+	return tests, nil
+}
+
+func hasBuildExpression(source string, buildExpression string) bool {
+	for _, line := range strings.Split(source, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, "//") {
+			break
+		}
+		if !strings.HasPrefix(line, "//go:build ") {
+			continue
+		}
+
+		return strings.TrimSpace(strings.TrimPrefix(line, "//go:build ")) == buildExpression
+	}
+
+	return false
+}
+
+func RunVerify(ctx context.Context, runner commandRunner, opts *VerifyOptions) (runErr error) {
+	if opts == nil {
+		return fmt.Errorf("verify options are required")
+	}
+
 	plan, err := resolveVerifyPlan(opts.Profile)
 	if err != nil {
 		return err
 	}
 
 	stdout, stderr := resolveVerifyWriters(opts)
+	collector := newVerifySummaryCollector(opts.Profile, stdout, opts.SummaryJSONPath)
+	defer func() {
+		if finalizeErr := collector.finalize(runErr); finalizeErr != nil {
+			if runErr == nil {
+				runErr = finalizeErr
+			} else {
+				runErr = errors.Join(runErr, finalizeErr)
+			}
+		}
+	}()
 	coverageThreshold := opts.CoverageThreshold
 	if coverageThreshold == 0 {
 		coverageThreshold = defaultCoverageThreshold
@@ -91,6 +592,7 @@ func RunVerify(ctx context.Context, runner commandRunner, opts VerifyOptions) (r
 		runner,
 		opts.RepoRoot,
 		env,
+		collector,
 		stdout,
 		stderr,
 		coverageFile,
@@ -100,7 +602,7 @@ func RunVerify(ctx context.Context, runner commandRunner, opts VerifyOptions) (r
 		return err
 	}
 
-	runErr = runOptionalVerification(ctx, runner, opts, env, stdout, stderr, plan)
+	runErr = runOptionalVerification(ctx, runner, opts, env, collector, stdout, stderr, plan)
 
 	return runErr
 }
@@ -138,7 +640,7 @@ func resolveVerifyPlan(profile VerifyProfile) (verifyPlan, error) {
 	}
 }
 
-func resolveVerifyWriters(opts VerifyOptions) (io.Writer, io.Writer) {
+func resolveVerifyWriters(opts *VerifyOptions) (io.Writer, io.Writer) {
 	stdout := opts.Stdout
 	if stdout == nil {
 		stdout = os.Stdout
@@ -181,6 +683,7 @@ func runPublicVerification(
 	runner commandRunner,
 	repoRoot string,
 	env []string,
+	collector *verifySummaryCollector,
 	stdout, stderr io.Writer,
 	coverageFile string,
 	coverageThreshold float64,
@@ -195,19 +698,28 @@ func runPublicVerification(
 		runLint,
 		runBuild,
 	}
-	for _, step := range publicSteps {
-		if err := step(ctx, runner, repoRoot, env, stdout, stderr); err != nil {
+	publicStepNames := []string{"format", "lint", "build"}
+	for i, step := range publicSteps {
+		if err := collector.runStep(publicStepNames[i], func() error {
+			return step(ctx, runner, repoRoot, env, stdout, stderr)
+		}); err != nil {
 			return err
 		}
 	}
 
-	if err := runUnitTests(ctx, runner, repoRoot, env, coverageFile, stdout, stderr); err != nil {
+	if err := collector.runStep("unit tests", func() error {
+		return runUnitTests(ctx, runner, repoRoot, env, coverageFile, stdout, stderr)
+	}); err != nil {
 		return err
 	}
-	if err := runCoverageGate(ctx, runner, repoRoot, env, coverageFile, coverageThreshold, stdout); err != nil {
+	if err := collector.runStep("coverage", func() error {
+		return runCoverageGate(ctx, runner, repoRoot, env, coverageFile, coverageThreshold, stdout)
+	}); err != nil {
 		return err
 	}
-	if err := runRepoConsistencyChecks(repoRoot); err != nil {
+	if err := collector.runStep("repo consistency", func() error {
+		return runRepoConsistencyChecks(repoRoot)
+	}); err != nil {
 		return err
 	}
 
@@ -217,30 +729,40 @@ func runPublicVerification(
 func runOptionalVerification(
 	ctx context.Context,
 	runner commandRunner,
-	opts VerifyOptions,
+	opts *VerifyOptions,
 	env []string,
+	collector *verifySummaryCollector,
 	stdout, stderr io.Writer,
 	plan verifyPlan,
 ) error {
+	e2eEnv := env
+	if opts.E2ELogDir != "" {
+		e2eEnv = append([]string{}, env...)
+		e2eEnv = append(e2eEnv, "E2E_LOG_DIR="+opts.E2ELogDir)
+		if err := resetE2ETimingArtifacts(opts.E2ELogDir); err != nil {
+			return err
+		}
+	}
+
 	if plan.runE2E {
-		if err := runE2E(ctx, runner, opts.RepoRoot, env, stdout, stderr, opts.ClassifyLiveQuirks); err != nil {
+		if err := runE2E(ctx, runner, opts.RepoRoot, e2eEnv, collector, stdout, stderr, opts.ClassifyLiveQuirks); err != nil {
 			return err
 		}
 	}
 
 	if plan.runE2EFull {
-		if err := runE2EFull(ctx, runner, opts.RepoRoot, env, opts.E2ELogDir, stdout, stderr, opts.ClassifyLiveQuirks); err != nil {
+		if err := runE2EFull(ctx, runner, opts.RepoRoot, e2eEnv, opts.E2ELogDir, collector, stdout, stderr); err != nil {
 			return err
 		}
 	}
 
 	if plan.runIntegration {
-		if err := runIntegration(ctx, runner, opts.RepoRoot, env, stdout, stderr); err != nil {
+		if err := runIntegration(ctx, runner, opts.RepoRoot, env, collector, stdout, stderr); err != nil {
 			return err
 		}
 	}
 	if plan.runStress {
-		if err := runStress(ctx, runner, opts.RepoRoot, env, stdout, stderr); err != nil {
+		if err := runStress(ctx, runner, opts.RepoRoot, env, collector, stdout, stderr); err != nil {
 			return err
 		}
 	}
@@ -385,21 +907,201 @@ func runE2E(
 	runner commandRunner,
 	repoRoot string,
 	env []string,
+	collector *verifySummaryCollector,
 	stdout, stderr io.Writer,
 	classifyLiveQuirks bool,
 ) error {
-	if err := runE2EPreflightAuth(ctx, runner, repoRoot, env, stdout, stderr, classifyLiveQuirks); err != nil {
+	if err := runE2EPreflightAuth(ctx, runner, repoRoot, env, collector, stdout, stderr, classifyLiveQuirks); err != nil {
 		return err
 	}
 
-	if err := runE2EPreflightFast(ctx, runner, repoRoot, env, stdout, stderr); err != nil {
+	if err := runE2EPreflightFast(ctx, runner, repoRoot, env, collector, stdout, stderr); err != nil {
 		return err
 	}
 
+	return runFastE2ESuite(ctx, runner, repoRoot, env, collector, stdout, stderr, classifyLiveQuirks)
+}
+
+func runFastE2ESuite(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	env []string,
+	collector *verifySummaryCollector,
+	stdout, stderr io.Writer,
+	classifyLiveQuirks bool,
+) error {
+	return collector.runStep("fast e2e", func() error {
+		if !classifyLiveQuirks {
+			return runFastE2ESuiteOnce(ctx, runner, repoRoot, env, stdout, stderr)
+		}
+
+		return runFastE2ESuiteWithClassification(ctx, runner, repoRoot, env, collector, stdout, stderr)
+	})
+}
+
+func runFastE2ESuiteOnce(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	env []string,
+	stdout, stderr io.Writer,
+) error {
 	if err := writeStatus(stdout, "==> go test -tags=e2e\n"); err != nil {
 		return fmt.Errorf("write status: %w", err)
 	}
-	if !classifyLiveQuirks {
+	if err := runner.Run(ctx, repoRoot, env, stdout, stderr, "go", fastE2EArgs()...); err != nil {
+		return fmt.Errorf("fast e2e: %w", err)
+	}
+
+	return nil
+}
+
+func runFastE2ESuiteWithClassification(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	env []string,
+	collector *verifySummaryCollector,
+	stdout, stderr io.Writer,
+) error {
+	if err := writeStatus(stdout, "==> go test -json -tags=e2e\n"); err != nil {
+		return fmt.Errorf("write status: %w", err)
+	}
+
+	output, err := runner.CombinedOutput(ctx, repoRoot, env, "go", fastE2EJSONArgs()...)
+	if writeErr := writeCommandOutput(stdout, output); writeErr != nil {
+		return fmt.Errorf("write fast e2e output: %w", writeErr)
+	}
+	if err == nil {
+		return nil
+	}
+
+	return rerunClassifiedFastE2EQuirk(ctx, runner, repoRoot, env, collector, stdout, stderr, output, err)
+}
+
+func rerunClassifiedFastE2EQuirk(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	env []string,
+	collector *verifySummaryCollector,
+	stdout, stderr io.Writer,
+	output []byte,
+	runErr error,
+) error {
+	failedTests := failedGoTestsFromJSON(output)
+	rerunArgs, incidentID, ok := classifyFastE2EQuirk(failedTests)
+	if !ok {
+		return fmt.Errorf("fast e2e: %w", runErr)
+	}
+
+	if writeErr := writeStatus(stdout, fmt.Sprintf("==> rerun known live quirk %s\n", incidentID)); writeErr != nil {
+		return fmt.Errorf("write status: %w", writeErr)
+	}
+
+	rerunStartedAt := time.Now()
+	rerunErr := runner.Run(ctx, repoRoot, env, stdout, stderr, "go", rerunArgs...)
+	rerunStatus := verifySummaryStatusPass
+	if rerunErr != nil {
+		rerunStatus = verifySummaryStatusFail
+	}
+	collector.recordClassifiedRerun(
+		incidentID,
+		"fast e2e",
+		fastDownloadTestName,
+		rerunArgs,
+		time.Since(rerunStartedAt),
+		rerunStatus,
+	)
+	if rerunErr != nil {
+		return fmt.Errorf("fast e2e: %w", runErr)
+	}
+
+	warning := fmt.Sprintf("warning: classified known live quirk %s after successful rerun\n", incidentID)
+	if writeErr := writeStatus(stdout, warning); writeErr != nil {
+		return fmt.Errorf("write status: %w", writeErr)
+	}
+
+	return nil
+}
+
+func runE2EPreflightAuth(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	env []string,
+	collector *verifySummaryCollector,
+	stdout, stderr io.Writer,
+	classifyLiveQuirks bool,
+) error {
+	return collector.runStep("auth preflight", func() error {
+		if err := writeStatus(stdout, "==> go test -tags=e2e auth preflight\n"); err != nil {
+			return fmt.Errorf("write status: %w", err)
+		}
+
+		authArgs := []string{
+			"test",
+			"-tags=e2e",
+			"-run=" + authE2EPreflightPattern,
+			"-count=1",
+			"-v",
+			"./e2e/...",
+		}
+		if err := runner.Run(ctx, repoRoot, env, stdout, stderr, "go", authArgs...); err != nil {
+			if !classifyLiveQuirks {
+				return fmt.Errorf("fast e2e auth preflight: %w", err)
+			}
+
+			if writeErr := writeStatus(stdout, fmt.Sprintf("==> rerun known live quirk %s\n", authPreflightIncidentID)); writeErr != nil {
+				return fmt.Errorf("write status: %w", writeErr)
+			}
+
+			rerunStartedAt := time.Now()
+			rerunErr := runner.Run(ctx, repoRoot, env, stdout, stderr, "go", authArgs...)
+			rerunStatus := verifySummaryStatusPass
+			if rerunErr != nil {
+				rerunStatus = verifySummaryStatusFail
+			}
+			collector.recordClassifiedRerun(
+				authPreflightIncidentID,
+				"auth preflight",
+				authE2EPreflightPattern,
+				authArgs,
+				time.Since(rerunStartedAt),
+				rerunStatus,
+			)
+			if rerunErr == nil {
+				warning := fmt.Sprintf(
+					"warning: classified known live quirk %s after successful rerun\n",
+					authPreflightIncidentID,
+				)
+				if writeErr := writeStatus(stdout, warning); writeErr != nil {
+					return fmt.Errorf("write status: %w", writeErr)
+				}
+
+				return nil
+			}
+
+			return fmt.Errorf("fast e2e auth preflight: %w", err)
+		}
+
+		return nil
+	})
+}
+
+func runE2EPreflightFast(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	env []string,
+	collector *verifySummaryCollector,
+	stdout, stderr io.Writer,
+) error {
+	return collector.runStep("fast fixture preflight", func() error {
+		if err := writeStatus(stdout, "==> go test -tags=e2e fixture preflight\n"); err != nil {
+			return fmt.Errorf("write status: %w", err)
+		}
 		if err := runner.Run(
 			ctx,
 			repoRoot,
@@ -409,140 +1111,16 @@ func runE2E(
 			"go",
 			"test",
 			"-tags=e2e",
-			"-race",
+			"-run="+fastE2EPreflightPattern,
+			"-count=1",
 			"-v",
-			"-parallel",
-			"5",
-			"-timeout=10m",
 			"./e2e/...",
 		); err != nil {
-			return fmt.Errorf("fast e2e: %w", err)
+			return fmt.Errorf("fast e2e fixture preflight: %w", err)
 		}
 
 		return nil
-	}
-
-	if err := writeStatus(stdout, "==> go test -json -tags=e2e\n"); err != nil {
-		return fmt.Errorf("write status: %w", err)
-	}
-
-	output, err := runner.CombinedOutput(
-		ctx,
-		repoRoot,
-		env,
-		"go",
-		"test",
-		"-json",
-		"-tags=e2e",
-		"-race",
-		"-v",
-		"-parallel",
-		"5",
-		"-timeout=10m",
-		"./e2e/...",
-	)
-	if writeErr := writeCommandOutput(stdout, output); writeErr != nil {
-		return fmt.Errorf("write fast e2e output: %w", writeErr)
-	}
-	if err == nil {
-		return nil
-	}
-
-	failedTests := failedGoTestsFromJSON(output)
-	if rerunArgs, incidentID, ok := classifyFastE2EQuirk(failedTests); ok {
-		if writeErr := writeStatus(stdout, fmt.Sprintf("==> rerun known live quirk %s\n", incidentID)); writeErr != nil {
-			return fmt.Errorf("write status: %w", writeErr)
-		}
-		if rerunErr := runner.Run(ctx, repoRoot, env, stdout, stderr, "go", rerunArgs...); rerunErr == nil {
-			warning := fmt.Sprintf(
-				"warning: classified known live quirk %s after successful rerun\n",
-				incidentID,
-			)
-			if writeErr := writeStatus(stdout, warning); writeErr != nil {
-				return fmt.Errorf("write status: %w", writeErr)
-			}
-
-			return nil
-		}
-	}
-
-	return fmt.Errorf("fast e2e: %w", err)
-}
-
-func runE2EPreflightAuth(
-	ctx context.Context,
-	runner commandRunner,
-	repoRoot string,
-	env []string,
-	stdout, stderr io.Writer,
-	classifyLiveQuirks bool,
-) error {
-	if err := writeStatus(stdout, "==> go test -tags=e2e auth preflight\n"); err != nil {
-		return fmt.Errorf("write status: %w", err)
-	}
-
-	authArgs := []string{
-		"test",
-		"-tags=e2e",
-		"-run=" + authE2EPreflightPattern,
-		"-count=1",
-		"-v",
-		"./e2e/...",
-	}
-	if err := runner.Run(ctx, repoRoot, env, stdout, stderr, "go", authArgs...); err != nil {
-		if !classifyLiveQuirks {
-			return fmt.Errorf("fast e2e auth preflight: %w", err)
-		}
-
-		if writeErr := writeStatus(stdout, fmt.Sprintf("==> rerun known live quirk %s\n", authPreflightIncidentID)); writeErr != nil {
-			return fmt.Errorf("write status: %w", writeErr)
-		}
-		if rerunErr := runner.Run(ctx, repoRoot, env, stdout, stderr, "go", authArgs...); rerunErr == nil {
-			warning := fmt.Sprintf(
-				"warning: classified known live quirk %s after successful rerun\n",
-				authPreflightIncidentID,
-			)
-			if writeErr := writeStatus(stdout, warning); writeErr != nil {
-				return fmt.Errorf("write status: %w", writeErr)
-			}
-
-			return nil
-		}
-
-		return fmt.Errorf("fast e2e auth preflight: %w", err)
-	}
-
-	return nil
-}
-
-func runE2EPreflightFast(
-	ctx context.Context,
-	runner commandRunner,
-	repoRoot string,
-	env []string,
-	stdout, stderr io.Writer,
-) error {
-	if err := writeStatus(stdout, "==> go test -tags=e2e fixture preflight\n"); err != nil {
-		return fmt.Errorf("write status: %w", err)
-	}
-	if err := runner.Run(
-		ctx,
-		repoRoot,
-		env,
-		stdout,
-		stderr,
-		"go",
-		"test",
-		"-tags=e2e",
-		"-run="+fastE2EPreflightPattern,
-		"-count=1",
-		"-v",
-		"./e2e/...",
-	); err != nil {
-		return fmt.Errorf("fast e2e fixture preflight: %w", err)
-	}
-
-	return nil
+	})
 }
 
 func runE2EFull(
@@ -551,8 +1129,8 @@ func runE2EFull(
 	repoRoot string,
 	env []string,
 	logDir string,
+	collector *verifySummaryCollector,
 	stdout, stderr io.Writer,
-	classifyLiveQuirks bool,
 ) error {
 	if logDir == "" {
 		logDir = filepath.Join(os.TempDir(), "e2e-debug-logs")
@@ -561,37 +1139,57 @@ func runE2EFull(
 	fullEnv := append([]string{}, env...)
 	fullEnv = append(fullEnv, "E2E_LOG_DIR="+logDir)
 
-	if err := runE2EPreflightAuth(ctx, runner, repoRoot, fullEnv, stdout, stderr, classifyLiveQuirks); err != nil {
+	if err := runE2EPreflightFull(ctx, runner, repoRoot, fullEnv, collector, stdout, stderr); err != nil {
 		return err
 	}
 
-	if err := runE2EPreflightFull(ctx, runner, repoRoot, fullEnv, stdout, stderr); err != nil {
-		return err
-	}
+	bucketEnv := append([]string{}, fullEnv...)
+	bucketEnv = append(bucketEnv, e2eSkipSuiteScrubEnvVar+"=1")
 
-	if err := writeStatus(stdout, "==> go test -tags='e2e e2e_full'\n"); err != nil {
-		return fmt.Errorf("write status: %w", err)
-	}
-	if err := runner.Run(
-		ctx,
-		repoRoot,
-		fullEnv,
-		stdout,
-		stderr,
-		"go",
-		"test",
-		"-tags=e2e e2e_full",
-		"-race",
-		"-v",
-		"-parallel",
-		"1",
-		"-timeout="+fullE2EPackageTimeout,
-		"./e2e/...",
-	); err != nil {
-		return fmt.Errorf("full e2e: %w", err)
+	buckets := fullE2EBuckets()
+	for i := range buckets {
+		bucket := buckets[i]
+		if err := collector.runBucket(bucket, func() error {
+			if err := writeStatus(stdout, fmt.Sprintf("==> go test -tags='e2e e2e_full' %s\n", bucket.Name)); err != nil {
+				return fmt.Errorf("write status: %w", err)
+			}
+			if err := runner.Run(
+				ctx,
+				repoRoot,
+				bucketEnv,
+				stdout,
+				stderr,
+				"go",
+				fullE2EBucketCommandArgs(bucket)...,
+			); err != nil {
+				return fmt.Errorf("full e2e: %w", err)
+			}
+
+			return nil
+		}); err != nil {
+			return err
+		}
 	}
 
 	return nil
+}
+
+func fastE2EArgs() []string {
+	return []string{
+		"test",
+		"-tags=e2e",
+		"-race",
+		"-v",
+		"-parallel",
+		strconv.Itoa(fastE2EParallel),
+		"-timeout=" + fastE2EPackageTimeout,
+		"./e2e/...",
+	}
+}
+
+func fastE2EJSONArgs() []string {
+	args := fastE2EArgs()
+	return append([]string{args[0], "-json"}, args[1:]...)
 }
 
 func classifyFastE2EQuirk(failedTests map[string]struct{}) ([]string, string, bool) {
@@ -664,77 +1262,98 @@ func runE2EPreflightFull(
 	runner commandRunner,
 	repoRoot string,
 	env []string,
+	collector *verifySummaryCollector,
 	stdout, stderr io.Writer,
 ) error {
-	if err := writeStatus(stdout, "==> go test -tags='e2e e2e_full' fixture preflight\n"); err != nil {
-		return fmt.Errorf("write status: %w", err)
-	}
-	if err := runner.Run(
-		ctx,
-		repoRoot,
-		env,
-		stdout,
-		stderr,
-		"go",
-		"test",
-		"-tags=e2e e2e_full",
-		"-run="+fullE2EPreflightPattern,
-		"-count=1",
-		"-v",
-		"./e2e/...",
-	); err != nil {
-		return fmt.Errorf("full e2e fixture preflight: %w", err)
-	}
+	return collector.runStep("full fixture preflight", func() error {
+		if err := writeStatus(stdout, "==> go test -tags='e2e e2e_full' fixture preflight\n"); err != nil {
+			return fmt.Errorf("write status: %w", err)
+		}
+		if err := runner.Run(
+			ctx,
+			repoRoot,
+			env,
+			stdout,
+			stderr,
+			"go",
+			"test",
+			"-tags=e2e e2e_full",
+			"-run="+fullE2EPreflightPattern,
+			"-count=1",
+			"-v",
+			"./e2e/...",
+		); err != nil {
+			return fmt.Errorf("full e2e fixture preflight: %w", err)
+		}
 
-	return nil
+		return nil
+	})
 }
 
-func runIntegration(ctx context.Context, runner commandRunner, repoRoot string, env []string, stdout, stderr io.Writer) error {
-	if err := writeStatus(stdout, "==> go test -tags=integration\n"); err != nil {
-		return fmt.Errorf("write status: %w", err)
-	}
-	if err := runner.Run(
-		ctx,
-		repoRoot,
-		env,
-		stdout,
-		stderr,
-		"go",
-		"test",
-		"-tags=integration",
-		"-race",
-		"-v",
-		"-timeout=5m",
-		"./internal/graph/...",
-	); err != nil {
-		return fmt.Errorf("integration tests: %w", err)
-	}
+func runIntegration(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	env []string,
+	collector *verifySummaryCollector,
+	stdout, stderr io.Writer,
+) error {
+	return collector.runStep("integration", func() error {
+		if err := writeStatus(stdout, "==> go test -tags=integration\n"); err != nil {
+			return fmt.Errorf("write status: %w", err)
+		}
+		if err := runner.Run(
+			ctx,
+			repoRoot,
+			env,
+			stdout,
+			stderr,
+			"go",
+			"test",
+			"-tags=integration",
+			"-race",
+			"-v",
+			"-timeout=5m",
+			"./internal/graph/...",
+		); err != nil {
+			return fmt.Errorf("integration tests: %w", err)
+		}
 
-	return nil
+		return nil
+	})
 }
 
-func runStress(ctx context.Context, runner commandRunner, repoRoot string, env []string, stdout, stderr io.Writer) error {
-	if err := writeStatus(stdout, "==> go test -race -count=50 runtime stress\n"); err != nil {
-		return fmt.Errorf("write status: %w", err)
-	}
-	if err := runner.Run(
-		ctx,
-		repoRoot,
-		env,
-		stdout,
-		stderr,
-		"go",
-		"test",
-		"-race",
-		"-count=50",
-		"./internal/sync",
-		"./internal/multisync",
-		"./internal/cli",
-	); err != nil {
-		return fmt.Errorf("stress tests: %w", err)
-	}
+func runStress(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	env []string,
+	collector *verifySummaryCollector,
+	stdout, stderr io.Writer,
+) error {
+	return collector.runStep("stress", func() error {
+		if err := writeStatus(stdout, "==> go test -race -count=50 runtime stress\n"); err != nil {
+			return fmt.Errorf("write status: %w", err)
+		}
+		if err := runner.Run(
+			ctx,
+			repoRoot,
+			env,
+			stdout,
+			stderr,
+			"go",
+			"test",
+			"-race",
+			"-count=50",
+			"./internal/sync",
+			"./internal/multisync",
+			"./internal/cli",
+		); err != nil {
+			return fmt.Errorf("stress tests: %w", err)
+		}
 
-	return nil
+		return nil
+	})
 }
 
 func runRepoConsistencyChecks(repoRoot string) error {

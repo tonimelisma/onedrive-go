@@ -144,6 +144,10 @@ Runtime and test policy:
 - delta-sensitive live tests assert eventual user-visible convergence
   (downloaded file appears locally, local delete propagates, conflict resolves)
   rather than first-pass delta visibility after a direct REST read
+- scheduled/manual verifier runs measure this consistency window explicitly in
+  the shared E2E `timing-summary.json` artifact so CI can track remote write
+  visibility, remote delete disappearance, scope-transition readiness, and
+  sync-convergence p50/p95 instead of treating the lag as opaque noise
 
 ### Folder-Scoped Delta Readiness Lag
 

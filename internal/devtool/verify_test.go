@@ -3,6 +3,7 @@ package devtool
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 type recordedCommand struct {
@@ -130,7 +133,7 @@ func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
 
-	err := RunVerify(context.Background(), runner, VerifyOptions{
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
 		RepoRoot:          repoRoot,
 		Profile:           VerifyDefault,
 		CoverageThreshold: 76.0,
@@ -160,22 +163,35 @@ func TestRunVerifyE2EFullRunsPreflightsBeforeSuites(t *testing.T) {
 
 	repoRoot := t.TempDir()
 	runner := &fakeRunner{}
+	stdout := &bytes.Buffer{}
+	logDir := filepath.Join(repoRoot, "e2e-logs")
 
-	err := RunVerify(context.Background(), runner, VerifyOptions{
-		RepoRoot: repoRoot,
-		Profile:  VerifyE2EFull,
-		Stdout:   &bytes.Buffer{},
-		Stderr:   &bytes.Buffer{},
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot:  repoRoot,
+		Profile:   VerifyE2EFull,
+		E2ELogDir: logDir,
+		Stdout:    stdout,
+		Stderr:    &bytes.Buffer{},
 	})
 	require.NoError(t, err)
 
-	require.Len(t, runner.runCommands, 6)
+	require.Len(t, runner.runCommands, 7)
 	assert.Equal(t, []string{"test", "-tags=e2e", "-run=" + authE2EPreflightPattern, "-count=1", "-v", "./e2e/..."}, runner.runCommands[0].args)
 	assert.Equal(t, []string{"test", "-tags=e2e", "-run=" + fastE2EPreflightPattern, "-count=1", "-v", "./e2e/..."}, runner.runCommands[1].args)
 	assert.Equal(t, []string{"test", "-tags=e2e", "-race", "-v", "-parallel", "5", "-timeout=10m", "./e2e/..."}, runner.runCommands[2].args)
-	assert.Equal(t, []string{"test", "-tags=e2e", "-run=" + authE2EPreflightPattern, "-count=1", "-v", "./e2e/..."}, runner.runCommands[3].args)
-	assert.Equal(t, []string{"test", "-tags=e2e e2e_full", "-run=" + fullE2EPreflightPattern, "-count=1", "-v", "./e2e/..."}, runner.runCommands[4].args)
-	assert.Equal(t, []string{"test", "-tags=e2e e2e_full", "-race", "-v", "-parallel", "1", "-timeout=60m", "./e2e/..."}, runner.runCommands[5].args)
+	assert.Equal(t, []string{"test", "-tags=e2e e2e_full", "-run=" + fullE2EPreflightPattern, "-count=1", "-v", "./e2e/..."}, runner.runCommands[3].args)
+	assert.Equal(t, fullE2EBucketCommandArgs(fullE2EParallelMiscBucket()), runner.runCommands[4].args)
+	assert.Equal(t, fullE2EBucketCommandArgs(fullE2ESerialSyncBucket()), runner.runCommands[5].args)
+	assert.Equal(t, fullE2EBucketCommandArgs(fullE2ESerialWatchSharedBucket()), runner.runCommands[6].args)
+	assertCommandHasEnvVar(t, runner.runCommands[3], "E2E_LOG_DIR="+logDir)
+	assertCommandLacksEnvVar(t, runner.runCommands[3], e2eSkipSuiteScrubEnvVar+"=1")
+	assertCommandHasEnvVar(t, runner.runCommands[4], "E2E_LOG_DIR="+logDir)
+	assertCommandHasEnvVar(t, runner.runCommands[4], e2eSkipSuiteScrubEnvVar+"=1")
+	assertCommandHasEnvVar(t, runner.runCommands[5], e2eSkipSuiteScrubEnvVar+"=1")
+	assertCommandHasEnvVar(t, runner.runCommands[6], e2eSkipSuiteScrubEnvVar+"=1")
+	assert.Contains(t, stdout.String(), "verify summary")
+	assert.Contains(t, stdout.String(), "full-parallel-misc")
+	assert.Contains(t, stdout.String(), "classified reruns: none")
 }
 
 func TestRunVerifyE2EFullClassifiesKnownAuthPreflightQuirkAfterSuccessfulRerun(t *testing.T) {
@@ -191,7 +207,7 @@ func TestRunVerifyE2EFullClassifiesKnownAuthPreflightQuirkAfterSuccessfulRerun(t
 	}
 
 	stdout := &bytes.Buffer{}
-	err := RunVerify(context.Background(), runner, VerifyOptions{
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
 		RepoRoot:           repoRoot,
 		Profile:            VerifyE2EFull,
 		ClassifyLiveQuirks: true,
@@ -200,10 +216,11 @@ func TestRunVerifyE2EFullClassifiesKnownAuthPreflightQuirkAfterSuccessfulRerun(t
 	})
 	require.NoError(t, err)
 
-	require.Len(t, runner.runCommands, 6)
+	require.Len(t, runner.runCommands, 7)
 	require.Len(t, runner.combinedCommands, 1)
 	assert.Equal(t, runner.runCommands[0].args, runner.runCommands[1].args)
 	assert.Contains(t, stdout.String(), "LI-20260405-06")
+	assert.Contains(t, stdout.String(), "classified reruns:")
 }
 
 func TestRunVerifyE2EFullClassifiesKnownFastSuiteQuirkAfterSuccessfulRerun(t *testing.T) {
@@ -224,7 +241,7 @@ func TestRunVerifyE2EFullClassifiesKnownFastSuiteQuirkAfterSuccessfulRerun(t *te
 	}
 
 	stdout := &bytes.Buffer{}
-	err := RunVerify(context.Background(), runner, VerifyOptions{
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
 		RepoRoot:           repoRoot,
 		Profile:            VerifyE2EFull,
 		ClassifyLiveQuirks: true,
@@ -235,9 +252,10 @@ func TestRunVerifyE2EFullClassifiesKnownFastSuiteQuirkAfterSuccessfulRerun(t *te
 
 	require.Len(t, runner.combinedCommands, 1)
 	assert.Equal(t, []string{"test", "-json", "-tags=e2e", "-race", "-v", "-parallel", "5", "-timeout=10m", "./e2e/..."}, runner.combinedCommands[0].args)
-	require.Len(t, runner.runCommands, 6)
+	require.Len(t, runner.runCommands, 7)
 	assert.Equal(t, []string{"test", "-tags=e2e", "-race", "-run=^TestE2E_Sync_DownloadOnly$", "-count=1", "-v", "./e2e/..."}, runner.runCommands[2].args)
 	assert.Contains(t, stdout.String(), "LI-20260405-04")
+	assert.Contains(t, stdout.String(), "classified reruns:")
 }
 
 func TestRunVerifyE2EFullDoesNotMaskUnknownFastSuiteFailure(t *testing.T) {
@@ -257,7 +275,7 @@ func TestRunVerifyE2EFullDoesNotMaskUnknownFastSuiteFailure(t *testing.T) {
 		},
 	}
 
-	err := RunVerify(context.Background(), runner, VerifyOptions{
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
 		RepoRoot:           repoRoot,
 		Profile:            VerifyE2EFull,
 		ClassifyLiveQuirks: true,
@@ -285,7 +303,105 @@ func TestRunVerifyE2EStopsAfterAuthPreflightFailure(t *testing.T) {
 func TestRunVerifyE2EFullStopsAfterFullPreflightFailure(t *testing.T) {
 	t.Parallel()
 
-	assertVerifyStopsAfterPreflightFailure(t, VerifyE2EFull, "go test -tags=e2e e2e_full -run="+fullE2EPreflightPattern+" -count=1 -v ./e2e/...", 5, "preflight")
+	assertVerifyStopsAfterPreflightFailure(t, VerifyE2EFull, "go test -tags=e2e e2e_full -run="+fullE2EPreflightPattern+" -count=1 -v ./e2e/...", 4, "preflight")
+}
+
+func TestRunVerifyWritesSummaryJSONOnSuccess(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+	summaryPath := filepath.Join(t.TempDir(), "verify-summary.json")
+	runner := &fakeRunner{
+		outputs: map[string][]byte{
+			"go tool cover -func=" + filepath.Join(repoRoot, "cover.out"): []byte("total:\t(statements)\t76.5%\n"),
+		},
+	}
+
+	stdout := &bytes.Buffer{}
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot:          repoRoot,
+		Profile:           VerifyPublic,
+		CoverageThreshold: 76.0,
+		CoverageFile:      filepath.Join(repoRoot, "cover.out"),
+		SummaryJSONPath:   summaryPath,
+		Stdout:            stdout,
+		Stderr:            &bytes.Buffer{},
+	})
+	require.NoError(t, err)
+
+	var summary VerifySummary
+	readVerifySummaryFile(t, summaryPath, &summary)
+	assert.Equal(t, string(VerifyPublic), summary.Profile)
+	assert.Equal(t, verifySummaryStatusPass, summary.Status)
+	assert.GreaterOrEqual(t, summary.TotalDurationMS, int64(0))
+	assertVerifySummaryHasStep(t, summary, "format", verifySummaryStatusPass)
+	assertVerifySummaryHasStep(t, summary, "repo consistency", verifySummaryStatusPass)
+	assert.Empty(t, summary.ClassifiedReruns)
+	assert.Contains(t, stdout.String(), "verify summary")
+	assert.Contains(t, stdout.String(), "classified reruns: none")
+}
+
+func TestRunVerifyWritesSummaryJSONOnFailure(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	summaryPath := filepath.Join(t.TempDir(), "verify-summary.json")
+	bucketArgs := fullE2EBucketCommandArgs(fullE2ESerialSyncBucket())
+	runner := &fakeRunner{
+		runErrByKey: map[string]error{
+			"go " + strings.Join(bucketArgs, " "): assert.AnError,
+		},
+	}
+
+	stdout := &bytes.Buffer{}
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot:        repoRoot,
+		Profile:         VerifyE2EFull,
+		SummaryJSONPath: summaryPath,
+		E2ELogDir:       filepath.Join(repoRoot, "e2e-logs"),
+		Stdout:          stdout,
+		Stderr:          &bytes.Buffer{},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "full e2e")
+
+	var summary VerifySummary
+	readVerifySummaryFile(t, summaryPath, &summary)
+	assert.Equal(t, string(VerifyE2EFull), summary.Profile)
+	assert.Equal(t, verifySummaryStatusFail, summary.Status)
+	assertVerifySummaryHasStep(t, summary, "fast e2e", verifySummaryStatusPass)
+	assertVerifyBucketSummary(t, summary, fullE2ESerialSyncBucket().Name, verifySummaryStatusFail)
+	assert.Contains(t, stdout.String(), "verify summary")
+	assert.Contains(t, stdout.String(), fullE2ESerialSyncBucket().Name)
+}
+
+func TestFullE2EExecutionManifestCoversTaggedTestsExactlyOnce(t *testing.T) {
+	t.Parallel()
+
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	require.NoError(t, err)
+
+	fullTests, err := discoverTaggedE2ETests(filepath.Join(repoRoot, "e2e"), "e2e && e2e_full")
+	require.NoError(t, err)
+
+	assigned := make(map[string]int)
+	for _, name := range fullE2EStandaloneTests() {
+		assigned[name]++
+	}
+	for _, bucket := range fullE2EBuckets() {
+		for _, name := range bucket.TestNames {
+			assigned[name]++
+		}
+	}
+
+	for _, name := range fullTests {
+		assert.Equalf(t, 1, assigned[name], "full-tag test %s must be assigned exactly once", name)
+	}
+	for name, count := range assigned {
+		assert.Containsf(t, fullTests, name, "assigned full-tag test %s must exist", name)
+		assert.Equalf(t, 1, count, "assigned full-tag test %s must appear once", name)
+	}
 }
 
 func assertVerifyStopsAfterPreflightFailure(
@@ -304,7 +420,7 @@ func assertVerifyStopsAfterPreflightFailure(
 		},
 	}
 
-	err := RunVerify(context.Background(), runner, VerifyOptions{
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
 		RepoRoot: repoRoot,
 		Profile:  profile,
 		Stdout:   &bytes.Buffer{},
@@ -315,6 +431,54 @@ func assertVerifyStopsAfterPreflightFailure(
 	require.Len(t, runner.runCommands, expectedCommands)
 }
 
+func readVerifySummaryFile(t *testing.T, path string, summary *VerifySummary) {
+	t.Helper()
+
+	data, err := localpath.ReadFile(path)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(data, summary))
+}
+
+func assertVerifySummaryHasStep(t *testing.T, summary VerifySummary, name string, status string) {
+	t.Helper()
+
+	for _, step := range summary.Steps {
+		if step.Name != name {
+			continue
+		}
+
+		assert.Equal(t, status, step.Status)
+		return
+	}
+
+	require.Failf(t, "missing summary step", "step %q not found", name)
+}
+
+func assertVerifyBucketSummary(t *testing.T, summary VerifySummary, name string, status string) {
+	t.Helper()
+
+	for _, bucket := range summary.E2EFullBuckets {
+		if bucket.Name != name {
+			continue
+		}
+
+		assert.Equal(t, status, bucket.Status)
+		return
+	}
+
+	require.Failf(t, "missing bucket summary", "bucket %q not found", name)
+}
+
+func assertCommandHasEnvVar(t *testing.T, cmd recordedCommand, want string) {
+	t.Helper()
+	assert.Contains(t, cmd.env, want)
+}
+
+func assertCommandLacksEnvVar(t *testing.T, cmd recordedCommand, unwanted string) {
+	t.Helper()
+	assert.NotContains(t, cmd.env, unwanted)
+}
+
 // Validates: R-6.2.1
 func TestRunVerifyStressRunsExpectedSteps(t *testing.T) {
 	t.Parallel()
@@ -322,7 +486,7 @@ func TestRunVerifyStressRunsExpectedSteps(t *testing.T) {
 	repoRoot := t.TempDir()
 	runner := &fakeRunner{}
 
-	err := RunVerify(context.Background(), runner, VerifyOptions{
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
 		RepoRoot: repoRoot,
 		Profile:  VerifyStress,
 		Stdout:   &bytes.Buffer{},
@@ -349,7 +513,7 @@ func TestRunVerifyFailsOnForbiddenRepoPattern(t *testing.T) {
 		},
 	}
 
-	err := RunVerify(context.Background(), runner, VerifyOptions{
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
 		RepoRoot:          repoRoot,
 		Profile:           VerifyPublic,
 		CoverageThreshold: 76.0,
@@ -383,7 +547,7 @@ func TestRunVerifyCoverageThresholdFailure(t *testing.T) {
 		},
 	}
 
-	err := RunVerify(context.Background(), runner, VerifyOptions{
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
 		RepoRoot:          repoRoot,
 		Profile:           VerifyPublic,
 		CoverageThreshold: 76.0,
