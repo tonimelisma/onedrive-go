@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
@@ -129,4 +130,21 @@ func (rt *watchRuntime) hasRetryTimer() bool {
 	defer rt.timerMu.RUnlock()
 
 	return rt.retryTimer != nil
+}
+
+func (rt *watchRuntime) queueUserIntentDispatch() {
+	rt.userIntentPending = true
+}
+
+func (rt *watchRuntime) flushPendingUserIntent(
+	ctx context.Context,
+	p *watchPipeline,
+	outbox []*synctypes.TrackedAction,
+) []*synctypes.TrackedAction {
+	if !rt.userIntentPending || len(outbox) > 0 {
+		return outbox
+	}
+
+	rt.userIntentPending = false
+	return append(outbox, rt.runUserIntentDispatch(ctx, p.bl, p.mode, p.safety)...)
 }

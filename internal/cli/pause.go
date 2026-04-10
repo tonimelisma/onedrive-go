@@ -38,7 +38,11 @@ func runPause(cmd *cobra.Command, args []string) error {
 // Non-fatal: if no daemon is running, prints a note instead.
 func notifyDaemon(cc *CLIContext) {
 	ctx := context.Background()
-	client, ok := openControlSocketClient(ctx)
+	client, ok, err := openControlSocketClient(ctx)
+	if err != nil {
+		cc.Statusf("Note: control socket unavailable (%v) — changes take effect on next daemon start\n", err)
+		return
+	}
 	if !ok {
 		cc.Statusf("Note: no running daemon found — changes take effect on next daemon start\n")
 		return

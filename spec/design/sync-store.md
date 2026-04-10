@@ -25,7 +25,7 @@ peer authority; it is rebuilt from store state when the engine starts.
 
 | Behavior | Evidence |
 | --- | --- |
-| `Inspector` exposes a stable read-only issue/status projection so CLI status and issues read the same visible facts. | `TestInspector_ReadIssuesSnapshot`, `TestInspector_ReadStatusSnapshot_StaysConsistentWithIssuesSnapshot` |
+| `Inspector` exposes a stable read-only issue/status projection so CLI status, daemon status, and issues read the same visible facts without opening writable store handles. | `TestInspector_ReadIssuesSnapshot`, `TestInspector_ReadStatusSnapshot_StaysConsistentWithIssuesSnapshot`, `TestOrchestrator_ControlSocket_StatusCountsUseReadOnlyInspector` |
 | Status issue-group projection preserves separate entries when the same summary key appears in multiple scopes. | `TestQuerySyncState_PreservesIssueGroupScopeContext`, `TestPrintStatusJSON_KeepsSameSummaryGroupsSeparatedByScope`, `TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope` |
 | Integrity inspection and safe repair stay store-owned, deterministic, and durable-intent aware. | `TestInspector_AuditIntegrityReportsPersistedProblems`, `TestSyncStore_AuditIntegrityReportsDurableIntentWorkflowProblems`, `TestSyncStore_RepairIntegritySafeNormalizesDeterministicViolations`, `TestSyncStore_RepairIntegritySafePreservesDurableUserIntent` |
 | Held-delete approval identity requires matching item ID and repeated approvals are idempotent. | `TestSyncStore_UpsertHeldDeletesRequiresItemID`, `TestSyncStore_HeldDeleteConsumeRequiresMatchingItemID`, `TestSyncStore_DeleteHeldDeleteRequiresMatchingItemID`, `TestSyncStore_ApproveHeldDeletesConcurrentCallsAreIdempotent` |
@@ -276,8 +276,14 @@ state without handing them raw SQL ownership.
 - `HasScopeBlock(ctx, key)` provides an exact read-only scope-block probe for
   CLI auth-health and other administrative readers that need one persisted
   signal without opening the writable `SyncStore` path.
+- `ReadDurableIntentCounts(ctx)` is the narrow read-only durable-intent
+  projection used by daemon `GET /v1/status` and other status-only readers
+  that need queued/resolving/failed workflow counts without paying writable
+  store lifecycle side effects.
 - `ReadStatusSnapshot(ctx)` returns metadata, aggregate counts, durable-intent
-  counters, and one derived `IssueSummary`.
+  counters, and one derived `IssueSummary`. It builds those durable-intent
+  counters through the same `ReadDurableIntentCounts` helper used by the
+  control socket.
 - `ReadIssuesSnapshot(ctx, history)` returns the full read-only `issues`
   projection: grouped visible issue families, held deletes, pending retries,
   and conflict history.
@@ -295,6 +301,9 @@ state without handing them raw SQL ownership.
   queued/resolving/failed conflict-request counts from `conflict_requests`.
   CLI `status` turns those store-owned counters into human text, JSON fields,
   and next-step hints without opening writable store paths.
+- Control-socket `GET /v1/status` uses the same read-only durable-intent
+  counters instead of opening a writable `SyncStore`, so status probes do not
+  trigger writable-store close/checkpoint work.
 - `StatusSnapshot` and `IssuesSnapshot` share one visible-issue projection
   builder inside `Inspector`, so `status` and `issues` cannot silently drift
   on what counts as a visible issue family.

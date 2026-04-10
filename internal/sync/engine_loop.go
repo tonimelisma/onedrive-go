@@ -232,7 +232,7 @@ func (rt *watchRuntime) runWatchStep(
 
 	select {
 	case dispatchCh <- nextAction:
-		return outbox[1:], false, nil
+		return rt.flushPendingUserIntent(ctx, p, outbox[1:]), false, nil
 	case batch, ok := <-p.batchReady:
 		return rt.handleWatchBatch(ctx, p, outbox, batch, ok)
 	case workerResult, ok := <-p.results:
@@ -243,9 +243,11 @@ func (rt *watchRuntime) runWatchStep(
 		return rt.handleWatchScopeChange(ctx, p, outbox, &scopeChange, ok)
 	case <-p.recheckC:
 		rt.handleRecheckTick(ctx)
-		return rt.appendUserIntentDispatch(ctx, p, outbox), false, nil
+		rt.queueUserIntentDispatch()
+		return rt.flushPendingUserIntent(ctx, p, outbox), false, nil
 	case <-p.userIntentC:
-		return rt.appendUserIntentDispatch(ctx, p, outbox), false, nil
+		rt.queueUserIntentDispatch()
+		return rt.flushPendingUserIntent(ctx, p, outbox), false, nil
 	case <-p.reconcileC:
 		rt.runFullReconciliationAsync(ctx, p.bl)
 		return outbox, false, nil
@@ -261,18 +263,6 @@ func (rt *watchRuntime) runWatchStep(
 		rt.beginWatchDrain(ctx, p, outbox)
 		return nil, false, nil
 	}
-}
-
-func (rt *watchRuntime) appendUserIntentDispatch(
-	ctx context.Context,
-	p *watchPipeline,
-	outbox []*synctypes.TrackedAction,
-) []*synctypes.TrackedAction {
-	if len(outbox) > 0 {
-		return outbox
-	}
-
-	return append(outbox, rt.runUserIntentDispatch(ctx, p.bl, p.mode, p.safety)...)
 }
 
 func (rt *watchRuntime) handleObserverExit(p *watchPipeline, shuttingDown bool) error {

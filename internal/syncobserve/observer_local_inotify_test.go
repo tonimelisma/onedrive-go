@@ -92,6 +92,7 @@ func (w *enospcWatcher) Close() error {
 	return nil
 }
 
+// Validates: R-2.1.2
 func TestAddWatchesRecursive_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 	t.Parallel()
 
@@ -109,6 +110,7 @@ func TestAddWatchesRecursive_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 		"expected ErrWatchLimitExhausted, got: %v", err)
 }
 
+// Validates: R-2.1.2
 func TestAddWatchesRecursive_ENOSPCRollsBackAddedWatches(t *testing.T) {
 	t.Parallel()
 

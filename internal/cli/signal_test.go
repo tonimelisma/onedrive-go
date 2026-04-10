@@ -208,6 +208,7 @@ func runSyncWatchFirstSignalHelper() {
 			_ synctypes.WatchOpts,
 			_ *slog.Logger,
 			_ io.Writer,
+			_ string,
 		) error {
 			mustWriteHelperLine("watch-ready")
 			<-ctx.Done()
