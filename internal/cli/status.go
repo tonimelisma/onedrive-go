@@ -61,14 +61,19 @@ type statusDrive struct {
 
 // syncStateInfo holds sync state for a single drive, queried from the state DB.
 type syncStateInfo struct {
-	LastSyncTime     string             `json:"last_sync_time,omitempty"`
-	LastSyncDuration string             `json:"last_sync_duration,omitempty"`
-	FileCount        int                `json:"file_count"`
-	Issues           int                `json:"issues"` // conflicts + actionable failures
-	IssueGroups      []statusIssueGroup `json:"issue_groups,omitempty"`
-	PendingSync      int                `json:"pending_sync"`
-	Retrying         int                `json:"retrying"` // transient failures with failure_count >= 3
-	LastError        string             `json:"last_error,omitempty"`
+	LastSyncTime               string             `json:"last_sync_time,omitempty"`
+	LastSyncDuration           string             `json:"last_sync_duration,omitempty"`
+	FileCount                  int                `json:"file_count"`
+	Issues                     int                `json:"issues"` // conflicts + actionable failures
+	IssueGroups                []statusIssueGroup `json:"issue_groups,omitempty"`
+	PendingSync                int                `json:"pending_sync"`
+	Retrying                   int                `json:"retrying"` // transient failures with failure_count >= 3
+	LastError                  string             `json:"last_error,omitempty"`
+	PendingHeldDeleteApprovals int                `json:"pending_held_delete_approvals,omitempty"`
+	PendingConflictRequests    int                `json:"pending_conflict_requests,omitempty"`
+	ResolvingConflictRequests  int                `json:"resolving_conflict_requests,omitempty"`
+	FailedConflictRequests     int                `json:"failed_conflict_requests,omitempty"`
+	ActionHints                []string           `json:"action_hints,omitempty"`
 }
 
 type statusIssueGroup struct {
@@ -334,17 +339,38 @@ func querySyncState(statePath string, logger *slog.Logger) *syncStateInfo {
 	ctx := context.Background()
 	snapshot := inspector.ReadStatusSnapshot(ctx)
 	info := &syncStateInfo{
-		FileCount:   snapshot.BaselineEntryCount,
-		Issues:      snapshot.Issues.VisibleTotal(),
-		PendingSync: snapshot.PendingSyncItems,
-		Retrying:    snapshot.Issues.RetryingCount(),
+		FileCount:                  snapshot.BaselineEntryCount,
+		Issues:                     snapshot.Issues.VisibleTotal(),
+		PendingSync:                snapshot.PendingSyncItems,
+		Retrying:                   snapshot.Issues.RetryingCount(),
+		PendingHeldDeleteApprovals: snapshot.DurableIntents.PendingHeldDeleteApprovals,
+		PendingConflictRequests:    snapshot.DurableIntents.PendingConflictRequests,
+		ResolvingConflictRequests:  snapshot.DurableIntents.ResolvingConflictRequests,
+		FailedConflictRequests:     snapshot.DurableIntents.FailedConflictRequests,
 	}
 	info.LastSyncTime = snapshot.SyncMetadata["last_sync_time"]
 	info.LastSyncDuration = snapshot.SyncMetadata["last_sync_duration_ms"]
 	info.LastError = snapshot.SyncMetadata["last_sync_error"]
 	info.IssueGroups = statusIssueGroups(snapshot.Issues.Groups)
+	info.ActionHints = statusActionHints(snapshot.DurableIntents)
 
 	return info
+}
+
+func statusActionHints(counts syncstore.DurableIntentCounts) []string {
+	var hints []string
+
+	if counts.PendingHeldDeleteApprovals > 0 {
+		hints = append(hints, "Run `onedrive-go sync` or start `onedrive-go sync --watch` to execute approved deletes.")
+	}
+	if counts.PendingConflictRequests > 0 {
+		hints = append(hints, "Run `onedrive-go sync` or start `onedrive-go sync --watch` to execute queued conflict resolutions.")
+	}
+	if counts.FailedConflictRequests > 0 {
+		hints = append(hints, "Run `onedrive-go conflicts` to inspect failures, then rerun `onedrive-go conflicts resolve`.")
+	}
+
+	return hints
 }
 
 func statusIssueGroups(groups []syncstore.IssueGroupCount) []statusIssueGroup {
@@ -518,21 +544,12 @@ func statusDriveLabel(drive statusDrive) string {
 }
 
 func printSyncStateText(w io.Writer, ss *syncStateInfo) error {
-	if ss.LastSyncTime != "" {
-		if err := writef(w, "    Last sync: %s (%d files)\n",
-			ss.LastSyncTime, ss.FileCount); err != nil {
-			return err
-		}
-	} else {
-		if err := writef(w, "    Last sync: never\n"); err != nil {
-			return err
-		}
+	if err := printStatusLastSyncLine(w, ss); err != nil {
+		return err
 	}
 
-	if ss.PendingSync > 0 {
-		if err := writef(w, "    Pending:   %d items\n", ss.PendingSync); err != nil {
-			return err
-		}
+	if err := writeOptionalStatusCountLine(w, ss.PendingSync, "    Pending:   %d items\n"); err != nil {
+		return err
 	}
 
 	if ss.Issues > 0 {
@@ -544,14 +561,78 @@ func printSyncStateText(w io.Writer, ss *syncStateInfo) error {
 		}
 	}
 
-	if ss.Retrying > 0 {
-		if err := writef(w, "    Retrying:  %d items\n", ss.Retrying); err != nil {
-			return err
-		}
+	if err := writeOptionalStatusCountLine(w, ss.Retrying, "    Retrying:  %d items\n"); err != nil {
+		return err
+	}
+
+	if err := printStatusDurableIntentLines(w, ss); err != nil {
+		return err
 	}
 
 	if ss.LastError != "" {
 		if err := writef(w, "    Last error: %s\n", ss.LastError); err != nil {
+			return err
+		}
+	}
+
+	return printStatusActionHints(w, ss.ActionHints)
+}
+
+func printStatusLastSyncLine(w io.Writer, ss *syncStateInfo) error {
+	if ss.LastSyncTime == "" {
+		return writef(w, "    Last sync: never\n")
+	}
+
+	return writef(w, "    Last sync: %s (%d files)\n", ss.LastSyncTime, ss.FileCount)
+}
+
+func writeOptionalStatusCountLine(w io.Writer, count int, format string) error {
+	if count <= 0 {
+		return nil
+	}
+
+	return writef(w, format, count)
+}
+
+func printStatusDurableIntentLines(w io.Writer, ss *syncStateInfo) error {
+	if err := writeOptionalStatusCountLine(
+		w,
+		ss.PendingHeldDeleteApprovals,
+		"    Approved deletes waiting: %d\n",
+	); err != nil {
+		return err
+	}
+
+	if err := writeOptionalStatusCountLine(
+		w,
+		ss.PendingConflictRequests,
+		"    Queued conflict resolutions: %d\n",
+	); err != nil {
+		return err
+	}
+
+	if err := writeOptionalStatusCountLine(
+		w,
+		ss.ResolvingConflictRequests,
+		"    Resolving conflicts: %d\n",
+	); err != nil {
+		return err
+	}
+
+	if err := writeOptionalStatusCountLine(
+		w,
+		ss.FailedConflictRequests,
+		"    Failed conflict resolutions: %d\n",
+	); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func printStatusActionHints(w io.Writer, hints []string) error {
+	for _, hint := range hints {
+		if err := writef(w, "    Next: %s\n", hint); err != nil {
 			return err
 		}
 	}

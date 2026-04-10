@@ -402,7 +402,7 @@ func TestResolveConflict_KeepLocal_RestoreFailure(t *testing.T) {
 	err = eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepLocal)
 	require.NoError(t, err)
 
-	failed, err := eng.baseline.GetConflict(ctx, conflicts[0].ID)
+	failed, err := eng.baseline.GetConflictRequest(ctx, conflicts[0].ID)
 	require.NoError(t, err)
 	assert.Equal(t, synctypes.ConflictStateResolveFailed, failed.State)
 	assert.Contains(t, failed.ResolutionError, "restoring conflict copy")
@@ -437,7 +437,7 @@ func TestResolveConflict_KeepBoth_MissingOriginalReturnsError(t *testing.T) {
 	err = eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepBoth)
 	require.NoError(t, err)
 
-	failed, err := eng.baseline.GetConflict(ctx, conflicts[0].ID)
+	failed, err := eng.baseline.GetConflictRequest(ctx, conflicts[0].ID)
 	require.NoError(t, err)
 	assert.Equal(t, synctypes.ConflictStateResolveFailed, failed.State)
 	assert.Contains(t, failed.ResolutionError, "updating baseline for original")

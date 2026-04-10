@@ -27,6 +27,7 @@ type StatusSnapshot struct {
 	BaselineEntryCount int
 	Issues             IssueSummary
 	PendingSyncItems   int
+	DurableIntents     DurableIntentCounts
 }
 
 // IssuesSnapshot is the read-only projection consumed by the CLI issues
@@ -260,13 +261,19 @@ func (i *Inspector) ReadStatusSnapshot(ctx context.Context) StatusSnapshot {
 	}
 
 	snapshot.BaselineEntryCount = i.countOrZero(ctx, "baseline entries", "SELECT COUNT(*) FROM baseline")
+	counts, err := countDurableIntents(ctx, i.db)
+	if err != nil {
+		i.logger.Debug("read durable intent counts", slog.String("error", err.Error()))
+	} else {
+		snapshot.DurableIntents = counts
+	}
 	projection, err := i.readVisibleIssueProjection(ctx)
 	if err != nil {
 		i.logger.Debug("read issues status projection", slog.String("error", err.Error()))
 	} else {
 		projection.summary.Groups = appendConflictSummaryCount(
 			projection.summary.Groups,
-			i.countOrZero(ctx, "unresolved conflicts", "SELECT COUNT(*) FROM conflicts WHERE state != 'resolved' AND resolution = 'unresolved'"),
+			i.countOrZero(ctx, "unresolved conflicts", "SELECT COUNT(*) FROM conflicts WHERE resolution = 'unresolved'"),
 		)
 		projection.summary.Retrying = i.countOrZero(
 			ctx,
