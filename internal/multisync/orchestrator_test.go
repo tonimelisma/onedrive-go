@@ -979,7 +979,7 @@ func assertDurableIntentStoreUpdated(t *testing.T, rd *config.ResolvedDrive) {
 	require.NoError(t, err)
 	require.Len(t, approved, 1)
 
-	conflict, err := reopened.GetConflict(t.Context(), "conflict-1")
+	conflict, err := reopened.GetConflictRequest(t.Context(), "conflict-1")
 	require.NoError(t, err)
 	assert.Equal(t, synctypes.ConflictStateResolutionRequested, conflict.State)
 	assert.Equal(t, synctypes.ResolutionKeepLocal, conflict.RequestedResolution)

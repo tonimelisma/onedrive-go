@@ -15,8 +15,8 @@ The store applies embedded goose migrations and records schema history in
 `goose_db_version`. Existing state DBs with user tables but no goose history
 are rejected with rebuild/migrate guidance rather than guessed forward. Most
 sync state is rebuildable from local filesystem plus OneDrive truth, but
-`conflicts` requests and `held_deletes` approvals are durable user intent and
-must not be silently migrated or erased by guesswork.
+`conflict_requests` rows and `held_deletes` approvals are durable user intent
+and must not be silently migrated or erased by guesswork.
 
 ## Three-Table State Model
 
@@ -28,7 +28,7 @@ The sync database uses remote state separation: three core tables decouple API o
 | `baseline` | Confirmed synced state | `(drive_id, item_id)`, `path` UNIQUE |
 | `sync_failures` | Unified item failure tracking with explicit role semantics | `(path, drive_id)` |
 
-Supporting tables: `delta_tokens`, `conflicts`, `held_deletes`, `sync_metadata`, `shortcuts`, `scope_blocks`.
+Supporting tables: `delta_tokens`, `conflicts`, `conflict_requests`, `held_deletes`, `sync_metadata`, `shortcuts`, `scope_blocks`.
 
 ### remote_state
 
@@ -131,27 +131,51 @@ Delta API cursor per drive scope. `scope_id = ""` for primary scope. Drives with
 Per-file conflict tracking. Three conflict types: `edit_edit`,
 `edit_delete`, `create_create`.
 
-The `resolution` column records the final user decision:
+`conflicts` is the derived conflict-facts and history table. It records:
+
+- conflict identity: `id`, `drive_id`, `item_id`, `path`
+- conflict evidence: `conflict_type`, `detected_at`, per-side hashes/mtimes
+- final outcome only: `resolution`, `resolved_at`, `resolved_by`
+
+`resolution` is the durable final outcome:
 `unresolved`, `keep_both`, `keep_local`, or `keep_remote`.
 
-The `state` column records workflow ownership:
+This table deliberately does **not** own active request workflow. Conflict
+existence and final engine outcome are derived sync facts; queued user intent
+belongs in `conflict_requests`.
 
-- `unresolved` — no queued user decision
-- `resolution_requested` — CLI/control socket recorded durable intent
+### conflict_requests
+
+Durable conflict-resolution request workflow, keyed by `conflict_id`.
+
+Columns:
+
+- `requested_resolution`
+- `state`
+- `requested_at`
+- `resolving_at`
+- `resolution_error`
+
+Valid states:
+
+- `resolution_requested` — CLI/control socket recorded durable user intent
 - `resolving` — one engine claimed execution
 - `resolve_failed` — execution failed and `resolution_error` explains why
-- `resolved` — final resolution was committed
-
-`requested_resolution`, `requested_at`, `resolving_at`, and
-`resolution_error` make conflict resolution crash-safe and concurrency-safe:
-multiple CLIs can request the same resolution idempotently, while only an
-engine can claim and execute the side effects.
 
 Concurrent request semantics are first-writer-wins until the engine claim
-completes: `unresolved` and `resolve_failed` accept a valid requested
-strategy, the same strategy while `resolution_requested` is idempotent, a
-different strategy while `resolution_requested` is rejected, `resolving`
-reports already in progress, and `resolved` reports already resolved.
+completes:
+
+- unresolved conflict + valid request => create/update one
+  `resolution_requested` row
+- same strategy while `resolution_requested` => idempotent
+- different strategy while `resolution_requested` => rejected
+- `resolving` => rejected as already in progress
+- resolved conflict => rejected as already resolved
+
+Successful engine resolution deletes the `conflict_requests` row in the same
+transaction that marks the matching `conflicts` row resolved. Failed
+execution leaves the row in `resolve_failed` so the user can retry without
+losing the requested strategy or failure reason.
 
 ### held_deletes
 
@@ -194,20 +218,20 @@ Resumable upload sessions are tracked as JSON files in the data directory (not i
 
 ## Schema Bootstrap
 
-The sync store applies one canonical embedded schema on database creation.
-Fresh databases are created directly from that schema.
+The sync store bootstraps and upgrades through embedded goose migrations.
+Fresh databases start at `00001_init.sql`; later migrations rewrite schema and
+data in place while preserving durable user intent.
 
-There is one narrow inline repair path for legacy `baseline` tables created
-before side-aware file metadata existed. On open, the store detects the old
-`size`/`mtime` shape, rewrites the table to the canonical
-`local_size`/`remote_size`/`local_mtime`/`remote_mtime` layout, and backfills
-only the local-side fields that can be reconstructed safely from the legacy
-row. Unrecoverable remote-side metadata remains unknown rather than invented.
+Existing DBs that contain user tables but no goose history are rejected
+instead of guessed forward. That fail-loudly behavior is intentional because
+the DB now holds explicit user decisions (`conflict_requests`,
+`held_deletes`), not only rebuildable cache.
 
-This is intentionally not stepwise schema-versioning machinery: there are no
-version tables, no numbered schema runners, and no compatibility shims beyond
-the one data-repair step needed to keep old baseline rows conservative and
-safe.
+The current migration stream includes a schema split that moves active
+conflict-resolution workflow out of `conflicts` and into
+`conflict_requests`. Migration correctness matters because it preserves queued
+and failed user requests without keeping the old mixed-authority table shape
+alive in the runtime schema.
 
 ## Performance
 

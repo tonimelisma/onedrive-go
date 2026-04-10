@@ -2,7 +2,10 @@ package syncstore
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"strconv"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -17,18 +20,35 @@ type DurableIntentCounts struct {
 	FailedConflictRequests     int
 }
 
+type durableIntentQuerier interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+const (
+	syncMetadataLastStaleHeldDeletePruneCount = "last_stale_held_delete_prune_count"
+	syncMetadataLastStaleHeldDeletePruneTime  = "last_stale_held_delete_prune_time"
+)
+
 func (m *SyncStore) CountDurableIntents(ctx context.Context) (DurableIntentCounts, error) {
+	return countDurableIntents(ctx, m.db)
+}
+
+func countDurableIntents(ctx context.Context, db durableIntentQuerier) (DurableIntentCounts, error) {
 	var counts DurableIntentCounts
 
-	if err := m.db.QueryRowContext(ctx,
+	if err := db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM held_deletes WHERE state = ?`,
 		synctypes.HeldDeleteStateApproved,
 	).Scan(&counts.PendingHeldDeleteApprovals); err != nil {
+		if isMissingTableErr(err) {
+			return counts, nil
+		}
 		return DurableIntentCounts{}, fmt.Errorf("sync: count approved held deletes: %w", err)
 	}
 
-	rows, err := m.db.QueryContext(ctx,
-		`SELECT state, COUNT(*) FROM conflicts
+	rows, err := db.QueryContext(ctx,
+		`SELECT state, COUNT(*) FROM conflict_requests
 		WHERE state IN (?, ?, ?)
 		GROUP BY state`,
 		synctypes.ConflictStateResolutionRequested,
@@ -36,6 +56,9 @@ func (m *SyncStore) CountDurableIntents(ctx context.Context) (DurableIntentCount
 		synctypes.ConflictStateResolveFailed,
 	)
 	if err != nil {
+		if isMissingTableErr(err) {
+			return counts, nil
+		}
 		return DurableIntentCounts{}, fmt.Errorf("sync: count conflict requests: %w", err)
 	}
 	defer rows.Close()
@@ -62,4 +85,15 @@ func (m *SyncStore) CountDurableIntents(ctx context.Context) (DurableIntentCount
 	}
 
 	return counts, nil
+}
+
+func (m *SyncStore) RecordStaleHeldDeletePrune(ctx context.Context, count int, at time.Time) error {
+	if count <= 0 {
+		return nil
+	}
+
+	return m.UpsertSyncMetadataEntries(ctx, map[string]string{
+		syncMetadataLastStaleHeldDeletePruneCount: strconv.Itoa(count),
+		syncMetadataLastStaleHeldDeletePruneTime:  at.UTC().Format(time.RFC3339Nano),
+	})
 }

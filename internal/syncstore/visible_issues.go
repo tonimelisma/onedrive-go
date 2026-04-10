@@ -153,7 +153,7 @@ func loadVisibleIssueProjection(
 func loadVisibleConflictCount(ctx context.Context, db *sql.DB) (int, error) {
 	var count int
 	if err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM conflicts WHERE state != 'resolved' AND resolution = 'unresolved'`,
+		`SELECT COUNT(*) FROM conflicts WHERE resolution = 'unresolved'`,
 	).Scan(&count); err != nil {
 		return 0, fmt.Errorf("count visible conflicts: %w", err)
 	}

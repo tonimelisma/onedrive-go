@@ -79,15 +79,26 @@ func TestSyncStore_AuditIntegrityReportsDurableIntentWorkflowProblems(t *testing
 
 	_, err := store.DB().ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`)
 	require.NoError(t, err)
+	_, err = store.DB().ExecContext(ctx, `PRAGMA foreign_keys = OFF`)
+	require.NoError(t, err)
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO conflicts
-			(id, drive_id, path, conflict_type, detected_at, resolution, state, requested_resolution, resolving_at)
+			(id, drive_id, path, conflict_type, detected_at, resolution, resolved_at, resolved_by)
 		VALUES
-			('conflict-missing-request', ?, '/conflict-a.txt', 'edit_edit', 1, 'unresolved', 'resolution_requested', NULL, NULL),
-			('conflict-missing-resolving-at', ?, '/conflict-b.txt', 'edit_edit', 2, 'unresolved', 'resolving', 'keep_local', NULL),
-			('conflict-resolved-unresolved', ?, '/conflict-c.txt', 'edit_edit', 3, 'unresolved', 'resolved', NULL, NULL),
-			('conflict-invalid-state', ?, '/conflict-d.txt', 'edit_edit', 4, 'unresolved', 'manual', NULL, NULL),
-			('conflict-invalid-resolution', ?, '/conflict-e.txt', 'edit_edit', 5, 'manual', 'unresolved', NULL, NULL);
+			('conflict-missing-request', ?, '/conflict-a.txt', 'edit_edit', 1, 'unresolved', NULL, NULL),
+			('conflict-missing-resolving-at', ?, '/conflict-b.txt', 'edit_edit', 2, 'unresolved', NULL, NULL),
+			('conflict-resolved-unresolved', ?, '/conflict-c.txt', 'edit_edit', 3, 'unresolved', 33, 'user'),
+			('conflict-invalid-state', ?, '/conflict-d.txt', 'edit_edit', 4, 'unresolved', NULL, NULL),
+			('conflict-invalid-resolution', ?, '/conflict-e.txt', 'edit_edit', 5, 'manual', NULL, NULL),
+			('conflict-request-on-resolved', ?, '/conflict-f.txt', 'edit_edit', 6, 'keep_local', 66, 'user');
+		INSERT INTO conflict_requests
+			(conflict_id, requested_resolution, state, requested_at, resolving_at, resolution_error)
+		VALUES
+			('conflict-missing-request', '', 'resolution_requested', NULL, NULL, NULL),
+			('conflict-missing-resolving-at', 'keep_local', 'resolving', 2, NULL, NULL),
+			('conflict-invalid-state', 'keep_remote', 'manual', 4, NULL, NULL),
+			('conflict-request-on-resolved', 'keep_remote', 'resolution_requested', 6, NULL, NULL),
+			('conflict-orphaned', 'keep_both', 'resolution_requested', 7, NULL, NULL);
 		INSERT INTO held_deletes
 			(drive_id, action_type, path, item_id, state, held_at, approved_at, last_planned_at)
 		VALUES
@@ -102,7 +113,10 @@ func TestSyncStore_AuditIntegrityReportsDurableIntentWorkflowProblems(t *testing
 		testDriveID,
 		testDriveID,
 		testDriveID,
+		testDriveID,
 	)
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(ctx, `PRAGMA foreign_keys = ON`)
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(ctx, `PRAGMA ignore_check_constraints = OFF`)
 	require.NoError(t, err)
@@ -121,9 +135,11 @@ func TestSyncStore_AuditIntegrityReportsDurableIntentWorkflowProblems(t *testing
 	assert.Contains(t, codes, integrityCodeInvalidHeldDelete)
 	assert.Contains(t, details, "conflict conflict-missing-request is resolution_requested without requested_resolution")
 	assert.Contains(t, details, "conflict conflict-missing-resolving-at is resolving without resolving_at")
-	assert.Contains(t, details, "conflict conflict-resolved-unresolved is resolved with unresolved final resolution")
+	assert.Contains(t, details, "conflict conflict-resolved-unresolved is unresolved with resolved_at set")
 	assert.Contains(t, details, `conflict conflict-invalid-state has invalid workflow state "manual"`)
 	assert.Contains(t, details, `conflict conflict-invalid-resolution has invalid final resolution "manual"`)
+	assert.Contains(t, details, "conflict request conflict-request-on-resolved targets already resolved conflict")
+	assert.Contains(t, details, "conflict request conflict-orphaned has no conflict row")
 	assert.Contains(t, details, "held delete /delete-a.txt is missing item_id")
 	assert.Contains(t, details, "approved held delete /delete-b.txt is missing approved_at")
 	assert.Contains(t, details, `held delete /delete-c.txt has invalid state "manual"`)
@@ -199,12 +215,15 @@ func TestSyncStore_RepairIntegritySafePreservesDurableUserIntent(t *testing.T) {
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO conflicts
-			(id, drive_id, path, conflict_type, detected_at, resolution, state, requested_resolution, requested_at)
+			(id, drive_id, path, conflict_type, detected_at, resolution)
 		VALUES
-			('conflict-requested', ?, '/conflict.txt', 'edit_edit', 1, 'unresolved', 'resolution_requested', 'keep_local', 2)`,
+			('conflict-requested', ?, '/conflict.txt', 'edit_edit', 1, 'unresolved')`,
 		testDriveID,
 	)
 	require.NoError(t, err)
+	result, err := store.RequestConflictResolution(ctx, "conflict-requested", synctypes.ResolutionKeepLocal)
+	require.NoError(t, err)
+	assert.Equal(t, ConflictRequestQueued, result.Status)
 
 	repairs, err := store.RepairIntegritySafe(ctx)
 	require.NoError(t, err)
@@ -215,10 +234,10 @@ func TestSyncStore_RepairIntegritySafePreservesDurableUserIntent(t *testing.T) {
 	require.Len(t, approved, 1)
 	assert.Equal(t, "item-delete", approved[0].ItemID)
 
-	conflict, err := store.GetConflict(ctx, "conflict-requested")
+	request, err := store.GetConflictRequest(ctx, "conflict-requested")
 	require.NoError(t, err)
-	assert.Equal(t, synctypes.ConflictStateResolutionRequested, conflict.State)
-	assert.Equal(t, synctypes.ResolutionKeepLocal, conflict.RequestedResolution)
+	assert.Equal(t, synctypes.ConflictStateResolutionRequested, request.State)
+	assert.Equal(t, synctypes.ResolutionKeepLocal, request.RequestedResolution)
 }
 
 // Validates: R-2.10.47

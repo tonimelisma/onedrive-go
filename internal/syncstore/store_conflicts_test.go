@@ -15,9 +15,9 @@ func insertUnresolvedConflict(t *testing.T, store *SyncStore, id string) {
 
 	_, err := store.DB().ExecContext(t.Context(), `
 		INSERT INTO conflicts
-			(id, drive_id, path, conflict_type, detected_at, resolution, state)
+			(id, drive_id, path, conflict_type, detected_at, resolution)
 		VALUES
-			(?, ?, ?, 'edit_edit', 1, 'unresolved', 'unresolved')`,
+			(?, ?, ?, 'edit_edit', 1, 'unresolved')`,
 		id,
 		testDriveID,
 		id+".txt",
@@ -102,4 +102,22 @@ func TestSyncStore_RequestConflictResolutionRejectsResolvingAndResolved(t *testi
 	result, err = store.RequestConflictResolution(t.Context(), "conflict-resolving", synctypes.ResolutionKeepLocal)
 	require.NoError(t, err)
 	assert.Equal(t, ConflictRequestAlreadyResolved, result.Status)
+}
+
+// Validates: R-2.3.12
+func TestSyncStore_ResolveConflictClearsConflictRequestRow(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	insertUnresolvedConflict(t, store, "conflict-clear-request")
+
+	result, err := store.RequestConflictResolution(t.Context(), "conflict-clear-request", synctypes.ResolutionKeepBoth)
+	require.NoError(t, err)
+	assert.Equal(t, ConflictRequestQueued, result.Status)
+
+	require.NoError(t, store.ResolveConflict(t.Context(), "conflict-clear-request", synctypes.ResolutionKeepBoth))
+
+	_, err = store.GetConflictRequest(t.Context(), "conflict-clear-request")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
 }

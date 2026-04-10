@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -81,6 +82,74 @@ func TestInspector_ReadStatusSnapshot(t *testing.T) {
 		{Key: synctypes.SummaryConflictUnresolved, Count: 1, ScopeKind: "file"},
 		{Key: synctypes.SummarySyncFailure, Count: 1, ScopeKind: "file"},
 	}, snapshot.Issues.Groups)
+}
+
+// Validates: R-2.3.6, R-2.3.12
+func TestInspector_ReadStatusSnapshot_DurableIntentCounts(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	store, err := NewSyncStore(t.Context(), dbPath, newTestLogger(t))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, store.Close(context.Background()))
+	})
+
+	ctx := t.Context()
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO conflicts
+			(id, drive_id, item_id, path, conflict_type, detected_at, resolution)
+		VALUES
+			('conflict-pending', ?, 'item-1', '/pending.txt', 'edit_edit', 1, 'unresolved'),
+			('conflict-resolving', ?, 'item-2', '/resolving.txt', 'edit_edit', 2, 'unresolved'),
+			('conflict-failed', ?, 'item-3', '/failed.txt', 'edit_edit', 3, 'unresolved')`,
+		testDriveID,
+		testDriveID,
+		testDriveID,
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, store.UpsertHeldDeletes(ctx, []synctypes.HeldDeleteRecord{{
+		DriveID:       driveid.New(testDriveID),
+		ActionType:    synctypes.ActionRemoteDelete,
+		Path:          "/delete-me.txt",
+		ItemID:        "item-delete",
+		State:         synctypes.HeldDeleteStateHeld,
+		HeldAt:        1,
+		LastPlannedAt: 1,
+	}}))
+	require.NoError(t, store.ApproveHeldDeletes(ctx))
+
+	pendingResult, err := store.RequestConflictResolution(ctx, "conflict-pending", synctypes.ResolutionKeepLocal)
+	require.NoError(t, err)
+	assert.Equal(t, ConflictRequestQueued, pendingResult.Status)
+
+	resolvingResult, err := store.RequestConflictResolution(ctx, "conflict-resolving", synctypes.ResolutionKeepRemote)
+	require.NoError(t, err)
+	assert.Equal(t, ConflictRequestQueued, resolvingResult.Status)
+	_, ok, err := store.ClaimConflictResolution(ctx, "conflict-resolving")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	failedResult, err := store.RequestConflictResolution(ctx, "conflict-failed", synctypes.ResolutionKeepBoth)
+	require.NoError(t, err)
+	assert.Equal(t, ConflictRequestQueued, failedResult.Status)
+	_, ok, err = store.ClaimConflictResolution(ctx, "conflict-failed")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, store.MarkConflictResolutionFailed(ctx, "conflict-failed", assert.AnError))
+
+	inspector, err := OpenInspector(dbPath, newTestLogger(t))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, inspector.Close())
+	})
+
+	snapshot := inspector.ReadStatusSnapshot(ctx)
+	assert.Equal(t, 1, snapshot.DurableIntents.PendingHeldDeleteApprovals)
+	assert.Equal(t, 1, snapshot.DurableIntents.PendingConflictRequests)
+	assert.Equal(t, 1, snapshot.DurableIntents.ResolvingConflictRequests)
+	assert.Equal(t, 1, snapshot.DurableIntents.FailedConflictRequests)
 }
 
 // Validates: R-2.10.47

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -160,22 +159,23 @@ func (s *conflictsService) requestConflictResolution(
 	id string,
 	resolution string,
 ) (syncstore.ConflictRequestResult, error) {
-	if client, ok := openControlSocketClient(ctx); ok {
-		if client.ownerMode() == synccontrol.OwnerModeWatch {
-			status, err := client.requestConflictResolution(ctx, s.cc.Cfg.CanonicalID, id, resolution)
-			if err == nil {
-				return syncstore.ConflictRequestResult{Status: syncstore.ConflictRequestStatus(status)}, nil
+	return routeDurableIntent(
+		ctx,
+		func(ctx context.Context) (syncstore.ConflictRequestResult, error) {
+			result, err := resolver.RequestConflictResolution(ctx, id, resolution)
+			if err != nil {
+				return syncstore.ConflictRequestResult{}, fmt.Errorf("queue conflict resolution: %w", err)
 			}
-			if isControlDaemonError(err) {
+
+			return result, nil
+		},
+		func(ctx context.Context, client *controlSocketClient) (syncstore.ConflictRequestResult, error) {
+			status, err := client.requestConflictResolution(ctx, s.cc.Cfg.CanonicalID, id, resolution)
+			if err != nil {
 				return syncstore.ConflictRequestResult{}, err
 			}
-		}
-	}
 
-	result, err := resolver.RequestConflictResolution(ctx, id, resolution)
-	if err != nil {
-		return syncstore.ConflictRequestResult{}, fmt.Errorf("queue conflict resolution: %w", err)
-	}
-
-	return result, nil
+			return syncstore.ConflictRequestResult{Status: syncstore.ConflictRequestStatus(status)}, nil
+		},
+	)
 }

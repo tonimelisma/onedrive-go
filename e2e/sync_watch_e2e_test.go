@@ -3,8 +3,11 @@
 package e2e
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -118,6 +121,77 @@ func TestE2E_SyncWatch_BasicRoundTrip(t *testing.T) {
 	// Verify the file content remotely.
 	remoteContent := getRemoteFile(t, opsCfgPath, nil, remotePath)
 	assert.Equal(t, "created during watch mode\n", remoteContent)
+}
+
+// Validates: R-2.9.1
+func TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners(t *testing.T) {
+	registerLogDump(t)
+
+	syncDir := t.TempDir()
+	cfgPath, env := writeSyncConfig(t, syncDir)
+
+	daemonArgs := []string{
+		"--config", cfgPath,
+		"--drive", drive,
+		"--debug",
+		"sync", "--watch",
+	}
+	cmd := makeCmd(daemonArgs, env)
+
+	var daemonStdout, daemonStderr syncBuffer
+	cmd.Stdout = &daemonStdout
+	cmd.Stderr = &daemonStderr
+
+	require.NoError(t, cmd.Start(), "failed to start daemon")
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+			_ = cmd.Wait()
+		}
+
+		logCLIExecution(t, daemonArgs, daemonStdout.String(), daemonStderr.String())
+	})
+
+	waitForDaemonReady(t, &daemonStderr, 30*time.Second)
+
+	assertCompetingOwnerFails := func(name string, args ...string) {
+		t.Helper()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		fullArgs := []string{"--config", cfgPath, "--drive", drive}
+		if shouldAddDebug(args) {
+			fullArgs = append(fullArgs, "--debug")
+		}
+		fullArgs = append(fullArgs, args...)
+
+		competingCmd := exec.CommandContext(ctx, binaryPath, fullArgs...)
+		if len(env) > 0 {
+			competingCmd.Env = makeCmd(nil, env).Env
+		}
+
+		var stdout, stderr bytes.Buffer
+		competingCmd.Stdout = &stdout
+		competingCmd.Stderr = &stderr
+
+		err := competingCmd.Run()
+		logCLIExecution(t, fullArgs, stdout.String(), stderr.String())
+		require.Error(t, err, "%s should fail while watch owner is live", name)
+		require.NotEqual(t, context.DeadlineExceeded, ctx.Err(), "%s should fail promptly instead of hanging", name)
+
+		combined := stdout.String() + stderr.String()
+		assert.Contains(
+			t,
+			combined,
+			"another sync process is already running",
+			"%s should report the owner-socket conflict",
+			name,
+		)
+	}
+
+	assertCompetingOwnerFails("second watch owner", "sync", "--watch")
+	assertCompetingOwnerFails("foreground sync owner", "sync")
 }
 
 // TestE2E_SyncWatch_PauseResume starts a daemon, pauses the drive, verifies
