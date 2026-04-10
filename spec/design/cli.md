@@ -26,10 +26,10 @@ This keeps human/JSON command results separate from progress/status messages and
 
 ## Ownership Contract
 
-- Owns: Cobra command wiring, CLI bootstrap, signal and PID-file lifecycle, output formatting, user-facing reason/action text for failures and issues, and dependency composition for Graph-facing HTTP profiles.
+- Owns: Cobra command wiring, CLI bootstrap, signal handling, control-socket client routing, output formatting, user-facing reason/action text for failures and issues, and dependency composition for Graph-facing HTTP profiles.
 - Does Not Own: Graph wire behavior, config semantics, sync planning/execution policy, or durable sync-state mutation rules.
 - Source of Truth: `CLIContext`, parsed flags/args, and the domain results returned by lower layers.
-- Allowed Side Effects: stdout/stderr output, log-file creation, PID-file lifecycle, signal handling, and calls into service packages.
+- Allowed Side Effects: stdout/stderr output, log-file creation, signal handling, control-socket RPCs, durable user-intent writes when no daemon is running, and calls into service packages.
 - Mutable Runtime Owner: Each command invocation owns its own runtime state. `internal/cli` keeps no package-level mutable state and relies on lower layers for long-lived watch ownership.
 - Error Boundary: The CLI turns lower-layer results into exit behavior plus human-readable reason/action text. It consumes the domain model from [error-model.md](error-model.md) instead of inventing a second classification scheme.
 
@@ -283,14 +283,32 @@ Two-signal shutdown for watch mode:
 
 There is no timer-based escalation between the first and second signal.
 
-`sighupChannel()` is separate because config reload is a control-plane signal,
-not a shutdown request.
+Config reload is not signal-based. `pause`, `resume`, and daemon operators use
+the sync control socket to request reload from a live watch owner.
 
-## PID File (`pidfile.go`)
+## Control Socket (`control_client.go`)
 
-Implements: R-6.3.3 [verified]
+Implements: R-2.8.1 [verified], R-2.8.2 [verified], R-2.9.1 [verified], R-2.9.2 [verified], R-2.9.3 [verified], R-6.3.3 [verified]
 
-Single-instance enforcement via advisory file lock. Created at daemon start, removed on shutdown. Stale PID files detected and cleaned up.
+Single-instance enforcement and live-daemon mutation routing use the Unix
+control socket, not legacy signal/file IPC. The CLI probes `GET /v1/status` to
+detect a live owner. Mutating sync-adjacent commands use socket RPC when a
+watch daemon is live and fall back to direct durable DB intent when no daemon
+is running.
+
+The socket path is config-owned. It normally resolves under the app data
+directory, with a stable hash-based runtime fallback when isolated test or user
+paths would be too long for Unix-domain sockets.
+
+Socket-routed commands:
+
+- `pause` / `resume`: update config, then `POST /v1/reload` if a daemon is live.
+- `issues force-deletes`: `POST /v1/drives/{canonical-id}/held-deletes/approve`.
+- `conflicts resolve`: `POST /v1/drives/{canonical-id}/conflicts/{conflict-id}/resolution-request`.
+
+The CLI never opens an ad hoc sync engine to execute held deletes or conflicts.
+It only records intent; the running or next normal sync engine owns the
+destructive side effects.
 
 ## Logging (`internal/logfile/logfile.go`)
 
@@ -322,7 +340,7 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
 - Production command code writes primary output through `CLIContext.OutputWriter`, and status/warning/error text through the CLI-owned status writer boundary instead of raw process-global stdout/stderr. This keeps command output injectable in tests and prevents hidden process-global output dependencies from creeping back into services, bootstrap warnings, or sync-daemon cleanup.
 - `go run ./cmd/devtool verify` enforces that production `internal/cli` files do not call `fmt.Print*`, `fmt.Fprint*(os.Stdout|os.Stderr, ...)`, or direct `os.Stdout` / `os.Stderr` writer methods. The only allowed process-global output boundary is the tiny process entrypoint outside `internal/cli`.
 - Browser auth URLs are validated against loopback or Microsoft auth hosts before launching the platform browser command. Validation and launch failures must not echo the full auth URL or any query tokens. The remaining inline `gosec` suppression on the `exec.CommandContext` call is intentional: the command comes from a fixed allowlist, but the linter cannot prove that through the helper boundary.
-- PID file and log file opens use root-based trusted-path helpers once the CLI/config layer has resolved the target path.
+- Control-socket probing and log file opens use resolved paths from the CLI/config layer; the socket itself is owned by `internal/multisync`.
 - If the configured log file cannot be opened, CLI bootstrap warns through the CLI status writer and falls back to console-only logging instead of failing the command before any user-facing work can run.
 - Direct `runSync` and service-level tests cover caller-visible failure paths such as config-load errors, all-drives-paused/no-drives guidance, and log-file-open fallback warnings through the injected status/output writers rather than process-global stderr assumptions.
 - The status command uses a testable service layer with narrowed interfaces (`accountMetaReader`, `accountAuthChecker`, `syncStateQuerier`), decoupling status aggregation from Cobra wiring. The concrete state reader is `syncstore.Inspector`; CLI code no longer opens SQLite directly.
@@ -370,8 +388,8 @@ Implements: R-2.3.3 [verified], R-2.3.4 [verified], R-2.3.5 [verified], R-2.3.6 
   This keeps the visible `issues` surface aligned with the same store-owned
   semantics that feed `status`.
 - **Auth scope display**: `auth:account` renders as an account-level `Authentication required` issue with no path list.
-- **Held-delete approval**: held deletes remain visible under `issues`, but approval is now one explicit command, `issues force-deletes`, which clears only `big_delete_held` rows for the selected drive.
-- **Conflict split**: `conflicts` is the dedicated conflict noun. `conflicts` lists unresolved conflicts, `conflicts --history` includes resolved conflicts, and `conflicts resolve` owns the keep-local/keep-remote/keep-both workflow.
+- **Held-delete approval**: held deletes remain visible under `issues`, but approval is now one explicit command, `issues force-deletes`, which moves only that drive's held-delete rows from `held` to `approved`. The engine consumes approved rows after successful delete execution.
+- **Conflict split**: `conflicts` is the dedicated conflict noun. `conflicts` lists unresolved conflicts, `conflicts --history` includes resolved conflicts, and `conflicts resolve` queues the keep-local/keep-remote/keep-both request for engine-owned execution.
 - **Replay-safe mutations**: `issues force-deletes` and repeated
   `conflicts resolve` calls are replay-safe. Repeating an approval or an
   already-resolved conflict returns a stable no-op/already-resolved result

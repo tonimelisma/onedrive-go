@@ -66,6 +66,13 @@ func (s *issuesService) writeEmptyIssues() error {
 }
 
 func (s *issuesService) runForceDeletes(ctx context.Context) error {
+	if client, ok := openControlSocketClient(ctx); ok {
+		if err := client.approveHeldDeletes(ctx, s.cc.Cfg.CanonicalID); err != nil {
+			return fmt.Errorf("approve held deletes via daemon: %w", err)
+		}
+		return writeln(s.cc.Output(), "Approved all held deletes for this drive.")
+	}
+
 	store, err := s.openMutationStore(ctx)
 	if err != nil {
 		return err

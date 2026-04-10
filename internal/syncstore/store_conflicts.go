@@ -29,31 +29,52 @@ import (
 const (
 	sqlListConflicts = `SELECT id, drive_id, item_id, path, conflict_type,
 		detected_at, local_hash, remote_hash, local_mtime, remote_mtime,
-		resolution, resolved_at, resolved_by
-		FROM conflicts WHERE resolution = 'unresolved'
+		resolution, state, requested_resolution, requested_at, resolving_at,
+		resolution_error, resolved_at, resolved_by
+		FROM conflicts WHERE state != 'resolved' AND resolution = 'unresolved'
 		ORDER BY detected_at`
 
 	sqlListAllConflicts = `SELECT id, drive_id, item_id, path, conflict_type,
 		detected_at, local_hash, remote_hash, local_mtime, remote_mtime,
-		resolution, resolved_at, resolved_by
+		resolution, state, requested_resolution, requested_at, resolving_at,
+		resolution_error, resolved_at, resolved_by
 		FROM conflicts
 		ORDER BY detected_at DESC`
 
 	sqlGetConflictByID = `SELECT id, drive_id, item_id, path, conflict_type,
 		detected_at, local_hash, remote_hash, local_mtime, remote_mtime,
-		resolution, resolved_at, resolved_by
+		resolution, state, requested_resolution, requested_at, resolving_at,
+		resolution_error, resolved_at, resolved_by
 		FROM conflicts WHERE id = ?`
 
 	sqlGetConflictByPath = `SELECT id, drive_id, item_id, path, conflict_type,
 		detected_at, local_hash, remote_hash, local_mtime, remote_mtime,
-		resolution, resolved_at, resolved_by
-		FROM conflicts WHERE path = ? AND resolution = 'unresolved'
+		resolution, state, requested_resolution, requested_at, resolving_at,
+		resolution_error, resolved_at, resolved_by
+		FROM conflicts WHERE path = ? AND state != 'resolved' AND resolution = 'unresolved'
 		ORDER BY detected_at DESC LIMIT 1`
 
 	sqlResolveConflict = `UPDATE conflicts
-		SET resolution = ?, resolved_at = ?, resolved_by = 'user'
-		WHERE id = ? AND resolution = 'unresolved'`
+		SET resolution = ?, state = 'resolved', resolved_at = ?, resolved_by = 'user',
+		    requested_resolution = NULL, requested_at = NULL, resolving_at = NULL,
+		    resolution_error = NULL
+		WHERE id = ? AND state != 'resolved'`
 )
+
+type ConflictRequestStatus string
+
+const (
+	ConflictRequestQueued            ConflictRequestStatus = "queued"
+	ConflictRequestAlreadyQueued     ConflictRequestStatus = "already_queued"
+	ConflictRequestAlreadyResolving  ConflictRequestStatus = "already_resolving"
+	ConflictRequestAlreadyResolved   ConflictRequestStatus = "already_resolved"
+	ConflictRequestDifferentStrategy ConflictRequestStatus = "different_strategy"
+)
+
+type ConflictRequestResult struct {
+	Status   ConflictRequestStatus
+	Conflict synctypes.ConflictRecord
+}
 
 // ListConflicts returns all unresolved conflicts ordered by detection time.
 func (m *SyncStore) ListConflicts(ctx context.Context) ([]synctypes.ConflictRecord, error) {
@@ -149,6 +170,220 @@ func (m *SyncStore) ResolveConflict(ctx context.Context, id, resolution string) 
 	return nil
 }
 
+// RequestConflictResolution durably records the user's desired resolution.
+// The engine, not the CLI, later claims and executes the request.
+func (m *SyncStore) RequestConflictResolution(
+	ctx context.Context,
+	id string,
+	resolution string,
+) (result ConflictRequestResult, retErr error) {
+	if !isQueueableConflictResolution(resolution) {
+		return ConflictRequestResult{}, fmt.Errorf("sync: unknown resolution strategy %q", resolution)
+	}
+
+	now := m.nowFunc().UnixNano()
+
+	tx, err := m.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ConflictRequestResult{}, fmt.Errorf("sync: begin conflict request tx: %w", err)
+	}
+	defer func() {
+		retErr = finalizeTxRollback(retErr, tx, "sync: rollback conflict request tx")
+	}()
+
+	row := tx.QueryRowContext(ctx, sqlGetConflictByID, id)
+	conflict, err := scanConflictRowSingle(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ConflictRequestResult{}, fmt.Errorf("sync: conflict %s not found", id)
+		}
+		return ConflictRequestResult{}, fmt.Errorf("sync: loading conflict %s: %w", id, err)
+	}
+
+	switch conflict.State {
+	case synctypes.ConflictStateUnresolved, synctypes.ConflictStateResolveFailed:
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE conflicts
+			SET state = ?, requested_resolution = ?, requested_at = ?,
+			    resolving_at = NULL, resolution_error = NULL
+			WHERE id = ? AND state IN (?, ?)`,
+			synctypes.ConflictStateResolutionRequested,
+			resolution,
+			now,
+			id,
+			synctypes.ConflictStateUnresolved,
+			synctypes.ConflictStateResolveFailed,
+		); err != nil {
+			return ConflictRequestResult{}, fmt.Errorf("sync: queue conflict resolution %s: %w", id, err)
+		}
+		conflict.State = synctypes.ConflictStateResolutionRequested
+		conflict.RequestedResolution = resolution
+		conflict.RequestedAt = now
+		conflict.ResolvingAt = 0
+		conflict.ResolutionError = ""
+		if err := tx.Commit(); err != nil {
+			return ConflictRequestResult{}, fmt.Errorf("sync: commit conflict resolution request %s: %w", id, err)
+		}
+		return ConflictRequestResult{Status: ConflictRequestQueued, Conflict: *conflict}, nil
+
+	case synctypes.ConflictStateResolutionRequested:
+		status := ConflictRequestAlreadyQueued
+		if conflict.RequestedResolution != resolution {
+			status = ConflictRequestDifferentStrategy
+		}
+		if err := tx.Commit(); err != nil {
+			return ConflictRequestResult{}, fmt.Errorf("sync: commit conflict resolution request read %s: %w", id, err)
+		}
+		return ConflictRequestResult{Status: status, Conflict: *conflict}, nil
+
+	case synctypes.ConflictStateResolving:
+		if err := tx.Commit(); err != nil {
+			return ConflictRequestResult{}, fmt.Errorf("sync: commit conflict resolving read %s: %w", id, err)
+		}
+		return ConflictRequestResult{Status: ConflictRequestAlreadyResolving, Conflict: *conflict}, nil
+
+	case synctypes.ConflictStateResolved:
+		if err := tx.Commit(); err != nil {
+			return ConflictRequestResult{}, fmt.Errorf("sync: commit resolved conflict read %s: %w", id, err)
+		}
+		return ConflictRequestResult{Status: ConflictRequestAlreadyResolved, Conflict: *conflict}, nil
+
+	default:
+		return ConflictRequestResult{}, fmt.Errorf("sync: conflict %s is not queueable in state %q", id, conflict.State)
+	}
+}
+
+func isQueueableConflictResolution(resolution string) bool {
+	switch resolution {
+	case synctypes.ResolutionKeepBoth, synctypes.ResolutionKeepLocal, synctypes.ResolutionKeepRemote:
+		return true
+	default:
+		return false
+	}
+}
+
+// ListRequestedConflictResolutions returns conflict resolution requests ready
+// for engine-owned execution.
+func (m *SyncStore) ListRequestedConflictResolutions(
+	ctx context.Context,
+	limit int,
+) ([]synctypes.ConflictRecord, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	rows, err := m.db.QueryContext(ctx,
+		`SELECT id, drive_id, item_id, path, conflict_type,
+			detected_at, local_hash, remote_hash, local_mtime, remote_mtime,
+			resolution, state, requested_resolution, requested_at, resolving_at,
+			resolution_error, resolved_at, resolved_by
+		FROM conflicts
+		WHERE state = ?
+		ORDER BY requested_at, detected_at
+		LIMIT ?`,
+		synctypes.ConflictStateResolutionRequested,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing requested conflict resolutions: %w", err)
+	}
+	defer rows.Close()
+
+	var conflicts []synctypes.ConflictRecord
+	for rows.Next() {
+		c, err := scanConflictRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		conflicts = append(conflicts, *c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sync: iterating requested conflict resolutions: %w", err)
+	}
+
+	return conflicts, nil
+}
+
+// ClaimConflictResolution moves a queued request into resolving state so only
+// one engine instance may execute its side effects.
+func (m *SyncStore) ClaimConflictResolution(
+	ctx context.Context,
+	id string,
+) (*synctypes.ConflictRecord, bool, error) {
+	now := m.nowFunc().UnixNano()
+	result, err := m.db.ExecContext(ctx,
+		`UPDATE conflicts
+		SET state = ?, resolving_at = ?, resolution_error = NULL
+		WHERE id = ? AND state = ?`,
+		synctypes.ConflictStateResolving,
+		now,
+		id,
+		synctypes.ConflictStateResolutionRequested,
+	)
+	if err != nil {
+		return nil, false, fmt.Errorf("sync: claiming conflict resolution %s: %w", id, err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return nil, false, fmt.Errorf("sync: checking claimed conflict resolution %s: %w", id, err)
+	}
+	if rows == 0 {
+		return nil, false, nil
+	}
+
+	conflict, err := m.GetConflict(ctx, id)
+	if err != nil {
+		return nil, false, err
+	}
+	conflict.State = synctypes.ConflictStateResolving
+	conflict.ResolvingAt = now
+
+	return conflict, true, nil
+}
+
+func (m *SyncStore) MarkConflictResolutionFailed(ctx context.Context, id string, cause error) error {
+	message := ""
+	if cause != nil {
+		message = cause.Error()
+	}
+
+	_, err := m.db.ExecContext(ctx,
+		`UPDATE conflicts
+		SET state = ?, resolution_error = ?, resolving_at = NULL
+		WHERE id = ? AND state = ?`,
+		synctypes.ConflictStateResolveFailed,
+		message,
+		id,
+		synctypes.ConflictStateResolving,
+	)
+	if err != nil {
+		return fmt.Errorf("sync: marking conflict resolution %s failed: %w", id, err)
+	}
+
+	return nil
+}
+
+func (m *SyncStore) ResetStaleResolvingConflicts(ctx context.Context, olderThan time.Time) (int, error) {
+	result, err := m.db.ExecContext(ctx,
+		`UPDATE conflicts
+		SET state = ?, resolving_at = NULL
+		WHERE state = ? AND resolving_at IS NOT NULL AND resolving_at < ?`,
+		synctypes.ConflictStateResolutionRequested,
+		synctypes.ConflictStateResolving,
+		olderThan.UnixNano(),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("sync: resetting stale resolving conflicts: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("sync: checking stale resolving conflict count: %w", err)
+	}
+
+	return int(rows), nil
+}
+
 // PruneResolvedConflicts deletes resolved conflicts whose detection time is
 // older than the given retention duration. Unresolved conflicts are never
 // pruned. Returns the number of deleted rows (B-087).
@@ -183,7 +418,7 @@ func (m *SyncStore) UnresolvedConflictCount(ctx context.Context) (int, error) {
 	var count int
 
 	err := m.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM conflicts WHERE resolution = 'unresolved'`).Scan(&count)
+		`SELECT COUNT(*) FROM conflicts WHERE state != 'resolved' AND resolution = 'unresolved'`).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("unresolved conflict count: %w", err)
 	}
@@ -213,6 +448,10 @@ func scanConflict(s conflictScanner) (*synctypes.ConflictRecord, error) {
 		remoteHash  sql.NullString
 		localMtime  sql.NullInt64
 		remoteMtime sql.NullInt64
+		requested   sql.NullString
+		requestedAt sql.NullInt64
+		resolvingAt sql.NullInt64
+		resolveErr  sql.NullString
 		resolvedAt  sql.NullInt64
 		resolvedBy  sql.NullString
 	)
@@ -220,7 +459,8 @@ func scanConflict(s conflictScanner) (*synctypes.ConflictRecord, error) {
 	err := s.Scan(
 		&c.ID, &c.DriveID, &itemID, &c.Path, &c.ConflictType,
 		&c.DetectedAt, &localHash, &remoteHash, &localMtime, &remoteMtime,
-		&c.Resolution, &resolvedAt, &resolvedBy,
+		&c.Resolution, &c.State, &requested, &requestedAt, &resolvingAt,
+		&resolveErr, &resolvedAt, &resolvedBy,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("sync: scanning conflict row: %w", err)
@@ -230,6 +470,8 @@ func scanConflict(s conflictScanner) (*synctypes.ConflictRecord, error) {
 	c.Name = path.Base(c.Path) // derived for display convenience (B-071)
 	c.LocalHash = localHash.String
 	c.RemoteHash = remoteHash.String
+	c.RequestedResolution = requested.String
+	c.ResolutionError = resolveErr.String
 	c.ResolvedBy = resolvedBy.String
 
 	if localMtime.Valid {
@@ -238,6 +480,14 @@ func scanConflict(s conflictScanner) (*synctypes.ConflictRecord, error) {
 
 	if remoteMtime.Valid {
 		c.RemoteMtime = remoteMtime.Int64
+	}
+
+	if requestedAt.Valid {
+		c.RequestedAt = requestedAt.Int64
+	}
+
+	if resolvingAt.Valid {
+		c.ResolvingAt = resolvingAt.Int64
 	}
 
 	if resolvedAt.Valid {

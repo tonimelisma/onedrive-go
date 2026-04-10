@@ -260,8 +260,8 @@ func (p *SessionProvider) clientsForTokenPath(
 }
 
 // FlushTokenCache clears the cached TokenSources, forcing the next Session()
-// call to re-read token files from disk. Called during daemon SIGHUP reload
-// to pick up logout/re-login credential changes.
+// call to re-read token files from disk. Called during daemon control-socket
+// reload to pick up logout/re-login credential changes.
 func (p *SessionProvider) FlushTokenCache() {
 	p.mu.Lock()
 	defer p.mu.Unlock()

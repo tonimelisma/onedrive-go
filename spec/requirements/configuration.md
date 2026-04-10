@@ -19,7 +19,7 @@ The system shall resolve settings with a four-layer override chain: defaults →
 
 ## R-4.4 Hot Reload [verified]
 
-- R-4.4.1: When running `sync --watch`, the system shall reload config on SIGHUP. [verified]
+- R-4.4.1: When running `sync --watch`, the system shall reload config on control-socket reload request. [verified]
 - R-4.4.2: Drives added, removed, or paused while running shall take effect immediately. [verified]
 
 ## R-4.5 Interactive Setup [future]

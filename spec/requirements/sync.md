@@ -24,14 +24,14 @@ When the same file has been modified on both the local filesystem and OneDrive s
 - R-2.3.2: The system shall persistently record conflicts with metadata (path, timestamp, hashes, resolution status). [verified]
 - R-2.3.3: When the user runs `issues`, the system shall list current drive-level sync issues only, excluding conflicts and retry-queue internals. [verified]
 - R-2.3.4: When the user runs `conflicts`, the system shall list unresolved conflicts, and `conflicts --history` shall include resolved conflicts. [verified]
-- R-2.3.5: When the user runs `conflicts resolve <path>`, the system shall allow resolution (keep-local, keep-remote, keep-both). [verified]
-- R-2.3.6: When the user runs `issues force-deletes`, the system shall approve all currently held big-delete entries for the selected drive without affecting other issue types. [verified]
+- R-2.3.5: When the user runs `conflicts resolve <path>`, the system shall durably request one resolution strategy (`keep-local`, `keep-remote`, `keep-both`) and the next running sync engine shall execute that request. If a daemon is running the request shall go through the control socket; otherwise it shall be written directly to the drive state DB. [verified]
+- R-2.3.6: When the user runs `issues force-deletes`, the system shall mark all currently held big-delete entries for the selected drive as `approved` without affecting other issue types. If a daemon is running the approval shall go through the control socket; otherwise it shall be written directly to the drive state DB. [verified]
 - R-2.3.7: When the `issues` command encounters more than 10 failures of the same issue type, the system shall group them under a single heading with count and show the first 5 paths. When `--verbose` is passed, the system shall show all paths. [verified]
 - R-2.3.8: When displaying scope-level issues where drives have independent scopes (507 quota, shared-folder write blocks), the system shall sub-group by scope (own drive vs each shortcut). [verified]
 - R-2.3.9: When displaying shortcut-scoped failures, the system shall use the shortcut's local path name (human-readable), not internal drive IDs or scope keys. [verified]
 - R-2.3.10: When `--json` is passed, `issues` shall output structured JSON with `failure_groups` and `held_deletes` only. Conflicts shall be reported through the separate `conflicts` command. [verified]
 - R-2.3.11: Shared-folder write blocks shall have no manual CLI retry or recheck command. The system shall revalidate them automatically during normal sync/watch permission checks while blocked writes still exist. [verified]
-- R-2.3.12: Repeated `issues force-deletes` and repeated conflict-resolution attempts shall be replay-safe. Repeating the same mutation shall either be a no-op or return a stable already-resolved result, without duplicate durable effects or partial scope release. [verified]
+- R-2.3.12: Repeated `issues force-deletes` and repeated conflict-resolution attempts shall be replay-safe. Repeating the same mutation shall either be a no-op or return a stable already-queued/already-resolved result, without duplicate durable effects or partial scope release. [verified]
 
 ## R-2.4 Filtering [verified]
 
@@ -72,17 +72,17 @@ When the user runs `verify`, the system shall re-hash local files and compare ag
 
 ## R-2.8 Watch Mode Behavior [verified]
 
-- R-2.8.1: The system shall reload `config.toml` on SIGHUP. [verified]
-- R-2.8.2: The system shall use a PID file with flock for single-instance enforcement. [verified]
+- R-2.8.1: The system shall reload `config.toml` on control-socket reload request. [verified]
+- R-2.8.2: The system shall use the Unix control socket as the single live sync-owner lock. [verified]
 - R-2.8.3: The system shall support two-signal shutdown. First SIGINT/SIGTERM cancels watch mode, seals new work admission, and lets already-admitted work follow the normal shutdown path; second signal forces immediate exit. [verified]
 - R-2.8.4: The system shall run periodic full reconciliation (default every 24 hours) to detect missed delta deletions. [verified]
 - R-2.8.5: The system shall support WebSocket subscription for near-instant remote change notification. [verified]
 
-## R-2.9 RPC / Control Socket [planned]
+## R-2.9 RPC / Control Socket [verified]
 
-- R-2.9.1: When running `sync --watch`, the system shall expose a JSON-over-HTTP API on a Unix domain socket. [planned]
-- R-2.9.2: The RPC API shall support polling (`GET /status`) and push (`GET /events` via SSE). [planned]
-- R-2.9.3: GUI frontends shall connect to the control socket for real-time status, pause/resume, and conflict resolution. [planned]
+- R-2.9.1: When running `sync` or `sync --watch`, the system shall own a JSON-over-HTTP API on a Unix domain socket so other sync owners cannot run concurrently. [verified]
+- R-2.9.2: The RPC API shall support `GET /v1/status`, `POST /v1/reload`, and `POST /v1/stop`. [verified]
+- R-2.9.3: The RPC API shall support durable user-intent mutations for held-delete approval and conflict-resolution requests. [verified]
 
 ## R-2.10 Failure Management [verified]
 

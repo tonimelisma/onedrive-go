@@ -92,7 +92,13 @@ func (rt *watchRuntime) planAndDispatchBatch(
 	// flowing. The planner-level check is disabled in watch mode
 	// (threshold=MaxInt32) — this counter replaces it.
 	if opts.applyDeleteCounter && rt.deleteCounter != nil {
-		plan = rt.applyDeleteCounter(ctx, plan)
+		plan, err = rt.applyDeleteCounter(ctx, plan)
+		if err != nil {
+			rt.engine.logger.Error("delete protection failed",
+				slog.String("error", err.Error()),
+			)
+			return nil
+		}
 		if len(plan.Actions) == 0 {
 			return nil
 		}
@@ -285,21 +291,31 @@ func isDeleteAction(t synctypes.ActionType) bool {
 	return t == synctypes.ActionLocalDelete || t == synctypes.ActionRemoteDelete
 }
 
-// applyDeleteCounter counts planned deletes in the plan, feeds them to the
-// rolling counter, and — if the counter is held — filters delete actions out
-// of the plan and records them as actionable issues. Returns the (possibly
-// filtered) plan. When all actions are filtered, returns a plan with empty
-// Actions/Deps.
-func (rt *watchRuntime) applyDeleteCounter(ctx context.Context, plan *synctypes.ActionPlan) *synctypes.ActionPlan {
+// applyDeleteCounter counts unapproved planned deletes, feeds them to the
+// rolling counter, and — if the counter is held — filters unapproved delete
+// actions out of the plan and records them in the held-delete ledger.
+func (rt *watchRuntime) applyDeleteCounter(
+	ctx context.Context,
+	plan *synctypes.ActionPlan,
+) (*synctypes.ActionPlan, error) {
+	approved, err := rt.engine.approvedDeleteKeys(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load approved deletes: %w", err)
+	}
+
 	deleteCount := 0
 	for i := range plan.Actions {
-		if isDeleteAction(plan.Actions[i].Type) {
+		action := &plan.Actions[i]
+		if isDeleteAction(action.Type) {
+			if _, ok := approved[deleteKeyFromAction(action)]; ok {
+				continue
+			}
 			deleteCount++
 		}
 	}
 
 	if deleteCount == 0 {
-		return plan
+		return plan, nil
 	}
 
 	tripped := rt.deleteCounter.Add(deleteCount)
@@ -311,78 +327,41 @@ func (rt *watchRuntime) applyDeleteCounter(ctx context.Context, plan *synctypes.
 	}
 
 	if !rt.deleteCounter.IsHeld() {
-		return plan
+		return plan, nil
 	}
-
-	kept := make([]synctypes.Action, 0, len(plan.Actions))
-	keptDeps := make([][]int, 0, len(plan.Deps))
-	oldToNew := make(map[int]int, len(plan.Actions))
 
 	var heldDeletes []synctypes.Action
-
 	for i := range plan.Actions {
-		if isDeleteAction(plan.Actions[i].Type) {
+		action := &plan.Actions[i]
+		if isDeleteAction(action.Type) {
+			if _, ok := approved[deleteKeyFromAction(action)]; ok {
+				continue
+			}
 			heldDeletes = append(heldDeletes, plan.Actions[i])
-			continue
-		}
-
-		oldToNew[i] = len(kept)
-		kept = append(kept, plan.Actions[i])
-		keptDeps = append(keptDeps, nil)
-	}
-
-	for newIdx := range kept {
-		var origIdx int
-		for oi, ni := range oldToNew {
-			if ni == newIdx {
-				origIdx = oi
-				break
-			}
-		}
-
-		for _, depOld := range plan.Deps[origIdx] {
-			if depNew, ok := oldToNew[depOld]; ok {
-				keptDeps[newIdx] = append(keptDeps[newIdx], depNew)
-			}
 		}
 	}
-
-	plan.Actions = kept
-	plan.Deps = keptDeps
 
 	rt.recordHeldDeletes(ctx, heldDeletes)
 
-	return plan
+	return filterActionPlan(plan, func(action *synctypes.Action) bool {
+		if !isDeleteAction(action.Type) {
+			return true
+		}
+		_, ok := approved[deleteKeyFromAction(action)]
+		return ok
+	}), nil
 }
 
-// recordHeldDeletes writes held delete actions to sync_failures as actionable
-// issues with type big_delete_held. Uses UpsertActionableFailures for batch
-// upsert — idempotent when the same deletes are re-observed.
+// recordHeldDeletes writes held delete actions to the held-delete ledger.
 func (rt *watchRuntime) recordHeldDeletes(ctx context.Context, actions []synctypes.Action) {
-	if len(actions) == 0 {
-		return
-	}
-
-	failures := make([]synctypes.ActionableFailure, len(actions))
-	for i := range actions {
-		failures[i] = synctypes.ActionableFailure{
-			Path:       actions[i].Path,
-			DriveID:    actions[i].DriveID,
-			Direction:  synctypes.DirectionDelete,
-			ActionType: synctypes.ActionRemoteDelete,
-			IssueType:  synctypes.IssueBigDeleteHeld,
-			Error:      fmt.Sprintf("held by big-delete protection (threshold: %d)", rt.engine.bigDeleteThreshold),
-		}
-	}
-
-	if err := rt.engine.baseline.UpsertActionableFailures(ctx, failures); err != nil {
+	if err := rt.engine.holdDeleteActions(ctx, actions); err != nil {
 		rt.engine.logger.Error("failed to record held deletes",
-			slog.Int("count", len(failures)),
+			slog.Int("count", len(actions)),
 			slog.String("error", err.Error()),
 		)
 	}
 
-	rt.engine.logger.Info("held delete actions recorded as issues",
-		slog.Int("count", len(failures)),
+	rt.engine.logger.Info("held delete actions recorded",
+		slog.Int("count", len(actions)),
 	)
 }

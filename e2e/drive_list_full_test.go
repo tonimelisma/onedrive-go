@@ -91,7 +91,7 @@ func TestE2E_DriveList_StaleStateDB(t *testing.T) {
 
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Wait for file to be visible remotely.
 	remotePath := "/" + testFolder + "/stale-test.txt"

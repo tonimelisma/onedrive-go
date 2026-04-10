@@ -1189,7 +1189,14 @@ const statusTestStateSchema = `
 			item_type TEXT NOT NULL,
 			conflict_type TEXT NOT NULL,
 			resolution TEXT NOT NULL DEFAULT 'unresolved',
+			state TEXT NOT NULL DEFAULT 'unresolved',
+			requested_resolution TEXT,
+			requested_at INTEGER,
+			resolving_at INTEGER,
+			resolution_error TEXT,
 			detected_at INTEGER NOT NULL,
+			local_hash TEXT,
+			local_mtime INTEGER,
 			resolved_at INTEGER,
 			resolved_by TEXT,
 			size INTEGER,
@@ -1233,6 +1240,18 @@ const statusTestStateSchema = `
 			local_hash TEXT,
 			scope_key TEXT,
 			PRIMARY KEY (path, drive_id)
+		);
+		CREATE TABLE IF NOT EXISTS held_deletes (
+			drive_id TEXT NOT NULL,
+			action_type TEXT NOT NULL,
+			path TEXT NOT NULL,
+			item_id TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL,
+			held_at INTEGER NOT NULL,
+			approved_at INTEGER,
+			last_planned_at INTEGER NOT NULL,
+			last_error TEXT,
+			PRIMARY KEY (drive_id, action_type, path)
 		);
 		CREATE TABLE IF NOT EXISTS scope_blocks (
 			scope_key TEXT PRIMARY KEY,

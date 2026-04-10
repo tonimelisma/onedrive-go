@@ -40,11 +40,3 @@ func managedPathExists(path string) bool {
 
 	return err == nil
 }
-
-func closePIDFile(f *os.File) error {
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("close PID file: %w", err)
-	}
-
-	return nil
-}

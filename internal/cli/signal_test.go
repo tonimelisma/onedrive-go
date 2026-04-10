@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"syscall"
 	"testing"
@@ -301,24 +300,5 @@ sync_dir = %q
 func mustWriteHelperLine(line string) {
 	if _, err := fmt.Fprintln(os.Stdout, line); err != nil {
 		panic(err)
-	}
-}
-
-func TestSighupChannel_DeliversSignal(t *testing.T) {
-	// Not parallel: sends a real SIGHUP to the process. Running in parallel
-	// with other signal tests risks a window where no handler is registered
-	// (between signal.Stop and signal.Notify), which terminates the process.
-
-	ch := sighupChannel()
-	defer signal.Stop(ch)
-
-	// Send SIGHUP to ourselves.
-	require.NoError(t, syscall.Kill(os.Getpid(), syscall.SIGHUP), "failed to send SIGHUP")
-
-	select {
-	case sig := <-ch:
-		assert.Equal(t, syscall.SIGHUP, sig)
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "SIGHUP not received within 2 seconds")
 	}
 }

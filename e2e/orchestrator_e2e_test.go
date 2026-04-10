@@ -62,8 +62,8 @@ func TestE2E_Orchestrator_SimultaneousSync(t *testing.T) {
 		cleanupRemoteFolderForDrive(t, drive2, testFolder2)
 	})
 
-	// Run sync --upload-only --force without --drive (all drives).
-	runCLIWithConfigAllDrives(t, cfgPath, env, "sync", "--upload-only", "--force")
+	// Run sync --upload-only without --drive (all drives).
+	runCLIWithConfigAllDrives(t, cfgPath, env, "sync", "--upload-only")
 
 	// Verify drive1's file exists remotely.
 	remotePath1 := "/" + testFolder1 + "/drive1-file.txt"
@@ -117,7 +117,7 @@ func TestE2E_Orchestrator_DriveIsolation(t *testing.T) {
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Run download-only sync for all drives.
-	runCLIWithConfigAllDrives(t, cfgPath, env, "sync", "--download-only", "--force")
+	runCLIWithConfigAllDrives(t, cfgPath, env, "sync", "--download-only")
 
 	// File should appear in drive1's sync dir.
 	localPath1 := filepath.Join(syncDir1, testFolder, "isolated.txt")
@@ -171,7 +171,7 @@ func TestE2E_Orchestrator_OneDriveFails(t *testing.T) {
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Run sync — should exit non-zero because drive2 fails (no token).
-	stdout, stderr, err := runCLIWithConfigAllDrivesAllowError(t, cfgPath, env, "sync", "--upload-only", "--force")
+	stdout, stderr, err := runCLIWithConfigAllDrivesAllowError(t, cfgPath, env, "sync", "--upload-only")
 
 	// Overall should fail (one drive failed).
 	assert.Error(t, err, "sync should exit non-zero when one drive fails")
@@ -227,7 +227,7 @@ func TestE2E_Orchestrator_SelectiveDrive(t *testing.T) {
 	})
 
 	// Run sync --upload-only --drive <drive1> (selective).
-	runCLIWithConfigForDrive(t, cfgPath, env, drive, "sync", "--upload-only", "--force")
+	runCLIWithConfigForDrive(t, cfgPath, env, drive, "sync", "--upload-only")
 
 	// drive1's file should be uploaded.
 	remotePath1 := "/" + testFolder1 + "/selected.txt"
@@ -269,7 +269,7 @@ func TestE2E_Orchestrator_WatchSimultaneous(t *testing.T) {
 	daemonArgs := []string{
 		"--config", cfgPath,
 		"--debug",
-		"sync", "--watch", "--upload-only", "--force",
+		"sync", "--watch", "--upload-only",
 	}
 	cmd := makeCmd(daemonArgs, env)
 
@@ -331,7 +331,7 @@ func TestE2E_Orchestrator_WatchDriveIsolation(t *testing.T) {
 	daemonArgs := []string{
 		"--config", cfgPath,
 		"--debug",
-		"sync", "--watch", "--upload-only", "--force",
+		"sync", "--watch", "--upload-only",
 	}
 	cmd := makeCmd(daemonArgs, env)
 
@@ -417,7 +417,7 @@ func TestE2E_Orchestrator_WatchPausedDrive(t *testing.T) {
 	daemonArgs := []string{
 		"--config", cfgPath,
 		"--debug",
-		"sync", "--watch", "--upload-only", "--force",
+		"sync", "--watch", "--upload-only",
 	}
 	cmd := makeCmd(daemonArgs, env)
 

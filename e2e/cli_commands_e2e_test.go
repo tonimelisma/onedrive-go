@@ -40,7 +40,7 @@ func TestE2E_Status_AfterSync(t *testing.T) {
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "status-test.txt"), []byte("status test"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Check status output.
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "status")
@@ -192,7 +192,7 @@ func TestE2E_Issues_Empty(t *testing.T) {
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "clean.txt"), []byte("clean file"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues")
 	assert.Contains(t, stdout, "No issues.")
@@ -216,7 +216,7 @@ func TestE2E_Conflicts_EmptyHistory(t *testing.T) {
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "clean.txt"), []byte("clean file"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Check conflicts — should show no unresolved.
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
@@ -246,13 +246,13 @@ func TestE2E_Conflicts_JSON(t *testing.T) {
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "jsonconflict.txt"), []byte("original"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Create edit-edit conflict.
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "jsonconflict.txt"), []byte("local edit"), 0o600))
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/jsonconflict.txt", "remote edit")
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync")
 
 	// Check conflicts --json.
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts", "--json")
@@ -298,13 +298,13 @@ func TestE2E_Conflicts_ResolveKeepBoth(t *testing.T) {
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "both.txt"), []byte("original"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Create edit-edit conflict.
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "both.txt"), []byte("local both"), 0o600))
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/both.txt", "remote both")
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync")
 
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
 	assert.Contains(t, stdout, "both.txt", "conflicts should list unresolved conflict")
@@ -332,7 +332,7 @@ func TestE2E_Conflicts_ResolveKeepBoth(t *testing.T) {
 
 	// Follow-up sync should leave the owned subtree stable even if unrelated
 	// full-suite activity produces delta traffic elsewhere on the shared drive.
-	assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync", "--force")
+	assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync")
 
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
 	assert.Contains(t, stdout, "No conflicts.", "keep-both should clear unresolved conflicts")
@@ -360,7 +360,7 @@ func TestE2E_Conflicts_ResolveMultipleStrategies(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "b.txt"), []byte("b-original"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "c.txt"), []byte("c-original"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Create 3 edit-edit conflicts.
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "a.txt"), []byte("a-local"), 0o600))
@@ -371,7 +371,7 @@ func TestE2E_Conflicts_ResolveMultipleStrategies(t *testing.T) {
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/b.txt", "b-remote")
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/c.txt", "c-remote")
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync")
 
 	// Resolve each with a different strategy.
 	runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/a.txt", "--keep-local")
@@ -406,7 +406,7 @@ func TestE2E_Conflicts_ResolveConflictNotFound(t *testing.T) {
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "dummy.txt"), []byte("dummy"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Try to resolve a non-existent conflict.
 	output := runCLIWithConfigExpectError(t, cfgPath, env, "conflicts", "resolve", "nonexistent-id", "--keep-local")
@@ -432,7 +432,7 @@ func TestE2E_Verify_AfterSync(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "v2.txt"), []byte("verify 2"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "v3.txt"), []byte("verify 3"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Verify in text mode.
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "verify")
@@ -900,7 +900,7 @@ func TestE2E_Issues_ReadOnlyLifecycle(t *testing.T) {
 	_, _ = buildDeepPath(t, syncDir, testFolder)
 
 	// Sync to trigger pre-upload validation failure.
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Verify the failure was recorded.
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues")
@@ -913,7 +913,7 @@ func TestE2E_Issues_ReadOnlyLifecycle(t *testing.T) {
 	require.NoError(t, os.RemoveAll(filepath.Join(syncDir, testFolder, longDirName)))
 	require.NoError(t, os.WriteFile(filepath.Join(syncDir, testFolder, "fixed.txt"), []byte("fixed"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Verify the stale issue clears once the underlying state is repaired.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "issues")
@@ -947,7 +947,7 @@ func TestE2E_Issues_ForceDeletes(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(localDir, name), []byte(fmt.Sprintf("content %d", i)), 0o600))
 	}
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 	pollCLIWithConfigContains(t, opsCfgPath, nil, "file-12.txt", pollTimeout, "ls", "/"+testFolder)
 
 	daemonArgs := []string{

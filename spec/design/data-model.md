@@ -1,6 +1,6 @@
 # Data Model
 
-Implements: R-6.5.1 [verified], R-6.5.2 [verified], R-2.5.1 [verified], R-2.5.2 [verified], R-2.3.2 [verified], R-6.7.17 [verified]
+Implements: R-6.5.1 [verified], R-6.5.2 [verified], R-2.5.1 [verified], R-2.5.2 [verified], R-2.3.2 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-6.7.17 [verified]
 
 ## One Database per Drive
 
@@ -21,7 +21,7 @@ The sync database uses remote state separation: three core tables decouple API o
 | `baseline` | Confirmed synced state | `(drive_id, item_id)`, `path` UNIQUE |
 | `sync_failures` | Unified item failure tracking with explicit role semantics | `(path, drive_id)` |
 
-Supporting tables: `delta_tokens`, `conflicts`, `sync_metadata`, `shortcuts`, `scope_blocks`.
+Supporting tables: `delta_tokens`, `conflicts`, `held_deletes`, `sync_metadata`, `shortcuts`, `scope_blocks`.
 
 ### remote_state
 
@@ -121,7 +121,41 @@ Delta API cursor per drive scope. `scope_id = ""` for primary scope. Drives with
 
 ### conflicts
 
-Per-file conflict tracking. Three types: `edit_edit`, `edit_delete`, `create_create`. Four resolution states: `unresolved`, `keep_both`, `keep_local`, `keep_remote`, `manual`.
+Per-file conflict tracking. Three conflict types: `edit_edit`,
+`edit_delete`, `create_create`.
+
+The `resolution` column records the final user decision:
+`unresolved`, `keep_both`, `keep_local`, `keep_remote`, or `manual`.
+
+The `state` column records workflow ownership:
+
+- `unresolved` — no queued user decision
+- `resolution_requested` — CLI/control socket recorded durable intent
+- `resolving` — one engine claimed execution
+- `resolve_failed` — execution failed and `resolution_error` explains why
+- `resolved` — final resolution was committed
+- `manual` — user-owned/manual state outside automatic execution
+
+`requested_resolution`, `requested_at`, `resolving_at`, and
+`resolution_error` make conflict resolution crash-safe and concurrency-safe:
+multiple CLIs can request the same resolution idempotently, while only an
+engine can claim and execute the side effects.
+
+### held_deletes
+
+Big-delete protection ledger. Held deletes are not sync failures; they are
+durable user-gated safety decisions.
+
+Keyed by `(drive_id, action_type, path)`. Fields:
+
+- `state='held'` — engine observed a delete above the configured threshold and filtered it out
+- `state='approved'` — user approved the delete; the next engine pass may execute it
+- `item_id` — retained for replay fidelity when available
+- `held_at`, `approved_at`, `last_planned_at`, `last_error` — audit and display metadata
+
+Approved rows are consumed only after the corresponding delete action succeeds.
+Approved rows are also excluded from future big-delete holds, so the same
+approved delete does not retrigger protection on the next normal sync pass.
 
 ### shortcuts
 

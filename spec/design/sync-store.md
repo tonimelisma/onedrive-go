@@ -1,14 +1,14 @@
 # Sync Store
 
-GOVERNS: internal/syncstore/store.go, internal/syncstore/inspector.go, internal/syncstore/schema.go, internal/syncstore/schema.sql, internal/syncstore/tx.go, internal/syncstore/store_baseline.go, internal/syncstore/store_observation.go, internal/syncstore/store_conflicts.go, internal/syncstore/store_failures.go, internal/syncstore/store_admin.go, internal/syncstore/store_scope_blocks.go, internal/syncstore/shortcuts.go, internal/syncverify/verify.go, internal/syncrecovery/recovery.go, internal/cli/verify.go, internal/cli/issues.go, internal/cli/failure_display.go
+GOVERNS: internal/syncstore/store.go, internal/syncstore/inspector.go, internal/syncstore/schema.go, internal/syncstore/schema.sql, internal/syncstore/tx.go, internal/syncstore/store_baseline.go, internal/syncstore/store_observation.go, internal/syncstore/store_conflicts.go, internal/syncstore/store_failures.go, internal/syncstore/store_held_deletes.go, internal/syncstore/store_admin.go, internal/syncstore/store_scope_blocks.go, internal/syncstore/shortcuts.go, internal/syncverify/verify.go, internal/syncrecovery/recovery.go, internal/cli/verify.go, internal/cli/issues.go, internal/cli/failure_display.go
 
 Implements: R-2.4.4 [verified], R-2.4.5 [verified], R-2.5 [verified], R-2.5.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.7 [verified], R-2.15.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.14 [verified], R-2.10.22 [verified], R-2.10.32 [verified], R-2.10.33 [verified], R-2.10.34 [verified], R-2.10.41 [verified], R-2.10.45 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified], R-6.7.17 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
 ## SyncStore (`store.go`)
 
 `SyncStore` is the sole durable authority for sync state. It owns baseline,
-remote observation state, conflicts, per-item failures, persisted scope
-blocks, shortcut metadata, and sync metadata. Runtime watch state is never a
+remote observation state, conflicts, held-delete approval state, per-item
+failures, persisted scope blocks, shortcut metadata, and sync metadata. Runtime watch state is never a
 peer authority; it is rebuilt from store state when the engine starts.
 
 ## Ownership Contract
@@ -52,6 +52,8 @@ Key operations:
   writer for status/report metadata only; sync-scope durability no longer
   piggybacks on generic metadata keys.
 - `RefreshLocalBaseline(ctx, LocalBaselineRefresh)` is the explicit manual-reconciliation path used when local disk now represents the chosen truth without a new executor transfer result. It updates only the local-side baseline tuple, preserves known remote-side metadata/`etag`, and marks a matching `remote_state` row synced.
+- `RequestConflictResolution(ctx, id, resolution)` records conflict-resolution intent without executing side effects. `ClaimConflictResolution`, `MarkConflictResolutionFailed`, and `ResolveConflict` enforce the durable `resolution_requested -> resolving -> resolved/resolve_failed` workflow for engine-owned execution.
+- `UpsertHeldDeletes`, `ApproveHeldDeletes`, `ListHeldDeletesByState`, and `ConsumeHeldDelete` own the durable big-delete approval workflow. Approval changes rows from `held` to `approved`; successful engine deletes consume approved rows.
 - `RecordFailure(ctx, SyncFailureParams, delayFn)` is the single failure writer. The engine provides classification and retry policy; the store provides transactional persistence and conflict-safe upsert behavior.
 - `TakeSyncFailure(ctx, path, driveID)` is the store-owned read-and-delete boundary for engine-managed failure resolution logging. It returns the authoritative persisted row, including `failure_count`, in the same transaction that removes it.
 - `ResetDownloadingStates(ctx, delayFn)`, `ListDeletingCandidates(ctx)`, and `FinalizeDeletingStates(ctx, deleted, pending, delayFn)` are the state-only crash-recovery primitives. The store no longer probes the sync-root filesystem itself. Their bridge rows preserve the exact replay action (`ActionDownload` for reset downloads, `ActionLocalDelete` for reset deletes) so the engine can re-enter the correct execution lane on the next pass.

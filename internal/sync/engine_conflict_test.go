@@ -400,8 +400,12 @@ func TestResolveConflict_KeepLocal_RestoreFailure(t *testing.T) {
 	require.Len(t, conflicts, 1)
 
 	err = eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepLocal)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "restoring conflict copy")
+	require.NoError(t, err)
+
+	failed, err := eng.baseline.GetConflict(ctx, conflicts[0].ID)
+	require.NoError(t, err)
+	assert.Equal(t, synctypes.ConflictStateResolveFailed, failed.State)
+	assert.Contains(t, failed.ResolutionError, "restoring conflict copy")
 }
 
 func TestResolveConflict_KeepBoth_MissingOriginalReturnsError(t *testing.T) {
@@ -431,9 +435,13 @@ func TestResolveConflict_KeepBoth_MissingOriginalReturnsError(t *testing.T) {
 	require.Len(t, conflicts, 1)
 
 	err = eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepBoth)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "updating baseline for original")
-	assert.Contains(t, err.Error(), "stat missing-original.txt")
+	require.NoError(t, err)
+
+	failed, err := eng.baseline.GetConflict(ctx, conflicts[0].ID)
+	require.NoError(t, err)
+	assert.Equal(t, synctypes.ConflictStateResolveFailed, failed.State)
+	assert.Contains(t, failed.ResolutionError, "updating baseline for original")
+	assert.Contains(t, failed.ResolutionError, "stat missing-original.txt")
 }
 
 // Validates: R-2.3.4

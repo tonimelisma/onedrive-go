@@ -19,7 +19,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.2.2: (S2) The system shall never process deletions from an incomplete enumeration (partial delta fetch or unmounted volume). [verified]
 - R-6.2.3: (S3) Downloads shall use atomic file writes (`.partial` + hash verify + rename). [verified]
 - R-6.2.4: (S4) Local deletions shall verify the file hash against baseline before deleting; on mismatch, a conflict copy is preserved. [verified]
-- R-6.2.5: (S5) Big-delete protection shall prevent mass accidental deletions: one-shot mode aborts when planned deletions exceed `big_delete_threshold`; watch mode holds deletes via a rolling window counter and surfaces them as actionable issues. [verified]
+- R-6.2.5: (S5) Big-delete protection shall prevent mass accidental deletions: one-shot and watch mode persist over-threshold unapproved deletes as held durable intent, continue safe non-delete work, and execute approved deletes only from the normal sync engine. [verified]
 - R-6.2.6: (S6) Before each download, the system shall verify available disk space. When below `min_free_space`: set a `disk:local` scope block on all downloads. When above `min_free_space` but below file size plus `min_free_space`: record a per-file failure. [verified]
 - R-6.2.7: (S7) The system shall never upload partial or temporary files (filter cascade excludes temp patterns). [verified]
 - R-6.2.8: File operations (ls, get, put, rm, mkdir, stat, mv, cp) shall work independently of sync state — no sync database involved. [verified]
@@ -29,14 +29,14 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 
 - R-6.3.1: Only one sync process per configuration shall run at a time. [verified]
 - R-6.3.2: Status and query commands shall be concurrent-reader safe while sync is running. [verified]
-- R-6.3.3: The system shall enforce single-instance via PID file with advisory lock. [verified]
+- R-6.3.3: The system shall enforce single-instance ownership via the Unix control socket. [verified]
 - R-6.3.4: Concurrent and runtime components shall document the single owner of mutable state, goroutines, channels, timers, and mutex-guarded fields. [verified]
 - R-6.3.5: Runtime-critical mutexes shall document the fields they guard, and any intentional nested lock ordering shall be called out in code comments or the governing design doc. [verified]
 
 ## R-6.4 Safety [implemented]
 
-- R-6.4.1: When a one-shot sync would delete more items than `big_delete_threshold` (default: 1000), the system shall abort and require `--force`. Single absolute count threshold — no percentage or per-folder checks. [verified]
-- R-6.4.2: In watch mode, when more than `big_delete_threshold` delete actions accumulate within a rolling 5-minute window, the system shall hold all pending delete actions while continuing non-delete operations. Held deletes shall be surfaced via `onedrive-go issues` and released when the user approves all big-delete-held entries via `issues force-deletes`. [verified]
+- R-6.4.1: When a one-shot sync would delete more items than `big_delete_threshold` (default: 1000), the system shall hold those unapproved deletes durably and execute no destructive delete until the user approves them with `issues force-deletes`. [verified]
+- R-6.4.2: In watch mode, when more than `big_delete_threshold` delete actions accumulate within a rolling 5-minute window, the system shall hold unapproved delete actions durably while continuing non-delete operations. Held deletes shall be surfaced via `onedrive-go issues`, approved via `issues force-deletes`, and consumed only after successful engine-owned delete execution. [verified]
 - R-6.4.3: The `big_delete_threshold` config setting shall be threaded from user configuration to the sync engine; the system shall not silently use hardcoded defaults. [verified]
 - R-6.4.4: Remote deletions shall go to the OneDrive recycle bin by default. [verified]
 - R-6.4.5: Local deletions triggered by remote changes shall go to OS trash on macOS (`use_local_trash`). [verified]

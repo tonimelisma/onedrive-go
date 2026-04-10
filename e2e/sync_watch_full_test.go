@@ -96,7 +96,7 @@ func TestE2E_SyncWatch_RemoteToLocal(t *testing.T) {
 
 	// Start download-only daemon.
 	cmd := startDaemon(t, cfgPath, env,
-		"--drive", drive, "sync", "--download-only", "--watch", "--force")
+		"--drive", drive, "sync", "--download-only", "--watch")
 
 	// Create remote folder and file.
 	runCLIWithConfig(t, opsCfgPath, nil, "mkdir", "/"+testFolder)
@@ -130,7 +130,7 @@ func TestE2E_SyncWatch_Bidirectional(t *testing.T) {
 
 	// Start bidirectional daemon.
 	cmd := startDaemon(t, cfgPath, env,
-		"--drive", drive, "sync", "--watch", "--force")
+		"--drive", drive, "sync", "--watch")
 
 	// Phase 1: local → remote.
 	localDir := filepath.Join(syncDir, testFolder)
@@ -175,7 +175,7 @@ func TestE2E_SyncWatch_ConflictDuringWatch(t *testing.T) {
 
 	// Start bidirectional daemon with stderr access to wait for watch setup.
 	h := startDaemonWithStderr(t, cfgPath, env,
-		"--drive", drive, "sync", "--watch", "--force")
+		"--drive", drive, "sync", "--watch")
 
 	// Wait for fsnotify watches to be established before creating files.
 	waitForStderrContains(t, h.Stderr, "local observer starting watch", 30*time.Second)
@@ -243,7 +243,7 @@ func TestE2E_SyncWatch_FileModification(t *testing.T) {
 
 	// Start upload-only daemon with stderr access to wait for watch setup.
 	h := startDaemonWithStderr(t, cfgPath, env,
-		"--drive", drive, "sync", "--upload-only", "--watch", "--force")
+		"--drive", drive, "sync", "--upload-only", "--watch")
 
 	// Wait for fsnotify watches to be established before creating files.
 	waitForStderrContains(t, h.Stderr, "local observer starting watch", 30*time.Second)
@@ -301,7 +301,7 @@ func TestE2E_SyncWatch_FileDeletion(t *testing.T) {
 
 	// Start upload-only daemon with stderr access to wait for watch setup.
 	h := startDaemonWithStderr(t, cfgPath, env,
-		"--drive", drive, "sync", "--upload-only", "--watch", "--force")
+		"--drive", drive, "sync", "--upload-only", "--watch")
 
 	// Wait for fsnotify watches to be established before creating files.
 	waitForStderrContains(t, h.Stderr, "local observer starting watch", 30*time.Second)
@@ -341,7 +341,7 @@ func TestE2E_SyncWatch_FolderCreation(t *testing.T) {
 
 	// Start upload-only daemon.
 	cmd := startDaemon(t, cfgPath, env,
-		"--drive", drive, "sync", "--upload-only", "--watch", "--force")
+		"--drive", drive, "sync", "--upload-only", "--watch")
 
 	// Create deeply nested structure.
 	localDir := filepath.Join(syncDir, testFolder, "a", "b", "c")
@@ -374,7 +374,7 @@ func TestE2E_SyncWatch_MultipleFiles(t *testing.T) {
 
 	// Start upload-only daemon.
 	cmd := startDaemon(t, cfgPath, env,
-		"--drive", drive, "sync", "--upload-only", "--watch", "--force")
+		"--drive", drive, "sync", "--upload-only", "--watch")
 
 	// Create 5 files.
 	localDir := filepath.Join(syncDir, testFolder)
@@ -414,7 +414,7 @@ func TestE2E_SyncWatch_LargeFile(t *testing.T) {
 
 	// Start upload-only daemon.
 	cmd := startDaemon(t, cfgPath, env,
-		"--drive", drive, "sync", "--upload-only", "--watch", "--force")
+		"--drive", drive, "sync", "--upload-only", "--watch")
 
 	// Create 5 MiB file with deterministic content.
 	const fileSize = 5 * 1024 * 1024
@@ -460,7 +460,7 @@ func TestE2E_SyncWatch_RapidChurn(t *testing.T) {
 
 	// Start upload-only daemon.
 	cmd := startDaemon(t, cfgPath, env,
-		"--drive", drive, "sync", "--upload-only", "--watch", "--force")
+		"--drive", drive, "sync", "--upload-only", "--watch")
 
 	// Create file and rapidly modify it.
 	localDir := filepath.Join(syncDir, testFolder)
@@ -511,7 +511,7 @@ func TestE2E_SyncWatch_GracefulShutdown(t *testing.T) {
 
 	// Start upload-only daemon.
 	cmd := startDaemon(t, cfgPath, env,
-		"--drive", drive, "sync", "--upload-only", "--watch", "--force")
+		"--drive", drive, "sync", "--upload-only", "--watch")
 
 	// Create first file and wait for daemon to sync it.
 	localDir := filepath.Join(syncDir, testFolder)
@@ -540,7 +540,7 @@ func TestE2E_SyncWatch_GracefulShutdown(t *testing.T) {
 	))
 
 	// Run one-shot sync.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Verify the one-shot sync uploaded only the new file (incremental).
 	assert.Contains(t, stderr, "Uploads:", "one-shot should report uploads")
@@ -551,8 +551,8 @@ func TestE2E_SyncWatch_GracefulShutdown(t *testing.T) {
 }
 
 // TestE2E_SyncWatch_TimedPauseExpiry starts a daemon, pauses the drive with
-// a short duration, verifies sync is paused, waits for expiry, sends SIGHUP,
-// and verifies sync resumes.
+// a short duration, verifies sync is paused, waits for expiry, asks the daemon
+// to reload through the control socket, and verifies sync resumes.
 func TestE2E_SyncWatch_TimedPauseExpiry(t *testing.T) {
 	registerLogDump(t)
 
@@ -565,14 +565,11 @@ func TestE2E_SyncWatch_TimedPauseExpiry(t *testing.T) {
 
 	// Start upload-only daemon (with stderr access for polling).
 	h := startDaemonWithStderr(t, cfgPath, env,
-		"--drive", drive, "sync", "--upload-only", "--watch", "--force")
+		"--drive", drive, "sync", "--upload-only", "--watch")
 	cmd := h.Cmd
 
 	// Pause for 5 seconds.
 	runCLIWithConfig(t, cfgPath, env, "pause", "5s")
-
-	// Send SIGHUP directly to ensure daemon gets it (per-test PID isolation).
-	require.NoError(t, cmd.Process.Signal(syscall.SIGHUP))
 
 	// Poll stderr for pause acknowledgment.
 	waitForStderrContains(t, h.Stderr, "paused", 10*time.Second)
@@ -598,10 +595,10 @@ func TestE2E_SyncWatch_TimedPauseExpiry(t *testing.T) {
 		time.Sleep(1 * time.Second)
 	}
 
-	// Wait for pause to expire (5s total from pause command), then send
-	// SIGHUP to trigger clearExpiredPauses.
+	// Wait for pause to expire (5s total from pause command), then use the
+	// control socket to trigger clearExpiredPauses.
 	time.Sleep(4 * time.Second)
-	require.NoError(t, cmd.Process.Signal(syscall.SIGHUP))
+	postControlSocket(t, env, "/v1/reload")
 
 	// Poll until file appears remotely (daemon should now be unpaused).
 	pollCLIWithConfigContains(t, opsCfgPath, nil, "paused-file.txt", daemonPollTimeout, "stat", remotePath)

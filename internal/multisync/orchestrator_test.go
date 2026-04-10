@@ -1,11 +1,15 @@
 package multisync
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -19,6 +23,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -26,8 +32,8 @@ import (
 
 // setupXDGIsolation sets XDG_DATA_HOME to a temp dir and creates drive
 // metadata files for each CID. This gives buildResolvedDrive (called during
-// SIGHUP reload → ResolveDrives) a non-zero DriveID, which is required for
-// Session() to succeed.
+// control-socket reload → ResolveDrives) a non-zero DriveID, which is required
+// for Session() to succeed.
 func setupXDGIsolation(t *testing.T, cids ...driveid.CanonicalID) {
 	t.Helper()
 
@@ -49,7 +55,7 @@ func testOrchestratorConfig(t *testing.T, drives ...*config.ResolvedDrive) *Orch
 
 // testOrchestratorConfigWithPath creates an OrchestratorConfig with a real
 // config path. Use this when the test needs a writable config file (e.g.,
-// SIGHUP reload tests that modify config on disk).
+// control-socket reload tests that modify config on disk).
 func testOrchestratorConfigWithPath(t *testing.T, cfgPath string, drives ...*config.ResolvedDrive) *OrchestratorConfig {
 	t.Helper()
 
@@ -67,6 +73,62 @@ func testOrchestratorConfigWithPath(t *testing.T, cfgPath string, drives ...*con
 		Provider: provider,
 		Logger:   slog.Default(),
 	}
+}
+
+func postControlReload(t *testing.T, socketPath string) {
+	t.Helper()
+
+	_ = postControlJSON(t, socketPath, "/v1/reload", nil)
+}
+
+func postControlJSON(t *testing.T, socketPath string, path string, body []byte) controlMutationResponse {
+	t.Helper()
+
+	client := controlTestClient(socketPath)
+	var decoded controlMutationResponse
+	require.Eventually(t, func() bool {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://unix"+path, bytes.NewReader(body))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+
+		// #nosec G704 -- fixed Unix-domain test socket client.
+		resp, err := client.Do(req)
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+			return false
+		}
+
+		return resp.StatusCode == http.StatusOK
+	}, 5*time.Second, 10*time.Millisecond, "control socket request did not succeed")
+
+	return decoded
+}
+
+func controlTestClient(socketPath string) *http.Client {
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var dialer net.Dialer
+			return dialer.DialContext(ctx, "unix", socketPath)
+		},
+	}
+
+	return &http.Client{Transport: transport}
+}
+
+func shortControlSocketPath(t *testing.T) string {
+	t.Helper()
+
+	path := filepath.Join(os.TempDir(), fmt.Sprintf("onedrive-go-%d.sock", time.Now().UnixNano()))
+	t.Cleanup(func() {
+		if err := localpath.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Logf("remove test control socket: %v", err)
+		}
+	})
+
+	return path
 }
 
 func testResolvedDrive(t *testing.T, cidStr, displayName string) *config.ResolvedDrive {
@@ -548,6 +610,155 @@ func TestOrchestrator_RunWatch_MultiDrive(t *testing.T) {
 	}
 }
 
+// Validates: R-2.9.1, R-2.9.2
+func TestOrchestrator_ControlSocket_StatusAndStop(t *testing.T) {
+	rd := testResolvedDrive(t, "personal:control@example.com", "Control")
+	cfgPath := writeTestConfig(t, rd.CanonicalID)
+	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
+	cfg.ControlSocketPath = shortControlSocketPath(t)
+	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+
+	orch := NewOrchestrator(cfg)
+
+	watchStarted := make(chan struct{})
+	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
+		return &mockEngine{
+			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
+				close(watchStarted)
+				<-ctx.Done()
+				return ctx.Err()
+			},
+		}, nil
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- orch.RunWatch(t.Context(), synctypes.SyncBidirectional, synctypes.WatchOpts{})
+	}()
+
+	select {
+	case <-watchStarted:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "RunWatch did not start in time")
+	}
+
+	client := controlTestClient(cfg.ControlSocketPath)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://unix/v1/status", http.NoBody)
+	require.NoError(t, err)
+	// #nosec G704 -- fixed Unix-domain test socket client.
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var status controlStatusResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&status))
+	assert.Equal(t, string(controlOwnerWatch), status.OwnerMode)
+	assert.Equal(t, []string{rd.CanonicalID.String()}, status.Drives)
+
+	stop := postControlJSON(t, cfg.ControlSocketPath, "/v1/stop", nil)
+	assert.Equal(t, "stopping", stop.Status)
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "RunWatch did not stop in time")
+	}
+}
+
+// Validates: R-2.3.5, R-2.3.6, R-2.9.3
+func TestOrchestrator_ControlSocket_QueuesDurableUserIntent(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+
+	rd := testResolvedDrive(t, "personal:intent@example.com", "Intent")
+	cfgPath := writeTestConfig(t, rd.CanonicalID)
+	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
+	cfg.ControlSocketPath = shortControlSocketPath(t)
+	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+
+	store, err := syncstore.NewSyncStore(t.Context(), rd.StatePath(), slog.Default())
+	require.NoError(t, err)
+	require.NoError(t, store.UpsertHeldDeletes(t.Context(), []synctypes.HeldDeleteRecord{{
+		DriveID:       rd.DriveID,
+		ItemID:        "item-delete",
+		Path:          "delete-me.txt",
+		ActionType:    synctypes.ActionRemoteDelete,
+		State:         synctypes.HeldDeleteStateHeld,
+		HeldAt:        1,
+		LastPlannedAt: 1,
+		LastError:     "held",
+	}}))
+	_, err = store.DB().ExecContext(t.Context(), `INSERT INTO conflicts
+		(id, drive_id, item_id, path, conflict_type, detected_at, resolution)
+		VALUES ('conflict-1', ?, 'item-conflict', 'conflict.txt', 'edit_edit', 1, 'unresolved')`,
+		rd.DriveID.String(),
+	)
+	require.NoError(t, err)
+	require.NoError(t, store.Close(t.Context()))
+
+	orch := NewOrchestrator(cfg)
+	watchStarted := make(chan struct{})
+	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
+		return &mockEngine{
+			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
+				close(watchStarted)
+				<-ctx.Done()
+				return ctx.Err()
+			},
+		}, nil
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- orch.RunWatch(t.Context(), synctypes.SyncBidirectional, synctypes.WatchOpts{})
+	}()
+
+	select {
+	case <-watchStarted:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "RunWatch did not start in time")
+	}
+
+	approvePath := "/v1/drives/" + url.PathEscape(rd.CanonicalID.String()) + "/held-deletes/approve"
+	approve := postControlJSON(t, cfg.ControlSocketPath, approvePath, nil)
+	assert.Equal(t, "approved", approve.Status)
+
+	requestPath := "/v1/drives/" + url.PathEscape(rd.CanonicalID.String()) +
+		"/conflicts/conflict-1/resolution-request"
+	request := postControlJSON(t, cfg.ControlSocketPath, requestPath, []byte(`{"resolution":"keep_local"}`))
+	assert.Equal(t, string(syncstore.ConflictRequestQueued), request.Status)
+
+	reopened, err := syncstore.NewSyncStore(t.Context(), rd.StatePath(), slog.Default())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, reopened.Close(context.Background()))
+	})
+
+	held, err := reopened.ListHeldDeletesByState(t.Context(), synctypes.HeldDeleteStateHeld)
+	require.NoError(t, err)
+	assert.Empty(t, held)
+	approved, err := reopened.ListHeldDeletesByState(t.Context(), synctypes.HeldDeleteStateApproved)
+	require.NoError(t, err)
+	require.Len(t, approved, 1)
+
+	conflict, err := reopened.GetConflict(t.Context(), "conflict-1")
+	require.NoError(t, err)
+	assert.Equal(t, synctypes.ConflictStateResolutionRequested, conflict.State)
+	assert.Equal(t, synctypes.ResolutionKeepLocal, conflict.RequestedResolution)
+
+	stop := postControlJSON(t, cfg.ControlSocketPath, "/v1/stop", nil)
+	assert.Equal(t, "stopping", stop.Status)
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "RunWatch did not stop in time")
+	}
+}
+
 // Validates: R-2.4
 func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 	rd1 := testResolvedDrive(t, "personal:existing@example.com", "Existing")
@@ -557,9 +768,8 @@ func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 	setupXDGIsolation(t, rd1.CanonicalID, rd2CID)
 
 	cfgPath := writeTestConfig(t, rd1.CanonicalID)
-	sighup := make(chan os.Signal, 1)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd1)
-	cfg.SIGHUPChan = sighup
+	cfg.ControlSocketPath = shortControlSocketPath(t)
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
@@ -589,10 +799,9 @@ func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 		return started.Load() >= 1
 	}, 5*time.Second, 10*time.Millisecond)
 
-	// Add a second drive to the config and send SIGHUP.
+	// Add a second drive to the config and request a control-socket reload.
 	writeTestConfigMulti(t, cfgPath, rd1.CanonicalID, rd1.SyncDir, rd2CID, t.TempDir())
-
-	sighup <- os.Interrupt
+	postControlReload(t, cfg.ControlSocketPath)
 
 	// Wait for the second drive to start.
 	require.Eventually(t, func() bool {
@@ -614,9 +823,8 @@ func TestOrchestrator_Reload_RemoveDrive(t *testing.T) {
 	rd1 := testResolvedDrive(t, "personal:keep@example.com", "Keep")
 	rd2 := testResolvedDrive(t, "personal:remove@example.com", "Remove")
 	cfgPath := writeTestConfig(t, rd1.CanonicalID, rd2.CanonicalID)
-	sighup := make(chan os.Signal, 1)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd1, rd2)
-	cfg.SIGHUPChan = sighup
+	cfg.ControlSocketPath = shortControlSocketPath(t)
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
@@ -648,9 +856,9 @@ func TestOrchestrator_Reload_RemoveDrive(t *testing.T) {
 		return started.Load() >= 2
 	}, 5*time.Second, 10*time.Millisecond)
 
-	// Remove rd2 from config and send SIGHUP.
+	// Remove rd2 from config and request a control-socket reload.
 	writeTestConfigSingle(t, cfgPath, rd1.CanonicalID, rd1.SyncDir)
-	sighup <- os.Interrupt
+	postControlReload(t, cfg.ControlSocketPath)
 
 	// Wait for one runner to stop (the removed drive).
 	require.Eventually(t, func() bool {
@@ -671,9 +879,8 @@ func TestOrchestrator_Reload_RemoveDrive(t *testing.T) {
 func TestOrchestrator_Reload_PausedDrive(t *testing.T) {
 	rd := testResolvedDrive(t, "personal:pausetest@example.com", "PauseTest")
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
-	sighup := make(chan os.Signal, 1)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
-	cfg.SIGHUPChan = sighup
+	cfg.ControlSocketPath = shortControlSocketPath(t)
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
@@ -705,9 +912,9 @@ func TestOrchestrator_Reload_PausedDrive(t *testing.T) {
 		return started.Load() >= 1
 	}, 5*time.Second, 10*time.Millisecond)
 
-	// Pause the drive and send SIGHUP.
+	// Pause the drive and request a control-socket reload.
 	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused", "true"))
-	sighup <- os.Interrupt
+	postControlReload(t, cfg.ControlSocketPath)
 
 	// The drive runner should stop.
 	require.Eventually(t, func() bool {
@@ -728,9 +935,8 @@ func TestOrchestrator_Reload_PausedDrive(t *testing.T) {
 func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 	rd := testResolvedDrive(t, "personal:invalidcfg@example.com", "InvalidCfg")
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
-	sighup := make(chan os.Signal, 1)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
-	cfg.SIGHUPChan = sighup
+	cfg.ControlSocketPath = shortControlSocketPath(t)
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
@@ -760,9 +966,9 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 		return started.Load() >= 1
 	}, 5*time.Second, 10*time.Millisecond)
 
-	// Write invalid TOML and send SIGHUP — should keep old state.
+	// Write invalid TOML and request a control-socket reload; old state should remain.
 	require.NoError(t, os.WriteFile(cfgPath, []byte("{{invalid toml"), 0o600))
-	sighup <- os.Interrupt
+	postControlReload(t, cfg.ControlSocketPath)
 
 	// Give reload time to process — the drive should still be running.
 	time.Sleep(200 * time.Millisecond)
@@ -787,9 +993,8 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 	setupXDGIsolation(t, rd.CanonicalID)
 
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
-	sighup := make(chan os.Signal, 1)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
-	cfg.SIGHUPChan = sighup
+	cfg.ControlSocketPath = shortControlSocketPath(t)
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
@@ -821,10 +1026,10 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 		return started.Load() >= 1
 	}, 5*time.Second, 10*time.Millisecond)
 
-	// Set an already-expired timed pause and send SIGHUP.
+	// Set an already-expired timed pause and request a control-socket reload.
 	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused", "true"))
 	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused_until", "2000-01-01T00:00:00Z"))
-	sighup <- os.Interrupt
+	postControlReload(t, cfg.ControlSocketPath)
 
 	// The expired timed pause is cleared by ClearExpiredPauses during reload.
 	// The drive is already running and remains in newActive, so it is NOT

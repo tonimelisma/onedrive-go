@@ -40,24 +40,24 @@ func recordRemoteBlockedFailure(
 	}, nil))
 }
 
-// Validates: R-2.3.5
-func TestSyncStore_ApproveHeldDeletes_ClearsOnlyHeldDeletes(t *testing.T) {
+// Validates: R-2.3.6
+func TestSyncStore_ApproveHeldDeletes_MarksOnlyHeldDeletesApproved(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
 	ctx := context.Background()
 	driveID := driveid.New("drive1")
 
-	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path:       "delete/a.txt",
-		DriveID:    driveID,
-		Direction:  synctypes.DirectionDelete,
-		ActionType: synctypes.ActionRemoteDelete,
-		Role:       synctypes.FailureRoleItem,
-		Category:   synctypes.CategoryActionable,
-		IssueType:  synctypes.IssueBigDeleteHeld,
-		ErrMsg:     "held delete",
-	}, nil))
+	require.NoError(t, mgr.UpsertHeldDeletes(ctx, []synctypes.HeldDeleteRecord{{
+		Path:          "delete/a.txt",
+		DriveID:       driveID,
+		ActionType:    synctypes.ActionRemoteDelete,
+		ItemID:        "item-a",
+		State:         synctypes.HeldDeleteStateHeld,
+		HeldAt:        1,
+		LastPlannedAt: 1,
+		LastError:     "held delete",
+	}}))
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "bad:name.txt",
 		DriveID:    driveID,
@@ -76,6 +76,15 @@ func TestSyncStore_ApproveHeldDeletes_ClearsOnlyHeldDeletes(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
 	assert.ElementsMatch(t, []string{"bad:name.txt", "Shared/Docs/a.txt"}, []string{rows[0].Path, rows[1].Path})
+
+	held, err := mgr.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateHeld)
+	require.NoError(t, err)
+	assert.Empty(t, held)
+
+	approved, err := mgr.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateApproved)
+	require.NoError(t, err)
+	require.Len(t, approved, 1)
+	assert.Equal(t, "delete/a.txt", approved[0].Path)
 }
 
 func TestSyncStore_DropLegacyRemoteBlockedScope_RemovesOnlyLegacyAuthorityRows(t *testing.T) {

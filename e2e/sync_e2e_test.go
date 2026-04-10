@@ -373,7 +373,7 @@ func TestE2E_Sync_UploadOnly(t *testing.T) {
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Run sync --upload-only.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 	assert.Contains(t, stderr, "Mode: upload-only")
 
 	// Upload-only success is persisted in the durable baseline immediately even
@@ -434,7 +434,6 @@ func TestE2E_Sync_DownloadOnly(t *testing.T) {
 			return bytes.Equal(downloaded, content)
 		},
 		"--download-only",
-		"--force",
 	)
 	assert.Contains(t, attempt.Stderr, "Mode: download-only")
 	assert.Equal(t, content, downloaded)
@@ -456,7 +455,7 @@ func TestE2E_Sync_DryRun(t *testing.T) {
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Run sync --dry-run --upload-only.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--dry-run", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--dry-run")
 	assert.Contains(t, stderr, "Dry run")
 
 	// Verify file was NOT uploaded.
@@ -481,7 +480,7 @@ func TestE2E_Sync_Verify(t *testing.T) {
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Sync to establish baseline.
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Run verify.
 	stdout, _, verifyErr := runCLIWithConfigAllowError(t, cfgPath, env, "verify")
@@ -550,7 +549,7 @@ sync_dir = %q
 		filepath.Join(localDir, "file1.txt"), []byte("first file\n"), 0o644))
 
 	cfgPath := writeConfig(t)
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 	assert.Contains(t, stderr, "Mode: upload-only")
 
 	// The durable baseline table is the authoritative proof for this test's
@@ -572,7 +571,7 @@ sync_dir = %q
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "file2.txt"), []byte("second file\n"), 0o644))
 
-	_, stderr = runCLIWithConfig(t, cfgPath2, env, "sync", "--upload-only", "--force")
+	_, stderr = runCLIWithConfig(t, cfgPath2, env, "sync", "--upload-only")
 	assert.Contains(t, stderr, "Mode: upload-only")
 
 	// Step 5: Verify both baseline rows exist in the preserved state DB. That

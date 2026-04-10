@@ -697,11 +697,11 @@ func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
 
 	setupWatchEngine(t, eng)
 
-	// Install a rolling delete counter with threshold=10 on the engine.
-	// The planner-level check is disabled (forceSafetyMax) — the counter
-	// handles protection in watch mode.
+	// Install a rolling delete counter with threshold=10 on the engine. The
+	// planner-level check is disabled so the engine can record durable
+	// held-delete intent and keep non-delete work flowing.
 	testWatchRuntime(t, eng).deleteCounter = syncdispatch.NewDeleteCounter(10, 5*time.Minute, time.Now)
-	safety := &synctypes.SafetyConfig{BigDeleteThreshold: forceSafetyMax}
+	safety := &synctypes.SafetyConfig{BigDeleteThreshold: plannerSafetyMax}
 
 	outbox := processBatchForTest(t, eng, ctx, batch, bl, safety)
 
@@ -712,10 +712,10 @@ func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
 	// Verify counter is now held.
 	assert.True(t, testWatchRuntime(t, eng).deleteCounter.IsHeld(), "counter should be held")
 
-	// Verify held deletes were recorded as actionable issues.
-	rows, listErr := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueBigDeleteHeld)
-	require.NoError(t, listErr, "ListSyncFailuresByIssueType")
-	assert.Len(t, rows, 20, "should have 20 big_delete_held entries")
+	// Verify held deletes were recorded in the durable held-delete workflow.
+	rows, listErr := eng.baseline.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateHeld)
+	require.NoError(t, listErr, "ListHeldDeletesByState")
+	assert.Len(t, rows, 20, "should have 20 held-delete entries")
 }
 
 // Validates: R-6.2.5, R-6.4.2
@@ -795,7 +795,7 @@ func TestRunWatch_ProcessBatch_BigDelete_NonDeletesFlow(t *testing.T) {
 
 	// Install counter with threshold=10. 15 deletes > 10 → trips.
 	testWatchRuntime(t, eng).deleteCounter = syncdispatch.NewDeleteCounter(10, 5*time.Minute, time.Now)
-	safety := &synctypes.SafetyConfig{BigDeleteThreshold: forceSafetyMax}
+	safety := &synctypes.SafetyConfig{BigDeleteThreshold: plannerSafetyMax}
 
 	outbox := processBatchForTest(t, eng, ctx, batch, bl, safety)
 
@@ -807,9 +807,9 @@ func TestRunWatch_ProcessBatch_BigDelete_NonDeletesFlow(t *testing.T) {
 	assert.Equal(t, "newfile.txt", outbox[0].Action.Path)
 
 	// 15 held delete entries should exist.
-	rows, listErr := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueBigDeleteHeld)
-	require.NoError(t, listErr, "ListSyncFailuresByIssueType")
-	assert.Len(t, rows, 15, "should have 15 big_delete_held entries")
+	rows, listErr := eng.baseline.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateHeld)
+	require.NoError(t, listErr, "ListHeldDeletesByState")
+	assert.Len(t, rows, 15, "should have 15 held-delete entries")
 }
 
 // Validates: R-6.2.5, R-6.4.3
@@ -872,7 +872,7 @@ func TestRunWatch_ProcessBatch_BigDelete_BelowThreshold(t *testing.T) {
 	setupWatchEngine(t, eng)
 
 	testWatchRuntime(t, eng).deleteCounter = syncdispatch.NewDeleteCounter(10, 5*time.Minute, time.Now)
-	safety := &synctypes.SafetyConfig{BigDeleteThreshold: forceSafetyMax}
+	safety := &synctypes.SafetyConfig{BigDeleteThreshold: plannerSafetyMax}
 
 	outbox := processBatchForTest(t, eng, ctx, batch, bl, safety)
 
@@ -918,8 +918,8 @@ func TestEngine_ExternalDBChanged(t *testing.T) {
 
 // Validates: R-6.2.5, R-6.4.2
 // TestEngine_HandleExternalChanges_BigDeleteClearance verifies that
-// handleExternalChanges releases the delete counter when all
-// big_delete_held entries have been cleared.
+// handleExternalChanges releases the delete counter when all held-delete rows
+// have moved out of held state.
 func TestEngine_HandleExternalChanges_BigDeleteClearance(t *testing.T) {
 	t.Parallel()
 
@@ -942,19 +942,19 @@ func TestEngine_HandleExternalChanges_BigDeleteClearance(t *testing.T) {
 	testWatchRuntime(t, eng).deleteCounter.Add(15) // trips the counter
 	require.True(t, testWatchRuntime(t, eng).deleteCounter.IsHeld())
 
-	// Record some big_delete_held issues.
-	failures := []synctypes.ActionableFailure{
-		{Path: "file1.txt", DriveID: driveID, Direction: synctypes.DirectionDelete, IssueType: synctypes.IssueBigDeleteHeld, Error: "held"},
-		{Path: "file2.txt", DriveID: driveID, Direction: synctypes.DirectionDelete, IssueType: synctypes.IssueBigDeleteHeld, Error: "held"},
+	// Record held-delete rows.
+	heldDeletes := []synctypes.HeldDeleteRecord{
+		{Path: "file1.txt", DriveID: driveID, ItemID: "item-1", ActionType: synctypes.ActionRemoteDelete, State: synctypes.HeldDeleteStateHeld},
+		{Path: "file2.txt", DriveID: driveID, ItemID: "item-2", ActionType: synctypes.ActionRemoteDelete, State: synctypes.HeldDeleteStateHeld},
 	}
-	require.NoError(t, eng.baseline.UpsertActionableFailures(ctx, failures))
+	require.NoError(t, eng.baseline.UpsertHeldDeletes(ctx, heldDeletes))
 
 	// handleExternalChanges should NOT release — rows still present.
 	handleExternalChangesForTest(t, eng, ctx)
 	assert.True(t, testWatchRuntime(t, eng).deleteCounter.IsHeld(), "should still be held with entries present")
 
-	// Clear all big_delete_held entries (simulates `issues force-deletes`).
-	require.NoError(t, eng.baseline.ClearResolvedActionableFailures(ctx, synctypes.IssueBigDeleteHeld, nil))
+	// Approve all held-delete entries (simulates `issues force-deletes`).
+	require.NoError(t, eng.baseline.ApproveHeldDeletes(ctx))
 
 	// Now handleExternalChanges should release.
 	handleExternalChangesForTest(t, eng, ctx)
@@ -963,7 +963,7 @@ func TestEngine_HandleExternalChanges_BigDeleteClearance(t *testing.T) {
 
 // Validates: R-6.2.5, R-6.4.2
 // TestEngine_HandleExternalChanges_PartialClear verifies that the counter
-// stays held when only some big_delete_held entries are cleared.
+// stays held when only some held-delete entries leave held state.
 func TestEngine_HandleExternalChanges_PartialClear(t *testing.T) {
 	t.Parallel()
 
@@ -985,15 +985,15 @@ func TestEngine_HandleExternalChanges_PartialClear(t *testing.T) {
 	testWatchRuntime(t, eng).deleteCounter.Add(15)
 	require.True(t, testWatchRuntime(t, eng).deleteCounter.IsHeld())
 
-	// Record two big_delete_held entries.
-	failures := []synctypes.ActionableFailure{
-		{Path: "file1.txt", DriveID: driveID, Direction: synctypes.DirectionDelete, IssueType: synctypes.IssueBigDeleteHeld, Error: "held"},
-		{Path: "file2.txt", DriveID: driveID, Direction: synctypes.DirectionDelete, IssueType: synctypes.IssueBigDeleteHeld, Error: "held"},
+	// Record two held-delete entries.
+	heldDeletes := []synctypes.HeldDeleteRecord{
+		{Path: "file1.txt", DriveID: driveID, ItemID: "item-1", ActionType: synctypes.ActionRemoteDelete, State: synctypes.HeldDeleteStateHeld},
+		{Path: "file2.txt", DriveID: driveID, ItemID: "item-2", ActionType: synctypes.ActionRemoteDelete, State: synctypes.HeldDeleteStateHeld},
 	}
-	require.NoError(t, eng.baseline.UpsertActionableFailures(ctx, failures))
+	require.NoError(t, eng.baseline.UpsertHeldDeletes(ctx, heldDeletes))
 
-	// Clear only file1.txt — one entry remains (file2.txt is the "current" path).
-	require.NoError(t, eng.baseline.ClearResolvedActionableFailures(ctx, synctypes.IssueBigDeleteHeld, []string{"file2.txt"}))
+	// Move only file1.txt out of held state — one entry remains held.
+	require.NoError(t, eng.baseline.DeleteHeldDelete(ctx, driveID, synctypes.ActionRemoteDelete, "file1.txt"))
 
 	handleExternalChangesForTest(t, eng, ctx)
 	assert.True(t, testWatchRuntime(t, eng).deleteCounter.IsHeld(), "should remain held with one entry still present")
@@ -1669,13 +1669,16 @@ func TestResolveConflict_KeepLocal_TransferFails(t *testing.T) {
 	require.NoError(t, err, "ListConflicts")
 	require.Len(t, conflicts, 1)
 
-	resolveErr := eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepLocal)
-	require.Error(t, resolveErr, "expected error from failed upload")
+	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepLocal))
 
-	// Conflict should remain unresolved.
+	// Conflict should remain visible with a durable failure state. Resolution
+	// execution is engine-owned and failure is persisted for retry/review,
+	// rather than returned as an ad hoc CLI-side operation error.
 	remaining, err := eng.ListConflicts(ctx)
 	require.NoError(t, err, "ListConflicts after failed resolve")
-	assert.Len(t, remaining, 1, "expected 1 unresolved conflict")
+	require.Len(t, remaining, 1, "expected 1 unresolved conflict")
+	assert.Equal(t, synctypes.ConflictStateResolveFailed, remaining[0].State)
+	assert.Contains(t, remaining[0].ResolutionError, "upload failed")
 }
 
 // ---------------------------------------------------------------------------

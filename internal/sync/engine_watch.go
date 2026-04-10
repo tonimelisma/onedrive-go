@@ -58,21 +58,10 @@ const minReconcileInterval = 15 * time.Minute
 // for in-flight actions to complete.
 const quiescenceLogInterval = 30 * time.Second
 
-// initDeleteProtection sets up the rolling delete counter and clears stale
-// big_delete_held entries from a prior daemon session. Force mode disables
-// the counter (deleteCounter stays nil). Also seeds lastDataVersion so
-// the first recheck tick doesn't fire spuriously.
-func (rt *watchRuntime) initDeleteProtection(ctx context.Context, force bool) {
-	if !force {
-		rt.deleteCounter = syncdispatch.NewDeleteCounter(rt.engine.bigDeleteThreshold, deleteCounterWindow, rt.engine.nowFunc)
-	}
-
-	if err := rt.engine.baseline.ClearResolvedActionableFailures(ctx, synctypes.IssueBigDeleteHeld, nil); err != nil {
-		rt.engine.logger.Warn("failed to clear stale big-delete-held entries",
-			slog.String("error", err.Error()),
-		)
-	}
-
+// initDeleteProtection sets up the rolling delete counter. Held and approved
+// big-delete rows are durable user intent, so startup must not clear them.
+func (rt *watchRuntime) initDeleteProtection(ctx context.Context) {
+	rt.deleteCounter = syncdispatch.NewDeleteCounter(rt.engine.bigDeleteThreshold, deleteCounterWindow, rt.engine.nowFunc)
 	if dv, dvErr := rt.engine.baseline.DataVersion(ctx); dvErr == nil {
 		rt.lastDataVersion = dv
 	}
@@ -81,10 +70,10 @@ func (rt *watchRuntime) initDeleteProtection(ctx context.Context, force bool) {
 // loadWatchState loads the baseline and shortcuts for the watch session.
 // Both are loaded once after the initial sync. synctypes.Baseline is live-mutated
 // under RWMutex; shortcuts are updated via setShortcuts when they change.
-func (rt *watchRuntime) loadWatchState(ctx context.Context) (*synctypes.Baseline, error) {
-	bl, err := rt.engine.baseline.Load(ctx)
+func (rt *watchRuntime) loadWatchState(ctx context.Context) error {
+	_, err := rt.engine.baseline.Load(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("sync: loading baseline for watch: %w", err)
+		return fmt.Errorf("sync: loading baseline for watch: %w", err)
 	}
 
 	shortcuts, scErr := rt.shortcutCoordinator().loadShortcutSnapshot(ctx)
@@ -96,7 +85,7 @@ func (rt *watchRuntime) loadWatchState(ctx context.Context) (*synctypes.Baseline
 
 	rt.setShortcuts(shortcuts)
 
-	return bl, nil
+	return nil
 }
 
 // RunWatch runs a continuous sync loop: bootstrap sync through the watch
@@ -110,7 +99,6 @@ func (rt *watchRuntime) loadWatchState(ctx context.Context) (*synctypes.Baseline
 func (e *Engine) RunWatch(ctx context.Context, mode synctypes.SyncMode, opts synctypes.WatchOpts) error {
 	e.logger.Info("watch mode starting",
 		slog.String("mode", mode.String()),
-		slog.Bool("force", opts.Force),
 		slog.Duration("poll_interval", e.resolvePollInterval(opts)),
 		slog.Duration("debounce", e.resolveDebounce(opts)),
 	)
@@ -202,6 +190,7 @@ type watchPipeline struct {
 	reconcileC       <-chan time.Time
 	reconcileResults <-chan reconcileResult
 	recheckC         <-chan time.Time
+	userIntentC      <-chan struct{}
 	activeObs        int
 	mode             synctypes.SyncMode
 	pool             *syncexec.WorkerPool // for bootstrapSync to access Results()
@@ -235,7 +224,7 @@ func (rt *watchRuntime) initWatchInfra(
 	// changes — see executor_transfer.go).
 	rt.engine.execCfg.SetWatchMode(true)
 
-	rt.initDeleteProtection(ctx, opts.Force)
+	rt.initDeleteProtection(ctx)
 
 	// Normalize persisted scope rows before loading runtime scope state.
 	// Startup must not trust stale scope rows blindly; the durable store is
@@ -283,12 +272,13 @@ func (rt *watchRuntime) initWatchInfra(
 
 	pipe := &watchPipeline{
 		runtime:          rt,
-		safety:           rt.engine.resolveSafetyConfig(opts.Force, true),
+		safety:           rt.engine.resolveSafetyConfig(),
 		batchReady:       batchReady,
 		results:          pool.Results(),
 		reconcileC:       tickerChan(reconcileTicker),
 		reconcileResults: rt.reconcileResults,
 		recheckC:         tickerChan(recheckTicker),
+		userIntentC:      opts.UserIntentWake,
 		mode:             mode,
 		pool:             pool,
 	}
@@ -346,9 +336,15 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode synctypes.SyncMo
 	}
 
 	// Load baseline + shortcuts.
-	bl, err := rt.loadWatchState(ctx)
-	if err != nil {
+	if err := rt.loadWatchState(ctx); err != nil {
 		return err
+	}
+	if processErr := rt.engine.processQueuedConflictResolutions(ctx); processErr != nil {
+		return processErr
+	}
+	bl, err := rt.engine.baseline.Load(ctx)
+	if err != nil {
+		return fmt.Errorf("sync: reloading baseline after queued user intent: %w", err)
 	}
 	pipe.bl = bl
 
@@ -364,6 +360,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode synctypes.SyncMo
 	if err != nil {
 		return fmt.Errorf("sync: bootstrap observation failed: %w", err)
 	}
+	changes = mergePathChangeBatches(changes, rt.collectApprovedDeleteChanges(ctx))
 
 	if len(changes) == 0 {
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventBootstrapQuiesced})

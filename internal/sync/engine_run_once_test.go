@@ -384,14 +384,15 @@ func TestRunOnce_DryRun_SharedConfiguredRootDoesNotSaveScopedDeltaToken(t *testi
 	assert.Empty(t, token)
 }
 
-func TestRunOnce_BigDelete_WithoutForce(t *testing.T) {
+func TestRunOnce_BigDelete_HoldsDeletesDurably(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
 
 	// Upload-only mode with no local files → local observer sees all baseline
 	// entries as deleted → EF6 → synctypes.ActionRemoteDelete. With threshold=10,
-	// 20 remote deletes > 10 → synctypes.ErrBigDeleteTriggered.
+	// 20 remote deletes > 10, so the engine records durable held-delete
+	// intent and executes no destructive deletes until the user approves.
 	mock := &engineMockClient{}
 	eng, _ := newTestEngine(t, mock)
 	eng.bigDeleteThreshold = 10 // low threshold for test
@@ -417,17 +418,29 @@ func TestRunOnce_BigDelete_WithoutForce(t *testing.T) {
 
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "old-token")
 
-	_, err := eng.RunOnce(ctx, synctypes.SyncUploadOnly, synctypes.RunOpts{})
-	assert.ErrorIs(t, err, synctypes.ErrBigDeleteTriggered)
+	report, err := eng.RunOnce(ctx, synctypes.SyncUploadOnly, synctypes.RunOpts{})
+	require.NoError(t, err)
+	require.NotNil(t, report)
+	assert.Equal(t, 0, report.RemoteDeletes, "held deletes must not execute before approval")
+
+	held, err := eng.baseline.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateHeld)
+	require.NoError(t, err)
+	require.Len(t, held, 20)
+	for i := range held {
+		assert.Equal(t, synctypes.ActionRemoteDelete, held[i].ActionType)
+		assert.Equal(t, synctypes.HeldDeleteStateHeld, held[i].State)
+		assert.NotEmpty(t, held[i].LastError)
+	}
 }
 
-func TestRunOnce_BigDelete_WithForce(t *testing.T) {
+func TestRunOnce_BigDelete_ApprovedDeletesBypassHold(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
 
-	// Same scenario as WithoutForce: upload-only, no local files, 20 baseline
-	// entries → 20 RemoteDeletes. Force bypasses the safety threshold.
+	// Same scenario as the held-delete test, but the user has already approved
+	// the durable held-delete rows. The next normal sync pass should execute
+	// those deletes without requiring any CLI force flag.
 	mock := &engineMockClient{}
 	eng, _ := newTestEngine(t, mock)
 	eng.bigDeleteThreshold = 10 // low threshold for test
@@ -453,9 +466,26 @@ func TestRunOnce_BigDelete_WithForce(t *testing.T) {
 
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "old-token")
 
-	report, err := eng.RunOnce(ctx, synctypes.SyncUploadOnly, synctypes.RunOpts{Force: true})
-	require.NoError(t, err, "RunOnce with force")
-	assert.GreaterOrEqual(t, report.RemoteDeletes, 1, "force should bypass big-delete")
+	held := make([]synctypes.HeldDeleteRecord, 0, len(seedOutcomes))
+	for i := range seedOutcomes {
+		held = append(held, synctypes.HeldDeleteRecord{
+			DriveID:    seedOutcomes[i].DriveID,
+			ItemID:     seedOutcomes[i].ItemID,
+			Path:       seedOutcomes[i].Path,
+			ActionType: synctypes.ActionRemoteDelete,
+			State:      synctypes.HeldDeleteStateHeld,
+		})
+	}
+	require.NoError(t, eng.baseline.UpsertHeldDeletes(ctx, held))
+	require.NoError(t, eng.baseline.ApproveHeldDeletes(ctx))
+
+	report, err := eng.RunOnce(ctx, synctypes.SyncUploadOnly, synctypes.RunOpts{})
+	require.NoError(t, err, "RunOnce with approved held deletes")
+	assert.GreaterOrEqual(t, report.RemoteDeletes, 1, "approved deletes should bypass big-delete hold")
+
+	remaining, err := eng.baseline.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateApproved)
+	require.NoError(t, err)
+	assert.Empty(t, remaining, "successful approved deletes should consume their approval rows")
 }
 
 type sharedFolderRecoveryRunOnceFixture struct {
@@ -971,7 +1001,7 @@ func TestRunOnce_CrashRecovery_ResetsInProgressStates(t *testing.T) {
 
 	// prepareRunOnceState should reset these before one-shot planning begins.
 	runner := newOneShotRunner(eng.Engine)
-	_, runErr := runner.prepareRunOnceState(ctx)
+	runErr := runner.prepareRunOnceState(ctx)
 	require.NoError(t, runErr, "prepareRunOnceState")
 
 	// Verify the states were reset.
@@ -1021,7 +1051,7 @@ func TestRunOnce_CrashRecovery_MixedDeletingCandidates(t *testing.T) {
 	require.NoError(t, err, "seed crash-recovery rows")
 
 	runner := newOneShotRunner(eng.Engine)
-	_, runErr := runner.prepareRunOnceState(ctx)
+	runErr := runner.prepareRunOnceState(ctx)
 	require.NoError(t, runErr, "prepareRunOnceState")
 
 	var goneStatus synctypes.SyncStatus
@@ -1236,37 +1266,18 @@ func TestResolveSafetyConfig_Default(t *testing.T) {
 	t.Parallel()
 
 	eng := &Engine{bigDeleteThreshold: synctypes.DefaultBigDeleteThreshold}
-	cfg := eng.resolveSafetyConfig(false, false)
+	cfg := eng.resolveSafetyConfig()
 
-	assert.Equal(t, synctypes.DefaultBigDeleteThreshold, cfg.BigDeleteThreshold)
-}
-
-func TestResolveSafetyConfig_Force(t *testing.T) {
-	t.Parallel()
-
-	eng := &Engine{bigDeleteThreshold: synctypes.DefaultBigDeleteThreshold}
-	cfg := eng.resolveSafetyConfig(true, false)
-
-	assert.Equal(t, forceSafetyMax, cfg.BigDeleteThreshold)
+	assert.Equal(t, plannerSafetyMax, cfg.BigDeleteThreshold)
 }
 
 func TestResolveSafetyConfig_UsesConfiguredThreshold(t *testing.T) {
 	t.Parallel()
 
-	// Verify the config bug is fixed: engine uses the configured threshold,
-	// not a hardcoded default.
+	// Planner-level protection is disabled because the engine now owns the
+	// durable held-delete workflow after planning.
 	eng := &Engine{bigDeleteThreshold: 500}
-	cfg := eng.resolveSafetyConfig(false, false)
+	cfg := eng.resolveSafetyConfig()
 
-	assert.Equal(t, 500, cfg.BigDeleteThreshold)
-}
-
-func TestResolveSafetyConfig_WatchMode_DisablesThreshold(t *testing.T) {
-	t.Parallel()
-
-	eng := &Engine{bigDeleteThreshold: 500}
-	cfg := eng.resolveSafetyConfig(false, true)
-
-	assert.Equal(t, forceSafetyMax, cfg.BigDeleteThreshold,
-		"watch mode should disable planner-level big-delete threshold")
+	assert.Equal(t, plannerSafetyMax, cfg.BigDeleteThreshold)
 }
