@@ -163,7 +163,6 @@ const (
 	ConflictStateResolving           = "resolving"
 	ConflictStateResolveFailed       = "resolve_failed"
 	ConflictStateResolved            = "resolved"
-	ConflictStateManual              = "manual"
 )
 
 // Held-delete workflow state constants.

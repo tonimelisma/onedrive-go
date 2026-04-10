@@ -953,7 +953,7 @@ func TestEngine_HandleExternalChanges_BigDeleteClearance(t *testing.T) {
 	handleExternalChangesForTest(t, eng, ctx)
 	assert.True(t, testWatchRuntime(t, eng).deleteCounter.IsHeld(), "should still be held with entries present")
 
-	// Approve all held-delete entries (simulates `issues force-deletes`).
+	// Approve all held-delete entries (simulates `issues approve-deletes`).
 	require.NoError(t, eng.baseline.ApproveHeldDeletes(ctx))
 
 	// Now handleExternalChanges should release.
@@ -993,7 +993,7 @@ func TestEngine_HandleExternalChanges_PartialClear(t *testing.T) {
 	require.NoError(t, eng.baseline.UpsertHeldDeletes(ctx, heldDeletes))
 
 	// Move only file1.txt out of held state — one entry remains held.
-	require.NoError(t, eng.baseline.DeleteHeldDelete(ctx, driveID, synctypes.ActionRemoteDelete, "file1.txt"))
+	require.NoError(t, eng.baseline.DeleteHeldDelete(ctx, driveID, synctypes.ActionRemoteDelete, "file1.txt", "item-1"))
 
 	handleExternalChangesForTest(t, eng, ctx)
 	assert.True(t, testWatchRuntime(t, eng).deleteCounter.IsHeld(), "should remain held with one entry still present")

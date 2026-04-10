@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -143,7 +144,7 @@ func resolveEachConflict(
 			return fmt.Errorf("resolving %s: %w", c.Path, err)
 		}
 
-		cc.Statusf("Queued %s as %s (%s)\n", c.Path, resolution, status)
+		writeConflictResolutionStatus(cc, c.Path, resolution, status)
 	}
 
 	return nil
@@ -196,9 +197,26 @@ func resolveSingleConflict(
 		return err
 	}
 
-	cc.Statusf("Queued %s as %s (%s)\n", target.Path, resolution, status)
+	writeConflictResolutionStatus(cc, target.Path, resolution, status)
 
 	return nil
+}
+
+func writeConflictResolutionStatus(cc *CLIContext, conflictPath, resolution, status string) {
+	switch syncstore.ConflictRequestStatus(status) {
+	case syncstore.ConflictRequestQueued:
+		cc.Statusf("Queued %s as %s (engine will resolve on the next sync pass)\n", conflictPath, resolution)
+	case syncstore.ConflictRequestAlreadyQueued:
+		cc.Statusf("Resolution already queued for %s as %s\n", conflictPath, resolution)
+	case syncstore.ConflictRequestAlreadyResolving:
+		cc.Statusf("Resolution already in progress for %s\n", conflictPath)
+	case syncstore.ConflictRequestAlreadyResolved:
+		cc.Statusf("Conflict %s is already resolved\n", conflictPath)
+	case syncstore.ConflictRequestDifferentStrategy:
+		cc.Statusf("Resolution already queued for %s with a different strategy\n", conflictPath)
+	default:
+		cc.Statusf("Resolution request for %s returned status %s\n", conflictPath, status)
+	}
 }
 
 func errAmbiguousPrefix(prefix string) error {

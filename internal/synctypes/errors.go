@@ -46,10 +46,9 @@ var ErrFileChangedDuringHash = errors.New("sync: file changed during hashing")
 // Planner errors
 // ---------------------------------------------------------------------------
 
-// ErrBigDeleteTriggered indicates that the planned number of deletions
-// exceeds safety thresholds. The sync pass should halt and require
-// user confirmation before proceeding.
-var ErrBigDeleteTriggered = errors.New("sync: big-delete protection triggered")
+// ErrDeleteSafetyThresholdExceeded indicates that planned deletes exceeded the
+// configured safety threshold and must be held for durable user approval.
+var ErrDeleteSafetyThresholdExceeded = errors.New("sync: delete safety threshold exceeded")
 
 // ErrDependencyCycle indicates that the action plan contains a dependency
 // cycle, making topological ordering impossible. This is a planner bug —

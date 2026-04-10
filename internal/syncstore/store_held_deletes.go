@@ -36,13 +36,15 @@ func (m *SyncStore) UpsertHeldDeletes(ctx context.Context, deletes []synctypes.H
 		if record.State == "" {
 			record.State = synctypes.HeldDeleteStateHeld
 		}
+		if record.ItemID == "" {
+			return fmt.Errorf("sync: held delete %s is missing item ID", record.Path)
+		}
 
 		_, err := tx.ExecContext(ctx,
 			`INSERT INTO held_deletes
 			(drive_id, action_type, path, item_id, state, held_at, approved_at, last_planned_at, last_error)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(drive_id, action_type, path) DO UPDATE SET
-				item_id = excluded.item_id,
+			ON CONFLICT(drive_id, action_type, path, item_id) DO UPDATE SET
 				state = CASE
 					WHEN held_deletes.state = 'approved' THEN held_deletes.state
 					ELSE excluded.state
@@ -119,13 +121,15 @@ func (m *SyncStore) ConsumeHeldDelete(
 	driveID driveid.ID,
 	actionType synctypes.ActionType,
 	path string,
+	itemID string,
 ) error {
 	_, err := m.db.ExecContext(ctx,
 		`DELETE FROM held_deletes
-		WHERE drive_id = ? AND action_type = ? AND path = ? AND state = ?`,
+		WHERE drive_id = ? AND action_type = ? AND path = ? AND item_id = ? AND state = ?`,
 		driveID.String(),
 		actionType,
 		path,
+		itemID,
 		synctypes.HeldDeleteStateApproved,
 	)
 	if err != nil {
@@ -140,13 +144,15 @@ func (m *SyncStore) DeleteHeldDelete(
 	driveID driveid.ID,
 	actionType synctypes.ActionType,
 	path string,
+	itemID string,
 ) error {
 	_, err := m.db.ExecContext(ctx,
 		`DELETE FROM held_deletes
-		WHERE drive_id = ? AND action_type = ? AND path = ?`,
+		WHERE drive_id = ? AND action_type = ? AND path = ? AND item_id = ?`,
 		driveID.String(),
 		actionType,
 		path,
+		itemID,
 	)
 	if err != nil {
 		return fmt.Errorf("sync: deleting held delete %s: %w", path, err)

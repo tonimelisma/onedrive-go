@@ -12,11 +12,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -27,15 +29,6 @@ const (
 	controlDialTimeout    = 200 * time.Millisecond
 	controlCloseTimeout   = time.Second
 	controlHeaderTimeout  = 5 * time.Second
-	controlStatusError    = "error"
-	controlStatusPath     = "/v1/status"
-)
-
-type controlOwnerMode string
-
-const (
-	controlOwnerOneShot controlOwnerMode = "oneshot"
-	controlOwnerWatch   controlOwnerMode = "watch"
 )
 
 type controlCommandKind int
@@ -58,22 +51,9 @@ type controlCommand struct {
 
 type controlResponse struct {
 	StatusCode int
+	Code       synccontrol.ErrorCode
 	Body       any
 	Err        error
-}
-
-type controlStatusResponse struct {
-	OwnerMode string   `json:"owner_mode"`
-	Drives    []string `json:"drives"`
-}
-
-type controlMutationResponse struct {
-	Status  string `json:"status"`
-	Message string `json:"message,omitempty"`
-}
-
-type controlConflictRequestBody struct {
-	Resolution string `json:"resolution"`
 }
 
 type ControlSocketInUseError struct {
@@ -82,6 +62,28 @@ type ControlSocketInUseError struct {
 
 func (e *ControlSocketInUseError) Error() string {
 	return fmt.Sprintf("another sync process is already running (control socket %s is live)", e.Path)
+}
+
+type controlRequestError struct {
+	status int
+	code   synccontrol.ErrorCode
+	err    error
+}
+
+func (e *controlRequestError) Error() string {
+	return e.err.Error()
+}
+
+func (e *controlRequestError) Unwrap() error {
+	return e.err
+}
+
+func newControlRequestError(status int, code synccontrol.ErrorCode, err error) error {
+	return &controlRequestError{
+		status: status,
+		code:   code,
+		err:    err,
+	}
 }
 
 type controlSocketServer struct {
@@ -206,12 +208,35 @@ func (s *controlSocketServer) Close(ctx context.Context) error {
 		}
 	}
 
+	if dirErr := removeEmptyRuntimeSocketDir(s.path); dirErr != nil && s.logger != nil {
+		s.logger.Debug("remove empty control socket runtime directory",
+			slog.String("path", filepath.Dir(s.path)),
+			slog.String("error", dirErr.Error()),
+		)
+	}
+
 	return err
+}
+
+func removeEmptyRuntimeSocketDir(socketPath string) error {
+	dir := filepath.Dir(socketPath)
+	if filepath.Dir(dir) != filepath.Clean(os.TempDir()) || !strings.HasPrefix(filepath.Base(dir), "odgo-") {
+		return nil
+	}
+
+	if err := localpath.Remove(dir); err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST) {
+			return nil
+		}
+		return fmt.Errorf("remove control socket runtime directory: %w", err)
+	}
+
+	return nil
 }
 
 func (o *Orchestrator) startControlServer(
 	ctx context.Context,
-	mode controlOwnerMode,
+	mode synccontrol.OwnerMode,
 	commands chan<- controlCommand,
 ) (*controlSocketServer, error) {
 	if o.cfg.ControlSocketPath == "" {
@@ -228,17 +253,21 @@ func (o *Orchestrator) startControlServer(
 func (o *Orchestrator) handleControlRequest(
 	w http.ResponseWriter,
 	r *http.Request,
-	mode controlOwnerMode,
+	mode synccontrol.OwnerMode,
 	commands chan<- controlCommand,
 ) {
-	if mode == controlOwnerOneShot {
+	if mode == synccontrol.OwnerModeOneShot {
 		o.handleOneShotControlRequest(w, r)
 		return
 	}
 
 	cmd, ok := parseControlCommand(r)
 	if !ok {
-		http.NotFound(w, r)
+		writeJSON(w, http.StatusNotFound, synccontrol.MutationResponse{
+			Status:  synccontrol.StatusError,
+			Code:    synccontrol.ErrorInvalidRequest,
+			Message: "unknown control endpoint or malformed control request",
+		})
 		return
 	}
 
@@ -258,16 +287,14 @@ func (o *Orchestrator) handleControlRequest(
 }
 
 func (o *Orchestrator) handleOneShotControlRequest(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodGet && r.URL.Path == controlStatusPath {
-		writeJSON(w, http.StatusOK, controlStatusResponse{
-			OwnerMode: string(controlOwnerOneShot),
-			Drives:    resolvedDriveIDs(o.cfg.Drives),
-		})
+	if r.Method == http.MethodGet && r.URL.Path == synccontrol.PathStatus {
+		writeJSON(w, http.StatusOK, o.controlStatus(r.Context(), synccontrol.OwnerModeOneShot))
 		return
 	}
 
-	writeJSON(w, http.StatusConflict, controlMutationResponse{
-		Status:  "busy",
+	writeJSON(w, http.StatusConflict, synccontrol.MutationResponse{
+		Status:  synccontrol.StatusError,
+		Code:    synccontrol.ErrorForegroundSyncRunning,
 		Message: "a foreground sync is currently running",
 	})
 }
@@ -282,11 +309,11 @@ func parseControlCommand(r *http.Request) (controlCommand, bool) {
 
 func parseRootControlCommand(r *http.Request) (controlCommand, bool) {
 	switch {
-	case r.Method == http.MethodGet && r.URL.Path == controlStatusPath:
+	case r.Method == http.MethodGet && r.URL.Path == synccontrol.PathStatus:
 		return controlCommand{kind: controlCommandStatus}, true
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/reload":
+	case r.Method == http.MethodPost && r.URL.Path == synccontrol.PathReload:
 		return controlCommand{kind: controlCommandReload}, true
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/stop":
+	case r.Method == http.MethodPost && r.URL.Path == synccontrol.PathStop:
 		return controlCommand{kind: controlCommandStop}, true
 	default:
 		return controlCommand{}, false
@@ -328,7 +355,7 @@ func parseConflictResolutionCommand(
 	if err != nil {
 		return controlCommand{}, false
 	}
-	var body controlConflictRequestBody
+	var body synccontrol.ConflictResolutionRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		return controlCommand{}, false
 	}
@@ -347,8 +374,13 @@ func writeControlResponse(w http.ResponseWriter, response controlResponse) {
 		if status == 0 {
 			status = http.StatusInternalServerError
 		}
-		writeJSON(w, status, controlMutationResponse{
-			Status:  controlStatusError,
+		code := response.Code
+		if code == "" {
+			code = synccontrol.ErrorInternal
+		}
+		writeJSON(w, status, synccontrol.MutationResponse{
+			Status:  synccontrol.StatusError,
+			Code:    code,
 			Message: response.Err.Error(),
 		})
 		return
@@ -380,6 +412,116 @@ func resolvedDriveIDs(drives []*config.ResolvedDrive) []string {
 	return ids
 }
 
+func (o *Orchestrator) controlStatus(ctx context.Context, mode synccontrol.OwnerMode) synccontrol.StatusResponse {
+	status := synccontrol.StatusResponse{
+		OwnerMode: mode,
+		Drives:    resolvedDriveIDs(o.cfg.Drives),
+	}
+	if mode != synccontrol.OwnerModeWatch {
+		return status
+	}
+
+	counts, err := o.countDurableIntents(ctx)
+	if err != nil {
+		o.logger.Warn("control status intent counts unavailable",
+			slog.String("error", err.Error()),
+		)
+		return status
+	}
+
+	status.PendingHeldDeleteApprovals = counts.PendingHeldDeleteApprovals
+	status.PendingConflictRequests = counts.PendingConflictRequests
+	status.ResolvingConflictRequests = counts.ResolvingConflictRequests
+	status.FailedConflictRequests = counts.FailedConflictRequests
+
+	return status
+}
+
+func (o *Orchestrator) countDurableIntents(ctx context.Context) (syncstore.DurableIntentCounts, error) {
+	var total syncstore.DurableIntentCounts
+	for _, rd := range o.cfg.Drives {
+		dbPath := rd.StatePath()
+		if dbPath == "" {
+			continue
+		}
+		if _, err := localpath.Stat(dbPath); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return syncstore.DurableIntentCounts{}, fmt.Errorf("stat sync store for %s: %w", rd.CanonicalID.String(), err)
+		}
+
+		store, err := syncstore.NewSyncStore(ctx, dbPath, o.logger)
+		if err != nil {
+			return syncstore.DurableIntentCounts{}, fmt.Errorf("open sync store for %s: %w", rd.CanonicalID.String(), err)
+		}
+		counts, countErr := store.CountDurableIntents(ctx)
+		closeErr := store.Close(ctx)
+		if countErr != nil {
+			return syncstore.DurableIntentCounts{}, fmt.Errorf("count durable intents for %s: %w", rd.CanonicalID.String(), countErr)
+		}
+		if closeErr != nil {
+			return syncstore.DurableIntentCounts{}, fmt.Errorf("close sync store for %s: %w", rd.CanonicalID.String(), closeErr)
+		}
+
+		total.PendingHeldDeleteApprovals += counts.PendingHeldDeleteApprovals
+		total.PendingConflictRequests += counts.PendingConflictRequests
+		total.ResolvingConflictRequests += counts.ResolvingConflictRequests
+		total.FailedConflictRequests += counts.FailedConflictRequests
+	}
+
+	return total, nil
+}
+
+func responseForMutation(status synccontrol.Status, err error) controlResponse {
+	if err != nil {
+		return errorControlResponse(err)
+	}
+
+	return controlResponse{Body: synccontrol.MutationResponse{Status: status}}
+}
+
+func responseForConflictRequest(result *syncstore.ConflictRequestResult, err error) controlResponse {
+	if err != nil {
+		return errorControlResponse(err)
+	}
+	switch result.Status {
+	case syncstore.ConflictRequestQueued, syncstore.ConflictRequestAlreadyQueued, syncstore.ConflictRequestAlreadyResolved:
+		return controlResponse{Body: synccontrol.MutationResponse{Status: synccontrol.Status(result.Status)}}
+	case syncstore.ConflictRequestDifferentStrategy:
+		return controlResponse{
+			StatusCode: http.StatusConflict,
+			Code:       synccontrol.ErrorConflictDifferentStrategy,
+			Err:        fmt.Errorf("conflict already has a different queued resolution"),
+		}
+	case syncstore.ConflictRequestAlreadyResolving:
+		return controlResponse{
+			StatusCode: http.StatusConflict,
+			Code:       synccontrol.ErrorConflictAlreadyResolving,
+			Err:        fmt.Errorf("conflict resolution is already in progress"),
+		}
+	default:
+		return controlResponse{Body: synccontrol.MutationResponse{Status: synccontrol.Status(result.Status)}}
+	}
+}
+
+func errorControlResponse(err error) controlResponse {
+	var reqErr *controlRequestError
+	if errors.As(err, &reqErr) {
+		return controlResponse{
+			StatusCode: reqErr.status,
+			Code:       reqErr.code,
+			Err:        reqErr.err,
+		}
+	}
+
+	return controlResponse{
+		StatusCode: http.StatusInternalServerError,
+		Code:       synccontrol.ErrorInternal,
+		Err:        err,
+	}
+}
+
 func (o *Orchestrator) handleControlCommand(
 	ctx context.Context,
 	cmd *controlCommand,
@@ -389,28 +531,25 @@ func (o *Orchestrator) handleControlCommand(
 ) bool {
 	switch cmd.kind {
 	case controlCommandStatus:
-		cmd.response <- controlResponse{Body: controlStatusResponse{
-			OwnerMode: string(controlOwnerWatch),
-			Drives:    resolvedDriveIDs(o.cfg.Drives),
-		}}
+		cmd.response <- controlResponse{Body: o.controlStatus(ctx, synccontrol.OwnerModeWatch)}
 	case controlCommandReload:
 		o.reload(ctx, mode, opts, runners)
-		cmd.response <- controlResponse{Body: controlMutationResponse{Status: "reloaded"}}
+		cmd.response <- controlResponse{Body: synccontrol.MutationResponse{Status: synccontrol.StatusReloaded}}
 	case controlCommandStop:
-		cmd.response <- controlResponse{Body: controlMutationResponse{Status: "stopping"}}
+		cmd.response <- controlResponse{Body: synccontrol.MutationResponse{Status: synccontrol.StatusStopping}}
 		return true
 	case controlCommandApproveHeldDeletes:
 		err := o.approveHeldDeletes(ctx, cmd.driveID)
 		if err == nil {
 			o.wakeRunner(runners, cmd.driveID)
 		}
-		cmd.response <- controlResponse{Err: err, Body: controlMutationResponse{Status: "approved"}}
+		cmd.response <- responseForMutation(synccontrol.StatusApproved, err)
 	case controlCommandRequestConflictResolution:
 		result, err := o.requestConflictResolution(ctx, cmd.driveID, cmd.conflictID, cmd.resolution)
 		if err == nil {
 			o.wakeRunner(runners, cmd.driveID)
 		}
-		cmd.response <- controlResponse{Err: err, Body: controlMutationResponse{Status: string(result.Status)}}
+		cmd.response <- responseForConflictRequest(&result, err)
 	}
 
 	return false
@@ -431,7 +570,11 @@ func (o *Orchestrator) approveHeldDeletes(ctx context.Context, cid driveid.Canon
 	}()
 
 	if err := store.ApproveHeldDeletes(ctx); err != nil {
-		return fmt.Errorf("approve held deletes for %s: %w", cid.String(), err)
+		return newControlRequestError(
+			http.StatusInternalServerError,
+			synccontrol.ErrorInternal,
+			fmt.Errorf("approve held deletes for %s: %w", cid.String(), err),
+		)
 	}
 
 	return nil
@@ -458,7 +601,9 @@ func (o *Orchestrator) requestConflictResolution(
 
 	result, err := store.RequestConflictResolution(ctx, conflictID, resolution)
 	if err != nil {
-		return syncstore.ConflictRequestResult{}, fmt.Errorf("request conflict resolution for %s: %w", cid.String(), err)
+		return syncstore.ConflictRequestResult{}, classifyConflictRequestError(
+			fmt.Errorf("request conflict resolution for %s: %w", cid.String(), err),
+		)
 	}
 
 	return result, nil
@@ -488,16 +633,40 @@ func (o *Orchestrator) openDriveStore(ctx context.Context, cid driveid.Canonical
 		}
 		dbPath := rd.StatePath()
 		if dbPath == "" {
-			return nil, fmt.Errorf("cannot determine state DB path for drive %q", cid.String())
+			return nil, newControlRequestError(
+				http.StatusInternalServerError,
+				synccontrol.ErrorStoreOpenFailed,
+				fmt.Errorf("cannot determine state DB path for drive %q", cid.String()),
+			)
 		}
 		store, err := syncstore.NewSyncStore(ctx, dbPath, o.logger)
 		if err != nil {
-			return nil, fmt.Errorf("open sync store for %s: %w", cid.String(), err)
+			return nil, newControlRequestError(
+				http.StatusInternalServerError,
+				synccontrol.ErrorStoreOpenFailed,
+				fmt.Errorf("open sync store for %s: %w", cid.String(), err),
+			)
 		}
 		return store, nil
 	}
 
-	return nil, fmt.Errorf("drive %q is not managed by this sync process", cid.String())
+	return nil, newControlRequestError(
+		http.StatusNotFound,
+		synccontrol.ErrorDriveNotManaged,
+		fmt.Errorf("drive %q is not managed by this sync process", cid.String()),
+	)
+}
+
+func classifyConflictRequestError(err error) error {
+	message := err.Error()
+	switch {
+	case strings.Contains(message, "unknown resolution strategy"):
+		return newControlRequestError(http.StatusBadRequest, synccontrol.ErrorInvalidResolution, err)
+	case strings.Contains(message, "conflict") && strings.Contains(message, "not found"):
+		return newControlRequestError(http.StatusNotFound, synccontrol.ErrorConflictNotFound, err)
+	default:
+		return newControlRequestError(http.StatusInternalServerError, synccontrol.ErrorInternal, err)
+	}
 }
 
 func (o *Orchestrator) wakeRunner(runners map[driveid.CanonicalID]*watchRunner, cid driveid.CanonicalID) {

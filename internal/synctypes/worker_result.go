@@ -12,6 +12,7 @@ import (
 // by the engine retry sweep.
 type WorkerResult struct {
 	Path       string
+	ItemID     string
 	DriveID    driveid.ID
 	ActionType ActionType
 	Success    bool

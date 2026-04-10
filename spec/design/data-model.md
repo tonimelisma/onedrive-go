@@ -11,6 +11,12 @@ Each configured drive gets its own SQLite database file. The canonical drive ide
 
 Engine: `modernc.org/sqlite` (pure Go, no CGO). WAL mode, `synchronous = FULL`, 5-second busy timeout.
 
+The store sets one current `PRAGMA user_version`. Unknown, non-current, or
+unversioned existing state DBs are rejected with rebuild/delete guidance. Most
+sync state is rebuildable from local filesystem plus OneDrive truth, but
+`conflicts` requests and `held_deletes` approvals are durable user intent and
+must not be silently migrated or erased by guesswork.
+
 ## Three-Table State Model
 
 The sync database uses remote state separation: three core tables decouple API observation from sync success.
@@ -125,7 +131,7 @@ Per-file conflict tracking. Three conflict types: `edit_edit`,
 `edit_delete`, `create_create`.
 
 The `resolution` column records the final user decision:
-`unresolved`, `keep_both`, `keep_local`, `keep_remote`, or `manual`.
+`unresolved`, `keep_both`, `keep_local`, or `keep_remote`.
 
 The `state` column records workflow ownership:
 
@@ -134,23 +140,30 @@ The `state` column records workflow ownership:
 - `resolving` — one engine claimed execution
 - `resolve_failed` — execution failed and `resolution_error` explains why
 - `resolved` — final resolution was committed
-- `manual` — user-owned/manual state outside automatic execution
 
 `requested_resolution`, `requested_at`, `resolving_at`, and
 `resolution_error` make conflict resolution crash-safe and concurrency-safe:
 multiple CLIs can request the same resolution idempotently, while only an
 engine can claim and execute the side effects.
 
+Concurrent request semantics are first-writer-wins until the engine claim
+completes: `unresolved` and `resolve_failed` accept a valid requested
+strategy, the same strategy while `resolution_requested` is idempotent, a
+different strategy while `resolution_requested` is rejected, `resolving`
+reports already in progress, and `resolved` reports already resolved.
+
 ### held_deletes
 
 Big-delete protection ledger. Held deletes are not sync failures; they are
 durable user-gated safety decisions.
 
-Keyed by `(drive_id, action_type, path)`. Fields:
+Keyed by `(drive_id, action_type, path, item_id)`. `item_id` is required so a
+user approval for one deleted item cannot authorize a later unrelated delete
+after path reuse. Fields:
 
 - `state='held'` — engine observed a delete above the configured threshold and filtered it out
 - `state='approved'` — user approved the delete; the next engine pass may execute it
-- `item_id` — retained for replay fidelity when available
+- `item_id` — the remote/local item identity that must match the planned delete
 - `held_at`, `approved_at`, `last_planned_at`, `last_error` — audit and display metadata
 
 Approved rows are consumed only after the corresponding delete action succeeds.

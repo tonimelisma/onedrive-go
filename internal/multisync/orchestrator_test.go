@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -24,6 +23,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -78,16 +78,44 @@ func testOrchestratorConfigWithPath(t *testing.T, cfgPath string, drives ...*con
 func postControlReload(t *testing.T, socketPath string) {
 	t.Helper()
 
-	_ = postControlJSON(t, socketPath, "/v1/reload", nil)
+	_ = postControlJSON(t, socketPath, synccontrol.PathReload, nil)
 }
 
-func postControlJSON(t *testing.T, socketPath string, path string, body []byte) controlMutationResponse {
+func getControlStatus(t *testing.T, socketPath string) synccontrol.StatusResponse {
 	t.Helper()
 
 	client := controlTestClient(socketPath)
-	var decoded controlMutationResponse
+	var decoded synccontrol.StatusResponse
 	require.Eventually(t, func() bool {
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://unix"+path, bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, synccontrol.HTTPBaseURL+synccontrol.PathStatus, http.NoBody)
+		require.NoError(t, err)
+
+		// #nosec G704 -- fixed Unix-domain test socket client.
+		resp, err := client.Do(req)
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return false
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+			return false
+		}
+
+		return true
+	}, 5*time.Second, 10*time.Millisecond, "control socket status did not succeed")
+
+	return decoded
+}
+
+func postControlJSON(t *testing.T, socketPath string, path string, body []byte) synccontrol.MutationResponse {
+	t.Helper()
+
+	client := controlTestClient(socketPath)
+	var decoded synccontrol.MutationResponse
+	require.Eventually(t, func() bool {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, synccontrol.HTTPBaseURL+path, bytes.NewReader(body))
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
 
@@ -104,6 +132,31 @@ func postControlJSON(t *testing.T, socketPath string, path string, body []byte) 
 		return resp.StatusCode == http.StatusOK
 	}, 5*time.Second, 10*time.Millisecond, "control socket request did not succeed")
 
+	return decoded
+}
+
+func postControlJSONStatus(
+	t *testing.T,
+	socketPath string,
+	path string,
+	body []byte,
+	wantStatus int,
+) synccontrol.MutationResponse {
+	t.Helper()
+
+	client := controlTestClient(socketPath)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, synccontrol.HTTPBaseURL+path, bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+
+	// #nosec G704 -- fixed Unix-domain test socket client.
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, wantStatus, resp.StatusCode)
+
+	var decoded synccontrol.MutationResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&decoded))
 	return decoded
 }
 
@@ -129,6 +182,37 @@ func shortControlSocketPath(t *testing.T) string {
 	})
 
 	return path
+}
+
+// Validates: R-2.9.1
+func TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval(t *testing.T) {
+	t.Parallel()
+
+	runtimeDir := filepath.Join(os.TempDir(), fmt.Sprintf("odgo-test-%d", time.Now().UnixNano()))
+	socketPath := filepath.Join(runtimeDir, "control.sock")
+	require.NoError(t, os.MkdirAll(runtimeDir, 0o700))
+	require.NoError(t, os.WriteFile(socketPath, []byte("stale"), 0o600))
+	t.Cleanup(func() {
+		assert.NoError(t, os.RemoveAll(runtimeDir))
+	})
+
+	server, err := startControlSocketServer(
+		t.Context(),
+		socketPath,
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, http.StatusOK, synccontrol.StatusResponse{OwnerMode: synccontrol.OwnerModeWatch})
+		}),
+		slog.Default(),
+	)
+	require.NoError(t, err)
+
+	info, err := os.Stat(socketPath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+
+	require.NoError(t, server.Close(t.Context()))
+	assert.NoFileExists(t, socketPath)
+	assert.NoDirExists(t, runtimeDir)
 }
 
 func testResolvedDrive(t *testing.T, cidStr, displayName string) *config.ResolvedDrive {
@@ -482,6 +566,62 @@ func TestRunOnce_ZeroDriveID_ReportsError(t *testing.T) {
 	assert.Contains(t, reports[0].Err.Error(), "login")
 }
 
+// Validates: R-2.9.1
+func TestRunOnce_ControlSocketBlocksWatchOwner(t *testing.T) {
+	rd := testResolvedDrive(t, "personal:owner-lock@example.com", "OwnerLock")
+	cfgPath := writeTestConfig(t, rd.CanonicalID)
+	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
+	cfg.ControlSocketPath = shortControlSocketPath(t)
+	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	orch := NewOrchestrator(cfg)
+	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
+		return &mockEngine{
+			runOnceFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.RunOpts) (*synctypes.SyncReport, error) {
+				close(started)
+				select {
+				case <-release:
+					return &synctypes.SyncReport{Mode: synctypes.SyncBidirectional}, nil
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			},
+		}, nil
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	reportsCh := make(chan []*synctypes.DriveReport, 1)
+	go func() {
+		reportsCh <- orch.RunOnce(ctx, synctypes.SyncBidirectional, synctypes.RunOpts{})
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "RunOnce did not start in time")
+	}
+	status := getControlStatus(t, cfg.ControlSocketPath)
+	assert.Equal(t, synccontrol.OwnerModeOneShot, status.OwnerMode)
+
+	watchErr := orch.RunWatch(t.Context(), synctypes.SyncBidirectional, synctypes.WatchOpts{})
+	require.Error(t, watchErr)
+	var inUse *ControlSocketInUseError
+	require.ErrorAs(t, watchErr, &inUse)
+
+	close(release)
+	select {
+	case reports := <-reportsCh:
+		require.Len(t, reports, 1)
+		require.NoError(t, reports[0].Err)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "RunOnce did not stop in time")
+	}
+}
+
 // --- mockEngine ---
 
 // mockEngine implements engineRunner for unit tests.
@@ -490,12 +630,16 @@ type mockEngine struct {
 	err         error
 	shouldPanic bool
 	closed      bool
+	runOnceFn   func(ctx context.Context, mode synctypes.SyncMode, opts synctypes.RunOpts) (*synctypes.SyncReport, error)
 	runWatchFn  func(ctx context.Context, mode synctypes.SyncMode, opts synctypes.WatchOpts) error
 }
 
-func (m *mockEngine) RunOnce(_ context.Context, _ synctypes.SyncMode, _ synctypes.RunOpts) (*synctypes.SyncReport, error) {
+func (m *mockEngine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts synctypes.RunOpts) (*synctypes.SyncReport, error) {
 	if m.shouldPanic {
 		panic("mock engine panic")
+	}
+	if m.runOnceFn != nil {
+		return m.runOnceFn(ctx, mode, opts)
 	}
 
 	return m.report, m.err
@@ -643,7 +787,7 @@ func TestOrchestrator_ControlSocket_StatusAndStop(t *testing.T) {
 	}
 
 	client := controlTestClient(cfg.ControlSocketPath)
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://unix/v1/status", http.NoBody)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, synccontrol.HTTPBaseURL+synccontrol.PathStatus, http.NoBody)
 	require.NoError(t, err)
 	// #nosec G704 -- fixed Unix-domain test socket client.
 	resp, err := client.Do(req)
@@ -651,13 +795,13 @@ func TestOrchestrator_ControlSocket_StatusAndStop(t *testing.T) {
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var status controlStatusResponse
+	var status synccontrol.StatusResponse
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&status))
-	assert.Equal(t, string(controlOwnerWatch), status.OwnerMode)
+	assert.Equal(t, synccontrol.OwnerModeWatch, status.OwnerMode)
 	assert.Equal(t, []string{rd.CanonicalID.String()}, status.Drives)
 
-	stop := postControlJSON(t, cfg.ControlSocketPath, "/v1/stop", nil)
-	assert.Equal(t, "stopping", stop.Status)
+	stop := postControlJSON(t, cfg.ControlSocketPath, synccontrol.PathStop, nil)
+	assert.Equal(t, synccontrol.StatusStopping, stop.Status)
 
 	select {
 	case err := <-errCh:
@@ -665,6 +809,45 @@ func TestOrchestrator_ControlSocket_StatusAndStop(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "RunWatch did not stop in time")
 	}
+}
+
+// Validates: R-2.9.1, R-2.9.3
+func TestOrchestrator_OneShotControlSocket_StatusAndMutationConflict(t *testing.T) {
+	rd := testResolvedDrive(t, "personal:oneshot@example.com", "OneShot")
+	cfg := testOrchestratorConfig(t, rd)
+	cfg.ControlSocketPath = shortControlSocketPath(t)
+	orch := NewOrchestrator(cfg)
+
+	control, err := orch.startControlServer(t.Context(), synccontrol.OwnerModeOneShot, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, control.Close(context.Background()))
+	})
+
+	status := getControlStatus(t, cfg.ControlSocketPath)
+	assert.Equal(t, synccontrol.OwnerModeOneShot, status.OwnerMode)
+	assert.Equal(t, []string{rd.CanonicalID.String()}, status.Drives)
+
+	client := controlTestClient(cfg.ControlSocketPath)
+	req, err := http.NewRequestWithContext(
+		t.Context(),
+		http.MethodPost,
+		synccontrol.HTTPBaseURL+synccontrol.HeldDeletesApprovePath(rd.CanonicalID.String()),
+		http.NoBody,
+	)
+	require.NoError(t, err)
+
+	// #nosec G704 -- fixed Unix-domain test socket client.
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusConflict, resp.StatusCode)
+
+	var decoded synccontrol.MutationResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&decoded))
+	assert.Equal(t, synccontrol.StatusError, decoded.Status)
+	assert.Equal(t, synccontrol.ErrorForegroundSyncRunning, decoded.Code)
+	assert.Contains(t, decoded.Message, "foreground sync")
 }
 
 // Validates: R-2.3.5, R-2.3.6, R-2.9.3
@@ -678,25 +861,7 @@ func TestOrchestrator_ControlSocket_QueuesDurableUserIntent(t *testing.T) {
 	cfg.ControlSocketPath = shortControlSocketPath(t)
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
-	store, err := syncstore.NewSyncStore(t.Context(), rd.StatePath(), slog.Default())
-	require.NoError(t, err)
-	require.NoError(t, store.UpsertHeldDeletes(t.Context(), []synctypes.HeldDeleteRecord{{
-		DriveID:       rd.DriveID,
-		ItemID:        "item-delete",
-		Path:          "delete-me.txt",
-		ActionType:    synctypes.ActionRemoteDelete,
-		State:         synctypes.HeldDeleteStateHeld,
-		HeldAt:        1,
-		LastPlannedAt: 1,
-		LastError:     "held",
-	}}))
-	_, err = store.DB().ExecContext(t.Context(), `INSERT INTO conflicts
-		(id, drive_id, item_id, path, conflict_type, detected_at, resolution)
-		VALUES ('conflict-1', ?, 'item-conflict', 'conflict.txt', 'edit_edit', 1, 'unresolved')`,
-		rd.DriveID.String(),
-	)
-	require.NoError(t, err)
-	require.NoError(t, store.Close(t.Context()))
+	seedControlSocketIntentStore(t, rd)
 
 	orch := NewOrchestrator(cfg)
 	watchStarted := make(chan struct{})
@@ -721,14 +886,81 @@ func TestOrchestrator_ControlSocket_QueuesDurableUserIntent(t *testing.T) {
 		require.Fail(t, "RunWatch did not start in time")
 	}
 
-	approvePath := "/v1/drives/" + url.PathEscape(rd.CanonicalID.String()) + "/held-deletes/approve"
+	approvePath := synccontrol.HeldDeletesApprovePath(rd.CanonicalID.String())
 	approve := postControlJSON(t, cfg.ControlSocketPath, approvePath, nil)
-	assert.Equal(t, "approved", approve.Status)
+	assert.Equal(t, synccontrol.StatusApproved, approve.Status)
 
-	requestPath := "/v1/drives/" + url.PathEscape(rd.CanonicalID.String()) +
-		"/conflicts/conflict-1/resolution-request"
+	requestPath := synccontrol.ConflictResolutionRequestPath(rd.CanonicalID.String(), "conflict-1")
 	request := postControlJSON(t, cfg.ControlSocketPath, requestPath, []byte(`{"resolution":"keep_local"}`))
-	assert.Equal(t, string(syncstore.ConflictRequestQueued), request.Status)
+	assert.Equal(t, synccontrol.Status(syncstore.ConflictRequestQueued), request.Status)
+
+	assertControlStatusCounts(t, cfg.ControlSocketPath)
+	assertControlTypedIntentErrors(t, cfg.ControlSocketPath, rd.CanonicalID.String())
+	assertDurableIntentStoreUpdated(t, rd)
+
+	stop := postControlJSON(t, cfg.ControlSocketPath, synccontrol.PathStop, nil)
+	assert.Equal(t, synccontrol.StatusStopping, stop.Status)
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "RunWatch did not stop in time")
+	}
+}
+
+func assertControlStatusCounts(t *testing.T, socketPath string) {
+	t.Helper()
+
+	status := getControlStatus(t, socketPath)
+	assert.Equal(t, 1, status.PendingHeldDeleteApprovals)
+	assert.Equal(t, 1, status.PendingConflictRequests)
+	assert.Zero(t, status.ResolvingConflictRequests)
+	assert.Zero(t, status.FailedConflictRequests)
+}
+
+func assertControlTypedIntentErrors(t *testing.T, socketPath, cid string) {
+	t.Helper()
+
+	unknownDrive := postControlJSONStatus(
+		t,
+		socketPath,
+		synccontrol.HeldDeletesApprovePath("personal:unknown@example.com"),
+		nil,
+		http.StatusNotFound,
+	)
+	assert.Equal(t, synccontrol.ErrorDriveNotManaged, unknownDrive.Code)
+
+	invalidResolution := postControlJSONStatus(
+		t,
+		socketPath,
+		synccontrol.ConflictResolutionRequestPath(cid, "conflict-1"),
+		[]byte(`{"resolution":"not_a_strategy"}`),
+		http.StatusBadRequest,
+	)
+	assert.Equal(t, synccontrol.ErrorInvalidResolution, invalidResolution.Code)
+
+	missingConflict := postControlJSONStatus(
+		t,
+		socketPath,
+		synccontrol.ConflictResolutionRequestPath(cid, "missing-conflict"),
+		[]byte(`{"resolution":"keep_local"}`),
+		http.StatusNotFound,
+	)
+	assert.Equal(t, synccontrol.ErrorConflictNotFound, missingConflict.Code)
+
+	differentStrategy := postControlJSONStatus(
+		t,
+		socketPath,
+		synccontrol.ConflictResolutionRequestPath(cid, "conflict-1"),
+		[]byte(`{"resolution":"keep_remote"}`),
+		http.StatusConflict,
+	)
+	assert.Equal(t, synccontrol.ErrorConflictDifferentStrategy, differentStrategy.Code)
+}
+
+func assertDurableIntentStoreUpdated(t *testing.T, rd *config.ResolvedDrive) {
+	t.Helper()
 
 	reopened, err := syncstore.NewSyncStore(t.Context(), rd.StatePath(), slog.Default())
 	require.NoError(t, err)
@@ -747,16 +979,30 @@ func TestOrchestrator_ControlSocket_QueuesDurableUserIntent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, synctypes.ConflictStateResolutionRequested, conflict.State)
 	assert.Equal(t, synctypes.ResolutionKeepLocal, conflict.RequestedResolution)
+}
 
-	stop := postControlJSON(t, cfg.ControlSocketPath, "/v1/stop", nil)
-	assert.Equal(t, "stopping", stop.Status)
+func seedControlSocketIntentStore(t *testing.T, rd *config.ResolvedDrive) {
+	t.Helper()
 
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		require.Fail(t, "RunWatch did not stop in time")
-	}
+	store, err := syncstore.NewSyncStore(t.Context(), rd.StatePath(), slog.Default())
+	require.NoError(t, err)
+	require.NoError(t, store.UpsertHeldDeletes(t.Context(), []synctypes.HeldDeleteRecord{{
+		DriveID:       rd.DriveID,
+		ItemID:        "item-delete",
+		Path:          "delete-me.txt",
+		ActionType:    synctypes.ActionRemoteDelete,
+		State:         synctypes.HeldDeleteStateHeld,
+		HeldAt:        1,
+		LastPlannedAt: 1,
+		LastError:     "held",
+	}}))
+	_, err = store.DB().ExecContext(t.Context(), `INSERT INTO conflicts
+		(id, drive_id, item_id, path, conflict_type, detected_at, resolution)
+		VALUES ('conflict-1', ?, 'item-conflict', 'conflict.txt', 'edit_edit', 1, 'unresolved')`,
+		rd.DriveID.String(),
+	)
+	require.NoError(t, err)
+	require.NoError(t, store.Close(t.Context()))
 }
 
 // Validates: R-2.4

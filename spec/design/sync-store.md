@@ -26,19 +26,22 @@ peer authority; it is rebuilt from store state when the engine starts.
 | --- | --- |
 | `Inspector` exposes a stable read-only issue/status projection so CLI status and issues read the same visible facts. | `TestInspector_ReadIssuesSnapshot`, `TestInspector_ReadStatusSnapshot_StaysConsistentWithIssuesSnapshot` |
 | Status issue-group projection preserves separate entries when the same summary key appears in multiple scopes. | `TestQuerySyncState_PreservesIssueGroupScopeContext`, `TestPrintStatusJSON_KeepsSameSummaryGroupsSeparatedByScope`, `TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope` |
-| Integrity inspection and safe repair stay store-owned and deterministic. | `TestInspector_AuditIntegrityReportsPersistedProblems`, `TestSyncStore_RepairIntegritySafeNormalizesDeterministicViolations` |
+| Integrity inspection and safe repair stay store-owned, deterministic, and durable-intent aware. | `TestInspector_AuditIntegrityReportsPersistedProblems`, `TestSyncStore_AuditIntegrityReportsDurableIntentWorkflowProblems`, `TestSyncStore_RepairIntegritySafeNormalizesDeterministicViolations`, `TestSyncStore_RepairIntegritySafePreservesDurableUserIntent` |
+| Held-delete approval identity requires matching item ID and repeated approvals are idempotent. | `TestSyncStore_UpsertHeldDeletesRequiresItemID`, `TestSyncStore_HeldDeleteConsumeRequiresMatchingItemID`, `TestSyncStore_DeleteHeldDeleteRequiresMatchingItemID`, `TestSyncStore_ApproveHeldDeletesConcurrentCallsAreIdempotent` |
+| Conflict request concurrency is first-writer-wins until engine claim completes. | `TestSyncStore_RequestConflictResolutionSameStrategyIsIdempotent`, `TestSyncStore_RequestConflictResolutionFirstWriterWinsConcurrently`, `TestSyncStore_RequestConflictResolutionRejectsResolvingAndResolved` |
 | Visible issue grouping comes from one store-owned projection instead of CLI-local reconstruction. | `TestSyncStore_ListVisibleIssueGroups` |
 | Crash-shaped `downloading` / `deleting` residue in the state DB is replayed from durable store truth on the next live sync run, and the immediate rerun is idle. | `TestE2E_Sync_CrashRecovery_ReplaysDurableInProgressRows` |
+| Store schema versioning sets the current `user_version` and rejects unversioned existing DBs instead of silently migrating durable user intent. | `TestNewSyncStore_SetsCurrentSchemaVersion`, `TestNewSyncStore_RejectsUnversionedExistingStateDB` |
 
 `NewSyncStore()` opens SQLite in WAL mode and applies the canonical schema from
 [`schema.sql`](/Users/tonimelisma/Development/onedrive-go/internal/syncstore/schema.sql)
 through [`schema.go`](/Users/tonimelisma/Development/onedrive-go/internal/syncstore/schema.go).
-Fresh databases use the final schema directly. There is one narrow legacy
-repair path for old `baseline` rows that still use the pre-side-aware
-`size`/`mtime` columns. On open, the store rewrites that table into the
-canonical shape and backfills only the local-side metadata that can be
-recovered exactly. Remote-side size/mtime remain unknown when the legacy row
-never stored them.
+Fresh databases use the final schema directly and set `PRAGMA user_version`
+to the one current schema version. Existing stores with a non-current or
+unversioned schema are rejected with a clear rebuild/delete message instead of
+being migrated in place. This is deliberate: the state DB now contains durable
+user intent, not only rebuildable derived cache, so unknown schema shape must
+fail loudly.
 
 Key operations:
 
@@ -51,9 +54,9 @@ Key operations:
 - `UpsertSyncMetadataEntries(ctx, entries)` remains the generic sync-metadata
   writer for status/report metadata only; sync-scope durability no longer
   piggybacks on generic metadata keys.
-- `RefreshLocalBaseline(ctx, LocalBaselineRefresh)` is the explicit manual-reconciliation path used when local disk now represents the chosen truth without a new executor transfer result. It updates only the local-side baseline tuple, preserves known remote-side metadata/`etag`, and marks a matching `remote_state` row synced.
+- `RefreshLocalBaseline(ctx, LocalBaselineRefresh)` is the explicit reconciliation path used when local disk now represents the chosen truth without a new executor transfer result. It updates only the local-side baseline tuple, preserves known remote-side metadata/`etag`, and marks a matching `remote_state` row synced.
 - `RequestConflictResolution(ctx, id, resolution)` records conflict-resolution intent without executing side effects. `ClaimConflictResolution`, `MarkConflictResolutionFailed`, and `ResolveConflict` enforce the durable `resolution_requested -> resolving -> resolved/resolve_failed` workflow for engine-owned execution.
-- `UpsertHeldDeletes`, `ApproveHeldDeletes`, `ListHeldDeletesByState`, and `ConsumeHeldDelete` own the durable big-delete approval workflow. Approval changes rows from `held` to `approved`; successful engine deletes consume approved rows.
+- `UpsertHeldDeletes`, `ApproveHeldDeletes`, `ListHeldDeletesByState`, `ConsumeHeldDelete`, and `DeleteHeldDelete` own the durable big-delete approval workflow. Approval changes rows from `held` to `approved`; successful engine deletes consume approved rows only when drive, action type, path, and item ID match.
 - `RecordFailure(ctx, SyncFailureParams, delayFn)` is the single failure writer. The engine provides classification and retry policy; the store provides transactional persistence and conflict-safe upsert behavior.
 - `TakeSyncFailure(ctx, path, driveID)` is the store-owned read-and-delete boundary for engine-managed failure resolution logging. It returns the authoritative persisted row, including `failure_count`, in the same transaction that removes it.
 - `ResetDownloadingStates(ctx, delayFn)`, `ListDeletingCandidates(ctx)`, and `FinalizeDeletingStates(ctx, deleted, pending, delayFn)` are the state-only crash-recovery primitives. The store no longer probes the sync-root filesystem itself. Their bridge rows preserve the exact replay action (`ActionDownload` for reset downloads, `ActionLocalDelete` for reset deletes) so the engine can re-enter the correct execution lane on the next pass.
@@ -135,7 +138,7 @@ impossible unclassified action anyway, the store invalidates and reloads the
 cache from SQLite so durable state remains the only authority.
 
 `RefreshLocalBaseline()` is deliberately narrower than `CommitOutcome()`. It
-exists for manual/local reconciliation paths such as `keep_both`, where the
+exists for local reconciliation paths such as `keep_both`, where the
 engine has authoritative current local disk facts but is not committing a new
 executor-produced remote result. The method preserves the remote-side
 comparison tuple for existing rows, creates unknown remote-side fields for
@@ -299,9 +302,14 @@ The store owns sync-state integrity inspection and deterministic safe repair.
   baseline-cache consistency after loading the cache.
 - `SyncStore.RepairIntegritySafe(ctx)` applies only repairs that do not guess
   user intent: it normalizes illegal `auth:account` timing fields, clears
-  impossible retry timestamps on non-retryable rows, clears illegal manual
-  trial timestamps, and removes legacy persisted `perm:remote` scope/boundary
-  authorities that are now derived from held rows.
+  impossible retry timestamps on non-retryable rows, normalizes deterministic
+  scope-state drift, and removes legacy persisted `perm:remote` scope/boundary
+  authorities that are now derived from held rows. It must not silently delete
+  approved held deletes or queued conflict-resolution requests.
+- Durable-intent integrity findings include invalid conflict lifecycle states,
+  missing requested-resolution/resolving timestamps, resolved conflicts with
+  `resolution='unresolved'`, invalid held-delete states, missing held-delete
+  item IDs, and approved held deletes without `approved_at`.
 - `cmd/devtool state-audit` is the human/JSON administrative entrypoint. It
   opens the database through `syncstore`, reports the store-owned
   `IntegrityReport`, optionally runs `RepairIntegritySafe`, then reruns the

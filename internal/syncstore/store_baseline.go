@@ -78,8 +78,8 @@ const (
 		 updated_at = excluded.updated_at`
 )
 
-// LocalBaselineRefresh is the explicit reconciliation input used by manual
-// convergence paths such as keep-both conflict resolution.
+// LocalBaselineRefresh is the explicit reconciliation input used by convergence
+// paths such as keep-both conflict resolution.
 type LocalBaselineRefresh struct {
 	Path           string
 	DriveID        driveid.ID

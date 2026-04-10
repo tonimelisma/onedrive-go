@@ -465,5 +465,5 @@ func TestCascade_BigDeleteProtection(t *testing.T) {
 	safety := &synctypes.SafetyConfig{BigDeleteThreshold: 3}
 
 	_, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, safety, nil)
-	assert.ErrorIs(t, err, synctypes.ErrBigDeleteTriggered, "cascaded deletes should trigger big-delete protection")
+	assert.ErrorIs(t, err, synctypes.ErrDeleteSafetyThresholdExceeded, "cascaded deletes should trigger big-delete protection")
 }

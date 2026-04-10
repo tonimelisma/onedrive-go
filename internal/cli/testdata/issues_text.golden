@@ -15,7 +15,7 @@ INVALID FILENAME (2 items)
   docs/CON
   docs/NUL.txt
 
-HELD DELETES (2 files — big-delete protection triggered, run `issues force-deletes` to approve)
+HELD DELETES (2 files — big-delete protection triggered, run `issues approve-deletes` to approve)
 PATH                LAST SEEN           
 /archive/old-a.txt  2026-04-03T09:00:00Z
 /archive/old-b.txt  2026-04-03T09:05:00Z

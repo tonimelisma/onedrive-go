@@ -13,6 +13,18 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
+// Validates: R-2.5.6
+func TestNewSyncStore_SetsCurrentSchemaVersion(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+
+	var version int
+	err := store.DB().QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&version)
+	require.NoError(t, err)
+	assert.Equal(t, syncStoreSchemaVersion, version)
+}
+
 // Validates: R-2.10.47
 func TestInspector_AuditIntegrityReportsPersistedProblems(t *testing.T) {
 	t.Parallel()
@@ -51,6 +63,65 @@ func TestInspector_AuditIntegrityReportsPersistedProblems(t *testing.T) {
 		integrityCodeLegacyRemoteBoundary,
 		integrityCodeVisibleProjectionOverlap,
 	})
+}
+
+// Validates: R-2.3.6, R-2.3.12
+func TestSyncStore_AuditIntegrityReportsDurableIntentWorkflowProblems(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	_, err := store.DB().ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`)
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO conflicts
+			(id, drive_id, path, conflict_type, detected_at, resolution, state, requested_resolution, resolving_at)
+		VALUES
+			('conflict-missing-request', ?, '/conflict-a.txt', 'edit_edit', 1, 'unresolved', 'resolution_requested', NULL, NULL),
+			('conflict-missing-resolving-at', ?, '/conflict-b.txt', 'edit_edit', 2, 'unresolved', 'resolving', 'keep_local', NULL),
+			('conflict-resolved-unresolved', ?, '/conflict-c.txt', 'edit_edit', 3, 'unresolved', 'resolved', NULL, NULL),
+			('conflict-invalid-state', ?, '/conflict-d.txt', 'edit_edit', 4, 'unresolved', 'manual', NULL, NULL),
+			('conflict-invalid-resolution', ?, '/conflict-e.txt', 'edit_edit', 5, 'manual', 'unresolved', NULL, NULL);
+		INSERT INTO held_deletes
+			(drive_id, action_type, path, item_id, state, held_at, approved_at, last_planned_at)
+		VALUES
+			(?, 'remote_delete', '/delete-a.txt', '', 'held', 1, NULL, 1),
+			(?, 'remote_delete', '/delete-b.txt', 'item-b', 'approved', 1, NULL, 1),
+			(?, 'remote_delete', '/delete-c.txt', 'item-c', 'manual', 1, NULL, 1)`,
+		testDriveID,
+		testDriveID,
+		testDriveID,
+		testDriveID,
+		testDriveID,
+		testDriveID,
+		testDriveID,
+		testDriveID,
+	)
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(ctx, `PRAGMA ignore_check_constraints = OFF`)
+	require.NoError(t, err)
+
+	report, err := store.AuditIntegrity(ctx)
+	require.NoError(t, err)
+
+	var codes []string
+	var details []string
+	for _, finding := range report.Findings {
+		codes = append(codes, finding.Code)
+		details = append(details, finding.Detail)
+	}
+
+	assert.Contains(t, codes, integrityCodeInvalidConflictWorkflow)
+	assert.Contains(t, codes, integrityCodeInvalidHeldDelete)
+	assert.Contains(t, details, "conflict conflict-missing-request is resolution_requested without requested_resolution")
+	assert.Contains(t, details, "conflict conflict-missing-resolving-at is resolving without resolving_at")
+	assert.Contains(t, details, "conflict conflict-resolved-unresolved is resolved with unresolved final resolution")
+	assert.Contains(t, details, `conflict conflict-invalid-state has invalid workflow state "manual"`)
+	assert.Contains(t, details, `conflict conflict-invalid-resolution has invalid final resolution "manual"`)
+	assert.Contains(t, details, "held delete /delete-a.txt is missing item_id")
+	assert.Contains(t, details, "approved held delete /delete-b.txt is missing approved_at")
+	assert.Contains(t, details, `held delete /delete-c.txt has invalid state "manual"`)
 }
 
 // Validates: R-2.10.47
@@ -100,6 +171,49 @@ func TestSyncStore_RepairIntegritySafeNormalizesDeterministicViolations(t *testi
 	}
 	assert.True(t, itemRowFound)
 	assert.True(t, heldRowFound)
+}
+
+// Validates: R-2.3.6, R-2.3.12
+func TestSyncStore_RepairIntegritySafePreservesDurableUserIntent(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(testDriveID)
+
+	require.NoError(t, store.UpsertHeldDeletes(ctx, []synctypes.HeldDeleteRecord{{
+		DriveID:       driveID,
+		ActionType:    synctypes.ActionRemoteDelete,
+		Path:          "/delete-me.txt",
+		ItemID:        "item-delete",
+		State:         synctypes.HeldDeleteStateHeld,
+		HeldAt:        1,
+		LastPlannedAt: 1,
+	}}))
+	require.NoError(t, store.ApproveHeldDeletes(ctx))
+
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO conflicts
+			(id, drive_id, path, conflict_type, detected_at, resolution, state, requested_resolution, requested_at)
+		VALUES
+			('conflict-requested', ?, '/conflict.txt', 'edit_edit', 1, 'unresolved', 'resolution_requested', 'keep_local', 2)`,
+		testDriveID,
+	)
+	require.NoError(t, err)
+
+	repairs, err := store.RepairIntegritySafe(ctx)
+	require.NoError(t, err)
+	assert.Zero(t, repairs)
+
+	approved, err := store.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateApproved)
+	require.NoError(t, err)
+	require.Len(t, approved, 1)
+	assert.Equal(t, "item-delete", approved[0].ItemID)
+
+	conflict, err := store.GetConflict(ctx, "conflict-requested")
+	require.NoError(t, err)
+	assert.Equal(t, synctypes.ConflictStateResolutionRequested, conflict.State)
+	assert.Equal(t, synctypes.ResolutionKeepLocal, conflict.RequestedResolution)
 }
 
 // Validates: R-2.10.47

@@ -217,7 +217,7 @@ func describeFilesystemSummary(key SummaryKey) (SummaryDescriptor, bool) {
 			Key:        SummaryHeldDeletes,
 			Title:      "HELD DELETES",
 			Reason:     "Big-delete protection triggered - too many deletes in one batch.",
-			Action:     "Run `issues force-deletes` to approve, or investigate first.",
+			Action:     "Run `issues approve-deletes` to approve, or investigate first.",
 			LogSummary: "held deletes",
 		}, true
 	case string(SummaryCaseCollision):

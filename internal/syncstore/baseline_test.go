@@ -1249,8 +1249,8 @@ func TestCommitOutcome_PersistsZeroByteSizeAsKnownZero(t *testing.T) {
 	assert.Equal(t, "etag-zero", storedLocalETag.String)
 }
 
-// Validates: R-6.7.17
-func TestNewSyncStore_MigratesLegacyBaselineToSideAwareMetadata(t *testing.T) {
+// Validates: R-2.5.6
+func TestNewSyncStore_RejectsUnversionedExistingStateDB(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "legacy.db")
@@ -1284,21 +1284,10 @@ func TestNewSyncStore_MigratesLegacyBaselineToSideAwareMetadata(t *testing.T) {
 	require.NoError(t, db.Close())
 
 	mgr, err := NewSyncStore(t.Context(), dbPath, newTestLogger(t))
-	require.NoError(t, err)
-	defer mgr.Close(t.Context())
-
-	bl, err := mgr.Load(t.Context())
-	require.NoError(t, err)
-
-	entry, ok := bl.GetByPath("legacy.txt")
-	require.True(t, ok, "migrated baseline entry not found")
-	assert.Equal(t, int64(123), entry.LocalSize)
-	assert.True(t, entry.LocalSizeKnown)
-	assert.Equal(t, int64(456), entry.LocalMtime)
-	assert.Zero(t, entry.RemoteSize)
-	assert.False(t, entry.RemoteSizeKnown, "remote size should stay unknown when legacy schema had no remote-side column")
-	assert.Zero(t, entry.RemoteMtime)
-	assert.Equal(t, "etag-legacy", entry.ETag)
+	require.Error(t, err)
+	require.Nil(t, mgr)
+	require.ErrorIs(t, err, ErrIncompatibleSchema)
+	assert.Contains(t, err.Error(), "rebuild or delete the drive state DB")
 }
 
 // Validates: R-2.2

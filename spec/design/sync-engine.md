@@ -253,6 +253,7 @@ The engine relies on a few non-negotiable behavioral invariants:
 | Bootstrap subroutines stay directly testable for quiescence, no-change startup, change-driven startup, and crash-recovery cleanup without helper-loop shims. | `TestWaitForQuiescence_EmptyGraph`, `TestWaitForQuiescence_ContextCancel`, `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestBootstrapSync_CrashRecovery_MixedDeletingCandidates` |
 | Watch shutdown seals admission, stops retry/trial wake handling, and drops reconcile handoff after drain begins. | `TestRunWatch_ShutdownStopsRetryAndTrialTimers`, `TestRunWatch_ShutdownDropsReconcileResult`, `TestRunFullReconciliationAsync_ShutdownAfterCommit` |
 | Cancellation wins over fatal observer-exit shutdown races, and fallback waits honor cancellation without wall-clock sleeps. | `TestRunWatch_ContextCancel`, `TestRunWatch_CancellationWinsOverFinalObserverExit`, `TestRunWatch_FallbackSleepHonorsCancellation` |
+| Held-delete approval is engine-owned durable intent and authorizes execution only for matching drive/action/path/item identity. | `TestRunOnce_BigDelete_ApprovedDeletesBypassHold`, `TestRunOnce_BigDelete_StaleApprovalWithDifferentItemIDDoesNotBypassHold` |
 
 ### Runtime Ownership
 
@@ -739,7 +740,6 @@ Conflict rows have explicit workflow states:
 - `resolving` — one engine has claimed the request
 - `resolve_failed` — engine execution failed; the requested resolution and error remain durable
 - `resolved` — resolution completed and the row is historical
-- `manual` — reserved for user-managed conflicts that should stay visible but not auto-resolve
 
 `keep_both` is intentionally modeled as an explicit reconciliation path, not
 as a synthetic executor transfer outcome:
@@ -758,8 +758,8 @@ as a synthetic executor transfer outcome:
 
 This separation matters because `ActionUpdateSynced` still means true
 planner/executor convergence: both sides are already equivalent without a
-manual resolution-specific store transition. `keep_both` is different. It is a
-manual reconciliation decision that needs explicit durable-state repair. If any
+resolution-specific store transition. `keep_both` is different. It is an
+explicit user reconciliation decision that needs durable-state repair. If any
 resolution attempt fails, the engine marks the conflict `resolve_failed` rather
 than pretending the CLI operation succeeded or retrying from an ad hoc engine.
 
@@ -821,11 +821,11 @@ In watch mode, the planner-level big-delete check is disabled (`threshold=MaxInt
 2. Non-delete actions continue to DepGraph and execute normally
 3. Held deletes are recorded in the `held_deletes` table with `state='held'`
 
-**CLI notification**: `issues` shows held deletes in a dedicated "HELD DELETES" section. User approves them via `issues force-deletes`, which records `state='approved'` either by socket RPC to the daemon or directly in the DB when no daemon is running.
+**CLI notification**: `issues` shows held deletes in a dedicated "HELD DELETES" section. User approves them via `issues approve-deletes`, which records `state='approved'` either by socket RPC to a watch daemon or directly in the DB when no watch daemon is running. If a foreground one-shot sync owns the socket, the CLI writes durable DB intent directly instead of sending a mutation RPC.
 
 **External change detection**: A 10-second `recheckTicker` in the `RunWatch()` select loop runs `PRAGMA data_version` to detect offline CLI writes. When the data version changes, `handleExternalChanges()` queries held-delete rows. If no `state='held'` rows remain, it calls `counter.Release()`. Socket approval also wakes the runner immediately. On the next user-intent pass, approved deletes are rebuilt into planner events and dispatched normally.
 
-**Consumption**: Approved rows are consumed only after the matching delete action succeeds. Approved deletes are excluded from big-delete counters and holds, so the protection does not retrigger for work the user already approved.
+**Consumption**: Approved rows are consumed only after the matching delete action succeeds. Matching requires the same drive, action type, path, and item ID. A stale approval for a reused path with a different item ID remains visible and does not authorize the current delete. Approved deletes are excluded from big-delete counters and holds, so the protection does not retrigger for work the user already approved.
 
 One-shot sync uses the same durable workflow: if the planned delete count exceeds `big_delete_threshold`, unapproved delete actions are filtered out and stored as `held`; after approval, the next ordinary sync pass executes and consumes them. There is no sync/watch force-flag bypass path.
 

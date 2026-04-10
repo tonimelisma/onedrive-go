@@ -171,5 +171,5 @@ Static verification is a first-class architectural constraint, not a best-effort
 - Resource consumption guarantees documented per component. [planned]
 - Production ignored-return audit complete: invariant-bearing results such as `DepGraph.Complete` and dispatch admission booleans are handled explicitly, baseline/account metadata lookups now use explicit helpers or `found` checks, and the remaining ignored returns are limited to explicit value-only helper drops plus documented impossible-error builder writes. [verified]
 - Bare `assert.NoError` audit complete: remaining sites are intentional cleanup, test-plumbing, or pure error-contract assertions, while weak CLI happy-path tests now assert rendered text, JSON shape, and preserved config/state. [verified]
-- Write-path `Close` audit complete: sync-store close failures now propagate on `verify` and `issues force-deletes`, while read-only inspector close paths remain best-effort debug logged by design. [verified]
+- Write-path `Close` audit complete: sync-store close failures now propagate on `verify` and `issues approve-deletes`, while read-only inspector close paths remain best-effort debug logged by design. [verified]
 - Direct handler/service coverage over the `internal/cli/` service split is above the current target: `go test ./internal/cli/... -cover` reports 67.8%. [verified]

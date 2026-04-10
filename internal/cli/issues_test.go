@@ -51,7 +51,18 @@ func TestNewIssuesCmd_Structure(t *testing.T) {
 
 	subcommands := cmd.Commands()
 	require.Len(t, subcommands, 1)
-	assert.Equal(t, "force-deletes", subcommands[0].Name())
+	assert.Equal(t, "approve-deletes", subcommands[0].Name())
+}
+
+func TestIssuesCmd_ForceDeletesIsNotRegistered(t *testing.T) {
+	t.Parallel()
+
+	cmd := newIssuesCmd()
+	cmd.SetArgs([]string{"force-deletes"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown command")
 }
 
 func TestIssuesCmd_RejectsUnexpectedPositionalArgs(t *testing.T) {
@@ -298,12 +309,12 @@ func newHeldDeleteIssuesCmd(t *testing.T) (*cobra.Command, string, *bytes.Buffer
 	return cmd, expectedPath, &buf
 }
 
-func TestIssuesForceDeletes_ApprovesHeldDeletesOnly(t *testing.T) {
+func TestIssuesApproveDeletes_ApprovesHeldDeletesOnly(t *testing.T) {
 	cmd, dbPath, out := newHeldDeleteIssuesCmd(t)
 
-	cmd.SetArgs([]string{"force-deletes"})
+	cmd.SetArgs([]string{"approve-deletes"})
 	require.NoError(t, cmd.Execute())
-	assert.Contains(t, out.String(), "Approved all held deletes for this drive.")
+	assert.Contains(t, out.String(), approveDeletesSuccess)
 
 	logger := slog.New(slog.DiscardHandler)
 	mgr, err := syncstore.NewSyncStore(t.Context(), dbPath, logger)

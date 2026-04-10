@@ -149,4 +149,4 @@ single `types.go` file:
 - `actions.go`: `Action`, `ActionPlan`, `Outcome`
 - `config.go`: `SafetyConfig`
 - `enums.go`: `ChangeSource`, `ChangeType`, `ItemType`, `SyncMode`, `ActionType`
-- `errors.go`: `ErrBigDeleteTriggered`, `ErrDependencyCycle`
+- `errors.go`: `ErrDeleteSafetyThresholdExceeded`, `ErrDependencyCycle`

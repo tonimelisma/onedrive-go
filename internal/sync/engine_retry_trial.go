@@ -97,7 +97,7 @@ func (rt *watchRuntime) dispatchPlannerWork(
 	denied := rt.engine.permHandler.DeniedPrefixes(ctx)
 	plan, err := rt.engine.planner.Plan(changes, bl, mode, safety, denied)
 	if err != nil {
-		if errors.Is(err, synctypes.ErrBigDeleteTriggered) {
+		if errors.Is(err, synctypes.ErrDeleteSafetyThresholdExceeded) {
 			rt.engine.logger.Warn("internal work request blocked by delete protection",
 				slog.Int("paths", len(changes)),
 			)

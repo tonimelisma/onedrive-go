@@ -387,8 +387,8 @@ type ConflictRecord struct {
 	RemoteHash          string
 	LocalMtime          int64
 	RemoteMtime         int64
-	Resolution          string // final outcome: unresolved, keep_local, keep_remote, keep_both, manual
-	State               string // workflow state: unresolved, resolution_requested, resolving, resolve_failed, resolved, manual
+	Resolution          string // final outcome: unresolved, keep_local, keep_remote, keep_both
+	State               string // workflow state: unresolved, resolution_requested, resolving, resolve_failed, resolved
 	RequestedResolution string
 	RequestedAt         int64
 	ResolvingAt         int64
