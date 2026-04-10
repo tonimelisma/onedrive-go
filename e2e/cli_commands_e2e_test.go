@@ -318,9 +318,9 @@ func TestE2E_Conflicts_ResolveKeepBoth(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, matches, "conflict copy should exist before resolve")
 
-	// Resolve --keep-both.
+	// Queue --keep-both; the next sync pass owns execution.
 	_, stderr := runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/both.txt", "--keep-both")
-	assert.Contains(t, stderr, "Resolved", "resolve should confirm resolution")
+	assert.Contains(t, stderr, "Queued", "resolve should queue durable engine-owned resolution")
 
 	// Verify both files still exist.
 	_, err = os.Stat(filepath.Join(localDir, "both.txt"))
@@ -377,6 +377,7 @@ func TestE2E_Conflicts_ResolveMultipleStrategies(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/a.txt", "--keep-local")
 	runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/b.txt", "--keep-remote")
 	runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/c.txt", "--keep-both")
+	runCLIWithConfig(t, cfgPath, env, "sync")
 
 	// Verify conflict history shows all 3.
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts", "--history")
@@ -934,7 +935,7 @@ func TestE2E_Issues_ApproveDeletes(t *testing.T) {
 	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "big_delete_threshold = 10\n")
 	opsCfgPath := writeMinimalConfig(t)
 
-	testFolder := fmt.Sprintf("e2e-issues-forcedeletes-%d", time.Now().UnixNano())
+	testFolder := fmt.Sprintf("e2e-issues-approve-deletes-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	localDir := filepath.Join(syncDir, testFolder)
