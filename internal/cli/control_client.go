@@ -29,6 +29,12 @@ type controlDaemonError struct {
 }
 
 func (e *controlDaemonError) Error() string {
+	if e.code != "" && e.message != "" {
+		return fmt.Sprintf("%s: %s", e.code, e.message)
+	}
+	if e.code != "" {
+		return string(e.code)
+	}
 	return e.message
 }
 

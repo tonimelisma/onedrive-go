@@ -384,7 +384,7 @@ func TestRunOnce_DryRun_SharedConfiguredRootDoesNotSaveScopedDeltaToken(t *testi
 	assert.Empty(t, token)
 }
 
-func TestRunOnce_BigDelete_HoldsDeletesDurably(t *testing.T) {
+func TestRunOnce_DeleteSafety_HoldsDeletesDurably(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -395,7 +395,7 @@ func TestRunOnce_BigDelete_HoldsDeletesDurably(t *testing.T) {
 	// intent and executes no destructive deletes until the user approves.
 	mock := &engineMockClient{}
 	eng, _ := newTestEngine(t, mock)
-	eng.bigDeleteThreshold = 10 // low threshold for test
+	eng.deleteSafetyThreshold = 10 // low threshold for test
 	ctx := t.Context()
 
 	seedOutcomes := make([]synctypes.Outcome, 20)
@@ -433,7 +433,7 @@ func TestRunOnce_BigDelete_HoldsDeletesDurably(t *testing.T) {
 	}
 }
 
-func TestRunOnce_BigDelete_ApprovedDeletesBypassHold(t *testing.T) {
+func TestRunOnce_DeleteSafety_ApprovedDeletesBypassHold(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -443,7 +443,7 @@ func TestRunOnce_BigDelete_ApprovedDeletesBypassHold(t *testing.T) {
 	// those deletes without requiring any CLI force flag.
 	mock := &engineMockClient{}
 	eng, _ := newTestEngine(t, mock)
-	eng.bigDeleteThreshold = 10 // low threshold for test
+	eng.deleteSafetyThreshold = 10 // low threshold for test
 	ctx := t.Context()
 
 	seedOutcomes := make([]synctypes.Outcome, 20)
@@ -481,7 +481,7 @@ func TestRunOnce_BigDelete_ApprovedDeletesBypassHold(t *testing.T) {
 
 	report, err := eng.RunOnce(ctx, synctypes.SyncUploadOnly, synctypes.RunOpts{})
 	require.NoError(t, err, "RunOnce with approved held deletes")
-	assert.GreaterOrEqual(t, report.RemoteDeletes, 1, "approved deletes should bypass big-delete hold")
+	assert.GreaterOrEqual(t, report.RemoteDeletes, 1, "approved deletes should bypass delete safety hold")
 
 	remaining, err := eng.baseline.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateApproved)
 	require.NoError(t, err)
@@ -489,13 +489,13 @@ func TestRunOnce_BigDelete_ApprovedDeletesBypassHold(t *testing.T) {
 }
 
 // Validates: R-6.4.1
-func TestRunOnce_BigDelete_StaleApprovalWithDifferentItemIDDoesNotBypassHold(t *testing.T) {
+func TestRunOnce_DeleteSafety_StaleApprovalWithDifferentItemIDDoesNotBypassHold(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
 	mock := &engineMockClient{}
 	eng, _ := newTestEngine(t, mock)
-	eng.bigDeleteThreshold = 10
+	eng.deleteSafetyThreshold = 10
 	ctx := t.Context()
 
 	seedOutcomes := make([]synctypes.Outcome, 20)
@@ -537,7 +537,7 @@ func TestRunOnce_BigDelete_StaleApprovalWithDifferentItemIDDoesNotBypassHold(t *
 
 	approved, err := eng.baseline.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateApproved)
 	require.NoError(t, err)
-	require.Len(t, approved, 20, "stale approvals remain visible instead of being consumed")
+	require.Empty(t, approved, "stale approvals should be pruned once a live plan proves they no longer match")
 
 	held, err := eng.baseline.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateHeld)
 	require.NoError(t, err)
@@ -545,6 +545,60 @@ func TestRunOnce_BigDelete_StaleApprovalWithDifferentItemIDDoesNotBypassHold(t *
 	for i := range held {
 		assert.Contains(t, held[i].ItemID, "current-item-")
 	}
+}
+
+// Validates: R-2.3.6, R-6.4.1
+func TestEngine_ApprovedDeleteKeysForPlanPrunesStaleApprovedRows(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	ctx := t.Context()
+
+	require.NoError(t, eng.baseline.UpsertHeldDeletes(ctx, []synctypes.HeldDeleteRecord{
+		{
+			DriveID:       driveID,
+			ItemID:        "current-item",
+			Path:          "current.txt",
+			ActionType:    synctypes.ActionRemoteDelete,
+			State:         synctypes.HeldDeleteStateHeld,
+			HeldAt:        1,
+			LastPlannedAt: 1,
+		},
+		{
+			DriveID:       driveID,
+			ItemID:        "stale-item",
+			Path:          "current.txt",
+			ActionType:    synctypes.ActionRemoteDelete,
+			State:         synctypes.HeldDeleteStateHeld,
+			HeldAt:        1,
+			LastPlannedAt: 1,
+		},
+	}))
+	require.NoError(t, eng.baseline.ApproveHeldDeletes(ctx))
+
+	plan := &synctypes.ActionPlan{Actions: []synctypes.Action{{
+		Type:    synctypes.ActionRemoteDelete,
+		DriveID: driveID,
+		ItemID:  "current-item",
+		Path:    "current.txt",
+	}}}
+
+	approved, err := eng.approvedDeleteKeysForPlan(ctx, plan)
+	require.NoError(t, err)
+	_, ok := approved[heldDeleteKey{
+		driveID:    driveID.String(),
+		actionType: synctypes.ActionRemoteDelete,
+		path:       "current.txt",
+		itemID:     "current-item",
+	}]
+	assert.True(t, ok, "current matching approval should remain usable")
+
+	rows, err := eng.baseline.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateApproved)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "current.txt", rows[0].Path)
+	assert.Equal(t, "current-item", rows[0].ItemID)
 }
 
 type sharedFolderRecoveryRunOnceFixture struct {
@@ -1324,10 +1378,10 @@ func TestRunOnce_CrashRecovery_ReplaysDeletingStateWithoutFreshDelta(t *testing.
 func TestResolveSafetyConfig_Default(t *testing.T) {
 	t.Parallel()
 
-	eng := &Engine{bigDeleteThreshold: synctypes.DefaultBigDeleteThreshold}
+	eng := &Engine{deleteSafetyThreshold: synctypes.DefaultDeleteSafetyThreshold}
 	cfg := eng.resolveSafetyConfig()
 
-	assert.Equal(t, plannerSafetyMax, cfg.BigDeleteThreshold)
+	assert.Equal(t, plannerSafetyMax, cfg.DeleteSafetyThreshold)
 }
 
 func TestResolveSafetyConfig_UsesConfiguredThreshold(t *testing.T) {
@@ -1335,8 +1389,8 @@ func TestResolveSafetyConfig_UsesConfiguredThreshold(t *testing.T) {
 
 	// Planner-level protection is disabled because the engine now owns the
 	// durable held-delete workflow after planning.
-	eng := &Engine{bigDeleteThreshold: 500}
+	eng := &Engine{deleteSafetyThreshold: 500}
 	cfg := eng.resolveSafetyConfig()
 
-	assert.Equal(t, plannerSafetyMax, cfg.BigDeleteThreshold)
+	assert.Equal(t, plannerSafetyMax, cfg.DeleteSafetyThreshold)
 }

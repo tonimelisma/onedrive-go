@@ -236,7 +236,7 @@ Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../
 First seen: 2026-04-05  
 Last seen: 2026-04-09
 Area: `e2e_full`, CLI `rm`, forced-overwrite cleanup  
-Suite / test: `go test -tags='e2e e2e_full' ./e2e -run '^TestE2E_EdgeCases$|^TestE2E_Sync_BidirectionalMerge$'`; later isolated `TestE2E_Sync_BigDeleteProtection`  
+Suite / test: `go test -tags='e2e e2e_full' ./e2e -run '^TestE2E_EdgeCases$|^TestE2E_Sync_BidirectionalMerge$'`; later isolated `TestE2E_Sync_DeleteSafetyThreshold`
 Classification: graph quirk  
 Status: mitigated  
 Recurring: yes  
@@ -253,7 +253,7 @@ Evidence:
 - The immediate `DELETE /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s5fd8d410d21d4234a567f45e01fc46e2`
   still returned HTTP 404 `itemNotFound` with request ID
   `335ea56d-e3a9-4d2f-8b4c-742da9088eec`.
-- On April 7, 2026, the isolated repro for `TestE2E_Sync_BigDeleteProtection`
+- On April 7, 2026, the isolated repro for `TestE2E_Sync_DeleteSafetyThreshold`
   extended the same family: after repeated sibling deletes, the initial exact
   path lookup for `file-10.txt` returned `404 itemNotFound` even though the
   file had been created successfully earlier in the same run.
@@ -464,8 +464,8 @@ Promoted docs: [system.md](../design/system.md)
 
 First seen: 2026-04-07  
 Last seen: 2026-04-07  
-Area: `e2e_full`, CLI `rm`, big-delete setup  
-Suite / test: local isolated repro of `TestE2E_Sync_BigDeleteProtection`  
+Area: `e2e_full`, CLI `rm`, delete-safety setup
+Suite / test: local isolated repro of `TestE2E_Sync_DeleteSafetyThreshold`
 Classification: graph quirk  
 Status: fixed  
 Recurring: no  
@@ -638,7 +638,7 @@ Suite / test: scheduled `e2e_full` setup and `internal/graph` integration tests 
 Classification: graph quirk  
 Status: mitigated  
 Recurring: yes  
-Summary: Ordinary metadata requests could connect successfully and then stall for tens of seconds before sending response headers. This first showed up in the scheduled full E2E battery during big-delete setup, then recurred in GitHub Actions integration when a normal `GET /me` call stalled long enough to hit the old 30-second budget.  
+Summary: Ordinary metadata requests could connect successfully and then stall for tens of seconds before sending response headers. This first showed up in the scheduled full E2E battery during delete-safety setup, then recurred in GitHub Actions integration when a normal `GET /me` call stalled long enough to hit the old 30-second budget.
 Evidence:
 - [graph-api-quirks.md](graph-api-quirks.md#slowstalled-metadata-response-headers) records the incident family with dates April 3, 2026 and April 5, 2026.
 - [internal/graph/integration_test.go](/Users/tonimelisma/Development/onedrive-go-live-incident-ledger/internal/graph/integration_test.go#L24) now keeps the live integration timeout above the observed GitHub runner tail latency.

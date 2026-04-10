@@ -56,9 +56,9 @@ func TestS1_NoRemoteDeleteWithoutBaseline(t *testing.T) {
 }
 
 // Validates: R-6.2.5, R-6.4.1
-// TestS5_BigDeleteThresholdBoundary validates that big-delete protection
+// TestS5_DeleteSafetyThresholdBoundary validates that delete safety protection
 // uses a simple absolute count threshold with no percentage or per-folder checks.
-func TestS5_BigDeleteThresholdBoundary(t *testing.T) {
+func TestS5_DeleteSafetyThresholdBoundary(t *testing.T) {
 	t.Run("above_threshold_blocked", func(t *testing.T) {
 		// 11 deletes > threshold of 10 → triggered.
 		assert.True(t, exceedsDeleteThreshold(11, 10))
@@ -629,9 +629,9 @@ func TestBuildDependencies_ChildDeleteBeforeParent(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // Validates: R-6.2.5, R-6.4.1
-// TestPlan_BigDeleteBlocked validates that the planner returns
+// TestPlan_DeleteSafetyBlocked validates that the planner returns
 // ErrDeleteSafetyThresholdExceeded when planned deletions exceed the threshold.
-func TestPlan_BigDeleteBlocked(t *testing.T) {
+func TestPlan_DeleteSafetyBlocked(t *testing.T) {
 	planner := NewPlanner(synctest.TestLogger(t))
 
 	// Create 10-item baseline.
@@ -662,7 +662,7 @@ func TestPlan_BigDeleteBlocked(t *testing.T) {
 		})
 	}
 
-	config := &synctypes.SafetyConfig{BigDeleteThreshold: 5}
+	config := &synctypes.SafetyConfig{DeleteSafetyThreshold: 5}
 
 	_, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, config, nil)
 	require.Error(t, err)

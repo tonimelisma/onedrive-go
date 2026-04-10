@@ -25,7 +25,7 @@ The planner is the intellectual core of the sync engine. It is a pure function �
 3. Classify each PathView using the decision matrix
 4. Apply filters symmetrically to both remote and local items
 5. Order the plan (folder creates before files, depth-first for deletes)
-6. Safety checks (big-delete) as pure functions on ActionPlan + Baseline
+6. Safety checks (delete safety threshold) as pure functions on ActionPlan + Baseline
 
 ## File Decision Matrix
 
@@ -86,10 +86,10 @@ Implements: R-6.2.5 [verified], R-6.4.1 [verified]
 
 Single absolute count threshold: `exceedsDeleteThreshold(deleteCount, threshold)` returns true when `deleteCount > threshold` and `threshold > 0`. No percentage checks, no per-folder checks (industry standard: rclone, rsync, abraunegg).
 
-`SafetyConfig` has one field: `BigDeleteThreshold int`, but the planner is no
+`SafetyConfig` has one field: `DeleteSafetyThreshold int`, but the planner is no
 longer the owner of user approval. The engine calls the planner with an
 effectively disabled threshold and then applies the configured
-`big_delete_threshold` at the engine boundary where it can write durable
+`delete_safety_threshold` at the engine boundary where it can write durable
 `held_deletes` rows, filter unapproved deletes, and allow approved deletes to
 proceed.
 
@@ -121,7 +121,7 @@ later cascade revisits a path that an earlier cascade appended.
 
 **Safety preservation**:
 - Hash-before-delete (S4): cascaded file deletes go through `DeleteLocalFile` which verifies hash against baseline before deletion — if locally modified, creates conflict copy.
-- Big-delete protection: cascaded actions increase the delete count → threshold check at Step 4 happens after cascade → triggers correctly.
+- Delete safety protection: cascaded actions increase the delete count → threshold check at Step 4 happens after cascade → triggers correctly.
 - Non-disposable check: `DeleteLocalFolder` remains as defense-in-depth.
 - Upload-only mode: cascade is skipped entirely (no local deletions in upload-only).
 

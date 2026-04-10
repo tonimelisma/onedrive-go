@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/syncstore/store.go, internal/syncstore/inspector.go, internal/syncstore/schema.go, internal/syncstore/schema.sql, internal/syncstore/tx.go, internal/syncstore/store_baseline.go, internal/syncstore/store_observation.go, internal/syncstore/store_conflicts.go, internal/syncstore/store_failures.go, internal/syncstore/store_held_deletes.go, internal/syncstore/store_admin.go, internal/syncstore/store_scope_blocks.go, internal/syncstore/shortcuts.go, internal/syncverify/verify.go, internal/syncrecovery/recovery.go, internal/cli/verify.go, internal/cli/issues.go, internal/cli/failure_display.go
+GOVERNS: internal/syncstore/store.go, internal/syncstore/inspector.go, internal/syncstore/schema.go, internal/syncstore/migrations/*.sql, internal/syncstore/tx.go, internal/syncstore/store_baseline.go, internal/syncstore/store_observation.go, internal/syncstore/store_conflicts.go, internal/syncstore/store_failures.go, internal/syncstore/store_held_deletes.go, internal/syncstore/store_admin.go, internal/syncstore/store_scope_blocks.go, internal/syncstore/shortcuts.go, internal/syncverify/verify.go, internal/syncrecovery/recovery.go, internal/cli/verify.go, internal/cli/issues.go, internal/cli/failure_display.go
 
 Implements: R-2.4.4 [verified], R-2.4.5 [verified], R-2.5 [verified], R-2.5.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.7 [verified], R-2.15.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.14 [verified], R-2.10.22 [verified], R-2.10.32 [verified], R-2.10.33 [verified], R-2.10.34 [verified], R-2.10.41 [verified], R-2.10.45 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified], R-6.7.17 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
@@ -15,7 +15,7 @@ peer authority; it is rebuilt from store state when the engine starts.
 
 - Owns: Durable sync state in SQLite, transactional state transitions, conflict/failure/scope persistence, and restart/recovery records.
 - Does Not Own: Graph calls, sync-root filesystem probing, failure classification policy, or multi-drive lifecycle.
-- Source of Truth: The SQLite schema and rows defined by `schema.sql`.
+- Source of Truth: The embedded goose migration history and the SQLite rows it defines.
 - Allowed Side Effects: SQLite reads/writes and schema application only.
 - Mutable Runtime Owner: `SyncStore` owns its writable DB handle and internal rebuildable baseline cache. `Inspector` owns its own read-only DB handle. Neither runs background goroutines; both expose synchronous methods only.
 - Error Boundary: The store persists already-classified failure roles and categories from [error-model.md](error-model.md). It does not reinterpret raw external errors into new policy classes.
@@ -31,17 +31,19 @@ peer authority; it is rebuilt from store state when the engine starts.
 | Conflict request concurrency is first-writer-wins until engine claim completes. | `TestSyncStore_RequestConflictResolutionSameStrategyIsIdempotent`, `TestSyncStore_RequestConflictResolutionFirstWriterWinsConcurrently`, `TestSyncStore_RequestConflictResolutionRejectsResolvingAndResolved` |
 | Visible issue grouping comes from one store-owned projection instead of CLI-local reconstruction. | `TestSyncStore_ListVisibleIssueGroups` |
 | Crash-shaped `downloading` / `deleting` residue in the state DB is replayed from durable store truth on the next live sync run, and the immediate rerun is idle. | `TestE2E_Sync_CrashRecovery_ReplaysDurableInProgressRows` |
-| Store schema versioning sets the current `user_version` and rejects unversioned existing DBs instead of silently migrating durable user intent. | `TestNewSyncStore_SetsCurrentSchemaVersion`, `TestNewSyncStore_RejectsUnversionedExistingStateDB` |
+| Store schema migration uses embedded goose migrations and rejects existing non-goose DBs instead of silently guessing at durable user intent. | `TestNewSyncStore_AppliesCurrentGooseMigration`, `TestNewSyncStore_RejectsUnversionedExistingStateDB` |
 
-`NewSyncStore()` opens SQLite in WAL mode and applies the canonical schema from
-[`schema.sql`](/Users/tonimelisma/Development/onedrive-go/internal/syncstore/schema.sql)
+`NewSyncStore()` opens SQLite in WAL mode and applies the embedded goose
+migrations from
+[`internal/syncstore/migrations`](/Users/tonimelisma/Development/onedrive-go/internal/syncstore/migrations)
 through [`schema.go`](/Users/tonimelisma/Development/onedrive-go/internal/syncstore/schema.go).
-Fresh databases use the final schema directly and set `PRAGMA user_version`
-to the one current schema version. Existing stores with a non-current or
-unversioned schema are rejected with a clear rebuild/delete message instead of
-being migrated in place. This is deliberate: the state DB now contains durable
-user intent, not only rebuildable derived cache, so unknown schema shape must
-fail loudly.
+Fresh databases start at migration `00001_init.sql` and record applied
+versions in goose's `goose_db_version` table. Existing stores that already
+carry goose history are advanced by the migration runner. Existing stores with
+user tables but no goose history are rejected with a clear rebuild/migrate
+message. This is deliberate: the state DB now contains durable user intent, not
+only rebuildable derived cache, so unknown schema shape must fail loudly
+instead of being guessed into a newer lifecycle.
 
 Key operations:
 
@@ -56,7 +58,7 @@ Key operations:
   piggybacks on generic metadata keys.
 - `RefreshLocalBaseline(ctx, LocalBaselineRefresh)` is the explicit reconciliation path used when local disk now represents the chosen truth without a new executor transfer result. It updates only the local-side baseline tuple, preserves known remote-side metadata/`etag`, and marks a matching `remote_state` row synced.
 - `RequestConflictResolution(ctx, id, resolution)` records conflict-resolution intent without executing side effects. `ClaimConflictResolution`, `MarkConflictResolutionFailed`, and `ResolveConflict` enforce the durable `resolution_requested -> resolving -> resolved/resolve_failed` workflow for engine-owned execution.
-- `UpsertHeldDeletes`, `ApproveHeldDeletes`, `ListHeldDeletesByState`, `ConsumeHeldDelete`, and `DeleteHeldDelete` own the durable big-delete approval workflow. Approval changes rows from `held` to `approved`; successful engine deletes consume approved rows only when drive, action type, path, and item ID match.
+- `UpsertHeldDeletes`, `ApproveHeldDeletes`, `ListHeldDeletesByState`, `ConsumeHeldDelete`, and `DeleteHeldDelete` own the durable delete-safety approval workflow. Approval changes rows from `held` to `approved`; successful engine deletes consume approved rows only when drive, action type, path, and item ID match. Engine planning prunes stale approved rows when the current plan proves a reused path now targets a different item ID.
 - `RecordFailure(ctx, SyncFailureParams, delayFn)` is the single failure writer. The engine provides classification and retry policy; the store provides transactional persistence and conflict-safe upsert behavior.
 - `TakeSyncFailure(ctx, path, driveID)` is the store-owned read-and-delete boundary for engine-managed failure resolution logging. It returns the authoritative persisted row, including `failure_count`, in the same transaction that removes it.
 - `ResetDownloadingStates(ctx, delayFn)`, `ListDeletingCandidates(ctx)`, and `FinalizeDeletingStates(ctx, deleted, pending, delayFn)` are the state-only crash-recovery primitives. The store no longer probes the sync-root filesystem itself. Their bridge rows preserve the exact replay action (`ActionDownload` for reset downloads, `ActionLocalDelete` for reset deletes) so the engine can re-enter the correct execution lane on the next pass.
@@ -145,10 +147,10 @@ comparison tuple for existing rows, creates unknown remote-side fields for
 local-only placeholder rows, and converges `remote_state` in the same
 transaction so the next sync does not rediscover stale remote work.
 
-## Canonical Schema (`schema.sql`)
+## Canonical Schema Migrations
 
-The schema is defined directly in final form. The important tables for failure
-and scope management are:
+The schema is defined by embedded goose migrations. The important tables for
+failure and scope management are:
 
 ### `sync_failures`
 

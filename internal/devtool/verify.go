@@ -400,7 +400,7 @@ func fullE2ESerialSyncTestNames() []string {
 		"TestE2E_Sync_ResolveAll",
 		"TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal",
 		"TestE2E_Sync_DeletePropagation",
-		"TestE2E_Sync_BigDeleteProtection",
+		"TestE2E_Sync_DeleteSafetyThreshold",
 		"TestE2E_Sync_DownloadOnlyIgnoresLocal",
 		"TestE2E_Sync_UploadOnlyIgnoresRemote",
 		"TestE2E_Sync_NestedFolderHierarchy",
@@ -1374,7 +1374,7 @@ func runStress(
 func runRepoConsistencyChecks(repoRoot string) error {
 	for _, check := range []func(string) error{
 		ensureNoStaleArchitecturePhrases,
-		ensureNoSchemaFrameworkTraces,
+		ensureSyncStoreMigrationDiscipline,
 		ensureGovernedDesignDocsHaveOwnershipContracts,
 		ensureCrossCuttingDesignDocs,
 		ensureCrossCuttingDesignDocEvidence,
@@ -1427,7 +1427,30 @@ func ensureNoStaleArchitecturePhrases(repoRoot string) error {
 	return nil
 }
 
-func ensureNoSchemaFrameworkTraces(repoRoot string) error {
+func ensureSyncStoreMigrationDiscipline(repoRoot string) error {
+	schemaOwnerPath := filepath.Join(repoRoot, "internal", "syncstore", "schema.go")
+	if _, err := localpath.Stat(schemaOwnerPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("stat sync-store schema owner: %w", err)
+	}
+
+	legacySchemaPath := filepath.Join(repoRoot, "internal", "syncstore", "schema.sql")
+	if _, err := localpath.Stat(legacySchemaPath); err == nil {
+		return fmt.Errorf("legacy sync-store schema file detected: %s", legacySchemaPath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat legacy sync-store schema file: %w", err)
+	}
+
+	initialMigrationPath := filepath.Join(repoRoot, "internal", "syncstore", "migrations", "00001_init.sql")
+	if _, err := localpath.Stat(initialMigrationPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("missing initial sync-store goose migration: %s", initialMigrationPath)
+		}
+		return fmt.Errorf("stat initial sync-store goose migration: %w", err)
+	}
+
 	roots := []string{
 		filepath.Join(repoRoot, "internal"),
 		filepath.Join(repoRoot, "cmd"),
@@ -1439,10 +1462,8 @@ func ensureNoSchemaFrameworkTraces(repoRoot string) error {
 	}
 
 	checks := []staleCheck{
-		{name: "stale third-party schema runner reference", pattern: regexp.MustCompile(`go` + `ose`)},
-		{name: "stale numbered schema path reference", pattern: regexp.MustCompile(`migra` + `tions/`)},
 		{name: "stale schema metadata table reference", pattern: regexp.MustCompile(`schema_` + `version`)},
-		{name: "stale numbered schema file reference", pattern: regexp.MustCompile(`0000\d_.*\.sql`)},
+		{name: "stale pragma schema version reference", pattern: regexp.MustCompile(`user_` + `version`)},
 	}
 
 	for _, check := range checks {
@@ -1451,7 +1472,7 @@ func ensureNoSchemaFrameworkTraces(repoRoot string) error {
 			return err
 		}
 		if match != "" {
-			return fmt.Errorf("stale schema-framework trace detected (%s): %s", check.name, match)
+			return fmt.Errorf("stale sync-store schema version trace detected (%s): %s", check.name, match)
 		}
 	}
 

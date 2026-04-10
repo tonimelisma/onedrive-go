@@ -216,7 +216,7 @@ func describeFilesystemSummary(key SummaryKey) (SummaryDescriptor, bool) {
 		return SummaryDescriptor{
 			Key:        SummaryHeldDeletes,
 			Title:      "HELD DELETES",
-			Reason:     "Big-delete protection triggered - too many deletes in one batch.",
+			Reason:     "Delete safety threshold triggered - too many deletes in one batch.",
 			Action:     "Run `issues approve-deletes` to approve, or investigate first.",
 			LogSummary: "held deletes",
 		}, true
@@ -296,7 +296,7 @@ func summaryKeyForFilesystemIssueType(issueType string) (SummaryKey, bool) {
 		return SummaryPathTooLong, true
 	case IssueFileTooLarge:
 		return SummaryFileTooLarge, true
-	case IssueBigDeleteHeld:
+	case IssueDeleteSafetyHeld:
 		return SummaryHeldDeletes, true
 	case IssueCaseCollision:
 		return SummaryCaseCollision, true

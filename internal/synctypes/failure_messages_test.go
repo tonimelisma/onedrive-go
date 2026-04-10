@@ -22,7 +22,7 @@ func TestMessageForIssueType_AllKnownTypes(t *testing.T) {
 		IssueInvalidFilename,
 		IssuePathTooLong,
 		IssueFileTooLarge,
-		IssueBigDeleteHeld,
+		IssueDeleteSafetyHeld,
 		IssueCaseCollision,
 		IssueDiskFull,
 		IssueServiceOutage,

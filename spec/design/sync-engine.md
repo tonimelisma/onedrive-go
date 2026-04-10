@@ -253,7 +253,7 @@ The engine relies on a few non-negotiable behavioral invariants:
 | Bootstrap subroutines stay directly testable for quiescence, no-change startup, change-driven startup, and crash-recovery cleanup without helper-loop shims. | `TestWaitForQuiescence_EmptyGraph`, `TestWaitForQuiescence_ContextCancel`, `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestBootstrapSync_CrashRecovery_MixedDeletingCandidates` |
 | Watch shutdown seals admission, stops retry/trial wake handling, and drops reconcile handoff after drain begins. | `TestRunWatch_ShutdownStopsRetryAndTrialTimers`, `TestRunWatch_ShutdownDropsReconcileResult`, `TestRunFullReconciliationAsync_ShutdownAfterCommit` |
 | Cancellation wins over fatal observer-exit shutdown races, and fallback waits honor cancellation without wall-clock sleeps. | `TestRunWatch_ContextCancel`, `TestRunWatch_CancellationWinsOverFinalObserverExit`, `TestRunWatch_FallbackSleepHonorsCancellation` |
-| Held-delete approval is engine-owned durable intent and authorizes execution only for matching drive/action/path/item identity. | `TestRunOnce_BigDelete_ApprovedDeletesBypassHold`, `TestRunOnce_BigDelete_StaleApprovalWithDifferentItemIDDoesNotBypassHold` |
+| Held-delete approval is engine-owned durable intent and authorizes execution only for matching drive/action/path/item identity. | `TestRunOnce_DeleteSafety_ApprovedDeletesBypassHold`, `TestRunOnce_DeleteSafety_StaleApprovalWithDifferentItemIDDoesNotBypassHold` |
 
 ### Runtime Ownership
 
@@ -812,9 +812,9 @@ observation/commit work.
 
 Implements: R-6.4.2 [verified], R-6.4.3 [verified]
 
-In watch mode, the planner-level big-delete check is disabled (`threshold=MaxInt32`) because 2-second debounced batches would fragment a mass delete across many small batches, each below threshold. Instead, a rolling-window `deleteCounter` accumulates planned deletes across batches.
+In watch mode, the planner-level delete-safety check is disabled (`threshold=MaxInt32`) because 2-second debounced batches would fragment a mass delete across many small batches, each below threshold. Instead, a rolling-window `deleteCounter` accumulates planned deletes across batches.
 
-**Counter**: `deleteCounter` tracks timestamps of planned delete actions within a configurable rolling window (5 minutes). When the cumulative count exceeds `big_delete_threshold`, the counter latches `held=true`. Expired entries (older than the window) are pruned on each `Add()` call.
+**Counter**: `deleteCounter` tracks timestamps of planned delete actions within a configurable rolling window (5 minutes). When the cumulative count exceeds `delete_safety_threshold`, the counter latches `held=true`. Expired entries (older than the window) are pruned on each `Add()` call.
 
 **Flow in `processBatch()`**: After `planner.Plan()` returns, the engine counts `ActionLocalDelete` + `ActionRemoteDelete` actions and calls `counter.Add(count)`. If `counter.IsHeld()`:
 1. Delete actions are filtered out of the plan (via `applyDeleteCounter()`)
@@ -825,9 +825,9 @@ In watch mode, the planner-level big-delete check is disabled (`threshold=MaxInt
 
 **External change detection**: A 10-second `recheckTicker` in the `RunWatch()` select loop runs `PRAGMA data_version` to detect offline CLI writes. When the data version changes, `handleExternalChanges()` queries held-delete rows. If no `state='held'` rows remain, it calls `counter.Release()`. Socket approval also wakes the runner immediately. On the next user-intent pass, approved deletes are rebuilt into planner events and dispatched normally.
 
-**Consumption**: Approved rows are consumed only after the matching delete action succeeds. Matching requires the same drive, action type, path, and item ID. A stale approval for a reused path with a different item ID remains visible and does not authorize the current delete. Approved deletes are excluded from big-delete counters and holds, so the protection does not retrigger for work the user already approved.
+**Consumption and stale approvals**: Approved rows are consumed only after the matching delete action succeeds. Matching requires the same drive, action type, path, and item ID. A stale approval for a reused path with a different item ID does not authorize the current delete. After an engine pass has a current plan, approved rows for the same drive/action/path but a different planned item ID are pruned as obsolete engine-owned intent. Other approved rows stay durable until they are consumed or rebuilt by approved-intent dispatch, which avoids deleting legitimate approvals just because a watch batch did not include that path. Approved deletes are excluded from delete-safety counters and holds, so the protection does not retrigger for work the user already approved.
 
-One-shot sync uses the same durable workflow: if the planned delete count exceeds `big_delete_threshold`, unapproved delete actions are filtered out and stored as `held`; after approval, the next ordinary sync pass executes and consumes them. There is no sync/watch force-flag bypass path.
+One-shot sync uses the same durable workflow: if the planned delete count exceeds `delete_safety_threshold`, unapproved delete actions are filtered out and stored as `held`; after approval, the next ordinary sync pass executes and consumes them. There is no sync/watch force-flag bypass path.
 
 ### Rationale
 

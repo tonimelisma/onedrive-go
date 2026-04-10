@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -341,4 +342,87 @@ func TestConflictsService_RunResolve_AllDryRun(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "Would resolve /foo.txt")
+}
+
+// Validates: R-2.3.12
+func TestConflictsService_RequestConflictResolutionConcurrentCLIsFirstWriterWins(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	canonicalID := driveid.MustCanonicalID("personal:concurrent-conflicts@example.com")
+	logger := slog.New(slog.DiscardHandler)
+	store, err := syncstore.NewSyncStore(t.Context(), config.DriveStatePath(canonicalID), logger)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, store.Close(context.Background()))
+	})
+
+	_, err = store.DB().ExecContext(t.Context(), `
+		INSERT INTO conflicts
+			(id, drive_id, item_id, path, conflict_type, detected_at, resolution, state)
+		VALUES
+			('conflict-concurrent-cli', ?, 'item-1', '/conflict.txt', 'edit_edit', 1, 'unresolved', 'unresolved')`,
+		canonicalID.String(),
+	)
+	require.NoError(t, err)
+
+	svc := newConflictsService(&CLIContext{
+		Logger: logger,
+		Cfg:    &config.ResolvedDrive{CanonicalID: canonicalID},
+	})
+
+	const requestCount = 16
+	statuses := make(chan syncstore.ConflictRequestStatus, requestCount)
+	errorsCh := make(chan error, requestCount)
+	start := make(chan struct{})
+	ctx := t.Context()
+	var wg sync.WaitGroup
+
+	for i := range requestCount {
+		strategy := synctypes.ResolutionKeepLocal
+		if i%2 == 1 {
+			strategy = synctypes.ResolutionKeepRemote
+		}
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			result, requestErr := svc.requestConflictResolution(
+				ctx,
+				store,
+				"conflict-concurrent-cli",
+				strategy,
+			)
+			if requestErr != nil {
+				errorsCh <- requestErr
+				return
+			}
+			statuses <- result.Status
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+	close(statuses)
+	close(errorsCh)
+
+	require.Empty(t, errorsCh)
+
+	queued := 0
+	for status := range statuses {
+		switch status {
+		case syncstore.ConflictRequestQueued:
+			queued++
+		case syncstore.ConflictRequestAlreadyQueued, syncstore.ConflictRequestDifferentStrategy:
+		case syncstore.ConflictRequestAlreadyResolving, syncstore.ConflictRequestAlreadyResolved:
+			require.Failf(t, "unexpected terminal conflict request status", "status=%s", status)
+		default:
+			require.Failf(t, "unexpected conflict request status", "status=%s", status)
+		}
+	}
+	assert.Equal(t, 1, queued)
+
+	conflict, err := store.GetConflict(t.Context(), "conflict-concurrent-cli")
+	require.NoError(t, err)
+	assert.Equal(t, synctypes.ConflictStateResolutionRequested, conflict.State)
+	assert.Contains(t, []string{synctypes.ResolutionKeepLocal, synctypes.ResolutionKeepRemote}, conflict.RequestedResolution)
 }

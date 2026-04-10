@@ -36,32 +36,32 @@ type driveIdentityProof struct {
 // Engine orchestrates a complete sync pass: observe → plan → execute → commit.
 // Single-drive only; multi-drive orchestration is handled by internal/multisync.
 type Engine struct {
-	baseline           *syncstore.SyncStore
-	planner            *syncplan.Planner
-	execCfg            *syncexec.ExecutorConfig
-	fetcher            synctypes.DeltaFetcher
-	socketIOFetcher    synctypes.SocketIOEndpointFetcher
-	itemsClient        synctypes.ItemClient
-	driveVerifier      synctypes.DriveVerifier      // optional (B-074)
-	folderDelta        synctypes.FolderDeltaFetcher // optional: for shortcut observation (6.4b)
-	recursiveLister    synctypes.RecursiveLister    // optional: for shortcut observation (6.4b)
-	permHandler        *PermissionHandler           // encapsulates all permission logic (6.4c)
-	syncRoot           string
-	syncTree           *synctree.Root
-	driveID            driveid.ID
-	driveType          string
-	rootItemID         string
-	logger             *slog.Logger
-	sessionStore       *driveops.SessionStore // for CleanStale() housekeeping
-	transferWorkers    int                    // goroutine count for the worker pool
-	checkWorkers       int                    // goroutine limit for parallel file hashing
-	localFilter        synctypes.LocalFilterConfig
-	localRules         synctypes.LocalObservationRules
-	syncScopeConfig    syncscope.Config
-	enableWebsocket    bool
-	bigDeleteThreshold int   // from config; 0 means use default
-	minFreeSpace       int64 // startup disk-scope revalidation threshold
-	diskAvailableFn    func(string) (uint64, error)
+	baseline              *syncstore.SyncStore
+	planner               *syncplan.Planner
+	execCfg               *syncexec.ExecutorConfig
+	fetcher               synctypes.DeltaFetcher
+	socketIOFetcher       synctypes.SocketIOEndpointFetcher
+	itemsClient           synctypes.ItemClient
+	driveVerifier         synctypes.DriveVerifier      // optional (B-074)
+	folderDelta           synctypes.FolderDeltaFetcher // optional: for shortcut observation (6.4b)
+	recursiveLister       synctypes.RecursiveLister    // optional: for shortcut observation (6.4b)
+	permHandler           *PermissionHandler           // encapsulates all permission logic (6.4c)
+	syncRoot              string
+	syncTree              *synctree.Root
+	driveID               driveid.ID
+	driveType             string
+	rootItemID            string
+	logger                *slog.Logger
+	sessionStore          *driveops.SessionStore // for CleanStale() housekeeping
+	transferWorkers       int                    // goroutine count for the worker pool
+	checkWorkers          int                    // goroutine limit for parallel file hashing
+	localFilter           synctypes.LocalFilterConfig
+	localRules            synctypes.LocalObservationRules
+	syncScopeConfig       syncscope.Config
+	enableWebsocket       bool
+	deleteSafetyThreshold int   // from config; 0 means use default
+	minFreeSpace          int64 // startup disk-scope revalidation threshold
+	diskAvailableFn       func(string) (uint64, error)
 
 	// Test/debug-only invariant checks. Production keeps this disabled;
 	// tests enable it to catch lifecycle and scope regressions immediately.
@@ -150,42 +150,42 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 	))
 
 	// Default threshold if not set by config.
-	bdThreshold := cfg.BigDeleteThreshold
-	if bdThreshold == 0 {
-		bdThreshold = synctypes.DefaultBigDeleteThreshold
+	deleteSafetyThreshold := cfg.DeleteSafetyThreshold
+	if deleteSafetyThreshold == 0 {
+		deleteSafetyThreshold = synctypes.DefaultDeleteSafetyThreshold
 	}
 
 	e := &Engine{
-		baseline:           bm,
-		planner:            syncplan.NewPlanner(cfg.Logger),
-		execCfg:            execCfg,
-		fetcher:            cfg.Fetcher,
-		socketIOFetcher:    cfg.SocketIOFetcher,
-		itemsClient:        cfg.Items,
-		driveVerifier:      cfg.DriveVerifier,
-		folderDelta:        cfg.FolderDelta,
-		recursiveLister:    cfg.RecursiveLister,
-		sessionStore:       sessionStore,
-		syncRoot:           cfg.SyncRoot,
-		syncTree:           syncTree,
-		driveID:            cfg.DriveID,
-		driveType:          cfg.DriveType,
-		rootItemID:         cfg.RootItemID,
-		logger:             cfg.Logger,
-		transferWorkers:    cfg.TransferWorkers,
-		checkWorkers:       cfg.CheckWorkers,
-		localFilter:        cfg.LocalFilter,
-		localRules:         cfg.LocalRules,
-		syncScopeConfig:    cfg.SyncScope,
-		enableWebsocket:    cfg.EnableWebsocket,
-		bigDeleteThreshold: bdThreshold,
-		minFreeSpace:       cfg.MinFreeSpace,
-		diskAvailableFn:    driveops.DiskAvailable,
-		nowFn:              time.Now,
-		afterFunc:          realAfterFunc,
-		newTicker:          realNewTicker,
-		sleepFn:            realSleep,
-		jitterFn:           realJitter,
+		baseline:              bm,
+		planner:               syncplan.NewPlanner(cfg.Logger),
+		execCfg:               execCfg,
+		fetcher:               cfg.Fetcher,
+		socketIOFetcher:       cfg.SocketIOFetcher,
+		itemsClient:           cfg.Items,
+		driveVerifier:         cfg.DriveVerifier,
+		folderDelta:           cfg.FolderDelta,
+		recursiveLister:       cfg.RecursiveLister,
+		sessionStore:          sessionStore,
+		syncRoot:              cfg.SyncRoot,
+		syncTree:              syncTree,
+		driveID:               cfg.DriveID,
+		driveType:             cfg.DriveType,
+		rootItemID:            cfg.RootItemID,
+		logger:                cfg.Logger,
+		transferWorkers:       cfg.TransferWorkers,
+		checkWorkers:          cfg.CheckWorkers,
+		localFilter:           cfg.LocalFilter,
+		localRules:            cfg.LocalRules,
+		syncScopeConfig:       cfg.SyncScope,
+		enableWebsocket:       cfg.EnableWebsocket,
+		deleteSafetyThreshold: deleteSafetyThreshold,
+		minFreeSpace:          cfg.MinFreeSpace,
+		diskAvailableFn:       driveops.DiskAvailable,
+		nowFn:                 time.Now,
+		afterFunc:             realAfterFunc,
+		newTicker:             realNewTicker,
+		sleepFn:               realSleep,
+		jitterFn:              realJitter,
 		socketIOWakeSourceFactory: func(
 			fetcher synctypes.SocketIOEndpointFetcher,
 			driveID driveid.ID,

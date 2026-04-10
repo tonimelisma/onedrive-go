@@ -213,7 +213,7 @@ func IsActionableIssue(issueType string) bool {
 	case synctypes.IssueInvalidFilename, synctypes.IssuePathTooLong, synctypes.IssueFileTooLarge,
 		synctypes.IssuePermissionDenied, synctypes.IssueQuotaExceeded, synctypes.IssueLocalPermissionDenied,
 		synctypes.IssueCaseCollision, synctypes.IssueDiskFull, synctypes.IssueFileTooLargeForSpace,
-		synctypes.IssueBigDeleteHeld:
+		synctypes.IssueDeleteSafetyHeld:
 		return true
 	default:
 		return false

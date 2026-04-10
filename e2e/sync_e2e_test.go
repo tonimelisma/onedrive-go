@@ -105,6 +105,22 @@ func runCLIWithConfig(t *testing.T, cfgPath string, env map[string]string, args 
 	return stdout, stderr
 }
 
+func queueConflictResolution(t *testing.T, cfgPath string, env map[string]string, args ...string) string {
+	t.Helper()
+
+	resolveArgs := append([]string{"conflicts", "resolve"}, args...)
+	_, stderr := runCLIWithConfig(t, cfgPath, env, resolveArgs...)
+	assert.Contains(t, stderr, "Queued", "conflict resolution should queue durable engine-owned intent")
+	return stderr
+}
+
+func queueConflictResolutionAndSync(t *testing.T, cfgPath string, env map[string]string, args ...string) {
+	t.Helper()
+
+	queueConflictResolution(t, cfgPath, env, args...)
+	runCLIWithConfig(t, cfgPath, env, "sync")
+}
+
 // runCLIWithConfigAllowError runs the CLI binary with a custom config file
 // and returns the output even on error.
 func runCLIWithConfigAllowError(t *testing.T, cfgPath string, env map[string]string, args ...string) (string, string, error) {
@@ -498,11 +514,34 @@ func TestE2E_Sync_Conflicts(t *testing.T) {
 
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
+	opsCfgPath := writeMinimalConfig(t)
 
-	// Run conflicts — should show no conflicts on a fresh drive.
+	testFolder := fmt.Sprintf("e2e-fast-conflict-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+
+	localDir := filepath.Join(syncDir, testFolder)
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
+	conflictFile := filepath.Join(localDir, "conflict.txt")
+	require.NoError(t, os.WriteFile(conflictFile, []byte("original"), 0o600))
+
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+
+	require.NoError(t, os.WriteFile(conflictFile, []byte("local edit"), 0o600))
+	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/conflict.txt", "remote edit")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync")
+	assert.Contains(t, stderr, "Conflicts:")
+
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
-	assert.True(t, strings.Contains(stdout, "No conflicts."),
-		"expected 'No conflicts.' in output, got: %s", stdout)
+	assert.Contains(t, stdout, "conflict.txt")
+
+	queueConflictResolutionAndSync(t, cfgPath, env, testFolder+"/conflict.txt", "--keep-remote")
+
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
+	assert.Contains(t, stdout, "No conflicts.")
+
+	content, err := os.ReadFile(conflictFile)
+	require.NoError(t, err)
+	assert.Equal(t, "remote edit", string(content))
 }
 
 func TestE2E_Sync_DriveRemoveAndReAdd(t *testing.T) {

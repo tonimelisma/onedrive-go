@@ -50,7 +50,7 @@ func defaultConfigTemplate() string {
 # check_workers = %d
 
 # Safety
-# big_delete_threshold = %d
+# delete_safety_threshold = %d
 # min_free_space = %q
 # use_local_trash = %t      # platform default
 
@@ -74,7 +74,7 @@ func defaultConfigTemplate() string {
 		defaultIgnoreMarker,
 		defaultTransferWorkers,
 		defaultCheckWorkers,
-		defaultBigDeleteThreshold,
+		defaultDeleteSafetyThreshold,
 		defaultMinFreeSpace,
 		defaultUseLocalTrash(),
 		defaultPollInterval,
