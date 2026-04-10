@@ -733,13 +733,22 @@ request goes through the control socket; otherwise the CLI writes the same
 request into the drive state DB. The engine claims queued requests and executes
 the side effects during normal `sync` / `sync --watch` ownership.
 
-Conflict rows have explicit workflow states:
+Conflict state is split across two durable authorities:
 
-- `unresolved` — visible conflict with no queued user decision
+- `conflicts` owns visible conflict facts and final historical outcome
+  (`resolution=unresolved|keep_local|keep_remote|keep_both`)
+- `conflict_requests` owns only active/failed request workflow
+
+Request rows use these explicit workflow states:
+
 - `resolution_requested` — durable user intent is queued
 - `resolving` — one engine has claimed the request
 - `resolve_failed` — engine execution failed; the requested resolution and error remain durable
-- `resolved` — resolution completed and the row is historical
+
+Successful execution deletes the `conflict_requests` row in the same
+transaction that marks the matching `conflicts` row resolved. This keeps the
+engine as the only side-effect owner while preventing the conflict fact table
+from also becoming a queued-work authority.
 
 `keep_both` is intentionally modeled as an explicit reconciliation path, not
 as a synthetic executor transfer outcome:
@@ -825,7 +834,7 @@ In watch mode, the planner-level delete-safety check is disabled (`threshold=Max
 
 **External change detection**: A 10-second `recheckTicker` in the `RunWatch()` select loop runs `PRAGMA data_version` to detect offline CLI writes. When the data version changes, `handleExternalChanges()` queries held-delete rows. If no `state='held'` rows remain, it calls `counter.Release()`. Socket approval also wakes the runner immediately. On the next user-intent pass, approved deletes are rebuilt into planner events and dispatched normally.
 
-**Consumption and stale approvals**: Approved rows are consumed only after the matching delete action succeeds. Matching requires the same drive, action type, path, and item ID. A stale approval for a reused path with a different item ID does not authorize the current delete. After an engine pass has a current plan, approved rows for the same drive/action/path but a different planned item ID are pruned as obsolete engine-owned intent. Other approved rows stay durable until they are consumed or rebuilt by approved-intent dispatch, which avoids deleting legitimate approvals just because a watch batch did not include that path. Approved deletes are excluded from delete-safety counters and holds, so the protection does not retrigger for work the user already approved.
+**Consumption and stale approvals**: Approved rows are consumed only after the matching delete action succeeds. Matching requires the same drive, action type, path, and item ID. A stale approval for a reused path with a different item ID does not authorize the current delete. After an engine pass has a current plan, approved rows for the same drive/action/path but a different planned item ID are pruned as obsolete engine-owned intent. The engine records the prune count/time in `sync_metadata` so status and audits can explain that cleanup later. Other approved rows stay durable until they are consumed or rebuilt by approved-intent dispatch, which avoids deleting legitimate approvals just because a watch batch did not include that path. Approved deletes are excluded from delete-safety counters and holds, so the protection does not retrigger for work the user already approved.
 
 One-shot sync uses the same durable workflow: if the planned delete count exceeds `delete_safety_threshold`, unapproved delete actions are filtered out and stored as `held`; after approval, the next ordinary sync pass executes and consumes them. There is no sync/watch force-flag bypass path.
 

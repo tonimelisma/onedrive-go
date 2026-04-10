@@ -1677,8 +1677,10 @@ func TestResolveConflict_KeepLocal_TransferFails(t *testing.T) {
 	remaining, err := eng.ListConflicts(ctx)
 	require.NoError(t, err, "ListConflicts after failed resolve")
 	require.Len(t, remaining, 1, "expected 1 unresolved conflict")
-	assert.Equal(t, synctypes.ConflictStateResolveFailed, remaining[0].State)
-	assert.Contains(t, remaining[0].ResolutionError, "upload failed")
+	request, err := eng.baseline.GetConflictRequest(ctx, conflicts[0].ID)
+	require.NoError(t, err)
+	assert.Equal(t, synctypes.ConflictStateResolveFailed, request.State)
+	assert.Contains(t, request.ResolutionError, "upload failed")
 }
 
 // ---------------------------------------------------------------------------

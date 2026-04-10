@@ -107,6 +107,7 @@ func (e *Engine) approvedDeleteKeysForPlan(
 	planned := plannedDeleteKeys(plan)
 	plannedItemsByPath := plannedDeleteItemsByPath(plan)
 	keys := make(map[heldDeleteKey]struct{}, len(approved))
+	prunedCount := 0
 	for i := range approved {
 		record := &approved[i]
 		key := deleteKeyFromRecord(record)
@@ -126,10 +127,14 @@ func (e *Engine) approvedDeleteKeysForPlan(
 		if err := e.baseline.DeleteHeldDelete(ctx, record.DriveID, record.ActionType, record.Path, record.ItemID); err != nil {
 			return nil, fmt.Errorf("sync: prune stale approved held delete %s: %w", record.Path, err)
 		}
+		prunedCount++
 		e.logger.Info("pruned stale approved held delete",
 			slog.String("path", record.Path),
 			slog.String("item_id", record.ItemID),
 		)
+	}
+	if err := e.baseline.RecordStaleHeldDeletePrune(ctx, prunedCount, e.nowFunc()); err != nil {
+		return nil, fmt.Errorf("sync: record stale approved held delete prune: %w", err)
 	}
 
 	return keys, nil
@@ -352,7 +357,7 @@ func (e *Engine) processQueuedConflictResolutions(ctx context.Context) error {
 				continue
 			}
 
-			execErr := e.executeConflictResolution(ctx, claimed, claimed.RequestedResolution)
+			execErr := e.executeConflictResolution(ctx, &claimed.ConflictRecord, claimed.RequestedResolution)
 			if execErr != nil {
 				if err := e.baseline.MarkConflictResolutionFailed(ctx, claimed.ID, execErr); err != nil {
 					return fmt.Errorf("sync: mark conflict resolution failed: %w", err)

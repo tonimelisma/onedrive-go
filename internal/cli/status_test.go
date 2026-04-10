@@ -18,6 +18,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
@@ -611,6 +612,69 @@ func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsIssues(t *testing.T) {
 	assert.Equal(t, 4, info.Issues)
 }
 
+// Validates: R-2.3.6, R-2.3.12
+func TestQuerySyncState_DurableIntentCountsAndActionHints(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.DiscardHandler)
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	store, err := syncstore.NewSyncStore(t.Context(), dbPath, logger)
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, store.Close(t.Context()))
+	}()
+
+	ctx := t.Context()
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO conflicts
+			(id, drive_id, item_id, path, conflict_type, detected_at, resolution)
+		VALUES
+			('conflict-pending', 'd!1', 'item-1', '/pending.txt', 'edit_edit', 1, 'unresolved'),
+			('conflict-resolving', 'd!1', 'item-2', '/resolving.txt', 'edit_edit', 2, 'unresolved'),
+			('conflict-failed', 'd!1', 'item-3', '/failed.txt', 'edit_edit', 3, 'unresolved')`)
+	require.NoError(t, err)
+
+	require.NoError(t, store.UpsertHeldDeletes(ctx, []synctypes.HeldDeleteRecord{{
+		DriveID:       driveid.New("d!1"),
+		ActionType:    synctypes.ActionRemoteDelete,
+		Path:          "/delete-me.txt",
+		ItemID:        "item-delete",
+		State:         synctypes.HeldDeleteStateHeld,
+		HeldAt:        1,
+		LastPlannedAt: 1,
+	}}))
+	require.NoError(t, store.ApproveHeldDeletes(ctx))
+
+	queued, err := store.RequestConflictResolution(ctx, "conflict-pending", synctypes.ResolutionKeepLocal)
+	require.NoError(t, err)
+	assert.Equal(t, syncstore.ConflictRequestQueued, queued.Status)
+
+	resolving, err := store.RequestConflictResolution(ctx, "conflict-resolving", synctypes.ResolutionKeepRemote)
+	require.NoError(t, err)
+	assert.Equal(t, syncstore.ConflictRequestQueued, resolving.Status)
+	_, ok, err := store.ClaimConflictResolution(ctx, "conflict-resolving")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	failed, err := store.RequestConflictResolution(ctx, "conflict-failed", synctypes.ResolutionKeepBoth)
+	require.NoError(t, err)
+	assert.Equal(t, syncstore.ConflictRequestQueued, failed.Status)
+	_, ok, err = store.ClaimConflictResolution(ctx, "conflict-failed")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, store.MarkConflictResolutionFailed(ctx, "conflict-failed", assert.AnError))
+
+	info := querySyncState(dbPath, logger)
+	require.NotNil(t, info)
+	assert.Equal(t, 1, info.PendingHeldDeleteApprovals)
+	assert.Equal(t, 1, info.PendingConflictRequests)
+	assert.Equal(t, 1, info.ResolvingConflictRequests)
+	assert.Equal(t, 1, info.FailedConflictRequests)
+	assert.Contains(t, info.ActionHints, "Run `onedrive-go sync` or start `onedrive-go sync --watch` to execute approved deletes.")
+	assert.Contains(t, info.ActionHints, "Run `onedrive-go sync` or start `onedrive-go sync --watch` to execute queued conflict resolutions.")
+	assert.Contains(t, info.ActionHints, "Run `onedrive-go conflicts` to inspect failures, then rerun `onedrive-go conflicts resolve`.")
+}
+
 // Validates: R-2.10.4, R-2.10.32
 func TestQuerySyncState_PreservesIssueGroupScopeContext(t *testing.T) {
 	t.Parallel()
@@ -1135,6 +1199,33 @@ func TestPrintSyncStateText_WithIssueGroups(t *testing.T) {
 	var buf bytes.Buffer
 	require.NoError(t, printSyncStateText(&buf, ss))
 	requireGoldenText(t, "status_sync_state_with_issue_groups.golden", buf.String())
+}
+
+// Validates: R-2.3.6, R-2.3.12
+func TestPrintSyncStateText_WithDurableIntentCountsAndHints(t *testing.T) {
+	t.Parallel()
+
+	ss := &syncStateInfo{
+		PendingHeldDeleteApprovals: 2,
+		PendingConflictRequests:    3,
+		ResolvingConflictRequests:  1,
+		FailedConflictRequests:     4,
+		ActionHints: []string{
+			"Run `onedrive-go sync` or start `onedrive-go sync --watch` to execute approved deletes.",
+			"Run `onedrive-go conflicts` to inspect failures, then rerun `onedrive-go conflicts resolve`.",
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, printSyncStateText(&buf, ss))
+
+	output := buf.String()
+	assert.Contains(t, output, "Approved deletes waiting: 2")
+	assert.Contains(t, output, "Queued conflict resolutions: 3")
+	assert.Contains(t, output, "Resolving conflicts: 1")
+	assert.Contains(t, output, "Failed conflict resolutions: 4")
+	assert.Contains(t, output, "Next: Run `onedrive-go sync` or start `onedrive-go sync --watch` to execute approved deletes.")
+	assert.Contains(t, output, "Next: Run `onedrive-go conflicts` to inspect failures, then rerun `onedrive-go conflicts resolve`.")
 }
 
 func TestComputeSummary_AggregatesPendingAndRetrying(t *testing.T) {

@@ -18,7 +18,7 @@ import (
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
-const currentMigrationVersion = int64(1)
+const currentMigrationVersion = int64(2)
 
 // ErrIncompatibleSchema marks a state DB that cannot be trusted under the
 // current durable-intent schema. The state is rebuildable, but user intent is

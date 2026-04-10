@@ -14,6 +14,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
 // ---------------------------------------------------------------------------
@@ -411,6 +413,82 @@ func TestE2E_Conflicts_ResolveConflictNotFound(t *testing.T) {
 	// Try to resolve a non-existent conflict.
 	output := runCLIWithConfigExpectError(t, cfgPath, env, "conflicts", "resolve", "nonexistent-id", "--keep-local")
 	assert.Contains(t, output, "not found", "should report conflict not found")
+}
+
+// Validates: R-2.3.5, R-2.9.3
+func TestE2E_Conflicts_ResolveWithWatchDaemonExecutesQueuedIntent(t *testing.T) {
+	registerLogDump(t)
+
+	syncDir := t.TempDir()
+	cfgPath, env := writeSyncConfig(t, syncDir)
+	opsCfgPath := writeMinimalConfig(t)
+
+	testFolder := fmt.Sprintf("e2e-conflicts-watch-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+
+	localDir := filepath.Join(syncDir, testFolder)
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "watch-conflict.txt"), []byte("original"), 0o600))
+
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "watch-conflict.txt"), []byte("local-watch"), 0o600))
+	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/watch-conflict.txt", "remote-watch")
+
+	runCLIWithConfig(t, cfgPath, env, "sync")
+
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
+	assert.Contains(t, stdout, "watch-conflict.txt", "conflict should exist before watch daemon starts")
+
+	daemonArgs := []string{
+		"--config", cfgPath,
+		"--drive", drive,
+		"--debug",
+		"sync", "--watch",
+	}
+	cmd := makeCmd(daemonArgs, env)
+
+	var daemonStdout, daemonStderr syncBuffer
+	cmd.Stdout = &daemonStdout
+	cmd.Stderr = &daemonStderr
+
+	require.NoError(t, cmd.Start(), "failed to start watch daemon")
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+			_ = cmd.Wait()
+		}
+
+		logCLIExecution(t, daemonArgs, daemonStdout.String(), daemonStderr.String())
+	})
+
+	waitForDaemonReady(t, &daemonStderr, 30*time.Second)
+
+	statusBefore := getControlSocketStatus(t, env)
+	assert.Equal(t, synccontrol.OwnerModeWatch, statusBefore.OwnerMode)
+
+	queueOutput := queueConflictResolution(t, cfgPath, env, testFolder+"/watch-conflict.txt", "--keep-remote")
+	assert.Contains(t, queueOutput, "Queued", "watch daemon should accept the queued resolution request")
+
+	require.Eventually(t, func() bool {
+		out, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
+		return strings.Contains(out, "No conflicts.")
+	}, 90*time.Second, time.Second, "watch daemon should execute queued conflict resolution")
+
+	require.Eventually(t, func() bool {
+		content, err := os.ReadFile(filepath.Join(localDir, "watch-conflict.txt"))
+		return err == nil && string(content) == "remote-watch"
+	}, 90*time.Second, time.Second, "keep-remote should restore remote content locally")
+
+	require.Eventually(t, func() bool {
+		matches, err := filepath.Glob(filepath.Join(localDir, "watch-conflict.conflict-*"))
+		return err == nil && len(matches) == 0
+	}, 90*time.Second, time.Second, "keep-remote should remove the local conflict copy")
+
+	statusAfter := getControlSocketStatus(t, env)
+	assert.Equal(t, 0, statusAfter.PendingConflictRequests)
+	assert.Equal(t, 0, statusAfter.ResolvingConflictRequests)
+	assert.Equal(t, 0, statusAfter.FailedConflictRequests)
 }
 
 // TestE2E_Verify_AfterSync validates that verify passes after a clean sync
@@ -992,4 +1070,17 @@ func TestE2E_Issues_ApproveDeletes(t *testing.T) {
 
 	issuesAfterApproval, _ := pollCLIWithConfigContains(t, cfgPath, env, "No issues.", 90*time.Second, "issues")
 	assert.Contains(t, issuesAfterApproval, "No issues.", "issues should clear once held deletes are approved and processed")
+
+	require.Eventually(t, func() bool {
+		remoteListing, _ := runCLIWithConfig(t, opsCfgPath, nil, "ls", "/"+testFolder)
+		return !strings.Contains(remoteListing, "file-01.txt")
+	}, 90*time.Second, time.Second, "watch daemon should execute approved deletes without an extra manual sync")
+
+	require.Eventually(t, func() bool {
+		return getControlSocketStatus(t, env).PendingHeldDeleteApprovals == 0
+	}, 90*time.Second, time.Second, "watch daemon should consume approved held-delete rows")
+
+	statusAfterApproval := getControlSocketStatus(t, env)
+	assert.Equal(t, synccontrol.OwnerModeWatch, statusAfterApproval.OwnerMode)
+	assert.Equal(t, 0, statusAfterApproval.PendingHeldDeleteApprovals)
 }

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 )
 
@@ -69,19 +68,19 @@ func (s *issuesService) writeEmptyIssues() error {
 const approveDeletesSuccess = "Approved held deletes for this drive. The next sync pass will execute matching approved deletes."
 
 func (s *issuesService) runApproveDeletes(ctx context.Context) error {
-	if client, ok := openControlSocketClient(ctx); ok {
-		if client.ownerMode() == synccontrol.OwnerModeWatch {
+	_, err := routeDurableIntent(
+		ctx,
+		func(ctx context.Context) (struct{}, error) {
+			return struct{}{}, s.approveDeletesDirect(ctx)
+		},
+		func(ctx context.Context, client *controlSocketClient) (struct{}, error) {
 			if err := client.approveHeldDeletes(ctx, s.cc.Cfg.CanonicalID); err != nil {
-				if isControlDaemonError(err) {
-					return fmt.Errorf("approve held deletes via daemon: %w", err)
-				}
-				return s.approveDeletesDirect(ctx)
+				return struct{}{}, fmt.Errorf("approve held deletes via daemon: %w", err)
 			}
-			return writeln(s.cc.Output(), approveDeletesSuccess)
-		}
-	}
-
-	return s.approveDeletesDirect(ctx)
+			return struct{}{}, writeln(s.cc.Output(), approveDeletesSuccess)
+		},
+	)
+	return err
 }
 
 func (s *issuesService) approveDeletesDirect(ctx context.Context) error {

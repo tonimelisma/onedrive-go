@@ -357,9 +357,9 @@ func TestConflictsService_RequestConflictResolutionConcurrentCLIsFirstWriterWins
 
 	_, err = store.DB().ExecContext(t.Context(), `
 		INSERT INTO conflicts
-			(id, drive_id, item_id, path, conflict_type, detected_at, resolution, state)
+			(id, drive_id, item_id, path, conflict_type, detected_at, resolution)
 		VALUES
-			('conflict-concurrent-cli', ?, 'item-1', '/conflict.txt', 'edit_edit', 1, 'unresolved', 'unresolved')`,
+			('conflict-concurrent-cli', ?, 'item-1', '/conflict.txt', 'edit_edit', 1, 'unresolved')`,
 		canonicalID.String(),
 	)
 	require.NoError(t, err)
@@ -421,7 +421,7 @@ func TestConflictsService_RequestConflictResolutionConcurrentCLIsFirstWriterWins
 	}
 	assert.Equal(t, 1, queued)
 
-	conflict, err := store.GetConflict(t.Context(), "conflict-concurrent-cli")
+	conflict, err := store.GetConflictRequest(t.Context(), "conflict-concurrent-cli")
 	require.NoError(t, err)
 	assert.Equal(t, synctypes.ConflictStateResolutionRequested, conflict.State)
 	assert.Contains(t, []string{synctypes.ResolutionKeepLocal, synctypes.ResolutionKeepRemote}, conflict.RequestedResolution)

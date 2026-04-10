@@ -78,13 +78,17 @@ func (i *Inspector) AuditIntegrity(ctx context.Context) (IntegrityReport, error)
 	if err != nil {
 		return IntegrityReport{}, fmt.Errorf("list conflicts for integrity audit: %w", err)
 	}
+	conflictRequests, err := queryAllConflictRequestsForAudit(ctx, i.db)
+	if err != nil {
+		return IntegrityReport{}, fmt.Errorf("list conflict requests for integrity audit: %w", err)
+	}
 
 	heldDeletes, err := queryHeldDeletesForAudit(ctx, i.db)
 	if err != nil {
 		return IntegrityReport{}, fmt.Errorf("list held deletes for integrity audit: %w", err)
 	}
 
-	report := auditPersistedIntegrity(blocks, failures, conflicts, heldDeletes)
+	report := auditPersistedIntegrity(blocks, failures, conflicts, conflictRequests, heldDeletes)
 	if err := auditScopeStateConsistency(ctx, i.db, &report); err != nil {
 		return IntegrityReport{}, err
 	}
@@ -110,13 +114,17 @@ func (m *SyncStore) AuditIntegrity(ctx context.Context) (IntegrityReport, error)
 	if err != nil {
 		return IntegrityReport{}, fmt.Errorf("list conflicts for integrity audit: %w", err)
 	}
+	conflictRequests, err := queryAllConflictRequestsForAudit(ctx, m.db)
+	if err != nil {
+		return IntegrityReport{}, fmt.Errorf("list conflict requests for integrity audit: %w", err)
+	}
 
 	heldDeletes, err := queryHeldDeletesForAudit(ctx, m.db)
 	if err != nil {
 		return IntegrityReport{}, fmt.Errorf("list held deletes for integrity audit: %w", err)
 	}
 
-	report := auditPersistedIntegrity(blocks, failures, conflicts, heldDeletes)
+	report := auditPersistedIntegrity(blocks, failures, conflicts, conflictRequests, heldDeletes)
 	if auditErr := auditScopeStateConsistency(ctx, m.db, &report); auditErr != nil {
 		return IntegrityReport{}, auditErr
 	}
@@ -244,10 +252,59 @@ func queryHeldDeletesForAudit(ctx context.Context, db *sql.DB) ([]synctypes.Held
 	return scanHeldDeleteRows(rows)
 }
 
+func queryAllConflictRequestsForAudit(ctx context.Context, db *sql.DB) ([]synctypes.ConflictRequestRecord, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT conflict_id, requested_resolution, state, requested_at, resolving_at, resolution_error
+		FROM conflict_requests
+		ORDER BY requested_at, conflict_id`)
+	if err != nil {
+		if isMissingTableErr(err) {
+			return nil, nil
+		}
+
+		return nil, fmt.Errorf("query conflict requests for audit: %w", err)
+	}
+	defer rows.Close()
+
+	var requests []synctypes.ConflictRequestRecord
+	for rows.Next() {
+		var (
+			record      synctypes.ConflictRequestRecord
+			requestedAt sql.NullInt64
+			resolvingAt sql.NullInt64
+			resolveErr  sql.NullString
+		)
+		if err := rows.Scan(
+			&record.ID,
+			&record.RequestedResolution,
+			&record.State,
+			&requestedAt,
+			&resolvingAt,
+			&resolveErr,
+		); err != nil {
+			return nil, fmt.Errorf("scan conflict request audit row: %w", err)
+		}
+		if requestedAt.Valid {
+			record.RequestedAt = requestedAt.Int64
+		}
+		if resolvingAt.Valid {
+			record.ResolvingAt = resolvingAt.Int64
+		}
+		record.ResolutionError = resolveErr.String
+		requests = append(requests, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate conflict request audit rows: %w", err)
+	}
+
+	return requests, nil
+}
+
 func auditPersistedIntegrity(
 	blocks []*synctypes.ScopeBlock,
 	failures []synctypes.SyncFailureRow,
 	conflicts []synctypes.ConflictRecord,
+	conflictRequests []synctypes.ConflictRequestRecord,
 	heldDeletes []synctypes.HeldDeleteRecord,
 ) IntegrityReport {
 	report := IntegrityReport{
@@ -260,6 +317,7 @@ func auditPersistedIntegrity(
 	auditScopeBlocks(&report, blocks, scopeBlockByKey, projectionSources)
 	auditFailureRows(&report, failures, scopeBlockByKey, projectionSources)
 	auditConflictRows(&report, conflicts)
+	auditConflictRequestRows(&report, conflicts, conflictRequests)
 	auditHeldDeleteRows(&report, heldDeletes)
 	addProjectionOverlapFindings(&report, projectionSources)
 
@@ -275,46 +333,32 @@ func auditConflictRows(report *IntegrityReport, conflicts []synctypes.ConflictRe
 				fmt.Sprintf("conflict %s has invalid final resolution %q", row.ID, row.Resolution),
 			)
 		}
-		if row.RequestedResolution != "" && !validRequestedConflictResolution(row.RequestedResolution) {
-			report.add(
-				integrityCodeInvalidConflictWorkflow,
-				fmt.Sprintf("conflict %s has invalid requested resolution %q", row.ID, row.RequestedResolution),
-			)
+		if row.Resolution == synctypes.ResolutionUnresolved {
+			if row.ResolvedAt != 0 {
+				report.add(
+					integrityCodeInvalidConflictWorkflow,
+					fmt.Sprintf("conflict %s is unresolved with resolved_at set", row.ID),
+				)
+			}
+			if row.ResolvedBy != "" {
+				report.add(
+					integrityCodeInvalidConflictWorkflow,
+					fmt.Sprintf("conflict %s is unresolved with resolved_by %q", row.ID, row.ResolvedBy),
+				)
+			}
+			continue
 		}
 
-		switch row.State {
-		case synctypes.ConflictStateUnresolved, synctypes.ConflictStateResolveFailed:
-		case synctypes.ConflictStateResolutionRequested:
-			if row.RequestedResolution == "" {
-				report.add(
-					integrityCodeInvalidConflictWorkflow,
-					fmt.Sprintf("conflict %s is resolution_requested without requested_resolution", row.ID),
-				)
-			}
-		case synctypes.ConflictStateResolving:
-			if row.RequestedResolution == "" {
-				report.add(
-					integrityCodeInvalidConflictWorkflow,
-					fmt.Sprintf("conflict %s is resolving without requested_resolution", row.ID),
-				)
-			}
-			if row.ResolvingAt == 0 {
-				report.add(
-					integrityCodeInvalidConflictWorkflow,
-					fmt.Sprintf("conflict %s is resolving without resolving_at", row.ID),
-				)
-			}
-		case synctypes.ConflictStateResolved:
-			if row.Resolution == synctypes.ResolutionUnresolved {
-				report.add(
-					integrityCodeInvalidConflictWorkflow,
-					fmt.Sprintf("conflict %s is resolved with unresolved final resolution", row.ID),
-				)
-			}
-		default:
+		if row.ResolvedAt == 0 {
 			report.add(
 				integrityCodeInvalidConflictWorkflow,
-				fmt.Sprintf("conflict %s has invalid workflow state %q", row.ID, row.State),
+				fmt.Sprintf("conflict %s is resolved without resolved_at", row.ID),
+			)
+		}
+		if row.ResolvedBy != "" && row.ResolvedBy != synctypes.ResolvedByUser && row.ResolvedBy != synctypes.ResolvedByAuto {
+			report.add(
+				integrityCodeInvalidConflictWorkflow,
+				fmt.Sprintf("conflict %s has invalid resolved_by %q", row.ID, row.ResolvedBy),
 			)
 		}
 	}
@@ -336,6 +380,77 @@ func validRequestedConflictResolution(resolution string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func auditConflictRequestRows(
+	report *IntegrityReport,
+	conflicts []synctypes.ConflictRecord,
+	requests []synctypes.ConflictRequestRecord,
+) {
+	conflictByID := make(map[string]synctypes.ConflictRecord, len(conflicts))
+	for i := range conflicts {
+		conflictByID[conflicts[i].ID] = conflicts[i]
+	}
+
+	for i := range requests {
+		row := &requests[i]
+		if !validRequestedConflictResolution(row.RequestedResolution) {
+			report.add(
+				integrityCodeInvalidConflictWorkflow,
+				fmt.Sprintf("conflict %s has invalid requested resolution %q", row.ID, row.RequestedResolution),
+			)
+		}
+
+		conflict, ok := conflictByID[row.ID]
+		if !ok {
+			report.add(
+				integrityCodeInvalidConflictWorkflow,
+				fmt.Sprintf("conflict request %s has no conflict row", row.ID),
+			)
+			continue
+		}
+		if conflict.Resolution != synctypes.ResolutionUnresolved {
+			report.add(
+				integrityCodeInvalidConflictWorkflow,
+				fmt.Sprintf("conflict request %s targets already resolved conflict", row.ID),
+			)
+		}
+
+		switch row.State {
+		case synctypes.ConflictStateResolutionRequested:
+			if row.RequestedResolution == "" {
+				report.add(
+					integrityCodeInvalidConflictWorkflow,
+					fmt.Sprintf("conflict %s is resolution_requested without requested_resolution", row.ID),
+				)
+			}
+		case synctypes.ConflictStateResolving:
+			if row.RequestedResolution == "" {
+				report.add(
+					integrityCodeInvalidConflictWorkflow,
+					fmt.Sprintf("conflict %s is resolving without requested_resolution", row.ID),
+				)
+			}
+			if row.ResolvingAt == 0 {
+				report.add(
+					integrityCodeInvalidConflictWorkflow,
+					fmt.Sprintf("conflict %s is resolving without resolving_at", row.ID),
+				)
+			}
+		case synctypes.ConflictStateResolveFailed:
+			if row.RequestedResolution == "" {
+				report.add(
+					integrityCodeInvalidConflictWorkflow,
+					fmt.Sprintf("conflict %s is resolve_failed without requested_resolution", row.ID),
+				)
+			}
+		default:
+			report.add(
+				integrityCodeInvalidConflictWorkflow,
+				fmt.Sprintf("conflict %s has invalid workflow state %q", row.ID, row.State),
+			)
+		}
 	}
 }
 

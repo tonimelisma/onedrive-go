@@ -67,8 +67,8 @@ const (
 	sqlInsertConflict = `INSERT INTO conflicts
 		(id, drive_id, item_id, path, conflict_type, detected_at,
 		 local_hash, remote_hash, local_mtime, remote_mtime,
-		 resolution, state, resolved_at, resolved_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		 resolution, resolved_at, resolved_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	sqlUpsertDeltaCursor = `INSERT INTO delta_tokens (drive_id, scope_id, scope_drive, cursor, updated_at)
 		VALUES (?, ?, ?, ?, ?)
@@ -579,13 +579,11 @@ func commitConflict(ctx context.Context, tx *sql.Tx, o *synctypes.Outcome, synce
 	conflictID := uuid.New().String()
 
 	resolution := synctypes.ResolutionUnresolved
-	state := synctypes.ConflictStateUnresolved
 	var resolvedAt sql.NullInt64
 	var resolvedBy sql.NullString
 
 	if o.ResolvedBy == synctypes.ResolvedByAuto {
 		resolution = synctypes.ResolutionKeepLocal
-		state = synctypes.ConflictStateResolved
 		resolvedAt = sql.NullInt64{Int64: syncedAt, Valid: true}
 		resolvedBy = sql.NullString{String: synctypes.ResolvedByAuto, Valid: true}
 	}
@@ -598,7 +596,7 @@ func commitConflict(ctx context.Context, tx *sql.Tx, o *synctypes.Outcome, synce
 		nullString(o.RemoteHash),
 		nullOptionalInt64(o.LocalMtime),
 		nullOptionalInt64(o.RemoteMtime),
-		resolution, state, resolvedAt, resolvedBy,
+		resolution, resolvedAt, resolvedBy,
 	)
 	if err != nil {
 		return fmt.Errorf("sync: inserting conflict for %s: %w", o.Path, err)

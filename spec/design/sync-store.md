@@ -7,8 +7,9 @@ Implements: R-2.4.4 [verified], R-2.4.5 [verified], R-2.5 [verified], R-2.5.5 [v
 ## SyncStore (`store.go`)
 
 `SyncStore` is the sole durable authority for sync state. It owns baseline,
-remote observation state, conflicts, held-delete approval state, per-item
-failures, persisted scope blocks, shortcut metadata, and sync metadata. Runtime watch state is never a
+remote observation state, conflict facts, durable conflict-resolution
+requests, held-delete approval state, per-item failures, persisted scope
+blocks, shortcut metadata, and sync metadata. Runtime watch state is never a
 peer authority; it is rebuilt from store state when the engine starts.
 
 ## Ownership Contract
@@ -31,7 +32,7 @@ peer authority; it is rebuilt from store state when the engine starts.
 | Conflict request concurrency is first-writer-wins until engine claim completes. | `TestSyncStore_RequestConflictResolutionSameStrategyIsIdempotent`, `TestSyncStore_RequestConflictResolutionFirstWriterWinsConcurrently`, `TestSyncStore_RequestConflictResolutionRejectsResolvingAndResolved` |
 | Visible issue grouping comes from one store-owned projection instead of CLI-local reconstruction. | `TestSyncStore_ListVisibleIssueGroups` |
 | Crash-shaped `downloading` / `deleting` residue in the state DB is replayed from durable store truth on the next live sync run, and the immediate rerun is idle. | `TestE2E_Sync_CrashRecovery_ReplaysDurableInProgressRows` |
-| Store schema migration uses embedded goose migrations and rejects existing non-goose DBs instead of silently guessing at durable user intent. | `TestNewSyncStore_AppliesCurrentGooseMigration`, `TestNewSyncStore_RejectsUnversionedExistingStateDB` |
+| Store schema migration uses embedded goose migrations, preserves durable user intent when migrating from schema v1, and rejects existing non-goose DBs instead of silently guessing. | `TestNewSyncStore_AppliesCurrentGooseMigration`, `TestSyncStore_MigrationProviderFreshDBUpgradesToCurrent`, `TestSyncStore_MigrationFromVersionOnePreservesDurableIntentSemantics`, `TestSyncStore_MigrationFilesIncludeUpDownAndMatchCurrentVersion`, `TestNewSyncStore_RejectsUnversionedExistingStateDB` |
 
 `NewSyncStore()` opens SQLite in WAL mode and applies the embedded goose
 migrations from
@@ -57,8 +58,9 @@ Key operations:
   writer for status/report metadata only; sync-scope durability no longer
   piggybacks on generic metadata keys.
 - `RefreshLocalBaseline(ctx, LocalBaselineRefresh)` is the explicit reconciliation path used when local disk now represents the chosen truth without a new executor transfer result. It updates only the local-side baseline tuple, preserves known remote-side metadata/`etag`, and marks a matching `remote_state` row synced.
-- `RequestConflictResolution(ctx, id, resolution)` records conflict-resolution intent without executing side effects. `ClaimConflictResolution`, `MarkConflictResolutionFailed`, and `ResolveConflict` enforce the durable `resolution_requested -> resolving -> resolved/resolve_failed` workflow for engine-owned execution.
+- `RequestConflictResolution(ctx, id, resolution)` records conflict-resolution intent without executing side effects. The durable request workflow lives in `conflict_requests`, while `conflicts` remains the derived fact/history table. `ClaimConflictResolution`, `MarkConflictResolutionFailed`, and `ResolveConflict` enforce the durable `resolution_requested -> resolving -> resolve_failed` workflow for engine-owned execution. Successful resolution deletes the request row in the same transaction that marks the conflict resolved in `conflicts`.
 - `UpsertHeldDeletes`, `ApproveHeldDeletes`, `ListHeldDeletesByState`, `ConsumeHeldDelete`, and `DeleteHeldDelete` own the durable delete-safety approval workflow. Approval changes rows from `held` to `approved`; successful engine deletes consume approved rows only when drive, action type, path, and item ID match. Engine planning prunes stale approved rows when the current plan proves a reused path now targets a different item ID.
+- `RecordStaleHeldDeletePrune(ctx, count, at)` records store-owned audit metadata when the engine prunes stale approved held-delete rows after a live plan proves a reused path now points at a different item ID.
 - `RecordFailure(ctx, SyncFailureParams, delayFn)` is the single failure writer. The engine provides classification and retry policy; the store provides transactional persistence and conflict-safe upsert behavior.
 - `TakeSyncFailure(ctx, path, driveID)` is the store-owned read-and-delete boundary for engine-managed failure resolution logging. It returns the authoritative persisted row, including `failure_count`, in the same transaction that removes it.
 - `ResetDownloadingStates(ctx, delayFn)`, `ListDeletingCandidates(ctx)`, and `FinalizeDeletingStates(ctx, deleted, pending, delayFn)` are the state-only crash-recovery primitives. The store no longer probes the sync-root filesystem itself. Their bridge rows preserve the exact replay action (`ActionDownload` for reset downloads, `ActionLocalDelete` for reset deletes) so the engine can re-enter the correct execution lane on the next pass.
@@ -269,8 +271,8 @@ state without handing them raw SQL ownership.
 - `HasScopeBlock(ctx, key)` provides an exact read-only scope-block probe for
   CLI auth-health and other administrative readers that need one persisted
   signal without opening the writable `SyncStore` path.
-- `ReadStatusSnapshot(ctx)` returns metadata, aggregate counts, and one
-  derived `IssueSummary`.
+- `ReadStatusSnapshot(ctx)` returns metadata, aggregate counts, durable-intent
+  counters, and one derived `IssueSummary`.
 - `ReadIssuesSnapshot(ctx, history)` returns the full read-only `issues`
   projection: grouped visible issue families, held deletes, pending retries,
   and conflict history.
@@ -284,6 +286,10 @@ state without handing them raw SQL ownership.
   `RemoteBlockedCount()`, `AuthRequiredCount()`, and `RetryingCount()` are the
   read-only status contract. CLI `status` consumes those helpers instead of
   reconstructing visible-issue semantics from raw counters.
+- `StatusSnapshot.DurableIntents` reports approved held-delete counts plus
+  queued/resolving/failed conflict-request counts from `conflict_requests`.
+  CLI `status` turns those store-owned counters into human text, JSON fields,
+  and next-step hints without opening writable store paths.
 - `StatusSnapshot` and `IssuesSnapshot` share one visible-issue projection
   builder inside `Inspector`, so `status` and `issues` cannot silently drift
   on what counts as a visible issue family.
@@ -308,8 +314,9 @@ The store owns sync-state integrity inspection and deterministic safe repair.
   scope-state drift, and removes legacy persisted `perm:remote` scope/boundary
   authorities that are now derived from held rows. It must not silently delete
   approved held deletes or queued conflict-resolution requests.
-- Durable-intent integrity findings include invalid conflict lifecycle states,
-  missing requested-resolution/resolving timestamps, resolved conflicts with
+- Durable-intent integrity findings include invalid `conflict_requests`
+  workflow states, missing request/resolving timestamps, request rows that
+  point at missing or already-resolved conflicts, resolved conflict facts with
   `resolution='unresolved'`, invalid held-delete states, missing held-delete
   item IDs, and approved held deletes without `approved_at`.
 - `cmd/devtool state-audit` is the human/JSON administrative entrypoint. It

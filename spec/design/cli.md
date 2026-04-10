@@ -298,6 +298,11 @@ reports `owner_mode="oneshot"`, or if a watch socket disappears between status
 probe and POST, the CLI falls back to direct durable DB intent. Typed daemon
 application errors are authoritative and are reported without fallback.
 
+`issues approve-deletes` and `conflicts resolve` share one CLI-owned durable
+intent routing helper so this policy lives in exactly one place. The helper
+decides between watch-mode RPC and direct store mutation; neither command
+opens its own ad hoc engine or duplicates socket fallback rules.
+
 The socket path is config-owned. It normally resolves under the app data
 directory, with a stable hash-based runtime fallback when isolated test or user
 paths would be too long for Unix-domain sockets.
@@ -362,6 +367,10 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
   `scope` in JSON, while text output renders the same groups under each drive's
   sync-state section before the aggregate retry counters. This is the CLI-side
   contract for `R-2.10.4`.
+- `status` also surfaces store-owned durable-intent counters:
+  approved deletes waiting, queued conflict resolutions, resolving conflict
+  requests, and failed conflict resolutions. Text output adds action-oriented
+  `Next:` hints, while JSON exposes the same counts plus `action_hints[]`.
 - Informational commands (`drive list`, `status`, `whoami`) use lenient config loading (`LoadOrDefaultLenient`) that collects validation errors as warnings instead of failing. This allows users to inspect their configuration and see drive status even when config has errors. Each of these commands (and `drive search`) must have `skipConfigAnnotation` on the leaf Cobra command — not just the parent — because Cobra checks annotations on the executing command, not parent commands. Safety net: `TestAnnotationTreeWalk` walks the entire command tree and fails if any leaf command with `RunE` is not explicitly classified as either a data command (no annotation) or an annotated command. New commands must be added to the `dataCommands` set or given the annotation. [verified]
 - `loadAndResolve` passes errors from `ResolveDrive` unwrapped. `ResolveDrive` already wraps `LoadOrDefault` errors with `"loading config: "`, and `MatchDrive` errors are user-facing messages that read better without a prefix (e.g., `"no drives configured — ..."` instead of `"loading config: no drives configured — ..."`). [verified]
 - CLI presentation is the final error boundary. `classifyCommandError` and `commandFailurePresentationForClass` map the domain classes from [error-model.md](error-model.md) to process exit behavior and user-facing reason/action text, while `authErrorMessage` specializes the user-facing auth copy for saved-login failures without re-inspecting raw transport payloads.
@@ -391,8 +400,10 @@ Implements: R-2.3.3 [verified], R-2.3.4 [verified], R-2.3.5 [verified], R-2.3.6 
   semantics that feed `status`.
 - **Auth scope display**: `auth:account` renders as an account-level `Authentication required` issue with no path list.
 - **Held-delete approval**: held deletes remain visible under `issues`, but approval is now one explicit command, `issues approve-deletes`, which moves only that drive's held-delete rows from `held` to `approved`. The engine consumes approved rows after successful matching delete execution.
-- **Conflict split**: `conflicts` is the dedicated conflict noun. `conflicts` lists unresolved conflicts, `conflicts --history` includes resolved conflicts, and `conflicts resolve` queues the keep-local/keep-remote/keep-both request for engine-owned execution.
+- **Conflict split**: `conflicts` is the dedicated conflict noun. `conflicts` lists unresolved conflicts from the fact table, `conflicts --history` includes resolved conflicts, and `conflicts resolve` queues the keep-local/keep-remote/keep-both request for engine-owned execution. Active request workflow is durable state, but it is not the primary list surface.
 - **Replay-safe mutations**: `issues approve-deletes` and repeated
   `conflicts resolve` calls are replay-safe. Repeating an approval or an
   already-resolved conflict returns a stable no-op/already-resolved result
-  instead of duplicating store mutations or partially releasing a scope.
+  instead of duplicating store mutations or partially releasing a scope. Same
+  queued resolution is idempotent; a different queued resolution is rejected
+  until the engine claims or clears the request.

@@ -33,7 +33,7 @@ runtime package that implements it.
 | Behavior | Evidence |
 | --- | --- |
 | `RunWatch` starts the configured drive set and keeps zero-drive watch mode valid without inventing a second startup path. | `TestOrchestrator_RunWatch_SingleDrive`, `TestOrchestrator_RunWatch_MultiDrive`, `TestOrchestrator_RunWatch_ZeroDrives` |
-| The Unix control socket is the single live-owner lock for one-shot and watch sync, reports owner mode/status, rejects one-shot mutations with typed `foreground_sync_running`, and serializes watch-mode durable held-delete/conflict user intent through the control loop. | `TestRunOnce_ControlSocketBlocksWatchOwner`, `TestOrchestrator_OneShotControlSocket_StatusAndMutationConflict`, `TestOrchestrator_ControlSocket_StatusAndStop`, `TestOrchestrator_ControlSocket_QueuesDurableUserIntent` |
+| The Unix control socket is the single live-owner lock for one-shot and watch sync, reports owner mode/status, rejects one-shot mutations with typed `foreground_sync_running`, and serializes watch-mode durable held-delete/conflict user intent through the control loop. | `TestRunOnce_ControlSocketBlocksWatchOwner`, `TestOrchestrator_OneShotControlSocket_StatusAndMutationConflict`, `TestOrchestrator_ControlSocket_StatusAndStop`, `TestOrchestrator_ControlSocket_QueuesDurableUserIntent`, `TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners`, `TestE2E_Conflicts_ResolveWithWatchDaemonExecutesQueuedIntent`, `TestE2E_Issues_ApproveDeletes` |
 | Socket files are permissioned private, stale sockets are removed only after a failed live probe, and empty hash-runtime socket directories are cleaned up on close. | `TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval` |
 | Control-socket reload applies add/remove/pause/expired-pause diffs to the live runner set without bouncing unaffected drives. | `TestOrchestrator_Reload_AddDrive`, `TestOrchestrator_Reload_RemoveDrive`, `TestOrchestrator_Reload_PausedDrive`, `TestOrchestrator_Reload_TimedPauseExpiry` |
 
@@ -99,7 +99,7 @@ stay in `internal/cli`.
 
 The socket speaks JSON over HTTP:
 
-- `GET /v1/status` returns the owner mode (`oneshot` or `watch`) and managed drives. Watch owners also report pending durable-intent counts. One-shot owners return those counters as zero/omitted because they are only exposing the owner lock/status surface, not running a long-lived intent loop.
+- `GET /v1/status` returns the owner mode (`oneshot` or `watch`) and managed drives. Watch owners also report pending durable-intent counts: approved held deletes plus queued/resolving/failed conflict requests. One-shot owners return those counters as zero/omitted because they are only exposing the owner lock/status surface, not running a long-lived intent loop.
 - `POST /v1/reload` reloads config in the watch owner.
 - `POST /v1/stop` asks the watch owner to stop cleanly.
 - `POST /v1/drives/{canonical-id}/held-deletes/approve` records durable held-delete approval for that drive and wakes the runner.
@@ -107,12 +107,13 @@ The socket speaks JSON over HTTP:
 
 One-shot sync exposes only status. Mutating requests return a busy response
 with `code="foreground_sync_running"` because a foreground one-shot sync is
-already the active owner. The CLI treats `owner_mode="watch"` as the only live
-RPC mutation target. If no socket is live, if the socket reports
-`owner_mode="oneshot"`, or if a watch socket disappears between status probe
-and POST, mutating CLIs write the same durable intent directly to the selected
-drive's state DB. Typed daemon application errors are authoritative and are
-reported rather than falling back.
+already the active owner. The CLI routes all durable-intent mutations through
+one shared policy: `owner_mode="watch"` is the only live RPC mutation target.
+If no socket is live, if the socket reports `owner_mode="oneshot"`, or if a
+watch socket disappears between status probe and POST, mutating CLIs write the
+same durable intent directly to the selected drive's state DB. Typed daemon
+application errors are authoritative and are reported rather than falling
+back.
 
 Error responses have the shape `{status, code, message}`. Stable codes are
 `invalid_request`, `foreground_sync_running`, `drive_not_managed`,

@@ -421,6 +421,7 @@ func fullE2ESerialSyncTestNames() []string {
 
 func fullE2ESerialWatchSharedTestNames() []string {
 	return []string{
+		"TestE2E_Conflicts_ResolveWithWatchDaemonExecutesQueuedIntent",
 		"TestE2E_Issues_ApproveDeletes",
 		"TestE2E_Sync_MultiDriveReport",
 		"TestE2E_SyncWatch_RemoteToLocal",
@@ -435,6 +436,7 @@ func fullE2ESerialWatchSharedTestNames() []string {
 		"TestE2E_SyncWatch_GracefulShutdown",
 		"TestE2E_SyncWatch_TimedPauseExpiry",
 		"TestE2E_SyncWatch_BasicRoundTrip",
+		"TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners",
 		"TestE2E_SyncWatch_PauseResume",
 		"TestE2E_SyncWatch_ControlSocketReload",
 		"TestE2E_SyncWatch_WebsocketRemoteWakeAndRestart",
