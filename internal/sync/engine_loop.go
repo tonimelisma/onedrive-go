@@ -449,7 +449,7 @@ func (rt *watchRuntime) handleBootstrapWorkerResult(
 	if outcome.terminate {
 		return outbox, false, outcome.terminateErr
 	}
-	return append(outbox, outcome.dispatched...), false, nil
+	return rt.flushPendingUserIntent(ctx, p, append(outbox, outcome.dispatched...)), false, nil
 }
 
 func (rt *watchRuntime) handleBootstrapResultsClosed(

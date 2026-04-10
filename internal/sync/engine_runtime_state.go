@@ -141,7 +141,7 @@ func (rt *watchRuntime) flushPendingUserIntent(
 	p *watchPipeline,
 	outbox []*synctypes.TrackedAction,
 ) []*synctypes.TrackedAction {
-	if !rt.userIntentPending || len(outbox) > 0 {
+	if !rt.userIntentPending || len(outbox) > 0 || rt.depGraph.InFlightCount() > 0 {
 		return outbox
 	}
 
