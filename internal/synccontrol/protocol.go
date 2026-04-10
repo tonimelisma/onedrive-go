@@ -57,6 +57,9 @@ type StatusResponse struct {
 	OwnerMode OwnerMode `json:"owner_mode"`
 	Drives    []string  `json:"drives"`
 
+	// Durable-intent counters are watch-owner diagnostics. One-shot owners
+	// expose the same status shape for owner-lock visibility, but they do not
+	// own a long-lived intent loop and must leave these counters zero/omitted.
 	PendingHeldDeleteApprovals int `json:"pending_held_delete_approvals,omitempty"`
 	PendingConflictRequests    int `json:"pending_conflict_requests,omitempty"`
 	ResolvingConflictRequests  int `json:"resolving_conflict_requests,omitempty"`

@@ -376,7 +376,7 @@ Observed evidence on April 5, 2026 during `go test -tags='e2e e2e_full' ./e2e
 - Graph request ID for the failed delete: `335ea56d-e3a9-4d2f-8b4c-742da9088eec`
 
 Observed extension on April 7, 2026 during the isolated repro for
-`TestE2E_Sync_BigDeleteProtection`:
+`TestE2E_Sync_DeleteSafetyThreshold`:
 
 - repeated sibling deletes in `/e2e-sync-bigdel-1775633571947871000` reached a
   state where `rm /e2e-sync-bigdel-1775633571947871000/file-10.txt` failed
@@ -501,7 +501,7 @@ Repo policy:
 Ordinary Graph metadata requests can sometimes connect successfully and then
 stall for tens of seconds before sending response headers. This was observed
 in the scheduled `e2e_full` CI run on April 3, 2026 during setup for the
-big-delete protection test: a normal metadata/path-resolution request hung
+delete-safety protection test: a normal metadata/path-resolution request hung
 long enough that a client-wide 30-second timeout misclassified it as canceled
 work even though later attempts succeeded. The same family showed up again in
 GitHub Actions integration on April 5, 2026: a plain `GET /me` request stalled

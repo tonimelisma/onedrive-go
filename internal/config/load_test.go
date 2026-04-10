@@ -48,7 +48,7 @@ ignore_marker = ".syncignore"
 transfer_workers = 16
 check_workers = 8
 
-big_delete_threshold = 500
+delete_safety_threshold = 500
 min_free_space = "2GB"
 use_local_trash = false
 
@@ -77,7 +77,7 @@ log_retention_days = 7
 	assert.Equal(t, 16, cfg.TransferWorkers)
 	assert.Equal(t, 8, cfg.CheckWorkers)
 
-	assert.Equal(t, 500, cfg.BigDeleteThreshold)
+	assert.Equal(t, 500, cfg.DeleteSafetyThreshold)
 	assert.Equal(t, "2GB", cfg.MinFreeSpace)
 	assert.False(t, cfg.UseLocalTrash)
 

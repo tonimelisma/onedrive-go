@@ -24,8 +24,8 @@ func newKnownGlobalKeys() map[string]bool {
 		// Transfer settings
 		"transfer_workers": true, "check_workers": true,
 		// Safety settings
-		"big_delete_threshold": true,
-		"min_free_space":       true, "use_local_trash": true,
+		"delete_safety_threshold": true,
+		"min_free_space":          true, "use_local_trash": true,
 		// Sync settings
 		"poll_interval": true, "websocket": true, "dry_run": true,
 		"safety_scan_interval": true,

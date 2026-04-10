@@ -105,7 +105,7 @@ func loadVisibleIssueProjection(
 		WHERE category = 'actionable'
 		AND (issue_type IS NULL OR issue_type != ?)
 		ORDER BY last_seen_at DESC`,
-		synctypes.IssueBigDeleteHeld,
+		synctypes.IssueDeleteSafetyHeld,
 	)
 	if err != nil {
 		return visibleIssueProjection{}, fmt.Errorf("sync: listing visible actionable failures: %w", err)
@@ -325,7 +325,7 @@ func addVisibleHeldDeleteGroup(groups *[]VisibleIssueGroup, heldDeletes []syncty
 
 	group := VisibleIssueGroup{
 		SummaryKey:   synctypes.SummaryHeldDeletes,
-		IssueType:    synctypes.IssueBigDeleteHeld,
+		IssueType:    synctypes.IssueDeleteSafetyHeld,
 		Count:        len(heldDeletes),
 		VisibleCount: len(heldDeletes),
 		Paths:        make([]string, 0, len(heldDeletes)),

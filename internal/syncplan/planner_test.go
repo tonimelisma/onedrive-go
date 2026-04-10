@@ -1264,11 +1264,11 @@ func TestDetectMoves_MovedPathsExcluded(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Safety Tests (Big Delete)
+// Delete Safety Tests
 // ---------------------------------------------------------------------------
 
 // Validates: R-6.2.5, R-6.4.1
-func TestBigDelete_BelowThreshold(t *testing.T) {
+func TestDeleteSafety_BelowThreshold(t *testing.T) {
 	// Delete count at or below threshold → no trigger.
 	planner := NewPlanner(synctest.TestLogger(t))
 
@@ -1308,7 +1308,7 @@ func TestBigDelete_BelowThreshold(t *testing.T) {
 
 	baseline := synctest.BaselineWith(entries...)
 
-	config := &synctypes.SafetyConfig{BigDeleteThreshold: 10}
+	config := &synctypes.SafetyConfig{DeleteSafetyThreshold: 10}
 
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, config, nil)
 	require.NoError(t, err, "at threshold should be allowed")
@@ -1316,7 +1316,7 @@ func TestBigDelete_BelowThreshold(t *testing.T) {
 }
 
 // Validates: R-6.2.5, R-6.4.1
-func TestBigDelete_ExceedsThreshold(t *testing.T) {
+func TestDeleteSafety_ExceedsThreshold(t *testing.T) {
 	// Delete count exceeds threshold → ErrDeleteSafetyThresholdExceeded.
 	planner := NewPlanner(synctest.TestLogger(t))
 
@@ -1324,14 +1324,14 @@ func TestBigDelete_ExceedsThreshold(t *testing.T) {
 	baseline := synctest.BaselineWith(entries...)
 
 	// 20 deletes > threshold of 10.
-	config := &synctypes.SafetyConfig{BigDeleteThreshold: 10}
+	config := &synctypes.SafetyConfig{DeleteSafetyThreshold: 10}
 
 	_, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, config, nil)
 	require.ErrorIs(t, err, synctypes.ErrDeleteSafetyThresholdExceeded)
 }
 
 // Validates: R-6.2.5, R-6.4.1
-func TestBigDelete_NoTrigger(t *testing.T) {
+func TestDeleteSafety_NoTrigger(t *testing.T) {
 	// Few deletes well within threshold → no error.
 	planner := NewPlanner(synctest.TestLogger(t))
 
@@ -1388,14 +1388,14 @@ func TestBigDelete_NoTrigger(t *testing.T) {
 }
 
 // Validates: R-6.2.5, R-6.4.1
-func TestBigDelete_ThresholdZero_Disabled(t *testing.T) {
-	// Threshold of 0 disables big-delete protection.
+func TestDeleteSafety_ThresholdZero_Disabled(t *testing.T) {
+	// Threshold of 0 disables delete safety protection.
 	planner := NewPlanner(synctest.TestLogger(t))
 
 	entries, changes := buildRemoteDeleteSet("planner-disabled", "dis", "hashDis", 20)
 	baseline := synctest.BaselineWith(entries...)
 
-	config := &synctypes.SafetyConfig{BigDeleteThreshold: 0}
+	config := &synctypes.SafetyConfig{DeleteSafetyThreshold: 0}
 
 	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, config, nil)
 	require.NoError(t, err, "threshold=0 disables protection")

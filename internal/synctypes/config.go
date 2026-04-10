@@ -54,7 +54,7 @@ type EngineConfig struct {
 	UseLocalTrash          bool  // move deleted local files to OS trash instead of permanent delete
 	TransferWorkers        int   // goroutine count for the worker pool (0 → minWorkers)
 	CheckWorkers           int   // goroutine limit for parallel file hashing (0 → 4)
-	BigDeleteThreshold     int   // max delete actions before big-delete protection triggers (0 → defaultBigDeleteThreshold)
+	DeleteSafetyThreshold  int   // max delete actions before delete safety protection triggers (0 -> DefaultDeleteSafetyThreshold)
 	MinFreeSpace           int64 // minimum free disk space (bytes) before downloads; 0 disables (R-6.4.7)
 }
 
@@ -73,21 +73,21 @@ type WatchOpts struct {
 	UserIntentWake     <-chan struct{} // daemon control-plane wakeups for queued user intent
 }
 
-// DefaultBigDeleteThreshold is the default absolute delete count threshold.
-// Engine uses this when EngineConfig.BigDeleteThreshold == 0.
-const DefaultBigDeleteThreshold = 1000
+// DefaultDeleteSafetyThreshold is the default absolute delete count threshold.
+// Engine uses this when EngineConfig.DeleteSafetyThreshold == 0.
+const DefaultDeleteSafetyThreshold = 1000
 
-// SafetyConfig controls big-delete protection thresholds.
+// SafetyConfig controls delete safety protection thresholds.
 // Single absolute count threshold — no percentages, no per-folder checks.
 // Industry standard approach (rclone, rsync, abraunegg).
 type SafetyConfig struct {
-	BigDeleteThreshold int // max number of delete actions before triggering (0 = disabled)
+	DeleteSafetyThreshold int // max number of delete actions before triggering (0 = disabled)
 }
 
 // DefaultSafetyConfig returns a SafetyConfig with the default threshold.
 func DefaultSafetyConfig() *SafetyConfig {
 	return &SafetyConfig{
-		BigDeleteThreshold: DefaultBigDeleteThreshold,
+		DeleteSafetyThreshold: DefaultDeleteSafetyThreshold,
 	}
 }
 

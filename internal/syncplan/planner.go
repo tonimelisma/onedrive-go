@@ -81,14 +81,14 @@ func (p *Planner) Plan(
 		Deps:    deps,
 	}
 
-	// Step 4: safety check for big deletes.
+	// Step 4: safety check for delete bursts.
 	counts := CountByType(plan.Actions)
 	deleteCount := counts[synctypes.ActionLocalDelete] + counts[synctypes.ActionRemoteDelete]
 
-	if exceedsDeleteThreshold(deleteCount, config.BigDeleteThreshold) {
-		p.logger.Warn("big-delete protection triggered",
+	if exceedsDeleteThreshold(deleteCount, config.DeleteSafetyThreshold) {
+		p.logger.Warn("delete safety threshold triggered",
 			slog.Int("delete_count", deleteCount),
-			slog.Int("threshold", config.BigDeleteThreshold),
+			slog.Int("threshold", config.DeleteSafetyThreshold),
 		)
 
 		return nil, synctypes.ErrDeleteSafetyThresholdExceeded

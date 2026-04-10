@@ -33,7 +33,7 @@ const (
 	watchResultBuf = 4096
 
 	// deleteCounterWindow is the rolling time window for the watch-mode
-	// big-delete counter. Deletes within this window accumulate toward
+	// delete safety counter. Deletes within this window accumulate toward
 	// the threshold. Expired entries drop off, preventing normal sustained
 	// file management from triggering false positives.
 	deleteCounterWindow = 5 * time.Minute
@@ -59,9 +59,9 @@ const minReconcileInterval = 15 * time.Minute
 const quiescenceLogInterval = 30 * time.Second
 
 // initDeleteProtection sets up the rolling delete counter. Held and approved
-// big-delete rows are durable user intent, so startup must not clear them.
+// held-delete rows are durable user intent, so startup must not clear them.
 func (rt *watchRuntime) initDeleteProtection(ctx context.Context) {
-	rt.deleteCounter = syncdispatch.NewDeleteCounter(rt.engine.bigDeleteThreshold, deleteCounterWindow, rt.engine.nowFunc)
+	rt.deleteCounter = syncdispatch.NewDeleteCounter(rt.engine.deleteSafetyThreshold, deleteCounterWindow, rt.engine.nowFunc)
 	if dv, dvErr := rt.engine.baseline.DataVersion(ctx); dvErr == nil {
 		rt.lastDataVersion = dv
 	}
@@ -369,7 +369,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode synctypes.SyncMo
 	}
 
 	// Commit the deferred delta token before dispatching bootstrap actions.
-	// Bootstrap uses watch-mode big-delete (rolling counter), not planner-level
+	// Bootstrap uses watch-mode delete safety (rolling counter), not planner-level
 	// threshold, so the token is always safe to commit here.
 	if err := rt.commitDeferredDeltaTokens(ctx, pendingTokens); err != nil {
 		return err

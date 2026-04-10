@@ -65,11 +65,11 @@ func BuildEngineConfig(
 			SyncPaths:    append([]string(nil), resolved.SyncPaths...),
 			IgnoreMarker: resolved.IgnoreMarker,
 		},
-		UseLocalTrash:      resolved.UseLocalTrash,
-		TransferWorkers:    resolved.TransferWorkers,
-		CheckWorkers:       resolved.CheckWorkers,
-		BigDeleteThreshold: resolved.BigDeleteThreshold,
-		MinFreeSpace:       minFree,
+		UseLocalTrash:         resolved.UseLocalTrash,
+		TransferWorkers:       resolved.TransferWorkers,
+		CheckWorkers:          resolved.CheckWorkers,
+		DeleteSafetyThreshold: resolved.DeleteSafetyThreshold,
+		MinFreeSpace:          minFree,
 	}
 
 	if verifyDrive {

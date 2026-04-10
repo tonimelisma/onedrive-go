@@ -3,20 +3,22 @@ package syncstore
 import (
 	"context"
 	"database/sql"
-	_ "embed"
+	"embed"
 	"errors"
 	"fmt"
-	"strconv"
+	"io/fs"
+
+	"github.com/pressly/goose/v3"
 )
 
-// schemaSQL is the canonical sync-store schema. The project has no launched
-// users and no state-compatibility burden, so the store applies the final
-// schema directly and rejects unknown existing schema versions.
+// migrationFS is the authoritative sync-store schema history. New stores apply
+// all embedded migrations; existing stores must already be goose-managed so we
+// never guess at durable user-intent shape.
 //
-//go:embed schema.sql
-var schemaSQL string
+//go:embed migrations/*.sql
+var migrationFS embed.FS
 
-const syncStoreSchemaVersion = 1
+const currentMigrationVersion = int64(1)
 
 // ErrIncompatibleSchema marks a state DB that cannot be trusted under the
 // current durable-intent schema. The state is rebuildable, but user intent is
@@ -24,91 +26,90 @@ const syncStoreSchemaVersion = 1
 var ErrIncompatibleSchema = errors.New("sync: incompatible sync store schema")
 
 func applySchema(ctx context.Context, db *sql.DB) error {
-	tx, err := db.BeginTx(ctx, nil)
+	if err := ensureGooseManagedOrEmpty(ctx, db); err != nil {
+		return fmt.Errorf("sync: check migration state: %w", err)
+	}
+
+	migrations, err := fs.Sub(migrationFS, "migrations")
 	if err != nil {
-		return fmt.Errorf("sync: begin schema bootstrap: %w", err)
+		return fmt.Errorf("sync: open embedded migrations: %w", err)
 	}
 
-	if err := ensureCompatibleSchemaVersion(ctx, tx); err != nil {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			return errors.Join(
-				fmt.Errorf("sync: check schema version: %w", err),
-				fmt.Errorf("sync: rollback schema bootstrap: %w", rollbackErr),
-			)
-		}
-
-		return fmt.Errorf("sync: check schema version: %w", err)
+	provider, err := goose.NewProvider(
+		goose.DialectSQLite3,
+		db,
+		migrations,
+		goose.WithLogger(goose.NopLogger()),
+		goose.WithDisableGlobalRegistry(true),
+	)
+	if err != nil {
+		return fmt.Errorf("sync: configure migrations: %w", err)
+	}
+	if _, upErr := provider.Up(ctx); upErr != nil {
+		return fmt.Errorf("sync: apply migrations: %w", upErr)
 	}
 
-	if _, err := tx.ExecContext(ctx, schemaSQL); err != nil {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			return errors.Join(
-				fmt.Errorf("sync: apply schema bootstrap: %w", err),
-				fmt.Errorf("sync: rollback schema bootstrap: %w", rollbackErr),
-			)
-		}
-		return fmt.Errorf("sync: apply schema bootstrap: %w", err)
+	version, err := provider.GetDBVersion(ctx)
+	if err != nil {
+		return fmt.Errorf("sync: read migration version: %w", err)
 	}
-
-	if _, err := tx.ExecContext(ctx, "PRAGMA user_version = "+strconv.Itoa(syncStoreSchemaVersion)); err != nil {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			return errors.Join(
-				fmt.Errorf("sync: set schema version: %w", err),
-				fmt.Errorf("sync: rollback schema bootstrap: %w", rollbackErr),
-			)
-		}
-
-		return fmt.Errorf("sync: set schema version: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("sync: commit schema bootstrap: %w", err)
+	if version != currentMigrationVersion {
+		return fmt.Errorf(
+			"%w: found migration version %d, expected version %d; rebuild or migrate the drive state DB and run sync again",
+			ErrIncompatibleSchema,
+			version,
+			currentMigrationVersion,
+		)
 	}
 
 	return nil
 }
 
-func ensureCompatibleSchemaVersion(ctx context.Context, tx *sql.Tx) error {
-	version, err := readSchemaVersion(ctx, tx)
+func ensureGooseManagedOrEmpty(ctx context.Context, db *sql.DB) error {
+	hasGooseVersion, err := tableExists(ctx, db, goose.DefaultTablename)
 	if err != nil {
 		return err
 	}
-	if version == syncStoreSchemaVersion {
+	if hasGooseVersion {
 		return nil
 	}
 
-	hasTables, err := hasUserTables(ctx, tx)
+	hasTables, err := hasNonGooseUserTables(ctx, db)
 	if err != nil {
 		return err
 	}
-	if version == 0 && !hasTables {
+	if !hasTables {
 		return nil
 	}
 
 	return fmt.Errorf(
-		"%w: found version %d, expected version %d; rebuild or delete the drive state DB and run sync again",
+		"%w: existing sync store has no goose migration history; rebuild or migrate the drive state DB and run sync again",
 		ErrIncompatibleSchema,
-		version,
-		syncStoreSchemaVersion,
 	)
 }
 
-func readSchemaVersion(ctx context.Context, tx *sql.Tx) (int, error) {
-	var version int
-	if err := tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
-		return 0, fmt.Errorf("sync: read schema version: %w", err)
-	}
-
-	return version, nil
-}
-
-func hasUserTables(ctx context.Context, tx *sql.Tx) (bool, error) {
+func tableExists(ctx context.Context, db *sql.DB, tableName string) (bool, error) {
 	var count int
-	err := tx.QueryRowContext(ctx, `
+	err := db.QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM sqlite_master
 		WHERE type = 'table'
-		  AND name NOT LIKE 'sqlite_%'`).Scan(&count)
+		  AND name = ?`, tableName).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("sync: inspect table %s: %w", tableName, err)
+	}
+
+	return count > 0, nil
+}
+
+func hasNonGooseUserTables(ctx context.Context, db *sql.DB) (bool, error) {
+	var count int
+	err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM sqlite_master
+		WHERE type = 'table'
+		  AND name NOT LIKE 'sqlite_%'
+		  AND name <> ?`, goose.DefaultTablename).Scan(&count)
 	if err != nil {
 		return false, fmt.Errorf("sync: inspect schema tables: %w", err)
 	}

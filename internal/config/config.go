@@ -60,9 +60,9 @@ type TransfersConfig struct {
 // SafetyConfig controls protective defaults and thresholds that prevent
 // accidental data loss during sync operations.
 type SafetyConfig struct {
-	BigDeleteThreshold int    `toml:"big_delete_threshold"`
-	MinFreeSpace       string `toml:"min_free_space"`
-	UseLocalTrash      bool   `toml:"use_local_trash"`
+	DeleteSafetyThreshold int    `toml:"delete_safety_threshold"`
+	MinFreeSpace          string `toml:"min_free_space"`
+	UseLocalTrash         bool   `toml:"use_local_trash"`
 }
 
 // SyncConfig controls live sync behavior: remote observation, periodic safety

@@ -1,7 +1,6 @@
--- Canonical schema for the sync engine state database.
--- The project has no launched users and no state-compatibility burden, so the
--- schema is defined directly in its final shape. schema.go gates existing DBs
--- with PRAGMA user_version instead of running stepwise migrations.
+-- +goose Up
+-- Initial sync-store schema. The database is opened only through goose-backed
+-- migrations so durable user intent has one explicit schema history.
 
 -- Core sync state: confirmed synced state per (drive_id, item_id).
 CREATE TABLE IF NOT EXISTS baseline (
@@ -71,9 +70,9 @@ CREATE TABLE IF NOT EXISTS conflicts (
 CREATE INDEX IF NOT EXISTS idx_conflicts_resolution ON conflicts(resolution);
 CREATE INDEX IF NOT EXISTS idx_conflicts_state ON conflicts(state);
 
--- Big-delete protection ledger. These rows are user-gated safety decisions,
+-- Delete safety protection ledger. These rows are user-gated safety decisions,
 -- not sync failures: held rows wait for approval, approved rows are consumed
--- by the next engine pass without retriggering big-delete protection.
+-- by the next engine pass without retriggering delete safety protection.
 CREATE TABLE IF NOT EXISTS held_deletes (
     drive_id        TEXT    NOT NULL,
     action_type     TEXT    NOT NULL CHECK(action_type IN ('local_delete', 'remote_delete')),
@@ -235,3 +234,15 @@ CREATE TABLE IF NOT EXISTS shortcuts (
     read_only      INTEGER NOT NULL DEFAULT 0,
     discovered_at  INTEGER NOT NULL CHECK(discovered_at > 0)
 );
+
+-- +goose Down
+DROP TABLE IF EXISTS shortcuts;
+DROP TABLE IF EXISTS scope_blocks;
+DROP TABLE IF EXISTS sync_failures;
+DROP TABLE IF EXISTS remote_state;
+DROP TABLE IF EXISTS scope_state;
+DROP TABLE IF EXISTS sync_metadata;
+DROP TABLE IF EXISTS held_deletes;
+DROP TABLE IF EXISTS conflicts;
+DROP TABLE IF EXISTS delta_tokens;
+DROP TABLE IF EXISTS baseline;

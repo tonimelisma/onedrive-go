@@ -368,12 +368,8 @@ func TestE2E_Sync_EditEditConflict_ResolveKeepRemote(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "remote edit v2", string(originalData))
 
-	// Step 11: Queue --keep-remote.
-	_, stderr = runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/conflict-file.txt", "--keep-remote")
-
-	// Step 12: Queued message, then normal sync executes the request.
-	assert.Contains(t, stderr, "Queued")
-	runCLIWithConfig(t, cfgPath, env, "sync")
+	// Step 11: Queue --keep-remote; a normal sync executes the request.
+	queueConflictResolutionAndSync(t, cfgPath, env, testFolder+"/conflict-file.txt", "--keep-remote")
 
 	// Step 13: No more conflicts.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
@@ -515,9 +511,7 @@ func TestE2E_Sync_ResolveAll(t *testing.T) {
 	assert.Contains(t, stdout, "edit_edit")
 
 	// Step 6: Queue --all --keep-remote, then normal sync executes the requests.
-	_, stderr = runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", "--all", "--keep-remote")
-	assert.Contains(t, stderr, "Queued")
-	runCLIWithConfig(t, cfgPath, env, "sync")
+	queueConflictResolutionAndSync(t, cfgPath, env, "--all", "--keep-remote")
 
 	// Step 7: No unresolved conflicts.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
@@ -582,9 +576,7 @@ func TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "collision.txt"), []byte("local version"), 0o600))
 
 	// Step 8: Queue --keep-local, then normal sync executes and propagates it.
-	_, stderr = runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/collision.txt", "--keep-local")
-	assert.Contains(t, stderr, "Queued")
-	runCLIWithConfig(t, cfgPath, env, "sync")
+	queueConflictResolutionAndSync(t, cfgPath, env, testFolder+"/collision.txt", "--keep-local")
 
 	// Step 9: No more conflicts.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
@@ -660,8 +652,8 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 
 	// Step 4: Bidirectional sync — retry until delta catches up with ALL
 	// remote deletions (ci_issues.md §17). The retry loop uses normal sync so
-	// big-delete protection and durable approval state are exercised through the
-	// engine boundary.
+	// delete safety and durable approval state are exercised through the engine
+	// boundary.
 	// Check both del-remote.txt (EF8) and sub/ (ED6) since folder deletions
 	// may propagate later than file deletions.
 	// With cascade expansion (sync-planning.md §Folder Delete Cascade),
@@ -708,16 +700,16 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 }
 
 // Validates: R-6.2.5, R-6.4.1
-// TestE2E_Sync_BigDeleteProtection exercises S5 big-delete protection.
+// TestE2E_Sync_DeleteSafetyThreshold exercises S5 delete safety threshold.
 // Creates 12 files, configures a low threshold (10) so that 12 deletions exceed
 // it, verifies protection triggers, then approves the held deletes durably.
-func TestE2E_Sync_BigDeleteProtection(t *testing.T) {
+func TestE2E_Sync_DeleteSafetyThreshold(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "big_delete_threshold = 10\n")
+	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "delete_safety_threshold = 10\n")
 	opsCfgPath := writeMinimalConfig(t)
-	testFolder := fmt.Sprintf("e2e-sync-bigdel-%d", time.Now().UnixNano())
+	testFolder := fmt.Sprintf("e2e-sync-delsafe-%d", time.Now().UnixNano())
 
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
@@ -736,8 +728,8 @@ func TestE2E_Sync_BigDeleteProtection(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Advance delta token past the upload. Upload-only mode skips remote
-	// observation, so no delta token is saved. Download-only avoids
-	// big-delete triggering from parallel test cleanup deletions.
+	// observation, so no delta token is saved. Download-only avoids delete
+	// safety triggering from parallel test cleanup deletions.
 	runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
 
 	// Poll for eventual consistency — verify all 12 files exist remotely
@@ -753,27 +745,29 @@ func TestE2E_Sync_BigDeleteProtection(t *testing.T) {
 	// Wait for remote deletes to propagate via REST before sync sees them via delta.
 	pollCLIWithConfigNotContains(t, opsCfgPath, nil, "file-01.txt", pollTimeout, "ls", "/"+testFolder)
 
-	// Step 4: Normal sync should trigger big-delete protection.
+	// Step 4: Normal sync should trigger delete safety and record held rows.
 	// Retry until delta catches up with all remote deletions (OneDrive
 	// eventual consistency — delta may lag behind REST).
-	attempt := requireSyncEventuallyConverges(
+	requireSyncEventuallyConverges(
 		t,
 		cfgPath,
 		env,
 		120*time.Second,
-		"big-delete protection should trigger",
+		"delete safety threshold should record held deletes",
 		func(result syncAttemptResult) bool {
-			return result.Err != nil && strings.Contains(result.Stderr, "big-delete")
+			if result.Err != nil {
+				return false
+			}
+			stdout, _, err := runCLICore(t, cfgPath, env, drive, "issues")
+			return err == nil && strings.Contains(stdout, "HELD DELETES")
 		},
 	)
-	assert.Error(t, attempt.Err)
-	assert.Contains(t, attempt.Stderr, "big-delete")
 
 	// Step 5: Local files should still exist (no changes applied).
 	for i := 1; i <= fileCount; i++ {
 		name := fmt.Sprintf("file-%02d.txt", i)
 		_, err := os.Stat(filepath.Join(localDir, name))
-		assert.NoError(t, err, "local file %s should still exist after big-delete protection", name)
+		assert.NoError(t, err, "local file %s should still exist after delete safety hold", name)
 	}
 
 	approvalOutput, _ := runCLIWithConfig(t, cfgPath, env, "issues", "approve-deletes")
@@ -1175,9 +1169,7 @@ func TestE2E_Sync_ResolveDryRun(t *testing.T) {
 	assert.Contains(t, stdout, "dryrun-conflict.txt", "conflict should remain after dry-run resolve")
 
 	// Step 7: Queue for real, then normal sync executes the request.
-	_, stderr = runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/dryrun-conflict.txt", "--keep-local")
-	assert.Contains(t, stderr, "Queued")
-	runCLIWithConfig(t, cfgPath, env, "sync")
+	queueConflictResolutionAndSync(t, cfgPath, env, testFolder+"/dryrun-conflict.txt", "--keep-local")
 
 	// Step 8: No more conflicts.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")

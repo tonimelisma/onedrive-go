@@ -83,7 +83,7 @@ This table is the authoritative config-package view of the current schema.
 | `ignore_marker` | `string` | `.odignore` | non-empty filename | `sync` | Presence-only directory exclusion marker. |
 | `transfer_workers` | `int` | `8` | `4..64` | `sync`, `transfer commands` | Shared transfer worker-pool size. |
 | `check_workers` | `int` | `4` | `1..16` | `sync` | Parallel local hashing worker count. |
-| `big_delete_threshold` | `int` | `1000` | `>= 1` | `sync` | Big-delete protection threshold. |
+| `delete_safety_threshold` | `int` | `1000` | `>= 1` | `sync` | Delete safety protection threshold. |
 | `min_free_space` | `string` | `1GB` | parseable size string; `0` disables | `sync`, `get`, shared download commands | Disk reservation floor for downloads. |
 | `use_local_trash` | `bool` | macOS: `true`; Linux: `false` | boolean | `sync` | Local delete handling. |
 | `poll_interval` | `string` | `5m` | duration `>= 30s` | `sync --watch` | Remote observation fallback poll cadence. |

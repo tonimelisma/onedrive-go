@@ -53,7 +53,7 @@ func TestE2E_Sync_EmptyDirectory(t *testing.T) {
 	// Re-run sync until delta catches up and the deletion propagates locally.
 	// Incremental delta (with saved token) is required because a fresh delta
 	// only lists existing items, so the deletion would be invisible.
-	// Big-delete protection won't trigger (< 10 baseline items).
+	// Delete safety protection won't trigger (< 10 baseline items).
 	// Delta endpoint may lag 60-120s behind REST; use 180s to avoid flakes.
 	requireSyncEventuallyConverges(
 		t,

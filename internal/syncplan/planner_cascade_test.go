@@ -425,9 +425,9 @@ func TestCascade_EmptyFolder(t *testing.T) {
 }
 
 // Validates: R-6.2.5, R-6.4.1
-// TestCascade_BigDeleteProtection verifies that cascaded actions increase
-// the delete count and trigger big-delete protection if threshold is exceeded.
-func TestCascade_BigDeleteProtection(t *testing.T) {
+// TestCascade_DeleteSafetyProtection verifies that cascaded actions increase
+// the delete count and trigger delete safety protection if threshold is exceeded.
+func TestCascade_DeleteSafetyProtection(t *testing.T) {
 	t.Parallel()
 
 	planner := NewPlanner(synctest.TestLogger(t))
@@ -462,8 +462,8 @@ func TestCascade_BigDeleteProtection(t *testing.T) {
 	}
 
 	// Set threshold to 3 — cascade produces 6 deletes, which exceeds it.
-	safety := &synctypes.SafetyConfig{BigDeleteThreshold: 3}
+	safety := &synctypes.SafetyConfig{DeleteSafetyThreshold: 3}
 
 	_, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, safety, nil)
-	assert.ErrorIs(t, err, synctypes.ErrDeleteSafetyThresholdExceeded, "cascaded deletes should trigger big-delete protection")
+	assert.ErrorIs(t, err, synctypes.ErrDeleteSafetyThresholdExceeded, "cascaded deletes should trigger delete safety protection")
 }

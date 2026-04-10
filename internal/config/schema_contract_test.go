@@ -17,8 +17,8 @@ import (
 
 func expectedGlobalSchemaKeys() []string {
 	return []string{
-		"big_delete_threshold",
 		"check_workers",
+		"delete_safety_threshold",
 		"dry_run",
 		"ignore_marker",
 		"log_file",

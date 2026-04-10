@@ -171,7 +171,37 @@ func TestConflictsResolve_DoesNotFallbackOnTypedWatchDaemonError(t *testing.T) {
 	_, err := svc.requestConflictResolution(t.Context(), resolver, "missing", synctypes.ResolutionKeepLocal)
 	require.Error(t, err)
 	assert.True(t, isControlDaemonError(err))
+	assert.Contains(t, err.Error(), string(synccontrol.ErrorConflictNotFound))
+	assert.Contains(t, err.Error(), "conflict not found")
 	assert.Zero(t, resolver.requestCalls)
+}
+
+// Validates: R-2.3.6, R-2.9.3
+func TestIssuesApproveDeletes_DoesNotFallbackOnTypedWatchDaemonError(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	cid := driveid.MustCanonicalID("personal:approve-error@example.com")
+	startCLIControlSocket(t, synccontrol.StatusResponse{OwnerMode: synccontrol.OwnerModeWatch}, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		assert.NoError(t, json.NewEncoder(w).Encode(synccontrol.MutationResponse{
+			Status:  synccontrol.StatusError,
+			Code:    synccontrol.ErrorDriveNotManaged,
+			Message: "drive not managed",
+		}))
+	})
+
+	var out bytes.Buffer
+	svc := newIssuesService(&CLIContext{
+		OutputWriter: &out,
+		Logger:       slog.New(slog.DiscardHandler),
+		Cfg:          &config.ResolvedDrive{CanonicalID: cid},
+	})
+
+	err := svc.runApproveDeletes(t.Context())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), string(synccontrol.ErrorDriveNotManaged))
+	assert.Contains(t, err.Error(), "drive not managed")
+	assert.NotContains(t, out.String(), approveDeletesSuccess)
 }
 
 // Validates: R-2.3.12, R-2.9.3

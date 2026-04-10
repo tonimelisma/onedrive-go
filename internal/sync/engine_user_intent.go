@@ -23,6 +23,12 @@ type heldDeleteKey struct {
 	itemID     string
 }
 
+type heldDeletePathKey struct {
+	driveID    string
+	actionType synctypes.ActionType
+	path       string
+}
+
 func deleteKeyFromAction(action *synctypes.Action) heldDeleteKey {
 	if action == nil {
 		return heldDeleteKey{}
@@ -49,15 +55,81 @@ func deleteKeyFromRecord(record *synctypes.HeldDeleteRecord) heldDeleteKey {
 	}
 }
 
-func (e *Engine) approvedDeleteKeys(ctx context.Context) (map[heldDeleteKey]struct{}, error) {
+func pathKeyFromDeleteKey(key heldDeleteKey) heldDeletePathKey {
+	return heldDeletePathKey{
+		driveID:    key.driveID,
+		actionType: key.actionType,
+		path:       key.path,
+	}
+}
+
+func plannedDeleteKeys(plan *synctypes.ActionPlan) map[heldDeleteKey]struct{} {
+	if plan == nil {
+		return map[heldDeleteKey]struct{}{}
+	}
+
+	keys := make(map[heldDeleteKey]struct{})
+	for i := range plan.Actions {
+		action := &plan.Actions[i]
+		if isDeleteAction(action.Type) {
+			keys[deleteKeyFromAction(action)] = struct{}{}
+		}
+	}
+
+	return keys
+}
+
+func plannedDeleteItemsByPath(plan *synctypes.ActionPlan) map[heldDeletePathKey]map[string]struct{} {
+	itemsByPath := make(map[heldDeletePathKey]map[string]struct{})
+	for key := range plannedDeleteKeys(plan) {
+		if key.itemID == "" {
+			continue
+		}
+		pathKey := pathKeyFromDeleteKey(key)
+		if itemsByPath[pathKey] == nil {
+			itemsByPath[pathKey] = make(map[string]struct{})
+		}
+		itemsByPath[pathKey][key.itemID] = struct{}{}
+	}
+
+	return itemsByPath
+}
+
+func (e *Engine) approvedDeleteKeysForPlan(
+	ctx context.Context,
+	plan *synctypes.ActionPlan,
+) (map[heldDeleteKey]struct{}, error) {
 	approved, err := e.baseline.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateApproved)
 	if err != nil {
 		return nil, fmt.Errorf("sync: list approved held deletes: %w", err)
 	}
 
+	planned := plannedDeleteKeys(plan)
+	plannedItemsByPath := plannedDeleteItemsByPath(plan)
 	keys := make(map[heldDeleteKey]struct{}, len(approved))
 	for i := range approved {
-		keys[deleteKeyFromRecord(&approved[i])] = struct{}{}
+		record := &approved[i]
+		key := deleteKeyFromRecord(record)
+		if _, ok := planned[key]; ok {
+			keys[key] = struct{}{}
+			continue
+		}
+
+		plannedItems := plannedItemsByPath[pathKeyFromDeleteKey(key)]
+		if len(plannedItems) == 0 || key.itemID == "" {
+			continue
+		}
+		if _, pathStillUsesSameItem := plannedItems[key.itemID]; pathStillUsesSameItem {
+			continue
+		}
+
+		if err := e.baseline.DeleteHeldDelete(ctx, record.DriveID, record.ActionType, record.Path, record.ItemID); err != nil {
+			return nil, fmt.Errorf("sync: prune stale approved held delete %s: %w", record.Path, err)
+		}
+		e.logger.Info("pruned stale approved held delete",
+			slog.String("path", record.Path),
+			slog.String("item_id", record.ItemID),
+		)
 	}
 
 	return keys, nil
@@ -112,7 +184,7 @@ func (e *Engine) holdDeleteActions(ctx context.Context, actions []synctypes.Acti
 			State:         synctypes.HeldDeleteStateHeld,
 			HeldAt:        now,
 			LastPlannedAt: now,
-			LastError:     fmt.Sprintf("held by big-delete protection (threshold: %d)", e.bigDeleteThreshold),
+			LastError:     fmt.Sprintf("held by delete safety threshold (threshold: %d)", e.deleteSafetyThreshold),
 		})
 	}
 
@@ -127,13 +199,17 @@ func (e *Engine) applyOneShotDeleteProtection(
 	ctx context.Context,
 	plan *synctypes.ActionPlan,
 ) (*synctypes.ActionPlan, error) {
-	if plan == nil || len(plan.Actions) == 0 || e.bigDeleteThreshold <= 0 {
-		return plan, nil
+	if plan == nil {
+		return &synctypes.ActionPlan{}, nil
 	}
 
-	approved, err := e.approvedDeleteKeys(ctx)
+	approved, err := e.approvedDeleteKeysForPlan(ctx, plan)
 	if err != nil {
 		return nil, fmt.Errorf("load approved deletes: %w", err)
+	}
+
+	if len(plan.Actions) == 0 || e.deleteSafetyThreshold <= 0 {
+		return plan, nil
 	}
 
 	var unapprovedDeletes []synctypes.Action
@@ -148,7 +224,7 @@ func (e *Engine) applyOneShotDeleteProtection(
 		unapprovedDeletes = append(unapprovedDeletes, *action)
 	}
 
-	if len(unapprovedDeletes) <= e.bigDeleteThreshold {
+	if len(unapprovedDeletes) <= e.deleteSafetyThreshold {
 		return plan, nil
 	}
 
@@ -156,9 +232,9 @@ func (e *Engine) applyOneShotDeleteProtection(
 		return nil, err
 	}
 
-	e.logger.Warn("big-delete protection held delete actions",
+	e.logger.Warn("delete safety threshold held delete actions",
 		slog.Int("delete_count", len(unapprovedDeletes)),
-		slog.Int("threshold", e.bigDeleteThreshold),
+		slog.Int("threshold", e.deleteSafetyThreshold),
 	)
 
 	return filterActionPlan(plan, func(action *synctypes.Action) bool {
@@ -212,7 +288,7 @@ func syncFailureRowFromHeldDelete(record *synctypes.HeldDeleteRecord) synctypes.
 		Direction:  synctypes.DirectionDelete,
 		Role:       synctypes.FailureRoleItem,
 		Category:   synctypes.CategoryActionable,
-		IssueType:  synctypes.IssueBigDeleteHeld,
+		IssueType:  synctypes.IssueDeleteSafetyHeld,
 		ItemID:     record.ItemID,
 		ActionType: record.ActionType,
 	}

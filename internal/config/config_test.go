@@ -26,7 +26,7 @@ func TestDefaultConfig_AllFieldsPopulated(t *testing.T) {
 	assert.Equal(t, 4, cfg.CheckWorkers)
 
 	// Safety defaults
-	assert.Equal(t, 1000, cfg.BigDeleteThreshold)
+	assert.Equal(t, 1000, cfg.DeleteSafetyThreshold)
 	assert.Equal(t, "1GB", cfg.MinFreeSpace)
 	assert.Equal(t, runtime.GOOS == "darwin", cfg.UseLocalTrash) // platform-specific default
 
@@ -116,7 +116,7 @@ func TestConfig_EmbeddedStructPromotion(t *testing.T) {
 	// These should compile and work because of struct embedding.
 	assert.False(t, cfg.SkipDotfiles)
 	assert.Equal(t, 8, cfg.TransferWorkers)
-	assert.Equal(t, 1000, cfg.BigDeleteThreshold)
+	assert.Equal(t, 1000, cfg.DeleteSafetyThreshold)
 	assert.Equal(t, "5m", cfg.PollInterval)
 	assert.Equal(t, "info", cfg.LogLevel)
 }

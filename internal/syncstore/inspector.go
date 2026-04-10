@@ -648,7 +648,7 @@ func (i *Inspector) listActionableFailures(ctx context.Context) ([]synctypes.Syn
 		WHERE category = 'actionable'
 		AND (issue_type IS NULL OR issue_type != ?)
 		ORDER BY last_seen_at DESC`,
-		synctypes.IssueBigDeleteHeld,
+		synctypes.IssueDeleteSafetyHeld,
 	)
 	if err != nil {
 		if isMissingTableErr(err) {

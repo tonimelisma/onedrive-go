@@ -9,7 +9,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
-// UpsertHeldDeletes records delete actions held by big-delete protection.
+// UpsertHeldDeletes records delete actions held by the delete safety threshold.
 // Existing approved rows are never downgraded back to held.
 func (m *SyncStore) UpsertHeldDeletes(ctx context.Context, deletes []synctypes.HeldDeleteRecord) (retErr error) {
 	if len(deletes) == 0 {

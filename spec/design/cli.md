@@ -380,7 +380,7 @@ Implements: R-2.3.3 [verified], R-2.3.4 [verified], R-2.3.5 [verified], R-2.3.6 
 - **Human-readable names**: Shortcut-scoped failures display local path name, not internal drive IDs.
 - **Scope-aware reason/action copy**: Failure text is selected from `issue_type` plus the raw scope key, so shortcut-scoped quota failures say the shared-folder owner is out of space instead of implying the user's own drive is full.
 - **Read-only surface**: `issues` is a read-only problem view. It shows grouped issue families plus held deletes, but not conflicts, pending retries, or manual retry/recheck state.
-- **Strict command grammar**: `issues` and `conflicts` are list commands and accept no positional args. CLI mutation lives only under explicit subcommands: `issues approve-deletes` for held big-delete approval and `conflicts resolve [path-or-id]` for conflict resolution.
+- **Strict command grammar**: `issues` and `conflicts` are list commands and accept no positional args. CLI mutation lives only under explicit subcommands: `issues approve-deletes` for held delete-safety approval and `conflicts resolve [path-or-id]` for conflict resolution.
 - **JSON shape**: `issues --json` emits `failure_groups` and `held_deletes` only. Conflict history has its own `conflicts --json` surface.
 - **Derived shared-folder issues**: `perm:remote` is displayed from held blocked-write rows, not from a standalone boundary issue. The CLI shows one visible issue per denied boundary only while blocked write intent still exists.
 - **Automatic shared-folder recovery**: shared-folder write blocks have no manual CLI controls. The engine rechecks permission state automatically during normal sync/watch passes while blocked writes still exist.

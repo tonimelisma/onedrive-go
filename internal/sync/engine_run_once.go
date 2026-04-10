@@ -88,7 +88,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 	if !opts.DryRun {
 		plan, err = e.applyOneShotDeleteProtection(ctx, plan)
 		if err != nil {
-			return nil, fmt.Errorf("sync: applying big-delete protection: %w", err)
+			return nil, fmt.Errorf("sync: applying delete safety threshold: %w", err)
 		}
 	}
 
@@ -374,7 +374,7 @@ func (flow *engineFlow) observeLocal(
 //
 // Observations (remote_state rows) are committed immediately. The delta token
 // is returned but NOT committed — the caller must commit it only after the
-// planner approves the changes (prevents big-delete protection from
+// planner approves the changes (prevents delete safety holds from
 // permanently consuming deletion events). Skipped entirely for dry-run.
 //
 // When fullReconcile is true, runs a fresh delta with empty token (enumerates
@@ -575,7 +575,7 @@ func (flow *engineFlow) observeLocalChanges(
 // Observations (remote_state rows) are committed immediately so the baseline
 // reflects the current remote state. The delta token is NOT committed here —
 // it is returned to the caller, who must commit it only after the planner
-// approves the changes. This prevents big-delete protection from permanently
+// approves the changes. This prevents delete safety holds from permanently
 // consuming deletion events: if the planner rejects the plan, the token stays
 // at its old position and the next sync replays the same delta window.
 //
@@ -725,12 +725,11 @@ func changeEventsToObservedItems(logger *slog.Logger, events []synctypes.ChangeE
 	return items
 }
 
-// resolveSafetyConfig returns the appropriate synctypes.SafetyConfig. The planner-level
-// big-delete check is disabled (threshold=MaxInt32) when force is set or when
-// the engine has a deleteCounter (watch mode — the rolling counter handles
-// big-delete protection instead).
+// resolveSafetyConfig returns the appropriate synctypes.SafetyConfig. The
+// planner-level delete threshold is disabled here (threshold=MaxInt32) because
+// the engine owns durable delete-safety holds and approvals.
 func (e *Engine) resolveSafetyConfig() *synctypes.SafetyConfig {
 	return &synctypes.SafetyConfig{
-		BigDeleteThreshold: plannerSafetyMax,
+		DeleteSafetyThreshold: plannerSafetyMax,
 	}
 }

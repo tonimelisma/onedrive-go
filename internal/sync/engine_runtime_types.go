@@ -88,7 +88,7 @@ type watchObservationState struct {
 	// Event buffer — watch-loop retry/trial work injects events via buf.Add().
 	buf *syncobserve.Buffer
 
-	// Big-delete protection: rolling counter + durable held-delete state.
+	// Delete safety protection: rolling counter + durable held-delete state.
 	deleteCounter   *syncdispatch.DeleteCounter
 	lastDataVersion int64
 

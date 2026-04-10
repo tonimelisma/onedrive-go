@@ -12,7 +12,7 @@ import (
 )
 
 // processBatch plans and dispatches a batch of path changes. On planner
-// error (e.g. big-delete protection), the batch is skipped and the loop
+// error (e.g. delete safety threshold), the batch is skipped and the loop
 // continues. In-flight actions for overlapping paths are canceled and
 // replaced (B-122 deduplication).
 func (rt *watchRuntime) processBatch(
@@ -68,7 +68,7 @@ func (rt *watchRuntime) planAndDispatchBatch(
 	plan, err := rt.engine.planner.Plan(batch, bl, mode, safety, denied)
 	if err != nil {
 		if errors.Is(err, synctypes.ErrDeleteSafetyThresholdExceeded) {
-			rt.engine.logger.Warn("big-delete protection triggered, skipping batch",
+			rt.engine.logger.Warn("delete safety threshold triggered, skipping batch",
 				slog.Int("paths", len(batch)),
 			)
 
@@ -87,7 +87,7 @@ func (rt *watchRuntime) planAndDispatchBatch(
 		return nil
 	}
 
-	// Rolling-window big-delete protection: count planned deletes and
+	// Rolling-window delete safety threshold: count planned deletes and
 	// filter them out if the counter trips. Non-delete actions continue
 	// flowing. The planner-level check is disabled in watch mode
 	// (threshold=MaxInt32) — this counter replaces it.
@@ -298,7 +298,7 @@ func (rt *watchRuntime) applyDeleteCounter(
 	ctx context.Context,
 	plan *synctypes.ActionPlan,
 ) (*synctypes.ActionPlan, error) {
-	approved, err := rt.engine.approvedDeleteKeys(ctx)
+	approved, err := rt.engine.approvedDeleteKeysForPlan(ctx, plan)
 	if err != nil {
 		return nil, fmt.Errorf("load approved deletes: %w", err)
 	}
@@ -320,7 +320,7 @@ func (rt *watchRuntime) applyDeleteCounter(
 
 	tripped := rt.deleteCounter.Add(deleteCount)
 	if tripped {
-		rt.engine.logger.Warn("big-delete protection triggered in watch mode",
+		rt.engine.logger.Warn("delete safety threshold triggered in watch mode",
 			slog.Int("delete_count", rt.deleteCounter.Count()),
 			slog.Int("threshold", rt.deleteCounter.Threshold()),
 		)
