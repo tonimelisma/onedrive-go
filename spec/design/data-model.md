@@ -11,8 +11,9 @@ Each configured drive gets its own SQLite database file. The canonical drive ide
 
 Engine: `modernc.org/sqlite` (pure Go, no CGO). WAL mode, `synchronous = FULL`, 5-second busy timeout.
 
-The store sets one current `PRAGMA user_version`. Unknown, non-current, or
-unversioned existing state DBs are rejected with rebuild/delete guidance. Most
+The store applies embedded goose migrations and records schema history in
+`goose_db_version`. Existing state DBs with user tables but no goose history
+are rejected with rebuild/migrate guidance rather than guessed forward. Most
 sync state is rebuildable from local filesystem plus OneDrive truth, but
 `conflicts` requests and `held_deletes` approvals are durable user intent and
 must not be silently migrated or erased by guesswork.
@@ -154,7 +155,7 @@ reports already in progress, and `resolved` reports already resolved.
 
 ### held_deletes
 
-Big-delete protection ledger. Held deletes are not sync failures; they are
+Delete safety protection ledger. Held deletes are not sync failures; they are
 durable user-gated safety decisions.
 
 Keyed by `(drive_id, action_type, path, item_id)`. `item_id` is required so a
@@ -167,7 +168,7 @@ after path reuse. Fields:
 - `held_at`, `approved_at`, `last_planned_at`, `last_error` — audit and display metadata
 
 Approved rows are consumed only after the corresponding delete action succeeds.
-Approved rows are also excluded from future big-delete holds, so the same
+Approved rows are also excluded from future delete-safety holds, so the same
 approved delete does not retrigger protection on the next normal sync pass.
 
 ### shortcuts

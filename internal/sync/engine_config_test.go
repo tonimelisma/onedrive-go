@@ -77,9 +77,9 @@ func TestBuildEngineConfig_PropagatesWatchCapabilities(t *testing.T) {
 			CheckWorkers:    4,
 		},
 		SafetyConfig: config.SafetyConfig{
-			UseLocalTrash:      true,
-			BigDeleteThreshold: 42,
-			MinFreeSpace:       "1MiB",
+			UseLocalTrash:         true,
+			DeleteSafetyThreshold: 42,
+			MinFreeSpace:          "1MiB",
 		},
 		SyncConfig: config.SyncConfig{
 			Websocket: true,
@@ -112,7 +112,7 @@ func TestBuildEngineConfig_PropagatesWatchCapabilities(t *testing.T) {
 	assert.True(t, ecfg.UseLocalTrash)
 	assert.Equal(t, 3, ecfg.TransferWorkers)
 	assert.Equal(t, 4, ecfg.CheckWorkers)
-	assert.Equal(t, 42, ecfg.BigDeleteThreshold)
+	assert.Equal(t, 42, ecfg.DeleteSafetyThreshold)
 	assert.Equal(t, int64(1024*1024), ecfg.MinFreeSpace)
 }
 

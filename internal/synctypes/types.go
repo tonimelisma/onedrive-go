@@ -397,9 +397,9 @@ type ConflictRecord struct {
 	ResolvedBy          string // ResolvedByUser, ResolvedByAuto, or "" if unresolved
 }
 
-// HeldDeleteRecord is the durable user-approval ledger for big-delete
-// protection. It records safety holds and approvals separately from ordinary
-// sync failures.
+// HeldDeleteRecord is the durable user-approval ledger for delete safety
+// threshold holds. It records safety holds and approvals separately from
+// ordinary sync failures.
 type HeldDeleteRecord struct {
 	DriveID       driveid.ID
 	ItemID        string

@@ -274,7 +274,7 @@ func TestE2E_Conflicts_JSON(t *testing.T) {
 	assert.Equal(t, "edit_edit", conflict["conflict_type"], "conflict type should be edit_edit")
 
 	// Resolve to clean up.
-	runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", "--all", "--keep-remote")
+	queueConflictResolutionAndSync(t, cfgPath, env, "--all", "--keep-remote")
 }
 
 // Validates: R-2.3.3, R-2.3.4, R-2.3.5
@@ -319,8 +319,7 @@ func TestE2E_Conflicts_ResolveKeepBoth(t *testing.T) {
 	require.NotEmpty(t, matches, "conflict copy should exist before resolve")
 
 	// Queue --keep-both; the next sync pass owns execution.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/both.txt", "--keep-both")
-	assert.Contains(t, stderr, "Queued", "resolve should queue durable engine-owned resolution")
+	queueConflictResolution(t, cfgPath, env, testFolder+"/both.txt", "--keep-both")
 
 	// Verify both files still exist.
 	_, err = os.Stat(filepath.Join(localDir, "both.txt"))
@@ -374,9 +373,9 @@ func TestE2E_Conflicts_ResolveMultipleStrategies(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync")
 
 	// Resolve each with a different strategy.
-	runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/a.txt", "--keep-local")
-	runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/b.txt", "--keep-remote")
-	runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/c.txt", "--keep-both")
+	queueConflictResolution(t, cfgPath, env, testFolder+"/a.txt", "--keep-local")
+	queueConflictResolution(t, cfgPath, env, testFolder+"/b.txt", "--keep-remote")
+	queueConflictResolution(t, cfgPath, env, testFolder+"/c.txt", "--keep-both")
 	runCLIWithConfig(t, cfgPath, env, "sync")
 
 	// Verify conflict history shows all 3.
@@ -932,7 +931,7 @@ func TestE2E_Issues_ApproveDeletes(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "big_delete_threshold = 10\n")
+	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "delete_safety_threshold = 10\n")
 	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-issues-approve-deletes-%d", time.Now().UnixNano())

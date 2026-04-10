@@ -29,11 +29,11 @@ const (
 )
 
 type plannerFuzzCase struct {
-	Mode               string                   `json:"mode"`
-	BigDeleteThreshold int                      `json:"big_delete_threshold"`
-	DeniedPrefixes     []string                 `json:"denied_prefixes"`
-	Baseline           []plannerFuzzBaselineRow `json:"baseline"`
-	Changes            []plannerFuzzPathChanges `json:"changes"`
+	Mode                  string                   `json:"mode"`
+	DeleteSafetyThreshold int                      `json:"delete_safety_threshold"`
+	DeniedPrefixes        []string                 `json:"denied_prefixes"`
+	Baseline              []plannerFuzzBaselineRow `json:"baseline"`
+	Changes               []plannerFuzzPathChanges `json:"changes"`
 }
 
 type plannerFuzzBaselineRow struct {
@@ -197,7 +197,7 @@ func decodePlannerFuzzCase(data []byte) (decodedPlannerFuzzCase, bool) {
 		changes:        changes,
 		baseline:       baseline,
 		mode:           parsePlannerMode(raw.Mode),
-		config:         &synctypes.SafetyConfig{BigDeleteThreshold: raw.BigDeleteThreshold},
+		config:         &synctypes.SafetyConfig{DeleteSafetyThreshold: raw.DeleteSafetyThreshold},
 		deniedPrefixes: sanitizePlannerPrefixes(raw.DeniedPrefixes),
 	}, true
 }
@@ -555,7 +555,7 @@ func plannerFuzzSeeds() [][]byte {
 	return [][]byte{
 		[]byte(`{
 			"mode":"bidirectional",
-			"big_delete_threshold":1000,
+			"delete_safety_threshold":1000,
 			"baseline":[
 				{"path":"converge.txt","drive_id":"drive-1","item_id":"item-1","item_type":"file","local_hash":"old","remote_hash":"old"}
 			],
@@ -565,7 +565,7 @@ func plannerFuzzSeeds() [][]byte {
 		}`),
 		[]byte(`{
 			"mode":"bidirectional",
-			"big_delete_threshold":1000,
+			"delete_safety_threshold":1000,
 			"baseline":[
 				{"path":"folder","drive_id":"drive-1","item_id":"folder-1","item_type":"folder"},
 				{"path":"folder/child.txt","drive_id":"drive-1","item_id":"file-1","item_type":"file","local_hash":"same","remote_hash":"same"}
@@ -576,7 +576,7 @@ func plannerFuzzSeeds() [][]byte {
 		}`),
 		[]byte(`{
 			"mode":"bidirectional",
-			"big_delete_threshold":1000,
+			"delete_safety_threshold":1000,
 			"baseline":[
 				{"path":"own/file.txt","drive_id":"drive-a","item_id":"item-1","item_type":"file","local_hash":"hash-1","remote_hash":"hash-1"},
 				{"path":"shared","drive_id":"drive-b","item_id":"shortcut-root","item_type":"folder"}
@@ -588,7 +588,7 @@ func plannerFuzzSeeds() [][]byte {
 		}`),
 		[]byte(`{
 			"mode":"download-only",
-			"big_delete_threshold":1000,
+			"delete_safety_threshold":1000,
 			"denied_prefixes":["shared"],
 			"baseline":[
 				{"path":"planner-replay.txt","drive_id":"drive-1","item_id":"item-1","item_type":"file","local_hash":"hash-a","remote_hash":"hash-a","etag":"etag-a"}

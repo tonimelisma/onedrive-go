@@ -54,7 +54,7 @@ func (rt *watchRuntime) handleExternalChanges(ctx context.Context) {
 	if rt.deleteCounter != nil && rt.deleteCounter.IsHeld() {
 		rows, err := rt.engine.baseline.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateHeld)
 		if err != nil {
-			rt.engine.logger.Warn("failed to check big-delete-held entries",
+			rt.engine.logger.Warn("failed to check held-delete entries",
 				slog.String("error", err.Error()),
 			)
 
@@ -63,7 +63,7 @@ func (rt *watchRuntime) handleExternalChanges(ctx context.Context) {
 
 		if len(rows) == 0 {
 			rt.deleteCounter.Release()
-			rt.engine.logger.Info("big-delete protection cleared by user")
+			rt.engine.logger.Info("delete safety threshold cleared by user")
 		}
 	}
 

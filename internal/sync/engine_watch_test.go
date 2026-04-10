@@ -638,10 +638,10 @@ func TestRunWatch_UploadOnly_SkipsRemoteObserver(t *testing.T) {
 }
 
 // Validates: R-6.2.5, R-6.4.2, R-6.4.3
-// TestRunWatch_ProcessBatch_BigDelete verifies that the rolling delete
+// TestRunWatch_ProcessBatch_DeleteSafety verifies that the rolling delete
 // counter in watch mode holds delete actions when the threshold is exceeded,
 // records them as actionable issues, and prevents dispatch.
-func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
+func TestRunWatch_ProcessBatch_DeleteSafety(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -657,7 +657,7 @@ func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	// Seed a large baseline so that a batch of deletes triggers big-delete.
+	// Seed a large baseline so that a batch of deletes triggers delete safety.
 	seedOutcomes := make([]synctypes.Outcome, 20)
 	for i := range 20 {
 		seedOutcomes[i] = synctypes.Outcome{
@@ -701,7 +701,7 @@ func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
 	// planner-level check is disabled so the engine can record durable
 	// held-delete intent and keep non-delete work flowing.
 	testWatchRuntime(t, eng).deleteCounter = syncdispatch.NewDeleteCounter(10, 5*time.Minute, time.Now)
-	safety := &synctypes.SafetyConfig{BigDeleteThreshold: plannerSafetyMax}
+	safety := &synctypes.SafetyConfig{DeleteSafetyThreshold: plannerSafetyMax}
 
 	outbox := processBatchForTest(t, eng, ctx, batch, bl, safety)
 
@@ -719,9 +719,9 @@ func TestRunWatch_ProcessBatch_BigDelete(t *testing.T) {
 }
 
 // Validates: R-6.2.5, R-6.4.2
-// TestRunWatch_ProcessBatch_BigDelete_NonDeletesFlow verifies that non-delete
+// TestRunWatch_ProcessBatch_DeleteSafety_NonDeletesFlow verifies that non-delete
 // actions are dispatched even when the delete counter is held.
-func TestRunWatch_ProcessBatch_BigDelete_NonDeletesFlow(t *testing.T) {
+func TestRunWatch_ProcessBatch_DeleteSafety_NonDeletesFlow(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -795,7 +795,7 @@ func TestRunWatch_ProcessBatch_BigDelete_NonDeletesFlow(t *testing.T) {
 
 	// Install counter with threshold=10. 15 deletes > 10 → trips.
 	testWatchRuntime(t, eng).deleteCounter = syncdispatch.NewDeleteCounter(10, 5*time.Minute, time.Now)
-	safety := &synctypes.SafetyConfig{BigDeleteThreshold: plannerSafetyMax}
+	safety := &synctypes.SafetyConfig{DeleteSafetyThreshold: plannerSafetyMax}
 
 	outbox := processBatchForTest(t, eng, ctx, batch, bl, safety)
 
@@ -813,9 +813,9 @@ func TestRunWatch_ProcessBatch_BigDelete_NonDeletesFlow(t *testing.T) {
 }
 
 // Validates: R-6.2.5, R-6.4.3
-// TestRunWatch_ProcessBatch_BigDelete_BelowThreshold verifies that the
+// TestRunWatch_ProcessBatch_DeleteSafety_BelowThreshold verifies that the
 // rolling counter allows deletes through when below the threshold.
-func TestRunWatch_ProcessBatch_BigDelete_BelowThreshold(t *testing.T) {
+func TestRunWatch_ProcessBatch_DeleteSafety_BelowThreshold(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -872,7 +872,7 @@ func TestRunWatch_ProcessBatch_BigDelete_BelowThreshold(t *testing.T) {
 	setupWatchEngine(t, eng)
 
 	testWatchRuntime(t, eng).deleteCounter = syncdispatch.NewDeleteCounter(10, 5*time.Minute, time.Now)
-	safety := &synctypes.SafetyConfig{BigDeleteThreshold: plannerSafetyMax}
+	safety := &synctypes.SafetyConfig{DeleteSafetyThreshold: plannerSafetyMax}
 
 	outbox := processBatchForTest(t, eng, ctx, batch, bl, safety)
 
@@ -917,10 +917,10 @@ func TestEngine_ExternalDBChanged(t *testing.T) {
 }
 
 // Validates: R-6.2.5, R-6.4.2
-// TestEngine_HandleExternalChanges_BigDeleteClearance verifies that
+// TestEngine_HandleExternalChanges_DeleteSafetyClearance verifies that
 // handleExternalChanges releases the delete counter when all held-delete rows
 // have moved out of held state.
-func TestEngine_HandleExternalChanges_BigDeleteClearance(t *testing.T) {
+func TestEngine_HandleExternalChanges_DeleteSafetyClearance(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)

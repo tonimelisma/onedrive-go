@@ -827,6 +827,10 @@ func TestOrchestrator_OneShotControlSocket_StatusAndMutationConflict(t *testing.
 	status := getControlStatus(t, cfg.ControlSocketPath)
 	assert.Equal(t, synccontrol.OwnerModeOneShot, status.OwnerMode)
 	assert.Equal(t, []string{rd.CanonicalID.String()}, status.Drives)
+	assert.Zero(t, status.PendingHeldDeleteApprovals)
+	assert.Zero(t, status.PendingConflictRequests)
+	assert.Zero(t, status.ResolvingConflictRequests)
+	assert.Zero(t, status.FailedConflictRequests)
 
 	client := controlTestClient(cfg.ControlSocketPath)
 	req, err := http.NewRequestWithContext(

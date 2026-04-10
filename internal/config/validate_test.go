@@ -80,12 +80,12 @@ func TestValidate_CheckWorkers_Boundaries(t *testing.T) {
 	assert.NoError(t, Validate(cfg))
 }
 
-func TestValidate_BigDeleteThreshold_BelowMin(t *testing.T) {
+func TestValidate_DeleteSafetyThreshold_BelowMin(t *testing.T) {
 	cfg := validConfig()
-	cfg.BigDeleteThreshold = 0
+	cfg.DeleteSafetyThreshold = 0
 	err := Validate(cfg)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "big_delete_threshold")
+	assert.Contains(t, err.Error(), "delete_safety_threshold")
 }
 
 func TestValidate_PollInterval_TooShort(t *testing.T) {

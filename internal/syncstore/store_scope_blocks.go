@@ -10,7 +10,7 @@
 // Related files:
 //   - active_scopes.go: stateless active-scope helper functions
 //   - scope_key.go:     ScopeKey, ParseScopeKey, ScopeKey.String()
-//   - schema.sql:       canonical schema definition
+//   - migrations/:      canonical schema migration history
 package syncstore
 
 import (

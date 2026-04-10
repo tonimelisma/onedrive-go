@@ -38,7 +38,7 @@ func newIssuesApproveDeletesCmd() *cobra.Command {
 		Short: "Approve all currently held deletes",
 		Long: `Approve all currently held deletes for the selected drive.
 
-This records durable approval for held big-delete rows on the current drive
+This records durable approval for held delete-safety rows on the current drive
 only. The sync engine executes matching approved deletes on a later pass.`,
 		Args: cobra.NoArgs,
 		RunE: runIssuesApproveDeletes,

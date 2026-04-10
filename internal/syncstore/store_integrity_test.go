@@ -14,15 +14,20 @@ import (
 )
 
 // Validates: R-2.5.6
-func TestNewSyncStore_SetsCurrentSchemaVersion(t *testing.T) {
+func TestNewSyncStore_AppliesCurrentGooseMigration(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
 
-	var version int
-	err := store.DB().QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&version)
+	var version int64
+	err := store.DB().QueryRowContext(t.Context(), `
+		SELECT version_id
+		FROM goose_db_version
+		WHERE is_applied = 1
+		ORDER BY version_id DESC
+		LIMIT 1`).Scan(&version)
 	require.NoError(t, err)
-	assert.Equal(t, syncStoreSchemaVersion, version)
+	assert.Equal(t, currentMigrationVersion, version)
 }
 
 // Validates: R-2.10.47

@@ -176,9 +176,9 @@ func TestDeleteCounter_WindowExpiry_NoTrip(t *testing.T) {
 }
 
 // Validates: R-6.4.1
-func TestIsActionableIssue_BigDeleteHeld(t *testing.T) {
+func TestIsActionableIssue_DeleteSafetyHeld(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, syncstore.IsActionableIssue(synctypes.IssueBigDeleteHeld),
-		"big_delete_held should be an actionable issue type")
+	assert.True(t, syncstore.IsActionableIssue(synctypes.IssueDeleteSafetyHeld),
+		"delete_safety_held should be an actionable issue type")
 }

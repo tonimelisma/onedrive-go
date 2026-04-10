@@ -13,7 +13,7 @@ const (
 	maxTransferWorkers    = 64
 	minCheckWorkers       = 1
 	maxCheckWorkers       = 16
-	minBigDelete          = 1
+	minDeleteSafety       = 1
 	minLogRetention       = 1
 	minPollInterval       = 30 * time.Second
 	minSafetyScanInterval = 10 * time.Second
@@ -54,9 +54,9 @@ func validateTransfers(t *TransfersConfig) []error {
 func validateSafety(s *SafetyConfig) []error {
 	var errs []error
 
-	if s.BigDeleteThreshold < minBigDelete {
-		errs = append(errs, fmt.Errorf("big_delete_threshold: must be >= %d, got %d",
-			minBigDelete, s.BigDeleteThreshold))
+	if s.DeleteSafetyThreshold < minDeleteSafety {
+		errs = append(errs, fmt.Errorf("delete_safety_threshold: must be >= %d, got %d",
+			minDeleteSafety, s.DeleteSafetyThreshold))
 	}
 
 	errs = append(errs, validateSafetyRemaining(s)...)
