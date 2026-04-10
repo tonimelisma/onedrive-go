@@ -20,6 +20,11 @@ var migrationFS embed.FS
 
 const currentMigrationVersion = int64(2)
 
+const (
+	gooseHistoryRebuildGuidance = "rebuild or migrate the drive state DB and run sync again"
+	gooseHistoryMalformedPrefix = "existing sync store has malformed goose migration history"
+)
+
 // ErrIncompatibleSchema marks a state DB that cannot be trusted under the
 // current durable-intent schema. The state is rebuildable, but user intent is
 // now part of the DB, so incompatible stores fail loudly instead of mutating.
@@ -71,6 +76,30 @@ func ensureGooseManagedOrEmpty(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if hasGooseVersion {
+		latestApplied, historyErr := latestAppliedGooseVersion(ctx, db)
+		if historyErr != nil {
+			return errors.Join(
+				fmt.Errorf("%w: %s; %s", ErrIncompatibleSchema, gooseHistoryMalformedPrefix, gooseHistoryRebuildGuidance),
+				fmt.Errorf("inspect goose migration history: %w", historyErr),
+			)
+		}
+		if !latestApplied.Valid {
+			return fmt.Errorf(
+				"%w: existing sync store has no applied goose migrations; %s",
+				ErrIncompatibleSchema,
+				gooseHistoryRebuildGuidance,
+			)
+		}
+		if latestApplied.Int64 < 0 {
+			return fmt.Errorf(
+				"%w: %s; %s: negative version %d",
+				ErrIncompatibleSchema,
+				gooseHistoryMalformedPrefix,
+				gooseHistoryRebuildGuidance,
+				latestApplied.Int64,
+			)
+		}
+
 		return nil
 	}
 
@@ -100,6 +129,19 @@ func tableExists(ctx context.Context, db *sql.DB, tableName string) (bool, error
 	}
 
 	return count > 0, nil
+}
+
+func latestAppliedGooseVersion(ctx context.Context, db *sql.DB) (sql.NullInt64, error) {
+	var version sql.NullInt64
+	err := db.QueryRowContext(ctx, `
+		SELECT MAX(version_id)
+		FROM `+goose.DefaultTablename+`
+		WHERE is_applied = 1`).Scan(&version)
+	if err != nil {
+		return sql.NullInt64{}, fmt.Errorf("sync: inspect goose migration history: %w", err)
+	}
+
+	return version, nil
 }
 
 func hasNonGooseUserTables(ctx context.Context, db *sql.DB) (bool, error) {

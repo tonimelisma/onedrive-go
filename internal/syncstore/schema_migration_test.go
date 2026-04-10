@@ -37,6 +37,37 @@ func newMigrationProvider(t *testing.T, db *sql.DB) *goose.Provider {
 	return provider
 }
 
+func createGooseVersionTable(t *testing.T, db *sql.DB) {
+	t.Helper()
+
+	_, err := db.ExecContext(t.Context(), `
+		CREATE TABLE goose_db_version (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			version_id INTEGER NOT NULL,
+			is_applied INTEGER NOT NULL,
+			tstamp TIMESTAMP DEFAULT (datetime('now'))
+		)
+	`)
+	require.NoError(t, err)
+}
+
+func insertGooseVersionRow(t *testing.T, db *sql.DB, version int64, applied bool) {
+	t.Helper()
+
+	isApplied := 0
+	if applied {
+		isApplied = 1
+	}
+
+	_, err := db.ExecContext(
+		t.Context(),
+		`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, ?)`,
+		version,
+		isApplied,
+	)
+	require.NoError(t, err)
+}
+
 // Validates: R-2.5.6
 func TestSyncStore_MigrationProviderFreshDBUpgradesToCurrent(t *testing.T) {
 	t.Parallel()
@@ -53,6 +84,101 @@ func TestSyncStore_MigrationProviderFreshDBUpgradesToCurrent(t *testing.T) {
 	require.NoError(t, err)
 
 	version, err := provider.GetDBVersion(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, currentMigrationVersion, version)
+}
+
+// Validates: R-2.5.6
+func TestNewSyncStore_RejectsEmptyGooseHistory(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "empty-goose.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+
+	createGooseVersionTable(t, db)
+	require.NoError(t, db.Close())
+
+	store, err := NewSyncStore(t.Context(), dbPath, newTestLogger(t))
+	require.Error(t, err)
+	require.Nil(t, store)
+	require.ErrorIs(t, err, ErrIncompatibleSchema)
+	assert.Contains(t, err.Error(), "no applied goose migrations")
+}
+
+// Validates: R-2.5.6
+func TestNewSyncStore_RejectsMalformedGooseHistoryWithLegacyTables(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "malformed-goose.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(t.Context(), `
+		CREATE TABLE goose_db_version (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			version_id INTEGER NOT NULL
+		);
+		CREATE TABLE legacy_items (
+			id INTEGER PRIMARY KEY,
+			path TEXT NOT NULL
+		)
+	`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	store, err := NewSyncStore(t.Context(), dbPath, newTestLogger(t))
+	require.Error(t, err)
+	require.Nil(t, store)
+	require.ErrorIs(t, err, ErrIncompatibleSchema)
+	assert.Contains(t, err.Error(), "malformed goose migration history")
+	assert.Contains(t, err.Error(), "rebuild or migrate the drive state DB")
+}
+
+// Validates: R-2.5.6
+func TestNewSyncStore_RejectsMalformedGooseHistoryWithoutLegacyTables(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "malformed-goose-only.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(t.Context(), `
+		CREATE TABLE goose_db_version (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			version_id INTEGER NOT NULL
+		)
+	`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	store, err := NewSyncStore(t.Context(), dbPath, newTestLogger(t))
+	require.Error(t, err)
+	require.Nil(t, store)
+	require.ErrorIs(t, err, ErrIncompatibleSchema)
+	assert.Contains(t, err.Error(), "malformed goose migration history")
+}
+
+// Validates: R-2.5.6
+func TestNewSyncStore_AcceptsPreexistingAppliedGooseHistory(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "preexisting-goose.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+
+	createGooseVersionTable(t, db)
+	insertGooseVersionRow(t, db, 0, true)
+	require.NoError(t, db.Close())
+
+	store, err := NewSyncStore(t.Context(), dbPath, newTestLogger(t))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, store.Close(context.Background()))
+	})
+
+	var version int64
+	err = store.DB().QueryRowContext(t.Context(), `SELECT MAX(version_id) FROM goose_db_version`).Scan(&version)
 	require.NoError(t, err)
 	assert.Equal(t, currentMigrationVersion, version)
 }
