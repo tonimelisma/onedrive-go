@@ -3,6 +3,7 @@ package syncobserve
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -48,7 +49,10 @@ func (m *mockSocketIOEndpointFetcher) CallCount() int {
 	return m.calls
 }
 
-func newSocketIOTestServer(t *testing.T, handler func(*websocket.Conn, *http.Request)) *httptest.Server {
+func newSocketIOTestServer(
+	t *testing.T,
+	handler func(*websocket.Conn, *http.Request) error,
+) *httptest.Server {
 	t.Helper()
 
 	handlerErrs := make(chan error, 1)
@@ -69,7 +73,12 @@ func newSocketIOTestServer(t *testing.T, handler func(*websocket.Conn, *http.Req
 		}
 		defer conn.Close(websocket.StatusNormalClosure, "test done")
 
-		handler(conn, r)
+		if err := handler(conn, r); err != nil {
+			select {
+			case handlerErrs <- err:
+			default:
+			}
+		}
 	}))
 
 	t.Cleanup(func() {
@@ -85,23 +94,41 @@ func newSocketIOTestServer(t *testing.T, handler func(*websocket.Conn, *http.Req
 	return server
 }
 
-func writeSocketIOText(ctx context.Context, t *testing.T, conn *websocket.Conn, packet string) {
-	t.Helper()
+func writeSocketIOText(ctx context.Context, conn *websocket.Conn, packet string) error {
 	writeCtx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	require.NoError(t, conn.Write(writeCtx, websocket.MessageText, []byte(packet)))
+	if err := conn.Write(writeCtx, websocket.MessageText, []byte(packet)); err != nil {
+		return fmt.Errorf("write websocket text %q: %w", packet, err)
+	}
+
+	return nil
 }
 
-func readSocketIOText(ctx context.Context, t *testing.T, conn *websocket.Conn) string {
-	t.Helper()
+func readSocketIOText(ctx context.Context, conn *websocket.Conn) (string, error) {
 	readCtx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 
 	typ, payload, err := conn.Read(readCtx)
-	require.NoError(t, err)
-	require.Equal(t, websocket.MessageText, typ)
+	if err != nil {
+		return "", fmt.Errorf("read websocket text: %w", err)
+	}
+	if typ != websocket.MessageText {
+		return "", fmt.Errorf("read websocket text: got message type %v", typ)
+	}
 
-	return string(payload)
+	return string(payload), nil
+}
+
+func expectSocketIOText(ctx context.Context, conn *websocket.Conn, want string) error {
+	got, err := readSocketIOText(ctx, conn)
+	if err != nil {
+		return err
+	}
+	if got != want {
+		return fmt.Errorf("read websocket text: got %q want %q", got, want)
+	}
+
+	return nil
 }
 
 // Validates: R-2.8.5
@@ -109,16 +136,30 @@ func TestSocketIOWakeSource_NotificationTriggersWake(t *testing.T) {
 	t.Parallel()
 
 	holdConn := make(chan struct{})
-	server := newSocketIOTestServer(t, func(conn *websocket.Conn, r *http.Request) {
-		assert.Equal(t, "4", r.URL.Query().Get("EIO"))
-		assert.Equal(t, "websocket", r.URL.Query().Get("transport"))
-		assert.Equal(t, "secret-token", r.URL.Query().Get("snthgk"))
-
-		writeSocketIOText(r.Context(), t, conn, `0{"sid":"sid-1","pingInterval":25000,"pingTimeout":60000}`)
-		assert.Equal(t, "40", readSocketIOText(r.Context(), t, conn))
-		assert.Equal(t, "40/notifications", readSocketIOText(r.Context(), t, conn))
-		writeSocketIOText(r.Context(), t, conn, `42["notification",{"sequence":1}]`)
+	server := newSocketIOTestServer(t, func(conn *websocket.Conn, r *http.Request) error {
+		if got := r.URL.Query().Get("EIO"); got != "4" {
+			return fmt.Errorf("query EIO: got %q want %q", got, "4")
+		}
+		if got := r.URL.Query().Get("transport"); got != "websocket" {
+			return fmt.Errorf("query transport: got %q want %q", got, "websocket")
+		}
+		if got := r.URL.Query().Get("snthgk"); got != "secret-token" {
+			return fmt.Errorf("query snthgk: got %q want %q", got, "secret-token")
+		}
+		if err := writeSocketIOText(r.Context(), conn, `0{"sid":"sid-1","pingInterval":25000,"pingTimeout":60000}`); err != nil {
+			return err
+		}
+		if err := expectSocketIOText(r.Context(), conn, "40"); err != nil {
+			return err
+		}
+		if err := expectSocketIOText(r.Context(), conn, "40/notifications"); err != nil {
+			return err
+		}
+		if err := writeSocketIOText(r.Context(), conn, `42["notification",{"sequence":1}]`); err != nil {
+			return err
+		}
 		<-holdConn
+		return nil
 	})
 
 	fetcher := &mockSocketIOEndpointFetcher{
@@ -167,19 +208,35 @@ func TestSocketIOWakeSource_NotificationTriggersWake(t *testing.T) {
 func TestSocketIOWakeSource_ReconnectsAfterDisconnect(t *testing.T) {
 	t.Parallel()
 
-	firstServer := newSocketIOTestServer(t, func(conn *websocket.Conn, r *http.Request) {
-		writeSocketIOText(r.Context(), t, conn, `0{"sid":"sid-1","pingInterval":25000,"pingTimeout":60000}`)
-		assert.Equal(t, "40", readSocketIOText(r.Context(), t, conn))
-		assert.Equal(t, "40/notifications", readSocketIOText(r.Context(), t, conn))
+	firstServer := newSocketIOTestServer(t, func(conn *websocket.Conn, r *http.Request) error {
+		if err := writeSocketIOText(r.Context(), conn, `0{"sid":"sid-1","pingInterval":25000,"pingTimeout":60000}`); err != nil {
+			return err
+		}
+		if err := expectSocketIOText(r.Context(), conn, "40"); err != nil {
+			return err
+		}
+		if err := expectSocketIOText(r.Context(), conn, "40/notifications"); err != nil {
+			return err
+		}
+		return nil
 	})
 
 	holdSecond := make(chan struct{})
-	secondServer := newSocketIOTestServer(t, func(conn *websocket.Conn, r *http.Request) {
-		writeSocketIOText(r.Context(), t, conn, `0{"sid":"sid-2","pingInterval":25000,"pingTimeout":60000}`)
-		assert.Equal(t, "40", readSocketIOText(r.Context(), t, conn))
-		assert.Equal(t, "40/notifications", readSocketIOText(r.Context(), t, conn))
-		writeSocketIOText(r.Context(), t, conn, `42/notifications,["notification",{"sequence":2}]`)
+	secondServer := newSocketIOTestServer(t, func(conn *websocket.Conn, r *http.Request) error {
+		if err := writeSocketIOText(r.Context(), conn, `0{"sid":"sid-2","pingInterval":25000,"pingTimeout":60000}`); err != nil {
+			return err
+		}
+		if err := expectSocketIOText(r.Context(), conn, "40"); err != nil {
+			return err
+		}
+		if err := expectSocketIOText(r.Context(), conn, "40/notifications"); err != nil {
+			return err
+		}
+		if err := writeSocketIOText(r.Context(), conn, `42/notifications,["notification",{"sequence":2}]`); err != nil {
+			return err
+		}
 		<-holdSecond
+		return nil
 	})
 
 	fetcher := &mockSocketIOEndpointFetcher{
@@ -227,20 +284,36 @@ func TestSocketIOWakeSource_RefreshesEndpointBeforeExpiry(t *testing.T) {
 	)
 
 	firstReleased := make(chan struct{})
-	firstServer := newSocketIOTestServer(t, func(conn *websocket.Conn, r *http.Request) {
-		writeSocketIOText(r.Context(), t, conn, `0{"sid":"sid-1","pingInterval":25000,"pingTimeout":60000}`)
-		assert.Equal(t, "40", readSocketIOText(r.Context(), t, conn))
-		assert.Equal(t, "40/notifications", readSocketIOText(r.Context(), t, conn))
+	firstServer := newSocketIOTestServer(t, func(conn *websocket.Conn, r *http.Request) error {
+		if err := writeSocketIOText(r.Context(), conn, `0{"sid":"sid-1","pingInterval":25000,"pingTimeout":60000}`); err != nil {
+			return err
+		}
+		if err := expectSocketIOText(r.Context(), conn, "40"); err != nil {
+			return err
+		}
+		if err := expectSocketIOText(r.Context(), conn, "40/notifications"); err != nil {
+			return err
+		}
 		<-firstReleased
+		return nil
 	})
 
 	holdSecond := make(chan struct{})
-	secondServer := newSocketIOTestServer(t, func(conn *websocket.Conn, r *http.Request) {
-		writeSocketIOText(r.Context(), t, conn, `0{"sid":"sid-2","pingInterval":25000,"pingTimeout":60000}`)
-		assert.Equal(t, "40", readSocketIOText(r.Context(), t, conn))
-		assert.Equal(t, "40/notifications", readSocketIOText(r.Context(), t, conn))
-		writeSocketIOText(r.Context(), t, conn, `42["notification",{"sequence":3}]`)
+	secondServer := newSocketIOTestServer(t, func(conn *websocket.Conn, r *http.Request) error {
+		if err := writeSocketIOText(r.Context(), conn, `0{"sid":"sid-2","pingInterval":25000,"pingTimeout":60000}`); err != nil {
+			return err
+		}
+		if err := expectSocketIOText(r.Context(), conn, "40"); err != nil {
+			return err
+		}
+		if err := expectSocketIOText(r.Context(), conn, "40/notifications"); err != nil {
+			return err
+		}
+		if err := writeSocketIOText(r.Context(), conn, `42["notification",{"sequence":3}]`); err != nil {
+			return err
+		}
 		<-holdSecond
+		return nil
 	})
 
 	now := time.Now()
@@ -349,13 +422,24 @@ func TestSocketIOWakeSource_PingPongHandling(t *testing.T) {
 	t.Parallel()
 
 	holdConn := make(chan struct{})
-	server := newSocketIOTestServer(t, func(conn *websocket.Conn, r *http.Request) {
-		writeSocketIOText(r.Context(), t, conn, `0{"sid":"sid-1","pingInterval":25000,"pingTimeout":60000}`)
-		assert.Equal(t, "40", readSocketIOText(r.Context(), t, conn))
-		assert.Equal(t, "40/notifications", readSocketIOText(r.Context(), t, conn))
-		writeSocketIOText(r.Context(), t, conn, "2")
-		assert.Equal(t, "3", readSocketIOText(r.Context(), t, conn))
+	server := newSocketIOTestServer(t, func(conn *websocket.Conn, r *http.Request) error {
+		if err := writeSocketIOText(r.Context(), conn, `0{"sid":"sid-1","pingInterval":25000,"pingTimeout":60000}`); err != nil {
+			return err
+		}
+		if err := expectSocketIOText(r.Context(), conn, "40"); err != nil {
+			return err
+		}
+		if err := expectSocketIOText(r.Context(), conn, "40/notifications"); err != nil {
+			return err
+		}
+		if err := writeSocketIOText(r.Context(), conn, "2"); err != nil {
+			return err
+		}
+		if err := expectSocketIOText(r.Context(), conn, "3"); err != nil {
+			return err
+		}
 		<-holdConn
+		return nil
 	})
 
 	fetcher := &mockSocketIOEndpointFetcher{

@@ -32,7 +32,7 @@ peer authority; it is rebuilt from store state when the engine starts.
 | Conflict request concurrency is first-writer-wins until engine claim completes. | `TestSyncStore_RequestConflictResolutionSameStrategyIsIdempotent`, `TestSyncStore_RequestConflictResolutionFirstWriterWinsConcurrently`, `TestSyncStore_RequestConflictResolutionRejectsResolvingAndResolved` |
 | Visible issue grouping comes from one store-owned projection instead of CLI-local reconstruction. | `TestSyncStore_ListVisibleIssueGroups` |
 | Crash-shaped `downloading` / `deleting` residue in the state DB is replayed from durable store truth on the next live sync run, and the immediate rerun is idle. | `TestE2E_Sync_CrashRecovery_ReplaysDurableInProgressRows` |
-| Store schema migration uses embedded goose migrations, preserves durable user intent when migrating from schema v1, and rejects existing non-goose DBs instead of silently guessing. | `TestNewSyncStore_AppliesCurrentGooseMigration`, `TestSyncStore_MigrationProviderFreshDBUpgradesToCurrent`, `TestSyncStore_MigrationFromVersionOnePreservesDurableIntentSemantics`, `TestSyncStore_MigrationFilesIncludeUpDownAndMatchCurrentVersion`, `TestNewSyncStore_RejectsUnversionedExistingStateDB` |
+| Store schema migration uses embedded goose migrations, preserves durable user intent when migrating from schema v1, and rejects missing, empty, or malformed goose history instead of silently guessing. | `TestNewSyncStore_AppliesCurrentGooseMigration`, `TestSyncStore_MigrationProviderFreshDBUpgradesToCurrent`, `TestSyncStore_MigrationFromVersionOnePreservesDurableIntentSemantics`, `TestSyncStore_MigrationFilesIncludeUpDownAndMatchCurrentVersion`, `TestNewSyncStore_RejectsUnversionedExistingStateDB`, `TestNewSyncStore_RejectsEmptyGooseHistory`, `TestNewSyncStore_RejectsMalformedGooseHistoryWithoutLegacyTables`, `TestNewSyncStore_RejectsMalformedGooseHistoryWithLegacyTables`, `TestNewSyncStore_AcceptsPreexistingAppliedGooseHistory` |
 
 `NewSyncStore()` opens SQLite in WAL mode and applies the embedded goose
 migrations from
@@ -40,11 +40,16 @@ migrations from
 through [`schema.go`](/Users/tonimelisma/Development/onedrive-go/internal/syncstore/schema.go).
 Fresh databases start at migration `00001_init.sql` and record applied
 versions in goose's `goose_db_version` table. Existing stores that already
-carry goose history are advanced by the migration runner. Existing stores with
-user tables but no goose history are rejected with a clear rebuild/migrate
-message. This is deliberate: the state DB now contains durable user intent, not
-only rebuildable derived cache, so unknown schema shape must fail loudly
-instead of being guessed into a newer lifecycle.
+carry valid goose history are advanced by the migration runner. Existing stores
+with user tables but no goose history are rejected with a clear rebuild/migrate
+message. Existing stores with a preexisting `goose_db_version` table are
+accepted only when that table has at least one applied goose version row that
+can be read through the expected schema. Empty goose tables, malformed goose
+tables, and broken goose rows are all explicit `ErrIncompatibleSchema`
+conditions, even when no other user tables are present. This is deliberate: the
+state DB now contains durable user intent, not only rebuildable derived cache,
+so unknown schema shape must fail loudly instead of being guessed into a newer
+lifecycle.
 
 Key operations:
 
