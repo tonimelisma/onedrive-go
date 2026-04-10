@@ -368,11 +368,12 @@ func TestE2E_Sync_EditEditConflict_ResolveKeepRemote(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "remote edit v2", string(originalData))
 
-	// Step 11: Resolve --keep-remote.
+	// Step 11: Queue --keep-remote.
 	_, stderr = runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/conflict-file.txt", "--keep-remote")
 
-	// Step 12: Resolved message.
-	assert.Contains(t, stderr, "Resolved")
+	// Step 12: Queued message, then normal sync executes the request.
+	assert.Contains(t, stderr, "Queued")
+	runCLIWithConfig(t, cfgPath, env, "sync")
 
 	// Step 13: No more conflicts.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
@@ -513,9 +514,10 @@ func TestE2E_Sync_ResolveAll(t *testing.T) {
 	assert.Contains(t, stdout, "b.txt")
 	assert.Contains(t, stdout, "edit_edit")
 
-	// Step 6: Resolve --all --keep-remote.
+	// Step 6: Queue --all --keep-remote, then normal sync executes the requests.
 	_, stderr = runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", "--all", "--keep-remote")
-	assert.Contains(t, stderr, "Resolved")
+	assert.Contains(t, stderr, "Queued")
+	runCLIWithConfig(t, cfgPath, env, "sync")
 
 	// Step 7: No unresolved conflicts.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
@@ -579,16 +581,14 @@ func TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal(t *testing.T) {
 	// Step 7: Restore local version to original path (prep for keep-local).
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "collision.txt"), []byte("local version"), 0o600))
 
-	// Step 8: Resolve --keep-local.
+	// Step 8: Queue --keep-local, then normal sync executes and propagates it.
 	_, stderr = runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/collision.txt", "--keep-local")
-	assert.Contains(t, stderr, "Resolved")
+	assert.Contains(t, stderr, "Queued")
+	runCLIWithConfig(t, cfgPath, env, "sync")
 
 	// Step 9: No more conflicts.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
 	assert.Contains(t, stdout, "No conflicts.")
-
-	// Step 10: Sync to propagate local version upstream.
-	runCLIWithConfig(t, cfgPath, env, "sync")
 
 	// Step 11: Remote should now have local version.
 	remoteContent := getRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/collision.txt")
@@ -1174,9 +1174,10 @@ func TestE2E_Sync_ResolveDryRun(t *testing.T) {
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
 	assert.Contains(t, stdout, "dryrun-conflict.txt", "conflict should remain after dry-run resolve")
 
-	// Step 7: Resolve for real.
+	// Step 7: Queue for real, then normal sync executes the request.
 	_, stderr = runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/dryrun-conflict.txt", "--keep-local")
-	assert.Contains(t, stderr, "Resolved")
+	assert.Contains(t, stderr, "Queued")
+	runCLIWithConfig(t, cfgPath, env, "sync")
 
 	// Step 8: No more conflicts.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
