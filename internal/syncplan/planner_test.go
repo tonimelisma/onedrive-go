@@ -1317,7 +1317,7 @@ func TestBigDelete_BelowThreshold(t *testing.T) {
 
 // Validates: R-6.2.5, R-6.4.1
 func TestBigDelete_ExceedsThreshold(t *testing.T) {
-	// Delete count exceeds threshold → ErrBigDeleteTriggered.
+	// Delete count exceeds threshold → ErrDeleteSafetyThresholdExceeded.
 	planner := NewPlanner(synctest.TestLogger(t))
 
 	entries, changes := buildRemoteDeleteSet("planner-bigdel", "bdi", "hashBD", 20)
@@ -1327,7 +1327,7 @@ func TestBigDelete_ExceedsThreshold(t *testing.T) {
 	config := &synctypes.SafetyConfig{BigDeleteThreshold: 10}
 
 	_, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, config, nil)
-	require.ErrorIs(t, err, synctypes.ErrBigDeleteTriggered)
+	require.ErrorIs(t, err, synctypes.ErrDeleteSafetyThresholdExceeded)
 }
 
 // Validates: R-6.2.5, R-6.4.1

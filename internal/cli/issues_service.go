@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 )
 
@@ -65,23 +66,34 @@ func (s *issuesService) writeEmptyIssues() error {
 	return writeln(s.cc.Output(), "No issues.")
 }
 
-func (s *issuesService) runForceDeletes(ctx context.Context) error {
+const approveDeletesSuccess = "Approved held deletes for this drive. The next sync pass will execute matching approved deletes."
+
+func (s *issuesService) runApproveDeletes(ctx context.Context) error {
 	if client, ok := openControlSocketClient(ctx); ok {
-		if err := client.approveHeldDeletes(ctx, s.cc.Cfg.CanonicalID); err != nil {
-			return fmt.Errorf("approve held deletes via daemon: %w", err)
+		if client.ownerMode() == synccontrol.OwnerModeWatch {
+			if err := client.approveHeldDeletes(ctx, s.cc.Cfg.CanonicalID); err != nil {
+				if isControlDaemonError(err) {
+					return fmt.Errorf("approve held deletes via daemon: %w", err)
+				}
+				return s.approveDeletesDirect(ctx)
+			}
+			return writeln(s.cc.Output(), approveDeletesSuccess)
 		}
-		return writeln(s.cc.Output(), "Approved all held deletes for this drive.")
 	}
 
+	return s.approveDeletesDirect(ctx)
+}
+
+func (s *issuesService) approveDeletesDirect(ctx context.Context) error {
 	store, err := s.openMutationStore(ctx)
 	if err != nil {
 		return err
 	}
 
-	return s.runForceDeletesWithStore(ctx, store)
+	return s.runApproveDeletesWithStore(ctx, store)
 }
 
-func (s *issuesService) runForceDeletesWithStore(ctx context.Context, store issuesMutationStore) (err error) {
+func (s *issuesService) runApproveDeletesWithStore(ctx context.Context, store issuesMutationStore) (err error) {
 	storeClosed := false
 	defer func() {
 		if storeClosed {
@@ -108,7 +120,7 @@ func (s *issuesService) runForceDeletesWithStore(ctx context.Context, store issu
 		return fmt.Errorf("close sync store: %w", err)
 	}
 
-	return writeln(s.cc.Output(), "Approved all held deletes for this drive.")
+	return writeln(s.cc.Output(), approveDeletesSuccess)
 }
 
 func (s *issuesService) openMutationStore(ctx context.Context) (issuesMutationStore, error) {

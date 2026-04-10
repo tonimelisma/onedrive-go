@@ -8,29 +8,33 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/url"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
-const (
-	controlClientTimeout = 2 * time.Second
-	controlStatusError   = "error"
-)
+const controlClientTimeout = 2 * time.Second
 
 type controlSocketClient struct {
 	transport *http.Transport
+	status    synccontrol.StatusResponse
 }
 
-type controlMutationResponse struct {
-	Status  string `json:"status"`
-	Message string `json:"message"`
+type controlDaemonError struct {
+	statusCode int
+	code       synccontrol.ErrorCode
+	message    string
 }
 
-type controlConflictRequestBody struct {
-	Resolution string `json:"resolution"`
+func (e *controlDaemonError) Error() string {
+	return e.message
+}
+
+func isControlDaemonError(err error) bool {
+	var daemonErr *controlDaemonError
+	return errors.As(err, &daemonErr)
 }
 
 func openControlSocketClient(ctx context.Context) (*controlSocketClient, bool) {
@@ -51,7 +55,7 @@ func openControlSocketClient(ctx context.Context) (*controlSocketClient, bool) {
 	requestCtx, cancel := context.WithTimeout(ctx, controlClientTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, "http://unix/v1/status", http.NoBody)
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, synccontrol.HTTPBaseURL+synccontrol.PathStatus, http.NoBody)
 	if err != nil {
 		return nil, false
 	}
@@ -60,24 +64,42 @@ func openControlSocketClient(ctx context.Context) (*controlSocketClient, bool) {
 		return nil, false
 	}
 	statusCode := resp.StatusCode
-	if closeErr := resp.Body.Close(); closeErr != nil {
+	var decoded synccontrol.StatusResponse
+	decodeErr := json.NewDecoder(resp.Body).Decode(&decoded)
+	closeErr := resp.Body.Close()
+	if closeErr != nil {
 		return nil, false
 	}
 	if statusCode != http.StatusOK {
 		return nil, false
 	}
+	if decodeErr != nil {
+		return nil, false
+	}
+	if decoded.OwnerMode == "" {
+		return nil, false
+	}
 
+	client.status = decoded
 	return client, true
 }
 
+func (c *controlSocketClient) ownerMode() synccontrol.OwnerMode {
+	return c.status.OwnerMode
+}
+
 func (c *controlSocketClient) approveHeldDeletes(ctx context.Context, cid driveid.CanonicalID) error {
-	path := "/v1/drives/" + url.PathEscape(cid.String()) + "/held-deletes/approve"
+	path := synccontrol.HeldDeletesApprovePath(cid.String())
 	response, err := c.postJSON(ctx, path, nil)
 	if err != nil {
 		return err
 	}
-	if response.Message != "" && response.Status == controlStatusError {
-		return errors.New(response.Message)
+	if response.Message != "" && response.Status == synccontrol.StatusError {
+		return &controlDaemonError{
+			statusCode: http.StatusInternalServerError,
+			code:       response.Code,
+			message:    response.Message,
+		}
 	}
 	return nil
 }
@@ -88,35 +110,46 @@ func (c *controlSocketClient) requestConflictResolution(
 	conflictID string,
 	resolution string,
 ) (string, error) {
-	path := "/v1/drives/" + url.PathEscape(cid.String()) +
-		"/conflicts/" + url.PathEscape(conflictID) + "/resolution-request"
-	response, err := c.postJSON(ctx, path, controlConflictRequestBody{Resolution: resolution})
+	path := synccontrol.ConflictResolutionRequestPath(cid.String(), conflictID)
+	response, err := c.postJSON(ctx, path, synccontrol.ConflictResolutionRequest{Resolution: resolution})
 	if err != nil {
 		return "", err
 	}
-	if response.Message != "" && response.Status == controlStatusError {
-		return "", errors.New(response.Message)
+	if response.Message != "" && response.Status == synccontrol.StatusError {
+		return "", &controlDaemonError{
+			statusCode: http.StatusInternalServerError,
+			code:       response.Code,
+			message:    response.Message,
+		}
 	}
-	return response.Status, nil
+	return string(response.Status), nil
 }
 
 func (c *controlSocketClient) reload(ctx context.Context) error {
-	response, err := c.postJSON(ctx, "/v1/reload", nil)
+	if c.ownerMode() != synccontrol.OwnerModeWatch {
+		return nil
+	}
+
+	response, err := c.postJSON(ctx, synccontrol.PathReload, nil)
 	if err != nil {
 		return err
 	}
-	if response.Message != "" && response.Status == controlStatusError {
-		return errors.New(response.Message)
+	if response.Message != "" && response.Status == synccontrol.StatusError {
+		return &controlDaemonError{
+			statusCode: http.StatusInternalServerError,
+			code:       response.Code,
+			message:    response.Message,
+		}
 	}
 	return nil
 }
 
-func (c *controlSocketClient) postJSON(ctx context.Context, path string, body any) (controlMutationResponse, error) {
+func (c *controlSocketClient) postJSON(ctx context.Context, path string, body any) (synccontrol.MutationResponse, error) {
 	var payload []byte
 	if body != nil {
 		encoded, err := json.Marshal(body)
 		if err != nil {
-			return controlMutationResponse{}, fmt.Errorf("encode control request: %w", err)
+			return synccontrol.MutationResponse{}, fmt.Errorf("encode control request: %w", err)
 		}
 		payload = encoded
 	}
@@ -124,31 +157,43 @@ func (c *controlSocketClient) postJSON(ctx context.Context, path string, body an
 	requestCtx, cancel := context.WithTimeout(ctx, controlClientTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, "http://unix"+path, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, synccontrol.HTTPBaseURL+path, bytes.NewReader(payload))
 	if err != nil {
-		return controlMutationResponse{}, fmt.Errorf("build control request: %w", err)
+		return synccontrol.MutationResponse{}, fmt.Errorf("build control request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.transport.RoundTrip(req)
 	if err != nil {
-		return controlMutationResponse{}, fmt.Errorf("send control request: %w", err)
+		return synccontrol.MutationResponse{}, fmt.Errorf("send control request: %w", err)
 	}
 
-	var decoded controlMutationResponse
+	var decoded synccontrol.MutationResponse
 	decodeErr := json.NewDecoder(resp.Body).Decode(&decoded)
 	closeErr := resp.Body.Close()
 	if decodeErr != nil {
-		return controlMutationResponse{}, fmt.Errorf("decode control response: %w", decodeErr)
+		return synccontrol.MutationResponse{}, &controlDaemonError{
+			statusCode: resp.StatusCode,
+			code:       synccontrol.ErrorInternal,
+			message:    fmt.Sprintf("decode control response: %v", decodeErr),
+		}
 	}
 	if closeErr != nil {
-		return controlMutationResponse{}, fmt.Errorf("close control response: %w", closeErr)
+		return synccontrol.MutationResponse{}, &controlDaemonError{
+			statusCode: resp.StatusCode,
+			code:       synccontrol.ErrorInternal,
+			message:    fmt.Sprintf("close control response: %v", closeErr),
+		}
 	}
 	if resp.StatusCode >= http.StatusBadRequest {
 		if decoded.Message == "" {
 			decoded.Message = resp.Status
 		}
-		return decoded, errors.New(decoded.Message)
+		return decoded, &controlDaemonError{
+			statusCode: resp.StatusCode,
+			code:       decoded.Code,
+			message:    decoded.Message,
+		}
 	}
 
 	return decoded, nil

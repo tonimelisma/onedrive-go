@@ -236,8 +236,8 @@ func TestResolveEachConflict_ResolvesAll(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"id-1", "id-2"}, resolved)
-	assert.Contains(t, buf.String(), "Queued /foo.txt as keep_both (queued)")
-	assert.Contains(t, buf.String(), "Queued /bar.txt as keep_both (queued)")
+	assert.Contains(t, buf.String(), "Queued /foo.txt as keep_both (engine will resolve on the next sync pass)")
+	assert.Contains(t, buf.String(), "Queued /bar.txt as keep_both (engine will resolve on the next sync pass)")
 }
 
 // Validates: R-2.3.4, R-2.3.12

@@ -67,7 +67,7 @@ func (rt *watchRuntime) planAndDispatchBatch(
 	denied := rt.engine.permHandler.DeniedPrefixes(ctx)
 	plan, err := rt.engine.planner.Plan(batch, bl, mode, safety, denied)
 	if err != nil {
-		if errors.Is(err, synctypes.ErrBigDeleteTriggered) {
+		if errors.Is(err, synctypes.ErrDeleteSafetyThresholdExceeded) {
 			rt.engine.logger.Warn("big-delete protection triggered, skipping batch",
 				slog.Int("paths", len(batch)),
 			)

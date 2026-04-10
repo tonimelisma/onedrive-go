@@ -421,7 +421,7 @@ func fullE2ESerialSyncTestNames() []string {
 
 func fullE2ESerialWatchSharedTestNames() []string {
 	return []string{
-		"TestE2E_Issues_ForceDeletes",
+		"TestE2E_Issues_ApproveDeletes",
 		"TestE2E_Sync_MultiDriveReport",
 		"TestE2E_SyncWatch_RemoteToLocal",
 		"TestE2E_SyncWatch_Bidirectional",
@@ -1442,7 +1442,6 @@ func ensureNoSchemaFrameworkTraces(repoRoot string) error {
 		{name: "stale third-party schema runner reference", pattern: regexp.MustCompile(`go` + `ose`)},
 		{name: "stale numbered schema path reference", pattern: regexp.MustCompile(`migra` + `tions/`)},
 		{name: "stale schema metadata table reference", pattern: regexp.MustCompile(`schema_` + `version`)},
-		{name: "stale sqlite version pragma reference", pattern: regexp.MustCompile(`user_` + `version`)},
 		{name: "stale numbered schema file reference", pattern: regexp.MustCompile(`0000\d_.*\.sql`)},
 	}
 

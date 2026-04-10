@@ -488,6 +488,65 @@ func TestRunOnce_BigDelete_ApprovedDeletesBypassHold(t *testing.T) {
 	assert.Empty(t, remaining, "successful approved deletes should consume their approval rows")
 }
 
+// Validates: R-6.4.1
+func TestRunOnce_BigDelete_StaleApprovalWithDifferentItemIDDoesNotBypassHold(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	eng.bigDeleteThreshold = 10
+	ctx := t.Context()
+
+	seedOutcomes := make([]synctypes.Outcome, 20)
+	for i := range 20 {
+		seedOutcomes[i] = synctypes.Outcome{
+			Action:          synctypes.ActionDownload,
+			Success:         true,
+			Path:            fmt.Sprintf("file%02d.txt", i),
+			DriveID:         driveID,
+			ItemID:          fmt.Sprintf("current-item-%02d", i),
+			ItemType:        synctypes.ItemTypeFile,
+			RemoteHash:      fmt.Sprintf("hash%02d", i),
+			LocalHash:       fmt.Sprintf("hash%02d", i),
+			LocalSize:       100,
+			LocalSizeKnown:  true,
+			RemoteSize:      100,
+			RemoteSizeKnown: true,
+		}
+	}
+
+	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "old-token")
+
+	staleApprovals := make([]synctypes.HeldDeleteRecord, 0, len(seedOutcomes))
+	for i := range seedOutcomes {
+		staleApprovals = append(staleApprovals, synctypes.HeldDeleteRecord{
+			DriveID:    seedOutcomes[i].DriveID,
+			ItemID:     fmt.Sprintf("stale-item-%02d", i),
+			Path:       seedOutcomes[i].Path,
+			ActionType: synctypes.ActionRemoteDelete,
+			State:      synctypes.HeldDeleteStateHeld,
+		})
+	}
+	require.NoError(t, eng.baseline.UpsertHeldDeletes(ctx, staleApprovals))
+	require.NoError(t, eng.baseline.ApproveHeldDeletes(ctx))
+
+	report, err := eng.RunOnce(ctx, synctypes.SyncUploadOnly, synctypes.RunOpts{})
+	require.NoError(t, err)
+	assert.Equal(t, 0, report.RemoteDeletes, "stale path-only approval must not authorize reused-path delete")
+
+	approved, err := eng.baseline.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateApproved)
+	require.NoError(t, err)
+	require.Len(t, approved, 20, "stale approvals remain visible instead of being consumed")
+
+	held, err := eng.baseline.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateHeld)
+	require.NoError(t, err)
+	require.Len(t, held, 20, "current deletes are held under their current item IDs")
+	for i := range held {
+		assert.Contains(t, held[i].ItemID, "current-item-")
+	}
+}
+
 type sharedFolderRecoveryRunOnceFixture struct {
 	eng            *testEngine
 	baseline       *synctypes.Baseline

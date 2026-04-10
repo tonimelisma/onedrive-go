@@ -1245,13 +1245,13 @@ const statusTestStateSchema = `
 			drive_id TEXT NOT NULL,
 			action_type TEXT NOT NULL,
 			path TEXT NOT NULL,
-			item_id TEXT NOT NULL DEFAULT '',
+			item_id TEXT NOT NULL CHECK(item_id <> ''),
 			state TEXT NOT NULL,
 			held_at INTEGER NOT NULL,
 			approved_at INTEGER,
 			last_planned_at INTEGER NOT NULL,
 			last_error TEXT,
-			PRIMARY KEY (drive_id, action_type, path)
+			PRIMARY KEY (drive_id, action_type, path, item_id)
 		);
 		CREATE TABLE IF NOT EXISTS scope_blocks (
 			scope_key TEXT PRIMARY KEY,

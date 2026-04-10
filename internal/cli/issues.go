@@ -19,7 +19,7 @@ failures.`,
 		RunE: runIssuesList,
 	}
 
-	cmd.AddCommand(newIssuesForceDeletesCmd())
+	cmd.AddCommand(newIssuesApproveDeletesCmd())
 
 	return cmd
 }
@@ -30,25 +30,25 @@ func runIssuesList(cmd *cobra.Command, _ []string) error {
 	return newIssuesService(mustCLIContext(cmd.Context())).runList(cmd.Context())
 }
 
-// --- issues force-deletes ---
+// --- issues approve-deletes ---
 
-func newIssuesForceDeletesCmd() *cobra.Command {
+func newIssuesApproveDeletesCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "force-deletes",
+		Use:   "approve-deletes",
 		Short: "Approve all currently held deletes",
 		Long: `Approve all currently held deletes for the selected drive.
 
-This releases big-delete protection for the current drive only. It does not
-affect any other issue type.`,
+This records durable approval for held big-delete rows on the current drive
+only. The sync engine executes matching approved deletes on a later pass.`,
 		Args: cobra.NoArgs,
-		RunE: runIssuesForceDeletes,
+		RunE: runIssuesApproveDeletes,
 	}
 
 	return cmd
 }
 
-func runIssuesForceDeletes(cmd *cobra.Command, _ []string) error {
-	return newIssuesService(mustCLIContext(cmd.Context())).runForceDeletes(cmd.Context())
+func runIssuesApproveDeletes(cmd *cobra.Command, _ []string) error {
+	return newIssuesService(mustCLIContext(cmd.Context())).runApproveDeletes(cmd.Context())
 }
 
 // --- helpers ---

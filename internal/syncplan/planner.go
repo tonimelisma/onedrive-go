@@ -25,7 +25,7 @@ func NewPlanner(logger *slog.Logger) *Planner {
 // Plan takes buffered changes, the current baseline, sync mode, safety
 // config, and denied prefixes, and produces an ActionPlan. Paths under
 // deniedPrefixes are treated as download-only (remote writes suppressed).
-// Returns ErrBigDeleteTriggered if the planned deletions exceed safety thresholds.
+// Returns ErrDeleteSafetyThresholdExceeded if planned deletes exceed safety thresholds.
 func (p *Planner) Plan(
 	changes []synctypes.PathChanges, baseline *synctypes.Baseline, mode synctypes.SyncMode, config *synctypes.SafetyConfig,
 	deniedPrefixes []string,
@@ -91,7 +91,7 @@ func (p *Planner) Plan(
 			slog.Int("threshold", config.BigDeleteThreshold),
 		)
 
-		return nil, synctypes.ErrBigDeleteTriggered
+		return nil, synctypes.ErrDeleteSafetyThresholdExceeded
 	}
 
 	p.logger.Info("plan complete",

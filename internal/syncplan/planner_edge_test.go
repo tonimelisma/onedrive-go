@@ -630,7 +630,7 @@ func TestBuildDependencies_ChildDeleteBeforeParent(t *testing.T) {
 
 // Validates: R-6.2.5, R-6.4.1
 // TestPlan_BigDeleteBlocked validates that the planner returns
-// ErrBigDeleteTriggered when planned deletions exceed the threshold.
+// ErrDeleteSafetyThresholdExceeded when planned deletions exceed the threshold.
 func TestPlan_BigDeleteBlocked(t *testing.T) {
 	planner := NewPlanner(synctest.TestLogger(t))
 
@@ -666,7 +666,7 @@ func TestPlan_BigDeleteBlocked(t *testing.T) {
 
 	_, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, config, nil)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, synctypes.ErrBigDeleteTriggered)
+	assert.ErrorIs(t, err, synctypes.ErrDeleteSafetyThresholdExceeded)
 }
 
 // ---------------------------------------------------------------------------

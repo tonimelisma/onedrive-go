@@ -495,22 +495,22 @@ func TestAnnotationTreeWalk(t *testing.T) {
 	// data command requires updating this list, which triggers a test failure
 	// as a reminder to classify the new command.
 	dataCommands := map[string]bool{
-		"onedrive-go ls":                   true,
-		"onedrive-go get":                  true,
-		"onedrive-go put":                  true,
-		"onedrive-go rm":                   true,
-		"onedrive-go mkdir":                true,
-		"onedrive-go stat":                 true,
-		"onedrive-go mv":                   true,
-		"onedrive-go cp":                   true,
-		"onedrive-go issues":               true,
-		"onedrive-go issues force-deletes": true,
-		"onedrive-go conflicts":            true,
-		"onedrive-go conflicts resolve":    true,
-		"onedrive-go verify":               true,
-		"onedrive-go recycle-bin list":     true,
-		"onedrive-go recycle-bin restore":  true,
-		"onedrive-go recycle-bin empty":    true,
+		"onedrive-go ls":                     true,
+		"onedrive-go get":                    true,
+		"onedrive-go put":                    true,
+		"onedrive-go rm":                     true,
+		"onedrive-go mkdir":                  true,
+		"onedrive-go stat":                   true,
+		"onedrive-go mv":                     true,
+		"onedrive-go cp":                     true,
+		"onedrive-go issues":                 true,
+		"onedrive-go issues approve-deletes": true,
+		"onedrive-go conflicts":              true,
+		"onedrive-go conflicts resolve":      true,
+		"onedrive-go verify":                 true,
+		"onedrive-go recycle-bin list":       true,
+		"onedrive-go recycle-bin restore":    true,
+		"onedrive-go recycle-bin empty":      true,
 	}
 
 	cmd := newRootCmd()

@@ -1,6 +1,6 @@
 # Sync Control Plane
 
-GOVERNS: internal/multisync/*.go, sync.go
+GOVERNS: internal/multisync/*.go, internal/synccontrol/*.go, sync.go
 
 Implements: R-2.8.1 [verified], R-2.8.2 [verified], R-2.8.3 [verified], R-2.9.1 [verified], R-2.9.2 [verified], R-2.9.3 [verified], R-3.4.2 [verified], R-6.3.3 [verified], R-6.3.4 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
@@ -33,7 +33,8 @@ runtime package that implements it.
 | Behavior | Evidence |
 | --- | --- |
 | `RunWatch` starts the configured drive set and keeps zero-drive watch mode valid without inventing a second startup path. | `TestOrchestrator_RunWatch_SingleDrive`, `TestOrchestrator_RunWatch_MultiDrive`, `TestOrchestrator_RunWatch_ZeroDrives` |
-| The Unix control socket reports status, stops the watch owner, and serializes durable held-delete/conflict user intent through the control loop. | `TestOrchestrator_ControlSocket_StatusAndStop`, `TestOrchestrator_ControlSocket_QueuesDurableUserIntent` |
+| The Unix control socket is the single live-owner lock for one-shot and watch sync, reports owner mode/status, rejects one-shot mutations with typed `foreground_sync_running`, and serializes watch-mode durable held-delete/conflict user intent through the control loop. | `TestRunOnce_ControlSocketBlocksWatchOwner`, `TestOrchestrator_OneShotControlSocket_StatusAndMutationConflict`, `TestOrchestrator_ControlSocket_StatusAndStop`, `TestOrchestrator_ControlSocket_QueuesDurableUserIntent` |
+| Socket files are permissioned private, stale sockets are removed only after a failed live probe, and empty hash-runtime socket directories are cleaned up on close. | `TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval` |
 | Control-socket reload applies add/remove/pause/expired-pause diffs to the live runner set without bouncing unaffected drives. | `TestOrchestrator_Reload_AddDrive`, `TestOrchestrator_Reload_RemoveDrive`, `TestOrchestrator_Reload_PausedDrive`, `TestOrchestrator_Reload_TimedPauseExpiry` |
 
 ## Boundary To The Engine
@@ -91,18 +92,33 @@ absolute path would exceed the platform-safe Unix socket length, config derives
 a stable hash-named runtime directory under the OS temp directory and stores
 only the socket there; durable sync state remains in the drive state DB.
 
+Wire facts live in `internal/synccontrol`: endpoint constants, owner modes,
+request/response structs, response statuses, and stable error codes. Server
+lifecycle stays in `internal/multisync`; CLI transport and fallback behavior
+stay in `internal/cli`.
+
 The socket speaks JSON over HTTP:
 
-- `GET /v1/status` returns the owner mode (`oneshot` or `watch`) and managed drives.
+- `GET /v1/status` returns the owner mode (`oneshot` or `watch`), managed drives, and watch-mode pending durable-intent counts.
 - `POST /v1/reload` reloads config in the watch owner.
 - `POST /v1/stop` asks the watch owner to stop cleanly.
 - `POST /v1/drives/{canonical-id}/held-deletes/approve` records durable held-delete approval for that drive and wakes the runner.
 - `POST /v1/drives/{canonical-id}/conflicts/{conflict-id}/resolution-request` records durable conflict-resolution intent and wakes the runner.
 
 One-shot sync exposes only status. Mutating requests return a busy response
-because a foreground one-shot sync is already the active owner. If no control
-socket is live, mutating CLIs write the same durable intent directly to the
-selected drive's state DB.
+with `code="foreground_sync_running"` because a foreground one-shot sync is
+already the active owner. The CLI treats `owner_mode="watch"` as the only live
+RPC mutation target. If no socket is live, if the socket reports
+`owner_mode="oneshot"`, or if a watch socket disappears between status probe
+and POST, mutating CLIs write the same durable intent directly to the selected
+drive's state DB. Typed daemon application errors are authoritative and are
+reported rather than falling back.
+
+Error responses have the shape `{status, code, message}`. Stable codes are
+`invalid_request`, `foreground_sync_running`, `drive_not_managed`,
+`conflict_not_found`, `invalid_resolution`,
+`conflict_different_strategy`, `conflict_already_resolving`,
+`store_open_failed`, and `internal_error`.
 
 ### Reload
 

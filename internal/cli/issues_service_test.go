@@ -34,7 +34,7 @@ func TestIssuesService_WriteEmptyIssues(t *testing.T) {
 	assert.Equal(t, "No issues.\n", out.String())
 }
 
-func TestIssuesService_RunForceDeletesWithStore_CloseFailureSuppressesSuccessOutput(t *testing.T) {
+func TestIssuesService_RunApproveDeletesWithStore_CloseFailureSuppressesSuccessOutput(t *testing.T) {
 	t.Parallel()
 
 	var out bytes.Buffer
@@ -42,7 +42,7 @@ func TestIssuesService_RunForceDeletesWithStore_CloseFailureSuppressesSuccessOut
 	closeErr := errors.New("db close failed")
 	store := &stubIssuesMutationStore{closeErr: closeErr}
 
-	err := svc.runForceDeletesWithStore(t.Context(), store)
+	err := svc.runApproveDeletesWithStore(t.Context(), store)
 	require.Error(t, err)
 	require.ErrorIs(t, err, closeErr)
 	assert.Contains(t, err.Error(), "close sync store")
@@ -50,7 +50,7 @@ func TestIssuesService_RunForceDeletesWithStore_CloseFailureSuppressesSuccessOut
 	assert.Equal(t, 1, store.closeCalls)
 }
 
-func TestIssuesService_RunForceDeletesWithStore_JoinsApproveAndCloseErrors(t *testing.T) {
+func TestIssuesService_RunApproveDeletesWithStore_JoinsApproveAndCloseErrors(t *testing.T) {
 	t.Parallel()
 
 	var out bytes.Buffer
@@ -62,7 +62,7 @@ func TestIssuesService_RunForceDeletesWithStore_JoinsApproveAndCloseErrors(t *te
 		closeErr:   closeErr,
 	}
 
-	err := svc.runForceDeletesWithStore(t.Context(), store)
+	err := svc.runApproveDeletesWithStore(t.Context(), store)
 	require.Error(t, err)
 	require.ErrorIs(t, err, approveErr)
 	require.ErrorIs(t, err, closeErr)

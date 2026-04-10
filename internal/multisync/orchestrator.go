@@ -11,6 +11,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -83,7 +84,7 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode synctypes.SyncMode, opt
 		return nil
 	}
 
-	control, err := o.startControlServer(ctx, controlOwnerOneShot, nil)
+	control, err := o.startControlServer(ctx, synccontrol.OwnerModeOneShot, nil)
 	if err != nil {
 		return controlFailureReports(drives, err)
 	}
@@ -242,7 +243,7 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode synctypes.SyncMode, op
 	)
 
 	commands := make(chan controlCommand)
-	control, err := o.startControlServer(ctx, controlOwnerWatch, commands)
+	control, err := o.startControlServer(ctx, synccontrol.OwnerModeWatch, commands)
 	if err != nil {
 		return err
 	}
