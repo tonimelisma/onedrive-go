@@ -436,7 +436,7 @@ func fullE2ESerialWatchSharedTestNames() []string {
 		"TestE2E_SyncWatch_TimedPauseExpiry",
 		"TestE2E_SyncWatch_BasicRoundTrip",
 		"TestE2E_SyncWatch_PauseResume",
-		"TestE2E_SyncWatch_SIGHUPReload",
+		"TestE2E_SyncWatch_ControlSocketReload",
 		"TestE2E_SyncWatch_WebsocketRemoteWakeAndRestart",
 		"TestE2E_Shared_FileDiscoveryAndSelectorRoundTrip",
 		"TestE2E_Shared_FolderDiscoveryContinuesToDriveAdd",

@@ -62,7 +62,6 @@ func TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile(t *testing.T
 			return string(selectedContent) == "selected\n"
 		},
 		"--download-only",
-		"--force",
 	)
 	assert.Contains(t, attempt.Stderr, "Mode: download-only")
 	assert.Equal(t, "selected\n", string(selectedContent))
@@ -96,7 +95,7 @@ func TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload(t *testing.
 	require.NoError(t, os.MkdirAll(filepath.Dir(markerPath), 0o700))
 	require.NoError(t, os.WriteFile(markerPath, []byte("marker"), 0o600))
 
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--download-only", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
 	assert.Contains(t, stderr, "Mode: download-only")
 
 	blockedLocalPath := filepath.Join(syncDir, testFolder, "blocked", "secret.txt")
@@ -126,7 +125,6 @@ func TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload(t *testing.
 			return string(blockedContent) == "blocked\n"
 		},
 		"--download-only",
-		"--force",
 	)
 	assert.Contains(t, attempt.Stderr, "Mode: download-only")
 	assert.Equal(t, "blocked\n", string(blockedContent))

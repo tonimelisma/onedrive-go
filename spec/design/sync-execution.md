@@ -302,7 +302,10 @@ Default: keep both versions. Remote version at original path, local version rena
 
 Issue type constants for failure classification (e.g., `IssueInvalidFilename`, `IssuePathTooLong`, `IssueFileTooLarge`, `IssueBigDeleteHeld`). Moved from the deleted `upload_validation.go`. The upload validation functions (`filterInvalidUploads`, `validateUploadActions`, `validateSingleUpload`, `ValidationFailure`, `removeActionsByIndex`) have been removed entirely — all validation now happens in the observation layer via `shouldObserve()` (Stage 1) and post-stat size checks (Stage 2). See `spec/design/sync-observation.md`.
 
-`IssueBigDeleteHeld` is an actionable issue type used by the watch-mode big-delete protection (see sync-engine.md). Held delete actions are recorded with this type and displayed in a dedicated "HELD DELETES" section in `issues list`.
+`IssueBigDeleteHeld` remains the display classification for big-delete
+protection, but held-delete workflow state is stored in `held_deletes`, not in
+`sync_failures`. The `issues` projection displays those rows in a dedicated
+"HELD DELETES" section.
 
 ## Crash Recovery
 

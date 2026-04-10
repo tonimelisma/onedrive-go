@@ -21,7 +21,7 @@ type conflictsInspector interface {
 type conflictsResolver interface {
 	ListConflicts(context.Context) ([]synctypes.ConflictRecord, error)
 	ListAllConflicts(context.Context) ([]synctypes.ConflictRecord, error)
-	ResolveConflict(context.Context, string, string) error
+	RequestConflictResolution(context.Context, string, string) (syncstore.ConflictRequestResult, error)
 	Close(context.Context) error
 }
 
@@ -101,8 +101,9 @@ func (s *conflictsService) runResolve(
 			return fmt.Errorf("list conflicts: %w", err)
 		}
 
-		return resolveEachConflict(s.cc, conflicts, resolution, dryRun, func(id, res string) error {
-			return resolver.ResolveConflict(ctx, id, res)
+		return resolveEachConflict(s.cc, conflicts, resolution, dryRun, func(id, res string) (string, error) {
+			result, err := s.requestConflictResolution(ctx, resolver, id, res)
+			return string(result.Status), err
 		})
 	}
 
@@ -113,7 +114,10 @@ func (s *conflictsService) runResolve(
 		dryRun,
 		func() ([]synctypes.ConflictRecord, error) { return resolver.ListConflicts(ctx) },
 		func() ([]synctypes.ConflictRecord, error) { return resolver.ListAllConflicts(ctx) },
-		func(id, res string) error { return resolver.ResolveConflict(ctx, id, res) },
+		func(id, res string) (string, error) {
+			result, err := s.requestConflictResolution(ctx, resolver, id, res)
+			return string(result.Status), err
+		},
 	)
 }
 
@@ -136,15 +140,34 @@ func (s *conflictsService) openInspector() (conflictsInspector, error) {
 }
 
 func (s *conflictsService) openResolver(ctx context.Context) (conflictsResolver, error) {
-	session, err := s.cc.Session(ctx)
-	if err != nil {
-		return nil, err
+	dbPath := s.cc.Cfg.StatePath()
+	if dbPath == "" {
+		return nil, fmt.Errorf("cannot determine state DB path for drive %q", s.cc.Cfg.CanonicalID)
 	}
 
-	engine, err := newSyncEngine(ctx, session, s.cc.Cfg, false, s.cc.Logger)
+	store, err := syncstore.NewSyncStore(ctx, dbPath, s.cc.Logger)
 	if err != nil {
-		return nil, fmt.Errorf("create sync engine: %w", err)
+		return nil, fmt.Errorf("open sync store: %w", err)
 	}
 
-	return engine, nil
+	return store, nil
+}
+
+func (s *conflictsService) requestConflictResolution(
+	ctx context.Context,
+	resolver conflictsResolver,
+	id string,
+	resolution string,
+) (syncstore.ConflictRequestResult, error) {
+	if client, ok := openControlSocketClient(ctx); ok {
+		status, err := client.requestConflictResolution(ctx, s.cc.Cfg.CanonicalID, id, resolution)
+		return syncstore.ConflictRequestResult{Status: syncstore.ConflictRequestStatus(status)}, err
+	}
+
+	result, err := resolver.RequestConflictResolution(ctx, id, resolution)
+	if err != nil {
+		return syncstore.ConflictRequestResult{}, fmt.Errorf("queue conflict resolution: %w", err)
+	}
+
+	return result, nil
 }

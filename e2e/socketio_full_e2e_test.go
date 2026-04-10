@@ -31,7 +31,7 @@ func TestE2E_SyncWatch_WebsocketRemoteWakeAndRestart(t *testing.T) {
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/baseline.txt", "baseline before websocket watch")
 
 	h := startDaemonWithStderr(t, cfgPath, env,
-		"--drive", drive, "sync", "--download-only", "--watch", "--force")
+		"--drive", drive, "sync", "--download-only", "--watch")
 
 	waitForObserverStarted(t, eventsPath, "remote", 3*time.Minute)
 	waitForSocketIOConnected(t, eventsPath, 45*time.Second)
@@ -61,7 +61,7 @@ func TestE2E_SyncWatch_WebsocketRemoteWakeAndRestart(t *testing.T) {
 
 	env2, eventsPath2 := withSocketIODebugEvents(t, env)
 	h2 := startDaemonWithStderr(t, cfgPath, env2,
-		"--drive", drive, "sync", "--download-only", "--watch", "--force")
+		"--drive", drive, "sync", "--download-only", "--watch")
 
 	waitForObserverStarted(t, eventsPath2, "remote", 3*time.Minute)
 	waitForSocketIOConnected(t, eventsPath2, 45*time.Second)

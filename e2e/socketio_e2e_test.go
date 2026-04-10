@@ -101,7 +101,7 @@ func TestE2E_SyncWatch_WebsocketDisabledLongPollRegression(t *testing.T) {
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	daemon, _ := startFastDaemon(t, cfgPath, env,
-		"--drive", drive, "sync", "--watch", "--upload-only", "--force")
+		"--drive", drive, "sync", "--watch", "--upload-only")
 
 	localDir := filepath.Join(syncDir, testFolder)
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
@@ -127,7 +127,7 @@ func TestE2E_SyncWatch_WebsocketStartupSmoke(t *testing.T) {
 	env, eventsPath := withSocketIODebugEvents(t, env)
 
 	h, _ := startFastDaemon(t, cfgPath, env,
-		"--drive", drive, "sync", "--download-only", "--watch", "--force")
+		"--drive", drive, "sync", "--download-only", "--watch")
 
 	// The websocket wake source only starts after bootstrap sync drains and the
 	// steady-state remote observer comes online. Wait for that runtime milestone

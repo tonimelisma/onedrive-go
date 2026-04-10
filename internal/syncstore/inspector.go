@@ -266,7 +266,7 @@ func (i *Inspector) ReadStatusSnapshot(ctx context.Context) StatusSnapshot {
 	} else {
 		projection.summary.Groups = appendConflictSummaryCount(
 			projection.summary.Groups,
-			i.countOrZero(ctx, "unresolved conflicts", "SELECT COUNT(*) FROM conflicts WHERE resolution = 'unresolved'"),
+			i.countOrZero(ctx, "unresolved conflicts", "SELECT COUNT(*) FROM conflicts WHERE state != 'resolved' AND resolution = 'unresolved'"),
 		)
 		projection.summary.Retrying = i.countOrZero(
 			ctx,
@@ -319,6 +319,11 @@ func (i *Inspector) readVisibleIssueProjection(ctx context.Context) (issuesProje
 		return issuesProjection{}, fmt.Errorf("list actionable failures: %w", err)
 	}
 
+	heldDeletes, err := i.listHeldDeletes(ctx)
+	if err != nil {
+		return issuesProjection{}, fmt.Errorf("list held deletes: %w", err)
+	}
+
 	remoteBlocked, err := i.listRemoteBlockedFailures(ctx)
 	if err != nil {
 		return issuesProjection{}, fmt.Errorf("list remote blocked failures: %w", err)
@@ -336,6 +341,7 @@ func (i *Inspector) readVisibleIssueProjection(ctx context.Context) (issuesProje
 
 	return buildIssuesProjection(
 		actionableFailures,
+		heldDeletes,
 		remoteBlocked,
 		scopeBlocks,
 		pendingRetries,
@@ -345,6 +351,7 @@ func (i *Inspector) readVisibleIssueProjection(ctx context.Context) (issuesProje
 
 func buildIssuesProjection(
 	actionableFailures []synctypes.SyncFailureRow,
+	heldDeletes []synctypes.HeldDeleteRecord,
 	remoteBlocked []synctypes.SyncFailureRow,
 	scopeBlocks []*synctypes.ScopeBlock,
 	pendingRetries []synctypes.PendingRetryGroup,
@@ -352,6 +359,7 @@ func buildIssuesProjection(
 ) issuesProjection {
 	builder := newIssuesProjectionBuilder(shortcuts, len(pendingRetries))
 	builder.addActionableFailures(actionableFailures)
+	builder.addHeldDeletes(heldDeletes)
 	builder.addRemoteBlocked(remoteBlocked)
 	builder.addAuthScopeBlocks(scopeBlocks)
 	builder.addPendingRetries(pendingRetries)
@@ -451,17 +459,19 @@ func (b *issuesProjectionBuilder) addActionableFailures(rows []synctypes.SyncFai
 	for i := range rows {
 		row := rows[i]
 		summaryKey := synctypes.SummaryKeyForPersistedFailure(row.IssueType, row.Category, row.Role)
-		if row.IssueType == synctypes.IssueBigDeleteHeld {
-			b.snapshot.HeldDeletes = append(b.snapshot.HeldDeletes, HeldDeleteSnapshot{
-				Path:       row.Path,
-				LastSeenAt: row.LastSeenAt,
-			})
-			b.addSummary(summaryKey, row.ScopeKey, row.Role)
-			continue
-		}
-
 		b.addGroupedPath(summaryKey, row.IssueType, row.ScopeKey, row.Path)
 		b.addSummary(summaryKey, row.ScopeKey, row.Role)
+	}
+}
+
+func (b *issuesProjectionBuilder) addHeldDeletes(rows []synctypes.HeldDeleteRecord) {
+	for i := range rows {
+		row := rows[i]
+		b.snapshot.HeldDeletes = append(b.snapshot.HeldDeletes, HeldDeleteSnapshot{
+			Path:       row.Path,
+			LastSeenAt: row.LastPlannedAt,
+		})
+		b.addSummary(synctypes.SummaryHeldDeletes, synctypes.ScopeKey{}, synctypes.FailureRoleItem)
 	}
 }
 
@@ -635,7 +645,11 @@ func (i *Inspector) listConflicts(ctx context.Context, history bool) ([]synctype
 func (i *Inspector) listActionableFailures(ctx context.Context) ([]synctypes.SyncFailureRow, error) {
 	rows, err := i.db.QueryContext(ctx,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
-		WHERE category = 'actionable' ORDER BY last_seen_at DESC`)
+		WHERE category = 'actionable'
+		AND (issue_type IS NULL OR issue_type != ?)
+		ORDER BY last_seen_at DESC`,
+		synctypes.IssueBigDeleteHeld,
+	)
 	if err != nil {
 		if isMissingTableErr(err) {
 			return []synctypes.SyncFailureRow{}, nil
@@ -645,6 +659,26 @@ func (i *Inspector) listActionableFailures(ctx context.Context) ([]synctypes.Syn
 	defer rows.Close()
 
 	return scanSyncFailureRows(rows)
+}
+
+func (i *Inspector) listHeldDeletes(ctx context.Context) ([]synctypes.HeldDeleteRecord, error) {
+	rows, err := i.db.QueryContext(ctx,
+		`SELECT drive_id, action_type, path, item_id, state, held_at, approved_at,
+			last_planned_at, last_error
+		FROM held_deletes
+		WHERE state = ?
+		ORDER BY last_planned_at DESC`,
+		synctypes.HeldDeleteStateHeld,
+	)
+	if err != nil {
+		if isMissingTableErr(err) {
+			return []synctypes.HeldDeleteRecord{}, nil
+		}
+		return nil, fmt.Errorf("query held deletes: %w", err)
+	}
+	defer rows.Close()
+
+	return scanHeldDeleteRows(rows)
 }
 
 func (i *Inspector) listRemoteBlockedFailures(ctx context.Context) ([]synctypes.SyncFailureRow, error) {

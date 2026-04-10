@@ -103,9 +103,17 @@ func loadVisibleIssueProjection(
 	actionable, err := querySyncFailureRowsDB(ctx, db,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
 		WHERE category = 'actionable'
-		ORDER BY last_seen_at DESC`)
+		AND (issue_type IS NULL OR issue_type != ?)
+		ORDER BY last_seen_at DESC`,
+		synctypes.IssueBigDeleteHeld,
+	)
 	if err != nil {
 		return visibleIssueProjection{}, fmt.Errorf("sync: listing visible actionable failures: %w", err)
+	}
+
+	heldDeletes, err := queryHeldDeletesDB(ctx, db)
+	if err != nil {
+		return visibleIssueProjection{}, fmt.Errorf("sync: listing visible held deletes: %w", err)
 	}
 
 	remoteBlocked, err := querySyncFailureRowsDB(ctx, db,
@@ -128,7 +136,7 @@ func loadVisibleIssueProjection(
 		return visibleIssueProjection{}, fmt.Errorf("sync: counting retrying sync failures: %w", err)
 	}
 
-	groups := buildVisibleIssueGroups(conflictCount, actionable, remoteBlocked, authBlocks)
+	groups := buildVisibleIssueGroups(conflictCount, actionable, heldDeletes, remoteBlocked, authBlocks)
 	if logger != nil {
 		logger.Debug("loaded visible issue projection",
 			slog.Int("groups", len(groups)),
@@ -145,7 +153,7 @@ func loadVisibleIssueProjection(
 func loadVisibleConflictCount(ctx context.Context, db *sql.DB) (int, error) {
 	var count int
 	if err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM conflicts WHERE resolution = 'unresolved'`,
+		`SELECT COUNT(*) FROM conflicts WHERE state != 'resolved' AND resolution = 'unresolved'`,
 	).Scan(&count); err != nil {
 		return 0, fmt.Errorf("count visible conflicts: %w", err)
 	}
@@ -220,6 +228,7 @@ func queryRetryingIssueCount(ctx context.Context, db *sql.DB) (int, error) {
 func buildVisibleIssueGroups(
 	conflictCount int,
 	actionable []synctypes.SyncFailureRow,
+	heldDeletes []synctypes.HeldDeleteRecord,
 	remoteBlocked []synctypes.SyncFailureRow,
 	authBlocks []*synctypes.ScopeBlock,
 ) []VisibleIssueGroup {
@@ -228,6 +237,7 @@ func buildVisibleIssueGroups(
 
 	appendVisibleConflictGroup(&groups, conflictCount)
 	addVisibleActionableGroups(&groups, groupIndex, actionable)
+	addVisibleHeldDeleteGroup(&groups, heldDeletes)
 	addVisibleRemoteBlockedGroups(&groups, groupIndex, remoteBlocked)
 	addVisibleAuthScopeGroups(&groups, groupIndex, authBlocks)
 	finalizeVisibleIssueGroups(groups)
@@ -276,6 +286,26 @@ func querySyncFailureRowsDB(ctx context.Context, db *sql.DB, query string, args 
 	return scanSyncFailureRows(rows)
 }
 
+func queryHeldDeletesDB(ctx context.Context, db *sql.DB) ([]synctypes.HeldDeleteRecord, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT drive_id, action_type, path, item_id, state, held_at, approved_at,
+			last_planned_at, last_error
+		FROM held_deletes
+		WHERE state = ?
+		ORDER BY last_planned_at DESC`,
+		synctypes.HeldDeleteStateHeld,
+	)
+	if err != nil {
+		if isMissingTableErr(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("query held deletes: %w", err)
+	}
+	defer rows.Close()
+
+	return scanHeldDeleteRows(rows)
+}
+
 func appendVisibleConflictGroup(groups *[]VisibleIssueGroup, conflictCount int) {
 	if conflictCount <= 0 {
 		return
@@ -286,6 +316,24 @@ func appendVisibleConflictGroup(groups *[]VisibleIssueGroup, conflictCount int) 
 		Count:        conflictCount,
 		VisibleCount: conflictCount,
 	})
+}
+
+func addVisibleHeldDeleteGroup(groups *[]VisibleIssueGroup, heldDeletes []synctypes.HeldDeleteRecord) {
+	if len(heldDeletes) == 0 {
+		return
+	}
+
+	group := VisibleIssueGroup{
+		SummaryKey:   synctypes.SummaryHeldDeletes,
+		IssueType:    synctypes.IssueBigDeleteHeld,
+		Count:        len(heldDeletes),
+		VisibleCount: len(heldDeletes),
+		Paths:        make([]string, 0, len(heldDeletes)),
+	}
+	for i := range heldDeletes {
+		group.Paths = append(group.Paths, heldDeletes[i].Path)
+	}
+	*groups = append(*groups, group)
 }
 
 func addVisibleActionableGroups(

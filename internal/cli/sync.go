@@ -24,7 +24,6 @@ one-way sync. Use --dry-run to preview what would happen without making changes.
 	cmd.Flags().Bool("download-only", false, "only download remote changes")
 	cmd.Flags().Bool("upload-only", false, "only upload local changes")
 	cmd.Flags().Bool("dry-run", false, "preview sync actions without executing")
-	cmd.Flags().Bool("force", false, "override big-delete safety threshold")
 	cmd.Flags().Bool("watch", false, "continuously sync changes (watch mode)")
 	cmd.Flags().Bool("full", false, "run full reconciliation (enumerate all remote items, detect orphans)")
 
@@ -49,11 +48,6 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	// second signal force-exits. Applies to both one-shot and watch modes.
 	ctx := shutdownContext(cmd.Context(), logger)
 
-	force, err := cmd.Flags().GetBool("force")
-	if err != nil {
-		return fmt.Errorf("read --force flag: %w", err)
-	}
-
 	dryRunValue, dryRunSet, err := syncDryRunOverride(cmd)
 	if err != nil {
 		return err
@@ -71,7 +65,6 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	return newSyncService(cc).run(ctx, syncCommandOptions{
 		Mode:          mode,
 		Watch:         watch,
-		Force:         force,
 		DryRun:        dryRun,
 		FullReconcile: fullReconcile,
 	})

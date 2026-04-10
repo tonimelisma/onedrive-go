@@ -151,17 +151,23 @@ func TestInspector_ReadIssuesSnapshot(t *testing.T) {
 		(path, drive_id, direction, action_type, failure_role, category, issue_type, scope_key, failure_count, next_retry_at, first_seen_at, last_seen_at)
 		VALUES
 		('/invalid:name.txt', ?, 'upload', 'upload', 'item', 'actionable', ?, '', 1, NULL, 1, 1),
-		('/delete/a.txt', ?, 'delete', 'remote_delete', 'item', 'actionable', ?, '', 1, NULL, 1, 1),
-		('/delete/b.txt', ?, 'delete', 'remote_delete', 'item', 'actionable', ?, '', 1, NULL, 1, 2),
 		('/blocked/a.txt', ?, 'upload', 'upload', 'held', 'transient', ?, 'perm:remote:Shared/Docs', 1, NULL, 1, 1),
 		('/blocked/b.txt', ?, 'upload', 'upload', 'held', 'transient', ?, 'perm:remote:Shared/Docs', 1, NULL, 1, 2),
 		('/retry.txt', ?, 'upload', 'upload', 'item', 'transient', '', '', 4, ?, 1, 1)`,
 		testDriveID, synctypes.IssueInvalidFilename,
-		testDriveID, synctypes.IssueBigDeleteHeld,
-		testDriveID, synctypes.IssueBigDeleteHeld,
 		testDriveID, synctypes.IssueSharedFolderBlocked,
 		testDriveID, synctypes.IssueSharedFolderBlocked,
 		testDriveID, time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC).UnixNano(),
+	)
+	require.NoError(t, err)
+
+	_, err = store.DB().ExecContext(ctx, `INSERT INTO held_deletes
+		(drive_id, action_type, path, item_id, state, held_at, last_planned_at, last_error)
+		VALUES
+		(?, 'remote_delete', '/delete/a.txt', 'item-a', 'held', 1, 1, 'held'),
+		(?, 'remote_delete', '/delete/b.txt', 'item-b', 'held', 1, 2, 'held')`,
+		testDriveID,
+		testDriveID,
 	)
 	require.NoError(t, err)
 

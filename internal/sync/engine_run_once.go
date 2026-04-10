@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -18,10 +17,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
-
-// forceSafetyMax is the maximum threshold used when --force is set,
-// effectively disabling big-delete protection.
-const forceSafetyMax = math.MaxInt32
 
 // RunOnce executes a single sync pass:
 //  1. Load baseline
@@ -40,12 +35,17 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 	e.logger.Info("sync pass starting",
 		slog.String("mode", mode.String()),
 		slog.Bool("dry_run", opts.DryRun),
-		slog.Bool("force", opts.Force),
 	)
 
-	bl, err := runner.prepareRunOnceState(ctx)
-	if err != nil {
+	if err := runner.prepareRunOnceState(ctx); err != nil {
 		return nil, err
+	}
+	if processErr := e.processQueuedConflictResolutions(ctx); processErr != nil {
+		return nil, processErr
+	}
+	bl, err := e.baseline.Load(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: reloading baseline after queued user intent: %w", err)
 	}
 
 	// Steps 2-4: Observe remote + local, buffer, and flush.
@@ -56,6 +56,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 		return nil, err
 	}
 	changes = mergePathChangeBatches(changes, runner.collectDueRetryChanges(ctx, pathSetFromBatch(changes)))
+	changes = mergePathChangeBatches(changes, runner.collectApprovedDeleteChanges(ctx))
 
 	// Step 5: Early return if no changes.
 	if len(changes) == 0 {
@@ -77,14 +78,18 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 	}
 
 	// Step 6: Plan actions.
-	safety := e.resolveSafetyConfig(opts.Force, false)
+	safety := e.resolveSafetyConfig()
 	denied := e.permHandler.DeniedPrefixes(ctx)
 
 	plan, err := e.planner.Plan(changes, bl, mode, safety, denied)
 	if err != nil {
-		// Big-delete protection (or other planner errors) — the delta token
-		// is NOT committed, so the next sync replays the same events.
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
+	}
+	if !opts.DryRun {
+		plan, err = e.applyOneShotDeleteProtection(ctx, plan)
+		if err != nil {
+			return nil, fmt.Errorf("sync: applying big-delete protection: %w", err)
+		}
 	}
 
 	// Planner approved — commit the deferred delta token now.
@@ -130,7 +135,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 	return report, nil
 }
 
-func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) (*synctypes.Baseline, error) {
+func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) error {
 	eng := r.engine
 	flow := &r.engineFlow
 
@@ -138,18 +143,18 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) (*synctypes.Bas
 	if proofErr != nil {
 		hasAuthScope, err := eng.hasPersistedAuthScope(ctx)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if !hasAuthScope {
-			return nil, proofErr
+			return proofErr
 		}
 	}
 
 	if err := flow.scopeController().repairPersistedScopes(ctx, nil, proof, proofErr); err != nil {
-		return nil, fmt.Errorf("sync: repairing persisted scopes: %w", err)
+		return fmt.Errorf("sync: repairing persisted scopes: %w", err)
 	}
 	if proofErr != nil {
-		return nil, proofErr
+		return proofErr
 	}
 	eng.logVerifiedDrive(proof)
 
@@ -169,7 +174,7 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) (*synctypes.Bas
 
 	bl, err := eng.baseline.Load(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("sync: loading baseline: %w", err)
+		return fmt.Errorf("sync: loading baseline: %w", err)
 	}
 
 	shortcuts, scErr := flow.shortcutCoordinator().loadShortcutSnapshot(ctx)
@@ -189,7 +194,7 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) (*synctypes.Bas
 	// directories that have become accessible since the last pass (R-2.10.13).
 	flow.scopeController().applyPermissionRecheckDecisions(ctx, nil, eng.permHandler.recheckLocalPermissions(ctx))
 
-	return bl, nil
+	return nil
 }
 
 // postSyncHousekeeping runs non-critical cleanup after a sync pass:
@@ -724,14 +729,8 @@ func changeEventsToObservedItems(logger *slog.Logger, events []synctypes.ChangeE
 // big-delete check is disabled (threshold=MaxInt32) when force is set or when
 // the engine has a deleteCounter (watch mode — the rolling counter handles
 // big-delete protection instead).
-func (e *Engine) resolveSafetyConfig(force, watchMode bool) *synctypes.SafetyConfig {
-	if force || watchMode {
-		return &synctypes.SafetyConfig{
-			BigDeleteThreshold: forceSafetyMax,
-		}
-	}
-
+func (e *Engine) resolveSafetyConfig() *synctypes.SafetyConfig {
 	return &synctypes.SafetyConfig{
-		BigDeleteThreshold: e.bigDeleteThreshold,
+		BigDeleteThreshold: plannerSafetyMax,
 	}
 }

@@ -52,12 +52,42 @@ CREATE TABLE IF NOT EXISTS conflicts (
                                 'unresolved', 'keep_both', 'keep_local',
                                 'keep_remote', 'manual'
                             )),
+    state           TEXT    NOT NULL DEFAULT 'unresolved'
+                            CHECK(state IN (
+                                'unresolved', 'resolution_requested', 'resolving',
+                                'resolve_failed', 'resolved', 'manual'
+                            )),
+    requested_resolution TEXT CHECK(requested_resolution IN (
+                                'keep_both', 'keep_local', 'keep_remote'
+                            ) OR requested_resolution IS NULL),
+    requested_at    INTEGER,
+    resolving_at    INTEGER,
+    resolution_error TEXT,
     resolved_at     INTEGER,
     resolved_by     TEXT    CHECK(resolved_by IN ('user', 'auto') OR resolved_by IS NULL),
     history         TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_conflicts_resolution ON conflicts(resolution);
+CREATE INDEX IF NOT EXISTS idx_conflicts_state ON conflicts(state);
+
+-- Big-delete protection ledger. These rows are user-gated safety decisions,
+-- not sync failures: held rows wait for approval, approved rows are consumed
+-- by the next engine pass without retriggering big-delete protection.
+CREATE TABLE IF NOT EXISTS held_deletes (
+    drive_id        TEXT    NOT NULL,
+    action_type     TEXT    NOT NULL CHECK(action_type IN ('local_delete', 'remote_delete')),
+    path            TEXT    NOT NULL,
+    item_id         TEXT    NOT NULL DEFAULT '',
+    state           TEXT    NOT NULL CHECK(state IN ('held', 'approved')),
+    held_at         INTEGER NOT NULL CHECK(held_at > 0),
+    approved_at     INTEGER,
+    last_planned_at INTEGER NOT NULL CHECK(last_planned_at > 0),
+    last_error      TEXT,
+    PRIMARY KEY (drive_id, action_type, path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_held_deletes_state ON held_deletes(state);
 
 -- Sync metadata key-value store for reporting.
 CREATE TABLE IF NOT EXISTS sync_metadata (

@@ -80,15 +80,23 @@ The important invariant is that missing hashes are never equality by
 themselves. `"" == ""` is not sufficient to declare a hashless file unchanged.
 Unknown fallback metadata is also never treated as equality.
 
-## Big-Delete Protection (One-Shot)
+## Big-Delete Classification
 
 Implements: R-6.2.5 [verified], R-6.4.1 [verified]
 
 Single absolute count threshold: `exceedsDeleteThreshold(deleteCount, threshold)` returns true when `deleteCount > threshold` and `threshold > 0`. No percentage checks, no per-folder checks (industry standard: rclone, rsync, abraunegg).
 
-`SafetyConfig` has one field: `BigDeleteThreshold int` (default: 1000, from user config). When `--force` is set, threshold is `math.MaxInt32` (effectively disabled). Returns `ErrBigDeleteTriggered` when exceeded.
+`SafetyConfig` has one field: `BigDeleteThreshold int`, but the planner is no
+longer the owner of user approval. The engine calls the planner with an
+effectively disabled threshold and then applies the configured
+`big_delete_threshold` at the engine boundary where it can write durable
+`held_deletes` rows, filter unapproved deletes, and allow approved deletes to
+proceed.
 
-In watch mode, the planner-level check is disabled (`threshold=MaxInt32`) — the engine's rolling `deleteCounter` handles protection instead (see sync-engine.md).
+In watch mode, the rolling `deleteCounter` still accumulates delete pressure
+across debounced batches. In one-shot mode, the engine applies the same
+durable held-delete workflow to the full plan. The planner has no user
+approval bypass; held-delete approval is durable engine-owned intent.
 
 ## Design Constraints
 

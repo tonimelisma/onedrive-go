@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	gosync "sync"
 	"time"
 
@@ -30,14 +29,14 @@ type engineFactoryFunc func(ctx context.Context, cfg *synctypes.EngineConfig) (e
 // OrchestratorConfig holds the inputs for creating an Orchestrator.
 // The CLI layer populates this from resolved config and HTTP clients.
 // Config and config path are accessed via Holder — a single source of truth
-// shared with SessionProvider. SIGHUP reload updates config in one place.
+// shared with SessionProvider. Control-socket reload updates config in one place.
 type OrchestratorConfig struct {
-	Holder         *config.Holder
-	Drives         []*config.ResolvedDrive
-	Provider       *driveops.SessionProvider // token caching + Session creation
-	Logger         *slog.Logger
-	SIGHUPChan     <-chan os.Signal // injectable for tests; nil uses no-op channel
-	DebugEventHook func(syncengine.DebugEvent)
+	Holder            *config.Holder
+	Drives            []*config.ResolvedDrive
+	Provider          *driveops.SessionProvider // token caching + Session creation
+	Logger            *slog.Logger
+	ControlSocketPath string
+	DebugEventHook    func(syncengine.DebugEvent)
 }
 
 // Orchestrator manages per-drive sync runners. It is always used, even for a
@@ -84,6 +83,22 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode synctypes.SyncMode, opt
 		return nil
 	}
 
+	control, err := o.startControlServer(ctx, controlOwnerOneShot, nil)
+	if err != nil {
+		return controlFailureReports(drives, err)
+	}
+	if control != nil {
+		defer func() {
+			closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), controlCloseTimeout)
+			defer cancel()
+			if closeErr := control.Close(closeCtx); closeErr != nil {
+				o.logger.Warn("control socket close error",
+					slog.String("error", closeErr.Error()),
+				)
+			}
+		}()
+	}
+
 	o.logger.Info("orchestrator starting RunOnce",
 		slog.Int("drives", len(drives)),
 		slog.String("mode", mode.String()),
@@ -108,6 +123,18 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode synctypes.SyncMode, opt
 
 	o.logger.Info("orchestrator RunOnce complete", slog.Int("reports", len(reports)))
 
+	return reports
+}
+
+func controlFailureReports(drives []*config.ResolvedDrive, err error) []*synctypes.DriveReport {
+	reports := make([]*synctypes.DriveReport, len(drives))
+	for i, rd := range drives {
+		reports[i] = &synctypes.DriveReport{
+			CanonicalID: rd.CanonicalID,
+			DisplayName: rd.DisplayName,
+			Err:         err,
+		}
+	}
 	return reports
 }
 
@@ -192,15 +219,17 @@ func (o *Orchestrator) buildEngineWork(
 
 // watchRunner holds per-drive state for a running watch-mode engine.
 type watchRunner struct {
-	canonID driveid.CanonicalID
-	engine  engineRunner
-	cancel  context.CancelFunc
-	done    chan struct{} // closed exactly once by the goroutine started in startWatchRunner
+	canonID        driveid.CanonicalID
+	engine         engineRunner
+	cancel         context.CancelFunc
+	userIntentWake chan struct{}
+	done           chan struct{} // closed exactly once by the goroutine started in startWatchRunner
 }
 
-// RunWatch runs all configured (non-paused) drives in watch mode. On SIGHUP,
-// it re-reads the config file and diffs the active drive set: stopped drives
-// are removed, new drives are started. Returns nil on clean context cancel.
+// RunWatch runs all configured (non-paused) drives in watch mode. On
+// control-socket reload, it re-reads the config file and diffs the active drive
+// set: stopped drives are removed, new drives are started. Returns nil on
+// clean context cancel.
 func (o *Orchestrator) RunWatch(ctx context.Context, mode synctypes.SyncMode, opts synctypes.WatchOpts) error {
 	drives := o.cfg.Drives
 	if len(drives) == 0 {
@@ -211,6 +240,23 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode synctypes.SyncMode, op
 		slog.Int("drives", len(drives)),
 		slog.String("mode", mode.String()),
 	)
+
+	commands := make(chan controlCommand)
+	control, err := o.startControlServer(ctx, controlOwnerWatch, commands)
+	if err != nil {
+		return err
+	}
+	if control != nil {
+		defer func() {
+			closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), controlCloseTimeout)
+			defer cancel()
+			if closeErr := control.Close(closeCtx); closeErr != nil {
+				o.logger.Warn("control socket close error",
+					slog.String("error", closeErr.Error()),
+				)
+			}
+		}()
+	}
 
 	// Build runners for all active (non-paused) drives.
 	runners := make(map[driveid.CanonicalID]*watchRunner)
@@ -256,19 +302,13 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode synctypes.SyncMode, op
 		o.logger.Info("orchestrator RunWatch stopped")
 	}()
 
-	// Resolve SIGHUP channel (nil → blocking channel that never fires).
-	sighup := o.cfg.SIGHUPChan
-	if sighup == nil {
-		sighup = make(<-chan os.Signal)
-	}
-
 	// Main select loop.
 	for {
 		select {
-		case <-sighup:
-			o.logger.Info("SIGHUP received, reloading config")
-			o.reload(ctx, mode, opts, runners)
-
+		case cmd := <-commands:
+			if o.handleControlCommand(ctx, &cmd, mode, opts, runners) {
+				return nil
+			}
 		case <-ctx.Done():
 			return nil
 		}
@@ -295,14 +335,17 @@ func (o *Orchestrator) startWatchRunner(
 	}
 
 	driveCtx, driveCancel := context.WithCancel(ctx)
+	userIntentWake := make(chan struct{}, 1)
 	done := make(chan struct{})
 
 	wr := &watchRunner{
-		canonID: rd.CanonicalID,
-		engine:  engine,
-		cancel:  driveCancel,
-		done:    done,
+		canonID:        rd.CanonicalID,
+		engine:         engine,
+		cancel:         driveCancel,
+		userIntentWake: userIntentWake,
+		done:           done,
 	}
+	opts.UserIntentWake = userIntentWake
 
 	go func() {
 		defer close(done)

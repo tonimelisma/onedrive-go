@@ -135,6 +135,19 @@ func MkdirAll(path string, perm os.FileMode) error {
 	return nil
 }
 
+func Chmod(path string, perm os.FileMode) error {
+	abs, err := absolutePath(path)
+	if err != nil {
+		return err
+	}
+
+	if err := os.Chmod(abs, perm); err != nil {
+		return fmt.Errorf("setting mode on %s: %w", path, err)
+	}
+
+	return nil
+}
+
 func Remove(path string) error {
 	abs, err := absolutePath(path)
 	if err != nil {
