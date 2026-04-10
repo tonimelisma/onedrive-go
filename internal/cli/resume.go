@@ -16,7 +16,7 @@ func newResumeCmd() *cobra.Command {
 		Long: `Resume syncing for the specified drive. With --drive, resumes that drive.
 Without --drive, resumes ALL paused drives.
 
-If a sync --watch daemon is running, it receives a SIGHUP to pick up the change.
+If a sync --watch daemon is running, it receives a control-socket reload.
 
 Examples:
   onedrive-go resume --drive personal:user@example.com

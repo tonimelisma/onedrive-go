@@ -65,7 +65,7 @@ func TestE2E_SyncWatch_BasicRoundTrip(t *testing.T) {
 		"--config", cfgPath,
 		"--drive", drive,
 		"--debug",
-		"sync", "--watch", "--upload-only", "--force",
+		"sync", "--watch", "--upload-only",
 	}
 	cmd := makeCmd(daemonArgs, env)
 
@@ -137,7 +137,7 @@ func TestE2E_SyncWatch_PauseResume(t *testing.T) {
 		"--config", cfgPath,
 		"--drive", drive,
 		"--debug",
-		"sync", "--watch", "--upload-only", "--force",
+		"sync", "--watch", "--upload-only",
 	}
 	cmd := makeCmd(daemonArgs, env)
 
@@ -159,11 +159,8 @@ func TestE2E_SyncWatch_PauseResume(t *testing.T) {
 	// Wait for daemon to initialize.
 	waitForDaemonReady(t, &stderr, 30*time.Second)
 
-	// Pause the drive. The pause command sends SIGHUP via the PID file.
-	// In per-test isolation, the PID file path must match the daemon's.
-	// Send SIGHUP directly to ensure the daemon receives it.
+	// Pause notifies the daemon through the control socket.
 	runCLIWithConfig(t, cfgPath, env, "pause")
-	require.NoError(t, cmd.Process.Signal(syscall.SIGHUP))
 
 	// Poll stderr for pause acknowledgment instead of sleeping.
 	waitForStderrContains(t, &stderr, "paused", 10*time.Second)
@@ -204,10 +201,10 @@ func TestE2E_SyncWatch_PauseResume(t *testing.T) {
 	assert.Equal(t, "created while paused\n", remoteContent)
 }
 
-// TestE2E_SyncWatch_SIGHUPReload starts a daemon with only drive1, then
-// rewrites the config to add drive2, sends SIGHUP, and verifies that
-// drive2 starts syncing after the reload.
-func TestE2E_SyncWatch_SIGHUPReload(t *testing.T) {
+// TestE2E_SyncWatch_ControlSocketReload starts a daemon with only drive1, then
+// rewrites the config to add drive2, sends a control-socket reload, and verifies
+// that drive2 starts syncing after the reload.
+func TestE2E_SyncWatch_ControlSocketReload(t *testing.T) {
 	requireDrive2(t)
 	registerLogDump(t)
 
@@ -237,8 +234,8 @@ func TestE2E_SyncWatch_SIGHUPReload(t *testing.T) {
 
 	opsCfgPath := writeMinimalConfig(t)
 
-	testFolder1 := fmt.Sprintf("e2e-sighup-d1-%d", time.Now().UnixNano())
-	testFolder2 := fmt.Sprintf("e2e-sighup-d2-%d", time.Now().UnixNano())
+	testFolder1 := fmt.Sprintf("e2e-reload-d1-%d", time.Now().UnixNano())
+	testFolder2 := fmt.Sprintf("e2e-reload-d2-%d", time.Now().UnixNano())
 
 	t.Cleanup(func() {
 		cleanupRemoteFolder(t, testFolder1)
@@ -249,7 +246,7 @@ func TestE2E_SyncWatch_SIGHUPReload(t *testing.T) {
 	daemonArgs := []string{
 		"--config", cfgPath,
 		"--debug",
-		"sync", "--watch", "--upload-only", "--force",
+		"sync", "--watch", "--upload-only",
 	}
 	cmd := makeCmd(daemonArgs, env)
 
@@ -289,8 +286,8 @@ func TestE2E_SyncWatch_SIGHUPReload(t *testing.T) {
 		drive, syncDir1, drive2, syncDir2)
 	require.NoError(t, os.WriteFile(cfgPath, []byte(updatedCfg), 0o600))
 
-	// Send SIGHUP to trigger config reload.
-	require.NoError(t, cmd.Process.Signal(syscall.SIGHUP))
+	// Ask the daemon to reload through the durable control path.
+	postControlSocket(t, env, "/v1/reload")
 
 	// Wait for config reload to complete.
 	waitForStderrContains(t, &stderr, "config reload complete", 30*time.Second)

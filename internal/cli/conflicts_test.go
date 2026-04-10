@@ -229,15 +229,15 @@ func TestResolveEachConflict_ResolvesAll(t *testing.T) {
 	var buf bytes.Buffer
 	cc := newTestCLIContext(&buf)
 
-	err := resolveEachConflict(cc, conflicts, "keep_both", false, func(id, _ string) error {
+	err := resolveEachConflict(cc, conflicts, "keep_both", false, func(id, _ string) (string, error) {
 		resolved = append(resolved, id)
-		return nil
+		return "queued", nil
 	})
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"id-1", "id-2"}, resolved)
-	assert.Contains(t, buf.String(), "Resolved /foo.txt as keep_both")
-	assert.Contains(t, buf.String(), "Resolved /bar.txt as keep_both")
+	assert.Contains(t, buf.String(), "Queued /foo.txt as keep_both (queued)")
+	assert.Contains(t, buf.String(), "Queued /bar.txt as keep_both (queued)")
 }
 
 // Validates: R-2.3.4, R-2.3.12
@@ -254,9 +254,9 @@ func TestResolveSingleConflict_AlreadyResolvedIsReplaySafe(t *testing.T) {
 	err := resolveSingleConflict(cc, "/foo.txt", "keep_local", false,
 		func() ([]synctypes.ConflictRecord, error) { return nil, nil },
 		func() ([]synctypes.ConflictRecord, error) { return resolvedConflicts, nil },
-		func(_, _ string) error {
+		func(_, _ string) (string, error) {
 			require.Fail(t, "resolveFn should not be called for already resolved conflicts")
-			return nil
+			return "", nil
 		},
 	)
 	require.NoError(t, err)
@@ -336,8 +336,8 @@ func TestConflictsService_RunResolve_AllDryRun(t *testing.T) {
 		Logger:       slog.New(slog.DiscardHandler),
 	})
 
-	err := resolveEachConflict(svc.cc, []synctypes.ConflictRecord{{ID: "id-1", Path: "/foo.txt"}}, "keep_local", true, func(_, _ string) error {
-		return fmt.Errorf("should not be called")
+	err := resolveEachConflict(svc.cc, []synctypes.ConflictRecord{{ID: "id-1", Path: "/foo.txt"}}, "keep_local", true, func(_, _ string) (string, error) {
+		return "", fmt.Errorf("should not be called")
 	})
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "Would resolve /foo.txt")

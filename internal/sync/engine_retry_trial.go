@@ -116,7 +116,13 @@ func (rt *watchRuntime) dispatchPlannerWork(
 	}
 
 	if options.applyDeleteCounter && rt.deleteCounter != nil {
-		plan = rt.applyDeleteCounter(ctx, plan)
+		plan, err = rt.applyDeleteCounter(ctx, plan)
+		if err != nil {
+			rt.engine.logger.Error("delete protection failed",
+				slog.String("error", err.Error()),
+			)
+			return nil, false
+		}
 		if len(plan.Actions) == 0 {
 			return nil, false
 		}
@@ -606,11 +612,19 @@ func (flow *engineFlow) rebuildLocalDeleteFailure(
 			return failureRebuildResult{err: fmt.Errorf("remote state lookup failed: %w", err)}
 		}
 		if found {
-			return failureRebuildResult{event: remoteStateToChangeEvent(rs, row.Path)}
+			event := remoteStateToChangeEvent(rs, row.Path)
+			event.ForcedAction = synctypes.ActionLocalDelete
+			event.HasForcedAction = true
+			return failureRebuildResult{event: event}
 		}
 	}
 
-	return flow.rebuildRemoteStateBackedFailure(ctx, row)
+	rebuild := flow.rebuildRemoteStateBackedFailure(ctx, row)
+	if rebuild.event != nil {
+		rebuild.event.ForcedAction = synctypes.ActionLocalDelete
+		rebuild.event.HasForcedAction = true
+	}
+	return rebuild
 }
 
 func (flow *engineFlow) observeLocalFailurePath(ctx context.Context, row *synctypes.SyncFailureRow) failureRebuildResult {
@@ -686,15 +700,17 @@ func (flow *engineFlow) rebuildRemoteDeleteFailure(ctx context.Context, row *syn
 	}
 
 	return failureRebuildResult{event: &synctypes.ChangeEvent{
-		Source:    synctypes.SourceLocal,
-		Type:      synctypes.ChangeDelete,
-		Path:      row.Path,
-		DriveID:   row.DriveID,
-		ItemType:  entry.ItemType,
-		Name:      filepath.Base(row.Path),
-		Size:      entry.LocalSize,
-		Mtime:     entry.LocalMtime,
-		IsDeleted: true,
+		Source:          synctypes.SourceLocal,
+		Type:            synctypes.ChangeDelete,
+		ForcedAction:    synctypes.ActionRemoteDelete,
+		HasForcedAction: true,
+		Path:            row.Path,
+		DriveID:         row.DriveID,
+		ItemType:        entry.ItemType,
+		Name:            filepath.Base(row.Path),
+		Size:            entry.LocalSize,
+		Mtime:           entry.LocalMtime,
+		IsDeleted:       true,
 	}}
 }
 

@@ -1,14 +1,13 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strconv"
 	"time"
 
 	"github.com/spf13/cobra"
-
-	"github.com/tonimelisma/onedrive-go/internal/config"
 )
 
 func newPauseCmd() *cobra.Command {
@@ -19,7 +18,7 @@ func newPauseCmd() *cobra.Command {
 (e.g., "2h", "30m", "1d") schedules automatic resume after the interval.
 
 Without a duration, the drive stays paused until manually resumed.
-If a sync --watch daemon is running, it receives a SIGHUP to pick up the change.
+If a sync --watch daemon is running, it receives a control-socket reload.
 
 Examples:
   onedrive-go pause --drive personal:user@example.com
@@ -35,15 +34,17 @@ func runPause(cmd *cobra.Command, args []string) error {
 	return newSyncControlService(mustCLIContext(cmd.Context())).runPause(args)
 }
 
-// notifyDaemon attempts to send SIGHUP to a running sync --watch daemon.
+// notifyDaemon attempts to ask a running sync owner to reload configuration.
 // Non-fatal: if no daemon is running, prints a note instead.
 func notifyDaemon(cc *CLIContext) {
-	pidPath := config.PIDFilePath()
-	if pidPath == "" {
+	ctx := context.Background()
+	client, ok := openControlSocketClient(ctx)
+	if !ok {
+		cc.Statusf("Note: no running daemon found — changes take effect on next daemon start\n")
 		return
 	}
 
-	if err := sendSIGHUP(pidPath); err != nil {
+	if err := client.reload(ctx); err != nil {
 		cc.Statusf("Note: %v — changes take effect on next daemon start\n", err)
 	} else {
 		cc.Statusf("Notified running daemon to reload config\n")

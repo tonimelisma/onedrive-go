@@ -376,20 +376,40 @@ type PathView struct {
 
 // ConflictRecord holds metadata about a detected conflict.
 type ConflictRecord struct {
-	ID           string
-	DriveID      driveid.ID
-	ItemID       string
-	Path         string
-	Name         string // derived: path.Base(Path), for display convenience (B-071)
-	ConflictType string // ConflictEditEdit, ConflictEditDelete, ConflictCreateCreate
-	DetectedAt   int64
-	LocalHash    string
-	RemoteHash   string
-	LocalMtime   int64
-	RemoteMtime  int64
-	Resolution   string // ResolutionUnresolved, ResolutionKeepLocal, ResolutionKeepRemote, ResolutionKeepBoth
-	ResolvedAt   int64  // 0 if unresolved
-	ResolvedBy   string // ResolvedByUser, ResolvedByAuto, or "" if unresolved
+	ID                  string
+	DriveID             driveid.ID
+	ItemID              string
+	Path                string
+	Name                string // derived: path.Base(Path), for display convenience (B-071)
+	ConflictType        string // ConflictEditEdit, ConflictEditDelete, ConflictCreateCreate
+	DetectedAt          int64
+	LocalHash           string
+	RemoteHash          string
+	LocalMtime          int64
+	RemoteMtime         int64
+	Resolution          string // final outcome: unresolved, keep_local, keep_remote, keep_both, manual
+	State               string // workflow state: unresolved, resolution_requested, resolving, resolve_failed, resolved, manual
+	RequestedResolution string
+	RequestedAt         int64
+	ResolvingAt         int64
+	ResolutionError     string
+	ResolvedAt          int64  // 0 if unresolved
+	ResolvedBy          string // ResolvedByUser, ResolvedByAuto, or "" if unresolved
+}
+
+// HeldDeleteRecord is the durable user-approval ledger for big-delete
+// protection. It records safety holds and approvals separately from ordinary
+// sync failures.
+type HeldDeleteRecord struct {
+	DriveID       driveid.ID
+	ItemID        string
+	Path          string
+	ActionType    ActionType
+	State         string
+	HeldAt        int64
+	ApprovedAt    int64
+	LastPlannedAt int64
+	LastError     string
 }
 
 // Shortcut represents a OneDrive shortcut or shared folder that requires

@@ -167,10 +167,10 @@ func TestE2E_Sync_IncrementalDeltaToken(t *testing.T) {
 		))
 	}
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Re-sync should show no changes (delta token persisted).
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 	assert.Contains(t, stderr, "No changes detected",
 		"incremental sync should detect no changes after all files uploaded")
 
@@ -178,7 +178,7 @@ func TestE2E_Sync_IncrementalDeltaToken(t *testing.T) {
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/delta-new.txt", "new from remote")
 
 	// Download-only sync — should pick up only the new file.
-	_, stderr = runCLIWithConfig(t, cfgPath, env, "sync", "--download-only", "--force")
+	_, stderr = runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
 	assert.Contains(t, stderr, "Downloads:",
 		"incremental download should report the new file")
 
@@ -218,7 +218,7 @@ func TestE2E_Sync_CrashRecoveryIdempotent(t *testing.T) {
 		))
 	}
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Verify all 5 exist remotely.
 	pollCLIWithConfigContains(t, opsCfgPath, nil, "crash-5.txt", pollTimeout, "ls", "/"+testFolder)
@@ -235,10 +235,10 @@ func TestE2E_Sync_CrashRecoveryIdempotent(t *testing.T) {
 	))
 
 	// Bidirectional sync — applies deletes + upload.
-	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync")
 
 	// Re-sync immediately — should show no changes (idempotent).
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync")
 	assert.Contains(t, stderr, "No changes detected",
 		"immediate re-sync after mixed changes should be idempotent")
 }
@@ -264,14 +264,14 @@ func TestE2E_Sync_CrashRecovery_ReplaysDurableInProgressRows(t *testing.T) {
 	require.NoError(t, os.WriteFile(resumePath, []byte("resume content"), 0o600))
 	require.NoError(t, os.WriteFile(deletePath, []byte("delete content"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 	pollCLIWithConfigContains(t, opsCfgPath, nil, "delete-me.txt", pollTimeout, "ls", "/"+testFolder)
 
 	// Establish a real delta token plus remote_state rows for this live drive
 	// before seeding crash-shaped durable residue. Root-scoped live drives may
 	// legitimately observe other preserved fixtures here, so this setup pass is
 	// about state initialization, not about idleness.
-	runCLIWithConfig(t, cfgPath, env, "sync", "--download-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
 
 	runCLIWithConfig(t, opsCfgPath, nil, "rm", "/"+testFolder+"/delete-me.txt")
 	require.NoError(t, os.Remove(resumePath))
@@ -286,7 +286,7 @@ func TestE2E_Sync_CrashRecovery_ReplaysDurableInProgressRows(t *testing.T) {
 	assert.Equal(t, synctypes.SyncStatusDeleting, readRemoteStateStatusByPath(t, db, deleteRelPath))
 	require.NoError(t, db.Close())
 
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--download-only", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
 	assert.NotContains(t, stderr, "No changes detected",
 		"recovery sync should reconcile the seeded in-progress rows")
 
@@ -304,7 +304,7 @@ func TestE2E_Sync_CrashRecovery_ReplaysDurableInProgressRows(t *testing.T) {
 	require.NoError(t, db.Close())
 
 	snapshot := snapshotLocalTree(t, localDir)
-	_, stderr = runCLIWithConfig(t, cfgPath, env, "sync", "--download-only", "--force")
+	_, stderr = runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
 	assert.Contains(t, stderr, "No changes detected",
 		"immediate rerun after recovery should be idle")
 	assert.Equal(t, snapshot, snapshotLocalTree(t, localDir))
@@ -330,7 +330,7 @@ func TestE2E_Sync_DriveRemovePurgeResetsState(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "purge-a.txt"), []byte("purge a"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "purge-b.txt"), []byte("purge b"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Verify files exist remotely.
 	pollCLIWithConfigContains(t, opsCfgPath, nil, "purge-a.txt", pollTimeout, "ls", "/"+testFolder)
@@ -348,7 +348,7 @@ func TestE2E_Sync_DriveRemovePurgeResetsState(t *testing.T) {
 	require.NoError(t, os.RemoveAll(localDir))
 
 	// Sync download-only — should do full re-enumeration and re-download.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--download-only", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
 	assert.NotContains(t, stderr, "No changes detected",
 		"sync after purge should re-enumerate, not report no changes")
 

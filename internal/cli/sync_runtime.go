@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os/signal"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
@@ -25,11 +24,9 @@ func defaultSyncDaemonOrchestratorFactory(cfg *multisync.OrchestratorConfig) syn
 	return multisync.NewOrchestrator(cfg)
 }
 
-// runSyncDaemon starts multi-drive watch mode via the Orchestrator. PID file
-// prevents duplicate daemons. SIGHUP triggers config reload (add/remove/pause
-// drives without restart). The status writer is threaded through the watch
-// bootstrap so warnings stay on the CLI-owned output boundary instead of
-// reaching for process-global stderr directly.
+// runSyncDaemon starts multi-drive watch mode via the Orchestrator. The Unix
+// control socket prevents duplicate sync owners and handles reload/status/user
+// intent RPCs.
 func runSyncDaemon(
 	ctx context.Context,
 	holder *config.Holder,
@@ -49,7 +46,7 @@ func runSyncDaemonWithFactory(
 	mode synctypes.SyncMode,
 	opts synctypes.WatchOpts,
 	logger *slog.Logger,
-	statusWriter io.Writer,
+	_ io.Writer,
 	orchestratorFactory syncDaemonOrchestratorFactory,
 ) (err error) {
 	if orchestratorFactory == nil {
@@ -71,15 +68,6 @@ func runSyncDaemonWithFactory(
 	if len(drives) == 0 {
 		return fmt.Errorf("no drives configured — run 'onedrive-go drive add' to add a drive")
 	}
-
-	cleanup, pidErr := writePIDFileWithWarningWriter(config.PIDFilePath(), statusWriter)
-	if pidErr != nil {
-		return pidErr
-	}
-	defer cleanup()
-
-	sighup := sighupChannel()
-	defer signal.Stop(sighup)
 
 	httpProvider := graphhttp.NewProvider(logger)
 	provider := driveops.NewSessionProvider(holder, func(_ *config.ResolvedDrive) driveops.HTTPClients {
@@ -111,12 +99,12 @@ func runSyncDaemonWithFactory(
 	}
 
 	orch := orchestratorFactory(&multisync.OrchestratorConfig{
-		Holder:         holder,
-		Drives:         drives,
-		Provider:       provider,
-		Logger:         logger,
-		SIGHUPChan:     sighup,
-		DebugEventHook: debugEventHook,
+		Holder:            holder,
+		Drives:            drives,
+		Provider:          provider,
+		Logger:            logger,
+		ControlSocketPath: config.ControlSocketPath(),
+		DebugEventHook:    debugEventHook,
 	})
 
 	if err := orch.RunWatch(ctx, mode, opts); err != nil {

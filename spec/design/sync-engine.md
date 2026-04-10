@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/engine*.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/engine_shortcuts.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_decisions.go, sync_helpers.go
 
-Implements: R-2.1 [verified], R-2.3.11 [verified], R-2.4.4 [verified], R-2.4.5 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-2.10.45 [verified], R-2.10.46 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified], R-2.14.5 [verified], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [verified], R-6.6.10 [verified], R-6.6.12 [verified], R-6.6.13 [verified], R-6.7.27 [verified], R-6.8.15 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.10 [verified], R-6.10.13 [verified]
+Implements: R-2.1 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.11 [verified], R-2.3.12 [verified], R-2.4.4 [verified], R-2.4.5 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-2.10.45 [verified], R-2.10.46 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified], R-2.14.5 [verified], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [verified], R-6.6.10 [verified], R-6.6.12 [verified], R-6.6.13 [verified], R-6.7.27 [verified], R-6.8.15 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.10 [verified], R-6.10.13 [verified]
 
 ## Ownership Contract
 
@@ -725,9 +725,21 @@ governed by `sync-control-plane.md`.
 
 ## Conflict Resolution
 
-Manual conflict resolution is part of the engine boundary, not a CLI-only
-string operation. `ResolveConflict()` owns the runtime flow for `keep_local`,
-`keep_remote`, and `keep_both`.
+Manual conflict resolution is engine-owned user intent, not a CLI-side
+transfer operation. `conflicts resolve` records a durable request with one of
+`keep_local`, `keep_remote`, or `keep_both`. If a watch daemon is running the
+request goes through the control socket; otherwise the CLI writes the same
+request into the drive state DB. The engine claims queued requests and executes
+the side effects during normal `sync` / `sync --watch` ownership.
+
+Conflict rows have explicit workflow states:
+
+- `unresolved` — visible conflict with no queued user decision
+- `resolution_requested` — durable user intent is queued
+- `resolving` — one engine has claimed the request
+- `resolve_failed` — engine execution failed; the requested resolution and error remain durable
+- `resolved` — resolution completed and the row is historical
+- `manual` — reserved for user-managed conflicts that should stay visible but not auto-resolve
 
 `keep_both` is intentionally modeled as an explicit reconciliation path, not
 as a synthetic executor transfer outcome:
@@ -747,12 +759,14 @@ as a synthetic executor transfer outcome:
 This separation matters because `ActionUpdateSynced` still means true
 planner/executor convergence: both sides are already equivalent without a
 manual resolution-specific store transition. `keep_both` is different. It is a
-manual reconciliation decision that needs explicit durable-state repair.
+manual reconciliation decision that needs explicit durable-state repair. If any
+resolution attempt fails, the engine marks the conflict `resolve_failed` rather
+than pretending the CLI operation succeeded or retrying from an ad hoc engine.
 
 ## Watch Mode Behavior
 
-- SIGHUP → reload `config.toml`, apply drive changes immediately
-- PID file with flock for single-instance enforcement
+- control-socket reload → reload `config.toml`, apply drive changes immediately
+- Unix control socket for single-instance enforcement and user-intent RPC
 - Two-signal shutdown (drain, then force)
 - Periodic full reconciliation (default 24h, async — see below)
 
@@ -805,15 +819,15 @@ In watch mode, the planner-level big-delete check is disabled (`threshold=MaxInt
 **Flow in `processBatch()`**: After `planner.Plan()` returns, the engine counts `ActionLocalDelete` + `ActionRemoteDelete` actions and calls `counter.Add(count)`. If `counter.IsHeld()`:
 1. Delete actions are filtered out of the plan (via `applyDeleteCounter()`)
 2. Non-delete actions continue to DepGraph and execute normally
-3. Held deletes are recorded as `sync_failures` rows with `issue_type=big_delete_held` via `UpsertActionableFailures()`
+3. Held deletes are recorded in the `held_deletes` table with `state='held'`
 
-**CLI notification**: `issues` shows held deletes in a dedicated "HELD DELETES" section. User approves them via `issues force-deletes`.
+**CLI notification**: `issues` shows held deletes in a dedicated "HELD DELETES" section. User approves them via `issues force-deletes`, which records `state='approved'` either by socket RPC to the daemon or directly in the DB when no daemon is running.
 
-**External change detection**: A 10-second `recheckTicker` in the `RunWatch()` select loop runs `PRAGMA data_version` to detect CLI writes. When the data version changes, `handleExternalChanges()` queries `ListSyncFailuresByIssueType(IssueBigDeleteHeld)`. If zero rows remain (user cleared them all), calls `counter.Release()`. On the next observation cycle, deletions are re-observed and dispatched normally.
+**External change detection**: A 10-second `recheckTicker` in the `RunWatch()` select loop runs `PRAGMA data_version` to detect offline CLI writes. When the data version changes, `handleExternalChanges()` queries held-delete rows. If no `state='held'` rows remain, it calls `counter.Release()`. Socket approval also wakes the runner immediately. On the next user-intent pass, approved deletes are rebuilt into planner events and dispatched normally.
 
-**Startup cleanup**: `RunWatch()` clears stale `big_delete_held` entries from prior daemon sessions, since the in-memory counter resets on restart.
+**Consumption**: Approved rows are consumed only after the matching delete action succeeds. Approved deletes are excluded from big-delete counters and holds, so the protection does not retrigger for work the user already approved.
 
-**Force mode**: `--force` skips counter creation (`deleteCounter` stays nil), so no watch-mode big-delete protection applies.
+One-shot sync uses the same durable workflow: if the planned delete count exceeds `big_delete_threshold`, unapproved delete actions are filtered out and stored as `held`; after approval, the next ordinary sync pass executes and consumes them. There is no sync/watch force-flag bypass path.
 
 ### Rationale
 

@@ -113,6 +113,27 @@ func TestDefaultDataDir_XDGFallback(t *testing.T) {
 	assert.Contains(t, result, appName)
 }
 
+func TestControlSocketPath_UsesDataDirWhenShortEnough(t *testing.T) {
+	xdgDir := filepath.Join(os.TempDir(), "odgo-short")
+	t.Setenv("XDG_DATA_HOME", xdgDir)
+
+	expected := filepath.Join(xdgDir, appName, "control.sock")
+	require.LessOrEqual(t, len(expected), unixSocketPathSoftLimit)
+	assert.Equal(t, expected, ControlSocketPath())
+}
+
+func TestControlSocketPath_UsesShortRuntimePathWhenDataDirIsTooLong(t *testing.T) {
+	longDir := filepath.Join(t.TempDir(), strings.Repeat("very-long-control-root-", 8))
+	t.Setenv("XDG_DATA_HOME", longDir)
+
+	path := ControlSocketPath()
+	assert.NotEqual(t, filepath.Join(longDir, appName, "control.sock"), path)
+	assert.LessOrEqual(t, len(path), unixSocketPathSoftLimit)
+	assert.Contains(t, path, "odgo-")
+	assert.True(t, strings.HasSuffix(path, "control.sock"))
+	assert.Equal(t, path, ControlSocketPath(), "hashed socket path should be stable within a data dir")
+}
+
 // Validates: R-4.1.2
 func TestDefaultCacheDir_XDGOverride(t *testing.T) {
 	xdgDir := t.TempDir()

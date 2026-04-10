@@ -124,7 +124,7 @@ func resolveEachConflict(
 	conflicts []synctypes.ConflictRecord,
 	resolution string,
 	dryRun bool,
-	resolveFn func(id, resolution string) error,
+	resolveFn func(id, resolution string) (string, error),
 ) error {
 	if len(conflicts) == 0 {
 		cc.Statusf("No unresolved conflicts.\n")
@@ -138,11 +138,12 @@ func resolveEachConflict(
 			continue
 		}
 
-		if err := resolveFn(c.ID, resolution); err != nil {
+		status, err := resolveFn(c.ID, resolution)
+		if err != nil {
 			return fmt.Errorf("resolving %s: %w", c.Path, err)
 		}
 
-		cc.Statusf("Resolved %s as %s\n", c.Path, resolution)
+		cc.Statusf("Queued %s as %s (%s)\n", c.Path, resolution, status)
 	}
 
 	return nil
@@ -155,7 +156,7 @@ func resolveSingleConflict(
 	dryRun bool,
 	listFn func() ([]synctypes.ConflictRecord, error),
 	listAllFn func() ([]synctypes.ConflictRecord, error),
-	resolveFn func(id, resolution string) error,
+	resolveFn func(id, resolution string) (string, error),
 ) error {
 	conflicts, err := listFn()
 	if err != nil {
@@ -169,9 +170,9 @@ func resolveSingleConflict(
 
 	if !found {
 		if listAllFn != nil {
-			allConflicts, err := listAllFn()
-			if err != nil {
-				return err
+			allConflicts, listAllErr := listAllFn()
+			if listAllErr != nil {
+				return listAllErr
 			}
 
 			if resolvedConflict, resolved, findErr := findConflict(allConflicts, idOrPath); findErr != nil {
@@ -190,11 +191,12 @@ func resolveSingleConflict(
 		return nil
 	}
 
-	if err := resolveFn(target.ID, resolution); err != nil {
+	status, err := resolveFn(target.ID, resolution)
+	if err != nil {
 		return err
 	}
 
-	cc.Statusf("Resolved %s as %s\n", target.Path, resolution)
+	cc.Statusf("Queued %s as %s (%s)\n", target.Path, resolution, status)
 
 	return nil
 }
@@ -230,37 +232,43 @@ func findConflict(conflicts []synctypes.ConflictRecord, idOrPath string) (*synct
 }
 
 type conflictJSON struct {
-	ID           string `json:"id"`
-	Path         string `json:"path"`
-	ConflictType string `json:"conflict_type"`
-	DetectedAt   string `json:"detected_at"`
-	LocalHash    string `json:"local_hash,omitempty"`
-	RemoteHash   string `json:"remote_hash,omitempty"`
-	Resolution   string `json:"resolution"`
-	ResolvedAt   string `json:"resolved_at,omitempty"`
-	ResolvedBy   string `json:"resolved_by,omitempty"`
+	ID                  string `json:"id"`
+	Path                string `json:"path"`
+	ConflictType        string `json:"conflict_type"`
+	DetectedAt          string `json:"detected_at"`
+	LocalHash           string `json:"local_hash,omitempty"`
+	RemoteHash          string `json:"remote_hash,omitempty"`
+	State               string `json:"state"`
+	Resolution          string `json:"resolution"`
+	RequestedResolution string `json:"requested_resolution,omitempty"`
+	ResolutionError     string `json:"resolution_error,omitempty"`
+	ResolvedAt          string `json:"resolved_at,omitempty"`
+	ResolvedBy          string `json:"resolved_by,omitempty"`
 }
 
 func toConflictJSON(c *synctypes.ConflictRecord) conflictJSON {
 	return conflictJSON{
-		ID:           c.ID,
-		Path:         c.Path,
-		ConflictType: c.ConflictType,
-		DetectedAt:   formatNanoTimestamp(c.DetectedAt),
-		LocalHash:    c.LocalHash,
-		RemoteHash:   c.RemoteHash,
-		Resolution:   c.Resolution,
-		ResolvedBy:   c.ResolvedBy,
-		ResolvedAt:   formatNanoTimestamp(c.ResolvedAt),
+		ID:                  c.ID,
+		Path:                c.Path,
+		ConflictType:        c.ConflictType,
+		DetectedAt:          formatNanoTimestamp(c.DetectedAt),
+		LocalHash:           c.LocalHash,
+		RemoteHash:          c.RemoteHash,
+		State:               c.State,
+		Resolution:          c.Resolution,
+		RequestedResolution: c.RequestedResolution,
+		ResolutionError:     c.ResolutionError,
+		ResolvedBy:          c.ResolvedBy,
+		ResolvedAt:          formatNanoTimestamp(c.ResolvedAt),
 	}
 }
 
 func printConflictsTable(w io.Writer, conflicts []synctypes.ConflictRecord, history bool) error {
 	var headers []string
 	if history {
-		headers = []string{"ID", "PATH", "TYPE", "RESOLUTION", "RESOLVED BY", "DETECTED"}
+		headers = []string{"ID", "PATH", "TYPE", "STATE", "RESOLUTION", "RESOLVED BY", "DETECTED"}
 	} else {
-		headers = []string{"ID", "PATH", "TYPE", "DETECTED"}
+		headers = []string{"ID", "PATH", "TYPE", "STATE", "DETECTED"}
 	}
 
 	rows := make([][]string, len(conflicts))
@@ -268,11 +276,15 @@ func printConflictsTable(w io.Writer, conflicts []synctypes.ConflictRecord, hist
 		c := &conflicts[i]
 		idPrefix := truncateID(c.ID)
 		detected := formatNanoTimestamp(c.DetectedAt)
+		state := c.State
+		if c.RequestedResolution != "" && c.State != synctypes.ConflictStateResolved {
+			state = fmt.Sprintf("%s:%s", c.State, c.RequestedResolution)
+		}
 
 		if history {
-			rows[i] = []string{idPrefix, c.Path, c.ConflictType, c.Resolution, c.ResolvedBy, detected}
+			rows[i] = []string{idPrefix, c.Path, c.ConflictType, state, c.Resolution, c.ResolvedBy, detected}
 		} else {
-			rows[i] = []string{idPrefix, c.Path, c.ConflictType, detected}
+			rows[i] = []string{idPrefix, c.Path, c.ConflictType, state, detected}
 		}
 	}
 

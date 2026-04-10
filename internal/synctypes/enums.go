@@ -155,6 +155,23 @@ const (
 	ResolutionUnresolved = "unresolved"
 )
 
+// Conflict workflow state constants. Resolution is the final user choice;
+// state is the engine-owned lifecycle for queued resolution work.
+const (
+	ConflictStateUnresolved          = "unresolved"
+	ConflictStateResolutionRequested = "resolution_requested"
+	ConflictStateResolving           = "resolving"
+	ConflictStateResolveFailed       = "resolve_failed"
+	ConflictStateResolved            = "resolved"
+	ConflictStateManual              = "manual"
+)
+
+// Held-delete workflow state constants.
+const (
+	HeldDeleteStateHeld     = "held"
+	HeldDeleteStateApproved = "approved"
+)
+
 // Conflict type constants.
 const (
 	ConflictEditEdit     = "edit_edit"

@@ -38,7 +38,7 @@ func TestE2E_ZeroByteFileSync(t *testing.T) {
 
 	// Create a zero-byte file locally and upload.
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "empty.txt"), []byte{}, 0o600))
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Verify it exists remotely (poll for eventual consistency).
 	pollCLIWithConfigContains(t, opsCfgPath, nil, "empty.txt", pollTimeout, "ls", "/"+testFolder)
@@ -72,7 +72,7 @@ func TestE2E_UnicodeFilenameRoundtrip(t *testing.T) {
 	unicodeName := "café résumé.txt"
 	content := "Unicode content: àéîõü"
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, unicodeName), []byte(content), 0o600))
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Verify it exists remotely via ls (poll for eventual consistency).
 	pollCLIWithConfigContains(t, opsCfgPath, nil, "caf", pollTimeout, "ls", "/"+testFolder)
@@ -108,7 +108,7 @@ func TestE2E_InvalidFilenameRejection(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "CON"), []byte("invalid"), 0o600))
 
 	// Upload.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// The debug stderr should mention skipping the invalid entry.
 	assert.Contains(t, stderr, "skipping invalid entry",
@@ -148,7 +148,7 @@ func TestE2E_RapidFileChurn(t *testing.T) {
 	require.NoError(t, os.WriteFile(filePath, []byte(finalContent), 0o600))
 
 	// Upload.
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Verify final content remotely (poll for eventual consistency).
 	pollCLIWithConfigContains(t, opsCfgPath, nil, "churn.txt", pollTimeout, "ls", "/"+testFolder)
@@ -176,7 +176,7 @@ func TestE2E_ConflictDetectionAndResolution(t *testing.T) {
 	// Step 1: Create file and sync to establish baseline.
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "shared.txt"), []byte("original"), 0o644))
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Step 2: Modify remote side directly.
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/shared.txt", "remote version")
@@ -186,7 +186,7 @@ func TestE2E_ConflictDetectionAndResolution(t *testing.T) {
 		filepath.Join(localDir, "shared.txt"), []byte("local version"), 0o644))
 
 	// Step 4: Bidirectional sync → should detect conflict.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync")
 	assert.Contains(t, stderr, "conflict",
 		"sync should report conflict")
 

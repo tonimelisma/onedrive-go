@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -17,6 +19,11 @@ const appName = "onedrive-go"
 
 // Config file name.
 const configFileName = "config.toml"
+
+// Unix socket paths are bounded by sockaddr_un.sun_path. macOS is the tighter
+// platform in practice, so long isolated XDG roots use a short hash-based
+// runtime path instead of failing bind(2) with EINVAL.
+const unixSocketPathSoftLimit = 100
 
 // DefaultConfigDir returns the platform-specific directory for config files.
 // XDG_CONFIG_HOME is checked first on ALL platforms (enables test isolation).
@@ -109,16 +116,26 @@ func UploadSessionDir() string {
 	return filepath.Join(dir, "upload-sessions")
 }
 
-// PIDFilePath returns the path to the daemon PID file. The PID file is used
-// to prevent multiple sync --watch daemons and to deliver SIGHUP for config
-// reload. Located in the data directory alongside state DBs and tokens.
-func PIDFilePath() string {
+// ControlSocketPath returns the Unix-domain control socket path. The socket is
+// the single local IPC boundary for daemon status, reload, and durable user
+// intent requests.
+func ControlSocketPath() string {
 	dir := DefaultDataDir()
 	if dir == "" {
 		return ""
 	}
 
-	return filepath.Join(dir, "daemon.pid")
+	return controlSocketPathForDataDir(dir)
+}
+
+func controlSocketPathForDataDir(dir string) string {
+	candidate := filepath.Join(dir, "control.sock")
+	if len(candidate) <= unixSocketPathSoftLimit {
+		return candidate
+	}
+
+	sum := sha256.Sum256([]byte(dir))
+	return filepath.Join(os.TempDir(), "odgo-"+hex.EncodeToString(sum[:])[:16], "control.sock")
 }
 
 // DefaultConfigPath returns the full path to the default config file.

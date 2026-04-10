@@ -206,9 +206,10 @@ func TestNewSyncCmd_Structure(t *testing.T) {
 	cmd := newSyncCmd()
 	assert.Equal(t, "sync", cmd.Use)
 
-	for _, flag := range []string{"download-only", "upload-only", "dry-run", "force", "watch", "full"} {
+	for _, flag := range []string{"download-only", "upload-only", "dry-run", "watch", "full"} {
 		assert.NotNil(t, cmd.Flags().Lookup(flag), "missing flag %q", flag)
 	}
+	assert.Nil(t, cmd.Flags().Lookup("force"), "sync must not expose ad hoc force execution")
 }
 
 func TestNewSyncCmd_FullWatchMutualExclusivity(t *testing.T) {

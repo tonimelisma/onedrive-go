@@ -43,7 +43,7 @@ func TestE2E_Verify_JSON(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "good.txt"), []byte("good"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "tamper.txt"), []byte("original"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Tamper with local file.
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "tamper.txt"), []byte("TAMPERED"), 0o600))
@@ -109,7 +109,7 @@ func TestE2E_Sync_QuietMode(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "quiet.txt"), []byte("quiet test"), 0o600))
 
 	// Sync with --quiet.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--quiet", "--upload-only", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--quiet", "--upload-only")
 
 	// Quiet mode should suppress DEBUG and INFO level log lines.
 	for _, line := range strings.Split(stderr, "\n") {
@@ -156,7 +156,7 @@ func TestE2E_Sync_MultiDriveReport(t *testing.T) {
 	})
 
 	// Sync all drives.
-	_, stderr := runCLIWithConfigAllDrives(t, cfgPath, env, "sync", "--upload-only", "--force")
+	_, stderr := runCLIWithConfigAllDrives(t, cfgPath, env, "sync", "--upload-only")
 
 	// Multi-drive output should have per-drive headers with "---" separators.
 	assert.Contains(t, stderr, "---", "multi-drive report should have separator headers")

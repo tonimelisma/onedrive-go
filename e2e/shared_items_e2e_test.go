@@ -193,14 +193,14 @@ func TestE2E_Shared_ReadOnlyFolder_DiscoveryDriveAddAndBlockedWriteUX(t *testing
 	}
 	require.NotEmpty(t, syncDir, "drive list should expose the configured sync_dir for the added read-only shared folder")
 
-	_, stderr := runCLIWithConfigForDrive(t, cfgPath, env, readOnlyFixture.FolderItem.Selector, "sync", "--force", "--download-only")
+	_, stderr := runCLIWithConfigForDrive(t, cfgPath, env, readOnlyFixture.FolderItem.Selector, "sync", "--download-only")
 	assert.Contains(t, stderr, "Mode: download-only")
 
 	blockedLocalPath := filepath.Join(syncDir, "blocked-from-recipient.txt")
 	require.NoError(t, os.MkdirAll(filepath.Dir(blockedLocalPath), 0o700))
 	require.NoError(t, os.WriteFile(blockedLocalPath, []byte("recipient write attempt\n"), 0o600))
 
-	_, stderr = runCLIWithConfigForDrive(t, cfgPath, env, readOnlyFixture.FolderItem.Selector, "sync", "--force", "--upload-only")
+	_, stderr = runCLIWithConfigForDrive(t, cfgPath, env, readOnlyFixture.FolderItem.Selector, "sync", "--upload-only")
 	assert.Contains(t, stderr, "Mode: upload-only")
 
 	issuesOut, _ := runCLIWithConfigForDrive(t, cfgPath, env, readOnlyFixture.FolderItem.Selector, "issues")
@@ -208,6 +208,6 @@ func TestE2E_Shared_ReadOnlyFolder_DiscoveryDriveAddAndBlockedWriteUX(t *testing
 	assert.Contains(t, issuesOut, "Downloads continue normally.")
 	assert.Contains(t, issuesOut, "blocked-from-recipient.txt")
 
-	_, stderr = runCLIWithConfigForDrive(t, cfgPath, env, readOnlyFixture.FolderItem.Selector, "sync", "--force", "--download-only")
+	_, stderr = runCLIWithConfigForDrive(t, cfgPath, env, readOnlyFixture.FolderItem.Selector, "sync", "--download-only")
 	assert.Contains(t, stderr, "Mode: download-only")
 }

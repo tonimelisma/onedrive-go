@@ -33,7 +33,7 @@ func TestE2E_Sync_EmptyDirectory(t *testing.T) {
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Sync upload — folder creation.
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Verify folder exists remotely.
 	pollCLIWithConfigContains(t, opsCfgPath, nil, "emptyFolder", pollTimeout, "ls", "/"+testFolder)
@@ -51,9 +51,9 @@ func TestE2E_Sync_EmptyDirectory(t *testing.T) {
 
 	// Delta endpoint may lag behind REST item endpoints (ci_issues.md §17).
 	// Re-run sync until delta catches up and the deletion propagates locally.
-	// Don't use --force: a fresh delta only lists existing items, so the
-	// deletion would be invisible. Incremental delta (with saved token) is
-	// required. Big-delete protection won't trigger (< 10 baseline items).
+	// Incremental delta (with saved token) is required because a fresh delta
+	// only lists existing items, so the deletion would be invisible.
+	// Big-delete protection won't trigger (< 10 baseline items).
 	// Delta endpoint may lag 60-120s behind REST; use 180s to avoid flakes.
 	requireSyncEventuallyConverges(
 		t,
@@ -93,7 +93,7 @@ func TestE2E_Sync_NestedDeletion(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "a", "b", "c", "deep.txt"), []byte("deep level"), 0o600))
 
 	// Sync upload.
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Verify deep file exists remotely.
 	pollCLIWithConfigContains(t, opsCfgPath, nil, "deep.txt", pollTimeout, "ls", "/"+testFolder+"/a/b/c")
@@ -160,20 +160,20 @@ func TestE2E_Sync_ResolveKeepLocalThenSync(t *testing.T) {
 	filePath := filepath.Join(localDir, "keeplocal.txt")
 	require.NoError(t, os.WriteFile(filePath, []byte("original"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Modify both sides to create edit-edit conflict.
 	require.NoError(t, os.WriteFile(filePath, []byte("local version wins"), 0o600))
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/keeplocal.txt", "remote version loses")
 
 	// Bidirectional sync — detects conflict.
-	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync")
 
 	// Resolve --keep-local.
 	runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/keeplocal.txt", "--keep-local")
 
 	// Sync to push local version to remote.
-	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync")
 
 	// Verify remote has local content.
 	remoteContent := getRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/keeplocal.txt")
@@ -201,21 +201,21 @@ func TestE2E_Sync_ResolveKeepRemoteThenSync(t *testing.T) {
 	filePath := filepath.Join(localDir, "keepremote.txt")
 	require.NoError(t, os.WriteFile(filePath, []byte("original"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Modify both sides.
 	require.NoError(t, os.WriteFile(filePath, []byte("local version loses"), 0o600))
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/keepremote.txt", "remote version wins")
 
 	// Bidirectional sync — conflict detected, remote content downloaded.
-	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync")
 
 	// Resolve --keep-remote.
 	_, stderr := runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/keepremote.txt", "--keep-remote")
 	assert.Contains(t, stderr, "Resolved")
 
 	// Sync to finalize.
-	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync")
 
 	// Verify local file has remote content.
 	localData, err := os.ReadFile(filePath)
@@ -241,7 +241,7 @@ func TestE2E_Sync_NosyncGuard(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(syncDir, ".nosync"), []byte{}, 0o600))
 
 	// Sync should fail with nosync error.
-	output := runCLIWithConfigExpectError(t, cfgPath, env, "sync", "--upload-only", "--force")
+	output := runCLIWithConfigExpectError(t, cfgPath, env, "sync", "--upload-only")
 	assert.Contains(t, output, "nosync", "sync should report .nosync guard file presence")
 }
 
@@ -264,14 +264,14 @@ func TestE2E_Sync_MtimeOnlyChange(t *testing.T) {
 	filePath := filepath.Join(localDir, "mtime-only.txt")
 	require.NoError(t, os.WriteFile(filePath, []byte("stable content"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Change only mtime (content stays the same).
 	newTime := time.Now().Add(-24 * time.Hour)
 	require.NoError(t, os.Chtimes(filePath, newTime, newTime))
 
 	// Re-sync — should detect no changes (hash matches baseline).
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 	assert.Contains(t, stderr, "No changes detected",
 		"mtime-only change should not trigger upload when hash matches baseline")
 }
@@ -300,11 +300,11 @@ func TestE2E_Sync_IdempotentReSync(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(subDir, "nested.txt"), []byte("nested content"), 0o600))
 
 	// Sync bidirectional.
-	runCLIWithConfig(t, cfgPath, env, "sync", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync")
 
 	// Re-sync — the owned subtree should stay stable even if unrelated tests
 	// churn elsewhere on the shared live drive.
-	assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync", "--force")
+	assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync")
 
 	// The test-owned remote subtree should still contain the same files.
 	stdout, _ := runCLIWithConfig(t, opsCfgPath, nil, "ls", "/"+testFolder)
@@ -344,7 +344,7 @@ func TestE2E_Sync_TransferWorkersConfig(t *testing.T) {
 	}
 
 	// Sync upload.
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--force")
+	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Verify all 5 files exist remotely.
 	stdout, _ := pollCLIWithConfigContains(t, opsCfgPath, nil, "worker-file-5.txt", pollTimeout, "ls", "/"+testFolder)

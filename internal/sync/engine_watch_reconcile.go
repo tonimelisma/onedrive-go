@@ -48,13 +48,11 @@ func (rt *watchRuntime) handleRecheckTick(ctx context.Context) {
 }
 
 // handleExternalChanges reacts to external DB modifications detected via
-// PRAGMA data_version. Currently handles big-delete clearance: if the
-// counter is held but all big_delete_held rows have been cleared (via
-// `issues force-deletes`), releases the counter so deletes resume on the next
-// observation cycle.
+// PRAGMA data_version. Approved held deletes release the rolling counter; the
+// engine consumes the approved rows through user-intent dispatch.
 func (rt *watchRuntime) handleExternalChanges(ctx context.Context) {
 	if rt.deleteCounter != nil && rt.deleteCounter.IsHeld() {
-		rows, err := rt.engine.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueBigDeleteHeld)
+		rows, err := rt.engine.baseline.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateHeld)
 		if err != nil {
 			rt.engine.logger.Warn("failed to check big-delete-held entries",
 				slog.String("error", err.Error()),

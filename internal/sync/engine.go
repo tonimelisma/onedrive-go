@@ -320,56 +320,25 @@ func (e *Engine) ListAllConflicts(ctx context.Context) ([]synctypes.ConflictReco
 	return conflicts, nil
 }
 
-// ResolveConflict resolves a single conflict by ID. For keep_both, this is
-// a DB-only update. For keep_local, the local file is uploaded to overwrite
-// the remote. For keep_remote, the remote file is downloaded to overwrite
-// the local. The conflict record and baseline are updated atomically.
+// ResolveConflict queues and immediately processes a conflict resolution
+// through the same engine-owned path used by daemon/user-intent processing.
+// CLI commands must not call this; they persist requests via SyncStore or the
+// control socket so a running engine remains the sole side-effect owner.
 func (e *Engine) ResolveConflict(ctx context.Context, conflictID, resolution string) error {
-	c, err := e.baseline.GetConflict(ctx, conflictID)
+	result, err := e.baseline.RequestConflictResolution(ctx, conflictID, resolution)
 	if err != nil {
-		return fmt.Errorf("sync: loading conflict %s: %w", conflictID, err)
+		return fmt.Errorf("sync: request conflict resolution: %w", err)
 	}
 
-	switch resolution {
-	case synctypes.ResolutionKeepBoth:
-		// Update baseline entries for both the original file and the conflict
-		// copy so the next sync sees them as unchanged. Without this, the
-		// scanner would flag the original (stale hash) and the conflict copy
-		// (no baseline entry) as needing action.
-		if err := e.resolveKeepBoth(ctx, c); err != nil {
-			return fmt.Errorf("sync: resolving conflict %s (%s): %w", c.ID, synctypes.ResolutionKeepBoth, err)
-		}
-
-		if err := e.baseline.ResolveConflict(ctx, c.ID, resolution); err != nil {
-			return fmt.Errorf("sync: marking conflict %s resolved as %s: %w", c.ID, resolution, err)
-		}
-
+	switch result.Status {
+	case syncstore.ConflictRequestQueued, syncstore.ConflictRequestAlreadyQueued:
+		return e.processQueuedConflictResolutions(ctx)
+	case syncstore.ConflictRequestAlreadyResolved:
 		return nil
-
-	case synctypes.ResolutionKeepLocal:
-		if err := e.resolveKeepLocal(ctx, c); err != nil {
-			return fmt.Errorf("sync: resolving conflict %s (%s): %w", c.ID, synctypes.ResolutionKeepLocal, err)
-		}
-
-		if err := e.baseline.ResolveConflict(ctx, c.ID, resolution); err != nil {
-			return fmt.Errorf("sync: marking conflict %s resolved as %s: %w", c.ID, resolution, err)
-		}
-
-		return nil
-
-	case synctypes.ResolutionKeepRemote:
-		if err := e.resolveKeepRemote(ctx, c); err != nil {
-			return fmt.Errorf("sync: resolving conflict %s (%s): %w", c.ID, synctypes.ResolutionKeepRemote, err)
-		}
-
-		if err := e.baseline.ResolveConflict(ctx, c.ID, resolution); err != nil {
-			return fmt.Errorf("sync: marking conflict %s resolved as %s: %w", c.ID, resolution, err)
-		}
-
-		return nil
-
+	case syncstore.ConflictRequestAlreadyResolving, syncstore.ConflictRequestDifferentStrategy:
+		return fmt.Errorf("sync: conflict %s resolution request is %s", conflictID, result.Status)
 	default:
-		return fmt.Errorf("sync: unknown resolution strategy %q", resolution)
+		return fmt.Errorf("sync: conflict %s resolution request is %s", conflictID, result.Status)
 	}
 }
 

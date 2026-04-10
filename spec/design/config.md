@@ -37,6 +37,13 @@ Only two environment variables: `ONEDRIVE_GO_CONFIG` (config path override) and 
 
 Platform-specific paths following XDG (Linux) and Application Support (macOS) conventions. Config and data may share the same directory on macOS.
 
+`ControlSocketPath()` normally places the Unix control socket under
+`DefaultDataDir()`. Unix socket path length is platform-bounded, so when the
+full data-dir socket path is too long the config layer derives a stable,
+hash-named runtime directory under `os.TempDir()` and places only the socket
+there. Durable state, tokens, logs, and drive metadata remain under the normal
+config/data/cache roots.
+
 `config` uses two filesystem boundaries, not ad hoc `os.*` calls:
 
 - `fsroot` for repo-managed state selected by the config layer: config files, tokens, account metadata, drive metadata, state DB path discovery
@@ -231,7 +238,7 @@ successful loads with warnings map to `actionable`, and clean loads map to
 
 ## Config Holder
 
-`config.Holder` wraps `*Config` + immutable config path behind an `RWMutex`. Both `SessionProvider` and `multisync.OrchestratorConfig` share the same `*Holder` instance. On SIGHUP reload, one `holder.Update(newCfg)` call atomically updates config for all consumers.
+`config.Holder` wraps `*Config` + immutable config path behind an `RWMutex`. Both `SessionProvider` and `multisync.OrchestratorConfig` share the same `*Holder` instance. On control-socket reload, one `holder.Update(newCfg)` call atomically updates config for all consumers.
 
 ## Runtime Ownership
 
@@ -240,7 +247,7 @@ successful loads with warnings map to `actionable`, and clean loads map to
 - `Holder.mu` guards exactly one field: the current `*Config` snapshot.
 - `Holder.path` is immutable after construction and intentionally read without locking.
 - Reload callers own goroutine lifetime outside the package. `config` exposes synchronous load/update operations only.
-- The package owns no channels or timers. SIGHUP wiring lives in the control plane; `config` only provides the atomic snapshot swap.
+- The package owns no channels or timers. Control-socket request handling lives in the control plane; `config` only provides the atomic snapshot swap.
 
 ## Auto-Creation
 

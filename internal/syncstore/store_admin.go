@@ -187,22 +187,6 @@ func (m *SyncStore) ResetAllFailures(ctx context.Context) error {
 	return nil
 }
 
-// FindRemoteBlockedTarget resolves user input to either one held blocked path
-// or a whole derived perm:remote boundary. Boundary matches win over exact-row
-// matches so a blocked folder-create at the boundary path still treats the
-// scope name as the scope, not as a single held row.
-func (m *SyncStore) ApproveHeldDeletes(ctx context.Context) error {
-	_, err := m.db.ExecContext(ctx,
-		`DELETE FROM sync_failures WHERE issue_type = ? AND category = ?`,
-		synctypes.IssueBigDeleteHeld, synctypes.CategoryActionable,
-	)
-	if err != nil {
-		return fmt.Errorf("sync: approving held deletes: %w", err)
-	}
-
-	return nil
-}
-
 // DropLegacyRemoteBlockedScope removes old persisted perm:remote authority
 // rows while leaving held failures intact. New code derives the runtime scope
 // entirely from the held rows.

@@ -4,8 +4,8 @@ import "sync"
 
 // Holder provides thread-safe access to a mutable *Config and an immutable
 // config file path. Both SessionProvider and the multi-drive control plane
-// read through a shared Holder, so SIGHUP reload updates config in exactly
-// one place.
+// read through a shared Holder, so control-socket reload updates config in
+// exactly one place.
 type Holder struct {
 	mu   sync.RWMutex // guards cfg
 	cfg  *Config
@@ -35,9 +35,9 @@ func (h *Holder) Path() string {
 	return h.path
 }
 
-// Update replaces the config. Thread-safe (write lock). Called on SIGHUP
-// reload — one call updates config for all consumers (SessionProvider and the
-// control plane).
+// Update replaces the config. Thread-safe (write lock). Called on
+// control-socket reload — one call updates config for all consumers
+// (SessionProvider and the control plane).
 func (h *Holder) Update(cfg *Config) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

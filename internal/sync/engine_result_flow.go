@@ -105,6 +105,7 @@ func (flow *engineFlow) routeReadyForClass(
 func (flow *engineFlow) applySuccessEffects(ctx context.Context, watch *watchRuntime, r *synctypes.WorkerResult) {
 	flow.succeeded++
 	flow.clearFailureOnSuccess(ctx, r)
+	flow.consumeHeldDeleteOnSuccess(ctx, r)
 	if watch != nil {
 		watch.scopeState.RecordSuccess(r)
 	}

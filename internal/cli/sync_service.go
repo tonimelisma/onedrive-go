@@ -17,7 +17,6 @@ import (
 type syncCommandOptions struct {
 	Mode          synctypes.SyncMode
 	Watch         bool
-	Force         bool
 	DryRun        *bool
 	FullReconcile bool
 }
@@ -89,10 +88,11 @@ func newSyncService(cc *CLIContext) *syncService {
 			)
 
 			orch := multisync.NewOrchestrator(&multisync.OrchestratorConfig{
-				Holder:   holder,
-				Drives:   drives,
-				Provider: provider,
-				Logger:   logger,
+				Holder:            holder,
+				Drives:            drives,
+				Provider:          provider,
+				Logger:            logger,
+				ControlSocketPath: config.ControlSocketPath(),
 			})
 
 			return orch.RunOnce(ctx, mode, opts)
@@ -128,7 +128,6 @@ func (s *syncService) run(ctx context.Context, opts syncCommandOptions) error {
 	holder := config.NewHolder(rawCfg, s.cc.CfgPath)
 	if opts.Watch {
 		return s.watchRunner(ctx, holder, selectors, opts.Mode, synctypes.WatchOpts{
-			Force:              opts.Force,
 			PollInterval:       parsePollInterval(rawCfg.PollInterval),
 			SafetyScanInterval: parseDurationOrZero(rawCfg.SafetyScanInterval),
 		}, logger, s.cc.Status())
@@ -156,7 +155,6 @@ func (s *syncService) run(ctx context.Context, opts syncCommandOptions) error {
 
 	reports := s.runOnceRunner(ctx, holder, drives, opts.Mode, synctypes.RunOpts{
 		DryRun:        effectiveDryRun,
-		Force:         opts.Force,
 		FullReconcile: opts.FullReconcile,
 	}, logger)
 

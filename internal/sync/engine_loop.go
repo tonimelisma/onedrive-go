@@ -243,7 +243,9 @@ func (rt *watchRuntime) runWatchStep(
 		return rt.handleWatchScopeChange(ctx, p, outbox, &scopeChange, ok)
 	case <-p.recheckC:
 		rt.handleRecheckTick(ctx)
-		return outbox, false, nil
+		return rt.appendUserIntentDispatch(ctx, p, outbox), false, nil
+	case <-p.userIntentC:
+		return rt.appendUserIntentDispatch(ctx, p, outbox), false, nil
 	case <-p.reconcileC:
 		rt.runFullReconciliationAsync(ctx, p.bl)
 		return outbox, false, nil
@@ -259,6 +261,18 @@ func (rt *watchRuntime) runWatchStep(
 		rt.beginWatchDrain(ctx, p, outbox)
 		return nil, false, nil
 	}
+}
+
+func (rt *watchRuntime) appendUserIntentDispatch(
+	ctx context.Context,
+	p *watchPipeline,
+	outbox []*synctypes.TrackedAction,
+) []*synctypes.TrackedAction {
+	if len(outbox) > 0 {
+		return outbox
+	}
+
+	return append(outbox, rt.runUserIntentDispatch(ctx, p.bl, p.mode, p.safety)...)
 }
 
 func (rt *watchRuntime) handleObserverExit(p *watchPipeline, shuttingDown bool) error {
@@ -315,6 +329,7 @@ func (rt *watchRuntime) disableDrainInputs(p *watchPipeline) {
 	p.skippedCh = nil
 	p.scopeChanges = nil
 	p.recheckC = nil
+	p.userIntentC = nil
 	p.reconcileC = nil
 }
 
@@ -432,6 +447,11 @@ func (rt *watchRuntime) handleBootstrapWorkerResult(
 	ok bool,
 ) ([]*synctypes.TrackedAction, bool, error) {
 	if !ok {
+		if contextIsCanceled(ctx) {
+			p.results = nil
+			rt.beginWatchDrain(ctx, p, outbox)
+			return nil, rt.drainLoopDone(p), nil
+		}
 		return rt.handleBootstrapResultsClosed(ctx)
 	}
 
@@ -486,6 +506,11 @@ func (rt *watchRuntime) handleWatchWorkerResult(
 			p.results = nil
 			return outbox, rt.drainLoopDone(p), nil
 		}
+		if contextIsCanceled(ctx) {
+			p.results = nil
+			rt.beginWatchDrain(ctx, p, outbox)
+			return nil, rt.drainLoopDone(p), nil
+		}
 		return outbox, false, fmt.Errorf("sync: worker results channel closed unexpectedly")
 	}
 
@@ -494,6 +519,10 @@ func (rt *watchRuntime) handleWatchWorkerResult(
 		return outbox, false, outcome.terminateErr
 	}
 	return append(outbox, outcome.dispatched...), false, nil
+}
+
+func contextIsCanceled(ctx context.Context) bool {
+	return ctx.Err() != nil
 }
 
 func (rt *watchRuntime) handleWatchSkipped(

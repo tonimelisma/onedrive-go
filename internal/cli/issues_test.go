@@ -241,15 +241,16 @@ func newHeldDeleteIssuesCmd(t *testing.T) (*cobra.Command, string, *bytes.Buffer
 
 	ctx := t.Context()
 	driveID := driveid.New("drive-1")
-	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
-		Path:       "delete/a.txt",
-		DriveID:    driveID,
-		Direction:  synctypes.DirectionDelete,
-		ActionType: synctypes.ActionRemoteDelete,
-		IssueType:  synctypes.IssueBigDeleteHeld,
-		Category:   synctypes.CategoryActionable,
-		ErrMsg:     "held delete",
-	}, nil))
+	require.NoError(t, mgr.UpsertHeldDeletes(ctx, []synctypes.HeldDeleteRecord{{
+		Path:          "delete/a.txt",
+		DriveID:       driveID,
+		ItemID:        "item-a",
+		ActionType:    synctypes.ActionRemoteDelete,
+		State:         synctypes.HeldDeleteStateHeld,
+		HeldAt:        1,
+		LastPlannedAt: 1,
+		LastError:     "held delete",
+	}}))
 	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
 		Path:       "docs/CON",
 		DriveID:    driveID,
@@ -297,7 +298,7 @@ func newHeldDeleteIssuesCmd(t *testing.T) (*cobra.Command, string, *bytes.Buffer
 	return cmd, expectedPath, &buf
 }
 
-func TestIssuesForceDeletes_ClearsHeldDeletesOnly(t *testing.T) {
+func TestIssuesForceDeletes_ApprovesHeldDeletesOnly(t *testing.T) {
 	cmd, dbPath, out := newHeldDeleteIssuesCmd(t)
 
 	cmd.SetArgs([]string{"force-deletes"})
@@ -313,4 +314,13 @@ func TestIssuesForceDeletes_ClearsHeldDeletesOnly(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
 	assert.ElementsMatch(t, []string{"docs/CON", "Shared/Docs/a.txt"}, []string{rows[0].Path, rows[1].Path})
+
+	held, err := mgr.ListHeldDeletesByState(t.Context(), synctypes.HeldDeleteStateHeld)
+	require.NoError(t, err)
+	assert.Empty(t, held)
+
+	approved, err := mgr.ListHeldDeletesByState(t.Context(), synctypes.HeldDeleteStateApproved)
+	require.NoError(t, err)
+	require.Len(t, approved, 1)
+	assert.Equal(t, "delete/a.txt", approved[0].Path)
 }
