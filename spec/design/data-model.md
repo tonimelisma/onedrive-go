@@ -13,7 +13,9 @@ Engine: `modernc.org/sqlite` (pure Go, no CGO). WAL mode, `synchronous = FULL`, 
 
 The store applies embedded goose migrations and records schema history in
 `goose_db_version`. Existing state DBs with user tables but no goose history
-are rejected with rebuild/migrate guidance rather than guessed forward. Most
+are rejected with rebuild/migrate guidance rather than guessed forward.
+Preexisting goose metadata is also rejected when it is empty or malformed; a
+broken `goose_db_version` table is not treated as a pristine empty store. Most
 sync state is rebuildable from local filesystem plus OneDrive truth, but
 `conflict_requests` rows and `held_deletes` approvals are durable user intent
 and must not be silently migrated or erased by guesswork.
@@ -223,9 +225,11 @@ Fresh databases start at `00001_init.sql`; later migrations rewrite schema and
 data in place while preserving durable user intent.
 
 Existing DBs that contain user tables but no goose history are rejected
-instead of guessed forward. That fail-loudly behavior is intentional because
-the DB now holds explicit user decisions (`conflict_requests`,
-`held_deletes`), not only rebuildable cache.
+instead of guessed forward. Existing DBs with empty or malformed
+`goose_db_version` history are also rejected before migration startup, even if
+that broken goose table is the only user-visible table. That fail-loudly
+behavior is intentional because the DB now holds explicit user decisions
+(`conflict_requests`, `held_deletes`), not only rebuildable cache.
 
 The current migration stream includes a schema split that moves active
 conflict-resolution workflow out of `conflicts` and into
