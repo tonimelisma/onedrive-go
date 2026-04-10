@@ -20,6 +20,7 @@ type heldDeleteKey struct {
 	driveID    string
 	actionType synctypes.ActionType
 	path       string
+	itemID     string
 }
 
 func deleteKeyFromAction(action *synctypes.Action) heldDeleteKey {
@@ -31,6 +32,7 @@ func deleteKeyFromAction(action *synctypes.Action) heldDeleteKey {
 		driveID:    action.DriveID.String(),
 		actionType: action.Type,
 		path:       action.Path,
+		itemID:     action.ItemID,
 	}
 }
 
@@ -43,6 +45,7 @@ func deleteKeyFromRecord(record *synctypes.HeldDeleteRecord) heldDeleteKey {
 		driveID:    record.DriveID.String(),
 		actionType: record.ActionType,
 		path:       record.Path,
+		itemID:     record.ItemID,
 	}
 }
 
@@ -216,7 +219,7 @@ func syncFailureRowFromHeldDelete(record *synctypes.HeldDeleteRecord) synctypes.
 }
 
 func (flow *engineFlow) consumeHeldDelete(ctx context.Context, record *synctypes.HeldDeleteRecord) {
-	if err := flow.engine.baseline.DeleteHeldDelete(ctx, record.DriveID, record.ActionType, record.Path); err != nil {
+	if err := flow.engine.baseline.DeleteHeldDelete(ctx, record.DriveID, record.ActionType, record.Path, record.ItemID); err != nil {
 		flow.engine.logger.Warn("consume resolved held delete",
 			slog.String("path", record.Path),
 			slog.String("error", err.Error()),
@@ -234,7 +237,7 @@ func (flow *engineFlow) consumeHeldDeleteOnSuccess(ctx context.Context, r *synct
 		driveID = flow.engine.driveID
 	}
 
-	if err := flow.engine.baseline.ConsumeHeldDelete(ctx, driveID, r.ActionType, r.Path); err != nil {
+	if err := flow.engine.baseline.ConsumeHeldDelete(ctx, driveID, r.ActionType, r.Path, r.ItemID); err != nil {
 		flow.engine.logger.Warn("consume approved held delete",
 			slog.String("path", r.Path),
 			slog.String("error", err.Error()),

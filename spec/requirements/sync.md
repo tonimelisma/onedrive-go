@@ -25,13 +25,13 @@ When the same file has been modified on both the local filesystem and OneDrive s
 - R-2.3.3: When the user runs `issues`, the system shall list current drive-level sync issues only, excluding conflicts and retry-queue internals. [verified]
 - R-2.3.4: When the user runs `conflicts`, the system shall list unresolved conflicts, and `conflicts --history` shall include resolved conflicts. [verified]
 - R-2.3.5: When the user runs `conflicts resolve <path>`, the system shall durably request one resolution strategy (`keep-local`, `keep-remote`, `keep-both`) and the next running sync engine shall execute that request. If a daemon is running the request shall go through the control socket; otherwise it shall be written directly to the drive state DB. [verified]
-- R-2.3.6: When the user runs `issues force-deletes`, the system shall mark all currently held big-delete entries for the selected drive as `approved` without affecting other issue types. If a daemon is running the approval shall go through the control socket; otherwise it shall be written directly to the drive state DB. [verified]
+- R-2.3.6: When the user runs `issues approve-deletes`, the system shall mark all currently held big-delete entries for the selected drive as `approved` without affecting other issue types. If a watch daemon is running the approval shall go through the control socket; otherwise it shall be written directly to the drive state DB. Approved deletes shall execute only when the planned delete matches drive, action type, path, and item ID. [verified]
 - R-2.3.7: When the `issues` command encounters more than 10 failures of the same issue type, the system shall group them under a single heading with count and show the first 5 paths. When `--verbose` is passed, the system shall show all paths. [verified]
 - R-2.3.8: When displaying scope-level issues where drives have independent scopes (507 quota, shared-folder write blocks), the system shall sub-group by scope (own drive vs each shortcut). [verified]
 - R-2.3.9: When displaying shortcut-scoped failures, the system shall use the shortcut's local path name (human-readable), not internal drive IDs or scope keys. [verified]
 - R-2.3.10: When `--json` is passed, `issues` shall output structured JSON with `failure_groups` and `held_deletes` only. Conflicts shall be reported through the separate `conflicts` command. [verified]
 - R-2.3.11: Shared-folder write blocks shall have no manual CLI retry or recheck command. The system shall revalidate them automatically during normal sync/watch permission checks while blocked writes still exist. [verified]
-- R-2.3.12: Repeated `issues force-deletes` and repeated conflict-resolution attempts shall be replay-safe. Repeating the same mutation shall either be a no-op or return a stable already-queued/already-resolved result, without duplicate durable effects or partial scope release. [verified]
+- R-2.3.12: Repeated `issues approve-deletes` and repeated conflict-resolution attempts shall be replay-safe. Repeating the same mutation shall either be a no-op or return a stable already-queued/already-resolved result, without duplicate durable effects or partial scope release. Concurrent conflict requests are first-writer-wins until the engine claim completes: same strategy is idempotent, different strategy is rejected, and resolving/resolved conflicts report their current state. [verified]
 
 ## R-2.4 Filtering [verified]
 
@@ -58,6 +58,7 @@ persisted scope projection rather than unrelated metadata.
 - R-2.5.3: On startup, the system shall detect items stuck in `syncing` state and reset them for re-planning (reconciler). [verified]
 - R-2.5.4: When `ResetInProgressStates` resets items to pending state, the system shall create corresponding `sync_failures` entries so the `FailureRetrier` can rediscover and re-process them. Without this bridge, items that crashed mid-execution become zombies — the delta token was already advanced, so no new events arrive. [verified]
 - R-2.5.5: The repository shall provide a store-owned sync-state audit and deterministic safe-repair tool that reports persisted integrity violations, performs only non-guessing normalizations, and reruns inspection after repair without changing the SQLite schema. [verified]
+- R-2.5.6: The sync state DB shall set one current schema version and reject existing non-current or unversioned stores with clear rebuild/delete guidance instead of silently migrating or erasing durable user intent. [verified]
 
 ## R-2.6 Pause / Resume [verified]
 
@@ -80,9 +81,9 @@ When the user runs `verify`, the system shall re-hash local files and compare ag
 
 ## R-2.9 RPC / Control Socket [verified]
 
-- R-2.9.1: When running `sync` or `sync --watch`, the system shall own a JSON-over-HTTP API on a Unix domain socket so other sync owners cannot run concurrently. [verified]
+- R-2.9.1: When running `sync` or `sync --watch`, the system shall own a JSON-over-HTTP API on a Unix domain socket so other sync owners cannot run concurrently. One-shot owners expose status and reject mutating RPCs with a typed foreground-sync-running response; watch owners accept mutation RPCs. [verified]
 - R-2.9.2: The RPC API shall support `GET /v1/status`, `POST /v1/reload`, and `POST /v1/stop`. [verified]
-- R-2.9.3: The RPC API shall support durable user-intent mutations for held-delete approval and conflict-resolution requests. [verified]
+- R-2.9.3: The RPC API shall support durable user-intent mutations for held-delete approval and conflict-resolution requests in watch mode, use typed `{status, code, message}` application errors, and report pending durable-intent counts in status. [verified]
 
 ## R-2.10 Failure Management [verified]
 

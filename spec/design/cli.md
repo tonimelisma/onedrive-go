@@ -37,7 +37,7 @@ This keeps human/JSON command results separate from progress/status messages and
 
 | Behavior | Evidence |
 | --- | --- |
-| Root `issues` and `conflicts` stay strict list commands while dedicated mutation lives under `issues force-deletes` and `conflicts resolve`. | `internal/cli/issues_test.go` (`TestIssuesCmd_RejectsUnexpectedPositionalArgs`), `internal/cli/conflicts_test.go` (`TestConflictsCmd_RejectsUnexpectedPositionalArgs`, `TestConflictsCmd_HistoryFlagStillWorksFromRoot`, `TestConflictsCmd_ResolveSubcommandStillExecutesFromRoot`), `e2e/cli_commands_e2e_test.go` (`TestE2E_Issues_Empty`, `TestE2E_Conflicts_EmptyHistory`, `TestE2E_Conflicts_JSON`, `TestE2E_Conflicts_ResolveKeepBoth`, `TestE2E_Issues_ForceDeletes`) |
+| Root `issues` and `conflicts` stay strict list commands while dedicated mutation lives under `issues approve-deletes` and `conflicts resolve`; the obsolete delete-approval command is not registered. | `internal/cli/issues_test.go` (`TestIssuesCmd_RejectsUnexpectedPositionalArgs`, `TestIssuesCmd_ForceDeletesIsNotRegistered`), `internal/cli/conflicts_test.go` (`TestConflictsCmd_RejectsUnexpectedPositionalArgs`, `TestConflictsCmd_HistoryFlagStillWorksFromRoot`, `TestConflictsCmd_ResolveSubcommandStillExecutesFromRoot`), `e2e/cli_commands_e2e_test.go` (`TestE2E_Issues_Empty`, `TestE2E_Conflicts_EmptyHistory`, `TestE2E_Conflicts_JSON`, `TestE2E_Conflicts_ResolveKeepBoth`, `TestE2E_Issues_ApproveDeletes`) |
 | CLI account-email reconciliation updates selector state and reloads the resolved drive before interactive session work continues. | `internal/cli/root_test.go` (`TestCLIContextSession_ReconcilesEmailChangeAndReloadsDrive`), `internal/config/token_resolution_test.go`, `internal/driveid/canonical_test.go` |
 | Watch-mode CLI wiring remains injectable at both the top-level watch-runner seam and the lower daemon-orchestrator seam, and target-scoped interactive/shared flows still work under live E2E coverage. | `internal/cli/signal_test.go` (`TestRunSyncWatch_FirstSignalCancelsWatchRunner`, `TestRunSyncWatch_FirstSignalCancelsDaemonOrchestrator`, `TestShutdownContext_FirstSignalCancels`, `TestShutdownContext_SecondSignalForcesExit`), `e2e/sync_watch_full_test.go` (`TestE2E_SyncWatch_ConflictDuringWatch`), `e2e/sync_full_test.go` (`TestE2E_Sync_EditDeleteConflict`, `TestE2E_Sync_EditEditConflict_ResolveKeepRemote`) |
 
@@ -59,7 +59,7 @@ Implements: R-6.2.8 [verified], R-1.3.6 [verified], R-1.5.2 [verified], R-1.7.2 
 | `sync` | `sync.go` | Multi-drive sync command (see [sync-control-plane.md](sync-control-plane.md)) |
 | `pause`, `resume` | `pause.go`, `resume.go` | Pause/resume sync through `syncControlService`. `resume` also cleans up stale config keys from expired timed pauses (paused=true + past paused_until). |
 | `status` | `status.go` | Display account/drive status via `statusService` and read-only `syncstore.Inspector` snapshots, preserving separate issue groups per scope |
-| `issues` | `issues.go` | Read-only issue listing plus held-delete approval via `issues force-deletes` |
+| `issues` | `issues.go` | Read-only issue listing plus held-delete approval via `issues approve-deletes` |
 | `conflicts` | `conflicts.go` | Conflict listing/history plus resolution via `conflicts resolve` |
 | `verify` | `verify.go` | Post-sync verification |
 | `drive` | `drive.go` | Drive management (list/add/remove/search) |
@@ -292,9 +292,11 @@ Implements: R-2.8.1 [verified], R-2.8.2 [verified], R-2.9.1 [verified], R-2.9.2 
 
 Single-instance enforcement and live-daemon mutation routing use the Unix
 control socket, not legacy signal/file IPC. The CLI probes `GET /v1/status` to
-detect a live owner. Mutating sync-adjacent commands use socket RPC when a
-watch daemon is live and fall back to direct durable DB intent when no daemon
-is running.
+detect a live owner. Mutating sync-adjacent commands use socket RPC only when
+the socket reports `owner_mode="watch"`. If no socket is live, if the socket
+reports `owner_mode="oneshot"`, or if a watch socket disappears between status
+probe and POST, the CLI falls back to direct durable DB intent. Typed daemon
+application errors are authoritative and are reported without fallback.
 
 The socket path is config-owned. It normally resolves under the app data
 directory, with a stable hash-based runtime fallback when isolated test or user
@@ -303,7 +305,7 @@ paths would be too long for Unix-domain sockets.
 Socket-routed commands:
 
 - `pause` / `resume`: update config, then `POST /v1/reload` if a daemon is live.
-- `issues force-deletes`: `POST /v1/drives/{canonical-id}/held-deletes/approve`.
+- `issues approve-deletes`: `POST /v1/drives/{canonical-id}/held-deletes/approve`.
 - `conflicts resolve`: `POST /v1/drives/{canonical-id}/conflicts/{conflict-id}/resolution-request`.
 
 The CLI never opens an ad hoc sync engine to execute held deletes or conflicts.
@@ -378,7 +380,7 @@ Implements: R-2.3.3 [verified], R-2.3.4 [verified], R-2.3.5 [verified], R-2.3.6 
 - **Human-readable names**: Shortcut-scoped failures display local path name, not internal drive IDs.
 - **Scope-aware reason/action copy**: Failure text is selected from `issue_type` plus the raw scope key, so shortcut-scoped quota failures say the shared-folder owner is out of space instead of implying the user's own drive is full.
 - **Read-only surface**: `issues` is a read-only problem view. It shows grouped issue families plus held deletes, but not conflicts, pending retries, or manual retry/recheck state.
-- **Strict command grammar**: `issues` and `conflicts` are list commands and accept no positional args. CLI mutation lives only under explicit subcommands: `issues force-deletes` for held big-delete approval and `conflicts resolve [path-or-id]` for conflict resolution.
+- **Strict command grammar**: `issues` and `conflicts` are list commands and accept no positional args. CLI mutation lives only under explicit subcommands: `issues approve-deletes` for held big-delete approval and `conflicts resolve [path-or-id]` for conflict resolution.
 - **JSON shape**: `issues --json` emits `failure_groups` and `held_deletes` only. Conflict history has its own `conflicts --json` surface.
 - **Derived shared-folder issues**: `perm:remote` is displayed from held blocked-write rows, not from a standalone boundary issue. The CLI shows one visible issue per denied boundary only while blocked write intent still exists.
 - **Automatic shared-folder recovery**: shared-folder write blocks have no manual CLI controls. The engine rechecks permission state automatically during normal sync/watch passes while blocked writes still exist.
@@ -388,9 +390,9 @@ Implements: R-2.3.3 [verified], R-2.3.4 [verified], R-2.3.5 [verified], R-2.3.6 
   This keeps the visible `issues` surface aligned with the same store-owned
   semantics that feed `status`.
 - **Auth scope display**: `auth:account` renders as an account-level `Authentication required` issue with no path list.
-- **Held-delete approval**: held deletes remain visible under `issues`, but approval is now one explicit command, `issues force-deletes`, which moves only that drive's held-delete rows from `held` to `approved`. The engine consumes approved rows after successful delete execution.
+- **Held-delete approval**: held deletes remain visible under `issues`, but approval is now one explicit command, `issues approve-deletes`, which moves only that drive's held-delete rows from `held` to `approved`. The engine consumes approved rows after successful matching delete execution.
 - **Conflict split**: `conflicts` is the dedicated conflict noun. `conflicts` lists unresolved conflicts, `conflicts --history` includes resolved conflicts, and `conflicts resolve` queues the keep-local/keep-remote/keep-both request for engine-owned execution.
-- **Replay-safe mutations**: `issues force-deletes` and repeated
+- **Replay-safe mutations**: `issues approve-deletes` and repeated
   `conflicts resolve` calls are replay-safe. Repeating an approval or an
   already-resolved conflict returns a stable no-op/already-resolved result
   instead of duplicating store mutations or partially releasing a scope.

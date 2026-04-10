@@ -35,8 +35,8 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 
 ## R-6.4 Safety [implemented]
 
-- R-6.4.1: When a one-shot sync would delete more items than `big_delete_threshold` (default: 1000), the system shall hold those unapproved deletes durably and execute no destructive delete until the user approves them with `issues force-deletes`. [verified]
-- R-6.4.2: In watch mode, when more than `big_delete_threshold` delete actions accumulate within a rolling 5-minute window, the system shall hold unapproved delete actions durably while continuing non-delete operations. Held deletes shall be surfaced via `onedrive-go issues`, approved via `issues force-deletes`, and consumed only after successful engine-owned delete execution. [verified]
+- R-6.4.1: When a one-shot sync would delete more items than `big_delete_threshold` (default: 1000), the system shall hold those unapproved deletes durably and execute no destructive delete until the user approves them with `issues approve-deletes`. Approval shall match drive, action type, path, and item ID at execution time. [verified]
+- R-6.4.2: In watch mode, when more than `big_delete_threshold` delete actions accumulate within a rolling 5-minute window, the system shall hold unapproved delete actions durably while continuing non-delete operations. Held deletes shall be surfaced via `onedrive-go issues`, approved via `issues approve-deletes`, and consumed only after successful engine-owned delete execution. [verified]
 - R-6.4.3: The `big_delete_threshold` config setting shall be threaded from user configuration to the sync engine; the system shall not silently use hardcoded defaults. [verified]
 - R-6.4.4: Remote deletions shall go to the OneDrive recycle bin by default. [verified]
 - R-6.4.5: Local deletions triggered by remote changes shall go to OS trash on macOS (`use_local_trash`). [verified]

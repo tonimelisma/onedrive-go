@@ -1,7 +1,7 @@
 -- Canonical schema for the sync engine state database.
 -- The project has no launched users and no state-compatibility burden, so the
--- schema is defined directly in its final shape. One narrow legacy baseline
--- repair path lives in schema.go; there is no stepwise schema-runner stack.
+-- schema is defined directly in its final shape. schema.go gates existing DBs
+-- with PRAGMA user_version instead of running stepwise migrations.
 
 -- Core sync state: confirmed synced state per (drive_id, item_id).
 CREATE TABLE IF NOT EXISTS baseline (
@@ -50,12 +50,12 @@ CREATE TABLE IF NOT EXISTS conflicts (
     resolution      TEXT    NOT NULL DEFAULT 'unresolved'
                             CHECK(resolution IN (
                                 'unresolved', 'keep_both', 'keep_local',
-                                'keep_remote', 'manual'
+                                'keep_remote'
                             )),
     state           TEXT    NOT NULL DEFAULT 'unresolved'
                             CHECK(state IN (
                                 'unresolved', 'resolution_requested', 'resolving',
-                                'resolve_failed', 'resolved', 'manual'
+                                'resolve_failed', 'resolved'
                             )),
     requested_resolution TEXT CHECK(requested_resolution IN (
                                 'keep_both', 'keep_local', 'keep_remote'
@@ -78,13 +78,13 @@ CREATE TABLE IF NOT EXISTS held_deletes (
     drive_id        TEXT    NOT NULL,
     action_type     TEXT    NOT NULL CHECK(action_type IN ('local_delete', 'remote_delete')),
     path            TEXT    NOT NULL,
-    item_id         TEXT    NOT NULL DEFAULT '',
+    item_id         TEXT    NOT NULL CHECK(item_id <> ''),
     state           TEXT    NOT NULL CHECK(state IN ('held', 'approved')),
     held_at         INTEGER NOT NULL CHECK(held_at > 0),
     approved_at     INTEGER,
     last_planned_at INTEGER NOT NULL CHECK(last_planned_at > 0),
     last_error      TEXT,
-    PRIMARY KEY (drive_id, action_type, path)
+    PRIMARY KEY (drive_id, action_type, path, item_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_held_deletes_state ON held_deletes(state);

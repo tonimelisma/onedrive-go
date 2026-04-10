@@ -776,8 +776,8 @@ func TestE2E_Sync_BigDeleteProtection(t *testing.T) {
 		assert.NoError(t, err, "local file %s should still exist after big-delete protection", name)
 	}
 
-	approvalOutput, _ := runCLIWithConfig(t, cfgPath, env, "issues", "force-deletes")
-	assert.Contains(t, approvalOutput, "Approved all held deletes for this drive.")
+	approvalOutput, _ := runCLIWithConfig(t, cfgPath, env, "issues", "approve-deletes")
+	assert.Contains(t, approvalOutput, "Approved held deletes for this drive.")
 
 	// Step 6: A normal sync should consume the durable approval and apply the deletes.
 	runCLIWithConfig(t, cfgPath, env, "sync")

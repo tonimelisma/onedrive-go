@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -160,8 +161,15 @@ func (s *conflictsService) requestConflictResolution(
 	resolution string,
 ) (syncstore.ConflictRequestResult, error) {
 	if client, ok := openControlSocketClient(ctx); ok {
-		status, err := client.requestConflictResolution(ctx, s.cc.Cfg.CanonicalID, id, resolution)
-		return syncstore.ConflictRequestResult{Status: syncstore.ConflictRequestStatus(status)}, err
+		if client.ownerMode() == synccontrol.OwnerModeWatch {
+			status, err := client.requestConflictResolution(ctx, s.cc.Cfg.CanonicalID, id, resolution)
+			if err == nil {
+				return syncstore.ConflictRequestResult{Status: syncstore.ConflictRequestStatus(status)}, nil
+			}
+			if isControlDaemonError(err) {
+				return syncstore.ConflictRequestResult{}, err
+			}
+		}
 	}
 
 	result, err := resolver.RequestConflictResolution(ctx, id, resolution)

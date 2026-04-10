@@ -924,10 +924,10 @@ func TestE2E_Issues_ReadOnlyLifecycle(t *testing.T) {
 }
 
 // Validates: R-2.3.3, R-2.3.6, R-2.3.12, R-6.2.5, R-6.4.2
-// TestE2E_Issues_ForceDeletes validates the watch-mode held-delete lifecycle:
-// hold deletes, surface them via issues, approve with issues force-deletes,
+// TestE2E_Issues_ApproveDeletes validates the watch-mode held-delete lifecycle:
+// hold deletes, surface them via issues, approve with issues approve-deletes,
 // and let watch mode resume delete propagation.
-func TestE2E_Issues_ForceDeletes(t *testing.T) {
+func TestE2E_Issues_ApproveDeletes(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
@@ -987,8 +987,8 @@ func TestE2E_Issues_ForceDeletes(t *testing.T) {
 	remoteBeforeApproval, _ := runCLIWithConfig(t, opsCfgPath, nil, "ls", "/"+testFolder)
 	assert.Contains(t, remoteBeforeApproval, "file-01.txt", "remote deletes should stay held before approval")
 
-	approvalOutput, _ := runCLIWithConfig(t, cfgPath, env, "issues", "force-deletes")
-	assert.Contains(t, approvalOutput, "Approved all held deletes for this drive.")
+	approvalOutput, _ := runCLIWithConfig(t, cfgPath, env, "issues", "approve-deletes")
+	assert.Contains(t, approvalOutput, "Approved held deletes for this drive.")
 
 	issuesAfterApproval, _ := pollCLIWithConfigContains(t, cfgPath, env, "No issues.", 90*time.Second, "issues")
 	assert.Contains(t, issuesAfterApproval, "No issues.", "issues should clear once held deletes are approved and processed")
