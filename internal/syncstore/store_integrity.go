@@ -153,7 +153,7 @@ func (m *SyncStore) AuditIntegrity(ctx context.Context) (IntegrityReport, error)
 // guess user intent, then returns the number of rows or scope authorities
 // normalized.
 func (m *SyncStore) RepairIntegritySafe(ctx context.Context) (repairsApplied int, err error) {
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
 		return 0, fmt.Errorf("sync: begin integrity repair tx: %w", err)
 	}
@@ -173,11 +173,11 @@ func (m *SyncStore) RepairIntegritySafe(ctx context.Context) (repairsApplied int
 	return repairsApplied, nil
 }
 
-func repairIntegritySafeTx(ctx context.Context, tx *sql.Tx) (int, error) {
+func repairIntegritySafeTx(ctx context.Context, tx sqlTxRunner) (int, error) {
 	repairsApplied := 0
 
 	repairSteps := []struct {
-		run func(context.Context, *sql.Tx) (int, error)
+		run func(context.Context, sqlTxRunner) (int, error)
 	}{
 		{run: repairLegacyThrottleAccountScope},
 		{run: repairAuthScopeTiming},
@@ -455,7 +455,7 @@ func auditHeldDeleteRows(report *IntegrityReport, heldDeletes []synctypes.HeldDe
 	}
 }
 
-func repairAuthScopeTiming(ctx context.Context, tx *sql.Tx) (int, error) {
+func repairAuthScopeTiming(ctx context.Context, tx sqlTxRunner) (int, error) {
 	authResult, err := tx.ExecContext(ctx, `
 		UPDATE scope_blocks
 		SET issue_type = ?,
@@ -486,7 +486,7 @@ func repairAuthScopeTiming(ctx context.Context, tx *sql.Tx) (int, error) {
 	return rowsAffected(authResult), nil
 }
 
-func repairLegacyThrottleAccountScope(ctx context.Context, tx *sql.Tx) (int, error) {
+func repairLegacyThrottleAccountScope(ctx context.Context, tx sqlTxRunner) (int, error) {
 	nowNano := time.Now().UnixNano()
 	repairsApplied := 0
 
@@ -528,7 +528,7 @@ func repairLegacyThrottleAccountScope(ctx context.Context, tx *sql.Tx) (int, err
 	return repairsApplied, nil
 }
 
-func repairNonRetryableFailureTiming(ctx context.Context, tx *sql.Tx) (int, error) {
+func repairNonRetryableFailureTiming(ctx context.Context, tx sqlTxRunner) (int, error) {
 	retryResult, err := tx.ExecContext(ctx, `
 		UPDATE sync_failures
 		SET next_retry_at = NULL
@@ -545,7 +545,7 @@ func repairNonRetryableFailureTiming(ctx context.Context, tx *sql.Tx) (int, erro
 	return rowsAffected(retryResult), nil
 }
 
-func listLegacyRemoteScopeKeys(ctx context.Context, tx *sql.Tx) ([]string, error) {
+func listLegacyRemoteScopeKeys(ctx context.Context, tx sqlTxRunner) ([]string, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT DISTINCT scope_key
 		FROM (
@@ -576,7 +576,7 @@ func listLegacyRemoteScopeKeys(ctx context.Context, tx *sql.Tx) ([]string, error
 	return legacyScopeKeys, nil
 }
 
-func deleteLegacyRemoteScopeAuthorities(ctx context.Context, tx *sql.Tx, scopeKey string) (int, error) {
+func deleteLegacyRemoteScopeAuthorities(ctx context.Context, tx sqlTxRunner, scopeKey string) (int, error) {
 	repairsApplied := 0
 
 	deleteScopeResult, err := tx.ExecContext(ctx, `DELETE FROM scope_blocks WHERE scope_key = ?`, scopeKey)

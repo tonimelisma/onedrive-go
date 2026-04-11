@@ -43,6 +43,7 @@ This keeps human/JSON command results separate from progress/status messages and
 | Command-scoped log-file cleanup is rooted in the top-level CLI runner, so the active closer still shuts down exactly once when a leaf command replaces the logger and then returns an error before Cobra post-run hooks would fire. | `internal/cli/root_test.go` (`TestCLIContextReplaceCommandLogger_ClosesReplacedCloserAndTopLevelCloseClosesActiveCloser`, `TestCloseRootCommandLogger_ClosesActiveLoggerAfterCommandError`) |
 | CLI control-socket probing classifies watch owners, one-shot owners, missing sockets, path-unavailable sockets, and ambiguous probe failures distinctly so durable-intent fallback is intentional and daemon notifications stop collapsing protocol failures into "no daemon". | `internal/cli/control_socket_semantics_test.go` (`TestProbeControlOwner_ClassifiesOutcomes`, `TestResolveDeletes_WritesDirectDBIntentForOneShotOwner`, `TestResolveConflict_FallsBackToDBIntentWhenNoDaemonSocketExists`, `TestResolveDeletes_FallsBackToDirectDBWhenControlSocketPathIsUnavailable`, `TestResolveDeletes_DoesNotFallbackWhenControlProbeIsAmbiguous`, `TestNotifyDaemon_ReportsAmbiguousProbeFailureClearly`), `internal/cli/sync_test.go` (`TestSyncService_Run_FailsLoudlyWhenControlSocketPathCannotBeDerivedForOneShot`, `TestSyncService_Run_FailsLoudlyWhenControlSocketPathCannotBeDerivedForWatch`) |
 | Read-only CLI sync-state surfaces consume store-owned one-shot projection helpers instead of managing inspector or writable-store lifecycle directly. | `internal/cli/status_test.go` (`TestQuerySyncState_UsesReadOnlyProjectionHelper`, `TestStatusService_Run_DamagedStateStoreSurfacesRecoverHint`), `internal/cli/auth_health_test.go` (`TestClearAccountAuthScopes_ClearsPersistedAuthScope`, `TestStatusService_Run_DoesNotClearPersistedAuthScope`) |
+| Production-visible perf surfaces stay split by intent: INFO log summaries are the durable history, `status --perf` is the live human view, and `perf capture` is the explicit deep-dive bundle command. | `internal/perf/logging_test.go` (`TestSession_EmitsPeriodicUpdateAndSummary`, `TestCaptureManager_DefaultManifestOmitsDriveSnapshots`, `TestCaptureManager_FullDetailManifestIncludesDriveSnapshots`), `internal/cli/status_perf_test.go` (`TestStatusService_Run_SummaryJSON_WithLivePerf`, `TestStatusService_Run_SummaryText_WithPerfAndNoActiveOwner`, `TestStatusService_Run_FilteredJSON_WithPerfUnavailableFromActiveOwner`), `internal/cli/perf_test.go` (`TestMainWithWriters_PerfCaptureJSON_ForOneShotOwner`, `TestMainWithWriters_PerfCaptureRejectsInvalidDuration`, `TestMainWithWriters_PerfCaptureFailsWhenNoOwnerIsRunning`) |
 | When `/me/drives` retry exhaustion forces authenticated degraded discovery, CLI logs preserve one shared degraded-discovery evidence shape (`account`, `endpoint`, quirk attempts) instead of flattening the failure to one opaque error string or letting each caller invent its own fields. | `internal/cli/degraded_discovery_log_test.go`, `internal/graph/quirk_retry_error_test.go`, `e2e/auth_preflight_helpers_test.go` |
 
 ## Command Structure
@@ -63,6 +64,7 @@ Implements: R-6.2.8 [verified], R-1.3.6 [verified], R-1.5.2 [verified], R-1.7.2 
 | `sync` | `sync.go` | Multi-drive sync command (see [sync-control-plane.md](sync-control-plane.md)) |
 | `pause`, `resume` | `pause.go`, `resume.go` | Pause/resume sync through `syncControlService`. `resume` also cleans up stale config keys from expired timed pauses (paused=true + past paused_until). |
 | `status` | `status.go` | Display account/drive status. It always renders the same per-drive sync-health contract for the displayed drives, and `--drive` only filters which drives are shown. |
+| `perf` | `perf.go` | Inspect live sync-owner performance and capture an explicit local profile bundle through the control socket. |
 | `resolve` | `resolve.go` | Record durable user decisions for held deletes and conflicts (`resolve deletes`, `resolve local|remote|both`, optional `--all`) |
 | `recover` | `recover.go` | Repair, rebuild, or reset the selected drive's sync database after explicit confirmation |
 | `drive` | `drive.go` | Drive management (list/add/remove/search) |
@@ -346,6 +348,30 @@ Implements: R-6.6.1 [verified], R-6.6.2 [verified], R-6.6.3 [verified], R-6.6.4 
 
 Log file creation with parent directory auto-creation. Append mode. Retention-based rotation (`log_retention_days`).
 
+## Production Performance Surfaces
+
+Implements: R-6.6.14 [verified], R-6.6.15 [verified], R-6.6.16 [verified]
+
+- The root runner creates one `internal/perf.Session` per command. Ordinary
+  commands emit periodic INFO `performance update` logs every 30 seconds while
+  still running, then one final INFO `performance summary` on completion.
+- `sync --watch` uses the same session model but with a 5-minute update
+  interval so long-lived owners surface periodic production-visible health
+  without flooding logs.
+- Always-on perf logs intentionally carry aggregate counters and timings only:
+  request counts, retry/backoff totals, DB timing, transfer counts/bytes,
+  observe/plan/execute/reconcile totals, and watch activity counts. They do
+  not log paths, account emails, drive IDs, item IDs, or transfer URLs.
+- `status --perf` is a live overlay, not a historical report. It probes the
+  active sync owner over the control socket, overlays any returned per-drive
+  snapshot onto the ordinary status read model, and prints a concrete
+  unavailable reason when no live owner or live perf snapshot exists.
+- `perf capture` is the explicit deep-dive surface. It probes the live owner,
+  validates a bounded capture duration, and prints either a machine-readable
+  JSON response or the local artifact paths for the resulting bundle.
+- `--full-detail` only widens the explicit capture bundle manifest. It does
+  not change the redaction policy of always-on logs or `status --perf`.
+
 ## Design Constraints
 
 - Config flows through Cobra context (`CLIContext` stored via `context.WithValue` with unexported key type). No global flag variables.
@@ -365,6 +391,7 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
 - `SessionProvider` caches `TokenSource`s by token file path — multiple drives sharing an account share one `TokenSource`, preventing OAuth2 refresh token rotation races.
 - `CLIContext` owns one `graphhttp.Provider` per command/watch runtime. Bootstrap/auth-discovery flows use `BootstrapMeta()`. Once both account and remote target identity are known, CLI passes target-scoped interactive client resolvers into `driveops.SessionProvider`: configured drives key by drive ID, configured shared roots key by remote root item, and direct shared-item commands key by `(remoteDriveID, remoteItemID)`. Sync paths request `Sync()` profiles instead. HTTP policy constants and client reuse live in `internal/graphhttp`, not `internal/cli`.
 - `CLIContext` is the sole owner of command-scoped log-file closers. When sync bootstrap rebuilds the logger from the raw logging config, it swaps the active logger through the CLI context, closes the old closer before installing the replacement, and relies on the top-level `mainWithWriters` runner to close the final active closer exactly once after `Execute()` returns. This top-level cleanup is intentionally outside Cobra post-run hooks so command-log shutdown still happens when a leaf command exits early with an error.
+- `CLIContext` is also the sole owner of command-scoped perf sessions. The top-level `mainWithWriters` runner completes the active session after `Execute()` returns so final perf summaries still emit when Cobra returns an error.
 - CLI handlers use `cmd.Context()` for signal propagation. Exception: upload session cancel paths use `context.Background()` because the cancel must succeed even when the original context is done.
 - Production command code writes primary output through `CLIContext.OutputWriter`, and status/warning/error text through the CLI-owned status writer boundary instead of raw process-global stdout/stderr. This keeps command output injectable in tests and prevents hidden process-global output dependencies from creeping back into services, bootstrap warnings, or sync-daemon cleanup.
 - `go run ./cmd/devtool verify` enforces that production `internal/cli` files do not call `fmt.Print*`, `fmt.Fprint*(os.Stdout|os.Stderr, ...)`, or direct `os.Stdout` / `os.Stderr` writer methods. The only allowed process-global output boundary is the tiny process entrypoint outside `internal/cli`.
@@ -401,6 +428,7 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
   per-drive `next_actions[]`, and preserves `state_store_recovery_hint` for
   damaged DB flows.
 - Informational commands (`drive list`, `status`, `whoami`) use lenient config loading (`LoadOrDefaultLenient`) that collects validation errors as warnings instead of failing. This allows users to inspect their configuration and see drive status even when config has errors. Each of these commands (and `drive search`) must have `skipConfigAnnotation` on the leaf Cobra command — not just the parent — because Cobra checks annotations on the executing command, not parent commands. Safety net: `TestAnnotationTreeWalk` walks the entire command tree and fails if any leaf command with `RunE` is not explicitly classified as either a data command (no annotation) or an annotated command. New commands must be added to the `dataCommands` set or given the annotation. [verified]
+- The `perf` command is also a skip-config leaf. Live perf inspection depends only on the control-socket owner and must remain available even if the config file is missing or invalid.
 - `loadAndResolve` passes errors from `ResolveDrive` unwrapped. `ResolveDrive` already wraps `LoadOrDefault` errors with `"loading config: "`, and `MatchDrive` errors are user-facing messages that read better without a prefix (e.g., `"no drives configured — ..."` instead of `"loading config: no drives configured — ..."`). [verified]
 - CLI presentation is the final error boundary. `classifyCommandError` and `commandFailurePresentationForClass` map the domain classes from [error-model.md](error-model.md) to process exit behavior and user-facing reason/action text, while `authErrorMessage` specializes the user-facing auth copy for saved-login failures without re-inspecting raw transport payloads.
 - The root error boundary maps both `graph.ErrNotLoggedIn` and `graph.ErrUnauthorized` into the same user-facing family, `Authentication required`, with cause-specific detail and a shared remediation path (`onedrive-go login`).
@@ -411,7 +439,7 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
 
 ## Status And Resolve
 
-Implements: R-2.3.3 [verified], R-2.3.4 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.3.10 [verified], R-2.3.12 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified]
+Implements: R-2.3.3 [verified], R-2.3.4 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.3.10 [verified], R-2.3.12 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified], R-6.6.15 [verified]
 
 - **Grouped display**: >10 failures of same `issue_type` → single heading with count, first 5 paths shown. `--verbose` shows all paths.
 - **Per-scope sub-grouping**: 507 quota and shared-folder write blocks are grouped by scope (own drive vs each shortcut). Different scopes = different owners = different user actions.
@@ -420,6 +448,7 @@ Implements: R-2.3.3 [verified], R-2.3.4 [verified], R-2.3.5 [verified], R-2.3.6 
 - **Single read surface**: `status` is the only sync read command. It always renders the same per-drive sync-health contract for the displayed drives, and `--drive` only filters which drives are shown.
 - **Strict command grammar**: CLI mutation lives under one explicit noun, `resolve`, with separate actions for delete approval (`resolve deletes`) and conflict requests (`resolve local|remote|both [path-or-id]`, optional `--all`). Recovery lives under one explicit noun, `recover`.
 - **JSON shape**: `status --json` always emits one top-level `summary` plus `accounts[]`, and each displayed drive may include one nested `sync_state` object with `issue_groups`, `delete_safety`, `delete_safety_total`, `conflicts`, `conflicts_total`, optional `conflict_history`, `conflict_history_total`, `examples_limit`, `verbose`, per-entry action hints, and per-drive `next_actions`.
+- **Live perf overlay**: `status --perf` augments that same per-drive read model with live sync-owner perf when available. Displayed drives gain `sync_state.perf` in JSON and a `PERF` section in text. When no owner or no live snapshot exists, the CLI emits `perf_unavailable_reason` instead of inventing persisted history.
 - **Derived shared-folder issues**: `perm:remote` is displayed from held blocked-write rows, not from a standalone boundary issue. The CLI shows one visible issue per denied boundary only while blocked write intent still exists.
 - **Automatic shared-folder recovery**: shared-folder write blocks have no manual CLI controls. The engine rechecks permission state automatically during normal sync/watch passes while blocked writes still exist.
 - **Shared summary descriptors**: Every sync issue renders from the shared `SummaryKey` descriptor table, with the humanized scope shown separately. This keeps sync logs and `status` grouped by the same normalized issue family without duplicating display taxonomies in each layer.

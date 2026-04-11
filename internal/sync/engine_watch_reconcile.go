@@ -388,6 +388,9 @@ func (rt *watchRuntime) performFullReconciliation(
 ) reconcileResult {
 	result := reconcileResult{}
 	start := rt.engine.nowFunc()
+	defer func() {
+		rt.engine.collector().RecordReconcile(len(result.events), rt.engine.since(start))
+	}()
 
 	rt.engine.logger.Info("periodic full reconciliation starting")
 

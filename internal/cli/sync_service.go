@@ -11,6 +11,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
+	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -107,6 +108,7 @@ func newSyncService(cc *CLIContext) *syncService {
 				Provider:          provider,
 				Logger:            logger,
 				ControlSocketPath: controlSocketPath,
+				PerfParent:        perf.FromContext(ctx),
 			})
 
 			return orch.RunOnce(ctx, mode, opts)

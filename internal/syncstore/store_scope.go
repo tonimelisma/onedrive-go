@@ -30,7 +30,7 @@ func (m *SyncStore) UpsertSyncMetadataEntries(ctx context.Context, entries map[s
 		return nil
 	}
 
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
 		return fmt.Errorf("sync metadata begin tx: %w", err)
 	}
@@ -110,7 +110,7 @@ func (m *SyncStore) ApplyScopeState(ctx context.Context, req synctypes.ScopeStat
 		return fmt.Errorf("decode scope snapshot: %w", err)
 	}
 
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
 		return fmt.Errorf("scope state begin tx: %w", err)
 	}
@@ -137,7 +137,7 @@ func (m *SyncStore) ApplyScopeState(ctx context.Context, req synctypes.ScopeStat
 	return nil
 }
 
-func loadRemoteScopeRows(ctx context.Context, tx *sql.Tx) ([]remoteScopeRow, error) {
+func loadRemoteScopeRows(ctx context.Context, tx sqlTxRunner) ([]remoteScopeRow, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT
 			rs.drive_id,
@@ -192,7 +192,7 @@ func loadRemoteScopeRows(ctx context.Context, tx *sql.Tx) ([]remoteScopeRow, err
 
 func applyRemoteScopeRows(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx sqlTxRunner,
 	snapshot syncscope.Snapshot,
 	generation int64,
 	allRows []remoteScopeRow,
@@ -213,7 +213,7 @@ func applyRemoteScopeRows(
 
 func applyRemoteScopeRow(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx sqlTxRunner,
 	snapshot syncscope.Snapshot,
 	generation int64,
 	row *remoteScopeRow,
@@ -269,7 +269,7 @@ func applyRemoteScopeRow(
 	return true, nil
 }
 
-func upsertScopeStateRow(ctx context.Context, tx *sql.Tx, state synctypes.ScopeStateRecord) error {
+func upsertScopeStateRow(ctx context.Context, tx sqlTxRunner, state synctypes.ScopeStateRecord) error {
 	if state.EffectiveSnapshotJSON == "" {
 		state.EffectiveSnapshotJSON = `{"version":1}`
 	}
@@ -319,7 +319,7 @@ type scopeStateRowQuerier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-func readScopeStateTx(ctx context.Context, tx *sql.Tx) (synctypes.ScopeStateRecord, bool, error) {
+func readScopeStateTx(ctx context.Context, tx sqlTxRunner) (synctypes.ScopeStateRecord, bool, error) {
 	return readScopeStateRecord(ctx, tx, "read scope state")
 }
 
@@ -364,7 +364,7 @@ func readScopeStateRecord(
 	return record, true, nil
 }
 
-func repairScopeStateConsistencyTx(ctx context.Context, tx *sql.Tx) (int, error) {
+func repairScopeStateConsistencyTx(ctx context.Context, tx sqlTxRunner) (int, error) {
 	state, found, err := readScopeStateTx(ctx, tx)
 	if err != nil {
 		return 0, err
@@ -398,7 +398,7 @@ func repairScopeStateConsistencyTx(ctx context.Context, tx *sql.Tx) (int, error)
 }
 
 func (m *SyncStore) repairScopeStateConsistencyOnOpen(ctx context.Context) (repairsApplied int, err error) {
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
 		return 0, fmt.Errorf("sync: begin scope-state repair tx: %w", err)
 	}
@@ -418,7 +418,7 @@ func (m *SyncStore) repairScopeStateConsistencyOnOpen(ctx context.Context) (repa
 	return repairsApplied, nil
 }
 
-func clearScopeStateTx(ctx context.Context, tx *sql.Tx) (int, error) {
+func clearScopeStateTx(ctx context.Context, tx sqlTxRunner) (int, error) {
 	result, err := tx.ExecContext(ctx, `DELETE FROM scope_state WHERE singleton = 1`)
 	if err != nil {
 		return 0, fmt.Errorf("delete invalid scope state: %w", err)

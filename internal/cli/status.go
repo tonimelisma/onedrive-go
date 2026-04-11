@@ -14,6 +14,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
 
 // Drive state constants for status and drive list display.
@@ -37,6 +38,7 @@ resolved conflict history, and --verbose to expand sampled path and row lists.`,
 	}
 
 	cmd.Flags().Bool("history", false, "include resolved conflict history for the displayed drives")
+	cmd.Flags().Bool("perf", false, "include live performance snapshots from the active sync owner")
 
 	return cmd
 }
@@ -88,6 +90,8 @@ type syncStateInfo struct {
 	ApprovedDeletesWaiting   int                         `json:"approved_deletes_waiting,omitempty"`
 	QueuedConflictRequests   int                         `json:"queued_conflict_requests,omitempty"`
 	ApplyingConflictRequests int                         `json:"applying_conflict_requests,omitempty"`
+	Perf                       *perf.Snapshot     `json:"perf,omitempty"`
+	PerfUnavailableReason      string             `json:"perf_unavailable_reason,omitempty"`
 }
 
 // statusSummary aggregates health info across all drives.
@@ -112,8 +116,12 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("read --history flag: %w", err)
 	}
+	showPerf, err := cmd.Flags().GetBool("perf")
+	if err != nil {
+		return fmt.Errorf("read --perf flag: %w", err)
+	}
 
-	return newStatusService(mustCLIContext(cmd.Context())).run(history)
+	return newStatusService(mustCLIContext(cmd.Context())).run(history, showPerf)
 }
 
 // accountNameReader abstracts reading display name and org name from account
@@ -513,18 +521,22 @@ func printSyncStateText(w io.Writer, ss *syncStateInfo, history bool) error {
 		return nil
 	}
 
-	if err := printSyncStateSummaryLines(w, ss); err != nil {
-		return err
-	}
-	if err := printSyncStateStoreLines(w, ss); err != nil {
-		return err
+	if ss.hasPersistentStatusData() {
+		if err := printSyncStateSummaryLines(w, ss); err != nil {
+			return err
+		}
+		if err := printSyncStateStoreLines(w, ss); err != nil {
+			return err
+		}
+
+		if ss.StateStoreStatus == "" || ss.StateStoreStatus == stateStoreStatusHealthy {
+			if err := printDriveSyncSections(w, ss, history); err != nil {
+				return err
+			}
+		}
 	}
 
-	if ss.StateStoreStatus != "" && ss.StateStoreStatus != stateStoreStatusHealthy {
-		return nil
-	}
-
-	return printDriveSyncSections(w, ss, history)
+	return printStatusPerfText(w, ss)
 }
 
 func printSyncStateSummaryLines(w io.Writer, ss *syncStateInfo) error {

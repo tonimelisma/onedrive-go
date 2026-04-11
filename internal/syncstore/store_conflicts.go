@@ -159,7 +159,7 @@ func (m *SyncStore) GetConflictRequest(ctx context.Context, id string) (*synctyp
 func (m *SyncStore) ResolveConflict(ctx context.Context, id, resolution string) (retErr error) {
 	resolvedAt := m.nowFunc().UnixNano()
 
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
 		return fmt.Errorf("sync: begin resolve conflict tx: %w", err)
 	}
@@ -217,7 +217,7 @@ func (m *SyncStore) RequestConflictResolution(
 
 	now := m.nowFunc().UnixNano()
 
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
 		return ConflictRequestResult{}, fmt.Errorf("sync: begin conflict request tx: %w", err)
 	}
@@ -287,7 +287,7 @@ func (m *SyncStore) RequestConflictResolution(
 
 func handleExistingConflictRequestTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx sqlCommitTx,
 	conflict *synctypes.ConflictRecord,
 	request *synctypes.ConflictRequestRecord,
 	id string,
@@ -325,7 +325,7 @@ func handleExistingConflictRequestTx(
 
 func overwriteQueuedConflictRequestTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx sqlCommitTx,
 	conflict *synctypes.ConflictRecord,
 	id string,
 	resolution string,
@@ -364,7 +364,7 @@ func overwriteQueuedConflictRequestTx(
 }
 
 func commitConflictRequestResult(
-	tx *sql.Tx,
+	tx sqlCommitTx,
 	id string,
 	contextMessage string,
 	result *ConflictRequestResult,
@@ -686,7 +686,7 @@ func scanConflictRequestRowSingle(row *sql.Row) (*synctypes.ConflictRequestRecor
 
 func getConflictRequestTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx sqlTxRunner,
 	id string,
 ) (*synctypes.ConflictRequestRecord, error) {
 	row := tx.QueryRowContext(ctx, sqlGetConflictRequestByID, id)

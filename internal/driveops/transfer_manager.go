@@ -15,6 +15,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
 
@@ -173,6 +174,8 @@ func NewTransferManager(
 func (tm *TransferManager) DownloadToFile(
 	ctx context.Context, driveID driveid.ID, itemID, targetPath string, opts DownloadOpts,
 ) (*DownloadResult, error) {
+	startedAt := time.Now()
+
 	if targetPath == "" {
 		return nil, fmt.Errorf("download: target path must not be empty")
 	}
@@ -258,6 +261,11 @@ func (tm *TransferManager) DownloadToFile(
 		slog.String("target", targetPath),
 		slog.Int64("size", size),
 	)
+	if collector := perf.FromContext(ctx); collector != nil {
+		collector.RecordTransfer(perf.TransferKindDownload, size, time.Since(startedAt))
+		collector.AddCommandItems(1)
+		collector.AddCommandBytes(size)
+	}
 
 	return &DownloadResult{
 		LocalHash:           localHash,
@@ -482,12 +490,59 @@ func validateUploadToItemParams(itemID, localPath string) error {
 	return nil
 }
 
+func uploadMtime(info os.FileInfo, opts UploadOpts) time.Time {
+	if opts.Mtime.IsZero() {
+		return info.ModTime()
+	}
+
+	return opts.Mtime
+}
+
+func (tm *TransferManager) uploadGraphItem(
+	ctx context.Context,
+	su SessionUploader,
+	hasSessionUploader bool,
+	file *os.File,
+	driveID driveid.ID,
+	parentID string,
+	name string,
+	localPath string,
+	localHash string,
+	size int64,
+	mtime time.Time,
+	progress graph.ProgressFunc,
+) (*graph.Item, error) {
+	if size > graph.SimpleUploadMaxSize && tm.sessionStore != nil && hasSessionUploader {
+		return tm.sessionUpload(ctx, su, file, driveID, parentID, name, localPath, localHash, size, mtime, progress)
+	}
+
+	item, err := tm.uploads.Upload(ctx, driveID, parentID, name, file, size, mtime, progress)
+	if err != nil {
+		return nil, fmt.Errorf("uploading %s: %w", localPath, err)
+	}
+
+	return item, nil
+}
+
+func recordUploadPerf(ctx context.Context, size int64, startedAt time.Time) {
+	collector := perf.FromContext(ctx)
+	if collector == nil {
+		return
+	}
+
+	collector.RecordTransfer(perf.TransferKindUpload, size, time.Since(startedAt))
+	collector.AddCommandItems(1)
+	collector.AddCommandBytes(size)
+}
+
 // UploadFile uploads a local file to OneDrive. For large files when a
 // SessionStore and SessionUploader are available, the upload session is
 // persisted for cross-crash resume.
 func (tm *TransferManager) UploadFile(
 	ctx context.Context, driveID driveid.ID, parentID, name, localPath string, opts UploadOpts,
 ) (*UploadResult, error) {
+	startedAt := time.Now()
+
 	if err := validateUploadParams(parentID, name, localPath); err != nil {
 		return nil, err
 	}
@@ -519,10 +574,7 @@ func (tm *TransferManager) UploadFile(
 		return nil, fmt.Errorf("hashing %s: %w", localPath, err)
 	}
 
-	mtime := opts.Mtime
-	if mtime.IsZero() {
-		mtime = info.ModTime()
-	}
+	mtime := uploadMtime(info, opts)
 
 	f, err := localpath.Open(localPath)
 	if err != nil {
@@ -534,18 +586,20 @@ func (tm *TransferManager) UploadFile(
 
 	// For large files with session store + SessionUploader, use session-based upload.
 	su, hasSU := tm.uploads.(SessionUploader)
-
-	var item *graph.Item
-
-	if size > graph.SimpleUploadMaxSize && tm.sessionStore != nil && hasSU {
-		item, err = tm.sessionUpload(ctx, su, f, driveID, parentID, name, localPath, localHash, size, mtime, progress)
-	} else {
-		item, err = tm.uploads.Upload(ctx, driveID, parentID, name, f, size, mtime, progress)
-		if err != nil {
-			err = fmt.Errorf("uploading %s: %w", localPath, err)
-		}
-	}
-
+	item, err := tm.uploadGraphItem(
+		ctx,
+		su,
+		hasSU,
+		f,
+		driveID,
+		parentID,
+		name,
+		localPath,
+		localHash,
+		size,
+		mtime,
+		progress,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -570,6 +624,7 @@ func (tm *TransferManager) UploadFile(
 		slog.String("item_id", item.ID),
 		slog.Int64("size", size),
 	)
+	recordUploadPerf(ctx, size, startedAt)
 
 	return &UploadResult{Item: item, LocalHash: localHash, Size: size, Mtime: mtime}, nil
 }
@@ -580,6 +635,8 @@ func (tm *TransferManager) UploadFile(
 func (tm *TransferManager) UploadFileToItem(
 	ctx context.Context, driveID driveid.ID, itemID, localPath string, opts UploadOpts,
 ) (*UploadResult, error) {
+	startedAt := time.Now()
+
 	if err := validateUploadToItemParams(itemID, localPath); err != nil {
 		return nil, err
 	}
@@ -639,6 +696,11 @@ func (tm *TransferManager) UploadFileToItem(
 		slog.String("item_id", item.ID),
 		slog.Int64("size", size),
 	)
+	if collector := perf.FromContext(ctx); collector != nil {
+		collector.RecordTransfer(perf.TransferKindUpload, size, time.Since(startedAt))
+		collector.AddCommandItems(1)
+		collector.AddCommandBytes(size)
+	}
 
 	return &UploadResult{Item: item, LocalHash: localHash, Size: size, Mtime: mtime}, nil
 }

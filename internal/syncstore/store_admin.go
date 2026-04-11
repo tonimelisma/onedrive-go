@@ -119,7 +119,7 @@ func (m *SyncStore) queryRemoteStateRows(ctx context.Context, query string, args
 // pending and removes the sync_failures row. Uses a transaction to ensure
 // atomicity — crash between statements cannot leave inconsistent state.
 func (m *SyncStore) ResetFailure(ctx context.Context, path string) (err error) {
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
 		return fmt.Errorf("sync: begin reset-failure tx for %s: %w", path, err)
 	}
@@ -194,7 +194,7 @@ func (m *SyncStore) DropLegacyRemoteBlockedScope(
 	ctx context.Context,
 	scopeKey synctypes.ScopeKey,
 ) (err error) {
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
 		return fmt.Errorf("sync: begin remote legacy cleanup tx for %s: %w", scopeKey.String(), err)
 	}
@@ -413,7 +413,7 @@ func (m *SyncStore) WriteSyncMetadata(ctx context.Context, report *synctypes.Syn
 		{"last_sync_failed", failed},
 	}
 
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
 		return fmt.Errorf("sync metadata begin tx: %w", err)
 	}
@@ -522,7 +522,7 @@ func (m *SyncStore) ReleaseScope(
 	wire := scopeKey.String()
 	nowNano := now.UnixNano()
 
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
 		return fmt.Errorf("sync: begin release-scope tx for %s: %w", wire, err)
 	}
@@ -569,7 +569,7 @@ func (m *SyncStore) ReleaseScope(
 func (m *SyncStore) DiscardScope(ctx context.Context, scopeKey synctypes.ScopeKey) (err error) {
 	wire := scopeKey.String()
 
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
 		return fmt.Errorf("sync: begin discard-scope tx for %s: %w", wire, err)
 	}

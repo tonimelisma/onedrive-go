@@ -18,6 +18,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
@@ -256,6 +257,10 @@ func (o *Orchestrator) handleControlRequest(
 	mode synccontrol.OwnerMode,
 	commands chan<- controlCommand,
 ) {
+	if o.handleDirectPerfControlRequest(w, r, mode) {
+		return
+	}
+
 	if mode == synccontrol.OwnerModeOneShot {
 		o.handleOneShotControlRequest(w, r)
 		return
@@ -296,6 +301,65 @@ func (o *Orchestrator) handleOneShotControlRequest(w http.ResponseWriter, r *htt
 		Status:  synccontrol.StatusError,
 		Code:    synccontrol.ErrorForegroundSyncRunning,
 		Message: "a foreground sync is currently running",
+	})
+}
+
+func (o *Orchestrator) handleDirectPerfControlRequest(
+	w http.ResponseWriter,
+	r *http.Request,
+	mode synccontrol.OwnerMode,
+) bool {
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == synccontrol.PathPerfStatus:
+		writeJSON(w, http.StatusOK, o.controlPerfStatus(mode))
+		return true
+	case r.Method == http.MethodPost && r.URL.Path == synccontrol.PathPerfCapture:
+		o.handlePerfCaptureRequest(w, r, mode)
+		return true
+	default:
+		return false
+	}
+}
+
+func (o *Orchestrator) handlePerfCaptureRequest(
+	w http.ResponseWriter,
+	r *http.Request,
+	mode synccontrol.OwnerMode,
+) {
+	var request synccontrol.PerfCaptureRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeJSON(w, http.StatusBadRequest, synccontrol.MutationResponse{
+			Status:  synccontrol.StatusError,
+			Code:    synccontrol.ErrorInvalidRequest,
+			Message: "decode perf capture request: " + err.Error(),
+		})
+		return
+	}
+
+	opts, err := perfCaptureOptionsFromRequest(mode, &request)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, synccontrol.MutationResponse{
+			Status:  synccontrol.StatusError,
+			Code:    synccontrol.ErrorInvalidRequest,
+			Message: err.Error(),
+		})
+		return
+	}
+
+	result, err := o.capturePerf(r.Context(), opts)
+	if err != nil {
+		statusCode, code := perfCaptureErrorStatus(err)
+		writeJSON(w, statusCode, synccontrol.MutationResponse{
+			Status:  synccontrol.StatusError,
+			Code:    code,
+			Message: err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, synccontrol.PerfCaptureResponse{
+		OwnerMode: mode,
+		Result:    result,
 	})
 }
 
@@ -434,6 +498,66 @@ func (o *Orchestrator) controlStatus(ctx context.Context, mode synccontrol.Owner
 	status.ApplyingConflictRequests = counts.ApplyingConflictRequests
 
 	return status
+}
+
+func (o *Orchestrator) controlPerfStatus(mode synccontrol.OwnerMode) synccontrol.PerfStatusResponse {
+	status := synccontrol.PerfStatusResponse{
+		OwnerMode: mode,
+	}
+	if o == nil || o.perfRuntime == nil {
+		return status
+	}
+
+	status.Aggregate = o.perfRuntime.AggregateSnapshot()
+	status.Drives = o.perfRuntime.SnapshotByDrive()
+
+	return status
+}
+
+func (o *Orchestrator) capturePerf(ctx context.Context, opts perf.CaptureOptions) (perf.CaptureResult, error) {
+	if o == nil || o.perfRuntime == nil {
+		return perf.CaptureResult{}, perf.ErrCaptureUnavailable
+	}
+
+	result, err := o.perfRuntime.Capture(ctx, opts)
+	if err != nil {
+		return perf.CaptureResult{}, fmt.Errorf("capture perf: %w", err)
+	}
+
+	return result, nil
+}
+
+func perfCaptureOptionsFromRequest(
+	mode synccontrol.OwnerMode,
+	request *synccontrol.PerfCaptureRequest,
+) (perf.CaptureOptions, error) {
+	if request == nil {
+		return perf.CaptureOptions{}, fmt.Errorf("missing perf capture request")
+	}
+
+	duration := time.Duration(request.DurationMS) * time.Millisecond
+	if duration <= 0 {
+		return perf.CaptureOptions{}, fmt.Errorf("perf capture duration must be greater than zero")
+	}
+
+	return perf.CaptureOptions{
+		Duration:   duration,
+		OutputDir:  request.OutputDir,
+		Trace:      request.Trace,
+		FullDetail: request.FullDetail,
+		OwnerMode:  string(mode),
+	}, nil
+}
+
+func perfCaptureErrorStatus(err error) (int, synccontrol.ErrorCode) {
+	switch {
+	case errors.Is(err, perf.ErrCaptureInProgress):
+		return http.StatusConflict, synccontrol.ErrorCaptureInProgress
+	case errors.Is(err, perf.ErrCaptureUnavailable):
+		return http.StatusConflict, synccontrol.ErrorCaptureUnavailable
+	default:
+		return http.StatusInternalServerError, synccontrol.ErrorInternal
+	}
 }
 
 func (o *Orchestrator) countDurableIntents(ctx context.Context) (syncstore.DurableIntentCounts, error) {

@@ -17,7 +17,7 @@ func (m *SyncStore) UpsertHeldDeletes(ctx context.Context, deletes []synctypes.H
 	}
 
 	now := m.nowFunc().UnixNano()
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
 		return fmt.Errorf("sync: begin held-delete upsert tx: %w", err)
 	}

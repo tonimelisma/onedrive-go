@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
 
 // RetryTransport is an http.RoundTripper that wraps an inner transport with
@@ -112,6 +114,9 @@ func (rt *RetryTransport) handleNetworkError(req *http.Request, err error, attem
 	logTarget := requestLogTarget(req)
 	if attempt < rt.Policy.MaxAttempts {
 		backoff := rt.Policy.Delay(attempt)
+		if collector := perf.FromContext(req.Context()); collector != nil {
+			collector.RecordHTTPRetry(backoff)
+		}
 		rt.Logger.Debug("retrying after network error",
 			slog.String("method", req.Method),
 			slog.String("url", logTarget),
@@ -166,6 +171,9 @@ func (rt *RetryTransport) handleResponse(
 
 	// --- Retryable status → extract backoff, discard body, retry ---
 	backoff := rt.retryBackoff(resp, attempt, sleepFn)
+	if collector := perf.FromContext(req.Context()); collector != nil {
+		collector.RecordHTTPRetry(backoff)
+	}
 
 	// Drain response body to allow connection reuse. A drain/close failure
 	// is not terminal for the retry path, but it is still operationally

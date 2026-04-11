@@ -249,7 +249,7 @@ func (m *SyncStore) RecordFailure(
 	}
 	direction, actionType := normalizeFailureIdentity(p.Direction, p.ActionType)
 
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning failure transaction for %s: %w", p.Path, err)
 	}
@@ -320,7 +320,7 @@ func (m *SyncStore) RecordFailure(
 
 // readFailureCount queries the current failure count for backoff computation.
 // Returns 0 if the row doesn't exist or the query fails (non-critical).
-func (m *SyncStore) readFailureCount(ctx context.Context, tx *sql.Tx, p *synctypes.SyncFailureParams) int {
+func (m *SyncStore) readFailureCount(ctx context.Context, tx sqlTxRunner, p *synctypes.SyncFailureParams) int {
 	var count int
 	if scanErr := tx.QueryRowContext(ctx,
 		`SELECT failure_count FROM sync_failures WHERE path = ? AND drive_id = ?`,
@@ -353,7 +353,7 @@ func (m *SyncStore) computeNextRetry(now time.Time, currentFailures int, delayFn
 // for download/delete failures, falls back to looking up remote_state.
 func (m *SyncStore) resolveItemID(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx sqlTxRunner,
 	path string,
 	driveID driveid.ID,
 	itemID string,
@@ -381,7 +381,7 @@ func (m *SyncStore) resolveItemID(
 // transitionRemoteStateOnFailure transitions remote_state status for
 // download/delete failures (downloading→download_failed, deleting→delete_failed).
 // The WHERE clause is a safe no-op when no matching row exists.
-func (m *SyncStore) transitionRemoteStateOnFailure(ctx context.Context, tx *sql.Tx, path string) error {
+func (m *SyncStore) transitionRemoteStateOnFailure(ctx context.Context, tx sqlTxRunner, path string) error {
 	result, execErr := tx.ExecContext(ctx,
 		`UPDATE remote_state SET
 			sync_status = CASE sync_status
@@ -474,7 +474,7 @@ func (m *SyncStore) TakeSyncFailure(
 	path string,
 	driveID driveid.ID,
 ) (row *synctypes.SyncFailureRow, found bool, err error) {
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
 		return nil, false, fmt.Errorf("sync: beginning take sync failure for %s: %w", path, err)
 	}
@@ -568,7 +568,7 @@ func (m *SyncStore) UpsertActionableFailures(
 	now := m.nowFunc()
 	nowNano := now.UnixNano()
 
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
 		return fmt.Errorf("sync: begin upsert actionable failures: %w", err)
 	}

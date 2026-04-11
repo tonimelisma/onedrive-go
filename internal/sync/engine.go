@@ -15,6 +15,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
+	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/syncplan"
@@ -53,6 +54,7 @@ type Engine struct {
 	driveType             string
 	rootItemID            string
 	logger                *slog.Logger
+	perfCollector         *perf.Collector
 	sessionStore          *driveops.SessionStore // for CleanStale() housekeeping
 	transferWorkers       int                    // goroutine count for the worker pool
 	checkWorkers          int                    // goroutine limit for parallel file hashing
@@ -173,6 +175,7 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 		driveType:             cfg.DriveType,
 		rootItemID:            cfg.RootItemID,
 		logger:                cfg.Logger,
+		perfCollector:         cfg.PerfCollector,
 		transferWorkers:       cfg.TransferWorkers,
 		checkWorkers:          cfg.CheckWorkers,
 		localFilter:           cfg.LocalFilter,
@@ -208,6 +211,14 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 	}
 
 	return e, nil
+}
+
+func (e *Engine) collector() *perf.Collector {
+	if e == nil {
+		return nil
+	}
+
+	return e.perfCollector
 }
 
 func (e *Engine) nextRuntimeRunID() string {
