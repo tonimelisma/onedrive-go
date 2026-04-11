@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"os"
+	"syscall"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
@@ -17,9 +20,24 @@ import (
 
 const controlClientTimeout = 2 * time.Second
 
+type controlOwnerState string
+
+const (
+	controlOwnerStateWatchOwner      controlOwnerState = "watch_owner"
+	controlOwnerStateOneShotOwner    controlOwnerState = "oneshot_owner"
+	controlOwnerStateNoSocket        controlOwnerState = "no_socket"
+	controlOwnerStatePathUnavailable controlOwnerState = "path_unavailable"
+	controlOwnerStateProbeFailed     controlOwnerState = "probe_failed"
+)
+
 type controlSocketClient struct {
 	transport *http.Transport
 	status    synccontrol.StatusResponse
+}
+
+type controlOwnerProbe struct {
+	state  controlOwnerState
+	client *controlSocketClient
 }
 
 type controlDaemonError struct {
@@ -43,17 +61,12 @@ func isControlDaemonError(err error) bool {
 	return errors.As(err, &daemonErr)
 }
 
-func openControlSocketClient(ctx context.Context) (*controlSocketClient, bool, error) {
+func probeControlOwner(ctx context.Context) (controlOwnerProbe, error) {
 	socketPath, err := config.ControlSocketPath()
 	if err != nil {
-		return nil, false, fmt.Errorf("control socket path: %w", err)
+		return controlOwnerProbe{state: controlOwnerStatePathUnavailable}, fmt.Errorf("control socket path: %w", err)
 	}
-	transport := &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			var dialer net.Dialer
-			return dialer.DialContext(ctx, "unix", socketPath)
-		},
-	}
+	transport := newControlSocketTransport(socketPath)
 	client := &controlSocketClient{
 		transport: transport,
 	}
@@ -63,31 +76,73 @@ func openControlSocketClient(ctx context.Context) (*controlSocketClient, bool, e
 
 	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, synccontrol.HTTPBaseURL+synccontrol.PathStatus, http.NoBody)
 	if err != nil {
-		return nil, false, nil
+		return controlOwnerProbe{state: controlOwnerStateProbeFailed}, fmt.Errorf("build control status request: %w", err)
 	}
 	resp, err := client.transport.RoundTrip(req)
 	if err != nil {
-		return nil, false, nil
+		if isControlSocketUnavailable(err) {
+			return controlOwnerProbe{state: controlOwnerStateNoSocket}, nil
+		}
+
+		return controlOwnerProbe{state: controlOwnerStateProbeFailed}, fmt.Errorf("send control status request: %w", err)
 	}
 	statusCode := resp.StatusCode
 	var decoded synccontrol.StatusResponse
 	decodeErr := json.NewDecoder(resp.Body).Decode(&decoded)
 	closeErr := resp.Body.Close()
 	if closeErr != nil {
-		return nil, false, nil
+		return controlOwnerProbe{state: controlOwnerStateProbeFailed}, fmt.Errorf("close control status response: %w", closeErr)
 	}
 	if statusCode != http.StatusOK {
-		return nil, false, nil
+		return controlOwnerProbe{state: controlOwnerStateProbeFailed}, fmt.Errorf("unexpected control status response: %s", resp.Status)
 	}
 	if decodeErr != nil {
-		return nil, false, nil
+		return controlOwnerProbe{state: controlOwnerStateProbeFailed}, fmt.Errorf("decode control status response: %w", decodeErr)
 	}
 	if decoded.OwnerMode == "" {
-		return nil, false, nil
+		return controlOwnerProbe{state: controlOwnerStateProbeFailed}, fmt.Errorf("decode control status response: missing owner mode")
 	}
 
 	client.status = decoded
-	return client, true, nil
+	switch decoded.OwnerMode {
+	case synccontrol.OwnerModeWatch:
+		return controlOwnerProbe{
+			state:  controlOwnerStateWatchOwner,
+			client: client,
+		}, nil
+	case synccontrol.OwnerModeOneShot:
+		return controlOwnerProbe{
+			state:  controlOwnerStateOneShotOwner,
+			client: client,
+		}, nil
+	default:
+		return controlOwnerProbe{state: controlOwnerStateProbeFailed}, fmt.Errorf(
+			"decode control status response: unknown owner mode %q",
+			decoded.OwnerMode,
+		)
+	}
+}
+
+func newControlSocketTransport(socketPath string) *http.Transport {
+	return &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var dialer net.Dialer
+			return dialer.DialContext(ctx, "unix", socketPath)
+		},
+	}
+}
+
+func isControlSocketUnavailable(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED)
+}
+
+func isControlSocketGone(err error) bool {
+	return isControlSocketUnavailable(err) ||
+		errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, syscall.ECONNRESET)
 }
 
 func (c *controlSocketClient) ownerMode() synccontrol.OwnerMode {

@@ -41,7 +41,7 @@ This keeps human/JSON command results separate from progress/status messages and
 | CLI account-email reconciliation updates selector state and reloads the resolved drive before interactive session work continues. | `internal/cli/root_test.go` (`TestCLIContextSession_ReconcilesEmailChangeAndReloadsDrive`), `internal/config/token_resolution_test.go`, `internal/driveid/canonical_test.go` |
 | Watch-mode CLI wiring remains injectable at both the top-level watch-runner seam and the lower daemon-orchestrator seam, and target-scoped interactive/shared flows still work under live E2E coverage. | `internal/cli/signal_test.go` (`TestRunSyncWatch_FirstSignalCancelsWatchRunner`, `TestRunSyncWatch_FirstSignalCancelsDaemonOrchestrator`, `TestShutdownContext_FirstSignalCancels`, `TestShutdownContext_SecondSignalForcesExit`), `e2e/sync_watch_full_test.go` (`TestE2E_SyncWatch_ConflictDuringWatch`), `e2e/sync_full_test.go` (`TestE2E_Sync_EditDeleteConflict`, `TestE2E_Sync_EditEditConflict_ResolveKeepRemote`) |
 | Command-scoped log-file cleanup is rooted in the top-level CLI runner, so the active closer still shuts down exactly once when a leaf command replaces the logger and then returns an error before Cobra post-run hooks would fire. | `internal/cli/root_test.go` (`TestCLIContextReplaceCommandLogger_ClosesReplacedCloserAndTopLevelCloseClosesActiveCloser`, `TestCloseRootCommandLogger_ClosesActiveLoggerAfterCommandError`) |
-| Control-socket path derivation failures stop sync-owner startup loudly, while durable-intent commands and daemon-reload notifications handle the same condition intentionally instead of pretending a daemon probe succeeded. | `internal/cli/sync_test.go` (`TestSyncService_Run_FailsLoudlyWhenControlSocketPathCannotBeDerivedForOneShot`, `TestSyncService_Run_FailsLoudlyWhenControlSocketPathCannotBeDerivedForWatch`), `internal/cli/control_socket_semantics_test.go` (`TestIssuesApproveDeletes_FallsBackToDirectDBWhenControlSocketPathIsUnavailable`, `TestNotifyDaemon_ReportsControlSocketPathFailureClearly`) |
+| CLI control-socket probing classifies watch owners, one-shot owners, missing sockets, path-unavailable sockets, and ambiguous probe failures distinctly so durable-intent fallback is intentional and daemon notifications stop collapsing protocol failures into "no daemon". | `internal/cli/control_socket_semantics_test.go` (`TestProbeControlOwner_ClassifiesOutcomes`, `TestIssuesApproveDeletes_WritesDirectDBIntentForOneShotOwner`, `TestConflictsResolve_FallsBackToDBIntentWhenNoDaemonSocketExists`, `TestIssuesApproveDeletes_FallsBackToDirectDBWhenControlSocketPathIsUnavailable`, `TestIssuesApproveDeletes_DoesNotFallbackWhenControlProbeIsAmbiguous`, `TestNotifyDaemon_ReportsAmbiguousProbeFailureClearly`), `internal/cli/sync_test.go` (`TestSyncService_Run_FailsLoudlyWhenControlSocketPathCannotBeDerivedForOneShot`, `TestSyncService_Run_FailsLoudlyWhenControlSocketPathCannotBeDerivedForWatch`) |
 
 ## Command Structure
 
@@ -293,12 +293,23 @@ the sync control socket to request reload from a live watch owner.
 Implements: R-2.8.1 [verified], R-2.8.2 [verified], R-2.9.1 [verified], R-2.9.2 [verified], R-2.9.3 [verified], R-6.3.3 [verified]
 
 Single-instance enforcement and live-daemon mutation routing use the Unix
-control socket, not legacy signal/file IPC. The CLI probes `GET /v1/status` to
-detect a live owner. Mutating sync-adjacent commands use socket RPC only when
-the socket reports `owner_mode="watch"`. If no socket is live, if the socket
-reports `owner_mode="oneshot"`, or if a watch socket disappears between status
-probe and POST, the CLI falls back to direct durable DB intent. Typed daemon
-application errors are authoritative and are reported without fallback.
+control socket, not legacy signal/file IPC. The CLI probes `GET /v1/status`
+through one shared owner-classification helper instead of collapsing the
+result to a bool. That helper returns exactly one of:
+
+- `watch_owner`: live watch daemon, live RPC allowed
+- `oneshot_owner`: live foreground sync owner, no live mutation RPC allowed
+- `no_socket`: no daemon reachable
+- `path_unavailable`: socket path derivation proved no daemon can bind
+- `probe_failed`: status/transport/protocol ambiguity at the owner boundary
+
+Mutating sync-adjacent commands use socket RPC only for `watch_owner`.
+`oneshot_owner`, `no_socket`, and `path_unavailable` fall back to direct
+durable DB intent. `probe_failed` is authoritative and does not fall back.
+After a successful `watch_owner` probe, one narrower fallback remains: if the
+watch socket disappears between status probe and POST, the CLI falls back to
+direct durable intent. Typed daemon application errors and other ambiguous
+POST failures are authoritative and are reported without fallback.
 
 `issues approve-deletes` and `conflicts resolve` share one CLI-owned durable
 intent routing helper so this policy lives in exactly one place. The helper
@@ -313,8 +324,10 @@ path nor the hashed runtime fallback fits inside the Unix socket length budget,
 pretending no socket exists. Sync-owner startup treats that as fatal before the
 orchestrator starts. Durable-intent commands treat the same derivation failure
 as proof that no live daemon can bind the socket and fall back to direct DB
-intent writes; daemon-reload notifications surface a note that the socket path
-is unavailable.
+intent writes. Daemon-reload notifications use the same owner probe, so they
+now distinguish "socket path unavailable", "no running daemon", "foreground
+one-shot owner", and "control socket probe failed" instead of reporting every
+non-watch case as "no daemon".
 
 Socket-routed commands:
 

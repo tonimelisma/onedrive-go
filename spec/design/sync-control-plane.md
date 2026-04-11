@@ -113,12 +113,28 @@ The socket speaks JSON over HTTP:
 One-shot sync exposes only status. Mutating requests return a busy response
 with `code="foreground_sync_running"` because a foreground one-shot sync is
 already the active owner. The CLI routes all durable-intent mutations through
-one shared policy: `owner_mode="watch"` is the only live RPC mutation target.
-If no socket is live, if the socket reports `owner_mode="oneshot"`, if socket
-path derivation proves no daemon can exist, or if a watch socket disappears
-between status probe and POST, mutating CLIs write the same durable intent
-directly to the selected drive's state DB. Typed daemon application errors are
-authoritative and are reported rather than falling back.
+one shared probe boundary before deciding whether the daemon is a live mutation
+target. That probe classifies exactly five outcomes:
+
+- `watch_owner`: live watch daemon, RPC mutations allowed
+- `oneshot_owner`: live foreground sync owner, status is authoritative but no
+  live mutation RPC is allowed
+- `no_socket`: no daemon reachable, direct durable-intent DB writes allowed
+- `path_unavailable`: socket path derivation proves no daemon can bind,
+  direct durable-intent DB writes allowed
+- `probe_failed`: the CLI could reach the owner boundary but could not classify
+  it reliably (transport/protocol/status ambiguity), so no direct fallback is
+  allowed
+
+Only `watch_owner` is a live RPC mutation target. `oneshot_owner`,
+`no_socket`, and `path_unavailable` all route durable intent directly to the
+selected drive store. `probe_failed` is authoritative and is surfaced as an
+error instead of being collapsed into "no daemon". After a successful
+`watch_owner` probe, one narrower fallback remains: if the watch socket
+disappears between `GET /v1/status` and the mutation POST, the CLI may fall
+back to the same direct durable-intent write. Typed daemon application errors
+and other ambiguous POST failures remain authoritative and are reported rather
+than falling back.
 
 Error responses have the shape `{status, code, message}`. Stable codes are
 `invalid_request`, `foreground_sync_running`, `drive_not_managed`,

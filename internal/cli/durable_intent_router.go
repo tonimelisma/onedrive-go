@@ -2,8 +2,7 @@ package cli
 
 import (
 	"context"
-
-	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
+	"fmt"
 )
 
 // routeDurableIntent centralizes the CLI policy for mutating durable sync
@@ -17,18 +16,30 @@ func routeDurableIntent[T any](
 ) (T, error) {
 	var zero T
 
-	client, ok, err := openControlSocketClient(ctx)
-	if err != nil || !ok || client.ownerMode() != synccontrol.OwnerModeWatch {
+	probe, err := probeControlOwner(ctx)
+	if err != nil && probe.state == controlOwnerStateProbeFailed {
+		return zero, fmt.Errorf("probe control owner: %w", err)
+	}
+
+	switch probe.state {
+	case controlOwnerStateOneShotOwner, controlOwnerStateNoSocket, controlOwnerStatePathUnavailable:
 		return direct(ctx)
-	}
+	case controlOwnerStateWatchOwner:
+		result, watchErr := watch(ctx, probe.client)
+		if watchErr == nil {
+			return result, nil
+		}
+		if isControlDaemonError(watchErr) {
+			return zero, watchErr
+		}
+		if isControlSocketGone(watchErr) {
+			return direct(ctx)
+		}
 
-	result, err := watch(ctx, client)
-	if err == nil {
-		return result, nil
+		return zero, watchErr
+	case controlOwnerStateProbeFailed:
+		return zero, fmt.Errorf("probe control owner: %w", err)
+	default:
+		return zero, fmt.Errorf("probe control owner: unhandled probe state %q", probe.state)
 	}
-	if isControlDaemonError(err) {
-		return zero, err
-	}
-
-	return direct(ctx)
 }

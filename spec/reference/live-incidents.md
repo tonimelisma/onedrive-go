@@ -25,7 +25,7 @@ of truth for what was seen, when it was seen, and how it was handled.
 | LI-20260407-01 | Follow-on `put` lost a freshly visible parent path | fixed | graph quirk | 2026-04-07 | no |
 | LI-20260406-01 | Personal scoped delta not ready after path resolution | fixed | graph quirk | 2026-04-06 | no |
 | LI-20260405-05 | One-shot crash recovery left durable work unreplayed | fixed | product bug | 2026-04-05 | no |
-| LI-20260405-04 | Fast E2E download-only assumed delta visibility too early | closed as test | graph quirk | 2026-04-09 | yes |
+| LI-20260405-04 | Fast E2E download-only assumed delta visibility too early | closed as test | graph quirk | 2026-04-10 | yes |
 | LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | fixed | test bug | 2026-04-08 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
@@ -588,7 +588,7 @@ Promoted docs: [test-assurance-audit.md](/Users/tonimelisma/Development/onedrive
 ## LI-20260405-04: Fast E2E download-only tests assumed delta visibility too early
 
 First seen: 2026-04-05  
-Last seen: 2026-04-09  
+Last seen: 2026-04-10  
 Area: fast-e2e, download-only sync  
 Suite / test: `e2e`, `TestE2E_Sync_DownloadOnly`; later `TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile`  
 Classification: graph quirk  
@@ -604,6 +604,21 @@ Evidence:
 - April 8, 2026 local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` hit the same family in the classified fast-E2E pre-pass, and the targeted rerun passed immediately, confirming the scheduled/manual rerun path is now correctly scoped to this exact recurrence.
 - April 9, 2026 local `go run ./cmd/devtool verify default` reproduced the same family in `TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile`: direct `stat` calls showed `/e2e-sync-scope-file-.../docs/report.txt` and `/other.txt` as visible, but the immediate `sync --download-only --force` pass still saw `No changes detected` because the incremental scoped observation had not caught up yet.
 - April 9, 2026 the same local `go run ./cmd/devtool verify default` later hit `TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload`: after removing `.odignore`, the immediate `sync --download-only --force` pass planned the download but the worker hit the documented transient item-by-ID download-metadata `404` family for `secret.txt`. A later sync pass was sufficient to converge, so the test's first-pass assumption was too strict.
+- April 10, 2026 local `go run ./cmd/devtool verify default` reproduced the
+  same family again in
+  `TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile`: after
+  `mkdir /e2e-sync-scope-file-1775867945012522000/docs` and the helper-driven
+  `put` steps completed, the eventual-convergence loop still timed out once
+  because the immediate `sync --download-only --force` pass saw `No changes
+  detected` while `GET /root:/.../docs/report.txt`, `GET /root:/.../docs`, and
+  `GET /root:/...` all still returned `404 itemNotFound`. The delta page later
+  returned only unrelated root items and one shortcut, with no events for the
+  fresh scoped subtree.
+- An immediate isolated rerun on April 10, 2026 passed:
+  `go test -tags=e2e ./e2e -run TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile -count=1`
+  completed successfully in about 21 seconds, which confirmed the same
+  intermittent delta-lag family rather than a deterministic product
+  regression.
 Resolution / mitigation: The fast E2E tests now wait for the real product outcome, the expected local sync result, instead of assuming the first pass after direct REST visibility or scope unblocking must succeed. Delta-sensitive live sync tests now reuse the same eventual-convergence helper pattern, and scheduled/manual `devtool verify e2e-full --classify-live-quirks` may rerun this exact test family once when the known delta-lag family recurs. Those same live waits now emit `timing-summary.json`, so recurring convergence gaps show up as measured windows rather than only as pass/fail noise.
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md)
 
