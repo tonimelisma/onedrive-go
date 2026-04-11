@@ -280,13 +280,21 @@ Run-scoped state lives in two dedicated owners:
   shortcut snapshot, result counters)
 - `watchRuntime`: watch-mode mutable state (`engineFlow`, active scopes,
   scope detection state, buffer, delete counter, observer references,
-  retry/trial timers, reconciliation state, next action ID, runtime phase)
+  retry/trial timers, reconciliation state, next action ID, loop state)
 
 `watchRuntime` keeps its `activeScopes` slice and retry/trial timer pointers
 behind unexported runtime accessors. The watch loop still owns the semantics,
 but those accessors snapshot or replace the tiny working sets under
 per-runtime locks so tests, startup repair, and timer re-arming cannot race on
 raw slice or timer-pointer fields.
+
+`watchRuntime.loop` is the single owner of watch-loop admission state. It
+holds the current phase (`running` or `draining`) plus the outbox slice of
+ready-but-not-yet-dispatched actions. Event handlers do not mutate `dispatchCh`
+or clear durable-intent wake state directly. They emit transitions, the watch
+loop applies the resulting effects, and `settleWatchAdmission()` is the only
+boundary allowed to clear `userIntentPending` or convert pending durable intent
+into new outbox work.
 
 Time boundaries are also engine-owned. `Engine.afterFunc`,
 `Engine.newTicker`, `Engine.sleepFn`, and `Engine.jitterFn` are the only
@@ -489,15 +497,23 @@ threshold is crossed, it creates or refreshes a persisted scope block via
 classifier's `ResultDecision`.
 
 The engine owns all completion decisions — workers are pure executors. In
-watch mode the single watch loop on `watchRuntime` uses an actor-with-outbox
-pattern: results, buffer flushes, trial ticks, retry ticks, and dependent
-admission are processed single-threaded within one select loop, and ready
-actions are collected into an outbox slice before being sent to `dispatchCh`.
-This prevents deadlock that would occur if result handling tried to
-synchronously send to a full `dispatchCh` while workers tried to synchronously
-send to a full results channel. One-shot mode keeps a separate coordinator,
-`oneShotRunner.runResultsLoop`, with the same shared result-routing semantics
-but without watch-only mutable state.
+watch mode the single watch loop on `watchRuntime` now runs through an
+explicit event -> transition -> effect -> admission pipeline. One loop-owned
+state object keeps the runtime phase plus an outbox slice of
+ready-but-not-yet-dispatched actions. Each iteration waits for one event
+(dispatch readiness, buffered observation, worker result, retry/trial tick,
+scope change, user-intent wake, reconcile activity, observer exit, or
+cancellation), computes one transition, applies the resulting side effects,
+and then runs one shared admission pass. This preserves the actor-style
+single-owner discipline while making the admission boundary explicit: event
+handlers can request work, but only the admission pass decides whether pending
+durable intent becomes dispatchable outbox actions.
+
+The loop-owned outbox still prevents deadlock that would occur if result
+handling tried to synchronously send to a full `dispatchCh` while workers
+tried to synchronously send to a full results channel. One-shot mode keeps a
+separate coordinator, `oneShotRunner.runResultsLoop`, with the same shared
+result-routing semantics but without watch-only mutable state.
 
 The watch loop has two explicit phases:
 

@@ -268,7 +268,8 @@ func TestEngine_DrainingDispatchAdmissionPanicsWithQueuedOutbox(t *testing.T) {
 	require.PanicsWithValue(t,
 		"dispatch channel for outbox: draining runtime must not attempt to admit 1 queued actions",
 		func() {
-			rt.dispatchChannelForOutbox(outbox)
+			rt.replaceOutbox(outbox)
+			rt.dispatchChannelForOutbox()
 		})
 }
 

@@ -9,7 +9,7 @@ import (
 )
 
 func (rt *watchRuntime) phase() watchRuntimePhase {
-	return rt.watchRuntimeState.phase
+	return rt.loop.phase
 }
 
 func (rt *watchRuntime) isDraining() bool {
@@ -17,13 +17,42 @@ func (rt *watchRuntime) isDraining() bool {
 }
 
 func (rt *watchRuntime) enterDraining() bool {
-	if rt.watchRuntimeState.phase == watchRuntimePhaseDraining {
+	if rt.loop.phase == watchRuntimePhaseDraining {
 		return false
 	}
 
-	rt.watchRuntimeState.phase = watchRuntimePhaseDraining
+	rt.loop.phase = watchRuntimePhaseDraining
 
 	return true
+}
+
+func (rt *watchRuntime) currentOutbox() []*synctypes.TrackedAction {
+	return rt.loop.outbox
+}
+
+func (rt *watchRuntime) replaceOutbox(outbox []*synctypes.TrackedAction) {
+	if len(outbox) == 0 {
+		rt.loop.outbox = nil
+		return
+	}
+
+	rt.loop.outbox = append(rt.loop.outbox[:0], outbox...)
+}
+
+func (rt *watchRuntime) appendOutbox(actions []*synctypes.TrackedAction) {
+	if len(actions) == 0 {
+		return
+	}
+
+	rt.loop.outbox = append(rt.loop.outbox, actions...)
+}
+
+func (rt *watchRuntime) consumeOutboxHead() {
+	if len(rt.loop.outbox) == 0 {
+		return
+	}
+
+	rt.loop.outbox = rt.loop.outbox[1:]
 }
 
 func (rt *watchRuntime) replaceActiveScopes(blocks []synctypes.ScopeBlock) {
@@ -136,15 +165,15 @@ func (rt *watchRuntime) queueUserIntentDispatch() {
 	rt.userIntentPending = true
 }
 
-func (rt *watchRuntime) flushPendingUserIntent(
+func (rt *watchRuntime) settleWatchAdmission(
 	ctx context.Context,
 	p *watchPipeline,
-	outbox []*synctypes.TrackedAction,
-) []*synctypes.TrackedAction {
+) {
+	outbox := rt.currentOutbox()
 	if !rt.userIntentPending || len(outbox) > 0 || rt.depGraph.InFlightCount() > 0 {
-		return outbox
+		return
 	}
 
 	rt.userIntentPending = false
-	return append(outbox, rt.runUserIntentDispatch(ctx, p.bl, p.mode, p.safety)...)
+	rt.appendOutbox(rt.runUserIntentDispatch(ctx, p.bl, p.mode, p.safety))
 }
