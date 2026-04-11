@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,8 +13,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // ---------------------------------------------------------------------------
@@ -25,47 +22,36 @@ import (
 // multi-drive report structure, and status edge cases.
 // ---------------------------------------------------------------------------
 
-// TestE2E_Verify_JSON validates that verify --json produces well-formed JSON
-// with mismatch entries when local files are tampered.
-func TestE2E_Verify_JSON(t *testing.T) {
+// TestE2E_Status_DetailedJSON validates that single-drive status --json emits
+// the detailed read model arrays used for issues, delete safety, and conflicts.
+func TestE2E_Status_DetailedJSON(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
 
-	testFolder := fmt.Sprintf("e2e-out-verifyjson-%d", time.Now().UnixNano())
+	testFolder := fmt.Sprintf("e2e-out-statusjson-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
-	// Create files and sync.
+	// Create a file and sync so the detailed status read model has baseline data.
 	localDir := filepath.Join(syncDir, testFolder)
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "good.txt"), []byte("good"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "tamper.txt"), []byte("original"), 0o600))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
-	// Tamper with local file.
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "tamper.txt"), []byte("TAMPERED"), 0o600))
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "status", "--json")
 
-	// Verify --json should detect mismatch.
-	stdout, _, verifyErr := runCLIWithConfigAllowError(t, cfgPath, env, "verify", "--json")
-	require.Error(t, verifyErr, "verify should fail when files are tampered")
-	var exitErr *exec.ExitError
-	require.ErrorAs(t, verifyErr, &exitErr)
-	assert.Equal(t, 1, exitErr.ExitCode(), "verify mismatch should exit with code 1")
+	var output map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &output),
+		"status --json should produce valid JSON, got: %s", stdout)
 
-	var report synctypes.VerifyReport
-	require.NoError(t, json.Unmarshal([]byte(stdout), &report),
-		"verify --json should produce valid JSON, got: %s", stdout)
-
-	assert.Equal(t, 1, report.Verified, "only the untampered file should verify")
-	require.Len(t, report.Mismatches, 1)
-	assert.Equal(t, filepath.ToSlash(filepath.Join(testFolder, "tamper.txt")), report.Mismatches[0].Path)
-	assert.Equal(t, "hash_mismatch", report.Mismatches[0].Status)
-	assert.NotEmpty(t, report.Mismatches[0].Expected)
-	assert.NotEmpty(t, report.Mismatches[0].Actual)
-	assert.NotEqual(t, report.Mismatches[0].Expected, report.Mismatches[0].Actual)
+	assert.Contains(t, output, "issue_groups")
+	assert.Contains(t, output, "delete_safety")
+	assert.Contains(t, output, "conflicts")
+	assert.Contains(t, output, "state_store_status")
+	assert.Equal(t, "healthy", output["state_store_status"])
 }
 
 // TestE2E_Status_NoDrives validates that status with no configured drives

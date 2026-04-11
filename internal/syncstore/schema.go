@@ -18,7 +18,10 @@ import (
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
-const currentMigrationVersion = int64(2)
+const (
+	currentMigrationVersion = int64(3)
+	recoverDriveStateDBHint = "run 'onedrive-go --drive <id> recover' to repair, rebuild, or reset this drive state DB"
+)
 
 const (
 	gooseHistoryRebuildGuidance = "rebuild or migrate the drive state DB and run sync again"
@@ -60,10 +63,11 @@ func applySchema(ctx context.Context, db *sql.DB) error {
 	}
 	if version != currentMigrationVersion {
 		return fmt.Errorf(
-			"%w: found migration version %d, expected version %d; rebuild or migrate the drive state DB and run sync again",
+			"%w: found migration version %d, expected version %d; %s",
 			ErrIncompatibleSchema,
 			version,
 			currentMigrationVersion,
+			recoverDriveStateDBHint,
 		)
 	}
 
@@ -112,8 +116,9 @@ func ensureGooseManagedOrEmpty(ctx context.Context, db *sql.DB) error {
 	}
 
 	return fmt.Errorf(
-		"%w: existing sync store has no goose migration history; rebuild or migrate the drive state DB and run sync again",
+		"%w: existing sync store has no goose migration history; %s",
 		ErrIncompatibleSchema,
+		recoverDriveStateDBHint,
 	)
 }
 

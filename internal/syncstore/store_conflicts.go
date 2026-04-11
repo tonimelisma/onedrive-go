@@ -34,7 +34,7 @@ const (
 	sqlSelectConflictRequestCols = `c.id, c.drive_id, c.item_id, c.path, c.conflict_type,
 		c.detected_at, c.local_hash, c.remote_hash, c.local_mtime, c.remote_mtime,
 		c.resolution, c.resolved_at, c.resolved_by,
-		r.state, r.requested_resolution, r.requested_at, r.resolving_at, r.resolution_error`
+		r.state, r.requested_resolution, r.requested_at, r.applying_at, r.last_error`
 
 	sqlListConflicts = `SELECT ` + sqlSelectConflictCols + `
 		FROM conflicts WHERE resolution = 'unresolved'
@@ -60,11 +60,10 @@ const (
 type ConflictRequestStatus string
 
 const (
-	ConflictRequestQueued            ConflictRequestStatus = "queued"
-	ConflictRequestAlreadyQueued     ConflictRequestStatus = "already_queued"
-	ConflictRequestAlreadyResolving  ConflictRequestStatus = "already_resolving"
-	ConflictRequestAlreadyResolved   ConflictRequestStatus = "already_resolved"
-	ConflictRequestDifferentStrategy ConflictRequestStatus = "different_strategy"
+	ConflictRequestQueued          ConflictRequestStatus = "queued"
+	ConflictRequestAlreadyQueued   ConflictRequestStatus = "already_queued"
+	ConflictRequestAlreadyApplying ConflictRequestStatus = "already_applying"
+	ConflictRequestAlreadyResolved ConflictRequestStatus = "already_resolved"
 )
 
 type ConflictRequestResult struct {
@@ -78,7 +77,8 @@ func (m *SyncStore) ListConflicts(ctx context.Context) ([]synctypes.ConflictReco
 }
 
 // ListAllConflicts returns all conflicts (resolved and unresolved) ordered
-// by detection time descending. Used by 'conflicts --history'.
+// by detection time descending. The product CLI consumes this through
+// single-drive `status --history`.
 func (m *SyncStore) ListAllConflicts(ctx context.Context) ([]synctypes.ConflictRecord, error) {
 	return m.queryConflicts(ctx, sqlListAllConflicts)
 }
@@ -247,12 +247,12 @@ func (m *SyncStore) RequestConflictResolution(
 
 	insertResult, err := tx.ExecContext(ctx,
 		`INSERT INTO conflict_requests (
-			conflict_id, requested_resolution, state, requested_at, resolving_at, resolution_error
+			conflict_id, requested_resolution, state, requested_at, applying_at, last_error
 		) VALUES (?, ?, ?, ?, NULL, NULL)
 		ON CONFLICT(conflict_id) DO NOTHING`,
 		id,
 		resolution,
-		synctypes.ConflictStateResolutionRequested,
+		synctypes.ConflictStateQueued,
 		now,
 	)
 	if err != nil {
@@ -295,38 +295,35 @@ func handleExistingConflictRequestTx(
 	now int64,
 ) (ConflictRequestResult, error) {
 	switch request.State {
-	case synctypes.ConflictStateResolutionRequested:
-		status := ConflictRequestAlreadyQueued
+	case synctypes.ConflictStateQueued:
 		if request.RequestedResolution != resolution {
-			status = ConflictRequestDifferentStrategy
+			return overwriteQueuedConflictRequestTx(ctx, tx, conflict, id, resolution, now)
 		}
 		return commitConflictRequestResult(
 			tx,
 			id,
 			"sync: commit conflict resolution request read",
 			&ConflictRequestResult{
-				Status:   status,
+				Status:   ConflictRequestAlreadyQueued,
 				Conflict: *conflict,
 			},
 		)
-	case synctypes.ConflictStateResolving:
+	case synctypes.ConflictStateApplying:
 		return commitConflictRequestResult(
 			tx,
 			id,
-			"sync: commit conflict resolving read",
+			"sync: commit conflict applying read",
 			&ConflictRequestResult{
-				Status:   ConflictRequestAlreadyResolving,
+				Status:   ConflictRequestAlreadyApplying,
 				Conflict: *conflict,
 			},
 		)
-	case synctypes.ConflictStateResolveFailed:
-		return requeueFailedConflictRequestTx(ctx, tx, conflict, id, resolution, now)
 	default:
 		return ConflictRequestResult{}, fmt.Errorf("sync: conflict request %s has invalid workflow state %q", id, request.State)
 	}
 }
 
-func requeueFailedConflictRequestTx(
+func overwriteQueuedConflictRequestTx(
 	ctx context.Context,
 	tx *sql.Tx,
 	conflict *synctypes.ConflictRecord,
@@ -336,30 +333,29 @@ func requeueFailedConflictRequestTx(
 ) (ConflictRequestResult, error) {
 	updateResult, err := tx.ExecContext(ctx,
 		`UPDATE conflict_requests
-		SET requested_resolution = ?, state = ?, requested_at = ?,
-		    resolving_at = NULL, resolution_error = NULL
+		SET requested_resolution = ?, requested_at = ?,
+		    applying_at = NULL, last_error = NULL
 		WHERE conflict_id = ? AND state = ?`,
 		resolution,
-		synctypes.ConflictStateResolutionRequested,
 		now,
 		id,
-		synctypes.ConflictStateResolveFailed,
+		synctypes.ConflictStateQueued,
 	)
 	if err != nil {
-		return ConflictRequestResult{}, fmt.Errorf("sync: requeue conflict resolution %s: %w", id, err)
+		return ConflictRequestResult{}, fmt.Errorf("sync: overwrite queued conflict resolution %s: %w", id, err)
 	}
 	updated, err := updateResult.RowsAffected()
 	if err != nil {
-		return ConflictRequestResult{}, fmt.Errorf("sync: checking requeued conflict resolution %s: %w", id, err)
+		return ConflictRequestResult{}, fmt.Errorf("sync: checking overwritten conflict resolution %s: %w", id, err)
 	}
 	if updated != 1 {
-		return ConflictRequestResult{}, fmt.Errorf("sync: conflict request %s changed while requeueing", id)
+		return ConflictRequestResult{}, fmt.Errorf("sync: conflict request %s changed while overwriting", id)
 	}
 
 	return commitConflictRequestResult(
 		tx,
 		id,
-		"sync: commit requeued conflict resolution",
+		"sync: commit overwritten conflict resolution",
 		&ConflictRequestResult{
 			Status:   ConflictRequestQueued,
 			Conflict: *conflict,
@@ -407,7 +403,7 @@ func (m *SyncStore) ListRequestedConflictResolutions(
 		WHERE r.state = ?
 		ORDER BY r.requested_at, c.detected_at
 		LIMIT ?`,
-		synctypes.ConflictStateResolutionRequested,
+		synctypes.ConflictStateQueued,
 		limit,
 	)
 	if err != nil {
@@ -430,7 +426,7 @@ func (m *SyncStore) ListRequestedConflictResolutions(
 	return conflicts, nil
 }
 
-// ClaimConflictResolution moves a queued request into resolving state so only
+// ClaimConflictResolution moves a queued request into applying state so only
 // one engine instance may execute its side effects.
 func (m *SyncStore) ClaimConflictResolution(
 	ctx context.Context,
@@ -439,12 +435,12 @@ func (m *SyncStore) ClaimConflictResolution(
 	now := m.nowFunc().UnixNano()
 	result, err := m.db.ExecContext(ctx,
 		`UPDATE conflict_requests
-		SET state = ?, resolving_at = ?, resolution_error = NULL
+		SET state = ?, applying_at = ?, last_error = NULL
 		WHERE conflict_id = ? AND state = ?`,
-		synctypes.ConflictStateResolving,
+		synctypes.ConflictStateApplying,
 		now,
 		id,
-		synctypes.ConflictStateResolutionRequested,
+		synctypes.ConflictStateQueued,
 	)
 	if err != nil {
 		return nil, false, fmt.Errorf("sync: claiming conflict resolution %s: %w", id, err)
@@ -461,8 +457,8 @@ func (m *SyncStore) ClaimConflictResolution(
 	if err != nil {
 		return nil, false, err
 	}
-	conflict.State = synctypes.ConflictStateResolving
-	conflict.ResolvingAt = now
+	conflict.State = synctypes.ConflictStateApplying
+	conflict.ApplyingAt = now
 
 	return conflict, true, nil
 }
@@ -475,12 +471,12 @@ func (m *SyncStore) MarkConflictResolutionFailed(ctx context.Context, id string,
 
 	_, err := m.db.ExecContext(ctx,
 		`UPDATE conflict_requests
-		SET state = ?, resolution_error = ?, resolving_at = NULL
+		SET state = ?, last_error = ?, applying_at = NULL
 		WHERE conflict_id = ? AND state = ?`,
-		synctypes.ConflictStateResolveFailed,
+		synctypes.ConflictStateQueued,
 		message,
 		id,
-		synctypes.ConflictStateResolving,
+		synctypes.ConflictStateApplying,
 	)
 	if err != nil {
 		return fmt.Errorf("sync: marking conflict resolution %s failed: %w", id, err)
@@ -492,19 +488,19 @@ func (m *SyncStore) MarkConflictResolutionFailed(ctx context.Context, id string,
 func (m *SyncStore) ResetStaleResolvingConflicts(ctx context.Context, olderThan time.Time) (int, error) {
 	result, err := m.db.ExecContext(ctx,
 		`UPDATE conflict_requests
-		SET state = ?, resolving_at = NULL
-		WHERE state = ? AND resolving_at IS NOT NULL AND resolving_at < ?`,
-		synctypes.ConflictStateResolutionRequested,
-		synctypes.ConflictStateResolving,
+		SET state = ?, applying_at = NULL
+		WHERE state = ? AND applying_at IS NOT NULL AND applying_at < ?`,
+		synctypes.ConflictStateQueued,
+		synctypes.ConflictStateApplying,
 		olderThan.UnixNano(),
 	)
 	if err != nil {
-		return 0, fmt.Errorf("sync: resetting stale resolving conflicts: %w", err)
+		return 0, fmt.Errorf("sync: resetting stale applying conflicts: %w", err)
 	}
 
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return 0, fmt.Errorf("sync: checking stale resolving conflict count: %w", err)
+		return 0, fmt.Errorf("sync: checking stale applying conflict count: %w", err)
 	}
 
 	return int(rows), nil
@@ -618,15 +614,15 @@ func scanConflictRequest(s conflictScanner) (*synctypes.ConflictRequestRecord, e
 		resolvedAt  sql.NullInt64
 		resolvedBy  sql.NullString
 		requestedAt sql.NullInt64
-		resolvingAt sql.NullInt64
-		resolveErr  sql.NullString
+		applyingAt  sql.NullInt64
+		lastErr     sql.NullString
 	)
 
 	err := s.Scan(
 		&record.ID, &record.DriveID, &itemID, &record.Path, &record.ConflictType,
 		&record.DetectedAt, &localHash, &remoteHash, &localMtime, &remoteMtime,
 		&record.Resolution, &resolvedAt, &resolvedBy,
-		&record.State, &record.RequestedResolution, &requestedAt, &resolvingAt, &resolveErr,
+		&record.State, &record.RequestedResolution, &requestedAt, &applyingAt, &lastErr,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("sync: scanning conflict request row: %w", err)
@@ -636,7 +632,7 @@ func scanConflictRequest(s conflictScanner) (*synctypes.ConflictRequestRecord, e
 	record.Name = path.Base(record.Path)
 	record.LocalHash = localHash.String
 	record.RemoteHash = remoteHash.String
-	record.ResolutionError = resolveErr.String
+	record.LastError = lastErr.String
 	record.ResolvedBy = resolvedBy.String
 
 	if localMtime.Valid {
@@ -651,8 +647,8 @@ func scanConflictRequest(s conflictScanner) (*synctypes.ConflictRequestRecord, e
 	if requestedAt.Valid {
 		record.RequestedAt = requestedAt.Int64
 	}
-	if resolvingAt.Valid {
-		record.ResolvingAt = resolvingAt.Int64
+	if applyingAt.Valid {
+		record.ApplyingAt = applyingAt.Int64
 	}
 
 	return &record, nil

@@ -33,7 +33,10 @@ func (s *issuesService) runList(ctx context.Context) error {
 
 	snapshot, err := syncstore.ReadIssuesSnapshot(ctx, dbPath, false, s.cc.Logger)
 	if err != nil {
-		return fmt.Errorf("read issues snapshot: %w", err)
+		return recoverAwareStoreOpenError(
+			s.cc.Cfg.CanonicalID.String(),
+			fmt.Errorf("read issues snapshot: %w", err),
+		)
 	}
 
 	if snapshot.Empty() {
@@ -120,7 +123,10 @@ func (s *issuesService) openMutationStore(ctx context.Context) (issuesMutationSt
 
 	mgr, err := syncstore.NewSyncStore(ctx, dbPath, s.cc.Logger)
 	if err != nil {
-		return nil, fmt.Errorf("open sync store: %w", err)
+		return nil, recoverAwareStoreOpenError(
+			s.cc.Cfg.CanonicalID.String(),
+			fmt.Errorf("open sync store: %w", err),
+		)
 	}
 
 	return mgr, nil

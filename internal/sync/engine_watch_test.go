@@ -1662,8 +1662,8 @@ func TestResolveConflict_KeepLocal_TransferFails(t *testing.T) {
 
 	seedBaseline(t, eng.baseline, ctx, outcomes, "")
 
-	// Write the local file that would be uploaded.
-	writeLocalFile(t, syncRoot, "fail-upload.txt", "local-data")
+	writeLocalFile(t, syncRoot, "fail-upload.txt", "remote-data")
+	writeLocalFile(t, syncRoot, "fail-upload.conflict-20260115-120000.txt", "local-data")
 
 	conflicts, err := eng.ListConflicts(ctx)
 	require.NoError(t, err, "ListConflicts")
@@ -1671,37 +1671,40 @@ func TestResolveConflict_KeepLocal_TransferFails(t *testing.T) {
 
 	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepLocal))
 
-	// Conflict should remain visible with a durable failure state. Resolution
-	// execution is engine-owned and failure is persisted for retry/review,
-	// rather than returned as an ad hoc CLI-side operation error.
 	remaining, err := eng.ListConflicts(ctx)
-	require.NoError(t, err, "ListConflicts after failed resolve")
-	require.Len(t, remaining, 1, "expected 1 unresolved conflict")
-	request, err := eng.baseline.GetConflictRequest(ctx, conflicts[0].ID)
+	require.NoError(t, err, "ListConflicts after resolve")
+	assert.Empty(t, remaining, "conflict should be resolved once the chosen layout exists")
+
+	report, runErr := eng.RunOnce(ctx, synctypes.SyncBidirectional, synctypes.RunOpts{})
+	require.NoError(t, runErr)
+	require.NotNil(t, report)
+
+	failures, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, synctypes.ConflictStateResolveFailed, request.State)
-	assert.Contains(t, request.ResolutionError, "upload failed")
+	require.NotEmpty(t, failures)
+	assert.Equal(t, "fail-upload.txt", failures[0].Path)
+	assert.Equal(t, synctypes.ActionUpload, failures[0].ActionType)
+	assert.Contains(t, failures[0].LastError, "upload failed")
 }
 
 // ---------------------------------------------------------------------------
-// Regression: B-091 — resolveTransfer success path commits to baseline
+// Regression: keep_local follow-up sync work still updates baseline normally
 // ---------------------------------------------------------------------------
 
-// TestResolveConflict_KeepLocal_CommitsToBaseline verifies that after a
-// successful keep_local resolution (upload), the baseline contains an updated
-// entry with the new ItemID and hash from the upload response.
-func TestResolveConflict_KeepLocal_CommitsToBaseline(t *testing.T) {
+func TestResolveConflict_KeepLocal_FollowUpSyncCommitsToBaseline(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
 
 	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems(nil, "token-1"), nil
+		},
 		uploadFn: func(_ context.Context, _ driveid.ID, _, name string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			return &graph.Item{
-				ID:   "resolved-item-id",
-				Name: name,
-				ETag: "etag-resolved",
-				// Empty hash = skip server-side verification (consistent with B-153).
+				ID:           "resolved-item-id",
+				Name:         name,
+				ETag:         "etag-resolved",
 				QuickXorHash: "",
 			}, nil
 		},
@@ -1710,7 +1713,6 @@ func TestResolveConflict_KeepLocal_CommitsToBaseline(t *testing.T) {
 	eng, syncRoot := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	// Seed a conflict.
 	outcomes := []synctypes.Outcome{{
 		Action:       synctypes.ActionConflict,
 		Success:      true,
@@ -1722,64 +1724,46 @@ func TestResolveConflict_KeepLocal_CommitsToBaseline(t *testing.T) {
 		RemoteHash:   "old-remote-h",
 		ConflictType: "edit_edit",
 	}}
-
 	seedBaseline(t, eng.baseline, ctx, outcomes, "")
-
-	// Write the local file that will be uploaded.
-	writeLocalFile(t, syncRoot, "baseline-commit.txt", "resolved local")
+	writeLocalFile(t, syncRoot, "baseline-commit.txt", "remote-version")
+	writeLocalFile(t, syncRoot, "baseline-commit.conflict-20260115-120000.txt", "resolved local")
 
 	conflicts, err := eng.ListConflicts(ctx)
-	require.NoError(t, err, "ListConflicts")
+	require.NoError(t, err)
 	require.Len(t, conflicts, 1)
 
-	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepLocal), "ResolveConflict")
+	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepLocal))
 
-	// Verify the baseline was updated with the new item from the upload.
+	report, runErr := eng.RunOnce(ctx, synctypes.SyncBidirectional, synctypes.RunOpts{})
+	require.NoError(t, runErr)
+	require.NotNil(t, report)
+
 	bl, loadErr := eng.baseline.Load(ctx)
 	require.NoError(t, loadErr, "baseline.Load")
 
 	entry, ok := bl.GetByPath("baseline-commit.txt")
-	require.True(t, ok, "baseline entry not found after resolve")
+	require.True(t, ok, "baseline entry not found after follow-up sync")
 
 	assert.Equal(t, "resolved-item-id", entry.ItemID)
 	assert.Equal(t, "etag-resolved", entry.ETag)
 	assert.NotEmpty(t, entry.LocalHash, "baseline LocalHash should be set (computed from local file)")
-
-	// RemoteHash comes from the upload response's QuickXorHash, which is empty
-	// in this mock (skip-verification pattern), so it should be empty.
 	assert.Empty(t, entry.RemoteHash, "mock returns no hash")
-
-	// "resolved local" is 14 bytes.
 	assert.Equal(t, int64(14), entry.LocalSize)
 	assert.True(t, entry.LocalSizeKnown)
 }
 
 // ---------------------------------------------------------------------------
-// Regression: B-077 — resolveTransfer with minimal conflict record (no panic)
+// Regression: sparse conflict records still resolve layout without panic
 // ---------------------------------------------------------------------------
 
-// TestResolveConflict_KeepLocal_MinimalRecord_NoPanic verifies that calling
-// ResolveConflict with a sparse synctypes.ConflictRecord (only mandatory fields) does
-// not cause a nil-pointer panic. The original bug was a nil-map panic when
-// called without prior Execute().
 func TestResolveConflict_KeepLocal_MinimalRecord_NoPanic(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
 
-	mock := &engineMockClient{
-		uploadFn: func(_ context.Context, _ driveid.ID, _, name string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			return &graph.Item{
-				ID:   "minimal-resolved",
-				Name: name,
-			}, nil
-		},
-	}
-
-	eng, syncRoot := newTestEngine(t, mock)
+	eng, syncRoot := newTestEngine(t, &engineMockClient{})
 	ctx := t.Context()
 
-	// Seed a conflict with only the mandatory fields — no hashes, no etag.
 	outcomes := []synctypes.Outcome{{
 		Action:       synctypes.ActionConflict,
 		Success:      true,
@@ -1789,22 +1773,18 @@ func TestResolveConflict_KeepLocal_MinimalRecord_NoPanic(t *testing.T) {
 		ItemType:     synctypes.ItemTypeFile,
 		ConflictType: "edit_edit",
 	}}
-
 	seedBaseline(t, eng.baseline, ctx, outcomes, "")
-
-	// Write the local file.
-	writeLocalFile(t, syncRoot, "minimal-conflict.txt", "minimal data")
+	writeLocalFile(t, syncRoot, "minimal-conflict.txt", "remote data")
+	writeLocalFile(t, syncRoot, "minimal-conflict.conflict-20260115-120000.txt", "minimal data")
 
 	conflicts, err := eng.ListConflicts(ctx)
 	require.NoError(t, err, "ListConflicts")
 	require.Len(t, conflicts, 1)
 
-	// This must not panic. The original bug was a nil-map access in resolveTransfer.
 	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepLocal), "ResolveConflict")
 
-	// Verify the conflict is resolved.
 	remaining, err := eng.ListConflicts(ctx)
-	require.NoError(t, err, "ListConflicts after resolve")
+	require.NoError(t, err, "ListConflicts after failed resolve")
 	assert.Empty(t, remaining, "expected 0 unresolved conflicts")
 }
 

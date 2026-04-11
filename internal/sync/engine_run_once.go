@@ -40,7 +40,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 	if err := runner.prepareRunOnceState(ctx); err != nil {
 		return nil, err
 	}
-	if processErr := e.processQueuedConflictResolutions(ctx); processErr != nil {
+	if _, processErr := e.processQueuedConflictResolutions(ctx); processErr != nil {
 		return nil, processErr
 	}
 	bl, err := e.baseline.Load(ctx)

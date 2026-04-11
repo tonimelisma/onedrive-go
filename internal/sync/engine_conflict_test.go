@@ -2,7 +2,6 @@ package sync
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -24,25 +23,20 @@ const engineResolvedRemoteVersion = "remote-version"
 // Conflict resolution tests
 // ---------------------------------------------------------------------------
 
-// Validates: R-2.3.4
 func TestResolveConflict_KeepBoth(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
-
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems(nil, "token-1"), nil
-		},
-	}
-
-	eng, syncRoot := newTestEngine(t, mock)
+	eng, syncRoot := newTestEngine(t, &engineMockClient{})
 	ctx := t.Context()
 
-	// Create the file on disk — resolveKeepBoth hashes it to update baseline.
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "conflict-file.txt"), []byte("local content"), 0o600))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(syncRoot, "conflict-file.conflict-20260115-120000-2.txt"),
+		[]byte("other local content"),
+		0o600,
+	))
 
-	// Seed a conflict.
 	outcomes := []synctypes.Outcome{{
 		Action:       synctypes.ActionConflict,
 		Success:      true,
@@ -57,42 +51,22 @@ func TestResolveConflict_KeepBoth(t *testing.T) {
 
 	seedBaseline(t, eng.baseline, ctx, outcomes, "")
 
-	_, err := eng.baseline.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		driveID.String(), "item-c", "conflict-file.txt", synctypes.ItemTypeFile,
-		synctypes.SyncStatusPendingDownload, time.Now().UnixNano(),
-	)
-	require.NoError(t, err)
-
-	// Get conflict ID.
 	conflicts, err := eng.ListConflicts(ctx)
 	require.NoError(t, err, "ListConflicts")
 	require.Len(t, conflicts, 1)
 
-	// Resolve as keep_both.
 	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepBoth), "ResolveConflict")
 
-	// Verify it's no longer unresolved.
 	remaining, err := eng.ListConflicts(ctx)
 	require.NoError(t, err, "ListConflicts after resolve")
 	assert.Empty(t, remaining, "expected 0 unresolved conflicts")
 
-	// Verify baseline was updated for the original file.
-	bl, loadErr := eng.baseline.Load(ctx)
-	require.NoError(t, loadErr)
-	entry, found := bl.GetByPath("conflict-file.txt")
-	require.True(t, found, "original file should have baseline entry after keep_both")
-	assert.NotEqual(t, "local-h", entry.LocalHash, "baseline hash should be updated to current disk content")
-
-	var status synctypes.SyncStatus
-	err = eng.baseline.DB().QueryRowContext(ctx,
-		`SELECT sync_status FROM remote_state WHERE drive_id = ? AND item_id = ?`,
-		driveID.String(), "item-c",
-	).Scan(&status)
-	require.NoError(t, err)
-	assert.Equal(t, synctypes.SyncStatusSynced, status,
-		"keep_both should converge matching remote_state so the next sync stays clean")
+	assert.Equal(t, "local content", string(mustReadFileUnderRoot(t, syncRoot, "conflict-file.txt")))
+	assert.Equal(
+		t,
+		"other local content",
+		string(mustReadFileUnderRoot(t, syncRoot, "conflict-file.conflict-20260115-120000-2.txt")),
+	)
 }
 
 func TestResolveConflict_NotFound(t *testing.T) {
@@ -203,20 +177,20 @@ func TestResolveConflict_KeepLocal(t *testing.T) {
 
 	seedBaseline(t, eng.baseline, ctx, outcomes, "")
 
-	// Write the local file that will be uploaded.
-	writeLocalFile(t, syncRoot, "keep-local.txt", "local")
+	writeLocalFile(t, syncRoot, "keep-local.txt", "remote content")
+	writeLocalFile(t, syncRoot, "keep-local.conflict-20260115-120000.txt", "local preferred")
 
 	conflicts, err := eng.ListConflicts(ctx)
 	require.NoError(t, err, "ListConflicts")
 	require.Len(t, conflicts, 1)
 
 	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepLocal), "ResolveConflict")
-	assert.True(t, uploadCalled, "expected Upload to be called for keep_local resolution")
+	assert.False(t, uploadCalled, "keep_local should only restore layout; upload is ordinary sync work")
 
-	// Conflict should be resolved.
 	remaining, err := eng.ListConflicts(ctx)
 	require.NoError(t, err, "ListConflicts after resolve")
 	assert.Empty(t, remaining, "expected 0 unresolved conflicts")
+	assert.Equal(t, "local preferred", string(mustReadFileUnderRoot(t, syncRoot, "keep-local.txt")))
 }
 
 // Validates: R-2.3.4
@@ -224,18 +198,12 @@ func TestResolveConflict_KeepLocal_RestoresSuffixedConflictCopy(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
-	var uploadedContent string
+	uploadCalled := false
 
 	mock := &engineMockClient{
 		uploadToItemFn: func(_ context.Context, _ driveid.ID, itemID string, content io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			assert.Equal(t, "item-kl", itemID)
-
-			buf := make([]byte, size)
-			_, readErr := content.ReadAt(buf, 0)
-			if readErr != nil && readErr != io.EOF {
-				return nil, fmt.Errorf("reading restored local content: %w", readErr)
-			}
-			uploadedContent = string(buf)
+			uploadCalled = true
 
 			return &graph.Item{
 				ID:           "uploaded-suffixed",
@@ -271,7 +239,7 @@ func TestResolveConflict_KeepLocal_RestoresSuffixedConflictCopy(t *testing.T) {
 	require.Len(t, conflicts, 1)
 
 	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepLocal))
-	assert.Equal(t, "local preferred", uploadedContent, "keep-local should restore the suffixed conflict copy before upload")
+	assert.False(t, uploadCalled, "keep-local should only restore the chosen local layout")
 	assert.Equal(t, "local preferred", string(mustReadFileUnderRoot(t, syncRoot, "keep-local.txt")))
 
 	_, statErr := os.Stat(filepath.Join(syncRoot, "keep-local.conflict-20260115-120000-2.txt"))
@@ -283,11 +251,12 @@ func TestResolveConflict_KeepRemote(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
-	downloadContent := "remote-version"
+	downloadCalled := false
 
 	mock := &engineMockClient{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
-			n, writeErr := w.Write([]byte(downloadContent))
+			downloadCalled = true
+			n, writeErr := w.Write([]byte("remote-version"))
 			return int64(n), writeErr
 		},
 	}
@@ -309,21 +278,22 @@ func TestResolveConflict_KeepRemote(t *testing.T) {
 	}}
 
 	seedBaseline(t, eng.baseline, ctx, outcomes, "")
+	writeLocalFile(t, syncRoot, "keep-remote.txt", engineResolvedRemoteVersion)
+	writeLocalFile(t, syncRoot, "keep-remote.conflict-20260115-120000.txt", "local version")
 
 	conflicts, err := eng.ListConflicts(ctx)
 	require.NoError(t, err, "ListConflicts")
 	require.Len(t, conflicts, 1)
 
 	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepRemote), "ResolveConflict")
+	assert.False(t, downloadCalled, "keep_remote should not trigger a special re-download")
 
-	// Conflict should be resolved.
 	remaining, err := eng.ListConflicts(ctx)
 	require.NoError(t, err, "ListConflicts after resolve")
 	assert.Empty(t, remaining, "expected 0 unresolved conflicts")
 
-	// Verify the local file has remote content.
 	data := mustReadFileUnderRoot(t, syncRoot, "keep-remote.txt")
-	assert.Equal(t, downloadContent, string(data))
+	assert.Equal(t, engineResolvedRemoteVersion, string(data))
 }
 
 // Validates: R-2.3.4
@@ -331,11 +301,12 @@ func TestResolveConflict_KeepRemote_CleansUpSuffixedConflictCopy(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
-	downloadContent := engineResolvedRemoteVersion
+	downloadCalled := false
 
 	mock := &engineMockClient{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
-			n, writeErr := w.Write([]byte(downloadContent))
+			downloadCalled = true
+			n, writeErr := w.Write([]byte(engineResolvedRemoteVersion))
 			return int64(n), writeErr
 		},
 	}
@@ -356,6 +327,7 @@ func TestResolveConflict_KeepRemote_CleansUpSuffixedConflictCopy(t *testing.T) {
 	}}
 	seedBaseline(t, eng.baseline, ctx, outcomes, "")
 
+	writeLocalFile(t, syncRoot, "keep-remote.txt", engineResolvedRemoteVersion)
 	writeLocalFile(t, syncRoot, "keep-remote.conflict-20260115-120000-2.txt", "local copy")
 
 	conflicts, err := eng.ListConflicts(ctx)
@@ -363,10 +335,11 @@ func TestResolveConflict_KeepRemote_CleansUpSuffixedConflictCopy(t *testing.T) {
 	require.Len(t, conflicts, 1)
 
 	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepRemote))
+	assert.False(t, downloadCalled, "keep_remote should not perform a special re-download")
 
 	_, statErr := os.Stat(filepath.Join(syncRoot, "keep-remote.conflict-20260115-120000-2.txt"))
 	assert.True(t, os.IsNotExist(statErr), "keep-remote cleanup should remove suffixed conflict copies")
-	assert.Equal(t, downloadContent, string(mustReadFileUnderRoot(t, syncRoot, "keep-remote.txt")))
+	assert.Equal(t, engineResolvedRemoteVersion, string(mustReadFileUnderRoot(t, syncRoot, "keep-remote.txt")))
 }
 
 func TestResolveConflict_KeepLocal_RestoreFailure(t *testing.T) {
@@ -404,8 +377,12 @@ func TestResolveConflict_KeepLocal_RestoreFailure(t *testing.T) {
 
 	failed, err := eng.baseline.GetConflictRequest(ctx, conflicts[0].ID)
 	require.NoError(t, err)
-	assert.Equal(t, synctypes.ConflictStateResolveFailed, failed.State)
-	assert.Contains(t, failed.ResolutionError, "restoring conflict copy")
+	assert.Equal(t, synctypes.ConflictStateQueued, failed.State)
+	assert.Contains(t, failed.LastError, "restoring conflict copy")
+
+	remaining, err := eng.ListConflicts(ctx)
+	require.NoError(t, err)
+	require.Len(t, remaining, 1)
 }
 
 func TestResolveConflict_KeepBoth_MissingOriginalReturnsError(t *testing.T) {
@@ -439,13 +416,17 @@ func TestResolveConflict_KeepBoth_MissingOriginalReturnsError(t *testing.T) {
 
 	failed, err := eng.baseline.GetConflictRequest(ctx, conflicts[0].ID)
 	require.NoError(t, err)
-	assert.Equal(t, synctypes.ConflictStateResolveFailed, failed.State)
-	assert.Contains(t, failed.ResolutionError, "updating baseline for original")
-	assert.Contains(t, failed.ResolutionError, "stat missing-original.txt")
+	assert.Equal(t, synctypes.ConflictStateQueued, failed.State)
+	assert.Contains(t, failed.LastError, "confirming original file for keep-both")
+	assert.Contains(t, failed.LastError, "missing-original.txt")
+
+	remaining, err := eng.ListConflicts(ctx)
+	require.NoError(t, err)
+	require.Len(t, remaining, 1)
 }
 
 // Validates: R-2.3.4
-func TestResolveConflict_KeepBoth_TracksSuffixedConflictCopy(t *testing.T) {
+func TestResolveConflict_KeepBoth_KeepsSuffixedConflictCopy(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -476,12 +457,11 @@ func TestResolveConflict_KeepBoth_TracksSuffixedConflictCopy(t *testing.T) {
 
 	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepBoth))
 
-	bl, err := eng.baseline.Load(ctx)
+	remaining, err := eng.ListConflicts(ctx)
 	require.NoError(t, err)
-	entry, ok := bl.GetByPath("conflict-file.conflict-20260115-120000-2.txt")
-	require.True(t, ok, "keep-both should create baseline state for suffixed conflict copies")
-	assert.Equal(t, conflictCopyPlaceholderItemID("conflict-file.conflict-20260115-120000-2.txt"), entry.ItemID)
-	assert.NotEmpty(t, entry.LocalHash)
+	assert.Empty(t, remaining)
+	assert.Equal(t, "other local content",
+		string(mustReadFileUnderRoot(t, syncRoot, "conflict-file.conflict-20260115-120000-2.txt")))
 }
 
 // ---------------------------------------------------------------------------

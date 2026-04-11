@@ -16,8 +16,7 @@ import (
 type DurableIntentCounts struct {
 	PendingHeldDeleteApprovals int
 	PendingConflictRequests    int
-	ResolvingConflictRequests  int
-	FailedConflictRequests     int
+	ApplyingConflictRequests   int
 }
 
 type durableIntentQuerier interface {
@@ -49,11 +48,10 @@ func countDurableIntents(ctx context.Context, db durableIntentQuerier) (DurableI
 
 	rows, err := db.QueryContext(ctx,
 		`SELECT state, COUNT(*) FROM conflict_requests
-		WHERE state IN (?, ?, ?)
+		WHERE state IN (?, ?)
 		GROUP BY state`,
-		synctypes.ConflictStateResolutionRequested,
-		synctypes.ConflictStateResolving,
-		synctypes.ConflictStateResolveFailed,
+		synctypes.ConflictStateQueued,
+		synctypes.ConflictStateApplying,
 	)
 	if err != nil {
 		if isMissingTableErr(err) {
@@ -72,12 +70,10 @@ func countDurableIntents(ctx context.Context, db durableIntentQuerier) (DurableI
 			return DurableIntentCounts{}, fmt.Errorf("sync: scan conflict request count: %w", err)
 		}
 		switch state {
-		case synctypes.ConflictStateResolutionRequested:
+		case synctypes.ConflictStateQueued:
 			counts.PendingConflictRequests = count
-		case synctypes.ConflictStateResolving:
-			counts.ResolvingConflictRequests = count
-		case synctypes.ConflictStateResolveFailed:
-			counts.FailedConflictRequests = count
+		case synctypes.ConflictStateApplying:
+			counts.ApplyingConflictRequests = count
 		}
 	}
 	if err := rows.Err(); err != nil {

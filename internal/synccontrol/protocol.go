@@ -33,24 +33,22 @@ const (
 	StatusApproved Status = "approved"
 	StatusQueued   Status = "queued"
 
-	StatusAlreadyQueued     Status = "already_queued"
-	StatusAlreadyResolving  Status = "already_resolving"
-	StatusAlreadyResolved   Status = "already_resolved"
-	StatusDifferentStrategy Status = "different_strategy"
+	StatusAlreadyQueued   Status = "already_queued"
+	StatusAlreadyApplying Status = "already_applying"
+	StatusAlreadyResolved Status = "already_resolved"
 )
 
 type ErrorCode string
 
 const (
-	ErrorInvalidRequest            ErrorCode = "invalid_request"
-	ErrorForegroundSyncRunning     ErrorCode = "foreground_sync_running"
-	ErrorDriveNotManaged           ErrorCode = "drive_not_managed"
-	ErrorConflictNotFound          ErrorCode = "conflict_not_found"
-	ErrorInvalidResolution         ErrorCode = "invalid_resolution"
-	ErrorConflictDifferentStrategy ErrorCode = "conflict_different_strategy"
-	ErrorConflictAlreadyResolving  ErrorCode = "conflict_already_resolving"
-	ErrorStoreOpenFailed           ErrorCode = "store_open_failed"
-	ErrorInternal                  ErrorCode = "internal_error"
+	ErrorInvalidRequest          ErrorCode = "invalid_request"
+	ErrorForegroundSyncRunning   ErrorCode = "foreground_sync_running"
+	ErrorDriveNotManaged         ErrorCode = "drive_not_managed"
+	ErrorConflictNotFound        ErrorCode = "conflict_not_found"
+	ErrorInvalidResolution       ErrorCode = "invalid_resolution"
+	ErrorConflictAlreadyApplying ErrorCode = "conflict_already_applying"
+	ErrorStoreOpenFailed         ErrorCode = "store_open_failed"
+	ErrorInternal                ErrorCode = "internal_error"
 )
 
 type StatusResponse struct {
@@ -62,8 +60,7 @@ type StatusResponse struct {
 	// own a long-lived intent loop and must leave these counters zero/omitted.
 	PendingHeldDeleteApprovals int `json:"pending_held_delete_approvals,omitempty"`
 	PendingConflictRequests    int `json:"pending_conflict_requests,omitempty"`
-	ResolvingConflictRequests  int `json:"resolving_conflict_requests,omitempty"`
-	FailedConflictRequests     int `json:"failed_conflict_requests,omitempty"`
+	ApplyingConflictRequests   int `json:"applying_conflict_requests,omitempty"`
 }
 
 type MutationResponse struct {

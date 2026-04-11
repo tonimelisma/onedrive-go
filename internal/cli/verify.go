@@ -8,8 +8,6 @@ import (
 	"io"
 	"log/slog"
 
-	"github.com/spf13/cobra"
-
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
@@ -23,22 +21,6 @@ var errVerifyMismatch = errors.New("verification found mismatches")
 type verifyStore interface {
 	Load(context.Context) (*synctypes.Baseline, error)
 	Close(context.Context) error
-}
-
-func newVerifyCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "verify",
-		Short: "Verify local files against sync baseline",
-		Long: `Perform a full-tree hash verification of local files against the sync
-baseline database. Reports missing files, hash mismatches, and size mismatches.
-
-Exit code 0 if all files verify; exit code 1 if any mismatches are found.`,
-		RunE: runVerify,
-	}
-}
-
-func runVerify(cmd *cobra.Command, _ []string) error {
-	return newVerifyService(mustCLIContext(cmd.Context())).run(cmd.Context())
 }
 
 // loadAndVerify opens the baseline, loads it, and runs verification.

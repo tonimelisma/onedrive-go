@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -144,9 +145,10 @@ func TestNewStatusCmd_Structure(t *testing.T) {
 	assert.Equal(t, "status", cmd.Name())
 	assert.NotEmpty(t, cmd.Short)
 	assert.NotNil(t, cmd.RunE)
-	assert.Contains(t, cmd.Short, "authentication health")
-	assert.Contains(t, cmd.Long, "authentication health")
-	assert.NotContains(t, cmd.Long, "token status")
+	assert.Contains(t, cmd.Short, "sync status")
+	assert.Contains(t, cmd.Long, "detailed per-drive inspection view")
+	assert.Contains(t, cmd.Long, "delete safety")
+	assert.Contains(t, cmd.Long, "state-store health")
 }
 
 // --- buildStatusAccountsWith tests (B-036) ---
@@ -667,12 +669,10 @@ func TestQuerySyncState_DurableIntentCountsAndActionHints(t *testing.T) {
 	info := querySyncState(dbPath, logger)
 	require.NotNil(t, info)
 	assert.Equal(t, 1, info.PendingHeldDeleteApprovals)
-	assert.Equal(t, 1, info.PendingConflictRequests)
-	assert.Equal(t, 1, info.ResolvingConflictRequests)
-	assert.Equal(t, 1, info.FailedConflictRequests)
+	assert.Equal(t, 2, info.PendingConflictRequests)
+	assert.Equal(t, 1, info.ApplyingConflictRequests)
 	assert.Contains(t, info.ActionHints, "Run `onedrive-go sync` or start `onedrive-go sync --watch` to execute approved deletes.")
 	assert.Contains(t, info.ActionHints, "Run `onedrive-go sync` or start `onedrive-go sync --watch` to execute queued conflict resolutions.")
-	assert.Contains(t, info.ActionHints, "Run `onedrive-go conflicts` to inspect failures, then rerun `onedrive-go conflicts resolve`.")
 }
 
 // Validates: R-6.10.5
@@ -1246,11 +1246,10 @@ func TestPrintSyncStateText_WithDurableIntentCountsAndHints(t *testing.T) {
 	ss := &syncStateInfo{
 		PendingHeldDeleteApprovals: 2,
 		PendingConflictRequests:    3,
-		ResolvingConflictRequests:  1,
-		FailedConflictRequests:     4,
+		ApplyingConflictRequests:   1,
 		ActionHints: []string{
 			"Run `onedrive-go sync` or start `onedrive-go sync --watch` to execute approved deletes.",
-			"Run `onedrive-go conflicts` to inspect failures, then rerun `onedrive-go conflicts resolve`.",
+			"Run `onedrive-go sync` or start `onedrive-go sync --watch` to execute queued conflict resolutions.",
 		},
 	}
 
@@ -1260,10 +1259,110 @@ func TestPrintSyncStateText_WithDurableIntentCountsAndHints(t *testing.T) {
 	output := buf.String()
 	assert.Contains(t, output, "Approved deletes waiting: 2")
 	assert.Contains(t, output, "Queued conflict resolutions: 3")
-	assert.Contains(t, output, "Resolving conflicts: 1")
-	assert.Contains(t, output, "Failed conflict resolutions: 4")
+	assert.Contains(t, output, "Applying conflicts: 1")
 	assert.Contains(t, output, "Next: Run `onedrive-go sync` or start `onedrive-go sync --watch` to execute approved deletes.")
-	assert.Contains(t, output, "Next: Run `onedrive-go conflicts` to inspect failures, then rerun `onedrive-go conflicts resolve`.")
+	assert.Contains(t, output, "Next: Run `onedrive-go sync` or start `onedrive-go sync --watch` to execute queued conflict resolutions.")
+}
+
+func TestStatusService_Run_DetailedSingleDriveText(t *testing.T) {
+	cfgPath, cid := seedDetailedStatusFixture(t)
+
+	var out bytes.Buffer
+	cc := newServiceContext(&out, cfgPath)
+	cc.Flags.Drive = []string{cid.String()}
+
+	require.NoError(t, newStatusService(cc).run(true))
+
+	output := out.String()
+	assert.Contains(t, output, "ISSUES")
+	assert.Contains(t, output, "INVALID FILENAME")
+	assert.Contains(t, output, "/bad:name.txt")
+	assert.Contains(t, output, "DELETE SAFETY")
+	assert.Contains(t, output, "Held deletes requiring approval: 1")
+	assert.Contains(t, output, "/held-delete.txt")
+	assert.Contains(t, output, "Approved deletes waiting for sync: 1")
+	assert.Contains(t, output, "/approved-delete.txt")
+	assert.Contains(t, output, "CONFLICTS")
+	assert.Contains(t, output, "/needs-choice.txt [edit_edit]")
+	assert.Contains(t, output, "Decision: needed")
+	assert.Contains(t, output, "/queued-conflict.txt [edit_edit]")
+	assert.Contains(t, output, "Decision: keep_local (queued)")
+	assert.Contains(t, output, "Last attempt: temporary upload failure")
+	assert.Contains(t, output, "/applying-conflict.txt [edit_delete]")
+	assert.Contains(t, output, "Decision: keep_remote (applying)")
+	assert.Contains(t, output, "CONFLICT HISTORY")
+	assert.Contains(t, output, "/resolved-conflict.txt [create_create]")
+	assert.Contains(t, output, "Resolved: keep_both by user")
+	assert.Contains(t, output, "State DB: healthy")
+}
+
+func TestStatusService_Run_DetailedSingleDriveJSON(t *testing.T) {
+	cfgPath, cid := seedDetailedStatusFixture(t)
+
+	var out bytes.Buffer
+	cc := newServiceContext(&out, cfgPath)
+	cc.Flags.Drive = []string{cid.String()}
+	cc.Flags.JSON = true
+
+	require.NoError(t, newStatusService(cc).run(true))
+
+	var decoded detailedStatusOutput
+	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
+	assert.Equal(t, cid.String(), decoded.Drive.CanonicalID)
+	assert.Equal(t, stateStoreStatusHealthy, decoded.StateStoreStatus)
+	assert.Len(t, decoded.IssueGroups, 1)
+	assert.Len(t, decoded.DeleteSafety, 2)
+	assert.Len(t, decoded.Conflicts, 3)
+	assert.Len(t, decoded.ConflictHistory, 1)
+
+	var (
+		queuedFound    bool
+		applyingFound  bool
+		unresolvedSeen bool
+	)
+	for _, conflict := range decoded.Conflicts {
+		switch conflict.Path {
+		case "/queued-conflict.txt":
+			queuedFound = true
+			assert.Equal(t, synctypes.ConflictStateQueued, conflict.State)
+			assert.Equal(t, synctypes.ResolutionKeepLocal, conflict.RequestedResolution)
+			assert.Equal(t, "temporary upload failure", conflict.LastRequestError)
+		case "/applying-conflict.txt":
+			applyingFound = true
+			assert.Equal(t, synctypes.ConflictStateApplying, conflict.State)
+			assert.Equal(t, synctypes.ResolutionKeepRemote, conflict.RequestedResolution)
+		case "/needs-choice.txt":
+			unresolvedSeen = true
+			assert.Equal(t, synctypes.ConflictStateUnresolved, conflict.State)
+			assert.Empty(t, conflict.RequestedResolution)
+		}
+	}
+	assert.True(t, queuedFound)
+	assert.True(t, applyingFound)
+	assert.True(t, unresolvedSeen)
+}
+
+func TestStatusService_Run_DamagedStateStoreSurfacesRecoverHint(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:damaged@example.com")
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, os.MkdirAll(filepath.Dir(config.DriveStatePath(cid)), 0o700))
+	require.NoError(t, os.WriteFile(config.DriveStatePath(cid), []byte("not a sqlite database"), 0o600))
+
+	var out bytes.Buffer
+	cc := newServiceContext(&out, cfgPath)
+	cc.Flags.Drive = []string{cid.String()}
+	cc.Flags.JSON = true
+
+	require.NoError(t, newStatusService(cc).run(false))
+
+	var decoded detailedStatusOutput
+	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
+	assert.Equal(t, stateStoreStatusDamaged, decoded.StateStoreStatus)
+	assert.NotEmpty(t, decoded.StateStoreError)
+	assert.Equal(t, recoverHintForDrive(cid.String()), decoded.StateStoreRecoveryHint)
 }
 
 func TestComputeSummary_AggregatesPendingAndRetrying(t *testing.T) {
@@ -1281,6 +1380,81 @@ func TestComputeSummary_AggregatesPendingAndRetrying(t *testing.T) {
 	s := computeSummary(accounts)
 	assert.Equal(t, 5, s.TotalPendingSync)
 	assert.Equal(t, 5, s.TotalRetrying)
+}
+
+func seedDetailedStatusFixture(t *testing.T) (string, driveid.CanonicalID) {
+	t.Helper()
+
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:detailed@example.com")
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+
+	store, err := syncstore.NewSyncStore(t.Context(), config.DriveStatePath(cid), slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+
+	ctx := t.Context()
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO sync_metadata (key, value)
+		VALUES
+			('last_sync_time', '2026-04-03T10:30:00Z'),
+			('last_sync_duration_ms', '1500');
+
+		INSERT INTO baseline
+			(drive_id, item_id, path, parent_id, item_type, local_hash, remote_hash,
+			 local_size, remote_size, local_mtime, remote_mtime, synced_at, etag)
+		VALUES
+			('d!1', 'baseline-1', '/tracked.txt', 'root', 'file', 'lh', 'rh', 1, 1, 1, 1, 1, 'etag-1');
+
+		INSERT INTO remote_state
+			(drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag, sync_status,
+			 filter_generation, filter_reason, observed_at)
+		VALUES
+			('d!1', 'remote-pending', '/pending.txt', 'root', 'file', 'rh-p', 5, 1, 'etag-p', 'pending_download', 0, '', 2),
+			('d!1', 'remote-synced', '/synced.txt', 'root', 'file', 'rh-s', 5, 1, 'etag-s', 'synced', 0, '', 2);
+
+		INSERT INTO sync_failures
+			(path, drive_id, direction, action_type, category, failure_role, issue_type, item_id,
+			 failure_count, next_retry_at, last_error, http_status, first_seen_at, last_seen_at,
+			 file_size, local_hash, scope_key)
+		VALUES
+			('/bad:name.txt', 'd!1', 'upload', 'upload', 'actionable', 'item', 'invalid_filename',
+			 'bad-item', 1, NULL, 'bad filename', NULL, 1, 2, NULL, NULL, '');
+
+		INSERT INTO held_deletes
+			(drive_id, action_type, path, item_id, state, held_at, approved_at, last_planned_at, last_error)
+		VALUES
+			('d!1', 'remote_delete', '/held-delete.txt', 'held-item', 'held', 1, NULL, 2, ''),
+			('d!1', 'remote_delete', '/approved-delete.txt', 'approved-item', 'approved', 1, 3, 2, '');
+
+		INSERT INTO conflicts
+			(id, drive_id, item_id, path, conflict_type, detected_at, resolution,
+			 local_hash, remote_hash, local_mtime, remote_mtime, resolved_at, resolved_by)
+		VALUES
+			('conflict-needs-choice', 'd!1', 'item-choice', '/needs-choice.txt', 'edit_edit', 10, 'unresolved', 'lh1', 'rh1', 1, 1, NULL, NULL),
+			('conflict-queued', 'd!1', 'item-queued', '/queued-conflict.txt', 'edit_edit', 20, 'unresolved', 'lh2', 'rh2', 2, 2, NULL, NULL),
+			('conflict-applying', 'd!1', 'item-applying', '/applying-conflict.txt', 'edit_delete', 30, 'unresolved', 'lh3', 'rh3', 3, 3, NULL, NULL),
+			('conflict-resolved', 'd!1', 'item-resolved', '/resolved-conflict.txt', 'create_create', 40, 'keep_both', 'lh4', 'rh4', 4, 4, 50, 'user');`)
+	require.NoError(t, err)
+
+	result, err := store.RequestConflictResolution(ctx, "conflict-queued", synctypes.ResolutionKeepLocal)
+	require.NoError(t, err)
+	assert.Equal(t, syncstore.ConflictRequestQueued, result.Status)
+	_, ok, err := store.ClaimConflictResolution(ctx, "conflict-queued")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, store.MarkConflictResolutionFailed(ctx, "conflict-queued", errors.New("temporary upload failure")))
+
+	result, err = store.RequestConflictResolution(ctx, "conflict-applying", synctypes.ResolutionKeepRemote)
+	require.NoError(t, err)
+	assert.Equal(t, syncstore.ConflictRequestQueued, result.Status)
+	_, ok, err = store.ClaimConflictResolution(ctx, "conflict-applying")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, store.Close(context.Background()))
+
+	return cfgPath, cid
 }
 
 // createTestStateDB creates a minimal SQLite DB with tables matching the sync schema.

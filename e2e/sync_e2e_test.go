@@ -8,9 +8,11 @@ import (
 	"database/sql"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +22,12 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+	"github.com/tonimelisma/onedrive-go/internal/syncverify"
 	"github.com/tonimelisma/onedrive-go/testutil"
 )
 
@@ -108,7 +116,7 @@ func runCLIWithConfig(t *testing.T, cfgPath string, env map[string]string, args 
 func queueConflictResolution(t *testing.T, cfgPath string, env map[string]string, args ...string) string {
 	t.Helper()
 
-	resolveArgs := append([]string{"conflicts", "resolve"}, args...)
+	resolveArgs := append([]string{"resolve"}, toResolveArgs(t, args...)...)
 	_, stderr := runCLIWithConfig(t, cfgPath, env, resolveArgs...)
 	assert.Contains(t, stderr, "Queued", "conflict resolution should queue durable engine-owned intent")
 	return stderr
@@ -119,6 +127,109 @@ func queueConflictResolutionAndSync(t *testing.T, cfgPath string, env map[string
 
 	queueConflictResolution(t, cfgPath, env, args...)
 	runCLIWithConfig(t, cfgPath, env, "sync")
+}
+
+func toResolveArgs(t *testing.T, args ...string) []string {
+	t.Helper()
+
+	var (
+		strategy string
+		target   string
+		all      bool
+		dryRun   bool
+	)
+
+	for _, arg := range args {
+		switch arg {
+		case "--keep-local":
+			strategy = "local"
+		case "--keep-remote":
+			strategy = "remote"
+		case "--keep-both":
+			strategy = "both"
+		case "--all":
+			all = true
+		case "--dry-run":
+			dryRun = true
+		default:
+			require.Empty(t, target, "only one conflict target is supported")
+			target = arg
+		}
+	}
+
+	require.NotEmpty(t, strategy, "resolve helper requires a keep-* strategy")
+
+	resolveArgs := []string{strategy}
+	if dryRun {
+		resolveArgs = append(resolveArgs, "--dry-run")
+	}
+	if all {
+		resolveArgs = append(resolveArgs, "--all")
+	}
+	if target != "" {
+		resolveArgs = append(resolveArgs, target)
+	}
+
+	return resolveArgs
+}
+
+func verifyBaselineReport(t *testing.T, cfgPath string, env map[string]string) (*synctypes.VerifyReport, error) {
+	t.Helper()
+
+	logger := slog.New(slog.DiscardHandler)
+	cfg, err := config.Load(cfgPath, logger)
+	require.NoError(t, err)
+
+	canonicalID, driveCfg, err := config.MatchDrive(cfg, drive, logger)
+	require.NoError(t, err)
+
+	dbPath := stateDBPathForEnv(canonicalID, env)
+	store, err := syncstore.NewSyncStore(t.Context(), dbPath, logger)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		require.NoError(t, store.Close(t.Context()))
+	}()
+
+	baseline, err := store.Load(t.Context())
+	if err != nil {
+		return nil, fmt.Errorf("load baseline: %w", err)
+	}
+
+	tree, err := synctree.Open(driveCfg.SyncDir)
+	if err != nil {
+		return nil, fmt.Errorf("open sync tree: %w", err)
+	}
+
+	report, err := syncverify.VerifyBaseline(t.Context(), baseline, tree, logger)
+	if err != nil {
+		return nil, fmt.Errorf("verify baseline: %w", err)
+	}
+
+	return report, nil
+}
+
+func stateDBPathForEnv(canonicalID driveid.CanonicalID, env map[string]string) string {
+	if canonicalID.IsZero() {
+		return ""
+	}
+
+	dataDir := env["XDG_DATA_HOME"]
+	if dataDir != "" {
+		dataDir = filepath.Join(dataDir, "onedrive-go")
+	} else {
+		home := env["HOME"]
+		switch runtime.GOOS {
+		case "darwin":
+			dataDir = filepath.Join(home, "Library", "Application Support", "onedrive-go")
+		default:
+			dataDir = filepath.Join(home, ".local", "share", "onedrive-go")
+		}
+	}
+
+	sanitized := strings.ReplaceAll(canonicalID.String(), ":", "_")
+	return filepath.Join(dataDir, "state_"+sanitized+".db")
 }
 
 // runCLIWithConfigAllowError runs the CLI binary with a custom config file
@@ -480,7 +591,7 @@ func TestE2E_Sync_DryRun(t *testing.T) {
 	assert.Contains(t, output, testFolder)
 }
 
-func TestE2E_Sync_Verify(t *testing.T) {
+func TestE2E_Sync_InternalBaselineVerification(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
@@ -498,15 +609,11 @@ func TestE2E_Sync_Verify(t *testing.T) {
 	// Sync to establish baseline.
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
-	// Run verify.
-	stdout, _, verifyErr := runCLIWithConfigAllowError(t, cfgPath, env, "verify")
-
-	// Verify should pass (exit 0) or show verified files.
-	if verifyErr != nil {
-		t.Logf("verify output: %s", stdout)
-	}
-
-	assert.Contains(t, stdout, "Verified")
+	report, err := verifyBaselineReport(t, cfgPath, env)
+	require.NoError(t, err)
+	require.NotNil(t, report)
+	assert.GreaterOrEqual(t, report.Verified, 1)
+	assert.Empty(t, report.Mismatches)
 }
 
 func TestE2E_Sync_Conflicts(t *testing.T) {
@@ -531,13 +638,13 @@ func TestE2E_Sync_Conflicts(t *testing.T) {
 	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync")
 	assert.Contains(t, stderr, "Conflicts:")
 
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "status")
 	assert.Contains(t, stdout, "conflict.txt")
 
 	queueConflictResolutionAndSync(t, cfgPath, env, testFolder+"/conflict.txt", "--keep-remote")
 
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
-	assert.Contains(t, stdout, "No conflicts.")
+	stdout, _ = runCLIWithConfig(t, cfgPath, env, "status")
+	assert.Contains(t, stdout, "No unresolved conflicts.")
 
 	content, err := os.ReadFile(conflictFile)
 	require.NoError(t, err)

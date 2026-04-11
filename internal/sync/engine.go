@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -332,189 +333,204 @@ func (e *Engine) ResolveConflict(ctx context.Context, conflictID, resolution str
 
 	switch result.Status {
 	case syncstore.ConflictRequestQueued, syncstore.ConflictRequestAlreadyQueued:
-		return e.processQueuedConflictResolutions(ctx)
+		_, err := e.processQueuedConflictResolutions(ctx)
+		return err
 	case syncstore.ConflictRequestAlreadyResolved:
 		return nil
-	case syncstore.ConflictRequestAlreadyResolving, syncstore.ConflictRequestDifferentStrategy:
+	case syncstore.ConflictRequestAlreadyApplying:
 		return fmt.Errorf("sync: conflict %s resolution request is %s", conflictID, result.Status)
 	default:
 		return fmt.Errorf("sync: conflict %s resolution request is %s", conflictID, result.Status)
 	}
 }
 
-// resolveKeepLocal restores the conflict copy (which holds the user's local
-// version) to the original path and uploads it. During conflict detection,
-// ExecuteConflict renamed the local file to a conflict copy and downloaded
-// the remote content to the original path. "Keep local" means the user wants
-// their pre-conflict local content — which lives in the conflict copy.
-func (e *Engine) resolveKeepLocal(ctx context.Context, c *synctypes.ConflictRecord) error {
-	matches, err := e.syncTree.Glob(conflictCopyGlob(c.Path))
+// resolveKeepLocal establishes the chosen on-disk layout for "keep local" by
+// restoring the newest untracked conflict copy back to the canonical path and
+// removing only the current unresolved conflict-copy artifacts. Any later
+// upload is ordinary sync work driven by normal observation/planning.
+func (e *Engine) resolveKeepLocal(ctx context.Context, c *synctypes.ConflictRecord) ([]string, error) {
+	copies, err := e.untrackedConflictCopyPaths(ctx, c.Path)
 	if err != nil {
-		return fmt.Errorf("glob conflict copies for keep-local: %w", err)
+		return nil, fmt.Errorf("glob conflict copies for keep-local: %w", err)
+	}
+	if len(copies) == 0 {
+		return nil, fmt.Errorf("restoring conflict copy to %s: conflict copy not found", c.Path)
 	}
 
-	// Restore the first conflict copy to the original path. If multiple
-	// conflict copies exist (shouldn't normally happen), the first one is
-	// the user's local version.
-	if len(matches) > 0 {
-		if renameErr := e.syncTree.Rename(matches[0], c.Path); renameErr != nil {
-			return fmt.Errorf("restoring conflict copy to %s: %w", c.Path, renameErr)
-		}
-
-		e.logger.Debug("restored conflict copy for keep-local",
-			slog.String("from", filepath.Base(matches[0])),
-			slog.String("to", c.Path),
-		)
+	selected := copies[len(copies)-1]
+	if err := e.syncTree.Rename(selected, c.Path); err != nil {
+		return nil, fmt.Errorf("restoring conflict copy to %s: %w", c.Path, err)
 	}
 
-	return e.resolveTransfer(ctx, c, synctypes.ActionUpload)
+	e.logger.Debug("restored conflict copy for keep-local",
+		slog.String("from", filepath.Base(selected)),
+		slog.String("to", c.Path),
+	)
+
+	if err := e.cleanupUntrackedConflictCopies(copies[:len(copies)-1]); err != nil {
+		return nil, err
+	}
+
+	return []string{c.Path}, nil
 }
 
-// resolveKeepRemote downloads the remote file to overwrite the local version.
-func (e *Engine) resolveKeepRemote(ctx context.Context, c *synctypes.ConflictRecord) error {
-	return e.resolveTransfer(ctx, c, synctypes.ActionDownload)
+// resolveKeepRemote treats the remote-version file already materialized at the
+// canonical path during conflict detection as the chosen layout. It only
+// removes the current unresolved conflict-copy artifacts; any later baseline
+// convergence or download/upload trouble is ordinary sync work.
+func (e *Engine) resolveKeepRemote(ctx context.Context, c *synctypes.ConflictRecord) ([]string, error) {
+	if _, err := e.syncTree.Stat(c.Path); err != nil {
+		return nil, fmt.Errorf("confirming remote version at %s: %w", c.Path, err)
+	}
+
+	copies, err := e.untrackedConflictCopyPaths(ctx, c.Path)
+	if err != nil {
+		return nil, fmt.Errorf("glob conflict copies for keep-remote: %w", err)
+	}
+	if err := e.cleanupUntrackedConflictCopies(copies); err != nil {
+		return nil, err
+	}
+
+	return []string{c.Path}, nil
 }
 
-// resolveTransfer executes a single transfer (upload or download) for conflict
-// resolution and commits the result to the baseline.
-//
-// Hash verification is intentionally skipped here (B-153): conflict resolution
-// is a user-initiated override ("keep mine" / "keep theirs") where the intent
-// is to force one side to match the other, not to verify content integrity.
-// The executor's per-action functions already verify hashes for normal syncs.
-func (e *Engine) resolveTransfer(ctx context.Context, c *synctypes.ConflictRecord, actionType synctypes.ActionType) error {
-	bl, err := e.baseline.Load(ctx)
+// resolveKeepBoth treats the current original path plus the unresolved
+// conflict-copy artifacts as the chosen final layout. The conflict is resolved
+// once that layout exists; later hashing, baseline refresh, or uploads are
+// ordinary sync work driven by normal observation/planning.
+func (e *Engine) resolveKeepBoth(ctx context.Context, c *synctypes.ConflictRecord) ([]string, error) {
+	if _, err := e.syncTree.Stat(c.Path); err != nil {
+		return nil, fmt.Errorf("confirming original file for keep-both: %w", err)
+	}
+
+	copies, err := e.untrackedConflictCopyPaths(ctx, c.Path)
 	if err != nil {
-		return fmt.Errorf("sync: loading baseline for resolve: %w", err)
+		return nil, fmt.Errorf("glob conflict copies for keep-both: %w", err)
+	}
+	if len(copies) == 0 {
+		return nil, fmt.Errorf("confirming conflict copies for keep-both: none found for %s", c.Path)
 	}
 
-	exec := syncexec.NewExecution(e.execCfg, bl)
-
-	action := &synctypes.Action{
-		Type:    actionType,
-		DriveID: c.DriveID,
-		ItemID:  c.ItemID,
-		Path:    c.Path,
-		View:    &synctypes.PathView{Path: c.Path},
-	}
-
-	var outcome synctypes.Outcome
-	if actionType == synctypes.ActionUpload {
-		outcome = exec.ExecuteUpload(ctx, action)
-	} else {
-		outcome = exec.ExecuteDownload(ctx, action)
-	}
-
-	if !outcome.Success {
-		return fmt.Errorf("transfer failed: %w", outcome.Error)
-	}
-
-	if err := e.baseline.CommitOutcome(ctx, &outcome); err != nil {
-		return fmt.Errorf("committing transfer outcome: %w", err)
-	}
-
-	// Clean up conflict copies — the user has chosen one side, so the
-	// conflict copy (holding the other side's content) serves no purpose.
-	e.cleanupConflictCopies(c.Path)
-
-	return nil
+	paths := append([]string{c.Path}, copies...)
+	return paths, nil
 }
 
-// resolveKeepBoth updates baseline entries for both the original file and its
-// conflict copies so that the next sync treats them as unchanged. The original
-// file's baseline was not updated during conflict detection (unresolved
-// conflicts intentionally skip baseline upsert), so it still has a stale hash.
-// Conflict copies have no baseline entry at all.
-func (e *Engine) resolveKeepBoth(ctx context.Context, c *synctypes.ConflictRecord) error {
-	// Update baseline for the original file with its current on-disk hash.
-	if err := e.refreshLocalBaselineFromDisk(ctx, c.DriveID, c.ItemID, c.Path); err != nil {
-		return fmt.Errorf("updating baseline for original: %w", err)
-	}
-
-	// Find conflict copies and create baseline entries for each. A synthetic
-	// item ID is used because the conflict copy has no remote counterpart yet.
-	// The next upload-capable sync or full reconciliation will upload the file
-	// and replace this entry with a real item ID.
-	matches, err := e.syncTree.Glob(conflictCopyGlob(c.Path))
-	if err != nil {
-		return fmt.Errorf("glob conflict copies: %w", err)
-	}
-
-	for _, m := range matches {
-		syntheticID := conflictCopyPlaceholderItemID(m)
-		if upsertErr := e.refreshLocalBaselineFromDisk(ctx, c.DriveID, syntheticID, m); upsertErr != nil {
-			return fmt.Errorf("updating baseline for conflict copy %s: %w", filepath.Base(m), upsertErr)
-		}
-	}
-
-	return nil
-}
-
-func conflictCopyPlaceholderItemID(relPath string) string {
-	return "conflict-copy:" + relPath
-}
-
-// refreshLocalBaselineFromDisk computes the QuickXorHash of a file on disk and
-// explicitly refreshes the local-side baseline tuple without fabricating a
-// transfer outcome.
-func (e *Engine) refreshLocalBaselineFromDisk(ctx context.Context, driveID driveid.ID, itemID, relPath string) error {
-	absPath, err := e.syncTree.Abs(relPath)
-	if err != nil {
-		return fmt.Errorf("resolving %s under sync tree: %w", relPath, err)
-	}
-
-	info, err := e.syncTree.Stat(relPath)
-	if err != nil {
-		return fmt.Errorf("stat %s: %w", relPath, err)
-	}
-
-	hash, err := driveops.ComputeQuickXorHash(absPath)
-	if err != nil {
-		return fmt.Errorf("hashing %s: %w", relPath, err)
-	}
-
-	if err := e.baseline.RefreshLocalBaseline(ctx, syncstore.LocalBaselineRefresh{
-		Path:           relPath,
-		DriveID:        driveID,
-		ItemID:         itemID,
-		ItemType:       synctypes.ItemTypeFile,
-		LocalHash:      hash,
-		LocalSize:      info.Size(),
-		LocalSizeKnown: true,
-		LocalMtime:     info.ModTime().UnixNano(),
-	}); err != nil {
-		return fmt.Errorf("refreshing local baseline for %s: %w", relPath, err)
-	}
-
-	return nil
-}
-
-// cleanupConflictCopies deletes all conflict copy files for the given
-// relative path. Called after keep-local or keep-remote resolution — the
-// user has chosen one side, so the other side's content is no longer needed.
-func (e *Engine) cleanupConflictCopies(relPath string) {
+func (e *Engine) untrackedConflictCopyPaths(ctx context.Context, relPath string) ([]string, error) {
 	matches, err := e.syncTree.Glob(conflictCopyGlob(relPath))
 	if err != nil {
-		e.logger.Warn("glob for conflict copies",
-			slog.String("path", relPath),
+		return nil, fmt.Errorf("glob conflict copy paths: %w", err)
+	}
+	sort.Strings(matches)
+
+	bl, err := e.baseline.Load(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load baseline for conflict copy classification: %w", err)
+	}
+
+	copies := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if _, tracked := bl.GetByPath(match); tracked {
+			continue
+		}
+		copies = append(copies, match)
+	}
+
+	return copies, nil
+}
+
+func (e *Engine) cleanupUntrackedConflictCopies(paths []string) error {
+	for _, relPath := range paths {
+		if relPath == "" {
+			continue
+		}
+		if err := e.syncTree.Remove(relPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove conflict copy %s: %w", filepath.Base(relPath), err)
+		}
+		e.logger.Debug("removed unresolved conflict copy",
+			slog.String("file", filepath.Base(relPath)),
+		)
+	}
+
+	return nil
+}
+
+func (e *Engine) conflictResolutionFollowUpChanges(
+	ctx context.Context,
+	paths []string,
+) []synctypes.PathChanges {
+	if len(paths) == 0 {
+		return nil
+	}
+
+	scopeSnapshot, err := e.buildScopeSnapshot(ctx)
+	if err != nil {
+		e.logger.Warn("build scope snapshot for conflict follow-up",
 			slog.String("error", err.Error()),
 		)
-
-		return
+		return nil
 	}
 
-	for _, m := range matches {
-		if removeErr := e.syncTree.Remove(m); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			e.logger.Warn("removing conflict copy",
-				slog.String("file", filepath.Base(m)),
-				slog.String("error", removeErr.Error()),
-			)
-		} else {
-			e.logger.Debug("removed conflict copy",
-				slog.String("file", filepath.Base(m)),
-			)
+	uniquePaths := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		if path != "" {
+			uniquePaths[path] = struct{}{}
 		}
 	}
+	sortedPaths := make([]string, 0, len(uniquePaths))
+	for path := range uniquePaths {
+		sortedPaths = append(sortedPaths, path)
+	}
+	sort.Strings(sortedPaths)
+
+	bl := e.baseline.Baseline()
+	if bl == nil {
+		var loadErr error
+		bl, loadErr = e.baseline.Load(ctx)
+		if loadErr != nil {
+			e.logger.Warn("load baseline for conflict follow-up",
+				slog.String("error", loadErr.Error()),
+			)
+			return nil
+		}
+	}
+
+	var changes []synctypes.PathChanges
+	for _, path := range sortedPaths {
+		var base *synctypes.BaselineEntry
+		if entry, ok := bl.GetByPath(path); ok {
+			base = entry
+		}
+
+		observation, observeErr := syncobserve.ObserveSinglePathWithScope(
+			e.logger,
+			e.syncTree,
+			path,
+			base,
+			e.nowFunc().UnixNano(),
+			nil,
+			e.localFilter,
+			e.localRules,
+			scopeSnapshot,
+		)
+		if observeErr != nil {
+			e.logger.Warn("observe conflict follow-up path",
+				slog.String("path", path),
+				slog.String("error", observeErr.Error()),
+			)
+			continue
+		}
+		if observation.Skipped != nil {
+			e.logger.Warn("conflict follow-up path requires normal sync attention",
+				slog.String("path", observation.Skipped.Path),
+				slog.String("reason", observation.Skipped.Reason),
+				slog.String("detail", observation.Skipped.Detail),
+			)
+			continue
+		}
+		changes = mergePathChangeBatches(changes, pathChangesFromEvent(observation.Event))
+	}
+
+	return changes
 }
 
 func conflictCopyGlob(relPath string) string {
