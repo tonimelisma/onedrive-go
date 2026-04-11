@@ -12,6 +12,7 @@ of truth for what was seen, when it was seen, and how it was handled.
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20260410-01 | Server-side copy rejected a freshly visible destination folder | fixed | graph quirk | 2026-04-10 | no |
 | LI-20260408-03 | Serialized `e2e_full` package exceeded the old 30-minute harness timeout | fixed | test harness | 2026-04-08 | no |
 | LI-20260408-02 | `CreateFolder` returned success status with an empty body | mitigated | graph quirk | 2026-04-08 | no |
 | LI-20260408-01 | Immediate post-simple-upload mtime PATCH returned `404 itemNotFound` | mitigated | graph quirk | 2026-04-08 | no |
@@ -29,6 +30,41 @@ of truth for what was seen, when it was seen, and how it was handled.
 | LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | fixed | test bug | 2026-04-08 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
+
+## LI-20260410-01: Server-side copy rejected a freshly visible destination folder
+
+First seen: 2026-04-10  
+Last seen: 2026-04-10  
+Area: `e2e_full`, CLI `cp`, Graph copy start  
+Suite / test: local `go run ./cmd/devtool verify e2e-full`, `TestE2E_Cp_IntoFolder`  
+Classification: graph quirk  
+Status: fixed  
+Recurring: no  
+Summary: A full-suite copy flow proved that Graph's server-side copy verifier
+can lag behind normal path reads for a freshly created destination folder.
+During the live run, the destination folder was already readable by path, but
+the immediate `POST .../copy` still returned `404` with `Failed to verify the
+existence of destination location`. The product already had narrow retries for
+other fresh-parent create routes, but copy start still treated this false
+negative as terminal.  
+Evidence:
+- Local `go run ./cmd/devtool verify e2e-full` on April 10, 2026 failed in
+  `TestE2E_Cp_IntoFolder` while copying
+  `/e2e-cp-folder-1775879036248706000/src.txt` into
+  `/e2e-cp-folder-1775879036248706000/dest`.
+- The child CLI log first showed
+  `GET /drives/bd50cf43646e28e6/root:/e2e-cp-folder-1775879036248706000/dest: = 200`,
+  proving the destination folder was already path-visible.
+- The immediate follow-on
+  `POST /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s75b8ff1dfb2846adbb1003d999d52233/copy`
+  then returned HTTP 404 with request ID
+  `f7f79148-fe82-4350-8bc7-a620c0598a1b` and message
+  `Failed to verify the existence of destination location`.
+Resolution / mitigation: `graph.Client.CopyItem()` now owns a narrow bounded
+retry for that exact 404 family, and the full-suite `cp` assertions poll for
+the copied child to appear instead of assuming post-copy listing is strongly
+consistent on the first read.  
+Promoted docs: [graph-client.md](../design/graph-client.md), [graph-api-quirks.md](graph-api-quirks.md)
 
 ## LI-20260408-03: Serialized `e2e_full` package exceeded the old 30-minute harness timeout
 
@@ -319,7 +355,7 @@ Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [drive-transfers.md](
 First seen: 2026-04-05
 Last seen: 2026-04-10
 Area: `e2e_full`, CLI mutation follow-on path reads
-Suite / test: `verify e2e-full`, `TestE2E_Sync_EditEditConflict_ResolveKeepRemote`; later `TestE2E_Sync_BidirectionalMerge`, `TestE2E_Conflicts_ResolveKeepBoth`, local `verify default` scoped-sync fixture setup, and `TestE2E_RoundTrip/rm_permanent`
+Suite / test: `verify e2e-full`, `TestE2E_Sync_EditEditConflict_ResolveKeepRemote`; later `TestE2E_Sync_BidirectionalMerge`, `TestE2E_Resolve_Both_PreservesConflictCopy`, local `verify default` scoped-sync fixture setup, and `TestE2E_RoundTrip/rm_permanent`
 Classification: graph quirk
 Status: mitigated
 Recurring: yes  
@@ -392,7 +428,7 @@ Evidence:
   `cff44bae-7863-4a8b-b345-6d85ace95cd8`,
   `73104aa2-ef31-4543-945d-d05506521ed2`, and
   `9eee346a-951e-48b9-8484-da811a59c4dd`.
-- On April 7, 2026, `TestE2E_Conflicts_ResolveKeepBoth` hit the same broader
+- On April 7, 2026, `TestE2E_Resolve_Both_PreservesConflictCopy` hit the same broader
   family earlier in the flow when a freshly visible parent path still returned
   `404 itemNotFound` to the next `put`, which is tracked separately in
   `LI-20260407-01`.
@@ -571,10 +607,10 @@ Status: fixed
 Recurring: no  
 Summary: A full-suite keep-local resolution proved that sync upload execution still recreated files through the parent-path upload route even when the conflict record already carried the authoritative remote `itemID`. During the live run, the small-file overwrite first hit the simple-upload `404` fallback and then exhausted the parent-based `createUploadSession` retry budget on the same folder. The Graph inconsistency was already known, but the executor widened its exposure by ignoring the narrower item-ID overwrite route it already had available.  
 Evidence:
-- Local `go run ./cmd/devtool verify e2e-full` on April 7, 2026 failed in `TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal` while resolving `e2e-sync-cc-1775631264479623000/collision.txt` with `--keep-local`.
-- The child CLI log showed `conflicts resolve` restoring the conflict copy, then attempting a parent-path simple upload followed by repeated `POST /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s8842f8751f7c491fbfd30ddaa2fc0031:/collision.txt:/createUploadSession` failures ending with request ID `9dce082f-97ae-4f6c-9cc2-69b650dcf4c1`.
+- Local `go run ./cmd/devtool verify e2e-full` on April 7, 2026 failed in `TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal` while resolving `e2e-sync-cc-1775631264479623000/collision.txt` with `resolve local`.
+- The child CLI log showed `resolve local` restoring the conflict copy, then attempting a parent-path simple upload followed by repeated `POST /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s8842f8751f7c491fbfd30ddaa2fc0031:/collision.txt:/createUploadSession` failures ending with request ID `9dce082f-97ae-4f6c-9cc2-69b650dcf4c1`.
 - [graph-api-quirks.md](graph-api-quirks.md) already documented the broader fresh-parent `createUploadSession` `404 itemNotFound` family; this incident showed the executor still depended on that family in an overwrite flow that already had stable remote item identity.
-Resolution / mitigation: `ExecuteUpload` now overwrites by item ID whenever the action carries a non-empty `ItemID`, using parent-path upload only for true create flows with no remote identity yet. `conflicts resolve --keep-local` therefore restores the local conflict copy and then overwrites the known remote item directly instead of recreating it through the parent route.  
+Resolution / mitigation: `ExecuteUpload` now overwrites by item ID whenever the action carries a non-empty `ItemID`, using parent-path upload only for true create flows with no remote identity yet. `resolve local` therefore restores the local conflict copy and then overwrites the known remote item directly instead of recreating it through the parent route.  
 Promoted docs: [drive-transfers.md](../design/drive-transfers.md), [sync-execution.md](../design/sync-execution.md), [graph-api-quirks.md](graph-api-quirks.md)
 
 ## LI-20260407-01: Follow-on `put` lost a freshly visible parent path
@@ -582,13 +618,13 @@ Promoted docs: [drive-transfers.md](../design/drive-transfers.md), [sync-executi
 First seen: 2026-04-07  
 Last seen: 2026-04-09
 Area: `e2e_full`, CLI `put`, conflict setup  
-Suite / test: `verify e2e-full`, `TestE2E_Conflicts_ResolveKeepBoth`  
+Suite / test: `verify e2e-full`, `TestE2E_Resolve_Both_PreservesConflictCopy`  
 Classification: graph quirk  
 Status: fixed  
 Recurring: yes
 Summary: A full-suite conflict setup proved that a parent folder could be visible to one command and still fail the immediate next command's parent-path resolution. The test helper confirmed the folder path before starting the remote edit step, but the subsequent CLI `put` still died resolving the same parent path with `404 itemNotFound` instead of treating it as a bounded visibility-convergence gap.  
 Evidence:
-- Local `go run ./cmd/devtool verify e2e-full` on April 7, 2026 failed in `TestE2E_Conflicts_ResolveKeepBoth` while uploading `/e2e-cli-keepboth-1775630146992732000/both.txt`.
+- Local `go run ./cmd/devtool verify e2e-full` on April 7, 2026 failed in `TestE2E_Resolve_Both_PreservesConflictCopy` while uploading `/e2e-cli-keepboth-1775630146992732000/both.txt`.
 - The child CLI log showed `GET /me` first stalling to a transient `504`, then succeeding on retry, followed by `GET /drives/bd50cf43646e28e6/root:/e2e-cli-keepboth-1775630146992732000:` returning `404 itemNotFound` with request ID `55b3980f-1c7c-4465-b09f-6683a0771f08`.
 - [graph-api-quirks.md](graph-api-quirks.md) already records the broader path-visibility lag family for adjacent `mkdir` / `put` / `mv` flows; this incident showed the same family could hit pre-upload parent resolution too.
 - Local `go run ./cmd/devtool verify default` on April 8, 2026 hit the same family in fast E2E `TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile`: after `mkdir /.../docs` succeeded, the harness still timed out polling `stat /.../docs` before the follow-on helper-driven `put`, even though the product `put` command already owns parent convergence through `WaitPathVisible()`.
@@ -600,7 +636,20 @@ Evidence:
   gate did not yet confirm the parent by exact-name ancestor listing. The
   final request ID on the last failing parent lookup was
   `264a05bf-5833-4592-9f73-3e4d5c2293df`.
-Resolution / mitigation: CLI `put` and folder upload bootstrap now resolve the parent path through `driveops.Session.WaitPathVisible()` instead of one-shot `ResolveItem()`. That visibility boundary now confirms settling paths through exact-name parent/ancestor listing when the direct path route still lies with `itemNotFound`, instead of trusting only repeated exact-path retries. The E2E upload helper no longer tries to prove fresh-parent stability in a separate preflight command before invoking `put`; it now relies on the product command's owned convergence boundary and waits only for the uploaded child path afterward.
+- Local `go run ./cmd/devtool verify e2e-full` on April 10, 2026 hit the same
+  family in `TestE2E_EdgeCases`: after `mkdir /onedrive-go-e2e-edge-...`
+  succeeded and earlier subtests had already used that folder, later `put`
+  calls for `spaces_in_filename` and `concurrent_uploads` still exhausted the
+  parent-visibility budget because the long-lived shared parent folder kept
+  flapping out of the path/listing read model.
+- Local `go run ./cmd/devtool verify e2e-full` on April 10, 2026 later hit the
+  same family again in `TestE2E_Status_JSON_ConflictDetails` and
+  `TestE2E_Status_History_ShowsResolvedStrategies`: the tests treated a
+  completed `sync --upload-only` as proof that the freshly uploaded remote file
+  path was ready for immediate direct `put` edits, but the next remote edit
+  still occasionally failed resolving `/e2e-cli-.../*.txt` through the shared
+  path model.
+Resolution / mitigation: CLI `put` and folder upload bootstrap now resolve the parent path through `driveops.Session.WaitPathVisible()` instead of one-shot `ResolveItem()`. That visibility boundary now confirms settling paths through exact-name parent/ancestor listing when the direct path route still lies with `itemNotFound`, instead of trusting only repeated exact-path retries. The E2E upload helper no longer tries to prove fresh-parent stability in a separate preflight command before invoking `put`; it now relies on the product command's owned convergence boundary and waits only for the uploaded child path afterward. The full-suite edge-case E2E no longer shares one long-lived remote parent folder across independent subtests; each subtest now gets its own fresh remote folder so the test stays focused on file-name/upload behavior instead of incidental parent-path flapping over minutes of unrelated activity. The status/conflict E2Es now also wait for the upload-only baseline file path itself to become remotely visible before starting direct remote edits, so they no longer assume that sync completion alone means the next raw REST mutation can resolve the same path immediately.
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [drive-transfers.md](../design/drive-transfers.md)
 
 ## LI-20260406-01: Personal scoped delta not ready after path resolution
@@ -615,7 +664,7 @@ Recurring: no
 Summary: A newly created folder in a personal drive could resolve successfully by path, but the immediate first folder-scoped delta request for that same folder still returned `404 itemNotFound`. This caused `sync_paths` bootstrap to fail even though the configured folder was real and readable.  
 Evidence:
 - [graph-api-quirks.md](graph-api-quirks.md) documents the folder-scoped delta readiness lag and dates it to the fast E2E lane on April 6, 2026.
-- [test-assurance-audit.md](/Users/tonimelisma/Development/onedrive-go-live-incident-ledger/spec/reviews/test-assurance-audit.md#L783) records the live failure and the resulting production fallback.
+- [test-assurance-audit.md](../archive/reviews/test-assurance-audit.md) records the live failure and the resulting production fallback.
 - Merged fix: `74da628` (`fix: replay crash recovery in one-shot sync (#420)`), which included the scoped-delta fallback.
 Resolution / mitigation: `sync_paths` primary-scope observation now mirrors scoped-root behavior and falls back to recursive enumeration when folder-scoped delta is temporarily unavailable for the already-resolved scope.  
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md)
@@ -631,10 +680,10 @@ Status: fixed
 Recurring: no  
 Summary: A live crash-recovery pass showed that one-shot sync created durable retry bridge rows for interrupted work but did not actually replay them on that same invocation. The live investigation then exposed two related bugs in the same lane: delete-side bridge rows were typed as remote deletes instead of local deletes, and interrupted downloads could still no-op when the baseline said the file was already synced.  
 Evidence:
-- [test-assurance-audit.md](/Users/tonimelisma/Development/onedrive-go-live-incident-ledger/spec/reviews/test-assurance-audit.md#L780) records the live crash-recovery investigation and the three production gaps it exposed.
+- [test-assurance-audit.md](../archive/reviews/test-assurance-audit.md) records the live crash-recovery investigation and the three production gaps it exposed.
 - Merged fix: `74da628` (`fix: replay crash recovery in one-shot sync (#420)`).
 Resolution / mitigation: One-shot startup now consumes due retry rows immediately, preserves delete replay as `ActionLocalDelete`, and carries an explicit forced-download hint through planning so missing local files are redownloaded even without a fresh delta event.  
-Promoted docs: [test-assurance-audit.md](/Users/tonimelisma/Development/onedrive-go-live-incident-ledger/spec/reviews/test-assurance-audit.md)
+Promoted docs: [test-assurance-audit.md](../archive/reviews/test-assurance-audit.md)
 
 ## LI-20260405-04: Fast E2E download-only tests assumed delta visibility too early
 

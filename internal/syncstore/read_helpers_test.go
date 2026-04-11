@@ -127,36 +127,6 @@ func TestHasScopeBlockAtPath(t *testing.T) {
 	assert.False(t, hasServiceScope)
 }
 
-// Validates: R-2.3.4
-func TestListConflictsAtPath(t *testing.T) {
-	t.Parallel()
-
-	dbPath := filepath.Join(t.TempDir(), "state.db")
-	store, err := NewSyncStore(t.Context(), dbPath, newTestLogger(t))
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		assert.NoError(t, store.Close(context.Background()))
-	})
-
-	_, err = store.DB().ExecContext(t.Context(), `INSERT INTO conflicts
-		(id, drive_id, item_id, path, conflict_type, detected_at, resolution, resolved_at)
-		VALUES
-		('c1', ?, 'item-1', '/conflict.txt', 'edit_edit', 1, 'unresolved', 0),
-		('c2', ?, 'item-2', '/resolved.txt', 'edit_edit', 2, 'keep_local', ?)`,
-		testDriveID, testDriveID, time.Now().UnixNano(),
-	)
-	require.NoError(t, err)
-
-	current, err := ListConflictsAtPath(t.Context(), dbPath, false, newTestLogger(t))
-	require.NoError(t, err)
-	require.Len(t, current, 1)
-	assert.Equal(t, "/conflict.txt", current[0].Path)
-
-	history, err := ListConflictsAtPath(t.Context(), dbPath, true, newTestLogger(t))
-	require.NoError(t, err)
-	require.Len(t, history, 2)
-}
-
 func TestFinalizeInspectorRead_PreservesSuccessfulReadOnCloseError(t *testing.T) {
 	t.Parallel()
 

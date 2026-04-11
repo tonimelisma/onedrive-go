@@ -39,7 +39,7 @@ const (
 	deleteCounterWindow = 5 * time.Minute
 
 	// recheckInterval is how often the engine checks for external DB
-	// changes (e.g., `issues approve-deletes` via the CLI). Uses PRAGMA data_version
+	// changes (e.g., `resolve deletes` via the CLI). Uses PRAGMA data_version
 	// — one integer comparison per tick, essentially free.
 	recheckInterval = 10 * time.Second
 )

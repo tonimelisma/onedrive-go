@@ -141,7 +141,7 @@ func TestE2E_Sync_NestedDeletion(t *testing.T) {
 }
 
 // TestE2E_Sync_ResolveKeepLocalThenSync resolves an edit-edit conflict with
-// --keep-local, then syncs to verify the remote gets the local content.
+// resolve local, then syncs to verify the remote gets the local content.
 func TestE2E_Sync_ResolveKeepLocalThenSync(t *testing.T) {
 	// No t.Parallel() — bidirectional sync sees drive-level delta feed,
 	// so parallel tests inject cross-test events causing spurious failures.
@@ -169,8 +169,8 @@ func TestE2E_Sync_ResolveKeepLocalThenSync(t *testing.T) {
 	// Bidirectional sync — detects conflict.
 	runCLIWithConfig(t, cfgPath, env, "sync")
 
-	// Resolve --keep-local.
-	runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/keeplocal.txt", "--keep-local")
+	// Resolve local.
+	runCLIWithConfig(t, cfgPath, env, "resolve", "local", testFolder+"/keeplocal.txt")
 
 	// Sync to push local version to remote.
 	runCLIWithConfig(t, cfgPath, env, "sync")
@@ -181,7 +181,7 @@ func TestE2E_Sync_ResolveKeepLocalThenSync(t *testing.T) {
 }
 
 // TestE2E_Sync_ResolveKeepRemoteThenSync resolves an edit-edit conflict with
-// --keep-remote, syncs, and verifies local has remote content with conflict
+// resolve remote, syncs, and verifies local has remote content with conflict
 // copy cleaned up.
 func TestE2E_Sync_ResolveKeepRemoteThenSync(t *testing.T) {
 	// No t.Parallel() — bidirectional sync sees drive-level delta feed,
@@ -210,12 +210,8 @@ func TestE2E_Sync_ResolveKeepRemoteThenSync(t *testing.T) {
 	// Bidirectional sync — conflict detected, remote content downloaded.
 	runCLIWithConfig(t, cfgPath, env, "sync")
 
-	// Resolve --keep-remote.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/keepremote.txt", "--keep-remote")
-	assert.Contains(t, stderr, "Resolved")
-
-	// Sync to finalize.
-	runCLIWithConfig(t, cfgPath, env, "sync")
+	// Queue keep-remote and let the next sync pass execute it.
+	queueConflictResolutionAndSync(t, cfgPath, env, "remote", testFolder+"/keepremote.txt")
 
 	// Verify local file has remote content.
 	localData, err := os.ReadFile(filePath)
@@ -225,7 +221,7 @@ func TestE2E_Sync_ResolveKeepRemoteThenSync(t *testing.T) {
 	// Verify conflict copies are cleaned up.
 	matches, err := filepath.Glob(filepath.Join(localDir, "keepremote.conflict-*"))
 	require.NoError(t, err)
-	assert.Empty(t, matches, "conflict copies should be cleaned up after resolve --keep-remote")
+	assert.Empty(t, matches, "conflict copies should be cleaned up after resolve remote")
 }
 
 // TestE2E_Sync_NosyncGuard validates that a .nosync file in the sync root

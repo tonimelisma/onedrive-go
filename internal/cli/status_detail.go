@@ -128,21 +128,7 @@ func readDetailedStatusSnapshot(
 		}
 	}
 
-	inspector, err := syncstore.OpenInspector(statePath, logger)
-	if err != nil {
-		return syncstore.DetailedStatusSnapshot{}, detailedStateStoreInfo{
-			Status:       stateStoreStatusDamaged,
-			Error:        err.Error(),
-			RecoveryHint: recoverAwareStateStoreHint(canonicalID),
-		}
-	}
-	defer func() {
-		if closeErr := inspector.Close(); closeErr != nil {
-			logger.Debug("close detailed status inspector", "error", closeErr.Error(), "path", statePath)
-		}
-	}()
-
-	snapshot, err := inspector.ReadDetailedStatusSnapshot(context.Background(), history)
+	snapshot, err := syncstore.ReadDetailedStatusSnapshot(context.Background(), statePath, history, logger)
 	if err != nil {
 		return syncstore.DetailedStatusSnapshot{}, detailedStateStoreInfo{
 			Status:       stateStoreStatusDamaged,

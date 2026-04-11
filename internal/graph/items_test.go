@@ -2,6 +2,7 @@ package graph
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -1849,6 +1850,39 @@ func TestCopyItem_NotFound(t *testing.T) {
 		_, err := client.CopyItem(t.Context(), driveid.New("d"), "nonexistent", "dest-id", "name.txt")
 		return err
 	}, ErrNotFound)
+}
+
+func TestCopyItem_TransientDestinationVisibilityRetry(t *testing.T) {
+	var attempts int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		current := atomic.AddInt32(&attempts, 1)
+		if current < 3 {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("request-id", fmt.Sprintf("req-copy-retry-%d", current))
+			w.WriteHeader(http.StatusNotFound)
+			writeTestResponse(t, w, `{
+				"error": {
+					"code": "itemNotFound",
+					"message": "Failed to verify the existence of destination location"
+				}
+			}`)
+			return
+		}
+
+		w.Header().Set("Location", "https://operations.contoso.sharepoint.com/status/retried")
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+
+	client := newNoRetryTestClient(t, srv.URL)
+	client.copyDestinationPolicy = testRetryPolicy()
+
+	result, err := client.CopyItem(t.Context(), driveid.New("d"), "item-to-copy", "dest-folder-id", "copy-of-file.txt")
+	require.NoError(t, err)
+
+	assert.Equal(t, int32(3), atomic.LoadInt32(&attempts))
+	assert.Equal(t, "https://operations.contoso.sharepoint.com/status/retried", result.MonitorURL)
 }
 
 func TestPollCopyStatus_Completed(t *testing.T) {

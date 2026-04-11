@@ -185,7 +185,7 @@ func TestInspector_HasScopeBlock(t *testing.T) {
 
 // Validates: R-2.4.4, R-2.4.5
 // Validates: R-2.3.7, R-2.3.10, R-2.10.22
-func TestInspector_ReadIssuesSnapshot(t *testing.T) {
+func TestInspector_ReadVisibleIssueSnapshot(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
@@ -250,7 +250,7 @@ func TestInspector_ReadIssuesSnapshot(t *testing.T) {
 		assert.NoError(t, inspector.Close())
 	})
 
-	current, err := inspector.ReadIssuesSnapshot(ctx, false)
+	current, err := inspector.ReadVisibleIssueSnapshot(ctx, false)
 	require.NoError(t, err)
 	assert.Len(t, current.Conflicts, 1)
 	assert.Equal(t, "/conflict.txt", current.Conflicts[0].Path)
@@ -262,7 +262,7 @@ func TestInspector_ReadIssuesSnapshot(t *testing.T) {
 	assert.Len(t, current.PendingRetries, 1)
 	assert.Equal(t, 1, current.PendingRetries[0].Count)
 
-	history, err := inspector.ReadIssuesSnapshot(ctx, true)
+	history, err := inspector.ReadVisibleIssueSnapshot(ctx, true)
 	require.NoError(t, err)
 	assert.Len(t, history.Conflicts, 2)
 }
@@ -437,7 +437,7 @@ func findConflictStatusSnapshot(
 }
 
 // Validates: R-2.14.3, R-2.10.47
-func TestInspector_ReadStatusSnapshot_StaysConsistentWithIssuesSnapshot(t *testing.T) {
+func TestInspector_ReadStatusSnapshot_StaysConsistentWithVisibleIssueSnapshot(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
@@ -479,7 +479,7 @@ func TestInspector_ReadStatusSnapshot_StaysConsistentWithIssuesSnapshot(t *testi
 		assert.NoError(t, inspector.Close())
 	})
 
-	issues, err := inspector.ReadIssuesSnapshot(ctx, false)
+	issues, err := inspector.ReadVisibleIssueSnapshot(ctx, false)
 	require.NoError(t, err)
 
 	status := inspector.ReadStatusSnapshot(ctx)

@@ -17,16 +17,17 @@ func ReadStatusSnapshot(ctx context.Context, dbPath string, logger *slog.Logger)
 	})
 }
 
-// ReadIssuesSnapshot opens a read-only inspector for one issues projection and
-// closes it before returning so callers do not own inspector lifecycle.
-func ReadIssuesSnapshot(
+// ReadDetailedStatusSnapshot opens a read-only inspector for one detailed
+// single-drive status projection and closes it before returning so callers do
+// not own inspector lifecycle.
+func ReadDetailedStatusSnapshot(
 	ctx context.Context,
 	dbPath string,
 	history bool,
 	logger *slog.Logger,
-) (IssuesSnapshot, error) {
-	return readWithInspector(dbPath, logger, func(inspector *Inspector) (IssuesSnapshot, error) {
-		return inspector.ReadIssuesSnapshot(ctx, history)
+) (DetailedStatusSnapshot, error) {
+	return readWithInspector(dbPath, logger, func(inspector *Inspector) (DetailedStatusSnapshot, error) {
+		return inspector.ReadDetailedStatusSnapshot(ctx, history)
 	})
 }
 
@@ -52,23 +53,6 @@ func HasScopeBlockAtPath(
 ) (bool, error) {
 	return readWithInspector(dbPath, logger, func(inspector *Inspector) (bool, error) {
 		return inspector.HasScopeBlock(ctx, key)
-	})
-}
-
-// ListConflictsAtPath returns either unresolved or full conflict history for
-// one read-only store path and closes the inspector before returning.
-func ListConflictsAtPath(
-	ctx context.Context,
-	dbPath string,
-	history bool,
-	logger *slog.Logger,
-) ([]synctypes.ConflictRecord, error) {
-	return readWithInspector(dbPath, logger, func(inspector *Inspector) ([]synctypes.ConflictRecord, error) {
-		if history {
-			return inspector.ListAllConflicts(ctx)
-		}
-
-		return inspector.ListConflicts(ctx)
 	})
 }
 

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -30,6 +31,41 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/syncverify"
 	"github.com/tonimelisma/onedrive-go/testutil"
 )
+
+type detailedStatusJSON struct {
+	IssueGroups      []statusIssueGroupJSON      `json:"issue_groups"`
+	DeleteSafety     []statusDeleteSafetyJSON    `json:"delete_safety"`
+	Conflicts        []statusConflictJSON        `json:"conflicts"`
+	ConflictHistory  []statusConflictHistoryJSON `json:"conflict_history"`
+	StateStoreStatus string                      `json:"state_store_status"`
+}
+
+type statusIssueGroupJSON struct {
+	Title string   `json:"title"`
+	Paths []string `json:"paths"`
+}
+
+type statusDeleteSafetyJSON struct {
+	Path  string `json:"path"`
+	State string `json:"state"`
+}
+
+type statusConflictJSON struct {
+	ID                  string `json:"id"`
+	Path                string `json:"path"`
+	ConflictType        string `json:"conflict_type"`
+	State               string `json:"state"`
+	RequestedResolution string `json:"requested_resolution"`
+	LastRequestError    string `json:"last_request_error"`
+}
+
+type statusConflictHistoryJSON struct {
+	ID           string `json:"id"`
+	Path         string `json:"path"`
+	ConflictType string `json:"conflict_type"`
+	Resolution   string `json:"resolution"`
+	ResolvedBy   string `json:"resolved_by"`
+}
 
 // ---------------------------------------------------------------------------
 // Sync test helpers (available under the base e2e tag for both fast and full)
@@ -129,6 +165,84 @@ func queueConflictResolutionAndSync(t *testing.T, cfgPath string, env map[string
 	runCLIWithConfig(t, cfgPath, env, "sync")
 }
 
+func runDetailedStatusAllowError(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	args ...string,
+) (detailedStatusJSON, string, string, error) {
+	t.Helper()
+
+	statusArgs := append([]string{"status"}, args...)
+	statusArgs = append(statusArgs, "--json")
+	stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, env, statusArgs...)
+	if err != nil {
+		return detailedStatusJSON{}, stdout, stderr, err
+	}
+
+	var output detailedStatusJSON
+	if err := json.Unmarshal([]byte(stdout), &output); err != nil {
+		return detailedStatusJSON{}, stdout, stderr, fmt.Errorf("decode status json: %w", err)
+	}
+
+	return output, stdout, stderr, nil
+}
+
+func readDetailedStatus(t *testing.T, cfgPath string, env map[string]string, args ...string) detailedStatusJSON {
+	t.Helper()
+
+	output, stdout, stderr, err := runDetailedStatusAllowError(t, cfgPath, env, args...)
+	require.NoErrorf(t, err, "status command failed\nstdout: %s\nstderr: %s", stdout, stderr)
+
+	return output
+}
+
+func pollDetailedStatus(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	timeout time.Duration,
+	ready func(detailedStatusJSON) bool,
+	args ...string,
+) detailedStatusJSON {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	var lastStatus detailedStatusJSON
+	var lastStdout string
+	var lastStderr string
+	var lastErr error
+
+	for attempt := 0; ; attempt++ {
+		status, stdout, stderr, err := runDetailedStatusAllowError(t, cfgPath, env, args...)
+		lastStdout = stdout
+		lastStderr = stderr
+		lastErr = err
+		if err == nil {
+			lastStatus = status
+			if ready(status) {
+				return status
+			}
+		}
+
+		if time.Now().After(deadline) {
+			require.Failf(
+				t,
+				"pollDetailedStatus: timed out",
+				"after %v waiting for status predicate with args %v\nlast error: %v\nlast status: %+v\nlast stdout: %s\nlast stderr: %s",
+				timeout,
+				args,
+				lastErr,
+				lastStatus,
+				lastStdout,
+				lastStderr,
+			)
+		}
+
+		time.Sleep(pollBackoff(attempt))
+	}
+}
+
 func toResolveArgs(t *testing.T, args ...string) []string {
 	t.Helper()
 
@@ -141,12 +255,9 @@ func toResolveArgs(t *testing.T, args ...string) []string {
 
 	for _, arg := range args {
 		switch arg {
-		case "--keep-local":
-			strategy = "local"
-		case "--keep-remote":
-			strategy = "remote"
-		case "--keep-both":
-			strategy = "both"
+		case "local", "remote", "both":
+			require.Empty(t, strategy, "only one resolve strategy is supported")
+			strategy = arg
 		case "--all":
 			all = true
 		case "--dry-run":
@@ -157,7 +268,7 @@ func toResolveArgs(t *testing.T, args ...string) []string {
 		}
 	}
 
-	require.NotEmpty(t, strategy, "resolve helper requires a keep-* strategy")
+	require.NotEmpty(t, strategy, "resolve helper requires local, remote, or both strategy")
 
 	resolveArgs := []string{strategy}
 	if dryRun {
@@ -351,13 +462,38 @@ func getRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePa
 
 	tmpDir := t.TempDir()
 	localPath := filepath.Join(tmpDir, "downloaded")
+	deadline := time.Now().Add(remoteWritePropagationTimeout)
 
-	runCLIWithConfig(t, cfgPath, env, "get", remotePath, localPath)
+	var (
+		lastStdout string
+		lastStderr string
+		lastErr    error
+	)
 
-	data, err := os.ReadFile(localPath)
-	require.NoError(t, err)
+	for attempt := 0; ; attempt++ {
+		stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, env, "get", remotePath, localPath)
+		lastStdout = stdout
+		lastStderr = stderr
+		lastErr = err
+		if err == nil {
+			data, readErr := os.ReadFile(localPath)
+			require.NoError(t, readErr)
+			return string(data)
+		}
 
-	return string(data)
+		if time.Now().After(deadline) {
+			require.NoErrorf(
+				t,
+				lastErr,
+				"get %q did not converge after visibility wait\nstdout: %s\nstderr: %s",
+				remotePath,
+				lastStdout,
+				lastStderr,
+			)
+		}
+
+		time.Sleep(pollBackoff(attempt))
+	}
 }
 
 func pollRemoteParentVisible(t *testing.T, cfgPath string, env map[string]string, remotePath string) {
@@ -641,7 +777,7 @@ func TestE2E_Sync_Conflicts(t *testing.T) {
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "status")
 	assert.Contains(t, stdout, "conflict.txt")
 
-	queueConflictResolutionAndSync(t, cfgPath, env, testFolder+"/conflict.txt", "--keep-remote")
+	queueConflictResolutionAndSync(t, cfgPath, env, "remote", testFolder+"/conflict.txt")
 
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "status")
 	assert.Contains(t, stdout, "No unresolved conflicts.")

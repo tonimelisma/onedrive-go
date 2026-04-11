@@ -203,10 +203,10 @@ func TestE2E_Shared_ReadOnlyFolder_DiscoveryDriveAddAndBlockedWriteUX(t *testing
 	_, stderr = runCLIWithConfigForDrive(t, cfgPath, env, readOnlyFixture.FolderItem.Selector, "sync", "--upload-only")
 	assert.Contains(t, stderr, "Mode: upload-only")
 
-	issuesOut, _ := runCLIWithConfigForDrive(t, cfgPath, env, readOnlyFixture.FolderItem.Selector, "issues")
-	assert.Contains(t, issuesOut, "SHARED FOLDER WRITES BLOCKED")
-	assert.Contains(t, issuesOut, "Downloads continue normally.")
-	assert.Contains(t, issuesOut, "blocked-from-recipient.txt")
+	statusOut, _ := runCLIWithConfigForDrive(t, cfgPath, env, readOnlyFixture.FolderItem.Selector, "status")
+	assert.Contains(t, statusOut, "SHARED FOLDER WRITES BLOCKED")
+	assert.Contains(t, statusOut, "Downloads continue normally.")
+	assert.Contains(t, statusOut, "blocked-from-recipient.txt")
 
 	_, stderr = runCLIWithConfigForDrive(t, cfgPath, env, readOnlyFixture.FolderItem.Selector, "sync", "--download-only")
 	assert.Contains(t, stderr, "Mode: download-only")

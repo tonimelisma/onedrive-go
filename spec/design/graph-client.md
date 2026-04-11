@@ -93,6 +93,7 @@ All API quirks handled at the graph boundary — downstream code never sees them
 - Exact transient 404 retry on `GET /drives/{driveID}/items/root/children` when the Graph code chain contains `itemNotFound`
 - Exact transient 404 retry on `GET /drives/{driveID}/items/{itemID}` when `Download()` or `DownloadRange()` are fetching pre-authenticated download metadata and the Graph code chain contains `itemNotFound`
 - Exact transient 404 retry on `POST /drives/{driveID}/items/{parentID}:/{name}:/createUploadSession` when a freshly created parent is already visible by path but upload-session creation still reports `itemNotFound`
+- Exact transient 404 retry on `POST /drives/{driveID}/items/{itemID}/copy` when Graph says it failed to verify the destination location even though the destination folder is already path-visible
 
 The graph boundary intentionally stops at those exact request/response quirks.
 It does not own post-success path convergence such as "mutation succeeded, but
@@ -118,6 +119,7 @@ The client owns its safety guards and Graph-specific request metadata:
 - `rootChildrenPolicy`: transient 404 retry policy for `root/children`
 - `downloadMetadataPolicy`: transient 404 retry policy for item-by-ID download metadata lookup
 - `uploadSessionCreatePolicy`: transient 404 retry policy for create-upload-session requests against freshly created parents
+- `copyDestinationPolicy`: transient 404 retry policy for copy requests whose destination folder is already visible by path but not yet accepted by Graph's copy verifier
 - `deltaPreferHeader`: prebuilt alias-ID delta header
 
 These are instance fields on `graph.Client`, not package globals. Tests in package `graph` override them per client instance instead of mutating shared process state.

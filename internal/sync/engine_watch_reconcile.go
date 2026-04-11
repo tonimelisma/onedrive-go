@@ -37,7 +37,7 @@ func (rt *watchRuntime) externalDBChanged(ctx context.Context) bool {
 }
 
 // handleRecheckTick processes a recheck timer tick: detects external DB
-// changes (e.g., `issues approve-deletes`) and logs a watch summary.
+// changes (e.g., `resolve deletes`) and logs a watch summary.
 func (rt *watchRuntime) handleRecheckTick(ctx context.Context) {
 	if rt.externalDBChanged(ctx) {
 		rt.handleExternalChanges(ctx)

@@ -52,6 +52,7 @@ func NewClient(
 		createFolderReadbackPolicy: retry.PathVisibilityPolicy(),
 		simpleUploadMtimePolicy:    retry.SimpleUploadMtimePatchPolicy(),
 		uploadSessionCreatePolicy:  retry.UploadSessionCreatePolicy(),
+		copyDestinationPolicy:      retry.CopyDestinationPolicy(),
 		simpleUploadCreatePolicy:   retry.SimpleUploadCreatePolicy(),
 		uploadURLValidator:         validateUploadURL,
 		copyMonitorValidator:       validateCopyMonitorURL,

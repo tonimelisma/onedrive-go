@@ -97,6 +97,23 @@ func isTransientUploadSessionCreateError(err error) (*GraphError, bool) {
 	return isTransientItemNotFoundError(err)
 }
 
+func isTransientCopyDestinationError(err error) (*GraphError, bool) {
+	if !errors.Is(err, ErrNotFound) {
+		return nil, false
+	}
+
+	var graphErr *GraphError
+	if !errors.As(err, &graphErr) || graphErr.StatusCode != http.StatusNotFound {
+		return nil, false
+	}
+
+	if !strings.Contains(strings.ToLower(graphErr.Message), "destination location") {
+		return nil, false
+	}
+
+	return graphErr, true
+}
+
 func isTransientItemNotFoundError(err error) (*GraphError, bool) {
 	if !errors.Is(err, ErrNotFound) {
 		return nil, false

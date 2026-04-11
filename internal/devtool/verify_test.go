@@ -1251,6 +1251,87 @@ func TestRunRepoConsistencyChecksFailsOnStaleFilterSemanticsWording(t *testing.T
 	assert.Contains(t, err.Error(), "sync.md")
 }
 
+func TestRunRepoConsistencyChecksFailsOnRemovedSyncCLICommandsOutsideArchive(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoRoot, "spec", "design", "cli.md"),
+		[]byte(strings.Join([]string{
+			"# CLI",
+			"",
+			"GOVERNS: internal/cli/*.go",
+			"",
+			"## Ownership Contract",
+			"- Owns: CLI entrypoints",
+			"- Does Not Own: sync runtime",
+			"- Source of Truth: Cobra command definitions",
+			"- Allowed Side Effects: config I/O and stdout",
+			"- Mutable Runtime Owner: process-local command execution",
+			"- Error Boundary: CLI error rendering",
+			"",
+			"## Verified By",
+			"",
+			"| Behavior | Evidence |",
+			"| --- | --- |",
+			"| stale | TestFixtureEvidence |",
+			"",
+			"Run `onedrive-go conflicts --history`.",
+			"",
+		}, "\n")),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "removed sync CLI command")
+	assert.Contains(t, err.Error(), "cli.md")
+}
+
+func TestRunRepoConsistencyChecksAllowsRemovedSyncCLICommandsInArchive(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	archiveDir := filepath.Join(repoRoot, "spec", "archive", "design")
+	require.NoError(t, os.MkdirAll(archiveDir, 0o750))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(archiveDir, "old-cli.md"),
+		[]byte("Run `onedrive-go conflicts --history`.\n"),
+		0o600,
+	))
+
+	require.NoError(t, runRepoConsistencyChecks(repoRoot))
+}
+
+func TestRunRepoConsistencyChecksFailsOnRemovedSyncCLIHelperInvocation(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoRoot, "e2e", "stale_sync_ux_test.go"),
+		[]byte(strings.Join([]string{
+			"package e2e",
+			"",
+			"func stale() {",
+			`	_, _, _ = runCLIWithConfigAllowError(nil, "", nil, "conflicts")`,
+			"}",
+			"",
+		}, "\n")),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "removed sync CLI command")
+	assert.Contains(t, err.Error(), "stale_sync_ux_test.go")
+}
+
 func writeRepoConsistencyFixtures(t *testing.T, repoRoot string) {
 	t.Helper()
 
@@ -1264,6 +1345,7 @@ func writeRepoConsistencyDirectories(t *testing.T, repoRoot string) {
 	t.Helper()
 
 	for _, dir := range []string{
+		filepath.Join(repoRoot, "e2e"),
 		filepath.Join(repoRoot, "spec", "design"),
 		filepath.Join(repoRoot, "spec", "requirements"),
 		filepath.Join(repoRoot, "internal"),

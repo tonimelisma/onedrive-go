@@ -257,6 +257,31 @@ Runtime policy:
 - direct `UpdateFileSystemInfo()` calls outside simple-upload finalization stay
   strict; callers should not assume all metadata PATCH paths are retried
 
+### Transient 404 on Server-Side Copy Into a Freshly Visible Destination
+
+After a destination folder has become readable by path, the immediate
+`POST /drives/{driveID}/items/{itemID}/copy` can still return HTTP 404 with the
+message `Failed to verify the existence of destination location`. This means
+Graph's copy verifier can lag behind ordinary path reads for the same folder.
+
+Observed local evidence on April 10, 2026 during `go run ./cmd/devtool verify e2e-full`:
+
+- `mkdir /e2e-cp-folder-1775879036248706000/dest` succeeded
+- `GET /drives/bd50cf43646e28e6/root:/e2e-cp-folder-1775879036248706000/dest:` returned `200`
+- the immediate `POST /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s75b8ff1dfb2846adbb1003d999d52233/copy`
+  still returned HTTP 404 with request ID `f7f79148-fe82-4350-8bc7-a620c0598a1b`
+  and message `Failed to verify the existence of destination location`
+
+Runtime policy:
+
+- only the copy start request gets the retry
+- retry remains narrow: only HTTP 404, only when the Graph message contains
+  `destination location`
+- the current production retry budget is 6 total attempts with 250ms base, 2x
+  multiplier, no jitter, and 4s max
+- post-success listing/readback still belongs to normal path-convergence or
+  caller polling; the graph boundary owns only the start-copy false negative
+
 ### Folder Create Can Return Success Status With An Empty Body
 
 Graph can return HTTP success for `POST /drives/{driveID}/items/{parentID}/children`
