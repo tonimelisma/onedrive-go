@@ -454,10 +454,14 @@ Runtime policy:
   sync pass must use the longer remote-write visibility budget rather than the
   generic 30-second poll helper
 - live-test fixture setup is intentionally split:
-  - fixture seeding helpers may absorb only the documented provider recurrence
-    families they are explicitly seeding around
+  - fixture `put` retries may absorb only the documented command-window
+    fresh-parent create and parent-resolution lag families that the failing
+    CLI `put` itself observed
   - generic fixture readiness waits prove user-visible availability (exact stat
-    success or parent listing visibility), not exact-route convergence
+    success or parent listing visibility), not exact-route convergence; when
+    exact stat still lags behind a visible parent listing they record the
+    `post_mutation_destination_visibility_lag` recurrence from that follow-on
+    wait instead of attributing it to the earlier `put`
   - tests that are explicitly validating exact-path reads must still poll the
     exact route directly instead of inheriting the looser fixture-seed contract
 
