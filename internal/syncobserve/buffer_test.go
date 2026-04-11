@@ -551,7 +551,9 @@ func TestFlushDebounced_DebounceResets(t *testing.T) {
 	buf := NewBuffer(synctest.TestLogger(t))
 	ctx, cancel := context.WithCancel(t.Context())
 
-	debounce := 100 * time.Millisecond
+	// Keep a wide gap between the pre-reset sleep and the debounce window so
+	// race-enabled verify runs do not turn scheduler delay into a false failure.
+	debounce := 200 * time.Millisecond
 	out := buf.FlushDebounced(ctx, debounce)
 
 	// Add first event.
@@ -562,7 +564,7 @@ func TestFlushDebounced_DebounceResets(t *testing.T) {
 	})
 
 	// Wait less than debounce, then add second event — timer should reset.
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
 	buf.Add(&synctypes.ChangeEvent{
 		Source: synctypes.SourceLocal, Type: synctypes.ChangeCreate,
 		Path: "reset-second.txt", Name: "reset-second.txt",
