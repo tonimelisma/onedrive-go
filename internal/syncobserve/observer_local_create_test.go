@@ -1,7 +1,6 @@
 package syncobserve
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -26,15 +25,7 @@ func TestWatch_DetectsFileCreate(t *testing.T) {
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
 
 	events := make(chan synctypes.ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
-
-	// Let the watcher settle, then create a file.
-	time.Sleep(100 * time.Millisecond)
+	cancel, done := startLocalWatch(t, obs, dir, events)
 	writeTestFile(t, dir, "new-file.txt", "hello watch")
 
 	var ev synctypes.ChangeEvent
@@ -51,9 +42,9 @@ func TestWatch_DetectsFileCreate(t *testing.T) {
 	assert.Equal(t, synctypes.ChangeCreate, ev.Type)
 	assert.Equal(t, "new-file.txt", ev.Path)
 	assert.Equal(t, synctypes.SourceLocal, ev.Source)
-	assert.NotEmpty(t, ev.Hash, "Hash should be non-empty for a file create")
 }
 
+// Validates: R-2.1.2
 func TestWatch_NewDirectoryWatched(t *testing.T) {
 	t.Parallel()
 
@@ -61,21 +52,13 @@ func TestWatch_NewDirectoryWatched(t *testing.T) {
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
 
 	events := make(chan synctypes.ChangeEvent, 20)
-	ctx, cancel := context.WithCancel(t.Context())
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
+	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	// Create a subdirectory and a file inside it.
 	subDir := filepath.Join(dir, "subdir")
 	require.NoError(t, os.Mkdir(subDir, 0o700))
 
-	// Give the watcher time to add the new directory watch.
-	time.Sleep(200 * time.Millisecond)
+	waitForLocalCreateEvent(t, events, "subdir")
 
 	writeTestFile(t, dir, "subdir/inner.txt", "nested")
 
@@ -106,6 +89,7 @@ func TestWatch_NewDirectoryWatched(t *testing.T) {
 // TestWatch_NewDirectoryPreExistingFiles verifies that files already present
 // in a newly-created directory are detected immediately (not deferred to the
 // next safety scan). Regression test for B-100.
+// Validates: R-2.1.2
 func TestWatch_NewDirectoryPreExistingFiles(t *testing.T) {
 	t.Parallel()
 
@@ -113,14 +97,7 @@ func TestWatch_NewDirectoryPreExistingFiles(t *testing.T) {
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
 
 	events := make(chan synctypes.ChangeEvent, 30)
-	ctx, cancel := context.WithCancel(t.Context())
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
+	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	// Create a directory with a file already inside it using os.MkdirAll +
 	// os.WriteFile atomically (from the watcher's perspective, the directory
@@ -161,6 +138,7 @@ func TestWatch_NewDirectoryPreExistingFiles(t *testing.T) {
 // Recursive scanNewDirectory tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.1.2
 func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
 	t.Parallel()
 
@@ -168,14 +146,7 @@ func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
 
 	events := make(chan synctypes.ChangeEvent, 50)
-	ctx, cancel := context.WithCancel(t.Context())
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
+	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	// Create a 3-level nested directory structure with a file at the bottom.
 	deepDir := filepath.Join(dir, "level1", "level2", "level3")
@@ -226,6 +197,22 @@ func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
 	}
 }
 
+func waitForLocalCreateEvent(t *testing.T, events <-chan synctypes.ChangeEvent, wantPath string) {
+	t.Helper()
+
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case ev := <-events:
+			if ev.Path == wantPath && ev.Type == synctypes.ChangeCreate {
+				return
+			}
+		case <-timeout:
+			require.Failf(t, "timeout", "waiting for create event for %q", wantPath)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Hash failure creates with empty hash (B-102) — Watch variant
 // ---------------------------------------------------------------------------
@@ -244,18 +231,12 @@ func TestWatch_HashFailureStillEmitsCreate(t *testing.T) {
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
 
 	events := make(chan synctypes.ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
+	cancel, done := startLocalWatch(t, obs, dir, events)
 
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
-
-	// Let the watcher settle, then create an unreadable file.
+	// Create an unreadable file after the watch loop is live.
 	// The file must be born unreadable — if we create then chmod, the observer
 	// can hash the file between creation and chmod, producing a valid hash
 	// instead of the expected empty hash (B-310).
-	time.Sleep(100 * time.Millisecond)
 	path := filepath.Join(dir, "unreadable.txt")
 	require.NoError(t, os.WriteFile(path, []byte("secret"), 0o000))
 

@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -44,6 +47,86 @@ func writeTestFile(t *testing.T, dir, relPath, content string) string {
 	require.NoError(t, os.WriteFile(fullPath, []byte(content), 0o600), "WriteFile(%s)", fullPath)
 
 	return fullPath
+}
+
+type readySignalWatcher struct {
+	inner *fsnotify.Watcher
+	ready chan struct{}
+	once  sync.Once
+}
+
+func newReadySignalWatcher(ready chan struct{}) (*readySignalWatcher, error) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return nil, fmt.Errorf("new watcher: %w", err)
+	}
+
+	return &readySignalWatcher{
+		inner: watcher,
+		ready: ready,
+	}, nil
+}
+
+func (w *readySignalWatcher) Add(name string) error {
+	if err := w.inner.Add(name); err != nil {
+		return fmt.Errorf("add watch %q: %w", name, err)
+	}
+
+	return nil
+}
+
+func (w *readySignalWatcher) Remove(name string) error {
+	if err := w.inner.Remove(name); err != nil {
+		return fmt.Errorf("remove watch %q: %w", name, err)
+	}
+
+	return nil
+}
+
+func (w *readySignalWatcher) Close() error {
+	if err := w.inner.Close(); err != nil {
+		return fmt.Errorf("close watcher: %w", err)
+	}
+
+	return nil
+}
+
+func (w *readySignalWatcher) Events() <-chan fsnotify.Event {
+	w.once.Do(func() {
+		close(w.ready)
+	})
+
+	return w.inner.Events
+}
+
+func (w *readySignalWatcher) Errors() <-chan error {
+	return w.inner.Errors
+}
+
+func startLocalWatch(t *testing.T, obs *LocalObserver, dir string, events chan<- synctypes.ChangeEvent) (context.CancelFunc, <-chan error) {
+	t.Helper()
+
+	ready := make(chan struct{})
+	obs.SetWatcherFactory(func() (FsWatcher, error) {
+		return newReadySignalWatcher(ready)
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err, "watch exited before becoming ready")
+	case <-ready:
+	case <-time.After(5 * time.Second):
+		cancel()
+		require.Fail(t, "timeout waiting for watch loop readiness")
+	}
+
+	return cancel, done
 }
 
 // hashContent computes the QuickXorHash of a string, returning the
