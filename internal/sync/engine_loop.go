@@ -157,14 +157,13 @@ func (rt *watchRuntime) runWatchUntilQuiescent(
 	ticker := rt.engine.newTicker(quiescenceLogInterval)
 	defer stopTicker(ticker)
 
-	outbox := append([]*synctypes.TrackedAction(nil), initialOutbox...)
+	rt.replaceOutbox(initialOutbox)
 	emptyCh := rt.depGraph.WaitForEmpty()
 	logC := tickerChan(ticker)
 
 	for {
 		if ctx.Err() != nil && !rt.isDraining() {
-			rt.beginWatchDrain(ctx, p, outbox)
-			outbox = nil
+			rt.beginWatchDrain(ctx, p)
 		}
 		if rt.isDraining() {
 			done, err := rt.runDrainStep(ctx, p)
@@ -177,14 +176,13 @@ func (rt *watchRuntime) runWatchUntilQuiescent(
 			continue
 		}
 
-		nextOutbox, done, err := rt.runBootstrapStep(ctx, p, outbox, logC, emptyCh)
+		done, err := rt.runBootstrapStep(ctx, p, logC, emptyCh)
 		if err != nil {
 			return err
 		}
 		if done {
 			return nil
 		}
-		outbox = nextOutbox
 	}
 }
 
@@ -192,12 +190,11 @@ func (rt *watchRuntime) runWatchUntilQuiescent(
 // observed batches, worker results, retry/trial timers, reconcile completions,
 // and outbox draining.
 func (rt *watchRuntime) runWatchLoop(ctx context.Context, p *watchPipeline) error {
-	var outbox []*synctypes.TrackedAction
+	rt.replaceOutbox(nil)
 
 	for {
 		if ctx.Err() != nil && !rt.isDraining() {
-			rt.beginWatchDrain(ctx, p, outbox)
-			outbox = nil
+			rt.beginWatchDrain(ctx, p)
 		}
 		if rt.isDraining() {
 			done, err := rt.runDrainStep(ctx, p)
@@ -210,59 +207,27 @@ func (rt *watchRuntime) runWatchLoop(ctx context.Context, p *watchPipeline) erro
 			continue
 		}
 
-		nextOutbox, done, err := rt.runWatchStep(ctx, p, outbox)
+		done, err := rt.runWatchStep(ctx, p)
 		if err != nil {
 			return err
 		}
 		if done {
 			return nil
 		}
-		outbox = nextOutbox
 	}
 }
 
 func (rt *watchRuntime) runWatchStep(
 	ctx context.Context,
 	p *watchPipeline,
-	outbox []*synctypes.TrackedAction,
-) ([]*synctypes.TrackedAction, bool, error) {
-	// Steady-state watch phase: dispatch, observer batches, skipped items,
-	// retry/trial wakeups, and reconcile handoff are all allowed to be live.
-	dispatchCh, nextAction := rt.dispatchChannelForOutbox(outbox)
-
-	select {
-	case dispatchCh <- nextAction:
-		return rt.flushPendingUserIntent(ctx, p, outbox[1:]), false, nil
-	case batch, ok := <-p.batchReady:
-		return rt.handleWatchBatch(ctx, p, outbox, batch, ok)
-	case workerResult, ok := <-p.results:
-		return rt.handleWatchWorkerResult(ctx, p, outbox, &workerResult, ok)
-	case skipped, ok := <-p.skippedCh:
-		return rt.handleWatchSkipped(ctx, p, outbox, skipped, ok)
-	case scopeChange, ok := <-p.scopeChanges:
-		return rt.handleWatchScopeChange(ctx, p, outbox, &scopeChange, ok)
-	case <-p.recheckC:
-		rt.handleRecheckTick(ctx)
-		rt.queueUserIntentDispatch()
-		return rt.flushPendingUserIntent(ctx, p, outbox), false, nil
-	case <-p.userIntentC:
-		rt.queueUserIntentDispatch()
-		return rt.flushPendingUserIntent(ctx, p, outbox), false, nil
-	case <-p.reconcileC:
-		rt.runFullReconciliationAsync(ctx, p.bl)
-		return outbox, false, nil
-	case result, ok := <-p.reconcileResults:
-		return rt.handleWatchReconcileResult(ctx, p, outbox, result, ok)
-	case obsErr, ok := <-p.errs:
-		return rt.handleWatchObserverError(ctx, p, outbox, obsErr, ok)
-	case <-rt.trialTimerChan():
-		return append(outbox, rt.runTrialDispatch(ctx, p.bl, p.mode, p.safety)...), false, nil
-	case <-rt.retryTimerChan():
-		return append(outbox, rt.runRetrierSweep(ctx, p.bl, p.mode, p.safety)...), false, nil
-	case <-ctx.Done():
-		rt.beginWatchDrain(ctx, p, outbox)
-		return nil, false, nil
+) (bool, error) {
+	event := rt.waitWatchEvent(ctx, p)
+	transition, err := rt.transitionWatchEvent(ctx, p, &event)
+	if err != nil {
+		return false, err
 	}
+
+	return rt.applyWatchTransition(ctx, p, transition)
 }
 
 func (rt *watchRuntime) handleObserverExit(p *watchPipeline, shuttingDown bool) error {
@@ -285,7 +250,6 @@ func (rt *watchRuntime) handleObserverExit(p *watchPipeline, shuttingDown bool) 
 func (rt *watchRuntime) beginWatchDrain(
 	ctx context.Context,
 	p *watchPipeline,
-	outbox []*synctypes.TrackedAction,
 ) {
 	if rt.enterDraining() {
 		rt.stopDrainTimers()
@@ -295,7 +259,7 @@ func (rt *watchRuntime) beginWatchDrain(
 		)
 	}
 
-	rt.completeDrainOutbox(outbox)
+	rt.completeDrainOutbox()
 	rt.disableDrainInputs(p)
 	rt.refreshDrainCompletionSources(p)
 	rt.mustAssertInvariants(ctx, rt, "begin watch drain")
@@ -306,12 +270,14 @@ func (rt *watchRuntime) stopDrainTimers() {
 	rt.stopTrialTimer()
 }
 
-func (rt *watchRuntime) completeDrainOutbox(outbox []*synctypes.TrackedAction) {
+func (rt *watchRuntime) completeDrainOutbox() {
+	outbox := rt.currentOutbox()
 	if len(outbox) == 0 {
 		return
 	}
 
 	rt.completeOutboxAsShutdown(outbox)
+	rt.replaceOutbox(nil)
 }
 
 func (rt *watchRuntime) disableDrainInputs(p *watchPipeline) {
@@ -369,39 +335,46 @@ func (rt *watchRuntime) logObserverError(obsErr error) {
 func (rt *watchRuntime) runBootstrapStep(
 	ctx context.Context,
 	p *watchPipeline,
-	outbox []*synctypes.TrackedAction,
 	logC <-chan time.Time,
 	emptyCh <-chan struct{},
-) ([]*synctypes.TrackedAction, bool, error) {
+) (bool, error) {
+	outbox := rt.currentOutbox()
+
 	// Bootstrap phase: dispatch, buffered bootstrap batches, worker results,
 	// retry/trial wakeups, and quiescence logging are live until the graph empties.
-	dispatchCh, nextAction := rt.dispatchChannelForOutbox(outbox)
+	dispatchCh, nextAction := rt.dispatchChannelForOutbox()
 
 	select {
 	case dispatchCh <- nextAction:
-		return outbox[1:], false, nil
+		rt.consumeOutboxHead()
+		return false, nil
 	case batch, ok := <-p.batchReady:
-		return rt.handleBootstrapBatch(ctx, p, outbox, batch, ok)
+		nextOutbox, done := rt.handleBootstrapBatch(ctx, p, outbox, batch, ok)
+		rt.replaceOutbox(nextOutbox)
+		return done, nil
 	case workerResult, ok := <-p.results:
-		return rt.handleBootstrapWorkerResult(ctx, p, outbox, &workerResult, ok)
+		nextOutbox, done, err := rt.handleBootstrapWorkerResult(ctx, p, outbox, &workerResult, ok)
+		rt.replaceOutbox(nextOutbox)
+		return done, err
 	case <-rt.trialTimerChan():
-		return append(outbox, rt.runTrialDispatch(ctx, p.bl, p.mode, p.safety)...), false, nil
+		rt.appendOutbox(rt.runTrialDispatch(ctx, p.bl, p.mode, p.safety))
+		return false, nil
 	case <-rt.retryTimerChan():
-		return append(outbox, rt.runRetrierSweep(ctx, p.bl, p.mode, p.safety)...), false, nil
+		rt.appendOutbox(rt.runRetrierSweep(ctx, p.bl, p.mode, p.safety))
+		return false, nil
 	case <-logC:
 		rt.logBootstrapWait()
-		return outbox, false, nil
+		return false, nil
 	case <-emptyCh:
-		return outbox, true, nil
+		return true, nil
 	case <-ctx.Done():
-		rt.beginWatchDrain(ctx, p, outbox)
-		return nil, false, nil
+		rt.beginWatchDrain(ctx, p)
+		return false, nil
 	}
 }
 
-func (rt *watchRuntime) dispatchChannelForOutbox(
-	outbox []*synctypes.TrackedAction,
-) (chan<- *synctypes.TrackedAction, *synctypes.TrackedAction) {
+func (rt *watchRuntime) dispatchChannelForOutbox() (chan<- *synctypes.TrackedAction, *synctypes.TrackedAction) {
+	outbox := rt.currentOutbox()
 	nextAction := firstOutbox(outbox)
 	if nextAction == nil {
 		return nil, nil
@@ -421,12 +394,12 @@ func (rt *watchRuntime) handleBootstrapBatch(
 	outbox []*synctypes.TrackedAction,
 	batch []synctypes.PathChanges,
 	ok bool,
-) ([]*synctypes.TrackedAction, bool, error) {
+) ([]*synctypes.TrackedAction, bool) {
 	if !ok {
-		return outbox, true, nil
+		return outbox, true
 	}
 
-	return append(outbox, rt.processBatch(ctx, batch, p.bl, p.mode, p.safety)...), false, nil
+	return append(outbox, rt.processBatch(ctx, batch, p.bl, p.mode, p.safety)...), false
 }
 
 func (rt *watchRuntime) handleBootstrapWorkerResult(
@@ -439,7 +412,7 @@ func (rt *watchRuntime) handleBootstrapWorkerResult(
 	if !ok {
 		if contextIsCanceled(ctx) {
 			p.results = nil
-			rt.beginWatchDrain(ctx, p, outbox)
+			rt.beginWatchDrain(ctx, p)
 			return nil, rt.drainLoopDone(p), nil
 		}
 		return rt.handleBootstrapResultsClosed(ctx)
@@ -449,7 +422,7 @@ func (rt *watchRuntime) handleBootstrapWorkerResult(
 	if outcome.terminate {
 		return outbox, false, outcome.terminateErr
 	}
-	return rt.flushPendingUserIntent(ctx, p, append(outbox, outcome.dispatched...)), false, nil
+	return append(outbox, outcome.dispatched...), false, nil
 }
 
 func (rt *watchRuntime) handleBootstrapResultsClosed(
@@ -470,20 +443,6 @@ func (rt *watchRuntime) logBootstrapWait() {
 	)
 }
 
-func (rt *watchRuntime) handleWatchBatch(
-	ctx context.Context,
-	p *watchPipeline,
-	outbox []*synctypes.TrackedAction,
-	batch []synctypes.PathChanges,
-	ok bool,
-) ([]*synctypes.TrackedAction, bool, error) {
-	if !ok {
-		return outbox, true, nil
-	}
-
-	return append(outbox, rt.processBatch(ctx, batch, p.bl, p.mode, p.safety)...), false, nil
-}
-
 func (rt *watchRuntime) handleWatchWorkerResult(
 	ctx context.Context,
 	p *watchPipeline,
@@ -498,7 +457,7 @@ func (rt *watchRuntime) handleWatchWorkerResult(
 		}
 		if contextIsCanceled(ctx) {
 			p.results = nil
-			rt.beginWatchDrain(ctx, p, outbox)
+			rt.beginWatchDrain(ctx, p)
 			return nil, rt.drainLoopDone(p), nil
 		}
 		return outbox, false, fmt.Errorf("sync: worker results channel closed unexpectedly")
@@ -513,63 +472,6 @@ func (rt *watchRuntime) handleWatchWorkerResult(
 
 func contextIsCanceled(ctx context.Context) bool {
 	return ctx.Err() != nil
-}
-
-func (rt *watchRuntime) handleWatchSkipped(
-	ctx context.Context,
-	p *watchPipeline,
-	outbox []*synctypes.TrackedAction,
-	skipped []synctypes.SkippedItem,
-	ok bool,
-) ([]*synctypes.TrackedAction, bool, error) {
-	if !ok {
-		p.skippedCh = nil
-		return outbox, false, nil
-	}
-
-	rt.recordSkippedItems(ctx, skipped)
-	rt.clearResolvedSkippedItems(ctx, skipped)
-	return outbox, false, nil
-}
-
-func (rt *watchRuntime) handleWatchReconcileResult(
-	ctx context.Context,
-	p *watchPipeline,
-	outbox []*synctypes.TrackedAction,
-	result reconcileResult,
-	ok bool,
-) ([]*synctypes.TrackedAction, bool, error) {
-	if !ok {
-		p.reconcileResults = nil
-		return outbox, false, nil
-	}
-
-	rt.applyReconcileResult(ctx, result)
-	return outbox, false, nil
-}
-
-func (rt *watchRuntime) handleWatchObserverError(
-	ctx context.Context,
-	p *watchPipeline,
-	outbox []*synctypes.TrackedAction,
-	obsErr error,
-	ok bool,
-) ([]*synctypes.TrackedAction, bool, error) {
-	if !ok {
-		p.errs = nil
-		return outbox, false, nil
-	}
-
-	rt.logObserverError(obsErr)
-
-	if err := rt.handleObserverExit(p, ctx.Err() != nil); err != nil {
-		return outbox, false, err
-	}
-	if p.activeObs == 0 {
-		p.errs = nil
-	}
-
-	return outbox, false, nil
 }
 
 func (rt *watchRuntime) handleDrainingWorkerResult(

@@ -78,10 +78,12 @@ func TestRunWatchStep_UserIntentWakeStaysPendingUntilOutboxDrains(t *testing.T) 
 	}, 99, nil)
 	require.NotNil(t, busy)
 	testWatchRuntime(t, eng).dispatchCh = nil
+	testWatchRuntime(t, eng).replaceOutbox([]*synctypes.TrackedAction{busy})
 
-	outbox, shuttingDown, err := testWatchRuntime(t, eng).runWatchStep(ctx, p, []*synctypes.TrackedAction{busy})
+	shuttingDown, err := testWatchRuntime(t, eng).runWatchStep(ctx, p)
 	require.NoError(t, err)
 	assert.False(t, shuttingDown)
+	outbox := testWatchRuntime(t, eng).currentOutbox()
 	require.Len(t, outbox, 1, "wake should stay pending while existing outbox work is still draining")
 	assert.Equal(t, "busy.txt", outbox[0].Action.Path)
 
@@ -89,19 +91,21 @@ func TestRunWatchStep_UserIntentWakeStaysPendingUntilOutboxDrains(t *testing.T) 
 	testWatchRuntime(t, eng).dispatchCh = dispatchCh
 
 	p.userIntentC = nil
-	outbox, shuttingDown, err = testWatchRuntime(t, eng).runWatchStep(ctx, p, outbox)
+	shuttingDown, err = testWatchRuntime(t, eng).runWatchStep(ctx, p)
 	require.NoError(t, err)
 	assert.False(t, shuttingDown)
 
 	dispatched := <-dispatchCh
 	assert.Equal(t, "busy.txt", dispatched.Action.Path)
+	outbox = testWatchRuntime(t, eng).currentOutbox()
 	assert.Empty(t, outbox, "pending user intent should stay queued until the in-flight action completes")
 	assert.True(t, testWatchRuntime(t, eng).userIntentPending)
 
 	ready, ok := testWatchRuntime(t, eng).depGraph.Complete(busy.ID)
 	require.True(t, ok)
 	assert.Empty(t, ready)
-	outbox = testWatchRuntime(t, eng).flushPendingUserIntent(ctx, p, outbox)
+	testWatchRuntime(t, eng).settleWatchAdmission(ctx, p)
+	outbox = testWatchRuntime(t, eng).currentOutbox()
 
 	require.Len(t, outbox, 1, "pending user intent should dispatch as soon as the in-flight action completes")
 	assert.Equal(t, synctypes.ActionRemoteDelete, outbox[0].Action.Type)
@@ -169,10 +173,12 @@ func TestRunWatchStep_RecheckWakeStaysPendingUntilOutboxDrains(t *testing.T) {
 	}, 100, nil)
 	require.NotNil(t, busy)
 	testWatchRuntime(t, eng).dispatchCh = nil
+	testWatchRuntime(t, eng).replaceOutbox([]*synctypes.TrackedAction{busy})
 
-	outbox, shuttingDown, err := testWatchRuntime(t, eng).runWatchStep(ctx, p, []*synctypes.TrackedAction{busy})
+	shuttingDown, err := testWatchRuntime(t, eng).runWatchStep(ctx, p)
 	require.NoError(t, err)
 	assert.False(t, shuttingDown)
+	outbox := testWatchRuntime(t, eng).currentOutbox()
 	require.Len(t, outbox, 1, "recheck-triggered user intent should stay pending while outbox work remains")
 	assert.Equal(t, "busy-recheck.txt", outbox[0].Action.Path)
 
@@ -180,19 +186,21 @@ func TestRunWatchStep_RecheckWakeStaysPendingUntilOutboxDrains(t *testing.T) {
 	testWatchRuntime(t, eng).dispatchCh = dispatchCh
 
 	p.recheckC = nil
-	outbox, shuttingDown, err = testWatchRuntime(t, eng).runWatchStep(ctx, p, outbox)
+	shuttingDown, err = testWatchRuntime(t, eng).runWatchStep(ctx, p)
 	require.NoError(t, err)
 	assert.False(t, shuttingDown)
 
 	dispatched := <-dispatchCh
 	assert.Equal(t, "busy-recheck.txt", dispatched.Action.Path)
+	outbox = testWatchRuntime(t, eng).currentOutbox()
 	assert.Empty(t, outbox, "pending recheck-triggered intent should stay queued while work remains in flight")
 	assert.True(t, testWatchRuntime(t, eng).userIntentPending)
 
 	ready, ok := testWatchRuntime(t, eng).depGraph.Complete(busy.ID)
 	require.True(t, ok)
 	assert.Empty(t, ready)
-	outbox = testWatchRuntime(t, eng).flushPendingUserIntent(ctx, p, outbox)
+	testWatchRuntime(t, eng).settleWatchAdmission(ctx, p)
+	outbox = testWatchRuntime(t, eng).currentOutbox()
 
 	require.Len(t, outbox, 1)
 	assert.Equal(t, synctypes.ActionRemoteDelete, outbox[0].Action.Type)
