@@ -25,7 +25,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
-type stubConflictsResolver struct {
+type stubResolveConflictStore struct {
 	requestCalls int
 	result       syncstore.ConflictRequestResult
 	err          error
@@ -33,15 +33,15 @@ type stubConflictsResolver struct {
 
 const controlSocketTestReadHeaderTimeout = 5 * time.Second
 
-func (s *stubConflictsResolver) ListConflicts(context.Context) ([]synctypes.ConflictRecord, error) {
+func (s *stubResolveConflictStore) ListConflicts(context.Context) ([]synctypes.ConflictRecord, error) {
 	return nil, nil
 }
 
-func (s *stubConflictsResolver) ListAllConflicts(context.Context) ([]synctypes.ConflictRecord, error) {
+func (s *stubResolveConflictStore) ListAllConflicts(context.Context) ([]synctypes.ConflictRecord, error) {
 	return nil, nil
 }
 
-func (s *stubConflictsResolver) RequestConflictResolution(
+func (s *stubResolveConflictStore) RequestConflictResolution(
 	context.Context,
 	string,
 	string,
@@ -50,7 +50,7 @@ func (s *stubConflictsResolver) RequestConflictResolution(
 	return s.result, s.err
 }
 
-func (s *stubConflictsResolver) Close(context.Context) error {
+func (s *stubResolveConflictStore) Close(context.Context) error {
 	return nil
 }
 
@@ -109,7 +109,7 @@ func startCLIControlSocketWithStatusHandler(
 }
 
 // Validates: R-2.3.6, R-2.9.1
-func TestIssuesApproveDeletes_WritesDirectDBIntentForOneShotOwner(t *testing.T) {
+func TestResolveDeletes_WritesDirectDBIntentForOneShotOwner(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	cid := driveid.MustCanonicalID("personal:oneshot@example.com")
 	driveID := driveid.New("drive-oneshot")
@@ -139,7 +139,7 @@ func TestIssuesApproveDeletes_WritesDirectDBIntentForOneShotOwner(t *testing.T) 
 	})
 
 	var out bytes.Buffer
-	svc := newIssuesService(&CLIContext{
+	svc := newResolveService(&CLIContext{
 		OutputWriter: &out,
 		Logger:       slog.New(slog.DiscardHandler),
 		Cfg:          &config.ResolvedDrive{CanonicalID: cid},
@@ -147,7 +147,7 @@ func TestIssuesApproveDeletes_WritesDirectDBIntentForOneShotOwner(t *testing.T) 
 
 	require.NoError(t, svc.runApproveDeletes(t.Context()))
 	assert.Zero(t, postCalls.Load())
-	assert.Contains(t, out.String(), approveDeletesSuccess)
+	assert.Contains(t, out.String(), resolveApproveDeletesSuccess)
 
 	reopened, err := syncstore.NewSyncStore(t.Context(), config.DriveStatePath(cid), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
@@ -161,14 +161,14 @@ func TestIssuesApproveDeletes_WritesDirectDBIntentForOneShotOwner(t *testing.T) 
 }
 
 // Validates: R-2.3.12, R-2.9.3
-func TestConflictsResolve_FallsBackToDBIntentWhenNoDaemonSocketExists(t *testing.T) {
+func TestResolveConflict_FallsBackToDBIntentWhenNoDaemonSocketExists(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	cid := driveid.MustCanonicalID("personal:no-daemon@example.com")
 
-	resolver := &stubConflictsResolver{
+	resolver := &stubResolveConflictStore{
 		result: syncstore.ConflictRequestResult{Status: syncstore.ConflictRequestQueued},
 	}
-	svc := newConflictsService(&CLIContext{
+	svc := newResolveService(&CLIContext{
 		Logger: slog.New(slog.DiscardHandler),
 		Cfg:    &config.ResolvedDrive{CanonicalID: cid},
 	})
@@ -180,7 +180,7 @@ func TestConflictsResolve_FallsBackToDBIntentWhenNoDaemonSocketExists(t *testing
 }
 
 // Validates: R-2.3.12, R-2.9.3
-func TestConflictsResolve_DoesNotFallbackOnTypedWatchDaemonError(t *testing.T) {
+func TestResolveConflict_DoesNotFallbackOnTypedWatchDaemonError(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	cid := driveid.MustCanonicalID("personal:watch-error@example.com")
 	startCLIControlSocket(t, synccontrol.StatusResponse{OwnerMode: synccontrol.OwnerModeWatch}, func(w http.ResponseWriter, _ *http.Request) {
@@ -193,10 +193,10 @@ func TestConflictsResolve_DoesNotFallbackOnTypedWatchDaemonError(t *testing.T) {
 		}))
 	})
 
-	resolver := &stubConflictsResolver{
+	resolver := &stubResolveConflictStore{
 		result: syncstore.ConflictRequestResult{Status: syncstore.ConflictRequestQueued},
 	}
-	svc := newConflictsService(&CLIContext{
+	svc := newResolveService(&CLIContext{
 		Logger: slog.New(slog.DiscardHandler),
 		Cfg:    &config.ResolvedDrive{CanonicalID: cid},
 	})
@@ -210,7 +210,7 @@ func TestConflictsResolve_DoesNotFallbackOnTypedWatchDaemonError(t *testing.T) {
 }
 
 // Validates: R-2.3.6, R-2.9.3
-func TestIssuesApproveDeletes_DoesNotFallbackOnTypedWatchDaemonError(t *testing.T) {
+func TestResolveDeletes_DoesNotFallbackOnTypedWatchDaemonError(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	cid := driveid.MustCanonicalID("personal:approve-error@example.com")
 	startCLIControlSocket(t, synccontrol.StatusResponse{OwnerMode: synccontrol.OwnerModeWatch}, func(w http.ResponseWriter, _ *http.Request) {
@@ -224,7 +224,7 @@ func TestIssuesApproveDeletes_DoesNotFallbackOnTypedWatchDaemonError(t *testing.
 	})
 
 	var out bytes.Buffer
-	svc := newIssuesService(&CLIContext{
+	svc := newResolveService(&CLIContext{
 		OutputWriter: &out,
 		Logger:       slog.New(slog.DiscardHandler),
 		Cfg:          &config.ResolvedDrive{CanonicalID: cid},
@@ -234,11 +234,11 @@ func TestIssuesApproveDeletes_DoesNotFallbackOnTypedWatchDaemonError(t *testing.
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), string(synccontrol.ErrorDriveNotManaged))
 	assert.Contains(t, err.Error(), "drive not managed")
-	assert.NotContains(t, out.String(), approveDeletesSuccess)
+	assert.NotContains(t, out.String(), resolveApproveDeletesSuccess)
 }
 
 // Validates: R-2.3.6, R-2.9.3
-func TestIssuesApproveDeletes_DoesNotFallbackWhenControlProbeIsAmbiguous(t *testing.T) {
+func TestResolveDeletes_DoesNotFallbackWhenControlProbeIsAmbiguous(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	cid := driveid.MustCanonicalID("personal:probe-failed@example.com")
 	driveID := driveid.New("drive-probe-failed")
@@ -263,7 +263,7 @@ func TestIssuesApproveDeletes_DoesNotFallbackWhenControlProbeIsAmbiguous(t *test
 	})
 
 	var out bytes.Buffer
-	svc := newIssuesService(&CLIContext{
+	svc := newResolveService(&CLIContext{
 		OutputWriter: &out,
 		Logger:       slog.New(slog.DiscardHandler),
 		Cfg:          &config.ResolvedDrive{CanonicalID: cid},
@@ -272,7 +272,7 @@ func TestIssuesApproveDeletes_DoesNotFallbackWhenControlProbeIsAmbiguous(t *test
 	err = svc.runApproveDeletes(t.Context())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "probe control owner")
-	assert.NotContains(t, out.String(), approveDeletesSuccess)
+	assert.NotContains(t, out.String(), resolveApproveDeletesSuccess)
 
 	reopened, err := syncstore.NewSyncStore(t.Context(), config.DriveStatePath(cid), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
@@ -286,7 +286,7 @@ func TestIssuesApproveDeletes_DoesNotFallbackWhenControlProbeIsAmbiguous(t *test
 }
 
 // Validates: R-2.3.12, R-2.9.3
-func TestConflictsResolve_FallsBackToDBIntentWhenWatchSocketPostFails(t *testing.T) {
+func TestResolveConflict_FallsBackToDBIntentWhenWatchSocketPostFails(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	cid := driveid.MustCanonicalID("personal:watch-disappears@example.com")
 	startCLIControlSocket(t, synccontrol.StatusResponse{OwnerMode: synccontrol.OwnerModeWatch}, func(w http.ResponseWriter, _ *http.Request) {
@@ -303,10 +303,10 @@ func TestConflictsResolve_FallsBackToDBIntentWhenWatchSocketPostFails(t *testing
 		assert.NoError(t, conn.Close())
 	})
 
-	resolver := &stubConflictsResolver{
+	resolver := &stubResolveConflictStore{
 		result: syncstore.ConflictRequestResult{Status: syncstore.ConflictRequestQueued},
 	}
-	svc := newConflictsService(&CLIContext{
+	svc := newResolveService(&CLIContext{
 		Logger: slog.New(slog.DiscardHandler),
 		Cfg:    &config.ResolvedDrive{CanonicalID: cid},
 	})
@@ -318,7 +318,7 @@ func TestConflictsResolve_FallsBackToDBIntentWhenWatchSocketPostFails(t *testing
 }
 
 // Validates: R-2.3.6, R-2.9.1
-func TestIssuesApproveDeletes_FallsBackToDirectDBWhenControlSocketPathIsUnavailable(t *testing.T) {
+func TestResolveDeletes_FallsBackToDirectDBWhenControlSocketPathIsUnavailable(t *testing.T) {
 	longDataHome := filepath.Join(t.TempDir(), strings.Repeat("very-long-control-root-", 8))
 	t.Setenv("XDG_DATA_HOME", longDataHome)
 	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), strings.Repeat("very-long-runtime-root-", 8)))
@@ -340,14 +340,14 @@ func TestIssuesApproveDeletes_FallsBackToDirectDBWhenControlSocketPathIsUnavaila
 	require.NoError(t, store.Close(t.Context()))
 
 	var out bytes.Buffer
-	svc := newIssuesService(&CLIContext{
+	svc := newResolveService(&CLIContext{
 		OutputWriter: &out,
 		Logger:       slog.New(slog.DiscardHandler),
 		Cfg:          &config.ResolvedDrive{CanonicalID: cid},
 	})
 
 	require.NoError(t, svc.runApproveDeletes(t.Context()))
-	assert.Contains(t, out.String(), approveDeletesSuccess)
+	assert.Contains(t, out.String(), resolveApproveDeletesSuccess)
 
 	reopened, err := syncstore.NewSyncStore(t.Context(), config.DriveStatePath(cid), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)

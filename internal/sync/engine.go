@@ -311,7 +311,7 @@ func (e *Engine) ListConflicts(ctx context.Context) ([]synctypes.ConflictRecord,
 }
 
 // ListAllConflicts returns all conflicts (resolved and unresolved) from the
-// database. Used by 'conflicts --history'.
+// database. Used by `status --history`.
 func (e *Engine) ListAllConflicts(ctx context.Context) ([]synctypes.ConflictRecord, error) {
 	conflicts, err := e.baseline.ListAllConflicts(ctx)
 	if err != nil {

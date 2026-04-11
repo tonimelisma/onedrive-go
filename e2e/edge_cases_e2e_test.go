@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -190,16 +191,26 @@ func TestE2E_ConflictDetectionAndResolution(t *testing.T) {
 	assert.Contains(t, stderr, "conflict",
 		"sync should report conflict")
 
-	// Step 5: Check conflicts list.
-	stdout, _ := pollCLIWithConfigContains(t, cfgPath, env, "shared.txt", pollTimeout, "conflicts")
-	assert.Contains(t, stdout, "shared.txt",
-		"conflicts list should include the conflicting file")
+	// Step 5: Detailed status should expose the unresolved conflict.
+	statusBeforeResolve := pollDetailedStatus(t, cfgPath, env, pollTimeout, func(status detailedStatusJSON) bool {
+		for _, conflict := range status.Conflicts {
+			if strings.HasSuffix(conflict.Path, "/shared.txt") {
+				return true
+			}
+		}
+		return false
+	})
+	require.Len(t, statusBeforeResolve.Conflicts, 1)
+	assert.Contains(t, statusBeforeResolve.Conflicts[0].Path, "shared.txt",
+		"detailed status should include the conflicting file")
 
-	// Step 6: Resolve the conflict.
-	runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/shared.txt", "--keep-local")
+	// Step 6: Queue the resolution and let the normal engine execute it.
+	queueConflictResolutionAndSync(t, cfgPath, env, "local", testFolder+"/shared.txt")
 
 	// Step 7: Verify conflict is resolved.
-	stdout, _ = pollCLIWithConfigContains(t, cfgPath, env, "No conflicts.", pollTimeout, "conflicts")
-	assert.Contains(t, stdout, "No conflicts.",
-		"conflicts list should be empty after resolution")
+	statusAfterResolve := pollDetailedStatus(t, cfgPath, env, pollTimeout, func(status detailedStatusJSON) bool {
+		return len(status.Conflicts) == 0
+	})
+	assert.Empty(t, statusAfterResolve.Conflicts,
+		"detailed status should show no unresolved conflicts after resolution")
 }

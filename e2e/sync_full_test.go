@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -24,29 +25,32 @@ import (
 func TestE2E_EdgeCases(t *testing.T) {
 	registerLogDump(t)
 	opsCfgPath := writeMinimalConfig(t)
-	testFolder := fmt.Sprintf("onedrive-go-e2e-edge-%d", time.Now().UnixNano())
-
-	// Cleanup at the end — delete the test folder (best-effort).
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
-
-	// Create the test folder first.
-	runCLIWithConfig(t, opsCfgPath, nil, "mkdir", "/"+testFolder)
+	testFolderPrefix := fmt.Sprintf("onedrive-go-e2e-edge-%d", time.Now().UnixNano())
 
 	t.Run("large_file_upload_download", func(t *testing.T) {
-		testLargeFileUploadDownload(t, opsCfgPath, testFolder)
+		testLargeFileUploadDownload(t, opsCfgPath, makeEdgeCaseTestFolder(t, opsCfgPath, testFolderPrefix, "large"))
 	})
 
 	t.Run("unicode_filename", func(t *testing.T) {
-		testUnicodeFilename(t, opsCfgPath, testFolder)
+		testUnicodeFilename(t, opsCfgPath, makeEdgeCaseTestFolder(t, opsCfgPath, testFolderPrefix, "unicode"))
 	})
 
 	t.Run("spaces_in_filename", func(t *testing.T) {
-		testSpacesInFilename(t, opsCfgPath, testFolder)
+		testSpacesInFilename(t, opsCfgPath, makeEdgeCaseTestFolder(t, opsCfgPath, testFolderPrefix, "spaces"))
 	})
 
 	t.Run("concurrent_uploads", func(t *testing.T) {
-		testConcurrentUploads(t, opsCfgPath, testFolder)
+		testConcurrentUploads(t, opsCfgPath, makeEdgeCaseTestFolder(t, opsCfgPath, testFolderPrefix, "concurrent"))
 	})
+}
+
+func makeEdgeCaseTestFolder(t *testing.T, opsCfgPath, prefix, suffix string) string {
+	t.Helper()
+
+	testFolder := fmt.Sprintf("%s-%s", prefix, suffix)
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+	runCLIWithConfig(t, opsCfgPath, nil, "mkdir", "/"+testFolder)
+	return testFolder
 }
 
 // testLargeFileUploadDownload generates a 5 MiB file (exceeding the 4 MB
@@ -305,10 +309,10 @@ func TestE2E_Sync_BidirectionalMerge(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "readme content", string(readmeData))
 
-	// Step 8: Verify integrity.
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "verify")
-	assert.Contains(t, stdout, "Verified")
-	assert.Contains(t, stdout, "All files verified successfully.")
+	// Step 8: Internal baseline verification should report a clean tree.
+	report, err := verifyBaselineReport(t, cfgPath, env)
+	require.NoError(t, err)
+	assert.Empty(t, report.Mismatches)
 
 	// Step 9: Re-sync should leave the test-owned subtree unchanged even if
 	// unrelated live-drive activity produces delta events elsewhere.
@@ -316,7 +320,7 @@ func TestE2E_Sync_BidirectionalMerge(t *testing.T) {
 }
 
 // TestE2E_Sync_EditEditConflict_ResolveKeepRemote exercises EF5 (edit-edit
-// conflict), conflict copy creation, and resolve --keep-remote.
+// conflict), conflict copy creation, and resolve remote.
 func TestE2E_Sync_EditEditConflict_ResolveKeepRemote(t *testing.T) {
 	registerLogDump(t)
 
@@ -348,10 +352,11 @@ func TestE2E_Sync_EditEditConflict_ResolveKeepRemote(t *testing.T) {
 	// Step 6: Conflict reported in sync output.
 	assert.Contains(t, stderr, "Conflicts:")
 
-	// Step 7: List conflicts — type is edit_edit.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
-	assert.Contains(t, stdout, "conflict-file.txt")
-	assert.Contains(t, stdout, "edit_edit")
+	// Step 7: Detailed status should report the unresolved conflict.
+	statusBeforeResolve := readDetailedStatus(t, cfgPath, env)
+	require.Len(t, statusBeforeResolve.Conflicts, 1)
+	assert.Contains(t, statusBeforeResolve.Conflicts[0].Path, "conflict-file.txt")
+	assert.Equal(t, "edit_edit", statusBeforeResolve.Conflicts[0].ConflictType)
 
 	// Step 8: Conflict copy exists on disk.
 	matches, err := filepath.Glob(filepath.Join(localDir, "conflict-file.conflict-*.txt"))
@@ -368,16 +373,16 @@ func TestE2E_Sync_EditEditConflict_ResolveKeepRemote(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "remote edit v2", string(originalData))
 
-	// Step 11: Queue --keep-remote; a normal sync executes the request.
-	queueConflictResolutionAndSync(t, cfgPath, env, testFolder+"/conflict-file.txt", "--keep-remote")
+	// Step 11: Queue resolve remote; a normal sync executes the request.
+	queueConflictResolutionAndSync(t, cfgPath, env, "remote", testFolder+"/conflict-file.txt")
 
 	// Step 13: No more conflicts.
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
-	assert.Contains(t, stdout, "No conflicts.")
+	assert.Empty(t, readDetailedStatus(t, cfgPath, env).Conflicts)
 
-	// Step 14: Verify passes.
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "verify")
-	assert.Contains(t, stdout, "Verified")
+	// Step 14: Internal baseline verification stays clean.
+	report, err := verifyBaselineReport(t, cfgPath, env)
+	require.NoError(t, err)
+	assert.Empty(t, report.Mismatches)
 }
 
 // TestE2E_Sync_EditDeleteConflict exercises EF9 (edit-delete conflict)
@@ -421,7 +426,7 @@ func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 	// Re-sync until delta catches up and the edit-delete conflict is resolved.
 	// The retry loop keeps using the normal sync path so conflict resolution is
 	// exercised through durable engine-owned state, not a CLI-side bypass.
-	var historyAfterResolution string
+	var historyAfterResolution detailedStatusJSON
 	requireSyncEventuallyConverges(
 		t,
 		cfgPath,
@@ -429,16 +434,23 @@ func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 		120*time.Second,
 		"sync should eventually detect and auto-resolve the edit-delete conflict",
 		func(_ syncAttemptResult) bool {
-			var err error
-			historyAfterResolution, _, err = runCLICore(t, cfgPath, env, drive, "conflicts", "--history")
+			status, _, _, err := runDetailedStatusAllowError(t, cfgPath, env, "--history")
 			if err != nil {
 				return false
 			}
 
-			return strings.Contains(historyAfterResolution, testFolder+"/fragile.txt") &&
-				strings.Contains(historyAfterResolution, "edit_delete") &&
-				strings.Contains(historyAfterResolution, "keep_local") &&
-				strings.Contains(historyAfterResolution, "auto")
+			historyAfterResolution = status
+
+			for _, entry := range status.ConflictHistory {
+				if strings.Contains(entry.Path, testFolder+"/fragile.txt") &&
+					entry.ConflictType == "edit_delete" &&
+					entry.Resolution == "keep_local" &&
+					entry.ResolvedBy == "auto" {
+					return true
+				}
+			}
+
+			return false
 		},
 	)
 
@@ -457,23 +469,23 @@ func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 	remoteContent := getRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/fragile.txt")
 	assert.Equal(t, "locally modified precious data", remoteContent)
 
-	// Step 10: Conflict history shows auto-resolved entry.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts", "--history")
-	assert.Contains(t, stdout, "fragile.txt")
-	assert.Contains(t, stdout, "edit_delete")
-	assert.Contains(t, stdout, "keep_local")
-	assert.Contains(t, stdout, "auto")
+	// Step 10: Conflict history shows the auto-resolved entry.
+	require.Len(t, historyAfterResolution.ConflictHistory, 1)
+	assert.Contains(t, historyAfterResolution.ConflictHistory[0].Path, "fragile.txt")
+	assert.Equal(t, "edit_delete", historyAfterResolution.ConflictHistory[0].ConflictType)
+	assert.Equal(t, "keep_local", historyAfterResolution.ConflictHistory[0].Resolution)
+	assert.Equal(t, "auto", historyAfterResolution.ConflictHistory[0].ResolvedBy)
 
 	// Step 11: No unresolved conflicts.
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
-	assert.Contains(t, stdout, "No conflicts.")
+	assert.Empty(t, readDetailedStatus(t, cfgPath, env).Conflicts)
 
-	// Step 12: Verify passes.
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "verify")
-	assert.Contains(t, stdout, "Verified")
+	// Step 12: Internal baseline verification stays clean.
+	report, err := verifyBaselineReport(t, cfgPath, env)
+	require.NoError(t, err)
+	assert.Empty(t, report.Mismatches)
 }
 
-// TestE2E_Sync_ResolveAll exercises 'resolve --all --keep-remote' with
+// TestE2E_Sync_ResolveAll exercises `resolve remote --all` with
 // multiple edit-edit conflicts.
 func TestE2E_Sync_ResolveAll(t *testing.T) {
 	registerLogDump(t)
@@ -504,18 +516,15 @@ func TestE2E_Sync_ResolveAll(t *testing.T) {
 	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync")
 	assert.Contains(t, stderr, "Conflicts:")
 
-	// Step 5: List conflicts — both present.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
-	assert.Contains(t, stdout, "a.txt")
-	assert.Contains(t, stdout, "b.txt")
-	assert.Contains(t, stdout, "edit_edit")
+	// Step 5: Detailed status reports both unresolved conflicts.
+	statusBeforeResolveAll := readDetailedStatus(t, cfgPath, env)
+	require.Len(t, statusBeforeResolveAll.Conflicts, 2)
 
-	// Step 6: Queue --all --keep-remote, then normal sync executes the requests.
-	queueConflictResolutionAndSync(t, cfgPath, env, "--all", "--keep-remote")
+	// Step 6: Queue resolve remote --all, then normal sync executes the requests.
+	queueConflictResolutionAndSync(t, cfgPath, env, "remote", "--all")
 
 	// Step 7: No unresolved conflicts.
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
-	assert.Contains(t, stdout, "No conflicts.")
+	assert.Empty(t, readDetailedStatus(t, cfgPath, env).Conflicts)
 
 	// Step 8: Local files have remote content.
 	aData, err := os.ReadFile(filepath.Join(localDir, "a.txt"))
@@ -526,13 +535,14 @@ func TestE2E_Sync_ResolveAll(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "b-remote-edit", string(bData))
 
-	// Step 9: Verify passes.
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "verify")
-	assert.Contains(t, stdout, "Verified")
+	// Step 9: Internal baseline verification stays clean.
+	report, err := verifyBaselineReport(t, cfgPath, env)
+	require.NoError(t, err)
+	assert.Empty(t, report.Mismatches)
 }
 
 // TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal exercises EF12
-// (create-create conflict) and resolve --keep-local with upload verification.
+// (create-create conflict) and resolve local with upload verification.
 func TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal(t *testing.T) {
 	registerLogDump(t)
 
@@ -558,10 +568,11 @@ func TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal(t *testing.T) {
 	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync")
 	assert.Contains(t, stderr, "Conflicts:")
 
-	// Step 5: Verify conflict type.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
-	assert.Contains(t, stdout, "collision.txt")
-	assert.Contains(t, stdout, "create_create")
+	// Step 5: Detailed status reports the create-create conflict.
+	statusBeforeKeepLocal := readDetailedStatus(t, cfgPath, env)
+	require.Len(t, statusBeforeKeepLocal.Conflicts, 1)
+	assert.Contains(t, statusBeforeKeepLocal.Conflicts[0].Path, "collision.txt")
+	assert.Equal(t, "create_create", statusBeforeKeepLocal.Conflicts[0].ConflictType)
 
 	// Step 6: Conflict copy holds local content.
 	matches, err := filepath.Glob(filepath.Join(localDir, "collision.conflict-*.txt"))
@@ -575,12 +586,11 @@ func TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal(t *testing.T) {
 	// Step 7: Restore local version to original path (prep for keep-local).
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "collision.txt"), []byte("local version"), 0o600))
 
-	// Step 8: Queue --keep-local, then normal sync executes and propagates it.
-	queueConflictResolutionAndSync(t, cfgPath, env, testFolder+"/collision.txt", "--keep-local")
+	// Step 8: Queue resolve local, then normal sync executes and propagates it.
+	queueConflictResolutionAndSync(t, cfgPath, env, "local", testFolder+"/collision.txt")
 
 	// Step 9: No more conflicts.
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
-	assert.Contains(t, stdout, "No conflicts.")
+	assert.Empty(t, readDetailedStatus(t, cfgPath, env).Conflicts)
 
 	// Step 11: Remote should now have local version.
 	remoteContent := getRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/collision.txt")
@@ -758,8 +768,8 @@ func TestE2E_Sync_DeleteSafetyThreshold(t *testing.T) {
 			if result.Err != nil {
 				return false
 			}
-			stdout, _, err := runCLICore(t, cfgPath, env, drive, "issues")
-			return err == nil && strings.Contains(stdout, "HELD DELETES")
+			status := readDetailedStatus(t, cfgPath, env)
+			return len(status.DeleteSafety) == fileCount
 		},
 	)
 
@@ -770,7 +780,7 @@ func TestE2E_Sync_DeleteSafetyThreshold(t *testing.T) {
 		assert.NoError(t, err, "local file %s should still exist after delete safety hold", name)
 	}
 
-	approvalOutput, _ := runCLIWithConfig(t, cfgPath, env, "issues", "approve-deletes")
+	approvalOutput, _ := runCLIWithConfig(t, cfgPath, env, "resolve", "deletes")
 	assert.Contains(t, approvalOutput, "Approved held deletes for this drive.")
 
 	// Step 6: A normal sync should consume the durable approval and apply the deletes.
@@ -830,9 +840,10 @@ func TestE2E_Sync_DownloadOnlyIgnoresLocal(t *testing.T) {
 	lsOut, _ := runCLIWithConfig(t, opsCfgPath, nil, "ls", "/"+testFolder)
 	assert.NotContains(t, lsOut, "local-new.txt", "local-new.txt should not be uploaded in download-only mode")
 
-	// Step 7: Verify.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "verify")
-	assert.Contains(t, stdout, "Verified")
+	// Step 7: Internal baseline verification stays clean.
+	report, err := verifyBaselineReport(t, cfgPath, env)
+	require.NoError(t, err)
+	assert.Empty(t, report.Mismatches)
 }
 
 // TestE2E_Sync_UploadOnlyIgnoresRemote exercises upload-only mode:
@@ -943,10 +954,10 @@ func TestE2E_Sync_NestedFolderHierarchy(t *testing.T) {
 	remoteAnother := getRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/x/y/another.txt")
 	assert.Equal(t, "modified another", remoteAnother)
 
-	// Step 6: Verify.
-	verifyOut, _ := runCLIWithConfig(t, cfgPath, env, "verify")
-	assert.Contains(t, verifyOut, "Verified")
-	assert.Contains(t, verifyOut, "All files verified successfully.")
+	// Step 6: Internal baseline verification stays clean.
+	report, err := verifyBaselineReport(t, cfgPath, env)
+	require.NoError(t, err)
+	assert.Empty(t, report.Mismatches)
 
 	// Step 7: Re-sync should leave the deep hierarchy unchanged even if the
 	// shared live drive saw unrelated activity elsewhere.
@@ -983,7 +994,7 @@ func TestE2E_Sync_DryRunNonDestructive(t *testing.T) {
 
 	// Step 4: Verify NO side effects.
 	// pending-upload.txt NOT remotely uploaded.
-	lsOut, _ := runCLIWithConfig(t, opsCfgPath, nil, "ls", "/"+testFolder)
+	lsOut, _ := pollCLIWithConfigContains(t, opsCfgPath, nil, "existing.txt", pollTimeout, "ls", "/"+testFolder)
 	assert.NotContains(t, lsOut, "pending-upload.txt", "dry-run should not upload")
 
 	// pending-download.txt NOT locally downloaded.
@@ -998,17 +1009,17 @@ func TestE2E_Sync_DryRunNonDestructive(t *testing.T) {
 
 	// Step 6: All changes applied (poll for eventual consistency).
 	lsOut, _ = pollCLIWithConfigContains(t, opsCfgPath, nil, "pending-upload.txt", pollTimeout, "ls", "/"+testFolder)
-	assert.Contains(t, lsOut, "pending-download.txt")
-	assert.NotContains(t, lsOut, "existing.txt", "real sync should propagate delete")
+	pollCLIWithConfigNotContains(t, opsCfgPath, nil, "existing.txt", pollTimeout, "ls", "/"+testFolder)
+	assert.Contains(t, lsOut, "pending-upload.txt")
 
 	dlData, err := os.ReadFile(filepath.Join(localDir, "pending-download.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, "to download", string(dlData))
 
-	// Step 7: Verify.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "verify")
-	assert.Contains(t, stdout, "Verified")
-	assert.Contains(t, stdout, "All files verified successfully.")
+	// Step 7: Internal baseline verification stays clean.
+	report, err := verifyBaselineReport(t, cfgPath, env)
+	require.NoError(t, err)
+	assert.Empty(t, report.Mismatches)
 }
 
 // TestE2E_Sync_ConvergentEdit exercises EF4 (convergent edit — same hash
@@ -1066,15 +1077,16 @@ func TestE2E_Sync_ConvergentEdit(t *testing.T) {
 
 	assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync")
 
-	// Step 5: Verify.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "verify")
-	assert.Contains(t, stdout, "Verified")
-	assert.Contains(t, stdout, "All files verified successfully.")
+	// Step 5: Internal baseline verification stays clean.
+	report, err := verifyBaselineReport(t, cfgPath, env)
+	require.NoError(t, err)
+	assert.Empty(t, report.Mismatches)
 }
 
-// TestE2E_Sync_VerifyDetectsTampering exercises verify detecting hash
-// mismatches and missing files after local tampering without syncing.
-func TestE2E_Sync_VerifyDetectsTampering(t *testing.T) {
+// TestE2E_Sync_InternalBaselineVerificationDetectsTampering exercises the
+// internal verifier detecting hash mismatches and missing files after local
+// tampering without syncing.
+func TestE2E_Sync_InternalBaselineVerificationDetectsTampering(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
@@ -1092,39 +1104,28 @@ func TestE2E_Sync_VerifyDetectsTampering(t *testing.T) {
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
-	// Step 2: Verify all good initially.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "verify")
-	assert.Contains(t, stdout, "Verified")
-	assert.Contains(t, stdout, "All files verified successfully.")
+	// Step 2: Internal baseline verification is clean initially.
+	report, err := verifyBaselineReport(t, cfgPath, env)
+	require.NoError(t, err)
+	assert.Empty(t, report.Mismatches)
 
 	// Step 3: Tamper locally WITHOUT syncing.
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "tampered.txt"), []byte("TAMPERED CONTENT"), 0o600))
 	require.NoError(t, os.Remove(filepath.Join(localDir, "missing.txt")))
 
-	// Step 4: Verify should detect mismatches (exit code ≠ 0).
-	stdout, _, verifyErr := runCLIWithConfigAllowError(t, cfgPath, env, "verify")
-	require.Error(t, verifyErr, "verify should fail when local files are tampered")
+	// Step 4: Internal verification should detect exactly the tampered paths.
+	report, err = verifyBaselineReport(t, cfgPath, env)
+	require.NoError(t, err)
+	require.Len(t, report.Mismatches, 2)
+	assert.Equal(t, 1, report.Verified)
 
-	// Step 5: Assert mismatch report.
-	assert.Contains(t, stdout, "Mismatches:")
-	assert.Contains(t, stdout, "tampered.txt")
-	assert.Contains(t, stdout, "hash_mismatch")
-	assert.Contains(t, stdout, "missing.txt")
-	assert.Contains(t, stdout, "missing")
-
-	// good.txt should not appear in mismatches.
-	// Split stdout by Mismatches section — good.txt should only be in Verified count.
-	lines := strings.Split(stdout, "\n")
-	inMismatchSection := false
-	for _, line := range lines {
-		if strings.Contains(line, "Mismatches:") {
-			inMismatchSection = true
-			continue
-		}
-		if inMismatchSection {
-			assert.NotContains(t, line, "good.txt", "good.txt should not be in mismatch table")
-		}
+	mismatchByPath := make(map[string]string, len(report.Mismatches))
+	for _, mismatch := range report.Mismatches {
+		mismatchByPath[mismatch.Path] = mismatch.Status
 	}
+
+	assert.Equal(t, "hash_mismatch", mismatchByPath[path.Join(testFolder, "tampered.txt")])
+	assert.Equal(t, "missing", mismatchByPath[path.Join(testFolder, "missing.txt")])
 }
 
 // TestE2E_Sync_ResolveDryRun exercises resolve --dry-run: shows what would
@@ -1155,23 +1156,22 @@ func TestE2E_Sync_ResolveDryRun(t *testing.T) {
 	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync")
 	assert.Contains(t, stderr, "Conflicts:")
 
-	// Step 4: Verify conflict exists.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
-	assert.Contains(t, stdout, "dryrun-conflict.txt")
-	assert.Contains(t, stdout, "edit_edit")
+	// Step 4: Detailed status reports the unresolved conflict.
+	statusBeforeDryRun := readDetailedStatus(t, cfgPath, env)
+	require.Len(t, statusBeforeDryRun.Conflicts, 1)
+	assert.Contains(t, statusBeforeDryRun.Conflicts[0].Path, "dryrun-conflict.txt")
+	assert.Equal(t, "edit_edit", statusBeforeDryRun.Conflicts[0].ConflictType)
 
-	// Step 5: Resolve --dry-run --keep-local.
-	_, stderr = runCLIWithConfig(t, cfgPath, env, "conflicts", "resolve", testFolder+"/dryrun-conflict.txt", "--keep-local", "--dry-run")
+	// Step 5: Resolve --dry-run local.
+	_, stderr = runCLIWithConfig(t, cfgPath, env, "resolve", "local", testFolder+"/dryrun-conflict.txt", "--dry-run")
 	assert.Contains(t, stderr, "Would resolve")
 
 	// Step 6: Conflict should still exist (dry-run didn't resolve it).
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
-	assert.Contains(t, stdout, "dryrun-conflict.txt", "conflict should remain after dry-run resolve")
+	assert.Len(t, readDetailedStatus(t, cfgPath, env).Conflicts, 1, "conflict should remain after dry-run resolve")
 
 	// Step 7: Queue for real, then normal sync executes the request.
-	queueConflictResolutionAndSync(t, cfgPath, env, testFolder+"/dryrun-conflict.txt", "--keep-local")
+	queueConflictResolutionAndSync(t, cfgPath, env, "local", testFolder+"/dryrun-conflict.txt")
 
 	// Step 8: No more conflicts.
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
-	assert.Contains(t, stdout, "No conflicts.")
+	assert.Empty(t, readDetailedStatus(t, cfgPath, env).Conflicts)
 }

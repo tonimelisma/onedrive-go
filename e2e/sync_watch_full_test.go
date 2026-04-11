@@ -202,21 +202,16 @@ func TestE2E_SyncWatch_ConflictDuringWatch(t *testing.T) {
 	// both the local change and the remote change from the delta feed.
 	require.NoError(t, os.WriteFile(filePath, []byte("local conflict version"), 0o600))
 
-	// Wait for the daemon to detect the conflict. Poll conflicts command.
-	deadline := time.Now().Add(daemonPollTimeout)
-	for attempt := 0; ; attempt++ {
-		stdout, _, err := runCLIWithConfigAllowError(t, cfgPath, env, "conflicts")
-		if err == nil && strings.Contains(stdout, "edit_edit") {
-			break
+	// Wait for the daemon to detect the conflict in detailed status.
+	status := pollDetailedStatus(t, cfgPath, env, daemonPollTimeout, func(status detailedStatusJSON) bool {
+		for _, conflict := range status.Conflicts {
+			if strings.HasSuffix(conflict.Path, "/conflict-watch.txt") && conflict.ConflictType == "edit_edit" {
+				return true
+			}
 		}
-
-		if time.Now().After(deadline) {
-			require.Failf(t, "conflict not detected",
-				"daemon did not detect edit_edit conflict within %v", daemonPollTimeout)
-		}
-
-		time.Sleep(pollBackoff(attempt))
-	}
+		return false
+	})
+	require.Len(t, status.Conflicts, 1)
 
 	// Graceful shutdown.
 	require.NoError(t, h.Cmd.Process.Signal(syscall.SIGTERM))

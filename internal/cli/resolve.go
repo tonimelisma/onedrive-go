@@ -4,6 +4,14 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+)
+
+const (
+	resolutionKeepLocal  = synctypes.ResolutionKeepLocal
+	resolutionKeepRemote = synctypes.ResolutionKeepRemote
+	resolutionKeepBoth   = synctypes.ResolutionKeepBoth
 )
 
 func newResolveCmd() *cobra.Command {
@@ -36,7 +44,7 @@ func newResolveDeletesCmd() *cobra.Command {
 The sync engine executes matching approved deletes on a later pass.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return newIssuesService(mustCLIContext(cmd.Context())).runApproveDeletes(cmd.Context())
+			return newResolveService(mustCLIContext(cmd.Context())).runApproveDeletes(cmd.Context())
 		},
 	}
 }
@@ -67,7 +75,7 @@ func newResolveActionCmd(name string, resolution string) *cobra.Command {
 				return fmt.Errorf("--all and a specific conflict argument are mutually exclusive")
 			}
 
-			return newConflictsService(mustCLIContext(cmd.Context())).runResolve(
+			return newResolveService(mustCLIContext(cmd.Context())).runResolve(
 				cmd.Context(),
 				args,
 				resolution,

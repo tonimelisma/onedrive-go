@@ -84,7 +84,7 @@ Sync execution uses the same split deliberately: when planning already knows
 the authoritative remote `itemID`, uploads overwrite that item by ID instead of
 recreating the file through the parent-path route. Parent-based uploads remain
 for true creates where no remote item identity exists yet. This keeps ordinary
-edits and `conflicts resolve --keep-local` on the narrower overwrite boundary
+edits and `resolve local` on the narrower overwrite boundary
 and avoids teaching parent-creation consistency gaps to flows that already have
 stable remote identity.
 

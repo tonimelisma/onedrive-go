@@ -26,7 +26,7 @@ import (
 // and state purge reset behavior.
 // ---------------------------------------------------------------------------
 
-func stateDBPathForEnv(env map[string]string) string {
+func stateDBPathForRecoveryEnv(env map[string]string) string {
 	dataHome := env["XDG_DATA_HOME"]
 	sanitizedDrive := strings.ReplaceAll(drive, ":", "_")
 	return filepath.Join(dataHome, "onedrive-go", "state_"+sanitizedDrive+".db")
@@ -35,7 +35,7 @@ func stateDBPathForEnv(env map[string]string) string {
 func openStateDB(t *testing.T, env map[string]string) *sql.DB {
 	t.Helper()
 
-	dbPath := stateDBPathForEnv(env)
+	dbPath := stateDBPathForRecoveryEnv(env)
 	require.FileExists(t, dbPath)
 
 	db, err := sql.Open("sqlite", "file:"+dbPath)

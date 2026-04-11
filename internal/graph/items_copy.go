@@ -56,7 +56,13 @@ func (c *Client) CopyItem(
 		return nil, fmt.Errorf("graph: marshaling copy request: %w", err)
 	}
 
-	resp, err := c.do(ctx, http.MethodPost, apiPath, bytes.NewReader(bodyBytes))
+	resp, err := doQuirkRetry(ctx, c, quirkRetrySpec{
+		name:   "copy-destination-transient-404",
+		policy: c.copyDestinationPolicy,
+		match:  isTransientCopyDestinationError,
+	}, func() (*http.Response, error) {
+		return c.do(ctx, http.MethodPost, apiPath, bytes.NewReader(bodyBytes))
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -361,12 +361,12 @@ func fullE2EParallelMiscTestNames() []string {
 		"TestE2E_Pause_IndefiniteAndResume",
 		"TestE2E_Resume_NotPaused",
 		"TestE2E_Resume_AllDrives",
-		"TestE2E_Issues_Empty",
-		"TestE2E_Conflicts_EmptyHistory",
-		"TestE2E_Conflicts_JSON",
-		"TestE2E_Conflicts_ResolveMultipleStrategies",
-		"TestE2E_Conflicts_ResolveConflictNotFound",
-		"TestE2E_Verify_AfterSync",
+		"TestE2E_Status_Detailed_NoVisibleProblems",
+		"TestE2E_Status_History_NoConflicts",
+		"TestE2E_Status_JSON_ConflictDetails",
+		"TestE2E_Status_History_ShowsResolvedStrategies",
+		"TestE2E_Resolve_TargetNotFound",
+		"TestE2E_InternalBaselineVerification_AfterSync",
 		"TestE2E_RecycleBinRoundtrip",
 		"TestE2E_RecycleBinEmpty",
 		"TestE2E_Mv_Rename",
@@ -380,7 +380,7 @@ func fullE2EParallelMiscTestNames() []string {
 		"TestE2E_Mv_ForceOverwrite",
 		"TestE2E_Cp_ForceOverwrite",
 		"TestE2E_Mv_Folder",
-		"TestE2E_Issues_ReadOnlyLifecycle",
+		"TestE2E_Status_IssueLifecycle",
 		"TestE2E_Status_DetailedJSON",
 		"TestE2E_Status_NoDrives",
 		"TestE2E_Sync_QuietMode",
@@ -407,7 +407,7 @@ func fullE2ESerialSyncTestNames() []string {
 		"TestE2E_Sync_NestedFolderHierarchy",
 		"TestE2E_Sync_DryRunNonDestructive",
 		"TestE2E_Sync_ConvergentEdit",
-		"TestE2E_Sync_VerifyDetectsTampering",
+		"TestE2E_Sync_InternalBaselineVerificationDetectsTampering",
 		"TestE2E_Sync_ResolveDryRun",
 		"TestE2E_Sync_EmptyDirectory",
 		"TestE2E_Sync_NestedDeletion",
@@ -416,14 +416,14 @@ func fullE2ESerialSyncTestNames() []string {
 		"TestE2E_Sync_IdempotentReSync",
 		"TestE2E_Sync_CrashRecoveryIdempotent",
 		"TestE2E_Sync_CrashRecovery_ReplaysDurableInProgressRows",
-		"TestE2E_Conflicts_ResolveKeepBoth",
+		"TestE2E_Resolve_Both_PreservesConflictCopy",
 	}
 }
 
 func fullE2ESerialWatchSharedTestNames() []string {
 	return []string{
-		"TestE2E_Conflicts_ResolveWithWatchDaemonExecutesQueuedIntent",
-		"TestE2E_Issues_ApproveDeletes",
+		"TestE2E_Resolve_WithWatchDaemonExecutesQueuedIntent",
+		"TestE2E_Resolve_DeletesWithWatchDaemon",
 		"TestE2E_Sync_MultiDriveReport",
 		"TestE2E_SyncWatch_RemoteToLocal",
 		"TestE2E_SyncWatch_Bidirectional",
@@ -1402,6 +1402,7 @@ func runStress(
 func runRepoConsistencyChecks(repoRoot string) error {
 	for _, check := range []func(string) error{
 		ensureNoStaleArchitecturePhrases,
+		ensureNoRemovedSyncCLICommandsOutsideArchive,
 		ensureSyncStoreMigrationDiscipline,
 		ensureGovernedDesignDocsHaveOwnershipContracts,
 		ensureCrossCuttingDesignDocs,
@@ -1449,6 +1450,53 @@ func ensureNoStaleArchitecturePhrases(repoRoot string) error {
 		}
 		if match != "" {
 			return fmt.Errorf("stale architecture/documentation phrase detected (%s): %s", check.name, match)
+		}
+	}
+
+	return nil
+}
+
+func ensureNoRemovedSyncCLICommandsOutsideArchive(repoRoot string) error {
+	checkRoots := []string{
+		filepath.Join(repoRoot, "internal", "cli"),
+		filepath.Join(repoRoot, "e2e"),
+		filepath.Join(repoRoot, "spec", "design"),
+		filepath.Join(repoRoot, "spec", "reference"),
+		filepath.Join(repoRoot, "spec", "requirements"),
+		filepath.Join(repoRoot, "README.md"),
+		filepath.Join(repoRoot, "CLAUDE.md"),
+	}
+
+	checks := []staleCheck{
+		{
+			name:    "removed sync CLI command invocation",
+			pattern: regexp.MustCompile(`onedrive-go (issues|conflicts|verify)\b`),
+		},
+		{
+			name:    "removed sync CLI command phrase",
+			pattern: regexp.MustCompile(`\b(issues approve-deletes|conflicts resolve|conflicts --history)\b`),
+		},
+		{
+			name:    "removed sync CLI argv",
+			pattern: regexp.MustCompile(`\[\](string)?\{("(issues|conflicts|verify)"|'(issues|conflicts|verify)')`),
+		},
+		{
+			name:    "removed sync CLI helper invocation",
+			pattern: regexp.MustCompile(`runCLI(?:Core|WithConfig(?:AllowError|ExpectError)?)\([^)]*"(issues|conflicts|verify)"`),
+		},
+	}
+
+	skip := func(path string) bool {
+		return strings.Contains(path, filepath.Join("spec", "archive")+string(os.PathSeparator))
+	}
+
+	for _, check := range checks {
+		match, err := findTextMatch(checkRoots, check.pattern, skip)
+		if err != nil {
+			return err
+		}
+		if match != "" {
+			return fmt.Errorf("removed sync CLI command detected (%s): %s", check.name, match)
 		}
 	}
 
