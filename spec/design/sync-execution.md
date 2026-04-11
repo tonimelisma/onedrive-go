@@ -287,7 +287,7 @@ sleep on its own.
 ### Deletes (`executor_delete.go`)
 Implements: R-6.2.4 [verified]
 
-Hash-before-delete guard for local deletions (verifies the file hasn't changed since planning). Remote deletes use `If-Match` with eTag. Local deletes go to OS trash if configured via [`internal/localtrash/trash.go`](/Users/tonimelisma/Development/onedrive-go/internal/localtrash/trash.go). When a local folder delete would fail due to non-empty directory containing only disposable files (OS junk like `.DS_Store`, editor temps like `.swp`, invalid OneDrive names), `deleteLocalFolder` auto-removes them before retrying the folder delete.
+Hash-before-delete guard for local deletions (verifies the file hasn't changed since planning). Remote deletes use `If-Match` with eTag. Local deletes go to OS trash if configured via [`internal/localtrash/trash.go`](../../internal/localtrash/trash.go). When a local folder delete would fail due to non-empty directory containing only disposable files (OS junk like `.DS_Store`, editor temps like `.swp`, invalid OneDrive names), `deleteLocalFolder` auto-removes them before retrying the folder delete.
 
 Remote delete semantics remain intentionally item-ID authoritative inside sync.
 The executor does **not** call `DeleteResolvedPath()` /
@@ -311,7 +311,7 @@ protection, but held-delete workflow state is stored in `held_deletes`, not in
 
 Implements: R-2.5.1 [verified], R-2.5.4 [verified], R-2.10.41 [verified]
 
-[`internal/syncrecovery/recovery.go`](/Users/tonimelisma/Development/onedrive-go/internal/syncrecovery/recovery.go) handles crash recovery: on startup, it resets items stuck in `downloading`/`deleting` state to `pending_download`, `pending_delete`, or `deleted`. The sync tree decides whether a local delete completed before the crash; the store applies only the durable state transitions. One-shot mode does this in `prepareRunOnceState`; watch mode does it during watch bootstrap before observation starts.
+[`internal/syncrecovery/recovery.go`](../../internal/syncrecovery/recovery.go) handles crash recovery: on startup, it resets items stuck in `downloading`/`deleting` state to `pending_download`, `pending_delete`, or `deleted`. The sync tree decides whether a local delete completed before the crash; the store applies only the durable state transitions. One-shot mode does this in `prepareRunOnceState`; watch mode does it during watch bootstrap before observation starts.
 
 Engine-level startup characterization covers both one-shot startup and watch bootstrap with mixed deleting candidate sets: missing local paths finalize as `deleted`, existing local paths return to `pending_delete`, and malformed or unreadable local paths fail open to `pending_delete` instead of being treated as successful deletes.
 

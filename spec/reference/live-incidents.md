@@ -745,8 +745,8 @@ Status: closed as test
 Recurring: yes  
 Summary: The tests treated direct remote visibility or newly-unblocked remote state as proof that the next incremental download-only sync pass would converge immediately. In live CI that assumption was false: first-pass sync could still lag delta visibility or hit a documented transient download-metadata `404`, even though a later pass converged correctly.  
 Evidence:
-- [sync_e2e_test.go](/Users/tonimelisma/Development/onedrive-go-live-incident-ledger/e2e/sync_e2e_test.go#L340) now explicitly waits for the local synced file after delta catches up.
-- [sync_scope_e2e_test.go](/Users/tonimelisma/Development/onedrive-go/e2e/sync_scope_e2e_test.go#L35) now uses the same eventual-convergence helper for exact-file `sync_paths` download coverage.
+- [sync_e2e_test.go](../../e2e/sync_e2e_test.go#L340) now explicitly waits for the local synced file after delta catches up.
+- [sync_scope_e2e_test.go](../../e2e/sync_scope_e2e_test.go#L35) now uses the same eventual-convergence helper for exact-file `sync_paths` download coverage.
 - [graph-api-quirks.md](graph-api-quirks.md) already documents delta endpoint consistency lag as a live behavior.
 - Merged fix chain is included in `74da628` after the earlier test hardening commit on the same PR line.
 - April 7, 2026 local `go run ./cmd/devtool verify default` reproduced the same symptom once in the fast E2E lane, while an immediate targeted rerun of `go test -tags=e2e ./e2e -run '^TestE2E_Sync_DownloadOnly$' -count=1` passed, consistent with intermittent delta visibility lag rather than a deterministic product regression.
@@ -789,8 +789,8 @@ Status: fixed
 Recurring: yes  
 Summary: The websocket harness originally treated an open socket connection as the readiness boundary, even though the product only starts honoring websocket-specific timing after bootstrap sync drains and the steady-state remote observer comes online. The original smoke failure and the later restart failure were both harness timing bugs, not websocket transport regressions.  
 Evidence:
-- [socketio_e2e_test.go](/Users/tonimelisma/Development/onedrive-go-live-incident-ledger/e2e/socketio_e2e_test.go#L132) now documents the correct remote-observer-first boundary.
-- [socketio_helpers_test.go](/Users/tonimelisma/Development/onedrive-go-live-incident-ledger/e2e/socketio_helpers_test.go#L87) contains the helper that waits for `observer_started(remote)` before websocket-specific timing.
+- [socketio_e2e_test.go](../../e2e/socketio_e2e_test.go#L132) now documents the correct remote-observer-first boundary.
+- [socketio_helpers_test.go](../../e2e/socketio_helpers_test.go#L87) contains the helper that waits for `observer_started(remote)` before websocket-specific timing.
 - Merged fix: `52cef0f` (`fix: close W8 validation audit gaps (#415)`).
 - On April 8, 2026 local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` reproduced the same harness gap in `TestE2E_SyncWatch_WebsocketRemoteWakeAndRestart`: after daemon restart, the test waited only for `websocket_connected`, so the first post-restart wake could still be consumed by bootstrap catch-up before the steady-state remote observer was ready.
 - On April 8, 2026 a later local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` run still failed the same test even after the remote-observer fix, because the timed assertion also depended on creating the parent folder after daemon startup. The first post-mutation wake could legitimately reflect unrelated live-drive traffic or an incremental delta read that still had not observed the fresh parent subtree.
@@ -808,8 +808,8 @@ Status: fixed
 Recurring: yes  
 Summary: Failed or interrupted live E2E runs left disposable `e2e-*` and `onedrive-go-e2e*` folders behind in the test drives. That cruft accumulated at drive root, polluted the test accounts, and made later bootstrap scans appear much slower than the fresh-suite case.  
 Evidence:
-- [e2e_test.go](/Users/tonimelisma/Development/onedrive-go-live-incident-ledger/e2e/e2e_test.go#L22) defines the disposable artifact prefixes.
-- [e2e_test.go](/Users/tonimelisma/Development/onedrive-go-live-incident-ledger/e2e/e2e_test.go#L95) now performs suite startup scrub against those root-level prefixes before the fast live battery begins.
+- [e2e_test.go](../../e2e/e2e_test.go#L22) defines the disposable artifact prefixes.
+- [e2e_test.go](../../e2e/e2e_test.go#L95) now performs suite startup scrub against those root-level prefixes before the fast live battery begins.
 - Merged fix: `52cef0f` (`fix: close W8 validation audit gaps (#415)`).
 Resolution / mitigation: The live E2E suite now pre-scrubs only known disposable root-level artifacts and surfaces remote cleanup failures instead of silently ignoring them.  
 Promoted docs: [system.md](../design/system.md)
@@ -826,6 +826,6 @@ Recurring: yes
 Summary: Ordinary metadata requests could connect successfully and then stall for tens of seconds before sending response headers. This first showed up in the scheduled full E2E battery during delete-safety setup, then recurred in GitHub Actions integration when a normal `GET /me` call stalled long enough to hit the old 30-second budget.
 Evidence:
 - [graph-api-quirks.md](graph-api-quirks.md#slowstalled-metadata-response-headers) records the incident family with dates April 3, 2026 and April 5, 2026.
-- [internal/graph/integration_test.go](/Users/tonimelisma/Development/onedrive-go-live-incident-ledger/internal/graph/integration_test.go#L24) now keeps the live integration timeout above the observed GitHub runner tail latency.
+- [internal/graph/integration_test.go](../../internal/graph/integration_test.go#L24) now keeps the live integration timeout above the observed GitHub runner tail latency.
 Resolution / mitigation: Runtime policy moved away from client-wide `http.Client.Timeout` for metadata callers and uses connection-level header deadlines instead. The live integration budget was also raised to avoid misclassifying service/header stalls as product regressions.  
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md)

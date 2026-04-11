@@ -10,6 +10,10 @@ import (
 )
 
 func goldenStatusAccounts() []statusAccount {
+	invalidDescriptor := synctypes.DescribeSummary(synctypes.SummaryInvalidFilename)
+	authDescriptor := synctypes.DescribeSummary(synctypes.SummaryAuthenticationRequired)
+	sharedDescriptor := synctypes.DescribeSummary(synctypes.SummarySharedFolderWritesBlocked)
+
 	return []statusAccount{
 		{
 			Email:       "alice@example.com",
@@ -27,32 +31,50 @@ func goldenStatusAccounts() []statusAccount {
 						LastSyncTime:     "2026-04-03T10:30:00Z",
 						LastSyncDuration: "1500",
 						FileCount:        42,
-						Issues:           3,
-						IssueGroups: []statusIssueGroup{
+						IssueCount:       3,
+						PendingSync:      2,
+						Retrying:         1,
+						LastError:        "sync: network timeout",
+						StateStoreStatus: stateStoreStatusHealthy,
+						ExamplesLimit:    defaultVisiblePaths,
+						NextActions: []string{
+							invalidDescriptor.Action,
+							authDescriptor.Action,
+							sharedDescriptor.Action,
+						},
+						IssueGroups: []failureGroupJSON{
 							{
 								SummaryKey: string(synctypes.SummaryInvalidFilename),
-								Title:      "INVALID FILENAME",
+								IssueType:  string(synctypes.IssueInvalidFilename),
+								Title:      invalidDescriptor.Title,
+								Reason:     invalidDescriptor.Reason,
+								Action:     invalidDescriptor.Action,
 								Count:      1,
-								ScopeKind:  "file",
+								Paths:      []string{"/invalid:name.txt"},
 							},
 							{
 								SummaryKey: string(synctypes.SummaryAuthenticationRequired),
-								Title:      "AUTHENTICATION REQUIRED",
+								IssueType:  string(synctypes.IssueUnauthorized),
+								Title:      authDescriptor.Title,
+								Reason:     authDescriptor.Reason,
+								Action:     authDescriptor.Action,
 								Count:      1,
 								ScopeKind:  "account",
 								Scope:      "your OneDrive account authorization",
+								Paths:      nil,
 							},
 							{
 								SummaryKey: string(synctypes.SummarySharedFolderWritesBlocked),
-								Title:      "SHARED FOLDER WRITES BLOCKED",
+								IssueType:  string(synctypes.IssueSharedFolderBlocked),
+								Title:      sharedDescriptor.Title,
+								Reason:     sharedDescriptor.Reason,
+								Action:     sharedDescriptor.Action,
 								Count:      1,
 								ScopeKind:  "shortcut",
 								Scope:      "Shared/Docs",
+								Paths:      []string{"Shared/Docs/report.docx"},
 							},
 						},
-						PendingSync: 2,
-						Retrying:    1,
-						LastError:   "sync: network timeout",
 					},
 				},
 			},
@@ -80,7 +102,7 @@ func TestStatusOutputGoldenText(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatusText(&buf, goldenStatusAccounts()))
+	require.NoError(t, printStatusText(&buf, goldenStatusAccounts(), false))
 	assertGoldenFile(t, "status_text.golden", buf.Bytes())
 }
 

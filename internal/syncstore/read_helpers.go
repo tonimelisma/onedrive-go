@@ -17,17 +17,17 @@ func ReadStatusSnapshot(ctx context.Context, dbPath string, logger *slog.Logger)
 	})
 }
 
-// ReadDetailedStatusSnapshot opens a read-only inspector for one detailed
-// single-drive status projection and closes it before returning so callers do
-// not own inspector lifecycle.
-func ReadDetailedStatusSnapshot(
+// ReadDriveStatusSnapshot opens a read-only inspector for one per-drive status
+// projection and closes it before returning so callers do not own inspector
+// lifecycle.
+func ReadDriveStatusSnapshot(
 	ctx context.Context,
 	dbPath string,
 	history bool,
 	logger *slog.Logger,
-) (DetailedStatusSnapshot, error) {
-	return readWithInspector(dbPath, logger, func(inspector *Inspector) (DetailedStatusSnapshot, error) {
-		return inspector.ReadDetailedStatusSnapshot(ctx, history)
+) (DriveStatusSnapshot, error) {
+	return readWithInspector(dbPath, logger, func(inspector *Inspector) (DriveStatusSnapshot, error) {
+		return inspector.ReadDriveStatusSnapshot(ctx, history)
 	})
 }
 

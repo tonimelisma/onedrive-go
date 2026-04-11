@@ -6,9 +6,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,9 +148,10 @@ func TestNewStatusCmd_Structure(t *testing.T) {
 	assert.NotEmpty(t, cmd.Short)
 	assert.NotNil(t, cmd.RunE)
 	assert.Contains(t, cmd.Short, "sync status")
-	assert.Contains(t, cmd.Long, "detailed per-drive inspection view")
-	assert.Contains(t, cmd.Long, "delete safety")
-	assert.Contains(t, cmd.Long, "state-store health")
+	assert.Contains(t, cmd.Long, "same per-drive sync-health contract")
+	assert.Contains(t, cmd.Long, "--drive to filter")
+	assert.Contains(t, cmd.Long, "--history")
+	assert.Contains(t, cmd.Long, "--verbose")
 }
 
 // --- buildStatusAccountsWith tests (B-036) ---
@@ -431,7 +434,7 @@ func TestBuildStatusAccountsWith_SyncStatePopulated(t *testing.T) {
 		LastSyncTime:     "2026-03-02T10:30:00Z",
 		LastSyncDuration: "1500",
 		FileCount:        45,
-		Issues:           2,
+		IssueCount:       2,
 	}
 
 	accounts := buildStatusAccountsWith(cfg,
@@ -448,7 +451,7 @@ func TestBuildStatusAccountsWith_SyncStatePopulated(t *testing.T) {
 	assert.Equal(t, "2026-03-02T10:30:00Z", ss.LastSyncTime)
 	assert.Equal(t, "1500", ss.LastSyncDuration)
 	assert.Equal(t, 45, ss.FileCount)
-	assert.Equal(t, 2, ss.Issues)
+	assert.Equal(t, 2, ss.IssueCount)
 }
 
 func TestBuildStatusAccountsWith_NilSyncState(t *testing.T) {
@@ -474,7 +477,8 @@ func TestQuerySyncState_NoDB(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 
 	info := querySyncState("personal:missing@example.com", "/nonexistent/path/state.db", logger)
-	assert.Nil(t, info)
+	require.NotNil(t, info)
+	assert.Equal(t, stateStoreStatusMissing, info.StateStoreStatus)
 }
 
 func TestQuerySyncState_EmptyDB(t *testing.T) {
@@ -491,7 +495,8 @@ func TestQuerySyncState_EmptyDB(t *testing.T) {
 	require.NotNil(t, info)
 	assert.Empty(t, info.LastSyncTime)
 	assert.Equal(t, 0, info.FileCount)
-	assert.Equal(t, 0, info.Issues)
+	assert.Equal(t, 0, info.IssueCount)
+	assert.Equal(t, stateStoreStatusHealthy, info.StateStoreStatus)
 }
 
 func TestQuerySyncState_WithMetadata(t *testing.T) {
@@ -534,7 +539,7 @@ func TestQuerySyncState_WithMetadata(t *testing.T) {
 	assert.Equal(t, "1500", info.LastSyncDuration)
 	assert.Empty(t, info.LastError)
 	assert.Equal(t, 1, info.FileCount)
-	assert.Equal(t, 1, info.Issues) // 1 conflict = 1 issue
+	assert.Zero(t, info.IssueCount)
 }
 
 func TestQuerySyncState_PendingSyncAndIssues(t *testing.T) {
@@ -572,7 +577,7 @@ func TestQuerySyncState_PendingSyncAndIssues(t *testing.T) {
 	info := querySyncState("personal:alice@example.com", dbPath, logger)
 	require.NotNil(t, info)
 	assert.Equal(t, 2, info.PendingSync) // pending_download + download_failed
-	assert.Equal(t, 1, info.Issues)      // 1 actionable failure
+	assert.Equal(t, 1, info.IssueCount)  // 1 actionable failure
 	assert.Equal(t, 2, info.Retrying)    // 2 transient with failure_count >= 3
 }
 
@@ -611,7 +616,7 @@ func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsIssues(t *testing.T) {
 
 	info := querySyncState("personal:alice@example.com", dbPath, logger)
 	require.NotNil(t, info)
-	assert.Equal(t, 4, info.Issues)
+	assert.Equal(t, 4, info.IssueCount)
 }
 
 // Validates: R-2.3.6, R-2.3.12
@@ -668,12 +673,12 @@ func TestQuerySyncState_DurableIntentCountsAndActionHints(t *testing.T) {
 
 	info := querySyncState("personal:alice@example.com", dbPath, logger)
 	require.NotNil(t, info)
-	assert.Equal(t, 1, info.PendingHeldDeleteApprovals)
-	assert.Equal(t, 2, info.PendingConflictRequests)
+	assert.Equal(t, 1, info.ApprovedDeletesWaiting)
+	assert.Equal(t, 2, info.QueuedConflictRequests)
 	assert.Equal(t, 1, info.ApplyingConflictRequests)
-	assert.Contains(t, info.ActionHints, "run `onedrive-go --drive personal:alice@example.com sync` or start `onedrive-go --drive personal:alice@example.com sync --watch` to execute approved deletes.")
-	assert.Contains(t, info.ActionHints, "run `onedrive-go --drive personal:alice@example.com sync` or start `onedrive-go --drive personal:alice@example.com sync --watch` to apply queued resolutions.")
-	assert.Contains(t, info.ActionHints, "wait for the active sync owner to finish, then run `onedrive-go --drive personal:alice@example.com status` again if needed.")
+	assert.Contains(t, info.NextActions, "run `onedrive-go --drive personal:alice@example.com sync` or start `onedrive-go --drive personal:alice@example.com sync --watch` to execute approved deletes.")
+	assert.Contains(t, info.NextActions, "run `onedrive-go --drive personal:alice@example.com sync` or start `onedrive-go --drive personal:alice@example.com sync --watch` to apply queued resolutions.")
+	assert.Contains(t, info.NextActions, "wait for the active sync owner to finish, then run `onedrive-go --drive personal:alice@example.com status` again if needed.")
 }
 
 // Validates: R-6.10.5
@@ -711,7 +716,7 @@ func TestQuerySyncState_UsesReadOnlyProjectionHelper(t *testing.T) {
 
 	info := querySyncState("personal:alice@example.com", dbPath, logger)
 	require.NotNil(t, info)
-	assert.Equal(t, 1, info.Issues)
+	assert.Zero(t, info.IssueCount)
 }
 
 // Validates: R-2.10.4, R-2.10.32
@@ -754,23 +759,36 @@ func TestQuerySyncState_PreservesIssueGroupScopeContext(t *testing.T) {
 
 	info := querySyncState("personal:alice@example.com", dbPath, logger)
 	require.NotNil(t, info)
-	assert.ElementsMatch(t, []statusIssueGroup{
+	invalidDescriptor := synctypes.DescribeSummary(synctypes.SummaryInvalidFilename)
+	quotaDescriptor := synctypes.DescribeSummary(synctypes.SummaryQuotaExceeded)
+	authDescriptor := synctypes.DescribeSummary(synctypes.SummaryAuthenticationRequired)
+	assert.ElementsMatch(t, []failureGroupJSON{
 		{
 			SummaryKey: string(synctypes.SummaryInvalidFilename),
-			Title:      "INVALID FILENAME",
+			IssueType:  string(synctypes.IssueInvalidFilename),
+			Title:      invalidDescriptor.Title,
+			Reason:     invalidDescriptor.Reason,
+			Action:     invalidDescriptor.Action,
 			Count:      1,
-			ScopeKind:  "file",
+			Paths:      []string{"/invalid:name.txt"},
 		},
 		{
 			SummaryKey: string(synctypes.SummaryQuotaExceeded),
-			Title:      "QUOTA EXCEEDED",
+			IssueType:  string(synctypes.IssueQuotaExceeded),
+			Title:      quotaDescriptor.Title,
+			Reason:     quotaDescriptor.Reason,
+			Action:     quotaDescriptor.Action,
 			Count:      2,
 			ScopeKind:  "shortcut",
 			Scope:      "Shared/Team Docs",
+			Paths:      []string{"/quota/a.txt", "/quota/b.txt"},
 		},
 		{
 			SummaryKey: string(synctypes.SummaryAuthenticationRequired),
-			Title:      "AUTHENTICATION REQUIRED",
+			IssueType:  string(synctypes.IssueUnauthorized),
+			Title:      authDescriptor.Title,
+			Reason:     authDescriptor.Reason,
+			Action:     authDescriptor.Action,
 			Count:      1,
 			ScopeKind:  "account",
 			Scope:      "your OneDrive account authorization",
@@ -793,9 +811,9 @@ func TestPrintStatusJSON_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T) {
 					SyncDir:     "~/Work",
 					State:       driveStateReady,
 					SyncState: &syncStateInfo{
-						FileCount: 10,
-						Issues:    2,
-						IssueGroups: []statusIssueGroup{
+						FileCount:  10,
+						IssueCount: 2,
+						IssueGroups: []failureGroupJSON{
 							{
 								SummaryKey: string(synctypes.SummaryQuotaExceeded),
 								Title:      "QUOTA EXCEEDED",
@@ -833,19 +851,26 @@ func TestPrintStatusJSON_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T) {
 func TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T) {
 	t.Parallel()
 
+	quotaDescriptor := synctypes.DescribeSummary(synctypes.SummaryQuotaExceeded)
 	ss := &syncStateInfo{
-		Issues: 2,
-		IssueGroups: []statusIssueGroup{
+		IssueCount: 2,
+		IssueGroups: []failureGroupJSON{
 			{
 				SummaryKey: string(synctypes.SummaryQuotaExceeded),
-				Title:      "QUOTA EXCEEDED",
+				IssueType:  string(synctypes.IssueQuotaExceeded),
+				Title:      quotaDescriptor.Title,
+				Reason:     quotaDescriptor.Reason,
+				Action:     quotaDescriptor.Action,
 				Count:      1,
 				ScopeKind:  "shortcut",
 				Scope:      "Shared/Docs",
 			},
 			{
 				SummaryKey: string(synctypes.SummaryQuotaExceeded),
-				Title:      "QUOTA EXCEEDED",
+				IssueType:  string(synctypes.IssueQuotaExceeded),
+				Title:      quotaDescriptor.Title,
+				Reason:     quotaDescriptor.Reason,
+				Action:     quotaDescriptor.Action,
 				Count:      1,
 				ScopeKind:  "shortcut",
 				Scope:      "Shared/Design",
@@ -854,10 +879,11 @@ func TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T)
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printSyncStateText(&buf, ss))
+	require.NoError(t, printSyncStateText(&buf, ss, false))
 	output := buf.String()
-	assert.Contains(t, output, "QUOTA EXCEEDED (shortcut Shared/Docs): 1")
-	assert.Contains(t, output, "QUOTA EXCEEDED (shortcut Shared/Design): 1")
+	assert.Equal(t, 2, strings.Count(output, "QUOTA EXCEEDED (1 item)"))
+	assert.Contains(t, output, "Scope: Shared/Docs")
+	assert.Contains(t, output, "Scope: Shared/Design")
 }
 
 func TestComputeSummary_Mixed(t *testing.T) {
@@ -867,7 +893,7 @@ func TestComputeSummary_Mixed(t *testing.T) {
 		{
 			AuthState: authStateReady,
 			Drives: []statusDrive{
-				{State: driveStateReady, SyncState: &syncStateInfo{Issues: 3}},
+				{State: driveStateReady, SyncState: &syncStateInfo{IssueCount: 3}},
 				{State: driveStatePaused},
 			},
 		},
@@ -875,7 +901,7 @@ func TestComputeSummary_Mixed(t *testing.T) {
 			AuthState: authStateAuthenticationNeeded,
 			Drives: []statusDrive{
 				{State: driveStateReady},
-				{State: driveStateReady, SyncState: &syncStateInfo{Issues: 1}},
+				{State: driveStateReady, SyncState: &syncStateInfo{IssueCount: 1}},
 			},
 		},
 	}
@@ -923,7 +949,7 @@ func TestPrintStatusJSON_WithAccounts(t *testing.T) {
 					CanonicalID: "personal:alice@example.com",
 					SyncDir:     "~/OneDrive",
 					State:       driveStateReady,
-					SyncState:   &syncStateInfo{FileCount: 10, Issues: 1},
+					SyncState:   &syncStateInfo{FileCount: 10, IssueCount: 1},
 				},
 			},
 		},
@@ -955,9 +981,9 @@ func TestPrintStatusJSON_WithIssueGroups(t *testing.T) {
 					SyncDir:     "~/OneDrive",
 					State:       driveStateReady,
 					SyncState: &syncStateInfo{
-						FileCount: 10,
-						Issues:    3,
-						IssueGroups: []statusIssueGroup{
+						FileCount:  10,
+						IssueCount: 3,
+						IssueGroups: []failureGroupJSON{
 							{
 								SummaryKey: string(synctypes.SummaryQuotaExceeded),
 								Title:      "QUOTA EXCEEDED",
@@ -997,11 +1023,10 @@ func TestPrintStatusText_NoDrives(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatusText(&buf, nil))
+	require.NoError(t, printStatusText(&buf, nil, false))
 
 	output := buf.String()
-	// Should still print summary line.
-	assert.Contains(t, output, "Summary: 0 drives")
+	assert.Equal(t, "Summary: 0 drives, 0 issues\n", output)
 }
 
 func TestPrintStatusText_WithDisplayNameAndOrg(t *testing.T) {
@@ -1025,9 +1050,10 @@ func TestPrintStatusText_WithDisplayNameAndOrg(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatusText(&buf, accounts))
+	require.NoError(t, printStatusText(&buf, accounts, false))
 
 	output := buf.String()
+	assert.True(t, strings.HasPrefix(output, "Summary: 1 drives (1 ready), 0 issues\n\n"))
 	assert.Contains(t, output, "Alice Smith (alice@contoso.com)")
 	assert.Contains(t, output, "Org:   Contoso")
 	assert.Contains(t, output, "Auth:  ready")
@@ -1055,7 +1081,7 @@ func TestPrintStatusText_WithAuthRequiredReasonAndAction(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatusText(&buf, accounts))
+	require.NoError(t, printStatusText(&buf, accounts, false))
 
 	output := buf.String()
 	assert.Contains(t, output, "Auth:  authentication_required")
@@ -1083,7 +1109,7 @@ func TestPrintStatusText_SyncStateNever(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatusText(&buf, accounts))
+	require.NoError(t, printStatusText(&buf, accounts, false))
 
 	output := buf.String()
 	assert.Contains(t, output, "Last sync: never")
@@ -1112,7 +1138,7 @@ func TestPrintStatusText_SyncStateWithError(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatusText(&buf, accounts))
+	require.NoError(t, printStatusText(&buf, accounts, false))
 
 	output := buf.String()
 	assert.Contains(t, output, "Last error: network timeout")
@@ -1137,7 +1163,7 @@ func TestPrintStatusText_EmptySyncDir(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatusText(&buf, accounts))
+	require.NoError(t, printStatusText(&buf, accounts, false))
 
 	output := buf.String()
 	assert.Contains(t, output, syncDirNotSet)
@@ -1163,6 +1189,79 @@ func TestPrintSummaryText_AllStates(t *testing.T) {
 	assert.Contains(t, output, "1 paused")
 	assert.Contains(t, output, "1 accounts requiring auth")
 	assert.Contains(t, output, "3 issues")
+}
+
+func TestBuildSyncStateInfo_SamplesSectionsByDefault(t *testing.T) {
+	t.Parallel()
+
+	descriptor := synctypes.DescribeSummary(synctypes.SummaryInvalidFilename)
+	paths := []string{"/one", "/two", "/three", "/four", "/five", "/six", "/seven"}
+	deleteRows, conflicts, history := buildStatusSectionRows(paths, synctypes.ResolutionKeepRemote)
+
+	info := buildSyncStateInfo(
+		"personal:alice@example.com",
+		&syncstore.DriveStatusSnapshot{
+			IssueGroups: []syncstore.IssueGroupSnapshot{
+				{
+					SummaryKey:       synctypes.SummaryInvalidFilename,
+					PrimaryIssueType: string(synctypes.IssueInvalidFilename),
+					Count:            len(paths),
+					Paths:            paths,
+				},
+			},
+			DeleteSafety:    deleteRows,
+			Conflicts:       conflicts,
+			ConflictHistory: history,
+		},
+		driveStateStoreInfo{Status: stateStoreStatusHealthy},
+		false,
+		defaultVisiblePaths,
+	)
+
+	require.Len(t, info.IssueGroups, 1)
+	assert.Equal(t, descriptor.Action, info.IssueGroups[0].Action)
+	assert.Len(t, info.IssueGroups[0].Paths, defaultVisiblePaths)
+	assert.Len(t, info.DeleteSafety, defaultVisiblePaths)
+	assert.Len(t, info.Conflicts, defaultVisiblePaths)
+	assert.Len(t, info.ConflictHistory, defaultVisiblePaths)
+	assert.Equal(t, len(paths), info.DeleteSafetyTotal)
+	assert.Equal(t, len(paths), info.ConflictsTotal)
+	assert.Equal(t, len(paths), info.ConflictHistoryTotal)
+	assert.Equal(t, defaultVisiblePaths, info.ExamplesLimit)
+	assert.False(t, info.Verbose)
+}
+
+func TestBuildSyncStateInfo_VerboseExpandsSections(t *testing.T) {
+	t.Parallel()
+
+	paths := []string{"/one", "/two", "/three", "/four", "/five", "/six"}
+	deleteRows, conflicts, history := buildStatusSectionRows(paths, synctypes.ResolutionKeepBoth)
+
+	info := buildSyncStateInfo(
+		"personal:alice@example.com",
+		&syncstore.DriveStatusSnapshot{
+			IssueGroups: []syncstore.IssueGroupSnapshot{
+				{
+					SummaryKey:       synctypes.SummaryInvalidFilename,
+					PrimaryIssueType: string(synctypes.IssueInvalidFilename),
+					Count:            len(paths),
+					Paths:            paths,
+				},
+			},
+			DeleteSafety:    deleteRows,
+			Conflicts:       conflicts,
+			ConflictHistory: history,
+		},
+		driveStateStoreInfo{Status: stateStoreStatusHealthy},
+		true,
+		defaultVisiblePaths,
+	)
+
+	assert.Len(t, info.IssueGroups[0].Paths, len(paths))
+	assert.Len(t, info.DeleteSafety, len(paths))
+	assert.Len(t, info.Conflicts, len(paths))
+	assert.Len(t, info.ConflictHistory, len(paths))
+	assert.True(t, info.Verbose)
 }
 
 func TestPrintSummaryText_WithPendingAndRetrying(t *testing.T) {
@@ -1191,13 +1290,13 @@ func TestPrintSyncStateText_WithPendingAndIssues(t *testing.T) {
 	ss := &syncStateInfo{
 		LastSyncTime: "2026-03-02T10:30:00Z",
 		FileCount:    45,
-		Issues:       0,
+		IssueCount:   0,
 		PendingSync:  3,
 		Retrying:     2,
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printSyncStateText(&buf, ss))
+	require.NoError(t, printSyncStateText(&buf, ss, false))
 
 	output := buf.String()
 	assert.Contains(t, output, "Pending:   3 items")
@@ -1208,26 +1307,39 @@ func TestPrintSyncStateText_WithPendingAndIssues(t *testing.T) {
 func TestPrintSyncStateText_WithIssueGroups(t *testing.T) {
 	t.Parallel()
 
+	quotaDescriptor := synctypes.DescribeSummary(synctypes.SummaryQuotaExceeded)
+	invalidDescriptor := synctypes.DescribeSummary(synctypes.SummaryInvalidFilename)
+	authDescriptor := synctypes.DescribeSummary(synctypes.SummaryAuthenticationRequired)
 	ss := &syncStateInfo{
-		Issues:   3,
-		Retrying: 2,
-		IssueGroups: []statusIssueGroup{
+		IssueCount: 3,
+		Retrying:   2,
+		IssueGroups: []failureGroupJSON{
 			{
 				SummaryKey: string(synctypes.SummaryQuotaExceeded),
-				Title:      "QUOTA EXCEEDED",
+				IssueType:  string(synctypes.IssueQuotaExceeded),
+				Title:      quotaDescriptor.Title,
+				Reason:     quotaDescriptor.Reason,
+				Action:     quotaDescriptor.Action,
 				Count:      1,
 				ScopeKind:  "shortcut",
 				Scope:      "Shared/Team Docs",
+				Paths:      []string{"/quota/a.txt"},
 			},
 			{
 				SummaryKey: string(synctypes.SummaryInvalidFilename),
-				Title:      "INVALID FILENAME",
+				IssueType:  string(synctypes.IssueInvalidFilename),
+				Title:      invalidDescriptor.Title,
+				Reason:     invalidDescriptor.Reason,
+				Action:     invalidDescriptor.Action,
 				Count:      2,
-				ScopeKind:  "file",
+				Paths:      []string{"/bad:name.txt", "/worse:name.txt"},
 			},
 			{
 				SummaryKey: string(synctypes.SummaryAuthenticationRequired),
-				Title:      "AUTHENTICATION REQUIRED",
+				IssueType:  string(synctypes.IssueUnauthorized),
+				Title:      authDescriptor.Title,
+				Reason:     authDescriptor.Reason,
+				Action:     authDescriptor.Action,
 				Count:      1,
 				ScopeKind:  "account",
 				Scope:      "your OneDrive account authorization",
@@ -1236,7 +1348,7 @@ func TestPrintSyncStateText_WithIssueGroups(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printSyncStateText(&buf, ss))
+	require.NoError(t, printSyncStateText(&buf, ss, false))
 	requireGoldenText(t, "status_sync_state_with_issue_groups.golden", buf.String())
 }
 
@@ -1245,30 +1357,52 @@ func TestPrintSyncStateText_WithDurableIntentCountsAndHints(t *testing.T) {
 	t.Parallel()
 
 	ss := &syncStateInfo{
-		PendingHeldDeleteApprovals: 2,
-		PendingConflictRequests:    3,
-		ApplyingConflictRequests:   1,
-		ActionHints: []string{
-			"run `onedrive-go --drive personal:alice@example.com sync` or start `onedrive-go --drive personal:alice@example.com sync --watch` to execute approved deletes.",
-			"run `onedrive-go --drive personal:alice@example.com sync` or start `onedrive-go --drive personal:alice@example.com sync --watch` to apply queued resolutions.",
-			"wait for the active sync owner to finish, then run `onedrive-go --drive personal:alice@example.com status` again if needed.",
+		StateStoreStatus:         stateStoreStatusHealthy,
+		DeleteSafetyTotal:        1,
+		ApprovedDeletesWaiting:   1,
+		QueuedConflictRequests:   1,
+		ApplyingConflictRequests: 1,
+		DeleteSafety: []deleteSafetyJSON{
+			{
+				Path:       "/approved-delete.txt",
+				State:      stateHeldDeleteApproved,
+				ActionHint: "run `onedrive-go --drive personal:alice@example.com sync` or start `onedrive-go --drive personal:alice@example.com sync --watch` to execute approved deletes.",
+			},
+		},
+		ConflictsTotal: 2,
+		Conflicts: []statusConflictJSON{
+			{
+				Path:                "/queued-conflict.txt",
+				ConflictType:        "edit_edit",
+				State:               synctypes.ConflictStateQueued,
+				RequestedResolution: synctypes.ResolutionKeepLocal,
+				ActionHint:          "run `onedrive-go --drive personal:alice@example.com sync` or start `onedrive-go --drive personal:alice@example.com sync --watch` to apply queued resolutions.",
+			},
+			{
+				Path:                "/applying-conflict.txt",
+				ConflictType:        "edit_delete",
+				State:               synctypes.ConflictStateApplying,
+				RequestedResolution: synctypes.ResolutionKeepRemote,
+				ActionHint:          "wait for the active sync owner to finish, then run `onedrive-go --drive personal:alice@example.com status` again if needed.",
+			},
 		},
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printSyncStateText(&buf, ss))
+	require.NoError(t, printSyncStateText(&buf, ss, false))
 
 	output := buf.String()
-	assert.Contains(t, output, "Approved deletes waiting: 2")
-	assert.Contains(t, output, "Queued conflict resolutions: 3")
+	assert.Contains(t, output, "Approved deletes waiting: 1")
+	assert.Contains(t, output, "/approved-delete.txt")
+	assert.Contains(t, output, "Queued conflict resolutions: 1")
 	assert.Contains(t, output, "Applying conflicts: 1")
 	assert.Contains(t, output, "Next: run `onedrive-go --drive personal:alice@example.com sync` or start `onedrive-go --drive personal:alice@example.com sync --watch` to execute approved deletes.")
 	assert.Contains(t, output, "Next: run `onedrive-go --drive personal:alice@example.com sync` or start `onedrive-go --drive personal:alice@example.com sync --watch` to apply queued resolutions.")
 	assert.Contains(t, output, "Next: wait for the active sync owner to finish, then run `onedrive-go --drive personal:alice@example.com status` again if needed.")
 }
 
-func TestStatusService_Run_DetailedSingleDriveText(t *testing.T) {
-	cfgPath, cid := seedDetailedStatusFixture(t)
+func TestStatusService_Run_FilteredDriveText(t *testing.T) {
+	cfgPath, cid := seedDriveStatusFixture(t)
 
 	var out bytes.Buffer
 	cc := newServiceContext(&out, cfgPath)
@@ -1301,11 +1435,12 @@ func TestStatusService_Run_DetailedSingleDriveText(t *testing.T) {
 	assert.Contains(t, output, "CONFLICT HISTORY")
 	assert.Contains(t, output, "/resolved-conflict.txt [create_create]")
 	assert.Contains(t, output, "Resolved: keep_both by user")
-	assert.Contains(t, output, "State DB: healthy")
+	assert.Contains(t, output, "State DB:")
+	assert.Contains(t, output, "healthy")
 }
 
-func TestStatusService_Run_DetailedSingleDriveJSON(t *testing.T) {
-	cfgPath, cid := seedDetailedStatusFixture(t)
+func TestStatusService_Run_FilteredDriveJSON(t *testing.T) {
+	cfgPath, cid := seedDriveStatusFixture(t)
 
 	var out bytes.Buffer
 	cc := newServiceContext(&out, cfgPath)
@@ -1314,20 +1449,114 @@ func TestStatusService_Run_DetailedSingleDriveJSON(t *testing.T) {
 
 	require.NoError(t, newStatusService(cc).run(true))
 
-	var decoded detailedStatusOutput
+	var decoded statusOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
-	assert.Equal(t, cid.String(), decoded.Drive.CanonicalID)
-	assert.Equal(t, stateStoreStatusHealthy, decoded.StateStoreStatus)
-	assert.Len(t, decoded.IssueGroups, 1)
-	assert.Len(t, decoded.DeleteSafety, 2)
-	assert.Len(t, decoded.Conflicts, 3)
-	assert.Len(t, decoded.ConflictHistory, 1)
-	assertDetailedStatusNextActions(t, &decoded, cid.String())
-	assertDetailedStatusDeleteSafetyActionHints(t, &decoded, cid.String())
-	assertDetailedStatusConflictActionHints(t, &decoded, cid.String())
+	drive, syncState := requireSingleStatusDriveJSON(t, decoded, cid.String())
+	assert.Equal(t, cid.String(), drive.CanonicalID)
+	require.NotNil(t, syncState)
+	assert.Equal(t, stateStoreStatusHealthy, syncState.StateStoreStatus)
+	assert.Equal(t, defaultVisiblePaths, syncState.ExamplesLimit)
+	assert.False(t, syncState.Verbose)
+	assert.Len(t, syncState.IssueGroups, 1)
+	assert.Equal(t, 2, syncState.DeleteSafetyTotal)
+	assert.Len(t, syncState.DeleteSafety, 2)
+	assert.Equal(t, 3, syncState.ConflictsTotal)
+	assert.Len(t, syncState.Conflicts, 3)
+	assert.Equal(t, 1, syncState.ConflictHistoryTotal)
+	assert.Len(t, syncState.ConflictHistory, 1)
+	assertStatusNextActions(t, syncState, cid.String())
+	assertStatusDeleteSafetyActionHints(t, syncState, cid.String())
+	assertStatusConflictActionHints(t, syncState, cid.String())
 }
 
-func assertDetailedStatusNextActions(t *testing.T, decoded *detailedStatusOutput, canonicalID string) {
+func TestStatusService_Run_AllDrivesJSON_FilteredDriveIsSubset(t *testing.T) {
+	cfgPath, cids := seedMultiDriveStatusFixture(t, false)
+	selected := cids[0]
+
+	var allOut bytes.Buffer
+	allCtx := newServiceContext(&allOut, cfgPath)
+	allCtx.Flags.JSON = true
+	require.NoError(t, newStatusService(allCtx).run(false))
+
+	var filteredOut bytes.Buffer
+	filteredCtx := newServiceContext(&filteredOut, cfgPath)
+	filteredCtx.Flags.JSON = true
+	filteredCtx.Flags.Drive = []string{selected.String()}
+	require.NoError(t, newStatusService(filteredCtx).run(false))
+
+	var allDecoded statusOutput
+	require.NoError(t, json.Unmarshal(allOut.Bytes(), &allDecoded))
+	var filteredDecoded statusOutput
+	require.NoError(t, json.Unmarshal(filteredOut.Bytes(), &filteredDecoded))
+
+	assert.Equal(t, 2, allDecoded.Summary.TotalDrives)
+	assert.Equal(t, 1, filteredDecoded.Summary.TotalDrives)
+
+	allDrive, allSyncState := findStatusDriveJSON(t, allDecoded, selected.String())
+	filteredDrive, filteredSyncState := requireSingleStatusDriveJSON(t, filteredDecoded, selected.String())
+	assert.Equal(t, allDrive, filteredDrive)
+	require.NotNil(t, allSyncState)
+	require.NotNil(t, filteredSyncState)
+	assert.Equal(t, *allSyncState, *filteredSyncState)
+}
+
+func TestStatusService_Run_HistoryIncludesAllDisplayedDrives(t *testing.T) {
+	cfgPath, cids := seedMultiDriveStatusFixture(t, true)
+
+	var out bytes.Buffer
+	cc := newServiceContext(&out, cfgPath)
+	cc.Flags.JSON = true
+	require.NoError(t, newStatusService(cc).run(true))
+
+	var decoded statusOutput
+	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
+	assert.Equal(t, len(cids), decoded.Summary.TotalDrives)
+
+	for i := range cids {
+		_, syncState := findStatusDriveJSON(t, decoded, cids[i].String())
+		require.NotNil(t, syncState)
+		require.Len(t, syncState.ConflictHistory, 1)
+	}
+}
+
+func requireSingleStatusDriveJSON(
+	t *testing.T,
+	decoded statusOutput,
+	canonicalID string,
+) (statusDrive, *syncStateInfo) {
+	t.Helper()
+
+	drive, syncState := findStatusDriveJSON(t, decoded, canonicalID)
+	require.Equal(t, 1, decoded.Summary.TotalDrives, "expected filtered status output")
+	return drive, syncState
+}
+
+func findStatusDriveJSON(
+	t *testing.T,
+	decoded statusOutput,
+	canonicalID string,
+) (statusDrive, *syncStateInfo) {
+	t.Helper()
+
+	var (
+		foundDrive statusDrive
+		found      bool
+	)
+	for i := range decoded.Accounts {
+		for j := range decoded.Accounts[i].Drives {
+			drive := decoded.Accounts[i].Drives[j]
+			if drive.CanonicalID == canonicalID {
+				require.False(t, found, "expected exactly one drive in filtered status output")
+				foundDrive = drive
+				found = true
+			}
+		}
+	}
+	require.True(t, found, "expected drive %s in status output", canonicalID)
+	return foundDrive, foundDrive.SyncState
+}
+
+func assertStatusNextActions(t *testing.T, decoded *syncStateInfo, canonicalID string) {
 	t.Helper()
 
 	assert.Contains(t, decoded.NextActions, "run `onedrive-go --drive "+canonicalID+" resolve deletes`.")
@@ -1337,7 +1566,7 @@ func assertDetailedStatusNextActions(t *testing.T, decoded *detailedStatusOutput
 	assert.Contains(t, decoded.NextActions, "wait for the active sync owner to finish, then run `onedrive-go --drive "+canonicalID+" status` again if needed.")
 }
 
-func assertDetailedStatusDeleteSafetyActionHints(t *testing.T, decoded *detailedStatusOutput, canonicalID string) {
+func assertStatusDeleteSafetyActionHints(t *testing.T, decoded *syncStateInfo, canonicalID string) {
 	t.Helper()
 
 	var (
@@ -1358,7 +1587,7 @@ func assertDetailedStatusDeleteSafetyActionHints(t *testing.T, decoded *detailed
 	assert.True(t, approvedSeen)
 }
 
-func assertDetailedStatusConflictActionHints(t *testing.T, decoded *detailedStatusOutput, canonicalID string) {
+func assertStatusConflictActionHints(t *testing.T, decoded *syncStateInfo, canonicalID string) {
 	t.Helper()
 
 	var (
@@ -1408,12 +1637,14 @@ func TestStatusService_Run_DamagedStateStoreSurfacesRecoverHint(t *testing.T) {
 
 	require.NoError(t, newStatusService(cc).run(false))
 
-	var decoded detailedStatusOutput
+	var decoded statusOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
-	assert.Equal(t, stateStoreStatusDamaged, decoded.StateStoreStatus)
-	assert.NotEmpty(t, decoded.StateStoreError)
-	assert.Equal(t, recoverHintForDrive(cid.String()), decoded.StateStoreRecoveryHint)
-	assert.Contains(t, decoded.NextActions, recoverHintForDrive(cid.String()))
+	_, syncState := requireSingleStatusDriveJSON(t, decoded, cid.String())
+	require.NotNil(t, syncState)
+	assert.Equal(t, stateStoreStatusDamaged, syncState.StateStoreStatus)
+	assert.NotEmpty(t, syncState.StateStoreError)
+	assert.Equal(t, recoverHintForDrive(cid.String()), syncState.StateStoreRecoveryHint)
+	assert.Contains(t, syncState.NextActions, recoverHintForDrive(cid.String()))
 }
 
 func TestComputeSummary_AggregatesPendingAndRetrying(t *testing.T) {
@@ -1433,7 +1664,7 @@ func TestComputeSummary_AggregatesPendingAndRetrying(t *testing.T) {
 	assert.Equal(t, 5, s.TotalRetrying)
 }
 
-func seedDetailedStatusFixture(t *testing.T) (string, driveid.CanonicalID) {
+func seedDriveStatusFixture(t *testing.T) (string, driveid.CanonicalID) {
 	t.Helper()
 
 	setTestDriveHome(t)
@@ -1506,6 +1737,87 @@ func seedDetailedStatusFixture(t *testing.T) (string, driveid.CanonicalID) {
 	require.NoError(t, store.Close(context.Background()))
 
 	return cfgPath, cid
+}
+
+func seedMultiDriveStatusFixture(t *testing.T, withHistory bool) (string, []driveid.CanonicalID) {
+	t.Helper()
+
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cids := []driveid.CanonicalID{
+		driveid.MustCanonicalID("personal:first@example.com"),
+		driveid.MustCanonicalID("business:second@example.com"),
+	}
+
+	for i := range cids {
+		require.NoError(t, config.AppendDriveSection(cfgPath, cids[i], filepath.Join("~", fmt.Sprintf("Drive%d", i+1))))
+		store, err := syncstore.NewSyncStore(t.Context(), config.DriveStatePath(cids[i]), slog.New(slog.DiscardHandler))
+		require.NoError(t, err)
+
+		_, err = store.DB().ExecContext(t.Context(), `
+			INSERT INTO sync_metadata (key, value)
+			VALUES ('last_sync_time', ?);
+
+			INSERT INTO baseline
+				(drive_id, item_id, path, parent_id, item_type, local_hash, remote_hash,
+				 local_size, remote_size, local_mtime, remote_mtime, synced_at, etag)
+			VALUES
+				('d!1', ?, '/tracked.txt', 'root', 'file', 'lh', 'rh', 1, 1, 1, 1, 1, 'etag-1');`,
+			fmt.Sprintf("2026-04-0%dT10:30:00Z", i+1),
+			fmt.Sprintf("baseline-%d", i+1),
+		)
+		require.NoError(t, err)
+
+		if withHistory {
+			_, err = store.DB().ExecContext(t.Context(), `
+				INSERT INTO conflicts
+					(id, drive_id, item_id, path, conflict_type, detected_at, resolution, resolved_at, resolved_by)
+				VALUES
+					(?, 'd!1', ?, ?, 'edit_edit', 10, 'keep_remote', 20, 'user')`,
+				fmt.Sprintf("resolved-%d", i+1),
+				fmt.Sprintf("item-%d", i+1),
+				fmt.Sprintf("/resolved-%d.txt", i+1),
+			)
+			require.NoError(t, err)
+		}
+
+		require.NoError(t, store.Close(context.Background()))
+	}
+
+	return cfgPath, cids
+}
+
+func buildStatusSectionRows(
+	paths []string,
+	resolution string,
+) ([]syncstore.DeleteSafetySnapshot, []syncstore.ConflictStatusSnapshot, []syncstore.ConflictHistorySnapshot) {
+	deleteRows := make([]syncstore.DeleteSafetySnapshot, 0, len(paths))
+	conflicts := make([]syncstore.ConflictStatusSnapshot, 0, len(paths))
+	history := make([]syncstore.ConflictHistorySnapshot, 0, len(paths))
+	for i := range paths {
+		deleteRows = append(deleteRows, syncstore.DeleteSafetySnapshot{
+			Path:       paths[i],
+			State:      stateHeldDeleteHeld,
+			LastSeenAt: int64(i + 1),
+		})
+		conflicts = append(conflicts, syncstore.ConflictStatusSnapshot{
+			ID:           fmt.Sprintf("conflict-%d", i),
+			Path:         paths[i],
+			ConflictType: "edit_edit",
+			DetectedAt:   int64(i + 1),
+		})
+		history = append(history, syncstore.ConflictHistorySnapshot{
+			ID:           fmt.Sprintf("resolved-%d", i),
+			Path:         paths[i],
+			ConflictType: "edit_edit",
+			DetectedAt:   int64(i + 1),
+			Resolution:   resolution,
+			ResolvedAt:   int64(i + 10),
+		})
+	}
+
+	return deleteRows, conflicts, history
 }
 
 // createTestStateDB creates a minimal SQLite DB with tables matching the sync schema.
