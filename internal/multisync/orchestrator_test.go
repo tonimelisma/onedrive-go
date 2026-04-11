@@ -978,8 +978,7 @@ func TestOrchestrator_ControlSocket_StatusCountsUseReadOnlyInspector(t *testing.
 	status := getControlStatus(t, cfg.ControlSocketPath)
 	assert.Equal(t, 1, status.PendingHeldDeleteApprovals)
 	assert.Equal(t, 1, status.PendingConflictRequests)
-	assert.Zero(t, status.ResolvingConflictRequests)
-	assert.Zero(t, status.FailedConflictRequests)
+	assert.Zero(t, status.ApplyingConflictRequests)
 
 	stop := postControlJSON(t, cfg.ControlSocketPath, synccontrol.PathStop, nil)
 	assert.Equal(t, synccontrol.StatusStopping, stop.Status)

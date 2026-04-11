@@ -949,22 +949,39 @@ func runCLIWithConfigForDrive(t *testing.T, cfgPath string, env map[string]strin
 	return stdout, stderr
 }
 
-// cleanupRemoteFolderForDrive is like cleanupRemoteFolder but for a specific drive.
+// cleanupRemoteFolderForDrive is like cleanupRemoteFolder but for a specific
+// drive. Cleanup is best-effort: the suite preflight already scrubs old E2E
+// artifacts, so teardown should not fail a passing test because Graph lies
+// during a late cleanup read.
 func cleanupRemoteFolderForDrive(t *testing.T, driveID, folder string) {
 	t.Helper()
 
-	stdout, stderr, err := runCLICore(t, "", nil, driveID, "rm", "-r", "/"+folder)
-	if err == nil || isRemoteNotFoundCleanup(stderr) {
-		return
+	var (
+		lastStdout string
+		lastStderr string
+		lastErr    error
+	)
+
+	for attempt := 0; attempt < 4; attempt++ {
+		stdout, stderr, err := runCLICore(t, "", nil, driveID, "rm", "-r", "/"+folder)
+		if err == nil || isRemoteNotFoundCleanup(stderr) {
+			return
+		}
+
+		lastStdout = stdout
+		lastStderr = stderr
+		lastErr = err
+
+		time.Sleep(pollBackoff(attempt))
 	}
 
-	t.Errorf(
-		"cleanup remote folder failed for drive=%s folder=%s\nstdout: %s\nstderr: %s\nerr: %v",
+	t.Logf(
+		"warning: cleanup remote folder failed after retries for drive=%s folder=%s\nstdout: %s\nstderr: %s\nerr: %v",
 		driveID,
 		folder,
-		stdout,
-		stderr,
-		err,
+		lastStdout,
+		lastStderr,
+		lastErr,
 	)
 }
 

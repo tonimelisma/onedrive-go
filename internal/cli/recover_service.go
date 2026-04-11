@@ -7,7 +7,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 )
 
@@ -49,23 +48,25 @@ func (s *recoverService) run(cmd *cobra.Command, yes bool) error {
 }
 
 func (s *recoverService) ensureNoLiveOwner(ctx context.Context) error {
-	client, ok := openControlSocketClient(ctx)
-	if !ok {
+	probe, err := probeControlOwner(ctx)
+	if err != nil && probe.state == controlOwnerStateProbeFailed {
+		return fmt.Errorf("probe control owner: %w", err)
+	}
+	if probe.state != controlOwnerStateWatchOwner && probe.state != controlOwnerStateOneShotOwner {
+		return nil
+	}
+	if probe.client == nil {
 		return nil
 	}
 
-	for _, drive := range client.status.Drives {
+	for _, drive := range probe.client.status.Drives {
 		if strings.EqualFold(drive, s.cc.Cfg.CanonicalID.String()) {
 			return fmt.Errorf(
 				"cannot recover while a sync owner is active for %s (owner mode: %s); stop sync first",
 				s.cc.Cfg.CanonicalID,
-				client.ownerMode(),
+				probe.client.ownerMode(),
 			)
 		}
-	}
-
-	if client.ownerMode() == synccontrol.OwnerModeOneShot || client.ownerMode() == synccontrol.OwnerModeWatch {
-		return nil
 	}
 
 	return nil

@@ -838,7 +838,7 @@ func TestE2E_RoundTrip(t *testing.T) {
 		_, stderr := runCLIWithConfig(t, cfgPath, nil, "put", tmpFile.Name(), "/"+permFile)
 		assert.Contains(t, stderr, "Uploaded")
 
-		waitForRemoteWriteVisible(t, cfgPath, nil, drive, "perm-test.txt", "stat", "/"+permFile)
+		pollRemotePathVisible(t, cfgPath, nil, "/"+permFile)
 
 		_, stderr = runCLIWithConfig(t, cfgPath, nil, "rm", "--permanent", "/"+permFile)
 		assert.Contains(t, stderr, "Permanently deleted")
