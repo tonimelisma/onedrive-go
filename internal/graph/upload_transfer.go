@@ -300,7 +300,7 @@ func (c *Client) finalizeSimpleUpload(
 	// request body. Post-upload PATCH preserves local mtime on the server,
 	// preventing mtime mismatch on the next sync pass.
 	if !mtime.IsZero() {
-		patched, patchErr := doQuirkRetry(ctx, c, quirkRetrySpec{
+		patched, patchErr := doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
 			name:   "simple-upload-mtime-transient-404",
 			policy: c.simpleUploadMtimePolicy,
 			match:  isTransientSimpleUploadMtimeError,
@@ -366,7 +366,7 @@ func (c *Client) simpleUploadCreateByParent(
 		slog.Int64("size", size),
 	)
 
-	item, retryErr := doQuirkRetry(ctx, c, quirkRetrySpec{
+	item, retryErr := doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
 		name:   "simple-upload-create-transient-404",
 		policy: c.simpleUploadCreatePolicy,
 		match:  isTransientSimpleUploadCreateError,

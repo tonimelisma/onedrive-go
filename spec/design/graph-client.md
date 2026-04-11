@@ -130,8 +130,10 @@ error wrapped in `QuirkRetryError` without inventing auth-required or
 degraded-user semantics. `QuirkRetryError` records the quirk name plus the
 per-attempt request IDs, HTTP statuses, and most-specific Graph codes that
 exhausted the bounded retry budget, while still unwrapping to the terminal
-`GraphError` so `errors.Is` / `errors.As` behavior stays unchanged. CLI callers
-own the next step:
+`GraphError` so `errors.Is` / `errors.As` behavior stays unchanged. Callers
+that only need those facts can project them through `ExtractQuirkEvidence`
+without depending on the behavior-bearing wrapper directly. CLI callers own
+the next step:
 
 - `whoami` degrades to authenticated profile plus `/me/drive` fallback when possible
 - `drive list` degrades to best-known live discovery plus `/me/drive` fallback
@@ -241,7 +243,8 @@ That wrapper is part of the same wire-to-domain boundary: it adds quirk-level
 attempt evidence for caller logs and verifier output, but it does not create a
 second error classification scheme. Callers still branch on the unwrapped
 terminal cause (`ErrForbidden`, `ErrNotFound`, `*GraphError`, and so on), then
-optionally log the attached retry evidence when they intentionally degrade.
+optionally project the attached retry evidence through `ExtractQuirkEvidence`
+when they intentionally degrade or summarize verifier output.
 
 This package owns the wire-to-domain normalization step for remote failures:
 raw HTTP and Graph payloads become `GraphError` values plus sentinels such as
