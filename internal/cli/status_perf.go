@@ -137,6 +137,12 @@ func (ss *syncStateInfo) hasPersistentStatusData() bool {
 		return false
 	}
 
+	return ss.hasPersistentSummaryData() ||
+		ss.hasPersistentStoreData() ||
+		ss.hasPersistentSyncSectionData()
+}
+
+func (ss *syncStateInfo) hasPersistentSummaryData() bool {
 	return ss.LastSyncTime != "" ||
 		ss.LastSyncDuration != "" ||
 		ss.FileCount > 0 ||
@@ -145,20 +151,26 @@ func (ss *syncStateInfo) hasPersistentStatusData() bool {
 		ss.PendingSync > 0 ||
 		ss.Retrying > 0 ||
 		ss.LastError != "" ||
-		ss.StateStoreStatus != "" ||
-		ss.StateStoreError != "" ||
-		ss.StateStoreRecoveryHint != "" ||
-		ss.DeleteSafetyTotal > 0 ||
-		len(ss.DeleteSafety) > 0 ||
-		ss.ConflictsTotal > 0 ||
-		len(ss.Conflicts) > 0 ||
-		ss.ConflictHistoryTotal > 0 ||
-		len(ss.ConflictHistory) > 0 ||
 		len(ss.NextActions) > 0 ||
 		ss.HeldDeletesWaiting > 0 ||
 		ss.ApprovedDeletesWaiting > 0 ||
 		ss.QueuedConflictRequests > 0 ||
 		ss.ApplyingConflictRequests > 0
+}
+
+func (ss *syncStateInfo) hasPersistentStoreData() bool {
+	return ss.StateStoreStatus != "" ||
+		ss.StateStoreError != "" ||
+		ss.StateStoreRecoveryHint != ""
+}
+
+func (ss *syncStateInfo) hasPersistentSyncSectionData() bool {
+	return ss.DeleteSafetyTotal > 0 ||
+		len(ss.DeleteSafety) > 0 ||
+		ss.ConflictsTotal > 0 ||
+		len(ss.Conflicts) > 0 ||
+		ss.ConflictHistoryTotal > 0 ||
+		len(ss.ConflictHistory) > 0
 }
 
 func printStatusPerfText(w io.Writer, ss *syncStateInfo) error {

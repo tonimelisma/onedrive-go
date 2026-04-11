@@ -90,8 +90,8 @@ type syncStateInfo struct {
 	ApprovedDeletesWaiting   int                         `json:"approved_deletes_waiting,omitempty"`
 	QueuedConflictRequests   int                         `json:"queued_conflict_requests,omitempty"`
 	ApplyingConflictRequests int                         `json:"applying_conflict_requests,omitempty"`
-	Perf                       *perf.Snapshot     `json:"perf,omitempty"`
-	PerfUnavailableReason      string             `json:"perf_unavailable_reason,omitempty"`
+	Perf                     *perf.Snapshot              `json:"perf,omitempty"`
+	PerfUnavailableReason    string                      `json:"perf_unavailable_reason,omitempty"`
 }
 
 // statusSummary aggregates health info across all drives.
@@ -521,7 +521,7 @@ func printSyncStateText(w io.Writer, ss *syncStateInfo, history bool) error {
 		return nil
 	}
 
-	if ss.hasPersistentStatusData() {
+	if ss.hasPersistentStatusData() || (ss.Perf == nil && ss.PerfUnavailableReason == "") {
 		if err := printSyncStateSummaryLines(w, ss); err != nil {
 			return err
 		}
