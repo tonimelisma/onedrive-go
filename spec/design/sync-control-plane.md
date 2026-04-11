@@ -104,7 +104,7 @@ stay in `internal/cli`.
 
 The socket speaks JSON over HTTP:
 
-- `GET /v1/status` returns the owner mode (`oneshot` or `watch`) and managed drives. Watch owners also report pending durable-intent counts: approved held deletes plus queued/resolving/failed conflict requests. Those counters come from the read-only `syncstore.Inspector` boundary, not from opening a writable `SyncStore`, so status probes do not own checkpoint or close-side DB work. One-shot owners return those counters as zero/omitted because they are only exposing the owner lock/status surface, not running a long-lived intent loop.
+- `GET /v1/status` returns the owner mode (`oneshot` or `watch`) and managed drives. Watch owners also report pending durable-intent counts: approved held deletes plus queued/resolving/failed conflict requests. Those counters come from the read-only `syncstore.ReadDurableIntentCounts` boundary, not from opening a writable `SyncStore`, so status probes do not own checkpoint or close-side DB work. One-shot owners return those counters as zero/omitted because they are only exposing the owner lock/status surface, not running a long-lived intent loop.
 - `POST /v1/reload` reloads config in the watch owner.
 - `POST /v1/stop` asks the watch owner to stop cleanly.
 - `POST /v1/drives/{canonical-id}/held-deletes/approve` records durable held-delete approval for that drive and marks a pending user-intent pass for the runner.

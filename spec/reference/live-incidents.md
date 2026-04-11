@@ -16,9 +16,9 @@ of truth for what was seen, when it was seen, and how it was handled.
 | LI-20260408-02 | `CreateFolder` returned success status with an empty body | mitigated | graph quirk | 2026-04-08 | no |
 | LI-20260408-01 | Immediate post-simple-upload mtime PATCH returned `404 itemNotFound` | mitigated | graph quirk | 2026-04-08 | no |
 | LI-20260405-06 | Strict auth preflight treated transient `/me` or `/me/drives` glitches as durable failure | mitigated | graph quirk | 2026-04-10 | yes |
-| LI-20260405-09 | Recently created parent folder lagged child create routes | mitigated | graph quirk | 2026-04-08 | yes |
+| LI-20260405-09 | Recently created parent folder lagged child create routes | mitigated | graph quirk | 2026-04-10 | yes |
 | LI-20260405-08 | Delete-by-ID returned `404 itemNotFound` after successful path lookup | mitigated | graph quirk | 2026-04-07 | yes |
-| LI-20260405-07 | Destination path stayed unreadable after successful mutation | mitigated | graph quirk | 2026-04-09 | yes |
+| LI-20260405-07 | Destination path stayed unreadable after successful mutation | mitigated | graph quirk | 2026-04-10 | yes |
 | LI-20260407-04 | Shared-file preflight assumed only one configured recipient could open the raw link | fixed | test bug | 2026-04-07 | no |
 | LI-20260407-03 | Exact delete-target path lookup lagged parent listing during repeated sibling deletes | fixed | graph quirk | 2026-04-07 | no |
 | LI-20260407-02 | Keep-local conflict resolution used parent-route upload despite known item identity | fixed | product bug | 2026-04-07 | no |
@@ -235,6 +235,26 @@ Evidence:
   `BD50CF43646E28E6!sa7cb589636134fe4b1bf296e555fb410`, then exhausted the old
   final simple-upload replay budget with request ID
   `a9ad7aa8-ba79-424d-9ead-9b718939ddca`.
+- The same family recurred again on April 10, 2026 during local
+  `go run ./cmd/devtool verify default` in `TestE2E_RoundTrip/put`: the fresh
+  parent `/onedrive-go-e2e-1775869538090298000` was initially readable by path
+  lookup (`request-id: 789200c7-e924-42d6-b7b6-5e4c4b9d2dad`), but the child
+  create for `test.txt` still hit the documented fresh-parent path lag. The
+  fallback `POST ...:/createUploadSession` retried through request IDs
+  `53caf9d0-a53a-4a36-91ae-80f4edaa50e0`,
+  `a54221af-4bef-4591-ab24-e94b5a1d8e2e`,
+  `45bc7457-377d-434a-b00c-d4c702a89bbb`,
+  `121a4763-1951-4bf3-8020-e1e815b166c2`,
+  `9916ac49-9af8-4acd-98bd-28a64eced354`, and
+  `46d04eb1-07df-4141-adf8-7e31c20d48e8` before the replayed simple-upload path
+  also exhausted with final request ID `1f05a8a1-16e7-4e98-baad-72edfbe95218`.
+  The rest of `TestE2E_RoundTrip` then failed only because the original child
+  create never converged, leaving the parent path intermittently unreadable by
+  exact route while root listing still showed unrelated siblings.
+- An immediate isolated rerun on April 10, 2026 passed:
+  `go test -tags=e2e ./e2e -run TestE2E_RoundTrip -count=1`
+  completed successfully in about 66 seconds, confirming the same transient
+  fresh-parent create family rather than a deterministic product regression.
 Resolution / mitigation: `graph.Client.CreateUploadSession()` now owns a
 bounded retry for the exact fresh-parent `404 itemNotFound` case, and flows
 that already know the authoritative remote `itemID` avoid parent-route create
@@ -248,7 +268,7 @@ Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../
 ## LI-20260405-08: Delete-by-ID returned `404 itemNotFound` after successful path lookup
 
 First seen: 2026-04-05  
-Last seen: 2026-04-09
+Last seen: 2026-04-10
 Area: `e2e_full`, CLI `rm`, forced-overwrite cleanup  
 Suite / test: `go test -tags='e2e e2e_full' ./e2e -run '^TestE2E_EdgeCases$|^TestE2E_Sync_BidirectionalMerge$'`; later isolated `TestE2E_Sync_DeleteSafetyThreshold`
 Classification: graph quirk  
@@ -417,6 +437,19 @@ Evidence:
   `/onedrive-go-e2e-1775753944282690000`. Representative late request IDs from
   that failing run were exact-path `54cd8b32-1efd-4927-8583-faa972d45e7a` and
   root-children `38ebde5b-9ff5-487a-89db-45b85f704e4b`.
+- GitHub Actions PR `#456` `e2e` run on April 10, 2026 hit the same broader
+  family in `TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload`:
+  after `mkdir /e2e-sync-marker-1775870853588831314` had already produced a
+  readable parent item ID
+  `F1DA660E69BDEC82!s1905001a0a384fdeb1e03964b22f430d`, the immediate child
+  create `POST /drives/f1da660e69bdec82/items/F1DA660E69BDEC82!s1905001a0a384fdeb1e03964b22f430d/children`
+  still returned `404 itemNotFound` with request ID
+  `c98813fc-6726-4d1f-ad89-a8a7da8522b3`. Cleanup immediately afterward also
+  saw `/e2e-sync-marker-1775870853588831314` as missing by exact path with
+  request ID `aa7dda79-1cad-4129-b6a6-6c1f37ad75bd`, even though the earlier
+  setup had already used the same parent successfully. That extends the same
+  post-mutation visibility family from follow-on read lag to immediate
+  follow-on child-create instability.
 Resolution / mitigation: CLI mutation flows now treat destination visibility as
 a bounded driveops-owned convergence concern. `mkdir`, single-file `put`, and
 `mv` wait for the destination path to become readable before reporting success,

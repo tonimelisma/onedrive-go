@@ -325,19 +325,12 @@ func querySyncState(statePath string, logger *slog.Logger) *syncStateInfo {
 		return nil
 	}
 
-	inspector, err := syncstore.OpenInspector(statePath, logger)
+	ctx := context.Background()
+	snapshot, err := syncstore.ReadStatusSnapshot(ctx, statePath, logger)
 	if err != nil {
 		logger.Debug("could not open state DB for status", slog.String("error", err.Error()), slog.String("path", statePath))
 		return nil
 	}
-	defer func() {
-		if closeErr := inspector.Close(); closeErr != nil {
-			logger.Debug("could not close state DB inspector", slog.String("error", closeErr.Error()), slog.String("path", statePath))
-		}
-	}()
-
-	ctx := context.Background()
-	snapshot := inspector.ReadStatusSnapshot(ctx)
 	info := &syncStateInfo{
 		FileCount:                  snapshot.BaselineEntryCount,
 		Issues:                     snapshot.Issues.VisibleTotal(),

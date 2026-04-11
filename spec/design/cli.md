@@ -42,6 +42,7 @@ This keeps human/JSON command results separate from progress/status messages and
 | Watch-mode CLI wiring remains injectable at both the top-level watch-runner seam and the lower daemon-orchestrator seam, and target-scoped interactive/shared flows still work under live E2E coverage. | `internal/cli/signal_test.go` (`TestRunSyncWatch_FirstSignalCancelsWatchRunner`, `TestRunSyncWatch_FirstSignalCancelsDaemonOrchestrator`, `TestShutdownContext_FirstSignalCancels`, `TestShutdownContext_SecondSignalForcesExit`), `e2e/sync_watch_full_test.go` (`TestE2E_SyncWatch_ConflictDuringWatch`), `e2e/sync_full_test.go` (`TestE2E_Sync_EditDeleteConflict`, `TestE2E_Sync_EditEditConflict_ResolveKeepRemote`) |
 | Command-scoped log-file cleanup is rooted in the top-level CLI runner, so the active closer still shuts down exactly once when a leaf command replaces the logger and then returns an error before Cobra post-run hooks would fire. | `internal/cli/root_test.go` (`TestCLIContextReplaceCommandLogger_ClosesReplacedCloserAndTopLevelCloseClosesActiveCloser`, `TestCloseRootCommandLogger_ClosesActiveLoggerAfterCommandError`) |
 | CLI control-socket probing classifies watch owners, one-shot owners, missing sockets, path-unavailable sockets, and ambiguous probe failures distinctly so durable-intent fallback is intentional and daemon notifications stop collapsing protocol failures into "no daemon". | `internal/cli/control_socket_semantics_test.go` (`TestProbeControlOwner_ClassifiesOutcomes`, `TestIssuesApproveDeletes_WritesDirectDBIntentForOneShotOwner`, `TestConflictsResolve_FallsBackToDBIntentWhenNoDaemonSocketExists`, `TestIssuesApproveDeletes_FallsBackToDirectDBWhenControlSocketPathIsUnavailable`, `TestIssuesApproveDeletes_DoesNotFallbackWhenControlProbeIsAmbiguous`, `TestNotifyDaemon_ReportsAmbiguousProbeFailureClearly`), `internal/cli/sync_test.go` (`TestSyncService_Run_FailsLoudlyWhenControlSocketPathCannotBeDerivedForOneShot`, `TestSyncService_Run_FailsLoudlyWhenControlSocketPathCannotBeDerivedForWatch`) |
+| Read-only CLI sync-state surfaces consume store-owned one-shot projection helpers instead of managing inspector or writable-store lifecycle directly. | `internal/cli/issues_test.go` (`TestIssuesService_RunList_UsesReadOnlyInspector`), `internal/cli/conflicts_test.go` (`TestConflictsService_RunList_UsesReadOnlyProjectionHelper`), `internal/cli/status_test.go` (`TestQuerySyncState_UsesReadOnlyProjectionHelper`), `internal/cli/auth_health_test.go` (`TestClearAccountAuthScopes_ClearsPersistedAuthScope`, `TestStatusService_Run_DoesNotClearPersistedAuthScope`) |
 
 ## Command Structure
 
@@ -60,7 +61,7 @@ Implements: R-6.2.8 [verified], R-1.3.6 [verified], R-1.5.2 [verified], R-1.7.2 
 | `stat` | `stat.go` | Display item metadata |
 | `sync` | `sync.go` | Multi-drive sync command (see [sync-control-plane.md](sync-control-plane.md)) |
 | `pause`, `resume` | `pause.go`, `resume.go` | Pause/resume sync through `syncControlService`. `resume` also cleans up stale config keys from expired timed pauses (paused=true + past paused_until). |
-| `status` | `status.go` | Display account/drive status via `statusService` and read-only `syncstore.Inspector` snapshots, preserving separate issue groups per scope |
+| `status` | `status.go` | Display account/drive status via `statusService` and the read-only `syncstore.ReadStatusSnapshot` projection, preserving separate issue groups per scope |
 | `issues` | `issues.go` | Read-only issue listing plus held-delete approval via `issues approve-deletes` |
 | `conflicts` | `conflicts.go` | Conflict listing/history plus resolution via `conflicts resolve` |
 | `verify` | `verify.go` | Post-sync verification |
@@ -100,9 +101,9 @@ purpose:
 token/account-profile state plus persisted sync state to show best-known auth
 health, but they never probe Graph and never mutate `auth:account`.
 Offline auth-scope detection now goes through the read-only
-`syncstore.Inspector` boundary as an exact `auth:account` scope-block query;
-CLI auth-health helpers do not open the mutable `SyncStore` path just to read
-persisted auth state.
+`syncstore.HasScopeBlockAtPath` boundary as an exact `auth:account`
+scope-block query; CLI auth-health helpers do not open the mutable
+`SyncStore` path just to read persisted auth state.
 
 `internal/authstate` is the leaf package that owns the shared auth-health
 vocabulary and copy:
@@ -372,16 +373,18 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
 - Control-socket probing and log file opens use resolved paths from the CLI/config layer; the socket itself is owned by `internal/multisync`.
 - If the configured log file cannot be opened, CLI bootstrap warns through the CLI status writer and falls back to console-only logging instead of failing the command before any user-facing work can run.
 - Direct `runSync` and service-level tests cover caller-visible failure paths such as config-load errors, all-drives-paused/no-drives guidance, and log-file-open fallback warnings through the injected status/output writers rather than process-global stderr assumptions.
-- The status command uses a testable service layer with narrowed interfaces (`accountMetaReader`, `accountAuthChecker`, `syncStateQuerier`), decoupling status aggregation from Cobra wiring. The concrete state reader is `syncstore.Inspector`; CLI code no longer opens SQLite directly.
-- `issuesService.runList` also uses `syncstore.Inspector`. CLI formatting code
-  is no longer the owner of issue grouping or scope labeling semantics.
-- Offline auth-health projection also uses `syncstore.Inspector` for persisted
-  `auth:account` checks, so read-only CLI account discovery no longer pays the
-  writable-store checkpoint/close path.
+- The status command uses a testable service layer with narrowed interfaces (`accountMetaReader`, `accountAuthChecker`, `syncStateQuerier`), decoupling status aggregation from Cobra wiring. The concrete state reader is `syncstore.ReadStatusSnapshot`; CLI code no longer opens SQLite or manages inspector lifecycle directly.
+- `issuesService.runList` uses `syncstore.ReadIssuesSnapshot`, and
+  `conflictsService.runList` uses `syncstore.ListConflictsAtPath`. CLI
+  formatting code is no longer the owner of issue grouping, scope labeling,
+  conflict-history reads, or inspector lifecycle.
+- Offline auth-health projection uses `syncstore.HasScopeBlockAtPath` for
+  persisted `auth:account` checks, so read-only CLI account discovery no
+  longer pays the writable-store checkpoint/close path.
 - Control-socket status reporting shares that same read-only store boundary.
   CLI status aggregation and daemon `GET /v1/status` both consume
-  `syncstore.Inspector` projections instead of opening writable `SyncStore`
-  handles just to count durable intent.
+  `syncstore` read helpers instead of opening writable `SyncStore` handles
+  just to count durable intent.
 - Sync-domain issue/status presentation uses the shared
   [`synctypes.SummaryKey`](/Users/tonimelisma/Development/onedrive-go-shared-failure-summaries/internal/synctypes/summary_keys.go)
   contract. `issues` groups persisted failures by normalized summary key plus
@@ -420,9 +423,11 @@ Implements: R-2.3.3 [verified], R-2.3.4 [verified], R-2.3.5 [verified], R-2.3.6 
 - **Derived shared-folder issues**: `perm:remote` is displayed from held blocked-write rows, not from a standalone boundary issue. The CLI shows one visible issue per denied boundary only while blocked write intent still exists.
 - **Automatic shared-folder recovery**: shared-folder write blocks have no manual CLI controls. The engine rechecks permission state automatically during normal sync/watch passes while blocked writes still exist.
 - **Shared summary descriptors**: Every sync issue renders from the shared `SummaryKey` descriptor table, with the humanized scope shown separately. This keeps sync logs, `status`, and `issues` grouped by the same normalized issue family without duplicating display taxonomies in each layer.
-- **Store-owned read model**: `issues list` renders `IssuesSnapshot` from
-  `syncstore.Inspector`; the CLI does not rebuild groups from raw SQL rows.
-  This keeps the visible `issues` surface aligned with the same store-owned
+- **Store-owned read model**: `issues list` renders `IssuesSnapshot` through
+  `syncstore.ReadIssuesSnapshot`, and `conflicts` list/history read through
+  `syncstore.ListConflictsAtPath`; the CLI does not rebuild groups from raw
+  SQL rows or manage inspector lifecycle itself. This keeps the visible
+  `issues` and `conflicts` surfaces aligned with the same store-owned
   semantics that feed `status`.
 - **Auth scope display**: `auth:account` renders as an account-level `Authentication required` issue with no path list.
 - **Held-delete approval**: held deletes remain visible under `issues`, but approval is now one explicit command, `issues approve-deletes`, which moves only that drive's held-delete rows from `held` to `approved`. The engine consumes approved rows after successful matching delete execution.

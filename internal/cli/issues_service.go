@@ -31,17 +31,7 @@ func (s *issuesService) runList(ctx context.Context) error {
 		return s.writeEmptyIssues()
 	}
 
-	inspector, err := syncstore.OpenInspector(dbPath, s.cc.Logger)
-	if err != nil {
-		return fmt.Errorf("open sync store inspector: %w", err)
-	}
-	defer func() {
-		if closeErr := inspector.Close(); closeErr != nil {
-			s.cc.Logger.Debug("close sync store inspector", "error", closeErr.Error())
-		}
-	}()
-
-	snapshot, err := inspector.ReadIssuesSnapshot(ctx, false)
+	snapshot, err := syncstore.ReadIssuesSnapshot(ctx, dbPath, false, s.cc.Logger)
 	if err != nil {
 		return fmt.Errorf("read issues snapshot: %w", err)
 	}
