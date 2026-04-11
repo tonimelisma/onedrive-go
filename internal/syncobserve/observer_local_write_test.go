@@ -43,15 +43,7 @@ func TestWatch_HashFailureModifyStillEmitsEvent(t *testing.T) {
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
 	events := make(chan synctypes.ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
-
-	// Let the watcher settle.
-	time.Sleep(100 * time.Millisecond)
+	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	// Make file write-only (stat succeeds, hash computation fails).
 	require.NoError(t, os.Chmod(filePath, 0o200))

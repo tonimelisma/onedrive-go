@@ -127,14 +127,7 @@ func TestWatch_DetectsFileModify(t *testing.T) {
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
 	events := make(chan synctypes.ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
+	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	// Modify the file.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "existing.txt"), []byte("modified"), 0o600))
@@ -163,14 +156,7 @@ func TestWatch_IgnoresExcludedFiles(t *testing.T) {
 	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
 
 	events := make(chan synctypes.ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
+	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	// Create an excluded file — should not produce an event.
 	writeTestFile(t, dir, "temp.tmp", "temporary")

@@ -244,6 +244,11 @@ The engine relies on a few non-negotiable behavioral invariants:
    not-yet-dispatched outbox actions as shutdown, and never admit new work
    afterward. Already-dispatched actions may still finish if workers produce
    results before they exit.
+9. **Durable-intent admission gate**: watch-mode user intent is level-triggered
+   loop state, not an edge-triggered channel contract. Recheck ticks and live
+   control-socket wakes may both set `userIntentPending`, but only
+   `settleWatchAdmission` may clear it, and only when ordinary outbox work is
+   empty and `depGraph` has no remaining in-flight actions.
 
 ## Verified By
 
@@ -254,7 +259,8 @@ The engine relies on a few non-negotiable behavioral invariants:
 | Watch shutdown seals admission, stops retry/trial wake handling, and drops reconcile handoff after drain begins. | `TestRunWatch_ShutdownStopsRetryAndTrialTimers`, `TestRunWatch_ShutdownDropsReconcileResult`, `TestRunFullReconciliationAsync_ShutdownAfterCommit` |
 | Cancellation wins over fatal observer-exit shutdown races, and fallback waits honor cancellation without wall-clock sleeps. | `TestRunWatch_ContextCancel`, `TestRunWatch_CancellationWinsOverFinalObserverExit`, `TestRunWatch_FallbackSleepHonorsCancellation` |
 | Held-delete approval is engine-owned durable intent and authorizes execution only for matching drive/action/path/item identity. | `TestRunOnce_DeleteSafety_ApprovedDeletesBypassHold`, `TestRunOnce_DeleteSafety_StaleApprovalWithDifferentItemIDDoesNotBypassHold` |
-| User-intent wakes from both live control-socket mutations and offline recheck/data-version detection stay pending until the watch outbox drains, so a wake received while other work is queued is not lost. | `TestRunWatchStep_UserIntentWakeStaysPendingUntilOutboxDrains`, `TestRunWatchStep_RecheckWakeStaysPendingUntilOutboxDrains` |
+| User-intent wakes from both live control-socket mutations and offline recheck/data-version detection stay pending until both the watch outbox and the in-flight dependency graph drain, so a wake received while other work is queued or still executing is not lost. | `TestRunWatchStep_UserIntentWakeStaysPendingUntilOutboxDrains`, `TestRunWatchStep_RecheckWakeStaysPendingUntilOutboxDrains`, `TestRunWatchStep_UserIntentWakeStaysPendingUntilInFlightCompletes`, `TestRunWatchStep_WorkerResultCompletionAdmitsPendingUserIntent` |
+| Repeated wakes coalesce into one durable-intent dispatch regardless of whether the select loop sees recheck ticks, live socket wakes, or worker-result completion first. The scheduled/manual stress lane compiles additional watch-order probes under the `stress` build tag so dual-ready select races stay out of `verify default`. | `TestRunWatchStep_RepeatedUserIntentWakesCoalesceWhileInFlight`, `TestRunWatchStep_RecheckAndUserIntentWakeCoalesceWhenBothReady`, `TestRunWatchStep_DrainDoesNotAdmitPendingUserIntent`, `TestWatchOrderingStress_UserIntentWakeAndWorkerResultRace`, `TestWatchOrderingStress_RecheckAndUserIntentWakeCoalesce` |
 
 ### Runtime Ownership
 

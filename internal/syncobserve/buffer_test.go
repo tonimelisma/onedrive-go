@@ -845,19 +845,25 @@ func TestFlushDebounced_SlowConsumer(t *testing.T) {
 		Path: "slow-a.txt", Name: "slow-a.txt", ItemType: synctypes.ItemTypeFile,
 	})
 
-	// Wait for the first batch to be flushed into the channel.
-	time.Sleep(debounce * 3)
+	require.Eventually(t, func() bool {
+		return len(out) == 1
+	}, 5*time.Second, 10*time.Millisecond, "first debounced batch should be waiting in the output channel")
 
 	// Inject second wave while the first batch is still unread (slow consumer).
 	// These events accumulate in the buffer because the debounce loop is
 	// blocked trying to send the first batch.
+	secondWave := make([]synctypes.ChangeEvent, 0, 5)
 	for i := range 5 {
-		buf.Add(&synctypes.ChangeEvent{
+		secondWave = append(secondWave, synctypes.ChangeEvent{
 			Source: synctypes.SourceLocal, Type: synctypes.ChangeCreate,
 			Path: fmt.Sprintf("slow-b%d.txt", i), Name: fmt.Sprintf("slow-b%d.txt", i),
 			ItemType: synctypes.ItemTypeFile,
 		})
 	}
+	// Add the whole wave under one lock acquisition so the debounce timer
+	// cannot split the intended accumulated batch while the stress lane is
+	// heavily loaded.
+	buf.AddAll(secondWave)
 
 	// Now consume the first batch (unblock the debounce loop).
 	select {

@@ -21,6 +21,7 @@ import (
 // Watch tests — file/directory deletion
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.1.2
 func TestWatch_DetectsFileDelete(t *testing.T) {
 	t.Parallel()
 
@@ -34,14 +35,7 @@ func TestWatch_DetectsFileDelete(t *testing.T) {
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
 	events := make(chan synctypes.ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
+	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	require.NoError(t, os.Remove(filepath.Join(dir, "doomed.txt")))
 
@@ -64,6 +58,7 @@ func TestWatch_DetectsFileDelete(t *testing.T) {
 // TestWatch_DeleteDirectoryRemovesWatch verifies that deleting a watched
 // directory emits a ChangeDelete event and the watch continues to function
 // normally for other events (B-112).
+// Validates: R-2.1.2
 func TestWatch_DeleteDirectoryRemovesWatch(t *testing.T) {
 	t.Parallel()
 
@@ -78,14 +73,7 @@ func TestWatch_DeleteDirectoryRemovesWatch(t *testing.T) {
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
 	events := make(chan synctypes.ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
+	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	// Delete the subdirectory.
 	require.NoError(t, os.Remove(subDir))
