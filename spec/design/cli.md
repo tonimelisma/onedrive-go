@@ -43,7 +43,7 @@ This keeps human/JSON command results separate from progress/status messages and
 | Command-scoped log-file cleanup is rooted in the top-level CLI runner, so the active closer still shuts down exactly once when a leaf command replaces the logger and then returns an error before Cobra post-run hooks would fire. | `internal/cli/root_test.go` (`TestCLIContextReplaceCommandLogger_ClosesReplacedCloserAndTopLevelCloseClosesActiveCloser`, `TestCloseRootCommandLogger_ClosesActiveLoggerAfterCommandError`) |
 | CLI control-socket probing classifies watch owners, one-shot owners, missing sockets, path-unavailable sockets, and ambiguous probe failures distinctly so durable-intent fallback is intentional and daemon notifications stop collapsing protocol failures into "no daemon". | `internal/cli/control_socket_semantics_test.go` (`TestProbeControlOwner_ClassifiesOutcomes`, `TestResolveDeletes_WritesDirectDBIntentForOneShotOwner`, `TestResolveConflict_FallsBackToDBIntentWhenNoDaemonSocketExists`, `TestResolveDeletes_FallsBackToDirectDBWhenControlSocketPathIsUnavailable`, `TestResolveDeletes_DoesNotFallbackWhenControlProbeIsAmbiguous`, `TestNotifyDaemon_ReportsAmbiguousProbeFailureClearly`), `internal/cli/sync_test.go` (`TestSyncService_Run_FailsLoudlyWhenControlSocketPathCannotBeDerivedForOneShot`, `TestSyncService_Run_FailsLoudlyWhenControlSocketPathCannotBeDerivedForWatch`) |
 | Read-only CLI sync-state surfaces consume store-owned one-shot projection helpers instead of managing inspector or writable-store lifecycle directly. | `internal/cli/status_test.go` (`TestQuerySyncState_UsesReadOnlyProjectionHelper`, `TestStatusService_Run_DamagedStateStoreSurfacesRecoverHint`), `internal/cli/auth_health_test.go` (`TestClearAccountAuthScopes_ClearsPersistedAuthScope`, `TestStatusService_Run_DoesNotClearPersistedAuthScope`) |
-| When `/me/drives` retry exhaustion forces authenticated degraded discovery, CLI logs preserve the attached Graph quirk attempt evidence instead of flattening the failure to one opaque error string. | `internal/cli/degraded_discovery_log_test.go`, `internal/graph/quirk_retry_error_test.go`, `e2e/auth_preflight_helpers_test.go` |
+| When `/me/drives` retry exhaustion forces authenticated degraded discovery, CLI logs preserve one shared degraded-discovery evidence shape (`account`, `endpoint`, quirk attempts) instead of flattening the failure to one opaque error string or letting each caller invent its own fields. | `internal/cli/degraded_discovery_log_test.go`, `internal/graph/quirk_retry_error_test.go`, `e2e/auth_preflight_helpers_test.go` |
 
 ## Command Structure
 
@@ -203,10 +203,14 @@ how to turn retry exhaustion into useful user-facing output instead of dropping
 usable local state or mislabeling the account as logged out.
 
 When the degraded transition is caused by an exhausted documented Graph quirk
-retry, the CLI also logs the attached `graph.QuirkRetryError` evidence
-(`graph_quirk`, attempt count, per-attempt request IDs/statuses/codes). That
-evidence is for operators and incident triage only; human-readable and JSON
-command output stay on the existing `accounts_degraded` contract.
+retry, the CLI also logs one shared degraded-discovery warning per
+account+endpoint after the caller-owned snapshot is built. That warning
+projects the attached retry evidence through `graph.ExtractQuirkEvidence`
+(`graph_quirk`, attempt count, per-attempt request IDs/statuses/codes) and
+always includes the degraded discovery endpoint (`/me/drives` today). Deep
+discovery helpers return data/errors only; they do not own operator-facing log
+policy. The evidence is for operators and incident triage only; human-readable
+and JSON command output stay on the existing `accounts_degraded` contract.
 
 After a plain logout, the account is no longer in config but its
 `account_*.json` profile file remains on disk. `whoami` still discovers these
@@ -357,7 +361,7 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
   - `recycleBinService`: recycle-bin list/restore/empty flows
   - `syncService`: multi-drive sync command assembly
   - `recoverService`: sync-database recovery flow
-- `accountReadModelService` is the shared read-model collaborator under `statusService`, `authService`, `driveService`, and `sharedService`. It owns lenient config loading, warning logging, offline account/auth projection, and the best-effort account-identity refresh used before read-model-backed live discovery commands build their catalogs.
+- `accountReadModelService` is the shared read-model collaborator under `statusService`, `authService`, `driveService`, and `sharedService`. It owns lenient config loading, warning logging, offline account/auth projection, the best-effort account-identity refresh used before read-model-backed live discovery commands build their catalogs, and the typed drive-list discovery snapshot (`configured`, `available`, `accounts_requiring_auth`, `accounts_degraded`) that `driveService` renders.
 - `sharedDiscoveryService` is the CLI-owned live-discovery collaborator for shared items. It owns live search, target normalization, enrichment, deduplication, and auth-vs-degraded classification for `shared`, the shared-folder portion of `drive list`, and name-based `drive add`. It consumes whatever refreshed account-catalog slice the caller passes; caller-owned account filtering stays outside this core so `drive list` can remain inventory-consistent while `shared` and name-based `drive add` still honor `--account`. Per-account discovery tries all available token IDs before surfacing auth-required or degraded output. It does not perform its own `/me` reconciliation pass.
 - `SessionProvider` caches `TokenSource`s by token file path — multiple drives sharing an account share one `TokenSource`, preventing OAuth2 refresh token rotation races.
 - `CLIContext` owns one `graphhttp.Provider` per command/watch runtime. Bootstrap/auth-discovery flows use `BootstrapMeta()`. Once both account and remote target identity are known, CLI passes target-scoped interactive client resolvers into `driveops.SessionProvider`: configured drives key by drive ID, configured shared roots key by remote root item, and direct shared-item commands key by `(remoteDriveID, remoteItemID)`. Sync paths request `Sync()` profiles instead. HTTP policy constants and client reuse live in `internal/graphhttp`, not `internal/cli`.

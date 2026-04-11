@@ -737,7 +737,10 @@ type debugEventRecorder struct {
 	history []engineDebugEvent
 }
 
-const debugEventTimeout = 2 * time.Second
+// debugEventTimeout gives race-covered watch tests enough headroom to observe
+// bootstrap and shutdown events under the repo's full verify load. These tests
+// validate event ordering, not sub-second latency.
+const debugEventTimeout = 10 * time.Second
 
 func attachDebugEventRecorder(eng *testEngine) *debugEventRecorder {
 	recorder := &debugEventRecorder{

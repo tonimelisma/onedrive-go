@@ -11,13 +11,13 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
-type quirkRetrySpec struct {
+type documentedGraphQuirkSpec struct {
 	name   string
 	policy retry.Policy
 	match  func(error) (*GraphError, bool)
 }
 
-func doQuirkRetry[T any](ctx context.Context, c *Client, spec quirkRetrySpec, op func() (T, error)) (T, error) {
+func doDocumentedGraphQuirkRetry[T any](ctx context.Context, c *Client, spec documentedGraphQuirkSpec, op func() (T, error)) (T, error) {
 	var zero T
 	attempts := make([]QuirkRetryAttempt, 0, spec.policy.MaxAttempts)
 

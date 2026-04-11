@@ -23,7 +23,7 @@ func TestDoQuirkRetry_ExhaustionWrapsTerminalErrorWithAttemptEvidence(t *testing
 	client.logger = slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	var attemptCount int
-	_, err := doQuirkRetry[string](t.Context(), client, quirkRetrySpec{
+	_, err := doDocumentedGraphQuirkRetry[string](t.Context(), client, documentedGraphQuirkSpec{
 		name: "drives-token-propagation",
 		policy: retry.Policy{
 			MaxAttempts: 2,
@@ -86,7 +86,7 @@ func TestDoQuirkRetry_NonRetryableFailureDoesNotWrap(t *testing.T) {
 		Err:        ErrForbidden,
 	}
 
-	_, err := doQuirkRetry[string](t.Context(), client, quirkRetrySpec{
+	_, err := doDocumentedGraphQuirkRetry[string](t.Context(), client, documentedGraphQuirkSpec{
 		name: "drives-token-propagation",
 		policy: retry.Policy{
 			MaxAttempts: 2,
@@ -155,4 +155,48 @@ func TestQuirkRetryError_UnwrapsTerminalError(t *testing.T) {
 	require.ErrorAs(t, err, &graphErr)
 	assert.Equal(t, "req-1", graphErr.RequestID)
 	assert.Equal(t, time.Second, graphErr.RetryAfter)
+}
+
+func TestExtractQuirkEvidence_ReturnsStructuredEvidenceForQuirkRetryError(t *testing.T) {
+	t.Parallel()
+
+	err := &QuirkRetryError{
+		Quirk: "drives-token-propagation",
+		Attempts: []QuirkRetryAttempt{
+			{
+				Attempt:    1,
+				StatusCode: http.StatusForbidden,
+				GraphCode:  "accessDenied",
+				RequestID:  "req-1",
+			},
+			{
+				Attempt:   2,
+				RequestID: "req-2",
+			},
+		},
+		Err: fmt.Errorf("terminal: %w", ErrForbidden),
+	}
+
+	evidence, ok := ExtractQuirkEvidence(err)
+	require.True(t, ok)
+	assert.Equal(t, "drives-token-propagation", evidence.Quirk)
+	require.Len(t, evidence.Attempts, 2)
+	assert.Equal(t, http.StatusForbidden, evidence.Attempts[0].StatusCode)
+	assert.Equal(t, "accessDenied", evidence.Attempts[0].GraphCode)
+	assert.Equal(t, "req-2", evidence.Attempts[1].RequestID)
+
+	evidence.Attempts[0].RequestID = "mutated"
+
+	again, ok := ExtractQuirkEvidence(err)
+	require.True(t, ok)
+	assert.Equal(t, "req-1", again.Attempts[0].RequestID)
+}
+
+func TestExtractQuirkEvidence_NonQuirkErrorsReturnFalse(t *testing.T) {
+	t.Parallel()
+
+	evidence, ok := ExtractQuirkEvidence(fmt.Errorf("wrapped: %w", ErrForbidden))
+	assert.False(t, ok)
+	assert.Empty(t, evidence.Quirk)
+	assert.Empty(t, evidence.Attempts)
 }

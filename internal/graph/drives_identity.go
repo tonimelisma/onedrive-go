@@ -41,7 +41,7 @@ func (c *Client) Me(ctx context.Context) (*User, error) {
 func (c *Client) Drives(ctx context.Context) ([]Drive, error) {
 	c.logger.Info("listing accessible drives")
 
-	return doQuirkRetry(ctx, c, quirkRetrySpec{
+	return doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
 		name:   "drives-token-propagation",
 		policy: c.driveDiscoveryPolicy,
 		match:  isTransientDrivesDiscoveryError,

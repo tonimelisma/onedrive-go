@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/failures"
@@ -15,6 +17,13 @@ import (
 type accountReadModelSnapshot struct {
 	Config  *config.Config
 	Catalog []accountCatalogEntry
+}
+
+type driveListReadModelSnapshot struct {
+	Configured            []driveListEntry
+	Available             []driveListEntry
+	AccountsRequiringAuth []accountAuthRequirement
+	AccountsDegraded      []accountDegradedNotice
 }
 
 type accountReadModelService struct {
@@ -81,4 +90,58 @@ func (s *accountReadModelService) whoamiAuthRequired(
 	authenticatedEmail string,
 ) []accountAuthRequirement {
 	return whoamiAuthRequiredAccounts(snapshot.Catalog, authenticatedEmail)
+}
+
+func (s *accountReadModelService) loadDriveListSnapshot(
+	ctx context.Context,
+	showAll bool,
+) (driveListReadModelSnapshot, error) {
+	catalogSnapshot, err := s.loadLenientCatalogWithBestEffortIdentityRefresh(ctx)
+	if err != nil {
+		return driveListReadModelSnapshot{}, err
+	}
+
+	logger := s.cc.Logger
+	configured := buildConfiguredDriveEntries(catalogSnapshot.Config, logger)
+	configuredAuth := catalogAuthByEmail(catalogSnapshot.Catalog)
+	annotateConfiguredDriveAuth(configured, configuredAuth)
+
+	siteLimit := sharePointSiteLimit
+	if showAll {
+		siteLimit = sharePointSiteUnlimited
+	}
+
+	recorder := newAuthProofRecorder(logger)
+	available, discoveredAuthRequired, discoveredDegraded := discoverAvailableDrives(
+		ctx,
+		catalogSnapshot.Config,
+		catalogSnapshot.Catalog,
+		siteLimit,
+		logger,
+		recorder,
+		s.cc.GraphBaseURL,
+		s.cc.httpProvider(),
+	)
+	sharedDiscovery := newSharedDiscoveryService(s.cc).discoverTargets(ctx, catalogSnapshot.Catalog)
+	available = append(available, sharedFoldersToEntries(projectSharedFolders(catalogSnapshot.Config, sharedDiscovery.Targets))...)
+	slices.SortFunc(available, func(a, b driveListEntry) int {
+		return cmp.Compare(a.CanonicalID, b.CanonicalID)
+	})
+	annotateStateDB(available)
+
+	authRequired := mergeAuthRequirements(
+		s.authRequirements(catalogSnapshot, func(accountCatalogEntry) bool {
+			return true
+		}),
+		discoveredAuthRequired,
+		sharedDiscovery.AccountsRequiringAuth,
+	)
+	degraded := mergeDegradedNotices(discoveredDegraded, sharedDiscovery.AccountsDegraded)
+
+	return driveListReadModelSnapshot{
+		Configured:            configured,
+		Available:             available,
+		AccountsRequiringAuth: authRequired,
+		AccountsDegraded:      degraded,
+	}, nil
 }

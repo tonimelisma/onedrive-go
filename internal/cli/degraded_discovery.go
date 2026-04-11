@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -12,6 +11,7 @@ import (
 const (
 	driveCatalogUnavailableReason    = "drive_catalog_unavailable"
 	sharedDiscoveryUnavailableReason = "shared_discovery_unavailable"
+	graphMeDrivesEndpoint            = "/me/drives"
 )
 
 type accountDegradedNotice struct {
@@ -152,20 +152,21 @@ func printAccountDegradedText(w io.Writer, header string, items []accountDegrade
 	return nil
 }
 
-func degradedDiscoveryLogAttrs(account string, err error) []any {
+func degradedDiscoveryLogAttrs(account, endpoint string, err error) []any {
 	attrs := []any{
 		"account", account,
+		"endpoint", endpoint,
 		"error", err,
 	}
 
-	var quirkErr *graph.QuirkRetryError
-	if !errors.As(err, &quirkErr) {
+	evidence, ok := graph.ExtractQuirkEvidence(err)
+	if !ok {
 		return attrs
 	}
 
 	return append(attrs,
-		"graph_quirk", quirkErr.Quirk,
-		"graph_quirk_attempt_count", len(quirkErr.Attempts),
-		"graph_quirk_attempts", quirkErr.Attempts,
+		"graph_quirk", evidence.Quirk,
+		"graph_quirk_attempt_count", len(evidence.Attempts),
+		"graph_quirk_attempts", evidence.Attempts,
 	)
 }

@@ -54,6 +54,14 @@ type QuirkRetryAttempt struct {
 	RequestID  string `json:"requestId,omitempty"`
 }
 
+// QuirkEvidence is the narrow reusable projection of bounded documented-quirk
+// retry evidence. It intentionally carries facts only; behavior and unwrapping
+// remain on QuirkRetryError.
+type QuirkEvidence struct {
+	Quirk    string              `json:"quirk"`
+	Attempts []QuirkRetryAttempt `json:"attempts,omitempty"`
+}
+
 // QuirkRetryError wraps the terminal error returned after a bounded documented
 // Graph quirk retry budget is exhausted. It preserves the original cause for
 // errors.Is / errors.As while exposing the retry evidence for callers that need
@@ -82,6 +90,21 @@ func (e *QuirkRetryError) Unwrap() error {
 	}
 
 	return e.Err
+}
+
+// ExtractQuirkEvidence projects structured retry evidence from a wrapped
+// QuirkRetryError without asking callers to depend on the behavior-bearing
+// error type directly.
+func ExtractQuirkEvidence(err error) (QuirkEvidence, bool) {
+	var quirkErr *QuirkRetryError
+	if !errors.As(err, &quirkErr) || quirkErr == nil {
+		return QuirkEvidence{}, false
+	}
+
+	return QuirkEvidence{
+		Quirk:    quirkErr.Quirk,
+		Attempts: append([]QuirkRetryAttempt(nil), quirkErr.Attempts...),
+	}, true
 }
 
 func (e *GraphError) Error() string {

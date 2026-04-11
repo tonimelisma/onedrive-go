@@ -332,7 +332,7 @@ func discoverAccessibleDrives(
 			return nil, []accountAuthRequirement{tokenAuthRequirement(tokenCID, authReasonSyncAuthRejected, logger)}, nil
 		}
 		logger.Warn("degrading drive-list live discovery after /me/drives failure",
-			degradedDiscoveryLogAttrs(tokenCID.String(), err)...,
+			degradedDiscoveryLogAttrs(tokenCID.Email(), graphMeDrivesEndpoint, err)...,
 		)
 
 		notice := tokenDriveCatalogDegradedNotice(catalog, tokenCID, logger)
