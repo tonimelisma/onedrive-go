@@ -47,7 +47,7 @@ func (c *Client) CreateUploadSession(
 		return nil, fmt.Errorf("graph: marshaling upload session request: %w", err)
 	}
 
-	resp, err := doQuirkRetry(ctx, c, quirkRetrySpec{
+	resp, err := doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
 		name:   "upload-session-create-transient-404",
 		policy: c.uploadSessionCreatePolicy,
 		match:  isTransientUploadSessionCreateError,

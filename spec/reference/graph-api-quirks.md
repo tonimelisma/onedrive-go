@@ -500,6 +500,9 @@ Runtime policy:
   and most-specific Graph codes in a typed `graph.QuirkRetryError`, so CLI
   degraded-mode logs and incident triage can preserve the exact observed
   projection-lag evidence without changing runtime behavior
+- callers that only need those facts project them through
+  `graph.ExtractQuirkEvidence`; the quirk wrapper remains the behavior-bearing
+  error so retry classification does not leak into a second generic error model
 - scheduled/manual `devtool verify e2e-full --classify-live-quirks` may rerun
   the strict auth preflight once for this exact known quirk and only downgrade
   it when the rerun passes; required per-PR lanes stay strict

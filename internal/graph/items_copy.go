@@ -56,7 +56,7 @@ func (c *Client) CopyItem(
 		return nil, fmt.Errorf("graph: marshaling copy request: %w", err)
 	}
 
-	resp, err := doQuirkRetry(ctx, c, quirkRetrySpec{
+	resp, err := doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
 		name:   "copy-destination-transient-404",
 		policy: c.copyDestinationPolicy,
 		match:  isTransientCopyDestinationError,

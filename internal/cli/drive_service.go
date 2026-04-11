@@ -1,10 +1,8 @@
 package cli
 
 import (
-	"cmp"
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
@@ -21,50 +19,29 @@ func newDriveService(cc *CLIContext) *driveService {
 }
 
 func (s *driveService) runList(ctx context.Context, showAll bool) error {
-	logger := s.cc.Logger
-	recorder := newAuthProofRecorder(logger)
-
 	readModel := newAccountReadModelService(s.cc)
-	snapshot, err := readModel.loadLenientCatalogWithBestEffortIdentityRefresh(ctx)
+	snapshot, err := readModel.loadDriveListSnapshot(ctx, showAll)
 	if err != nil {
 		return err
 	}
 
-	configured := buildConfiguredDriveEntries(snapshot.Config, logger)
-	configuredAuth := catalogAuthByEmail(snapshot.Catalog)
-	annotateConfiguredDriveAuth(configured, configuredAuth)
-
-	siteLimit := sharePointSiteLimit
-	if showAll {
-		siteLimit = sharePointSiteUnlimited
-	}
-
-	available, discoveredAuthRequired, discoveredDegraded := discoverAvailableDrives(
-		ctx,
-		snapshot.Config,
-		snapshot.Catalog,
-		siteLimit,
-		logger,
-		recorder,
-		s.cc.GraphBaseURL,
-		s.cc.httpProvider(),
-	)
-	sharedDiscovery := newSharedDiscoveryService(s.cc).discoverTargets(ctx, snapshot.Catalog)
-	available = append(available, sharedFoldersToEntries(projectSharedFolders(snapshot.Config, sharedDiscovery.Targets))...)
-	slices.SortFunc(available, func(a, b driveListEntry) int {
-		return cmp.Compare(a.CanonicalID, b.CanonicalID)
-	})
-	annotateStateDB(available)
-	authRequired := mergeAuthRequirements(readModel.authRequirements(snapshot, func(entry accountCatalogEntry) bool {
-		return true
-	}), discoveredAuthRequired, sharedDiscovery.AccountsRequiringAuth)
-	degraded := mergeDegradedNotices(discoveredDegraded, sharedDiscovery.AccountsDegraded)
-
 	if s.cc.Flags.JSON {
-		return printDriveListJSON(s.cc.Output(), configured, available, authRequired, degraded)
+		return printDriveListJSON(
+			s.cc.Output(),
+			snapshot.Configured,
+			snapshot.Available,
+			snapshot.AccountsRequiringAuth,
+			snapshot.AccountsDegraded,
+		)
 	}
 
-	return printDriveListText(s.cc.Output(), configured, available, authRequired, degraded)
+	return printDriveListText(
+		s.cc.Output(),
+		snapshot.Configured,
+		snapshot.Available,
+		snapshot.AccountsRequiringAuth,
+		snapshot.AccountsDegraded,
+	)
 }
 
 func (s *driveService) runAdd(ctx context.Context, args []string) error {
