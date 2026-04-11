@@ -37,50 +37,33 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 		slog.Bool("dry_run", opts.DryRun),
 	)
 
-	if err := runner.prepareRunOnceState(ctx); err != nil {
-		return nil, err
-	}
-	if _, processErr := e.processQueuedConflictResolutions(ctx); processErr != nil {
-		return nil, processErr
-	}
-	bl, err := e.baseline.Load(ctx)
+	bl, err := e.prepareRunOnceBaseline(ctx, runner)
 	if err != nil {
-		return nil, fmt.Errorf("sync: reloading baseline after queued user intent: %w", err)
+		return nil, err
 	}
 
 	// Steps 2-4: Observe remote + local, buffer, and flush.
 	// The pending delta token is returned but NOT committed yet — it is
 	// deferred until after the planner approves the changes (step 6).
+	observeStart := e.nowFunc()
 	changes, pendingDeltaTokens, err := runner.observeChanges(ctx, nil, bl, mode, opts.DryRun, opts.FullReconcile)
 	if err != nil {
 		return nil, err
 	}
 	changes = mergePathChangeBatches(changes, runner.collectDueRetryChanges(ctx, pathSetFromBatch(changes)))
 	changes = mergePathChangeBatches(changes, runner.collectApprovedDeleteChanges(ctx))
+	e.collector().RecordObserve(len(changes), e.since(observeStart))
 
 	// Step 5: Early return if no changes.
 	if len(changes) == 0 {
-		e.logger.Info("sync pass complete: no changes detected",
-			slog.Duration("duration", e.since(start)),
-		)
-
-		report := &synctypes.SyncReport{
-			Mode:     mode,
-			DryRun:   opts.DryRun,
-			Duration: e.since(start),
-		}
-		// Persist sync metadata even when no changes detected.
-		if metaErr := e.baseline.WriteSyncMetadata(ctx, report); metaErr != nil {
-			e.logger.Warn("failed to write sync metadata", slog.String("error", metaErr.Error()))
-		}
-
-		return report, nil
+		return e.completeRunOnceWithoutChanges(ctx, start, mode, opts), nil
 	}
 
 	// Step 6: Plan actions.
 	safety := e.resolveSafetyConfig()
 	denied := e.permHandler.DeniedPrefixes(ctx)
 
+	planStart := e.nowFunc()
 	plan, err := e.planner.Plan(changes, bl, mode, safety, denied)
 	if err != nil {
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
@@ -91,6 +74,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 			return nil, fmt.Errorf("sync: applying delete safety threshold: %w", err)
 		}
 	}
+	e.collector().RecordPlan(len(plan.Actions), e.since(planStart))
 
 	// Planner approved — commit the deferred delta token now.
 	if err := runner.commitDeferredDeltaTokens(ctx, pendingDeltaTokens); err != nil {
@@ -102,20 +86,17 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 	report := buildReportFromCounts(counts, mode, opts)
 
 	if opts.DryRun {
-		report.Duration = e.since(start)
-
-		e.logger.Info("dry-run complete: no changes applied",
-			slog.Duration("duration", report.Duration),
-		)
-
-		return report, nil
+		return e.completeDryRunReport(start, report), nil
 	}
 
 	// Execute plan: run workers, drain results (failures, 403s, upload issues).
+	executeStart := e.nowFunc()
 	if err := runner.executePlan(ctx, plan, report, bl); err != nil {
 		report.Duration = e.since(start)
+		e.collector().RecordExecute(len(plan.Actions), report.Succeeded, report.Failed, e.since(executeStart))
 		return report, err
 	}
+	e.collector().RecordExecute(len(plan.Actions), report.Succeeded, report.Failed, e.since(executeStart))
 
 	report.Duration = e.since(start)
 
@@ -133,6 +114,58 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 	}
 
 	return report, nil
+}
+
+func (e *Engine) prepareRunOnceBaseline(
+	ctx context.Context,
+	runner *oneShotRunner,
+) (*synctypes.Baseline, error) {
+	if err := runner.prepareRunOnceState(ctx); err != nil {
+		return nil, err
+	}
+	if _, processErr := e.processQueuedConflictResolutions(ctx); processErr != nil {
+		return nil, processErr
+	}
+
+	bl, err := e.baseline.Load(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: reloading baseline after queued user intent: %w", err)
+	}
+
+	return bl, nil
+}
+
+func (e *Engine) completeRunOnceWithoutChanges(
+	ctx context.Context,
+	start time.Time,
+	mode synctypes.SyncMode,
+	opts synctypes.RunOpts,
+) *synctypes.SyncReport {
+	e.logger.Info("sync pass complete: no changes detected",
+		slog.Duration("duration", e.since(start)),
+	)
+
+	report := &synctypes.SyncReport{
+		Mode:     mode,
+		DryRun:   opts.DryRun,
+		Duration: e.since(start),
+	}
+	// Persist sync metadata even when no changes detected.
+	if metaErr := e.baseline.WriteSyncMetadata(ctx, report); metaErr != nil {
+		e.logger.Warn("failed to write sync metadata", slog.String("error", metaErr.Error()))
+	}
+
+	return report
+}
+
+func (e *Engine) completeDryRunReport(start time.Time, report *synctypes.SyncReport) *synctypes.SyncReport {
+	report.Duration = e.since(start)
+
+	e.logger.Info("dry-run complete: no changes applied",
+		slog.Duration("duration", report.Duration),
+	)
+
+	return report
 }
 
 func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) error {

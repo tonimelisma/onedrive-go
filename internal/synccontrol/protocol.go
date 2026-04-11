@@ -6,14 +6,18 @@ package synccontrol
 import (
 	"net/url"
 	"path"
+
+	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
 
 const (
 	HTTPBaseURL = "http://unix"
 
-	PathStatus = "/v1/status"
-	PathReload = "/v1/reload"
-	PathStop   = "/v1/stop"
+	PathStatus      = "/v1/status"
+	PathReload      = "/v1/reload"
+	PathStop        = "/v1/stop"
+	PathPerfStatus  = "/v1/perf"
+	PathPerfCapture = "/v1/perf/capture"
 )
 
 type OwnerMode string
@@ -49,6 +53,8 @@ const (
 	ErrorConflictAlreadyApplying ErrorCode = "conflict_already_applying"
 	ErrorStoreOpenFailed         ErrorCode = "store_open_failed"
 	ErrorInternal                ErrorCode = "internal_error"
+	ErrorCaptureUnavailable      ErrorCode = "capture_unavailable"
+	ErrorCaptureInProgress       ErrorCode = "capture_in_progress"
 )
 
 type StatusResponse struct {
@@ -67,6 +73,24 @@ type MutationResponse struct {
 	Status  Status    `json:"status"`
 	Code    ErrorCode `json:"code,omitempty"`
 	Message string    `json:"message,omitempty"`
+}
+
+type PerfStatusResponse struct {
+	OwnerMode OwnerMode                `json:"owner_mode"`
+	Aggregate perf.Snapshot            `json:"aggregate"`
+	Drives    map[string]perf.Snapshot `json:"drives,omitempty"`
+}
+
+type PerfCaptureRequest struct {
+	DurationMS int64  `json:"duration_ms"`
+	OutputDir  string `json:"output_dir,omitempty"`
+	Trace      bool   `json:"trace,omitempty"`
+	FullDetail bool   `json:"full_detail,omitempty"`
+}
+
+type PerfCaptureResponse struct {
+	OwnerMode OwnerMode          `json:"owner_mode"`
+	Result    perf.CaptureResult `json:"result"`
 }
 
 type ConflictResolutionRequest struct {

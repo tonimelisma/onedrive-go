@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
@@ -106,11 +107,11 @@ func (p *Provider) Sync() ClientSet {
 		p.syncClients = &ClientSet{
 			Meta: &http.Client{
 				Timeout:   0,
-				Transport: metadataTransport(),
+				Transport: perf.RoundTripper{Inner: metadataTransport()},
 			},
 			Transfer: &http.Client{
 				Timeout:   0,
-				Transport: transferTransport(),
+				Transport: perf.RoundTripper{Inner: transferTransport()},
 			},
 		}
 	}
@@ -122,7 +123,7 @@ func (p *Provider) retryingMetadataClient(gate *retry.ThrottleGate) *http.Client
 	return &http.Client{
 		Timeout: 0,
 		Transport: &retry.RetryTransport{
-			Inner:        metadataTransport(),
+			Inner:        perf.RoundTripper{Inner: metadataTransport()},
 			Policy:       retry.TransportPolicy(),
 			Logger:       p.logger,
 			ThrottleGate: gate,
@@ -134,7 +135,7 @@ func (p *Provider) retryingTransferClient() *http.Client {
 	return &http.Client{
 		Timeout: 0,
 		Transport: &retry.RetryTransport{
-			Inner:  transferTransport(),
+			Inner:  perf.RoundTripper{Inner: transferTransport()},
 			Policy: retry.TransportPolicy(),
 			Logger: p.logger,
 		},

@@ -2,7 +2,7 @@
 
 GOVERNS: internal/multisync/*.go, internal/synccontrol/*.go, sync.go
 
-Implements: R-2.8.1 [verified], R-2.8.2 [verified], R-2.8.3 [verified], R-2.9.1 [verified], R-2.9.2 [verified], R-2.9.3 [verified], R-3.4.2 [verified], R-6.3.3 [verified], R-6.3.4 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
+Implements: R-2.8.1 [verified], R-2.8.2 [verified], R-2.8.3 [verified], R-2.9.1 [verified], R-2.9.2 [verified], R-2.9.3 [verified], R-3.4.2 [verified], R-6.3.3 [verified], R-6.3.4 [verified], R-6.6.15 [verified], R-6.6.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
 ## Overview
 
@@ -34,6 +34,7 @@ runtime package that implements it.
 | --- | --- |
 | `RunWatch` starts the configured drive set and keeps zero-drive watch mode valid without inventing a second startup path. | `TestOrchestrator_RunWatch_SingleDrive`, `TestOrchestrator_RunWatch_MultiDrive`, `TestOrchestrator_RunWatch_ZeroDrives` |
 | The Unix control socket is the single live-owner lock for one-shot and watch sync, reports owner mode/status through a read-only inspector projection, rejects one-shot mutations with typed `foreground_sync_running`, and serializes watch-mode durable held-delete/conflict user intent through the control loop. | `TestRunOnce_ControlSocketBlocksWatchOwner`, `TestOrchestrator_OneShotControlSocket_StatusAndMutationConflict`, `TestOrchestrator_ControlSocket_StatusAndStop`, `TestOrchestrator_ControlSocket_QueuesDurableUserIntent`, `TestOrchestrator_ControlSocket_StatusCountsUseReadOnlyInspector`, `TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners`, `TestE2E_Resolve_WithWatchDaemonExecutesQueuedIntent`, `TestE2E_Resolve_DeletesWithWatchDaemon` |
+| The control socket also exposes live perf snapshots and explicit capture bundles for both one-shot and watch owners without creating a second network surface or durable metrics store. | `TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture`, `TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration`, `internal/cli/perf_test.go` (`TestMainWithWriters_PerfCaptureJSON_ForOneShotOwner`, `TestMainWithWriters_PerfCaptureFailsWhenNoOwnerIsRunning`) |
 | Socket files are permissioned private, stale sockets are removed only after a failed live probe, and empty hash-runtime socket directories are cleaned up on close. | `TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval` |
 | Control-socket reload applies add/remove/pause/expired-pause diffs to the live runner set without bouncing unaffected drives. | `TestOrchestrator_Reload_AddDrive`, `TestOrchestrator_Reload_RemoveDrive`, `TestOrchestrator_Reload_PausedDrive`, `TestOrchestrator_Reload_TimedPauseExpiry` |
 
@@ -105,15 +106,18 @@ stay in `internal/cli`.
 The socket speaks JSON over HTTP:
 
 - `GET /v1/status` returns the owner mode (`oneshot` or `watch`) and managed drives. Watch owners also report pending durable-intent counts: approved held deletes plus queued/applying conflict requests. Those counters come from the read-only `syncstore.ReadDurableIntentCounts` boundary, not from opening a writable `SyncStore`, so status probes do not own checkpoint or close-side DB work. One-shot owners return those counters as zero/omitted because they are only exposing the owner lock/status surface, not running a long-lived intent loop.
+- `GET /v1/perf` returns the owner mode plus the live aggregate and per-drive perf snapshots currently owned by the active sync runtime. This surface is live-only and returns whatever the owner has collected so far; it does not materialize historical perf state from SQLite.
+- `POST /v1/perf/capture` triggers an explicit local capture bundle from the active owner. The request carries bounded duration plus optional output-dir, trace, and full-detail toggles; the response returns the local artifact paths for the completed bundle.
 - `POST /v1/reload` reloads config in the watch owner.
 - `POST /v1/stop` asks the watch owner to stop cleanly.
 - `POST /v1/drives/{canonical-id}/held-deletes/approve` records durable held-delete approval for that drive and marks a pending user-intent pass for the runner.
 - `POST /v1/drives/{canonical-id}/conflicts/{conflict-id}/resolution-request` records durable conflict-resolution intent and marks a pending user-intent pass for the runner.
 
-One-shot sync exposes only status. Mutating requests return a busy response
-with `code="foreground_sync_running"` because a foreground one-shot sync is
-already the active owner. The CLI routes all durable-intent mutations through
-one shared probe boundary before deciding whether the daemon is a live mutation
+One-shot sync exposes status plus the direct perf endpoints above. Durable
+mutation requests still return a busy response with
+`code="foreground_sync_running"` because a foreground one-shot sync is already
+the active owner. The CLI routes all durable-intent mutations through one
+shared probe boundary before deciding whether the daemon is a live mutation
 target. That probe classifies exactly five outcomes:
 
 - `watch_owner`: live watch daemon, RPC mutations allowed
@@ -140,7 +144,8 @@ Error responses have the shape `{status, code, message}`. Stable codes are
 `invalid_request`, `foreground_sync_running`, `drive_not_managed`,
 `conflict_not_found`, `invalid_resolution`,
 `conflict_different_strategy`, `conflict_already_resolving`,
-`store_open_failed`, and `internal_error`.
+`store_open_failed`, `capture_unavailable`, `capture_in_progress`, and
+`internal_error`.
 
 ### Reload
 
@@ -166,6 +171,10 @@ runner set.
 - The control command channel is internal to `RunWatch`; socket handlers send commands into that channel and wait for one response.
 - The control plane itself owns no timers; reload, stop, and durable user-intent wakeups are event-driven through control-socket requests and context cancellation.
 - Control-socket mutation handlers do not force immediate dispatch themselves. They record durable intent and signal the single-owner engine/runtime boundary, which coalesces repeated wakes and guarantees one later user-intent pass once ordinary outbox work yields capacity.
+- The control plane owns live perf registration for active drives, but not the
+  counters themselves. `internal/perf` owns the aggregate/live snapshot state;
+  the control plane only exposes that state through the local socket and
+  forwards explicit capture requests into the owning runtime.
 
 ## `DriveRunner`
 

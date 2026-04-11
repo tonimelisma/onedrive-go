@@ -232,7 +232,7 @@ func (m *SyncStore) CommitOutcome(ctx context.Context, outcome *synctypes.Outcom
 		}
 	}
 
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning commit outcome transaction: %w", err)
 	}
@@ -295,7 +295,7 @@ func (m *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh LocalBasel
 		entry.ETag = existing.ETag
 	}
 
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning refresh local baseline transaction: %w", err)
 	}
@@ -359,7 +359,7 @@ func classifyBaselineMutation(action synctypes.ActionType) (baselineMutationKind
 }
 
 // applySingleOutcome dispatches a single outcome to the appropriate DB helper.
-func applySingleOutcome(ctx context.Context, tx *sql.Tx, o *synctypes.Outcome, syncedAt int64) error {
+func applySingleOutcome(ctx context.Context, tx sqlTxRunner, o *synctypes.Outcome, syncedAt int64) error {
 	mutation, err := classifyBaselineMutation(o.Action)
 	if err != nil {
 		return err
@@ -465,7 +465,7 @@ func (m *SyncStore) CommitDeltaToken(ctx context.Context, token, driveID, scopeI
 		return nil
 	}
 
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning delta token transaction: %w", err)
 	}
@@ -506,7 +506,7 @@ func (m *SyncStore) DeleteDeltaToken(ctx context.Context, driveID, scopeID strin
 // saveDeltaToken persists the delta token in the same transaction as
 // baseline updates.
 func (m *SyncStore) saveDeltaToken(
-	ctx context.Context, tx *sql.Tx, driveID, scopeID, scopeDrive, token string, updatedAt int64,
+	ctx context.Context, tx sqlTxRunner, driveID, scopeID, scopeDrive, token string, updatedAt int64,
 ) error {
 	_, err := tx.ExecContext(ctx, sqlUpsertDeltaCursor, driveID, scopeID, scopeDrive, token, updatedAt)
 	if err != nil {
@@ -520,7 +520,7 @@ func (m *SyncStore) saveDeltaToken(
 // folder create, and update-synced outcomes. Handles the case where a
 // server-side delete+recreate assigns a new item_id for an existing path
 // by removing the stale row first (prevents UNIQUE constraint violation on path).
-func commitUpsert(ctx context.Context, tx *sql.Tx, o *synctypes.Outcome, syncedAt int64) error {
+func commitUpsert(ctx context.Context, tx sqlTxRunner, o *synctypes.Outcome, syncedAt int64) error {
 	// Remove any stale baseline row at the same path but different identity.
 	// This happens when the server assigns a new item_id for a path that
 	// was previously tracked under a different ID (delete+recreate, or
@@ -553,7 +553,7 @@ func commitUpsert(ctx context.Context, tx *sql.Tx, o *synctypes.Outcome, syncedA
 }
 
 // commitDelete removes a baseline entry for delete and cleanup outcomes.
-func commitDelete(ctx context.Context, tx *sql.Tx, path string) error {
+func commitDelete(ctx context.Context, tx sqlTxRunner, path string) error {
 	_, err := tx.ExecContext(ctx, sqlDeleteBaseline, path)
 	if err != nil {
 		return fmt.Errorf("sync: deleting baseline for %s: %w", path, err)
@@ -565,7 +565,7 @@ func commitDelete(ctx context.Context, tx *sql.Tx, path string) error {
 // commitMove atomically updates the path for move outcomes. With the ID-based
 // PK, a move is a single UPDATE (not DELETE+INSERT) — the row identity
 // (drive_id, item_id) doesn't change, only the path does.
-func commitMove(ctx context.Context, tx *sql.Tx, o *synctypes.Outcome, syncedAt int64) error {
+func commitMove(ctx context.Context, tx sqlTxRunner, o *synctypes.Outcome, syncedAt int64) error {
 	// Upsert handles both the path update and all other field updates.
 	// The ON CONFLICT(drive_id, item_id) clause matches the existing row
 	// and updates path + all mutable fields atomically.
@@ -575,7 +575,7 @@ func commitMove(ctx context.Context, tx *sql.Tx, o *synctypes.Outcome, syncedAt 
 // commitConflict inserts a conflict record. Auto-resolved conflicts
 // (Outcome.ResolvedBy == ResolvedByAuto) are inserted as already resolved, and
 // the baseline is updated (the upload created a new remote item).
-func commitConflict(ctx context.Context, tx *sql.Tx, o *synctypes.Outcome, syncedAt int64) error {
+func commitConflict(ctx context.Context, tx sqlTxRunner, o *synctypes.Outcome, syncedAt int64) error {
 	conflictID := uuid.New().String()
 
 	resolution := synctypes.ResolutionUnresolved
@@ -624,7 +624,7 @@ func commitConflict(ctx context.Context, tx *sql.Tx, o *synctypes.Outcome, synce
 // updateRemoteStateOnOutcome updates remote_state based on a completed action
 // outcome, called from within the same transaction as the baseline update.
 // Silently skips if no matching remote_state row exists (e.g., upload-only mode).
-func updateRemoteStateOnOutcome(ctx context.Context, tx *sql.Tx, o *synctypes.Outcome) error {
+func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *synctypes.Outcome) error {
 	if o.ItemID == "" || o.DriveID.IsZero() {
 		return nil
 	}

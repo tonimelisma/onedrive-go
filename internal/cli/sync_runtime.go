@@ -11,6 +11,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
+	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -117,6 +118,7 @@ func runSyncDaemonWithFactory(
 		Logger:            logger,
 		ControlSocketPath: controlSocketPath,
 		DebugEventHook:    debugEventHook,
+		PerfParent:        perf.FromContext(ctx),
 	})
 
 	if err := orch.RunWatch(ctx, mode, opts); err != nil {

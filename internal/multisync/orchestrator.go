@@ -10,6 +10,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
@@ -38,6 +39,7 @@ type OrchestratorConfig struct {
 	Logger            *slog.Logger
 	ControlSocketPath string
 	DebugEventHook    func(syncengine.DebugEvent)
+	PerfParent        *perf.Collector
 }
 
 // Orchestrator manages per-drive sync runners. It is always used, even for a
@@ -46,6 +48,7 @@ type Orchestrator struct {
 	cfg           *OrchestratorConfig
 	engineFactory engineFactoryFunc // injectable for tests
 	logger        *slog.Logger
+	perfRuntime   *perf.Runtime
 }
 
 // NewOrchestrator creates an Orchestrator with real Engine factory.
@@ -64,7 +67,8 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 			}
 			return engine, nil
 		},
-		logger: cfg.Logger,
+		logger:      cfg.Logger,
+		perfRuntime: perf.NewRuntime(cfg.PerfParent),
 	}
 }
 
@@ -174,8 +178,10 @@ func (o *Orchestrator) prepareDriveWork(ctx context.Context, mode synctypes.Sync
 func (o *Orchestrator) buildEngineWork(
 	ctx context.Context, rd *config.ResolvedDrive, session *driveops.Session, mode synctypes.SyncMode, opts synctypes.RunOpts,
 ) driveWork {
+	driveCollector := o.registerDrivePerfCollector(rd.CanonicalID.String())
 	ecfg, buildErr := syncengine.BuildEngineConfig(session, rd, true, o.logger)
 	if buildErr != nil {
+		o.removeDrivePerfCollector(rd.CanonicalID.String())
 		capturedErr := buildErr
 
 		return driveWork{
@@ -185,9 +191,11 @@ func (o *Orchestrator) buildEngineWork(
 			},
 		}
 	}
+	ecfg.PerfCollector = driveCollector
 
 	engine, engineErr := o.engineFactory(ctx, ecfg)
 	if engineErr != nil {
+		o.removeDrivePerfCollector(rd.CanonicalID.String())
 		capturedErr := engineErr
 
 		return driveWork{
@@ -202,6 +210,7 @@ func (o *Orchestrator) buildEngineWork(
 		runner: &DriveRunner{canonID: rd.CanonicalID, displayName: rd.DisplayName},
 		fn: func(c context.Context) (*synctypes.SyncReport, error) {
 			defer func() {
+				o.removeDrivePerfCollector(rd.CanonicalID.String())
 				if closeErr := engine.Close(c); closeErr != nil {
 					o.logger.Warn("engine close error",
 						slog.String("drive", rd.CanonicalID.String()),
@@ -325,13 +334,17 @@ func (o *Orchestrator) startWatchRunner(
 		return nil, fmt.Errorf("session error for drive %s: %w", rd.CanonicalID, err)
 	}
 
+	driveCollector := o.registerDrivePerfCollector(rd.CanonicalID.String())
 	ecfg, buildErr := syncengine.BuildEngineConfig(session, rd, true, o.logger)
 	if buildErr != nil {
+		o.removeDrivePerfCollector(rd.CanonicalID.String())
 		return nil, fmt.Errorf("engine config failed for %s: %w", rd.CanonicalID, buildErr)
 	}
+	ecfg.PerfCollector = driveCollector
 
 	engine, engineErr := o.engineFactory(ctx, ecfg)
 	if engineErr != nil {
+		o.removeDrivePerfCollector(rd.CanonicalID.String())
 		return nil, fmt.Errorf("engine creation failed for %s: %w", rd.CanonicalID, engineErr)
 	}
 
@@ -351,6 +364,7 @@ func (o *Orchestrator) startWatchRunner(
 	go func() {
 		defer close(done)
 		defer driveCancel()
+		defer o.removeDrivePerfCollector(rd.CanonicalID.String())
 
 		if watchErr := engine.RunWatch(driveCtx, mode, opts); watchErr != nil {
 			// Context cancellation is normal shutdown — don't log as error.
@@ -368,6 +382,22 @@ func (o *Orchestrator) startWatchRunner(
 	)
 
 	return wr, nil
+}
+
+func (o *Orchestrator) registerDrivePerfCollector(canonicalID string) *perf.Collector {
+	if o == nil || o.perfRuntime == nil {
+		return nil
+	}
+
+	return o.perfRuntime.RegisterDrive(canonicalID)
+}
+
+func (o *Orchestrator) removeDrivePerfCollector(canonicalID string) {
+	if o == nil || o.perfRuntime == nil {
+		return
+	}
+
+	o.perfRuntime.RemoveDrive(canonicalID)
 }
 
 // reload re-reads the config file, diffs the active drive set against running

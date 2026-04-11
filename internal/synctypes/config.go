@@ -6,6 +6,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 )
 
@@ -50,6 +51,7 @@ type EngineConfig struct {
 	LocalFilter            LocalFilterConfig
 	LocalRules             LocalObservationRules
 	SyncScope              syncscope.Config
+	PerfCollector          *perf.Collector
 	EnableWebsocket        bool  // when true, full-drive watch mode enables outbound Socket.IO wakeups
 	UseLocalTrash          bool  // move deleted local files to OS trash instead of permanent delete
 	TransferWorkers        int   // goroutine count for the worker pool (0 → minWorkers)

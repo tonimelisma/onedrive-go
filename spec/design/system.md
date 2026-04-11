@@ -22,6 +22,7 @@ internal/
   localpath/                  Explicit arbitrary-local-path boundary helpers
   logfile/                    Log file creation, rotation, retention
   multisync/                  Multi-drive sync control plane and watch reload
+  perf/                       Command-scoped and live sync performance instrumentation plus capture bundles
   retry/                      Retry policies, exponential backoff with jitter, retry transport
   sync/                       Single-drive sync engine (see pipeline below)
   syncstore/                  Durable SQLite sync state and read-only inspection
@@ -39,8 +40,10 @@ testutil/                     Shared test helpers (not production code)
 root pkg → internal/cli/ → internal/graphhttp/ → internal/retry/
                          → internal/driveops/  → internal/graph/ → pkg/*
                          → internal/failures/
-                         → internal/multisync/ → internal/sync/ → internal/driveops/
-                                                             → internal/syncstore/
+                         → internal/perf/
+                         → internal/multisync/ → internal/perf/
+                                              → internal/sync/ → internal/driveops/
+                                                               → internal/syncstore/
                          → internal/config/  → internal/driveid/
 ```
 
@@ -108,7 +111,26 @@ For detailed module design, see:
 | Durable sync issue facts | `internal/syncstore` SQLite tables (`sync_failures`, `scope_blocks`, conflicts) |
 | Account/auth presentation | `internal/authstate` vocabulary projected through `internal/cli/account_read_model_service.go` |
 | Read-only issue/status read model | `internal/syncstore/inspector.go` |
+| Production perf counters, live snapshots, and capture bundles | `internal/perf` with session/control-plane ownership split across `internal/cli` and `internal/multisync` |
 | Durable mutation rules | `internal/syncstore` writable store APIs plus engine-owned scope/result flow |
+
+## Production Performance Instrumentation
+
+`internal/perf` is the repo-owned measurement boundary for production-visible
+performance data.
+
+- `internal/perf` owns command/session collectors, aggregate counter rollups,
+  live per-drive snapshots, and opt-in capture bundle creation.
+- `internal/cli` owns command-session lifetime and human-visible rendering:
+  final/periodic log summaries, `status --perf`, and the `perf capture`
+  command.
+- `internal/multisync` owns live sync-owner registration and the control-socket
+  surfaces that expose live snapshots and trigger captures.
+- Logs are the durable history. `status --perf` and the control socket are
+  live-owner views only and intentionally do not invent a new persistent perf
+  database.
+- Always-on production logs carry aggregate counters and timings only. Rich
+  per-drive detail is reserved for explicit capture bundles.
 
 ## Verification Policy
 
