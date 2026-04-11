@@ -496,6 +496,10 @@ Runtime policy:
   - `drive list` keeps configured/offline state, uses `/me/drive` fallback for
     the primary drive, and continues independent shared-folder and SharePoint
     discovery
+- retry exhaustion now also carries per-attempt request IDs, HTTP statuses,
+  and most-specific Graph codes in a typed `graph.QuirkRetryError`, so CLI
+  degraded-mode logs and incident triage can preserve the exact observed
+  projection-lag evidence without changing runtime behavior
 - scheduled/manual `devtool verify e2e-full --classify-live-quirks` may rerun
   the strict auth preflight once for this exact known quirk and only downgrade
   it when the rerun passes; required per-PR lanes stay strict
@@ -520,6 +524,11 @@ Repo policy:
 - `/me/drives` keeps its broader bounded poll because the documented discovery
   projection lag can manifest as repeated `403 accessDenied` rather than a
   single transient transport/service failure
+- strict-preflight failure output now includes the retry decision for each
+  attempt (`retry=true|false` plus a stable reason string such as
+  `transient_gateway_status` or `drive_catalog_projection_lag`) so verifier
+  artifacts can be read directly without reconstructing the classifier from raw
+  bodies
 
 ### Slow/Stalled Metadata Response Headers
 
@@ -710,6 +719,11 @@ Runtime policy:
 - flows that already know the authoritative remote `itemID` avoid this parent
   create route entirely and overwrite by item ID instead of re-creating by
   parent path
+- live-test fixture setup that only needs a remote file for some later
+  assertion should treat this as a known provider timing family and retry the
+  whole fixture `put` operation when Graph either exhausts the documented
+  child-create retries or still reports `remote path not yet visible` while
+  resolving the freshly created parent for that later command
 - if the request still fails after the quirk budget, the upload returns the
   final error without pretending the parent exists
 

@@ -70,8 +70,9 @@ func waitForAuthPreflightEndpoint(
 			return attempts, nil
 		}
 
-		if !shouldRetryAuthPreflight(path, result) {
-			return attempts, fmt.Errorf("auth preflight endpoint %s returned a non-retryable failure", path)
+		decision := classifyAuthPreflightAttempt(path, result)
+		if !decision.Retry {
+			return attempts, fmt.Errorf("auth preflight endpoint %s returned a non-retryable failure: %s", path, decision.Reason)
 		}
 
 		if err := retry.TimeSleep(ctx, pollBackoff(attempt)); err != nil {
@@ -137,27 +138,4 @@ func authPreflightGraphCode(body []byte) string {
 	}
 
 	return payload.Error.Code
-}
-
-func formatAuthPreflightFailure(
-	driveID string,
-	endpoint string,
-	elapsed time.Duration,
-	attempts []authPreflightAttempt,
-) string {
-	var builder strings.Builder
-	builder.WriteString(fmt.Sprintf("auth preflight failed for %s endpoint=%s failed_calls=%d elapsed=%s",
-		driveID, endpoint, len(attempts), elapsed.Round(time.Millisecond)))
-
-	for i, attempt := range attempts {
-		builder.WriteString(fmt.Sprintf("\n  attempt=%d status=%d code=%q request_id=%q detail=%q",
-			i+1,
-			attempt.StatusCode,
-			attempt.Code,
-			attempt.RequestID,
-			attempt.Err,
-		))
-	}
-
-	return builder.String()
 }

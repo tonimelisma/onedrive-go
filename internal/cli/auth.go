@@ -983,8 +983,7 @@ func whoamiDrives(
 
 	notice := driveCatalogDegradedNotice(user.Email, user.DisplayName, authRequired.DriveType)
 	logger.Warn("degrading whoami drive discovery after /me/drives failure",
-		"account", user.Email,
-		"error", err,
+		degradedDiscoveryLogAttrs(user.Email, err)...,
 	)
 
 	primary, primaryErr := client.PrimaryDrive(ctx)
