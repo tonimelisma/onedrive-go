@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -139,6 +140,18 @@ type verifyPlan struct {
 type staleCheck struct {
 	name    string
 	pattern *regexp.Regexp
+}
+
+type documentedCLIFlagSpec struct {
+	consumesValue bool
+}
+
+type documentedCLICommandSpec struct {
+	name        string
+	runnable    bool
+	parent      *documentedCLICommandSpec
+	flags       map[string]documentedCLIFlagSpec
+	subcommands map[string]*documentedCLICommandSpec
 }
 
 func newVerifySummaryCollector(profile VerifyProfile, stdout io.Writer, summaryJSONPath string) *verifySummaryCollector {
@@ -1402,7 +1415,7 @@ func runStress(
 func runRepoConsistencyChecks(repoRoot string) error {
 	for _, check := range []func(string) error{
 		ensureNoStaleArchitecturePhrases,
-		ensureNoRemovedSyncCLICommandsOutsideArchive,
+		ensureActiveDocCLIExamplesResolve,
 		ensureSyncStoreMigrationDiscipline,
 		ensureGovernedDesignDocsHaveOwnershipContracts,
 		ensureCrossCuttingDesignDocs,
@@ -1425,6 +1438,10 @@ func runRepoConsistencyChecks(repoRoot string) error {
 
 	return nil
 }
+
+const documentedCLIExecutableName = "onedrive-go"
+
+var documentedCLIExamplePattern = regexp.MustCompile(documentedCLIExecutableName + "(?:\\s+[^\\s`'\"\\)\\(]+)+")
 
 func ensureNoStaleArchitecturePhrases(repoRoot string) error {
 	staleChecks := []staleCheck{
@@ -1456,47 +1473,373 @@ func ensureNoStaleArchitecturePhrases(repoRoot string) error {
 	return nil
 }
 
-func ensureNoRemovedSyncCLICommandsOutsideArchive(repoRoot string) error {
+func ensureActiveDocCLIExamplesResolve(repoRoot string) error {
 	checkRoots := []string{
-		filepath.Join(repoRoot, "internal", "cli"),
-		filepath.Join(repoRoot, "e2e"),
 		filepath.Join(repoRoot, "spec", "design"),
 		filepath.Join(repoRoot, "spec", "reference"),
 		filepath.Join(repoRoot, "spec", "requirements"),
 		filepath.Join(repoRoot, "README.md"),
 		filepath.Join(repoRoot, "CLAUDE.md"),
+		filepath.Join(repoRoot, "AGENTS.md"),
 	}
 
-	checks := []staleCheck{
-		{
-			name:    "removed sync CLI command invocation",
-			pattern: regexp.MustCompile(`onedrive-go (issues|conflicts|verify)\b`),
-		},
-		{
-			name:    "removed sync CLI command phrase",
-			pattern: regexp.MustCompile(`\b(issues approve-deletes|conflicts resolve|conflicts --history)\b`),
-		},
-		{
-			name:    "removed sync CLI argv",
-			pattern: regexp.MustCompile(`\[\](string)?\{("(issues|conflicts|verify)"|'(issues|conflicts|verify)')`),
-		},
-		{
-			name:    "removed sync CLI helper invocation",
-			pattern: regexp.MustCompile(`runCLI(?:Core|WithConfig(?:AllowError|ExpectError)?)\([^)]*"(issues|conflicts|verify)"`),
-		},
+	resolver := documentedCLIExampleResolver{
+		root: currentDocumentedCLIManifest(),
 	}
 
-	skip := func(path string) bool {
-		return strings.Contains(path, filepath.Join("spec", "archive")+string(os.PathSeparator))
+	for _, root := range checkRoots {
+		if err := walkDocumentedCLIExamples(root, resolver.resolve); err != nil {
+			return err
+		}
 	}
 
-	for _, check := range checks {
-		match, err := findTextMatch(checkRoots, check.pattern, skip)
+	return nil
+}
+
+type documentedCLIExampleResolver struct {
+	root *documentedCLICommandSpec
+}
+
+func (r documentedCLIExampleResolver) resolve(snippet string) error {
+	args := strings.Fields(strings.TrimSpace(snippet))
+	if !isDocumentedCLIExample(args) {
+		return nil
+	}
+
+	current, commandSeen, err := r.resolveTokens(args[1:])
+	if err != nil {
+		return err
+	}
+
+	if !commandSeen {
+		return fmt.Errorf("no command found")
+	}
+	if !current.runnable && len(current.subcommands) > 0 {
+		return fmt.Errorf("command %q is incomplete", current.commandPath())
+	}
+
+	return nil
+}
+
+func isDocumentedCLIExample(args []string) bool {
+	return len(args) != 0 && args[0] == documentedCLIExecutableName
+}
+
+func (r documentedCLIExampleResolver) resolveTokens(
+	args []string,
+) (*documentedCLICommandSpec, bool, error) {
+	current := r.root
+	commandSeen := false
+	for i := 0; i < len(args); i++ {
+		nextIndex, nextCommand, nextSeen, stop, err := documentedCLIConsumeToken(current, commandSeen, args, i)
+		if err != nil {
+			return nil, false, err
+		}
+		current = nextCommand
+		commandSeen = nextSeen
+		if stop {
+			break
+		}
+		i = nextIndex
+	}
+
+	return current, commandSeen, nil
+}
+
+func documentedCLIConsumeToken(
+	current *documentedCLICommandSpec,
+	commandSeen bool,
+	args []string,
+	index int,
+) (nextIndex int, nextCommand *documentedCLICommandSpec, nextSeen bool, stop bool, err error) {
+	token := strings.TrimRight(strings.TrimSpace(args[index]), ".,:;")
+	if token == "" {
+		return index, current, commandSeen, false, nil
+	}
+	if strings.HasPrefix(token, "<") && strings.HasSuffix(token, ">") {
+		if !commandSeen {
+			return index, nil, false, false, fmt.Errorf("placeholder %s appears before any command", token)
+		}
+
+		return index, current, commandSeen, true, nil
+	}
+	if strings.HasPrefix(token, "-") {
+		consumesValue, flagErr := documentedCLIFlagConsumesValue(current, token)
+		if flagErr != nil {
+			return index, nil, false, false, flagErr
+		}
+		if consumesValue && !strings.Contains(token, "=") {
+			index++
+			if index >= len(args) {
+				return index, nil, false, false, fmt.Errorf("flag %s is missing its value", token)
+			}
+		}
+
+		return index, current, commandSeen, false, nil
+	}
+
+	next := documentedCLISubcommand(current, token)
+	if next == nil {
+		if !commandSeen {
+			return index, nil, false, false, fmt.Errorf("unknown command %q", token)
+		}
+
+		return index, current, commandSeen, true, nil
+	}
+
+	return index, next, true, false, nil
+}
+
+func documentedCLIFlagConsumesValue(cmd *documentedCLICommandSpec, token string) (bool, error) {
+	name := documentedCLIFlagName(token)
+	flag := documentedCLIFlag(cmd, name)
+	if flag == nil {
+		return false, fmt.Errorf("unknown flag %q", token)
+	}
+
+	return flag.consumesValue, nil
+}
+
+func documentedCLIFlagName(token string) string {
+	trimmed := strings.TrimLeft(token, "-")
+	parts := strings.SplitN(trimmed, "=", 2)
+
+	return parts[0]
+}
+
+func documentedCLIFlag(cmd *documentedCLICommandSpec, name string) *documentedCLIFlagSpec {
+	for current := cmd; current != nil; current = current.Parent() {
+		if flag, ok := current.flags[name]; ok {
+			flagCopy := flag
+			return &flagCopy
+		}
+	}
+
+	return nil
+}
+
+func (c *documentedCLICommandSpec) Parent() *documentedCLICommandSpec {
+	if c == nil {
+		return nil
+	}
+
+	return c.parent
+}
+
+func (c *documentedCLICommandSpec) commandPath() string {
+	if c == nil {
+		return "onedrive-go"
+	}
+
+	parts := []string{c.name}
+	for current := c.parent; current != nil; current = current.parent {
+		if current.name == "" {
+			continue
+		}
+		parts = append(parts, current.name)
+	}
+	slices.Reverse(parts)
+
+	return strings.Join(parts, " ")
+}
+
+func documentedCLISubcommand(cmd *documentedCLICommandSpec, token string) *documentedCLICommandSpec {
+	if cmd == nil {
+		return nil
+	}
+
+	return cmd.subcommands[token]
+}
+
+func currentDocumentedCLIManifest() *documentedCLICommandSpec {
+	root := newDocumentedCLICommand("onedrive-go", false, documentedCLIFlags(
+		documentedCLIFlagWithValue("config"),
+		documentedCLIFlagWithValue("account"),
+		documentedCLIFlagWithValue("drive"),
+		documentedCLIBoolFlag("json"),
+		documentedCLIBoolFlag("verbose"),
+		documentedCLIBoolFlag("v"),
+		documentedCLIBoolFlag("debug"),
+		documentedCLIBoolFlag("quiet"),
+		documentedCLIBoolFlag("q"),
+	))
+
+	root.addSubcommand(newDocumentedCLICommand("login", true, documentedCLIFlags(
+		documentedCLIBoolFlag("browser"),
+	)))
+	root.addSubcommand(newDocumentedCLICommand("logout", true, documentedCLIFlags(
+		documentedCLIBoolFlag("purge"),
+	)))
+	root.addSubcommand(newDocumentedCLICommand("whoami", true, nil))
+	root.addSubcommand(newDocumentedCLICommand("status", true, documentedCLIFlags(
+		documentedCLIBoolFlag("history"),
+	)))
+	root.addSubcommand(newDocumentedCLICommand("shared", true, nil))
+	root.addSubcommand(newDocumentedCLICommand("ls", true, nil))
+	root.addSubcommand(newDocumentedCLICommand("get", true, nil))
+	root.addSubcommand(newDocumentedCLICommand("put", true, nil))
+	root.addSubcommand(newDocumentedCLICommand("rm", true, documentedCLIFlags(
+		documentedCLIBoolFlag("recursive"),
+		documentedCLIBoolFlag("r"),
+		documentedCLIBoolFlag("permanent"),
+	)))
+	root.addSubcommand(newDocumentedCLICommand("mkdir", true, nil))
+	root.addSubcommand(newDocumentedCLICommand("stat", true, nil))
+	root.addSubcommand(newDocumentedCLICommand("pause", true, nil))
+	root.addSubcommand(newDocumentedCLICommand("resume", true, nil))
+	root.addSubcommand(newDocumentedCLICommand("recover", true, documentedCLIFlags(
+		documentedCLIBoolFlag("yes"),
+	)))
+	root.addSubcommand(newDocumentedCLICommand("mv", true, documentedCLIFlags(
+		documentedCLIBoolFlag("force"),
+		documentedCLIBoolFlag("f"),
+	)))
+	root.addSubcommand(newDocumentedCLICommand("cp", true, documentedCLIFlags(
+		documentedCLIBoolFlag("force"),
+		documentedCLIBoolFlag("f"),
+	)))
+	root.addSubcommand(newDocumentedCLICommand("sync", true, documentedCLIFlags(
+		documentedCLIBoolFlag("download-only"),
+		documentedCLIBoolFlag("upload-only"),
+		documentedCLIBoolFlag("dry-run"),
+		documentedCLIBoolFlag("watch"),
+		documentedCLIBoolFlag("full"),
+	)))
+
+	drive := newDocumentedCLICommand("drive", false, nil)
+	drive.addSubcommand(newDocumentedCLICommand("list", true, documentedCLIFlags(
+		documentedCLIBoolFlag("all"),
+	)))
+	drive.addSubcommand(newDocumentedCLICommand("add", true, nil))
+	drive.addSubcommand(newDocumentedCLICommand("remove", true, documentedCLIFlags(
+		documentedCLIBoolFlag("purge"),
+	)))
+	drive.addSubcommand(newDocumentedCLICommand("search", true, nil))
+	root.addSubcommand(drive)
+
+	resolve := newDocumentedCLICommand("resolve", false, nil)
+	resolve.addSubcommand(newDocumentedCLICommand("deletes", true, nil))
+	resolveFlags := documentedCLIFlags(
+		documentedCLIBoolFlag("all"),
+		documentedCLIBoolFlag("dry-run"),
+	)
+	resolve.addSubcommand(newDocumentedCLICommand("local", true, resolveFlags))
+	resolve.addSubcommand(newDocumentedCLICommand("remote", true, resolveFlags))
+	resolve.addSubcommand(newDocumentedCLICommand("both", true, resolveFlags))
+	root.addSubcommand(resolve)
+
+	recycleBin := newDocumentedCLICommand("recycle-bin", false, nil)
+	recycleBin.addSubcommand(newDocumentedCLICommand("list", true, nil))
+	recycleBin.addSubcommand(newDocumentedCLICommand("restore", true, nil))
+	recycleBin.addSubcommand(newDocumentedCLICommand("empty", true, documentedCLIFlags(
+		documentedCLIBoolFlag("confirm"),
+	)))
+	root.addSubcommand(recycleBin)
+
+	return root
+}
+
+func newDocumentedCLICommand(
+	name string,
+	runnable bool,
+	flags map[string]documentedCLIFlagSpec,
+) *documentedCLICommandSpec {
+	if flags == nil {
+		flags = map[string]documentedCLIFlagSpec{}
+	}
+
+	return &documentedCLICommandSpec{
+		name:        name,
+		runnable:    runnable,
+		flags:       flags,
+		subcommands: map[string]*documentedCLICommandSpec{},
+	}
+}
+
+func (c *documentedCLICommandSpec) addSubcommand(child *documentedCLICommandSpec) {
+	if c == nil || child == nil {
+		return
+	}
+
+	child.parent = c
+	c.subcommands[child.name] = child
+}
+
+func documentedCLIFlags(
+	flags ...documentedCLIFlagDecl,
+) map[string]documentedCLIFlagSpec {
+	if len(flags) == 0 {
+		return nil
+	}
+
+	result := make(map[string]documentedCLIFlagSpec, len(flags))
+	for _, flag := range flags {
+		result[flag.name] = documentedCLIFlagSpec{consumesValue: flag.consumesValue}
+	}
+
+	return result
+}
+
+type documentedCLIFlagDecl struct {
+	name          string
+	consumesValue bool
+}
+
+func documentedCLIBoolFlag(name string) documentedCLIFlagDecl {
+	return documentedCLIFlagDecl{name: name}
+}
+
+func documentedCLIFlagWithValue(name string) documentedCLIFlagDecl {
+	return documentedCLIFlagDecl{
+		name:          name,
+		consumesValue: true,
+	}
+}
+
+func walkDocumentedCLIExamples(root string, resolver func(string) error) error {
+	info, err := localpath.Stat(root)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+
+		return fmt.Errorf("stat %s: %w", root, err)
+	}
+
+	if !info.IsDir() {
+		return scanDocumentedCLIExamplesInFile(root, resolver)
+	}
+
+	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if match != "" {
-			return fmt.Errorf("removed sync CLI command detected (%s): %s", check.name, match)
+		if d.IsDir() || filepath.Ext(path) != ".md" {
+			return nil
+		}
+
+		return scanDocumentedCLIExamplesInFile(path, resolver)
+	})
+	if walkErr != nil {
+		return fmt.Errorf("walk %s: %w", root, walkErr)
+	}
+
+	return nil
+}
+
+func scanDocumentedCLIExamplesInFile(path string, resolver func(string) error) error {
+	data, err := localpath.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	for lineNumber, line := range lines {
+		examples := documentedCLIExamplePattern.FindAllString(line, -1)
+		for _, example := range examples {
+			if err := resolver(strings.TrimSpace(example)); err != nil {
+				return fmt.Errorf("invalid documented CLI example in %s:%d (%s): %w", path, lineNumber+1, example, err)
+			}
 		}
 	}
 

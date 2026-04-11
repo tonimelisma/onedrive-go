@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -380,20 +381,19 @@ func TestNewGraphClient_ReturnsConstructionError(t *testing.T) {
 func TestNewRootCmd_Subcommands(t *testing.T) {
 	cmd := newRootCmd()
 
-	expected := []string{"login", "logout", "whoami", "status", "shared", "drive", "ls", "get", "put", "rm", "mkdir", "stat"}
-	for _, name := range expected {
-		found := false
-
-		for _, sub := range cmd.Commands() {
-			if sub.Name() == name {
-				found = true
-
-				break
-			}
-		}
-
-		assert.True(t, found, "expected subcommand %q not found", name)
+	expected := []string{
+		"cp", "drive", "get", "login", "ls", "mkdir", "mv", "pause", "put",
+		"recycle-bin", "recover", "resolve", "resume", "rm", "shared", "stat",
+		"status", "sync", "whoami", "logout",
 	}
+	actual := make([]string, 0, len(cmd.Commands()))
+	for _, sub := range cmd.Commands() {
+		actual = append(actual, sub.Name())
+	}
+
+	sort.Strings(actual)
+	sort.Strings(expected)
+	assert.Equal(t, expected, actual)
 }
 
 func TestNewRootCmd_PersistentFlags(t *testing.T) {
@@ -1298,7 +1298,7 @@ func TestMain_UnknownCommandReturnsFailure(t *testing.T) {
 	assert.Equal(t, 1, Main([]string{"definitely-not-a-real-command"}))
 }
 
-func TestMainWithWriters_SyncUXCommandsRemainRegistered(t *testing.T) {
+func TestMainWithWriters_StatusResolveRecoverHelpSucceeds(t *testing.T) {
 	for _, args := range [][]string{
 		{"status", "--help"},
 		{"resolve", "--help"},
