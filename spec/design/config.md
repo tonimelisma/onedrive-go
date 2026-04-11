@@ -24,6 +24,7 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 | Drive resolution applies pause semantics consistently, including expired timed pauses. | `TestResolveDrives_ExcludesPausedByDefault`, `TestResolveDrives_IncludePausedWhenRequested`, `TestClearExpiredPauses_ClearsExpired` |
 | `buildResolvedDrive` owns defaulting and per-drive override materialization for sync callers. | `TestBuildResolvedDrive_GlobalDefaults`, `TestBuildResolvedDrive_PerDriveOverrides`, `TestBuildResolvedDrive_TimedPauseExpired` |
 | Token-owner resolution stays config-owned for shared and business-derived drives. | `TestDriveTokenPath_Shared_WithDriveMetadata`, `TestTokenAccountCID_Shared`, `TestTokenAccountCID_SharePoint` |
+| Control-socket path derivation keeps the socket under the data dir when possible, falls back to a stable hashed runtime dir when necessary, and fails explicitly when neither path can satisfy the Unix socket length budget. | `TestControlSocketPath_UsesDataDirWhenShortEnough`, `TestControlSocketPath_UsesShortRuntimePathWhenDataDirIsTooLong`, `TestControlSocketPath_ReturnsErrorWhenFallbackStillExceedsLimit` |
 
 Transfer validation behavior is not user-disableable. The config surface intentionally has no `disable_download_validation` or `disable_upload_validation` escape hatches; transfer correctness policy lives in the transfer and observation layers, not in mutable config toggles.
 
@@ -43,6 +44,14 @@ full data-dir socket path is too long the config layer derives a stable,
 hash-named runtime directory under `os.TempDir()` and places only the socket
 there. Durable state, tokens, logs, and drive metadata remain under the normal
 config/data/cache roots.
+
+`ControlSocketPath()` returns `(path, error)`, not an empty-string sentinel.
+The config layer revalidates the hashed runtime fallback against the same Unix
+socket soft limit as the primary path. If neither path fits, it returns an
+explicit error describing both candidates. Callers then decide policy at their
+own boundary: sync-owner startup treats the error as fatal because the socket
+is the single-owner lock, while some CLI mutation/reload flows can intentionally
+degrade when the derivation proves no daemon can exist.
 
 `config` uses two filesystem boundaries, not ad hoc `os.*` calls:
 

@@ -40,6 +40,8 @@ This keeps human/JSON command results separate from progress/status messages and
 | Root `issues` and `conflicts` stay strict list commands while dedicated mutation lives under `issues approve-deletes` and `conflicts resolve`; the obsolete delete-approval command is not registered. | `internal/cli/issues_test.go` (`TestIssuesCmd_RejectsUnexpectedPositionalArgs`, `TestIssuesCmd_ForceDeletesIsNotRegistered`), `internal/cli/conflicts_test.go` (`TestConflictsCmd_RejectsUnexpectedPositionalArgs`, `TestConflictsCmd_HistoryFlagStillWorksFromRoot`, `TestConflictsCmd_ResolveSubcommandStillExecutesFromRoot`), `e2e/cli_commands_e2e_test.go` (`TestE2E_Issues_Empty`, `TestE2E_Conflicts_EmptyHistory`, `TestE2E_Conflicts_JSON`, `TestE2E_Conflicts_ResolveKeepBoth`, `TestE2E_Issues_ApproveDeletes`) |
 | CLI account-email reconciliation updates selector state and reloads the resolved drive before interactive session work continues. | `internal/cli/root_test.go` (`TestCLIContextSession_ReconcilesEmailChangeAndReloadsDrive`), `internal/config/token_resolution_test.go`, `internal/driveid/canonical_test.go` |
 | Watch-mode CLI wiring remains injectable at both the top-level watch-runner seam and the lower daemon-orchestrator seam, and target-scoped interactive/shared flows still work under live E2E coverage. | `internal/cli/signal_test.go` (`TestRunSyncWatch_FirstSignalCancelsWatchRunner`, `TestRunSyncWatch_FirstSignalCancelsDaemonOrchestrator`, `TestShutdownContext_FirstSignalCancels`, `TestShutdownContext_SecondSignalForcesExit`), `e2e/sync_watch_full_test.go` (`TestE2E_SyncWatch_ConflictDuringWatch`), `e2e/sync_full_test.go` (`TestE2E_Sync_EditDeleteConflict`, `TestE2E_Sync_EditEditConflict_ResolveKeepRemote`) |
+| Command-scoped log-file cleanup is rooted in the top-level CLI runner, so the active closer still shuts down exactly once when a leaf command replaces the logger and then returns an error before Cobra post-run hooks would fire. | `internal/cli/root_test.go` (`TestCLIContextReplaceCommandLogger_ClosesReplacedCloserAndTopLevelCloseClosesActiveCloser`, `TestCloseRootCommandLogger_ClosesActiveLoggerAfterCommandError`) |
+| Control-socket path derivation failures stop sync-owner startup loudly, while durable-intent commands and daemon-reload notifications handle the same condition intentionally instead of pretending a daemon probe succeeded. | `internal/cli/sync_test.go` (`TestSyncService_Run_FailsLoudlyWhenControlSocketPathCannotBeDerivedForOneShot`, `TestSyncService_Run_FailsLoudlyWhenControlSocketPathCannotBeDerivedForWatch`), `internal/cli/control_socket_semantics_test.go` (`TestIssuesApproveDeletes_FallsBackToDirectDBWhenControlSocketPathIsUnavailable`, `TestNotifyDaemon_ReportsControlSocketPathFailureClearly`) |
 
 ## Command Structure
 
@@ -305,7 +307,14 @@ opens its own ad hoc engine or duplicates socket fallback rules.
 
 The socket path is config-owned. It normally resolves under the app data
 directory, with a stable hash-based runtime fallback when isolated test or user
-paths would be too long for Unix-domain sockets.
+paths would be too long for Unix-domain sockets. If neither the normal data-dir
+path nor the hashed runtime fallback fits inside the Unix socket length budget,
+`config.ControlSocketPath()` returns an explicit error instead of silently
+pretending no socket exists. Sync-owner startup treats that as fatal before the
+orchestrator starts. Durable-intent commands treat the same derivation failure
+as proof that no live daemon can bind the socket and fall back to direct DB
+intent writes; daemon-reload notifications surface a note that the socket path
+is unavailable.
 
 Socket-routed commands:
 
@@ -342,7 +351,7 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
 - `sharedDiscoveryService` is the CLI-owned live-discovery collaborator for shared items. It owns live search, target normalization, enrichment, deduplication, and auth-vs-degraded classification for `shared`, the shared-folder portion of `drive list`, and name-based `drive add`. It consumes whatever refreshed account-catalog slice the caller passes; caller-owned account filtering stays outside this core so `drive list` can remain inventory-consistent while `shared` and name-based `drive add` still honor `--account`. Per-account discovery tries all available token IDs before surfacing auth-required or degraded output. It does not perform its own `/me` reconciliation pass.
 - `SessionProvider` caches `TokenSource`s by token file path — multiple drives sharing an account share one `TokenSource`, preventing OAuth2 refresh token rotation races.
 - `CLIContext` owns one `graphhttp.Provider` per command/watch runtime. Bootstrap/auth-discovery flows use `BootstrapMeta()`. Once both account and remote target identity are known, CLI passes target-scoped interactive client resolvers into `driveops.SessionProvider`: configured drives key by drive ID, configured shared roots key by remote root item, and direct shared-item commands key by `(remoteDriveID, remoteItemID)`. Sync paths request `Sync()` profiles instead. HTTP policy constants and client reuse live in `internal/graphhttp`, not `internal/cli`.
-- `CLIContext` is the sole owner of command-scoped log-file closers. When sync bootstrap rebuilds the logger from the raw logging config, it swaps the active logger through the CLI context, closes the old closer before installing the replacement, and lets root `PersistentPostRunE` close the active closer exactly once on command shutdown.
+- `CLIContext` is the sole owner of command-scoped log-file closers. When sync bootstrap rebuilds the logger from the raw logging config, it swaps the active logger through the CLI context, closes the old closer before installing the replacement, and relies on the top-level `mainWithWriters` runner to close the final active closer exactly once after `Execute()` returns. This top-level cleanup is intentionally outside Cobra post-run hooks so command-log shutdown still happens when a leaf command exits early with an error.
 - CLI handlers use `cmd.Context()` for signal propagation. Exception: upload session cancel paths use `context.Background()` because the cancel must succeed even when the original context is done.
 - Production command code writes primary output through `CLIContext.OutputWriter`, and status/warning/error text through the CLI-owned status writer boundary instead of raw process-global stdout/stderr. This keeps command output injectable in tests and prevents hidden process-global output dependencies from creeping back into services, bootstrap warnings, or sync-daemon cleanup.
 - `go run ./cmd/devtool verify` enforces that production `internal/cli` files do not call `fmt.Print*`, `fmt.Fprint*(os.Stdout|os.Stderr, ...)`, or direct `os.Stdout` / `os.Stderr` writer methods. The only allowed process-global output boundary is the tiny process entrypoint outside `internal/cli`.
@@ -356,6 +365,10 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
 - Offline auth-health projection also uses `syncstore.Inspector` for persisted
   `auth:account` checks, so read-only CLI account discovery no longer pays the
   writable-store checkpoint/close path.
+- Control-socket status reporting shares that same read-only store boundary.
+  CLI status aggregation and daemon `GET /v1/status` both consume
+  `syncstore.Inspector` projections instead of opening writable `SyncStore`
+  handles just to count durable intent.
 - Sync-domain issue/status presentation uses the shared
   [`synctypes.SummaryKey`](/Users/tonimelisma/Development/onedrive-go-shared-failure-summaries/internal/synctypes/summary_keys.go)
   contract. `issues` groups persisted failures by normalized summary key plus

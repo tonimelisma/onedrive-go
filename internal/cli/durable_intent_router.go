@@ -17,8 +17,8 @@ func routeDurableIntent[T any](
 ) (T, error) {
 	var zero T
 
-	client, ok := openControlSocketClient(ctx)
-	if !ok || client.ownerMode() != synccontrol.OwnerModeWatch {
+	client, ok, err := openControlSocketClient(ctx)
+	if err != nil || !ok || client.ownerMode() != synccontrol.OwnerModeWatch {
 		return direct(ctx)
 	}
 

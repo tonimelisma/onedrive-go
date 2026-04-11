@@ -5,14 +5,11 @@ package e2e
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -20,18 +17,18 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
 const (
 	controlSocketRequestTimeout = 10 * time.Second
-	e2eUnixSocketPathSoftLimit  = 100
 )
 
 func postControlSocket(t *testing.T, env map[string]string, requestPath string) {
 	t.Helper()
 
-	socketPath := e2eControlSocketPath(env)
+	socketPath := e2eControlSocketPath(t, env)
 	client := &http.Client{
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -85,7 +82,7 @@ func postControlSocket(t *testing.T, env map[string]string, requestPath string) 
 func getControlSocketStatus(t *testing.T, env map[string]string) synccontrol.StatusResponse {
 	t.Helper()
 
-	socketPath := e2eControlSocketPath(env)
+	socketPath := e2eControlSocketPath(t, env)
 	client := &http.Client{
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -150,13 +147,11 @@ func getControlSocketStatus(t *testing.T, env map[string]string) synccontrol.Sta
 	return status
 }
 
-func e2eControlSocketPath(env map[string]string) string {
-	dataDir := filepath.Join(env["XDG_DATA_HOME"], "onedrive-go")
-	candidate := filepath.Join(dataDir, "control.sock")
-	if len(candidate) <= e2eUnixSocketPathSoftLimit {
-		return candidate
-	}
+func e2eControlSocketPath(t *testing.T, env map[string]string) string {
+	t.Helper()
 
-	sum := sha256.Sum256([]byte(dataDir))
-	return filepath.Join(os.TempDir(), "odgo-"+hex.EncodeToString(sum[:])[:16], "control.sock")
+	dataDir := filepath.Join(env["XDG_DATA_HOME"], "onedrive-go")
+	socketPath, err := config.ControlSocketPathForDataDir(dataDir)
+	require.NoError(t, err)
+	return socketPath
 }

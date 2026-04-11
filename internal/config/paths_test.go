@@ -119,19 +119,37 @@ func TestControlSocketPath_UsesDataDirWhenShortEnough(t *testing.T) {
 
 	expected := filepath.Join(xdgDir, appName, "control.sock")
 	require.LessOrEqual(t, len(expected), unixSocketPathSoftLimit)
-	assert.Equal(t, expected, ControlSocketPath())
+	path, err := ControlSocketPath()
+	require.NoError(t, err)
+	assert.Equal(t, expected, path)
 }
 
 func TestControlSocketPath_UsesShortRuntimePathWhenDataDirIsTooLong(t *testing.T) {
 	longDir := filepath.Join(t.TempDir(), strings.Repeat("very-long-control-root-", 8))
 	t.Setenv("XDG_DATA_HOME", longDir)
 
-	path := ControlSocketPath()
+	path, err := ControlSocketPath()
+	require.NoError(t, err)
 	assert.NotEqual(t, filepath.Join(longDir, appName, "control.sock"), path)
 	assert.LessOrEqual(t, len(path), unixSocketPathSoftLimit)
 	assert.Contains(t, path, "odgo-")
-	assert.True(t, strings.HasSuffix(path, "control.sock"))
-	assert.Equal(t, path, ControlSocketPath(), "hashed socket path should be stable within a data dir")
+	assert.Equal(t, runtimeControlSocketName, filepath.Base(path))
+
+	again, err := ControlSocketPath()
+	require.NoError(t, err)
+	assert.Equal(t, path, again, "hashed socket path should be stable within a data dir")
+}
+
+func TestControlSocketPath_ReturnsErrorWhenFallbackStillExceedsLimit(t *testing.T) {
+	longDir := filepath.Join(t.TempDir(), strings.Repeat("very-long-control-root-", 8))
+	t.Setenv("XDG_DATA_HOME", longDir)
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), strings.Repeat("very-long-runtime-root-", 8)))
+
+	path, err := ControlSocketPath()
+	require.Error(t, err)
+	assert.Empty(t, path)
+	assert.Contains(t, err.Error(), "fallback")
+	assert.Contains(t, err.Error(), "exceeds the limit")
 }
 
 // Validates: R-4.1.2

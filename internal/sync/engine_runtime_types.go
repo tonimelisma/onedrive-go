@@ -78,6 +78,11 @@ type watchRuntimeState struct {
 	// Monotonic action ID counter owned by the watch control flow. Prevents
 	// ID collisions across batches without introducing cross-goroutine sync.
 	nextActionID int64
+
+	// userIntentPending makes durable user-intent admission level-triggered at
+	// the watch-loop boundary. Wakes can arrive while ordinary outbox work is
+	// still draining; this flag ensures the next user-intent pass is not lost.
+	userIntentPending bool
 }
 
 type watchObservationState struct {

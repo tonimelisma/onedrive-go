@@ -33,7 +33,7 @@ runtime package that implements it.
 | Behavior | Evidence |
 | --- | --- |
 | `RunWatch` starts the configured drive set and keeps zero-drive watch mode valid without inventing a second startup path. | `TestOrchestrator_RunWatch_SingleDrive`, `TestOrchestrator_RunWatch_MultiDrive`, `TestOrchestrator_RunWatch_ZeroDrives` |
-| The Unix control socket is the single live-owner lock for one-shot and watch sync, reports owner mode/status, rejects one-shot mutations with typed `foreground_sync_running`, and serializes watch-mode durable held-delete/conflict user intent through the control loop. | `TestRunOnce_ControlSocketBlocksWatchOwner`, `TestOrchestrator_OneShotControlSocket_StatusAndMutationConflict`, `TestOrchestrator_ControlSocket_StatusAndStop`, `TestOrchestrator_ControlSocket_QueuesDurableUserIntent`, `TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners`, `TestE2E_Conflicts_ResolveWithWatchDaemonExecutesQueuedIntent`, `TestE2E_Issues_ApproveDeletes` |
+| The Unix control socket is the single live-owner lock for one-shot and watch sync, reports owner mode/status through a read-only inspector projection, rejects one-shot mutations with typed `foreground_sync_running`, and serializes watch-mode durable held-delete/conflict user intent through the control loop. | `TestRunOnce_ControlSocketBlocksWatchOwner`, `TestOrchestrator_OneShotControlSocket_StatusAndMutationConflict`, `TestOrchestrator_ControlSocket_StatusAndStop`, `TestOrchestrator_ControlSocket_QueuesDurableUserIntent`, `TestOrchestrator_ControlSocket_StatusCountsUseReadOnlyInspector`, `TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners`, `TestE2E_Conflicts_ResolveWithWatchDaemonExecutesQueuedIntent`, `TestE2E_Issues_ApproveDeletes` |
 | Socket files are permissioned private, stale sockets are removed only after a failed live probe, and empty hash-runtime socket directories are cleaned up on close. | `TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval` |
 | Control-socket reload applies add/remove/pause/expired-pause diffs to the live runner set without bouncing unaffected drives. | `TestOrchestrator_Reload_AddDrive`, `TestOrchestrator_Reload_RemoveDrive`, `TestOrchestrator_Reload_PausedDrive`, `TestOrchestrator_Reload_TimedPauseExpiry` |
 
@@ -90,7 +90,12 @@ owns them.
 The configured socket path normally lives under the app data directory. If that
 absolute path would exceed the platform-safe Unix socket length, config derives
 a stable hash-named runtime directory under the OS temp directory and stores
-only the socket there; durable sync state remains in the drive state DB.
+only the socket there; durable sync state remains in the drive state DB. If the
+normal path and the hashed runtime fallback both exceed the Unix socket budget,
+path derivation fails explicitly. `RunOnce` and `RunWatch` treat that as fatal
+startup because the control socket is the single-owner lock. CLI durable-intent
+commands may still fall back to direct DB writes in that condition because no
+daemon can bind the socket path at all.
 
 Wire facts live in `internal/synccontrol`: endpoint constants, owner modes,
 request/response structs, response statuses, and stable error codes. Server
@@ -99,21 +104,21 @@ stay in `internal/cli`.
 
 The socket speaks JSON over HTTP:
 
-- `GET /v1/status` returns the owner mode (`oneshot` or `watch`) and managed drives. Watch owners also report pending durable-intent counts: approved held deletes plus queued/resolving/failed conflict requests. One-shot owners return those counters as zero/omitted because they are only exposing the owner lock/status surface, not running a long-lived intent loop.
+- `GET /v1/status` returns the owner mode (`oneshot` or `watch`) and managed drives. Watch owners also report pending durable-intent counts: approved held deletes plus queued/resolving/failed conflict requests. Those counters come from the read-only `syncstore.Inspector` boundary, not from opening a writable `SyncStore`, so status probes do not own checkpoint or close-side DB work. One-shot owners return those counters as zero/omitted because they are only exposing the owner lock/status surface, not running a long-lived intent loop.
 - `POST /v1/reload` reloads config in the watch owner.
 - `POST /v1/stop` asks the watch owner to stop cleanly.
-- `POST /v1/drives/{canonical-id}/held-deletes/approve` records durable held-delete approval for that drive and wakes the runner.
-- `POST /v1/drives/{canonical-id}/conflicts/{conflict-id}/resolution-request` records durable conflict-resolution intent and wakes the runner.
+- `POST /v1/drives/{canonical-id}/held-deletes/approve` records durable held-delete approval for that drive and marks a pending user-intent pass for the runner.
+- `POST /v1/drives/{canonical-id}/conflicts/{conflict-id}/resolution-request` records durable conflict-resolution intent and marks a pending user-intent pass for the runner.
 
 One-shot sync exposes only status. Mutating requests return a busy response
 with `code="foreground_sync_running"` because a foreground one-shot sync is
 already the active owner. The CLI routes all durable-intent mutations through
 one shared policy: `owner_mode="watch"` is the only live RPC mutation target.
-If no socket is live, if the socket reports `owner_mode="oneshot"`, or if a
-watch socket disappears between status probe and POST, mutating CLIs write the
-same durable intent directly to the selected drive's state DB. Typed daemon
-application errors are authoritative and are reported rather than falling
-back.
+If no socket is live, if the socket reports `owner_mode="oneshot"`, if socket
+path derivation proves no daemon can exist, or if a watch socket disappears
+between status probe and POST, mutating CLIs write the same durable intent
+directly to the selected drive's state DB. Typed daemon application errors are
+authoritative and are reported rather than falling back.
 
 Error responses have the shape `{status, code, message}`. Stable codes are
 `invalid_request`, `foreground_sync_running`, `drive_not_managed`,
@@ -144,6 +149,7 @@ runner set.
 - `startWatchRunner` creates one goroutine per running drive. That goroutine owns closing the runner's `done` channel exactly once on exit.
 - The control command channel is internal to `RunWatch`; socket handlers send commands into that channel and wait for one response.
 - The control plane itself owns no timers; reload, stop, and durable user-intent wakeups are event-driven through control-socket requests and context cancellation.
+- Control-socket mutation handlers do not force immediate dispatch themselves. They record durable intent and signal the single-owner engine/runtime boundary, which coalesces repeated wakes and guarantees one later user-intent pass once ordinary outbox work yields capacity.
 
 ## `DriveRunner`
 

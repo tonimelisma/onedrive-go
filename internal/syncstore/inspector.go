@@ -197,7 +197,7 @@ func (s IssueSummary) countForKey(key synctypes.SummaryKey) int {
 
 // OpenInspector opens a read-only connection to a sync state database.
 func OpenInspector(dbPath string, logger *slog.Logger) (*Inspector, error) {
-	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(1000)", dbPath)
+	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(1000)", dbPath)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open read-only sync store %s: %w", dbPath, err)
@@ -215,6 +215,15 @@ func (i *Inspector) Close() error {
 	}
 
 	return nil
+}
+
+func (i *Inspector) ReadDurableIntentCounts(ctx context.Context) (DurableIntentCounts, error) {
+	counts, err := countDurableIntents(ctx, i.db)
+	if err != nil {
+		return DurableIntentCounts{}, fmt.Errorf("read durable intent counts: %w", err)
+	}
+
+	return counts, nil
 }
 
 // HasScopeBlock reports whether the read-only store currently contains the
@@ -261,7 +270,7 @@ func (i *Inspector) ReadStatusSnapshot(ctx context.Context) StatusSnapshot {
 	}
 
 	snapshot.BaselineEntryCount = i.countOrZero(ctx, "baseline entries", "SELECT COUNT(*) FROM baseline")
-	counts, err := countDurableIntents(ctx, i.db)
+	counts, err := i.ReadDurableIntentCounts(ctx)
 	if err != nil {
 		i.logger.Debug("read durable intent counts", slog.String("error", err.Error()))
 	} else {

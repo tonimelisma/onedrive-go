@@ -422,6 +422,7 @@ func TestSocketIOWakeSource_PingPongHandling(t *testing.T) {
 	t.Parallel()
 
 	holdConn := make(chan struct{})
+	pongSeen := make(chan struct{})
 	server := newSocketIOTestServer(t, func(conn *websocket.Conn, r *http.Request) error {
 		if err := writeSocketIOText(r.Context(), conn, `0{"sid":"sid-1","pingInterval":25000,"pingTimeout":60000}`); err != nil {
 			return err
@@ -438,6 +439,7 @@ func TestSocketIOWakeSource_PingPongHandling(t *testing.T) {
 		if err := expectSocketIOText(r.Context(), conn, "3"); err != nil {
 			return err
 		}
+		close(pongSeen)
 		<-holdConn
 		return nil
 	})
@@ -461,7 +463,11 @@ func TestSocketIOWakeSource_PingPongHandling(t *testing.T) {
 		done <- source.Run(ctx, make(chan struct{}, 1))
 	}()
 
-	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-pongSeen:
+	case <-time.After(time.Second):
+		require.FailNow(t, "expected socket.io pong response")
+	}
 	cancel()
 	close(holdConn)
 	require.NoError(t, <-done)

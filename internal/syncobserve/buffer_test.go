@@ -829,6 +829,7 @@ func TestBuffer_RetainsRemoteMoveMarkerWithLatestRemoteState(t *testing.T) {
 // accumulate in the buffer and are delivered as a batch when the consumer
 // unblocks. The blocking send on the output channel is intentional
 // backpressure — it prevents event loss (B-128).
+// Validates: R-2.1.2
 func TestFlushDebounced_SlowConsumer(t *testing.T) {
 	t.Parallel()
 
