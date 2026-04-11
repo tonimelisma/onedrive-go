@@ -11,7 +11,6 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
-	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -435,6 +434,20 @@ func assertSyncLeavesLocalTreeStable(
 
 const remoteFixturePutMaxAttempts = 3
 
+type liveProviderRecurrenceReason string
+
+const (
+	liveProviderRecurrenceFreshParentChildCreateLag      liveProviderRecurrenceReason = "fresh_parent_child_create_lag"
+	liveProviderRecurrenceFreshParentParentPathLag       liveProviderRecurrenceReason = "fresh_parent_parent_path_lag"
+	liveProviderRecurrencePostMutationDestinationPathLag liveProviderRecurrenceReason = "post_mutation_destination_visibility_lag"
+	liveProviderRecurrenceUnknown                        liveProviderRecurrenceReason = "unknown"
+)
+
+type liveProviderRecurrenceDecision struct {
+	Reason liveProviderRecurrenceReason
+	Retry  bool
+}
+
 // putRemoteFile uploads string content to a remote path via a temp file.
 // cfgPath must point to a valid config with the drive section; env overrides
 // (if non-nil) are forwarded to the CLI child process. The helper deliberately
@@ -459,7 +472,8 @@ func putRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePa
 			break
 		}
 
-		if attempt >= remoteFixturePutMaxAttempts-1 || !shouldRetryRemoteFixturePut(stderr) {
+		decision := classifyRemoteFixturePutFailure(stderr)
+		if attempt >= remoteFixturePutMaxAttempts-1 || !decision.Retry {
 			require.NoErrorf(t, putErr, "CLI command %v failed\nstdout: %s\nstderr: %s",
 				[]string{"put", tmpFile.Name(), remotePath}, stdout, stderr)
 		}
@@ -467,40 +481,86 @@ func putRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePa
 		time.Sleep(pollBackoff(attempt))
 	}
 
-	pollRemotePathVisible(t, cfgPath, env, remotePath)
+	waitForRemoteFixtureSeedVisible(t, cfgPath, env, drive, remotePath)
 }
 
-func shouldRetryRemoteFixturePut(stderr string) bool {
-	return strings.Contains(stderr, "simple-upload-create-transient-404 retry exhausted") ||
-		strings.Contains(stderr, "upload-session-create-transient-404 retry exhausted") ||
-		(strings.Contains(stderr, "resolving parent") &&
-			strings.Contains(stderr, "remote path not yet visible"))
+func classifyRemoteFixturePutFailure(stderr string) liveProviderRecurrenceDecision {
+	switch {
+	case strings.Contains(stderr, "simple-upload-create-transient-404 retry exhausted"),
+		strings.Contains(stderr, "upload-session-create-transient-404 retry exhausted"):
+		return liveProviderRecurrenceDecision{
+			Reason: liveProviderRecurrenceFreshParentChildCreateLag,
+			Retry:  true,
+		}
+	case strings.Contains(stderr, "resolving parent") &&
+		strings.Contains(stderr, "remote path not yet visible"):
+		return liveProviderRecurrenceDecision{
+			Reason: liveProviderRecurrenceFreshParentParentPathLag,
+			Retry:  true,
+		}
+	case strings.Contains(stderr, "remote exact-path visibility for"),
+		strings.Contains(stderr, "remote fixture seed visibility for"),
+		strings.Contains(stderr, "remote write visibility for"):
+		return liveProviderRecurrenceDecision{
+			Reason: liveProviderRecurrencePostMutationDestinationPathLag,
+			Retry:  true,
+		}
+	default:
+		return liveProviderRecurrenceDecision{
+			Reason: liveProviderRecurrenceUnknown,
+			Retry:  false,
+		}
+	}
 }
 
-func TestShouldRetryRemoteFixturePut_KnownFreshParentConvergenceFamilies(t *testing.T) {
+func TestClassifyRemoteFixturePutFailure_KnownConvergenceFamilies(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, shouldRetryRemoteFixturePut(
+	assert.Equal(t, liveProviderRecurrenceDecision{
+		Reason: liveProviderRecurrenceFreshParentChildCreateLag,
+		Retry:  true,
+	}, classifyRemoteFixturePutFailure(
 		`Error: graph: simple-upload-create-transient-404 retry exhausted after 7 attempts: graph: HTTP 404`,
 	))
-	assert.True(t, shouldRetryRemoteFixturePut(
+	assert.Equal(t, liveProviderRecurrenceDecision{
+		Reason: liveProviderRecurrenceFreshParentChildCreateLag,
+		Retry:  true,
+	}, classifyRemoteFixturePutFailure(
 		`Error: graph: upload-session-create-transient-404 retry exhausted after 6 attempts: graph: HTTP 404`,
 	))
-	assert.True(t, shouldRetryRemoteFixturePut(
+	assert.Equal(t, liveProviderRecurrenceDecision{
+		Reason: liveProviderRecurrenceFreshParentParentPathLag,
+		Retry:  true,
+	}, classifyRemoteFixturePutFailure(
 		`Error: resolving parent "e2e-fast-conflict": remote path not yet visible: "e2e-fast-conflict"`,
+	))
+	assert.Equal(t, liveProviderRecurrenceDecision{
+		Reason: liveProviderRecurrencePostMutationDestinationPathLag,
+		Retry:  true,
+	}, classifyRemoteFixturePutFailure(
+		`pollRemoteEventually: timed out after 30s waiting for remote write visibility for "test.txt" via [stat /folder/test.txt]`,
 	))
 }
 
-func TestShouldRetryRemoteFixturePut_RejectsUnrelatedFailures(t *testing.T) {
+func TestClassifyRemoteFixturePutFailure_RejectsUnrelatedFailures(t *testing.T) {
 	t.Parallel()
 
-	assert.False(t, shouldRetryRemoteFixturePut(
+	assert.Equal(t, liveProviderRecurrenceDecision{
+		Reason: liveProviderRecurrenceUnknown,
+		Retry:  false,
+	}, classifyRemoteFixturePutFailure(
 		`Error: graph: setting mtime after simple upload: graph: simple-upload-mtime-transient-404 retry exhausted`,
 	))
-	assert.False(t, shouldRetryRemoteFixturePut(
+	assert.Equal(t, liveProviderRecurrenceDecision{
+		Reason: liveProviderRecurrenceUnknown,
+		Retry:  false,
+	}, classifyRemoteFixturePutFailure(
 		`Error: graph: HTTP 403: Access denied`,
 	))
-	assert.False(t, shouldRetryRemoteFixturePut(
+	assert.Equal(t, liveProviderRecurrenceDecision{
+		Reason: liveProviderRecurrenceUnknown,
+		Retry:  false,
+	}, classifyRemoteFixturePutFailure(
 		`Error: resolving "/e2e-fast-conflict": resolve delete target "e2e-fast-conflict" from parent "": graph: not found`,
 	))
 }
@@ -511,7 +571,7 @@ func TestShouldRetryRemoteFixturePut_RejectsUnrelatedFailures(t *testing.T) {
 func getRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePath string) string {
 	t.Helper()
 
-	pollRemotePathVisible(t, cfgPath, env, remotePath)
+	waitForRemoteFixtureSeedVisible(t, cfgPath, env, drive, remotePath)
 
 	tmpDir := t.TempDir()
 	localPath := filepath.Join(tmpDir, "downloaded")
@@ -540,116 +600,6 @@ func getRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePa
 				lastErr,
 				"get %q did not converge after visibility wait\nstdout: %s\nstderr: %s",
 				remotePath,
-				lastStdout,
-				lastStderr,
-			)
-		}
-
-		time.Sleep(pollBackoff(attempt))
-	}
-}
-
-func pollRemoteParentVisible(t *testing.T, cfgPath string, env map[string]string, remotePath string) {
-	t.Helper()
-
-	cleanPath := path.Clean(remotePath)
-	parent := path.Dir(cleanPath)
-	if parent == "." || parent == "/" || parent == "" {
-		return
-	}
-
-	pollRemotePathVisible(t, cfgPath, env, parent)
-}
-
-func pollRemotePathVisible(t *testing.T, cfgPath string, env map[string]string, remotePath string) {
-	t.Helper()
-
-	cleanPath := path.Clean(remotePath)
-	if cleanPath == "." || cleanPath == "/" || cleanPath == "" {
-		return
-	}
-
-	base := path.Base(cleanPath)
-	if base == "." || base == "/" || base == "" {
-		return
-	}
-
-	parent := path.Dir(cleanPath)
-	if parent == "." || parent == "" {
-		parent = "/"
-	}
-
-	waitForRemotePathVisible(t, cfgPath, env, cleanPath, parent, base)
-}
-
-func waitForRemotePathVisible(t *testing.T, cfgPath string, env map[string]string, cleanPath string, parent string, base string) {
-	t.Helper()
-
-	deadline := time.Now().Add(remoteWritePropagationTimeout)
-	startedAt := time.Now()
-
-	var lastStdout string
-	var lastStderr string
-
-	for attempt := 0; ; attempt++ {
-		stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, env, "stat", cleanPath)
-		if err == nil && strings.Contains(stdout, base) {
-			recordTimingEvent(
-				t,
-				timingKindRemoteWriteVisibility,
-				fmt.Sprintf("remote path visibility for %q", cleanPath),
-				drive,
-				[]string{"stat", cleanPath},
-				remoteWritePropagationTimeout,
-				time.Since(startedAt),
-				attempt+1,
-				timingOutcomeSuccess,
-			)
-			return
-		}
-
-		lastStdout = stdout
-		lastStderr = stderr
-
-		stdout, stderr, err = runCLIWithConfigAllowError(t, cfgPath, env, "ls", parent)
-		if err == nil && strings.Contains(stdout, base) {
-			recordTimingEvent(
-				t,
-				timingKindRemoteWriteVisibility,
-				fmt.Sprintf("remote path visibility for %q", cleanPath),
-				drive,
-				[]string{"ls", parent},
-				remoteWritePropagationTimeout,
-				time.Since(startedAt),
-				attempt+1,
-				timingOutcomeSuccess,
-			)
-			return
-		}
-
-		lastStdout = stdout
-		lastStderr = stderr
-
-		if time.Now().After(deadline) {
-			recordTimingEvent(
-				t,
-				timingKindRemoteWriteVisibility,
-				fmt.Sprintf("remote path visibility for %q", cleanPath),
-				drive,
-				[]string{"stat", cleanPath, "ls", parent},
-				remoteWritePropagationTimeout,
-				time.Since(startedAt),
-				attempt+1,
-				timingOutcomeTimeout,
-			)
-			require.Failf(
-				t,
-				"waitForRemotePathVisible: timed out",
-				"after %v waiting for %q via stat %q or ls %q\nlast stdout: %s\nlast stderr: %s",
-				remoteWritePropagationTimeout,
-				cleanPath,
-				cleanPath,
-				parent,
 				lastStdout,
 				lastStderr,
 			)
@@ -722,7 +672,7 @@ func TestE2E_Sync_DownloadOnly(t *testing.T) {
 	require.NoError(t, tmpFile.Close())
 
 	runCLIWithConfig(t, opsCfgPath, nil, "put", tmpFile.Name(), remotePath)
-	waitForRemoteWriteVisible(t, opsCfgPath, nil, drive, "download-test.txt", "stat", remotePath)
+	waitForRemoteFixtureSeedVisible(t, opsCfgPath, nil, drive, remotePath)
 
 	// Cleanup remote after test.
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
