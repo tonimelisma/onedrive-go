@@ -25,7 +25,7 @@ peer authority; it is rebuilt from store state when the engine starts.
 
 | Behavior | Evidence |
 | --- | --- |
-| Store-owned read helpers and `Inspector` expose stable read-only issue/status projections, so summary status, detailed single-drive status, offline auth projection, and daemon status all read the same durable truth without opening writable store handles. | `TestReadStatusSnapshot`, `TestReadDetailedStatusSnapshot_ReadOnlyDB`, `TestReadDurableIntentCounts_ReadOnlyDB`, `TestHasScopeBlockAtPath`, `TestInspector_ReadVisibleIssueSnapshot`, `TestInspector_ReadStatusSnapshot_StaysConsistentWithVisibleIssueSnapshot`, `TestInspector_ReadDetailedStatusSnapshot`, `TestOrchestrator_ControlSocket_StatusCountsUseReadOnlyInspector` |
+| Store-owned read helpers and `Inspector` expose stable read-only issue/status projections, so `status`, offline auth projection, and daemon status all read the same durable truth without opening writable store handles. | `TestReadStatusSnapshot`, `TestReadDriveStatusSnapshot_ReadOnlyDB`, `TestReadDurableIntentCounts_ReadOnlyDB`, `TestHasScopeBlockAtPath`, `TestInspector_ReadGroupedIssueProjection`, `TestInspector_ReadStatusSnapshot_StaysConsistentWithDriveStatusSnapshot`, `TestInspector_ReadDriveStatusSnapshot`, `TestOrchestrator_ControlSocket_StatusCountsUseReadOnlyInspector` |
 | Status issue-group projection preserves separate entries when the same summary key appears in multiple scopes. | `TestQuerySyncState_PreservesIssueGroupScopeContext`, `TestPrintStatusJSON_KeepsSameSummaryGroupsSeparatedByScope`, `TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope` |
 | Integrity inspection and safe repair stay store-owned, deterministic, and durable-intent aware. | `TestInspector_AuditIntegrityReportsPersistedProblems`, `TestSyncStore_AuditIntegrityReportsDurableIntentWorkflowProblems`, `TestSyncStore_RepairIntegritySafeNormalizesDeterministicViolations`, `TestSyncStore_RepairIntegritySafePreservesDurableUserIntent` |
 | Held-delete approval identity requires matching item ID and repeated approvals are idempotent. | `TestSyncStore_UpsertHeldDeletesRequiresItemID`, `TestSyncStore_HeldDeleteConsumeRequiresMatchingItemID`, `TestSyncStore_DeleteHeldDeleteRequiresMatchingItemID`, `TestSyncStore_ApproveHeldDeletesConcurrentCallsAreIdempotent` |
@@ -36,8 +36,8 @@ peer authority; it is rebuilt from store state when the engine starts.
 
 `NewSyncStore()` opens SQLite in WAL mode and applies the embedded goose
 migrations from
-[`internal/syncstore/migrations`](/Users/tonimelisma/Development/onedrive-go/internal/syncstore/migrations)
-through [`schema.go`](/Users/tonimelisma/Development/onedrive-go/internal/syncstore/schema.go).
+[`internal/syncstore/migrations`](../../internal/syncstore/migrations)
+through [`schema.go`](../../internal/syncstore/schema.go).
 Fresh databases start at migration `00001_init.sql` and record applied
 versions in goose's `goose_db_version` table. Existing stores that already
 carry valid goose history are advanced by the migration runner. Existing stores
@@ -271,7 +271,7 @@ tooling opens the smallest boundary that can answer its question.
 `Inspector` is the read-only companion to `SyncStore`. It is opened only from
 `internal/syncstore` and gives administrative readers a narrow projection of
 state without handing them raw SQL ownership. Package-level helper functions
-such as `ReadStatusSnapshot`, `ReadDetailedStatusSnapshot`,
+such as `ReadStatusSnapshot`, `ReadDriveStatusSnapshot`,
 `ReadDurableIntentCounts`, and `HasScopeBlockAtPath` are the default one-shot
 projection entrypoints. They open one read-only inspector, run one store-owned
 query/projection, and close it before returning so callers do not own DB
@@ -280,9 +280,9 @@ lifecycle just to answer one question.
 - `OpenInspector(dbPath, logger)` opens SQLite in read-only mode.
 - `ReadStatusSnapshot(ctx, dbPath, logger)` is the one-shot status reader used
   by CLI status paths that need one projection and nothing else.
-- `ReadDetailedStatusSnapshot(ctx, dbPath, history, logger)` is the one-shot
-  detailed status reader used by single-drive `status` paths that need one
-  projection and nothing else.
+- `ReadDriveStatusSnapshot(ctx, dbPath, history, logger)` is the one-shot
+  per-drive status reader used by `status` paths that need one projection and
+  nothing else.
 - `ReadDurableIntentCounts(ctx, dbPath, logger)` is the one-shot durable-intent
   projection reader used by daemon status aggregation.
 - `HasScopeBlockAtPath(ctx, dbPath, key, logger)` is the one-shot auth/scope
@@ -298,14 +298,14 @@ lifecycle just to answer one question.
   counters, and one derived `IssueSummary`. It builds those durable-intent
   counters through the same `ReadDurableIntentCounts` helper used by the
   control socket.
-- `ReadVisibleIssueSnapshot(ctx, history)` returns the internal read-only
+- `readGroupedIssueProjection(ctx, history)` returns the internal read-only
   grouped sync-health projection used by store tests and internal readers:
   grouped visible issue families, held deletes, pending retries, and optional
   conflict history.
-- `ReadDetailedStatusSnapshot(ctx, history)` returns the detailed single-drive
-  `status` projection: grouped visible issue families, delete-safety rows,
-  unresolved conflicts joined with request metadata, and optional resolved
-  conflict history.
+- `ReadDriveStatusSnapshot(ctx, history)` returns the per-drive `status`
+  projection: grouped visible issue families, delete-safety rows, unresolved
+  conflicts joined with request metadata, and optional resolved conflict
+  history.
 - `IssueSummary.Groups` are keyed by the shared
   [`synctypes.SummaryKey`](../../internal/synctypes/summary_keys.go),
   not by raw SQL categories. Each group also carries the normalized scope kind
@@ -323,10 +323,11 @@ lifecycle just to answer one question.
 - Control-socket `GET /v1/status` uses the same read-only durable-intent
   helper instead of opening a writable `SyncStore`, so status probes do not
   trigger writable-store close/checkpoint work.
-- `StatusSnapshot`, `VisibleIssueSnapshot`, and `DetailedStatusSnapshot` share
-  one visible-issue projection builder inside `Inspector`, so summary status,
-  detailed status, and internal issue-history reads cannot silently drift on
-  what counts as a visible issue family.
+- `StatusSnapshot`, the internal grouped issue projection, and
+  `DriveStatusSnapshot` share one visible-issue projection builder inside
+  `Inspector`, so aggregate status, per-drive status, and internal
+  issue-history reads cannot silently drift on what counts as a visible issue
+  family.
 - CLI `status`, daemon status probes, offline auth projection, and internal
   test/admin readers consume store-owned read helpers or `Inspector`; they do
   not build their own DSNs or call `sql.Open` directly.
@@ -366,9 +367,9 @@ stay inside the store-owned boundary.
 
 ## Verification
 
-[`internal/syncverify/verify.go`](/Users/tonimelisma/Development/onedrive-go/internal/syncverify/verify.go)
+[`internal/syncverify/verify.go`](../../internal/syncverify/verify.go)
 re-hashes local files against baseline entries through a
-[`synctree.Root`](/Users/tonimelisma/Development/onedrive-go/internal/synctree/synctree.go)
+[`synctree.Root`](../../internal/synctree/synctree.go)
 capability. The store provides only baseline data; it does not own local file
 hashing or filesystem probing.
 
@@ -385,10 +386,10 @@ iteration order.
 
 ## Crash Recovery Boundary
 
-[`internal/syncrecovery/recovery.go`](/Users/tonimelisma/Development/onedrive-go/internal/syncrecovery/recovery.go)
+[`internal/syncrecovery/recovery.go`](../../internal/syncrecovery/recovery.go)
 owns the sync-root filesystem half of crash recovery. It classifies deleting
 rows as completed deletes or pending retries via
-[`synctree.Root`](/Users/tonimelisma/Development/onedrive-go/internal/synctree/synctree.go),
+[`synctree.Root`](../../internal/synctree/synctree.go),
 then calls the store’s state-only recovery primitives. `SyncStore` no longer
 joins sync-root paths or calls `os.Stat` itself.
 
@@ -398,17 +399,17 @@ failures (`ResetDownloadingStates`, `ListDeletingCandidates`,
 `FinalizeDeletingStates`) still abort the recovery pass with context-wrapped
 errors because the durable-state transition itself is incomplete.
 
-## Detailed Status
+## Drive Status
 
-Single-drive `status` reads one store-owned `DetailedStatusSnapshot` from
-`Inspector`. `syncstore` owns grouping, scope labeling, pending-retry
-aggregation, delete-safety separation, and unresolved-conflict/request joins;
-CLI only formats that snapshot. Grouping and display use the persisted
-`scope_key`, `issue_type`, `category`, `failure_role`, and shortcut metadata,
-but the user-facing grouping key is still the shared
-`synctypes.SummaryKey`. This keeps detailed `status` presentation aligned with
-summary `status` and sync-runtime logging without persisting a second summary
-column in SQLite.
+Each displayed drive in `status` reads one store-owned `DriveStatusSnapshot`
+from `Inspector`. `syncstore` owns grouping, scope labeling, pending-retry
+aggregation, delete-safety separation, unresolved-conflict/request joins, and
+optional resolved conflict history; CLI only formats that snapshot. Grouping
+and display use the persisted `scope_key`, `issue_type`, `category`,
+`failure_role`, and shortcut metadata, but the user-facing grouping key is
+still the shared `synctypes.SummaryKey`. This keeps per-drive `status`
+presentation aligned with aggregate `status` and sync-runtime logging without
+persisting a second summary column in SQLite.
 
 Retryable transient item failures intentionally surface through
 the detailed/read-only retry projection rather than the visible grouped-issue list.

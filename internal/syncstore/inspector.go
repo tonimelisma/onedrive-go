@@ -20,8 +20,9 @@ type Inspector struct {
 	logger *slog.Logger
 }
 
-// StatusSnapshot is the read-only projection consumed by the CLI status
-// command. It intentionally exposes counts and metadata only, not raw tables.
+// StatusSnapshot is the read-only aggregate projection consumed by status
+// summaries and daemon/control-plane readers. It intentionally exposes counts
+// and metadata only, not raw tables.
 type StatusSnapshot struct {
 	SyncMetadata       map[string]string
 	BaselineEntryCount int
@@ -30,23 +31,24 @@ type StatusSnapshot struct {
 	DurableIntents     DurableIntentCounts
 }
 
-// DetailedStatusSnapshot is the single-drive read model consumed by the
-// product-facing status command. It keeps the per-drive sync-health view in
-// one store-owned projection.
-type DetailedStatusSnapshot struct {
+// DriveStatusSnapshot is the per-drive read model consumed by the
+// product-facing status command. It keeps the full per-drive sync-health view
+// in one store-owned projection.
+type DriveStatusSnapshot struct {
 	SyncMetadata       map[string]string
 	BaselineEntryCount int
 	PendingSyncItems   int
+	RetryingItems      int
 	IssueGroups        []IssueGroupSnapshot
 	DeleteSafety       []DeleteSafetySnapshot
 	Conflicts          []ConflictStatusSnapshot
 	ConflictHistory    []ConflictHistorySnapshot
 }
 
-// VisibleIssueSnapshot is the read-only projection used by internal tests and
-// diagnostics that need grouped visible issues plus held-delete detail without
-// opening writable store handles.
-type VisibleIssueSnapshot struct {
+// groupedIssueProjection is the internal grouped sync-health projection shared
+// by aggregate status readers and store/package tests. It stays unexported so
+// the public store read surface has one product-facing per-drive projection.
+type groupedIssueProjection struct {
 	Conflicts      []synctypes.ConflictRecord
 	Groups         []IssueGroupSnapshot
 	HeldDeletes    []HeldDeleteSnapshot
@@ -54,7 +56,7 @@ type VisibleIssueSnapshot struct {
 }
 
 // DeleteSafetySnapshot is one held-delete approval row exposed through the
-// detailed status projection.
+// per-drive status projection.
 type DeleteSafetySnapshot struct {
 	Path       string
 	State      string
@@ -187,7 +189,7 @@ type IssueSummary struct {
 	Retrying int
 }
 
-func (s VisibleIssueSnapshot) Empty() bool {
+func (s groupedIssueProjection) Empty() bool {
 	return len(s.Groups) == 0 && len(s.HeldDeletes) == 0
 }
 
@@ -331,7 +333,7 @@ func (i *Inspector) ReadStatusSnapshot(ctx context.Context) StatusSnapshot {
 	} else {
 		snapshot.DurableIntents = counts
 	}
-	projection, err := i.readVisibleIssueReadProjection(ctx)
+	projection, err := i.readGroupedIssueProjectionModel(ctx)
 	if err != nil {
 		i.logger.Debug("read visible issue status projection", slog.String("error", err.Error()))
 	} else {
@@ -355,11 +357,11 @@ func (i *Inspector) ReadStatusSnapshot(ctx context.Context) StatusSnapshot {
 	return snapshot
 }
 
-// ReadDetailedStatusSnapshot returns the single-drive status projection used
-// by the product-facing status command. Missing tables are tolerated so older
-// or partially initialized DBs still yield best-effort status information.
-func (i *Inspector) ReadDetailedStatusSnapshot(ctx context.Context, history bool) (DetailedStatusSnapshot, error) {
-	snapshot := DetailedStatusSnapshot{
+// ReadDriveStatusSnapshot returns the per-drive status projection used by the
+// product-facing status command. Missing tables are tolerated so older or
+// partially initialized DBs still yield best-effort status information.
+func (i *Inspector) ReadDriveStatusSnapshot(ctx context.Context, history bool) (DriveStatusSnapshot, error) {
+	snapshot := DriveStatusSnapshot{
 		SyncMetadata: make(map[string]string),
 	}
 
@@ -374,7 +376,7 @@ func (i *Inspector) ReadDetailedStatusSnapshot(ctx context.Context, history bool
 			}
 		}
 		if rowErr := rows.Err(); rowErr != nil {
-			i.logger.Debug("read detailed sync metadata snapshot", slog.String("error", rowErr.Error()))
+			i.logger.Debug("read drive status sync metadata snapshot", slog.String("error", rowErr.Error()))
 		}
 	}
 
@@ -384,29 +386,34 @@ func (i *Inspector) ReadDetailedStatusSnapshot(ctx context.Context, history bool
 		"pending sync items",
 		"SELECT COUNT(*) FROM remote_state WHERE sync_status NOT IN ('synced','deleted','filtered')",
 	)
+	snapshot.RetryingItems = i.countOrZero(
+		ctx,
+		"retrying sync failures",
+		"SELECT COUNT(*) FROM sync_failures WHERE category = 'transient' AND failure_count >= 3",
+	)
 
-	projection, err := i.readVisibleIssueReadProjection(ctx)
+	projection, err := i.readGroupedIssueProjectionModel(ctx)
 	if err != nil {
-		return DetailedStatusSnapshot{}, fmt.Errorf("read detailed status projection: %w", err)
+		return DriveStatusSnapshot{}, fmt.Errorf("read drive status projection: %w", err)
 	}
 	snapshot.IssueGroups = projection.snapshot.Groups
 
 	deleteSafety, err := i.listDeleteSafety(ctx)
 	if err != nil {
-		return DetailedStatusSnapshot{}, fmt.Errorf("list delete safety rows: %w", err)
+		return DriveStatusSnapshot{}, fmt.Errorf("list delete safety rows: %w", err)
 	}
 	snapshot.DeleteSafety = deleteSafety
 
-	conflicts, err := i.listDetailedConflicts(ctx)
+	conflicts, err := i.listDriveStatusConflicts(ctx)
 	if err != nil {
-		return DetailedStatusSnapshot{}, fmt.Errorf("list unresolved conflicts: %w", err)
+		return DriveStatusSnapshot{}, fmt.Errorf("list unresolved conflicts: %w", err)
 	}
 	snapshot.Conflicts = conflicts
 
 	if history {
 		conflictHistory, err := i.listConflictHistory(ctx)
 		if err != nil {
-			return DetailedStatusSnapshot{}, fmt.Errorf("list conflict history: %w", err)
+			return DriveStatusSnapshot{}, fmt.Errorf("list conflict history: %w", err)
 		}
 		snapshot.ConflictHistory = conflictHistory
 	}
@@ -414,61 +421,61 @@ func (i *Inspector) ReadDetailedStatusSnapshot(ctx context.Context, history bool
 	return snapshot, nil
 }
 
-// ReadVisibleIssueSnapshot returns the grouped sync-health projection used by
+// readGroupedIssueProjection returns the grouped sync-health projection used by
 // internal readers and tests. history only widens the auxiliary conflicts
 // slice for callers that also want resolved conflict history.
-func (i *Inspector) ReadVisibleIssueSnapshot(ctx context.Context, history bool) (VisibleIssueSnapshot, error) {
-	projection, err := i.readVisibleIssueReadProjection(ctx)
+func (i *Inspector) readGroupedIssueProjection(ctx context.Context, history bool) (groupedIssueProjection, error) {
+	projection, err := i.readGroupedIssueProjectionModel(ctx)
 	if err != nil {
-		return VisibleIssueSnapshot{}, err
+		return groupedIssueProjection{}, err
 	}
 
 	conflicts, err := i.listConflicts(ctx, history)
 	if err != nil {
-		return VisibleIssueSnapshot{}, fmt.Errorf("list conflicts: %w", err)
+		return groupedIssueProjection{}, fmt.Errorf("list conflicts: %w", err)
 	}
 	projection.snapshot.Conflicts = conflicts
 
 	return projection.snapshot, nil
 }
 
-type visibleIssueReadProjection struct {
-	snapshot VisibleIssueSnapshot
+type groupedIssueProjectionModel struct {
+	snapshot groupedIssueProjection
 	summary  IssueSummary
 }
 
-func (i *Inspector) readVisibleIssueReadProjection(ctx context.Context) (visibleIssueReadProjection, error) {
+func (i *Inspector) readGroupedIssueProjectionModel(ctx context.Context) (groupedIssueProjectionModel, error) {
 	shortcuts, err := i.listShortcuts(ctx)
 	if err != nil {
-		return visibleIssueReadProjection{}, fmt.Errorf("list shortcuts: %w", err)
+		return groupedIssueProjectionModel{}, fmt.Errorf("list shortcuts: %w", err)
 	}
 
 	actionableFailures, err := i.listActionableFailures(ctx)
 	if err != nil {
-		return visibleIssueReadProjection{}, fmt.Errorf("list actionable failures: %w", err)
+		return groupedIssueProjectionModel{}, fmt.Errorf("list actionable failures: %w", err)
 	}
 
 	heldDeletes, err := i.listHeldDeletes(ctx)
 	if err != nil {
-		return visibleIssueReadProjection{}, fmt.Errorf("list held deletes: %w", err)
+		return groupedIssueProjectionModel{}, fmt.Errorf("list held deletes: %w", err)
 	}
 
 	remoteBlocked, err := i.listRemoteBlockedFailures(ctx)
 	if err != nil {
-		return visibleIssueReadProjection{}, fmt.Errorf("list remote blocked failures: %w", err)
+		return groupedIssueProjectionModel{}, fmt.Errorf("list remote blocked failures: %w", err)
 	}
 
 	scopeBlocks, err := i.listScopeBlocks(ctx)
 	if err != nil {
-		return visibleIssueReadProjection{}, fmt.Errorf("list scope blocks: %w", err)
+		return groupedIssueProjectionModel{}, fmt.Errorf("list scope blocks: %w", err)
 	}
 
 	pendingRetries, err := i.pendingRetrySummary(ctx)
 	if err != nil {
-		return visibleIssueReadProjection{}, fmt.Errorf("pending retry summary: %w", err)
+		return groupedIssueProjectionModel{}, fmt.Errorf("pending retry summary: %w", err)
 	}
 
-	return buildVisibleIssueReadProjection(
+	return buildGroupedIssueProjection(
 		actionableFailures,
 		heldDeletes,
 		remoteBlocked,
@@ -478,15 +485,15 @@ func (i *Inspector) readVisibleIssueReadProjection(ctx context.Context) (visible
 	), nil
 }
 
-func buildVisibleIssueReadProjection(
+func buildGroupedIssueProjection(
 	actionableFailures []synctypes.SyncFailureRow,
 	heldDeletes []synctypes.HeldDeleteRecord,
 	remoteBlocked []synctypes.SyncFailureRow,
 	scopeBlocks []*synctypes.ScopeBlock,
 	pendingRetries []synctypes.PendingRetryGroup,
 	shortcuts []synctypes.Shortcut,
-) visibleIssueReadProjection {
-	builder := newVisibleIssueReadBuilder(shortcuts, len(pendingRetries))
+) groupedIssueProjectionModel {
+	builder := newGroupedIssueProjectionBuilder(shortcuts, len(pendingRetries))
 	builder.addActionableFailures(actionableFailures)
 	builder.addHeldDeletes(heldDeletes)
 	builder.addRemoteBlocked(remoteBlocked)
@@ -500,19 +507,19 @@ type issueGroupKey struct {
 	scopeKey   string
 }
 
-type visibleIssueReadBuilder struct {
+type groupedIssueProjectionBuilder struct {
 	shortcuts   []synctypes.Shortcut
 	groupCounts issueGroupAccumulator
 	groupIndex  map[issueGroupKey]int
-	snapshot    VisibleIssueSnapshot
+	snapshot    groupedIssueProjection
 }
 
-func newVisibleIssueReadBuilder(shortcuts []synctypes.Shortcut, pendingRetryCap int) *visibleIssueReadBuilder {
-	return &visibleIssueReadBuilder{
+func newGroupedIssueProjectionBuilder(shortcuts []synctypes.Shortcut, pendingRetryCap int) *groupedIssueProjectionBuilder {
+	return &groupedIssueProjectionBuilder{
 		shortcuts:   shortcuts,
 		groupCounts: make(issueGroupAccumulator),
 		groupIndex:  make(map[issueGroupKey]int),
-		snapshot: VisibleIssueSnapshot{
+		snapshot: groupedIssueProjection{
 			Groups:         make([]IssueGroupSnapshot, 0),
 			HeldDeletes:    make([]HeldDeleteSnapshot, 0),
 			PendingRetries: make([]PendingRetrySnapshot, 0, pendingRetryCap),
@@ -520,7 +527,7 @@ func newVisibleIssueReadBuilder(shortcuts []synctypes.Shortcut, pendingRetryCap 
 	}
 }
 
-func (b *visibleIssueReadBuilder) addSummary(
+func (b *groupedIssueProjectionBuilder) addSummary(
 	key synctypes.SummaryKey,
 	scopeKey synctypes.ScopeKey,
 	role synctypes.FailureRole,
@@ -529,7 +536,7 @@ func (b *visibleIssueReadBuilder) addSummary(
 	b.groupCounts.Add(key, 1, scopeKind, scope)
 }
 
-func (b *visibleIssueReadBuilder) addGroupedPath(
+func (b *groupedIssueProjectionBuilder) addGroupedPath(
 	summaryKey synctypes.SummaryKey,
 	issueType string,
 	scopeKey synctypes.ScopeKey,
@@ -558,7 +565,7 @@ func (b *visibleIssueReadBuilder) addGroupedPath(
 	return true
 }
 
-func (b *visibleIssueReadBuilder) addScopeOnlyGroup(
+func (b *groupedIssueProjectionBuilder) addScopeOnlyGroup(
 	summaryKey synctypes.SummaryKey,
 	issueType string,
 	scopeKey synctypes.ScopeKey,
@@ -584,7 +591,7 @@ func (b *visibleIssueReadBuilder) addScopeOnlyGroup(
 	return true
 }
 
-func (b *visibleIssueReadBuilder) addActionableFailures(rows []synctypes.SyncFailureRow) {
+func (b *groupedIssueProjectionBuilder) addActionableFailures(rows []synctypes.SyncFailureRow) {
 	for i := range rows {
 		row := rows[i]
 		summaryKey := synctypes.SummaryKeyForPersistedFailure(row.IssueType, row.Category, row.Role)
@@ -593,7 +600,7 @@ func (b *visibleIssueReadBuilder) addActionableFailures(rows []synctypes.SyncFai
 	}
 }
 
-func (b *visibleIssueReadBuilder) addHeldDeletes(rows []synctypes.HeldDeleteRecord) {
+func (b *groupedIssueProjectionBuilder) addHeldDeletes(rows []synctypes.HeldDeleteRecord) {
 	for i := range rows {
 		row := rows[i]
 		b.snapshot.HeldDeletes = append(b.snapshot.HeldDeletes, HeldDeleteSnapshot{
@@ -604,7 +611,7 @@ func (b *visibleIssueReadBuilder) addHeldDeletes(rows []synctypes.HeldDeleteReco
 	}
 }
 
-func (b *visibleIssueReadBuilder) addRemoteBlocked(rows []synctypes.SyncFailureRow) {
+func (b *groupedIssueProjectionBuilder) addRemoteBlocked(rows []synctypes.SyncFailureRow) {
 	for i := range rows {
 		row := rows[i]
 		summaryKey := synctypes.SummaryKeyForPersistedFailure(row.IssueType, row.Category, row.Role)
@@ -614,7 +621,7 @@ func (b *visibleIssueReadBuilder) addRemoteBlocked(rows []synctypes.SyncFailureR
 	}
 }
 
-func (b *visibleIssueReadBuilder) addAuthScopeBlocks(blocks []*synctypes.ScopeBlock) {
+func (b *groupedIssueProjectionBuilder) addAuthScopeBlocks(blocks []*synctypes.ScopeBlock) {
 	for i := range blocks {
 		block := blocks[i]
 		if block.Key != synctypes.SKAuthAccount() {
@@ -628,7 +635,7 @@ func (b *visibleIssueReadBuilder) addAuthScopeBlocks(blocks []*synctypes.ScopeBl
 	}
 }
 
-func (b *visibleIssueReadBuilder) addPendingRetries(groups []synctypes.PendingRetryGroup) {
+func (b *groupedIssueProjectionBuilder) addPendingRetries(groups []synctypes.PendingRetryGroup) {
 	for i := range groups {
 		group := groups[i]
 		b.snapshot.PendingRetries = append(b.snapshot.PendingRetries, PendingRetrySnapshot{
@@ -640,14 +647,14 @@ func (b *visibleIssueReadBuilder) addPendingRetries(groups []synctypes.PendingRe
 	}
 }
 
-func (b *visibleIssueReadBuilder) projection() visibleIssueReadProjection {
+func (b *groupedIssueProjectionBuilder) projection() groupedIssueProjectionModel {
 	sortIssueGroups(b.snapshot.Groups)
 
 	summary := IssueSummary{
 		Groups: b.groupCounts.Groups(),
 	}
 
-	return visibleIssueReadProjection{
+	return groupedIssueProjectionModel{
 		snapshot: b.snapshot,
 		summary:  summary,
 	}
@@ -861,7 +868,7 @@ func (i *Inspector) listDeleteSafety(ctx context.Context) ([]DeleteSafetySnapsho
 	return snapshots, nil
 }
 
-func (i *Inspector) listDetailedConflicts(ctx context.Context) ([]ConflictStatusSnapshot, error) {
+func (i *Inspector) listDriveStatusConflicts(ctx context.Context) ([]ConflictStatusSnapshot, error) {
 	rows, err := i.db.QueryContext(ctx, `
 		SELECT c.id, c.path, c.conflict_type, c.detected_at,
 		       COALESCE(r.requested_resolution, ''),
@@ -878,7 +885,7 @@ func (i *Inspector) listDetailedConflicts(ctx context.Context) ([]ConflictStatus
 		if isMissingTableErr(err) {
 			return []ConflictStatusSnapshot{}, nil
 		}
-		return nil, fmt.Errorf("query unresolved conflicts for detailed status: %w", err)
+		return nil, fmt.Errorf("query unresolved conflicts for drive status: %w", err)
 	}
 	defer rows.Close()
 
@@ -895,13 +902,13 @@ func (i *Inspector) listDetailedConflicts(ctx context.Context) ([]ConflictStatus
 			&snapshot.LastRequestedAt,
 			&snapshot.LastRequestError,
 		); err != nil {
-			return nil, fmt.Errorf("scan detailed conflict row: %w", err)
+			return nil, fmt.Errorf("scan drive status conflict row: %w", err)
 		}
 
 		snapshots = append(snapshots, snapshot)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate detailed conflict rows: %w", err)
+		return nil, fmt.Errorf("iterate drive status conflict rows: %w", err)
 	}
 
 	return snapshots, nil

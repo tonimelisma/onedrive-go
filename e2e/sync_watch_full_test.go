@@ -202,8 +202,8 @@ func TestE2E_SyncWatch_ConflictDuringWatch(t *testing.T) {
 	// both the local change and the remote change from the delta feed.
 	require.NoError(t, os.WriteFile(filePath, []byte("local conflict version"), 0o600))
 
-	// Wait for the daemon to detect the conflict in detailed status.
-	status := pollDetailedStatus(t, cfgPath, env, daemonPollTimeout, func(status detailedStatusJSON) bool {
+	// Wait for the daemon to detect the conflict in per-drive status.
+	status := pollStatusSyncState(t, cfgPath, env, daemonPollTimeout, func(status statusSyncStateJSON) bool {
 		for _, conflict := range status.Conflicts {
 			if strings.HasSuffix(conflict.Path, "/conflict-watch.txt") && conflict.ConflictType == "edit_edit" {
 				return true

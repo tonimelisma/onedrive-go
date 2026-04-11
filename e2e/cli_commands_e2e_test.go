@@ -50,8 +50,8 @@ func TestE2E_Status_AfterSync(t *testing.T) {
 	assert.Contains(t, stdout, "ready", "status should show ready state after sync")
 }
 
-// TestE2E_Status_JSON validates that single-drive status --json produces the
-// detailed current sync-state schema.
+// TestE2E_Status_JSON validates that status --json exposes the unified
+// summary-plus-per-drive schema.
 func TestE2E_Status_JSON(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
@@ -59,34 +59,13 @@ func TestE2E_Status_JSON(t *testing.T) {
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
 
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "status", "--json")
-
-	var output map[string]interface{}
-	require.NoError(t, json.Unmarshal([]byte(stdout), &output),
-		"status --json should produce valid JSON, got: %s", stdout)
-
-	assert.Contains(t, output, "drive", "single-drive status json should name the selected drive")
-	assert.Contains(t, output, "issue_groups", "single-drive status json should include grouped issue details")
-	assert.Contains(t, output, "delete_safety", "single-drive status json should include delete safety rows")
-	assert.Contains(t, output, "conflicts", "single-drive status json should include unresolved conflicts")
-	assert.Contains(t, output, "next_actions", "single-drive status json should include explicit next actions")
-	assert.Contains(t, output, "state_store_status", "single-drive status json should report state-store health")
-
-	_, ok := output["issue_groups"].([]interface{})
-	require.True(t, ok, "issue_groups should be an array")
-
-	_, ok = output["delete_safety"].([]interface{})
-	require.True(t, ok, "delete_safety should be an array")
-
-	_, ok = output["conflicts"].([]interface{})
-	require.True(t, ok, "conflicts should be an array")
-
-	_, ok = output["next_actions"].([]interface{})
-	require.True(t, ok, "next_actions should be an array")
-
-	stateStoreStatus, ok := output["state_store_status"].(string)
-	require.True(t, ok, "state_store_status should be a string")
-	assert.NotEmpty(t, stateStoreStatus, "state_store_status should be populated")
+	status := readStatus(t, cfgPath, env)
+	assert.Equal(t, 1, status.Summary.TotalDrives)
+	driveStatus := requireStatusDrive(t, status, drive)
+	require.NotNil(t, driveStatus.SyncState)
+	assert.Equal(t, 5, driveStatus.SyncState.ExamplesLimit)
+	assert.False(t, driveStatus.SyncState.Verbose)
+	assert.NotEmpty(t, driveStatus.SyncState.StateStoreStatus)
 }
 
 // TestE2E_Status_PausedDrive validates that pausing a drive changes its
@@ -188,7 +167,7 @@ func TestE2E_Resume_AllDrives(t *testing.T) {
 }
 
 // Validates: R-2.3.3
-func TestE2E_Status_Detailed_NoVisibleProblems(t *testing.T) {
+func TestE2E_Status_PerDrive_NoVisibleProblems(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
@@ -205,7 +184,7 @@ func TestE2E_Status_Detailed_NoVisibleProblems(t *testing.T) {
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
-	status := readDetailedStatus(t, cfgPath, env)
+	status := readStatusSyncState(t, cfgPath, env)
 	assert.Empty(t, status.IssueGroups)
 	assert.Empty(t, status.DeleteSafety)
 	assert.Empty(t, status.Conflicts)
@@ -214,7 +193,7 @@ func TestE2E_Status_Detailed_NoVisibleProblems(t *testing.T) {
 }
 
 // Validates: R-2.3.4
-// TestE2E_Status_History_NoConflicts validates that detailed status and
+// TestE2E_Status_History_NoConflicts validates that per-drive status and
 // status --history show empty conflict sections when no conflicts exist.
 func TestE2E_Status_History_NoConflicts(t *testing.T) {
 	t.Parallel()
@@ -233,16 +212,16 @@ func TestE2E_Status_History_NoConflicts(t *testing.T) {
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
-	current := readDetailedStatus(t, cfgPath, env)
+	current := readStatusSyncState(t, cfgPath, env)
 	assert.Empty(t, current.Conflicts)
 
-	history := readDetailedStatus(t, cfgPath, env, "--history")
+	history := readStatusSyncState(t, cfgPath, env, "--history")
 	assert.Empty(t, history.Conflicts)
 	assert.Empty(t, history.ConflictHistory)
 }
 
 // Validates: R-2.3.4, R-2.3.10
-// TestE2E_Status_JSON_ConflictDetails validates that detailed status JSON
+// TestE2E_Status_JSON_ConflictDetails validates that per-drive status JSON
 // exposes unresolved conflicts with the expected fields.
 func TestE2E_Status_JSON_ConflictDetails(t *testing.T) {
 	t.Parallel()
@@ -269,7 +248,7 @@ func TestE2E_Status_JSON_ConflictDetails(t *testing.T) {
 
 	runCLIWithConfig(t, cfgPath, env, "sync")
 
-	status := readDetailedStatus(t, cfgPath, env)
+	status := readStatusSyncState(t, cfgPath, env)
 	require.NotEmpty(t, status.Conflicts, "status should report the unresolved conflict")
 	conflict := status.Conflicts[0]
 	assert.NotEmpty(t, conflict.ID)
@@ -312,7 +291,7 @@ func TestE2E_Resolve_Both_PreservesConflictCopy(t *testing.T) {
 
 	runCLIWithConfig(t, cfgPath, env, "sync")
 
-	statusBefore := readDetailedStatus(t, cfgPath, env)
+	statusBefore := readStatusSyncState(t, cfgPath, env)
 	require.Len(t, statusBefore.Conflicts, 1)
 	assert.Contains(t, statusBefore.Conflicts[0].Path, "both.txt")
 	assert.Equal(t, "edit_edit", statusBefore.Conflicts[0].ConflictType)
@@ -338,7 +317,7 @@ func TestE2E_Resolve_Both_PreservesConflictCopy(t *testing.T) {
 	// full-suite activity produces delta traffic elsewhere on the shared drive.
 	assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync")
 
-	statusAfter := readDetailedStatus(t, cfgPath, env)
+	statusAfter := readStatusSyncState(t, cfgPath, env)
 	assert.Empty(t, statusAfter.Conflicts, "keep-both should clear unresolved conflicts")
 }
 
@@ -385,7 +364,7 @@ func TestE2E_Status_History_ShowsResolvedStrategies(t *testing.T) {
 	queueConflictResolution(t, cfgPath, env, "both", testFolder+"/c.txt")
 	runCLIWithConfig(t, cfgPath, env, "sync")
 
-	history := readDetailedStatus(t, cfgPath, env, "--history")
+	history := readStatusSyncState(t, cfgPath, env, "--history")
 	require.Len(t, history.ConflictHistory, 3)
 	assert.Contains(t, []string{
 		history.ConflictHistory[0].Resolution,
@@ -452,7 +431,7 @@ func TestE2E_Resolve_WithWatchDaemonExecutesQueuedIntent(t *testing.T) {
 
 	runCLIWithConfig(t, cfgPath, env, "sync")
 
-	statusBefore := readDetailedStatus(t, cfgPath, env)
+	statusBefore := readStatusSyncState(t, cfgPath, env)
 	require.Len(t, statusBefore.Conflicts, 1)
 	assert.Contains(t, statusBefore.Conflicts[0].Path, "watch-conflict.txt")
 
@@ -487,7 +466,7 @@ func TestE2E_Resolve_WithWatchDaemonExecutesQueuedIntent(t *testing.T) {
 	assert.Contains(t, queueOutput, "Queued", "watch daemon should accept the queued resolution request")
 
 	require.Eventually(t, func() bool {
-		return len(readDetailedStatus(t, cfgPath, env).Conflicts) == 0
+		return len(readStatusSyncState(t, cfgPath, env).Conflicts) == 0
 	}, 90*time.Second, time.Second, "watch daemon should execute queued conflict resolution")
 
 	require.Eventually(t, func() bool {
@@ -935,7 +914,7 @@ func TestE2E_Mv_Folder(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// detailed status issue lifecycle / held-delete approval
+// per-drive status issue lifecycle / held-delete approval
 // ---------------------------------------------------------------------------
 
 // buildDeepPath creates a directory structure under localDir whose relative
@@ -966,7 +945,7 @@ func buildDeepPath(t *testing.T, syncDir, testFolder string) (string, string) {
 
 // Validates: R-2.3.3, R-2.3.11
 // TestE2E_Status_IssueLifecycle triggers a real sync failure (path too long),
-// fixes the underlying local state, and validates that detailed status follows
+// fixes the underlying local state, and validates that per-drive status follows
 // durable store truth without any manual clear/retry command.
 func TestE2E_Status_IssueLifecycle(t *testing.T) {
 	t.Parallel()
@@ -984,7 +963,7 @@ func TestE2E_Status_IssueLifecycle(t *testing.T) {
 	// Sync to trigger pre-upload validation failure.
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
-	status := readDetailedStatus(t, cfgPath, env)
+	status := readStatusSyncState(t, cfgPath, env)
 	require.Len(t, status.IssueGroups, 1)
 	assert.Equal(t, "PATH TOO LONG", status.IssueGroups[0].Title)
 	assert.Contains(t, strings.Join(status.IssueGroups[0].Paths, "\n"), testFolder)
@@ -997,7 +976,7 @@ func TestE2E_Status_IssueLifecycle(t *testing.T) {
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
-	status = readDetailedStatus(t, cfgPath, env)
+	status = readStatusSyncState(t, cfgPath, env)
 	assert.Empty(t, status.IssueGroups, "status should be clean after the next sync")
 
 	listing, _ := runCLIWithConfig(t, cfgPath, env, "ls", "/"+testFolder)
@@ -1061,11 +1040,11 @@ func TestE2E_Resolve_DeletesWithWatchDaemon(t *testing.T) {
 	}
 
 	require.Eventually(t, func() bool {
-		status := readDetailedStatus(t, cfgPath, env)
+		status := readStatusSyncState(t, cfgPath, env, "--verbose")
 		return len(status.DeleteSafety) == fileCount
 	}, 90*time.Second, time.Second, "status should show held deletes while watch protection is active")
 
-	statusBeforeApproval := readDetailedStatus(t, cfgPath, env)
+	statusBeforeApproval := readStatusSyncState(t, cfgPath, env, "--verbose")
 	require.Len(t, statusBeforeApproval.DeleteSafety, fileCount)
 
 	remoteBeforeApproval, _ := runCLIWithConfig(t, opsCfgPath, nil, "ls", "/"+testFolder)
@@ -1075,7 +1054,7 @@ func TestE2E_Resolve_DeletesWithWatchDaemon(t *testing.T) {
 	assert.Contains(t, approvalOutput, "Approved held deletes for this drive.")
 
 	require.Eventually(t, func() bool {
-		return len(readDetailedStatus(t, cfgPath, env).DeleteSafety) == 0
+		return len(readStatusSyncState(t, cfgPath, env).DeleteSafety) == 0
 	}, 90*time.Second, time.Second, "status should clear delete safety rows once held deletes are approved and processed")
 
 	require.Eventually(t, func() bool {

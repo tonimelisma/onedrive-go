@@ -8,7 +8,7 @@ Implements: R-1 [implemented], R-3.1 [verified], R-3.7 [verified], R-4.7 [verifi
 
 The root package is a thin process entrypoint. The Cobra command tree, CLI bootstrap, output formatting, and command handlers live in `internal/cli`.
 
-`internal/cli/root.go` handles global flags (`--config`, `--drive`, `--verbose`, `--quiet`, `--debug`, `--json`), config loading via `PersistentPreRunE`, and single-drive resolution. Cobra `RunE` functions are intentionally thin: they parse command-local flags and delegate to service-layer collaborators (`authService`, `driveService`, `statusService`, `syncControlService`, `recycleBinService`, `syncService`, plus the dedicated services behind `resolve` and `recover`). `internal/cli/sync.go` stays in the same package because multi-drive sync reuses the same Phase 1 CLI context but performs its own multi-drive resolution.
+`internal/cli/root.go` handles global flags (`--config`, `--drive`, `--verbose`, `--quiet`, `--debug`, `--json`), config loading via `PersistentPreRunE`, and drive filtering or drive resolution as appropriate for the command. Cobra `RunE` functions are intentionally thin: they parse command-local flags and delegate to service-layer collaborators (`authService`, `driveService`, `statusService`, `syncControlService`, `recycleBinService`, `syncService`, plus the dedicated services behind `resolve` and `recover`). `internal/cli/sync.go` stays in the same package because multi-drive sync reuses the same Phase 1 CLI context but performs its own multi-drive resolution.
 Sync-specific report rendering and watch bootstrap helpers stay in the same package, but they live outside the Cobra wiring file so `internal/cli/sync.go` remains focused on command construction, flag parsing, and multi-drive resolution.
 
 `internal/cli` is also the composition root for Graph-facing HTTP runtime
@@ -37,7 +37,7 @@ This keeps human/JSON command results separate from progress/status messages and
 
 | Behavior | Evidence |
 | --- | --- |
-| The user-facing sync CLI uses `status` for read-only sync health, `resolve` for user decisions, and `recover` for state-DB recovery. | `internal/cli/root_test.go` (`TestNewRootCmd_Subcommands`, `TestMainWithWriters_StatusResolveRecoverHelpSucceeds`), `internal/cli/resolve_recover_test.go`, `internal/cli/status_test.go`, `e2e/cli_commands_e2e_test.go` (`TestE2E_Status_Detailed_NoVisibleProblems`, `TestE2E_Status_History_ShowsResolvedStrategies`, `TestE2E_InternalBaselineVerification_AfterSync`) |
+| The user-facing sync CLI uses `status` for read-only sync health, `resolve` for user decisions, and `recover` for state-DB recovery. | `internal/cli/root_test.go` (`TestNewRootCmd_Subcommands`, `TestMainWithWriters_StatusResolveRecoverHelpSucceeds`), `internal/cli/resolve_recover_test.go`, `internal/cli/status_test.go`, `e2e/cli_commands_e2e_test.go` (`TestE2E_Status_PerDrive_NoVisibleProblems`, `TestE2E_Status_History_ShowsResolvedStrategies`, `TestE2E_InternalBaselineVerification_AfterSync`) |
 | CLI account-email reconciliation updates selector state and reloads the resolved drive before interactive session work continues. | `internal/cli/root_test.go` (`TestCLIContextSession_ReconcilesEmailChangeAndReloadsDrive`), `internal/config/token_resolution_test.go`, `internal/driveid/canonical_test.go` |
 | Watch-mode CLI wiring remains injectable at both the top-level watch-runner seam and the lower daemon-orchestrator seam, and target-scoped interactive/shared flows still work under live E2E coverage. | `internal/cli/signal_test.go` (`TestRunSyncWatch_FirstSignalCancelsWatchRunner`, `TestRunSyncWatch_FirstSignalCancelsDaemonOrchestrator`, `TestShutdownContext_FirstSignalCancels`, `TestShutdownContext_SecondSignalForcesExit`), `e2e/sync_watch_full_test.go` (`TestE2E_SyncWatch_ConflictDuringWatch`), `e2e/sync_full_test.go` (`TestE2E_Sync_EditDeleteConflict`, `TestE2E_Sync_EditEditConflict_ResolveKeepRemote`) |
 | Command-scoped log-file cleanup is rooted in the top-level CLI runner, so the active closer still shuts down exactly once when a leaf command replaces the logger and then returns an error before Cobra post-run hooks would fire. | `internal/cli/root_test.go` (`TestCLIContextReplaceCommandLogger_ClosesReplacedCloserAndTopLevelCloseClosesActiveCloser`, `TestCloseRootCommandLogger_ClosesActiveLoggerAfterCommandError`) |
@@ -62,7 +62,7 @@ Implements: R-6.2.8 [verified], R-1.3.6 [verified], R-1.5.2 [verified], R-1.7.2 
 | `stat` | `stat.go` | Display item metadata |
 | `sync` | `sync.go` | Multi-drive sync command (see [sync-control-plane.md](sync-control-plane.md)) |
 | `pause`, `resume` | `pause.go`, `resume.go` | Pause/resume sync through `syncControlService`. `resume` also cleans up stale config keys from expired timed pauses (paused=true + past paused_until). |
-| `status` | `status.go` | Display account/drive status. With one selected drive it becomes the detailed read model for issues, delete safety, unresolved conflicts, conflict history, and state-store health. |
+| `status` | `status.go` | Display account/drive status. It always renders the same per-drive sync-health contract for the displayed drives, and `--drive` only filters which drives are shown. |
 | `resolve` | `resolve.go` | Record durable user decisions for held deletes and conflicts (`resolve deletes`, `resolve local|remote|both`, optional `--all`) |
 | `recover` | `recover.go` | Repair, rebuild, or reset the selected drive's sync database after explicit confirmation |
 | `drive` | `drive.go` | Drive management (list/add/remove/search) |
@@ -274,7 +274,6 @@ sections so degraded discovery never reads like a login failure.
 | `drive list` | `printDriveListJSON` | `driveListJSONOutput` |
 | `drive search` | `printDriveSearchJSON` | `driveSearchJSONOutput` |
 | `status` | `printStatusJSON` | `statusOutput` |
-| `status` (single-drive detailed mode) | `printDetailedStatusJSON` | `detailedStatusOutput` |
 
 ## Signal Handling (`signal.go`)
 
@@ -373,7 +372,7 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
 - Control-socket probing and log file opens use resolved paths from the CLI/config layer; the socket itself is owned by `internal/multisync`.
 - If the configured log file cannot be opened, CLI bootstrap warns through the CLI status writer and falls back to console-only logging instead of failing the command before any user-facing work can run.
 - Direct `runSync` and service-level tests cover caller-visible failure paths such as config-load errors, all-drives-paused/no-drives guidance, and log-file-open fallback warnings through the injected status/output writers rather than process-global stderr assumptions.
-- The status command uses a testable service layer with narrowed interfaces (`accountMetaReader`, `accountAuthChecker`, `syncStateQuerier`), decoupling status aggregation from Cobra wiring. Summary status and detailed single-drive `status` use store-owned read-helper wrappers. CLI code does not open writable SQLite paths for read-only sync-state views.
+- The status command uses a testable service layer with narrowed interfaces (`accountMetaReader`, `accountAuthChecker`, `syncStateQuerier`), decoupling status aggregation from Cobra wiring. `status` uses the same store-owned per-drive read-helper wrapper for every displayed drive. CLI code does not open writable SQLite paths for read-only sync-state views.
 - Offline auth-health projection uses `syncstore.HasScopeBlockAtPath` for
   persisted `auth:account` checks, so read-only CLI account discovery no
   longer pays the writable-store checkpoint/close path.
@@ -382,7 +381,7 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
   `syncstore` read helpers instead of opening writable `SyncStore` handles
   just to count durable intent.
 - Sync-domain issue/status presentation uses the shared
-  [`synctypes.SummaryKey`](/Users/tonimelisma/Development/onedrive-go-shared-failure-summaries/internal/synctypes/summary_keys.go)
+  [`synctypes.SummaryKey`](../../internal/synctypes/summary_keys.go)
   contract. `status` consumes the store-owned issue projection instead of
   rebuilding visible-issue math locally.
 - `status` now preserves the store-owned issue-group projection instead of
@@ -394,13 +393,13 @@ Log file creation with parent directory auto-creation. Append mode. Retention-ba
 - `status` also surfaces store-owned durable-intent counters:
   approved deletes waiting plus queued/applying conflict requests. Text output
   adds action-oriented `Next:` hints, while JSON exposes the same counts plus
-  `action_hints[]`.
-- Single-drive `status` is the explicit call-to-action surface. Detailed text
-  shows exact `Next:` lines for held deletes, approved deletes, unresolved
-  conflicts, queued/applying conflict requests, and damaged state stores. The
-  matching JSON contract adds per-entry `action_hint`, top-level
-  `next_actions[]`, and preserves `state_store_recovery_hint` for damaged DB
-  flows.
+  per-entry `action_hint` fields and per-drive `next_actions[]`.
+- `status` is the explicit call-to-action surface. Each displayed drive's text
+  section shows exact `Next:` lines for grouped issues, held deletes, approved
+  deletes, unresolved conflicts, queued/applying conflict requests, and damaged
+  state stores. The matching JSON contract adds per-entry `action_hint`,
+  per-drive `next_actions[]`, and preserves `state_store_recovery_hint` for
+  damaged DB flows.
 - Informational commands (`drive list`, `status`, `whoami`) use lenient config loading (`LoadOrDefaultLenient`) that collects validation errors as warnings instead of failing. This allows users to inspect their configuration and see drive status even when config has errors. Each of these commands (and `drive search`) must have `skipConfigAnnotation` on the leaf Cobra command — not just the parent — because Cobra checks annotations on the executing command, not parent commands. Safety net: `TestAnnotationTreeWalk` walks the entire command tree and fails if any leaf command with `RunE` is not explicitly classified as either a data command (no annotation) or an annotated command. New commands must be added to the `dataCommands` set or given the annotation. [verified]
 - `loadAndResolve` passes errors from `ResolveDrive` unwrapped. `ResolveDrive` already wraps `LoadOrDefault` errors with `"loading config: "`, and `MatchDrive` errors are user-facing messages that read better without a prefix (e.g., `"no drives configured — ..."` instead of `"loading config: no drives configured — ..."`). [verified]
 - CLI presentation is the final error boundary. `classifyCommandError` and `commandFailurePresentationForClass` map the domain classes from [error-model.md](error-model.md) to process exit behavior and user-facing reason/action text, while `authErrorMessage` specializes the user-facing auth copy for saved-login failures without re-inspecting raw transport payloads.
@@ -418,13 +417,13 @@ Implements: R-2.3.3 [verified], R-2.3.4 [verified], R-2.3.5 [verified], R-2.3.6 
 - **Per-scope sub-grouping**: 507 quota and shared-folder write blocks are grouped by scope (own drive vs each shortcut). Different scopes = different owners = different user actions.
 - **Human-readable names**: Shortcut-scoped failures display local path name, not internal drive IDs.
 - **Scope-aware reason/action copy**: Failure text is selected from `issue_type` plus the raw scope key, so shortcut-scoped quota failures say the shared-folder owner is out of space instead of implying the user's own drive is full.
-- **Single read surface**: `status` is the only sync read command. Multi-drive mode is summary-first; single-drive mode is the detailed per-path/problem view.
+- **Single read surface**: `status` is the only sync read command. It always renders the same per-drive sync-health contract for the displayed drives, and `--drive` only filters which drives are shown.
 - **Strict command grammar**: CLI mutation lives under one explicit noun, `resolve`, with separate actions for delete approval (`resolve deletes`) and conflict requests (`resolve local|remote|both [path-or-id]`, optional `--all`). Recovery lives under one explicit noun, `recover`.
-- **JSON shape**: single-drive `status --json` emits one detailed read model with `issue_groups`, `delete_safety`, `conflicts`, and optional `conflict_history`.
+- **JSON shape**: `status --json` always emits one top-level `summary` plus `accounts[]`, and each displayed drive may include one nested `sync_state` object with `issue_groups`, `delete_safety`, `delete_safety_total`, `conflicts`, `conflicts_total`, optional `conflict_history`, `conflict_history_total`, `examples_limit`, `verbose`, per-entry action hints, and per-drive `next_actions`.
 - **Derived shared-folder issues**: `perm:remote` is displayed from held blocked-write rows, not from a standalone boundary issue. The CLI shows one visible issue per denied boundary only while blocked write intent still exists.
 - **Automatic shared-folder recovery**: shared-folder write blocks have no manual CLI controls. The engine rechecks permission state automatically during normal sync/watch passes while blocked writes still exist.
 - **Shared summary descriptors**: Every sync issue renders from the shared `SummaryKey` descriptor table, with the humanized scope shown separately. This keeps sync logs and `status` grouped by the same normalized issue family without duplicating display taxonomies in each layer.
-- **Store-owned read model**: detailed single-drive `status` renders `DetailedStatusSnapshot` from `syncstore.Inspector`, while narrower read-only helpers serve the summary status path and other store-owned projections. The CLI does not rebuild issue/conflict/delete-safety state locally.
+- **Store-owned read model**: `status` renders one store-owned `DriveStatusSnapshot` per displayed drive, while narrower read-only helpers serve aggregate or daemon-only projections. The CLI does not rebuild issue/conflict/delete-safety state locally.
 - **Auth scope display**: `auth:account` renders as an account-level `Authentication required` issue with no path list.
 - **Held-delete approval**: held deletes remain visible under detailed `status`, and `resolve deletes` moves only that drive's held-delete rows from `held` to `approved`. The engine consumes approved rows after successful matching delete execution.
 - **Conflict split**: `status` lists unresolved conflicts from the fact table, `status --history` includes resolved conflicts, and `resolve local|remote|both` queues the keep-local/keep-remote/keep-both request for engine-owned execution. Active request workflow is visible as request metadata on unresolved conflicts, not as a separate top-level noun.
