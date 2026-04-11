@@ -172,7 +172,7 @@ func (m *SyncStore) Checkpoint(ctx context.Context, retention time.Duration) err
 
 // DataVersion returns SQLite's PRAGMA data_version, which changes every time
 // another connection commits a write. The engine's own writes don't change it.
-// Used to detect CLI→DB modifications (e.g. `issues approve-deletes`) without polling
+// Used to detect CLI→DB modifications (e.g. `resolve deletes`) without polling
 // the full table.
 func (m *SyncStore) DataVersion(ctx context.Context) (int64, error) {
 	var version int64

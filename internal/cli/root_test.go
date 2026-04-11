@@ -579,7 +579,7 @@ func TestAnnotationTreeWalk(t *testing.T) {
 
 	// Verify the dataCommands set doesn't have stale entries.
 	for path := range dataCommands {
-		// Split "onedrive-go ls" → ["ls"], "onedrive-go conflicts resolve" → ["conflicts", "resolve"]
+		// Split "onedrive-go ls" → ["ls"], "onedrive-go resolve local" → ["resolve", "local"]
 		parts := strings.SplitN(path, " ", 2)
 		var args []string
 		if len(parts) == 2 {
@@ -1298,37 +1298,19 @@ func TestMain_UnknownCommandReturnsFailure(t *testing.T) {
 	assert.Equal(t, 1, Main([]string{"definitely-not-a-real-command"}))
 }
 
-func TestMainWithWriters_VerifyCommandIsNotRegistered(t *testing.T) {
-	var stdoutBuf bytes.Buffer
-	var stderrBuf bytes.Buffer
+func TestMainWithWriters_SyncUXCommandsRemainRegistered(t *testing.T) {
+	for _, args := range [][]string{
+		{"status", "--help"},
+		{"resolve", "--help"},
+		{"recover", "--help"},
+	} {
+		var stdoutBuf bytes.Buffer
+		var stderrBuf bytes.Buffer
 
-	exitCode := mainWithWriters([]string{"verify"}, &stdoutBuf, &stderrBuf)
+		exitCode := mainWithWriters(args, &stdoutBuf, &stderrBuf)
 
-	assert.Equal(t, 1, exitCode)
-	assert.Empty(t, stdoutBuf.String())
-	assert.Contains(t, stderrBuf.String(), `unknown command "verify"`)
-}
-
-func TestMainWithWriters_IssuesCommandIsNotRegistered(t *testing.T) {
-	var stdoutBuf bytes.Buffer
-	var stderrBuf bytes.Buffer
-
-	exitCode := mainWithWriters([]string{"issues"}, &stdoutBuf, &stderrBuf)
-
-	assert.Equal(t, 1, exitCode)
-	assert.Empty(t, stdoutBuf.String())
-	assert.Contains(t, stderrBuf.String(), `unknown command "issues"`)
-}
-
-func TestMainWithWriters_ConflictsCommandIsNotRegistered(t *testing.T) {
-	var stdoutBuf bytes.Buffer
-	var stderrBuf bytes.Buffer
-
-	exitCode := mainWithWriters([]string{"conflicts"}, &stdoutBuf, &stderrBuf)
-
-	assert.Equal(t, 1, exitCode)
-	assert.Empty(t, stdoutBuf.String())
-	assert.Contains(t, stderrBuf.String(), `unknown command "conflicts"`)
+		assert.Equal(t, 0, exitCode, strings.Join(args, " "))
+	}
 }
 
 func TestMainWithWriters_UnknownCommandWritesToProvidedStatusWriter(t *testing.T) {

@@ -2,7 +2,7 @@
 //
 // The counter tracks planned delete actions within a configurable time window.
 // When the cumulative count exceeds the threshold, all subsequent deletes are
-// held until the user explicitly approves them via `issues approve-deletes`.
+// held until the user explicitly approves them via `resolve deletes`.
 //
 // The counter is purely in-memory — on daemon restart it resets. The one-shot
 // planner-level threshold check handles the restart case (RunOnce runs first
@@ -72,7 +72,7 @@ func (c *DeleteCounter) IsHeld() bool {
 }
 
 // Release resets the held flag and clears all entries. Called when the user
-// approves held deletes via `issues approve-deletes`.
+// approves held deletes via `resolve deletes`.
 func (c *DeleteCounter) Release() {
 	c.mu.Lock()
 	defer c.mu.Unlock()

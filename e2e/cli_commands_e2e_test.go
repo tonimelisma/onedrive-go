@@ -21,8 +21,8 @@ import (
 // ---------------------------------------------------------------------------
 // CLI command E2E tests (slow — run only with -tags=e2e,e2e_full)
 //
-// These tests validate the status, pause, resume, conflicts, resolve, and
-// verify CLI commands against a live OneDrive account.
+// These tests validate the status, pause, resume, resolve, and recover sync
+// UX against a live OneDrive account.
 // ---------------------------------------------------------------------------
 
 // TestE2E_Status_AfterSync validates that status shows token state and last
@@ -50,8 +50,8 @@ func TestE2E_Status_AfterSync(t *testing.T) {
 	assert.Contains(t, stdout, "ready", "status should show ready state after sync")
 }
 
-// TestE2E_Status_JSON validates that status --json produces well-formed JSON
-// with the expected schema.
+// TestE2E_Status_JSON validates that single-drive status --json produces the
+// detailed current sync-state schema.
 func TestE2E_Status_JSON(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
@@ -59,25 +59,30 @@ func TestE2E_Status_JSON(t *testing.T) {
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
 
-	// Run status --json.
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "status", "--json")
 
 	var output map[string]interface{}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &output),
 		"status --json should produce valid JSON, got: %s", stdout)
 
-	// Verify top-level structure.
-	assert.Contains(t, output, "accounts", "JSON should have accounts array")
-	assert.Contains(t, output, "summary", "JSON should have summary object")
+	assert.Contains(t, output, "drive", "single-drive status json should name the selected drive")
+	assert.Contains(t, output, "issue_groups", "single-drive status json should include grouped issue details")
+	assert.Contains(t, output, "delete_safety", "single-drive status json should include delete safety rows")
+	assert.Contains(t, output, "conflicts", "single-drive status json should include unresolved conflicts")
+	assert.Contains(t, output, "state_store_status", "single-drive status json should report state-store health")
 
-	// Verify summary has expected fields.
-	summary, ok := output["summary"].(map[string]interface{})
-	require.True(t, ok, "summary should be an object")
-	assert.Contains(t, summary, "total_drives", "summary should have total_drives")
+	_, ok := output["issue_groups"].([]interface{})
+	require.True(t, ok, "issue_groups should be an array")
 
-	totalDrives, ok := summary["total_drives"].(float64)
-	require.True(t, ok, "total_drives should be a number")
-	assert.GreaterOrEqual(t, totalDrives, float64(1), "should have at least 1 drive")
+	_, ok = output["delete_safety"].([]interface{})
+	require.True(t, ok, "delete_safety should be an array")
+
+	_, ok = output["conflicts"].([]interface{})
+	require.True(t, ok, "conflicts should be an array")
+
+	stateStoreStatus, ok := output["state_store_status"].(string)
+	require.True(t, ok, "state_store_status should be a string")
+	assert.NotEmpty(t, stateStoreStatus, "state_store_status should be populated")
 }
 
 // TestE2E_Status_PausedDrive validates that pausing a drive changes its
@@ -179,7 +184,7 @@ func TestE2E_Resume_AllDrives(t *testing.T) {
 }
 
 // Validates: R-2.3.3
-func TestE2E_Issues_Empty(t *testing.T) {
+func TestE2E_Status_Detailed_NoVisibleProblems(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
@@ -196,14 +201,17 @@ func TestE2E_Issues_Empty(t *testing.T) {
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues")
-	assert.Contains(t, stdout, "No issues.")
+	status := readDetailedStatus(t, cfgPath, env)
+	assert.Empty(t, status.IssueGroups)
+	assert.Empty(t, status.DeleteSafety)
+	assert.Empty(t, status.Conflicts)
+	assert.Equal(t, "healthy", status.StateStoreStatus)
 }
 
 // Validates: R-2.3.4
-// TestE2E_Conflicts_EmptyHistory validates that conflicts and conflicts
-// --history show appropriate messages when no conflicts exist.
-func TestE2E_Conflicts_EmptyHistory(t *testing.T) {
+// TestE2E_Status_History_NoConflicts validates that detailed status and
+// status --history show empty conflict sections when no conflicts exist.
+func TestE2E_Status_History_NoConflicts(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
@@ -220,19 +228,18 @@ func TestE2E_Conflicts_EmptyHistory(t *testing.T) {
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
-	// Check conflicts — should show no unresolved.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
-	assert.Contains(t, stdout, "No conflicts.")
+	current := readDetailedStatus(t, cfgPath, env)
+	assert.Empty(t, current.Conflicts)
 
-	// Check conflicts --history — should show no history.
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts", "--history")
-	assert.Contains(t, stdout, "No conflicts in history.")
+	history := readDetailedStatus(t, cfgPath, env, "--history")
+	assert.Empty(t, history.Conflicts)
+	assert.Empty(t, history.ConflictHistory)
 }
 
 // Validates: R-2.3.4, R-2.3.10
-// TestE2E_Conflicts_JSON validates that conflicts --json produces a valid
-// JSON array with the expected fields.
-func TestE2E_Conflicts_JSON(t *testing.T) {
+// TestE2E_Status_JSON_ConflictDetails validates that detailed status JSON
+// exposes unresolved conflicts with the expected fields.
+func TestE2E_Status_JSON_ConflictDetails(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
@@ -249,6 +256,7 @@ func TestE2E_Conflicts_JSON(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "jsonconflict.txt"), []byte("original"), 0o600))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	pollRemotePathVisible(t, opsCfgPath, nil, "/"+testFolder+"/jsonconflict.txt")
 
 	// Create edit-edit conflict.
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "jsonconflict.txt"), []byte("local edit"), 0o600))
@@ -256,34 +264,22 @@ func TestE2E_Conflicts_JSON(t *testing.T) {
 
 	runCLIWithConfig(t, cfgPath, env, "sync")
 
-	// Check conflicts --json.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts", "--json")
-
-	var conflictsJSON map[string]interface{}
-	require.NoError(t, json.Unmarshal([]byte(stdout), &conflictsJSON),
-		"conflicts --json should produce valid JSON object, got: %s", stdout)
-
-	conflictsRaw, ok := conflictsJSON["conflicts"].([]interface{})
-	require.True(t, ok, "JSON should have conflicts array")
-	require.NotEmpty(t, conflictsRaw, "should have at least one conflict")
-
-	// Verify expected fields.
-	conflict, ok := conflictsRaw[0].(map[string]interface{})
-	require.True(t, ok, "conflict entry should be an object")
-	assert.Contains(t, conflict, "id", "conflict should have id field")
-	assert.Contains(t, conflict, "path", "conflict should have path field")
-	assert.Contains(t, conflict, "conflict_type", "conflict should have conflict_type field")
-	assert.Equal(t, "edit_edit", conflict["conflict_type"], "conflict type should be edit_edit")
+	status := readDetailedStatus(t, cfgPath, env)
+	require.NotEmpty(t, status.Conflicts, "status should report the unresolved conflict")
+	conflict := status.Conflicts[0]
+	assert.NotEmpty(t, conflict.ID)
+	assert.Contains(t, conflict.Path, "jsonconflict.txt")
+	assert.Equal(t, "edit_edit", conflict.ConflictType)
+	assert.Equal(t, "unresolved", conflict.State)
 
 	// Resolve to clean up.
-	queueConflictResolutionAndSync(t, cfgPath, env, "--all", "--keep-remote")
+	queueConflictResolutionAndSync(t, cfgPath, env, "remote", "--all")
 }
 
 // Validates: R-2.3.3, R-2.3.4, R-2.3.5
-// TestE2E_Conflicts_ResolveKeepBoth validates that conflicts resolve
-// --keep-both marks the conflict as resolved while preserving both the
-// original and conflict copy.
-func TestE2E_Conflicts_ResolveKeepBoth(t *testing.T) {
+// TestE2E_Resolve_Both_PreservesConflictCopy validates that `resolve both`
+// clears the unresolved conflict while preserving both chosen files.
+func TestE2E_Resolve_Both_PreservesConflictCopy(t *testing.T) {
 	// No t.Parallel() — bidirectional sync sees drive-level delta feed,
 	// so parallel tests inject cross-test events causing spurious failures.
 	registerLogDump(t)
@@ -301,6 +297,7 @@ func TestE2E_Conflicts_ResolveKeepBoth(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "both.txt"), []byte("original"), 0o600))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	pollRemotePathVisible(t, opsCfgPath, nil, "/"+testFolder+"/both.txt")
 
 	// Create edit-edit conflict.
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "both.txt"), []byte("local both"), 0o600))
@@ -308,20 +305,19 @@ func TestE2E_Conflicts_ResolveKeepBoth(t *testing.T) {
 
 	runCLIWithConfig(t, cfgPath, env, "sync")
 
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
-	assert.Contains(t, stdout, "both.txt", "conflicts should list unresolved conflict")
-	assert.Contains(t, stdout, "edit_edit", "conflicts should show conflict type")
-
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "issues")
-	assert.Contains(t, stdout, "No issues.", "issues should stay read-only and exclude conflicts")
+	statusBefore := readDetailedStatus(t, cfgPath, env)
+	require.Len(t, statusBefore.Conflicts, 1)
+	assert.Contains(t, statusBefore.Conflicts[0].Path, "both.txt")
+	assert.Equal(t, "edit_edit", statusBefore.Conflicts[0].ConflictType)
+	assert.Empty(t, statusBefore.IssueGroups, "ordinary issues should stay separate from conflicts")
 
 	// Verify conflict copy exists.
 	matches, err := filepath.Glob(filepath.Join(localDir, "both.conflict-*"))
 	require.NoError(t, err)
 	require.NotEmpty(t, matches, "conflict copy should exist before resolve")
 
-	// Queue --keep-both; the next sync pass owns execution.
-	queueConflictResolution(t, cfgPath, env, testFolder+"/both.txt", "--keep-both")
+	// Queue resolve both; the next sync pass owns execution.
+	queueConflictResolution(t, cfgPath, env, "both", testFolder+"/both.txt")
 
 	// Verify both files still exist.
 	_, err = os.Stat(filepath.Join(localDir, "both.txt"))
@@ -335,15 +331,14 @@ func TestE2E_Conflicts_ResolveKeepBoth(t *testing.T) {
 	// full-suite activity produces delta traffic elsewhere on the shared drive.
 	assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync")
 
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "conflicts")
-	assert.Contains(t, stdout, "No conflicts.", "keep-both should clear unresolved conflicts")
+	statusAfter := readDetailedStatus(t, cfgPath, env)
+	assert.Empty(t, statusAfter.Conflicts, "keep-both should clear unresolved conflicts")
 }
 
 // Validates: R-2.3.4, R-2.3.5, R-2.3.12
-// TestE2E_Conflicts_ResolveMultipleStrategies creates 3 conflicts and
-// resolves each with a different strategy, then verifies conflict history
-// shows all 3.
-func TestE2E_Conflicts_ResolveMultipleStrategies(t *testing.T) {
+// TestE2E_Status_History_ShowsResolvedStrategies creates 3 conflicts,
+// resolves each with a different strategy, and verifies status --history.
+func TestE2E_Status_History_ShowsResolvedStrategies(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
@@ -362,6 +357,9 @@ func TestE2E_Conflicts_ResolveMultipleStrategies(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "c.txt"), []byte("c-original"), 0o600))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	pollRemotePathVisible(t, opsCfgPath, nil, "/"+testFolder+"/a.txt")
+	pollRemotePathVisible(t, opsCfgPath, nil, "/"+testFolder+"/b.txt")
+	pollRemotePathVisible(t, opsCfgPath, nil, "/"+testFolder+"/c.txt")
 
 	// Create 3 edit-edit conflicts.
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "a.txt"), []byte("a-local"), 0o600))
@@ -375,25 +373,34 @@ func TestE2E_Conflicts_ResolveMultipleStrategies(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync")
 
 	// Resolve each with a different strategy.
-	queueConflictResolution(t, cfgPath, env, testFolder+"/a.txt", "--keep-local")
-	queueConflictResolution(t, cfgPath, env, testFolder+"/b.txt", "--keep-remote")
-	queueConflictResolution(t, cfgPath, env, testFolder+"/c.txt", "--keep-both")
+	queueConflictResolution(t, cfgPath, env, "local", testFolder+"/a.txt")
+	queueConflictResolution(t, cfgPath, env, "remote", testFolder+"/b.txt")
+	queueConflictResolution(t, cfgPath, env, "both", testFolder+"/c.txt")
 	runCLIWithConfig(t, cfgPath, env, "sync")
 
-	// Verify conflict history shows all 3.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts", "--history")
-	assert.Contains(t, stdout, "a.txt", "history should include a.txt")
-	assert.Contains(t, stdout, "b.txt", "history should include b.txt")
-	assert.Contains(t, stdout, "c.txt", "history should include c.txt")
-	assert.Contains(t, stdout, "keep_local", "history should show keep_local strategy")
-	assert.Contains(t, stdout, "keep_remote", "history should show keep_remote strategy")
-	assert.Contains(t, stdout, "keep_both", "history should show keep_both strategy")
+	history := readDetailedStatus(t, cfgPath, env, "--history")
+	require.Len(t, history.ConflictHistory, 3)
+	assert.Contains(t, []string{
+		history.ConflictHistory[0].Resolution,
+		history.ConflictHistory[1].Resolution,
+		history.ConflictHistory[2].Resolution,
+	}, "keep_local")
+	assert.Contains(t, []string{
+		history.ConflictHistory[0].Resolution,
+		history.ConflictHistory[1].Resolution,
+		history.ConflictHistory[2].Resolution,
+	}, "keep_remote")
+	assert.Contains(t, []string{
+		history.ConflictHistory[0].Resolution,
+		history.ConflictHistory[1].Resolution,
+		history.ConflictHistory[2].Resolution,
+	}, "keep_both")
 }
 
 // Validates: R-2.3.5
-// TestE2E_Conflicts_ResolveConflictNotFound validates that resolving a
-// non-existent conflict produces an appropriate error.
-func TestE2E_Conflicts_ResolveConflictNotFound(t *testing.T) {
+// TestE2E_Resolve_TargetNotFound validates that resolving a non-existent
+// conflict target produces an appropriate error.
+func TestE2E_Resolve_TargetNotFound(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
@@ -411,12 +418,12 @@ func TestE2E_Conflicts_ResolveConflictNotFound(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Try to resolve a non-existent conflict.
-	output := runCLIWithConfigExpectError(t, cfgPath, env, "conflicts", "resolve", "nonexistent-id", "--keep-local")
+	output := runCLIWithConfigExpectError(t, cfgPath, env, "resolve", "local", "nonexistent-id")
 	assert.Contains(t, output, "not found", "should report conflict not found")
 }
 
 // Validates: R-2.3.5, R-2.9.3
-func TestE2E_Conflicts_ResolveWithWatchDaemonExecutesQueuedIntent(t *testing.T) {
+func TestE2E_Resolve_WithWatchDaemonExecutesQueuedIntent(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
@@ -431,14 +438,16 @@ func TestE2E_Conflicts_ResolveWithWatchDaemonExecutesQueuedIntent(t *testing.T) 
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "watch-conflict.txt"), []byte("original"), 0o600))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	pollRemotePathVisible(t, opsCfgPath, nil, "/"+testFolder+"/watch-conflict.txt")
 
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "watch-conflict.txt"), []byte("local-watch"), 0o600))
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/watch-conflict.txt", "remote-watch")
 
 	runCLIWithConfig(t, cfgPath, env, "sync")
 
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
-	assert.Contains(t, stdout, "watch-conflict.txt", "conflict should exist before watch daemon starts")
+	statusBefore := readDetailedStatus(t, cfgPath, env)
+	require.Len(t, statusBefore.Conflicts, 1)
+	assert.Contains(t, statusBefore.Conflicts[0].Path, "watch-conflict.txt")
 
 	daemonArgs := []string{
 		"--config", cfgPath,
@@ -464,15 +473,14 @@ func TestE2E_Conflicts_ResolveWithWatchDaemonExecutesQueuedIntent(t *testing.T) 
 
 	waitForDaemonReady(t, &daemonStderr, 30*time.Second)
 
-	statusBefore := getControlSocketStatus(t, env)
-	assert.Equal(t, synccontrol.OwnerModeWatch, statusBefore.OwnerMode)
+	controlStatusBefore := getControlSocketStatus(t, env)
+	assert.Equal(t, synccontrol.OwnerModeWatch, controlStatusBefore.OwnerMode)
 
-	queueOutput := queueConflictResolution(t, cfgPath, env, testFolder+"/watch-conflict.txt", "--keep-remote")
+	queueOutput := queueConflictResolution(t, cfgPath, env, "remote", testFolder+"/watch-conflict.txt")
 	assert.Contains(t, queueOutput, "Queued", "watch daemon should accept the queued resolution request")
 
 	require.Eventually(t, func() bool {
-		out, _ := runCLIWithConfig(t, cfgPath, env, "conflicts")
-		return strings.Contains(out, "No conflicts.")
+		return len(readDetailedStatus(t, cfgPath, env).Conflicts) == 0
 	}, 90*time.Second, time.Second, "watch daemon should execute queued conflict resolution")
 
 	require.Eventually(t, func() bool {
@@ -485,15 +493,14 @@ func TestE2E_Conflicts_ResolveWithWatchDaemonExecutesQueuedIntent(t *testing.T) 
 		return err == nil && len(matches) == 0
 	}, 90*time.Second, time.Second, "keep-remote should remove the local conflict copy")
 
-	statusAfter := getControlSocketStatus(t, env)
-	assert.Equal(t, 0, statusAfter.PendingConflictRequests)
-	assert.Equal(t, 0, statusAfter.ResolvingConflictRequests)
-	assert.Equal(t, 0, statusAfter.FailedConflictRequests)
+	controlStatusAfter := getControlSocketStatus(t, env)
+	assert.Equal(t, 0, controlStatusAfter.PendingConflictRequests)
+	assert.Equal(t, 0, controlStatusAfter.ApplyingConflictRequests)
 }
 
-// TestE2E_Verify_AfterSync validates that verify passes after a clean sync
-// and produces correct output in both text and JSON formats.
-func TestE2E_Verify_AfterSync(t *testing.T) {
+// TestE2E_InternalBaselineVerification_AfterSync validates that the internal
+// baseline verifier reports a clean tree after sync.
+func TestE2E_InternalBaselineVerification_AfterSync(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
@@ -512,21 +519,10 @@ func TestE2E_Verify_AfterSync(t *testing.T) {
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
-	// Verify in text mode.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "verify")
-	assert.Contains(t, stdout, "Verified", "verify should report verified files")
-	assert.Contains(t, stdout, "All files verified successfully.",
-		"verify should confirm all files verified")
-
-	// Verify in JSON mode.
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "verify", "--json")
-
-	var verifyOutput map[string]interface{}
-	require.NoError(t, json.Unmarshal([]byte(stdout), &verifyOutput),
-		"verify --json should produce valid JSON, got: %s", stdout)
-
-	assert.Contains(t, verifyOutput, "verified", "JSON should have verified count")
-	assert.Contains(t, verifyOutput, "mismatches", "JSON should have mismatches array")
+	report, err := verifyBaselineReport(t, cfgPath, env)
+	require.NoError(t, err)
+	assert.Equal(t, 3, report.Verified)
+	assert.Empty(t, report.Mismatches)
 }
 
 // TestE2E_RecycleBinRoundtrip validates the full recycle bin workflow:
@@ -746,8 +742,8 @@ func TestE2E_Cp_File(t *testing.T) {
 	_, stderr := runCLIWithConfig(t, cfgPath, nil, "cp", "/"+testFolder+"/source.txt", "/"+testFolder+"/copy.txt")
 	assert.Contains(t, stderr, "Copied", "cp should confirm the copy")
 
-	// Verify both files exist.
-	stdout, _ := runCLIWithConfig(t, cfgPath, nil, "ls", "/"+testFolder)
+	// Verify both files exist after the remote copy settles.
+	stdout, _ := pollCLIWithConfigContains(t, cfgPath, nil, "copy.txt", remoteWritePropagationTimeout, "ls", "/"+testFolder)
 	assert.Contains(t, stdout, "source.txt", "source file should still exist")
 	assert.Contains(t, stdout, "copy.txt", "copied file should exist")
 
@@ -768,6 +764,7 @@ func TestE2E_Cp_IntoFolder(t *testing.T) {
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder+"/dest")
+	pollCLIWithConfigContains(t, cfgPath, nil, "dest", remoteWritePropagationTimeout, "ls", "/"+testFolder)
 	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/src.txt", "cp into folder")
 	pollCLIWithConfigContains(t, cfgPath, nil, "src.txt", pollTimeout, "ls", "/"+testFolder)
 
@@ -776,7 +773,7 @@ func TestE2E_Cp_IntoFolder(t *testing.T) {
 	assert.Contains(t, stderr, "Copied", "cp should confirm the copy")
 
 	// Verify the copy is in the dest folder.
-	stdout, _ := runCLIWithConfig(t, cfgPath, nil, "ls", "/"+testFolder+"/dest")
+	stdout, _ := pollCLIWithConfigContains(t, cfgPath, nil, "src.txt", remoteWritePropagationTimeout, "ls", "/"+testFolder+"/dest")
 	assert.Contains(t, stdout, "src.txt", "copied file should appear in dest folder")
 }
 
@@ -931,7 +928,7 @@ func TestE2E_Mv_Folder(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// issues read-only lifecycle / held delete approval
+// detailed status issue lifecycle / held-delete approval
 // ---------------------------------------------------------------------------
 
 // buildDeepPath creates a directory structure under localDir whose relative
@@ -961,10 +958,10 @@ func buildDeepPath(t *testing.T, syncDir, testFolder string) (string, string) {
 }
 
 // Validates: R-2.3.3, R-2.3.11
-// TestE2E_Issues_ReadOnlyLifecycle triggers a real sync failure (path too
-// long), fixes the underlying local state, and validates that issues follows
+// TestE2E_Status_IssueLifecycle triggers a real sync failure (path too long),
+// fixes the underlying local state, and validates that detailed status follows
 // durable store truth without any manual clear/retry command.
-func TestE2E_Issues_ReadOnlyLifecycle(t *testing.T) {
+func TestE2E_Status_IssueLifecycle(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
@@ -980,10 +977,10 @@ func TestE2E_Issues_ReadOnlyLifecycle(t *testing.T) {
 	// Sync to trigger pre-upload validation failure.
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
-	// Verify the failure was recorded.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "issues")
-	assert.Contains(t, stdout, "PATH TOO LONG", "issues should show path_too_long section")
-	assert.Contains(t, stdout, "path exceeds", "issues should describe the path_too_long error")
+	status := readDetailedStatus(t, cfgPath, env)
+	require.Len(t, status.IssueGroups, 1)
+	assert.Equal(t, "PATH TOO LONG", status.IssueGroups[0].Title)
+	assert.Contains(t, strings.Join(status.IssueGroups[0].Paths, "\n"), testFolder)
 
 	// Fix the underlying problem by removing the long path and creating
 	// a valid replacement that can sync normally.
@@ -993,19 +990,18 @@ func TestE2E_Issues_ReadOnlyLifecycle(t *testing.T) {
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
-	// Verify the stale issue clears once the underlying state is repaired.
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "issues")
-	assert.Contains(t, stdout, "No issues.", "issues should be clean after the next sync")
+	status = readDetailedStatus(t, cfgPath, env)
+	assert.Empty(t, status.IssueGroups, "status should be clean after the next sync")
 
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "ls", "/"+testFolder)
-	assert.Contains(t, stdout, "fixed.txt", "replacement file should sync after the issue clears")
+	listing, _ := runCLIWithConfig(t, cfgPath, env, "ls", "/"+testFolder)
+	assert.Contains(t, listing, "fixed.txt", "replacement file should sync after the issue clears")
 }
 
 // Validates: R-2.3.3, R-2.3.6, R-2.3.12, R-6.2.5, R-6.4.2
-// TestE2E_Issues_ApproveDeletes validates the watch-mode held-delete lifecycle:
-// hold deletes, surface them via issues, approve with issues approve-deletes,
-// and let watch mode resume delete propagation.
-func TestE2E_Issues_ApproveDeletes(t *testing.T) {
+// TestE2E_Resolve_DeletesWithWatchDaemon validates the watch-mode held-delete
+// lifecycle: hold deletes, surface them via status, approve with
+// `resolve deletes`, and let watch mode resume delete propagation.
+func TestE2E_Resolve_DeletesWithWatchDaemon(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
@@ -1057,19 +1053,23 @@ func TestE2E_Issues_ApproveDeletes(t *testing.T) {
 		require.NoError(t, os.Remove(filepath.Join(localDir, name)))
 	}
 
-	pollCLIWithConfigContains(t, cfgPath, env, "HELD DELETES", 90*time.Second, "issues")
+	require.Eventually(t, func() bool {
+		status := readDetailedStatus(t, cfgPath, env)
+		return len(status.DeleteSafety) == fileCount
+	}, 90*time.Second, time.Second, "status should show held deletes while watch protection is active")
 
-	issuesBeforeApproval, _ := runCLIWithConfig(t, cfgPath, env, "issues")
-	assert.Contains(t, issuesBeforeApproval, "HELD DELETES", "issues should show held deletes while watch protection is active")
+	statusBeforeApproval := readDetailedStatus(t, cfgPath, env)
+	require.Len(t, statusBeforeApproval.DeleteSafety, fileCount)
 
 	remoteBeforeApproval, _ := runCLIWithConfig(t, opsCfgPath, nil, "ls", "/"+testFolder)
 	assert.Contains(t, remoteBeforeApproval, "file-01.txt", "remote deletes should stay held before approval")
 
-	approvalOutput, _ := runCLIWithConfig(t, cfgPath, env, "issues", "approve-deletes")
+	approvalOutput, _ := runCLIWithConfig(t, cfgPath, env, "resolve", "deletes")
 	assert.Contains(t, approvalOutput, "Approved held deletes for this drive.")
 
-	issuesAfterApproval, _ := pollCLIWithConfigContains(t, cfgPath, env, "No issues.", 90*time.Second, "issues")
-	assert.Contains(t, issuesAfterApproval, "No issues.", "issues should clear once held deletes are approved and processed")
+	require.Eventually(t, func() bool {
+		return len(readDetailedStatus(t, cfgPath, env).DeleteSafety) == 0
+	}, 90*time.Second, time.Second, "status should clear delete safety rows once held deletes are approved and processed")
 
 	require.Eventually(t, func() bool {
 		remoteListing, _ := runCLIWithConfig(t, opsCfgPath, nil, "ls", "/"+testFolder)

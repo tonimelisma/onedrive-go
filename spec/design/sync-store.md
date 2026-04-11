@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/syncstore/store.go, internal/syncstore/inspector.go, internal/syncstore/schema.go, internal/syncstore/migrations/*.sql, internal/syncstore/tx.go, internal/syncstore/store_baseline.go, internal/syncstore/store_observation.go, internal/syncstore/store_conflicts.go, internal/syncstore/store_failures.go, internal/syncstore/store_held_deletes.go, internal/syncstore/store_admin.go, internal/syncstore/store_scope_blocks.go, internal/syncstore/shortcuts.go, internal/syncstore/store_recover.go, internal/syncverify/verify.go, internal/syncrecovery/recovery.go, internal/cli/status.go, internal/cli/recover.go, internal/cli/failure_display.go
+GOVERNS: internal/syncstore/store.go, internal/syncstore/inspector.go, internal/syncstore/schema.go, internal/syncstore/migrations/*.sql, internal/syncstore/tx.go, internal/syncstore/store_baseline.go, internal/syncstore/store_observation.go, internal/syncstore/store_conflicts.go, internal/syncstore/store_failures.go, internal/syncstore/store_held_deletes.go, internal/syncstore/store_admin.go, internal/syncstore/store_scope_blocks.go, internal/syncstore/shortcuts.go, internal/syncstore/store_recover.go, internal/syncverify/verify.go, internal/syncrecovery/recovery.go, internal/cli/status.go, internal/cli/recover.go
 
 Implements: R-2.4.4 [verified], R-2.4.5 [verified], R-2.5 [verified], R-2.5.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.7 [verified], R-2.15.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.14 [verified], R-2.10.22 [verified], R-2.10.32 [verified], R-2.10.33 [verified], R-2.10.34 [verified], R-2.10.41 [verified], R-2.10.45 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified], R-6.7.17 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
@@ -25,7 +25,7 @@ peer authority; it is rebuilt from store state when the engine starts.
 
 | Behavior | Evidence |
 | --- | --- |
-| Store-owned read helpers and `Inspector` expose stable read-only issue/status projections, so summary status, detailed single-drive status, offline auth projection, and daemon status all read the same durable truth without opening writable store handles. | `TestReadStatusSnapshot`, `TestReadDurableIntentCounts_ReadOnlyDB`, `TestHasScopeBlockAtPath`, `TestListConflictsAtPath`, `TestInspector_ReadIssuesSnapshot`, `TestInspector_ReadStatusSnapshot_StaysConsistentWithIssuesSnapshot`, `TestInspector_ReadDetailedStatusSnapshot`, `TestOrchestrator_ControlSocket_StatusCountsUseReadOnlyInspector` |
+| Store-owned read helpers and `Inspector` expose stable read-only issue/status projections, so summary status, detailed single-drive status, offline auth projection, and daemon status all read the same durable truth without opening writable store handles. | `TestReadStatusSnapshot`, `TestReadDetailedStatusSnapshot_ReadOnlyDB`, `TestReadDurableIntentCounts_ReadOnlyDB`, `TestHasScopeBlockAtPath`, `TestInspector_ReadVisibleIssueSnapshot`, `TestInspector_ReadStatusSnapshot_StaysConsistentWithVisibleIssueSnapshot`, `TestInspector_ReadDetailedStatusSnapshot`, `TestOrchestrator_ControlSocket_StatusCountsUseReadOnlyInspector` |
 | Status issue-group projection preserves separate entries when the same summary key appears in multiple scopes. | `TestQuerySyncState_PreservesIssueGroupScopeContext`, `TestPrintStatusJSON_KeepsSameSummaryGroupsSeparatedByScope`, `TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope` |
 | Integrity inspection and safe repair stay store-owned, deterministic, and durable-intent aware. | `TestInspector_AuditIntegrityReportsPersistedProblems`, `TestSyncStore_AuditIntegrityReportsDurableIntentWorkflowProblems`, `TestSyncStore_RepairIntegritySafeNormalizesDeterministicViolations`, `TestSyncStore_RepairIntegritySafePreservesDurableUserIntent` |
 | Held-delete approval identity requires matching item ID and repeated approvals are idempotent. | `TestSyncStore_UpsertHeldDeletesRequiresItemID`, `TestSyncStore_HeldDeleteConsumeRequiresMatchingItemID`, `TestSyncStore_DeleteHeldDeleteRequiresMatchingItemID`, `TestSyncStore_ApproveHeldDeletesConcurrentCallsAreIdempotent` |
@@ -271,8 +271,8 @@ tooling opens the smallest boundary that can answer its question.
 `Inspector` is the read-only companion to `SyncStore`. It is opened only from
 `internal/syncstore` and gives administrative readers a narrow projection of
 state without handing them raw SQL ownership. Package-level helper functions
-such as `ReadStatusSnapshot`, `ReadIssuesSnapshot`, `ReadDurableIntentCounts`,
-`HasScopeBlockAtPath`, and `ListConflictsAtPath` are the default one-shot
+such as `ReadStatusSnapshot`, `ReadDetailedStatusSnapshot`,
+`ReadDurableIntentCounts`, and `HasScopeBlockAtPath` are the default one-shot
 projection entrypoints. They open one read-only inspector, run one store-owned
 query/projection, and close it before returning so callers do not own DB
 lifecycle just to answer one question.
@@ -280,14 +280,13 @@ lifecycle just to answer one question.
 - `OpenInspector(dbPath, logger)` opens SQLite in read-only mode.
 - `ReadStatusSnapshot(ctx, dbPath, logger)` is the one-shot status reader used
   by CLI status paths that need one projection and nothing else.
-- `ReadIssuesSnapshot(ctx, dbPath, history, logger)` is the one-shot `issues`
-  projection reader used by `issues list`.
+- `ReadDetailedStatusSnapshot(ctx, dbPath, history, logger)` is the one-shot
+  detailed status reader used by single-drive `status` paths that need one
+  projection and nothing else.
 - `ReadDurableIntentCounts(ctx, dbPath, logger)` is the one-shot durable-intent
   projection reader used by daemon status aggregation.
 - `HasScopeBlockAtPath(ctx, dbPath, key, logger)` is the one-shot auth/scope
   probe used by offline auth-health projection and similar exact lookups.
-- `ListConflictsAtPath(ctx, dbPath, history, logger)` is the one-shot conflict
-  listing reader used by `conflicts` list/history.
 - `HasScopeBlock(ctx, key)` provides an exact read-only scope-block probe for
   CLI auth-health and other administrative readers that need one persisted
   signal without opening the writable `SyncStore` path.
@@ -299,9 +298,10 @@ lifecycle just to answer one question.
   counters, and one derived `IssueSummary`. It builds those durable-intent
   counters through the same `ReadDurableIntentCounts` helper used by the
   control socket.
-- `ReadIssuesSnapshot(ctx, history)` returns the full read-only `issues`
-  projection: grouped visible issue families, held deletes, pending retries,
-  and conflict history.
+- `ReadVisibleIssueSnapshot(ctx, history)` returns the internal read-only
+  grouped sync-health projection used by store tests and internal readers:
+  grouped visible issue families, held deletes, pending retries, and optional
+  conflict history.
 - `ReadDetailedStatusSnapshot(ctx, history)` returns the detailed single-drive
   `status` projection: grouped visible issue families, delete-safety rows,
   unresolved conflicts joined with request metadata, and optional resolved
@@ -323,13 +323,13 @@ lifecycle just to answer one question.
 - Control-socket `GET /v1/status` uses the same read-only durable-intent
   helper instead of opening a writable `SyncStore`, so status probes do not
   trigger writable-store close/checkpoint work.
-- `StatusSnapshot`, `IssuesSnapshot`, and `DetailedStatusSnapshot` share one
-  visible-issue projection builder inside `Inspector`, so summary status,
-  detailed status, and issue-history compatibility reads cannot silently drift
-  on what counts as a visible issue family.
-- CLI `status`, daemon status probes, offline auth projection, and narrower
-  compatibility readers consume store-owned read helpers or `Inspector`; they
-  do not build their own DSNs or call `sql.Open` directly.
+- `StatusSnapshot`, `VisibleIssueSnapshot`, and `DetailedStatusSnapshot` share
+  one visible-issue projection builder inside `Inspector`, so summary status,
+  detailed status, and internal issue-history reads cannot silently drift on
+  what counts as a visible issue family.
+- CLI `status`, daemon status probes, offline auth projection, and internal
+  test/admin readers consume store-owned read helpers or `Inspector`; they do
+  not build their own DSNs or call `sql.Open` directly.
 - `AuditIntegrity(ctx)` is the read-only integrity surface. It reports stable
   finding codes for impossible scope shapes, invalid auth timing, impossible
   retry/trial timing, scope/failure contradictions, visible-projection overlap,

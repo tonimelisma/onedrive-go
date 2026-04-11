@@ -11,6 +11,7 @@ const (
 	downloadMetadataAttempts     = 4
 	simpleUploadMtimeAttempts    = 6
 	uploadSessionCreateAttempts  = 6
+	copyDestinationAttempts      = 6
 	simpleUploadCreateAttempts   = 7
 	pathVisibilityAttempts       = 10
 	infiniteAttempts             = 0
@@ -26,6 +27,8 @@ const (
 	simpleUploadMtimeMaxDelay    = 4 * time.Second
 	uploadSessionCreateBaseDelay = 250 * time.Millisecond
 	uploadSessionCreateMaxDelay  = 4 * time.Second
+	copyDestinationBaseDelay     = 250 * time.Millisecond
+	copyDestinationMaxDelay      = 4 * time.Second
 	simpleUploadCreateBaseDelay  = 250 * time.Millisecond
 	simpleUploadCreateMaxDelay   = 8 * time.Second
 	pathVisibilityBaseDelay      = 250 * time.Millisecond
@@ -112,6 +115,19 @@ func UploadSessionCreatePolicy() Policy {
 		MaxAttempts: uploadSessionCreateAttempts,
 		Base:        uploadSessionCreateBaseDelay,
 		Max:         uploadSessionCreateMaxDelay,
+		Multiplier:  standardMultiplier,
+		Jitter:      noJitter,
+	}
+}
+
+// CopyDestinationPolicy is the quick-retry policy for transient not-found
+// misfires when a server-side copy targets a freshly created destination that
+// is already visible by path but not yet accepted by Graph's copy verifier.
+func CopyDestinationPolicy() Policy {
+	return Policy{
+		MaxAttempts: copyDestinationAttempts,
+		Base:        copyDestinationBaseDelay,
+		Max:         copyDestinationMaxDelay,
 		Multiplier:  standardMultiplier,
 		Jitter:      noJitter,
 	}

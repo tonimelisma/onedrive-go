@@ -953,7 +953,7 @@ func TestEngine_HandleExternalChanges_DeleteSafetyClearance(t *testing.T) {
 	handleExternalChangesForTest(t, eng, ctx)
 	assert.True(t, testWatchRuntime(t, eng).deleteCounter.IsHeld(), "should still be held with entries present")
 
-	// Approve all held-delete entries (simulates `issues approve-deletes`).
+	// Approve all held-delete entries (simulates `resolve deletes`).
 	require.NoError(t, eng.baseline.ApproveHeldDeletes(ctx))
 
 	// Now handleExternalChanges should release.

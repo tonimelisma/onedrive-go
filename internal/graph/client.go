@@ -60,6 +60,7 @@ type Client struct {
 	createFolderReadbackPolicy retry.Policy
 	simpleUploadMtimePolicy    retry.Policy
 	uploadSessionCreatePolicy  retry.Policy
+	copyDestinationPolicy      retry.Policy
 	simpleUploadCreatePolicy   retry.Policy
 	uploadURLValidator         func(*url.URL) error
 	copyMonitorValidator       func(*url.URL) error
