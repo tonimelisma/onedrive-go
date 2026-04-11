@@ -167,40 +167,14 @@ func inspectSavedLogin(
 
 func hasPersistedAuthScope(ctx context.Context, account string, logger *slog.Logger) bool {
 	for _, statePath := range config.DiscoverStateDBsForEmail(account, logger) {
-		inspector, err := syncstore.OpenInspector(statePath, logger)
+		hasBlock, err := syncstore.HasScopeBlockAtPath(ctx, statePath, synctypes.SKAuthAccount(), logger)
 		if err != nil {
-			logger.Debug("opening state DB for auth projection",
+			logger.Debug("reading auth scope block for auth projection",
 				"account", account,
 				"path", statePath,
 				"error", err,
 			)
 			continue
-		}
-
-		hasBlock, readErr := inspector.HasScopeBlock(ctx, synctypes.SKAuthAccount())
-		closeErr := inspector.Close()
-		if readErr != nil {
-			logger.Debug("querying auth scope block for auth projection",
-				"account", account,
-				"path", statePath,
-				"error", readErr,
-			)
-			if closeErr != nil {
-				logger.Debug("closing state DB after auth projection failure",
-					"account", account,
-					"path", statePath,
-					"error", closeErr,
-				)
-			}
-			continue
-		}
-
-		if closeErr != nil {
-			logger.Debug("closing state DB after auth projection",
-				"account", account,
-				"path", statePath,
-				"error", closeErr,
-			)
 		}
 
 		if hasBlock {
