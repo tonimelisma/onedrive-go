@@ -496,6 +496,10 @@ Runtime policy:
   - `drive list` keeps configured/offline state, uses `/me/drive` fallback for
     the primary drive, and continues independent shared-folder and SharePoint
     discovery
+- retry exhaustion now also carries per-attempt request IDs, HTTP statuses,
+  and most-specific Graph codes in a typed `graph.QuirkRetryError`, so CLI
+  degraded-mode logs and incident triage can preserve the exact observed
+  projection-lag evidence without changing runtime behavior
 - scheduled/manual `devtool verify e2e-full --classify-live-quirks` may rerun
   the strict auth preflight once for this exact known quirk and only downgrade
   it when the rerun passes; required per-PR lanes stay strict
@@ -520,6 +524,11 @@ Repo policy:
 - `/me/drives` keeps its broader bounded poll because the documented discovery
   projection lag can manifest as repeated `403 accessDenied` rather than a
   single transient transport/service failure
+- strict-preflight failure output now includes the retry decision for each
+  attempt (`retry=true|false` plus a stable reason string such as
+  `transient_gateway_status` or `drive_catalog_projection_lag`) so verifier
+  artifacts can be read directly without reconstructing the classifier from raw
+  bodies
 
 ### Slow/Stalled Metadata Response Headers
 

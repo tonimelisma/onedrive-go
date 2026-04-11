@@ -43,6 +43,7 @@ This keeps human/JSON command results separate from progress/status messages and
 | Command-scoped log-file cleanup is rooted in the top-level CLI runner, so the active closer still shuts down exactly once when a leaf command replaces the logger and then returns an error before Cobra post-run hooks would fire. | `internal/cli/root_test.go` (`TestCLIContextReplaceCommandLogger_ClosesReplacedCloserAndTopLevelCloseClosesActiveCloser`, `TestCloseRootCommandLogger_ClosesActiveLoggerAfterCommandError`) |
 | CLI control-socket probing classifies watch owners, one-shot owners, missing sockets, path-unavailable sockets, and ambiguous probe failures distinctly so durable-intent fallback is intentional and daemon notifications stop collapsing protocol failures into "no daemon". | `internal/cli/control_socket_semantics_test.go` (`TestProbeControlOwner_ClassifiesOutcomes`, `TestResolveDeletes_WritesDirectDBIntentForOneShotOwner`, `TestResolveConflict_FallsBackToDBIntentWhenNoDaemonSocketExists`, `TestResolveDeletes_FallsBackToDirectDBWhenControlSocketPathIsUnavailable`, `TestResolveDeletes_DoesNotFallbackWhenControlProbeIsAmbiguous`, `TestNotifyDaemon_ReportsAmbiguousProbeFailureClearly`), `internal/cli/sync_test.go` (`TestSyncService_Run_FailsLoudlyWhenControlSocketPathCannotBeDerivedForOneShot`, `TestSyncService_Run_FailsLoudlyWhenControlSocketPathCannotBeDerivedForWatch`) |
 | Read-only CLI sync-state surfaces consume store-owned one-shot projection helpers instead of managing inspector or writable-store lifecycle directly. | `internal/cli/status_test.go` (`TestQuerySyncState_UsesReadOnlyProjectionHelper`, `TestStatusService_Run_DamagedStateStoreSurfacesRecoverHint`), `internal/cli/auth_health_test.go` (`TestClearAccountAuthScopes_ClearsPersistedAuthScope`, `TestStatusService_Run_DoesNotClearPersistedAuthScope`) |
+| When `/me/drives` retry exhaustion forces authenticated degraded discovery, CLI logs preserve the attached Graph quirk attempt evidence instead of flattening the failure to one opaque error string. | `internal/cli/degraded_discovery_log_test.go`, `internal/graph/quirk_retry_error_test.go`, `e2e/auth_preflight_helpers_test.go` |
 
 ## Command Structure
 
@@ -200,6 +201,12 @@ This is a CLI-owned degraded mode, not an auth failure. It exists because
 `internal/graph` owns the narrow `/me/drives` retry, but only the caller knows
 how to turn retry exhaustion into useful user-facing output instead of dropping
 usable local state or mislabeling the account as logged out.
+
+When the degraded transition is caused by an exhausted documented Graph quirk
+retry, the CLI also logs the attached `graph.QuirkRetryError` evidence
+(`graph_quirk`, attempt count, per-attempt request IDs/statuses/codes). That
+evidence is for operators and incident triage only; human-readable and JSON
+command output stay on the existing `accounts_degraded` contract.
 
 After a plain logout, the account is no longer in config but its
 `account_*.json` profile file remains on disk. `whoami` still discovers these

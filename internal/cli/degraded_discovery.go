@@ -1,9 +1,12 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"sort"
+
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 const (
@@ -147,4 +150,22 @@ func printAccountDegradedText(w io.Writer, header string, items []accountDegrade
 	}
 
 	return nil
+}
+
+func degradedDiscoveryLogAttrs(account string, err error) []any {
+	attrs := []any{
+		"account", account,
+		"error", err,
+	}
+
+	var quirkErr *graph.QuirkRetryError
+	if !errors.As(err, &quirkErr) {
+		return attrs
+	}
+
+	return append(attrs,
+		"graph_quirk", quirkErr.Quirk,
+		"graph_quirk_attempt_count", len(quirkErr.Attempts),
+		"graph_quirk_attempts", quirkErr.Attempts,
+	)
 }
