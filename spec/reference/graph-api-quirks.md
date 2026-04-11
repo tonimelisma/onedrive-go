@@ -719,6 +719,11 @@ Runtime policy:
 - flows that already know the authoritative remote `itemID` avoid this parent
   create route entirely and overwrite by item ID instead of re-creating by
   parent path
+- live-test fixture setup that only needs a remote file for some later
+  assertion should treat this as a known provider timing family and retry the
+  whole fixture `put` operation when Graph either exhausts the documented
+  child-create retries or still reports `remote path not yet visible` while
+  resolving the freshly created parent for that later command
 - if the request still fails after the quirk budget, the upload returns the
   final error without pretending the parent exists
 

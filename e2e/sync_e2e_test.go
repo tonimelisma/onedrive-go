@@ -430,13 +430,15 @@ func assertSyncLeavesLocalTreeStable(
 	return stderr
 }
 
+const remoteFixturePutMaxAttempts = 3
+
 // putRemoteFile uploads string content to a remote path via a temp file.
 // cfgPath must point to a valid config with the drive section; env overrides
 // (if non-nil) are forwarded to the CLI child process. The helper deliberately
-// relies on the CLI put command's own parent-path convergence boundary instead
-// of proving parent visibility in a separate preflight command, because Graph
-// can make a fresh folder visible to one command before the next path read
-// stabilizes.
+// retries the known fresh-parent convergence family when the file is only
+// fixture setup for another test. That keeps unrelated tests from depending on
+// a single CLI invocation being the one where Graph finally makes a freshly
+// created parent path writable again.
 func putRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePath, content string) {
 	t.Helper()
 
@@ -448,8 +450,56 @@ func putRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePa
 	require.NoError(t, err)
 	require.NoError(t, tmpFile.Close())
 
-	runCLIWithConfig(t, cfgPath, env, "put", tmpFile.Name(), remotePath)
+	for attempt := 0; ; attempt++ {
+		stdout, stderr, putErr := runCLIWithConfigAllowError(t, cfgPath, env, "put", tmpFile.Name(), remotePath)
+		if putErr == nil {
+			break
+		}
+
+		if attempt >= remoteFixturePutMaxAttempts-1 || !shouldRetryRemoteFixturePut(stderr) {
+			require.NoErrorf(t, putErr, "CLI command %v failed\nstdout: %s\nstderr: %s",
+				[]string{"put", tmpFile.Name(), remotePath}, stdout, stderr)
+		}
+
+		time.Sleep(pollBackoff(attempt))
+	}
+
 	pollRemotePathVisible(t, cfgPath, env, remotePath)
+}
+
+func shouldRetryRemoteFixturePut(stderr string) bool {
+	return strings.Contains(stderr, "simple-upload-create-transient-404 retry exhausted") ||
+		strings.Contains(stderr, "upload-session-create-transient-404 retry exhausted") ||
+		(strings.Contains(stderr, "resolving parent") &&
+			strings.Contains(stderr, "remote path not yet visible"))
+}
+
+func TestShouldRetryRemoteFixturePut_KnownFreshParentConvergenceFamilies(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, shouldRetryRemoteFixturePut(
+		`Error: graph: simple-upload-create-transient-404 retry exhausted after 7 attempts: graph: HTTP 404`,
+	))
+	assert.True(t, shouldRetryRemoteFixturePut(
+		`Error: graph: upload-session-create-transient-404 retry exhausted after 6 attempts: graph: HTTP 404`,
+	))
+	assert.True(t, shouldRetryRemoteFixturePut(
+		`Error: resolving parent "e2e-fast-conflict": remote path not yet visible: "e2e-fast-conflict"`,
+	))
+}
+
+func TestShouldRetryRemoteFixturePut_RejectsUnrelatedFailures(t *testing.T) {
+	t.Parallel()
+
+	assert.False(t, shouldRetryRemoteFixturePut(
+		`Error: graph: setting mtime after simple upload: graph: simple-upload-mtime-transient-404 retry exhausted`,
+	))
+	assert.False(t, shouldRetryRemoteFixturePut(
+		`Error: graph: HTTP 403: Access denied`,
+	))
+	assert.False(t, shouldRetryRemoteFixturePut(
+		`Error: resolving "/e2e-fast-conflict": resolve delete target "e2e-fast-conflict" from parent "": graph: not found`,
+	))
 }
 
 // getRemoteFile downloads a remote file and returns its content as a string.

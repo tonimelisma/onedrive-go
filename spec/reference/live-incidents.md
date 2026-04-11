@@ -238,9 +238,9 @@ Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../
 ## LI-20260405-09: Recently created parent folder lagged child create routes
 
 First seen: 2026-04-05  
-Last seen: 2026-04-08  
-Area: `e2e_full`, child create after recently created parent visibility  
-Suite / test: `verify e2e-full`, `TestE2E_SyncWatch_WebsocketStartupSmoke`; later `TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal`; later `TestE2E_Sync_DriveRemoveAndReAdd`  
+Last seen: 2026-04-11  
+Area: `e2e_full` and fast `e2e`, child create after recently created parent visibility  
+Suite / test: `verify e2e-full`, `TestE2E_SyncWatch_WebsocketStartupSmoke`; later `TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal`; later `TestE2E_Sync_DriveRemoveAndReAdd`; later PR `e2e` CI `TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload` fixture setup  
 Classification: graph quirk  
 Status: mitigated  
 Recurring: yes  
@@ -294,6 +294,31 @@ Evidence:
   `go test -tags=e2e ./e2e -run TestE2E_RoundTrip -count=1`
   completed successfully in about 66 seconds, confirming the same transient
   fresh-parent create family rather than a deterministic product regression.
+- GitHub Actions PR `e2e` run `24275068041` on April 11, 2026 hit the same
+  family in `TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload`
+  before the test reached its actual ignore-marker assertion. After
+  `mkdir /e2e-sync-marker-1775883434742317229/blocked`, fixture setup
+  `put /e2e-sync-marker-1775883434742317229/blocked/secret.txt` exhausted the
+  bounded `simple-upload-create-transient-404` retry family through request
+  IDs `0cca0a1f-1ddb-4be4-8455-8fd1f06dbfc2`,
+  `b9d5a1df-6fec-411c-9111-bb42feae1179`,
+  `915727ce-0845-413f-a498-28b88c29ea48`,
+  `229237c5-f2c1-438d-bb0c-d7b416482345`,
+  `e5cd276f-fb21-4117-bc12-4cd738b1a81b`,
+  `46a997a3-1e97-4ce3-b2b4-a27244a5adf1`, and final request ID
+  `2ffe00d6-8b13-4f83-b4e0-9de51a8691ad`.
+- The same family recurred again on April 10, 2026 during a local rerun of
+  `go run ./cmd/devtool verify default` in `TestE2E_Sync_Conflicts`. The
+  earlier local `sync --upload-only` had already returned success for
+  `/e2e-fast-conflict-1775883850469638000/conflict.txt`, but the later fixture
+  `put` used to seed the remote edit still spent its full bounded parent-path
+  convergence window getting `GET ...root:/e2e-fast-conflict-1775883850469638000:`
+  `404 itemNotFound` responses, ending with request ID
+  `2017317f-6a94-454d-9bbb-6476355e92f1`, while the companion root listing also
+  still omitted that folder on its final pass (`request-id:
+  2fc18cd3-4efb-470b-ba09-5df096fe3a91`). The helper then surfaced
+  `resolving parent "...": remote path not yet visible` before the test ever
+  reached its actual conflict assertion.
 Resolution / mitigation: `graph.Client.CreateUploadSession()` now owns a
 bounded retry for the exact fresh-parent `404 itemNotFound` case, and flows
 that already know the authoritative remote `itemID` avoid parent-route create
@@ -301,7 +326,12 @@ paths entirely by overwriting via item ID instead. When a small-file create has
 already seen the initial simple-upload `404`, the graph boundary now replays
 that original simple upload under a second, slightly longer bounded
 create-convergence policy after the session path still exhausts on exact
-`itemNotFound`.  
+`itemNotFound`. Fast E2E fixture helpers that are only seeding unrelated tests
+now retry the whole fixture `put` when that command hits either the documented
+fresh-parent create exhaustion signatures or the bounded
+`resolving parent ... remote path not yet visible` variant, so the suite does
+not tie unrelated assertions to one specific command window being the moment
+Graph finally converges.  
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../design/graph-client.md), [drive-transfers.md](../design/drive-transfers.md)
 
 ## LI-20260405-08: Delete-by-ID returned `404 itemNotFound` after successful path lookup
@@ -468,6 +498,15 @@ Evidence:
   such as `75777728-d7e4-4172-91ef-5a183c209999`,
   `a172eda8-3091-43e3-a20c-d355f14e93c8`, and
   `9ad0757a-d809-46cb-ae4f-cbff943f1bcf`.
+- The same family recurred again later on April 10, 2026 during another local
+  `go run ./cmd/devtool verify default`, this time one substep earlier in
+  `TestE2E_RoundTrip/put`. The `put /onedrive-go-e2e-1775884436088088000/test.txt`
+  command had already succeeded, but the harness's extra follow-on exact-path
+  `stat /onedrive-go-e2e-1775884436088088000/test.txt` still timed out under
+  the shared two-minute write-visibility window with final request ID
+  `b5a70314-3791-4118-bc31-697c6af18177`, before later round-trip substeps even
+  got a chance to run. That proved the `put` subtest was still asserting a
+  stronger second read-after-write guarantee than the product command itself.
 - On April 9, 2026 local `go run ./cmd/devtool verify default` reproduced the
   same family twice in sync-scope fixture setup. First,
   `TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile` uploaded
@@ -518,7 +557,10 @@ gone it downgrades a pure `PathNotVisibleError` on that follow-on parent read
 to a warning instead of reporting a false delete failure. For
 `TestE2E_RoundTrip/rm_permanent`, the harness now uses that same `stat`-or-parent-`ls`
 visibility helper before issuing the permanent delete instead of insisting on a
-second exact-path `stat` after `put` already reported success. For
+second exact-path `stat` after `put` already reported success. The generic
+`TestE2E_RoundTrip/put` subtest now follows the same rule and does not add its
+own second exact-path `stat`; later `ls_folder` and `stat` subtests still own
+the end-to-end readability assertions for that round-trip. For
 `TestE2E_Sync_DriveRemoveAndReAdd`, the harness now asserts the thing the test
 actually claims: the durable `baseline` rows survive config removal and are
 reused after drive re-add. It no longer treats follow-on remote path
