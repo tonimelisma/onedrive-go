@@ -30,6 +30,19 @@ type StatusSnapshot struct {
 	DurableIntents     DurableIntentCounts
 }
 
+// DetailedStatusSnapshot is the single-drive read model consumed by the
+// product-facing status command. It exposes the same durable truth as the old
+// issues/conflicts split, but in one store-owned projection.
+type DetailedStatusSnapshot struct {
+	SyncMetadata       map[string]string
+	BaselineEntryCount int
+	PendingSyncItems   int
+	IssueGroups        []IssueGroupSnapshot
+	DeleteSafety       []DeleteSafetySnapshot
+	Conflicts          []ConflictStatusSnapshot
+	ConflictHistory    []ConflictHistorySnapshot
+}
+
 // IssuesSnapshot is the read-only projection consumed by the CLI issues
 // command. It centralizes visible grouped issues and held deletes under one
 // store-owned read model.
@@ -38,6 +51,40 @@ type IssuesSnapshot struct {
 	Groups         []IssueGroupSnapshot
 	HeldDeletes    []HeldDeleteSnapshot
 	PendingRetries []PendingRetrySnapshot
+}
+
+// DeleteSafetySnapshot is one held-delete approval row exposed through the
+// detailed status projection.
+type DeleteSafetySnapshot struct {
+	Path       string
+	State      string
+	LastSeenAt int64
+	ApprovedAt int64
+}
+
+// ConflictStatusSnapshot is one unresolved conflict plus any active queued or
+// applying request metadata.
+type ConflictStatusSnapshot struct {
+	ID                  string
+	Path                string
+	ConflictType        string
+	DetectedAt          int64
+	RequestedResolution string
+	RequestState        string
+	LastRequestError    string
+	LastRequestedAt     int64
+}
+
+// ConflictHistorySnapshot is one resolved conflict record exposed when the
+// caller opts into resolved conflict history.
+type ConflictHistorySnapshot struct {
+	ID           string
+	Path         string
+	ConflictType string
+	DetectedAt   int64
+	Resolution   string
+	ResolvedAt   int64
+	ResolvedBy   string
 }
 
 // IssueGroupSnapshot is one visible grouped issue family in the read-only
@@ -197,16 +244,25 @@ func (s IssueSummary) countForKey(key synctypes.SummaryKey) int {
 
 // OpenInspector opens a read-only connection to a sync state database.
 func OpenInspector(dbPath string, logger *slog.Logger) (*Inspector, error) {
-	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(1000)", dbPath)
-	db, err := sql.Open("sqlite", dsn)
+	db, err := openReadOnlySyncStoreDB(dbPath)
 	if err != nil {
-		return nil, fmt.Errorf("open read-only sync store %s: %w", dbPath, err)
+		return nil, err
 	}
 
 	return &Inspector{
 		db:     db,
 		logger: logger,
 	}, nil
+}
+
+func openReadOnlySyncStoreDB(dbPath string) (*sql.DB, error) {
+	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(1000)", dbPath)
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open read-only sync store %s: %w", dbPath, err)
+	}
+
+	return db, nil
 }
 
 func (i *Inspector) Close() error {
@@ -298,6 +354,65 @@ func (i *Inspector) ReadStatusSnapshot(ctx context.Context) StatusSnapshot {
 	)
 
 	return snapshot
+}
+
+// ReadDetailedStatusSnapshot returns the single-drive status projection used
+// by the product-facing status command. Missing tables are tolerated so older
+// or partially initialized DBs still yield best-effort status information.
+func (i *Inspector) ReadDetailedStatusSnapshot(ctx context.Context, history bool) (DetailedStatusSnapshot, error) {
+	snapshot := DetailedStatusSnapshot{
+		SyncMetadata: make(map[string]string),
+	}
+
+	rows, err := i.db.QueryContext(ctx, "SELECT key, value FROM sync_metadata")
+	if err == nil {
+		defer rows.Close()
+
+		for rows.Next() {
+			var key, value string
+			if scanErr := rows.Scan(&key, &value); scanErr == nil {
+				snapshot.SyncMetadata[key] = value
+			}
+		}
+		if rowErr := rows.Err(); rowErr != nil {
+			i.logger.Debug("read detailed sync metadata snapshot", slog.String("error", rowErr.Error()))
+		}
+	}
+
+	snapshot.BaselineEntryCount = i.countOrZero(ctx, "baseline entries", "SELECT COUNT(*) FROM baseline")
+	snapshot.PendingSyncItems = i.countOrZero(
+		ctx,
+		"pending sync items",
+		"SELECT COUNT(*) FROM remote_state WHERE sync_status NOT IN ('synced','deleted','filtered')",
+	)
+
+	projection, err := i.readVisibleIssueProjection(ctx)
+	if err != nil {
+		return DetailedStatusSnapshot{}, fmt.Errorf("read detailed issues projection: %w", err)
+	}
+	snapshot.IssueGroups = projection.snapshot.Groups
+
+	deleteSafety, err := i.listDeleteSafety(ctx)
+	if err != nil {
+		return DetailedStatusSnapshot{}, fmt.Errorf("list delete safety rows: %w", err)
+	}
+	snapshot.DeleteSafety = deleteSafety
+
+	conflicts, err := i.listDetailedConflicts(ctx)
+	if err != nil {
+		return DetailedStatusSnapshot{}, fmt.Errorf("list unresolved conflicts: %w", err)
+	}
+	snapshot.Conflicts = conflicts
+
+	if history {
+		conflictHistory, err := i.listConflictHistory(ctx)
+		if err != nil {
+			return DetailedStatusSnapshot{}, fmt.Errorf("list conflict history: %w", err)
+		}
+		snapshot.ConflictHistory = conflictHistory
+	}
+
+	return snapshot, nil
 }
 
 // ReadIssuesSnapshot returns the read-only issues projection used by the CLI
@@ -695,6 +810,150 @@ func (i *Inspector) listHeldDeletes(ctx context.Context) ([]synctypes.HeldDelete
 	defer rows.Close()
 
 	return scanHeldDeleteRows(rows)
+}
+
+func (i *Inspector) listDeleteSafety(ctx context.Context) ([]DeleteSafetySnapshot, error) {
+	rows, err := i.db.QueryContext(ctx, `
+		SELECT path, state, last_planned_at, approved_at
+		FROM held_deletes
+		WHERE state IN (?, ?)
+		ORDER BY CASE state
+			WHEN ? THEN 0
+			WHEN ? THEN 1
+			ELSE 2
+		END, last_planned_at DESC, path`,
+		synctypes.HeldDeleteStateHeld,
+		synctypes.HeldDeleteStateApproved,
+		synctypes.HeldDeleteStateHeld,
+		synctypes.HeldDeleteStateApproved,
+	)
+	if err != nil {
+		if isMissingTableErr(err) {
+			return []DeleteSafetySnapshot{}, nil
+		}
+		return nil, fmt.Errorf("query delete safety rows: %w", err)
+	}
+	defer rows.Close()
+
+	var snapshots []DeleteSafetySnapshot
+	for rows.Next() {
+		var (
+			snapshot   DeleteSafetySnapshot
+			approvedAt sql.NullInt64
+		)
+
+		if err := rows.Scan(
+			&snapshot.Path,
+			&snapshot.State,
+			&snapshot.LastSeenAt,
+			&approvedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan delete safety row: %w", err)
+		}
+		if approvedAt.Valid {
+			snapshot.ApprovedAt = approvedAt.Int64
+		}
+
+		snapshots = append(snapshots, snapshot)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate delete safety rows: %w", err)
+	}
+
+	return snapshots, nil
+}
+
+func (i *Inspector) listDetailedConflicts(ctx context.Context) ([]ConflictStatusSnapshot, error) {
+	rows, err := i.db.QueryContext(ctx, `
+		SELECT c.id, c.path, c.conflict_type, c.detected_at,
+		       COALESCE(r.requested_resolution, ''),
+		       COALESCE(r.state, ''),
+		       COALESCE(r.requested_at, 0),
+		       COALESCE(r.last_error, '')
+		FROM conflicts c
+		LEFT JOIN conflict_requests r ON r.conflict_id = c.id
+		WHERE c.resolution = ?
+		ORDER BY c.detected_at, c.path`,
+		synctypes.ResolutionUnresolved,
+	)
+	if err != nil {
+		if isMissingTableErr(err) {
+			return []ConflictStatusSnapshot{}, nil
+		}
+		return nil, fmt.Errorf("query unresolved conflicts for detailed status: %w", err)
+	}
+	defer rows.Close()
+
+	var snapshots []ConflictStatusSnapshot
+	for rows.Next() {
+		var snapshot ConflictStatusSnapshot
+		if err := rows.Scan(
+			&snapshot.ID,
+			&snapshot.Path,
+			&snapshot.ConflictType,
+			&snapshot.DetectedAt,
+			&snapshot.RequestedResolution,
+			&snapshot.RequestState,
+			&snapshot.LastRequestedAt,
+			&snapshot.LastRequestError,
+		); err != nil {
+			return nil, fmt.Errorf("scan detailed conflict row: %w", err)
+		}
+
+		snapshots = append(snapshots, snapshot)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate detailed conflict rows: %w", err)
+	}
+
+	return snapshots, nil
+}
+
+func (i *Inspector) listConflictHistory(ctx context.Context) ([]ConflictHistorySnapshot, error) {
+	rows, err := i.db.QueryContext(ctx, `
+		SELECT id, path, conflict_type, detected_at, resolution, resolved_at, resolved_by
+		FROM conflicts
+		WHERE resolution != ?
+		ORDER BY resolved_at DESC, detected_at DESC, path`,
+		synctypes.ResolutionUnresolved,
+	)
+	if err != nil {
+		if isMissingTableErr(err) {
+			return []ConflictHistorySnapshot{}, nil
+		}
+		return nil, fmt.Errorf("query conflict history: %w", err)
+	}
+	defer rows.Close()
+
+	var snapshots []ConflictHistorySnapshot
+	for rows.Next() {
+		var (
+			snapshot   ConflictHistorySnapshot
+			resolvedAt sql.NullInt64
+			resolvedBy sql.NullString
+		)
+		if err := rows.Scan(
+			&snapshot.ID,
+			&snapshot.Path,
+			&snapshot.ConflictType,
+			&snapshot.DetectedAt,
+			&snapshot.Resolution,
+			&resolvedAt,
+			&resolvedBy,
+		); err != nil {
+			return nil, fmt.Errorf("scan conflict history row: %w", err)
+		}
+		if resolvedAt.Valid {
+			snapshot.ResolvedAt = resolvedAt.Int64
+		}
+		snapshot.ResolvedBy = resolvedBy.String
+		snapshots = append(snapshots, snapshot)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate conflict history rows: %w", err)
+	}
+
+	return snapshots, nil
 }
 
 func (i *Inspector) listRemoteBlockedFailures(ctx context.Context) ([]synctypes.SyncFailureRow, error) {

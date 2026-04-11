@@ -41,41 +41,6 @@ func TestFormatNanoTimestamp(t *testing.T) {
 	}
 }
 
-func TestNewIssuesCmd_Structure(t *testing.T) {
-	t.Parallel()
-
-	cmd := newIssuesCmd()
-	assert.Equal(t, "issues", cmd.Use)
-	assert.False(t, cmd.Hidden)
-	assert.Nil(t, cmd.Flags().Lookup("history"))
-
-	subcommands := cmd.Commands()
-	require.Len(t, subcommands, 1)
-	assert.Equal(t, "approve-deletes", subcommands[0].Name())
-}
-
-func TestIssuesCmd_ForceDeletesIsNotRegistered(t *testing.T) {
-	t.Parallel()
-
-	cmd := newIssuesCmd()
-	cmd.SetArgs([]string{"force-deletes"})
-
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown command")
-}
-
-func TestIssuesCmd_RejectsUnexpectedPositionalArgs(t *testing.T) {
-	t.Parallel()
-
-	cmd := newIssuesCmd()
-	cmd.SetArgs([]string{"unexpected"})
-
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown command")
-}
-
 func TestPrintGroupedIssuesText_ReadOnlySectionsOnly(t *testing.T) {
 	t.Parallel()
 
@@ -301,7 +266,7 @@ func newHeldDeleteIssuesCmd(t *testing.T) (*cobra.Command, string, *bytes.Buffer
 		Cfg:          &config.ResolvedDrive{CanonicalID: cid},
 	}
 
-	cmd := newIssuesCmd()
+	cmd := newResolveCmd()
 	cmd.SetContext(context.WithValue(context.Background(), cliContextKey{}, cc))
 	cmd.SetOut(&buf)
 	cmd.SetErr(&buf)
@@ -312,7 +277,7 @@ func newHeldDeleteIssuesCmd(t *testing.T) (*cobra.Command, string, *bytes.Buffer
 func TestIssuesApproveDeletes_ApprovesHeldDeletesOnly(t *testing.T) {
 	cmd, dbPath, out := newHeldDeleteIssuesCmd(t)
 
-	cmd.SetArgs([]string{"approve-deletes"})
+	cmd.SetArgs([]string{"deletes"})
 	require.NoError(t, cmd.Execute())
 	assert.Contains(t, out.String(), approveDeletesSuccess)
 

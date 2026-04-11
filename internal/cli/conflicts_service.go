@@ -98,7 +98,10 @@ func (s *conflictsService) listConflicts(ctx context.Context, history bool) ([]s
 
 	conflicts, err := syncstore.ListConflictsAtPath(ctx, dbPath, history, s.cc.Logger)
 	if err != nil {
-		return nil, fmt.Errorf("read conflicts snapshot: %w", err)
+		return nil, recoverAwareStoreOpenError(
+			s.cc.Cfg.CanonicalID.String(),
+			fmt.Errorf("read conflicts snapshot: %w", err),
+		)
 	}
 
 	return conflicts, nil
@@ -112,7 +115,10 @@ func (s *conflictsService) openResolver(ctx context.Context) (conflictsResolver,
 
 	store, err := syncstore.NewSyncStore(ctx, dbPath, s.cc.Logger)
 	if err != nil {
-		return nil, fmt.Errorf("open sync store: %w", err)
+		return nil, recoverAwareStoreOpenError(
+			s.cc.Cfg.CanonicalID.String(),
+			fmt.Errorf("open sync store: %w", err),
+		)
 	}
 
 	return store, nil

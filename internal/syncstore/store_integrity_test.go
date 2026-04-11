@@ -92,13 +92,13 @@ func TestSyncStore_AuditIntegrityReportsDurableIntentWorkflowProblems(t *testing
 			('conflict-invalid-resolution', ?, '/conflict-e.txt', 'edit_edit', 5, 'manual', NULL, NULL),
 			('conflict-request-on-resolved', ?, '/conflict-f.txt', 'edit_edit', 6, 'keep_local', 66, 'user');
 		INSERT INTO conflict_requests
-			(conflict_id, requested_resolution, state, requested_at, resolving_at, resolution_error)
+			(conflict_id, requested_resolution, state, requested_at, applying_at, last_error)
 		VALUES
-			('conflict-missing-request', '', 'resolution_requested', NULL, NULL, NULL),
-			('conflict-missing-resolving-at', 'keep_local', 'resolving', 2, NULL, NULL),
+			('conflict-missing-request', '', 'queued', NULL, NULL, NULL),
+			('conflict-missing-resolving-at', 'keep_local', 'applying', 2, NULL, NULL),
 			('conflict-invalid-state', 'keep_remote', 'manual', 4, NULL, NULL),
-			('conflict-request-on-resolved', 'keep_remote', 'resolution_requested', 6, NULL, NULL),
-			('conflict-orphaned', 'keep_both', 'resolution_requested', 7, NULL, NULL);
+			('conflict-request-on-resolved', 'keep_remote', 'queued', 6, NULL, NULL),
+			('conflict-orphaned', 'keep_both', 'queued', 7, NULL, NULL);
 		INSERT INTO held_deletes
 			(drive_id, action_type, path, item_id, state, held_at, approved_at, last_planned_at)
 		VALUES
@@ -133,8 +133,8 @@ func TestSyncStore_AuditIntegrityReportsDurableIntentWorkflowProblems(t *testing
 
 	assert.Contains(t, codes, integrityCodeInvalidConflictWorkflow)
 	assert.Contains(t, codes, integrityCodeInvalidHeldDelete)
-	assert.Contains(t, details, "conflict conflict-missing-request is resolution_requested without requested_resolution")
-	assert.Contains(t, details, "conflict conflict-missing-resolving-at is resolving without resolving_at")
+	assert.Contains(t, details, "conflict conflict-missing-request is queued without requested_resolution")
+	assert.Contains(t, details, "conflict conflict-missing-resolving-at is applying without applying_at")
 	assert.Contains(t, details, "conflict conflict-resolved-unresolved is unresolved with resolved_at set")
 	assert.Contains(t, details, `conflict conflict-invalid-state has invalid workflow state "manual"`)
 	assert.Contains(t, details, `conflict conflict-invalid-resolution has invalid final resolution "manual"`)
@@ -236,7 +236,7 @@ func TestSyncStore_RepairIntegritySafePreservesDurableUserIntent(t *testing.T) {
 
 	request, err := store.GetConflictRequest(ctx, "conflict-requested")
 	require.NoError(t, err)
-	assert.Equal(t, synctypes.ConflictStateResolutionRequested, request.State)
+	assert.Equal(t, synctypes.ConflictStateQueued, request.State)
 	assert.Equal(t, synctypes.ResolutionKeepLocal, request.RequestedResolution)
 }
 

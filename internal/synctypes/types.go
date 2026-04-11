@@ -397,11 +397,11 @@ type ConflictRecord struct {
 // request lifecycle ownership separate from the derived conflict ledger.
 type ConflictRequestRecord struct {
 	ConflictRecord
-	State               string // resolution_requested, resolving, resolve_failed
+	State               string // queued, applying
 	RequestedResolution string
 	RequestedAt         int64
-	ResolvingAt         int64
-	ResolutionError     string
+	ApplyingAt          int64
+	LastError           string
 }
 
 // HeldDeleteRecord is the durable user-approval ledger for delete safety

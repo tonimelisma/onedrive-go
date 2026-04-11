@@ -21,17 +21,17 @@ When the same file has been modified on both the local filesystem and OneDrive s
 ## R-2.3 Conflict Resolution [verified]
 
 - R-2.3.1: The default resolution shall preserve both versions: remote wins the original path, local version is renamed to `<name>.conflict-<timestamp>.<ext>`. [verified]
-- R-2.3.2: The system shall persistently record conflicts with metadata (path, timestamp, hashes, final resolution status) and keep any active/failed conflict-resolution request workflow as separate durable user intent. [verified]
-- R-2.3.3: When the user runs `issues`, the system shall list current drive-level sync issues only, excluding conflicts and retry-queue internals. [verified]
-- R-2.3.4: When the user runs `conflicts`, the system shall list unresolved conflicts, and `conflicts --history` shall include resolved conflicts. [verified]
-- R-2.3.5: When the user runs `conflicts resolve <path>`, the system shall durably request one resolution strategy (`keep-local`, `keep-remote`, `keep-both`) and the next running sync engine shall execute that request. If a daemon is running the request shall go through the control socket; otherwise it shall be written directly to the drive state DB. [verified]
-- R-2.3.6: When the user runs `issues approve-deletes`, the system shall mark all currently held delete-safety entries for the selected drive as `approved` without affecting other issue types. If a watch daemon is running the approval shall go through the control socket; otherwise it shall be written directly to the drive state DB. Approved deletes shall execute only when the planned delete matches drive, action type, path, and item ID. Approved rows for a reused path shall be pruned by the engine only when a live plan proves the same drive/action/path now targets a different item ID. [verified]
-- R-2.3.7: When the `issues` command encounters more than 10 failures of the same issue type, the system shall group them under a single heading with count and show the first 5 paths. When `--verbose` is passed, the system shall show all paths. [verified]
+- R-2.3.2: The system shall persistently record conflicts with metadata (path, timestamp, hashes, final resolution status) and keep active conflict-resolution requests, including the last failed layout-establishment error, as separate durable user intent. [verified]
+- R-2.3.3: When the user runs `status` with exactly one selected drive, the system shall present one detailed per-drive read view that includes ordinary issue groups, delete-safety entries, unresolved conflicts, and state-store health. [verified]
+- R-2.3.4: When the user runs `status --history` with exactly one selected drive, the system shall include resolved conflict history in that detailed view. [verified]
+- R-2.3.5: When the user runs `resolve local <path>`, `resolve remote <path>`, or `resolve both <path>`, the system shall durably request one resolution strategy (`keep-local`, `keep-remote`, `keep-both`) and the next running sync engine shall execute that request. If a daemon is running the request shall go through the control socket; otherwise it shall be written directly to the drive state DB. `resolve ... --all` shall record the same strategy for all unresolved conflicts on the selected drive. [verified]
+- R-2.3.6: When the user runs `resolve deletes`, the system shall mark all currently held delete-safety entries for the selected drive as `approved` without affecting other issue types. If a watch daemon is running the approval shall go through the control socket; otherwise it shall be written directly to the drive state DB. Approved deletes shall execute only when the planned delete matches drive, action type, path, and item ID. Approved rows for a reused path shall be pruned by the engine only when a live plan proves the same drive/action/path now targets a different item ID. [verified]
+- R-2.3.7: When the single-drive `status` view encounters more than 10 failures of the same issue type, the system shall group them under a single heading with count and show the first 5 paths. When `--verbose` is passed, the system shall show all paths. [verified]
 - R-2.3.8: When displaying scope-level issues where drives have independent scopes (507 quota, shared-folder write blocks), the system shall sub-group by scope (own drive vs each shortcut). [verified]
 - R-2.3.9: When displaying shortcut-scoped failures, the system shall use the shortcut's local path name (human-readable), not internal drive IDs or scope keys. [verified]
-- R-2.3.10: When `--json` is passed, `issues` shall output structured JSON with `failure_groups` and `held_deletes` only. Conflicts shall be reported through the separate `conflicts` command. [verified]
+- R-2.3.10: When `--json` is passed to single-drive `status`, the detailed read model shall expose structured arrays for `issue_groups`, `delete_safety`, and `conflicts`, plus optional `conflict_history` when `--history` is selected. [verified]
 - R-2.3.11: Shared-folder write blocks shall have no manual CLI retry or recheck command. The system shall revalidate them automatically during normal sync/watch permission checks while blocked writes still exist. [verified]
-- R-2.3.12: Repeated `issues approve-deletes` and repeated conflict-resolution attempts shall be replay-safe. Repeating the same mutation shall either be a no-op or return a stable already-queued/already-resolved result, without duplicate durable effects or partial scope release. Concurrent conflict requests are first-writer-wins until the engine claim completes: same strategy is idempotent, different strategy is rejected, and resolving/resolved conflicts report their current state. [verified]
+- R-2.3.12: Repeated `resolve deletes` and repeated conflict-resolution attempts shall be replay-safe. Repeating the same mutation shall either be a no-op or return a stable already-queued/already-resolved result, without duplicate durable effects or partial scope release. Concurrent conflict requests are last-write-wins while queued, but once a request is `applying` or the conflict is already resolved the current engine-owned state is authoritative. [verified]
 
 ## R-2.4 Filtering [verified]
 
@@ -57,7 +57,7 @@ persisted scope projection rather than unrelated metadata.
 - R-2.5.2: The sync state store shall provide durable, transactional writes that survive process kill. [verified]
 - R-2.5.3: On startup, the system shall detect items stuck in `syncing` state and reset them for re-planning (reconciler). [verified]
 - R-2.5.4: When `ResetInProgressStates` resets items to pending state, the system shall create corresponding `sync_failures` entries so the `FailureRetrier` can rediscover and re-process them. Without this bridge, items that crashed mid-execution become zombies — the delta token was already advanced, so no new events arrive. [verified]
-- R-2.5.5: The repository shall provide a store-owned sync-state audit and deterministic safe-repair tool that reports persisted integrity violations, performs only non-guessing normalizations, and reruns inspection after repair without changing the SQLite schema. [verified]
+- R-2.5.5: The product shall provide one supported `recover` command that performs store-owned sync-state recovery: it first attempts deterministic safe in-place repair, then rebuilds the DB while preserving recoverable durable user intent, and finally resets the DB from scratch if salvage is impossible. The recovery path shall report what it did and shall require explicit user confirmation before mutation. [verified]
 - R-2.5.6: The sync state DB shall use an embedded goose migration history, reject existing state stores that contain user tables without migration history, and provide clear rebuild/migrate guidance instead of silently guessing at or erasing durable user intent. [verified]
 
 ## R-2.6 Pause / Resume [verified]
@@ -67,9 +67,11 @@ persisted scope projection rather than unrelated metadata.
 
 ## R-2.7 Verification [verified]
 
-When the user runs `verify`, the system shall re-hash local files and compare against the baseline and remote state, reporting discrepancies.
+The repository shall provide an internal verification capability that re-hashes
+local files against the sync baseline for tests and developer diagnostics. It
+is not part of the normal product CLI.
 
-- R-2.7.1: When `--json` is passed, `verify` shall output structured JSON with verified count and mismatches. [verified]
+- R-2.7.1: The internal verification capability shall expose structured mismatch data with verified count and per-path discrepancies. [verified]
 
 ## R-2.8 Watch Mode Behavior [verified]
 
@@ -110,7 +112,7 @@ Failure tracking, scope-based classification, and lifecycle management. Each fai
 - R-2.10.19: When 507 occurs on own-drive, scope key `quota:own` shall block own-drive uploads only. Shortcut uploads, downloads, deletes, and moves shall continue. [verified]
 - R-2.10.20: When 507 occurs on a shortcut, scope key `quota:shortcut:$remoteDrive:$remoteItem` shall block that shortcut's uploads only. Own-drive and other shortcut operations shall continue. [verified]
 - R-2.10.21: Trial actions for `quota:own` shall select own-drive uploads. Trial actions for `quota:shortcut:*` shall select uploads targeting that shortcut. [verified]
-- R-2.10.22: The `issues` display shall identify shortcut-scoped 507 by local path name (e.g., "Shared folder 'Team Docs'"), not opaque drive IDs. [verified]
+- R-2.10.22: The detailed single-drive `status` view shall identify shortcut-scoped 507 by local path name (e.g., "Shared folder 'Team Docs'"), not opaque drive IDs. [verified]
 - R-2.10.23: When 403 occurs on a shortcut, the scope boundary shall be that shortcut's `RemoteDriveID`. Permission boundary walking shall use the shortcut's drive, not the primary drive. [verified]
 - R-2.10.24: When 403 occurs on shortcut A, it shall not affect shortcut B. Each shortcut has independent permissions from an independent owner. [verified]
 - R-2.10.25: When a shortcut root itself is read-only, the system shall record a scope block at shortcut root level without walking above the shortcut boundary. [verified]
@@ -121,8 +123,8 @@ Failure tracking, scope-based classification, and lifecycle management. Each fai
 - R-2.10.30: During `service` scope blocks, the system shall suppress shortcut observation polling globally. During `throttle:target:shared:*` scope blocks, it shall suppress observation only for that exact shared target. `throttle:target:drive:*` shall not suppress other shortcut observation. [verified]
 - R-2.10.31: During `quota:shortcut:*` scope blocks, observation of that shortcut shall continue (read-only). Other observations shall be unaffected. [verified]
 - R-2.10.32: The `status` command shall show per-scope block status as separate entries per drive/shortcut, preserving separate visible issue groups even when the summary key is the same. [verified]
-- R-2.10.33: The `sync_failures` table shall store a `scope_key` column for scope-level failures, enabling `issues` display grouping without re-deriving scope. [verified]
-- R-2.10.34: The `scope_key` format shall be: `auth:account`, `quota:own`, `quota:shortcut:$remoteDrive:$remoteItem`, `perm:remote:{localPath}`, `perm:dir:{localPath}`, `throttle:target:drive:$targetDriveID`, `throttle:target:shared:$remoteDrive:$remoteItem`, `service`, `disk:local`. Persisted scope keys use stable internal identifiers where required for correctness; human-readable naming for `issues` output is derived at display time from shortcut metadata. Legacy `throttle:account` keys may still be parsed during startup repair, but new runtime state shall not persist them. [verified]
+- R-2.10.33: The `sync_failures` table shall store a `scope_key` column for scope-level failures, enabling detailed `status` grouping without re-deriving scope. [verified]
+- R-2.10.34: The `scope_key` format shall be: `auth:account`, `quota:own`, `quota:shortcut:$remoteDrive:$remoteItem`, `perm:remote:{localPath}`, `perm:dir:{localPath}`, `throttle:target:drive:$targetDriveID`, `throttle:target:shared:$remoteDrive:$remoteItem`, `service`, `disk:local`. Persisted scope keys use stable internal identifiers where required for correctness; human-readable naming for `status` output is derived at display time from shortcut metadata. Legacy `throttle:account` keys may still be parsed during startup repair, but new runtime state shall not persist them. [verified]
 - R-2.10.35: Engines shall not coordinate scope blocks across engine boundaries. Each engine shall discover scope conditions independently. [verified]
 - R-2.10.36: When 429 is discovered independently per engine (same token), no shared state shall be required. [verified]
 - R-2.10.37: Shortcut scope blocks shall be engine-internal. A shortcut in Engine A shall have no effect on Engine B's shortcuts. [verified]
@@ -135,7 +137,7 @@ Failure tracking, scope-based classification, and lifecycle management. Each fai
 - R-2.10.44: When available disk space is above `min_free_space` but below file size plus `min_free_space`, the system shall record a per-file failure without scope escalation. Smaller files that fit within available space may still download. [verified]
 - R-2.10.45: When a worker result returns HTTP 401, the system shall activate scope key `auth:account` in `scope_blocks` with issue type `unauthorized` and terminate the current one-shot pass or watch session. It shall not fabricate a per-path `sync_failures` row for the 401. Trial 401 results shall not be treated as proof that the blocked scope persists or recovered. CLI presentation of `auth:account` shall remain account-level and shall not synthesize fake path rows. [verified]
 - R-2.10.46: When a persisted `auth:account` scope exists at startup, the system shall revalidate it exactly once with `DriveVerifier.Drive(ctx, driveID)`. Successful proof shall clear the scope and continue startup. Unauthorized proof shall keep the scope and abort startup. Non-auth probe failures, or a missing `DriveVerifier`, shall leave the scope untouched and abort startup. [verified]
-- R-2.10.47: Offline read-only CLI surfaces (`status`, `issues`) shall never mutate persisted `auth:account`. Successful authenticated live CLI proof surfaces may clear persisted `auth:account` for the proved account after the first successful authenticated Graph response. Pre-authenticated upload or download URL success shall not count as proof. [verified]
+- R-2.10.47: Offline read-only CLI surfaces (`status`) shall never mutate persisted `auth:account`. Successful authenticated live CLI proof surfaces may clear persisted `auth:account` for the proved account after the first successful authenticated Graph response. Pre-authenticated upload or download URL success shall not count as proof. [verified]
 
 ## R-2.11 Filename Validation [verified]
 
@@ -160,7 +162,7 @@ The system shall validate filenames against OneDrive naming restrictions before 
 
 - R-2.14.1: When a write to a shared item returns HTTP 403, the system shall call the Graph permissions API to confirm whether the folder is truly read-only, fail open when the evidence is writable or inconclusive, and walk parent folders to the highest denied ancestor without walking above the shortcut root. [verified]
 - R-2.14.2: When confirmed read-only shared-folder state still has blocked remote-mutating work, the planner shall treat that subtree as download-only — suppressing uploads, folder creates, remote moves, and remote deletes while still allowing downloads. [verified]
-- R-2.14.3: The system shall surface read-only shared-folder state in `issues` and `status` only while blocked remote-mutating intent exists, grouping one visible issue per denied boundary and forgetting the state immediately when the last blocked write disappears. [verified]
+- R-2.14.3: The system shall surface read-only shared-folder state in detailed `status` only while blocked remote-mutating intent exists, grouping one visible issue per denied boundary and forgetting the state immediately when the last blocked write disappears. [verified]
 - R-2.14.4: At the start of each sync pass, the system shall recheck visible read-only shared-folder scopes against the Graph API and release them when write access is restored or the evidence is inconclusive. [verified]
 - R-2.14.5: Read-only shared-folder state shall not expose manual retry or manual recheck commands. Recovery shall happen only through automatic permission revalidation and normal scope release when blocked writes disappear. [verified]
 

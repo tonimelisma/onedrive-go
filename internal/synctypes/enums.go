@@ -158,11 +158,10 @@ const (
 // Conflict workflow state constants. Resolution is the final user choice;
 // state is the engine-owned lifecycle for queued resolution work.
 const (
-	ConflictStateUnresolved          = "unresolved"
-	ConflictStateResolutionRequested = "resolution_requested"
-	ConflictStateResolving           = "resolving"
-	ConflictStateResolveFailed       = "resolve_failed"
-	ConflictStateResolved            = "resolved"
+	ConflictStateUnresolved = "unresolved"
+	ConflictStateQueued     = "queued"
+	ConflictStateApplying   = "applying"
+	ConflictStateResolved   = "resolved"
 )
 
 // Held-delete workflow state constants.

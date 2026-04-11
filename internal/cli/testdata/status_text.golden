@@ -6,7 +6,7 @@ Account: Alice Example (alice@example.com) [personal]
     State:     ready
     Last sync: 2026-04-03T10:30:00Z (42 files)
     Pending:   2 items
-    Issues:    3 (run 'onedrive-go issues')
+    Issues:    3
     Issue groups:
       - INVALID FILENAME (file scope): 1
       - AUTHENTICATION REQUIRED (account your OneDrive account authorization): 1

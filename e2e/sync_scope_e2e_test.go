@@ -42,7 +42,7 @@ func TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile(t *testing.T
 		t,
 		cfgPath,
 		env,
-		90*time.Second,
+		remoteScopeTransitionTimeout,
 		"sync_paths exact-file download should eventually materialize only the selected file after delta catches up",
 		func(result syncAttemptResult) bool {
 			if result.Err != nil {
@@ -109,7 +109,7 @@ func TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload(t *testing.
 		t,
 		cfgPath,
 		env,
-		90*time.Second,
+		remoteScopeTransitionTimeout,
 		"ignore marker removal should eventually materialize the newly unblocked remote file",
 		func(result syncAttemptResult) bool {
 			if result.Err != nil {

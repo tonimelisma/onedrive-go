@@ -209,29 +209,13 @@ func repairIntegritySafeTx(ctx context.Context, tx *sql.Tx) (int, error) {
 }
 
 func queryAllConflictsForAudit(ctx context.Context, db *sql.DB) ([]synctypes.ConflictRecord, error) {
-	rows, err := db.QueryContext(ctx, sqlListAllConflicts)
-	if err != nil {
-		if isMissingTableErr(err) {
-			return nil, nil
-		}
-
-		return nil, fmt.Errorf("query conflicts for audit: %w", err)
-	}
-	defer rows.Close()
-
-	var conflicts []synctypes.ConflictRecord
-	for rows.Next() {
-		conflict, err := scanConflictRow(rows)
-		if err != nil {
-			return nil, err
-		}
-		conflicts = append(conflicts, *conflict)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate conflict audit rows: %w", err)
-	}
-
-	return conflicts, nil
+	return queryConflictRows(
+		ctx,
+		db,
+		sqlListAllConflicts,
+		"query conflicts for audit",
+		"iterate conflict audit rows",
+	)
 }
 
 func queryHeldDeletesForAudit(ctx context.Context, db *sql.DB) ([]synctypes.HeldDeleteRecord, error) {
@@ -254,7 +238,7 @@ func queryHeldDeletesForAudit(ctx context.Context, db *sql.DB) ([]synctypes.Held
 
 func queryAllConflictRequestsForAudit(ctx context.Context, db *sql.DB) ([]synctypes.ConflictRequestRecord, error) {
 	rows, err := db.QueryContext(ctx, `
-		SELECT conflict_id, requested_resolution, state, requested_at, resolving_at, resolution_error
+		SELECT conflict_id, requested_resolution, state, requested_at, applying_at, last_error
 		FROM conflict_requests
 		ORDER BY requested_at, conflict_id`)
 	if err != nil {
@@ -271,26 +255,26 @@ func queryAllConflictRequestsForAudit(ctx context.Context, db *sql.DB) ([]syncty
 		var (
 			record      synctypes.ConflictRequestRecord
 			requestedAt sql.NullInt64
-			resolvingAt sql.NullInt64
-			resolveErr  sql.NullString
+			applyingAt  sql.NullInt64
+			lastErr     sql.NullString
 		)
 		if err := rows.Scan(
 			&record.ID,
 			&record.RequestedResolution,
 			&record.State,
 			&requestedAt,
-			&resolvingAt,
-			&resolveErr,
+			&applyingAt,
+			&lastErr,
 		); err != nil {
 			return nil, fmt.Errorf("scan conflict request audit row: %w", err)
 		}
 		if requestedAt.Valid {
 			record.RequestedAt = requestedAt.Int64
 		}
-		if resolvingAt.Valid {
-			record.ResolvingAt = resolvingAt.Int64
+		if applyingAt.Valid {
+			record.ApplyingAt = applyingAt.Int64
 		}
-		record.ResolutionError = resolveErr.String
+		record.LastError = lastErr.String
 		requests = append(requests, record)
 	}
 	if err := rows.Err(); err != nil {
@@ -418,31 +402,24 @@ func auditConflictRequestRows(
 		}
 
 		switch row.State {
-		case synctypes.ConflictStateResolutionRequested:
+		case synctypes.ConflictStateQueued:
 			if row.RequestedResolution == "" {
 				report.add(
 					integrityCodeInvalidConflictWorkflow,
-					fmt.Sprintf("conflict %s is resolution_requested without requested_resolution", row.ID),
+					fmt.Sprintf("conflict %s is queued without requested_resolution", row.ID),
 				)
 			}
-		case synctypes.ConflictStateResolving:
+		case synctypes.ConflictStateApplying:
 			if row.RequestedResolution == "" {
 				report.add(
 					integrityCodeInvalidConflictWorkflow,
-					fmt.Sprintf("conflict %s is resolving without requested_resolution", row.ID),
+					fmt.Sprintf("conflict %s is applying without requested_resolution", row.ID),
 				)
 			}
-			if row.ResolvingAt == 0 {
+			if row.ApplyingAt == 0 {
 				report.add(
 					integrityCodeInvalidConflictWorkflow,
-					fmt.Sprintf("conflict %s is resolving without resolving_at", row.ID),
-				)
-			}
-		case synctypes.ConflictStateResolveFailed:
-			if row.RequestedResolution == "" {
-				report.add(
-					integrityCodeInvalidConflictWorkflow,
-					fmt.Sprintf("conflict %s is resolve_failed without requested_resolution", row.ID),
+					fmt.Sprintf("conflict %s is applying without applying_at", row.ID),
 				)
 			}
 		default:

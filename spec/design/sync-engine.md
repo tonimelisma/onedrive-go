@@ -383,7 +383,7 @@ failure persistence shape, retry/trial timing, and log ownership are not
 re-derived from raw `HTTPStatus`, wrapped errors, or `RetryAfter` headers after
 classification. Structured sync logs emit `summary_key` from the same
 `ResultDecision`, which gives tests and operators one normalized failure family
-across runtime logs, `issues`, and `status`.
+across runtime logs and the store-owned `status` read model.
 Permission-flow and fatal-auth side effects follow the same rule: their
 durable writes and scope-activation logs emit the normalized `summary_key`
 instead of inventing a second presentation taxonomy for shared-folder blocked,
@@ -721,57 +721,56 @@ preventing stale recursive write suppression after the share disappears.
 ## CLI / Engine Boundary (`sync_helpers.go`)
 
 `sync_helpers.go` is the root-package bridge into the single-drive engine. It
-constructs `sync.Engine` instances for engine-facing flows such as conflict
-resolution and verification, while the multi-drive `sync` command itself is
+constructs `sync.Engine` instances for engine-facing flows such as one-shot
+sync and watch bootstrap, while the multi-drive `sync` command itself is
 governed by `sync-control-plane.md`.
 
 ## Conflict Resolution
 
 Manual conflict resolution is engine-owned user intent, not a CLI-side
-transfer operation. `conflicts resolve` records a durable request with one of
-`keep_local`, `keep_remote`, or `keep_both`. If a watch daemon is running the
-request goes through the control socket; otherwise the CLI writes the same
-request into the drive state DB. The engine claims queued requests and executes
-the side effects during normal `sync` / `sync --watch` ownership.
+transfer operation. `resolve local|remote|both` records a durable request with
+one of `keep_local`, `keep_remote`, or `keep_both`. If a watch daemon is
+running the request goes through the control socket; otherwise the CLI writes
+the same request into the drive state DB. The engine claims queued requests
+and executes the side effects during normal `sync` / `sync --watch`
+ownership.
 
 Conflict state is split across two durable authorities:
 
 - `conflicts` owns visible conflict facts and final historical outcome
   (`resolution=unresolved|keep_local|keep_remote|keep_both`)
-- `conflict_requests` owns only active/failed request workflow
+- `conflict_requests` owns only active request workflow
 
 Request rows use these explicit workflow states:
 
-- `resolution_requested` — durable user intent is queued
-- `resolving` — one engine has claimed the request
-- `resolve_failed` — engine execution failed; the requested resolution and error remain durable
+- `queued` — durable user intent is recorded and waiting
+- `applying` — one engine has claimed the request
 
 Successful execution deletes the `conflict_requests` row in the same
-transaction that marks the matching `conflicts` row resolved. This keeps the
-engine as the only side-effect owner while preventing the conflict fact table
-from also becoming a queued-work authority.
+transaction that marks the matching `conflicts` row resolved. Failed
+layout-establishment attempts rewrite the request back to `queued` with
+`last_error` preserved. This keeps the engine as the only side-effect owner
+while preventing the conflict fact table from also becoming a queued-work
+authority.
 
-`keep_both` is intentionally modeled as an explicit reconciliation path, not
-as a synthetic executor transfer outcome:
+Conflict requests stop being “conflicts” once the engine establishes the
+user-chosen file layout. After that point, any later upload/download/stat/hash
+or baseline failure is ordinary sync failure, not a conflict-workflow state.
 
-- the executor-level file operations still produce the visible filesystem
-  result: keep the renamed local conflict copy and restore/download the remote
-  file at the original path
-- once that local disk state exists, the engine hashes the current file and
-  calls `SyncStore.RefreshLocalBaseline(...)`
-- the store updates only the local-side baseline tuple for the original path,
-  preserves the known remote-side tuple/`etag`, and marks a matching
-  `remote_state` row `synced`
-- conflict-copy placeholders use synthetic local-only item IDs so the
-  baseline can remember the extra file without claiming it has a remote
-  counterpart yet
+- `keep_local`: restore the chosen conflict copy to the original path, remove
+  leftover conflict artifacts, mark the conflict resolved, then hand the path
+  back to ordinary sync planning/execution for any follow-on upload/baseline
+  work.
+- `keep_remote`: remove leftover conflict artifacts, leave the chosen remote
+  version at the original path, mark the conflict resolved, then let ordinary
+  sync/state convergence continue.
+- `keep_both`: accept the current original path plus conflict-copy files as the
+  chosen final layout, mark the conflict resolved, then let ordinary local
+  observation/baseline convergence handle the files like any other local state.
 
-This separation matters because `ActionUpdateSynced` still means true
-planner/executor convergence: both sides are already equivalent without a
-resolution-specific store transition. `keep_both` is different. It is an
-explicit user reconciliation decision that needs durable-state repair. If any
-resolution attempt fails, the engine marks the conflict `resolve_failed` rather
-than pretending the CLI operation succeeded or retrying from an ad hoc engine.
+If the engine cannot establish the chosen layout itself, such as a restore or
+cleanup filesystem failure, the conflict stays unresolved and the request
+returns to `queued` with `last_error` recorded.
 
 ## Watch Mode Behavior
 
@@ -831,7 +830,12 @@ In watch mode, the planner-level delete-safety check is disabled (`threshold=Max
 2. Non-delete actions continue to DepGraph and execute normally
 3. Held deletes are recorded in the `held_deletes` table with `state='held'`
 
-**CLI notification**: `issues` shows held deletes in a dedicated "HELD DELETES" section. User approves them via `issues approve-deletes`, which records `state='approved'` either by socket RPC to a watch daemon or directly in the DB when no watch daemon is running. If a foreground one-shot sync owns the socket, the CLI writes durable DB intent directly instead of sending a mutation RPC.
+**CLI notification**: single-drive `status` shows held deletes in a dedicated
+"DELETE SAFETY" section. User approves them via `resolve deletes`, which
+records `state='approved'` either by socket RPC to a watch daemon or directly
+in the DB when no watch daemon is running. If a foreground one-shot sync owns
+the socket, the CLI writes durable DB intent directly instead of sending a
+mutation RPC.
 
 **External change detection**: A 10-second `recheckTicker` in the `RunWatch()` select loop runs `PRAGMA data_version` to detect offline CLI writes. When the data version changes, `handleExternalChanges()` queries held-delete rows. If no `state='held'` rows remain, it calls `counter.Release()`. Socket approval and recheck/data-version detection do not inject best-effort edge-triggered dispatch directly into the outbox. Instead, both wake sources set one watch-loop-owned pending-user-intent flag. The watch loop clears that flag only when it can append a user-intent pass after ordinary outbox work drains, so a wake received while other actions are already queued is preserved rather than lost. Repeated wakes coalesce while one user-intent pass is already pending. On that later user-intent pass, approved deletes are rebuilt into planner events and dispatched normally.
 

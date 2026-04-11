@@ -1,7 +1,6 @@
 package syncstore
 
 import (
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -42,66 +41,74 @@ func TestSyncStore_RequestConflictResolutionSameStrategyIsIdempotent(t *testing.
 }
 
 // Validates: R-2.3.12
-func TestSyncStore_RequestConflictResolutionFirstWriterWinsConcurrently(t *testing.T) {
+func TestSyncStore_RequestConflictResolutionQueuedRequestCanBeOverwrittenBeforeApplying(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
-	insertUnresolvedConflict(t, store, "conflict-concurrent")
+	insertUnresolvedConflict(t, store, "conflict-overwrite")
 
-	type requestResult struct {
-		status ConflictRequestStatus
-		err    error
-	}
-	results := make(chan requestResult, 2)
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	for _, strategy := range []string{synctypes.ResolutionKeepLocal, synctypes.ResolutionKeepRemote} {
-		wg.Add(1)
-		go func(strategy string) {
-			defer wg.Done()
-			<-start
-			result, err := store.RequestConflictResolution(t.Context(), "conflict-concurrent", strategy)
-			results <- requestResult{status: result.Status, err: err}
-		}(strategy)
-	}
-	close(start)
-	wg.Wait()
-	close(results)
-
-	var statuses []ConflictRequestStatus
-	for result := range results {
-		require.NoError(t, result.err)
-		statuses = append(statuses, result.status)
-	}
-	assert.ElementsMatch(t, []ConflictRequestStatus{
-		ConflictRequestQueued,
-		ConflictRequestDifferentStrategy,
-	}, statuses)
-}
-
-// Validates: R-2.3.12
-func TestSyncStore_RequestConflictResolutionRejectsResolvingAndResolved(t *testing.T) {
-	t.Parallel()
-
-	store := newTestStore(t)
-	insertUnresolvedConflict(t, store, "conflict-resolving")
-
-	result, err := store.RequestConflictResolution(t.Context(), "conflict-resolving", synctypes.ResolutionKeepLocal)
+	result, err := store.RequestConflictResolution(t.Context(), "conflict-overwrite", synctypes.ResolutionKeepLocal)
 	require.NoError(t, err)
 	assert.Equal(t, ConflictRequestQueued, result.Status)
 
-	_, ok, err := store.ClaimConflictResolution(t.Context(), "conflict-resolving")
+	result, err = store.RequestConflictResolution(t.Context(), "conflict-overwrite", synctypes.ResolutionKeepRemote)
+	require.NoError(t, err)
+	assert.Equal(t, ConflictRequestQueued, result.Status)
+
+	request, err := store.GetConflictRequest(t.Context(), "conflict-overwrite")
+	require.NoError(t, err)
+	assert.Equal(t, synctypes.ResolutionKeepRemote, request.RequestedResolution)
+	assert.Empty(t, request.LastError)
+}
+
+// Validates: R-2.3.12
+func TestSyncStore_RequestConflictResolutionRejectsApplyingAndResolved(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	insertUnresolvedConflict(t, store, "conflict-applying")
+
+	result, err := store.RequestConflictResolution(t.Context(), "conflict-applying", synctypes.ResolutionKeepLocal)
+	require.NoError(t, err)
+	assert.Equal(t, ConflictRequestQueued, result.Status)
+
+	_, ok, err := store.ClaimConflictResolution(t.Context(), "conflict-applying")
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	result, err = store.RequestConflictResolution(t.Context(), "conflict-resolving", synctypes.ResolutionKeepLocal)
+	result, err = store.RequestConflictResolution(t.Context(), "conflict-applying", synctypes.ResolutionKeepLocal)
 	require.NoError(t, err)
-	assert.Equal(t, ConflictRequestAlreadyResolving, result.Status)
+	assert.Equal(t, ConflictRequestAlreadyApplying, result.Status)
 
-	require.NoError(t, store.ResolveConflict(t.Context(), "conflict-resolving", synctypes.ResolutionKeepLocal))
-	result, err = store.RequestConflictResolution(t.Context(), "conflict-resolving", synctypes.ResolutionKeepLocal)
+	require.NoError(t, store.ResolveConflict(t.Context(), "conflict-applying", synctypes.ResolutionKeepLocal))
+	result, err = store.RequestConflictResolution(t.Context(), "conflict-applying", synctypes.ResolutionKeepLocal)
 	require.NoError(t, err)
 	assert.Equal(t, ConflictRequestAlreadyResolved, result.Status)
+}
+
+// Validates: R-2.3.12
+func TestSyncStore_RequeueConflictResolutionWithErrorKeepsQueuedRequest(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	insertUnresolvedConflict(t, store, "conflict-error")
+
+	result, err := store.RequestConflictResolution(t.Context(), "conflict-error", synctypes.ResolutionKeepBoth)
+	require.NoError(t, err)
+	assert.Equal(t, ConflictRequestQueued, result.Status)
+
+	claimed, ok, err := store.ClaimConflictResolution(t.Context(), "conflict-error")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NotNil(t, claimed)
+
+	require.NoError(t, store.MarkConflictResolutionFailed(t.Context(), "conflict-error", assert.AnError))
+
+	request, err := store.GetConflictRequest(t.Context(), "conflict-error")
+	require.NoError(t, err)
+	assert.Equal(t, synctypes.ConflictStateQueued, request.State)
+	assert.Equal(t, assert.AnError.Error(), request.LastError)
+	assert.Zero(t, request.ApplyingAt)
 }
 
 // Validates: R-2.3.12

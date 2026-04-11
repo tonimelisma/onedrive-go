@@ -838,7 +838,7 @@ func TestE2E_RoundTrip(t *testing.T) {
 		_, stderr := runCLIWithConfig(t, cfgPath, nil, "put", tmpFile.Name(), "/"+permFile)
 		assert.Contains(t, stderr, "Uploaded")
 
-		waitForRemoteWriteVisible(t, cfgPath, nil, drive, "perm-test.txt", "stat", "/"+permFile)
+		pollRemotePathVisible(t, cfgPath, nil, "/"+permFile)
 
 		_, stderr = runCLIWithConfig(t, cfgPath, nil, "rm", "--permanent", "/"+permFile)
 		assert.Contains(t, stderr, "Permanently deleted")
@@ -856,8 +856,9 @@ func TestE2E_RoundTrip(t *testing.T) {
 
 	t.Run("status", func(t *testing.T) {
 		stdout, _ := runCLIWithConfig(t, cfgPath, nil, "status")
-		assert.Contains(t, stdout, "Account:", "status should show account header")
+		assert.Contains(t, stdout, "Drive:", "status should show drive header")
 		assert.Contains(t, stdout, "Auth:", "status should show auth state")
+		assert.Contains(t, stdout, "State DB: missing", "status should surface missing state DB for unsynced drives")
 	})
 }
 
