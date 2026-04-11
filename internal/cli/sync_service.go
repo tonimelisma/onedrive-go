@@ -29,6 +29,7 @@ type syncWatchRunner func(
 	opts synctypes.WatchOpts,
 	logger *slog.Logger,
 	statusWriter io.Writer,
+	controlSocketPath string,
 ) error
 
 type syncRunOnceRunner func(
@@ -38,6 +39,7 @@ type syncRunOnceRunner func(
 	mode synctypes.SyncMode,
 	opts synctypes.RunOpts,
 	logger *slog.Logger,
+	controlSocketPath string,
 ) []*synctypes.DriveReport
 
 type syncService struct {
@@ -57,12 +59,23 @@ func newSyncService(cc *CLIContext) *syncService {
 			opts synctypes.WatchOpts,
 			logger *slog.Logger,
 			statusWriter io.Writer,
+			controlSocketPath string,
 		) error {
 			if cc != nil && cc.syncDaemonOrchestratorFactory != nil {
-				return runSyncDaemonWithFactory(ctx, holder, selectors, mode, opts, logger, statusWriter, cc.syncDaemonOrchestratorFactory)
+				return runSyncDaemonWithFactory(
+					ctx,
+					holder,
+					selectors,
+					mode,
+					opts,
+					logger,
+					statusWriter,
+					controlSocketPath,
+					cc.syncDaemonOrchestratorFactory,
+				)
 			}
 
-			return runSyncDaemon(ctx, holder, selectors, mode, opts, logger, statusWriter)
+			return runSyncDaemon(ctx, holder, selectors, mode, opts, logger, statusWriter, controlSocketPath)
 		},
 		runOnceRunner: func(
 			ctx context.Context,
@@ -71,6 +84,7 @@ func newSyncService(cc *CLIContext) *syncService {
 			mode synctypes.SyncMode,
 			opts synctypes.RunOpts,
 			logger *slog.Logger,
+			controlSocketPath string,
 		) []*synctypes.DriveReport {
 			httpProvider := graphhttp.NewProvider(logger)
 			provider := driveops.NewSessionProvider(
@@ -92,7 +106,7 @@ func newSyncService(cc *CLIContext) *syncService {
 				Drives:            drives,
 				Provider:          provider,
 				Logger:            logger,
-				ControlSocketPath: config.ControlSocketPath(),
+				ControlSocketPath: controlSocketPath,
 			})
 
 			return orch.RunOnce(ctx, mode, opts)
@@ -124,13 +138,17 @@ func (s *syncService) run(ctx context.Context, opts syncCommandOptions) error {
 	if err != nil {
 		return err
 	}
+	controlSocketPath, err := config.ControlSocketPath()
+	if err != nil {
+		return fmt.Errorf("resolve control socket path: %w", err)
+	}
 
 	holder := config.NewHolder(rawCfg, s.cc.CfgPath)
 	if opts.Watch {
 		return s.watchRunner(ctx, holder, selectors, opts.Mode, synctypes.WatchOpts{
 			PollInterval:       parsePollInterval(rawCfg.PollInterval),
 			SafetyScanInterval: parseDurationOrZero(rawCfg.SafetyScanInterval),
-		}, logger, s.cc.Status())
+		}, logger, s.cc.Status(), controlSocketPath)
 	}
 
 	drives, err := config.ResolveDrives(rawCfg, selectors, false, logger)
@@ -156,7 +174,7 @@ func (s *syncService) run(ctx context.Context, opts syncCommandOptions) error {
 	reports := s.runOnceRunner(ctx, holder, drives, opts.Mode, synctypes.RunOpts{
 		DryRun:        effectiveDryRun,
 		FullReconcile: opts.FullReconcile,
-	}, logger)
+	}, logger, controlSocketPath)
 
 	printDriveReports(reports, s.cc)
 

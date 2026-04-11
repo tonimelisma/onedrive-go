@@ -913,6 +913,86 @@ func TestOrchestrator_ControlSocket_QueuesDurableUserIntent(t *testing.T) {
 	}
 }
 
+// Validates: R-2.9.3, R-2.10.4
+func TestOrchestrator_ControlSocket_StatusCountsUseReadOnlyInspector(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+
+	rd := testResolvedDrive(t, "personal:readonly-status@example.com", "ReadOnlyStatus")
+	cfgPath := writeTestConfig(t, rd.CanonicalID)
+	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
+	cfg.ControlSocketPath = shortControlSocketPath(t)
+	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+
+	seedControlSocketIntentStore(t, rd)
+
+	store, err := syncstore.NewSyncStore(t.Context(), rd.StatePath(), slog.Default())
+	require.NoError(t, err)
+	require.NoError(t, store.ApproveHeldDeletes(t.Context()))
+	result, err := store.RequestConflictResolution(t.Context(), "conflict-1", synctypes.ResolutionKeepLocal)
+	require.NoError(t, err)
+	assert.Equal(t, syncstore.ConflictRequestQueued, result.Status)
+
+	dbPath := rd.StatePath()
+	dbDir := filepath.Dir(dbPath)
+	walPath := dbPath + "-wal"
+	shmPath := dbPath + "-shm"
+	require.Eventually(t, func() bool {
+		_, walErr := os.Stat(walPath)
+		_, shmErr := os.Stat(shmPath)
+		return walErr == nil && shmErr == nil
+	}, time.Second, 10*time.Millisecond, "WAL sidecars were not created")
+
+	require.NoError(t, os.Chmod(dbPath, 0o400))
+	// #nosec G302 -- test intentionally makes the directory read-only to prove status uses a read-only DB path.
+	require.NoError(t, os.Chmod(dbDir, 0o500))
+	t.Cleanup(func() {
+		// #nosec G302 -- cleanup restores the test directory so the writable store can close cleanly.
+		assert.NoError(t, os.Chmod(dbDir, 0o700))
+		assert.NoError(t, os.Chmod(dbPath, 0o600))
+		assert.NoError(t, store.Close(context.Background()))
+	})
+
+	orch := NewOrchestrator(cfg)
+	watchStarted := make(chan struct{})
+	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
+		return &mockEngine{
+			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
+				close(watchStarted)
+				<-ctx.Done()
+				return ctx.Err()
+			},
+		}, nil
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- orch.RunWatch(t.Context(), synctypes.SyncBidirectional, synctypes.WatchOpts{})
+	}()
+
+	select {
+	case <-watchStarted:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "RunWatch did not start in time")
+	}
+
+	status := getControlStatus(t, cfg.ControlSocketPath)
+	assert.Equal(t, 1, status.PendingHeldDeleteApprovals)
+	assert.Equal(t, 1, status.PendingConflictRequests)
+	assert.Zero(t, status.ResolvingConflictRequests)
+	assert.Zero(t, status.FailedConflictRequests)
+
+	stop := postControlJSON(t, cfg.ControlSocketPath, synccontrol.PathStop, nil)
+	assert.Equal(t, synccontrol.StatusStopping, stop.Status)
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "RunWatch did not stop in time")
+	}
+}
+
 func assertControlStatusCounts(t *testing.T, socketPath string) {
 	t.Helper()
 

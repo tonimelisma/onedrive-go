@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -448,11 +449,13 @@ sync_dir = %q
 		mode synctypes.SyncMode,
 		opts synctypes.RunOpts,
 		_ *slog.Logger,
+		controlSocketPath string,
 	) []*synctypes.DriveReport {
 		called = true
 		assert.Len(t, drives, 1)
 		assert.Equal(t, synctypes.SyncBidirectional, mode)
 		assert.True(t, opts.DryRun)
+		assert.NotEmpty(t, controlSocketPath)
 
 		return []*synctypes.DriveReport{
 			{
@@ -499,6 +502,7 @@ sync_dir = %q
 		_ synctypes.SyncMode,
 		opts synctypes.RunOpts,
 		_ *slog.Logger,
+		_ string,
 	) []*synctypes.DriveReport {
 		assert.False(t, opts.DryRun)
 
@@ -538,6 +542,7 @@ sync_dir = %q
 			synctypes.WatchOpts,
 			*slog.Logger,
 			io.Writer,
+			string,
 		) error {
 			require.FailNow(t, "watch runner should not be called when effective dry run is true")
 			return nil
@@ -550,4 +555,90 @@ sync_dir = %q
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "watch mode does not support dry-run")
+}
+
+func TestSyncService_Run_FailsLoudlyWhenControlSocketPathCannotBeDerivedForOneShot(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	syncDir := t.TempDir()
+	configBody := fmt.Sprintf(`
+["personal:test@example.com"]
+sync_dir = %q
+`, syncDir)
+	require.NoError(t, os.WriteFile(cfgPath, []byte(configBody), 0o600))
+
+	t.Setenv("XDG_DATA_HOME", filepath.Join(t.TempDir(), strings.Repeat("very-long-control-root-", 8)))
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), strings.Repeat("very-long-runtime-root-", 8)))
+
+	service := newSyncService(&CLIContext{
+		Logger:       slog.New(slog.DiscardHandler),
+		OutputWriter: io.Discard,
+		StatusWriter: io.Discard,
+		CfgPath:      cfgPath,
+	})
+
+	called := false
+	service.runOnceRunner = func(
+		context.Context,
+		*config.Holder,
+		[]*config.ResolvedDrive,
+		synctypes.SyncMode,
+		synctypes.RunOpts,
+		*slog.Logger,
+		string,
+	) []*synctypes.DriveReport {
+		called = true
+		return nil
+	}
+
+	err := service.run(t.Context(), syncCommandOptions{Mode: synctypes.SyncBidirectional})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "resolve control socket path")
+	assert.False(t, called, "one-shot sync owner must stop before engine startup when the socket path is impossible")
+}
+
+func TestSyncService_Run_FailsLoudlyWhenControlSocketPathCannotBeDerivedForWatch(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	syncDir := t.TempDir()
+	configBody := fmt.Sprintf(`
+["personal:test@example.com"]
+sync_dir = %q
+`, syncDir)
+	require.NoError(t, os.WriteFile(cfgPath, []byte(configBody), 0o600))
+
+	t.Setenv("XDG_DATA_HOME", filepath.Join(t.TempDir(), strings.Repeat("very-long-control-root-", 8)))
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), strings.Repeat("very-long-runtime-root-", 8)))
+
+	service := newSyncService(&CLIContext{
+		Logger:       slog.New(slog.DiscardHandler),
+		OutputWriter: io.Discard,
+		StatusWriter: io.Discard,
+		CfgPath:      cfgPath,
+	})
+
+	called := false
+	service.watchRunner = func(
+		context.Context,
+		*config.Holder,
+		[]string,
+		synctypes.SyncMode,
+		synctypes.WatchOpts,
+		*slog.Logger,
+		io.Writer,
+		string,
+	) error {
+		called = true
+		return nil
+	}
+
+	err := service.run(t.Context(), syncCommandOptions{
+		Mode:  synctypes.SyncBidirectional,
+		Watch: true,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "resolve control socket path")
+	assert.False(t, called, "watch sync owner must stop before daemon startup when the socket path is impossible")
 }

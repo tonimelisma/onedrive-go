@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -288,7 +289,7 @@ func TestCLIContextSession_ReconcilesEmailChangeAndReloadsDrive(t *testing.T) {
 	assert.FileExists(t, config.DriveTokenPath(newCID))
 }
 
-func TestCLIContextReplaceCommandLogger_ClosesReplacedCloserAndPostRunClosesActiveCloser(t *testing.T) {
+func TestCLIContextReplaceCommandLogger_ClosesReplacedCloserAndTopLevelCloseClosesActiveCloser(t *testing.T) {
 	t.Parallel()
 
 	oldCloser := &countingCloser{}
@@ -310,7 +311,7 @@ func TestCLIContextReplaceCommandLogger_ClosesReplacedCloserAndPostRunClosesActi
 	assert.Equal(t, 1, newCloser.callCount)
 
 	require.NoError(t, cc.closeCommandLogger())
-	assert.Equal(t, 1, newCloser.callCount, "post-run close should not double-close the active logger")
+	assert.Equal(t, 1, newCloser.callCount, "top-level close should not double-close the active logger")
 }
 
 func TestCLIContextReplaceCommandLogger_SurfacesSwapCloseError(t *testing.T) {
@@ -334,6 +335,38 @@ func TestCLIContextReplaceCommandLogger_SurfacesSwapCloseError(t *testing.T) {
 	assert.Nil(t, cc.logCloser, "failed swap should not leave a replacement closer installed")
 	assert.Equal(t, 1, oldCloser.callCount)
 	assert.Equal(t, 1, newCloser.callCount, "replacement closer should be closed on swap failure")
+}
+
+func TestCloseRootCommandLogger_ClosesActiveLoggerAfterCommandError(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	root := newRootCmdWithWriters(io.Discard, io.Discard)
+	activeCloser := &countingCloser{}
+	commandErr := errors.New("boom")
+
+	root.AddCommand(&cobra.Command{
+		Use:         "failing",
+		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cc := mustCLIContext(cmd.Context())
+			rootCC := cliContextFrom(cmd.Root().Context())
+			require.Same(t, cc, rootCC, "root command must carry the same CLIContext for top-level cleanup")
+			require.NoError(t, cc.replaceCommandLogger(slog.New(slog.DiscardHandler), activeCloser))
+			return commandErr
+		},
+	})
+
+	root.SetArgs([]string{"failing"})
+
+	err := root.Execute()
+	require.ErrorIs(t, err, commandErr)
+	assert.Equal(t, 0, activeCloser.callCount, "execute should return before top-level cleanup closes the active logger")
+
+	require.NoError(t, closeRootCommandLogger(root))
+	assert.Equal(t, 1, activeCloser.callCount)
+
+	require.NoError(t, closeRootCommandLogger(root))
+	assert.Equal(t, 1, activeCloser.callCount, "top-level cleanup should remain idempotent")
 }
 
 func TestNewGraphClient_ReturnsConstructionError(t *testing.T) {

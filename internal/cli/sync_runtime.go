@@ -35,8 +35,19 @@ func runSyncDaemon(
 	opts synctypes.WatchOpts,
 	logger *slog.Logger,
 	statusWriter io.Writer,
+	controlSocketPath string,
 ) error {
-	return runSyncDaemonWithFactory(ctx, holder, selectors, mode, opts, logger, statusWriter, defaultSyncDaemonOrchestratorFactory)
+	return runSyncDaemonWithFactory(
+		ctx,
+		holder,
+		selectors,
+		mode,
+		opts,
+		logger,
+		statusWriter,
+		controlSocketPath,
+		defaultSyncDaemonOrchestratorFactory,
+	)
 }
 
 func runSyncDaemonWithFactory(
@@ -47,6 +58,7 @@ func runSyncDaemonWithFactory(
 	opts synctypes.WatchOpts,
 	logger *slog.Logger,
 	_ io.Writer,
+	controlSocketPath string,
 	orchestratorFactory syncDaemonOrchestratorFactory,
 ) (err error) {
 	if orchestratorFactory == nil {
@@ -103,7 +115,7 @@ func runSyncDaemonWithFactory(
 		Drives:            drives,
 		Provider:          provider,
 		Logger:            logger,
-		ControlSocketPath: config.ControlSocketPath(),
+		ControlSocketPath: controlSocketPath,
 		DebugEventHook:    debugEventHook,
 	})
 

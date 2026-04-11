@@ -451,17 +451,17 @@ func (o *Orchestrator) countDurableIntents(ctx context.Context) (syncstore.Durab
 			return syncstore.DurableIntentCounts{}, fmt.Errorf("stat sync store for %s: %w", rd.CanonicalID.String(), err)
 		}
 
-		store, err := syncstore.NewSyncStore(ctx, dbPath, o.logger)
+		inspector, err := syncstore.OpenInspector(dbPath, o.logger)
 		if err != nil {
-			return syncstore.DurableIntentCounts{}, fmt.Errorf("open sync store for %s: %w", rd.CanonicalID.String(), err)
+			return syncstore.DurableIntentCounts{}, fmt.Errorf("open read-only sync store for %s: %w", rd.CanonicalID.String(), err)
 		}
-		counts, countErr := store.CountDurableIntents(ctx)
-		closeErr := store.Close(ctx)
+		counts, countErr := inspector.ReadDurableIntentCounts(ctx)
+		closeErr := inspector.Close()
 		if countErr != nil {
 			return syncstore.DurableIntentCounts{}, fmt.Errorf("count durable intents for %s: %w", rd.CanonicalID.String(), countErr)
 		}
 		if closeErr != nil {
-			return syncstore.DurableIntentCounts{}, fmt.Errorf("close sync store for %s: %w", rd.CanonicalID.String(), closeErr)
+			return syncstore.DurableIntentCounts{}, fmt.Errorf("close read-only sync store for %s: %w", rd.CanonicalID.String(), closeErr)
 		}
 
 		total.PendingHeldDeleteApprovals += counts.PendingHeldDeleteApprovals

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -60,7 +61,8 @@ func startCLIControlSocket(
 ) {
 	t.Helper()
 
-	socketPath := config.ControlSocketPath()
+	socketPath, err := config.ControlSocketPath()
+	require.NoError(t, err)
 	require.NotEmpty(t, socketPath)
 	require.NoError(t, os.MkdirAll(filepath.Dir(socketPath), 0o700))
 	require.NoError(t, os.RemoveAll(socketPath))
@@ -234,4 +236,63 @@ func TestConflictsResolve_FallsBackToDBIntentWhenWatchSocketPostFails(t *testing
 	require.NoError(t, err)
 	assert.Equal(t, syncstore.ConflictRequestQueued, result.Status)
 	assert.Equal(t, 1, resolver.requestCalls)
+}
+
+// Validates: R-2.3.6, R-2.9.1
+func TestIssuesApproveDeletes_FallsBackToDirectDBWhenControlSocketPathIsUnavailable(t *testing.T) {
+	longDataHome := filepath.Join(t.TempDir(), strings.Repeat("very-long-control-root-", 8))
+	t.Setenv("XDG_DATA_HOME", longDataHome)
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), strings.Repeat("very-long-runtime-root-", 8)))
+
+	cid := driveid.MustCanonicalID("personal:no-socket-path@example.com")
+	driveID := driveid.New("drive-direct-fallback")
+
+	store, err := syncstore.NewSyncStore(t.Context(), config.DriveStatePath(cid), slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	require.NoError(t, store.UpsertHeldDeletes(t.Context(), []synctypes.HeldDeleteRecord{{
+		DriveID:       driveID,
+		ActionType:    synctypes.ActionRemoteDelete,
+		Path:          "delete-me.txt",
+		ItemID:        "item-delete",
+		State:         synctypes.HeldDeleteStateHeld,
+		HeldAt:        1,
+		LastPlannedAt: 1,
+	}}))
+	require.NoError(t, store.Close(t.Context()))
+
+	var out bytes.Buffer
+	svc := newIssuesService(&CLIContext{
+		OutputWriter: &out,
+		Logger:       slog.New(slog.DiscardHandler),
+		Cfg:          &config.ResolvedDrive{CanonicalID: cid},
+	})
+
+	require.NoError(t, svc.runApproveDeletes(t.Context()))
+	assert.Contains(t, out.String(), approveDeletesSuccess)
+
+	reopened, err := syncstore.NewSyncStore(t.Context(), config.DriveStatePath(cid), slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, reopened.Close(t.Context()))
+	})
+
+	approved, err := reopened.ListHeldDeletesByState(t.Context(), synctypes.HeldDeleteStateApproved)
+	require.NoError(t, err)
+	require.Len(t, approved, 1)
+}
+
+func TestNotifyDaemon_ReportsControlSocketPathFailureClearly(t *testing.T) {
+	longDataHome := filepath.Join(t.TempDir(), strings.Repeat("very-long-control-root-", 8))
+	t.Setenv("XDG_DATA_HOME", longDataHome)
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), strings.Repeat("very-long-runtime-root-", 8)))
+
+	var status bytes.Buffer
+	cc := &CLIContext{
+		Logger:       slog.New(slog.DiscardHandler),
+		StatusWriter: &status,
+	}
+
+	notifyDaemon(cc)
+	assert.Contains(t, status.String(), "control socket unavailable")
+	assert.Contains(t, status.String(), "changes take effect on next daemon start")
 }

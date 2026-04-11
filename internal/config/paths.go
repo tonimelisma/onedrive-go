@@ -3,6 +3,7 @@ package config
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -24,6 +25,11 @@ const configFileName = "config.toml"
 // platform in practice, so long isolated XDG roots use a short hash-based
 // runtime path instead of failing bind(2) with EINVAL.
 const unixSocketPathSoftLimit = 100
+
+const (
+	controlSocketName        = "control.sock"
+	runtimeControlSocketName = "sock"
+)
 
 // DefaultConfigDir returns the platform-specific directory for config files.
 // XDG_CONFIG_HOME is checked first on ALL platforms (enables test isolation).
@@ -119,23 +125,36 @@ func UploadSessionDir() string {
 // ControlSocketPath returns the Unix-domain control socket path. The socket is
 // the single local IPC boundary for daemon status, reload, and durable user
 // intent requests.
-func ControlSocketPath() string {
+func ControlSocketPath() (string, error) {
 	dir := DefaultDataDir()
 	if dir == "" {
-		return ""
+		return "", fmt.Errorf("resolve control socket path: no data directory available")
 	}
 
-	return controlSocketPathForDataDir(dir)
+	return ControlSocketPathForDataDir(dir)
 }
 
-func controlSocketPathForDataDir(dir string) string {
-	candidate := filepath.Join(dir, "control.sock")
+// ControlSocketPathForDataDir derives the runtime control socket path for a
+// resolved data directory. It exists so tests and helpers can share the same
+// path-derivation rules as the live runtime instead of copying fallback logic.
+func ControlSocketPathForDataDir(dir string) (string, error) {
+	candidate := filepath.Join(dir, controlSocketName)
 	if len(candidate) <= unixSocketPathSoftLimit {
-		return candidate
+		return candidate, nil
 	}
 
 	sum := sha256.Sum256([]byte(dir))
-	return filepath.Join(os.TempDir(), "odgo-"+hex.EncodeToString(sum[:])[:16], "control.sock")
+	fallback := filepath.Join(os.TempDir(), "odgo-"+hex.EncodeToString(sum[:])[:16], runtimeControlSocketName)
+	if len(fallback) <= unixSocketPathSoftLimit {
+		return fallback, nil
+	}
+
+	return "", fmt.Errorf(
+		"resolve control socket path: %q exceeds Unix socket limit %d and fallback %q also exceeds the limit",
+		candidate,
+		unixSocketPathSoftLimit,
+		fallback,
+	)
 }
 
 // DefaultConfigPath returns the full path to the default config file.

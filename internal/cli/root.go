@@ -338,6 +338,12 @@ func initializeCLIContext(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx = context.WithValue(ctx, cliContextKey{}, cc)
+	cmd.SetContext(ctx)
+	root := cmd.Root()
+	if root != nil && root != cmd {
+		root.SetContext(ctx)
+	}
 
 	sharedTarget, found, err := resolveSharedTargetBootstrap(ctx, cmd, args, cc)
 	if err != nil {
@@ -352,8 +358,6 @@ func initializeCLIContext(
 			return err
 		}
 	}
-
-	cmd.SetContext(context.WithValue(ctx, cliContextKey{}, cc))
 
 	return nil
 }
@@ -411,16 +415,6 @@ func newRootCmdWithWriters(outputWriter, statusWriter io.Writer) *cobra.Command 
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			return initializeCLIContext(cmd, args, bindings, outputWriter, statusWriter)
 		},
-		PersistentPostRunE: func(cmd *cobra.Command, _ []string) error {
-			cc := cliContextFrom(cmd.Context())
-			if cc != nil {
-				if err := cc.closeCommandLogger(); err != nil {
-					return err
-				}
-			}
-
-			return nil
-		},
 	}
 
 	bindRootFlags(cmd, &bindings)
@@ -449,11 +443,39 @@ func Main(args []string) int {
 	return mainWithWriters(args, nil, nil)
 }
 
+func closeRootCommandLogger(cmd *cobra.Command) error {
+	if cmd == nil {
+		return nil
+	}
+
+	root := cmd.Root()
+	if root == nil {
+		root = cmd
+	}
+
+	cc := cliContextFrom(root.Context())
+	if cc == nil {
+		return nil
+	}
+
+	return cc.closeCommandLogger()
+}
+
 func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) int {
 	cmd := newRootCmdWithWriters(outputWriter, statusWriter)
 	cmd.SetArgs(args)
 
-	if err := cmd.Execute(); err != nil {
+	err := cmd.Execute()
+	closeErr := closeRootCommandLogger(cmd)
+	if closeErr != nil {
+		if err == nil {
+			err = closeErr
+		} else {
+			writeWarningf(statusWriter, "warning: close command log: %v\n", closeErr)
+		}
+	}
+
+	if err != nil {
 		if errors.Is(err, errVerifyMismatch) {
 			return 1
 		}

@@ -43,10 +43,10 @@ func isControlDaemonError(err error) bool {
 	return errors.As(err, &daemonErr)
 }
 
-func openControlSocketClient(ctx context.Context) (*controlSocketClient, bool) {
-	socketPath := config.ControlSocketPath()
-	if socketPath == "" {
-		return nil, false
+func openControlSocketClient(ctx context.Context) (*controlSocketClient, bool, error) {
+	socketPath, err := config.ControlSocketPath()
+	if err != nil {
+		return nil, false, fmt.Errorf("control socket path: %w", err)
 	}
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -63,31 +63,31 @@ func openControlSocketClient(ctx context.Context) (*controlSocketClient, bool) {
 
 	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, synccontrol.HTTPBaseURL+synccontrol.PathStatus, http.NoBody)
 	if err != nil {
-		return nil, false
+		return nil, false, nil
 	}
 	resp, err := client.transport.RoundTrip(req)
 	if err != nil {
-		return nil, false
+		return nil, false, nil
 	}
 	statusCode := resp.StatusCode
 	var decoded synccontrol.StatusResponse
 	decodeErr := json.NewDecoder(resp.Body).Decode(&decoded)
 	closeErr := resp.Body.Close()
 	if closeErr != nil {
-		return nil, false
+		return nil, false, nil
 	}
 	if statusCode != http.StatusOK {
-		return nil, false
+		return nil, false, nil
 	}
 	if decodeErr != nil {
-		return nil, false
+		return nil, false, nil
 	}
 	if decoded.OwnerMode == "" {
-		return nil, false
+		return nil, false, nil
 	}
 
 	client.status = decoded
-	return client, true
+	return client, true, nil
 }
 
 func (c *controlSocketClient) ownerMode() synccontrol.OwnerMode {

@@ -15,7 +15,7 @@ of truth for what was seen, when it was seen, and how it was handled.
 | LI-20260408-03 | Serialized `e2e_full` package exceeded the old 30-minute harness timeout | fixed | test harness | 2026-04-08 | no |
 | LI-20260408-02 | `CreateFolder` returned success status with an empty body | mitigated | graph quirk | 2026-04-08 | no |
 | LI-20260408-01 | Immediate post-simple-upload mtime PATCH returned `404 itemNotFound` | mitigated | graph quirk | 2026-04-08 | no |
-| LI-20260405-06 | Strict auth preflight treated transient `/me` or `/me/drives` glitches as durable failure | mitigated | graph quirk | 2026-04-09 | yes |
+| LI-20260405-06 | Strict auth preflight treated transient `/me` or `/me/drives` glitches as durable failure | mitigated | graph quirk | 2026-04-10 | yes |
 | LI-20260405-09 | Recently created parent folder lagged child create routes | mitigated | graph quirk | 2026-04-08 | yes |
 | LI-20260405-08 | Delete-by-ID returned `404 itemNotFound` after successful path lookup | mitigated | graph quirk | 2026-04-07 | yes |
 | LI-20260405-07 | Destination path stayed unreadable after successful mutation | mitigated | graph quirk | 2026-04-09 | yes |
@@ -128,7 +128,7 @@ Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../
 ## LI-20260405-06: Strict auth preflight treated transient `/me` or `/me/drives` glitches as durable failure
 
 First seen: 2026-04-05  
-Last seen: 2026-04-09  
+Last seen: 2026-04-10  
 Area: scheduled/full live verification, auth preflight, drive catalog  
 Suite / test: scheduled `e2e_full` `whoami`, local `verify default` `TestE2E_AuthPreflight_Fast`  
 Classification: graph quirk  
@@ -166,6 +166,20 @@ Evidence:
   `TestE2E_AuthPreflight_Fast/personal_testitesti18@outlook.com` when
   `GET /me` returned HTTP 504 `GatewayTimeout` with message
   `ProfileException` and request ID `446dc036-f752-4805-9c33-d637eb70975d`.
+- Local `go run ./cmd/devtool verify default` on April 10, 2026 failed
+  `TestE2E_AuthPreflight_Fast/personal_testitesti18@outlook.com` after 10
+  consecutive `/me/drives = 403 accessDenied` responses over about 30.2
+  seconds with request IDs
+  `33133131-635a-459d-ae94-27ad662726fc`,
+  `1735118a-3af3-4c10-9ca9-42341dc34d3c`,
+  `02c6479c-b1f1-48a2-9df7-59839e9aeb13`,
+  `c8c28fc2-602d-4353-93dc-8bc922e322cc`,
+  `2609dbc8-b7cd-4c21-a4e2-a9fea4b97685`,
+  `6b8f17e3-0afc-4449-9018-0b75a7ec9464`,
+  `db8fbae0-2a00-47fe-95c8-bd922e5b1daf`,
+  `635af068-cb2c-4854-b2a9-5419966d6a69`,
+  `003f4e1e-0183-4168-8d9d-6c392e6406d0`, and
+  `79db09a2-6d40-4a44-ba9a-73d1119690ac`.
 - An immediate isolated rerun of the same preflight later passed for that
   account, confirming both the `/me/drives` and `/me` failures were transient.
 Resolution / mitigation: `graph.Client.Drives()` now owns a narrow 5-attempt
