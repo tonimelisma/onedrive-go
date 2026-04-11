@@ -8,6 +8,13 @@ issues may also be summarized in curated reference docs such as
 [graph-api-quirks.md](graph-api-quirks.md), but the ledger remains the source
 of truth for what was seen, when it was seen, and how it was handled.
 
+Promotion contract:
+- this ledger owns chronology and investigation history
+- promoted design/reference docs own the current repo policy
+- recurring incidents should point to a canonical promoted-doc section so the
+  current policy can be opened directly without replaying the whole incident
+  history in your head
+
 ## Index
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
@@ -233,7 +240,7 @@ failing on a single recoverable `/me` glitch. Scheduled/manual
 preflight once and only downgrades it when the rerun passes; the verifier
 summary records that classified rerun explicitly so nightly/manual CI can
 distinguish a clean pass from a green-after-rerun pass.
-Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../design/graph-client.md), [degraded-mode.md](../design/degraded-mode.md), [cli.md](../design/cli.md)
+Promoted docs: [graph-api-quirks.md#strict-auth-preflight-quirks](graph-api-quirks.md#strict-auth-preflight-quirks), [graph-client.md](../design/graph-client.md), [degraded-mode.md](../design/degraded-mode.md), [cli.md](../design/cli.md)
 
 ## LI-20260405-09: Recently created parent folder lagged child create routes
 
@@ -332,7 +339,7 @@ fresh-parent create exhaustion signatures or the bounded
 `resolving parent ... remote path not yet visible` variant, so the suite does
 not tie unrelated assertions to one specific command window being the moment
 Graph finally converges.  
-Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../design/graph-client.md), [drive-transfers.md](../design/drive-transfers.md)
+Promoted docs: [graph-api-quirks.md#fresh-parent-child-create-lag](graph-api-quirks.md#fresh-parent-child-create-lag), [graph-client.md](../design/graph-client.md), [drive-transfers.md](../design/drive-transfers.md)
 
 ## LI-20260405-08: Delete-by-ID returned `404 itemNotFound` after successful path lookup
 
@@ -378,7 +385,7 @@ parent's children by item ID instead of failing on the first path-shaped
 false negative. `DeleteResolvedPath()` / `PermanentDeleteResolvedPath()` still
 retry delete intent against the currently resolved target while treating a
 now-missing path as success.
-Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [drive-transfers.md](../design/drive-transfers.md)
+Promoted docs: [graph-api-quirks.md#post-mutation-visibility-lag](graph-api-quirks.md#post-mutation-visibility-lag), [drive-transfers.md](../design/drive-transfers.md)
 
 ## LI-20260405-07: Destination path stayed unreadable after successful mutation
 
@@ -573,7 +580,7 @@ repro proved the product boundary itself could still exhaust too early,
 three capped sleeps, which yields about `95.75s` of deterministic wait before
 request overhead and roughly a two-minute wall-clock budget before surfacing
 `ErrPathNotVisible`.
-Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [drive-transfers.md](../design/drive-transfers.md), [cli.md](../design/cli.md)
+Promoted docs: [graph-api-quirks.md#post-mutation-visibility-lag](graph-api-quirks.md#post-mutation-visibility-lag), [drive-transfers.md](../design/drive-transfers.md), [cli.md](../design/cli.md)
 
 ## LI-20260407-04: Shared-file preflight assumed only one configured recipient could open the raw link
 
@@ -805,7 +812,7 @@ Evidence:
 - [e2e_test.go](/Users/tonimelisma/Development/onedrive-go-live-incident-ledger/e2e/e2e_test.go#L95) now performs suite startup scrub against those root-level prefixes before the fast live battery begins.
 - Merged fix: `52cef0f` (`fix: close W8 validation audit gaps (#415)`).
 Resolution / mitigation: The live E2E suite now pre-scrubs only known disposable root-level artifacts and surfaces remote cleanup failures instead of silently ignoring them.  
-Promoted docs: none
+Promoted docs: [system.md](../design/system.md)
 
 ## LI-20260403-01: Live Graph metadata requests stalled before response headers
 

@@ -294,20 +294,23 @@ jobs:
           set -euo pipefail
           profile=e2e
           extra_args=()
+          if [[ "${{ github.event_name }}" == "pull_request" || "${{ github.event_name }}" == "schedule" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            extra_args+=(--summary-json "${RUNNER_TEMP}/e2e-verify-summary.json")
+          fi
           if [[ "${{ github.event_name }}" == "schedule" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             profile=e2e-full
             extra_args+=(--classify-live-quirks)
-            extra_args+=(--summary-json "${RUNNER_TEMP}/e2e-verify-summary.json")
           fi
           go run ./cmd/devtool verify "$profile" --e2e-log-dir /tmp/e2e-debug-logs "${extra_args[@]}"
 
       - name: Upload E2E summaries
-        if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: always() && (github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: actions/upload-artifact@v7.0.0
         with:
           name: e2e-summaries
           path: |
             /tmp/e2e-debug-logs/timing-summary.json
+            /tmp/e2e-debug-logs/quirk-summary.json
             ${{ runner.temp }}/e2e-verify-summary.json
           if-no-files-found: warn
           retention-days: 7
