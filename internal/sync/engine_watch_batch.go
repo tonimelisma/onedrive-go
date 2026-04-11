@@ -48,6 +48,7 @@ func (rt *watchRuntime) planAndDispatchBatch(
 	rt.engine.logger.Info("processing watch batch",
 		slog.Int("paths", len(batch)),
 	)
+	rt.engine.collector().RecordWatchBatch(len(batch))
 
 	if opts.runPeriodicPermCheck {
 		rt.periodicPermRecheck(ctx, bl)
@@ -65,6 +66,7 @@ func (rt *watchRuntime) planAndDispatchBatch(
 	}
 
 	denied := rt.engine.permHandler.DeniedPrefixes(ctx)
+	planStart := rt.engine.nowFunc()
 	plan, err := rt.engine.planner.Plan(batch, bl, mode, safety, denied)
 	if err != nil {
 		if errors.Is(err, synctypes.ErrDeleteSafetyThresholdExceeded) {
@@ -81,6 +83,7 @@ func (rt *watchRuntime) planAndDispatchBatch(
 
 		return nil
 	}
+	rt.engine.collector().RecordPlan(len(plan.Actions), rt.engine.since(planStart))
 
 	if len(plan.Actions) == 0 {
 		rt.engine.logger.Debug("empty plan for batch, nothing to do")
@@ -224,6 +227,7 @@ func (rt *watchRuntime) dispatchBatchActions(
 	rt.engine.logger.Info("watch batch dispatched",
 		slog.Int("actions", len(plan.Actions)),
 	)
+	rt.engine.collector().RecordExecute(len(plan.Actions), 0, 0, 0)
 
 	if trialIndex >= 0 {
 		rt.engine.emitDebugEvent(engineDebugEvent{

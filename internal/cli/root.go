@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
@@ -18,6 +19,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 	"github.com/tonimelisma/onedrive-go/internal/logfile"
+	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
 
 // version is set at build time via ldflags.
@@ -55,6 +57,11 @@ func parseLogLevel(s string) (slog.Level, bool) {
 const (
 	skipConfigAnnotation = "skipConfig"
 	skipConfigValue      = "true"
+)
+
+const (
+	commandPerfUpdateInterval      = 30 * time.Second
+	watchCommandPerfUpdateInterval = 5 * time.Minute
 )
 
 // CLIFlags contains parsed CLI flag values. Populated in Phase 1 of
@@ -125,6 +132,7 @@ type CLIContext struct {
 	HTTPProvider                  *graphhttp.Provider           // Graph-facing HTTP runtime policy
 	Cfg                           *config.ResolvedDrive         // nil for auth/account commands
 	Provider                      *driveops.SessionProvider     // nil for auth/account commands; created in Phase 2
+	PerfSession                   *perf.Session                 // command-scoped performance collector/logging session
 	syncWatchRunner               syncWatchRunner               // test-only seam for sync --watch command coverage
 	syncDaemonOrchestratorFactory syncDaemonOrchestratorFactory // test-only seam below syncWatchRunner for real daemon-path coverage
 	logCloser                     io.Closer                     // log file closer; nil when no log file is configured
@@ -159,6 +167,9 @@ func (cc *CLIContext) replaceCommandLogger(logger *slog.Logger, closer io.Closer
 		cc.Logger = logger
 	}
 	cc.logCloser = closer
+	if cc.PerfSession != nil && cc.Logger != nil {
+		cc.PerfSession.SetLogger(cc.Logger)
+	}
 
 	return nil
 }
@@ -338,6 +349,11 @@ func initializeCLIContext(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	perfSession, perfCtx := newCommandPerfSession(ctx, cmd, logger)
+	cc.PerfSession = perfSession
+	if perfCtx != nil {
+		ctx = perfCtx
+	}
 	ctx = context.WithValue(ctx, cliContextKey{}, cc)
 	cmd.SetContext(ctx)
 	root := cmd.Root()
@@ -427,6 +443,7 @@ func newRootCmdWithWriters(outputWriter, statusWriter io.Writer) *cobra.Command 
 func addRootSubcommands(cmd *cobra.Command) {
 	cmd.AddCommand(
 		newLoginCmd(), newLogoutCmd(), newWhoamiCmd(), newStatusCmd(),
+		newPerfCmd(),
 		newSharedCmd(),
 		newDriveCmd(), newLsCmd(), newGetCmd(), newPutCmd(),
 		newRmCmd(), newMkdirCmd(), newStatCmd(), newSyncCmd(),
@@ -466,6 +483,7 @@ func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) int {
 	cmd.SetArgs(args)
 
 	err := cmd.Execute()
+	completeRootCommandPerf(cmd, err)
 	closeErr := closeRootCommandLogger(cmd)
 	if closeErr != nil {
 		if err == nil {
@@ -490,6 +508,43 @@ func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) int {
 	}
 
 	return 0
+}
+
+func newCommandPerfSession(
+	ctx context.Context,
+	cmd *cobra.Command,
+	logger *slog.Logger,
+) (*perf.Session, context.Context) {
+	if cmd == nil {
+		return nil, ctx
+	}
+
+	interval := commandPerfUpdateInterval
+	if cmd.Name() == "sync" {
+		if watch, err := cmd.Flags().GetBool("watch"); err == nil && watch {
+			interval = watchCommandPerfUpdateInterval
+		}
+	}
+
+	return perf.NewSession(ctx, logger, "command", cmd.CommandPath(), interval, nil)
+}
+
+func completeRootCommandPerf(cmd *cobra.Command, err error) {
+	if cmd == nil {
+		return
+	}
+
+	root := cmd.Root()
+	if root == nil {
+		root = cmd
+	}
+
+	cc := cliContextFrom(root.Context())
+	if cc == nil || cc.PerfSession == nil {
+		return
+	}
+
+	cc.PerfSession.Complete(err)
 }
 
 // loadAndResolve resolves the effective configuration from the four-layer

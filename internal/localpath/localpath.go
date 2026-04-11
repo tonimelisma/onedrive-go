@@ -233,6 +233,20 @@ func CreateTemp(dir, pattern string) (*os.File, error) {
 	return file, nil
 }
 
+func MkdirTemp(dir, pattern string) (string, error) {
+	abs, err := absolutePath(dir)
+	if err != nil {
+		return "", err
+	}
+
+	tempDir, err := os.MkdirTemp(abs, pattern)
+	if err != nil {
+		return "", fmt.Errorf("creating temp directory in %s: %w", dir, err)
+	}
+
+	return tempDir, nil
+}
+
 func RemoveAll(path string) error {
 	abs, err := absolutePath(path)
 	if err != nil {

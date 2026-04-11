@@ -18,7 +18,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
-const controlClientTimeout = 2 * time.Second
+const (
+	controlClientTimeout        = 2 * time.Second
+	controlCaptureTimeoutBuffer = 10 * time.Second
+)
 
 type controlOwnerState string
 
@@ -149,6 +152,32 @@ func (c *controlSocketClient) ownerMode() synccontrol.OwnerMode {
 	return c.status.OwnerMode
 }
 
+func (c *controlSocketClient) perfStatus(ctx context.Context) (synccontrol.PerfStatusResponse, error) {
+	var response synccontrol.PerfStatusResponse
+	if err := c.getJSON(ctx, synccontrol.PathPerfStatus, controlClientTimeout, &response); err != nil {
+		return synccontrol.PerfStatusResponse{}, err
+	}
+
+	return response, nil
+}
+
+func (c *controlSocketClient) capturePerf(
+	ctx context.Context,
+	request synccontrol.PerfCaptureRequest,
+) (synccontrol.PerfCaptureResponse, error) {
+	timeout := time.Duration(request.DurationMS)*time.Millisecond + controlCaptureTimeoutBuffer
+	if timeout < controlClientTimeout {
+		timeout = controlClientTimeout
+	}
+
+	var response synccontrol.PerfCaptureResponse
+	if err := c.postJSONInto(ctx, synccontrol.PathPerfCapture, request, timeout, &response); err != nil {
+		return synccontrol.PerfCaptureResponse{}, err
+	}
+
+	return response, nil
+}
+
 func (c *controlSocketClient) approveHeldDeletes(ctx context.Context, cid driveid.CanonicalID) error {
 	path := synccontrol.HeldDeletesApprovePath(cid.String())
 	response, err := c.postJSON(ctx, path, nil)
@@ -206,56 +235,115 @@ func (c *controlSocketClient) reload(ctx context.Context) error {
 }
 
 func (c *controlSocketClient) postJSON(ctx context.Context, path string, body any) (synccontrol.MutationResponse, error) {
+	var decoded synccontrol.MutationResponse
+	if err := c.postJSONInto(ctx, path, body, controlClientTimeout, &decoded); err != nil {
+		return synccontrol.MutationResponse{}, err
+	}
+
+	return decoded, nil
+}
+
+func (c *controlSocketClient) getJSON(ctx context.Context, path string, timeout time.Duration, target any) error {
+	requestCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, synccontrol.HTTPBaseURL+path, http.NoBody)
+	if err != nil {
+		return fmt.Errorf("build control request: %w", err)
+	}
+
+	resp, err := c.transport.RoundTrip(req)
+	if err != nil {
+		return fmt.Errorf("send control request: %w", err)
+	}
+
+	return decodeControlJSONResponse(resp, target)
+}
+
+func (c *controlSocketClient) postJSONInto(
+	ctx context.Context,
+	path string,
+	body any,
+	timeout time.Duration,
+	target any,
+) error {
 	var payload []byte
 	if body != nil {
 		encoded, err := json.Marshal(body)
 		if err != nil {
-			return synccontrol.MutationResponse{}, fmt.Errorf("encode control request: %w", err)
+			return fmt.Errorf("encode control request: %w", err)
 		}
 		payload = encoded
 	}
 
-	requestCtx, cancel := context.WithTimeout(ctx, controlClientTimeout)
+	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, synccontrol.HTTPBaseURL+path, bytes.NewReader(payload))
 	if err != nil {
-		return synccontrol.MutationResponse{}, fmt.Errorf("build control request: %w", err)
+		return fmt.Errorf("build control request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.transport.RoundTrip(req)
 	if err != nil {
-		return synccontrol.MutationResponse{}, fmt.Errorf("send control request: %w", err)
+		return fmt.Errorf("send control request: %w", err)
 	}
 
-	var decoded synccontrol.MutationResponse
-	decodeErr := json.NewDecoder(resp.Body).Decode(&decoded)
-	closeErr := resp.Body.Close()
-	if decodeErr != nil {
-		return synccontrol.MutationResponse{}, &controlDaemonError{
-			statusCode: resp.StatusCode,
-			code:       synccontrol.ErrorInternal,
-			message:    fmt.Sprintf("decode control response: %v", decodeErr),
-		}
-	}
-	if closeErr != nil {
-		return synccontrol.MutationResponse{}, &controlDaemonError{
-			statusCode: resp.StatusCode,
-			code:       synccontrol.ErrorInternal,
-			message:    fmt.Sprintf("close control response: %v", closeErr),
-		}
-	}
+	return decodeControlJSONResponse(resp, target)
+}
+
+func decodeControlJSONResponse(resp *http.Response, target any) error {
 	if resp.StatusCode >= http.StatusBadRequest {
+		var decoded synccontrol.MutationResponse
+		if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+			closeErr := resp.Body.Close()
+			message := fmt.Sprintf("decode control response: %v", err)
+			if closeErr != nil {
+				message = fmt.Sprintf("%s (close: %v)", message, closeErr)
+			}
+			return &controlDaemonError{
+				statusCode: resp.StatusCode,
+				code:       synccontrol.ErrorInternal,
+				message:    message,
+			}
+		}
 		if decoded.Message == "" {
 			decoded.Message = resp.Status
 		}
-		return decoded, &controlDaemonError{
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return &controlDaemonError{
+				statusCode: resp.StatusCode,
+				code:       synccontrol.ErrorInternal,
+				message:    fmt.Sprintf("close control response: %v", closeErr),
+			}
+		}
+		return &controlDaemonError{
 			statusCode: resp.StatusCode,
 			code:       decoded.Code,
 			message:    decoded.Message,
 		}
 	}
 
-	return decoded, nil
+	if err := json.NewDecoder(resp.Body).Decode(target); err != nil {
+		closeErr := resp.Body.Close()
+		message := fmt.Sprintf("decode control response: %v", err)
+		if closeErr != nil {
+			message = fmt.Sprintf("%s (close: %v)", message, closeErr)
+		}
+		return &controlDaemonError{
+			statusCode: resp.StatusCode,
+			code:       synccontrol.ErrorInternal,
+			message:    message,
+		}
+	}
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		return &controlDaemonError{
+			statusCode: resp.StatusCode,
+			code:       synccontrol.ErrorInternal,
+			message:    fmt.Sprintf("close control response: %v", closeErr),
+		}
+	}
+
+	return nil
 }

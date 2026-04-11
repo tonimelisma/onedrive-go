@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
@@ -31,7 +32,10 @@ func TestProvider_BootstrapMeta(t *testing.T) {
 	rt, ok := client.Transport.(*retry.RetryTransport)
 	require.True(t, ok, "bootstrap metadata client should use RetryTransport")
 
-	inner, ok := rt.Inner.(*http.Transport)
+	perfRT, ok := rt.Inner.(perf.RoundTripper)
+	require.True(t, ok, "bootstrap metadata inner transport should be perf.RoundTripper")
+
+	inner, ok := perfRT.Inner.(*http.Transport)
 	require.True(t, ok, "bootstrap metadata inner transport should be *http.Transport")
 	assert.Equal(t, metadataResponseHeaderTimeout, inner.ResponseHeaderTimeout)
 	assert.Nil(t, rt.ThrottleGate, "bootstrap metadata should not share throttle state")
@@ -97,11 +101,17 @@ func TestProvider_Sync_NoRetryTransport(t *testing.T) {
 	_, hasRetryTransport := clients.Meta.Transport.(*retry.RetryTransport)
 	assert.False(t, hasRetryTransport, "sync metadata should not use RetryTransport")
 
-	metaTransport, ok := clients.Meta.Transport.(*http.Transport)
+	metaPerfRT, ok := clients.Meta.Transport.(perf.RoundTripper)
+	require.True(t, ok, "sync metadata transport should be perf.RoundTripper")
+
+	metaTransport, ok := metaPerfRT.Inner.(*http.Transport)
 	require.True(t, ok, "sync metadata inner transport should be *http.Transport")
 	assert.Equal(t, metadataResponseHeaderTimeout, metaTransport.ResponseHeaderTimeout)
 
-	transferTransport, ok := clients.Transfer.Transport.(*http.Transport)
+	transferPerfRT, ok := clients.Transfer.Transport.(perf.RoundTripper)
+	require.True(t, ok, "sync transfer transport should be perf.RoundTripper")
+
+	transferTransport, ok := transferPerfRT.Inner.(*http.Transport)
 	require.True(t, ok, "sync transfer transport should be *http.Transport")
 	assert.Equal(t, transferResponseHeaderTimeout, transferTransport.ResponseHeaderTimeout)
 }

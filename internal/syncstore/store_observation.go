@@ -89,7 +89,7 @@ func (m *SyncStore) commitObservation(
 	driveID driveid.ID,
 	scopeID string,
 ) (err error) {
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning observation transaction: %w", err)
 	}
@@ -126,7 +126,7 @@ func (m *SyncStore) commitObservation(
 }
 
 // processObservedItem handles a single item within the CommitObservation transaction.
-func (m *SyncStore) processObservedItem(ctx context.Context, tx *sql.Tx, item *synctypes.ObservedItem, now int64) error {
+func (m *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, item *synctypes.ObservedItem, now int64) error {
 	existing := m.scanRemoteStateRow(ctx, tx, item.DriveID.String(), item.ItemID)
 
 	if existing == nil {
@@ -163,7 +163,7 @@ func (m *SyncStore) processObservedItem(ctx context.Context, tx *sql.Tx, item *s
 
 // scanRemoteStateRow reads a single remote_state row within a transaction.
 // Returns nil if no row exists.
-func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx *sql.Tx, driveID, itemID string) *synctypes.RemoteStateRow {
+func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx sqlTxRunner, driveID, itemID string) *synctypes.RemoteStateRow {
 	var (
 		row          synctypes.RemoteStateRow
 		parentID     sql.NullString
@@ -304,7 +304,7 @@ func (m *SyncStore) GetRemoteStateByID(
 }
 
 // insertRemoteState inserts a new remote_state row for a newly observed item.
-func (m *SyncStore) insertRemoteState(ctx context.Context, tx *sql.Tx, item *synctypes.ObservedItem, now int64) error {
+func (m *SyncStore) insertRemoteState(ctx context.Context, tx sqlTxRunner, item *synctypes.ObservedItem, now int64) error {
 	initialStatus := synctypes.SyncStatusPendingDownload
 	if item.Filtered {
 		initialStatus = synctypes.SyncStatusFiltered
@@ -326,7 +326,7 @@ func (m *SyncStore) insertRemoteState(ctx context.Context, tx *sql.Tx, item *syn
 
 // updateRemoteStateFromObs updates an existing remote_state row with observation data.
 func (m *SyncStore) updateRemoteStateFromObs(
-	ctx context.Context, tx *sql.Tx, item *synctypes.ObservedItem,
+	ctx context.Context, tx sqlTxRunner, item *synctypes.ObservedItem,
 	newStatus synctypes.SyncStatus, previousPath string, now int64,
 ) error {
 	filterGeneration := int64(0)

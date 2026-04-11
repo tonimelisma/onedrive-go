@@ -17,8 +17,9 @@ func newStatusService(cc *CLIContext) *statusService {
 	return &statusService{cc: cc}
 }
 
-func (s *statusService) run(history bool) error {
+func (s *statusService) run(history bool, showPerf ...bool) error {
 	logger := s.cc.Logger
+	perfEnabled := len(showPerf) > 0 && showPerf[0]
 	readModel := newAccountReadModelService(s.cc)
 	snapshot, err := readModel.loadLenientCatalog(context.Background())
 	if err != nil {
@@ -43,6 +44,7 @@ func (s *statusService) run(history bool) error {
 	}
 
 	accounts := readModel.statusAccounts(filteredSnapshot, history)
+	applyStatusPerfOverlay(accounts, loadStatusPerfOverlay(context.Background(), perfEnabled))
 	if s.cc.Flags.JSON {
 		return printStatusJSON(s.cc.Output(), accounts)
 	}

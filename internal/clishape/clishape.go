@@ -28,7 +28,7 @@ func Root() CommandSpec {
 			command("login", boolFlag("browser")),
 			command("logout", boolFlag("purge")),
 			command("whoami"),
-			command("status", boolFlag("history")),
+			command("status", boolFlag("history"), boolFlag("perf")),
 			command("shared"),
 			command("ls"),
 			command("get"),
@@ -41,6 +41,13 @@ func Root() CommandSpec {
 			command("recover", boolFlag("yes")),
 			command("mv", boolFlag("force")),
 			command("cp", boolFlag("force")),
+			{
+				Name:     "perf",
+				Runnable: false,
+				Subcommands: []CommandSpec{
+					command("capture", valueFlag("duration"), valueFlag("output"), boolFlag("trace"), boolFlag("full-detail")),
+				},
+			},
 			command(
 				"sync",
 				boolFlag("download-only"),
