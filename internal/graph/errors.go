@@ -44,6 +44,46 @@ type GraphError struct {
 	RetryAfter time.Duration
 }
 
+// QuirkRetryAttempt records the observable evidence from one retryable Graph
+// quirk attempt. It is attached to QuirkRetryError so callers can log or report
+// the exact request IDs and Graph codes that exhausted the bounded quirk budget.
+type QuirkRetryAttempt struct {
+	Attempt    int    `json:"attempt"`
+	StatusCode int    `json:"statusCode,omitempty"`
+	GraphCode  string `json:"graphCode,omitempty"`
+	RequestID  string `json:"requestId,omitempty"`
+}
+
+// QuirkRetryError wraps the terminal error returned after a bounded documented
+// Graph quirk retry budget is exhausted. It preserves the original cause for
+// errors.Is / errors.As while exposing the retry evidence for callers that need
+// richer degraded-mode logging or incident reporting.
+type QuirkRetryError struct {
+	Quirk    string              `json:"quirk"`
+	Attempts []QuirkRetryAttempt `json:"attempts,omitempty"`
+	Err      error               `json:"-"`
+}
+
+func (e *QuirkRetryError) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+
+	if e.Err == nil {
+		return fmt.Sprintf("graph: %s retry exhausted after %d attempts", e.Quirk, len(e.Attempts))
+	}
+
+	return fmt.Sprintf("graph: %s retry exhausted after %d attempts: %v", e.Quirk, len(e.Attempts), e.Err)
+}
+
+func (e *QuirkRetryError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+
+	return e.Err
+}
+
 func (e *GraphError) Error() string {
 	if e.RequestID != "" {
 		return fmt.Sprintf("graph: HTTP %d (request-id: %s): %s", e.StatusCode, e.RequestID, e.Message)

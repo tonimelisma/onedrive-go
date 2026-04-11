@@ -19,6 +19,7 @@ type quirkRetrySpec struct {
 
 func doQuirkRetry[T any](ctx context.Context, c *Client, spec quirkRetrySpec, op func() (T, error)) (T, error) {
 	var zero T
+	attempts := make([]QuirkRetryAttempt, 0, spec.policy.MaxAttempts)
 
 	for attempt := range spec.policy.MaxAttempts {
 		value, err := op()
@@ -27,8 +28,26 @@ func doQuirkRetry[T any](ctx context.Context, c *Client, spec quirkRetrySpec, op
 		}
 
 		graphErr, retryable := spec.match(err)
-		if !retryable || attempt >= spec.policy.MaxAttempts-1 {
+		if !retryable {
 			return zero, err
+		}
+		attempts = append(attempts, buildQuirkRetryAttempt(attempt+1, graphErr))
+
+		if attempt >= spec.policy.MaxAttempts-1 {
+			quirkErr := &QuirkRetryError{
+				Quirk:    spec.name,
+				Attempts: attempts,
+				Err:      err,
+			}
+
+			c.logger.Warn("graph quirk retry exhausted",
+				slog.String("graph_quirk", quirkErr.Quirk),
+				slog.Int("graph_quirk_attempt_count", len(quirkErr.Attempts)),
+				slog.Any("graph_quirk_attempts", quirkErr.Attempts),
+				slog.Any("error", err),
+			)
+
+			return zero, quirkErr
 		}
 
 		backoff := spec.policy.Delay(attempt)
@@ -50,6 +69,22 @@ func doQuirkRetry[T any](ctx context.Context, c *Client, spec quirkRetrySpec, op
 	}
 
 	return zero, fmt.Errorf("graph: quirk retry exhausted without returning")
+}
+
+func buildQuirkRetryAttempt(attempt int, graphErr *GraphError) QuirkRetryAttempt {
+	record := QuirkRetryAttempt{Attempt: attempt}
+	if graphErr == nil {
+		return record
+	}
+
+	record.StatusCode = graphErr.StatusCode
+	record.GraphCode = graphErr.MostSpecificCode()
+	if record.GraphCode == "" {
+		record.GraphCode = graphErr.Code
+	}
+	record.RequestID = graphErr.RequestID
+
+	return record
 }
 
 func isTransientDrivesDiscoveryError(err error) (*GraphError, bool) {

@@ -126,7 +126,11 @@ These are instance fields on `graph.Client`, not package globals. Tests in packa
 
 `graph` intentionally stops at the Graph-boundary retry. After the
 five-attempt `/me/drives` budget is exhausted, the client returns the final
-error without inventing auth-required or degraded-user semantics. CLI callers
+error wrapped in `QuirkRetryError` without inventing auth-required or
+degraded-user semantics. `QuirkRetryError` records the quirk name plus the
+per-attempt request IDs, HTTP statuses, and most-specific Graph codes that
+exhausted the bounded retry budget, while still unwrapping to the terminal
+`GraphError` so `errors.Is` / `errors.As` behavior stays unchanged. CLI callers
 own the next step:
 
 - `whoami` degrades to authenticated profile plus `/me/drive` fallback when possible
@@ -231,6 +235,13 @@ path remain strict.
 Sentinel errors: `ErrGone` (410), `ErrNotFound` (404), `ErrThrottled` (429), `ErrConflict` (409). Error response bodies are read with a 64 KiB cap (`io.LimitReader`) to prevent unbounded memory allocation from malformed responses. HTTP 423 (Locked) from SharePoint co-authoring is classified as skip, not retryable — locks persist for hours; watch mode retries on the next safety scan.
 
 `GraphError` preserves Graph's structured error metadata: `Code`, `InnerCodes`, capped `RawBody`, and helper methods `MostSpecificCode()` / `HasCode()`. `Message`, `RawBody`, and `Error()` are sanitized before exposure so bearer tokens and pre-authenticated URLs are redacted even when Graph echoes them back in an error payload. Quirk retries key on the code chain first. One-off incident signatures without recoverable payload evidence stay in the reference layer and are not special-cased in runtime classification.
+
+Bounded documented-quirk retry exhaustion is surfaced as `QuirkRetryError`.
+That wrapper is part of the same wire-to-domain boundary: it adds quirk-level
+attempt evidence for caller logs and verifier output, but it does not create a
+second error classification scheme. Callers still branch on the unwrapped
+terminal cause (`ErrForbidden`, `ErrNotFound`, `*GraphError`, and so on), then
+optionally log the attached retry evidence when they intentionally degrade.
 
 This package owns the wire-to-domain normalization step for remote failures:
 raw HTTP and Graph payloads become `GraphError` values plus sentinels such as

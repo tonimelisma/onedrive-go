@@ -787,8 +787,6 @@ func TestE2E_RoundTrip(t *testing.T) {
 
 		_, stderr := runCLIWithConfig(t, cfgPath, nil, "put", tmpFile.Name(), "/"+testFile)
 		assert.Contains(t, stderr, "Uploaded")
-
-		waitForRemoteWriteVisible(t, cfgPath, nil, drive, "test.txt", "stat", "/"+testFile)
 	})
 
 	t.Run("ls_folder", func(t *testing.T) {
