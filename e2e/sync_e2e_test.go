@@ -134,6 +134,7 @@ func runCLICore(t *testing.T, cfgPath string, env map[string]string, driveID str
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
+	recordCLIQuirkEvents(t, fullArgs, stderr.String(), err)
 	logCLIExecution(t, fullArgs, stdout.String(), stderr.String())
 
 	return stdout.String(), stderr.String(), err
@@ -477,6 +478,13 @@ func putRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePa
 			require.NoErrorf(t, putErr, "CLI command %v failed\nstdout: %s\nstderr: %s",
 				[]string{"put", tmpFile.Name(), remotePath}, stdout, stderr)
 		}
+		recordLiveProviderRecurrenceEvent(
+			t,
+			fmt.Sprintf("put %s", remotePath),
+			decision,
+			quirkOutcomeRetried,
+			putErr.Error(),
+		)
 
 		time.Sleep(pollBackoff(attempt))
 	}

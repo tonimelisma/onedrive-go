@@ -230,6 +230,42 @@ func TestRunVerifyE2EFullWithoutExplicitLogDirNormalizesDefaultLogDir(t *testing
 	assert.True(t, os.IsNotExist(summaryErr))
 }
 
+func TestRunVerifyE2EWithoutExplicitLogDirNormalizesDefaultLogDir(t *testing.T) {
+	repoRoot := t.TempDir()
+	tmpRoot := t.TempDir()
+	t.Setenv("TMPDIR", tmpRoot)
+
+	logDir := filepath.Join(os.TempDir(), "e2e-debug-logs")
+	require.NoError(t, os.MkdirAll(logDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(logDir, e2eTimingEventsFileName), []byte("events"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(logDir, e2eTimingSummaryFileName), []byte("summary"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(logDir, e2eQuirkEventsFileName), []byte("events"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(logDir, e2eQuirkSummaryFileName), []byte(`{"events":[]}`), 0o600))
+
+	runner := &fakeRunner{}
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot: repoRoot,
+		Profile:  VerifyE2E,
+		Stdout:   &bytes.Buffer{},
+		Stderr:   &bytes.Buffer{},
+	})
+	require.NoError(t, err)
+
+	require.Len(t, runner.runCommands, 3)
+	for i := range runner.runCommands {
+		assertCommandHasEnvVar(t, runner.runCommands[i], "E2E_LOG_DIR="+logDir)
+	}
+
+	_, eventsErr := os.Stat(filepath.Join(logDir, e2eTimingEventsFileName))
+	assert.True(t, os.IsNotExist(eventsErr))
+	_, summaryErr := os.Stat(filepath.Join(logDir, e2eTimingSummaryFileName))
+	assert.True(t, os.IsNotExist(summaryErr))
+	_, quirkEventsErr := os.Stat(filepath.Join(logDir, e2eQuirkEventsFileName))
+	assert.True(t, os.IsNotExist(quirkEventsErr))
+	_, quirkSummaryErr := os.Stat(filepath.Join(logDir, e2eQuirkSummaryFileName))
+	assert.True(t, os.IsNotExist(quirkSummaryErr))
+}
+
 func TestRunVerifyE2EFullClassifiesKnownAuthPreflightQuirkAfterSuccessfulRerun(t *testing.T) {
 	t.Parallel()
 
@@ -376,6 +412,29 @@ func TestRunVerifyWritesSummaryJSONOnSuccess(t *testing.T) {
 	assert.Empty(t, summary.ClassifiedReruns)
 	assert.Contains(t, stdout.String(), "verify summary")
 	assert.Contains(t, stdout.String(), "classified reruns: none")
+}
+
+func TestVerifySummaryCollectorFinalizeReadsQuirkSummary(t *testing.T) {
+	t.Parallel()
+
+	logDir := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(logDir, e2eQuirkSummaryFileName),
+		[]byte("{\"events\":[{\"phase\":\"cli_command\"},{\"phase\":\"auth_preflight\"}]}\n"),
+		0o600,
+	))
+
+	stdout := &bytes.Buffer{}
+	summaryPath := filepath.Join(t.TempDir(), "verify-summary.json")
+	collector := newVerifySummaryCollector(VerifyE2E, stdout, summaryPath, logDir)
+
+	require.NoError(t, collector.finalize(nil))
+
+	assert.Contains(t, stdout.String(), "quirk events: 2")
+
+	var summary VerifySummary
+	readVerifySummaryFile(t, summaryPath, &summary)
+	assert.Equal(t, 2, summary.QuirkEventCount)
 }
 
 func TestRunVerifyWritesSummaryJSONOnFailure(t *testing.T) {
@@ -773,6 +832,33 @@ func TestRunRepoConsistencyChecksFailsOnUnknownRequirementReference(t *testing.T
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown requirement ID R-9.9.9")
 	assert.Contains(t, err.Error(), "unknown_trace_test.go")
+}
+
+// Validates: R-6.10.12
+func TestRunRepoConsistencyChecksFailsOnBrokenRecurringIncidentPromotedDocAnchor(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoRoot, "spec", "reference", "live-incidents.md"),
+		[]byte(strings.Join([]string{
+			"# Live Incidents",
+			"",
+			"## LI-TEST-01: Sample recurring incident",
+			"",
+			"Recurring: yes",
+			"Promoted docs: [graph-api-quirks.md#missing-anchor](graph-api-quirks.md#missing-anchor)",
+			"",
+		}, "\n")),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing anchor #missing-anchor")
+	assert.Contains(t, err.Error(), "LI-TEST-01")
 }
 
 // Validates: R-6.10.12
@@ -1306,6 +1392,7 @@ func writeRepoConsistencyFixtures(t *testing.T, repoRoot string) {
 	writeRepoConsistencyDirectories(t, repoRoot)
 	writeRepoConsistencyRequirements(t, repoRoot)
 	writeRepoConsistencyDesignDocs(t, repoRoot)
+	writeRepoConsistencyReferenceDocs(t, repoRoot)
 	writeRepoConsistencyCodeFixtures(t, repoRoot)
 }
 
@@ -1316,6 +1403,7 @@ func writeRepoConsistencyDirectories(t *testing.T, repoRoot string) {
 		filepath.Join(repoRoot, "e2e"),
 		filepath.Join(repoRoot, "spec", "design"),
 		filepath.Join(repoRoot, "spec", "requirements"),
+		filepath.Join(repoRoot, "spec", "reference"),
 		filepath.Join(repoRoot, "internal"),
 		filepath.Join(repoRoot, "cmd"),
 		filepath.Join(repoRoot, ".github", "workflows"),
@@ -1384,6 +1472,37 @@ func writeRepoConsistencyDesignDocs(t *testing.T, repoRoot string) {
 	for _, doc := range repoConsistencyDesignDocFixtures() {
 		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "spec", "design", doc.name), []byte(doc.content), 0o600))
 	}
+}
+
+func writeRepoConsistencyReferenceDocs(t *testing.T, repoRoot string) {
+	t.Helper()
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoRoot, "spec", "reference", "graph-api-quirks.md"),
+		[]byte(strings.Join([]string{
+			"# Graph API Quirks",
+			"",
+			`<a id="fixture-quirk"></a>`,
+			"### Fixture Quirk",
+			"",
+			"Sample quirk.",
+			"",
+		}, "\n")),
+		0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoRoot, "spec", "reference", "live-incidents.md"),
+		[]byte(strings.Join([]string{
+			"# Live Incidents",
+			"",
+			"## LI-TEST-01: Sample recurring incident",
+			"",
+			"Recurring: yes",
+			"Promoted docs: [graph-api-quirks.md#fixture-quirk](graph-api-quirks.md#fixture-quirk)",
+			"",
+		}, "\n")),
+		0o600,
+	))
 }
 
 func repoConsistencyDesignDocFixtures() []struct {

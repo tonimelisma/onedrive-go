@@ -27,6 +27,7 @@ var (
 	logDir              string
 	liveConfig          testutil.LiveTestConfig
 	suiteTimingRecorder *e2eTimingRecorder
+	suiteQuirkRecorder  *e2eQuirkRecorder
 )
 
 var e2eArtifactPrefixes = []string{
@@ -99,6 +100,13 @@ func TestMain(m *testing.M) {
 	suiteTimingRecorder, err = newE2ETimingRecorder(logDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "creating E2E timing recorder: %v\n", err)
+		cleanupIsolation()
+		os.RemoveAll(tmpDir)
+		os.Exit(1)
+	}
+	suiteQuirkRecorder, err = newE2EQuirkRecorder(logDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "creating E2E quirk recorder: %v\n", err)
 		cleanupIsolation()
 		os.RemoveAll(tmpDir)
 		os.Exit(1)
@@ -689,6 +697,16 @@ func waitForRemoteFixtureSeedVisible(
 
 		stdout, stderr, err = runCLIWithConfigAllowError(t, cfgPath, env, "ls", parentPath)
 		if err == nil && strings.Contains(stdout, base) {
+			recordLiveProviderRecurrenceEvent(
+				t,
+				fmt.Sprintf("fixture visibility %s", cleanPath),
+				liveProviderRecurrenceDecision{
+					Reason: liveProviderRecurrencePostMutationDestinationPathLag,
+					Retry:  false,
+				},
+				quirkOutcomeSoftened,
+				lastStderr,
+			)
 			recordTimingEvent(
 				t,
 				timingKindRemoteWriteVisibility,

@@ -45,10 +45,12 @@ func assertLiveAuthPreflight(t *testing.T, driveID string) {
 
 	started := time.Now()
 	meAttempts, err := waitForAuthPreflightEndpoint(t.Context(), httpClient, ts, "/me")
+	recordAuthPreflightDecisionEvent(t, driveID, "/me", meAttempts, err)
 	require.NoErrorf(t, err, "%s", formatAuthPreflightFailure(driveID, "/me", time.Since(started), meAttempts))
 
 	started = time.Now()
 	drivesAttempts, err := waitForAuthPreflightEndpoint(t.Context(), httpClient, ts, "/me/drives")
+	recordAuthPreflightDecisionEvent(t, driveID, "/me/drives", drivesAttempts, err)
 	require.NoErrorf(t, err, "%s", formatAuthPreflightFailure(driveID, "/me/drives", time.Since(started), drivesAttempts))
 }
 
