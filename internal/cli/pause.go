@@ -38,17 +38,29 @@ func runPause(cmd *cobra.Command, args []string) error {
 // Non-fatal: if no daemon is running, prints a note instead.
 func notifyDaemon(cc *CLIContext) {
 	ctx := context.Background()
-	client, ok, err := openControlSocketClient(ctx)
-	if err != nil {
+	probe, err := probeControlOwner(ctx)
+	switch probe.state {
+	case controlOwnerStateWatchOwner:
+	case controlOwnerStatePathUnavailable:
 		cc.Statusf("Note: control socket unavailable (%v) — changes take effect on next daemon start\n", err)
 		return
-	}
-	if !ok {
+	case controlOwnerStateNoSocket:
 		cc.Statusf("Note: no running daemon found — changes take effect on next daemon start\n")
+		return
+	case controlOwnerStateOneShotOwner:
+		cc.Statusf("Note: foreground sync is running — changes take effect on next daemon start\n")
+		return
+	case controlOwnerStateProbeFailed:
+		cc.Statusf("Note: control socket probe failed (%v) — changes take effect on next daemon start\n", err)
 		return
 	}
 
-	if err := client.reload(ctx); err != nil {
+	if err := probe.client.reload(ctx); err != nil {
+		if isControlSocketGone(err) {
+			cc.Statusf("Note: running daemon disappeared before reload could be sent — changes take effect on next daemon start\n")
+			return
+		}
+
 		cc.Statusf("Note: %v — changes take effect on next daemon start\n", err)
 	} else {
 		cc.Statusf("Notified running daemon to reload config\n")
