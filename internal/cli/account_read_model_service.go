@@ -74,8 +74,13 @@ func (s *accountReadModelService) loadLenientCatalogWithBestEffortIdentityRefres
 	return s.loadLenientCatalog(ctx)
 }
 
-func (s *accountReadModelService) statusAccounts(snapshot accountReadModelSnapshot) []statusAccount {
-	return buildStatusAccountsFromCatalog(snapshot.Config, snapshot.Catalog, &liveSyncStateQuerier{logger: s.cc.Logger})
+func (s *accountReadModelService) statusAccounts(snapshot accountReadModelSnapshot, history bool) []statusAccount {
+	return buildStatusAccountsFromCatalog(snapshot.Config, snapshot.Catalog, &liveSyncStateQuerier{
+		logger:        s.cc.Logger,
+		history:       history,
+		verbose:       s.cc.Flags.Verbose,
+		examplesLimit: defaultVisiblePaths,
+	})
 }
 
 func (s *accountReadModelService) authRequirements(

@@ -3,7 +3,6 @@
 package e2e
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,9 +21,9 @@ import (
 // multi-drive report structure, and status edge cases.
 // ---------------------------------------------------------------------------
 
-// TestE2E_Status_DetailedJSON validates that single-drive status --json emits
-// the detailed read model arrays used for issues, delete safety, and conflicts.
-func TestE2E_Status_DetailedJSON(t *testing.T) {
+// TestE2E_Status_JSONShape validates that status --json emits one top-level
+// summary plus nested per-drive sync-state sections.
+func TestE2E_Status_JSONShape(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
@@ -34,25 +33,46 @@ func TestE2E_Status_DetailedJSON(t *testing.T) {
 	testFolder := fmt.Sprintf("e2e-out-statusjson-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
-	// Create a file and sync so the detailed status read model has baseline data.
+	// Create a file and sync so the per-drive status read model has baseline data.
 	localDir := filepath.Join(syncDir, testFolder)
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "good.txt"), []byte("good"), 0o600))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "status", "--json")
+	status := readStatus(t, cfgPath, env)
+	assert.Equal(t, 1, status.Summary.TotalDrives)
 
-	var output map[string]any
-	require.NoError(t, json.Unmarshal([]byte(stdout), &output),
-		"status --json should produce valid JSON, got: %s", stdout)
+	driveStatus := requireStatusDrive(t, status, drive)
+	require.NotNil(t, driveStatus.SyncState)
+	assert.Equal(t, "healthy", driveStatus.SyncState.StateStoreStatus)
+	assert.Equal(t, 5, driveStatus.SyncState.ExamplesLimit)
+	assert.False(t, driveStatus.SyncState.Verbose)
+}
 
-	assert.Contains(t, output, "issue_groups")
-	assert.Contains(t, output, "delete_safety")
-	assert.Contains(t, output, "conflicts")
-	assert.Contains(t, output, "next_actions")
-	assert.Contains(t, output, "state_store_status")
-	assert.Equal(t, "healthy", output["state_store_status"])
+func TestE2E_Status_FilteredDriveIsSubsetOfAllDrives(t *testing.T) {
+	t.Parallel()
+	requireDrive2(t)
+	registerLogDump(t)
+
+	syncDir1 := t.TempDir()
+	syncDir2 := t.TempDir()
+	cfgPath, env := writeMultiDriveConfig(t, syncDir1, syncDir2)
+
+	statusAll := readStatusAllDrives(t, cfgPath, env)
+	assert.Equal(t, 2, statusAll.Summary.TotalDrives)
+	requireStatusDrive(t, statusAll, drive)
+	requireStatusDrive(t, statusAll, drive2)
+
+	statusFiltered := readStatus(t, cfgPath, env)
+	assert.Equal(t, 1, statusFiltered.Summary.TotalDrives)
+	requireStatusDrive(t, statusFiltered, drive)
+
+	for i := range statusFiltered.Accounts {
+		for j := range statusFiltered.Accounts[i].Drives {
+			assert.NotEqual(t, drive2, statusFiltered.Accounts[i].Drives[j].CanonicalID)
+		}
+	}
 }
 
 // TestE2E_Status_NoDrives validates that status with no configured drives

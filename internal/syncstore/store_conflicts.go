@@ -78,7 +78,7 @@ func (m *SyncStore) ListConflicts(ctx context.Context) ([]synctypes.ConflictReco
 
 // ListAllConflicts returns all conflicts (resolved and unresolved) ordered
 // by detection time descending. The product CLI consumes this through
-// single-drive `status --history`.
+// per-drive `status --history`.
 func (m *SyncStore) ListAllConflicts(ctx context.Context) ([]synctypes.ConflictRecord, error) {
 	return m.queryConflicts(ctx, sqlListAllConflicts)
 }

@@ -185,7 +185,7 @@ func TestInspector_HasScopeBlock(t *testing.T) {
 
 // Validates: R-2.4.4, R-2.4.5
 // Validates: R-2.3.7, R-2.3.10, R-2.10.22
-func TestInspector_ReadVisibleIssueSnapshot(t *testing.T) {
+func TestInspector_ReadGroupedIssueProjection(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
@@ -250,7 +250,7 @@ func TestInspector_ReadVisibleIssueSnapshot(t *testing.T) {
 		assert.NoError(t, inspector.Close())
 	})
 
-	current, err := inspector.ReadVisibleIssueSnapshot(ctx, false)
+	current, err := inspector.readGroupedIssueProjection(ctx, false)
 	require.NoError(t, err)
 	assert.Len(t, current.Conflicts, 1)
 	assert.Equal(t, "/conflict.txt", current.Conflicts[0].Path)
@@ -262,16 +262,16 @@ func TestInspector_ReadVisibleIssueSnapshot(t *testing.T) {
 	assert.Len(t, current.PendingRetries, 1)
 	assert.Equal(t, 1, current.PendingRetries[0].Count)
 
-	history, err := inspector.ReadVisibleIssueSnapshot(ctx, true)
+	history, err := inspector.readGroupedIssueProjection(ctx, true)
 	require.NoError(t, err)
 	assert.Len(t, history.Conflicts, 2)
 }
 
 // Validates: R-2.3.3, R-2.3.4, R-2.3.6
-func TestInspector_ReadDetailedStatusSnapshot(t *testing.T) {
+func TestInspector_ReadDriveStatusSnapshot(t *testing.T) {
 	t.Parallel()
 
-	dbPath, ctx := seedDetailedStatusSnapshotFixture(t)
+	dbPath, ctx := seedDriveStatusSnapshotFixture(t)
 
 	inspector, err := OpenInspector(dbPath, newTestLogger(t))
 	require.NoError(t, err)
@@ -279,7 +279,7 @@ func TestInspector_ReadDetailedStatusSnapshot(t *testing.T) {
 		assert.NoError(t, inspector.Close())
 	})
 
-	snapshot, err := inspector.ReadDetailedStatusSnapshot(ctx, true)
+	snapshot, err := inspector.ReadDriveStatusSnapshot(ctx, true)
 	require.NoError(t, err)
 
 	assert.Equal(t, "2026-04-10T12:00:00Z", snapshot.SyncMetadata["last_sync_time"])
@@ -317,7 +317,7 @@ func TestInspector_ReadDetailedStatusSnapshot(t *testing.T) {
 	assert.Equal(t, synctypes.ResolvedByUser, snapshot.ConflictHistory[0].ResolvedBy)
 }
 
-func seedDetailedStatusSnapshotFixture(t *testing.T) (string, context.Context) {
+func seedDriveStatusSnapshotFixture(t *testing.T) (string, context.Context) {
 	t.Helper()
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
@@ -328,15 +328,15 @@ func seedDetailedStatusSnapshotFixture(t *testing.T) (string, context.Context) {
 	})
 
 	ctx := t.Context()
-	seedDetailedStatusMetadata(t, store, ctx)
-	seedDetailedStatusFailures(t, store, ctx)
-	seedDetailedStatusDeleteSafety(t, store, ctx)
-	seedDetailedStatusConflicts(t, store, ctx)
+	seedDriveStatusMetadata(t, store, ctx)
+	seedDriveStatusFailures(t, store, ctx)
+	seedDriveStatusDeleteSafety(t, store, ctx)
+	seedDriveStatusConflicts(t, store, ctx)
 
 	return dbPath, ctx
 }
 
-func seedDetailedStatusMetadata(t *testing.T, store *SyncStore, ctx context.Context) {
+func seedDriveStatusMetadata(t *testing.T, store *SyncStore, ctx context.Context) {
 	t.Helper()
 
 	_, err := store.DB().ExecContext(ctx, `INSERT INTO sync_metadata (key, value) VALUES
@@ -345,7 +345,7 @@ func seedDetailedStatusMetadata(t *testing.T, store *SyncStore, ctx context.Cont
 	require.NoError(t, err)
 }
 
-func seedDetailedStatusFailures(t *testing.T, store *SyncStore, ctx context.Context) {
+func seedDriveStatusFailures(t *testing.T, store *SyncStore, ctx context.Context) {
 	t.Helper()
 
 	_, err := store.DB().ExecContext(ctx, `INSERT INTO remote_state
@@ -368,7 +368,7 @@ func seedDetailedStatusFailures(t *testing.T, store *SyncStore, ctx context.Cont
 	require.NoError(t, err)
 }
 
-func seedDetailedStatusDeleteSafety(t *testing.T, store *SyncStore, ctx context.Context) {
+func seedDriveStatusDeleteSafety(t *testing.T, store *SyncStore, ctx context.Context) {
 	t.Helper()
 
 	require.NoError(t, store.UpsertHeldDeletes(ctx, []synctypes.HeldDeleteRecord{
@@ -394,7 +394,7 @@ func seedDetailedStatusDeleteSafety(t *testing.T, store *SyncStore, ctx context.
 	}))
 }
 
-func seedDetailedStatusConflicts(t *testing.T, store *SyncStore, ctx context.Context) {
+func seedDriveStatusConflicts(t *testing.T, store *SyncStore, ctx context.Context) {
 	t.Helper()
 
 	_, err := store.DB().ExecContext(ctx, `INSERT INTO conflicts
@@ -437,7 +437,7 @@ func findConflictStatusSnapshot(
 }
 
 // Validates: R-2.14.3, R-2.10.47
-func TestInspector_ReadStatusSnapshot_StaysConsistentWithVisibleIssueSnapshot(t *testing.T) {
+func TestInspector_ReadStatusSnapshot_StaysConsistentWithDriveStatusSnapshot(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
@@ -479,11 +479,11 @@ func TestInspector_ReadStatusSnapshot_StaysConsistentWithVisibleIssueSnapshot(t 
 		assert.NoError(t, inspector.Close())
 	})
 
-	issues, err := inspector.ReadVisibleIssueSnapshot(ctx, false)
+	driveStatus, err := inspector.ReadDriveStatusSnapshot(ctx, false)
 	require.NoError(t, err)
 
 	status := inspector.ReadStatusSnapshot(ctx)
-	assert.Equal(t, len(issues.Conflicts)+1+1+1, status.Issues.VisibleTotal())
+	assert.Equal(t, len(driveStatus.Conflicts)+1+1+1, status.Issues.VisibleTotal())
 	assert.Equal(t, 1, status.Issues.ConflictCount())
 	assert.Equal(t, 1, status.Issues.ActionableCount())
 	assert.Equal(t, 1, status.Issues.RemoteBlockedCount())

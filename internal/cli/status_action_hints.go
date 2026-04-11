@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -42,21 +41,6 @@ func (s *statusActionHintSet) slice() []string {
 	copy(out, s.values)
 
 	return out
-}
-
-func durableIntentActionHints(canonicalID string, counts syncstore.DurableIntentCounts) []string {
-	hints := newStatusActionHintSet()
-	if counts.PendingHeldDeleteApprovals > 0 {
-		hints.add(approvedDeleteActionHint(canonicalID))
-	}
-	if counts.PendingConflictRequests > 0 {
-		hints.add(queuedConflictActionHint(canonicalID))
-	}
-	if counts.ApplyingConflictRequests > 0 {
-		hints.add(applyingConflictActionHint(canonicalID))
-	}
-
-	return hints.slice()
 }
 
 func heldDeleteActionHint(canonicalID string) string {

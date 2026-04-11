@@ -852,7 +852,7 @@ In watch mode, the planner-level delete-safety check is disabled (`threshold=Max
 2. Non-delete actions continue to DepGraph and execute normally
 3. Held deletes are recorded in the `held_deletes` table with `state='held'`
 
-**CLI notification**: single-drive `status` shows held deletes in a dedicated
+**CLI notification**: per-drive `status` shows held deletes in a dedicated
 "DELETE SAFETY" section. User approves them via `resolve deletes`, which
 records `state='approved'` either by socket RPC to a watch daemon or directly
 in the DB when no watch daemon is running. If a foreground one-shot sync owns
@@ -867,5 +867,5 @@ One-shot sync uses the same durable workflow: if the planned delete count exceed
 
 ### Rationale
 
-- **Crash recovery requires explicit bridging**: On restart after crash, [`internal/syncrecovery/recovery.go`](/Users/tonimelisma/Development/onedrive-go/internal/syncrecovery/recovery.go) resets `remote_state` items stuck mid-execution to pending or deleted, AND creates `sync_failures` entries so the engine retry sweep can rediscover them. This is necessary because the delta token was already advanced before execution — items that crashed mid-execution won't appear in the next delta response. The planner is idempotent for items that DO appear in observations, but crash recovery items need the `sync_failures` → retrier → planner path.
+- **Crash recovery requires explicit bridging**: On restart after crash, [`internal/syncrecovery/recovery.go`](../../internal/syncrecovery/recovery.go) resets `remote_state` items stuck mid-execution to pending or deleted, AND creates `sync_failures` entries so the engine retry sweep can rediscover them. This is necessary because the delta token was already advanced before execution — items that crashed mid-execution won't appear in the next delta response. The planner is idempotent for items that DO appear in observations, but crash recovery items need the `sync_failures` → retrier → planner path.
 - **Keep control plane separate from the engine**: multi-drive coordination now lives in `internal/multisync`, leaving `internal/sync` focused on the single-drive runtime and conflict APIs.

@@ -11,14 +11,15 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/clishape"
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
@@ -380,27 +381,14 @@ func TestNewGraphClient_ReturnsConstructionError(t *testing.T) {
 
 func TestNewRootCmd_Subcommands(t *testing.T) {
 	cmd := newRootCmd()
-
-	expected := []string{
-		"cp", "drive", "get", "login", "ls", "mkdir", "mv", "pause", "put",
-		"recycle-bin", "recover", "resolve", "resume", "rm", "shared", "stat",
-		"status", "sync", "whoami", "logout",
-	}
-	actual := make([]string, 0, len(cmd.Commands()))
-	for _, sub := range cmd.Commands() {
-		actual = append(actual, sub.Name())
-	}
-
-	sort.Strings(actual)
-	sort.Strings(expected)
-	assert.Equal(t, expected, actual)
+	assertCommandMatchesShape(t, cmd, clishape.Root())
 }
 
 func TestNewRootCmd_PersistentFlags(t *testing.T) {
 	cmd := newRootCmd()
 
-	expectedFlags := []string{"config", "account", "drive", "json", "verbose", "debug", "quiet"}
-	for _, name := range expectedFlags {
+	for _, flag := range clishape.Root().Flags {
+		name := flag.Name
 		flag := cmd.PersistentFlags().Lookup(name)
 		assert.NotNil(t, flag, "expected persistent flag %q not found", name)
 	}
@@ -465,25 +453,92 @@ func TestNewRootCmd_AuthSkipsConfig(t *testing.T) {
 func TestNewRootCmd_DriveSubcommands(t *testing.T) {
 	cmd := newRootCmd()
 
-	// Find the "drive" command and verify its subcommands.
 	driveSub, _, err := cmd.Find([]string{"drive"})
 	require.NoError(t, err)
 	require.Equal(t, "drive", driveSub.Name())
+	assertCommandMatchesShape(t, driveSub, requiredShapeSubcommand(t, clishape.Root(), "drive"))
+}
 
-	expectedSubs := []string{"add", "remove"}
-	for _, name := range expectedSubs {
-		found := false
+func assertCommandMatchesShape(t *testing.T, cmd *cobra.Command, spec clishape.CommandSpec) {
+	t.Helper()
 
-		for _, sub := range driveSub.Commands() {
-			if sub.Name() == name {
-				found = true
-
-				break
-			}
-		}
-
-		assert.True(t, found, "expected drive subcommand %q not found", name)
+	require.Equal(t, spec.Name, cmd.Name())
+	if spec.Runnable {
+		require.NotNil(t, cmd.RunE, "command %q should be runnable", spec.Name)
 	}
+
+	assert.ElementsMatch(t, commandFlagNames(cmd, spec.Name == clishape.Root().Name), shapeFlagNames(spec.Flags))
+	assert.ElementsMatch(t, commandNames(cmd.Commands()), shapeSubcommandNames(spec.Subcommands))
+
+	for i := range spec.Subcommands {
+		childSpec := spec.Subcommands[i]
+		childCmd, _, err := cmd.Find([]string{childSpec.Name})
+		require.NoError(t, err)
+		assertCommandMatchesShape(t, childCmd, childSpec)
+	}
+}
+
+func requiredShapeSubcommand(t *testing.T, parent clishape.CommandSpec, name string) clishape.CommandSpec {
+	t.Helper()
+
+	for i := range parent.Subcommands {
+		if parent.Subcommands[i].Name == name {
+			return parent.Subcommands[i]
+		}
+	}
+
+	require.FailNow(t, "missing shape subcommand", "subcommand %q was not found in the shared CLI shape", name)
+	return clishape.CommandSpec{}
+}
+
+func commandNames(commands []*cobra.Command) []string {
+	names := make([]string, 0, len(commands))
+	for _, command := range commands {
+		names = append(names, command.Name())
+	}
+
+	return names
+}
+
+func shapeSubcommandNames(specs []clishape.CommandSpec) []string {
+	names := make([]string, 0, len(specs))
+	for i := range specs {
+		names = append(names, specs[i].Name)
+	}
+
+	return names
+}
+
+func commandFlagNames(cmd *cobra.Command, root bool) []string {
+	const helpFlagName = "help"
+
+	var names []string
+	if root {
+		cmd.PersistentFlags().VisitAll(func(flag *pflag.Flag) {
+			if flag.Name == helpFlagName {
+				return
+			}
+			names = append(names, flag.Name)
+		})
+		return names
+	}
+
+	cmd.NonInheritedFlags().VisitAll(func(flag *pflag.Flag) {
+		if flag.Name == helpFlagName {
+			return
+		}
+		names = append(names, flag.Name)
+	})
+	return names
+}
+
+func shapeFlagNames(flags []clishape.FlagSpec) []string {
+	names := make([]string, 0, len(flags))
+	for i := range flags {
+		names = append(names, flags[i].Name)
+	}
+
+	return names
 }
 
 func TestNewRootCmd_DriveSubcommandsSkipConfig(t *testing.T) {

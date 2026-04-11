@@ -14,8 +14,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // Drive state constants for status and drive list display.
@@ -31,14 +29,14 @@ func newStatusCmd() *cobra.Command {
 		Short: "Show sync status, drive health, and pending user decisions",
 		Long: `Display the status of all configured accounts and drives.
 
-Without --drive, status shows the account and drive summary view. With exactly
-one selected drive, status becomes the detailed per-drive inspection view for
-ordinary failures, delete safety, conflicts, and state-store health.`,
+Status always shows the same per-drive sync-health contract for every displayed
+drive. Use --drive to filter which drives are shown, --history to include
+resolved conflict history, and --verbose to expand sampled path and row lists.`,
 		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
 		RunE:        runStatus,
 	}
 
-	cmd.Flags().Bool("history", false, "include resolved conflict history in single-drive detailed status")
+	cmd.Flags().Bool("history", false, "include resolved conflict history for the displayed drives")
 
 	return cmd
 }
@@ -64,28 +62,32 @@ type statusDrive struct {
 	SyncState   *syncStateInfo `json:"sync_state,omitempty"`
 }
 
-// syncStateInfo holds sync state for a single drive, queried from the state DB.
+// syncStateInfo holds the full per-drive status payload rendered by `status`.
 type syncStateInfo struct {
-	LastSyncTime               string             `json:"last_sync_time,omitempty"`
-	LastSyncDuration           string             `json:"last_sync_duration,omitempty"`
-	FileCount                  int                `json:"file_count"`
-	Issues                     int                `json:"issues"` // conflicts + actionable failures
-	IssueGroups                []statusIssueGroup `json:"issue_groups,omitempty"`
-	PendingSync                int                `json:"pending_sync"`
-	Retrying                   int                `json:"retrying"` // transient failures with failure_count >= 3
-	LastError                  string             `json:"last_error,omitempty"`
-	PendingHeldDeleteApprovals int                `json:"pending_held_delete_approvals,omitempty"`
-	PendingConflictRequests    int                `json:"pending_conflict_requests,omitempty"`
-	ApplyingConflictRequests   int                `json:"applying_conflict_requests,omitempty"`
-	ActionHints                []string           `json:"action_hints,omitempty"`
-}
-
-type statusIssueGroup struct {
-	SummaryKey string `json:"summary_key"`
-	Title      string `json:"title"`
-	Count      int    `json:"count"`
-	ScopeKind  string `json:"scope_kind"`
-	Scope      string `json:"scope,omitempty"`
+	LastSyncTime             string                      `json:"last_sync_time,omitempty"`
+	LastSyncDuration         string                      `json:"last_sync_duration,omitempty"`
+	FileCount                int                         `json:"file_count"`
+	IssueCount               int                         `json:"issue_count"`
+	PendingSync              int                         `json:"pending_sync"`
+	Retrying                 int                         `json:"retrying"`
+	LastError                string                      `json:"last_error,omitempty"`
+	IssueGroups              []failureGroupJSON          `json:"issue_groups,omitempty"`
+	DeleteSafety             []deleteSafetyJSON          `json:"delete_safety,omitempty"`
+	DeleteSafetyTotal        int                         `json:"delete_safety_total"`
+	Conflicts                []statusConflictJSON        `json:"conflicts,omitempty"`
+	ConflictsTotal           int                         `json:"conflicts_total"`
+	ConflictHistory          []statusConflictHistoryJSON `json:"conflict_history,omitempty"`
+	ConflictHistoryTotal     int                         `json:"conflict_history_total"`
+	NextActions              []string                    `json:"next_actions,omitempty"`
+	ExamplesLimit            int                         `json:"examples_limit"`
+	Verbose                  bool                        `json:"verbose"`
+	StateStoreStatus         string                      `json:"state_store_status"`
+	StateStoreError          string                      `json:"state_store_error,omitempty"`
+	StateStoreRecoveryHint   string                      `json:"state_store_recovery_hint,omitempty"`
+	HeldDeletesWaiting       int                         `json:"held_deletes_waiting,omitempty"`
+	ApprovedDeletesWaiting   int                         `json:"approved_deletes_waiting,omitempty"`
+	QueuedConflictRequests   int                         `json:"queued_conflict_requests,omitempty"`
+	ApplyingConflictRequests int                         `json:"applying_conflict_requests,omitempty"`
 }
 
 // statusSummary aggregates health info across all drives.
@@ -128,12 +130,15 @@ type syncStateQuerier interface {
 
 // liveSyncStateQuerier queries per-drive sync state from real state DBs.
 type liveSyncStateQuerier struct {
-	logger *slog.Logger
+	logger        *slog.Logger
+	history       bool
+	verbose       bool
+	examplesLimit int
 }
 
 func (q *liveSyncStateQuerier) QuerySyncState(cid driveid.CanonicalID) *syncStateInfo {
 	statePath := config.DriveStatePath(cid)
-	return querySyncState(cid.String(), statePath, q.logger)
+	return querySyncStateWithOptions(cid.String(), statePath, q.logger, q.history, q.verbose, q.examplesLimit)
 }
 
 // buildStatusAccountsWith is the testable core of buildStatusAccounts.
@@ -326,60 +331,25 @@ func driveState(d *config.Drive) string {
 	return driveStateReady
 }
 
-// querySyncState opens a state DB read-only and queries sync metadata, baseline
-// entry count, and unresolved conflict count. Returns nil if the DB doesn't exist
-// (drive never synced) or if an error occurs opening it.
-func querySyncState(canonicalID string, statePath string, logger *slog.Logger) *syncStateInfo {
-	if !managedPathExists(statePath) {
-		return nil
-	}
-
-	ctx := context.Background()
-	snapshot, err := syncstore.ReadStatusSnapshot(ctx, statePath, logger)
-	if err != nil {
-		logger.Debug("could not open state DB for status", slog.String("error", err.Error()), slog.String("path", statePath))
-		return nil
-	}
-	info := &syncStateInfo{
-		FileCount:                  snapshot.BaselineEntryCount,
-		Issues:                     snapshot.Issues.VisibleTotal(),
-		PendingSync:                snapshot.PendingSyncItems,
-		Retrying:                   snapshot.Issues.RetryingCount(),
-		PendingHeldDeleteApprovals: snapshot.DurableIntents.PendingHeldDeleteApprovals,
-		PendingConflictRequests:    snapshot.DurableIntents.PendingConflictRequests,
-		ApplyingConflictRequests:   snapshot.DurableIntents.ApplyingConflictRequests,
-	}
-	info.LastSyncTime = snapshot.SyncMetadata["last_sync_time"]
-	info.LastSyncDuration = snapshot.SyncMetadata["last_sync_duration_ms"]
-	info.LastError = snapshot.SyncMetadata["last_sync_error"]
-	info.IssueGroups = statusIssueGroups(snapshot.Issues.Groups)
-	info.ActionHints = statusActionHints(canonicalID, snapshot.DurableIntents)
-
-	return info
+func querySyncState(
+	canonicalID string,
+	statePath string,
+	logger *slog.Logger,
+) *syncStateInfo {
+	return querySyncStateWithOptions(canonicalID, statePath, logger, false, false, defaultVisiblePaths)
 }
 
-func statusActionHints(canonicalID string, counts syncstore.DurableIntentCounts) []string {
-	return durableIntentActionHints(canonicalID, counts)
-}
-
-func statusIssueGroups(groups []syncstore.IssueGroupCount) []statusIssueGroup {
-	if len(groups) == 0 {
-		return nil
-	}
-
-	out := make([]statusIssueGroup, 0, len(groups))
-	for _, group := range groups {
-		descriptor := synctypes.DescribeSummary(group.Key)
-		out = append(out, statusIssueGroup{
-			SummaryKey: string(group.Key),
-			Title:      descriptor.Title,
-			Count:      group.Count,
-			ScopeKind:  group.ScopeKind,
-			Scope:      group.Scope,
-		})
-	}
-
-	return out
+func querySyncStateWithOptions(
+	canonicalID string,
+	statePath string,
+	logger *slog.Logger,
+	history bool,
+	verbose bool,
+	examplesLimit int,
+) *syncStateInfo {
+	snapshot, storeInfo := readDriveStatusSnapshot(statePath, logger, history, canonicalID)
+	info := buildSyncStateInfo(canonicalID, &snapshot, storeInfo, verbose, examplesLimit)
+	return &info
 }
 
 // computeSummary aggregates health information across all status accounts.
@@ -404,7 +374,7 @@ func computeSummary(accounts []statusAccount) statusSummary {
 			}
 
 			if d.SyncState != nil {
-				s.TotalIssues += d.SyncState.Issues
+				s.TotalIssues += d.SyncState.IssueCount
 				s.TotalPendingSync += d.SyncState.PendingSync
 				s.TotalRetrying += d.SyncState.Retrying
 			}
@@ -430,23 +400,29 @@ func printStatusJSON(w io.Writer, accounts []statusAccount) error {
 	return nil
 }
 
-func printStatusText(w io.Writer, accounts []statusAccount) error {
-	for i := range accounts {
-		if err := printAccountStatus(w, &accounts[i], i > 0); err != nil {
-			return err
-		}
+func printStatusText(w io.Writer, accounts []statusAccount, history bool) error {
+	summary := computeSummary(accounts)
+	if err := printSummaryText(w, summary); err != nil {
+		return err
+	}
+	if len(accounts) == 0 {
+		return nil
 	}
 
-	// Print health summary.
-	summary := computeSummary(accounts)
 	if err := writeln(w); err != nil {
 		return err
 	}
 
-	return printSummaryText(w, summary)
+	for i := range accounts {
+		if err := printAccountStatus(w, &accounts[i], i > 0, history); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
-func printAccountStatus(w io.Writer, acct *statusAccount, leadingBlank bool) error {
+func printAccountStatus(w io.Writer, acct *statusAccount, leadingBlank bool, history bool) error {
 	if acct == nil {
 		return nil
 	}
@@ -482,7 +458,7 @@ func printAccountStatus(w io.Writer, acct *statusAccount, leadingBlank bool) err
 	}
 
 	for _, drive := range acct.Drives {
-		if err := printDriveStatus(w, drive); err != nil {
+		if err := printDriveStatus(w, drive, history); err != nil {
 			return err
 		}
 	}
@@ -502,7 +478,7 @@ func statusAccountLabel(acct *statusAccount) string {
 	return fmt.Sprintf("%s (%s)", acct.DisplayName, acct.Email)
 }
 
-func printDriveStatus(w io.Writer, drive statusDrive) error {
+func printDriveStatus(w io.Writer, drive statusDrive, history bool) error {
 	syncDir := drive.SyncDir
 	if syncDir == "" {
 		syncDir = syncDirNotSet
@@ -521,7 +497,7 @@ func printDriveStatus(w io.Writer, drive statusDrive) error {
 		return nil
 	}
 
-	return printSyncStateText(w, drive.SyncState)
+	return printSyncStateText(w, drive.SyncState, history)
 }
 
 func statusDriveLabel(drive statusDrive) string {
@@ -532,39 +508,70 @@ func statusDriveLabel(drive statusDrive) string {
 	return fmt.Sprintf("%s (%s)", drive.DisplayName, drive.CanonicalID)
 }
 
-func printSyncStateText(w io.Writer, ss *syncStateInfo) error {
+func printSyncStateText(w io.Writer, ss *syncStateInfo, history bool) error {
+	if ss == nil {
+		return nil
+	}
+
+	if err := printSyncStateSummaryLines(w, ss); err != nil {
+		return err
+	}
+	if err := printSyncStateStoreLines(w, ss); err != nil {
+		return err
+	}
+
+	if ss.StateStoreStatus != "" && ss.StateStoreStatus != stateStoreStatusHealthy {
+		return nil
+	}
+
+	return printDriveSyncSections(w, ss, history)
+}
+
+func printSyncStateSummaryLines(w io.Writer, ss *syncStateInfo) error {
 	if err := printStatusLastSyncLine(w, ss); err != nil {
 		return err
 	}
-
-	if err := writeOptionalStatusCountLine(w, ss.PendingSync, "    Pending:   %d items\n"); err != nil {
-		return err
-	}
-
-	if ss.Issues > 0 {
-		if err := writef(w, "    Issues:    %d\n", ss.Issues); err != nil {
-			return err
-		}
-		if err := printStatusIssueGroups(w, ss.IssueGroups); err != nil {
+	if ss.LastSyncDuration != "" {
+		if err := writef(w, "    Duration:  %sms\n", ss.LastSyncDuration); err != nil {
 			return err
 		}
 	}
 
-	if err := writeOptionalStatusCountLine(w, ss.Retrying, "    Retrying:  %d items\n"); err != nil {
-		return err
+	countLines := []struct {
+		count  int
+		format string
+	}{
+		{count: ss.FileCount, format: "    Files:     %d\n"},
+		{count: ss.PendingSync, format: "    Pending:   %d items\n"},
+		{count: ss.IssueCount, format: "    Issues:    %d\n"},
+		{count: ss.Retrying, format: "    Retrying:  %d items\n"},
 	}
-
-	if err := printStatusDurableIntentLines(w, ss); err != nil {
-		return err
-	}
-
-	if ss.LastError != "" {
-		if err := writef(w, "    Last error: %s\n", ss.LastError); err != nil {
+	for i := range countLines {
+		if err := writeOptionalStatusCountLine(w, countLines[i].count, countLines[i].format); err != nil {
 			return err
 		}
 	}
 
-	return printStatusActionHints(w, ss.ActionHints)
+	return printStatusDurableIntentLines(w, ss)
+}
+
+func printSyncStateStoreLines(w io.Writer, ss *syncStateInfo) error {
+	valueLines := []struct {
+		value  string
+		format string
+	}{
+		{value: ss.StateStoreStatus, format: "    State DB:  %s\n"},
+		{value: ss.StateStoreError, format: "    DB error:  %s\n"},
+		{value: ss.StateStoreRecoveryHint, format: "    Recover:   %s\n"},
+		{value: ss.LastError, format: "    Last error: %s\n"},
+	}
+	for i := range valueLines {
+		if err := writeOptionalStatusValueLine(w, valueLines[i].value, valueLines[i].format); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func printStatusLastSyncLine(w io.Writer, ss *syncStateInfo) error {
@@ -572,7 +579,7 @@ func printStatusLastSyncLine(w io.Writer, ss *syncStateInfo) error {
 		return writef(w, "    Last sync: never\n")
 	}
 
-	return writef(w, "    Last sync: %s (%d files)\n", ss.LastSyncTime, ss.FileCount)
+	return writef(w, "    Last sync: %s\n", ss.LastSyncTime)
 }
 
 func writeOptionalStatusCountLine(w io.Writer, count int, format string) error {
@@ -583,10 +590,18 @@ func writeOptionalStatusCountLine(w io.Writer, count int, format string) error {
 	return writef(w, format, count)
 }
 
+func writeOptionalStatusValueLine(w io.Writer, value string, format string) error {
+	if value == "" {
+		return nil
+	}
+
+	return writef(w, format, value)
+}
+
 func printStatusDurableIntentLines(w io.Writer, ss *syncStateInfo) error {
 	if err := writeOptionalStatusCountLine(
 		w,
-		ss.PendingHeldDeleteApprovals,
+		ss.ApprovedDeletesWaiting,
 		"    Approved deletes waiting: %d\n",
 	); err != nil {
 		return err
@@ -594,7 +609,7 @@ func printStatusDurableIntentLines(w io.Writer, ss *syncStateInfo) error {
 
 	if err := writeOptionalStatusCountLine(
 		w,
-		ss.PendingConflictRequests,
+		ss.QueuedConflictRequests,
 		"    Queued conflict resolutions: %d\n",
 	); err != nil {
 		return err
@@ -609,53 +624,6 @@ func printStatusDurableIntentLines(w io.Writer, ss *syncStateInfo) error {
 	}
 
 	return nil
-}
-
-func printStatusActionHints(w io.Writer, hints []string) error {
-	for _, hint := range hints {
-		if err := writef(w, "    Next: %s\n", hint); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func printStatusIssueGroups(w io.Writer, groups []statusIssueGroup) error {
-	if len(groups) == 0 {
-		return nil
-	}
-
-	if err := writeln(w, "    Issue groups:"); err != nil {
-		return err
-	}
-
-	for _, group := range groups {
-		scopeText := statusIssueScopeText(group)
-		if scopeText == "" {
-			if err := writef(w, "      - %s: %d\n", group.Title, group.Count); err != nil {
-				return err
-			}
-			continue
-		}
-
-		if err := writef(w, "      - %s (%s): %d\n", group.Title, scopeText, group.Count); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func statusIssueScopeText(group statusIssueGroup) string {
-	if group.ScopeKind == "" {
-		return ""
-	}
-	if group.Scope == "" {
-		return group.ScopeKind + " scope"
-	}
-
-	return group.ScopeKind + " " + group.Scope
 }
 
 func printSummaryText(w io.Writer, s statusSummary) error {
@@ -685,6 +653,9 @@ func printSummaryText(w io.Writer, s statusSummary) error {
 		extra += fmt.Sprintf(", %d retrying", s.TotalRetrying)
 	}
 
-	return writef(w, "Summary: %d drives (%s), %s\n",
-		s.TotalDrives, stateStr, extra)
+	if stateStr == "" {
+		return writef(w, "Summary: %d drives, %s\n", s.TotalDrives, extra)
+	}
+
+	return writef(w, "Summary: %d drives (%s), %s\n", s.TotalDrives, stateStr, extra)
 }

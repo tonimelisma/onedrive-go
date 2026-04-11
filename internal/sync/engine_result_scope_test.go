@@ -323,7 +323,7 @@ func TestRecordFailure_LogsSummaryKey(t *testing.T) {
 	assert.Contains(t, output, "issue_type=service_outage")
 }
 
-func readVisibleIssueSnapshotForTest(t *testing.T, eng *testEngine, ctx context.Context) syncstore.VisibleIssueSnapshot {
+func readDriveStatusSnapshotForTest(t *testing.T, eng *testEngine, ctx context.Context) syncstore.DriveStatusSnapshot {
 	t.Helper()
 
 	require.NoError(t, eng.baseline.Checkpoint(ctx, 0))
@@ -334,7 +334,7 @@ func readVisibleIssueSnapshotForTest(t *testing.T, eng *testEngine, ctx context.
 		require.NoError(t, inspector.Close())
 	}()
 
-	snapshot, err := inspector.ReadVisibleIssueSnapshot(ctx, false)
+	snapshot, err := inspector.ReadDriveStatusSnapshot(ctx, false)
 	require.NoError(t, err)
 
 	return snapshot
@@ -342,14 +342,16 @@ func readVisibleIssueSnapshotForTest(t *testing.T, eng *testEngine, ctx context.
 
 func requireIssueGroupSummaryKey(
 	t *testing.T,
-	snapshot syncstore.VisibleIssueSnapshot,
+	snapshot *syncstore.DriveStatusSnapshot,
 	key synctypes.SummaryKey,
 ) syncstore.IssueGroupSnapshot {
 	t.Helper()
 
-	for i := range snapshot.Groups {
-		if snapshot.Groups[i].SummaryKey == key {
-			return snapshot.Groups[i]
+	require.NotNil(t, snapshot)
+
+	for i := range snapshot.IssueGroups {
+		if snapshot.IssueGroups[i].SummaryKey == key {
+			return snapshot.IssueGroups[i]
 		}
 	}
 
@@ -386,11 +388,6 @@ func TestProcessWorkerResult_EndToEndSummaryKey_ServiceOutage(t *testing.T) {
 	assert.Equal(t, synctypes.SKService(), rows[0].ScopeKey)
 	assert.Equal(t, synctypes.SummaryServiceOutage,
 		synctypes.SummaryKeyForPersistedFailure(rows[0].IssueType, rows[0].Category, rows[0].Role))
-
-	snapshot := readVisibleIssueSnapshotForTest(t, eng, ctx)
-	require.Len(t, snapshot.PendingRetries, 1)
-	assert.Equal(t, synctypes.SKService(), snapshot.PendingRetries[0].ScopeKey)
-	assert.Equal(t, 1, snapshot.PendingRetries[0].Count)
 
 	output := logBuf.String()
 	assert.Contains(t, output, "run_id=run-")
@@ -456,8 +453,8 @@ func TestProcessWorkerResult_EndToEndSummaryKey_SharedFolderWritesBlocked(t *tes
 	assert.Equal(t, synctypes.FailureRoleHeld, rows[0].Role)
 	assert.Equal(t, synctypes.SKPermRemote("Shared/TeamDocs"), rows[0].ScopeKey)
 
-	snapshot := readVisibleIssueSnapshotForTest(t, eng, ctx)
-	group := requireIssueGroupSummaryKey(t, snapshot, synctypes.SummarySharedFolderWritesBlocked)
+	snapshot := readDriveStatusSnapshotForTest(t, eng, ctx)
+	group := requireIssueGroupSummaryKey(t, &snapshot, synctypes.SummarySharedFolderWritesBlocked)
 	assert.Equal(t, 1, group.Count)
 	assert.Equal(t, []string{"Shared/TeamDocs/file.txt"}, group.Paths)
 	assert.Equal(t, synctypes.SKPermRemote("Shared/TeamDocs"), group.ScopeKey)
@@ -502,8 +499,8 @@ func TestProcessWorkerResult_EndToEndSummaryKey_AuthenticationRequired(t *testin
 	require.NoError(t, err)
 	assert.Empty(t, failures)
 
-	snapshot := readVisibleIssueSnapshotForTest(t, eng, ctx)
-	group := requireIssueGroupSummaryKey(t, snapshot, synctypes.SummaryAuthenticationRequired)
+	snapshot := readDriveStatusSnapshotForTest(t, eng, ctx)
+	group := requireIssueGroupSummaryKey(t, &snapshot, synctypes.SummaryAuthenticationRequired)
 	assert.Equal(t, 1, group.Count)
 	assert.Equal(t, synctypes.SKAuthAccount(), group.ScopeKey)
 	assert.Empty(t, group.Paths)
@@ -542,8 +539,8 @@ func TestProcessWorkerResult_EndToEndSummaryKey_LocalPermissionDenied(t *testing
 	assert.Equal(t, synctypes.CategoryActionable, rows[0].Category)
 	assert.Equal(t, synctypes.FailureRoleItem, rows[0].Role)
 
-	snapshot := readVisibleIssueSnapshotForTest(t, eng, ctx)
-	group := requireIssueGroupSummaryKey(t, snapshot, synctypes.SummaryLocalPermissionDenied)
+	snapshot := readDriveStatusSnapshotForTest(t, eng, ctx)
+	group := requireIssueGroupSummaryKey(t, &snapshot, synctypes.SummaryLocalPermissionDenied)
 	assert.Equal(t, 1, group.Count)
 	assert.Equal(t, []string{"file.txt"}, group.Paths)
 

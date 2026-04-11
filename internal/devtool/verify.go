@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/tonimelisma/onedrive-go/internal/clishape"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
@@ -389,7 +390,7 @@ func fullE2EParallelMiscTestNames() []string {
 		"TestE2E_Pause_IndefiniteAndResume",
 		"TestE2E_Resume_NotPaused",
 		"TestE2E_Resume_AllDrives",
-		"TestE2E_Status_Detailed_NoVisibleProblems",
+		"TestE2E_Status_PerDrive_NoVisibleProblems",
 		"TestE2E_Status_History_NoConflicts",
 		"TestE2E_Status_JSON_ConflictDetails",
 		"TestE2E_Status_History_ShowsResolvedStrategies",
@@ -409,7 +410,8 @@ func fullE2EParallelMiscTestNames() []string {
 		"TestE2E_Cp_ForceOverwrite",
 		"TestE2E_Mv_Folder",
 		"TestE2E_Status_IssueLifecycle",
-		"TestE2E_Status_DetailedJSON",
+		"TestE2E_Status_JSONShape",
+		"TestE2E_Status_FilteredDriveIsSubsetOfAllDrives",
 		"TestE2E_Status_NoDrives",
 		"TestE2E_Sync_QuietMode",
 		"TestE2E_Sync_NosyncGuard",
@@ -1699,148 +1701,40 @@ func documentedCLISubcommand(cmd *documentedCLICommandSpec, token string) *docum
 }
 
 func currentDocumentedCLIManifest() *documentedCLICommandSpec {
-	root := newDocumentedCLICommand("onedrive-go", false, documentedCLIFlags(
-		documentedCLIFlagWithValue("config"),
-		documentedCLIFlagWithValue("account"),
-		documentedCLIFlagWithValue("drive"),
-		documentedCLIBoolFlag("json"),
-		documentedCLIBoolFlag("verbose"),
-		documentedCLIBoolFlag("v"),
-		documentedCLIBoolFlag("debug"),
-		documentedCLIBoolFlag("quiet"),
-		documentedCLIBoolFlag("q"),
-	))
-
-	root.addSubcommand(newDocumentedCLICommand("login", true, documentedCLIFlags(
-		documentedCLIBoolFlag("browser"),
-	)))
-	root.addSubcommand(newDocumentedCLICommand("logout", true, documentedCLIFlags(
-		documentedCLIBoolFlag("purge"),
-	)))
-	root.addSubcommand(newDocumentedCLICommand("whoami", true, nil))
-	root.addSubcommand(newDocumentedCLICommand("status", true, documentedCLIFlags(
-		documentedCLIBoolFlag("history"),
-	)))
-	root.addSubcommand(newDocumentedCLICommand("shared", true, nil))
-	root.addSubcommand(newDocumentedCLICommand("ls", true, nil))
-	root.addSubcommand(newDocumentedCLICommand("get", true, nil))
-	root.addSubcommand(newDocumentedCLICommand("put", true, nil))
-	root.addSubcommand(newDocumentedCLICommand("rm", true, documentedCLIFlags(
-		documentedCLIBoolFlag("recursive"),
-		documentedCLIBoolFlag("r"),
-		documentedCLIBoolFlag("permanent"),
-	)))
-	root.addSubcommand(newDocumentedCLICommand("mkdir", true, nil))
-	root.addSubcommand(newDocumentedCLICommand("stat", true, nil))
-	root.addSubcommand(newDocumentedCLICommand("pause", true, nil))
-	root.addSubcommand(newDocumentedCLICommand("resume", true, nil))
-	root.addSubcommand(newDocumentedCLICommand("recover", true, documentedCLIFlags(
-		documentedCLIBoolFlag("yes"),
-	)))
-	root.addSubcommand(newDocumentedCLICommand("mv", true, documentedCLIFlags(
-		documentedCLIBoolFlag("force"),
-		documentedCLIBoolFlag("f"),
-	)))
-	root.addSubcommand(newDocumentedCLICommand("cp", true, documentedCLIFlags(
-		documentedCLIBoolFlag("force"),
-		documentedCLIBoolFlag("f"),
-	)))
-	root.addSubcommand(newDocumentedCLICommand("sync", true, documentedCLIFlags(
-		documentedCLIBoolFlag("download-only"),
-		documentedCLIBoolFlag("upload-only"),
-		documentedCLIBoolFlag("dry-run"),
-		documentedCLIBoolFlag("watch"),
-		documentedCLIBoolFlag("full"),
-	)))
-
-	drive := newDocumentedCLICommand("drive", false, nil)
-	drive.addSubcommand(newDocumentedCLICommand("list", true, documentedCLIFlags(
-		documentedCLIBoolFlag("all"),
-	)))
-	drive.addSubcommand(newDocumentedCLICommand("add", true, nil))
-	drive.addSubcommand(newDocumentedCLICommand("remove", true, documentedCLIFlags(
-		documentedCLIBoolFlag("purge"),
-	)))
-	drive.addSubcommand(newDocumentedCLICommand("search", true, nil))
-	root.addSubcommand(drive)
-
-	resolve := newDocumentedCLICommand("resolve", false, nil)
-	resolve.addSubcommand(newDocumentedCLICommand("deletes", true, nil))
-	resolveFlags := documentedCLIFlags(
-		documentedCLIBoolFlag("all"),
-		documentedCLIBoolFlag("dry-run"),
-	)
-	resolve.addSubcommand(newDocumentedCLICommand("local", true, resolveFlags))
-	resolve.addSubcommand(newDocumentedCLICommand("remote", true, resolveFlags))
-	resolve.addSubcommand(newDocumentedCLICommand("both", true, resolveFlags))
-	root.addSubcommand(resolve)
-
-	recycleBin := newDocumentedCLICommand("recycle-bin", false, nil)
-	recycleBin.addSubcommand(newDocumentedCLICommand("list", true, nil))
-	recycleBin.addSubcommand(newDocumentedCLICommand("restore", true, nil))
-	recycleBin.addSubcommand(newDocumentedCLICommand("empty", true, documentedCLIFlags(
-		documentedCLIBoolFlag("confirm"),
-	)))
-	root.addSubcommand(recycleBin)
-
-	return root
+	return documentedCLIFromShape(clishape.Root(), nil)
 }
 
-func newDocumentedCLICommand(
-	name string,
-	runnable bool,
-	flags map[string]documentedCLIFlagSpec,
+func documentedCLIFromShape(
+	spec clishape.CommandSpec,
+	parent *documentedCLICommandSpec,
 ) *documentedCLICommandSpec {
-	if flags == nil {
-		flags = map[string]documentedCLIFlagSpec{}
-	}
-
-	return &documentedCLICommandSpec{
-		name:        name,
-		runnable:    runnable,
-		flags:       flags,
+	cmd := &documentedCLICommandSpec{
+		name:        spec.Name,
+		runnable:    spec.Runnable,
+		parent:      parent,
+		flags:       documentedCLIFlagsFromShape(spec.Flags),
 		subcommands: map[string]*documentedCLICommandSpec{},
 	}
-}
 
-func (c *documentedCLICommandSpec) addSubcommand(child *documentedCLICommandSpec) {
-	if c == nil || child == nil {
-		return
+	for i := range spec.Subcommands {
+		child := documentedCLIFromShape(spec.Subcommands[i], cmd)
+		cmd.subcommands[child.name] = child
 	}
 
-	child.parent = c
-	c.subcommands[child.name] = child
+	return cmd
 }
 
-func documentedCLIFlags(
-	flags ...documentedCLIFlagDecl,
-) map[string]documentedCLIFlagSpec {
+func documentedCLIFlagsFromShape(flags []clishape.FlagSpec) map[string]documentedCLIFlagSpec {
 	if len(flags) == 0 {
 		return nil
 	}
 
 	result := make(map[string]documentedCLIFlagSpec, len(flags))
 	for _, flag := range flags {
-		result[flag.name] = documentedCLIFlagSpec{consumesValue: flag.consumesValue}
+		result[flag.Name] = documentedCLIFlagSpec{consumesValue: flag.ConsumesValue}
 	}
 
 	return result
-}
-
-type documentedCLIFlagDecl struct {
-	name          string
-	consumesValue bool
-}
-
-func documentedCLIBoolFlag(name string) documentedCLIFlagDecl {
-	return documentedCLIFlagDecl{name: name}
-}
-
-func documentedCLIFlagWithValue(name string) documentedCLIFlagDecl {
-	return documentedCLIFlagDecl{
-		name:          name,
-		consumesValue: true,
-	}
 }
 
 func walkDocumentedCLIExamples(root string, resolver func(string) error) error {

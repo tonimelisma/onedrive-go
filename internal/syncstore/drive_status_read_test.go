@@ -14,7 +14,7 @@ import (
 )
 
 // Validates: R-2.3.3, R-6.10.5
-func TestReadDetailedStatusSnapshot_ReadOnlyDB(t *testing.T) {
+func TestReadDriveStatusSnapshot_ReadOnlyDB(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -43,7 +43,7 @@ func TestReadDetailedStatusSnapshot_ReadOnlyDB(t *testing.T) {
 	}, time.Second, 10*time.Millisecond, "WAL sidecars were not created")
 
 	require.NoError(t, os.Chmod(dbPath, 0o400))
-	// #nosec G302 -- test intentionally makes the directory read-only to prove detailed status reads stay read-only.
+	// #nosec G302 -- test intentionally makes the directory read-only to prove per-drive status reads stay read-only.
 	require.NoError(t, os.Chmod(dir, 0o500))
 	t.Cleanup(func() {
 		// #nosec G302 -- cleanup restores permissions for tempdir removal.
@@ -52,7 +52,7 @@ func TestReadDetailedStatusSnapshot_ReadOnlyDB(t *testing.T) {
 		assert.NoError(t, store.Close(context.Background()))
 	})
 
-	snapshot, err := ReadDetailedStatusSnapshot(ctx, dbPath, false, newTestLogger(t))
+	snapshot, err := ReadDriveStatusSnapshot(ctx, dbPath, false, newTestLogger(t))
 	require.NoError(t, err)
 	require.Len(t, snapshot.Conflicts, 1)
 	assert.Equal(t, "/conflict.txt", snapshot.Conflicts[0].Path)

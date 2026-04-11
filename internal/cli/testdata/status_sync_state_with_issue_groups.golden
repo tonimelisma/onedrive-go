@@ -1,7 +1,29 @@
     Last sync: never
     Issues:    3
-    Issue groups:
-      - QUOTA EXCEEDED (shortcut Shared/Team Docs): 1
-      - INVALID FILENAME (file scope): 2
-      - AUTHENTICATION REQUIRED (account your OneDrive account authorization): 1
     Retrying:  2 items
+
+    ISSUES
+    QUOTA EXCEEDED (1 item)
+      The OneDrive storage quota for this sync scope is full. Free up space in the owning drive, or ask the shared-folder owner to do so.
+      Scope: Shared/Team Docs
+
+      /quota/a.txt
+      Next: Free up space in the owning drive, or ask the shared-folder owner to do so.
+
+    INVALID FILENAME (2 items)
+      The filename contains characters not allowed by OneDrive. Rename the file to remove invalid characters.
+
+      /bad:name.txt
+      /worse:name.txt
+      Next: Rename the file to remove invalid characters.
+
+    AUTHENTICATION REQUIRED (1 item)
+      The last sync attempt for this account was rejected by OneDrive. Run 'onedrive-go whoami' to re-check access, or 'onedrive-go login' to sign in again.
+      Scope: your OneDrive account authorization
+      Next: Run 'onedrive-go whoami' to re-check access, or 'onedrive-go login' to sign in again.
+
+    DELETE SAFETY
+    No delete-safety entries.
+
+    CONFLICTS
+    No unresolved conflicts.

@@ -31,13 +31,37 @@ import (
 	"github.com/tonimelisma/onedrive-go/testutil"
 )
 
-type detailedStatusJSON struct {
-	IssueGroups      []statusIssueGroupJSON      `json:"issue_groups"`
-	DeleteSafety     []statusDeleteSafetyJSON    `json:"delete_safety"`
-	Conflicts        []statusConflictJSON        `json:"conflicts"`
-	ConflictHistory  []statusConflictHistoryJSON `json:"conflict_history"`
-	NextActions      []string                    `json:"next_actions"`
-	StateStoreStatus string                      `json:"state_store_status"`
+type statusJSON struct {
+	Accounts []statusAccountJSON `json:"accounts"`
+	Summary  statusSummaryJSON   `json:"summary"`
+}
+
+type statusSummaryJSON struct {
+	TotalDrives int `json:"total_drives"`
+}
+
+type statusAccountJSON struct {
+	Email  string            `json:"email"`
+	Drives []statusDriveJSON `json:"drives"`
+}
+
+type statusDriveJSON struct {
+	CanonicalID string               `json:"canonical_id"`
+	SyncState   *statusSyncStateJSON `json:"sync_state,omitempty"`
+}
+
+type statusSyncStateJSON struct {
+	IssueGroups          []statusIssueGroupJSON      `json:"issue_groups"`
+	DeleteSafety         []statusDeleteSafetyJSON    `json:"delete_safety"`
+	DeleteSafetyTotal    int                         `json:"delete_safety_total"`
+	Conflicts            []statusConflictJSON        `json:"conflicts"`
+	ConflictsTotal       int                         `json:"conflicts_total"`
+	ConflictHistory      []statusConflictHistoryJSON `json:"conflict_history"`
+	ConflictHistoryTotal int                         `json:"conflict_history_total"`
+	NextActions          []string                    `json:"next_actions"`
+	ExamplesLimit        int                         `json:"examples_limit"`
+	Verbose              bool                        `json:"verbose"`
+	StateStoreStatus     string                      `json:"state_store_status"`
 }
 
 type statusIssueGroupJSON struct {
@@ -168,70 +192,157 @@ func queueConflictResolutionAndSync(t *testing.T, cfgPath string, env map[string
 	runCLIWithConfig(t, cfgPath, env, "sync")
 }
 
-func runDetailedStatusAllowError(
+func runStatusAllowError(
 	t *testing.T,
 	cfgPath string,
 	env map[string]string,
 	args ...string,
-) (detailedStatusJSON, string, string, error) {
+) (statusJSON, string, string, error) {
 	t.Helper()
 
 	statusArgs := append([]string{"status"}, args...)
 	statusArgs = append(statusArgs, "--json")
 	stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, env, statusArgs...)
 	if err != nil {
-		return detailedStatusJSON{}, stdout, stderr, err
+		return statusJSON{}, stdout, stderr, err
 	}
 
-	var output detailedStatusJSON
+	var output statusJSON
 	if err := json.Unmarshal([]byte(stdout), &output); err != nil {
-		return detailedStatusJSON{}, stdout, stderr, fmt.Errorf("decode status json: %w", err)
+		return statusJSON{}, stdout, stderr, fmt.Errorf("decode status json: %w", err)
 	}
 
 	return output, stdout, stderr, nil
 }
 
-func readDetailedStatus(t *testing.T, cfgPath string, env map[string]string, args ...string) detailedStatusJSON {
+func runStatusAllDrivesAllowError(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	args ...string,
+) (statusJSON, string, string, error) {
 	t.Helper()
 
-	output, stdout, stderr, err := runDetailedStatusAllowError(t, cfgPath, env, args...)
+	statusArgs := append([]string{"status"}, args...)
+	statusArgs = append(statusArgs, "--json")
+	stdout, stderr, err := runCLIWithConfigAllDrivesAllowError(t, cfgPath, env, statusArgs...)
+	if err != nil {
+		return statusJSON{}, stdout, stderr, err
+	}
+
+	var output statusJSON
+	if err := json.Unmarshal([]byte(stdout), &output); err != nil {
+		return statusJSON{}, stdout, stderr, fmt.Errorf("decode status json: %w", err)
+	}
+
+	return output, stdout, stderr, nil
+}
+
+func readStatus(t *testing.T, cfgPath string, env map[string]string, args ...string) statusJSON {
+	t.Helper()
+
+	output, stdout, stderr, err := runStatusAllowError(t, cfgPath, env, args...)
 	require.NoErrorf(t, err, "status command failed\nstdout: %s\nstderr: %s", stdout, stderr)
 
 	return output
 }
 
-func pollDetailedStatus(
+func readStatusAllDrives(t *testing.T, cfgPath string, env map[string]string, args ...string) statusJSON {
+	t.Helper()
+
+	output, stdout, stderr, err := runStatusAllDrivesAllowError(t, cfgPath, env, args...)
+	require.NoErrorf(t, err, "status command failed\nstdout: %s\nstderr: %s", stdout, stderr)
+
+	return output
+}
+
+func requireStatusDrive(
+	t *testing.T,
+	status statusJSON,
+	canonicalID string,
+) statusDriveJSON {
+	t.Helper()
+
+	for i := range status.Accounts {
+		for j := range status.Accounts[i].Drives {
+			driveStatus := status.Accounts[i].Drives[j]
+			if driveStatus.CanonicalID == canonicalID {
+				return driveStatus
+			}
+		}
+	}
+
+	require.FailNowf(t, "missing status drive", "canonical_id=%s", canonicalID)
+	return statusDriveJSON{}
+}
+
+func readStatusSyncState(t *testing.T, cfgPath string, env map[string]string, args ...string) statusSyncStateJSON {
+	t.Helper()
+	return readStatusSyncStateForDrive(t, cfgPath, env, drive, args...)
+}
+
+func readStatusSyncStateForDrive(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	canonicalID string,
+	args ...string,
+) statusSyncStateJSON {
+	t.Helper()
+
+	status := readStatus(t, cfgPath, env, args...)
+	driveStatus := requireStatusDrive(t, status, canonicalID)
+	require.NotNil(t, driveStatus.SyncState, "expected sync_state for %s", canonicalID)
+	return *driveStatus.SyncState
+}
+
+func pollStatusSyncState(
 	t *testing.T,
 	cfgPath string,
 	env map[string]string,
 	timeout time.Duration,
-	ready func(detailedStatusJSON) bool,
+	ready func(statusSyncStateJSON) bool,
 	args ...string,
-) detailedStatusJSON {
+) statusSyncStateJSON {
+	return pollStatusSyncStateForDrive(t, cfgPath, env, drive, timeout, ready, args...)
+}
+
+func pollStatusSyncStateForDrive(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	canonicalID string,
+	timeout time.Duration,
+	ready func(statusSyncStateJSON) bool,
+	args ...string,
+) statusSyncStateJSON {
 	t.Helper()
 
 	deadline := time.Now().Add(timeout)
-	var lastStatus detailedStatusJSON
+	var lastStatus statusSyncStateJSON
 	var lastStdout string
 	var lastStderr string
 	var lastErr error
 
 	for attempt := 0; ; attempt++ {
-		status, stdout, stderr, err := runDetailedStatusAllowError(t, cfgPath, env, args...)
+		status, stdout, stderr, err := runStatusAllowError(t, cfgPath, env, args...)
 		lastStdout = stdout
 		lastStderr = stderr
 		lastErr = err
 		if err == nil {
-			lastStatus = status
-			if ready(status) {
-				return status
+			driveStatus := requireStatusDrive(t, status, canonicalID)
+			if driveStatus.SyncState != nil {
+				lastStatus = *driveStatus.SyncState
+				if ready(lastStatus) {
+					return lastStatus
+				}
 			}
 		}
 
 		if time.Now().After(deadline) {
 			require.Failf(
 				t,
-				"pollDetailedStatus: timed out",
+				"pollStatusSyncState: timed out",
 				"after %v waiting for status predicate with args %v\nlast error: %v\nlast status: %+v\nlast stdout: %s\nlast stderr: %s",
 				timeout,
 				args,

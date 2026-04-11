@@ -93,7 +93,7 @@ time so persisted rows cannot drift into illegal combinations.
 
 The role model makes row meaning explicit instead of inferring it from
 `scope_key` and `next_retry_at`. Keyed by `(path, drive_id)`. Surfaced via
-single-drive `status`. Shared-folder read-only state is modeled as `held`
+per-drive `status`. Shared-folder read-only state is modeled as `held`
 blocked-write rows only; it does not keep a durable `boundary` row once the
 blocked write intent is gone.
 

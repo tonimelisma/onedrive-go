@@ -1,18 +1,44 @@
+Summary: 2 drives (1 ready, 1 paused, 1 accounts requiring auth), 3 issues, 2 pending, 1 retrying
+
 Account: Alice Example (alice@example.com) [personal]
   Org:   Contoso
   Auth:  ready
   Alice Personal (personal:alice@example.com)
     Sync dir:  /Users/alice/OneDrive
     State:     ready
-    Last sync: 2026-04-03T10:30:00Z (42 files)
+    Last sync: 2026-04-03T10:30:00Z
+    Duration:  1500ms
+    Files:     42
     Pending:   2 items
     Issues:    3
-    Issue groups:
-      - INVALID FILENAME (file scope): 1
-      - AUTHENTICATION REQUIRED (account your OneDrive account authorization): 1
-      - SHARED FOLDER WRITES BLOCKED (shortcut Shared/Docs): 1
     Retrying:  1 items
+    State DB:  healthy
     Last error: sync: network timeout
+
+    ISSUES
+    INVALID FILENAME (1 item)
+      The filename contains characters not allowed by OneDrive. Rename the file to remove invalid characters.
+
+      /invalid:name.txt
+      Next: Rename the file to remove invalid characters.
+
+    AUTHENTICATION REQUIRED (1 item)
+      The last sync attempt for this account was rejected by OneDrive. Run 'onedrive-go whoami' to re-check access, or 'onedrive-go login' to sign in again.
+      Scope: your OneDrive account authorization
+      Next: Run 'onedrive-go whoami' to re-check access, or 'onedrive-go login' to sign in again.
+
+    SHARED FOLDER WRITES BLOCKED (1 item)
+      This shared folder is read-only for your current write attempts. Downloads continue normally. Remove or ignore local write changes here, or ask the owner for edit permissions if the write was intended.
+      Scope: Shared/Docs
+
+      Shared/Docs/report.docx
+      Next: Remove or ignore local write changes here, or ask the owner for edit permissions if the write was intended.
+
+    DELETE SAFETY
+    No delete-safety entries.
+
+    CONFLICTS
+    No unresolved conflicts.
 
 Account: bob@example.com [business]
   Auth:  authentication_required
@@ -21,5 +47,3 @@ Account: bob@example.com [business]
   Bob Work (business:bob@example.com)
     Sync dir:  /Users/bob/WorkDrive
     State:     paused
-
-Summary: 2 drives (1 ready, 1 paused, 1 accounts requiring auth), 3 issues, 2 pending, 1 retrying

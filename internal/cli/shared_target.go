@@ -78,6 +78,8 @@ func resolveSharedTargetBootstrap(
 }
 
 func sharedTargetInput(cmd *cobra.Command, args []string) (string, bool) {
+	const driveCommandName = "drive"
+
 	switch cmd.Name() {
 	case "stat":
 		if len(args) == 1 && isSharedTargetInput(args[0]) {
@@ -92,7 +94,7 @@ func sharedTargetInput(cmd *cobra.Command, args []string) (string, bool) {
 			return args[1], true
 		}
 	case "add":
-		if parent := cmd.Parent(); parent != nil && parent.Name() == "drive" &&
+		if parent := cmd.Parent(); parent != nil && parent.Name() == driveCommandName &&
 			len(args) == 1 && isSharedTargetInput(args[0]) {
 			return args[0], true
 		}
