@@ -18,14 +18,14 @@ peer authority; it is rebuilt from store state when the engine starts.
 - Does Not Own: Graph calls, sync-root filesystem probing, failure classification policy, or multi-drive lifecycle.
 - Source of Truth: The embedded goose migration history and the SQLite rows it defines.
 - Allowed Side Effects: SQLite reads/writes and schema application only.
-- Mutable Runtime Owner: `SyncStore` owns its writable DB handle and internal rebuildable baseline cache. `Inspector` owns its own read-only DB handle. Neither runs background goroutines; both expose synchronous methods only.
+- Mutable Runtime Owner: `SyncStore` owns its writable DB handle and internal rebuildable baseline cache. `Inspector` and the package-level read helpers own short-lived read-only DB handles. Neither runs background goroutines; all store boundaries expose synchronous methods only.
 - Error Boundary: The store persists already-classified failure roles and categories from [error-model.md](error-model.md). It does not reinterpret raw external errors into new policy classes.
 
 ## Verified By
 
 | Behavior | Evidence |
 | --- | --- |
-| `Inspector` exposes a stable read-only issue/status projection so CLI status, daemon status, and issues read the same visible facts without opening writable store handles. | `TestInspector_ReadIssuesSnapshot`, `TestInspector_ReadStatusSnapshot_StaysConsistentWithIssuesSnapshot`, `TestOrchestrator_ControlSocket_StatusCountsUseReadOnlyInspector` |
+| One-shot projection readers use store-owned read-only helpers while broader admin readers still use `Inspector`, so CLI status/issues/conflicts/auth projection and daemon status all consume the same read boundary without opening writable store handles. | `TestReadStatusSnapshot`, `TestReadDurableIntentCounts_ReadOnlyDB`, `TestHasScopeBlockAtPath`, `TestListConflictsAtPath`, `TestInspector_ReadIssuesSnapshot`, `TestInspector_ReadStatusSnapshot_StaysConsistentWithIssuesSnapshot`, `TestOrchestrator_ControlSocket_StatusCountsUseReadOnlyInspector` |
 | Status issue-group projection preserves separate entries when the same summary key appears in multiple scopes. | `TestQuerySyncState_PreservesIssueGroupScopeContext`, `TestPrintStatusJSON_KeepsSameSummaryGroupsSeparatedByScope`, `TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope` |
 | Integrity inspection and safe repair stay store-owned, deterministic, and durable-intent aware. | `TestInspector_AuditIntegrityReportsPersistedProblems`, `TestSyncStore_AuditIntegrityReportsDurableIntentWorkflowProblems`, `TestSyncStore_RepairIntegritySafeNormalizesDeterministicViolations`, `TestSyncStore_RepairIntegritySafePreservesDurableUserIntent` |
 | Held-delete approval identity requires matching item ID and repeated approvals are idempotent. | `TestSyncStore_UpsertHeldDeletesRequiresItemID`, `TestSyncStore_HeldDeleteConsumeRequiresMatchingItemID`, `TestSyncStore_DeleteHeldDeleteRequiresMatchingItemID`, `TestSyncStore_ApproveHeldDeletesConcurrentCallsAreIdempotent` |
@@ -261,18 +261,33 @@ and rebuilds it after writes. That cache is internal to the store and is
 rebuildable from durable state; it is not a competing authority.
 
 Callers are expected to depend on narrow store-owned interfaces rather than a
-raw `*SyncStore` whenever they only need one slice of functionality. CLI
+raw `*SyncStore` whenever they only need one slice of functionality. One-shot
+projection readers use package-level read helpers, multi-read administrative
 readers use `Inspector`, runtime mutation paths use the writable store, and
-administrative tooling opens the smallest boundary that can answer its
-question.
+tooling opens the smallest boundary that can answer its question.
 
 ## Read-Only Inspection
 
 `Inspector` is the read-only companion to `SyncStore`. It is opened only from
 `internal/syncstore` and gives administrative readers a narrow projection of
-state without handing them raw SQL ownership.
+state without handing them raw SQL ownership. Package-level helper functions
+such as `ReadStatusSnapshot`, `ReadIssuesSnapshot`, `ReadDurableIntentCounts`,
+`HasScopeBlockAtPath`, and `ListConflictsAtPath` are the default one-shot
+projection entrypoints. They open one read-only inspector, run one store-owned
+query/projection, and close it before returning so callers do not own DB
+lifecycle just to answer one question.
 
 - `OpenInspector(dbPath, logger)` opens SQLite in read-only mode.
+- `ReadStatusSnapshot(ctx, dbPath, logger)` is the one-shot status reader used
+  by CLI status paths that need one projection and nothing else.
+- `ReadIssuesSnapshot(ctx, dbPath, history, logger)` is the one-shot `issues`
+  projection reader used by `issues list`.
+- `ReadDurableIntentCounts(ctx, dbPath, logger)` is the one-shot durable-intent
+  projection reader used by daemon status aggregation.
+- `HasScopeBlockAtPath(ctx, dbPath, key, logger)` is the one-shot auth/scope
+  probe used by offline auth-health projection and similar exact lookups.
+- `ListConflictsAtPath(ctx, dbPath, history, logger)` is the one-shot conflict
+  listing reader used by `conflicts` list/history.
 - `HasScopeBlock(ctx, key)` provides an exact read-only scope-block probe for
   CLI auth-health and other administrative readers that need one persisted
   signal without opening the writable `SyncStore` path.
@@ -302,13 +317,14 @@ state without handing them raw SQL ownership.
   CLI `status` turns those store-owned counters into human text, JSON fields,
   and next-step hints without opening writable store paths.
 - Control-socket `GET /v1/status` uses the same read-only durable-intent
-  counters instead of opening a writable `SyncStore`, so status probes do not
+  helper instead of opening a writable `SyncStore`, so status probes do not
   trigger writable-store close/checkpoint work.
 - `StatusSnapshot` and `IssuesSnapshot` share one visible-issue projection
   builder inside `Inspector`, so `status` and `issues` cannot silently drift
   on what counts as a visible issue family.
-- CLI `status` and `issues list` consume `Inspector`; they do not build their
-  own DSNs or call `sql.Open` directly.
+- CLI `status`, `issues list`, `conflicts` list/history, and offline auth
+  projection consume store-owned read helpers; they do not build their own
+  DSNs or call `sql.Open` directly.
 - `AuditIntegrity(ctx)` is the read-only integrity surface. It reports stable
   finding codes for impossible scope shapes, invalid auth timing, impossible
   retry/trial timing, scope/failure contradictions, visible-projection overlap,
@@ -380,7 +396,8 @@ errors because the durable-state transition itself is incomplete.
 
 ## Issues CLI
 
-`issues list` reads one store-owned `IssuesSnapshot` from `Inspector`.
+`issues list` reads one store-owned `IssuesSnapshot` through
+`syncstore.ReadIssuesSnapshot`.
 `syncstore` owns grouping, scope labeling, pending-retry aggregation, and held
 delete separation; CLI only formats that snapshot. Grouping and display use
 the persisted `scope_key`, `issue_type`, `category`, `failure_role`, and
@@ -401,7 +418,7 @@ summaries all consume one store-owned visible-issue taxonomy instead of
 rebuilding different views from raw tables.
 
 The broader CLI auth-health projection also reads `auth:account` from
-`scope_blocks` through `Inspector.HasScopeBlock`, but it combines that
+`scope_blocks` through `syncstore.HasScopeBlockAtPath`, but it combines that
 store-backed signal with token and account-profile discovery instead of
 replacing either source of truth.
 Offline/read-only surfaces only project the stored auth block. Live proof

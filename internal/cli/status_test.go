@@ -675,6 +675,44 @@ func TestQuerySyncState_DurableIntentCountsAndActionHints(t *testing.T) {
 	assert.Contains(t, info.ActionHints, "Run `onedrive-go conflicts` to inspect failures, then rerun `onedrive-go conflicts resolve`.")
 }
 
+// Validates: R-6.10.5
+func TestQuerySyncState_UsesReadOnlyProjectionHelper(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.DiscardHandler)
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "state.db")
+	store, err := syncstore.NewSyncStore(t.Context(), dbPath, logger)
+	require.NoError(t, err)
+
+	_, err = store.DB().ExecContext(t.Context(), `INSERT INTO conflicts
+		(id, drive_id, item_id, path, conflict_type, detected_at, resolution)
+		VALUES ('c1', 'd!1', 'item-1', '/conflict.txt', 'edit_edit', 1, 'unresolved')`)
+	require.NoError(t, err)
+
+	walPath := dbPath + "-wal"
+	shmPath := dbPath + "-shm"
+	require.Eventually(t, func() bool {
+		_, walErr := os.Stat(walPath)
+		_, shmErr := os.Stat(shmPath)
+		return walErr == nil && shmErr == nil
+	}, time.Second, 10*time.Millisecond, "WAL sidecars were not created")
+
+	require.NoError(t, os.Chmod(dbPath, 0o400))
+	// #nosec G302 -- test intentionally makes the directory read-only to prove status stays on the read-only path.
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() {
+		// #nosec G302 -- cleanup restores the tempdir so the writable store can close.
+		assert.NoError(t, os.Chmod(dir, 0o700))
+		assert.NoError(t, os.Chmod(dbPath, 0o600))
+		assert.NoError(t, store.Close(context.Background()))
+	})
+
+	info := querySyncState(dbPath, logger)
+	require.NotNil(t, info)
+	assert.Equal(t, 1, info.Issues)
+}
+
 // Validates: R-2.10.4, R-2.10.32
 func TestQuerySyncState_PreservesIssueGroupScopeContext(t *testing.T) {
 	t.Parallel()

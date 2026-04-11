@@ -8,8 +8,10 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -326,6 +328,55 @@ func TestConflictsService_RunList_UsesDedicatedCommandSurface(t *testing.T) {
 		require.NoError(t, json.Unmarshal(buf.Bytes(), &out))
 		require.Len(t, out.Conflicts, 2)
 	})
+}
+
+// Validates: R-6.10.5
+func TestConflictsService_RunList_UsesReadOnlyProjectionHelper(t *testing.T) {
+	setTestDriveHome(t)
+
+	canonicalID := driveid.MustCanonicalID("personal:readonly-conflicts@example.com")
+	require.NoError(t, os.MkdirAll(config.DefaultDataDir(), 0o750))
+
+	dbPath := config.DriveStatePath(canonicalID)
+	logger := slog.New(slog.DiscardHandler)
+	store, err := syncstore.NewSyncStore(t.Context(), dbPath, logger)
+	require.NoError(t, err)
+
+	_, err = store.DB().ExecContext(t.Context(), `INSERT INTO conflicts
+		(id, drive_id, item_id, path, conflict_type, detected_at, resolution)
+		VALUES ('c1', ?, 'item-1', '/conflict.txt', 'edit_edit', 1, 'unresolved')`,
+		canonicalID.String(),
+	)
+	require.NoError(t, err)
+
+	walPath := dbPath + "-wal"
+	shmPath := dbPath + "-shm"
+	require.Eventually(t, func() bool {
+		_, walErr := os.Stat(walPath)
+		_, shmErr := os.Stat(shmPath)
+		return walErr == nil && shmErr == nil
+	}, time.Second, 10*time.Millisecond, "WAL sidecars were not created")
+
+	dbDir := filepath.Dir(dbPath)
+	require.NoError(t, os.Chmod(dbPath, 0o400))
+	// #nosec G302 -- test intentionally makes the directory read-only to prove conflict listing stays on the read-only path.
+	require.NoError(t, os.Chmod(dbDir, 0o500))
+	t.Cleanup(func() {
+		// #nosec G302 -- cleanup restores the temp state dir so the writable store can close.
+		assert.NoError(t, os.Chmod(dbDir, 0o700))
+		assert.NoError(t, os.Chmod(dbPath, 0o600))
+		assert.NoError(t, store.Close(context.Background()))
+	})
+
+	var buf bytes.Buffer
+	svc := newConflictsService(&CLIContext{
+		Logger:       logger,
+		OutputWriter: &buf,
+		Cfg:          &config.ResolvedDrive{CanonicalID: canonicalID},
+	})
+
+	require.NoError(t, svc.runList(t.Context(), false))
+	assert.Contains(t, buf.String(), "/conflict.txt")
 }
 
 func TestConflictsService_RunResolve_AllDryRun(t *testing.T) {

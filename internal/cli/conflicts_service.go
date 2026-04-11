@@ -12,12 +12,6 @@ type conflictsService struct {
 	cc *CLIContext
 }
 
-type conflictsInspector interface {
-	ListConflicts(context.Context) ([]synctypes.ConflictRecord, error)
-	ListAllConflicts(context.Context) ([]synctypes.ConflictRecord, error)
-	Close() error
-}
-
 type conflictsResolver interface {
 	ListConflicts(context.Context) ([]synctypes.ConflictRecord, error)
 	ListAllConflicts(context.Context) ([]synctypes.ConflictRecord, error)
@@ -25,41 +19,12 @@ type conflictsResolver interface {
 	Close(context.Context) error
 }
 
-type emptyConflictsInspector struct{}
-
-func (emptyConflictsInspector) ListConflicts(context.Context) ([]synctypes.ConflictRecord, error) {
-	return nil, nil
-}
-
-func (emptyConflictsInspector) ListAllConflicts(context.Context) ([]synctypes.ConflictRecord, error) {
-	return nil, nil
-}
-
-func (emptyConflictsInspector) Close() error {
-	return nil
-}
-
 func newConflictsService(cc *CLIContext) *conflictsService {
 	return &conflictsService{cc: cc}
 }
 
 func (s *conflictsService) runList(ctx context.Context, history bool) error {
-	inspector, err := s.openInspector()
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if closeErr := inspector.Close(); closeErr != nil {
-			s.cc.Logger.Debug("close conflicts inspector", "error", closeErr.Error())
-		}
-	}()
-
-	var conflicts []synctypes.ConflictRecord
-	if history {
-		conflicts, err = inspector.ListAllConflicts(ctx)
-	} else {
-		conflicts, err = inspector.ListConflicts(ctx)
-	}
+	conflicts, err := s.listConflicts(ctx, history)
 	if err != nil {
 		return fmt.Errorf("list conflicts: %w", err)
 	}
@@ -121,22 +86,22 @@ func (s *conflictsService) runResolve(
 	)
 }
 
-func (s *conflictsService) openInspector() (conflictsInspector, error) {
+func (s *conflictsService) listConflicts(ctx context.Context, history bool) ([]synctypes.ConflictRecord, error) {
 	dbPath := s.cc.Cfg.StatePath()
 	if dbPath == "" {
 		return nil, fmt.Errorf("cannot determine state DB path for drive %q", s.cc.Cfg.CanonicalID)
 	}
 
 	if !managedPathExists(dbPath) {
-		return emptyConflictsInspector{}, nil
+		return nil, nil
 	}
 
-	inspector, err := syncstore.OpenInspector(dbPath, s.cc.Logger)
+	conflicts, err := syncstore.ListConflictsAtPath(ctx, dbPath, history, s.cc.Logger)
 	if err != nil {
-		return nil, fmt.Errorf("open sync store inspector: %w", err)
+		return nil, fmt.Errorf("read conflicts snapshot: %w", err)
 	}
 
-	return inspector, nil
+	return conflicts, nil
 }
 
 func (s *conflictsService) openResolver(ctx context.Context) (conflictsResolver, error) {
