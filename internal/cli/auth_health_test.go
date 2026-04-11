@@ -123,7 +123,7 @@ func TestStatusService_Run_JSONSurfacesSyncAuthRejectedOffline(t *testing.T) {
 		Flags:        CLIFlags{JSON: true},
 	})
 
-	require.NoError(t, svc.run())
+	require.NoError(t, svc.run(false))
 
 	var decoded statusOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
@@ -151,7 +151,7 @@ func TestStatusService_Run_DoesNotClearPersistedAuthScope(t *testing.T) {
 		CfgPath:      cfgPath,
 	})
 
-	require.NoError(t, svc.run())
+	require.NoError(t, svc.run(false))
 	assert.True(t, hasPersistedAuthScope(t.Context(), cid.Email(), testDriveLogger(t)))
 }
 

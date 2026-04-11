@@ -339,7 +339,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode synctypes.SyncMo
 	if err := rt.loadWatchState(ctx); err != nil {
 		return err
 	}
-	if processErr := rt.engine.processQueuedConflictResolutions(ctx); processErr != nil {
+	if _, processErr := rt.engine.processQueuedConflictResolutions(ctx); processErr != nil {
 		return processErr
 	}
 	bl, err := rt.engine.baseline.Load(ctx)

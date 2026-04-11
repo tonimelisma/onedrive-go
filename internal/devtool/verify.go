@@ -380,7 +380,7 @@ func fullE2EParallelMiscTestNames() []string {
 		"TestE2E_Cp_ForceOverwrite",
 		"TestE2E_Mv_Folder",
 		"TestE2E_Issues_ReadOnlyLifecycle",
-		"TestE2E_Verify_JSON",
+		"TestE2E_Status_DetailedJSON",
 		"TestE2E_Status_NoDrives",
 		"TestE2E_Sync_QuietMode",
 		"TestE2E_Sync_NosyncGuard",

@@ -119,7 +119,7 @@ func describeCoreSummary(key SummaryKey) (SummaryDescriptor, bool) {
 			Key:        SummaryConflictUnresolved,
 			Title:      "UNRESOLVED CONFLICT",
 			Reason:     "Local and remote changes diverged and both versions were preserved.",
-			Action:     "Review the conflict copies, then run 'onedrive-go conflicts resolve <path>'.",
+			Action:     "Review the conflict copies, then run 'onedrive-go resolve local|remote|both <path>'.",
 			LogSummary: "unresolved conflict",
 		}, true
 	case string(SummaryAuthenticationRequired):
@@ -217,7 +217,7 @@ func describeFilesystemSummary(key SummaryKey) (SummaryDescriptor, bool) {
 			Key:        SummaryHeldDeletes,
 			Title:      "HELD DELETES",
 			Reason:     "Delete safety threshold triggered - too many deletes in one batch.",
-			Action:     "Run `issues approve-deletes` to approve, or investigate first.",
+			Action:     "Run `resolve deletes` to approve, or investigate first.",
 			LogSummary: "held deletes",
 		}, true
 	case string(SummaryCaseCollision):

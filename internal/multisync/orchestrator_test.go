@@ -829,8 +829,7 @@ func TestOrchestrator_OneShotControlSocket_StatusAndMutationConflict(t *testing.
 	assert.Equal(t, []string{rd.CanonicalID.String()}, status.Drives)
 	assert.Zero(t, status.PendingHeldDeleteApprovals)
 	assert.Zero(t, status.PendingConflictRequests)
-	assert.Zero(t, status.ResolvingConflictRequests)
-	assert.Zero(t, status.FailedConflictRequests)
+	assert.Zero(t, status.ApplyingConflictRequests)
 
 	client := controlTestClient(cfg.ControlSocketPath)
 	req, err := http.NewRequestWithContext(
@@ -979,8 +978,7 @@ func TestOrchestrator_ControlSocket_StatusCountsUseReadOnlyInspector(t *testing.
 	status := getControlStatus(t, cfg.ControlSocketPath)
 	assert.Equal(t, 1, status.PendingHeldDeleteApprovals)
 	assert.Equal(t, 1, status.PendingConflictRequests)
-	assert.Zero(t, status.ResolvingConflictRequests)
-	assert.Zero(t, status.FailedConflictRequests)
+	assert.Zero(t, status.ApplyingConflictRequests)
 
 	stop := postControlJSON(t, cfg.ControlSocketPath, synccontrol.PathStop, nil)
 	assert.Equal(t, synccontrol.StatusStopping, stop.Status)
@@ -999,8 +997,7 @@ func assertControlStatusCounts(t *testing.T, socketPath string) {
 	status := getControlStatus(t, socketPath)
 	assert.Equal(t, 1, status.PendingHeldDeleteApprovals)
 	assert.Equal(t, 1, status.PendingConflictRequests)
-	assert.Zero(t, status.ResolvingConflictRequests)
-	assert.Zero(t, status.FailedConflictRequests)
+	assert.Zero(t, status.ApplyingConflictRequests)
 }
 
 func assertControlTypedIntentErrors(t *testing.T, socketPath, cid string) {
@@ -1033,14 +1030,14 @@ func assertControlTypedIntentErrors(t *testing.T, socketPath, cid string) {
 	)
 	assert.Equal(t, synccontrol.ErrorConflictNotFound, missingConflict.Code)
 
-	differentStrategy := postControlJSONStatus(
+	overwrittenStrategy := postControlJSONStatus(
 		t,
 		socketPath,
 		synccontrol.ConflictResolutionRequestPath(cid, "conflict-1"),
 		[]byte(`{"resolution":"keep_remote"}`),
-		http.StatusConflict,
+		http.StatusOK,
 	)
-	assert.Equal(t, synccontrol.ErrorConflictDifferentStrategy, differentStrategy.Code)
+	assert.Equal(t, synccontrol.StatusQueued, overwrittenStrategy.Status)
 }
 
 func assertDurableIntentStoreUpdated(t *testing.T, rd *config.ResolvedDrive) {
@@ -1061,8 +1058,8 @@ func assertDurableIntentStoreUpdated(t *testing.T, rd *config.ResolvedDrive) {
 
 	conflict, err := reopened.GetConflictRequest(t.Context(), "conflict-1")
 	require.NoError(t, err)
-	assert.Equal(t, synctypes.ConflictStateResolutionRequested, conflict.State)
-	assert.Equal(t, synctypes.ResolutionKeepLocal, conflict.RequestedResolution)
+	assert.Equal(t, synctypes.ConflictStateQueued, conflict.State)
+	assert.Equal(t, synctypes.ResolutionKeepRemote, conflict.RequestedResolution)
 }
 
 func seedControlSocketIntentStore(t *testing.T, rd *config.ResolvedDrive) {

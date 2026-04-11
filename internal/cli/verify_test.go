@@ -46,7 +46,7 @@ type verifyBaselineRow struct {
 	localSize int64
 }
 
-func setupVerifyFixture(t *testing.T, syncDir string) (string, driveid.CanonicalID, string) {
+func setupVerifyFixture(t *testing.T, syncDir string) (driveid.CanonicalID, string) {
 	t.Helper()
 
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
@@ -58,7 +58,7 @@ func setupVerifyFixture(t *testing.T, syncDir string) (string, driveid.Canonical
 	dbPath := config.DriveStatePath(cid)
 	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o700))
 
-	return cfgPath, cid, dbPath
+	return cid, dbPath
 }
 
 func insertVerifyBaselineRows(t *testing.T, dbPath string, rows ...verifyBaselineRow) {
@@ -142,16 +142,8 @@ func TestPrintVerifyJSON(t *testing.T) {
 	assert.Equal(t, *expected, parsed)
 }
 
-// Validates: R-2.7
-func TestNewVerifyCmd_Structure(t *testing.T) {
-	t.Parallel()
-
-	cmd := newVerifyCmd()
-	assert.Equal(t, "verify", cmd.Use)
-}
-
-func newVerifyContext(output io.Writer, jsonOutput bool, syncDir string, cid driveid.CanonicalID) context.Context {
-	cc := &CLIContext{
+func newVerifyCLIContext(output io.Writer, jsonOutput bool, syncDir string, cid driveid.CanonicalID) *CLIContext {
+	return &CLIContext{
 		Flags:        CLIFlags{JSON: jsonOutput},
 		Logger:       slog.New(slog.DiscardHandler),
 		OutputWriter: output,
@@ -160,8 +152,6 @@ func newVerifyContext(output io.Writer, jsonOutput bool, syncDir string, cid dri
 			SyncDir:     syncDir,
 		},
 	}
-
-	return context.WithValue(context.Background(), cliContextKey{}, cc)
 }
 
 // Validates: R-2.7
@@ -216,30 +206,27 @@ func TestRunVerify_PropagatesSyncStoreOpenError(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", xdgFile)
 
 	cid := driveid.MustCanonicalID("personal:test@example.com")
-	cmd := newVerifyCmd()
-	cmd.SetContext(newVerifyContext(io.Discard, false, t.TempDir(), cid))
+	svc := newVerifyService(newVerifyCLIContext(io.Discard, false, t.TempDir(), cid))
 
-	err := runVerify(cmd, nil)
+	err := svc.run(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "open sync store")
 }
 
 // Validates: R-2.7
 func TestRunVerify_RequiresSyncDir(t *testing.T) {
-	cmd := newVerifyCmd()
-	cmd.SetContext(newVerifyContext(io.Discard, false, "", driveid.MustCanonicalID("personal:test@example.com")))
+	svc := newVerifyService(newVerifyCLIContext(io.Discard, false, "", driveid.MustCanonicalID("personal:test@example.com")))
 
-	err := runVerify(cmd, nil)
+	err := svc.run(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sync_dir not configured")
 }
 
 // Validates: R-2.7
 func TestRunVerify_RequiresStatePath(t *testing.T) {
-	cmd := newVerifyCmd()
-	cmd.SetContext(newVerifyContext(io.Discard, false, t.TempDir(), driveid.CanonicalID{}))
+	svc := newVerifyService(newVerifyCLIContext(io.Discard, false, t.TempDir(), driveid.CanonicalID{}))
 
-	err := runVerify(cmd, nil)
+	err := svc.run(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot determine state DB path")
 }
@@ -247,13 +234,12 @@ func TestRunVerify_RequiresStatePath(t *testing.T) {
 // Validates: R-2.7
 func TestRunVerify_Success(t *testing.T) {
 	syncDir := t.TempDir()
-	_, cid, _ := setupVerifyFixture(t, syncDir)
+	cid, _ := setupVerifyFixture(t, syncDir)
 
-	cmd := newVerifyCmd()
 	var out bytes.Buffer
-	cmd.SetContext(newVerifyContext(&out, false, syncDir, cid))
+	svc := newVerifyService(newVerifyCLIContext(&out, false, syncDir, cid))
 
-	require.NoError(t, runVerify(cmd, nil))
+	require.NoError(t, svc.run(context.Background()))
 
 	assert.Contains(t, out.String(), "All files verified successfully.")
 }
@@ -261,13 +247,12 @@ func TestRunVerify_Success(t *testing.T) {
 // Validates: R-2.7.1
 func TestRunVerify_SuccessJSON(t *testing.T) {
 	syncDir := t.TempDir()
-	_, cid, _ := setupVerifyFixture(t, syncDir)
+	cid, _ := setupVerifyFixture(t, syncDir)
 
-	cmd := newVerifyCmd()
 	var out bytes.Buffer
-	cmd.SetContext(newVerifyContext(&out, true, syncDir, cid))
+	svc := newVerifyService(newVerifyCLIContext(&out, true, syncDir, cid))
 
-	require.NoError(t, runVerify(cmd, nil))
+	require.NoError(t, svc.run(context.Background()))
 
 	var report synctypes.VerifyReport
 	require.NoError(t, json.Unmarshal(out.Bytes(), &report))
@@ -278,7 +263,7 @@ func TestRunVerify_SuccessJSON(t *testing.T) {
 // Validates: R-2.7
 func TestRunVerify_ReturnsMismatchSentinel(t *testing.T) {
 	syncDir := t.TempDir()
-	_, cid, dbPath := setupVerifyFixture(t, syncDir)
+	cid, dbPath := setupVerifyFixture(t, syncDir)
 	require.NoError(t, os.MkdirAll(filepath.Join(syncDir, "docs"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(syncDir, "docs", "readme.txt"), []byte("hello"), 0o600))
 	insertVerifyBaselineRows(t, dbPath, verifyBaselineRow{
@@ -287,11 +272,10 @@ func TestRunVerify_ReturnsMismatchSentinel(t *testing.T) {
 		localSize: 5,
 	})
 
-	cmd := newVerifyCmd()
 	var out bytes.Buffer
-	cmd.SetContext(newVerifyContext(&out, false, syncDir, cid))
+	svc := newVerifyService(newVerifyCLIContext(&out, false, syncDir, cid))
 
-	err := runVerify(cmd, nil)
+	err := svc.run(context.Background())
 
 	require.ErrorIs(t, err, errVerifyMismatch)
 	assert.Contains(t, out.String(), "Mismatches: 1")

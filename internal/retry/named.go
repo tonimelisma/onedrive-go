@@ -9,7 +9,7 @@ const (
 	driveDiscoveryAttempts       = 5
 	rootChildrenAttempts         = 3
 	downloadMetadataAttempts     = 4
-	simpleUploadMtimeAttempts    = 4
+	simpleUploadMtimeAttempts    = 6
 	uploadSessionCreateAttempts  = 6
 	simpleUploadCreateAttempts   = 7
 	pathVisibilityAttempts       = 10
@@ -23,7 +23,7 @@ const (
 	downloadMetadataBaseDelay    = 250 * time.Millisecond
 	downloadMetadataMaxDelay     = 2 * time.Second
 	simpleUploadMtimeBaseDelay   = 250 * time.Millisecond
-	simpleUploadMtimeMaxDelay    = 2 * time.Second
+	simpleUploadMtimeMaxDelay    = 4 * time.Second
 	uploadSessionCreateBaseDelay = 250 * time.Millisecond
 	uploadSessionCreateMaxDelay  = 4 * time.Second
 	simpleUploadCreateBaseDelay  = 250 * time.Millisecond

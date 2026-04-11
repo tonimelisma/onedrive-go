@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/spf13/cobra"
-
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -22,103 +20,6 @@ const (
 	resolutionKeepRemote = synctypes.ResolutionKeepRemote
 	resolutionKeepBoth   = synctypes.ResolutionKeepBoth
 )
-
-func newConflictsCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "conflicts",
-		Short: "List and resolve sync conflicts",
-		Long: `Display sync conflicts for the selected drive.
-
-Shows unresolved conflicts by default. Use --history to include resolved
-conflicts, or the resolve subcommand to choose how unresolved conflicts are
-handled.`,
-		Args: cobra.NoArgs,
-		RunE: runConflictsList,
-	}
-
-	cmd.Flags().Bool("history", false, "include resolved conflicts")
-	cmd.AddCommand(newConflictsResolveCmd())
-
-	return cmd
-}
-
-func runConflictsList(cmd *cobra.Command, _ []string) error {
-	history, err := cmd.Flags().GetBool("history")
-	if err != nil {
-		return fmt.Errorf("read --history flag: %w", err)
-	}
-
-	return newConflictsService(mustCLIContext(cmd.Context())).runList(cmd.Context(), history)
-}
-
-func newConflictsResolveCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "resolve [path-or-id]",
-		Short: "Resolve sync conflicts",
-		Long: `Resolve sync conflicts with a chosen strategy.
-
-Strategies:
-  --keep-local   Upload the local file to overwrite remote
-  --keep-remote  Download the remote file to overwrite local
-  --keep-both    Keep both versions as-is
-
-Use --all to resolve all unresolved conflicts with the chosen strategy.
-Without --all, a path or conflict ID argument is required.`,
-		Args: cobra.MaximumNArgs(1),
-		RunE: runConflictsResolve,
-	}
-
-	cmd.Flags().Bool("keep-local", false, "upload local file to overwrite remote")
-	cmd.Flags().Bool("keep-remote", false, "download remote file to overwrite local")
-	cmd.Flags().Bool("keep-both", false, "keep both versions as-is")
-	cmd.Flags().Bool("all", false, "resolve all unresolved conflicts")
-	cmd.Flags().Bool("dry-run", false, "preview resolution without executing")
-	cmd.MarkFlagsMutuallyExclusive("keep-local", "keep-remote", "keep-both")
-
-	return cmd
-}
-
-func runConflictsResolve(cmd *cobra.Command, args []string) error {
-	resolution, err := resolveStrategy(cmd)
-	if err != nil {
-		return err
-	}
-
-	resolveAll := cmd.Flags().Changed("all")
-	dryRun, err := cmd.Flags().GetBool("dry-run")
-	if err != nil {
-		return fmt.Errorf("read --dry-run flag: %w", err)
-	}
-
-	if !resolveAll && len(args) == 0 {
-		return fmt.Errorf("specify a conflict path or ID, or use --all to resolve all conflicts")
-	}
-	if resolveAll && len(args) > 0 {
-		return fmt.Errorf("--all and a specific conflict argument are mutually exclusive")
-	}
-
-	return newConflictsService(mustCLIContext(cmd.Context())).runResolve(cmd.Context(), args, resolution, resolveAll, dryRun)
-}
-
-// resolveStrategy returns the chosen resolution string from flags.
-func resolveStrategy(cmd *cobra.Command) (string, error) {
-	keepLocal := cmd.Flags().Changed("keep-local")
-	keepRemote := cmd.Flags().Changed("keep-remote")
-	keepBoth := cmd.Flags().Changed("keep-both")
-
-	if !keepLocal && !keepRemote && !keepBoth {
-		return "", fmt.Errorf("specify a resolution strategy: --keep-local, --keep-remote, or --keep-both")
-	}
-
-	switch {
-	case keepLocal:
-		return resolutionKeepLocal, nil
-	case keepRemote:
-		return resolutionKeepRemote, nil
-	default:
-		return resolutionKeepBoth, nil
-	}
-}
 
 func resolveEachConflict(
 	cc *CLIContext,
@@ -208,12 +109,10 @@ func writeConflictResolutionStatus(cc *CLIContext, conflictPath, resolution, sta
 		cc.Statusf("Queued %s as %s (engine will resolve on the next sync pass)\n", conflictPath, resolution)
 	case syncstore.ConflictRequestAlreadyQueued:
 		cc.Statusf("Resolution already queued for %s as %s\n", conflictPath, resolution)
-	case syncstore.ConflictRequestAlreadyResolving:
-		cc.Statusf("Resolution already in progress for %s\n", conflictPath)
+	case syncstore.ConflictRequestAlreadyApplying:
+		cc.Statusf("Resolution already applying for %s\n", conflictPath)
 	case syncstore.ConflictRequestAlreadyResolved:
 		cc.Statusf("Conflict %s is already resolved\n", conflictPath)
-	case syncstore.ConflictRequestDifferentStrategy:
-		cc.Statusf("Resolution already queued for %s with a different strategy\n", conflictPath)
 	default:
 		cc.Statusf("Resolution request for %s returned status %s\n", conflictPath, status)
 	}

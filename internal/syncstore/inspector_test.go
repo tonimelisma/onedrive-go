@@ -147,9 +147,8 @@ func TestInspector_ReadStatusSnapshot_DurableIntentCounts(t *testing.T) {
 
 	snapshot := inspector.ReadStatusSnapshot(ctx)
 	assert.Equal(t, 1, snapshot.DurableIntents.PendingHeldDeleteApprovals)
-	assert.Equal(t, 1, snapshot.DurableIntents.PendingConflictRequests)
-	assert.Equal(t, 1, snapshot.DurableIntents.ResolvingConflictRequests)
-	assert.Equal(t, 1, snapshot.DurableIntents.FailedConflictRequests)
+	assert.Equal(t, 2, snapshot.DurableIntents.PendingConflictRequests)
+	assert.Equal(t, 1, snapshot.DurableIntents.ApplyingConflictRequests)
 }
 
 // Validates: R-2.10.47
@@ -266,6 +265,175 @@ func TestInspector_ReadIssuesSnapshot(t *testing.T) {
 	history, err := inspector.ReadIssuesSnapshot(ctx, true)
 	require.NoError(t, err)
 	assert.Len(t, history.Conflicts, 2)
+}
+
+// Validates: R-2.3.3, R-2.3.4, R-2.3.6
+func TestInspector_ReadDetailedStatusSnapshot(t *testing.T) {
+	t.Parallel()
+
+	dbPath, ctx := seedDetailedStatusSnapshotFixture(t)
+
+	inspector, err := OpenInspector(dbPath, newTestLogger(t))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, inspector.Close())
+	})
+
+	snapshot, err := inspector.ReadDetailedStatusSnapshot(ctx, true)
+	require.NoError(t, err)
+
+	assert.Equal(t, "2026-04-10T12:00:00Z", snapshot.SyncMetadata["last_sync_time"])
+	assert.Equal(t, 1, snapshot.PendingSyncItems)
+	require.Len(t, snapshot.IssueGroups, 1)
+	assert.Equal(t, synctypes.SummaryInvalidFilename, snapshot.IssueGroups[0].SummaryKey)
+
+	assert.ElementsMatch(t, []DeleteSafetySnapshot{
+		{Path: "/held-delete.txt", State: synctypes.HeldDeleteStateHeld, LastSeenAt: 10},
+		{Path: "/approved-delete.txt", State: synctypes.HeldDeleteStateApproved, LastSeenAt: 20, ApprovedAt: 20},
+	}, snapshot.DeleteSafety)
+
+	require.Len(t, snapshot.Conflicts, 2)
+	needsChoice := findConflictStatusSnapshot(t, snapshot.Conflicts, "conflict-needs-choice")
+	assert.Equal(t, "/needs-choice.txt", needsChoice.Path)
+	assert.Equal(t, "edit_edit", needsChoice.ConflictType)
+	assert.Equal(t, int64(1), needsChoice.DetectedAt)
+	assert.Empty(t, needsChoice.RequestedResolution)
+	assert.Empty(t, needsChoice.RequestState)
+	assert.Empty(t, needsChoice.LastRequestError)
+
+	queuedConflict := findConflictStatusSnapshot(t, snapshot.Conflicts, "conflict-queued")
+	assert.Equal(t, "/queued.txt", queuedConflict.Path)
+	assert.Equal(t, "edit_delete", queuedConflict.ConflictType)
+	assert.Equal(t, int64(2), queuedConflict.DetectedAt)
+	assert.Equal(t, synctypes.ResolutionKeepLocal, queuedConflict.RequestedResolution)
+	assert.Equal(t, synctypes.ConflictStateQueued, queuedConflict.RequestState)
+	assert.Equal(t, assert.AnError.Error(), queuedConflict.LastRequestError)
+	assert.NotZero(t, queuedConflict.LastRequestedAt)
+
+	require.Len(t, snapshot.ConflictHistory, 1)
+	assert.Equal(t, "/resolved.txt", snapshot.ConflictHistory[0].Path)
+	assert.Equal(t, synctypes.ResolutionKeepBoth, snapshot.ConflictHistory[0].Resolution)
+	assert.Equal(t, int64(30), snapshot.ConflictHistory[0].ResolvedAt)
+	assert.Equal(t, synctypes.ResolvedByUser, snapshot.ConflictHistory[0].ResolvedBy)
+}
+
+func seedDetailedStatusSnapshotFixture(t *testing.T) (string, context.Context) {
+	t.Helper()
+
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	store, err := NewSyncStore(t.Context(), dbPath, newTestLogger(t))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, store.Close(context.Background()))
+	})
+
+	ctx := t.Context()
+	seedDetailedStatusMetadata(t, store, ctx)
+	seedDetailedStatusFailures(t, store, ctx)
+	seedDetailedStatusDeleteSafety(t, store, ctx)
+	seedDetailedStatusConflicts(t, store, ctx)
+
+	return dbPath, ctx
+}
+
+func seedDetailedStatusMetadata(t *testing.T, store *SyncStore, ctx context.Context) {
+	t.Helper()
+
+	_, err := store.DB().ExecContext(ctx, `INSERT INTO sync_metadata (key, value) VALUES
+		('last_sync_time', '2026-04-10T12:00:00Z'),
+		('last_sync_duration_ms', '2000')`)
+	require.NoError(t, err)
+}
+
+func seedDetailedStatusFailures(t *testing.T, store *SyncStore, ctx context.Context) {
+	t.Helper()
+
+	_, err := store.DB().ExecContext(ctx, `INSERT INTO remote_state
+		(drive_id, item_id, path, parent_id, item_type, sync_status, observed_at)
+		VALUES
+		(?, 'pending-item', '/pending.txt', 'root', 'file', 'pending_download', 1),
+		(?, 'synced-item', '/synced.txt', 'root', 'file', 'synced', 1)`,
+		testDriveID,
+		testDriveID,
+	)
+	require.NoError(t, err)
+
+	_, err = store.DB().ExecContext(ctx, `INSERT INTO sync_failures
+		(path, drive_id, direction, action_type, failure_role, category, issue_type, failure_count, first_seen_at, last_seen_at)
+		VALUES
+		('/invalid:name.txt', ?, 'upload', 'upload', 'item', 'actionable', ?, 1, 1, 1)`,
+		testDriveID,
+		synctypes.IssueInvalidFilename,
+	)
+	require.NoError(t, err)
+}
+
+func seedDetailedStatusDeleteSafety(t *testing.T, store *SyncStore, ctx context.Context) {
+	t.Helper()
+
+	require.NoError(t, store.UpsertHeldDeletes(ctx, []synctypes.HeldDeleteRecord{
+		{
+			DriveID:       driveid.New(testDriveID),
+			ActionType:    synctypes.ActionRemoteDelete,
+			Path:          "/held-delete.txt",
+			ItemID:        "held-item",
+			State:         synctypes.HeldDeleteStateHeld,
+			HeldAt:        1,
+			LastPlannedAt: 10,
+		},
+		{
+			DriveID:       driveid.New(testDriveID),
+			ActionType:    synctypes.ActionRemoteDelete,
+			Path:          "/approved-delete.txt",
+			ItemID:        "approved-item",
+			State:         synctypes.HeldDeleteStateApproved,
+			HeldAt:        2,
+			ApprovedAt:    20,
+			LastPlannedAt: 20,
+		},
+	}))
+}
+
+func seedDetailedStatusConflicts(t *testing.T, store *SyncStore, ctx context.Context) {
+	t.Helper()
+
+	_, err := store.DB().ExecContext(ctx, `INSERT INTO conflicts
+		(id, drive_id, item_id, path, conflict_type, detected_at, resolution, resolved_at, resolved_by)
+		VALUES
+		('conflict-needs-choice', ?, 'item-1', '/needs-choice.txt', 'edit_edit', 1, 'unresolved', NULL, NULL),
+		('conflict-queued', ?, 'item-2', '/queued.txt', 'edit_delete', 2, 'unresolved', NULL, NULL),
+		('conflict-resolved', ?, 'item-3', '/resolved.txt', 'edit_edit', 3, 'keep_both', 30, 'user')`,
+		testDriveID,
+		testDriveID,
+		testDriveID,
+	)
+	require.NoError(t, err)
+
+	request, err := store.RequestConflictResolution(ctx, "conflict-queued", synctypes.ResolutionKeepLocal)
+	require.NoError(t, err)
+	assert.Equal(t, ConflictRequestQueued, request.Status)
+
+	_, ok, err := store.ClaimConflictResolution(ctx, "conflict-queued")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, store.MarkConflictResolutionFailed(ctx, "conflict-queued", assert.AnError))
+}
+
+func findConflictStatusSnapshot(
+	t *testing.T,
+	conflicts []ConflictStatusSnapshot,
+	id string,
+) ConflictStatusSnapshot {
+	t.Helper()
+
+	for _, conflict := range conflicts {
+		if conflict.ID == id {
+			return conflict
+		}
+	}
+
+	require.FailNowf(t, "missing conflict snapshot", "id=%s", id)
+	return ConflictStatusSnapshot{}
 }
 
 // Validates: R-2.14.3, R-2.10.47

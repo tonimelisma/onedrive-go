@@ -95,12 +95,12 @@ Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../
 ## LI-20260408-01: Immediate post-simple-upload mtime PATCH returned `404 itemNotFound`
 
 First seen: 2026-04-08  
-Last seen: 2026-04-08  
+Last seen: 2026-04-10  
 Area: fast E2E, CLI `put`, simple-upload finalization  
 Suite / test: local `go run ./cmd/devtool verify default`, `TestE2E_RoundTrip/rm_permanent` setup `put`  
 Classification: graph quirk  
 Status: mitigated  
-Recurring: no  
+Recurring: yes  
 Summary: Graph can return a concrete item ID from a successful small-file
 simple upload and then immediately reject the follow-on
 `UpdateFileSystemInfo` PATCH for that same item with `404 itemNotFound`. The
@@ -122,7 +122,10 @@ Evidence:
 Resolution / mitigation: simple-upload finalization now owns a narrow bounded
 retry for the exact follow-on `UpdateFileSystemInfo` `404 itemNotFound` case.
 Direct `UpdateFileSystemInfo()` calls remain strict; only the immediate
-post-simple-upload patch gets this normalization.  
+post-simple-upload patch gets this normalization. A later April 10, 2026 fast
+E2E verifier run hit the same family again during `TestE2E_Sync_Conflicts`
+while overwriting a remote file via CLI `put`, so the retry budget was widened
+to 6 total attempts with a 250ms base, 2x multiplier, no jitter, and 4s max.  
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../design/graph-client.md), [drive-transfers.md](../design/drive-transfers.md), [transfers.md](../requirements/transfers.md)
 
 ## LI-20260405-06: Strict auth preflight treated transient `/me` or `/me/drives` glitches as durable failure
@@ -314,9 +317,9 @@ Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [drive-transfers.md](
 ## LI-20260405-07: Destination path stayed unreadable after successful mutation
 
 First seen: 2026-04-05
-Last seen: 2026-04-09
+Last seen: 2026-04-10
 Area: `e2e_full`, CLI mutation follow-on path reads
-Suite / test: `verify e2e-full`, `TestE2E_Sync_EditEditConflict_ResolveKeepRemote`; later `TestE2E_Sync_BidirectionalMerge`, `TestE2E_Conflicts_ResolveKeepBoth`, and local `verify default` scoped-sync fixture setup
+Suite / test: `verify e2e-full`, `TestE2E_Sync_EditEditConflict_ResolveKeepRemote`; later `TestE2E_Sync_BidirectionalMerge`, `TestE2E_Conflicts_ResolveKeepBoth`, local `verify default` scoped-sync fixture setup, and `TestE2E_RoundTrip/rm_permanent`
 Classification: graph quirk
 Status: mitigated
 Recurring: yes  
@@ -417,6 +420,18 @@ Evidence:
   and timed out waiting for a follow-on by-path read that the product does not
   promise. The final request ID on the last failing `stat` was
   `fe8a7c70-ab69-44ed-9be3-c2ff83b05684`.
+- On April 10, 2026 local `go run ./cmd/devtool verify default` reproduced the
+  same family again in `TestE2E_RoundTrip/rm_permanent`, but this time the log
+  proved the `put` command had already crossed its own visibility boundary:
+  `put /onedrive-go-e2e-1775871160938777000/perm-test.txt` ended with a
+  successful exact-path `GET .../root:/onedrive-go-e2e-1775871160938777000/perm-test.txt: = 200`
+  and then the harness's separate follow-on `stat` on the same path kept
+  returning `404 itemNotFound` for more than two minutes. Representative
+  request IDs from that recurrence included `105db850-9f4d-41a6-8a60-cad58732c009`
+  for the product-owned success read, followed by repeated harness failures
+  such as `75777728-d7e4-4172-91ef-5a183c209999`,
+  `a172eda8-3091-43e3-a20c-d355f14e93c8`, and
+  `9ad0757a-d809-46cb-ae4f-cbff943f1bcf`.
 - On April 9, 2026 local `go run ./cmd/devtool verify default` reproduced the
   same family twice in sync-scope fixture setup. First,
   `TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile` uploaded
@@ -465,6 +480,9 @@ being the first one to converge after a mutation.
 non-root deletes, but once delete intent has already proved the target path is
 gone it downgrades a pure `PathNotVisibleError` on that follow-on parent read
 to a warning instead of reporting a false delete failure. For
+`TestE2E_RoundTrip/rm_permanent`, the harness now uses that same `stat`-or-parent-`ls`
+visibility helper before issuing the permanent delete instead of insisting on a
+second exact-path `stat` after `put` already reported success. For
 `TestE2E_Sync_DriveRemoveAndReAdd`, the harness now asserts the thing the test
 actually claims: the durable `baseline` rows survive config removal and are
 reused after drive re-add. It no longer treats follow-on remote path
@@ -652,6 +670,13 @@ Evidence:
   completed successfully in about 21 seconds, which confirmed the same
   intermittent delta-lag family rather than a deterministic product
   regression.
+- The same April 10, 2026 `go run ./cmd/devtool verify default` run later hit
+  `TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload` again:
+  after removing `.odignore`, repeated `sync --download-only` passes kept
+  reporting `No changes detected` while the root delta feed still omitted the
+  newly unblocked scoped subtree. That test is also a scope-transition case,
+  so it now uses the existing 3-minute `remoteScopeTransitionTimeout` instead
+  of the shorter 90-second generic sync-convergence budget.
 Resolution / mitigation: The fast E2E tests now wait for the real product outcome, the expected local sync result, instead of assuming the first pass after direct REST visibility or scope unblocking must succeed. Delta-sensitive live sync tests now reuse the same eventual-convergence helper pattern, and scheduled/manual `devtool verify e2e-full --classify-live-quirks` may rerun this exact test family once when the known delta-lag family recurs. Those same live waits now emit `timing-summary.json`, so recurring convergence gaps show up as measured windows rather than only as pass/fail noise.
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md)
 

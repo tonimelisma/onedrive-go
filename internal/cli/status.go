@@ -26,16 +26,21 @@ const (
 )
 
 func newStatusCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show all accounts, drives, and authentication health",
+		Short: "Show sync status, drive health, and pending user decisions",
 		Long: `Display the status of all configured accounts and drives.
 
-Shows authentication health, sync directory, and paused/ready status for each drive.
-Reads from config only — does not discover drives from tokens on disk.`,
+Without --drive, status shows the account and drive summary view. With exactly
+one selected drive, status becomes the detailed per-drive inspection view for
+ordinary failures, delete safety, conflicts, and state-store health.`,
 		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
 		RunE:        runStatus,
 	}
+
+	cmd.Flags().Bool("history", false, "include resolved conflict history in single-drive detailed status")
+
+	return cmd
 }
 
 // statusAccount groups drives under a single account email.
@@ -71,8 +76,7 @@ type syncStateInfo struct {
 	LastError                  string             `json:"last_error,omitempty"`
 	PendingHeldDeleteApprovals int                `json:"pending_held_delete_approvals,omitempty"`
 	PendingConflictRequests    int                `json:"pending_conflict_requests,omitempty"`
-	ResolvingConflictRequests  int                `json:"resolving_conflict_requests,omitempty"`
-	FailedConflictRequests     int                `json:"failed_conflict_requests,omitempty"`
+	ApplyingConflictRequests   int                `json:"applying_conflict_requests,omitempty"`
 	ActionHints                []string           `json:"action_hints,omitempty"`
 }
 
@@ -102,7 +106,12 @@ type statusOutput struct {
 }
 
 func runStatus(cmd *cobra.Command, _ []string) error {
-	return newStatusService(mustCLIContext(cmd.Context())).run()
+	history, err := cmd.Flags().GetBool("history")
+	if err != nil {
+		return fmt.Errorf("read --history flag: %w", err)
+	}
+
+	return newStatusService(mustCLIContext(cmd.Context())).run(history)
 }
 
 // accountNameReader abstracts reading display name and org name from account
@@ -338,8 +347,7 @@ func querySyncState(statePath string, logger *slog.Logger) *syncStateInfo {
 		Retrying:                   snapshot.Issues.RetryingCount(),
 		PendingHeldDeleteApprovals: snapshot.DurableIntents.PendingHeldDeleteApprovals,
 		PendingConflictRequests:    snapshot.DurableIntents.PendingConflictRequests,
-		ResolvingConflictRequests:  snapshot.DurableIntents.ResolvingConflictRequests,
-		FailedConflictRequests:     snapshot.DurableIntents.FailedConflictRequests,
+		ApplyingConflictRequests:   snapshot.DurableIntents.ApplyingConflictRequests,
 	}
 	info.LastSyncTime = snapshot.SyncMetadata["last_sync_time"]
 	info.LastSyncDuration = snapshot.SyncMetadata["last_sync_duration_ms"]
@@ -358,9 +366,6 @@ func statusActionHints(counts syncstore.DurableIntentCounts) []string {
 	}
 	if counts.PendingConflictRequests > 0 {
 		hints = append(hints, "Run `onedrive-go sync` or start `onedrive-go sync --watch` to execute queued conflict resolutions.")
-	}
-	if counts.FailedConflictRequests > 0 {
-		hints = append(hints, "Run `onedrive-go conflicts` to inspect failures, then rerun `onedrive-go conflicts resolve`.")
 	}
 
 	return hints
@@ -546,7 +551,7 @@ func printSyncStateText(w io.Writer, ss *syncStateInfo) error {
 	}
 
 	if ss.Issues > 0 {
-		if err := writef(w, "    Issues:    %d (run 'onedrive-go issues')\n", ss.Issues); err != nil {
+		if err := writef(w, "    Issues:    %d\n", ss.Issues); err != nil {
 			return err
 		}
 		if err := printStatusIssueGroups(w, ss.IssueGroups); err != nil {
@@ -606,16 +611,8 @@ func printStatusDurableIntentLines(w io.Writer, ss *syncStateInfo) error {
 
 	if err := writeOptionalStatusCountLine(
 		w,
-		ss.ResolvingConflictRequests,
-		"    Resolving conflicts: %d\n",
-	); err != nil {
-		return err
-	}
-
-	if err := writeOptionalStatusCountLine(
-		w,
-		ss.FailedConflictRequests,
-		"    Failed conflict resolutions: %d\n",
+		ss.ApplyingConflictRequests,
+		"    Applying conflicts: %d\n",
 	); err != nil {
 		return err
 	}

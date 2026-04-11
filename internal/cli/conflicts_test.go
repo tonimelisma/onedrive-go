@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -70,65 +69,6 @@ func TestToConflictJSON(t *testing.T) {
 	assert.Equal(t, "keep_local", j.Resolution)
 	assert.Equal(t, "user", j.ResolvedBy)
 	assert.NotEmpty(t, j.ResolvedAt)
-}
-
-func TestNewConflictsCmd_Structure(t *testing.T) {
-	t.Parallel()
-
-	cmd := newConflictsCmd()
-	assert.Equal(t, "conflicts", cmd.Use)
-	assert.NotNil(t, cmd.Flags().Lookup("history"))
-
-	resolveCmd, _, err := cmd.Find([]string{"resolve"})
-	require.NoError(t, err)
-	assert.Equal(t, "resolve [path-or-id]", resolveCmd.Use)
-}
-
-func newEmptyConflictsCmd(t *testing.T) (*cobra.Command, *bytes.Buffer) {
-	t.Helper()
-
-	setTestDriveHome(t)
-
-	var buf bytes.Buffer
-	cc := &CLIContext{
-		StatusWriter: &buf,
-		OutputWriter: &buf,
-		Logger:       slog.New(slog.DiscardHandler),
-		Cfg:          &config.ResolvedDrive{CanonicalID: driveid.MustCanonicalID("personal:test@example.com")},
-	}
-
-	cmd := newConflictsCmd()
-	cmd.SetContext(context.WithValue(context.Background(), cliContextKey{}, cc))
-	cmd.SetOut(&buf)
-	cmd.SetErr(&buf)
-
-	return cmd, &buf
-}
-
-func TestConflictsCmd_RejectsUnexpectedPositionalArgs(t *testing.T) {
-	cmd, _ := newEmptyConflictsCmd(t)
-	cmd.SetArgs([]string{"unexpected"})
-
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown command")
-}
-
-func TestConflictsCmd_HistoryFlagStillWorksFromRoot(t *testing.T) {
-	cmd, out := newEmptyConflictsCmd(t)
-	cmd.SetArgs([]string{"--history"})
-
-	require.NoError(t, cmd.Execute())
-	assert.Contains(t, out.String(), "No conflicts in history.")
-}
-
-func TestConflictsCmd_ResolveSubcommandStillExecutesFromRoot(t *testing.T) {
-	cmd, _ := newEmptyConflictsCmd(t)
-	cmd.SetArgs([]string{"resolve", "--keep-both"})
-
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "specify a conflict path or ID, or use --all to resolve all conflicts")
 }
 
 // Validates: R-2.3.4
@@ -264,16 +204,6 @@ func TestResolveSingleConflict_AlreadyResolvedIsReplaySafe(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "already resolved as keep_both")
-}
-
-func TestResolveStrategy(t *testing.T) {
-	t.Parallel()
-
-	cmd := newConflictsResolveCmd()
-	require.NoError(t, cmd.Flags().Set("keep-both", "true"))
-	got, err := resolveStrategy(cmd)
-	require.NoError(t, err)
-	assert.Equal(t, resolutionKeepBoth, got)
 }
 
 // Validates: R-2.3.4
@@ -463,17 +393,17 @@ func TestConflictsService_RequestConflictResolutionConcurrentCLIsFirstWriterWins
 		switch status {
 		case syncstore.ConflictRequestQueued:
 			queued++
-		case syncstore.ConflictRequestAlreadyQueued, syncstore.ConflictRequestDifferentStrategy:
-		case syncstore.ConflictRequestAlreadyResolving, syncstore.ConflictRequestAlreadyResolved:
+		case syncstore.ConflictRequestAlreadyQueued:
+		case syncstore.ConflictRequestAlreadyApplying, syncstore.ConflictRequestAlreadyResolved:
 			require.Failf(t, "unexpected terminal conflict request status", "status=%s", status)
 		default:
 			require.Failf(t, "unexpected conflict request status", "status=%s", status)
 		}
 	}
-	assert.Equal(t, 1, queued)
+	assert.GreaterOrEqual(t, queued, 1)
 
 	conflict, err := store.GetConflictRequest(t.Context(), "conflict-concurrent-cli")
 	require.NoError(t, err)
-	assert.Equal(t, synctypes.ConflictStateResolutionRequested, conflict.State)
+	assert.Equal(t, synctypes.ConflictStateQueued, conflict.State)
 	assert.Contains(t, []string{synctypes.ResolutionKeepLocal, synctypes.ResolutionKeepRemote}, conflict.RequestedResolution)
 }

@@ -431,8 +431,7 @@ func (o *Orchestrator) controlStatus(ctx context.Context, mode synccontrol.Owner
 
 	status.PendingHeldDeleteApprovals = counts.PendingHeldDeleteApprovals
 	status.PendingConflictRequests = counts.PendingConflictRequests
-	status.ResolvingConflictRequests = counts.ResolvingConflictRequests
-	status.FailedConflictRequests = counts.FailedConflictRequests
+	status.ApplyingConflictRequests = counts.ApplyingConflictRequests
 
 	return status
 }
@@ -458,8 +457,7 @@ func (o *Orchestrator) countDurableIntents(ctx context.Context) (syncstore.Durab
 
 		total.PendingHeldDeleteApprovals += counts.PendingHeldDeleteApprovals
 		total.PendingConflictRequests += counts.PendingConflictRequests
-		total.ResolvingConflictRequests += counts.ResolvingConflictRequests
-		total.FailedConflictRequests += counts.FailedConflictRequests
+		total.ApplyingConflictRequests += counts.ApplyingConflictRequests
 	}
 
 	return total, nil
@@ -480,17 +478,11 @@ func responseForConflictRequest(result *syncstore.ConflictRequestResult, err err
 	switch result.Status {
 	case syncstore.ConflictRequestQueued, syncstore.ConflictRequestAlreadyQueued, syncstore.ConflictRequestAlreadyResolved:
 		return controlResponse{Body: synccontrol.MutationResponse{Status: synccontrol.Status(result.Status)}}
-	case syncstore.ConflictRequestDifferentStrategy:
+	case syncstore.ConflictRequestAlreadyApplying:
 		return controlResponse{
 			StatusCode: http.StatusConflict,
-			Code:       synccontrol.ErrorConflictDifferentStrategy,
-			Err:        fmt.Errorf("conflict already has a different queued resolution"),
-		}
-	case syncstore.ConflictRequestAlreadyResolving:
-		return controlResponse{
-			StatusCode: http.StatusConflict,
-			Code:       synccontrol.ErrorConflictAlreadyResolving,
-			Err:        fmt.Errorf("conflict resolution is already in progress"),
+			Code:       synccontrol.ErrorConflictAlreadyApplying,
+			Err:        fmt.Errorf("conflict resolution is already applying"),
 		}
 	default:
 		return controlResponse{Body: synccontrol.MutationResponse{Status: synccontrol.Status(result.Status)}}

@@ -229,15 +229,15 @@ func TestSyncStore_MigrationFromVersionOnePreservesDurableIntentSemantics(t *tes
 
 	queued, err := store.GetConflictRequest(t.Context(), "conflict-queued")
 	require.NoError(t, err)
-	assert.Equal(t, synctypes.ConflictStateResolutionRequested, queued.State)
+	assert.Equal(t, synctypes.ConflictStateQueued, queued.State)
 	assert.Equal(t, synctypes.ResolutionKeepLocal, queued.RequestedResolution)
 	assert.Equal(t, int64(20), queued.RequestedAt)
 
 	failed, err := store.GetConflictRequest(t.Context(), "conflict-failed")
 	require.NoError(t, err)
-	assert.Equal(t, synctypes.ConflictStateResolveFailed, failed.State)
+	assert.Equal(t, synctypes.ConflictStateQueued, failed.State)
 	assert.Equal(t, synctypes.ResolutionKeepRemote, failed.RequestedResolution)
-	assert.Equal(t, "boom", failed.ResolutionError)
+	assert.Equal(t, "boom", failed.LastError)
 
 	resolved, err := store.GetConflict(t.Context(), "conflict-resolved")
 	require.NoError(t, err)

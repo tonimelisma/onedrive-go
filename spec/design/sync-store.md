@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/syncstore/store.go, internal/syncstore/inspector.go, internal/syncstore/schema.go, internal/syncstore/migrations/*.sql, internal/syncstore/tx.go, internal/syncstore/store_baseline.go, internal/syncstore/store_observation.go, internal/syncstore/store_conflicts.go, internal/syncstore/store_failures.go, internal/syncstore/store_held_deletes.go, internal/syncstore/store_admin.go, internal/syncstore/store_scope_blocks.go, internal/syncstore/shortcuts.go, internal/syncverify/verify.go, internal/syncrecovery/recovery.go, internal/cli/verify.go, internal/cli/issues.go, internal/cli/failure_display.go
+GOVERNS: internal/syncstore/store.go, internal/syncstore/inspector.go, internal/syncstore/schema.go, internal/syncstore/migrations/*.sql, internal/syncstore/tx.go, internal/syncstore/store_baseline.go, internal/syncstore/store_observation.go, internal/syncstore/store_conflicts.go, internal/syncstore/store_failures.go, internal/syncstore/store_held_deletes.go, internal/syncstore/store_admin.go, internal/syncstore/store_scope_blocks.go, internal/syncstore/shortcuts.go, internal/syncstore/store_recover.go, internal/syncverify/verify.go, internal/syncrecovery/recovery.go, internal/cli/status.go, internal/cli/recover.go, internal/cli/failure_display.go
 
 Implements: R-2.4.4 [verified], R-2.4.5 [verified], R-2.5 [verified], R-2.5.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.7 [verified], R-2.15.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.14 [verified], R-2.10.22 [verified], R-2.10.32 [verified], R-2.10.33 [verified], R-2.10.34 [verified], R-2.10.41 [verified], R-2.10.45 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified], R-6.7.17 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
@@ -25,11 +25,11 @@ peer authority; it is rebuilt from store state when the engine starts.
 
 | Behavior | Evidence |
 | --- | --- |
-| One-shot projection readers use store-owned read-only helpers while broader admin readers still use `Inspector`, so CLI status/issues/conflicts/auth projection and daemon status all consume the same read boundary without opening writable store handles. | `TestReadStatusSnapshot`, `TestReadDurableIntentCounts_ReadOnlyDB`, `TestHasScopeBlockAtPath`, `TestListConflictsAtPath`, `TestInspector_ReadIssuesSnapshot`, `TestInspector_ReadStatusSnapshot_StaysConsistentWithIssuesSnapshot`, `TestOrchestrator_ControlSocket_StatusCountsUseReadOnlyInspector` |
+| Store-owned read helpers and `Inspector` expose stable read-only issue/status projections, so summary status, detailed single-drive status, offline auth projection, and daemon status all read the same durable truth without opening writable store handles. | `TestReadStatusSnapshot`, `TestReadDurableIntentCounts_ReadOnlyDB`, `TestHasScopeBlockAtPath`, `TestListConflictsAtPath`, `TestInspector_ReadIssuesSnapshot`, `TestInspector_ReadStatusSnapshot_StaysConsistentWithIssuesSnapshot`, `TestInspector_ReadDetailedStatusSnapshot`, `TestOrchestrator_ControlSocket_StatusCountsUseReadOnlyInspector` |
 | Status issue-group projection preserves separate entries when the same summary key appears in multiple scopes. | `TestQuerySyncState_PreservesIssueGroupScopeContext`, `TestPrintStatusJSON_KeepsSameSummaryGroupsSeparatedByScope`, `TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope` |
 | Integrity inspection and safe repair stay store-owned, deterministic, and durable-intent aware. | `TestInspector_AuditIntegrityReportsPersistedProblems`, `TestSyncStore_AuditIntegrityReportsDurableIntentWorkflowProblems`, `TestSyncStore_RepairIntegritySafeNormalizesDeterministicViolations`, `TestSyncStore_RepairIntegritySafePreservesDurableUserIntent` |
 | Held-delete approval identity requires matching item ID and repeated approvals are idempotent. | `TestSyncStore_UpsertHeldDeletesRequiresItemID`, `TestSyncStore_HeldDeleteConsumeRequiresMatchingItemID`, `TestSyncStore_DeleteHeldDeleteRequiresMatchingItemID`, `TestSyncStore_ApproveHeldDeletesConcurrentCallsAreIdempotent` |
-| Conflict request concurrency is first-writer-wins until engine claim completes. | `TestSyncStore_RequestConflictResolutionSameStrategyIsIdempotent`, `TestSyncStore_RequestConflictResolutionFirstWriterWinsConcurrently`, `TestSyncStore_RequestConflictResolutionRejectsResolvingAndResolved` |
+| Conflict requests stay mutable while queued, remain idempotent for the same strategy, and reject rewrites once the engine has claimed them. | `TestSyncStore_RequestConflictResolutionSameStrategyIsIdempotent`, `TestSyncStore_RequestConflictResolutionQueuedRequestCanBeOverwrittenBeforeApplying`, `TestSyncStore_RequestConflictResolutionRejectsApplyingAndResolved` |
 | Visible issue grouping comes from one store-owned projection instead of CLI-local reconstruction. | `TestSyncStore_ListVisibleIssueGroups` |
 | Crash-shaped `downloading` / `deleting` residue in the state DB is replayed from durable store truth on the next live sync run, and the immediate rerun is idle. | `TestE2E_Sync_CrashRecovery_ReplaysDurableInProgressRows` |
 | Store schema migration uses embedded goose migrations, preserves durable user intent when migrating from schema v1, and rejects missing, empty, or malformed goose history instead of silently guessing. | `TestNewSyncStore_AppliesCurrentGooseMigration`, `TestSyncStore_MigrationProviderFreshDBUpgradesToCurrent`, `TestSyncStore_MigrationFromVersionOnePreservesDurableIntentSemantics`, `TestSyncStore_MigrationFilesIncludeUpDownAndMatchCurrentVersion`, `TestNewSyncStore_RejectsUnversionedExistingStateDB`, `TestNewSyncStore_RejectsEmptyGooseHistory`, `TestNewSyncStore_RejectsMalformedGooseHistoryWithoutLegacyTables`, `TestNewSyncStore_RejectsMalformedGooseHistoryWithLegacyTables`, `TestNewSyncStore_AcceptsPreexistingAppliedGooseHistory` |
@@ -63,7 +63,7 @@ Key operations:
   writer for status/report metadata only; sync-scope durability no longer
   piggybacks on generic metadata keys.
 - `RefreshLocalBaseline(ctx, LocalBaselineRefresh)` is the explicit reconciliation path used when local disk now represents the chosen truth without a new executor transfer result. It updates only the local-side baseline tuple, preserves known remote-side metadata/`etag`, and marks a matching `remote_state` row synced.
-- `RequestConflictResolution(ctx, id, resolution)` records conflict-resolution intent without executing side effects. The durable request workflow lives in `conflict_requests`, while `conflicts` remains the derived fact/history table. `ClaimConflictResolution`, `MarkConflictResolutionFailed`, and `ResolveConflict` enforce the durable `resolution_requested -> resolving -> resolve_failed` workflow for engine-owned execution. Successful resolution deletes the request row in the same transaction that marks the conflict resolved in `conflicts`.
+- `RequestConflictResolution(ctx, id, resolution)` records conflict-resolution intent without executing side effects. The durable request workflow lives in `conflict_requests`, while `conflicts` remains the derived fact/history table. `ClaimConflictResolution`, `MarkConflictResolutionFailed`, and `ResolveConflict` enforce the durable `queued -> applying` workflow for engine-owned execution. Failed attempts rewrite the request back to `queued` with `last_error` preserved. Successful resolution deletes the request row in the same transaction that marks the conflict resolved in `conflicts`.
 - `UpsertHeldDeletes`, `ApproveHeldDeletes`, `ListHeldDeletesByState`, `ConsumeHeldDelete`, and `DeleteHeldDelete` own the durable delete-safety approval workflow. Approval changes rows from `held` to `approved`; successful engine deletes consume approved rows only when drive, action type, path, and item ID match. Engine planning prunes stale approved rows when the current plan proves a reused path now targets a different item ID.
 - `RecordStaleHeldDeletePrune(ctx, count, at)` records store-owned audit metadata when the engine prunes stale approved held-delete rows after a live plan proves a reused path now points at a different item ID.
 - `RecordFailure(ctx, SyncFailureParams, delayFn)` is the single failure writer. The engine provides classification and retry policy; the store provides transactional persistence and conflict-safe upsert behavior.
@@ -293,7 +293,7 @@ lifecycle just to answer one question.
   signal without opening the writable `SyncStore` path.
 - `ReadDurableIntentCounts(ctx)` is the narrow read-only durable-intent
   projection used by daemon `GET /v1/status` and other status-only readers
-  that need queued/resolving/failed workflow counts without paying writable
+  that need queued/applying workflow counts without paying writable
   store lifecycle side effects.
 - `ReadStatusSnapshot(ctx)` returns metadata, aggregate counts, durable-intent
   counters, and one derived `IssueSummary`. It builds those durable-intent
@@ -302,6 +302,10 @@ lifecycle just to answer one question.
 - `ReadIssuesSnapshot(ctx, history)` returns the full read-only `issues`
   projection: grouped visible issue families, held deletes, pending retries,
   and conflict history.
+- `ReadDetailedStatusSnapshot(ctx, history)` returns the detailed single-drive
+  `status` projection: grouped visible issue families, delete-safety rows,
+  unresolved conflicts joined with request metadata, and optional resolved
+  conflict history.
 - `IssueSummary.Groups` are keyed by the shared
   [`synctypes.SummaryKey`](../../internal/synctypes/summary_keys.go),
   not by raw SQL categories. Each group also carries the normalized scope kind
@@ -313,18 +317,19 @@ lifecycle just to answer one question.
   read-only status contract. CLI `status` consumes those helpers instead of
   reconstructing visible-issue semantics from raw counters.
 - `StatusSnapshot.DurableIntents` reports approved held-delete counts plus
-  queued/resolving/failed conflict-request counts from `conflict_requests`.
+  queued/applying conflict-request counts from `conflict_requests`.
   CLI `status` turns those store-owned counters into human text, JSON fields,
   and next-step hints without opening writable store paths.
 - Control-socket `GET /v1/status` uses the same read-only durable-intent
   helper instead of opening a writable `SyncStore`, so status probes do not
   trigger writable-store close/checkpoint work.
-- `StatusSnapshot` and `IssuesSnapshot` share one visible-issue projection
-  builder inside `Inspector`, so `status` and `issues` cannot silently drift
+- `StatusSnapshot`, `IssuesSnapshot`, and `DetailedStatusSnapshot` share one
+  visible-issue projection builder inside `Inspector`, so summary status,
+  detailed status, and issue-history compatibility reads cannot silently drift
   on what counts as a visible issue family.
-- CLI `status`, `issues list`, `conflicts` list/history, and offline auth
-  projection consume store-owned read helpers; they do not build their own
-  DSNs or call `sql.Open` directly.
+- CLI `status`, daemon status probes, offline auth projection, and narrower
+  compatibility readers consume store-owned read helpers or `Inspector`; they
+  do not build their own DSNs or call `sql.Open` directly.
 - `AuditIntegrity(ctx)` is the read-only integrity surface. It reports stable
   finding codes for impossible scope shapes, invalid auth timing, impossible
   retry/trial timing, scope/failure contradictions, visible-projection overlap,
@@ -345,14 +350,13 @@ The store owns sync-state integrity inspection and deterministic safe repair.
   authorities that are now derived from held rows. It must not silently delete
   approved held deletes or queued conflict-resolution requests.
 - Durable-intent integrity findings include invalid `conflict_requests`
-  workflow states, missing request/resolving timestamps, request rows that
+  workflow states, missing request/applying timestamps, request rows that
   point at missing or already-resolved conflicts, resolved conflict facts with
   `resolution='unresolved'`, invalid held-delete states, missing held-delete
   item IDs, and approved held deletes without `approved_at`.
-- `cmd/devtool state-audit` is the human/JSON administrative entrypoint. It
-  opens the database through `syncstore`, reports the store-owned
-  `IntegrityReport`, optionally runs `RepairIntegritySafe`, then reruns the
-  audit and exits non-zero if findings remain.
+- Product recovery flows call store-owned recovery from `recover`. The
+  developer-only `cmd/devtool state-audit` wrapper still exists for repo
+  diagnostics, but it is no longer the user-facing escape hatch.
 
 The audit/repair split is deliberate: normal runtime code never auto-repairs
 durable state during ordinary sync execution beyond the narrow scope-state
@@ -375,8 +379,8 @@ local verification.
 Verification remains read-only all the way through the store boundary:
 per-path stat/rooted-path/hash failures are reported as mismatch rows instead
 of aborting the whole pass, while context cancellation is still fatal to the
-overall verify command. `VerifyReport.Mismatches` is sorted by path before it
-reaches CLI formatting so text and JSON output stay deterministic across map
+overall verification routine. `VerifyReport.Mismatches` is sorted by path
+before it reaches formatting so test/dev output stays deterministic across map
 iteration order.
 
 ## Crash Recovery Boundary
@@ -394,28 +398,28 @@ failures (`ResetDownloadingStates`, `ListDeletingCandidates`,
 `FinalizeDeletingStates`) still abort the recovery pass with context-wrapped
 errors because the durable-state transition itself is incomplete.
 
-## Issues CLI
+## Detailed Status
 
-`issues list` reads one store-owned `IssuesSnapshot` through
-`syncstore.ReadIssuesSnapshot`.
-`syncstore` owns grouping, scope labeling, pending-retry aggregation, and held
-delete separation; CLI only formats that snapshot. Grouping and display use
-the persisted `scope_key`, `issue_type`, `category`, `failure_role`, and
-shortcut metadata, but the user-facing grouping key is still the shared
-`synctypes.SummaryKey`. This keeps `issues` presentation aligned with
-`status` summaries and sync-runtime logging without persisting a second
-summary column in SQLite.
+Single-drive `status` reads one store-owned `DetailedStatusSnapshot` from
+`Inspector`. `syncstore` owns grouping, scope labeling, pending-retry
+aggregation, delete-safety separation, and unresolved-conflict/request joins;
+CLI only formats that snapshot. Grouping and display use the persisted
+`scope_key`, `issue_type`, `category`, `failure_role`, and shortcut metadata,
+but the user-facing grouping key is still the shared
+`synctypes.SummaryKey`. This keeps detailed `status` presentation aligned with
+summary `status` and sync-runtime logging without persisting a second summary
+column in SQLite.
 
 Retryable transient item failures intentionally surface through
-`IssuesSnapshot.PendingRetries` rather than the visible grouped-issue list.
+the detailed/read-only retry projection rather than the visible grouped-issue list.
 The durable row still carries the raw evidence (`issue_type`, `category`,
 `failure_role`, `scope_key`), and `synctypes.SummaryKeyForPersistedFailure`
 remains the read-time normalization rule for testable reprojection.
 
 Derived shared-folder blocked writes and scope-only auth blocks are normalized
-into that same `IssuesSnapshot`, so `issues`, `status`, and watch/runtime
-summaries all consume one store-owned visible-issue taxonomy instead of
-rebuilding different views from raw tables.
+into that same read model, so `status` and watch/runtime summaries all consume
+one store-owned visible-issue taxonomy instead of rebuilding different views
+from raw tables.
 
 The broader CLI auth-health projection also reads `auth:account` from
 `scope_blocks` through `syncstore.HasScopeBlockAtPath`, but it combines that

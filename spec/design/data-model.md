@@ -92,8 +92,8 @@ coarse summary/display column and is normalized from `action_type` at write
 time so persisted rows cannot drift into illegal combinations.
 
 The role model makes row meaning explicit instead of inferring it from
-`scope_key` and `next_retry_at`. Keyed by `(path, drive_id)`. Surfaced via the
-`issues` CLI command. Shared-folder read-only state is modeled as `held`
+`scope_key` and `next_retry_at`. Keyed by `(path, drive_id)`. Surfaced via
+single-drive `status`. Shared-folder read-only state is modeled as `held`
 blocked-write rows only; it does not keep a durable `boundary` row once the
 blocked write intent is gone.
 
@@ -155,29 +155,29 @@ Columns:
 - `requested_resolution`
 - `state`
 - `requested_at`
-- `resolving_at`
-- `resolution_error`
+- `applying_at`
+- `last_error`
 
 Valid states:
 
-- `resolution_requested` — CLI/control socket recorded durable user intent
-- `resolving` — one engine claimed execution
-- `resolve_failed` — execution failed and `resolution_error` explains why
+- `queued` — CLI/control socket recorded durable user intent, possibly with a
+  preserved `last_error` from the most recent failed attempt
+- `applying` — one engine claimed execution
 
-Concurrent request semantics are first-writer-wins until the engine claim
-completes:
+Concurrent request semantics are last-write-wins while still queued, then
+engine-owned once application begins:
 
-- unresolved conflict + valid request => create/update one
-  `resolution_requested` row
-- same strategy while `resolution_requested` => idempotent
-- different strategy while `resolution_requested` => rejected
-- `resolving` => rejected as already in progress
+- unresolved conflict + valid request => create/update one `queued` row
+- same strategy while `queued` => idempotent
+- different strategy while `queued` => overwrite the queued strategy and clear the old `last_error`
+- `applying` => rejected as already in progress
 - resolved conflict => rejected as already resolved
 
 Successful engine resolution deletes the `conflict_requests` row in the same
 transaction that marks the matching `conflicts` row resolved. Failed
-execution leaves the row in `resolve_failed` so the user can retry without
-losing the requested strategy or failure reason.
+execution rewrites the row back to `queued` with `last_error` preserved so the
+unresolved conflict stays visible until the chosen layout can actually be
+established.
 
 ### held_deletes
 

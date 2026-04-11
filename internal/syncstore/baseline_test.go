@@ -1287,7 +1287,7 @@ func TestNewSyncStore_RejectsUnversionedExistingStateDB(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, mgr)
 	require.ErrorIs(t, err, ErrIncompatibleSchema)
-	assert.Contains(t, err.Error(), "rebuild or migrate the drive state DB")
+	assert.Contains(t, err.Error(), "onedrive-go --drive <id> recover")
 }
 
 // Validates: R-2.2

@@ -44,8 +44,8 @@ itself. Those responsibilities remain in the single-drive engine.
 
 - `internal/multisync` owns drive selection, session resolution, engine
   construction, per-drive goroutines, reload, and shutdown.
-- `internal/sync` owns one-shot execution, watch-mode runtime state, conflicts,
-  retry/trial logic, scope lifecycle, and reconciliation.
+- `internal/sync` owns one-shot execution, watch-mode runtime state, conflict
+  execution, retry/trial logic, scope lifecycle, and reconciliation.
 
 This split keeps the engine package focused on one drive at a time while
 allowing the CLI to run any number of drives through one consistent control
@@ -104,7 +104,7 @@ stay in `internal/cli`.
 
 The socket speaks JSON over HTTP:
 
-- `GET /v1/status` returns the owner mode (`oneshot` or `watch`) and managed drives. Watch owners also report pending durable-intent counts: approved held deletes plus queued/resolving/failed conflict requests. Those counters come from the read-only `syncstore.ReadDurableIntentCounts` boundary, not from opening a writable `SyncStore`, so status probes do not own checkpoint or close-side DB work. One-shot owners return those counters as zero/omitted because they are only exposing the owner lock/status surface, not running a long-lived intent loop.
+- `GET /v1/status` returns the owner mode (`oneshot` or `watch`) and managed drives. Watch owners also report pending durable-intent counts: approved held deletes plus queued/applying conflict requests. Those counters come from the read-only `syncstore.ReadDurableIntentCounts` boundary, not from opening a writable `SyncStore`, so status probes do not own checkpoint or close-side DB work. One-shot owners return those counters as zero/omitted because they are only exposing the owner lock/status surface, not running a long-lived intent loop.
 - `POST /v1/reload` reloads config in the watch owner.
 - `POST /v1/stop` asks the watch owner to stop cleanly.
 - `POST /v1/drives/{canonical-id}/held-deletes/approve` records durable held-delete approval for that drive and marks a pending user-intent pass for the runner.

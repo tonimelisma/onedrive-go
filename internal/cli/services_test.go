@@ -74,7 +74,7 @@ func TestStatusService_Run_NoAccountsWritesGuidance(t *testing.T) {
 	var out bytes.Buffer
 	svc := newStatusService(newServiceContext(&out, t.TempDir()+"/missing-config.toml"))
 
-	require.NoError(t, svc.run())
+	require.NoError(t, svc.run(false))
 	assert.Contains(t, out.String(), "No accounts configured")
 }
 
@@ -274,7 +274,7 @@ func TestVerifyService_Run_MismatchJSONUsesConfiguredOutput(t *testing.T) {
 	setTestDriveHome(t)
 
 	syncDir := t.TempDir()
-	_, cid, dbPath := setupVerifyFixture(t, syncDir)
+	cid, dbPath := setupVerifyFixture(t, syncDir)
 	require.NoError(t, os.WriteFile(filepath.Join(syncDir, "keep.txt"), []byte("keep"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(syncDir, "tamper.txt"), []byte("hello"), 0o600))
 	keepHash, err := driveops.ComputeQuickXorHash(filepath.Join(syncDir, "keep.txt"))

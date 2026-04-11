@@ -91,7 +91,7 @@ func printFailurePaths(w io.Writer, group *syncstore.IssueGroupSnapshot, verbose
 const heldDeleteDirGroupThreshold = 20
 
 func printHeldDeletesGrouped(w io.Writer, heldDeletes []syncstore.HeldDeleteSnapshot, verbose bool) error {
-	if err := writef(w, "HELD DELETES (%d files — delete safety threshold triggered, run `issues approve-deletes` to approve)\n",
+	if err := writef(w, "HELD DELETES (%d files — delete safety threshold triggered, run `resolve deletes` to approve)\n",
 		len(heldDeletes)); err != nil {
 		return err
 	}

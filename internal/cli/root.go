@@ -430,15 +430,15 @@ func addRootSubcommands(cmd *cobra.Command) {
 		newSharedCmd(),
 		newDriveCmd(), newLsCmd(), newGetCmd(), newPutCmd(),
 		newRmCmd(), newMkdirCmd(), newStatCmd(), newSyncCmd(),
-		newPauseCmd(), newResumeCmd(), newIssuesCmd(), newConflictsCmd(),
-		newVerifyCmd(), newMvCmd(), newCpCmd(),
+		newPauseCmd(), newResumeCmd(), newResolveCmd(), newRecoverCmd(),
+		newMvCmd(), newCpCmd(),
 		newRecycleBinCmd(),
 	)
 }
 
 // Main executes the CLI with the provided args and returns the desired
 // process exit code. Keeping exit behavior here leaves the root package as
-// a thin entrypoint while preserving the existing verify-mismatch contract.
+// a thin entrypoint while the command layer owns user-facing presentation.
 func Main(args []string) int {
 	return mainWithWriters(args, nil, nil)
 }
@@ -476,10 +476,6 @@ func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) int {
 	}
 
 	if err != nil {
-		if errors.Is(err, errVerifyMismatch) {
-			return 1
-		}
-
 		class := classifyCommandError(err)
 		presentation := commandFailurePresentationForClass(class)
 		if class != failures.ClassShutdown {

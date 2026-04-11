@@ -326,43 +326,53 @@ func (flow *engineFlow) consumeHeldDeleteOnSuccess(ctx context.Context, r *synct
 	}
 }
 
-func (e *Engine) processQueuedConflictResolutions(ctx context.Context) error {
+func (e *Engine) processQueuedConflictResolutions(ctx context.Context) ([]synctypes.PathChanges, error) {
 	cutoff := e.nowFunc().Add(-staleConflictResolvingThreshold)
 	if _, err := e.baseline.ResetStaleResolvingConflicts(ctx, cutoff); err != nil {
-		return fmt.Errorf("sync: reset stale resolving conflicts: %w", err)
+		return nil, fmt.Errorf("sync: reset stale applying conflicts: %w", err)
 	}
 
+	var followUpChanges []synctypes.PathChanges
+	attempted := make(map[string]struct{})
 	for {
 		requests, err := e.baseline.ListRequestedConflictResolutions(ctx, conflictResolutionBatchLimit)
 		if err != nil {
-			return fmt.Errorf("sync: list requested conflict resolutions: %w", err)
+			return nil, fmt.Errorf("sync: list requested conflict resolutions: %w", err)
 		}
 		if len(requests) == 0 {
-			return nil
+			return followUpChanges, nil
 		}
 
+		progressed := false
 		for i := range requests {
+			if _, seen := attempted[requests[i].ID]; seen {
+				continue
+			}
+
 			claimed, ok, err := e.baseline.ClaimConflictResolution(ctx, requests[i].ID)
 			if err != nil {
-				return fmt.Errorf("sync: claim conflict resolution %s: %w", requests[i].ID, err)
+				return nil, fmt.Errorf("sync: claim conflict resolution %s: %w", requests[i].ID, err)
 			}
 			if !ok {
 				continue
 			}
+
+			progressed = true
+			attempted[claimed.ID] = struct{}{}
 			if claimed.RequestedResolution == "" {
 				markErr := fmt.Errorf("missing requested resolution")
 				if err := e.baseline.MarkConflictResolutionFailed(ctx, claimed.ID, markErr); err != nil {
-					return fmt.Errorf("sync: mark missing conflict resolution failed: %w", err)
+					return nil, fmt.Errorf("sync: mark missing conflict resolution failed: %w", err)
 				}
 				continue
 			}
 
-			execErr := e.executeConflictResolution(ctx, &claimed.ConflictRecord, claimed.RequestedResolution)
+			affectedPaths, execErr := e.executeConflictResolution(ctx, &claimed.ConflictRecord, claimed.RequestedResolution)
 			if execErr != nil {
 				if err := e.baseline.MarkConflictResolutionFailed(ctx, claimed.ID, execErr); err != nil {
-					return fmt.Errorf("sync: mark conflict resolution failed: %w", err)
+					return nil, fmt.Errorf("sync: return conflict resolution to queue: %w", err)
 				}
-				e.logger.Warn("conflict resolution failed",
+				e.logger.Warn("conflict resolution attempt failed",
 					slog.String("id", claimed.ID),
 					slog.String("path", claimed.Path),
 					slog.String("resolution", claimed.RequestedResolution),
@@ -372,8 +382,17 @@ func (e *Engine) processQueuedConflictResolutions(ctx context.Context) error {
 			}
 
 			if err := e.baseline.ResolveConflict(ctx, claimed.ID, claimed.RequestedResolution); err != nil {
-				return fmt.Errorf("sync: mark conflict resolved: %w", err)
+				return nil, fmt.Errorf("sync: mark conflict resolved: %w", err)
 			}
+
+			followUpChanges = mergePathChangeBatches(
+				followUpChanges,
+				e.conflictResolutionFollowUpChanges(ctx, affectedPaths),
+			)
+		}
+
+		if !progressed {
+			return followUpChanges, nil
 		}
 	}
 }
@@ -382,7 +401,7 @@ func (e *Engine) executeConflictResolution(
 	ctx context.Context,
 	c *synctypes.ConflictRecord,
 	resolution string,
-) error {
+) ([]string, error) {
 	switch resolution {
 	case synctypes.ResolutionKeepBoth:
 		return e.resolveKeepBoth(ctx, c)
@@ -391,7 +410,7 @@ func (e *Engine) executeConflictResolution(
 	case synctypes.ResolutionKeepRemote:
 		return e.resolveKeepRemote(ctx, c)
 	default:
-		return fmt.Errorf("sync: unknown resolution strategy %q", resolution)
+		return nil, fmt.Errorf("sync: unknown resolution strategy %q", resolution)
 	}
 }
 
@@ -405,13 +424,14 @@ func (rt *watchRuntime) runUserIntentDispatch(
 		return nil
 	}
 
-	if err := rt.engine.processQueuedConflictResolutions(ctx); err != nil {
+	conflictChanges, err := rt.engine.processQueuedConflictResolutions(ctx)
+	if err != nil {
 		rt.engine.logger.Warn("process queued conflict resolutions",
 			slog.String("error", err.Error()),
 		)
 	}
 
-	changes := rt.collectApprovedDeleteChanges(ctx)
+	changes := mergePathChangeBatches(conflictChanges, rt.collectApprovedDeleteChanges(ctx))
 	if len(changes) == 0 {
 		return nil
 	}
