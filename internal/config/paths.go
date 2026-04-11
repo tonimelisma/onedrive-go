@@ -131,10 +131,13 @@ func ControlSocketPath() (string, error) {
 		return "", fmt.Errorf("resolve control socket path: no data directory available")
 	}
 
-	return controlSocketPathForDataDir(dir)
+	return ControlSocketPathForDataDir(dir)
 }
 
-func controlSocketPathForDataDir(dir string) (string, error) {
+// ControlSocketPathForDataDir derives the runtime control socket path for a
+// resolved data directory. It exists so tests and helpers can share the same
+// path-derivation rules as the live runtime instead of copying fallback logic.
+func ControlSocketPathForDataDir(dir string) (string, error) {
 	candidate := filepath.Join(dir, controlSocketName)
 	if len(candidate) <= unixSocketPathSoftLimit {
 		return candidate, nil
