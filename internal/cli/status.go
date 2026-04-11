@@ -133,7 +133,7 @@ type liveSyncStateQuerier struct {
 
 func (q *liveSyncStateQuerier) QuerySyncState(cid driveid.CanonicalID) *syncStateInfo {
 	statePath := config.DriveStatePath(cid)
-	return querySyncState(statePath, q.logger)
+	return querySyncState(cid.String(), statePath, q.logger)
 }
 
 // buildStatusAccountsWith is the testable core of buildStatusAccounts.
@@ -329,7 +329,7 @@ func driveState(d *config.Drive) string {
 // querySyncState opens a state DB read-only and queries sync metadata, baseline
 // entry count, and unresolved conflict count. Returns nil if the DB doesn't exist
 // (drive never synced) or if an error occurs opening it.
-func querySyncState(statePath string, logger *slog.Logger) *syncStateInfo {
+func querySyncState(canonicalID string, statePath string, logger *slog.Logger) *syncStateInfo {
 	if !managedPathExists(statePath) {
 		return nil
 	}
@@ -353,22 +353,13 @@ func querySyncState(statePath string, logger *slog.Logger) *syncStateInfo {
 	info.LastSyncDuration = snapshot.SyncMetadata["last_sync_duration_ms"]
 	info.LastError = snapshot.SyncMetadata["last_sync_error"]
 	info.IssueGroups = statusIssueGroups(snapshot.Issues.Groups)
-	info.ActionHints = statusActionHints(snapshot.DurableIntents)
+	info.ActionHints = statusActionHints(canonicalID, snapshot.DurableIntents)
 
 	return info
 }
 
-func statusActionHints(counts syncstore.DurableIntentCounts) []string {
-	var hints []string
-
-	if counts.PendingHeldDeleteApprovals > 0 {
-		hints = append(hints, "Run `onedrive-go sync` or start `onedrive-go sync --watch` to execute approved deletes.")
-	}
-	if counts.PendingConflictRequests > 0 {
-		hints = append(hints, "Run `onedrive-go sync` or start `onedrive-go sync --watch` to execute queued conflict resolutions.")
-	}
-
-	return hints
+func statusActionHints(canonicalID string, counts syncstore.DurableIntentCounts) []string {
+	return durableIntentActionHints(canonicalID, counts)
 }
 
 func statusIssueGroups(groups []syncstore.IssueGroupCount) []statusIssueGroup {

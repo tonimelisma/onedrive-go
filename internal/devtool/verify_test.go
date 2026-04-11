@@ -1251,7 +1251,7 @@ func TestRunRepoConsistencyChecksFailsOnStaleFilterSemanticsWording(t *testing.T
 	assert.Contains(t, err.Error(), "sync.md")
 }
 
-func TestRunRepoConsistencyChecksFailsOnRemovedSyncCLICommandsOutsideArchive(t *testing.T) {
+func TestRunRepoConsistencyChecksFailsOnUnknownActiveDocCLIExample(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
@@ -1278,7 +1278,7 @@ func TestRunRepoConsistencyChecksFailsOnRemovedSyncCLICommandsOutsideArchive(t *
 			"| --- | --- |",
 			"| stale | TestFixtureEvidence |",
 			"",
-			"Run `onedrive-go conflicts --history`.",
+			"Run `onedrive-go madeup`.",
 			"",
 		}, "\n")),
 		0o600,
@@ -1286,50 +1286,18 @@ func TestRunRepoConsistencyChecksFailsOnRemovedSyncCLICommandsOutsideArchive(t *
 
 	err := runRepoConsistencyChecks(repoRoot)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "removed sync CLI command")
+	assert.Contains(t, err.Error(), "invalid documented CLI example")
+	assert.Contains(t, err.Error(), "madeup")
 	assert.Contains(t, err.Error(), "cli.md")
 }
 
-func TestRunRepoConsistencyChecksAllowsRemovedSyncCLICommandsInArchive(t *testing.T) {
+func TestRunRepoConsistencyChecksPassesCurrentActiveDocCLIExamples(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
 	writeRepoConsistencyFixtures(t, repoRoot)
-
-	archiveDir := filepath.Join(repoRoot, "spec", "archive", "design")
-	require.NoError(t, os.MkdirAll(archiveDir, 0o750))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(archiveDir, "old-cli.md"),
-		[]byte("Run `onedrive-go conflicts --history`.\n"),
-		0o600,
-	))
 
 	require.NoError(t, runRepoConsistencyChecks(repoRoot))
-}
-
-func TestRunRepoConsistencyChecksFailsOnRemovedSyncCLIHelperInvocation(t *testing.T) {
-	t.Parallel()
-
-	repoRoot := t.TempDir()
-	writeRepoConsistencyFixtures(t, repoRoot)
-
-	require.NoError(t, os.WriteFile(
-		filepath.Join(repoRoot, "e2e", "stale_sync_ux_test.go"),
-		[]byte(strings.Join([]string{
-			"package e2e",
-			"",
-			"func stale() {",
-			`	_, _, _ = runCLIWithConfigAllowError(nil, "", nil, "conflicts")`,
-			"}",
-			"",
-		}, "\n")),
-		0o600,
-	))
-
-	err := runRepoConsistencyChecks(repoRoot)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "removed sync CLI command")
-	assert.Contains(t, err.Error(), "stale_sync_ux_test.go")
 }
 
 func writeRepoConsistencyFixtures(t *testing.T, repoRoot string) {
@@ -1445,6 +1413,11 @@ func repoConsistencyDesignDocFixtures() []struct {
 			"- Allowed Side Effects: config I/O and stdout",
 			"- Mutable Runtime Owner: process-local command execution",
 			"- Error Boundary: CLI error rendering",
+		}, []string{
+			"Run `onedrive-go status`.",
+			"Run `onedrive-go --drive <id> resolve deletes` after reviewing held deletes.",
+			"Run `onedrive-go --drive <id> resolve local <target>` to queue a specific conflict choice.",
+			"Run 'onedrive-go --drive <id> recover' when the state DB is damaged.",
 		}),
 		{
 			name: "sync-engine.md",
@@ -1466,7 +1439,7 @@ func repoConsistencyDesignDocFixtures() []struct {
 			"- Allowed Side Effects: transfer execution",
 			"- Mutable Runtime Owner: worker pool",
 			"- Error Boundary: worker results",
-		}),
+		}, nil),
 		repoConsistencyBehaviorDocFixture("sync-control-plane.md", "Sync Control Plane", "internal/multisync/*.go", []string{
 			"- Owns: multi-drive lifecycle",
 			"- Does Not Own: single-drive execution",
@@ -1474,7 +1447,7 @@ func repoConsistencyDesignDocFixtures() []struct {
 			"- Allowed Side Effects: orchestrator startup",
 			"- Mutable Runtime Owner: watch orchestrator",
 			"- Error Boundary: drive reports",
-		}),
+		}, nil),
 		repoConsistencyBehaviorDocFixture("sync-store.md", "Sync Store", "internal/syncstore/*.go", []string{
 			"- Owns: sqlite sync state",
 			"- Does Not Own: graph calls",
@@ -1482,7 +1455,7 @@ func repoConsistencyDesignDocFixtures() []struct {
 			"- Allowed Side Effects: sqlite reads and writes",
 			"- Mutable Runtime Owner: sync store handles",
 			"- Error Boundary: persisted failure facts",
-		}),
+		}, nil),
 		repoConsistencyBehaviorDocFixture("sync-observation.md", "Sync Observation", "internal/syncobserve/*.go", []string{
 			"- Owns: change observation",
 			"- Does Not Own: planning",
@@ -1490,7 +1463,7 @@ func repoConsistencyDesignDocFixtures() []struct {
 			"- Allowed Side Effects: filesystem and graph observation",
 			"- Mutable Runtime Owner: observers and buffer",
 			"- Error Boundary: change events and skipped items",
-		}),
+		}, nil),
 		repoConsistencyBehaviorDocFixture("config.md", "Configuration", "internal/config/*.go", []string{
 			"- Owns: config loading",
 			"- Does Not Own: graph calls",
@@ -1498,7 +1471,7 @@ func repoConsistencyDesignDocFixtures() []struct {
 			"- Allowed Side Effects: config and metadata IO",
 			"- Mutable Runtime Owner: config holder",
 			"- Error Boundary: load and validation outcomes",
-		}),
+		}, nil),
 	}
 }
 
@@ -1507,6 +1480,7 @@ func repoConsistencyBehaviorDocFixture(
 	title string,
 	governs string,
 	ownership []string,
+	examples []string,
 ) struct {
 	name    string
 	content string
@@ -1528,6 +1502,10 @@ func repoConsistencyBehaviorDocFixture(
 		"| sample | TestFixtureEvidence |",
 		"",
 	)
+	lines = append(lines, examples...)
+	if len(examples) > 0 {
+		lines = append(lines, "")
+	}
 
 	return struct {
 		name    string

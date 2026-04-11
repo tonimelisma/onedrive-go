@@ -473,7 +473,7 @@ func TestQuerySyncState_NoDB(t *testing.T) {
 
 	logger := slog.New(slog.DiscardHandler)
 
-	info := querySyncState("/nonexistent/path/state.db", logger)
+	info := querySyncState("personal:missing@example.com", "/nonexistent/path/state.db", logger)
 	assert.Nil(t, info)
 }
 
@@ -487,7 +487,7 @@ func TestQuerySyncState_EmptyDB(t *testing.T) {
 	// Create a minimal DB with the required tables.
 	createTestStateDB(t, dbPath)
 
-	info := querySyncState(dbPath, logger)
+	info := querySyncState("personal:alice@example.com", dbPath, logger)
 	require.NotNil(t, info)
 	assert.Empty(t, info.LastSyncTime)
 	assert.Equal(t, 0, info.FileCount)
@@ -528,7 +528,7 @@ func TestQuerySyncState_WithMetadata(t *testing.T) {
 
 	require.NoError(t, db.Close())
 
-	info := querySyncState(dbPath, logger)
+	info := querySyncState("personal:alice@example.com", dbPath, logger)
 	require.NotNil(t, info)
 	assert.Equal(t, "2026-03-02T10:30:00Z", info.LastSyncTime)
 	assert.Equal(t, "1500", info.LastSyncDuration)
@@ -569,7 +569,7 @@ func TestQuerySyncState_PendingSyncAndIssues(t *testing.T) {
 
 	require.NoError(t, db.Close())
 
-	info := querySyncState(dbPath, logger)
+	info := querySyncState("personal:alice@example.com", dbPath, logger)
 	require.NotNil(t, info)
 	assert.Equal(t, 2, info.PendingSync) // pending_download + download_failed
 	assert.Equal(t, 1, info.Issues)      // 1 actionable failure
@@ -609,7 +609,7 @@ func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsIssues(t *testing.T) {
 		VALUES ('auth:account', 'unauthorized', 'none', 1, 0, 0, 0, 0)`)
 	require.NoError(t, err)
 
-	info := querySyncState(dbPath, logger)
+	info := querySyncState("personal:alice@example.com", dbPath, logger)
 	require.NotNil(t, info)
 	assert.Equal(t, 4, info.Issues)
 }
@@ -666,13 +666,14 @@ func TestQuerySyncState_DurableIntentCountsAndActionHints(t *testing.T) {
 	require.True(t, ok)
 	require.NoError(t, store.MarkConflictResolutionFailed(ctx, "conflict-failed", assert.AnError))
 
-	info := querySyncState(dbPath, logger)
+	info := querySyncState("personal:alice@example.com", dbPath, logger)
 	require.NotNil(t, info)
 	assert.Equal(t, 1, info.PendingHeldDeleteApprovals)
 	assert.Equal(t, 2, info.PendingConflictRequests)
 	assert.Equal(t, 1, info.ApplyingConflictRequests)
-	assert.Contains(t, info.ActionHints, "Run `onedrive-go sync` or start `onedrive-go sync --watch` to execute approved deletes.")
-	assert.Contains(t, info.ActionHints, "Run `onedrive-go sync` or start `onedrive-go sync --watch` to execute queued conflict resolutions.")
+	assert.Contains(t, info.ActionHints, "run `onedrive-go --drive personal:alice@example.com sync` or start `onedrive-go --drive personal:alice@example.com sync --watch` to execute approved deletes.")
+	assert.Contains(t, info.ActionHints, "run `onedrive-go --drive personal:alice@example.com sync` or start `onedrive-go --drive personal:alice@example.com sync --watch` to apply queued resolutions.")
+	assert.Contains(t, info.ActionHints, "wait for the active sync owner to finish, then run `onedrive-go --drive personal:alice@example.com status` again if needed.")
 }
 
 // Validates: R-6.10.5
@@ -708,7 +709,7 @@ func TestQuerySyncState_UsesReadOnlyProjectionHelper(t *testing.T) {
 		assert.NoError(t, store.Close(context.Background()))
 	})
 
-	info := querySyncState(dbPath, logger)
+	info := querySyncState("personal:alice@example.com", dbPath, logger)
 	require.NotNil(t, info)
 	assert.Equal(t, 1, info.Issues)
 }
@@ -751,7 +752,7 @@ func TestQuerySyncState_PreservesIssueGroupScopeContext(t *testing.T) {
 		VALUES ('auth:account', ?, 'none', 1, 0, 0, 0, 0)`, synctypes.IssueUnauthorized)
 	require.NoError(t, err)
 
-	info := querySyncState(dbPath, logger)
+	info := querySyncState("personal:alice@example.com", dbPath, logger)
 	require.NotNil(t, info)
 	assert.ElementsMatch(t, []statusIssueGroup{
 		{
@@ -1248,8 +1249,9 @@ func TestPrintSyncStateText_WithDurableIntentCountsAndHints(t *testing.T) {
 		PendingConflictRequests:    3,
 		ApplyingConflictRequests:   1,
 		ActionHints: []string{
-			"Run `onedrive-go sync` or start `onedrive-go sync --watch` to execute approved deletes.",
-			"Run `onedrive-go sync` or start `onedrive-go sync --watch` to execute queued conflict resolutions.",
+			"run `onedrive-go --drive personal:alice@example.com sync` or start `onedrive-go --drive personal:alice@example.com sync --watch` to execute approved deletes.",
+			"run `onedrive-go --drive personal:alice@example.com sync` or start `onedrive-go --drive personal:alice@example.com sync --watch` to apply queued resolutions.",
+			"wait for the active sync owner to finish, then run `onedrive-go --drive personal:alice@example.com status` again if needed.",
 		},
 	}
 
@@ -1260,8 +1262,9 @@ func TestPrintSyncStateText_WithDurableIntentCountsAndHints(t *testing.T) {
 	assert.Contains(t, output, "Approved deletes waiting: 2")
 	assert.Contains(t, output, "Queued conflict resolutions: 3")
 	assert.Contains(t, output, "Applying conflicts: 1")
-	assert.Contains(t, output, "Next: Run `onedrive-go sync` or start `onedrive-go sync --watch` to execute approved deletes.")
-	assert.Contains(t, output, "Next: Run `onedrive-go sync` or start `onedrive-go sync --watch` to execute queued conflict resolutions.")
+	assert.Contains(t, output, "Next: run `onedrive-go --drive personal:alice@example.com sync` or start `onedrive-go --drive personal:alice@example.com sync --watch` to execute approved deletes.")
+	assert.Contains(t, output, "Next: run `onedrive-go --drive personal:alice@example.com sync` or start `onedrive-go --drive personal:alice@example.com sync --watch` to apply queued resolutions.")
+	assert.Contains(t, output, "Next: wait for the active sync owner to finish, then run `onedrive-go --drive personal:alice@example.com status` again if needed.")
 }
 
 func TestStatusService_Run_DetailedSingleDriveText(t *testing.T) {
@@ -1280,16 +1283,21 @@ func TestStatusService_Run_DetailedSingleDriveText(t *testing.T) {
 	assert.Contains(t, output, "DELETE SAFETY")
 	assert.Contains(t, output, "Held deletes requiring approval: 1")
 	assert.Contains(t, output, "/held-delete.txt")
+	assert.Contains(t, output, "Next: run `onedrive-go --drive "+cid.String()+" resolve deletes`.")
 	assert.Contains(t, output, "Approved deletes waiting for sync: 1")
 	assert.Contains(t, output, "/approved-delete.txt")
+	assert.Contains(t, output, "Next: run `onedrive-go --drive "+cid.String()+" sync` or start `onedrive-go --drive "+cid.String()+" sync --watch` to execute approved deletes.")
 	assert.Contains(t, output, "CONFLICTS")
 	assert.Contains(t, output, "/needs-choice.txt [edit_edit]")
 	assert.Contains(t, output, "Decision: needed")
+	assert.Contains(t, output, "Next: run `onedrive-go --drive "+cid.String()+" resolve local '/needs-choice.txt'` or replace `local` with `remote` or `both`.")
 	assert.Contains(t, output, "/queued-conflict.txt [edit_edit]")
 	assert.Contains(t, output, "Decision: keep_local (queued)")
 	assert.Contains(t, output, "Last attempt: temporary upload failure")
+	assert.Contains(t, output, "Next: run `onedrive-go --drive "+cid.String()+" sync` or start `onedrive-go --drive "+cid.String()+" sync --watch` to apply queued resolutions.")
 	assert.Contains(t, output, "/applying-conflict.txt [edit_delete]")
 	assert.Contains(t, output, "Decision: keep_remote (applying)")
+	assert.Contains(t, output, "Next: wait for the active sync owner to finish, then run `onedrive-go --drive "+cid.String()+" status` again if needed.")
 	assert.Contains(t, output, "CONFLICT HISTORY")
 	assert.Contains(t, output, "/resolved-conflict.txt [create_create]")
 	assert.Contains(t, output, "Resolved: keep_both by user")
@@ -1314,27 +1322,69 @@ func TestStatusService_Run_DetailedSingleDriveJSON(t *testing.T) {
 	assert.Len(t, decoded.DeleteSafety, 2)
 	assert.Len(t, decoded.Conflicts, 3)
 	assert.Len(t, decoded.ConflictHistory, 1)
+	assertDetailedStatusNextActions(t, &decoded, cid.String())
+	assertDetailedStatusDeleteSafetyActionHints(t, &decoded, cid.String())
+	assertDetailedStatusConflictActionHints(t, &decoded, cid.String())
+}
+
+func assertDetailedStatusNextActions(t *testing.T, decoded *detailedStatusOutput, canonicalID string) {
+	t.Helper()
+
+	assert.Contains(t, decoded.NextActions, "run `onedrive-go --drive "+canonicalID+" resolve deletes`.")
+	assert.Contains(t, decoded.NextActions, "run `onedrive-go --drive "+canonicalID+" sync` or start `onedrive-go --drive "+canonicalID+" sync --watch` to execute approved deletes.")
+	assert.Contains(t, decoded.NextActions, "run `onedrive-go --drive "+canonicalID+" resolve local '/needs-choice.txt'` or replace `local` with `remote` or `both`.")
+	assert.Contains(t, decoded.NextActions, "run `onedrive-go --drive "+canonicalID+" sync` or start `onedrive-go --drive "+canonicalID+" sync --watch` to apply queued resolutions.")
+	assert.Contains(t, decoded.NextActions, "wait for the active sync owner to finish, then run `onedrive-go --drive "+canonicalID+" status` again if needed.")
+}
+
+func assertDetailedStatusDeleteSafetyActionHints(t *testing.T, decoded *detailedStatusOutput, canonicalID string) {
+	t.Helper()
+
+	var (
+		heldSeen     bool
+		approvedSeen bool
+	)
+	for _, row := range decoded.DeleteSafety {
+		switch row.Path {
+		case "/held-delete.txt":
+			heldSeen = true
+			assert.Equal(t, "run `onedrive-go --drive "+canonicalID+" resolve deletes`.", row.ActionHint)
+		case "/approved-delete.txt":
+			approvedSeen = true
+			assert.Equal(t, "run `onedrive-go --drive "+canonicalID+" sync` or start `onedrive-go --drive "+canonicalID+" sync --watch` to execute approved deletes.", row.ActionHint)
+		}
+	}
+	assert.True(t, heldSeen)
+	assert.True(t, approvedSeen)
+}
+
+func assertDetailedStatusConflictActionHints(t *testing.T, decoded *detailedStatusOutput, canonicalID string) {
+	t.Helper()
 
 	var (
 		queuedFound    bool
 		applyingFound  bool
 		unresolvedSeen bool
 	)
-	for _, conflict := range decoded.Conflicts {
+	for i := range decoded.Conflicts {
+		conflict := decoded.Conflicts[i]
 		switch conflict.Path {
 		case "/queued-conflict.txt":
 			queuedFound = true
 			assert.Equal(t, synctypes.ConflictStateQueued, conflict.State)
 			assert.Equal(t, synctypes.ResolutionKeepLocal, conflict.RequestedResolution)
 			assert.Equal(t, "temporary upload failure", conflict.LastRequestError)
+			assert.Equal(t, "run `onedrive-go --drive "+canonicalID+" sync` or start `onedrive-go --drive "+canonicalID+" sync --watch` to apply queued resolutions.", conflict.ActionHint)
 		case "/applying-conflict.txt":
 			applyingFound = true
 			assert.Equal(t, synctypes.ConflictStateApplying, conflict.State)
 			assert.Equal(t, synctypes.ResolutionKeepRemote, conflict.RequestedResolution)
+			assert.Equal(t, "wait for the active sync owner to finish, then run `onedrive-go --drive "+canonicalID+" status` again if needed.", conflict.ActionHint)
 		case "/needs-choice.txt":
 			unresolvedSeen = true
 			assert.Equal(t, synctypes.ConflictStateUnresolved, conflict.State)
 			assert.Empty(t, conflict.RequestedResolution)
+			assert.Equal(t, "run `onedrive-go --drive "+canonicalID+" resolve local '/needs-choice.txt'` or replace `local` with `remote` or `both`.", conflict.ActionHint)
 		}
 	}
 	assert.True(t, queuedFound)
@@ -1363,6 +1413,7 @@ func TestStatusService_Run_DamagedStateStoreSurfacesRecoverHint(t *testing.T) {
 	assert.Equal(t, stateStoreStatusDamaged, decoded.StateStoreStatus)
 	assert.NotEmpty(t, decoded.StateStoreError)
 	assert.Equal(t, recoverHintForDrive(cid.String()), decoded.StateStoreRecoveryHint)
+	assert.Contains(t, decoded.NextActions, recoverHintForDrive(cid.String()))
 }
 
 func TestComputeSummary_AggregatesPendingAndRetrying(t *testing.T) {

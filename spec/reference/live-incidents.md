@@ -706,7 +706,7 @@ Recurring: no
 Summary: A newly created folder in a personal drive could resolve successfully by path, but the immediate first folder-scoped delta request for that same folder still returned `404 itemNotFound`. This caused `sync_paths` bootstrap to fail even though the configured folder was real and readable.  
 Evidence:
 - [graph-api-quirks.md](graph-api-quirks.md) documents the folder-scoped delta readiness lag and dates it to the fast E2E lane on April 6, 2026.
-- [test-assurance-audit.md](../archive/reviews/test-assurance-audit.md) records the live failure and the resulting production fallback.
+- The original live investigation showed that a newly created personal-drive scope could resolve successfully by path while the first folder-scoped delta call for that same scope still returned transient `404 itemNotFound`, which is why the long-term fix falls back to recursive enumeration for that scope instead of trusting immediate folder-scoped delta readiness.
 - Merged fix: `74da628` (`fix: replay crash recovery in one-shot sync (#420)`), which included the scoped-delta fallback.
 Resolution / mitigation: `sync_paths` primary-scope observation now mirrors scoped-root behavior and falls back to recursive enumeration when folder-scoped delta is temporarily unavailable for the already-resolved scope.  
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md)
@@ -722,10 +722,10 @@ Status: fixed
 Recurring: no  
 Summary: A live crash-recovery pass showed that one-shot sync created durable retry bridge rows for interrupted work but did not actually replay them on that same invocation. The live investigation then exposed two related bugs in the same lane: delete-side bridge rows were typed as remote deletes instead of local deletes, and interrupted downloads could still no-op when the baseline said the file was already synced.  
 Evidence:
-- [test-assurance-audit.md](../archive/reviews/test-assurance-audit.md) records the live crash-recovery investigation and the three production gaps it exposed.
+- The original live crash-recovery investigation exposed three concrete production gaps: one-shot startup created retry bridge rows without consuming them on that same invocation, delete-side bridge rows preserved the wrong replay action (`ActionRemoteDelete` instead of `ActionLocalDelete`), and interrupted downloads could still no-op when baseline metadata said the file was already synced.
 - Merged fix: `74da628` (`fix: replay crash recovery in one-shot sync (#420)`).
 Resolution / mitigation: One-shot startup now consumes due retry rows immediately, preserves delete replay as `ActionLocalDelete`, and carries an explicit forced-download hint through planning so missing local files are redownloaded even without a fresh delta event.  
-Promoted docs: [test-assurance-audit.md](../archive/reviews/test-assurance-audit.md)
+Promoted docs: [sync-store.md](../design/sync-store.md), [sync-engine.md](../design/sync-engine.md)
 
 ## LI-20260405-04: Fast E2E download-only tests assumed delta visibility too early
 
