@@ -61,6 +61,20 @@ func startCLIControlSocket(
 ) {
 	t.Helper()
 
+	startCLIControlSocketWithStatusHandler(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		assert.NoError(t, json.NewEncoder(w).Encode(status))
+	}, mutate)
+}
+
+func startCLIControlSocketWithStatusHandler(
+	t *testing.T,
+	statusHandler func(http.ResponseWriter, *http.Request),
+	mutate func(http.ResponseWriter, *http.Request),
+) {
+	t.Helper()
+
 	socketPath, err := config.ControlSocketPath()
 	require.NoError(t, err)
 	require.NotEmpty(t, socketPath)
@@ -75,9 +89,7 @@ func startCLIControlSocket(
 		ReadHeaderTimeout: controlSocketTestReadHeaderTimeout,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet && r.URL.Path == synccontrol.PathStatus {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusOK)
-				assert.NoError(t, json.NewEncoder(w).Encode(status))
+				statusHandler(w, r)
 				return
 			}
 			mutate(w, r)
@@ -149,6 +161,25 @@ func TestIssuesApproveDeletes_WritesDirectDBIntentForOneShotOwner(t *testing.T) 
 }
 
 // Validates: R-2.3.12, R-2.9.3
+func TestConflictsResolve_FallsBackToDBIntentWhenNoDaemonSocketExists(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	cid := driveid.MustCanonicalID("personal:no-daemon@example.com")
+
+	resolver := &stubConflictsResolver{
+		result: syncstore.ConflictRequestResult{Status: syncstore.ConflictRequestQueued},
+	}
+	svc := newConflictsService(&CLIContext{
+		Logger: slog.New(slog.DiscardHandler),
+		Cfg:    &config.ResolvedDrive{CanonicalID: cid},
+	})
+
+	result, err := svc.requestConflictResolution(t.Context(), resolver, "conflict-1", synctypes.ResolutionKeepLocal)
+	require.NoError(t, err)
+	assert.Equal(t, syncstore.ConflictRequestQueued, result.Status)
+	assert.Equal(t, 1, resolver.requestCalls)
+}
+
+// Validates: R-2.3.12, R-2.9.3
 func TestConflictsResolve_DoesNotFallbackOnTypedWatchDaemonError(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	cid := driveid.MustCanonicalID("personal:watch-error@example.com")
@@ -204,6 +235,54 @@ func TestIssuesApproveDeletes_DoesNotFallbackOnTypedWatchDaemonError(t *testing.
 	assert.Contains(t, err.Error(), string(synccontrol.ErrorDriveNotManaged))
 	assert.Contains(t, err.Error(), "drive not managed")
 	assert.NotContains(t, out.String(), approveDeletesSuccess)
+}
+
+// Validates: R-2.3.6, R-2.9.3
+func TestIssuesApproveDeletes_DoesNotFallbackWhenControlProbeIsAmbiguous(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	cid := driveid.MustCanonicalID("personal:probe-failed@example.com")
+	driveID := driveid.New("drive-probe-failed")
+
+	store, err := syncstore.NewSyncStore(t.Context(), config.DriveStatePath(cid), slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	require.NoError(t, store.UpsertHeldDeletes(t.Context(), []synctypes.HeldDeleteRecord{{
+		DriveID:       driveID,
+		ActionType:    synctypes.ActionRemoteDelete,
+		Path:          "delete-me.txt",
+		ItemID:        "item-delete",
+		State:         synctypes.HeldDeleteStateHeld,
+		HeldAt:        1,
+		LastPlannedAt: 1,
+	}}))
+	require.NoError(t, store.Close(t.Context()))
+
+	startCLIControlSocketWithStatusHandler(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "status unavailable", http.StatusInternalServerError)
+	}, func(http.ResponseWriter, *http.Request) {
+		t.Fatal("mutating control request should not be attempted after an ambiguous probe failure")
+	})
+
+	var out bytes.Buffer
+	svc := newIssuesService(&CLIContext{
+		OutputWriter: &out,
+		Logger:       slog.New(slog.DiscardHandler),
+		Cfg:          &config.ResolvedDrive{CanonicalID: cid},
+	})
+
+	err = svc.runApproveDeletes(t.Context())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "probe control owner")
+	assert.NotContains(t, out.String(), approveDeletesSuccess)
+
+	reopened, err := syncstore.NewSyncStore(t.Context(), config.DriveStatePath(cid), slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, reopened.Close(t.Context()))
+	})
+
+	held, err := reopened.ListHeldDeletesByState(t.Context(), synctypes.HeldDeleteStateHeld)
+	require.NoError(t, err)
+	require.Len(t, held, 1)
 }
 
 // Validates: R-2.3.12, R-2.9.3
@@ -295,4 +374,86 @@ func TestNotifyDaemon_ReportsControlSocketPathFailureClearly(t *testing.T) {
 	notifyDaemon(cc)
 	assert.Contains(t, status.String(), "control socket unavailable")
 	assert.Contains(t, status.String(), "changes take effect on next daemon start")
+}
+
+func TestNotifyDaemon_ReportsAmbiguousProbeFailureClearly(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	startCLIControlSocketWithStatusHandler(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, err := w.Write([]byte("{"))
+		assert.NoError(t, err)
+	}, func(http.ResponseWriter, *http.Request) {
+		t.Fatal("daemon notification should stop before mutating when the owner probe is ambiguous")
+	})
+
+	var status bytes.Buffer
+	cc := &CLIContext{
+		Logger:       slog.New(slog.DiscardHandler),
+		StatusWriter: &status,
+	}
+
+	notifyDaemon(cc)
+	assert.Contains(t, status.String(), "control socket probe failed")
+	assert.Contains(t, status.String(), "changes take effect on next daemon start")
+	assert.NotContains(t, status.String(), "no running daemon found")
+}
+
+func TestProbeControlOwner_ClassifiesOutcomes(t *testing.T) {
+	t.Run("watch owner", func(t *testing.T) {
+		t.Setenv("XDG_DATA_HOME", t.TempDir())
+		startCLIControlSocket(t, synccontrol.StatusResponse{OwnerMode: synccontrol.OwnerModeWatch}, func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "unexpected mutation", http.StatusInternalServerError)
+		})
+
+		probe, err := probeControlOwner(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, controlOwnerStateWatchOwner, probe.state)
+		require.NotNil(t, probe.client)
+	})
+
+	t.Run("one-shot owner", func(t *testing.T) {
+		t.Setenv("XDG_DATA_HOME", t.TempDir())
+		startCLIControlSocket(t, synccontrol.StatusResponse{OwnerMode: synccontrol.OwnerModeOneShot}, func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "unexpected mutation", http.StatusInternalServerError)
+		})
+
+		probe, err := probeControlOwner(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, controlOwnerStateOneShotOwner, probe.state)
+		require.NotNil(t, probe.client)
+	})
+
+	t.Run("no socket", func(t *testing.T) {
+		t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+		probe, err := probeControlOwner(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, controlOwnerStateNoSocket, probe.state)
+		assert.Nil(t, probe.client)
+	})
+
+	t.Run("path unavailable", func(t *testing.T) {
+		longDataHome := filepath.Join(t.TempDir(), strings.Repeat("very-long-control-root-", 8))
+		t.Setenv("XDG_DATA_HOME", longDataHome)
+		t.Setenv("TMPDIR", filepath.Join(t.TempDir(), strings.Repeat("very-long-runtime-root-", 8)))
+
+		probe, err := probeControlOwner(t.Context())
+		require.Error(t, err)
+		assert.Equal(t, controlOwnerStatePathUnavailable, probe.state)
+		assert.Contains(t, err.Error(), "control socket path")
+	})
+
+	t.Run("probe failed", func(t *testing.T) {
+		t.Setenv("XDG_DATA_HOME", t.TempDir())
+		startCLIControlSocketWithStatusHandler(t, func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "status unavailable", http.StatusInternalServerError)
+		}, func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "unexpected mutation", http.StatusInternalServerError)
+		})
+
+		probe, err := probeControlOwner(t.Context())
+		require.Error(t, err)
+		assert.Equal(t, controlOwnerStateProbeFailed, probe.state)
+		assert.Contains(t, err.Error(), "unexpected control status response")
+	})
 }
