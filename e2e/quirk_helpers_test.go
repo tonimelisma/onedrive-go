@@ -69,6 +69,23 @@ type cliQuirkLogLine struct {
 	Error                  string                    `json:"error"`
 }
 
+// Fixture recurrence reasons are recorder-owned taxonomy values because both
+// command-window retries and later readiness waits emit the same quirk summary
+// vocabulary.
+type liveProviderRecurrenceReason string
+
+const (
+	liveProviderRecurrenceFreshParentChildCreateLag      liveProviderRecurrenceReason = "fresh_parent_child_create_lag"
+	liveProviderRecurrenceFreshParentParentPathLag       liveProviderRecurrenceReason = "fresh_parent_parent_path_lag"
+	liveProviderRecurrencePostMutationDestinationPathLag liveProviderRecurrenceReason = "post_mutation_destination_visibility_lag"
+	liveProviderRecurrenceUnknown                        liveProviderRecurrenceReason = "unknown"
+)
+
+type liveProviderRecurrenceDecision struct {
+	Reason liveProviderRecurrenceReason
+	Retry  bool
+}
+
 func newE2EQuirkRecorder(logDir string) (*e2eQuirkRecorder, error) {
 	if logDir == "" {
 		return nil, fmt.Errorf("quirk recorder log dir is required")
@@ -319,6 +336,16 @@ func recordLiveProviderRecurrenceEvent(
 	})
 }
 
+func installSuiteQuirkRecorderForTest(t *testing.T, recorder *e2eQuirkRecorder) {
+	t.Helper()
+
+	previous := suiteQuirkRecorder
+	suiteQuirkRecorder = recorder
+	t.Cleanup(func() {
+		suiteQuirkRecorder = previous
+	})
+}
+
 func summarizeReasons(reasons []string) string {
 	unique := uniqueStrings(reasons)
 	if len(unique) == 1 {
@@ -461,10 +488,7 @@ func TestRecordCLIQuirkEventsParsesStructuredJSONLogs(t *testing.T) {
 	dir := t.TempDir()
 	recorder, err := newE2EQuirkRecorder(dir)
 	require.NoError(t, err)
-	suiteQuirkRecorder = recorder
-	t.Cleanup(func() {
-		suiteQuirkRecorder = nil
-	})
+	installSuiteQuirkRecorderForTest(t, recorder)
 
 	stderr := strings.Join([]string{
 		`{"time":"2026-04-10T23:56:11.987283-07:00","level":"WARN","msg":"graph quirk retry exhausted","graph_quirk":"download-metadata-transient-404","graph_quirk_attempt_count":4,"graph_quirk_attempts":[{"attempt":1,"statusCode":404,"graphCode":"itemNotFound","requestId":"req-1"},{"attempt":2,"statusCode":404,"graphCode":"itemNotFound","requestId":"req-2"}],"error":"graph: HTTP 404"}`,
@@ -489,10 +513,7 @@ func TestRecordAuthPreflightDecisionEventSummarizesRetryReasons(t *testing.T) {
 	dir := t.TempDir()
 	recorder, err := newE2EQuirkRecorder(dir)
 	require.NoError(t, err)
-	suiteQuirkRecorder = recorder
-	t.Cleanup(func() {
-		suiteQuirkRecorder = nil
-	})
+	installSuiteQuirkRecorderForTest(t, recorder)
 
 	recordAuthPreflightDecisionEvent(t, "personal:test@example.com", "/me/drives", []authPreflightAttempt{
 		{StatusCode: 403, Code: "accessDenied", RequestID: "req-1", Err: "forbidden"},
@@ -513,10 +534,7 @@ func TestRecordLiveProviderRecurrenceEventIgnoresUnknownReasons(t *testing.T) {
 	dir := t.TempDir()
 	recorder, err := newE2EQuirkRecorder(dir)
 	require.NoError(t, err)
-	suiteQuirkRecorder = recorder
-	t.Cleanup(func() {
-		suiteQuirkRecorder = nil
-	})
+	installSuiteQuirkRecorderForTest(t, recorder)
 
 	recordLiveProviderRecurrenceEvent(t, "put /file.txt", liveProviderRecurrenceDecision{
 		Reason: liveProviderRecurrenceUnknown,
@@ -525,4 +543,45 @@ func TestRecordLiveProviderRecurrenceEventIgnoresUnknownReasons(t *testing.T) {
 
 	summary := readQuirkSummaryFile(t, filepath.Join(dir, quirkSummaryFileName))
 	assert.Empty(t, summary.Events)
+}
+
+func TestRecordLiveProviderRecurrenceEventWritesKnownReasons(t *testing.T) {
+	dir := t.TempDir()
+	recorder, err := newE2EQuirkRecorder(dir)
+	require.NoError(t, err)
+	installSuiteQuirkRecorderForTest(t, recorder)
+
+	recordLiveProviderRecurrenceEvent(t, "fixture visibility /file.txt", liveProviderRecurrenceDecision{
+		Reason: liveProviderRecurrencePostMutationDestinationPathLag,
+		Retry:  false,
+	}, quirkOutcomeSoftened, "stat still 404")
+
+	summary := readQuirkSummaryFile(t, filepath.Join(dir, quirkSummaryFileName))
+	require.Len(t, summary.Events, 1)
+	assert.Equal(t, quirkPhaseFixtureSeed, summary.Events[0].Phase)
+	assert.Equal(t, quirkSourceFixtureRecurrence, summary.Events[0].Source)
+	assert.Equal(t, string(liveProviderRecurrencePostMutationDestinationPathLag), summary.Events[0].QuirkOrReason)
+	assert.Equal(t, quirkOutcomeSoftened, summary.Events[0].Outcome)
+	assert.Equal(t, "stat still 404", summary.Events[0].FinalError)
+}
+
+func TestInstallSuiteQuirkRecorderForTestRestoresPreviousRecorder(t *testing.T) {
+	original := suiteQuirkRecorder
+	t.Cleanup(func() {
+		suiteQuirkRecorder = original
+	})
+
+	previous, err := newE2EQuirkRecorder(t.TempDir())
+	require.NoError(t, err)
+	suiteQuirkRecorder = previous
+
+	t.Run("override", func(t *testing.T) {
+		current, err := newE2EQuirkRecorder(t.TempDir())
+		require.NoError(t, err)
+
+		installSuiteQuirkRecorderForTest(t, current)
+		assert.Same(t, current, suiteQuirkRecorder)
+	})
+
+	assert.Same(t, previous, suiteQuirkRecorder)
 }

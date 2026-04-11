@@ -641,6 +641,33 @@ func waitForRemoteParentListingContains(
 	)
 }
 
+type fixtureSeedVisibilityOutcome uint8
+
+const (
+	fixtureSeedVisibilityKeepPolling fixtureSeedVisibilityOutcome = iota
+	fixtureSeedVisibilityExactSuccess
+	fixtureSeedVisibilitySoftenedByParentListing
+)
+
+// classifyFixtureSeedVisibilityAttempt keeps the fixture-readiness contract
+// pure: exact stat success wins immediately, otherwise a visible parent listing
+// softens the lag into the documented post-mutation destination recurrence.
+func classifyFixtureSeedVisibilityAttempt(
+	targetBase string,
+	statErr error,
+	parentListStdout string,
+	parentListErr error,
+) fixtureSeedVisibilityOutcome {
+	switch {
+	case statErr == nil:
+		return fixtureSeedVisibilityExactSuccess
+	case parentListErr == nil && strings.Contains(parentListStdout, targetBase):
+		return fixtureSeedVisibilitySoftenedByParentListing
+	default:
+		return fixtureSeedVisibilityKeepPolling
+	}
+}
+
 // waitForRemoteFixtureSeedVisible is the shared fixture-readiness contract for
 // remote writes that are only setup for later assertions. It accepts either
 // exact stat success or parent-list visibility so unrelated tests do not depend
@@ -676,8 +703,9 @@ func waitForRemoteFixtureSeedVisible(
 	var lastStderr string
 
 	for attempt := 0; ; attempt++ {
-		stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, env, "stat", cleanPath)
-		if err == nil {
+		statStdout, statStderr, statErr := runCLIWithConfigAllowError(t, cfgPath, env, "stat", cleanPath)
+		switch classifyFixtureSeedVisibilityAttempt(base, statErr, "", nil) {
+		case fixtureSeedVisibilityExactSuccess:
 			recordTimingEvent(
 				t,
 				timingKindRemoteWriteVisibility,
@@ -692,11 +720,12 @@ func waitForRemoteFixtureSeedVisible(
 			return
 		}
 
-		lastStdout = stdout
-		lastStderr = stderr
+		lastStdout = statStdout
+		lastStderr = statStderr
 
-		stdout, stderr, err = runCLIWithConfigAllowError(t, cfgPath, env, "ls", parentPath)
-		if err == nil && strings.Contains(stdout, base) {
+		listStdout, listStderr, listErr := runCLIWithConfigAllowError(t, cfgPath, env, "ls", parentPath)
+		switch classifyFixtureSeedVisibilityAttempt(base, statErr, listStdout, listErr) {
+		case fixtureSeedVisibilitySoftenedByParentListing:
 			recordLiveProviderRecurrenceEvent(
 				t,
 				fmt.Sprintf("fixture visibility %s", cleanPath),
@@ -721,8 +750,8 @@ func waitForRemoteFixtureSeedVisible(
 			return
 		}
 
-		lastStdout = stdout
-		lastStderr = stderr
+		lastStdout = listStdout
+		lastStderr = listStderr
 
 		if time.Now().After(deadline) {
 			recordTimingEvent(
@@ -751,6 +780,35 @@ func waitForRemoteFixtureSeedVisible(
 
 		time.Sleep(pollBackoff(attempt))
 	}
+}
+
+func TestClassifyFixtureSeedVisibilityAttempt(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, fixtureSeedVisibilityExactSuccess, classifyFixtureSeedVisibilityAttempt(
+		"test.txt",
+		nil,
+		"",
+		nil,
+	))
+	assert.Equal(t, fixtureSeedVisibilitySoftenedByParentListing, classifyFixtureSeedVisibilityAttempt(
+		"test.txt",
+		assert.AnError,
+		"test.txt\nother.txt\n",
+		nil,
+	))
+	assert.Equal(t, fixtureSeedVisibilityKeepPolling, classifyFixtureSeedVisibilityAttempt(
+		"test.txt",
+		assert.AnError,
+		"other.txt\n",
+		nil,
+	))
+	assert.Equal(t, fixtureSeedVisibilityKeepPolling, classifyFixtureSeedVisibilityAttempt(
+		"test.txt",
+		assert.AnError,
+		"",
+		assert.AnError,
+	))
 }
 
 func waitForRemoteDeleteDisappearance(
