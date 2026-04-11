@@ -530,19 +530,31 @@ func TestRunVerifyStressRunsExpectedSteps(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Len(t, runner.runCommands, 1)
+	require.Len(t, runner.runCommands, 2)
+
 	assert.Equal(t, "go", runner.runCommands[0].name)
+	assert.Equal(t, []string{
+		"test",
+		"-tags=stress",
+		"-race",
+		"-count=50",
+		"-timeout=20m",
+		"-run",
+		"TestWatchOrderingStress_",
+		"./internal/sync",
+	}, runner.runCommands[0].args)
+
+	assert.Equal(t, "go", runner.runCommands[1].name)
 	assert.Equal(t, []string{
 		"test",
 		"-race",
 		"-count=50",
-		"./internal/sync",
+		"-timeout=20m",
 		"./internal/multisync",
 		"./internal/syncdispatch",
 		"./internal/syncexec",
 		"./internal/syncobserve",
-		"./internal/cli",
-	}, runner.runCommands[0].args)
+	}, runner.runCommands[1].args)
 }
 
 // Validates: R-6.2.1

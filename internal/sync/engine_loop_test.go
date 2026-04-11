@@ -53,6 +53,45 @@ func seedApprovedHeldDelete(
 	return testWorkDispatchState(t, eng, ctx)
 }
 
+func dispatchBusyWatchAction(
+	t *testing.T,
+	eng *testEngine,
+	ctx context.Context,
+	path string,
+	actionID int64,
+) *synctypes.TrackedAction {
+	t.Helper()
+
+	rt := testWatchRuntime(t, eng)
+	busy := rt.depGraph.Add(&synctypes.Action{
+		Type:    synctypes.ActionUpload,
+		Path:    path,
+		DriveID: driveid.New(engineTestDriveID),
+	}, actionID, nil)
+	require.NotNil(t, busy)
+
+	dispatchCh := make(chan *synctypes.TrackedAction, 1)
+	rt.dispatchCh = dispatchCh
+	rt.replaceOutbox([]*synctypes.TrackedAction{busy})
+
+	shuttingDown, err := rt.runWatchStep(ctx, &watchPipeline{})
+	require.NoError(t, err)
+	assert.False(t, shuttingDown)
+
+	dispatched := <-dispatchCh
+	assert.Same(t, busy, dispatched)
+	assert.Empty(t, rt.currentOutbox())
+
+	return busy
+}
+
+func assertQueuedHeldDeleteAction(t *testing.T, action *synctypes.TrackedAction, path string) {
+	t.Helper()
+	require.NotNil(t, action)
+	assert.Equal(t, synctypes.ActionRemoteDelete, action.Action.Type)
+	assert.Equal(t, path, action.Action.Path)
+}
+
 // Validates: R-2.3.6, R-2.9.3
 func TestRunWatchStep_UserIntentWakeStaysPendingUntilOutboxDrains(t *testing.T) {
 	t.Parallel()
@@ -206,4 +245,188 @@ func TestRunWatchStep_RecheckWakeStaysPendingUntilOutboxDrains(t *testing.T) {
 	assert.Equal(t, synctypes.ActionRemoteDelete, outbox[0].Action.Type)
 	assert.Equal(t, "recheck-delete.txt", outbox[0].Action.Path)
 	assert.False(t, testWatchRuntime(t, eng).userIntentPending)
+}
+
+// Validates: R-2.3.6, R-2.9.3
+func TestRunWatchStep_UserIntentWakeStaysPendingUntilInFlightCompletes(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, nil)
+	newTestWatchState(t, eng)
+	ctx := t.Context()
+
+	bl, safety := seedApprovedHeldDelete(t, eng, ctx, "delete-after-inflight.txt", "item-inflight")
+	busy := dispatchBusyWatchAction(t, eng, ctx, "busy-inflight.txt", 101)
+	userIntentC := make(chan struct{}, 1)
+	userIntentC <- struct{}{}
+	p := &watchPipeline{
+		bl:          bl,
+		safety:      safety,
+		mode:        synctypes.SyncBidirectional,
+		userIntentC: userIntentC,
+	}
+
+	shuttingDown, err := testWatchRuntime(t, eng).runWatchStep(ctx, p)
+	require.NoError(t, err)
+	assert.False(t, shuttingDown)
+	assert.Empty(t, testWatchRuntime(t, eng).currentOutbox(), "pending intent should not admit while a dispatched action is still in flight")
+	assert.True(t, testWatchRuntime(t, eng).userIntentPending)
+
+	ready, ok := testWatchRuntime(t, eng).depGraph.Complete(busy.ID)
+	require.True(t, ok)
+	assert.Empty(t, ready)
+	testWatchRuntime(t, eng).settleWatchAdmission(ctx, p)
+
+	outbox := testWatchRuntime(t, eng).currentOutbox()
+	require.Len(t, outbox, 1)
+	assertQueuedHeldDeleteAction(t, outbox[0], "delete-after-inflight.txt")
+	assert.False(t, testWatchRuntime(t, eng).userIntentPending)
+}
+
+// Validates: R-2.3.6, R-2.9.3
+func TestRunWatchStep_RepeatedUserIntentWakesCoalesceWhileInFlight(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, nil)
+	newTestWatchState(t, eng)
+	ctx := t.Context()
+
+	bl, safety := seedApprovedHeldDelete(t, eng, ctx, "delete-coalesced.txt", "item-coalesced")
+	busy := dispatchBusyWatchAction(t, eng, ctx, "busy-coalesced.txt", 102)
+	userIntentC := make(chan struct{}, 2)
+	userIntentC <- struct{}{}
+	userIntentC <- struct{}{}
+	p := &watchPipeline{
+		bl:          bl,
+		safety:      safety,
+		mode:        synctypes.SyncBidirectional,
+		userIntentC: userIntentC,
+	}
+
+	for range 2 {
+		shuttingDown, err := testWatchRuntime(t, eng).runWatchStep(ctx, p)
+		require.NoError(t, err)
+		assert.False(t, shuttingDown)
+		assert.Empty(t, testWatchRuntime(t, eng).currentOutbox())
+		assert.True(t, testWatchRuntime(t, eng).userIntentPending)
+	}
+
+	ready, ok := testWatchRuntime(t, eng).depGraph.Complete(busy.ID)
+	require.True(t, ok)
+	assert.Empty(t, ready)
+	testWatchRuntime(t, eng).settleWatchAdmission(ctx, p)
+
+	outbox := testWatchRuntime(t, eng).currentOutbox()
+	require.Len(t, outbox, 1, "multiple wakes should still collapse into one durable-intent dispatch")
+	assertQueuedHeldDeleteAction(t, outbox[0], "delete-coalesced.txt")
+	assert.False(t, testWatchRuntime(t, eng).userIntentPending)
+}
+
+// Validates: R-2.3.6, R-2.9.3
+func TestRunWatchStep_RecheckAndUserIntentWakeCoalesceWhenBothReady(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, nil)
+	newTestWatchState(t, eng)
+	ctx := t.Context()
+
+	bl, safety := seedApprovedHeldDelete(t, eng, ctx, "delete-dual-wake.txt", "item-dual-wake")
+	busy := dispatchBusyWatchAction(t, eng, ctx, "busy-dual-wake.txt", 103)
+	recheckC := make(chan time.Time, 1)
+	recheckC <- time.Now()
+	userIntentC := make(chan struct{}, 1)
+	userIntentC <- struct{}{}
+	p := &watchPipeline{
+		bl:          bl,
+		safety:      safety,
+		mode:        synctypes.SyncBidirectional,
+		recheckC:    recheckC,
+		userIntentC: userIntentC,
+	}
+
+	for range 2 {
+		shuttingDown, err := testWatchRuntime(t, eng).runWatchStep(ctx, p)
+		require.NoError(t, err)
+		assert.False(t, shuttingDown)
+		assert.Empty(t, testWatchRuntime(t, eng).currentOutbox())
+		assert.True(t, testWatchRuntime(t, eng).userIntentPending)
+	}
+
+	ready, ok := testWatchRuntime(t, eng).depGraph.Complete(busy.ID)
+	require.True(t, ok)
+	assert.Empty(t, ready)
+	testWatchRuntime(t, eng).settleWatchAdmission(ctx, p)
+
+	outbox := testWatchRuntime(t, eng).currentOutbox()
+	require.Len(t, outbox, 1, "recheck and live wake should still produce one durable-intent dispatch")
+	assertQueuedHeldDeleteAction(t, outbox[0], "delete-dual-wake.txt")
+	assert.False(t, testWatchRuntime(t, eng).userIntentPending)
+}
+
+// Validates: R-2.3.6, R-2.9.3
+func TestRunWatchStep_WorkerResultCompletionAdmitsPendingUserIntent(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, nil)
+	newTestWatchState(t, eng)
+	ctx := t.Context()
+
+	bl, safety := seedApprovedHeldDelete(t, eng, ctx, "delete-on-result.txt", "item-result")
+	busy := testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{
+		Type:    synctypes.ActionUpload,
+		Path:    "busy-result.txt",
+		DriveID: driveid.New(engineTestDriveID),
+	}, 104, nil)
+	require.NotNil(t, busy)
+
+	results := make(chan synctypes.WorkerResult, 1)
+	results <- synctypes.WorkerResult{
+		ActionID:   busy.ID,
+		ActionType: busy.Action.Type,
+		Path:       busy.Action.Path,
+		DriveID:    busy.Action.DriveID,
+		Success:    true,
+	}
+	testWatchRuntime(t, eng).queueUserIntentDispatch()
+	p := &watchPipeline{
+		bl:      bl,
+		safety:  safety,
+		mode:    synctypes.SyncBidirectional,
+		results: results,
+	}
+
+	shuttingDown, err := testWatchRuntime(t, eng).runWatchStep(ctx, p)
+	require.NoError(t, err)
+	assert.False(t, shuttingDown)
+	assert.False(t, testWatchRuntime(t, eng).userIntentPending)
+
+	outbox := testWatchRuntime(t, eng).currentOutbox()
+	require.Len(t, outbox, 1, "worker completion should trigger admission when it frees the final capacity edge")
+	assertQueuedHeldDeleteAction(t, outbox[0], "delete-on-result.txt")
+	assert.Equal(t, 1, testWatchRuntime(t, eng).depGraph.InFlightCount(), "the completed action should be replaced by the newly admitted durable-intent action")
+}
+
+// Validates: R-2.8.3, R-6.10.10
+func TestRunWatchStep_DrainDoesNotAdmitPendingUserIntent(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, nil)
+	newTestWatchState(t, eng)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	bl, safety := seedApprovedHeldDelete(t, eng, t.Context(), "delete-drain.txt", "item-drain")
+	testWatchRuntime(t, eng).queueUserIntentDispatch()
+	p := &watchPipeline{
+		bl:     bl,
+		safety: safety,
+		mode:   synctypes.SyncBidirectional,
+	}
+
+	shuttingDown, err := testWatchRuntime(t, eng).runWatchStep(ctx, p)
+	require.NoError(t, err)
+	assert.False(t, shuttingDown)
+	assert.True(t, testWatchRuntime(t, eng).isDraining())
+	assert.Empty(t, testWatchRuntime(t, eng).currentOutbox(), "shutdown must seal admission even when user intent is already pending")
+	assert.True(t, testWatchRuntime(t, eng).userIntentPending)
 }

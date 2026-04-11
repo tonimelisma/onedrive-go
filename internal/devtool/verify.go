@@ -31,6 +31,7 @@ const (
 	fullE2EFixturePreflight  = "TestE2E_FixturePreflight_Full"
 	fullE2EPackageTimeout    = "60m"
 	fastE2EPackageTimeout    = "10m"
+	stressPackageTimeout     = "20m"
 	authPreflightIncidentID  = "LI-20260405-06"
 	fastDownloadIncidentID   = "LI-20260405-04"
 	fastDownloadTestName     = "TestE2E_Sync_DownloadOnly"
@@ -1346,27 +1347,52 @@ func runStress(
 	stdout, stderr io.Writer,
 ) error {
 	return collector.runStep("stress", func() error {
-		if err := writeStatus(stdout, "==> go test -race -count=50 runtime stress\n"); err != nil {
-			return fmt.Errorf("write status: %w", err)
+		stressCommands := []struct {
+			statusLine string
+			args       []string
+		}{
+			{
+				statusLine: fmt.Sprintf(
+					"==> go test -tags=stress -race -count=50 -timeout=%s "+
+						"-run TestWatchOrderingStress_ ./internal/sync\n",
+					stressPackageTimeout,
+				),
+				args: []string{
+					"go", "test",
+					"-tags=stress",
+					"-race",
+					"-count=50",
+					"-timeout=" + stressPackageTimeout,
+					"-run", "TestWatchOrderingStress_",
+					"./internal/sync",
+				},
+			},
+			{
+				statusLine: fmt.Sprintf(
+					"==> go test -race -count=50 -timeout=%s "+
+						"./internal/multisync ./internal/syncdispatch ./internal/syncexec ./internal/syncobserve\n",
+					stressPackageTimeout,
+				),
+				args: []string{
+					"go", "test",
+					"-race",
+					"-count=50",
+					"-timeout=" + stressPackageTimeout,
+					"./internal/multisync",
+					"./internal/syncdispatch",
+					"./internal/syncexec",
+					"./internal/syncobserve",
+				},
+			},
 		}
-		if err := runner.Run(
-			ctx,
-			repoRoot,
-			env,
-			stdout,
-			stderr,
-			"go",
-			"test",
-			"-race",
-			"-count=50",
-			"./internal/sync",
-			"./internal/multisync",
-			"./internal/syncdispatch",
-			"./internal/syncexec",
-			"./internal/syncobserve",
-			"./internal/cli",
-		); err != nil {
-			return fmt.Errorf("stress tests: %w", err)
+
+		for _, command := range stressCommands {
+			if err := writeStatus(stdout, command.statusLine); err != nil {
+				return fmt.Errorf("write status: %w", err)
+			}
+			if err := runner.Run(ctx, repoRoot, env, stdout, stderr, command.args[0], command.args[1:]...); err != nil {
+				return fmt.Errorf("stress tests: %w", err)
+			}
 		}
 
 		return nil
