@@ -546,27 +546,13 @@ func assertSyncLeavesLocalTreeStable(
 
 const remoteFixturePutMaxAttempts = 3
 
-type liveProviderRecurrenceReason string
-
-const (
-	liveProviderRecurrenceFreshParentChildCreateLag      liveProviderRecurrenceReason = "fresh_parent_child_create_lag"
-	liveProviderRecurrenceFreshParentParentPathLag       liveProviderRecurrenceReason = "fresh_parent_parent_path_lag"
-	liveProviderRecurrencePostMutationDestinationPathLag liveProviderRecurrenceReason = "post_mutation_destination_visibility_lag"
-	liveProviderRecurrenceUnknown                        liveProviderRecurrenceReason = "unknown"
-)
-
-type liveProviderRecurrenceDecision struct {
-	Reason liveProviderRecurrenceReason
-	Retry  bool
-}
-
 // putRemoteFile uploads string content to a remote path via a temp file.
 // cfgPath must point to a valid config with the drive section; env overrides
 // (if non-nil) are forwarded to the CLI child process. The helper deliberately
-// retries the known fresh-parent convergence family when the file is only
-// fixture setup for another test. That keeps unrelated tests from depending on
-// a single CLI invocation being the one where Graph finally makes a freshly
-// created parent path writable again.
+// retries only the command-window fresh-parent convergence families when the
+// file is only fixture setup for another test. That keeps unrelated tests from
+// depending on a single CLI invocation being the one where Graph finally makes
+// a freshly created parent path writable again.
 func putRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePath, content string) {
 	t.Helper()
 
@@ -584,7 +570,7 @@ func putRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePa
 			break
 		}
 
-		decision := classifyRemoteFixturePutFailure(stderr)
+		decision := classifyFixturePutCommandFailure(stderr)
 		if attempt >= remoteFixturePutMaxAttempts-1 || !decision.Retry {
 			require.NoErrorf(t, putErr, "CLI command %v failed\nstdout: %s\nstderr: %s",
 				[]string{"put", tmpFile.Name(), remotePath}, stdout, stderr)
@@ -603,7 +589,7 @@ func putRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePa
 	waitForRemoteFixtureSeedVisible(t, cfgPath, env, drive, remotePath)
 }
 
-func classifyRemoteFixturePutFailure(stderr string) liveProviderRecurrenceDecision {
+func classifyFixturePutCommandFailure(stderr string) liveProviderRecurrenceDecision {
 	switch {
 	case strings.Contains(stderr, "simple-upload-create-transient-404 retry exhausted"),
 		strings.Contains(stderr, "upload-session-create-transient-404 retry exhausted"):
@@ -617,13 +603,6 @@ func classifyRemoteFixturePutFailure(stderr string) liveProviderRecurrenceDecisi
 			Reason: liveProviderRecurrenceFreshParentParentPathLag,
 			Retry:  true,
 		}
-	case strings.Contains(stderr, "remote exact-path visibility for"),
-		strings.Contains(stderr, "remote fixture seed visibility for"),
-		strings.Contains(stderr, "remote write visibility for"):
-		return liveProviderRecurrenceDecision{
-			Reason: liveProviderRecurrencePostMutationDestinationPathLag,
-			Retry:  true,
-		}
 	default:
 		return liveProviderRecurrenceDecision{
 			Reason: liveProviderRecurrenceUnknown,
@@ -632,55 +611,55 @@ func classifyRemoteFixturePutFailure(stderr string) liveProviderRecurrenceDecisi
 	}
 }
 
-func TestClassifyRemoteFixturePutFailure_KnownConvergenceFamilies(t *testing.T) {
+func TestClassifyFixturePutCommandFailure_KnownConvergenceFamilies(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, liveProviderRecurrenceDecision{
 		Reason: liveProviderRecurrenceFreshParentChildCreateLag,
 		Retry:  true,
-	}, classifyRemoteFixturePutFailure(
+	}, classifyFixturePutCommandFailure(
 		`Error: graph: simple-upload-create-transient-404 retry exhausted after 7 attempts: graph: HTTP 404`,
 	))
 	assert.Equal(t, liveProviderRecurrenceDecision{
 		Reason: liveProviderRecurrenceFreshParentChildCreateLag,
 		Retry:  true,
-	}, classifyRemoteFixturePutFailure(
+	}, classifyFixturePutCommandFailure(
 		`Error: graph: upload-session-create-transient-404 retry exhausted after 6 attempts: graph: HTTP 404`,
 	))
 	assert.Equal(t, liveProviderRecurrenceDecision{
 		Reason: liveProviderRecurrenceFreshParentParentPathLag,
 		Retry:  true,
-	}, classifyRemoteFixturePutFailure(
+	}, classifyFixturePutCommandFailure(
 		`Error: resolving parent "e2e-fast-conflict": remote path not yet visible: "e2e-fast-conflict"`,
-	))
-	assert.Equal(t, liveProviderRecurrenceDecision{
-		Reason: liveProviderRecurrencePostMutationDestinationPathLag,
-		Retry:  true,
-	}, classifyRemoteFixturePutFailure(
-		`pollRemoteEventually: timed out after 30s waiting for remote write visibility for "test.txt" via [stat /folder/test.txt]`,
 	))
 }
 
-func TestClassifyRemoteFixturePutFailure_RejectsUnrelatedFailures(t *testing.T) {
+func TestClassifyFixturePutCommandFailure_RejectsUnrelatedFailures(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, liveProviderRecurrenceDecision{
 		Reason: liveProviderRecurrenceUnknown,
 		Retry:  false,
-	}, classifyRemoteFixturePutFailure(
+	}, classifyFixturePutCommandFailure(
 		`Error: graph: setting mtime after simple upload: graph: simple-upload-mtime-transient-404 retry exhausted`,
 	))
 	assert.Equal(t, liveProviderRecurrenceDecision{
 		Reason: liveProviderRecurrenceUnknown,
 		Retry:  false,
-	}, classifyRemoteFixturePutFailure(
+	}, classifyFixturePutCommandFailure(
 		`Error: graph: HTTP 403: Access denied`,
 	))
 	assert.Equal(t, liveProviderRecurrenceDecision{
 		Reason: liveProviderRecurrenceUnknown,
 		Retry:  false,
-	}, classifyRemoteFixturePutFailure(
+	}, classifyFixturePutCommandFailure(
 		`Error: resolving "/e2e-fast-conflict": resolve delete target "e2e-fast-conflict" from parent "": graph: not found`,
+	))
+	assert.Equal(t, liveProviderRecurrenceDecision{
+		Reason: liveProviderRecurrenceUnknown,
+		Retry:  false,
+	}, classifyFixturePutCommandFailure(
+		`pollRemoteEventually: timed out after 30s waiting for remote fixture seed visibility for "test.txt" via [stat /folder/test.txt]`,
 	))
 }
 
