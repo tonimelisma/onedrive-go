@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -579,26 +580,14 @@ func pollRemoteEventually(
 	}
 }
 
-func waitForRemoteReadSuccess(
+// waitForRemoteExactStatVisible is for tests whose contract is the exact path
+// route itself. It should not be used for generic fixture seeding.
+func waitForRemoteExactStatVisible(
 	t *testing.T,
 	cfgPath string,
 	env map[string]string,
 	driveID string,
-	timeout time.Duration,
-	args ...string,
-) (string, string) {
-	t.Helper()
-
-	return pollCLIWithConfigRetryingTransientGraphFailures(t, cfgPath, env, driveID, timeout, args...)
-}
-
-func waitForRemoteWriteVisible(
-	t *testing.T,
-	cfgPath string,
-	env map[string]string,
-	driveID string,
-	expected string,
-	args ...string,
+	remotePath string,
 ) (string, string) {
 	t.Helper()
 
@@ -609,12 +598,141 @@ func waitForRemoteWriteVisible(
 		driveID,
 		remoteWritePropagationTimeout,
 		timingKindRemoteWriteVisibility,
-		fmt.Sprintf("remote write visibility for %q", expected),
+		fmt.Sprintf("remote exact-path visibility for %q", remotePath),
+		func(_ string, _ string, err error) bool {
+			return err == nil
+		},
+		"stat", remotePath,
+	)
+}
+
+// waitForRemoteParentListingContains proves list-visible availability under a
+// parent path without asserting exact-path convergence.
+func waitForRemoteParentListingContains(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	driveID string,
+	parentPath string,
+	expected string,
+) (string, string) {
+	t.Helper()
+
+	return pollRemoteEventually(
+		t,
+		cfgPath,
+		env,
+		driveID,
+		remoteWritePropagationTimeout,
+		timingKindRemoteWriteVisibility,
+		fmt.Sprintf("remote parent listing contains %q under %q", expected, parentPath),
 		func(stdout, _ string, err error) bool {
 			return err == nil && strings.Contains(stdout, expected)
 		},
-		args...,
+		"ls", parentPath,
 	)
+}
+
+// waitForRemoteFixtureSeedVisible is the shared fixture-readiness contract for
+// remote writes that are only setup for later assertions. It accepts either
+// exact stat success or parent-list visibility so unrelated tests do not depend
+// on one stricter read path winning a provider convergence race.
+func waitForRemoteFixtureSeedVisible(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	driveID string,
+	remotePath string,
+) {
+	t.Helper()
+
+	cleanPath := path.Clean(remotePath)
+	if cleanPath == "." || cleanPath == "/" || cleanPath == "" {
+		return
+	}
+
+	base := path.Base(cleanPath)
+	if base == "." || base == "/" || base == "" {
+		return
+	}
+
+	parentPath := path.Dir(cleanPath)
+	if parentPath == "." || parentPath == "" {
+		parentPath = "/"
+	}
+
+	deadline := time.Now().Add(remoteWritePropagationTimeout)
+	startedAt := time.Now()
+
+	var lastStdout string
+	var lastStderr string
+
+	for attempt := 0; ; attempt++ {
+		stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, env, "stat", cleanPath)
+		if err == nil {
+			recordTimingEvent(
+				t,
+				timingKindRemoteWriteVisibility,
+				fmt.Sprintf("remote fixture seed visibility for %q", cleanPath),
+				driveID,
+				[]string{"stat", cleanPath},
+				remoteWritePropagationTimeout,
+				time.Since(startedAt),
+				attempt+1,
+				timingOutcomeSuccess,
+			)
+			return
+		}
+
+		lastStdout = stdout
+		lastStderr = stderr
+
+		stdout, stderr, err = runCLIWithConfigAllowError(t, cfgPath, env, "ls", parentPath)
+		if err == nil && strings.Contains(stdout, base) {
+			recordTimingEvent(
+				t,
+				timingKindRemoteWriteVisibility,
+				fmt.Sprintf("remote fixture seed visibility for %q", cleanPath),
+				driveID,
+				[]string{"ls", parentPath},
+				remoteWritePropagationTimeout,
+				time.Since(startedAt),
+				attempt+1,
+				timingOutcomeSuccess,
+			)
+			return
+		}
+
+		lastStdout = stdout
+		lastStderr = stderr
+
+		if time.Now().After(deadline) {
+			recordTimingEvent(
+				t,
+				timingKindRemoteWriteVisibility,
+				fmt.Sprintf("remote fixture seed visibility for %q", cleanPath),
+				driveID,
+				[]string{"stat", cleanPath, "ls", parentPath},
+				remoteWritePropagationTimeout,
+				time.Since(startedAt),
+				attempt+1,
+				timingOutcomeTimeout,
+			)
+			require.Failf(
+				t,
+				"waitForRemoteFixtureSeedVisible: timed out",
+				"after %v waiting for fixture visibility of %q via stat %q or ls %q\nlast stdout: %s\nlast stderr: %s",
+				remoteWritePropagationTimeout,
+				cleanPath,
+				cleanPath,
+				parentPath,
+				lastStdout,
+				lastStderr,
+			)
+		}
+
+		time.Sleep(pollBackoff(attempt))
+	}
 }
 
 func waitForRemoteDeleteDisappearance(
@@ -790,12 +908,12 @@ func TestE2E_RoundTrip(t *testing.T) {
 	})
 
 	t.Run("ls_folder", func(t *testing.T) {
-		stdout, _ := waitForRemoteWriteVisible(t, cfgPath, nil, drive, "test.txt", "ls", "/"+testFolder)
+		stdout, _ := waitForRemoteParentListingContains(t, cfgPath, nil, drive, "/"+testFolder, "test.txt")
 		assert.Contains(t, stdout, "subfolder")
 	})
 
 	t.Run("stat", func(t *testing.T) {
-		stdout, _ := waitForRemoteWriteVisible(t, cfgPath, nil, drive, "test.txt", "stat", "/"+testFile)
+		stdout, _ := waitForRemoteExactStatVisible(t, cfgPath, nil, drive, "/"+testFile)
 		assert.Contains(t, stdout, fmt.Sprintf("%d bytes", len(testContent)))
 	})
 
@@ -836,7 +954,7 @@ func TestE2E_RoundTrip(t *testing.T) {
 		_, stderr := runCLIWithConfig(t, cfgPath, nil, "put", tmpFile.Name(), "/"+permFile)
 		assert.Contains(t, stderr, "Uploaded")
 
-		pollRemotePathVisible(t, cfgPath, nil, "/"+permFile)
+		waitForRemoteFixtureSeedVisible(t, cfgPath, nil, drive, "/"+permFile)
 
 		_, stderr = runCLIWithConfig(t, cfgPath, nil, "rm", "--permanent", "/"+permFile)
 		assert.Contains(t, stderr, "Permanently deleted")

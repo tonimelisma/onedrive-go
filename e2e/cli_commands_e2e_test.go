@@ -261,7 +261,7 @@ func TestE2E_Status_JSON_ConflictDetails(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "jsonconflict.txt"), []byte("original"), 0o600))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
-	pollRemotePathVisible(t, opsCfgPath, nil, "/"+testFolder+"/jsonconflict.txt")
+	waitForRemoteFixtureSeedVisible(t, opsCfgPath, nil, drive, "/"+testFolder+"/jsonconflict.txt")
 
 	// Create edit-edit conflict.
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "jsonconflict.txt"), []byte("local edit"), 0o600))
@@ -304,7 +304,7 @@ func TestE2E_Resolve_Both_PreservesConflictCopy(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "both.txt"), []byte("original"), 0o600))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
-	pollRemotePathVisible(t, opsCfgPath, nil, "/"+testFolder+"/both.txt")
+	waitForRemoteFixtureSeedVisible(t, opsCfgPath, nil, drive, "/"+testFolder+"/both.txt")
 
 	// Create edit-edit conflict.
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "both.txt"), []byte("local both"), 0o600))
@@ -364,9 +364,9 @@ func TestE2E_Status_History_ShowsResolvedStrategies(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "c.txt"), []byte("c-original"), 0o600))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
-	pollRemotePathVisible(t, opsCfgPath, nil, "/"+testFolder+"/a.txt")
-	pollRemotePathVisible(t, opsCfgPath, nil, "/"+testFolder+"/b.txt")
-	pollRemotePathVisible(t, opsCfgPath, nil, "/"+testFolder+"/c.txt")
+	waitForRemoteFixtureSeedVisible(t, opsCfgPath, nil, drive, "/"+testFolder+"/a.txt")
+	waitForRemoteFixtureSeedVisible(t, opsCfgPath, nil, drive, "/"+testFolder+"/b.txt")
+	waitForRemoteFixtureSeedVisible(t, opsCfgPath, nil, drive, "/"+testFolder+"/c.txt")
 
 	// Create 3 edit-edit conflicts.
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "a.txt"), []byte("a-local"), 0o600))
@@ -445,7 +445,7 @@ func TestE2E_Resolve_WithWatchDaemonExecutesQueuedIntent(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "watch-conflict.txt"), []byte("original"), 0o600))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
-	pollRemotePathVisible(t, opsCfgPath, nil, "/"+testFolder+"/watch-conflict.txt")
+	waitForRemoteFixtureSeedVisible(t, opsCfgPath, nil, drive, "/"+testFolder+"/watch-conflict.txt")
 
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "watch-conflict.txt"), []byte("local-watch"), 0o600))
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/watch-conflict.txt", "remote-watch")

@@ -381,6 +381,10 @@ default`:
   three capped sleeps, which yields about `95.75s` of scheduled wait before
   request overhead and roughly a two-minute wall-clock budget before surfacing
   `ErrPathNotVisible`
+- fast E2E helpers mirror that split: generic fixture seeding waits for
+  user-visible availability, while exact-route assertions (`stat` or other
+  exact-path probes) use dedicated exact-route waits so unrelated tests do not
+  overassert the stricter read model
 
 ### Delete-By-ID Can Lag A Successful Path Lookup
 
@@ -445,6 +449,13 @@ Runtime policy:
 - live tests that assert remote existence after a successful write-producing
   sync pass must use the longer remote-write visibility budget rather than the
   generic 30-second poll helper
+- live-test fixture setup is intentionally split:
+  - fixture seeding helpers may absorb only the documented provider recurrence
+    families they are explicitly seeding around
+  - generic fixture readiness waits prove user-visible availability (exact stat
+    success or parent listing visibility), not exact-route convergence
+  - tests that are explicitly validating exact-path reads must still poll the
+    exact route directly instead of inheriting the looser fixture-seed contract
 
 ### Transient 403 on `/me/drives` (Discovery/Auth Projection Lag)
 
@@ -727,6 +738,9 @@ Runtime policy:
   whole fixture `put` operation when Graph either exhausts the documented
   child-create retries or still reports `remote path not yet visible` while
   resolving the freshly created parent for that later command
+- that fixture policy remains narrow: it does not absorb unrelated failures,
+  and it does not replace tests that are explicitly asserting exact-route
+  behavior after the create succeeds
 - if the request still fails after the quirk budget, the upload returns the
   final error without pretending the parent exists
 
