@@ -69,6 +69,7 @@ func TestE2E_Status_JSON(t *testing.T) {
 	assert.Contains(t, output, "issue_groups", "single-drive status json should include grouped issue details")
 	assert.Contains(t, output, "delete_safety", "single-drive status json should include delete safety rows")
 	assert.Contains(t, output, "conflicts", "single-drive status json should include unresolved conflicts")
+	assert.Contains(t, output, "next_actions", "single-drive status json should include explicit next actions")
 	assert.Contains(t, output, "state_store_status", "single-drive status json should report state-store health")
 
 	_, ok := output["issue_groups"].([]interface{})
@@ -79,6 +80,9 @@ func TestE2E_Status_JSON(t *testing.T) {
 
 	_, ok = output["conflicts"].([]interface{})
 	require.True(t, ok, "conflicts should be an array")
+
+	_, ok = output["next_actions"].([]interface{})
+	require.True(t, ok, "next_actions should be an array")
 
 	stateStoreStatus, ok := output["state_store_status"].(string)
 	require.True(t, ok, "state_store_status should be a string")
@@ -205,6 +209,7 @@ func TestE2E_Status_Detailed_NoVisibleProblems(t *testing.T) {
 	assert.Empty(t, status.IssueGroups)
 	assert.Empty(t, status.DeleteSafety)
 	assert.Empty(t, status.Conflicts)
+	assert.Empty(t, status.NextActions)
 	assert.Equal(t, "healthy", status.StateStoreStatus)
 }
 
@@ -271,6 +276,8 @@ func TestE2E_Status_JSON_ConflictDetails(t *testing.T) {
 	assert.Contains(t, conflict.Path, "jsonconflict.txt")
 	assert.Equal(t, "edit_edit", conflict.ConflictType)
 	assert.Equal(t, "unresolved", conflict.State)
+	assert.Contains(t, conflict.ActionHint, "resolve local")
+	assert.NotEmpty(t, status.NextActions)
 
 	// Resolve to clean up.
 	queueConflictResolutionAndSync(t, cfgPath, env, "remote", "--all")

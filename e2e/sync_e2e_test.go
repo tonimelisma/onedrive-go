@@ -37,6 +37,7 @@ type detailedStatusJSON struct {
 	DeleteSafety     []statusDeleteSafetyJSON    `json:"delete_safety"`
 	Conflicts        []statusConflictJSON        `json:"conflicts"`
 	ConflictHistory  []statusConflictHistoryJSON `json:"conflict_history"`
+	NextActions      []string                    `json:"next_actions"`
 	StateStoreStatus string                      `json:"state_store_status"`
 }
 
@@ -46,8 +47,9 @@ type statusIssueGroupJSON struct {
 }
 
 type statusDeleteSafetyJSON struct {
-	Path  string `json:"path"`
-	State string `json:"state"`
+	Path       string `json:"path"`
+	State      string `json:"state"`
+	ActionHint string `json:"action_hint"`
 }
 
 type statusConflictJSON struct {
@@ -57,6 +59,7 @@ type statusConflictJSON struct {
 	State               string `json:"state"`
 	RequestedResolution string `json:"requested_resolution"`
 	LastRequestError    string `json:"last_request_error"`
+	ActionHint          string `json:"action_hint"`
 }
 
 type statusConflictHistoryJSON struct {

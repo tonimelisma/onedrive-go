@@ -38,6 +38,7 @@ type detailedStatusOutput struct {
 	DeleteSafety           []deleteSafetyJSON          `json:"delete_safety"`
 	Conflicts              []statusConflictJSON        `json:"conflicts"`
 	ConflictHistory        []statusConflictHistoryJSON `json:"conflict_history,omitempty"`
+	NextActions            []string                    `json:"next_actions,omitempty"`
 	StateStoreStatus       string                      `json:"state_store_status"`
 	StateStoreError        string                      `json:"state_store_error,omitempty"`
 	StateStoreRecoveryHint string                      `json:"state_store_recovery_hint,omitempty"`
@@ -48,6 +49,7 @@ type deleteSafetyJSON struct {
 	State      string `json:"state"`
 	LastSeenAt string `json:"last_seen_at,omitempty"`
 	ApprovedAt string `json:"approved_at,omitempty"`
+	ActionHint string `json:"action_hint,omitempty"`
 }
 
 type statusConflictJSON struct {
@@ -59,6 +61,7 @@ type statusConflictJSON struct {
 	RequestedResolution string `json:"requested_resolution,omitempty"`
 	LastRequestedAt     string `json:"last_requested_at,omitempty"`
 	LastRequestError    string `json:"last_request_error,omitempty"`
+	ActionHint          string `json:"action_hint,omitempty"`
 }
 
 type statusConflictHistoryJSON struct {
@@ -145,6 +148,7 @@ func buildDetailedStatusOutput(
 	snapshot syncstore.DetailedStatusSnapshot,
 	storeInfo detailedStateStoreInfo,
 ) detailedStatusOutput {
+	nextActions := newStatusActionHintSet()
 	output := detailedStatusOutput{
 		Drive:                  drive,
 		FileCount:              snapshot.BaselineEntryCount,
@@ -157,6 +161,7 @@ func buildDetailedStatusOutput(
 		StateStoreError:        storeInfo.Error,
 		StateStoreRecoveryHint: storeInfo.RecoveryHint,
 	}
+	nextActions.add(storeInfo.RecoveryHint)
 
 	output.LastSyncTime = snapshot.SyncMetadata["last_sync_time"]
 	output.LastSyncDuration = snapshot.SyncMetadata["last_sync_duration_ms"]
@@ -181,17 +186,20 @@ func buildDetailedStatusOutput(
 
 	for i := range snapshot.DeleteSafety {
 		row := snapshot.DeleteSafety[i]
+		actionHint := deleteSafetyActionHint(drive.CanonicalID, row.State)
+		nextActions.add(actionHint)
 		output.DeleteSafety = append(output.DeleteSafety, deleteSafetyJSON{
 			Path:       row.Path,
 			State:      row.State,
 			LastSeenAt: formatNanoTimestamp(row.LastSeenAt),
 			ApprovedAt: formatNanoTimestamp(row.ApprovedAt),
+			ActionHint: actionHint,
 		})
 	}
 
 	for i := range snapshot.Conflicts {
 		row := snapshot.Conflicts[i]
-		output.Conflicts = append(output.Conflicts, statusConflictJSON{
+		conflict := statusConflictJSON{
 			ID:                  row.ID,
 			Path:                row.Path,
 			ConflictType:        row.ConflictType,
@@ -200,7 +208,10 @@ func buildDetailedStatusOutput(
 			RequestedResolution: row.RequestedResolution,
 			LastRequestedAt:     formatNanoTimestamp(row.LastRequestedAt),
 			LastRequestError:    row.LastRequestError,
-		})
+		}
+		conflict.ActionHint = statusConflictActionHint(drive.CanonicalID, &conflict)
+		nextActions.add(conflict.ActionHint)
+		output.Conflicts = append(output.Conflicts, conflict)
 	}
 
 	for i := range snapshot.ConflictHistory {
@@ -215,6 +226,7 @@ func buildDetailedStatusOutput(
 			ResolvedBy:   row.ResolvedBy,
 		})
 	}
+	output.NextActions = nextActions.slice()
 
 	return output
 }
@@ -422,6 +434,9 @@ func printDetailedDeleteSafetySection(w io.Writer, rows []deleteSafetyJSON, verb
 		if err := printDeleteSafetyPaths(w, held, verbose); err != nil {
 			return err
 		}
+		if err := printDetailedActionHint(w, held[0].ActionHint); err != nil {
+			return err
+		}
 	}
 
 	if len(approved) > 0 {
@@ -434,6 +449,9 @@ func printDetailedDeleteSafetySection(w io.Writer, rows []deleteSafetyJSON, verb
 			return err
 		}
 		if err := printDeleteSafetyPaths(w, approved, verbose); err != nil {
+			return err
+		}
+		if err := printDetailedActionHint(w, approved[0].ActionHint); err != nil {
 			return err
 		}
 	}
@@ -509,9 +527,20 @@ func printDetailedConflictSection(w io.Writer, conflicts []statusConflictJSON) e
 				return err
 			}
 		}
+		if err := printDetailedActionHint(w, conflict.ActionHint); err != nil {
+			return err
+		}
 	}
 
 	return nil
+}
+
+func printDetailedActionHint(w io.Writer, hint string) error {
+	if hint == "" {
+		return nil
+	}
+
+	return writef(w, "  Next: %s\n", hint)
 }
 
 func printDetailedConflictHistorySection(w io.Writer, history []statusConflictHistoryJSON) error {

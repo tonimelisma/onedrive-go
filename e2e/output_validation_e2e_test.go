@@ -50,6 +50,7 @@ func TestE2E_Status_DetailedJSON(t *testing.T) {
 	assert.Contains(t, output, "issue_groups")
 	assert.Contains(t, output, "delete_safety")
 	assert.Contains(t, output, "conflicts")
+	assert.Contains(t, output, "next_actions")
 	assert.Contains(t, output, "state_store_status")
 	assert.Equal(t, "healthy", output["state_store_status"])
 }
