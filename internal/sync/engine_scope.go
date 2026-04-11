@@ -180,15 +180,8 @@ func (rt *watchRuntime) setScopeSnapshot(snapshot syncscope.Snapshot, generation
 func (rt *watchRuntime) handleWatchScopeChange(
 	ctx context.Context,
 	p *watchPipeline,
-	outbox []*synctypes.TrackedAction,
 	change *syncscope.Change,
-	ok bool,
-) ([]*synctypes.TrackedAction, bool, error) {
-	if !ok {
-		p.scopeChanges = nil
-		return outbox, false, nil
-	}
-
+) error {
 	session := ScopeSession{
 		Current:    change.New,
 		Previous:   change.Old,
@@ -201,7 +194,7 @@ func (rt *watchRuntime) handleWatchScopeChange(
 		Purpose:  observationPlanPurposeWatch,
 	})
 	if err != nil {
-		return outbox, false, err
+		return err
 	}
 
 	rt.setScopeSnapshot(change.New, session.Generation)
@@ -211,12 +204,12 @@ func (rt *watchRuntime) handleWatchScopeChange(
 		plan.Reentry.Kind = synctypes.ScopeReconcileNone
 	}
 	if err := rt.applyScopeState(ctx, false, &session, &plan); err != nil {
-		return outbox, false, fmt.Errorf("sync: applying watch scope change: %w", err)
+		return fmt.Errorf("sync: applying watch scope change: %w", err)
 	}
 
 	if plan.Reentry.Pending {
 		rt.runEnteredScopeReconciliationAsync(ctx, p.bl, plan.Reentry.Paths)
 	}
 
-	return outbox, false, nil
+	return nil
 }

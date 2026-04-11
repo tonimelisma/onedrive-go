@@ -59,8 +59,13 @@ func newOneShotRunner(engine *Engine) *oneShotRunner {
 	}
 }
 
+type watchLoopState struct {
+	phase  watchRuntimePhase
+	outbox []*synctypes.TrackedAction
+}
+
 type watchRuntimeState struct {
-	phase watchRuntimePhase
+	loop watchLoopState
 
 	// activeScopesMu guards activeScopes. The watch loop remains the logical
 	// owner, but tests and repair paths can observe or adjust the working set
@@ -170,7 +175,9 @@ func newWatchRuntime(engine *Engine) *watchRuntime {
 	rt := &watchRuntime{
 		engineFlow: newEngineFlow(engine),
 		watchRuntimeState: watchRuntimeState{
-			phase: watchRuntimePhaseRunning,
+			loop: watchLoopState{
+				phase: watchRuntimePhaseRunning,
+			},
 		},
 		watchTimerState: watchTimerState{
 			trialCh:      make(chan struct{}, 1),
