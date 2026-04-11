@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
@@ -39,6 +40,8 @@ const (
 	e2eSkipSuiteScrubEnvVar  = "ONEDRIVE_E2E_SKIP_SUITE_SCRUB"
 	e2eTimingEventsFileName  = "timing-events.jsonl"
 	e2eTimingSummaryFileName = "timing-summary.json"
+	e2eQuirkEventsFileName   = "quirk-events.jsonl"
+	e2eQuirkSummaryFileName  = "quirk-summary.json"
 
 	fullE2EParallelMiscParallel = 5
 	fullE2ESerialParallel       = 1
@@ -75,6 +78,7 @@ type VerifySummary struct {
 	Status           string                   `json:"status"`
 	TotalDurationMS  int64                    `json:"total_duration_ms"`
 	Steps            []VerifyStepSummary      `json:"steps"`
+	QuirkEventCount  int                      `json:"quirk_event_count"`
 	ClassifiedReruns []ClassifiedRerunSummary `json:"classified_reruns,omitempty"`
 	E2EFullBuckets   []E2EBucketSummary       `json:"e2e_full_buckets,omitempty"`
 }
@@ -110,6 +114,7 @@ type verifySummaryCollector struct {
 	summary         VerifySummary
 	stdout          io.Writer
 	summaryJSONPath string
+	e2eLogDir       string
 	startedAt       time.Time
 }
 
@@ -154,13 +159,14 @@ type documentedCLICommandSpec struct {
 	subcommands map[string]*documentedCLICommandSpec
 }
 
-func newVerifySummaryCollector(profile VerifyProfile, stdout io.Writer, summaryJSONPath string) *verifySummaryCollector {
+func newVerifySummaryCollector(profile VerifyProfile, stdout io.Writer, summaryJSONPath string, e2eLogDir string) *verifySummaryCollector {
 	return &verifySummaryCollector{
 		summary: VerifySummary{
 			Profile: string(profile),
 		},
 		stdout:          stdout,
 		summaryJSONPath: summaryJSONPath,
+		e2eLogDir:       e2eLogDir,
 		startedAt:       time.Now(),
 	}
 }
@@ -225,6 +231,14 @@ func (c *verifySummaryCollector) recordClassifiedRerun(
 }
 
 func (c *verifySummaryCollector) finalize(runErr error) error {
+	if c.e2eLogDir != "" {
+		quirkEventCount, err := readE2EQuirkEventCount(c.e2eLogDir)
+		if err != nil {
+			return err
+		}
+		c.summary.QuirkEventCount = quirkEventCount
+	}
+
 	c.summary.TotalDurationMS = durationMS(time.Since(c.startedAt))
 	c.summary.Status = verifySummaryStatusPass
 	if runErr != nil {
@@ -277,6 +291,7 @@ func (c *verifySummaryCollector) renderText() string {
 		}
 		builder.WriteString(renderSummaryLine(bucket.Name, bucket.Status, bucket.DurationMS, errorText))
 	}
+	fmt.Fprintf(&builder, "quirk events: %d\n", c.summary.QuirkEventCount)
 
 	if len(c.summary.ClassifiedReruns) == 0 {
 		builder.WriteString("classified reruns: none\n")
@@ -491,12 +506,17 @@ func fullE2EBucketRunPattern(testNames []string) string {
 	return "^(" + strings.Join(testNames, "|") + ")$"
 }
 
-func resetE2ETimingArtifacts(logDir string) error {
+func resetE2EArtifacts(logDir string) error {
 	if logDir == "" {
 		return nil
 	}
 
-	for _, name := range []string{e2eTimingEventsFileName, e2eTimingSummaryFileName} {
+	for _, name := range []string{
+		e2eTimingEventsFileName,
+		e2eTimingSummaryFileName,
+		e2eQuirkEventsFileName,
+		e2eQuirkSummaryFileName,
+	} {
 		path := filepath.Join(logDir, name)
 		if err := localpath.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove %s: %w", path, err)
@@ -504,6 +524,31 @@ func resetE2ETimingArtifacts(logDir string) error {
 	}
 
 	return nil
+}
+
+func readE2EQuirkEventCount(logDir string) (int, error) {
+	if logDir == "" {
+		return 0, nil
+	}
+
+	summaryPath := filepath.Join(logDir, e2eQuirkSummaryFileName)
+	data, err := localpath.ReadFile(summaryPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+
+		return 0, fmt.Errorf("read quirk summary %s: %w", summaryPath, err)
+	}
+
+	var summary struct {
+		Events []json.RawMessage `json:"events"`
+	}
+	if err := json.Unmarshal(data, &summary); err != nil {
+		return 0, fmt.Errorf("decode quirk summary %s: %w", summaryPath, err)
+	}
+
+	return len(summary.Events), nil
 }
 
 func discoverTaggedE2ETests(e2eDir string, buildExpression string) ([]string, error) {
@@ -577,7 +622,8 @@ func RunVerify(ctx context.Context, runner commandRunner, opts *VerifyOptions) (
 	}
 
 	stdout, stderr := resolveVerifyWriters(opts)
-	collector := newVerifySummaryCollector(opts.Profile, stdout, opts.SummaryJSONPath)
+	effectiveE2ELogDir := resolvedE2ELogDir(opts.E2ELogDir, plan)
+	collector := newVerifySummaryCollector(opts.Profile, stdout, opts.SummaryJSONPath, effectiveE2ELogDir)
 	defer func() {
 		if finalizeErr := collector.finalize(runErr); finalizeErr != nil {
 			if runErr == nil {
@@ -756,7 +802,7 @@ func runOptionalVerification(
 	if effectiveE2ELogDir != "" {
 		e2eEnv = append([]string{}, env...)
 		e2eEnv = append(e2eEnv, "E2E_LOG_DIR="+effectiveE2ELogDir)
-		if err := resetE2ETimingArtifacts(effectiveE2ELogDir); err != nil {
+		if err := resetE2EArtifacts(effectiveE2ELogDir); err != nil {
 			return err
 		}
 	}
@@ -791,7 +837,7 @@ func resolvedE2ELogDir(explicit string, plan verifyPlan) string {
 	if explicit != "" {
 		return explicit
 	}
-	if plan.runE2EFull {
+	if plan.runE2E || plan.runE2EFull {
 		return filepath.Join(os.TempDir(), "e2e-debug-logs")
 	}
 
@@ -1423,6 +1469,7 @@ func runRepoConsistencyChecks(repoRoot string) error {
 		ensureGovernedBehaviorDocsHaveEvidence,
 		ensureRequirementReferencesResolve,
 		ensureEvidenceDocsReferenceRealTests,
+		ensureRecurringIncidentPromotedDocsResolve,
 		ensureCLIOutputBoundary,
 		ensureGuardedPackagesAvoidRawOS,
 		ensureFilterSemanticsWording,
@@ -1844,6 +1891,188 @@ func scanDocumentedCLIExamplesInFile(path string, resolver func(string) error) e
 	}
 
 	return nil
+}
+
+var (
+	markdownLinkTargetPattern     = regexp.MustCompile(`\[[^\]]+\]\(([^)]+)\)`)
+	markdownExplicitAnchorPattern = regexp.MustCompile(`<a\s+id="([^"]+)"`)
+)
+
+type liveIncidentDocPromotion struct {
+	incidentID   string
+	isRecurring  bool
+	promotedDocs string
+}
+
+func ensureRecurringIncidentPromotedDocsResolve(repoRoot string) error {
+	liveIncidentsPath := filepath.Join(repoRoot, "spec", "reference", "live-incidents.md")
+	data, err := localpath.ReadFile(liveIncidentsPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+
+		return fmt.Errorf("read live incidents: %w", err)
+	}
+
+	promotions := parseLiveIncidentPromotions(string(data))
+	for _, promotion := range promotions {
+		if !promotion.isRecurring {
+			continue
+		}
+		if promotion.promotedDocs == "" {
+			return fmt.Errorf("recurring incident %s is missing Promoted docs", promotion.incidentID)
+		}
+		if strings.EqualFold(strings.TrimSpace(promotion.promotedDocs), "none") {
+			return fmt.Errorf("recurring incident %s cannot use Promoted docs: none", promotion.incidentID)
+		}
+
+		targets := markdownLinkTargets(promotion.promotedDocs)
+		if len(targets) == 0 {
+			return fmt.Errorf("recurring incident %s has malformed Promoted docs links", promotion.incidentID)
+		}
+		for _, target := range targets {
+			if err := validatePromotedDocLink(liveIncidentsPath, target); err != nil {
+				return fmt.Errorf("recurring incident %s promoted doc %q: %w", promotion.incidentID, target, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+func parseLiveIncidentPromotions(source string) []liveIncidentDocPromotion {
+	lines := strings.Split(source, "\n")
+	promotions := make([]liveIncidentDocPromotion, 0)
+	var current *liveIncidentDocPromotion
+
+	flush := func() {
+		if current == nil || current.incidentID == "" {
+			return
+		}
+		promotions = append(promotions, *current)
+	}
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "## LI-") {
+			flush()
+			heading := strings.TrimSpace(strings.TrimPrefix(trimmed, "## "))
+			incidentID, _, _ := strings.Cut(heading, ":")
+			current = &liveIncidentDocPromotion{
+				incidentID: strings.TrimSpace(incidentID),
+			}
+			continue
+		}
+		if current == nil {
+			continue
+		}
+
+		if strings.HasPrefix(trimmed, "Recurring:") {
+			current.isRecurring = strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(trimmed, "Recurring:")), "yes")
+			continue
+		}
+		if strings.HasPrefix(trimmed, "Promoted docs:") {
+			current.promotedDocs = strings.TrimSpace(strings.TrimPrefix(trimmed, "Promoted docs:"))
+		}
+	}
+
+	flush()
+	return promotions
+}
+
+func markdownLinkTargets(source string) []string {
+	matches := markdownLinkTargetPattern.FindAllStringSubmatch(source, -1)
+	targets := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		targets = append(targets, strings.TrimSpace(match[1]))
+	}
+
+	return targets
+}
+
+func validatePromotedDocLink(basePath string, target string) error {
+	pathPart, fragment, _ := strings.Cut(target, "#")
+	resolvedPath := basePath
+	if pathPart != "" {
+		resolvedPath = filepath.Clean(filepath.Join(filepath.Dir(basePath), filepath.FromSlash(pathPart)))
+	}
+
+	if _, err := localpath.Stat(resolvedPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("missing target %s", resolvedPath)
+		}
+
+		return fmt.Errorf("stat target %s: %w", resolvedPath, err)
+	}
+
+	if fragment == "" {
+		return nil
+	}
+
+	ok, err := markdownDocumentHasAnchor(resolvedPath, fragment)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("missing anchor #%s in %s", fragment, resolvedPath)
+	}
+
+	return nil
+}
+
+func markdownDocumentHasAnchor(path string, fragment string) (bool, error) {
+	data, err := localpath.ReadFile(path)
+	if err != nil {
+		return false, fmt.Errorf("read target %s: %w", path, err)
+	}
+
+	anchors := make(map[string]struct{})
+	for _, line := range strings.Split(string(data), "\n") {
+		for _, match := range markdownExplicitAnchorPattern.FindAllStringSubmatch(line, -1) {
+			if len(match) >= 2 && match[1] != "" {
+				anchors[match[1]] = struct{}{}
+			}
+		}
+
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		heading := strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
+		if heading == "" {
+			continue
+		}
+
+		anchors[slugifyMarkdownHeading(heading)] = struct{}{}
+	}
+
+	_, ok := anchors[fragment]
+	return ok, nil
+}
+
+func slugifyMarkdownHeading(heading string) string {
+	var builder strings.Builder
+	lastHyphen := false
+	for _, r := range strings.ToLower(heading) {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			builder.WriteRune(r)
+			lastHyphen = false
+		case r == ' ' || r == '-':
+			if builder.Len() == 0 || lastHyphen {
+				continue
+			}
+			builder.WriteByte('-')
+			lastHyphen = true
+		}
+	}
+
+	return strings.Trim(builder.String(), "-")
 }
 
 func ensureSyncStoreMigrationDiscipline(repoRoot string) error {

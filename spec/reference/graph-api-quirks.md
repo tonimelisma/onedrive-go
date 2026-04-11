@@ -156,9 +156,12 @@ Runtime and test policy:
   (downloaded file appears locally, local delete propagates, conflict resolves)
   rather than first-pass delta visibility after a direct REST read
 - scheduled/manual verifier runs measure this consistency window explicitly in
-  the shared E2E `timing-summary.json` artifact so CI can track remote write
-  visibility, remote delete disappearance, scope-transition readiness, and
-  sync-convergence p50/p95 instead of treating the lag as opaque noise
+  the shared E2E `timing-summary.json` artifact, while the sibling
+  `quirk-summary.json` artifact records the repo-owned retry/fallback
+  classifications that fired during those waits, so CI can track remote write
+  visibility, remote delete disappearance, scope-transition readiness,
+  sync-convergence p50/p95, and the exact quirk families that were absorbed
+  instead of treating the lag as opaque noise
 
 ### Folder-Scoped Delta Readiness Lag
 
@@ -312,6 +315,7 @@ Runtime policy:
   fails loudly so callers do not report success without authoritative item
   identity
 
+<a id="post-mutation-visibility-lag"></a>
 ### Post-Mutation Path Reads Can Lag Successful `mkdir`, `put`, `mv`, And Sync-Created Writes`
 
 Graph can acknowledge a metadata-changing mutation and still return
@@ -457,6 +461,7 @@ Runtime policy:
   - tests that are explicitly validating exact-path reads must still poll the
     exact route directly instead of inheriting the looser fixture-seed contract
 
+<a id="strict-auth-preflight-quirks"></a>
 ### Transient 403 on `/me/drives` (Discovery/Auth Projection Lag)
 
 `GET /me/drives` can return HTTP 403 with Graph code `accessDenied` while
@@ -542,7 +547,8 @@ Repo policy:
   attempt (`retry=true|false` plus a stable reason string such as
   `transient_gateway_status` or `drive_catalog_projection_lag`) so verifier
   artifacts can be read directly without reconstructing the classifier from raw
-  bodies
+  bodies, and the shared E2E `quirk-summary.json` artifact preserves those
+  typed reasons alongside request IDs/statuses for later incident triage
 
 ### Slow/Stalled Metadata Response Headers
 
@@ -709,6 +715,7 @@ Runtime policy:
   so read-only shared folders surface `403` and enter the normal `perm:remote`
   flow instead of being misclassified as missing
 
+<a id="fresh-parent-child-create-lag"></a>
 ### Recently Created Parent Folders Can Lag Child Create Routes
 
 Live `e2e_full` coverage on April 5, 2026 captured a second create-path
