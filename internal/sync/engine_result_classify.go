@@ -246,6 +246,29 @@ func withRuntimeSummary(decision *ResultDecision) ResultDecision {
 	return *decision
 }
 
+// runtimeSummaryKeysByIssueType is immutable process-wide lookup data for
+// classifying runtime issue types without per-result allocations in the sync
+// hot path.
+//
+//nolint:gochecknoglobals // Immutable lookup table; kept package-wide to avoid per-result allocation churn.
+var runtimeSummaryKeysByIssueType = map[string]synctypes.SummaryKey{
+	synctypes.IssueUnauthorized:          synctypes.SummaryAuthenticationRequired,
+	synctypes.IssueQuotaExceeded:         synctypes.SummaryQuotaExceeded,
+	synctypes.IssueServiceOutage:         synctypes.SummaryServiceOutage,
+	synctypes.IssueRateLimited:           synctypes.SummaryRateLimited,
+	synctypes.IssueSharedFolderBlocked:   synctypes.SummarySharedFolderWritesBlocked,
+	synctypes.IssuePermissionDenied:      synctypes.SummaryRemotePermissionDenied,
+	synctypes.IssueLocalPermissionDenied: synctypes.SummaryLocalPermissionDenied,
+	synctypes.IssueInvalidFilename:       synctypes.SummaryInvalidFilename,
+	synctypes.IssuePathTooLong:           synctypes.SummaryPathTooLong,
+	synctypes.IssueFileTooLarge:          synctypes.SummaryFileTooLarge,
+	synctypes.IssueDeleteSafetyHeld:      synctypes.SummaryHeldDeletes,
+	synctypes.IssueCaseCollision:         synctypes.SummaryCaseCollision,
+	synctypes.IssueDiskFull:              synctypes.SummaryDiskFull,
+	synctypes.IssueHashPanic:             synctypes.SummaryHashError,
+	synctypes.IssueFileTooLargeForSpace:  synctypes.SummaryFileTooLargeForSpace,
+}
+
 func runtimeSummaryKey(class failures.Class, issueType string) synctypes.SummaryKey {
 	if key, ok := runtimeSummaryKeyForIssueType(issueType); ok {
 		return key
@@ -262,24 +285,6 @@ func runtimeSummaryKey(class failures.Class, issueType string) synctypes.Summary
 }
 
 func runtimeSummaryKeyForIssueType(issueType string) (synctypes.SummaryKey, bool) {
-	runtimeSummaryKeysByIssueType := map[string]synctypes.SummaryKey{
-		synctypes.IssueUnauthorized:          synctypes.SummaryAuthenticationRequired,
-		synctypes.IssueQuotaExceeded:         synctypes.SummaryQuotaExceeded,
-		synctypes.IssueServiceOutage:         synctypes.SummaryServiceOutage,
-		synctypes.IssueRateLimited:           synctypes.SummaryRateLimited,
-		synctypes.IssueSharedFolderBlocked:   synctypes.SummarySharedFolderWritesBlocked,
-		synctypes.IssuePermissionDenied:      synctypes.SummaryRemotePermissionDenied,
-		synctypes.IssueLocalPermissionDenied: synctypes.SummaryLocalPermissionDenied,
-		synctypes.IssueInvalidFilename:       synctypes.SummaryInvalidFilename,
-		synctypes.IssuePathTooLong:           synctypes.SummaryPathTooLong,
-		synctypes.IssueFileTooLarge:          synctypes.SummaryFileTooLarge,
-		synctypes.IssueDeleteSafetyHeld:      synctypes.SummaryHeldDeletes,
-		synctypes.IssueCaseCollision:         synctypes.SummaryCaseCollision,
-		synctypes.IssueDiskFull:              synctypes.SummaryDiskFull,
-		synctypes.IssueHashPanic:             synctypes.SummaryHashError,
-		synctypes.IssueFileTooLargeForSpace:  synctypes.SummaryFileTooLargeForSpace,
-	}
-
 	key, ok := runtimeSummaryKeysByIssueType[issueType]
 	return key, ok
 }
