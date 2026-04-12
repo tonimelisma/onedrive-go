@@ -1,6 +1,6 @@
 # Sync Execution
 
-GOVERNS: internal/syncexec/executor.go, internal/syncexec/executor_conflict.go, internal/syncexec/executor_delete.go, internal/syncexec/executor_transfer.go, internal/syncexec/worker.go, internal/syncdispatch/dep_graph.go, internal/syncdispatch/active_scopes.go, internal/syncdispatch/scope.go, internal/syncdispatch/delete_counter.go, internal/localtrash/trash.go, status.go
+GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/dep_graph.go, internal/sync/active_scopes.go, internal/sync/scope.go, internal/sync/delete_counter.go, internal/localtrash/trash.go, status.go
 
 Implements: R-2.3 [verified], R-2.8.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.4.4 [verified], R-6.4.5 [verified], R-6.4.6 [verified], R-6.5.3 [verified], R-6.7.25 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.16 [verified], R-2.10.41 [verified], R-2.10.42 [verified], R-2.10.43 [verified], R-2.10.44 [verified], R-2.14.2 [verified], R-6.3.4 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
@@ -74,7 +74,8 @@ The D-10 fix ensures completed actions are removed from the `actions` map. Witho
 
 `active_scopes.go` no longer owns a runtime subsystem. It provides pure helper
 functions over an engine-owned `[]ScopeBlock` working set. There is no mutex,
-no write-through cache, and no persistence layer in `syncdispatch`.
+no write-through cache, and no persistence layer in a separate dispatch
+package.
 
 - **`FindBlockingScope(blocks, ta) ScopeKey`**: Check whether an action matches
   any active scope block. Returns the blocking key or zero. Priority-ordered:
@@ -200,7 +201,7 @@ ancestry so execution does not rediscover target ownership ad hoc.
 - `DepGraph` is engine-owned mutable state. Execution code never mutates it behind the engine's back.
 - `WorkerPool` owns worker goroutine lifecycle and closes `results` exactly once after all workers exit.
 - Workers own only per-action local state plus the cancellation function stored on their current `TrackedAction`.
-- There are no long-lived mutexes in `syncexec`; coordination flows through explicit channel ownership instead of shared mutable maps.
+- There are no long-lived mutexes in the sync execution helpers; coordination flows through explicit channel ownership instead of shared mutable maps.
 
 ### Channel And Timer Ownership
 
@@ -311,7 +312,7 @@ protection, but held-delete workflow state is stored in `held_deletes`, not in
 
 Implements: R-2.5.1 [verified], R-2.5.4 [verified], R-2.10.41 [verified]
 
-[`internal/syncrecovery/recovery.go`](../../internal/syncrecovery/recovery.go) handles crash recovery: on startup, it resets items stuck in `downloading`/`deleting` state to `pending_download`, `pending_delete`, or `deleted`. The sync tree decides whether a local delete completed before the crash; the store applies only the durable state transitions. One-shot mode does this in `prepareRunOnceState`; watch mode does it during watch bootstrap before observation starts.
+[`internal/sync/recovery.go`](../../internal/sync/recovery.go) handles crash recovery: on startup, it resets items stuck in `downloading`/`deleting` state to `pending_download`, `pending_delete`, or `deleted`. The sync tree decides whether a local delete completed before the crash; the store applies only the durable state transitions. One-shot mode does this in `prepareRunOnceState`; watch mode does it during watch bootstrap before observation starts.
 
 Engine-level startup characterization covers both one-shot startup and watch bootstrap with mixed deleting candidate sets: missing local paths finalize as `deleted`, existing local paths return to `pending_delete`, and malformed or unreadable local paths fail open to `pending_delete` instead of being treated as successful deletes.
 
@@ -376,7 +377,7 @@ Scope block classification remains in the sync engine: `classifyResult` maps `dr
 - All executor write operations use `containedPath()` with `filepath.IsLocal()` to confine local filesystem writes to the sync root directory. This is defense-in-depth against path reconstruction bugs, not input validation (the OneDrive API is the source of truth, not an attacker). Symlink escape is prevented by resolving symlinks on the parent directory via `filepath.EvalSymlinks`.
 - Conflict-copy naming keeps the readable second-precision timestamp base, but uniqueness is enforced against the filesystem by the executor: if `<name>.conflict-YYYYMMDD-HHMMSS.ext` already exists, later copies append ordinal suffixes before the extension (`-2`, `-3`, ...). `*.conflict-*` globbing still discovers both the base and suffixed copies for keep-local, keep-both, and cleanup flows.
 - Concurrent folder creates via Graph API `$batch` for sibling folders at same depth. Diminishing returns after first sync. [planned]
-- Targeted `-race` stress tests for DepGraph, active-scope admission helpers, Buffer, and WorkerPool run through `go run ./cmd/devtool verify stress`. The verifier repeats `./internal/multisync`, `./internal/syncdispatch`, `./internal/syncexec`, and `./internal/syncobserve` under `-race -count=50 -timeout=20m`, while `internal/sync` contributes only the dedicated `TestWatchOrderingStress_*` probes behind the `stress` build tag so the runtime lane does not spend its budget replaying unrelated sync-package suites. [verified]
+- Targeted `-race` stress tests for DepGraph, active-scope admission helpers, Buffer, and WorkerPool run through `go run ./cmd/devtool verify stress`. The verifier runs the dedicated `TestWatchOrderingStress_*` probes in `internal/sync` behind the `stress` build tag, then repeats `./internal/multisync ./internal/sync` under `-race -count=50 -timeout=20m` so the merged runtime package is stressed as a unit. [verified]
 - Watch shutdown and active worker-pool cancellation are covered by direct lifecycle tests, including real watch-loop shutdown races and worker-pool close behavior. [verified]
 
 ## CLI Status (`status.go`)

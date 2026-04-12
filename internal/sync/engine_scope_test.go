@@ -63,7 +63,7 @@ func reopenEngineForInterruptedScopeRepair(
 ) *Engine {
 	t.Helper()
 
-	reopened, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	reopened, err := newEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:                 dbPath,
 		SyncRoot:               syncRoot,
 		DriveID:                driveID,

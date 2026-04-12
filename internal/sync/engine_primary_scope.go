@@ -10,7 +10,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -389,10 +388,10 @@ func convertObservedTargetItems(
 	items []graph.Item,
 ) []synctypes.ChangeEvent {
 	if target.shortcut != nil {
-		return syncobserve.ConvertShortcutItems(items, target.shortcut, target.driveID, bl, logger)
+		return ConvertShortcutItems(items, target.shortcut, target.driveID, bl, logger)
 	}
 
-	converter := syncobserve.NewPrimaryConverter(bl, target.driveID, logger, nil)
+	converter := NewPrimaryConverter(bl, target.driveID, logger, nil)
 	converter.PathPrefix = target.localPath
 	converter.ScopeRootID = target.scopeID
 
@@ -405,7 +404,7 @@ func observeTargetOrphansFromItems(
 	items []graph.Item,
 ) []synctypes.ChangeEvent {
 	if target.shortcut != nil {
-		return syncobserve.DetectShortcutOrphans(target.shortcut, target.driveID, items, bl)
+		return DetectShortcutOrphans(target.shortcut, target.driveID, items, bl)
 	}
 
 	seen := make(map[driveid.ItemKey]struct{}, len(items))
@@ -508,7 +507,7 @@ func (flow *engineFlow) reconcileEnteredPrimaryPath(
 	}
 
 	parentPath := parentObservedPath(enteredPath)
-	converter := syncobserve.NewPrimaryConverter(bl, eng.driveID, eng.logger, nil)
+	converter := NewPrimaryConverter(bl, eng.driveID, eng.logger, nil)
 	converter.PathPrefix = parentPath
 	converter.ScopeRootID = item.ParentID
 

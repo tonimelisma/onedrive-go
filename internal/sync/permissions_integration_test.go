@@ -10,7 +10,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -26,7 +25,7 @@ func startDrainLoopForEngine(
 		rt = testWatchRuntime(t, eng)
 	}
 	if rt.buf == nil {
-		rt.buf = syncobserve.NewBuffer(eng.logger)
+		rt.buf = NewBuffer(eng.logger)
 	}
 
 	results := make(chan synctypes.WorkerResult, 16)

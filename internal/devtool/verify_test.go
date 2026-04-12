@@ -610,9 +610,7 @@ func TestRunVerifyStressRunsExpectedSteps(t *testing.T) {
 		"-count=50",
 		"-timeout=20m",
 		"./internal/multisync",
-		"./internal/syncdispatch",
-		"./internal/syncexec",
-		"./internal/syncobserve",
+		"./internal/sync",
 	}, runner.runCommands[1].args)
 }
 
@@ -1551,7 +1549,7 @@ func repoConsistencyDesignDocFixtures() []struct {
 				"",
 			}, "\n"),
 		},
-		repoConsistencyBehaviorDocFixture("sync-execution.md", "Sync Execution", "internal/syncexec/*.go", []string{
+		repoConsistencyBehaviorDocFixture("sync-execution.md", "Sync Execution", "internal/sync/*.go", []string{
 			"- Owns: action execution",
 			"- Does Not Own: planning",
 			"- Source of Truth: executor config",
@@ -1575,7 +1573,7 @@ func repoConsistencyDesignDocFixtures() []struct {
 			"- Mutable Runtime Owner: sync store handles",
 			"- Error Boundary: persisted failure facts",
 		}, nil),
-		repoConsistencyBehaviorDocFixture("sync-observation.md", "Sync Observation", "internal/syncobserve/*.go", []string{
+		repoConsistencyBehaviorDocFixture("sync-observation.md", "Sync Observation", "internal/sync/*.go", []string{
 			"- Owns: change observation",
 			"- Does Not Own: planning",
 			"- Source of Truth: local and remote observation inputs",

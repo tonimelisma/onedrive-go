@@ -9,10 +9,6 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/retry"
-	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
-	"github.com/tonimelisma/onedrive-go/internal/syncexec"
-	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
-	"github.com/tonimelisma/onedrive-go/internal/syncrecovery"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
@@ -61,7 +57,7 @@ const quiescenceLogInterval = 30 * time.Second
 // initDeleteProtection sets up the rolling delete counter. Held and approved
 // held-delete rows are durable user intent, so startup must not clear them.
 func (rt *watchRuntime) initDeleteProtection(ctx context.Context) {
-	rt.deleteCounter = syncdispatch.NewDeleteCounter(rt.engine.deleteSafetyThreshold, deleteCounterWindow, rt.engine.nowFunc)
+	rt.deleteCounter = NewDeleteCounter(rt.engine.deleteSafetyThreshold, deleteCounterWindow, rt.engine.nowFunc)
 	if dv, dvErr := rt.engine.baseline.DataVersion(ctx); dvErr == nil {
 		rt.lastDataVersion = dv
 	}
@@ -193,7 +189,7 @@ type watchPipeline struct {
 	userIntentC      <-chan struct{}
 	activeObs        int
 	mode             synctypes.SyncMode
-	pool             *syncexec.WorkerPool // for bootstrapSync to access Results()
+	pool             *WorkerPool // for bootstrapSync to access Results()
 	cleanup          func()
 }
 
@@ -236,13 +232,13 @@ func (rt *watchRuntime) initWatchInfra(
 
 	// DepGraph tracks action dependencies. Active scope state is loaded from
 	// the persisted scope_blocks table into watch-owned runtime state.
-	depGraph := syncdispatch.NewDepGraph(rt.engine.logger)
+	depGraph := NewDepGraph(rt.engine.logger)
 	rt.depGraph = depGraph
 	if err := rt.scopeController().loadActiveScopes(ctx, rt); err != nil {
 		return nil, fmt.Errorf("sync: loading active scopes: %w", err)
 	}
 
-	rt.scopeState = syncdispatch.NewScopeState(rt.engine.nowFunc, rt.engine.logger)
+	rt.scopeState = NewScopeState(rt.engine.nowFunc, rt.engine.logger)
 	rt.nextActionID = 0
 
 	// dispatchCh feeds admitted actions to workers. Buffer is generous to avoid
@@ -253,12 +249,12 @@ func (rt *watchRuntime) initWatchInfra(
 	// between batches when completed == total. Workers exit only via ctx.Done().
 	neverDone := make(chan struct{})
 
-	pool := syncexec.NewWorkerPool(rt.engine.execCfg, rt.dispatchCh, neverDone, rt.engine.baseline, rt.engine.logger, watchResultBuf)
+	pool := NewWorkerPool(rt.engine.execCfg, rt.dispatchCh, neverDone, rt.engine.baseline, rt.engine.logger, watchResultBuf)
 	pool.Start(ctx, rt.engine.transferWorkers)
 
 	// Buffer promoted to watchRuntime so observed and reconciliation work share
 	// the same debounce/planning path the watch loop already owns.
-	buf := syncobserve.NewBuffer(rt.engine.logger)
+	buf := NewBuffer(rt.engine.logger)
 	rt.buf = buf
 	batchReady := buf.FlushDebounced(ctx, rt.engine.resolveDebounce(opts))
 
@@ -325,7 +321,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode synctypes.SyncMo
 	rt.engine.logger.Info("bootstrap sync starting", slog.String("mode", mode.String()))
 
 	// Crash recovery: reset in-progress states from prior crash.
-	if err := syncrecovery.ResetInProgressStates(
+	if err := ResetInProgressStates(
 		ctx,
 		rt.engine.baseline,
 		rt.engine.syncTree,
@@ -394,7 +390,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode synctypes.SyncMo
 // the number of observers started. The events channel is closed automatically
 // when all observers exit, allowing the bridge goroutine to drain cleanly.
 func (rt *watchRuntime) startObservers(
-	ctx context.Context, bl *synctypes.Baseline, mode synctypes.SyncMode, buf *syncobserve.Buffer, opts synctypes.WatchOpts,
+	ctx context.Context, bl *synctypes.Baseline, mode synctypes.SyncMode, buf *Buffer, opts synctypes.WatchOpts,
 ) (<-chan error, int, <-chan []synctypes.SkippedItem, <-chan syncscope.Change) {
 	events := make(chan synctypes.ChangeEvent, watchEventBuf)
 	errs := make(chan error, 2)
@@ -419,7 +415,7 @@ func (rt *watchRuntime) startObservers(
 
 	// Local observer (skip for download-only mode).
 	if mode != synctypes.SyncDownloadOnly {
-		localObs := syncobserve.NewLocalObserver(bl, rt.engine.logger, rt.engine.checkWorkers)
+		localObs := NewLocalObserver(bl, rt.engine.logger, rt.engine.checkWorkers)
 		localObs.SetFilterConfig(rt.engine.localFilter)
 		localObs.SetObservationRules(rt.engine.localRules)
 		localObs.SetSafetyScanInterval(opts.SafetyScanInterval)
@@ -494,7 +490,7 @@ func (rt *watchRuntime) startRemoteObserver(
 	rt.startPrimaryWatchPhase(ctx, obsWg, bl, events, errs, pollInterval, plan.PrimaryPhase)
 }
 
-func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context, remoteObs *syncobserve.RemoteObserver) {
+func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context, remoteObs *RemoteObserver) {
 	if !rt.engine.enableWebsocket || rt.engine.socketIOFetcher == nil || remoteObs == nil {
 		return
 	}
@@ -512,7 +508,7 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context, remoteObs *
 	wakeSource := rt.engine.socketIOWakeSourceFactory(
 		rt.engine.socketIOFetcher,
 		rt.engine.driveID,
-		syncobserve.SocketIOWakeSourceOptions{
+		SocketIOWakeSourceOptions{
 			Logger:        rt.engine.logger,
 			LifecycleHook: rt.emitSocketIOLifecycleEvent,
 		},
@@ -540,7 +536,7 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context, remoteObs *
 	}()
 }
 
-func (rt *watchRuntime) emitSocketIOLifecycleEvent(event syncobserve.SocketIOLifecycleEvent) {
+func (rt *watchRuntime) emitSocketIOLifecycleEvent(event SocketIOLifecycleEvent) {
 	debugEvent := engineDebugEvent{
 		DriveID: event.DriveID,
 		Note:    event.Note,
@@ -549,26 +545,26 @@ func (rt *watchRuntime) emitSocketIOLifecycleEvent(event syncobserve.SocketIOLif
 	}
 
 	switch event.Type {
-	case syncobserve.SocketIOLifecycleEventStarted:
+	case SocketIOLifecycleEventStarted:
 		debugEvent.Type = engineDebugEventWebsocketWakeSourceStarted
-	case syncobserve.SocketIOLifecycleEventEndpointFetchFail:
+	case SocketIOLifecycleEventEndpointFetchFail:
 		debugEvent.Type = engineDebugEventWebsocketEndpointFetchFail
-	case syncobserve.SocketIOLifecycleEventConnectFail:
+	case SocketIOLifecycleEventConnectFail:
 		debugEvent.Type = engineDebugEventWebsocketConnectFail
-	case syncobserve.SocketIOLifecycleEventConnected:
+	case SocketIOLifecycleEventConnected:
 		debugEvent.Type = engineDebugEventWebsocketConnected
 		if event.SID != "" {
 			debugEvent.Note = "sid=" + event.SID
 		}
-	case syncobserve.SocketIOLifecycleEventRefreshRequested:
+	case SocketIOLifecycleEventRefreshRequested:
 		debugEvent.Type = engineDebugEventWebsocketRefreshRequested
-	case syncobserve.SocketIOLifecycleEventConnectionDropped:
+	case SocketIOLifecycleEventConnectionDropped:
 		debugEvent.Type = engineDebugEventWebsocketConnectionDropped
-	case syncobserve.SocketIOLifecycleEventNotificationWake:
+	case SocketIOLifecycleEventNotificationWake:
 		debugEvent.Type = engineDebugEventWebsocketNotificationWake
-	case syncobserve.SocketIOLifecycleEventWakeCoalesced:
+	case SocketIOLifecycleEventWakeCoalesced:
 		debugEvent.Type = engineDebugEventWebsocketWakeCoalesced
-	case syncobserve.SocketIOLifecycleEventStopped:
+	case SocketIOLifecycleEventStopped:
 		debugEvent.Type = engineDebugEventWebsocketWakeSourceStopped
 	default:
 		return
@@ -579,7 +575,7 @@ func (rt *watchRuntime) emitSocketIOLifecycleEvent(event syncobserve.SocketIOLif
 
 func (rt *watchRuntime) startWatchEventBridge(
 	ctx context.Context,
-	buf *syncobserve.Buffer,
+	buf *Buffer,
 	events <-chan synctypes.ChangeEvent,
 ) {
 	go func() {
@@ -612,7 +608,7 @@ func (rt *watchRuntime) closeWatchEventsWhenObserversExit(
 // inotify watch limits are exhausted. Blocks until the context is canceled.
 // Each scan's events are forwarded to the events channel via trySend.
 func (rt *watchRuntime) runPeriodicFullScan(
-	ctx context.Context, obs *syncobserve.LocalObserver, tree *synctree.Root,
+	ctx context.Context, obs *LocalObserver, tree *synctree.Root,
 	events chan<- synctypes.ChangeEvent, interval time.Duration,
 ) {
 	ticker := rt.engine.newTicker(interval)

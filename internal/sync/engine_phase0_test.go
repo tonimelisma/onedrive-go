@@ -17,9 +17,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
-	"github.com/tonimelisma/onedrive-go/internal/syncexec"
-	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -57,10 +54,10 @@ func newBootstrapWatchPipelineForTest(
 
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
+	rt.scopeState = NewScopeState(eng.nowFunc, eng.logger)
 
 	completeCh := make(chan struct{})
-	pool := syncexec.NewWorkerPool(eng.execCfg, rt.dispatchCh, completeCh, eng.baseline, eng.logger, 1024)
+	pool := NewWorkerPool(eng.execCfg, rt.dispatchCh, completeCh, eng.baseline, eng.logger, 1024)
 	pool.Start(ctx, workers)
 	t.Cleanup(pool.Stop)
 
@@ -99,7 +96,7 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeLocalObserverStarts(t *testing.
 	eng, syncRoot := newTestEngine(t, mock)
 	writeLocalFile(t, syncRoot, "local.txt", "bootstrap upload")
 	recorder := attachDebugEventRecorder(eng)
-	eng.localWatcherFactory = func() (syncobserve.FsWatcher, error) {
+	eng.localWatcherFactory = func() (FsWatcher, error) {
 		return newEnospcWatcher(1 << 20), nil
 	}
 
@@ -586,7 +583,7 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 	ctx := t.Context()
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.buf = syncobserve.NewBuffer(eng.logger)
+	rt.buf = NewBuffer(eng.logger)
 
 	scopeKey := synctypes.SKPermDir("Private")
 	accessibleDir := filepath.Join(syncRoot, "Private")
@@ -735,7 +732,7 @@ func TestPhase0_RunFullReconciliationAsync_UsesBufferHandoffInsteadOfDirectDispa
 
 	ready := setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.buf = syncobserve.NewBuffer(eng.logger)
+	rt.buf = NewBuffer(eng.logger)
 
 	rt.runFullReconciliationAsync(ctx, bl)
 	waitForReconcileDone(t, eng)

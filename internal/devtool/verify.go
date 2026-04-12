@@ -1431,7 +1431,7 @@ func runStress(
 			{
 				statusLine: fmt.Sprintf(
 					"==> go test -race -count=50 -timeout=%s "+
-						"./internal/multisync ./internal/syncdispatch ./internal/syncexec ./internal/syncobserve\n",
+						"./internal/multisync ./internal/sync\n",
 					stressPackageTimeout,
 				),
 				args: []string{
@@ -1440,9 +1440,7 @@ func runStress(
 					"-count=50",
 					"-timeout=" + stressPackageTimeout,
 					"./internal/multisync",
-					"./internal/syncdispatch",
-					"./internal/syncexec",
-					"./internal/syncobserve",
+					"./internal/sync",
 				},
 			},
 		}
@@ -2113,7 +2111,6 @@ func ensureGuardedPackagesAvoidRawOS(repoRoot string) error {
 		filepath.Join(repoRoot, "internal", "cli"),
 		filepath.Join(repoRoot, "internal", "config"),
 		filepath.Join(repoRoot, "internal", "sync"),
-		filepath.Join(repoRoot, "internal", "syncrecovery"),
 		filepath.Join(repoRoot, "internal", "syncverify"),
 	}
 	skip := func(path string) bool {

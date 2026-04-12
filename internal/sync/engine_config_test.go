@@ -13,7 +13,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -46,7 +45,7 @@ func (s *configTestPathConvergenceStub) PermanentDeleteResolvedPath(_ context.Co
 	return nil
 }
 
-func TestBuildEngineConfig_PropagatesWatchCapabilities(t *testing.T) {
+func TestNewDriveEngine_PropagatesWatchCapabilities(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	logger := testLogger(t)
@@ -86,37 +85,40 @@ func TestBuildEngineConfig_PropagatesWatchCapabilities(t *testing.T) {
 		},
 	}
 
-	ecfg, err := BuildEngineConfig(session, resolved, true, logger)
+	eng, err := NewDriveEngine(t.Context(), session, resolved, DriveEngineOptions{
+		Logger:      logger,
+		VerifyDrive: true,
+	})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, eng.Close(t.Context()))
+	})
 
-	assert.Equal(t, syncDir, ecfg.SyncRoot)
-	assert.Equal(t, resolved.StatePath(), ecfg.DBPath)
-	assert.Equal(t, session.DriveID, ecfg.DriveID)
-	assert.Same(t, session, ecfg.PathConvergenceFactory)
-	assert.Equal(t, resolved.CanonicalID.DriveType(), ecfg.DriveType)
-	assert.Equal(t, resolved.CanonicalID.Email(), ecfg.AccountEmail)
-	assert.Equal(t, "shared-root-id", ecfg.RootItemID)
-	assert.True(t, ecfg.EnableWebsocket)
-	assert.NotNil(t, ecfg.SocketIOFetcher)
-	assert.NotNil(t, ecfg.DriveVerifier)
-	assert.NotNil(t, ecfg.FolderDelta)
-	assert.NotNil(t, ecfg.RecursiveLister)
-	assert.NotNil(t, ecfg.PermChecker)
-	assert.True(t, ecfg.LocalFilter.SkipDotfiles)
-	assert.True(t, ecfg.LocalFilter.SkipSymlinks)
-	assert.Equal(t, []string{"vendor"}, ecfg.LocalFilter.SkipDirs)
-	assert.Equal(t, []string{"*.tmp"}, ecfg.LocalFilter.SkipFiles)
-	assert.Equal(t, []string{"/Projects/report.txt"}, ecfg.SyncScope.SyncPaths)
-	assert.Equal(t, ".syncignore", ecfg.SyncScope.IgnoreMarker)
-	assert.True(t, ecfg.LocalRules.RejectSharePointRootForms)
-	assert.True(t, ecfg.UseLocalTrash)
-	assert.Equal(t, 3, ecfg.TransferWorkers)
-	assert.Equal(t, 4, ecfg.CheckWorkers)
-	assert.Equal(t, 42, ecfg.DeleteSafetyThreshold)
-	assert.Equal(t, int64(1024*1024), ecfg.MinFreeSpace)
+	assert.Equal(t, syncDir, eng.syncRoot)
+	assert.Equal(t, session.DriveID, eng.driveID)
+	assert.Equal(t, resolved.CanonicalID.DriveType(), eng.driveType)
+	assert.Equal(t, "shared-root-id", eng.rootItemID)
+	assert.True(t, eng.enableWebsocket)
+	assert.NotNil(t, eng.socketIOFetcher)
+	assert.NotNil(t, eng.driveVerifier)
+	assert.NotNil(t, eng.folderDelta)
+	assert.NotNil(t, eng.recursiveLister)
+	assert.NotNil(t, eng.permHandler)
+	assert.True(t, eng.localFilter.SkipDotfiles)
+	assert.True(t, eng.localFilter.SkipSymlinks)
+	assert.Equal(t, []string{"vendor"}, eng.localFilter.SkipDirs)
+	assert.Equal(t, []string{"*.tmp"}, eng.localFilter.SkipFiles)
+	assert.Equal(t, []string{"/Projects/report.txt"}, eng.syncScopeConfig.SyncPaths)
+	assert.Equal(t, ".syncignore", eng.syncScopeConfig.IgnoreMarker)
+	assert.True(t, eng.localRules.RejectSharePointRootForms)
+	assert.NotNil(t, eng.execCfg.trashFunc)
+	assert.Equal(t, 3, eng.transferWorkers)
+	assert.Equal(t, 4, eng.checkWorkers)
+	assert.Equal(t, 42, eng.deleteSafetyThreshold)
+	assert.Equal(t, int64(1024*1024), eng.minFreeSpace)
 }
 
-func TestBuildEngineConfig_InvalidMinFreeSpace(t *testing.T) {
+func TestNewDriveEngine_InvalidMinFreeSpace(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	logger := testLogger(t)
@@ -134,7 +136,9 @@ func TestBuildEngineConfig_InvalidMinFreeSpace(t *testing.T) {
 		},
 	}
 
-	_, err := BuildEngineConfig(session, resolved, false, logger)
+	_, err := NewDriveEngine(t.Context(), session, resolved, DriveEngineOptions{
+		Logger: logger,
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid min_free_space")
 }
@@ -153,7 +157,7 @@ func TestNewEngine_PropagatesPathConvergenceFactory(t *testing.T) {
 		},
 	}
 
-	eng, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	eng, err := newEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:                 filepath.Join(t.TempDir(), "test.db"),
 		SyncRoot:               syncDir,
 		DriveID:                driveid.New("abc123"),
@@ -170,7 +174,7 @@ func TestNewEngine_PropagatesPathConvergenceFactory(t *testing.T) {
 		assert.NoError(t, eng.Close(t.Context()))
 	})
 
-	executor := syncexec.NewExecution(eng.execCfg, synctest.EmptyBaseline())
+	executor := NewExecution(eng.execCfg, synctest.EmptyBaseline())
 	outcome := executor.ExecuteFolderCreate(t.Context(), &synctypes.Action{
 		Type:       synctypes.ActionFolderCreate,
 		Path:       "photos",

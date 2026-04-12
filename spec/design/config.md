@@ -151,7 +151,7 @@ user explicitly opts out.
 `sync_paths` and `ignore_marker` are live bidirectional sync-scope controls,
 not local-only scanner filters. `buildResolvedDrive` merges them through the
 same global-default plus per-drive override chain as the other filter fields,
-and `BuildEngineConfig` passes the resolved scope into the engine. Validation
+and `NewDriveEngine` passes the resolved scope into the engine. Validation
 requires every configured `sync_paths` entry to start with `/`, and
 `ignore_marker` to be non-empty when present. The config layer owns only the
 normalized user intent; runtime marker discovery and persisted effective-scope

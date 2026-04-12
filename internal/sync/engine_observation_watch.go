@@ -7,7 +7,6 @@ import (
 	stdsync "sync"
 	"time"
 
-	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -45,7 +44,7 @@ func (rt *watchRuntime) startPrimaryWatchPhase(
 			errs <- rt.watchScopedRootRemote(ctx, bl, events, pollInterval, phase)
 		}()
 	case observationPhaseDriverRootDelta:
-		remoteObs := syncobserve.NewRemoteObserver(rt.engine.fetcher, bl, rt.engine.driveID, rt.engine.logger)
+		remoteObs := NewRemoteObserver(rt.engine.fetcher, bl, rt.engine.driveID, rt.engine.logger)
 		remoteObs.SetObsWriter(rt.engine.baseline)
 		remoteObs.SetWatchObservationPreparer(func(
 			_ context.Context,

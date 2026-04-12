@@ -20,8 +20,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/failures"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
-	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -162,7 +160,7 @@ func TestOneShotEngineLoop_ClosedResultsStillProcessBufferedSideEffects(t *testi
 	ctx := t.Context()
 
 	runner := newOneShotRunner(eng.Engine)
-	runner.depGraph = syncdispatch.NewDepGraph(eng.logger)
+	runner.depGraph = NewDepGraph(eng.logger)
 	runner.dispatchCh = make(chan *synctypes.TrackedAction, 16)
 	for _, id := range []int64{1, 2, 3} {
 		runner.depGraph.Add(&synctypes.Action{Path: fmt.Sprintf("action-%d", id), Type: synctypes.ActionUpload}, id, nil)
@@ -192,7 +190,7 @@ func TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady(t *testing
 	ctx := t.Context()
 
 	runner := newOneShotRunner(eng.Engine)
-	runner.depGraph = syncdispatch.NewDepGraph(eng.logger)
+	runner.depGraph = NewDepGraph(eng.logger)
 	runner.dispatchCh = make(chan *synctypes.TrackedAction)
 
 	runner.depGraph.Add(&synctypes.Action{
@@ -570,14 +568,14 @@ func TestHandleWatchWorkerResult_UnauthorizedStopsWatchLoop(t *testing.T) {
 // processWorkerResult — shared helper tests
 // ---------------------------------------------------------------------------
 
-// setupEngineDepGraph creates a syncdispatch.DepGraph on the engine and adds a dummy action
+// setupEngineDepGraph creates a DepGraph on the engine and adds a dummy action
 // for the given actionID so that processWorkerResult can call Complete without
 // panicking on nil depGraph or unknown ID.
 func setupEngineDepGraph(t *testing.T, eng *testEngine, actionID int64) *engineFlow {
 	t.Helper()
 
 	flow := newEngineFlow(eng.Engine)
-	flow.depGraph = syncdispatch.NewDepGraph(eng.logger)
+	flow.depGraph = NewDepGraph(eng.logger)
 	flow.dispatchCh = make(chan *synctypes.TrackedAction, 16)
 	dummyAction := &synctypes.Action{Path: "dummy", Type: synctypes.ActionDownload}
 	flow.depGraph.Add(dummyAction, actionID, nil)
@@ -941,7 +939,7 @@ func TestProcessTrialResultV2_Success_ClearsScope(t *testing.T) {
 		Category: synctypes.CategoryTransient, ErrMsg: "rate limited", ScopeKey: testThrottleScope(),
 	}, nil)) // nil delayFn → scope-blocked (next_retry_at = NULL)
 
-	// Add the trial action to the syncdispatch.DepGraph.
+	// Add the trial action to the DepGraph.
 	testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{Type: synctypes.ActionUpload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
 
 	// Simulate successful trial result.
@@ -978,7 +976,7 @@ func TestProcessTrialResultV2_Failure_DoublesInterval(t *testing.T) {
 		NextTrialAt:   now.Add(30 * time.Second),
 	})
 
-	// Add the trial action to the syncdispatch.DepGraph.
+	// Add the trial action to the DepGraph.
 	testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{Type: synctypes.ActionDownload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 99, nil)
 
 	processTrialResultForTest(t, eng, ctx, &synctypes.WorkerResult{
@@ -1045,8 +1043,8 @@ func TestProcessTrialResultV2_Failure_CapsAt5m(t *testing.T) {
 
 			got, ok := getTestScopeBlock(eng, tt.scopeKey)
 			require.True(t, ok)
-			assert.Equal(t, syncdispatch.DefaultMaxTrialInterval, got.TrialInterval,
-				"%s interval should cap at %v", tt.name, syncdispatch.DefaultMaxTrialInterval)
+			assert.Equal(t, DefaultMaxTrialInterval, got.TrialInterval,
+				"%s interval should cap at %v", tt.name, DefaultMaxTrialInterval)
 		})
 	}
 }
@@ -1059,7 +1057,7 @@ func TestProcessTrialResultV2_Failure_NoScopeDetection(t *testing.T) {
 	eng := newSingleOwnerEngine(t)
 	ctx := t.Context()
 
-	ss := syncdispatch.NewScopeState(eng.nowFn, eng.logger)
+	ss := NewScopeState(eng.nowFn, eng.logger)
 	testWatchRuntime(t, eng).scopeState = ss
 
 	now := eng.nowFunc()
@@ -1462,13 +1460,13 @@ func TestComputeTrialInterval(t *testing.T) {
 		{"retry-after with current", synctypes.SKService(), 2 * time.Minute, 30 * time.Second, 2 * time.Minute},
 
 		// No Retry-After, no current: initial interval.
-		{"initial interval", synctypes.SKService(), 0, 0, syncdispatch.DefaultInitialTrialInterval},
+		{"initial interval", synctypes.SKService(), 0, 0, DefaultInitialTrialInterval},
 		{"disk initial interval", synctypes.SKDiskLocal(), 0, 0, diskScopeInitialTrialInterval},
 
 		// No Retry-After, with current: double + cap.
 		{"double interval", synctypes.SKService(), 0, 30 * time.Second, 60 * time.Second},
-		{"double caps at max", synctypes.SKService(), 0, 4 * time.Minute, syncdispatch.DefaultMaxTrialInterval},
-		{"already at max stays", synctypes.SKService(), 0, syncdispatch.DefaultMaxTrialInterval, syncdispatch.DefaultMaxTrialInterval},
+		{"double caps at max", synctypes.SKService(), 0, 4 * time.Minute, DefaultMaxTrialInterval},
+		{"already at max stays", synctypes.SKService(), 0, DefaultMaxTrialInterval, DefaultMaxTrialInterval},
 		{"disk double interval", synctypes.SKDiskLocal(), 0, 30 * time.Minute, 60 * time.Minute},
 		{"disk caps at max", synctypes.SKDiskLocal(), 0, 45 * time.Minute, diskScopeMaxTrialInterval},
 	}
@@ -1500,7 +1498,7 @@ func TestExtendTrialInterval_WithRetryAfter(t *testing.T) {
 
 	testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{Type: synctypes.ActionUpload, Path: "trial.txt", DriveID: testThrottleDriveID(), ItemID: "i1"}, 99, nil)
 
-	// Retry-After of 30 minutes exceeds syncdispatch.DefaultMaxTrialInterval (5m) — must be
+	// Retry-After of 30 minutes exceeds DefaultMaxTrialInterval (5m) — must be
 	// honored directly with no cap, because the server is ground truth.
 	processTrialResultForTest(t, eng, ctx, &synctypes.WorkerResult{
 		ActionID:      99,
@@ -1719,8 +1717,8 @@ func startDrainLoop(t *testing.T) (chan synctypes.WorkerResult, <-chan struct{},
 
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
-	rt.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
-	rt.buf = syncobserve.NewBuffer(eng.logger)
+	rt.scopeState = NewScopeState(eng.nowFunc, eng.logger)
+	rt.buf = NewBuffer(eng.logger)
 
 	results := make(chan synctypes.WorkerResult, 16)
 
@@ -1862,7 +1860,7 @@ func TestE2E_OneShotEngineLoop_ProcessesAndRoutes(t *testing.T) {
 
 	ctx := t.Context()
 
-	// Add parent action to syncdispatch.DepGraph, send to dispatchCh.
+	// Add parent action to DepGraph, send to dispatchCh.
 	ta := testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{Type: synctypes.ActionUpload, Path: "a.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 0, nil)
 	require.NotNil(t, ta)
 	testWatchRuntime(t, eng).dispatchCh <- ta
@@ -2126,8 +2124,8 @@ func assertScopeWindowBlock(
 ) {
 	t.Helper()
 
-	clock := controllableClock()
-	ss := syncdispatch.NewScopeState(clock, discardLogger())
+	clock, _ := controllableClock()
+	ss := NewScopeState(clock, discardLogger())
 
 	for i := range threshold {
 		sr := ss.UpdateScope(&synctypes.WorkerResult{
@@ -2155,8 +2153,8 @@ func assertImmediateRetryAfterBlock(
 ) {
 	t.Helper()
 
-	clock := controllableClock()
-	ss := syncdispatch.NewScopeState(clock, discardLogger())
+	clock, _ := controllableClock()
+	ss := NewScopeState(clock, discardLogger())
 
 	sr := ss.UpdateScope(&synctypes.WorkerResult{
 		Path:          "/file.txt",
@@ -2394,7 +2392,7 @@ func TestFeedScopeDetection_LocalErrorIgnored(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
-	testWatchRuntime(t, eng).scopeState = syncdispatch.NewScopeState(time.Now, eng.logger)
+	testWatchRuntime(t, eng).scopeState = NewScopeState(time.Now, eng.logger)
 
 	// Feed several local errors (HTTPStatus=0) — should not trigger a scope block.
 	for i := range 10 {
@@ -2683,7 +2681,7 @@ func TestLogFailureSummary_NoTransientSummariesNoops(t *testing.T) {
 // Retrier pipeline integration test (single-owner architecture)
 //
 // Exercises the integrated retrier: action → failure → sync_failures
-// → retry timer fires → runRetrierSweep → createEventFromDB → syncobserve.Buffer.
+// → retry timer fires → runRetrierSweep → createEventFromDB → Buffer.
 // ---------------------------------------------------------------------------
 
 // Validates: R-6.8.10, R-6.8.11, R-6.8.7

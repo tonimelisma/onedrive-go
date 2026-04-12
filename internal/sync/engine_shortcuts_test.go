@@ -12,7 +12,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -61,7 +60,7 @@ func TestFilterOutShortcuts_RemovesShortcuts(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// syncobserve.ConvertShortcutItems (unified item conversion for shortcut scopes)
+// ConvertShortcutItems (unified item conversion for shortcut scopes)
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.10.16
@@ -96,7 +95,7 @@ func TestConvertShortcutItems_NewFiles(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	events := syncobserve.ConvertShortcutItems(items, sc, remoteDriveID, bl, testLogger(t))
+	events := ConvertShortcutItems(items, sc, remoteDriveID, bl, testLogger(t))
 
 	require.Len(t, events, 2)
 
@@ -140,7 +139,7 @@ func TestConvertShortcutItems_ExistingModified(t *testing.T) {
 		ItemID:  "f1",
 	})
 
-	events := syncobserve.ConvertShortcutItems(items, sc, remoteDriveID, bl, testLogger(t))
+	events := ConvertShortcutItems(items, sc, remoteDriveID, bl, testLogger(t))
 	require.Len(t, events, 1)
 	assert.Equal(t, synctypes.ChangeModify, events[0].Type)
 	assert.Equal(t, "SharedFolder/report.xlsx", events[0].Path)
@@ -174,7 +173,7 @@ func TestConvertShortcutItems_DeletedItem(t *testing.T) {
 		ItemID:  "f1",
 	})
 
-	events := syncobserve.ConvertShortcutItems(items, sc, remoteDriveID, bl, testLogger(t))
+	events := ConvertShortcutItems(items, sc, remoteDriveID, bl, testLogger(t))
 	require.Len(t, events, 1)
 	assert.Equal(t, synctypes.ChangeDelete, events[0].Type)
 	assert.Equal(t, "SharedFolder/report.xlsx", events[0].Path)
@@ -199,13 +198,13 @@ func TestConvertShortcutItems_SkipsRoot(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	events := syncobserve.ConvertShortcutItems(items, sc, remoteDriveID, bl, testLogger(t))
+	events := ConvertShortcutItems(items, sc, remoteDriveID, bl, testLogger(t))
 	require.Len(t, events, 1)
 	assert.Equal(t, "f1", events[0].ItemID)
 }
 
 // ---------------------------------------------------------------------------
-// syncobserve.DetectShortcutOrphans
+// DetectShortcutOrphans
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.10.17
@@ -230,7 +229,7 @@ func TestDetectShortcutOrphans_NoOrphans(t *testing.T) {
 		ItemID:  "f1",
 	})
 
-	orphans := syncobserve.DetectShortcutOrphans(sc, remoteDriveID, items, bl)
+	orphans := DetectShortcutOrphans(sc, remoteDriveID, items, bl)
 	assert.Empty(t, orphans)
 }
 
@@ -257,7 +256,7 @@ func TestDetectShortcutOrphans_DetectsOrphans(t *testing.T) {
 		&synctypes.BaselineEntry{Path: "SharedFolder/deleted.txt", DriveID: remoteDriveID, ItemID: "f2"},
 	)
 
-	orphans := syncobserve.DetectShortcutOrphans(sc, remoteDriveID, items, bl)
+	orphans := DetectShortcutOrphans(sc, remoteDriveID, items, bl)
 	require.Len(t, orphans, 1)
 	assert.Equal(t, synctypes.ChangeDelete, orphans[0].Type)
 	assert.Equal(t, "SharedFolder/deleted.txt", orphans[0].Path)
@@ -285,7 +284,7 @@ func TestDetectShortcutOrphans_IgnoresOtherDrives(t *testing.T) {
 		&synctypes.BaselineEntry{Path: "SharedFolder/other.txt", DriveID: otherDriveID, ItemID: "x1"},
 	)
 
-	orphans := syncobserve.DetectShortcutOrphans(sc, remoteDriveID, items, bl)
+	orphans := DetectShortcutOrphans(sc, remoteDriveID, items, bl)
 	assert.Empty(t, orphans, "items from other drives should not be treated as orphans")
 }
 
@@ -2096,7 +2095,7 @@ func TestConvertShortcutItems_NestedShortcut_SkippedWithWarning(t *testing.T) {
 		LocalPath: "SharedFolder",
 	}
 
-	events := syncobserve.ConvertShortcutItems(items, sc, remoteDriveID, emptyBaseline(), testLogger(t))
+	events := ConvertShortcutItems(items, sc, remoteDriveID, emptyBaseline(), testLogger(t))
 
 	// Only the normal file should produce an event.
 	require.Len(t, events, 1)

@@ -9,7 +9,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
-	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -64,9 +63,9 @@ func (flow *engineFlow) observeScopedRemote(
 			fullReconcile = true
 		}
 		if err == nil {
-			events := syncobserve.ConvertShortcutItems(items, sc, eng.driveID, bl, eng.logger)
+			events := ConvertShortcutItems(items, sc, eng.driveID, bl, eng.logger)
 			if fullReconcile {
-				events = append(events, syncobserve.DetectShortcutOrphans(sc, eng.driveID, items, bl)...)
+				events = append(events, DetectShortcutOrphans(sc, eng.driveID, items, bl)...)
 			}
 
 			return events, newToken, nil
@@ -92,8 +91,8 @@ func (flow *engineFlow) observeScopedRemote(
 		return nil, "", fmt.Errorf("sync: scoped recursive listing: %w", err)
 	}
 
-	events := syncobserve.ConvertShortcutItems(items, sc, eng.driveID, bl, eng.logger)
-	events = append(events, syncobserve.DetectShortcutOrphans(sc, eng.driveID, items, bl)...)
+	events := ConvertShortcutItems(items, sc, eng.driveID, bl, eng.logger)
+	events = append(events, DetectShortcutOrphans(sc, eng.driveID, items, bl)...)
 
 	return events, "", nil
 }
@@ -135,8 +134,8 @@ func (rt *watchRuntime) watchScopedRootRemote(
 	interval time.Duration,
 	phase ObservationPhasePlan,
 ) error {
-	if interval < syncobserve.MinPollInterval {
-		interval = syncobserve.MinPollInterval
+	if interval < MinPollInterval {
+		interval = MinPollInterval
 	}
 
 	bo := retry.NewBackoff(retry.WatchRemotePolicy())
@@ -217,7 +216,7 @@ func (rt *watchRuntime) sleepScopedRootWatch(
 	delay time.Duration,
 	label string,
 ) (bool, error) {
-	sleepErr := syncobserve.TimeSleep(ctx, delay)
+	sleepErr := TimeSleep(ctx, delay)
 	if sleepErr == nil {
 		return false, nil
 	}

@@ -9,11 +9,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
-	"github.com/tonimelisma/onedrive-go/internal/syncexec"
-	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
-	"github.com/tonimelisma/onedrive-go/internal/syncplan"
-	"github.com/tonimelisma/onedrive-go/internal/syncrecovery"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -82,7 +77,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts sync
 	}
 
 	// Step 7: Build report from plan counts.
-	counts := syncplan.CountByType(plan.Actions)
+	counts := CountByType(plan.Actions)
 	report := buildReportFromCounts(counts, mode, opts)
 
 	if opts.DryRun {
@@ -195,7 +190,7 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) error {
 	// One-shot mode has no long-lived retry loop, so bridge rows created here
 	// must be immediately retryable on this invocation instead of waiting for a
 	// later timer tick that will never happen.
-	if err := syncrecovery.ResetInProgressStates(
+	if err := ResetInProgressStates(
 		ctx,
 		eng.baseline,
 		eng.syncTree,
@@ -273,7 +268,7 @@ func (r *oneShotRunner) executePlan(
 	// One-shot mode: DepGraph + dispatchCh, no watch-mode active-scope admission
 	// loop (e.watch == nil). Actions that pass dependency resolution go
 	// straight to workers. Scope blocking is watch-mode only (§2.3).
-	depGraph := syncdispatch.NewDepGraph(r.engine.logger)
+	depGraph := NewDepGraph(r.engine.logger)
 	r.depGraph = depGraph
 	r.dispatchCh = make(chan *synctypes.TrackedAction, len(plan.Actions))
 
@@ -297,7 +292,7 @@ func (r *oneShotRunner) executePlan(
 		}
 	}
 
-	pool := syncexec.NewWorkerPool(r.engine.execCfg, r.dispatchCh, depGraph.Done(), r.engine.baseline, r.engine.logger, len(plan.Actions))
+	pool := NewWorkerPool(r.engine.execCfg, r.dispatchCh, depGraph.Done(), r.engine.baseline, r.engine.logger, len(plan.Actions))
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	pool.Start(runCtx, r.engine.transferWorkers)
@@ -357,7 +352,7 @@ func (flow *engineFlow) observeRemote(ctx context.Context, bl *synctypes.Baselin
 		return nil, "", fmt.Errorf("sync: getting delta token: %w", err)
 	}
 
-	obs := syncobserve.NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
+	obs := NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
 
 	events, token, err := obs.FullDelta(ctx, savedToken)
 	if err != nil {
@@ -389,7 +384,7 @@ func (flow *engineFlow) observeLocal(
 ) (synctypes.ScanResult, error) {
 	eng := flow.engine
 
-	obs := syncobserve.NewLocalObserver(bl, eng.logger, eng.checkWorkers)
+	obs := NewLocalObserver(bl, eng.logger, eng.checkWorkers)
 	obs.SetFilterConfig(eng.localFilter)
 	obs.SetObservationRules(eng.localRules)
 	obs.SetScopeSnapshot(scopeSnapshot)
@@ -460,7 +455,7 @@ func (flow *engineFlow) observeChanges(
 		return nil, nil, err
 	}
 
-	buf := syncobserve.NewBuffer(flow.engine.logger)
+	buf := NewBuffer(flow.engine.logger)
 	buf.AddAll(finalRemoteEvents)
 	buf.AddAll(localResult.Events)
 
@@ -667,7 +662,7 @@ func (flow *engineFlow) commitDeferredDeltaTokens(ctx context.Context, tokens []
 // synthesized deletes for orphans) and the new delta token.
 func (flow *engineFlow) observeRemoteFull(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, string, error) {
 	eng := flow.engine
-	obs := syncobserve.NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
+	obs := NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
 
 	// Full enumeration: empty token returns ALL items as create/modify events.
 	events, token, err := obs.FullDelta(ctx, "")
@@ -720,42 +715,6 @@ func (flow *engineFlow) observeAndCommitRemoteFull(ctx context.Context, bl *sync
 	}
 
 	return events, deltaToken, nil
-}
-
-// changeEventsToObservedItems converts remote ChangeEvents into ObservedItems
-// for CommitObservation. Filters out local-source events and events with
-// empty ItemIDs (defensive guard against malformed API responses).
-func changeEventsToObservedItems(logger *slog.Logger, events []synctypes.ChangeEvent) []synctypes.ObservedItem {
-	var items []synctypes.ObservedItem
-
-	for i := range events {
-		if events[i].Source != synctypes.SourceRemote {
-			continue
-		}
-
-		if events[i].ItemID == "" {
-			logger.Warn("changeEventsToObservedItems: skipping event with empty ItemID",
-				slog.String("path", events[i].Path),
-			)
-
-			continue
-		}
-
-		items = append(items, synctypes.ObservedItem{
-			DriveID:   events[i].DriveID,
-			ItemID:    events[i].ItemID,
-			ParentID:  events[i].ParentID,
-			Path:      events[i].Path,
-			ItemType:  events[i].ItemType,
-			Hash:      events[i].Hash,
-			Size:      events[i].Size,
-			Mtime:     events[i].Mtime,
-			ETag:      events[i].ETag,
-			IsDeleted: events[i].IsDeleted,
-		})
-	}
-
-	return items
 }
 
 // resolveSafetyConfig returns the appropriate synctypes.SafetyConfig. The
