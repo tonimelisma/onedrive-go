@@ -50,7 +50,7 @@ type RemoteObserver struct {
 	logger    *slog.Logger
 	driveID   driveid.ID
 	SleepFunc func(ctx context.Context, d time.Duration) error
-	ObsWriter observationWriter // nil-safe: when set, observations are committed atomically with delta token
+	store     *SyncStore // nil-safe: when set, observations are committed atomically with delta token
 	wakeCh    <-chan struct{}
 	prepWatch WatchObservationPreparer
 	postWatch WatchBatchPostProcessor
@@ -101,11 +101,11 @@ func NewRemoteObserver(
 	return obs
 }
 
-// SetObsWriter sets the observation writer for committing delta observations
+// SetObservationStore sets the sync store used to commit delta observations
 // atomically with the delta token during watch mode. When non-nil, each poll
 // cycle commits observations before returning events to the engine.
-func (o *RemoteObserver) SetObsWriter(w observationWriter) {
-	o.ObsWriter = w
+func (o *RemoteObserver) SetObservationStore(store *SyncStore) {
+	o.store = store
 }
 
 // SetWakeChannel installs an optional remote wake signal source. When set,
@@ -325,11 +325,11 @@ func (o *RemoteObserver) commitWatchObservation(
 	// Commit observations atomically with delta token before sending events
 	// to the channel. This ensures remote state is durable even if the engine
 	// crashes before processing the events.
-	if o.ObsWriter == nil {
+	if o.store == nil {
 		return true
 	}
 
-	if commitErr := o.ObsWriter.CommitObservation(ctx, observed, newToken, o.driveID); commitErr != nil {
+	if commitErr := o.store.CommitObservation(ctx, observed, newToken, o.driveID); commitErr != nil {
 		if ctx.Err() != nil {
 			return false
 		}

@@ -770,7 +770,7 @@ func runWhoami(cmd *cobra.Command, _ []string) error {
 
 func runWhoamiWithContext(ctx context.Context, cc *CLIContext) error {
 	logger := cc.Logger
-	snapshot, err := loadLenientCatalog(ctx, cc)
+	snapshot, err := loadAccountCatalogSnapshot(ctx, cc)
 	if err != nil {
 		return err
 	}
@@ -799,7 +799,7 @@ func runWhoamiWithContext(ctx context.Context, cc *CLIContext) error {
 	}
 
 	if authResult.reconciled {
-		snapshot, err = loadLenientCatalog(ctx, cc)
+		snapshot, err = loadAccountCatalogSnapshot(ctx, cc)
 		if err != nil {
 			return err
 		}

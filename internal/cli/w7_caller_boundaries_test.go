@@ -66,7 +66,7 @@ func writeInvalidSavedLoginFile(t *testing.T, cid driveid.CanonicalID) {
 }
 
 // Validates: R-3.1.3, R-2.10.47
-func TestAuthService_RunLogout_PreservesOfflineState(t *testing.T) {
+func TestLogoutCommand_PreservesOfflineState(t *testing.T) {
 	setTestDriveHome(t)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
@@ -88,7 +88,7 @@ func TestAuthService_RunLogout_PreservesOfflineState(t *testing.T) {
 	require.NoError(t, config.SetDriveKey(cfgPath, cid, "sync_dir", syncDir))
 
 	var out bytes.Buffer
-	cc := newServiceContext(&out, cfgPath)
+	cc := newCommandContext(&out, cfgPath)
 
 	require.NoError(t, runLogoutWithContext(cc, false))
 
@@ -207,7 +207,7 @@ func TestRunWhoamiWithContext_MultipleConfiguredDrivesRequireSelector(t *testing
 }
 
 // Validates: R-3.3.2
-func TestDriveService_RunList_TextSurfacesConfiguredAuthRequirement(t *testing.T) {
+func TestDriveList_TextSurfacesConfiguredAuthRequirement(t *testing.T) {
 	setTestDriveHome(t)
 
 	cfgPath, _ := setupConfiguredInvalidSavedLogin(t)
@@ -229,7 +229,7 @@ func TestDriveService_RunList_TextSurfacesConfiguredAuthRequirement(t *testing.T
 }
 
 // Validates: R-3.3.10
-func TestDriveService_RunList_JSONSurfacesConfiguredAuthRequirement(t *testing.T) {
+func TestDriveList_JSONSurfacesConfiguredAuthRequirement(t *testing.T) {
 	setTestDriveHome(t)
 
 	cfgPath, cid := setupConfiguredInvalidSavedLogin(t)
@@ -260,7 +260,7 @@ func TestDriveService_RunList_JSONSurfacesConfiguredAuthRequirement(t *testing.T
 }
 
 // Validates: R-3.3.2, R-3.3.10
-func TestDriveService_RunList_JSONSurfacesOrphanedMissingLogin(t *testing.T) {
+func TestDriveList_JSONSurfacesOrphanedMissingLogin(t *testing.T) {
 	setTestDriveHome(t)
 
 	cid := driveid.MustCanonicalID("personal:orphan@example.com")
@@ -270,7 +270,7 @@ func TestDriveService_RunList_JSONSurfacesOrphanedMissingLogin(t *testing.T) {
 	require.NoError(t, touchStateDBForAccount(t, cid))
 
 	var out bytes.Buffer
-	cc := newServiceContext(&out, filepath.Join(t.TempDir(), "missing-config.toml"))
+	cc := newCommandContext(&out, filepath.Join(t.TempDir(), "missing-config.toml"))
 	cc.Flags = CLIFlags{JSON: true}
 
 	require.NoError(t, runDriveListWithContext(t.Context(), cc, false))
@@ -287,13 +287,13 @@ func TestDriveService_RunList_JSONSurfacesOrphanedMissingLogin(t *testing.T) {
 }
 
 // Validates: R-3.3.9
-func TestDriveService_RunSearch_TextSurfacesUnconfiguredAuthRequirement(t *testing.T) {
+func TestDriveSearch_TextSurfacesUnconfiguredAuthRequirement(t *testing.T) {
 	setTestDriveHome(t)
 
 	cid := setupUnconfiguredInvalidSavedLogin(t)
 
 	var out bytes.Buffer
-	cc := newServiceContext(&out, filepath.Join(t.TempDir(), "missing-config.toml"))
+	cc := newCommandContext(&out, filepath.Join(t.TempDir(), "missing-config.toml"))
 
 	require.NoError(t, runDriveSearchWithContext(t.Context(), cc, "marketing"))
 	assert.Contains(t, out.String(), "Authentication required:")
@@ -304,13 +304,13 @@ func TestDriveService_RunSearch_TextSurfacesUnconfiguredAuthRequirement(t *testi
 }
 
 // Validates: R-3.3.9, R-3.3.11
-func TestDriveService_RunSearch_JSONSurfacesUnconfiguredAuthRequirementForAccountFilter(t *testing.T) {
+func TestDriveSearch_JSONSurfacesUnconfiguredAuthRequirementForAccountFilter(t *testing.T) {
 	setTestDriveHome(t)
 
 	cid := setupUnconfiguredInvalidSavedLogin(t)
 
 	var out bytes.Buffer
-	cc := newServiceContext(&out, filepath.Join(t.TempDir(), "missing-config.toml"))
+	cc := newCommandContext(&out, filepath.Join(t.TempDir(), "missing-config.toml"))
 	cc.Flags = CLIFlags{
 		Account: cid.Email(),
 		JSON:    true,
@@ -329,7 +329,7 @@ func TestDriveService_RunSearch_JSONSurfacesUnconfiguredAuthRequirementForAccoun
 }
 
 // Validates: R-3.6.6
-func TestSharedService_RunList_TextSurfacesUnconfiguredAuthRequirement(t *testing.T) {
+func TestSharedList_TextSurfacesUnconfiguredAuthRequirement(t *testing.T) {
 	setTestDriveHome(t)
 
 	cid := setupUnconfiguredInvalidSavedLoginCID(
@@ -339,7 +339,7 @@ func TestSharedService_RunList_TextSurfacesUnconfiguredAuthRequirement(t *testin
 	)
 
 	var out bytes.Buffer
-	cc := newServiceContext(&out, filepath.Join(t.TempDir(), "missing-config.toml"))
+	cc := newCommandContext(&out, filepath.Join(t.TempDir(), "missing-config.toml"))
 
 	require.NoError(t, runSharedList(t.Context(), cc))
 	assert.Contains(t, out.String(), "Authentication required:")
@@ -349,7 +349,7 @@ func TestSharedService_RunList_TextSurfacesUnconfiguredAuthRequirement(t *testin
 }
 
 // Validates: R-3.6.6, R-3.6.7
-func TestSharedService_RunList_JSONSurfacesUnconfiguredAuthRequirementForAccountFilter(t *testing.T) {
+func TestSharedList_JSONSurfacesUnconfiguredAuthRequirementForAccountFilter(t *testing.T) {
 	setTestDriveHome(t)
 
 	cid := setupUnconfiguredInvalidSavedLoginCID(
@@ -359,7 +359,7 @@ func TestSharedService_RunList_JSONSurfacesUnconfiguredAuthRequirementForAccount
 	)
 
 	var out bytes.Buffer
-	cc := newServiceContext(&out, filepath.Join(t.TempDir(), "missing-config.toml"))
+	cc := newCommandContext(&out, filepath.Join(t.TempDir(), "missing-config.toml"))
 	cc.Flags = CLIFlags{
 		Account: cid.Email(),
 		JSON:    true,

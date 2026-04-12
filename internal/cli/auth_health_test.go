@@ -105,7 +105,7 @@ func TestAttachAccountAuthProof_DoesNotClearOnUnauthorized(t *testing.T) {
 }
 
 // Validates: R-2.10.45, R-2.10.47
-func TestStatusService_Run_JSONSurfacesSyncAuthRejectedOffline(t *testing.T) {
+func TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline(t *testing.T) {
 	setTestDriveHome(t)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
@@ -133,7 +133,7 @@ func TestStatusService_Run_JSONSurfacesSyncAuthRejectedOffline(t *testing.T) {
 }
 
 // Validates: R-2.10.47
-func TestStatusService_Run_DoesNotClearPersistedAuthScope(t *testing.T) {
+func TestStatusCommand_DoesNotClearPersistedAuthScope(t *testing.T) {
 	setTestDriveHome(t)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")

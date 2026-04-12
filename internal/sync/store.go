@@ -82,7 +82,7 @@ func NewSyncStore(ctx context.Context, dbPath string, logger *slog.Logger) (*Syn
 		return nil, baseErr
 	}
 
-	logger.Info("baseline manager initialized", slog.String("db_path", dbPath))
+	logger.Info("sync store initialized", slog.String("db_path", dbPath))
 
 	store := &SyncStore{
 		db:      db,

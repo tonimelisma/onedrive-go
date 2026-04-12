@@ -21,7 +21,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
-func newServiceContext(output *bytes.Buffer, cfgPath string) *CLIContext {
+func newCommandContext(output *bytes.Buffer, cfgPath string) *CLIContext {
 	return &CLIContext{
 		Logger:       slog.New(slog.DiscardHandler),
 		OutputWriter: output,
@@ -65,22 +65,22 @@ func (m *mockRecycleBinSession) DeleteItem(_ context.Context, itemID string) err
 }
 
 // Validates: R-4.8.4
-func TestStatusService_Run_NoAccountsWritesGuidance(t *testing.T) {
+func TestStatusCommand_NoAccountsWritesGuidance(t *testing.T) {
 	setTestDriveHome(t)
 
 	var out bytes.Buffer
-	cc := newServiceContext(&out, t.TempDir()+"/missing-config.toml")
+	cc := newCommandContext(&out, t.TempDir()+"/missing-config.toml")
 
 	require.NoError(t, runStatusCommand(cc, false))
 	assert.Contains(t, out.String(), "No accounts configured")
 }
 
 // Validates: R-3.3.5
-func TestDriveService_RunAdd_NoSelectorWritesGuidance(t *testing.T) {
+func TestDriveAdd_NoSelectorWritesGuidance(t *testing.T) {
 	setTestDriveHome(t)
 
 	var out bytes.Buffer
-	cc := newServiceContext(&out, t.TempDir()+"/config.toml")
+	cc := newCommandContext(&out, t.TempDir()+"/config.toml")
 
 	require.NoError(t, runDriveAddWithContext(t.Context(), cc, nil))
 	assert.Contains(t, out.String(), "drive add <canonical-id>")
@@ -88,11 +88,11 @@ func TestDriveService_RunAdd_NoSelectorWritesGuidance(t *testing.T) {
 }
 
 // Validates: R-3.6.2
-func TestDriveService_RunSearch_NoBusinessAccounts(t *testing.T) {
+func TestDriveSearch_NoBusinessAccounts(t *testing.T) {
 	setTestDriveHome(t)
 
 	var out bytes.Buffer
-	cc := newServiceContext(&out, t.TempDir()+"/config.toml")
+	cc := newCommandContext(&out, t.TempDir()+"/config.toml")
 
 	err := runDriveSearchWithContext(t.Context(), cc, "marketing")
 	require.Error(t, err)
@@ -100,7 +100,7 @@ func TestDriveService_RunSearch_NoBusinessAccounts(t *testing.T) {
 }
 
 // Validates: R-3.3.9, R-3.7
-func TestDriveService_RunSearch_RefreshesIdentityOnceBeforeSharePointSearch(t *testing.T) {
+func TestDriveSearch_RefreshesIdentityOnceBeforeSharePointSearch(t *testing.T) {
 	setTestDriveHome(t)
 
 	cid := driveid.MustCanonicalID("business:alice@contoso.com")
@@ -133,7 +133,7 @@ func TestDriveService_RunSearch_RefreshesIdentityOnceBeforeSharePointSearch(t *t
 	defer srv.Close()
 
 	var out bytes.Buffer
-	cc := newServiceContext(&out, filepath.Join(t.TempDir(), "missing-config.toml"))
+	cc := newCommandContext(&out, filepath.Join(t.TempDir(), "missing-config.toml"))
 	cc.GraphBaseURL = srv.URL
 
 	require.NoError(t, runDriveSearchWithContext(t.Context(), cc, "marketing"))
@@ -142,18 +142,18 @@ func TestDriveService_RunSearch_RefreshesIdentityOnceBeforeSharePointSearch(t *t
 }
 
 // Validates: R-3.1.4
-func TestAuthService_RunLogout_NoAccountsConfigured(t *testing.T) {
+func TestLogoutCommand_NoAccountsConfigured(t *testing.T) {
 	setTestDriveHome(t)
 
 	var out bytes.Buffer
-	cc := newServiceContext(&out, t.TempDir()+"/config.toml")
+	cc := newCommandContext(&out, t.TempDir()+"/config.toml")
 	err := runLogoutWithContext(cc, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no accounts configured")
 }
 
 // Validates: R-3.1.4
-func TestAuthService_RunLogout_PurgeRemovesAccountProfile(t *testing.T) {
+func TestLogoutCommand_PurgeRemovesAccountProfile(t *testing.T) {
 	setTestDriveHome(t)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
@@ -172,7 +172,7 @@ func TestAuthService_RunLogout_PurgeRemovesAccountProfile(t *testing.T) {
 	require.NoError(t, config.SetDriveKey(cfgPath, cid, "sync_dir", syncDir))
 
 	var out bytes.Buffer
-	cc := newServiceContext(&out, cfgPath)
+	cc := newCommandContext(&out, cfgPath)
 	cc.Flags.Account = "alice@contoso.com"
 
 	require.NoError(t, runLogoutWithContext(cc, true))
@@ -195,7 +195,7 @@ func TestAuthService_RunLogout_PurgeRemovesAccountProfile(t *testing.T) {
 }
 
 // Validates: R-3.3.8, R-3.1.5
-func TestDriveService_RunRemove_PurgePreservesAccountProfile(t *testing.T) {
+func TestDriveRemove_PurgePreservesAccountProfile(t *testing.T) {
 	setTestDriveHome(t)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
@@ -210,7 +210,7 @@ func TestDriveService_RunRemove_PurgePreservesAccountProfile(t *testing.T) {
 	require.NoError(t, os.WriteFile(config.DriveMetadataPath(cid), []byte(`{"drive_id":"d1"}`), 0o600))
 
 	var out bytes.Buffer
-	cc := newServiceContext(&out, cfgPath)
+	cc := newCommandContext(&out, cfgPath)
 	cc.Flags.Drive = []string{cid.String()}
 
 	require.NoError(t, runDriveRemoveWithContext(cc, true))
@@ -242,7 +242,7 @@ func TestDriveService_RunRemove_PurgePreservesAccountProfile(t *testing.T) {
 }
 
 // Validates: R-2.6
-func TestSyncControlService_RunPause_PersistsTimedPause(t *testing.T) {
+func TestPauseCommand_PersistsTimedPause(t *testing.T) {
 	setTestDriveHome(t)
 
 	var out bytes.Buffer
@@ -250,7 +250,7 @@ func TestSyncControlService_RunPause_PersistsTimedPause(t *testing.T) {
 	cid := driveid.MustCanonicalID("personal:pause@example.com")
 	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
 
-	cc := newServiceContext(&out, cfgPath)
+	cc := newCommandContext(&out, cfgPath)
 	cc.Flags.Drive = []string{cid.String()}
 
 	now := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
@@ -268,7 +268,7 @@ func TestSyncControlService_RunPause_PersistsTimedPause(t *testing.T) {
 }
 
 // Validates: R-2.6
-func TestSyncControlService_RunResume_ClearsPausedKeys(t *testing.T) {
+func TestResumeCommand_ClearsPausedKeys(t *testing.T) {
 	setTestDriveHome(t)
 
 	var out bytes.Buffer
@@ -277,7 +277,7 @@ func TestSyncControlService_RunResume_ClearsPausedKeys(t *testing.T) {
 	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
 	require.NoError(t, config.SetDriveKey(cfgPath, cid, "paused", "true"))
 
-	cc := newServiceContext(&out, cfgPath)
+	cc := newCommandContext(&out, cfgPath)
 	cc.Flags.Drive = []string{cid.String()}
 
 	require.NoError(t, runResumeCommand(cc, time.Now))
@@ -290,11 +290,11 @@ func TestSyncControlService_RunResume_ClearsPausedKeys(t *testing.T) {
 }
 
 // Validates: R-1.9
-func TestRecycleBinService_RunList_PersonalAccountMessage(t *testing.T) {
+func TestRecycleBinList_PersonalAccountMessage(t *testing.T) {
 	setTestDriveHome(t)
 
 	var out bytes.Buffer
-	cc := newServiceContext(&out, filepath.Join(t.TempDir(), "config.toml"))
+	cc := newCommandContext(&out, filepath.Join(t.TempDir(), "config.toml"))
 	sessionFactory := func(context.Context) (recycleBinSession, error) {
 		return &mockRecycleBinSession{listErr: graph.ErrBadRequest}, nil
 	}
@@ -305,7 +305,7 @@ func TestRecycleBinService_RunList_PersonalAccountMessage(t *testing.T) {
 }
 
 // Validates: R-1.9
-func TestRecycleBinService_RunEmpty_FallsBackToDelete(t *testing.T) {
+func TestRecycleBinEmpty_FallsBackToDelete(t *testing.T) {
 	setTestDriveHome(t)
 
 	var out bytes.Buffer
@@ -314,7 +314,7 @@ func TestRecycleBinService_RunEmpty_FallsBackToDelete(t *testing.T) {
 		permanentDeleteErr: graph.ErrMethodNotAllowed,
 	}
 
-	cc := newServiceContext(&out, filepath.Join(t.TempDir(), "config.toml"))
+	cc := newCommandContext(&out, filepath.Join(t.TempDir(), "config.toml"))
 	sessionFactory := func(context.Context) (recycleBinSession, error) {
 		return mockSession, nil
 	}
