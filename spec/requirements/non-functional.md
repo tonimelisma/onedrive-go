@@ -9,7 +9,11 @@ Performance targets, data integrity, process model, safety, observability, and p
 - R-6.1.3: Initial sync of 10K files shall complete in under 10 minutes. [target]
 - R-6.1.4: Startup time shall be under 1 second. [verified]
 - R-6.1.5: Binary size shall be under 20 MB (single static binary, no runtime dependencies). [verified]
-- R-6.1.6: When operating in production, the system shall meet CPU, memory, and I/O performance targets validated via profiling. [planned]
+- R-6.1.6: When operating in production, the system shall meet CPU, memory, and I/O performance targets validated via repo-owned profiling and benchmark scenarios. [planned]
+- R-6.1.7: The repository shall define stable named representative benchmark scenarios for startup, idle watch, no-op reconcile, initial sync, and partial-local catch-up workloads. [planned]
+- R-6.1.8: Representative benchmark runs shall record both external process metrics (for proof) and repo-owned internal perf/timing metrics (for explanation) in machine-readable artifacts. [planned]
+- R-6.1.9: Publicly reported representative performance numbers shall be generated from repo-owned benchmark artifacts and accompanied by machine/date/methodology and subject-under-test context. [planned]
+- R-6.1.10: Cross-app comparison results shall use documented fixtures and methodology, and shall not be mixed into required per-PR verification claims. [planned]
 
 ## R-6.2 Data Integrity [implemented]
 
@@ -145,3 +149,5 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.10.11: Repository tooling shall provide a read-only cleanup audit that classifies local worktrees, local branches, and remote branches as safe-to-remove or keep reasons without deleting anything. [verified]
 - R-6.10.12: Repo verification shall enforce that `Validates:` test references and `Implements:` design-doc references resolve to declared requirement IDs. [verified]
 - R-6.10.13: Governed behavioral design docs shall include executable evidence links to exact named tests for the behaviors they claim. [verified]
+- R-6.10.14: Repository tooling shall provide a repo-owned benchmark entrypoint with named scenarios and subject-aware machine-readable result output, separate from default verification. [verified]
+- R-6.10.15: Live representative benchmarks and cross-app comparison runs shall execute in explicit manual or scheduled lanes, not in required default verification. [planned]
