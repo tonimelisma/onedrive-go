@@ -22,7 +22,7 @@ const maxHashRetries = 2
 // ExecuteDownload downloads a remote file via TransferManager with .partial
 // safety, hash verification with retry, and atomic rename. Exported for use
 // by the engine's conflict resolution path.
-func (e *Executor) ExecuteDownload(ctx context.Context, action *synctypes.Action) synctypes.Outcome {
+func (e *Executor) ExecuteDownload(ctx context.Context, action *Action) ExecutionResult {
 	targetPath, err := e.syncTree.Abs(action.Path)
 	if err != nil {
 		return e.failedOutcome(action, synctypes.ActionDownload, normalizeSyncTreePathError(err))
@@ -48,9 +48,9 @@ func (e *Executor) ExecuteDownload(ctx context.Context, action *synctypes.Action
 
 // downloadOutcome builds a successful Outcome after download.
 func (e *Executor) downloadOutcome(
-	action *synctypes.Action, driveID driveid.ID, localHash, remoteHash string, size int64,
-) synctypes.Outcome {
-	o := synctypes.Outcome{
+	action *Action, driveID driveid.ID, localHash, remoteHash string, size int64,
+) ExecutionResult {
+	o := ExecutionResult{
 		Action:          synctypes.ActionDownload,
 		Success:         true,
 		Path:            action.Path,
@@ -88,7 +88,7 @@ func (e *Executor) downloadOutcome(
 // the baseline, the upload is aborted with a descriptive error. The engine
 // records this as a sync_failure; on the next pass the remote observer will
 // have polled, and the planner will see both changes and detect a conflict.
-func (e *Executor) ExecuteUpload(ctx context.Context, action *synctypes.Action) synctypes.Outcome {
+func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ExecutionResult {
 	driveID := e.resolveDriveID(action)
 
 	// Watch-mode freshness check: verify the remote hasn't changed since
@@ -147,7 +147,7 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *synctypes.Action) 
 
 	e.confirmRemotePathVisible(ctx, action)
 
-	return synctypes.Outcome{
+	return ExecutionResult{
 		Action:          synctypes.ActionUpload,
 		Success:         true,
 		Path:            action.Path,
@@ -167,7 +167,7 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *synctypes.Action) 
 	}
 }
 
-func shouldOverwriteKnownRemoteItem(action *synctypes.Action) bool {
+func shouldOverwriteKnownRemoteItem(action *Action) bool {
 	if action == nil || action.ItemID == "" {
 		return false
 	}
@@ -183,7 +183,7 @@ func shouldOverwriteKnownRemoteItem(action *synctypes.Action) bool {
 	return true
 }
 
-func resolvedUploadParentID(action *synctypes.Action, item *graph.Item) string {
+func resolvedUploadParentID(action *Action, item *graph.Item) string {
 	if item != nil && item.ParentID != "" {
 		return item.ParentID
 	}

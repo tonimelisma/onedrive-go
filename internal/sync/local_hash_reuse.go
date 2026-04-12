@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -18,7 +19,7 @@ import (
 // This keeps the engine's retry/reobserve paths aligned with the main local
 // scanner so we do not hash aggressively in one path while trusting metadata
 // in another.
-func CanReuseBaselineHash(info fs.FileInfo, base *synctypes.BaselineEntry, observeStartNano int64) bool {
+func CanReuseBaselineHash(info fs.FileInfo, base *syncstore.BaselineEntry, observeStartNano int64) bool {
 	if info == nil || base == nil || info.IsDir() || base.ItemType != synctypes.ItemTypeFile || base.LocalHash == "" {
 		return false
 	}

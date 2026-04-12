@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -15,14 +16,14 @@ import (
 const maxShortcutConcurrency = 4
 
 type shortcutBatchMutationResult struct {
-	VisiblePrimary []synctypes.ChangeEvent
+	VisiblePrimary []ChangeEvent
 	SnapshotDirty  bool
 }
 
 // filterOutShortcuts removes synctypes.ChangeShortcut events from a slice —
 // shortcut discovery is consumed by the post-primary coordinator and should
 // not enter the planner as regular path events.
-func filterOutShortcuts(events []synctypes.ChangeEvent) []synctypes.ChangeEvent {
+func filterOutShortcuts(events []ChangeEvent) []ChangeEvent {
 	n := 0
 
 	for i := range events {
@@ -38,7 +39,7 @@ func filterOutShortcuts(events []synctypes.ChangeEvent) []synctypes.ChangeEvent 
 // registerShortcuts upserts shortcuts from synctypes.ChangeShortcut events.
 // For new shortcuts, detects the source drive type to determine the
 // observation strategy (delta vs enumerate).
-func (coordinator *shortcutCoordinator) registerShortcuts(ctx context.Context, events []synctypes.ChangeEvent) error {
+func (coordinator *shortcutCoordinator) registerShortcuts(ctx context.Context, events []ChangeEvent) error {
 	flow := coordinator.flow
 	eng := flow.engine
 
@@ -93,7 +94,7 @@ func (coordinator *shortcutCoordinator) registerShortcuts(ctx context.Context, e
 // and returns the set of item IDs that should be skipped during observation.
 // Detects: exact duplicates, prefix nesting (Shared vs Shared/Sub), and
 // conflicts with primary drive baseline entries.
-func detectShortcutCollisionsFromList(shortcuts []synctypes.Shortcut, bl *synctypes.Baseline, logger *slog.Logger) map[string]bool {
+func detectShortcutCollisionsFromList(shortcuts []synctypes.Shortcut, bl *syncstore.Baseline, logger *slog.Logger) map[string]bool {
 	collisions := make(map[string]bool)
 
 	// Check shortcut-vs-shortcut: exact duplicates and prefix nesting.
@@ -335,7 +336,7 @@ func (coordinator *shortcutCoordinator) loadShortcutSnapshot(ctx context.Context
 
 func (coordinator *shortcutCoordinator) applyShortcutBatchMutations(
 	ctx context.Context,
-	primaryEvents []synctypes.ChangeEvent,
+	primaryEvents []ChangeEvent,
 ) (shortcutBatchMutationResult, error) {
 	eng := coordinator.flow.engine
 	shortcutEvents, removedShortcutIDs := splitShortcutBatchEvents(primaryEvents)
@@ -364,11 +365,11 @@ func (coordinator *shortcutCoordinator) applyShortcutBatchMutations(
 func (coordinator *shortcutCoordinator) observeShortcutFollowUp(
 	ctx context.Context,
 	shortcuts []synctypes.Shortcut,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	fullReconcile bool,
 	collisions map[string]bool,
 	suppressedShortcutTargets map[string]struct{},
-) ([]synctypes.ChangeEvent, error) {
+) ([]ChangeEvent, error) {
 	eng := coordinator.flow.engine
 
 	if len(shortcuts) == 0 || (eng.folderDelta == nil && eng.recursiveLister == nil) {
@@ -377,7 +378,7 @@ func (coordinator *shortcutCoordinator) observeShortcutFollowUp(
 
 	plan, err := coordinator.flow.BuildObservationSessionPlan(ctx, ObservationPlanRequest{
 		Baseline:                  bl,
-		SyncMode:                  synctypes.SyncBidirectional,
+		SyncMode:                  SyncBidirectional,
 		Purpose:                   observationPlanPurposeOneShot,
 		Shortcuts:                 shortcuts,
 		ShortcutCollisions:        collisions,
@@ -400,9 +401,9 @@ func (coordinator *shortcutCoordinator) observeShortcutFollowUp(
 func (coordinator *shortcutCoordinator) observeShortcutContentFromList(
 	ctx context.Context,
 	shortcuts []synctypes.Shortcut,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	collisions map[string]bool,
-) ([]synctypes.ChangeEvent, error) {
+) ([]ChangeEvent, error) {
 	return coordinator.observeShortcutFollowUp(
 		ctx,
 		shortcuts,
@@ -419,8 +420,8 @@ func (coordinator *shortcutCoordinator) observeShortcutContentFromList(
 // orphans against the baseline.
 func (coordinator *shortcutCoordinator) reconcileShortcutScopes(
 	ctx context.Context,
-	bl *synctypes.Baseline,
-) ([]synctypes.ChangeEvent, error) {
+	bl *syncstore.Baseline,
+) ([]ChangeEvent, error) {
 	flow := coordinator.flow
 	eng := flow.engine
 
@@ -440,8 +441,8 @@ func (coordinator *shortcutCoordinator) reconcileShortcutScopes(
 	return coordinator.observeShortcutFollowUp(ctx, shortcuts, bl, true, nil, nil)
 }
 
-func splitShortcutBatchEvents(primaryEvents []synctypes.ChangeEvent) ([]synctypes.ChangeEvent, map[string]bool) {
-	var shortcutEvents []synctypes.ChangeEvent
+func splitShortcutBatchEvents(primaryEvents []ChangeEvent) ([]ChangeEvent, map[string]bool) {
+	var shortcutEvents []ChangeEvent
 	removedShortcutIDs := make(map[string]bool)
 
 	for i := range primaryEvents {

@@ -27,15 +27,15 @@ const minWorkers = 4
 // DepGraph or any other dispatch source.
 type WorkerPool struct {
 	cfg        *ExecutorConfig
-	dispatchCh <-chan *synctypes.TrackedAction
+	dispatchCh <-chan *TrackedAction
 	completeCh <-chan struct{}
-	baseline   synctypes.OutcomeWriter
+	baseline   executionResultWriter
 	logger     *slog.Logger
 
 	// results reports per-action outcomes back to the engine. The engine
 	// reads from this channel, classifies results, and calls depGraph.Complete.
 	// Failed items are recorded in sync_failures for retry.
-	results chan synctypes.WorkerResult
+	results chan WorkerResult
 
 	cancel    context.CancelFunc
 	wg        stdsync.WaitGroup
@@ -50,9 +50,9 @@ type WorkerPool struct {
 // work is complete (workers exit when completeCh closes or ctx is canceled).
 func NewWorkerPool(
 	cfg *ExecutorConfig,
-	dispatchCh <-chan *synctypes.TrackedAction,
+	dispatchCh <-chan *TrackedAction,
 	completeCh <-chan struct{},
-	baseline synctypes.OutcomeWriter,
+	baseline executionResultWriter,
 	logger *slog.Logger,
 	planSize int,
 ) *WorkerPool {
@@ -70,7 +70,7 @@ func NewWorkerPool(
 		// the number of actions, so workers never block). Watch mode uses
 		// watchResultBuf (4096) with a drain goroutine reading results
 		// concurrently, so blocking is unlikely under normal load.
-		results: make(chan synctypes.WorkerResult, planSize),
+		results: make(chan WorkerResult, planSize),
 	}
 }
 
@@ -143,7 +143,7 @@ func (wp *WorkerPool) worker(ctx context.Context) {
 // safeExecuteAction wraps executeAction with panic recovery so a single
 // action panic doesn't crash the entire program. The engine receives the
 // panic as a failed WorkerResult and decides how to handle it.
-func (wp *WorkerPool) safeExecuteAction(ctx context.Context, ta *synctypes.TrackedAction) {
+func (wp *WorkerPool) safeExecuteAction(ctx context.Context, ta *TrackedAction) {
 	defer func() {
 		if r := recover(); r != nil {
 			wp.logger.Error("worker: panic in action execution",
@@ -163,7 +163,7 @@ func (wp *WorkerPool) safeExecuteAction(ctx context.Context, ta *synctypes.Track
 // executeAction runs a single tracked action: execute, persist success
 // outcomes, and send the result to the engine. Workers are pure executors —
 // they NEVER call depGraph.Complete().
-func (wp *WorkerPool) executeAction(ctx context.Context, ta *synctypes.TrackedAction) {
+func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 	// Per-action cancellable context.
 	actionCtx, cancel := context.WithCancel(ctx)
 	ta.Cancel = cancel
@@ -184,12 +184,12 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *synctypes.TrackedAc
 	exec := NewExecution(wp.cfg, bl)
 	outcome := wp.dispatchAction(actionCtx, exec, ta)
 
-	// Persist success outcomes immediately. CommitOutcome is a no-op for
-	// failures (store_baseline.go:186), so we only call it on success.
+	// Persist success outcomes immediately via the store-owned mutation input.
 	// Uses pool-level ctx because the action already completed — its outcome
 	// should be persisted even if CancelByPath canceled actionCtx.
 	if outcome.Success {
-		if commitErr := wp.baseline.CommitOutcome(ctx, &outcome); commitErr != nil {
+		mutation := baselineMutationFromExecutionResult(&outcome)
+		if commitErr := wp.baseline.CommitMutation(ctx, mutation); commitErr != nil {
 			wp.logger.Error("worker: commit outcome failed",
 				slog.Int64("id", ta.ID),
 				slog.String("error", commitErr.Error()),
@@ -205,8 +205,8 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *synctypes.TrackedAc
 
 // dispatchAction routes a tracked action to the appropriate executor method.
 func (wp *WorkerPool) dispatchAction(
-	ctx context.Context, exec *Executor, ta *synctypes.TrackedAction,
-) synctypes.Outcome {
+	ctx context.Context, exec *Executor, ta *TrackedAction,
+) ExecutionResult {
 	action := &ta.Action
 
 	switch action.Type {
@@ -229,7 +229,7 @@ func (wp *WorkerPool) dispatchAction(
 	case synctypes.ActionCleanup:
 		return exec.ExecuteCleanup(action)
 	default:
-		return synctypes.Outcome{
+		return ExecutionResult{
 			Action:  action.Type,
 			Path:    action.Path,
 			Success: false,
@@ -241,7 +241,7 @@ func (wp *WorkerPool) dispatchAction(
 // Results returns a read-only channel of per-action results. The engine
 // reads from this channel, classifies each result, and calls
 // depGraph.Complete. Failed items go to sync_failures for the engine retry sweep.
-func (wp *WorkerPool) Results() <-chan synctypes.WorkerResult {
+func (wp *WorkerPool) Results() <-chan WorkerResult {
 	return wp.results
 }
 
@@ -253,7 +253,7 @@ func (wp *WorkerPool) Results() <-chan synctypes.WorkerResult {
 // If the context is canceled before the result is sent (engine shutdown),
 // the WorkerResult is silently dropped. The engine handles shutdown via
 // context cancellation on the result-processing loop (resultShutdown classification).
-func (wp *WorkerPool) sendResult(ctx context.Context, ta *synctypes.TrackedAction, outcome *synctypes.Outcome, actionErr error) {
+func (wp *WorkerPool) sendResult(ctx context.Context, ta *TrackedAction, outcome *ExecutionResult, actionErr error) {
 	driveID := ta.Action.DriveID
 	if outcome != nil && !outcome.DriveID.IsZero() {
 		driveID = outcome.DriveID
@@ -264,7 +264,7 @@ func (wp *WorkerPool) sendResult(ctx context.Context, ta *synctypes.TrackedActio
 		driveID = ta.Action.TargetDriveID
 	}
 
-	r := synctypes.WorkerResult{
+	r := WorkerResult{
 		Path:          ta.Action.Path,
 		ItemID:        ta.Action.ItemID,
 		DriveID:       driveID,

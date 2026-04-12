@@ -27,8 +27,8 @@ func TestFullScan_ConfiguredFiltersExcludeConfiguredEntries(t *testing.T) {
 	writeTestFile(t, syncRoot, "debug.log", "noise")
 	writeTestFile(t, syncRoot, "keep.txt", "keep")
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(synctypes.LocalFilterConfig{
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.SetFilterConfig(LocalFilterConfig{
 		SkipDotfiles: true,
 		SkipDirs:     []string{"vendor"},
 		SkipFiles:    []string{"*.log"},
@@ -53,8 +53,8 @@ func TestFullScan_SkipSymlinksExcludesSymlinkEntries(t *testing.T) {
 	require.NoError(t, os.Symlink(filepath.Join(syncRoot, "real.txt"), filepath.Join(syncRoot, "link.txt")))
 	require.NoError(t, os.Symlink(filepath.Join(syncRoot, "real"), filepath.Join(syncRoot, "alias")))
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(synctypes.LocalFilterConfig{
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.SetFilterConfig(LocalFilterConfig{
 		SkipSymlinks: true,
 	})
 
@@ -82,51 +82,51 @@ func TestFullScan_ConfiguredSilentFiltersSuppressDeleteForExcludedBaselineEntrie
 	require.NoError(t, os.Symlink(filepath.Join(syncRoot, "real.txt"), filepath.Join(syncRoot, "link.txt")))
 	require.NoError(t, os.Symlink(filepath.Join(syncRoot, "realdir"), filepath.Join(syncRoot, "aliasdir")))
 
-	baseline := synctest.BaselineWith(
-		&synctypes.BaselineEntry{
+	baseline := baselineWith(
+		&BaselineEntry{
 			Path: "real.txt", DriveID: driveid.New("d"), ItemID: "real",
 			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "content"),
 		},
-		&synctypes.BaselineEntry{
+		&BaselineEntry{
 			Path: "realdir", DriveID: driveid.New("d"), ItemID: "realdir",
 			ItemType: synctypes.ItemTypeFolder,
 		},
-		&synctypes.BaselineEntry{
+		&BaselineEntry{
 			Path: "realdir/nested.txt", DriveID: driveid.New("d"), ItemID: "realdir-nested",
 			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "nested"),
 		},
-		&synctypes.BaselineEntry{
+		&BaselineEntry{
 			Path: ".env", DriveID: driveid.New("d"), ItemID: "dot",
 			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "secret"),
 		},
-		&synctypes.BaselineEntry{
+		&BaselineEntry{
 			Path: "vendor", DriveID: driveid.New("d"), ItemID: "vendor",
 			ItemType: synctypes.ItemTypeFolder,
 		},
-		&synctypes.BaselineEntry{
+		&BaselineEntry{
 			Path: "vendor/lib.txt", DriveID: driveid.New("d"), ItemID: "vendor-lib",
 			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "vendored"),
 		},
-		&synctypes.BaselineEntry{
+		&BaselineEntry{
 			Path: "debug.log", DriveID: driveid.New("d"), ItemID: "log",
 			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "noise"),
 		},
-		&synctypes.BaselineEntry{
+		&BaselineEntry{
 			Path: "link.txt", DriveID: driveid.New("d"), ItemID: "link",
 			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "content"),
 		},
-		&synctypes.BaselineEntry{
+		&BaselineEntry{
 			Path: "aliasdir", DriveID: driveid.New("d"), ItemID: "aliasdir",
 			ItemType: synctypes.ItemTypeFolder,
 		},
-		&synctypes.BaselineEntry{
+		&BaselineEntry{
 			Path: "aliasdir/nested.txt", DriveID: driveid.New("d"), ItemID: "aliasdir-nested",
 			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "nested"),
 		},
 	)
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(synctypes.LocalFilterConfig{
+	obs.SetFilterConfig(LocalFilterConfig{
 		SkipDotfiles: true,
 		SkipDirs:     []string{"vendor"},
 		SkipFiles:    []string{"*.log"},
@@ -149,7 +149,7 @@ func TestObserveSinglePathWithFilter_ConfiguredFiltersResolveSilently(t *testing
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "debug.log"), []byte("noise"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, ".env"), []byte("secret"), 0o600))
 
-	filter := synctypes.LocalFilterConfig{
+	filter := LocalFilterConfig{
 		SkipDotfiles: true,
 		SkipDirs:     []string{"vendor"},
 		SkipFiles:    []string{"*.log"},
@@ -166,7 +166,7 @@ func TestObserveSinglePathWithFilter_ConfiguredFiltersResolveSilently(t *testing
 				time.Now().UnixNano(),
 				nil,
 				filter,
-				synctypes.LocalObservationRules{},
+				LocalObservationRules{},
 			)
 			require.NoError(t, err)
 			assert.Nil(t, result.Event)
@@ -191,8 +191,8 @@ func TestObserveSinglePathWithFilter_SkipSymlinksResolvesSilently(t *testing.T) 
 		nil,
 		time.Now().UnixNano(),
 		nil,
-		synctypes.LocalFilterConfig{SkipSymlinks: true},
-		synctypes.LocalObservationRules{},
+		LocalFilterConfig{SkipSymlinks: true},
+		LocalObservationRules{},
 	)
 	require.NoError(t, err)
 	assert.Nil(t, result.Event)
@@ -210,7 +210,7 @@ func TestFullScan_SyncPathsRestrictObservedEntries(t *testing.T) {
 	writeTestFile(t, syncRoot, "photos/img.jpg", "img")
 	writeTestFile(t, syncRoot, "root.txt", "root")
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	snapshot, err := obs.BuildScopeSnapshot(t.Context(), mustOpenSyncTree(t, syncRoot), syncscope.Config{
 		SyncPaths: []string{"/docs/keep.txt", "/photos"},
 	})
@@ -239,7 +239,7 @@ func TestFullScan_IgnoreMarkerExcludesMarkedDirectory(t *testing.T) {
 	writeTestFile(t, syncRoot, "blocked/secret.txt", "secret")
 	writeTestFile(t, syncRoot, "blocked/nested/deep.txt", "deep")
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	snapshot, err := obs.BuildScopeSnapshot(t.Context(), mustOpenSyncTree(t, syncRoot), syncscope.Config{
 		IgnoreMarker: ".odignore",
 	})
@@ -266,8 +266,8 @@ func TestAddWatchesRecursive_ConfiguredDirectoryFiltersSkipWatchedSubtrees(t *te
 	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, "vendor"), 0o700))
 	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, "docs"), 0o700))
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(synctypes.LocalFilterConfig{
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.SetFilterConfig(LocalFilterConfig{
 		SkipDotfiles: true,
 		SkipDirs:     []string{"vendor"},
 	})
@@ -306,8 +306,8 @@ func TestAddWatchesRecursive_SkipSymlinksControlsSymlinkedDirectories(t *testing
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-			obs.SetFilterConfig(synctypes.LocalFilterConfig{
+			obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+			obs.SetFilterConfig(LocalFilterConfig{
 				SkipSymlinks: tc.skipSymlinks,
 			})
 
@@ -333,7 +333,7 @@ func TestAddWatchesRecursive_IgnoreMarkerKeepsMarkerDirectoryWatchOnly(t *testin
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "blocked", "nested"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "blocked", ".odignore"), []byte("marker"), 0o600))
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	snapshot, err := obs.BuildScopeSnapshot(t.Context(), mustOpenSyncTree(t, syncRoot), syncscope.Config{
 		IgnoreMarker: ".odignore",
 	})
@@ -362,7 +362,7 @@ func TestHandleFsEvent_MarkerParentRenamePublishesScopeChange(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "parent", "blocked"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "parent", "blocked", ".odignore"), []byte("marker"), 0o600))
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	tree := mustOpenSyncTree(t, syncRoot)
 	snapshot, err := obs.BuildScopeSnapshot(t.Context(), tree, syncscope.Config{
 		IgnoreMarker: ".odignore",
@@ -386,7 +386,7 @@ func TestHandleFsEvent_MarkerParentRenamePublishesScopeChange(t *testing.T) {
 		},
 		newMockFsWatcher(),
 		tree,
-		make(chan synctypes.ChangeEvent, 2),
+		make(chan ChangeEvent, 2),
 	)
 
 	select {
@@ -406,13 +406,13 @@ func TestHandleFsEvent_ConfiguredFileFilterSkipsWrite(t *testing.T) {
 	syncRoot := t.TempDir()
 	logFile := writeTestFile(t, syncRoot, "debug.log", "noise")
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(synctypes.LocalFilterConfig{
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.SetFilterConfig(LocalFilterConfig{
 		SkipFiles: []string{"*.log"},
 	})
 
 	watcher := newMockFsWatcher()
-	events := make(chan synctypes.ChangeEvent, 2)
+	events := make(chan ChangeEvent, 2)
 
 	obs.HandleFsEvent(
 		t.Context(),

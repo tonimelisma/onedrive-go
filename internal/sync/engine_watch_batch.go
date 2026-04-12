@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -16,9 +17,9 @@ import (
 // continues. In-flight actions for overlapping paths are canceled and
 // replaced (B-122 deduplication).
 func (rt *watchRuntime) processBatch(
-	ctx context.Context, batch []synctypes.PathChanges, bl *synctypes.Baseline,
-	mode synctypes.SyncMode, safety *synctypes.SafetyConfig,
-) []*synctypes.TrackedAction {
+	ctx context.Context, batch []PathChanges, bl *syncstore.Baseline,
+	mode Mode, safety *SafetyConfig,
+) []*TrackedAction {
 	return rt.planAndDispatchBatch(ctx, batch, bl, mode, safety, dispatchBatchOptions{
 		applyDeleteCounter:   true,
 		deduplicateInFlight:  true,
@@ -39,12 +40,12 @@ type dispatchBatchOptions struct {
 
 func (rt *watchRuntime) planAndDispatchBatch(
 	ctx context.Context,
-	batch []synctypes.PathChanges,
-	bl *synctypes.Baseline,
-	mode synctypes.SyncMode,
-	safety *synctypes.SafetyConfig,
+	batch []PathChanges,
+	bl *syncstore.Baseline,
+	mode Mode,
+	safety *SafetyConfig,
 	opts dispatchBatchOptions,
-) []*synctypes.TrackedAction {
+) []*TrackedAction {
 	rt.engine.logger.Info("processing watch batch",
 		slog.Int("paths", len(batch)),
 	)
@@ -121,7 +122,7 @@ func (rt *watchRuntime) planAndDispatchBatch(
 
 // periodicPermRecheck runs permission rechecks at most once per 60 seconds.
 // Throttled to avoid API hammering (R-2.10.9).
-func (rt *watchRuntime) periodicPermRecheck(ctx context.Context, bl *synctypes.Baseline) {
+func (rt *watchRuntime) periodicPermRecheck(ctx context.Context, bl *syncstore.Baseline) {
 	const permRecheckInterval = 60 * time.Second
 
 	now := rt.engine.nowFunc()
@@ -147,7 +148,7 @@ func (rt *watchRuntime) periodicPermRecheck(ctx context.Context, bl *synctypes.B
 
 // deduplicateInFlight cancels in-flight actions for paths that appear in the
 // plan. B-122: newer observation supersedes in-progress action.
-func (rt *watchRuntime) deduplicateInFlight(plan *synctypes.ActionPlan) {
+func (rt *watchRuntime) deduplicateInFlight(plan *ActionPlan) {
 	for i := range plan.Actions {
 		if rt.depGraph.HasInFlight(plan.Actions[i].Path) {
 			rt.engine.logger.Info("canceling in-flight action for updated path",
@@ -163,9 +164,9 @@ func (rt *watchRuntime) deduplicateInFlight(plan *synctypes.ActionPlan) {
 // then admits ready actions through active-scope checks.
 func (rt *watchRuntime) dispatchBatchActions(
 	ctx context.Context,
-	plan *synctypes.ActionPlan,
+	plan *ActionPlan,
 	opts dispatchBatchOptions,
-) ([]*synctypes.TrackedAction, bool) {
+) ([]*TrackedAction, bool) {
 	// Invariant: Planner always builds Deps with len(Actions).
 	if len(plan.Actions) != len(plan.Deps) {
 		rt.engine.logger.Error("plan invariant violation: Actions/Deps length mismatch",
@@ -197,7 +198,7 @@ func (rt *watchRuntime) dispatchBatchActions(
 		actionIDs[i] = batchBaseID + int64(i)
 	}
 
-	var ready []*synctypes.TrackedAction
+	var ready []*TrackedAction
 
 	for i := range plan.Actions {
 		id := actionIDs[i]
@@ -240,7 +241,7 @@ func (rt *watchRuntime) dispatchBatchActions(
 	return ready, true
 }
 
-func (rt *watchRuntime) findTrialActionIndex(plan *synctypes.ActionPlan, opts dispatchBatchOptions) int {
+func (rt *watchRuntime) findTrialActionIndex(plan *ActionPlan, opts dispatchBatchOptions) int {
 	if opts.trialScopeKey.IsZero() {
 		return -1
 	}
@@ -281,7 +282,7 @@ func (rt *watchRuntime) findTrialActionIndex(plan *synctypes.ActionPlan, opts di
 // setDispatch writes the dispatch state transition for an action before it
 // enters the tracker. Only applies to downloads and local deletes (the action
 // types that have remote_state lifecycle).
-func (flow *engineFlow) setDispatch(ctx context.Context, action *synctypes.Action) {
+func (flow *engineFlow) setDispatch(ctx context.Context, action *Action) {
 	if err := flow.engine.baseline.SetDispatchStatus(ctx, action.DriveID.String(), action.ItemID, action.Type); err != nil {
 		flow.engine.logger.Warn("failed to set dispatch status",
 			slog.String("path", action.Path),
@@ -300,8 +301,8 @@ func isDeleteAction(t synctypes.ActionType) bool {
 // actions out of the plan and records them in the held-delete ledger.
 func (rt *watchRuntime) applyDeleteCounter(
 	ctx context.Context,
-	plan *synctypes.ActionPlan,
-) (*synctypes.ActionPlan, error) {
+	plan *ActionPlan,
+) (*ActionPlan, error) {
 	approved, err := rt.engine.approvedDeleteKeysForPlan(ctx, plan)
 	if err != nil {
 		return nil, fmt.Errorf("load approved deletes: %w", err)
@@ -334,7 +335,7 @@ func (rt *watchRuntime) applyDeleteCounter(
 		return plan, nil
 	}
 
-	var heldDeletes []synctypes.Action
+	var heldDeletes []Action
 	for i := range plan.Actions {
 		action := &plan.Actions[i]
 		if isDeleteAction(action.Type) {
@@ -347,7 +348,7 @@ func (rt *watchRuntime) applyDeleteCounter(
 
 	rt.recordHeldDeletes(ctx, heldDeletes)
 
-	return filterActionPlan(plan, func(action *synctypes.Action) bool {
+	return filterActionPlan(plan, func(action *Action) bool {
 		if !isDeleteAction(action.Type) {
 			return true
 		}
@@ -357,7 +358,7 @@ func (rt *watchRuntime) applyDeleteCounter(
 }
 
 // recordHeldDeletes writes held delete actions to the held-delete ledger.
-func (rt *watchRuntime) recordHeldDeletes(ctx context.Context, actions []synctypes.Action) {
+func (rt *watchRuntime) recordHeldDeletes(ctx context.Context, actions []Action) {
 	if err := rt.engine.holdDeleteActions(ctx, actions); err != nil {
 		rt.engine.logger.Error("failed to record held deletes",
 			slog.Int("count", len(actions)),

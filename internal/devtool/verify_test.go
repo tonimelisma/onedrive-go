@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -37,6 +39,8 @@ type fakeRunner struct {
 	combinedErr         error
 	combinedErrByKey    map[string]error
 }
+
+const dependencyGraphFixtureFallbackGoVersion = "1.24.0"
 
 func (f *fakeRunner) Run(
 	_ context.Context,
@@ -620,7 +624,20 @@ func TestRunVerifyFailsOnForbiddenRepoPattern(t *testing.T) {
 
 	repoRoot := t.TempDir()
 	writeRepoConsistencyFixtures(t, repoRoot)
-	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "internal", "bad.go"), []byte("graph.MustNewClient(nil, nil)\n"), 0o600))
+	badDir := filepath.Join(repoRoot, "internal", "bad")
+	require.NoError(t, os.MkdirAll(badDir, 0o750))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(badDir, "bad.go"),
+		[]byte(strings.Join([]string{
+			"package bad",
+			"",
+			"func forbiddenPattern() string {",
+			"\treturn \"graph.MustNewClient(nil, nil)\"",
+			"}",
+			"",
+		}, "\n")),
+		0o600,
+	))
 
 	runner := &fakeRunner{
 		outputs: map[string][]byte{
@@ -731,6 +748,95 @@ func TestRunRepoConsistencyChecksFailsWithoutOwnershipContractBullet(t *testing.
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Error Boundary")
 	assert.Contains(t, err.Error(), "cli.md")
+}
+
+// Validates: R-6.10.5
+func TestEnsureInternalDependencyGraphGuardrailsPassesMinimalValidGraph(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeDependencyGraphModule(t, repoRoot)
+	writeDependencyGraphPackage(t, repoRoot, "driveid")
+	writeDependencyGraphPackage(t, repoRoot, "synctypes", internalPackagePrefix+"driveid")
+	writeDependencyGraphPackage(t, repoRoot, "sync")
+	writeDependencyGraphPackage(t, repoRoot, "syncstore")
+	writeDependencyGraphPackage(t, repoRoot, "cli")
+	writeDependencyGraphPackage(t, repoRoot, "multisync")
+
+	require.NoError(t, ensureInternalDependencyGraphGuardrails(repoRoot))
+}
+
+// Validates: R-6.10.5
+func TestEnsureInternalDependencyGraphGuardrailsFailsOnForbiddenEdge(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeDependencyGraphModule(t, repoRoot)
+	writeDependencyGraphPackage(t, repoRoot, "driveid")
+	writeDependencyGraphPackage(t, repoRoot, "synctypes", internalPackagePrefix+"driveid")
+	writeDependencyGraphPackage(t, repoRoot, "sync")
+	writeDependencyGraphPackage(t, repoRoot, "syncstore")
+	writeDependencyGraphPackage(t, repoRoot, "multisync")
+	writeDependencyGraphPackage(t, repoRoot, "cli", internalPackagePrefix+"synctypes")
+
+	err := ensureInternalDependencyGraphGuardrails(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "forbidden internal import edge detected")
+	assert.Contains(t, err.Error(), internalPackagePrefix+"cli")
+	assert.Contains(t, err.Error(), internalPackagePrefix+"synctypes")
+}
+
+// Validates: R-6.10.5
+func TestEnsureInternalDependencyGraphGuardrailsFailsWhenSynctypesImportsExtraInternalPackage(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeDependencyGraphModule(t, repoRoot)
+	writeDependencyGraphPackage(t, repoRoot, "driveid")
+	writeDependencyGraphPackage(t, repoRoot, "sync")
+	writeDependencyGraphPackage(t, repoRoot, "synctypes", internalPackagePrefix+"driveid", internalPackagePrefix+"sync")
+
+	err := ensureInternalDependencyGraphGuardrails(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "synctypes may only import internal/driveid")
+	assert.Contains(t, err.Error(), internalPackagePrefix+"sync")
+}
+
+// Validates: R-6.10.5
+func TestEnsureInternalDependencyGraphGuardrailsFailsOnPackageCountLimit(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeDependencyGraphModule(t, repoRoot)
+	for i := 0; i <= internalPackageLimit; i++ {
+		writeDependencyGraphPackage(t, repoRoot, fmt.Sprintf("pkg%02d", i))
+	}
+
+	err := ensureInternalDependencyGraphGuardrails(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "internal package graph exceeds limit")
+	assert.Contains(t, err.Error(), "28 packages")
+}
+
+// Validates: R-6.10.5
+func TestEnsureInternalDependencyGraphGuardrailsFailsOnImportEdgeLimit(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeDependencyGraphModule(t, repoRoot)
+	for i := 0; i < 14; i++ {
+		name := fmt.Sprintf("pkg%02d", i)
+		var imports []string
+		for j := i + 1; j < 14; j++ {
+			imports = append(imports, internalPackagePrefix+fmt.Sprintf("pkg%02d", j))
+		}
+		writeDependencyGraphPackage(t, repoRoot, name, imports...)
+	}
+
+	err := ensureInternalDependencyGraphGuardrails(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "internal package graph exceeds limit")
+	assert.Contains(t, err.Error(), "91 import edges")
 }
 
 // Validates: R-6.10.7
@@ -1015,8 +1121,10 @@ func TestRunRepoConsistencyChecksFailsOnHTTPClientDoOutsideApprovedBoundary(t *t
 	repoRoot := t.TempDir()
 	writeRepoConsistencyFixtures(t, repoRoot)
 
+	badDir := filepath.Join(repoRoot, "internal", "bad")
+	require.NoError(t, os.MkdirAll(badDir, 0o750))
 	require.NoError(t, os.WriteFile(
-		filepath.Join(repoRoot, "internal", "bad_http.go"),
+		filepath.Join(badDir, "bad_http.go"),
 		[]byte(strings.Join([]string{
 			"package bad",
 			"",
@@ -1248,8 +1356,10 @@ func assertRepoConsistencyRejectsPrivilegedCall(
 	repoRoot := t.TempDir()
 	writeRepoConsistencyFixtures(t, repoRoot)
 
+	badDir := filepath.Join(repoRoot, "internal", "bad")
+	require.NoError(t, os.MkdirAll(badDir, 0o750))
 	require.NoError(t, os.WriteFile(
-		filepath.Join(repoRoot, "internal", filename),
+		filepath.Join(badDir, filename),
 		[]byte(strings.Join(source, "\n")),
 		0o600,
 	))
@@ -1394,6 +1504,55 @@ func writeRepoConsistencyFixtures(t *testing.T, repoRoot string) {
 	writeRepoConsistencyCodeFixtures(t, repoRoot)
 }
 
+func writeDependencyGraphModule(t *testing.T, repoRoot string) {
+	t.Helper()
+
+	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "internal"), 0o750))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoRoot, "go.mod"),
+		[]byte(fmt.Sprintf("module github.com/tonimelisma/onedrive-go\n\ngo %s\n", dependencyGraphFixtureGoVersion())),
+		0o600,
+	))
+}
+
+func dependencyGraphFixtureGoVersion() string {
+	version := strings.TrimPrefix(runtime.Version(), "go")
+	if version == runtime.Version() || version == "" {
+		return dependencyGraphFixtureFallbackGoVersion
+	}
+
+	for _, r := range version {
+		if (r < '0' || r > '9') && r != '.' {
+			return dependencyGraphFixtureFallbackGoVersion
+		}
+	}
+
+	return version
+}
+
+func writeDependencyGraphPackage(t *testing.T, repoRoot string, name string, imports ...string) {
+	t.Helper()
+
+	dir := filepath.Join(repoRoot, "internal", name)
+	require.NoError(t, os.MkdirAll(dir, 0o750))
+
+	lines := []string{"package " + name}
+	if len(imports) > 0 {
+		lines = append(lines, "", "import (")
+		for _, path := range imports {
+			lines = append(lines, fmt.Sprintf("\t_ %q", path))
+		}
+		lines = append(lines, ")")
+	}
+	lines = append(lines, "")
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, name+".go"),
+		[]byte(strings.Join(lines, "\n")),
+		0o600,
+	))
+}
+
 func writeRepoConsistencyDirectories(t *testing.T, repoRoot string) {
 	t.Helper()
 
@@ -1409,6 +1568,11 @@ func writeRepoConsistencyDirectories(t *testing.T, repoRoot string) {
 		require.NoError(t, os.MkdirAll(dir, 0o750))
 	}
 
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoRoot, "go.mod"),
+		[]byte(fmt.Sprintf("module github.com/tonimelisma/onedrive-go\n\ngo %s\n", dependencyGraphFixtureGoVersion())),
+		0o600,
+	))
 	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "CLAUDE.md"), []byte("clean\n"), 0o600))
 }
 
@@ -1636,7 +1800,7 @@ func repoConsistencyBehaviorDocFixture(
 func writeRepoConsistencyCodeFixtures(t *testing.T, repoRoot string) {
 	t.Helper()
 
-	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "internal", "clean.go"), []byte("package clean\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "internal", "clean.go"), []byte("package internal\n"), 0o600))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(repoRoot, "internal", "fixture_test.go"),
 		[]byte(strings.Join([]string{

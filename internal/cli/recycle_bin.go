@@ -59,12 +59,14 @@ Requires --confirm flag to proceed.`,
 
 func runRecycleBinList(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
-	return newRecycleBinService(mustCLIContext(ctx)).runList(ctx)
+	cc := mustCLIContext(ctx)
+	return runRecycleBinListWithFactory(ctx, cc, defaultRecycleBinSessionFactory(cc))
 }
 
 func runRecycleBinRestore(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
-	return newRecycleBinService(mustCLIContext(ctx)).runRestore(ctx, args[0])
+	cc := mustCLIContext(ctx)
+	return runRecycleBinRestoreWithFactory(ctx, cc, args[0], defaultRecycleBinSessionFactory(cc))
 }
 
 func runRecycleBinEmpty(cmd *cobra.Command, _ []string) error {
@@ -75,7 +77,8 @@ func runRecycleBinEmpty(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("read --confirm flag: %w", err)
 	}
 
-	return newRecycleBinService(mustCLIContext(ctx)).runEmpty(ctx, confirm)
+	cc := mustCLIContext(ctx)
+	return runRecycleBinEmptyWithFactory(ctx, cc, confirm, defaultRecycleBinSessionFactory(cc))
 }
 
 // --- formatting ---

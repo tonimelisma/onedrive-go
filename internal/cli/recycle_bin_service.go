@@ -15,22 +15,20 @@ type recycleBinSession interface {
 	DeleteItem(ctx context.Context, itemID string) error
 }
 
-type recycleBinService struct {
-	cc      *CLIContext
-	session func(context.Context) (recycleBinSession, error)
-}
+type recycleBinSessionFactory func(context.Context) (recycleBinSession, error)
 
-func newRecycleBinService(cc *CLIContext) *recycleBinService {
-	return &recycleBinService{
-		cc: cc,
-		session: func(ctx context.Context) (recycleBinSession, error) {
-			return cc.Session(ctx)
-		},
+func defaultRecycleBinSessionFactory(cc *CLIContext) recycleBinSessionFactory {
+	return func(ctx context.Context) (recycleBinSession, error) {
+		return cc.Session(ctx)
 	}
 }
 
-func (s *recycleBinService) runList(ctx context.Context) error {
-	session, err := s.session(ctx)
+func runRecycleBinListWithFactory(
+	ctx context.Context,
+	cc *CLIContext,
+	sessionFactory recycleBinSessionFactory,
+) error {
+	session, err := sessionFactory(ctx)
 	if err != nil {
 		return err
 	}
@@ -44,15 +42,20 @@ func (s *recycleBinService) runList(ctx context.Context) error {
 		return fmt.Errorf("listing recycle bin: %w", err)
 	}
 
-	if s.cc.Flags.JSON {
-		return formatRecycleBinJSON(s.cc.Output(), items)
+	if cc.Flags.JSON {
+		return formatRecycleBinJSON(cc.Output(), items)
 	}
 
-	return formatRecycleBinTable(s.cc.Output(), items)
+	return formatRecycleBinTable(cc.Output(), items)
 }
 
-func (s *recycleBinService) runRestore(ctx context.Context, itemID string) error {
-	session, err := s.session(ctx)
+func runRecycleBinRestoreWithFactory(
+	ctx context.Context,
+	cc *CLIContext,
+	itemID string,
+	sessionFactory recycleBinSessionFactory,
+) error {
+	session, err := sessionFactory(ctx)
 	if err != nil {
 		return err
 	}
@@ -66,8 +69,8 @@ func (s *recycleBinService) runRestore(ctx context.Context, itemID string) error
 		return fmt.Errorf("restoring item: %w", err)
 	}
 
-	if s.cc.Flags.JSON {
-		return printRecycleBinRestoreJSON(s.cc.Output(), recycleBinJSONItem{
+	if cc.Flags.JSON {
+		return printRecycleBinRestoreJSON(cc.Output(), recycleBinJSONItem{
 			ID:      item.ID,
 			Name:    item.Name,
 			Size:    item.Size,
@@ -76,17 +79,22 @@ func (s *recycleBinService) runRestore(ctx context.Context, itemID string) error
 		})
 	}
 
-	s.cc.Statusf("Restored %q (id: %s)\n", item.Name, item.ID)
+	cc.Statusf("Restored %q (id: %s)\n", item.Name, item.ID)
 
 	return nil
 }
 
-func (s *recycleBinService) runEmpty(ctx context.Context, confirm bool) error {
+func runRecycleBinEmptyWithFactory(
+	ctx context.Context,
+	cc *CLIContext,
+	confirm bool,
+	sessionFactory recycleBinSessionFactory,
+) error {
 	if !confirm {
 		return fmt.Errorf("--confirm flag required to permanently delete all recycle bin items")
 	}
 
-	session, err := s.session(ctx)
+	session, err := sessionFactory(ctx)
 	if err != nil {
 		return err
 	}
@@ -101,11 +109,11 @@ func (s *recycleBinService) runEmpty(ctx context.Context, confirm bool) error {
 	}
 
 	if len(items) == 0 {
-		s.cc.Statusf("Recycle bin is already empty\n")
+		cc.Statusf("Recycle bin is already empty\n")
 		return nil
 	}
 
-	s.cc.Statusf("Permanently deleting %d items...\n", len(items))
+	cc.Statusf("Permanently deleting %d items...\n", len(items))
 
 	var failed int
 	for i := range items {
@@ -115,19 +123,19 @@ func (s *recycleBinService) runEmpty(ctx context.Context, confirm bool) error {
 		}
 
 		if deleteErr != nil {
-			s.cc.Statusf("  Failed to delete %q: %v\n", items[i].Name, deleteErr)
+			cc.Statusf("  Failed to delete %q: %v\n", items[i].Name, deleteErr)
 			failed++
 			continue
 		}
 
-		s.cc.Statusf("  Deleted %q\n", items[i].Name)
+		cc.Statusf("  Deleted %q\n", items[i].Name)
 	}
 
 	if failed > 0 {
 		return fmt.Errorf("%d of %d items failed to delete", failed, len(items))
 	}
 
-	s.cc.Statusf("Recycle bin emptied\n")
+	cc.Statusf("Recycle bin emptied\n")
 
 	return nil
 }

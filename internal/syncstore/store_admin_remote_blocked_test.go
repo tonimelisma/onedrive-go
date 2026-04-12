@@ -27,7 +27,7 @@ func recordRemoteBlockedFailure(
 ) {
 	t.Helper()
 
-	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
+	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       path,
 		DriveID:    driveID,
 		Direction:  synctypes.DirectionUpload,
@@ -48,7 +48,7 @@ func TestSyncStore_ApproveHeldDeletes_MarksOnlyHeldDeletesApproved(t *testing.T)
 	ctx := context.Background()
 	driveID := driveid.New("drive1")
 
-	require.NoError(t, mgr.UpsertHeldDeletes(ctx, []synctypes.HeldDeleteRecord{{
+	require.NoError(t, mgr.UpsertHeldDeletes(ctx, []HeldDeleteRecord{{
 		Path:          "delete/a.txt",
 		DriveID:       driveID,
 		ActionType:    synctypes.ActionRemoteDelete,
@@ -58,7 +58,7 @@ func TestSyncStore_ApproveHeldDeletes_MarksOnlyHeldDeletesApproved(t *testing.T)
 		LastPlannedAt: 1,
 		LastError:     "held delete",
 	}}))
-	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
+	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "bad:name.txt",
 		DriveID:    driveID,
 		Direction:  synctypes.DirectionUpload,
@@ -96,13 +96,13 @@ func TestSyncStore_DropLegacyRemoteBlockedScope_RemovesOnlyLegacyAuthorityRows(t
 	boundary := testRemoteBlockedBoundaryTeamDocs
 	scopeKey := synctypes.SKPermRemote(boundary)
 
-	require.NoError(t, mgr.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
+	require.NoError(t, mgr.UpsertScopeBlock(ctx, &ScopeBlock{
 		Key:          scopeKey,
 		IssueType:    synctypes.IssueSharedFolderBlocked,
 		TimingSource: synctypes.ScopeTimingNone,
 		BlockedAt:    time.Date(2025, 4, 2, 10, 0, 0, 0, time.UTC),
 	}))
-	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
+	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       boundary,
 		DriveID:    driveID,
 		Direction:  synctypes.DirectionUpload,

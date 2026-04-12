@@ -14,7 +14,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // ---------------------------------------------------------------------------
@@ -91,7 +90,7 @@ func newDeleteTestExecutor(t *testing.T) (*Executor, string) {
 	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, nil)
 	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
 	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) })
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	return e, syncRoot
 }
@@ -107,7 +106,7 @@ func TestDeleteLocalFolder_DSStoreOnly_Succeeds(t *testing.T) {
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".DS_Store"), []byte{0}, 0o600))
 
-	action := &synctypes.Action{Type: synctypes.ActionLocalDelete, Path: "folder", ItemID: "id1"}
+	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
 	outcome := e.DeleteLocalFolder(action, dir)
 
 	requireOutcomeSuccess(t, &outcome)
@@ -136,14 +135,14 @@ func TestExecuteRemoteDelete_DoesNotUsePathConvergenceDelete(t *testing.T) {
 
 	cfg := NewExecutorConfig(items, &executorMockDownloader{}, &executorMockUploader{}, syncTree, driveID, logger, pathConvergence)
 	cfg.SetTransferMgr(driveops.NewTransferManager(&executorMockDownloader{}, &executorMockUploader{}, nil, logger))
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
-	action := &synctypes.Action{
-		Type:   synctypes.ActionRemoteDelete,
+	action := &Action{
+		Type:   ActionRemoteDelete,
 		Path:   "docs/report.txt",
 		ItemID: "remote-item-id",
-		View: &synctypes.PathView{
-			Remote: &synctypes.RemoteState{ETag: "etag-1"},
+		View: &PathView{
+			Remote: &RemoteState{ETag: "etag-1"},
 		},
 	}
 
@@ -163,7 +162,7 @@ func TestDeleteLocalFolder_TmpFilesOnly_Succeeds(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "temp.tmp"), []byte("tmp"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "edit.swp"), []byte("swp"), 0o600))
 
-	action := &synctypes.Action{Type: synctypes.ActionLocalDelete, Path: "folder", ItemID: "id1"}
+	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
 	outcome := e.DeleteLocalFolder(action, dir)
 
 	requireOutcomeSuccess(t, &outcome)
@@ -182,7 +181,7 @@ func TestDeleteLocalFolder_UnknownFile_Fails(t *testing.T) {
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "important.txt"), []byte("data"), 0o600))
 
-	action := &synctypes.Action{Type: synctypes.ActionLocalDelete, Path: "folder", ItemID: "id1"}
+	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
 	outcome := e.DeleteLocalFolder(action, dir)
 
 	requireOutcomeFailure(t, &outcome)
@@ -199,7 +198,7 @@ func TestDeleteLocalFolder_MixedDisposableAndUnknown_Fails(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".DS_Store"), []byte{0}, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "realfile.doc"), []byte("content"), 0o600))
 
-	action := &synctypes.Action{Type: synctypes.ActionLocalDelete, Path: "folder", ItemID: "id1"}
+	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
 	outcome := e.DeleteLocalFolder(action, dir)
 
 	requireOutcomeFailure(t, &outcome)
@@ -220,7 +219,7 @@ func TestDeleteLocalFolder_AppleDoubleFiles_Succeeds(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "._photo.jpg"), []byte{0}, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".DS_Store"), []byte{0}, 0o600))
 
-	action := &synctypes.Action{Type: synctypes.ActionLocalDelete, Path: "folder", ItemID: "id1"}
+	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
 	outcome := e.DeleteLocalFolder(action, dir)
 
 	requireOutcomeSuccess(t, &outcome)
@@ -239,7 +238,7 @@ func TestDeleteLocalFolder_DisposableDirWithNonDisposableChild_Fails(t *testing.
 	require.NoError(t, os.MkdirAll(macDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(macDir, "important.txt"), []byte("data"), 0o600))
 
-	action := &synctypes.Action{Type: synctypes.ActionLocalDelete, Path: "folder", ItemID: "id1"}
+	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
 	outcome := e.DeleteLocalFolder(action, dir)
 
 	requireOutcomeFailure(t, &outcome)
@@ -257,7 +256,7 @@ func TestDeleteLocalFolder_DisposableDirAllDisposableChildren_Succeeds(t *testin
 	require.NoError(t, os.WriteFile(filepath.Join(macDir, "._photo.jpg"), []byte{0}, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(macDir, ".DS_Store"), []byte{0}, 0o600))
 
-	action := &synctypes.Action{Type: synctypes.ActionLocalDelete, Path: "folder", ItemID: "id1"}
+	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
 	outcome := e.DeleteLocalFolder(action, dir)
 
 	requireOutcomeSuccess(t, &outcome)
@@ -291,7 +290,7 @@ func TestDeleteLocalFolder_EmptyDir_Succeeds(t *testing.T) {
 	dir := filepath.Join(syncRoot, "empty")
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 
-	action := &synctypes.Action{Type: synctypes.ActionLocalDelete, Path: "empty", ItemID: "id1"}
+	action := &Action{Type: ActionLocalDelete, Path: "empty", ItemID: "id1"}
 	outcome := e.DeleteLocalFolder(action, dir)
 
 	requireOutcomeSuccess(t, &outcome)

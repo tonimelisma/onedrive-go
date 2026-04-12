@@ -6,19 +6,19 @@ import (
 	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 )
 
 func (flow *engineFlow) processCommittedPrimaryBatch(
 	ctx context.Context,
-	bl *synctypes.Baseline,
-	primaryEvents []synctypes.ChangeEvent,
+	bl *syncstore.Baseline,
+	primaryEvents []ChangeEvent,
 	snapshot syncscope.Snapshot,
 	generation int64,
 	dryRun bool,
 	fullReconcile bool,
-) ([]synctypes.ChangeEvent, error) {
-	visiblePrimary := filterOutShortcuts(append([]synctypes.ChangeEvent(nil), primaryEvents...))
+) ([]ChangeEvent, error) {
+	visiblePrimary := filterOutShortcuts(append([]ChangeEvent(nil), primaryEvents...))
 	if dryRun {
 		return visiblePrimary, nil
 	}
@@ -62,10 +62,10 @@ func (flow *engineFlow) processCommittedPrimaryBatch(
 
 func (rt *watchRuntime) processCommittedScopedWatchBatch(
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	result remoteFetchResult,
 	fullReconcile bool,
-) ([]synctypes.ChangeEvent, bool) {
+) ([]ChangeEvent, bool) {
 	scopeSnapshot := rt.currentScopeSnapshot()
 	scopeGeneration := rt.currentScopeGeneration()
 	scoped := applyRemoteScope(rt.engine.logger, scopeSnapshot, scopeGeneration, result.events)

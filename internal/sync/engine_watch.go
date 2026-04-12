@@ -10,6 +10,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -64,7 +65,7 @@ func (rt *watchRuntime) initDeleteProtection(ctx context.Context) {
 }
 
 // loadWatchState loads the baseline and shortcuts for the watch session.
-// Both are loaded once after the initial sync. synctypes.Baseline is live-mutated
+// Both are loaded once after the initial sync. syncstore.Baseline is live-mutated
 // under RWMutex; shortcuts are updated via setShortcuts when they change.
 func (rt *watchRuntime) loadWatchState(ctx context.Context) error {
 	_, err := rt.engine.baseline.Load(ctx)
@@ -92,7 +93,7 @@ func (rt *watchRuntime) loadWatchState(ctx context.Context) error {
 // Unlike the old approach (calling RunOnce with throwaway infrastructure),
 // bootstrapSync dispatches through the same DepGraph, active scope working
 // set, and WorkerPool that the steady-state watch loop uses.
-func (e *Engine) RunWatch(ctx context.Context, mode synctypes.SyncMode, opts synctypes.WatchOpts) error {
+func (e *Engine) RunWatch(ctx context.Context, mode Mode, opts WatchOptions) error {
 	e.logger.Info("watch mode starting",
 		slog.String("mode", mode.String()),
 		slog.Duration("poll_interval", e.resolvePollInterval(opts)),
@@ -176,19 +177,19 @@ func isWatchShutdownError(ctx context.Context, err error) bool {
 // Created by initWatchInfra; cleaned up by its cleanup method.
 type watchPipeline struct {
 	runtime          *watchRuntime
-	bl               *synctypes.Baseline
-	safety           *synctypes.SafetyConfig
-	batchReady       <-chan []synctypes.PathChanges
-	results          <-chan synctypes.WorkerResult
+	bl               *syncstore.Baseline
+	safety           *SafetyConfig
+	batchReady       <-chan []PathChanges
+	results          <-chan WorkerResult
 	errs             <-chan error
-	skippedCh        <-chan []synctypes.SkippedItem
+	skippedCh        <-chan []SkippedItem
 	scopeChanges     <-chan syncscope.Change
 	reconcileC       <-chan time.Time
 	reconcileResults <-chan reconcileResult
 	recheckC         <-chan time.Time
 	userIntentC      <-chan struct{}
 	activeObs        int
-	mode             synctypes.SyncMode
+	mode             Mode
 	pool             *WorkerPool // for bootstrapSync to access Results()
 	cleanup          func()
 }
@@ -210,8 +211,8 @@ type socketIOWakeSourceRunner interface {
 //     retry/trial work now enters through explicit engine-owned planner requests.
 func (rt *watchRuntime) initWatchInfra(
 	ctx context.Context,
-	mode synctypes.SyncMode,
-	opts synctypes.WatchOpts,
+	mode Mode,
+	opts WatchOptions,
 	proof driveIdentityProof,
 	proofErr error,
 ) (*watchPipeline, error) {
@@ -243,7 +244,7 @@ func (rt *watchRuntime) initWatchInfra(
 
 	// dispatchCh feeds admitted actions to workers. Buffer is generous to avoid
 	// backpressure when a batch produces many immediately-ready actions.
-	rt.dispatchCh = make(chan *synctypes.TrackedAction, watchResultBuf)
+	rt.dispatchCh = make(chan *TrackedAction, watchResultBuf)
 
 	// Never-closing done channel — DepGraph.Done() would fire prematurely
 	// between batches when completed == total. Workers exit only via ctx.Done().
@@ -317,7 +318,7 @@ func (rt *watchRuntime) initWatchInfra(
 // the watch loop uses. Blocks until all bootstrap actions complete.
 //
 // Must be called after initWatchInfra and before startObservers.
-func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode synctypes.SyncMode, pipe *watchPipeline) error {
+func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watchPipeline) error {
 	rt.engine.logger.Info("bootstrap sync starting", slog.String("mode", mode.String()))
 
 	// Crash recovery: reset in-progress states from prior crash.
@@ -390,9 +391,9 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode synctypes.SyncMo
 // the number of observers started. The events channel is closed automatically
 // when all observers exit, allowing the bridge goroutine to drain cleanly.
 func (rt *watchRuntime) startObservers(
-	ctx context.Context, bl *synctypes.Baseline, mode synctypes.SyncMode, buf *Buffer, opts synctypes.WatchOpts,
-) (<-chan error, int, <-chan []synctypes.SkippedItem, <-chan syncscope.Change) {
-	events := make(chan synctypes.ChangeEvent, watchEventBuf)
+	ctx context.Context, bl *syncstore.Baseline, mode Mode, buf *Buffer, opts WatchOptions,
+) (<-chan error, int, <-chan []SkippedItem, <-chan syncscope.Change) {
+	events := make(chan ChangeEvent, watchEventBuf)
 	errs := make(chan error, 2)
 
 	var obsWg stdsync.WaitGroup
@@ -402,7 +403,7 @@ func (rt *watchRuntime) startObservers(
 	count := 0
 
 	// Remote observer (skip for upload-only mode).
-	if mode != synctypes.SyncUploadOnly {
+	if mode != SyncUploadOnly {
 		obsWg.Add(1)
 		count++
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverStarted, Observer: engineDebugObserverRemote})
@@ -411,10 +412,10 @@ func (rt *watchRuntime) startObservers(
 
 	// Channel for forwarding SkippedItems from safety scans to the engine.
 	// Buffered(2) — at most 2 safety scans could overlap before draining.
-	skippedCh := make(chan []synctypes.SkippedItem, 2)
+	skippedCh := make(chan []SkippedItem, 2)
 
 	// Local observer (skip for download-only mode).
-	if mode != synctypes.SyncDownloadOnly {
+	if mode != SyncDownloadOnly {
 		localObs := NewLocalObserver(bl, rt.engine.logger, rt.engine.checkWorkers)
 		localObs.SetFilterConfig(rt.engine.localFilter)
 		localObs.SetObservationRules(rt.engine.localRules)
@@ -463,10 +464,10 @@ func (rt *watchRuntime) startObservers(
 func (rt *watchRuntime) startRemoteObserver(
 	ctx context.Context,
 	obsWg *stdsync.WaitGroup,
-	bl *synctypes.Baseline,
-	events chan<- synctypes.ChangeEvent,
+	bl *syncstore.Baseline,
+	events chan<- ChangeEvent,
 	errs chan<- error,
-	opts synctypes.WatchOpts,
+	opts WatchOptions,
 ) {
 	pollInterval := rt.engine.resolvePollInterval(opts)
 	session := ScopeSession{
@@ -475,7 +476,7 @@ func (rt *watchRuntime) startRemoteObserver(
 	}
 	plan, err := rt.BuildObservationSessionPlan(ctx, ObservationPlanRequest{
 		Session:  &session,
-		SyncMode: synctypes.SyncBidirectional,
+		SyncMode: SyncBidirectional,
 		Purpose:  observationPlanPurposeWatch,
 	})
 	if err != nil {
@@ -576,7 +577,7 @@ func (rt *watchRuntime) emitSocketIOLifecycleEvent(event SocketIOLifecycleEvent)
 func (rt *watchRuntime) startWatchEventBridge(
 	ctx context.Context,
 	buf *Buffer,
-	events <-chan synctypes.ChangeEvent,
+	events <-chan ChangeEvent,
 ) {
 	go func() {
 		for {
@@ -596,7 +597,7 @@ func (rt *watchRuntime) startWatchEventBridge(
 
 func (rt *watchRuntime) closeWatchEventsWhenObserversExit(
 	obsWg *stdsync.WaitGroup,
-	events chan synctypes.ChangeEvent,
+	events chan ChangeEvent,
 ) {
 	go func() {
 		obsWg.Wait()
@@ -609,7 +610,7 @@ func (rt *watchRuntime) closeWatchEventsWhenObserversExit(
 // Each scan's events are forwarded to the events channel via trySend.
 func (rt *watchRuntime) runPeriodicFullScan(
 	ctx context.Context, obs *LocalObserver, tree *synctree.Root,
-	events chan<- synctypes.ChangeEvent, interval time.Duration,
+	events chan<- ChangeEvent, interval time.Duration,
 ) {
 	ticker := rt.engine.newTicker(interval)
 	defer stopTicker(ticker)
@@ -659,7 +660,7 @@ func (rt *watchRuntime) runPeriodicFullScan(
 }
 
 // resolvePollInterval returns the configured poll interval or the default.
-func (e *Engine) resolvePollInterval(opts synctypes.WatchOpts) time.Duration {
+func (e *Engine) resolvePollInterval(opts WatchOptions) time.Duration {
 	if opts.PollInterval > 0 {
 		return opts.PollInterval
 	}
@@ -668,7 +669,7 @@ func (e *Engine) resolvePollInterval(opts synctypes.WatchOpts) time.Duration {
 }
 
 // resolveDebounce returns the configured debounce or the default.
-func (e *Engine) resolveDebounce(opts synctypes.WatchOpts) time.Duration {
+func (e *Engine) resolveDebounce(opts WatchOptions) time.Duration {
 	if opts.Debounce > 0 {
 		return opts.Debounce
 	}

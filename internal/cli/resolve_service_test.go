@@ -14,7 +14,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 type stubResolveDeleteStore struct {
@@ -33,8 +32,8 @@ func (s *stubResolveDeleteStore) Close(context.Context) error {
 }
 
 type stubResolveConflictQueueStore struct {
-	conflicts        []synctypes.ConflictRecord
-	allConflicts     []synctypes.ConflictRecord
+	conflicts        []syncstore.ConflictRecord
+	allConflicts     []syncstore.ConflictRecord
 	requestResult    syncstore.ConflictRequestResult
 	requestErr       error
 	requestCalls     int
@@ -42,11 +41,11 @@ type stubResolveConflictQueueStore struct {
 	requestedActions []string
 }
 
-func (s *stubResolveConflictQueueStore) ListConflicts(context.Context) ([]synctypes.ConflictRecord, error) {
+func (s *stubResolveConflictQueueStore) ListConflicts(context.Context) ([]syncstore.ConflictRecord, error) {
 	return s.conflicts, nil
 }
 
-func (s *stubResolveConflictQueueStore) ListAllConflicts(context.Context) ([]synctypes.ConflictRecord, error) {
+func (s *stubResolveConflictQueueStore) ListAllConflicts(context.Context) ([]syncstore.ConflictRecord, error) {
 	return s.allConflicts, nil
 }
 
@@ -69,11 +68,10 @@ func TestResolveService_RunApproveDeletesWithStore_CloseFailureSuppressesSuccess
 	t.Parallel()
 
 	var out bytes.Buffer
-	svc := newResolveService(&CLIContext{OutputWriter: &out})
 	closeErr := errors.New("db close failed")
 	store := &stubResolveDeleteStore{closeErr: closeErr}
 
-	err := svc.runApproveDeletesWithStore(t.Context(), store)
+	err := runApproveDeletesWithStore(t.Context(), &CLIContext{OutputWriter: &out}, store)
 	require.Error(t, err)
 	require.ErrorIs(t, err, closeErr)
 	assert.Contains(t, err.Error(), "close sync store")
@@ -85,7 +83,6 @@ func TestResolveService_RunApproveDeletesWithStore_JoinsApproveAndCloseErrors(t 
 	t.Parallel()
 
 	var out bytes.Buffer
-	svc := newResolveService(&CLIContext{OutputWriter: &out})
 	approveErr := errors.New("approve failed")
 	closeErr := errors.New("db close failed")
 	store := &stubResolveDeleteStore{
@@ -93,7 +90,7 @@ func TestResolveService_RunApproveDeletesWithStore_JoinsApproveAndCloseErrors(t 
 		closeErr:   closeErr,
 	}
 
-	err := svc.runApproveDeletesWithStore(t.Context(), store)
+	err := runApproveDeletesWithStore(t.Context(), &CLIContext{OutputWriter: &out}, store)
 	require.Error(t, err)
 	require.ErrorIs(t, err, approveErr)
 	require.ErrorIs(t, err, closeErr)
@@ -107,12 +104,12 @@ func TestResolveService_QueueEachConflictResolution_DryRun(t *testing.T) {
 	t.Parallel()
 
 	var status bytes.Buffer
-	svc := newResolveService(&CLIContext{StatusWriter: &status, Logger: slog.New(slog.DiscardHandler)})
+	cc := &CLIContext{StatusWriter: &status, Logger: slog.New(slog.DiscardHandler)}
 	store := &stubResolveConflictQueueStore{
-		conflicts: []synctypes.ConflictRecord{{ID: "id-1", Path: "/foo.txt"}},
+		conflicts: []syncstore.ConflictRecord{{ID: "id-1", Path: "/foo.txt"}},
 	}
 
-	require.NoError(t, svc.queueEachConflictResolution(t.Context(), store, store.conflicts, synctypes.ResolutionKeepLocal, true))
+	require.NoError(t, queueEachConflictResolution(t.Context(), cc, store, store.conflicts, syncstore.ResolutionKeepLocal, true))
 	assert.Contains(t, status.String(), "Would resolve /foo.txt as keep_local")
 	assert.Zero(t, store.requestCalls)
 }
@@ -121,14 +118,14 @@ func TestResolveService_QueueSingleConflictResolution_AlreadyResolvedIsReplaySaf
 	t.Parallel()
 
 	var status bytes.Buffer
-	svc := newResolveService(&CLIContext{StatusWriter: &status, Logger: slog.New(slog.DiscardHandler)})
+	cc := &CLIContext{StatusWriter: &status, Logger: slog.New(slog.DiscardHandler)}
 	store := &stubResolveConflictQueueStore{
-		allConflicts: []synctypes.ConflictRecord{
-			{ID: "id-1", Path: "/foo.txt", Resolution: synctypes.ResolutionKeepBoth},
+		allConflicts: []syncstore.ConflictRecord{
+			{ID: "id-1", Path: "/foo.txt", Resolution: syncstore.ResolutionKeepBoth},
 		},
 	}
 
-	require.NoError(t, svc.queueSingleConflictResolution(t.Context(), store, "/foo.txt", synctypes.ResolutionKeepLocal, false))
+	require.NoError(t, queueSingleConflictResolution(t.Context(), cc, store, "/foo.txt", syncstore.ResolutionKeepLocal, false))
 	assert.Contains(t, status.String(), "already resolved as keep_both")
 	assert.Zero(t, store.requestCalls)
 }
@@ -136,7 +133,7 @@ func TestResolveService_QueueSingleConflictResolution_AlreadyResolvedIsReplaySaf
 func TestFindSelectedConflict_AmbiguousPrefix(t *testing.T) {
 	t.Parallel()
 
-	conflicts := []synctypes.ConflictRecord{
+	conflicts := []syncstore.ConflictRecord{
 		{ID: "aabb1122-dead-beef-cafe-000000000001", Path: "/foo/bar.txt"},
 		{ID: "aabb1122-dead-beef-cafe-000000000002", Path: "/baz/qux.txt"},
 	}
@@ -165,9 +162,9 @@ func TestResolveService_RequestConflictResolutionConcurrentCLIsLastWriteWinsWhil
 	)
 	require.NoError(t, err)
 
-	svc := newResolveService(&CLIContext{
+	cc := &CLIContext{
 		Cfg: &config.ResolvedDrive{CanonicalID: canonicalID},
-	})
+	}
 
 	const requestCount = 16
 	statuses := make(chan syncstore.ConflictRequestStatus, requestCount)
@@ -177,17 +174,18 @@ func TestResolveService_RequestConflictResolutionConcurrentCLIsLastWriteWinsWhil
 	var wg sync.WaitGroup
 
 	for i := range requestCount {
-		strategy := synctypes.ResolutionKeepLocal
+		strategy := syncstore.ResolutionKeepLocal
 		if i%2 == 1 {
-			strategy = synctypes.ResolutionKeepRemote
+			strategy = syncstore.ResolutionKeepRemote
 		}
 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			<-start
-			result, requestErr := svc.requestConflictResolution(
+			result, requestErr := requestConflictResolution(
 				ctx,
+				cc,
 				store,
 				"conflict-concurrent-cli",
 				strategy,
@@ -223,6 +221,6 @@ func TestResolveService_RequestConflictResolutionConcurrentCLIsLastWriteWinsWhil
 
 	conflict, err := store.GetConflictRequest(t.Context(), "conflict-concurrent-cli")
 	require.NoError(t, err)
-	assert.Equal(t, synctypes.ConflictStateQueued, conflict.State)
-	assert.Contains(t, []string{synctypes.ResolutionKeepLocal, synctypes.ResolutionKeepRemote}, conflict.RequestedResolution)
+	assert.Equal(t, syncstore.ConflictStateQueued, conflict.State)
+	assert.Contains(t, []string{syncstore.ResolutionKeepLocal, syncstore.ResolutionKeepRemote}, conflict.RequestedResolution)
 }

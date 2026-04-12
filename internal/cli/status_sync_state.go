@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 const (
@@ -141,7 +140,7 @@ func buildFailureGroupJSON(
 	output := make([]failureGroupJSON, 0, len(groups))
 	for i := range groups {
 		group := groups[i]
-		descriptor := synctypes.DescribeSummary(group.SummaryKey)
+		descriptor := syncstore.DescribeIssueSummary(group.SummaryKey)
 		nextActions.add(strings.TrimSpace(descriptor.Action))
 		output = append(output, failureGroupJSON{
 			SummaryKey: string(group.SummaryKey),
@@ -149,7 +148,7 @@ func buildFailureGroupJSON(
 			Title:      descriptor.Title,
 			Reason:     descriptor.Reason,
 			Action:     descriptor.Action,
-			ScopeKind:  statusIssueScopeKind(group.ScopeKey),
+			ScopeKind:  syncstore.StatusScopeKind(group.ScopeKey),
 			Scope:      group.ScopeLabel,
 			Count:      group.Count,
 			Paths:      sampleStrings(group.Paths, verbose, examplesLimit),
@@ -157,37 +156,6 @@ func buildFailureGroupJSON(
 	}
 
 	return output
-}
-
-func statusIssueScopeKind(scopeKey synctypes.ScopeKey) string {
-	if scopeKey == (synctypes.ScopeKey{}) {
-		return ""
-	}
-	switch scopeKey.Kind {
-	case synctypes.ScopeAuthAccount:
-		return statusScopeAccount
-	case synctypes.ScopeThrottleAccount:
-		return statusScopeAccount
-	case synctypes.ScopeQuotaOwn:
-		return statusScopeDrive
-	case synctypes.ScopeQuotaShortcut:
-		return statusScopeShortcut
-	case synctypes.ScopePermDir:
-		return statusScopeDirectory
-	case synctypes.ScopePermRemote:
-		return statusScopeShortcut
-	case synctypes.ScopeThrottleTarget:
-		if scopeKey.IsThrottleShared() {
-			return statusScopeShortcut
-		}
-		return statusScopeDrive
-	case synctypes.ScopeService:
-		return statusScopeService
-	case synctypes.ScopeDiskLocal:
-		return statusScopeDisk
-	}
-
-	return "file"
 }
 
 func buildDeleteSafetyJSON(
@@ -244,9 +212,9 @@ func buildConflictJSON(
 	output := make([]statusConflictJSON, 0, len(sampled))
 	for i := range rows {
 		switch conflictRequestDisplayState(rows[i]) {
-		case synctypes.ConflictStateQueued:
+		case syncstore.ConflictStateQueued:
 			info.QueuedConflictRequests++
-		case synctypes.ConflictStateApplying:
+		case syncstore.ConflictStateApplying:
 			info.ApplyingConflictRequests++
 		}
 	}
@@ -551,7 +519,7 @@ func printConflictSection(w io.Writer, conflicts []statusConflictJSON, totalCoun
 			return err
 		}
 		switch conflict.State {
-		case synctypes.ConflictStateUnresolved:
+		case syncstore.ConflictStateUnresolved:
 			if err := writeln(w, "      Decision: needed"); err != nil {
 				return err
 			}
@@ -653,7 +621,7 @@ func filterDeleteSafety(rows []deleteSafetyJSON, state string) []deleteSafetyJSO
 
 func conflictRequestDisplayState(conflict syncstore.ConflictStatusSnapshot) string {
 	if conflict.RequestState == "" {
-		return synctypes.ConflictStateUnresolved
+		return syncstore.ConflictStateUnresolved
 	}
 
 	return conflict.RequestState

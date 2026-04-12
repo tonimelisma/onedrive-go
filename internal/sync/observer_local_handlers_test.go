@@ -120,19 +120,19 @@ func TestWatch_DetectsFileModify(t *testing.T) {
 	writeTestFile(t, dir, "existing.txt", "original")
 	existingHash := hashContent(t, "original")
 
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path: "existing.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: existingHash,
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	// Modify the file.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "existing.txt"), []byte("modified"), 0o600))
 
-	var ev synctypes.ChangeEvent
+	var ev ChangeEvent
 	select {
 	case ev = <-events:
 	case <-time.After(5 * time.Second):
@@ -153,9 +153,9 @@ func TestWatch_IgnoresExcludedFiles(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	// Create an excluded file — should not produce an event.
@@ -165,7 +165,7 @@ func TestWatch_IgnoresExcludedFiles(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	writeTestFile(t, dir, "valid.txt", "keep")
 
-	var ev synctypes.ChangeEvent
+	var ev ChangeEvent
 	select {
 	case ev = <-events:
 	case <-time.After(5 * time.Second):
@@ -185,8 +185,8 @@ func TestWatch_NosyncGuard(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, dir, ".nosync", "")
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	events := make(chan synctypes.ChangeEvent, 10)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	events := make(chan ChangeEvent, 10)
 
 	err := obs.Watch(t.Context(), mustOpenSyncTree(t, dir), events)
 	assert.ErrorIs(t, err, synctypes.ErrNosyncGuard)
@@ -196,9 +196,9 @@ func TestLocalWatch_ContextCancellation(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
 
 	done := make(chan error, 1)
@@ -236,7 +236,7 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 	tickCh := make(chan time.Time, 1)
 
 	obs := &LocalObserver{
-		Baseline: synctest.EmptyBaseline(),
+		Baseline: emptyBaseline(),
 		Logger:   synctest.TestLogger(t),
 		localWatchState: localWatchState{
 			PendingTimers: make(map[string]*time.Timer),
@@ -251,7 +251,7 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 		},
 	}
 
-	events := make(chan synctypes.ChangeEvent, 50)
+	events := make(chan ChangeEvent, 50)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -302,7 +302,7 @@ func TestWatchLoop_BackoffEscalatesWithoutReset(t *testing.T) {
 	mockWatcher := newMockFsWatcher()
 
 	obs := &LocalObserver{
-		Baseline: synctest.EmptyBaseline(),
+		Baseline: emptyBaseline(),
 		Logger:   synctest.TestLogger(t),
 		localWatchState: localWatchState{
 			PendingTimers: make(map[string]*time.Timer),
@@ -318,7 +318,7 @@ func TestWatchLoop_BackoffEscalatesWithoutReset(t *testing.T) {
 		},
 	}
 
-	events := make(chan synctypes.ChangeEvent, 50)
+	events := make(chan ChangeEvent, 50)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -360,7 +360,7 @@ func TestWatchLoop_ChmodCreateCombinedEvent(t *testing.T) {
 	mockWatcher := newMockFsWatcher()
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
 
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -402,7 +402,7 @@ func TestWatchLoop_TransientFileCreateDelete(t *testing.T) {
 	mockWatcher := newMockFsWatcher()
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
 
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -451,7 +451,7 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 	writeTestFile(t, dir, "dest/moved.txt", "moved content")
 
 	// Baseline has the file at the old path.
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path: "original.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "moved content"),
 	})
@@ -473,7 +473,7 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 		},
 	}
 
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -495,7 +495,7 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 	}
 
 	// Collect both events.
-	var collected []synctypes.ChangeEvent
+	var collected []ChangeEvent
 	timeout := time.After(5 * time.Second)
 
 	for len(collected) < 2 {
@@ -511,7 +511,7 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 	<-done
 
 	// Find the Create and Delete events (order may vary).
-	var createEv, deleteEv *synctypes.ChangeEvent
+	var createEv, deleteEv *ChangeEvent
 	for i := range collected {
 		if collected[i].Type == synctypes.ChangeCreate {
 			createEv = &collected[i]

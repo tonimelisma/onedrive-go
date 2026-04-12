@@ -7,6 +7,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -29,7 +30,7 @@ type heldDeletePathKey struct {
 	path       string
 }
 
-func deleteKeyFromAction(action *synctypes.Action) heldDeleteKey {
+func deleteKeyFromAction(action *Action) heldDeleteKey {
 	if action == nil {
 		return heldDeleteKey{}
 	}
@@ -42,7 +43,7 @@ func deleteKeyFromAction(action *synctypes.Action) heldDeleteKey {
 	}
 }
 
-func deleteKeyFromRecord(record *synctypes.HeldDeleteRecord) heldDeleteKey {
+func deleteKeyFromRecord(record *syncstore.HeldDeleteRecord) heldDeleteKey {
 	if record == nil {
 		return heldDeleteKey{}
 	}
@@ -63,7 +64,7 @@ func pathKeyFromDeleteKey(key heldDeleteKey) heldDeletePathKey {
 	}
 }
 
-func plannedDeleteKeys(plan *synctypes.ActionPlan) map[heldDeleteKey]struct{} {
+func plannedDeleteKeys(plan *ActionPlan) map[heldDeleteKey]struct{} {
 	if plan == nil {
 		return map[heldDeleteKey]struct{}{}
 	}
@@ -79,7 +80,7 @@ func plannedDeleteKeys(plan *synctypes.ActionPlan) map[heldDeleteKey]struct{} {
 	return keys
 }
 
-func plannedDeleteItemsByPath(plan *synctypes.ActionPlan) map[heldDeletePathKey]map[string]struct{} {
+func plannedDeleteItemsByPath(plan *ActionPlan) map[heldDeletePathKey]map[string]struct{} {
 	itemsByPath := make(map[heldDeletePathKey]map[string]struct{})
 	for key := range plannedDeleteKeys(plan) {
 		if key.itemID == "" {
@@ -97,7 +98,7 @@ func plannedDeleteItemsByPath(plan *synctypes.ActionPlan) map[heldDeletePathKey]
 
 func (e *Engine) approvedDeleteKeysForPlan(
 	ctx context.Context,
-	plan *synctypes.ActionPlan,
+	plan *ActionPlan,
 ) (map[heldDeleteKey]struct{}, error) {
 	approved, err := e.baseline.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateApproved)
 	if err != nil {
@@ -141,14 +142,14 @@ func (e *Engine) approvedDeleteKeysForPlan(
 }
 
 func filterActionPlan(
-	plan *synctypes.ActionPlan,
-	keepAction func(*synctypes.Action) bool,
-) *synctypes.ActionPlan {
+	plan *ActionPlan,
+	keepAction func(*Action) bool,
+) *ActionPlan {
 	if plan == nil || len(plan.Actions) == 0 {
 		return plan
 	}
 
-	kept := make([]synctypes.Action, 0, len(plan.Actions))
+	kept := make([]Action, 0, len(plan.Actions))
 	keptDeps := make([][]int, 0, len(plan.Deps))
 	oldToNew := make(map[int]int, len(plan.Actions))
 
@@ -170,18 +171,18 @@ func filterActionPlan(
 		}
 	}
 
-	return &synctypes.ActionPlan{Actions: kept, Deps: keptDeps}
+	return &ActionPlan{Actions: kept, Deps: keptDeps}
 }
 
-func (e *Engine) holdDeleteActions(ctx context.Context, actions []synctypes.Action) error {
+func (e *Engine) holdDeleteActions(ctx context.Context, actions []Action) error {
 	if len(actions) == 0 {
 		return nil
 	}
 
 	now := e.nowFunc().UnixNano()
-	records := make([]synctypes.HeldDeleteRecord, 0, len(actions))
+	records := make([]syncstore.HeldDeleteRecord, 0, len(actions))
 	for i := range actions {
-		records = append(records, synctypes.HeldDeleteRecord{
+		records = append(records, syncstore.HeldDeleteRecord{
 			DriveID:       actions[i].DriveID,
 			ItemID:        actions[i].ItemID,
 			Path:          actions[i].Path,
@@ -202,10 +203,10 @@ func (e *Engine) holdDeleteActions(ctx context.Context, actions []synctypes.Acti
 
 func (e *Engine) applyOneShotDeleteProtection(
 	ctx context.Context,
-	plan *synctypes.ActionPlan,
-) (*synctypes.ActionPlan, error) {
+	plan *ActionPlan,
+) (*ActionPlan, error) {
 	if plan == nil {
-		return &synctypes.ActionPlan{}, nil
+		return &ActionPlan{}, nil
 	}
 
 	approved, err := e.approvedDeleteKeysForPlan(ctx, plan)
@@ -217,7 +218,7 @@ func (e *Engine) applyOneShotDeleteProtection(
 		return plan, nil
 	}
 
-	var unapprovedDeletes []synctypes.Action
+	var unapprovedDeletes []Action
 	for i := range plan.Actions {
 		action := &plan.Actions[i]
 		if !isDeleteAction(action.Type) {
@@ -242,7 +243,7 @@ func (e *Engine) applyOneShotDeleteProtection(
 		slog.Int("threshold", e.deleteSafetyThreshold),
 	)
 
-	return filterActionPlan(plan, func(action *synctypes.Action) bool {
+	return filterActionPlan(plan, func(action *Action) bool {
 		if !isDeleteAction(action.Type) {
 			return true
 		}
@@ -251,7 +252,7 @@ func (e *Engine) applyOneShotDeleteProtection(
 	}), nil
 }
 
-func (flow *engineFlow) collectApprovedDeleteChanges(ctx context.Context) []synctypes.PathChanges {
+func (flow *engineFlow) collectApprovedDeleteChanges(ctx context.Context) []PathChanges {
 	records, err := flow.engine.baseline.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateApproved)
 	if err != nil {
 		flow.engine.logger.Warn("load approved held deletes",
@@ -260,7 +261,7 @@ func (flow *engineFlow) collectApprovedDeleteChanges(ctx context.Context) []sync
 		return nil
 	}
 
-	var changes []synctypes.PathChanges
+	var changes []PathChanges
 	for i := range records {
 		record := records[i]
 		row := syncFailureRowFromHeldDelete(&record)
@@ -286,8 +287,8 @@ func (flow *engineFlow) collectApprovedDeleteChanges(ctx context.Context) []sync
 	return changes
 }
 
-func syncFailureRowFromHeldDelete(record *synctypes.HeldDeleteRecord) synctypes.SyncFailureRow {
-	return synctypes.SyncFailureRow{
+func syncFailureRowFromHeldDelete(record *syncstore.HeldDeleteRecord) syncstore.SyncFailureRow {
+	return syncstore.SyncFailureRow{
 		Path:       record.Path,
 		DriveID:    record.DriveID,
 		Direction:  synctypes.DirectionDelete,
@@ -299,7 +300,7 @@ func syncFailureRowFromHeldDelete(record *synctypes.HeldDeleteRecord) synctypes.
 	}
 }
 
-func (flow *engineFlow) consumeHeldDelete(ctx context.Context, record *synctypes.HeldDeleteRecord) {
+func (flow *engineFlow) consumeHeldDelete(ctx context.Context, record *syncstore.HeldDeleteRecord) {
 	if err := flow.engine.baseline.DeleteHeldDelete(ctx, record.DriveID, record.ActionType, record.Path, record.ItemID); err != nil {
 		flow.engine.logger.Warn("consume resolved held delete",
 			slog.String("path", record.Path),
@@ -308,7 +309,7 @@ func (flow *engineFlow) consumeHeldDelete(ctx context.Context, record *synctypes
 	}
 }
 
-func (flow *engineFlow) consumeHeldDeleteOnSuccess(ctx context.Context, r *synctypes.WorkerResult) {
+func (flow *engineFlow) consumeHeldDeleteOnSuccess(ctx context.Context, r *WorkerResult) {
 	if !isDeleteAction(r.ActionType) {
 		return
 	}
@@ -326,13 +327,13 @@ func (flow *engineFlow) consumeHeldDeleteOnSuccess(ctx context.Context, r *synct
 	}
 }
 
-func (e *Engine) processQueuedConflictResolutions(ctx context.Context) ([]synctypes.PathChanges, error) {
+func (e *Engine) processQueuedConflictResolutions(ctx context.Context) ([]PathChanges, error) {
 	cutoff := e.nowFunc().Add(-staleConflictResolvingThreshold)
 	if _, err := e.baseline.ResetStaleResolvingConflicts(ctx, cutoff); err != nil {
 		return nil, fmt.Errorf("sync: reset stale applying conflicts: %w", err)
 	}
 
-	var followUpChanges []synctypes.PathChanges
+	var followUpChanges []PathChanges
 	attempted := make(map[string]struct{})
 	for {
 		requests, err := e.baseline.ListRequestedConflictResolutions(ctx, conflictResolutionBatchLimit)
@@ -399,7 +400,7 @@ func (e *Engine) processQueuedConflictResolutions(ctx context.Context) ([]syncty
 
 func (e *Engine) executeConflictResolution(
 	ctx context.Context,
-	c *synctypes.ConflictRecord,
+	c *syncstore.ConflictRecord,
 	resolution string,
 ) ([]string, error) {
 	switch resolution {
@@ -416,10 +417,10 @@ func (e *Engine) executeConflictResolution(
 
 func (rt *watchRuntime) runUserIntentDispatch(
 	ctx context.Context,
-	bl *synctypes.Baseline,
-	mode synctypes.SyncMode,
-	safety *synctypes.SafetyConfig,
-) []*synctypes.TrackedAction {
+	bl *syncstore.Baseline,
+	mode Mode,
+	safety *SafetyConfig,
+) []*TrackedAction {
 	if rt.depGraph.InFlightCount() > 0 {
 		return nil
 	}

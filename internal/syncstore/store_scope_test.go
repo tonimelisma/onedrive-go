@@ -22,7 +22,7 @@ func TestApplyScopeState_MarksOutOfScopeRowsFiltered(t *testing.T) {
 	ctx := t.Context()
 	driveID := driveid.New(testDriveID)
 
-	require.NoError(t, mgr.CommitObservation(ctx, []synctypes.ObservedItem{
+	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{
 		{
 			DriveID:  driveID,
 			ItemID:   "keep-item",
@@ -49,8 +49,8 @@ func TestApplyScopeState_MarksOutOfScopeRowsFiltered(t *testing.T) {
 	snapshotJSON, err := syncscope.MarshalSnapshot(snapshot)
 	require.NoError(t, err)
 
-	require.NoError(t, mgr.ApplyScopeState(ctx, synctypes.ScopeStateApplyRequest{
-		State: synctypes.ScopeStateRecord{
+	require.NoError(t, mgr.ApplyScopeState(ctx, ScopeStateApplyRequest{
+		State: ScopeStateRecord{
 			Generation:            1,
 			EffectiveSnapshotJSON: snapshotJSON,
 			ObservationMode:       synctypes.ScopeObservationScopedDelta,
@@ -124,10 +124,10 @@ func TestReadScopeState_ReturnsPersistedRecord(t *testing.T) {
 	record, found, err := mgr.ReadScopeState(ctx)
 	require.NoError(t, err)
 	assert.False(t, found)
-	assert.Equal(t, synctypes.ScopeStateRecord{}, record)
+	assert.Equal(t, ScopeStateRecord{}, record)
 
-	require.NoError(t, mgr.ApplyScopeState(ctx, synctypes.ScopeStateApplyRequest{
-		State: synctypes.ScopeStateRecord{
+	require.NoError(t, mgr.ApplyScopeState(ctx, ScopeStateApplyRequest{
+		State: ScopeStateRecord{
 			Generation:            7,
 			EffectiveSnapshotJSON: `{"version":1,"sync_paths":["Docs"]}`,
 			ObservationPlanHash:   "scope-hash",
@@ -226,7 +226,7 @@ func TestNewSyncStore_RepairsScopeStateDriftOnOpen(t *testing.T) {
 	store, err := NewSyncStore(ctx, dbPath, newTestLogger(t))
 	require.NoError(t, err)
 
-	require.NoError(t, store.CommitObservation(ctx, []synctypes.ObservedItem{
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{
 		{
 			DriveID:  driveID,
 			ItemID:   "filtered-item",
@@ -264,7 +264,7 @@ func TestNewSyncStore_RepairsScopeStateDriftOnOpen(t *testing.T) {
 	scopeState, found, err := reopened.ReadScopeState(ctx)
 	require.NoError(t, err)
 	assert.False(t, found)
-	assert.Equal(t, synctypes.ScopeStateRecord{}, scopeState)
+	assert.Equal(t, ScopeStateRecord{}, scopeState)
 }
 
 // Validates: R-2.4.4, R-2.4.5
@@ -275,7 +275,7 @@ func TestRepairIntegritySafe_ReconcilesFilteredRowsToPersistedScopeState(t *test
 	ctx := t.Context()
 	driveID := driveid.New(testDriveID)
 
-	require.NoError(t, mgr.CommitObservation(ctx, []synctypes.ObservedItem{
+	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{
 		{
 			DriveID:  driveID,
 			ItemID:   "keep-item",
@@ -347,7 +347,7 @@ func TestRepairIntegritySafe_ReactivatesFilteredRowsWhenPersistedScopeIncludesPa
 	ctx := t.Context()
 	driveID := driveid.New(testDriveID)
 
-	require.NoError(t, mgr.CommitObservation(ctx, []synctypes.ObservedItem{
+	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{
 		{
 			DriveID:  driveID,
 			ItemID:   "reenter-item",
@@ -398,8 +398,8 @@ func TestNewSyncStore_PendingReentrySurvivesValidRestart(t *testing.T) {
 	store, err := NewSyncStore(ctx, dbPath, newTestLogger(t))
 	require.NoError(t, err)
 
-	require.NoError(t, store.ApplyScopeState(ctx, synctypes.ScopeStateApplyRequest{
-		State: synctypes.ScopeStateRecord{
+	require.NoError(t, store.ApplyScopeState(ctx, ScopeStateApplyRequest{
+		State: ScopeStateRecord{
 			Generation:            11,
 			EffectiveSnapshotJSON: `{"version":1}`,
 			ObservationPlanHash:   "hash",

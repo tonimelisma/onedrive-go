@@ -22,13 +22,13 @@ func TestWatch_DetectsFileCreate(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	cancel, done := startLocalWatch(t, obs, dir, events)
 	writeTestFile(t, dir, "new-file.txt", "hello watch")
 
-	var ev synctypes.ChangeEvent
+	var ev ChangeEvent
 	select {
 	case ev = <-events:
 	case <-time.After(5 * time.Second):
@@ -49,9 +49,9 @@ func TestWatch_NewDirectoryWatched(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
-	events := make(chan synctypes.ChangeEvent, 20)
+	events := make(chan ChangeEvent, 20)
 	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	// Create a subdirectory and a file inside it.
@@ -94,9 +94,9 @@ func TestWatch_NewDirectoryPreExistingFiles(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
-	events := make(chan synctypes.ChangeEvent, 30)
+	events := make(chan ChangeEvent, 30)
 	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	// Create a directory with a file already inside it using os.MkdirAll +
@@ -143,9 +143,9 @@ func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
-	events := make(chan synctypes.ChangeEvent, 50)
+	events := make(chan ChangeEvent, 50)
 	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	// Create a 3-level nested directory structure with a file at the bottom.
@@ -197,7 +197,7 @@ func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
 	}
 }
 
-func waitForLocalCreateEvent(t *testing.T, events <-chan synctypes.ChangeEvent, wantPath string) {
+func waitForLocalCreateEvent(t *testing.T, events <-chan ChangeEvent, wantPath string) {
 	t.Helper()
 
 	timeout := time.After(5 * time.Second)
@@ -228,9 +228,9 @@ func TestWatch_HashFailureStillEmitsCreate(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	// Create an unreadable file after the watch loop is live.
@@ -245,7 +245,7 @@ func TestWatch_HashFailureStillEmitsCreate(t *testing.T) {
 		assert.NoError(t, os.Chmod(path, 0o600))
 	})
 
-	var ev synctypes.ChangeEvent
+	var ev ChangeEvent
 
 	select {
 	case ev = <-events:

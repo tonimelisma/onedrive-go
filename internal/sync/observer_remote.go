@@ -14,6 +14,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -33,25 +34,25 @@ type watchStepResult struct {
 
 type WatchObservationPreparer func(
 	ctx context.Context,
-	events []synctypes.ChangeEvent,
-) ([]synctypes.ObservedItem, []synctypes.ChangeEvent, error)
+	events []ChangeEvent,
+) ([]syncstore.ObservedItem, []ChangeEvent, error)
 
 type WatchBatchPostProcessor func(
 	ctx context.Context,
-	events []synctypes.ChangeEvent,
-) []synctypes.ChangeEvent
+	events []ChangeEvent,
+) []ChangeEvent
 
-// RemoteObserver transforms Graph API delta responses into []synctypes.ChangeEvent.
+// RemoteObserver transforms Graph API delta responses into []ChangeEvent.
 // It handles pagination, path materialization, change classification, and
 // normalization (NFC, driveID zero-padding). Delegates item conversion to
 // an embedded ItemConverter configured for primary drive observation.
 type RemoteObserver struct {
-	fetcher   synctypes.DeltaFetcher
+	fetcher   DeltaFetcher
 	Converter *ItemConverter
 	logger    *slog.Logger
 	driveID   driveid.ID
 	SleepFunc func(ctx context.Context, d time.Duration) error
-	ObsWriter synctypes.ObservationWriter // nil-safe: when set, observations are committed atomically with delta token
+	ObsWriter observationWriter // nil-safe: when set, observations are committed atomically with delta token
 	wakeCh    <-chan struct{}
 	prepWatch WatchObservationPreparer
 	postWatch WatchBatchPostProcessor
@@ -89,7 +90,7 @@ type ObserverStats struct {
 // baseline must be a loaded Baseline (from SyncStore.Load); it is
 // read-only during observation. The caller must pass a normalized driveid.ID.
 func NewRemoteObserver(
-	fetcher synctypes.DeltaFetcher, baseline *synctypes.Baseline, driveID driveid.ID, logger *slog.Logger,
+	fetcher DeltaFetcher, baseline *syncstore.Baseline, driveID driveid.ID, logger *slog.Logger,
 ) *RemoteObserver {
 	obs := &RemoteObserver{
 		fetcher:   fetcher,
@@ -105,7 +106,7 @@ func NewRemoteObserver(
 // SetObsWriter sets the observation writer for committing delta observations
 // atomically with the delta token during watch mode. When non-nil, each poll
 // cycle commits observations before returning events to the engine.
-func (o *RemoteObserver) SetObsWriter(w synctypes.ObservationWriter) {
+func (o *RemoteObserver) SetObsWriter(w observationWriter) {
 	o.ObsWriter = w
 }
 
@@ -133,13 +134,13 @@ func (o *RemoteObserver) SetWatchBatchPostProcessor(processor WatchBatchPostProc
 
 // FullDelta fetches all delta pages and returns the accumulated change events
 // plus the new delta token (DeltaLink URL) for the next sync pass.
-func (o *RemoteObserver) FullDelta(ctx context.Context, savedToken string) ([]synctypes.ChangeEvent, string, error) {
+func (o *RemoteObserver) FullDelta(ctx context.Context, savedToken string) ([]ChangeEvent, string, error) {
 	o.logger.Info("remote observer starting delta enumeration",
 		slog.String("drive_id", o.driveID.String()),
 		slog.Bool("has_token", savedToken != ""),
 	)
 
-	var events []synctypes.ChangeEvent
+	var events []ChangeEvent
 	inflight := make(map[driveid.ItemKey]InflightParent)
 	token := savedToken
 	lastProgressLog := time.Now()
@@ -191,7 +192,7 @@ func (o *RemoteObserver) FullDelta(ctx context.Context, savedToken string) ([]sy
 // at the poll interval). On ErrDeltaExpired (410), it resets the token and
 // retries with a full resync. The delta token is tracked internally — use
 // CurrentDeltaToken() to read the latest value.
-func (o *RemoteObserver) Watch(ctx context.Context, savedToken string, events chan<- synctypes.ChangeEvent, interval time.Duration) error {
+func (o *RemoteObserver) Watch(ctx context.Context, savedToken string, events chan<- ChangeEvent, interval time.Duration) error {
 	if interval < MinPollInterval {
 		o.logger.Warn("poll interval below minimum, clamping",
 			slog.Duration("requested", interval),
@@ -316,7 +317,7 @@ func (o *RemoteObserver) handleZeroEventPoll(ctx context.Context, interval time.
 
 func (o *RemoteObserver) commitWatchObservation(
 	ctx context.Context,
-	observed []synctypes.ObservedItem,
+	observed []syncstore.ObservedItem,
 	newToken string,
 ) bool {
 	// Commit observations atomically with delta token before sending events
@@ -340,8 +341,8 @@ func (o *RemoteObserver) commitWatchObservation(
 
 func (o *RemoteObserver) prepareWatchObservation(
 	ctx context.Context,
-	polledEvents []synctypes.ChangeEvent,
-) ([]synctypes.ObservedItem, []synctypes.ChangeEvent, error) {
+	polledEvents []ChangeEvent,
+) ([]syncstore.ObservedItem, []ChangeEvent, error) {
 	if o.prepWatch == nil {
 		return changeEventsToObservedItems(o.logger, polledEvents), polledEvents, nil
 	}
@@ -351,8 +352,8 @@ func (o *RemoteObserver) prepareWatchObservation(
 
 func (o *RemoteObserver) emitWatchEvents(
 	ctx context.Context,
-	events chan<- synctypes.ChangeEvent,
-	polledEvents []synctypes.ChangeEvent,
+	events chan<- ChangeEvent,
+	polledEvents []ChangeEvent,
 ) error {
 	// Blocking send: remote delta events must not be dropped. Unlike local
 	// events (which the safety scan recovers), dropped remote events would
@@ -498,7 +499,7 @@ func TimeSleep(ctx context.Context, d time.Duration) error {
 // when the child appears before its vault parent in the response.
 func (o *RemoteObserver) fetchPage(
 	ctx context.Context, token string, page int, inflight map[driveid.ItemKey]InflightParent,
-) ([]synctypes.ChangeEvent, string, bool, error) {
+) ([]ChangeEvent, string, bool, error) {
 	dp, err := o.fetcher.Delta(ctx, o.driveID, token)
 	if err != nil {
 		if errors.Is(err, graph.ErrGone) {
@@ -515,7 +516,7 @@ func (o *RemoteObserver) fetchPage(
 	}
 
 	// Pass 2: classify and emit events (inflight map is fully populated).
-	var events []synctypes.ChangeEvent
+	var events []ChangeEvent
 
 	for i := range dp.Items {
 		if ev := o.Converter.ClassifyItem(&dp.Items[i], inflight); ev != nil {

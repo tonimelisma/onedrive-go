@@ -39,31 +39,22 @@ func newSharedCmd() *cobra.Command {
 }
 
 func runShared(cmd *cobra.Command, _ []string) error {
-	return newSharedService(mustCLIContext(cmd.Context())).runList(cmd.Context())
+	return runSharedList(cmd.Context(), mustCLIContext(cmd.Context()))
 }
 
-type sharedService struct {
-	cc *CLIContext
-}
-
-func newSharedService(cc *CLIContext) *sharedService {
-	return &sharedService{cc: cc}
-}
-
-func (s *sharedService) runList(ctx context.Context) error {
-	readModel := newAccountReadModelService(s.cc)
-	snapshot, err := readModel.loadLenientCatalogWithBestEffortIdentityRefresh(ctx)
+func runSharedList(ctx context.Context, cc *CLIContext) error {
+	snapshot, err := loadLenientCatalogWithBestEffortIdentityRefresh(ctx, cc)
 	if err != nil {
 		return err
 	}
 
-	discovery := newSharedDiscoveryService(s.cc).discoverTargets(ctx, filterAccountCatalog(snapshot.Catalog, s.cc.Flags.Account))
+	discovery := discoverSharedTargets(ctx, cc, filterAccountCatalog(snapshot.Catalog, cc.Flags.Account))
 	items := sharedListItemsFromTargets(discovery.Targets)
-	if s.cc.Flags.JSON {
-		return printSharedJSON(s.cc.Output(), items, discovery.AccountsRequiringAuth, discovery.AccountsDegraded)
+	if cc.Flags.JSON {
+		return printSharedJSON(cc.Output(), items, discovery.AccountsRequiringAuth, discovery.AccountsDegraded)
 	}
 
-	return printSharedText(s.cc.Output(), items, discovery.AccountsRequiringAuth, discovery.AccountsDegraded)
+	return printSharedText(cc.Output(), items, discovery.AccountsRequiringAuth, discovery.AccountsDegraded)
 }
 
 func sharedListItemsFromTargets(targets []sharedDiscoveryTarget) []sharedListItem {

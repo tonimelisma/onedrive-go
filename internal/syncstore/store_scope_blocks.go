@@ -21,7 +21,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
-func validateScopeBlock(block *synctypes.ScopeBlock) error {
+func validateScopeBlock(block *ScopeBlock) error {
 	if block.Key.IsZero() {
 		return fmt.Errorf("sync: upserting scope block: missing scope key")
 	}
@@ -62,7 +62,7 @@ func validateScopeBlock(block *synctypes.ScopeBlock) error {
 // INSERT OR REPLACE — the scope_key is the primary key, so this handles
 // both insert and update. All fields are serialized: ScopeKey.String() for
 // the key, UnixNano for timestamps, nanoseconds for Duration.
-func (m *SyncStore) UpsertScopeBlock(ctx context.Context, block *synctypes.ScopeBlock) error {
+func (m *SyncStore) UpsertScopeBlock(ctx context.Context, block *ScopeBlock) error {
 	if err := validateScopeBlock(block); err != nil {
 		return err
 	}
@@ -113,7 +113,7 @@ func (m *SyncStore) DeleteScopeBlock(ctx context.Context, key synctypes.ScopeKey
 // ListScopeBlocks returns all persisted scope blocks. Used at startup to
 // populate the engine-owned active scope working set. Returns an empty slice
 // (not nil) if no rows exist.
-func (m *SyncStore) ListScopeBlocks(ctx context.Context) ([]*synctypes.ScopeBlock, error) {
+func (m *SyncStore) ListScopeBlocks(ctx context.Context) ([]*ScopeBlock, error) {
 	rows, err := m.db.QueryContext(ctx,
 		`SELECT scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count
 		FROM scope_blocks`)
@@ -122,7 +122,7 @@ func (m *SyncStore) ListScopeBlocks(ctx context.Context) ([]*synctypes.ScopeBloc
 	}
 	defer rows.Close()
 
-	var result []*synctypes.ScopeBlock
+	var result []*ScopeBlock
 
 	for rows.Next() {
 		var (
@@ -152,7 +152,7 @@ func (m *SyncStore) ListScopeBlocks(ctx context.Context) ([]*synctypes.ScopeBloc
 			preserveUntil = time.Unix(0, preserveNano).UTC()
 		}
 
-		block := &synctypes.ScopeBlock{
+		block := &ScopeBlock{
 			Key:           synctypes.ParseScopeKey(wireKey),
 			IssueType:     issueType,
 			TimingSource:  synctypes.ScopeTimingSource(timingSource),
@@ -171,7 +171,7 @@ func (m *SyncStore) ListScopeBlocks(ctx context.Context) ([]*synctypes.ScopeBloc
 
 	// Return empty slice, not nil, for consistent caller behavior.
 	if result == nil {
-		result = []*synctypes.ScopeBlock{}
+		result = []*ScopeBlock{}
 	}
 
 	return result, nil

@@ -37,8 +37,8 @@ func seedInterruptedScopeTransitionState(t *testing.T, syncRoot string) string {
 		"drop-item",
 	)
 	require.NoError(t, err)
-	require.NoError(t, store.ApplyScopeState(t.Context(), synctypes.ScopeStateApplyRequest{
-		State: synctypes.ScopeStateRecord{
+	require.NoError(t, store.ApplyScopeState(t.Context(), ScopeStateApplyRequest{
+		State: ScopeStateRecord{
 			Generation:            2,
 			EffectiveSnapshotJSON: snapshotJSON,
 			ObservationPlanHash:   "interrupted",
@@ -63,7 +63,7 @@ func reopenEngineForInterruptedScopeRepair(
 ) *Engine {
 	t.Helper()
 
-	reopened, err := newEngine(t.Context(), &synctypes.EngineConfig{
+	reopened, err := newEngine(t.Context(), &engineInputs{
 		DBPath:                 dbPath,
 		SyncRoot:               syncRoot,
 		DriveID:                driveID,
@@ -97,7 +97,7 @@ func TestApplyRemoteScope_ClassifiesBoundaryMoves(t *testing.T) {
 	tests := []struct {
 		name             string
 		config           syncscope.Config
-		event            synctypes.ChangeEvent
+		event            ChangeEvent
 		wantObserved     int
 		wantFiltered     bool
 		wantEmittedTypes []synctypes.ChangeType
@@ -108,7 +108,7 @@ func TestApplyRemoteScope_ClassifiesBoundaryMoves(t *testing.T) {
 			config: syncscope.Config{
 				SyncPaths: []string{"docs"},
 			},
-			event: synctypes.ChangeEvent{
+			event: ChangeEvent{
 				Source:   synctypes.SourceRemote,
 				Type:     synctypes.ChangeMove,
 				DriveID:  driveID,
@@ -127,7 +127,7 @@ func TestApplyRemoteScope_ClassifiesBoundaryMoves(t *testing.T) {
 			config: syncscope.Config{
 				SyncPaths: []string{"docs"},
 			},
-			event: synctypes.ChangeEvent{
+			event: ChangeEvent{
 				Source:   synctypes.SourceRemote,
 				Type:     synctypes.ChangeMove,
 				DriveID:  driveID,
@@ -146,7 +146,7 @@ func TestApplyRemoteScope_ClassifiesBoundaryMoves(t *testing.T) {
 			config: syncscope.Config{
 				SyncPaths: []string{"docs"},
 			},
-			event: synctypes.ChangeEvent{
+			event: ChangeEvent{
 				Source:   synctypes.SourceRemote,
 				Type:     synctypes.ChangeMove,
 				DriveID:  driveID,
@@ -169,7 +169,7 @@ func TestApplyRemoteScope_ClassifiesBoundaryMoves(t *testing.T) {
 			snapshot, err := syncscope.NewSnapshot(tt.config, nil)
 			require.NoError(t, err)
 
-			result := applyRemoteScope(logger, snapshot, 7, []synctypes.ChangeEvent{tt.event})
+			result := applyRemoteScope(logger, snapshot, 7, []ChangeEvent{tt.event})
 			require.Len(t, result.observed, tt.wantObserved)
 			assert.Equal(t, tt.wantFiltered, result.observed[0].Filtered)
 
@@ -199,7 +199,7 @@ func TestRunOnce_PersistsEffectiveScopeSnapshot(t *testing.T) {
 	writeLocalFile(t, syncRoot, "blocked/.odignore", "")
 	writeLocalFile(t, syncRoot, "blocked/secret.txt", "blocked")
 
-	_, err := eng.RunOnce(t.Context(), synctypes.SyncUploadOnly, synctypes.RunOpts{})
+	_, err := eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 
 	scopeState, found, err := eng.baseline.ReadScopeState(t.Context())
@@ -261,7 +261,7 @@ func TestRunOnce_ScopeExpansionReconcilesPreviouslyFilteredRemoteItems(t *testin
 		SyncPaths: []string{"/keep.txt"},
 	}
 
-	firstReport, err := eng.RunOnce(t.Context(), synctypes.SyncDownloadOnly, synctypes.RunOpts{})
+	firstReport, err := eng.RunOnce(t.Context(), SyncDownloadOnly, RunOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 1, firstReport.Downloads)
 	assert.Equal(t, []string{"keep-item"}, downloaded)
@@ -274,7 +274,7 @@ func TestRunOnce_ScopeExpansionReconcilesPreviouslyFilteredRemoteItems(t *testin
 	downloaded = nil
 	eng.syncScopeConfig = syncscope.Config{}
 
-	secondReport, err := eng.RunOnce(t.Context(), synctypes.SyncDownloadOnly, synctypes.RunOpts{})
+	secondReport, err := eng.RunOnce(t.Context(), SyncDownloadOnly, RunOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 1, secondReport.Downloads)
 	assert.Equal(t, []string{"drop-item"}, downloaded)
@@ -312,7 +312,7 @@ func TestRunOnce_StartupRepair_InterruptedScopeTransitionClearsPendingReentryOnS
 		SyncPaths: []string{"/keep.txt"},
 	}
 
-	_, err := eng.RunOnce(t.Context(), synctypes.SyncDownloadOnly, synctypes.RunOpts{})
+	_, err := eng.RunOnce(t.Context(), SyncDownloadOnly, RunOptions{})
 	require.NoError(t, err)
 	require.NoError(t, eng.Close(context.Background()))
 
@@ -321,7 +321,7 @@ func TestRunOnce_StartupRepair_InterruptedScopeTransitionClearsPendingReentryOnS
 	reopened.syncScopeConfig = syncscope.Config{}
 
 	downloaded = nil
-	report, err := reopened.RunOnce(t.Context(), synctypes.SyncDownloadOnly, synctypes.RunOpts{})
+	report, err := reopened.RunOnce(t.Context(), SyncDownloadOnly, RunOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 1, report.Downloads)
 	assert.Equal(t, []string{"drop-item"}, downloaded)
@@ -390,7 +390,7 @@ func TestFetchRemoteChanges_SyncPathsPersonalUsesFolderScopedDelta(t *testing.T)
 	require.NoError(t, err)
 	plan, err := flow.BuildObservationSessionPlan(t.Context(), ObservationPlanRequest{
 		Session:  &session,
-		SyncMode: synctypes.SyncDownloadOnly,
+		SyncMode: SyncDownloadOnly,
 		Purpose:  observationPlanPurposeOneShot,
 	})
 	require.NoError(t, err)
@@ -451,7 +451,7 @@ func TestFetchRemoteChanges_SyncPathsPersonalFallsBackToRecursiveEnumerationWhen
 	require.NoError(t, err)
 	plan, err := flow.BuildObservationSessionPlan(t.Context(), ObservationPlanRequest{
 		Session:  &session,
-		SyncMode: synctypes.SyncDownloadOnly,
+		SyncMode: SyncDownloadOnly,
 		Purpose:  observationPlanPurposeOneShot,
 	})
 	require.NoError(t, err)
@@ -511,7 +511,7 @@ func TestFetchRemoteChanges_SyncPathsBusinessUsesRecursiveEnumeration(t *testing
 	require.NoError(t, err)
 	plan, err := flow.BuildObservationSessionPlan(t.Context(), ObservationPlanRequest{
 		Session:  &session,
-		SyncMode: synctypes.SyncDownloadOnly,
+		SyncMode: SyncDownloadOnly,
 		Purpose:  observationPlanPurposeOneShot,
 	})
 	require.NoError(t, err)
@@ -553,7 +553,7 @@ func TestBuildObservationSessionPlan_PrimaryScopeUsesScopedTargetPhase(t *testin
 
 	plan, err := flow.BuildObservationSessionPlan(t.Context(), ObservationPlanRequest{
 		Session:  &session,
-		SyncMode: synctypes.SyncBidirectional,
+		SyncMode: SyncBidirectional,
 		Purpose:  observationPlanPurposeWatch,
 	})
 	require.NoError(t, err)
@@ -581,7 +581,7 @@ func TestBuildObservationSessionPlan_ScopedRootUsesScopedRootPhase(t *testing.T)
 
 	plan, err := flow.BuildObservationSessionPlan(t.Context(), ObservationPlanRequest{
 		Session:  &session,
-		SyncMode: synctypes.SyncBidirectional,
+		SyncMode: SyncBidirectional,
 		Purpose:  observationPlanPurposeWatch,
 	})
 	require.NoError(t, err)
@@ -606,7 +606,7 @@ func TestBuildObservationSessionPlan_FullDriveUsesExplicitRootDeltaPhase(t *test
 
 	plan, err := flow.BuildObservationSessionPlan(t.Context(), ObservationPlanRequest{
 		Session:  &session,
-		SyncMode: synctypes.SyncBidirectional,
+		SyncMode: SyncBidirectional,
 		Purpose:  observationPlanPurposeWatch,
 	})
 	require.NoError(t, err)

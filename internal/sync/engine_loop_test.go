@@ -20,12 +20,12 @@ func seedApprovedHeldDelete(
 	ctx context.Context,
 	path string,
 	itemID string,
-) (*synctypes.Baseline, *synctypes.SafetyConfig) {
+) (*Baseline, *SafetyConfig) {
 	t.Helper()
 
 	driveID := driveid.New(engineTestDriveID)
-	seedBaseline(t, eng.baseline, ctx, []synctypes.Outcome{{
-		Action:          synctypes.ActionDownload,
+	seedBaseline(t, eng.baseline, ctx, []ExecutionResult{{
+		Action:          ActionDownload,
 		Success:         true,
 		Path:            path,
 		DriveID:         driveID,
@@ -39,11 +39,11 @@ func seedApprovedHeldDelete(
 		RemoteSizeKnown: true,
 	}}, "")
 
-	require.NoError(t, eng.baseline.UpsertHeldDeletes(ctx, []synctypes.HeldDeleteRecord{{
+	require.NoError(t, eng.baseline.UpsertHeldDeletes(ctx, []HeldDeleteRecord{{
 		DriveID:       driveID,
 		ItemID:        itemID,
 		Path:          path,
-		ActionType:    synctypes.ActionRemoteDelete,
+		ActionType:    ActionRemoteDelete,
 		State:         synctypes.HeldDeleteStateHeld,
 		HeldAt:        1,
 		LastPlannedAt: 1,
@@ -59,20 +59,20 @@ func dispatchBusyWatchAction(
 	ctx context.Context,
 	path string,
 	actionID int64,
-) *synctypes.TrackedAction {
+) *TrackedAction {
 	t.Helper()
 
 	rt := testWatchRuntime(t, eng)
-	busy := rt.depGraph.Add(&synctypes.Action{
-		Type:    synctypes.ActionUpload,
+	busy := rt.depGraph.Add(&Action{
+		Type:    ActionUpload,
 		Path:    path,
 		DriveID: driveid.New(engineTestDriveID),
 	}, actionID, nil)
 	require.NotNil(t, busy)
 
-	dispatchCh := make(chan *synctypes.TrackedAction, 1)
+	dispatchCh := make(chan *TrackedAction, 1)
 	rt.dispatchCh = dispatchCh
-	rt.replaceOutbox([]*synctypes.TrackedAction{busy})
+	rt.replaceOutbox([]*TrackedAction{busy})
 
 	shuttingDown, err := rt.runWatchStep(ctx, &watchPipeline{})
 	require.NoError(t, err)
@@ -85,10 +85,10 @@ func dispatchBusyWatchAction(
 	return busy
 }
 
-func assertQueuedHeldDeleteAction(t *testing.T, action *synctypes.TrackedAction, path string) {
+func assertQueuedHeldDeleteAction(t *testing.T, action *TrackedAction, path string) {
 	t.Helper()
 	require.NotNil(t, action)
-	assert.Equal(t, synctypes.ActionRemoteDelete, action.Action.Type)
+	assert.Equal(t, ActionRemoteDelete, action.Action.Type)
 	assert.Equal(t, path, action.Action.Path)
 }
 
@@ -106,18 +106,18 @@ func TestRunWatchStep_UserIntentWakeStaysPendingUntilOutboxDrains(t *testing.T) 
 	p := &watchPipeline{
 		bl:          bl,
 		safety:      safety,
-		mode:        synctypes.SyncBidirectional,
+		mode:        SyncBidirectional,
 		userIntentC: userIntentC,
 	}
 
-	busy := testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{
-		Type:    synctypes.ActionUpload,
+	busy := testWatchRuntime(t, eng).depGraph.Add(&Action{
+		Type:    ActionUpload,
 		Path:    "busy.txt",
 		DriveID: driveid.New(engineTestDriveID),
 	}, 99, nil)
 	require.NotNil(t, busy)
 	testWatchRuntime(t, eng).dispatchCh = nil
-	testWatchRuntime(t, eng).replaceOutbox([]*synctypes.TrackedAction{busy})
+	testWatchRuntime(t, eng).replaceOutbox([]*TrackedAction{busy})
 
 	shuttingDown, err := testWatchRuntime(t, eng).runWatchStep(ctx, p)
 	require.NoError(t, err)
@@ -126,7 +126,7 @@ func TestRunWatchStep_UserIntentWakeStaysPendingUntilOutboxDrains(t *testing.T) 
 	require.Len(t, outbox, 1, "wake should stay pending while existing outbox work is still draining")
 	assert.Equal(t, "busy.txt", outbox[0].Action.Path)
 
-	dispatchCh := make(chan *synctypes.TrackedAction, 1)
+	dispatchCh := make(chan *TrackedAction, 1)
 	testWatchRuntime(t, eng).dispatchCh = dispatchCh
 
 	p.userIntentC = nil
@@ -147,7 +147,7 @@ func TestRunWatchStep_UserIntentWakeStaysPendingUntilOutboxDrains(t *testing.T) 
 	outbox = testWatchRuntime(t, eng).currentOutbox()
 
 	require.Len(t, outbox, 1, "pending user intent should dispatch as soon as the in-flight action completes")
-	assert.Equal(t, synctypes.ActionRemoteDelete, outbox[0].Action.Type)
+	assert.Equal(t, ActionRemoteDelete, outbox[0].Action.Type)
 	assert.Equal(t, "delete-me.txt", outbox[0].Action.Path)
 	assert.False(t, testWatchRuntime(t, eng).userIntentPending)
 }
@@ -161,8 +161,8 @@ func TestRunWatchStep_RecheckWakeStaysPendingUntilOutboxDrains(t *testing.T) {
 	ctx := t.Context()
 
 	driveID := driveid.New(engineTestDriveID)
-	seedBaseline(t, eng.baseline, ctx, []synctypes.Outcome{{
-		Action:          synctypes.ActionDownload,
+	seedBaseline(t, eng.baseline, ctx, []ExecutionResult{{
+		Action:          ActionDownload,
 		Success:         true,
 		Path:            "recheck-delete.txt",
 		DriveID:         driveID,
@@ -175,11 +175,11 @@ func TestRunWatchStep_RecheckWakeStaysPendingUntilOutboxDrains(t *testing.T) {
 		RemoteSize:      10,
 		RemoteSizeKnown: true,
 	}}, "")
-	require.NoError(t, eng.baseline.UpsertHeldDeletes(ctx, []synctypes.HeldDeleteRecord{{
+	require.NoError(t, eng.baseline.UpsertHeldDeletes(ctx, []HeldDeleteRecord{{
 		DriveID:       driveID,
 		ItemID:        "recheck-item",
 		Path:          "recheck-delete.txt",
-		ActionType:    synctypes.ActionRemoteDelete,
+		ActionType:    ActionRemoteDelete,
 		State:         synctypes.HeldDeleteStateHeld,
 		HeldAt:        1,
 		LastPlannedAt: 1,
@@ -201,18 +201,18 @@ func TestRunWatchStep_RecheckWakeStaysPendingUntilOutboxDrains(t *testing.T) {
 	p := &watchPipeline{
 		bl:       bl,
 		safety:   safety,
-		mode:     synctypes.SyncBidirectional,
+		mode:     SyncBidirectional,
 		recheckC: recheckC,
 	}
 
-	busy := testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{
-		Type:    synctypes.ActionUpload,
+	busy := testWatchRuntime(t, eng).depGraph.Add(&Action{
+		Type:    ActionUpload,
 		Path:    "busy-recheck.txt",
 		DriveID: driveID,
 	}, 100, nil)
 	require.NotNil(t, busy)
 	testWatchRuntime(t, eng).dispatchCh = nil
-	testWatchRuntime(t, eng).replaceOutbox([]*synctypes.TrackedAction{busy})
+	testWatchRuntime(t, eng).replaceOutbox([]*TrackedAction{busy})
 
 	shuttingDown, err := testWatchRuntime(t, eng).runWatchStep(ctx, p)
 	require.NoError(t, err)
@@ -221,7 +221,7 @@ func TestRunWatchStep_RecheckWakeStaysPendingUntilOutboxDrains(t *testing.T) {
 	require.Len(t, outbox, 1, "recheck-triggered user intent should stay pending while outbox work remains")
 	assert.Equal(t, "busy-recheck.txt", outbox[0].Action.Path)
 
-	dispatchCh := make(chan *synctypes.TrackedAction, 1)
+	dispatchCh := make(chan *TrackedAction, 1)
 	testWatchRuntime(t, eng).dispatchCh = dispatchCh
 
 	p.recheckC = nil
@@ -242,7 +242,7 @@ func TestRunWatchStep_RecheckWakeStaysPendingUntilOutboxDrains(t *testing.T) {
 	outbox = testWatchRuntime(t, eng).currentOutbox()
 
 	require.Len(t, outbox, 1)
-	assert.Equal(t, synctypes.ActionRemoteDelete, outbox[0].Action.Type)
+	assert.Equal(t, ActionRemoteDelete, outbox[0].Action.Type)
 	assert.Equal(t, "recheck-delete.txt", outbox[0].Action.Path)
 	assert.False(t, testWatchRuntime(t, eng).userIntentPending)
 }
@@ -262,7 +262,7 @@ func TestRunWatchStep_UserIntentWakeStaysPendingUntilInFlightCompletes(t *testin
 	p := &watchPipeline{
 		bl:          bl,
 		safety:      safety,
-		mode:        synctypes.SyncBidirectional,
+		mode:        SyncBidirectional,
 		userIntentC: userIntentC,
 	}
 
@@ -299,7 +299,7 @@ func TestRunWatchStep_RepeatedUserIntentWakesCoalesceWhileInFlight(t *testing.T)
 	p := &watchPipeline{
 		bl:          bl,
 		safety:      safety,
-		mode:        synctypes.SyncBidirectional,
+		mode:        SyncBidirectional,
 		userIntentC: userIntentC,
 	}
 
@@ -339,7 +339,7 @@ func TestRunWatchStep_RecheckAndUserIntentWakeCoalesceWhenBothReady(t *testing.T
 	p := &watchPipeline{
 		bl:          bl,
 		safety:      safety,
-		mode:        synctypes.SyncBidirectional,
+		mode:        SyncBidirectional,
 		recheckC:    recheckC,
 		userIntentC: userIntentC,
 	}
@@ -372,15 +372,15 @@ func TestRunWatchStep_WorkerResultCompletionAdmitsPendingUserIntent(t *testing.T
 	ctx := t.Context()
 
 	bl, safety := seedApprovedHeldDelete(t, eng, ctx, "delete-on-result.txt", "item-result")
-	busy := testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{
-		Type:    synctypes.ActionUpload,
+	busy := testWatchRuntime(t, eng).depGraph.Add(&Action{
+		Type:    ActionUpload,
 		Path:    "busy-result.txt",
 		DriveID: driveid.New(engineTestDriveID),
 	}, 104, nil)
 	require.NotNil(t, busy)
 
-	results := make(chan synctypes.WorkerResult, 1)
-	results <- synctypes.WorkerResult{
+	results := make(chan WorkerResult, 1)
+	results <- WorkerResult{
 		ActionID:   busy.ID,
 		ActionType: busy.Action.Type,
 		Path:       busy.Action.Path,
@@ -391,7 +391,7 @@ func TestRunWatchStep_WorkerResultCompletionAdmitsPendingUserIntent(t *testing.T
 	p := &watchPipeline{
 		bl:      bl,
 		safety:  safety,
-		mode:    synctypes.SyncBidirectional,
+		mode:    SyncBidirectional,
 		results: results,
 	}
 
@@ -420,7 +420,7 @@ func TestRunWatchStep_DrainDoesNotAdmitPendingUserIntent(t *testing.T) {
 	p := &watchPipeline{
 		bl:     bl,
 		safety: safety,
-		mode:   synctypes.SyncBidirectional,
+		mode:   SyncBidirectional,
 	}
 
 	shuttingDown, err := testWatchRuntime(t, eng).runWatchStep(ctx, p)

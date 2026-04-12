@@ -4,34 +4,55 @@ package sync
 // sync package's engine, observer, planner, and executor tests.
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	stdsync "sync"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // testDriveID is the canonical drive ID used by engine tests.
 const testDriveID = synctest.TestDriveID
 
-// emptyBaseline returns a synctypes.Baseline with initialized but empty maps.
-func emptyBaseline() *synctypes.Baseline {
-	return synctest.EmptyBaseline()
+// emptyBaseline returns a Baseline with initialized but empty maps.
+func emptyBaseline() *Baseline {
+	return syncstore.NewBaselineForTest(nil)
 }
 
-// baselineWith creates a synctypes.Baseline pre-populated with the given entries.
-func baselineWith(entries ...*synctypes.BaselineEntry) *synctypes.Baseline {
-	return synctest.BaselineWith(entries...)
+// baselineWith creates a Baseline pre-populated with the given entries.
+func baselineWith(entries ...*BaselineEntry) *Baseline {
+	return syncstore.NewBaselineForTest(entries)
+}
+
+// newBaselineForTest seeds a baseline using the store-owned test helper so
+// sync tests stay aligned with the current baseline owner.
+func newBaselineForTest(entries []*BaselineEntry) *Baseline {
+	return syncstore.NewBaselineForTest(entries)
+}
+
+// actionsOfType filters a flat action list to a single type.
+func actionsOfType(actions []Action, actionType ActionType) []Action {
+	var result []Action
+
+	for i := range actions {
+		if actions[i].Type == actionType {
+			result = append(result, actions[i])
+		}
+	}
+
+	return result
 }
 
 // testLogger returns a *slog.Logger wired to t.Log for clean test output.
@@ -61,7 +82,17 @@ func mustOpenSyncTree(t *testing.T, path string) *synctree.Root {
 // engine tests that need database access (shortcut storage, etc.).
 func newTestManager(t *testing.T) *syncstore.SyncStore {
 	t.Helper()
-	return synctest.NewTestStore(t)
+
+	ctx := synctest.TestContext(t)
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	mgr, err := syncstore.NewSyncStore(ctx, dbPath, synctest.TestLogger(t))
+	require.NoError(t, err, "NewSyncStore(%q)", dbPath)
+
+	t.Cleanup(func() {
+		assert.NoError(t, mgr.Close(context.Background()), "Close()")
+	})
+
+	return mgr
 }
 
 // discardLogger returns a logger that writes to nowhere, suitable for tests.

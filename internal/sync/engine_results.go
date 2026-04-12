@@ -5,8 +5,6 @@ import (
 	"log/slog"
 	"sort"
 	"time"
-
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 type failureSummaryEntry struct {
@@ -68,7 +66,7 @@ func (rt *watchRuntime) retryTimerChan() <-chan struct{} {
 // recordError increments the failed counter, preserves the raw error for the
 // final SyncReport, and records the classified transient-failure shape needed
 // for end-of-pass WARN aggregation.
-func (f *engineFlow) recordError(decision *ResultDecision, r *synctypes.WorkerResult) {
+func (f *engineFlow) recordError(decision *ResultDecision, r *WorkerResult) {
 	f.failed++
 	if r == nil {
 		return

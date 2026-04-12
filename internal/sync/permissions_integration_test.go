@@ -16,7 +16,7 @@ import (
 func startDrainLoopForEngine(
 	t *testing.T,
 	eng *testEngine,
-) (chan synctypes.WorkerResult, <-chan struct{}, context.CancelFunc) {
+) (chan WorkerResult, <-chan struct{}, context.CancelFunc) {
 	t.Helper()
 
 	rt, ok := lookupTestWatchRuntime(eng)
@@ -28,12 +28,12 @@ func startDrainLoopForEngine(
 		rt.buf = NewBuffer(eng.logger)
 	}
 
-	results := make(chan synctypes.WorkerResult, 16)
+	results := make(chan WorkerResult, 16)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
-	safety := synctypes.DefaultSafetyConfig()
+	safety := DefaultSafetyConfig()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -76,9 +76,9 @@ func TestRemotePermissionRecovery_RedispatchesHeldUploadWithoutNewObservation(t 
 		Observation:  synctypes.ObservationDelta,
 		DiscoveredAt: 1000,
 	}}
-	baselineEntries := []synctypes.Outcome{
+	baselineEntries := []ExecutionResult{
 		{
-			Action:   synctypes.ActionDownload,
+			Action:   ActionDownload,
 			Success:  true,
 			Path:     "Shared/TeamDocs",
 			DriveID:  driveid.New(remoteDriveID),
@@ -87,7 +87,7 @@ func TestRemotePermissionRecovery_RedispatchesHeldUploadWithoutNewObservation(t 
 			ItemType: synctypes.ItemTypeFolder,
 		},
 		{
-			Action:   synctypes.ActionDownload,
+			Action:   ActionDownload,
 			Success:  true,
 			Path:     boundaryPath,
 			DriveID:  driveid.New(remoteDriveID),
@@ -103,7 +103,7 @@ func TestRemotePermissionRecovery_RedispatchesHeldUploadWithoutNewObservation(t 
 	ctx := t.Context()
 	scopeKey := synctypes.SKPermRemote(boundaryPath)
 	recordRemoteBlockedFailure(t, eng, ctx, scopeKey, blockedPath)
-	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:       scopeKey,
 		IssueType: synctypes.IssueSharedFolderBlocked,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
@@ -125,7 +125,7 @@ func TestRemotePermissionRecovery_RedispatchesHeldUploadWithoutNewObservation(t 
 		return len(listRemoteBlockedFailures(t, eng, ctx)) == 0
 	}, 5*time.Second, 10*time.Millisecond, "remote-blocked issue rows should be cleared once permissions return")
 
-	var retried *synctypes.TrackedAction
+	var retried *TrackedAction
 	require.Eventually(t, func() bool {
 		select {
 		case retried = <-testWatchRuntime(t, eng).dispatchCh:
@@ -136,5 +136,5 @@ func TestRemotePermissionRecovery_RedispatchesHeldUploadWithoutNewObservation(t 
 	}, 5*time.Second, 10*time.Millisecond, "released shared-folder writes should be redispatched without any new observation event")
 
 	require.NotNil(t, retried)
-	assert.Equal(t, synctypes.ActionUpload, retried.Action.Type)
+	assert.Equal(t, ActionUpload, retried.Action.Type)
 }

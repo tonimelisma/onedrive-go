@@ -87,7 +87,7 @@ func resolvedObservedDirPath(fsPath string) (string, error) {
 	return filepath.Clean(resolved), nil
 }
 
-func shouldSkipObservedSymlink(isSymlink bool, filter synctypes.LocalFilterConfig) bool {
+func shouldSkipObservedSymlink(isSymlink bool, filter LocalFilterConfig) bool {
 	return isSymlink && filter.SkipSymlinks
 }
 
@@ -161,9 +161,9 @@ func (o *LocalObserver) walkFollowedDirectory(
 	fsPath string,
 	dbRelPath string,
 	observed map[string]bool,
-	events *[]synctypes.ChangeEvent,
+	events *[]ChangeEvent,
 	jobs *[]hashJob,
-	skipped *[]synctypes.SkippedItem,
+	skipped *[]SkippedItem,
 	scanStartNano int64,
 	dirStack map[string]struct{},
 ) error {
@@ -203,9 +203,9 @@ func (o *LocalObserver) walkObservedDirectory(
 	fsPath string,
 	dbRelPath string,
 	observed map[string]bool,
-	events *[]synctypes.ChangeEvent,
+	events *[]ChangeEvent,
 	jobs *[]hashJob,
-	skipped *[]synctypes.SkippedItem,
+	skipped *[]SkippedItem,
 	scanStartNano int64,
 	dirStack map[string]struct{},
 ) error {
@@ -241,9 +241,9 @@ func (o *LocalObserver) walkObservedEntries(
 	fsPath string,
 	dbRelPath string,
 	observed map[string]bool,
-	events *[]synctypes.ChangeEvent,
+	events *[]ChangeEvent,
 	jobs *[]hashJob,
-	skipped *[]synctypes.SkippedItem,
+	skipped *[]SkippedItem,
 	scanStartNano int64,
 	dirStack map[string]struct{},
 	stage string,
@@ -287,9 +287,9 @@ func (o *LocalObserver) walkObservedEntry(
 	parentRelPath string,
 	entry os.DirEntry,
 	observed map[string]bool,
-	events *[]synctypes.ChangeEvent,
+	events *[]ChangeEvent,
 	jobs *[]hashJob,
-	skipped *[]synctypes.SkippedItem,
+	skipped *[]SkippedItem,
 	scanStartNano int64,
 	dirStack map[string]struct{},
 	stage string,
@@ -572,9 +572,9 @@ func (o *LocalObserver) processSymlinkPath(
 	dbRelPath string,
 	name string,
 	observed map[string]bool,
-	events *[]synctypes.ChangeEvent,
+	events *[]ChangeEvent,
 	jobs *[]hashJob,
-	skipped *[]synctypes.SkippedItem,
+	skipped *[]SkippedItem,
 	scanStartNano int64,
 	dirStack map[string]struct{},
 ) error {

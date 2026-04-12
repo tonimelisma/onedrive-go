@@ -19,7 +19,7 @@ func TestScope_429FallbackInterval(t *testing.T) {
 	ss := NewScopeState(clock, discardLogger())
 
 	// 429 without Retry-After should use the defaultInitialTrialInterval fallback.
-	r := synctypes.WorkerResult{
+	r := WorkerResult{
 		Path:          "/file-a.txt",
 		HTTPStatus:    429,
 		TargetDriveID: driveid.New("0000000000000001"),
@@ -66,7 +66,7 @@ func TestScope_ImmediateRetryAfterBlocks(t *testing.T) {
 			clock, _ := controllableClock()
 			ss := NewScopeState(clock, discardLogger())
 
-			result := ss.UpdateScope(&synctypes.WorkerResult{
+			result := ss.UpdateScope(&WorkerResult{
 				Path:          tt.path,
 				HTTPStatus:    tt.status,
 				RetryAfter:    tt.retryAfter,
@@ -90,7 +90,7 @@ func TestScope_503WithoutRetryAfter(t *testing.T) {
 
 	// A 503 without Retry-After should feed the service sliding window,
 	// not trigger an immediate block (it falls into the >= 500 case).
-	r := synctypes.WorkerResult{
+	r := WorkerResult{
 		Path:       "/doc.docx",
 		HTTPStatus: 503,
 	}
@@ -109,7 +109,7 @@ func TestScope_507OwnDrive(t *testing.T) {
 	// Three unique paths within the quota window should trigger quota:own.
 	paths := []string{"/a.txt", "/b.txt", "/c.txt"}
 	for i, p := range paths {
-		r := synctypes.WorkerResult{
+		r := WorkerResult{
 			Path:       p,
 			HTTPStatus: 507,
 		}
@@ -136,7 +136,7 @@ func TestScope_507Shortcut(t *testing.T) {
 	shortcutKey := "abc123:item456"
 	paths := []string{"/shared/x.doc", "/shared/y.doc", "/shared/z.doc"}
 	for i, p := range paths {
-		r := synctypes.WorkerResult{
+		r := WorkerResult{
 			Path:        p,
 			HTTPStatus:  507,
 			ShortcutKey: shortcutKey,
@@ -166,7 +166,7 @@ func TestScope_507IndependentShortcuts(t *testing.T) {
 
 	// Feed two failures on shortcut A — not enough to trigger.
 	for _, p := range []string{"/shared-a/1.txt", "/shared-a/2.txt"} {
-		r := synctypes.WorkerResult{Path: p, HTTPStatus: 507, ShortcutKey: keyA}
+		r := WorkerResult{Path: p, HTTPStatus: 507, ShortcutKey: keyA}
 		result := ss.UpdateScope(&r)
 		assert.False(t, result.Block)
 		advance(1 * time.Second)
@@ -174,7 +174,7 @@ func TestScope_507IndependentShortcuts(t *testing.T) {
 
 	// Feed three failures on shortcut B — should trigger block for B only.
 	for i, p := range []string{"/shared-b/1.txt", "/shared-b/2.txt", "/shared-b/3.txt"} {
-		r := synctypes.WorkerResult{Path: p, HTTPStatus: 507, ShortcutKey: keyB}
+		r := WorkerResult{Path: p, HTTPStatus: 507, ShortcutKey: keyB}
 		result := ss.UpdateScope(&r)
 		if i < 2 {
 			assert.False(t, result.Block)
@@ -188,7 +188,7 @@ func TestScope_507IndependentShortcuts(t *testing.T) {
 	// One more failure on shortcut A — still at 2 unique paths after B
 	// triggered, so A must not block (only 3 unique paths needed but we
 	// only have 2 for A).
-	rA3 := synctypes.WorkerResult{Path: "/shared-a/3.txt", HTTPStatus: 507, ShortcutKey: keyA}
+	rA3 := WorkerResult{Path: "/shared-a/3.txt", HTTPStatus: 507, ShortcutKey: keyA}
 	resultA3 := ss.UpdateScope(&rA3)
 	require.True(t, resultA3.Block, "third unique path on shortcut A should now trigger")
 	assert.Equal(t, synctypes.SKQuotaShortcut(keyA), resultA3.ScopeKey,
@@ -205,7 +205,7 @@ func TestScope_5xxSlidingWindow(t *testing.T) {
 	// Five unique paths with 5xx within 30s must trigger a service block.
 	paths := []string{"/a.txt", "/b.txt", "/c.txt", "/d.txt", "/e.txt"}
 	for i, p := range paths {
-		r := synctypes.WorkerResult{
+		r := WorkerResult{
 			Path:       p,
 			HTTPStatus: 500,
 		}
@@ -233,7 +233,7 @@ func TestScope_5xxWindowExpiry(t *testing.T) {
 	// failure after expiry must NOT trigger a block because the earlier
 	// entries have aged out.
 	for _, p := range []string{"/a.txt", "/b.txt", "/c.txt", "/d.txt"} {
-		r := synctypes.WorkerResult{Path: p, HTTPStatus: 500}
+		r := WorkerResult{Path: p, HTTPStatus: 500}
 		result := ss.UpdateScope(&r)
 		assert.False(t, result.Block)
 		advance(1 * time.Second)
@@ -242,7 +242,7 @@ func TestScope_5xxWindowExpiry(t *testing.T) {
 	// Advance past the 30s window so the first entries expire.
 	advance(30 * time.Second)
 
-	r := synctypes.WorkerResult{Path: "/e.txt", HTTPStatus: 500}
+	r := WorkerResult{Path: "/e.txt", HTTPStatus: 500}
 	result := ss.UpdateScope(&r)
 	assert.False(t, result.Block, "entries from before the window should have expired")
 }
@@ -256,27 +256,27 @@ func TestScope_SuccessResetsWindow(t *testing.T) {
 
 	// Accumulate two 507 failures on own drive.
 	for _, p := range []string{"/a.txt", "/b.txt"} {
-		r := synctypes.WorkerResult{Path: p, HTTPStatus: 507}
+		r := WorkerResult{Path: p, HTTPStatus: 507}
 		result := ss.UpdateScope(&r)
 		assert.False(t, result.Block)
 		advance(1 * time.Second)
 	}
 
 	// Record a success — this must reset the quota:own window.
-	ss.RecordSuccess(&synctypes.WorkerResult{Path: "/ok.txt"})
+	ss.RecordSuccess(&WorkerResult{Path: "/ok.txt"})
 
 	// Now three more unique failures are needed to trigger the block.
 	// The next failure (3rd unique path overall but 1st after reset)
 	// must NOT trigger.
 	for i, p := range []string{"/c.txt", "/d.txt"} {
-		r := synctypes.WorkerResult{Path: p, HTTPStatus: 507}
+		r := WorkerResult{Path: p, HTTPStatus: 507}
 		result := ss.UpdateScope(&r)
 		assert.False(t, result.Block, "after reset, path %d should not trigger", i)
 		advance(1 * time.Second)
 	}
 
 	// Third unique path after reset should trigger.
-	r := synctypes.WorkerResult{Path: "/e.txt", HTTPStatus: 507}
+	r := WorkerResult{Path: "/e.txt", HTTPStatus: 507}
 	result := ss.UpdateScope(&r)
 	require.True(t, result.Block, "third unique path after reset should trigger quota:own")
 	assert.Equal(t, synctypes.SKQuotaOwn(), result.ScopeKey)
@@ -293,23 +293,23 @@ func TestScope_SuccessResetsShortcutWindow(t *testing.T) {
 
 	// Two failures on a shortcut.
 	for _, p := range []string{"/sh/a.txt", "/sh/b.txt"} {
-		r := synctypes.WorkerResult{Path: p, HTTPStatus: 507, ShortcutKey: shortcutKey}
+		r := WorkerResult{Path: p, HTTPStatus: 507, ShortcutKey: shortcutKey}
 		ss.UpdateScope(&r)
 		advance(1 * time.Second)
 	}
 
 	// Success on same shortcut resets its window.
-	ss.RecordSuccess(&synctypes.WorkerResult{Path: "/sh/ok.txt", ShortcutKey: shortcutKey})
+	ss.RecordSuccess(&WorkerResult{Path: "/sh/ok.txt", ShortcutKey: shortcutKey})
 
 	// Need three fresh unique paths to trigger again.
 	for _, p := range []string{"/sh/c.txt", "/sh/d.txt"} {
-		r := synctypes.WorkerResult{Path: p, HTTPStatus: 507, ShortcutKey: shortcutKey}
+		r := WorkerResult{Path: p, HTTPStatus: 507, ShortcutKey: shortcutKey}
 		result := ss.UpdateScope(&r)
 		assert.False(t, result.Block)
 		advance(1 * time.Second)
 	}
 
-	r := synctypes.WorkerResult{Path: "/sh/e.txt", HTTPStatus: 507, ShortcutKey: shortcutKey}
+	r := WorkerResult{Path: "/sh/e.txt", HTTPStatus: 507, ShortcutKey: shortcutKey}
 	result := ss.UpdateScope(&r)
 	require.True(t, result.Block)
 	assert.Equal(t, synctypes.SKQuotaShortcut(shortcutKey), result.ScopeKey)
@@ -327,7 +327,7 @@ func TestScope_SameFileDoesNotEscalate(t *testing.T) {
 
 	// Feed 10 failures on the same path — should never trigger.
 	for i := range 10 {
-		r := synctypes.WorkerResult{
+		r := WorkerResult{
 			Path:       "/same-file.txt",
 			HTTPStatus: 507,
 		}
@@ -360,7 +360,7 @@ func TestScope_NonScopeStatusReturnsEmpty(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r := synctypes.WorkerResult{Path: "/file.txt", HTTPStatus: tc.status}
+			r := WorkerResult{Path: "/file.txt", HTTPStatus: tc.status}
 			result := ss.UpdateScope(&r)
 			assert.False(t, result.Block, "status %d should not trigger a scope block", tc.status)
 			assert.Empty(t, result.ScopeKey)
@@ -380,18 +380,18 @@ func TestScope_SuccessResetsServiceWindow(t *testing.T) {
 
 	// Four 5xx failures — one short of triggering.
 	for _, p := range []string{"/a.txt", "/b.txt", "/c.txt", "/d.txt"} {
-		r := synctypes.WorkerResult{Path: p, HTTPStatus: 500}
+		r := WorkerResult{Path: p, HTTPStatus: 500}
 		result := ss.UpdateScope(&r)
 		assert.False(t, result.Block)
 		advance(1 * time.Second)
 	}
 
 	// Success resets the service window.
-	ss.RecordSuccess(&synctypes.WorkerResult{Path: "/ok.txt"})
+	ss.RecordSuccess(&WorkerResult{Path: "/ok.txt"})
 
 	// Now we need five fresh unique paths to trigger again.
 	// The next failure (5th overall but 1st after reset) must not trigger.
-	r := synctypes.WorkerResult{Path: "/e.txt", HTTPStatus: 500}
+	r := WorkerResult{Path: "/e.txt", HTTPStatus: 500}
 	result := ss.UpdateScope(&r)
 	assert.False(t, result.Block, "first failure after service window reset should not trigger")
 }
@@ -561,45 +561,45 @@ func TestScopeKey_BlocksAction(t *testing.T) {
 		path            string
 		throttleTarget  string
 		shortcutKey     string
-		actionType      synctypes.ActionType
+		actionType      ActionType
 		targetsOwnDrive bool
 		want            bool
 	}{
 		// Global scopes block everything.
-		{"legacy throttle blocks upload", synctypes.SKThrottleAccount(), "/a.txt", "", "", synctypes.ActionUpload, true, true},
-		{"legacy throttle blocks download", synctypes.SKThrottleAccount(), "/a.txt", "", "", synctypes.ActionDownload, true, true},
-		{"drive throttle blocks matching drive", synctypes.SKThrottleDrive(driveid.New("0000000000000001")), "/a.txt", "drive:0000000000000001", "", synctypes.ActionUpload, true, true},
-		{"drive throttle passes other drive", synctypes.SKThrottleDrive(driveid.New("0000000000000001")), "/a.txt", "drive:0000000000000002", "", synctypes.ActionUpload, true, false},
-		{"shared throttle blocks matching shared target", synctypes.SKThrottleShared("driveA", "itemB"), "/a.txt", "shared:driveA:itemB", "driveA:itemB", synctypes.ActionUpload, false, true},
-		{"shared throttle passes other shared target", synctypes.SKThrottleShared("driveA", "itemB"), "/a.txt", "shared:driveA:itemC", "driveA:itemC", synctypes.ActionUpload, false, false},
-		{"service blocks all", synctypes.SKService(), "/a.txt", "", "sc:1", synctypes.ActionUpload, false, true},
+		{"legacy throttle blocks upload", synctypes.SKThrottleAccount(), "/a.txt", "", "", ActionUpload, true, true},
+		{"legacy throttle blocks download", synctypes.SKThrottleAccount(), "/a.txt", "", "", ActionDownload, true, true},
+		{"drive throttle blocks matching drive", synctypes.SKThrottleDrive(driveid.New("0000000000000001")), "/a.txt", "drive:0000000000000001", "", ActionUpload, true, true},
+		{"drive throttle passes other drive", synctypes.SKThrottleDrive(driveid.New("0000000000000001")), "/a.txt", "drive:0000000000000002", "", ActionUpload, true, false},
+		{"shared throttle blocks matching shared target", synctypes.SKThrottleShared("driveA", "itemB"), "/a.txt", "shared:driveA:itemB", "driveA:itemB", ActionUpload, false, true},
+		{"shared throttle passes other shared target", synctypes.SKThrottleShared("driveA", "itemB"), "/a.txt", "shared:driveA:itemC", "driveA:itemC", ActionUpload, false, false},
+		{"service blocks all", synctypes.SKService(), "/a.txt", "", "sc:1", ActionUpload, false, true},
 
 		// Disk:local blocks downloads only.
-		{"disk blocks download", synctypes.SKDiskLocal(), "/a.txt", "", "", synctypes.ActionDownload, true, true},
-		{"disk passes upload", synctypes.SKDiskLocal(), "/a.txt", "", "", synctypes.ActionUpload, true, false},
+		{"disk blocks download", synctypes.SKDiskLocal(), "/a.txt", "", "", ActionDownload, true, true},
+		{"disk passes upload", synctypes.SKDiskLocal(), "/a.txt", "", "", ActionUpload, true, false},
 
 		// Quota:own blocks own-drive uploads.
-		{"quota own blocks own upload", synctypes.SKQuotaOwn(), "/a.txt", "", "", synctypes.ActionUpload, true, true},
-		{"quota own passes download", synctypes.SKQuotaOwn(), "/a.txt", "", "", synctypes.ActionDownload, true, false},
-		{"quota own passes shortcut upload", synctypes.SKQuotaOwn(), "/a.txt", "", "sc:1", synctypes.ActionUpload, false, false},
+		{"quota own blocks own upload", synctypes.SKQuotaOwn(), "/a.txt", "", "", ActionUpload, true, true},
+		{"quota own passes download", synctypes.SKQuotaOwn(), "/a.txt", "", "", ActionDownload, true, false},
+		{"quota own passes shortcut upload", synctypes.SKQuotaOwn(), "/a.txt", "", "sc:1", ActionUpload, false, false},
 
 		// Quota:shortcut blocks matching shortcut uploads.
-		{"shortcut blocks matching upload", synctypes.SKQuotaShortcut("sc:1"), "/a.txt", "", "sc:1", synctypes.ActionUpload, false, true},
-		{"shortcut passes wrong shortcut", synctypes.SKQuotaShortcut("sc:1"), "/a.txt", "", "sc:2", synctypes.ActionUpload, false, false},
-		{"shortcut passes download", synctypes.SKQuotaShortcut("sc:1"), "/a.txt", "", "sc:1", synctypes.ActionDownload, false, false},
+		{"shortcut blocks matching upload", synctypes.SKQuotaShortcut("sc:1"), "/a.txt", "", "sc:1", ActionUpload, false, true},
+		{"shortcut passes wrong shortcut", synctypes.SKQuotaShortcut("sc:1"), "/a.txt", "", "sc:2", ActionUpload, false, false},
+		{"shortcut passes download", synctypes.SKQuotaShortcut("sc:1"), "/a.txt", "", "sc:1", ActionDownload, false, false},
 
 		// Perm:dir blocks paths under the directory.
-		{"perm blocks exact dir", synctypes.SKPermDir("Private"), "Private", "", "", synctypes.ActionUpload, true, true},
-		{"perm blocks subpath", synctypes.SKPermDir("Private"), "Private/secret.txt", "", "", synctypes.ActionUpload, true, true},
-		{"perm passes outside", synctypes.SKPermDir("Private"), "Public/readme.txt", "", "", synctypes.ActionUpload, true, false},
+		{"perm blocks exact dir", synctypes.SKPermDir("Private"), "Private", "", "", ActionUpload, true, true},
+		{"perm blocks subpath", synctypes.SKPermDir("Private"), "Private/secret.txt", "", "", ActionUpload, true, true},
+		{"perm passes outside", synctypes.SKPermDir("Private"), "Public/readme.txt", "", "", ActionUpload, true, false},
 
 		// Perm:remote blocks remote mutations recursively, but still allows downloads/local-only work.
-		{"perm remote blocks upload", synctypes.SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", "", synctypes.ActionUpload, false, true},
-		{"perm remote blocks nested remote delete", synctypes.SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/nested/file.txt", "", "", synctypes.ActionRemoteDelete, false, true},
-		{"perm remote blocks folder create", synctypes.SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/newdir", "", "", synctypes.ActionFolderCreate, false, true},
-		{"perm remote passes download", synctypes.SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", "", synctypes.ActionDownload, false, false},
-		{"perm remote passes local delete", synctypes.SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", "", synctypes.ActionLocalDelete, false, false},
-		{"perm remote passes outside", synctypes.SKPermRemote("Shared/TeamDocs"), "Shared/Other/file.txt", "", "", synctypes.ActionUpload, false, false},
+		{"perm remote blocks upload", synctypes.SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", "", ActionUpload, false, true},
+		{"perm remote blocks nested remote delete", synctypes.SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/nested/file.txt", "", "", ActionRemoteDelete, false, true},
+		{"perm remote blocks folder create", synctypes.SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/newdir", "", "", ActionFolderCreate, false, true},
+		{"perm remote passes download", synctypes.SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", "", ActionDownload, false, false},
+		{"perm remote passes local delete", synctypes.SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", "", ActionLocalDelete, false, false},
+		{"perm remote passes outside", synctypes.SKPermRemote("Shared/TeamDocs"), "Shared/Other/file.txt", "", "", ActionUpload, false, false},
 	}
 
 	for _, tt := range tests {

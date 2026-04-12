@@ -27,7 +27,7 @@ const (
 func TestNewPrimaryConverter_EnablesVaultAndShortcutDetect(t *testing.T) {
 	t.Parallel()
 
-	bl := synctest.EmptyBaseline()
+	bl := emptyBaseline()
 	driveID := driveid.New(synctest.TestDriveID)
 	stats := &ObserverCounters{}
 
@@ -43,7 +43,7 @@ func TestNewPrimaryConverter_EnablesVaultAndShortcutDetect(t *testing.T) {
 func TestNewShortcutConverter_EnablesShortcutBehavior(t *testing.T) {
 	t.Parallel()
 
-	bl := synctest.EmptyBaseline()
+	bl := emptyBaseline()
 	remoteDriveID := driveid.New("0000000000000099")
 	sc := &synctypes.Shortcut{
 		ItemID:      "sc-1",
@@ -98,7 +98,7 @@ func TestShortcutConverter_NFCNormalization(t *testing.T) {
 		},
 	}
 
-	events := ConvertShortcutItems(items, sc, remoteDriveID, synctest.EmptyBaseline(), synctest.TestLogger(t))
+	events := ConvertShortcutItems(items, sc, remoteDriveID, emptyBaseline(), synctest.TestLogger(t))
 
 	require.Len(t, events, 1)
 	assert.Equal(t, nfc, events[0].Name, "shortcut items should be NFC-normalized")
@@ -122,7 +122,7 @@ func TestShortcutConverter_MoveDetection(t *testing.T) {
 	}
 
 	// File was at SharedFolder/old-name.txt, now renamed to new-name.txt.
-	bl := synctest.BaselineWith(&synctypes.BaselineEntry{
+	bl := baselineWith(&BaselineEntry{
 		Path:    "SharedFolder/old-name.txt",
 		DriveID: remoteDriveID,
 		ItemID:  shortcutTestFileItemID,
@@ -159,15 +159,15 @@ func TestShortcutConverter_SparseRenameReusesBaselineDirectory(t *testing.T) {
 		LocalPath:   "SharedFolder",
 	}
 
-	bl := synctest.BaselineWith(
-		&synctypes.BaselineEntry{
+	bl := baselineWith(
+		&BaselineEntry{
 			Path:     "SharedFolder/Subdir",
 			DriveID:  remoteDriveID,
 			ItemID:   "subdir",
 			ParentID: "scope-root",
 			ItemType: synctypes.ItemTypeFolder,
 		},
-		&synctypes.BaselineEntry{
+		&BaselineEntry{
 			Path:     "SharedFolder/Subdir/old-name.txt",
 			DriveID:  remoteDriveID,
 			ItemID:   shortcutTestFileItemID,
@@ -207,22 +207,22 @@ func TestShortcutConverter_DescendantFollowsSparseMovedParentWithOmittedName(t *
 		LocalPath:   "SharedFolder",
 	}
 
-	bl := synctest.BaselineWith(
-		&synctypes.BaselineEntry{
+	bl := baselineWith(
+		&BaselineEntry{
 			Path:     "SharedFolder/FolderA",
 			DriveID:  remoteDriveID,
 			ItemID:   "folder-a",
 			ParentID: "scope-root",
 			ItemType: synctypes.ItemTypeFolder,
 		},
-		&synctypes.BaselineEntry{
+		&BaselineEntry{
 			Path:     "SharedFolder/FolderB",
 			DriveID:  remoteDriveID,
 			ItemID:   "folder-b",
 			ParentID: "scope-root",
 			ItemType: synctypes.ItemTypeFolder,
 		},
-		&synctypes.BaselineEntry{
+		&BaselineEntry{
 			Path:     "SharedFolder/FolderA/report.txt",
 			DriveID:  remoteDriveID,
 			ItemID:   shortcutTestFileItemID,
@@ -241,7 +241,7 @@ func TestShortcutConverter_DescendantFollowsSparseMovedParentWithOmittedName(t *
 
 	events := ConvertShortcutItems(items, sc, remoteDriveID, bl, synctest.TestLogger(t))
 
-	var fileEvent *synctypes.ChangeEvent
+	var fileEvent *ChangeEvent
 	for i := range events {
 		if events[i].ItemID == shortcutTestFileItemID {
 			fileEvent = &events[i]
@@ -272,7 +272,7 @@ func TestShortcutConverter_DeletedItemNameRecovery(t *testing.T) {
 		LocalPath:   "SharedFolder",
 	}
 
-	bl := synctest.BaselineWith(&synctypes.BaselineEntry{
+	bl := baselineWith(&BaselineEntry{
 		Path:    "SharedFolder/budget.xlsx",
 		DriveID: remoteDriveID,
 		ItemID:  shortcutTestFileItemID,
@@ -324,7 +324,7 @@ func TestShortcutConverter_OrphanWarning(t *testing.T) {
 		},
 	}
 
-	events := ConvertShortcutItems(items, sc, remoteDriveID, synctest.EmptyBaseline(), synctest.TestLogger(t))
+	events := ConvertShortcutItems(items, sc, remoteDriveID, emptyBaseline(), synctest.TestLogger(t))
 
 	require.Len(t, events, 1)
 	assert.Equal(t, synctypes.ChangeCreate, events[0].Type)
@@ -366,7 +366,7 @@ func TestShortcutConverter_PathPrefix(t *testing.T) {
 		},
 	}
 
-	events := ConvertShortcutItems(items, sc, remoteDriveID, synctest.EmptyBaseline(), synctest.TestLogger(t))
+	events := ConvertShortcutItems(items, sc, remoteDriveID, emptyBaseline(), synctest.TestLogger(t))
 
 	require.Len(t, events, 2)
 	assert.Equal(t, "Deep/Nested/Path/SubDir", events[0].Path)
@@ -405,7 +405,7 @@ func TestShortcutConverter_ScopeRootSkip(t *testing.T) {
 		},
 	}
 
-	events := ConvertShortcutItems(items, sc, remoteDriveID, synctest.EmptyBaseline(), synctest.TestLogger(t))
+	events := ConvertShortcutItems(items, sc, remoteDriveID, emptyBaseline(), synctest.TestLogger(t))
 
 	require.Len(t, events, 1)
 	assert.Equal(t, shortcutTestFileItemID, events[0].ItemID, "only the child should produce an event")
@@ -437,7 +437,7 @@ func TestShortcutConverter_NestedShortcutSkip(t *testing.T) {
 		},
 	}
 
-	events := ConvertShortcutItems(items, sc, remoteDriveID, synctest.EmptyBaseline(), synctest.TestLogger(t))
+	events := ConvertShortcutItems(items, sc, remoteDriveID, emptyBaseline(), synctest.TestLogger(t))
 
 	require.Len(t, events, 1)
 	assert.Equal(t, shortcutTestFileItemID, events[0].ItemID)
@@ -453,7 +453,7 @@ func TestPrimaryConverter_VaultExclusion(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(synctest.TestDriveID)
-	bl := synctest.EmptyBaseline()
+	bl := emptyBaseline()
 	c := NewPrimaryConverter(bl, driveID, synctest.TestLogger(t), &ObserverCounters{})
 
 	inflight := map[driveid.ItemKey]InflightParent{
@@ -491,7 +491,7 @@ func TestPrimaryConverter_ShortcutDetection(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(synctest.TestDriveID)
-	bl := synctest.EmptyBaseline()
+	bl := emptyBaseline()
 	c := NewPrimaryConverter(bl, driveID, synctest.TestLogger(t), &ObserverCounters{})
 
 	inflight := map[driveid.ItemKey]InflightParent{
@@ -518,7 +518,7 @@ func TestPrimaryConverter_ShortcutDetection_NoFolderFacet(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(synctest.TestDriveID)
-	bl := synctest.EmptyBaseline()
+	bl := emptyBaseline()
 	c := NewPrimaryConverter(bl, driveID, synctest.TestLogger(t), &ObserverCounters{})
 
 	inflight := map[driveid.ItemKey]InflightParent{
@@ -546,7 +546,7 @@ func TestPrimaryConverter_RegularFileNotShortcut(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(synctest.TestDriveID)
-	bl := synctest.EmptyBaseline()
+	bl := emptyBaseline()
 	c := NewPrimaryConverter(bl, driveID, synctest.TestLogger(t), &ObserverCounters{})
 
 	inflight := map[driveid.ItemKey]InflightParent{
@@ -570,7 +570,7 @@ func TestPrimaryConverter_NilStatsIsSafe(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(synctest.TestDriveID)
-	bl := synctest.EmptyBaseline()
+	bl := emptyBaseline()
 
 	// Create converter with nil stats (like shortcut converter).
 	c := &ItemConverter{
@@ -619,12 +619,12 @@ func TestConvertItems_TwoPassProcessing(t *testing.T) {
 		{ID: "d1", Name: "SubDir", ParentID: "scope-root", DriveID: remoteDriveID, IsFolder: true},
 	}
 
-	events := ConvertShortcutItems(items, sc, remoteDriveID, synctest.EmptyBaseline(), synctest.TestLogger(t))
+	events := ConvertShortcutItems(items, sc, remoteDriveID, emptyBaseline(), synctest.TestLogger(t))
 
 	require.Len(t, events, 2)
 
 	// Find the file event regardless of output order.
-	var fileEvent *synctypes.ChangeEvent
+	var fileEvent *ChangeEvent
 	for i := range events {
 		if events[i].ItemID == shortcutTestFileItemID {
 			fileEvent = &events[i]
@@ -659,7 +659,7 @@ func TestConvertItems_HashAndTimestamp(t *testing.T) {
 		},
 	}
 
-	events := ConvertShortcutItems(items, sc, remoteDriveID, synctest.EmptyBaseline(), synctest.TestLogger(t))
+	events := ConvertShortcutItems(items, sc, remoteDriveID, emptyBaseline(), synctest.TestLogger(t))
 
 	require.Len(t, events, 1)
 	assert.Equal(t, "qxh123", events[0].Hash)
@@ -685,7 +685,7 @@ func TestConvertShortcutItems_NilLogger(t *testing.T) {
 	}
 
 	// Should not panic with nil logger.
-	events := ConvertShortcutItems(items, sc, remoteDriveID, synctest.EmptyBaseline(), nil)
+	events := ConvertShortcutItems(items, sc, remoteDriveID, emptyBaseline(), nil)
 	require.Len(t, events, 1)
 }
 
@@ -708,7 +708,7 @@ func TestConvertShortcutItems_NilLoggerPassedDefault(t *testing.T) {
 	}
 
 	// nil logger falls back to slog.Default(), should not panic.
-	events := ConvertShortcutItems(items, sc, remoteDriveID, synctest.EmptyBaseline(), (*slog.Logger)(nil))
+	events := ConvertShortcutItems(items, sc, remoteDriveID, emptyBaseline(), (*slog.Logger)(nil))
 	require.Len(t, events, 1)
 }
 
@@ -732,7 +732,7 @@ func TestShortcutConverter_CrossSubfolderMove(t *testing.T) {
 	}
 
 	// Baseline: file was under Shared/FolderA.
-	bl := synctest.BaselineWith(&synctypes.BaselineEntry{
+	bl := baselineWith(&BaselineEntry{
 		Path:    "Shared/FolderA/file.txt",
 		DriveID: remoteDriveID,
 		ItemID:  shortcutTestFileItemID,
@@ -749,7 +749,7 @@ func TestShortcutConverter_CrossSubfolderMove(t *testing.T) {
 	events := ConvertShortcutItems(items, sc, remoteDriveID, bl, synctest.TestLogger(t))
 
 	// Find the file event (folders also produce events).
-	var fileEvent *synctypes.ChangeEvent
+	var fileEvent *ChangeEvent
 	for i := range events {
 		if events[i].ItemID == shortcutTestFileItemID {
 			fileEvent = &events[i]
@@ -789,12 +789,12 @@ func TestShortcutConverter_MixedDriveIDs(t *testing.T) {
 		{ID: "f2", Name: "cross.txt", ParentID: "scope-root", DriveID: crossDriveID, Size: 200},
 	}
 
-	events := ConvertShortcutItems(items, sc, remoteDriveID, synctest.EmptyBaseline(), synctest.TestLogger(t))
+	events := ConvertShortcutItems(items, sc, remoteDriveID, emptyBaseline(), synctest.TestLogger(t))
 
 	require.Len(t, events, 2)
 
 	// Build a map for order-independent assertions.
-	byID := make(map[string]*synctypes.ChangeEvent, 2)
+	byID := make(map[string]*ChangeEvent, 2)
 	for i := range events {
 		byID[events[i].ItemID] = &events[i]
 	}
@@ -834,7 +834,7 @@ func TestShortcutConverter_VaultItemsPassThrough(t *testing.T) {
 		},
 	}
 
-	events := ConvertShortcutItems(items, sc, remoteDriveID, synctest.EmptyBaseline(), synctest.TestLogger(t))
+	events := ConvertShortcutItems(items, sc, remoteDriveID, emptyBaseline(), synctest.TestLogger(t))
 
 	assert.Len(t, events, 2, "vault items should pass through in shortcut scope")
 }
@@ -861,7 +861,7 @@ func TestShortcutConverter_ContentEventsCarryShortcutIdentity(t *testing.T) {
 		{ID: "d1", Name: "SubDir", ParentID: "source-folder-1", DriveID: remoteDriveID, IsFolder: true},
 	}
 
-	events := ConvertShortcutItems(items, sc, remoteDriveID, synctest.EmptyBaseline(), synctest.TestLogger(t))
+	events := ConvertShortcutItems(items, sc, remoteDriveID, emptyBaseline(), synctest.TestLogger(t))
 
 	require.Len(t, events, 2)
 	for _, ev := range events {
@@ -877,7 +877,7 @@ func TestPrimaryConverter_ContentEventsHaveEmptyShortcutIdentity(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(synctest.TestDriveID)
-	bl := synctest.EmptyBaseline()
+	bl := emptyBaseline()
 	c := NewPrimaryConverter(bl, driveID, synctest.TestLogger(t), &ObserverCounters{})
 
 	inflight := map[driveid.ItemKey]InflightParent{

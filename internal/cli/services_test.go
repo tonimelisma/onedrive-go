@@ -69,9 +69,9 @@ func TestStatusService_Run_NoAccountsWritesGuidance(t *testing.T) {
 	setTestDriveHome(t)
 
 	var out bytes.Buffer
-	svc := newStatusService(newServiceContext(&out, t.TempDir()+"/missing-config.toml"))
+	cc := newServiceContext(&out, t.TempDir()+"/missing-config.toml")
 
-	require.NoError(t, svc.run(false))
+	require.NoError(t, runStatusCommand(cc, false))
 	assert.Contains(t, out.String(), "No accounts configured")
 }
 
@@ -80,9 +80,9 @@ func TestDriveService_RunAdd_NoSelectorWritesGuidance(t *testing.T) {
 	setTestDriveHome(t)
 
 	var out bytes.Buffer
-	svc := newDriveService(newServiceContext(&out, t.TempDir()+"/config.toml"))
+	cc := newServiceContext(&out, t.TempDir()+"/config.toml")
 
-	require.NoError(t, svc.runAdd(t.Context(), nil))
+	require.NoError(t, runDriveAddWithContext(t.Context(), cc, nil))
 	assert.Contains(t, out.String(), "drive add <canonical-id>")
 	assert.Contains(t, out.String(), "drive list")
 }
@@ -92,9 +92,9 @@ func TestDriveService_RunSearch_NoBusinessAccounts(t *testing.T) {
 	setTestDriveHome(t)
 
 	var out bytes.Buffer
-	svc := newDriveService(newServiceContext(&out, t.TempDir()+"/config.toml"))
+	cc := newServiceContext(&out, t.TempDir()+"/config.toml")
 
-	err := svc.runSearch(t.Context(), "marketing")
+	err := runDriveSearchWithContext(t.Context(), cc, "marketing")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no business accounts found")
 }
@@ -136,7 +136,7 @@ func TestDriveService_RunSearch_RefreshesIdentityOnceBeforeSharePointSearch(t *t
 	cc := newServiceContext(&out, filepath.Join(t.TempDir(), "missing-config.toml"))
 	cc.GraphBaseURL = srv.URL
 
-	require.NoError(t, newDriveService(cc).runSearch(t.Context(), "marketing"))
+	require.NoError(t, runDriveSearchWithContext(t.Context(), cc, "marketing"))
 	assert.Equal(t, int32(1), meCalls.Load())
 	assert.Contains(t, out.String(), `No SharePoint sites found matching "marketing".`)
 }
@@ -147,9 +147,7 @@ func TestAuthService_RunLogout_NoAccountsConfigured(t *testing.T) {
 
 	var out bytes.Buffer
 	cc := newServiceContext(&out, t.TempDir()+"/config.toml")
-	svc := newAuthService(cc)
-
-	err := svc.runLogout(false)
+	err := runLogoutWithContext(cc, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no accounts configured")
 }
@@ -177,7 +175,7 @@ func TestAuthService_RunLogout_PurgeRemovesAccountProfile(t *testing.T) {
 	cc := newServiceContext(&out, cfgPath)
 	cc.Flags.Account = "alice@contoso.com"
 
-	require.NoError(t, newAuthService(cc).runLogout(true))
+	require.NoError(t, runLogoutWithContext(cc, true))
 
 	_, tokenErr := os.Stat(config.DriveTokenPath(cid))
 	assert.True(t, os.IsNotExist(tokenErr), "logout --purge should remove token file")
@@ -215,7 +213,7 @@ func TestDriveService_RunRemove_PurgePreservesAccountProfile(t *testing.T) {
 	cc := newServiceContext(&out, cfgPath)
 	cc.Flags.Drive = []string{cid.String()}
 
-	require.NoError(t, newDriveService(cc).runRemove(true))
+	require.NoError(t, runDriveRemoveWithContext(cc, true))
 
 	cfg, err := config.LoadOrDefault(cfgPath, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
@@ -255,11 +253,9 @@ func TestSyncControlService_RunPause_PersistsTimedPause(t *testing.T) {
 	cc := newServiceContext(&out, cfgPath)
 	cc.Flags.Drive = []string{cid.String()}
 
-	svc := newSyncControlService(cc)
 	now := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
-	svc.now = func() time.Time { return now }
 
-	require.NoError(t, svc.runPause([]string{"2h"}))
+	require.NoError(t, runPauseCommand(cc, func() time.Time { return now }, []string{"2h"}))
 
 	cfg, err := config.LoadOrDefault(cfgPath, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
@@ -284,7 +280,7 @@ func TestSyncControlService_RunResume_ClearsPausedKeys(t *testing.T) {
 	cc := newServiceContext(&out, cfgPath)
 	cc.Flags.Drive = []string{cid.String()}
 
-	require.NoError(t, newSyncControlService(cc).runResume())
+	require.NoError(t, runResumeCommand(cc, time.Now))
 
 	cfg, err := config.LoadOrDefault(cfgPath, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
@@ -298,12 +294,12 @@ func TestRecycleBinService_RunList_PersonalAccountMessage(t *testing.T) {
 	setTestDriveHome(t)
 
 	var out bytes.Buffer
-	svc := newRecycleBinService(newServiceContext(&out, filepath.Join(t.TempDir(), "config.toml")))
-	svc.session = func(context.Context) (recycleBinSession, error) {
+	cc := newServiceContext(&out, filepath.Join(t.TempDir(), "config.toml"))
+	sessionFactory := func(context.Context) (recycleBinSession, error) {
 		return &mockRecycleBinSession{listErr: graph.ErrBadRequest}, nil
 	}
 
-	err := svc.runList(t.Context())
+	err := runRecycleBinListWithFactory(t.Context(), cc, sessionFactory)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Personal OneDrive accounts")
 }
@@ -318,12 +314,12 @@ func TestRecycleBinService_RunEmpty_FallsBackToDelete(t *testing.T) {
 		permanentDeleteErr: graph.ErrMethodNotAllowed,
 	}
 
-	svc := newRecycleBinService(newServiceContext(&out, filepath.Join(t.TempDir(), "config.toml")))
-	svc.session = func(context.Context) (recycleBinSession, error) {
+	cc := newServiceContext(&out, filepath.Join(t.TempDir(), "config.toml"))
+	sessionFactory := func(context.Context) (recycleBinSession, error) {
 		return mockSession, nil
 	}
 
-	require.NoError(t, svc.runEmpty(t.Context(), true))
+	require.NoError(t, runRecycleBinEmptyWithFactory(t.Context(), cc, true, sessionFactory))
 	assert.Equal(t, []string{"item-1"}, mockSession.deletedIDs)
 	assert.Contains(t, out.String(), "Recycle bin emptied")
 }

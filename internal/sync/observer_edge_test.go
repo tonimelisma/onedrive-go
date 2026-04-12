@@ -34,7 +34,7 @@ func TestRacilyClean_SameSecondDetection(t *testing.T) {
 	info, err := os.Stat(filePath)
 	require.NoError(t, err)
 
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path:           "racily-clean.txt",
 		ItemType:       synctypes.ItemTypeFile,
 		LocalHash:      hash,
@@ -75,7 +75,7 @@ func TestMtimeChangeWithoutContentChange(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create baseline with a DIFFERENT mtime but same hash.
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path:           "touched.txt",
 		ItemType:       synctypes.ItemTypeFile,
 		LocalHash:      hash,
@@ -124,7 +124,7 @@ func TestNosyncGuard_PreventsAllSync(t *testing.T) {
 	// Create the .nosync guard file.
 	writeTestFile(t, syncRoot, ".nosync", "")
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
 	require.ErrorIs(t, err, synctypes.ErrNosyncGuard)
@@ -286,7 +286,7 @@ func TestValidateOneDriveName_Empty(t *testing.T) {
 func TestIsOversizedFile(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
 	// Exactly at the limit — should NOT be oversized.
 	assert.False(t, obs.IsOversizedFile(MaxOneDriveFileSize, "exactly-250gb.bin"),

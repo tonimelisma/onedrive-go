@@ -9,13 +9,14 @@ import (
 	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 type ScopeSession struct {
 	Current        syncscope.Snapshot
 	Previous       syncscope.Snapshot
-	Persisted      synctypes.ScopeStateRecord
+	Persisted      syncstore.ScopeStateRecord
 	PersistedFound bool
 	Diff           syncscope.Diff
 	Generation     int64
@@ -86,8 +87,8 @@ func (plan ObservationPhasePlan) HasTargets() bool {
 
 type ObservationPlanRequest struct {
 	Session                   *ScopeSession
-	Baseline                  *synctypes.Baseline
-	SyncMode                  synctypes.SyncMode
+	Baseline                  *syncstore.Baseline
+	SyncMode                  Mode
 	FullReconcile             bool
 	Purpose                   ObservationPlanPurpose
 	Shortcuts                 []synctypes.Shortcut
@@ -200,7 +201,7 @@ func buildReentryPlan(req ObservationPlanRequest) ReentryPlan {
 	if req.Session == nil {
 		return plan
 	}
-	if req.SyncMode == synctypes.SyncUploadOnly || !req.Session.Diff.HasEntered() {
+	if req.SyncMode == SyncUploadOnly || !req.Session.Diff.HasEntered() {
 		return plan
 	}
 	if hasObservedRoot(req.Session.Diff.EnteredPaths) {
@@ -329,14 +330,14 @@ func hasObservedRoot(paths []string) bool {
 	return false
 }
 
-func (flow *engineFlow) scopeStateRecord(session *ScopeSession, plan *ObservationSessionPlan) (synctypes.ScopeStateRecord, error) {
+func (flow *engineFlow) scopeStateRecord(session *ScopeSession, plan *ObservationSessionPlan) (syncstore.ScopeStateRecord, error) {
 	if err := flow.validatePrimaryScopePersistence(plan); err != nil {
-		return synctypes.ScopeStateRecord{}, fmt.Errorf("validate primary scope persistence: %w", err)
+		return syncstore.ScopeStateRecord{}, fmt.Errorf("validate primary scope persistence: %w", err)
 	}
 
 	snapshotJSON, err := syncscope.MarshalSnapshot(session.Current)
 	if err != nil {
-		return synctypes.ScopeStateRecord{}, fmt.Errorf("marshal scope snapshot: %w", err)
+		return syncstore.ScopeStateRecord{}, fmt.Errorf("marshal scope snapshot: %w", err)
 	}
 
 	lastKind := plan.Reentry.Kind
@@ -344,7 +345,7 @@ func (flow *engineFlow) scopeStateRecord(session *ScopeSession, plan *Observatio
 		lastKind = synctypes.ScopeReconcileNone
 	}
 
-	return synctypes.ScopeStateRecord{
+	return syncstore.ScopeStateRecord{
 		Generation:            session.Generation,
 		EffectiveSnapshotJSON: snapshotJSON,
 		ObservationPlanHash:   plan.Hash,

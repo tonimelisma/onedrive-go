@@ -6,15 +6,8 @@ package synctest
 import (
 	"context"
 	"log/slog"
-	"path/filepath"
 	"sync"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // TestDriveID is a canonical test drive ID used across all sync test files.
@@ -61,16 +54,12 @@ func (w *testLogWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// EmptyBaseline returns a Baseline with empty maps, ready for test use.
-func EmptyBaseline() *synctypes.Baseline {
-	return synctypes.NewBaselineForTest(nil)
-}
-
 type testContextProvider interface {
 	Context() context.Context
 }
 
-func testContext(tb testing.TB) context.Context {
+// TestContext returns the best available test-scoped context.
+func TestContext(tb testing.TB) context.Context {
 	tb.Helper()
 
 	if provider, ok := tb.(testContextProvider); ok {
@@ -78,43 +67,4 @@ func testContext(tb testing.TB) context.Context {
 	}
 
 	return context.Background()
-}
-
-// BaselineWith returns a Baseline pre-populated with the given entries.
-func BaselineWith(entries ...*synctypes.BaselineEntry) *synctypes.Baseline {
-	return synctypes.NewBaselineForTest(entries)
-}
-
-// ActionsOfType filters a flat action list to a single type.
-// Test-only helper — kept in synctest because no production package needs it.
-func ActionsOfType(actions []synctypes.Action, t synctypes.ActionType) []synctypes.Action {
-	var result []synctypes.Action
-
-	for i := range actions {
-		if actions[i].Type == t {
-			result = append(result, actions[i])
-		}
-	}
-
-	return result
-}
-
-// NewTestStore creates a SyncStore backed by a temp directory,
-// registering cleanup with t.Cleanup.
-func NewTestStore(tb testing.TB) *syncstore.SyncStore {
-	tb.Helper()
-
-	dbPath := filepath.Join(tb.TempDir(), "test.db")
-	logger := TestLogger(tb)
-
-	ctx := testContext(tb)
-
-	mgr, err := syncstore.NewSyncStore(ctx, dbPath, logger)
-	require.NoError(tb, err, "NewSyncStore(%q)", dbPath)
-
-	tb.Cleanup(func() {
-		assert.NoError(tb, mgr.Close(ctx), "Close()")
-	})
-
-	return mgr
 }

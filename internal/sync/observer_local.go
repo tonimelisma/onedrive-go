@@ -24,6 +24,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -169,15 +170,15 @@ func (fw *fsnotifyWrapper) Close() error {
 func (fw *fsnotifyWrapper) Events() <-chan fsnotify.Event { return fw.w.Events }
 func (fw *fsnotifyWrapper) Errors() <-chan error          { return fw.w.Errors }
 
-// LocalObserver walks the local filesystem and produces []synctypes.ChangeEvent by
+// LocalObserver walks the local filesystem and produces []ChangeEvent by
 // comparing each entry against the in-memory baseline. Stateless — syncRoot
 // is a parameter of FullScan, allowing reuse across passes.
 type LocalObserver struct {
-	Baseline           *synctypes.Baseline
+	Baseline           *syncstore.Baseline
 	Logger             *slog.Logger
 	checkWorkers       int // parallel hash goroutine limit for FullScan (0 → defaultCheckWorkers)
-	filterConfig       synctypes.LocalFilterConfig
-	observationRules   synctypes.LocalObservationRules
+	filterConfig       LocalFilterConfig
+	observationRules   LocalObservationRules
 	WatcherFactory     func() (FsWatcher, error)
 	droppedEvents      atomic.Int64                                     // events dropped by TrySend due to full channel
 	droppedRetries     atomic.Int64                                     // hash requests dropped due to full channel
@@ -195,7 +196,7 @@ type LocalObserver struct {
 	// skippedCh forwards SkippedItems from safety scans to the engine for
 	// recording in sync_failures. Nil disables forwarding (pre-existing behavior).
 	// Set via SetSkippedChannel before Watch.
-	skippedCh chan<- []synctypes.SkippedItem
+	skippedCh chan<- []SkippedItem
 
 	// localWatchState owns all watch-loop mutable state. It is embedded so
 	// same-package tests can still reach the existing fields directly while the
@@ -207,7 +208,7 @@ type LocalObserver struct {
 // of parallel goroutines used for file hashing during FullScan (0 → default 4).
 // The baseline must be loaded (from SyncStore.Load); it is read-only
 // during observation.
-func NewLocalObserver(baseline *synctypes.Baseline, logger *slog.Logger, checkWorkers int) *LocalObserver {
+func NewLocalObserver(baseline *syncstore.Baseline, logger *slog.Logger, checkWorkers int) *LocalObserver {
 	return &LocalObserver{
 		Baseline:        baseline,
 		Logger:          logger,
@@ -231,15 +232,15 @@ func NewLocalObserver(baseline *synctypes.Baseline, logger *slog.Logger, checkWo
 
 // SetSkippedChannel sets the channel for forwarding SkippedItems from safety
 // scans to the engine. Must be called before Watch. Nil disables forwarding.
-func (o *LocalObserver) SetSkippedChannel(ch chan<- []synctypes.SkippedItem) {
+func (o *LocalObserver) SetSkippedChannel(ch chan<- []SkippedItem) {
 	o.skippedCh = ch
 }
 
 // SetFilterConfig installs user-configured local observation filters. The
 // observer copies the slices so later config mutations cannot silently change
 // an already-running watch/scanner.
-func (o *LocalObserver) SetFilterConfig(cfg synctypes.LocalFilterConfig) {
-	o.filterConfig = synctypes.LocalFilterConfig{
+func (o *LocalObserver) SetFilterConfig(cfg LocalFilterConfig) {
+	o.filterConfig = LocalFilterConfig{
 		SkipDotfiles: cfg.SkipDotfiles,
 		SkipSymlinks: cfg.SkipSymlinks,
 		SkipDirs:     append([]string(nil), cfg.SkipDirs...),
@@ -250,7 +251,7 @@ func (o *LocalObserver) SetFilterConfig(cfg synctypes.LocalFilterConfig) {
 // SetObservationRules installs platform-derived local validation rules. These
 // stay separate from user-configured filter knobs so drive semantics do not
 // get conflated with local exclusions.
-func (o *LocalObserver) SetObservationRules(rules synctypes.LocalObservationRules) {
+func (o *LocalObserver) SetObservationRules(rules LocalObservationRules) {
 	o.observationRules = rules
 }
 
@@ -347,7 +348,7 @@ func (o *LocalObserver) SetWatcherFactory(fn func() (FsWatcher, error)) {
 // TrySend sends a ChangeEvent to the events channel without blocking. If the
 // channel is full, the event is dropped and logged at Warn. The safety scan
 // (every 5 minutes) catches any dropped events, providing eventual consistency.
-func (o *LocalObserver) TrySend(ctx context.Context, events chan<- synctypes.ChangeEvent, ev *synctypes.ChangeEvent) {
+func (o *LocalObserver) TrySend(ctx context.Context, events chan<- ChangeEvent, ev *ChangeEvent) {
 	select {
 	case events <- *ev:
 		o.recordActivity()
@@ -403,7 +404,7 @@ func (o *LocalObserver) recordActivity() {
 func (o *LocalObserver) EstimateDirCount() int {
 	count := 1 // sync root always needs a watch
 
-	o.Baseline.ForEachPath(func(_ string, entry *synctypes.BaselineEntry) {
+	o.Baseline.ForEachPath(func(_ string, entry *syncstore.BaselineEntry) {
 		if entry.ItemType == synctypes.ItemTypeFolder {
 			count++
 		}
@@ -422,7 +423,7 @@ func (o *LocalObserver) EstimateDirCount() int {
 // size: 256). An unbuffered channel blocks on every event. If the channel is
 // full, TrySend drops the event and increments the drop counter — the safety
 // scan provides eventual consistency for any dropped events.
-func (o *LocalObserver) Watch(ctx context.Context, tree *synctree.Root, events chan<- synctypes.ChangeEvent) error {
+func (o *LocalObserver) Watch(ctx context.Context, tree *synctree.Root, events chan<- ChangeEvent) error {
 	syncRoot := tree.Path()
 	o.Logger.Info("local observer starting watch",
 		slog.String("sync_root", syncRoot),

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -16,7 +17,7 @@ type engineFlow struct {
 	watch  *watchRuntime
 
 	depGraph   *DepGraph
-	dispatchCh chan *synctypes.TrackedAction
+	dispatchCh chan *TrackedAction
 	shortcuts  []synctypes.Shortcut
 
 	succeeded  int
@@ -59,7 +60,7 @@ func newOneShotRunner(engine *Engine) *oneShotRunner {
 
 type watchLoopState struct {
 	phase  watchRuntimePhase
-	outbox []*synctypes.TrackedAction
+	outbox []*TrackedAction
 }
 
 type watchRuntimeState struct {
@@ -73,7 +74,7 @@ type watchRuntimeState struct {
 	// Active scope blocks owned by the watch control flow. The slice is tiny
 	// (usually 0-5 entries), so linear scans keep the logic simple and avoid a
 	// second mirrored subsystem.
-	activeScopes []synctypes.ScopeBlock
+	activeScopes []syncstore.ScopeBlock
 
 	// Scope detection — sliding window failure tracking.
 	scopeState *ScopeState

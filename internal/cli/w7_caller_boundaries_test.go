@@ -90,7 +90,7 @@ func TestAuthService_RunLogout_PreservesOfflineState(t *testing.T) {
 	var out bytes.Buffer
 	cc := newServiceContext(&out, cfgPath)
 
-	require.NoError(t, newAuthService(cc).runLogout(false))
+	require.NoError(t, runLogoutWithContext(cc, false))
 
 	cfg, err := config.LoadOrDefault(cfgPath, testDriveLogger(t))
 	require.NoError(t, err)
@@ -220,7 +220,7 @@ func TestDriveService_RunList_TextSurfacesConfiguredAuthRequirement(t *testing.T
 		CfgPath:      cfgPath,
 	}
 
-	require.NoError(t, newDriveService(cc).runList(t.Context(), false))
+	require.NoError(t, runDriveListWithContext(t.Context(), cc, false))
 	assert.Contains(t, out.String(), "Configured drives:")
 	assert.Contains(t, out.String(), "required")
 	assert.Contains(t, out.String(), "Authentication required:")
@@ -245,7 +245,7 @@ func TestDriveService_RunList_JSONSurfacesConfiguredAuthRequirement(t *testing.T
 		},
 	}
 
-	require.NoError(t, newDriveService(cc).runList(t.Context(), false))
+	require.NoError(t, runDriveListWithContext(t.Context(), cc, false))
 
 	var decoded driveListJSONOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
@@ -273,7 +273,7 @@ func TestDriveService_RunList_JSONSurfacesOrphanedMissingLogin(t *testing.T) {
 	cc := newServiceContext(&out, filepath.Join(t.TempDir(), "missing-config.toml"))
 	cc.Flags = CLIFlags{JSON: true}
 
-	require.NoError(t, newDriveService(cc).runList(t.Context(), false))
+	require.NoError(t, runDriveListWithContext(t.Context(), cc, false))
 
 	var decoded driveListJSONOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
@@ -295,7 +295,7 @@ func TestDriveService_RunSearch_TextSurfacesUnconfiguredAuthRequirement(t *testi
 	var out bytes.Buffer
 	cc := newServiceContext(&out, filepath.Join(t.TempDir(), "missing-config.toml"))
 
-	require.NoError(t, newDriveService(cc).runSearch(t.Context(), "marketing"))
+	require.NoError(t, runDriveSearchWithContext(t.Context(), cc, "marketing"))
 	assert.Contains(t, out.String(), "Authentication required:")
 	assert.Contains(t, out.String(), cid.Email())
 	assert.Contains(t, out.String(), "invalid or unreadable")
@@ -316,7 +316,7 @@ func TestDriveService_RunSearch_JSONSurfacesUnconfiguredAuthRequirementForAccoun
 		JSON:    true,
 	}
 
-	require.NoError(t, newDriveService(cc).runSearch(t.Context(), "marketing"))
+	require.NoError(t, runDriveSearchWithContext(t.Context(), cc, "marketing"))
 
 	var decoded driveSearchJSONOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
@@ -341,7 +341,7 @@ func TestSharedService_RunList_TextSurfacesUnconfiguredAuthRequirement(t *testin
 	var out bytes.Buffer
 	cc := newServiceContext(&out, filepath.Join(t.TempDir(), "missing-config.toml"))
 
-	require.NoError(t, newSharedService(cc).runList(t.Context()))
+	require.NoError(t, runSharedList(t.Context(), cc))
 	assert.Contains(t, out.String(), "Authentication required:")
 	assert.Contains(t, out.String(), cid.Email())
 	assert.Contains(t, out.String(), "invalid or unreadable")
@@ -365,7 +365,7 @@ func TestSharedService_RunList_JSONSurfacesUnconfiguredAuthRequirementForAccount
 		JSON:    true,
 	}
 
-	require.NoError(t, newSharedService(cc).runList(t.Context()))
+	require.NoError(t, runSharedList(t.Context(), cc))
 
 	var decoded sharedListJSONOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))

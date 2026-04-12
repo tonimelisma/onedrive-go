@@ -12,11 +12,11 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 type syncDaemonOrchestrator interface {
-	RunWatch(context.Context, synctypes.SyncMode, synctypes.WatchOpts) error
+	RunWatch(context.Context, syncengine.Mode, syncengine.WatchOptions) error
 }
 
 type syncDaemonOrchestratorFactory func(*multisync.OrchestratorConfig) syncDaemonOrchestrator
@@ -32,8 +32,8 @@ func runSyncDaemon(
 	ctx context.Context,
 	holder *config.Holder,
 	selectors []string,
-	mode synctypes.SyncMode,
-	opts synctypes.WatchOpts,
+	mode syncengine.Mode,
+	opts syncengine.WatchOptions,
 	logger *slog.Logger,
 	statusWriter io.Writer,
 	controlSocketPath string,
@@ -55,8 +55,8 @@ func runSyncDaemonWithFactory(
 	ctx context.Context,
 	holder *config.Holder,
 	selectors []string,
-	mode synctypes.SyncMode,
-	opts synctypes.WatchOpts,
+	mode syncengine.Mode,
+	opts syncengine.WatchOptions,
 	logger *slog.Logger,
 	_ io.Writer,
 	controlSocketPath string,

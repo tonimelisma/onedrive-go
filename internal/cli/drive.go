@@ -100,7 +100,7 @@ func runDriveList(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("reading --all flag: %w", err)
 	}
 
-	return newDriveService(mustCLIContext(cmd.Context())).runList(cmd.Context(), showAll)
+	return runDriveListWithContext(cmd.Context(), mustCLIContext(cmd.Context()), showAll)
 }
 
 // buildConfiguredDriveEntries creates list entries from the config.
@@ -815,7 +815,7 @@ Examples:
 }
 
 func runDriveAdd(cmd *cobra.Command, args []string) error {
-	return newDriveService(mustCLIContext(cmd.Context())).runAdd(cmd.Context(), args)
+	return runDriveAddWithContext(cmd.Context(), mustCLIContext(cmd.Context()), args)
 }
 
 // addNewDrive adds a new drive to the config with a computed default sync_dir.
@@ -1015,13 +1015,12 @@ func addSharedDriveByName(
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	readModel := newAccountReadModelService(cc)
-	snapshot, err := readModel.loadLenientCatalogWithBestEffortIdentityRefresh(ctx)
+	snapshot, err := loadLenientCatalogWithBestEffortIdentityRefresh(ctx, cc)
 	if err != nil {
 		return err
 	}
 
-	discovery := newSharedDiscoveryService(cc).discoverTargets(ctx, filterAccountCatalog(snapshot.Catalog, cc.Flags.Account))
+	discovery := discoverSharedTargets(ctx, cc, filterAccountCatalog(snapshot.Catalog, cc.Flags.Account))
 	matches := searchSharedDrives(selector, projectSharedFolders(cfg, discovery.Targets))
 
 	switch len(matches) {
@@ -1107,7 +1106,7 @@ func runDriveRemove(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("reading --purge flag: %w", err)
 	}
 
-	return newDriveService(mustCLIContext(cmd.Context())).runRemove(purge)
+	return runDriveRemoveWithContext(mustCLIContext(cmd.Context()), purge)
 }
 
 // removeDrive deletes the config section for the drive, preserving token,
@@ -1205,7 +1204,7 @@ type driveSearchJSONOutput struct {
 const sharePointSearchLimit = 50
 
 func runDriveSearch(cmd *cobra.Command, args []string) error {
-	return newDriveService(mustCLIContext(cmd.Context())).runSearch(cmd.Context(), args[0])
+	return runDriveSearchWithContext(cmd.Context(), mustCLIContext(cmd.Context()), args[0])
 }
 
 // searchAccountSharePoint searches SharePoint sites for a single business account.

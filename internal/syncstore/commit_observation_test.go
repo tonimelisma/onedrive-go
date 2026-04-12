@@ -16,11 +16,11 @@ import (
 )
 
 // readRemoteStateRow is a test helper that reads a single remote_state row.
-func readRemoteStateRow(t *testing.T, db *sql.DB, itemID string) *synctypes.RemoteStateRow {
+func readRemoteStateRow(t *testing.T, db *sql.DB, itemID string) *RemoteStateRow {
 	t.Helper()
 
 	var (
-		row          synctypes.RemoteStateRow
+		row          RemoteStateRow
 		parentID     sql.NullString
 		hash         sql.NullString
 		size         sql.NullInt64
@@ -89,7 +89,7 @@ func TestCommitObservation_NewItem(t *testing.T) {
 	ctx := context.Background()
 
 	driveID := driveid.New(testDriveID)
-	events := []synctypes.ObservedItem{
+	events := []ObservedItem{
 		{
 			DriveID:  driveID,
 			ItemID:   "item1",
@@ -126,7 +126,7 @@ func TestCommitObservation_DeletedUnknownItem_Noop(t *testing.T) {
 	ctx := context.Background()
 
 	driveID := driveid.New(testDriveID)
-	events := []synctypes.ObservedItem{
+	events := []ObservedItem{
 		{
 			DriveID:   driveID,
 			ItemID:    "unknown",
@@ -166,7 +166,7 @@ func TestCommitObservation_SyncedSameHash_NoChange(t *testing.T) {
 	require.NoError(t, err)
 
 	// Observe same hash again (delta redelivery).
-	events := []synctypes.ObservedItem{
+	events := []ObservedItem{
 		{
 			DriveID:  driveID,
 			ItemID:   "item1",
@@ -203,7 +203,7 @@ func TestCommitObservation_HashChange_ResetsFailureCount(t *testing.T) {
 	require.NoError(t, err)
 
 	// Observe with different hash.
-	events := []synctypes.ObservedItem{
+	events := []ObservedItem{
 		{
 			DriveID:  driveID,
 			ItemID:   "item1",
@@ -241,7 +241,7 @@ func TestCommitObservation_MoveTracking_SetsPreviousPath(t *testing.T) {
 	require.NoError(t, err)
 
 	// Observe at new path.
-	events := []synctypes.ObservedItem{
+	events := []ObservedItem{
 		{
 			DriveID:  driveID,
 			ItemID:   "item1",
@@ -269,7 +269,7 @@ func TestCommitObservation_AtomicWithDeltaToken(t *testing.T) {
 	driveID := driveid.New(testDriveID)
 
 	// Multiple items + delta token in a single CommitObservation call.
-	events := []synctypes.ObservedItem{
+	events := []ObservedItem{
 		{
 			DriveID: driveID, ItemID: "a", Path: "a.txt",
 			ItemType: synctypes.ItemTypeFile, Hash: "h1",
@@ -338,7 +338,7 @@ func TestCommitObservation_AllMatrixCells(t *testing.T) {
 			)
 			require.NoError(t, err)
 
-			events := []synctypes.ObservedItem{
+			events := []ObservedItem{
 				{
 					DriveID:   driveID,
 					ItemID:    "item1",
@@ -378,7 +378,7 @@ func TestRecordFailure_TransitionsDownloading(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
+	err = mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "hello.txt",
 		DriveID:    driveid.New(testDriveID),
 		Direction:  synctypes.DirectionDownload,
@@ -425,7 +425,7 @@ func TestRecordFailure_OptimisticConcurrency_NoMatch(t *testing.T) {
 	// RecordFailure should be a no-op for the state
 	// transition (row not in downloading/deleting), but still records the
 	// sync_failure entry.
-	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
+	err = mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "hello.txt",
 		DriveID:    driveid.New(testDriveID),
 		Direction:  synctypes.DirectionDownload,
@@ -460,7 +460,7 @@ func TestRecordFailure_IncreasesFailureCount(t *testing.T) {
 	require.NoError(t, err)
 
 	// First failure.
-	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
+	err = mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "hello.txt",
 		DriveID:    driveid.New(testDriveID),
 		Direction:  synctypes.DirectionDownload,
@@ -483,7 +483,7 @@ func TestRecordFailure_IncreasesFailureCount(t *testing.T) {
 	require.NoError(t, err)
 
 	// Second failure.
-	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
+	err = mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "hello.txt",
 		DriveID:    driveid.New(testDriveID),
 		Direction:  synctypes.DirectionDownload,
@@ -514,7 +514,7 @@ func TestRecordFailure_DeleteTransitionsDeleting(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
+	err = mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "hello.txt",
 		DriveID:    driveid.New(testDriveID),
 		Direction:  synctypes.DirectionDownload,
@@ -557,7 +557,7 @@ func TestRecordFailure_Download(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
+	err = mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "hello.txt",
 		DriveID:    driveid.New(testDriveID),
 		Direction:  synctypes.DirectionDownload,
@@ -600,7 +600,7 @@ func TestRecordFailure_SetsIssueTypeAndScopeKey(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	err = mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
+	err = mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "hello.txt",
 		DriveID:    driveid.New(testDriveID),
 		Direction:  synctypes.DirectionDownload,
@@ -710,17 +710,17 @@ func TestResetRetryTimesForScope(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// CommitOutcome remote_state extension tests
+// CommitMutation remote_state extension tests
 // ---------------------------------------------------------------------------
 
-func TestCommitOutcome_UpdatesRemoteState_Download(t *testing.T) {
+func TestCommitMutation_UpdatesRemoteState_Download(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
 	mgr.SetNowFunc(func() time.Time { return time.Unix(5000, 0) })
 	ctx := context.Background()
 
-	// Load baseline so CommitOutcome can update cache.
+	// Load baseline so CommitMutation can update cache.
 	_, err := mgr.Load(ctx)
 	require.NoError(t, err)
 
@@ -732,7 +732,7 @@ func TestCommitOutcome_UpdatesRemoteState_Download(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	outcome := &synctypes.Outcome{
+	outcome := &BaselineMutation{
 		Action:          synctypes.ActionDownload,
 		Success:         true,
 		Path:            "hello.txt",
@@ -750,7 +750,7 @@ func TestCommitOutcome_UpdatesRemoteState_Download(t *testing.T) {
 		ETag:            "etag1",
 	}
 
-	err = mgr.CommitOutcome(ctx, outcome)
+	err = mgr.CommitMutation(ctx, outcome)
 	require.NoError(t, err)
 
 	row := readRemoteStateRow(t, mgr.DB(), "item1")
@@ -758,7 +758,7 @@ func TestCommitOutcome_UpdatesRemoteState_Download(t *testing.T) {
 	assert.Equal(t, synctypes.SyncStatusSynced, row.SyncStatus)
 }
 
-func TestCommitOutcome_HashGuard_PreventsStaleOverwrite(t *testing.T) {
+func TestCommitMutation_HashGuard_PreventsStaleOverwrite(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
@@ -777,7 +777,7 @@ func TestCommitOutcome_HashGuard_PreventsStaleOverwrite(t *testing.T) {
 	require.NoError(t, err)
 
 	// Outcome from old download with old hash.
-	outcome := &synctypes.Outcome{
+	outcome := &BaselineMutation{
 		Action:     synctypes.ActionDownload,
 		Success:    true,
 		Path:       "hello.txt",
@@ -788,7 +788,7 @@ func TestCommitOutcome_HashGuard_PreventsStaleOverwrite(t *testing.T) {
 		RemoteHash: "old-hash",
 	}
 
-	err = mgr.CommitOutcome(ctx, outcome)
+	err = mgr.CommitMutation(ctx, outcome)
 	require.NoError(t, err)
 
 	// Should NOT transition to synced (hash mismatch guard).
@@ -797,7 +797,7 @@ func TestCommitOutcome_HashGuard_PreventsStaleOverwrite(t *testing.T) {
 	assert.Equal(t, synctypes.SyncStatusDownloading, row.SyncStatus, "hash guard should prevent stale overwrite")
 }
 
-func TestCommitOutcome_Upload_UnconditionalUpdate(t *testing.T) {
+func TestCommitMutation_Upload_UnconditionalUpdate(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
@@ -815,7 +815,7 @@ func TestCommitOutcome_Upload_UnconditionalUpdate(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	outcome := &synctypes.Outcome{
+	outcome := &BaselineMutation{
 		Action:          synctypes.ActionUpload,
 		Success:         true,
 		Path:            "hello.txt",
@@ -832,7 +832,7 @@ func TestCommitOutcome_Upload_UnconditionalUpdate(t *testing.T) {
 		RemoteMtime:     3000000,
 	}
 
-	err = mgr.CommitOutcome(ctx, outcome)
+	err = mgr.CommitMutation(ctx, outcome)
 	require.NoError(t, err)
 
 	row := readRemoteStateRow(t, mgr.DB(), "item1")
@@ -1136,7 +1136,7 @@ func TestResetInProgressStates(t *testing.T) {
 	assert.Equal(t, synctypes.SyncStatusPendingDownload, rowD.SyncStatus, "pending_download unchanged")
 }
 
-func TestCommitOutcome_LocalDelete_MarksDeleted(t *testing.T) {
+func TestCommitMutation_LocalDelete_MarksDeleted(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
@@ -1154,7 +1154,7 @@ func TestCommitOutcome_LocalDelete_MarksDeleted(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	outcome := &synctypes.Outcome{
+	outcome := &BaselineMutation{
 		Action:  synctypes.ActionLocalDelete,
 		Success: true,
 		Path:    "hello.txt",
@@ -1162,7 +1162,7 @@ func TestCommitOutcome_LocalDelete_MarksDeleted(t *testing.T) {
 		ItemID:  "item1",
 	}
 
-	err = mgr.CommitOutcome(ctx, outcome)
+	err = mgr.CommitMutation(ctx, outcome)
 	require.NoError(t, err)
 
 	row := readRemoteStateRow(t, mgr.DB(), "item1")

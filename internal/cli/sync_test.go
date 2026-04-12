@@ -16,7 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+	"github.com/tonimelisma/onedrive-go/internal/multisync"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 // --- driveReportsError ---
@@ -29,7 +30,7 @@ func TestDriveReportsError(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		reports []*synctypes.DriveReport
+		reports []*multisync.DriveReport
 		wantNil bool
 		wantMsg string // substring, only checked when wantNil is false
 	}{
@@ -40,29 +41,29 @@ func TestDriveReportsError(t *testing.T) {
 		},
 		{
 			name: "one success",
-			reports: []*synctypes.DriveReport{
-				{Report: &synctypes.SyncReport{Mode: synctypes.SyncBidirectional}},
+			reports: []*multisync.DriveReport{
+				{Report: &syncengine.Report{Mode: syncengine.SyncBidirectional}},
 			},
 			wantNil: true,
 		},
 		{
 			name: "one failure",
-			reports: []*synctypes.DriveReport{
+			reports: []*multisync.DriveReport{
 				{Err: errDelta},
 			},
 			wantMsg: "delta expired",
 		},
 		{
 			name: "multi-drive mixed",
-			reports: []*synctypes.DriveReport{
-				{Report: &synctypes.SyncReport{}},
+			reports: []*multisync.DriveReport{
+				{Report: &syncengine.Report{}},
 				{Err: errDelta},
 			},
 			wantMsg: "1 of 2 drives failed",
 		},
 		{
 			name: "all failures",
-			reports: []*synctypes.DriveReport{
+			reports: []*multisync.DriveReport{
 				{Err: errDelta},
 				{Err: errAuth},
 			},
@@ -107,10 +108,10 @@ func newSyncTestContext(parent context.Context, cfgPath string, statusWriter io.
 func TestPrintDriveReports_SingleDrive_NoHeader(t *testing.T) {
 	t.Parallel()
 
-	reports := []*synctypes.DriveReport{
+	reports := []*multisync.DriveReport{
 		{
 			DisplayName: "Personal",
-			Report:      &synctypes.SyncReport{Mode: synctypes.SyncBidirectional},
+			Report:      &syncengine.Report{Mode: syncengine.SyncBidirectional},
 		},
 	}
 
@@ -121,10 +122,10 @@ func TestPrintDriveReports_SingleDrive_NoHeader(t *testing.T) {
 func TestPrintDriveReports_MultiDrive_WithError(t *testing.T) {
 	t.Parallel()
 
-	reports := []*synctypes.DriveReport{
+	reports := []*multisync.DriveReport{
 		{
 			DisplayName: "Personal",
-			Report:      &synctypes.SyncReport{Mode: synctypes.SyncBidirectional},
+			Report:      &syncengine.Report{Mode: syncengine.SyncBidirectional},
 		},
 		{
 			DisplayName: "Business",
@@ -145,11 +146,11 @@ func TestSyncModeFromFlags(t *testing.T) {
 	tests := []struct {
 		name string
 		flag string
-		want synctypes.SyncMode
+		want syncengine.Mode
 	}{
-		{"default bidirectional", "", synctypes.SyncBidirectional},
-		{"download-only", "download-only", synctypes.SyncDownloadOnly},
-		{"upload-only", "upload-only", synctypes.SyncUploadOnly},
+		{"default bidirectional", "", syncengine.SyncBidirectional},
+		{"download-only", "download-only", syncengine.SyncDownloadOnly},
+		{"upload-only", "upload-only", syncengine.SyncUploadOnly},
 	}
 
 	for _, tt := range tests {
@@ -185,17 +186,17 @@ func TestPrintSyncReport(t *testing.T) {
 	cc := quietCC()
 
 	// Dry-run report.
-	printSyncReport(&synctypes.SyncReport{DryRun: true, Mode: synctypes.SyncBidirectional}, cc)
+	printSyncReport(&syncengine.Report{DryRun: true, Mode: syncengine.SyncBidirectional}, cc)
 
 	// No-changes report.
-	printSyncReport(&synctypes.SyncReport{Mode: synctypes.SyncUploadOnly}, cc)
+	printSyncReport(&syncengine.Report{Mode: syncengine.SyncUploadOnly}, cc)
 
 	// Full report with results.
-	printSyncReport(&synctypes.SyncReport{
+	printSyncReport(&syncengine.Report{
 		Downloads: 3,
 		Uploads:   2,
 		Succeeded: 5,
-		Mode:      synctypes.SyncDownloadOnly,
+		Mode:      syncengine.SyncDownloadOnly,
 	}, cc)
 }
 
@@ -434,34 +435,35 @@ sync_dir = %q
 `, syncDir)
 	require.NoError(t, os.WriteFile(cfgPath, []byte(configBody), 0o600))
 
-	service := newSyncService(&CLIContext{
+	cc := &CLIContext{
 		Logger:       slog.New(slog.DiscardHandler),
 		OutputWriter: io.Discard,
 		StatusWriter: io.Discard,
 		CfgPath:      cfgPath,
-	})
+	}
+	deps := defaultSyncCommandDeps(cc)
 
 	called := false
-	service.runOnceRunner = func(
+	deps.runOnceRunner = func(
 		_ context.Context,
 		_ *config.Holder,
 		drives []*config.ResolvedDrive,
-		mode synctypes.SyncMode,
-		opts synctypes.RunOpts,
+		mode syncengine.Mode,
+		opts syncengine.RunOptions,
 		_ *slog.Logger,
 		controlSocketPath string,
-	) []*synctypes.DriveReport {
+	) []*multisync.DriveReport {
 		called = true
 		assert.Len(t, drives, 1)
-		assert.Equal(t, synctypes.SyncBidirectional, mode)
+		assert.Equal(t, syncengine.SyncBidirectional, mode)
 		assert.True(t, opts.DryRun)
 		assert.NotEmpty(t, controlSocketPath)
 
-		return []*synctypes.DriveReport{
+		return []*multisync.DriveReport{
 			{
 				CanonicalID: drives[0].CanonicalID,
 				DisplayName: drives[0].DisplayName,
-				Report: &synctypes.SyncReport{
+				Report: &syncengine.Report{
 					Mode:   mode,
 					DryRun: opts.DryRun,
 				},
@@ -469,7 +471,7 @@ sync_dir = %q
 		}
 	}
 
-	err := service.run(t.Context(), syncCommandOptions{Mode: synctypes.SyncBidirectional})
+	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncengine.SyncBidirectional}, deps)
 	require.NoError(t, err)
 	assert.True(t, called)
 }
@@ -487,32 +489,33 @@ sync_dir = %q
 `, syncDir)
 	require.NoError(t, os.WriteFile(cfgPath, []byte(configBody), 0o600))
 
-	service := newSyncService(&CLIContext{
+	cc := &CLIContext{
 		Logger:       slog.New(slog.DiscardHandler),
 		OutputWriter: io.Discard,
 		StatusWriter: io.Discard,
 		CfgPath:      cfgPath,
-	})
+	}
+	deps := defaultSyncCommandDeps(cc)
 
 	override := false
-	service.runOnceRunner = func(
+	deps.runOnceRunner = func(
 		_ context.Context,
 		_ *config.Holder,
 		_ []*config.ResolvedDrive,
-		_ synctypes.SyncMode,
-		opts synctypes.RunOpts,
+		_ syncengine.Mode,
+		opts syncengine.RunOptions,
 		_ *slog.Logger,
 		_ string,
-	) []*synctypes.DriveReport {
+	) []*multisync.DriveReport {
 		assert.False(t, opts.DryRun)
 
-		return []*synctypes.DriveReport{{Report: &synctypes.SyncReport{Mode: synctypes.SyncBidirectional}}}
+		return []*multisync.DriveReport{{Report: &syncengine.Report{Mode: syncengine.SyncBidirectional}}}
 	}
 
-	err := service.run(t.Context(), syncCommandOptions{
-		Mode:   synctypes.SyncBidirectional,
+	err := runSyncCommand(t.Context(), cc, syncCommandOptions{
+		Mode:   syncengine.SyncBidirectional,
 		DryRun: &override,
-	})
+	}, deps)
 	require.NoError(t, err)
 }
 
@@ -529,7 +532,7 @@ sync_dir = %q
 `, syncDir)
 	require.NoError(t, os.WriteFile(cfgPath, []byte(configBody), 0o600))
 
-	service := newSyncService(&CLIContext{
+	cc := &CLIContext{
 		Logger:       slog.New(slog.DiscardHandler),
 		OutputWriter: io.Discard,
 		StatusWriter: io.Discard,
@@ -538,8 +541,8 @@ sync_dir = %q
 			context.Context,
 			*config.Holder,
 			[]string,
-			synctypes.SyncMode,
-			synctypes.WatchOpts,
+			syncengine.Mode,
+			syncengine.WatchOptions,
 			*slog.Logger,
 			io.Writer,
 			string,
@@ -547,12 +550,12 @@ sync_dir = %q
 			require.FailNow(t, "watch runner should not be called when effective dry run is true")
 			return nil
 		},
-	})
+	}
 
-	err := service.run(t.Context(), syncCommandOptions{
-		Mode:  synctypes.SyncBidirectional,
+	err := runSyncCommand(t.Context(), cc, syncCommandOptions{
+		Mode:  syncengine.SyncBidirectional,
 		Watch: true,
-	})
+	}, defaultSyncCommandDeps(cc))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "watch mode does not support dry-run")
 }
@@ -571,28 +574,29 @@ sync_dir = %q
 	t.Setenv("XDG_DATA_HOME", filepath.Join(t.TempDir(), strings.Repeat("very-long-control-root-", 8)))
 	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), strings.Repeat("very-long-runtime-root-", 8)))
 
-	service := newSyncService(&CLIContext{
+	cc := &CLIContext{
 		Logger:       slog.New(slog.DiscardHandler),
 		OutputWriter: io.Discard,
 		StatusWriter: io.Discard,
 		CfgPath:      cfgPath,
-	})
+	}
+	deps := defaultSyncCommandDeps(cc)
 
 	called := false
-	service.runOnceRunner = func(
+	deps.runOnceRunner = func(
 		context.Context,
 		*config.Holder,
 		[]*config.ResolvedDrive,
-		synctypes.SyncMode,
-		synctypes.RunOpts,
+		syncengine.Mode,
+		syncengine.RunOptions,
 		*slog.Logger,
 		string,
-	) []*synctypes.DriveReport {
+	) []*multisync.DriveReport {
 		called = true
 		return nil
 	}
 
-	err := service.run(t.Context(), syncCommandOptions{Mode: synctypes.SyncBidirectional})
+	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncengine.SyncBidirectional}, deps)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "resolve control socket path")
 	assert.False(t, called, "one-shot sync owner must stop before engine startup when the socket path is impossible")
@@ -612,20 +616,21 @@ sync_dir = %q
 	t.Setenv("XDG_DATA_HOME", filepath.Join(t.TempDir(), strings.Repeat("very-long-control-root-", 8)))
 	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), strings.Repeat("very-long-runtime-root-", 8)))
 
-	service := newSyncService(&CLIContext{
+	cc := &CLIContext{
 		Logger:       slog.New(slog.DiscardHandler),
 		OutputWriter: io.Discard,
 		StatusWriter: io.Discard,
 		CfgPath:      cfgPath,
-	})
+	}
+	deps := defaultSyncCommandDeps(cc)
 
 	called := false
-	service.watchRunner = func(
+	deps.watchRunner = func(
 		context.Context,
 		*config.Holder,
 		[]string,
-		synctypes.SyncMode,
-		synctypes.WatchOpts,
+		syncengine.Mode,
+		syncengine.WatchOptions,
 		*slog.Logger,
 		io.Writer,
 		string,
@@ -634,10 +639,10 @@ sync_dir = %q
 		return nil
 	}
 
-	err := service.run(t.Context(), syncCommandOptions{
-		Mode:  synctypes.SyncBidirectional,
+	err := runSyncCommand(t.Context(), cc, syncCommandOptions{
+		Mode:  syncengine.SyncBidirectional,
 		Watch: true,
-	})
+	}, deps)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "resolve control socket path")
 	assert.False(t, called, "watch sync owner must stop before daemon startup when the socket path is impossible")

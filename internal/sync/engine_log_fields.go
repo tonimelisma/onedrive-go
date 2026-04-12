@@ -7,7 +7,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
-func (flow *engineFlow) resultLogFields(decision *ResultDecision, r *synctypes.WorkerResult) []any {
+func (flow *engineFlow) resultLogFields(decision *ResultDecision, r *WorkerResult) []any {
 	if flow == nil || decision == nil || r == nil {
 		return nil
 	}
