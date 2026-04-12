@@ -641,7 +641,7 @@ func TestQuerySyncState_DurableIntentCountsAndActionHints(t *testing.T) {
 			('conflict-failed', 'd!1', 'item-3', '/failed.txt', 'edit_edit', 3, 'unresolved')`)
 	require.NoError(t, err)
 
-	require.NoError(t, store.UpsertHeldDeletes(ctx, []synctypes.HeldDeleteRecord{{
+	require.NoError(t, store.UpsertHeldDeletes(ctx, []syncstore.HeldDeleteRecord{{
 		DriveID:       driveid.New("d!1"),
 		ActionType:    synctypes.ActionRemoteDelete,
 		Path:          "/delete-me.txt",
@@ -652,18 +652,18 @@ func TestQuerySyncState_DurableIntentCountsAndActionHints(t *testing.T) {
 	}}))
 	require.NoError(t, store.ApproveHeldDeletes(ctx))
 
-	queued, err := store.RequestConflictResolution(ctx, "conflict-pending", synctypes.ResolutionKeepLocal)
+	queued, err := store.RequestConflictResolution(ctx, "conflict-pending", syncstore.ResolutionKeepLocal)
 	require.NoError(t, err)
 	assert.Equal(t, syncstore.ConflictRequestQueued, queued.Status)
 
-	resolving, err := store.RequestConflictResolution(ctx, "conflict-resolving", synctypes.ResolutionKeepRemote)
+	resolving, err := store.RequestConflictResolution(ctx, "conflict-resolving", syncstore.ResolutionKeepRemote)
 	require.NoError(t, err)
 	assert.Equal(t, syncstore.ConflictRequestQueued, resolving.Status)
 	_, ok, err := store.ClaimConflictResolution(ctx, "conflict-resolving")
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	failed, err := store.RequestConflictResolution(ctx, "conflict-failed", synctypes.ResolutionKeepBoth)
+	failed, err := store.RequestConflictResolution(ctx, "conflict-failed", syncstore.ResolutionKeepBoth)
 	require.NoError(t, err)
 	assert.Equal(t, syncstore.ConflictRequestQueued, failed.Status)
 	_, ok, err = store.ClaimConflictResolution(ctx, "conflict-failed")
@@ -1196,7 +1196,7 @@ func TestBuildSyncStateInfo_SamplesSectionsByDefault(t *testing.T) {
 
 	descriptor := synctypes.DescribeSummary(synctypes.SummaryInvalidFilename)
 	paths := []string{"/one", "/two", "/three", "/four", "/five", "/six", "/seven"}
-	deleteRows, conflicts, history := buildStatusSectionRows(paths, synctypes.ResolutionKeepRemote)
+	deleteRows, conflicts, history := buildStatusSectionRows(paths, syncstore.ResolutionKeepRemote)
 
 	info := buildSyncStateInfo(
 		"personal:alice@example.com",
@@ -1235,7 +1235,7 @@ func TestBuildSyncStateInfo_VerboseExpandsSections(t *testing.T) {
 	t.Parallel()
 
 	paths := []string{"/one", "/two", "/three", "/four", "/five", "/six"}
-	deleteRows, conflicts, history := buildStatusSectionRows(paths, synctypes.ResolutionKeepBoth)
+	deleteRows, conflicts, history := buildStatusSectionRows(paths, syncstore.ResolutionKeepBoth)
 
 	info := buildSyncStateInfo(
 		"personal:alice@example.com",
@@ -1374,15 +1374,15 @@ func TestPrintSyncStateText_WithDurableIntentCountsAndHints(t *testing.T) {
 			{
 				Path:                "/queued-conflict.txt",
 				ConflictType:        "edit_edit",
-				State:               synctypes.ConflictStateQueued,
-				RequestedResolution: synctypes.ResolutionKeepLocal,
+				State:               syncstore.ConflictStateQueued,
+				RequestedResolution: syncstore.ResolutionKeepLocal,
 				ActionHint:          "run `onedrive-go --drive personal:alice@example.com sync` or start `onedrive-go --drive personal:alice@example.com sync --watch` to apply queued resolutions.",
 			},
 			{
 				Path:                "/applying-conflict.txt",
 				ConflictType:        "edit_delete",
-				State:               synctypes.ConflictStateApplying,
-				RequestedResolution: synctypes.ResolutionKeepRemote,
+				State:               syncstore.ConflictStateApplying,
+				RequestedResolution: syncstore.ResolutionKeepRemote,
 				ActionHint:          "wait for the active sync owner to finish, then run `onedrive-go --drive personal:alice@example.com status` again if needed.",
 			},
 		},
@@ -1408,7 +1408,7 @@ func TestStatusService_Run_FilteredDriveText(t *testing.T) {
 	cc := newServiceContext(&out, cfgPath)
 	cc.Flags.Drive = []string{cid.String()}
 
-	require.NoError(t, newStatusService(cc).run(true))
+	require.NoError(t, runStatusCommand(cc, true))
 
 	output := out.String()
 	assert.Contains(t, output, "ISSUES")
@@ -1447,7 +1447,7 @@ func TestStatusService_Run_FilteredDriveJSON(t *testing.T) {
 	cc.Flags.Drive = []string{cid.String()}
 	cc.Flags.JSON = true
 
-	require.NoError(t, newStatusService(cc).run(true))
+	require.NoError(t, runStatusCommand(cc, true))
 
 	var decoded statusOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
@@ -1476,13 +1476,13 @@ func TestStatusService_Run_AllDrivesJSON_FilteredDriveIsSubset(t *testing.T) {
 	var allOut bytes.Buffer
 	allCtx := newServiceContext(&allOut, cfgPath)
 	allCtx.Flags.JSON = true
-	require.NoError(t, newStatusService(allCtx).run(false))
+	require.NoError(t, runStatusCommand(allCtx, false))
 
 	var filteredOut bytes.Buffer
 	filteredCtx := newServiceContext(&filteredOut, cfgPath)
 	filteredCtx.Flags.JSON = true
 	filteredCtx.Flags.Drive = []string{selected.String()}
-	require.NoError(t, newStatusService(filteredCtx).run(false))
+	require.NoError(t, runStatusCommand(filteredCtx, false))
 
 	var allDecoded statusOutput
 	require.NoError(t, json.Unmarshal(allOut.Bytes(), &allDecoded))
@@ -1506,7 +1506,7 @@ func TestStatusService_Run_HistoryIncludesAllDisplayedDrives(t *testing.T) {
 	var out bytes.Buffer
 	cc := newServiceContext(&out, cfgPath)
 	cc.Flags.JSON = true
-	require.NoError(t, newStatusService(cc).run(true))
+	require.NoError(t, runStatusCommand(cc, true))
 
 	var decoded statusOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
@@ -1600,18 +1600,18 @@ func assertStatusConflictActionHints(t *testing.T, decoded *syncStateInfo, canon
 		switch conflict.Path {
 		case "/queued-conflict.txt":
 			queuedFound = true
-			assert.Equal(t, synctypes.ConflictStateQueued, conflict.State)
-			assert.Equal(t, synctypes.ResolutionKeepLocal, conflict.RequestedResolution)
+			assert.Equal(t, syncstore.ConflictStateQueued, conflict.State)
+			assert.Equal(t, syncstore.ResolutionKeepLocal, conflict.RequestedResolution)
 			assert.Equal(t, "temporary upload failure", conflict.LastRequestError)
 			assert.Equal(t, "run `onedrive-go --drive "+canonicalID+" sync` or start `onedrive-go --drive "+canonicalID+" sync --watch` to apply queued resolutions.", conflict.ActionHint)
 		case "/applying-conflict.txt":
 			applyingFound = true
-			assert.Equal(t, synctypes.ConflictStateApplying, conflict.State)
-			assert.Equal(t, synctypes.ResolutionKeepRemote, conflict.RequestedResolution)
+			assert.Equal(t, syncstore.ConflictStateApplying, conflict.State)
+			assert.Equal(t, syncstore.ResolutionKeepRemote, conflict.RequestedResolution)
 			assert.Equal(t, "wait for the active sync owner to finish, then run `onedrive-go --drive "+canonicalID+" status` again if needed.", conflict.ActionHint)
 		case "/needs-choice.txt":
 			unresolvedSeen = true
-			assert.Equal(t, synctypes.ConflictStateUnresolved, conflict.State)
+			assert.Equal(t, syncstore.ConflictStateUnresolved, conflict.State)
 			assert.Empty(t, conflict.RequestedResolution)
 			assert.Equal(t, "run `onedrive-go --drive "+canonicalID+" resolve local '/needs-choice.txt'` or replace `local` with `remote` or `both`.", conflict.ActionHint)
 		}
@@ -1635,7 +1635,7 @@ func TestStatusService_Run_DamagedStateStoreSurfacesRecoverHint(t *testing.T) {
 	cc.Flags.Drive = []string{cid.String()}
 	cc.Flags.JSON = true
 
-	require.NoError(t, newStatusService(cc).run(false))
+	require.NoError(t, runStatusCommand(cc, false))
 
 	var decoded statusOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
@@ -1720,7 +1720,7 @@ func seedDriveStatusFixture(t *testing.T) (string, driveid.CanonicalID) {
 			('conflict-resolved', 'd!1', 'item-resolved', '/resolved-conflict.txt', 'create_create', 40, 'keep_both', 'lh4', 'rh4', 4, 4, 50, 'user');`)
 	require.NoError(t, err)
 
-	result, err := store.RequestConflictResolution(ctx, "conflict-queued", synctypes.ResolutionKeepLocal)
+	result, err := store.RequestConflictResolution(ctx, "conflict-queued", syncstore.ResolutionKeepLocal)
 	require.NoError(t, err)
 	assert.Equal(t, syncstore.ConflictRequestQueued, result.Status)
 	_, ok, err := store.ClaimConflictResolution(ctx, "conflict-queued")
@@ -1728,7 +1728,7 @@ func seedDriveStatusFixture(t *testing.T) (string, driveid.CanonicalID) {
 	require.True(t, ok)
 	require.NoError(t, store.MarkConflictResolutionFailed(ctx, "conflict-queued", errors.New("temporary upload failure")))
 
-	result, err = store.RequestConflictResolution(ctx, "conflict-applying", synctypes.ResolutionKeepRemote)
+	result, err = store.RequestConflictResolution(ctx, "conflict-applying", syncstore.ResolutionKeepRemote)
 	require.NoError(t, err)
 	assert.Equal(t, syncstore.ConflictRequestQueued, result.Status)
 	_, ok, err = store.ClaimConflictResolution(ctx, "conflict-applying")

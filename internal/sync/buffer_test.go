@@ -17,7 +17,7 @@ import (
 
 // findPathChanges returns the PathChanges entry with the given path,
 // or nil if not found.
-func findPathChanges(changes []synctypes.PathChanges, p string) *synctypes.PathChanges {
+func findPathChanges(changes []PathChanges, p string) *PathChanges {
 	for i := range changes {
 		if changes[i].Path == p {
 			return &changes[i]
@@ -31,7 +31,7 @@ func TestBuffer_AddSingle(t *testing.T) {
 	t.Parallel()
 
 	buf := NewBuffer(synctest.TestLogger(t))
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source:   synctypes.SourceRemote,
 		Type:     synctypes.ChangeCreate,
 		Path:     "buffer-notes.txt",
@@ -57,12 +57,12 @@ func TestBuffer_AddMultiplePaths(t *testing.T) {
 	t.Parallel()
 
 	buf := NewBuffer(synctest.TestLogger(t))
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source: synctypes.SourceRemote, Type: synctypes.ChangeCreate,
 		Path: "buffer-alpha.txt", Name: "buffer-alpha.txt",
 		ItemID: "buf-a1", DriveID: driveid.New(synctest.TestDriveID), ItemType: synctypes.ItemTypeFile,
 	})
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source: synctypes.SourceLocal, Type: synctypes.ChangeModify,
 		Path: "buffer-beta.csv", Name: "buffer-beta.csv",
 		ItemID: "", ItemType: synctypes.ItemTypeFile,
@@ -84,12 +84,12 @@ func TestBuffer_AddSamePathRemote(t *testing.T) {
 	t.Parallel()
 
 	buf := NewBuffer(synctest.TestLogger(t))
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source: synctypes.SourceRemote, Type: synctypes.ChangeCreate,
 		Path: "docs/buffer-report.pdf", Name: "buffer-report.pdf",
 		ItemID: "buf-r1", DriveID: driveid.New(synctest.TestDriveID), ItemType: synctypes.ItemTypeFile,
 	})
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source: synctypes.SourceRemote, Type: synctypes.ChangeModify,
 		Path: "docs/buffer-report.pdf", Name: "buffer-report.pdf",
 		ItemID: "buf-r1", DriveID: driveid.New(synctest.TestDriveID), ItemType: synctypes.ItemTypeFile,
@@ -107,12 +107,12 @@ func TestBuffer_AddSamePathLocal(t *testing.T) {
 	t.Parallel()
 
 	buf := NewBuffer(synctest.TestLogger(t))
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source: synctypes.SourceLocal, Type: synctypes.ChangeCreate,
 		Path: "buffer-localdata.txt", Name: "buffer-localdata.txt",
 		ItemType: synctypes.ItemTypeFile, Size: 100,
 	})
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source: synctypes.SourceLocal, Type: synctypes.ChangeModify,
 		Path: "buffer-localdata.txt", Name: "buffer-localdata.txt",
 		ItemType: synctypes.ItemTypeFile, Size: 200,
@@ -128,12 +128,12 @@ func TestBuffer_AddMixedSources(t *testing.T) {
 	t.Parallel()
 
 	buf := NewBuffer(synctest.TestLogger(t))
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source: synctypes.SourceRemote, Type: synctypes.ChangeModify,
 		Path: "buffer-shared.docx", Name: "buffer-shared.docx",
 		ItemID: "buf-s1", DriveID: driveid.New(synctest.TestDriveID), ItemType: synctypes.ItemTypeFile,
 	})
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source: synctypes.SourceLocal, Type: synctypes.ChangeModify,
 		Path: "buffer-shared.docx", Name: "buffer-shared.docx",
 		ItemType: synctypes.ItemTypeFile,
@@ -151,7 +151,7 @@ func TestBuffer_MoveDualKeying(t *testing.T) {
 	t.Parallel()
 
 	buf := NewBuffer(synctest.TestLogger(t))
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source:   synctypes.SourceRemote,
 		Type:     synctypes.ChangeMove,
 		Path:     "buffer-new-folder/moved.txt",
@@ -191,7 +191,7 @@ func TestBuffer_MoveNoOldPath(t *testing.T) {
 	t.Parallel()
 
 	buf := NewBuffer(synctest.TestLogger(t))
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source:   synctypes.SourceRemote,
 		Type:     synctypes.ChangeMove,
 		Path:     "buffer-dest/file.txt",
@@ -213,7 +213,7 @@ func TestBuffer_AddAll(t *testing.T) {
 	t.Parallel()
 
 	buf := NewBuffer(synctest.TestLogger(t))
-	events := []synctypes.ChangeEvent{
+	events := []ChangeEvent{
 		{
 			Source: synctypes.SourceRemote, Type: synctypes.ChangeCreate,
 			Path: "buffer-batch-a.txt", Name: "buffer-batch-a.txt",
@@ -250,7 +250,7 @@ func TestBuffer_AddAllWithMoves(t *testing.T) {
 	t.Parallel()
 
 	buf := NewBuffer(synctest.TestLogger(t))
-	events := []synctypes.ChangeEvent{
+	events := []ChangeEvent{
 		{
 			Source: synctypes.SourceLocal, Type: synctypes.ChangeMove,
 			Path: "buffer-mv-new/data.json", OldPath: "buffer-mv-old/data.json",
@@ -288,7 +288,7 @@ func TestBuffer_FlushClears(t *testing.T) {
 	t.Parallel()
 
 	buf := NewBuffer(synctest.TestLogger(t))
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source: synctypes.SourceRemote, Type: synctypes.ChangeCreate,
 		Path: "buffer-cleartest.txt", Name: "buffer-cleartest.txt",
 		ItemID: "buf-ct1", DriveID: driveid.New(synctest.TestDriveID), ItemType: synctypes.ItemTypeFile,
@@ -314,7 +314,7 @@ func TestBuffer_FlushSorted(t *testing.T) {
 	}
 
 	for _, p := range paths {
-		buf.Add(&synctypes.ChangeEvent{
+		buf.Add(&ChangeEvent{
 			Source: synctypes.SourceRemote, Type: synctypes.ChangeCreate,
 			Path: p, Name: p,
 			ItemID: "buf-sort-" + p, DriveID: driveid.New(synctest.TestDriveID), ItemType: synctypes.ItemTypeFile,
@@ -336,7 +336,7 @@ func TestBuffer_Len(t *testing.T) {
 
 	assert.Equal(t, 0, buf.Len())
 
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source: synctypes.SourceRemote, Type: synctypes.ChangeCreate,
 		Path: "buffer-len-one.txt", Name: "buffer-len-one.txt",
 		ItemID: "buf-l1", DriveID: driveid.New(synctest.TestDriveID), ItemType: synctypes.ItemTypeFile,
@@ -345,7 +345,7 @@ func TestBuffer_Len(t *testing.T) {
 	assert.Equal(t, 1, buf.Len())
 
 	// Same path again — Len should not increase.
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source: synctypes.SourceLocal, Type: synctypes.ChangeModify,
 		Path: "buffer-len-one.txt", Name: "buffer-len-one.txt",
 		ItemType: synctypes.ItemTypeFile,
@@ -354,7 +354,7 @@ func TestBuffer_Len(t *testing.T) {
 	assert.Equal(t, 1, buf.Len())
 
 	// Different path.
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source: synctypes.SourceLocal, Type: synctypes.ChangeCreate,
 		Path: "buffer-len-two.txt", Name: "buffer-len-two.txt",
 		ItemType: synctypes.ItemTypeFile,
@@ -384,7 +384,7 @@ func TestBuffer_ThreadSafety_DifferentPaths(t *testing.T) {
 			for i := range eventsPerGoroutine {
 				// Path includes goroutine ID and event index for uniqueness.
 				p := fmt.Sprintf("buffer-mt-g%d-e%d.txt", id, i)
-				buf.Add(&synctypes.ChangeEvent{
+				buf.Add(&ChangeEvent{
 					Source:   synctypes.SourceRemote,
 					Type:     synctypes.ChangeCreate,
 					Path:     p,
@@ -433,7 +433,7 @@ func TestBuffer_ThreadSafety(t *testing.T) {
 					source = synctypes.SourceLocal
 				}
 
-				buf.Add(&synctypes.ChangeEvent{
+				buf.Add(&ChangeEvent{
 					Source:   source,
 					Type:     synctypes.ChangeModify,
 					Path:     "buffer-concurrent.dat",
@@ -476,12 +476,12 @@ func TestFlushDebounced_SingleBatch(t *testing.T) {
 	out := buf.FlushDebounced(ctx, debounce)
 
 	// Add events, then wait for the debounce to flush.
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source: synctypes.SourceRemote, Type: synctypes.ChangeCreate,
 		Path: "debounce-a.txt", Name: "debounce-a.txt",
 		ItemID: "d1", DriveID: driveid.New(synctest.TestDriveID), ItemType: synctypes.ItemTypeFile,
 	})
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source: synctypes.SourceLocal, Type: synctypes.ChangeCreate,
 		Path: "debounce-b.txt", Name: "debounce-b.txt",
 		ItemType: synctypes.ItemTypeFile,
@@ -511,7 +511,7 @@ func TestFlushDebounced_MultipleWaves(t *testing.T) {
 	out := buf.FlushDebounced(ctx, debounce)
 
 	// Wave 1.
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source: synctypes.SourceRemote, Type: synctypes.ChangeCreate,
 		Path: "wave1.txt", Name: "wave1.txt",
 		ItemID: "w1", DriveID: driveid.New(synctest.TestDriveID), ItemType: synctypes.ItemTypeFile,
@@ -525,7 +525,7 @@ func TestFlushDebounced_MultipleWaves(t *testing.T) {
 	}
 
 	// Wave 2.
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source: synctypes.SourceLocal, Type: synctypes.ChangeModify,
 		Path: "wave2.txt", Name: "wave2.txt",
 		ItemType: synctypes.ItemTypeFile,
@@ -556,7 +556,7 @@ func TestFlushDebounced_DebounceResets(t *testing.T) {
 	out := buf.FlushDebounced(ctx, debounce)
 
 	// Add first event.
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source: synctypes.SourceRemote, Type: synctypes.ChangeCreate,
 		Path: "reset-first.txt", Name: "reset-first.txt",
 		ItemID: "r1", DriveID: driveid.New(synctest.TestDriveID), ItemType: synctypes.ItemTypeFile,
@@ -564,7 +564,7 @@ func TestFlushDebounced_DebounceResets(t *testing.T) {
 
 	// Wait less than debounce, then add second event — timer should reset.
 	time.Sleep(20 * time.Millisecond)
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source: synctypes.SourceLocal, Type: synctypes.ChangeCreate,
 		Path: "reset-second.txt", Name: "reset-second.txt",
 		ItemType: synctypes.ItemTypeFile,
@@ -593,7 +593,7 @@ func TestFlushDebounced_ContextCancel(t *testing.T) {
 	out := buf.FlushDebounced(ctx, debounce)
 
 	// Add an event, then cancel before debounce expires.
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source: synctypes.SourceRemote, Type: synctypes.ChangeCreate,
 		Path: "cancel-drain.txt", Name: "cancel-drain.txt",
 		ItemID: "cd1", DriveID: driveid.New(synctest.TestDriveID), ItemType: synctypes.ItemTypeFile,
@@ -635,7 +635,7 @@ func TestFlushDebounced_ConcurrentAddAndFlush(t *testing.T) {
 			defer wg.Done()
 
 			for i := range eventsPerGoroutine {
-				buf.Add(&synctypes.ChangeEvent{
+				buf.Add(&ChangeEvent{
 					Source:   synctypes.SourceRemote,
 					Type:     synctypes.ChangeCreate,
 					Path:     fmt.Sprintf("concurrent-g%d-e%d.txt", id, i),
@@ -680,7 +680,7 @@ func TestBuffer_FlushDebounced_FinalDrainNoDeadlock(t *testing.T) {
 	out := buf.FlushDebounced(ctx, debounce)
 
 	// Add an event so the final drain has something to send.
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source: synctypes.SourceRemote, Type: synctypes.ChangeCreate,
 		Path: "deadlock-test.txt", Name: "deadlock-test.txt",
 		ItemID: "dl1", DriveID: driveid.New(synctest.TestDriveID), ItemType: synctypes.ItemTypeFile,
@@ -724,7 +724,7 @@ func TestBuffer_WatchAndSafetyScanConflictingTypes(t *testing.T) {
 	buf := NewBuffer(synctest.TestLogger(t))
 
 	// Simulate a file watch event (ChangeCreate) arriving first.
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source:   synctypes.SourceLocal,
 		Type:     synctypes.ChangeCreate,
 		Path:     "docs/new-file.txt",
@@ -735,7 +735,7 @@ func TestBuffer_WatchAndSafetyScanConflictingTypes(t *testing.T) {
 	})
 
 	// Safety scan sees the same file and reports ChangeModify (different type).
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source:   synctypes.SourceLocal,
 		Type:     synctypes.ChangeModify,
 		Path:     "docs/new-file.txt",
@@ -756,17 +756,17 @@ func TestBuffer_WatchAndSafetyScanConflictingTypes(t *testing.T) {
 	// event (ChangeModify), which gives a non-nil LocalState.
 	planner := NewPlanner(synctest.TestLogger(t))
 
-	plan, err := planner.Plan(result, synctest.EmptyBaseline(), synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(result, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err, "Plan()")
 	require.Len(t, plan.Actions, 1, "single upload for local-only file")
-	assert.Equal(t, synctypes.ActionUpload, plan.Actions[0].Type)
+	assert.Equal(t, ActionUpload, plan.Actions[0].Type)
 }
 
 func TestBuffer_RetainsRemoteMoveMarkerWithLatestRemoteState(t *testing.T) {
 	t.Parallel()
 
 	buf := NewBuffer(synctest.TestLogger(t))
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source:   synctypes.SourceRemote,
 		Type:     synctypes.ChangeMove,
 		Path:     "docs/new-name.txt",
@@ -777,7 +777,7 @@ func TestBuffer_RetainsRemoteMoveMarkerWithLatestRemoteState(t *testing.T) {
 		DriveID:  driveid.New(synctest.TestDriveID),
 		ItemType: synctypes.ItemTypeFile,
 	})
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source:   synctypes.SourceRemote,
 		Type:     synctypes.ChangeModify,
 		Path:     "docs/new-name.txt",
@@ -803,7 +803,7 @@ func TestBuffer_RetainsRemoteMoveMarkerWithLatestRemoteState(t *testing.T) {
 	require.Len(t, oldPC.RemoteEvents, 1)
 	assert.Equal(t, synctypes.ChangeDelete, oldPC.RemoteEvents[0].Type)
 
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path:      "docs/old-name.txt",
 		DriveID:   driveid.New(synctest.TestDriveID),
 		ItemID:    "buf-rm1",
@@ -813,10 +813,10 @@ func TestBuffer_RetainsRemoteMoveMarkerWithLatestRemoteState(t *testing.T) {
 	})
 
 	planner := NewPlanner(synctest.TestLogger(t))
-	plan, err := planner.Plan(result, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(result, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 	require.Len(t, plan.Actions, 1)
-	assert.Equal(t, synctypes.ActionLocalMove, plan.Actions[0].Type)
+	assert.Equal(t, ActionLocalMove, plan.Actions[0].Type)
 	assert.Equal(t, "docs/old-name.txt", plan.Actions[0].OldPath)
 	assert.Equal(t, "docs/new-name.txt", plan.Actions[0].Path)
 }
@@ -841,7 +841,7 @@ func TestFlushDebounced_SlowConsumer(t *testing.T) {
 	out := buf.FlushDebounced(ctx, debounce)
 
 	// Inject first wave — this will flush and fill the output channel (cap 1).
-	buf.Add(&synctypes.ChangeEvent{
+	buf.Add(&ChangeEvent{
 		Source: synctypes.SourceLocal, Type: synctypes.ChangeCreate,
 		Path: "slow-a.txt", Name: "slow-a.txt", ItemType: synctypes.ItemTypeFile,
 	})
@@ -853,9 +853,9 @@ func TestFlushDebounced_SlowConsumer(t *testing.T) {
 	// Inject second wave while the first batch is still unread (slow consumer).
 	// These events accumulate in the buffer because the debounce loop is
 	// blocked trying to send the first batch.
-	secondWave := make([]synctypes.ChangeEvent, 0, 5)
+	secondWave := make([]ChangeEvent, 0, 5)
 	for i := range 5 {
-		secondWave = append(secondWave, synctypes.ChangeEvent{
+		secondWave = append(secondWave, ChangeEvent{
 			Source: synctypes.SourceLocal, Type: synctypes.ChangeCreate,
 			Path: fmt.Sprintf("slow-b%d.txt", i), Name: fmt.Sprintf("slow-b%d.txt", i),
 			ItemType: synctypes.ItemTypeFile,

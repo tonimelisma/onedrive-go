@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
@@ -92,8 +93,8 @@ func TestVerifyBaseline_AllMatch(t *testing.T) {
 	writeTestFile(t, dir, "notes.txt", content)
 
 	hash := hashContent(t, content)
-	bl := &synctypes.Baseline{
-		ByPath: map[string]*synctypes.BaselineEntry{
+	bl := &syncstore.Baseline{
+		ByPath: map[string]*syncstore.BaselineEntry{
 			"docs/readme.md": {
 				Path: "docs/readme.md", DriveID: driveid.New("d"), ItemID: "i1",
 				ItemType: synctypes.ItemTypeFile, LocalHash: hash, LocalSize: int64(len(content)), LocalSizeKnown: true,
@@ -103,7 +104,7 @@ func TestVerifyBaseline_AllMatch(t *testing.T) {
 				ItemType: synctypes.ItemTypeFile, LocalHash: hash, LocalSize: int64(len(content)), LocalSizeKnown: true,
 			},
 		},
-		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),
+		ByDirLower: make(map[syncstore.DirLowerKey][]*syncstore.BaselineEntry),
 	}
 
 	tree, err := synctree.Open(dir)
@@ -123,14 +124,14 @@ func TestVerifyBaseline_MissingFile(t *testing.T) {
 	tree, err := synctree.Open(dir)
 	require.NoError(t, err)
 
-	bl := &synctypes.Baseline{
-		ByPath: map[string]*synctypes.BaselineEntry{
+	bl := &syncstore.Baseline{
+		ByPath: map[string]*syncstore.BaselineEntry{
 			"ghost.txt": {
 				Path: "ghost.txt", DriveID: driveid.New("d"), ItemID: "i1",
 				ItemType: synctypes.ItemTypeFile, LocalHash: "somehash", LocalSize: 100, LocalSizeKnown: true,
 			},
 		},
-		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),
+		ByDirLower: make(map[syncstore.DirLowerKey][]*syncstore.BaselineEntry),
 	}
 
 	report, err := VerifyBaseline(t.Context(), bl, tree, newTestLogger())
@@ -151,14 +152,14 @@ func TestVerifyBaseline_HashMismatch(t *testing.T) {
 	tree, err := synctree.Open(dir)
 	require.NoError(t, err)
 
-	bl := &synctypes.Baseline{
-		ByPath: map[string]*synctypes.BaselineEntry{
+	bl := &syncstore.Baseline{
+		ByPath: map[string]*syncstore.BaselineEntry{
 			"changed.txt": {
 				Path: "changed.txt", DriveID: driveid.New("d"), ItemID: "i1",
 				ItemType: synctypes.ItemTypeFile, LocalHash: "wrong-hash", LocalSize: int64(len(content)), LocalSizeKnown: true,
 			},
 		},
-		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),
+		ByDirLower: make(map[syncstore.DirLowerKey][]*syncstore.BaselineEntry),
 	}
 
 	report, err := VerifyBaseline(t.Context(), bl, tree, newTestLogger())
@@ -177,9 +178,9 @@ func TestVerifyBaseline_EmptyBaseline(t *testing.T) {
 	tree, err := synctree.Open(dir)
 	require.NoError(t, err)
 
-	bl := &synctypes.Baseline{
-		ByPath:     make(map[string]*synctypes.BaselineEntry),
-		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),
+	bl := &syncstore.Baseline{
+		ByPath:     make(map[string]*syncstore.BaselineEntry),
+		ByDirLower: make(map[syncstore.DirLowerKey][]*syncstore.BaselineEntry),
 	}
 
 	report, err := VerifyBaseline(t.Context(), bl, tree, newTestLogger())
@@ -200,8 +201,8 @@ func TestVerifyBaseline_SkipsFolders(t *testing.T) {
 	require.NoError(t, err)
 
 	hash := hashContent(t, content)
-	bl := &synctypes.Baseline{
-		ByPath: map[string]*synctypes.BaselineEntry{
+	bl := &syncstore.Baseline{
+		ByPath: map[string]*syncstore.BaselineEntry{
 			"docs": {
 				Path: "docs", DriveID: driveid.New("d"), ItemID: "folder1",
 				ItemType: synctypes.ItemTypeFolder,
@@ -211,7 +212,7 @@ func TestVerifyBaseline_SkipsFolders(t *testing.T) {
 				ItemType: synctypes.ItemTypeFile, LocalHash: hash, LocalSize: int64(len(content)), LocalSizeKnown: true,
 			},
 		},
-		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),
+		ByDirLower: make(map[syncstore.DirLowerKey][]*syncstore.BaselineEntry),
 	}
 
 	report, err := VerifyBaseline(t.Context(), bl, tree, newTestLogger())
@@ -231,14 +232,14 @@ func TestVerifyBaseline_SizeMismatch(t *testing.T) {
 	tree, err := synctree.Open(dir)
 	require.NoError(t, err)
 
-	bl := &synctypes.Baseline{
-		ByPath: map[string]*synctypes.BaselineEntry{
+	bl := &syncstore.Baseline{
+		ByPath: map[string]*syncstore.BaselineEntry{
 			"size.txt": {
 				Path: "size.txt", DriveID: driveid.New("d"), ItemID: "i1",
 				ItemType: synctypes.ItemTypeFile, LocalHash: "somehash", LocalSize: 99999, LocalSizeKnown: true,
 			},
 		},
-		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),
+		ByDirLower: make(map[syncstore.DirLowerKey][]*syncstore.BaselineEntry),
 	}
 
 	report, err := VerifyBaseline(t.Context(), bl, tree, newTestLogger())
@@ -251,7 +252,7 @@ func TestVerifyBaseline_SizeMismatch(t *testing.T) {
 func TestVerifyBaseline_SortsMismatchesByPath(t *testing.T) {
 	t.Parallel()
 
-	bl := synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{
+	bl := syncstore.NewBaselineForTest([]*syncstore.BaselineEntry{
 		{
 			Path: "zeta.txt", DriveID: driveid.New("d"), ItemID: "i3",
 			ItemType: synctypes.ItemTypeFile, LocalHash: "hash-z",
@@ -295,7 +296,7 @@ func TestVerifyBaseline_CanceledContextReturnsWrappedCancellation(t *testing.T) 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	bl := synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{{
+	bl := syncstore.NewBaselineForTest([]*syncstore.BaselineEntry{{
 		Path: "alpha.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: "hash-a",
 	}})
@@ -323,7 +324,7 @@ func TestVerifyBaseline_CanceledContextReturnsWrappedCancellation(t *testing.T) 
 func TestVerifyBaseline_EmptyLocalHashSkipsHashCheck(t *testing.T) {
 	t.Parallel()
 
-	bl := synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{{
+	bl := syncstore.NewBaselineForTest([]*syncstore.BaselineEntry{{
 		Path: "sharepoint.docx", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: "", LocalSize: 42, LocalSizeKnown: true,
 	}})
@@ -355,7 +356,7 @@ func TestVerifyBaseline_ClassifiesStatErrorsAsMissing(t *testing.T) {
 
 	report, err := verifyBaselineWithHasher(
 		t.Context(),
-		synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{{
+		syncstore.NewBaselineForTest([]*syncstore.BaselineEntry{{
 			Path: "problem.txt", DriveID: driveid.New("d"), ItemID: "i1",
 			ItemType: synctypes.ItemTypeFile, LocalHash: "expected-hash",
 		}}),
@@ -382,7 +383,7 @@ func TestVerifyBaseline_ClassifiesRootedPathErrorsAsHashMismatch(t *testing.T) {
 
 	report, err := verifyBaselineWithHasher(
 		t.Context(),
-		synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{{
+		syncstore.NewBaselineForTest([]*syncstore.BaselineEntry{{
 			Path: "problem.txt", DriveID: driveid.New("d"), ItemID: "i1",
 			ItemType: synctypes.ItemTypeFile, LocalHash: "expected-hash",
 		}}),
@@ -412,7 +413,7 @@ func TestVerifyBaseline_ClassifiesHashComputationErrorsAsHashMismatch(t *testing
 
 	report, err := verifyBaselineWithHasher(
 		t.Context(),
-		synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{{
+		syncstore.NewBaselineForTest([]*syncstore.BaselineEntry{{
 			Path: "problem.txt", DriveID: driveid.New("d"), ItemID: "i1",
 			ItemType: synctypes.ItemTypeFile, LocalHash: "expected-hash",
 		}}),

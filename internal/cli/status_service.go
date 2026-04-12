@@ -9,19 +9,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-type statusService struct {
-	cc *CLIContext
-}
-
-func newStatusService(cc *CLIContext) *statusService {
-	return &statusService{cc: cc}
-}
-
-func (s *statusService) run(history bool, showPerf ...bool) error {
-	logger := s.cc.Logger
+func runStatusCommand(cc *CLIContext, history bool, showPerf ...bool) error {
+	logger := cc.Logger
 	perfEnabled := len(showPerf) > 0 && showPerf[0]
-	readModel := newAccountReadModelService(s.cc)
-	snapshot, err := readModel.loadLenientCatalog(context.Background())
+	snapshot, err := loadLenientCatalog(context.Background(), cc)
 	if err != nil {
 		return err
 	}
@@ -29,27 +20,27 @@ func (s *statusService) run(history bool, showPerf ...bool) error {
 	if len(snapshot.Config.Drives) == 0 {
 		tokens := config.DiscoverTokens(logger)
 		if len(tokens) > 0 {
-			return writeln(s.cc.Output(), "No drives configured. Run 'onedrive-go drive add' to add a drive.")
+			return writeln(cc.Output(), "No drives configured. Run 'onedrive-go drive add' to add a drive.")
 		}
 
-		return writeln(s.cc.Output(), "No accounts configured. Run 'onedrive-go login' to get started.")
+		return writeln(cc.Output(), "No accounts configured. Run 'onedrive-go login' to get started.")
 	}
 
-	filteredSnapshot, err := filterStatusSnapshot(snapshot, s.cc.Flags.Drive, logger)
+	filteredSnapshot, err := filterStatusSnapshot(snapshot, cc.Flags.Drive, logger)
 	if err != nil {
 		return err
 	}
 	if len(filteredSnapshot.Config.Drives) == 0 {
-		return writeln(s.cc.Output(), "No matching drives selected.")
+		return writeln(cc.Output(), "No matching drives selected.")
 	}
 
-	accounts := readModel.statusAccounts(filteredSnapshot, history)
+	accounts := statusAccounts(cc, filteredSnapshot, history)
 	applyStatusPerfOverlay(accounts, loadStatusPerfOverlay(context.Background(), perfEnabled))
-	if s.cc.Flags.JSON {
-		return printStatusJSON(s.cc.Output(), accounts)
+	if cc.Flags.JSON {
+		return printStatusJSON(cc.Output(), accounts)
 	}
 
-	return printStatusText(s.cc.Output(), accounts, history)
+	return printStatusText(cc.Output(), accounts, history)
 }
 
 func filterStatusSnapshot(

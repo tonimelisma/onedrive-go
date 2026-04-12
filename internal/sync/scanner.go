@@ -36,6 +36,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -95,7 +96,7 @@ func (o *LocalObserver) resolveCheckWorkers() int {
 //     for invalid names, too-long paths, and too-large files.
 //  2. Hash (parallel): errgroup.SetLimit(checkWorkers) hashes files concurrently.
 //  3. Deletion detection (sequential): compare observed vs baseline.
-func (o *LocalObserver) FullScan(ctx context.Context, tree *synctree.Root) (synctypes.ScanResult, error) {
+func (o *LocalObserver) FullScan(ctx context.Context, tree *synctree.Root) (ScanResult, error) {
 	syncRoot := tree.Path()
 	o.Logger.Info("local observer starting full scan",
 		slog.String("sync_root", syncRoot),
@@ -108,20 +109,20 @@ func (o *LocalObserver) FullScan(ctx context.Context, tree *synctree.Root) (sync
 	if !SyncRootExists(syncRoot) {
 		o.Logger.Warn("sync root missing, aborting scan",
 			slog.String("sync_root", syncRoot))
-		return synctypes.ScanResult{}, synctypes.ErrSyncRootMissing
+		return ScanResult{}, synctypes.ErrSyncRootMissing
 	}
 
 	// Guard: abort if .nosync file is present (sync dir may be unmounted).
 	if _, err := tree.Stat(nosyncFileName); err == nil {
 		o.Logger.Warn("nosync guard file detected, aborting scan",
 			slog.String("sync_root", syncRoot))
-		return synctypes.ScanResult{}, synctypes.ErrNosyncGuard
+		return ScanResult{}, synctypes.ErrNosyncGuard
 	}
 
 	// Phase 1: Walk — collect observed paths, folder events, hash jobs, and skipped items.
-	var events []synctypes.ChangeEvent
+	var events []ChangeEvent
 	var jobs []hashJob
-	var skipped []synctypes.SkippedItem
+	var skipped []SkippedItem
 	var skippedEntries atomic.Int64
 	observed := make(map[string]bool)
 	scanStartNano := time.Now().UnixNano()
@@ -130,10 +131,10 @@ func (o *LocalObserver) FullScan(ctx context.Context, tree *synctree.Root) (sync
 	walkFn := o.makeWalkFunc(ctx, tree, observed, &events, &jobs, &skipped, &skippedEntries, scanStartNano, dirStack)
 	if err := tree.WalkDir(walkFn); err != nil {
 		if ctx.Err() != nil {
-			return synctypes.ScanResult{}, fmt.Errorf("sync: local scan canceled: %w", ctx.Err())
+			return ScanResult{}, fmt.Errorf("sync: local scan canceled: %w", ctx.Err())
 		}
 
-		return synctypes.ScanResult{}, fmt.Errorf("sync: walking %s: %w", syncRoot, err)
+		return ScanResult{}, fmt.Errorf("sync: walking %s: %w", syncRoot, err)
 	}
 
 	if n := skippedEntries.Load(); n > 0 {
@@ -147,7 +148,7 @@ func (o *LocalObserver) FullScan(ctx context.Context, tree *synctree.Root) (sync
 	if len(jobs) > 0 {
 		hashEvents, hashSkipped, err := o.hashPhase(ctx, jobs)
 		if err != nil {
-			return synctypes.ScanResult{}, err
+			return ScanResult{}, err
 		}
 
 		events = append(events, hashEvents...)
@@ -158,7 +159,7 @@ func (o *LocalObserver) FullScan(ctx context.Context, tree *synctree.Root) (sync
 	// but before deletion detection. Colliding files stay in the observed map
 	// (set in Phase 1) to prevent Phase 3 from generating spurious ChangeDelete
 	// events for files that exist locally but were excluded from events (R-2.12.1).
-	var caseSkipped []synctypes.SkippedItem
+	var caseSkipped []SkippedItem
 	events, caseSkipped = DetectCaseCollisions(events, o.Baseline)
 	skipped = append(skipped, caseSkipped...)
 
@@ -183,7 +184,7 @@ func (o *LocalObserver) FullScan(ctx context.Context, tree *synctree.Root) (sync
 		o.recordActivity()
 	}
 
-	return synctypes.ScanResult{Events: events, Skipped: skipped}, nil
+	return ScanResult{Events: events, Skipped: skipped}, nil
 }
 
 // hashPhase runs hash jobs in parallel using errgroup with checkWorkers limit.
@@ -191,7 +192,7 @@ func (o *LocalObserver) FullScan(ctx context.Context, tree *synctree.Root) (sync
 // any skipped items from panics in hash goroutines. Panics are recovered and
 // converted to SkippedItem entries — a single corrupted file cannot crash the
 // entire scan (defensive coding per eng philosophy).
-func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]synctypes.ChangeEvent, []synctypes.SkippedItem, error) {
+func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]ChangeEvent, []SkippedItem, error) {
 	workers := o.resolveCheckWorkers()
 
 	o.Logger.Debug("starting parallel hash phase",
@@ -205,8 +206,8 @@ func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]syncty
 	}
 
 	var mu stdsync.Mutex
-	var events []synctypes.ChangeEvent
-	var skipped []synctypes.SkippedItem
+	var events []ChangeEvent
+	var skipped []SkippedItem
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(workers)
@@ -224,7 +225,7 @@ func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]syncty
 					)
 
 					mu.Lock()
-					skipped = append(skipped, synctypes.SkippedItem{
+					skipped = append(skipped, SkippedItem{
 						Path:   job.dbRelPath,
 						Reason: synctypes.IssueHashPanic,
 						Detail: fmt.Sprintf("panic: %v", r),
@@ -256,7 +257,7 @@ func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]syncty
 				changeType = synctypes.ChangeModify
 			}
 
-			ev := synctypes.ChangeEvent{
+			ev := ChangeEvent{
 				Source:   synctypes.SourceLocal,
 				Type:     changeType,
 				Path:     job.dbRelPath,
@@ -288,7 +289,7 @@ func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]syncty
 // rejections are appended to skipped for engine recording.
 func (o *LocalObserver) makeWalkFunc(
 	ctx context.Context, tree *synctree.Root, observed map[string]bool,
-	events *[]synctypes.ChangeEvent, jobs *[]hashJob, skipped *[]synctypes.SkippedItem,
+	events *[]ChangeEvent, jobs *[]hashJob, skipped *[]SkippedItem,
 	skippedEntries *atomic.Int64, scanStartNano int64, dirStack map[string]struct{},
 ) fs.WalkDirFunc {
 	syncRoot := tree.Path()
@@ -378,7 +379,7 @@ func (o *LocalObserver) makeWalkFunc(
 // Stage 2 observation filter: file size > 250GB is checked here (after stat).
 func (o *LocalObserver) processEntry(
 	fsPath, dbRelPath, name string, d fs.DirEntry, observed map[string]bool,
-	events *[]synctypes.ChangeEvent, jobs *[]hashJob, skipped *[]synctypes.SkippedItem, scanStartNano int64,
+	events *[]ChangeEvent, jobs *[]hashJob, skipped *[]SkippedItem, scanStartNano int64,
 ) error {
 	info, err := d.Info()
 	if err != nil {
@@ -407,16 +408,16 @@ func (o *LocalObserver) processObservedInfo(
 	info fs.FileInfo,
 	kind observedKind,
 	observed map[string]bool,
-	events *[]synctypes.ChangeEvent,
+	events *[]ChangeEvent,
 	jobs *[]hashJob,
-	skipped *[]synctypes.SkippedItem,
+	skipped *[]SkippedItem,
 	scanStartNano int64,
 ) error {
 	// Stage 2 observation filter: file size check (requires stat, hence here).
 	// FullScan records SkippedItems for oversized files; watch handlers don't
 	// (the safety scan catches them).
 	if kind == observedKindFile && o.IsOversizedFile(info.Size(), dbRelPath) {
-		*skipped = append(*skipped, synctypes.SkippedItem{
+		*skipped = append(*skipped, SkippedItem{
 			Path:     dbRelPath,
 			Reason:   synctypes.IssueFileTooLarge,
 			Detail:   fmt.Sprintf("file size %d bytes exceeds 250 GB limit", info.Size()),
@@ -438,11 +439,11 @@ func (o *LocalObserver) classifyObservedInfo(
 	fsPath, dbRelPath, name string,
 	info fs.FileInfo,
 	kind observedKind,
-	events *[]synctypes.ChangeEvent,
+	events *[]ChangeEvent,
 	jobs *[]hashJob,
 	scanStartNano int64,
 ) error {
-	var existing *synctypes.BaselineEntry
+	var existing *syncstore.BaselineEntry
 	if baselineEntry, found := o.Baseline.GetByPath(dbRelPath); found {
 		existing = baselineEntry
 	}
@@ -451,7 +452,7 @@ func (o *LocalObserver) classifyObservedInfo(
 	if existing == nil {
 		if kind == observedKindDir {
 			// Folder creates go directly to events (no hashing needed).
-			*events = append(*events, synctypes.ChangeEvent{
+			*events = append(*events, ChangeEvent{
 				Source:   synctypes.SourceLocal,
 				Type:     synctypes.ChangeCreate,
 				Path:     dbRelPath,
@@ -492,7 +493,7 @@ func (o *LocalObserver) classifyObservedInfo(
 // are always hashed, because they may have been modified in the same clock
 // tick as the last sync (Git's "racily clean" problem).
 func (o *LocalObserver) classifyFileChange(
-	fsPath, dbRelPath, name string, info fs.FileInfo, base *synctypes.BaselineEntry,
+	fsPath, dbRelPath, name string, info fs.FileInfo, base *syncstore.BaselineEntry,
 	jobs *[]hashJob, scanStartNano int64,
 ) error {
 	currentMtime := info.ModTime().UnixNano()
@@ -530,8 +531,8 @@ func (o *LocalObserver) classifyFileChange(
 //
 // O(n) time, O(n) memory. Pure function — no side effects.
 func DetectCaseCollisions(
-	events []synctypes.ChangeEvent, baseline *synctypes.Baseline,
-) (clean []synctypes.ChangeEvent, collisions []synctypes.SkippedItem) {
+	events []ChangeEvent, baseline *syncstore.Baseline,
+) (clean []ChangeEvent, collisions []SkippedItem) {
 	if len(events) == 0 {
 		return nil, nil
 	}
@@ -570,7 +571,7 @@ func DetectCaseCollisions(
 		events, groups, colliderSet, childColliderSet, collidingDirPrefixes, baseline)
 
 	// Build clean events — those not in the collider set.
-	clean = make([]synctypes.ChangeEvent, 0, len(events)-len(colliderSet))
+	clean = make([]ChangeEvent, 0, len(events)-len(colliderSet))
 	for i := range events {
 		if _, collider := colliderSet[i]; !collider {
 			clean = append(clean, events[i])
@@ -591,9 +592,9 @@ type caseGroupKey struct {
 // with different exact casing is a collision (the baseline file produced no event
 // because it was unchanged — fast-path skip in classifyFileChange).
 func crossCheckBaseline(
-	events []synctypes.ChangeEvent,
+	events []ChangeEvent,
 	groups map[caseGroupKey][]int,
-	baseline *synctypes.Baseline,
+	baseline *syncstore.Baseline,
 	colliderSet map[int]struct{},
 ) {
 	if baseline == nil {
@@ -625,7 +626,7 @@ func crossCheckBaseline(
 // suppressDirectoryChildren marks children of colliding directories as colliders.
 // They can't be uploaded to a folder that won't exist on OneDrive.
 func suppressDirectoryChildren(
-	events []synctypes.ChangeEvent, colliderSet map[int]struct{},
+	events []ChangeEvent, colliderSet map[int]struct{},
 ) (childColliderSet map[int]struct{}, collidingDirPrefixes []string) {
 	childColliderSet = make(map[int]struct{})
 
@@ -656,13 +657,13 @@ func suppressDirectoryChildren(
 // buildCollisionSkippedItems constructs SkippedItems with Detail messages for
 // event-vs-event collisions, baseline cross-check collisions, and child collisions.
 func buildCollisionSkippedItems(
-	events []synctypes.ChangeEvent,
+	events []ChangeEvent,
 	groups map[caseGroupKey][]int,
 	colliderSet, childColliderSet map[int]struct{},
 	collidingDirPrefixes []string,
-	baseline *synctypes.Baseline,
-) []synctypes.SkippedItem {
-	collisions := make([]synctypes.SkippedItem, 0, len(colliderSet))
+	baseline *syncstore.Baseline,
+) []SkippedItem {
+	collisions := make([]SkippedItem, 0, len(colliderSet))
 
 	// Event-vs-event and baseline collisions.
 	for _, indices := range groups {
@@ -690,7 +691,7 @@ func buildCollisionSkippedItems(
 			}
 		}
 
-		collisions = append(collisions, synctypes.SkippedItem{
+		collisions = append(collisions, SkippedItem{
 			Path:   ev.Path,
 			Reason: synctypes.IssueCaseCollision,
 			Detail: fmt.Sprintf("parent directory %q has a case collision",
@@ -704,12 +705,12 @@ func buildCollisionSkippedItems(
 // appendSingleGroupCollision handles SkippedItem construction for a group with
 // exactly one event (flagged by baseline cross-check).
 func appendSingleGroupCollision(
-	collisions []synctypes.SkippedItem,
-	events []synctypes.ChangeEvent,
+	collisions []SkippedItem,
+	events []ChangeEvent,
 	indices []int,
 	colliderSet, childColliderSet map[int]struct{},
-	baseline *synctypes.Baseline,
-) []synctypes.SkippedItem {
+	baseline *syncstore.Baseline,
+) []SkippedItem {
 	idx := indices[0]
 
 	if _, flagged := colliderSet[idx]; !flagged {
@@ -729,7 +730,7 @@ func appendSingleGroupCollision(
 	variants := baseline.GetCaseVariants(filepath.Dir(ev.Path), filepath.Base(ev.Path))
 	for _, v := range variants {
 		if v.Path != ev.Path {
-			return append(collisions, synctypes.SkippedItem{
+			return append(collisions, SkippedItem{
 				Path:   ev.Path,
 				Reason: synctypes.IssueCaseCollision,
 				Detail: fmt.Sprintf("conflicts with synced file %s",
@@ -744,11 +745,11 @@ func appendSingleGroupCollision(
 // appendMultiGroupCollisions handles SkippedItem construction for groups with
 // multiple events (event-vs-event collisions).
 func appendMultiGroupCollisions(
-	collisions []synctypes.SkippedItem,
-	events []synctypes.ChangeEvent,
+	collisions []SkippedItem,
+	events []ChangeEvent,
 	indices []int,
 	childColliderSet map[int]struct{},
-) []synctypes.SkippedItem {
+) []SkippedItem {
 	for i, idx := range indices {
 		if _, isChild := childColliderSet[idx]; isChild {
 			continue
@@ -761,7 +762,7 @@ func appendMultiGroupCollisions(
 			}
 		}
 
-		collisions = append(collisions, synctypes.SkippedItem{
+		collisions = append(collisions, SkippedItem{
 			Path:   events[idx].Path,
 			Reason: synctypes.IssueCaseCollision,
 			Detail: fmt.Sprintf("conflicts with %s", strings.Join(others, ", ")),
@@ -773,10 +774,10 @@ func appendMultiGroupCollisions(
 
 // detectDeletions finds baseline entries that were not observed during the
 // walk, emitting ChangeDelete events for each.
-func (o *LocalObserver) detectDeletions(observed map[string]bool) []synctypes.ChangeEvent {
-	var events []synctypes.ChangeEvent
+func (o *LocalObserver) detectDeletions(observed map[string]bool) []ChangeEvent {
+	var events []ChangeEvent
 
-	o.Baseline.ForEachPath(func(path string, entry *synctypes.BaselineEntry) {
+	o.Baseline.ForEachPath(func(path string, entry *syncstore.BaselineEntry) {
 		if path == "" {
 			return
 		}
@@ -793,7 +794,7 @@ func (o *LocalObserver) detectDeletions(observed map[string]bool) []synctypes.Ch
 			return
 		}
 
-		events = append(events, synctypes.ChangeEvent{
+		events = append(events, ChangeEvent{
 			Source:    synctypes.SourceLocal,
 			Type:      synctypes.ChangeDelete,
 			Path:      path,
@@ -808,7 +809,7 @@ func (o *LocalObserver) detectDeletions(observed map[string]bool) []synctypes.Ch
 	return events
 }
 
-func (o *LocalObserver) shouldSuppressDeleteForExcludedPath(path string, entry *synctypes.BaselineEntry) bool {
+func (o *LocalObserver) shouldSuppressDeleteForExcludedPath(path string, entry *syncstore.BaselineEntry) bool {
 	if !o.scopeSnapshot.AllowsPath(path) {
 		return true
 	}
@@ -930,30 +931,30 @@ func (o *LocalObserver) IsOversizedFile(size int64, path string) bool {
 // Expects NFC-normalized name and path. This is Stage 1 of the two-stage
 // observation filter — cheap string checks only (no syscall). Stage 2
 // (file size > 250GB) is checked after stat in processEntry/hashAndEmit.
-func ShouldObserve(name, path string) *synctypes.SkippedItem {
-	return shouldObserveWithFilter(name, path, observedKindUnknown, synctypes.LocalFilterConfig{}, synctypes.LocalObservationRules{})
+func ShouldObserve(name, path string) *SkippedItem {
+	return shouldObserveWithFilter(name, path, observedKindUnknown, LocalFilterConfig{}, LocalObservationRules{})
 }
 
 func shouldObserveWithFilter(
 	name, path string,
 	kind observedKind,
-	filter synctypes.LocalFilterConfig,
-	rules synctypes.LocalObservationRules,
-) *synctypes.SkippedItem {
+	filter LocalFilterConfig,
+	rules LocalObservationRules,
+) *SkippedItem {
 	if IsAlwaysExcluded(name) {
-		return &synctypes.SkippedItem{} // internal exclusion, not reportable
+		return &SkippedItem{} // internal exclusion, not reportable
 	}
 
 	if shouldSkipConfiguredPath(name, path, kind, filter) {
-		return &synctypes.SkippedItem{}
+		return &SkippedItem{}
 	}
 
 	if reason, detail := validateObservedName(name, path, rules); reason != "" {
-		return &synctypes.SkippedItem{Path: path, Reason: reason, Detail: detail}
+		return &SkippedItem{Path: path, Reason: reason, Detail: detail}
 	}
 
 	if len(path) > MaxOneDrivePathLength {
-		return &synctypes.SkippedItem{
+		return &SkippedItem{
 			Path:   path,
 			Reason: synctypes.IssuePathTooLong,
 			Detail: fmt.Sprintf("path length %d exceeds %d-character limit", len(path), MaxOneDrivePathLength),
@@ -974,7 +975,7 @@ func dirEntryKind(d fs.DirEntry) observedKind {
 func shouldSkipConfiguredPath(
 	name, path string,
 	kind observedKind,
-	filter synctypes.LocalFilterConfig,
+	filter LocalFilterConfig,
 ) bool {
 	parts := observedPathParts(path)
 	if len(parts) == 0 {
@@ -1151,7 +1152,7 @@ func IsAlwaysExcluded(name string) bool {
 	return false
 }
 
-func validateObservedName(name, path string, rules synctypes.LocalObservationRules) (reason, detail string) {
+func validateObservedName(name, path string, rules LocalObservationRules) (reason, detail string) {
 	if reason, detail := ValidateOneDriveName(name); reason != "" {
 		return reason, detail
 	}

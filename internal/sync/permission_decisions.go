@@ -7,6 +7,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/failures"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -25,9 +26,9 @@ const (
 type PermissionCheckDecision struct {
 	Matched      bool
 	Kind         PermissionCheckDecisionKind
-	Failure      synctypes.SyncFailureParams
+	Failure      syncstore.SyncFailureParams
 	ScopeKey     synctypes.ScopeKey
-	ScopeBlock   synctypes.ScopeBlock
+	ScopeBlock   syncstore.ScopeBlock
 	BoundaryPath string
 	TriggerPath  string
 }
@@ -96,7 +97,7 @@ func (controller *scopeController) applyPermissionCheckMutation(
 	case permissionCheckActivateDerivedScope:
 		controller.recordExplicitFailure(ctx, &decision.Failure)
 		if watch != nil {
-			watch.upsertActiveScope(&synctypes.ScopeBlock{
+			watch.upsertActiveScope(&syncstore.ScopeBlock{
 				Key:       decision.ScopeKey,
 				IssueType: decision.ScopeKey.IssueType(),
 			})
@@ -202,7 +203,7 @@ func (controller *scopeController) applyPermissionRecheckDecisions(
 	}
 }
 
-func (controller *scopeController) recordExplicitFailure(ctx context.Context, params *synctypes.SyncFailureParams) {
+func (controller *scopeController) recordExplicitFailure(ctx context.Context, params *syncstore.SyncFailureParams) {
 	flow := controller.flow
 	summaryKey := synctypes.SummaryKeyForPersistedFailure(params.IssueType, params.Category, params.Role)
 

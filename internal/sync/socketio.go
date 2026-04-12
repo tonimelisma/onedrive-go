@@ -13,7 +13,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 const (
@@ -71,7 +70,7 @@ type socketIOConn struct {
 // wake the remote delta observer. It never interprets change payloads as truth;
 // every notification is reduced to a coalesced wake signal.
 type SocketIOWakeSource struct {
-	fetcher          synctypes.SocketIOEndpointFetcher
+	fetcher          SocketIOEndpointFetcher
 	driveID          driveid.ID
 	logger           *slog.Logger
 	dialFunc         func(context.Context, string, *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
@@ -86,7 +85,7 @@ type SocketIOWakeSource struct {
 
 // NewSocketIOWakeSource creates a wake source for one drive root.
 func NewSocketIOWakeSource(
-	fetcher synctypes.SocketIOEndpointFetcher,
+	fetcher SocketIOEndpointFetcher,
 	driveID driveid.ID,
 	logger *slog.Logger,
 ) *SocketIOWakeSource {
@@ -96,7 +95,7 @@ func NewSocketIOWakeSource(
 }
 
 func NewSocketIOWakeSourceWithOptions(
-	fetcher synctypes.SocketIOEndpointFetcher,
+	fetcher SocketIOEndpointFetcher,
 	driveID driveid.ID,
 	opts SocketIOWakeSourceOptions,
 ) *SocketIOWakeSource {

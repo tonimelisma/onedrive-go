@@ -36,13 +36,13 @@ func TestWatch_HashFailureModifyStillEmitsEvent(t *testing.T) {
 	filePath := writeTestFile(t, dir, "watchable.txt", "original")
 	existingHash := hashContent(t, "original")
 
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path: "watchable.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: existingHash,
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	// Make file write-only (stat succeeds, hash computation fails).
@@ -53,7 +53,7 @@ func TestWatch_HashFailureModifyStillEmitsEvent(t *testing.T) {
 	// which succeeds with 0o200 permissions.
 	require.NoError(t, os.WriteFile(filePath, []byte("modified"), 0o200))
 
-	var ev synctypes.ChangeEvent
+	var ev ChangeEvent
 
 	select {
 	case ev = <-events:
@@ -84,7 +84,7 @@ func TestHandleWrite_CoalescesRapidWrites(t *testing.T) {
 	filePath := writeTestFile(t, dir, "rapid.txt", "v1")
 	existingHash := hashContent(t, "v1")
 
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path: "rapid.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: existingHash,
 	})
@@ -95,7 +95,7 @@ func TestHandleWrite_CoalescesRapidWrites(t *testing.T) {
 		WriteCoalesceCooldown: 100 * time.Millisecond,
 	})
 
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -149,7 +149,7 @@ func TestHandleWrite_EmitsAfterCooldownExpires(t *testing.T) {
 	writeTestFile(t, dir, "single.txt", "original")
 	existingHash := hashContent(t, "original")
 
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path: "single.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: existingHash,
 	})
@@ -160,7 +160,7 @@ func TestHandleWrite_EmitsAfterCooldownExpires(t *testing.T) {
 		WriteCoalesceCooldown: 50 * time.Millisecond,
 	})
 
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -196,7 +196,7 @@ func TestHashAndEmit_DropsStaleGenerationAfterScopeChange(t *testing.T) {
 
 	dir := t.TempDir()
 	filePath := writeTestFile(t, dir, "docs/file.txt", "modified")
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path: "docs/file.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "original"),
 	})
@@ -213,7 +213,7 @@ func TestHashAndEmit_DropsStaleGenerationAfterScopeChange(t *testing.T) {
 	obs.SetScopeSnapshot(updatedSnapshot)
 	require.Greater(t, obs.currentScopeGeneration(), reqGeneration)
 
-	events := make(chan synctypes.ChangeEvent, 1)
+	events := make(chan ChangeEvent, 1)
 	obs.HashAndEmit(t.Context(), mustOpenSyncTree(t, dir), HashRequest{
 		FsPath:     filePath,
 		DbRelPath:  "docs/file.txt",
@@ -237,12 +237,12 @@ func TestHandleWrite_DifferentPathsNotCoalesced(t *testing.T) {
 	writeTestFile(t, dir, "fileA.txt", "origA")
 	writeTestFile(t, dir, "fileB.txt", "origB")
 
-	baseline := synctest.BaselineWith(
-		&synctypes.BaselineEntry{
+	baseline := baselineWith(
+		&BaselineEntry{
 			Path: "fileA.txt", DriveID: driveid.New("d"), ItemID: "a1",
 			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "origA"),
 		},
-		&synctypes.BaselineEntry{
+		&BaselineEntry{
 			Path: "fileB.txt", DriveID: driveid.New("d"), ItemID: "b1",
 			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "origB"),
 		},
@@ -254,7 +254,7 @@ func TestHandleWrite_DifferentPathsNotCoalesced(t *testing.T) {
 		WriteCoalesceCooldown: 50 * time.Millisecond,
 	})
 
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -276,7 +276,7 @@ func TestHandleWrite_DifferentPathsNotCoalesced(t *testing.T) {
 	}
 
 	// Collect both events.
-	collected := make(map[string]synctypes.ChangeEvent)
+	collected := make(map[string]ChangeEvent)
 	timeout := time.After(5 * time.Second)
 
 	for len(collected) < 2 {
@@ -308,7 +308,7 @@ func TestHandleWrite_DeleteClearsTimer(t *testing.T) {
 	filePath := writeTestFile(t, dir, "doomed.txt", "original")
 	existingHash := hashContent(t, "original")
 
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path: "doomed.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: existingHash,
 	})
@@ -319,7 +319,7 @@ func TestHandleWrite_DeleteClearsTimer(t *testing.T) {
 		WriteCoalesceCooldown: 200 * time.Millisecond,
 	})
 
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -375,12 +375,12 @@ func TestCancelPendingTimers(t *testing.T) {
 	writeTestFile(t, dir, "pending1.txt", "data1")
 	writeTestFile(t, dir, "pending2.txt", "data2")
 
-	baseline := synctest.BaselineWith(
-		&synctypes.BaselineEntry{
+	baseline := baselineWith(
+		&BaselineEntry{
 			Path: "pending1.txt", DriveID: driveid.New("d"), ItemID: "p1",
 			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "old1"),
 		},
-		&synctypes.BaselineEntry{
+		&BaselineEntry{
 			Path: "pending2.txt", DriveID: driveid.New("d"), ItemID: "p2",
 			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "old2"),
 		},
@@ -392,7 +392,7 @@ func TestCancelPendingTimers(t *testing.T) {
 		WriteCoalesceCooldown: 5 * time.Second, // very long — timers should NOT fire
 	})
 
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
 
 	done := make(chan error, 1)
@@ -445,7 +445,7 @@ func TestHashAndEmit_RetriesExhausted_EmitsEvent(t *testing.T) {
 	filePath := writeTestFile(t, dir, "exhausted.txt", "content")
 
 	// Baseline with a DIFFERENT hash so the event is not suppressed.
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path: "exhausted.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: "old-hash",
 	})
@@ -460,7 +460,7 @@ func TestHashAndEmit_RetriesExhausted_EmitsEvent(t *testing.T) {
 		},
 	}
 
-	events := make(chan synctypes.ChangeEvent, 5)
+	events := make(chan ChangeEvent, 5)
 	ctx := t.Context()
 
 	// Call hashAndEmit with retries at the cap. Even though the file is
@@ -495,7 +495,7 @@ func TestHashAndEmit_BaselineMatch_NoEvent(t *testing.T) {
 	filePath := writeTestFile(t, dir, "noop.txt", "unchanged")
 	hash := hashContent(t, "unchanged")
 
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path: "noop.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: hash,
 	})
@@ -510,7 +510,7 @@ func TestHashAndEmit_BaselineMatch_NoEvent(t *testing.T) {
 		},
 	}
 
-	events := make(chan synctypes.ChangeEvent, 5)
+	events := make(chan ChangeEvent, 5)
 	ctx := t.Context()
 
 	obs.HashAndEmit(ctx, mustOpenSyncTree(t, dir), HashRequest{
@@ -548,7 +548,7 @@ func TestHashAndEmit_CaseCollision_Suppressed(t *testing.T) {
 		t.Skip("case-insensitive filesystem — cannot create case-colliding files")
 	}
 
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path: "existing.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "old"),
 	})
@@ -559,7 +559,7 @@ func TestHashAndEmit_CaseCollision_Suppressed(t *testing.T) {
 		WriteCoalesceCooldown: 50 * time.Millisecond,
 	})
 
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -600,7 +600,7 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 
 	mockWatcher := newMockFsWatcher()
 	obs := &LocalObserver{
-		Baseline: synctest.EmptyBaseline(),
+		Baseline: emptyBaseline(),
 		Logger:   synctest.TestLogger(t),
 		localWatchState: localWatchState{
 			CollisionPeers: make(map[string]map[string]struct{}),
@@ -626,7 +626,7 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 		},
 	}
 
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 

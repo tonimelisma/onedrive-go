@@ -96,7 +96,7 @@ func TestAccountReadModelService_LoadLenientCatalogWithBestEffortIdentityRefresh
 		GraphBaseURL: srv.URL,
 	}
 
-	snapshot, err := newAccountReadModelService(cc).loadLenientCatalogWithBestEffortIdentityRefresh(t.Context())
+	snapshot, err := loadLenientCatalogWithBestEffortIdentityRefresh(t.Context(), cc)
 	require.NoError(t, err)
 
 	assert.Len(t, snapshot.Catalog, 2)
@@ -143,7 +143,7 @@ func TestAccountReadModelService_LoadLenientCatalogWithBestEffortIdentityRefresh
 		GraphBaseURL: srv.URL,
 	}
 
-	snapshot, err := newAccountReadModelService(cc).loadLenientCatalogWithBestEffortIdentityRefresh(ctx)
+	snapshot, err := loadLenientCatalogWithBestEffortIdentityRefresh(ctx, cc)
 	require.NoError(t, err)
 
 	entry := accountCatalogEntryByEmail(t, snapshot.Catalog, "offline@example.com")

@@ -49,7 +49,7 @@ type DriveStatusSnapshot struct {
 // by aggregate status readers and store/package tests. It stays unexported so
 // the public store read surface has one product-facing per-drive projection.
 type groupedIssueProjection struct {
-	Conflicts      []synctypes.ConflictRecord
+	Conflicts      []ConflictRecord
 	Groups         []IssueGroupSnapshot
 	HeldDeletes    []HeldDeleteSnapshot
 	PendingRetries []PendingRetrySnapshot
@@ -486,11 +486,11 @@ func (i *Inspector) readGroupedIssueProjectionModel(ctx context.Context) (groupe
 }
 
 func buildGroupedIssueProjection(
-	actionableFailures []synctypes.SyncFailureRow,
-	heldDeletes []synctypes.HeldDeleteRecord,
-	remoteBlocked []synctypes.SyncFailureRow,
-	scopeBlocks []*synctypes.ScopeBlock,
-	pendingRetries []synctypes.PendingRetryGroup,
+	actionableFailures []SyncFailureRow,
+	heldDeletes []HeldDeleteRecord,
+	remoteBlocked []SyncFailureRow,
+	scopeBlocks []*ScopeBlock,
+	pendingRetries []PendingRetryGroup,
 	shortcuts []synctypes.Shortcut,
 ) groupedIssueProjectionModel {
 	builder := newGroupedIssueProjectionBuilder(shortcuts, len(pendingRetries))
@@ -591,7 +591,7 @@ func (b *groupedIssueProjectionBuilder) addScopeOnlyGroup(
 	return true
 }
 
-func (b *groupedIssueProjectionBuilder) addActionableFailures(rows []synctypes.SyncFailureRow) {
+func (b *groupedIssueProjectionBuilder) addActionableFailures(rows []SyncFailureRow) {
 	for i := range rows {
 		row := rows[i]
 		summaryKey := synctypes.SummaryKeyForPersistedFailure(row.IssueType, row.Category, row.Role)
@@ -600,7 +600,7 @@ func (b *groupedIssueProjectionBuilder) addActionableFailures(rows []synctypes.S
 	}
 }
 
-func (b *groupedIssueProjectionBuilder) addHeldDeletes(rows []synctypes.HeldDeleteRecord) {
+func (b *groupedIssueProjectionBuilder) addHeldDeletes(rows []HeldDeleteRecord) {
 	for i := range rows {
 		row := rows[i]
 		b.snapshot.HeldDeletes = append(b.snapshot.HeldDeletes, HeldDeleteSnapshot{
@@ -611,7 +611,7 @@ func (b *groupedIssueProjectionBuilder) addHeldDeletes(rows []synctypes.HeldDele
 	}
 }
 
-func (b *groupedIssueProjectionBuilder) addRemoteBlocked(rows []synctypes.SyncFailureRow) {
+func (b *groupedIssueProjectionBuilder) addRemoteBlocked(rows []SyncFailureRow) {
 	for i := range rows {
 		row := rows[i]
 		summaryKey := synctypes.SummaryKeyForPersistedFailure(row.IssueType, row.Category, row.Role)
@@ -621,7 +621,7 @@ func (b *groupedIssueProjectionBuilder) addRemoteBlocked(rows []synctypes.SyncFa
 	}
 }
 
-func (b *groupedIssueProjectionBuilder) addAuthScopeBlocks(blocks []*synctypes.ScopeBlock) {
+func (b *groupedIssueProjectionBuilder) addAuthScopeBlocks(blocks []*ScopeBlock) {
 	for i := range blocks {
 		block := blocks[i]
 		if block.Key != synctypes.SKAuthAccount() {
@@ -635,7 +635,7 @@ func (b *groupedIssueProjectionBuilder) addAuthScopeBlocks(blocks []*synctypes.S
 	}
 }
 
-func (b *groupedIssueProjectionBuilder) addPendingRetries(groups []synctypes.PendingRetryGroup) {
+func (b *groupedIssueProjectionBuilder) addPendingRetries(groups []PendingRetryGroup) {
 	for i := range groups {
 		group := groups[i]
 		b.snapshot.PendingRetries = append(b.snapshot.PendingRetries, PendingRetrySnapshot{
@@ -738,15 +738,15 @@ func sortIssueGroups(groups []IssueGroupSnapshot) {
 	}
 }
 
-func (i *Inspector) ListConflicts(ctx context.Context) ([]synctypes.ConflictRecord, error) {
+func (i *Inspector) ListConflicts(ctx context.Context) ([]ConflictRecord, error) {
 	return i.listConflicts(ctx, false)
 }
 
-func (i *Inspector) ListAllConflicts(ctx context.Context) ([]synctypes.ConflictRecord, error) {
+func (i *Inspector) ListAllConflicts(ctx context.Context) ([]ConflictRecord, error) {
 	return i.listConflicts(ctx, true)
 }
 
-func (i *Inspector) listConflicts(ctx context.Context, history bool) ([]synctypes.ConflictRecord, error) {
+func (i *Inspector) listConflicts(ctx context.Context, history bool) ([]ConflictRecord, error) {
 	query := sqlListConflicts
 	if history {
 		query = sqlListAllConflicts
@@ -755,13 +755,13 @@ func (i *Inspector) listConflicts(ctx context.Context, history bool) ([]synctype
 	rows, err := i.db.QueryContext(ctx, query)
 	if err != nil {
 		if isMissingTableErr(err) {
-			return []synctypes.ConflictRecord{}, nil
+			return []ConflictRecord{}, nil
 		}
 		return nil, fmt.Errorf("query conflicts: %w", err)
 	}
 	defer rows.Close()
 
-	var conflicts []synctypes.ConflictRecord
+	var conflicts []ConflictRecord
 	for rows.Next() {
 		conflict, err := scanConflictRow(rows)
 		if err != nil {
@@ -778,7 +778,7 @@ func (i *Inspector) listConflicts(ctx context.Context, history bool) ([]synctype
 	return conflicts, nil
 }
 
-func (i *Inspector) listActionableFailures(ctx context.Context) ([]synctypes.SyncFailureRow, error) {
+func (i *Inspector) listActionableFailures(ctx context.Context) ([]SyncFailureRow, error) {
 	rows, err := i.db.QueryContext(ctx,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
 		WHERE category = 'actionable'
@@ -788,7 +788,7 @@ func (i *Inspector) listActionableFailures(ctx context.Context) ([]synctypes.Syn
 	)
 	if err != nil {
 		if isMissingTableErr(err) {
-			return []synctypes.SyncFailureRow{}, nil
+			return []SyncFailureRow{}, nil
 		}
 		return nil, fmt.Errorf("query actionable failures: %w", err)
 	}
@@ -797,7 +797,7 @@ func (i *Inspector) listActionableFailures(ctx context.Context) ([]synctypes.Syn
 	return scanSyncFailureRows(rows)
 }
 
-func (i *Inspector) listHeldDeletes(ctx context.Context) ([]synctypes.HeldDeleteRecord, error) {
+func (i *Inspector) listHeldDeletes(ctx context.Context) ([]HeldDeleteRecord, error) {
 	rows, err := i.db.QueryContext(ctx,
 		`SELECT drive_id, action_type, path, item_id, state, held_at, approved_at,
 			last_planned_at, last_error
@@ -808,7 +808,7 @@ func (i *Inspector) listHeldDeletes(ctx context.Context) ([]synctypes.HeldDelete
 	)
 	if err != nil {
 		if isMissingTableErr(err) {
-			return []synctypes.HeldDeleteRecord{}, nil
+			return []HeldDeleteRecord{}, nil
 		}
 		return nil, fmt.Errorf("query held deletes: %w", err)
 	}
@@ -961,7 +961,7 @@ func (i *Inspector) listConflictHistory(ctx context.Context) ([]ConflictHistoryS
 	return snapshots, nil
 }
 
-func (i *Inspector) listRemoteBlockedFailures(ctx context.Context) ([]synctypes.SyncFailureRow, error) {
+func (i *Inspector) listRemoteBlockedFailures(ctx context.Context) ([]SyncFailureRow, error) {
 	rows, err := i.db.QueryContext(ctx,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
 		WHERE failure_role = ? AND scope_key LIKE 'perm:remote:%'
@@ -970,7 +970,7 @@ func (i *Inspector) listRemoteBlockedFailures(ctx context.Context) ([]synctypes.
 	)
 	if err != nil {
 		if isMissingTableErr(err) {
-			return []synctypes.SyncFailureRow{}, nil
+			return []SyncFailureRow{}, nil
 		}
 		return nil, fmt.Errorf("query remote blocked failures: %w", err)
 	}
@@ -1016,19 +1016,19 @@ func (i *Inspector) listShortcuts(ctx context.Context) ([]synctypes.Shortcut, er
 	return shortcuts, nil
 }
 
-func (i *Inspector) listScopeBlocks(ctx context.Context) ([]*synctypes.ScopeBlock, error) {
+func (i *Inspector) listScopeBlocks(ctx context.Context) ([]*ScopeBlock, error) {
 	rows, err := i.db.QueryContext(ctx,
 		`SELECT scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count
 		FROM scope_blocks`)
 	if err != nil {
 		if isMissingTableErr(err) {
-			return []*synctypes.ScopeBlock{}, nil
+			return []*ScopeBlock{}, nil
 		}
 		return nil, fmt.Errorf("query scope blocks: %w", err)
 	}
 	defer rows.Close()
 
-	var result []*synctypes.ScopeBlock
+	var result []*ScopeBlock
 	for rows.Next() {
 		var (
 			wireKey       string
@@ -1054,7 +1054,7 @@ func (i *Inspector) listScopeBlocks(ctx context.Context) ([]*synctypes.ScopeBloc
 			return nil, fmt.Errorf("scan scope block row: %w", err)
 		}
 
-		block := &synctypes.ScopeBlock{
+		block := &ScopeBlock{
 			Key:           synctypes.ParseScopeKey(wireKey),
 			IssueType:     issueType,
 			TimingSource:  synctypes.ScopeTimingSource(timingSource),
@@ -1079,7 +1079,7 @@ func (i *Inspector) listScopeBlocks(ctx context.Context) ([]*synctypes.ScopeBloc
 	return result, nil
 }
 
-func (i *Inspector) pendingRetrySummary(ctx context.Context) ([]synctypes.PendingRetryGroup, error) {
+func (i *Inspector) pendingRetrySummary(ctx context.Context) ([]PendingRetryGroup, error) {
 	rows, err := i.db.QueryContext(ctx,
 		`SELECT COALESCE(scope_key, ''), COUNT(*), MIN(next_retry_at)
 		 FROM sync_failures
@@ -1088,16 +1088,16 @@ func (i *Inspector) pendingRetrySummary(ctx context.Context) ([]synctypes.Pendin
 		 ORDER BY COUNT(*) DESC`)
 	if err != nil {
 		if isMissingTableErr(err) {
-			return []synctypes.PendingRetryGroup{}, nil
+			return []PendingRetryGroup{}, nil
 		}
 		return nil, fmt.Errorf("query pending retry summary: %w", err)
 	}
 	defer rows.Close()
 
-	var result []synctypes.PendingRetryGroup
+	var result []PendingRetryGroup
 	for rows.Next() {
 		var (
-			group        synctypes.PendingRetryGroup
+			group        PendingRetryGroup
 			wireScopeKey string
 			minNano      int64
 		)

@@ -13,13 +13,13 @@ func applyRemote403Decision(
 	t *testing.T,
 	eng *testEngine,
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *Baseline,
 	path string,
 	shortcuts []synctypes.Shortcut,
 ) PermissionCheckDecision {
 	t.Helper()
 
-	decision := eng.permHandler.handle403(ctx, bl, path, synctypes.ActionUpload, shortcuts)
+	decision := eng.permHandler.handle403(ctx, bl, path, ActionUpload, shortcuts)
 	rt, ok := lookupTestWatchRuntime(eng)
 	if !ok {
 		rt = newWatchRuntime(eng.Engine)
@@ -33,7 +33,7 @@ func applyLocalPermissionDecision(
 	t *testing.T,
 	eng *testEngine,
 	ctx context.Context,
-	result *synctypes.WorkerResult,
+	result *WorkerResult,
 ) PermissionCheckDecision {
 	t.Helper()
 
@@ -51,7 +51,7 @@ func applyRemotePermissionRecheck(
 	t *testing.T,
 	eng *testEngine,
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *Baseline,
 	shortcuts []synctypes.Shortcut,
 ) []PermissionRecheckDecision {
 	t.Helper()

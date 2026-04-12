@@ -13,7 +13,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -157,7 +156,7 @@ func TestNewEngine_PropagatesPathConvergenceFactory(t *testing.T) {
 		},
 	}
 
-	eng, err := newEngine(t.Context(), &synctypes.EngineConfig{
+	eng, err := newEngine(t.Context(), &engineInputs{
 		DBPath:                 filepath.Join(t.TempDir(), "test.db"),
 		SyncRoot:               syncDir,
 		DriveID:                driveid.New("abc123"),
@@ -174,12 +173,12 @@ func TestNewEngine_PropagatesPathConvergenceFactory(t *testing.T) {
 		assert.NoError(t, eng.Close(t.Context()))
 	})
 
-	executor := NewExecution(eng.execCfg, synctest.EmptyBaseline())
-	outcome := executor.ExecuteFolderCreate(t.Context(), &synctypes.Action{
-		Type:       synctypes.ActionFolderCreate,
+	executor := NewExecution(eng.execCfg, emptyBaseline())
+	outcome := executor.ExecuteFolderCreate(t.Context(), &Action{
+		Type:       ActionFolderCreate,
 		Path:       "photos",
 		CreateSide: synctypes.CreateRemote,
-		View:       &synctypes.PathView{Path: "photos"},
+		View:       &PathView{Path: "photos"},
 	})
 	require.True(t, outcome.Success, "expected remote folder create to succeed: %v", outcome.Error)
 	assert.Equal(t, []configTestPathConvergenceTarget{{

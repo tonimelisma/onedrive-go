@@ -123,7 +123,7 @@ func touchStateDBForAccount(t *testing.T, cid driveid.CanonicalID) error {
 		require.NoError(t, store.Close(t.Context()))
 	}()
 
-	if err := store.UpsertScopeBlock(t.Context(), &synctypes.ScopeBlock{
+	if err := store.UpsertScopeBlock(t.Context(), &syncstore.ScopeBlock{
 		Key:           synctypes.SKService(),
 		IssueType:     synctypes.IssueServiceOutage,
 		TimingSource:  synctypes.ScopeTimingBackoff,

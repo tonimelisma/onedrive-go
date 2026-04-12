@@ -76,10 +76,10 @@ type plannerFuzzEvent struct {
 }
 
 type decodedPlannerFuzzCase struct {
-	changes        []synctypes.PathChanges
-	baseline       *synctypes.Baseline
-	mode           synctypes.SyncMode
-	config         *synctypes.SafetyConfig
+	changes        []PathChanges
+	baseline       *Baseline
+	mode           Mode
+	config         *SafetyConfig
 	deniedPrefixes []string
 }
 
@@ -129,7 +129,7 @@ func decodePlannerFuzzCase(data []byte) (decodedPlannerFuzzCase, bool) {
 		return decodedPlannerFuzzCase{}, false
 	}
 
-	baselineEntries := make([]*synctypes.BaselineEntry, 0, minInt(len(raw.Baseline), maxPlannerFuzzPaths))
+	baselineEntries := make([]*BaselineEntry, 0, minInt(len(raw.Baseline), maxPlannerFuzzPaths))
 	seenBaselinePaths := make(map[string]struct{}, maxPlannerFuzzPaths)
 	for i := 0; i < len(raw.Baseline) && len(baselineEntries) < maxPlannerFuzzPaths; i++ {
 		entry := &raw.Baseline[i]
@@ -153,7 +153,7 @@ func decodePlannerFuzzCase(data []byte) (decodedPlannerFuzzCase, bool) {
 			remoteHash = ""
 		}
 
-		baselineEntries = append(baselineEntries, &synctypes.BaselineEntry{
+		baselineEntries = append(baselineEntries, &BaselineEntry{
 			Path:            safePath,
 			DriveID:         parsePlannerDriveID(entry.DriveID, fmt.Sprintf("drive-%d", i%2+1)),
 			ItemID:          defaultPlannerString(entry.ItemID, fmt.Sprintf("baseline-item-%d", i)),
@@ -170,8 +170,8 @@ func decodePlannerFuzzCase(data []byte) (decodedPlannerFuzzCase, bool) {
 		})
 	}
 
-	baseline := synctypes.NewBaselineForTest(baselineEntries)
-	changes := make([]synctypes.PathChanges, 0, minInt(len(raw.Changes), maxPlannerFuzzPaths))
+	baseline := newBaselineForTest(baselineEntries)
+	changes := make([]PathChanges, 0, minInt(len(raw.Changes), maxPlannerFuzzPaths))
 	seenChangePaths := make(map[string]struct{}, maxPlannerFuzzPaths)
 	for i := 0; i < len(raw.Changes) && len(changes) < maxPlannerFuzzPaths; i++ {
 		change := &raw.Changes[i]
@@ -183,7 +183,7 @@ func decodePlannerFuzzCase(data []byte) (decodedPlannerFuzzCase, bool) {
 		}
 		seenChangePaths[safePath] = struct{}{}
 
-		pc := synctypes.PathChanges{Path: safePath}
+		pc := PathChanges{Path: safePath}
 		pc.RemoteEvents = decodePlannerEvents(change.RemoteEvents, synctypes.SourceRemote, safePath)
 		pc.LocalEvents = decodePlannerEvents(change.LocalEvents, synctypes.SourceLocal, safePath)
 		changes = append(changes, pc)
@@ -197,7 +197,7 @@ func decodePlannerFuzzCase(data []byte) (decodedPlannerFuzzCase, bool) {
 		changes:        changes,
 		baseline:       baseline,
 		mode:           parsePlannerMode(raw.Mode),
-		config:         &synctypes.SafetyConfig{DeleteSafetyThreshold: raw.DeleteSafetyThreshold},
+		config:         &SafetyConfig{DeleteSafetyThreshold: raw.DeleteSafetyThreshold},
 		deniedPrefixes: sanitizePlannerPrefixes(raw.DeniedPrefixes),
 	}, true
 }
@@ -206,12 +206,12 @@ func decodePlannerEvents(
 	rawEvents []plannerFuzzEvent,
 	source synctypes.ChangeSource,
 	fallbackPath string,
-) []synctypes.ChangeEvent {
+) []ChangeEvent {
 	if len(rawEvents) == 0 {
 		return nil
 	}
 
-	events := make([]synctypes.ChangeEvent, 0, minInt(len(rawEvents), maxPlannerFuzzEvents))
+	events := make([]ChangeEvent, 0, minInt(len(rawEvents), maxPlannerFuzzEvents))
 	for i := 0; i < len(rawEvents) && len(events) < maxPlannerFuzzEvents; i++ {
 		raw := &rawEvents[i]
 
@@ -221,7 +221,7 @@ func decodePlannerEvents(
 		}
 
 		eventType := parsePlannerChangeType(raw.Type)
-		event := synctypes.ChangeEvent{
+		event := ChangeEvent{
 			Source:        source,
 			Type:          eventType,
 			Path:          fallbackPath,
@@ -255,14 +255,14 @@ func decodePlannerEvents(
 	return events
 }
 
-func parsePlannerMode(raw string) synctypes.SyncMode {
+func parsePlannerMode(raw string) Mode {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case plannerDownloadWord + "-only", plannerDownloadWord:
-		return synctypes.SyncDownloadOnly
+		return SyncDownloadOnly
 	case plannerUploadWord + "-only", plannerUploadWord:
-		return synctypes.SyncUploadOnly
+		return SyncUploadOnly
 	default:
-		return synctypes.SyncBidirectional
+		return SyncBidirectional
 	}
 }
 
@@ -290,28 +290,28 @@ func parsePlannerChangeType(raw string) synctypes.ChangeType {
 	}
 }
 
-func parsePlannerActionType(raw string) (synctypes.ActionType, bool) {
+func parsePlannerActionType(raw string) (ActionType, bool) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case plannerDownloadWord:
-		return synctypes.ActionDownload, true
+		return ActionDownload, true
 	case plannerUploadWord:
-		return synctypes.ActionUpload, true
+		return ActionUpload, true
 	case "local_delete":
-		return synctypes.ActionLocalDelete, true
+		return ActionLocalDelete, true
 	case "remote_delete":
-		return synctypes.ActionRemoteDelete, true
+		return ActionRemoteDelete, true
 	case "local_move":
-		return synctypes.ActionLocalMove, true
+		return ActionLocalMove, true
 	case "remote_move":
-		return synctypes.ActionRemoteMove, true
+		return ActionRemoteMove, true
 	case "folder_create":
-		return synctypes.ActionFolderCreate, true
+		return ActionFolderCreate, true
 	case "conflict":
-		return synctypes.ActionConflict, true
+		return ActionConflict, true
 	case "update_synced":
-		return synctypes.ActionUpdateSynced, true
+		return ActionUpdateSynced, true
 	case "cleanup":
-		return synctypes.ActionCleanup, true
+		return ActionCleanup, true
 	default:
 		return 0, false
 	}
@@ -405,7 +405,7 @@ func defaultPlannerString(value, fallback string) string {
 	return value
 }
 
-func plannerOutcomeFingerprint(plan *synctypes.ActionPlan, err error) string {
+func plannerOutcomeFingerprint(plan *ActionPlan, err error) string {
 	outcome := struct {
 		Error string              `json:"error,omitempty"`
 		Plan  *plannerPlanSummary `json:"plan,omitempty"`
@@ -424,7 +424,7 @@ func plannerOutcomeFingerprint(plan *synctypes.ActionPlan, err error) string {
 	return string(data)
 }
 
-func summarizePlannerPlan(plan *synctypes.ActionPlan) *plannerPlanSummary {
+func summarizePlannerPlan(plan *ActionPlan) *plannerPlanSummary {
 	if plan == nil {
 		return nil
 	}

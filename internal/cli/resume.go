@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -27,11 +28,11 @@ Examples:
 }
 
 func runResume(cmd *cobra.Command, _ []string) error {
-	return newSyncControlService(mustCLIContext(cmd.Context())).runResume()
+	return runResumeCommand(mustCLIContext(cmd.Context()), time.Now)
 }
 
 func resumeSingleDrive(cc *CLIContext, cfg *config.Config, selector string) error {
-	return newSyncControlService(cc).resumeSingleDrive(cfg, selector)
+	return resumeSingleDriveWithNow(cc, time.Now, cfg, selector)
 }
 
 // clearPausedKeys removes both paused and paused_until keys from a drive section.

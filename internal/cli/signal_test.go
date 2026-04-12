@@ -19,7 +19,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 func TestShutdownContext_FirstSignalCancels(t *testing.T) {
@@ -204,8 +204,8 @@ func runSyncWatchFirstSignalHelper() {
 			ctx context.Context,
 			_ *config.Holder,
 			_ []string,
-			_ synctypes.SyncMode,
-			_ synctypes.WatchOpts,
+			_ syncengine.Mode,
+			_ syncengine.WatchOptions,
 			_ *slog.Logger,
 			_ io.Writer,
 			_ string,
@@ -231,8 +231,8 @@ type fakeSyncDaemonOrchestrator struct{}
 
 func (o *fakeSyncDaemonOrchestrator) RunWatch(
 	ctx context.Context,
-	_ synctypes.SyncMode,
-	_ synctypes.WatchOpts,
+	_ syncengine.Mode,
+	_ syncengine.WatchOptions,
 ) error {
 	mustWriteHelperLine("watch-daemon-ready")
 	<-ctx.Done()

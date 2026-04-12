@@ -6,13 +6,14 @@ import (
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // resolveRemoteItemID looks up the remote item ID for a local path from the
 // baseline. Pure data lookup — no store access needed.
-func resolveRemoteItemID(bl *synctypes.Baseline, localPath string, driveID driveid.ID) string {
+func resolveRemoteItemID(bl *syncstore.Baseline, localPath string, driveID driveid.ID) string {
 	entry, ok := bl.GetByPath(localPath)
 	if !ok {
 		return ""
@@ -66,7 +67,7 @@ func isDirAccessible(tree *synctree.Root, dir string) bool {
 }
 
 // pathSetFromEvents builds a set of paths from scanner change events.
-func pathSetFromEvents(events []synctypes.ChangeEvent) map[string]bool {
+func pathSetFromEvents(events []ChangeEvent) map[string]bool {
 	if len(events) == 0 {
 		return nil
 	}
@@ -82,7 +83,7 @@ func pathSetFromEvents(events []synctypes.ChangeEvent) map[string]bool {
 }
 
 // pathSetFromBatch builds a set of paths from watch-mode batch entries.
-func pathSetFromBatch(batch []synctypes.PathChanges) map[string]bool {
+func pathSetFromBatch(batch []PathChanges) map[string]bool {
 	if len(batch) == 0 {
 		return nil
 	}

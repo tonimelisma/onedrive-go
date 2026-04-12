@@ -21,7 +21,7 @@ func TestSyncStore_UpsertScopeBlock(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := context.Background()
 
-	block := &synctypes.ScopeBlock{
+	block := &ScopeBlock{
 		Key:           synctypes.SKThrottleAccount(),
 		IssueType:     synctypes.IssueRateLimited,
 		TimingSource:  synctypes.ScopeTimingServerRetryAfter,
@@ -67,7 +67,7 @@ func TestSyncStore_DeleteScopeBlock(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := context.Background()
 
-	block := &synctypes.ScopeBlock{
+	block := &ScopeBlock{
 		Key:           synctypes.SKService(),
 		IssueType:     synctypes.IssueServiceOutage,
 		TimingSource:  synctypes.ScopeTimingBackoff,
@@ -105,7 +105,7 @@ func TestSyncStore_ListScopeBlocks(t *testing.T) {
 
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
-	blocks := []*synctypes.ScopeBlock{
+	blocks := []*ScopeBlock{
 		{
 			Key:           synctypes.SKThrottleAccount(),
 			IssueType:     synctypes.IssueRateLimited,
@@ -145,7 +145,7 @@ func TestSyncStore_ListScopeBlocks(t *testing.T) {
 	require.Len(t, got, 3)
 
 	// Build a map for easier assertion (order is not guaranteed).
-	byKey := make(map[synctypes.ScopeKey]*synctypes.ScopeBlock)
+	byKey := make(map[synctypes.ScopeKey]*ScopeBlock)
 	for _, b := range got {
 		byKey[b.Key] = b
 	}
@@ -193,7 +193,7 @@ func TestSyncStore_ScopeBlock_Roundtrip(t *testing.T) {
 	// - Timestamps with nanosecond precision
 	// - Duration in nanoseconds
 	// - Parameterized scope key (perm:dir)
-	original := &synctypes.ScopeBlock{
+	original := &ScopeBlock{
 		Key:           synctypes.SKQuotaShortcut("drive1:item1"),
 		IssueType:     synctypes.IssueQuotaExceeded,
 		TimingSource:  synctypes.ScopeTimingBackoff,
@@ -226,7 +226,7 @@ func TestSyncStore_ScopeBlock_Roundtrip_ZeroNextTrialAt(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := context.Background()
 
-	original := &synctypes.ScopeBlock{
+	original := &ScopeBlock{
 		Key:           synctypes.SKPermRemote("Shared/TeamDocs"),
 		IssueType:     synctypes.IssuePermissionDenied,
 		TimingSource:  synctypes.ScopeTimingNone,

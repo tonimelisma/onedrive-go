@@ -1,12 +1,5 @@
 package synctypes
 
-import (
-	"strings"
-
-	"github.com/tonimelisma/onedrive-go/internal/authstate"
-	"github.com/tonimelisma/onedrive-go/internal/failures"
-)
-
 // SummaryKey is the shared sync-domain rendering key consumed by sync logs,
 // store-derived summaries, and CLI issue/status presentation.
 type SummaryKey string
@@ -50,23 +43,6 @@ func DescribeSummary(key SummaryKey) SummaryDescriptor {
 		return descriptor
 	}
 	return defaultSummaryDescriptor(key)
-}
-
-// SummaryKeyForRuntime maps the classified runtime result to the shared
-// summary/rendering family.
-func SummaryKeyForRuntime(class failures.Class, issueType string) SummaryKey {
-	if key, ok := summaryKeyForIssueType(issueType); ok {
-		return key
-	}
-
-	if class == failures.ClassRetryableTransient ||
-		class == failures.ClassScopeBlockingTransient ||
-		class == failures.ClassActionable ||
-		class == failures.ClassFatal {
-		return SummarySyncFailure
-	}
-
-	return ""
 }
 
 // SummaryKeyForPersistedFailure maps a persisted sync_failures row to the
@@ -123,12 +99,11 @@ func describeCoreSummary(key SummaryKey) (SummaryDescriptor, bool) {
 			LogSummary: "unresolved conflict",
 		}, true
 	case string(SummaryAuthenticationRequired):
-		presentation := authstate.UnauthorizedIssuePresentation()
 		return SummaryDescriptor{
 			Key:        SummaryAuthenticationRequired,
-			Title:      strings.ToUpper(presentation.Title),
-			Reason:     presentation.Reason,
-			Action:     presentation.Action,
+			Title:      "AUTHENTICATION REQUIRED",
+			Reason:     "The last sync attempt for this account was rejected by OneDrive.",
+			Action:     "Run 'onedrive-go whoami' to re-check access, or 'onedrive-go login' to sign in again.",
 			LogSummary: "authentication required",
 		}, true
 	case string(SummaryQuotaExceeded):

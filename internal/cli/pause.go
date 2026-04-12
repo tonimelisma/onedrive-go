@@ -31,7 +31,7 @@ Examples:
 }
 
 func runPause(cmd *cobra.Command, args []string) error {
-	return newSyncControlService(mustCLIContext(cmd.Context())).runPause(args)
+	return runPauseCommand(mustCLIContext(cmd.Context()), time.Now, args)
 }
 
 // notifyDaemon attempts to ask a running sync owner to reload configuration.

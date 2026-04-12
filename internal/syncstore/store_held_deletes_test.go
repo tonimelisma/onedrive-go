@@ -17,7 +17,7 @@ func TestSyncStore_UpsertHeldDeletesRequiresItemID(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
-	err := store.UpsertHeldDeletes(t.Context(), []synctypes.HeldDeleteRecord{{
+	err := store.UpsertHeldDeletes(t.Context(), []HeldDeleteRecord{{
 		DriveID:       driveid.New("drive1"),
 		ActionType:    synctypes.ActionRemoteDelete,
 		Path:          "delete-me.txt",
@@ -37,7 +37,7 @@ func TestSyncStore_HeldDeleteConsumeRequiresMatchingItemID(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 	driveID := driveid.New("drive1")
-	require.NoError(t, store.UpsertHeldDeletes(ctx, []synctypes.HeldDeleteRecord{
+	require.NoError(t, store.UpsertHeldDeletes(ctx, []HeldDeleteRecord{
 		{
 			DriveID:       driveID,
 			ActionType:    synctypes.ActionRemoteDelete,
@@ -78,7 +78,7 @@ func TestSyncStore_DeleteHeldDeleteRequiresMatchingItemID(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 	driveID := driveid.New("drive1")
-	require.NoError(t, store.UpsertHeldDeletes(ctx, []synctypes.HeldDeleteRecord{{
+	require.NoError(t, store.UpsertHeldDeletes(ctx, []HeldDeleteRecord{{
 		DriveID:       driveID,
 		ActionType:    synctypes.ActionRemoteDelete,
 		Path:          "delete-me.txt",
@@ -105,7 +105,7 @@ func TestSyncStore_ApproveHeldDeletesConcurrentCallsAreIdempotent(t *testing.T) 
 
 	store := newTestStore(t)
 	ctx := context.Background()
-	require.NoError(t, store.UpsertHeldDeletes(ctx, []synctypes.HeldDeleteRecord{{
+	require.NoError(t, store.UpsertHeldDeletes(ctx, []HeldDeleteRecord{{
 		DriveID:       driveid.New("drive1"),
 		ActionType:    synctypes.ActionRemoteDelete,
 		Path:          "delete-me.txt",

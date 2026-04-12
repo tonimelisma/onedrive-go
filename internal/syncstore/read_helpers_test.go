@@ -55,7 +55,7 @@ func TestReadDurableIntentCounts_ReadOnlyDB(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := t.Context()
-	require.NoError(t, store.UpsertHeldDeletes(ctx, []synctypes.HeldDeleteRecord{{
+	require.NoError(t, store.UpsertHeldDeletes(ctx, []HeldDeleteRecord{{
 		DriveID:       driveid.New(testDriveID),
 		ActionType:    synctypes.ActionRemoteDelete,
 		Path:          "/delete-me.txt",

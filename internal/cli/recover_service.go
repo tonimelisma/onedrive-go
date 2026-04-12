@@ -10,44 +10,36 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 )
 
-type recoverService struct {
-	cc *CLIContext
-}
-
-func newRecoverService(cc *CLIContext) *recoverService {
-	return &recoverService{cc: cc}
-}
-
-func (s *recoverService) run(cmd *cobra.Command, yes bool) error {
+func runRecoverCommand(cmd *cobra.Command, cc *CLIContext, yes bool) error {
 	_ = yes
 
-	dbPath := s.cc.Cfg.StatePath()
+	dbPath := cc.Cfg.StatePath()
 	if dbPath == "" {
-		return fmt.Errorf("cannot determine state DB path for drive %q", s.cc.Cfg.CanonicalID)
+		return fmt.Errorf("cannot determine state DB path for drive %q", cc.Cfg.CanonicalID)
 	}
 
-	if err := s.ensureNoLiveOwner(cmd.Context()); err != nil {
+	if err := ensureNoLiveRecoverOwner(cmd.Context(), cc); err != nil {
 		return err
 	}
 
 	preflight := recoverPreflight{HasStateDB: managedPathExists(dbPath)}
 	if !preflight.HasStateDB {
-		return writeln(s.cc.Output(), recoverResultMessage(syncstore.RecoverResult{Action: syncstore.RecoverActionNoState}))
+		return writeln(cc.Output(), recoverResultMessage(syncstore.RecoverResult{Action: syncstore.RecoverActionNoState}))
 	}
 
-	if err := confirmRecoverIntent(cmd, s.cc, preflight); err != nil {
+	if err := confirmRecoverIntent(cmd, cc, preflight); err != nil {
 		return err
 	}
 
-	result, err := syncstore.RecoverSyncStore(cmd.Context(), dbPath, s.cc.Logger)
+	result, err := syncstore.RecoverSyncStore(cmd.Context(), dbPath, cc.Logger)
 	if err != nil {
 		return fmt.Errorf("recover sync database: %w", err)
 	}
 
-	return writeln(s.cc.Output(), recoverResultMessage(result))
+	return writeln(cc.Output(), recoverResultMessage(result))
 }
 
-func (s *recoverService) ensureNoLiveOwner(ctx context.Context) error {
+func ensureNoLiveRecoverOwner(ctx context.Context, cc *CLIContext) error {
 	probe, err := probeControlOwner(ctx)
 	if err != nil && probe.state == controlOwnerStateProbeFailed {
 		return fmt.Errorf("probe control owner: %w", err)
@@ -60,10 +52,10 @@ func (s *recoverService) ensureNoLiveOwner(ctx context.Context) error {
 	}
 
 	for _, drive := range probe.client.status.Drives {
-		if strings.EqualFold(drive, s.cc.Cfg.CanonicalID.String()) {
+		if strings.EqualFold(drive, cc.Cfg.CanonicalID.String()) {
 			return fmt.Errorf(
 				"cannot recover while a sync owner is active for %s (owner mode: %s); stop sync first",
-				s.cc.Cfg.CanonicalID,
+				cc.Cfg.CanonicalID,
 				probe.client.ownerMode(),
 			)
 		}

@@ -23,7 +23,7 @@ import (
 )
 
 type reconcileResult struct {
-	events    []synctypes.ChangeEvent
+	events    []ChangeEvent
 	shortcuts []synctypes.Shortcut
 }
 
@@ -38,13 +38,13 @@ type Engine struct {
 	baseline              *syncstore.SyncStore
 	planner               *Planner
 	execCfg               *ExecutorConfig
-	fetcher               synctypes.DeltaFetcher
-	socketIOFetcher       synctypes.SocketIOEndpointFetcher
-	itemsClient           synctypes.ItemClient
-	driveVerifier         synctypes.DriveVerifier      // optional (B-074)
-	folderDelta           synctypes.FolderDeltaFetcher // optional: for shortcut observation (6.4b)
-	recursiveLister       synctypes.RecursiveLister    // optional: for shortcut observation (6.4b)
-	permHandler           *PermissionHandler           // encapsulates all permission logic (6.4c)
+	fetcher               DeltaFetcher
+	socketIOFetcher       SocketIOEndpointFetcher
+	itemsClient           ItemClient
+	driveVerifier         DriveVerifier      // optional (B-074)
+	folderDelta           FolderDeltaFetcher // optional: for shortcut observation (6.4b)
+	recursiveLister       RecursiveLister    // optional: for shortcut observation (6.4b)
+	permHandler           *PermissionHandler // encapsulates all permission logic (6.4c)
 	syncRoot              string
 	syncTree              *synctree.Root
 	driveID               driveid.ID
@@ -55,8 +55,8 @@ type Engine struct {
 	sessionStore          *driveops.SessionStore // for CleanStale() housekeeping
 	transferWorkers       int                    // goroutine count for the worker pool
 	checkWorkers          int                    // goroutine limit for parallel file hashing
-	localFilter           synctypes.LocalFilterConfig
-	localRules            synctypes.LocalObservationRules
+	localFilter           LocalFilterConfig
+	localRules            LocalObservationRules
 	syncScopeConfig       syncscope.Config
 	enableWebsocket       bool
 	deleteSafetyThreshold int   // from config; 0 means use default
@@ -86,7 +86,7 @@ type Engine struct {
 	// socketIOWakeSourceFactory is a test seam for watch-mode websocket
 	// wakeups. Production uses NewSocketIOWakeSource.
 	socketIOWakeSourceFactory func(
-		synctypes.SocketIOEndpointFetcher,
+		SocketIOEndpointFetcher,
 		driveid.ID,
 		SocketIOWakeSourceOptions,
 	) socketIOWakeSourceRunner
@@ -106,7 +106,7 @@ type Engine struct {
 // newEngine creates an Engine, initializing the SyncStore (which opens
 // the SQLite database and applies the canonical schema). Returns an error if DB init fails
 // or if DriveID is zero (indicates a config/login issue).
-func newEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error) {
+func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	if cfg.DriveID.IsZero() {
 		return nil, fmt.Errorf("sync: engine requires non-zero drive ID")
 	}
@@ -152,7 +152,7 @@ func newEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 	// Default threshold if not set by config.
 	deleteSafetyThreshold := cfg.DeleteSafetyThreshold
 	if deleteSafetyThreshold == 0 {
-		deleteSafetyThreshold = synctypes.DefaultDeleteSafetyThreshold
+		deleteSafetyThreshold = DefaultDeleteSafetyThreshold
 	}
 
 	e := &Engine{
@@ -188,7 +188,7 @@ func newEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 		sleepFn:               realSleep,
 		jitterFn:              realJitter,
 		socketIOWakeSourceFactory: func(
-			fetcher synctypes.SocketIOEndpointFetcher,
+			fetcher SocketIOEndpointFetcher,
 			driveID driveid.ID,
 			opts SocketIOWakeSourceOptions,
 		) socketIOWakeSourceRunner {
@@ -309,7 +309,7 @@ func (e *Engine) hasPersistedAuthScope(ctx context.Context) (bool, error) {
 //  9. Wait for completion, commit delta token
 
 // ListConflicts returns all unresolved conflicts from the database.
-func (e *Engine) ListConflicts(ctx context.Context) ([]synctypes.ConflictRecord, error) {
+func (e *Engine) ListConflicts(ctx context.Context) ([]syncstore.ConflictRecord, error) {
 	conflicts, err := e.baseline.ListConflicts(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing unresolved conflicts: %w", err)
@@ -320,7 +320,7 @@ func (e *Engine) ListConflicts(ctx context.Context) ([]synctypes.ConflictRecord,
 
 // ListAllConflicts returns all conflicts (resolved and unresolved) from the
 // database. Used by `status --history`.
-func (e *Engine) ListAllConflicts(ctx context.Context) ([]synctypes.ConflictRecord, error) {
+func (e *Engine) ListAllConflicts(ctx context.Context) ([]syncstore.ConflictRecord, error) {
 	conflicts, err := e.baseline.ListAllConflicts(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing conflict history: %w", err)
@@ -356,7 +356,7 @@ func (e *Engine) ResolveConflict(ctx context.Context, conflictID, resolution str
 // restoring the newest untracked conflict copy back to the canonical path and
 // removing only the current unresolved conflict-copy artifacts. Any later
 // upload is ordinary sync work driven by normal observation/planning.
-func (e *Engine) resolveKeepLocal(ctx context.Context, c *synctypes.ConflictRecord) ([]string, error) {
+func (e *Engine) resolveKeepLocal(ctx context.Context, c *syncstore.ConflictRecord) ([]string, error) {
 	copies, err := e.untrackedConflictCopyPaths(ctx, c.Path)
 	if err != nil {
 		return nil, fmt.Errorf("glob conflict copies for keep-local: %w", err)
@@ -386,7 +386,7 @@ func (e *Engine) resolveKeepLocal(ctx context.Context, c *synctypes.ConflictReco
 // canonical path during conflict detection as the chosen layout. It only
 // removes the current unresolved conflict-copy artifacts; any later baseline
 // convergence or download/upload trouble is ordinary sync work.
-func (e *Engine) resolveKeepRemote(ctx context.Context, c *synctypes.ConflictRecord) ([]string, error) {
+func (e *Engine) resolveKeepRemote(ctx context.Context, c *syncstore.ConflictRecord) ([]string, error) {
 	if _, err := e.syncTree.Stat(c.Path); err != nil {
 		return nil, fmt.Errorf("confirming remote version at %s: %w", c.Path, err)
 	}
@@ -406,7 +406,7 @@ func (e *Engine) resolveKeepRemote(ctx context.Context, c *synctypes.ConflictRec
 // conflict-copy artifacts as the chosen final layout. The conflict is resolved
 // once that layout exists; later hashing, baseline refresh, or uploads are
 // ordinary sync work driven by normal observation/planning.
-func (e *Engine) resolveKeepBoth(ctx context.Context, c *synctypes.ConflictRecord) ([]string, error) {
+func (e *Engine) resolveKeepBoth(ctx context.Context, c *syncstore.ConflictRecord) ([]string, error) {
 	if _, err := e.syncTree.Stat(c.Path); err != nil {
 		return nil, fmt.Errorf("confirming original file for keep-both: %w", err)
 	}
@@ -465,7 +465,7 @@ func (e *Engine) cleanupUntrackedConflictCopies(paths []string) error {
 func (e *Engine) conflictResolutionFollowUpChanges(
 	ctx context.Context,
 	paths []string,
-) []synctypes.PathChanges {
+) []PathChanges {
 	if len(paths) == 0 {
 		return nil
 	}
@@ -502,9 +502,9 @@ func (e *Engine) conflictResolutionFollowUpChanges(
 		}
 	}
 
-	var changes []synctypes.PathChanges
+	var changes []PathChanges
 	for _, path := range sortedPaths {
-		var base *synctypes.BaselineEntry
+		var base *syncstore.BaselineEntry
 		if entry, ok := bl.GetByPath(path); ok {
 			base = entry
 		}

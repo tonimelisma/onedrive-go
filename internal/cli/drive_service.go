@@ -10,24 +10,15 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/sharedref"
 )
 
-type driveService struct {
-	cc *CLIContext
-}
-
-func newDriveService(cc *CLIContext) *driveService {
-	return &driveService{cc: cc}
-}
-
-func (s *driveService) runList(ctx context.Context, showAll bool) error {
-	readModel := newAccountReadModelService(s.cc)
-	snapshot, err := readModel.loadDriveListSnapshot(ctx, showAll)
+func runDriveListWithContext(ctx context.Context, cc *CLIContext, showAll bool) error {
+	snapshot, err := loadDriveListSnapshot(ctx, cc, showAll)
 	if err != nil {
 		return err
 	}
 
-	if s.cc.Flags.JSON {
+	if cc.Flags.JSON {
 		return printDriveListJSON(
-			s.cc.Output(),
+			cc.Output(),
 			snapshot.Configured,
 			snapshot.Available,
 			snapshot.AccountsRequiringAuth,
@@ -36,7 +27,7 @@ func (s *driveService) runList(ctx context.Context, showAll bool) error {
 	}
 
 	return printDriveListText(
-		s.cc.Output(),
+		cc.Output(),
 		snapshot.Configured,
 		snapshot.Available,
 		snapshot.AccountsRequiringAuth,
@@ -44,11 +35,11 @@ func (s *driveService) runList(ctx context.Context, showAll bool) error {
 	)
 }
 
-func (s *driveService) runAdd(ctx context.Context, args []string) error {
-	logger := s.cc.Logger
+func runDriveAddWithContext(ctx context.Context, cc *CLIContext, args []string) error {
+	logger := cc.Logger
 
-	if s.cc.SharedTarget != nil {
-		item, _, err := s.cc.resolveSharedItem(ctx)
+	if cc.SharedTarget != nil {
+		item, _, err := cc.resolveSharedItem(ctx)
 		if err != nil {
 			return err
 		}
@@ -56,12 +47,12 @@ func (s *driveService) runAdd(ctx context.Context, args []string) error {
 			return fmt.Errorf("shared files are direct stat/get/put targets, not drives")
 		}
 
-		cid, err := driveid.NewCanonicalID(s.cc.SharedTarget.Selector())
+		cid, err := driveid.NewCanonicalID(cc.SharedTarget.Selector())
 		if err != nil {
 			return fmt.Errorf("parse shared drive identity: %w", err)
 		}
 
-		return addSharedDrive(ctx, s.cc.CfgPath, s.cc.Output(), cid, "", logger, s.cc.httpProvider())
+		return addSharedDrive(ctx, cc.CfgPath, cc.Output(), cid, "", logger, cc.httpProvider())
 	}
 
 	selector := ""
@@ -71,14 +62,14 @@ func (s *driveService) runAdd(ctx context.Context, args []string) error {
 
 	if selector == "" {
 		var driveErr error
-		selector, driveErr = s.cc.Flags.SingleDrive()
+		selector, driveErr = cc.Flags.SingleDrive()
 		if driveErr != nil {
 			return driveErr
 		}
 	}
 
 	if selector == "" {
-		return listAvailableDrives(s.cc.Output())
+		return listAvailableDrives(cc.Output())
 	}
 
 	cid, err := driveid.NewCanonicalID(selector)
@@ -88,11 +79,11 @@ func (s *driveService) runAdd(ctx context.Context, args []string) error {
 				"Run 'onedrive-go drive list' to see valid canonical IDs", selector, err)
 		}
 
-		return addSharedDriveByName(ctx, s.cc, selector)
+		return addSharedDriveByName(ctx, cc, selector)
 	}
 
 	if cid.IsShared() {
-		clients, err := s.cc.sharedTargetClients(ctx, sharedref.Ref{
+		clients, err := cc.sharedTargetClients(ctx, sharedref.Ref{
 			AccountEmail:  cid.Email(),
 			RemoteDriveID: cid.SourceDriveID(),
 			RemoteItemID:  cid.SourceItemID(),
@@ -109,16 +100,16 @@ func (s *driveService) runAdd(ctx context.Context, args []string) error {
 			return fmt.Errorf("shared files are direct stat/get/put targets, not drives")
 		}
 
-		return addSharedDrive(ctx, s.cc.CfgPath, s.cc.Output(), cid, "", logger, s.cc.httpProvider())
+		return addSharedDrive(ctx, cc.CfgPath, cc.Output(), cid, "", logger, cc.httpProvider())
 	}
 
-	return addNewDrive(s.cc.Output(), s.cc.CfgPath, cid, logger)
+	return addNewDrive(cc.Output(), cc.CfgPath, cid, logger)
 }
 
-func (s *driveService) runRemove(purge bool) error {
-	logger := s.cc.Logger
+func runDriveRemoveWithContext(cc *CLIContext, purge bool) error {
+	logger := cc.Logger
 
-	driveSelector, driveErr := s.cc.Flags.SingleDrive()
+	driveSelector, driveErr := cc.Flags.SingleDrive()
 	if driveErr != nil {
 		return driveErr
 	}
@@ -127,7 +118,7 @@ func (s *driveService) runRemove(purge bool) error {
 		return fmt.Errorf("--drive is required (specify which drive to remove)")
 	}
 
-	cfg, err := config.LoadOrDefault(s.cc.CfgPath, logger)
+	cfg, err := config.LoadOrDefault(cc.CfgPath, logger)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
@@ -144,37 +135,36 @@ func (s *driveService) runRemove(purge bool) error {
 
 	if !inConfig && purge {
 		logger.Info("purging orphaned drive state", "drive", cid.String())
-		return purgeOrphanedDriveState(s.cc.Output(), cid, logger)
+		return purgeOrphanedDriveState(cc.Output(), cid, logger)
 	}
 
 	logger.Info("removing drive", "drive", cid.String(), "purge", purge)
 	if purge {
-		return purgeDrive(s.cc.Output(), s.cc.CfgPath, cid, logger)
+		return purgeDrive(cc.Output(), cc.CfgPath, cid, logger)
 	}
 
-	return removeDrive(s.cc.Output(), s.cc.CfgPath, cid, cfg.Drives[cid].SyncDir, logger)
+	return removeDrive(cc.Output(), cc.CfgPath, cid, cfg.Drives[cid].SyncDir, logger)
 }
 
-func (s *driveService) runSearch(ctx context.Context, query string) error {
-	logger := s.cc.Logger
+func runDriveSearchWithContext(ctx context.Context, cc *CLIContext, query string) error {
+	logger := cc.Logger
 	recorder := newAuthProofRecorder(logger)
 
-	readModel := newAccountReadModelService(s.cc)
-	snapshot, err := readModel.loadLenientCatalogWithBestEffortIdentityRefresh(ctx)
+	snapshot, err := loadLenientCatalogWithBestEffortIdentityRefresh(ctx, cc)
 	if err != nil {
 		return err
 	}
 
-	businessTokens := searchableBusinessTokenIDs(snapshot.Catalog, s.cc.Flags.Account)
-	businessAuthRequired := readModel.authRequirements(snapshot, func(entry accountCatalogEntry) bool {
-		if s.cc.Flags.Account != "" && entry.Email != s.cc.Flags.Account {
+	businessTokens := searchableBusinessTokenIDs(snapshot.Catalog, cc.Flags.Account)
+	businessAuthRequired := authRequirements(snapshot, func(entry accountCatalogEntry) bool {
+		if cc.Flags.Account != "" && entry.Email != cc.Flags.Account {
 			return false
 		}
 		return entry.DriveType == driveid.DriveTypeBusiness
 	})
 	if len(businessTokens) == 0 && len(businessAuthRequired) == 0 {
-		if s.cc.Flags.Account != "" {
-			return fmt.Errorf("no business account found for %s — run 'onedrive-go login' first", s.cc.Flags.Account)
+		if cc.Flags.Account != "" {
+			return fmt.Errorf("no business account found for %s — run 'onedrive-go login' first", cc.Flags.Account)
 		}
 
 		return fmt.Errorf("no business accounts found — SharePoint search requires a business account")
@@ -191,17 +181,17 @@ func (s *driveService) runSearch(ctx context.Context, query string) error {
 			query,
 			logger,
 			recorder,
-			s.cc.GraphBaseURL,
-			s.cc.httpProvider(),
+			cc.GraphBaseURL,
+			cc.httpProvider(),
 		)
 		results = append(results, accountResults...)
 		discoveredAuthRequired = append(discoveredAuthRequired, accountAuthRequired...)
 	}
 	authRequired := mergeAuthRequirements(businessAuthRequired, discoveredAuthRequired)
 
-	if s.cc.Flags.JSON {
-		return printDriveSearchJSON(s.cc.Output(), results, authRequired)
+	if cc.Flags.JSON {
+		return printDriveSearchJSON(cc.Output(), results, authRequired)
 	}
 
-	return printDriveSearchText(s.cc.Output(), results, query, authRequired)
+	return printDriveSearchText(cc.Output(), results, query, authRequired)
 }

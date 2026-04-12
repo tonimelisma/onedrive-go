@@ -137,7 +137,7 @@ func buildObservationSessionPlanFullDrive(t *testing.T) (*engineFlow, *Observati
 	require.NoError(t, err)
 	plan, err := flow.BuildObservationSessionPlan(t.Context(), ObservationPlanRequest{
 		Session:  &session,
-		SyncMode: synctypes.SyncBidirectional,
+		SyncMode: SyncBidirectional,
 		Purpose:  observationPlanPurposeWatch,
 	})
 	require.NoError(t, err)
@@ -154,7 +154,7 @@ func buildObservationSessionPlanScopedRoot(t *testing.T) (*engineFlow, *Observat
 	require.NoError(t, err)
 	plan, err := flow.BuildObservationSessionPlan(t.Context(), ObservationPlanRequest{
 		Session:  &session,
-		SyncMode: synctypes.SyncBidirectional,
+		SyncMode: SyncBidirectional,
 		Purpose:  observationPlanPurposeWatch,
 	})
 	require.NoError(t, err)
@@ -172,7 +172,7 @@ func buildObservationSessionPlanScopedTargets(t *testing.T) (*engineFlow, *Obser
 	require.NoError(t, err)
 	plan, err := flow.BuildObservationSessionPlan(t.Context(), ObservationPlanRequest{
 		Session:  &session,
-		SyncMode: synctypes.SyncBidirectional,
+		SyncMode: SyncBidirectional,
 		Purpose:  observationPlanPurposeWatch,
 	})
 	require.NoError(t, err)
@@ -186,7 +186,7 @@ func buildObservationSessionPlanShortcutOnly(t *testing.T) (*engineFlow, *Observ
 	flow := testEngineFlow(t, eng)
 	plan, err := flow.BuildObservationSessionPlan(t.Context(), ObservationPlanRequest{
 		Baseline: emptyBaseline(),
-		SyncMode: synctypes.SyncBidirectional,
+		SyncMode: SyncBidirectional,
 		Purpose:  observationPlanPurposeOneShot,
 		Shortcuts: []synctypes.Shortcut{{
 			ItemID:      "sc-1",
@@ -215,7 +215,7 @@ func buildObservationSessionPlanCombined(
 	plan, err := flow.BuildObservationSessionPlan(t.Context(), ObservationPlanRequest{
 		Session:                   &session,
 		Baseline:                  emptyBaseline(),
-		SyncMode:                  synctypes.SyncBidirectional,
+		SyncMode:                  SyncBidirectional,
 		Purpose:                   observationPlanPurposeWatch,
 		Shortcuts:                 shortcuts,
 		SuppressedShortcutTargets: suppressed,

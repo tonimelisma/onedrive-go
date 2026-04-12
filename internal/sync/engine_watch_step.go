@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 type watchEventKind string
@@ -34,9 +33,9 @@ const (
 
 type watchEvent struct {
 	kind            watchEventKind
-	batch           []synctypes.PathChanges
-	workerResult    *synctypes.WorkerResult
-	skipped         []synctypes.SkippedItem
+	batch           []PathChanges
+	workerResult    *WorkerResult
+	skipped         []SkippedItem
 	scopeChange     *syncscope.Change
 	reconcileResult reconcileResult
 	observerErr     error
@@ -44,7 +43,7 @@ type watchEvent struct {
 
 type watchTransition struct {
 	consumeOutboxHead     bool
-	appendOutbox          []*synctypes.TrackedAction
+	appendOutbox          []*TrackedAction
 	markUserIntentPending bool
 	startReconcile        bool
 	beginDrain            bool

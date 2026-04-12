@@ -21,7 +21,7 @@ func TestRefreshLocalBaseline_PreservesRemoteMetadataAndMarksRemoteStateSynced(t
 	seedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	mgr.SetNowFunc(func() time.Time { return seedTime })
 
-	seed := synctypes.Outcome{
+	seed := BaselineMutation{
 		Action:          synctypes.ActionDownload,
 		Success:         true,
 		Path:            "file.txt",
@@ -38,7 +38,7 @@ func TestRefreshLocalBaseline_PreservesRemoteMetadataAndMarksRemoteStateSynced(t
 		RemoteMtime:     seedTime.Add(2 * time.Second).UnixNano(),
 		ETag:            "etag-old",
 	}
-	require.NoError(t, mgr.CommitOutcome(ctx, &seed))
+	require.NoError(t, mgr.CommitMutation(ctx, &seed))
 
 	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type, hash, size, mtime, sync_status, observed_at)

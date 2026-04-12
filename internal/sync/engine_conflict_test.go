@@ -36,8 +36,8 @@ func TestResolveConflict_KeepBoth(t *testing.T) {
 		0o600,
 	))
 
-	outcomes := []synctypes.Outcome{{
-		Action:       synctypes.ActionConflict,
+	outcomes := []ExecutionResult{{
+		Action:       ActionConflict,
 		Success:      true,
 		Path:         "conflict-file.txt",
 		DriveID:      driveID,
@@ -99,8 +99,8 @@ func TestResolveConflict_UnknownStrategy(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed a conflict.
-	outcomes := []synctypes.Outcome{{
-		Action:       synctypes.ActionConflict,
+	outcomes := []ExecutionResult{{
+		Action:       ActionConflict,
 		Success:      true,
 		Path:         "bad-strategy.txt",
 		DriveID:      driveID,
@@ -162,8 +162,8 @@ func TestResolveConflict_KeepLocal(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed a conflict.
-	outcomes := []synctypes.Outcome{{
-		Action:       synctypes.ActionConflict,
+	outcomes := []ExecutionResult{{
+		Action:       ActionConflict,
 		Success:      true,
 		Path:         "keep-local.txt",
 		DriveID:      driveID,
@@ -217,8 +217,8 @@ func TestResolveConflict_KeepLocal_RestoresSuffixedConflictCopy(t *testing.T) {
 	eng, syncRoot := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	outcomes := []synctypes.Outcome{{
-		Action:       synctypes.ActionConflict,
+	outcomes := []ExecutionResult{{
+		Action:       ActionConflict,
 		Success:      true,
 		Path:         "keep-local.txt",
 		DriveID:      driveID,
@@ -264,8 +264,8 @@ func TestResolveConflict_KeepRemote(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed a conflict.
-	outcomes := []synctypes.Outcome{{
-		Action:       synctypes.ActionConflict,
+	outcomes := []ExecutionResult{{
+		Action:       ActionConflict,
 		Success:      true,
 		Path:         "keep-remote.txt",
 		DriveID:      driveID,
@@ -313,8 +313,8 @@ func TestResolveConflict_KeepRemote_CleansUpSuffixedConflictCopy(t *testing.T) {
 	eng, syncRoot := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	outcomes := []synctypes.Outcome{{
-		Action:       synctypes.ActionConflict,
+	outcomes := []ExecutionResult{{
+		Action:       ActionConflict,
 		Success:      true,
 		Path:         "keep-remote.txt",
 		DriveID:      driveID,
@@ -350,8 +350,8 @@ func TestResolveConflict_KeepLocal_RestoreFailure(t *testing.T) {
 	eng, syncRoot := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	outcomes := []synctypes.Outcome{{
-		Action:       synctypes.ActionConflict,
+	outcomes := []ExecutionResult{{
+		Action:       ActionConflict,
 		Success:      true,
 		Path:         "keep-local.txt",
 		DriveID:      driveID,
@@ -393,8 +393,8 @@ func TestResolveConflict_KeepBoth_MissingOriginalReturnsError(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	outcomes := []synctypes.Outcome{{
-		Action:       synctypes.ActionConflict,
+	outcomes := []ExecutionResult{{
+		Action:       ActionConflict,
 		Success:      true,
 		Path:         "missing-original.txt",
 		DriveID:      driveID,
@@ -437,8 +437,8 @@ func TestResolveConflict_KeepBoth_KeepsSuffixedConflictCopy(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "conflict-file.txt"), []byte("local content"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "conflict-file.conflict-20260115-120000-2.txt"), []byte("other local content"), 0o600))
 
-	outcomes := []synctypes.Outcome{{
-		Action:       synctypes.ActionConflict,
+	outcomes := []ExecutionResult{{
+		Action:       ActionConflict,
 		Success:      true,
 		Path:         "conflict-file.txt",
 		DriveID:      driveID,

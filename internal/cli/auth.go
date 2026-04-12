@@ -235,7 +235,7 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("reading --browser flag: %w", err)
 	}
 
-	return newAuthService(mustCLIContext(cmd.Context())).runLogin(cmd.Context(), useBrowser)
+	return runLoginWithContext(cmd.Context(), mustCLIContext(cmd.Context()), useBrowser)
 }
 
 // discoverAccount calls /me, /me/drive, and /me/organization to build the
@@ -376,7 +376,7 @@ func runLogout(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("reading --purge flag: %w", err)
 	}
 
-	return newAuthService(mustCLIContext(cmd.Context())).runLogout(purge)
+	return runLogoutWithContext(mustCLIContext(cmd.Context()), purge)
 }
 
 // resolveLogoutAccount determines the account email for logout. Uses the
@@ -765,13 +765,12 @@ type whoamiDrive struct {
 }
 
 func runWhoami(cmd *cobra.Command, _ []string) error {
-	return newAuthService(mustCLIContext(cmd.Context())).runWhoami(cmd.Context())
+	return runWhoamiWithContext(cmd.Context(), mustCLIContext(cmd.Context()))
 }
 
 func runWhoamiWithContext(ctx context.Context, cc *CLIContext) error {
 	logger := cc.Logger
-	readModel := newAccountReadModelService(cc)
-	snapshot, err := readModel.loadLenientCatalog(ctx)
+	snapshot, err := loadLenientCatalog(ctx, cc)
 	if err != nil {
 		return err
 	}
@@ -800,14 +799,14 @@ func runWhoamiWithContext(ctx context.Context, cc *CLIContext) error {
 	}
 
 	if authResult.reconciled {
-		snapshot, err = readModel.loadLenientCatalog(ctx)
+		snapshot, err = loadLenientCatalog(ctx, cc)
 		if err != nil {
 			return err
 		}
 	}
 
 	// Discover offline auth-required accounts from orphaned account profiles.
-	authRequired := readModel.whoamiAuthRequired(snapshot, authResult.authenticatedEmail)
+	authRequired := whoamiAuthRequired(snapshot, authResult.authenticatedEmail)
 	if authResult.authRequired != nil {
 		authRequired = mergeAuthRequirements(authRequired, []accountAuthRequirement{*authResult.authRequired})
 	}

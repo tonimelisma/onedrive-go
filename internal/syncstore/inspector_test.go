@@ -109,7 +109,7 @@ func TestInspector_ReadStatusSnapshot_DurableIntentCounts(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	require.NoError(t, store.UpsertHeldDeletes(ctx, []synctypes.HeldDeleteRecord{{
+	require.NoError(t, store.UpsertHeldDeletes(ctx, []HeldDeleteRecord{{
 		DriveID:       driveid.New(testDriveID),
 		ActionType:    synctypes.ActionRemoteDelete,
 		Path:          "/delete-me.txt",
@@ -371,7 +371,7 @@ func seedDriveStatusFailures(t *testing.T, store *SyncStore, ctx context.Context
 func seedDriveStatusDeleteSafety(t *testing.T, store *SyncStore, ctx context.Context) {
 	t.Helper()
 
-	require.NoError(t, store.UpsertHeldDeletes(ctx, []synctypes.HeldDeleteRecord{
+	require.NoError(t, store.UpsertHeldDeletes(ctx, []HeldDeleteRecord{
 		{
 			DriveID:       driveid.New(testDriveID),
 			ActionType:    synctypes.ActionRemoteDelete,

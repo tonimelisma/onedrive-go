@@ -9,6 +9,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -17,8 +18,8 @@ import (
 // full scan or watch pipeline. Used by engine-owned retry/trial work to keep
 // single-path reconstruction aligned with normal local observation semantics.
 type SinglePathObservation struct {
-	Event    *synctypes.ChangeEvent
-	Skipped  *synctypes.SkippedItem
+	Event    *ChangeEvent
+	Skipped  *SkippedItem
 	Resolved bool
 }
 
@@ -30,7 +31,7 @@ func ObserveSinglePath(
 	logger *slog.Logger,
 	syncTree *synctree.Root,
 	relPath string,
-	base *synctypes.BaselineEntry,
+	base *syncstore.BaselineEntry,
 	observeStartNano int64,
 	hashFunc func(string) (string, error),
 ) (SinglePathObservation, error) {
@@ -41,8 +42,8 @@ func ObserveSinglePath(
 		base,
 		observeStartNano,
 		hashFunc,
-		synctypes.LocalFilterConfig{},
-		synctypes.LocalObservationRules{},
+		LocalFilterConfig{},
+		LocalObservationRules{},
 	)
 }
 
@@ -55,11 +56,11 @@ func ObserveSinglePathWithFilter(
 	logger *slog.Logger,
 	syncTree *synctree.Root,
 	relPath string,
-	base *synctypes.BaselineEntry,
+	base *syncstore.BaselineEntry,
 	observeStartNano int64,
 	hashFunc func(string) (string, error),
-	filter synctypes.LocalFilterConfig,
-	rules synctypes.LocalObservationRules,
+	filter LocalFilterConfig,
+	rules LocalObservationRules,
 ) (SinglePathObservation, error) {
 	return ObserveSinglePathWithScope(
 		logger,
@@ -82,11 +83,11 @@ func ObserveSinglePathWithScope(
 	logger *slog.Logger,
 	syncTree *synctree.Root,
 	relPath string,
-	base *synctypes.BaselineEntry,
+	base *syncstore.BaselineEntry,
 	observeStartNano int64,
 	hashFunc func(string) (string, error),
-	filter synctypes.LocalFilterConfig,
-	rules synctypes.LocalObservationRules,
+	filter LocalFilterConfig,
+	rules LocalObservationRules,
 	scopeSnapshot syncscope.Snapshot,
 ) (SinglePathObservation, error) {
 	path := nfcNormalize(filepath.ToSlash(relPath))
@@ -117,8 +118,8 @@ func ObserveSinglePathWithScope(
 func resolveSinglePathWithoutStat(
 	name string,
 	path string,
-	filter synctypes.LocalFilterConfig,
-	rules synctypes.LocalObservationRules,
+	filter LocalFilterConfig,
+	rules LocalObservationRules,
 	scopeSnapshot syncscope.Snapshot,
 ) (SinglePathObservation, bool) {
 	if scopeSnapshot.IsMarkerFile(path) {
@@ -163,8 +164,8 @@ func resolveSinglePathWithInfo(
 	path string,
 	info os.FileInfo,
 	isSymlink bool,
-	filter synctypes.LocalFilterConfig,
-	rules synctypes.LocalObservationRules,
+	filter LocalFilterConfig,
+	rules LocalObservationRules,
 	scopeSnapshot syncscope.Snapshot,
 ) (SinglePathObservation, bool) {
 	if info == nil {
@@ -191,7 +192,7 @@ func resolveSinglePathWithInfo(
 		return SinglePathObservation{}, false
 	}
 
-	return SinglePathObservation{Skipped: &synctypes.SkippedItem{
+	return SinglePathObservation{Skipped: &SkippedItem{
 		Path:     path,
 		Reason:   synctypes.IssueFileTooLarge,
 		Detail:   fmt.Sprintf("file size %d bytes exceeds 250 GB limit", info.Size()),
@@ -223,7 +224,7 @@ func singlePathEvent(
 	hash string,
 ) SinglePathObservation {
 	return SinglePathObservation{
-		Event: &synctypes.ChangeEvent{
+		Event: &ChangeEvent{
 			Source:   synctypes.SourceLocal,
 			Type:     synctypes.ChangeModify,
 			Path:     path,
@@ -249,7 +250,7 @@ func observeSinglePathHash(
 	path string,
 	absPath string,
 	info os.FileInfo,
-	base *synctypes.BaselineEntry,
+	base *syncstore.BaselineEntry,
 	observeStartNano int64,
 	hashFunc func(string) (string, error),
 ) string {

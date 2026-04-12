@@ -103,7 +103,7 @@ func (w *readySignalWatcher) Errors() <-chan error {
 	return w.inner.Errors
 }
 
-func startLocalWatch(t *testing.T, obs *LocalObserver, dir string, events chan<- synctypes.ChangeEvent) (context.CancelFunc, <-chan error) {
+func startLocalWatch(t *testing.T, obs *LocalObserver, dir string, events chan<- ChangeEvent) (context.CancelFunc, <-chan error) {
 	t.Helper()
 
 	ready := make(chan struct{})
@@ -143,7 +143,7 @@ func hashContent(t *testing.T, content string) string {
 }
 
 // findEvent returns the first ChangeEvent with the given path, or nil.
-func findEvent(events []synctypes.ChangeEvent, path string) *synctypes.ChangeEvent {
+func findEvent(events []ChangeEvent, path string) *ChangeEvent {
 	for i := range events {
 		if events[i].Path == path {
 			return &events[i]
@@ -164,7 +164,7 @@ func TestFullScan_NewFiles(t *testing.T) {
 	writeTestFile(t, dir, "hello.txt", "hello world")
 	writeTestFile(t, dir, "data.csv", "a,b,c")
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -188,7 +188,7 @@ func TestFullScan_NewFolder(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "photos"), 0o700), "Mkdir")
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -207,7 +207,7 @@ func TestFullScan_ModifiedFile(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, dir, "doc.txt", "updated content")
 
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path: "doc.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "original content"),
 	})
@@ -231,7 +231,7 @@ func TestFullScan_UnchangedFile(t *testing.T) {
 	content := "same content"
 	writeTestFile(t, dir, "stable.txt", content)
 
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path: "stable.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, content),
 	})
@@ -249,7 +249,7 @@ func TestFullScan_DeletedFile(t *testing.T) {
 	dir := t.TempDir()
 	// File is in baseline but NOT on disk.
 
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path: "gone.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: "some-hash",
 		LocalSize: 42, LocalSizeKnown: true,
@@ -278,7 +278,7 @@ func TestFullScan_DeletedFolder(t *testing.T) {
 
 	dir := t.TempDir()
 
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path: "old-folder", DriveID: driveid.New("d"), ItemID: "f1",
 		ItemType: synctypes.ItemTypeFolder,
 	})
@@ -302,7 +302,7 @@ func TestFullScan_MtimeChangeNoContentChange(t *testing.T) {
 	writeTestFile(t, dir, "stable.txt", content)
 
 	// Baseline has a different mtime but the same hash.
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path: "stable.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, content),
 		LocalMtime: 999, // intentionally different from actual file mtime
@@ -330,7 +330,7 @@ func TestFullScan_MtimeSizeFastPath(t *testing.T) {
 	require.NoError(t, err, "Stat")
 
 	// Baseline matches file's actual mtime, size, and hash — fast path should skip hashing.
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path: "cached.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, content),
 		LocalSize: info.Size(), LocalSizeKnown: true,
@@ -358,7 +358,7 @@ func TestFullScan_SameSecondSubsecondDifferenceSkipsFalseModify(t *testing.T) {
 	info, err := os.Stat(filepath.Join(dir, "stable.txt"))
 	require.NoError(t, err, "Stat")
 
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path: "stable.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, content),
 		LocalSize: info.Size(), LocalSizeKnown: true,
@@ -392,7 +392,7 @@ func TestFullScan_RacilyCleanForcesHash(t *testing.T) {
 	require.NoError(t, err, "Stat")
 
 	// Baseline has same mtime and size but different hash.
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path: "racy.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, baselineContent),
 		LocalSize: info.Size(), LocalSizeKnown: true,
@@ -426,7 +426,7 @@ func TestFullScan_SizeChangeForcesHash(t *testing.T) {
 	require.NoError(t, err, "Stat")
 
 	// Baseline has same mtime but different size — should force hash.
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path: "grown.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "short"),
 		LocalSize: 5, LocalSizeKnown: true,
@@ -447,7 +447,7 @@ func TestFullScan_NosyncGuard(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, dir, ".nosync", "")
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	_, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 
 	assert.ErrorIs(t, err, synctypes.ErrNosyncGuard)
@@ -458,7 +458,7 @@ func TestFullScan_EmptyDir(t *testing.T) {
 
 	dir := t.TempDir()
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -474,7 +474,7 @@ func TestFullScan_SymlinkFollowedByDefault(t *testing.T) {
 
 	require.NoError(t, os.Symlink(filepath.Join(dir, "real.txt"), filepath.Join(dir, "link.txt")), "Symlink")
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -496,7 +496,7 @@ func TestFullScan_SymlinkDirectoryFollowedByDefault(t *testing.T) {
 
 	require.NoError(t, os.Symlink(filepath.Join(dir, "real"), filepath.Join(dir, "alias")), "Symlink")
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -518,7 +518,7 @@ func TestFullScan_SymlinkDirectoryCycleStopsAtAliasBoundary(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	result, err := obs.FullScan(ctx, mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -536,7 +536,7 @@ func TestFullScan_InvalidName(t *testing.T) {
 	writeTestFile(t, dir, "~$Budget.xlsx", "reserved pattern")
 	writeTestFile(t, dir, "valid.txt", "ok")
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -546,7 +546,7 @@ func TestFullScan_InvalidName(t *testing.T) {
 
 	require.Len(t, result.Skipped, 2, "invalid OneDrive names should be reported in Skipped")
 
-	skipped := make(map[string]synctypes.SkippedItem, len(result.Skipped))
+	skipped := make(map[string]SkippedItem, len(result.Skipped))
 	for i := range result.Skipped {
 		skipped[result.Skipped[i].Path] = result.Skipped[i]
 	}
@@ -568,8 +568,8 @@ func TestFullScan_SharePointRootFormsProducesSkippedItem(t *testing.T) {
 	writeTestFile(t, dir, "docs/forms", "allowed below root")
 	writeTestFile(t, dir, "valid.txt", "ok")
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.SetObservationRules(synctypes.LocalObservationRules{RejectSharePointRootForms: true})
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.SetObservationRules(LocalObservationRules{RejectSharePointRootForms: true})
 
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
@@ -594,7 +594,7 @@ func TestFullScan_AlwaysExcluded(t *testing.T) {
 	writeTestFile(t, dir, "~backup", "old")
 	writeTestFile(t, dir, "legit.txt", "keep me")
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -615,7 +615,7 @@ func TestFullScan_ContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	_, err := obs.FullScan(ctx, mustOpenSyncTree(t, dir))
 
 	require.Error(t, err, "expected error")
@@ -634,7 +634,7 @@ func TestFullScan_NFCNormalization(t *testing.T) {
 
 	writeTestFile(t, dir, nfdName, "resume content")
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -650,7 +650,7 @@ func TestFullScan_NestedDirs(t *testing.T) {
 	writeTestFile(t, dir, "a/b/deep.txt", "deep content")
 	writeTestFile(t, dir, "top.txt", "top content")
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -676,7 +676,7 @@ func TestFullScan_EmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, dir, "empty.txt", "")
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -705,16 +705,16 @@ func TestFullScan_MixedChanges(t *testing.T) {
 
 	// Deleted file: in baseline but NOT on disk (don't create).
 
-	baseline := synctest.BaselineWith(
-		&synctypes.BaselineEntry{
+	baseline := baselineWith(
+		&BaselineEntry{
 			Path: "modified.txt", DriveID: driveid.New("d"), ItemID: "i1",
 			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "original content"),
 		},
-		&synctypes.BaselineEntry{
+		&BaselineEntry{
 			Path: "unchanged.txt", DriveID: driveid.New("d"), ItemID: "i2",
 			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "same content"),
 		},
-		&synctypes.BaselineEntry{
+		&BaselineEntry{
 			Path: "deleted.txt", DriveID: driveid.New("d"), ItemID: "i3",
 			ItemType: synctypes.ItemTypeFile, LocalHash: "some-hash",
 		},
@@ -968,7 +968,7 @@ func TestFullScan_NosyncGuardDir(t *testing.T) {
 	// .nosync as a directory should also trigger the guard.
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".nosync"), 0o700), "Mkdir")
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	_, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 
 	assert.ErrorIs(t, err, synctypes.ErrNosyncGuard)
@@ -983,7 +983,7 @@ func TestFullScan_ExcludedDirSkipsSubtree(t *testing.T) {
 	writeTestFile(t, dir, "~excluded/inner.txt", "hidden")
 	writeTestFile(t, dir, "visible.txt", "shown")
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -1023,7 +1023,7 @@ func TestFullScan_InvalidNameDirSkipsSubtree(t *testing.T) {
 	writeTestFile(t, dir, "bad./child.txt", "child")
 	writeTestFile(t, dir, "good.txt", "good")
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -1053,7 +1053,7 @@ func TestFullScan_PermissionDenied(t *testing.T) {
 	setTestDirPermissions(t, unreadableDir, 0o000)
 	t.Cleanup(func() { setTestDirPermissions(t, unreadableDir, 0o700) })
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
 
@@ -1064,7 +1064,7 @@ func TestFullScan_PermissionDenied(t *testing.T) {
 }
 
 // eventPaths extracts paths from a slice of ChangeEvents.
-func eventPaths(events []synctypes.ChangeEvent) []string {
+func eventPaths(events []ChangeEvent) []string {
 	paths := make([]string, len(events))
 	for i := range events {
 		paths[i] = events[i].Path
@@ -1169,7 +1169,7 @@ func TestFullScan_HashFailureStillEmitsCreate(t *testing.T) {
 		assert.NoError(t, os.Chmod(path, 0o600))
 	})
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err)
 
@@ -1198,7 +1198,7 @@ func TestFullScan_HashFailureModifyStillEmitsEvent(t *testing.T) {
 	path := writeTestFile(t, dir, "unreadable.txt", "modified content")
 
 	// Baseline has a different hash so the slow path (hash check) kicks in.
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path: "unreadable.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "original content"),
 	})
@@ -1295,7 +1295,7 @@ func TestFullScan_PathTooLong(t *testing.T) {
 	// Also write a normal file to verify it still appears.
 	writeTestFile(t, dir, "normal.txt", "ok")
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -1308,7 +1308,7 @@ func TestFullScan_PathTooLong(t *testing.T) {
 	}
 
 	// The too-long path should appear in Skipped with IssuePathTooLong.
-	var foundSkip *synctypes.SkippedItem
+	var foundSkip *SkippedItem
 	for i := range result.Skipped {
 		if result.Skipped[i].Reason == synctypes.IssuePathTooLong {
 			foundSkip = &result.Skipped[i]
@@ -1333,8 +1333,8 @@ func TestShouldObserve_AllCases(t *testing.T) {
 		name       string
 		fileName   string
 		path       string
-		filter     synctypes.LocalFilterConfig
-		rules      synctypes.LocalObservationRules
+		filter     LocalFilterConfig
+		rules      LocalObservationRules
 		wantNil    bool   // expect nil (observe)
 		wantReason string // expected Reason if non-nil; "" for internal exclusions
 	}{
@@ -1385,14 +1385,14 @@ func TestShouldObserve_AllCases(t *testing.T) {
 			name:       "sharepoint root forms",
 			fileName:   "forms",
 			path:       "forms",
-			rules:      synctypes.LocalObservationRules{RejectSharePointRootForms: true},
+			rules:      LocalObservationRules{RejectSharePointRootForms: true},
 			wantReason: synctypes.IssueInvalidFilename,
 		},
 		{
 			name:     "sharepoint nested forms allowed",
 			fileName: "forms",
 			path:     "team/forms",
-			rules:    synctypes.LocalObservationRules{RejectSharePointRootForms: true},
+			rules:    LocalObservationRules{RejectSharePointRootForms: true},
 			wantNil:  true,
 		},
 		{
@@ -1538,7 +1538,7 @@ func TestHashPhase_PanicRecovery(t *testing.T) {
 				writeTestFile(t, dir, f, "content of "+f)
 			}
 
-			obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 1)
+			obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 1)
 			// Inject a hash function that panics for the target path.
 			obs.HashFunc = func(path string) (string, error) {
 				if filepath.Base(path) == tt.panicPath {
@@ -1556,7 +1556,7 @@ func TestHashPhase_PanicRecovery(t *testing.T) {
 				"non-panicking files should still produce events")
 
 			// The panicking file should appear in Skipped.
-			var found *synctypes.SkippedItem
+			var found *SkippedItem
 			for i := range result.Skipped {
 				if result.Skipped[i].Path == tt.panicPath {
 					found = &result.Skipped[i]
@@ -1584,7 +1584,7 @@ func TestFullScan_HashPanicDoesNotAbort(t *testing.T) {
 	writeTestFile(t, dir, "good.txt", "good content")
 	writeTestFile(t, dir, badFileName, "bad content")
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	obs.HashFunc = func(path string) (string, error) {
 		if filepath.Base(path) == badFileName {
 			panic("corrupted file")
@@ -1605,7 +1605,7 @@ func TestFullScan_HashPanicDoesNotAbort(t *testing.T) {
 	assert.Nil(t, badEv, "panicking file should not produce an event")
 
 	// bad.txt should be in Skipped.
-	var badSkip *synctypes.SkippedItem
+	var badSkip *SkippedItem
 	for i := range result.Skipped {
 		if result.Skipped[i].Path == badFileName {
 			badSkip = &result.Skipped[i]
@@ -1625,7 +1625,7 @@ func TestFullScan_HashPanicDoesNotAbort(t *testing.T) {
 func TestNewLocalObserver_MapsInitialized(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	assert.NotNil(t, obs.PendingTimers, "pendingTimers should be initialized in constructor")
 	assert.NotNil(t, obs.HashRequests, "hashRequests should be initialized in constructor")
 }

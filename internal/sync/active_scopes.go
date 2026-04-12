@@ -8,6 +8,7 @@ package sync
 import (
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -16,7 +17,7 @@ import (
 //
 // The caller owns the blocks slice and decides how to persist or mutate it.
 // This function is pure — no locking, no persistence, no callbacks.
-func FindBlockingScope(blocks []synctypes.ScopeBlock, ta *synctypes.TrackedAction) synctypes.ScopeKey {
+func FindBlockingScope(blocks []syncstore.ScopeBlock, ta *TrackedAction) synctypes.ScopeKey {
 	if len(blocks) == 0 {
 		return synctypes.ScopeKey{}
 	}
@@ -49,82 +50,82 @@ func FindBlockingScope(blocks []synctypes.ScopeBlock, ta *synctypes.TrackedActio
 
 // UpsertScope returns a copy of blocks with the provided scope inserted or
 // replaced by key.
-func UpsertScope(blocks []synctypes.ScopeBlock, block *synctypes.ScopeBlock) []synctypes.ScopeBlock {
+func UpsertScope(blocks []syncstore.ScopeBlock, block *syncstore.ScopeBlock) []syncstore.ScopeBlock {
 	if block == nil {
-		return append([]synctypes.ScopeBlock(nil), blocks...)
+		return append([]syncstore.ScopeBlock(nil), blocks...)
 	}
 
 	for i := range blocks {
 		if blocks[i].Key == block.Key {
-			next := append([]synctypes.ScopeBlock(nil), blocks...)
+			next := append([]syncstore.ScopeBlock(nil), blocks...)
 			next[i] = *block
 			return next
 		}
 	}
 
-	next := append([]synctypes.ScopeBlock(nil), blocks...)
+	next := append([]syncstore.ScopeBlock(nil), blocks...)
 	next = append(next, *block)
 	return next
 }
 
 // RemoveScope returns a copy of blocks with the given key removed.
-func RemoveScope(blocks []synctypes.ScopeBlock, key synctypes.ScopeKey) []synctypes.ScopeBlock {
+func RemoveScope(blocks []syncstore.ScopeBlock, key synctypes.ScopeKey) []syncstore.ScopeBlock {
 	for i := range blocks {
 		if blocks[i].Key != key {
 			continue
 		}
 
-		next := append([]synctypes.ScopeBlock(nil), blocks[:i]...)
+		next := append([]syncstore.ScopeBlock(nil), blocks[:i]...)
 		next = append(next, blocks[i+1:]...)
 		return next
 	}
 
-	return append([]synctypes.ScopeBlock(nil), blocks...)
+	return append([]syncstore.ScopeBlock(nil), blocks...)
 }
 
 // HasScope reports whether the given scope key is active.
-func HasScope(blocks []synctypes.ScopeBlock, key synctypes.ScopeKey) bool {
+func HasScope(blocks []syncstore.ScopeBlock, key synctypes.ScopeKey) bool {
 	_, ok := LookupScope(blocks, key)
 	return ok
 }
 
 // LookupScope returns a value copy of the active scope block for the key.
-func LookupScope(blocks []synctypes.ScopeBlock, key synctypes.ScopeKey) (synctypes.ScopeBlock, bool) {
+func LookupScope(blocks []syncstore.ScopeBlock, key synctypes.ScopeKey) (syncstore.ScopeBlock, bool) {
 	for i := range blocks {
 		if blocks[i].Key == key {
 			return blocks[i], true
 		}
 	}
 
-	return synctypes.ScopeBlock{}, false
+	return syncstore.ScopeBlock{}, false
 }
 
 // ExtendScopeTrial returns a copy of blocks with the given scope's trial
 // metadata updated. The boolean reports whether the scope existed.
 func ExtendScopeTrial(
-	blocks []synctypes.ScopeBlock,
+	blocks []syncstore.ScopeBlock,
 	key synctypes.ScopeKey,
 	nextAt time.Time,
 	newInterval time.Duration,
-) ([]synctypes.ScopeBlock, bool) {
+) ([]syncstore.ScopeBlock, bool) {
 	for i := range blocks {
 		if blocks[i].Key != key {
 			continue
 		}
 
-		next := append([]synctypes.ScopeBlock(nil), blocks...)
+		next := append([]syncstore.ScopeBlock(nil), blocks...)
 		next[i].NextTrialAt = nextAt
 		next[i].TrialInterval = newInterval
 		next[i].TrialCount++
 		return next, true
 	}
 
-	return append([]synctypes.ScopeBlock(nil), blocks...), false
+	return append([]syncstore.ScopeBlock(nil), blocks...), false
 }
 
 // DueTrials returns the active scope keys whose trial is due at now. Scopes
 // with zero NextTrialAt are excluded.
-func DueTrials(blocks []synctypes.ScopeBlock, now time.Time) []synctypes.ScopeKey {
+func DueTrials(blocks []syncstore.ScopeBlock, now time.Time) []synctypes.ScopeKey {
 	var due []synctypes.ScopeKey
 
 	for i := range blocks {
@@ -141,7 +142,7 @@ func DueTrials(blocks []synctypes.ScopeBlock, now time.Time) []synctypes.ScopeKe
 
 // EarliestTrialAt returns the earliest pending trial time across all active
 // scopes. Scopes with zero NextTrialAt are skipped.
-func EarliestTrialAt(blocks []synctypes.ScopeBlock) (time.Time, bool) {
+func EarliestTrialAt(blocks []syncstore.ScopeBlock) (time.Time, bool) {
 	var earliest time.Time
 	found := false
 
@@ -159,7 +160,7 @@ func EarliestTrialAt(blocks []synctypes.ScopeBlock) (time.Time, bool) {
 }
 
 // ScopeKeys returns the active scope keys in slice order.
-func ScopeKeys(blocks []synctypes.ScopeBlock) []synctypes.ScopeKey {
+func ScopeKeys(blocks []syncstore.ScopeBlock) []synctypes.ScopeKey {
 	keys := make([]synctypes.ScopeKey, len(blocks))
 	for i := range blocks {
 		keys[i] = blocks[i].Key

@@ -28,18 +28,18 @@ func TestWatch_DetectsFileDelete(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, dir, "doomed.txt", "goodbye")
 
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path: "doomed.txt", DriveID: driveid.New("d"), ItemID: "i1",
 		ItemType: synctypes.ItemTypeFile,
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	require.NoError(t, os.Remove(filepath.Join(dir, "doomed.txt")))
 
-	var ev synctypes.ChangeEvent
+	var ev ChangeEvent
 	select {
 	case ev = <-events:
 	case <-time.After(5 * time.Second):
@@ -66,19 +66,19 @@ func TestWatch_DeleteDirectoryRemovesWatch(t *testing.T) {
 	subDir := filepath.Join(dir, "subdir")
 	require.NoError(t, os.Mkdir(subDir, 0o700))
 
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path: "subdir", DriveID: driveid.New("d"), ItemID: "d1",
 		ItemType: synctypes.ItemTypeFolder,
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	// Delete the subdirectory.
 	require.NoError(t, os.Remove(subDir))
 
-	var ev synctypes.ChangeEvent
+	var ev ChangeEvent
 
 	select {
 	case ev = <-events:
@@ -103,13 +103,13 @@ func TestHandleFsEvent_SkipSymlinksIgnoresTransientSymlinkDelete(t *testing.T) {
 	syncRoot := t.TempDir()
 	writeTestFile(t, syncRoot, "real.txt", "content")
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(synctypes.LocalFilterConfig{
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.SetFilterConfig(LocalFilterConfig{
 		SkipSymlinks: true,
 	})
 
 	watcher := newRecordingFsWatcher()
-	events := make(chan synctypes.ChangeEvent, 4)
+	events := make(chan ChangeEvent, 4)
 	tree := mustOpenSyncTree(t, syncRoot)
 	linkPath := filepath.Join(syncRoot, "link.txt")
 
@@ -149,19 +149,19 @@ func TestSkipSymlinkDelete_RemainsIgnoredThroughSafetyScan(t *testing.T) {
 	linkPath := filepath.Join(syncRoot, "link.txt")
 	require.NoError(t, os.Symlink(filepath.Join(syncRoot, "real.txt"), linkPath))
 
-	baseline := synctest.BaselineWith(
-		&synctypes.BaselineEntry{
+	baseline := baselineWith(
+		&BaselineEntry{
 			Path: "real.txt", DriveID: driveid.New("d"), ItemID: "real",
 			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "content"),
 		},
-		&synctypes.BaselineEntry{
+		&BaselineEntry{
 			Path: "link.txt", DriveID: driveid.New("d"), ItemID: "link",
 			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "content"),
 		},
 	)
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(synctypes.LocalFilterConfig{
+	obs.SetFilterConfig(LocalFilterConfig{
 		SkipSymlinks: true,
 	})
 
@@ -171,7 +171,7 @@ func TestSkipSymlinkDelete_RemainsIgnoredThroughSafetyScan(t *testing.T) {
 
 	require.NoError(t, os.Remove(linkPath))
 
-	events := make(chan synctypes.ChangeEvent, 4)
+	events := make(chan ChangeEvent, 4)
 	obs.HandleFsEvent(
 		t.Context(),
 		fsnotify.Event{Name: linkPath, Op: fsnotify.Remove},
@@ -209,7 +209,7 @@ func TestAddWatchesRecursive_FollowsSymlinksByDefault(t *testing.T) {
 		addedPaths: make(map[string]bool),
 	}
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
 	err := obs.AddWatchesRecursive(t.Context(), tracker, mustOpenSyncTree(t, root))
 	require.NoError(t, err)
@@ -331,7 +331,7 @@ func TestHandleDelete_UsesOriginalFsPath(t *testing.T) {
 			t.Parallel()
 
 			watcher := newRecordingFsWatcher()
-			baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+			baseline := baselineWith(&BaselineEntry{
 				Path:     tt.dbRelPath,
 				DriveID:  driveid.New("d"),
 				ItemID:   "item1",
@@ -342,7 +342,7 @@ func TestHandleDelete_UsesOriginalFsPath(t *testing.T) {
 			obs.PendingTimers = make(map[string]*time.Timer)
 			obs.HashRequests = make(chan HashRequest, HashRequestBufSize)
 
-			events := make(chan synctypes.ChangeEvent, 10)
+			events := make(chan ChangeEvent, 10)
 			name := filepath.Base(tt.dbRelPath)
 
 			obs.HandleDelete(t.Context(), watcher, mustOpenSyncTree(t, "/sync"), tt.fsPath, tt.dbRelPath, name, events)
@@ -376,7 +376,7 @@ func TestHandleDelete_EmitsDeleteEvent(t *testing.T) {
 			t.Parallel()
 
 			watcher := newRecordingFsWatcher()
-			baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+			baseline := baselineWith(&BaselineEntry{
 				Path:     "target",
 				DriveID:  driveid.New("d"),
 				ItemID:   "item1",
@@ -387,7 +387,7 @@ func TestHandleDelete_EmitsDeleteEvent(t *testing.T) {
 			obs.PendingTimers = make(map[string]*time.Timer)
 			obs.HashRequests = make(chan HashRequest, HashRequestBufSize)
 
-			events := make(chan synctypes.ChangeEvent, 10)
+			events := make(chan ChangeEvent, 10)
 			obs.HandleDelete(t.Context(), watcher, mustOpenSyncTree(t, "/sync"), "/sync/target", "target", "target", events)
 
 			select {
@@ -411,14 +411,14 @@ func TestHandleDelete_CancelsCoalesceTimer(t *testing.T) {
 	t.Parallel()
 
 	watcher := newRecordingFsWatcher()
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	obs.PendingTimers = make(map[string]*time.Timer)
 	obs.HashRequests = make(chan HashRequest, HashRequestBufSize)
 
 	// Set up a pending timer for "file.txt".
 	obs.PendingTimers["file.txt"] = time.AfterFunc(time.Hour, func() {})
 
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	obs.HandleDelete(t.Context(), watcher, mustOpenSyncTree(t, "/sync"), "/sync/file.txt", "file.txt", "file.txt", events)
 
 	assert.Empty(t, obs.PendingTimers, "handleDelete should cancel pending timer")
@@ -436,7 +436,7 @@ func TestHandleFsEvent_DeletePassesFsPath(t *testing.T) {
 	require.NoError(t, os.MkdirAll(dirPath, 0o700))
 
 	watcher := newRecordingFsWatcher()
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path:     "folder",
 		DriveID:  driveid.New("d"),
 		ItemID:   "f1",
@@ -447,7 +447,7 @@ func TestHandleFsEvent_DeletePassesFsPath(t *testing.T) {
 	obs.PendingTimers = make(map[string]*time.Timer)
 	obs.HashRequests = make(chan HashRequest, HashRequestBufSize)
 
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 
 	fsEvent := fsnotify.Event{
 		Name: dirPath,

@@ -18,11 +18,11 @@ import (
 func TestTrySend_ChannelAvailable_SendsEvent(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	events := make(chan synctypes.ChangeEvent, 1)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	events := make(chan ChangeEvent, 1)
 	ctx := t.Context()
 
-	ev := synctypes.ChangeEvent{
+	ev := ChangeEvent{
 		Source: synctypes.SourceLocal, Type: synctypes.ChangeCreate, Path: "test.txt",
 		ItemType: synctypes.ItemTypeFile,
 	}
@@ -42,19 +42,19 @@ func TestTrySend_ChannelAvailable_SendsEvent(t *testing.T) {
 func TestTrySend_ChannelFull_DropsEvent(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	events := make(chan synctypes.ChangeEvent, 1)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	events := make(chan ChangeEvent, 1)
 	ctx := t.Context()
 
 	// Fill the channel.
-	first := synctypes.ChangeEvent{
+	first := ChangeEvent{
 		Source: synctypes.SourceLocal, Type: synctypes.ChangeCreate, Path: "first.txt",
 		ItemType: synctypes.ItemTypeFile,
 	}
 	events <- first
 
 	// This should be dropped (channel full).
-	second := synctypes.ChangeEvent{
+	second := ChangeEvent{
 		Source: synctypes.SourceLocal, Type: synctypes.ChangeCreate, Path: "second.txt",
 		ItemType: synctypes.ItemTypeFile,
 	}
@@ -76,15 +76,15 @@ func TestTrySend_ChannelFull_DropsEvent(t *testing.T) {
 func TestTrySend_ContextCanceled_NoDrop(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(synctest.EmptyBaseline(), synctest.TestLogger(t), 0)
-	events := make(chan synctypes.ChangeEvent, 1)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	events := make(chan ChangeEvent, 1)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	// Fill the channel so default branch would fire, but ctx is canceled.
-	events <- synctypes.ChangeEvent{Path: "fill.txt"}
+	events <- ChangeEvent{Path: "fill.txt"}
 
-	ev := synctypes.ChangeEvent{
+	ev := ChangeEvent{
 		Source: synctypes.SourceLocal, Type: synctypes.ChangeCreate, Path: "test.txt",
 		ItemType: synctypes.ItemTypeFile,
 	}

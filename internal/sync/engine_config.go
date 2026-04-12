@@ -9,7 +9,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // DriveEngineOptions carries the small set of construction decisions that are
@@ -40,7 +39,7 @@ func newEngineConfigForDrive(
 	session *driveops.Session,
 	resolved *config.ResolvedDrive,
 	opts DriveEngineOptions,
-) (*synctypes.EngineConfig, error) {
+) (*engineInputs, error) {
 	if session == nil {
 		return nil, fmt.Errorf("sync: session is required")
 	}
@@ -69,7 +68,7 @@ func newEngineConfigForDrive(
 		return nil, fmt.Errorf("invalid min_free_space %q: %w", resolved.MinFreeSpace, err)
 	}
 
-	ecfg := &synctypes.EngineConfig{
+	ecfg := &engineInputs{
 		DBPath:                 dbPath,
 		SyncRoot:               syncDir,
 		DataDir:                config.DefaultDataDir(),
@@ -88,13 +87,13 @@ func newEngineConfigForDrive(
 		PermChecker:            session.Meta,
 		Logger:                 logger,
 		EnableWebsocket:        resolved.Websocket,
-		LocalFilter: synctypes.LocalFilterConfig{
+		LocalFilter: LocalFilterConfig{
 			SkipDotfiles: resolved.SkipDotfiles,
 			SkipSymlinks: resolved.SkipSymlinks,
 			SkipDirs:     resolved.SkipDirs,
 			SkipFiles:    resolved.SkipFiles,
 		},
-		LocalRules: synctypes.LocalObservationRules{
+		LocalRules: LocalObservationRules{
 			RejectSharePointRootForms: resolved.CanonicalID.IsSharePoint(),
 		},
 		SyncScope: syncscope.Config{

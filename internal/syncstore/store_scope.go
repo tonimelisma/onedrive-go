@@ -63,7 +63,7 @@ func (m *SyncStore) UpsertSyncMetadataEntries(ctx context.Context, entries map[s
 // ReadScopeState returns the durable sync-scope projection. Missing scope
 // state is not an error; callers use found=false to bootstrap the first
 // generation from current truth.
-func (m *SyncStore) ReadScopeState(ctx context.Context) (synctypes.ScopeStateRecord, bool, error) {
+func (m *SyncStore) ReadScopeState(ctx context.Context) (ScopeStateRecord, bool, error) {
 	row := m.db.QueryRowContext(ctx, `
 		SELECT generation, effective_snapshot_json, observation_plan_hash,
 		       observation_mode, websocket_enabled, pending_reentry,
@@ -73,7 +73,7 @@ func (m *SyncStore) ReadScopeState(ctx context.Context) (synctypes.ScopeStateRec
 	)
 
 	var (
-		record           synctypes.ScopeStateRecord
+		record           ScopeStateRecord
 		websocketEnabled int
 		pendingReentry   int
 	)
@@ -88,10 +88,10 @@ func (m *SyncStore) ReadScopeState(ctx context.Context) (synctypes.ScopeStateRec
 		&record.UpdatedAt,
 	); err != nil {
 		if err == sql.ErrNoRows || isMissingTableErr(err) {
-			return synctypes.ScopeStateRecord{}, false, nil
+			return ScopeStateRecord{}, false, nil
 		}
 
-		return synctypes.ScopeStateRecord{}, false, fmt.Errorf("read scope state: %w", err)
+		return ScopeStateRecord{}, false, fmt.Errorf("read scope state: %w", err)
 	}
 
 	record.WebsocketEnabled = websocketEnabled != 0
@@ -104,7 +104,7 @@ func (m *SyncStore) ReadScopeState(ctx context.Context) (synctypes.ScopeStateRec
 // already-known remote_state rows against the effective snapshot in the same
 // transaction. This is the sole durable authority for filtered-row activation
 // and deactivation.
-func (m *SyncStore) ApplyScopeState(ctx context.Context, req synctypes.ScopeStateApplyRequest) (err error) {
+func (m *SyncStore) ApplyScopeState(ctx context.Context, req ScopeStateApplyRequest) (err error) {
 	snapshot, err := syncscope.UnmarshalSnapshot(req.State.EffectiveSnapshotJSON)
 	if err != nil {
 		return fmt.Errorf("decode scope snapshot: %w", err)
@@ -269,7 +269,7 @@ func applyRemoteScopeRow(
 	return true, nil
 }
 
-func upsertScopeStateRow(ctx context.Context, tx sqlTxRunner, state synctypes.ScopeStateRecord) error {
+func upsertScopeStateRow(ctx context.Context, tx sqlTxRunner, state ScopeStateRecord) error {
 	if state.EffectiveSnapshotJSON == "" {
 		state.EffectiveSnapshotJSON = `{"version":1}`
 	}
@@ -319,7 +319,7 @@ type scopeStateRowQuerier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-func readScopeStateTx(ctx context.Context, tx sqlTxRunner) (synctypes.ScopeStateRecord, bool, error) {
+func readScopeStateTx(ctx context.Context, tx sqlTxRunner) (ScopeStateRecord, bool, error) {
 	return readScopeStateRecord(ctx, tx, "read scope state")
 }
 
@@ -327,7 +327,7 @@ func readScopeStateRecord(
 	ctx context.Context,
 	querier scopeStateRowQuerier,
 	errAction string,
-) (synctypes.ScopeStateRecord, bool, error) {
+) (ScopeStateRecord, bool, error) {
 	row := querier.QueryRowContext(ctx, `
 		SELECT generation, effective_snapshot_json, observation_plan_hash,
 		       observation_mode, websocket_enabled, pending_reentry,
@@ -337,7 +337,7 @@ func readScopeStateRecord(
 	)
 
 	var (
-		record           synctypes.ScopeStateRecord
+		record           ScopeStateRecord
 		websocketEnabled int
 		pendingReentry   int
 	)
@@ -352,10 +352,10 @@ func readScopeStateRecord(
 		&record.UpdatedAt,
 	); err != nil {
 		if err == sql.ErrNoRows || isMissingTableErr(err) {
-			return synctypes.ScopeStateRecord{}, false, nil
+			return ScopeStateRecord{}, false, nil
 		}
 
-		return synctypes.ScopeStateRecord{}, false, fmt.Errorf("%s: %w", errAction, err)
+		return ScopeStateRecord{}, false, fmt.Errorf("%s: %w", errAction, err)
 	}
 
 	record.WebsocketEnabled = websocketEnabled != 0

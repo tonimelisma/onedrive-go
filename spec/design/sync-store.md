@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/syncstore/store.go, internal/syncstore/inspector.go, internal/syncstore/schema.go, internal/syncstore/migrations/*.sql, internal/syncstore/tx.go, internal/syncstore/store_baseline.go, internal/syncstore/store_observation.go, internal/syncstore/store_conflicts.go, internal/syncstore/store_failures.go, internal/syncstore/store_held_deletes.go, internal/syncstore/store_admin.go, internal/syncstore/store_scope_blocks.go, internal/syncstore/shortcuts.go, internal/syncstore/store_recover.go, internal/syncverify/verify.go, internal/sync/recovery.go, internal/cli/status.go, internal/cli/recover.go
+GOVERNS: internal/syncstore/store.go, internal/syncstore/inspector.go, internal/syncstore/schema.go, internal/syncstore/migrations/*.sql, internal/syncstore/tx.go, internal/syncstore/store_baseline.go, internal/syncstore/store_observation.go, internal/syncstore/store_conflicts.go, internal/syncstore/store_failures.go, internal/syncstore/store_held_deletes.go, internal/syncstore/store_admin.go, internal/syncstore/store_scope_blocks.go, internal/syncstore/shortcuts.go, internal/syncstore/store_recover.go, internal/syncstore/types.go, internal/syncverify/verify.go, internal/syncverify/report.go, internal/sync/recovery.go, internal/cli/status.go, internal/cli/recover.go
 
 Implements: R-2.4.4 [verified], R-2.4.5 [verified], R-2.5 [verified], R-2.5.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.7 [verified], R-2.15.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.14 [verified], R-2.10.22 [verified], R-2.10.32 [verified], R-2.10.33 [verified], R-2.10.34 [verified], R-2.10.41 [verified], R-2.10.45 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified], R-6.7.17 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
@@ -20,6 +20,7 @@ peer authority; it is rebuilt from store state when the engine starts.
 - Allowed Side Effects: SQLite reads/writes and schema application only.
 - Mutable Runtime Owner: `SyncStore` owns its writable DB handle and internal rebuildable baseline cache. `Inspector` and the package-level read helpers own short-lived read-only DB handles. Neither runs background goroutines; all store boundaries expose synchronous methods only.
 - Error Boundary: The store persists already-classified failure roles and categories from [error-model.md](error-model.md). It does not reinterpret raw external errors into new policy classes.
+- Store-owned durable boundary types such as `BaselineMutation`, `SyncFailureParams`, `ObservedItem`, `ScopeBlock`, and conflict/held-delete records live in `internal/syncstore/types.go`. Verification `Result` and `Report` types live in `internal/syncverify/report.go`.
 
 ## Verified By
 
@@ -54,7 +55,7 @@ lifecycle.
 Key operations:
 
 - `CommitObservation()` atomically writes `remote_state` rows and advances the relevant delta token.
-- `CommitOutcome()` updates `baseline` and finalizes remote-state transitions per action. Success-side `sync_failures` cleanup is engine-owned and happens before or after the store commit depending on the result flow.
+- `CommitMutation()` updates `baseline` and finalizes remote-state transitions per action. `BaselineMutation` is the store-owned persistence input passed from engine execution results. Success-side `sync_failures` cleanup is engine-owned and happens before or after the store commit depending on the result flow.
 - `ApplyScopeState(ctx, req)` is the durable sync-scope transition boundary.
   It upserts the singleton `scope_state` row and atomically re-evaluates
   existing `remote_state` rows against the effective snapshot, marking
@@ -82,7 +83,7 @@ successful commit, and joins any real rollback failure into the returned
 error. The store therefore never silently discards rollback failures at the
 durable state boundary.
 
-For file rows, `CommitOutcome()` persists the comparison tuple the planner
+For file rows, `CommitMutation()` persists the comparison tuple the planner
 needs later:
 
 - local side: `local_hash`, `local_size`, `local_mtime`
@@ -139,14 +140,14 @@ against the persisted snapshot and fixes rows that should no longer be
 engine remains the only owner that can consume that persisted signal and clear
 it after a successful re-entry reconciliation.
 
-`CommitOutcome()` classifies baseline mutations through one shared
+`CommitMutation()` classifies baseline mutations through one shared
 ActionType-to-mutation mapping before any transaction writes happen. Unknown
 actions are explicit store errors, not silent no-ops. The in-memory baseline
 cache uses that same classifier after commit; if that path ever encounters an
 impossible unclassified action anyway, the store invalidates and reloads the
 cache from SQLite so durable state remains the only authority.
 
-`RefreshLocalBaseline()` is deliberately narrower than `CommitOutcome()`. It
+`RefreshLocalBaseline()` is deliberately narrower than `CommitMutation()`. It
 exists for local reconciliation paths such as `keep_both`, where the
 engine has authoritative current local disk facts but is not committing a new
 executor-produced remote result. The method preserves the remote-side
@@ -380,7 +381,7 @@ local verification.
 Verification remains read-only all the way through the store boundary:
 per-path stat/rooted-path/hash failures are reported as mismatch rows instead
 of aborting the whole pass, while context cancellation is still fatal to the
-overall verification routine. `VerifyReport.Mismatches` is sorted by path
+overall verification routine. `syncverify.Report.Mismatches` is sorted by path
 before it reaches formatting so test/dev output stays deterministic across map
 iteration order.
 

@@ -7,8 +7,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 func TestItemType_String(t *testing.T) {
@@ -234,12 +232,3 @@ func TestBaseline_PutGetByIDDeleteAndLen(t *testing.T) {
 
 	assert.Empty(t, bl.GetCaseVariants("docs", "readme.txt"))
 }
-
-// Interface satisfaction checks — compile-time verification that
-// *graph.Client implements the consumer-defined interfaces.
-var (
-	_ DeltaFetcher        = (*graph.Client)(nil)
-	_ ItemClient          = (*graph.Client)(nil)
-	_ driveops.Downloader = (*graph.Client)(nil)
-	_ driveops.Uploader   = (*graph.Client)(nil)
-)

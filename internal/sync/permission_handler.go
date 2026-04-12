@@ -12,6 +12,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -20,8 +21,8 @@ import (
 // Engine. It handles HTTP 403 responses, local permission denials, per-pass
 // permission rechecks, and scanner-resolved permission clearing.
 type PermissionHandler struct {
-	baseline     synctypes.SyncFailureRecorder
-	permChecker  synctypes.PermissionChecker
+	baseline     failureRecorder
+	permChecker  PermissionChecker
 	syncTree     *synctree.Root
 	driveID      driveid.ID
 	accountEmail string
@@ -77,7 +78,7 @@ func (ph *PermissionHandler) DeniedPrefixes(ctx context.Context) []string {
 // and returns a decision for the engine to apply.
 func (ph *PermissionHandler) handle403(
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	failedPath string,
 	actionType synctypes.ActionType,
 	shortcuts []synctypes.Shortcut,
@@ -221,7 +222,7 @@ func (ph *PermissionHandler) remoteBoundaryDecision(
 	return PermissionCheckDecision{
 		Matched: true,
 		Kind:    permissionCheckActivateDerivedScope,
-		Failure: synctypes.SyncFailureParams{
+		Failure: syncstore.SyncFailureParams{
 			Path:       failedPath,
 			DriveID:    failureDriveID,
 			Direction:  directionFromAction(actionType),
@@ -242,7 +243,7 @@ func (ph *PermissionHandler) remoteBoundaryDecision(
 // walkPermissionBoundary walks UP the folder hierarchy to find the highest
 // read-only ancestor. Returns the boundary folder path.
 func (ph *PermissionHandler) walkPermissionBoundary(
-	ctx context.Context, bl *synctypes.Baseline, startFolder string, sc *synctypes.Shortcut, remoteDriveID driveid.ID,
+	ctx context.Context, bl *syncstore.Baseline, startFolder string, sc *synctypes.Shortcut, remoteDriveID driveid.ID,
 ) string {
 	boundary := startFolder
 
@@ -278,7 +279,7 @@ func (ph *PermissionHandler) walkPermissionBoundary(
 // and writes resume. Runs every pass (typically 5 min in watch mode).
 func (ph *PermissionHandler) recheckPermissions(
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	shortcuts []synctypes.Shortcut,
 ) []PermissionRecheckDecision {
 	return ph.recheckPermissionsForScopeKeys(ctx, bl, shortcuts, nil)
@@ -286,7 +287,7 @@ func (ph *PermissionHandler) recheckPermissions(
 
 func (ph *PermissionHandler) recheckPermissionsForScopeKeys(
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	shortcuts []synctypes.Shortcut,
 	scopeFilter map[synctypes.ScopeKey]bool,
 ) []PermissionRecheckDecision {
@@ -411,7 +412,7 @@ func (ph *PermissionHandler) permissionShortcuts(shortcuts []synctypes.Shortcut)
 }
 
 func resolveBoundaryRemoteItemID(
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	boundaryPath string,
 	driveID driveid.ID,
 	sc *synctypes.Shortcut,
@@ -462,7 +463,7 @@ func remoteBoundaryParent(boundary string, rootPath string) (string, bool) {
 // block for the directory subtree (R-2.10.12).
 func (ph *PermissionHandler) handleLocalPermission(
 	_ context.Context,
-	r *synctypes.WorkerResult,
+	r *WorkerResult,
 ) PermissionCheckDecision {
 	// If the sync root itself is inaccessible, WARN loudly — don't silently
 	// block everything behind a scope block. The sync root being inaccessible
@@ -539,7 +540,7 @@ func (ph *PermissionHandler) localFilePermissionDecision(
 	return PermissionCheckDecision{
 		Matched: true,
 		Kind:    permissionCheckRecordFileFailure,
-		Failure: synctypes.SyncFailureParams{
+		Failure: syncstore.SyncFailureParams{
 			Path:       path,
 			DriveID:    ph.driveID,
 			Direction:  directionFromAction(actionType),
@@ -563,7 +564,7 @@ func (ph *PermissionHandler) localDirectoryPermissionDecision(
 		Matched:  true,
 		Kind:     permissionCheckActivateBoundaryScope,
 		ScopeKey: scopeKey,
-		Failure: synctypes.SyncFailureParams{
+		Failure: syncstore.SyncFailureParams{
 			Path:       boundaryPath,
 			DriveID:    ph.driveID,
 			Direction:  directionFromAction(actionType),
@@ -574,7 +575,7 @@ func (ph *PermissionHandler) localDirectoryPermissionDecision(
 			ErrMsg:     "directory not accessible (check filesystem permissions)",
 			ScopeKey:   scopeKey,
 		},
-		ScopeBlock: synctypes.ScopeBlock{
+		ScopeBlock: syncstore.ScopeBlock{
 			Key:          scopeKey,
 			IssueType:    synctypes.IssueLocalPermissionDenied,
 			TimingSource: synctypes.ScopeTimingNone,

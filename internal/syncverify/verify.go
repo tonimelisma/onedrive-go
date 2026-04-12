@@ -11,6 +11,7 @@ import (
 	"sort"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -36,25 +37,25 @@ const (
 // skipped (no content hash).
 func VerifyBaseline(
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	tree *synctree.Root,
 	logger *slog.Logger,
-) (*synctypes.VerifyReport, error) {
+) (*Report, error) {
 	return verifyBaselineWithHasher(ctx, bl, tree, driveops.ComputeQuickXorHash, logger)
 }
 
 func verifyBaselineWithHasher(
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	tree verifyRoot,
 	computeHash hashComputer,
 	logger *slog.Logger,
-) (*synctypes.VerifyReport, error) {
-	report := &synctypes.VerifyReport{}
+) (*Report, error) {
+	report := &Report{}
 
 	var ctxErr error
 
-	bl.ForEachPath(func(relPath string, entry *synctypes.BaselineEntry) {
+	bl.ForEachPath(func(relPath string, entry *syncstore.BaselineEntry) {
 		if ctxErr != nil {
 			return
 		}
@@ -92,14 +93,14 @@ func verifyBaselineWithHasher(
 func verifyEntry(
 	tree verifyRoot,
 	relPath string,
-	entry *synctypes.BaselineEntry,
+	entry *syncstore.BaselineEntry,
 	computeHash hashComputer,
 	logger *slog.Logger,
-) synctypes.VerifyResult {
+) Result {
 	info, err := tree.Stat(relPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return synctypes.VerifyResult{
+			return Result{
 				Path:     entry.Path,
 				Status:   VerifyMissing,
 				Expected: entry.LocalHash,
@@ -108,7 +109,7 @@ func verifyEntry(
 
 		logger.Warn("verify: stat failed", slog.String("path", entry.Path), slog.String("error", err.Error()))
 
-		return synctypes.VerifyResult{
+		return Result{
 			Path:     entry.Path,
 			Status:   VerifyMissing,
 			Expected: entry.LocalHash,
@@ -118,7 +119,7 @@ func verifyEntry(
 
 	// Check size first (fast path) when the baseline knows the local file size.
 	if entry.LocalSizeKnown && info.Size() != entry.LocalSize {
-		return synctypes.VerifyResult{
+		return Result{
 			Path:     entry.Path,
 			Status:   VerifySizeMismatch,
 			Expected: fmt.Sprintf("%d", entry.LocalSize),
@@ -129,14 +130,14 @@ func verifyEntry(
 	// Skip hash check if baseline has no local hash (e.g., SharePoint-enriched
 	// files where only remote_hash is populated).
 	if entry.LocalHash == "" {
-		return synctypes.VerifyResult{Path: entry.Path, Status: VerifyOK}
+		return Result{Path: entry.Path, Status: VerifyOK}
 	}
 
 	absPath, err := tree.Abs(relPath)
 	if err != nil {
 		logger.Warn("verify: rooted path failed", slog.String("path", entry.Path), slog.String("error", err.Error()))
 
-		return synctypes.VerifyResult{
+		return Result{
 			Path:     entry.Path,
 			Status:   VerifyHashMismatch,
 			Expected: entry.LocalHash,
@@ -148,7 +149,7 @@ func verifyEntry(
 	if err != nil {
 		logger.Warn("verify: hash failed", slog.String("path", entry.Path), slog.String("error", err.Error()))
 
-		return synctypes.VerifyResult{
+		return Result{
 			Path:     entry.Path,
 			Status:   VerifyHashMismatch,
 			Expected: entry.LocalHash,
@@ -157,7 +158,7 @@ func verifyEntry(
 	}
 
 	if hash != entry.LocalHash {
-		return synctypes.VerifyResult{
+		return Result{
 			Path:     entry.Path,
 			Status:   VerifyHashMismatch,
 			Expected: entry.LocalHash,
@@ -165,5 +166,5 @@ func verifyEntry(
 		}
 	}
 
-	return synctypes.VerifyResult{Path: entry.Path, Status: VerifyOK}
+	return Result{Path: entry.Path, Status: VerifyOK}
 }

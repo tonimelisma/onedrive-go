@@ -73,8 +73,7 @@ func TestSharedDiscoveryService_DiscoverTargets_IgnoresNonActionableHits(t *test
 		GraphBaseURL: srv.URL,
 	}
 
-	service := newSharedDiscoveryService(cc)
-	result := service.discoverTargets(t.Context(), []accountCatalogEntry{{
+	result := discoverSharedTargets(t.Context(), cc, []accountCatalogEntry{{
 		Email:                 "user@example.com",
 		DisplayName:           "User Example",
 		DriveType:             driveid.DriveTypePersonal,
@@ -146,7 +145,7 @@ func TestSharedService_RunList_RefreshesIdentityOnceBeforeSharedDiscovery(t *tes
 		GraphBaseURL: srv.URL,
 	}
 
-	require.NoError(t, newSharedService(cc).runList(context.Background()))
+	require.NoError(t, runSharedList(context.Background(), cc))
 
 	var parsed sharedListJSONOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &parsed))
@@ -187,8 +186,7 @@ func TestSharedDiscoveryService_DiscoverTargets_SearchUnauthorizedReturnsAuthReq
 		GraphBaseURL: srv.URL,
 	}
 
-	service := newSharedDiscoveryService(cc)
-	result := service.discoverTargets(t.Context(), []accountCatalogEntry{{
+	result := discoverSharedTargets(t.Context(), cc, []accountCatalogEntry{{
 		Email:                 "user@example.com",
 		DisplayName:           "User Example",
 		DriveType:             driveid.DriveTypePersonal,
@@ -212,8 +210,7 @@ func TestSharedDiscoveryService_DiscoverTargets_NoRepresentativeTokenReturnsDegr
 		CfgPath:      filepath.Join(t.TempDir(), "config.toml"),
 	}
 
-	service := newSharedDiscoveryService(cc)
-	result := service.discoverTargets(t.Context(), []accountCatalogEntry{{
+	result := discoverSharedTargets(t.Context(), cc, []accountCatalogEntry{{
 		Email:       "user@example.com",
 		DisplayName: "User Example",
 		DriveType:   driveid.DriveTypePersonal,
@@ -266,7 +263,7 @@ func TestSharedDiscoveryService_DiscoverTargets_IgnoresCallerAccountFilter(t *te
 		GraphBaseURL: srv.URL,
 	}
 
-	result := newSharedDiscoveryService(cc).discoverTargets(t.Context(), []accountCatalogEntry{{
+	result := discoverSharedTargets(t.Context(), cc, []accountCatalogEntry{{
 		Email:                 "other@example.com",
 		DisplayName:           "Other Example",
 		DriveType:             driveid.DriveTypePersonal,
@@ -319,7 +316,7 @@ func TestSharedDiscoveryService_DiscoverTargets_FallsBackAcrossAccountTokens(t *
 		GraphBaseURL: srv.URL,
 	}
 
-	result := newSharedDiscoveryService(cc).discoverTargets(t.Context(), []accountCatalogEntry{{
+	result := discoverSharedTargets(t.Context(), cc, []accountCatalogEntry{{
 		Email:                 "user@example.com",
 		DisplayName:           "User Example",
 		DriveType:             driveid.DriveTypeBusiness,
@@ -366,7 +363,7 @@ func TestSharedService_RunList_JSONIncludesAuthRequiredWhenSearchUnauthorized(t 
 		GraphBaseURL: srv.URL,
 	}
 
-	require.NoError(t, newSharedService(cc).runList(context.Background()))
+	require.NoError(t, runSharedList(context.Background(), cc))
 
 	var parsed sharedListJSONOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &parsed))

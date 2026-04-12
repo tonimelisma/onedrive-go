@@ -25,7 +25,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Composite mock implementing synctypes.DeltaFetcher + synctypes.ItemClient + Downloader + Uploader
+// Composite mock implementing DeltaFetcher + ItemClient + Downloader + Uploader
 //
 // Engine requires all 4 interfaces (unlike Executor, which takes them
 // individually), so a single mock is pragmatic here. Executor tests split
@@ -34,20 +34,20 @@ import (
 
 // Compile-time interface satisfaction checks.
 var (
-	_ synctypes.DeltaFetcher            = (*engineMockClient)(nil)
-	_ synctypes.SocketIOEndpointFetcher = (*engineMockClient)(nil)
-	_ synctypes.ItemClient              = (*engineMockClient)(nil)
-	_ driveops.Downloader               = (*engineMockClient)(nil)
-	_ driveops.Uploader                 = (*engineMockClient)(nil)
-	_ driveops.ItemUploader             = (*engineMockClient)(nil)
-	_ synctypes.FolderDeltaFetcher      = (*engineMockClient)(nil)
-	_ synctypes.RecursiveLister         = (*engineMockClient)(nil)
-	_ synctypes.PermissionChecker       = (*engineMockClient)(nil)
-	_ synctypes.DriveVerifier           = (*engineMockClient)(nil)
+	_ DeltaFetcher            = (*engineMockClient)(nil)
+	_ SocketIOEndpointFetcher = (*engineMockClient)(nil)
+	_ ItemClient              = (*engineMockClient)(nil)
+	_ driveops.Downloader     = (*engineMockClient)(nil)
+	_ driveops.Uploader       = (*engineMockClient)(nil)
+	_ driveops.ItemUploader   = (*engineMockClient)(nil)
+	_ FolderDeltaFetcher      = (*engineMockClient)(nil)
+	_ RecursiveLister         = (*engineMockClient)(nil)
+	_ PermissionChecker       = (*engineMockClient)(nil)
+	_ DriveVerifier           = (*engineMockClient)(nil)
 )
 
 type engineMockClient struct {
-	// synctypes.DeltaFetcher
+	// DeltaFetcher
 	deltaFn                 func(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error)
 	socketIOEndpointFn      func(ctx context.Context, driveID driveid.ID) (*graph.SocketIOEndpoint, error)
 	driveFn                 func(ctx context.Context, driveID driveid.ID) (*graph.Drive, error)
@@ -55,7 +55,7 @@ type engineMockClient struct {
 	listChildrenRecursiveFn func(ctx context.Context, driveID driveid.ID, folderID string) ([]graph.Item, error)
 	listItemPermissionsFn   func(ctx context.Context, driveID driveid.ID, itemID string) ([]graph.Permission, error)
 
-	// synctypes.ItemClient
+	// ItemClient
 	getItemFn       func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
 	getItemByPathFn func(ctx context.Context, driveID driveid.ID, remotePath string) (*graph.Item, error)
 	listChildrenFn  func(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
@@ -275,7 +275,7 @@ func newTestEngineWithContext(t *testing.T, ctx context.Context, mock *engineMoc
 	logger := testLogger(t)
 	driveID := driveid.New(engineTestDriveID)
 
-	eng, err := newEngine(ctx, &synctypes.EngineConfig{
+	eng, err := newEngine(ctx, &engineInputs{
 		DBPath:                 dbPath,
 		SyncRoot:               syncRoot,
 		DriveID:                driveID,
@@ -326,7 +326,7 @@ func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *eng
 
 	driveID := driveid.New(engineTestDriveID)
 
-	eng, err := newEngine(ctx, &synctypes.EngineConfig{
+	eng, err := newEngine(ctx, &engineInputs{
 		DBPath:                 dbPath,
 		SyncRoot:               syncRoot,
 		DriveID:                driveID,
@@ -446,12 +446,12 @@ func readFileUnderRootIfExists(t *testing.T, root, relativePath string) ([]byte,
 // setupWatchEngine initializes an engine with DepGraph + dispatchCh + watchRuntime
 // for processBatch tests. Returns the dispatchCh for reading dispatched actions.
 // Replaces the old two-call pattern of setupWatchEngine + newTestWatchState.
-func setupWatchEngine(t *testing.T, eng *testEngine) <-chan *synctypes.TrackedAction {
+func setupWatchEngine(t *testing.T, eng *testEngine) <-chan *TrackedAction {
 	t.Helper()
 
 	rt := newWatchRuntime(eng.Engine)
 	rt.depGraph = NewDepGraph(eng.logger)
-	rt.dispatchCh = make(chan *synctypes.TrackedAction, 1024)
+	rt.dispatchCh = make(chan *TrackedAction, 1024)
 	rt.scopeState = NewScopeState(eng.nowFunc, eng.logger)
 	eng.runtime = rt
 	eng.flow = &rt.engineFlow
@@ -468,29 +468,29 @@ func newTestWatchState(t *testing.T, eng *testEngine) {
 	_ = setupWatchEngine(t, eng)
 }
 
-func testWorkDispatchState(t *testing.T, eng *testEngine, ctx context.Context) (*synctypes.Baseline, *synctypes.SafetyConfig) {
+func testWorkDispatchState(t *testing.T, eng *testEngine, ctx context.Context) (*Baseline, *SafetyConfig) {
 	t.Helper()
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
-	return bl, synctypes.DefaultSafetyConfig()
+	return bl, DefaultSafetyConfig()
 }
 
-func runTestRetrierSweep(t *testing.T, eng *testEngine, ctx context.Context) []*synctypes.TrackedAction {
+func runTestRetrierSweep(t *testing.T, eng *testEngine, ctx context.Context) []*TrackedAction {
 	t.Helper()
 
 	bl, safety := testWorkDispatchState(t, eng, ctx)
-	return testWatchRuntime(t, eng).runRetrierSweep(ctx, bl, synctypes.SyncBidirectional, safety)
+	return testWatchRuntime(t, eng).runRetrierSweep(ctx, bl, SyncBidirectional, safety)
 }
 
-func runTestTrialDispatch(t *testing.T, eng *testEngine, ctx context.Context) []*synctypes.TrackedAction {
+func runTestTrialDispatch(t *testing.T, eng *testEngine, ctx context.Context) []*TrackedAction {
 	t.Helper()
 
 	bl, safety := testWorkDispatchState(t, eng, ctx)
-	return testWatchRuntime(t, eng).runTrialDispatch(ctx, bl, synctypes.SyncBidirectional, safety)
+	return testWatchRuntime(t, eng).runTrialDispatch(ctx, bl, SyncBidirectional, safety)
 }
 
-func setTestScopeBlock(t *testing.T, eng *testEngine, block *synctypes.ScopeBlock) {
+func setTestScopeBlock(t *testing.T, eng *testEngine, block *ScopeBlock) {
 	t.Helper()
 
 	require.NotNil(t, block)
@@ -581,12 +581,12 @@ func loadActiveScopesForTest(t *testing.T, eng *testEngine, ctx context.Context)
 	return testScopeController(t, eng).loadActiveScopes(ctx, testWatchRuntime(t, eng))
 }
 
-func createEventFromDBForTest(t *testing.T, eng *testEngine, ctx context.Context, row *synctypes.SyncFailureRow) *synctypes.ChangeEvent {
+func createEventFromDBForTest(t *testing.T, eng *testEngine, ctx context.Context, row *SyncFailureRow) *ChangeEvent {
 	t.Helper()
 	return testEngineFlow(t, eng).createEventFromDB(ctx, row)
 }
 
-func isFailureResolvedForTest(t *testing.T, eng *testEngine, ctx context.Context, row *synctypes.SyncFailureRow) bool {
+func isFailureResolvedForTest(t *testing.T, eng *testEngine, ctx context.Context, row *SyncFailureRow) bool {
 	t.Helper()
 	return testEngineFlow(t, eng).isFailureResolved(ctx, row)
 }
@@ -595,7 +595,7 @@ func clearFailureCandidateForTest(
 	t *testing.T,
 	eng *testEngine,
 	ctx context.Context,
-	row *synctypes.SyncFailureRow,
+	row *SyncFailureRow,
 	caller string,
 ) {
 	t.Helper()
@@ -606,8 +606,8 @@ func recordRetryTrialSkippedItemForTest(
 	t *testing.T,
 	eng *testEngine,
 	ctx context.Context,
-	row *synctypes.SyncFailureRow,
-	skipped *synctypes.SkippedItem,
+	row *SyncFailureRow,
+	skipped *SkippedItem,
 ) {
 	t.Helper()
 	testEngineFlow(t, eng).recordRetryTrialSkippedItem(ctx, row, skipped)
@@ -659,7 +659,7 @@ func repairPersistedScopesForTest(t *testing.T, eng *testEngine, ctx context.Con
 	return testScopeController(t, eng).repairPersistedScopes(ctx, rt, driveIdentityProof{}, nil)
 }
 
-func admitReadyForTest(t *testing.T, eng *testEngine, ctx context.Context, ready []*synctypes.TrackedAction) []*synctypes.TrackedAction {
+func admitReadyForTest(t *testing.T, eng *testEngine, ctx context.Context, ready []*TrackedAction) []*TrackedAction {
 	t.Helper()
 	if rt, ok := lookupTestWatchRuntime(eng); ok {
 		return testScopeController(t, eng).admitReady(ctx, rt, ready)
@@ -668,7 +668,7 @@ func admitReadyForTest(t *testing.T, eng *testEngine, ctx context.Context, ready
 	return testScopeController(t, eng).admitReady(ctx, nil, ready)
 }
 
-func cascadeRecordAndCompleteForTest(t *testing.T, eng *testEngine, ctx context.Context, ta *synctypes.TrackedAction, scopeKey synctypes.ScopeKey) {
+func cascadeRecordAndCompleteForTest(t *testing.T, eng *testEngine, ctx context.Context, ta *TrackedAction, scopeKey synctypes.ScopeKey) {
 	t.Helper()
 	testScopeController(t, eng).cascadeRecordAndComplete(ctx, ta, scopeKey)
 }
@@ -677,9 +677,9 @@ func processWorkerResultForTest(
 	t *testing.T,
 	eng *testEngine,
 	ctx context.Context,
-	r *synctypes.WorkerResult,
-	bl *synctypes.Baseline,
-) []*synctypes.TrackedAction {
+	r *WorkerResult,
+	bl *Baseline,
+) []*TrackedAction {
 	t.Helper()
 	return processWorkerResultDetailedForTest(t, eng, ctx, r, bl).dispatched
 }
@@ -688,8 +688,8 @@ func processWorkerResultDetailedForTest(
 	t *testing.T,
 	eng *testEngine,
 	ctx context.Context,
-	r *synctypes.WorkerResult,
-	bl *synctypes.Baseline,
+	r *WorkerResult,
+	bl *Baseline,
 ) routeOutcome {
 	t.Helper()
 	if rt, ok := lookupTestWatchRuntime(eng); ok {
@@ -701,7 +701,7 @@ func processWorkerResultDetailedForTest(
 	return flow.processWorkerResult(ctx, nil, r, bl)
 }
 
-func processTrialResultForTest(t *testing.T, eng *testEngine, ctx context.Context, r *synctypes.WorkerResult) {
+func processTrialResultForTest(t *testing.T, eng *testEngine, ctx context.Context, r *WorkerResult) {
 	t.Helper()
 	if rt, ok := lookupTestWatchRuntime(eng); ok {
 		rt.processWorkerResult(ctx, rt, r, nil)
@@ -717,12 +717,12 @@ func processBatchForTest(
 	t *testing.T,
 	eng *testEngine,
 	ctx context.Context,
-	batch []synctypes.PathChanges,
-	bl *synctypes.Baseline,
-	safety *synctypes.SafetyConfig,
-) []*synctypes.TrackedAction {
+	batch []PathChanges,
+	bl *Baseline,
+	safety *SafetyConfig,
+) []*TrackedAction {
 	t.Helper()
-	return testWatchRuntime(t, eng).processBatch(ctx, batch, bl, synctypes.SyncBidirectional, safety)
+	return testWatchRuntime(t, eng).processBatch(ctx, batch, bl, SyncBidirectional, safety)
 }
 
 func externalDBChangedForTest(t *testing.T, eng *testEngine, ctx context.Context) bool {
@@ -1121,12 +1121,12 @@ func handleExternalChangesForTest(t *testing.T, eng *testEngine, ctx context.Con
 	testWatchRuntime(t, eng).handleExternalChanges(ctx)
 }
 
-func runFullReconciliationAsyncForTest(t *testing.T, eng *testEngine, ctx context.Context, bl *synctypes.Baseline) {
+func runFullReconciliationAsyncForTest(t *testing.T, eng *testEngine, ctx context.Context, bl *Baseline) {
 	t.Helper()
 	testWatchRuntime(t, eng).runFullReconciliationAsync(ctx, bl)
 }
 
-func activeBlockingScopeForTest(t *testing.T, eng *testEngine, ta *synctypes.TrackedAction) synctypes.ScopeKey {
+func activeBlockingScopeForTest(t *testing.T, eng *testEngine, ta *TrackedAction) synctypes.ScopeKey {
 	t.Helper()
 	rt, _ := lookupTestWatchRuntime(eng)
 	return testScopeController(t, eng).activeBlockingScope(rt, ta)
@@ -1138,7 +1138,7 @@ func applyScopeBlockForTest(t *testing.T, eng *testEngine, ctx context.Context, 
 	testScopeController(t, eng).applyScopeBlock(ctx, rt, sr)
 }
 
-func feedScopeDetectionForTest(t *testing.T, eng *testEngine, ctx context.Context, r *synctypes.WorkerResult) {
+func feedScopeDetectionForTest(t *testing.T, eng *testEngine, ctx context.Context, r *WorkerResult) {
 	t.Helper()
 	rt, _ := lookupTestWatchRuntime(eng)
 	testScopeController(t, eng).feedScopeDetection(ctx, rt, r)
@@ -1163,7 +1163,7 @@ func isTestScopeBlocked(eng *testEngine, key synctypes.ScopeKey) bool {
 	return false
 }
 
-func getTestScopeBlock(eng *testEngine, key synctypes.ScopeKey) (synctypes.ScopeBlock, bool) {
+func getTestScopeBlock(eng *testEngine, key synctypes.ScopeKey) (ScopeBlock, bool) {
 	if eng.runtime != nil {
 		if block, ok := eng.runtime.lookupActiveScope(key); ok {
 			return block, true
@@ -1179,7 +1179,7 @@ func getTestScopeBlock(eng *testEngine, key synctypes.ScopeKey) (synctypes.Scope
 			return *blocks[i], true
 		}
 	}
-	return synctypes.ScopeBlock{}, false
+	return ScopeBlock{}, false
 }
 
 // deltaPageWithItems returns a DeltaPage with the given items and a delta link.
@@ -1211,11 +1211,11 @@ func hashContentQuickXor(t *testing.T, content string) string {
 
 // seedBaseline commits outcomes and an optional delta token to the baseline,
 // using the per-outcome CommitOutcome API (the old batch Commit was removed).
-func seedBaseline(t *testing.T, mgr *syncstore.SyncStore, ctx context.Context, outcomes []synctypes.Outcome, deltaToken string) {
+func seedBaseline(t *testing.T, mgr *syncstore.SyncStore, ctx context.Context, outcomes []ExecutionResult, deltaToken string) {
 	t.Helper()
 
 	for i := range outcomes {
-		require.NoError(t, mgr.CommitOutcome(ctx, &outcomes[i]), "seed CommitOutcome[%d]", i)
+		require.NoError(t, mgr.CommitMutation(ctx, baselineMutationFromExecutionResult(&outcomes[i])), "seed CommitMutation[%d]", i)
 	}
 
 	if deltaToken != "" {

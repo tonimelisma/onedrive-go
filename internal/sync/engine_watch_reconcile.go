@@ -217,14 +217,14 @@ func summarySignature(summary syncstore.IssueSummary) (string, string) {
 
 // recordSkippedItems records observation-time rejections (invalid names,
 // path too long, file too large) as actionable failures in sync_failures.
-func (flow *engineFlow) recordSkippedItems(ctx context.Context, skipped []synctypes.SkippedItem) {
+func (flow *engineFlow) recordSkippedItems(ctx context.Context, skipped []SkippedItem) {
 	eng := flow.engine
 
 	if len(skipped) == 0 {
 		return
 	}
 
-	byReason := make(map[string][]synctypes.SkippedItem)
+	byReason := make(map[string][]SkippedItem)
 	for i := range skipped {
 		byReason[skipped[i].Reason] = append(byReason[skipped[i].Reason], skipped[i])
 	}
@@ -265,9 +265,9 @@ func (flow *engineFlow) recordSkippedItems(ctx context.Context, skipped []syncty
 			}
 		}
 
-		failures := make([]synctypes.ActionableFailure, len(items))
+		failures := make([]syncstore.ActionableFailure, len(items))
 		for i := range items {
-			failures[i] = synctypes.ActionableFailure{
+			failures[i] = syncstore.ActionableFailure{
 				Path:       items[i].Path,
 				DriveID:    eng.driveID,
 				Direction:  synctypes.DirectionUpload,
@@ -290,7 +290,7 @@ func (flow *engineFlow) recordSkippedItems(ctx context.Context, skipped []syncty
 
 // clearResolvedSkippedItems removes sync_failures entries for scanner-detectable
 // issue types that are no longer present in the current scan.
-func (flow *engineFlow) clearResolvedSkippedItems(ctx context.Context, skipped []synctypes.SkippedItem) {
+func (flow *engineFlow) clearResolvedSkippedItems(ctx context.Context, skipped []SkippedItem) {
 	eng := flow.engine
 
 	currentByType := make(map[string][]string)
@@ -317,7 +317,7 @@ func (flow *engineFlow) clearResolvedSkippedItems(ctx context.Context, skipped [
 // resolveReconcileInterval returns the configured reconcile interval or the
 // default. Negative values disable periodic reconciliation. Values below
 // minReconcileInterval are clamped up.
-func (e *Engine) resolveReconcileInterval(opts synctypes.WatchOpts) time.Duration {
+func (e *Engine) resolveReconcileInterval(opts WatchOptions) time.Duration {
 	if opts.ReconcileInterval < 0 {
 		return 0
 	}
@@ -349,7 +349,7 @@ func (e *Engine) newReconcileTicker(interval time.Duration) syncTicker {
 }
 
 // initReconcileTicker creates the periodic full-reconciliation timer.
-func (e *Engine) initReconcileTicker(opts synctypes.WatchOpts) syncTicker {
+func (e *Engine) initReconcileTicker(opts WatchOptions) syncTicker {
 	interval := e.resolveReconcileInterval(opts)
 	ticker := e.newReconcileTicker(interval)
 
@@ -369,7 +369,7 @@ func (e *Engine) initReconcileTicker(opts synctypes.WatchOpts) syncTicker {
 // while reconciliation runs. The goroutine sends a reconcileResult back to the
 // watch loop, and the loop applies shortcut snapshot updates plus buffer
 // injection from its own goroutine.
-func (rt *watchRuntime) runFullReconciliationAsync(ctx context.Context, bl *synctypes.Baseline) {
+func (rt *watchRuntime) runFullReconciliationAsync(ctx context.Context, bl *syncstore.Baseline) {
 	if rt.reconcileActive {
 		rt.engine.logger.Info("full reconciliation skipped — previous still running")
 		return
@@ -384,7 +384,7 @@ func (rt *watchRuntime) runFullReconciliationAsync(ctx context.Context, bl *sync
 
 func (rt *watchRuntime) performFullReconciliation(
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 ) reconcileResult {
 	result := reconcileResult{}
 	start := rt.engine.nowFunc()
@@ -468,7 +468,7 @@ func (rt *watchRuntime) buildFullReconciliationPlan(
 
 	return rt.BuildObservationSessionPlan(ctx, ObservationPlanRequest{
 		Session:       &session,
-		SyncMode:      synctypes.SyncBidirectional,
+		SyncMode:      SyncBidirectional,
 		FullReconcile: true,
 		Purpose:       observationPlanPurposeWatch,
 	})
@@ -476,7 +476,7 @@ func (rt *watchRuntime) buildFullReconciliationPlan(
 
 func (rt *watchRuntime) observeCommittedFullReconciliationBatch(
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	plan *ObservationSessionPlan,
 	scopeSnapshot syncscope.Snapshot,
 	scopeGeneration int64,
@@ -503,7 +503,7 @@ func (rt *watchRuntime) observeCommittedFullReconciliationBatch(
 
 func (rt *watchRuntime) runEnteredScopeReconciliationAsync(
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	enteredPaths []string,
 ) {
 	if rt.reconcileActive {
@@ -593,7 +593,7 @@ func (rt *watchRuntime) applyReconcileResult(ctx context.Context, result reconci
 	}
 	plan, err := rt.BuildObservationSessionPlan(ctx, ObservationPlanRequest{
 		Session:  &session,
-		SyncMode: synctypes.SyncBidirectional,
+		SyncMode: SyncBidirectional,
 		Purpose:  observationPlanPurposeWatch,
 	})
 	if err != nil {

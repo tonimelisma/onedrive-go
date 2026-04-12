@@ -9,6 +9,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -23,7 +24,7 @@ type InflightParent struct {
 	IsVault       bool // true for Personal Vault folder (B-271)
 }
 
-// ItemConverter converts []graph.Item into []synctypes.ChangeEvent with full path
+// ItemConverter converts []graph.Item into []ChangeEvent with full path
 // materialization, NFC normalization, move detection, and deleted-item name
 // recovery. Both RemoteObserver (primary drive) and shortcut observation share
 // this single conversion pipeline, configured via boolean flags.
@@ -32,7 +33,7 @@ type InflightParent struct {
 // accumulates inflight across delta pages; shortcuts populate it once per
 // batch. Same methods, different lifetime.
 type ItemConverter struct {
-	Baseline *synctypes.Baseline
+	Baseline *syncstore.Baseline
 	DriveID  driveid.ID
 	Logger   *slog.Logger
 	Stats    *ObserverCounters // nil-safe: primary observer provides this
@@ -71,7 +72,7 @@ type ItemConverter struct {
 
 // NewPrimaryConverter creates an ItemConverter for primary drive observation.
 // Vault filter and shortcut detection are enabled.
-func NewPrimaryConverter(baseline *synctypes.Baseline, driveID driveid.ID, logger *slog.Logger, stats *ObserverCounters) *ItemConverter {
+func NewPrimaryConverter(baseline *syncstore.Baseline, driveID driveid.ID, logger *slog.Logger, stats *ObserverCounters) *ItemConverter {
 	return &ItemConverter{
 		Baseline:             baseline,
 		DriveID:              driveID,
@@ -86,7 +87,7 @@ func NewPrimaryConverter(baseline *synctypes.Baseline, driveID driveid.ID, logge
 // Path prefix, scope root skip, and nested shortcut skip are enabled.
 // A nil logger is replaced with slog.Default() to prevent panics.
 func NewShortcutConverter(
-	baseline *synctypes.Baseline, remoteDriveID driveid.ID, logger *slog.Logger, sc *synctypes.Shortcut,
+	baseline *syncstore.Baseline, remoteDriveID driveid.ID, logger *slog.Logger, sc *synctypes.Shortcut,
 ) *ItemConverter {
 	if logger == nil {
 		logger = slog.Default()
@@ -107,7 +108,7 @@ func NewShortcutConverter(
 // ConvertItems converts a batch of graph.Items into ChangeEvents using
 // two-pass processing: register all items in inflight, then classify all.
 // Used by shortcut observation where all items arrive in a single batch.
-func (c *ItemConverter) ConvertItems(items []graph.Item) []synctypes.ChangeEvent {
+func (c *ItemConverter) ConvertItems(items []graph.Item) []ChangeEvent {
 	inflight := make(map[driveid.ItemKey]InflightParent, len(items))
 
 	// Pass 1: register all items so parent-chain walks see every item.
@@ -116,7 +117,7 @@ func (c *ItemConverter) ConvertItems(items []graph.Item) []synctypes.ChangeEvent
 	}
 
 	// Pass 2: classify and emit events.
-	var events []synctypes.ChangeEvent
+	var events []ChangeEvent
 
 	for i := range items {
 		if ev := c.ClassifyItem(&items[i], inflight); ev != nil {
@@ -133,7 +134,7 @@ func (c *ItemConverter) ConvertItems(items []graph.Item) []synctypes.ChangeEvent
 func (c *ItemConverter) registerInflight(item *graph.Item, inflight map[driveid.ItemKey]InflightParent) {
 	itemDriveID := c.resolveItemDriveID(item)
 	key := driveid.NewItemKey(itemDriveID, item.ID)
-	var existing *synctypes.BaselineEntry
+	var existing *syncstore.BaselineEntry
 	if baselineEntry, found := c.Baseline.GetByID(key); found {
 		existing = baselineEntry
 	}
@@ -158,7 +159,7 @@ func (c *ItemConverter) registerInflight(item *graph.Item, inflight map[driveid.
 // ClassifyItem converts a single graph.Item into a ChangeEvent. Returns nil
 // for items that should be skipped (root, vault descendants, scope root,
 // nested shortcuts).
-func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[driveid.ItemKey]InflightParent) *synctypes.ChangeEvent {
+func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[driveid.ItemKey]InflightParent) *ChangeEvent {
 	itemDriveID := c.resolveItemDriveID(item)
 
 	// Skip root items (applies to both primary and shortcut scopes).
@@ -182,7 +183,7 @@ func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[driveid.Item
 	}
 
 	baselineKey := driveid.NewItemKey(itemDriveID, item.ID)
-	var existing *synctypes.BaselineEntry
+	var existing *syncstore.BaselineEntry
 	if baselineEntry, found := c.Baseline.GetByID(baselineKey); found {
 		existing = baselineEntry
 	}
@@ -239,8 +240,8 @@ func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[driveid.Item
 // classifyAndConvert classifies the change type and builds a ChangeEvent.
 // Handles NFC normalization, move detection, and deleted-item name recovery.
 func (c *ItemConverter) classifyAndConvert(
-	item *graph.Item, inflight map[driveid.ItemKey]InflightParent, itemDriveID driveid.ID, existing *synctypes.BaselineEntry,
-) *synctypes.ChangeEvent {
+	item *graph.Item, inflight map[driveid.ItemKey]InflightParent, itemDriveID driveid.ID, existing *syncstore.BaselineEntry,
+) *ChangeEvent {
 	name := effectiveItemName(item, existing)
 
 	hash := driveops.SelectHash(item)
@@ -248,7 +249,7 @@ func (c *ItemConverter) classifyAndConvert(
 		c.Stats.hashesComputed.Add(1)
 	}
 
-	ev := synctypes.ChangeEvent{
+	ev := ChangeEvent{
 		Source:        synctypes.SourceRemote,
 		ItemID:        item.ID,
 		ParentID:      item.ParentID,
@@ -314,8 +315,8 @@ func (c *ItemConverter) classifyShortcut(
 	item *graph.Item,
 	inflight map[driveid.ItemKey]InflightParent,
 	itemDriveID driveid.ID,
-	existing *synctypes.BaselineEntry,
-) *synctypes.ChangeEvent {
+	existing *syncstore.BaselineEntry,
+) *ChangeEvent {
 	name := effectiveItemName(item, existing)
 	relPath := c.materializePathWithBaselineFallback(item, inflight, itemDriveID, existing, name)
 
@@ -327,7 +328,7 @@ func (c *ItemConverter) classifyShortcut(
 		slog.String("remote_item", item.RemoteItemID),
 	)
 
-	return &synctypes.ChangeEvent{
+	return &ChangeEvent{
 		Source:        synctypes.SourceRemote,
 		Type:          synctypes.ChangeShortcut,
 		Path:          relPath,
@@ -344,7 +345,7 @@ func (c *ItemConverter) classifyShortcut(
 	}
 }
 
-func effectiveItemName(item *graph.Item, existing *synctypes.BaselineEntry) string {
+func effectiveItemName(item *graph.Item, existing *syncstore.BaselineEntry) string {
 	name := nfcNormalize(item.Name)
 	if name != "" || existing == nil {
 		return name
@@ -357,7 +358,7 @@ func (c *ItemConverter) materializePathWithBaselineFallback(
 	item *graph.Item,
 	inflight map[driveid.ItemKey]InflightParent,
 	itemDriveID driveid.ID,
-	existing *synctypes.BaselineEntry,
+	existing *syncstore.BaselineEntry,
 	name string,
 ) string {
 	if name == "" {
@@ -547,8 +548,8 @@ func resolveParentDriveID(item *graph.Item, itemDriveID driveid.ID) driveid.ID {
 // wrapper creating a shortcut-configured ItemConverter and calling ConvertItems.
 // Exported for use by the sync engine's shortcut observation logic.
 func ConvertShortcutItems(
-	items []graph.Item, sc *synctypes.Shortcut, remoteDriveID driveid.ID, bl *synctypes.Baseline, logger *slog.Logger,
-) []synctypes.ChangeEvent {
+	items []graph.Item, sc *synctypes.Shortcut, remoteDriveID driveid.ID, bl *syncstore.Baseline, logger *slog.Logger,
+) []ChangeEvent {
 	conv := NewShortcutConverter(bl, remoteDriveID, logger, sc)
 
 	return conv.ConvertItems(items)
@@ -559,13 +560,13 @@ func ConvertShortcutItems(
 // Baseline.FindOrphans with a path prefix filter for the shortcut's local path.
 // Exported for use by the sync engine's shortcut observation logic.
 func DetectShortcutOrphans(
-	sc *synctypes.Shortcut, remoteDriveID driveid.ID, items []graph.Item, bl *synctypes.Baseline,
-) []synctypes.ChangeEvent {
+	sc *synctypes.Shortcut, remoteDriveID driveid.ID, items []graph.Item, bl *syncstore.Baseline,
+) []ChangeEvent {
 	seen := make(map[driveid.ItemKey]struct{}, len(items))
 	for i := range items {
 		itemDriveID := resolveItemDriveIDWithFallback(&items[i], remoteDriveID)
 		seen[driveid.NewItemKey(itemDriveID, items[i].ID)] = struct{}{}
 	}
 
-	return bl.FindOrphans(seen, remoteDriveID, sc.LocalPath)
+	return findBaselineOrphans(bl, seen, remoteDriveID, sc.LocalPath)
 }

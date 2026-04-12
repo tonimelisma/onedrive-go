@@ -32,9 +32,9 @@ type RecoverResult struct {
 }
 
 type RecoveredState struct {
-	HeldDeletes []synctypes.HeldDeleteRecord
-	Conflicts   []synctypes.ConflictRecord
-	Requests    []synctypes.ConflictRequestRecord
+	HeldDeletes []HeldDeleteRecord
+	Conflicts   []ConflictRecord
+	Requests    []ConflictRequestRecord
 }
 
 func RecoverSyncStore(ctx context.Context, dbPath string, logger *slog.Logger) (RecoverResult, error) {
@@ -194,7 +194,7 @@ func readRecoverableState(ctx context.Context, dbPath string) (RecoveredState, e
 	return recovered, nil
 }
 
-func readUnresolvedConflictsForRecovery(ctx context.Context, db *sql.DB) ([]synctypes.ConflictRecord, error) {
+func readUnresolvedConflictsForRecovery(ctx context.Context, db *sql.DB) ([]ConflictRecord, error) {
 	return queryConflictRows(
 		ctx,
 		db,
@@ -210,7 +210,7 @@ func queryConflictRows(
 	query string,
 	queryOp string,
 	iterOp string,
-) ([]synctypes.ConflictRecord, error) {
+) ([]ConflictRecord, error) {
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		if isMissingTableErr(err) {
@@ -220,7 +220,7 @@ func queryConflictRows(
 	}
 	defer rows.Close()
 
-	var conflicts []synctypes.ConflictRecord
+	var conflicts []ConflictRecord
 	for rows.Next() {
 		record, scanErr := scanConflictRow(rows)
 		if scanErr != nil {
@@ -235,7 +235,7 @@ func queryConflictRows(
 	return conflicts, nil
 }
 
-func readConflictRequestsForRecovery(ctx context.Context, db *sql.DB) ([]synctypes.ConflictRequestRecord, error) {
+func readConflictRequestsForRecovery(ctx context.Context, db *sql.DB) ([]ConflictRequestRecord, error) {
 	hasRequests, err := tableExists(ctx, db, "conflict_requests")
 	if err != nil {
 		return nil, err
@@ -247,7 +247,7 @@ func readConflictRequestsForRecovery(ctx context.Context, db *sql.DB) ([]synctyp
 	return readLegacyConflictRequestsForRecovery(ctx, db)
 }
 
-func readSplitConflictRequestsForRecovery(ctx context.Context, db *sql.DB) ([]synctypes.ConflictRequestRecord, error) {
+func readSplitConflictRequestsForRecovery(ctx context.Context, db *sql.DB) ([]ConflictRequestRecord, error) {
 	columns, err := tableColumns(ctx, db, "conflict_requests")
 	if err != nil {
 		return nil, err
@@ -281,7 +281,7 @@ func readSplitConflictRequestsForRecovery(ctx context.Context, db *sql.DB) ([]sy
 	)
 }
 
-func readLegacyConflictRequestsForRecovery(ctx context.Context, db *sql.DB) ([]synctypes.ConflictRequestRecord, error) {
+func readLegacyConflictRequestsForRecovery(ctx context.Context, db *sql.DB) ([]ConflictRequestRecord, error) {
 	columns, err := tableColumns(ctx, db, "conflicts")
 	if err != nil {
 		return nil, err
@@ -311,11 +311,11 @@ func scanRecoveredConflictRequests(
 	rows *sql.Rows,
 	scanOp string,
 	iterOp string,
-) ([]synctypes.ConflictRequestRecord, error) {
-	var requests []synctypes.ConflictRequestRecord
+) ([]ConflictRequestRecord, error) {
+	var requests []ConflictRequestRecord
 	for rows.Next() {
 		var (
-			record      synctypes.ConflictRequestRecord
+			record      ConflictRequestRecord
 			requestedAt sql.NullInt64
 			applyingAt  sql.NullInt64
 			lastErr     sql.NullString

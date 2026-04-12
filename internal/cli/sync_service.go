@@ -12,11 +12,11 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 type syncCommandOptions struct {
-	Mode          synctypes.SyncMode
+	Mode          syncengine.Mode
 	Watch         bool
 	DryRun        *bool
 	FullReconcile bool
@@ -26,8 +26,8 @@ type syncWatchRunner func(
 	ctx context.Context,
 	holder *config.Holder,
 	selectors []string,
-	mode synctypes.SyncMode,
-	opts synctypes.WatchOpts,
+	mode syncengine.Mode,
+	opts syncengine.WatchOptions,
 	logger *slog.Logger,
 	statusWriter io.Writer,
 	controlSocketPath string,
@@ -37,27 +37,25 @@ type syncRunOnceRunner func(
 	ctx context.Context,
 	holder *config.Holder,
 	drives []*config.ResolvedDrive,
-	mode synctypes.SyncMode,
-	opts synctypes.RunOpts,
+	mode syncengine.Mode,
+	opts syncengine.RunOptions,
 	logger *slog.Logger,
 	controlSocketPath string,
-) []*synctypes.DriveReport
+) []*multisync.DriveReport
 
-type syncService struct {
-	cc            *CLIContext
+type syncCommandDeps struct {
 	watchRunner   syncWatchRunner
 	runOnceRunner syncRunOnceRunner
 }
 
-func newSyncService(cc *CLIContext) *syncService {
-	service := &syncService{
-		cc: cc,
+func defaultSyncCommandDeps(cc *CLIContext) syncCommandDeps {
+	deps := syncCommandDeps{
 		watchRunner: func(
 			ctx context.Context,
 			holder *config.Holder,
 			selectors []string,
-			mode synctypes.SyncMode,
-			opts synctypes.WatchOpts,
+			mode syncengine.Mode,
+			opts syncengine.WatchOptions,
 			logger *slog.Logger,
 			statusWriter io.Writer,
 			controlSocketPath string,
@@ -82,11 +80,11 @@ func newSyncService(cc *CLIContext) *syncService {
 			ctx context.Context,
 			holder *config.Holder,
 			drives []*config.ResolvedDrive,
-			mode synctypes.SyncMode,
-			opts synctypes.RunOpts,
+			mode syncengine.Mode,
+			opts syncengine.RunOptions,
 			logger *slog.Logger,
 			controlSocketPath string,
-		) []*synctypes.DriveReport {
+		) []*multisync.DriveReport {
 			httpProvider := graphhttp.NewProvider(logger)
 			provider := driveops.NewSessionProvider(
 				holder,
@@ -115,27 +113,27 @@ func newSyncService(cc *CLIContext) *syncService {
 		},
 	}
 	if cc != nil && cc.syncWatchRunner != nil {
-		service.watchRunner = cc.syncWatchRunner
+		deps.watchRunner = cc.syncWatchRunner
 	}
 
-	return service
+	return deps
 }
 
-func (s *syncService) run(ctx context.Context, opts syncCommandOptions) error {
-	logger := s.cc.Logger
-	rawCfg, err := s.loadConfigWithEmailReconcile(ctx, logger)
+func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions, deps syncCommandDeps) error {
+	logger := cc.Logger
+	rawCfg, err := loadSyncConfigWithEmailReconcile(ctx, cc, logger)
 	if err != nil {
 		return err
 	}
 
 	cfgForLog := &config.ResolvedDrive{LoggingConfig: rawCfg.LoggingConfig}
-	dualLogger, logCloser := buildLoggerDualWithStatusWriter(cfgForLog, s.cc.Flags, s.cc.Status())
-	if swapErr := s.cc.replaceCommandLogger(dualLogger, logCloser); swapErr != nil {
+	dualLogger, logCloser := buildLoggerDualWithStatusWriter(cfgForLog, cc.Flags, cc.Status())
+	if swapErr := cc.replaceCommandLogger(dualLogger, logCloser); swapErr != nil {
 		return swapErr
 	}
-	logger = s.cc.Logger
+	logger = cc.Logger
 
-	selectors := s.cc.Flags.Drive
+	selectors := cc.Flags.Drive
 	effectiveDryRun, err := resolveSyncDryRun(rawCfg.DryRun, opts.DryRun, opts.Watch)
 	if err != nil {
 		return err
@@ -145,12 +143,12 @@ func (s *syncService) run(ctx context.Context, opts syncCommandOptions) error {
 		return fmt.Errorf("resolve control socket path: %w", err)
 	}
 
-	holder := config.NewHolder(rawCfg, s.cc.CfgPath)
+	holder := config.NewHolder(rawCfg, cc.CfgPath)
 	if opts.Watch {
-		return s.watchRunner(ctx, holder, selectors, opts.Mode, synctypes.WatchOpts{
+		return deps.watchRunner(ctx, holder, selectors, opts.Mode, syncengine.WatchOptions{
 			PollInterval:       parsePollInterval(rawCfg.PollInterval),
 			SafetyScanInterval: parseDurationOrZero(rawCfg.SafetyScanInterval),
-		}, logger, s.cc.Status(), controlSocketPath)
+		}, logger, cc.Status(), controlSocketPath)
 	}
 
 	drives, err := config.ResolveDrives(rawCfg, selectors, false, logger)
@@ -173,37 +171,38 @@ func (s *syncService) run(ctx context.Context, opts syncCommandOptions) error {
 		return fmt.Errorf("no drives configured — run 'onedrive-go drive add' to add a drive")
 	}
 
-	reports := s.runOnceRunner(ctx, holder, drives, opts.Mode, synctypes.RunOpts{
+	reports := deps.runOnceRunner(ctx, holder, drives, opts.Mode, syncengine.RunOptions{
 		DryRun:        effectiveDryRun,
 		FullReconcile: opts.FullReconcile,
 	}, logger, controlSocketPath)
 
-	printDriveReports(reports, s.cc)
+	printDriveReports(reports, cc)
 
 	return driveReportsError(reports)
 }
 
-func (s *syncService) loadConfigWithEmailReconcile(
+func loadSyncConfigWithEmailReconcile(
 	ctx context.Context,
+	cc *CLIContext,
 	logger *slog.Logger,
 ) (*config.Config, error) {
-	rawCfg, err := config.LoadOrDefault(s.cc.CfgPath, logger)
+	rawCfg, err := config.LoadOrDefault(cc.CfgPath, logger)
 	if err != nil {
 		return nil, fmt.Errorf("loading config: %w", err)
 	}
 
-	selectedDrives, resolveErr := config.ResolveDrives(rawCfg, s.cc.Flags.Drive, true, logger)
+	selectedDrives, resolveErr := config.ResolveDrives(rawCfg, cc.Flags.Drive, true, logger)
 	if resolveErr == nil {
 		accountCIDs, accountErr := accountIDsFromResolvedDrives(selectedDrives)
 		if accountErr != nil {
 			return nil, accountErr
 		}
 
-		if !s.reconcileSyncAccounts(ctx, accountCIDs, logger) {
+		if !reconcileSyncAccounts(ctx, cc, accountCIDs, logger) {
 			return rawCfg, nil
 		}
 
-		rawCfg, err = config.LoadOrDefault(s.cc.CfgPath, logger)
+		rawCfg, err = config.LoadOrDefault(cc.CfgPath, logger)
 		if err != nil {
 			return nil, fmt.Errorf("reload config after email reconciliation: %w", err)
 		}
@@ -212,15 +211,16 @@ func (s *syncService) loadConfigWithEmailReconcile(
 	return rawCfg, nil
 }
 
-func (s *syncService) reconcileSyncAccounts(
+func reconcileSyncAccounts(
 	ctx context.Context,
+	cc *CLIContext,
 	accountCIDs []driveid.CanonicalID,
 	logger *slog.Logger,
 ) bool {
 	reconciled := false
 
 	for _, accountCID := range accountCIDs {
-		reconcileResult, probeErr := s.cc.probeAccountIdentity(ctx, accountCID, "sync-bootstrap")
+		reconcileResult, probeErr := cc.probeAccountIdentity(ctx, accountCID, "sync-bootstrap")
 		if probeErr != nil {
 			logger.Debug("skip email reconciliation during sync bootstrap",
 				"account", accountCID.String(),

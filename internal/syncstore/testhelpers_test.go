@@ -13,72 +13,27 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	stdsync "sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // testDriveID is a canonical test drive ID for all syncstore tests.
-const testDriveID = "0000000000000001"
+const testDriveID = synctest.TestDriveID
 
-// newTestLogger returns a debug-level slog.Logger that writes via t.Log.
-// Safe for concurrent use; silently discards writes after the test finishes.
 func newTestLogger(tb testing.TB) *slog.Logger {
 	tb.Helper()
-
-	return slog.New(slog.NewTextHandler(newTestLogWriter(tb), &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	}))
-}
-
-// testLogWriter adapts testing.TB to io.Writer for slog. Uses a done channel
-// to silently discard writes after the test has finished (prevents t.Log races).
-type testLogWriter struct {
-	t    testing.TB
-	done chan struct{}
-	once stdsync.Once
-}
-
-func newTestLogWriter(tb testing.TB) *testLogWriter {
-	tb.Helper()
-
-	w := &testLogWriter{t: tb, done: make(chan struct{})}
-	tb.Cleanup(func() { w.once.Do(func() { close(w.done) }) })
-
-	return w
-}
-
-type testContextProvider interface {
-	Context() context.Context
+	return synctest.TestLogger(tb)
 }
 
 func testContext(tb testing.TB) context.Context {
 	tb.Helper()
-
-	if provider, ok := tb.(testContextProvider); ok {
-		return provider.Context()
-	}
-
-	return context.Background()
-}
-
-func (w *testLogWriter) Write(p []byte) (int, error) {
-	select {
-	case <-w.done:
-		return len(p), nil
-	default:
-	}
-
-	w.t.Helper()
-	w.t.Log(string(p))
-
-	return len(p), nil
+	return synctest.TestContext(tb)
 }
 
 // newTestStore creates a SyncStore backed by a temp directory,
@@ -117,8 +72,8 @@ func resetInProgressStates(tb testing.TB, mgr *SyncStore, syncRoot string, delay
 	require.NoError(tb, err)
 
 	var (
-		deleted []synctypes.RecoveryCandidate
-		pending []synctypes.RecoveryCandidate
+		deleted []RecoveryCandidate
+		pending []RecoveryCandidate
 	)
 
 	for _, candidate := range candidates {

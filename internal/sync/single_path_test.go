@@ -62,7 +62,7 @@ func TestObserveSinglePath_ReusesBaselineHashWhenMetadataMatches(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, "cached-hash", actualHash)
 
-	result, err := ObserveSinglePath(nil, mustOpenSyncTree(t, syncRoot), relPath, &synctypes.BaselineEntry{
+	result, err := ObserveSinglePath(nil, mustOpenSyncTree(t, syncRoot), relPath, &BaselineEntry{
 		Path:           relPath,
 		ItemType:       synctypes.ItemTypeFile,
 		LocalSize:      info.Size(),
@@ -95,7 +95,7 @@ func TestObserveSinglePath_ReusesBaselineHashWhenSameSecondMtimeDiffersByFractio
 	info, err := os.Stat(absPath)
 	require.NoError(t, err)
 
-	result, err := ObserveSinglePath(nil, mustOpenSyncTree(t, syncRoot), relPath, &synctypes.BaselineEntry{
+	result, err := ObserveSinglePath(nil, mustOpenSyncTree(t, syncRoot), relPath, &BaselineEntry{
 		Path:           relPath,
 		ItemType:       synctypes.ItemTypeFile,
 		LocalSize:      info.Size(),
@@ -179,8 +179,8 @@ func TestObserveSinglePathWithFilter_SharePointRootFormsReturnsSkipped(t *testin
 		nil,
 		time.Now().UnixNano(),
 		nil,
-		synctypes.LocalFilterConfig{},
-		synctypes.LocalObservationRules{RejectSharePointRootForms: true},
+		LocalFilterConfig{},
+		LocalObservationRules{RejectSharePointRootForms: true},
 	)
 	require.NoError(t, err)
 	require.NotNil(t, result.Skipped)
@@ -259,8 +259,8 @@ func TestObserveSinglePathWithScope_ResolvesOutOfScopePathsSilently(t *testing.T
 			nil,
 			time.Now().UnixNano(),
 			nil,
-			synctypes.LocalFilterConfig{},
-			synctypes.LocalObservationRules{},
+			LocalFilterConfig{},
+			LocalObservationRules{},
 			scopeSnapshot,
 		)
 		require.NoError(t, err)

@@ -68,30 +68,30 @@ const (
 
 type ConflictRequestResult struct {
 	Status   ConflictRequestStatus
-	Conflict synctypes.ConflictRecord
+	Conflict ConflictRecord
 }
 
 // ListConflicts returns all unresolved conflicts ordered by detection time.
-func (m *SyncStore) ListConflicts(ctx context.Context) ([]synctypes.ConflictRecord, error) {
+func (m *SyncStore) ListConflicts(ctx context.Context) ([]ConflictRecord, error) {
 	return m.queryConflicts(ctx, sqlListConflicts)
 }
 
 // ListAllConflicts returns all conflicts (resolved and unresolved) ordered
 // by detection time descending. The product CLI consumes this through
 // per-drive `status --history`.
-func (m *SyncStore) ListAllConflicts(ctx context.Context) ([]synctypes.ConflictRecord, error) {
+func (m *SyncStore) ListAllConflicts(ctx context.Context) ([]ConflictRecord, error) {
 	return m.queryConflicts(ctx, sqlListAllConflicts)
 }
 
 // queryConflicts executes a conflict query and scans the results.
-func (m *SyncStore) queryConflicts(ctx context.Context, query string) ([]synctypes.ConflictRecord, error) {
+func (m *SyncStore) queryConflicts(ctx context.Context, query string) ([]ConflictRecord, error) {
 	rows, err := m.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying conflicts: %w", err)
 	}
 	defer rows.Close()
 
-	var conflicts []synctypes.ConflictRecord
+	var conflicts []ConflictRecord
 
 	for rows.Next() {
 		c, err := scanConflictRow(rows)
@@ -111,7 +111,7 @@ func (m *SyncStore) queryConflicts(ctx context.Context, query string) ([]synctyp
 
 // GetConflict looks up a conflict by UUID or path. Tries ID first, falls
 // back to path (most recent unresolved conflict for that path).
-func (m *SyncStore) GetConflict(ctx context.Context, idOrPath string) (*synctypes.ConflictRecord, error) {
+func (m *SyncStore) GetConflict(ctx context.Context, idOrPath string) (*ConflictRecord, error) {
 	// Try by ID first.
 	row := m.db.QueryRowContext(ctx, sqlGetConflictByID, idOrPath)
 
@@ -140,7 +140,7 @@ func (m *SyncStore) GetConflict(ctx context.Context, idOrPath string) (*synctype
 }
 
 // GetConflictRequest returns the durable request workflow for one conflict.
-func (m *SyncStore) GetConflictRequest(ctx context.Context, id string) (*synctypes.ConflictRequestRecord, error) {
+func (m *SyncStore) GetConflictRequest(ctx context.Context, id string) (*ConflictRequestRecord, error) {
 	row := m.db.QueryRowContext(ctx, sqlGetConflictRequestByID, id)
 
 	request, err := scanConflictRequestRowSingle(row)
@@ -288,8 +288,8 @@ func (m *SyncStore) RequestConflictResolution(
 func handleExistingConflictRequestTx(
 	ctx context.Context,
 	tx sqlCommitTx,
-	conflict *synctypes.ConflictRecord,
-	request *synctypes.ConflictRequestRecord,
+	conflict *ConflictRecord,
+	request *ConflictRequestRecord,
 	id string,
 	resolution string,
 	now int64,
@@ -326,7 +326,7 @@ func handleExistingConflictRequestTx(
 func overwriteQueuedConflictRequestTx(
 	ctx context.Context,
 	tx sqlCommitTx,
-	conflict *synctypes.ConflictRecord,
+	conflict *ConflictRecord,
 	id string,
 	resolution string,
 	now int64,
@@ -391,7 +391,7 @@ func isQueueableConflictResolution(resolution string) bool {
 func (m *SyncStore) ListRequestedConflictResolutions(
 	ctx context.Context,
 	limit int,
-) ([]synctypes.ConflictRequestRecord, error) {
+) ([]ConflictRequestRecord, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -411,7 +411,7 @@ func (m *SyncStore) ListRequestedConflictResolutions(
 	}
 	defer rows.Close()
 
-	var conflicts []synctypes.ConflictRequestRecord
+	var conflicts []ConflictRequestRecord
 	for rows.Next() {
 		c, err := scanConflictRequestRow(rows)
 		if err != nil {
@@ -431,7 +431,7 @@ func (m *SyncStore) ListRequestedConflictResolutions(
 func (m *SyncStore) ClaimConflictResolution(
 	ctx context.Context,
 	id string,
-) (*synctypes.ConflictRequestRecord, bool, error) {
+) (*ConflictRequestRecord, bool, error) {
 	now := m.nowFunc().UnixNano()
 	result, err := m.db.ExecContext(ctx,
 		`UPDATE conflict_requests
@@ -561,9 +561,9 @@ type conflictScanner interface {
 
 // scanConflict scans a single conflict fact row from any scanner (*sql.Rows or
 // *sql.Row), handling nullable columns.
-func scanConflict(s conflictScanner) (*synctypes.ConflictRecord, error) {
+func scanConflict(s conflictScanner) (*ConflictRecord, error) {
 	var (
-		c           synctypes.ConflictRecord
+		c           ConflictRecord
 		itemID      sql.NullString
 		localHash   sql.NullString
 		remoteHash  sql.NullString
@@ -603,9 +603,9 @@ func scanConflict(s conflictScanner) (*synctypes.ConflictRecord, error) {
 	return &c, nil
 }
 
-func scanConflictRequest(s conflictScanner) (*synctypes.ConflictRequestRecord, error) {
+func scanConflictRequest(s conflictScanner) (*ConflictRequestRecord, error) {
 	var (
-		record      synctypes.ConflictRequestRecord
+		record      ConflictRequestRecord
 		itemID      sql.NullString
 		localHash   sql.NullString
 		remoteHash  sql.NullString
@@ -656,7 +656,7 @@ func scanConflictRequest(s conflictScanner) (*synctypes.ConflictRequestRecord, e
 
 // scanConflictRow scans a conflict from a multi-row result set. Delegates
 // to scanConflict via the conflictScanner interface (B-149).
-func scanConflictRow(rows *sql.Rows) (*synctypes.ConflictRecord, error) {
+func scanConflictRow(rows *sql.Rows) (*ConflictRecord, error) {
 	c, err := scanConflict(rows)
 	if err != nil {
 		return nil, fmt.Errorf("sync: scanning conflict row: %w", err)
@@ -667,11 +667,11 @@ func scanConflictRow(rows *sql.Rows) (*synctypes.ConflictRecord, error) {
 
 // scanConflictRowSingle scans a conflict from a single-row result.
 // Returns sql.ErrNoRows transparently for callers that need it (B-149).
-func scanConflictRowSingle(row *sql.Row) (*synctypes.ConflictRecord, error) {
+func scanConflictRowSingle(row *sql.Row) (*ConflictRecord, error) {
 	return scanConflict(row)
 }
 
-func scanConflictRequestRow(rows *sql.Rows) (*synctypes.ConflictRequestRecord, error) {
+func scanConflictRequestRow(rows *sql.Rows) (*ConflictRequestRecord, error) {
 	record, err := scanConflictRequest(rows)
 	if err != nil {
 		return nil, fmt.Errorf("sync: scanning conflict request row: %w", err)
@@ -680,7 +680,7 @@ func scanConflictRequestRow(rows *sql.Rows) (*synctypes.ConflictRequestRecord, e
 	return record, nil
 }
 
-func scanConflictRequestRowSingle(row *sql.Row) (*synctypes.ConflictRequestRecord, error) {
+func scanConflictRequestRowSingle(row *sql.Row) (*ConflictRequestRecord, error) {
 	return scanConflictRequest(row)
 }
 
@@ -688,7 +688,7 @@ func getConflictRequestTx(
 	ctx context.Context,
 	tx sqlTxRunner,
 	id string,
-) (*synctypes.ConflictRequestRecord, error) {
+) (*ConflictRequestRecord, error) {
 	row := tx.QueryRowContext(ctx, sqlGetConflictRequestByID, id)
 	return scanConflictRequestRowSingle(row)
 }

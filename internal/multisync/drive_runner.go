@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 // DriveRunner manages a single drive's sync lifecycle with panic recovery
@@ -20,8 +20,8 @@ type DriveRunner struct {
 // plane injects the per-drive RunOnce closure instead of holding a direct
 // Engine reference so tests can exercise panic isolation without a real
 // engine stack.
-func (dr *DriveRunner) run(ctx context.Context, fn func(context.Context) (*synctypes.SyncReport, error)) (result *synctypes.DriveReport) {
-	result = &synctypes.DriveReport{
+func (dr *DriveRunner) run(ctx context.Context, fn func(context.Context) (*syncengine.Report, error)) (result *DriveReport) {
+	result = &DriveReport{
 		CanonicalID: dr.canonID,
 		DisplayName: dr.displayName,
 	}

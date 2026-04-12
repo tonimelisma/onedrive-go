@@ -3,13 +3,14 @@ package cli
 import (
 	"fmt"
 
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+	"github.com/tonimelisma/onedrive-go/internal/multisync"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 // printDriveReports prints sync reports for all drives. When there's only
 // one drive, the output is identical to the pre-Orchestrator format. For
 // multiple drives, each drive's output is prefixed with a header.
-func printDriveReports(reports []*synctypes.DriveReport, cc *CLIContext) {
+func printDriveReports(reports []*multisync.DriveReport, cc *CLIContext) {
 	multiDrive := len(reports) > 1
 
 	for _, dr := range reports {
@@ -31,7 +32,7 @@ func printDriveReports(reports []*synctypes.DriveReport, cc *CLIContext) {
 
 // driveReportsError returns an error if any drive report has an error.
 // Returns nil when all drives succeeded.
-func driveReportsError(reports []*synctypes.DriveReport) error {
+func driveReportsError(reports []*multisync.DriveReport) error {
 	var firstErr error
 
 	failCount := 0
@@ -65,7 +66,7 @@ func printNonZero(cc *CLIContext, label string, n int) {
 }
 
 // printSyncReport formats and prints the sync report to the CLI status stream.
-func printSyncReport(r *synctypes.SyncReport, cc *CLIContext) {
+func printSyncReport(r *syncengine.Report, cc *CLIContext) {
 	if r.DryRun {
 		cc.Statusf("Dry run — no changes applied\n")
 	}

@@ -1,7 +1,7 @@
 // Package sync owns the single-drive runtime, including local/remote
 // observation buffering between the observers and planner.
 // It sits between observers and planner in the sync pipeline: observers
-// produce []synctypes.ChangeEvent, Buffer groups them into []synctypes.PathChanges,
+// produce []ChangeEvent, Buffer groups them into []PathChanges,
 // planner consumes the grouped view. Thread-safe for concurrent observer output.
 package sync
 
@@ -21,7 +21,7 @@ import (
 // safe for concurrent use.
 type Buffer struct {
 	mu      sync.Mutex // guards pending and notify
-	pending map[string]*synctypes.PathChanges
+	pending map[string]*PathChanges
 	notify  chan struct{} // signaled on Add/AddAll when FlushDebounced is active; nil otherwise
 	logger  *slog.Logger
 }
@@ -31,7 +31,7 @@ func NewBuffer(logger *slog.Logger) *Buffer {
 	logger.Debug("buffer created")
 
 	return &Buffer{
-		pending: make(map[string]*synctypes.PathChanges),
+		pending: make(map[string]*PathChanges),
 		logger:  logger,
 	}
 }
@@ -40,7 +40,7 @@ func NewBuffer(logger *slog.Logger) *Buffer {
 // path group and retaining only the planner-relevant per-path history.
 // Thread-safe. Takes a pointer to avoid copying the 192-byte ChangeEvent
 // struct on each call.
-func (b *Buffer) Add(ev *synctypes.ChangeEvent) {
+func (b *Buffer) Add(ev *ChangeEvent) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -50,7 +50,7 @@ func (b *Buffer) Add(ev *synctypes.ChangeEvent) {
 // AddAll appends a batch of events under a single lock acquisition.
 // This avoids per-event lock overhead when processing the full output
 // of a one-shot observer (thousands of events from FullDelta or FullScan).
-func (b *Buffer) AddAll(events []synctypes.ChangeEvent) {
+func (b *Buffer) AddAll(events []ChangeEvent) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -62,7 +62,7 @@ func (b *Buffer) AddAll(events []synctypes.ChangeEvent) {
 // FlushImmediate returns all buffered PathChanges sorted by path
 // (deterministic ordering for the planner) and clears the buffer.
 // Returns nil for an empty buffer.
-func (b *Buffer) FlushImmediate() []synctypes.PathChanges {
+func (b *Buffer) FlushImmediate() []PathChanges {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -71,7 +71,7 @@ func (b *Buffer) FlushImmediate() []synctypes.PathChanges {
 		return nil
 	}
 
-	result := make([]synctypes.PathChanges, 0, len(b.pending))
+	result := make([]PathChanges, 0, len(b.pending))
 	for _, pc := range b.pending {
 		result = append(result, *pc)
 	}
@@ -81,7 +81,7 @@ func (b *Buffer) FlushImmediate() []synctypes.PathChanges {
 	})
 
 	count := len(b.pending)
-	b.pending = make(map[string]*synctypes.PathChanges)
+	b.pending = make(map[string]*PathChanges)
 
 	b.logger.Info("buffer flushed", "paths", count)
 
@@ -101,8 +101,8 @@ func (b *Buffer) Len() int {
 // calling FlushImmediate(). The debounce timer resets every time Add() or
 // AddAll() is called. The output channel is closed when the context is
 // canceled; any remaining events are drained in a final batch.
-func (b *Buffer) FlushDebounced(ctx context.Context, debounce time.Duration) <-chan []synctypes.PathChanges {
-	out := make(chan []synctypes.PathChanges, 1)
+func (b *Buffer) FlushDebounced(ctx context.Context, debounce time.Duration) <-chan []PathChanges {
+	out := make(chan []PathChanges, 1)
 
 	b.mu.Lock()
 	if b.notify != nil {
@@ -120,7 +120,7 @@ func (b *Buffer) FlushDebounced(ctx context.Context, debounce time.Duration) <-c
 
 // debounceLoop is the goroutine driving FlushDebounced. It waits for new-event
 // signals, resets the debounce timer, and flushes when the timer expires.
-func (b *Buffer) debounceLoop(ctx context.Context, debounce time.Duration, out chan<- []synctypes.PathChanges) {
+func (b *Buffer) debounceLoop(ctx context.Context, debounce time.Duration, out chan<- []PathChanges) {
 	defer close(out)
 
 	timer := time.NewTimer(debounce)
@@ -198,7 +198,7 @@ func (b *Buffer) signalNew() {
 // It routes the event to the correct PathChanges entry and handles
 // move dual-keying: a ChangeMove with OldPath produces a synthetic
 // ChangeDelete at the old path so the planner sees both paths.
-func (b *Buffer) addLocked(ev *synctypes.ChangeEvent) {
+func (b *Buffer) addLocked(ev *ChangeEvent) {
 	pc := b.getOrCreate(ev.Path)
 	b.routeEvent(pc, ev)
 
@@ -217,7 +217,7 @@ func (b *Buffer) addLocked(ev *synctypes.ChangeEvent) {
 	// dual-keying stays correct if watch-mode local observation later emits
 	// rename events directly instead of relying only on planner correlation.
 	if ev.Type == synctypes.ChangeMove && ev.OldPath != "" {
-		synthetic := synctypes.ChangeEvent{
+		synthetic := ChangeEvent{
 			Source:    ev.Source,
 			Type:      synctypes.ChangeDelete,
 			Path:      ev.OldPath,
@@ -243,10 +243,10 @@ func (b *Buffer) addLocked(ev *synctypes.ChangeEvent) {
 
 // getOrCreate returns the PathChanges for the given path, creating it
 // if it does not yet exist in the pending map.
-func (b *Buffer) getOrCreate(p string) *synctypes.PathChanges {
+func (b *Buffer) getOrCreate(p string) *PathChanges {
 	pc, ok := b.pending[p]
 	if !ok {
-		pc = &synctypes.PathChanges{Path: p}
+		pc = &PathChanges{Path: p}
 		b.pending[p] = pc
 	}
 
@@ -257,23 +257,23 @@ func (b *Buffer) getOrCreate(p string) *synctypes.PathChanges {
 // Local history keeps only the latest event. Remote history keeps the latest
 // event plus one move marker when needed so the planner can still detect
 // remote moves after a follow-up remote modify in the same debounce window.
-func (b *Buffer) routeEvent(pc *synctypes.PathChanges, ev *synctypes.ChangeEvent) {
+func (b *Buffer) routeEvent(pc *PathChanges, ev *ChangeEvent) {
 	switch ev.Source {
 	case synctypes.SourceRemote:
 		pc.RemoteEvents = retainRemoteEvents(pc.RemoteEvents, ev)
 	case synctypes.SourceLocal:
-		pc.LocalEvents = []synctypes.ChangeEvent{*ev}
+		pc.LocalEvents = []ChangeEvent{*ev}
 	}
 }
 
-func retainRemoteEvents(existing []synctypes.ChangeEvent, ev *synctypes.ChangeEvent) []synctypes.ChangeEvent {
+func retainRemoteEvents(existing []ChangeEvent, ev *ChangeEvent) []ChangeEvent {
 	if ev.Type == synctypes.ChangeMove {
-		return []synctypes.ChangeEvent{*ev}
+		return []ChangeEvent{*ev}
 	}
 
 	if len(existing) > 0 && existing[0].Type == synctypes.ChangeMove {
-		return []synctypes.ChangeEvent{existing[0], *ev}
+		return []ChangeEvent{existing[0], *ev}
 	}
 
-	return []synctypes.ChangeEvent{*ev}
+	return []ChangeEvent{*ev}
 }

@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 func newSyncCmd() *cobra.Command {
@@ -62,12 +62,12 @@ func runSync(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("read --full flag: %w", err)
 	}
 
-	return newSyncService(cc).run(ctx, syncCommandOptions{
+	return runSyncCommand(ctx, cc, syncCommandOptions{
 		Mode:          mode,
 		Watch:         watch,
 		DryRun:        dryRun,
 		FullReconcile: fullReconcile,
-	})
+	}, defaultSyncCommandDeps(cc))
 }
 
 func syncDryRunOverride(cmd *cobra.Command) (bool, bool, error) {
@@ -101,14 +101,14 @@ func resolveSyncDryRun(cfgDryRun bool, override *bool, watch bool) (bool, error)
 // false, so GetBool() would work identically. Changed() is preferred because
 // it directly expresses intent: "did the user explicitly set this flag?" This
 // is the standard Cobra pattern for flags where presence equals activation.
-func syncModeFromFlags(cmd *cobra.Command) synctypes.SyncMode {
+func syncModeFromFlags(cmd *cobra.Command) syncengine.Mode {
 	if cmd.Flags().Changed("download-only") {
-		return synctypes.SyncDownloadOnly
+		return syncengine.SyncDownloadOnly
 	}
 
 	if cmd.Flags().Changed("upload-only") {
-		return synctypes.SyncUploadOnly
+		return syncengine.SyncUploadOnly
 	}
 
-	return synctypes.SyncBidirectional
+	return syncengine.SyncBidirectional
 }

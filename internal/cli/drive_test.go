@@ -1414,7 +1414,7 @@ func TestDriveService_RunAdd_SharedTargetFolderAddsCanonicalSharedDrive(t *testi
 		},
 	}
 
-	err := newDriveService(cc).runAdd(context.Background(), []string{"https://1drv.ms/f/c/example"})
+	err := runDriveAddWithContext(context.Background(), cc, []string{"https://1drv.ms/f/c/example"})
 	require.NoError(t, err)
 
 	cfg, err := config.LoadOrDefault(cfgPath, testDriveLogger(t))
@@ -1467,7 +1467,7 @@ func TestDriveService_RunAdd_SharedTargetFileRejectsDirectFileGuidance(t *testin
 		},
 	}
 
-	err := newDriveService(cc).runAdd(context.Background(), []string{"https://1drv.ms/t/c/example"})
+	err := runDriveAddWithContext(context.Background(), cc, []string{"https://1drv.ms/t/c/example"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "shared files are direct stat/get/put targets")
 }
@@ -1515,7 +1515,7 @@ func TestDriveService_RunList_JSONKeepsSharedEntryWithoutOwnerIdentity(t *testin
 		GraphBaseURL: srv.URL,
 	}
 
-	require.NoError(t, newDriveService(cc).runList(t.Context(), false))
+	require.NoError(t, runDriveListWithContext(t.Context(), cc, false))
 
 	var decoded driveListJSONOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
@@ -1569,7 +1569,7 @@ func TestDriveService_RunList_JSONIncludesSharedDiscoveryDegradedAccount(t *test
 		GraphBaseURL: srv.URL,
 	}
 
-	require.NoError(t, newDriveService(cc).runList(t.Context(), false))
+	require.NoError(t, runDriveListWithContext(t.Context(), cc, false))
 
 	var decoded driveListJSONOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
@@ -1618,7 +1618,7 @@ func TestDriveService_RunList_JSONIncludesSharedDiscoveryAuthRequiredAccount(t *
 		GraphBaseURL: srv.URL,
 	}
 
-	require.NoError(t, newDriveService(cc).runList(t.Context(), false))
+	require.NoError(t, runDriveListWithContext(t.Context(), cc, false))
 
 	var decoded driveListJSONOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
@@ -1678,7 +1678,7 @@ func TestDriveService_RunAdd_SharedNameHonorsAccountFilter(t *testing.T) {
 		GraphBaseURL: srv.URL,
 	}
 
-	require.NoError(t, newDriveService(cc).runAdd(context.Background(), []string{"Project Folder"}))
+	require.NoError(t, runDriveAddWithContext(context.Background(), cc, []string{"Project Folder"}))
 
 	cfg, err := config.LoadOrDefault(cfgPath, testDriveLogger(t))
 	require.NoError(t, err)
@@ -1704,7 +1704,7 @@ func TestDriveService_RunAdd_SharedNameNoMatchesIncludesBlockedAccounts(t *testi
 		CfgPath:      filepath.Join(t.TempDir(), "config.toml"),
 	}
 
-	err := newDriveService(cc).runAdd(context.Background(), []string{"marketing"})
+	err := runDriveAddWithContext(context.Background(), cc, []string{"marketing"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Authentication required:")
 	assert.Contains(t, err.Error(), "User Example (user@example.com)")
@@ -1932,14 +1932,14 @@ func TestDriveService_RunList_ClearsPersistedAuthScopeAfterSuccessfulDiscovery(t
 	defer srv.Close()
 
 	var out bytes.Buffer
-	svc := newDriveService(&CLIContext{
+	cc := &CLIContext{
 		Logger:       testDriveLogger(t),
 		OutputWriter: &out,
 		StatusWriter: &out,
 		CfgPath:      filepath.Join(t.TempDir(), "config.toml"),
 		GraphBaseURL: srv.URL,
-	})
+	}
 
-	require.NoError(t, svc.runList(t.Context(), false))
+	require.NoError(t, runDriveListWithContext(t.Context(), cc, false))
 	assert.False(t, hasPersistedAuthScope(t.Context(), cid.Email(), testDriveLogger(t)))
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -42,7 +43,7 @@ func (flow *engineFlow) mustAssertDiscardedScope(ctx context.Context, watch *wat
 
 func (flow *engineFlow) mustAssertDispatchAdmissionSealed(
 	watch *watchRuntime,
-	outbox []*synctypes.TrackedAction,
+	outbox []*TrackedAction,
 	stage string,
 ) {
 	if !flow.invariantChecksEnabled() {
@@ -133,7 +134,7 @@ func (flow *engineFlow) assertWatchRuntimeInvariants(watch *watchRuntime) error 
 
 func (flow *engineFlow) assertDispatchAdmissionSealed(
 	watch *watchRuntime,
-	outbox []*synctypes.TrackedAction,
+	outbox []*TrackedAction,
 ) error {
 	if watch == nil || !watch.isDraining() || len(outbox) == 0 {
 		return nil
@@ -278,7 +279,7 @@ func (flow *engineFlow) assertDiscardedScope(ctx context.Context, watch *watchRu
 	return nil
 }
 
-func validatePersistedFailureRow(row *synctypes.SyncFailureRow) error {
+func validatePersistedFailureRow(row *syncstore.SyncFailureRow) error {
 	switch row.Role {
 	case synctypes.FailureRoleHeld:
 		if row.ScopeKey.IsZero() {

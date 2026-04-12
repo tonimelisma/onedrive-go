@@ -32,7 +32,7 @@ func TestFilterOutShortcuts_Empty(t *testing.T) {
 func TestFilterOutShortcuts_NoShortcuts(t *testing.T) {
 	t.Parallel()
 
-	events := []synctypes.ChangeEvent{
+	events := []ChangeEvent{
 		{Type: synctypes.ChangeCreate, Path: "a.txt"},
 		{Type: synctypes.ChangeModify, Path: "b.txt"},
 		{Type: synctypes.ChangeDelete, Path: "c.txt"},
@@ -46,7 +46,7 @@ func TestFilterOutShortcuts_NoShortcuts(t *testing.T) {
 func TestFilterOutShortcuts_RemovesShortcuts(t *testing.T) {
 	t.Parallel()
 
-	events := []synctypes.ChangeEvent{
+	events := []ChangeEvent{
 		{Type: synctypes.ChangeCreate, Path: "a.txt"},
 		{Type: synctypes.ChangeShortcut, Path: "SharedFolder"},
 		{Type: synctypes.ChangeModify, Path: "b.txt"},
@@ -133,7 +133,7 @@ func TestConvertShortcutItems_ExistingModified(t *testing.T) {
 		},
 	}
 
-	bl := baselineWith(&synctypes.BaselineEntry{
+	bl := baselineWith(&BaselineEntry{
 		Path:    "SharedFolder/report.xlsx",
 		DriveID: remoteDriveID,
 		ItemID:  "f1",
@@ -167,7 +167,7 @@ func TestConvertShortcutItems_DeletedItem(t *testing.T) {
 		},
 	}
 
-	bl := baselineWith(&synctypes.BaselineEntry{
+	bl := baselineWith(&BaselineEntry{
 		Path:    "SharedFolder/report.xlsx",
 		DriveID: remoteDriveID,
 		ItemID:  "f1",
@@ -223,7 +223,7 @@ func TestDetectShortcutOrphans_NoOrphans(t *testing.T) {
 		{ID: "f1", Name: "file.txt", DriveID: remoteDriveID},
 	}
 
-	bl := baselineWith(&synctypes.BaselineEntry{
+	bl := baselineWith(&BaselineEntry{
 		Path:    "SharedFolder/file.txt",
 		DriveID: remoteDriveID,
 		ItemID:  "f1",
@@ -250,10 +250,10 @@ func TestDetectShortcutOrphans_DetectsOrphans(t *testing.T) {
 		{ID: "f1", Name: "file.txt", DriveID: remoteDriveID},
 	}
 
-	// synctypes.Baseline has f1 and f2 — f2 is the orphan.
+	// Baseline has f1 and f2 — f2 is the orphan.
 	bl := baselineWith(
-		&synctypes.BaselineEntry{Path: "SharedFolder/file.txt", DriveID: remoteDriveID, ItemID: "f1"},
-		&synctypes.BaselineEntry{Path: "SharedFolder/deleted.txt", DriveID: remoteDriveID, ItemID: "f2"},
+		&BaselineEntry{Path: "SharedFolder/file.txt", DriveID: remoteDriveID, ItemID: "f1"},
+		&BaselineEntry{Path: "SharedFolder/deleted.txt", DriveID: remoteDriveID, ItemID: "f2"},
 	)
 
 	orphans := DetectShortcutOrphans(sc, remoteDriveID, items, bl)
@@ -279,9 +279,9 @@ func TestDetectShortcutOrphans_IgnoresOtherDrives(t *testing.T) {
 
 	items := []graph.Item{} // empty enumeration
 
-	// synctypes.Baseline has an entry from a different drive — should NOT be treated as orphan.
+	// Baseline has an entry from a different drive — should NOT be treated as orphan.
 	bl := baselineWith(
-		&synctypes.BaselineEntry{Path: "SharedFolder/other.txt", DriveID: otherDriveID, ItemID: "x1"},
+		&BaselineEntry{Path: "SharedFolder/other.txt", DriveID: otherDriveID, ItemID: "x1"},
 	)
 
 	orphans := DetectShortcutOrphans(sc, remoteDriveID, items, bl)
@@ -304,7 +304,7 @@ func TestRegisterShortcuts_NewShortcut(t *testing.T) {
 		logger:   testLogger(t),
 	}
 
-	events := []synctypes.ChangeEvent{
+	events := []ChangeEvent{
 		{
 			Type:          synctypes.ChangeShortcut,
 			ItemID:        "sc-1",
@@ -349,7 +349,7 @@ func TestRegisterShortcuts_UpdateExisting(t *testing.T) {
 		logger:   testLogger(t),
 	}
 
-	events := []synctypes.ChangeEvent{
+	events := []ChangeEvent{
 		{
 			Type:          synctypes.ChangeShortcut,
 			ItemID:        "sc-1",
@@ -499,12 +499,12 @@ func seedShortcutRemovalFailures(
 ) {
 	t.Helper()
 
-	failures := []synctypes.SyncFailureParams{
+	failures := []SyncFailureParams{
 		{
 			Path:       "SharedFolder/locked/file.txt",
 			DriveID:    eng.driveID,
 			Direction:  synctypes.DirectionUpload,
-			ActionType: synctypes.ActionUpload,
+			ActionType: ActionUpload,
 			Role:       synctypes.FailureRoleHeld,
 			Category:   synctypes.CategoryTransient,
 			IssueType:  synctypes.IssueSharedFolderBlocked,
@@ -515,7 +515,7 @@ func seedShortcutRemovalFailures(
 			Path:       "SharedFolder/quota/file.txt",
 			DriveID:    eng.driveID,
 			Direction:  synctypes.DirectionUpload,
-			ActionType: synctypes.ActionUpload,
+			ActionType: ActionUpload,
 			Role:       synctypes.FailureRoleHeld,
 			Category:   synctypes.CategoryTransient,
 			ErrMsg:     "blocked by shortcut quota scope",
@@ -525,7 +525,7 @@ func seedShortcutRemovalFailures(
 			Path:       "OtherFolder/locked/file.txt",
 			DriveID:    eng.driveID,
 			Direction:  synctypes.DirectionUpload,
-			ActionType: synctypes.ActionUpload,
+			ActionType: ActionUpload,
 			Role:       synctypes.FailureRoleHeld,
 			Category:   synctypes.CategoryTransient,
 			IssueType:  synctypes.IssueSharedFolderBlocked,
@@ -536,7 +536,7 @@ func seedShortcutRemovalFailures(
 			Path:       "OtherFolder/quota/file.txt",
 			DriveID:    eng.driveID,
 			Direction:  synctypes.DirectionUpload,
-			ActionType: synctypes.ActionUpload,
+			ActionType: ActionUpload,
 			Role:       synctypes.FailureRoleHeld,
 			Category:   synctypes.CategoryTransient,
 			ErrMsg:     "blocked by shortcut quota scope",
@@ -560,7 +560,7 @@ func seedShortcutRemovalScopeBlocks(
 	t.Helper()
 
 	now := eng.nowFn()
-	blocks := []synctypes.ScopeBlock{
+	blocks := []ScopeBlock{
 		{
 			Key:       removedScope,
 			IssueType: synctypes.IssueSharedFolderBlocked,
@@ -647,8 +647,8 @@ func TestDetectShortcutCollisions_PrimaryDriveConflict(t *testing.T) {
 		DiscoveredAt: 1000,
 	}))
 
-	// synctypes.Baseline has a primary drive entry at the same path.
-	bl := baselineWith(&synctypes.BaselineEntry{
+	// Baseline has a primary drive entry at the same path.
+	bl := baselineWith(&BaselineEntry{
 		Path:    "SharedDocs",
 		DriveID: primaryDriveID,
 		ItemID:  "primary-folder-1",
@@ -899,7 +899,7 @@ func TestBuildShortcutObservationPlan_FiltersSuppressedAndCollidingTargets(t *te
 	flow := testEngineFlow(t, newFlowBackedTestEngine(e))
 	plan, err := flow.BuildObservationSessionPlan(t.Context(), ObservationPlanRequest{
 		Baseline:  emptyBaseline(),
-		SyncMode:  synctypes.SyncBidirectional,
+		SyncMode:  SyncBidirectional,
 		Purpose:   observationPlanPurposeOneShot,
 		Shortcuts: shortcuts,
 		SuppressedShortcutTargets: map[string]struct{}{
@@ -938,7 +938,7 @@ func TestBuildObservationSessionPlan_ShortcutOnlySkipsPrimaryScopeResolution(t *
 	flow := testEngineFlow(t, eng)
 	plan, err := flow.BuildObservationSessionPlan(t.Context(), ObservationPlanRequest{
 		Baseline: emptyBaseline(),
-		SyncMode: synctypes.SyncBidirectional,
+		SyncMode: SyncBidirectional,
 		Purpose:  observationPlanPurposeOneShot,
 		Shortcuts: []synctypes.Shortcut{{
 			ItemID:      "sc-keep",
@@ -999,7 +999,7 @@ func TestBuildObservationSessionPlan_CombinesPrimaryAndShortcutScopes(t *testing
 	plan, err := flow.BuildObservationSessionPlan(t.Context(), ObservationPlanRequest{
 		Session:   &session,
 		Baseline:  emptyBaseline(),
-		SyncMode:  synctypes.SyncBidirectional,
+		SyncMode:  SyncBidirectional,
 		Purpose:   observationPlanPurposeWatch,
 		Shortcuts: shortcuts,
 		SuppressedShortcutTargets: map[string]struct{}{
@@ -1044,7 +1044,7 @@ func TestBuildObservationSessionPlan_PrimaryHashIgnoresShortcutPhase(t *testing.
 
 	primaryOnly, err := flow.BuildObservationSessionPlan(t.Context(), ObservationPlanRequest{
 		Session:  &session,
-		SyncMode: synctypes.SyncBidirectional,
+		SyncMode: SyncBidirectional,
 		Purpose:  observationPlanPurposeWatch,
 	})
 	require.NoError(t, err)
@@ -1052,7 +1052,7 @@ func TestBuildObservationSessionPlan_PrimaryHashIgnoresShortcutPhase(t *testing.
 	withShortcuts, err := flow.BuildObservationSessionPlan(t.Context(), ObservationPlanRequest{
 		Session:  &session,
 		Baseline: emptyBaseline(),
-		SyncMode: synctypes.SyncBidirectional,
+		SyncMode: SyncBidirectional,
 		Purpose:  observationPlanPurposeWatch,
 		Shortcuts: []synctypes.Shortcut{
 			{
@@ -1305,7 +1305,7 @@ func TestApplyShortcutBatchMutations_DoesNotPublishRuntimeShortcuts(t *testing.T
 		RemoteItem:  "stale-item",
 	}})
 
-	_, err := flow.shortcutCoordinator().applyShortcutBatchMutations(ctx, []synctypes.ChangeEvent{{
+	_, err := flow.shortcutCoordinator().applyShortcutBatchMutations(ctx, []ChangeEvent{{
 		Type:          synctypes.ChangeShortcut,
 		ItemID:        "sc-1",
 		Path:          "SharedDocs",
@@ -1350,7 +1350,7 @@ func TestProcessCommittedPrimaryBatch_RegistersAndObserves(t *testing.T) {
 		logger:          testLogger(t),
 	}
 
-	remoteEvents := []synctypes.ChangeEvent{
+	remoteEvents := []ChangeEvent{
 		{
 			Type:          synctypes.ChangeShortcut,
 			ItemID:        "sc-1",
@@ -1407,7 +1407,7 @@ func TestProcessCommittedPrimaryBatch_PublishesRefreshedShortcutsAfterMutation(t
 	_, err := flow.processCommittedPrimaryBatch(
 		ctx,
 		emptyBaseline(),
-		[]synctypes.ChangeEvent{{
+		[]ChangeEvent{{
 			Type:          synctypes.ChangeShortcut,
 			ItemID:        "sc-1",
 			Path:          "SharedDocs",
@@ -1439,7 +1439,7 @@ func TestProcessCommittedPrimaryBatch_DryRunSkipsShortcutMutationAndObservation(
 		logger:          testLogger(t),
 	}
 
-	remoteEvents := []synctypes.ChangeEvent{
+	remoteEvents := []ChangeEvent{
 		{
 			Type:          synctypes.ChangeShortcut,
 			ItemID:        "sc-1",
@@ -1516,7 +1516,7 @@ func TestProcessCommittedPrimaryBatch_NoChangeSkipsShortcutReloadAndFollowUp(t *
 	events, err := flow.processCommittedPrimaryBatch(
 		t.Context(),
 		emptyBaseline(),
-		[]synctypes.ChangeEvent{{
+		[]ChangeEvent{{
 			Type:   synctypes.ChangeCreate,
 			Path:   "primary/newfile.txt",
 			ItemID: "p1",
@@ -1628,7 +1628,7 @@ func TestProcessCommittedPrimaryBatch_ShortcutAndPrimaryEventsCoexist(t *testing
 	}
 
 	// Simulate primary delta producing a regular file change AND a shortcut event.
-	remoteEvents := []synctypes.ChangeEvent{
+	remoteEvents := []ChangeEvent{
 		{Type: synctypes.ChangeCreate, Path: "primary/newfile.txt", ItemID: "p1", Source: synctypes.SourceRemote},
 		{
 			Type: synctypes.ChangeShortcut, Path: "SharedDocs", ItemID: "sc-1",
@@ -1781,13 +1781,13 @@ func TestReconcileShortcutScopes_DeltaReconciliation(t *testing.T) {
 	}))
 
 	// Seed baseline with an existing file (will NOT be in delta → becomes orphan).
-	require.NoError(t, mgr.CommitOutcome(ctx, &synctypes.Outcome{
-		Action: synctypes.ActionDownload, Success: true, Path: "Shared/Delta/old.txt",
+	require.NoError(t, mgr.CommitMutation(ctx, baselineMutationFromExecutionResult(&ExecutionResult{
+		Action: ActionDownload, Success: true, Path: "Shared/Delta/old.txt",
 		DriveID: remoteDriveID, ItemID: "old-file", ParentID: "root-1", ItemType: synctypes.ItemTypeFile,
 		RemoteHash: "oldhash",
 		LocalSize:  100, LocalSizeKnown: true,
 		RemoteSize: 100, RemoteSizeKnown: true,
-	}))
+	})))
 
 	mockDelta := &mockFolderDeltaFetcher{
 		items: []graph.Item{

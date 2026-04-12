@@ -19,9 +19,9 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 const (
@@ -633,8 +633,8 @@ func errorControlResponse(err error) controlResponse {
 func (o *Orchestrator) handleControlCommand(
 	ctx context.Context,
 	cmd *controlCommand,
-	mode synctypes.SyncMode,
-	opts synctypes.WatchOpts,
+	mode syncengine.Mode,
+	opts syncengine.WatchOptions,
 	runners map[driveid.CanonicalID]*watchRunner,
 ) bool {
 	switch cmd.kind {

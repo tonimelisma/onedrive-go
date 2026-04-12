@@ -20,11 +20,11 @@ import (
 
 const updatedHash = "h2"
 
-// commitAll is a test helper that commits outcomes one by one via CommitOutcome.
-func commitAll(t *testing.T, mgr *SyncStore, ctx context.Context, outcomes []synctypes.Outcome) {
+// commitAll is a test helper that commits outcomes one by one via CommitMutation.
+func commitAll(t *testing.T, mgr *SyncStore, ctx context.Context, outcomes []BaselineMutation) {
 	t.Helper()
 	for i := range outcomes {
-		require.NoError(t, mgr.CommitOutcome(ctx, &outcomes[i]), "CommitOutcome[%d]", i)
+		require.NoError(t, mgr.CommitMutation(ctx, &outcomes[i]), "CommitMutation[%d]", i)
 	}
 }
 
@@ -242,7 +242,7 @@ func TestCommit_Download(t *testing.T) {
 	fixedTime := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
 	mgr.SetNowFunc(func() time.Time { return fixedTime })
 
-	outcomes := []synctypes.Outcome{{
+	outcomes := []BaselineMutation{{
 		Action:          synctypes.ActionDownload,
 		Success:         true,
 		Path:            "docs/readme.md",
@@ -281,7 +281,7 @@ func TestCommit_Upload(t *testing.T) {
 	fixedTime := time.Date(2026, 2, 1, 10, 0, 0, 0, time.UTC)
 	mgr.SetNowFunc(func() time.Time { return fixedTime })
 
-	outcomes := []synctypes.Outcome{{
+	outcomes := []BaselineMutation{{
 		Action:          synctypes.ActionUpload,
 		Success:         true,
 		Path:            "photos/cat.jpg",
@@ -319,7 +319,7 @@ func TestCommit_FolderCreate(t *testing.T) {
 		return time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	})
 
-	outcomes := []synctypes.Outcome{{
+	outcomes := []BaselineMutation{{
 		Action:   synctypes.ActionFolderCreate,
 		Success:  true,
 		Path:     "Documents/Reports",
@@ -353,7 +353,7 @@ func TestCommit_UpdateSynced(t *testing.T) {
 	t1 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	mgr.SetNowFunc(func() time.Time { return t1 })
 
-	outcomes := []synctypes.Outcome{{
+	outcomes := []BaselineMutation{{
 		Action:          synctypes.ActionDownload,
 		Success:         true,
 		Path:            "file.txt",
@@ -412,7 +412,7 @@ func TestCommit_DeleteLikeActionsRemoveBaseline(t *testing.T) {
 				return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 			})
 
-			create := []synctypes.Outcome{{
+			create := []BaselineMutation{{
 				Action: synctypes.ActionDownload, Success: true,
 				Path: tc.path, DriveID: driveid.New("d"), ItemID: "i",
 				ItemType: synctypes.ItemTypeFile, LocalHash: "h", RemoteHash: "h",
@@ -422,7 +422,7 @@ func TestCommit_DeleteLikeActionsRemoveBaseline(t *testing.T) {
 			}}
 			commitAll(t, mgr, ctx, create)
 
-			remove := []synctypes.Outcome{{
+			remove := []BaselineMutation{{
 				Action: tc.deleteAction, Success: true, Path: tc.path,
 			}}
 			commitAll(t, mgr, ctx, remove)
@@ -444,7 +444,7 @@ func TestCommit_Move(t *testing.T) {
 	mgr.SetNowFunc(func() time.Time { return fixedTime })
 
 	// Create original entry.
-	create := []synctypes.Outcome{{
+	create := []BaselineMutation{{
 		Action: synctypes.ActionDownload, Success: true,
 		Path: "old/path.txt", DriveID: driveid.New("d"), ItemID: "i", ParentID: "p",
 		ItemType: synctypes.ItemTypeFile, LocalHash: "h", RemoteHash: "h",
@@ -456,7 +456,7 @@ func TestCommit_Move(t *testing.T) {
 	commitAll(t, mgr, ctx, create)
 
 	// Move to new path.
-	move := []synctypes.Outcome{{
+	move := []BaselineMutation{{
 		Action: synctypes.ActionLocalMove, Success: true,
 		Path: "new/path.txt", OldPath: "old/path.txt",
 		DriveID: driveid.New("d"), ItemID: "i", ParentID: "p2",
@@ -486,7 +486,7 @@ func TestCommit_Conflict(t *testing.T) {
 	fixedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	mgr.SetNowFunc(func() time.Time { return fixedTime })
 
-	outcomes := []synctypes.Outcome{{
+	outcomes := []BaselineMutation{{
 		Action:       synctypes.ActionConflict,
 		Success:      true,
 		Path:         "conflict.txt",
@@ -526,7 +526,7 @@ func TestCommit_Conflict_StoresRemoteMtime(t *testing.T) {
 	mgr.SetNowFunc(func() time.Time { return fixedTime })
 
 	remoteMtime := int64(1700000000000000000) // non-zero nanosecond timestamp
-	outcomes := []synctypes.Outcome{{
+	outcomes := []BaselineMutation{{
 		Action:       synctypes.ActionConflict,
 		Success:      true,
 		Path:         "mtime-test.txt",
@@ -564,7 +564,7 @@ func TestCommit_SkipsFailedOutcomes(t *testing.T) {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	})
 
-	outcomes := []synctypes.Outcome{{
+	outcomes := []BaselineMutation{{
 		Action:  synctypes.ActionDownload,
 		Success: false, // should be skipped
 		Path:    "should-not-exist.txt",
@@ -605,7 +605,7 @@ func TestCommit_DeltaTokenRoundTrip(t *testing.T) {
 				return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 			})
 
-			outcomes := []synctypes.Outcome{{
+			outcomes := []BaselineMutation{{
 				Action: synctypes.ActionDownload, Success: true,
 				Path: "f.txt", DriveID: driveid.New(tc.driveID), ItemID: "i", ItemType: synctypes.ItemTypeFile,
 				LocalHash: "h", RemoteHash: "h",
@@ -639,7 +639,7 @@ func TestCommit_SyncedAtFromNowFunc(t *testing.T) {
 	fixedTime := time.Date(2025, 6, 15, 12, 30, 0, 0, time.UTC)
 	mgr.SetNowFunc(func() time.Time { return fixedTime })
 
-	outcomes := []synctypes.Outcome{{
+	outcomes := []BaselineMutation{{
 		Action: synctypes.ActionDownload, Success: true,
 		Path: "f.txt", DriveID: driveid.New("d"), ItemID: "i", ItemType: synctypes.ItemTypeFile,
 		LocalHash: "h", RemoteHash: "h",
@@ -669,7 +669,7 @@ func TestCommit_RefreshesCache(t *testing.T) {
 	// Verify baseline is nil before first commit.
 	assert.Nil(t, mgr.Baseline(), "baseline should be nil before first Load/Commit")
 
-	outcomes := []synctypes.Outcome{{
+	outcomes := []BaselineMutation{{
 		Action: synctypes.ActionDownload, Success: true,
 		Path: "f.txt", DriveID: driveid.New("d"), ItemID: "i", ItemType: synctypes.ItemTypeFile,
 		LocalHash: "h", RemoteHash: "h",
@@ -733,13 +733,13 @@ func TestLoad_NullableFields(t *testing.T) {
 // Conflict query + resolve tests
 // ---------------------------------------------------------------------------
 
-// seedConflict inserts a conflict via CommitOutcome and returns its UUID.
+// seedConflict inserts a conflict via CommitMutation and returns its UUID.
 func seedConflict(t *testing.T, mgr *SyncStore, path, conflictType string) string {
 	t.Helper()
 
 	ctx := t.Context()
 
-	outcomes := []synctypes.Outcome{{
+	outcomes := []BaselineMutation{{
 		Action:       synctypes.ActionConflict,
 		Success:      true,
 		Path:         path,
@@ -909,7 +909,7 @@ func TestLoad_ReturnsCachedBaseline(t *testing.T) {
 	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 
 	// Seed a baseline entry.
-	outcomes := []synctypes.Outcome{{
+	outcomes := []BaselineMutation{{
 		Action: synctypes.ActionDownload, Success: true,
 		Path: "cached.txt", DriveID: driveid.New("d"), ItemID: "i", ItemType: synctypes.ItemTypeFile,
 		LocalHash: "h", RemoteHash: "h",
@@ -940,7 +940,7 @@ func TestLoad_CacheInvalidatedByCommit(t *testing.T) {
 	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 
 	// Seed one entry.
-	outcomes := []synctypes.Outcome{{
+	outcomes := []BaselineMutation{{
 		Action: synctypes.ActionDownload, Success: true,
 		Path: "first.txt", DriveID: driveid.New("d"), ItemID: "i1", ItemType: synctypes.ItemTypeFile,
 		LocalHash: "h1", RemoteHash: "h1",
@@ -956,7 +956,7 @@ func TestLoad_CacheInvalidatedByCommit(t *testing.T) {
 	require.Equal(t, 1, b1.Len())
 
 	// Commit a second entry — cache should be invalidated and refreshed.
-	outcomes2 := []synctypes.Outcome{{
+	outcomes2 := []BaselineMutation{{
 		Action: synctypes.ActionDownload, Success: true,
 		Path: "second.txt", DriveID: driveid.New("d"), ItemID: "i2", ItemType: synctypes.ItemTypeFile,
 		LocalHash: updatedHash, RemoteHash: updatedHash,
@@ -1007,7 +1007,7 @@ func TestCommitConflict_AutoResolved(t *testing.T) {
 	fixedTime := time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC)
 	mgr.SetNowFunc(func() time.Time { return fixedTime })
 
-	outcomes := []synctypes.Outcome{{
+	outcomes := []BaselineMutation{{
 		Action:          synctypes.ActionConflict,
 		Success:         true,
 		Path:            "auto-resolved.txt",
@@ -1092,11 +1092,11 @@ func TestListAllConflicts(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// CommitOutcome tests
+// CommitMutation tests
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.2
-func TestCommitOutcome_Download(t *testing.T) {
+func TestCommitMutation_Download(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
@@ -1105,7 +1105,7 @@ func TestCommitOutcome_Download(t *testing.T) {
 	fixedTime := time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC)
 	mgr.SetNowFunc(func() time.Time { return fixedTime })
 
-	outcome := synctypes.Outcome{
+	outcome := BaselineMutation{
 		Action:          synctypes.ActionDownload,
 		Success:         true,
 		Path:            "co-download.txt",
@@ -1124,7 +1124,7 @@ func TestCommitOutcome_Download(t *testing.T) {
 		ETag:            "etag1",
 	}
 
-	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
+	require.NoError(t, mgr.CommitMutation(ctx, &outcome))
 
 	entry, ok := mgr.Baseline().GetByPath("co-download.txt")
 	require.True(t, ok, "baseline entry not found")
@@ -1134,7 +1134,7 @@ func TestCommitOutcome_Download(t *testing.T) {
 }
 
 // Validates: R-2.2
-func TestCommitOutcome_Upload(t *testing.T) {
+func TestCommitMutation_Upload(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
@@ -1142,7 +1142,7 @@ func TestCommitOutcome_Upload(t *testing.T) {
 
 	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
-	outcome := synctypes.Outcome{
+	outcome := BaselineMutation{
 		Action:          synctypes.ActionUpload,
 		Success:         true,
 		Path:            "co-upload.txt",
@@ -1157,7 +1157,7 @@ func TestCommitOutcome_Upload(t *testing.T) {
 		RemoteSizeKnown: true,
 	}
 
-	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
+	require.NoError(t, mgr.CommitMutation(ctx, &outcome))
 
 	entry, ok := mgr.Baseline().GetByPath("co-upload.txt")
 	require.True(t, ok, "baseline entry not found")
@@ -1165,7 +1165,7 @@ func TestCommitOutcome_Upload(t *testing.T) {
 }
 
 // Validates: R-6.7.17
-func TestCommitOutcome_PersistsSideAwareFileMetadata(t *testing.T) {
+func TestCommitMutation_PersistsSideAwareFileMetadata(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
@@ -1173,7 +1173,7 @@ func TestCommitOutcome_PersistsSideAwareFileMetadata(t *testing.T) {
 
 	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC) })
 
-	outcome := synctypes.Outcome{
+	outcome := BaselineMutation{
 		Action:          synctypes.ActionUpload,
 		Success:         true,
 		Path:            "hashless.docx",
@@ -1191,7 +1191,7 @@ func TestCommitOutcome_PersistsSideAwareFileMetadata(t *testing.T) {
 		ETag:            "etag-side-aware",
 	}
 
-	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
+	require.NoError(t, mgr.CommitMutation(ctx, &outcome))
 
 	entry, ok := mgr.Baseline().GetByPath("hashless.docx")
 	require.True(t, ok, "baseline entry not found")
@@ -1205,13 +1205,13 @@ func TestCommitOutcome_PersistsSideAwareFileMetadata(t *testing.T) {
 }
 
 // Validates: R-6.7.17
-func TestCommitOutcome_PersistsZeroByteSizeAsKnownZero(t *testing.T) {
+func TestCommitMutation_PersistsZeroByteSizeAsKnownZero(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	outcome := synctypes.Outcome{
+	outcome := BaselineMutation{
 		Action:          synctypes.ActionDownload,
 		Success:         true,
 		Path:            "zero.txt",
@@ -1229,7 +1229,7 @@ func TestCommitOutcome_PersistsZeroByteSizeAsKnownZero(t *testing.T) {
 		ETag:            "etag-zero",
 	}
 
-	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
+	require.NoError(t, mgr.CommitMutation(ctx, &outcome))
 
 	var (
 		localSize       sql.NullInt64
@@ -1291,7 +1291,7 @@ func TestNewSyncStore_RejectsUnversionedExistingStateDB(t *testing.T) {
 }
 
 // Validates: R-2.2
-func TestCommitOutcome_Delete(t *testing.T) {
+func TestCommitMutation_Delete(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
@@ -1300,7 +1300,7 @@ func TestCommitOutcome_Delete(t *testing.T) {
 	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
 	// Seed an entry first.
-	seed := synctypes.Outcome{
+	seed := BaselineMutation{
 		Action: synctypes.ActionDownload, Success: true,
 		Path: "co-delete.txt", DriveID: driveid.New("d"), ItemID: "i",
 		ItemType: synctypes.ItemTypeFile, LocalHash: "h", RemoteHash: "h",
@@ -1308,17 +1308,17 @@ func TestCommitOutcome_Delete(t *testing.T) {
 		RemoteSize: 10, RemoteSizeKnown: true,
 	}
 
-	require.NoError(t, mgr.CommitOutcome(ctx, &seed))
+	require.NoError(t, mgr.CommitMutation(ctx, &seed))
 
-	del := synctypes.Outcome{Action: synctypes.ActionLocalDelete, Success: true, Path: "co-delete.txt"}
-	require.NoError(t, mgr.CommitOutcome(ctx, &del))
+	del := BaselineMutation{Action: synctypes.ActionLocalDelete, Success: true, Path: "co-delete.txt"}
+	require.NoError(t, mgr.CommitMutation(ctx, &del))
 
 	_, ok := mgr.Baseline().GetByPath("co-delete.txt")
 	assert.False(t, ok, "entry still exists after delete")
 }
 
 // Validates: R-2.2
-func TestCommitOutcome_Move(t *testing.T) {
+func TestCommitMutation_Move(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
@@ -1327,7 +1327,7 @@ func TestCommitOutcome_Move(t *testing.T) {
 	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
 	// Seed original entry.
-	seed := synctypes.Outcome{
+	seed := BaselineMutation{
 		Action: synctypes.ActionDownload, Success: true,
 		Path: "old/move.txt", DriveID: driveid.New("d"), ItemID: "i", ParentID: "p1",
 		ItemType: synctypes.ItemTypeFile, LocalHash: "h", RemoteHash: "h",
@@ -1335,9 +1335,9 @@ func TestCommitOutcome_Move(t *testing.T) {
 		RemoteSize: 10, RemoteSizeKnown: true,
 	}
 
-	require.NoError(t, mgr.CommitOutcome(ctx, &seed))
+	require.NoError(t, mgr.CommitMutation(ctx, &seed))
 
-	move := synctypes.Outcome{
+	move := BaselineMutation{
 		Action: synctypes.ActionLocalMove, Success: true,
 		Path: "new/move.txt", OldPath: "old/move.txt",
 		DriveID: driveid.New("d"), ItemID: "i", ParentID: "p2",
@@ -1345,7 +1345,7 @@ func TestCommitOutcome_Move(t *testing.T) {
 		LocalSize: 10, LocalSizeKnown: true,
 		RemoteSize: 10, RemoteSizeKnown: true,
 	}
-	require.NoError(t, mgr.CommitOutcome(ctx, &move))
+	require.NoError(t, mgr.CommitMutation(ctx, &move))
 
 	_, ok := mgr.Baseline().GetByPath("old/move.txt")
 	assert.False(t, ok, "old path still exists after move")
@@ -1356,7 +1356,7 @@ func TestCommitOutcome_Move(t *testing.T) {
 }
 
 // Validates: R-2.3.2
-func TestCommitOutcome_Conflict_AutoResolved(t *testing.T) {
+func TestCommitMutation_Conflict_AutoResolved(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
@@ -1364,7 +1364,7 @@ func TestCommitOutcome_Conflict_AutoResolved(t *testing.T) {
 
 	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
-	outcome := synctypes.Outcome{
+	outcome := BaselineMutation{
 		Action:       synctypes.ActionConflict,
 		Success:      true,
 		Path:         "co-conflict.txt",
@@ -1377,7 +1377,7 @@ func TestCommitOutcome_Conflict_AutoResolved(t *testing.T) {
 		ResolvedBy:   synctypes.ResolvedByAuto,
 	}
 
-	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
+	require.NoError(t, mgr.CommitMutation(ctx, &outcome))
 
 	// Auto-resolved conflict should update baseline.
 	entry, ok := mgr.Baseline().GetByPath("co-conflict.txt")
@@ -1395,7 +1395,7 @@ func TestCommitOutcome_Conflict_AutoResolved(t *testing.T) {
 }
 
 // Validates: R-2.3.2
-func TestCommitOutcome_Conflict_Unresolved(t *testing.T) {
+func TestCommitMutation_Conflict_Unresolved(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
@@ -1403,7 +1403,7 @@ func TestCommitOutcome_Conflict_Unresolved(t *testing.T) {
 
 	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
-	outcome := synctypes.Outcome{
+	outcome := BaselineMutation{
 		Action:       synctypes.ActionConflict,
 		Success:      true,
 		Path:         "co-unresolved.txt",
@@ -1413,7 +1413,7 @@ func TestCommitOutcome_Conflict_Unresolved(t *testing.T) {
 		ConflictType: synctypes.ConflictEditEdit,
 	}
 
-	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
+	require.NoError(t, mgr.CommitMutation(ctx, &outcome))
 
 	// Unresolved conflict should NOT update baseline.
 	_, ok := mgr.Baseline().GetByPath("co-unresolved.txt")
@@ -1421,7 +1421,7 @@ func TestCommitOutcome_Conflict_Unresolved(t *testing.T) {
 }
 
 // Validates: R-2.3.2
-func TestCommitOutcome_EditDeleteConflict_DeletesBaseline(t *testing.T) {
+func TestCommitMutation_EditDeleteConflict_DeletesBaseline(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
@@ -1430,7 +1430,7 @@ func TestCommitOutcome_EditDeleteConflict_DeletesBaseline(t *testing.T) {
 	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
 	// First, create a baseline entry for the file.
-	setupOutcome := synctypes.Outcome{
+	setupOutcome := BaselineMutation{
 		Action:   synctypes.ActionDownload,
 		Success:  true,
 		Path:     "edit-delete-target.txt",
@@ -1438,14 +1438,14 @@ func TestCommitOutcome_EditDeleteConflict_DeletesBaseline(t *testing.T) {
 		ItemID:   "i1",
 		ItemType: synctypes.ItemTypeFile,
 	}
-	require.NoError(t, mgr.CommitOutcome(ctx, &setupOutcome))
+	require.NoError(t, mgr.CommitMutation(ctx, &setupOutcome))
 
 	// Verify baseline entry exists.
 	_, ok := mgr.Baseline().GetByPath("edit-delete-target.txt")
 	require.True(t, ok, "baseline entry should exist after download")
 
 	// Now commit an unresolved edit-delete conflict (B-133).
-	conflictOutcome := synctypes.Outcome{
+	conflictOutcome := BaselineMutation{
 		Action:       synctypes.ActionConflict,
 		Success:      true,
 		Path:         "edit-delete-target.txt",
@@ -1456,7 +1456,7 @@ func TestCommitOutcome_EditDeleteConflict_DeletesBaseline(t *testing.T) {
 		LocalHash:    "modified-hash",
 		RemoteHash:   "baseline-remote-hash",
 	}
-	require.NoError(t, mgr.CommitOutcome(ctx, &conflictOutcome))
+	require.NoError(t, mgr.CommitMutation(ctx, &conflictOutcome))
 
 	// Baseline entry should be deleted — the original file was renamed to conflict copy.
 	_, ok = mgr.Baseline().GetByPath("edit-delete-target.txt")
@@ -1474,19 +1474,19 @@ func TestCommitOutcome_EditDeleteConflict_DeletesBaseline(t *testing.T) {
 }
 
 // Validates: R-2.2
-func TestCommitOutcome_SkipsFailedOutcome(t *testing.T) {
+func TestCommitMutation_SkipsFailedOutcome(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	outcome := synctypes.Outcome{
+	outcome := BaselineMutation{
 		Action:  synctypes.ActionDownload,
 		Success: false,
 		Path:    "should-not-exist.txt",
 	}
 
-	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
+	require.NoError(t, mgr.CommitMutation(ctx, &outcome))
 
 	if mgr.Baseline() != nil {
 		_, ok := mgr.Baseline().GetByPath("should-not-exist.txt")
@@ -1495,13 +1495,13 @@ func TestCommitOutcome_SkipsFailedOutcome(t *testing.T) {
 }
 
 // Validates: R-2.2
-func TestCommitOutcome_UnknownAction_ReturnsErrorAndSkipsDBWrite(t *testing.T) {
+func TestCommitMutation_UnknownAction_ReturnsErrorAndSkipsDBWrite(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	err := mgr.CommitOutcome(ctx, &synctypes.Outcome{
+	err := mgr.CommitMutation(ctx, &BaselineMutation{
 		Action:   synctypes.ActionType(999),
 		Success:  true,
 		Path:     "unknown.txt",
@@ -1528,7 +1528,7 @@ func TestUpdateBaselineCache_UnknownActionReloadsFromDB(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	seed := synctypes.Outcome{
+	seed := BaselineMutation{
 		Action:          synctypes.ActionDownload,
 		Success:         true,
 		Path:            "cached.txt",
@@ -1542,13 +1542,13 @@ func TestUpdateBaselineCache_UnknownActionReloadsFromDB(t *testing.T) {
 		RemoteSize:      42,
 		RemoteSizeKnown: true,
 	}
-	require.NoError(t, mgr.CommitOutcome(ctx, &seed))
+	require.NoError(t, mgr.CommitMutation(ctx, &seed))
 
 	mgr.Baseline().Delete("cached.txt")
 	_, ok := mgr.Baseline().GetByPath("cached.txt")
 	require.False(t, ok, "test setup should corrupt the cache before reload")
 
-	err := mgr.updateBaselineCache(ctx, &synctypes.Outcome{
+	err := mgr.updateBaselineCache(ctx, &BaselineMutation{
 		Action: synctypes.ActionType(999),
 		Path:   "ignored.txt",
 	}, time.Now().UnixNano())
@@ -1560,7 +1560,7 @@ func TestUpdateBaselineCache_UnknownActionReloadsFromDB(t *testing.T) {
 }
 
 // Validates: R-2.2
-func TestCommitOutcome_FolderCreate(t *testing.T) {
+func TestCommitMutation_FolderCreate(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
@@ -1568,7 +1568,7 @@ func TestCommitOutcome_FolderCreate(t *testing.T) {
 
 	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
-	outcome := synctypes.Outcome{
+	outcome := BaselineMutation{
 		Action:   synctypes.ActionFolderCreate,
 		Success:  true,
 		Path:     "Documents/Reports",
@@ -1578,7 +1578,7 @@ func TestCommitOutcome_FolderCreate(t *testing.T) {
 		ItemType: synctypes.ItemTypeFolder,
 	}
 
-	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
+	require.NoError(t, mgr.CommitMutation(ctx, &outcome))
 
 	entry, ok := mgr.Baseline().GetByPath("Documents/Reports")
 	require.True(t, ok, "folder entry not found")
@@ -1587,11 +1587,11 @@ func TestCommitOutcome_FolderCreate(t *testing.T) {
 }
 
 // Validates: R-2.2
-// TestCommitOutcome_Upload_NewItemID_SamePath verifies that when an upload
+// TestCommitMutation_Upload_NewItemID_SamePath verifies that when an upload
 // outcome has a different item_id than the existing baseline entry at the same
 // path (e.g., server-side delete+recreate assigns new ID), the stale row is
 // replaced and no UNIQUE constraint violation occurs.
-func TestCommitOutcome_Upload_NewItemID_SamePath(t *testing.T) {
+func TestCommitMutation_Upload_NewItemID_SamePath(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
@@ -1600,7 +1600,7 @@ func TestCommitOutcome_Upload_NewItemID_SamePath(t *testing.T) {
 	driveID := driveid.New("d1")
 
 	// Seed baseline with item_id "old-id" at path "file.txt".
-	seedOutcome := synctypes.Outcome{
+	seedOutcome := BaselineMutation{
 		Action:          synctypes.ActionDownload,
 		Success:         true,
 		Path:            "file.txt",
@@ -1614,10 +1614,10 @@ func TestCommitOutcome_Upload_NewItemID_SamePath(t *testing.T) {
 		RemoteSize:      100,
 		RemoteSizeKnown: true,
 	}
-	require.NoError(t, mgr.CommitOutcome(ctx, &seedOutcome))
+	require.NoError(t, mgr.CommitMutation(ctx, &seedOutcome))
 
 	// Upload outcome with different item_id for the same path.
-	uploadOutcome := synctypes.Outcome{
+	uploadOutcome := BaselineMutation{
 		Action:          synctypes.ActionUpload,
 		Success:         true,
 		Path:            "file.txt",
@@ -1631,7 +1631,7 @@ func TestCommitOutcome_Upload_NewItemID_SamePath(t *testing.T) {
 		RemoteSize:      200,
 		RemoteSizeKnown: true,
 	}
-	require.NoError(t, mgr.CommitOutcome(ctx, &uploadOutcome))
+	require.NoError(t, mgr.CommitMutation(ctx, &uploadOutcome))
 
 	// Verify the entry now has the new item_id.
 	entry, ok := mgr.Baseline().GetByPath("file.txt")
@@ -1756,12 +1756,12 @@ func TestCommitDeltaToken_CompositeKey_UpdatePreservesOtherScopes(t *testing.T) 
 func TestBaseline_GetByPath(t *testing.T) {
 	t.Parallel()
 
-	b := &synctypes.Baseline{
-		ByPath: map[string]*synctypes.BaselineEntry{
+	b := &Baseline{
+		ByPath: map[string]*BaselineEntry{
 			"docs/readme.md": {Path: "docs/readme.md", ItemID: "item1", DriveID: driveid.New("d1")},
 		},
-		ByID:       make(map[driveid.ItemKey]*synctypes.BaselineEntry),
-		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),
+		ByID:       make(map[driveid.ItemKey]*BaselineEntry),
+		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
 	entry, ok := b.GetByPath("docs/readme.md")
@@ -1778,12 +1778,12 @@ func TestBaseline_GetByID(t *testing.T) {
 
 	driveID := driveid.New("d1")
 	key := driveid.NewItemKey(driveID, "item1")
-	entry := &synctypes.BaselineEntry{Path: "test.txt", ItemID: "item1", DriveID: driveID}
+	entry := &BaselineEntry{Path: "test.txt", ItemID: "item1", DriveID: driveID}
 
-	b := &synctypes.Baseline{
-		ByPath:     make(map[string]*synctypes.BaselineEntry),
-		ByID:       map[driveid.ItemKey]*synctypes.BaselineEntry{key: entry},
-		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),
+	b := &Baseline{
+		ByPath:     make(map[string]*BaselineEntry),
+		ByID:       map[driveid.ItemKey]*BaselineEntry{key: entry},
+		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
 	got, ok := b.GetByID(key)
@@ -1799,13 +1799,13 @@ func TestBaseline_GetByID(t *testing.T) {
 func TestBaseline_Put(t *testing.T) {
 	t.Parallel()
 
-	b := &synctypes.Baseline{
-		ByPath:     make(map[string]*synctypes.BaselineEntry),
-		ByID:       make(map[driveid.ItemKey]*synctypes.BaselineEntry),
-		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),
+	b := &Baseline{
+		ByPath:     make(map[string]*BaselineEntry),
+		ByID:       make(map[driveid.ItemKey]*BaselineEntry),
+		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
-	entry := &synctypes.BaselineEntry{
+	entry := &BaselineEntry{
 		Path:    "new/file.txt",
 		DriveID: driveid.New("d1"),
 		ItemID:  "item-new",
@@ -1830,17 +1830,17 @@ func TestBaseline_Put_ReplacesStaleID(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New("d1")
-	oldEntry := &synctypes.BaselineEntry{Path: "file.txt", DriveID: driveID, ItemID: "old-id"}
+	oldEntry := &BaselineEntry{Path: "file.txt", DriveID: driveID, ItemID: "old-id"}
 	oldKey := driveid.NewItemKey(driveID, "old-id")
 
-	b := &synctypes.Baseline{
-		ByPath:     map[string]*synctypes.BaselineEntry{"file.txt": oldEntry},
-		ByID:       map[driveid.ItemKey]*synctypes.BaselineEntry{oldKey: oldEntry},
-		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),
+	b := &Baseline{
+		ByPath:     map[string]*BaselineEntry{"file.txt": oldEntry},
+		ByID:       map[driveid.ItemKey]*BaselineEntry{oldKey: oldEntry},
+		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
 	// Put a new entry at the same path but different item_id.
-	newEntry := &synctypes.BaselineEntry{Path: "file.txt", DriveID: driveID, ItemID: "new-id"}
+	newEntry := &BaselineEntry{Path: "file.txt", DriveID: driveID, ItemID: "new-id"}
 	b.Put(newEntry)
 
 	// New entry should be accessible by path and new ID.
@@ -1865,13 +1865,13 @@ func TestBaseline_Delete(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New("d1")
-	entry := &synctypes.BaselineEntry{Path: "delete-me.txt", DriveID: driveID, ItemID: "item-del"}
+	entry := &BaselineEntry{Path: "delete-me.txt", DriveID: driveID, ItemID: "item-del"}
 	key := driveid.NewItemKey(driveID, "item-del")
 
-	b := &synctypes.Baseline{
-		ByPath:     map[string]*synctypes.BaselineEntry{"delete-me.txt": entry},
-		ByID:       map[driveid.ItemKey]*synctypes.BaselineEntry{key: entry},
-		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),
+	b := &Baseline{
+		ByPath:     map[string]*BaselineEntry{"delete-me.txt": entry},
+		ByID:       map[driveid.ItemKey]*BaselineEntry{key: entry},
+		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
 	b.Delete("delete-me.txt")
@@ -1890,13 +1890,13 @@ func TestBaseline_Delete(t *testing.T) {
 func TestBaseline_Len(t *testing.T) {
 	t.Parallel()
 
-	b := &synctypes.Baseline{
-		ByPath: map[string]*synctypes.BaselineEntry{
+	b := &Baseline{
+		ByPath: map[string]*BaselineEntry{
 			"a.txt": {Path: "a.txt"},
 			"b.txt": {Path: "b.txt"},
 		},
-		ByID:       make(map[driveid.ItemKey]*synctypes.BaselineEntry),
-		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),
+		ByID:       make(map[driveid.ItemKey]*BaselineEntry),
+		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
 	assert.Equal(t, 2, b.Len())
@@ -1906,17 +1906,17 @@ func TestBaseline_Len(t *testing.T) {
 func TestBaseline_ForEachPath(t *testing.T) {
 	t.Parallel()
 
-	b := &synctypes.Baseline{
-		ByPath: map[string]*synctypes.BaselineEntry{
+	b := &Baseline{
+		ByPath: map[string]*BaselineEntry{
 			"a.txt": {Path: "a.txt", ItemID: "i1"},
 			"b.txt": {Path: "b.txt", ItemID: "i2"},
 		},
-		ByID:       make(map[driveid.ItemKey]*synctypes.BaselineEntry),
-		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),
+		ByID:       make(map[driveid.ItemKey]*BaselineEntry),
+		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
 	paths := make(map[string]bool)
-	b.ForEachPath(func(path string, entry *synctypes.BaselineEntry) {
+	b.ForEachPath(func(path string, entry *BaselineEntry) {
 		paths[path] = true
 	})
 
@@ -1929,15 +1929,15 @@ func TestBaseline_ForEachPath(t *testing.T) {
 func TestBaseline_ConcurrentAccess(t *testing.T) {
 	t.Parallel()
 
-	b := &synctypes.Baseline{
-		ByPath:     make(map[string]*synctypes.BaselineEntry),
-		ByID:       make(map[driveid.ItemKey]*synctypes.BaselineEntry),
-		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),
+	b := &Baseline{
+		ByPath:     make(map[string]*BaselineEntry),
+		ByID:       make(map[driveid.ItemKey]*BaselineEntry),
+		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
 	// Seed some entries.
 	for i := range 100 {
-		entry := &synctypes.BaselineEntry{
+		entry := &BaselineEntry{
 			Path:    fmt.Sprintf("file%03d.txt", i),
 			DriveID: driveid.New("d1"),
 			ItemID:  fmt.Sprintf("item-%03d", i),
@@ -1964,7 +1964,7 @@ func TestBaseline_ConcurrentAccess(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			entry := &synctypes.BaselineEntry{
+			entry := &BaselineEntry{
 				Path:    fmt.Sprintf("concurrent%d.txt", i),
 				DriveID: driveid.New("d1"),
 				ItemID:  fmt.Sprintf("concurrent-item-%d", i),
@@ -1978,7 +1978,7 @@ func TestBaseline_ConcurrentAccess(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			b.ForEachPath(func(_ string, _ *synctypes.BaselineEntry) {})
+			b.ForEachPath(func(_ string, _ *BaselineEntry) {})
 		}()
 	}
 
@@ -1999,7 +1999,7 @@ func TestConflictRecord_NameField(t *testing.T) {
 	require.NoError(t, err)
 
 	// Insert a conflict with a nested path.
-	outcome := &synctypes.Outcome{
+	outcome := &BaselineMutation{
 		Action:       synctypes.ActionConflict,
 		Success:      true,
 		Path:         "docs/notes/readme.md",
@@ -2012,7 +2012,7 @@ func TestConflictRecord_NameField(t *testing.T) {
 		RemoteMtime:  200,
 	}
 
-	require.NoError(t, mgr.CommitOutcome(ctx, outcome))
+	require.NoError(t, mgr.CommitMutation(ctx, outcome))
 
 	// Verify via ListConflicts.
 	conflicts, err := mgr.ListConflicts(ctx)
@@ -2039,7 +2039,7 @@ func setupPruneTestConflicts(t *testing.T, mgr *SyncStore, ctx context.Context, 
 
 	mgr.SetNowFunc(func() time.Time { return now.AddDate(0, 0, -120) })
 
-	require.NoError(t, mgr.CommitOutcome(ctx, &synctypes.Outcome{
+	require.NoError(t, mgr.CommitMutation(ctx, &BaselineMutation{
 		Action: synctypes.ActionConflict, Success: true,
 		Path: "old-resolved.txt", DriveID: driveid.New(testDriveID),
 		ItemID: "item-old", ConflictType: synctypes.ConflictEditEdit,
@@ -2056,7 +2056,7 @@ func setupPruneTestConflicts(t *testing.T, mgr *SyncStore, ctx context.Context, 
 
 	mgr.SetNowFunc(func() time.Time { return now.AddDate(0, 0, -10) })
 
-	require.NoError(t, mgr.CommitOutcome(ctx, &synctypes.Outcome{
+	require.NoError(t, mgr.CommitMutation(ctx, &BaselineMutation{
 		Action: synctypes.ActionConflict, Success: true,
 		Path: "new-resolved.txt", DriveID: driveid.New(testDriveID),
 		ItemID: "item-new", ConflictType: synctypes.ConflictEditEdit,
@@ -2078,7 +2078,7 @@ func setupPruneTestConflicts(t *testing.T, mgr *SyncStore, ctx context.Context, 
 
 	mgr.SetNowFunc(func() time.Time { return now.AddDate(0, 0, -120) })
 
-	require.NoError(t, mgr.CommitOutcome(ctx, &synctypes.Outcome{
+	require.NoError(t, mgr.CommitMutation(ctx, &BaselineMutation{
 		Action: synctypes.ActionConflict, Success: true,
 		Path: "unresolved.txt", DriveID: driveid.New(testDriveID),
 		ItemID: "item-unresolved", ConflictType: synctypes.ConflictEditEdit,
@@ -2136,8 +2136,8 @@ func TestCheckCacheConsistency(t *testing.T) {
 	_, err := mgr.Load(ctx)
 	require.NoError(t, err)
 
-	// Insert a baseline entry via CommitOutcome.
-	require.NoError(t, mgr.CommitOutcome(ctx, &synctypes.Outcome{
+	// Insert a baseline entry via CommitMutation.
+	require.NoError(t, mgr.CommitMutation(ctx, &BaselineMutation{
 		Action: synctypes.ActionDownload, Success: true,
 		Path: "consistency-check.txt", DriveID: driveid.New(testDriveID),
 		ItemID: "item-cc", ParentID: "root", ItemType: synctypes.ItemTypeFile,
@@ -2270,7 +2270,7 @@ func TestWriteSyncMetadata_RoundTrip(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	report := &synctypes.SyncReport{
+	report := &SyncMetadata{
 		Duration:  1500 * time.Millisecond,
 		Succeeded: 42,
 		Failed:    3,
@@ -2295,10 +2295,10 @@ func TestWriteSyncMetadata_Upsert(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	report1 := &synctypes.SyncReport{Duration: 1 * time.Second, Succeeded: 10}
+	report1 := &SyncMetadata{Duration: 1 * time.Second, Succeeded: 10}
 	require.NoError(t, mgr.WriteSyncMetadata(ctx, report1))
 
-	report2 := &synctypes.SyncReport{Duration: 2 * time.Second, Succeeded: 20}
+	report2 := &SyncMetadata{Duration: 2 * time.Second, Succeeded: 20}
 	require.NoError(t, mgr.WriteSyncMetadata(ctx, report2))
 
 	meta, err := mgr.ReadSyncMetadata(ctx)
@@ -2314,7 +2314,7 @@ func TestWriteSyncMetadata_NoErrors(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	report := &synctypes.SyncReport{Duration: 500 * time.Millisecond, Succeeded: 5}
+	report := &SyncMetadata{Duration: 500 * time.Millisecond, Succeeded: 5}
 	require.NoError(t, mgr.WriteSyncMetadata(ctx, report))
 
 	meta, err := mgr.ReadSyncMetadata(ctx)
@@ -2369,7 +2369,7 @@ func TestBaselineEntryCount_WithEntries(t *testing.T) {
 	ctx := t.Context()
 
 	// Commit a download outcome to add a baseline entry.
-	outcome := synctypes.Outcome{
+	outcome := BaselineMutation{
 		Action:          synctypes.ActionDownload,
 		Success:         true,
 		Path:            "/test/file.txt",
@@ -2385,7 +2385,7 @@ func TestBaselineEntryCount_WithEntries(t *testing.T) {
 		LocalMtime:      time.Now().UnixNano(),
 		RemoteMtime:     time.Now().UnixNano(),
 	}
-	require.NoError(t, mgr.CommitOutcome(ctx, &outcome))
+	require.NoError(t, mgr.CommitMutation(ctx, &outcome))
 
 	count, err := mgr.BaselineEntryCount(ctx)
 	require.NoError(t, err)

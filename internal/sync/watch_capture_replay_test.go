@@ -15,7 +15,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/devtool"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 type replayTrackingWatcher struct {
@@ -73,7 +72,7 @@ type replayOutcome struct {
 	observer     *LocalObserver
 	watcher      *replayTrackingWatcher
 	scopeChanges []syncscope.Change
-	events       []synctypes.ChangeEvent
+	events       []ChangeEvent
 }
 
 type watchCaptureFixtureVariant struct {
@@ -111,7 +110,7 @@ func replayWatchCaptureScenarioVariants(
 		require.NoError(t, observer.AddWatchesRecursive(t.Context(), watcher, tree))
 		initialGeneration := observer.currentScopeGeneration()
 
-		eventsCh := make(chan synctypes.ChangeEvent, 64)
+		eventsCh := make(chan ChangeEvent, 64)
 		for _, stepName := range scenario.StepNames() {
 			require.NoError(t, scenario.RunStep(root, stepName))
 
@@ -202,8 +201,8 @@ func drainScopeChanges(ch <-chan syncscope.Change) []syncscope.Change {
 	}
 }
 
-func drainReplayEvents(ch <-chan synctypes.ChangeEvent) []synctypes.ChangeEvent {
-	events := make([]synctypes.ChangeEvent, 0)
+func drainReplayEvents(ch <-chan ChangeEvent) []ChangeEvent {
+	events := make([]ChangeEvent, 0)
 	for {
 		select {
 		case event := <-ch:

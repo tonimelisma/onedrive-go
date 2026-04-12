@@ -8,7 +8,7 @@ Implements: R-1 [implemented], R-3.1 [verified], R-3.7 [verified], R-4.7 [verifi
 
 The root package is a thin process entrypoint. The Cobra command tree, CLI bootstrap, output formatting, and command handlers live in `internal/cli`.
 
-`internal/cli/root.go` handles global flags (`--config`, `--drive`, `--verbose`, `--quiet`, `--debug`, `--json`), config loading via `PersistentPreRunE`, and drive filtering or drive resolution as appropriate for the command. Cobra `RunE` functions are intentionally thin: they parse command-local flags and delegate to service-layer collaborators (`authService`, `driveService`, `statusService`, `syncControlService`, `recycleBinService`, `syncService`, plus the dedicated services behind `resolve` and `recover`). `internal/cli/sync.go` stays in the same package because multi-drive sync reuses the same Phase 1 CLI context but performs its own multi-drive resolution.
+`internal/cli/root.go` handles global flags (`--config`, `--drive`, `--verbose`, `--quiet`, `--debug`, `--json`), config loading via `PersistentPreRunE`, and drive filtering or drive resolution as appropriate for the command. Cobra `RunE` functions are intentionally thin: they parse command-local flags and delegate to command-family helper functions that take `*CLIContext` plus explicit inputs. `internal/cli/sync.go` stays in the same package because multi-drive sync reuses the same Phase 1 CLI context but performs its own multi-drive resolution.
 Sync-specific report rendering and watch bootstrap helpers stay in the same package, but they live outside the Cobra wiring file so `internal/cli/sync.go` remains focused on command construction, flag parsing, and multi-drive resolution.
 
 `internal/cli` is also the composition root for Graph-facing HTTP runtime
@@ -29,7 +29,7 @@ This keeps human/JSON command results separate from progress/status messages and
 - Owns: Cobra command wiring, CLI bootstrap, signal handling, control-socket client routing, output formatting, user-facing reason/action text for failures and issues, and dependency composition for Graph-facing HTTP profiles.
 - Does Not Own: Graph wire behavior, config semantics, sync planning/execution policy, or durable sync-state mutation rules.
 - Source of Truth: `CLIContext`, parsed flags/args, and the domain results returned by lower layers.
-- Allowed Side Effects: stdout/stderr output, log-file creation, signal handling, control-socket RPCs, durable user-intent writes when no daemon is running, and calls into service packages.
+- Allowed Side Effects: stdout/stderr output, log-file creation, signal handling, control-socket RPCs, durable user-intent writes when no daemon is running, and calls into CLI-owned helper families plus lower-layer packages.
 - Mutable Runtime Owner: Each command invocation owns its own runtime state. `internal/cli` keeps no package-level mutable state and relies on lower layers for long-lived watch ownership.
 - Error Boundary: The CLI turns lower-layer results into exit behavior plus human-readable reason/action text. It consumes the domain model from [error-model.md](error-model.md) instead of inventing a second classification scheme.
 
@@ -62,13 +62,13 @@ Implements: R-6.2.8 [verified], R-1.3.6 [verified], R-1.5.2 [verified], R-1.7.2 
 | `cp` | `cp.go` | Server-side async copy with polling |
 | `stat` | `stat.go` | Display item metadata |
 | `sync` | `sync.go` | Multi-drive sync command (see [sync-control-plane.md](sync-control-plane.md)) |
-| `pause`, `resume` | `pause.go`, `resume.go` | Pause/resume sync through `syncControlService`. `resume` also cleans up stale config keys from expired timed pauses (paused=true + past paused_until). |
+| `pause`, `resume` | `pause.go`, `resume.go` | Pause/resume sync through CLI-owned config-mutation helpers. `resume` also cleans up stale config keys from expired timed pauses (paused=true + past paused_until). |
 | `status` | `status.go` | Display account/drive status. It always renders the same per-drive sync-health contract for the displayed drives, and `--drive` only filters which drives are shown. |
 | `perf` | `perf.go` | Inspect live sync-owner performance and capture an explicit local profile bundle through the control socket. |
 | `resolve` | `resolve.go` | Record durable user decisions for held deletes and conflicts (`resolve deletes`, `resolve local|remote|both`, optional `--all`) |
 | `recover` | `recover.go` | Repair, rebuild, or reset the selected drive's sync database after explicit confirmation |
 | `drive` | `drive.go` | Drive management (list/add/remove/search) |
-| `recycle-bin` | `recycle_bin.go` | Recycle bin operations (list/restore/empty) via `recycleBinService` |
+| `recycle-bin` | `recycle_bin.go` | Recycle bin operations (list/restore/empty) via recycle-bin helper functions |
 
 For metadata-changing file commands that return a single destination path,
 success means more than "Graph accepted the mutation." `mkdir`, single-file
@@ -114,7 +114,7 @@ vocabulary and copy:
 - reasons: `missing_login`, `invalid_saved_login`, `sync_auth_rejected`
 - shared title/reason/action text for CLI auth surfaces and `IssueUnauthorized`
 
-`accountReadModelService` builds one offline account catalog from configured drives,
+Shared account read-model helpers build one offline account catalog from configured drives,
 discovered account profiles, discovered token files, and persisted
 `auth:account` scope presence. `status`, `whoami`, `drive list`, `drive search`,
 and `shared` all read from that same catalog so account discovery and auth
@@ -146,7 +146,7 @@ durable state when the email changed. Trigger points are:
 
 - `login` after account discovery
 - `whoami` authenticated account lookup
-- `accountReadModelService` best-effort account-catalog refresh for `drive list`,
+- shared account read-model helper best-effort account-catalog refresh for `drive list`,
   `drive search`, `shared`, and name-based `drive add`
 - shared-target account bootstrap before resolving share URLs/items
 - ordinary file-command `CLIContext.Session()` bootstrap
@@ -376,30 +376,21 @@ Implements: R-6.6.14 [verified], R-6.6.15 [verified], R-6.6.16 [verified]
 
 - Config flows through Cobra context (`CLIContext` stored via `context.WithValue` with unexported key type). No global flag variables.
 - Two-phase `PersistentPreRunE`: Phase 1 (all commands) reads flags + creates logger. Phase 2 (data commands only) loads config + resolves drive. Commands skip Phase 2 via `skipConfigAnnotation` in `Annotations`.
-- Command handlers are wiring only. Command-family services own the runtime behavior:
-  - `authService`: login/logout/whoami flows
-  - `driveService`: drive list/add/remove/search flows
-  - `resolveService`: held-delete approval and conflict request routing
-  - `sharedService`: shared-item discovery and auth-required projection
-  - `statusService`: account/drive status aggregation, lenient config warning handling, offline auth-health projection, and read-only sync-state inspection
-  - `syncControlService`: pause/resume config mutation flows
-  - `recycleBinService`: recycle-bin list/restore/empty flows
-  - `syncService`: multi-drive sync command assembly
-  - `recoverService`: sync-database recovery flow
-- `accountReadModelService` is the shared read-model collaborator under `statusService`, `authService`, `driveService`, and `sharedService`. It owns lenient config loading, warning logging, offline account/auth projection, the best-effort account-identity refresh used before read-model-backed live discovery commands build their catalogs, and the typed drive-list discovery snapshot (`configured`, `available`, `accounts_requiring_auth`, `accounts_degraded`) that `driveService` renders.
-- `sharedDiscoveryService` is the CLI-owned live-discovery collaborator for shared items. It owns live search, target normalization, enrichment, deduplication, and auth-vs-degraded classification for `shared`, the shared-folder portion of `drive list`, and name-based `drive add`. It consumes whatever refreshed account-catalog slice the caller passes; caller-owned account filtering stays outside this core so `drive list` can remain inventory-consistent while `shared` and name-based `drive add` still honor `--account`. Per-account discovery tries all available token IDs before surfacing auth-required or degraded output. It does not perform its own `/me` reconciliation pass.
+- Command handlers are wiring only. Command-family helpers own the runtime behavior around `CLIContext`: auth helpers handle login/logout/whoami flows, drive helpers handle list/add/remove/search, resolve helpers own held-delete approval and conflict-request routing, shared/read-model helpers own discovery and auth-required projection, status helpers own account/drive aggregation plus read-only sync-state inspection, sync-control helpers own pause/resume config mutation, recycle-bin helpers own list/restore/empty flows, sync helpers own multi-drive command assembly, and recover helpers own sync-database recovery.
+- Shared account read-model helpers own lenient config loading, warning logging, offline account/auth projection, the best-effort account-identity refresh used before read-model-backed live discovery commands build their catalogs, and the typed drive-list discovery snapshot (`configured`, `available`, `accounts_requiring_auth`, `accounts_degraded`) that drive helpers render.
+- Shared discovery helpers are the CLI-owned live-discovery boundary for shared items. They own live search, target normalization, enrichment, deduplication, and auth-vs-degraded classification for `shared`, the shared-folder portion of `drive list`, and name-based `drive add`. They consume whatever refreshed account-catalog slice the caller passes; caller-owned account filtering stays outside this core so `drive list` can remain inventory-consistent while `shared` and name-based `drive add` still honor `--account`. Per-account discovery tries all available token IDs before surfacing auth-required or degraded output. It does not perform its own `/me` reconciliation pass.
 - `SessionProvider` caches `TokenSource`s by token file path — multiple drives sharing an account share one `TokenSource`, preventing OAuth2 refresh token rotation races.
 - `CLIContext` owns one `graphhttp.Provider` per command/watch runtime. Bootstrap/auth-discovery flows use `BootstrapMeta()`. Once both account and remote target identity are known, CLI passes target-scoped interactive client resolvers into `driveops.SessionProvider`: configured drives key by drive ID, configured shared roots key by remote root item, and direct shared-item commands key by `(remoteDriveID, remoteItemID)`. Sync paths request `Sync()` profiles instead. HTTP policy constants and client reuse live in `internal/graphhttp`, not `internal/cli`.
 - `CLIContext` is the sole owner of command-scoped log-file closers. When sync bootstrap rebuilds the logger from the raw logging config, it swaps the active logger through the CLI context, closes the old closer before installing the replacement, and relies on the top-level `mainWithWriters` runner to close the final active closer exactly once after `Execute()` returns. This top-level cleanup is intentionally outside Cobra post-run hooks so command-log shutdown still happens when a leaf command exits early with an error.
 - `CLIContext` is also the sole owner of command-scoped perf sessions. The top-level `mainWithWriters` runner completes the active session after `Execute()` returns so final perf summaries still emit when Cobra returns an error.
 - CLI handlers use `cmd.Context()` for signal propagation. Exception: upload session cancel paths use `context.Background()` because the cancel must succeed even when the original context is done.
-- Production command code writes primary output through `CLIContext.OutputWriter`, and status/warning/error text through the CLI-owned status writer boundary instead of raw process-global stdout/stderr. This keeps command output injectable in tests and prevents hidden process-global output dependencies from creeping back into services, bootstrap warnings, or sync-daemon cleanup.
+- Production command code writes primary output through `CLIContext.OutputWriter`, and status/warning/error text through the CLI-owned status writer boundary instead of raw process-global stdout/stderr. This keeps command output injectable in tests and prevents hidden process-global output dependencies from creeping back into helpers, bootstrap warnings, or sync-daemon cleanup.
 - `go run ./cmd/devtool verify` enforces that production `internal/cli` files do not call `fmt.Print*`, `fmt.Fprint*(os.Stdout|os.Stderr, ...)`, or direct `os.Stdout` / `os.Stderr` writer methods. The only allowed process-global output boundary is the tiny process entrypoint outside `internal/cli`.
 - Browser auth URLs are validated against loopback or Microsoft auth hosts before launching the platform browser command. Validation and launch failures must not echo the full auth URL or any query tokens. The remaining inline `gosec` suppression on the `exec.CommandContext` call is intentional: the command comes from a fixed allowlist, but the linter cannot prove that through the helper boundary.
 - Control-socket probing and log file opens use resolved paths from the CLI/config layer; the socket itself is owned by `internal/multisync`.
 - If the configured log file cannot be opened, CLI bootstrap warns through the CLI status writer and falls back to console-only logging instead of failing the command before any user-facing work can run.
-- Direct `runSync` and service-level tests cover caller-visible failure paths such as config-load errors, all-drives-paused/no-drives guidance, and log-file-open fallback warnings through the injected status/output writers rather than process-global stderr assumptions.
-- The status command uses a testable service layer with narrowed interfaces (`accountMetaReader`, `accountAuthChecker`, `syncStateQuerier`), decoupling status aggregation from Cobra wiring. `status` uses the same store-owned per-drive read-helper wrapper for every displayed drive. CLI code does not open writable SQLite paths for read-only sync-state views.
+- Direct `runSync` and helper-level tests cover caller-visible failure paths such as config-load errors, all-drives-paused/no-drives guidance, and log-file-open fallback warnings through the injected status/output writers rather than process-global stderr assumptions.
+- The status command uses testable helper seams with narrowed interfaces (`accountMetaReader`, `accountAuthChecker`, `syncStateQuerier`), decoupling status aggregation from Cobra wiring. `status` uses the same store-owned per-drive read-helper wrapper for every displayed drive. CLI code does not open writable SQLite paths for read-only sync-state views.
 - Offline auth-health projection uses `syncstore.HasScopeBlockAtPath` for
   persisted `auth:account` checks, so read-only CLI account discovery no
   longer pays the writable-store checkpoint/close path.

@@ -11,7 +11,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // ---------------------------------------------------------------------------
@@ -24,8 +23,8 @@ func TestDepGraph_Add_NoDeps(t *testing.T) {
 
 	dg := NewDepGraph(synctest.TestLogger(t))
 
-	ta := dg.Add(&synctypes.Action{
-		Type: synctypes.ActionFolderCreate, Path: "dir",
+	ta := dg.Add(&Action{
+		Type: ActionFolderCreate, Path: "dir",
 		DriveID: driveid.New("d"), ItemID: "i1",
 	}, 1, nil)
 
@@ -44,15 +43,15 @@ func TestDepGraph_Add_WithDeps(t *testing.T) {
 	dg := NewDepGraph(synctest.TestLogger(t))
 
 	// Action 1: no deps — should be returned as ready.
-	ta1 := dg.Add(&synctypes.Action{
-		Type: synctypes.ActionFolderCreate, Path: "parent",
+	ta1 := dg.Add(&Action{
+		Type: ActionFolderCreate, Path: "parent",
 		DriveID: driveid.New("d"), ItemID: "i1",
 	}, 1, nil)
 	require.NotNil(t, ta1, "action 1 with no deps should be immediately ready")
 
 	// Action 2: depends on action 1 — should NOT be returned (waiting).
-	ta2 := dg.Add(&synctypes.Action{
-		Type: synctypes.ActionDownload, Path: "parent/child.txt",
+	ta2 := dg.Add(&Action{
+		Type: ActionDownload, Path: "parent/child.txt",
 		DriveID: driveid.New("d"), ItemID: "i2",
 	}, 2, []int64{1})
 	assert.Nil(t, ta2, "action 2 with unsatisfied dep should not be immediately ready")
@@ -69,20 +68,20 @@ func TestDepGraph_Complete_ReturnsDependents(t *testing.T) {
 	dg := NewDepGraph(synctest.TestLogger(t))
 
 	// Action 1: no deps.
-	dg.Add(&synctypes.Action{
-		Type: synctypes.ActionFolderCreate, Path: "parent",
+	dg.Add(&Action{
+		Type: ActionFolderCreate, Path: "parent",
 		DriveID: driveid.New("d"), ItemID: "i1",
 	}, 1, nil)
 
 	// Action 2: depends on action 1.
-	dg.Add(&synctypes.Action{
-		Type: synctypes.ActionDownload, Path: "parent/child.txt",
+	dg.Add(&Action{
+		Type: ActionDownload, Path: "parent/child.txt",
 		DriveID: driveid.New("d"), ItemID: "i2",
 	}, 2, []int64{1})
 
 	// Action 3: also depends on action 1.
-	dg.Add(&synctypes.Action{
-		Type: synctypes.ActionDownload, Path: "parent/other.txt",
+	dg.Add(&Action{
+		Type: ActionDownload, Path: "parent/other.txt",
 		DriveID: driveid.New("d"), ItemID: "i3",
 	}, 3, []int64{1})
 
@@ -109,8 +108,8 @@ func TestDepGraph_Complete_DeletesFromActions(t *testing.T) {
 
 	dg := NewDepGraph(synctest.TestLogger(t))
 
-	dg.Add(&synctypes.Action{
-		Type: synctypes.ActionFolderCreate, Path: "dir",
+	dg.Add(&Action{
+		Type: ActionFolderCreate, Path: "dir",
 		DriveID: driveid.New("d"), ItemID: "i1",
 	}, 1, nil)
 
@@ -124,8 +123,8 @@ func TestDepGraph_Complete_DeletesFromActions(t *testing.T) {
 
 	// A new action depending on the completed ID should treat it as
 	// satisfied (dep not found in actions → skip → depsLeft stays 0).
-	ta := dg.Add(&synctypes.Action{
-		Type: synctypes.ActionDownload, Path: "dir/file.txt",
+	ta := dg.Add(&Action{
+		Type: ActionDownload, Path: "dir/file.txt",
 		DriveID: driveid.New("d"), ItemID: "i2",
 	}, 2, []int64{1})
 
@@ -144,8 +143,8 @@ func TestDepGraph_Complete_UnknownID(t *testing.T) {
 	dg := NewDepGraph(synctest.TestLogger(t))
 
 	// Add one real action.
-	dg.Add(&synctypes.Action{
-		Type: synctypes.ActionFolderCreate, Path: "real",
+	dg.Add(&Action{
+		Type: ActionFolderCreate, Path: "real",
 		DriveID: driveid.New("d"), ItemID: "i1",
 	}, 1, nil)
 
@@ -177,8 +176,8 @@ func TestDepGraph_Complete_CleansByPath(t *testing.T) {
 
 	dg := NewDepGraph(synctest.TestLogger(t))
 
-	dg.Add(&synctypes.Action{
-		Type: synctypes.ActionDownload, Path: "file.txt",
+	dg.Add(&Action{
+		Type: ActionDownload, Path: "file.txt",
 		DriveID: driveid.New("d"), ItemID: "i1",
 	}, 1, nil)
 
@@ -197,15 +196,15 @@ func TestDepGraph_Complete_DoesNotDeleteReplacedByPath(t *testing.T) {
 	dg := NewDepGraph(synctest.TestLogger(t))
 
 	// Add action 1 for pathA.
-	dg.Add(&synctypes.Action{
-		Type: synctypes.ActionDownload, Path: "pathA",
+	dg.Add(&Action{
+		Type: ActionDownload, Path: "pathA",
 		DriveID: driveid.New("d"), ItemID: "i1",
 	}, 1, nil)
 
 	// Cancel pathA (simulates supersede) and add action 2 for the same path.
 	dg.CancelByPath("pathA")
-	dg.Add(&synctypes.Action{
-		Type: synctypes.ActionDownload, Path: "pathA",
+	dg.Add(&Action{
+		Type: ActionDownload, Path: "pathA",
 		DriveID: driveid.New("d"), ItemID: "i2",
 	}, 2, nil)
 
@@ -231,14 +230,14 @@ func TestDepGraph_ConcurrentComplete(t *testing.T) {
 	dg := NewDepGraph(synctest.TestLogger(t))
 
 	// Fan-out: action 0 has no deps; actions 1-49 depend on action 0.
-	dg.Add(&synctypes.Action{
-		Type: synctypes.ActionFolderCreate, Path: "root",
+	dg.Add(&Action{
+		Type: ActionFolderCreate, Path: "root",
 		DriveID: driveid.New("d"), ItemID: "i0",
 	}, 0, nil)
 
 	for i := int64(1); i <= 49; i++ {
-		dg.Add(&synctypes.Action{
-			Type: synctypes.ActionDownload, Path: fmt.Sprintf("file-%d", i),
+		dg.Add(&Action{
+			Type: ActionDownload, Path: fmt.Sprintf("file-%d", i),
 			DriveID: driveid.New("d"), ItemID: "i",
 		}, i, []int64{0})
 	}
@@ -252,7 +251,7 @@ func TestDepGraph_ConcurrentComplete(t *testing.T) {
 	var wg stdsync.WaitGroup
 	for _, ta := range ready {
 		wg.Add(1)
-		go func(ta *synctypes.TrackedAction) {
+		go func(ta *TrackedAction) {
 			defer wg.Done()
 			dg.Complete(ta.ID)
 		}(ta)
@@ -273,15 +272,15 @@ func TestDepGraph_ConcurrentAddAndComplete(t *testing.T) {
 	dg := NewDepGraph(synctest.TestLogger(t))
 
 	// Root action with no deps.
-	dg.Add(&synctypes.Action{
-		Type: synctypes.ActionFolderCreate, Path: "root",
+	dg.Add(&Action{
+		Type: ActionFolderCreate, Path: "root",
 		DriveID: driveid.New("d"), ItemID: "i0",
 	}, 0, nil)
 
 	// Seed some initial dependents.
 	for i := int64(1); i <= 20; i++ {
-		dg.Add(&synctypes.Action{
-			Type: synctypes.ActionDownload, Path: fmt.Sprintf("file-%d", i),
+		dg.Add(&Action{
+			Type: ActionDownload, Path: fmt.Sprintf("file-%d", i),
 			DriveID: driveid.New("d"), ItemID: fmt.Sprintf("i%d", i),
 		}, i, []int64{0})
 	}
@@ -291,7 +290,7 @@ func TestDepGraph_ConcurrentAddAndComplete(t *testing.T) {
 	var wg stdsync.WaitGroup
 	wg.Add(2)
 
-	var readyFromComplete []*synctypes.TrackedAction
+	var readyFromComplete []*TrackedAction
 
 	go func() {
 		defer wg.Done()
@@ -301,8 +300,8 @@ func TestDepGraph_ConcurrentAddAndComplete(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := int64(21); i <= 40; i++ {
-			dg.Add(&synctypes.Action{
-				Type: synctypes.ActionDownload, Path: fmt.Sprintf("file-%d", i),
+			dg.Add(&Action{
+				Type: ActionDownload, Path: fmt.Sprintf("file-%d", i),
 				DriveID: driveid.New("d"), ItemID: fmt.Sprintf("i%d", i),
 			}, i, []int64{0})
 		}
@@ -328,8 +327,8 @@ func TestDepGraph_HasInFlight(t *testing.T) {
 	// No actions — HasInFlight should be false.
 	assert.False(t, dg.HasInFlight("file.txt"))
 
-	dg.Add(&synctypes.Action{
-		Type: synctypes.ActionDownload, Path: "file.txt",
+	dg.Add(&Action{
+		Type: ActionDownload, Path: "file.txt",
 		DriveID: driveid.New("d"), ItemID: "i1",
 	}, 1, nil)
 
@@ -350,8 +349,8 @@ func TestDepGraph_CancelByPath(t *testing.T) {
 
 	dg := NewDepGraph(synctest.TestLogger(t))
 
-	dg.Add(&synctypes.Action{
-		Type: synctypes.ActionDownload, Path: "cancel-me.txt",
+	dg.Add(&Action{
+		Type: ActionDownload, Path: "cancel-me.txt",
 		DriveID: driveid.New("d"), ItemID: "i1",
 	}, 1, nil)
 
@@ -363,8 +362,8 @@ func TestDepGraph_CancelByPath(t *testing.T) {
 	// Action 1 was returned by Add (no deps), so we already have it. But since
 	// we didn't capture it, add a second and test with that.
 	dg2 := NewDepGraph(synctest.TestLogger(t))
-	ta := dg2.Add(&synctypes.Action{
-		Type: synctypes.ActionDownload, Path: "cancel-me.txt",
+	ta := dg2.Add(&Action{
+		Type: ActionDownload, Path: "cancel-me.txt",
 		DriveID: driveid.New("d"), ItemID: "i1",
 	}, 1, nil)
 	require.NotNil(t, ta)
@@ -386,8 +385,8 @@ func TestDepGraph_CancelByPath_CleansUp(t *testing.T) {
 
 	dg := NewDepGraph(synctest.TestLogger(t))
 
-	ta := dg.Add(&synctypes.Action{
-		Type: synctypes.ActionDownload, Path: "cancel-me.txt",
+	ta := dg.Add(&Action{
+		Type: ActionDownload, Path: "cancel-me.txt",
 		DriveID: driveid.New("d"), ItemID: "i1",
 	}, 1, nil)
 	require.NotNil(t, ta)
@@ -411,8 +410,8 @@ func TestDepGraph_CancelByPath_CleansUp(t *testing.T) {
 		"byPath should be cleaned after CancelByPath")
 
 	// Add a new action at the same path and cancel it.
-	ta2 := dg.Add(&synctypes.Action{
-		Type: synctypes.ActionUpload, Path: "cancel-me.txt",
+	ta2 := dg.Add(&Action{
+		Type: ActionUpload, Path: "cancel-me.txt",
 		DriveID: driveid.New("d"), ItemID: "i2",
 	}, 2, nil)
 	require.NotNil(t, ta2)
@@ -443,8 +442,8 @@ func TestDepGraph_SkipCompletedDeps(t *testing.T) {
 
 	// Action 2 depends on action 1, but action 1 is not in the graph
 	// (simulating it was already completed before graph was populated).
-	ta := dg.Add(&synctypes.Action{
-		Type: synctypes.ActionDownload, Path: "orphan.txt",
+	ta := dg.Add(&Action{
+		Type: ActionDownload, Path: "orphan.txt",
 		DriveID: driveid.New("d"), ItemID: "i2",
 	}, 2, []int64{1})
 
@@ -465,15 +464,15 @@ func TestDepGraph_InFlightCount(t *testing.T) {
 
 	assert.Equal(t, 0, dg.InFlightCount())
 
-	dg.Add(&synctypes.Action{
-		Type: synctypes.ActionDownload, Path: "a.txt",
+	dg.Add(&Action{
+		Type: ActionDownload, Path: "a.txt",
 		DriveID: driveid.New("d"), ItemID: "i1",
 	}, 1, nil)
 
 	assert.Equal(t, 1, dg.InFlightCount())
 
-	dg.Add(&synctypes.Action{
-		Type: synctypes.ActionDownload, Path: "b.txt",
+	dg.Add(&Action{
+		Type: ActionDownload, Path: "b.txt",
 		DriveID: driveid.New("d"), ItemID: "i2",
 	}, 2, nil)
 
@@ -507,8 +506,8 @@ func TestDepGraph_ConcurrentMultiAdd(t *testing.T) {
 
 			for i := range 50 {
 				id := int64(g*100 + i)
-				dg.Add(&synctypes.Action{
-					Type:    synctypes.ActionDownload,
+				dg.Add(&Action{
+					Type:    ActionDownload,
 					Path:    fmt.Sprintf("file-%d-%d", g, i),
 					DriveID: driveid.New("d"),
 					ItemID:  fmt.Sprintf("i%d", id),
@@ -535,8 +534,8 @@ func TestDepGraph_ConcurrentHasInFlightDuringComplete(t *testing.T) {
 
 	// Add 100 independent actions.
 	for i := range int64(100) {
-		dg.Add(&synctypes.Action{
-			Type:    synctypes.ActionDownload,
+		dg.Add(&Action{
+			Type:    ActionDownload,
 			Path:    fmt.Sprintf("file-%d", i),
 			DriveID: driveid.New("d"),
 			ItemID:  fmt.Sprintf("i%d", i),
@@ -582,8 +581,8 @@ func TestDepGraph_ConcurrentCancelAndComplete(t *testing.T) {
 
 	// Add 50 independent actions.
 	for i := range int64(50) {
-		ta := dg.Add(&synctypes.Action{
-			Type:    synctypes.ActionDownload,
+		ta := dg.Add(&Action{
+			Type:    ActionDownload,
 			Path:    fmt.Sprintf("file-%d", i),
 			DriveID: driveid.New("d"),
 			ItemID:  fmt.Sprintf("i%d", i),
@@ -635,8 +634,8 @@ func TestDepGraph_D10_CompletedDepSatisfiedForNewAction(t *testing.T) {
 	dg := NewDepGraph(synctest.TestLogger(t))
 
 	// Add and complete action 1.
-	dg.Add(&synctypes.Action{
-		Type: synctypes.ActionFolderCreate, Path: "dir",
+	dg.Add(&Action{
+		Type: ActionFolderCreate, Path: "dir",
 		DriveID: driveid.New("d"), ItemID: "i1",
 	}, 1, nil)
 	dg.Complete(1)
@@ -644,8 +643,8 @@ func TestDepGraph_D10_CompletedDepSatisfiedForNewAction(t *testing.T) {
 	// Now add action 2 depending on action 1.
 	// Since action 1 was completed AND deleted from actions, the dep
 	// lookup should find nothing and treat it as satisfied.
-	ta := dg.Add(&synctypes.Action{
-		Type: synctypes.ActionDownload, Path: "dir/file.txt",
+	ta := dg.Add(&Action{
+		Type: ActionDownload, Path: "dir/file.txt",
 		DriveID: driveid.New("d"), ItemID: "i2",
 	}, 2, []int64{1})
 
@@ -682,8 +681,8 @@ func TestDepGraph_WaitForEmpty_FiresAfterAllComplete(t *testing.T) {
 
 	// Add 3 independent actions.
 	for i := int64(1); i <= 3; i++ {
-		dg.Add(&synctypes.Action{
-			Type: synctypes.ActionDownload, Path: fmt.Sprintf("file-%d", i),
+		dg.Add(&Action{
+			Type: ActionDownload, Path: fmt.Sprintf("file-%d", i),
 			DriveID: driveid.New("d"), ItemID: fmt.Sprintf("i%d", i),
 		}, i, nil)
 	}
@@ -723,14 +722,14 @@ func TestDepGraph_WaitForEmpty_WithDependencies(t *testing.T) {
 	dg := NewDepGraph(synctest.TestLogger(t))
 
 	// Parent action (no deps).
-	dg.Add(&synctypes.Action{
-		Type: synctypes.ActionFolderCreate, Path: "parent",
+	dg.Add(&Action{
+		Type: ActionFolderCreate, Path: "parent",
 		DriveID: driveid.New("d"), ItemID: "i1",
 	}, 1, nil)
 
 	// Child depends on parent.
-	dg.Add(&synctypes.Action{
-		Type: synctypes.ActionDownload, Path: "parent/child.txt",
+	dg.Add(&Action{
+		Type: ActionDownload, Path: "parent/child.txt",
 		DriveID: driveid.New("d"), ItemID: "i2",
 	}, 2, []int64{1})
 
@@ -765,8 +764,8 @@ func TestDepGraph_WaitForEmpty_Concurrent(t *testing.T) {
 
 	// Add 50 independent actions.
 	for i := int64(1); i <= 50; i++ {
-		dg.Add(&synctypes.Action{
-			Type: synctypes.ActionDownload, Path: fmt.Sprintf("file-%d", i),
+		dg.Add(&Action{
+			Type: ActionDownload, Path: fmt.Sprintf("file-%d", i),
 			DriveID: driveid.New("d"), ItemID: fmt.Sprintf("i%d", i),
 		}, i, nil)
 	}
@@ -800,12 +799,12 @@ func TestDepGraph_WaitForEmpty_Reusable(t *testing.T) {
 	dg := NewDepGraph(synctest.TestLogger(t))
 
 	// Batch 1: add and complete 2 actions.
-	dg.Add(&synctypes.Action{
-		Type: synctypes.ActionDownload, Path: "a.txt",
+	dg.Add(&Action{
+		Type: ActionDownload, Path: "a.txt",
 		DriveID: driveid.New("d"), ItemID: "i1",
 	}, 1, nil)
-	dg.Add(&synctypes.Action{
-		Type: synctypes.ActionDownload, Path: "b.txt",
+	dg.Add(&Action{
+		Type: ActionDownload, Path: "b.txt",
 		DriveID: driveid.New("d"), ItemID: "i2",
 	}, 2, nil)
 
@@ -821,8 +820,8 @@ func TestDepGraph_WaitForEmpty_Reusable(t *testing.T) {
 	}
 
 	// Batch 2: add more actions — new WaitForEmpty should work.
-	dg.Add(&synctypes.Action{
-		Type: synctypes.ActionUpload, Path: "c.txt",
+	dg.Add(&Action{
+		Type: ActionUpload, Path: "c.txt",
 		DriveID: driveid.New("d"), ItemID: "i3",
 	}, 3, nil)
 

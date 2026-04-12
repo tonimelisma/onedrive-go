@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -25,11 +26,11 @@ func (rt *watchRuntime) enterDraining() bool {
 	return true
 }
 
-func (rt *watchRuntime) currentOutbox() []*synctypes.TrackedAction {
+func (rt *watchRuntime) currentOutbox() []*TrackedAction {
 	return rt.loop.outbox
 }
 
-func (rt *watchRuntime) replaceOutbox(outbox []*synctypes.TrackedAction) {
+func (rt *watchRuntime) replaceOutbox(outbox []*TrackedAction) {
 	if len(outbox) == 0 {
 		rt.loop.outbox = nil
 		return
@@ -38,7 +39,7 @@ func (rt *watchRuntime) replaceOutbox(outbox []*synctypes.TrackedAction) {
 	rt.loop.outbox = append(rt.loop.outbox[:0], outbox...)
 }
 
-func (rt *watchRuntime) appendOutbox(actions []*synctypes.TrackedAction) {
+func (rt *watchRuntime) appendOutbox(actions []*TrackedAction) {
 	if len(actions) == 0 {
 		return
 	}
@@ -54,7 +55,7 @@ func (rt *watchRuntime) consumeOutboxHead() {
 	rt.loop.outbox = rt.loop.outbox[1:]
 }
 
-func (rt *watchRuntime) replaceActiveScopes(blocks []synctypes.ScopeBlock) {
+func (rt *watchRuntime) replaceActiveScopes(blocks []syncstore.ScopeBlock) {
 	rt.activeScopesMu.Lock()
 	defer rt.activeScopesMu.Unlock()
 
@@ -62,7 +63,7 @@ func (rt *watchRuntime) replaceActiveScopes(blocks []synctypes.ScopeBlock) {
 	rt.activeScopes = append(rt.activeScopes, blocks...)
 }
 
-func (rt *watchRuntime) upsertActiveScope(block *synctypes.ScopeBlock) {
+func (rt *watchRuntime) upsertActiveScope(block *syncstore.ScopeBlock) {
 	rt.activeScopesMu.Lock()
 	defer rt.activeScopesMu.Unlock()
 
@@ -76,7 +77,7 @@ func (rt *watchRuntime) removeActiveScope(key synctypes.ScopeKey) {
 	rt.activeScopes = RemoveScope(rt.activeScopes, key)
 }
 
-func (rt *watchRuntime) lookupActiveScope(key synctypes.ScopeKey) (synctypes.ScopeBlock, bool) {
+func (rt *watchRuntime) lookupActiveScope(key synctypes.ScopeKey) (syncstore.ScopeBlock, bool) {
 	rt.activeScopesMu.RLock()
 	defer rt.activeScopesMu.RUnlock()
 
@@ -90,7 +91,7 @@ func (rt *watchRuntime) hasActiveScope(key synctypes.ScopeKey) bool {
 	return HasScope(rt.activeScopes, key)
 }
 
-func (rt *watchRuntime) findBlockingScope(ta *synctypes.TrackedAction) synctypes.ScopeKey {
+func (rt *watchRuntime) findBlockingScope(ta *TrackedAction) synctypes.ScopeKey {
 	rt.activeScopesMu.RLock()
 	defer rt.activeScopesMu.RUnlock()
 
@@ -104,11 +105,11 @@ func (rt *watchRuntime) activeScopeKeys() []synctypes.ScopeKey {
 	return ScopeKeys(rt.activeScopes)
 }
 
-func (rt *watchRuntime) snapshotActiveScopes() []synctypes.ScopeBlock {
+func (rt *watchRuntime) snapshotActiveScopes() []syncstore.ScopeBlock {
 	rt.activeScopesMu.RLock()
 	defer rt.activeScopesMu.RUnlock()
 
-	blocks := make([]synctypes.ScopeBlock, len(rt.activeScopes))
+	blocks := make([]syncstore.ScopeBlock, len(rt.activeScopes))
 	copy(blocks, rt.activeScopes)
 
 	return blocks

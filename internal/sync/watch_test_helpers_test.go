@@ -6,11 +6,10 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 type watchObserverTestOptions struct {
-	Baseline              *synctypes.Baseline
+	Baseline              *Baseline
 	WriteCoalesceCooldown time.Duration
 	CollisionPeers        map[string]map[string]struct{}
 	DirNameCache          map[string]map[string][]string
@@ -24,7 +23,7 @@ func newWatchTestObserver(t *testing.T, watcher FsWatcher, opts watchObserverTes
 
 	baseline := opts.Baseline
 	if baseline == nil {
-		baseline = synctest.EmptyBaseline()
+		baseline = emptyBaseline()
 	}
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)

@@ -33,7 +33,7 @@ func TestNewEngine_ZeroDriveID_ReturnsError(t *testing.T) {
 	mock := &engineMockClient{}
 	logger := testLogger(t)
 
-	_, err := newEngine(t.Context(), &synctypes.EngineConfig{
+	_, err := newEngine(t.Context(), &engineInputs{
 		DBPath:    dbPath,
 		SyncRoot:  syncRoot,
 		DriveID:   driveid.ID{}, // zero — should be rejected
@@ -63,10 +63,10 @@ func TestRunOnce_NoChanges(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	report, err := eng.RunOnce(ctx, synctypes.SyncBidirectional, synctypes.RunOpts{})
+	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
 	require.NoError(t, err, "RunOnce")
 
-	assert.Equal(t, synctypes.SyncBidirectional, report.Mode)
+	assert.Equal(t, SyncBidirectional, report.Mode)
 
 	total := report.Downloads + report.Uploads + report.LocalDeletes +
 		report.RemoteDeletes + report.FolderCreates + report.Moves +
@@ -89,10 +89,10 @@ func TestRunOnce_SharePointRootFormsRecordsActionableFailure(t *testing.T) {
 	}
 
 	eng, syncRoot := newTestEngine(t, mock)
-	eng.localRules = synctypes.LocalObservationRules{RejectSharePointRootForms: true}
+	eng.localRules = LocalObservationRules{RejectSharePointRootForms: true}
 	writeLocalFile(t, syncRoot, "forms", "reserved root name")
 
-	report, err := eng.RunOnce(t.Context(), synctypes.SyncBidirectional, synctypes.RunOpts{})
+	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
 	require.NoError(t, err, "RunOnce")
 	assert.Equal(t, 0, report.Uploads, "reserved SharePoint root names must not produce upload actions")
 
@@ -122,7 +122,7 @@ func TestRunOnce_DownloadOnly_SkipsLocalScan(t *testing.T) {
 
 	ctx := t.Context()
 
-	report, err := eng.RunOnce(ctx, synctypes.SyncDownloadOnly, synctypes.RunOpts{})
+	report, err := eng.RunOnce(ctx, SyncDownloadOnly, RunOptions{})
 	require.NoError(t, err, "RunOnce")
 
 	// The local file should not appear in uploads because local scan was skipped.
@@ -144,7 +144,7 @@ func TestRunOnce_UploadOnly_SkipsDelta(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	_, err := eng.RunOnce(ctx, synctypes.SyncUploadOnly, synctypes.RunOpts{})
+	_, err := eng.RunOnce(ctx, SyncUploadOnly, RunOptions{})
 	require.NoError(t, err, "RunOnce")
 	assert.False(t, deltaCalled, "Delta should not be called in upload-only mode")
 }
@@ -183,7 +183,7 @@ func TestRunOnce_Bidirectional_FullRun(t *testing.T) {
 
 	ctx := t.Context()
 
-	report, err := eng.RunOnce(ctx, synctypes.SyncBidirectional, synctypes.RunOpts{})
+	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
 	require.NoError(t, err, "RunOnce")
 
 	// Expect at least one download (remote.txt) and one upload (local.txt).
@@ -228,7 +228,7 @@ func TestRunOnce_DryRun_NoExecution(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	report, err := eng.RunOnce(ctx, synctypes.SyncBidirectional, synctypes.RunOpts{DryRun: true})
+	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{DryRun: true})
 	require.NoError(t, err, "RunOnce")
 
 	assert.True(t, report.DryRun, "report.DryRun")
@@ -285,7 +285,7 @@ func TestRunOnce_SharedConfiguredRootUsesScopedDeltaAndToken(t *testing.T) {
 	syncRoot := filepath.Join(tmpDir, "sync")
 	require.NoError(t, os.MkdirAll(syncRoot, 0o750))
 
-	eng, err := newEngine(t.Context(), &synctypes.EngineConfig{
+	eng, err := newEngine(t.Context(), &engineInputs{
 		DBPath:          dbPath,
 		SyncRoot:        syncRoot,
 		DriveID:         driveID,
@@ -304,7 +304,7 @@ func TestRunOnce_SharedConfiguredRootUsesScopedDeltaAndToken(t *testing.T) {
 		assert.NoError(t, eng.Close(t.Context()))
 	})
 
-	report, err := eng.RunOnce(t.Context(), synctypes.SyncDownloadOnly, synctypes.RunOpts{})
+	report, err := eng.RunOnce(t.Context(), SyncDownloadOnly, RunOptions{})
 	require.NoError(t, err)
 	assert.False(t, deltaCalled, "drive-root delta must not be used for shared configured roots")
 	assert.Equal(t, 1, folderDeltaCalls)
@@ -350,7 +350,7 @@ func TestRunOnce_DryRun_SharedConfiguredRootDoesNotSaveScopedDeltaToken(t *testi
 	syncRoot := filepath.Join(tmpDir, "sync")
 	require.NoError(t, os.MkdirAll(syncRoot, 0o750))
 
-	eng, err := newEngine(t.Context(), &synctypes.EngineConfig{
+	eng, err := newEngine(t.Context(), &engineInputs{
 		DBPath:          dbPath,
 		SyncRoot:        syncRoot,
 		DriveID:         driveID,
@@ -369,7 +369,7 @@ func TestRunOnce_DryRun_SharedConfiguredRootDoesNotSaveScopedDeltaToken(t *testi
 		assert.NoError(t, eng.Close(t.Context()))
 	})
 
-	report, err := eng.RunOnce(t.Context(), synctypes.SyncDownloadOnly, synctypes.RunOpts{DryRun: true})
+	report, err := eng.RunOnce(t.Context(), SyncDownloadOnly, RunOptions{DryRun: true})
 	require.NoError(t, err)
 	assert.True(t, report.DryRun)
 	assert.Equal(t, 1, folderDeltaCalls)
@@ -390,7 +390,7 @@ func TestRunOnce_DeleteSafety_HoldsDeletesDurably(t *testing.T) {
 	driveID := driveid.New(engineTestDriveID)
 
 	// Upload-only mode with no local files → local observer sees all baseline
-	// entries as deleted → EF6 → synctypes.ActionRemoteDelete. With threshold=10,
+	// entries as deleted → EF6 → ActionRemoteDelete. With threshold=10,
 	// 20 remote deletes > 10, so the engine records durable held-delete
 	// intent and executes no destructive deletes until the user approves.
 	mock := &engineMockClient{}
@@ -398,10 +398,10 @@ func TestRunOnce_DeleteSafety_HoldsDeletesDurably(t *testing.T) {
 	eng.deleteSafetyThreshold = 10 // low threshold for test
 	ctx := t.Context()
 
-	seedOutcomes := make([]synctypes.Outcome, 20)
+	seedOutcomes := make([]ExecutionResult, 20)
 	for i := range 20 {
-		seedOutcomes[i] = synctypes.Outcome{
-			Action:          synctypes.ActionDownload,
+		seedOutcomes[i] = ExecutionResult{
+			Action:          ActionDownload,
 			Success:         true,
 			Path:            fmt.Sprintf("file%02d.txt", i),
 			DriveID:         driveID,
@@ -418,7 +418,7 @@ func TestRunOnce_DeleteSafety_HoldsDeletesDurably(t *testing.T) {
 
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "old-token")
 
-	report, err := eng.RunOnce(ctx, synctypes.SyncUploadOnly, synctypes.RunOpts{})
+	report, err := eng.RunOnce(ctx, SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 	require.NotNil(t, report)
 	assert.Equal(t, 0, report.RemoteDeletes, "held deletes must not execute before approval")
@@ -427,7 +427,7 @@ func TestRunOnce_DeleteSafety_HoldsDeletesDurably(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, held, 20)
 	for i := range held {
-		assert.Equal(t, synctypes.ActionRemoteDelete, held[i].ActionType)
+		assert.Equal(t, ActionRemoteDelete, held[i].ActionType)
 		assert.Equal(t, synctypes.HeldDeleteStateHeld, held[i].State)
 		assert.NotEmpty(t, held[i].LastError)
 	}
@@ -446,10 +446,10 @@ func TestRunOnce_DeleteSafety_ApprovedDeletesBypassHold(t *testing.T) {
 	eng.deleteSafetyThreshold = 10 // low threshold for test
 	ctx := t.Context()
 
-	seedOutcomes := make([]synctypes.Outcome, 20)
+	seedOutcomes := make([]ExecutionResult, 20)
 	for i := range 20 {
-		seedOutcomes[i] = synctypes.Outcome{
-			Action:          synctypes.ActionDownload,
+		seedOutcomes[i] = ExecutionResult{
+			Action:          ActionDownload,
 			Success:         true,
 			Path:            fmt.Sprintf("file%02d.txt", i),
 			DriveID:         driveID,
@@ -466,20 +466,20 @@ func TestRunOnce_DeleteSafety_ApprovedDeletesBypassHold(t *testing.T) {
 
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "old-token")
 
-	held := make([]synctypes.HeldDeleteRecord, 0, len(seedOutcomes))
+	held := make([]HeldDeleteRecord, 0, len(seedOutcomes))
 	for i := range seedOutcomes {
-		held = append(held, synctypes.HeldDeleteRecord{
+		held = append(held, HeldDeleteRecord{
 			DriveID:    seedOutcomes[i].DriveID,
 			ItemID:     seedOutcomes[i].ItemID,
 			Path:       seedOutcomes[i].Path,
-			ActionType: synctypes.ActionRemoteDelete,
+			ActionType: ActionRemoteDelete,
 			State:      synctypes.HeldDeleteStateHeld,
 		})
 	}
 	require.NoError(t, eng.baseline.UpsertHeldDeletes(ctx, held))
 	require.NoError(t, eng.baseline.ApproveHeldDeletes(ctx))
 
-	report, err := eng.RunOnce(ctx, synctypes.SyncUploadOnly, synctypes.RunOpts{})
+	report, err := eng.RunOnce(ctx, SyncUploadOnly, RunOptions{})
 	require.NoError(t, err, "RunOnce with approved held deletes")
 	assert.GreaterOrEqual(t, report.RemoteDeletes, 1, "approved deletes should bypass delete safety hold")
 
@@ -498,10 +498,10 @@ func TestRunOnce_DeleteSafety_StaleApprovalWithDifferentItemIDDoesNotBypassHold(
 	eng.deleteSafetyThreshold = 10
 	ctx := t.Context()
 
-	seedOutcomes := make([]synctypes.Outcome, 20)
+	seedOutcomes := make([]ExecutionResult, 20)
 	for i := range 20 {
-		seedOutcomes[i] = synctypes.Outcome{
-			Action:          synctypes.ActionDownload,
+		seedOutcomes[i] = ExecutionResult{
+			Action:          ActionDownload,
 			Success:         true,
 			Path:            fmt.Sprintf("file%02d.txt", i),
 			DriveID:         driveID,
@@ -518,20 +518,20 @@ func TestRunOnce_DeleteSafety_StaleApprovalWithDifferentItemIDDoesNotBypassHold(
 
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "old-token")
 
-	staleApprovals := make([]synctypes.HeldDeleteRecord, 0, len(seedOutcomes))
+	staleApprovals := make([]HeldDeleteRecord, 0, len(seedOutcomes))
 	for i := range seedOutcomes {
-		staleApprovals = append(staleApprovals, synctypes.HeldDeleteRecord{
+		staleApprovals = append(staleApprovals, HeldDeleteRecord{
 			DriveID:    seedOutcomes[i].DriveID,
 			ItemID:     fmt.Sprintf("stale-item-%02d", i),
 			Path:       seedOutcomes[i].Path,
-			ActionType: synctypes.ActionRemoteDelete,
+			ActionType: ActionRemoteDelete,
 			State:      synctypes.HeldDeleteStateHeld,
 		})
 	}
 	require.NoError(t, eng.baseline.UpsertHeldDeletes(ctx, staleApprovals))
 	require.NoError(t, eng.baseline.ApproveHeldDeletes(ctx))
 
-	report, err := eng.RunOnce(ctx, synctypes.SyncUploadOnly, synctypes.RunOpts{})
+	report, err := eng.RunOnce(ctx, SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 0, report.RemoteDeletes, "stale path-only approval must not authorize reused-path delete")
 
@@ -555,12 +555,12 @@ func TestEngine_ApprovedDeleteKeysForPlanPrunesStaleApprovedRows(t *testing.T) {
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	ctx := t.Context()
 
-	require.NoError(t, eng.baseline.UpsertHeldDeletes(ctx, []synctypes.HeldDeleteRecord{
+	require.NoError(t, eng.baseline.UpsertHeldDeletes(ctx, []HeldDeleteRecord{
 		{
 			DriveID:       driveID,
 			ItemID:        "current-item",
 			Path:          "current.txt",
-			ActionType:    synctypes.ActionRemoteDelete,
+			ActionType:    ActionRemoteDelete,
 			State:         synctypes.HeldDeleteStateHeld,
 			HeldAt:        1,
 			LastPlannedAt: 1,
@@ -569,7 +569,7 @@ func TestEngine_ApprovedDeleteKeysForPlanPrunesStaleApprovedRows(t *testing.T) {
 			DriveID:       driveID,
 			ItemID:        "stale-item",
 			Path:          "current.txt",
-			ActionType:    synctypes.ActionRemoteDelete,
+			ActionType:    ActionRemoteDelete,
 			State:         synctypes.HeldDeleteStateHeld,
 			HeldAt:        1,
 			LastPlannedAt: 1,
@@ -577,8 +577,8 @@ func TestEngine_ApprovedDeleteKeysForPlanPrunesStaleApprovedRows(t *testing.T) {
 	}))
 	require.NoError(t, eng.baseline.ApproveHeldDeletes(ctx))
 
-	plan := &synctypes.ActionPlan{Actions: []synctypes.Action{{
-		Type:    synctypes.ActionRemoteDelete,
+	plan := &ActionPlan{Actions: []Action{{
+		Type:    ActionRemoteDelete,
 		DriveID: driveID,
 		ItemID:  "current-item",
 		Path:    "current.txt",
@@ -588,7 +588,7 @@ func TestEngine_ApprovedDeleteKeysForPlanPrunesStaleApprovedRows(t *testing.T) {
 	require.NoError(t, err)
 	_, ok := approved[heldDeleteKey{
 		driveID:    driveID.String(),
-		actionType: synctypes.ActionRemoteDelete,
+		actionType: ActionRemoteDelete,
 		path:       "current.txt",
 		itemID:     "current-item",
 	}]
@@ -603,7 +603,7 @@ func TestEngine_ApprovedDeleteKeysForPlanPrunesStaleApprovedRows(t *testing.T) {
 
 type sharedFolderRecoveryRunOnceFixture struct {
 	eng            *testEngine
-	baseline       *synctypes.Baseline
+	baseline       *Baseline
 	syncRoot       string
 	checker        *mockPermChecker
 	shortcuts      []synctypes.Shortcut
@@ -643,9 +643,9 @@ func newSharedFolderRecoveryRunOnceFixture(t *testing.T) *sharedFolderRecoveryRu
 		Observation:  synctypes.ObservationDelta,
 		DiscoveredAt: 1000,
 	}}
-	baselineEntries := []synctypes.Outcome{
+	baselineEntries := []ExecutionResult{
 		{
-			Action:   synctypes.ActionDownload,
+			Action:   ActionDownload,
 			Success:  true,
 			Path:     "Shared",
 			DriveID:  driveid.New(engineTestDriveID),
@@ -654,7 +654,7 @@ func newSharedFolderRecoveryRunOnceFixture(t *testing.T) *sharedFolderRecoveryRu
 			ItemType: synctypes.ItemTypeFolder,
 		},
 		{
-			Action:   synctypes.ActionDownload,
+			Action:   ActionDownload,
 			Success:  true,
 			Path:     "Shared/TeamDocs",
 			DriveID:  driveid.New(remoteDriveID),
@@ -663,7 +663,7 @@ func newSharedFolderRecoveryRunOnceFixture(t *testing.T) *sharedFolderRecoveryRu
 			ItemType: synctypes.ItemTypeFolder,
 		},
 		{
-			Action:   synctypes.ActionDownload,
+			Action:   ActionDownload,
 			Success:  true,
 			Path:     boundaryPath,
 			DriveID:  driveid.New(remoteDriveID),
@@ -743,7 +743,7 @@ func TestRunOnce_SharedFolderPermissionRecovery_AutoUploadsPreviouslyBlockedFile
 		Roles: []string{"write"},
 	}}
 
-	report, err := fixture.eng.RunOnce(ctx, synctypes.SyncUploadOnly, synctypes.RunOpts{})
+	report, err := fixture.eng.RunOnce(ctx, SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, uploadCalls, "a recovered shared-folder upload should execute exactly once during the sync pass")
@@ -797,7 +797,7 @@ func TestRunOnce_ExecutorPartialFailure(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	report, err := eng.RunOnce(ctx, synctypes.SyncBidirectional, synctypes.RunOpts{})
+	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
 	// DAG executor handles individual failures gracefully — RunOnce succeeds
 	// but reports the failure in Stats.
 	require.NoError(t, err, "RunOnce")
@@ -827,7 +827,7 @@ func TestRunOnce_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // pre-cancel
 
-	_, err := eng.RunOnce(ctx, synctypes.SyncBidirectional, synctypes.RunOpts{})
+	_, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
 	require.Error(t, err, "expected error from canceled context")
 }
 
@@ -849,7 +849,7 @@ func TestRunOnce_DeltaTokenPersisted(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	_, err := eng.RunOnce(ctx, synctypes.SyncBidirectional, synctypes.RunOpts{})
+	_, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
 	require.NoError(t, err, "RunOnce")
 
 	// Verify delta token was saved.
@@ -876,7 +876,7 @@ func TestRunOnce_BaselineUpdatedAfterRun(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	_, err := eng.RunOnce(ctx, synctypes.SyncBidirectional, synctypes.RunOpts{})
+	_, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
 	require.NoError(t, err, "RunOnce")
 
 	// Reload and verify.
@@ -894,7 +894,7 @@ func TestNewEngine_InvalidDBPath(t *testing.T) {
 
 	logger := testLogger(t)
 
-	_, err := newEngine(t.Context(), &synctypes.EngineConfig{
+	_, err := newEngine(t.Context(), &engineInputs{
 		DBPath:    "/nonexistent/deeply/nested/path/test.db",
 		SyncRoot:  t.TempDir(),
 		DriveID:   driveid.New(engineTestDriveID),
@@ -933,8 +933,8 @@ func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed a stale delta token.
-	seedOutcomes := []synctypes.Outcome{{
-		Action:  synctypes.ActionDownload,
+	seedOutcomes := []ExecutionResult{{
+		Action:  ActionDownload,
 		Success: true,
 		Path:    "seed.txt",
 		DriveID: driveID,
@@ -942,7 +942,7 @@ func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {
 	}}
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "stale-token")
 
-	report, err := eng.RunOnce(ctx, synctypes.SyncBidirectional, synctypes.RunOpts{})
+	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
 	require.NoError(t, err, "RunOnce")
 
 	// Delta should have been called twice (expired + retry).
@@ -981,8 +981,8 @@ func TestRunOnce_EmptyPlan_NoPanic(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed baseline so the file appears as already synced with matching hash.
-	seedOutcomes := []synctypes.Outcome{{
-		Action:          synctypes.ActionDownload,
+	seedOutcomes := []ExecutionResult{{
+		Action:          ActionDownload,
 		Success:         true,
 		Path:            "unchanged.txt",
 		DriveID:         driveID,
@@ -1002,11 +1002,11 @@ func TestRunOnce_EmptyPlan_NoPanic(t *testing.T) {
 
 	// This should complete without deadlock — use a timeout to detect hangs.
 	done := make(chan struct{})
-	var report *synctypes.SyncReport
+	var report *Report
 	var runErr error
 
 	go func() {
-		report, runErr = eng.RunOnce(ctx, synctypes.SyncBidirectional, synctypes.RunOpts{})
+		report, runErr = eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
 		close(done)
 	}()
 
@@ -1033,7 +1033,7 @@ func TestRunOnce_DeltaTokenCommittedWithObservations(t *testing.T) {
 	// Seed a known delta token.
 	seedBaseline(t, eng.baseline, ctx, nil, "old-token")
 
-	report, err := eng.RunOnce(ctx, synctypes.SyncBidirectional, synctypes.RunOpts{})
+	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
 	require.NoError(t, err, "RunOnce")
 	require.GreaterOrEqual(t, report.Failed, 1, "should have failures")
 
@@ -1052,7 +1052,7 @@ func TestRunOnce_FailedActionsRemainInReportErrorsAfterSummaryLogging(t *testing
 
 	seedBaseline(t, eng.baseline, ctx, nil, "old-token")
 
-	report, err := eng.RunOnce(ctx, synctypes.SyncBidirectional, synctypes.RunOpts{})
+	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
 	require.NoError(t, err, "RunOnce")
 	require.GreaterOrEqual(t, report.Failed, 1, "should have failures")
 	require.NotEmpty(t, report.Errors, "report should keep raw errors after summary logging")
@@ -1215,7 +1215,7 @@ func TestRunOnce_CrashRecovery_ReplaysDownloadingStateWithoutFreshDelta(t *testi
 	)
 	require.NoError(t, err, "seed downloading row")
 
-	report, runErr := eng.RunOnce(ctx, synctypes.SyncDownloadOnly, synctypes.RunOpts{})
+	report, runErr := eng.RunOnce(ctx, SyncDownloadOnly, RunOptions{})
 	require.NoError(t, runErr, "RunOnce")
 	assert.Equal(t, 1, report.Downloads, "due crash-recovery download should be replanned in one-shot mode")
 
@@ -1259,8 +1259,8 @@ func TestRunOnce_CrashRecovery_ReplaysDownloadingStateWithBaselineAndMissingLoca
 
 	writeLocalFile(t, syncRoot, "retry-download.txt", "recovered-download")
 	downloadHash := hashContentQuickXor(t, "recovered-download")
-	seedBaseline(t, eng.baseline, ctx, []synctypes.Outcome{{
-		Action:          synctypes.ActionDownload,
+	seedBaseline(t, eng.baseline, ctx, []ExecutionResult{{
+		Action:          ActionDownload,
 		Success:         true,
 		Path:            "retry-download.txt",
 		DriveID:         driveID,
@@ -1286,7 +1286,7 @@ func TestRunOnce_CrashRecovery_ReplaysDownloadingStateWithBaselineAndMissingLoca
 	)
 	require.NoError(t, err, "seed downloading row")
 
-	report, runErr := eng.RunOnce(ctx, synctypes.SyncDownloadOnly, synctypes.RunOpts{})
+	report, runErr := eng.RunOnce(ctx, SyncDownloadOnly, RunOptions{})
 	require.NoError(t, runErr, "RunOnce")
 	assert.Equal(t, 1, report.Downloads, "missing local file should force crash-recovery download replay")
 
@@ -1326,8 +1326,8 @@ func TestRunOnce_CrashRecovery_ReplaysDeletingStateWithoutFreshDelta(t *testing.
 
 	writeLocalFile(t, syncRoot, "retry-delete.txt", "delete me")
 	deleteHash := hashContentQuickXor(t, "delete me")
-	seedBaseline(t, eng.baseline, ctx, []synctypes.Outcome{{
-		Action:          synctypes.ActionDownload,
+	seedBaseline(t, eng.baseline, ctx, []ExecutionResult{{
+		Action:          ActionDownload,
 		Success:         true,
 		Path:            "retry-delete.txt",
 		DriveID:         driveID,
@@ -1356,7 +1356,7 @@ func TestRunOnce_CrashRecovery_ReplaysDeletingStateWithoutFreshDelta(t *testing.
 	)
 	require.NoError(t, err, "seed deleting row")
 
-	report, runErr := eng.RunOnce(ctx, synctypes.SyncDownloadOnly, synctypes.RunOpts{})
+	report, runErr := eng.RunOnce(ctx, SyncDownloadOnly, RunOptions{})
 	require.NoError(t, runErr, "RunOnce")
 	assert.Equal(t, 1, report.LocalDeletes, "due crash-recovery delete should be replanned in one-shot mode")
 
@@ -1378,7 +1378,7 @@ func TestRunOnce_CrashRecovery_ReplaysDeletingStateWithoutFreshDelta(t *testing.
 func TestResolveSafetyConfig_Default(t *testing.T) {
 	t.Parallel()
 
-	eng := &Engine{deleteSafetyThreshold: synctypes.DefaultDeleteSafetyThreshold}
+	eng := &Engine{deleteSafetyThreshold: DefaultDeleteSafetyThreshold}
 	cfg := eng.resolveSafetyConfig()
 
 	assert.Equal(t, plannerSafetyMax, cfg.DeleteSafetyThreshold)

@@ -26,7 +26,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 	"github.com/tonimelisma/onedrive-go/internal/syncverify"
 	"github.com/tonimelisma/onedrive-go/testutil"
 )
@@ -398,7 +397,7 @@ func toResolveArgs(t *testing.T, args ...string) []string {
 	return resolveArgs
 }
 
-func verifyBaselineReport(t *testing.T, cfgPath string, env map[string]string) (*synctypes.VerifyReport, error) {
+func verifyBaselineReport(t *testing.T, cfgPath string, env map[string]string) (*syncverify.Report, error) {
 	t.Helper()
 
 	logger := slog.New(slog.DiscardHandler)

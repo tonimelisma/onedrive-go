@@ -65,7 +65,7 @@ const (
 //   - New item (no existing row): INSERT with pending_download (skip if deleted)
 //   - Existing item: call computeNewStatus() and UPDATE only if changed
 //   - Path change: set previous_path for move tracking
-func (m *SyncStore) CommitObservation(ctx context.Context, events []synctypes.ObservedItem, newToken string, driveID driveid.ID) error {
+func (m *SyncStore) CommitObservation(ctx context.Context, events []ObservedItem, newToken string, driveID driveid.ID) error {
 	return m.commitObservation(ctx, events, newToken, driveID, "")
 }
 
@@ -74,7 +74,7 @@ func (m *SyncStore) CommitObservation(ctx context.Context, events []synctypes.Ob
 // owns its own delta token instead of competing with the owner drive root.
 func (m *SyncStore) CommitObservationForScope(
 	ctx context.Context,
-	events []synctypes.ObservedItem,
+	events []ObservedItem,
 	newToken string,
 	driveID driveid.ID,
 	scopeID string,
@@ -84,7 +84,7 @@ func (m *SyncStore) CommitObservationForScope(
 
 func (m *SyncStore) commitObservation(
 	ctx context.Context,
-	events []synctypes.ObservedItem,
+	events []ObservedItem,
 	newToken string,
 	driveID driveid.ID,
 	scopeID string,
@@ -126,7 +126,7 @@ func (m *SyncStore) commitObservation(
 }
 
 // processObservedItem handles a single item within the CommitObservation transaction.
-func (m *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, item *synctypes.ObservedItem, now int64) error {
+func (m *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, item *ObservedItem, now int64) error {
 	existing := m.scanRemoteStateRow(ctx, tx, item.DriveID.String(), item.ItemID)
 
 	if existing == nil {
@@ -163,9 +163,9 @@ func (m *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, ite
 
 // scanRemoteStateRow reads a single remote_state row within a transaction.
 // Returns nil if no row exists.
-func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx sqlTxRunner, driveID, itemID string) *synctypes.RemoteStateRow {
+func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx sqlTxRunner, driveID, itemID string) *RemoteStateRow {
 	var (
-		row          synctypes.RemoteStateRow
+		row          RemoteStateRow
 		parentID     sql.NullString
 		hash         sql.NullString
 		size         sql.NullInt64
@@ -213,9 +213,9 @@ func (m *SyncStore) GetRemoteStateByPath(
 	ctx context.Context,
 	path string,
 	driveID driveid.ID,
-) (*synctypes.RemoteStateRow, bool, error) {
+) (*RemoteStateRow, bool, error) {
 	var (
-		row          synctypes.RemoteStateRow
+		row          RemoteStateRow
 		parentID     sql.NullString
 		hash         sql.NullString
 		size         sql.NullInt64
@@ -263,9 +263,9 @@ func (m *SyncStore) GetRemoteStateByID(
 	ctx context.Context,
 	driveID driveid.ID,
 	itemID string,
-) (*synctypes.RemoteStateRow, bool, error) {
+) (*RemoteStateRow, bool, error) {
 	var (
-		row      synctypes.RemoteStateRow
+		row      RemoteStateRow
 		parentID sql.NullString
 		hash     sql.NullString
 		size     sql.NullInt64
@@ -304,7 +304,7 @@ func (m *SyncStore) GetRemoteStateByID(
 }
 
 // insertRemoteState inserts a new remote_state row for a newly observed item.
-func (m *SyncStore) insertRemoteState(ctx context.Context, tx sqlTxRunner, item *synctypes.ObservedItem, now int64) error {
+func (m *SyncStore) insertRemoteState(ctx context.Context, tx sqlTxRunner, item *ObservedItem, now int64) error {
 	initialStatus := synctypes.SyncStatusPendingDownload
 	if item.Filtered {
 		initialStatus = synctypes.SyncStatusFiltered
@@ -326,7 +326,7 @@ func (m *SyncStore) insertRemoteState(ctx context.Context, tx sqlTxRunner, item 
 
 // updateRemoteStateFromObs updates an existing remote_state row with observation data.
 func (m *SyncStore) updateRemoteStateFromObs(
-	ctx context.Context, tx sqlTxRunner, item *synctypes.ObservedItem,
+	ctx context.Context, tx sqlTxRunner, item *ObservedItem,
 	newStatus synctypes.SyncStatus, previousPath string, now int64,
 ) error {
 	filterGeneration := int64(0)
@@ -399,7 +399,7 @@ func computeFilteredObservation(
 	return synctypes.SyncStatusFiltered, true
 }
 
-func initialFilterGeneration(item *synctypes.ObservedItem) int64 {
+func initialFilterGeneration(item *ObservedItem) int64 {
 	if item == nil || !item.Filtered {
 		return 0
 	}

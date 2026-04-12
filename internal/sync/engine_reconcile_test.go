@@ -24,7 +24,7 @@ import (
 func TestChangeEventsToObservedItems_RemoteOnly(t *testing.T) {
 	t.Parallel()
 
-	events := []synctypes.ChangeEvent{
+	events := []ChangeEvent{
 		{Source: synctypes.SourceRemote, ItemID: "r1", Path: "remote.txt", DriveID: driveid.New(testDriveID)},
 		{Source: synctypes.SourceLocal, Path: "local.txt"},
 		{Source: synctypes.SourceRemote, ItemID: "r2", Path: "remote2.txt", DriveID: driveid.New(testDriveID)},
@@ -40,7 +40,7 @@ func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(testDriveID)
-	events := []synctypes.ChangeEvent{
+	events := []ChangeEvent{
 		{
 			Source:    synctypes.SourceRemote,
 			ItemID:    "item1",
@@ -104,7 +104,7 @@ func TestObserveAndCommitRemote_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	rawEngine, err := newEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := newEngine(t.Context(), &engineInputs{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -159,7 +159,7 @@ func TestObserveAndCommitRemote_WithEvents_TokenDeferred(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	rawEngine, err := newEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := newEngine(t.Context(), &engineInputs{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -204,7 +204,7 @@ func TestFindOrphans_DetectsDeletedItems(t *testing.T) {
 
 	driveID := driveid.New(testDriveID)
 
-	bl := synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{
+	bl := newBaselineForTest([]*BaselineEntry{
 		{Path: "a.txt", DriveID: driveID, ItemID: "id-a", ItemType: synctypes.ItemTypeFile},
 		{Path: "b.txt", DriveID: driveID, ItemID: "id-b", ItemType: synctypes.ItemTypeFile},
 		{Path: "c.txt", DriveID: driveID, ItemID: "id-c", ItemType: synctypes.ItemTypeFile},
@@ -216,7 +216,7 @@ func TestFindOrphans_DetectsDeletedItems(t *testing.T) {
 		driveid.NewItemKey(driveID, "id-c"): {},
 	}
 
-	orphans := bl.FindOrphans(seen, driveID, "")
+	orphans := findBaselineOrphans(bl, seen, driveID, "")
 	require.Len(t, orphans, 1, "should detect 1 orphan")
 	assert.Equal(t, "b.txt", orphans[0].Path)
 	assert.Equal(t, "id-b", orphans[0].ItemID)
@@ -230,7 +230,7 @@ func TestFindOrphans_NoOrphans(t *testing.T) {
 
 	driveID := driveid.New(testDriveID)
 
-	bl := synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{
+	bl := newBaselineForTest([]*BaselineEntry{
 		{Path: "a.txt", DriveID: driveID, ItemID: "id-a", ItemType: synctypes.ItemTypeFile},
 		{Path: "b.txt", DriveID: driveID, ItemID: "id-b", ItemType: synctypes.ItemTypeFile},
 	})
@@ -241,7 +241,7 @@ func TestFindOrphans_NoOrphans(t *testing.T) {
 		driveid.NewItemKey(driveID, "id-b"): {},
 	}
 
-	orphans := bl.FindOrphans(seen, driveID, "")
+	orphans := findBaselineOrphans(bl, seen, driveID, "")
 	assert.Empty(t, orphans, "should find no orphans when all items are in seen set")
 }
 
@@ -251,7 +251,7 @@ func TestFindOrphans_IgnoresOtherDrives(t *testing.T) {
 	driveID := driveid.New(testDriveID)
 	otherDrive := driveid.New("0000000000000002")
 
-	bl := synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{
+	bl := newBaselineForTest([]*BaselineEntry{
 		{Path: "a.txt", DriveID: driveID, ItemID: "id-a", ItemType: synctypes.ItemTypeFile},
 		{Path: "other.txt", DriveID: otherDrive, ItemID: "id-other", ItemType: synctypes.ItemTypeFile},
 	})
@@ -259,7 +259,7 @@ func TestFindOrphans_IgnoresOtherDrives(t *testing.T) {
 	// Empty seen set — only driveID's items should be orphaned.
 	seen := map[driveid.ItemKey]struct{}{}
 
-	orphans := bl.FindOrphans(seen, driveID, "")
+	orphans := findBaselineOrphans(bl, seen, driveID, "")
 	require.Len(t, orphans, 1, "should only detect orphans for the specified drive")
 	assert.Equal(t, "a.txt", orphans[0].Path)
 }
@@ -269,7 +269,7 @@ func TestFindOrphans_WithPathPrefix(t *testing.T) {
 
 	driveID := driveid.New(testDriveID)
 
-	bl := synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{
+	bl := newBaselineForTest([]*BaselineEntry{
 		{Path: "SharedFolder/a.txt", DriveID: driveID, ItemID: "id-a", ItemType: synctypes.ItemTypeFile},
 		{Path: "SharedFolder/sub/b.txt", DriveID: driveID, ItemID: "id-b", ItemType: synctypes.ItemTypeFile},
 		{Path: "OtherFolder/c.txt", DriveID: driveID, ItemID: "id-c", ItemType: synctypes.ItemTypeFile},
@@ -281,7 +281,7 @@ func TestFindOrphans_WithPathPrefix(t *testing.T) {
 		driveid.NewItemKey(driveID, "id-a"): {},
 	}
 
-	orphans := bl.FindOrphans(seen, driveID, "SharedFolder")
+	orphans := findBaselineOrphans(bl, seen, driveID, "SharedFolder")
 	require.Len(t, orphans, 1, "should detect only orphans under the prefix")
 	assert.Equal(t, "SharedFolder/sub/b.txt", orphans[0].Path)
 }
@@ -291,7 +291,7 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 
 	driveID := driveid.New(testDriveID)
 
-	// Full delta returns 2 items (root + file1). synctypes.Baseline has file1 + file2.
+	// Full delta returns 2 items (root + file1). Baseline has file1 + file2.
 	// file2 should be detected as an orphan.
 	mock := &engineMockClient{
 		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
@@ -309,7 +309,7 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	rawEngine, err := newEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := newEngine(t.Context(), &engineInputs{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -329,8 +329,8 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 	bl, err := e.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	bl.Put(&synctypes.BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: synctypes.ItemTypeFile})
-	bl.Put(&synctypes.BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: synctypes.ItemTypeFile})
+	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: synctypes.ItemTypeFile})
+	bl.Put(&BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: synctypes.ItemTypeFile})
 
 	events, token, err := testEngineFlow(t, e).observeRemoteFull(ctx, bl)
 	require.NoError(t, err)
@@ -364,7 +364,7 @@ func TestChangeEventsToObservedItems_SkipsEmptyItemID(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(testDriveID)
-	events := []synctypes.ChangeEvent{
+	events := []ChangeEvent{
 		{Source: synctypes.SourceRemote, ItemID: "valid-1", Path: "a.txt", DriveID: driveID},
 		{Source: synctypes.SourceRemote, ItemID: "", Path: "bad.txt", DriveID: driveID},
 		{Source: synctypes.SourceRemote, ItemID: "valid-2", Path: "b.txt", DriveID: driveID},
@@ -384,7 +384,7 @@ func TestResolveReconcileInterval_Default(t *testing.T) {
 	t.Parallel()
 
 	e, _ := newTestEngine(t, &engineMockClient{})
-	d := e.resolveReconcileInterval(synctypes.WatchOpts{})
+	d := e.resolveReconcileInterval(WatchOptions{})
 	assert.Equal(t, 24*time.Hour, d)
 }
 
@@ -392,7 +392,7 @@ func TestResolveReconcileInterval_Disabled(t *testing.T) {
 	t.Parallel()
 
 	e, _ := newTestEngine(t, &engineMockClient{})
-	d := e.resolveReconcileInterval(synctypes.WatchOpts{ReconcileInterval: -1})
+	d := e.resolveReconcileInterval(WatchOptions{ReconcileInterval: -1})
 	assert.Equal(t, time.Duration(0), d)
 }
 
@@ -400,7 +400,7 @@ func TestResolveReconcileInterval_Custom(t *testing.T) {
 	t.Parallel()
 
 	e, _ := newTestEngine(t, &engineMockClient{})
-	d := e.resolveReconcileInterval(synctypes.WatchOpts{ReconcileInterval: 2 * time.Hour})
+	d := e.resolveReconcileInterval(WatchOptions{ReconcileInterval: 2 * time.Hour})
 	assert.Equal(t, 2*time.Hour, d)
 }
 
@@ -408,7 +408,7 @@ func TestResolveReconcileInterval_ClampsBelowMinimum(t *testing.T) {
 	t.Parallel()
 
 	e, _ := newTestEngine(t, &engineMockClient{})
-	d := e.resolveReconcileInterval(synctypes.WatchOpts{ReconcileInterval: 1 * time.Minute})
+	d := e.resolveReconcileInterval(WatchOptions{ReconcileInterval: 1 * time.Minute})
 	assert.Equal(t, minReconcileInterval, d, "should be clamped to 15 minutes")
 }
 
@@ -466,7 +466,7 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	rawEngine, err := newEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := newEngine(t.Context(), &engineInputs{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -486,8 +486,8 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 	bl, err := e.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	bl.Put(&synctypes.BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: synctypes.ItemTypeFile})
-	bl.Put(&synctypes.BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: synctypes.ItemTypeFile})
+	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: synctypes.ItemTypeFile})
+	bl.Put(&BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: synctypes.ItemTypeFile})
 
 	events, pendingToken, err := testEngineFlow(t, e).observeAndCommitRemoteFull(ctx, bl)
 	require.NoError(t, err)
@@ -562,7 +562,7 @@ func TestRunFullReconciliationAsync_NoChanges(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	rawEngine, err := newEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := newEngine(t.Context(), &engineInputs{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -582,7 +582,7 @@ func TestRunFullReconciliationAsync_NoChanges(t *testing.T) {
 	bl, err := e.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	bl.Put(&synctypes.BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: synctypes.ItemTypeFile})
+	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: synctypes.ItemTypeFile})
 
 	ready := setupWatchEngine(t, e)
 	testWatchRuntime(t, e).buf = NewBuffer(e.logger)
@@ -720,7 +720,7 @@ func TestRunFullReconciliationAsync_FeedsBuffer(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	rawEngine, err := newEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := newEngine(t.Context(), &engineInputs{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -742,7 +742,7 @@ func TestRunFullReconciliationAsync_FeedsBuffer(t *testing.T) {
 	setupWatchEngine(t, e)
 	testWatchRuntime(t, e).buf = NewBuffer(e.logger)
 
-	// synctypes.Baseline is empty — delta returns a new file → orphan detection
+	// Baseline is empty — delta returns a new file → orphan detection
 	// produces a download event that gets fed into the buffer.
 	runFullReconciliationAsyncForTest(t, e, ctx, bl)
 	waitForReconcileDone(t, e)
@@ -787,8 +787,8 @@ func TestWatchLoop_ReconcileTick_RunsPeriodicFullReconciliationThroughResultHand
 		done <- rt.runWatchLoop(ctx, &watchPipeline{
 			runtime:          rt,
 			bl:               bl,
-			safety:           synctypes.DefaultSafetyConfig(),
-			mode:             synctypes.SyncBidirectional,
+			safety:           DefaultSafetyConfig(),
+			mode:             SyncBidirectional,
 			reconcileC:       reconcileC,
 			reconcileResults: rt.reconcileResults,
 		})
@@ -846,7 +846,7 @@ func TestRunFullReconciliationAsync_ShutdownAfterCommit(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	rawEngine, err := newEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := newEngine(t.Context(), &engineInputs{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -961,7 +961,7 @@ func TestRunFullReconciliationAsync_DurationInCompletionLog(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	syncDir := t.TempDir()
 
-	rawEngine, err := newEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := newEngine(t.Context(), &engineInputs{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -1020,7 +1020,7 @@ func TestRunFullReconciliationAsync_DurationInNoChangesLog(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	syncDir := t.TempDir()
 
-	rawEngine, err := newEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := newEngine(t.Context(), &engineInputs{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,

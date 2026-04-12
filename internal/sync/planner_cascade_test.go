@@ -26,17 +26,17 @@ func TestCascade_BasicFolderDelete(t *testing.T) {
 	planner := NewPlanner(synctest.TestLogger(t))
 	driveID := driveid.New(synctest.TestDriveID)
 
-	baseline := synctest.BaselineWith(
-		&synctypes.BaselineEntry{Path: "folder", ItemType: synctypes.ItemTypeFolder, ItemID: "f1", DriveID: driveID},
-		&synctypes.BaselineEntry{Path: "folder/a.txt", ItemType: synctypes.ItemTypeFile, ItemID: "f2", DriveID: driveID, LocalHash: "hashA", RemoteHash: "hashA"},
-		&synctypes.BaselineEntry{Path: "folder/b.txt", ItemType: synctypes.ItemTypeFile, ItemID: "f3", DriveID: driveID, LocalHash: "hashB", RemoteHash: "hashB"},
+	baseline := baselineWith(
+		&BaselineEntry{Path: "folder", ItemType: synctypes.ItemTypeFolder, ItemID: "f1", DriveID: driveID},
+		&BaselineEntry{Path: "folder/a.txt", ItemType: synctypes.ItemTypeFile, ItemID: "f2", DriveID: driveID, LocalHash: "hashA", RemoteHash: "hashA"},
+		&BaselineEntry{Path: "folder/b.txt", ItemType: synctypes.ItemTypeFile, ItemID: "f3", DriveID: driveID, LocalHash: "hashB", RemoteHash: "hashB"},
 	)
 
 	// Delta reports only the parent folder as deleted — children NOT reported.
-	changes := []synctypes.PathChanges{
+	changes := []PathChanges{
 		{
 			Path: "folder",
-			RemoteEvents: []synctypes.ChangeEvent{
+			RemoteEvents: []ChangeEvent{
 				{
 					Source:    synctypes.SourceRemote,
 					Type:      synctypes.ChangeDelete,
@@ -50,11 +50,11 @@ func TestCascade_BasicFolderDelete(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	// Should have 3 actions: folder delete + 2 cascaded child deletes.
-	localDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionLocalDelete)
+	localDeletes := actionsOfType(plan.Actions, ActionLocalDelete)
 	assert.Len(t, localDeletes, 3, "folder + 2 children = 3 local deletes")
 
 	// Verify paths.
@@ -75,19 +75,19 @@ func TestCascade_NestedHierarchy(t *testing.T) {
 	planner := NewPlanner(synctest.TestLogger(t))
 	driveID := driveid.New(synctest.TestDriveID)
 
-	baseline := synctest.BaselineWith(
-		&synctypes.BaselineEntry{Path: "a", ItemType: synctypes.ItemTypeFolder, ItemID: "a1", DriveID: driveID},
-		&synctypes.BaselineEntry{Path: "a/top.txt", ItemType: synctypes.ItemTypeFile, ItemID: "a2", DriveID: driveID, LocalHash: "h1", RemoteHash: "h1"},
-		&synctypes.BaselineEntry{Path: "a/b", ItemType: synctypes.ItemTypeFolder, ItemID: "a3", DriveID: driveID},
-		&synctypes.BaselineEntry{Path: "a/b/mid.txt", ItemType: synctypes.ItemTypeFile, ItemID: "a4", DriveID: driveID, LocalHash: "h2", RemoteHash: "h2"},
-		&synctypes.BaselineEntry{Path: "a/b/c", ItemType: synctypes.ItemTypeFolder, ItemID: "a5", DriveID: driveID},
-		&synctypes.BaselineEntry{Path: "a/b/c/deep.txt", ItemType: synctypes.ItemTypeFile, ItemID: "a6", DriveID: driveID, LocalHash: "h3", RemoteHash: "h3"},
+	baseline := baselineWith(
+		&BaselineEntry{Path: "a", ItemType: synctypes.ItemTypeFolder, ItemID: "a1", DriveID: driveID},
+		&BaselineEntry{Path: "a/top.txt", ItemType: synctypes.ItemTypeFile, ItemID: "a2", DriveID: driveID, LocalHash: "h1", RemoteHash: "h1"},
+		&BaselineEntry{Path: "a/b", ItemType: synctypes.ItemTypeFolder, ItemID: "a3", DriveID: driveID},
+		&BaselineEntry{Path: "a/b/mid.txt", ItemType: synctypes.ItemTypeFile, ItemID: "a4", DriveID: driveID, LocalHash: "h2", RemoteHash: "h2"},
+		&BaselineEntry{Path: "a/b/c", ItemType: synctypes.ItemTypeFolder, ItemID: "a5", DriveID: driveID},
+		&BaselineEntry{Path: "a/b/c/deep.txt", ItemType: synctypes.ItemTypeFile, ItemID: "a6", DriveID: driveID, LocalHash: "h3", RemoteHash: "h3"},
 	)
 
-	changes := []synctypes.PathChanges{
+	changes := []PathChanges{
 		{
 			Path: "a",
-			RemoteEvents: []synctypes.ChangeEvent{
+			RemoteEvents: []ChangeEvent{
 				{
 					Source:    synctypes.SourceRemote,
 					Type:      synctypes.ChangeDelete,
@@ -101,17 +101,17 @@ func TestCascade_NestedHierarchy(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	// All 6 items should be deleted (1 parent + 5 descendants).
-	localDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionLocalDelete)
+	localDeletes := actionsOfType(plan.Actions, ActionLocalDelete)
 	assert.Len(t, localDeletes, 6, "a + a/top.txt + a/b + a/b/mid.txt + a/b/c + a/b/c/deep.txt")
 
 	// Dependency ordering: child deletes must complete before parent.
 	deleteByPath := make(map[string]int)
 	for i, a := range plan.Actions {
-		if a.Type == synctypes.ActionLocalDelete {
+		if a.Type == ActionLocalDelete {
 			deleteByPath[a.Path] = i
 		}
 	}
@@ -120,7 +120,7 @@ func TestCascade_NestedHierarchy(t *testing.T) {
 	// The dependency graph ensures correct ordering.
 	for i, deps := range plan.Deps {
 		a := plan.Actions[i]
-		if a.Type == synctypes.ActionLocalDelete && a.View != nil &&
+		if a.Type == ActionLocalDelete && a.View != nil &&
 			a.View.Baseline != nil && a.View.Baseline.ItemType == synctypes.ItemTypeFolder {
 			// Folder deletes should depend on their children.
 			if a.Path == "a" {
@@ -138,16 +138,16 @@ func TestCascade_Deduplication(t *testing.T) {
 	planner := NewPlanner(synctest.TestLogger(t))
 	driveID := driveid.New(synctest.TestDriveID)
 
-	baseline := synctest.BaselineWith(
-		&synctypes.BaselineEntry{Path: "folder", ItemType: synctypes.ItemTypeFolder, ItemID: "f1", DriveID: driveID},
-		&synctypes.BaselineEntry{Path: "folder/child.txt", ItemType: synctypes.ItemTypeFile, ItemID: "f2", DriveID: driveID, LocalHash: "hC", RemoteHash: "hC"},
+	baseline := baselineWith(
+		&BaselineEntry{Path: "folder", ItemType: synctypes.ItemTypeFolder, ItemID: "f1", DriveID: driveID},
+		&BaselineEntry{Path: "folder/child.txt", ItemType: synctypes.ItemTypeFile, ItemID: "f2", DriveID: driveID, LocalHash: "hC", RemoteHash: "hC"},
 	)
 
 	// Delta reports BOTH parent folder AND child as deleted.
-	changes := []synctypes.PathChanges{
+	changes := []PathChanges{
 		{
 			Path: "folder",
-			RemoteEvents: []synctypes.ChangeEvent{
+			RemoteEvents: []ChangeEvent{
 				{
 					Source: synctypes.SourceRemote, Type: synctypes.ChangeDelete,
 					Path: "folder", ItemType: synctypes.ItemTypeFolder,
@@ -157,7 +157,7 @@ func TestCascade_Deduplication(t *testing.T) {
 		},
 		{
 			Path: "folder/child.txt",
-			RemoteEvents: []synctypes.ChangeEvent{
+			RemoteEvents: []ChangeEvent{
 				{
 					Source: synctypes.SourceRemote, Type: synctypes.ChangeDelete,
 					Path: "folder/child.txt", ItemType: synctypes.ItemTypeFile,
@@ -167,11 +167,11 @@ func TestCascade_Deduplication(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	// Should have exactly 2 local deletes (no duplicates).
-	localDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionLocalDelete)
+	localDeletes := actionsOfType(plan.Actions, ActionLocalDelete)
 	assert.Len(t, localDeletes, 2, "no duplicates: folder + child")
 }
 
@@ -181,16 +181,16 @@ func TestCascade_NestedDeletedFolders_DoesNotPanicOnOverlappingCascade(t *testin
 	planner := NewPlanner(synctest.TestLogger(t))
 	driveID := driveid.New(synctest.TestDriveID)
 
-	baseline := synctest.BaselineWith(
-		&synctypes.BaselineEntry{Path: "folder", ItemType: synctypes.ItemTypeFolder, ItemID: "folder-id", DriveID: driveID},
-		&synctypes.BaselineEntry{Path: "folder/child", ItemType: synctypes.ItemTypeFolder, ItemID: "child-id", DriveID: driveID},
-		&synctypes.BaselineEntry{Path: "folder/child/deep.txt", ItemType: synctypes.ItemTypeFile, ItemID: "deep-id", DriveID: driveID, LocalHash: "h", RemoteHash: "h"},
+	baseline := baselineWith(
+		&BaselineEntry{Path: "folder", ItemType: synctypes.ItemTypeFolder, ItemID: "folder-id", DriveID: driveID},
+		&BaselineEntry{Path: "folder/child", ItemType: synctypes.ItemTypeFolder, ItemID: "child-id", DriveID: driveID},
+		&BaselineEntry{Path: "folder/child/deep.txt", ItemType: synctypes.ItemTypeFile, ItemID: "deep-id", DriveID: driveID, LocalHash: "h", RemoteHash: "h"},
 	)
 
-	changes := []synctypes.PathChanges{
+	changes := []PathChanges{
 		{
 			Path: "folder",
-			RemoteEvents: []synctypes.ChangeEvent{{
+			RemoteEvents: []ChangeEvent{{
 				Source:    synctypes.SourceRemote,
 				Type:      synctypes.ChangeDelete,
 				Path:      "folder",
@@ -202,7 +202,7 @@ func TestCascade_NestedDeletedFolders_DoesNotPanicOnOverlappingCascade(t *testin
 		},
 		{
 			Path: "folder/child",
-			RemoteEvents: []synctypes.ChangeEvent{{
+			RemoteEvents: []ChangeEvent{{
 				Source:    synctypes.SourceRemote,
 				Type:      synctypes.ChangeDelete,
 				Path:      "folder/child",
@@ -214,11 +214,11 @@ func TestCascade_NestedDeletedFolders_DoesNotPanicOnOverlappingCascade(t *testin
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 	require.NotNil(t, plan)
 
-	localDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionLocalDelete)
+	localDeletes := actionsOfType(plan.Actions, ActionLocalDelete)
 	assert.Len(t, localDeletes, 3)
 
 	deletePaths := make(map[string]bool, len(localDeletes))
@@ -238,15 +238,15 @@ func TestCascade_UploadOnlyMode(t *testing.T) {
 	planner := NewPlanner(synctest.TestLogger(t))
 	driveID := driveid.New(synctest.TestDriveID)
 
-	baseline := synctest.BaselineWith(
-		&synctypes.BaselineEntry{Path: "folder", ItemType: synctypes.ItemTypeFolder, ItemID: "f1", DriveID: driveID},
-		&synctypes.BaselineEntry{Path: "folder/child.txt", ItemType: synctypes.ItemTypeFile, ItemID: "f2", DriveID: driveID, LocalHash: "h", RemoteHash: "h"},
+	baseline := baselineWith(
+		&BaselineEntry{Path: "folder", ItemType: synctypes.ItemTypeFolder, ItemID: "f1", DriveID: driveID},
+		&BaselineEntry{Path: "folder/child.txt", ItemType: synctypes.ItemTypeFile, ItemID: "f2", DriveID: driveID, LocalHash: "h", RemoteHash: "h"},
 	)
 
-	changes := []synctypes.PathChanges{
+	changes := []PathChanges{
 		{
 			Path: "folder",
-			RemoteEvents: []synctypes.ChangeEvent{
+			RemoteEvents: []ChangeEvent{
 				{
 					Source: synctypes.SourceRemote, Type: synctypes.ChangeDelete,
 					Path: "folder", ItemType: synctypes.ItemTypeFolder,
@@ -256,11 +256,11 @@ func TestCascade_UploadOnlyMode(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, synctypes.SyncUploadOnly, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(changes, baseline, SyncUploadOnly, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	// Upload-only mode suppresses remote deletions — no local deletes at all.
-	localDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionLocalDelete)
+	localDeletes := actionsOfType(plan.Actions, ActionLocalDelete)
 	assert.Empty(t, localDeletes, "upload-only mode: no local deletes")
 }
 
@@ -275,14 +275,14 @@ func TestCascade_RemoteDeletedFolderWithModifiedDescendant_ReclassifiesDescendan
 	planner := NewPlanner(synctest.TestLogger(t))
 	driveID := driveid.New(synctest.TestDriveID)
 
-	baseline := synctest.BaselineWith(
-		&synctypes.BaselineEntry{
+	baseline := baselineWith(
+		&BaselineEntry{
 			Path:     "folder",
 			ItemType: synctypes.ItemTypeFolder,
 			ItemID:   "folder-id",
 			DriveID:  driveID,
 		},
-		&synctypes.BaselineEntry{
+		&BaselineEntry{
 			Path:       "folder/child.txt",
 			ItemType:   synctypes.ItemTypeFile,
 			ItemID:     "child-id",
@@ -292,10 +292,10 @@ func TestCascade_RemoteDeletedFolderWithModifiedDescendant_ReclassifiesDescendan
 		},
 	)
 
-	changes := []synctypes.PathChanges{
+	changes := []PathChanges{
 		{
 			Path: "folder",
-			RemoteEvents: []synctypes.ChangeEvent{
+			RemoteEvents: []ChangeEvent{
 				{
 					Source:    synctypes.SourceRemote,
 					Type:      synctypes.ChangeDelete,
@@ -309,7 +309,7 @@ func TestCascade_RemoteDeletedFolderWithModifiedDescendant_ReclassifiesDescendan
 		},
 		{
 			Path: "folder/child.txt",
-			LocalEvents: []synctypes.ChangeEvent{
+			LocalEvents: []ChangeEvent{
 				{
 					Source:   synctypes.SourceLocal,
 					Type:     synctypes.ChangeModify,
@@ -321,29 +321,29 @@ func TestCascade_RemoteDeletedFolderWithModifiedDescendant_ReclassifiesDescendan
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
-	folderCreates := synctest.ActionsOfType(plan.Actions, synctypes.ActionFolderCreate)
+	folderCreates := actionsOfType(plan.Actions, ActionFolderCreate)
 	require.Len(t, folderCreates, 1)
 	assert.Equal(t, plannerCascadeFolderPath, folderCreates[0].Path)
 	assert.Equal(t, synctypes.CreateRemote, folderCreates[0].CreateSide)
 
-	conflicts := synctest.ActionsOfType(plan.Actions, synctypes.ActionConflict)
+	conflicts := actionsOfType(plan.Actions, ActionConflict)
 	require.Len(t, conflicts, 1)
 	assert.Equal(t, "folder/child.txt", conflicts[0].Path)
 	require.NotNil(t, conflicts[0].ConflictInfo)
 	assert.Equal(t, synctypes.ConflictEditDelete, conflicts[0].ConflictInfo.ConflictType)
 
-	localDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionLocalDelete)
+	localDeletes := actionsOfType(plan.Actions, ActionLocalDelete)
 	assert.Empty(t, localDeletes, "remote recreation should replace parent local delete when a descendant is preserved")
 
 	var folderCreateIdx, conflictIdx int
 	for i := range plan.Actions {
 		switch {
-		case plan.Actions[i].Type == synctypes.ActionFolderCreate && plan.Actions[i].Path == plannerCascadeFolderPath:
+		case plan.Actions[i].Type == ActionFolderCreate && plan.Actions[i].Path == plannerCascadeFolderPath:
 			folderCreateIdx = i
-		case plan.Actions[i].Type == synctypes.ActionConflict && plan.Actions[i].Path == "folder/child.txt":
+		case plan.Actions[i].Type == ActionConflict && plan.Actions[i].Path == "folder/child.txt":
 			conflictIdx = i
 		}
 	}
@@ -362,17 +362,17 @@ func TestCascade_BothSidesDeleted(t *testing.T) {
 	planner := NewPlanner(synctest.TestLogger(t))
 	driveID := driveid.New(synctest.TestDriveID)
 
-	baseline := synctest.BaselineWith(
-		&synctypes.BaselineEntry{Path: "folder", ItemType: synctypes.ItemTypeFolder, ItemID: "f1", DriveID: driveID},
-		&synctypes.BaselineEntry{Path: "folder/gone.txt", ItemType: synctypes.ItemTypeFile, ItemID: "f2", DriveID: driveID, LocalHash: "h", RemoteHash: "h"},
+	baseline := baselineWith(
+		&BaselineEntry{Path: "folder", ItemType: synctypes.ItemTypeFolder, ItemID: "f1", DriveID: driveID},
+		&BaselineEntry{Path: "folder/gone.txt", ItemType: synctypes.ItemTypeFile, ItemID: "f2", DriveID: driveID, LocalHash: "h", RemoteHash: "h"},
 	)
 
 	// Remote deleted, no local events. The planner derives local state from
 	// baseline (assumes folder still on disk) → ED6 (ActionLocalDelete).
-	changes := []synctypes.PathChanges{
+	changes := []PathChanges{
 		{
 			Path: "folder",
-			RemoteEvents: []synctypes.ChangeEvent{
+			RemoteEvents: []ChangeEvent{
 				{
 					Source: synctypes.SourceRemote, Type: synctypes.ChangeDelete,
 					Path: "folder", ItemType: synctypes.ItemTypeFolder,
@@ -382,12 +382,12 @@ func TestCascade_BothSidesDeleted(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	// Both parent and child get ActionLocalDelete (local state derived from
 	// baseline — planner assumes items exist on disk).
-	localDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionLocalDelete)
+	localDeletes := actionsOfType(plan.Actions, ActionLocalDelete)
 	assert.Len(t, localDeletes, 2, "parent + child: local deletes")
 }
 
@@ -398,14 +398,14 @@ func TestCascade_EmptyFolder(t *testing.T) {
 	planner := NewPlanner(synctest.TestLogger(t))
 	driveID := driveid.New(synctest.TestDriveID)
 
-	baseline := synctest.BaselineWith(
-		&synctypes.BaselineEntry{Path: "empty", ItemType: synctypes.ItemTypeFolder, ItemID: "e1", DriveID: driveID},
+	baseline := baselineWith(
+		&BaselineEntry{Path: "empty", ItemType: synctypes.ItemTypeFolder, ItemID: "e1", DriveID: driveID},
 	)
 
-	changes := []synctypes.PathChanges{
+	changes := []PathChanges{
 		{
 			Path: "empty",
-			RemoteEvents: []synctypes.ChangeEvent{
+			RemoteEvents: []ChangeEvent{
 				{
 					Source: synctypes.SourceRemote, Type: synctypes.ChangeDelete,
 					Path: "empty", ItemType: synctypes.ItemTypeFolder,
@@ -415,11 +415,11 @@ func TestCascade_EmptyFolder(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	// Just the single folder delete — no cascade needed.
-	localDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionLocalDelete)
+	localDeletes := actionsOfType(plan.Actions, ActionLocalDelete)
 	assert.Len(t, localDeletes, 1)
 	assert.Equal(t, "empty", localDeletes[0].Path)
 }
@@ -434,24 +434,24 @@ func TestCascade_DeleteSafetyProtection(t *testing.T) {
 	driveID := driveid.New(synctest.TestDriveID)
 
 	// Create a folder with 5 children.
-	entries := []*synctypes.BaselineEntry{
+	entries := []*BaselineEntry{
 		{Path: "bigfolder", ItemType: synctypes.ItemTypeFolder, ItemID: "bf1", DriveID: driveID},
 	}
 
 	for i := range 5 {
-		entries = append(entries, &synctypes.BaselineEntry{
+		entries = append(entries, &BaselineEntry{
 			Path: fmt.Sprintf("bigfolder/file%d.txt", i), ItemType: synctypes.ItemTypeFile,
 			ItemID: fmt.Sprintf("bf%d", i+2), DriveID: driveID,
 			LocalHash: fmt.Sprintf("h%d", i), RemoteHash: fmt.Sprintf("h%d", i),
 		})
 	}
 
-	baseline := synctest.BaselineWith(entries...)
+	baseline := baselineWith(entries...)
 
-	changes := []synctypes.PathChanges{
+	changes := []PathChanges{
 		{
 			Path: "bigfolder",
-			RemoteEvents: []synctypes.ChangeEvent{
+			RemoteEvents: []ChangeEvent{
 				{
 					Source: synctypes.SourceRemote, Type: synctypes.ChangeDelete,
 					Path: "bigfolder", ItemType: synctypes.ItemTypeFolder,
@@ -462,8 +462,8 @@ func TestCascade_DeleteSafetyProtection(t *testing.T) {
 	}
 
 	// Set threshold to 3 — cascade produces 6 deletes, which exceeds it.
-	safety := &synctypes.SafetyConfig{DeleteSafetyThreshold: 3}
+	safety := &SafetyConfig{DeleteSafetyThreshold: 3}
 
-	_, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, safety, nil)
+	_, err := planner.Plan(changes, baseline, SyncBidirectional, safety, nil)
 	assert.ErrorIs(t, err, synctypes.ErrDeleteSafetyThresholdExceeded, "cascaded deletes should trigger delete safety protection")
 }

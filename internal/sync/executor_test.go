@@ -155,13 +155,13 @@ func writeExecTestFile(t *testing.T, dir, relPath, content string) string {
 	return absPath
 }
 
-func requireOutcomeSuccess(t *testing.T, o *synctypes.Outcome) {
+func requireOutcomeSuccess(t *testing.T, o *ExecutionResult) {
 	t.Helper()
 
 	require.True(t, o.Success, "expected success but got error: %v", o.Error)
 }
 
-func requireOutcomeFailure(t *testing.T, o *synctypes.Outcome) {
+func requireOutcomeFailure(t *testing.T, o *ExecutionResult) {
 	t.Helper()
 
 	require.False(t, o.Success, "expected failure but got success")
@@ -183,14 +183,14 @@ func TestExecutor_CreateLocalFolder(t *testing.T) {
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
-	action := &synctypes.Action{
-		Type:       synctypes.ActionFolderCreate,
+	action := &Action{
+		Type:       ActionFolderCreate,
 		Path:       "docs/notes",
 		CreateSide: synctypes.CreateLocal,
-		View: &synctypes.PathView{
-			Remote: &synctypes.RemoteState{
+		View: &PathView{
+			Remote: &RemoteState{
 				ItemID:   "folder1",
 				ParentID: "root",
 				Mtime:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixNano(),
@@ -219,13 +219,13 @@ func TestExecutor_CreateRemoteFolder(t *testing.T) {
 	}
 
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
-	action := &synctypes.Action{
-		Type:       synctypes.ActionFolderCreate,
+	action := &Action{
+		Type:       ActionFolderCreate,
 		Path:       "photos",
 		CreateSide: synctypes.CreateRemote,
-		View:       &synctypes.PathView{Path: "photos"},
+		View:       &PathView{Path: "photos"},
 	}
 
 	o := e.ExecuteFolderCreate(t.Context(), action)
@@ -245,18 +245,18 @@ func TestExecutor_CreateRemoteFolder_UsesPathConvergence(t *testing.T) {
 	pathConvergence := &executorPathConvergenceStub{}
 
 	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
-	e := NewExecution(cfg, synctest.BaselineWith(&synctypes.BaselineEntry{
+	e := NewExecution(cfg, baselineWith(&BaselineEntry{
 		Path:     "shortcut",
 		ItemID:   "shortcut-parent-id",
 		DriveID:  driveid.New("00000000000000ff"),
 		ItemType: synctypes.ItemTypeFolder,
 	}))
 
-	action := &synctypes.Action{
-		Type:       synctypes.ActionFolderCreate,
+	action := &Action{
+		Type:       ActionFolderCreate,
 		Path:       "photos",
 		CreateSide: synctypes.CreateRemote,
-		View:       &synctypes.PathView{Path: "photos"},
+		View:       &PathView{Path: "photos"},
 	}
 
 	o := e.ExecuteFolderCreate(t.Context(), action)
@@ -276,13 +276,13 @@ func TestExecutor_CreateRemoteFolder_PathConvergenceWarningIsNonFatal(t *testing
 	pathConvergence := &executorPathConvergenceStub{waitErr: driveops.ErrPathNotVisible}
 
 	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
-	action := &synctypes.Action{
-		Type:       synctypes.ActionFolderCreate,
+	action := &Action{
+		Type:       ActionFolderCreate,
 		Path:       "photos",
 		CreateSide: synctypes.CreateRemote,
-		View:       &synctypes.PathView{Path: "photos"},
+		View:       &PathView{Path: "photos"},
 	}
 
 	o := e.ExecuteFolderCreate(t.Context(), action)
@@ -307,20 +307,20 @@ func TestExecutor_CreateRemoteFolder_CrossDriveParentUsesTargetScopedPathConverg
 	pathConvergence := &executorPathConvergenceStub{}
 
 	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
-	e := NewExecution(cfg, synctest.BaselineWith(&synctypes.BaselineEntry{
+	e := NewExecution(cfg, baselineWith(&BaselineEntry{
 		Path:     "shortcut",
 		ItemID:   shortcutParent,
 		DriveID:  driveid.New("00000000000000ff"),
 		ItemType: synctypes.ItemTypeFolder,
 	}))
 
-	action := &synctypes.Action{
-		Type:                synctypes.ActionFolderCreate,
+	action := &Action{
+		Type:                ActionFolderCreate,
 		Path:                "shortcut/photos",
 		CreateSide:          synctypes.CreateRemote,
 		TargetRootItemID:    shortcutParent,
 		TargetRootLocalPath: "shortcut",
-		View:                &synctypes.PathView{Path: "shortcut/photos"},
+		View:                &PathView{Path: "shortcut/photos"},
 	}
 
 	o := e.ExecuteFolderCreate(t.Context(), action)
@@ -343,13 +343,13 @@ func TestExecutor_CreateRemoteFolder_Error(t *testing.T) {
 	}
 
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
-	action := &synctypes.Action{
-		Type:       synctypes.ActionFolderCreate,
+	action := &Action{
+		Type:       ActionFolderCreate,
 		Path:       "restricted",
 		CreateSide: synctypes.CreateRemote,
-		View:       &synctypes.PathView{Path: "restricted"},
+		View:       &PathView{Path: "restricted"},
 	}
 
 	o := e.ExecuteFolderCreate(t.Context(), action)
@@ -364,15 +364,15 @@ func TestExecutor_LocalMove(t *testing.T) {
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "old-name.txt", "content")
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionLocalMove,
+	action := &Action{
+		Type:    ActionLocalMove,
 		Path:    "new-name.txt",
 		OldPath: "old-name.txt",
-		View:    &synctypes.PathView{Path: "new-name.txt"},
+		View:    &PathView{Path: "new-name.txt"},
 	}
 
 	o := e.ExecuteMove(t.Context(), action)
@@ -386,13 +386,13 @@ func TestExecutor_LocalMove_SourceMissing(t *testing.T) {
 	t.Parallel()
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionLocalMove,
+	action := &Action{
+		Type:    ActionLocalMove,
 		Path:    "target.txt",
 		OldPath: "nonexistent.txt",
-		View:    &synctypes.PathView{Path: "target.txt"},
+		View:    &PathView{Path: "target.txt"},
 	}
 
 	o := e.ExecuteMove(t.Context(), action)
@@ -413,15 +413,15 @@ func TestExecutor_RemoteMove(t *testing.T) {
 	}
 
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionRemoteMove,
+	action := &Action{
+		Type:    ActionRemoteMove,
 		Path:    "renamed.txt",
 		OldPath: "original.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &synctypes.PathView{Path: "renamed.txt"},
+		View:    &PathView{Path: "renamed.txt"},
 	}
 
 	o := e.ExecuteMove(t.Context(), action)
@@ -442,20 +442,20 @@ func TestExecutor_RemoteMove_UsesPathConvergence(t *testing.T) {
 	pathConvergence := &executorPathConvergenceStub{}
 
 	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
-	e := NewExecution(cfg, synctest.BaselineWith(&synctypes.BaselineEntry{
+	e := NewExecution(cfg, baselineWith(&BaselineEntry{
 		Path:     "shortcut",
 		ItemID:   "shortcut-parent-id",
 		DriveID:  driveid.New("00000000000000ff"),
 		ItemType: synctypes.ItemTypeFolder,
 	}))
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionRemoteMove,
+	action := &Action{
+		Type:    ActionRemoteMove,
 		Path:    "renamed.txt",
 		OldPath: "original.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &synctypes.PathView{Path: "renamed.txt"},
+		View:    &PathView{Path: "renamed.txt"},
 	}
 
 	o := e.ExecuteMove(t.Context(), action)
@@ -474,22 +474,22 @@ func TestExecutor_RemoteMove_CrossDriveUsesTargetScopedPathConvergence(t *testin
 	pathConvergence := &executorPathConvergenceStub{}
 
 	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
-	e := NewExecution(cfg, synctest.BaselineWith(&synctypes.BaselineEntry{
+	e := NewExecution(cfg, baselineWith(&BaselineEntry{
 		Path:     "shortcut",
 		ItemID:   "shortcut-parent-id",
 		DriveID:  driveid.New("00000000000000ff"),
 		ItemType: synctypes.ItemTypeFolder,
 	}))
 
-	action := &synctypes.Action{
-		Type:                synctypes.ActionRemoteMove,
+	action := &Action{
+		Type:                ActionRemoteMove,
 		Path:                "shortcut/renamed.txt",
 		OldPath:             "shortcut/original.txt",
 		ItemID:              "item1",
 		DriveID:             driveid.New("00000000000000ff"),
 		TargetRootItemID:    "shortcut-root-id",
 		TargetRootLocalPath: "shortcut",
-		View:                &synctypes.PathView{Path: "shortcut/renamed.txt"},
+		View:                &PathView{Path: "shortcut/renamed.txt"},
 	}
 
 	o := e.ExecuteMove(t.Context(), action)
@@ -519,15 +519,15 @@ func TestExecutor_Download_Success(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionDownload,
+	action := &Action{
+		Type:    ActionDownload,
 		Path:    "greetings.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &synctypes.PathView{
-			Remote: &synctypes.RemoteState{
+		View: &PathView{
+			Remote: &RemoteState{
 				ItemID:   "item1",
 				ParentID: "root",
 				ETag:     "etag1",
@@ -559,14 +559,14 @@ func TestExecutor_Download_APIError(t *testing.T) {
 	}
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionDownload,
+	action := &Action{
+		Type:    ActionDownload,
 		Path:    "exec-forbidden.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &synctypes.PathView{Remote: &synctypes.RemoteState{}},
+		View:    &PathView{Remote: &RemoteState{}},
 	}
 
 	o := e.ExecuteDownload(t.Context(), action)
@@ -584,14 +584,14 @@ func TestExecutor_Download_ParentDirCreated(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionDownload,
+	action := &Action{
+		Type:    ActionDownload,
 		Path:    "deep/nested/dir/exec-dl.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &synctypes.PathView{Remote: &synctypes.RemoteState{Mtime: 1}},
+		View:    &PathView{Remote: &RemoteState{Mtime: 1}},
 	}
 
 	o := e.ExecuteDownload(t.Context(), action)
@@ -610,14 +610,14 @@ func TestExecutor_Download_ZeroByte(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionDownload,
+	action := &Action{
+		Type:    ActionDownload,
 		Path:    "exec-empty.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &synctypes.PathView{Remote: &synctypes.RemoteState{}},
+		View:    &PathView{Remote: &RemoteState{}},
 	}
 
 	o := e.ExecuteDownload(t.Context(), action)
@@ -653,15 +653,15 @@ func TestExecutor_Download_HashMismatch_Retries(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	correctHash := execHelloWorldQuickXorHash // QuickXorHash of hello world.
-	action := &synctypes.Action{
-		Type:    synctypes.ActionDownload,
+	action := &Action{
+		Type:    ActionDownload,
 		Path:    "hash-retry.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &synctypes.PathView{Remote: &synctypes.RemoteState{Hash: correctHash, Mtime: 1}},
+		View:    &PathView{Remote: &RemoteState{Hash: correctHash, Mtime: 1}},
 	}
 
 	o := e.ExecuteDownload(t.Context(), action)
@@ -692,14 +692,14 @@ func TestExecutor_Download_HashMismatch_Accepted(t *testing.T) {
 	}
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionDownload,
+	action := &Action{
+		Type:    ActionDownload,
 		Path:    "hash-accept.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &synctypes.PathView{Remote: &synctypes.RemoteState{Hash: "stale-remote-hash", Mtime: 1}},
+		View:    &PathView{Remote: &RemoteState{Hash: "stale-remote-hash", Mtime: 1}},
 	}
 
 	o := e.ExecuteDownload(t.Context(), action)
@@ -727,15 +727,15 @@ func TestExecutor_Download_HashMatch_NoRetry(t *testing.T) {
 	}
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	correctHash := execHelloWorldQuickXorHash
-	action := &synctypes.Action{
-		Type:    synctypes.ActionDownload,
+	action := &Action{
+		Type:    ActionDownload,
 		Path:    "hash-ok.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &synctypes.PathView{Remote: &synctypes.RemoteState{Hash: correctHash, Mtime: 1}},
+		View:    &PathView{Remote: &RemoteState{Hash: correctHash, Mtime: 1}},
 	}
 
 	o := e.ExecuteDownload(t.Context(), action)
@@ -763,15 +763,15 @@ func TestExecutor_Upload_SimpleSuccess(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-small.txt", "hello")
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionUpload,
+	action := &Action{
+		Type:    ActionUpload,
 		Path:    "exec-small.txt",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &synctypes.PathView{Path: "exec-small.txt"},
+		View:    &PathView{Path: "exec-small.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
@@ -792,15 +792,15 @@ func TestExecutor_Upload_UsesPathConvergence(t *testing.T) {
 	pathConvergence := &executorPathConvergenceStub{}
 
 	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, &executorMockItemClient{}, &executorMockDownloader{}, ul, pathConvergence)
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-small.txt", "hello")
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionUpload,
+	action := &Action{
+		Type:    ActionUpload,
 		Path:    "exec-small.txt",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &synctypes.PathView{Path: "exec-small.txt"},
+		View:    &PathView{Path: "exec-small.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
@@ -819,15 +819,15 @@ func TestExecutor_Upload_PathConvergenceProbeFailureIsNonFatal(t *testing.T) {
 	pathConvergence := &executorPathConvergenceStub{waitErr: fmt.Errorf("metadata probe failed")}
 
 	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, &executorMockItemClient{}, &executorMockDownloader{}, ul, pathConvergence)
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-small.txt", "hello")
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionUpload,
+	action := &Action{
+		Type:    ActionUpload,
 		Path:    "exec-small.txt",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &synctypes.PathView{Path: "exec-small.txt"},
+		View:    &PathView{Path: "exec-small.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
@@ -852,7 +852,7 @@ func TestExecutor_Upload_CrossDriveParentUsesTargetScopedPathConvergence(t *test
 	pathConvergence := &executorPathConvergenceStub{}
 
 	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, &executorMockItemClient{}, &executorMockDownloader{}, ul, pathConvergence)
-	e := NewExecution(cfg, synctest.BaselineWith(&synctypes.BaselineEntry{
+	e := NewExecution(cfg, baselineWith(&BaselineEntry{
 		Path:     "shortcut",
 		ItemID:   shortcutParent,
 		DriveID:  driveid.New("00000000000000ff"),
@@ -861,12 +861,12 @@ func TestExecutor_Upload_CrossDriveParentUsesTargetScopedPathConvergence(t *test
 
 	writeExecTestFile(t, syncRoot, "shortcut/exec-small.txt", "hello")
 
-	action := &synctypes.Action{
-		Type:                synctypes.ActionUpload,
+	action := &Action{
+		Type:                ActionUpload,
 		Path:                "shortcut/exec-small.txt",
 		TargetRootItemID:    shortcutParent,
 		TargetRootLocalPath: "shortcut",
-		View:                &synctypes.PathView{Path: "shortcut/exec-small.txt"},
+		View:                &PathView{Path: "shortcut/exec-small.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
@@ -893,7 +893,7 @@ func TestExecutor_Upload_CrossDriveWithoutTargetRootMetadataSkipsPathConvergence
 	pathConvergence := &executorPathConvergenceStub{}
 
 	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, &executorMockItemClient{}, &executorMockDownloader{}, ul, pathConvergence)
-	e := NewExecution(cfg, synctest.BaselineWith(&synctypes.BaselineEntry{
+	e := NewExecution(cfg, baselineWith(&BaselineEntry{
 		Path:     "shortcut",
 		ItemID:   shortcutParent,
 		DriveID:  driveid.New("00000000000000ff"),
@@ -902,10 +902,10 @@ func TestExecutor_Upload_CrossDriveWithoutTargetRootMetadataSkipsPathConvergence
 
 	writeExecTestFile(t, syncRoot, "shortcut/exec-small.txt", "hello")
 
-	action := &synctypes.Action{
-		Type: synctypes.ActionUpload,
+	action := &Action{
+		Type: ActionUpload,
 		Path: "shortcut/exec-small.txt",
-		View: &synctypes.PathView{Path: "shortcut/exec-small.txt"},
+		View: &PathView{Path: "shortcut/exec-small.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
@@ -927,7 +927,7 @@ func TestExecutor_Upload_ParentFromBaseline(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
-	e := NewExecution(cfg, synctest.BaselineWith(&synctypes.BaselineEntry{
+	e := NewExecution(cfg, baselineWith(&BaselineEntry{
 		Path:     "exec-existing-dir",
 		ItemID:   "baseline-folder-id",
 		DriveID:  driveid.New(synctest.TestDriveID),
@@ -936,10 +936,10 @@ func TestExecutor_Upload_ParentFromBaseline(t *testing.T) {
 
 	writeExecTestFile(t, syncRoot, "exec-existing-dir/exec-doc.txt", "content")
 
-	action := &synctypes.Action{
-		Type: synctypes.ActionUpload,
+	action := &Action{
+		Type: ActionUpload,
 		Path: "exec-existing-dir/exec-doc.txt",
-		View: &synctypes.PathView{Path: "exec-existing-dir/exec-doc.txt"},
+		View: &PathView{Path: "exec-existing-dir/exec-doc.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
@@ -969,7 +969,7 @@ func TestExecutor_Upload_KnownItemUsesItemOverwrite(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
-	e := NewExecution(cfg, synctest.BaselineWith(&synctypes.BaselineEntry{
+	e := NewExecution(cfg, baselineWith(&BaselineEntry{
 		Path:     "known.txt",
 		ItemID:   "known-item-id",
 		ParentID: "baseline-parent",
@@ -979,14 +979,14 @@ func TestExecutor_Upload_KnownItemUsesItemOverwrite(t *testing.T) {
 
 	writeExecTestFile(t, syncRoot, "known.txt", "known content")
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionUpload,
+	action := &Action{
+		Type:    ActionUpload,
 		Path:    "known.txt",
 		ItemID:  "known-item-id",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &synctypes.PathView{
+		View: &PathView{
 			Path: "known.txt",
-			Baseline: &synctypes.BaselineEntry{
+			Baseline: &BaselineEntry{
 				ParentID: "baseline-parent",
 			},
 		},
@@ -1011,15 +1011,15 @@ func TestExecutor_Upload_B068_ZeroDriveIDFilled(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-new-file.txt", "data")
 
 	// New local item has zero DriveID (EF13 scenario).
-	action := &synctypes.Action{
-		Type: synctypes.ActionUpload,
+	action := &Action{
+		Type: ActionUpload,
 		Path: "exec-new-file.txt",
-		View: &synctypes.PathView{Path: "exec-new-file.txt"},
+		View: &PathView{Path: "exec-new-file.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
@@ -1040,16 +1040,16 @@ func TestExecutor_Upload_LargeFileSuccess(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	// Create a file > 4 MiB to exercise Upload for large files.
 	bigContent := strings.Repeat("x", 5*1024*1024) // 5 MiB
 	writeExecTestFile(t, syncRoot, "exec-big-file.bin", bigContent)
 
-	action := &synctypes.Action{
-		Type: synctypes.ActionUpload,
+	action := &Action{
+		Type: ActionUpload,
 		Path: "exec-big-file.bin",
-		View: &synctypes.PathView{Path: "exec-big-file.bin"},
+		View: &PathView{Path: "exec-big-file.bin"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
@@ -1067,19 +1067,19 @@ func TestExecutor_LocalDelete_HashMatch(t *testing.T) {
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	absPath := writeExecTestFile(t, syncRoot, "exec-delete-me.txt", "content")
 
 	hash, err := driveops.ComputeQuickXorHash(absPath)
 	require.NoError(t, err)
 
-	action := &synctypes.Action{
-		Type:   synctypes.ActionLocalDelete,
+	action := &Action{
+		Type:   ActionLocalDelete,
 		Path:   "exec-delete-me.txt",
 		ItemID: "item1",
-		View: &synctypes.PathView{
-			Baseline: &synctypes.BaselineEntry{LocalHash: hash},
+		View: &PathView{
+			Baseline: &BaselineEntry{LocalHash: hash},
 		},
 	}
 
@@ -1095,16 +1095,16 @@ func TestExecutor_LocalDelete_HashMismatch_ConflictCopy(t *testing.T) {
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-modified.txt", "new content")
 
-	action := &synctypes.Action{
-		Type:   synctypes.ActionLocalDelete,
+	action := &Action{
+		Type:   ActionLocalDelete,
 		Path:   "exec-modified.txt",
 		ItemID: "item1",
-		View: &synctypes.PathView{
-			Baseline: &synctypes.BaselineEntry{
+		View: &PathView{
+			Baseline: &BaselineEntry{
 				LocalHash:  "old-hash-that-wont-match",
 				RemoteHash: "baseline-remote-hash",
 			},
@@ -1115,7 +1115,7 @@ func TestExecutor_LocalDelete_HashMismatch_ConflictCopy(t *testing.T) {
 	requireOutcomeSuccess(t, &o)
 
 	// B-133: outcome should be ActionConflict (not ActionLocalDelete) so it's tracked.
-	assert.Equal(t, synctypes.ActionConflict, o.Action, "expected ActionConflict")
+	assert.Equal(t, ActionConflict, o.Action, "expected ActionConflict")
 	assert.Equal(t, synctypes.ConflictEditDelete, o.ConflictType, "expected ConflictEditDelete")
 	assert.Equal(t, "baseline-remote-hash", o.RemoteHash)
 
@@ -1142,17 +1142,17 @@ func TestExecutor_LocalDelete_HashMismatch_ConflictCopyCollisionGetsSuffix(t *te
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-modified.txt", "new content")
 	writeExecTestFile(t, syncRoot, "exec-modified.conflict-20260115-120000.txt", "existing conflict")
 
-	action := &synctypes.Action{
-		Type:   synctypes.ActionLocalDelete,
+	action := &Action{
+		Type:   ActionLocalDelete,
 		Path:   "exec-modified.txt",
 		ItemID: "item1",
-		View: &synctypes.PathView{
-			Baseline: &synctypes.BaselineEntry{
+		View: &PathView{
+			Baseline: &BaselineEntry{
 				LocalHash:  "old-hash-that-wont-match",
 				RemoteHash: "baseline-remote-hash",
 			},
@@ -1161,7 +1161,7 @@ func TestExecutor_LocalDelete_HashMismatch_ConflictCopyCollisionGetsSuffix(t *te
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
-	assert.Equal(t, synctypes.ActionConflict, o.Action)
+	assert.Equal(t, ActionConflict, o.Action)
 
 	_, statErr := os.Stat(filepath.Join(syncRoot, "exec-modified.txt"))
 	assert.True(t, os.IsNotExist(statErr), "original file should have been renamed")
@@ -1179,13 +1179,13 @@ func TestExecutor_LocalDelete_AlreadyGone(t *testing.T) {
 	t.Parallel()
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
-	action := &synctypes.Action{
-		Type:   synctypes.ActionLocalDelete,
+	action := &Action{
+		Type:   ActionLocalDelete,
 		Path:   "exec-already-gone.txt",
 		ItemID: "item1",
-		View:   &synctypes.PathView{},
+		View:   &PathView{},
 	}
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
@@ -1196,15 +1196,15 @@ func TestExecutor_LocalDelete_FolderEmpty(t *testing.T) {
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "exec-empty-dir"), 0o700))
 
-	action := &synctypes.Action{
-		Type:   synctypes.ActionLocalDelete,
+	action := &Action{
+		Type:   ActionLocalDelete,
 		Path:   "exec-empty-dir",
 		ItemID: "item1",
-		View:   &synctypes.PathView{},
+		View:   &PathView{},
 	}
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
@@ -1218,15 +1218,15 @@ func TestExecutor_LocalDelete_FolderNotEmpty(t *testing.T) {
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-non-empty-dir/child.txt", "data")
 
-	action := &synctypes.Action{
-		Type:   synctypes.ActionLocalDelete,
+	action := &Action{
+		Type:   ActionLocalDelete,
 		Path:   "exec-non-empty-dir",
 		ItemID: "item1",
-		View:   &synctypes.PathView{},
+		View:   &PathView{},
 	}
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
@@ -1249,14 +1249,14 @@ func TestExecutor_RemoteDelete_Success(t *testing.T) {
 	}
 
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionRemoteDelete,
+	action := &Action{
+		Type:    ActionRemoteDelete,
 		Path:    "exec-remote-file.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &synctypes.PathView{},
+		View:    &PathView{},
 	}
 
 	o := e.ExecuteRemoteDelete(t.Context(), action)
@@ -1288,14 +1288,14 @@ func TestExecutor_RemoteDelete_ErrorHandling(t *testing.T) {
 			}
 
 			cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-			e := NewExecution(cfg, synctest.EmptyBaseline())
+			e := NewExecution(cfg, emptyBaseline())
 
-			action := &synctypes.Action{
-				Type:    synctypes.ActionRemoteDelete,
+			action := &Action{
+				Type:    ActionRemoteDelete,
 				Path:    tt.path,
 				ItemID:  tt.itemID,
 				DriveID: driveid.New(synctest.TestDriveID),
-				View:    &synctypes.PathView{},
+				View:    &PathView{},
 			}
 
 			o := e.ExecuteRemoteDelete(t.Context(), action)
@@ -1325,23 +1325,23 @@ func TestExecutor_Conflict_EditEdit_KeepBoth(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-conflict.txt", "local version")
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionConflict,
+	action := &Action{
+		Type:    ActionConflict,
 		Path:    "exec-conflict.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &synctypes.PathView{
-			Remote: &synctypes.RemoteState{
+		View: &PathView{
+			Remote: &RemoteState{
 				ItemID:   "item1",
 				ParentID: "root",
 				ETag:     "etag1",
 			},
 		},
-		ConflictInfo: &synctypes.ConflictRecord{ConflictType: "edit_edit"},
+		ConflictInfo: &ConflictRecord{ConflictType: "edit_edit"},
 	}
 
 	o := e.ExecuteConflict(t.Context(), action)
@@ -1384,24 +1384,24 @@ func TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix(t *
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-conflict.txt", "local version")
 	writeExecTestFile(t, syncRoot, "exec-conflict.conflict-20260115-120000.txt", "existing conflict")
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionConflict,
+	action := &Action{
+		Type:    ActionConflict,
 		Path:    "exec-conflict.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &synctypes.PathView{
-			Remote: &synctypes.RemoteState{
+		View: &PathView{
+			Remote: &RemoteState{
 				ItemID:   "item1",
 				ParentID: "root",
 				ETag:     "etag1",
 			},
 		},
-		ConflictInfo: &synctypes.ConflictRecord{ConflictType: "edit_edit"},
+		ConflictInfo: &ConflictRecord{ConflictType: "edit_edit"},
 	}
 
 	o := e.ExecuteConflict(t.Context(), action)
@@ -1443,7 +1443,7 @@ func TestExecutor_Conflict_EditDelete_AutoResolve(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path:     "folder",
 		DriveID:  driveid.New(synctest.TestDriveID),
 		ItemID:   "parent-folder",
@@ -1455,21 +1455,21 @@ func TestExecutor_Conflict_EditDelete_AutoResolve(t *testing.T) {
 	// remote deleted).
 	writeExecTestFile(t, syncRoot, "folder/exec-ed-file.txt", "locally modified data")
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionConflict,
+	action := &Action{
+		Type:    ActionConflict,
 		Path:    "folder/exec-ed-file.txt",
 		ItemID:  "deleted-item",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &synctypes.PathView{
+		View: &PathView{
 			Path: "folder/exec-ed-file.txt",
-			Remote: &synctypes.RemoteState{
+			Remote: &RemoteState{
 				ItemID:    "deleted-item",
 				DriveID:   driveid.New(synctest.TestDriveID),
 				ParentID:  "parent-folder",
 				ItemType:  synctypes.ItemTypeFile,
 				IsDeleted: true,
 			},
-			Baseline: &synctypes.BaselineEntry{
+			Baseline: &BaselineEntry{
 				Path:     "folder/exec-ed-file.txt",
 				DriveID:  driveid.New(synctest.TestDriveID),
 				ItemID:   "deleted-item",
@@ -1477,7 +1477,7 @@ func TestExecutor_Conflict_EditDelete_AutoResolve(t *testing.T) {
 				ItemType: synctypes.ItemTypeFile,
 			},
 		},
-		ConflictInfo: &synctypes.ConflictRecord{
+		ConflictInfo: &ConflictRecord{
 			ConflictType: "edit_delete",
 			DriveID:      driveid.New(synctest.TestDriveID),
 		},
@@ -1488,7 +1488,7 @@ func TestExecutor_Conflict_EditDelete_AutoResolve(t *testing.T) {
 
 	assert.True(t, uploadCalled, "expected upload to be called for edit-delete auto-resolve")
 	assert.False(t, uploadToItemCalled, "edit-delete auto-resolve should not overwrite a deleted item ID")
-	assert.Equal(t, synctypes.ActionConflict, o.Action)
+	assert.Equal(t, ActionConflict, o.Action)
 	assert.Equal(t, "edit_delete", o.ConflictType)
 	assert.Equal(t, "auto", o.ResolvedBy)
 	assert.Equal(t, "new-item", o.ItemID)
@@ -1541,15 +1541,15 @@ func TestExecutor_SyncedUpdate(t *testing.T) {
 	t.Parallel()
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionUpdateSynced,
+	action := &Action{
+		Type:    ActionUpdateSynced,
 		Path:    "exec-converged.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &synctypes.PathView{
-			Remote: &synctypes.RemoteState{
+		View: &PathView{
+			Remote: &RemoteState{
 				ItemID:   "item1",
 				ParentID: "root",
 				Hash:     "hash1",
@@ -1557,7 +1557,7 @@ func TestExecutor_SyncedUpdate(t *testing.T) {
 				ETag:     "etag1",
 				ItemType: synctypes.ItemTypeFile,
 			},
-			Local: &synctypes.LocalState{
+			Local: &LocalState{
 				Hash:  "hash1",
 				Mtime: 1234567890,
 			},
@@ -1582,10 +1582,10 @@ func TestExecutor_Cleanup(t *testing.T) {
 	t.Parallel()
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionCleanup,
+	action := &Action{
+		Type:    ActionCleanup,
 		Path:    "exec-ghost.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
@@ -1594,7 +1594,7 @@ func TestExecutor_Cleanup(t *testing.T) {
 	o := e.ExecuteCleanup(action)
 	requireOutcomeSuccess(t, &o)
 
-	assert.Equal(t, synctypes.ActionCleanup, o.Action)
+	assert.Equal(t, ActionCleanup, o.Action)
 	assert.Equal(t, "exec-ghost.txt", o.Path)
 }
 
@@ -1606,7 +1606,7 @@ func TestExecutor_ResolveParentID_Baseline(t *testing.T) {
 	t.Parallel()
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.BaselineWith(&synctypes.BaselineEntry{
+	e := NewExecution(cfg, baselineWith(&BaselineEntry{
 		Path:     "exec-existing-folder",
 		ItemID:   "folder-id-from-baseline",
 		DriveID:  driveid.New(synctest.TestDriveID),
@@ -1646,7 +1646,7 @@ func TestExecutor_ResolveParentID_SharedScopedRoot(t *testing.T) {
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	cfg.SetRootItemID("shared-root-id")
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	id, err := e.ResolveParentID("exec-file.txt")
 	require.NoError(t, err)
@@ -1695,20 +1695,20 @@ func TestExecutor_Conflict_DownloadFails_RestoresLocal(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	originalContent := "precious local data"
 	writeExecTestFile(t, syncRoot, "exec-restore.txt", originalContent)
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionConflict,
+	action := &Action{
+		Type:    ActionConflict,
 		Path:    "exec-restore.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &synctypes.PathView{
-			Remote: &synctypes.RemoteState{ItemID: "item1", ParentID: "root"},
+		View: &PathView{
+			Remote: &RemoteState{ItemID: "item1", ParentID: "root"},
 		},
-		ConflictInfo: &synctypes.ConflictRecord{ConflictType: "edit_edit"},
+		ConflictInfo: &ConflictRecord{ConflictType: "edit_edit"},
 	}
 
 	o := e.ExecuteConflict(t.Context(), action)
@@ -1731,15 +1731,15 @@ func TestExecutor_RemoteMove_Error(t *testing.T) {
 	}
 
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionRemoteMove,
+	action := &Action{
+		Type:    ActionRemoteMove,
 		Path:    "renamed.txt",
 		OldPath: "original.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &synctypes.PathView{Path: "renamed.txt"},
+		View:    &PathView{Path: "renamed.txt"},
 	}
 
 	o := e.ExecuteMove(t.Context(), action)
@@ -1753,25 +1753,25 @@ func TestExecutor_LocalMove_ViewFields(t *testing.T) {
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-src.txt", "content")
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionLocalMove,
+	action := &Action{
+		Type:    ActionLocalMove,
 		Path:    "exec-dst.txt",
 		OldPath: "exec-src.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &synctypes.PathView{
+		View: &PathView{
 			Path: "exec-dst.txt",
-			Remote: &synctypes.RemoteState{
+			Remote: &RemoteState{
 				Hash:     "remotehash",
 				Size:     42,
 				ETag:     "etag-move",
 				ItemType: synctypes.ItemTypeFile,
 			},
-			Local: &synctypes.LocalState{
+			Local: &LocalState{
 				Hash:  "localhash",
 				Mtime: 9876543210,
 			},
@@ -1804,17 +1804,17 @@ func TestExecutor_Upload_LargeFileSizePassedToUploader(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	// 25 MiB file — Uploader receives the exact size.
 	expectedSize := int64(25 * 1024 * 1024)
 	bigContent := strings.Repeat("x", int(expectedSize))
 	writeExecTestFile(t, syncRoot, "exec-multi-chunk.bin", bigContent)
 
-	action := &synctypes.Action{
-		Type: synctypes.ActionUpload,
+	action := &Action{
+		Type: ActionUpload,
 		Path: "exec-multi-chunk.bin",
-		View: &synctypes.PathView{Path: "exec-multi-chunk.bin"},
+		View: &PathView{Path: "exec-multi-chunk.bin"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
@@ -1852,15 +1852,15 @@ func TestExecutor_DeleteOutcome_FolderType(t *testing.T) {
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{
 		deleteItemFn: func(_ context.Context, _ driveid.ID, _ string) error { return nil },
 	}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionRemoteDelete,
+	action := &Action{
+		Type:    ActionRemoteDelete,
 		Path:    "exec-folder-del",
 		ItemID:  "folder1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &synctypes.PathView{
-			Baseline: &synctypes.BaselineEntry{ItemType: synctypes.ItemTypeFolder},
+		View: &PathView{
+			Baseline: &BaselineEntry{ItemType: synctypes.ItemTypeFolder},
 		},
 	}
 
@@ -1874,15 +1874,15 @@ func TestExecutor_Cleanup_FolderType(t *testing.T) {
 	t.Parallel()
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionCleanup,
+	action := &Action{
+		Type:    ActionCleanup,
 		Path:    "exec-cleanup-folder",
 		ItemID:  "folder1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &synctypes.PathView{
-			Baseline: &synctypes.BaselineEntry{ItemType: synctypes.ItemTypeFolder},
+		View: &PathView{
+			Baseline: &BaselineEntry{ItemType: synctypes.ItemTypeFolder},
 		},
 	}
 
@@ -1896,17 +1896,17 @@ func TestExecutor_SyncedUpdate_BaselineFallback(t *testing.T) {
 	t.Parallel()
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	// No Remote, only Baseline with folder type.
-	action := &synctypes.Action{
-		Type:    synctypes.ActionUpdateSynced,
+	action := &Action{
+		Type:    ActionUpdateSynced,
 		Path:    "exec-synced-folder",
 		ItemID:  "folder1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &synctypes.PathView{
-			Baseline: &synctypes.BaselineEntry{ItemType: synctypes.ItemTypeFolder},
-			Local:    &synctypes.LocalState{Hash: "lh", Mtime: 123},
+		View: &PathView{
+			Baseline: &BaselineEntry{ItemType: synctypes.ItemTypeFolder},
+			Local:    &LocalState{Hash: "lh", Mtime: 123},
 		},
 	}
 
@@ -1933,15 +1933,15 @@ func TestExecutor_LocalDelete_TrashSuccess(t *testing.T) {
 		return os.Remove(absPath)
 	})
 
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "trash-file.txt", "content")
 
-	action := &synctypes.Action{
-		Type:   synctypes.ActionLocalDelete,
+	action := &Action{
+		Type:   ActionLocalDelete,
 		Path:   "trash-file.txt",
 		ItemID: "item1",
-		View:   &synctypes.PathView{Baseline: &synctypes.BaselineEntry{}},
+		View:   &PathView{Baseline: &BaselineEntry{}},
 	}
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
@@ -1960,15 +1960,15 @@ func TestExecutor_LocalDelete_TrashFailure_FallsBackToRemove(t *testing.T) {
 		return fmt.Errorf("trash unavailable")
 	})
 
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	absPath := writeExecTestFile(t, syncRoot, "trash-fallback.txt", "content")
 
-	action := &synctypes.Action{
-		Type:   synctypes.ActionLocalDelete,
+	action := &Action{
+		Type:   ActionLocalDelete,
 		Path:   "trash-fallback.txt",
 		ItemID: "item1",
-		View:   &synctypes.PathView{Baseline: &synctypes.BaselineEntry{}},
+		View:   &PathView{Baseline: &BaselineEntry{}},
 	}
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
@@ -1985,15 +1985,15 @@ func TestExecutor_LocalDelete_NoTrashFunc_DirectRemove(t *testing.T) {
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	// trashFunc is nil — should go straight to os.Remove.
 
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	absPath := writeExecTestFile(t, syncRoot, "no-trash.txt", "content")
 
-	action := &synctypes.Action{
-		Type:   synctypes.ActionLocalDelete,
+	action := &Action{
+		Type:   ActionLocalDelete,
 		Path:   "no-trash.txt",
 		ItemID: "item1",
-		View:   &synctypes.PathView{Baseline: &synctypes.BaselineEntry{}},
+		View:   &PathView{Baseline: &BaselineEntry{}},
 	}
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
@@ -2016,15 +2016,15 @@ func TestExecutor_LocalDeleteFolder_TrashSuccess(t *testing.T) {
 		return os.Remove(absPath)
 	})
 
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "trash-dir"), 0o700))
 
-	action := &synctypes.Action{
-		Type:   synctypes.ActionLocalDelete,
+	action := &Action{
+		Type:   ActionLocalDelete,
 		Path:   "trash-dir",
 		ItemID: "item1",
-		View:   &synctypes.PathView{},
+		View:   &PathView{},
 	}
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
@@ -2058,14 +2058,14 @@ func TestExecutor_Download_PartialFileCleanedOnMidStreamError(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionDownload,
+	action := &Action{
+		Type:    ActionDownload,
 		Path:    "partial-cleanup.txt",
 		ItemID:  "item-partial",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &synctypes.PathView{Remote: &synctypes.RemoteState{}},
+		View:    &PathView{Remote: &RemoteState{}},
 	}
 
 	o := e.ExecuteDownload(t.Context(), action)
@@ -2101,7 +2101,7 @@ func TestExecutor_Upload_MtimePassedToUploader(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	// Write a file and set a specific mtime.
 	writeExecTestFile(t, syncRoot, "mtime-test.txt", "mtime content")
@@ -2111,10 +2111,10 @@ func TestExecutor_Upload_MtimePassedToUploader(t *testing.T) {
 
 	require.NoError(t, os.Chtimes(absPath, targetMtime, targetMtime))
 
-	action := &synctypes.Action{
-		Type: synctypes.ActionUpload,
+	action := &Action{
+		Type: ActionUpload,
 		Path: "mtime-test.txt",
-		View: &synctypes.PathView{Path: "mtime-test.txt"},
+		View: &PathView{Path: "mtime-test.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
@@ -2188,10 +2188,10 @@ func TestCreateLocalFolder_TraversalBlocked(t *testing.T) {
 	t.Parallel()
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
-	action := &synctypes.Action{
-		Type:       synctypes.ActionFolderCreate,
+	action := &Action{
+		Type:       ActionFolderCreate,
 		Path:       "../escape",
 		CreateSide: synctypes.CreateLocal,
 	}
@@ -2280,17 +2280,17 @@ func TestExecutor_Upload_WatchMode_ETagMismatch(t *testing.T) {
 	cfg, syncRoot := newTestExecutorConfig(t, items, &executorMockDownloader{}, ul)
 	cfg.SetWatchMode(true)
 
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 	writeExecTestFile(t, syncRoot, "conflict.txt", "local content")
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionUpload,
+	action := &Action{
+		Type:    ActionUpload,
 		Path:    "conflict.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &synctypes.PathView{
+		View: &PathView{
 			Path: "conflict.txt",
-			Baseline: &synctypes.BaselineEntry{
+			Baseline: &BaselineEntry{
 				ETag: "etag-baseline",
 			},
 		},
@@ -2320,17 +2320,17 @@ func TestExecutor_Upload_WatchMode_ETagMatch(t *testing.T) {
 	cfg, syncRoot := newTestExecutorConfig(t, items, &executorMockDownloader{}, ul)
 	cfg.SetWatchMode(true)
 
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 	writeExecTestFile(t, syncRoot, "safe.txt", "content")
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionUpload,
+	action := &Action{
+		Type:    ActionUpload,
 		Path:    "safe.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &synctypes.PathView{
+		View: &PathView{
 			Path: "safe.txt",
-			Baseline: &synctypes.BaselineEntry{
+			Baseline: &BaselineEntry{
 				ETag: "etag-same",
 			},
 		},
@@ -2359,17 +2359,17 @@ func TestExecutor_Upload_NonWatchMode_NoFreshnessCheck(t *testing.T) {
 	cfg, syncRoot := newTestExecutorConfig(t, items, &executorMockDownloader{}, ul)
 	// cfg.watchMode is false by default — no freshness check.
 
-	e := NewExecution(cfg, synctest.EmptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 	writeExecTestFile(t, syncRoot, "normal.txt", "content")
 
-	action := &synctypes.Action{
-		Type:    synctypes.ActionUpload,
+	action := &Action{
+		Type:    ActionUpload,
 		Path:    "normal.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &synctypes.PathView{
+		View: &PathView{
 			Path: "normal.txt",
-			Baseline: &synctypes.BaselineEntry{
+			Baseline: &BaselineEntry{
 				ETag: "etag-baseline",
 			},
 		},

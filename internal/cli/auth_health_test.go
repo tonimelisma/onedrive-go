@@ -26,8 +26,8 @@ func seedAuthScope(t *testing.T, cid driveid.CanonicalID) {
 	require.NoError(t, err)
 	defer store.Close(t.Context())
 
-	require.NoError(t, store.UpsertScopeBlock(t.Context(), &synctypes.ScopeBlock{
-		Key:          synctypes.SKAuthAccount(),
+	require.NoError(t, store.UpsertScopeBlock(t.Context(), &syncstore.ScopeBlock{
+		Key:          syncstore.AuthAccountScopeKey(),
 		IssueType:    synctypes.IssueUnauthorized,
 		TimingSource: synctypes.ScopeTimingNone,
 		BlockedAt:    time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC),
@@ -116,14 +116,14 @@ func TestStatusService_Run_JSONSurfacesSyncAuthRejectedOffline(t *testing.T) {
 	seedAuthScope(t, cid)
 
 	var out bytes.Buffer
-	svc := newStatusService(&CLIContext{
+	cc := &CLIContext{
 		Logger:       testDriveLogger(t),
 		OutputWriter: &out,
 		CfgPath:      cfgPath,
 		Flags:        CLIFlags{JSON: true},
-	})
+	}
 
-	require.NoError(t, svc.run(false))
+	require.NoError(t, runStatusCommand(cc, false))
 
 	var decoded statusOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
@@ -144,14 +144,14 @@ func TestStatusService_Run_DoesNotClearPersistedAuthScope(t *testing.T) {
 	seedAuthScope(t, cid)
 
 	var out bytes.Buffer
-	svc := newStatusService(&CLIContext{
+	cc := &CLIContext{
 		Logger:       testDriveLogger(t),
 		OutputWriter: &out,
 		StatusWriter: &out,
 		CfgPath:      cfgPath,
-	})
+	}
 
-	require.NoError(t, svc.run(false))
+	require.NoError(t, runStatusCommand(cc, false))
 	assert.True(t, hasPersistedAuthScope(t.Context(), cid.Email(), testDriveLogger(t)))
 }
 

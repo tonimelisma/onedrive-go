@@ -21,7 +21,7 @@ func TestSyncStore_ListVisibleIssueGroups(t *testing.T) {
 	driveID := driveid.New(testDriveID)
 	scopeKey := synctypes.SKPermRemote("Shared/Docs")
 
-	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
+	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "bad:name.txt",
 		DriveID:    driveID,
 		Direction:  synctypes.DirectionUpload,
@@ -31,7 +31,7 @@ func TestSyncStore_ListVisibleIssueGroups(t *testing.T) {
 		IssueType:  synctypes.IssueInvalidFilename,
 		ErrMsg:     "invalid",
 	}, nil))
-	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
+	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "Shared/Docs/a.txt",
 		DriveID:    driveID,
 		Direction:  synctypes.DirectionUpload,
@@ -42,7 +42,7 @@ func TestSyncStore_ListVisibleIssueGroups(t *testing.T) {
 		ErrMsg:     "blocked",
 		ScopeKey:   scopeKey,
 	}, nil))
-	require.NoError(t, mgr.RecordFailure(ctx, &synctypes.SyncFailureParams{
+	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "Shared/Docs/b.txt",
 		DriveID:    driveID,
 		Direction:  synctypes.DirectionUpload,
@@ -53,7 +53,7 @@ func TestSyncStore_ListVisibleIssueGroups(t *testing.T) {
 		ErrMsg:     "blocked",
 		ScopeKey:   scopeKey,
 	}, nil))
-	require.NoError(t, mgr.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
+	require.NoError(t, mgr.UpsertScopeBlock(ctx, &ScopeBlock{
 		Key:          synctypes.SKAuthAccount(),
 		IssueType:    synctypes.IssueUnauthorized,
 		TimingSource: synctypes.ScopeTimingNone,

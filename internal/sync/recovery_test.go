@@ -12,15 +12,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 type fakeStore struct {
 	resetDownloadingCalled bool
 	listDeletingCalled     bool
-	finalizeDeleted        []synctypes.RecoveryCandidate
-	finalizePending        []synctypes.RecoveryCandidate
-	candidates             []synctypes.RecoveryCandidate
+	finalizeDeleted        []RecoveryCandidate
+	finalizePending        []RecoveryCandidate
+	candidates             []RecoveryCandidate
 	resetDownloadingErr    error
 	listDeletingErr        error
 	finalizeErr            error
@@ -31,19 +30,19 @@ func (s *fakeStore) ResetDownloadingStates(_ context.Context, _ func(int) time.D
 	return s.resetDownloadingErr
 }
 
-func (s *fakeStore) ListDeletingCandidates(_ context.Context) ([]synctypes.RecoveryCandidate, error) {
+func (s *fakeStore) ListDeletingCandidates(_ context.Context) ([]RecoveryCandidate, error) {
 	s.listDeletingCalled = true
 	return s.candidates, s.listDeletingErr
 }
 
 func (s *fakeStore) FinalizeDeletingStates(
 	_ context.Context,
-	deleted []synctypes.RecoveryCandidate,
-	pending []synctypes.RecoveryCandidate,
+	deleted []RecoveryCandidate,
+	pending []RecoveryCandidate,
 	_ func(int) time.Duration,
 ) error {
-	s.finalizeDeleted = append([]synctypes.RecoveryCandidate(nil), deleted...)
-	s.finalizePending = append([]synctypes.RecoveryCandidate(nil), pending...)
+	s.finalizeDeleted = append([]RecoveryCandidate(nil), deleted...)
+	s.finalizePending = append([]RecoveryCandidate(nil), pending...)
 	return s.finalizeErr
 }
 
@@ -58,7 +57,7 @@ func TestResetInProgressStates_PartitionsDeletingCandidates(t *testing.T) {
 	require.NoError(t, err)
 
 	store := &fakeStore{
-		candidates: []synctypes.RecoveryCandidate{
+		candidates: []RecoveryCandidate{
 			{DriveID: "d1", ItemID: "gone", Path: "gone.txt"},
 			{DriveID: "d1", ItemID: "exists", Path: "/exists.txt"},
 		},
@@ -82,7 +81,7 @@ func TestResetInProgressStates_StatErrorRetriesDelete(t *testing.T) {
 	require.NoError(t, err)
 
 	store := &fakeStore{
-		candidates: []synctypes.RecoveryCandidate{
+		candidates: []RecoveryCandidate{
 			{DriveID: "d1", ItemID: "bad", Path: "/../bad.txt"},
 		},
 	}
@@ -131,7 +130,7 @@ func TestResetInProgressStates_FinalizeDeletingStatesError(t *testing.T) {
 
 	store := &fakeStore{
 		finalizeErr: errors.New("boom"),
-		candidates: []synctypes.RecoveryCandidate{
+		candidates: []RecoveryCandidate{
 			{DriveID: "d1", ItemID: "gone", Path: "gone.txt"},
 		},
 	}

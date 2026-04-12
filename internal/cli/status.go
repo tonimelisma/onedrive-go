@@ -121,7 +121,7 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("read --perf flag: %w", err)
 	}
 
-	return newStatusService(mustCLIContext(cmd.Context())).run(history, showPerf)
+	return runStatusCommand(mustCLIContext(cmd.Context()), history, showPerf)
 }
 
 // accountNameReader abstracts reading display name and org name from account

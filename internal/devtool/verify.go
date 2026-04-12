@@ -26,23 +26,27 @@ import (
 type VerifyProfile string
 
 const (
-	defaultCoverageThreshold = 76.0
-	defaultCoveragePattern   = "onedrive-go-cover.*"
-	authE2EPreflightPattern  = "^TestE2E_AuthPreflight_Fast$"
-	fastE2EPreflightPattern  = "^TestE2E_FixturePreflight_Fast$"
-	fullE2EPreflightPattern  = "^TestE2E_FixturePreflight_Full$"
-	fullE2EFixturePreflight  = "TestE2E_FixturePreflight_Full"
-	fullE2EPackageTimeout    = "60m"
-	fastE2EPackageTimeout    = "10m"
-	stressPackageTimeout     = "20m"
-	authPreflightIncidentID  = "LI-20260405-06"
-	fastDownloadIncidentID   = "LI-20260405-04"
-	fastDownloadTestName     = "TestE2E_Sync_DownloadOnly"
-	e2eSkipSuiteScrubEnvVar  = "ONEDRIVE_E2E_SKIP_SUITE_SCRUB"
-	e2eTimingEventsFileName  = "timing-events.jsonl"
-	e2eTimingSummaryFileName = "timing-summary.json"
-	e2eQuirkEventsFileName   = "quirk-events.jsonl"
-	e2eQuirkSummaryFileName  = "quirk-summary.json"
+	defaultCoverageThreshold  = 76.0
+	defaultCoveragePattern    = "onedrive-go-cover.*"
+	authE2EPreflightPattern   = "^TestE2E_AuthPreflight_Fast$"
+	fastE2EPreflightPattern   = "^TestE2E_FixturePreflight_Fast$"
+	fullE2EPreflightPattern   = "^TestE2E_FixturePreflight_Full$"
+	fullE2EFixturePreflight   = "TestE2E_FixturePreflight_Full"
+	fullE2EPackageTimeout     = "60m"
+	fastE2EPackageTimeout     = "10m"
+	stressPackageTimeout      = "20m"
+	authPreflightIncidentID   = "LI-20260405-06"
+	fastDownloadIncidentID    = "LI-20260405-04"
+	fastDownloadTestName      = "TestE2E_Sync_DownloadOnly"
+	e2eSkipSuiteScrubEnvVar   = "ONEDRIVE_E2E_SKIP_SUITE_SCRUB"
+	e2eTimingEventsFileName   = "timing-events.jsonl"
+	e2eTimingSummaryFileName  = "timing-summary.json"
+	e2eQuirkEventsFileName    = "quirk-events.jsonl"
+	e2eQuirkSummaryFileName   = "quirk-summary.json"
+	internalPackagePrefix     = "github.com/tonimelisma/onedrive-go/internal/"
+	internalPackageLimit      = 27
+	internalImportEdgeLimit   = 80
+	internalGraphCheckTimeout = 30 * time.Second
 
 	fullE2EParallelMiscParallel = 5
 	fullE2ESerialParallel       = 1
@@ -1463,6 +1467,7 @@ func runRepoConsistencyChecks(repoRoot string) error {
 		ensureNoStaleArchitecturePhrases,
 		ensureActiveDocCLIExamplesResolve,
 		ensureSyncStoreMigrationDiscipline,
+		ensureInternalDependencyGraphGuardrails,
 		ensureGovernedDesignDocsHaveOwnershipContracts,
 		ensureCrossCuttingDesignDocs,
 		ensureCrossCuttingDesignDocEvidence,
@@ -1480,6 +1485,90 @@ func runRepoConsistencyChecks(repoRoot string) error {
 	} {
 		if err := check(repoRoot); err != nil {
 			return err
+		}
+	}
+
+	return nil
+}
+
+func ensureInternalDependencyGraphGuardrails(repoRoot string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), internalGraphCheckTimeout)
+	defer cancel()
+
+	output, err := ExecRunner{}.CombinedOutput(
+		ctx,
+		repoRoot,
+		os.Environ(),
+		"go",
+		"list",
+		"-f",
+		"{{.ImportPath}} {{join .Imports \" \"}}",
+		"./internal/...",
+	)
+	if err != nil {
+		return fmt.Errorf("list internal package graph: %w\n%s", err, strings.TrimSpace(string(output)))
+	}
+
+	packages := make(map[string]struct{})
+	edges := make(map[[2]string]struct{})
+	synctypesTargets := make(map[string]struct{})
+
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+
+		pkg := fields[0]
+		if !strings.HasPrefix(pkg, internalPackagePrefix) {
+			continue
+		}
+		packages[pkg] = struct{}{}
+
+		for _, imp := range fields[1:] {
+			if !strings.HasPrefix(imp, internalPackagePrefix) {
+				continue
+			}
+			edges[[2]string{pkg, imp}] = struct{}{}
+			if pkg == internalPackagePrefix+"synctypes" {
+				synctypesTargets[imp] = struct{}{}
+			}
+		}
+	}
+
+	if len(packages) > internalPackageLimit {
+		return fmt.Errorf(
+			"internal package graph exceeds limit: %d packages (limit %d)",
+			len(packages),
+			internalPackageLimit,
+		)
+	}
+	if len(edges) > internalImportEdgeLimit {
+		return fmt.Errorf(
+			"internal package graph exceeds limit: %d import edges (limit %d)",
+			len(edges),
+			internalImportEdgeLimit,
+		)
+	}
+
+	for _, forbidden := range [][2]string{
+		{internalPackagePrefix + "cli", internalPackagePrefix + "synctypes"},
+		{internalPackagePrefix + "multisync", internalPackagePrefix + "synctypes"},
+		{internalPackagePrefix + "syncstore", internalPackagePrefix + "sync"},
+	} {
+		if _, ok := edges[forbidden]; ok {
+			return fmt.Errorf("forbidden internal import edge detected: %s -> %s", forbidden[0], forbidden[1])
+		}
+	}
+
+	for target := range synctypesTargets {
+		if target != internalPackagePrefix+"driveid" {
+			return fmt.Errorf("synctypes may only import internal/driveid, found %s", target)
 		}
 	}
 

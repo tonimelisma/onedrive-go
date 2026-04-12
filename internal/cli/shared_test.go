@@ -95,7 +95,7 @@ func TestSharedService_RunList_JSON(t *testing.T) {
 		GraphBaseURL: srv.URL,
 	}
 
-	err := newSharedService(cc).runList(context.Background())
+	err := runSharedList(context.Background(), cc)
 	require.NoError(t, err)
 
 	var parsed sharedListJSONOutput
@@ -154,7 +154,7 @@ func TestSharedService_RunList_JSONKeepsOwnerIdentityEmptyWhenEnrichmentFails(t 
 		GraphBaseURL: srv.URL,
 	}
 
-	err := newSharedService(cc).runList(context.Background())
+	err := runSharedList(context.Background(), cc)
 	require.NoError(t, err)
 
 	var parsed sharedListJSONOutput
@@ -211,7 +211,7 @@ func TestSharedService_RunList_JSONHonorsAccountFilter(t *testing.T) {
 		GraphBaseURL: srv.URL,
 	}
 
-	err := newSharedService(cc).runList(context.Background())
+	err := runSharedList(context.Background(), cc)
 	require.NoError(t, err)
 
 	var parsed sharedListJSONOutput
@@ -248,7 +248,7 @@ func TestSharedService_RunList_JSONIncludesDegradedAccountWhenSearchFails(t *tes
 		GraphBaseURL: srv.URL,
 	}
 
-	err := newSharedService(cc).runList(context.Background())
+	err := runSharedList(context.Background(), cc)
 	require.NoError(t, err)
 
 	var parsed sharedListJSONOutput
@@ -308,7 +308,7 @@ func TestDriveService_RunAdd_RejectsSharedFileSelector(t *testing.T) {
 		GraphBaseURL: srv.URL,
 	}
 
-	err := newDriveService(cc).runAdd(context.Background(), []string{"shared:user@example.com:b!drive1234567891:source-item-file"})
+	err := runDriveAddWithContext(context.Background(), cc, []string{"shared:user@example.com:b!drive1234567891:source-item-file"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "shared files are direct stat/get/put targets")
 }

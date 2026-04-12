@@ -8,12 +8,12 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 )
 
 func (flow *engineFlow) executeObservationPhase(
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	phase ObservationPhasePlan,
 	fullReconcile bool,
 ) (remoteFetchResult, error) {
@@ -34,7 +34,7 @@ func (flow *engineFlow) executeObservationPhase(
 
 func (flow *engineFlow) observeObservationPhase(
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	phase ObservationPhasePlan,
 	fullReconcile bool,
 ) (remoteFetchResult, error) {
@@ -62,7 +62,7 @@ func (flow *engineFlow) observeObservationPhase(
 
 func (flow *engineFlow) executeSingleBatchObservationPhase(
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	phase ObservationPhasePlan,
 	fullReconcile bool,
 ) (remoteFetchResult, error) {
@@ -87,7 +87,7 @@ func (flow *engineFlow) executeSingleBatchObservationPhase(
 
 func (flow *engineFlow) executeRootDeltaObservationPhase(
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	fullReconcile bool,
 ) (remoteFetchResult, error) {
 	if fullReconcile {
@@ -107,7 +107,7 @@ func (flow *engineFlow) executeRootDeltaObservationPhase(
 
 func (flow *engineFlow) executeSequentialTargetObservationPhase(
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	phase ObservationPhasePlan,
 	fullReconcile bool,
 ) (remoteFetchResult, error) {
@@ -123,7 +123,7 @@ func (flow *engineFlow) executeSequentialTargetObservationPhase(
 
 func (flow *engineFlow) executeParallelTargetObservationPhase(
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	phase ObservationPhasePlan,
 	fullReconcile bool,
 ) (remoteFetchResult, error) {
@@ -166,7 +166,7 @@ func (flow *engineFlow) executeParallelTargetObservationPhase(
 	}
 
 	merged := remoteFetchResult{
-		events:       make([]synctypes.ChangeEvent, 0),
+		events:       make([]ChangeEvent, 0),
 		deferred:     make([]deferredDeltaToken, 0),
 		fullPrefixes: make([]string, 0),
 	}
