@@ -18,7 +18,7 @@ import (
 // replaced (B-122 deduplication).
 func (rt *watchRuntime) processBatch(
 	ctx context.Context, batch []PathChanges, bl *syncstore.Baseline,
-	mode Mode, safety *SafetyConfig,
+	mode Mode, safety *synctypes.SafetyConfig,
 ) []*TrackedAction {
 	return rt.planAndDispatchBatch(ctx, batch, bl, mode, safety, dispatchBatchOptions{
 		applyDeleteCounter:   true,
@@ -43,7 +43,7 @@ func (rt *watchRuntime) planAndDispatchBatch(
 	batch []PathChanges,
 	bl *syncstore.Baseline,
 	mode Mode,
-	safety *SafetyConfig,
+	safety *synctypes.SafetyConfig,
 	opts dispatchBatchOptions,
 ) []*TrackedAction {
 	rt.engine.logger.Info("processing watch batch",
@@ -279,16 +279,11 @@ func (rt *watchRuntime) findTrialActionIndex(plan *ActionPlan, opts dispatchBatc
 	return -1
 }
 
-// setDispatch writes the dispatch state transition for an action before it
-// enters the tracker. Only applies to downloads and local deletes (the action
-// types that have remote_state lifecycle).
+// setDispatch is retained as a coordination hook for tracker admission, but
+// dispatch no longer mutates durable remote_state lifecycle.
 func (flow *engineFlow) setDispatch(ctx context.Context, action *Action) {
-	if err := flow.engine.baseline.SetDispatchStatus(ctx, action.DriveID.String(), action.ItemID, action.Type); err != nil {
-		flow.engine.logger.Warn("failed to set dispatch status",
-			slog.String("path", action.Path),
-			slog.String("error", err.Error()),
-		)
-	}
+	_ = ctx
+	_ = action
 }
 
 // isDeleteAction returns true if the action type is a local or remote delete.

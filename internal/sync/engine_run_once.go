@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -16,9 +18,9 @@ import (
 
 // RunOnce executes a single sync pass:
 //  1. Load baseline
-//  2. Observe remote (skip if upload-only)
-//  3. Observe local (skip if download-only)
-//  4. Buffer and flush changes
+//  2. Observe remote
+//  3. Observe local
+//  4. Reconcile buffered changes plus durable remote drift
 //  5. Early return if no changes
 //  6. Plan actions (flat list + dependency edges)
 //  7. Return early if dry-run
@@ -196,20 +198,6 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) error {
 		return proofErr
 	}
 	eng.logVerifiedDrive(proof)
-
-	// Crash recovery: reset any in-progress states from a previous crash.
-	// One-shot mode has no long-lived retry loop, so bridge rows created here
-	// must be immediately retryable on this invocation instead of waiting for a
-	// later timer tick that will never happen.
-	if err := ResetInProgressStates(
-		ctx,
-		eng.baseline,
-		eng.syncTree,
-		func(int) time.Duration { return 0 },
-		eng.logger,
-	); err != nil {
-		eng.logger.Warn("failed to reset in-progress states", slog.String("error", err.Error()))
-	}
 
 	bl, err := eng.baseline.Load(ctx)
 	if err != nil {
@@ -432,14 +420,12 @@ func (flow *engineFlow) observeChanges(
 	}
 
 	remoteEvents, pendingDeltaTokens, err := flow.observeRemoteChanges(
-		ctx, bl, mode, dryRun, &scopeSession, &observationPlan, fullReconcile,
+		ctx, bl, dryRun, &scopeSession, &observationPlan, fullReconcile,
 	)
 	if err != nil {
 		return nil, nil, err
 	}
-	if mode != SyncUploadOnly {
-		observationPlan.Reentry.Pending = false
-	}
+	observationPlan.Reentry.Pending = false
 
 	finalRemoteEvents, shortcutErr := flow.processCommittedPrimaryBatch(
 		ctx,
@@ -457,18 +443,24 @@ func (flow *engineFlow) observeChanges(
 		finalRemoteEvents = filterOutShortcuts(remoteEvents)
 	}
 
-	localResult, err := flow.observeLocalChanges(ctx, watch, bl, mode, scopeSession.Current)
+	localResult, err := flow.observeLocalChanges(ctx, watch, bl, scopeSession.Current)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	if err := flow.applyScopeState(ctx, dryRun, &scopeSession, &observationPlan); err != nil {
+	err = flow.applyScopeState(ctx, dryRun, &scopeSession, &observationPlan)
+	if err != nil {
 		return nil, nil, err
 	}
 
 	buf := NewBuffer(flow.engine.logger)
 	buf.AddAll(finalRemoteEvents)
 	buf.AddAll(localResult.Events)
+	remoteDriftEvents, err := flow.synthesizeRemoteMirrorDrift(ctx, bl, scopeSession.Current)
+	if err != nil {
+		return nil, nil, err
+	}
+	buf.AddAll(remoteDriftEvents)
 
 	return buf.FlushImmediate(), pendingDeltaTokens, nil
 }
@@ -504,16 +496,11 @@ func (flow *engineFlow) prepareObservationScope(
 func (flow *engineFlow) observeRemoteChanges(
 	ctx context.Context,
 	bl *syncstore.Baseline,
-	mode Mode,
 	dryRun bool,
 	scopeSession *ScopeSession,
 	observationPlan *ObservationSessionPlan,
 	fullReconcile bool,
 ) ([]ChangeEvent, []deferredDeltaToken, error) {
-	if mode == SyncUploadOnly {
-		return nil, nil, nil
-	}
-
 	effectiveFullReconcile := effectivePrimaryFullReconcile(fullReconcile, observationPlan)
 	fetchResult, err := flow.fetchRemoteChanges(ctx, bl, observationPlan, effectiveFullReconcile)
 	if err != nil {
@@ -582,13 +569,8 @@ func (flow *engineFlow) observeLocalChanges(
 	ctx context.Context,
 	watch *watchRuntime,
 	bl *syncstore.Baseline,
-	mode Mode,
 	scopeSnapshot syncscope.Snapshot,
 ) (ScanResult, error) {
-	if mode == SyncDownloadOnly {
-		return ScanResult{}, nil
-	}
-
 	localResult, err := flow.observeLocal(ctx, bl, scopeSnapshot)
 	if err != nil {
 		return ScanResult{}, err
@@ -606,6 +588,110 @@ func (flow *engineFlow) observeLocalChanges(
 	flow.scopeController().clearResolvedRemoteBlockedFailures(ctx, watch, pathSet)
 
 	return localResult, nil
+}
+
+func (flow *engineFlow) synthesizeRemoteMirrorDrift(
+	ctx context.Context,
+	bl *syncstore.Baseline,
+	scopeSnapshot syncscope.Snapshot,
+) ([]ChangeEvent, error) {
+	rows, err := flow.engine.baseline.ListRemoteState(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing remote mirror state: %w", err)
+	}
+
+	seenRemote := make(map[driveid.ItemKey]struct{}, len(rows))
+	events := make([]ChangeEvent, 0, len(rows))
+
+	for i := range rows {
+		row := &rows[i]
+		if row.IsFiltered || scopeSnapshot.ExclusionReason(row.Path) != syncscope.ExclusionNone {
+			continue
+		}
+
+		key := driveid.NewItemKey(row.DriveID, row.ItemID)
+		seenRemote[key] = struct{}{}
+
+		entry, found := bl.GetByID(key)
+		if found && !remoteMirrorDiffers(entry, row) {
+			continue
+		}
+
+		event := ChangeEvent{
+			Source:   synctypes.SourceRemote,
+			Type:     synctypes.ChangeModify,
+			Path:     row.Path,
+			ItemID:   row.ItemID,
+			ParentID: row.ParentID,
+			DriveID:  row.DriveID,
+			ItemType: row.ItemType,
+			Name:     filepath.Base(row.Path),
+			Size:     row.Size,
+			Hash:     row.Hash,
+			Mtime:    row.Mtime,
+			ETag:     row.ETag,
+		}
+		if found && entry.Path != row.Path {
+			event.Type = synctypes.ChangeMove
+			event.OldPath = entry.Path
+		}
+
+		events = append(events, event)
+	}
+
+	bl.ForEachPath(func(path string, entry *syncstore.BaselineEntry) {
+		if entry == nil || scopeSnapshot.ExclusionReason(path) != syncscope.ExclusionNone {
+			return
+		}
+
+		key := driveid.NewItemKey(entry.DriveID, entry.ItemID)
+		if _, ok := seenRemote[key]; ok {
+			return
+		}
+
+		events = append(events, ChangeEvent{
+			Source:    synctypes.SourceRemote,
+			Type:      synctypes.ChangeDelete,
+			Path:      path,
+			ItemID:    entry.ItemID,
+			ParentID:  entry.ParentID,
+			DriveID:   entry.DriveID,
+			ItemType:  entry.ItemType,
+			Name:      filepath.Base(path),
+			Size:      entry.RemoteSize,
+			Hash:      entry.RemoteHash,
+			Mtime:     entry.RemoteMtime,
+			IsDeleted: true,
+		})
+	})
+
+	sort.Slice(events, func(i, j int) bool {
+		if events[i].Path != events[j].Path {
+			return events[i].Path < events[j].Path
+		}
+		if events[i].Type != events[j].Type {
+			return events[i].Type < events[j].Type
+		}
+		return events[i].OldPath < events[j].OldPath
+	})
+
+	return events, nil
+}
+
+func remoteMirrorDiffers(entry *syncstore.BaselineEntry, row *syncstore.RemoteStateRow) bool {
+	if entry == nil || row == nil {
+		return true
+	}
+	if entry.Path != row.Path || entry.ItemType != row.ItemType {
+		return true
+	}
+	if entry.RemoteHash != row.Hash {
+		return true
+	}
+	if entry.RemoteSizeKnown && entry.RemoteSize != row.Size {
+		return true
+	}
+	return entry.RemoteMtime != row.Mtime
 }
 
 // observeAndCommitRemote wraps observeRemote to persist observations
@@ -728,11 +814,11 @@ func (flow *engineFlow) observeAndCommitRemoteFull(ctx context.Context, bl *sync
 	return events, deltaToken, nil
 }
 
-// resolveSafetyConfig returns the appropriate SafetyConfig. The
+// resolveSafetyConfig returns the appropriate synctypes.SafetyConfig. The
 // planner-level delete threshold is disabled here (threshold=MaxInt32) because
 // the engine owns durable delete-safety holds and approvals.
-func (e *Engine) resolveSafetyConfig() *SafetyConfig {
-	return &SafetyConfig{
+func (e *Engine) resolveSafetyConfig() *synctypes.SafetyConfig {
+	return &synctypes.SafetyConfig{
 		DeleteSafetyThreshold: plannerSafetyMax,
 	}
 }

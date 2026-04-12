@@ -34,19 +34,30 @@ Supporting tables: `delta_tokens`, `conflicts`, `conflict_requests`, `held_delet
 
 ### remote_state
 
-Full mirror of remote drive state. Updated on each delta observation and action completion. The `sync_status` column is an explicit state machine:
+`remote_state` is a pure mirror of the latest observed remote truth for the
+drive. It is updated only by remote observation and by successful remote-side
+executor outcomes that change remote truth (for example, upload, remote move,
+and remote delete).
 
-```
-pending_download → downloading → synced
-                              → download_failed → pending_download (reconciler reset)
-pending_delete   → deleting    → deleted
-                              → delete_failed
-filtered         (terminal — item excluded by filter rules)
-```
+It does **not** store workflow phases such as pending download, in-progress
+work, success, or failure. Those concerns belong to the planner, the executor,
+and `sync_failures`.
 
-Items in `downloading` or `deleting` at startup are reset to `pending_download` / `pending_delete` by the reconciler (crash recovery).
+Important fields:
 
-11 columns. `previous_path` tracks renames for move detection. Partial unique index on `path` for active items only (deleted items retain paths for diagnostics).
+- remote identity: `drive_id`, `item_id`, `parent_id`
+- materialized location: `path`, `previous_path`
+- item shape: `item_type`
+- remote comparison facts: `hash`, `size`, `mtime`, `etag`
+- scope policy metadata: `is_filtered`, `filter_generation`, `filter_reason`
+- observation time: `observed_at`
+
+Remote deletion is represented by row absence. If a baseline row exists and the
+corresponding remote mirror row no longer exists, the next reconciliation pass
+derives remote-delete drift directly from `baseline` vs `remote_state`.
+
+`previous_path` tracks rename history for move detection. `path` remains unique
+for live mirrored items.
 
 ### baseline
 
@@ -207,12 +218,11 @@ All database writes flow through typed sub-interfaces, enforcing transition owne
 
 | Interface | Caller | Purpose |
 |-----------|--------|---------|
-| `ObservationWriter` | Remote observer | Write observed remote state + advance delta token atomically |
-| `OutcomeWriter` | Worker pool | Commit action results to baseline + update remote_state |
+| `ObservationWriter` | Remote observer | Write observed remote truth + advance delta token atomically |
+| `OutcomeWriter` | Worker pool | Commit action results to baseline + update remote truth when the action changes remote state |
 | `FailureRecorder` | Worker result drain | Record failure metadata in sync_failures |
 | `StateReader` | Reconciler, planner, CLI | Read-only queries across all tables |
 | `StateAdmin` | CLI commands | Admin writes (resolve conflicts, reset failures) |
-| `CrashRecoveryStore` | sync startup recovery | State-only crash-recovery transitions plus retry-bridge failures |
 
 ## Upload Sessions (File-Based)
 

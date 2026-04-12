@@ -336,7 +336,7 @@ func TestCommitMutation_DownloadSuccess_DoesNotClearSyncFailures(t *testing.T) {
 		Path:      "docs/file.txt",
 		DriveID:   driveid.ID{},
 		Direction: synctypes.DirectionDownload,
-		IssueType: "download_failed",
+		IssueType: "download_error",
 		ErrMsg:    "timeout",
 	}, nil)
 	require.NoError(t, err)
@@ -344,9 +344,9 @@ func TestCommitMutation_DownloadSuccess_DoesNotClearSyncFailures(t *testing.T) {
 	// Insert a remote_state row so the download outcome has something to update.
 	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state
-			(drive_id, item_id, path, parent_id, item_type, sync_status, observed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		driveid.New(testDriveID).String(), "item-1", "docs/file.txt", "file", "file", synctypes.SyncStatusDownloading, 1)
+			(drive_id, item_id, path, parent_id, item_type, observed_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		driveid.New(testDriveID).String(), "item-1", "docs/file.txt", "file", "file", 1)
 	require.NoError(t, err)
 
 	// Commit a successful download outcome.
@@ -372,28 +372,25 @@ func TestCommitMutation_DownloadSuccess_DoesNotClearSyncFailures(t *testing.T) {
 // Validates: R-2.10.41
 func TestCommitMutation_Success_DoesNotClearSyncFailures(t *testing.T) {
 	tests := []struct {
-		name         string
-		path         string
-		direction    synctypes.Direction
-		issueType    string
-		remoteStatus synctypes.SyncStatus
-		action       synctypes.ActionType
+		name      string
+		path      string
+		direction synctypes.Direction
+		issueType string
+		action    synctypes.ActionType
 	}{
 		{
-			name:         "DeleteSuccess",
-			path:         "docs/old.txt",
-			direction:    synctypes.DirectionDelete,
-			issueType:    "delete_failed",
-			remoteStatus: synctypes.SyncStatusDeleting,
-			action:       synctypes.ActionLocalDelete,
+			name:      "DeleteSuccess",
+			path:      "docs/old.txt",
+			direction: synctypes.DirectionDelete,
+			issueType: "local_delete_error",
+			action:    synctypes.ActionLocalDelete,
 		},
 		{
-			name:         "MoveSuccess",
-			path:         "docs/moved.txt",
-			direction:    synctypes.DirectionUpload,
-			issueType:    "upload_failed",
-			remoteStatus: synctypes.SyncStatusSynced,
-			action:       synctypes.ActionLocalMove,
+			name:      "MoveSuccess",
+			path:      "docs/moved.txt",
+			direction: synctypes.DirectionUpload,
+			issueType: "upload_failed",
+			action:    synctypes.ActionLocalMove,
 		},
 	}
 
@@ -413,9 +410,9 @@ func TestCommitMutation_Success_DoesNotClearSyncFailures(t *testing.T) {
 
 			_, err = mgr.DB().ExecContext(ctx,
 				`INSERT INTO remote_state
-					(drive_id, item_id, path, parent_id, item_type, sync_status, observed_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				driveid.New(testDriveID).String(), "item-1", tt.path, "root", "file", tt.remoteStatus, 1)
+						(drive_id, item_id, path, parent_id, item_type, observed_at)
+					VALUES (?, ?, ?, ?, ?, ?)`,
+				driveid.New(testDriveID).String(), "item-1", tt.path, "root", "file", 1)
 			require.NoError(t, err)
 
 			outcome := &BaselineMutation{
@@ -434,7 +431,7 @@ func TestCommitMutation_Success_DoesNotClearSyncFailures(t *testing.T) {
 	}
 }
 
-func TestLocalIssueSyncStatus(t *testing.T) {
+func TestLocalIssueActionability(t *testing.T) {
 	tests := []struct {
 		issueType string
 		want      bool // true = actionable (user must fix)
@@ -960,17 +957,17 @@ func TestRecordFailure_TransientHasDatabaseBackoff(t *testing.T) {
 		"transient issues should have next_retry_at set by delay function")
 }
 
-func TestRecordFailure_DownloadStateTransition(t *testing.T) {
+func TestRecordFailure_DownloadResolvesItemIDFromRemoteMirror(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
 	mgr.SetNowFunc(func() time.Time { return time.Unix(1000, 0) })
 	ctx := context.Background()
 
-	// Insert a downloading item.
+	// Insert a remote mirror row so RecordFailure can resolve item_id.
 	_, err := mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
-		VALUES (?, ?, ?, 'file', 'downloading', ?)`,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, observed_at)
+		VALUES (?, ?, ?, 'file', ?)`,
 		testDriveID, "item1", "hello.txt", 999,
 	)
 	require.NoError(t, err)
@@ -984,10 +981,10 @@ func TestRecordFailure_DownloadStateTransition(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 
-	// remote_state should be transitioned to download_failed.
+	// remote_state remains a pure mirror.
 	row := readRemoteStateRow(t, mgr.DB(), "item1")
 	require.NotNil(t, row)
-	assert.Equal(t, synctypes.SyncStatusDownloadFailed, row.SyncStatus)
+	assert.Equal(t, "hello.txt", row.Path)
 
 	// sync_failures row should exist with item_id auto-resolved.
 	issues, err := mgr.ListSyncFailures(ctx)
@@ -996,17 +993,17 @@ func TestRecordFailure_DownloadStateTransition(t *testing.T) {
 	assert.Equal(t, "item1", issues[0].ItemID, "item_id should be auto-resolved from remote_state")
 }
 
-func TestRecordFailure_UploadNoStateTransition(t *testing.T) {
+func TestRecordFailure_UploadPreservesRemoteMirrorRow(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
 	mgr.SetNowFunc(func() time.Time { return time.Unix(1000, 0) })
 	ctx := context.Background()
 
-	// Insert a synced item — uploads should not affect remote_state.
+	// Insert a mirror row — uploads should not mutate remote truth.
 	_, err := mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
-		VALUES (?, ?, ?, 'file', 'synced', ?)`,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, observed_at)
+		VALUES (?, ?, ?, 'file', ?)`,
 		testDriveID, "item1", "hello.txt", 999,
 	)
 	require.NoError(t, err)
@@ -1019,10 +1016,10 @@ func TestRecordFailure_UploadNoStateTransition(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 
-	// Status should remain synced — uploads don't transition remote_state.
+	// Remote mirror truth should remain unchanged.
 	row := readRemoteStateRow(t, mgr.DB(), "item1")
 	require.NotNil(t, row)
-	assert.Equal(t, synctypes.SyncStatusSynced, row.SyncStatus)
+	assert.Equal(t, "hello.txt", row.Path)
 }
 
 func TestRecordFailure_PreservesExistingValuesOnConflict(t *testing.T) {

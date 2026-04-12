@@ -7,12 +7,12 @@
 //   - CommitDeltaToken:        persist delta token in own transaction
 //   - DeleteDeltaToken:        remove delta token for drive/scope
 //   - saveDeltaToken:          persist delta token within existing transaction
-//   - CommitMutation:           atomically apply mutation to baseline + remote_state
+//   - CommitMutation:          atomically apply mutation to baseline + remote_state
 //   - classifyBaselineMutation: map ActionType to one explicit baseline mutation kind
-//   - applySingleOutcome:      dispatch outcome to appropriate DB helper
+//   - applySingleMutation:     dispatch mutation to appropriate DB helper
 //   - updateBaselineCache:     patch in-memory baseline after DB commit
 //   - reloadBaselineCache:     rebuild the cache from SQLite after impossible cache state
-//   - outcomeToEntry:          convert Outcome to BaselineEntry
+//   - mutationToEntry:         convert BaselineMutation to BaselineEntry
 //   - commitUpsert:            INSERT/UPDATE baseline for download/upload/create
 //   - commitDelete:            DELETE baseline for delete/cleanup
 //   - commitMove:              UPDATE path for move outcomes
@@ -217,7 +217,7 @@ func (m *SyncStore) GetDeltaToken(ctx context.Context, driveID, scopeID string) 
 	return token, nil
 }
 
-// CommitMutation atomically applies a single outcome to the baseline in a
+// CommitMutation atomically applies a single mutation to the baseline in a
 // SQLite transaction. After the DB write, the in-memory baseline cache is
 // updated incrementally (Put or Delete).
 func (m *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutation) (err error) {
@@ -246,7 +246,7 @@ func (m *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutatio
 
 	syncedAt := m.nowFunc().UnixNano()
 
-	if applyErr := applySingleOutcome(ctx, tx, outcome, syncedAt); applyErr != nil {
+	if applyErr := applySingleMutation(ctx, tx, outcome, syncedAt); applyErr != nil {
 		return applyErr
 	}
 
@@ -260,6 +260,16 @@ func (m *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutatio
 	}
 
 	return nil
+}
+
+// CommitOutcome preserves older test call sites while the sync package migrates
+// fully to store-owned BaselineMutation inputs.
+func (m *SyncStore) CommitOutcome(ctx context.Context, outcome *synctypes.Outcome) error {
+	if outcome == nil {
+		return fmt.Errorf("sync: commit outcome requires outcome")
+	}
+
+	return m.CommitMutation(ctx, mutationFromOutcome(outcome))
 }
 
 // RefreshLocalBaseline updates the local-side comparison tuple for one path
@@ -326,18 +336,6 @@ func (m *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh LocalBasel
 		return fmt.Errorf("sync: refreshing baseline for %s: %w", refresh.Path, err)
 	}
 
-	if refresh.ItemID != "" && !refresh.DriveID.IsZero() {
-		_, err = tx.ExecContext(ctx,
-			`UPDATE remote_state SET sync_status = ? WHERE drive_id = ? AND item_id = ?`,
-			synctypes.SyncStatusSynced,
-			refresh.DriveID.String(),
-			refresh.ItemID,
-		)
-		if err != nil {
-			return fmt.Errorf("sync: updating remote_state during local baseline refresh for %s: %w", refresh.Path, err)
-		}
-	}
-
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("sync: committing refresh local baseline transaction: %w", err)
 	}
@@ -362,8 +360,8 @@ func classifyBaselineMutation(action synctypes.ActionType) (baselineMutationKind
 	}
 }
 
-// applySingleOutcome dispatches a single outcome to the appropriate DB helper.
-func applySingleOutcome(ctx context.Context, tx sqlTxRunner, o *BaselineMutation, syncedAt int64) error {
+// applySingleMutation dispatches a single mutation to the appropriate DB helper.
+func applySingleMutation(ctx context.Context, tx sqlTxRunner, o *BaselineMutation, syncedAt int64) error {
 	mutation, err := classifyBaselineMutation(o.Action)
 	if err != nil {
 		return err
@@ -385,7 +383,7 @@ func applySingleOutcome(ctx context.Context, tx sqlTxRunner, o *BaselineMutation
 	}
 
 	// Update remote_state in the same transaction.
-	return updateRemoteStateOnOutcome(ctx, tx, o)
+	return updateRemoteStateOnOutcome(ctx, tx, o, syncedAt)
 }
 
 // updateBaselineCache applies a single outcome to the in-memory baseline,
@@ -408,15 +406,15 @@ func (m *SyncStore) updateBaselineCache(ctx context.Context, o *BaselineMutation
 
 	switch mutation {
 	case baselineMutationUpsert:
-		m.baseline.Put(outcomeToEntry(o, syncedAt))
+		m.baseline.Put(mutationToEntry(o, syncedAt))
 	case baselineMutationDelete:
 		m.baseline.Delete(o.Path)
 	case baselineMutationMove:
 		m.baseline.Delete(o.OldPath)
-		m.baseline.Put(outcomeToEntry(o, syncedAt))
+		m.baseline.Put(mutationToEntry(o, syncedAt))
 	case baselineMutationConflict:
 		if o.ResolvedBy == synctypes.ResolvedByAuto {
-			m.baseline.Put(outcomeToEntry(o, syncedAt))
+			m.baseline.Put(mutationToEntry(o, syncedAt))
 		} else if o.ConflictType == synctypes.ConflictEditDelete {
 			// Unresolved edit-delete conflict from local delete: the original file
 			// is gone (renamed to conflict copy), so remove the baseline entry.
@@ -439,8 +437,8 @@ func (m *SyncStore) reloadBaselineCache(ctx context.Context) error {
 	return nil
 }
 
-// outcomeToEntry converts an Outcome into a BaselineEntry for cache update.
-func outcomeToEntry(o *BaselineMutation, syncedAt int64) *BaselineEntry {
+// mutationToEntry converts a BaselineMutation into a BaselineEntry for cache update.
+func mutationToEntry(o *BaselineMutation, syncedAt int64) *BaselineEntry {
 	return &BaselineEntry{
 		Path:            o.Path,
 		DriveID:         o.DriveID,
@@ -457,6 +455,30 @@ func outcomeToEntry(o *BaselineMutation, syncedAt int64) *BaselineEntry {
 		RemoteMtime:     o.RemoteMtime,
 		SyncedAt:        syncedAt,
 		ETag:            o.ETag,
+	}
+}
+
+func mutationFromOutcome(o *synctypes.Outcome) *BaselineMutation {
+	return &BaselineMutation{
+		Action:          o.Action,
+		Success:         o.Success,
+		Path:            o.Path,
+		OldPath:         o.OldPath,
+		DriveID:         o.DriveID,
+		ItemID:          o.ItemID,
+		ParentID:        o.ParentID,
+		ItemType:        o.ItemType,
+		LocalHash:       o.LocalHash,
+		RemoteHash:      o.RemoteHash,
+		LocalSize:       o.LocalSize,
+		LocalSizeKnown:  o.LocalSizeKnown,
+		RemoteSize:      o.RemoteSize,
+		RemoteSizeKnown: o.RemoteSizeKnown,
+		LocalMtime:      o.LocalMtime,
+		RemoteMtime:     o.RemoteMtime,
+		ETag:            o.ETag,
+		ConflictType:    o.ConflictType,
+		ResolvedBy:      o.ResolvedBy,
 	}
 }
 
@@ -625,74 +647,62 @@ func commitConflict(ctx context.Context, tx sqlTxRunner, o *BaselineMutation, sy
 	return nil
 }
 
-// updateRemoteStateOnOutcome updates remote_state based on a completed action
-// outcome, called from within the same transaction as the baseline update.
-// Silently skips if no matching remote_state row exists (e.g., upload-only mode).
-func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) error {
+// updateRemoteStateOnOutcome updates the remote mirror when execution produces
+// authoritative new remote truth.
+func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *BaselineMutation, syncedAt int64) error {
 	if o.ItemID == "" || o.DriveID.IsZero() {
 		return nil
 	}
 
-	// Note: sync_failures cleanup is handled exclusively by the engine's
-	// clearFailureOnSuccess method (D-6). The store owns only baseline and
-	// remote_state commits.
-	if o.Action == synctypes.ActionDownload {
-		// Hash guard: only transition if the remote_state hash matches the
-		// downloaded hash. Prevents stale overwrite when a new observation
-		// arrived while the download was in progress.
+	switch o.Action {
+	case synctypes.ActionUpload, synctypes.ActionFolderCreate:
 		_, err := tx.ExecContext(ctx,
-			`UPDATE remote_state SET sync_status = ?
-			WHERE drive_id = ? AND item_id = ? AND sync_status = ? AND hash IS ?`,
-			synctypes.SyncStatusSynced,
-			o.DriveID.String(), o.ItemID, synctypes.SyncStatusDownloading, nullString(o.RemoteHash),
-		)
-		if err != nil {
-			return fmt.Errorf("sync: updating remote_state for download %s: %w", o.Path, err)
-		}
-		return nil
-	}
-
-	if o.Action == synctypes.ActionLocalDelete {
-		_, err := tx.ExecContext(ctx,
-			`UPDATE remote_state SET sync_status = ?
-			WHERE drive_id = ? AND item_id = ? AND sync_status = ?`,
-			synctypes.SyncStatusDeleted,
-			o.DriveID.String(), o.ItemID, synctypes.SyncStatusDeleting,
-		)
-		if err != nil {
-			return fmt.Errorf("sync: updating remote_state for local delete %s: %w", o.Path, err)
-		}
-		return nil
-	}
-
-	if o.Action == synctypes.ActionUpload || o.Action == synctypes.ActionFolderCreate {
-		// Unconditional: upload resolves any state.
-		_, err := tx.ExecContext(ctx,
-			`UPDATE remote_state SET sync_status = ?, hash = ?, size = ?, mtime = ?
-			WHERE drive_id = ? AND item_id = ?`,
-			synctypes.SyncStatusSynced,
-			nullString(o.RemoteHash),
-			nullKnownInt64(o.RemoteSize, o.RemoteSizeKnown),
-			nullOptionalInt64(o.RemoteMtime),
-			o.DriveID.String(), o.ItemID,
+			`INSERT INTO remote_state (
+				drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
+				previous_path, is_filtered, observed_at, filter_generation, filter_reason
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, '')
+			ON CONFLICT(drive_id, item_id) DO UPDATE SET
+				path = excluded.path,
+				parent_id = excluded.parent_id,
+				item_type = excluded.item_type,
+				hash = excluded.hash,
+				size = excluded.size,
+				mtime = excluded.mtime,
+				etag = excluded.etag,
+				previous_path = excluded.previous_path,
+				is_filtered = 0,
+				observed_at = excluded.observed_at,
+				filter_generation = 0,
+				filter_reason = ''`,
+			o.DriveID.String(), o.ItemID, o.Path, nullString(o.ParentID), o.ItemType,
+			nullString(o.RemoteHash), nullKnownInt64(o.RemoteSize, o.RemoteSizeKnown), nullOptionalInt64(o.RemoteMtime),
+			nullString(o.ETag), sql.NullString{}, syncedAt,
 		)
 		if err != nil {
 			return fmt.Errorf("sync: updating remote_state for upload %s: %w", o.Path, err)
 		}
-		return nil
-	}
-
-	if o.Action == synctypes.ActionLocalMove || o.Action == synctypes.ActionRemoteMove {
-		// Move success: update path and mark synced.
-		_, err := tx.ExecContext(ctx,
-			`UPDATE remote_state SET path = ?, sync_status = ?
-			WHERE drive_id = ? AND item_id = ?`,
-			o.Path, synctypes.SyncStatusSynced,
+	case synctypes.ActionRemoteDelete:
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM remote_state WHERE drive_id = ? AND item_id = ?`,
 			o.DriveID.String(), o.ItemID,
-		)
-		if err != nil {
-			return fmt.Errorf("sync: updating remote_state for move %s: %w", o.Path, err)
+		); err != nil {
+			return fmt.Errorf("sync: deleting remote_state for remote delete %s: %w", o.Path, err)
 		}
+	case synctypes.ActionRemoteMove:
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE remote_state
+			 SET path = ?, previous_path = ?, observed_at = ?, is_filtered = 0, filter_generation = 0, filter_reason = ''
+			 WHERE drive_id = ? AND item_id = ?`,
+			o.Path, nullString(o.OldPath), syncedAt, o.DriveID.String(), o.ItemID,
+		); err != nil {
+			return fmt.Errorf("sync: updating remote_state for remote move %s: %w", o.Path, err)
+		}
+	case synctypes.ActionDownload,
+		synctypes.ActionLocalDelete,
+		synctypes.ActionLocalMove,
+		synctypes.ActionConflict,
+		synctypes.ActionUpdateSynced,
+		synctypes.ActionCleanup:
 		return nil
 	}
 

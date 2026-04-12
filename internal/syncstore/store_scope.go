@@ -15,7 +15,7 @@ type remoteScopeRow struct {
 	ItemID           string
 	Path             string
 	Hash             sql.NullString
-	Status           synctypes.SyncStatus
+	IsFiltered       bool
 	FilterGeneration int64
 	FilterReason     string
 	BaselinePath     sql.NullString
@@ -144,7 +144,7 @@ func loadRemoteScopeRows(ctx context.Context, tx sqlTxRunner) ([]remoteScopeRow,
 			rs.item_id,
 			rs.path,
 			rs.hash,
-			rs.sync_status,
+			rs.is_filtered,
 			rs.filter_generation,
 			rs.filter_reason,
 			b.path,
@@ -152,12 +152,7 @@ func loadRemoteScopeRows(ctx context.Context, tx sqlTxRunner) ([]remoteScopeRow,
 		FROM remote_state rs
 		LEFT JOIN baseline b
 		  ON b.drive_id = rs.drive_id
-		 AND b.item_id = rs.item_id
-		WHERE rs.sync_status NOT IN (?, ?, ?, ?)`,
-		synctypes.SyncStatusDeleted,
-		synctypes.SyncStatusPendingDelete,
-		synctypes.SyncStatusDownloading,
-		synctypes.SyncStatusDeleting,
+		 AND b.item_id = rs.item_id`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("scope state query remote rows: %w", err)
@@ -172,7 +167,7 @@ func loadRemoteScopeRows(ctx context.Context, tx sqlTxRunner) ([]remoteScopeRow,
 			&row.ItemID,
 			&row.Path,
 			&row.Hash,
-			&row.Status,
+			&row.IsFiltered,
 			&row.FilterGeneration,
 			&row.FilterReason,
 			&row.BaselinePath,
@@ -220,7 +215,7 @@ func applyRemoteScopeRow(
 ) (bool, error) {
 	reason := snapshot.ExclusionReason(row.Path)
 	if reason != syncscope.ExclusionNone {
-		if row.Status == synctypes.SyncStatusFiltered &&
+		if row.IsFiltered &&
 			row.FilterGeneration == generation &&
 			row.FilterReason == string(reason) {
 			return false, nil
@@ -229,9 +224,8 @@ func applyRemoteScopeRow(
 		if _, err := tx.ExecContext(
 			ctx,
 			`UPDATE remote_state
-			 SET sync_status = ?, filter_generation = ?, filter_reason = ?
+			 SET is_filtered = 1, filter_generation = ?, filter_reason = ?
 			 WHERE drive_id = ? AND item_id = ?`,
-			synctypes.SyncStatusFiltered,
 			generation,
 			string(reason),
 			row.DriveID,
@@ -243,23 +237,15 @@ func applyRemoteScopeRow(
 		return true, nil
 	}
 
-	if row.Status != synctypes.SyncStatusFiltered {
+	if !row.IsFiltered {
 		return false, nil
 	}
 
-	nextStatus := reactivatedRemoteStatus(
-		row.Path,
-		row.Hash.String,
-		row.BaselinePath.Valid,
-		row.BaselinePath.String,
-		row.BaselineHash.String,
-	)
 	if _, err := tx.ExecContext(
 		ctx,
 		`UPDATE remote_state
-		 SET sync_status = ?, filter_generation = 0, filter_reason = ''
+		 SET is_filtered = 0, filter_generation = 0, filter_reason = ''
 		 WHERE drive_id = ? AND item_id = ?`,
-		nextStatus,
 		row.DriveID,
 		row.ItemID,
 	); err != nil {
@@ -425,14 +411,6 @@ func clearScopeStateTx(ctx context.Context, tx sqlTxRunner) (int, error) {
 	}
 
 	return rowsAffected(result), nil
-}
-
-func reactivatedRemoteStatus(path, hash string, baselineFound bool, baselinePath, baselineHash string) synctypes.SyncStatus {
-	if baselineFound && baselinePath == path && baselineHash == hash {
-		return synctypes.SyncStatusSynced
-	}
-
-	return synctypes.SyncStatusPendingDownload
 }
 
 func boolToInt(value bool) int {

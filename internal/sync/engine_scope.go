@@ -199,10 +199,6 @@ func (rt *watchRuntime) handleWatchScopeChange(
 
 	rt.setScopeSnapshot(change.New, session.Generation)
 
-	if p.mode == SyncUploadOnly {
-		plan.Reentry.Pending = false
-		plan.Reentry.Kind = synctypes.ScopeReconcileNone
-	}
 	if err := rt.applyScopeState(ctx, false, &session, &plan); err != nil {
 		return fmt.Errorf("sync: applying watch scope change: %w", err)
 	}

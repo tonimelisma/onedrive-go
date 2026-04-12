@@ -6,8 +6,8 @@ Bidirectional file synchronization between a local directory and OneDrive.
 
 - R-2.1.1: When the user runs `sync`, the system shall perform one-shot bidirectional sync. [verified]
 - R-2.1.2: When `--watch` is passed, the system shall run continuously, detecting changes via filesystem events (inotify/FSEvents) and remote delta polling. [verified]
-- R-2.1.3: When `--download-only` is passed, the system shall only download remote changes. [verified]
-- R-2.1.4: When `--upload-only` is passed, the system shall only upload local changes. [verified]
+- R-2.1.3: When `--download-only` is passed, the system shall still observe both local and remote truth, but it shall only execute remote-to-local reconciliation work. Local-to-remote mutations shall remain deferred until a mode that permits them. [verified]
+- R-2.1.4: When `--upload-only` is passed, the system shall still observe both local and remote truth, but it shall only execute local-to-remote reconciliation work. Remote-to-local mutations shall remain deferred until a mode that permits them. [verified]
 - R-2.1.5: When `--dry-run` is passed, the system shall preview operations without executing. [verified]
 - R-2.1.6: When `--full` is passed, the system shall perform full reconciliation (fresh delta enumeration + orphan detection). [verified]
 
@@ -53,10 +53,10 @@ persisted scope projection rather than unrelated metadata.
 
 ## R-2.5 Crash Recovery [verified]
 
-- R-2.5.1: When the process is killed mid-sync, the next run shall resume cleanly from the last checkpoint. [verified]
+- R-2.5.1: When the process is killed mid-sync, the next run shall resume cleanly by reloading durable truth (`baseline`, `remote_state`, `sync_failures`, `scope_blocks`), reobserving current state, and replanning from that truth. [verified]
 - R-2.5.2: The sync state store shall provide durable, transactional writes that survive process kill. [verified]
-- R-2.5.3: On startup, the system shall detect items stuck in `syncing` state and reset them for re-planning (reconciler). [verified]
-- R-2.5.4: When `ResetInProgressStates` resets items to pending state, the system shall create corresponding `sync_failures` entries so the `FailureRetrier` can rediscover and re-process them. Without this bridge, items that crashed mid-execution become zombies — the delta token was already advanced, so no new events arrive. [verified]
+- R-2.5.3: On startup, the system shall not require persisted in-progress lane state to recover interrupted work. Incomplete actions shall be rediscovered from durable truth plus transfer/session artifacts and then replanned normally. [verified]
+- R-2.5.4: When a prior run has already advanced remote observation, later runs shall still rediscover already-observed remote drift from durable `remote_state` and reconcile it without requiring synthetic pending-state bridge rows or fresh delta events. [verified]
 - R-2.5.5: The product shall provide one supported `recover` command that performs store-owned sync-state recovery: it first attempts deterministic safe in-place repair, then rebuilds the DB while preserving recoverable durable user intent, and finally resets the DB from scratch if salvage is impossible. The recovery path shall report what it did and shall require explicit user confirmation before mutation. [verified]
 - R-2.5.6: The sync state DB shall use an embedded goose migration history, reject existing state stores that contain user tables without migration history, and provide clear rebuild/migrate guidance instead of silently guessing at or erasing durable user intent. [verified]
 

@@ -126,9 +126,9 @@ func (m *SyncStore) Close(ctx context.Context) error {
 	return nil
 }
 
-// Checkpoint performs WAL checkpoint and optionally prunes soft-deleted rows
-// older than retention. Called: after initial sync, every 30 minutes, and on
-// shutdown. Pass retention=0 to skip pruning (WAL checkpoint only).
+// Checkpoint performs WAL checkpoint and optionally prunes old actionable
+// failures. Called after initial sync, every 30 minutes, and on shutdown.
+// Pass retention=0 to skip pruning (WAL checkpoint only).
 func (m *SyncStore) Checkpoint(ctx context.Context, retention time.Duration) error {
 	if _, err := m.db.ExecContext(ctx,
 		"PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
@@ -140,12 +140,6 @@ func (m *SyncStore) Checkpoint(ctx context.Context, retention time.Duration) err
 	}
 
 	cutoff := m.nowFunc().Add(-retention).UnixNano()
-
-	if _, err := m.db.ExecContext(ctx,
-		`DELETE FROM remote_state WHERE sync_status = 'deleted' AND observed_at < ?`,
-		cutoff); err != nil {
-		return fmt.Errorf("prune deleted remote_state: %w", err)
-	}
 
 	// Actionable failures are kept for user visibility but pruned after retention
 	// to prevent unbounded growth of stale entries.

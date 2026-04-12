@@ -585,9 +585,9 @@ func TestRunWatch_CancellationWinsOverFinalObserverExit(t *testing.T) {
 	}, "watch stopped")
 }
 
-// TestRunWatch_UploadOnly_SkipsRemoteObserver verifies that upload-only mode
-// does not start a remote observer (no delta polling).
-func TestRunWatch_UploadOnly_SkipsRemoteObserver(t *testing.T) {
+// TestRunWatch_UploadOnly_StartsRemoteObserver verifies that upload-only mode
+// still observes remote truth via delta polling.
+func TestRunWatch_UploadOnly_StartsRemoteObserver(t *testing.T) {
 	t.Parallel()
 
 	var deltaCalls atomic.Int32
@@ -629,10 +629,10 @@ func TestRunWatch_UploadOnly_SkipsRemoteObserver(t *testing.T) {
 		require.Fail(t, "RunWatch did not return within timeout")
 	}
 
-	assert.Zero(t, deltaCalls.Load(), "upload-only watch should not issue any delta calls")
-	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
+	assert.Positive(t, deltaCalls.Load(), "upload-only watch should still issue delta calls")
+	assert.True(t, recorder.findEvent(func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverRemote
-	}), "upload-only watch must not start a remote observer")
+	}), "upload-only watch must start a remote observer")
 }
 
 // Validates: R-6.2.5, R-6.4.2, R-6.4.3
@@ -1201,9 +1201,9 @@ func TestRunWatch_Deduplication(t *testing.T) {
 	assert.True(t, testWatchRuntime(t, eng).depGraph.HasInFlight("overlapping.txt"), "expected in-flight action for overlapping.txt after second batch")
 }
 
-// TestRunWatch_DownloadOnly_SkipsLocalObserver verifies that download-only mode
-// does not start a local observer (no fsnotify watcher, no local change detection).
-func TestRunWatch_DownloadOnly_SkipsLocalObserver(t *testing.T) {
+// TestRunWatch_DownloadOnly_StartsLocalObserver verifies that download-only
+// mode still observes local truth even though uploads stay suppressed.
+func TestRunWatch_DownloadOnly_StartsLocalObserver(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -1237,9 +1237,8 @@ func TestRunWatch_DownloadOnly_SkipsLocalObserver(t *testing.T) {
 		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverRemote
 	}, "remote observer started")
 
-	// Create a local file. If a local observer were running, it would detect
-	// this and eventually produce a sync action. In download-only mode, the
-	// local observer is skipped, so this file should be invisible to sync.
+	// Create a local file. Download-only still observes it, but upload actions
+	// remain suppressed by mode admission.
 	writeLocalFile(t, syncRoot, "local-only.txt", "should-be-ignored")
 
 	cancel()
@@ -1255,9 +1254,9 @@ func TestRunWatch_DownloadOnly_SkipsLocalObserver(t *testing.T) {
 	require.NoError(t, err)
 	_, found := bl.GetByPath("local-only.txt")
 	assert.False(t, found, "download-only watch mode must ignore local-only files created after bootstrap")
-	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
+	assert.True(t, recorder.findEvent(func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
-	}), "download-only watch must not start a local observer")
+	}), "download-only watch must start a local observer")
 }
 
 // TestRunWatch_AllObserversDead_ReturnsError verifies that RunWatch returns an
@@ -1481,8 +1480,15 @@ func TestRunWatch_ShutdownDropsReconcileResult(t *testing.T) {
 	reconcileStarted := make(chan struct{})
 	reconcileReleased := make(chan struct{})
 	var reconcileStartedOnce atomic.Bool
+	var deltaCalls atomic.Int32
 	mock := &engineMockClient{
 		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			call := deltaCalls.Add(1)
+			if call == 1 {
+				return deltaPageWithItems([]graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveid.New(engineTestDriveID)},
+				}, "bootstrap-token"), nil
+			}
 			if reconcileStartedOnce.CompareAndSwap(false, true) {
 				close(reconcileStarted)
 			}

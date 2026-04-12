@@ -125,12 +125,7 @@ CREATE TABLE IF NOT EXISTS remote_state (
     mtime         INTEGER,
     etag          TEXT,
     previous_path TEXT,
-    sync_status   TEXT    NOT NULL DEFAULT 'pending_download'
-                  CHECK(sync_status IN (
-                      'pending_download', 'downloading', 'download_failed',
-                      'synced',
-                      'pending_delete', 'deleting', 'delete_failed', 'deleted',
-                      'filtered')),
+    is_filtered   INTEGER NOT NULL DEFAULT 0 CHECK(is_filtered IN (0, 1)),
     filter_generation INTEGER NOT NULL DEFAULT 0,
     filter_reason  TEXT    NOT NULL DEFAULT ''
                    CHECK(filter_reason IN ('', 'path_scope', 'marker_scope')),
@@ -138,13 +133,12 @@ CREATE TABLE IF NOT EXISTS remote_state (
     PRIMARY KEY (drive_id, item_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_remote_state_status
-    ON remote_state(sync_status);
 CREATE INDEX IF NOT EXISTS idx_remote_state_parent
     ON remote_state(parent_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_state_active_path
-    ON remote_state(path)
-    WHERE sync_status NOT IN ('deleted', 'pending_delete');
+CREATE INDEX IF NOT EXISTS idx_remote_state_filtered
+    ON remote_state(is_filtered);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_state_path
+    ON remote_state(path);
 
 -- Unified per-item failure tracking.
 --

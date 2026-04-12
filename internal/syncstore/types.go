@@ -25,24 +25,7 @@ func DirLowerKeyFromPath(path string) DirLowerKey {
 	}
 }
 
-// BaselineEntry represents the confirmed synced state of a single path.
-type BaselineEntry struct {
-	Path            string
-	DriveID         driveid.ID
-	ItemID          string
-	ParentID        string
-	ItemType        synctypes.ItemType
-	LocalHash       string
-	RemoteHash      string
-	LocalSize       int64
-	LocalSizeKnown  bool
-	RemoteSize      int64
-	RemoteSizeKnown bool
-	LocalMtime      int64
-	RemoteMtime     int64
-	SyncedAt        int64
-	ETag            string
-}
+type BaselineEntry = synctypes.BaselineEntry
 
 // Baseline is the in-memory container for all baseline entries.
 type Baseline struct {
@@ -167,92 +150,15 @@ func NewBaselineForTest(entries []*BaselineEntry) *Baseline {
 	return bl
 }
 
-// ObservedItem represents a single item from a delta API response, ready
-// for CommitObservation to process against existing remote_state.
-type ObservedItem struct {
-	DriveID          driveid.ID
-	ItemID           string
-	ParentID         string
-	Path             string
-	ItemType         synctypes.ItemType
-	Hash             string
-	Size             int64
-	Mtime            int64
-	ETag             string
-	IsDeleted        bool
-	Filtered         bool
-	FilterGeneration int64
-	FilterReason     synctypes.RemoteFilterReason
-}
-
-// RemoteStateRow represents a row from the remote_state table.
-type RemoteStateRow struct {
-	DriveID          driveid.ID
-	ItemID           string
-	Path             string
-	ParentID         string
-	ItemType         synctypes.ItemType
-	Hash             string
-	Size             int64
-	Mtime            int64
-	ETag             string
-	PreviousPath     string
-	SyncStatus       synctypes.SyncStatus
-	ObservedAt       int64
-	FilterGeneration int64
-	FilterReason     synctypes.RemoteFilterReason
-}
-
-// SyncFailureParams bundles all inputs for RecordFailure into a single struct.
-type SyncFailureParams struct {
-	Path       string
-	DriveID    driveid.ID
-	Direction  synctypes.Direction
-	Role       synctypes.FailureRole
-	IssueType  string
-	Category   synctypes.FailureCategory
-	ErrMsg     string
-	HTTPStatus int
-	ActionType synctypes.ActionType
-	FileSize   int64
-	LocalHash  string
-	ItemID     string
-	ScopeKey   synctypes.ScopeKey
-}
-
-// SyncFailureRow represents a row from the sync_failures table.
-type SyncFailureRow struct {
-	Path         string
-	DriveID      driveid.ID
-	Direction    synctypes.Direction
-	Role         synctypes.FailureRole
-	Category     synctypes.FailureCategory
-	IssueType    string
-	ItemID       string
-	ActionType   synctypes.ActionType
-	FailureCount int
-	NextRetryAt  int64
-	LastError    string
-	HTTPStatus   int
-	FirstSeenAt  int64
-	LastSeenAt   int64
-	FileSize     int64
-	LocalHash    string
-	ScopeKey     synctypes.ScopeKey
-}
-
-// ActionableFailure represents a scanner-detected issue to batch-upsert.
-type ActionableFailure struct {
-	Path       string
-	DriveID    driveid.ID
-	Direction  synctypes.Direction
-	ActionType synctypes.ActionType
-	Role       synctypes.FailureRole
-	IssueType  string
-	Error      string
-	ScopeKey   synctypes.ScopeKey
-	FileSize   int64
-}
+// These aliases keep store row DTOs on a single canonical shape shared with
+// legacy consumers, instead of maintaining duplicate struct definitions.
+type (
+	ObservedItem      = synctypes.ObservedItem
+	RemoteStateRow    = synctypes.RemoteStateRow
+	SyncFailureParams = synctypes.SyncFailureParams
+	SyncFailureRow    = synctypes.SyncFailureRow
+	ActionableFailure = synctypes.ActionableFailure
+)
 
 // RecoveryCandidate identifies one remote_state row that crash recovery must resolve.
 type RecoveryCandidate struct {
@@ -261,30 +167,10 @@ type RecoveryCandidate struct {
 	Path    string
 }
 
-// PendingRetryGroup aggregates transient failures by scope_key.
-type PendingRetryGroup struct {
-	ScopeKey     synctypes.ScopeKey
-	Count        int
-	EarliestNext time.Time
-}
-
-// ConflictRecord holds metadata about a detected conflict.
-type ConflictRecord struct {
-	ID           string
-	DriveID      driveid.ID
-	ItemID       string
-	Path         string
-	Name         string
-	ConflictType string
-	DetectedAt   int64
-	LocalHash    string
-	RemoteHash   string
-	LocalMtime   int64
-	RemoteMtime  int64
-	Resolution   string
-	ResolvedAt   int64
-	ResolvedBy   string
-}
+type (
+	PendingRetryGroup = synctypes.PendingRetryGroup
+	ConflictRecord    = synctypes.ConflictRecord
+)
 
 // ConflictRequestRecord is the durable user-intent workflow for one conflict.
 type ConflictRequestRecord struct {
@@ -309,34 +195,12 @@ type HeldDeleteRecord struct {
 	LastError     string
 }
 
-// ScopeBlock represents an active scope-level block.
-type ScopeBlock struct {
-	Key           synctypes.ScopeKey
-	IssueType     string
-	TimingSource  synctypes.ScopeTimingSource
-	BlockedAt     time.Time
-	TrialInterval time.Duration
-	NextTrialAt   time.Time
-	PreserveUntil time.Time
-	TrialCount    int
-}
+type ScopeBlock = synctypes.ScopeBlock
 
-// ScopeStateRecord is the durable store-owned projection of the current sync scope.
-type ScopeStateRecord struct {
-	Generation            int64
-	EffectiveSnapshotJSON string
-	ObservationPlanHash   string
-	ObservationMode       synctypes.ScopeObservationMode
-	WebsocketEnabled      bool
-	PendingReentry        bool
-	LastReconcileKind     synctypes.ScopeReconcileKind
-	UpdatedAt             int64
-}
-
-// ScopeStateApplyRequest is one atomic scope-state transition.
-type ScopeStateApplyRequest struct {
-	State ScopeStateRecord
-}
+type (
+	ScopeStateRecord       = synctypes.ScopeStateRecord
+	ScopeStateApplyRequest = synctypes.ScopeStateApplyRequest
+)
 
 // BaselineMutation is the store-owned persistence input produced from one
 // executed action result.

@@ -1,4 +1,4 @@
-Summary: 2 drives (1 ready, 1 paused, 1 accounts requiring auth), 3 issues, 2 pending, 1 retrying
+Summary: 2 drives (1 ready, 1 paused, 1 accounts requiring auth), 3 issues, 2 remote drift, 1 retrying
 
 Account: Alice Example (alice@example.com) [personal]
   Org:   Contoso
@@ -9,7 +9,7 @@ Account: Alice Example (alice@example.com) [personal]
     Last sync: 2026-04-03T10:30:00Z
     Duration:  1500ms
     Files:     42
-    Pending:   2 items
+    Remote drift: 2 items
     Issues:    3
     Retrying:  1 items
     State DB:  healthy

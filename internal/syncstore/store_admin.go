@@ -1,20 +1,13 @@
 // Package syncstore persists sync baseline, observation, conflict, failure, and scope state.
 //
 // Contents:
-//   - ListUnreconciled:          remote_state rows needing action
-//   - ListActionableRemoteState: pending/failed remote_state for initial dispatch
-//   - queryRemoteStateRows:      shared multi-row remote_state scanner
-//   - ResetFailure:              reset single failed path to pending
-//   - ResetAllFailures:          reset all failures to pending
-//   - ResetDownloadingStates:    crash recovery for downloading states
-//   - ListDeletingCandidates:    crash recovery candidates for deleting states
-//   - FinalizeDeletingStates:    apply delete crash-recovery decisions
-//   - SetDispatchStatus:         transition pending→in-progress before dispatch
-//   - WriteSyncMetadata:         persist sync report after RunOnce
-//   - ReadSyncMetadata:          retrieve all sync metadata key-value pairs
-//   - ReleaseScope:               atomic scope release + failure unblock
-//   - DiscardScope:               atomic scope discard + failure delete
-//   - BaselineEntryCount:        count of entries in baseline table
+//   - ResetFailure:             reset single failed path
+//   - ResetAllFailures:         reset all failed rows
+//   - WriteSyncMetadata:        persist sync report after RunOnce
+//   - ReadSyncMetadata:         retrieve all sync metadata key-value pairs
+//   - ReleaseScope:             atomic scope release + failure unblock
+//   - DiscardScope:             atomic scope discard + failure delete
+//   - BaselineEntryCount:       count of entries in baseline table
 //
 // Related files:
 //   - store.go:          SyncStore type definition and lifecycle
@@ -23,101 +16,17 @@ package syncstore
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"time"
 
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
-
-// ---------------------------------------------------------------------------
-// StateReader methods
-// ---------------------------------------------------------------------------
-
-// ListUnreconciled returns remote_state rows that need action (not synced,
-// filtered, or deleted).
-func (m *SyncStore) ListUnreconciled(ctx context.Context) ([]RemoteStateRow, error) {
-	return m.queryRemoteStateRows(ctx,
-		`SELECT drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
-			previous_path, sync_status, observed_at
-		FROM remote_state WHERE sync_status NOT IN (?, ?, ?)`,
-		synctypes.SyncStatusSynced, synctypes.SyncStatusFiltered, synctypes.SyncStatusDeleted,
-	)
-}
-
-// ListActionableRemoteState returns remote_state rows with pending or failed status
-// that don't have pending sync_failures (used for initial dispatch, not retry scheduling).
-func (m *SyncStore) ListActionableRemoteState(ctx context.Context) ([]RemoteStateRow, error) {
-	return m.queryRemoteStateRows(ctx,
-		`SELECT drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
-			previous_path, sync_status, observed_at
-		FROM remote_state
-		WHERE sync_status IN (?, ?, ?, ?)`,
-		synctypes.SyncStatusPendingDownload, synctypes.SyncStatusDownloadFailed,
-		synctypes.SyncStatusPendingDelete, synctypes.SyncStatusDeleteFailed,
-	)
-}
-
-// queryRemoteStateRows is a shared helper for scanning multiple remote_state rows.
-func (m *SyncStore) queryRemoteStateRows(ctx context.Context, query string, args ...any) ([]RemoteStateRow, error) {
-	rows, err := m.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("sync: querying remote_state: %w", err)
-	}
-	defer rows.Close()
-
-	var result []RemoteStateRow
-
-	for rows.Next() {
-		var (
-			row      RemoteStateRow
-			parentID sql.NullString
-			hash     sql.NullString
-			size     sql.NullInt64
-			mtime    sql.NullInt64
-			etag     sql.NullString
-			prevPath sql.NullString
-		)
-
-		if err := rows.Scan(
-			&row.DriveID, &row.ItemID, &row.Path, &parentID, &row.ItemType,
-			&hash, &size, &mtime, &etag,
-			&prevPath, &row.SyncStatus, &row.ObservedAt,
-		); err != nil {
-			return nil, fmt.Errorf("sync: scanning remote_state row: %w", err)
-		}
-
-		row.ParentID = parentID.String
-		row.Hash = hash.String
-		row.ETag = etag.String
-		row.PreviousPath = prevPath.String
-
-		if size.Valid {
-			row.Size = size.Int64
-		}
-
-		if mtime.Valid {
-			row.Mtime = mtime.Int64
-		}
-
-		result = append(result, row)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: iterating remote_state rows: %w", err)
-	}
-
-	return result, nil
-}
 
 // ---------------------------------------------------------------------------
 // StateAdmin methods
 // ---------------------------------------------------------------------------
 
-// ResetFailure resets a single failed path: transitions remote_state back to
-// pending and removes the sync_failures row. Uses a transaction to ensure
-// atomicity — crash between statements cannot leave inconsistent state.
+// ResetFailure resets a single failed path by removing its retry record.
 func (m *SyncStore) ResetFailure(ctx context.Context, path string) (err error) {
 	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
@@ -127,24 +36,6 @@ func (m *SyncStore) ResetFailure(ctx context.Context, path string) (err error) {
 		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback reset-failure tx for %s", path))
 	}()
 
-	// download_failed → pending_download
-	if _, execErr := tx.ExecContext(ctx,
-		`UPDATE remote_state SET sync_status = ? WHERE path = ? AND sync_status = ?`,
-		synctypes.SyncStatusPendingDownload, path, synctypes.SyncStatusDownloadFailed,
-	); execErr != nil {
-		return fmt.Errorf("sync: resetting download failure for %s: %w", path, execErr)
-	}
-
-	// delete_failed → pending_delete (not pending_download — the item
-	// should be re-attempted as a delete, not a download).
-	if _, execErr := tx.ExecContext(ctx,
-		`UPDATE remote_state SET sync_status = ? WHERE path = ? AND sync_status = ?`,
-		synctypes.SyncStatusPendingDelete, path, synctypes.SyncStatusDeleteFailed,
-	); execErr != nil {
-		return fmt.Errorf("sync: resetting delete failure for %s: %w", path, execErr)
-	}
-
-	// Remove from sync_failures.
 	if _, execErr := tx.ExecContext(ctx,
 		`DELETE FROM sync_failures WHERE path = ? AND failure_role != ?`, path, synctypes.FailureRoleHeld,
 	); execErr != nil {
@@ -158,27 +49,9 @@ func (m *SyncStore) ResetFailure(ctx context.Context, path string) (err error) {
 	return nil
 }
 
-// ResetAllFailures resets all failed rows: transitions remote_state back to
-// pending and clears all transient sync_failures.
+// ResetAllFailures clears all transient retry rows.
 func (m *SyncStore) ResetAllFailures(ctx context.Context) error {
 	_, err := m.db.ExecContext(ctx,
-		`UPDATE remote_state SET sync_status = ? WHERE sync_status = ?`,
-		synctypes.SyncStatusPendingDownload, synctypes.SyncStatusDownloadFailed,
-	)
-	if err != nil {
-		return fmt.Errorf("sync: resetting download failures: %w", err)
-	}
-
-	_, err = m.db.ExecContext(ctx,
-		`UPDATE remote_state SET sync_status = ? WHERE sync_status = ?`,
-		synctypes.SyncStatusPendingDelete, synctypes.SyncStatusDeleteFailed,
-	)
-	if err != nil {
-		return fmt.Errorf("sync: resetting delete failures: %w", err)
-	}
-
-	// Clear all transient failures from sync_failures.
-	_, err = m.db.ExecContext(ctx,
 		`DELETE FROM sync_failures WHERE category = 'transient' AND failure_role = 'item'`)
 	if err != nil {
 		return fmt.Errorf("sync: clearing transient sync failures: %w", err)
@@ -217,175 +90,6 @@ func (m *SyncStore) DropLegacyRemoteBlockedScope(
 
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("sync: committing remote legacy cleanup for %s: %w", scopeKey.String(), err)
-	}
-
-	return nil
-}
-
-// ResetDownloadingStates is the state-only half of crash recovery for
-// downloads: downloading → pending_download, plus sync_failures entries so the
-// retrier can rediscover the reset items on the next bootstrap sweep.
-func (m *SyncStore) ResetDownloadingStates(ctx context.Context, delayFn func(int) time.Duration) error {
-	downloadingRows, err := m.queryResetCandidates(ctx, synctypes.SyncStatusDownloading)
-	if err != nil {
-		return fmt.Errorf("sync: querying downloading candidates: %w", err)
-	}
-
-	_, err = m.db.ExecContext(ctx,
-		`UPDATE remote_state SET sync_status = ? WHERE sync_status = ?`,
-		synctypes.SyncStatusPendingDownload, synctypes.SyncStatusDownloading,
-	)
-	if err != nil {
-		return fmt.Errorf("sync: resetting downloading states: %w", err)
-	}
-
-	if err := m.createCrashRecoveryFailures(
-		ctx,
-		downloadingRows,
-		synctypes.DirectionDownload,
-		synctypes.ActionDownload,
-		delayFn,
-	); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// ListDeletingCandidates returns deleting rows that the crash-recovery
-// filesystem layer must classify as completed deletes or pending retries.
-func (m *SyncStore) ListDeletingCandidates(ctx context.Context) ([]RecoveryCandidate, error) {
-	candidates, err := m.queryResetCandidates(ctx, synctypes.SyncStatusDeleting)
-	if err != nil {
-		return nil, fmt.Errorf("sync: querying deleting candidates: %w", err)
-	}
-
-	return candidates, nil
-}
-
-// FinalizeDeletingStates applies the crash-recovery delete classification
-// computed outside the store. `deleted` rows become SyncStatusDeleted;
-// `pending` rows become SyncStatusPendingDelete plus transient sync_failures.
-func (m *SyncStore) FinalizeDeletingStates(
-	ctx context.Context,
-	deleted []RecoveryCandidate,
-	pending []RecoveryCandidate,
-	delayFn func(int) time.Duration,
-) error {
-	for _, candidate := range deleted {
-		if _, err := m.db.ExecContext(ctx,
-			`UPDATE remote_state SET sync_status = ? WHERE drive_id = ? AND item_id = ?`,
-			synctypes.SyncStatusDeleted, candidate.DriveID, candidate.ItemID,
-		); err != nil {
-			return fmt.Errorf("sync: marking deleting state complete for %s: %w", candidate.Path, err)
-		}
-	}
-
-	for _, candidate := range pending {
-		if _, err := m.db.ExecContext(ctx,
-			`UPDATE remote_state SET sync_status = ? WHERE drive_id = ? AND item_id = ?`,
-			synctypes.SyncStatusPendingDelete, candidate.DriveID, candidate.ItemID,
-		); err != nil {
-			return fmt.Errorf("sync: resetting deleting state for %s: %w", candidate.Path, err)
-		}
-	}
-
-	if err := m.createCrashRecoveryFailures(
-		ctx,
-		pending,
-		synctypes.DirectionDelete,
-		synctypes.ActionLocalDelete,
-		delayFn,
-	); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// queryResetCandidates returns identity info for remote_state rows matching
-// a given status. Used to capture row data before the bulk status update.
-func (m *SyncStore) queryResetCandidates(ctx context.Context, status synctypes.SyncStatus) ([]RecoveryCandidate, error) {
-	rows, err := m.db.QueryContext(ctx,
-		`SELECT drive_id, item_id, path FROM remote_state WHERE sync_status = ?`,
-		status,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("query reset candidates: %w", err)
-	}
-	defer rows.Close()
-
-	var result []RecoveryCandidate
-
-	for rows.Next() {
-		var (
-			driveID string
-			itemID  string
-			path    string
-		)
-		if scanErr := rows.Scan(&driveID, &itemID, &path); scanErr != nil {
-			return nil, fmt.Errorf("scan reset candidate: %w", scanErr)
-		}
-
-		result = append(result, RecoveryCandidate{
-			DriveID: driveID,
-			ItemID:  itemID,
-			Path:    path,
-		})
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate reset candidates: %w", err)
-	}
-
-	return result, nil
-}
-
-// createCrashRecoveryFailures creates sync_failures entries for items that
-// were reset during crash recovery. This ensures the retrier can rediscover
-// them on the next bootstrap sweep.
-func (m *SyncStore) createCrashRecoveryFailures(
-	ctx context.Context,
-	candidates []RecoveryCandidate,
-	direction synctypes.Direction,
-	actionType synctypes.ActionType,
-	delayFn func(int) time.Duration,
-) error {
-	for _, candidate := range candidates {
-		if err := m.RecordFailure(ctx, &SyncFailureParams{
-			Path:       candidate.Path,
-			DriveID:    driveid.New(candidate.DriveID),
-			Direction:  direction,
-			ActionType: actionType,
-			Category:   synctypes.CategoryTransient,
-			ItemID:     candidate.ItemID,
-			ErrMsg:     "crash recovery: reset from in-progress state",
-		}, delayFn); err != nil {
-			return fmt.Errorf("sync: creating crash recovery failure for %s: %w", candidate.Path, err)
-		}
-	}
-
-	return nil
-}
-
-// SetDispatchStatus transitions a remote_state row from pending/failed to
-// in-progress before the action is dispatched to the worker pool. Uses
-// optimistic concurrency: only updates if the current status is valid for
-// the given action type.
-func (m *SyncStore) SetDispatchStatus(ctx context.Context, driveID, itemID string, actionType synctypes.ActionType) error {
-	nextStatus, validStatuses, label, ok := dispatchStatusTransition(actionType)
-	if !ok {
-		return nil
-	}
-
-	_, err := m.db.ExecContext(ctx,
-		`UPDATE remote_state SET sync_status = ?
-		WHERE drive_id = ? AND item_id = ? AND sync_status IN (?, ?)`,
-		nextStatus,
-		driveID, itemID, validStatuses[0], validStatuses[1],
-	)
-	if err != nil {
-		return fmt.Errorf("sync: setting dispatch status %s for %s: %w", label, itemID, err)
 	}
 
 	return nil
@@ -471,24 +175,6 @@ func (m *SyncStore) ReadSyncMetadata(ctx context.Context) (map[string]string, er
 	}
 
 	return result, nil
-}
-
-func dispatchStatusTransition(actionType synctypes.ActionType) (synctypes.SyncStatus, [2]synctypes.SyncStatus, string, bool) {
-	if actionType == synctypes.ActionDownload {
-		return synctypes.SyncStatusDownloading,
-			[2]synctypes.SyncStatus{synctypes.SyncStatusPendingDownload, synctypes.SyncStatusDownloadFailed},
-			"downloading",
-			true
-	}
-
-	if actionType == synctypes.ActionLocalDelete {
-		return synctypes.SyncStatusDeleting,
-			[2]synctypes.SyncStatus{synctypes.SyncStatusPendingDelete, synctypes.SyncStatusDeleteFailed},
-			"deleting",
-			true
-	}
-
-	return "", [2]synctypes.SyncStatus{}, "", false
 }
 
 func (m *SyncStore) syncMetadataTableExists(ctx context.Context) (bool, error) {

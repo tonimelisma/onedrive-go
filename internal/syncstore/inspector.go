@@ -20,6 +20,33 @@ type Inspector struct {
 	logger *slog.Logger
 }
 
+// sqlCountRemoteDriftItems counts already-observed remote-side differences
+// that are not yet reflected in baseline. This is the durable remote half of
+// "not fully converged yet"; exact local-only drift still requires a live scan.
+const sqlCountRemoteDriftItems = `
+SELECT COUNT(*) FROM (
+	SELECT rs.drive_id, rs.item_id
+	FROM remote_state rs
+	LEFT JOIN baseline b
+	  ON b.drive_id = rs.drive_id
+	 AND b.item_id = rs.item_id
+	WHERE rs.is_filtered = 0
+	  AND (
+		b.item_id IS NULL OR
+		b.path <> rs.path OR
+		b.item_type <> rs.item_type OR
+		COALESCE(b.remote_hash, '') <> COALESCE(rs.hash, '') OR
+		COALESCE(b.remote_mtime, 0) <> COALESCE(rs.mtime, 0)
+	  )
+	UNION
+	SELECT b.drive_id, b.item_id
+	FROM baseline b
+	LEFT JOIN remote_state rs
+	  ON rs.drive_id = b.drive_id
+	 AND rs.item_id = b.item_id
+	WHERE rs.item_id IS NULL
+) remote_drift`
+
 // StatusSnapshot is the read-only aggregate projection consumed by status
 // summaries and daemon/control-plane readers. It intentionally exposes counts
 // and metadata only, not raw tables.
@@ -27,7 +54,7 @@ type StatusSnapshot struct {
 	SyncMetadata       map[string]string
 	BaselineEntryCount int
 	Issues             IssueSummary
-	PendingSyncItems   int
+	RemoteDriftItems   int
 	DurableIntents     DurableIntentCounts
 }
 
@@ -37,7 +64,7 @@ type StatusSnapshot struct {
 type DriveStatusSnapshot struct {
 	SyncMetadata       map[string]string
 	BaselineEntryCount int
-	PendingSyncItems   int
+	RemoteDriftItems   int
 	RetryingItems      int
 	IssueGroups        []IssueGroupSnapshot
 	DeleteSafety       []DeleteSafetySnapshot
@@ -348,10 +375,10 @@ func (i *Inspector) ReadStatusSnapshot(ctx context.Context) StatusSnapshot {
 		)
 		snapshot.Issues = projection.summary
 	}
-	snapshot.PendingSyncItems = i.countOrZero(
+	snapshot.RemoteDriftItems = i.countOrZero(
 		ctx,
-		"pending sync items",
-		"SELECT COUNT(*) FROM remote_state WHERE sync_status NOT IN ('synced','deleted','filtered')",
+		"remote drift items",
+		sqlCountRemoteDriftItems,
 	)
 
 	return snapshot
@@ -381,10 +408,10 @@ func (i *Inspector) ReadDriveStatusSnapshot(ctx context.Context, history bool) (
 	}
 
 	snapshot.BaselineEntryCount = i.countOrZero(ctx, "baseline entries", "SELECT COUNT(*) FROM baseline")
-	snapshot.PendingSyncItems = i.countOrZero(
+	snapshot.RemoteDriftItems = i.countOrZero(
 		ctx,
-		"pending sync items",
-		"SELECT COUNT(*) FROM remote_state WHERE sync_status NOT IN ('synced','deleted','filtered')",
+		"remote drift items",
+		sqlCountRemoteDriftItems,
 	)
 	snapshot.RetryingItems = i.countOrZero(
 		ctx,
