@@ -92,12 +92,14 @@ func TestE2E_RoundTrip(t *testing.T) {
 	})
 
 	t.Run("rm_file", func(t *testing.T) {
+		waitForRemoteExactStatVisible(t, cfgPath, nil, drive, "/"+testFile)
 		_, stderr := runCLIWithConfig(t, cfgPath, nil, "rm", "/"+testFile)
 		assert.Contains(t, stderr, "Deleted")
 		waitForRemoteDeleteDisappearance(t, cfgPath, nil, drive, "test.txt", "ls", "/"+testFolder)
 	})
 
 	t.Run("rm_subfolder", func(t *testing.T) {
+		waitForRemoteExactStatVisible(t, cfgPath, nil, drive, "/"+testSubfolder)
 		_, stderr := runCLIWithConfig(t, cfgPath, nil, "rm", "-r", "/"+testSubfolder)
 		assert.Contains(t, stderr, "Deleted")
 		waitForRemoteDeleteDisappearance(t, cfgPath, nil, drive, "subfolder", "ls", "/"+testFolder)
@@ -116,7 +118,7 @@ func TestE2E_RoundTrip(t *testing.T) {
 		_, stderr := runCLIWithConfig(t, cfgPath, nil, "put", tmpFile.Name(), "/"+permFile)
 		assert.Contains(t, stderr, "Uploaded")
 
-		waitForRemoteFixtureSeedVisible(t, cfgPath, nil, drive, "/"+permFile)
+		waitForRemoteExactStatVisible(t, cfgPath, nil, drive, "/"+permFile)
 
 		_, stderr = runCLIWithConfig(t, cfgPath, nil, "rm", "--permanent", "/"+permFile)
 		assert.Contains(t, stderr, "Permanently deleted")
