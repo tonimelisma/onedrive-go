@@ -123,7 +123,7 @@ schema-level cascades.
 ### ScopeBlockStore Interface
 
 `ScopeBlockStore` is the persistence interface for scope-block rows.
-Implemented by `SyncStore` in `store_scope_blocks.go`:
+Implemented by `SyncStore` in `store_write_scope_blocks.go`:
 - `UpsertScopeBlock(ctx, block) error` — INSERT OR REPLACE
 - `DeleteScopeBlock(ctx, key) error` — DELETE WHERE
 - `ListScopeBlocks(ctx) ([]*ScopeBlock, error)` — SELECT all rows

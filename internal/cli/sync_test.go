@@ -422,7 +422,7 @@ func TestRunSync_LogFileOpenFailureWarnsToStatusWriter(t *testing.T) {
 	assert.Contains(t, statusBuf.String(), "cannot open log file")
 }
 
-func TestSyncService_Run_UsesConfigDryRunWhenFlagUnset(t *testing.T) {
+func TestRunSyncCommand_UsesConfigDryRunWhenFlagUnset(t *testing.T) {
 	setTestDriveHome(t)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
@@ -476,7 +476,7 @@ sync_dir = %q
 	assert.True(t, called)
 }
 
-func TestSyncService_Run_CLIFalseOverridesConfigDryRun(t *testing.T) {
+func TestRunSyncCommand_CLIFalseOverridesConfigDryRun(t *testing.T) {
 	setTestDriveHome(t)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
@@ -519,7 +519,7 @@ sync_dir = %q
 	require.NoError(t, err)
 }
 
-func TestSyncService_Run_WatchRejectsEffectiveDryRun(t *testing.T) {
+func TestRunSyncCommand_WatchRejectsEffectiveDryRun(t *testing.T) {
 	setTestDriveHome(t)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
@@ -560,7 +560,7 @@ sync_dir = %q
 	assert.Contains(t, err.Error(), "watch mode does not support dry-run")
 }
 
-func TestSyncService_Run_FailsLoudlyWhenControlSocketPathCannotBeDerivedForOneShot(t *testing.T) {
+func TestRunSyncCommand_FailsLoudlyWhenControlSocketPathCannotBeDerivedForOneShot(t *testing.T) {
 	setTestDriveHome(t)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
@@ -602,7 +602,7 @@ sync_dir = %q
 	assert.False(t, called, "one-shot sync owner must stop before engine startup when the socket path is impossible")
 }
 
-func TestSyncService_Run_FailsLoudlyWhenControlSocketPathCannotBeDerivedForWatch(t *testing.T) {
+func TestRunSyncCommand_FailsLoudlyWhenControlSocketPathCannotBeDerivedForWatch(t *testing.T) {
 	setTestDriveHome(t)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")

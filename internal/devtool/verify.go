@@ -2820,10 +2820,10 @@ func ensurePrivilegedPackageCallsStayAtApprovedBoundaries(repoRoot string) error
 		{
 			importPath:  "database/sql",
 			selector:    "Open",
-			description: "sql.Open is only allowed in internal/sync/store.go and internal/sync/inspector.go",
+			description: "sql.Open is only allowed in internal/sync/store.go and internal/sync/store_inspect.go",
 			allowed: func(path string) bool {
 				return path == filepath.Join(repoRoot, "internal", "sync", "store.go") ||
-					path == filepath.Join(repoRoot, "internal", "sync", "inspector.go")
+					path == filepath.Join(repoRoot, "internal", "sync", "store_inspect.go")
 			},
 		},
 		{

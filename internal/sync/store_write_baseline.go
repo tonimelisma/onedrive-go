@@ -22,7 +22,7 @@
 //
 // Related files:
 //   - store.go:             SyncStore type definition and lifecycle
-//   - store_observation.go: CommitObservation calls saveDeltaToken
+//   - store_write_observation.go: CommitObservation calls saveDeltaToken
 package sync
 
 import (
