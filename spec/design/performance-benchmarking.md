@@ -51,6 +51,7 @@ The implementation should stay deliberately small:
 | The verifier already owns machine-readable run summaries instead of forcing downstream tooling to scrape console text. | `TestRunVerifyWritesSummaryJSONOnSuccess`, `TestRunVerifyWritesSummaryJSONOnFailure` |
 | Repo-owned diagnostic scenario tooling is already an accepted pattern under `cmd/devtool` for reproducible, named capture flows. | `TestRunWatchCaptureWritesJSON`, `TestLookupWatchCaptureScenarioStepOrder` |
 | Repo-owned benchmarking now has a subject-aware `devtool bench` entrypoint with named scenarios, JSON result bundles, and deterministic summary aggregation. | `TestNewBenchCmdRequiresScenarioFlag`, `TestNewBenchCmdDefaultsSubjectToOnedriveGo`, `TestNewBenchCmdPassesFlagsThrough`, `TestRunBenchRequiresRepoRootAndScenario`, `TestLookupBenchRegistriesAreSortedAndIncludeBuiltins`, `TestRunBenchStartupEmptyConfigSucceeds` |
+| The benchmark runner now owns one canonical live representative catch-up scenario with a checked-in deterministic fixture contract, stable denominator math, and fixture-failure reporting that stays inside benchmark results. | `TestLoadBenchLiveFixturePlanIsDeterministicAndSized`, `TestLoadBenchLiveFixturePlanMutationSelectionIsStable`, `TestPrepareBenchScenarioUsesPreparedRunnerAndCleanup`, `TestLiveCatchupScenarioMissingPrerequisitesReturnsFixtureFailure` |
 
 ## Objectives
 
@@ -125,10 +126,17 @@ Different consumers need different answers.
 - README readers need only a few representative numbers, but those numbers must
   be tied back to the authoritative artifacts and methodology.
 
-## Benchmark Classes
+## Benchmark Shape
 
-The benchmark surface is split into three classes because one method cannot
-serve every audience or every claim honestly.
+The benchmark system should stay as one maintained suite, one artifact format,
+and one repo-owned runner. Controlled, live, and comparative workloads are
+scenario modes within that one harness, not separate benchmark subsystems.
+
+The first representative benchmark is intentionally a real OneDrive-backed
+synthetic fixture. One long run through that scenario already yields external
+proof metrics plus the internal attribution from `internal/perf`, which is
+enough to find bottlenecks without maintaining several different benchmark
+programs.
 
 ### Controlled Synthetic Scenarios
 
@@ -177,16 +185,20 @@ Initial benchmark families:
 - `watch-idle-30m`
 - `sync-noop-reconcile-large`
 - `sync-initial-10k-small-files`
-- `sync-partial-local-catchup-large`
+- `sync-partial-local-catchup-100m`
 - `sync-local-burst-1k-edits`
 - `sync-remote-burst-1k-edits`
 - `sync-large-files-10x1gb`
 
 The first harness-validation scenario is `startup-empty-config`. The first
-representative sync scenario priority remains `sync-partial-local-catchup-large`.
-That sync scenario matches a realistic user complaint, exercises enumeration
-plus planner plus transfer behavior together, and is likely to reveal the most
-meaningful near-term bottlenecks.
+representative sync scenario is `sync-partial-local-catchup-100m`. It is a
+real OneDrive-backed benchmark-owned fixture rooted at
+`/benchmarks/sync-partial-local-catchup-100m`, generated from a checked-in
+synthetic manifest that totals exactly 100 MiB across roughly 2.6K files. The
+measured phase is intentionally a catch-up run, not an initial sync: the
+scenario seeds remote state once per invocation, establishes a fresh local
+baseline before each sample, applies deterministic local deletes and
+truncations, and then measures the repairing `sync --download-only` pass.
 
 ## Scenario Contract
 
@@ -413,10 +425,10 @@ artifact schema from v1. It does not need full comparison automation in the
 first increment, but the core model must not assume that `onedrive-go` is the
 only measurable subject.
 
-### Delivered Benchmark Runner Slice
+### Delivered Benchmark Runner Slices
 
-The first implemented slice is intentionally narrow and exists to prove the
-runner shape before broader sync scenarios land.
+The implemented slices stay intentionally narrow: first the runner shape,
+then one canonical live representative catch-up benchmark.
 
 - `go run ./cmd/devtool bench --scenario <id>` is the repo-owned benchmark
   entrypoint.
@@ -471,6 +483,40 @@ performance summary log line captured on stderr. Skip-config commands such as
 `drive list` do not switch into config-driven log-file routing, so the runner
 must not assume that a configured `log_file` will exist for every scenario.
 
+The implemented v1 representative sync scenario is
+`sync-partial-local-catchup-100m`:
+
+- class: `live`
+- config profile: `default-safe`
+- defaults: `runs=3`, `warmup=0`
+- command under test: `onedrive-go sync --download-only`
+
+The scenario keeps a benchmark-owned remote scope under
+`/benchmarks/sync-partial-local-catchup-100m` and uses `sync_paths` so the
+subject syncs only that subtree. The checked-in manifest defines four file
+bands totaling exactly 100 MiB:
+
+- `documents`: 1600 files × 256 B
+- `metadata`: 900 files × 4 KiB
+- `assets`: 160 files × 256 KiB
+- `media`: 8 files × 7 MiB
+
+Each measured sample follows the same three-stage contract:
+
+1. run an unmeasured `sync --download-only` to establish a fresh local
+   baseline and sync database
+2. delete and truncate a deterministic subset of local files
+3. measure a second `sync --download-only` until process exit, then verify the
+   local tree matches the manifest exactly
+
+Remote fixture setup is owned by scenario preparation, not by the measured
+sample window. The runner resets the benchmark-owned remote scope, uploads the
+canonical seed tree with `sync --upload-only`, waits for the scope to become
+visible, and only then starts per-sample baseline and measured phases. Missing
+live credentials, missing `.testdata`, missing allowlist entries, remote-reset
+failures, and seed failures surface as `fixture_failed` benchmark outcomes
+instead of opaque setup crashes.
+
 ## Publication Rules
 
 - Default local verification and required CI remain correctness-focused.
@@ -523,12 +569,16 @@ This work is intentionally staged.
 - define the scenario contract shape, denominator fields, and sample-size policy
 - implement the harness-validation scenario `startup-empty-config`
 
-### Increment 3: First Representative Scenario
+### Increment 3: Canonical Live Catch-Up Benchmark [delivered]
 
-- implement `sync-partial-local-catchup-large`
-- reuse existing E2E or fixture helpers where they reduce duplicated setup
-- emit both external metrics and repo-owned internal perf/timing artifacts
-- make the timer start/stop and convergence predicates explicit in the scenario
+- implement `sync-partial-local-catchup-100m`
+- keep one benchmark harness and one artifact format instead of parallel
+  benchmark subsystems
+- add scenario-level prepare/cleanup support so live fixture setup happens once
+  per invocation
+- keep the scenario manual-only and outside default verification
+- reuse existing `internal/perf` summaries for explanation metrics while the
+  benchmark runner records external proof metrics
 
 ### Increment 4: Reporting Surface And Simple README Update
 
