@@ -10,6 +10,7 @@ import (
 
 func TestE2E_FixturePreflight_Fast(t *testing.T) {
 	registerLogDump(t)
+	requireVerifierOwnedPreflightEnv(t, e2eRunFastFixturePreflightEnvVar)
 
 	fixture := resolveSharedFileFixture(t, requireSharedFileLink(t))
 

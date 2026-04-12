@@ -208,9 +208,6 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      - name: Build
-        run: go build ./...
-
       - name: Azure OIDC login (attempt 1)
         id: azure_login_e2e
         uses: azure/login@v2.3.0

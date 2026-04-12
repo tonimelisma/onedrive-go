@@ -25,6 +25,7 @@ const authPreflightTimeout = 30 * time.Second
 
 func TestE2E_AuthPreflight_Fast(t *testing.T) {
 	registerLogDump(t)
+	requireVerifierOwnedPreflightEnv(t, e2eRunAuthPreflightEnvVar)
 
 	for _, driveID := range liveConfig.CandidateDriveIDs() {
 		driveID := driveID
