@@ -16,9 +16,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
-	"github.com/tonimelisma/onedrive-go/internal/syncexec"
-	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
-	"github.com/tonimelisma/onedrive-go/internal/syncplan"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
@@ -39,8 +36,8 @@ type driveIdentityProof struct {
 // Single-drive only; multi-drive orchestration is handled by internal/multisync.
 type Engine struct {
 	baseline              *syncstore.SyncStore
-	planner               *syncplan.Planner
-	execCfg               *syncexec.ExecutorConfig
+	planner               *Planner
+	execCfg               *ExecutorConfig
 	fetcher               synctypes.DeltaFetcher
 	socketIOFetcher       synctypes.SocketIOEndpointFetcher
 	itemsClient           synctypes.ItemClient
@@ -78,7 +75,7 @@ type Engine struct {
 	// localWatcherFactory overrides the default fsnotify watcher factory
 	// for the local observer. Tests inject a mock factory to simulate
 	// inotify watch limit exhaustion (ENOSPC).
-	localWatcherFactory func() (syncobserve.FsWatcher, error)
+	localWatcherFactory func() (FsWatcher, error)
 
 	// retryBatchLimit lets tests lower the retrier sweep batch size so stress
 	// runs can exercise the batching contract without seeding thousands of
@@ -87,11 +84,11 @@ type Engine struct {
 	retryBatchLimit int
 
 	// socketIOWakeSourceFactory is a test seam for watch-mode websocket
-	// wakeups. Production uses syncobserve.NewSocketIOWakeSource.
+	// wakeups. Production uses NewSocketIOWakeSource.
 	socketIOWakeSourceFactory func(
 		synctypes.SocketIOEndpointFetcher,
 		driveid.ID,
-		syncobserve.SocketIOWakeSourceOptions,
+		SocketIOWakeSourceOptions,
 	) socketIOWakeSourceRunner
 
 	// watchRuntimeHook is a test-only seam that exposes the newly constructed
@@ -106,10 +103,10 @@ type Engine struct {
 	nextRunID atomic.Int64
 }
 
-// NewEngine creates an Engine, initializing the SyncStore (which opens
+// newEngine creates an Engine, initializing the SyncStore (which opens
 // the SQLite database and applies the canonical schema). Returns an error if DB init fails
 // or if DriveID is zero (indicates a config/login issue).
-func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error) {
+func newEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error) {
 	if cfg.DriveID.IsZero() {
 		return nil, fmt.Errorf("sync: engine requires non-zero drive ID")
 	}
@@ -124,7 +121,7 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 		return nil, fmt.Errorf("sync: opening sync tree: %w", err)
 	}
 
-	execCfg := syncexec.NewExecutorConfig(
+	execCfg := NewExecutorConfig(
 		cfg.Items,
 		cfg.Downloads,
 		cfg.Uploads,
@@ -160,7 +157,7 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 
 	e := &Engine{
 		baseline:              bm,
-		planner:               syncplan.NewPlanner(cfg.Logger),
+		planner:               NewPlanner(cfg.Logger),
 		execCfg:               execCfg,
 		fetcher:               cfg.Fetcher,
 		socketIOFetcher:       cfg.SocketIOFetcher,
@@ -193,9 +190,9 @@ func NewEngine(ctx context.Context, cfg *synctypes.EngineConfig) (*Engine, error
 		socketIOWakeSourceFactory: func(
 			fetcher synctypes.SocketIOEndpointFetcher,
 			driveID driveid.ID,
-			opts syncobserve.SocketIOWakeSourceOptions,
+			opts SocketIOWakeSourceOptions,
 		) socketIOWakeSourceRunner {
-			return syncobserve.NewSocketIOWakeSourceWithOptions(fetcher, driveID, opts)
+			return NewSocketIOWakeSourceWithOptions(fetcher, driveID, opts)
 		},
 	}
 
@@ -512,7 +509,7 @@ func (e *Engine) conflictResolutionFollowUpChanges(
 			base = entry
 		}
 
-		observation, observeErr := syncobserve.ObserveSinglePathWithScope(
+		observation, observeErr := ObserveSinglePathWithScope(
 			e.logger,
 			e.syncTree,
 			path,
@@ -547,7 +544,7 @@ func (e *Engine) conflictResolutionFollowUpChanges(
 func conflictCopyGlob(relPath string) string {
 	dir := filepath.Dir(relPath)
 	name := filepath.Base(relPath)
-	stem, ext := syncexec.ConflictStemExt(name)
+	stem, ext := ConflictStemExt(name)
 	pattern := fmt.Sprintf("%s.conflict-*%s", stem, ext)
 	if dir == "." {
 		return pattern

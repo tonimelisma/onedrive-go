@@ -10,7 +10,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
-	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -587,8 +586,8 @@ func (controller *scopeController) preserveScopeTrial(ctx context.Context, watch
 //   - retryAfter == 0, currentInterval > 0: double current, cap at defaultMaxTrialInterval
 //   - retryAfter == 0, currentInterval == 0: use defaultInitialTrialInterval
 func computeTrialInterval(scopeKey synctypes.ScopeKey, retryAfter, currentInterval time.Duration) time.Duration {
-	initialInterval := syncdispatch.DefaultInitialTrialInterval
-	maxInterval := syncdispatch.DefaultMaxTrialInterval
+	initialInterval := DefaultInitialTrialInterval
+	maxInterval := DefaultMaxTrialInterval
 	if scopeKey == synctypes.SKDiskLocal() {
 		initialInterval = diskScopeInitialTrialInterval
 		maxInterval = diskScopeMaxTrialInterval

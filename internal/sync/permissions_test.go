@@ -145,7 +145,7 @@ func newTestEngineWithPermsAndRoot(
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	driveID := driveid.New(engineTestDriveID)
 
-	eng, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	eng, err := newEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:       dbPath,
 		SyncRoot:     syncRoot,
 		DriveID:      driveID,

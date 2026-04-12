@@ -11,7 +11,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
-	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -633,7 +632,7 @@ func (flow *engineFlow) observeLocalFailurePath(ctx context.Context, row *syncty
 		return failureRebuildResult{err: fmt.Errorf("build scope snapshot: %w", err)}
 	}
 
-	result, err := syncobserve.ObserveSinglePathWithScope(
+	result, err := ObserveSinglePathWithScope(
 		flow.engine.logger,
 		flow.engine.syncTree,
 		row.Path,

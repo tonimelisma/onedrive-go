@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -67,42 +66,42 @@ func (rt *watchRuntime) upsertActiveScope(block *synctypes.ScopeBlock) {
 	rt.activeScopesMu.Lock()
 	defer rt.activeScopesMu.Unlock()
 
-	rt.activeScopes = syncdispatch.UpsertScope(rt.activeScopes, block)
+	rt.activeScopes = UpsertScope(rt.activeScopes, block)
 }
 
 func (rt *watchRuntime) removeActiveScope(key synctypes.ScopeKey) {
 	rt.activeScopesMu.Lock()
 	defer rt.activeScopesMu.Unlock()
 
-	rt.activeScopes = syncdispatch.RemoveScope(rt.activeScopes, key)
+	rt.activeScopes = RemoveScope(rt.activeScopes, key)
 }
 
 func (rt *watchRuntime) lookupActiveScope(key synctypes.ScopeKey) (synctypes.ScopeBlock, bool) {
 	rt.activeScopesMu.RLock()
 	defer rt.activeScopesMu.RUnlock()
 
-	return syncdispatch.LookupScope(rt.activeScopes, key)
+	return LookupScope(rt.activeScopes, key)
 }
 
 func (rt *watchRuntime) hasActiveScope(key synctypes.ScopeKey) bool {
 	rt.activeScopesMu.RLock()
 	defer rt.activeScopesMu.RUnlock()
 
-	return syncdispatch.HasScope(rt.activeScopes, key)
+	return HasScope(rt.activeScopes, key)
 }
 
 func (rt *watchRuntime) findBlockingScope(ta *synctypes.TrackedAction) synctypes.ScopeKey {
 	rt.activeScopesMu.RLock()
 	defer rt.activeScopesMu.RUnlock()
 
-	return syncdispatch.FindBlockingScope(rt.activeScopes, ta)
+	return FindBlockingScope(rt.activeScopes, ta)
 }
 
 func (rt *watchRuntime) activeScopeKeys() []synctypes.ScopeKey {
 	rt.activeScopesMu.RLock()
 	defer rt.activeScopesMu.RUnlock()
 
-	return syncdispatch.ScopeKeys(rt.activeScopes)
+	return ScopeKeys(rt.activeScopes)
 }
 
 func (rt *watchRuntime) snapshotActiveScopes() []synctypes.ScopeBlock {
@@ -116,11 +115,11 @@ func (rt *watchRuntime) snapshotActiveScopes() []synctypes.ScopeBlock {
 }
 
 func (rt *watchRuntime) earliestTrialAt() (time.Time, bool) {
-	return syncdispatch.EarliestTrialAt(rt.snapshotActiveScopes())
+	return EarliestTrialAt(rt.snapshotActiveScopes())
 }
 
 func (rt *watchRuntime) dueTrials(now time.Time) []synctypes.ScopeKey {
-	return syncdispatch.DueTrials(rt.snapshotActiveScopes(), now)
+	return DueTrials(rt.snapshotActiveScopes(), now)
 }
 
 func (rt *watchRuntime) resetTrialTimer(next syncTimer) {

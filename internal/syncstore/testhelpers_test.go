@@ -8,8 +8,11 @@ package syncstore
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"os"
 	"path/filepath"
+	"strings"
 	stdsync "sync"
 	"testing"
 	"time"
@@ -17,8 +20,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tonimelisma/onedrive-go/internal/syncrecovery"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // testDriveID is a canonical test drive ID for all syncstore tests.
@@ -105,5 +108,35 @@ func resetInProgressStates(tb testing.TB, mgr *SyncStore, syncRoot string, delay
 	tree, err := synctree.Open(syncRoot)
 	require.NoError(tb, err, "synctree.Open(%q)", syncRoot)
 
-	require.NoError(tb, syncrecovery.ResetInProgressStates(testContext(tb), mgr, tree, delayFn, newTestLogger(tb)))
+	ctx := testContext(tb)
+	logger := newTestLogger(tb)
+
+	require.NoError(tb, mgr.ResetDownloadingStates(ctx, delayFn))
+
+	candidates, err := mgr.ListDeletingCandidates(ctx)
+	require.NoError(tb, err)
+
+	var (
+		deleted []synctypes.RecoveryCandidate
+		pending []synctypes.RecoveryCandidate
+	)
+
+	for _, candidate := range candidates {
+		relPath := strings.TrimPrefix(candidate.Path, "/")
+		_, statErr := tree.Stat(relPath)
+		switch {
+		case errors.Is(statErr, os.ErrNotExist):
+			deleted = append(deleted, candidate)
+		case statErr != nil:
+			logger.Warn("crash recovery delete stat failed; retrying delete",
+				slog.String("path", candidate.Path),
+				slog.String("error", statErr.Error()),
+			)
+			pending = append(pending, candidate)
+		default:
+			pending = append(pending, candidate)
+		}
+	}
+
+	require.NoError(tb, mgr.FinalizeDeletingStates(ctx, deleted, pending, delayFn))
 }

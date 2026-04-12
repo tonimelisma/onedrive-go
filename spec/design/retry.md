@@ -83,7 +83,7 @@ shown minute-scale path-read model lag after successful writes and deletes, so
 the shorter old budget was no longer enough to distinguish a real missing path
 from delayed visibility.
 
-`syncexec` does not carry an independent visibility schedule or sleep loop.
+The sync execution path does not carry an independent visibility schedule or sleep loop.
 When sync wants best-effort confirmation after a successful remote create,
 upload, or move, it delegates to the injected
 `driveops.PathConvergenceFactory`, which returns the correct drive/root-scoped

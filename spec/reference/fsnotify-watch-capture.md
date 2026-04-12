@@ -4,7 +4,7 @@ Reference notes for the repo-owned raw watch-event harness:
 
 - Command: `go run ./cmd/devtool watch-capture --scenario <name> --json`
 - Fixture location:
-  `internal/syncobserve/testdata/watch_capture/<goos>/<scenario>/<variant>.json`
+  `internal/sync/testdata/watch_capture/<goos>/<scenario>/<variant>.json`
 - Purpose: record real fsnotify ordering for marker and path-scope transitions,
   then replay those traces through `LocalObserver.HandleFsEvent` in tests
 - Linux capture workflow: run the command inside a Linux Docker container and

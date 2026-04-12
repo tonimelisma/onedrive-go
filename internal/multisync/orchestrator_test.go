@@ -282,7 +282,7 @@ func TestRunOnce_OneDrive_Success(t *testing.T) {
 	}
 
 	orch := NewOrchestrator(cfg)
-	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{report: expectedReport}, nil
 	}
 
@@ -306,8 +306,8 @@ func TestRunOnce_TwoDrives_OneFailsOneSucceeds(t *testing.T) {
 	okReport := &synctypes.SyncReport{Mode: synctypes.SyncBidirectional, Uploads: 2}
 
 	orch := NewOrchestrator(cfg)
-	orch.engineFactory = func(_ context.Context, ecfg *synctypes.EngineConfig) (engineRunner, error) {
-		if ecfg.SyncRoot == rd1.SyncDir {
+	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
+		if req.Drive.SyncDir == rd1.SyncDir {
 			return &mockEngine{err: errDelta}, nil
 		}
 
@@ -346,8 +346,8 @@ func TestRunOnce_PanicRecovery(t *testing.T) {
 	stableReport := &synctypes.SyncReport{Mode: synctypes.SyncBidirectional, Downloads: 1}
 
 	orch := NewOrchestrator(cfg)
-	orch.engineFactory = func(_ context.Context, ecfg *synctypes.EngineConfig) (engineRunner, error) {
-		if ecfg.SyncRoot == rd1.SyncDir {
+	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
+		if req.Drive.SyncDir == rd1.SyncDir {
 			return &mockEngine{shouldPanic: true}, nil
 		}
 
@@ -384,9 +384,9 @@ func TestPrepareDriveWork_ThreadsWebsocketConfig(t *testing.T) {
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
-	var captured *synctypes.EngineConfig
-	orch.engineFactory = func(_ context.Context, ecfg *synctypes.EngineConfig) (engineRunner, error) {
-		captured = ecfg
+	var captured *engineFactoryRequest
+	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
+		captured = &req
 		return &mockEngine{report: &synctypes.SyncReport{}}, nil
 	}
 
@@ -396,8 +396,10 @@ func TestPrepareDriveWork_ThreadsWebsocketConfig(t *testing.T) {
 	_, err := work[0].fn(t.Context())
 	require.NoError(t, err)
 	require.NotNil(t, captured)
-	assert.True(t, captured.EnableWebsocket)
-	assert.NotNil(t, captured.SocketIOFetcher)
+	assert.True(t, captured.Drive.Websocket)
+	assert.True(t, captured.VerifyDrive)
+	assert.NotNil(t, captured.Session)
+	assert.NotNil(t, captured.Session.Meta)
 }
 
 // Validates: R-2.8.5
@@ -409,10 +411,10 @@ func TestStartWatchRunner_ThreadsWebsocketConfig(t *testing.T) {
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
-	var captured *synctypes.EngineConfig
+	var captured *engineFactoryRequest
 	started := make(chan struct{}, 1)
-	orch.engineFactory = func(_ context.Context, ecfg *synctypes.EngineConfig) (engineRunner, error) {
-		captured = ecfg
+	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
+		captured = &req
 		return &mockEngine{
 			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
 				select {
@@ -429,10 +431,12 @@ func TestStartWatchRunner_ThreadsWebsocketConfig(t *testing.T) {
 	wr, err := orch.startWatchRunner(ctx, rd, synctypes.SyncDownloadOnly, synctypes.WatchOpts{})
 	require.NoError(t, err)
 	require.NotNil(t, captured)
-	assert.True(t, captured.EnableWebsocket)
-	assert.NotNil(t, captured.SocketIOFetcher)
-	assert.Equal(t, rd.RootItemID, captured.RootItemID)
-	assert.Equal(t, rd.CanonicalID.Email(), captured.AccountEmail)
+	assert.True(t, captured.Drive.Websocket)
+	assert.True(t, captured.VerifyDrive)
+	assert.NotNil(t, captured.Session)
+	assert.NotNil(t, captured.Session.Meta)
+	assert.Equal(t, rd.RootItemID, captured.Drive.RootItemID)
+	assert.Equal(t, rd.CanonicalID.Email(), captured.Drive.CanonicalID.Email())
 
 	select {
 	case <-started:
@@ -456,7 +460,7 @@ func TestRunOnce_ContextCanceled(t *testing.T) {
 	cancel()
 
 	orch := NewOrchestrator(cfg)
-	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{err: context.Canceled}, nil
 	}
 
@@ -472,7 +476,7 @@ func TestRunOnce_EngineFactoryError(t *testing.T) {
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
-	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return nil, errors.New("db init failed")
 	}
 
@@ -492,8 +496,8 @@ func TestRunOnce_EngineFactoryError_IsolatesAffectedDrive(t *testing.T) {
 	okReport := &synctypes.SyncReport{Mode: synctypes.SyncBidirectional, Downloads: 1}
 
 	orch := NewOrchestrator(cfg)
-	orch.engineFactory = func(_ context.Context, ecfg *synctypes.EngineConfig) (engineRunner, error) {
-		if ecfg.SyncRoot == rd1.SyncDir {
+	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
+		if req.Drive.SyncDir == rd1.SyncDir {
 			return nil, errors.New("open sync store: corrupted database")
 		}
 
@@ -578,7 +582,7 @@ func TestRunOnce_ControlSocketBlocksWatchOwner(t *testing.T) {
 	release := make(chan struct{})
 
 	orch := NewOrchestrator(cfg)
-	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
 			runOnceFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.RunOpts) (*synctypes.SyncReport, error) {
 				close(started)
@@ -674,7 +678,7 @@ func TestOrchestrator_RunWatch_SingleDrive(t *testing.T) {
 
 	watchStarted := make(chan struct{})
 
-	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
 			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
 				close(watchStarted)
@@ -721,7 +725,7 @@ func TestOrchestrator_RunWatch_MultiDrive(t *testing.T) {
 
 	var started atomic.Int32
 
-	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
 			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
 				started.Add(1)
@@ -765,7 +769,7 @@ func TestOrchestrator_ControlSocket_StatusAndStop(t *testing.T) {
 	orch := NewOrchestrator(cfg)
 
 	watchStarted := make(chan struct{})
-	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
 			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
 				close(watchStarted)
@@ -868,7 +872,7 @@ func TestOrchestrator_ControlSocket_QueuesDurableUserIntent(t *testing.T) {
 
 	orch := NewOrchestrator(cfg)
 	watchStarted := make(chan struct{})
-	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
 			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
 				close(watchStarted)
@@ -954,7 +958,7 @@ func TestOrchestrator_ControlSocket_StatusCountsUseReadOnlyInspector(t *testing.
 
 	orch := NewOrchestrator(cfg)
 	watchStarted := make(chan struct{})
-	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
 			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
 				close(watchStarted)
@@ -1103,7 +1107,7 @@ func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 
 	var started atomic.Int32
 
-	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
 			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
 				started.Add(1)
@@ -1159,7 +1163,7 @@ func TestOrchestrator_Reload_RemoveDrive(t *testing.T) {
 	var started atomic.Int32
 	var stopped atomic.Int32
 
-	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
 			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
 				started.Add(1)
@@ -1215,7 +1219,7 @@ func TestOrchestrator_Reload_PausedDrive(t *testing.T) {
 	var started atomic.Int32
 	var stopped atomic.Int32
 
-	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
 			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
 				started.Add(1)
@@ -1270,7 +1274,7 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 
 	var started atomic.Int32
 
-	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
 			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
 				started.Add(1)
@@ -1329,7 +1333,7 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 	var started atomic.Int32
 	var stopped atomic.Int32
 
-	orch.engineFactory = func(_ context.Context, _ *synctypes.EngineConfig) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
 			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
 				started.Add(1)

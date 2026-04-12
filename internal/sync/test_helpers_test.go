@@ -1,9 +1,7 @@
 package sync
 
-// test_helpers_test.go provides shared test helper functions used by the
-// engine tests in internal/sync. The observer tests (previously defined
-// here) have been migrated to internal/syncobserve; these shims remain so
-// that the engine tests compile without change.
+// test_helpers_test.go provides shared test helper functions for the merged
+// sync package's engine, observer, planner, and executor tests.
 
 import (
 	"fmt"
@@ -71,24 +69,26 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
 }
 
-// controllableClock returns a nowFunc fixed at a known epoch to keep tests deterministic.
-func controllableClock() func() time.Time {
+// controllableClock returns a deterministic clock and an advance hook for tests
+// that need to move time forward explicitly.
+func controllableClock() (nowFunc func() time.Time, advance func(d time.Duration)) {
 	now := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	return func() time.Time { return now }
+	return func() time.Time { return now }, func(d time.Duration) { now = now.Add(d) }
 }
 
 // enospcWatcher returns ENOSPC after N successful Add calls.
 // Used by engine tests that verify the ENOSPC fallback-to-polling path.
 type enospcWatcher struct {
-	events      chan fsnotify.Event
-	errs        chan error
-	addCount    int
-	failAfter   int
-	closeOne    stdsync.Once
-	failOne     stdsync.Once
-	failCh      chan struct{}
-	addedPaths  []string
-	failedPaths []string
+	events       chan fsnotify.Event
+	errs         chan error
+	addCount     int
+	failAfter    int
+	closeOne     stdsync.Once
+	failOne      stdsync.Once
+	failCh       chan struct{}
+	addedPaths   []string
+	failedPaths  []string
+	removedPaths []string
 }
 
 func newEnospcWatcher(failAfter int) *enospcWatcher {
@@ -144,7 +144,11 @@ func (w *signalingWatcher) Close() error {
 	return nil
 }
 
-func (w *enospcWatcher) Remove(string) error           { return nil }
+func (w *enospcWatcher) Remove(name string) error {
+	w.removedPaths = append(w.removedPaths, name)
+	return nil
+}
+
 func (w *enospcWatcher) Events() <-chan fsnotify.Event { return w.events }
 func (w *enospcWatcher) Errors() <-chan error          { return w.errs }
 func (w *enospcWatcher) Failures() <-chan struct{}     { return w.failCh }

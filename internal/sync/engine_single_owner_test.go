@@ -15,8 +15,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
-	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -34,7 +32,7 @@ func (m *countingDriveVerifier) Drive(_ context.Context, _ driveid.ID) (*graph.D
 	return m.drive, m.err
 }
 
-// newSingleOwnerEngine creates a minimal engine with syncdispatch.DepGraph plus the
+// newSingleOwnerEngine creates a minimal engine with DepGraph plus the
 // watch-mode active-scope working set for testing the single-owner engine
 // methods. Uses a real syncstore.SyncStore (in-memory SQLite).
 func newSingleOwnerEngine(t *testing.T) *testEngine {
@@ -958,7 +956,7 @@ func TestEngine_ProcessAndRoute_Success(t *testing.T) {
 
 	driveID := driveid.New("drive1")
 
-	// Add parent + child to syncdispatch.DepGraph.
+	// Add parent + child to DepGraph.
 	parent := synctypes.Action{Type: synctypes.ActionUpload, Path: "parent.txt", DriveID: driveID}
 	testWatchRuntime(t, eng).depGraph.Add(&parent, 1, nil)
 
@@ -1168,12 +1166,12 @@ func TestCascadeFailAndComplete_Diamond(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// syncdispatch.DepGraph.Done
+// DepGraph.Done
 // ---------------------------------------------------------------------------
 
 func TestDepGraph_DoneClosesWhenAllComplete(t *testing.T) {
 	t.Parallel()
-	dg := syncdispatch.NewDepGraph(testLogger(t))
+	dg := NewDepGraph(testLogger(t))
 
 	action1 := synctypes.Action{Type: synctypes.ActionUpload, Path: "a.txt"}
 	action2 := synctypes.Action{Type: synctypes.ActionUpload, Path: "b.txt"}
@@ -1213,7 +1211,7 @@ func TestEngineFlow_CompleteDepGraphActionPanicsOnUnknownID(t *testing.T) {
 
 	eng := newSingleOwnerEngine(t)
 	flow := newEngineFlow(eng.Engine)
-	flow.depGraph = syncdispatch.NewDepGraph(eng.logger)
+	flow.depGraph = NewDepGraph(eng.logger)
 
 	require.PanicsWithValue(t,
 		"dep_graph: complete unknown action ID 99 during unit test",
@@ -1333,7 +1331,7 @@ func TestRetrierSweep_SkipsInFlight(t *testing.T) {
 		}))
 	}
 
-	// Add "b.txt" to the syncdispatch.DepGraph so it's in-flight.
+	// Add "b.txt" to the DepGraph so it's in-flight.
 	testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{
 		Type:    synctypes.ActionDownload,
 		Path:    "b.txt",
@@ -1601,7 +1599,7 @@ func TestCreateEventFromDB_Upload_ReusesBaselineHashWhenMetadataMatches(t *testi
 	info, err := os.Stat(filepath.Join(eng.syncRoot, testFile))
 	require.NoError(t, err)
 
-	actualHash, err := syncobserve.ComputeStableHash(filepath.Join(eng.syncRoot, testFile))
+	actualHash, err := ComputeStableHash(filepath.Join(eng.syncRoot, testFile))
 	require.NoError(t, err)
 	require.NotEqual(t, actualHash, cachedHash, "test needs a distinct cached hash to prove reuse")
 
@@ -2162,7 +2160,7 @@ func TestRetrierSweep_UploadSkippedCandidateBecomesActionableFailure(t *testing.
 
 	file, err := os.Create(filepath.Join(eng.syncRoot, "oversized.bin"))
 	require.NoError(t, err)
-	require.NoError(t, file.Truncate(syncobserve.MaxOneDriveFileSize+1))
+	require.NoError(t, file.Truncate(MaxOneDriveFileSize+1))
 	require.NoError(t, file.Close())
 
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
@@ -2202,7 +2200,7 @@ func TestTrialDispatch_SkippedHeldCandidateBecomesActionableAndContinues(t *test
 
 	oversized, err := os.Create(filepath.Join(eng.syncRoot, "oversized.bin"))
 	require.NoError(t, err)
-	require.NoError(t, oversized.Truncate(syncobserve.MaxOneDriveFileSize+1))
+	require.NoError(t, oversized.Truncate(MaxOneDriveFileSize+1))
 	require.NoError(t, oversized.Close())
 
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
@@ -2270,7 +2268,7 @@ func TestTrialDispatch_OnlySkippedHeldCandidatesPreserveScope(t *testing.T) {
 
 	oversized, err := os.Create(filepath.Join(eng.syncRoot, "oversized.bin"))
 	require.NoError(t, err)
-	require.NoError(t, oversized.Truncate(syncobserve.MaxOneDriveFileSize+1))
+	require.NoError(t, oversized.Truncate(MaxOneDriveFileSize+1))
 	require.NoError(t, oversized.Close())
 
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
@@ -2385,7 +2383,7 @@ func TestEngine_RecordRetryTrialSkippedItem_ZeroDriveIDFallsBackToEngineDrive(t 
 		Path:     row.Path,
 		Reason:   synctypes.IssueFileTooLarge,
 		Detail:   "file size exceeds limit",
-		FileSize: syncobserve.MaxOneDriveFileSize + 1,
+		FileSize: MaxOneDriveFileSize + 1,
 	})
 
 	failures, err := eng.baseline.ListActionableFailures(ctx)

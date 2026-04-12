@@ -24,9 +24,17 @@ type engineRunner interface {
 	Close(ctx context.Context) error
 }
 
-// engineFactoryFunc creates an engineRunner from an synctypes.EngineConfig.
-// The real implementation calls NewEngine; tests inject mocks.
-type engineFactoryFunc func(ctx context.Context, cfg *synctypes.EngineConfig) (engineRunner, error)
+type engineFactoryRequest struct {
+	Session       *driveops.Session
+	Drive         *config.ResolvedDrive
+	Logger        *slog.Logger
+	VerifyDrive   bool
+	PerfCollector *perf.Collector
+}
+
+// engineFactoryFunc creates an engineRunner from the resolved drive/session
+// pair used by production orchestration. Tests inject mocks at this boundary.
+type engineFactoryFunc func(ctx context.Context, req engineFactoryRequest) (engineRunner, error)
 
 // OrchestratorConfig holds the inputs for creating an Orchestrator.
 // The CLI layer populates this from resolved config and HTTP clients.
@@ -57,8 +65,12 @@ type Orchestrator struct {
 func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 	return &Orchestrator{
 		cfg: cfg,
-		engineFactory: func(ctx context.Context, ecfg *synctypes.EngineConfig) (engineRunner, error) {
-			engine, err := syncengine.NewEngine(ctx, ecfg)
+		engineFactory: func(ctx context.Context, req engineFactoryRequest) (engineRunner, error) {
+			engine, err := syncengine.NewDriveEngine(ctx, req.Session, req.Drive, syncengine.DriveEngineOptions{
+				Logger:        req.Logger,
+				PerfCollector: req.PerfCollector,
+				VerifyDrive:   req.VerifyDrive,
+			})
 			if err != nil {
 				return nil, fmt.Errorf("new engine: %w", err)
 			}
@@ -179,21 +191,13 @@ func (o *Orchestrator) buildEngineWork(
 	ctx context.Context, rd *config.ResolvedDrive, session *driveops.Session, mode synctypes.SyncMode, opts synctypes.RunOpts,
 ) driveWork {
 	driveCollector := o.registerDrivePerfCollector(rd.CanonicalID.String())
-	ecfg, buildErr := syncengine.BuildEngineConfig(session, rd, true, o.logger)
-	if buildErr != nil {
-		o.removeDrivePerfCollector(rd.CanonicalID.String())
-		capturedErr := buildErr
-
-		return driveWork{
-			runner: &DriveRunner{canonID: rd.CanonicalID, displayName: rd.DisplayName},
-			fn: func(_ context.Context) (*synctypes.SyncReport, error) {
-				return nil, capturedErr
-			},
-		}
-	}
-	ecfg.PerfCollector = driveCollector
-
-	engine, engineErr := o.engineFactory(ctx, ecfg)
+	engine, engineErr := o.engineFactory(ctx, engineFactoryRequest{
+		Session:       session,
+		Drive:         rd,
+		Logger:        o.logger,
+		VerifyDrive:   true,
+		PerfCollector: driveCollector,
+	})
 	if engineErr != nil {
 		o.removeDrivePerfCollector(rd.CanonicalID.String())
 		capturedErr := engineErr
@@ -335,14 +339,13 @@ func (o *Orchestrator) startWatchRunner(
 	}
 
 	driveCollector := o.registerDrivePerfCollector(rd.CanonicalID.String())
-	ecfg, buildErr := syncengine.BuildEngineConfig(session, rd, true, o.logger)
-	if buildErr != nil {
-		o.removeDrivePerfCollector(rd.CanonicalID.String())
-		return nil, fmt.Errorf("engine config failed for %s: %w", rd.CanonicalID, buildErr)
-	}
-	ecfg.PerfCollector = driveCollector
-
-	engine, engineErr := o.engineFactory(ctx, ecfg)
+	engine, engineErr := o.engineFactory(ctx, engineFactoryRequest{
+		Session:       session,
+		Drive:         rd,
+		Logger:        o.logger,
+		VerifyDrive:   true,
+		PerfCollector: driveCollector,
+	})
 	if engineErr != nil {
 		o.removeDrivePerfCollector(rd.CanonicalID.String())
 		return nil, fmt.Errorf("engine creation failed for %s: %w", rd.CanonicalID, engineErr)

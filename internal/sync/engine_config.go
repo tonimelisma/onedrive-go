@@ -1,23 +1,59 @@
 package sync
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
-// BuildEngineConfig is the single authority for translating an authenticated
-// drive session plus resolved config into an EngineConfig.
-func BuildEngineConfig(
+// DriveEngineOptions carries the small set of construction decisions that are
+// not owned by the resolved drive/session pair itself.
+type DriveEngineOptions struct {
+	Logger        *slog.Logger
+	PerfCollector *perf.Collector
+	VerifyDrive   bool
+}
+
+// NewDriveEngine constructs an Engine directly from the authenticated drive
+// session and resolved drive config used by production entrypoints.
+func NewDriveEngine(
+	ctx context.Context,
 	session *driveops.Session,
 	resolved *config.ResolvedDrive,
-	verifyDrive bool,
-	logger *slog.Logger,
+	opts DriveEngineOptions,
+) (*Engine, error) {
+	cfg, err := newEngineConfigForDrive(session, resolved, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	return newEngine(ctx, cfg)
+}
+
+func newEngineConfigForDrive(
+	session *driveops.Session,
+	resolved *config.ResolvedDrive,
+	opts DriveEngineOptions,
 ) (*synctypes.EngineConfig, error) {
+	if session == nil {
+		return nil, fmt.Errorf("sync: session is required")
+	}
+
+	if resolved == nil {
+		return nil, fmt.Errorf("sync: resolved drive is required")
+	}
+
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	syncDir := resolved.SyncDir
 	if syncDir == "" {
 		return nil, fmt.Errorf("sync_dir not configured — set it in the config file or add a drive with 'onedrive-go drive add'")
@@ -70,9 +106,10 @@ func BuildEngineConfig(
 		CheckWorkers:          resolved.CheckWorkers,
 		DeleteSafetyThreshold: resolved.DeleteSafetyThreshold,
 		MinFreeSpace:          minFree,
+		PerfCollector:         opts.PerfCollector,
 	}
 
-	if verifyDrive {
+	if opts.VerifyDrive {
 		ecfg.DriveVerifier = session.Meta
 	}
 

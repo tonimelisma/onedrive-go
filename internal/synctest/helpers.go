@@ -86,8 +86,7 @@ func BaselineWith(entries ...*synctypes.BaselineEntry) *synctypes.Baseline {
 }
 
 // ActionsOfType filters a flat action list to a single type.
-// Test-only helper — not exported from syncplan because no production
-// code needs it.
+// Test-only helper — kept in synctest because no production package needs it.
 func ActionsOfType(actions []synctypes.Action, t synctypes.ActionType) []synctypes.Action {
 	var result []synctypes.Action
 
