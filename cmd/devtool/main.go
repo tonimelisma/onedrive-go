@@ -18,6 +18,8 @@ type cwdLookup func() (string, error)
 
 type verifyFunc func(context.Context, *devtool.VerifyOptions) error
 
+type benchFunc func(context.Context, devtool.BenchOptions) error
+
 type cleanupAuditFunc func(context.Context, devtool.CleanupAuditOptions) error
 
 type stateAuditFunc func(context.Context, devtool.StateAuditOptions) error
@@ -43,6 +45,7 @@ func newRootCmd() *cobra.Command {
 
 	cmd.AddCommand(
 		newVerifyCmd(defaultCWD, defaultVerify),
+		newBenchCmd(defaultCWD, defaultBench),
 		newCleanupAuditCmd(defaultCWD, defaultCleanupAudit),
 		newStateAuditCmd(defaultStateAudit),
 		newWatchCaptureCmd(defaultWatchCapture),
@@ -100,6 +103,50 @@ func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
 		false,
 		"rerun narrow known live-provider quirk failures once during verification",
 	)
+
+	return cmd
+}
+
+func newBenchCmd(getwd cwdLookup, runBench benchFunc) *cobra.Command {
+	var (
+		scenario       string
+		subject        string
+		runs           int
+		warmup         int
+		jsonOutput     bool
+		resultJSONPath string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "bench",
+		Short: "Run repo-owned benchmark scenarios",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			repoRoot, err := getwd()
+			if err != nil {
+				return fmt.Errorf("get working directory: %w", err)
+			}
+
+			return runBench(cmd.Context(), devtool.BenchOptions{
+				RepoRoot:       repoRoot,
+				Scenario:       scenario,
+				Subject:        subject,
+				Runs:           runs,
+				Warmup:         warmup,
+				JSON:           jsonOutput,
+				ResultJSONPath: resultJSONPath,
+				Stdout:         cmd.OutOrStdout(),
+				Stderr:         cmd.ErrOrStderr(),
+			})
+		},
+	}
+
+	cmd.Flags().StringVar(&scenario, "scenario", "", "benchmark scenario ID")
+	cmd.Flags().StringVar(&subject, "subject", devtool.DefaultBenchSubjectID, "subject under test")
+	cmd.Flags().IntVar(&runs, "runs", -1, "override measured sample count (-1 uses the scenario default)")
+	cmd.Flags().IntVar(&warmup, "warmup", -1, "override warmup count (-1 uses the scenario default)")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "emit the benchmark result bundle as JSON")
+	cmd.Flags().StringVar(&resultJSONPath, "result-json", "", "write benchmark result bundle JSON to this path")
+	requireFlag(cmd, "scenario")
 
 	return cmd
 }
@@ -292,6 +339,14 @@ func defaultCWD() (string, error) {
 func defaultVerify(ctx context.Context, opts *devtool.VerifyOptions) error {
 	if err := devtool.RunVerify(ctx, devtool.ExecRunner{}, opts); err != nil {
 		return fmt.Errorf("run verify: %w", err)
+	}
+
+	return nil
+}
+
+func defaultBench(ctx context.Context, opts devtool.BenchOptions) error {
+	if err := devtool.RunBench(ctx, opts); err != nil {
+		return fmt.Errorf("run bench: %w", err)
 	}
 
 	return nil

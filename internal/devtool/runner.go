@@ -5,7 +5,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"runtime"
+	"syscall"
+	"time"
 )
 
 type commandRunner interface {
@@ -84,4 +88,62 @@ func (ExecRunner) CombinedOutput(
 	}
 
 	return out, nil
+}
+
+func runMeasuredCommand(
+	ctx context.Context,
+	name string,
+	cwd string,
+	env []string,
+	args ...string,
+) (benchMeasuredProcess, error) {
+	//nolint:gosec // benchmark subjects and args are repo-owned fixed command definitions.
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = cwd
+	cmd.Env = env
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	startedAt := time.Now()
+	err := cmd.Run()
+	elapsed := time.Since(startedAt)
+
+	result := benchMeasuredProcess{
+		ElapsedMicros: durationMicros(elapsed),
+		Stdout:        append([]byte(nil), stdout.Bytes()...),
+		Stderr:        append([]byte(nil), stderr.Bytes()...),
+	}
+	if cmd.ProcessState != nil {
+		result.ExitCode = cmd.ProcessState.ExitCode()
+		result.UserCPUMicros = durationMicros(cmd.ProcessState.UserTime())
+		result.SystemCPUMicros = durationMicros(cmd.ProcessState.SystemTime())
+		result.PeakRSSBytes = processStateMaxRSSBytes(cmd.ProcessState)
+	}
+
+	if err != nil {
+		return result, fmt.Errorf("run benchmark subject command: %w", err)
+	}
+
+	return result, nil
+}
+
+func processStateMaxRSSBytes(state *os.ProcessState) int64 {
+	if state == nil {
+		return 0
+	}
+
+	rusage, ok := state.SysUsage().(*syscall.Rusage)
+	if !ok || rusage == nil {
+		return 0
+	}
+
+	maxRSS := rusage.Maxrss
+	if runtime.GOOS == "linux" {
+		return maxRSS * linuxMaxRSSUnitBytes
+	}
+
+	return maxRSS
 }
