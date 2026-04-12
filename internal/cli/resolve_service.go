@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 type resolveDeleteStore interface {
@@ -14,9 +14,9 @@ type resolveDeleteStore interface {
 }
 
 type resolveConflictStore interface {
-	ListConflicts(context.Context) ([]syncstore.ConflictRecord, error)
-	ListAllConflicts(context.Context) ([]syncstore.ConflictRecord, error)
-	RequestConflictResolution(context.Context, string, string) (syncstore.ConflictRequestResult, error)
+	ListConflicts(context.Context) ([]syncengine.ConflictRecord, error)
+	ListAllConflicts(context.Context) ([]syncengine.ConflictRecord, error)
+	RequestConflictResolution(context.Context, string, string) (syncengine.ConflictRequestResult, error)
 	Close(context.Context) error
 }
 
@@ -113,24 +113,24 @@ func requestConflictResolution(
 	store resolveConflictStore,
 	id string,
 	resolution string,
-) (syncstore.ConflictRequestResult, error) {
+) (syncengine.ConflictRequestResult, error) {
 	return routeDurableIntent(
 		ctx,
-		func(ctx context.Context) (syncstore.ConflictRequestResult, error) {
+		func(ctx context.Context) (syncengine.ConflictRequestResult, error) {
 			result, err := store.RequestConflictResolution(ctx, id, resolution)
 			if err != nil {
-				return syncstore.ConflictRequestResult{}, fmt.Errorf("queue conflict resolution: %w", err)
+				return syncengine.ConflictRequestResult{}, fmt.Errorf("queue conflict resolution: %w", err)
 			}
 
 			return result, nil
 		},
-		func(ctx context.Context, client *controlSocketClient) (syncstore.ConflictRequestResult, error) {
+		func(ctx context.Context, client *controlSocketClient) (syncengine.ConflictRequestResult, error) {
 			status, err := client.requestConflictResolution(ctx, cc.Cfg.CanonicalID, id, resolution)
 			if err != nil {
-				return syncstore.ConflictRequestResult{}, err
+				return syncengine.ConflictRequestResult{}, err
 			}
 
-			return syncstore.ConflictRequestResult{Status: syncstore.ConflictRequestStatus(status)}, nil
+			return syncengine.ConflictRequestResult{Status: syncengine.ConflictRequestStatus(status)}, nil
 		},
 	)
 }
@@ -139,7 +139,7 @@ func queueEachConflictResolution(
 	ctx context.Context,
 	cc *CLIContext,
 	store resolveConflictStore,
-	conflicts []syncstore.ConflictRecord,
+	conflicts []syncengine.ConflictRecord,
 	resolution string,
 	dryRun bool,
 ) error {
@@ -194,7 +194,7 @@ func queueSingleConflictResolution(
 		if findResolvedErr != nil {
 			return findResolvedErr
 		}
-		if resolved && resolvedConflict.Resolution != syncstore.ResolutionUnresolved {
+		if resolved && resolvedConflict.Resolution != syncengine.ResolutionUnresolved {
 			cc.Statusf("Conflict %s already resolved as %s\n", resolvedConflict.Path, resolvedConflict.Resolution)
 			return nil
 		}
@@ -216,7 +216,7 @@ func queueSingleConflictResolution(
 	return nil
 }
 
-func findSelectedConflict(conflicts []syncstore.ConflictRecord, idOrPath string) (*syncstore.ConflictRecord, bool, error) {
+func findSelectedConflict(conflicts []syncengine.ConflictRecord, idOrPath string) (*syncengine.ConflictRecord, bool, error) {
 	if idOrPath == "" {
 		return nil, false, nil
 	}
@@ -228,7 +228,7 @@ func findSelectedConflict(conflicts []syncstore.ConflictRecord, idOrPath string)
 		}
 	}
 
-	var match *syncstore.ConflictRecord
+	var match *syncengine.ConflictRecord
 	for i := range conflicts {
 		conflict := &conflicts[i]
 		if len(conflict.ID) >= len(idOrPath) && conflict.ID[:len(idOrPath)] == idOrPath {
@@ -246,29 +246,29 @@ func writeQueuedConflictStatus(
 	cc *CLIContext,
 	conflictPath string,
 	resolution string,
-	status syncstore.ConflictRequestStatus,
+	status syncengine.ConflictRequestStatus,
 ) {
 	switch status {
-	case syncstore.ConflictRequestQueued:
+	case syncengine.ConflictRequestQueued:
 		cc.Statusf("Queued %s as %s (engine will resolve on the next sync pass)\n", conflictPath, resolution)
-	case syncstore.ConflictRequestAlreadyQueued:
+	case syncengine.ConflictRequestAlreadyQueued:
 		cc.Statusf("Resolution already queued for %s as %s\n", conflictPath, resolution)
-	case syncstore.ConflictRequestAlreadyApplying:
+	case syncengine.ConflictRequestAlreadyApplying:
 		cc.Statusf("Resolution already applying for %s\n", conflictPath)
-	case syncstore.ConflictRequestAlreadyResolved:
+	case syncengine.ConflictRequestAlreadyResolved:
 		cc.Statusf("Conflict %s is already resolved\n", conflictPath)
 	default:
 		cc.Statusf("Resolution request for %s returned status %s\n", conflictPath, status)
 	}
 }
 
-func openWritableStoreForContext(ctx context.Context, cc *CLIContext) (*syncstore.SyncStore, error) {
+func openWritableStoreForContext(ctx context.Context, cc *CLIContext) (*syncengine.SyncStore, error) {
 	dbPath := cc.Cfg.StatePath()
 	if dbPath == "" {
 		return nil, fmt.Errorf("cannot determine state DB path for drive %q", cc.Cfg.CanonicalID)
 	}
 
-	store, err := syncstore.NewSyncStore(ctx, dbPath, cc.Logger)
+	store, err := syncengine.NewSyncStore(ctx, dbPath, cc.Logger)
 	if err != nil {
 		return nil, recoverAwareStoreOpenError(
 			cc.Cfg.CanonicalID.String(),

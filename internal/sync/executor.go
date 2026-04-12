@@ -12,9 +12,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // graphRootID is the Graph API parent reference for top-level items.
@@ -61,7 +59,7 @@ type ExecutorConfig struct {
 // Thread-safe: all mutable state is per-call, no shared mutation.
 type Executor struct {
 	*ExecutorConfig
-	baseline *syncstore.Baseline
+	baseline *Baseline
 }
 
 // NewExecutorConfig creates an immutable executor configuration bound to a
@@ -232,7 +230,7 @@ func (cfg *ExecutorConfig) SetUploads(ul driveops.Uploader) {
 
 // NewExecution creates an ephemeral Executor for a single action execution.
 // Baseline is used for parent ID resolution (thread-safe via locked accessors).
-func NewExecution(cfg *ExecutorConfig, bl *syncstore.Baseline) *Executor {
+func NewExecution(cfg *ExecutorConfig, bl *Baseline) *Executor {
 	return &Executor{
 		ExecutorConfig: cfg,
 		baseline:       bl,
@@ -240,8 +238,8 @@ func NewExecution(cfg *ExecutorConfig, bl *syncstore.Baseline) *Executor {
 }
 
 // ExecuteFolderCreate dispatches to local or remote folder creation.
-func (e *Executor) ExecuteFolderCreate(ctx context.Context, action *Action) ExecutionResult {
-	if action.CreateSide == synctypes.CreateLocal {
+func (e *Executor) ExecuteFolderCreate(ctx context.Context, action *Action) ActionOutcome {
+	if action.CreateSide == CreateLocal {
 		return e.createLocalFolder(action)
 	}
 
@@ -249,11 +247,11 @@ func (e *Executor) ExecuteFolderCreate(ctx context.Context, action *Action) Exec
 }
 
 // createLocalFolder creates a directory on the local filesystem.
-func (e *Executor) createLocalFolder(action *Action) ExecutionResult {
+func (e *Executor) createLocalFolder(action *Action) ActionOutcome {
 	if err := e.syncTree.MkdirAll(action.Path, localDirPerms); err != nil {
 		return e.failedOutcome(
 			action,
-			synctypes.ActionFolderCreate,
+			ActionFolderCreate,
 			fmt.Errorf("creating local folder %s: %w", action.Path, normalizeSyncTreePathError(err)),
 		)
 	}
@@ -273,11 +271,11 @@ func (e *Executor) createLocalFolder(action *Action) ExecutionResult {
 
 // createRemoteFolder creates a folder on OneDrive. The DAG guarantees parent
 // folder creates complete before children, so ResolveParentID finds the parent
-// in the baseline (committed by CommitOutcome before depGraph.Complete).
-func (e *Executor) createRemoteFolder(ctx context.Context, action *Action) ExecutionResult {
+// in the baseline (committed by CommitMutation before depGraph.Complete).
+func (e *Executor) createRemoteFolder(ctx context.Context, action *Action) ActionOutcome {
 	parentID, err := e.ResolveParentID(action.Path)
 	if err != nil {
-		return e.failedOutcome(action, synctypes.ActionFolderCreate, err)
+		return e.failedOutcome(action, ActionFolderCreate, err)
 	}
 
 	driveID := e.resolveDriveID(action)
@@ -285,7 +283,7 @@ func (e *Executor) createRemoteFolder(ctx context.Context, action *Action) Execu
 
 	item, err := e.items.CreateFolder(ctx, driveID, parentID, name)
 	if err != nil {
-		return e.failedOutcome(action, synctypes.ActionFolderCreate, fmt.Errorf("creating remote folder %s: %w", action.Path, err))
+		return e.failedOutcome(action, ActionFolderCreate, fmt.Errorf("creating remote folder %s: %w", action.Path, err))
 	}
 
 	e.logger.Debug("created remote folder",
@@ -295,22 +293,22 @@ func (e *Executor) createRemoteFolder(ctx context.Context, action *Action) Execu
 
 	e.confirmRemotePathVisible(ctx, action)
 
-	return ExecutionResult{
-		Action:     synctypes.ActionFolderCreate,
+	return ActionOutcome{
+		Action:     ActionFolderCreate,
 		Success:    true,
 		Path:       action.Path,
 		DriveID:    driveID,
 		ItemID:     item.ID,
 		ParentID:   parentID,
-		ItemType:   synctypes.ItemTypeFolder,
+		ItemType:   ItemTypeFolder,
 		RemoteHash: driveops.SelectHash(item), // SelectHash: driveops package (B-222)
 		ETag:       item.ETag,
 	}
 }
 
 // ExecuteMove dispatches to local or remote move.
-func (e *Executor) ExecuteMove(ctx context.Context, action *Action) ExecutionResult {
-	if action.Type == synctypes.ActionLocalMove {
+func (e *Executor) ExecuteMove(ctx context.Context, action *Action) ActionOutcome {
+	if action.Type == ActionLocalMove {
 		return e.ExecuteLocalMove(action)
 	}
 
@@ -318,12 +316,12 @@ func (e *Executor) ExecuteMove(ctx context.Context, action *Action) ExecutionRes
 }
 
 // ExecuteLocalMove renames a local file/folder.
-func (e *Executor) ExecuteLocalMove(action *Action) ExecutionResult {
+func (e *Executor) ExecuteLocalMove(action *Action) ActionOutcome {
 	// Ensure parent directory exists.
 	if err := e.syncTree.MkdirAll(filepath.Dir(action.Path), localDirPerms); err != nil {
 		return e.failedOutcome(
 			action,
-			synctypes.ActionLocalMove,
+			ActionLocalMove,
 			fmt.Errorf("creating parent for move target %s: %w", action.Path, normalizeSyncTreePathError(err)),
 		)
 	}
@@ -331,7 +329,7 @@ func (e *Executor) ExecuteLocalMove(action *Action) ExecutionResult {
 	if err := e.syncTree.Rename(action.OldPath, action.Path); err != nil {
 		return e.failedOutcome(
 			action,
-			synctypes.ActionLocalMove,
+			ActionLocalMove,
 			fmt.Errorf("renaming %s -> %s: %w", action.OldPath, action.Path, normalizeSyncTreePathError(err)),
 		)
 	}
@@ -342,19 +340,19 @@ func (e *Executor) ExecuteLocalMove(action *Action) ExecutionResult {
 }
 
 // ExecuteRemoteMove renames/moves an item on OneDrive.
-func (e *Executor) ExecuteRemoteMove(ctx context.Context, action *Action) ExecutionResult {
+func (e *Executor) ExecuteRemoteMove(ctx context.Context, action *Action) ActionOutcome {
 	driveID := e.resolveDriveID(action)
 
 	newParentID, err := e.ResolveParentID(action.Path)
 	if err != nil {
-		return e.failedOutcome(action, synctypes.ActionRemoteMove, err)
+		return e.failedOutcome(action, ActionRemoteMove, err)
 	}
 
 	newName := filepath.Base(action.Path)
 
 	item, err := e.items.MoveItem(ctx, driveID, action.ItemID, newParentID, newName)
 	if err != nil {
-		return e.failedOutcome(action, synctypes.ActionRemoteMove, fmt.Errorf("moving %s -> %s: %w", action.OldPath, action.Path, err))
+		return e.failedOutcome(action, ActionRemoteMove, fmt.Errorf("moving %s -> %s: %w", action.OldPath, action.Path, err))
 	}
 
 	e.logger.Debug("remote move complete",
@@ -372,15 +370,15 @@ func (e *Executor) ExecuteRemoteMove(ctx context.Context, action *Action) Execut
 	return o
 }
 
-// ExecuteSyncedUpdate produces an Outcome from a PathView without I/O.
-func (e *Executor) ExecuteSyncedUpdate(action *Action) ExecutionResult {
-	o := ExecutionResult{
-		Action:   synctypes.ActionUpdateSynced,
+// ExecuteSyncedUpdate produces an ActionOutcome from a PathView without I/O.
+func (e *Executor) ExecuteSyncedUpdate(action *Action) ActionOutcome {
+	o := ActionOutcome{
+		Action:   ActionUpdateSynced,
 		Success:  true,
 		Path:     action.Path,
 		DriveID:  e.resolveDriveID(action),
 		ItemID:   action.ItemID,
-		ItemType: synctypes.ItemTypeFile,
+		ItemType: ItemTypeFile,
 	}
 
 	if action.View != nil {
@@ -404,7 +402,7 @@ func (e *Executor) ExecuteSyncedUpdate(action *Action) ExecutionResult {
 		fillOutcomeFromBaseline(&o, action.View.Baseline)
 
 		// Fall back to baseline ItemType when Remote is absent or had zero value.
-		if o.ItemType == synctypes.ItemTypeFile && action.View.Baseline != nil && action.View.Baseline.ItemType != synctypes.ItemTypeFile {
+		if o.ItemType == ItemTypeFile && action.View.Baseline != nil && action.View.Baseline.ItemType != ItemTypeFile {
 			o.ItemType = action.View.Baseline.ItemType
 		}
 	}
@@ -413,9 +411,9 @@ func (e *Executor) ExecuteSyncedUpdate(action *Action) ExecutionResult {
 }
 
 // ExecuteCleanup signals baseline removal without I/O.
-func (e *Executor) ExecuteCleanup(action *Action) ExecutionResult {
-	return ExecutionResult{
-		Action:   synctypes.ActionCleanup,
+func (e *Executor) ExecuteCleanup(action *Action) ActionOutcome {
+	return ActionOutcome{
+		Action:   ActionCleanup,
 		Success:  true,
 		Path:     action.Path,
 		DriveID:  e.resolveDriveID(action),
@@ -434,7 +432,7 @@ func (e *Executor) ExecuteCleanup(action *Action) ExecutionResult {
 // resolves symlinks to detect TOCTOU escape via symlinked path components.
 func ContainedPath(syncRoot, relPath string) (string, error) {
 	if !filepath.IsLocal(relPath) {
-		return "", fmt.Errorf("%w: %q", synctypes.ErrPathEscapesSyncRoot, relPath)
+		return "", fmt.Errorf("%w: %q", ErrPathEscapesSyncRoot, relPath)
 	}
 
 	absPath := filepath.Join(syncRoot, relPath)
@@ -461,7 +459,7 @@ func ContainedPath(syncRoot, relPath string) (string, error) {
 	if resolvedParent != resolvedRoot &&
 		!strings.HasPrefix(resolvedParent, resolvedRoot+string(filepath.Separator)) {
 		return "", fmt.Errorf("%w: symlink resolves to %q outside root %q",
-			synctypes.ErrPathEscapesSyncRoot, resolvedParent, resolvedRoot)
+			ErrPathEscapesSyncRoot, resolvedParent, resolvedRoot)
 	}
 
 	return absPath, nil
@@ -473,7 +471,7 @@ func normalizeSyncTreePathError(err error) error {
 	}
 
 	if strings.Contains(err.Error(), "escapes root") || strings.Contains(err.Error(), "must not be absolute") {
-		return errors.Join(synctypes.ErrPathEscapesSyncRoot, err)
+		return errors.Join(ErrPathEscapesSyncRoot, err)
 	}
 
 	return err
@@ -495,22 +493,22 @@ func resolveParentForContainment(parentDir string) (string, bool, error) {
 // resolveActionItemType extracts ItemType from the action's View, skipping
 // zero values (ItemTypeFile) to find the actual type. Checks Remote → Baseline
 // → Local, defaulting to ItemTypeFile if all are zero or View is nil.
-func resolveActionItemType(action *Action) synctypes.ItemType {
+func resolveActionItemType(action *Action) ItemType {
 	if action.View != nil {
-		if action.View.Remote != nil && action.View.Remote.ItemType != synctypes.ItemTypeFile {
+		if action.View.Remote != nil && action.View.Remote.ItemType != ItemTypeFile {
 			return action.View.Remote.ItemType
 		}
 
-		if action.View.Baseline != nil && action.View.Baseline.ItemType != synctypes.ItemTypeFile {
+		if action.View.Baseline != nil && action.View.Baseline.ItemType != ItemTypeFile {
 			return action.View.Baseline.ItemType
 		}
 
-		if action.View.Local != nil && action.View.Local.ItemType != synctypes.ItemTypeFile {
+		if action.View.Local != nil && action.View.Local.ItemType != ItemTypeFile {
 			return action.View.Local.ItemType
 		}
 	}
 
-	return synctypes.ItemTypeFile
+	return ItemTypeFile
 }
 
 // ResolveParentID determines the remote parent ID for a given relative path.
@@ -560,15 +558,15 @@ func (e *Executor) resolveDriveID(action *Action) driveid.ID {
 	return e.driveID
 }
 
-// failedOutcome builds an Outcome for a failed action.
-func (e *Executor) failedOutcome(action *Action, actionType synctypes.ActionType, err error) ExecutionResult {
+// failedOutcome builds an ActionOutcome for a failed action.
+func (e *Executor) failedOutcome(action *Action, actionType ActionType, err error) ActionOutcome {
 	e.logger.Warn("action failed",
 		slog.String("action", actionType.String()),
 		slog.String("path", action.Path),
 		slog.String("error", err.Error()),
 	)
 
-	return ExecutionResult{
+	return ActionOutcome{
 		Action:  actionType,
 		Success: false,
 		Error:   err,
@@ -578,15 +576,15 @@ func (e *Executor) failedOutcome(action *Action, actionType synctypes.ActionType
 	}
 }
 
-// folderOutcome builds a successful Outcome for a local folder create.
-func (e *Executor) folderOutcome(action *Action) ExecutionResult {
-	o := ExecutionResult{
-		Action:   synctypes.ActionFolderCreate,
+// folderOutcome builds a successful ActionOutcome for a local folder create.
+func (e *Executor) folderOutcome(action *Action) ActionOutcome {
+	o := ActionOutcome{
+		Action:   ActionFolderCreate,
 		Success:  true,
 		Path:     action.Path,
 		DriveID:  e.resolveDriveID(action),
 		ItemID:   action.ItemID,
-		ItemType: synctypes.ItemTypeFolder,
+		ItemType: ItemTypeFolder,
 	}
 
 	if action.View != nil && action.View.Remote != nil {
@@ -598,9 +596,9 @@ func (e *Executor) folderOutcome(action *Action) ExecutionResult {
 	return o
 }
 
-// moveOutcome builds a successful Outcome for a move action.
-func (e *Executor) moveOutcome(action *Action) ExecutionResult {
-	o := ExecutionResult{
+// moveOutcome builds a successful ActionOutcome for a move action.
+func (e *Executor) moveOutcome(action *Action) ActionOutcome {
+	o := ActionOutcome{
 		Action:  action.Type,
 		Success: true,
 		Path:    action.Path,
@@ -632,7 +630,7 @@ func (e *Executor) moveOutcome(action *Action) ExecutionResult {
 	return o
 }
 
-func fillOutcomeFromBaseline(o *ExecutionResult, baseline *syncstore.BaselineEntry) {
+func fillOutcomeFromBaseline(o *ActionOutcome, baseline *BaselineEntry) {
 	if baseline == nil {
 		return
 	}

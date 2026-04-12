@@ -14,7 +14,7 @@ classes and log owners. Boundary packages consume that shared vocabulary rather
 than re-declaring local enums.
 
 Structured sync logs are part of that shared contract: the engine logs the
-classified `failures.Class` and `synctypes.SummaryKey` together with stable
+classified `failures.Class` and `sync.SummaryKey` together with stable
 run/action identifiers so runtime evidence, persisted rows, and CLI read models
 can be compared directly.
 
@@ -24,7 +24,7 @@ The repository keeps three related but distinct projections of failure state:
 
 - `failures.Class`: the runtime execution contract used by sync routing,
   retry/trial policy, and CLI exit behavior.
-- `synctypes.SummaryKey`: the shared sync-domain rendering key used for
+- `sync.SummaryKey`: the shared sync-domain rendering key used for
   structured logs, read-only issue summaries, and human-facing sync issue
   presentation.
 - Persisted issue fields: `issue_type`, `category`, `failure_role`, and
@@ -55,7 +55,7 @@ Each boundary owns exactly one translation step:
 - `graph`: normalize wire/auth/API failures into `GraphError` plus sentinels such as `ErrGone`, `ErrUnauthorized`, `ErrNotFound`, and `ErrThrottled`.
 - `config`: normalize parse, validation, and discovery outcomes into fatal load errors or lenient warnings.
 - `sync`: normalize `WorkerResult`, observer sentinels, and permission checks into `ResultDecision`, scope actions, retry scheduling, and success cleanup.
-- `syncstore`: persist the engine's classification using `category`, `failure_role`, `scope_key`, and `next_retry_at`; it never reclassifies raw transport failures.
+- `sync`: persist the engine's classification using `category`, `failure_role`, `scope_key`, and `next_retry_at`; it never reclassifies raw transport failures.
 - `cli`: map fatal/actionable/transient outcomes into command exit errors and user-facing reason/action text.
 
 ## Executable Mapping
@@ -64,7 +64,7 @@ The docs and code stay aligned through a small number of explicit classifier
 entry points:
 
 - `internal/failures`: shared `Class` and `LogOwner` definitions.
-- `internal/synctypes/summary_keys.go`: shared `SummaryKey`,
+- `internal/sync/summary_keys.go`: shared `SummaryKey`,
   `SummaryDescriptor`, and the normalization helpers that map runtime results,
   persisted failures, and scope blocks into one rendering key.
 - `internal/config/failure_class.go`: classify config load results into
@@ -106,9 +106,9 @@ automatic permission rechecks decide when that derived scope clears.
 | Boundary | Evidence |
 |----------|----------|
 | Shared failure classes | `internal/failures/failures_test.go`, `internal/config/failure_class_test.go`, `internal/cli/failure_class_test.go` |
-| Shared summary key mapping and descriptors | `internal/synctypes/summary_keys_test.go` (`TestDescribeSummary_KnownKeys`, `TestSummaryKeyForPersistedFailure_RepresentativeMappings`, `TestSummaryKeyForScopeBlock_RepresentativeMappings`), `internal/sync/engine_result_scope_test.go` (`TestRecordFailure_LogsSummaryKey`, `TestProcessWorkerResult_EndToEndSummaryKey_ServiceOutage`, `TestProcessWorkerResult_EndToEndSummaryKey_SharedFolderWritesBlocked`, `TestProcessWorkerResult_EndToEndSummaryKey_AuthenticationRequired`, `TestProcessWorkerResult_EndToEndSummaryKey_LocalPermissionDenied`, `TestClassifyResult_LifecycleAndAuth`, `TestClassifyResult_RemoteRetriesAndSkips`, `TestClassifyResult_StorageScopes`, `TestClassifyResult_LocalErrors`) |
+| Shared summary key mapping and descriptors | `internal/sync/summary_keys_test.go` (`TestDescribeSummary_KnownKeys`, `TestSummaryKeyForPersistedFailure_RepresentativeMappings`, `TestSummaryKeyForScopeBlock_RepresentativeMappings`), `internal/sync/engine_result_scope_test.go` (`TestRecordFailure_LogsSummaryKey`, `TestProcessWorkerResult_EndToEndSummaryKey_ServiceOutage`, `TestProcessWorkerResult_EndToEndSummaryKey_SharedFolderWritesBlocked`, `TestProcessWorkerResult_EndToEndSummaryKey_AuthenticationRequired`, `TestProcessWorkerResult_EndToEndSummaryKey_LocalPermissionDenied`, `TestClassifyResult_LifecycleAndAuth`, `TestClassifyResult_RemoteRetriesAndSkips`, `TestClassifyResult_StorageScopes`, `TestClassifyResult_LocalErrors`) |
 | Structured sync log schema from classified results | `internal/sync/engine_result_scope_test.go` (`TestRecordFailure_LogsSummaryKey`, `TestProcessWorkerResult_EndToEndSummaryKey_ServiceOutage`, `TestProcessWorkerResult_EndToEndSummaryKey_SharedFolderWritesBlocked`, `TestProcessWorkerResult_EndToEndSummaryKey_AuthenticationRequired`, `TestProcessWorkerResult_EndToEndSummaryKey_LocalPermissionDenied`) |
 | Sync result classification and persistence mapping | `internal/sync/engine_result_scope_test.go` (`TestClassifyResult_LifecycleAndAuth`, `TestClassifyResult_StorageScopes`, `TestDiskLocalScopeBlock_FullCycle`, `TestRetryPipeline_TransientFailure_IntegratedRetrier`) |
 | Trial routing from classified decisions | `internal/sync/engine_result_scope_test.go` (`TestProcessTrialResultV2_Success_ClearsScope`, `TestProcessTrialResultV2_Preserve_LocalPermissionRecordsCandidateFailure`, `TestEvaluateTrialOutcome_OnlyMatchingScopeEvidenceExtends`) |
 | CLI exit/presentation mapping | `internal/cli/failure_class_test.go`, `internal/cli/resolve_recover_test.go`, `internal/cli/status_test.go` |
-| Read-only/persistent store projection of classified failures | `internal/syncstore/inspector_test.go` (`TestInspector_ReadGroupedIssueProjection`, `TestInspector_ReadStatusSnapshot_IssueSummary`, `TestInspector_ReadStatusSnapshot_StaysConsistentWithDriveStatusSnapshot`), `internal/cli/status_test.go` (`TestQuerySyncState_WithMetadata`, `TestQuerySyncState_RemoteDriftAndIssues`, `TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsIssues`, `TestQuerySyncState_UsesReadOnlyProjectionHelper`) |
+| Read-only/persistent store projection of classified failures | `internal/sync/inspector_test.go` (`TestInspector_ReadGroupedIssueProjection`, `TestInspector_ReadStatusSnapshot_IssueSummary`, `TestInspector_ReadStatusSnapshot_StaysConsistentWithDriveStatusSnapshot`), `internal/cli/status_test.go` (`TestQuerySyncState_WithMetadata`, `TestQuerySyncState_RemoteDriftAndIssues`, `TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsIssues`, `TestQuerySyncState_UsesReadOnlyProjectionHelper`) |

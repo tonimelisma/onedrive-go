@@ -4,16 +4,14 @@ import (
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // findBaselineOrphans identifies baseline entries that are not present in the
 // seen set from a full enumeration and synthesizes remote delete events for them.
-func findBaselineOrphans(bl *syncstore.Baseline, seen map[driveid.ItemKey]struct{}, driveID driveid.ID, pathPrefix string) []ChangeEvent {
+func findBaselineOrphans(bl *Baseline, seen map[driveid.ItemKey]struct{}, driveID driveid.ID, pathPrefix string) []ChangeEvent {
 	var orphans []ChangeEvent
 
-	bl.ForEachPath(func(path string, entry *syncstore.BaselineEntry) {
+	bl.ForEachPath(func(path string, entry *BaselineEntry) {
 		if entry.DriveID != driveID {
 			return
 		}
@@ -27,8 +25,8 @@ func findBaselineOrphans(bl *syncstore.Baseline, seen map[driveid.ItemKey]struct
 		}
 
 		orphans = append(orphans, ChangeEvent{
-			Source:    synctypes.SourceRemote,
-			Type:      synctypes.ChangeDelete,
+			Source:    SourceRemote,
+			Type:      ChangeDelete,
 			Path:      entry.Path,
 			ItemID:    entry.ItemID,
 			DriveID:   entry.DriveID,

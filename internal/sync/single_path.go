@@ -9,9 +9,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // SinglePathObservation rebuilds local truth for one path without invoking a
@@ -31,7 +29,7 @@ func ObserveSinglePath(
 	logger *slog.Logger,
 	syncTree *synctree.Root,
 	relPath string,
-	base *syncstore.BaselineEntry,
+	base *BaselineEntry,
 	observeStartNano int64,
 	hashFunc func(string) (string, error),
 ) (SinglePathObservation, error) {
@@ -56,7 +54,7 @@ func ObserveSinglePathWithFilter(
 	logger *slog.Logger,
 	syncTree *synctree.Root,
 	relPath string,
-	base *syncstore.BaselineEntry,
+	base *BaselineEntry,
 	observeStartNano int64,
 	hashFunc func(string) (string, error),
 	filter LocalFilterConfig,
@@ -83,7 +81,7 @@ func ObserveSinglePathWithScope(
 	logger *slog.Logger,
 	syncTree *synctree.Root,
 	relPath string,
-	base *syncstore.BaselineEntry,
+	base *BaselineEntry,
 	observeStartNano int64,
 	hashFunc func(string) (string, error),
 	filter LocalFilterConfig,
@@ -108,7 +106,7 @@ func ObserveSinglePathWithScope(
 
 	itemType := singlePathItemType(info)
 	hash := ""
-	if itemType == synctypes.ItemTypeFile {
+	if itemType == ItemTypeFile {
 		hash = observeSinglePathHash(logger, path, absPath, info, base, observeStartNano, hashFunc)
 	}
 
@@ -194,7 +192,7 @@ func resolveSinglePathWithInfo(
 
 	return SinglePathObservation{Skipped: &SkippedItem{
 		Path:     path,
-		Reason:   synctypes.IssueFileTooLarge,
+		Reason:   IssueFileTooLarge,
 		Detail:   fmt.Sprintf("file size %d bytes exceeds 250 GB limit", info.Size()),
 		FileSize: info.Size(),
 	}}, true
@@ -208,25 +206,25 @@ func singlePathAllowedByScope(path string, info os.FileInfo, scopeSnapshot syncs
 	return scopeSnapshot.AllowsPath(path)
 }
 
-func singlePathItemType(info os.FileInfo) synctypes.ItemType {
+func singlePathItemType(info os.FileInfo) ItemType {
 	if info.IsDir() {
-		return synctypes.ItemTypeFolder
+		return ItemTypeFolder
 	}
 
-	return synctypes.ItemTypeFile
+	return ItemTypeFile
 }
 
 func singlePathEvent(
 	path string,
 	name string,
-	itemType synctypes.ItemType,
+	itemType ItemType,
 	info os.FileInfo,
 	hash string,
 ) SinglePathObservation {
 	return SinglePathObservation{
 		Event: &ChangeEvent{
-			Source:   synctypes.SourceLocal,
-			Type:     synctypes.ChangeModify,
+			Source:   SourceLocal,
+			Type:     ChangeModify,
 			Path:     path,
 			Name:     name,
 			ItemType: itemType,
@@ -250,7 +248,7 @@ func observeSinglePathHash(
 	path string,
 	absPath string,
 	info os.FileInfo,
-	base *syncstore.BaselineEntry,
+	base *BaselineEntry,
 	observeStartNano int64,
 	hashFunc func(string) (string, error),
 ) string {
@@ -268,7 +266,7 @@ func observeSinglePathHash(
 	}
 
 	if logger != nil {
-		if errors.Is(err, synctypes.ErrFileChangedDuringHash) {
+		if errors.Is(err, ErrFileChangedDuringHash) {
 			logger.Debug("file metadata still settling, emitting with empty hash",
 				slog.String("path", path))
 		} else {

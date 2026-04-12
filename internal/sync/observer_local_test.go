@@ -19,18 +19,17 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
 
 // itemTypeFromDirEntry maps a DirEntry to the sync engine's ItemType.
 // Test-only helper — not used in production code.
-func itemTypeFromDirEntry(d fs.DirEntry) synctypes.ItemType {
+func itemTypeFromDirEntry(d fs.DirEntry) ItemType {
 	if d.IsDir() {
-		return synctypes.ItemTypeFolder
+		return ItemTypeFolder
 	}
 
-	return synctypes.ItemTypeFile
+	return ItemTypeFile
 }
 
 // ---------------------------------------------------------------------------
@@ -173,13 +172,13 @@ func TestFullScan_NewFiles(t *testing.T) {
 	ev := findEvent(result.Events, "hello.txt")
 	require.NotNil(t, ev, "hello.txt event not found")
 
-	assert.Equal(t, synctypes.SourceLocal, ev.Source)
-	assert.Equal(t, synctypes.ChangeCreate, ev.Type)
+	assert.Equal(t, SourceLocal, ev.Source)
+	assert.Equal(t, ChangeCreate, ev.Type)
 	assert.Equal(t, "hello.txt", ev.Name)
 	assert.Equal(t, hashContent(t, "hello world"), ev.Hash)
 	assert.Equal(t, int64(len("hello world")), ev.Size)
 	assert.NotZero(t, ev.Mtime, "Mtime should be non-zero")
-	assert.Equal(t, synctypes.ItemTypeFile, ev.ItemType)
+	assert.Equal(t, ItemTypeFile, ev.ItemType)
 }
 
 func TestFullScan_NewFolder(t *testing.T) {
@@ -195,8 +194,8 @@ func TestFullScan_NewFolder(t *testing.T) {
 	require.Len(t, result.Events, 1)
 
 	ev := result.Events[0]
-	assert.Equal(t, synctypes.ChangeCreate, ev.Type)
-	assert.Equal(t, synctypes.ItemTypeFolder, ev.ItemType)
+	assert.Equal(t, ChangeCreate, ev.Type)
+	assert.Equal(t, ItemTypeFolder, ev.ItemType)
 	assert.Empty(t, ev.Hash, "folders have no hash")
 	assert.Equal(t, "photos", ev.Path)
 }
@@ -209,7 +208,7 @@ func TestFullScan_ModifiedFile(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path: "doc.txt", DriveID: driveid.New("d"), ItemID: "i1",
-		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "original content"),
+		ItemType: ItemTypeFile, LocalHash: hashContent(t, "original content"),
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
@@ -219,9 +218,9 @@ func TestFullScan_ModifiedFile(t *testing.T) {
 	require.Len(t, result.Events, 1)
 
 	ev := result.Events[0]
-	assert.Equal(t, synctypes.ChangeModify, ev.Type)
+	assert.Equal(t, ChangeModify, ev.Type)
 	assert.Equal(t, hashContent(t, "updated content"), ev.Hash)
-	assert.Equal(t, synctypes.SourceLocal, ev.Source)
+	assert.Equal(t, SourceLocal, ev.Source)
 }
 
 func TestFullScan_UnchangedFile(t *testing.T) {
@@ -233,7 +232,7 @@ func TestFullScan_UnchangedFile(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path: "stable.txt", DriveID: driveid.New("d"), ItemID: "i1",
-		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, content),
+		ItemType: ItemTypeFile, LocalHash: hashContent(t, content),
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
@@ -251,7 +250,7 @@ func TestFullScan_DeletedFile(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path: "gone.txt", DriveID: driveid.New("d"), ItemID: "i1",
-		ItemType: synctypes.ItemTypeFile, LocalHash: "some-hash",
+		ItemType: ItemTypeFile, LocalHash: "some-hash",
 		LocalSize: 42, LocalSizeKnown: true,
 		LocalMtime: 1234567890,
 	})
@@ -263,7 +262,7 @@ func TestFullScan_DeletedFile(t *testing.T) {
 	require.Len(t, result.Events, 1)
 
 	ev := result.Events[0]
-	assert.Equal(t, synctypes.ChangeDelete, ev.Type)
+	assert.Equal(t, ChangeDelete, ev.Type)
 	assert.True(t, ev.IsDeleted)
 	assert.Equal(t, "gone.txt", ev.Path)
 	assert.Equal(t, "gone.txt", ev.Name)
@@ -280,7 +279,7 @@ func TestFullScan_DeletedFolder(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path: "old-folder", DriveID: driveid.New("d"), ItemID: "f1",
-		ItemType: synctypes.ItemTypeFolder,
+		ItemType: ItemTypeFolder,
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
@@ -290,8 +289,8 @@ func TestFullScan_DeletedFolder(t *testing.T) {
 	require.Len(t, result.Events, 1)
 
 	ev := result.Events[0]
-	assert.Equal(t, synctypes.ChangeDelete, ev.Type)
-	assert.Equal(t, synctypes.ItemTypeFolder, ev.ItemType)
+	assert.Equal(t, ChangeDelete, ev.Type)
+	assert.Equal(t, ItemTypeFolder, ev.ItemType)
 }
 
 func TestFullScan_MtimeChangeNoContentChange(t *testing.T) {
@@ -304,7 +303,7 @@ func TestFullScan_MtimeChangeNoContentChange(t *testing.T) {
 	// Baseline has a different mtime but the same hash.
 	baseline := baselineWith(&BaselineEntry{
 		Path: "stable.txt", DriveID: driveid.New("d"), ItemID: "i1",
-		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, content),
+		ItemType: ItemTypeFile, LocalHash: hashContent(t, content),
 		LocalMtime: 999, // intentionally different from actual file mtime
 	})
 
@@ -332,7 +331,7 @@ func TestFullScan_MtimeSizeFastPath(t *testing.T) {
 	// Baseline matches file's actual mtime, size, and hash — fast path should skip hashing.
 	baseline := baselineWith(&BaselineEntry{
 		Path: "cached.txt", DriveID: driveid.New("d"), ItemID: "i1",
-		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, content),
+		ItemType: ItemTypeFile, LocalHash: hashContent(t, content),
 		LocalSize: info.Size(), LocalSizeKnown: true,
 		LocalMtime: info.ModTime().UnixNano(),
 	})
@@ -360,7 +359,7 @@ func TestFullScan_SameSecondSubsecondDifferenceSkipsFalseModify(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path: "stable.txt", DriveID: driveid.New("d"), ItemID: "i1",
-		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, content),
+		ItemType: ItemTypeFile, LocalHash: hashContent(t, content),
 		LocalSize: info.Size(), LocalSizeKnown: true,
 		LocalMtime: fileTime.Add(700 * time.Millisecond).UnixNano(),
 	})
@@ -394,7 +393,7 @@ func TestFullScan_RacilyCleanForcesHash(t *testing.T) {
 	// Baseline has same mtime and size but different hash.
 	baseline := baselineWith(&BaselineEntry{
 		Path: "racy.txt", DriveID: driveid.New("d"), ItemID: "i1",
-		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, baselineContent),
+		ItemType: ItemTypeFile, LocalHash: hashContent(t, baselineContent),
 		LocalSize: info.Size(), LocalSizeKnown: true,
 		LocalMtime: info.ModTime().UnixNano(),
 	})
@@ -407,7 +406,7 @@ func TestFullScan_RacilyCleanForcesHash(t *testing.T) {
 	require.Len(t, result.Events, 1, "racily clean should force hash")
 
 	ev := result.Events[0]
-	assert.Equal(t, synctypes.ChangeModify, ev.Type)
+	assert.Equal(t, ChangeModify, ev.Type)
 	assert.Equal(t, hashContent(t, actualContent), ev.Hash)
 }
 
@@ -428,7 +427,7 @@ func TestFullScan_SizeChangeForcesHash(t *testing.T) {
 	// Baseline has same mtime but different size — should force hash.
 	baseline := baselineWith(&BaselineEntry{
 		Path: "grown.txt", DriveID: driveid.New("d"), ItemID: "i1",
-		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "short"),
+		ItemType: ItemTypeFile, LocalHash: hashContent(t, "short"),
 		LocalSize: 5, LocalSizeKnown: true,
 		LocalMtime: info.ModTime().UnixNano(),
 	})
@@ -438,7 +437,7 @@ func TestFullScan_SizeChangeForcesHash(t *testing.T) {
 	require.NoError(t, err, "FullScan")
 
 	require.Len(t, result.Events, 1, "size change should force hash")
-	assert.Equal(t, synctypes.ChangeModify, result.Events[0].Type)
+	assert.Equal(t, ChangeModify, result.Events[0].Type)
 }
 
 func TestFullScan_NosyncGuard(t *testing.T) {
@@ -450,7 +449,7 @@ func TestFullScan_NosyncGuard(t *testing.T) {
 	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	_, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 
-	assert.ErrorIs(t, err, synctypes.ErrNosyncGuard)
+	assert.ErrorIs(t, err, ErrNosyncGuard)
 }
 
 func TestFullScan_EmptyDir(t *testing.T) {
@@ -483,7 +482,7 @@ func TestFullScan_SymlinkFollowedByDefault(t *testing.T) {
 
 	linkEvent := findEvent(result.Events, "link.txt")
 	require.NotNil(t, linkEvent)
-	assert.Equal(t, synctypes.ItemTypeFile, linkEvent.ItemType)
+	assert.Equal(t, ItemTypeFile, linkEvent.ItemType)
 	assert.Equal(t, hashContent(t, "content"), linkEvent.Hash)
 }
 
@@ -554,7 +553,7 @@ func TestFullScan_InvalidName(t *testing.T) {
 	for _, path := range []string{"CON", "~$Budget.xlsx"} {
 		item, ok := skipped[path]
 		require.True(t, ok, "%s should be in Skipped", path)
-		assert.Equal(t, synctypes.IssueInvalidFilename, item.Reason)
+		assert.Equal(t, IssueInvalidFilename, item.Reason)
 		assert.NotEmpty(t, item.Detail)
 	}
 }
@@ -580,7 +579,7 @@ func TestFullScan_SharePointRootFormsProducesSkippedItem(t *testing.T) {
 
 	require.Len(t, result.Skipped, 1, "SharePoint root-level forms should be reported as actionable")
 	assert.Equal(t, "forms", result.Skipped[0].Path)
-	assert.Equal(t, synctypes.IssueInvalidFilename, result.Skipped[0].Reason)
+	assert.Equal(t, IssueInvalidFilename, result.Skipped[0].Reason)
 	assert.NotEmpty(t, result.Skipped[0].Detail)
 }
 
@@ -659,12 +658,12 @@ func TestFullScan_NestedDirs(t *testing.T) {
 
 	deepEv := findEvent(result.Events, "a/b/deep.txt")
 	require.NotNil(t, deepEv, "a/b/deep.txt event not found")
-	assert.Equal(t, synctypes.ChangeCreate, deepEv.Type)
+	assert.Equal(t, ChangeCreate, deepEv.Type)
 
 	// Verify folder events exist with correct paths.
 	aEv := findEvent(result.Events, "a")
 	require.NotNil(t, aEv, "folder 'a' event not found")
-	assert.Equal(t, synctypes.ItemTypeFolder, aEv.ItemType)
+	assert.Equal(t, ItemTypeFolder, aEv.ItemType)
 
 	abEv := findEvent(result.Events, "a/b")
 	require.NotNil(t, abEv, "folder 'a/b' event not found")
@@ -683,7 +682,7 @@ func TestFullScan_EmptyFile(t *testing.T) {
 	require.Len(t, result.Events, 1)
 
 	ev := result.Events[0]
-	assert.Equal(t, synctypes.ChangeCreate, ev.Type)
+	assert.Equal(t, ChangeCreate, ev.Type)
 	assert.NotEmpty(t, ev.Hash, "want non-empty hash for empty file")
 	assert.Equal(t, hashContent(t, ""), ev.Hash)
 	assert.Equal(t, int64(0), ev.Size)
@@ -708,15 +707,15 @@ func TestFullScan_MixedChanges(t *testing.T) {
 	baseline := baselineWith(
 		&BaselineEntry{
 			Path: "modified.txt", DriveID: driveid.New("d"), ItemID: "i1",
-			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "original content"),
+			ItemType: ItemTypeFile, LocalHash: hashContent(t, "original content"),
 		},
 		&BaselineEntry{
 			Path: "unchanged.txt", DriveID: driveid.New("d"), ItemID: "i2",
-			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "same content"),
+			ItemType: ItemTypeFile, LocalHash: hashContent(t, "same content"),
 		},
 		&BaselineEntry{
 			Path: "deleted.txt", DriveID: driveid.New("d"), ItemID: "i3",
-			ItemType: synctypes.ItemTypeFile, LocalHash: "some-hash",
+			ItemType: ItemTypeFile, LocalHash: "some-hash",
 		},
 	)
 
@@ -729,15 +728,15 @@ func TestFullScan_MixedChanges(t *testing.T) {
 
 	newEv := findEvent(result.Events, "new.txt")
 	require.NotNil(t, newEv, "new.txt event not found")
-	assert.Equal(t, synctypes.ChangeCreate, newEv.Type)
+	assert.Equal(t, ChangeCreate, newEv.Type)
 
 	modEv := findEvent(result.Events, "modified.txt")
 	require.NotNil(t, modEv, "modified.txt event not found")
-	assert.Equal(t, synctypes.ChangeModify, modEv.Type)
+	assert.Equal(t, ChangeModify, modEv.Type)
 
 	delEv := findEvent(result.Events, "deleted.txt")
 	require.NotNil(t, delEv, "deleted.txt event not found")
-	assert.Equal(t, synctypes.ChangeDelete, delEv.Type)
+	assert.Equal(t, ChangeDelete, delEv.Type)
 }
 
 // ---------------------------------------------------------------------------
@@ -913,9 +912,9 @@ func TestItemTypeFromDirEntry(t *testing.T) {
 
 		switch {
 		case e.IsDir():
-			assert.Equal(t, synctypes.ItemTypeFolder, got, "%s should be ItemTypeFolder", e.Name())
+			assert.Equal(t, ItemTypeFolder, got, "%s should be ItemTypeFolder", e.Name())
 		default:
-			assert.Equal(t, synctypes.ItemTypeFile, got, "%s should be ItemTypeFile", e.Name())
+			assert.Equal(t, ItemTypeFile, got, "%s should be ItemTypeFile", e.Name())
 		}
 	}
 }
@@ -971,7 +970,7 @@ func TestFullScan_NosyncGuardDir(t *testing.T) {
 	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	_, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 
-	assert.ErrorIs(t, err, synctypes.ErrNosyncGuard)
+	assert.ErrorIs(t, err, ErrNosyncGuard)
 }
 
 // Validates: R-2.4
@@ -1130,10 +1129,10 @@ func TestItemTypeFromDirEntry_Table(t *testing.T) {
 	tests := []struct {
 		name  string
 		isDir bool
-		want  synctypes.ItemType
+		want  ItemType
 	}{
-		{"file", false, synctypes.ItemTypeFile},
-		{"directory", true, synctypes.ItemTypeFolder},
+		{"file", false, ItemTypeFile},
+		{"directory", true, ItemTypeFolder},
 	}
 
 	for _, tt := range tests {
@@ -1175,9 +1174,9 @@ func TestFullScan_HashFailureStillEmitsCreate(t *testing.T) {
 
 	ev := findEvent(result.Events, "unreadable.txt")
 	require.NotNil(t, ev, "unreadable file should still produce an event")
-	require.Equal(t, synctypes.ChangeCreate, ev.Type)
+	require.Equal(t, ChangeCreate, ev.Type)
 	require.Empty(t, ev.Hash, "hash should be empty when computation fails")
-	require.Equal(t, synctypes.SourceLocal, ev.Source)
+	require.Equal(t, SourceLocal, ev.Source)
 }
 
 // ---------------------------------------------------------------------------
@@ -1200,7 +1199,7 @@ func TestFullScan_HashFailureModifyStillEmitsEvent(t *testing.T) {
 	// Baseline has a different hash so the slow path (hash check) kicks in.
 	baseline := baselineWith(&BaselineEntry{
 		Path: "unreadable.txt", DriveID: driveid.New("d"), ItemID: "i1",
-		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "original content"),
+		ItemType: ItemTypeFile, LocalHash: hashContent(t, "original content"),
 	})
 
 	// Make file unreadable -- stat still succeeds but hash computation fails.
@@ -1213,9 +1212,9 @@ func TestFullScan_HashFailureModifyStillEmitsEvent(t *testing.T) {
 
 	ev := findEvent(result.Events, "unreadable.txt")
 	require.NotNil(t, ev, "unreadable modified file should still produce an event")
-	require.Equal(t, synctypes.ChangeModify, ev.Type)
+	require.Equal(t, ChangeModify, ev.Type)
 	require.Empty(t, ev.Hash, "hash should be empty when computation fails")
-	require.Equal(t, synctypes.SourceLocal, ev.Source)
+	require.Equal(t, SourceLocal, ev.Source)
 }
 
 // ---------------------------------------------------------------------------
@@ -1310,7 +1309,7 @@ func TestFullScan_PathTooLong(t *testing.T) {
 	// The too-long path should appear in Skipped with IssuePathTooLong.
 	var foundSkip *SkippedItem
 	for i := range result.Skipped {
-		if result.Skipped[i].Reason == synctypes.IssuePathTooLong {
+		if result.Skipped[i].Reason == IssuePathTooLong {
 			foundSkip = &result.Skipped[i]
 			break
 		}
@@ -1355,38 +1354,38 @@ func TestShouldObserve_AllCases(t *testing.T) {
 			name:       "invalid name (CON)",
 			fileName:   "CON",
 			path:       "CON",
-			wantReason: synctypes.IssueInvalidFilename,
+			wantReason: IssueInvalidFilename,
 		},
 		{
 			name:       "invalid char",
 			fileName:   "bad?.txt",
 			path:       "bad?.txt",
-			wantReason: synctypes.IssueInvalidFilename,
+			wantReason: IssueInvalidFilename,
 		},
 		{
 			name:       "reserved pattern (~$)",
 			fileName:   "~$Budget.xlsx",
 			path:       "~$Budget.xlsx",
-			wantReason: synctypes.IssueInvalidFilename,
+			wantReason: IssueInvalidFilename,
 		},
 		{
 			name:       "reserved pattern (_vti_)",
 			fileName:   "_vti_history",
 			path:       "_vti_history",
-			wantReason: synctypes.IssueInvalidFilename,
+			wantReason: IssueInvalidFilename,
 		},
 		{
 			name:       "trailing dot",
 			fileName:   "bad.",
 			path:       "bad.",
-			wantReason: synctypes.IssueInvalidFilename,
+			wantReason: IssueInvalidFilename,
 		},
 		{
 			name:       "sharepoint root forms",
 			fileName:   "forms",
 			path:       "forms",
 			rules:      LocalObservationRules{RejectSharePointRootForms: true},
-			wantReason: synctypes.IssueInvalidFilename,
+			wantReason: IssueInvalidFilename,
 		},
 		{
 			name:     "sharepoint nested forms allowed",
@@ -1399,7 +1398,7 @@ func TestShouldObserve_AllCases(t *testing.T) {
 			name:       "path too long (>400 chars)",
 			fileName:   "file.txt",
 			path:       strings.Repeat("a", 401),
-			wantReason: synctypes.IssuePathTooLong,
+			wantReason: IssuePathTooLong,
 		},
 	}
 
@@ -1446,25 +1445,25 @@ func TestValidateOneDriveName_AllCases(t *testing.T) {
 		{
 			name:       "empty name",
 			input:      "",
-			wantReason: synctypes.IssueInvalidFilename,
+			wantReason: IssueInvalidFilename,
 			wantDetail: true,
 		},
 		{
 			name:       "trailing dot",
 			input:      "file.",
-			wantReason: synctypes.IssueInvalidFilename,
+			wantReason: IssueInvalidFilename,
 			wantDetail: true,
 		},
 		{
 			name:       "reserved name (CON)",
 			input:      "CON",
-			wantReason: synctypes.IssueInvalidFilename,
+			wantReason: IssueInvalidFilename,
 			wantDetail: true,
 		},
 		{
 			name:       "invalid chars (asterisk)",
 			input:      "file*name",
-			wantReason: synctypes.IssueInvalidFilename,
+			wantReason: IssueInvalidFilename,
 			wantDetail: true,
 		},
 	}
@@ -1564,7 +1563,7 @@ func TestHashPhase_PanicRecovery(t *testing.T) {
 				}
 			}
 			require.NotNil(t, found, "panicking file should be in Skipped")
-			assert.Equal(t, synctypes.IssueHashPanic, found.Reason)
+			assert.Equal(t, IssueHashPanic, found.Reason)
 			assert.Contains(t, found.Detail, "panic:")
 		})
 	}
@@ -1598,7 +1597,7 @@ func TestFullScan_HashPanicDoesNotAbort(t *testing.T) {
 	// good.txt should produce an event.
 	goodEv := findEvent(result.Events, "good.txt")
 	require.NotNil(t, goodEv, "good.txt should still produce an event")
-	assert.Equal(t, synctypes.ChangeCreate, goodEv.Type)
+	assert.Equal(t, ChangeCreate, goodEv.Type)
 
 	// bad.txt should NOT produce an event.
 	badEv := findEvent(result.Events, badFileName)
@@ -1613,7 +1612,7 @@ func TestFullScan_HashPanicDoesNotAbort(t *testing.T) {
 		}
 	}
 	require.NotNil(t, badSkip, "panicking file should be in Skipped")
-	assert.Equal(t, synctypes.IssueHashPanic, badSkip.Reason)
+	assert.Equal(t, IssueHashPanic, badSkip.Reason)
 	assert.Contains(t, badSkip.Detail, "corrupted file")
 }
 

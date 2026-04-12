@@ -12,9 +12,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // PermissionHandler encapsulates all permission-related logic extracted from
@@ -78,10 +76,10 @@ func (ph *PermissionHandler) DeniedPrefixes(ctx context.Context) []string {
 // and returns a decision for the engine to apply.
 func (ph *PermissionHandler) handle403(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	failedPath string,
-	actionType synctypes.ActionType,
-	shortcuts []synctypes.Shortcut,
+	actionType ActionType,
+	shortcuts []Shortcut,
 ) PermissionCheckDecision {
 	if ph.permChecker == nil {
 		return PermissionCheckDecision{}
@@ -173,7 +171,7 @@ func (ph *PermissionHandler) handlePermissionCheckError(
 	err error,
 	failedPath,
 	parentFolder string,
-	actionType synctypes.ActionType,
+	actionType ActionType,
 	remoteDriveID driveid.ID,
 ) PermissionCheckDecision {
 	if errors.Is(err, graph.ErrNotFound) {
@@ -214,22 +212,22 @@ func (ph *PermissionHandler) remoteBoundaryDecision(
 	errMsg string,
 	httpStatus int,
 	failedPath string,
-	actionType synctypes.ActionType,
+	actionType ActionType,
 	failureDriveID driveid.ID,
 ) PermissionCheckDecision {
-	scopeKey := synctypes.SKPermRemote(boundary)
+	scopeKey := SKPermRemote(boundary)
 
 	return PermissionCheckDecision{
 		Matched: true,
 		Kind:    permissionCheckActivateDerivedScope,
-		Failure: syncstore.SyncFailureParams{
+		Failure: SyncFailureParams{
 			Path:       failedPath,
 			DriveID:    failureDriveID,
 			Direction:  directionFromAction(actionType),
 			ActionType: actionType,
-			Role:       synctypes.FailureRoleHeld,
-			Category:   synctypes.CategoryTransient,
-			IssueType:  synctypes.IssueSharedFolderBlocked,
+			Role:       FailureRoleHeld,
+			Category:   CategoryTransient,
+			IssueType:  IssueSharedFolderBlocked,
 			ErrMsg:     errMsg,
 			HTTPStatus: httpStatus,
 			ScopeKey:   scopeKey,
@@ -243,7 +241,7 @@ func (ph *PermissionHandler) remoteBoundaryDecision(
 // walkPermissionBoundary walks UP the folder hierarchy to find the highest
 // read-only ancestor. Returns the boundary folder path.
 func (ph *PermissionHandler) walkPermissionBoundary(
-	ctx context.Context, bl *syncstore.Baseline, startFolder string, sc *synctypes.Shortcut, remoteDriveID driveid.ID,
+	ctx context.Context, bl *Baseline, startFolder string, sc *Shortcut, remoteDriveID driveid.ID,
 ) string {
 	boundary := startFolder
 
@@ -279,17 +277,17 @@ func (ph *PermissionHandler) walkPermissionBoundary(
 // and writes resume. Runs every pass (typically 5 min in watch mode).
 func (ph *PermissionHandler) recheckPermissions(
 	ctx context.Context,
-	bl *syncstore.Baseline,
-	shortcuts []synctypes.Shortcut,
+	bl *Baseline,
+	shortcuts []Shortcut,
 ) []PermissionRecheckDecision {
 	return ph.recheckPermissionsForScopeKeys(ctx, bl, shortcuts, nil)
 }
 
 func (ph *PermissionHandler) recheckPermissionsForScopeKeys(
 	ctx context.Context,
-	bl *syncstore.Baseline,
-	shortcuts []synctypes.Shortcut,
-	scopeFilter map[synctypes.ScopeKey]bool,
+	bl *Baseline,
+	shortcuts []Shortcut,
+	scopeFilter map[ScopeKey]bool,
 ) []PermissionRecheckDecision {
 	if ph.permChecker == nil {
 		return nil
@@ -301,7 +299,7 @@ func (ph *PermissionHandler) recheckPermissionsForScopeKeys(
 	}
 
 	var decisions []PermissionRecheckDecision
-	seen := make(map[synctypes.ScopeKey]bool, len(issues))
+	seen := make(map[ScopeKey]bool, len(issues))
 
 	for i := range issues {
 		issue := &issues[i]
@@ -384,11 +382,11 @@ func (ph *PermissionHandler) recheckPermissionsForScopeKeys(
 	return decisions
 }
 
-func (ph *PermissionHandler) findPermissionShortcut(shortcuts []synctypes.Shortcut, path string) *synctypes.Shortcut {
+func (ph *PermissionHandler) findPermissionShortcut(shortcuts []Shortcut, path string) *Shortcut {
 	return findShortcutForPath(ph.permissionShortcuts(shortcuts), path)
 }
 
-func (ph *PermissionHandler) permissionShortcuts(shortcuts []synctypes.Shortcut) []synctypes.Shortcut {
+func (ph *PermissionHandler) permissionShortcuts(shortcuts []Shortcut) []Shortcut {
 	if ph.rootItemID == "" {
 		return shortcuts
 	}
@@ -399,9 +397,9 @@ func (ph *PermissionHandler) permissionShortcuts(shortcuts []synctypes.Shortcut)
 		}
 	}
 
-	augmented := make([]synctypes.Shortcut, 0, len(shortcuts)+1)
+	augmented := make([]Shortcut, 0, len(shortcuts)+1)
 	augmented = append(augmented, shortcuts...)
-	augmented = append(augmented, synctypes.Shortcut{
+	augmented = append(augmented, Shortcut{
 		ItemID:      ph.rootItemID,
 		RemoteDrive: ph.driveID.String(),
 		RemoteItem:  ph.rootItemID,
@@ -412,10 +410,10 @@ func (ph *PermissionHandler) permissionShortcuts(shortcuts []synctypes.Shortcut)
 }
 
 func resolveBoundaryRemoteItemID(
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	boundaryPath string,
 	driveID driveid.ID,
-	sc *synctypes.Shortcut,
+	sc *Shortcut,
 ) string {
 	if sc != nil && boundaryPath == sc.LocalPath {
 		return sc.RemoteItem
@@ -534,20 +532,20 @@ func (ph *PermissionHandler) handleLocalPermission(
 
 func (ph *PermissionHandler) localFilePermissionDecision(
 	path string,
-	actionType synctypes.ActionType,
+	actionType ActionType,
 	errMsg string,
 ) PermissionCheckDecision {
 	return PermissionCheckDecision{
 		Matched: true,
 		Kind:    permissionCheckRecordFileFailure,
-		Failure: syncstore.SyncFailureParams{
+		Failure: SyncFailureParams{
 			Path:       path,
 			DriveID:    ph.driveID,
 			Direction:  directionFromAction(actionType),
 			ActionType: actionType,
-			Role:       synctypes.FailureRoleItem,
-			IssueType:  synctypes.IssueLocalPermissionDenied,
-			Category:   synctypes.CategoryActionable,
+			Role:       FailureRoleItem,
+			IssueType:  IssueLocalPermissionDenied,
+			Category:   CategoryActionable,
 			ErrMsg:     errMsg,
 		},
 	}
@@ -556,29 +554,29 @@ func (ph *PermissionHandler) localFilePermissionDecision(
 func (ph *PermissionHandler) localDirectoryPermissionDecision(
 	boundaryPath string,
 	triggerPath string,
-	actionType synctypes.ActionType,
+	actionType ActionType,
 ) PermissionCheckDecision {
-	scopeKey := synctypes.SKPermDir(boundaryPath)
+	scopeKey := SKPermDir(boundaryPath)
 
 	return PermissionCheckDecision{
 		Matched:  true,
 		Kind:     permissionCheckActivateBoundaryScope,
 		ScopeKey: scopeKey,
-		Failure: syncstore.SyncFailureParams{
+		Failure: SyncFailureParams{
 			Path:       boundaryPath,
 			DriveID:    ph.driveID,
 			Direction:  directionFromAction(actionType),
 			ActionType: actionType,
-			Role:       synctypes.FailureRoleBoundary,
-			IssueType:  synctypes.IssueLocalPermissionDenied,
-			Category:   synctypes.CategoryActionable,
+			Role:       FailureRoleBoundary,
+			IssueType:  IssueLocalPermissionDenied,
+			Category:   CategoryActionable,
 			ErrMsg:     "directory not accessible (check filesystem permissions)",
 			ScopeKey:   scopeKey,
 		},
-		ScopeBlock: syncstore.ScopeBlock{
+		ScopeBlock: ScopeBlock{
 			Key:          scopeKey,
-			IssueType:    synctypes.IssueLocalPermissionDenied,
-			TimingSource: synctypes.ScopeTimingNone,
+			IssueType:    IssueLocalPermissionDenied,
+			TimingSource: ScopeTimingNone,
 			BlockedAt:    ph.nowFn(),
 		},
 		BoundaryPath: boundaryPath,
@@ -604,7 +602,7 @@ func (ph *PermissionHandler) deepestDeniedBoundary(parentDir string) string {
 // at the start of each sync pass. If a directory is now accessible, clears
 // the failure and releases the scope block (R-2.10.13).
 func (ph *PermissionHandler) recheckLocalPermissions(ctx context.Context) []PermissionRecheckDecision {
-	issues, err := ph.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueLocalPermissionDenied)
+	issues, err := ph.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
 	if err != nil || len(issues) == 0 {
 		return nil
 	}
@@ -656,7 +654,7 @@ func (ph *PermissionHandler) clearScannerResolvedPermissions(
 		return nil
 	}
 
-	issues, err := ph.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueLocalPermissionDenied)
+	issues, err := ph.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
 	if err != nil || len(issues) == 0 {
 		return nil
 	}

@@ -4,8 +4,6 @@ import (
 	"log/slog"
 	stdsync "sync"
 	"sync/atomic"
-
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // trackedNode is an internal wrapper around *TrackedAction that adds
@@ -201,7 +199,7 @@ func (g *DepGraph) WireDeps(id int64, depIDs []int64) *TrackedAction {
 // MarkTrial marks an already-registered action as a scope trial. This lets the
 // engine tag an action before it becomes ready, so the metadata survives normal
 // dependency resolution instead of relying on a separate pending-trial map.
-func (g *DepGraph) MarkTrial(id int64, scopeKey synctypes.ScopeKey) bool {
+func (g *DepGraph) MarkTrial(id int64, scopeKey ScopeKey) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 

@@ -8,7 +8,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // ---------------------------------------------------------------------------
@@ -27,7 +26,7 @@ func assertPerSideHashNoLoop(t *testing.T, path, localHash, remoteHash string) {
 		Path:       path,
 		DriveID:    driveid.New(synctest.TestDriveID),
 		ItemID:     "item1",
-		ItemType:   synctypes.ItemTypeFile,
+		ItemType:   ItemTypeFile,
 		LocalHash:  localHash,
 		RemoteHash: remoteHash,
 	})
@@ -35,19 +34,19 @@ func assertPerSideHashNoLoop(t *testing.T, path, localHash, remoteHash string) {
 	changes := []PathChanges{{
 		Path: path,
 		RemoteEvents: []ChangeEvent{{
-			Source:   synctypes.SourceRemote,
-			Type:     synctypes.ChangeModify,
+			Source:   SourceRemote,
+			Type:     ChangeModify,
 			Path:     path,
-			ItemType: synctypes.ItemTypeFile,
+			ItemType: ItemTypeFile,
 			Hash:     remoteHash,
 			ItemID:   "item1",
 			DriveID:  driveid.New(synctest.TestDriveID),
 		}},
 		LocalEvents: []ChangeEvent{{
-			Source:   synctypes.SourceLocal,
-			Type:     synctypes.ChangeModify,
+			Source:   SourceLocal,
+			Type:     ChangeModify,
 			Path:     path,
-			ItemType: synctypes.ItemTypeFile,
+			ItemType: ItemTypeFile,
 			Hash:     localHash,
 		}},
 	}}
@@ -87,7 +86,7 @@ func TestPerSideHash_5RunStabilityProof(t *testing.T) {
 		Path:       "stable.docx",
 		DriveID:    driveid.New(synctest.TestDriveID),
 		ItemID:     "item1",
-		ItemType:   synctypes.ItemTypeFile,
+		ItemType:   ItemTypeFile,
 		LocalHash:  "localHashXXX",
 		RemoteHash: "remoteHashYYY",
 	})
@@ -100,10 +99,10 @@ func TestPerSideHash_5RunStabilityProof(t *testing.T) {
 				Path: "stable.docx",
 				RemoteEvents: []ChangeEvent{
 					{
-						Source:   synctypes.SourceRemote,
-						Type:     synctypes.ChangeModify,
+						Source:   SourceRemote,
+						Type:     ChangeModify,
 						Path:     "stable.docx",
-						ItemType: synctypes.ItemTypeFile,
+						ItemType: ItemTypeFile,
 						Hash:     "remoteHashYYY",
 						ItemID:   "item1",
 						DriveID:  driveid.New(synctest.TestDriveID),
@@ -111,10 +110,10 @@ func TestPerSideHash_5RunStabilityProof(t *testing.T) {
 				},
 				LocalEvents: []ChangeEvent{
 					{
-						Source:   synctypes.SourceLocal,
-						Type:     synctypes.ChangeModify,
+						Source:   SourceLocal,
+						Type:     ChangeModify,
 						Path:     "stable.docx",
-						ItemType: synctypes.ItemTypeFile,
+						ItemType: ItemTypeFile,
 						Hash:     "localHashXXX",
 					},
 				},
@@ -135,7 +134,7 @@ func TestZeroHashFallback_5RunStabilityProof(t *testing.T) {
 		Path:            "hashless.docx",
 		DriveID:         driveid.New(synctest.TestDriveID),
 		ItemID:          "item1",
-		ItemType:        synctypes.ItemTypeFile,
+		ItemType:        ItemTypeFile,
 		LocalSize:       0,
 		LocalSizeKnown:  true,
 		RemoteSize:      0,
@@ -153,10 +152,10 @@ func TestZeroHashFallback_5RunStabilityProof(t *testing.T) {
 				Path: "hashless.docx",
 				RemoteEvents: []ChangeEvent{
 					{
-						Source:   synctypes.SourceRemote,
-						Type:     synctypes.ChangeModify,
+						Source:   SourceRemote,
+						Type:     ChangeModify,
 						Path:     "hashless.docx",
-						ItemType: synctypes.ItemTypeFile,
+						ItemType: ItemTypeFile,
 						ItemID:   "item1",
 						DriveID:  driveid.New(synctest.TestDriveID),
 						Size:     0,
@@ -166,10 +165,10 @@ func TestZeroHashFallback_5RunStabilityProof(t *testing.T) {
 				},
 				LocalEvents: []ChangeEvent{
 					{
-						Source:   synctypes.SourceLocal,
-						Type:     synctypes.ChangeModify,
+						Source:   SourceLocal,
+						Type:     ChangeModify,
 						Path:     "hashless.docx",
-						ItemType: synctypes.ItemTypeFile,
+						ItemType: ItemTypeFile,
 						Size:     0,
 						Mtime:    100,
 					},
@@ -195,7 +194,7 @@ func TestPerSideHash_NormalDriveUnaffected(t *testing.T) {
 		Path:       "normal.txt",
 		DriveID:    driveid.New(synctest.TestDriveID),
 		ItemID:     "item1",
-		ItemType:   synctypes.ItemTypeFile,
+		ItemType:   ItemTypeFile,
 		LocalHash:  "sameHash",
 		RemoteHash: "sameHash",
 	})
@@ -206,10 +205,10 @@ func TestPerSideHash_NormalDriveUnaffected(t *testing.T) {
 			Path: "normal.txt",
 			RemoteEvents: []ChangeEvent{
 				{
-					Source:   synctypes.SourceRemote,
-					Type:     synctypes.ChangeModify,
+					Source:   SourceRemote,
+					Type:     ChangeModify,
 					Path:     "normal.txt",
-					ItemType: synctypes.ItemTypeFile,
+					ItemType: ItemTypeFile,
 					Hash:     "newRemoteHash",
 					ItemID:   "item1",
 					DriveID:  driveid.New(synctest.TestDriveID),

@@ -7,12 +7,10 @@ import (
 	"path"
 
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 type remoteScopeResult struct {
-	observed []syncstore.ObservedItem
+	observed []ObservedItem
 	emitted  []ChangeEvent
 }
 
@@ -40,7 +38,7 @@ func (flow *engineFlow) applyScopeState(
 		return err
 	}
 
-	if err := flow.engine.baseline.ApplyScopeState(ctx, syncstore.ScopeStateApplyRequest{
+	if err := flow.engine.baseline.ApplyScopeState(ctx, ScopeStateApplyRequest{
 		State: state,
 	}); err != nil {
 		return fmt.Errorf("apply scope state: %w", err)
@@ -56,19 +54,19 @@ func applyRemoteScope(
 	events []ChangeEvent,
 ) remoteScopeResult {
 	result := remoteScopeResult{
-		observed: make([]syncstore.ObservedItem, 0, len(events)),
+		observed: make([]ObservedItem, 0, len(events)),
 		emitted:  make([]ChangeEvent, 0, len(events)),
 	}
 
 	for i := range events {
 		ev := events[i]
-		if ev.Source != synctypes.SourceRemote {
+		if ev.Source != SourceRemote {
 			result.emitted = append(result.emitted, ev)
 			continue
 		}
 
 		switch ev.Type {
-		case synctypes.ChangeMove:
+		case ChangeMove:
 			oldInScope := snapshot.AllowsPath(ev.OldPath)
 			newReason := snapshot.ExclusionReason(ev.Path)
 			newInScope := newReason == syncscope.ExclusionNone
@@ -80,7 +78,7 @@ func applyRemoteScope(
 				result.emitted = append(result.emitted, ev)
 			case oldInScope && !newInScope:
 				deleteEv := ev
-				deleteEv.Type = synctypes.ChangeDelete
+				deleteEv.Type = ChangeDelete
 				deleteEv.Path = ev.OldPath
 				deleteEv.OldPath = ""
 				deleteEv.Name = path.Base(ev.OldPath)
@@ -89,12 +87,12 @@ func applyRemoteScope(
 				result.emitted = append(result.emitted, deleteEv)
 			case !oldInScope && newInScope:
 				createEv := ev
-				createEv.Type = synctypes.ChangeCreate
+				createEv.Type = ChangeCreate
 				createEv.OldPath = ""
 				createEv.IsDeleted = false
 				result.emitted = append(result.emitted, createEv)
 			}
-		case synctypes.ChangeCreate, synctypes.ChangeModify, synctypes.ChangeDelete, synctypes.ChangeShortcut:
+		case ChangeCreate, ChangeModify, ChangeDelete, ChangeShortcut:
 			reason := snapshot.ExclusionReason(ev.Path)
 			result.observed = appendObservedEvent(logger, result.observed, &ev, generation, reason)
 			if reason == syncscope.ExclusionNone {
@@ -108,11 +106,11 @@ func applyRemoteScope(
 
 func appendObservedEvent(
 	logger *slog.Logger,
-	items []syncstore.ObservedItem,
+	items []ObservedItem,
 	ev *ChangeEvent,
 	generation int64,
 	reason syncscope.ExclusionReason,
-) []syncstore.ObservedItem {
+) []ObservedItem {
 	if ev.ItemID == "" {
 		if logger != nil {
 			logger.Warn("changeEventsToObservedItems: skipping event with empty ItemID",
@@ -125,7 +123,7 @@ func appendObservedEvent(
 
 	filtered := reason != syncscope.ExclusionNone
 
-	return append(items, syncstore.ObservedItem{
+	return append(items, ObservedItem{
 		DriveID:          ev.DriveID,
 		ItemID:           ev.ItemID,
 		ParentID:         ev.ParentID,
@@ -142,14 +140,14 @@ func appendObservedEvent(
 	})
 }
 
-func mapFilterReason(reason syncscope.ExclusionReason) synctypes.RemoteFilterReason {
+func mapFilterReason(reason syncscope.ExclusionReason) RemoteFilterReason {
 	switch reason {
 	case syncscope.ExclusionNone:
-		return synctypes.RemoteFilterNone
+		return RemoteFilterNone
 	case syncscope.ExclusionMarkerScope:
-		return synctypes.RemoteFilterMarkerScope
+		return RemoteFilterMarkerScope
 	case syncscope.ExclusionPathScope:
-		return synctypes.RemoteFilterPathScope
+		return RemoteFilterPathScope
 	default:
 		panic(fmt.Sprintf("unknown exclusion reason %q", reason))
 	}

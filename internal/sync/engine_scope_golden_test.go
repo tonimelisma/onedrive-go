@@ -10,7 +10,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 const (
@@ -188,7 +187,7 @@ func buildObservationSessionPlanShortcutOnly(t *testing.T) (*engineFlow, *Observ
 		Baseline: emptyBaseline(),
 		SyncMode: SyncBidirectional,
 		Purpose:  observationPlanPurposeOneShot,
-		Shortcuts: []synctypes.Shortcut{{
+		Shortcuts: []Shortcut{{
 			ItemID:      "sc-1",
 			RemoteDrive: "drv-a",
 			RemoteItem:  "item-a",
@@ -201,7 +200,7 @@ func buildObservationSessionPlanShortcutOnly(t *testing.T) (*engineFlow, *Observ
 
 func buildObservationSessionPlanCombined(
 	t *testing.T,
-	shortcuts []synctypes.Shortcut,
+	shortcuts []Shortcut,
 	suppressed map[string]struct{},
 ) (*engineFlow, *ObservationSessionPlan) {
 	t.Helper()
@@ -251,7 +250,7 @@ func observationSessionPlanGoldenCases() []observationSessionPlanGoldenCase {
 			goldenPath: "observation_session_plan/combined_primary_plus_shortcuts.golden.json",
 			build: func(t *testing.T) (*engineFlow, *ObservationSessionPlan) {
 				t.Helper()
-				return buildObservationSessionPlanCombined(t, []synctypes.Shortcut{{
+				return buildObservationSessionPlanCombined(t, []Shortcut{{
 					ItemID:      "sc-1",
 					RemoteDrive: "drv-a",
 					RemoteItem:  "item-a",
@@ -264,7 +263,7 @@ func observationSessionPlanGoldenCases() []observationSessionPlanGoldenCase {
 			goldenPath: "observation_session_plan/combined_with_suppressed_shortcuts.golden.json",
 			build: func(t *testing.T) (*engineFlow, *ObservationSessionPlan) {
 				t.Helper()
-				return buildObservationSessionPlanCombined(t, []synctypes.Shortcut{
+				return buildObservationSessionPlanCombined(t, []Shortcut{
 					{
 						ItemID:      "sc-1",
 						RemoteDrive: "drv-a",

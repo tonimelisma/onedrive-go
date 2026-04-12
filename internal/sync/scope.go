@@ -3,7 +3,7 @@
 //
 // ScopeState maintains sliding windows for scope escalation. The engine
 // calls UpdateScope after each worker result; when a threshold is crossed,
-// it returns a ScopeUpdateResult and the engine creates a syncstore.ScopeBlock.
+// it returns a ScopeUpdateResult and the engine creates a ScopeBlock.
 //
 // Detection thresholds (failure-redesign.md §7.3.1):
 //   - throttle:target:* (429) — immediate, single response
@@ -14,7 +14,7 @@
 // Trial interval computation is centralized in computeTrialInterval()
 // (engine.go), not here. See R-2.10.14.
 //
-// Type definitions (ScopeKey, ScopeKeyKind, syncstore.ScopeBlock, ScopeUpdateResult,
+// Type definitions (ScopeKey, ScopeKeyKind, ScopeBlock, ScopeUpdateResult,
 // ScopeBlockStore) are in synctypes and re-exported via types.go.
 package sync
 
@@ -22,8 +22,6 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
-
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // Scope detection thresholds.
@@ -53,7 +51,7 @@ const (
 // engine-owned result loop — all calls come from processWorkerResult on one
 // goroutine.
 type ScopeState struct {
-	windows map[synctypes.ScopeKey]*slidingWindow
+	windows map[ScopeKey]*slidingWindow
 	nowFunc func() time.Time
 	logger  *slog.Logger
 }
@@ -61,7 +59,7 @@ type ScopeState struct {
 // NewScopeState creates a ScopeState with the given clock and logger.
 func NewScopeState(nowFunc func() time.Time, logger *slog.Logger) *ScopeState {
 	return &ScopeState{
-		windows: make(map[synctypes.ScopeKey]*slidingWindow),
+		windows: make(map[ScopeKey]*slidingWindow),
 		nowFunc: nowFunc,
 		logger:  logger,
 	}
@@ -76,7 +74,7 @@ func NewScopeState(nowFunc func() time.Time, logger *slog.Logger) *ScopeState {
 //   - 507 own-drive → sliding window quota:own (3 unique paths / 10s)
 //   - 507 shortcut → sliding window quota:shortcut:$key (3 unique paths / 10s)
 //   - 5xx (no Retry-After) → sliding window service (5 unique paths / 30s)
-func (ss *ScopeState) UpdateScope(r *WorkerResult) synctypes.ScopeUpdateResult {
+func (ss *ScopeState) UpdateScope(r *WorkerResult) ScopeUpdateResult {
 	targetDriveID := r.TargetDriveID
 	if targetDriveID.IsZero() {
 		targetDriveID = r.DriveID
@@ -85,40 +83,40 @@ func (ss *ScopeState) UpdateScope(r *WorkerResult) synctypes.ScopeUpdateResult {
 	switch {
 	case r.HTTPStatus == http.StatusTooManyRequests:
 		// Immediate block — server signal, single response triggers (R-2.10.26).
-		scopeKey := synctypes.ScopeKeyForResult(r.HTTPStatus, targetDriveID, r.ShortcutKey)
+		scopeKey := ScopeKeyForResult(r.HTTPStatus, targetDriveID, r.ShortcutKey)
 		if scopeKey.IsZero() {
-			return synctypes.ScopeUpdateResult{}
+			return ScopeUpdateResult{}
 		}
-		return synctypes.ScopeUpdateResult{
+		return ScopeUpdateResult{
 			Block:      true,
 			ScopeKey:   scopeKey,
-			IssueType:  synctypes.IssueRateLimited,
+			IssueType:  IssueRateLimited,
 			RetryAfter: r.RetryAfter,
 		}
 
 	case r.HTTPStatus == http.StatusServiceUnavailable && r.RetryAfter > 0:
 		// Immediate block — 503 with Retry-After is a server signal (R-2.10.3).
-		return synctypes.ScopeUpdateResult{
+		return ScopeUpdateResult{
 			Block:      true,
-			ScopeKey:   synctypes.SKService(),
-			IssueType:  synctypes.IssueServiceOutage,
+			ScopeKey:   SKService(),
+			IssueType:  IssueServiceOutage,
 			RetryAfter: r.RetryAfter,
 		}
 
 	case r.HTTPStatus == http.StatusInsufficientStorage:
 		// Quota failure — scope depends on target drive (R-2.10.1, R-2.10.17).
-		sk := synctypes.ScopeKeyForResult(r.HTTPStatus, targetDriveID, r.ShortcutKey)
-		return ss.checkWindow(sk, r.Path, quotaWindowThreshold, quotaWindowDuration, synctypes.IssueQuotaExceeded)
+		sk := ScopeKeyForResult(r.HTTPStatus, targetDriveID, r.ShortcutKey)
+		return ss.checkWindow(sk, r.Path, quotaWindowThreshold, quotaWindowDuration, IssueQuotaExceeded)
 
 	case r.HTTPStatus >= http.StatusInternalServerError:
 		// Service error — feed into service sliding window (R-2.10.28, R-2.10.29).
-		sk := synctypes.ScopeKeyForResult(r.HTTPStatus, targetDriveID, r.ShortcutKey)
+		sk := ScopeKeyForResult(r.HTTPStatus, targetDriveID, r.ShortcutKey)
 		return ss.checkWindow(sk, r.Path,
 			serviceWindowThreshold, serviceWindowDuration,
-			synctypes.IssueServiceOutage)
+			IssueServiceOutage)
 
 	default:
-		return synctypes.ScopeUpdateResult{}
+		return ScopeUpdateResult{}
 	}
 }
 
@@ -128,20 +126,20 @@ func (ss *ScopeState) UpdateScope(r *WorkerResult) synctypes.ScopeUpdateResult {
 func (ss *ScopeState) RecordSuccess(r *WorkerResult) {
 	// Success resets all potentially-relevant windows for this action's scope.
 	if r.ShortcutKey != "" {
-		delete(ss.windows, synctypes.SKQuotaShortcut(r.ShortcutKey))
+		delete(ss.windows, SKQuotaShortcut(r.ShortcutKey))
 	} else {
-		delete(ss.windows, synctypes.SKQuotaOwn())
+		delete(ss.windows, SKQuotaOwn())
 	}
 	// Also reset service window — a successful request proves the service is up.
-	delete(ss.windows, synctypes.SKService())
+	delete(ss.windows, SKService())
 }
 
 // checkWindow adds a failure to the named sliding window and returns a
 // ScopeUpdateResult indicating whether the threshold was crossed.
 func (ss *ScopeState) checkWindow(
-	sk synctypes.ScopeKey, path string, threshold int, window time.Duration,
+	sk ScopeKey, path string, threshold int, window time.Duration,
 	issueType string,
-) synctypes.ScopeUpdateResult {
+) ScopeUpdateResult {
 	now := ss.nowFunc()
 
 	w, ok := ss.windows[sk]
@@ -161,14 +159,14 @@ func (ss *ScopeState) checkWindow(
 		)
 		// Reset window after triggering to avoid re-triggering on next failure.
 		delete(ss.windows, sk)
-		return synctypes.ScopeUpdateResult{
+		return ScopeUpdateResult{
 			Block:     true,
 			ScopeKey:  sk,
 			IssueType: issueType,
 		}
 	}
 
-	return synctypes.ScopeUpdateResult{}
+	return ScopeUpdateResult{}
 }
 
 // slidingWindow tracks unique failed paths within a time window for

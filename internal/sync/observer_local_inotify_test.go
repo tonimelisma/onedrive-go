@@ -13,7 +13,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // ---------------------------------------------------------------------------
@@ -32,9 +31,9 @@ func TestEstimateDirCount_WithFolders(t *testing.T) {
 	t.Parallel()
 
 	bl := newBaselineForTest([]*BaselineEntry{
-		{Path: "docs", ItemType: synctypes.ItemTypeFolder},
-		{Path: "docs/sub", ItemType: synctypes.ItemTypeFolder},
-		{Path: "file.txt", ItemType: synctypes.ItemTypeFile},
+		{Path: "docs", ItemType: ItemTypeFolder},
+		{Path: "docs/sub", ItemType: ItemTypeFolder},
+		{Path: "file.txt", ItemType: ItemTypeFile},
 	})
 
 	obs := NewLocalObserver(bl, synctest.TestLogger(t), 0)
@@ -60,7 +59,7 @@ func TestAddWatchesRecursive_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 	err := obs.AddWatchesRecursive(t.Context(), watcher, mustOpenSyncTree(t, root))
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, synctypes.ErrWatchLimitExhausted,
+	assert.ErrorIs(t, err, ErrWatchLimitExhausted,
 		"expected ErrWatchLimitExhausted, got: %v", err)
 }
 
@@ -77,7 +76,7 @@ func TestAddWatchesRecursive_ENOSPCRollsBackAddedWatches(t *testing.T) {
 	err := obs.AddWatchesRecursive(t.Context(), watcher, mustOpenSyncTree(t, root))
 
 	require.Error(t, err)
-	require.ErrorIs(t, err, synctypes.ErrWatchLimitExhausted)
+	require.ErrorIs(t, err, ErrWatchLimitExhausted)
 	assert.Equal(t, []string{
 		filepath.Join(root, "a"),
 		root,
@@ -161,7 +160,7 @@ func TestWatch_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 	err := obs.Watch(ctx, mustOpenSyncTree(t, root), events)
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, synctypes.ErrWatchLimitExhausted,
+	assert.ErrorIs(t, err, ErrWatchLimitExhausted,
 		"Watch should return ErrWatchLimitExhausted, got: %v", err)
 }
 
@@ -205,6 +204,6 @@ func TestFullScan_NonexistentSyncRoot_ReturnsError(t *testing.T) {
 	_, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, nonexistent))
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, synctypes.ErrSyncRootMissing,
+	assert.ErrorIs(t, err, ErrSyncRootMissing,
 		"FullScan should return ErrSyncRootMissing, got: %v", err)
 }

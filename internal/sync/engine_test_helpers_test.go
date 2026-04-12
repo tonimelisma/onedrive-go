@@ -19,8 +19,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
 
@@ -216,8 +214,8 @@ func testThrottleDriveID() driveid.ID {
 	return driveid.New(engineTestDriveID)
 }
 
-func testThrottleScope() synctypes.ScopeKey {
-	return synctypes.SKThrottleDrive(testThrottleDriveID())
+func testThrottleScope() ScopeKey {
+	return SKThrottleDrive(testThrottleDriveID())
 }
 
 type testEngine struct {
@@ -500,12 +498,12 @@ func setTestScopeBlock(t *testing.T, eng *testEngine, block *ScopeBlock) {
 	}
 	if block.TimingSource == "" {
 		if block.NextTrialAt.IsZero() && block.TrialInterval == 0 {
-			block.TimingSource = synctypes.ScopeTimingNone
+			block.TimingSource = ScopeTimingNone
 		} else {
-			block.TimingSource = synctypes.ScopeTimingBackoff
+			block.TimingSource = ScopeTimingBackoff
 		}
 	}
-	if block.TimingSource != synctypes.ScopeTimingNone && block.NextTrialAt.IsZero() {
+	if block.TimingSource != ScopeTimingNone && block.NextTrialAt.IsZero() {
 		block.NextTrialAt = block.BlockedAt.Add(block.TrialInterval)
 	}
 	if !block.Key.IsPermRemote() {
@@ -570,7 +568,7 @@ func handleRemovedShortcutsForTest(
 	eng *testEngine,
 	ctx context.Context,
 	deletedItemIDs map[string]bool,
-	shortcuts []synctypes.Shortcut,
+	shortcuts []Shortcut,
 ) error {
 	t.Helper()
 	return testShortcutCoordinator(t, eng).handleRemovedShortcuts(ctx, deletedItemIDs, shortcuts)
@@ -583,12 +581,20 @@ func loadActiveScopesForTest(t *testing.T, eng *testEngine, ctx context.Context)
 
 func createEventFromDBForTest(t *testing.T, eng *testEngine, ctx context.Context, row *SyncFailureRow) *ChangeEvent {
 	t.Helper()
-	return testEngineFlow(t, eng).createEventFromDB(ctx, row)
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+	return testEngineFlow(t, eng).buildRetryCandidate(ctx, bl, row).event
 }
 
 func isFailureResolvedForTest(t *testing.T, eng *testEngine, ctx context.Context, row *SyncFailureRow) bool {
 	t.Helper()
-	return testEngineFlow(t, eng).isFailureResolved(ctx, row)
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+	candidate := testEngineFlow(t, eng).buildRetryCandidate(ctx, bl, row)
+	if candidate.resolved {
+		testEngineFlow(t, eng).clearFailureCandidate(ctx, row, "test resolution")
+	}
+	return candidate.resolved
 }
 
 func clearFailureCandidateForTest(
@@ -623,13 +629,13 @@ func suppressedShortcutTargetsForTest(t *testing.T, eng *testEngine, watch *watc
 	return testScopeController(t, eng).suppressedShortcutTargets(watch)
 }
 
-func releaseTestScope(t *testing.T, eng *testEngine, ctx context.Context, key synctypes.ScopeKey) error {
+func releaseTestScope(t *testing.T, eng *testEngine, ctx context.Context, key ScopeKey) error {
 	t.Helper()
 	rt, _ := lookupTestWatchRuntime(eng)
 	return testScopeController(t, eng).releaseScope(ctx, rt, key)
 }
 
-func discardTestScope(t *testing.T, eng *testEngine, ctx context.Context, key synctypes.ScopeKey) error {
+func discardTestScope(t *testing.T, eng *testEngine, ctx context.Context, key ScopeKey) error {
 	t.Helper()
 	rt, _ := lookupTestWatchRuntime(eng)
 	return testScopeController(t, eng).discardScope(ctx, rt, key)
@@ -641,13 +647,13 @@ func assertTestCurrentScopeInvariants(t *testing.T, eng *testEngine, ctx context
 	return testEngineFlow(t, eng).assertCurrentInvariants(ctx, rt)
 }
 
-func assertReleasedScopeForTest(t *testing.T, eng *testEngine, ctx context.Context, key synctypes.ScopeKey) error {
+func assertReleasedScopeForTest(t *testing.T, eng *testEngine, ctx context.Context, key ScopeKey) error {
 	t.Helper()
 	rt, _ := lookupTestWatchRuntime(eng)
 	return testEngineFlow(t, eng).assertReleasedScope(ctx, rt, key)
 }
 
-func assertDiscardedScopeForTest(t *testing.T, eng *testEngine, ctx context.Context, key synctypes.ScopeKey) error {
+func assertDiscardedScopeForTest(t *testing.T, eng *testEngine, ctx context.Context, key ScopeKey) error {
 	t.Helper()
 	rt, _ := lookupTestWatchRuntime(eng)
 	return testEngineFlow(t, eng).assertDiscardedScope(ctx, rt, key)
@@ -668,7 +674,7 @@ func admitReadyForTest(t *testing.T, eng *testEngine, ctx context.Context, ready
 	return testScopeController(t, eng).admitReady(ctx, nil, ready)
 }
 
-func cascadeRecordAndCompleteForTest(t *testing.T, eng *testEngine, ctx context.Context, ta *TrackedAction, scopeKey synctypes.ScopeKey) {
+func cascadeRecordAndCompleteForTest(t *testing.T, eng *testEngine, ctx context.Context, ta *TrackedAction, scopeKey ScopeKey) {
 	t.Helper()
 	testScopeController(t, eng).cascadeRecordAndComplete(ctx, ta, scopeKey)
 }
@@ -1093,10 +1099,10 @@ func (t *manualSyncTicker) Stop() {
 	t.stopped = true
 }
 
-func syncStorePathForTest(t *testing.T, eng *testEngine) string {
+func syncStorePathForTest(t *testing.T, ctx context.Context, eng *testEngine) string {
 	t.Helper()
 
-	rows, err := eng.baseline.DB().Query("PRAGMA database_list")
+	rows, err := eng.baseline.DB().QueryContext(ctx, "PRAGMA database_list")
 	require.NoError(t, err, "PRAGMA database_list")
 	defer rows.Close()
 
@@ -1126,13 +1132,13 @@ func runFullReconciliationAsyncForTest(t *testing.T, eng *testEngine, ctx contex
 	testWatchRuntime(t, eng).runFullReconciliationAsync(ctx, bl)
 }
 
-func activeBlockingScopeForTest(t *testing.T, eng *testEngine, ta *TrackedAction) synctypes.ScopeKey {
+func activeBlockingScopeForTest(t *testing.T, eng *testEngine, ta *TrackedAction) ScopeKey {
 	t.Helper()
 	rt, _ := lookupTestWatchRuntime(eng)
 	return testScopeController(t, eng).activeBlockingScope(rt, ta)
 }
 
-func applyScopeBlockForTest(t *testing.T, eng *testEngine, ctx context.Context, sr synctypes.ScopeUpdateResult) {
+func applyScopeBlockForTest(t *testing.T, eng *testEngine, ctx context.Context, sr ScopeUpdateResult) {
 	t.Helper()
 	rt := testWatchRuntime(t, eng)
 	testScopeController(t, eng).applyScopeBlock(ctx, rt, sr)
@@ -1144,7 +1150,7 @@ func feedScopeDetectionForTest(t *testing.T, eng *testEngine, ctx context.Contex
 	testScopeController(t, eng).feedScopeDetection(ctx, rt, r)
 }
 
-func isTestScopeBlocked(eng *testEngine, key synctypes.ScopeKey) bool {
+func isTestScopeBlocked(eng *testEngine, key ScopeKey) bool {
 	if eng.runtime != nil {
 		if eng.runtime.hasActiveScope(key) {
 			return true
@@ -1163,7 +1169,7 @@ func isTestScopeBlocked(eng *testEngine, key synctypes.ScopeKey) bool {
 	return false
 }
 
-func getTestScopeBlock(eng *testEngine, key synctypes.ScopeKey) (ScopeBlock, bool) {
+func getTestScopeBlock(eng *testEngine, key ScopeKey) (ScopeBlock, bool) {
 	if eng.runtime != nil {
 		if block, ok := eng.runtime.lookupActiveScope(key); ok {
 			return block, true
@@ -1210,12 +1216,12 @@ func hashContentQuickXor(t *testing.T, content string) string {
 }
 
 // seedBaseline commits outcomes and an optional delta token to the baseline,
-// using the per-outcome CommitOutcome API (the old batch Commit was removed).
-func seedBaseline(t *testing.T, mgr *syncstore.SyncStore, ctx context.Context, outcomes []ExecutionResult, deltaToken string) {
+// using per-outcome CommitMutation inputs (the old batch Commit was removed).
+func seedBaseline(t *testing.T, mgr *SyncStore, ctx context.Context, outcomes []ActionOutcome, deltaToken string) {
 	t.Helper()
 
 	for i := range outcomes {
-		require.NoError(t, mgr.CommitMutation(ctx, baselineMutationFromExecutionResult(&outcomes[i])), "seed CommitMutation[%d]", i)
+		require.NoError(t, mgr.CommitMutation(ctx, mutationFromActionOutcome(&outcomes[i])), "seed CommitMutation[%d]", i)
 	}
 
 	if deltaToken != "" {

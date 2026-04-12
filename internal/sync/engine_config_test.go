@@ -13,7 +13,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 type configTestPathConvergenceStub struct {
@@ -177,7 +176,7 @@ func TestNewEngine_PropagatesPathConvergenceFactory(t *testing.T) {
 	outcome := executor.ExecuteFolderCreate(t.Context(), &Action{
 		Type:       ActionFolderCreate,
 		Path:       "photos",
-		CreateSide: synctypes.CreateRemote,
+		CreateSide: CreateRemote,
 		View:       &PathView{Path: "photos"},
 	})
 	require.True(t, outcome.Success, "expected remote folder create to succeed: %v", outcome.Error)

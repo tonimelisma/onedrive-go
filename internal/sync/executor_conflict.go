@@ -9,33 +9,31 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // ExecuteConflict handles conflict resolution. For edit-delete conflicts,
 // the modified local version wins automatically (industry consensus). For
 // all others, keep_both: rename local to a conflict copy, download remote.
-func (e *Executor) ExecuteConflict(ctx context.Context, action *Action) ExecutionResult {
+func (e *Executor) ExecuteConflict(ctx context.Context, action *Action) ActionOutcome {
 	// Edit-delete: local was modified, remote was deleted. Upload local file
 	// to re-create remote, record as auto-resolved. No conflict copy needed.
-	if action.ConflictInfo != nil && action.ConflictInfo.ConflictType == synctypes.ConflictEditDelete {
+	if action.ConflictInfo != nil && action.ConflictInfo.ConflictType == ConflictEditDelete {
 		return e.ExecuteEditDeleteConflict(ctx, action)
 	}
 
 	absPath, err := e.syncTree.Abs(action.Path)
 	if err != nil {
-		return e.failedOutcome(action, synctypes.ActionConflict, normalizeSyncTreePathError(err))
+		return e.failedOutcome(action, ActionConflict, normalizeSyncTreePathError(err))
 	}
 
 	// Step 1: Rename local to conflict copy (if it exists).
 	conflictPath, err := e.uniqueConflictCopyPath(absPath)
 	if err != nil {
-		return e.failedOutcome(action, synctypes.ActionConflict, err)
+		return e.failedOutcome(action, ActionConflict, err)
 	}
 	conflictRel, err := e.syncTree.Rel(conflictPath)
 	if err != nil {
-		return e.failedOutcome(action, synctypes.ActionConflict, normalizeSyncTreePathError(err))
+		return e.failedOutcome(action, ActionConflict, normalizeSyncTreePathError(err))
 	}
 	localExists := true
 
@@ -44,7 +42,7 @@ func (e *Executor) ExecuteConflict(ctx context.Context, action *Action) Executio
 			// Local file absent — skip rename, proceed to download.
 			localExists = false
 		} else {
-			return e.failedOutcome(action, synctypes.ActionConflict,
+			return e.failedOutcome(action, ActionConflict,
 				fmt.Errorf("renaming to conflict copy %s: %w", filepath.Base(conflictPath), normalizeSyncTreePathError(err)))
 		}
 	}
@@ -69,13 +67,13 @@ func (e *Executor) ExecuteConflict(ctx context.Context, action *Action) Executio
 			}
 		}
 
-		return e.failedOutcome(action, synctypes.ActionConflict,
+		return e.failedOutcome(action, ActionConflict,
 			fmt.Errorf("downloading remote during conflict resolution for %s: %w", action.Path, downloadOutcome.Error))
 	}
 
 	// Build conflict outcome from the download result.
 	o := downloadOutcome
-	o.Action = synctypes.ActionConflict
+	o.Action = ActionConflict
 
 	if action.ConflictInfo != nil {
 		o.ConflictType = action.ConflictInfo.ConflictType
@@ -135,23 +133,23 @@ func (e *Executor) conflictCopyPathAvailable(absPath string) (bool, error) {
 // the locally modified file to re-create it on the remote side. The local
 // version wins automatically — industry consensus (rclone, Dropbox, Google
 // Drive, OneDrive official, abraunegg).
-func (e *Executor) ExecuteEditDeleteConflict(ctx context.Context, action *Action) ExecutionResult {
+func (e *Executor) ExecuteEditDeleteConflict(ctx context.Context, action *Action) ActionOutcome {
 	e.logger.Info("auto-resolving edit-delete conflict: local edit wins",
 		slog.String("path", action.Path),
 	)
 
 	uploadOutcome := e.ExecuteUpload(ctx, action)
 	if !uploadOutcome.Success {
-		return e.failedOutcome(action, synctypes.ActionConflict,
+		return e.failedOutcome(action, ActionConflict,
 			fmt.Errorf("uploading local during edit-delete auto-resolve for %s: %w",
 				action.Path, uploadOutcome.Error))
 	}
 
 	// Build conflict outcome from the upload result.
 	o := uploadOutcome
-	o.Action = synctypes.ActionConflict
-	o.ConflictType = synctypes.ConflictEditDelete
-	o.ResolvedBy = synctypes.ResolvedByAuto
+	o.Action = ActionConflict
+	o.ConflictType = ConflictEditDelete
+	o.ResolvedBy = ResolvedByAuto
 
 	if action.View != nil && action.View.Remote != nil {
 		o.RemoteMtime = action.View.Remote.Mtime

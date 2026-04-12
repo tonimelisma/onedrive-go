@@ -25,7 +25,7 @@ internal/
   perf/                       Command-scoped and live sync performance instrumentation plus capture bundles
   retry/                      Retry policies, exponential backoff with jitter, retry transport
   sync/                       Single-drive sync engine (see pipeline below)
-  syncstore/                  Durable SQLite sync state and read-only inspection
+  sync/                       Single-drive sync engine, durable SQLite sync state, and read-only inspection
   synctree/                   Root-bound sync runtime filesystem capability
   tokenfile/                  Pure OAuth token file I/O (leaf, stdlib + oauth2 only)
 pkg/
@@ -43,7 +43,6 @@ root pkg → internal/cli/ → internal/graphhttp/ → internal/retry/
                          → internal/perf/
                          → internal/multisync/ → internal/perf/
                                               → internal/sync/ → internal/driveops/
-                                                               → internal/syncstore/
                          → internal/config/  → internal/driveid/
 ```
 
@@ -108,12 +107,12 @@ For detailed module design, see:
 | Concern | Owner |
 |---------|-------|
 | Runtime failure class | `internal/failures` + `internal/sync/engine_result_classify.go` |
-| Sync-domain summary/rendering key | `internal/synctypes/summary_keys.go` |
-| Durable sync issue facts | `internal/syncstore` SQLite tables (`sync_failures`, `scope_blocks`, conflicts) |
+| Sync-domain summary/rendering key | `internal/sync/summary_keys.go` |
+| Durable sync issue facts | `internal/sync` SQLite tables (`sync_failures`, `scope_blocks`, conflicts) |
 | Account/auth presentation | `internal/authstate` vocabulary projected through `internal/cli/account_read_model_service.go` |
-| Read-only issue/status read model | `internal/syncstore/inspector.go` |
+| Read-only issue/status read model | `internal/sync/inspector.go` |
 | Production perf counters, live snapshots, and capture bundles | `internal/perf` with session/control-plane ownership split across `internal/cli` and `internal/multisync` |
-| Durable mutation rules | `internal/syncstore` writable store APIs (`CommitMutation`, scope/failure/conflict helpers) plus engine-owned scope/result flow |
+| Durable mutation rules | `internal/sync` writable store APIs (`CommitMutation`, scope/failure/conflict helpers) plus engine-owned scope/result flow |
 
 ## Production Performance Instrumentation
 
@@ -168,7 +167,7 @@ Static verification is a first-class architectural constraint, not a best-effort
   of `ObservationSessionPlan` live under
   `internal/sync/testdata/observation_session_plan/` and are updated with the
   standard local `-update` golden workflow in same-package tests.
-- Repo-consistency checks in `cmd/devtool verify` enforce the repo-level architecture constraints linters do not express cleanly: governed design docs must carry ownership contracts, required cross-cutting docs must exist and be linked from this document, production `internal/cli` code must not bypass its output-writer boundary with direct process-global stdout/stderr writes, guarded runtime packages must not reintroduce raw `os.*` filesystem calls, known stale wording classes for filter ownership are rejected in live docs, recurring `spec/reference/live-incidents.md` `Promoted docs:` links must resolve to real files/anchors, `internal/graph/client_preauth.go` remains the only raw production `http.Client.Do` boundary, `exec.CommandContext` is limited to validated browser launch and devtool runner entrypoints, `sql.Open` is limited to `internal/syncstore`, `signal.Notify` is limited to `internal/cli/signal.go`, and the internal dependency graph stays inside explicit guardrails: at most 27 internal packages, at most 80 internal import edges, no direct `cli -> synctypes`, `multisync -> synctypes`, or `syncstore -> sync` edge, and `synctypes` may import only `driveid` among internal packages.
+- Repo-consistency checks in `cmd/devtool verify` enforce the repo-level architecture constraints linters do not express cleanly: governed design docs must carry ownership contracts, required cross-cutting docs must exist and be linked from this document, production `internal/cli` code must not bypass its output-writer boundary with direct process-global stdout/stderr writes, guarded runtime packages must not reintroduce raw `os.*` filesystem calls, known stale wording classes for filter ownership are rejected in live docs, recurring `spec/reference/live-incidents.md` `Promoted docs:` links must resolve to real files/anchors, `internal/graph/client_preauth.go` remains the only raw production `http.Client.Do` boundary, `exec.CommandContext` is limited to validated browser launch and devtool runner entrypoints, `sql.Open` is limited to `internal/sync`, `signal.Notify` is limited to `internal/cli/signal.go`, and the internal dependency graph stays inside explicit guardrails: at most 27 internal packages, at most 80 internal import edges, with `internal/sync` as the single sync-domain owner package and deleted split-package references rejected by repo consistency checks.
 - The same repo-consistency pass also forbids raw `exec.Command` in production, narrows `signal.Stop` and `os.Exit` to the documented process-lifecycle entrypoints, validates that `Validates:` and `Implements:` references resolve to declared requirement IDs, enforces that governed lifecycle docs cite exact named tests in their evidence sections, and enforces the degraded-mode evidence-table structure that links each `DM-*` row to named tests.
 - `go run ./cmd/devtool worktree add --path <path> --branch <branch>` is the canonical way to create new worktrees from `origin/main`. It applies `.worktreeinclude` immediately so the new worktree is ready for fast E2E and local development.
 - `cmd/devtool` is exercised both through package-level command assembly tests and black-box process tests for `verify` profile parsing plus `worktree bootstrap/add` semantics, including explicit `--source-root` selection. The documented developer entrypoint and the shipped binary must stay aligned.
@@ -196,7 +195,7 @@ Static verification is a first-class architectural constraint, not a best-effort
 - Managed repo-state files use `internal/fsroot` root capabilities.
 - Sync-runtime filesystem operations under one configured sync root use `internal/synctree`.
 - Arbitrary local file paths outside those rooted domains use `internal/localpath` as the explicit trust boundary. `localpath.AtomicWrite` is the default arbitrary-path writer when replace-in-place semantics matter.
-- Sync-state integrity inspection and deterministic safe repair live behind `internal/syncstore` and surface operationally through `go run ./cmd/devtool state-audit`.
+- Sync-state integrity inspection and deterministic safe repair live behind `internal/sync` and surface operationally through `go run ./cmd/devtool state-audit`.
 - Append-only log file creation in `internal/logfile` is the single documented exception to atomic replace-style writes. It is allowed because the log is an append-only operational artifact, not an authoritative config/state file.
 - `fsroot.Root` and `synctree.Root` carry unexported injectable ops so managed-state and sync-runtime I/O failure paths can be tested deterministically without package-level test hooks.
 

@@ -11,7 +11,7 @@ Implements: R-6.8.9 [verified]
 Thin action dispatcher. Takes an `ActionPlan` and dispatches actions to workers
 via `DepGraph` plus the engine's active-scope admission logic. Actions are
 dispatched based on dependency satisfaction, not fixed phase ordering. Workers
-produce individual `Outcome` values committed per-action by the SyncStore.
+produce individual `ActionOutcome` values committed per-action by the SyncStore.
 
 ## Ownership Contract
 
@@ -22,7 +22,7 @@ produce individual `Outcome` values committed per-action by the SyncStore.
 - Mutable Runtime Owner: The engine owns dispatch state (`DepGraph`, dispatch channel, done signal). `WorkerPool` owns worker goroutines and the results channel it closes once after worker exit.
 - Error Boundary: Execution returns raw `WorkerResult` values and driveops/graph errors upward. The engine owns mapping those results into [error-model.md](error-model.md) classes.
 
-Action methods call the graph client directly and return `Outcome` — no retry
+Action methods call the graph client directly and return `ActionOutcome` — no retry
 loop, no error classification, and no executor-owned sleep budget. The
 following were removed as part of the retry-to-transport refactoring:
 `withRetry()`, `classifyError()`, `classifyStatusCode()`, `calcExecBackoff()`,
@@ -345,7 +345,7 @@ rebuild now derives the current action need from durable truth and the recorded
 action type, not from lifecycle state stored on `remote_state`. The engine calls
 `DepGraph.Complete` on every worker result and records failures in
 `sync_failures` with exponential backoff via `retry.ReconcilePolicy().Delay`.
-`CommitOutcome` updates baseline and `remote_state`, but it does not clear
+`CommitMutation` updates baseline and `remote_state`, but it does not clear
 `sync_failures`; the engine owns success-side failure cleanup explicitly via
 `clearFailureOnSuccess`. `runTrialDispatch()` handles scope trial candidate
 selection via `PickTrialCandidate` and re-observation.

@@ -11,7 +11,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // ---------------------------------------------------------------------------
@@ -23,8 +22,8 @@ func TestDetectCaseCollisions_TwoWay(t *testing.T) {
 	t.Parallel()
 
 	events := []ChangeEvent{
-		{Path: "dir/File.txt", Name: "File.txt", Type: synctypes.ChangeCreate},
-		{Path: "dir/file.txt", Name: "file.txt", Type: synctypes.ChangeCreate},
+		{Path: "dir/File.txt", Name: "File.txt", Type: ChangeCreate},
+		{Path: "dir/file.txt", Name: "file.txt", Type: ChangeCreate},
 	}
 
 	clean, collisions := DetectCaseCollisions(events, nil)
@@ -32,7 +31,7 @@ func TestDetectCaseCollisions_TwoWay(t *testing.T) {
 	require.Len(t, collisions, 2, "both colliders should be returned as SkippedItems")
 
 	for _, si := range collisions {
-		assert.Equal(t, synctypes.IssueCaseCollision, si.Reason)
+		assert.Equal(t, IssueCaseCollision, si.Reason)
 		assert.NotEmpty(t, si.Detail, "detail should name the colliding file")
 	}
 }
@@ -42,9 +41,9 @@ func TestDetectCaseCollisions_ThreeWay(t *testing.T) {
 	t.Parallel()
 
 	events := []ChangeEvent{
-		{Path: "File.txt", Name: "File.txt", Type: synctypes.ChangeCreate},
-		{Path: "file.txt", Name: "file.txt", Type: synctypes.ChangeCreate},
-		{Path: "FILE.txt", Name: "FILE.txt", Type: synctypes.ChangeCreate},
+		{Path: "File.txt", Name: "File.txt", Type: ChangeCreate},
+		{Path: "file.txt", Name: "file.txt", Type: ChangeCreate},
+		{Path: "FILE.txt", Name: "FILE.txt", Type: ChangeCreate},
 	}
 
 	clean, collisions := DetectCaseCollisions(events, nil)
@@ -57,8 +56,8 @@ func TestDetectCaseCollisions_DifferentDirs(t *testing.T) {
 	t.Parallel()
 
 	events := []ChangeEvent{
-		{Path: "dir1/File.txt", Name: "File.txt", Type: synctypes.ChangeCreate},
-		{Path: "dir2/file.txt", Name: "file.txt", Type: synctypes.ChangeCreate},
+		{Path: "dir1/File.txt", Name: "File.txt", Type: ChangeCreate},
+		{Path: "dir2/file.txt", Name: "file.txt", Type: ChangeCreate},
 	}
 
 	clean, collisions := DetectCaseCollisions(events, nil)
@@ -80,11 +79,11 @@ func TestDetectCaseCollisions_NoCollisions(t *testing.T) {
 	t.Parallel()
 
 	events := []ChangeEvent{
-		{Path: "a.txt", Name: "a.txt", Type: synctypes.ChangeCreate},
-		{Path: "b.txt", Name: "b.txt", Type: synctypes.ChangeCreate},
-		{Path: "c.txt", Name: "c.txt", Type: synctypes.ChangeCreate},
-		{Path: "dir/d.txt", Name: "d.txt", Type: synctypes.ChangeCreate},
-		{Path: "dir/e.txt", Name: "e.txt", Type: synctypes.ChangeCreate},
+		{Path: "a.txt", Name: "a.txt", Type: ChangeCreate},
+		{Path: "b.txt", Name: "b.txt", Type: ChangeCreate},
+		{Path: "c.txt", Name: "c.txt", Type: ChangeCreate},
+		{Path: "dir/d.txt", Name: "d.txt", Type: ChangeCreate},
+		{Path: "dir/e.txt", Name: "e.txt", Type: ChangeCreate},
 	}
 
 	clean, collisions := DetectCaseCollisions(events, nil)
@@ -97,8 +96,8 @@ func TestDetectCaseCollisions_DetailContainsCollidingName(t *testing.T) {
 	t.Parallel()
 
 	events := []ChangeEvent{
-		{Path: "docs/Report.md", Name: "Report.md", Type: synctypes.ChangeCreate},
-		{Path: "docs/report.md", Name: "report.md", Type: synctypes.ChangeCreate},
+		{Path: "docs/Report.md", Name: "Report.md", Type: ChangeCreate},
+		{Path: "docs/report.md", Name: "report.md", Type: ChangeCreate},
 	}
 
 	_, collisions := DetectCaseCollisions(events, nil)
@@ -150,7 +149,7 @@ func TestFullScan_CaseCollision_InSkippedNotEvents(t *testing.T) {
 	// Both colliders should be in Skipped, not in Events.
 	var collisionPaths []string
 	for _, si := range result.Skipped {
-		if si.Reason == synctypes.IssueCaseCollision {
+		if si.Reason == IssueCaseCollision {
 			collisionPaths = append(collisionPaths, si.Path)
 		}
 	}
@@ -199,7 +198,7 @@ func TestFullScan_CaseCollision_NoFalseDeletion(t *testing.T) {
 	// Colliders should NOT generate ChangeDelete events — they stay in the
 	// observed map to prevent false deletions.
 	for _, ev := range result.Events {
-		if ev.Type == synctypes.ChangeDelete {
+		if ev.Type == ChangeDelete {
 			assert.NotEqual(t, "Doc.pdf", ev.Path, "collider should not generate false delete")
 			assert.NotEqual(t, "doc.pdf", ev.Path, "collider should not generate false delete")
 		}
@@ -234,7 +233,7 @@ func TestDetectCaseCollisions_CaseInsensitiveFS(t *testing.T) {
 
 	// No collision — the FS itself prevents the scenario from arising.
 	for _, si := range result.Skipped {
-		assert.NotEqual(t, synctypes.IssueCaseCollision, si.Reason,
+		assert.NotEqual(t, IssueCaseCollision, si.Reason,
 			"case-insensitive FS should not report collisions for a single file")
 	}
 
@@ -257,14 +256,14 @@ func TestDetectCaseCollisions_BaselineCrossCheck(t *testing.T) {
 	})
 
 	events := []ChangeEvent{
-		{Path: "file.txt", Name: "file.txt", Type: synctypes.ChangeCreate},
+		{Path: "file.txt", Name: "file.txt", Type: ChangeCreate},
 	}
 
 	clean, collisions := DetectCaseCollisions(events, baseline)
 	assert.Empty(t, clean, "new file should be removed — collides with baseline")
 	require.Len(t, collisions, 1)
 	assert.Equal(t, "file.txt", collisions[0].Path)
-	assert.Equal(t, synctypes.IssueCaseCollision, collisions[0].Reason)
+	assert.Equal(t, IssueCaseCollision, collisions[0].Reason)
 	assert.Contains(t, collisions[0].Detail, "File.txt", "detail should name the synced file")
 }
 
@@ -278,7 +277,7 @@ func TestDetectCaseCollisions_BaselineExactMatch_NoCollision(t *testing.T) {
 	})
 
 	events := []ChangeEvent{
-		{Path: "File.txt", Name: "File.txt", Type: synctypes.ChangeModify},
+		{Path: "File.txt", Name: "File.txt", Type: ChangeModify},
 	}
 
 	clean, collisions := DetectCaseCollisions(events, baseline)
@@ -298,8 +297,8 @@ func TestDetectCaseCollisions_BaselineAndEventCollision(t *testing.T) {
 	})
 
 	events := []ChangeEvent{
-		{Path: "File.txt", Name: "File.txt", Type: synctypes.ChangeCreate},
-		{Path: "file.txt", Name: "file.txt", Type: synctypes.ChangeCreate},
+		{Path: "File.txt", Name: "File.txt", Type: ChangeCreate},
+		{Path: "file.txt", Name: "file.txt", Type: ChangeCreate},
 	}
 
 	clean, collisions := DetectCaseCollisions(events, baseline)
@@ -317,7 +316,7 @@ func TestDetectCaseCollisions_BaselineInSubdir(t *testing.T) {
 	})
 
 	events := []ChangeEvent{
-		{Path: "docs/report.md", Name: "report.md", Type: synctypes.ChangeCreate},
+		{Path: "docs/report.md", Name: "report.md", Type: ChangeCreate},
 	}
 
 	clean, collisions := DetectCaseCollisions(events, baseline)
@@ -332,7 +331,7 @@ func TestDetectCaseCollisions_NilBaseline_NoChange(t *testing.T) {
 
 	// nil baseline (backwards compat) — should behave exactly like before.
 	events := []ChangeEvent{
-		{Path: "unique.txt", Name: "unique.txt", Type: synctypes.ChangeCreate},
+		{Path: "unique.txt", Name: "unique.txt", Type: ChangeCreate},
 	}
 
 	clean, collisions := DetectCaseCollisions(events, nil)
@@ -351,9 +350,9 @@ func TestDetectCaseCollisions_DirectoryChildrenSuppressed(t *testing.T) {
 	// "Docs/" (folder) collides with "docs" (file). Children of "Docs/" must
 	// also be suppressed — they can't be uploaded to a folder that won't exist.
 	events := []ChangeEvent{
-		{Path: "Docs", Name: "Docs", Type: synctypes.ChangeCreate, ItemType: synctypes.ItemTypeFolder},
-		{Path: "docs", Name: "docs", Type: synctypes.ChangeCreate, ItemType: synctypes.ItemTypeFile},
-		{Path: "Docs/readme.txt", Name: "readme.txt", Type: synctypes.ChangeCreate, ItemType: synctypes.ItemTypeFile},
+		{Path: "Docs", Name: "Docs", Type: ChangeCreate, ItemType: ItemTypeFolder},
+		{Path: "docs", Name: "docs", Type: ChangeCreate, ItemType: ItemTypeFile},
+		{Path: "Docs/readme.txt", Name: "readme.txt", Type: ChangeCreate, ItemType: ItemTypeFile},
 	}
 
 	clean, collisions := DetectCaseCollisions(events, nil)
@@ -374,10 +373,10 @@ func TestDetectCaseCollisions_DirectoryNestedChildrenSuppressed(t *testing.T) {
 
 	// Nested children under a colliding directory should also be suppressed.
 	events := []ChangeEvent{
-		{Path: "Docs", Name: "Docs", Type: synctypes.ChangeCreate, ItemType: synctypes.ItemTypeFolder},
-		{Path: "docs", Name: "docs", Type: synctypes.ChangeCreate, ItemType: synctypes.ItemTypeFile},
-		{Path: "Docs/sub", Name: "sub", Type: synctypes.ChangeCreate, ItemType: synctypes.ItemTypeFolder},
-		{Path: "Docs/sub/file.txt", Name: "file.txt", Type: synctypes.ChangeCreate, ItemType: synctypes.ItemTypeFile},
+		{Path: "Docs", Name: "Docs", Type: ChangeCreate, ItemType: ItemTypeFolder},
+		{Path: "docs", Name: "docs", Type: ChangeCreate, ItemType: ItemTypeFile},
+		{Path: "Docs/sub", Name: "sub", Type: ChangeCreate, ItemType: ItemTypeFolder},
+		{Path: "Docs/sub/file.txt", Name: "file.txt", Type: ChangeCreate, ItemType: ItemTypeFile},
 	}
 
 	clean, collisions := DetectCaseCollisions(events, nil)
@@ -391,8 +390,8 @@ func TestDetectCaseCollisions_DirectoryNoCollision_ChildrenPass(t *testing.T) {
 
 	// No collision on the directory — children pass through normally.
 	events := []ChangeEvent{
-		{Path: "Docs", Name: "Docs", Type: synctypes.ChangeCreate, ItemType: synctypes.ItemTypeFolder},
-		{Path: "Docs/readme.txt", Name: "readme.txt", Type: synctypes.ChangeCreate, ItemType: synctypes.ItemTypeFile},
+		{Path: "Docs", Name: "Docs", Type: ChangeCreate, ItemType: ItemTypeFolder},
+		{Path: "Docs/readme.txt", Name: "readme.txt", Type: ChangeCreate, ItemType: ItemTypeFile},
 	}
 
 	clean, collisions := DetectCaseCollisions(events, nil)
@@ -437,7 +436,7 @@ func TestDetectCaseCollisions_CaseSensitiveFS(t *testing.T) {
 	// Both files should appear in Skipped with IssueCaseCollision.
 	var collisions []SkippedItem
 	for _, si := range result.Skipped {
-		if si.Reason == synctypes.IssueCaseCollision {
+		if si.Reason == IssueCaseCollision {
 			collisions = append(collisions, si)
 		}
 	}
@@ -461,11 +460,11 @@ func TestDetectCaseCollisions_ChildInMultiGroup_NoDuplicate(t *testing.T) {
 	t.Parallel()
 
 	events := []ChangeEvent{
-		{Path: "Docs", ItemType: synctypes.ItemTypeFolder},
-		{Path: "docs", ItemType: synctypes.ItemTypeFile},
+		{Path: "Docs", ItemType: ItemTypeFolder},
+		{Path: "docs", ItemType: ItemTypeFile},
 		// These are children of "Docs/" AND collide with each other.
-		{Path: "Docs/readme.txt", ItemType: synctypes.ItemTypeFile},
-		{Path: "Docs/README.txt", ItemType: synctypes.ItemTypeFile},
+		{Path: "Docs/readme.txt", ItemType: ItemTypeFile},
+		{Path: "Docs/README.txt", ItemType: ItemTypeFile},
 	}
 
 	_, collisions := DetectCaseCollisions(events, nil)

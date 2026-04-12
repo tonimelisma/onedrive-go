@@ -2,8 +2,10 @@ package sync
 
 import (
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	stdsync "sync"
 	"testing"
@@ -12,7 +14,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tonimelisma/onedrive-go/internal/devtool"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 )
@@ -77,7 +78,47 @@ type replayOutcome struct {
 
 type watchCaptureFixtureVariant struct {
 	name    string
-	records []devtool.WatchCaptureRecord
+	records []watchCaptureRecord
+}
+
+type watchCaptureRecord struct {
+	Scenario         string   `json:"scenario"`
+	Step             string   `json:"step"`
+	Path             string   `json:"path"`
+	OpBits           uint32   `json:"op_bits"`
+	OpNames          []string `json:"op_names"`
+	TimeOffsetMicros int64    `json:"time_offset_micros"`
+}
+
+type watchCaptureScenario struct {
+	setup func(root string) error
+	steps map[string]func(root string) error
+}
+
+func (scenario watchCaptureScenario) SetUp(root string) error {
+	if scenario.setup == nil {
+		return nil
+	}
+
+	return scenario.setup(root)
+}
+
+func (scenario watchCaptureScenario) StepNames() []string {
+	names := make([]string, 0, len(scenario.steps))
+	for name := range scenario.steps {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func (scenario watchCaptureScenario) RunStep(root, name string) error {
+	run, ok := scenario.steps[name]
+	if !ok {
+		return fmt.Errorf("watch capture scenario: unknown step %q", name)
+	}
+
+	return run(root)
 }
 
 func replayWatchCaptureScenarioVariants(
@@ -87,8 +128,7 @@ func replayWatchCaptureScenarioVariants(
 ) []replayOutcome {
 	t.Helper()
 
-	scenario, err := devtool.LookupWatchCaptureScenario(scenarioName)
-	require.NoError(t, err)
+	scenario := lookupWatchCaptureScenario(t, scenarioName)
 
 	variants := loadWatchCaptureFixtures(t, scenarioName)
 	outcomes := make([]replayOutcome, 0, len(variants))
@@ -169,7 +209,7 @@ func loadWatchCaptureFixtures(t *testing.T, scenarioName string) []watchCaptureF
 		raw, err := localpath.ReadFile(fixturePath)
 		require.NoError(t, err)
 
-		var records []devtool.WatchCaptureRecord
+		var records []watchCaptureRecord
 		require.NoError(t, json.Unmarshal(raw, &records))
 		require.NotEmpty(t, records)
 		variants = append(variants, watchCaptureFixtureVariant{
@@ -179,6 +219,186 @@ func loadWatchCaptureFixtures(t *testing.T, scenarioName string) []watchCaptureF
 	}
 
 	return variants
+}
+
+func lookupWatchCaptureScenario(t *testing.T, name string) watchCaptureScenario {
+	t.Helper()
+
+	switch name {
+	case "marker_create":
+		return watchCaptureMarkerCreateScenario()
+	case "marker_delete":
+		return watchCaptureMarkerDeleteScenario()
+	case "marker_rename":
+		return watchCaptureMarkerRenameScenario()
+	case "marker_parent_rename":
+		return watchCaptureMarkerParentRenameScenario()
+	case "marker_move_between_dirs":
+		return watchCaptureMarkerMoveBetweenDirsScenario()
+	case "dir_move_into_scope":
+		return watchCaptureMoveDirScenario("parking/album", "docs/album", "move_into_scope", "move into scope")
+	case "dir_move_out_of_scope":
+		return watchCaptureMoveDirScenario("docs/album", "parking/album", "move_out_of_scope", "move out of scope")
+	default:
+		t.Fatalf("unknown watch capture scenario %q", name)
+		return watchCaptureScenario{}
+	}
+}
+
+func watchCaptureWriteFile(root, relPath, content string) error {
+	fullPath := filepath.Join(root, filepath.FromSlash(relPath))
+	if err := localpath.MkdirAll(filepath.Dir(fullPath), 0o700); err != nil {
+		return fmt.Errorf("mkdir %q: %w", filepath.Dir(fullPath), err)
+	}
+	if err := localpath.WriteFile(fullPath, []byte(content), 0o600); err != nil {
+		return fmt.Errorf("write file %q: %w", fullPath, err)
+	}
+
+	return nil
+}
+
+func watchCaptureEnsureDir(root, relPath string) error {
+	if err := localpath.MkdirAll(filepath.Join(root, filepath.FromSlash(relPath)), 0o700); err != nil {
+		return fmt.Errorf("mkdir %q: %w", relPath, err)
+	}
+
+	return nil
+}
+
+func watchCaptureMarkerCreateScenario() watchCaptureScenario {
+	return watchCaptureScenario{
+		setup: func(root string) error {
+			return watchCaptureEnsureDir(root, "blocked/nested")
+		},
+		steps: map[string]func(root string) error{
+			"create_marker": func(root string) error {
+				return watchCaptureWriteFile(root, "blocked/.odignore", "marker")
+			},
+		},
+	}
+}
+
+func watchCaptureMarkerDeleteScenario() watchCaptureScenario {
+	return watchCaptureScenario{
+		setup: func(root string) error {
+			if err := watchCaptureEnsureDir(root, "blocked/nested"); err != nil {
+				return err
+			}
+			if err := watchCaptureWriteFile(root, "blocked/.odignore", "marker"); err != nil {
+				return err
+			}
+			return watchCaptureWriteFile(root, "blocked/nested/keep.txt", "keep")
+		},
+		steps: map[string]func(root string) error{
+			"delete_marker": func(root string) error {
+				if err := localpath.Remove(filepath.Join(root, "blocked", ".odignore")); err != nil {
+					return fmt.Errorf("remove marker: %w", err)
+				}
+				return nil
+			},
+		},
+	}
+}
+
+func watchCaptureMarkerRenameScenario() watchCaptureScenario {
+	return watchCaptureScenario{
+		setup: func(root string) error {
+			if err := watchCaptureEnsureDir(root, "blocked/nested"); err != nil {
+				return err
+			}
+			return watchCaptureWriteFile(root, "blocked/pending.marker", "marker")
+		},
+		steps: map[string]func(root string) error{
+			"rename_to_marker": func(root string) error {
+				if err := localpath.Rename(
+					filepath.Join(root, "blocked", "pending.marker"),
+					filepath.Join(root, "blocked", ".odignore"),
+				); err != nil {
+					return fmt.Errorf("rename to marker: %w", err)
+				}
+				return nil
+			},
+		},
+	}
+}
+
+func watchCaptureMarkerParentRenameScenario() watchCaptureScenario {
+	return watchCaptureScenario{
+		setup: func(root string) error {
+			if err := watchCaptureEnsureDir(root, "parent/blocked/nested"); err != nil {
+				return err
+			}
+			if err := watchCaptureWriteFile(root, "parent/blocked/.odignore", "marker"); err != nil {
+				return err
+			}
+			return watchCaptureWriteFile(root, "parent/blocked/nested/keep.txt", "keep")
+		},
+		steps: map[string]func(root string) error{
+			"rename_parent": func(root string) error {
+				if err := localpath.Rename(
+					filepath.Join(root, "parent"),
+					filepath.Join(root, "renamed"),
+				); err != nil {
+					return fmt.Errorf("rename parent: %w", err)
+				}
+				return nil
+			},
+		},
+	}
+}
+
+func watchCaptureMarkerMoveBetweenDirsScenario() watchCaptureScenario {
+	return watchCaptureScenario{
+		setup: func(root string) error {
+			if err := watchCaptureEnsureDir(root, "left/blocked/nested"); err != nil {
+				return err
+			}
+			if err := watchCaptureEnsureDir(root, "right"); err != nil {
+				return err
+			}
+			if err := watchCaptureWriteFile(root, "left/blocked/.odignore", "marker"); err != nil {
+				return err
+			}
+			return watchCaptureWriteFile(root, "left/blocked/nested/keep.txt", "keep")
+		},
+		steps: map[string]func(root string) error{
+			"move_marker_dir": func(root string) error {
+				if err := localpath.Rename(
+					filepath.Join(root, "left", "blocked"),
+					filepath.Join(root, "right", "blocked"),
+				); err != nil {
+					return fmt.Errorf("move marker directory: %w", err)
+				}
+				return nil
+			},
+		},
+	}
+}
+
+func watchCaptureMoveDirScenario(sourceDir, destDir, stepName, moveLabel string) watchCaptureScenario {
+	sourceFile := filepath.ToSlash(filepath.Join(sourceDir, "photo.jpg"))
+	return watchCaptureScenario{
+		setup: func(root string) error {
+			if err := watchCaptureEnsureDir(root, sourceDir); err != nil {
+				return err
+			}
+			if err := watchCaptureEnsureDir(root, filepath.Dir(destDir)); err != nil {
+				return err
+			}
+			return watchCaptureWriteFile(root, sourceFile, "img")
+		},
+		steps: map[string]func(root string) error{
+			stepName: func(root string) error {
+				if err := localpath.Rename(
+					filepath.Join(root, filepath.FromSlash(sourceDir)),
+					filepath.Join(root, filepath.FromSlash(destDir)),
+				); err != nil {
+					return fmt.Errorf("%s: %w", moveLabel, err)
+				}
+				return nil
+			},
+		},
+	}
 }
 
 func replayRecordPath(root, recordPath string) string {

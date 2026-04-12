@@ -36,9 +36,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // Constants for the local scanner.
@@ -109,14 +107,14 @@ func (o *LocalObserver) FullScan(ctx context.Context, tree *synctree.Root) (Scan
 	if !SyncRootExists(syncRoot) {
 		o.Logger.Warn("sync root missing, aborting scan",
 			slog.String("sync_root", syncRoot))
-		return ScanResult{}, synctypes.ErrSyncRootMissing
+		return ScanResult{}, ErrSyncRootMissing
 	}
 
 	// Guard: abort if .nosync file is present (sync dir may be unmounted).
 	if _, err := tree.Stat(nosyncFileName); err == nil {
 		o.Logger.Warn("nosync guard file detected, aborting scan",
 			slog.String("sync_root", syncRoot))
-		return ScanResult{}, synctypes.ErrNosyncGuard
+		return ScanResult{}, ErrNosyncGuard
 	}
 
 	// Phase 1: Walk — collect observed paths, folder events, hash jobs, and skipped items.
@@ -227,7 +225,7 @@ func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]Change
 					mu.Lock()
 					skipped = append(skipped, SkippedItem{
 						Path:   job.dbRelPath,
-						Reason: synctypes.IssueHashPanic,
+						Reason: IssueHashPanic,
 						Detail: fmt.Sprintf("panic: %v", r),
 					})
 					mu.Unlock()
@@ -251,14 +249,14 @@ func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]Change
 				}
 			}
 
-			changeType := synctypes.ChangeCreate
-			itemType := synctypes.ItemTypeFile
+			changeType := ChangeCreate
+			itemType := ItemTypeFile
 			if !job.isNew {
-				changeType = synctypes.ChangeModify
+				changeType = ChangeModify
 			}
 
 			ev := ChangeEvent{
-				Source:   synctypes.SourceLocal,
+				Source:   SourceLocal,
 				Type:     changeType,
 				Path:     job.dbRelPath,
 				Name:     job.name,
@@ -419,7 +417,7 @@ func (o *LocalObserver) processObservedInfo(
 	if kind == observedKindFile && o.IsOversizedFile(info.Size(), dbRelPath) {
 		*skipped = append(*skipped, SkippedItem{
 			Path:     dbRelPath,
-			Reason:   synctypes.IssueFileTooLarge,
+			Reason:   IssueFileTooLarge,
 			Detail:   fmt.Sprintf("file size %d bytes exceeds 250 GB limit", info.Size()),
 			FileSize: info.Size(),
 		})
@@ -443,7 +441,7 @@ func (o *LocalObserver) classifyObservedInfo(
 	jobs *[]hashJob,
 	scanStartNano int64,
 ) error {
-	var existing *syncstore.BaselineEntry
+	var existing *BaselineEntry
 	if baselineEntry, found := o.Baseline.GetByPath(dbRelPath); found {
 		existing = baselineEntry
 	}
@@ -453,11 +451,11 @@ func (o *LocalObserver) classifyObservedInfo(
 		if kind == observedKindDir {
 			// Folder creates go directly to events (no hashing needed).
 			*events = append(*events, ChangeEvent{
-				Source:   synctypes.SourceLocal,
-				Type:     synctypes.ChangeCreate,
+				Source:   SourceLocal,
+				Type:     ChangeCreate,
 				Path:     dbRelPath,
 				Name:     name,
-				ItemType: synctypes.ItemTypeFolder,
+				ItemType: ItemTypeFolder,
 				Size:     info.Size(),
 				Mtime:    info.ModTime().UnixNano(),
 			})
@@ -493,7 +491,7 @@ func (o *LocalObserver) classifyObservedInfo(
 // are always hashed, because they may have been modified in the same clock
 // tick as the last sync (Git's "racily clean" problem).
 func (o *LocalObserver) classifyFileChange(
-	fsPath, dbRelPath, name string, info fs.FileInfo, base *syncstore.BaselineEntry,
+	fsPath, dbRelPath, name string, info fs.FileInfo, base *BaselineEntry,
 	jobs *[]hashJob, scanStartNano int64,
 ) error {
 	currentMtime := info.ModTime().UnixNano()
@@ -531,7 +529,7 @@ func (o *LocalObserver) classifyFileChange(
 //
 // O(n) time, O(n) memory. Pure function — no side effects.
 func DetectCaseCollisions(
-	events []ChangeEvent, baseline *syncstore.Baseline,
+	events []ChangeEvent, baseline *Baseline,
 ) (clean []ChangeEvent, collisions []SkippedItem) {
 	if len(events) == 0 {
 		return nil, nil
@@ -594,7 +592,7 @@ type caseGroupKey struct {
 func crossCheckBaseline(
 	events []ChangeEvent,
 	groups map[caseGroupKey][]int,
-	baseline *syncstore.Baseline,
+	baseline *Baseline,
 	colliderSet map[int]struct{},
 ) {
 	if baseline == nil {
@@ -631,7 +629,7 @@ func suppressDirectoryChildren(
 	childColliderSet = make(map[int]struct{})
 
 	for idx := range colliderSet {
-		if events[idx].ItemType == synctypes.ItemTypeFolder {
+		if events[idx].ItemType == ItemTypeFolder {
 			collidingDirPrefixes = append(collidingDirPrefixes, events[idx].Path+"/")
 		}
 	}
@@ -661,7 +659,7 @@ func buildCollisionSkippedItems(
 	groups map[caseGroupKey][]int,
 	colliderSet, childColliderSet map[int]struct{},
 	collidingDirPrefixes []string,
-	baseline *syncstore.Baseline,
+	baseline *Baseline,
 ) []SkippedItem {
 	collisions := make([]SkippedItem, 0, len(colliderSet))
 
@@ -693,7 +691,7 @@ func buildCollisionSkippedItems(
 
 		collisions = append(collisions, SkippedItem{
 			Path:   ev.Path,
-			Reason: synctypes.IssueCaseCollision,
+			Reason: IssueCaseCollision,
 			Detail: fmt.Sprintf("parent directory %q has a case collision",
 				filepath.Base(parentDir)),
 		})
@@ -709,7 +707,7 @@ func appendSingleGroupCollision(
 	events []ChangeEvent,
 	indices []int,
 	colliderSet, childColliderSet map[int]struct{},
-	baseline *syncstore.Baseline,
+	baseline *Baseline,
 ) []SkippedItem {
 	idx := indices[0]
 
@@ -732,7 +730,7 @@ func appendSingleGroupCollision(
 		if v.Path != ev.Path {
 			return append(collisions, SkippedItem{
 				Path:   ev.Path,
-				Reason: synctypes.IssueCaseCollision,
+				Reason: IssueCaseCollision,
 				Detail: fmt.Sprintf("conflicts with synced file %s",
 					filepath.Base(v.Path)),
 			})
@@ -764,7 +762,7 @@ func appendMultiGroupCollisions(
 
 		collisions = append(collisions, SkippedItem{
 			Path:   events[idx].Path,
-			Reason: synctypes.IssueCaseCollision,
+			Reason: IssueCaseCollision,
 			Detail: fmt.Sprintf("conflicts with %s", strings.Join(others, ", ")),
 		})
 	}
@@ -777,12 +775,12 @@ func appendMultiGroupCollisions(
 func (o *LocalObserver) detectDeletions(observed map[string]bool) []ChangeEvent {
 	var events []ChangeEvent
 
-	o.Baseline.ForEachPath(func(path string, entry *syncstore.BaselineEntry) {
+	o.Baseline.ForEachPath(func(path string, entry *BaselineEntry) {
 		if path == "" {
 			return
 		}
 
-		if entry.ItemType == synctypes.ItemTypeRoot {
+		if entry.ItemType == ItemTypeRoot {
 			return
 		}
 
@@ -795,8 +793,8 @@ func (o *LocalObserver) detectDeletions(observed map[string]bool) []ChangeEvent 
 		}
 
 		events = append(events, ChangeEvent{
-			Source:    synctypes.SourceLocal,
-			Type:      synctypes.ChangeDelete,
+			Source:    SourceLocal,
+			Type:      ChangeDelete,
 			Path:      path,
 			Name:      filepath.Base(path),
 			ItemType:  entry.ItemType,
@@ -809,7 +807,7 @@ func (o *LocalObserver) detectDeletions(observed map[string]bool) []ChangeEvent 
 	return events
 }
 
-func (o *LocalObserver) shouldSuppressDeleteForExcludedPath(path string, entry *syncstore.BaselineEntry) bool {
+func (o *LocalObserver) shouldSuppressDeleteForExcludedPath(path string, entry *BaselineEntry) bool {
 	if !o.scopeSnapshot.AllowsPath(path) {
 		return true
 	}
@@ -829,8 +827,8 @@ func (o *LocalObserver) shouldSuppressDeleteForExcludedPath(path string, entry *
 	return skip != nil && skip.Reason == ""
 }
 
-func observedKindFromItemType(itemType synctypes.ItemType) observedKind {
-	if itemType == synctypes.ItemTypeFolder || itemType == synctypes.ItemTypeRoot {
+func observedKindFromItemType(itemType ItemType) observedKind {
+	if itemType == ItemTypeFolder || itemType == ItemTypeRoot {
 		return observedKindDir
 	}
 
@@ -876,7 +874,7 @@ func computeStableHashWith(fsPath string, hashFunc func(string) (string, error))
 	}
 
 	if pre.Size() != post.Size() || pre.ModTime() != post.ModTime() {
-		return "", synctypes.ErrFileChangedDuringHash
+		return "", ErrFileChangedDuringHash
 	}
 
 	return hash, nil
@@ -956,7 +954,7 @@ func shouldObserveWithFilter(
 	if len(path) > MaxOneDrivePathLength {
 		return &SkippedItem{
 			Path:   path,
-			Reason: synctypes.IssuePathTooLong,
+			Reason: IssuePathTooLong,
 			Detail: fmt.Sprintf("path length %d exceeds %d-character limit", len(path), MaxOneDrivePathLength),
 		}
 	}
@@ -1071,37 +1069,37 @@ func matchesConfiguredFile(name, path string, skipFiles []string) bool {
 // invalid characters.
 func ValidateOneDriveName(name string) (reason, detail string) {
 	if name == "" {
-		return synctypes.IssueInvalidFilename, "empty filename"
+		return IssueInvalidFilename, "empty filename"
 	}
 
 	if name[len(name)-1] == '.' {
-		return synctypes.IssueInvalidFilename, fmt.Sprintf("filename %q ends with a period", name)
+		return IssueInvalidFilename, fmt.Sprintf("filename %q ends with a period", name)
 	}
 
 	if name[len(name)-1] == ' ' {
-		return synctypes.IssueInvalidFilename, fmt.Sprintf("filename %q ends with a space", name)
+		return IssueInvalidFilename, fmt.Sprintf("filename %q ends with a space", name)
 	}
 
 	if name[0] == ' ' {
-		return synctypes.IssueInvalidFilename, fmt.Sprintf("filename %q starts with a space", name)
+		return IssueInvalidFilename, fmt.Sprintf("filename %q starts with a space", name)
 	}
 
 	if len(name) > maxComponentLength {
-		return synctypes.IssueInvalidFilename, fmt.Sprintf("filename %q exceeds %d-character component limit", name, maxComponentLength)
+		return IssueInvalidFilename, fmt.Sprintf("filename %q exceeds %d-character component limit", name, maxComponentLength)
 	}
 
 	lower := strings.ToLower(name)
 
 	if isReservedDeviceName(lower) {
-		return synctypes.IssueInvalidFilename, fmt.Sprintf("filename %q is a reserved Windows device name", name)
+		return IssueInvalidFilename, fmt.Sprintf("filename %q is a reserved Windows device name", name)
 	}
 
 	if isReservedPattern(name, lower) {
-		return synctypes.IssueInvalidFilename, fmt.Sprintf("filename %q matches a reserved OneDrive pattern", name)
+		return IssueInvalidFilename, fmt.Sprintf("filename %q matches a reserved OneDrive pattern", name)
 	}
 
 	if containsInvalidChars(name) {
-		return synctypes.IssueInvalidFilename, fmt.Sprintf("filename %q contains characters forbidden by OneDrive", name)
+		return IssueInvalidFilename, fmt.Sprintf("filename %q contains characters forbidden by OneDrive", name)
 	}
 
 	return "", ""
@@ -1158,7 +1156,7 @@ func validateObservedName(name, path string, rules LocalObservationRules) (reaso
 	}
 
 	if rules.RejectSharePointRootForms && isSharePointRootForms(name, path) {
-		return synctypes.IssueInvalidFilename, fmt.Sprintf("name %q is reserved at the root of a SharePoint library", name)
+		return IssueInvalidFilename, fmt.Sprintf("name %q is reserved at the root of a SharePoint library", name)
 	}
 
 	return "", ""

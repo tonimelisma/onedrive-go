@@ -8,7 +8,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // ---------------------------------------------------------------------------
@@ -29,10 +28,10 @@ func TestS1_NoRemoteDeleteWithoutBaseline(t *testing.T) {
 			Path: "remote-only.txt",
 			RemoteEvents: []ChangeEvent{
 				{
-					Source:   synctypes.SourceRemote,
-					Type:     synctypes.ChangeCreate,
+					Source:   SourceRemote,
+					Type:     ChangeCreate,
 					Path:     "remote-only.txt",
-					ItemType: synctypes.ItemTypeFile,
+					ItemType: ItemTypeFile,
 					Hash:     "hash1",
 					ItemID:   "item1",
 					DriveID:  driveid.New(synctest.TestDriveID),
@@ -130,17 +129,17 @@ func assertDeletedLocalFileProducesRemoteDelete(t *testing.T, path string, mode 
 		Path:       path,
 		DriveID:    driveid.New(synctest.TestDriveID),
 		ItemID:     "item1",
-		ItemType:   synctypes.ItemTypeFile,
+		ItemType:   ItemTypeFile,
 		LocalHash:  "hashA",
 		RemoteHash: "hashA",
 	})
 	changes := []PathChanges{{
 		Path: path,
 		LocalEvents: []ChangeEvent{{
-			Source:    synctypes.SourceLocal,
-			Type:      synctypes.ChangeDelete,
+			Source:    SourceLocal,
+			Type:      ChangeDelete,
 			Path:      path,
-			ItemType:  synctypes.ItemTypeFile,
+			ItemType:  ItemTypeFile,
 			IsDeleted: true,
 		}},
 	}}
@@ -166,7 +165,7 @@ func TestEF4_ConvergentEdit_NoTransfer(t *testing.T) {
 		Path:       "converge.txt",
 		DriveID:    driveid.New(synctest.TestDriveID),
 		ItemID:     "item1",
-		ItemType:   synctypes.ItemTypeFile,
+		ItemType:   ItemTypeFile,
 		LocalHash:  "oldHash",
 		RemoteHash: "oldHash",
 	})
@@ -176,10 +175,10 @@ func TestEF4_ConvergentEdit_NoTransfer(t *testing.T) {
 			Path: "converge.txt",
 			RemoteEvents: []ChangeEvent{
 				{
-					Source:   synctypes.SourceRemote,
-					Type:     synctypes.ChangeModify,
+					Source:   SourceRemote,
+					Type:     ChangeModify,
 					Path:     "converge.txt",
-					ItemType: synctypes.ItemTypeFile,
+					ItemType: ItemTypeFile,
 					Hash:     "newHash",
 					ItemID:   "item1",
 					DriveID:  driveid.New(synctest.TestDriveID),
@@ -187,10 +186,10 @@ func TestEF4_ConvergentEdit_NoTransfer(t *testing.T) {
 			},
 			LocalEvents: []ChangeEvent{
 				{
-					Source:   synctypes.SourceLocal,
-					Type:     synctypes.ChangeModify,
+					Source:   SourceLocal,
+					Type:     ChangeModify,
 					Path:     "converge.txt",
-					ItemType: synctypes.ItemTypeFile,
+					ItemType: ItemTypeFile,
 					Hash:     "newHash",
 				},
 			},
@@ -220,10 +219,10 @@ func TestEF11_ConvergentCreate(t *testing.T) {
 			Path: "newfile.txt",
 			RemoteEvents: []ChangeEvent{
 				{
-					Source:   synctypes.SourceRemote,
-					Type:     synctypes.ChangeCreate,
+					Source:   SourceRemote,
+					Type:     ChangeCreate,
 					Path:     "newfile.txt",
-					ItemType: synctypes.ItemTypeFile,
+					ItemType: ItemTypeFile,
 					Hash:     "sameHash",
 					ItemID:   "item1",
 					DriveID:  driveid.New(synctest.TestDriveID),
@@ -231,10 +230,10 @@ func TestEF11_ConvergentCreate(t *testing.T) {
 			},
 			LocalEvents: []ChangeEvent{
 				{
-					Source:   synctypes.SourceLocal,
-					Type:     synctypes.ChangeCreate,
+					Source:   SourceLocal,
+					Type:     ChangeCreate,
 					Path:     "newfile.txt",
-					ItemType: synctypes.ItemTypeFile,
+					ItemType: ItemTypeFile,
 					Hash:     "sameHash",
 				},
 			},
@@ -259,10 +258,10 @@ func TestEF12_DivergentCreate(t *testing.T) {
 			Path: "newfile.txt",
 			RemoteEvents: []ChangeEvent{
 				{
-					Source:   synctypes.SourceRemote,
-					Type:     synctypes.ChangeCreate,
+					Source:   SourceRemote,
+					Type:     ChangeCreate,
 					Path:     "newfile.txt",
-					ItemType: synctypes.ItemTypeFile,
+					ItemType: ItemTypeFile,
 					Hash:     "hashA",
 					ItemID:   "item1",
 					DriveID:  driveid.New(synctest.TestDriveID),
@@ -270,10 +269,10 @@ func TestEF12_DivergentCreate(t *testing.T) {
 			},
 			LocalEvents: []ChangeEvent{
 				{
-					Source:   synctypes.SourceLocal,
-					Type:     synctypes.ChangeCreate,
+					Source:   SourceLocal,
+					Type:     ChangeCreate,
 					Path:     "newfile.txt",
-					ItemType: synctypes.ItemTypeFile,
+					ItemType: ItemTypeFile,
 					Hash:     "hashB",
 				},
 			},
@@ -285,7 +284,7 @@ func TestEF12_DivergentCreate(t *testing.T) {
 
 	conflicts := actionsOfType(plan.Actions, ActionConflict)
 	assert.Len(t, conflicts, 1, "EF12: divergent create should conflict")
-	assert.Equal(t, synctypes.ConflictCreateCreate, conflicts[0].ConflictInfo.ConflictType)
+	assert.Equal(t, ConflictCreateCreate, conflicts[0].ConflictInfo.ConflictType)
 }
 
 // Validates: R-2.2
@@ -298,7 +297,7 @@ func TestEF9_EditDeleteAutoResolve(t *testing.T) {
 		Path:       "edited.txt",
 		DriveID:    driveid.New(synctest.TestDriveID),
 		ItemID:     "item1",
-		ItemType:   synctypes.ItemTypeFile,
+		ItemType:   ItemTypeFile,
 		LocalHash:  "oldHash",
 		RemoteHash: "oldHash",
 	})
@@ -308,10 +307,10 @@ func TestEF9_EditDeleteAutoResolve(t *testing.T) {
 			Path: "edited.txt",
 			RemoteEvents: []ChangeEvent{
 				{
-					Source:    synctypes.SourceRemote,
-					Type:      synctypes.ChangeDelete,
+					Source:    SourceRemote,
+					Type:      ChangeDelete,
 					Path:      "edited.txt",
-					ItemType:  synctypes.ItemTypeFile,
+					ItemType:  ItemTypeFile,
 					ItemID:    "item1",
 					DriveID:   driveid.New(synctest.TestDriveID),
 					IsDeleted: true,
@@ -319,10 +318,10 @@ func TestEF9_EditDeleteAutoResolve(t *testing.T) {
 			},
 			LocalEvents: []ChangeEvent{
 				{
-					Source:   synctypes.SourceLocal,
-					Type:     synctypes.ChangeModify,
+					Source:   SourceLocal,
+					Type:     ChangeModify,
 					Path:     "edited.txt",
-					ItemType: synctypes.ItemTypeFile,
+					ItemType: ItemTypeFile,
 					Hash:     "newHash",
 				},
 			},
@@ -334,7 +333,7 @@ func TestEF9_EditDeleteAutoResolve(t *testing.T) {
 
 	conflicts := actionsOfType(plan.Actions, ActionConflict)
 	assert.Len(t, conflicts, 1, "EF9: local edit + remote delete = conflict")
-	assert.Equal(t, synctypes.ConflictEditDelete, conflicts[0].ConflictInfo.ConflictType)
+	assert.Equal(t, ConflictEditDelete, conflicts[0].ConflictInfo.ConflictType)
 }
 
 // Validates: R-2.3
@@ -352,7 +351,7 @@ func TestDownloadOnlyMode_SkipsLocalCorruption(t *testing.T) {
 		Path:       "corrupted.txt",
 		DriveID:    driveid.New(synctest.TestDriveID),
 		ItemID:     "item1",
-		ItemType:   synctypes.ItemTypeFile,
+		ItemType:   ItemTypeFile,
 		LocalHash:  "goodHash",
 		RemoteHash: "goodHash",
 	})
@@ -364,10 +363,10 @@ func TestDownloadOnlyMode_SkipsLocalCorruption(t *testing.T) {
 			Path: "corrupted.txt",
 			LocalEvents: []ChangeEvent{
 				{
-					Source:   synctypes.SourceLocal,
-					Type:     synctypes.ChangeModify,
+					Source:   SourceLocal,
+					Type:     ChangeModify,
 					Path:     "corrupted.txt",
-					ItemType: synctypes.ItemTypeFile,
+					ItemType: ItemTypeFile,
 					Hash:     "corruptedHash",
 				},
 			},
@@ -395,7 +394,7 @@ func TestED8_FolderModeFilteringRegression(t *testing.T) {
 		Path:     "photos",
 		DriveID:  driveid.New(synctest.TestDriveID),
 		ItemID:   "folder1",
-		ItemType: synctypes.ItemTypeFolder,
+		ItemType: ItemTypeFolder,
 	})
 
 	changes := []PathChanges{
@@ -403,10 +402,10 @@ func TestED8_FolderModeFilteringRegression(t *testing.T) {
 			Path: "photos",
 			LocalEvents: []ChangeEvent{
 				{
-					Source:    synctypes.SourceLocal,
-					Type:      synctypes.ChangeDelete,
+					Source:    SourceLocal,
+					Type:      ChangeDelete,
 					Path:      "photos",
-					ItemType:  synctypes.ItemTypeFolder,
+					ItemType:  ItemTypeFolder,
 					IsDeleted: true,
 				},
 			},
@@ -434,11 +433,11 @@ func TestMoveDetection_AmbiguousSameHashMultipleDeletes(t *testing.T) {
 	baseline := baselineWith(
 		&BaselineEntry{
 			Path: "dir1/file.txt", DriveID: driveid.New(synctest.TestDriveID),
-			ItemID: "item1", ItemType: synctypes.ItemTypeFile, LocalHash: "sameHash", RemoteHash: "sameHash",
+			ItemID: "item1", ItemType: ItemTypeFile, LocalHash: "sameHash", RemoteHash: "sameHash",
 		},
 		&BaselineEntry{
 			Path: "dir2/file.txt", DriveID: driveid.New(synctest.TestDriveID),
-			ItemID: "item2", ItemType: synctypes.ItemTypeFile, LocalHash: "sameHash", RemoteHash: "sameHash",
+			ItemID: "item2", ItemType: ItemTypeFile, LocalHash: "sameHash", RemoteHash: "sameHash",
 		},
 	)
 
@@ -447,19 +446,19 @@ func TestMoveDetection_AmbiguousSameHashMultipleDeletes(t *testing.T) {
 		{
 			Path: "dir1/file.txt",
 			LocalEvents: []ChangeEvent{
-				{Source: synctypes.SourceLocal, Type: synctypes.ChangeDelete, Path: "dir1/file.txt", ItemType: synctypes.ItemTypeFile, IsDeleted: true},
+				{Source: SourceLocal, Type: ChangeDelete, Path: "dir1/file.txt", ItemType: ItemTypeFile, IsDeleted: true},
 			},
 		},
 		{
 			Path: "dir2/file.txt",
 			LocalEvents: []ChangeEvent{
-				{Source: synctypes.SourceLocal, Type: synctypes.ChangeDelete, Path: "dir2/file.txt", ItemType: synctypes.ItemTypeFile, IsDeleted: true},
+				{Source: SourceLocal, Type: ChangeDelete, Path: "dir2/file.txt", ItemType: ItemTypeFile, IsDeleted: true},
 			},
 		},
 		{
 			Path: "dir3/file.txt",
 			LocalEvents: []ChangeEvent{
-				{Source: synctypes.SourceLocal, Type: synctypes.ChangeCreate, Path: "dir3/file.txt", ItemType: synctypes.ItemTypeFile, Hash: "sameHash"},
+				{Source: SourceLocal, Type: ChangeCreate, Path: "dir3/file.txt", ItemType: ItemTypeFile, Hash: "sameHash"},
 			},
 		},
 	}
@@ -481,7 +480,7 @@ func TestMoveDetection_AmbiguousSameHashMultipleCreates(t *testing.T) {
 	baseline := baselineWith(
 		&BaselineEntry{
 			Path: "original.txt", DriveID: driveid.New(synctest.TestDriveID),
-			ItemID: "item1", ItemType: synctypes.ItemTypeFile, LocalHash: "sameHash", RemoteHash: "sameHash",
+			ItemID: "item1", ItemType: ItemTypeFile, LocalHash: "sameHash", RemoteHash: "sameHash",
 		},
 	)
 
@@ -489,19 +488,19 @@ func TestMoveDetection_AmbiguousSameHashMultipleCreates(t *testing.T) {
 		{
 			Path: "original.txt",
 			LocalEvents: []ChangeEvent{
-				{Source: synctypes.SourceLocal, Type: synctypes.ChangeDelete, Path: "original.txt", ItemType: synctypes.ItemTypeFile, IsDeleted: true},
+				{Source: SourceLocal, Type: ChangeDelete, Path: "original.txt", ItemType: ItemTypeFile, IsDeleted: true},
 			},
 		},
 		{
 			Path: "copy1.txt",
 			LocalEvents: []ChangeEvent{
-				{Source: synctypes.SourceLocal, Type: synctypes.ChangeCreate, Path: "copy1.txt", ItemType: synctypes.ItemTypeFile, Hash: "sameHash"},
+				{Source: SourceLocal, Type: ChangeCreate, Path: "copy1.txt", ItemType: ItemTypeFile, Hash: "sameHash"},
 			},
 		},
 		{
 			Path: "copy2.txt",
 			LocalEvents: []ChangeEvent{
-				{Source: synctypes.SourceLocal, Type: synctypes.ChangeCreate, Path: "copy2.txt", ItemType: synctypes.ItemTypeFile, Hash: "sameHash"},
+				{Source: SourceLocal, Type: ChangeCreate, Path: "copy2.txt", ItemType: ItemTypeFile, Hash: "sameHash"},
 			},
 		},
 	}
@@ -523,7 +522,7 @@ func TestRemoteMove_WithRecreationAtSource(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path: "source.txt", DriveID: driveid.New(synctest.TestDriveID),
-		ItemID: "item1", ItemType: synctypes.ItemTypeFile, LocalHash: "hashA", RemoteHash: "hashA",
+		ItemID: "item1", ItemType: ItemTypeFile, LocalHash: "hashA", RemoteHash: "hashA",
 	})
 
 	changes := []PathChanges{
@@ -532,11 +531,11 @@ func TestRemoteMove_WithRecreationAtSource(t *testing.T) {
 			Path: "dest.txt",
 			RemoteEvents: []ChangeEvent{
 				{
-					Source:   synctypes.SourceRemote,
-					Type:     synctypes.ChangeMove,
+					Source:   SourceRemote,
+					Type:     ChangeMove,
 					Path:     "dest.txt",
 					OldPath:  "source.txt",
-					ItemType: synctypes.ItemTypeFile,
+					ItemType: ItemTypeFile,
 					ItemID:   "item1",
 					DriveID:  driveid.New(synctest.TestDriveID),
 					Hash:     "hashA",
@@ -548,10 +547,10 @@ func TestRemoteMove_WithRecreationAtSource(t *testing.T) {
 			Path: "source.txt",
 			RemoteEvents: []ChangeEvent{
 				{
-					Source:   synctypes.SourceRemote,
-					Type:     synctypes.ChangeCreate,
+					Source:   SourceRemote,
+					Type:     ChangeCreate,
 					Path:     "source.txt",
-					ItemType: synctypes.ItemTypeFile,
+					ItemType: ItemTypeFile,
 					ItemID:   "item2",
 					DriveID:  driveid.New(synctest.TestDriveID),
 					Hash:     "hashB",
@@ -586,7 +585,7 @@ func TestRemoteMove_WithRecreationAtSource(t *testing.T) {
 // download depends on its parent folder create.
 func TestBuildDependencies_FolderCreateBeforeChild(t *testing.T) {
 	actions := []Action{
-		{Type: ActionFolderCreate, Path: "newdir", CreateSide: synctypes.CreateLocal},
+		{Type: ActionFolderCreate, Path: "newdir", CreateSide: CreateLocal},
 		{Type: ActionDownload, Path: "newdir/file.txt"},
 	}
 
@@ -606,13 +605,13 @@ func TestBuildDependencies_ChildDeleteBeforeParent(t *testing.T) {
 		{
 			Type: ActionLocalDelete, Path: "dir",
 			View: &PathView{
-				Baseline: &BaselineEntry{ItemType: synctypes.ItemTypeFolder},
+				Baseline: &BaselineEntry{ItemType: ItemTypeFolder},
 			},
 		},
 		{
 			Type: ActionLocalDelete, Path: "dir/file.txt",
 			View: &PathView{
-				Baseline: &BaselineEntry{ItemType: synctypes.ItemTypeFile},
+				Baseline: &BaselineEntry{ItemType: ItemTypeFile},
 			},
 		},
 	}
@@ -644,7 +643,7 @@ func TestPlan_DeleteSafetyBlocked(t *testing.T) {
 			Path:       path,
 			DriveID:    driveid.New(synctest.TestDriveID),
 			ItemID:     "item-" + string(rune('a'+i)),
-			ItemType:   synctypes.ItemTypeFile,
+			ItemType:   ItemTypeFile,
 			LocalHash:  "hash",
 			RemoteHash: "hash",
 		}
@@ -657,7 +656,7 @@ func TestPlan_DeleteSafetyBlocked(t *testing.T) {
 		changes = append(changes, PathChanges{
 			Path: path,
 			LocalEvents: []ChangeEvent{
-				{Source: synctypes.SourceLocal, Type: synctypes.ChangeDelete, Path: path, ItemType: synctypes.ItemTypeFile, IsDeleted: true},
+				{Source: SourceLocal, Type: ChangeDelete, Path: path, ItemType: ItemTypeFile, IsDeleted: true},
 			},
 		})
 	}
@@ -666,7 +665,7 @@ func TestPlan_DeleteSafetyBlocked(t *testing.T) {
 
 	_, err := planner.Plan(changes, baseline, SyncBidirectional, config, nil)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, synctypes.ErrDeleteSafetyThresholdExceeded)
+	assert.ErrorIs(t, err, ErrDeleteSafetyThresholdExceeded)
 }
 
 // ---------------------------------------------------------------------------
@@ -701,7 +700,7 @@ func TestDetectCycle_SelfLoop(t *testing.T) {
 
 	err := detectDependencyCycle(deps)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, synctypes.ErrDependencyCycle)
+	assert.ErrorIs(t, err, ErrDependencyCycle)
 }
 
 // Validates: R-2.3
@@ -716,7 +715,7 @@ func TestDetectCycle_MutualDependency(t *testing.T) {
 
 	err := detectDependencyCycle(deps)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, synctypes.ErrDependencyCycle)
+	assert.ErrorIs(t, err, ErrDependencyCycle)
 }
 
 // Validates: R-2.3
@@ -732,7 +731,7 @@ func TestDetectCycle_IndirectCycle(t *testing.T) {
 
 	err := detectDependencyCycle(deps)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, synctypes.ErrDependencyCycle)
+	assert.ErrorIs(t, err, ErrDependencyCycle)
 }
 
 // Validates: R-2.3

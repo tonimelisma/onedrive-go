@@ -11,8 +11,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 type engineWorkReason int
@@ -35,12 +33,12 @@ const (
 type engineWorkRequest struct {
 	reason        engineWorkReason
 	changes       []PathChanges
-	trialScopeKey synctypes.ScopeKey
+	trialScopeKey ScopeKey
 	trialPath     string
 	trialDriveID  driveid.ID
 }
 
-type failureRebuildResult struct {
+type retryCandidate struct {
 	event    *ChangeEvent
 	skipped  *SkippedItem
 	resolved bool
@@ -54,9 +52,9 @@ func pathChangesFromEvent(ev *ChangeEvent) []PathChanges {
 
 	pc := PathChanges{Path: ev.Path}
 	switch ev.Source {
-	case synctypes.SourceRemote:
+	case SourceRemote:
 		pc.RemoteEvents = append(pc.RemoteEvents, *ev)
-	case synctypes.SourceLocal:
+	case SourceLocal:
 		pc.LocalEvents = append(pc.LocalEvents, *ev)
 	default:
 		return nil
@@ -68,9 +66,9 @@ func pathChangesFromEvent(ev *ChangeEvent) []PathChanges {
 func (rt *watchRuntime) dispatchWorkRequest(
 	ctx context.Context,
 	request engineWorkRequest,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	mode Mode,
-	safety *synctypes.SafetyConfig,
+	safety *SafetyConfig,
 ) ([]*TrackedAction, bool) {
 	if len(request.changes) == 0 {
 		return nil, false
@@ -89,15 +87,15 @@ func (rt *watchRuntime) dispatchWorkRequest(
 func (rt *watchRuntime) dispatchPlannerWork(
 	ctx context.Context,
 	changes []PathChanges,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	mode Mode,
-	safety *synctypes.SafetyConfig,
+	safety *SafetyConfig,
 	options dispatchBatchOptions,
 ) ([]*TrackedAction, bool) {
 	denied := rt.engine.permHandler.DeniedPrefixes(ctx)
 	plan, err := rt.engine.planner.Plan(changes, bl, mode, safety, denied)
 	if err != nil {
-		if errors.Is(err, synctypes.ErrDeleteSafetyThresholdExceeded) {
+		if errors.Is(err, ErrDeleteSafetyThresholdExceeded) {
 			rt.engine.logger.Warn("internal work request blocked by delete protection",
 				slog.Int("paths", len(changes)),
 			)
@@ -139,16 +137,16 @@ func (rt *watchRuntime) dispatchPlannerWork(
 // actual release signal arrives.
 func (rt *watchRuntime) runTrialDispatch(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	mode Mode,
-	safety *synctypes.SafetyConfig,
+	safety *SafetyConfig,
 ) []*TrackedAction {
 	rt.mustAssertPlannerSweepAllowed(rt, "runTrialDispatch", "run trial dispatch")
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventTrialSweepStarted})
 
 	now := rt.engine.nowFunc()
 	var dispatch []*TrackedAction
-	seen := make(map[synctypes.ScopeKey]bool)
+	seen := make(map[ScopeKey]bool)
 
 	for _, key := range rt.dueTrials(now) {
 		seen[key] = true
@@ -166,10 +164,10 @@ func (rt *watchRuntime) runTrialDispatch(
 
 func (rt *watchRuntime) dispatchDueTrialScope(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	mode Mode,
-	safety *synctypes.SafetyConfig,
-	key synctypes.ScopeKey,
+	safety *SafetyConfig,
+	key ScopeKey,
 ) []*TrackedAction {
 	for {
 		row, found, err := rt.engine.baseline.PickTrialCandidate(ctx, key)
@@ -193,11 +191,7 @@ func (rt *watchRuntime) dispatchDueTrialScope(
 			return nil
 		}
 
-		if rt.isFailureResolved(ctx, row) {
-			continue
-		}
-
-		rebuild := rt.rebuildFailureWork(ctx, row)
+		rebuild := rt.buildRetryCandidate(ctx, bl, row)
 		switch {
 		case rebuild.err != nil:
 			rt.engine.logger.Warn("runTrialDispatch: failed to rebuild trial candidate",
@@ -235,9 +229,9 @@ func (rt *watchRuntime) dispatchDueTrialScope(
 // cached action payloads.
 func (rt *watchRuntime) runRetrierSweep(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	mode Mode,
-	safety *synctypes.SafetyConfig,
+	safety *SafetyConfig,
 ) []*TrackedAction {
 	rt.mustAssertPlannerSweepAllowed(rt, "runRetrierSweep", "run retrier sweep")
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetrySweepStarted})
@@ -271,11 +265,7 @@ func (rt *watchRuntime) runRetrierSweep(
 		if rt.depGraph.HasInFlight(row.Path) {
 			continue
 		}
-		if rt.isFailureResolved(ctx, row) {
-			continue
-		}
-
-		rebuild := rt.rebuildFailureWork(ctx, row)
+		rebuild := rt.buildRetryCandidate(ctx, bl, row)
 		switch {
 		case rebuild.err != nil:
 			rt.engine.logger.Warn("retrier sweep: failed to rebuild retry candidate",
@@ -324,9 +314,17 @@ func (flow *engineFlow) collectDueRetryChanges(
 	ctx context.Context,
 	observedPaths map[string]bool,
 ) []PathChanges {
+	bl, loadErr := flow.engine.baseline.Load(ctx)
+	if loadErr != nil {
+		flow.engine.logger.Warn("one-shot retry rebuild: failed to load baseline",
+			slog.String("error", loadErr.Error()),
+		)
+		return nil
+	}
+
 	rows, err := flow.engine.baseline.ListSyncFailuresForRetry(ctx, flow.engine.nowFunc())
 	if err != nil {
-		flow.engine.logger.Warn("one-shot retry replay: failed to list retriable items",
+		flow.engine.logger.Warn("one-shot retry rebuild: failed to list retriable items",
 			slog.String("error", err.Error()),
 		)
 		return nil
@@ -342,14 +340,11 @@ func (flow *engineFlow) collectDueRetryChanges(
 		if observedPaths[row.Path] {
 			continue
 		}
-		if flow.isFailureResolved(ctx, row) {
-			continue
-		}
 
-		rebuild := flow.rebuildFailureWork(ctx, row)
+		rebuild := flow.buildRetryCandidate(ctx, bl, row)
 		switch {
 		case rebuild.err != nil:
-			flow.engine.logger.Warn("one-shot retry replay: failed to rebuild retry candidate",
+			flow.engine.logger.Warn("one-shot retry rebuild: failed to rebuild retry candidate",
 				slog.String("path", row.Path),
 				slog.String("error", rebuild.err.Error()),
 			)
@@ -363,7 +358,7 @@ func (flow *engineFlow) collectDueRetryChanges(
 	}
 
 	if len(changes) > 0 {
-		flow.engine.logger.Info("one-shot retry replay",
+		flow.engine.logger.Info("one-shot retry rebuild",
 			slog.Int("paths", len(changes)),
 		)
 	}
@@ -421,10 +416,10 @@ func (e *Engine) effectiveRetryBatchLimit() int {
 // remoteStateToChangeEvent converts current remote mirror truth into a
 // planner-ready remote change event. Remote deletion is represented by mirror
 // absence and handled separately by delete-specific rebuild paths.
-func remoteStateToChangeEvent(rs *syncstore.RemoteStateRow, path string) *ChangeEvent {
+func remoteStateToChangeEvent(rs *RemoteStateRow, path string) *ChangeEvent {
 	return &ChangeEvent{
-		Source:    synctypes.SourceRemote,
-		Type:      synctypes.ChangeModify,
+		Source:    SourceRemote,
+		Type:      ChangeModify,
 		Path:      path,
 		ItemID:    rs.ItemID,
 		ParentID:  rs.ParentID,
@@ -439,7 +434,7 @@ func remoteStateToChangeEvent(rs *syncstore.RemoteStateRow, path string) *Change
 	}
 }
 
-func baselineEntryMatchesRemoteState(entry *syncstore.BaselineEntry, rs *syncstore.RemoteStateRow) bool {
+func baselineEntryMatchesRemoteState(entry *BaselineEntry, rs *RemoteStateRow) bool {
 	if entry == nil || rs == nil {
 		return false
 	}
@@ -451,18 +446,19 @@ func baselineEntryMatchesRemoteState(entry *syncstore.BaselineEntry, rs *syncsto
 	return entry.RemoteHash == rs.Hash
 }
 
-func (flow *engineFlow) baselineEntryForFailure(ctx context.Context, row *syncstore.SyncFailureRow) *syncstore.BaselineEntry {
-	bl := flow.engine.baseline.Baseline()
-	if bl == nil {
-		var err error
-		bl, err = flow.engine.baseline.Load(ctx)
-		if err != nil {
-			flow.engine.logger.Debug("baselineEntryForFailure: failed to load baseline",
-				slog.String("path", row.Path),
-				slog.String("error", err.Error()),
-			)
-			return nil
-		}
+func (flow *engineFlow) loadRetryBaseline(ctx context.Context, bl *Baseline) (*Baseline, error) {
+	if bl != nil {
+		return bl, nil
+	}
+	if cached := flow.engine.baseline.Baseline(); cached != nil {
+		return cached, nil
+	}
+	return flow.engine.baseline.Load(ctx)
+}
+
+func baselineEntryForFailureInBaseline(bl *Baseline, row *SyncFailureRow) *BaselineEntry {
+	if bl == nil || row == nil {
+		return nil
 	}
 
 	if entry, ok := bl.GetByPath(row.Path); ok && entry.DriveID == row.DriveID {
@@ -480,19 +476,9 @@ func (flow *engineFlow) baselineEntryForFailure(ctx context.Context, row *syncst
 	return entry
 }
 
-// observeLocalFile rebuilds upload-side observation from current local truth.
-func (flow *engineFlow) baselineEntryForPath(ctx context.Context, path string, driveID driveid.ID) *syncstore.BaselineEntry {
-	bl := flow.engine.baseline.Baseline()
+func baselineEntryForPathInBaseline(bl *Baseline, path string, driveID driveid.ID) *BaselineEntry {
 	if bl == nil {
-		var err error
-		bl, err = flow.engine.baseline.Load(ctx)
-		if err != nil {
-			flow.engine.logger.Debug("baselineEntryForPath: failed to load baseline",
-				slog.String("path", path),
-				slog.String("error", err.Error()),
-			)
-			return nil
-		}
+		return nil
 	}
 
 	entry, ok := bl.GetByPath(path)
@@ -503,7 +489,7 @@ func (flow *engineFlow) baselineEntryForPath(ctx context.Context, path string, d
 	return entry
 }
 
-func (flow *engineFlow) clearFailureCandidate(ctx context.Context, row *syncstore.SyncFailureRow, caller string) {
+func (flow *engineFlow) clearFailureCandidate(ctx context.Context, row *SyncFailureRow, caller string) {
 	if err := flow.takeSyncFailureAndLogResolution(
 		ctx,
 		row.Path,
@@ -517,7 +503,7 @@ func (flow *engineFlow) clearFailureCandidate(ctx context.Context, row *syncstor
 	}
 }
 
-func (flow *engineFlow) failureDriveID(row *syncstore.SyncFailureRow) driveid.ID {
+func (flow *engineFlow) failureDriveID(row *SyncFailureRow) driveid.ID {
 	if row == nil || row.DriveID.IsZero() {
 		return flow.engine.driveID
 	}
@@ -525,18 +511,18 @@ func (flow *engineFlow) failureDriveID(row *syncstore.SyncFailureRow) driveid.ID
 	return row.DriveID
 }
 
-func failureActionType(row *syncstore.SyncFailureRow) synctypes.ActionType {
+func failureActionType(row *SyncFailureRow) ActionType {
 	if row == nil {
-		return synctypes.ActionDownload
+		return ActionDownload
 	}
-	if row.ActionType == synctypes.ActionDownload && row.Direction != synctypes.DirectionDownload {
+	if row.ActionType == ActionDownload && row.Direction != DirectionDownload {
 		switch row.Direction {
-		case synctypes.DirectionDownload:
-			return synctypes.ActionDownload
-		case synctypes.DirectionUpload:
-			return synctypes.ActionUpload
-		case synctypes.DirectionDelete:
-			return synctypes.ActionRemoteDelete
+		case DirectionDownload:
+			return ActionDownload
+		case DirectionUpload:
+			return ActionUpload
+		case DirectionDelete:
+			return ActionRemoteDelete
 		}
 	}
 	return row.ActionType
@@ -544,7 +530,7 @@ func failureActionType(row *syncstore.SyncFailureRow) synctypes.ActionType {
 
 func (flow *engineFlow) recordRetryTrialSkippedItem(
 	ctx context.Context,
-	row *syncstore.SyncFailureRow,
+	row *SyncFailureRow,
 	skipped *SkippedItem,
 ) {
 	if skipped == nil {
@@ -563,7 +549,7 @@ func (flow *engineFlow) recordRetryTrialSkippedItem(
 		slog.String("detail", skipped.Detail),
 	)
 
-	if err := flow.engine.baseline.UpsertActionableFailures(ctx, []syncstore.ActionableFailure{{
+	if err := flow.engine.baseline.UpsertActionableFailures(ctx, []ActionableFailure{{
 		Path:       skipped.Path,
 		DriveID:    driveID,
 		Direction:  failureActionType(row).Direction(),
@@ -580,91 +566,87 @@ func (flow *engineFlow) recordRetryTrialSkippedItem(
 	}
 }
 
-func (flow *engineFlow) rebuildFailureWork(ctx context.Context, row *syncstore.SyncFailureRow) failureRebuildResult {
+func (flow *engineFlow) buildRetryCandidate(
+	ctx context.Context,
+	bl *Baseline,
+	row *SyncFailureRow,
+) retryCandidate {
+	bl, err := flow.loadRetryBaseline(ctx, bl)
+	if err != nil {
+		return retryCandidate{err: fmt.Errorf("load baseline: %w", err)}
+	}
+
 	switch failureActionType(row) {
-	case synctypes.ActionUpload, synctypes.ActionFolderCreate:
-		return flow.observeLocalFailurePath(ctx, row)
-	case synctypes.ActionRemoteMove:
-		return flow.rebuildRemoteMoveFailure(ctx, row)
-	case synctypes.ActionRemoteDelete:
-		return flow.rebuildRemoteDeleteFailure(ctx, row)
-	case synctypes.ActionDownload:
-		return flow.rebuildDownloadFailure(ctx, row)
-	case synctypes.ActionLocalDelete:
-		return flow.rebuildLocalDeleteFailure(ctx, row)
-	case synctypes.ActionLocalMove,
-		synctypes.ActionConflict,
-		synctypes.ActionUpdateSynced,
-		synctypes.ActionCleanup:
-		return flow.rebuildRemoteStateBackedFailure(ctx, row)
+	case ActionUpload, ActionFolderCreate:
+		return flow.buildLocalObservationRetryCandidate(ctx, bl, row)
+	case ActionRemoteMove:
+		return flow.buildRemoteMoveRetryCandidate(ctx, bl, row)
+	case ActionRemoteDelete:
+		return flow.buildRemoteDeleteRetryCandidate(bl, row)
+	case ActionDownload:
+		return flow.buildMirrorRetryCandidate(ctx, bl, row, true)
+	case ActionLocalDelete:
+		return flow.buildLocalDeleteRetryCandidate(ctx, bl, row)
+	case ActionLocalMove,
+		ActionConflict,
+		ActionUpdateSynced,
+		ActionCleanup:
+		return flow.buildMirrorRetryCandidate(ctx, bl, row, false)
 	default:
 		panic(fmt.Sprintf("unknown action type %d", row.ActionType))
 	}
 }
 
-func (flow *engineFlow) rebuildRemoteStateBackedFailure(
+func (flow *engineFlow) buildMirrorRetryCandidate(
 	ctx context.Context,
-	row *syncstore.SyncFailureRow,
-) failureRebuildResult {
+	bl *Baseline,
+	row *SyncFailureRow,
+	forceDownload bool,
+) retryCandidate {
 	rs, found, err := flow.engine.baseline.GetRemoteStateByPath(ctx, row.Path, row.DriveID)
 	if err != nil {
-		return failureRebuildResult{err: fmt.Errorf("remote state lookup failed: %w", err)}
+		return retryCandidate{err: fmt.Errorf("remote state lookup failed: %w", err)}
 	}
-	if !found {
-		return failureRebuildResult{resolved: true}
+	if !found || rs.IsFiltered {
+		return retryCandidate{resolved: true}
 	}
-	if rs.IsFiltered {
-		return failureRebuildResult{resolved: true}
-	}
-
-	return failureRebuildResult{event: remoteStateToChangeEvent(rs, row.Path)}
-}
-
-func (flow *engineFlow) rebuildDownloadFailure(
-	ctx context.Context,
-	row *syncstore.SyncFailureRow,
-) failureRebuildResult {
-	rs, found, err := flow.engine.baseline.GetRemoteStateByPath(ctx, row.Path, row.DriveID)
-	if err != nil {
-		return failureRebuildResult{err: fmt.Errorf("remote state lookup failed: %w", err)}
-	}
-	if !found {
-		return failureRebuildResult{resolved: true}
-	}
-	if rs.IsFiltered {
-		return failureRebuildResult{resolved: true}
+	if baselineEntryMatchesRemoteState(baselineEntryForFailureInBaseline(bl, row), rs) {
+		return retryCandidate{resolved: true}
 	}
 
 	event := remoteStateToChangeEvent(rs, row.Path)
-	event.ForcedAction = synctypes.ActionDownload
-	event.HasForcedAction = true
+	if forceDownload {
+		event.ForcedAction = ActionDownload
+		event.HasForcedAction = true
+	}
 
-	return failureRebuildResult{event: event}
+	return retryCandidate{event: event}
 }
 
-func (flow *engineFlow) rebuildLocalDeleteFailure(
+func (flow *engineFlow) buildLocalDeleteRetryCandidate(
 	ctx context.Context,
-	row *syncstore.SyncFailureRow,
-) failureRebuildResult {
-	entry := flow.baselineEntryForFailure(ctx, row)
+	bl *Baseline,
+	row *SyncFailureRow,
+) retryCandidate {
+	entry := baselineEntryForFailureInBaseline(bl, row)
 	if entry == nil {
-		return failureRebuildResult{resolved: true}
+		return retryCandidate{resolved: true}
 	}
 
 	if row.ItemID != "" {
 		_, found, err := flow.engine.baseline.GetRemoteStateByID(ctx, row.DriveID, row.ItemID)
 		if err != nil {
-			return failureRebuildResult{err: fmt.Errorf("remote state lookup failed: %w", err)}
+			return retryCandidate{err: fmt.Errorf("remote state lookup failed: %w", err)}
 		}
 		if found {
-			return failureRebuildResult{resolved: true}
+			return retryCandidate{resolved: true}
 		}
 	}
 
-	return failureRebuildResult{event: &ChangeEvent{
-		Source:          synctypes.SourceRemote,
-		Type:            synctypes.ChangeDelete,
-		ForcedAction:    synctypes.ActionLocalDelete,
+	return retryCandidate{event: &ChangeEvent{
+		Source:          SourceRemote,
+		Type:            ChangeDelete,
+		ForcedAction:    ActionLocalDelete,
 		HasForcedAction: true,
 		Path:            entry.Path,
 		ItemID:          entry.ItemID,
@@ -679,17 +661,21 @@ func (flow *engineFlow) rebuildLocalDeleteFailure(
 	}}
 }
 
-func (flow *engineFlow) observeLocalFailurePath(ctx context.Context, row *syncstore.SyncFailureRow) failureRebuildResult {
+func (flow *engineFlow) buildLocalObservationRetryCandidate(
+	ctx context.Context,
+	bl *Baseline,
+	row *SyncFailureRow,
+) retryCandidate {
 	scopeSnapshot, err := flow.engine.buildScopeSnapshot(ctx)
 	if err != nil {
-		return failureRebuildResult{err: fmt.Errorf("build scope snapshot: %w", err)}
+		return retryCandidate{err: fmt.Errorf("build scope snapshot: %w", err)}
 	}
 
 	result, err := ObserveSinglePathWithScope(
 		flow.engine.logger,
 		flow.engine.syncTree,
 		row.Path,
-		flow.baselineEntryForPath(ctx, row.Path, row.DriveID),
+		baselineEntryForPathInBaseline(bl, row.Path, row.DriveID),
 		flow.engine.nowFunc().UnixNano(),
 		nil,
 		flow.engine.localFilter,
@@ -697,64 +683,59 @@ func (flow *engineFlow) observeLocalFailurePath(ctx context.Context, row *syncst
 		scopeSnapshot,
 	)
 	if err != nil {
-		return failureRebuildResult{err: err}
+		return retryCandidate{err: err}
 	}
 
-	return failureRebuildResult{
+	return retryCandidate{
 		event:    result.Event,
 		skipped:  result.Skipped,
 		resolved: result.Resolved,
 	}
 }
 
-func (flow *engineFlow) rebuildRemoteMoveFailure(ctx context.Context, row *syncstore.SyncFailureRow) failureRebuildResult {
-	rebuild := flow.observeLocalFailurePath(ctx, row)
+func (flow *engineFlow) buildRemoteMoveRetryCandidate(
+	ctx context.Context,
+	bl *Baseline,
+	row *SyncFailureRow,
+) retryCandidate {
+	rebuild := flow.buildLocalObservationRetryCandidate(ctx, bl, row)
 	if rebuild.err != nil || rebuild.skipped != nil || rebuild.resolved || rebuild.event == nil || row.ItemID == "" {
 		return rebuild
 	}
 
-	bl, err := flow.engine.baseline.Load(ctx)
-	if err != nil {
-		return failureRebuildResult{err: err}
-	}
 	oldEntry, ok := bl.GetByID(driveid.NewItemKey(row.DriveID, row.ItemID))
 	if !ok || oldEntry.Path == row.Path {
 		return rebuild
 	}
 
 	moveEvent := *rebuild.event
-	moveEvent.Type = synctypes.ChangeMove
+	moveEvent.Type = ChangeMove
 	moveEvent.OldPath = oldEntry.Path
 
-	return failureRebuildResult{event: &moveEvent}
+	return retryCandidate{event: &moveEvent}
 }
 
-func (flow *engineFlow) rebuildRemoteDeleteFailure(ctx context.Context, row *syncstore.SyncFailureRow) failureRebuildResult {
-	bl, err := flow.engine.baseline.Load(ctx)
-	if err != nil {
-		return failureRebuildResult{err: err}
-	}
-
+func (flow *engineFlow) buildRemoteDeleteRetryCandidate(bl *Baseline, row *SyncFailureRow) retryCandidate {
 	entry, ok := bl.GetByPath(row.Path)
 	if !ok && row.ItemID != "" {
 		entry, ok = bl.GetByID(driveid.NewItemKey(row.DriveID, row.ItemID))
 	}
 	if !ok {
-		return failureRebuildResult{resolved: true}
+		return retryCandidate{resolved: true}
 	}
 
 	_, statErr := flow.engine.syncTree.Stat(row.Path)
 	switch {
 	case statErr == nil:
-		return failureRebuildResult{resolved: true}
+		return retryCandidate{resolved: true}
 	case !errors.Is(statErr, os.ErrNotExist):
-		return failureRebuildResult{err: statErr}
+		return retryCandidate{err: statErr}
 	}
 
-	return failureRebuildResult{event: &ChangeEvent{
-		Source:          synctypes.SourceLocal,
-		Type:            synctypes.ChangeDelete,
-		ForcedAction:    synctypes.ActionRemoteDelete,
+	return retryCandidate{event: &ChangeEvent{
+		Source:          SourceLocal,
+		Type:            ChangeDelete,
+		ForcedAction:    ActionRemoteDelete,
 		HasForcedAction: true,
 		Path:            row.Path,
 		DriveID:         row.DriveID,
@@ -766,142 +747,9 @@ func (flow *engineFlow) rebuildRemoteDeleteFailure(ctx context.Context, row *syn
 	}}
 }
 
-// createEventFromDB rebuilds a planner-ready change from current durable
-// state plus the local filesystem. Retry and trial work both use this shared
-// reconstruction path.
-func (flow *engineFlow) createEventFromDB(ctx context.Context, row *syncstore.SyncFailureRow) *ChangeEvent {
-	return flow.rebuildFailureWork(ctx, row).event
-}
-
-// isFailureResolved checks whether a retry/trial candidate has already been
-// resolved by normal observation or action processing.
-func (flow *engineFlow) isFailureResolved(ctx context.Context, row *syncstore.SyncFailureRow) bool {
-	switch failureActionType(row) {
-	case synctypes.ActionUpload, synctypes.ActionFolderCreate, synctypes.ActionRemoteMove:
-		return flow.clearFailureIfResolved(ctx, row, flow.isUploadLikeFailureResolved(row.Path))
-	case synctypes.ActionRemoteDelete:
-		return flow.clearFailureIfResolved(ctx, row, flow.isRemoteDeleteFailureResolved(ctx, row))
-	case synctypes.ActionDownload:
-		return flow.clearFailureIfResolved(ctx, row, flow.isDownloadFailureResolved(ctx, row))
-	case synctypes.ActionLocalDelete,
-		synctypes.ActionLocalMove,
-		synctypes.ActionConflict,
-		synctypes.ActionUpdateSynced,
-		synctypes.ActionCleanup:
-		return flow.clearFailureIfResolved(ctx, row, flow.isRemoteStateBackedActionResolved(ctx, row))
-	default:
-		panic(fmt.Sprintf("unknown action type %d", row.ActionType))
-	}
-}
-
-func (flow *engineFlow) isRemoteStateBackedActionResolved(
-	ctx context.Context,
-	row *syncstore.SyncFailureRow,
-) bool {
-	switch failureActionType(row) {
-	case synctypes.ActionUpload:
-		panic(fmt.Sprintf("unexpected remote-state-backed action type %d", row.ActionType))
-	case synctypes.ActionRemoteDelete:
-		panic(fmt.Sprintf("unexpected remote-state-backed action type %d", row.ActionType))
-	case synctypes.ActionRemoteMove:
-		panic(fmt.Sprintf("unexpected remote-state-backed action type %d", row.ActionType))
-	case synctypes.ActionFolderCreate:
-		panic(fmt.Sprintf("unexpected remote-state-backed action type %d", row.ActionType))
-	case synctypes.ActionLocalDelete:
-		return flow.isDeleteDirectionFailureResolved(ctx, row)
-	case synctypes.ActionDownload,
-		synctypes.ActionLocalMove,
-		synctypes.ActionConflict,
-		synctypes.ActionUpdateSynced,
-		synctypes.ActionCleanup:
-		return flow.isDownloadFailureResolved(ctx, row)
-	default:
-		panic(fmt.Sprintf("unexpected remote-state-backed action type %d", row.ActionType))
-	}
-}
-
-func (flow *engineFlow) isUploadLikeFailureResolved(path string) bool {
-	_, err := flow.engine.syncTree.Stat(path)
-	return errors.Is(err, os.ErrNotExist)
-}
-
-func (flow *engineFlow) isRemoteDeleteFailureResolved(
-	ctx context.Context,
-	row *syncstore.SyncFailureRow,
-) bool {
-	bl, err := flow.engine.baseline.Load(ctx)
-	if err != nil {
-		return false
-	}
-	if _, exists := bl.GetByPath(row.Path); !exists {
-		if row.ItemID == "" {
-			return true
-		}
-		_, existsByID := bl.GetByID(driveid.NewItemKey(row.DriveID, row.ItemID))
-		return !existsByID
-	}
-
-	_, statErr := flow.engine.syncTree.Stat(row.Path)
-	return statErr == nil
-}
-
-func (flow *engineFlow) isDeleteDirectionFailureResolved(
-	ctx context.Context,
-	row *syncstore.SyncFailureRow,
-) bool {
-	bl, err := flow.engine.baseline.Load(ctx)
-	if err != nil {
-		return false
-	}
-	_, exists := bl.GetByPath(row.Path)
-	return !exists
-}
-
-func (flow *engineFlow) isDownloadFailureResolved(
-	ctx context.Context,
-	row *syncstore.SyncFailureRow,
-) bool {
-	rs, found, err := flow.engine.baseline.GetRemoteStateByPath(ctx, row.Path, row.DriveID)
-	if err != nil {
-		return false
-	}
-	if !found {
-		return true
-	}
-	if rs.IsFiltered {
-		return true
-	}
-
-	return baselineEntryMatchesRemoteState(flow.baselineEntryForFailure(ctx, row), rs)
-}
-
-func (flow *engineFlow) clearFailureIfResolved(
-	ctx context.Context,
-	row *syncstore.SyncFailureRow,
-	resolved bool,
-) bool {
-	if !resolved {
-		return false
-	}
-
-	if err := flow.takeSyncFailureAndLogResolution(
-		ctx,
-		row.Path,
-		flow.failureDriveID(row),
-		failureResolutionSourceRetryResolved,
-	); err != nil {
-		flow.engine.logger.Debug("isFailureResolved: failed to clear resolved failure",
-			slog.String("path", row.Path),
-			slog.String("error", err.Error()),
-		)
-	}
-
-	return true
-}
-
 // clearFailureOnSuccess removes the sync_failures row for a successfully
 // completed action. The engine owns failure lifecycle — store_baseline's
-// CommitOutcome handles only baseline/remote_state updates.
+// CommitMutation handles only baseline/remote_state updates.
 func (flow *engineFlow) clearFailureOnSuccess(ctx context.Context, r *WorkerResult) {
 	driveID := r.DriveID
 	if driveID.String() == "" {
@@ -934,7 +782,7 @@ func (flow *engineFlow) takeSyncFailureAndLogResolution(
 	if !found || row == nil {
 		return nil
 	}
-	if row.Category != synctypes.CategoryTransient || row.Role != synctypes.FailureRoleItem {
+	if row.Category != CategoryTransient || row.Role != FailureRoleItem {
 		return nil
 	}
 

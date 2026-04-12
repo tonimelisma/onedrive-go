@@ -13,7 +13,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // ---------------------------------------------------------------------------
@@ -33,9 +32,9 @@ func TestFilterOutShortcuts_NoShortcuts(t *testing.T) {
 	t.Parallel()
 
 	events := []ChangeEvent{
-		{Type: synctypes.ChangeCreate, Path: "a.txt"},
-		{Type: synctypes.ChangeModify, Path: "b.txt"},
-		{Type: synctypes.ChangeDelete, Path: "c.txt"},
+		{Type: ChangeCreate, Path: "a.txt"},
+		{Type: ChangeModify, Path: "b.txt"},
+		{Type: ChangeDelete, Path: "c.txt"},
 	}
 
 	result := filterOutShortcuts(events)
@@ -47,10 +46,10 @@ func TestFilterOutShortcuts_RemovesShortcuts(t *testing.T) {
 	t.Parallel()
 
 	events := []ChangeEvent{
-		{Type: synctypes.ChangeCreate, Path: "a.txt"},
-		{Type: synctypes.ChangeShortcut, Path: "SharedFolder"},
-		{Type: synctypes.ChangeModify, Path: "b.txt"},
-		{Type: synctypes.ChangeShortcut, Path: "OtherShared"},
+		{Type: ChangeCreate, Path: "a.txt"},
+		{Type: ChangeShortcut, Path: "SharedFolder"},
+		{Type: ChangeModify, Path: "b.txt"},
+		{Type: ChangeShortcut, Path: "OtherShared"},
 	}
 
 	result := filterOutShortcuts(events)
@@ -68,7 +67,7 @@ func TestConvertShortcutItems_NewFiles(t *testing.T) {
 	t.Parallel()
 
 	remoteDriveID := driveid.New("0000000000000099")
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID:      "sc-1",
 		RemoteDrive: "0000000000000099",
 		RemoteItem:  "source-folder-1",
@@ -100,15 +99,15 @@ func TestConvertShortcutItems_NewFiles(t *testing.T) {
 	require.Len(t, events, 2)
 
 	// File should be create with mapped path.
-	assert.Equal(t, synctypes.ChangeCreate, events[0].Type)
+	assert.Equal(t, ChangeCreate, events[0].Type)
 	assert.Equal(t, "Shared/TeamDocs/report.xlsx", events[0].Path)
 	assert.Equal(t, "f1", events[0].ItemID)
 	assert.Equal(t, remoteDriveID, events[0].DriveID)
 
 	// Folder should also be create.
-	assert.Equal(t, synctypes.ChangeCreate, events[1].Type)
+	assert.Equal(t, ChangeCreate, events[1].Type)
 	assert.Equal(t, "Shared/TeamDocs/SubDir", events[1].Path)
-	assert.Equal(t, synctypes.ItemTypeFolder, events[1].ItemType)
+	assert.Equal(t, ItemTypeFolder, events[1].ItemType)
 }
 
 // Validates: R-2.10.16
@@ -116,7 +115,7 @@ func TestConvertShortcutItems_ExistingModified(t *testing.T) {
 	t.Parallel()
 
 	remoteDriveID := driveid.New("0000000000000099")
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID:      "sc-1",
 		RemoteDrive: "0000000000000099",
 		RemoteItem:  "source-folder-1",
@@ -141,7 +140,7 @@ func TestConvertShortcutItems_ExistingModified(t *testing.T) {
 
 	events := ConvertShortcutItems(items, sc, remoteDriveID, bl, testLogger(t))
 	require.Len(t, events, 1)
-	assert.Equal(t, synctypes.ChangeModify, events[0].Type)
+	assert.Equal(t, ChangeModify, events[0].Type)
 	assert.Equal(t, "SharedFolder/report.xlsx", events[0].Path)
 }
 
@@ -150,7 +149,7 @@ func TestConvertShortcutItems_DeletedItem(t *testing.T) {
 	t.Parallel()
 
 	remoteDriveID := driveid.New("0000000000000099")
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID:      "sc-1",
 		RemoteDrive: "0000000000000099",
 		RemoteItem:  "source-folder-1",
@@ -175,7 +174,7 @@ func TestConvertShortcutItems_DeletedItem(t *testing.T) {
 
 	events := ConvertShortcutItems(items, sc, remoteDriveID, bl, testLogger(t))
 	require.Len(t, events, 1)
-	assert.Equal(t, synctypes.ChangeDelete, events[0].Type)
+	assert.Equal(t, ChangeDelete, events[0].Type)
 	assert.Equal(t, "SharedFolder/report.xlsx", events[0].Path)
 	assert.True(t, events[0].IsDeleted)
 }
@@ -185,7 +184,7 @@ func TestConvertShortcutItems_SkipsRoot(t *testing.T) {
 	t.Parallel()
 
 	remoteDriveID := driveid.New("0000000000000099")
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID:      "sc-1",
 		RemoteDrive: "0000000000000099",
 		RemoteItem:  "source-folder-1",
@@ -212,7 +211,7 @@ func TestDetectShortcutOrphans_NoOrphans(t *testing.T) {
 	t.Parallel()
 
 	remoteDriveID := driveid.New("0000000000000099")
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID:      "sc-1",
 		RemoteDrive: "0000000000000099",
 		RemoteItem:  "source-folder-1",
@@ -238,7 +237,7 @@ func TestDetectShortcutOrphans_DetectsOrphans(t *testing.T) {
 	t.Parallel()
 
 	remoteDriveID := driveid.New("0000000000000099")
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID:      "sc-1",
 		RemoteDrive: "0000000000000099",
 		RemoteItem:  "source-folder-1",
@@ -258,7 +257,7 @@ func TestDetectShortcutOrphans_DetectsOrphans(t *testing.T) {
 
 	orphans := DetectShortcutOrphans(sc, remoteDriveID, items, bl)
 	require.Len(t, orphans, 1)
-	assert.Equal(t, synctypes.ChangeDelete, orphans[0].Type)
+	assert.Equal(t, ChangeDelete, orphans[0].Type)
 	assert.Equal(t, "SharedFolder/deleted.txt", orphans[0].Path)
 	assert.Equal(t, "f2", orphans[0].ItemID)
 	assert.True(t, orphans[0].IsDeleted)
@@ -270,7 +269,7 @@ func TestDetectShortcutOrphans_IgnoresOtherDrives(t *testing.T) {
 
 	remoteDriveID := driveid.New("0000000000000099")
 	otherDriveID := driveid.New("0000000000000001")
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID:      "sc-1",
 		RemoteDrive: "0000000000000099",
 		RemoteItem:  "source-folder-1",
@@ -289,7 +288,7 @@ func TestDetectShortcutOrphans_IgnoresOtherDrives(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// registerShortcuts (integration with syncstore.SyncStore)
+// registerShortcuts (integration with SyncStore)
 // ---------------------------------------------------------------------------
 
 // Validates: R-3.4.2
@@ -306,7 +305,7 @@ func TestRegisterShortcuts_NewShortcut(t *testing.T) {
 
 	events := []ChangeEvent{
 		{
-			Type:          synctypes.ChangeShortcut,
+			Type:          ChangeShortcut,
 			ItemID:        "sc-1",
 			Path:          "Shared/TeamDocs",
 			RemoteDriveID: "remote-drive-1",
@@ -334,13 +333,13 @@ func TestRegisterShortcuts_UpdateExisting(t *testing.T) {
 	ctx := t.Context()
 
 	// Pre-register a shortcut.
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
 		ItemID:       "sc-1",
 		RemoteDrive:  "remote-drive-1",
 		RemoteItem:   "remote-item-1",
 		LocalPath:    "OldPath",
 		DriveType:    "personal",
-		Observation:  synctypes.ObservationDelta,
+		Observation:  ObservationDelta,
 		DiscoveredAt: 1000,
 	}))
 
@@ -351,7 +350,7 @@ func TestRegisterShortcuts_UpdateExisting(t *testing.T) {
 
 	events := []ChangeEvent{
 		{
-			Type:          synctypes.ChangeShortcut,
+			Type:          ChangeShortcut,
 			ItemID:        "sc-1",
 			Path:          "NewPath",
 			RemoteDriveID: "remote-drive-1",
@@ -369,21 +368,21 @@ func TestRegisterShortcuts_UpdateExisting(t *testing.T) {
 	assert.Equal(t, "NewPath", sc.LocalPath)
 	// DriveType and Observation should be preserved from the existing record.
 	assert.Equal(t, "personal", sc.DriveType)
-	assert.Equal(t, synctypes.ObservationDelta, sc.Observation)
+	assert.Equal(t, ObservationDelta, sc.Observation)
 	assert.Equal(t, int64(1000), sc.DiscoveredAt)
 }
 
 // ---------------------------------------------------------------------------
-// handleRemovedShortcuts (integration with syncstore.SyncStore)
+// handleRemovedShortcuts (integration with SyncStore)
 // ---------------------------------------------------------------------------
 
-func shortcutRecord(itemID, remoteDrive, remoteItem, localPath string) *synctypes.Shortcut {
-	return &synctypes.Shortcut{
+func shortcutRecord(itemID, remoteDrive, remoteItem, localPath string) *Shortcut {
+	return &Shortcut{
 		ItemID:       itemID,
 		RemoteDrive:  remoteDrive,
 		RemoteItem:   remoteItem,
 		LocalPath:    localPath,
-		Observation:  synctypes.ObservationUnknown,
+		Observation:  ObservationUnknown,
 		DiscoveredAt: 1000,
 	}
 }
@@ -437,27 +436,27 @@ func TestHandleRemovedShortcuts_ClearsRemotePermissionScopesUnderRemovedShortcut
 	ctx := t.Context()
 	newTestWatchState(t, eng)
 
-	require.NoError(t, eng.baseline.UpsertShortcut(ctx, &synctypes.Shortcut{
+	require.NoError(t, eng.baseline.UpsertShortcut(ctx, &Shortcut{
 		ItemID:       "sc-1",
 		RemoteDrive:  "remote-drive-1",
 		RemoteItem:   "remote-item-1",
 		LocalPath:    "SharedFolder",
-		Observation:  synctypes.ObservationUnknown,
+		Observation:  ObservationUnknown,
 		DiscoveredAt: 1000,
 	}))
-	require.NoError(t, eng.baseline.UpsertShortcut(ctx, &synctypes.Shortcut{
+	require.NoError(t, eng.baseline.UpsertShortcut(ctx, &Shortcut{
 		ItemID:       "sc-2",
 		RemoteDrive:  "remote-drive-2",
 		RemoteItem:   "remote-item-2",
 		LocalPath:    "OtherFolder",
-		Observation:  synctypes.ObservationUnknown,
+		Observation:  ObservationUnknown,
 		DiscoveredAt: 1000,
 	}))
 
-	removedScope := synctypes.SKPermRemote("SharedFolder/locked")
-	otherScope := synctypes.SKPermRemote("OtherFolder/locked")
-	removedQuotaScope := synctypes.SKQuotaShortcut("remote-drive-1:remote-item-1")
-	otherQuotaScope := synctypes.SKQuotaShortcut("remote-drive-2:remote-item-2")
+	removedScope := SKPermRemote("SharedFolder/locked")
+	otherScope := SKPermRemote("OtherFolder/locked")
+	removedQuotaScope := SKQuotaShortcut("remote-drive-1:remote-item-1")
+	otherQuotaScope := SKQuotaShortcut("remote-drive-2:remote-item-2")
 
 	seedShortcutRemovalFailures(t, eng, ctx, removedScope, removedQuotaScope, otherScope, otherQuotaScope)
 	seedShortcutRemovalScopeBlocks(t, eng, removedScope, removedQuotaScope, otherScope, otherQuotaScope)
@@ -492,10 +491,10 @@ func seedShortcutRemovalFailures(
 	t *testing.T,
 	eng *testEngine,
 	ctx context.Context,
-	removedScope synctypes.ScopeKey,
-	removedQuotaScope synctypes.ScopeKey,
-	otherScope synctypes.ScopeKey,
-	otherQuotaScope synctypes.ScopeKey,
+	removedScope ScopeKey,
+	removedQuotaScope ScopeKey,
+	otherScope ScopeKey,
+	otherQuotaScope ScopeKey,
 ) {
 	t.Helper()
 
@@ -503,42 +502,42 @@ func seedShortcutRemovalFailures(
 		{
 			Path:       "SharedFolder/locked/file.txt",
 			DriveID:    eng.driveID,
-			Direction:  synctypes.DirectionUpload,
+			Direction:  DirectionUpload,
 			ActionType: ActionUpload,
-			Role:       synctypes.FailureRoleHeld,
-			Category:   synctypes.CategoryTransient,
-			IssueType:  synctypes.IssueSharedFolderBlocked,
+			Role:       FailureRoleHeld,
+			Category:   CategoryTransient,
+			IssueType:  IssueSharedFolderBlocked,
 			ErrMsg:     "blocked by remote permission scope",
 			ScopeKey:   removedScope,
 		},
 		{
 			Path:       "SharedFolder/quota/file.txt",
 			DriveID:    eng.driveID,
-			Direction:  synctypes.DirectionUpload,
+			Direction:  DirectionUpload,
 			ActionType: ActionUpload,
-			Role:       synctypes.FailureRoleHeld,
-			Category:   synctypes.CategoryTransient,
+			Role:       FailureRoleHeld,
+			Category:   CategoryTransient,
 			ErrMsg:     "blocked by shortcut quota scope",
 			ScopeKey:   removedQuotaScope,
 		},
 		{
 			Path:       "OtherFolder/locked/file.txt",
 			DriveID:    eng.driveID,
-			Direction:  synctypes.DirectionUpload,
+			Direction:  DirectionUpload,
 			ActionType: ActionUpload,
-			Role:       synctypes.FailureRoleHeld,
-			Category:   synctypes.CategoryTransient,
-			IssueType:  synctypes.IssueSharedFolderBlocked,
+			Role:       FailureRoleHeld,
+			Category:   CategoryTransient,
+			IssueType:  IssueSharedFolderBlocked,
 			ErrMsg:     "blocked by remote permission scope",
 			ScopeKey:   otherScope,
 		},
 		{
 			Path:       "OtherFolder/quota/file.txt",
 			DriveID:    eng.driveID,
-			Direction:  synctypes.DirectionUpload,
+			Direction:  DirectionUpload,
 			ActionType: ActionUpload,
-			Role:       synctypes.FailureRoleHeld,
-			Category:   synctypes.CategoryTransient,
+			Role:       FailureRoleHeld,
+			Category:   CategoryTransient,
 			ErrMsg:     "blocked by shortcut quota scope",
 			ScopeKey:   otherQuotaScope,
 		},
@@ -552,10 +551,10 @@ func seedShortcutRemovalFailures(
 func seedShortcutRemovalScopeBlocks(
 	t *testing.T,
 	eng *testEngine,
-	removedScope synctypes.ScopeKey,
-	removedQuotaScope synctypes.ScopeKey,
-	otherScope synctypes.ScopeKey,
-	otherQuotaScope synctypes.ScopeKey,
+	removedScope ScopeKey,
+	removedQuotaScope ScopeKey,
+	otherScope ScopeKey,
+	otherQuotaScope ScopeKey,
 ) {
 	t.Helper()
 
@@ -563,26 +562,26 @@ func seedShortcutRemovalScopeBlocks(
 	blocks := []ScopeBlock{
 		{
 			Key:       removedScope,
-			IssueType: synctypes.IssueSharedFolderBlocked,
+			IssueType: IssueSharedFolderBlocked,
 			BlockedAt: now,
 		},
 		{
 			Key:           removedQuotaScope,
-			IssueType:     synctypes.IssueQuotaExceeded,
-			TimingSource:  synctypes.ScopeTimingBackoff,
+			IssueType:     IssueQuotaExceeded,
+			TimingSource:  ScopeTimingBackoff,
 			BlockedAt:     now,
 			TrialInterval: time.Minute,
 			NextTrialAt:   now.Add(time.Minute),
 		},
 		{
 			Key:       otherScope,
-			IssueType: synctypes.IssueSharedFolderBlocked,
+			IssueType: IssueSharedFolderBlocked,
 			BlockedAt: now,
 		},
 		{
 			Key:           otherQuotaScope,
-			IssueType:     synctypes.IssueQuotaExceeded,
-			TimingSource:  synctypes.ScopeTimingBackoff,
+			IssueType:     IssueQuotaExceeded,
+			TimingSource:  ScopeTimingBackoff,
 			BlockedAt:     now,
 			TrialInterval: time.Minute,
 			NextTrialAt:   now.Add(time.Minute),
@@ -605,20 +604,20 @@ func TestDetectShortcutCollisions_NoCollisions(t *testing.T) {
 	mgr := newTestManager(t)
 	ctx := t.Context()
 
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
 		ItemID:       "sc-1",
 		RemoteDrive:  "remote-drive-1",
 		RemoteItem:   "remote-item-1",
 		LocalPath:    "SharedA",
-		Observation:  synctypes.ObservationUnknown,
+		Observation:  ObservationUnknown,
 		DiscoveredAt: 1000,
 	}))
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
 		ItemID:       "sc-2",
 		RemoteDrive:  "remote-drive-2",
 		RemoteItem:   "remote-item-2",
 		LocalPath:    "SharedB",
-		Observation:  synctypes.ObservationUnknown,
+		Observation:  ObservationUnknown,
 		DiscoveredAt: 1000,
 	}))
 
@@ -638,12 +637,12 @@ func TestDetectShortcutCollisions_PrimaryDriveConflict(t *testing.T) {
 
 	primaryDriveID := driveid.New("0000000000000001")
 
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
 		ItemID:       "sc-1",
 		RemoteDrive:  "0000000000000099",
 		RemoteItem:   "remote-item-1",
 		LocalPath:    "SharedDocs",
-		Observation:  synctypes.ObservationUnknown,
+		Observation:  ObservationUnknown,
 		DiscoveredAt: 1000,
 	}))
 
@@ -667,12 +666,12 @@ func TestDetectShortcutCollisions_PathConflicts(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		shortcuts      []*synctypes.Shortcut
+		shortcuts      []*Shortcut
 		wantCollisions map[string]bool
 	}{
 		{
 			name: "DuplicatePath",
-			shortcuts: []*synctypes.Shortcut{
+			shortcuts: []*Shortcut{
 				shortcutRecord("sc-1", "remote-drive-1", "remote-item-1", "SharedDocs"),
 				shortcutRecord("sc-2", "remote-drive-2", "remote-item-2", "SharedDocs"),
 			},
@@ -680,7 +679,7 @@ func TestDetectShortcutCollisions_PathConflicts(t *testing.T) {
 		},
 		{
 			name: "NestedPaths",
-			shortcuts: []*synctypes.Shortcut{
+			shortcuts: []*Shortcut{
 				shortcutRecord("sc-parent", "remote-drive-1", "remote-item-1", "Shared"),
 				shortcutRecord("sc-child", "remote-drive-2", "remote-item-2", "Shared/Sub"),
 			},
@@ -719,20 +718,20 @@ func TestObserveShortcutContent_SkipsCollisions(t *testing.T) {
 	remoteDriveID := driveid.New("0000000000000099")
 
 	// Two shortcuts — one will be marked as collision.
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
 		ItemID:       "sc-ok",
 		RemoteDrive:  "0000000000000099",
 		RemoteItem:   "ok-folder",
 		LocalPath:    "Good",
-		Observation:  synctypes.ObservationEnumerate,
+		Observation:  ObservationEnumerate,
 		DiscoveredAt: 1000,
 	}))
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
 		ItemID:       "sc-collide",
 		RemoteDrive:  "0000000000000099",
 		RemoteItem:   "collide-folder",
 		LocalPath:    "Bad",
-		Observation:  synctypes.ObservationEnumerate,
+		Observation:  ObservationEnumerate,
 		DiscoveredAt: 1000,
 	}))
 
@@ -785,7 +784,7 @@ func TestDetectDriveType_Personal(t *testing.T) {
 
 	driveType, obs := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).detectDriveType(t.Context(), "0000000000000099")
 	assert.Equal(t, "personal", driveType)
-	assert.Equal(t, synctypes.ObservationDelta, obs)
+	assert.Equal(t, ObservationDelta, obs)
 }
 
 // Validates: R-2.10.16
@@ -806,7 +805,7 @@ func TestDetectDriveType_Business(t *testing.T) {
 
 	driveType, obs := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).detectDriveType(t.Context(), "0000000000000099")
 	assert.Equal(t, "business", driveType)
-	assert.Equal(t, synctypes.ObservationEnumerate, obs)
+	assert.Equal(t, ObservationEnumerate, obs)
 }
 
 // Validates: R-2.10.16
@@ -822,7 +821,7 @@ func TestDetectDriveType_ErrorFallsBackToEnumerate(t *testing.T) {
 
 	driveType, obs := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).detectDriveType(t.Context(), "0000000000000099")
 	assert.Empty(t, driveType)
-	assert.Equal(t, synctypes.ObservationEnumerate, obs)
+	assert.Equal(t, ObservationEnumerate, obs)
 }
 
 // ---------------------------------------------------------------------------
@@ -875,7 +874,7 @@ func TestBuildShortcutObservationPlan_FiltersSuppressedAndCollidingTargets(t *te
 		logger: testLogger(t),
 	}
 
-	shortcuts := []synctypes.Shortcut{
+	shortcuts := []Shortcut{
 		{
 			ItemID:      "sc-keep",
 			RemoteDrive: "drv-a",
@@ -940,7 +939,7 @@ func TestBuildObservationSessionPlan_ShortcutOnlySkipsPrimaryScopeResolution(t *
 		Baseline: emptyBaseline(),
 		SyncMode: SyncBidirectional,
 		Purpose:  observationPlanPurposeOneShot,
-		Shortcuts: []synctypes.Shortcut{{
+		Shortcuts: []Shortcut{{
 			ItemID:      "sc-keep",
 			RemoteDrive: "drv-a",
 			RemoteItem:  "item-a",
@@ -981,7 +980,7 @@ func TestBuildObservationSessionPlan_CombinesPrimaryAndShortcutScopes(t *testing
 	session, err := flow.BuildScopeSession(t.Context(), nil)
 	require.NoError(t, err)
 
-	shortcuts := []synctypes.Shortcut{
+	shortcuts := []Shortcut{
 		{
 			ItemID:      "sc-keep",
 			RemoteDrive: "drv-a",
@@ -1054,7 +1053,7 @@ func TestBuildObservationSessionPlan_PrimaryHashIgnoresShortcutPhase(t *testing.
 		Baseline: emptyBaseline(),
 		SyncMode: SyncBidirectional,
 		Purpose:  observationPlanPurposeWatch,
-		Shortcuts: []synctypes.Shortcut{
+		Shortcuts: []Shortcut{
 			{
 				ItemID:      "sc-keep",
 				RemoteDrive: "drv-a",
@@ -1079,12 +1078,12 @@ func TestObserveShortcutContent_DeltaStrategy(t *testing.T) {
 	remoteDriveID := driveid.New("0000000000000099")
 
 	// Register a shortcut with delta observation.
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
 		ItemID:       "sc-1",
 		RemoteDrive:  "0000000000000099",
 		RemoteItem:   "source-folder-1",
 		LocalPath:    "SharedFolder",
-		Observation:  synctypes.ObservationDelta,
+		Observation:  ObservationDelta,
 		DiscoveredAt: 1000,
 	}))
 
@@ -1116,7 +1115,7 @@ func TestObserveShortcutContent_DeltaStrategy(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, events, 1)
-	assert.Equal(t, synctypes.ChangeCreate, events[0].Type)
+	assert.Equal(t, ChangeCreate, events[0].Type)
 	assert.Equal(t, "SharedFolder/report.xlsx", events[0].Path)
 	assert.Equal(t, remoteDriveID, events[0].DriveID)
 
@@ -1135,12 +1134,12 @@ func TestObserveShortcutContent_EnumerateStrategy(t *testing.T) {
 
 	remoteDriveID := driveid.New("0000000000000099")
 
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
 		ItemID:       "sc-1",
 		RemoteDrive:  "0000000000000099",
 		RemoteItem:   "source-folder-1",
 		LocalPath:    "SharedFolder",
-		Observation:  synctypes.ObservationEnumerate,
+		Observation:  ObservationEnumerate,
 		DiscoveredAt: 1000,
 	}))
 
@@ -1170,7 +1169,7 @@ func TestObserveShortcutContent_EnumerateStrategy(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, events, 1)
-	assert.Equal(t, synctypes.ChangeCreate, events[0].Type)
+	assert.Equal(t, ChangeCreate, events[0].Type)
 	assert.Equal(t, "SharedFolder/data.csv", events[0].Path)
 }
 
@@ -1181,12 +1180,12 @@ func TestObserveShortcutContent_SkipsOnError(t *testing.T) {
 	mgr := newTestManager(t)
 	ctx := t.Context()
 
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
 		ItemID:       "sc-1",
 		RemoteDrive:  "0000000000000099",
 		RemoteItem:   "source-folder-1",
 		LocalPath:    "SharedFolder",
-		Observation:  synctypes.ObservationDelta,
+		Observation:  ObservationDelta,
 		DiscoveredAt: 1000,
 	}))
 
@@ -1215,12 +1214,12 @@ func TestObserveShortcutContent_SyncPathsResolutionFailureDoesNotBlockShortcutOb
 	remoteDriveID := driveid.New("0000000000000099")
 	primaryLookups := 0
 
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
 		ItemID:       "sc-1",
 		RemoteDrive:  "0000000000000099",
 		RemoteItem:   "source-folder-1",
 		LocalPath:    "SharedFolder",
-		Observation:  synctypes.ObservationDelta,
+		Observation:  ObservationDelta,
 		DiscoveredAt: 1000,
 	}))
 
@@ -1275,7 +1274,7 @@ func TestObserveShortcutContent_NoShortcuts(t *testing.T) {
 	}
 
 	bl := emptyBaseline()
-	var shortcuts []synctypes.Shortcut
+	var shortcuts []Shortcut
 	events, err := testShortcutCoordinator(t, newFlowBackedTestEngine(e)).observeShortcutContentFromList(ctx, shortcuts, bl, nil)
 	require.NoError(t, err)
 	assert.Empty(t, events)
@@ -1298,7 +1297,7 @@ func TestApplyShortcutBatchMutations_DoesNotPublishRuntimeShortcuts(t *testing.T
 	}
 
 	flow := testEngineFlow(t, newFlowBackedTestEngine(e))
-	flow.setShortcuts([]synctypes.Shortcut{{
+	flow.setShortcuts([]Shortcut{{
 		ItemID:      "stale-shortcut",
 		LocalPath:   "Stale",
 		RemoteDrive: "stale-drive",
@@ -1306,7 +1305,7 @@ func TestApplyShortcutBatchMutations_DoesNotPublishRuntimeShortcuts(t *testing.T
 	}})
 
 	_, err := flow.shortcutCoordinator().applyShortcutBatchMutations(ctx, []ChangeEvent{{
-		Type:          synctypes.ChangeShortcut,
+		Type:          ChangeShortcut,
 		ItemID:        "sc-1",
 		Path:          "SharedDocs",
 		RemoteDriveID: "0000000000000099",
@@ -1352,7 +1351,7 @@ func TestProcessCommittedPrimaryBatch_RegistersAndObserves(t *testing.T) {
 
 	remoteEvents := []ChangeEvent{
 		{
-			Type:          synctypes.ChangeShortcut,
+			Type:          ChangeShortcut,
 			ItemID:        "sc-1",
 			Path:          "SharedDocs",
 			RemoteDriveID: "0000000000000099",
@@ -1397,7 +1396,7 @@ func TestProcessCommittedPrimaryBatch_PublishesRefreshedShortcutsAfterMutation(t
 	}
 
 	flow := testEngineFlow(t, newFlowBackedTestEngine(e))
-	flow.setShortcuts([]synctypes.Shortcut{{
+	flow.setShortcuts([]Shortcut{{
 		ItemID:      "stale-shortcut",
 		LocalPath:   "Stale",
 		RemoteDrive: "stale-drive",
@@ -1408,7 +1407,7 @@ func TestProcessCommittedPrimaryBatch_PublishesRefreshedShortcutsAfterMutation(t
 		ctx,
 		emptyBaseline(),
 		[]ChangeEvent{{
-			Type:          synctypes.ChangeShortcut,
+			Type:          ChangeShortcut,
 			ItemID:        "sc-1",
 			Path:          "SharedDocs",
 			RemoteDriveID: "0000000000000099",
@@ -1441,7 +1440,7 @@ func TestProcessCommittedPrimaryBatch_DryRunSkipsShortcutMutationAndObservation(
 
 	remoteEvents := []ChangeEvent{
 		{
-			Type:          synctypes.ChangeShortcut,
+			Type:          ChangeShortcut,
 			ItemID:        "sc-1",
 			Path:          "SharedDocs",
 			RemoteDriveID: "0000000000000099",
@@ -1506,7 +1505,7 @@ func TestProcessCommittedPrimaryBatch_NoChangeSkipsShortcutReloadAndFollowUp(t *
 	}
 
 	flow := testEngineFlow(t, newFlowBackedTestEngine(e))
-	flow.setShortcuts([]synctypes.Shortcut{{
+	flow.setShortcuts([]Shortcut{{
 		ItemID:      "stale-shortcut",
 		LocalPath:   "Stale",
 		RemoteDrive: "stale-drive",
@@ -1517,10 +1516,10 @@ func TestProcessCommittedPrimaryBatch_NoChangeSkipsShortcutReloadAndFollowUp(t *
 		t.Context(),
 		emptyBaseline(),
 		[]ChangeEvent{{
-			Type:   synctypes.ChangeCreate,
+			Type:   ChangeCreate,
 			Path:   "primary/newfile.txt",
 			ItemID: "p1",
-			Source: synctypes.SourceRemote,
+			Source: SourceRemote,
 		}},
 		syncscope.Snapshot{},
 		1,
@@ -1544,12 +1543,12 @@ func TestProcessCommittedPrimaryBatch_FullReconcileReloadsCurrentShortcuts(t *te
 	ctx := t.Context()
 
 	remoteDriveID := driveid.New("0000000000000099")
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
 		ItemID:       "sc-1",
 		RemoteDrive:  "0000000000000099",
 		RemoteItem:   "remote-item-1",
 		LocalPath:    "SharedDocs",
-		Observation:  synctypes.ObservationEnumerate,
+		Observation:  ObservationEnumerate,
 		DiscoveredAt: 1000,
 	}))
 
@@ -1567,7 +1566,7 @@ func TestProcessCommittedPrimaryBatch_FullReconcileReloadsCurrentShortcuts(t *te
 	}
 
 	flow := testEngineFlow(t, newFlowBackedTestEngine(e))
-	flow.setShortcuts([]synctypes.Shortcut{{
+	flow.setShortcuts([]Shortcut{{
 		ItemID:      "stale-shortcut",
 		LocalPath:   "Stale",
 		RemoteDrive: "stale-drive",
@@ -1606,12 +1605,12 @@ func TestProcessCommittedPrimaryBatch_ShortcutAndPrimaryEventsCoexist(t *testing
 	remoteDriveID := driveid.New("0000000000000099")
 
 	// Pre-register a shortcut so observation finds it.
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
 		ItemID:       "sc-1",
 		RemoteDrive:  "0000000000000099",
 		RemoteItem:   "remote-item-1",
 		LocalPath:    "SharedDocs",
-		Observation:  synctypes.ObservationEnumerate,
+		Observation:  ObservationEnumerate,
 		DiscoveredAt: 1000,
 	}))
 
@@ -1629,9 +1628,9 @@ func TestProcessCommittedPrimaryBatch_ShortcutAndPrimaryEventsCoexist(t *testing
 
 	// Simulate primary delta producing a regular file change AND a shortcut event.
 	remoteEvents := []ChangeEvent{
-		{Type: synctypes.ChangeCreate, Path: "primary/newfile.txt", ItemID: "p1", Source: synctypes.SourceRemote},
+		{Type: ChangeCreate, Path: "primary/newfile.txt", ItemID: "p1", Source: SourceRemote},
 		{
-			Type: synctypes.ChangeShortcut, Path: "SharedDocs", ItemID: "sc-1",
+			Type: ChangeShortcut, Path: "SharedDocs", ItemID: "sc-1",
 			RemoteDriveID: "0000000000000099", RemoteItemID: "remote-item-1",
 		},
 	}
@@ -1669,12 +1668,12 @@ func TestObserveShortcutContent_ConcurrentMultipleShortcuts(t *testing.T) {
 	// Register 5 shortcuts to exercise concurrency (maxShortcutConcurrency=4).
 	for i := range 5 {
 		id := fmt.Sprintf("sc-%d", i)
-		require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
+		require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
 			ItemID:       id,
 			RemoteDrive:  "0000000000000099",
 			RemoteItem:   fmt.Sprintf("folder-%d", i),
 			LocalPath:    fmt.Sprintf("Shared%d", i),
-			Observation:  synctypes.ObservationEnumerate,
+			Observation:  ObservationEnumerate,
 			DiscoveredAt: 1000,
 		}))
 	}
@@ -1715,12 +1714,12 @@ func TestObserveShortcutDelta_RetryOnErrGone(t *testing.T) {
 
 	remoteDriveID := driveid.New("0000000000000099")
 
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
 		ItemID:       "sc-1",
 		RemoteDrive:  "0000000000000099",
 		RemoteItem:   "source-folder-1",
 		LocalPath:    "SharedFolder",
-		Observation:  synctypes.ObservationDelta,
+		Observation:  ObservationDelta,
 		DiscoveredAt: 1000,
 	}))
 
@@ -1775,15 +1774,15 @@ func TestReconcileShortcutScopes_DeltaReconciliation(t *testing.T) {
 	remoteDriveID := driveid.New("0000000000000099")
 
 	// Register a delta-observation shortcut.
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
 		ItemID: "sc-1", RemoteDrive: "0000000000000099", RemoteItem: "root-1",
-		LocalPath: "Shared/Delta", Observation: synctypes.ObservationDelta, DiscoveredAt: 1000,
+		LocalPath: "Shared/Delta", Observation: ObservationDelta, DiscoveredAt: 1000,
 	}))
 
 	// Seed baseline with an existing file (will NOT be in delta → becomes orphan).
-	require.NoError(t, mgr.CommitMutation(ctx, baselineMutationFromExecutionResult(&ExecutionResult{
+	require.NoError(t, mgr.CommitMutation(ctx, mutationFromActionOutcome(&ActionOutcome{
 		Action: ActionDownload, Success: true, Path: "Shared/Delta/old.txt",
-		DriveID: remoteDriveID, ItemID: "old-file", ParentID: "root-1", ItemType: synctypes.ItemTypeFile,
+		DriveID: remoteDriveID, ItemID: "old-file", ParentID: "root-1", ItemType: ItemTypeFile,
 		RemoteHash: "oldhash",
 		LocalSize:  100, LocalSizeKnown: true,
 		RemoteSize: 100, RemoteSizeKnown: true,
@@ -1813,13 +1812,13 @@ func TestReconcileShortcutScopes_DeltaReconciliation(t *testing.T) {
 
 	var creates, deletes int
 	for _, ev := range events {
-		if ev.Type == synctypes.ChangeCreate {
+		if ev.Type == ChangeCreate {
 			creates++
 			assert.Equal(t, "Shared/Delta/new.txt", ev.Path)
 			continue
 		}
 
-		if ev.Type == synctypes.ChangeDelete {
+		if ev.Type == ChangeDelete {
 			deletes++
 			assert.Equal(t, "Shared/Delta/old.txt", ev.Path)
 		}
@@ -1843,9 +1842,9 @@ func TestReconcileShortcutScopes_EnumerateReconciliation(t *testing.T) {
 
 	remoteDriveID := driveid.New("0000000000000099")
 
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
 		ItemID: "sc-1", RemoteDrive: "0000000000000099", RemoteItem: "root-1",
-		LocalPath: "Shared/Enum", Observation: synctypes.ObservationEnumerate, DiscoveredAt: 1000,
+		LocalPath: "Shared/Enum", Observation: ObservationEnumerate, DiscoveredAt: 1000,
 	}))
 
 	mockLister := &mockRecursiveLister{
@@ -1866,7 +1865,7 @@ func TestReconcileShortcutScopes_EnumerateReconciliation(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, events, 1)
-	assert.Equal(t, synctypes.ChangeCreate, events[0].Type)
+	assert.Equal(t, ChangeCreate, events[0].Type)
 	assert.Equal(t, "Shared/Enum/doc.txt", events[0].Path)
 }
 
@@ -1880,9 +1879,9 @@ func TestReconcileShortcutScopes_SyncPathsResolutionFailureDoesNotBlockShortcutR
 	remoteDriveID := driveid.New("0000000000000099")
 	primaryLookups := 0
 
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
 		ItemID: "sc-1", RemoteDrive: "0000000000000099", RemoteItem: "root-1",
-		LocalPath: "Shared/Enum", Observation: synctypes.ObservationEnumerate, DiscoveredAt: 1000,
+		LocalPath: "Shared/Enum", Observation: ObservationEnumerate, DiscoveredAt: 1000,
 	}))
 
 	e := &Engine{
@@ -1927,13 +1926,13 @@ func TestReconcileShortcutScopes_CollisionSkipped(t *testing.T) {
 	remoteDriveID := driveid.New("0000000000000099")
 
 	// Two shortcuts with colliding local paths.
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
 		ItemID: "sc-1", RemoteDrive: "0000000000000099", RemoteItem: "root-1",
-		LocalPath: "Shared/Collide", Observation: synctypes.ObservationDelta, DiscoveredAt: 1000,
+		LocalPath: "Shared/Collide", Observation: ObservationDelta, DiscoveredAt: 1000,
 	}))
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
 		ItemID: "sc-2", RemoteDrive: "0000000000000099", RemoteItem: "root-2",
-		LocalPath: "Shared/Collide", Observation: synctypes.ObservationDelta, DiscoveredAt: 2000,
+		LocalPath: "Shared/Collide", Observation: ObservationDelta, DiscoveredAt: 2000,
 	}))
 
 	mockDelta := &mockFolderDeltaFetcher{
@@ -1975,13 +1974,13 @@ func TestReconcileShortcutScopes_PerScopeErrorIsolation(t *testing.T) {
 	remoteDriveID := driveid.New("0000000000000099")
 
 	// Two shortcuts: one with failing delta, one with working lister.
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
 		ItemID: "sc-fail", RemoteDrive: "0000000000000099", RemoteItem: "root-fail",
-		LocalPath: "Shared/Fail", Observation: synctypes.ObservationDelta, DiscoveredAt: 1000,
+		LocalPath: "Shared/Fail", Observation: ObservationDelta, DiscoveredAt: 1000,
 	}))
-	require.NoError(t, mgr.UpsertShortcut(ctx, &synctypes.Shortcut{
+	require.NoError(t, mgr.UpsertShortcut(ctx, &Shortcut{
 		ItemID: "sc-ok", RemoteDrive: "0000000000000099", RemoteItem: "root-ok",
-		LocalPath: "Shared/Ok", Observation: synctypes.ObservationEnumerate, DiscoveredAt: 2000,
+		LocalPath: "Shared/Ok", Observation: ObservationEnumerate, DiscoveredAt: 2000,
 	}))
 
 	// Folder delta will fail.
@@ -2058,7 +2057,7 @@ func TestReconcileShortcutScopes_NilFetchersReturnsNil(t *testing.T) {
 func TestDetectShortcutCollisions_DuplicateSourceFolder(t *testing.T) {
 	t.Parallel()
 
-	shortcuts := []synctypes.Shortcut{
+	shortcuts := []Shortcut{
 		{ItemID: "sc-1", RemoteDrive: "drive-1", RemoteItem: "item-1", LocalPath: "Shared/A"},
 		{ItemID: "sc-2", RemoteDrive: "drive-1", RemoteItem: "item-1", LocalPath: "Shared/B"},
 	}
@@ -2090,7 +2089,7 @@ func TestConvertShortcutItems_NestedShortcut_SkippedWithWarning(t *testing.T) {
 		},
 	}
 
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID: "sc-1", RemoteDrive: "0000000000000099", RemoteItem: "root-1",
 		LocalPath: "SharedFolder",
 	}

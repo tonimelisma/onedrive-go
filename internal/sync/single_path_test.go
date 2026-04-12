@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 func TestObserveSinglePath_HashFailureEmitsEventWithEmptyHash(t *testing.T) {
@@ -64,7 +63,7 @@ func TestObserveSinglePath_ReusesBaselineHashWhenMetadataMatches(t *testing.T) {
 
 	result, err := ObserveSinglePath(nil, mustOpenSyncTree(t, syncRoot), relPath, &BaselineEntry{
 		Path:           relPath,
-		ItemType:       synctypes.ItemTypeFile,
+		ItemType:       ItemTypeFile,
 		LocalSize:      info.Size(),
 		LocalSizeKnown: true,
 		LocalMtime:     info.ModTime().UnixNano(),
@@ -97,7 +96,7 @@ func TestObserveSinglePath_ReusesBaselineHashWhenSameSecondMtimeDiffersByFractio
 
 	result, err := ObserveSinglePath(nil, mustOpenSyncTree(t, syncRoot), relPath, &BaselineEntry{
 		Path:           relPath,
-		ItemType:       synctypes.ItemTypeFile,
+		ItemType:       ItemTypeFile,
 		LocalSize:      info.Size(),
 		LocalSizeKnown: true,
 		LocalMtime:     fileTime.Add(600 * time.Millisecond).UnixNano(),
@@ -122,8 +121,8 @@ func TestObserveSinglePath_DirectoryProducesFolderEvent(t *testing.T) {
 	result, err := ObserveSinglePath(nil, mustOpenSyncTree(t, syncRoot), relPath, nil, time.Now().UnixNano(), nil)
 	require.NoError(t, err)
 	require.NotNil(t, result.Event)
-	assert.Equal(t, synctypes.ItemTypeFolder, result.Event.ItemType)
-	assert.Equal(t, synctypes.ChangeModify, result.Event.Type)
+	assert.Equal(t, ItemTypeFolder, result.Event.ItemType)
+	assert.Equal(t, ChangeModify, result.Event.Type)
 	assert.Empty(t, result.Event.Hash)
 	assert.Nil(t, result.Skipped)
 	assert.False(t, result.Resolved)
@@ -140,7 +139,7 @@ func TestObserveSinglePath_SymlinkFollowedByDefault(t *testing.T) {
 	result, err := ObserveSinglePath(nil, mustOpenSyncTree(t, syncRoot), "link.txt", nil, time.Now().UnixNano(), nil)
 	require.NoError(t, err)
 	require.NotNil(t, result.Event)
-	assert.Equal(t, synctypes.ItemTypeFile, result.Event.ItemType)
+	assert.Equal(t, ItemTypeFile, result.Event.ItemType)
 	assert.Nil(t, result.Skipped)
 	assert.False(t, result.Resolved)
 }
@@ -165,7 +164,7 @@ func TestObserveSinglePath_InvalidNameReturnsSkipped(t *testing.T) {
 	require.NotNil(t, result.Skipped)
 	assert.Nil(t, result.Event)
 	assert.False(t, result.Resolved)
-	assert.Equal(t, synctypes.IssueInvalidFilename, result.Skipped.Reason)
+	assert.Equal(t, IssueInvalidFilename, result.Skipped.Reason)
 }
 
 // Validates: R-2.11.3
@@ -186,7 +185,7 @@ func TestObserveSinglePathWithFilter_SharePointRootFormsReturnsSkipped(t *testin
 	require.NotNil(t, result.Skipped)
 	assert.Nil(t, result.Event)
 	assert.False(t, result.Resolved)
-	assert.Equal(t, synctypes.IssueInvalidFilename, result.Skipped.Reason)
+	assert.Equal(t, IssueInvalidFilename, result.Skipped.Reason)
 }
 
 func TestObserveSinglePath_PathTooLongReturnsSkipped(t *testing.T) {
@@ -203,7 +202,7 @@ func TestObserveSinglePath_PathTooLongReturnsSkipped(t *testing.T) {
 	require.NotNil(t, result.Skipped)
 	assert.Nil(t, result.Event)
 	assert.False(t, result.Resolved)
-	assert.Equal(t, synctypes.IssuePathTooLong, result.Skipped.Reason)
+	assert.Equal(t, IssuePathTooLong, result.Skipped.Reason)
 }
 
 func TestObserveSinglePath_OversizedFileReturnsSkipped(t *testing.T) {
@@ -221,7 +220,7 @@ func TestObserveSinglePath_OversizedFileReturnsSkipped(t *testing.T) {
 	require.NotNil(t, result.Skipped)
 	assert.Nil(t, result.Event)
 	assert.False(t, result.Resolved)
-	assert.Equal(t, synctypes.IssueFileTooLarge, result.Skipped.Reason)
+	assert.Equal(t, IssueFileTooLarge, result.Skipped.Reason)
 	assert.Equal(t, int64(MaxOneDriveFileSize+1), result.Skipped.FileSize)
 }
 

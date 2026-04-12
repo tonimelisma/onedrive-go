@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // processBatch plans and dispatches a batch of path changes. On planner
@@ -17,8 +15,8 @@ import (
 // continues. In-flight actions for overlapping paths are canceled and
 // replaced (B-122 deduplication).
 func (rt *watchRuntime) processBatch(
-	ctx context.Context, batch []PathChanges, bl *syncstore.Baseline,
-	mode Mode, safety *synctypes.SafetyConfig,
+	ctx context.Context, batch []PathChanges, bl *Baseline,
+	mode Mode, safety *SafetyConfig,
 ) []*TrackedAction {
 	return rt.planAndDispatchBatch(ctx, batch, bl, mode, safety, dispatchBatchOptions{
 		applyDeleteCounter:   true,
@@ -33,7 +31,7 @@ type dispatchBatchOptions struct {
 	deduplicateInFlight  bool
 	runPeriodicPermCheck bool
 	clearScannerResolved bool
-	trialScopeKey        synctypes.ScopeKey
+	trialScopeKey        ScopeKey
 	trialPath            string
 	trialDriveID         driveid.ID
 }
@@ -41,9 +39,9 @@ type dispatchBatchOptions struct {
 func (rt *watchRuntime) planAndDispatchBatch(
 	ctx context.Context,
 	batch []PathChanges,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	mode Mode,
-	safety *synctypes.SafetyConfig,
+	safety *SafetyConfig,
 	opts dispatchBatchOptions,
 ) []*TrackedAction {
 	rt.engine.logger.Info("processing watch batch",
@@ -70,7 +68,7 @@ func (rt *watchRuntime) planAndDispatchBatch(
 	planStart := rt.engine.nowFunc()
 	plan, err := rt.engine.planner.Plan(batch, bl, mode, safety, denied)
 	if err != nil {
-		if errors.Is(err, synctypes.ErrDeleteSafetyThresholdExceeded) {
+		if errors.Is(err, ErrDeleteSafetyThresholdExceeded) {
 			rt.engine.logger.Warn("delete safety threshold triggered, skipping batch",
 				slog.Int("paths", len(batch)),
 			)
@@ -122,7 +120,7 @@ func (rt *watchRuntime) planAndDispatchBatch(
 
 // periodicPermRecheck runs permission rechecks at most once per 60 seconds.
 // Throttled to avoid API hammering (R-2.10.9).
-func (rt *watchRuntime) periodicPermRecheck(ctx context.Context, bl *syncstore.Baseline) {
+func (rt *watchRuntime) periodicPermRecheck(ctx context.Context, bl *Baseline) {
 	const permRecheckInterval = 60 * time.Second
 
 	now := rt.engine.nowFunc()
@@ -287,8 +285,8 @@ func (flow *engineFlow) setDispatch(ctx context.Context, action *Action) {
 }
 
 // isDeleteAction returns true if the action type is a local or remote delete.
-func isDeleteAction(t synctypes.ActionType) bool {
-	return t == synctypes.ActionLocalDelete || t == synctypes.ActionRemoteDelete
+func isDeleteAction(t ActionType) bool {
+	return t == ActionLocalDelete || t == ActionRemoteDelete
 }
 
 // applyDeleteCounter counts unapproved planned deletes, feeds them to the

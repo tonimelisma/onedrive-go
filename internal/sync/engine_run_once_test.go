@@ -15,7 +15,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // ---------------------------------------------------------------------------
@@ -100,8 +99,8 @@ func TestRunOnce_SharePointRootFormsRecordsActionableFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, failures, 1)
 	assert.Equal(t, "forms", failures[0].Path)
-	assert.Equal(t, synctypes.IssueInvalidFilename, failures[0].IssueType)
-	assert.Equal(t, synctypes.CategoryActionable, failures[0].Category)
+	assert.Equal(t, IssueInvalidFilename, failures[0].IssueType)
+	assert.Equal(t, CategoryActionable, failures[0].Category)
 }
 
 // Validates: R-2.1.3
@@ -397,15 +396,15 @@ func TestRunOnce_DeleteSafety_HoldsDeletesDurably(t *testing.T) {
 	eng.deleteSafetyThreshold = 10 // low threshold for test
 	ctx := t.Context()
 
-	seedOutcomes := make([]ExecutionResult, 20)
+	seedOutcomes := make([]ActionOutcome, 20)
 	for i := range 20 {
-		seedOutcomes[i] = ExecutionResult{
+		seedOutcomes[i] = ActionOutcome{
 			Action:          ActionDownload,
 			Success:         true,
 			Path:            fmt.Sprintf("file%02d.txt", i),
 			DriveID:         driveID,
 			ItemID:          fmt.Sprintf("item-%02d", i),
-			ItemType:        synctypes.ItemTypeFile,
+			ItemType:        ItemTypeFile,
 			RemoteHash:      fmt.Sprintf("hash%02d", i),
 			LocalHash:       fmt.Sprintf("hash%02d", i),
 			LocalSize:       100,
@@ -416,9 +415,9 @@ func TestRunOnce_DeleteSafety_HoldsDeletesDurably(t *testing.T) {
 	}
 
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "old-token")
-	observedItems := make([]synctypes.ObservedItem, 0, len(seedOutcomes))
+	observedItems := make([]ObservedItem, 0, len(seedOutcomes))
 	for i := range seedOutcomes {
-		observedItems = append(observedItems, synctypes.ObservedItem{
+		observedItems = append(observedItems, ObservedItem{
 			DriveID:  driveID,
 			ItemID:   seedOutcomes[i].ItemID,
 			Path:     seedOutcomes[i].Path,
@@ -435,12 +434,12 @@ func TestRunOnce_DeleteSafety_HoldsDeletesDurably(t *testing.T) {
 	require.NotNil(t, report)
 	assert.Equal(t, 0, report.RemoteDeletes, "held deletes must not execute before approval")
 
-	held, err := eng.baseline.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateHeld)
+	held, err := eng.baseline.ListHeldDeletesByState(ctx, HeldDeleteStateHeld)
 	require.NoError(t, err)
 	require.Len(t, held, 20)
 	for i := range held {
 		assert.Equal(t, ActionRemoteDelete, held[i].ActionType)
-		assert.Equal(t, synctypes.HeldDeleteStateHeld, held[i].State)
+		assert.Equal(t, HeldDeleteStateHeld, held[i].State)
 		assert.NotEmpty(t, held[i].LastError)
 	}
 }
@@ -458,15 +457,15 @@ func TestRunOnce_DeleteSafety_ApprovedDeletesBypassHold(t *testing.T) {
 	eng.deleteSafetyThreshold = 10 // low threshold for test
 	ctx := t.Context()
 
-	seedOutcomes := make([]ExecutionResult, 20)
+	seedOutcomes := make([]ActionOutcome, 20)
 	for i := range 20 {
-		seedOutcomes[i] = ExecutionResult{
+		seedOutcomes[i] = ActionOutcome{
 			Action:          ActionDownload,
 			Success:         true,
 			Path:            fmt.Sprintf("file%02d.txt", i),
 			DriveID:         driveID,
 			ItemID:          fmt.Sprintf("item-%02d", i),
-			ItemType:        synctypes.ItemTypeFile,
+			ItemType:        ItemTypeFile,
 			RemoteHash:      fmt.Sprintf("hash%02d", i),
 			LocalHash:       fmt.Sprintf("hash%02d", i),
 			LocalSize:       100,
@@ -477,9 +476,9 @@ func TestRunOnce_DeleteSafety_ApprovedDeletesBypassHold(t *testing.T) {
 	}
 
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "old-token")
-	observedItems := make([]synctypes.ObservedItem, 0, len(seedOutcomes))
+	observedItems := make([]ObservedItem, 0, len(seedOutcomes))
 	for i := range seedOutcomes {
-		observedItems = append(observedItems, synctypes.ObservedItem{
+		observedItems = append(observedItems, ObservedItem{
 			DriveID:  driveID,
 			ItemID:   seedOutcomes[i].ItemID,
 			Path:     seedOutcomes[i].Path,
@@ -498,7 +497,7 @@ func TestRunOnce_DeleteSafety_ApprovedDeletesBypassHold(t *testing.T) {
 			ItemID:     seedOutcomes[i].ItemID,
 			Path:       seedOutcomes[i].Path,
 			ActionType: ActionRemoteDelete,
-			State:      synctypes.HeldDeleteStateHeld,
+			State:      HeldDeleteStateHeld,
 		})
 	}
 	require.NoError(t, eng.baseline.UpsertHeldDeletes(ctx, held))
@@ -508,7 +507,7 @@ func TestRunOnce_DeleteSafety_ApprovedDeletesBypassHold(t *testing.T) {
 	require.NoError(t, err, "RunOnce with approved held deletes")
 	assert.GreaterOrEqual(t, report.RemoteDeletes, 1, "approved deletes should bypass delete safety hold")
 
-	remaining, err := eng.baseline.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateApproved)
+	remaining, err := eng.baseline.ListHeldDeletesByState(ctx, HeldDeleteStateApproved)
 	require.NoError(t, err)
 	assert.Empty(t, remaining, "successful approved deletes should consume their approval rows")
 }
@@ -523,15 +522,15 @@ func TestRunOnce_DeleteSafety_StaleApprovalWithDifferentItemIDDoesNotBypassHold(
 	eng.deleteSafetyThreshold = 10
 	ctx := t.Context()
 
-	seedOutcomes := make([]ExecutionResult, 20)
+	seedOutcomes := make([]ActionOutcome, 20)
 	for i := range 20 {
-		seedOutcomes[i] = ExecutionResult{
+		seedOutcomes[i] = ActionOutcome{
 			Action:          ActionDownload,
 			Success:         true,
 			Path:            fmt.Sprintf("file%02d.txt", i),
 			DriveID:         driveID,
 			ItemID:          fmt.Sprintf("current-item-%02d", i),
-			ItemType:        synctypes.ItemTypeFile,
+			ItemType:        ItemTypeFile,
 			RemoteHash:      fmt.Sprintf("hash%02d", i),
 			LocalHash:       fmt.Sprintf("hash%02d", i),
 			LocalSize:       100,
@@ -542,9 +541,9 @@ func TestRunOnce_DeleteSafety_StaleApprovalWithDifferentItemIDDoesNotBypassHold(
 	}
 
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "old-token")
-	observedItems := make([]synctypes.ObservedItem, 0, len(seedOutcomes))
+	observedItems := make([]ObservedItem, 0, len(seedOutcomes))
 	for i := range seedOutcomes {
-		observedItems = append(observedItems, synctypes.ObservedItem{
+		observedItems = append(observedItems, ObservedItem{
 			DriveID:  driveID,
 			ItemID:   seedOutcomes[i].ItemID,
 			Path:     seedOutcomes[i].Path,
@@ -563,7 +562,7 @@ func TestRunOnce_DeleteSafety_StaleApprovalWithDifferentItemIDDoesNotBypassHold(
 			ItemID:     fmt.Sprintf("stale-item-%02d", i),
 			Path:       seedOutcomes[i].Path,
 			ActionType: ActionRemoteDelete,
-			State:      synctypes.HeldDeleteStateHeld,
+			State:      HeldDeleteStateHeld,
 		})
 	}
 	require.NoError(t, eng.baseline.UpsertHeldDeletes(ctx, staleApprovals))
@@ -573,11 +572,11 @@ func TestRunOnce_DeleteSafety_StaleApprovalWithDifferentItemIDDoesNotBypassHold(
 	require.NoError(t, err)
 	assert.Equal(t, 0, report.RemoteDeletes, "stale path-only approval must not authorize reused-path delete")
 
-	approved, err := eng.baseline.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateApproved)
+	approved, err := eng.baseline.ListHeldDeletesByState(ctx, HeldDeleteStateApproved)
 	require.NoError(t, err)
 	require.Empty(t, approved, "stale approvals should be pruned once a live plan proves they no longer match")
 
-	held, err := eng.baseline.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateHeld)
+	held, err := eng.baseline.ListHeldDeletesByState(ctx, HeldDeleteStateHeld)
 	require.NoError(t, err)
 	require.Len(t, held, 20, "current deletes are held under their current item IDs")
 	for i := range held {
@@ -599,7 +598,7 @@ func TestEngine_ApprovedDeleteKeysForPlanPrunesStaleApprovedRows(t *testing.T) {
 			ItemID:        "current-item",
 			Path:          "current.txt",
 			ActionType:    ActionRemoteDelete,
-			State:         synctypes.HeldDeleteStateHeld,
+			State:         HeldDeleteStateHeld,
 			HeldAt:        1,
 			LastPlannedAt: 1,
 		},
@@ -608,7 +607,7 @@ func TestEngine_ApprovedDeleteKeysForPlanPrunesStaleApprovedRows(t *testing.T) {
 			ItemID:        "stale-item",
 			Path:          "current.txt",
 			ActionType:    ActionRemoteDelete,
-			State:         synctypes.HeldDeleteStateHeld,
+			State:         HeldDeleteStateHeld,
 			HeldAt:        1,
 			LastPlannedAt: 1,
 		},
@@ -632,7 +631,7 @@ func TestEngine_ApprovedDeleteKeysForPlanPrunesStaleApprovedRows(t *testing.T) {
 	}]
 	assert.True(t, ok, "current matching approval should remain usable")
 
-	rows, err := eng.baseline.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateApproved)
+	rows, err := eng.baseline.ListHeldDeletesByState(ctx, HeldDeleteStateApproved)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "current.txt", rows[0].Path)
@@ -644,7 +643,7 @@ type sharedFolderRecoveryRunOnceFixture struct {
 	baseline       *Baseline
 	syncRoot       string
 	checker        *mockPermChecker
-	shortcuts      []synctypes.Shortcut
+	shortcuts      []Shortcut
 	remoteDriveID  string
 	blockedPath    string
 	sharedFolderID string
@@ -673,15 +672,15 @@ func newSharedFolderRecoveryRunOnceFixture(t *testing.T) *sharedFolderRecoveryRu
 		},
 	}
 
-	shortcuts := []synctypes.Shortcut{{
+	shortcuts := []Shortcut{{
 		ItemID:       "shortcut-1",
 		RemoteDrive:  remoteDriveID,
 		RemoteItem:   "root-id",
 		LocalPath:    "Shared/TeamDocs",
-		Observation:  synctypes.ObservationDelta,
+		Observation:  ObservationDelta,
 		DiscoveredAt: 1000,
 	}}
-	baselineEntries := []ExecutionResult{
+	baselineEntries := []ActionOutcome{
 		{
 			Action:   ActionDownload,
 			Success:  true,
@@ -689,7 +688,7 @@ func newSharedFolderRecoveryRunOnceFixture(t *testing.T) *sharedFolderRecoveryRu
 			DriveID:  driveid.New(engineTestDriveID),
 			ItemID:   "shared-parent-id",
 			ParentID: "root",
-			ItemType: synctypes.ItemTypeFolder,
+			ItemType: ItemTypeFolder,
 		},
 		{
 			Action:   ActionDownload,
@@ -698,7 +697,7 @@ func newSharedFolderRecoveryRunOnceFixture(t *testing.T) *sharedFolderRecoveryRu
 			DriveID:  driveid.New(remoteDriveID),
 			ItemID:   "root-id",
 			ParentID: "root",
-			ItemType: synctypes.ItemTypeFolder,
+			ItemType: ItemTypeFolder,
 		},
 		{
 			Action:   ActionDownload,
@@ -707,7 +706,7 @@ func newSharedFolderRecoveryRunOnceFixture(t *testing.T) *sharedFolderRecoveryRu
 			DriveID:  driveid.New(remoteDriveID),
 			ItemID:   sharedFolderID,
 			ParentID: "root-id",
-			ItemType: synctypes.ItemTypeFolder,
+			ItemType: ItemTypeFolder,
 		},
 	}
 
@@ -971,7 +970,7 @@ func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed a stale delta token.
-	seedOutcomes := []ExecutionResult{{
+	seedOutcomes := []ActionOutcome{{
 		Action:  ActionDownload,
 		Success: true,
 		Path:    "seed.txt",
@@ -1019,13 +1018,13 @@ func TestRunOnce_EmptyPlan_NoPanic(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed baseline so the file appears as already synced with matching hash.
-	seedOutcomes := []ExecutionResult{{
+	seedOutcomes := []ActionOutcome{{
 		Action:          ActionDownload,
 		Success:         true,
 		Path:            "unchanged.txt",
 		DriveID:         driveID,
 		ItemID:          "f1",
-		ItemType:        synctypes.ItemTypeFile,
+		ItemType:        ItemTypeFile,
 		RemoteHash:      "matchhash",
 		LocalHash:       "matchhash",
 		LocalSize:       5,
@@ -1187,13 +1186,13 @@ func TestRunOnce_DownloadOnly_DoesNotOverrideLocalDeleteWhenRemoteAlsoChanged(t 
 
 	writeLocalFile(t, syncRoot, "retry-download.txt", "recovered-download")
 	downloadHash := hashContentQuickXor(t, "recovered-download")
-	seedBaseline(t, eng.baseline, ctx, []ExecutionResult{{
+	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{{
 		Action:          ActionDownload,
 		Success:         true,
 		Path:            "retry-download.txt",
 		DriveID:         driveID,
 		ItemID:          "item-dl",
-		ItemType:        synctypes.ItemTypeFile,
+		ItemType:        ItemTypeFile,
 		LocalHash:       downloadHash,
 		RemoteHash:      downloadHash,
 		LocalSize:       18,
@@ -1246,13 +1245,13 @@ func TestRunOnce_ReconcilesRemoteDeleteDriftWithoutFreshDelta(t *testing.T) {
 
 	writeLocalFile(t, syncRoot, "retry-delete.txt", "delete me")
 	deleteHash := hashContentQuickXor(t, "delete me")
-	seedBaseline(t, eng.baseline, ctx, []ExecutionResult{{
+	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{{
 		Action:          ActionDownload,
 		Success:         true,
 		Path:            "retry-delete.txt",
 		DriveID:         driveID,
 		ItemID:          "item-del",
-		ItemType:        synctypes.ItemTypeFile,
+		ItemType:        ItemTypeFile,
 		LocalHash:       deleteHash,
 		RemoteHash:      deleteHash,
 		LocalSize:       9,

@@ -7,9 +7,6 @@ package sync
 
 import (
 	"time"
-
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // FindBlockingScope returns the highest-priority active scope that blocks the
@@ -17,9 +14,9 @@ import (
 //
 // The caller owns the blocks slice and decides how to persist or mutate it.
 // This function is pure — no locking, no persistence, no callbacks.
-func FindBlockingScope(blocks []syncstore.ScopeBlock, ta *TrackedAction) synctypes.ScopeKey {
+func FindBlockingScope(blocks []ScopeBlock, ta *TrackedAction) ScopeKey {
 	if len(blocks) == 0 {
-		return synctypes.ScopeKey{}
+		return ScopeKey{}
 	}
 
 	scKey := ta.Action.ShortcutKey()
@@ -28,7 +25,7 @@ func FindBlockingScope(blocks []syncstore.ScopeBlock, ta *TrackedAction) synctyp
 
 	bestRank := scopePriorityMax
 	bestSpecificity := -1
-	var best synctypes.ScopeKey
+	var best ScopeKey
 
 	for i := range blocks {
 		key := blocks[i].Key
@@ -50,83 +47,83 @@ func FindBlockingScope(blocks []syncstore.ScopeBlock, ta *TrackedAction) synctyp
 
 // UpsertScope returns a copy of blocks with the provided scope inserted or
 // replaced by key.
-func UpsertScope(blocks []syncstore.ScopeBlock, block *syncstore.ScopeBlock) []syncstore.ScopeBlock {
+func UpsertScope(blocks []ScopeBlock, block *ScopeBlock) []ScopeBlock {
 	if block == nil {
-		return append([]syncstore.ScopeBlock(nil), blocks...)
+		return append([]ScopeBlock(nil), blocks...)
 	}
 
 	for i := range blocks {
 		if blocks[i].Key == block.Key {
-			next := append([]syncstore.ScopeBlock(nil), blocks...)
+			next := append([]ScopeBlock(nil), blocks...)
 			next[i] = *block
 			return next
 		}
 	}
 
-	next := append([]syncstore.ScopeBlock(nil), blocks...)
+	next := append([]ScopeBlock(nil), blocks...)
 	next = append(next, *block)
 	return next
 }
 
 // RemoveScope returns a copy of blocks with the given key removed.
-func RemoveScope(blocks []syncstore.ScopeBlock, key synctypes.ScopeKey) []syncstore.ScopeBlock {
+func RemoveScope(blocks []ScopeBlock, key ScopeKey) []ScopeBlock {
 	for i := range blocks {
 		if blocks[i].Key != key {
 			continue
 		}
 
-		next := append([]syncstore.ScopeBlock(nil), blocks[:i]...)
+		next := append([]ScopeBlock(nil), blocks[:i]...)
 		next = append(next, blocks[i+1:]...)
 		return next
 	}
 
-	return append([]syncstore.ScopeBlock(nil), blocks...)
+	return append([]ScopeBlock(nil), blocks...)
 }
 
 // HasScope reports whether the given scope key is active.
-func HasScope(blocks []syncstore.ScopeBlock, key synctypes.ScopeKey) bool {
+func HasScope(blocks []ScopeBlock, key ScopeKey) bool {
 	_, ok := LookupScope(blocks, key)
 	return ok
 }
 
 // LookupScope returns a value copy of the active scope block for the key.
-func LookupScope(blocks []syncstore.ScopeBlock, key synctypes.ScopeKey) (syncstore.ScopeBlock, bool) {
+func LookupScope(blocks []ScopeBlock, key ScopeKey) (ScopeBlock, bool) {
 	for i := range blocks {
 		if blocks[i].Key == key {
 			return blocks[i], true
 		}
 	}
 
-	return syncstore.ScopeBlock{}, false
+	return ScopeBlock{}, false
 }
 
 // ExtendScopeTrial returns a copy of blocks with the given scope's trial
 // metadata updated. The boolean reports whether the scope existed.
 func ExtendScopeTrial(
-	blocks []syncstore.ScopeBlock,
-	key synctypes.ScopeKey,
+	blocks []ScopeBlock,
+	key ScopeKey,
 	nextAt time.Time,
 	newInterval time.Duration,
-) ([]syncstore.ScopeBlock, bool) {
+) ([]ScopeBlock, bool) {
 	for i := range blocks {
 		if blocks[i].Key != key {
 			continue
 		}
 
-		next := append([]syncstore.ScopeBlock(nil), blocks...)
+		next := append([]ScopeBlock(nil), blocks...)
 		next[i].NextTrialAt = nextAt
 		next[i].TrialInterval = newInterval
 		next[i].TrialCount++
 		return next, true
 	}
 
-	return append([]syncstore.ScopeBlock(nil), blocks...), false
+	return append([]ScopeBlock(nil), blocks...), false
 }
 
 // DueTrials returns the active scope keys whose trial is due at now. Scopes
 // with zero NextTrialAt are excluded.
-func DueTrials(blocks []syncstore.ScopeBlock, now time.Time) []synctypes.ScopeKey {
-	var due []synctypes.ScopeKey
+func DueTrials(blocks []ScopeBlock, now time.Time) []ScopeKey {
+	var due []ScopeKey
 
 	for i := range blocks {
 		if blocks[i].NextTrialAt.IsZero() {
@@ -142,7 +139,7 @@ func DueTrials(blocks []syncstore.ScopeBlock, now time.Time) []synctypes.ScopeKe
 
 // EarliestTrialAt returns the earliest pending trial time across all active
 // scopes. Scopes with zero NextTrialAt are skipped.
-func EarliestTrialAt(blocks []syncstore.ScopeBlock) (time.Time, bool) {
+func EarliestTrialAt(blocks []ScopeBlock) (time.Time, bool) {
 	var earliest time.Time
 	found := false
 
@@ -160,8 +157,8 @@ func EarliestTrialAt(blocks []syncstore.ScopeBlock) (time.Time, bool) {
 }
 
 // ScopeKeys returns the active scope keys in slice order.
-func ScopeKeys(blocks []syncstore.ScopeBlock) []synctypes.ScopeKey {
-	keys := make([]synctypes.ScopeKey, len(blocks))
+func ScopeKeys(blocks []ScopeBlock) []ScopeKey {
+	keys := make([]ScopeKey, len(blocks))
 	for i := range blocks {
 		keys[i] = blocks[i].Key
 	}
@@ -182,25 +179,25 @@ const (
 
 const scopePriorityMax = 99
 
-func scopePriority(key synctypes.ScopeKey) int {
+func scopePriority(key ScopeKey) int {
 	switch key.Kind {
-	case synctypes.ScopeAuthAccount:
+	case ScopeAuthAccount:
 		return scopePriorityAuthAccount
-	case synctypes.ScopeThrottleAccount:
+	case ScopeThrottleAccount:
 		return scopePriorityThrottleAccount
-	case synctypes.ScopeThrottleTarget:
+	case ScopeThrottleTarget:
 		return scopePriorityThrottleTarget
-	case synctypes.ScopeService:
+	case ScopeService:
 		return scopePriorityService
-	case synctypes.ScopeDiskLocal:
+	case ScopeDiskLocal:
 		return scopePriorityDiskLocal
-	case synctypes.ScopeQuotaOwn:
+	case ScopeQuotaOwn:
 		return scopePriorityQuotaOwn
-	case synctypes.ScopeQuotaShortcut:
+	case ScopeQuotaShortcut:
 		return scopePriorityQuotaShortcut
-	case synctypes.ScopePermDir:
+	case ScopePermDir:
 		return scopePriorityPermDir
-	case synctypes.ScopePermRemote:
+	case ScopePermRemote:
 		return scopePriorityPermRemote
 	default:
 		return scopePriorityMax

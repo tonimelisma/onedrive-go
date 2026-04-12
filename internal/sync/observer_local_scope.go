@@ -10,7 +10,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 func (o *LocalObserver) scopeAllowsUnknown(path string) bool {
@@ -104,7 +103,7 @@ func (o *LocalObserver) shouldRebuildScopeForEvent(
 	}
 
 	existing, ok := o.Baseline.GetByPath(dbRelPath)
-	return ok && existing.ItemType == synctypes.ItemTypeFolder
+	return ok && existing.ItemType == ItemTypeFolder
 }
 
 func (o *LocalObserver) pathTouchesMarkerDir(path string) bool {

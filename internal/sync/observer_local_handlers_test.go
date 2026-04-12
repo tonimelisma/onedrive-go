@@ -16,7 +16,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // ---------------------------------------------------------------------------
@@ -122,7 +121,7 @@ func TestWatch_DetectsFileModify(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path: "existing.txt", DriveID: driveid.New("d"), ItemID: "i1",
-		ItemType: synctypes.ItemTypeFile, LocalHash: existingHash,
+		ItemType: ItemTypeFile, LocalHash: existingHash,
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
@@ -143,7 +142,7 @@ func TestWatch_DetectsFileModify(t *testing.T) {
 	cancel()
 	<-done
 
-	assert.Equal(t, synctypes.ChangeModify, ev.Type)
+	assert.Equal(t, ChangeModify, ev.Type)
 	assert.Equal(t, "existing.txt", ev.Path)
 	assert.Equal(t, hashContent(t, "modified"), ev.Hash)
 }
@@ -189,7 +188,7 @@ func TestWatch_NosyncGuard(t *testing.T) {
 	events := make(chan ChangeEvent, 10)
 
 	err := obs.Watch(t.Context(), mustOpenSyncTree(t, dir), events)
-	assert.ErrorIs(t, err, synctypes.ErrNosyncGuard)
+	assert.ErrorIs(t, err, ErrNosyncGuard)
 }
 
 func TestLocalWatch_ContextCancellation(t *testing.T) {
@@ -377,9 +376,9 @@ func TestWatchLoop_ChmodCreateCombinedEvent(t *testing.T) {
 
 	select {
 	case ev := <-events:
-		require.Equal(t, synctypes.ChangeCreate, ev.Type, "combined Chmod|Create should be handled as Create")
+		require.Equal(t, ChangeCreate, ev.Type, "combined Chmod|Create should be handled as Create")
 		require.Equal(t, "combo.txt", ev.Path)
-		require.Equal(t, synctypes.SourceLocal, ev.Source)
+		require.Equal(t, SourceLocal, ev.Source)
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "timeout waiting for combined Chmod|Create event")
 	}
@@ -421,10 +420,10 @@ func TestWatchLoop_TransientFileCreateDelete(t *testing.T) {
 
 	select {
 	case ev := <-events:
-		require.Equal(t, synctypes.ChangeDelete, ev.Type,
+		require.Equal(t, ChangeDelete, ev.Type,
 			"transient file delete should produce ChangeDelete")
 		require.Equal(t, "transient.txt", ev.Path)
-		require.Equal(t, synctypes.ItemTypeFile, ev.ItemType,
+		require.Equal(t, ItemTypeFile, ev.ItemType,
 			"unknown path defaults to ItemTypeFile")
 		require.True(t, ev.IsDeleted)
 	case <-time.After(5 * time.Second):
@@ -453,7 +452,7 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 	// Baseline has the file at the old path.
 	baseline := baselineWith(&BaselineEntry{
 		Path: "original.txt", DriveID: driveid.New("d"), ItemID: "i1",
-		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "moved content"),
+		ItemType: ItemTypeFile, LocalHash: hashContent(t, "moved content"),
 	})
 
 	mockWatcher := newMockFsWatcher()
@@ -513,23 +512,23 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 	// Find the Create and Delete events (order may vary).
 	var createEv, deleteEv *ChangeEvent
 	for i := range collected {
-		if collected[i].Type == synctypes.ChangeCreate {
+		if collected[i].Type == ChangeCreate {
 			createEv = &collected[i]
 			continue
 		}
 
-		if collected[i].Type == synctypes.ChangeDelete {
+		if collected[i].Type == ChangeDelete {
 			deleteEv = &collected[i]
 		}
 	}
 
 	require.NotNil(t, createEv, "should have a ChangeCreate for the new path")
 	require.Equal(t, "dest/moved.txt", createEv.Path)
-	require.Equal(t, synctypes.SourceLocal, createEv.Source)
+	require.Equal(t, SourceLocal, createEv.Source)
 
 	require.NotNil(t, deleteEv, "should have a ChangeDelete for the old path")
 	require.Equal(t, "original.txt", deleteEv.Path)
 	require.True(t, deleteEv.IsDeleted)
-	require.Equal(t, synctypes.ItemTypeFile, deleteEv.ItemType,
+	require.Equal(t, ItemTypeFile, deleteEv.ItemType,
 		"baseline lookup should resolve the item type for the old path")
 }

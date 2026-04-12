@@ -16,7 +16,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // ---------------------------------------------------------------------------
@@ -107,11 +106,11 @@ func TestFullDelta_NewFiles(t *testing.T) {
 
 	// First file.
 	e := events[0]
-	assert.Equal(t, synctypes.ChangeCreate, e.Type)
+	assert.Equal(t, ChangeCreate, e.Type)
 	assert.Equal(t, "hello.txt", e.Path)
 	assert.Equal(t, "qxh1", e.Hash)
 	assert.Equal(t, int64(100), e.Size)
-	assert.Equal(t, synctypes.SourceRemote, e.Source)
+	assert.Equal(t, SourceRemote, e.Source)
 
 	// Second file.
 	assert.Equal(t, "world.txt", events[1].Name)
@@ -122,7 +121,7 @@ func TestFullDelta_ModifiedFile(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path: "docs/readme.md", DriveID: driveid.New(synctest.TestDriveID), ItemID: "f1",
-		ParentID: "folder1", ItemType: synctypes.ItemTypeFile, RemoteHash: "old-hash",
+		ParentID: "folder1", ItemType: ItemTypeFile, RemoteHash: "old-hash",
 	})
 
 	fetcher := &mockDeltaFetcher{
@@ -157,7 +156,7 @@ func TestFullDelta_ModifiedFile(t *testing.T) {
 	}
 
 	require.NotNil(t, fileEvent, "file event not found")
-	assert.Equal(t, synctypes.ChangeModify, fileEvent.Type)
+	assert.Equal(t, ChangeModify, fileEvent.Type)
 	assert.Equal(t, "docs/readme.md", fileEvent.Path)
 	assert.Equal(t, "new-hash", fileEvent.Hash)
 }
@@ -167,7 +166,7 @@ func TestFullDelta_DeletedFile(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path: "photos/cat.jpg", DriveID: driveid.New(synctest.TestDriveID), ItemID: "f1",
-		ItemType: synctypes.ItemTypeFile,
+		ItemType: ItemTypeFile,
 	})
 
 	fetcher := &mockDeltaFetcher{
@@ -188,7 +187,7 @@ func TestFullDelta_DeletedFile(t *testing.T) {
 	require.Len(t, events, 1)
 
 	e := events[0]
-	assert.Equal(t, synctypes.ChangeDelete, e.Type)
+	assert.Equal(t, ChangeDelete, e.Type)
 	assert.True(t, e.IsDeleted)
 	assert.Equal(t, "photos/cat.jpg", e.Path)
 }
@@ -199,7 +198,7 @@ func TestFullDelta_ModifiedFile_SparseFieldsRecoveredFromBaseline(t *testing.T) 
 
 	baseline := baselineWith(&BaselineEntry{
 		Path: "docs/readme.md", DriveID: driveid.New(synctest.TestDriveID), ItemID: "f1",
-		ParentID: "folder1", ItemType: synctypes.ItemTypeFile, RemoteHash: "old-hash",
+		ParentID: "folder1", ItemType: ItemTypeFile, RemoteHash: "old-hash",
 	})
 
 	fetcher := &mockDeltaFetcher{
@@ -221,7 +220,7 @@ func TestFullDelta_ModifiedFile_SparseFieldsRecoveredFromBaseline(t *testing.T) 
 	require.NoError(t, err, "FullDelta")
 
 	require.Len(t, events, 1)
-	assert.Equal(t, synctypes.ChangeModify, events[0].Type)
+	assert.Equal(t, ChangeModify, events[0].Type)
 	assert.Equal(t, "docs/readme.md", events[0].Path)
 	assert.Equal(t, "readme.md", events[0].Name)
 	assert.Equal(t, "new-hash", events[0].Hash)
@@ -233,15 +232,15 @@ func TestFullDelta_MovedFile(t *testing.T) {
 	baseline := baselineWith(
 		&BaselineEntry{
 			Path: "old-folder", DriveID: driveid.New(synctest.TestDriveID), ItemID: "folder-old",
-			ParentID: "root", ItemType: synctypes.ItemTypeFolder,
+			ParentID: "root", ItemType: ItemTypeFolder,
 		},
 		&BaselineEntry{
 			Path: "old-folder/doc.txt", DriveID: driveid.New(synctest.TestDriveID), ItemID: "f1",
-			ParentID: "folder-old", ItemType: synctypes.ItemTypeFile,
+			ParentID: "folder-old", ItemType: ItemTypeFile,
 		},
 		&BaselineEntry{
 			Path: "new-folder", DriveID: driveid.New(synctest.TestDriveID), ItemID: "folder-new",
-			ParentID: "root", ItemType: synctypes.ItemTypeFolder,
+			ParentID: "root", ItemType: ItemTypeFolder,
 		},
 	)
 
@@ -272,7 +271,7 @@ func TestFullDelta_MovedFile(t *testing.T) {
 	}
 
 	require.NotNil(t, moveEvent, "move event not found")
-	assert.Equal(t, synctypes.ChangeMove, moveEvent.Type)
+	assert.Equal(t, ChangeMove, moveEvent.Type)
 	assert.Equal(t, "new-folder/doc.txt", moveEvent.Path)
 	assert.Equal(t, "old-folder/doc.txt", moveEvent.OldPath)
 }
@@ -284,15 +283,15 @@ func TestFullDelta_MovedFile_SparseNameRecoveredFromBaseline(t *testing.T) {
 	baseline := baselineWith(
 		&BaselineEntry{
 			Path: "old-folder", DriveID: driveid.New(synctest.TestDriveID), ItemID: "folder-old",
-			ParentID: "root", ItemType: synctypes.ItemTypeFolder,
+			ParentID: "root", ItemType: ItemTypeFolder,
 		},
 		&BaselineEntry{
 			Path: "old-folder/doc.txt", DriveID: driveid.New(synctest.TestDriveID), ItemID: "f1",
-			ParentID: "folder-old", ItemType: synctypes.ItemTypeFile,
+			ParentID: "folder-old", ItemType: ItemTypeFile,
 		},
 		&BaselineEntry{
 			Path: "new-folder", DriveID: driveid.New(synctest.TestDriveID), ItemID: "folder-new",
-			ParentID: "root", ItemType: synctypes.ItemTypeFolder,
+			ParentID: "root", ItemType: ItemTypeFolder,
 		},
 	)
 
@@ -312,7 +311,7 @@ func TestFullDelta_MovedFile_SparseNameRecoveredFromBaseline(t *testing.T) {
 	require.NoError(t, err, "FullDelta")
 
 	require.Len(t, events, 1)
-	assert.Equal(t, synctypes.ChangeMove, events[0].Type)
+	assert.Equal(t, ChangeMove, events[0].Type)
 	assert.Equal(t, "new-folder/doc.txt", events[0].Path)
 	assert.Equal(t, "old-folder/doc.txt", events[0].OldPath)
 	assert.Equal(t, "doc.txt", events[0].Name)
@@ -325,15 +324,15 @@ func TestFullDelta_DescendantFollowsSparseRenamedParentWithOmittedParentReferenc
 	baseline := baselineWith(
 		&BaselineEntry{
 			Path: "Team", DriveID: driveid.New(synctest.TestDriveID), ItemID: "team",
-			ParentID: "root", ItemType: synctypes.ItemTypeFolder,
+			ParentID: "root", ItemType: ItemTypeFolder,
 		},
 		&BaselineEntry{
 			Path: "Team/Reports", DriveID: driveid.New(synctest.TestDriveID), ItemID: "reports",
-			ParentID: "team", ItemType: synctypes.ItemTypeFolder,
+			ParentID: "team", ItemType: ItemTypeFolder,
 		},
 		&BaselineEntry{
 			Path: "Team/Reports/q1.txt", DriveID: driveid.New(synctest.TestDriveID), ItemID: "f1",
-			ParentID: "reports", ItemType: synctypes.ItemTypeFile,
+			ParentID: "reports", ItemType: ItemTypeFile,
 		},
 	)
 
@@ -365,7 +364,7 @@ func TestFullDelta_DescendantFollowsSparseRenamedParentWithOmittedParentReferenc
 	}
 
 	require.NotNil(t, fileEvent, "descendant event not found")
-	assert.Equal(t, synctypes.ChangeMove, fileEvent.Type)
+	assert.Equal(t, ChangeMove, fileEvent.Type)
 	assert.Equal(t, "Team/Statements/q1.txt", fileEvent.Path,
 		"descendant should keep the renamed parent's baseline ancestry when parentReference is omitted")
 	assert.Equal(t, "Team/Reports/q1.txt", fileEvent.OldPath)
@@ -421,7 +420,7 @@ func TestFullDelta_DeltaExpired(t *testing.T) {
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	_, _, err := obs.FullDelta(t.Context(), "expired-token")
 
-	assert.ErrorIs(t, err, synctypes.ErrDeltaExpired)
+	assert.ErrorIs(t, err, ErrDeltaExpired)
 }
 
 func TestFullDelta_FetchError(t *testing.T) {
@@ -512,7 +511,7 @@ func TestFullDelta_PathMaterialization_Baseline(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path: "Projects/GoApp", DriveID: driveid.New(synctest.TestDriveID), ItemID: "folder1",
-		ParentID: "root", ItemType: synctypes.ItemTypeFolder,
+		ParentID: "root", ItemType: ItemTypeFolder,
 	})
 
 	fetcher := &mockDeltaFetcher{
@@ -540,7 +539,7 @@ func TestFullDelta_PathMaterialization_Mixed(t *testing.T) {
 	// Existing folder in baseline, new subfolder in inflight.
 	baseline := baselineWith(&BaselineEntry{
 		Path: "Documents", DriveID: driveid.New(synctest.TestDriveID), ItemID: "docs",
-		ParentID: "root", ItemType: synctypes.ItemTypeFolder,
+		ParentID: "root", ItemType: ItemTypeFolder,
 	})
 
 	fetcher := &mockDeltaFetcher{
@@ -579,7 +578,7 @@ func TestFullDelta_DeletedItem_MissingName(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path: "work/budget.xlsx", DriveID: driveid.New(synctest.TestDriveID), ItemID: "f1",
-		ItemType: synctypes.ItemTypeFile,
+		ItemType: ItemTypeFile,
 	})
 
 	fetcher := &mockDeltaFetcher{
@@ -769,7 +768,7 @@ func TestFullDelta_FolderEvent(t *testing.T) {
 	require.NoError(t, err, "FullDelta")
 
 	require.Len(t, events, 1)
-	assert.Equal(t, synctypes.ItemTypeFolder, events[0].ItemType)
+	assert.Equal(t, ItemTypeFolder, events[0].ItemType)
 	assert.Empty(t, events[0].Hash, "folders have no hash")
 }
 
@@ -828,12 +827,12 @@ func TestClassifyItemType(t *testing.T) {
 	tests := []struct {
 		name string
 		item graph.Item
-		want synctypes.ItemType
+		want ItemType
 	}{
-		{"file", graph.Item{}, synctypes.ItemTypeFile},
-		{"folder", graph.Item{IsFolder: true}, synctypes.ItemTypeFolder},
-		{"root", graph.Item{IsRoot: true}, synctypes.ItemTypeRoot},
-		{"root takes precedence", graph.Item{IsRoot: true, IsFolder: true}, synctypes.ItemTypeRoot},
+		{"file", graph.Item{}, ItemTypeFile},
+		{"folder", graph.Item{IsFolder: true}, ItemTypeFolder},
+		{"root", graph.Item{IsRoot: true}, ItemTypeRoot},
+		{"root takes precedence", graph.Item{IsRoot: true, IsFolder: true}, ItemTypeRoot},
 	}
 
 	for _, tt := range tests {
@@ -901,7 +900,7 @@ func TestFullDelta_OrphanedItem(t *testing.T) {
 
 	// Orphaned item gets a partial path: just its own name.
 	assert.Equal(t, "orphan.txt", events[0].Path, "partial path for orphan")
-	assert.Equal(t, synctypes.ChangeCreate, events[0].Type)
+	assert.Equal(t, ChangeCreate, events[0].Type)
 }
 
 // Validates: R-6.7.3
@@ -927,7 +926,7 @@ func TestFullDelta_DeletedItem_NotInBaseline(t *testing.T) {
 	require.NoError(t, err, "FullDelta")
 
 	require.Len(t, events, 1)
-	assert.Equal(t, synctypes.ChangeDelete, events[0].Type)
+	assert.Equal(t, ChangeDelete, events[0].Type)
 	assert.Equal(t, "ephemeral.txt", events[0].Path)
 	assert.Equal(t, "ephemeral.txt", events[0].Name)
 }
@@ -1460,11 +1459,11 @@ func TestFullDelta_RenameInPlace(t *testing.T) {
 	baseline := baselineWith(
 		&BaselineEntry{
 			Path: "docs", DriveID: driveid.New(synctest.TestDriveID), ItemID: "folder1",
-			ParentID: "root", ItemType: synctypes.ItemTypeFolder,
+			ParentID: "root", ItemType: ItemTypeFolder,
 		},
 		&BaselineEntry{
 			Path: "docs/old-name.txt", DriveID: driveid.New(synctest.TestDriveID), ItemID: "f1",
-			ParentID: "folder1", ItemType: synctypes.ItemTypeFile,
+			ParentID: "folder1", ItemType: ItemTypeFile,
 		},
 	)
 
@@ -1495,7 +1494,7 @@ func TestFullDelta_RenameInPlace(t *testing.T) {
 	}
 
 	require.NotNil(t, renameEvent, "rename event not found")
-	assert.Equal(t, synctypes.ChangeMove, renameEvent.Type)
+	assert.Equal(t, ChangeMove, renameEvent.Type)
 	assert.Equal(t, "docs/new-name.txt", renameEvent.Path)
 	assert.Equal(t, "docs/old-name.txt", renameEvent.OldPath)
 	assert.Equal(t, "new-name.txt", renameEvent.Name)
@@ -1620,7 +1619,7 @@ func TestFullDelta_CrossDriveItems(t *testing.T) {
 	baseline := baselineWith(
 		&BaselineEntry{
 			Path: "shared-folder", DriveID: primaryDrive, ItemID: "sf1",
-			ParentID: "root", ItemType: synctypes.ItemTypeFolder,
+			ParentID: "root", ItemType: ItemTypeFolder,
 		},
 	)
 
@@ -1663,7 +1662,7 @@ func TestFullDelta_CrossDriveItems(t *testing.T) {
 	assert.Equal(t, "shared-folder/shared-doc.txt", ev.Path)
 
 	// Since the item is new (not in baseline), it should be a Create.
-	assert.Equal(t, synctypes.ChangeCreate, ev.Type)
+	assert.Equal(t, ChangeCreate, ev.Type)
 }
 
 // Validates: R-2.4.7
@@ -2056,10 +2055,10 @@ func TestClassifyItem_ShortcutDetection(t *testing.T) {
 	ev := obs.Converter.ClassifyItem(item, inflight)
 	require.NotNil(t, ev, "shortcut should produce an event")
 
-	assert.Equal(t, synctypes.ChangeShortcut, ev.Type, "shortcut should be classified as ChangeShortcut")
+	assert.Equal(t, ChangeShortcut, ev.Type, "shortcut should be classified as ChangeShortcut")
 	assert.Equal(t, "shortcut-1", ev.ItemID)
 	assert.Equal(t, "TeamDocs", ev.Path)
-	assert.Equal(t, synctypes.ItemTypeFolder, ev.ItemType)
+	assert.Equal(t, ItemTypeFolder, ev.ItemType)
 	assert.Equal(t, "source-drive-abc", ev.RemoteDriveID)
 	assert.Equal(t, "source-item-123", ev.RemoteItemID)
 }
@@ -2094,7 +2093,7 @@ func TestClassifyItem_ShortcutDetection_NotFolder(t *testing.T) {
 	ev := obs.Converter.ClassifyItem(item, inflight)
 	require.NotNil(t, ev, "shortcut without folder facet should produce an event")
 
-	assert.Equal(t, synctypes.ChangeShortcut, ev.Type, "item with RemoteDriveID should be ChangeShortcut regardless of IsFolder")
+	assert.Equal(t, ChangeShortcut, ev.Type, "item with RemoteDriveID should be ChangeShortcut regardless of IsFolder")
 	assert.Equal(t, "source-drive-abc", ev.RemoteDriveID)
 	assert.Equal(t, "source-item-456", ev.RemoteItemID)
 }
@@ -2124,7 +2123,7 @@ func TestClassifyItem_RegularFileNoRemoteDriveID(t *testing.T) {
 	ev := obs.Converter.ClassifyItem(item, inflight)
 	require.NotNil(t, ev, "regular file should produce an event")
 
-	assert.Equal(t, synctypes.ChangeCreate, ev.Type, "regular file without RemoteDriveID should be ChangeCreate")
+	assert.Equal(t, ChangeCreate, ev.Type, "regular file without RemoteDriveID should be ChangeCreate")
 }
 
 // TestClassifyItem_ShortcutDeleted verifies that a deleted shortcut produces
@@ -2158,7 +2157,7 @@ func TestClassifyItem_ShortcutDeleted(t *testing.T) {
 	ev := obs.Converter.ClassifyItem(item, inflight)
 	require.NotNil(t, ev, "deleted shortcut should produce an event")
 
-	assert.Equal(t, synctypes.ChangeDelete, ev.Type, "deleted shortcut should be ChangeDelete")
+	assert.Equal(t, ChangeDelete, ev.Type, "deleted shortcut should be ChangeDelete")
 	assert.Equal(t, "TeamDocs", ev.Path)
 }
 
@@ -2198,7 +2197,7 @@ func TestFullDelta_ShortcutsInDelta(t *testing.T) {
 	// Find the shortcut event.
 	var shortcutEvent *ChangeEvent
 	for i := range events {
-		if events[i].Type == synctypes.ChangeShortcut {
+		if events[i].Type == ChangeShortcut {
 			shortcutEvent = &events[i]
 
 			break

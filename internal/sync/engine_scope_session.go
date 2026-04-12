@@ -9,14 +9,12 @@ import (
 	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 type ScopeSession struct {
 	Current        syncscope.Snapshot
 	Previous       syncscope.Snapshot
-	Persisted      syncstore.ScopeStateRecord
+	Persisted      ScopeStateRecord
 	PersistedFound bool
 	Diff           syncscope.Diff
 	Generation     int64
@@ -25,7 +23,7 @@ type ScopeSession struct {
 type ReentryPlan struct {
 	Paths   []string
 	Pending bool
-	Kind    synctypes.ScopeReconcileKind
+	Kind    ScopeReconcileKind
 }
 
 type ObservationPlanPurpose string
@@ -87,11 +85,11 @@ func (plan ObservationPhasePlan) HasTargets() bool {
 
 type ObservationPlanRequest struct {
 	Session                   *ScopeSession
-	Baseline                  *syncstore.Baseline
+	Baseline                  *Baseline
 	SyncMode                  Mode
 	FullReconcile             bool
 	Purpose                   ObservationPlanPurpose
-	Shortcuts                 []synctypes.Shortcut
+	Shortcuts                 []Shortcut
 	ShortcutCollisions        map[string]bool
 	SuppressedShortcutTargets map[string]struct{}
 }
@@ -189,14 +187,14 @@ func (flow *engineFlow) BuildObservationSessionPlan(
 func (flow *engineFlow) newObservationSessionPlan() ObservationSessionPlan {
 	return ObservationSessionPlan{
 		Reentry: ReentryPlan{
-			Kind: synctypes.ScopeReconcileNone,
+			Kind: ScopeReconcileNone,
 		},
 	}
 }
 
 func buildReentryPlan(req ObservationPlanRequest) ReentryPlan {
 	plan := ReentryPlan{
-		Kind: synctypes.ScopeReconcileNone,
+		Kind: ScopeReconcileNone,
 	}
 	if req.Session == nil {
 		return plan
@@ -205,13 +203,13 @@ func buildReentryPlan(req ObservationPlanRequest) ReentryPlan {
 		return plan
 	}
 	if hasObservedRoot(req.Session.Diff.EnteredPaths) {
-		plan.Kind = synctypes.ScopeReconcileFull
+		plan.Kind = ScopeReconcileFull
 		return plan
 	}
 
 	plan.Paths = append([]string(nil), req.Session.Diff.EnteredPaths...)
 	plan.Pending = true
-	plan.Kind = synctypes.ScopeReconcileEnteredPath
+	plan.Kind = ScopeReconcileEnteredPath
 	return plan
 }
 
@@ -330,22 +328,22 @@ func hasObservedRoot(paths []string) bool {
 	return false
 }
 
-func (flow *engineFlow) scopeStateRecord(session *ScopeSession, plan *ObservationSessionPlan) (syncstore.ScopeStateRecord, error) {
+func (flow *engineFlow) scopeStateRecord(session *ScopeSession, plan *ObservationSessionPlan) (ScopeStateRecord, error) {
 	if err := flow.validatePrimaryScopePersistence(plan); err != nil {
-		return syncstore.ScopeStateRecord{}, fmt.Errorf("validate primary scope persistence: %w", err)
+		return ScopeStateRecord{}, fmt.Errorf("validate primary scope persistence: %w", err)
 	}
 
 	snapshotJSON, err := syncscope.MarshalSnapshot(session.Current)
 	if err != nil {
-		return syncstore.ScopeStateRecord{}, fmt.Errorf("marshal scope snapshot: %w", err)
+		return ScopeStateRecord{}, fmt.Errorf("marshal scope snapshot: %w", err)
 	}
 
 	lastKind := plan.Reentry.Kind
 	if !plan.Reentry.Pending {
-		lastKind = synctypes.ScopeReconcileNone
+		lastKind = ScopeReconcileNone
 	}
 
-	return syncstore.ScopeStateRecord{
+	return ScopeStateRecord{
 		Generation:            session.Generation,
 		EffectiveSnapshotJSON: snapshotJSON,
 		ObservationPlanHash:   plan.Hash,
@@ -357,30 +355,30 @@ func (flow *engineFlow) scopeStateRecord(session *ScopeSession, plan *Observatio
 	}, nil
 }
 
-func scopeObservationModeForPrimary(mode primaryObservationMode) synctypes.ScopeObservationMode {
+func scopeObservationModeForPrimary(mode primaryObservationMode) ScopeObservationMode {
 	switch mode {
 	case primaryObservationDelta:
-		return synctypes.ScopeObservationScopedDelta
+		return ScopeObservationScopedDelta
 	case primaryObservationEnumerate:
-		return synctypes.ScopeObservationScopedEnumerate
+		return ScopeObservationScopedEnumerate
 	default:
 		panic(fmt.Sprintf("unknown primary observation mode %q", mode))
 	}
 }
 
-func (flow *engineFlow) scopeObservationMode(plan *ObservationSessionPlan) synctypes.ScopeObservationMode {
+func (flow *engineFlow) scopeObservationMode(plan *ObservationSessionPlan) ScopeObservationMode {
 	switch {
 	case plan.PrimaryPhase.Driver == observationPhaseDriverScopedTarget && plan.PrimaryPhase.HasTargets():
 		return scopeObservationModeForPrimary(plan.PrimaryPhase.Targets[0].mode)
 	case plan.PrimaryPhase.Driver == observationPhaseDriverScopedRoot:
 		return scopeObservationModeForPrimary(flow.engine.primaryObservationMode())
 	default:
-		return synctypes.ScopeObservationRootDelta
+		return ScopeObservationRootDelta
 	}
 }
 
 func effectivePrimaryFullReconcile(fullReconcile bool, plan *ObservationSessionPlan) bool {
-	return fullReconcile || plan.Reentry.Kind == synctypes.ScopeReconcileFull
+	return fullReconcile || plan.Reentry.Kind == ScopeReconcileFull
 }
 
 func (flow *engineFlow) planHash(
@@ -389,15 +387,15 @@ func (flow *engineFlow) planHash(
 	fullReconcile bool,
 ) (string, error) {
 	type planHashInput struct {
-		Mode             synctypes.ScopeObservationMode `json:"mode"`
-		PrimaryPaths     []string                       `json:"primary_paths,omitempty"`
-		PrimaryFolderIDs []string                       `json:"primary_folder_ids,omitempty"`
-		FullReconcile    bool                           `json:"full_reconcile"`
-		ReentryKind      synctypes.ScopeReconcileKind   `json:"reentry_kind"`
-		ReentryPaths     []string                       `json:"reentry_paths,omitempty"`
-		PendingReentry   bool                           `json:"pending_reentry"`
-		WebsocketEnabled bool                           `json:"websocket_enabled"`
-		Snapshot         syncscope.PersistedSnapshot    `json:"snapshot"`
+		Mode             ScopeObservationMode        `json:"mode"`
+		PrimaryPaths     []string                    `json:"primary_paths,omitempty"`
+		PrimaryFolderIDs []string                    `json:"primary_folder_ids,omitempty"`
+		FullReconcile    bool                        `json:"full_reconcile"`
+		ReentryKind      ScopeReconcileKind          `json:"reentry_kind"`
+		ReentryPaths     []string                    `json:"reentry_paths,omitempty"`
+		PendingReentry   bool                        `json:"pending_reentry"`
+		WebsocketEnabled bool                        `json:"websocket_enabled"`
+		Snapshot         syncscope.PersistedSnapshot `json:"snapshot"`
 	}
 
 	input := planHashInput{

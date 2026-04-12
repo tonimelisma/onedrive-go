@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/syncstore/store.go, internal/syncstore/inspector.go, internal/syncstore/schema.go, internal/syncstore/migrations/*.sql, internal/syncstore/tx.go, internal/syncstore/store_baseline.go, internal/syncstore/store_observation.go, internal/syncstore/store_conflicts.go, internal/syncstore/store_failures.go, internal/syncstore/store_held_deletes.go, internal/syncstore/store_admin.go, internal/syncstore/store_scope_blocks.go, internal/syncstore/shortcuts.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/recover.go
+GOVERNS: internal/sync/store.go, internal/sync/inspector.go, internal/sync/schema.go, internal/sync/migrations/*.sql, internal/sync/tx.go, internal/sync/store_baseline.go, internal/sync/store_observation.go, internal/sync/store_conflicts.go, internal/sync/store_failures.go, internal/sync/store_held_deletes.go, internal/sync/store_admin.go, internal/sync/store_scope_blocks.go, internal/sync/shortcuts.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/recover.go
 
 Implements: R-2.4.4 [verified], R-2.4.5 [verified], R-2.5 [verified], R-2.5.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.7 [verified], R-2.15.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.14 [verified], R-2.10.22 [verified], R-2.10.32 [verified], R-2.10.33 [verified], R-2.10.34 [verified], R-2.10.41 [verified], R-2.10.45 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified], R-6.7.17 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
@@ -36,8 +36,8 @@ peer authority; it is rebuilt from store state when the engine starts.
 
 `NewSyncStore()` opens SQLite in WAL mode and applies the embedded goose
 migrations from
-[`internal/syncstore/migrations`](../../internal/syncstore/migrations)
-through [`schema.go`](../../internal/syncstore/schema.go).
+[`internal/sync/migrations`](../../internal/sync/migrations)
+through [`schema.go`](../../internal/sync/schema.go).
 Fresh databases start at migration `00001_init.sql` and record applied
 versions in goose's `goose_db_version` table. Existing stores that already
 carry valid goose history are advanced by the migration runner. Existing stores
@@ -54,7 +54,7 @@ lifecycle.
 Key operations:
 
 - `CommitObservation()` atomically writes pure remote mirror rows and advances the relevant delta token.
-- `CommitOutcome()` updates `baseline` and updates remote mirror truth only when the successful action changed remote truth. Success-side `sync_failures` cleanup is engine-owned and happens before or after the store commit depending on the result flow.
+- `CommitMutation()` updates `baseline` and updates remote mirror truth only when the successful action changed remote truth. Success-side `sync_failures` cleanup is engine-owned and happens before or after the store commit depending on the result flow.
 - `ApplyScopeState(ctx, req)` is the durable sync-scope transition boundary.
   It upserts the singleton `scope_state` row and atomically re-evaluates
   existing `remote_state` rows against the effective snapshot, marking
@@ -81,7 +81,7 @@ successful commit, and joins any real rollback failure into the returned
 error. The store therefore never silently discards rollback failures at the
 durable state boundary.
 
-For file rows, `CommitOutcome()` persists the comparison tuple the planner
+For file rows, `CommitMutation()` persists the comparison tuple the planner
 needs later:
 
 - local side: `local_hash`, `local_size`, `local_mtime`
@@ -138,14 +138,14 @@ against the persisted snapshot and fixes rows that should no longer be
 engine remains the only owner that can consume that persisted signal and clear
 it after a successful re-entry reconciliation.
 
-`CommitOutcome()` classifies baseline mutations through one shared
+`CommitMutation()` classifies baseline mutations through one shared
 ActionType-to-mutation mapping before any transaction writes happen. Unknown
 actions are explicit store errors, not silent no-ops. The in-memory baseline
 cache uses that same classifier after commit; if that path ever encounters an
 impossible unclassified action anyway, the store invalidates and reloads the
 cache from SQLite so durable state remains the only authority.
 
-`RefreshLocalBaseline()` is deliberately narrower than `CommitOutcome()`. It
+`RefreshLocalBaseline()` is deliberately narrower than `CommitMutation()`. It
 exists for local reconciliation paths such as `keep_both`, where the
 engine has authoritative current local disk facts but is not committing a new
 executor-produced remote result. The method preserves the remote-side
@@ -268,7 +268,7 @@ tooling opens the smallest boundary that can answer its question.
 ## Read-Only Inspection
 
 `Inspector` is the read-only companion to `SyncStore`. It is opened only from
-`internal/syncstore` and gives administrative readers a narrow projection of
+`internal/sync` and gives administrative readers a narrow projection of
 state without handing them raw SQL ownership. Package-level helper functions
 such as `ReadStatusSnapshot`, `ReadDriveStatusSnapshot`,
 `ReadDurableIntentCounts`, and `HasScopeBlockAtPath` are the default one-shot
@@ -306,7 +306,7 @@ lifecycle just to answer one question.
   conflicts joined with request metadata, and optional resolved conflict
   history.
 - `IssueSummary.Groups` are keyed by the shared
-  [`synctypes.SummaryKey`](../../internal/synctypes/summary_keys.go),
+  [`sync.SummaryKey`](../../internal/sync/summary_keys.go),
   not by raw SQL categories. Each group also carries the normalized scope kind
   plus an optional humanized scope label so CLI `status` can show file,
   directory, shortcut/drive, account, or service context without reopening raw
@@ -402,7 +402,7 @@ truth, and replans from those authorities. Transfer-side leftovers such as
 not by the store.
 
 Store-owned recovery still exists for damaged databases through
-[`store_recover.go`](../../internal/syncstore/store_recover.go). That explicit
+[`db_repair.go`](../../internal/sync/db_repair.go). That explicit
 `recover` flow audits/repairs/rebuilds the database while preserving recoverable
 durable user intent, but it is separate from the normal startup path for an
 otherwise healthy store.
@@ -410,19 +410,19 @@ otherwise healthy store.
 ## Drive Status
 
 Each displayed drive in `status` reads one store-owned `DriveStatusSnapshot`
-from `Inspector`. `syncstore` owns grouping, scope labeling, pending-retry
+from `Inspector`. `internal/sync` owns grouping, scope labeling, pending-retry
 aggregation, delete-safety separation, unresolved-conflict/request joins, and
 optional resolved conflict history; CLI only formats that snapshot. Grouping
 and display use the persisted `scope_key`, `issue_type`, `category`,
 `failure_role`, and shortcut metadata, but the user-facing grouping key is
-still the shared `synctypes.SummaryKey`. This keeps per-drive `status`
+still the shared `sync.SummaryKey`. This keeps per-drive `status`
 presentation aligned with aggregate `status` and sync-runtime logging without
 persisting a second summary column in SQLite.
 
 Retryable transient item failures intentionally surface through
 the detailed/read-only retry projection rather than the visible grouped-issue list.
 The durable row still carries the raw evidence (`issue_type`, `category`,
-`failure_role`, `scope_key`), and `synctypes.SummaryKeyForPersistedFailure`
+`failure_role`, `scope_key`), and `sync.SummaryKeyForPersistedFailure`
 remains the read-time normalization rule for testable reprojection.
 
 Derived shared-folder blocked writes and scope-only auth blocks are normalized
@@ -431,7 +431,7 @@ one store-owned visible-issue taxonomy instead of rebuilding different views
 from raw tables.
 
 The broader CLI auth-health projection also reads `auth:account` from
-`scope_blocks` through `syncstore.HasScopeBlockAtPath`, but it combines that
+`scope_blocks` through `sync.HasScopeBlockAtPath`, but it combines that
 store-backed signal with token and account-profile discovery instead of
 replacing either source of truth.
 Offline/read-only surfaces only project the stored auth block. Live proof

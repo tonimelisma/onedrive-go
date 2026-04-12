@@ -6,9 +6,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // Validates: R-2.3.5
@@ -179,6 +176,6 @@ func TestDeleteCounter_WindowExpiry_NoTrip(t *testing.T) {
 func TestIsActionableIssue_DeleteSafetyHeld(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, syncstore.IsActionableIssue(synctypes.IssueDeleteSafetyHeld),
+	assert.True(t, IsActionableIssue(IssueDeleteSafetyHeld),
 		"delete_safety_held should be an actionable issue type")
 }

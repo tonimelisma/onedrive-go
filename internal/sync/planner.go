@@ -9,8 +9,6 @@ import (
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // Planner is a pure decision engine that transforms change events and
@@ -29,7 +27,7 @@ func NewPlanner(logger *slog.Logger) *Planner {
 // deniedPrefixes are treated as download-only (remote writes suppressed).
 // Returns ErrDeleteSafetyThresholdExceeded if planned deletes exceed safety thresholds.
 func (p *Planner) Plan(
-	changes []PathChanges, baseline *syncstore.Baseline, mode Mode, config *synctypes.SafetyConfig,
+	changes []PathChanges, baseline *Baseline, mode Mode, config *SafetyConfig,
 	deniedPrefixes []string,
 ) (*ActionPlan, error) {
 	p.logger.Info("planning sync actions",
@@ -85,7 +83,7 @@ func (p *Planner) Plan(
 
 	// Step 4: safety check for delete bursts.
 	counts := CountByType(plan.Actions)
-	deleteCount := counts[synctypes.ActionLocalDelete] + counts[synctypes.ActionRemoteDelete]
+	deleteCount := counts[ActionLocalDelete] + counts[ActionRemoteDelete]
 
 	if exceedsDeleteThreshold(deleteCount, config.DeleteSafetyThreshold) {
 		p.logger.Warn("delete safety threshold triggered",
@@ -93,20 +91,20 @@ func (p *Planner) Plan(
 			slog.Int("threshold", config.DeleteSafetyThreshold),
 		)
 
-		return nil, synctypes.ErrDeleteSafetyThresholdExceeded
+		return nil, ErrDeleteSafetyThresholdExceeded
 	}
 
 	p.logger.Info("plan complete",
 		slog.Int("total_actions", len(plan.Actions)),
-		slog.Int("folder_creates", counts[synctypes.ActionFolderCreate]),
-		slog.Int("moves", counts[synctypes.ActionLocalMove]+counts[synctypes.ActionRemoteMove]),
-		slog.Int("downloads", counts[synctypes.ActionDownload]),
-		slog.Int("uploads", counts[synctypes.ActionUpload]),
-		slog.Int("local_deletes", counts[synctypes.ActionLocalDelete]),
-		slog.Int("remote_deletes", counts[synctypes.ActionRemoteDelete]),
-		slog.Int("conflicts", counts[synctypes.ActionConflict]),
-		slog.Int("synced_updates", counts[synctypes.ActionUpdateSynced]),
-		slog.Int("cleanups", counts[synctypes.ActionCleanup]),
+		slog.Int("folder_creates", counts[ActionFolderCreate]),
+		slog.Int("moves", counts[ActionLocalMove]+counts[ActionRemoteMove]),
+		slog.Int("downloads", counts[ActionDownload]),
+		slog.Int("uploads", counts[ActionUpload]),
+		slog.Int("local_deletes", counts[ActionLocalDelete]),
+		slog.Int("remote_deletes", counts[ActionRemoteDelete]),
+		slog.Int("conflicts", counts[ActionConflict]),
+		slog.Int("synced_updates", counts[ActionUpdateSynced]),
+		slog.Int("cleanups", counts[ActionCleanup]),
 	)
 
 	return plan, nil
@@ -115,7 +113,7 @@ func (p *Planner) Plan(
 // buildPathViews constructs a three-way PathView for each path appearing
 // in change events. Paths with no local events but with a baseline entry
 // derive their LocalState from the baseline (item is unchanged locally).
-func buildPathViews(changes []PathChanges, baseline *syncstore.Baseline) map[string]*PathView {
+func buildPathViews(changes []PathChanges, baseline *Baseline) map[string]*PathView {
 	views := make(map[string]*PathView, len(changes))
 
 	for i := range changes {
@@ -165,7 +163,7 @@ func buildPathViews(changes []PathChanges, baseline *syncstore.Baseline) map[str
 // baseline. If the path itself has no baseline entry, walks up parent
 // directories until an ancestor with a baseline entry is found. Returns
 // zero ID if no ancestry has a baseline entry.
-func resolvePathDriveID(p string, bl *syncstore.Baseline) driveid.ID {
+func resolvePathDriveID(p string, bl *Baseline) driveid.ID {
 	// Check the path itself first.
 	if entry, ok := bl.GetByPath(p); ok {
 		return entry.DriveID
@@ -185,7 +183,7 @@ func resolvePathDriveID(p string, bl *syncstore.Baseline) driveid.ID {
 // pair spans different drives (e.g., own drive → shortcut folder). The
 // Graph API MoveItem is a single-drive operation, so cross-drive moves
 // must be decomposed into a delete + upload.
-func isCrossDriveLocalMove(deletePath, createPath string, views map[string]*PathView, bl *syncstore.Baseline) bool {
+func isCrossDriveLocalMove(deletePath, createPath string, views map[string]*PathView, bl *Baseline) bool {
 	// Source drive comes from the deleted item's baseline.
 	deleteView := views[deletePath]
 	if deleteView == nil || deleteView.Baseline == nil {
@@ -231,7 +229,7 @@ func detectMoves(
 	changes []PathChanges,
 	mode Mode,
 	deniedPrefixes []string,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 ) []Action {
 	var actions []Action
 
@@ -251,7 +249,7 @@ func detectRemoteMoves(
 	changes []PathChanges,
 	mode Mode,
 ) []Action {
-	if mode == synctypes.SyncUploadOnly {
+	if mode == SyncUploadOnly {
 		return nil
 	}
 
@@ -261,7 +259,7 @@ func detectRemoteMoves(
 		pc := &changes[i]
 		for j := range pc.RemoteEvents {
 			ev := &pc.RemoteEvents[j]
-			if ev.Type != synctypes.ChangeMove {
+			if ev.Type != ChangeMove {
 				continue
 			}
 
@@ -279,7 +277,7 @@ func detectRemoteMoves(
 				continue
 			}
 
-			action := MakeAction(synctypes.ActionLocalMove, view)
+			action := MakeAction(ActionLocalMove, view)
 			action.OldPath = ev.OldPath
 			// action.Path is already ev.Path (destination) via MakeAction.
 
@@ -314,9 +312,9 @@ func detectLocalMoves(
 	views map[string]*PathView,
 	mode Mode,
 	deniedPrefixes []string,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 ) []Action {
-	if mode == synctypes.SyncDownloadOnly {
+	if mode == SyncDownloadOnly {
 		return nil
 	}
 
@@ -348,7 +346,7 @@ func detectLocalMoves(
 
 		view := views[deletePath]
 
-		action := MakeAction(synctypes.ActionRemoteMove, view)
+		action := MakeAction(ActionRemoteMove, view)
 		action.OldPath = deletePath
 		action.Path = createPath
 
@@ -385,7 +383,7 @@ func buildLocalMoveHashMaps(views map[string]*PathView) (deletesByHash, createsB
 // should NOT be treated as a move (permission denied or cross-drive).
 func shouldSkipLocalMove(
 	deletePath, createPath string, views map[string]*PathView,
-	deniedPrefixes []string, bl *syncstore.Baseline,
+	deniedPrefixes []string, bl *Baseline,
 ) bool {
 	// Skip local moves under permission-denied folders — can't write to remote.
 	if IsWriteDenied(deletePath, deniedPrefixes) || IsWriteDenied(createPath, deniedPrefixes) {
@@ -406,7 +404,7 @@ func classifyPathView(view *PathView, mode Mode, deniedPrefixes []string) []Acti
 	// Under a denied prefix, behave as download-only: we cannot write to remote.
 	effectiveMode := mode
 	if IsWriteDenied(view.Path, deniedPrefixes) {
-		effectiveMode = synctypes.SyncDownloadOnly
+		effectiveMode = SyncDownloadOnly
 	}
 
 	if forced := classifyForcedAction(view, effectiveMode); forced != nil {
@@ -415,7 +413,7 @@ func classifyPathView(view *PathView, mode Mode, deniedPrefixes []string) []Acti
 
 	itemType := resolveItemType(view)
 
-	if itemType == synctypes.ItemTypeFolder {
+	if itemType == ItemTypeFolder {
 		return filterActionsForMode(classifyFolder(view), effectiveMode)
 	}
 
@@ -423,7 +421,7 @@ func classifyPathView(view *PathView, mode Mode, deniedPrefixes []string) []Acti
 }
 
 func filterActionsForMode(actions []Action, mode Mode) []Action {
-	if len(actions) == 0 || mode == synctypes.SyncBidirectional {
+	if len(actions) == 0 || mode == SyncBidirectional {
 		return actions
 	}
 
@@ -439,27 +437,27 @@ func filterActionsForMode(actions []Action, mode Mode) []Action {
 
 func actionAllowedInMode(action *Action, mode Mode) bool {
 	switch action.Type {
-	case synctypes.ActionDownload:
-		return mode != synctypes.SyncUploadOnly
-	case synctypes.ActionUpload:
-		return mode != synctypes.SyncDownloadOnly
-	case synctypes.ActionLocalDelete:
-		return mode != synctypes.SyncUploadOnly
-	case synctypes.ActionRemoteDelete:
-		return mode != synctypes.SyncDownloadOnly
-	case synctypes.ActionLocalMove:
-		return mode != synctypes.SyncUploadOnly
-	case synctypes.ActionRemoteMove:
-		return mode != synctypes.SyncDownloadOnly
-	case synctypes.ActionFolderCreate:
-		if action.CreateSide == synctypes.CreateLocal {
-			return mode != synctypes.SyncUploadOnly
+	case ActionDownload:
+		return mode != SyncUploadOnly
+	case ActionUpload:
+		return mode != SyncDownloadOnly
+	case ActionLocalDelete:
+		return mode != SyncUploadOnly
+	case ActionRemoteDelete:
+		return mode != SyncDownloadOnly
+	case ActionLocalMove:
+		return mode != SyncUploadOnly
+	case ActionRemoteMove:
+		return mode != SyncDownloadOnly
+	case ActionFolderCreate:
+		if action.CreateSide == CreateLocal {
+			return mode != SyncUploadOnly
 		}
-		if action.CreateSide == synctypes.CreateRemote {
-			return mode != synctypes.SyncDownloadOnly
+		if action.CreateSide == CreateRemote {
+			return mode != SyncDownloadOnly
 		}
 		return true
-	case synctypes.ActionConflict, synctypes.ActionUpdateSynced, synctypes.ActionCleanup:
+	case ActionConflict, ActionUpdateSynced, ActionCleanup:
 		return true
 	default:
 		return true
@@ -472,20 +470,20 @@ func classifyForcedAction(view *PathView, mode Mode) []Action {
 	}
 
 	switch view.ForcedAction {
-	case synctypes.ActionDownload:
-		if mode == synctypes.SyncUploadOnly {
+	case ActionDownload:
+		if mode == SyncUploadOnly {
 			return nil
 		}
-		return []Action{MakeAction(synctypes.ActionDownload, view)}
-	case synctypes.ActionUpload,
-		synctypes.ActionLocalDelete,
-		synctypes.ActionRemoteDelete,
-		synctypes.ActionLocalMove,
-		synctypes.ActionRemoteMove,
-		synctypes.ActionFolderCreate,
-		synctypes.ActionConflict,
-		synctypes.ActionUpdateSynced,
-		synctypes.ActionCleanup:
+		return []Action{MakeAction(ActionDownload, view)}
+	case ActionUpload,
+		ActionLocalDelete,
+		ActionRemoteDelete,
+		ActionLocalMove,
+		ActionRemoteMove,
+		ActionFolderCreate,
+		ActionConflict,
+		ActionUpdateSynced,
+		ActionCleanup:
 		return nil
 	default:
 		return nil
@@ -554,11 +552,11 @@ func classifyFileWithFlags(
 func classifyFileLocalDeleted(view *PathView, remoteChanged, hasRemote, remoteDeleted bool) []Action {
 	switch {
 	case !remoteChanged && !remoteDeleted:
-		return []Action{MakeAction(synctypes.ActionRemoteDelete, view)} // EF6
+		return []Action{MakeAction(ActionRemoteDelete, view)} // EF6
 	case remoteChanged && hasRemote:
-		return []Action{MakeAction(synctypes.ActionDownload, view)} // EF7: remote wins
+		return []Action{MakeAction(ActionDownload, view)} // EF7: remote wins
 	case remoteDeleted:
-		return []Action{MakeAction(synctypes.ActionCleanup, view)} // EF10
+		return []Action{MakeAction(ActionCleanup, view)} // EF10
 	}
 
 	return nil
@@ -571,18 +569,18 @@ func classifyFileLocalPresent(
 ) []Action {
 	switch {
 	case !localChanged && remoteChanged && hasRemote:
-		return []Action{MakeAction(synctypes.ActionDownload, view)} // EF2
+		return []Action{MakeAction(ActionDownload, view)} // EF2
 	case localChanged && !remoteChanged:
-		return []Action{MakeAction(synctypes.ActionUpload, view)} // EF3
+		return []Action{MakeAction(ActionUpload, view)} // EF3
 	case localChanged && remoteChanged && hasRemote:
 		if view.Local != nil && view.Local.Hash == view.Remote.Hash {
-			return []Action{MakeAction(synctypes.ActionUpdateSynced, view)} // EF4: convergent edit
+			return []Action{MakeAction(ActionUpdateSynced, view)} // EF4: convergent edit
 		}
-		return []Action{makeConflictAction(view, synctypes.ConflictEditEdit)} // EF5
+		return []Action{makeConflictAction(view, ConflictEditEdit)} // EF5
 	case !localChanged && remoteDeleted:
-		return []Action{MakeAction(synctypes.ActionLocalDelete, view)} // EF8
+		return []Action{MakeAction(ActionLocalDelete, view)} // EF8
 	case localChanged && remoteDeleted:
-		return []Action{makeConflictAction(view, synctypes.ConflictEditDelete)} // EF9
+		return []Action{makeConflictAction(view, ConflictEditDelete)} // EF9
 	}
 
 	return nil
@@ -597,15 +595,15 @@ func classifyFileNoBaseline(view *PathView) []Action {
 	switch {
 	case hasLocal && hasRemote:
 		if view.Local.Hash == view.Remote.Hash {
-			return []Action{MakeAction(synctypes.ActionUpdateSynced, view)} // EF11: convergent create
+			return []Action{MakeAction(ActionUpdateSynced, view)} // EF11: convergent create
 		}
-		return []Action{makeConflictAction(view, synctypes.ConflictCreateCreate)} // EF12
+		return []Action{makeConflictAction(view, ConflictCreateCreate)} // EF12
 
 	case hasLocal && !hasRemote:
-		return []Action{MakeAction(synctypes.ActionUpload, view)} // EF13
+		return []Action{MakeAction(ActionUpload, view)} // EF13
 
 	case !hasLocal && hasRemote:
-		return []Action{MakeAction(synctypes.ActionDownload, view)} // EF14
+		return []Action{MakeAction(ActionDownload, view)} // EF14
 	}
 
 	return nil
@@ -642,16 +640,16 @@ func classifyFolderWithFlags(view *PathView, localDeleted, hasRemote, remoteDele
 		return nil // ED1: in sync
 
 	case localDeleted && hasRemote:
-		return []Action{makeFolderCreate(view, synctypes.CreateLocal)} // ED4: remote wins
+		return []Action{makeFolderCreate(view, CreateLocal)} // ED4: remote wins
 
 	case !localDeleted && remoteDeleted:
-		return []Action{MakeAction(synctypes.ActionLocalDelete, view)} // ED6
+		return []Action{MakeAction(ActionLocalDelete, view)} // ED6
 
 	case localDeleted && remoteDeleted:
-		return []Action{MakeAction(synctypes.ActionCleanup, view)} // ED7: both deleted
+		return []Action{MakeAction(ActionCleanup, view)} // ED7: both deleted
 
 	case localDeleted && !hasRemote && !remoteDeleted:
-		return []Action{MakeAction(synctypes.ActionRemoteDelete, view)} // ED8: propagate delete
+		return []Action{MakeAction(ActionRemoteDelete, view)} // ED8: propagate delete
 	}
 
 	return nil
@@ -666,13 +664,13 @@ func classifyFolderNoBaseline(view *PathView) []Action {
 
 	switch {
 	case hasLocal && hasRemote:
-		return []Action{MakeAction(synctypes.ActionUpdateSynced, view)} // ED2: adopt
+		return []Action{MakeAction(ActionUpdateSynced, view)} // ED2: adopt
 
 	case !hasLocal && hasRemote:
-		return []Action{makeFolderCreate(view, synctypes.CreateLocal)} // ED3
+		return []Action{makeFolderCreate(view, CreateLocal)} // ED3
 
 	case hasLocal && !hasRemote && !remoteDeleted:
-		return []Action{makeFolderCreate(view, synctypes.CreateRemote)} // ED5
+		return []Action{makeFolderCreate(view, CreateRemote)} // ED5
 	}
 
 	return nil
@@ -704,7 +702,7 @@ func remoteStateFromEvent(ev *ChangeEvent) *RemoteState {
 // localStateFromEvent constructs a LocalState from a ChangeEvent.
 // Returns nil if the event is a deletion (item is absent locally).
 func localStateFromEvent(ev *ChangeEvent) *LocalState {
-	if ev.Type == synctypes.ChangeDelete {
+	if ev.Type == ChangeDelete {
 		return nil
 	}
 
@@ -719,7 +717,7 @@ func localStateFromEvent(ev *ChangeEvent) *LocalState {
 
 // localStateFromBaseline derives a LocalState from a baseline entry for
 // paths with no local events (item is unchanged on disk).
-func localStateFromBaseline(entry *syncstore.BaselineEntry) *LocalState {
+func localStateFromBaseline(entry *BaselineEntry) *LocalState {
 	return &LocalState{
 		Name:     path.Base(entry.Path),
 		ItemType: entry.ItemType,
@@ -742,7 +740,7 @@ func detectLocalChange(view *PathView) bool {
 	}
 
 	// Folders have no content hash; existence is the only signal.
-	if view.Baseline.ItemType == synctypes.ItemTypeFolder {
+	if view.Baseline.ItemType == ItemTypeFolder {
 		return false
 	}
 
@@ -777,7 +775,7 @@ func detectRemoteChange(view *PathView) bool {
 	}
 
 	// Folders have no content hash; existence is the only signal.
-	if view.Baseline.ItemType == synctypes.ItemTypeFolder {
+	if view.Baseline.ItemType == ItemTypeFolder {
 		return false
 	}
 
@@ -848,9 +846,9 @@ func fileSideChanged(
 // fall through to Baseline which has the correct type from when the item
 // was alive. This ensures folder deletes are correctly identified for
 // dependency ordering in buildDependencies/addChildDeleteDeps.
-func resolveItemType(view *PathView) synctypes.ItemType {
+func resolveItemType(view *PathView) ItemType {
 	if view == nil {
-		return synctypes.ItemTypeFile
+		return ItemTypeFile
 	}
 
 	if view.Remote != nil {
@@ -859,9 +857,9 @@ func resolveItemType(view *PathView) synctypes.ItemType {
 		// exists with a non-file type, prefer it — the baseline recorded the
 		// correct type when the item was still alive.
 		if view.Remote.IsDeleted &&
-			view.Remote.ItemType == synctypes.ItemTypeFile &&
+			view.Remote.ItemType == ItemTypeFile &&
 			view.Baseline != nil &&
-			view.Baseline.ItemType != synctypes.ItemTypeFile {
+			view.Baseline.ItemType != ItemTypeFile {
 			return view.Baseline.ItemType
 		}
 
@@ -876,7 +874,7 @@ func resolveItemType(view *PathView) synctypes.ItemType {
 		return view.Baseline.ItemType
 	}
 
-	return synctypes.ItemTypeFile
+	return ItemTypeFile
 }
 
 // MakeAction constructs an Action with type, path, and IDs populated from
@@ -889,7 +887,7 @@ func resolveItemType(view *PathView) synctypes.ItemType {
 //   - Empty DriveID for new local items (EF13, ED5) — the executor fills
 //     this from its per-drive Engine context before making API calls.
 //   - Empty ItemID for new items — assigned by the API on creation.
-func MakeAction(actionType synctypes.ActionType, view *PathView) Action {
+func MakeAction(actionType ActionType, view *PathView) Action {
 	a := Action{
 		Type: actionType,
 		Path: view.Path,
@@ -927,13 +925,13 @@ func MakeAction(actionType synctypes.ActionType, view *PathView) Action {
 	return a
 }
 
-func enrichActionTargets(actions []Action, baseline *syncstore.Baseline) {
+func enrichActionTargets(actions []Action, baseline *Baseline) {
 	for i := range actions {
 		enrichActionTarget(&actions[i], baseline)
 	}
 }
 
-func enrichActionTarget(action *Action, baseline *syncstore.Baseline) {
+func enrichActionTarget(action *Action, baseline *Baseline) {
 	if action == nil || baseline == nil {
 		return
 	}
@@ -947,7 +945,7 @@ func enrichActionTarget(action *Action, baseline *syncstore.Baseline) {
 	populateActionTargetRootFromBaseline(action, baseline)
 }
 
-func resolveActionTargetDriveID(action *Action, baseline *syncstore.Baseline) driveid.ID {
+func resolveActionTargetDriveID(action *Action, baseline *Baseline) driveid.ID {
 	if action == nil {
 		return driveid.ID{}
 	}
@@ -961,7 +959,7 @@ func resolveActionTargetDriveID(action *Action, baseline *syncstore.Baseline) dr
 	return resolvePathDriveID(action.Path, baseline)
 }
 
-func populateActionTargetRootFromRemote(action *Action, baseline *syncstore.Baseline) {
+func populateActionTargetRootFromRemote(action *Action, baseline *Baseline) {
 	if action.TargetRootItemID == "" && action.View != nil && action.View.Remote != nil {
 		action.TargetRootItemID = action.View.Remote.RemoteItemID
 	}
@@ -979,7 +977,7 @@ func populateActionTargetRootFromRemote(action *Action, baseline *syncstore.Base
 	}
 }
 
-func populateActionTargetRootFromBaseline(action *Action, baseline *syncstore.Baseline) {
+func populateActionTargetRootFromBaseline(action *Action, baseline *Baseline) {
 	if action.TargetRootItemID != "" && action.TargetRootLocalPath != "" {
 		return
 	}
@@ -1000,7 +998,7 @@ func findTargetRootPath(
 	path string,
 	targetDriveID driveid.ID,
 	targetRootItemID string,
-	baseline *syncstore.Baseline,
+	baseline *Baseline,
 ) string {
 	if baseline == nil || targetDriveID.IsZero() || targetRootItemID == "" {
 		return ""
@@ -1021,12 +1019,12 @@ func findTargetRootPath(
 	return ""
 }
 
-func findTargetRootEntry(path string, targetDriveID driveid.ID, baseline *syncstore.Baseline) *syncstore.BaselineEntry {
+func findTargetRootEntry(path string, targetDriveID driveid.ID, baseline *Baseline) *BaselineEntry {
 	if baseline == nil || targetDriveID.IsZero() {
 		return nil
 	}
 
-	var root *syncstore.BaselineEntry
+	var root *BaselineEntry
 	for current := filepath.ToSlash(path); current != "." && current != "" && current != "/"; current = filepath.ToSlash(
 		filepath.Dir(current),
 	) {
@@ -1042,9 +1040,9 @@ func findTargetRootEntry(path string, targetDriveID driveid.ID, baseline *syncst
 
 // makeConflictAction constructs an ActionConflict with ConflictInfo populated.
 func makeConflictAction(view *PathView, conflictType string) Action {
-	a := MakeAction(synctypes.ActionConflict, view)
+	a := MakeAction(ActionConflict, view)
 
-	record := &syncstore.ConflictRecord{
+	record := &ConflictRecord{
 		Path:         view.Path,
 		ConflictType: conflictType,
 	}
@@ -1068,8 +1066,8 @@ func makeConflictAction(view *PathView, conflictType string) Action {
 
 // makeFolderCreate constructs an ActionFolderCreate action with the
 // specified creation side (local or remote).
-func makeFolderCreate(view *PathView, side synctypes.FolderCreateSide) Action {
-	a := MakeAction(synctypes.ActionFolderCreate, view)
+func makeFolderCreate(view *PathView, side FolderCreateSide) Action {
+	a := MakeAction(ActionFolderCreate, view)
 	a.CreateSide = side
 
 	return a
@@ -1099,7 +1097,7 @@ func makeFolderCreate(view *PathView, side synctypes.FolderCreateSide) Action {
 //     folder delete into a remote folder create so child work has a target.
 func expandFolderDeleteCascades(
 	actions []Action,
-	baseline *syncstore.Baseline,
+	baseline *Baseline,
 	views map[string]*PathView,
 	mode Mode,
 	logger *slog.Logger,
@@ -1150,18 +1148,18 @@ func expandFolderDeleteCascades(
 		}
 
 		switch a.Type {
-		case synctypes.ActionLocalDelete:
-			actions[i] = makeFolderCreate(a.View, synctypes.CreateRemote)
-		case synctypes.ActionRemoteDelete:
-			actions[i] = makeFolderCreate(a.View, synctypes.CreateLocal)
-		case synctypes.ActionCleanup:
-		case synctypes.ActionDownload,
-			synctypes.ActionUpload,
-			synctypes.ActionLocalMove,
-			synctypes.ActionRemoteMove,
-			synctypes.ActionFolderCreate,
-			synctypes.ActionConflict,
-			synctypes.ActionUpdateSynced:
+		case ActionLocalDelete:
+			actions[i] = makeFolderCreate(a.View, CreateRemote)
+		case ActionRemoteDelete:
+			actions[i] = makeFolderCreate(a.View, CreateLocal)
+		case ActionCleanup:
+		case ActionDownload,
+			ActionUpload,
+			ActionLocalMove,
+			ActionRemoteMove,
+			ActionFolderCreate,
+			ActionConflict,
+			ActionUpdateSynced:
 			panic(fmt.Sprintf("unexpected folder cascade action type %s", a.Type.String()))
 		}
 	}
@@ -1180,10 +1178,10 @@ func shouldCascadeFolderDelete(action *Action) bool {
 		return false
 	}
 
-	isDelete := action.Type == synctypes.ActionLocalDelete ||
-		action.Type == synctypes.ActionRemoteDelete ||
-		action.Type == synctypes.ActionCleanup
-	return isDelete && resolveItemType(action.View) == synctypes.ItemTypeFolder
+	isDelete := action.Type == ActionLocalDelete ||
+		action.Type == ActionRemoteDelete ||
+		action.Type == ActionCleanup
+	return isDelete && resolveItemType(action.View) == ItemTypeFolder
 }
 
 type actionLocation struct {
@@ -1199,21 +1197,21 @@ const (
 	cascadeBothDeleted
 )
 
-func cascadeDeleteKindForAction(actionType synctypes.ActionType) (cascadeDeleteKind, bool) {
+func cascadeDeleteKindForAction(actionType ActionType) (cascadeDeleteKind, bool) {
 	switch actionType {
-	case synctypes.ActionLocalDelete:
+	case ActionLocalDelete:
 		return cascadeRemoteDeleted, true
-	case synctypes.ActionRemoteDelete:
+	case ActionRemoteDelete:
 		return cascadeLocalDeleted, true
-	case synctypes.ActionCleanup:
+	case ActionCleanup:
 		return cascadeBothDeleted, true
-	case synctypes.ActionDownload,
-		synctypes.ActionUpload,
-		synctypes.ActionLocalMove,
-		synctypes.ActionRemoteMove,
-		synctypes.ActionFolderCreate,
-		synctypes.ActionConflict,
-		synctypes.ActionUpdateSynced:
+	case ActionDownload,
+		ActionUpload,
+		ActionLocalMove,
+		ActionRemoteMove,
+		ActionFolderCreate,
+		ActionConflict,
+		ActionUpdateSynced:
 		return 0, false
 	}
 
@@ -1223,7 +1221,7 @@ func cascadeDeleteKindForAction(actionType synctypes.ActionType) (cascadeDeleteK
 func applyFolderDeleteCascade(
 	actions []Action,
 	existingActionIndex map[string]actionLocation,
-	descendants []*syncstore.BaselineEntry,
+	descendants []*BaselineEntry,
 	views map[string]*PathView,
 	mode Mode,
 	cascadeKind cascadeDeleteKind,
@@ -1265,7 +1263,7 @@ func applyFolderDeleteCascade(
 }
 
 func buildCascadedDescendantView(
-	desc *syncstore.BaselineEntry,
+	desc *BaselineEntry,
 	existingView *PathView,
 	cascadeKind cascadeDeleteKind,
 ) *PathView {
@@ -1310,17 +1308,17 @@ func classifyCascadedDescendant(view *PathView, mode Mode) []Action {
 		return nil
 	}
 
-	if resolveItemType(view) == synctypes.ItemTypeFolder {
+	if resolveItemType(view) == ItemTypeFolder {
 		return filterActionsForMode(classifyFolder(view), mode)
 	}
 
 	return filterActionsForMode(classifyFile(view), mode)
 }
 
-func actionRequiresParentFolder(actionType synctypes.ActionType) bool {
-	return actionType != synctypes.ActionLocalDelete &&
-		actionType != synctypes.ActionCleanup &&
-		actionType != synctypes.ActionRemoteDelete
+func actionRequiresParentFolder(actionType ActionType) bool {
+	return actionType != ActionLocalDelete &&
+		actionType != ActionCleanup &&
+		actionType != ActionRemoteDelete
 }
 
 // buildDependencies computes dependency edges for a flat action list.
@@ -1337,13 +1335,13 @@ func buildDependencies(actions []Action) [][]int {
 	deleteIdx := make(map[string]int)
 
 	for i := range actions {
-		if actions[i].Type == synctypes.ActionFolderCreate {
+		if actions[i].Type == ActionFolderCreate {
 			folderCreateIdx[actions[i].Path] = i
 		}
 
-		isDelete := actions[i].Type == synctypes.ActionLocalDelete ||
-			actions[i].Type == synctypes.ActionRemoteDelete ||
-			actions[i].Type == synctypes.ActionCleanup
+		isDelete := actions[i].Type == ActionLocalDelete ||
+			actions[i].Type == ActionRemoteDelete ||
+			actions[i].Type == ActionCleanup
 		if isDelete {
 			deleteIdx[actions[i].Path] = i
 		}
@@ -1377,11 +1375,11 @@ func addParentFolderDep(deps []int, idx int, a *Action, folderCreateIdx map[stri
 
 // addChildDeleteDeps makes folder deletes depend on child deletes at deeper paths.
 func addChildDeleteDeps(deps []int, idx int, a *Action, deleteIdx map[string]int) []int {
-	if a.Type != synctypes.ActionLocalDelete && a.Type != synctypes.ActionRemoteDelete {
+	if a.Type != ActionLocalDelete && a.Type != ActionRemoteDelete {
 		return deps
 	}
 
-	if resolveItemType(a.View) != synctypes.ItemTypeFolder {
+	if resolveItemType(a.View) != ItemTypeFolder {
 		return deps
 	}
 
@@ -1398,8 +1396,8 @@ func addChildDeleteDeps(deps []int, idx int, a *Action, deleteIdx map[string]int
 
 // CountByType counts actions grouped by ActionType. Exported for use by the
 // sync engine when building pass reports from plan counts.
-func CountByType(actions []Action) map[synctypes.ActionType]int {
-	counts := make(map[synctypes.ActionType]int)
+func CountByType(actions []Action) map[ActionType]int {
+	counts := make(map[ActionType]int)
 	for i := range actions {
 		counts[actions[i].Type]++
 	}
@@ -1442,7 +1440,7 @@ func detectDependencyCycle(deps [][]int) error {
 	for i := range deps {
 		if color[i] == white {
 			if dfs(i) {
-				return synctypes.ErrDependencyCycle
+				return ErrDependencyCycle
 			}
 		}
 	}

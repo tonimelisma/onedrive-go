@@ -6,13 +6,13 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 func goldenStatusAccounts() []statusAccount {
-	invalidDescriptor := synctypes.DescribeSummary(synctypes.SummaryInvalidFilename)
-	authDescriptor := synctypes.DescribeSummary(synctypes.SummaryAuthenticationRequired)
-	sharedDescriptor := synctypes.DescribeSummary(synctypes.SummarySharedFolderWritesBlocked)
+	invalidDescriptor := syncengine.DescribeSummary(syncengine.SummaryInvalidFilename)
+	authDescriptor := syncengine.DescribeSummary(syncengine.SummaryAuthenticationRequired)
+	sharedDescriptor := syncengine.DescribeSummary(syncengine.SummarySharedFolderWritesBlocked)
 
 	return []statusAccount{
 		{
@@ -44,8 +44,8 @@ func goldenStatusAccounts() []statusAccount {
 						},
 						IssueGroups: []failureGroupJSON{
 							{
-								SummaryKey: string(synctypes.SummaryInvalidFilename),
-								IssueType:  string(synctypes.IssueInvalidFilename),
+								SummaryKey: string(syncengine.SummaryInvalidFilename),
+								IssueType:  string(syncengine.IssueInvalidFilename),
 								Title:      invalidDescriptor.Title,
 								Reason:     invalidDescriptor.Reason,
 								Action:     invalidDescriptor.Action,
@@ -53,8 +53,8 @@ func goldenStatusAccounts() []statusAccount {
 								Paths:      []string{"/invalid:name.txt"},
 							},
 							{
-								SummaryKey: string(synctypes.SummaryAuthenticationRequired),
-								IssueType:  string(synctypes.IssueUnauthorized),
+								SummaryKey: string(syncengine.SummaryAuthenticationRequired),
+								IssueType:  string(syncengine.IssueUnauthorized),
 								Title:      authDescriptor.Title,
 								Reason:     authDescriptor.Reason,
 								Action:     authDescriptor.Action,
@@ -64,8 +64,8 @@ func goldenStatusAccounts() []statusAccount {
 								Paths:      nil,
 							},
 							{
-								SummaryKey: string(synctypes.SummarySharedFolderWritesBlocked),
-								IssueType:  string(synctypes.IssueSharedFolderBlocked),
+								SummaryKey: string(syncengine.SummarySharedFolderWritesBlocked),
+								IssueType:  string(syncengine.IssueSharedFolderBlocked),
 								Title:      sharedDescriptor.Title,
 								Reason:     sharedDescriptor.Reason,
 								Action:     sharedDescriptor.Action,

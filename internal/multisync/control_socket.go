@@ -15,13 +15,13 @@ import (
 	"syscall"
 	"time"
 
+	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
+
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
-	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 )
 
 const (
@@ -560,8 +560,8 @@ func perfCaptureErrorStatus(err error) (int, synccontrol.ErrorCode) {
 	}
 }
 
-func (o *Orchestrator) countDurableIntents(ctx context.Context) (syncstore.DurableIntentCounts, error) {
-	var total syncstore.DurableIntentCounts
+func (o *Orchestrator) countDurableIntents(ctx context.Context) (syncengine.DurableIntentCounts, error) {
+	var total syncengine.DurableIntentCounts
 	for _, rd := range o.cfg.Drives {
 		dbPath := rd.StatePath()
 		if dbPath == "" {
@@ -571,12 +571,12 @@ func (o *Orchestrator) countDurableIntents(ctx context.Context) (syncstore.Durab
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
-			return syncstore.DurableIntentCounts{}, fmt.Errorf("stat sync store for %s: %w", rd.CanonicalID.String(), err)
+			return syncengine.DurableIntentCounts{}, fmt.Errorf("stat sync store for %s: %w", rd.CanonicalID.String(), err)
 		}
 
-		counts, err := syncstore.ReadDurableIntentCounts(ctx, dbPath, o.logger)
+		counts, err := syncengine.ReadDurableIntentCounts(ctx, dbPath, o.logger)
 		if err != nil {
-			return syncstore.DurableIntentCounts{}, fmt.Errorf("count durable intents for %s: %w", rd.CanonicalID.String(), err)
+			return syncengine.DurableIntentCounts{}, fmt.Errorf("count durable intents for %s: %w", rd.CanonicalID.String(), err)
 		}
 
 		total.PendingHeldDeleteApprovals += counts.PendingHeldDeleteApprovals
@@ -595,14 +595,14 @@ func responseForMutation(status synccontrol.Status, err error) controlResponse {
 	return controlResponse{Body: synccontrol.MutationResponse{Status: status}}
 }
 
-func responseForConflictRequest(result *syncstore.ConflictRequestResult, err error) controlResponse {
+func responseForConflictRequest(result *syncengine.ConflictRequestResult, err error) controlResponse {
 	if err != nil {
 		return errorControlResponse(err)
 	}
 	switch result.Status {
-	case syncstore.ConflictRequestQueued, syncstore.ConflictRequestAlreadyQueued, syncstore.ConflictRequestAlreadyResolved:
+	case syncengine.ConflictRequestQueued, syncengine.ConflictRequestAlreadyQueued, syncengine.ConflictRequestAlreadyResolved:
 		return controlResponse{Body: synccontrol.MutationResponse{Status: synccontrol.Status(result.Status)}}
-	case syncstore.ConflictRequestAlreadyApplying:
+	case syncengine.ConflictRequestAlreadyApplying:
 		return controlResponse{
 			StatusCode: http.StatusConflict,
 			Code:       synccontrol.ErrorConflictAlreadyApplying,
@@ -693,10 +693,10 @@ func (o *Orchestrator) requestConflictResolution(
 	cid driveid.CanonicalID,
 	conflictID string,
 	resolution string,
-) (syncstore.ConflictRequestResult, error) {
+) (syncengine.ConflictRequestResult, error) {
 	store, err := o.openDriveStore(ctx, cid)
 	if err != nil {
-		return syncstore.ConflictRequestResult{}, err
+		return syncengine.ConflictRequestResult{}, err
 	}
 	defer func() {
 		if closeErr := store.Close(ctx); closeErr != nil {
@@ -709,7 +709,7 @@ func (o *Orchestrator) requestConflictResolution(
 
 	result, err := store.RequestConflictResolution(ctx, conflictID, resolution)
 	if err != nil {
-		return syncstore.ConflictRequestResult{}, classifyConflictRequestError(
+		return syncengine.ConflictRequestResult{}, classifyConflictRequestError(
 			fmt.Errorf("request conflict resolution for %s: %w", cid.String(), err),
 		)
 	}
@@ -734,7 +734,7 @@ func closeListenerAndRemoveSocket(listener net.Listener, path string) error {
 	return err
 }
 
-func (o *Orchestrator) openDriveStore(ctx context.Context, cid driveid.CanonicalID) (*syncstore.SyncStore, error) {
+func (o *Orchestrator) openDriveStore(ctx context.Context, cid driveid.CanonicalID) (*syncengine.SyncStore, error) {
 	for _, rd := range o.cfg.Drives {
 		if !rd.CanonicalID.Equal(cid) {
 			continue
@@ -747,7 +747,7 @@ func (o *Orchestrator) openDriveStore(ctx context.Context, cid driveid.Canonical
 				fmt.Errorf("cannot determine state DB path for drive %q", cid.String()),
 			)
 		}
-		store, err := syncstore.NewSyncStore(ctx, dbPath, o.logger)
+		store, err := syncengine.NewSyncStore(ctx, dbPath, o.logger)
 		if err != nil {
 			return nil, newControlRequestError(
 				http.StatusInternalServerError,

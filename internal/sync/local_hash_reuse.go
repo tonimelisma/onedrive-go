@@ -3,9 +3,6 @@ package sync
 import (
 	"io/fs"
 	"time"
-
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // CanReuseBaselineHash reports whether a caller can safely trust the cached
@@ -19,8 +16,8 @@ import (
 // This keeps the engine's retry/reobserve paths aligned with the main local
 // scanner so we do not hash aggressively in one path while trusting metadata
 // in another.
-func CanReuseBaselineHash(info fs.FileInfo, base *syncstore.BaselineEntry, observeStartNano int64) bool {
-	if info == nil || base == nil || info.IsDir() || base.ItemType != synctypes.ItemTypeFile || base.LocalHash == "" {
+func CanReuseBaselineHash(info fs.FileInfo, base *BaselineEntry, observeStartNano int64) bool {
+	if info == nil || base == nil || info.IsDir() || base.ItemType != ItemTypeFile || base.LocalHash == "" {
 		return false
 	}
 

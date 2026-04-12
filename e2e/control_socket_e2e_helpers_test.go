@@ -15,10 +15,11 @@ import (
 	"testing"
 	"time"
 
+	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
+
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
-	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
 const (

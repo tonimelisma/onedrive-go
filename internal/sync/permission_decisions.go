@@ -7,8 +7,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/failures"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 type PermissionCheckDecisionKind int
@@ -26,9 +24,9 @@ const (
 type PermissionCheckDecision struct {
 	Matched      bool
 	Kind         PermissionCheckDecisionKind
-	Failure      syncstore.SyncFailureParams
-	ScopeKey     synctypes.ScopeKey
-	ScopeBlock   syncstore.ScopeBlock
+	Failure      SyncFailureParams
+	ScopeKey     ScopeKey
+	ScopeBlock   ScopeBlock
 	BoundaryPath string
 	TriggerPath  string
 }
@@ -48,14 +46,14 @@ type PermissionRecheckDecision struct {
 	Kind     PermissionRecheckDecisionKind
 	Path     string
 	DriveID  driveid.ID
-	ScopeKey synctypes.ScopeKey
+	ScopeKey ScopeKey
 	Reason   string
 }
 
 // ShortcutRemovalDecision explicitly describes scope state to discard when a
 // shortcut disappears. The engine applies these through discardScope.
 type ShortcutRemovalDecision struct {
-	ScopeKey synctypes.ScopeKey
+	ScopeKey ScopeKey
 }
 
 func (controller *scopeController) applyPermissionCheckDecision(
@@ -97,7 +95,7 @@ func (controller *scopeController) applyPermissionCheckMutation(
 	case permissionCheckActivateDerivedScope:
 		controller.recordExplicitFailure(ctx, &decision.Failure)
 		if watch != nil {
-			watch.upsertActiveScope(&syncstore.ScopeBlock{
+			watch.upsertActiveScope(&ScopeBlock{
 				Key:       decision.ScopeKey,
 				IssueType: decision.ScopeKey.IssueType(),
 			})
@@ -111,7 +109,7 @@ func (controller *scopeController) logPermissionCheckDecision(
 	flowKind permissionFlow,
 	decision *PermissionCheckDecision,
 ) {
-	summaryKey := synctypes.SummaryKeyForPersistedFailure(
+	summaryKey := SummaryKeyForPersistedFailure(
 		decision.Failure.IssueType,
 		decision.Failure.Category,
 		decision.Failure.Role,
@@ -142,7 +140,7 @@ func (controller *scopeController) logPermissionCheckDecision(
 
 func (controller *scopeController) logRemotePermissionDecision(
 	decision *PermissionCheckDecision,
-	summaryKey synctypes.SummaryKey,
+	summaryKey SummaryKey,
 ) {
 	if decision.Kind != permissionCheckActivateBoundaryScope && decision.Kind != permissionCheckActivateDerivedScope {
 		return
@@ -203,9 +201,9 @@ func (controller *scopeController) applyPermissionRecheckDecisions(
 	}
 }
 
-func (controller *scopeController) recordExplicitFailure(ctx context.Context, params *syncstore.SyncFailureParams) {
+func (controller *scopeController) recordExplicitFailure(ctx context.Context, params *SyncFailureParams) {
 	flow := controller.flow
-	summaryKey := synctypes.SummaryKeyForPersistedFailure(params.IssueType, params.Category, params.Role)
+	summaryKey := SummaryKeyForPersistedFailure(params.IssueType, params.Category, params.Role)
 
 	if err := flow.engine.baseline.RecordFailure(ctx, params, nil); err != nil {
 		fields := append(flow.summaryLogFields(

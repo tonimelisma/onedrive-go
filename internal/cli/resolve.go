@@ -5,13 +5,13 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 const (
-	resolutionKeepLocal  = syncstore.ResolutionKeepLocal
-	resolutionKeepRemote = syncstore.ResolutionKeepRemote
-	resolutionKeepBoth   = syncstore.ResolutionKeepBoth
+	resolutionKeepLocal  = syncengine.ResolutionKeepLocal
+	resolutionKeepRemote = syncengine.ResolutionKeepRemote
+	resolutionKeepBoth   = syncengine.ResolutionKeepBoth
 )
 
 func newResolveCmd() *cobra.Command {

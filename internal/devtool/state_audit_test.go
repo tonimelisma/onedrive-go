@@ -12,8 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 // Validates: R-2.15.1
@@ -21,7 +20,7 @@ func TestRunStateAuditClean(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	store, err := syncstore.NewSyncStore(t.Context(), dbPath, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	store, err := syncengine.NewSyncStore(t.Context(), dbPath, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, store.Close(context.Background()))
@@ -41,7 +40,7 @@ func TestRunStateAuditReportsFindingsInJSON(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	store, err := syncstore.NewSyncStore(t.Context(), dbPath, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	store, err := syncengine.NewSyncStore(t.Context(), dbPath, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, store.Close(context.Background()))
@@ -51,8 +50,8 @@ func TestRunStateAuditReportsFindingsInJSON(t *testing.T) {
 		INSERT INTO scope_blocks
 			(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count)
 		VALUES (?, ?, 'backoff', ?, ?, ?, ?, 2)`,
-		synctypes.SKAuthAccount().String(),
-		synctypes.IssueUnauthorized,
+		syncengine.SKAuthAccount().String(),
+		syncengine.IssueUnauthorized,
 		time.Date(2026, 4, 3, 10, 0, 0, 0, time.UTC).UnixNano(),
 		int64(time.Minute),
 		time.Date(2026, 4, 3, 10, 1, 0, 0, time.UTC).UnixNano(),
@@ -81,7 +80,7 @@ func TestRunStateAuditRepairSafe(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	store, err := syncstore.NewSyncStore(t.Context(), dbPath, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	store, err := syncengine.NewSyncStore(t.Context(), dbPath, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, store.Close(context.Background()))
@@ -91,8 +90,8 @@ func TestRunStateAuditRepairSafe(t *testing.T) {
 		INSERT INTO scope_blocks
 			(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count)
 		VALUES (?, ?, 'backoff', ?, ?, ?, ?, 1)`,
-		synctypes.SKAuthAccount().String(),
-		synctypes.IssueUnauthorized,
+		syncengine.SKAuthAccount().String(),
+		syncengine.IssueUnauthorized,
 		time.Date(2026, 4, 3, 10, 0, 0, 0, time.UTC).UnixNano(),
 		int64(time.Minute),
 		time.Date(2026, 4, 3, 10, 1, 0, 0, time.UTC).UnixNano(),

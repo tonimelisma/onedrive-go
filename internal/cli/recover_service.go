@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 func runRecoverCommand(cmd *cobra.Command, cc *CLIContext, yes bool) error {
@@ -24,14 +24,14 @@ func runRecoverCommand(cmd *cobra.Command, cc *CLIContext, yes bool) error {
 
 	preflight := recoverPreflight{HasStateDB: managedPathExists(dbPath)}
 	if !preflight.HasStateDB {
-		return writeln(cc.Output(), recoverResultMessage(syncstore.RecoverResult{Action: syncstore.RecoverActionNoState}))
+		return writeln(cc.Output(), recoverResultMessage(syncengine.StateDBRepairResult{Action: syncengine.StateDBRepairNoState}))
 	}
 
 	if err := confirmRecoverIntent(cmd, cc, preflight); err != nil {
 		return err
 	}
 
-	result, err := syncstore.RecoverSyncStore(cmd.Context(), dbPath, cc.Logger)
+	result, err := syncengine.RepairStateDB(cmd.Context(), dbPath, cc.Logger)
 	if err != nil {
 		return fmt.Errorf("recover sync database: %w", err)
 	}

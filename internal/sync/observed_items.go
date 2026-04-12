@@ -2,20 +2,17 @@ package sync
 
 import (
 	"log/slog"
-
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // changeEventsToObservedItems converts remote ChangeEvents into ObservedItems
 // for CommitObservation. It keeps malformed payload filtering at the engine
 // boundary even though remote observation and one-shot reconciliation now live
 // in the same package.
-func changeEventsToObservedItems(logger *slog.Logger, events []ChangeEvent) []syncstore.ObservedItem {
-	var items []syncstore.ObservedItem
+func changeEventsToObservedItems(logger *slog.Logger, events []ChangeEvent) []ObservedItem {
+	var items []ObservedItem
 
 	for i := range events {
-		if events[i].Source != synctypes.SourceRemote {
+		if events[i].Source != SourceRemote {
 			continue
 		}
 
@@ -27,7 +24,7 @@ func changeEventsToObservedItems(logger *slog.Logger, events []ChangeEvent) []sy
 			continue
 		}
 
-		items = append(items, syncstore.ObservedItem{
+		items = append(items, ObservedItem{
 			DriveID:   events[i].DriveID,
 			ItemID:    events[i].ItemID,
 			ParentID:  events[i].ParentID,

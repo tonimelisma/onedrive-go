@@ -10,7 +10,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // LocalFilterConfig controls local-only observation exclusions. These filters
@@ -30,21 +29,7 @@ type LocalObservationRules struct {
 	RejectSharePointRootForms bool
 }
 
-const DefaultDeleteSafetyThreshold = synctypes.DefaultDeleteSafetyThreshold
-
-type SafetyConfig = synctypes.SafetyConfig
-
-func DefaultSafetyConfig() *SafetyConfig {
-	return synctypes.DefaultSafetyConfig()
-}
-
-type Mode = synctypes.SyncMode
-
-const (
-	SyncBidirectional = synctypes.SyncBidirectional
-	SyncDownloadOnly  = synctypes.SyncDownloadOnly
-	SyncUploadOnly    = synctypes.SyncUploadOnly
-)
+type Mode = SyncMode
 
 type (
 	RunOptions struct {
@@ -59,7 +44,7 @@ type (
 		UserIntentWake     <-chan struct{} // daemon control-plane wakeups for queued user intent
 	}
 	Report struct {
-		Mode     synctypes.SyncMode
+		Mode     Mode
 		DryRun   bool
 		Duration time.Duration
 

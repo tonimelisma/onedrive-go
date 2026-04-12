@@ -4,7 +4,6 @@ import (
 	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/failures"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 func (flow *engineFlow) resultLogFields(decision *ResultDecision, r *WorkerResult) []any {
@@ -47,9 +46,9 @@ func (flow *engineFlow) resultLogFields(decision *ResultDecision, r *WorkerResul
 
 func (flow *engineFlow) summaryLogFields(
 	class failures.Class,
-	summaryKey synctypes.SummaryKey,
+	summaryKey SummaryKey,
 	path string,
-	scopeKey synctypes.ScopeKey,
+	scopeKey ScopeKey,
 ) []any {
 	if flow == nil {
 		return nil

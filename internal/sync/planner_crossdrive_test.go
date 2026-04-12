@@ -8,7 +8,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // ---------------------------------------------------------------------------
@@ -19,7 +18,7 @@ import (
 func TestResolvePathDriveID_DirectMatch(t *testing.T) {
 	driveA := driveid.New("driveA")
 	bl := newBaselineForTest([]*BaselineEntry{
-		{Path: "docs/file.txt", DriveID: driveA, ItemID: "item1", ItemType: synctypes.ItemTypeFile},
+		{Path: "docs/file.txt", DriveID: driveA, ItemID: "item1", ItemType: ItemTypeFile},
 	})
 
 	got := resolvePathDriveID("docs/file.txt", bl)
@@ -30,7 +29,7 @@ func TestResolvePathDriveID_DirectMatch(t *testing.T) {
 func TestResolvePathDriveID_ParentMatch(t *testing.T) {
 	driveA := driveid.New("driveA")
 	bl := newBaselineForTest([]*BaselineEntry{
-		{Path: "shared", DriveID: driveA, ItemID: "folder1", ItemType: synctypes.ItemTypeFolder},
+		{Path: "shared", DriveID: driveA, ItemID: "folder1", ItemType: ItemTypeFolder},
 	})
 
 	// The file itself has no baseline, but its parent folder does.
@@ -41,7 +40,7 @@ func TestResolvePathDriveID_ParentMatch(t *testing.T) {
 // Validates: R-6.7.21
 func TestResolvePathDriveID_NoMatch(t *testing.T) {
 	bl := newBaselineForTest([]*BaselineEntry{
-		{Path: "other/file.txt", DriveID: driveid.New("driveX"), ItemID: "x", ItemType: synctypes.ItemTypeFile},
+		{Path: "other/file.txt", DriveID: driveid.New("driveX"), ItemID: "x", ItemType: ItemTypeFile},
 	})
 
 	got := resolvePathDriveID("completely/different/path.txt", bl)
@@ -56,8 +55,8 @@ func TestResolvePathDriveID_NoMatch(t *testing.T) {
 func TestIsCrossDriveLocalMove_SameDrive(t *testing.T) {
 	driveA := driveid.New("driveA")
 	bl := newBaselineForTest([]*BaselineEntry{
-		{Path: "old.txt", DriveID: driveA, ItemID: "item1", ItemType: synctypes.ItemTypeFile, LocalHash: "hash1"},
-		{Path: "docs", DriveID: driveA, ItemID: "folder1", ItemType: synctypes.ItemTypeFolder},
+		{Path: "old.txt", DriveID: driveA, ItemID: "item1", ItemType: ItemTypeFile, LocalHash: "hash1"},
+		{Path: "docs", DriveID: driveA, ItemID: "folder1", ItemType: ItemTypeFolder},
 	})
 	views := map[string]*PathView{
 		"old.txt":          {Path: "old.txt", Baseline: bl.ByPath["old.txt"]},
@@ -73,8 +72,8 @@ func TestIsCrossDriveLocalMove_DifferentDrive(t *testing.T) {
 	driveA := driveid.New("driveA")
 	driveB := driveid.New("driveB")
 	bl := newBaselineForTest([]*BaselineEntry{
-		{Path: "own/file.txt", DriveID: driveA, ItemID: "item1", ItemType: synctypes.ItemTypeFile, LocalHash: "hash1"},
-		{Path: "shared", DriveID: driveB, ItemID: "folder1", ItemType: synctypes.ItemTypeFolder},
+		{Path: "own/file.txt", DriveID: driveA, ItemID: "item1", ItemType: ItemTypeFile, LocalHash: "hash1"},
+		{Path: "shared", DriveID: driveB, ItemID: "folder1", ItemType: ItemTypeFolder},
 	})
 	views := map[string]*PathView{
 		"own/file.txt":    {Path: "own/file.txt", Baseline: bl.ByPath["own/file.txt"]},
@@ -89,7 +88,7 @@ func TestIsCrossDriveLocalMove_DifferentDrive(t *testing.T) {
 func TestIsCrossDriveLocalMove_ZeroDrive(t *testing.T) {
 	driveA := driveid.New("driveA")
 	bl := newBaselineForTest([]*BaselineEntry{
-		{Path: "old.txt", DriveID: driveA, ItemID: "item1", ItemType: synctypes.ItemTypeFile, LocalHash: "hash1"},
+		{Path: "old.txt", DriveID: driveA, ItemID: "item1", ItemType: ItemTypeFile, LocalHash: "hash1"},
 	})
 	views := map[string]*PathView{
 		"old.txt":         {Path: "old.txt", Baseline: bl.ByPath["old.txt"]},
@@ -177,13 +176,13 @@ func TestPlan_CrossDriveLocalMove_DecomposesToDeleteAndUpload(t *testing.T) {
 			planner := NewPlanner(synctest.TestLogger(t))
 
 			bl := newBaselineForTest([]*BaselineEntry{
-				{Path: tt.sourcePath, DriveID: driveB, ItemID: tt.targetID, ItemType: synctypes.ItemTypeFile, LocalHash: "hash1", RemoteHash: "hash1"},
-				{Path: tt.targetRoot, DriveID: driveA, ItemID: tt.sourceID, ItemType: synctypes.ItemTypeFolder},
+				{Path: tt.sourcePath, DriveID: driveB, ItemID: tt.targetID, ItemType: ItemTypeFile, LocalHash: "hash1", RemoteHash: "hash1"},
+				{Path: tt.targetRoot, DriveID: driveA, ItemID: tt.sourceID, ItemType: ItemTypeFolder},
 			})
 			if tt.name == "OwnDriveToShortcut" {
 				bl = newBaselineForTest([]*BaselineEntry{
-					{Path: tt.sourcePath, DriveID: driveA, ItemID: tt.targetID, ItemType: synctypes.ItemTypeFile, LocalHash: "hash1", RemoteHash: "hash1"},
-					{Path: tt.targetRoot, DriveID: driveB, ItemID: tt.sourceID, ItemType: synctypes.ItemTypeFolder},
+					{Path: tt.sourcePath, DriveID: driveA, ItemID: tt.targetID, ItemType: ItemTypeFile, LocalHash: "hash1", RemoteHash: "hash1"},
+					{Path: tt.targetRoot, DriveID: driveB, ItemID: tt.sourceID, ItemType: ItemTypeFolder},
 				})
 			}
 
@@ -191,20 +190,20 @@ func TestPlan_CrossDriveLocalMove_DecomposesToDeleteAndUpload(t *testing.T) {
 				{
 					Path: tt.sourcePath,
 					LocalEvents: []ChangeEvent{{
-						Source:    synctypes.SourceLocal,
-						Type:      synctypes.ChangeDelete,
+						Source:    SourceLocal,
+						Type:      ChangeDelete,
 						Path:      tt.sourcePath,
-						ItemType:  synctypes.ItemTypeFile,
+						ItemType:  ItemTypeFile,
 						IsDeleted: true,
 					}},
 				},
 				{
 					Path: tt.targetPath,
 					LocalEvents: []ChangeEvent{{
-						Source:   synctypes.SourceLocal,
-						Type:     synctypes.ChangeCreate,
+						Source:   SourceLocal,
+						Type:     ChangeCreate,
 						Path:     tt.targetPath,
-						ItemType: synctypes.ItemTypeFile,
+						ItemType: ItemTypeFile,
 						Name:     "file.txt",
 						Hash:     "hash1",
 					}},
@@ -242,16 +241,16 @@ func TestPlan_LocalUploadUnderShortcutAncestor_HasTargetRootMetadata(t *testing.
 	planner := NewPlanner(synctest.TestLogger(t))
 
 	bl := newBaselineForTest([]*BaselineEntry{
-		{Path: "shortcut", DriveID: shortcutDriveID, ItemID: "shortcut-root-id", ItemType: synctypes.ItemTypeFolder},
+		{Path: "shortcut", DriveID: shortcutDriveID, ItemID: "shortcut-root-id", ItemType: ItemTypeFolder},
 	})
 
 	changes := []PathChanges{{
 		Path: "shortcut/new-file.txt",
 		LocalEvents: []ChangeEvent{{
-			Source:   synctypes.SourceLocal,
-			Type:     synctypes.ChangeCreate,
+			Source:   SourceLocal,
+			Type:     ChangeCreate,
 			Path:     "shortcut/new-file.txt",
-			ItemType: synctypes.ItemTypeFile,
+			ItemType: ItemTypeFile,
 			Name:     "new-file.txt",
 			Hash:     "hash1",
 		}},
@@ -276,7 +275,7 @@ func TestPlan_SameDriveMove_StillWorks(t *testing.T) {
 	planner := NewPlanner(synctest.TestLogger(t))
 
 	bl := newBaselineForTest([]*BaselineEntry{
-		{Path: "old-name.txt", DriveID: driveA, ItemID: "item1", ItemType: synctypes.ItemTypeFile, LocalHash: "hash1", RemoteHash: "hash1"},
+		{Path: "old-name.txt", DriveID: driveA, ItemID: "item1", ItemType: ItemTypeFile, LocalHash: "hash1", RemoteHash: "hash1"},
 	})
 
 	changes := []PathChanges{
@@ -284,10 +283,10 @@ func TestPlan_SameDriveMove_StillWorks(t *testing.T) {
 			Path: "old-name.txt",
 			LocalEvents: []ChangeEvent{
 				{
-					Source:    synctypes.SourceLocal,
-					Type:      synctypes.ChangeDelete,
+					Source:    SourceLocal,
+					Type:      ChangeDelete,
 					Path:      "old-name.txt",
-					ItemType:  synctypes.ItemTypeFile,
+					ItemType:  ItemTypeFile,
 					IsDeleted: true,
 				},
 			},
@@ -296,10 +295,10 @@ func TestPlan_SameDriveMove_StillWorks(t *testing.T) {
 			Path: "new-name.txt",
 			LocalEvents: []ChangeEvent{
 				{
-					Source:   synctypes.SourceLocal,
-					Type:     synctypes.ChangeCreate,
+					Source:   SourceLocal,
+					Type:     ChangeCreate,
 					Path:     "new-name.txt",
-					ItemType: synctypes.ItemTypeFile,
+					ItemType: ItemTypeFile,
 					Name:     "new-name.txt",
 					Hash:     "hash1",
 				},

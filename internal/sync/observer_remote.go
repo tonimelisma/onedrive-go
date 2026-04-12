@@ -14,8 +14,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // Constants for the remote observer (satisfy mnd linter).
@@ -35,7 +33,7 @@ type watchStepResult struct {
 type WatchObservationPreparer func(
 	ctx context.Context,
 	events []ChangeEvent,
-) ([]syncstore.ObservedItem, []ChangeEvent, error)
+) ([]ObservedItem, []ChangeEvent, error)
 
 type WatchBatchPostProcessor func(
 	ctx context.Context,
@@ -90,7 +88,7 @@ type ObserverStats struct {
 // baseline must be a loaded Baseline (from SyncStore.Load); it is
 // read-only during observation. The caller must pass a normalized driveid.ID.
 func NewRemoteObserver(
-	fetcher DeltaFetcher, baseline *syncstore.Baseline, driveID driveid.ID, logger *slog.Logger,
+	fetcher DeltaFetcher, baseline *Baseline, driveID driveid.ID, logger *slog.Logger,
 ) *RemoteObserver {
 	obs := &RemoteObserver{
 		fetcher:   fetcher,
@@ -231,39 +229,7 @@ func (o *RemoteObserver) Watch(ctx context.Context, savedToken string, events ch
 			continue
 		}
 
-		if len(polledEvents) == 0 {
-			result := o.handleZeroEventPoll(ctx, interval, bo)
-			if result.err != nil {
-				return result.err
-			}
-			if result.stop {
-				return nil
-			}
-
-			continue
-		}
-
-		observed, emitted, prepErr := o.prepareWatchObservation(ctx, polledEvents)
-		if prepErr != nil {
-			return prepErr
-		}
-
-		if !o.commitWatchObservation(ctx, observed, newToken) {
-			continue
-		}
-
-		if o.postWatch != nil {
-			emitted = o.postWatch(ctx, emitted)
-		}
-
-		if err := o.emitWatchEvents(ctx, events, emitted); err != nil {
-			return err
-		}
-
-		o.setDeltaToken(newToken)
-		bo.Reset()
-
-		result := o.sleepWatch(ctx, interval, "interval")
+		result := o.handleWatchBatch(ctx, events, polledEvents, newToken, interval, bo)
 		if result.err != nil {
 			return result.err
 		}
@@ -273,12 +239,48 @@ func (o *RemoteObserver) Watch(ctx context.Context, savedToken string, events ch
 	}
 }
 
+func (o *RemoteObserver) handleWatchBatch(
+	ctx context.Context,
+	events chan<- ChangeEvent,
+	polledEvents []ChangeEvent,
+	newToken string,
+	interval time.Duration,
+	bo *retry.Backoff,
+) watchStepResult {
+	if len(polledEvents) == 0 {
+		return o.handleZeroEventPoll(ctx, interval, bo)
+	}
+
+	observed, emitted, prepErr := o.prepareWatchObservation(ctx, polledEvents)
+	if prepErr != nil {
+		return watchStepResult{err: prepErr}
+	}
+
+	if !o.commitWatchObservation(ctx, observed, newToken) {
+		if ctx.Err() != nil {
+			return watchStepResult{stop: true}
+		}
+		return watchStepResult{}
+	}
+
+	if o.postWatch != nil {
+		emitted = o.postWatch(ctx, emitted)
+	}
+
+	o.emitWatchEvents(ctx, events, emitted)
+
+	o.setDeltaToken(newToken)
+	bo.Reset()
+
+	return o.sleepWatch(ctx, interval, "interval")
+}
+
 func (o *RemoteObserver) handleWatchPollError(ctx context.Context, bo *retry.Backoff, err error) watchStepResult {
 	if watchShouldStop(ctx, err) {
 		return watchStepResult{stop: true}
 	}
 
-	if errors.Is(err, synctypes.ErrDeltaExpired) {
+	if errors.Is(err, ErrDeltaExpired) {
 		o.logger.Warn("delta token expired during watch, resetting for full resync")
 		o.setDeltaToken("")
 		bo.Reset()
@@ -317,7 +319,7 @@ func (o *RemoteObserver) handleZeroEventPoll(ctx context.Context, interval time.
 
 func (o *RemoteObserver) commitWatchObservation(
 	ctx context.Context,
-	observed []syncstore.ObservedItem,
+	observed []ObservedItem,
 	newToken string,
 ) bool {
 	// Commit observations atomically with delta token before sending events
@@ -328,6 +330,9 @@ func (o *RemoteObserver) commitWatchObservation(
 	}
 
 	if commitErr := o.ObsWriter.CommitObservation(ctx, observed, newToken, o.driveID); commitErr != nil {
+		if ctx.Err() != nil {
+			return false
+		}
 		o.logger.Error("failed to commit observations in watch",
 			slog.String("error", commitErr.Error()),
 			slog.Int("events", len(observed)),
@@ -342,7 +347,7 @@ func (o *RemoteObserver) commitWatchObservation(
 func (o *RemoteObserver) prepareWatchObservation(
 	ctx context.Context,
 	polledEvents []ChangeEvent,
-) ([]syncstore.ObservedItem, []ChangeEvent, error) {
+) ([]ObservedItem, []ChangeEvent, error) {
 	if o.prepWatch == nil {
 		return changeEventsToObservedItems(o.logger, polledEvents), polledEvents, nil
 	}
@@ -350,11 +355,7 @@ func (o *RemoteObserver) prepareWatchObservation(
 	return o.prepWatch(ctx, polledEvents)
 }
 
-func (o *RemoteObserver) emitWatchEvents(
-	ctx context.Context,
-	events chan<- ChangeEvent,
-	polledEvents []ChangeEvent,
-) error {
+func (o *RemoteObserver) emitWatchEvents(ctx context.Context, events chan<- ChangeEvent, polledEvents []ChangeEvent) {
 	// Blocking send: remote delta events must not be dropped. Unlike local
 	// events (which the safety scan recovers), dropped remote events would
 	// advance the delta token past unprocessed changes — silent data loss
@@ -363,11 +364,9 @@ func (o *RemoteObserver) emitWatchEvents(
 		select {
 		case events <- polledEvents[i]:
 		case <-ctx.Done():
-			return nil
+			return
 		}
 	}
-
-	return nil
 }
 
 func (o *RemoteObserver) sleepWatch(ctx context.Context, delay time.Duration, phase string) watchStepResult {
@@ -503,7 +502,7 @@ func (o *RemoteObserver) fetchPage(
 	dp, err := o.fetcher.Delta(ctx, o.driveID, token)
 	if err != nil {
 		if errors.Is(err, graph.ErrGone) {
-			return nil, "", false, synctypes.ErrDeltaExpired
+			return nil, "", false, ErrDeltaExpired
 		}
 
 		return nil, "", false, fmt.Errorf("sync: fetching delta page %d: %w", page, err)
@@ -539,15 +538,15 @@ func (o *RemoteObserver) fetchPage(
 // Pure helper functions
 // ---------------------------------------------------------------------------
 
-// ClassifyItemType determines the synctypes.ItemType from graph.Item flags.
-func ClassifyItemType(item *graph.Item) synctypes.ItemType {
+// ClassifyItemType determines the ItemType from graph.Item flags.
+func ClassifyItemType(item *graph.Item) ItemType {
 	switch {
 	case item.IsRoot:
-		return synctypes.ItemTypeRoot
+		return ItemTypeRoot
 	case item.IsFolder:
-		return synctypes.ItemTypeFolder
+		return ItemTypeFolder
 	default:
-		return synctypes.ItemTypeFile
+		return ItemTypeFile
 	}
 }
 

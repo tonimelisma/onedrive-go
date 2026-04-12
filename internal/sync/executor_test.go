@@ -19,7 +19,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 const (
@@ -155,13 +154,13 @@ func writeExecTestFile(t *testing.T, dir, relPath, content string) string {
 	return absPath
 }
 
-func requireOutcomeSuccess(t *testing.T, o *ExecutionResult) {
+func requireOutcomeSuccess(t *testing.T, o *ActionOutcome) {
 	t.Helper()
 
 	require.True(t, o.Success, "expected success but got error: %v", o.Error)
 }
 
-func requireOutcomeFailure(t *testing.T, o *ExecutionResult) {
+func requireOutcomeFailure(t *testing.T, o *ActionOutcome) {
 	t.Helper()
 
 	require.False(t, o.Success, "expected failure but got success")
@@ -188,7 +187,7 @@ func TestExecutor_CreateLocalFolder(t *testing.T) {
 	action := &Action{
 		Type:       ActionFolderCreate,
 		Path:       "docs/notes",
-		CreateSide: synctypes.CreateLocal,
+		CreateSide: CreateLocal,
 		View: &PathView{
 			Remote: &RemoteState{
 				ItemID:   "folder1",
@@ -224,7 +223,7 @@ func TestExecutor_CreateRemoteFolder(t *testing.T) {
 	action := &Action{
 		Type:       ActionFolderCreate,
 		Path:       "photos",
-		CreateSide: synctypes.CreateRemote,
+		CreateSide: CreateRemote,
 		View:       &PathView{Path: "photos"},
 	}
 
@@ -249,13 +248,13 @@ func TestExecutor_CreateRemoteFolder_UsesPathConvergence(t *testing.T) {
 		Path:     "shortcut",
 		ItemID:   "shortcut-parent-id",
 		DriveID:  driveid.New("00000000000000ff"),
-		ItemType: synctypes.ItemTypeFolder,
+		ItemType: ItemTypeFolder,
 	}))
 
 	action := &Action{
 		Type:       ActionFolderCreate,
 		Path:       "photos",
-		CreateSide: synctypes.CreateRemote,
+		CreateSide: CreateRemote,
 		View:       &PathView{Path: "photos"},
 	}
 
@@ -281,7 +280,7 @@ func TestExecutor_CreateRemoteFolder_PathConvergenceWarningIsNonFatal(t *testing
 	action := &Action{
 		Type:       ActionFolderCreate,
 		Path:       "photos",
-		CreateSide: synctypes.CreateRemote,
+		CreateSide: CreateRemote,
 		View:       &PathView{Path: "photos"},
 	}
 
@@ -311,13 +310,13 @@ func TestExecutor_CreateRemoteFolder_CrossDriveParentUsesTargetScopedPathConverg
 		Path:     "shortcut",
 		ItemID:   shortcutParent,
 		DriveID:  driveid.New("00000000000000ff"),
-		ItemType: synctypes.ItemTypeFolder,
+		ItemType: ItemTypeFolder,
 	}))
 
 	action := &Action{
 		Type:                ActionFolderCreate,
 		Path:                "shortcut/photos",
-		CreateSide:          synctypes.CreateRemote,
+		CreateSide:          CreateRemote,
 		TargetRootItemID:    shortcutParent,
 		TargetRootLocalPath: "shortcut",
 		View:                &PathView{Path: "shortcut/photos"},
@@ -348,7 +347,7 @@ func TestExecutor_CreateRemoteFolder_Error(t *testing.T) {
 	action := &Action{
 		Type:       ActionFolderCreate,
 		Path:       "restricted",
-		CreateSide: synctypes.CreateRemote,
+		CreateSide: CreateRemote,
 		View:       &PathView{Path: "restricted"},
 	}
 
@@ -446,7 +445,7 @@ func TestExecutor_RemoteMove_UsesPathConvergence(t *testing.T) {
 		Path:     "shortcut",
 		ItemID:   "shortcut-parent-id",
 		DriveID:  driveid.New("00000000000000ff"),
-		ItemType: synctypes.ItemTypeFolder,
+		ItemType: ItemTypeFolder,
 	}))
 
 	action := &Action{
@@ -478,7 +477,7 @@ func TestExecutor_RemoteMove_CrossDriveUsesTargetScopedPathConvergence(t *testin
 		Path:     "shortcut",
 		ItemID:   "shortcut-parent-id",
 		DriveID:  driveid.New("00000000000000ff"),
-		ItemType: synctypes.ItemTypeFolder,
+		ItemType: ItemTypeFolder,
 	}))
 
 	action := &Action{
@@ -856,7 +855,7 @@ func TestExecutor_Upload_CrossDriveParentUsesTargetScopedPathConvergence(t *test
 		Path:     "shortcut",
 		ItemID:   shortcutParent,
 		DriveID:  driveid.New("00000000000000ff"),
-		ItemType: synctypes.ItemTypeFolder,
+		ItemType: ItemTypeFolder,
 	}))
 
 	writeExecTestFile(t, syncRoot, "shortcut/exec-small.txt", "hello")
@@ -897,7 +896,7 @@ func TestExecutor_Upload_CrossDriveWithoutTargetRootMetadataSkipsPathConvergence
 		Path:     "shortcut",
 		ItemID:   shortcutParent,
 		DriveID:  driveid.New("00000000000000ff"),
-		ItemType: synctypes.ItemTypeFolder,
+		ItemType: ItemTypeFolder,
 	}))
 
 	writeExecTestFile(t, syncRoot, "shortcut/exec-small.txt", "hello")
@@ -931,7 +930,7 @@ func TestExecutor_Upload_ParentFromBaseline(t *testing.T) {
 		Path:     "exec-existing-dir",
 		ItemID:   "baseline-folder-id",
 		DriveID:  driveid.New(synctest.TestDriveID),
-		ItemType: synctypes.ItemTypeFolder,
+		ItemType: ItemTypeFolder,
 	}))
 
 	writeExecTestFile(t, syncRoot, "exec-existing-dir/exec-doc.txt", "content")
@@ -974,7 +973,7 @@ func TestExecutor_Upload_KnownItemUsesItemOverwrite(t *testing.T) {
 		ItemID:   "known-item-id",
 		ParentID: "baseline-parent",
 		DriveID:  driveid.New(synctest.TestDriveID),
-		ItemType: synctypes.ItemTypeFile,
+		ItemType: ItemTypeFile,
 	}))
 
 	writeExecTestFile(t, syncRoot, "known.txt", "known content")
@@ -1116,7 +1115,7 @@ func TestExecutor_LocalDelete_HashMismatch_ConflictCopy(t *testing.T) {
 
 	// B-133: outcome should be ActionConflict (not ActionLocalDelete) so it's tracked.
 	assert.Equal(t, ActionConflict, o.Action, "expected ActionConflict")
-	assert.Equal(t, synctypes.ConflictEditDelete, o.ConflictType, "expected ConflictEditDelete")
+	assert.Equal(t, ConflictEditDelete, o.ConflictType, "expected ConflictEditDelete")
 	assert.Equal(t, "baseline-remote-hash", o.RemoteHash)
 
 	// Original should be gone.
@@ -1447,7 +1446,7 @@ func TestExecutor_Conflict_EditDelete_AutoResolve(t *testing.T) {
 		Path:     "folder",
 		DriveID:  driveid.New(synctest.TestDriveID),
 		ItemID:   "parent-folder",
-		ItemType: synctypes.ItemTypeFolder,
+		ItemType: ItemTypeFolder,
 	})
 	e := NewExecution(cfg, baseline)
 
@@ -1466,7 +1465,7 @@ func TestExecutor_Conflict_EditDelete_AutoResolve(t *testing.T) {
 				ItemID:    "deleted-item",
 				DriveID:   driveid.New(synctest.TestDriveID),
 				ParentID:  "parent-folder",
-				ItemType:  synctypes.ItemTypeFile,
+				ItemType:  ItemTypeFile,
 				IsDeleted: true,
 			},
 			Baseline: &BaselineEntry{
@@ -1474,7 +1473,7 @@ func TestExecutor_Conflict_EditDelete_AutoResolve(t *testing.T) {
 				DriveID:  driveid.New(synctest.TestDriveID),
 				ItemID:   "deleted-item",
 				ParentID: "parent-folder",
-				ItemType: synctypes.ItemTypeFile,
+				ItemType: ItemTypeFile,
 			},
 		},
 		ConflictInfo: &ConflictRecord{
@@ -1555,7 +1554,7 @@ func TestExecutor_SyncedUpdate(t *testing.T) {
 				Hash:     "hash1",
 				Size:     1024,
 				ETag:     "etag1",
-				ItemType: synctypes.ItemTypeFile,
+				ItemType: ItemTypeFile,
 			},
 			Local: &LocalState{
 				Hash:  "hash1",
@@ -1610,7 +1609,7 @@ func TestExecutor_ResolveParentID_Baseline(t *testing.T) {
 		Path:     "exec-existing-folder",
 		ItemID:   "folder-id-from-baseline",
 		DriveID:  driveid.New(synctest.TestDriveID),
-		ItemType: synctypes.ItemTypeFolder,
+		ItemType: ItemTypeFolder,
 	}))
 
 	tests := []struct {
@@ -1769,7 +1768,7 @@ func TestExecutor_LocalMove_ViewFields(t *testing.T) {
 				Hash:     "remotehash",
 				Size:     42,
 				ETag:     "etag-move",
-				ItemType: synctypes.ItemTypeFile,
+				ItemType: ItemTypeFile,
 			},
 			Local: &LocalState{
 				Hash:  "localhash",
@@ -1787,7 +1786,7 @@ func TestExecutor_LocalMove_ViewFields(t *testing.T) {
 	assert.Equal(t, "etag-move", o.ETag)
 	assert.Equal(t, "localhash", o.LocalHash)
 	assert.Equal(t, int64(9876543210), o.LocalMtime)
-	assert.Equal(t, synctypes.ItemTypeFile, o.ItemType)
+	assert.Equal(t, ItemTypeFile, o.ItemType)
 }
 
 // Fix 12: Test large-file upload delegates to Uploader with correct size.
@@ -1860,14 +1859,14 @@ func TestExecutor_DeleteOutcome_FolderType(t *testing.T) {
 		ItemID:  "folder1",
 		DriveID: driveid.New(synctest.TestDriveID),
 		View: &PathView{
-			Baseline: &BaselineEntry{ItemType: synctypes.ItemTypeFolder},
+			Baseline: &BaselineEntry{ItemType: ItemTypeFolder},
 		},
 	}
 
 	o := e.ExecuteRemoteDelete(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
 
-	assert.Equal(t, synctypes.ItemTypeFolder, o.ItemType)
+	assert.Equal(t, ItemTypeFolder, o.ItemType)
 }
 
 func TestExecutor_Cleanup_FolderType(t *testing.T) {
@@ -1882,14 +1881,14 @@ func TestExecutor_Cleanup_FolderType(t *testing.T) {
 		ItemID:  "folder1",
 		DriveID: driveid.New(synctest.TestDriveID),
 		View: &PathView{
-			Baseline: &BaselineEntry{ItemType: synctypes.ItemTypeFolder},
+			Baseline: &BaselineEntry{ItemType: ItemTypeFolder},
 		},
 	}
 
 	o := e.ExecuteCleanup(action)
 	requireOutcomeSuccess(t, &o)
 
-	assert.Equal(t, synctypes.ItemTypeFolder, o.ItemType)
+	assert.Equal(t, ItemTypeFolder, o.ItemType)
 }
 
 func TestExecutor_SyncedUpdate_BaselineFallback(t *testing.T) {
@@ -1905,7 +1904,7 @@ func TestExecutor_SyncedUpdate_BaselineFallback(t *testing.T) {
 		ItemID:  "folder1",
 		DriveID: driveid.New(synctest.TestDriveID),
 		View: &PathView{
-			Baseline: &BaselineEntry{ItemType: synctypes.ItemTypeFolder},
+			Baseline: &BaselineEntry{ItemType: ItemTypeFolder},
 			Local:    &LocalState{Hash: "lh", Mtime: 123},
 		},
 	}
@@ -1913,7 +1912,7 @@ func TestExecutor_SyncedUpdate_BaselineFallback(t *testing.T) {
 	o := e.ExecuteSyncedUpdate(action)
 	requireOutcomeSuccess(t, &o)
 
-	assert.Equal(t, synctypes.ItemTypeFolder, o.ItemType)
+	assert.Equal(t, ItemTypeFolder, o.ItemType)
 }
 
 // ---------------------------------------------------------------------------
@@ -2179,7 +2178,7 @@ func TestContainedPath_TraversalAttempts(t *testing.T) {
 
 			_, err := ContainedPath(root, tt.relPath)
 			require.Error(t, err)
-			assert.ErrorIs(t, err, synctypes.ErrPathEscapesSyncRoot)
+			assert.ErrorIs(t, err, ErrPathEscapesSyncRoot)
 		})
 	}
 }
@@ -2193,12 +2192,12 @@ func TestCreateLocalFolder_TraversalBlocked(t *testing.T) {
 	action := &Action{
 		Type:       ActionFolderCreate,
 		Path:       "../escape",
-		CreateSide: synctypes.CreateLocal,
+		CreateSide: CreateLocal,
 	}
 
 	o := e.ExecuteFolderCreate(t.Context(), action)
 	requireOutcomeFailure(t, &o)
-	assert.ErrorIs(t, o.Error, synctypes.ErrPathEscapesSyncRoot)
+	assert.ErrorIs(t, o.Error, ErrPathEscapesSyncRoot)
 }
 
 // ---------------------------------------------------------------------------
@@ -2216,7 +2215,7 @@ func TestContainedPath_SymlinkEscape(t *testing.T) {
 
 	_, err := ContainedPath(root, "escape/secret.txt")
 	require.Error(t, err)
-	assert.ErrorIs(t, err, synctypes.ErrPathEscapesSyncRoot)
+	assert.ErrorIs(t, err, ErrPathEscapesSyncRoot)
 }
 
 func TestContainedPath_SymlinkWithinRoot(t *testing.T) {

@@ -6,9 +6,9 @@ import (
 	"io"
 	"time"
 
-	"github.com/spf13/cobra"
+	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 
-	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
+	"github.com/spf13/cobra"
 )
 
 const (

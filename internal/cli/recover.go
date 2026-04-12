@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 type recoverPreflight struct {
@@ -97,22 +97,22 @@ func stdinAsWriter(r io.Reader) io.Writer {
 	return nil
 }
 
-func recoverResultMessage(result syncstore.RecoverResult) string {
+func recoverResultMessage(result syncengine.StateDBRepairResult) string {
 	switch result.Action {
-	case syncstore.RecoverActionNoState:
+	case syncengine.StateDBRepairNoState:
 		return "No sync database found. Nothing to recover."
-	case syncstore.RecoverActionNoop:
+	case syncengine.StateDBRepairNoop:
 		return "Sync database is already healthy. No recovery was needed."
-	case syncstore.RecoverActionRepair:
+	case syncengine.StateDBRepairRepair:
 		return fmt.Sprintf("Recovered sync database in place. Applied %d deterministic repair(s).", result.RepairsApplied)
-	case syncstore.RecoverActionRebuild:
+	case syncengine.StateDBRepairRebuild:
 		return fmt.Sprintf(
 			"Rebuilt sync database and preserved %d held delete approvals, %d unresolved conflicts, and %d queued conflict requests.",
 			result.PreservedHeldDeletes,
 			result.PreservedConflicts,
 			result.PreservedRequests,
 		)
-	case syncstore.RecoverActionReset:
+	case syncengine.StateDBRepairReset:
 		return "Reset sync database from scratch. The drive will need a full re-sync."
 	default:
 		return "Recovered sync database."

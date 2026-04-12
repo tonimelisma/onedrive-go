@@ -6,12 +6,11 @@ import (
 	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 )
 
 func (flow *engineFlow) processCommittedPrimaryBatch(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	primaryEvents []ChangeEvent,
 	snapshot syncscope.Snapshot,
 	generation int64,
@@ -62,7 +61,7 @@ func (flow *engineFlow) processCommittedPrimaryBatch(
 
 func (rt *watchRuntime) processCommittedScopedWatchBatch(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	result remoteFetchResult,
 	fullReconcile bool,
 ) ([]ChangeEvent, bool) {

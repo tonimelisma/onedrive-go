@@ -9,9 +9,7 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // periodicScanJitterDivisor controls the jitter window for periodic full
@@ -64,7 +62,7 @@ func (rt *watchRuntime) initDeleteProtection(ctx context.Context) {
 }
 
 // loadWatchState loads the baseline and shortcuts for the watch session.
-// Both are loaded once after the initial sync. synctypes.Baseline is live-mutated
+// Both are loaded once after the initial sync. Baseline is live-mutated
 // under RWMutex; shortcuts are updated via setShortcuts when they change.
 func (rt *watchRuntime) loadWatchState(ctx context.Context) error {
 	_, err := rt.engine.baseline.Load(ctx)
@@ -176,8 +174,8 @@ func isWatchShutdownError(ctx context.Context, err error) bool {
 // Created by initWatchInfra; cleaned up by its cleanup method.
 type watchPipeline struct {
 	runtime          *watchRuntime
-	bl               *syncstore.Baseline
-	safety           *synctypes.SafetyConfig
+	bl               *Baseline
+	safety           *SafetyConfig
 	batchReady       <-chan []PathChanges
 	results          <-chan WorkerResult
 	errs             <-chan error
@@ -379,7 +377,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 // the number of observers started. The events channel is closed automatically
 // when all observers exit, allowing the bridge goroutine to drain cleanly.
 func (rt *watchRuntime) startObservers(
-	ctx context.Context, bl *syncstore.Baseline, buf *Buffer, opts WatchOptions,
+	ctx context.Context, bl *Baseline, buf *Buffer, opts WatchOptions,
 ) (<-chan error, int, <-chan []SkippedItem, <-chan syncscope.Change) {
 	events := make(chan ChangeEvent, watchEventBuf)
 	errs := make(chan error, 2)
@@ -422,7 +420,7 @@ func (rt *watchRuntime) startObservers(
 		defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverLocal})
 
 		watchErr := localObs.Watch(ctx, rt.engine.syncTree, events)
-		if errors.Is(watchErr, synctypes.ErrWatchLimitExhausted) {
+		if errors.Is(watchErr, ErrWatchLimitExhausted) {
 			rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverFallbackStarted, Observer: engineDebugObserverLocal})
 			rt.engine.logger.Warn("inotify watch limit exhausted, falling back to periodic full scan",
 				slog.Duration("poll_interval", rt.engine.resolvePollInterval(opts)),
@@ -446,7 +444,7 @@ func (rt *watchRuntime) startObservers(
 func (rt *watchRuntime) startRemoteObserver(
 	ctx context.Context,
 	obsWg *stdsync.WaitGroup,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	events chan<- ChangeEvent,
 	errs chan<- error,
 	opts WatchOptions,
@@ -458,7 +456,7 @@ func (rt *watchRuntime) startRemoteObserver(
 	}
 	plan, err := rt.BuildObservationSessionPlan(ctx, ObservationPlanRequest{
 		Session:  &session,
-		SyncMode: synctypes.SyncBidirectional,
+		SyncMode: SyncBidirectional,
 		Purpose:  observationPlanPurposeWatch,
 	})
 	if err != nil {

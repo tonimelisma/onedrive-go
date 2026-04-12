@@ -13,9 +13,10 @@ import (
 	"syscall"
 	"time"
 
+	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
+
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
 const (

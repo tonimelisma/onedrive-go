@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 var errUnknownActionType = errors.New("sync: unknown action type in worker dispatch")
@@ -188,7 +187,7 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 	// Uses pool-level ctx because the action already completed — its outcome
 	// should be persisted even if CancelByPath canceled actionCtx.
 	if outcome.Success {
-		mutation := baselineMutationFromExecutionResult(&outcome)
+		mutation := mutationFromActionOutcome(&outcome)
 		if commitErr := wp.baseline.CommitMutation(ctx, mutation); commitErr != nil {
 			wp.logger.Error("worker: commit outcome failed",
 				slog.Int64("id", ta.ID),
@@ -206,30 +205,30 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 // dispatchAction routes a tracked action to the appropriate executor method.
 func (wp *WorkerPool) dispatchAction(
 	ctx context.Context, exec *Executor, ta *TrackedAction,
-) ExecutionResult {
+) ActionOutcome {
 	action := &ta.Action
 
 	switch action.Type {
-	case synctypes.ActionFolderCreate:
+	case ActionFolderCreate:
 		return exec.ExecuteFolderCreate(ctx, action)
-	case synctypes.ActionLocalMove, synctypes.ActionRemoteMove:
+	case ActionLocalMove, ActionRemoteMove:
 		return exec.ExecuteMove(ctx, action)
-	case synctypes.ActionDownload:
+	case ActionDownload:
 		return exec.ExecuteDownload(ctx, action)
-	case synctypes.ActionUpload:
+	case ActionUpload:
 		return exec.ExecuteUpload(ctx, action)
-	case synctypes.ActionLocalDelete:
+	case ActionLocalDelete:
 		return exec.ExecuteLocalDelete(ctx, action)
-	case synctypes.ActionRemoteDelete:
+	case ActionRemoteDelete:
 		return exec.ExecuteRemoteDelete(ctx, action)
-	case synctypes.ActionConflict:
+	case ActionConflict:
 		return exec.ExecuteConflict(ctx, action)
-	case synctypes.ActionUpdateSynced:
+	case ActionUpdateSynced:
 		return exec.ExecuteSyncedUpdate(action)
-	case synctypes.ActionCleanup:
+	case ActionCleanup:
 		return exec.ExecuteCleanup(action)
 	default:
-		return ExecutionResult{
+		return ActionOutcome{
 			Action:  action.Type,
 			Path:    action.Path,
 			Success: false,
@@ -253,7 +252,7 @@ func (wp *WorkerPool) Results() <-chan WorkerResult {
 // If the context is canceled before the result is sent (engine shutdown),
 // the WorkerResult is silently dropped. The engine handles shutdown via
 // context cancellation on the result-processing loop (resultShutdown classification).
-func (wp *WorkerPool) sendResult(ctx context.Context, ta *TrackedAction, outcome *ExecutionResult, actionErr error) {
+func (wp *WorkerPool) sendResult(ctx context.Context, ta *TrackedAction, outcome *ActionOutcome, actionErr error) {
 	driveID := ta.Action.DriveID
 	if outcome != nil && !outcome.DriveID.IsZero() {
 		driveID = outcome.DriveID

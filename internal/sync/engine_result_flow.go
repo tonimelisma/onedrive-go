@@ -7,13 +7,11 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/failures"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 type resultContext struct {
 	isTrial       bool
-	trialScopeKey synctypes.ScopeKey
+	trialScopeKey ScopeKey
 }
 
 type trialOutcome int
@@ -51,7 +49,7 @@ func (flow *engineFlow) processWorkerResult(
 	ctx context.Context,
 	watch *watchRuntime,
 	r *WorkerResult,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 ) routeOutcome {
 	if r.IsTrial && !r.TrialScopeKey.IsZero() {
 		return flow.processResult(ctx, watch, resultContext{
@@ -68,7 +66,7 @@ func (flow *engineFlow) processResult(
 	watch *watchRuntime,
 	resultCtx resultContext,
 	r *WorkerResult,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 ) routeOutcome {
 	decision := classifyResult(r)
 	ready := flow.completeDepGraphAction(r.ActionID, "processResult")
@@ -121,7 +119,7 @@ func (flow *engineFlow) applyOrdinaryFailureEffects(
 	watch *watchRuntime,
 	decision *ResultDecision,
 	r *WorkerResult,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 ) {
 	if flow.scopeController().applyPermissionDecisionFlow(ctx, watch, decision, r, bl) {
 		flow.recordError(decision, r)
@@ -133,7 +131,7 @@ func (flow *engineFlow) applyOrdinaryFailureEffects(
 	if decision.RunScopeDetection {
 		flow.scopeController().feedScopeDetection(ctx, watch, r)
 	} else if decision.Class == failures.ClassScopeBlockingTransient && !decision.ScopeKey.IsZero() {
-		flow.scopeController().applyScopeBlock(ctx, watch, synctypes.ScopeUpdateResult{
+		flow.scopeController().applyScopeBlock(ctx, watch, ScopeUpdateResult{
 			Block:     true,
 			ScopeKey:  decision.ScopeKey,
 			IssueType: decision.ScopeKey.IssueType(),
@@ -156,7 +154,7 @@ func (flow *engineFlow) processNormalDecision(
 	decision *ResultDecision,
 	ready []*TrackedAction,
 	r *WorkerResult,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 ) routeOutcome {
 	scopeCtrl := flow.scopeController()
 
@@ -216,11 +214,11 @@ func (flow *engineFlow) processNormalDecision(
 func (flow *engineFlow) processTrialDecision(
 	ctx context.Context,
 	watch *watchRuntime,
-	trialScopeKey synctypes.ScopeKey,
+	trialScopeKey ScopeKey,
 	decision *ResultDecision,
 	ready []*TrackedAction,
 	r *WorkerResult,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 ) routeOutcome {
 	scopeCtrl := flow.scopeController()
 	outcome := routeOutcome{}
@@ -259,7 +257,7 @@ func (flow *engineFlow) processTrialDecision(
 }
 
 func (flow *engineFlow) evaluateTrialOutcome(
-	trialScopeKey synctypes.ScopeKey,
+	trialScopeKey ScopeKey,
 	decision *ResultDecision,
 ) trialOutcome {
 	switch decision.TrialHint {
@@ -282,7 +280,7 @@ func (flow *engineFlow) evaluateTrialOutcome(
 }
 
 func (flow *engineFlow) trialScopePersists(
-	trialScopeKey synctypes.ScopeKey,
+	trialScopeKey ScopeKey,
 	decision *ResultDecision,
 ) bool {
 	return !decision.ScopeEvidence.IsZero() && decision.ScopeEvidence == trialScopeKey
@@ -293,7 +291,7 @@ func (controller *scopeController) applyTrialPreserveEffects(
 	watch *watchRuntime,
 	decision *ResultDecision,
 	r *WorkerResult,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 ) {
 	if decision.PermissionFlow != permissionFlowNone {
 		if permDecision, handled := controller.resolvePermissionDecision(ctx, decision, r, bl); handled {
@@ -303,8 +301,8 @@ func (controller *scopeController) applyTrialPreserveEffects(
 		return
 	}
 
-	if decision.Class == failures.ClassScopeBlockingTransient && decision.ScopeKey == synctypes.SKDiskLocal() {
-		controller.applyScopeBlock(ctx, watch, synctypes.ScopeUpdateResult{
+	if decision.Class == failures.ClassScopeBlockingTransient && decision.ScopeKey == SKDiskLocal() {
+		controller.applyScopeBlock(ctx, watch, ScopeUpdateResult{
 			Block:     true,
 			ScopeKey:  decision.ScopeKey,
 			IssueType: decision.ScopeKey.IssueType(),
@@ -316,7 +314,7 @@ func (controller *scopeController) applyTrialPreserveEffects(
 func (controller *scopeController) clearHeldFailureForScope(
 	ctx context.Context,
 	path string,
-	scopeKey synctypes.ScopeKey,
+	scopeKey ScopeKey,
 ) {
 	if scopeKey.IsZero() {
 		return
@@ -336,7 +334,7 @@ func (controller *scopeController) clearHeldFailureForScope(
 
 	for i := range rows {
 		row := rows[i]
-		if row.Path != path || row.Role != synctypes.FailureRoleHeld || row.ScopeKey != scopeKey {
+		if row.Path != path || row.Role != FailureRoleHeld || row.ScopeKey != scopeKey {
 			continue
 		}
 
@@ -362,7 +360,7 @@ func (controller *scopeController) applyFatalAuthEffects(
 	ctx context.Context,
 	watch *watchRuntime,
 	r *WorkerResult,
-	summaryKey synctypes.SummaryKey,
+	summaryKey SummaryKey,
 ) {
 	flow := controller.flow
 
@@ -371,7 +369,7 @@ func (controller *scopeController) applyFatalAuthEffects(
 			failures.ClassFatal,
 			summaryKey,
 			r.Path,
-			synctypes.SKAuthAccount(),
+			SKAuthAccount(),
 		), slog.String("error", err.Error()))
 		flow.engine.logger.Warn("fatal unauthorized: failed to persist auth scope", fields...)
 		return
@@ -382,7 +380,7 @@ func (controller *scopeController) applyFatalAuthEffects(
 			failures.ClassFatal,
 			summaryKey,
 			r.Path,
-			synctypes.SKAuthAccount(),
+			SKAuthAccount(),
 		)...,
 	)
 }
@@ -392,7 +390,7 @@ func (controller *scopeController) applyPermissionDecisionFlow(
 	watch *watchRuntime,
 	decision *ResultDecision,
 	r *WorkerResult,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 ) bool {
 	permDecision, handled := controller.resolvePermissionDecision(ctx, decision, r, bl)
 	if !handled {
@@ -406,7 +404,7 @@ func (controller *scopeController) resolvePermissionDecision(
 	ctx context.Context,
 	decision *ResultDecision,
 	r *WorkerResult,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 ) (*PermissionCheckDecision, bool) {
 	flow := controller.flow
 
@@ -445,12 +443,12 @@ func (flow *engineFlow) recordFailure(
 	category := decision.Persistence.failureCategory()
 	scopeKey := decision.ScopeEvidence
 
-	if recErr := flow.engine.baseline.RecordFailure(ctx, &syncstore.SyncFailureParams{
+	if recErr := flow.engine.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:       r.Path,
 		DriveID:    driveID,
 		Direction:  direction,
 		ActionType: r.ActionType,
-		Role:       synctypes.FailureRoleItem,
+		Role:       FailureRoleItem,
 		Category:   category,
 		IssueType:  decision.IssueType,
 		ErrMsg:     r.ErrMsg,

@@ -11,8 +11,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/authstate"
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 func accountCatalogEntryByEmail(t *testing.T, catalog []accountCatalogEntry, email string) accountCatalogEntry {
@@ -117,16 +116,16 @@ func TestBuildAccountCatalog_PersistedAuthScopeWinsOnlyWhenSavedLoginIsOtherwise
 func touchStateDBForAccount(t *testing.T, cid driveid.CanonicalID) error {
 	t.Helper()
 
-	store, err := syncstore.NewSyncStore(t.Context(), config.DriveStatePath(cid), testDriveLogger(t))
+	store, err := syncengine.NewSyncStore(t.Context(), config.DriveStatePath(cid), testDriveLogger(t))
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, store.Close(t.Context()))
 	}()
 
-	if err := store.UpsertScopeBlock(t.Context(), &syncstore.ScopeBlock{
-		Key:           synctypes.SKService(),
-		IssueType:     synctypes.IssueServiceOutage,
-		TimingSource:  synctypes.ScopeTimingBackoff,
+	if err := store.UpsertScopeBlock(t.Context(), &syncengine.ScopeBlock{
+		Key:           syncengine.SKService(),
+		IssueType:     syncengine.IssueServiceOutage,
+		TimingSource:  syncengine.ScopeTimingBackoff,
 		BlockedAt:     time.Date(2026, 4, 3, 8, 0, 0, 0, time.UTC),
 		TrialInterval: 5 * time.Second,
 		NextTrialAt:   time.Date(2026, 4, 3, 8, 0, 5, 0, time.UTC),

@@ -13,7 +13,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 const engineResolvedRemoteVersion = "remote-version"
@@ -36,13 +35,13 @@ func TestResolveConflict_KeepBoth(t *testing.T) {
 		0o600,
 	))
 
-	outcomes := []ExecutionResult{{
+	outcomes := []ActionOutcome{{
 		Action:       ActionConflict,
 		Success:      true,
 		Path:         "conflict-file.txt",
 		DriveID:      driveID,
 		ItemID:       "item-c",
-		ItemType:     synctypes.ItemTypeFile,
+		ItemType:     ItemTypeFile,
 		LocalHash:    "local-h",
 		RemoteHash:   "remote-h",
 		ConflictType: "edit_edit",
@@ -54,7 +53,7 @@ func TestResolveConflict_KeepBoth(t *testing.T) {
 	require.NoError(t, err, "ListConflicts")
 	require.Len(t, conflicts, 1)
 
-	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepBoth), "ResolveConflict")
+	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepBoth), "ResolveConflict")
 
 	remaining, err := eng.ListConflicts(ctx)
 	require.NoError(t, err, "ListConflicts after resolve")
@@ -80,7 +79,7 @@ func TestResolveConflict_NotFound(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	err := eng.ResolveConflict(ctx, "nonexistent-id", synctypes.ResolutionKeepBoth)
+	err := eng.ResolveConflict(ctx, "nonexistent-id", ResolutionKeepBoth)
 	require.Error(t, err, "expected error for nonexistent conflict")
 }
 
@@ -99,13 +98,13 @@ func TestResolveConflict_UnknownStrategy(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed a conflict.
-	outcomes := []ExecutionResult{{
+	outcomes := []ActionOutcome{{
 		Action:       ActionConflict,
 		Success:      true,
 		Path:         "bad-strategy.txt",
 		DriveID:      driveID,
 		ItemID:       "item-x",
-		ItemType:     synctypes.ItemTypeFile,
+		ItemType:     ItemTypeFile,
 		ConflictType: "edit_edit",
 	}}
 
@@ -162,13 +161,13 @@ func TestResolveConflict_KeepLocal(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed a conflict.
-	outcomes := []ExecutionResult{{
+	outcomes := []ActionOutcome{{
 		Action:       ActionConflict,
 		Success:      true,
 		Path:         "keep-local.txt",
 		DriveID:      driveID,
 		ItemID:       "item-kl",
-		ItemType:     synctypes.ItemTypeFile,
+		ItemType:     ItemTypeFile,
 		LocalHash:    "local-h",
 		RemoteHash:   "remote-h",
 		ConflictType: "edit_edit",
@@ -183,7 +182,7 @@ func TestResolveConflict_KeepLocal(t *testing.T) {
 	require.NoError(t, err, "ListConflicts")
 	require.Len(t, conflicts, 1)
 
-	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepLocal), "ResolveConflict")
+	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepLocal), "ResolveConflict")
 	assert.False(t, uploadCalled, "keep_local should only restore layout; upload is ordinary sync work")
 
 	remaining, err := eng.ListConflicts(ctx)
@@ -217,13 +216,13 @@ func TestResolveConflict_KeepLocal_RestoresSuffixedConflictCopy(t *testing.T) {
 	eng, syncRoot := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	outcomes := []ExecutionResult{{
+	outcomes := []ActionOutcome{{
 		Action:       ActionConflict,
 		Success:      true,
 		Path:         "keep-local.txt",
 		DriveID:      driveID,
 		ItemID:       "item-kl",
-		ItemType:     synctypes.ItemTypeFile,
+		ItemType:     ItemTypeFile,
 		LocalHash:    "local-h",
 		RemoteHash:   "remote-h",
 		ConflictType: "edit_edit",
@@ -237,7 +236,7 @@ func TestResolveConflict_KeepLocal_RestoresSuffixedConflictCopy(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, conflicts, 1)
 
-	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepLocal))
+	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepLocal))
 	assert.False(t, uploadCalled, "keep-local should only restore the chosen local layout")
 	assert.Equal(t, "local preferred", string(mustReadFileUnderRoot(t, syncRoot, "keep-local.txt")))
 
@@ -264,13 +263,13 @@ func TestResolveConflict_KeepRemote(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed a conflict.
-	outcomes := []ExecutionResult{{
+	outcomes := []ActionOutcome{{
 		Action:       ActionConflict,
 		Success:      true,
 		Path:         "keep-remote.txt",
 		DriveID:      driveID,
 		ItemID:       "item-kr",
-		ItemType:     synctypes.ItemTypeFile,
+		ItemType:     ItemTypeFile,
 		LocalHash:    "local-h",
 		RemoteHash:   "remote-h",
 		ConflictType: "edit_edit",
@@ -284,7 +283,7 @@ func TestResolveConflict_KeepRemote(t *testing.T) {
 	require.NoError(t, err, "ListConflicts")
 	require.Len(t, conflicts, 1)
 
-	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepRemote), "ResolveConflict")
+	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepRemote), "ResolveConflict")
 	assert.False(t, downloadCalled, "keep_remote should not trigger a special re-download")
 
 	remaining, err := eng.ListConflicts(ctx)
@@ -313,13 +312,13 @@ func TestResolveConflict_KeepRemote_CleansUpSuffixedConflictCopy(t *testing.T) {
 	eng, syncRoot := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	outcomes := []ExecutionResult{{
+	outcomes := []ActionOutcome{{
 		Action:       ActionConflict,
 		Success:      true,
 		Path:         "keep-remote.txt",
 		DriveID:      driveID,
 		ItemID:       "item-kr",
-		ItemType:     synctypes.ItemTypeFile,
+		ItemType:     ItemTypeFile,
 		LocalHash:    "local-h",
 		RemoteHash:   "remote-h",
 		ConflictType: "edit_edit",
@@ -333,7 +332,7 @@ func TestResolveConflict_KeepRemote_CleansUpSuffixedConflictCopy(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, conflicts, 1)
 
-	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepRemote))
+	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepRemote))
 	assert.False(t, downloadCalled, "keep_remote should not perform a special re-download")
 
 	_, statErr := os.Stat(filepath.Join(syncRoot, "keep-remote.conflict-20260115-120000-2.txt"))
@@ -350,13 +349,13 @@ func TestResolveConflict_KeepLocal_RestoreFailure(t *testing.T) {
 	eng, syncRoot := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	outcomes := []ExecutionResult{{
+	outcomes := []ActionOutcome{{
 		Action:       ActionConflict,
 		Success:      true,
 		Path:         "keep-local.txt",
 		DriveID:      driveID,
 		ItemID:       "item-kl",
-		ItemType:     synctypes.ItemTypeFile,
+		ItemType:     ItemTypeFile,
 		LocalHash:    "local-h",
 		RemoteHash:   "remote-h",
 		ConflictType: "edit_edit",
@@ -371,12 +370,12 @@ func TestResolveConflict_KeepLocal_RestoreFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, conflicts, 1)
 
-	err = eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepLocal)
+	err = eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepLocal)
 	require.NoError(t, err)
 
 	failed, err := eng.baseline.GetConflictRequest(ctx, conflicts[0].ID)
 	require.NoError(t, err)
-	assert.Equal(t, synctypes.ConflictStateQueued, failed.State)
+	assert.Equal(t, ConflictStateQueued, failed.State)
 	assert.Contains(t, failed.LastError, "restoring conflict copy")
 
 	remaining, err := eng.ListConflicts(ctx)
@@ -393,13 +392,13 @@ func TestResolveConflict_KeepBoth_MissingOriginalReturnsError(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	outcomes := []ExecutionResult{{
+	outcomes := []ActionOutcome{{
 		Action:       ActionConflict,
 		Success:      true,
 		Path:         "missing-original.txt",
 		DriveID:      driveID,
 		ItemID:       "item-kb",
-		ItemType:     synctypes.ItemTypeFile,
+		ItemType:     ItemTypeFile,
 		LocalHash:    "local-h",
 		RemoteHash:   "remote-h",
 		ConflictType: "edit_edit",
@@ -410,12 +409,12 @@ func TestResolveConflict_KeepBoth_MissingOriginalReturnsError(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, conflicts, 1)
 
-	err = eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepBoth)
+	err = eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepBoth)
 	require.NoError(t, err)
 
 	failed, err := eng.baseline.GetConflictRequest(ctx, conflicts[0].ID)
 	require.NoError(t, err)
-	assert.Equal(t, synctypes.ConflictStateQueued, failed.State)
+	assert.Equal(t, ConflictStateQueued, failed.State)
 	assert.Contains(t, failed.LastError, "confirming original file for keep-both")
 	assert.Contains(t, failed.LastError, "missing-original.txt")
 
@@ -437,13 +436,13 @@ func TestResolveConflict_KeepBoth_KeepsSuffixedConflictCopy(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "conflict-file.txt"), []byte("local content"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "conflict-file.conflict-20260115-120000-2.txt"), []byte("other local content"), 0o600))
 
-	outcomes := []ExecutionResult{{
+	outcomes := []ActionOutcome{{
 		Action:       ActionConflict,
 		Success:      true,
 		Path:         "conflict-file.txt",
 		DriveID:      driveID,
 		ItemID:       "item-c",
-		ItemType:     synctypes.ItemTypeFile,
+		ItemType:     ItemTypeFile,
 		LocalHash:    "local-h",
 		RemoteHash:   "remote-h",
 		ConflictType: "edit_edit",
@@ -454,7 +453,7 @@ func TestResolveConflict_KeepBoth_KeepsSuffixedConflictCopy(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, conflicts, 1)
 
-	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepBoth))
+	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepBoth))
 
 	remaining, err := eng.ListConflicts(ctx)
 	require.NoError(t, err)

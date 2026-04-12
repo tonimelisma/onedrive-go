@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 func TestCanReuseBaselineHash_MetadataMatchOutsideRacilyCleanWindow(t *testing.T) {
@@ -53,7 +52,7 @@ func TestCanReuseBaselineHash_MetadataMatchOutsideRacilyCleanWindow(t *testing.T
 				Path:           tt.path,
 				DriveID:        driveid.New("d"),
 				ItemID:         "i1",
-				ItemType:       synctypes.ItemTypeFile,
+				ItemType:       ItemTypeFile,
 				LocalHash:      "cached-hash",
 				LocalSize:      info.Size(),
 				LocalSizeKnown: true,
@@ -83,7 +82,7 @@ func TestCanReuseBaselineHash_SameSecondSubsecondDifferenceStillMatches(t *testi
 		Path:           "same-second.txt",
 		DriveID:        driveid.New("d"),
 		ItemID:         "i1",
-		ItemType:       synctypes.ItemTypeFile,
+		ItemType:       ItemTypeFile,
 		LocalHash:      "cached-hash",
 		LocalSize:      info.Size(),
 		LocalSizeKnown: true,
@@ -109,7 +108,7 @@ func TestCanReuseBaselineHash_MetadataMismatchRequiresHash(t *testing.T) {
 		Path:           "changed.txt",
 		DriveID:        driveid.New("d"),
 		ItemID:         "i1",
-		ItemType:       synctypes.ItemTypeFile,
+		ItemType:       ItemTypeFile,
 		LocalHash:      "cached-hash",
 		LocalSize:      info.Size() + 1,
 		LocalSizeKnown: true,

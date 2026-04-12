@@ -11,8 +11,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // ---------------------------------------------------------------------------
@@ -72,16 +70,16 @@ func TestFault_BaselineCommitError(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	mgr, err := syncstore.NewSyncStore(t.Context(), dbPath, testLogger(t))
+	mgr, err := NewSyncStore(t.Context(), dbPath, testLogger(t))
 	require.NoError(t, err)
 
 	ctx := t.Context()
 
 	// Seed a baseline entry.
-	require.NoError(t, mgr.CommitMutation(ctx, baselineMutationFromExecutionResult(&ExecutionResult{
+	require.NoError(t, mgr.CommitMutation(ctx, mutationFromActionOutcome(&ActionOutcome{
 		Action: ActionDownload, Success: true, Path: "file.txt",
 		DriveID: driveid.New(engineTestDriveID), ItemID: "item-1",
-		ParentID: "root", ItemType: synctypes.ItemTypeFile, RemoteHash: "hash1",
+		ParentID: "root", ItemType: ItemTypeFile, RemoteHash: "hash1",
 		LocalSize:       100,
 		LocalSizeKnown:  true,
 		RemoteSize:      100,
@@ -91,11 +89,11 @@ func TestFault_BaselineCommitError(t *testing.T) {
 	// Close the DB to simulate a fault.
 	require.NoError(t, mgr.Close(t.Context()))
 
-	// CommitOutcome should return an error, not panic.
-	err = mgr.CommitMutation(ctx, baselineMutationFromExecutionResult(&ExecutionResult{
+	// CommitMutation should return an error, not panic.
+	err = mgr.CommitMutation(ctx, mutationFromActionOutcome(&ActionOutcome{
 		Action: ActionDownload, Success: true, Path: "file2.txt",
 		DriveID: driveid.New(engineTestDriveID), ItemID: "item-2",
-		ParentID: "root", ItemType: synctypes.ItemTypeFile,
+		ParentID: "root", ItemType: ItemTypeFile,
 	}))
 	assert.Error(t, err)
 }

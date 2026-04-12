@@ -5,8 +5,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 func applyRemote403Decision(
@@ -15,7 +13,7 @@ func applyRemote403Decision(
 	ctx context.Context,
 	bl *Baseline,
 	path string,
-	shortcuts []synctypes.Shortcut,
+	shortcuts []Shortcut,
 ) PermissionCheckDecision {
 	t.Helper()
 
@@ -52,7 +50,7 @@ func applyRemotePermissionRecheck(
 	eng *testEngine,
 	ctx context.Context,
 	bl *Baseline,
-	shortcuts []synctypes.Shortcut,
+	shortcuts []Shortcut,
 ) []PermissionRecheckDecision {
 	t.Helper()
 
