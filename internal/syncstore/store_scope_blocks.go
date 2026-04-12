@@ -2,7 +2,7 @@
 //
 // The engine persists active scope rows here for restart/recovery. Watch mode
 // loads them into its single-owner runtime working set at startup; there is no
-// separate write-through cache subsystem in syncdispatch.
+// separate write-through cache subsystem outside the sync runtime.
 //
 // The scope_blocks table is tiny (typically 0-5 rows). No batch optimization
 // needed — single-row operations are sufficient.

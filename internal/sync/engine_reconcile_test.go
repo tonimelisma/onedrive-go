@@ -14,7 +14,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -105,7 +104,7 @@ func TestObserveAndCommitRemote_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	rawEngine, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := newEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -160,7 +159,7 @@ func TestObserveAndCommitRemote_WithEvents_TokenDeferred(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	rawEngine, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := newEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -310,7 +309,7 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	rawEngine, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := newEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -467,7 +466,7 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	rawEngine, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := newEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -563,7 +562,7 @@ func TestRunFullReconciliationAsync_NoChanges(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	rawEngine, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := newEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -586,7 +585,7 @@ func TestRunFullReconciliationAsync_NoChanges(t *testing.T) {
 	bl.Put(&synctypes.BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: synctypes.ItemTypeFile})
 
 	ready := setupWatchEngine(t, e)
-	testWatchRuntime(t, e).buf = syncobserve.NewBuffer(e.logger)
+	testWatchRuntime(t, e).buf = NewBuffer(e.logger)
 
 	// Full reconciliation always hands observed changes back through the watch
 	// buffer, even when the later planner pass reduces them to a no-op. The
@@ -622,13 +621,13 @@ func TestRunFullReconciliationAsync_DeltaError(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).buf = syncobserve.NewBuffer(e.logger)
+	testWatchRuntime(t, e).buf = NewBuffer(e.logger)
 
 	// Should not panic — error is logged and function returns.
 	runFullReconciliationAsyncForTest(t, e, ctx, bl)
 	waitForReconcileDone(t, e)
 
-	// syncobserve.Buffer should be empty — no events were produced.
+	// Buffer should be empty — no events were produced.
 	batch := testWatchRuntime(t, e).buf.FlushImmediate()
 	assert.Empty(t, batch)
 }
@@ -654,7 +653,7 @@ func TestRunFullReconciliationAsync_NonBlocking(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).buf = syncobserve.NewBuffer(e.logger)
+	testWatchRuntime(t, e).buf = NewBuffer(e.logger)
 
 	// Call should return immediately — goroutine is blocked in deltaFn.
 	runFullReconciliationAsyncForTest(t, e, ctx, bl)
@@ -687,7 +686,7 @@ func TestRunFullReconciliationAsync_SkipsIfRunning(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).buf = syncobserve.NewBuffer(e.logger)
+	testWatchRuntime(t, e).buf = NewBuffer(e.logger)
 
 	// Pre-set reconcileActive — simulates a reconciliation already in progress.
 	testWatchRuntime(t, e).reconcileActive = true
@@ -721,7 +720,7 @@ func TestRunFullReconciliationAsync_FeedsBuffer(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	rawEngine, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := newEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -741,7 +740,7 @@ func TestRunFullReconciliationAsync_FeedsBuffer(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).buf = syncobserve.NewBuffer(e.logger)
+	testWatchRuntime(t, e).buf = NewBuffer(e.logger)
 
 	// synctypes.Baseline is empty — delta returns a new file → orphan detection
 	// produces a download event that gets fed into the buffer.
@@ -780,7 +779,7 @@ func TestWatchLoop_ReconcileTick_RunsPeriodicFullReconciliationThroughResultHand
 
 	ready := setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.buf = syncobserve.NewBuffer(eng.logger)
+	rt.buf = NewBuffer(eng.logger)
 
 	reconcileC := make(chan time.Time, 1)
 	done := make(chan error, 1)
@@ -847,7 +846,7 @@ func TestRunFullReconciliationAsync_ShutdownAfterCommit(t *testing.T) {
 	syncDir := t.TempDir()
 	logger := testLogger(t)
 
-	rawEngine, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := newEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -870,7 +869,7 @@ func TestRunFullReconciliationAsync_ShutdownAfterCommit(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).buf = syncobserve.NewBuffer(e.logger)
+	testWatchRuntime(t, e).buf = NewBuffer(e.logger)
 
 	// Hook: cancel context immediately after CommitObservation succeeds.
 	// This guarantees we test the exact shutdown-after-commit code path,
@@ -890,7 +889,7 @@ func TestRunFullReconciliationAsync_ShutdownAfterCommit(t *testing.T) {
 	assert.Equal(t, "shutdown-tok", savedToken,
 		"delta token should be saved — CommitObservation must have succeeded")
 
-	// syncobserve.Buffer should be empty — events were committed to SQLite but
+	// Buffer should be empty — events were committed to SQLite but
 	// not fed to the buffer because shutdown was detected after commit.
 	batch := testWatchRuntime(t, e).buf.FlushImmediate()
 	assert.Empty(t, batch, "buffer should be empty after shutdown-aware early exit")
@@ -920,7 +919,7 @@ func TestRunFullReconciliationAsync_SkipLogPromotedToInfo(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).buf = syncobserve.NewBuffer(e.logger)
+	testWatchRuntime(t, e).buf = NewBuffer(e.logger)
 
 	// Pre-set reconcileActive — simulates a reconciliation already in progress.
 	testWatchRuntime(t, e).reconcileActive = true
@@ -962,7 +961,7 @@ func TestRunFullReconciliationAsync_DurationInCompletionLog(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	syncDir := t.TempDir()
 
-	rawEngine, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := newEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -982,7 +981,7 @@ func TestRunFullReconciliationAsync_DurationInCompletionLog(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).buf = syncobserve.NewBuffer(e.logger)
+	testWatchRuntime(t, e).buf = NewBuffer(e.logger)
 
 	runFullReconciliationAsyncForTest(t, e, ctx, bl)
 	waitForReconcileDone(t, e)
@@ -1021,7 +1020,7 @@ func TestRunFullReconciliationAsync_DurationInNoChangesLog(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	syncDir := t.TempDir()
 
-	rawEngine, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	rawEngine, err := newEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncDir,
 		DriveID:   driveID,
@@ -1041,7 +1040,7 @@ func TestRunFullReconciliationAsync_DurationInNoChangesLog(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).buf = syncobserve.NewBuffer(e.logger)
+	testWatchRuntime(t, e).buf = NewBuffer(e.logger)
 
 	runFullReconciliationAsyncForTest(t, e, ctx, bl)
 	waitForReconcileDone(t, e)

@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"path"
 
-	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -17,7 +16,7 @@ type remoteScopeResult struct {
 }
 
 func (e *Engine) buildScopeSnapshot(ctx context.Context) (syncscope.Snapshot, error) {
-	snapshot, err := syncobserve.BuildScopeSnapshot(ctx, e.syncTree, e.syncScopeConfig, e.logger)
+	snapshot, err := BuildScopeSnapshot(ctx, e.syncTree, e.syncScopeConfig, e.logger)
 	if err != nil {
 		return syncscope.Snapshot{}, fmt.Errorf("build scope snapshot: %w", err)
 	}

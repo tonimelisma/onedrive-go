@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/retry"
-	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -19,8 +18,8 @@ func (rt *watchRuntime) watchPrimaryScopedRemote(
 	interval time.Duration,
 	phase ObservationPhasePlan,
 ) error {
-	if interval < syncobserve.MinPollInterval {
-		interval = syncobserve.MinPollInterval
+	if interval < MinPollInterval {
+		interval = MinPollInterval
 	}
 
 	bo := retry.NewBackoff(retry.WatchRemotePolicy())
@@ -110,7 +109,7 @@ func (rt *watchRuntime) sleepPrimaryScopedWatch(
 	delay time.Duration,
 	label string,
 ) (bool, error) {
-	sleepErr := syncobserve.TimeSleep(ctx, delay)
+	sleepErr := TimeSleep(ctx, delay)
 	if sleepErr == nil {
 		return false, nil
 	}

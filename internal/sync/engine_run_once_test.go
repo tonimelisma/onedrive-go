@@ -33,7 +33,7 @@ func TestNewEngine_ZeroDriveID_ReturnsError(t *testing.T) {
 	mock := &engineMockClient{}
 	logger := testLogger(t)
 
-	_, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	_, err := newEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncRoot,
 		DriveID:   driveid.ID{}, // zero — should be rejected
@@ -285,7 +285,7 @@ func TestRunOnce_SharedConfiguredRootUsesScopedDeltaAndToken(t *testing.T) {
 	syncRoot := filepath.Join(tmpDir, "sync")
 	require.NoError(t, os.MkdirAll(syncRoot, 0o750))
 
-	eng, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	eng, err := newEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:          dbPath,
 		SyncRoot:        syncRoot,
 		DriveID:         driveID,
@@ -350,7 +350,7 @@ func TestRunOnce_DryRun_SharedConfiguredRootDoesNotSaveScopedDeltaToken(t *testi
 	syncRoot := filepath.Join(tmpDir, "sync")
 	require.NoError(t, os.MkdirAll(syncRoot, 0o750))
 
-	eng, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	eng, err := newEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:          dbPath,
 		SyncRoot:        syncRoot,
 		DriveID:         driveID,
@@ -894,7 +894,7 @@ func TestNewEngine_InvalidDBPath(t *testing.T) {
 
 	logger := testLogger(t)
 
-	_, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	_, err := newEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    "/nonexistent/deeply/nested/path/test.db",
 		SyncRoot:  t.TempDir(),
 		DriveID:   driveid.New(engineTestDriveID),
@@ -955,7 +955,7 @@ func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {
 
 // TestRunOnce_EmptyPlan_NoPanic verifies that when changes exist but all
 // classify to no-op actions (producing an empty plan), the engine does not
-// deadlock. Regression test for: empty plan caused syncdispatch.NewDepGraph with total=0,
+// deadlock. Regression test for: empty plan caused NewDepGraph with total=0,
 // Done() channel never closed, pool.Wait() blocked forever.
 func TestRunOnce_EmptyPlan_NoPanic(t *testing.T) {
 	t.Parallel()

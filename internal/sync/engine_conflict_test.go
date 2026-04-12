@@ -13,7 +13,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -364,7 +363,7 @@ func TestResolveConflict_KeepLocal_RestoreFailure(t *testing.T) {
 	}}
 	seedBaseline(t, eng.baseline, ctx, outcomes, "")
 
-	conflictCopy := syncexec.ConflictCopyPath(filepath.Join(syncRoot, "keep-local.txt"), time.Unix(1, 0))
+	conflictCopy := ConflictCopyPath(filepath.Join(syncRoot, "keep-local.txt"), time.Unix(1, 0))
 	require.NoError(t, os.WriteFile(conflictCopy, []byte("local"), 0o600))
 	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, "keep-local.txt"), 0o700))
 

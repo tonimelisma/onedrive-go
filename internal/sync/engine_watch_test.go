@@ -16,8 +16,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
-	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -112,17 +110,17 @@ func TestRunWatch_WebsocketEnabledStartsWakeSource(t *testing.T) {
 	eng.enableWebsocket = true
 	recorder := attachDebugEventRecorder(eng)
 	started := make(chan struct{}, 1)
-	eng.socketIOWakeSourceFactory = func(_ synctypes.SocketIOEndpointFetcher, _ driveid.ID, opts syncobserve.SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
+	eng.socketIOWakeSourceFactory = func(_ synctypes.SocketIOEndpointFetcher, _ driveid.ID, opts SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
 		return &stubSocketIOWakeSource{
 			started: started,
 			runFn: func(ctx context.Context, _ chan<- struct{}) error {
 				require.NotNil(t, opts.LifecycleHook)
-				opts.LifecycleHook(syncobserve.SocketIOLifecycleEvent{
-					Type:    syncobserve.SocketIOLifecycleEventStarted,
+				opts.LifecycleHook(SocketIOLifecycleEvent{
+					Type:    SocketIOLifecycleEventStarted,
 					DriveID: driveID.String(),
 				})
-				opts.LifecycleHook(syncobserve.SocketIOLifecycleEvent{
-					Type:    syncobserve.SocketIOLifecycleEventConnected,
+				opts.LifecycleHook(SocketIOLifecycleEvent{
+					Type:    SocketIOLifecycleEventConnected,
 					DriveID: driveID.String(),
 					SID:     "sid-1",
 				})
@@ -131,8 +129,8 @@ func TestRunWatch_WebsocketEnabledStartsWakeSource(t *testing.T) {
 				default:
 				}
 				<-ctx.Done()
-				opts.LifecycleHook(syncobserve.SocketIOLifecycleEvent{
-					Type:    syncobserve.SocketIOLifecycleEventStopped,
+				opts.LifecycleHook(SocketIOLifecycleEvent{
+					Type:    SocketIOLifecycleEventStopped,
 					DriveID: driveID.String(),
 				})
 				return nil
@@ -187,7 +185,7 @@ func TestRunWatch_WebsocketDisabledKeepsPollingOnly(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	recorder := attachDebugEventRecorder(eng)
 	started := make(chan struct{}, 1)
-	eng.socketIOWakeSourceFactory = func(_ synctypes.SocketIOEndpointFetcher, _ driveid.ID, _ syncobserve.SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
+	eng.socketIOWakeSourceFactory = func(_ synctypes.SocketIOEndpointFetcher, _ driveid.ID, _ SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
 		return &stubSocketIOWakeSource{started: started}
 	}
 
@@ -236,7 +234,7 @@ func TestRunWatch_ScopedRootKeepsPollingOnly(t *testing.T) {
 	eng.rootItemID = "scoped-root"
 	recorder := attachDebugEventRecorder(eng)
 	started := make(chan struct{}, 1)
-	eng.socketIOWakeSourceFactory = func(_ synctypes.SocketIOEndpointFetcher, _ driveid.ID, _ syncobserve.SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
+	eng.socketIOWakeSourceFactory = func(_ synctypes.SocketIOEndpointFetcher, _ driveid.ID, _ SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
 		return &stubSocketIOWakeSource{started: started}
 	}
 
@@ -294,7 +292,7 @@ func TestRunWatch_SyncPathsScopedPollingDisablesWebsocket(t *testing.T) {
 
 	recorder := attachDebugEventRecorder(eng)
 	started := make(chan struct{}, 1)
-	eng.socketIOWakeSourceFactory = func(_ synctypes.SocketIOEndpointFetcher, _ driveid.ID, _ syncobserve.SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
+	eng.socketIOWakeSourceFactory = func(_ synctypes.SocketIOEndpointFetcher, _ driveid.ID, _ SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
 		return &stubSocketIOWakeSource{started: started}
 	}
 
@@ -700,7 +698,7 @@ func TestRunWatch_ProcessBatch_DeleteSafety(t *testing.T) {
 	// Install a rolling delete counter with threshold=10 on the engine. The
 	// planner-level check is disabled so the engine can record durable
 	// held-delete intent and keep non-delete work flowing.
-	testWatchRuntime(t, eng).deleteCounter = syncdispatch.NewDeleteCounter(10, 5*time.Minute, time.Now)
+	testWatchRuntime(t, eng).deleteCounter = NewDeleteCounter(10, 5*time.Minute, time.Now)
 	safety := &synctypes.SafetyConfig{DeleteSafetyThreshold: plannerSafetyMax}
 
 	outbox := processBatchForTest(t, eng, ctx, batch, bl, safety)
@@ -794,7 +792,7 @@ func TestRunWatch_ProcessBatch_DeleteSafety_NonDeletesFlow(t *testing.T) {
 	setupWatchEngine(t, eng)
 
 	// Install counter with threshold=10. 15 deletes > 10 → trips.
-	testWatchRuntime(t, eng).deleteCounter = syncdispatch.NewDeleteCounter(10, 5*time.Minute, time.Now)
+	testWatchRuntime(t, eng).deleteCounter = NewDeleteCounter(10, 5*time.Minute, time.Now)
 	safety := &synctypes.SafetyConfig{DeleteSafetyThreshold: plannerSafetyMax}
 
 	outbox := processBatchForTest(t, eng, ctx, batch, bl, safety)
@@ -871,7 +869,7 @@ func TestRunWatch_ProcessBatch_DeleteSafety_BelowThreshold(t *testing.T) {
 
 	setupWatchEngine(t, eng)
 
-	testWatchRuntime(t, eng).deleteCounter = syncdispatch.NewDeleteCounter(10, 5*time.Minute, time.Now)
+	testWatchRuntime(t, eng).deleteCounter = NewDeleteCounter(10, 5*time.Minute, time.Now)
 	safety := &synctypes.SafetyConfig{DeleteSafetyThreshold: plannerSafetyMax}
 
 	outbox := processBatchForTest(t, eng, ctx, batch, bl, safety)
@@ -938,7 +936,7 @@ func TestEngine_HandleExternalChanges_DeleteSafetyClearance(t *testing.T) {
 	newTestWatchState(t, eng)
 
 	// Install a held delete counter.
-	testWatchRuntime(t, eng).deleteCounter = syncdispatch.NewDeleteCounter(10, 5*time.Minute, time.Now)
+	testWatchRuntime(t, eng).deleteCounter = NewDeleteCounter(10, 5*time.Minute, time.Now)
 	testWatchRuntime(t, eng).deleteCounter.Add(15) // trips the counter
 	require.True(t, testWatchRuntime(t, eng).deleteCounter.IsHeld())
 
@@ -981,7 +979,7 @@ func TestEngine_HandleExternalChanges_PartialClear(t *testing.T) {
 	ctx := t.Context()
 	newTestWatchState(t, eng)
 
-	testWatchRuntime(t, eng).deleteCounter = syncdispatch.NewDeleteCounter(10, 5*time.Minute, time.Now)
+	testWatchRuntime(t, eng).deleteCounter = NewDeleteCounter(10, 5*time.Minute, time.Now)
 	testWatchRuntime(t, eng).deleteCounter.Add(15)
 	require.True(t, testWatchRuntime(t, eng).deleteCounter.IsHeld())
 
@@ -1329,7 +1327,7 @@ func TestRunWatch_WatchLimitExhausted_FallsBackToPolling(t *testing.T) {
 
 	// Inject a watcher factory that returns ENOSPC after the first Add (root).
 	watcher := newEnospcWatcher(1)
-	eng.localWatcherFactory = func() (syncobserve.FsWatcher, error) {
+	eng.localWatcherFactory = func() (FsWatcher, error) {
 		return watcher, nil
 	}
 
@@ -1500,7 +1498,7 @@ func TestRunWatch_ShutdownDropsReconcileResult(t *testing.T) {
 	clock := newManualClock(time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC))
 	installManualClock(eng.Engine, clock)
 	watcher := newSignalingWatcher()
-	eng.localWatcherFactory = func() (syncobserve.FsWatcher, error) {
+	eng.localWatcherFactory = func() (FsWatcher, error) {
 		return watcher, nil
 	}
 	reconcileTickerCreated := installTickerCreatedSignal(eng, 15*time.Minute)
@@ -1600,7 +1598,7 @@ func TestRunWatch_FallbackSleepHonorsCancellation(t *testing.T) {
 	}
 
 	watcher := newEnospcWatcher(1)
-	eng.localWatcherFactory = func() (syncobserve.FsWatcher, error) {
+	eng.localWatcherFactory = func() (FsWatcher, error) {
 		return watcher, nil
 	}
 	tickerCreated := installTickerCreatedSignal(eng, 1*time.Second)
@@ -1842,7 +1840,7 @@ func TestEngine_Close_CleansStaleAndIsIdempotent(t *testing.T) {
 	logger := testLogger(t)
 	driveID := driveid.New(engineTestDriveID)
 
-	eng, err := NewEngine(t.Context(), &synctypes.EngineConfig{
+	eng, err := newEngine(t.Context(), &synctypes.EngineConfig{
 		DBPath:    dbPath,
 		SyncRoot:  syncRoot,
 		DataDir:   dataDir,
@@ -1860,8 +1858,8 @@ func TestEngine_Close_CleansStaleAndIsIdempotent(t *testing.T) {
 	// only; watch observers now belong to the runtime and are cleaned up by the
 	// watch coordinator, not by Engine.Close.
 	setupWatchEngine(t, testEng)
-	testWatchRuntime(t, testEng).remoteObs = &syncobserve.RemoteObserver{}
-	testWatchRuntime(t, testEng).localObs = &syncobserve.LocalObserver{}
+	testWatchRuntime(t, testEng).remoteObs = &RemoteObserver{}
+	testWatchRuntime(t, testEng).localObs = &LocalObserver{}
 
 	// First Close should succeed.
 	require.NoError(t, eng.Close(t.Context()))

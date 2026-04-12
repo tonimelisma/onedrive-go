@@ -4,8 +4,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
-	"github.com/tonimelisma/onedrive-go/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
@@ -17,7 +15,7 @@ type engineFlow struct {
 	engine *Engine
 	watch  *watchRuntime
 
-	depGraph   *syncdispatch.DepGraph
+	depGraph   *DepGraph
 	dispatchCh chan *synctypes.TrackedAction
 	shortcuts  []synctypes.Shortcut
 
@@ -78,7 +76,7 @@ type watchRuntimeState struct {
 	activeScopes []synctypes.ScopeBlock
 
 	// Scope detection — sliding window failure tracking.
-	scopeState *syncdispatch.ScopeState
+	scopeState *ScopeState
 
 	// Monotonic action ID counter owned by the watch control flow. Prevents
 	// ID collisions across batches without introducing cross-goroutine sync.
@@ -96,15 +94,15 @@ type watchObservationState struct {
 	scopeMu sync.RWMutex
 
 	// Event buffer — watch-loop retry/trial work injects events via buf.Add().
-	buf *syncobserve.Buffer
+	buf *Buffer
 
 	// Delete safety protection: rolling counter + durable held-delete state.
-	deleteCounter   *syncdispatch.DeleteCounter
+	deleteCounter   *DeleteCounter
 	lastDataVersion int64
 
 	// Observer references — set in startObservers, nil'd on shutdown.
-	remoteObs       *syncobserve.RemoteObserver
-	localObs        *syncobserve.LocalObserver
+	remoteObs       *RemoteObserver
+	localObs        *LocalObserver
 	scopeSnapshot   syncscope.Snapshot
 	scopeGeneration int64
 	scopeChanges    chan syncscope.Change

@@ -6,7 +6,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -24,7 +23,7 @@ func applyRemote403Decision(
 	rt, ok := lookupTestWatchRuntime(eng)
 	if !ok {
 		rt = newWatchRuntime(eng.Engine)
-		rt.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
+		rt.scopeState = NewScopeState(eng.nowFunc, eng.logger)
 	}
 	rt.scopeController().applyPermissionCheckDecision(ctx, rt, permissionFlowRemote403, &decision)
 	return decision
@@ -42,7 +41,7 @@ func applyLocalPermissionDecision(
 	rt, ok := lookupTestWatchRuntime(eng)
 	if !ok {
 		rt = newWatchRuntime(eng.Engine)
-		rt.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
+		rt.scopeState = NewScopeState(eng.nowFunc, eng.logger)
 	}
 	rt.scopeController().applyPermissionCheckDecision(ctx, rt, permissionFlowLocalPermission, &decision)
 	return decision
@@ -61,7 +60,7 @@ func applyRemotePermissionRecheck(
 	rt, ok := lookupTestWatchRuntime(eng)
 	if !ok {
 		rt = newWatchRuntime(eng.Engine)
-		rt.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
+		rt.scopeState = NewScopeState(eng.nowFunc, eng.logger)
 	}
 	rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, decisions)
 	return decisions
@@ -74,7 +73,7 @@ func applyLocalPermissionRecheck(t *testing.T, eng *testEngine, ctx context.Cont
 	rt, ok := lookupTestWatchRuntime(eng)
 	if !ok {
 		rt = newWatchRuntime(eng.Engine)
-		rt.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
+		rt.scopeState = NewScopeState(eng.nowFunc, eng.logger)
 	}
 	rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, decisions)
 	return decisions
@@ -92,7 +91,7 @@ func applyScannerResolvedPermissions(
 	rt, ok := lookupTestWatchRuntime(eng)
 	if !ok {
 		rt = newWatchRuntime(eng.Engine)
-		rt.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
+		rt.scopeState = NewScopeState(eng.nowFunc, eng.logger)
 	}
 	rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, decisions)
 	return decisions

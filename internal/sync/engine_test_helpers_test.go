@@ -19,7 +19,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/syncdispatch"
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
@@ -28,8 +27,8 @@ import (
 // ---------------------------------------------------------------------------
 // Composite mock implementing synctypes.DeltaFetcher + synctypes.ItemClient + Downloader + Uploader
 //
-// Engine requires all 4 interfaces (unlike syncexec.Executor, which takes them
-// individually), so a single mock is pragmatic here. syncexec.Executor tests split
+// Engine requires all 4 interfaces (unlike Executor, which takes them
+// individually), so a single mock is pragmatic here. Executor tests split
 // mocks by interface because each test exercises only 1-2 interfaces.
 // ---------------------------------------------------------------------------
 
@@ -276,7 +275,7 @@ func newTestEngineWithContext(t *testing.T, ctx context.Context, mock *engineMoc
 	logger := testLogger(t)
 	driveID := driveid.New(engineTestDriveID)
 
-	eng, err := NewEngine(ctx, &synctypes.EngineConfig{
+	eng, err := newEngine(ctx, &synctypes.EngineConfig{
 		DBPath:                 dbPath,
 		SyncRoot:               syncRoot,
 		DriveID:                driveID,
@@ -327,7 +326,7 @@ func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *eng
 
 	driveID := driveid.New(engineTestDriveID)
 
-	eng, err := NewEngine(ctx, &synctypes.EngineConfig{
+	eng, err := newEngine(ctx, &synctypes.EngineConfig{
 		DBPath:                 dbPath,
 		SyncRoot:               syncRoot,
 		DriveID:                driveID,
@@ -444,16 +443,16 @@ func readFileUnderRootIfExists(t *testing.T, root, relativePath string) ([]byte,
 	return data, true
 }
 
-// setupWatchEngine initializes an engine with syncdispatch.DepGraph + dispatchCh + watchRuntime
+// setupWatchEngine initializes an engine with DepGraph + dispatchCh + watchRuntime
 // for processBatch tests. Returns the dispatchCh for reading dispatched actions.
 // Replaces the old two-call pattern of setupWatchEngine + newTestWatchState.
 func setupWatchEngine(t *testing.T, eng *testEngine) <-chan *synctypes.TrackedAction {
 	t.Helper()
 
 	rt := newWatchRuntime(eng.Engine)
-	rt.depGraph = syncdispatch.NewDepGraph(eng.logger)
+	rt.depGraph = NewDepGraph(eng.logger)
 	rt.dispatchCh = make(chan *synctypes.TrackedAction, 1024)
-	rt.scopeState = syncdispatch.NewScopeState(eng.nowFunc, eng.logger)
+	rt.scopeState = NewScopeState(eng.nowFunc, eng.logger)
 	eng.runtime = rt
 	eng.flow = &rt.engineFlow
 

@@ -36,12 +36,14 @@ Socket.IO when `websocket = true` on eligible full-drive sessions, with
 `poll_interval` retained as the fallback polling cadence and periodic full
 reconciliation every 24 hours to detect missed delta deletions.
 
-`BuildEngineConfig(session, resolved, verifyDrive, logger)` is the single
-authority for translating a resolved drive plus authenticated session into
-`synctypes.EngineConfig`. CLI single-drive setup and multisync orchestration
-both call that one builder so watch-only dependencies such as
-`SocketIOFetcher`, local observation filters/rules, and drive verification
-cannot silently diverge between entrypoints.
+`NewDriveEngine(ctx, session, resolved, DriveEngineOptions)` is the production
+constructor for translating a resolved drive plus authenticated session into
+one single-drive runtime. CLI single-drive setup and multisync orchestration
+both call that one constructor so watch-only dependencies such as websocket
+wake fetchers, local observation filters/rules, and drive verification cannot
+silently diverge between entrypoints. The lower-level `newEngine(ctx, cfg)`
+constructor remains for same-package tests and narrowly-scoped internal
+construction seams.
 
 Scoped-root watch sessions and `sync_paths`-scoped primary-drive watch
 sessions do not use Socket.IO in v1. They continue on the existing polling
@@ -317,7 +319,7 @@ embeds `engineFlow` and adds watch-only state; `oneShotRunner` embeds
 `engineFlow` without watch-specific fields.
 
 Watch-mode websocket diagnostics remain internal-only. `watchRuntime`
-translates `syncobserve.SocketIOLifecycleEvent` values into engine debug
+translates `SocketIOLifecycleEvent` values into engine debug
 events with drive identity attached, and the CLI may opt into a hidden
 newline-delimited JSON debug-event sink (`ONEDRIVE_TEST_DEBUG_EVENTS_PATH`)
 for E2E/runtime proof. This sink is test infrastructure, not a user-facing
@@ -867,5 +869,5 @@ One-shot sync uses the same durable workflow: if the planned delete count exceed
 
 ### Rationale
 
-- **Crash recovery requires explicit bridging**: On restart after crash, [`internal/syncrecovery/recovery.go`](../../internal/syncrecovery/recovery.go) resets `remote_state` items stuck mid-execution to pending or deleted, AND creates `sync_failures` entries so the engine retry sweep can rediscover them. This is necessary because the delta token was already advanced before execution — items that crashed mid-execution won't appear in the next delta response. The planner is idempotent for items that DO appear in observations, but crash recovery items need the `sync_failures` → retrier → planner path.
+- **Crash recovery requires explicit bridging**: On restart after crash, [`internal/sync/recovery.go`](../../internal/sync/recovery.go) resets `remote_state` items stuck mid-execution to pending or deleted, AND creates `sync_failures` entries so the engine retry sweep can rediscover them. This is necessary because the delta token was already advanced before execution — items that crashed mid-execution won't appear in the next delta response. The planner is idempotent for items that DO appear in observations, but crash recovery items need the `sync_failures` → retrier → planner path.
 - **Keep control plane separate from the engine**: multi-drive coordination now lives in `internal/multisync`, leaving `internal/sync` focused on the single-drive runtime and conflict APIs.
