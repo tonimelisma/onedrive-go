@@ -98,7 +98,7 @@ func (m *SyncStore) DropLegacyRemoteBlockedScope(
 // WriteSyncMetadata persists sync metadata after a completed RunOnce pass.
 // Keys: last_sync_time, last_sync_duration_ms, last_sync_error,
 // last_sync_succeeded, last_sync_failed.
-func (m *SyncStore) WriteSyncMetadata(ctx context.Context, report *synctypes.SyncReport) (err error) {
+func (m *SyncStore) WriteSyncMetadata(ctx context.Context, report *SyncMetadata) (err error) {
 	now := m.nowFunc().UTC().Format(time.RFC3339)
 	durationMS := fmt.Sprintf("%d", report.Duration.Milliseconds())
 	succeeded := fmt.Sprintf("%d", report.Succeeded)

@@ -26,17 +26,6 @@ type failureRecorder interface {
 	ResetRetryTimesForScope(ctx context.Context, scopeKey synctypes.ScopeKey, now time.Time) error
 }
 
-type crashRecoveryStore interface {
-	ResetDownloadingStates(ctx context.Context, delayFn func(int) time.Duration) error
-	ListDeletingCandidates(ctx context.Context) ([]syncstore.RecoveryCandidate, error)
-	FinalizeDeletingStates(
-		ctx context.Context,
-		deleted []syncstore.RecoveryCandidate,
-		pending []syncstore.RecoveryCandidate,
-		delayFn func(int) time.Duration,
-	) error
-}
-
 type executionResultWriter interface {
 	Load(ctx context.Context) (*syncstore.Baseline, error)
 	CommitMutation(ctx context.Context, mutation *syncstore.BaselineMutation) error

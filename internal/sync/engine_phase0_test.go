@@ -105,7 +105,7 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeLocalObserverStarts(t *testing.
 
 	done := make(chan error, 1)
 	go func() {
-		done <- eng.RunWatch(ctx, synctypes.SyncUploadOnly, synctypes.WatchOpts{
+		done <- eng.RunWatch(ctx, synctypes.SyncUploadOnly, WatchOptions{
 			PollInterval: time.Hour,
 			Debounce:     5 * time.Millisecond,
 		})
@@ -184,7 +184,7 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeRemoteObserverStarts(t *testing
 
 	done := make(chan error, 1)
 	go func() {
-		done <- eng.RunWatch(ctx, synctypes.SyncDownloadOnly, synctypes.WatchOpts{
+		done <- eng.RunWatch(ctx, synctypes.SyncDownloadOnly, WatchOptions{
 			PollInterval: 20 * time.Millisecond,
 			Debounce:     5 * time.Millisecond,
 		})
@@ -409,7 +409,7 @@ func TestPhase0_ExecutePlan_WaitsForDrainSideEffects(t *testing.T) {
 		Deps: [][]int{nil},
 	}
 
-	report := &synctypes.SyncReport{}
+	report := &Report{}
 	done := make(chan error, 1)
 	go func() {
 		done <- runner.executePlan(t.Context(), plan, report, bl)

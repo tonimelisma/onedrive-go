@@ -19,7 +19,6 @@ import (
 	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 const (
@@ -41,14 +40,14 @@ const (
 
 // CommitObservation atomically persists observed remote mirror state and
 // advances the delta token in a single transaction.
-func (m *SyncStore) CommitObservation(ctx context.Context, events []synctypes.ObservedItem, newToken string, driveID driveid.ID) error {
+func (m *SyncStore) CommitObservation(ctx context.Context, events []ObservedItem, newToken string, driveID driveid.ID) error {
 	return m.commitObservation(ctx, events, newToken, driveID, "")
 }
 
 // CommitObservationForScope is the folder-scoped variant of CommitObservation.
 func (m *SyncStore) CommitObservationForScope(
 	ctx context.Context,
-	events []synctypes.ObservedItem,
+	events []ObservedItem,
 	newToken string,
 	driveID driveid.ID,
 	scopeID string,
@@ -58,7 +57,7 @@ func (m *SyncStore) CommitObservationForScope(
 
 func (m *SyncStore) commitObservation(
 	ctx context.Context,
-	events []synctypes.ObservedItem,
+	events []ObservedItem,
 	newToken string,
 	driveID driveid.ID,
 	scopeID string,
@@ -98,7 +97,7 @@ func (m *SyncStore) commitObservation(
 	return nil
 }
 
-func (m *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, item *synctypes.ObservedItem, now int64) error {
+func (m *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, item *ObservedItem, now int64) error {
 	existing := m.scanRemoteStateRow(ctx, tx, item.DriveID.String(), item.ItemID)
 
 	if existing == nil {
@@ -123,7 +122,7 @@ func (m *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, ite
 func deleteObservedRemoteState(
 	ctx context.Context,
 	tx sqlTxRunner,
-	item *synctypes.ObservedItem,
+	item *ObservedItem,
 	existingPath string,
 ) error {
 	if _, err := tx.ExecContext(ctx,
@@ -138,8 +137,8 @@ func deleteObservedRemoteState(
 }
 
 func observedRemoteStateUpdate(
-	existing *synctypes.RemoteStateRow,
-	item *synctypes.ObservedItem,
+	existing *RemoteStateRow,
+	item *ObservedItem,
 ) (changed bool, previousPath string) {
 	pathChanged := item.Path != "" && item.Path != existing.Path
 	filterGeneration := initialFilterGeneration(item)
@@ -161,7 +160,7 @@ func observedRemoteStateUpdate(
 	return changed, previousPath
 }
 
-func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx sqlTxRunner, driveID, itemID string) *synctypes.RemoteStateRow {
+func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx sqlTxRunner, driveID, itemID string) *RemoteStateRow {
 	row, err := scanRemoteStateRowWithQuerier(
 		func(dest ...any) error {
 			return tx.QueryRowContext(ctx, sqlGetRemoteStateRow, driveID, itemID).Scan(dest...)
@@ -174,7 +173,7 @@ func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx sqlTxRunner, driv
 	return row
 }
 
-func (m *SyncStore) insertRemoteState(ctx context.Context, tx sqlTxRunner, item *synctypes.ObservedItem, now int64) error {
+func (m *SyncStore) insertRemoteState(ctx context.Context, tx sqlTxRunner, item *ObservedItem, now int64) error {
 	_, err := tx.ExecContext(ctx, sqlInsertRemoteState,
 		item.DriveID.String(), item.ItemID, item.Path,
 		nullString(item.ParentID), item.ItemType,
@@ -196,7 +195,7 @@ func (m *SyncStore) insertRemoteState(ctx context.Context, tx sqlTxRunner, item 
 func (m *SyncStore) updateRemoteStateFromObs(
 	ctx context.Context,
 	tx sqlTxRunner,
-	item *synctypes.ObservedItem,
+	item *ObservedItem,
 	previousPath string,
 	now int64,
 ) error {
@@ -221,7 +220,7 @@ func (m *SyncStore) updateRemoteStateFromObs(
 	return nil
 }
 
-func initialFilterGeneration(item *synctypes.ObservedItem) int64 {
+func initialFilterGeneration(item *ObservedItem) int64 {
 	if item == nil || !item.Filtered {
 		return 0
 	}

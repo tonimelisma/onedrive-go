@@ -12,7 +12,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // Validates: R-2.4.1, R-2.4.2, R-2.4.3

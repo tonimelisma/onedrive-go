@@ -33,7 +33,7 @@ const (
 )
 
 // ListRemoteState returns the current remote mirror rows.
-func (m *SyncStore) ListRemoteState(ctx context.Context) ([]synctypes.RemoteStateRow, error) {
+func (m *SyncStore) ListRemoteState(ctx context.Context) ([]RemoteStateRow, error) {
 	return m.queryRemoteStateRows(ctx,
 		`SELECT drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
 			previous_path, is_filtered, observed_at, filter_generation, filter_reason
@@ -41,18 +41,18 @@ func (m *SyncStore) ListRemoteState(ctx context.Context) ([]synctypes.RemoteStat
 	)
 }
 
-func (m *SyncStore) queryRemoteStateRows(ctx context.Context, query string, args ...any) ([]synctypes.RemoteStateRow, error) {
+func (m *SyncStore) queryRemoteStateRows(ctx context.Context, query string, args ...any) ([]RemoteStateRow, error) {
 	rows, err := m.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying remote_state: %w", err)
 	}
 	defer rows.Close()
 
-	var result []synctypes.RemoteStateRow
+	var result []RemoteStateRow
 
 	for rows.Next() {
 		var (
-			row      synctypes.RemoteStateRow
+			row      RemoteStateRow
 			parentID sql.NullString
 			hash     sql.NullString
 			size     sql.NullInt64
@@ -101,7 +101,7 @@ func (m *SyncStore) GetRemoteStateByPath(
 	ctx context.Context,
 	path string,
 	driveID driveid.ID,
-) (*synctypes.RemoteStateRow, bool, error) {
+) (*RemoteStateRow, bool, error) {
 	row, err := scanRemoteStateRowWithQuerier(
 		func(dest ...any) error {
 			return m.db.QueryRowContext(ctx, sqlGetRemoteStateByPath, path, driveID.String()).Scan(dest...)
@@ -122,7 +122,7 @@ func (m *SyncStore) GetRemoteStateByID(
 	ctx context.Context,
 	driveID driveid.ID,
 	itemID string,
-) (*synctypes.RemoteStateRow, bool, error) {
+) (*RemoteStateRow, bool, error) {
 	row, err := scanRemoteStateRowWithQuerier(
 		func(dest ...any) error {
 			return m.db.QueryRowContext(ctx, sqlGetRemoteStateByID, driveID.String(), itemID).Scan(dest...)
@@ -140,9 +140,9 @@ func (m *SyncStore) GetRemoteStateByID(
 
 func scanRemoteStateRowWithQuerier(
 	scan func(dest ...any) error,
-) (*synctypes.RemoteStateRow, error) {
+) (*RemoteStateRow, error) {
 	var (
-		row          synctypes.RemoteStateRow
+		row          RemoteStateRow
 		parentID     sql.NullString
 		hash         sql.NullString
 		size         sql.NullInt64

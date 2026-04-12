@@ -65,10 +65,10 @@ type ResultDecision struct {
 	LogLevel          slog.Level
 }
 
-// classifyResult is a pure function that maps a synctypes.WorkerResult to a
+// classifyResult is a pure function that maps a WorkerResult to a
 // single ResultDecision. No side effects — classification is separate from
 // routing.
-func classifyResult(r *synctypes.WorkerResult) ResultDecision {
+func classifyResult(r *WorkerResult) ResultDecision {
 	if r.Success {
 		return withRuntimeSummary(&ResultDecision{
 			Class:         resultSuccess,
@@ -95,7 +95,7 @@ func classifyResult(r *synctypes.WorkerResult) ResultDecision {
 	return classifyLocalResult(r)
 }
 
-func classifyHTTPResult(r *synctypes.WorkerResult) (ResultDecision, bool) {
+func classifyHTTPResult(r *WorkerResult) (ResultDecision, bool) {
 	scopeEvidence := deriveScopeKey(r)
 	issueType := issueTypeForHTTPStatus(r.HTTPStatus, r.Err)
 
@@ -186,7 +186,7 @@ func isRetryableHTTPStatus(status int) bool {
 		status == http.StatusLocked
 }
 
-func classifyLocalResult(r *synctypes.WorkerResult) ResultDecision {
+func classifyLocalResult(r *WorkerResult) ResultDecision {
 	issueType := issueTypeForHTTPStatus(r.HTTPStatus, r.Err)
 
 	switch {
@@ -242,14 +242,64 @@ func classifyLocalResult(r *synctypes.WorkerResult) ResultDecision {
 }
 
 func withRuntimeSummary(decision *ResultDecision) ResultDecision {
-	decision.SummaryKey = synctypes.SummaryKeyForRuntime(decision.Class, decision.IssueType)
+	decision.SummaryKey = runtimeSummaryKey(decision.Class, decision.IssueType)
 	return *decision
+}
+
+func runtimeSummaryKey(class failures.Class, issueType string) synctypes.SummaryKey {
+	if key, ok := runtimeSummaryKeyForIssueType(issueType); ok {
+		return key
+	}
+
+	if class == failures.ClassRetryableTransient ||
+		class == failures.ClassScopeBlockingTransient ||
+		class == failures.ClassActionable ||
+		class == failures.ClassFatal {
+		return synctypes.SummarySyncFailure
+	}
+
+	return ""
+}
+
+func runtimeSummaryKeyForIssueType(issueType string) (synctypes.SummaryKey, bool) {
+	switch issueType {
+	case synctypes.IssueInvalidFilename:
+		return synctypes.SummaryInvalidFilename, true
+	case synctypes.IssuePathTooLong:
+		return synctypes.SummaryPathTooLong, true
+	case synctypes.IssueFileTooLarge:
+		return synctypes.SummaryFileTooLarge, true
+	case synctypes.IssueFileTooLargeForSpace:
+		return synctypes.SummaryFileTooLargeForSpace, true
+	case synctypes.IssueDiskFull:
+		return synctypes.SummaryDiskFull, true
+	case synctypes.IssueHashPanic:
+		return synctypes.SummaryHashError, true
+	case synctypes.IssueUnauthorized:
+		return synctypes.SummaryAuthenticationRequired, true
+	case synctypes.IssueQuotaExceeded:
+		return synctypes.SummaryQuotaExceeded, true
+	case synctypes.IssueServiceOutage:
+		return synctypes.SummaryServiceOutage, true
+	case synctypes.IssueRateLimited:
+		return synctypes.SummaryRateLimited, true
+	case synctypes.IssueSharedFolderBlocked:
+		return synctypes.SummarySharedFolderWritesBlocked, true
+	case synctypes.IssuePermissionDenied:
+		return synctypes.SummaryRemotePermissionDenied, true
+	case synctypes.IssueLocalPermissionDenied:
+		return synctypes.SummaryLocalPermissionDenied, true
+	case synctypes.IssueCaseCollision:
+		return synctypes.SummaryCaseCollision, true
+	default:
+		return "", false
+	}
 }
 
 // deriveScopeKey maps a worker result to its typed scope key. Delegates to
 // synctypes.ScopeKeyForResult — single source of truth for HTTP status → scope
 // key mapping. Returns the zero-value synctypes.ScopeKey for non-scope statuses.
-func deriveScopeKey(r *synctypes.WorkerResult) synctypes.ScopeKey {
+func deriveScopeKey(r *WorkerResult) synctypes.ScopeKey {
 	targetDriveID := r.TargetDriveID
 	if targetDriveID.IsZero() {
 		targetDriveID = r.DriveID
